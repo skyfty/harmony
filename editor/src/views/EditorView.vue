@@ -97,7 +97,6 @@ const {
   cameraFocusRequestId,
   nodeHighlightTargetId,
   nodeHighlightRequestId,
-  groundSettings,
 } = storeToRefs(sceneStore)
 
 const { sortedMetadata: allSceneSummaries } = storeToRefs(scenesStore)
@@ -1892,8 +1891,6 @@ async function handleAction(action: string) {
 }
 async function handleCreateScene(payload: {
   name: string
-  groundWidth: number
-  groundDepth: number
   planningData?: import('@/types/planning-scene-data').PlanningSceneData | null
   presetSceneId?: string | null
   presetSceneDocument?: PresetSceneDocument | null
@@ -1906,10 +1903,6 @@ async function handleCreateScene(payload: {
   try {
     // Template-based scene creation removed; always create a fresh scene with provided ground settings.
     await sceneStore.createScene(payload.name, {
-      groundSettings: {
-        width: payload.groundWidth,
-        depth: payload.groundDepth,
-      },
       planningData: payload.planningData ?? null,
     })
     // If you need to apply a preset scene in future, reintroduce a dedicated migration or importer.
@@ -2687,8 +2680,6 @@ onBeforeUnmount(() => {
     />
     <NewSceneDialog
       v-model="isNewSceneDialogOpen"
-      :initial-ground-width="groundSettings.width"
-      :initial-ground-depth="groundSettings.depth"
       @confirm="handleCreateScene"
     />
     <NewProjectDialog

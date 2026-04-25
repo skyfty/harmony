@@ -3,6 +3,7 @@
 // to avoid runtime circular dependencies.
 
 import {
+  GROUND_TERRAIN_CHUNK_SIZE_METERS,
   getGroundVertexIndex,
   GROUND_HEIGHT_UNSET_VALUE,
   type GroundDynamicMesh,
@@ -16,10 +17,10 @@ import { computeGroundBaseHeightAtVertex } from '@schema/groundGeneration'
 
 const DEFAULT_GROUND_CELL_SIZE = 1
 const DEFAULT_GROUND_EXTENT = 100
+const DEFAULT_GROUND_RENDER_RADIUS_CHUNKS = 4
+const DEFAULT_GROUND_COLLISION_RADIUS_CHUNKS = 2
 const MIN_GROUND_EXTENT = 1
 const HEIGHT_EPSILON = 1e-5
-const GROUND_CREATION_MAX_CELL_SIZE = 5
-
 const GROUND_CREATION_AXIS_TARGET = 1024
 const GROUND_CREATION_HIGH_VERTEX_BUDGET = 1_500_000
 const GROUND_CREATION_BALANCED_VERTEX_BUDGET = 4_000_000
@@ -134,6 +135,12 @@ export function cloneGroundGenerationSettings(settings?: GroundGenerationSetting
 export function cloneGroundDynamicMesh(definition: GroundDynamicMeshLike): GroundDynamicMeshResult {
   const result: GroundDynamicMeshResult = {
     type: 'Ground',
+    terrainMode: definition.terrainMode ?? 'infinite',
+    chunkSizeMeters: definition.chunkSizeMeters ?? GROUND_TERRAIN_CHUNK_SIZE_METERS,
+    baseHeight: definition.baseHeight ?? 0,
+    renderRadiusChunks: definition.renderRadiusChunks ?? DEFAULT_GROUND_RENDER_RADIUS_CHUNKS,
+    collisionRadiusChunks: definition.collisionRadiusChunks ?? DEFAULT_GROUND_COLLISION_RADIUS_CHUNKS,
+    chunkManifestRevision: Number.isFinite(definition.chunkManifestRevision) ? Math.max(0, Math.trunc(definition.chunkManifestRevision as number)) : 0,
     width: definition.width,
     depth: definition.depth,
     rows: definition.rows,
@@ -155,6 +162,7 @@ export function cloneGroundDynamicMesh(definition: GroundDynamicMeshLike): Groun
     textureDataUrl: definition.textureDataUrl ?? null,
     textureName: definition.textureName ?? null,
     generation: cloneGroundGenerationSettings(definition.generation) ?? null,
+    localEditTiles: manualDeepCloneLocal(definition.localEditTiles ?? null) as GroundDynamicMesh['localEditTiles'],
   }
   if (definition.optimizedMesh !== undefined) {
     result.optimizedMesh = manualDeepCloneLocal(definition.optimizedMesh) as GroundDynamicMesh['optimizedMesh']
@@ -184,7 +192,11 @@ export function normalizeGroundSettings(settings: Partial<GroundSettings> | null
   return {
     width: normalizeGroundDimension(settings?.width as unknown, DEFAULT_GROUND_EXTENT),
     depth: normalizeGroundDimension(settings?.depth as unknown, DEFAULT_GROUND_EXTENT),
-    enableAirWall: settings?.enableAirWall !== false,
+    chunkSizeMeters: normalizeGroundDimension(settings?.chunkSizeMeters as unknown, GROUND_TERRAIN_CHUNK_SIZE_METERS),
+    baseHeight: typeof settings?.baseHeight === 'number' && Number.isFinite(settings.baseHeight) ? settings.baseHeight : 0,
+    renderRadiusChunks: Math.max(1, Math.trunc(typeof settings?.renderRadiusChunks === 'number' && Number.isFinite(settings.renderRadiusChunks) ? settings.renderRadiusChunks : DEFAULT_GROUND_RENDER_RADIUS_CHUNKS)),
+    collisionRadiusChunks: Math.max(1, Math.trunc(typeof settings?.collisionRadiusChunks === 'number' && Number.isFinite(settings.collisionRadiusChunks) ? settings.collisionRadiusChunks : DEFAULT_GROUND_COLLISION_RADIUS_CHUNKS)),
+    enableAirWall: settings?.enableAirWall === true,
     editorScatterDynamicStreamingEnabled: settings?.editorScatterDynamicStreamingEnabled !== false,
     editorScatterVisible: settings?.editorScatterVisible !== false,
   }
@@ -217,10 +229,7 @@ export function resolveGroundCreationProfile(
     storageMode = 'tiled'
     quality = 'balanced'
     warningLevel = 'info'
-    cellSize = Math.min(
-      GROUND_CREATION_MAX_CELL_SIZE,
-      Math.max(normalizedBaseCellSize, Math.ceil(Math.max(safeWidth, safeDepth) / GROUND_CREATION_AXIS_TARGET)),
-    )
+    cellSize = Math.max(normalizedBaseCellSize, Math.ceil(Math.max(safeWidth, safeDepth) / GROUND_CREATION_AXIS_TARGET))
     warningMessage = '地形已自动切换为分层/流式配置，并提高单元尺寸以控制工作集。'
   }
 
@@ -304,6 +313,12 @@ export function createGroundDynamicMeshDefinition(overrides: Partial<GroundDynam
   const initialGeneration = cloneGroundGenerationSettings(overrides.generation) ?? null
   const definition: GroundDynamicMesh = {
     type: 'Ground',
+    terrainMode: overrides.terrainMode ?? 'infinite',
+    chunkSizeMeters: overrides.chunkSizeMeters ?? baseSettings.chunkSizeMeters ?? GROUND_TERRAIN_CHUNK_SIZE_METERS,
+    baseHeight: overrides.baseHeight ?? baseSettings.baseHeight ?? 0,
+    renderRadiusChunks: overrides.renderRadiusChunks ?? baseSettings.renderRadiusChunks ?? DEFAULT_GROUND_RENDER_RADIUS_CHUNKS,
+    collisionRadiusChunks: overrides.collisionRadiusChunks ?? baseSettings.collisionRadiusChunks ?? DEFAULT_GROUND_COLLISION_RADIUS_CHUNKS,
+    chunkManifestRevision: Number.isFinite(overrides.chunkManifestRevision) ? Math.max(0, Math.trunc(overrides.chunkManifestRevision as number)) : 0,
     width,
     depth,
     rows: derivedRows,
@@ -317,7 +332,7 @@ export function createGroundDynamicMeshDefinition(overrides: Partial<GroundDynam
     editTileSizeMeters: creationProfile.editTileSizeMeters,
     editTileResolution: creationProfile.editTileResolution,
     collisionMode: creationProfile.collisionMode,
-    chunkStreamingEnabled: overrides.chunkStreamingEnabled === true,
+      chunkStreamingEnabled: overrides.chunkStreamingEnabled ?? true,
     surfaceRevision: Number.isFinite(overrides.surfaceRevision) ? Math.max(0, Math.trunc(overrides.surfaceRevision as number)) : 0,
     heightComposition: {
       mode: overrides.heightComposition?.mode ?? 'planning_plus_manual',

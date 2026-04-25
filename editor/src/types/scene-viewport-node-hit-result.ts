@@ -7,4 +7,6 @@ export interface NodeHitResult {
 
   /** Optional sub-selection for Road dynamic meshes. */
   roadSegmentIndex?: number | null
+  /** Optional infinite terrain base chunk key resolved from InstancedMesh picking. */
+  groundChunkKey?: string | null
 }

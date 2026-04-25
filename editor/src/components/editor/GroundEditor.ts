@@ -9,6 +9,7 @@ import type {
 	SceneNode,
 	Vector3Like,
 } from '@schema'
+import { resolveGroundEditCellSize } from '@schema'
 import {
 	deleteTerrainScatterStore,
 	ensureTerrainScatterStore,
@@ -157,7 +158,18 @@ export type GroundEditorOptions = {
 		maxChunkChangesPerUpdate?: number
 		maxBindingChangesPerUpdate?: number
 	}
-	onSculptCommitApplied?: (payload: { groundObject: THREE.Object3D; definition: GroundRuntimeDynamicMesh }) => void
+	onSculptCommitApplied?: (payload: {
+		groundObject: THREE.Object3D
+		definition: GroundRuntimeDynamicMesh
+		affectedRegion: GroundGeometryUpdateRegion | null
+		chunkCells: number
+	}) => void
+	onGroundChunkContentCommitApplied?: (payload: {
+		groundObject: THREE.Object3D
+		definition: GroundRuntimeDynamicMesh
+		chunkKeys: string[]
+		chunkCells: number
+	}) => void
 	onTerrainPaintSurfacePreviewChanged?: (payload: {
 		groundObject: THREE.Object3D
 		groundNode: SceneNode
@@ -538,7 +550,6 @@ function buildLiveTerrainPaintChunkPreviews(
 	}
 	return previews
 }
-
 function resolvePaintChunkBounds(
 	definition: GroundDynamicMesh,
 	chunkCells: number,
@@ -667,6 +678,33 @@ type ScatterSessionState = {
 type ScatterPreviewSample = {
 	key: string
 	point: THREE.Vector3
+}
+
+function collectGroundChunkKeys(keys: Iterable<string>): string[] {
+	const nextKeys: string[] = []
+	const seen = new Set<string>()
+	for (const value of keys) {
+		const key = typeof value === 'string' ? value.trim() : ''
+		if (!key || seen.has(key)) {
+			continue
+		}
+		seen.add(key)
+		nextKeys.push(key)
+	}
+	return nextKeys
+}
+
+function collectScatterChunkKeysFromInstances(
+	instances: Iterable<Pick<TerrainScatterInstance, 'localPosition'>>,
+	definition: GroundDynamicMesh,
+	chunkCells: number,
+): string[] {
+	const keys = new Set<string>()
+	for (const instance of instances) {
+		const local = instance.localPosition
+		keys.add(getScatterChunkKeyFromLocal(definition, chunkCells, local?.x ?? 0, local?.z ?? 0).key)
+	}
+	return Array.from(keys)
 }
 
 let scatterSession: ScatterSessionState | null = null
@@ -1074,6 +1112,7 @@ let scatterEraseState: ScatterEraseState | null = null
 let scatterSidecarPersistPending = false
 let pendingScatterSidecarSave: Promise<void> | null = null
 let scatterSidecarSaveQueued = false
+const pendingScatterChunkKeys = new Set<string>()
 let pendingScatterAssetCleanup: Promise<void> | null = null
 let scatterAssetCleanupQueued = false
 const pendingScatterAssetCleanupIds = new Set<string>()
@@ -1804,8 +1843,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		groundMesh: THREE.Object3D,
 		worldPoint: THREE.Vector3,
 	): boolean {
-		const halfWidth = definition.width * 0.5
-		const halfDepth = definition.depth * 0.5
 		if (!Number.isFinite(worldPoint.x) || !Number.isFinite(worldPoint.z) || !Number.isFinite(worldPoint.y)) {
 			return false
 		}
@@ -1813,6 +1850,11 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		groundLocalVertexHelper.copy(worldPoint)
 		groundMesh.updateMatrixWorld(true)
 		groundMesh.worldToLocal(groundLocalVertexHelper)
+		if (definition.terrainMode === 'infinite') {
+			return Number.isFinite(groundLocalVertexHelper.x) && Number.isFinite(groundLocalVertexHelper.z)
+		}
+		const halfWidth = definition.width * 0.5
+		const halfDepth = definition.depth * 0.5
 		return (
 			Number.isFinite(groundLocalVertexHelper.x) &&
 			Number.isFinite(groundLocalVertexHelper.z) &&
@@ -3292,10 +3334,24 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				if (!sceneId || !groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
 					continue
 				}
+				const chunkKeysToPersist = collectGroundChunkKeys(pendingScatterChunkKeys)
 				const sidecar = useGroundScatterStore().buildSceneDocumentSidecar(sceneId, groundNode)
 				try {
 					await useScenesStore().saveSceneGroundScatterSidecar(sceneId, sidecar, { syncServer: false })
-					scatterSidecarPersistPending = false
+					const groundObject = getGroundObject()
+					const runtimeDefinition = getGroundDynamicMeshDefinition()
+					if (groundObject && runtimeDefinition && chunkKeysToPersist.length > 0) {
+						for (const chunkKey of chunkKeysToPersist) {
+							pendingScatterChunkKeys.delete(chunkKey)
+						}
+						emitGroundChunkContentCommit({
+							groundObject,
+							definition: runtimeDefinition,
+							chunkKeys: chunkKeysToPersist,
+							chunkCells: resolveChunkCellsForDefinition(runtimeDefinition),
+						})
+					}
+					scatterSidecarPersistPending = scatterSidecarSaveQueued || pendingScatterChunkKeys.size > 0
 				} catch (error) {
 					console.warn('保存散布 sidecar 失败', error)
 					return
@@ -3314,6 +3370,27 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		})
 	}
 
+
+	function emitGroundChunkContentCommit(payload: {
+		groundObject: THREE.Object3D
+		definition: GroundRuntimeDynamicMesh
+		chunkKeys: Iterable<string>
+		chunkCells: number
+	}): void {
+		if (!options.onGroundChunkContentCommitApplied) {
+			return
+		}
+		const chunkKeys = collectGroundChunkKeys(payload.chunkKeys)
+		if (!chunkKeys.length) {
+			return
+		}
+		options.onGroundChunkContentCommitApplied({
+			groundObject: payload.groundObject,
+			definition: payload.definition,
+			chunkKeys,
+			chunkCells: payload.chunkCells,
+		})
+	}
 	function generateScatterInstanceId(): string {
 		return `scatter_${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`
 	}
@@ -3500,14 +3577,29 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return false
 		}
 		const committedDefinition = sculptSessionState.definition
-		const committed = options.sceneStore.commitGroundHeightMapEdit(
-			targetNode.id,
-			committedDefinition,
-			sculptSessionState.heightMap,
-		)
+		const usesLocalEditTiles = resolveGroundEditCellSize(committedDefinition) < Math.max(committedDefinition.cellSize, Number.EPSILON)
+			&& !!committedDefinition.localEditTiles
+			&& Object.keys(committedDefinition.localEditTiles).length > 0
+		const committed = usesLocalEditTiles
+			? options.sceneStore.commitGroundLocalEditTilesEdit(
+				targetNode.id,
+				committedDefinition,
+				committedDefinition.localEditTiles ?? null,
+				sculptSessionState.affectedRegion,
+			)
+			: options.sceneStore.commitGroundHeightMapEdit(
+				targetNode.id,
+				committedDefinition,
+				sculptSessionState.heightMap,
+			)
 		const groundObject = getGroundObject()
 		if (groundObject) {
-			options.onSculptCommitApplied?.({ groundObject, definition: committedDefinition })
+			options.onSculptCommitApplied?.({
+				groundObject,
+				definition: committedDefinition,
+				affectedRegion: sculptSessionState.affectedRegion,
+				chunkCells: resolveChunkCellsForDefinition(committedDefinition),
+			})
 		}
 		sculptSessionState = null
 		return committed
@@ -4114,6 +4206,16 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			}
 			const sidecar = useGroundPaintStore().buildSceneDocumentSidecar(sceneId, targetNode)
 			await useScenesStore().saveSceneGroundPaintSidecar(sceneId, sidecar, { syncServer: false })
+			const groundObject = getGroundObject()
+			const runtimeDefinition = getGroundDynamicMeshDefinition()
+			if (groundObject && runtimeDefinition) {
+				emitGroundChunkContentCommit({
+					groundObject,
+					definition: runtimeDefinition,
+					chunkKeys: dirtyChunks.map((chunk) => chunk.key),
+					chunkCells: session.chunkCells,
+				})
+			}
 			await options.sceneStore.saveActiveScene({ force: true })
 			emitCommittedTerrainPaintSurfacePreview(session, nextGroundSurfaceChunks)
 			paintSessionState = null
@@ -4356,6 +4458,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function clampPointToGround(definition: GroundDynamicMesh, point: THREE.Vector3): THREE.Vector3 {
+		if (definition.terrainMode === 'infinite') {
+			return point
+		}
 		const halfWidth = definition.width * 0.5
 		const halfDepth = definition.depth * 0.5
 		point.x = THREE.MathUtils.clamp(point.x, -halfWidth, halfWidth)
@@ -4460,19 +4565,24 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	): THREE.Vector3 | null {
 		const localPoint = worldPoint.clone()
 		groundMesh.worldToLocal(localPoint)
-		const halfWidth = definition.width * 0.5
-		const halfDepth = definition.depth * 0.5
-		if (
-			!Number.isFinite(localPoint.x) ||
-			!Number.isFinite(localPoint.z) ||
-			localPoint.x < -halfWidth ||
-			localPoint.x > halfWidth ||
-			localPoint.z < -halfDepth ||
-			localPoint.z > halfDepth
-		) {
+		if (!Number.isFinite(localPoint.x) || !Number.isFinite(localPoint.z)) {
 			return null
 		}
-		const height = sampleGroundHeight(definition, localPoint.x, localPoint.z)
+		if (definition.terrainMode !== 'infinite') {
+			const halfWidth = definition.width * 0.5
+			const halfDepth = definition.depth * 0.5
+			if (
+				localPoint.x < -halfWidth ||
+				localPoint.x > halfWidth ||
+				localPoint.z < -halfDepth ||
+				localPoint.z > halfDepth
+			) {
+				return null
+			}
+		}
+		const height = definition.terrainMode === 'infinite'
+			? (typeof definition.baseHeight === 'number' && Number.isFinite(definition.baseHeight) ? definition.baseHeight : 0)
+			: sampleGroundHeight(definition, localPoint.x, localPoint.z)
 		localPoint.y = height
 		groundMesh.localToWorld(localPoint)
 		return localPoint
@@ -4575,6 +4685,12 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		}
 		scatterRuntimeAssetIdByNodeId.set(buildScatterNodeId(nextLayer.id, stored.id), scatterSession.bindingAssetId)
 		addScatterInstanceToNeighborIndex(scatterSession, stored)
+		pendingScatterChunkKeys.add(getScatterChunkKeyFromLocal(
+			scatterSession.definition,
+			scatterSession.chunkCells,
+			localPoint.x,
+			localPoint.z,
+		).key)
 		return true
 	}
 
@@ -4972,6 +5088,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			}
 			scatterRuntimeAssetIdByNodeId.set(buildScatterNodeId(nextLayer.id, stored.id), session.bindingAssetId)
 			addScatterInstanceToNeighborIndex(session, stored)
+		}
+		for (const chunkKey of collectScatterChunkKeysFromInstances(appended, session.definition, session.chunkCells)) {
+			pendingScatterChunkKeys.add(chunkKey)
 		}
 
 		let committedCount = appended.length
@@ -6302,6 +6421,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				bumpRuntimeVersion: false,
 				runtimeSyncReason: 'editor-local-erase',
 			})
+			for (const chunkKey of chunkKeys) {
+				pendingScatterChunkKeys.add(chunkKey)
+			}
 			scatterSidecarPersistPending = true
 			queueScatterAssetCleanup(cleanupAssetIds)
 		}
@@ -6373,6 +6495,15 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 	function clearScatterInstances(): boolean {
 		const store = ensureScatterStoreRef()
+		const definition = getGroundDynamicMeshDefinition()
+		if (definition) {
+			const chunkCells = resolveChunkCellsForDefinition(definition)
+			for (const layer of Array.from(store.layers.values())) {
+				for (const chunkKey of collectScatterChunkKeysFromInstances(layer.instances, definition, chunkCells)) {
+					pendingScatterChunkKeys.add(chunkKey)
+				}
+			}
+		}
 		let removed = false
 		for (const layer of Array.from(store.layers.values())) {
 			removed = removeScatterLayerFromStore(store, layer, new Set<string>()) || removed

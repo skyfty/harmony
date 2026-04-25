@@ -1,10 +1,11 @@
 import * as THREE from 'three'
 import type {
   GroundDynamicMesh,
+  GroundHeightMap,
   GroundRuntimeDynamicMesh,
   SceneNode,
 } from '@schema'
-import { GROUND_HEIGHT_UNSET_VALUE, getGroundVertexIndex } from '@schema'
+import { GROUND_HEIGHT_UNSET_VALUE, createGroundHeightMap, getGroundVertexIndex } from '@schema'
 import {
   ensureTerrainScatterStore,
   getTerrainScatterStore,
@@ -589,18 +590,27 @@ async function clearPlanningGeneratedContentIncremental(options: {
 }
 
 function resetGroundPlanningContours(definition: GroundRuntimeDynamicMesh): { definition: GroundRuntimeDynamicMesh; changed: boolean } {
-  const hadPlanningContours = Boolean(
-    definition.planningHeightMap.some((value) => Number.isFinite(value)),
-  )
+  let hadPlanningContours = false
+  for (let index = 0; index < definition.planningHeightMap.length; index += 1) {
+    if (Number.isFinite(definition.planningHeightMap[index])) {
+      hadPlanningContours = true
+      break
+    }
+  }
   if (!hadPlanningContours) {
     return { definition, changed: false }
+  }
+
+  const clearedPlanningHeightMap = createGroundHeightMap(definition.rows, definition.columns)
+  for (let index = 0; index < clearedPlanningHeightMap.length; index += 1) {
+    clearedPlanningHeightMap[index] = GROUND_HEIGHT_UNSET_VALUE
   }
 
   return {
     changed: true,
     definition: {
       ...definition,
-      planningHeightMap: definition.planningHeightMap.fill(GROUND_HEIGHT_UNSET_VALUE),
+      planningHeightMap: clearedPlanningHeightMap,
       planningMetadata: {
         ...(definition.planningMetadata ?? {}),
         contourBounds: null,
@@ -608,6 +618,15 @@ function resetGroundPlanningContours(definition: GroundRuntimeDynamicMesh): { de
       },
     },
   }
+}
+
+function createClearedGroundHeightMap(source: GroundHeightMap, rows: number, columns: number): GroundHeightMap {
+  const cleared = createGroundHeightMap(rows, columns)
+  const length = Math.min(cleared.length, source.length)
+  for (let index = 0; index < length; index += 1) {
+    cleared[index] = GROUND_HEIGHT_UNSET_VALUE
+  }
+  return cleared
 }
 
 function derivePlanningContourBounds(definition: GroundRuntimeDynamicMesh): GroundContourBounds | null {
@@ -744,12 +763,22 @@ function applyPlanningDemRegionToGround(
   definition: GroundRuntimeDynamicMesh,
   region: PlanningDemHeightRegion,
   planningMetadata: GroundRuntimeDynamicMesh['planningMetadata'],
+  localEditTiles: GroundRuntimeDynamicMesh['localEditTiles'] = null,
 ): GroundRuntimeDynamicMesh {
   const nextGroundSeed = {
     ...definition,
     planningMetadata,
+    localEditTiles: localEditTiles
+      ? {
+          ...(definition.localEditTiles ?? {}),
+          ...localEditTiles,
+        }
+      : definition.localEditTiles ?? null,
   } satisfies GroundRuntimeDynamicMesh
   const nextGround = syncPlanningHeightRegionState(sceneStore, groundNode, nextGroundSeed, region)
+  if (localEditTiles) {
+    useGroundHeightmapStore().replaceLocalEditTiles(groundNode.id, nextGround, nextGround.localEditTiles ?? null)
+  }
   sceneStore.updateGroundNodeDynamicMesh(groundNode.id, nextGround)
   return nextGround
 }
@@ -1335,7 +1364,7 @@ async function applyPlanningTerrainContoursToGround(options: {
 
   const rewriteBounds = unionBounds(previousBounds, nextBounds)
   if (!rewriteBounds) {
-    const clearedPlanningHeightMap = definition.planningHeightMap.fill(GROUND_HEIGHT_UNSET_VALUE)
+    const clearedPlanningHeightMap = createClearedGroundHeightMap(definition.planningHeightMap, definition.rows, definition.columns)
     const cleared = { ...definition }
     cleared.planningHeightMap = clearedPlanningHeightMap
     cleared.planningMetadata = {
@@ -1698,6 +1727,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
         groundDefinition as GroundRuntimeDynamicMesh,
         demResult.region,
         demResult.planningMetadata,
+        demResult.localEditTiles,
       )
       demApplied = true
       sceneStore.setGroundTexture({

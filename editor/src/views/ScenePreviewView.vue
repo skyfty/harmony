@@ -39,6 +39,7 @@ import {
 	disposeGradientBackgroundDome,
 	type GradientBackgroundDome,
 	type GroundDynamicMesh,
+	type GroundChunkManifestRecord,
 	type GroundSurfaceChunkTextureMap,
 	type GroundRuntimeDynamicMesh,
 	type LanternSlideDefinition,
@@ -83,14 +84,12 @@ import {
 	isGroundDynamicMesh,
 } from '@schema/groundHeightfield'
 import {
-	areAllGroundChunksLoaded,
-	ensureAllGroundChunks,
-	isGroundChunkStreamingEnabled,
 	resolveGroundChunkRadiusMeters,
 	resolveGroundRuntimeChunkCells,
-	sampleGroundHeight,
-	updateGroundChunks,
+	setInfiniteGroundHiddenChunkKeys,
+	syncGroundChunkLoadingMode,
 } from '@schema/groundMesh'
+import { clearInfiniteGroundChunkMeshes, syncInfiniteGroundChunkMeshes } from '@schema/groundChunkManifestRuntime'
 import {
 	createSceneCsmShadowRuntime,
 	DEFAULT_SCENE_CSM_CONFIG,
@@ -1627,6 +1626,11 @@ let cachedGroundNodeId: string | null = null
 let cachedGroundDynamicMesh: GroundDynamicMesh | null = null
 let cachedGroundNode: SceneNode | null = null
 let groundSurfacePreviewLoadToken = 0
+let previewGroundChunkManifestSceneId: string | null = null
+let previewGroundChunkManifestRevision = -1
+let previewGroundChunkManifestRecords: Record<string, GroundChunkManifestRecord> = {}
+let previewGroundChunkManifestLoadToken = 0
+let previewGroundChunkManifestLoadPromise: Promise<void> | null = null
 let unsubscribe: (() => void) | null = null
 let livePreviewEnabled = true
 let isApplyingSnapshot = false
@@ -1946,6 +1950,11 @@ async function syncGroundCache(document: SceneJsonExportDocument | null): Promis
 	cachedGroundNode = null
 	cameraDependentUpdateInitialized = false
 	groundSurfacePreviewLoadToken += 1
+	previewGroundChunkManifestSceneId = null
+	previewGroundChunkManifestRevision = -1
+	previewGroundChunkManifestRecords = {}
+	previewGroundChunkManifestLoadToken += 1
+	previewGroundChunkManifestLoadPromise = null
 	const loadToken = groundSurfacePreviewLoadToken
 	if (!document) {
 		return
@@ -1974,6 +1983,111 @@ async function syncGroundCache(document: SceneJsonExportDocument | null): Promis
 	cachedGroundNode = groundNode
 	if (scene && currentDocument?.id === document.id) {
 		void applyEnvironmentSettingsToScene(resolveDocumentEnvironment(document))
+	}
+}
+
+function syncPreviewInfiniteGroundChunkManifest(
+	groundObject: THREE.Object3D,
+	groundDefinition: GroundRuntimeDynamicMesh,
+	activeCamera: THREE.PerspectiveCamera,
+): void {
+	if (groundDefinition.terrainMode !== 'infinite') {
+		setInfiniteGroundHiddenChunkKeys(groundObject, [])
+		clearInfiniteGroundChunkMeshes(groundObject)
+		previewGroundChunkManifestSceneId = null
+		previewGroundChunkManifestRevision = -1
+		previewGroundChunkManifestRecords = {}
+		return
+	}
+
+	const sceneId = typeof currentDocument?.id === 'string' ? currentDocument.id.trim() : ''
+	const manifestRevision = Number.isFinite(groundDefinition.chunkManifestRevision)
+		? Math.max(0, Math.trunc(groundDefinition.chunkManifestRevision as number))
+		: 0
+
+	if (!sceneId || manifestRevision <= 0) {
+		setInfiniteGroundHiddenChunkKeys(groundObject, [])
+		clearInfiniteGroundChunkMeshes(groundObject)
+		previewGroundChunkManifestSceneId = sceneId || null
+		previewGroundChunkManifestRevision = manifestRevision
+		previewGroundChunkManifestRecords = {}
+		return
+	}
+
+	if (previewGroundChunkManifestSceneId === sceneId && previewGroundChunkManifestRevision === manifestRevision) {
+		setInfiniteGroundHiddenChunkKeys(groundObject, Object.keys(previewGroundChunkManifestRecords))
+		syncInfiniteGroundChunkMeshes({
+			groundObject,
+			groundDefinition,
+			camera: activeCamera,
+			sourceId: sceneId,
+			manifestRevision,
+			manifestRecords: previewGroundChunkManifestRecords,
+			loadChunkData: (record) => useScenesStore().loadGroundChunkData(sceneId, record.key),
+			resolveActiveRecord: (chunkKey) => previewGroundChunkManifestRecords[chunkKey] ?? null,
+		})
+		return
+	}
+
+	setInfiniteGroundHiddenChunkKeys(groundObject, [])
+	clearInfiniteGroundChunkMeshes(groundObject)
+
+	if (!previewGroundChunkManifestLoadPromise) {
+		const loadToken = ++previewGroundChunkManifestLoadToken
+		previewGroundChunkManifestLoadPromise = useScenesStore().loadGroundChunkManifest(sceneId)
+			.then((manifest) => {
+				if (loadToken !== previewGroundChunkManifestLoadToken) {
+					return
+				}
+				const manifestRecords = manifest?.revision === manifestRevision
+					? { ...(manifest.chunks ?? {}) }
+					: {}
+				previewGroundChunkManifestSceneId = sceneId
+				previewGroundChunkManifestRevision = manifestRevision
+				previewGroundChunkManifestRecords = manifestRecords
+
+				const currentGroundId = cachedGroundNodeId
+				const currentDefinition = cachedGroundDynamicMesh as GroundRuntimeDynamicMesh | null
+				if (!currentGroundId || !currentDefinition || currentDefinition.terrainMode !== 'infinite') {
+					return
+				}
+				const currentSceneId = typeof currentDocument?.id === 'string' ? currentDocument.id.trim() : ''
+				const currentRevision = Number.isFinite(currentDefinition.chunkManifestRevision)
+					? Math.max(0, Math.trunc(currentDefinition.chunkManifestRevision as number))
+					: 0
+				if (currentSceneId !== sceneId || currentRevision !== manifestRevision) {
+					return
+				}
+				const currentGroundObject = nodeObjectMap.get(currentGroundId) ?? null
+				if (!currentGroundObject) {
+					return
+				}
+				setInfiniteGroundHiddenChunkKeys(currentGroundObject, Object.keys(manifestRecords))
+				syncInfiniteGroundChunkMeshes({
+					groundObject: currentGroundObject,
+					groundDefinition: currentDefinition,
+					camera: activeCamera,
+					sourceId: sceneId,
+					manifestRevision,
+					manifestRecords,
+					loadChunkData: (record) => useScenesStore().loadGroundChunkData(sceneId, record.key),
+					resolveActiveRecord: (chunkKey) => previewGroundChunkManifestRecords[chunkKey] ?? null,
+				})
+			})
+			.catch((error) => {
+				if (loadToken !== previewGroundChunkManifestLoadToken) {
+					return
+				}
+				console.warn('[ScenePreview] 加载地形 chunk manifest 失败', error)
+				previewGroundChunkManifestSceneId = sceneId
+				previewGroundChunkManifestRevision = manifestRevision
+				previewGroundChunkManifestRecords = {}
+			})
+			.finally(() => {
+				if (loadToken === previewGroundChunkManifestLoadToken) {
+					previewGroundChunkManifestLoadPromise = null
+				}
+			})
 	}
 }
 
@@ -9111,11 +9225,8 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
 	if (cachedGroundNodeId && cachedGroundDynamicMesh && cachedGroundNode) {
 		const groundObject = nodeObjectMap.get(cachedGroundNodeId) ?? null
 		if (groundObject) {
-			if (isGroundChunkStreamingEnabled(cachedGroundDynamicMesh)) {
-				updateGroundChunks(groundObject, cachedGroundDynamicMesh as GroundRuntimeDynamicMesh, activeCamera)
-			} else if (!areAllGroundChunksLoaded(groundObject, cachedGroundDynamicMesh)) {
-				ensureAllGroundChunks(groundObject, cachedGroundDynamicMesh as GroundRuntimeDynamicMesh)
-			}
+			syncGroundChunkLoadingMode(groundObject, cachedGroundDynamicMesh as GroundRuntimeDynamicMesh, activeCamera)
+			syncPreviewInfiniteGroundChunkManifest(groundObject, cachedGroundDynamicMesh as GroundRuntimeDynamicMesh, activeCamera)
 			syncGroundSurfacePreviewForGroundNode(groundObject, cachedGroundNode, cachedGroundDynamicMesh)
 			if (isGroundChunkStreamingDebugVisible.value || isGroundChunkStatsVisible.value) {
 				syncGroundChunkStreamingDebug(groundObject, cachedGroundDynamicMesh, activeCamera, {

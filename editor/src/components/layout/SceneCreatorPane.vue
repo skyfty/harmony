@@ -2,37 +2,23 @@
 import { computed, ref } from 'vue'
 import type { PlanningSceneData, PlanningTerrainDemData } from '@/types/planning-scene-data'
 import { parsePlanningDemFile, demImportResultToTerrainData } from '@/utils/planningDemImport'
-import { buildPlanningDataFromDem, suggestPlanningDemGroundSize } from '@/utils/planningDemSceneSizing'
+import { buildPlanningDataFromDem } from '@/utils/planningDemSceneSizing'
 import { storePlanningDemBlobByHash } from '@/utils/planningDemStorage'
 
 const props = defineProps<{
   sceneName: string
-  groundWidth: number
-  groundDepth: number
   planningData?: PlanningSceneData | null
   confirmError?: string | null
 }>()
 
 const emit = defineEmits<{
   (e: 'update:sceneName', value: string): void
-  (e: 'update:groundWidth', value: number): void
-  (e: 'update:groundDepth', value: number): void
   (e: 'update:planningData', value: PlanningSceneData | null): void
 }>()
 
 const name = computed({
   get: () => props.sceneName,
   set: (v: string) => emit('update:sceneName', v),
-})
-
-const width = computed({
-  get: () => props.groundWidth,
-  set: (v: number) => emit('update:groundWidth', v),
-})
-
-const depth = computed({
-  get: () => props.groundDepth,
-  set: (v: number) => emit('update:groundDepth', v),
 })
 
 const planningData = computed({
@@ -45,7 +31,6 @@ const demImportError = ref<string | null>(null)
 const demImportName = ref<string | null>(null)
 const isImportingDem = ref(false)
 const importedDem = computed<PlanningTerrainDemData | null>(() => planningData.value?.terrain?.dem ?? null)
-const suggestedGroundSize = computed(() => (importedDem.value ? suggestPlanningDemGroundSize(importedDem.value) : null))
 
 function isPlanningDemFile(file: File): boolean {
   const name = file.name.toLowerCase()
@@ -79,9 +64,6 @@ async function handleDemFileChange(event: Event) {
     const result = await parsePlanningDemFile(file)
     await storePlanningDemBlobByHash(result.sourceFileHash, file)
     const dem = demImportResultToTerrainData(result)
-    const suggested = suggestPlanningDemGroundSize(dem)
-    width.value = suggested.width
-    depth.value = suggested.depth
     planningData.value = buildPlanningDataFromDem(dem)
     demImportName.value = file.name
   } catch (error) {
@@ -103,33 +85,6 @@ async function handleDemFileChange(event: Event) {
     density="comfortable"
     autofocus
   />
-
-  <v-row dense>
-    <v-col cols="6">
-      <v-text-field
-        v-model.number="width"
-        label="Ground Width (m)"
-        variant="underlined"
-        density="comfortable"
-        type="number"
-        min="1"
-        step="1"
-        suffix="m"
-      />
-    </v-col>
-    <v-col cols="6">
-      <v-text-field
-        v-model.number="depth"
-        label="Ground Depth (m)"
-        variant="underlined"
-        density="comfortable"
-        type="number"
-        min="1"
-        step="1"
-        suffix="m"
-      />
-    </v-col>
-  </v-row>
 
   <div class="scene-creator-dem-import">
     <div class="scene-creator-dem-import__header">
@@ -167,12 +122,11 @@ async function handleDemFileChange(event: Event) {
         <div class="scene-creator-dem-import__row"><span>File</span><strong>{{ demImportName || importedDem.filename || 'Unnamed DEM' }}</strong></div>
         <div class="scene-creator-dem-import__row"><span>Size</span><strong>{{ importedDem.width ?? '—' }} × {{ importedDem.height ?? '—' }}</strong></div>
         <div class="scene-creator-dem-import__row"><span>Elevation</span><strong>{{ importedDem.minElevation ?? '—' }} → {{ importedDem.maxElevation ?? '—' }}</strong></div>
-        <div class="scene-creator-dem-import__row"><span>Ground</span><strong>{{ suggestedGroundSize?.width ?? width }} × {{ suggestedGroundSize?.depth ?? depth }} m</strong></div>
       </div>
       <div class="scene-creator-dem-import__preview-placeholder">Imported DEM will be attached to the new scene.</div>
     </div>
     <div v-else class="scene-creator-dem-import__empty">
-      Import a DEM to auto-fill the ground size and attach the DEM data to the new scene.
+      Import a DEM to attach chunked terrain source data to the new scene.
     </div>
     <v-alert
       v-if="demImportError"

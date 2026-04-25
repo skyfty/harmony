@@ -16,8 +16,6 @@ const dialogOpen = computed({
 
 const name = ref('')
 const defaultSceneName = ref('New Scene')
-const defaultGroundWidth = ref<number>(100)
-const defaultGroundDepth = ref<number>(100)
 const defaultPlanningData = ref<import('@/types/planning-scene-data').PlanningSceneData | null>(null)
 
 watch(
@@ -44,9 +42,7 @@ function handleConfirm() {
     name: trimmed.length ? trimmed : 'New Project',
     defaultScene: {
       name: defaultSceneName.value,
-      groundWidth: defaultGroundWidth.value,
-      groundDepth: defaultGroundDepth.value,
-        planningData: defaultPlanningData.value,
+      planningData: defaultPlanningData.value,
     },
   })
   dialogOpen.value = false
@@ -63,8 +59,6 @@ function handleConfirm() {
  
         <SceneCreatorPane
           v-model:sceneName="defaultSceneName"
-          v-model:groundWidth="defaultGroundWidth"
-          v-model:groundDepth="defaultGroundDepth"
           v-model:planningData="defaultPlanningData"
         />
       </v-card-text>

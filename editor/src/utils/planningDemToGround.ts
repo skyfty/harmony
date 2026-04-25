@@ -1,6 +1,7 @@
-import type { GroundRuntimeDynamicMesh } from '@schema'
+import type { GroundHeightMap, GroundLocalEditTileMap, GroundRuntimeDynamicMesh } from '@schema'
 import {
   createGroundHeightMap,
+  formatGroundLocalEditTileKey,
   getGroundVertexIndex,
   resolveGroundEditCellSize,
   resolveGroundEditTileResolution,
@@ -12,7 +13,8 @@ import { loadPlanningDemBlobByHash } from '@/utils/planningDemStorage'
 import { parsePlanningDemBlob } from '@/utils/planningDemImport'
 
 export interface PlanningDemGroundConversionResult {
-  planningHeightMap: Float64Array
+  planningHeightMap: GroundHeightMap
+  localEditTiles: GroundLocalEditTileMap | null
   planningMetadata: GroundPlanningMetadata
   textureDataUrl: string | null
   textureName: string | null
@@ -20,6 +22,7 @@ export interface PlanningDemGroundConversionResult {
 
 export interface PlanningDemRegionConversionResult {
   region: PlanningDemHeightRegion
+  localEditTiles: GroundLocalEditTileMap | null
   planningMetadata: GroundPlanningMetadata
   textureDataUrl: string | null
   textureName: string | null
@@ -27,6 +30,7 @@ export interface PlanningDemRegionConversionResult {
 
 export interface PlanningDemTileConversionResult {
   region: PlanningDemTileHeightRegion
+  localEditTiles: GroundLocalEditTileMap | null
   planningMetadata: GroundPlanningMetadata
   textureDataUrl: string | null
   textureName: string | null
@@ -89,19 +93,83 @@ function buildPlanningDemRegionFromPreparedSource(options: {
   textureDataUrl?: string | null
   textureName?: string | null
 }): PlanningDemRegionConversionResult {
+  const region = buildPlanningDemHeightRegion({
+    definition: options.definition,
+    source: options.prepared.rasterSource,
+    startRow: options.startRow,
+    endRow: options.endRow,
+    startColumn: options.startColumn,
+    endColumn: options.endColumn,
+  })
   return {
-    region: buildPlanningDemHeightRegion({
+    region,
+    localEditTiles: buildPlanningDemLocalEditTilesForRegion({
       definition: options.definition,
       source: options.prepared.rasterSource,
-      startRow: options.startRow,
-      endRow: options.endRow,
-      startColumn: options.startColumn,
-      endColumn: options.endColumn,
+      startRow: region.startRow,
+      endRow: region.endRow,
+      startColumn: region.startColumn,
+      endColumn: region.endColumn,
     }),
     planningMetadata: options.prepared.planningMetadata,
     textureDataUrl: options.textureDataUrl ?? null,
     textureName: options.textureName ?? null,
   }
+}
+
+export function buildPlanningDemLocalEditTilesForRegion(options: {
+  definition: Pick<GroundRuntimeDynamicMesh, 'width' | 'depth' | 'editTileSizeMeters' | 'tileSizeMeters' | 'editTileResolution' | 'tileResolution' | 'cellSize'>
+  source: PlanningDemRasterSource
+  startRow: number
+  endRow: number
+  startColumn: number
+  endColumn: number
+}): GroundLocalEditTileMap | null {
+  const tileSizeMeters = resolveGroundEditTileSizeMeters(options.definition)
+  const resolution = resolveGroundEditTileResolution(options.definition)
+  if (!(tileSizeMeters > 0) || !(resolution > 0)) {
+    return null
+  }
+  const cellSize = Number.isFinite(options.definition.cellSize) && options.definition.cellSize > 0 ? options.definition.cellSize : 1
+  const halfWidth = options.definition.width * 0.5
+  const halfDepth = options.definition.depth * 0.5
+  const minX = -halfWidth + options.startColumn * cellSize
+  const maxX = -halfWidth + options.endColumn * cellSize
+  const minZ = -halfDepth + options.startRow * cellSize
+  const maxZ = -halfDepth + options.endRow * cellSize
+  const startTileColumn = Math.max(0, Math.floor((minX + halfWidth) / tileSizeMeters))
+  const endTileColumn = Math.max(startTileColumn, Math.floor((maxX + halfWidth) / tileSizeMeters))
+  const startTileRow = Math.max(0, Math.floor((minZ + halfDepth) / tileSizeMeters))
+  const endTileRow = Math.max(startTileRow, Math.floor((maxZ + halfDepth) / tileSizeMeters))
+  const result: GroundLocalEditTileMap = {}
+
+  for (let tileRow = startTileRow; tileRow <= endTileRow; tileRow += 1) {
+    for (let tileColumn = startTileColumn; tileColumn <= endTileColumn; tileColumn += 1) {
+      const key = formatGroundLocalEditTileKey(tileRow, tileColumn)
+      const tileMinX = -halfWidth + tileColumn * tileSizeMeters
+      const tileMinZ = -halfDepth + tileRow * tileSizeMeters
+      const values = new Array<number>((resolution + 1) * (resolution + 1))
+      for (let row = 0; row <= resolution; row += 1) {
+        const z = tileMinZ + (row / resolution) * tileSizeMeters
+        for (let column = 0; column <= resolution; column += 1) {
+          const x = tileMinX + (column / resolution) * tileSizeMeters
+          values[row * (resolution + 1) + column] = samplePlanningDemHeightAtWorld(options.source, x, z)
+        }
+      }
+      result[key] = {
+        key,
+        tileRow,
+        tileColumn,
+        tileSizeMeters,
+        resolution,
+        values,
+        source: 'dem',
+        updatedAt: Date.now(),
+      }
+    }
+  }
+
+  return Object.keys(result).length ? result : null
 }
 
 function clamp01(value: number): number {
@@ -421,13 +489,22 @@ export async function buildPlanningDemGroundTileData(options: {
     terrainDem: options.terrainDem,
     applyOrthophoto: options.applyOrthophoto,
   })
+  const region = buildPlanningDemTileHeightRegion({
+    definition: options.definition,
+    source: prepared.rasterSource,
+    tileLayout: prepared.tileLayout,
+    tileRow: options.tileRow,
+    tileColumn: options.tileColumn,
+  })
   return {
-    region: buildPlanningDemTileHeightRegion({
+    region,
+    localEditTiles: buildPlanningDemLocalEditTilesForRegion({
       definition: options.definition,
       source: prepared.rasterSource,
-      tileLayout: prepared.tileLayout,
-      tileRow: options.tileRow,
-      tileColumn: options.tileColumn,
+      startRow: region.startRow,
+      endRow: region.endRow,
+      startColumn: region.startColumn,
+      endColumn: region.endColumn,
     }),
     planningMetadata: prepared.planningMetadata,
     textureDataUrl: texture.textureDataUrl,
@@ -499,6 +576,14 @@ export async function buildPlanningDemGroundData(options: {
 
   return {
     planningHeightMap: heightMap,
+    localEditTiles: buildPlanningDemLocalEditTilesForRegion({
+      definition,
+      source: prepared.rasterSource,
+      startRow: 0,
+      endRow: rows,
+      startColumn: 0,
+      endColumn: columns,
+    }),
     planningMetadata: fullRegionResult.planningMetadata,
     textureDataUrl: texture.textureDataUrl,
     textureName: texture.textureName ?? (prepared.parsed.orthophoto ? terrainDem.orthophoto?.filename ?? terrainDem.filename ?? 'Orthophoto' : null),

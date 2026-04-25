@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import type { SceneNode } from '@schema'
+import type { GroundChunkManifest, SceneNode } from '@schema'
 import type { SceneSummary } from '@/types/scene-summary'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import { toRaw, watch } from 'vue'
@@ -154,17 +154,21 @@ async function mapWithConcurrency<T, R>(
 }
 
 const DB_NAME = 'harmony-editor-scenes'
-const DB_VERSION = 7
+const DB_VERSION = 8
 const STORE_METADATA = 'sceneMetadata'
 const STORE_DOCUMENTS = 'sceneDocuments'
 const STORE_GROUND_HEIGHTMAPS = 'sceneGroundHeightmaps'
 const STORE_GROUND_SCATTERS = 'sceneGroundScatters'
 const STORE_GROUND_PAINTS = 'sceneGroundPaints'
+const STORE_GROUND_CHUNK_MANIFESTS = 'sceneGroundChunkManifests'
+const STORE_GROUND_CHUNK_DATA = 'sceneGroundChunkData'
 
 const memoryWorkspaceDocuments = new Map<string, Map<string, StoredSceneDocument>>()
 const memoryWorkspaceGroundHeightSidecars = new Map<string, Map<string, ArrayBuffer>>()
 const memoryWorkspaceGroundScatterSidecars = new Map<string, Map<string, ArrayBuffer>>()
 const memoryWorkspaceGroundPaintSidecars = new Map<string, Map<string, ArrayBuffer>>()
+const memoryWorkspaceGroundChunkManifests = new Map<string, Map<string, GroundChunkManifest>>()
+const memoryWorkspaceGroundChunkData = new Map<string, Map<string, ArrayBuffer>>()
 const workspaceDbPromises = new Map<string, Promise<IDBDatabase>>()
 const workspaceDbInstances = new Map<string, IDBDatabase>()
 
@@ -205,6 +209,28 @@ function getMemoryGroundPaintSidecars(workspaceId: string): Map<string, ArrayBuf
     memoryWorkspaceGroundPaintSidecars.set(workspaceId, bucket)
   }
   return bucket
+}
+
+function getMemoryGroundChunkManifests(workspaceId: string): Map<string, GroundChunkManifest> {
+  let bucket = memoryWorkspaceGroundChunkManifests.get(workspaceId)
+  if (!bucket) {
+    bucket = new Map()
+    memoryWorkspaceGroundChunkManifests.set(workspaceId, bucket)
+  }
+  return bucket
+}
+
+function getMemoryGroundChunkData(workspaceId: string): Map<string, ArrayBuffer> {
+  let bucket = memoryWorkspaceGroundChunkData.get(workspaceId)
+  if (!bucket) {
+    bucket = new Map()
+    memoryWorkspaceGroundChunkData.set(workspaceId, bucket)
+  }
+  return bucket
+}
+
+function getGroundChunkDataStorageKey(sceneId: string, chunkKey: string): string {
+  return `${sceneId}:${chunkKey}`
 }
 
 function getWorkspaceDbName(workspaceId: string): string {
@@ -340,6 +366,12 @@ function openDatabase(workspaceId: string): Promise<IDBDatabase> {
           if (!db.objectStoreNames.contains(STORE_GROUND_PAINTS)) {
             db.createObjectStore(STORE_GROUND_PAINTS, { keyPath: 'id' })
           }
+          if (!db.objectStoreNames.contains(STORE_GROUND_CHUNK_MANIFESTS)) {
+            db.createObjectStore(STORE_GROUND_CHUNK_MANIFESTS, { keyPath: 'id' })
+          }
+          if (!db.objectStoreNames.contains(STORE_GROUND_CHUNK_DATA)) {
+            db.createObjectStore(STORE_GROUND_CHUNK_DATA, { keyPath: 'id' })
+          }
           if (request.transaction && oldVersion < 3) {
             request.transaction.objectStore(STORE_METADATA).clear()
             request.transaction.objectStore(STORE_DOCUMENTS).clear()
@@ -366,6 +398,8 @@ async function deleteWorkspaceStorage(workspaceId: string): Promise<void> {
     memoryWorkspaceGroundHeightSidecars.delete(workspaceId)
     memoryWorkspaceGroundScatterSidecars.delete(workspaceId)
     memoryWorkspaceGroundPaintSidecars.delete(workspaceId)
+    memoryWorkspaceGroundChunkManifests.delete(workspaceId)
+    memoryWorkspaceGroundChunkData.delete(workspaceId)
     return
   }
   const dbName = getWorkspaceDbName(workspaceId)
@@ -387,6 +421,8 @@ async function deleteWorkspaceStorage(workspaceId: string): Promise<void> {
   memoryWorkspaceGroundHeightSidecars.delete(workspaceId)
   memoryWorkspaceGroundScatterSidecars.delete(workspaceId)
   memoryWorkspaceGroundPaintSidecars.delete(workspaceId)
+  memoryWorkspaceGroundChunkManifests.delete(workspaceId)
+  memoryWorkspaceGroundChunkData.delete(workspaceId)
 }
 
 async function readSceneGroundHeightSidecar(workspaceId: string, sceneId: string): Promise<ArrayBuffer | null> {
@@ -497,6 +533,95 @@ async function writeSceneGroundPaintSidecar(workspaceId: string, sceneId: string
     tx.oncomplete = () => resolve()
     tx.onerror = () => reject(tx.error ?? new Error('Failed to write scene ground paint sidecar'))
     tx.onabort = () => reject(tx.error ?? new Error('Scene ground paint sidecar write aborted'))
+  })
+}
+
+async function readSceneGroundChunkManifest(workspaceId: string, sceneId: string): Promise<GroundChunkManifest | null> {
+  if (!isIndexedDbAvailable()) {
+    const manifest = getMemoryGroundChunkManifests(workspaceId).get(sceneId)
+    return manifest ? cloneForIndexedDb(manifest) : null
+  }
+  const db = await openDatabase(workspaceId)
+  const tx = db.transaction(STORE_GROUND_CHUNK_MANIFESTS, 'readonly')
+  const store = tx.objectStore(STORE_GROUND_CHUNK_MANIFESTS)
+  const entry = await requestToPromise<{ id: string; manifest: GroundChunkManifest } | undefined>(store.get(sceneId))
+  return entry?.manifest ? cloneForIndexedDb(entry.manifest) : null
+}
+
+async function writeSceneGroundChunkManifest(
+  workspaceId: string,
+  sceneId: string,
+  manifest: GroundChunkManifest | null,
+): Promise<void> {
+  if (!isIndexedDbAvailable()) {
+    const bucket = getMemoryGroundChunkManifests(workspaceId)
+    if (manifest) {
+      bucket.set(sceneId, cloneForIndexedDb(manifest))
+    } else {
+      bucket.delete(sceneId)
+    }
+    return
+  }
+  const db = await openDatabase(workspaceId)
+  const tx = db.transaction(STORE_GROUND_CHUNK_MANIFESTS, 'readwrite')
+  const store = tx.objectStore(STORE_GROUND_CHUNK_MANIFESTS)
+  if (manifest) {
+    store.put({ id: sceneId, manifest: cloneForIndexedDb(manifest) })
+  } else {
+    store.delete(sceneId)
+  }
+  await new Promise<void>((resolve, reject) => {
+    tx.oncomplete = () => resolve()
+    tx.onerror = () => reject(tx.error ?? new Error('Failed to write scene ground chunk manifest'))
+    tx.onabort = () => reject(tx.error ?? new Error('Scene ground chunk manifest write aborted'))
+  })
+}
+
+async function readSceneGroundChunkData(
+  workspaceId: string,
+  sceneId: string,
+  chunkKey: string,
+): Promise<ArrayBuffer | null> {
+  const storageKey = getGroundChunkDataStorageKey(sceneId, chunkKey)
+  if (!isIndexedDbAvailable()) {
+    const buffer = getMemoryGroundChunkData(workspaceId).get(storageKey)
+    return buffer ? cloneArrayBuffer(buffer) : null
+  }
+  const db = await openDatabase(workspaceId)
+  const tx = db.transaction(STORE_GROUND_CHUNK_DATA, 'readonly')
+  const store = tx.objectStore(STORE_GROUND_CHUNK_DATA)
+  const entry = await requestToPromise<{ id: string; buffer: ArrayBuffer } | undefined>(store.get(storageKey))
+  return entry?.buffer ?? null
+}
+
+async function writeSceneGroundChunkData(
+  workspaceId: string,
+  sceneId: string,
+  chunkKey: string,
+  data: ArrayBuffer | null,
+): Promise<void> {
+  const storageKey = getGroundChunkDataStorageKey(sceneId, chunkKey)
+  if (!isIndexedDbAvailable()) {
+    const bucket = getMemoryGroundChunkData(workspaceId)
+    if (data) {
+      bucket.set(storageKey, cloneArrayBuffer(data))
+    } else {
+      bucket.delete(storageKey)
+    }
+    return
+  }
+  const db = await openDatabase(workspaceId)
+  const tx = db.transaction(STORE_GROUND_CHUNK_DATA, 'readwrite')
+  const store = tx.objectStore(STORE_GROUND_CHUNK_DATA)
+  if (data) {
+    store.put({ id: storageKey, sceneId, chunkKey, buffer: cloneArrayBuffer(data) })
+  } else {
+    store.delete(storageKey)
+  }
+  await new Promise<void>((resolve, reject) => {
+    tx.oncomplete = () => resolve()
+    tx.onerror = () => reject(tx.error ?? new Error('Failed to write scene ground chunk data'))
+    tx.onabort = () => reject(tx.error ?? new Error('Scene ground chunk data write aborted'))
   })
 }
 
@@ -938,20 +1063,40 @@ async function removeSceneDocument(workspaceId: string, id: string): Promise<voi
     getMemoryGroundHeightSidecars(workspaceId).delete(id)
     getMemoryGroundScatterSidecars(workspaceId).delete(id)
     getMemoryGroundPaintSidecars(workspaceId).delete(id)
+    getMemoryGroundChunkManifests(workspaceId).delete(id)
+    const chunkDataBucket = getMemoryGroundChunkData(workspaceId)
+    Array.from(chunkDataBucket.keys())
+      .filter((key) => key.startsWith(`${id}:`))
+      .forEach((key) => chunkDataBucket.delete(key))
     return
   }
   const db = await openDatabase(workspaceId)
-  const tx = db.transaction([STORE_DOCUMENTS, STORE_METADATA, STORE_GROUND_HEIGHTMAPS, STORE_GROUND_SCATTERS, STORE_GROUND_PAINTS], 'readwrite')
+  const tx = db.transaction([
+    STORE_DOCUMENTS,
+    STORE_METADATA,
+    STORE_GROUND_HEIGHTMAPS,
+    STORE_GROUND_SCATTERS,
+    STORE_GROUND_PAINTS,
+    STORE_GROUND_CHUNK_MANIFESTS,
+    STORE_GROUND_CHUNK_DATA,
+  ], 'readwrite')
   const docs = tx.objectStore(STORE_DOCUMENTS)
   const meta = tx.objectStore(STORE_METADATA)
   const heightmaps = tx.objectStore(STORE_GROUND_HEIGHTMAPS)
   const dynamics = tx.objectStore(STORE_GROUND_SCATTERS)
   const paints = tx.objectStore(STORE_GROUND_PAINTS)
+  const manifests = tx.objectStore(STORE_GROUND_CHUNK_MANIFESTS)
+  const chunkData = tx.objectStore(STORE_GROUND_CHUNK_DATA)
   docs.delete(id)
   meta.delete(id)
   heightmaps.delete(id)
   dynamics.delete(id)
   paints.delete(id)
+  manifests.delete(id)
+  const chunkKeys = await requestToPromise<IDBValidKey[]>(chunkData.getAllKeys())
+  chunkKeys
+    .filter((key): key is string => typeof key === 'string' && key.startsWith(`${id}:`))
+    .forEach((key) => chunkData.delete(key))
   await new Promise<void>((resolve, reject) => {
     tx.oncomplete = () => resolve()
     tx.onerror = () => reject(tx.error ?? new Error('Failed to delete scene document'))
@@ -1284,6 +1429,45 @@ export const useScenesStore = defineStore('scenes', {
     },
     async loadGroundPaintSidecar(sceneId: string): Promise<ArrayBuffer | null> {
       return await readSceneGroundPaintSidecar(this.workspaceId, sceneId)
+    },
+    async loadGroundChunkManifest(sceneId: string): Promise<GroundChunkManifest | null> {
+      return await readSceneGroundChunkManifest(this.workspaceId, sceneId)
+    },
+    async saveGroundChunkManifest(
+      sceneId: string,
+      manifest: GroundChunkManifest | null,
+      options: { syncServer?: boolean } = {},
+    ): Promise<void> {
+      await writeSceneGroundChunkManifest(this.workspaceId, sceneId, manifest)
+      if (options.syncServer !== false && this.workspaceType === 'user') {
+        const sceneStore = useSceneStore()
+        const document = sceneStore.currentSceneId === sceneId
+          ? sceneStore.createSceneDocumentSnapshot()
+          : await this.loadSceneDocument(sceneId, { hydrateGroundRuntime: false })
+        if (document) {
+          await this.syncSceneToServer(document)
+        }
+      }
+    },
+    async loadGroundChunkData(sceneId: string, chunkKey: string): Promise<ArrayBuffer | null> {
+      return await readSceneGroundChunkData(this.workspaceId, sceneId, chunkKey)
+    },
+    async saveGroundChunkData(
+      sceneId: string,
+      chunkKey: string,
+      data: ArrayBuffer | null,
+      options: { syncServer?: boolean } = {},
+    ): Promise<void> {
+      await writeSceneGroundChunkData(this.workspaceId, sceneId, chunkKey, data)
+      if (options.syncServer !== false && this.workspaceType === 'user') {
+        const sceneStore = useSceneStore()
+        const document = sceneStore.currentSceneId === sceneId
+          ? sceneStore.createSceneDocumentSnapshot()
+          : await this.loadSceneDocument(sceneId, { hydrateGroundRuntime: false })
+        if (document) {
+          await this.syncSceneToServer(document)
+        }
+      }
     },
     async saveSceneGroundHeightSidecar(
       sceneId: string,
