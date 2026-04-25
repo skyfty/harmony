@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import {
   CHARACTER_CONTROLLER_COMPONENT_TYPE,
@@ -98,14 +98,19 @@ async function loadClipsForNode(nodeId: string) {
   clipLoadError.value = null
   isLoadingClips.value = true
   try {
-    const runtimeObject = getRuntimeObject(nodeId)
+    let runtimeObject = getRuntimeObject(nodeId)
     if (!runtimeObject) {
       const node = selectedNode.value
       if (node) {
         await sceneStore.ensureSceneAssetsReady({ nodes: [node], showOverlay: false, refreshViewport: false })
+        runtimeObject = getRuntimeObject(nodeId)
       }
     }
-    const clipEntries = collectRuntimeAnimationClipOptions(getRuntimeObject(nodeId))
+    if (!runtimeObject) {
+      return
+    }
+
+    const clipEntries = collectRuntimeAnimationClipOptions(runtimeObject)
     if (requestId === clipLoadRequestId) {
       clipOptions.value = clipEntries
     }
@@ -133,8 +138,18 @@ watch(
 
     void loadClipsForNode(nodeId)
   },
-  { immediate: true },
+  { immediate: false },
 )
+
+onMounted(() => {
+  const nodeId = selectedNodeId.value
+  const currentComponentId = component.value?.id ?? null
+  if (!nodeId || !currentComponentId) {
+    return
+  }
+
+  void loadClipsForNode(nodeId)
+})
 
 const clipItems = computed(() => clipOptions.value)
 </script>
