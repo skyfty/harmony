@@ -20,6 +20,7 @@ const component = computed(() =>
     | undefined,
 )
 
+const componentEnabled = computed(() => component.value?.enabled !== false)
 const normalizedProps = computed(() => clampCharacterControllerComponentProps(component.value?.props ?? null))
 const clipOptions = ref<Array<{ label: string; value: string }>>([])
 const isLoadingClips = ref(false)
@@ -73,6 +74,24 @@ function updateAnimationBinding(slot: CharacterAnimationSlot, clipName: string |
   updateComponent({ animationBindings: nextBindings })
 }
 
+function handleToggleComponent() {
+  const currentComponent = component.value
+  const nodeId = selectedNodeId.value
+  if (!currentComponent || !nodeId) {
+    return
+  }
+  sceneStore.toggleNodeComponentEnabled(nodeId, currentComponent.id)
+}
+
+function handleRemoveComponent() {
+  const currentComponent = component.value
+  const nodeId = selectedNodeId.value
+  if (!currentComponent || !nodeId) {
+    return
+  }
+  sceneStore.removeNodeComponent(nodeId, currentComponent.id)
+}
+
 async function loadClipsForNode(nodeId: string) {
   const requestId = ++clipLoadRequestId
   clipOptions.value = []
@@ -122,22 +141,49 @@ const clipItems = computed(() => clipOptions.value)
 
 <template>
   <v-expansion-panel value="character-controller">
-    <v-expansion-panel-title>Character Controller</v-expansion-panel-title>
+    <v-expansion-panel-title>
+      <div class="character-controller-panel__header">
+        <span class="character-controller-panel__title">Character Controller</span>
+        <v-spacer />
+        <v-menu
+          v-if="component"
+          location="bottom end"
+          origin="auto"
+          transition="fade-transition"
+        >
+          <template #activator="{ props }">
+            <v-btn
+              v-bind="props"
+              icon
+              variant="text"
+              size="small"
+              class="component-menu-btn"
+              @click.stop
+            >
+              <v-icon size="18">mdi-dots-vertical</v-icon>
+            </v-btn>
+          </template>
+          <v-list density="compact">
+            <v-list-item @click.stop="handleToggleComponent()">
+              <v-list-item-title>{{ componentEnabled ? 'Disable' : 'Enable' }}</v-list-item-title>
+            </v-list-item>
+            <v-divider class="component-menu-divider" inset />
+            <v-list-item @click.stop="handleRemoveComponent()">
+              <v-list-item-title>Remove</v-list-item-title>
+            </v-list-item>
+          </v-list>
+        </v-menu>
+      </div>
+    </v-expansion-panel-title>
     <v-expansion-panel-text>
       <div class="character-controller-panel">
-        <v-switch
-          :model-value="normalizedProps.enabledByDefault"
-          label="Enabled by default"
-          density="compact"
-          hide-details
-          @update:model-value="(value) => updateField('enabledByDefault', Boolean(value))"
-        />
         <v-text-field
           :model-value="normalizedProps.label"
           label="Label"
           density="compact"
           variant="underlined"
           hide-details
+          :disabled="!componentEnabled"
           @update:model-value="(value) => updateField('label', String(value ?? ''))"
         />
 
@@ -147,17 +193,19 @@ const clipItems = computed(() => clipOptions.value)
             type="number"
             label="Walk speed"
             density="compact"
-          variant="underlined"
+            variant="underlined"
             hide-details
+            :disabled="!componentEnabled"
             @update:model-value="(value) => updateField('walkSpeed', Number(value))"
           />
           <v-text-field
             :model-value="normalizedProps.runSpeed"
             type="number"
             label="Run speed"
-          variant="underlined"
+            variant="underlined"
             density="compact"
             hide-details
+            :disabled="!componentEnabled"
             @update:model-value="(value) => updateField('runSpeed', Number(value))"
           />
           <v-text-field
@@ -166,74 +214,82 @@ const clipItems = computed(() => clipOptions.value)
             label="Sprint speed"
             density="compact"
             hide-details
-          variant="underlined"
+            variant="underlined"
+            :disabled="!componentEnabled"
             @update:model-value="(value) => updateField('sprintSpeed', Number(value))"
           />
           <v-text-field
             :model-value="normalizedProps.turnRateDegreesPerSecond"
             type="number"
-          variant="underlined"
+            variant="underlined"
             label="Turn rate (deg/s)"
             density="compact"
             hide-details
+            :disabled="!componentEnabled"
             @update:model-value="(value) => updateField('turnRateDegreesPerSecond', Number(value))"
           />
           <v-text-field
             :model-value="normalizedProps.jumpImpulse"
             type="number"
-          variant="underlined"
+            variant="underlined"
             label="Jump impulse"
             density="compact"
             hide-details
+            :disabled="!componentEnabled"
             @update:model-value="(value) => updateField('jumpImpulse', Number(value))"
           />
           <v-text-field
             :model-value="normalizedProps.airControl"
             type="number"
             step="0.05"
-          variant="underlined"
+            variant="underlined"
             label="Air control"
             density="compact"
             hide-details
+            :disabled="!componentEnabled"
             @update:model-value="(value) => updateField('airControl', Number(value))"
           />
           <v-text-field
             :model-value="normalizedProps.stepHeight"
             type="number"
-          variant="underlined"
+            variant="underlined"
             step="0.05"
             label="Step height"
             density="compact"
             hide-details
+            :disabled="!componentEnabled"
             @update:model-value="(value) => updateField('stepHeight', Number(value))"
           />
           <v-text-field
             :model-value="normalizedProps.slopeLimitDegrees"
             type="number"
-          variant="underlined"
+            variant="underlined"
             label="Slope limit"
             density="compact"
             hide-details
+            :disabled="!componentEnabled"
             @update:model-value="(value) => updateField('slopeLimitDegrees', Number(value))"
           />
           <v-text-field
             :model-value="normalizedProps.colliderRadius"
             type="number"
-          variant="underlined"
+            variant="underlined"
             step="0.05"
             label="Collider radius"
             density="compact"
             hide-details
+            :disabled="!componentEnabled"
             @update:model-value="(value) => updateField('colliderRadius', Number(value))"
           />
           <v-text-field
             :model-value="normalizedProps.colliderHeight"
             type="number"
             step="0.05"
-          variant="underlined"
+            variant="underlined"
             label="Collider height"
             density="compact"
             hide-details
+            :disabled="!componentEnabled"
             @update:model-value="(value) => updateField('colliderHeight', Number(value))"
           />
         </div>
@@ -257,6 +313,7 @@ const clipItems = computed(() => clipOptions.value)
               hide-details
               variant="underlined"
               placeholder="Select a clip"
+              :disabled="!componentEnabled"
               @update:model-value="(value) => updateAnimationBinding(slot.value, value ? String(value) : null)"
             />
           </div>
@@ -267,6 +324,26 @@ const clipItems = computed(() => clipOptions.value)
 </template>
 
 <style scoped>
+.character-controller-panel__header {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+}
+
+.character-controller-panel__title {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.component-menu-btn {
+  color: rgba(233, 236, 241, 0.82);
+}
+
+.component-menu-divider {
+  margin-inline: 0.6rem;
+}
+
 .character-controller-panel {
   display: flex;
   flex-direction: column;

@@ -6,9 +6,8 @@
   "private": false,
   "sideEffects": false,
   "scripts": {
-    "build": "pnpm run build:asset-types && tsc -p tsconfig.build.json && pnpm run clean:generated",
+    "build": "pnpm run build:asset-types && tsc -p tsconfig.build.json",
     "build:asset-types": "tsc -p tsconfig.asset-types.json",
-    "clean:generated": "node -e \"const fs=require('fs');const path=require('path');const root=process.cwd();const walk=(dir)=>{for(const entry of fs.readdirSync(dir,{withFileTypes:true})){const full=path.join(dir,entry.name);if(entry.isDirectory()){if(entry.name==='dist') continue; walk(full);} else if(entry.isFile() && entry.name.endsWith('.js')){fs.rmSync(full,{force:true});}}};walk(root);\"",
     "type-check": "tsc -p tsconfig.build.json --noEmit",
     "type-check:asset-types": "tsc -p tsconfig.asset-types.json --noEmit",
     "check": "pnpm run type-check && pnpm run type-check:asset-types",
