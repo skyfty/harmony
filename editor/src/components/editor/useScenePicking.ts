@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import { type Ref } from 'vue'
 import { useSceneStore } from '@/stores/sceneStore'
 import type { NodeHitResult } from '@/types/scene-viewport-node-hit-result'
+import { resolveInfiniteGroundChunkKeyFromInstanceId } from '@schema/groundMesh'
 import { findNodeIdForInstance } from '@schema/modelObjectCache'
 import { flush as flushInstancedBounds, hasPending as instancedBoundsHasPending } from '@schema/instancedBoundsTracker'
 
@@ -125,6 +126,13 @@ export function useScenePicking(
       }
     }
     return resolveNodeIdFromObject(intersection.object)
+  }
+
+  function resolveGroundChunkKeyFromIntersection(intersection: THREE.Intersection): string | null {
+    if (typeof intersection.instanceId !== 'number' || intersection.instanceId < 0) {
+      return null
+    }
+    return resolveInfiniteGroundChunkKeyFromInstanceId(intersection.object, intersection.instanceId)
   }
 
   function collectSceneIntersections(collectOptions?: {
@@ -251,12 +259,14 @@ export function useScenePicking(
       }
 
       const roadSegmentIndex = resolveRoadSegmentIndexFromIntersection(intersection)
+      const groundChunkKey = resolveGroundChunkKeyFromIntersection(intersection)
 
       const hit: NodeHitResult = {
         nodeId,
         object: baseObject,
         point: intersection.point.clone(),
         roadSegmentIndex,
+        groundChunkKey,
       }
 
       if (isPickProxyObject(intersection.object as THREE.Object3D)) {

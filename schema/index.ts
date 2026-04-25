@@ -7,6 +7,7 @@ import type { AssetType } from './asset-types'
 import { createUvDebugMaterial } from './debugTextures'
 
 export const GROUND_NODE_ID = 'harmony:ground'
+export const GROUND_TERRAIN_CHUNK_SIZE_METERS = 100
 export const ENVIRONMENT_NODE_ID = 'harmony:environment'
 export const MULTIUSER_NODE_ID = 'harmony:multiuser'
 export const PROTAGONIST_NODE_ID = 'harmony:protagonist'
@@ -1131,8 +1132,18 @@ export interface SceneNode {
 }
 
 export interface GroundSettings {
+  /** @deprecated Infinite terrain no longer uses a fixed scene-wide ground width. */
   width: number;
+  /** @deprecated Infinite terrain no longer uses a fixed scene-wide ground depth. */
   depth: number;
+  /** World-space size of one terrain chunk. Defaults to 100m. */
+  chunkSizeMeters?: number;
+  /** Runtime flat terrain height used for chunks without persisted terrain data. */
+  baseHeight?: number;
+  /** Camera render window radius, in chunks, for infinite ground streaming. */
+  renderRadiusChunks?: number;
+  /** Vehicle collision interest window radius, in chunks, for dynamic terrain physics. */
+  collisionRadiusChunks?: number;
   /** When true, build static air-wall colliders around the ground perimeter. */
   enableAirWall?: boolean;
   /** When true, editor viewports may dynamically load and unload ground scatter instances. */
@@ -1312,7 +1323,10 @@ export type EnvironmentSettingsPatch = Partial<EnvironmentSettings> & {
 }
 export type DynamicMeshType = 'Ground' | 'Wall' | 'Road' | 'Floor' | 'Landform' | 'GuideRoute' | 'Region' | 'ModelCollision'
 
-export type GroundHeightMap = Float64Array
+export type GroundHeightMap = ArrayLike<number> & {
+  length: number
+  [index: number]: number
+}
 
 export const GROUND_HEIGHT_UNSET_VALUE = Number.NaN
 
@@ -1362,8 +1376,8 @@ export function ensureGroundHeightMap(
   fill = GROUND_HEIGHT_UNSET_VALUE,
 ): GroundHeightMap {
   const expectedLength = getGroundVertexCount(rows, columns)
-  if (source instanceof Float64Array && source.length === expectedLength) {
-    return source
+  if (source && typeof source === 'object' && source.length === expectedLength) {
+    return source as GroundHeightMap
   }
   return cloneGroundHeightMap(source, rows, columns, fill)
 }
@@ -1420,6 +1434,45 @@ export interface GroundPlanningMetadata {
   contourBounds?: GroundContourBounds | null
   generatedAt?: number
   demSource?: GroundPlanningDemSourceMetadata | null
+}
+
+export type GroundLocalEditTileSource = 'manual' | 'dem' | 'mixed'
+
+export interface GroundLocalEditTileData {
+  key: string
+  tileRow: number
+  tileColumn: number
+  tileSizeMeters: number
+  resolution: number
+  values: number[]
+  source?: GroundLocalEditTileSource | null
+  updatedAt?: number
+}
+
+export type GroundLocalEditTileMap = Record<string, GroundLocalEditTileData>
+
+export function formatGroundLocalEditTileKey(tileRow: number, tileColumn: number): string {
+  return `${Math.trunc(tileRow)}:${Math.trunc(tileColumn)}`
+}
+
+export function parseGroundLocalEditTileKey(key: string): { tileRow: number; tileColumn: number } | null {
+  const raw = typeof key === 'string' ? key.trim() : ''
+  if (!raw) {
+    return null
+  }
+  const parts = raw.split(':')
+  if (parts.length !== 2) {
+    return null
+  }
+  const tileRow = Number.parseInt(parts[0] ?? '', 10)
+  const tileColumn = Number.parseInt(parts[1] ?? '', 10)
+  if (!Number.isFinite(tileRow) || !Number.isFinite(tileColumn)) {
+    return null
+  }
+  return {
+    tileRow: Math.trunc(tileRow),
+    tileColumn: Math.trunc(tileColumn),
+  }
 }
 
 export type GroundGenerationMode = 'simple' | 'perlin' | 'ridge' | 'voronoi' | 'flat'
@@ -1536,6 +1589,231 @@ export interface GroundSurfaceChunkTextureRef {
 
 export type GroundSurfaceChunkTextureMap = Record<string, GroundSurfaceChunkTextureRef>
 
+export type GroundTerrainMode = 'bounded' | 'infinite'
+
+export type GroundChunkSource = 'manual' | 'dem' | 'import' | 'paint' | 'scatter'
+
+export interface GroundChunkCoord {
+  chunkX: number
+  chunkZ: number
+}
+
+export type GroundChunkKey = `${number}:${number}` | string
+
+export interface GroundChunkManifestRecord extends GroundChunkCoord {
+  key: GroundChunkKey
+  originX: number
+  originZ: number
+  chunkSizeMeters: number
+  resolution: number
+  revision: number
+  heightMin: number
+  heightMax: number
+  dataPath: string
+  updatedAt: number
+  source?: GroundChunkSource | null
+  paintAssetId?: string | null
+  scatterAssetId?: string | null
+}
+
+export interface GroundChunkManifest {
+  version: 1
+  sceneId: string
+  chunkSizeMeters: number
+  baseHeight: number
+  revision: number
+  updatedAt: number
+  chunks: Record<GroundChunkKey, GroundChunkManifestRecord>
+}
+
+export interface GroundChunkDataHeader extends GroundChunkCoord {
+  version: 1
+  key: GroundChunkKey
+  originX: number
+  originZ: number
+  chunkSizeMeters: number
+  resolution: number
+  cellSize: number
+  revision: number
+  heightMin: number
+  heightMax: number
+  updatedAt: number
+  source?: GroundChunkSource | null
+}
+
+export interface GroundChunkData {
+  header: GroundChunkDataHeader
+  /** Row-major `(resolution + 1) * (resolution + 1)` effective terrain heights. */
+  heights: Float32Array | number[]
+}
+
+const GROUND_CHUNK_DATA_MAGIC = 0x4847434b
+const GROUND_CHUNK_DATA_PREFIX_BYTES = Uint32Array.BYTES_PER_ELEMENT * 3
+
+function normalizeGroundChunkDataHeights(
+  heights: GroundChunkData['heights'],
+  resolution: number,
+): Float32Array | null {
+  const normalizedResolution = Math.max(1, Math.trunc(resolution))
+  const expectedCount = (normalizedResolution + 1) * (normalizedResolution + 1)
+  const nextHeights = heights instanceof Float32Array ? heights : Float32Array.from(heights ?? [])
+  if (nextHeights.length !== expectedCount) {
+    return null
+  }
+  return nextHeights
+}
+
+export function serializeGroundChunkData(data: GroundChunkData): ArrayBuffer {
+  const heights = normalizeGroundChunkDataHeights(data.heights, data.header.resolution)
+  if (!heights) {
+    throw new Error('Ground chunk data heights length does not match resolution')
+  }
+
+  const serializedHeader = JSON.stringify({
+    ...data.header,
+    source: data.header.source ?? null,
+  })
+  const headerBytes = new TextEncoder().encode(serializedHeader)
+  const totalBytes = GROUND_CHUNK_DATA_PREFIX_BYTES + headerBytes.byteLength + heights.byteLength
+  const buffer = new ArrayBuffer(totalBytes)
+  const prefixView = new Uint32Array(buffer, 0, 3)
+  prefixView[0] = GROUND_CHUNK_DATA_MAGIC
+  prefixView[1] = data.header.version
+  prefixView[2] = headerBytes.byteLength
+
+  new Uint8Array(buffer, GROUND_CHUNK_DATA_PREFIX_BYTES, headerBytes.byteLength).set(headerBytes)
+  new Float32Array(buffer, GROUND_CHUNK_DATA_PREFIX_BYTES + headerBytes.byteLength, heights.length).set(heights)
+  return buffer
+}
+
+export function deserializeGroundChunkData(buffer: ArrayBuffer | null | undefined): GroundChunkData | null {
+  if (!(buffer instanceof ArrayBuffer) || buffer.byteLength < GROUND_CHUNK_DATA_PREFIX_BYTES) {
+    return null
+  }
+
+  const prefixView = new Uint32Array(buffer, 0, 3)
+  if (prefixView[0] !== GROUND_CHUNK_DATA_MAGIC) {
+    return null
+  }
+
+  const version = Math.trunc(prefixView[1] ?? 0)
+  const headerByteLength = Math.trunc(prefixView[2] ?? 0)
+  const headerOffset = GROUND_CHUNK_DATA_PREFIX_BYTES
+  const heightsOffset = headerOffset + headerByteLength
+  if (version !== 1 || headerByteLength <= 0 || heightsOffset > buffer.byteLength) {
+    return null
+  }
+  if ((buffer.byteLength - heightsOffset) % Float32Array.BYTES_PER_ELEMENT !== 0) {
+    return null
+  }
+
+  try {
+    const headerBytes = new Uint8Array(buffer, headerOffset, headerByteLength)
+    const parsed = JSON.parse(new TextDecoder().decode(headerBytes)) as Partial<GroundChunkDataHeader> | null
+    if (!parsed || typeof parsed !== 'object') {
+      return null
+    }
+
+    const key = typeof parsed.key === 'string' ? parsed.key.trim() : ''
+    const resolution = Number(parsed.resolution)
+    const chunkX = Number(parsed.chunkX)
+    const chunkZ = Number(parsed.chunkZ)
+    if (!key || !Number.isFinite(resolution) || !Number.isFinite(chunkX) || !Number.isFinite(chunkZ)) {
+      return null
+    }
+
+    const heights = new Float32Array(buffer.slice(heightsOffset))
+    const normalizedHeights = normalizeGroundChunkDataHeights(heights, resolution)
+    if (!normalizedHeights) {
+      return null
+    }
+
+    const header: GroundChunkDataHeader = {
+      version: 1,
+      key,
+      chunkX: Math.trunc(chunkX),
+      chunkZ: Math.trunc(chunkZ),
+      originX: Number(parsed.originX) || 0,
+      originZ: Number(parsed.originZ) || 0,
+      chunkSizeMeters: Number(parsed.chunkSizeMeters) || GROUND_TERRAIN_CHUNK_SIZE_METERS,
+      resolution: Math.max(1, Math.trunc(resolution)),
+      cellSize: Number(parsed.cellSize) || 1,
+      revision: Math.max(0, Math.trunc(Number(parsed.revision) || 0)),
+      heightMin: Number.isFinite(parsed.heightMin) ? Number(parsed.heightMin) : 0,
+      heightMax: Number.isFinite(parsed.heightMax) ? Number(parsed.heightMax) : 0,
+      updatedAt: Math.max(0, Math.trunc(Number(parsed.updatedAt) || 0)),
+      source: parsed.source ?? null,
+    }
+    return {
+      header,
+      heights: normalizedHeights,
+    }
+  } catch (_error) {
+    return null
+  }
+}
+
+export function formatGroundChunkKey(chunkX: number, chunkZ: number): GroundChunkKey {
+  return `${Math.trunc(chunkX)}:${Math.trunc(chunkZ)}`
+}
+
+export function parseGroundChunkKey(value: string | null | undefined): GroundChunkCoord | null {
+  const normalized = typeof value === 'string' ? value.trim() : ''
+  if (!normalized) {
+    return null
+  }
+  const parts = normalized.split(':')
+  if (parts.length !== 2) {
+    return null
+  }
+  const chunkX = Number(parts[0])
+  const chunkZ = Number(parts[1])
+  if (!Number.isFinite(chunkX) || !Number.isFinite(chunkZ)) {
+    return null
+  }
+  return {
+    chunkX: Math.trunc(chunkX),
+    chunkZ: Math.trunc(chunkZ),
+  }
+}
+
+export function resolveGroundChunkCoordFromWorldPosition(
+  worldX: number,
+  worldZ: number,
+  chunkSizeMeters = GROUND_TERRAIN_CHUNK_SIZE_METERS,
+): GroundChunkCoord {
+  const safeChunkSize = Number.isFinite(chunkSizeMeters) && chunkSizeMeters > 0
+    ? chunkSizeMeters
+    : GROUND_TERRAIN_CHUNK_SIZE_METERS
+  return {
+    chunkX: Math.floor(worldX / safeChunkSize),
+    chunkZ: Math.floor(worldZ / safeChunkSize),
+  }
+}
+
+export function resolveGroundChunkOrigin(
+  coord: GroundChunkCoord,
+  chunkSizeMeters = GROUND_TERRAIN_CHUNK_SIZE_METERS,
+): { x: number; z: number } {
+  const safeChunkSize = Number.isFinite(chunkSizeMeters) && chunkSizeMeters > 0
+    ? chunkSizeMeters
+    : GROUND_TERRAIN_CHUNK_SIZE_METERS
+  return {
+    x: Math.trunc(coord.chunkX) * safeChunkSize,
+    z: Math.trunc(coord.chunkZ) * safeChunkSize,
+  }
+}
+
+export function formatGroundChunkDataPath(
+  coord: GroundChunkCoord,
+  root = 'ground/chunks',
+  extension = 'ground.bin',
+): string {
+  const normalizedRoot = typeof root === 'string' && root.trim().length ? root.replace(/\/$/, '') : 'ground/chunks'
+  const normalizedExtension = typeof extension === 'string' && extension.trim().length ? extension.replace(/^\./, '') : 'ground.bin'
+  return `${normalizedRoot}/x_${Math.trunc(coord.chunkX)}_z_${Math.trunc(coord.chunkZ)}.${normalizedExtension}`
+}
+
 export function normalizeGroundSurfaceChunkTextureMap(
   value: GroundSurfaceChunkTextureMap | null | undefined,
 ): GroundSurfaceChunkTextureMap {
@@ -1558,9 +1836,24 @@ export function normalizeGroundSurfaceChunkTextureMap(
 
 export interface GroundDynamicMesh {
   type: 'Ground'
+  terrainMode?: GroundTerrainMode
+  /** Infinite terrain chunk size in meters. Defaults to 100m. */
+  chunkSizeMeters?: number
+  /** Flat runtime fallback height for chunks without persisted terrain data. */
+  baseHeight?: number
+  /** Camera render window radius, in chunks, for infinite terrain. */
+  renderRadiusChunks?: number
+  /** Vehicle collision interest window radius, in chunks, for infinite terrain. */
+  collisionRadiusChunks?: number
+  /** Monotonic revision for the infinite terrain chunk manifest. */
+  chunkManifestRevision?: number
+  /** @deprecated Infinite terrain no longer uses a fixed scene-wide ground width. */
   width: number
+  /** @deprecated Infinite terrain no longer uses a fixed scene-wide ground depth. */
   depth: number
+  /** @deprecated Infinite terrain no longer uses a fixed scene-wide row count. */
   rows: number
+  /** @deprecated Infinite terrain no longer uses a fixed scene-wide column count. */
   columns: number
   cellSize: number
   storageMode?: 'full' | 'tiled'
@@ -1589,6 +1882,8 @@ export interface GroundDynamicMesh {
   textureDataUrl?: string | null
   textureName?: string | null
   generation?: GroundGenerationSettings | null
+  /** Sparse local high-resolution authoring tiles for Terrain Tools and DEM-preserved detail. */
+  localEditTiles?: GroundLocalEditTileMap | null
   terrainScatter?: TerrainScatterStoreSnapshot | null
   /** @deprecated Ground paint now persists via groundSurfaceChunks only. */
   terrainPaint?: null
@@ -1633,6 +1928,7 @@ export function resolveGroundEditCellSize(
 export type GroundRuntimeDynamicMesh = GroundDynamicMesh & {
   manualHeightMap: GroundHeightMap
   planningHeightMap: GroundHeightMap
+  localEditTiles?: GroundLocalEditTileMap | null
   /** Runtime-only hydration state used to distinguish untouched sidecar restore from in-session edits. */
   runtimeHydratedHeightState?: 'pristine' | 'dirty'
   /** Runtime-only guard to bypass optimized streamed chunk geometry when sidecar/runtime overrides are active. */

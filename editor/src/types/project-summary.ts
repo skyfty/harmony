@@ -12,8 +12,6 @@ export interface ProjectCreateParams {
   name: string
   defaultScene: { 
     name: string
-    groundWidth: number
-    groundDepth: number
     planningData?: PlanningSceneData | null
   }
 }

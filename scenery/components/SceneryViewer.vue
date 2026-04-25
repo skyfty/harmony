@@ -508,12 +508,10 @@ import { AssetCache, AssetLoader, configureAssetDownloadHostMirrors, type AssetC
 import { ASSET_DOWNLOAD_HOST_MIRRORS } from '@harmony/schema/assetDownloadMirrors';
 import { isGroundDynamicMesh } from '@harmony/schema/groundHeightfield';
 import {
-  areAllGroundChunksLoaded,
-  ensureAllGroundChunks,
-  isGroundChunkStreamingEnabled,
-  sampleGroundHeight,
-  updateGroundChunks,
+  setInfiniteGroundHiddenChunkKeys,
+  syncGroundChunkLoadingMode,
 } from '@harmony/schema/groundMesh';
+import { clearInfiniteGroundChunkMeshes, syncInfiniteGroundChunkMeshes } from '@harmony/schema/groundChunkManifestRuntime';
 import { buildGroundAirWallDefinitions } from '@harmony/schema/airWall';
 
 import {
@@ -608,6 +606,7 @@ import {
 } from '@harmony/schema/scenePackageZip';
 import type {
   AutoTourRouteSnapResult,
+  GroundChunkManifest,
   GroundTerrainPackageManifest,
   SceneNode,
   SceneNodeComponentState,
@@ -3602,6 +3601,23 @@ function readGroundTerrainManifestFromPackage(pkg: ScenePackageUnzipped, manifes
   }
 }
 
+function readGroundChunkManifestFromPackage(pkg: ScenePackageUnzipped, manifestPath: string | null | undefined): GroundChunkManifest | null {
+  const trimmedPath = typeof manifestPath === 'string' ? manifestPath.trim() : ''
+  if (!trimmedPath) {
+    return null
+  }
+  const manifestText = readTextFileFromScenePackage(pkg, trimmedPath)
+  const raw = JSON.parse(manifestText) as unknown
+  if (!raw || typeof raw !== 'object') {
+    throw new Error(`场景包内 ground chunk manifest 无效：${trimmedPath}`)
+  }
+  const candidate = raw as GroundChunkManifest
+  if (candidate.version !== 1 || typeof candidate.sceneId !== 'string' || !candidate.chunks || typeof candidate.chunks !== 'object') {
+    throw new Error(`场景包内 ground chunk manifest 结构不正确：${trimmedPath}`)
+  }
+  return candidate
+}
+
 async function resolveAssetUrlReference(candidate: string): Promise<ResolvedAssetUrl | null> {
 	const trimmed = candidate.trim()
 	if (!trimmed.length) {
@@ -4542,6 +4558,65 @@ function refreshDynamicGroundCache(document: SceneJsonExportDocument | null): vo
   if (currentDocument?.id === document?.id) {
     void applyEnvironmentSettingsToScene(resolveDocumentEnvironment(document));
   }
+}
+
+function syncViewerInfiniteGroundChunkManifest(
+  groundObject: THREE.Object3D,
+  groundDefinition: GroundRuntimeDynamicMesh,
+  camera: THREE.PerspectiveCamera,
+): void {
+  if (groundDefinition.terrainMode !== 'infinite') {
+    setInfiniteGroundHiddenChunkKeys(groundObject, []);
+    clearInfiniteGroundChunkMeshes(groundObject);
+    return;
+  }
+
+  const manifestRevision = Number.isFinite(groundDefinition.chunkManifestRevision)
+    ? Math.max(0, Math.trunc(groundDefinition.chunkManifestRevision as number))
+    : 0;
+  const sourceId = (currentSceneId.value ?? currentDocument?.id ?? '').trim();
+  const rawManifest = (groundObject.userData as Record<string, unknown> | undefined)?.groundChunkManifest
+    ?? (dynamicGroundCache?.node.userData as Record<string, unknown> | undefined)?.groundChunkManifest
+    ?? null;
+  const manifest = rawManifest && typeof rawManifest === 'object'
+    ? rawManifest as GroundChunkManifest
+    : null;
+  const manifestRecords = manifest?.revision === manifestRevision
+    ? { ...(manifest.chunks ?? {}) }
+    : {};
+
+  if (!sourceId || !manifestRevision || !Object.keys(manifestRecords).length) {
+    setInfiniteGroundHiddenChunkKeys(groundObject, []);
+    clearInfiniteGroundChunkMeshes(groundObject);
+    return;
+  }
+
+  setInfiniteGroundHiddenChunkKeys(groundObject, Object.keys(manifestRecords));
+  syncInfiniteGroundChunkMeshes({
+    groundObject,
+    groundDefinition,
+    camera,
+    sourceId,
+    manifestRevision,
+    manifestRecords,
+    resolveActiveRecord: (chunkKey) => manifestRecords[chunkKey] ?? null,
+    loadChunkData: async (record) => {
+      const dataPath = typeof record.dataPath === 'string' ? record.dataPath.trim() : '';
+      if (!dataPath) {
+        return null;
+      }
+      const packagedBytes = activeScenePackagePkg?.files?.[dataPath] ?? null;
+      if (packagedBytes) {
+        const buffer = new ArrayBuffer(packagedBytes.byteLength);
+        new Uint8Array(buffer).set(packagedBytes);
+        return buffer;
+      }
+      if (dataPath.startsWith('/') || /^(https?:)?\/\//i.test(dataPath)) {
+        return await requestBinaryFromUrl(dataPath);
+      }
+      return null;
+    },
+  });
 }
 
 function resolveGroundViewportWorldSize(): { width: number; depth: number } | null {
@@ -11327,6 +11402,7 @@ function parseScenePackageToProjectData(pkg: ScenePackageUnzipped): ScenePackage
     }
     const document = hydrateGroundSidecarFromPackage(pkg, sceneEntry, sceneRaw as SceneJsonExportDocument);
     const terrain = readGroundTerrainManifestFromPackage(pkg, sceneEntry.groundTerrainManifestPath);
+    const groundChunkManifest = readGroundChunkManifestFromPackage(pkg, sceneEntry.groundChunkManifestPath);
     if (terrain) {
       const groundNode = Array.isArray(document.nodes)
         ? document.nodes.find((node) => node?.dynamicMesh?.type === 'Ground')
@@ -11341,6 +11417,21 @@ function parseScenePackageToProjectData(pkg: ScenePackageUnzipped): ScenePackage
           groundTerrainManifestPath: terrain.manifestPath,
           groundTerrainTilesRootPath: terrain.manifest.terrainTilesRootPath,
           groundCollisionPath: terrain.manifest.collisionManifestPath,
+        };
+      }
+    }
+    if (groundChunkManifest) {
+      const groundNode = Array.isArray(document.nodes)
+        ? document.nodes.find((node) => node?.dynamicMesh?.type === 'Ground')
+        : null;
+      if (groundNode) {
+        const userData = groundNode.userData && typeof groundNode.userData === 'object'
+          ? (groundNode.userData as Record<string, unknown>)
+          : {};
+        groundNode.userData = {
+          ...userData,
+          groundChunkManifest,
+          groundChunkManifestPath: sceneEntry.groundChunkManifestPath ?? null,
         };
       }
     }
@@ -12232,11 +12323,8 @@ function startRenderLoop(
         if (cachedGround) {
           const groundObject = nodeObjectMap.get(cachedGround.nodeId) ?? null;
           if (groundObject) {
-            if (isGroundChunkStreamingEnabled(cachedGround.dynamicMesh)) {
-              updateGroundChunks(groundObject, cachedGround.dynamicMesh, camera);
-            } else if (!areAllGroundChunksLoaded(groundObject, cachedGround.dynamicMesh)) {
-              ensureAllGroundChunks(groundObject, cachedGround.dynamicMesh);
-            }
+            syncGroundChunkLoadingMode(groundObject, cachedGround.dynamicMesh, camera);
+            syncViewerInfiniteGroundChunkManifest(groundObject, cachedGround.dynamicMesh, camera);
             if (debugEnabled.value && debugMode.value === 'full') {
               syncGroundChunkDebugCounters(groundObject, cachedGround.dynamicMesh, camera);
             }

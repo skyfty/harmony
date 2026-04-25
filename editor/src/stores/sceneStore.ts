@@ -26,6 +26,8 @@ import {
   ENVIRONMENT_NODE_ID,
   MULTIUSER_NODE_ID,
   PROTAGONIST_NODE_ID,
+  GROUND_HEIGHT_UNSET_VALUE,
+  getGroundVertexIndex,
   createPrimitiveMesh,
   resolveServerAssetDownloadUrl,
   WATER_SURFACE_MESH_USERDATA_KEY,
@@ -42,6 +44,8 @@ import type {
   BehaviorEventType,
   CameraNodeProperties,
   GroundDynamicMesh,
+  GroundHeightMap,
+  GroundLocalEditTileMap,
   GroundGenerationSettings,
   GroundSettings,
   LightNodeProperties,
@@ -163,7 +167,7 @@ import { createBehaviorSequenceId } from '@schema/behaviors/definitions'
 import { findObjectByPath } from '@schema/modelAssetLoader'
 
 import { useAssetCacheStore } from './assetCacheStore'
-import { useGroundHeightmapStore, type GroundRuntimeDynamicMesh } from './groundHeightmapStore'
+import { useGroundHeightmapStore, type GroundPlanningHeightRegion, type GroundRuntimeDynamicMesh } from './groundHeightmapStore'
 import { attachGroundScatterRuntimeToNode, useGroundScatterStore } from './groundScatterStore'
 import { attachGroundPaintRuntimeToNode, useGroundPaintStore } from './groundPaintStore'
 import { useUiStore } from './uiStore'
@@ -1790,7 +1794,8 @@ function commitGroundHeightMapRuntimeEdit(
   },
   nodeId: string,
   definition: GroundDynamicMesh,
-  manualHeightMap: Float64Array,
+  manualHeightMap: GroundHeightMap,
+  manualRegion: GroundPlanningHeightRegion | null = null,
   dirtyBounds: WorldBoundsXZ | null = null,
 ): boolean {
   const target = findNodeById(store.nodes, nodeId)
@@ -1808,7 +1813,64 @@ function commitGroundHeightMapRuntimeEdit(
   definition.surfaceRevision = nextRevision
   runtimeDefinition.runtimeHydratedHeightState = 'dirty'
   runtimeDefinition.runtimeDisableOptimizedChunks = true
-  useGroundHeightmapStore().replaceManualHeightMap(nodeId, definition, manualHeightMap)
+  if (manualRegion) {
+    useGroundHeightmapStore().replaceManualHeightRegion(nodeId, definition, manualRegion)
+  } else {
+    useGroundHeightmapStore().replaceManualHeightMap(nodeId, definition, manualHeightMap)
+  }
+  useGroundHeightmapStore().markOptimizedMeshDirtyBounds(nodeId, definition, manualRegion ?? {
+    startRow: 0,
+    endRow: definition.rows,
+    startColumn: 0,
+    endColumn: definition.columns,
+  })
+  refreshLandformNodesForGroundChange(store, nodeId, resolvedDirtyBounds)
+  finalizeDynamicMeshRuntimePatch(store, nodeId, 'Ground')
+  persistGroundHeightSidecarForNode(target)
+  return true
+}
+
+function commitGroundLocalEditTilesRuntimeEdit(
+  store: {
+    nodes: SceneNode[]
+    currentSceneId?: string | null
+    queueSceneNodePatch: (nodeId: string, fields: ScenePatchField[], options?: { bumpVersion?: boolean }) => boolean
+    bumpSceneNodePropertyVersion: () => void
+  },
+  nodeId: string,
+  definition: GroundDynamicMesh,
+  localEditTiles: GroundLocalEditTileMap | null,
+  affectedRegion: { minRow: number; maxRow: number; minColumn: number; maxColumn: number } | null = null,
+): boolean {
+  const target = findNodeById(store.nodes, nodeId)
+  if (!target || target.dynamicMesh?.type !== 'Ground' || !store.currentSceneId) {
+    return false
+  }
+  const runtimeDefinition = definition as GroundRuntimeDynamicMesh
+  const targetRuntimeDefinition = target.dynamicMesh as GroundRuntimeDynamicMesh
+  const resolvedDirtyBounds = computeGroundDirtyBoundsXZFromRegion(target, runtimeDefinition, affectedRegion)
+  const currentRevision = normalizeGroundSurfaceRevision(target.dynamicMesh.surfaceRevision)
+  const nextRevision = currentRevision + 1
+  target.dynamicMesh.surfaceRevision = nextRevision
+  targetRuntimeDefinition.runtimeHydratedHeightState = 'dirty'
+  targetRuntimeDefinition.runtimeDisableOptimizedChunks = true
+  targetRuntimeDefinition.localEditTiles = localEditTiles
+  definition.surfaceRevision = nextRevision
+  runtimeDefinition.runtimeHydratedHeightState = 'dirty'
+  runtimeDefinition.runtimeDisableOptimizedChunks = true
+  runtimeDefinition.localEditTiles = localEditTiles
+  useGroundHeightmapStore().replaceLocalEditTiles(nodeId, definition, localEditTiles)
+  useGroundHeightmapStore().markOptimizedMeshDirtyBounds(nodeId, definition, affectedRegion ? {
+    startRow: affectedRegion.minRow,
+    endRow: affectedRegion.maxRow,
+    startColumn: affectedRegion.minColumn,
+    endColumn: affectedRegion.maxColumn,
+  } : {
+    startRow: 0,
+    endRow: definition.rows,
+    startColumn: 0,
+    endColumn: definition.columns,
+  })
   refreshLandformNodesForGroundChange(store, nodeId, resolvedDirtyBounds)
   finalizeDynamicMeshRuntimePatch(store, nodeId, 'Ground')
   persistGroundHeightSidecarForNode(target)
@@ -1829,11 +1891,21 @@ function refreshGroundOptimizedMeshRuntime(
     return false
   }
 
-  const runtimeDefinition = useGroundHeightmapStore().resolveGroundRuntimeMesh(nodeId, target.dynamicMesh)
-  const optimizedMesh = rebuildOptimizedGroundMeshForDefinition(runtimeDefinition)
+  const groundHeightmapStore = useGroundHeightmapStore()
+  const runtimeDefinition = groundHeightmapStore.resolveGroundRuntimeMesh(nodeId, target.dynamicMesh)
+  const runtimeState = groundHeightmapStore.getNodeGroundHeightmap(nodeId)
+  const heightSampler = groundHeightmapStore.resolveGroundRuntimeHeightSampler(nodeId, target.dynamicMesh)
+  const optimizedMesh = rebuildOptimizedGroundMeshForDefinition(
+    runtimeDefinition,
+    target.dynamicMesh.optimizedMesh,
+    {},
+    runtimeState?.optimizedMeshDirtyBounds ?? null,
+    heightSampler,
+  )
   markGroundOptimizedMeshReady(runtimeDefinition, optimizedMesh)
   markGroundOptimizedMeshReady(target.dynamicMesh, optimizedMesh)
-  useGroundHeightmapStore().replaceManualHeightMap(nodeId, runtimeDefinition, runtimeDefinition.manualHeightMap)
+  groundHeightmapStore.syncRuntimeGroundState(nodeId, runtimeDefinition)
+  groundHeightmapStore.clearOptimizedMeshDirtyBounds(nodeId, runtimeDefinition)
   finalizeDynamicMeshRuntimePatch(store, nodeId, 'Ground')
   persistGroundHeightSidecarForNode(target)
   return true
@@ -2397,8 +2469,8 @@ function boundsIntersectXZ(a: WorldBoundsXZ | null, b: WorldBoundsXZ | null): bo
 function computeGroundDirtyBoundsXZ(
   groundNode: SceneNode,
   definition: GroundRuntimeDynamicMesh,
-  previousHeightMap: Float64Array,
-  nextHeightMap: Float64Array,
+  previousHeightMap: GroundHeightMap,
+  nextHeightMap: GroundHeightMap,
 ): WorldBoundsXZ | null {
   const total = Math.min(previousHeightMap.length, nextHeightMap.length)
   if (total <= 0) {
@@ -2457,6 +2529,41 @@ function computeGroundDirtyBoundsXZ(
   }
 }
 
+function computeGroundDirtyBoundsXZFromRegion(
+  groundNode: SceneNode,
+  definition: GroundRuntimeDynamicMesh,
+  region: { minRow: number; maxRow: number; minColumn: number; maxColumn: number } | null,
+): WorldBoundsXZ | null {
+  if (!region) {
+    return null
+  }
+  const columns = Math.max(1, Math.trunc(definition.columns))
+  const rows = Math.max(1, Math.trunc(definition.rows))
+  const expandedMinRow = Math.max(0, Math.floor(region.minRow) - 1)
+  const expandedMaxRow = Math.min(rows, Math.ceil(region.maxRow) + 1)
+  const expandedMinColumn = Math.max(0, Math.floor(region.minColumn) - 1)
+  const expandedMaxColumn = Math.min(columns, Math.ceil(region.maxColumn) + 1)
+  const halfWidth = definition.width * 0.5
+  const halfDepth = definition.depth * 0.5
+  const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1
+  const localMinX = -halfWidth + expandedMinColumn * cellSize
+  const localMaxX = -halfWidth + expandedMaxColumn * cellSize
+  const localMinZ = -halfDepth + expandedMinRow * cellSize
+  const localMaxZ = -halfDepth + expandedMaxRow * cellSize
+  const position = groundNode.position ?? { x: 0, y: 0, z: 0 }
+  const scale = groundNode.scale ?? { x: 1, y: 1, z: 1 }
+  const worldX0 = position.x + localMinX * scale.x
+  const worldX1 = position.x + localMaxX * scale.x
+  const worldZ0 = position.z + localMinZ * scale.z
+  const worldZ1 = position.z + localMaxZ * scale.z
+  return {
+    minX: Math.min(worldX0, worldX1),
+    maxX: Math.max(worldX0, worldX1),
+    minZ: Math.min(worldZ0, worldZ1),
+    maxZ: Math.max(worldZ0, worldZ1),
+  }
+}
+
 function computeGroundDirtyBoundsFromRegionXZ(
   groundNode: SceneNode,
   definition: GroundRuntimeDynamicMesh,
@@ -2491,6 +2598,35 @@ function computeGroundDirtyBoundsFromRegionXZ(
     maxX: Math.max(worldX0, worldX1),
     minZ: Math.min(worldZ0, worldZ1),
     maxZ: Math.max(worldZ0, worldZ1),
+  }
+}
+
+function buildGroundManualRegionFromHeightMap(
+  definition: GroundRuntimeDynamicMesh,
+  bounds: GroundRegionBounds,
+): GroundPlanningHeightRegion | null {
+  const normalized = groundUtils.normalizeGroundBounds(definition, bounds)
+  const vertexRows = normalized.maxRow - normalized.minRow + 1
+  const vertexColumns = normalized.maxColumn - normalized.minColumn + 1
+  if (!(vertexRows > 0) || !(vertexColumns > 0)) {
+    return null
+  }
+  const values = new Float64Array(vertexRows * vertexColumns)
+  for (let row = normalized.minRow; row <= normalized.maxRow; row += 1) {
+    const rowOffset = (row - normalized.minRow) * vertexColumns
+    for (let column = normalized.minColumn; column <= normalized.maxColumn; column += 1) {
+      const source = Number(definition.manualHeightMap[getGroundVertexIndex(definition.columns, row, column)])
+      values[rowOffset + (column - normalized.minColumn)] = Number.isFinite(source) ? source : GROUND_HEIGHT_UNSET_VALUE
+    }
+  }
+  return {
+    startRow: normalized.minRow,
+    endRow: normalized.maxRow,
+    startColumn: normalized.minColumn,
+    endColumn: normalized.maxColumn,
+    vertexRows,
+    vertexColumns,
+    values,
   }
 }
 
@@ -7259,7 +7395,15 @@ function createSceneDocument(
     : null
   const groundSettings = cloneGroundSettings(
     options.groundSettings
-      ?? (existingGroundMesh ? { width: existingGroundMesh.width, depth: existingGroundMesh.depth } : undefined),
+      ?? (existingGroundMesh
+        ? {
+            chunkSizeMeters: existingGroundMesh.chunkSizeMeters,
+            baseHeight: existingGroundMesh.baseHeight,
+            renderRadiusChunks: existingGroundMesh.renderRadiusChunks,
+            collisionRadiusChunks: existingGroundMesh.collisionRadiusChunks,
+            enableAirWall: existingGroundMesh.terrainMode === 'bounded' ? true : undefined,
+          }
+        : undefined),
   )
   const existingEnvironmentNode = clonedNodes.find((node) => isEnvironmentNode(node)) ?? null
   const environmentSettings = cloneEnvironmentSettings(
@@ -8774,12 +8918,14 @@ export const useSceneStore = defineStore('scene', {
       if (!result.changed) {
         return false
       }
+      const manualRegion = buildGroundManualRegionFromHeightMap(currentDefinition, bounds)
 
       return commitGroundHeightMapRuntimeEdit(
         this,
         groundNode.id,
         currentDefinition,
         result.definition.manualHeightMap,
+        manualRegion,
         dirtyBounds,
       )
     },
@@ -8882,6 +9028,63 @@ export const useSceneStore = defineStore('scene', {
         this.environment,
       )
       this.nodes = updatedNodes
+
+      commitSceneSnapshot(this)
+      return true
+    },
+    setGroundInfiniteSettings(payload: {
+      chunkSizeMeters?: number
+      baseHeight?: number
+      renderRadiusChunks?: number
+      collisionRadiusChunks?: number
+    }) {
+      const requested = {
+        ...this.groundSettings,
+        chunkSizeMeters: payload.chunkSizeMeters ?? this.groundSettings.chunkSizeMeters,
+        baseHeight: payload.baseHeight ?? this.groundSettings.baseHeight,
+        renderRadiusChunks: payload.renderRadiusChunks ?? this.groundSettings.renderRadiusChunks,
+        collisionRadiusChunks: payload.collisionRadiusChunks ?? this.groundSettings.collisionRadiusChunks,
+      }
+      const normalized = cloneGroundSettings(requested)
+      const changed =
+        Math.abs((normalized.chunkSizeMeters ?? 0) - (this.groundSettings.chunkSizeMeters ?? 0)) >= 1e-6
+        || Math.abs((normalized.baseHeight ?? 0) - (this.groundSettings.baseHeight ?? 0)) >= 1e-6
+        || Math.abs((normalized.renderRadiusChunks ?? 0) - (this.groundSettings.renderRadiusChunks ?? 0)) >= 1e-6
+        || Math.abs((normalized.collisionRadiusChunks ?? 0) - (this.groundSettings.collisionRadiusChunks ?? 0)) >= 1e-6
+      if (!changed) {
+        return false
+      }
+
+      this.appendUndoEntry({ kind: 'ground-settings', groundSettings: cloneGroundSettings(this.groundSettings) })
+      this.groundSettings = normalized
+
+      const clonedNodes = cloneSceneNodes(this.nodes)
+      const existingGround = findGroundNode(clonedNodes)
+      if (existingGround) {
+        existingGround.dynamicMesh = createGroundDynamicMeshDefinition(
+          existingGround.dynamicMesh?.type === 'Ground'
+            ? {
+                ...(existingGround.dynamicMesh as GroundDynamicMesh),
+                terrainMode: 'infinite',
+                chunkSizeMeters: normalized.chunkSizeMeters,
+                baseHeight: normalized.baseHeight,
+                renderRadiusChunks: normalized.renderRadiusChunks,
+                collisionRadiusChunks: normalized.collisionRadiusChunks,
+              }
+            : {
+                terrainMode: 'infinite',
+                chunkSizeMeters: normalized.chunkSizeMeters,
+                baseHeight: normalized.baseHeight,
+                renderRadiusChunks: normalized.renderRadiusChunks,
+                collisionRadiusChunks: normalized.collisionRadiusChunks,
+              },
+          normalized,
+        )
+      }
+      this.nodes = ensureEnvironmentNode(
+        ensureGroundNode(clonedNodes, normalized),
+        this.environment,
+      )
 
       commitSceneSnapshot(this)
       return true
@@ -9529,9 +9732,17 @@ export const useSceneStore = defineStore('scene', {
     commitGroundHeightMapEdit(
       nodeId: string,
       definition: GroundDynamicMesh,
-      manualHeightMap: Float64Array,
+      manualHeightMap: GroundHeightMap,
     ) {
       return commitGroundHeightMapRuntimeEdit(this, nodeId, definition, manualHeightMap)
+    },
+    commitGroundLocalEditTilesEdit(
+      nodeId: string,
+      definition: GroundDynamicMesh,
+      localEditTiles: GroundLocalEditTileMap | null,
+      affectedRegion: { minRow: number; maxRow: number; minColumn: number; maxColumn: number } | null = null,
+    ) {
+      return commitGroundLocalEditTilesRuntimeEdit(this, nodeId, definition, localEditTiles, affectedRegion)
     },
     refreshGroundOptimizedMesh(nodeId: string) {
       return refreshGroundOptimizedMeshRuntime(this, nodeId)

@@ -8,16 +8,12 @@ import { generateUuid } from '@/utils/uuid'
 const props = defineProps<{
   modelValue: boolean
   initialName?: string
-  initialGroundWidth?: number
-  initialGroundDepth?: number
 }>()
 
 const emit = defineEmits<{
   (event: 'update:modelValue', value: boolean): void
   (event: 'confirm', payload: {
     name: string
-    groundWidth: number
-    groundDepth: number
     planningData?: PlanningSceneData | null
     presetSceneId?: string | null
     presetSceneDocument?: PresetSceneDocument | null
@@ -30,8 +26,6 @@ const dialogOpen = computed({
 })
 
 const sceneName = ref('New Scene')
-const groundWidth = ref<number>(100)
-const groundDepth = ref<number>(100)
 const planningData = ref<PlanningSceneData | null>(null)
 
 interface PresetListEntry {
@@ -59,18 +53,6 @@ const isCreateDisabled = computed(() => {
   }
   return !presetSceneDetails.value[selectedPresetId.value]
 })
-
-function normalizeDimension(value: unknown, fallback: number): number {
-  const numeric = typeof value === 'number'
-    ? value
-    : typeof value === 'string'
-      ? Number.parseFloat(value)
-      : Number.NaN
-  if (!Number.isFinite(numeric)) {
-    return fallback
-  }
-  return Math.min(20000, Math.max(1, numeric))
-}
 
 function createSuggestedSceneName(baseName: string): string {
   const normalized = baseName?.trim() ?? ''
@@ -173,14 +155,6 @@ async function selectPreset(id: string, options: { userInitiated?: boolean } = {
   }
   if (!isSameSelection) {
     sceneName.value = createSuggestedSceneName(detail.name)
-    const recommendedWidth = detail.document.groundSettings?.width
-    if (typeof recommendedWidth === 'number') {
-      groundWidth.value = normalizeDimension(recommendedWidth, groundWidth.value)
-    }
-    const recommendedDepth = detail.document.groundSettings?.depth
-    if (typeof recommendedDepth === 'number') {
-      groundDepth.value = normalizeDimension(recommendedDepth, groundDepth.value)
-    }
   }
 }
 
@@ -203,8 +177,6 @@ watch(
       sceneName.value = props.initialName?.trim().length
         ? props.initialName.trim()
         : 'New Scene'
-      groundWidth.value = normalizeDimension(props.initialGroundWidth, 100)
-      groundDepth.value = normalizeDimension(props.initialGroundDepth, 100)
       planningData.value = null
       confirmError.value = null
       selectedPresetId.value = null
@@ -217,8 +189,6 @@ watch(
       input?.select()
     } else {
       sceneName.value = 'New Scene'
-      groundWidth.value = 100
-      groundDepth.value = 100
       planningData.value = null
       resetPresetState()
       isConfirming.value = false
@@ -248,15 +218,9 @@ async function confirm() {
 
     const trimmed = sceneName.value.trim()
     const name = trimmed.length ? trimmed : 'New Scene'
-    const width = normalizeDimension(groundWidth.value, 100)
-    const depth = normalizeDimension(groundDepth.value, 100)
-    groundWidth.value = width
-    groundDepth.value = depth
 
     emit('confirm', {
       name,
-      groundWidth: width,
-      groundDepth: depth,
       planningData: planningData.value,
       presetSceneId: presetId,
       presetSceneDocument: presetDocument,
@@ -289,8 +253,6 @@ function cancel() {
       <v-card-text>
         <SceneCreatorPane
           v-model:sceneName="sceneName"
-          v-model:groundWidth="groundWidth"
-          v-model:groundDepth="groundDepth"
           v-model:planningData="planningData"
           :confirmError="confirmError"
         />

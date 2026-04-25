@@ -10,7 +10,8 @@
     "build:asset-types": "tsc -p tsconfig.asset-types.json",
     "type-check": "tsc -p tsconfig.build.json --noEmit",
     "type-check:asset-types": "tsc -p tsconfig.asset-types.json --noEmit",
-    "check": "pnpm run type-check && pnpm run type-check:asset-types"
+    "check": "pnpm run type-check && pnpm run type-check:asset-types",
+    "check:ground-local-edit": "pnpm run build && node ./scripts/fix-esm-extensions.mjs ./dist && node ./scripts/ground-local-edit-regression.mjs"
   },
   "engines": {
     "pnpm": ">=10.0.0"

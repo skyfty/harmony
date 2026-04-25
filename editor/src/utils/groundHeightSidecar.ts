@@ -18,6 +18,14 @@ type GroundHeightSidecarHeader = {
   planningMetadata: GroundPlanningMetadata | null
 }
 
+export type GroundHeightSidecarSampler = {
+  rows: number
+  columns: number
+  planningMetadata?: GroundPlanningMetadata | null
+  getManualHeight: (row: number, column: number) => number
+  getPlanningHeight: (row: number, column: number) => number
+}
+
 export function getGroundHeightSidecarByteLength(definition: GroundDynamicMesh): number {
   const metadataPayload = encodePlanningMetadataPayload(definition.planningMetadata ?? null)
   return GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES + metadataPayload.byteLength + getGroundVertexCount(definition.rows, definition.columns) * Float64Array.BYTES_PER_ELEMENT * 2
@@ -184,19 +192,45 @@ function readSidecarHeader(view: DataView): GroundHeightSidecarHeader {
   }
 }
 
-export function serializeGroundHeightSidecar(definition: GroundRuntimeDynamicMesh): ArrayBuffer {
-  const metadataPayload = encodePlanningMetadataPayload(definition.planningMetadata ?? null)
-  const vertexCount = getGroundVertexCount(definition.rows, definition.columns)
-  const buffer = new ArrayBuffer(GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES + metadataPayload.byteLength + vertexCount * Float64Array.BYTES_PER_ELEMENT * 2)
+function writeGroundHeightSidecarValues(
+  buffer: ArrayBuffer,
+  metadataPayload: Uint8Array,
+  sampler: GroundHeightSidecarSampler,
+): void {
+  const vertexCount = getGroundVertexCount(sampler.rows, sampler.columns)
   const view = new DataView(buffer, 0, GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES)
-  writeSidecarHeader(view, definition.planningMetadata ?? null)
+  writeSidecarHeader(view, sampler.planningMetadata ?? null)
   new Uint8Array(buffer, GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES, metadataPayload.byteLength).set(metadataPayload)
   const manualOffset = GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES + metadataPayload.byteLength
   const planningOffset = manualOffset + vertexCount * Float64Array.BYTES_PER_ELEMENT
   const manual = new Float64Array(buffer, manualOffset, vertexCount)
   const planning = new Float64Array(buffer, planningOffset, vertexCount)
-  manual.set(definition.manualHeightMap)
-  planning.set(definition.planningHeightMap)
+
+  for (let row = 0; row <= sampler.rows; row += 1) {
+    for (let column = 0; column <= sampler.columns; column += 1) {
+      const index = row * (sampler.columns + 1) + column
+      const manualHeight = Number(sampler.getManualHeight(row, column))
+      const planningHeight = Number(sampler.getPlanningHeight(row, column))
+      manual[index] = Number.isFinite(manualHeight) ? manualHeight : Number.NaN
+      planning[index] = Number.isFinite(planningHeight) ? planningHeight : Number.NaN
+    }
+  }
+}
+
+export function serializeGroundHeightSidecar(definition: GroundRuntimeDynamicMesh): ArrayBuffer {
+  return serializeGroundHeightSidecarFromSampler({
+    rows: definition.rows,
+    columns: definition.columns,
+    planningMetadata: definition.planningMetadata ?? null,
+    getManualHeight: (row, column) => definition.manualHeightMap[row * (definition.columns + 1) + column] ?? Number.NaN,
+    getPlanningHeight: (row, column) => definition.planningHeightMap[row * (definition.columns + 1) + column] ?? Number.NaN,
+  })
+}
+
+export function serializeGroundHeightSidecarFromSampler(sampler: GroundHeightSidecarSampler): ArrayBuffer {
+  const metadataPayload = encodePlanningMetadataPayload(sampler.planningMetadata ?? null)
+  const buffer = new ArrayBuffer(GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES + metadataPayload.byteLength + getGroundVertexCount(sampler.rows, sampler.columns) * Float64Array.BYTES_PER_ELEMENT * 2)
+  writeGroundHeightSidecarValues(buffer, metadataPayload, sampler)
   return buffer
 }
 

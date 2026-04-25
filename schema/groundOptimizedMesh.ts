@@ -5,7 +5,12 @@ import type {
   GroundOptimizedMeshChunkData,
   GroundOptimizedMeshData,
 } from './index'
-import { resolveGroundChunkCells, sampleGroundEffectiveHeightRegion } from './groundMesh'
+import {
+  type GroundHeightFieldSampler,
+  resolveGroundChunkCells,
+  sampleGroundEffectiveHeightRegion,
+  sampleGroundEffectiveHeightRegionFromSampler,
+} from './groundMesh'
 
 export type GroundOptimizedMeshBuildOptions = {
   tolerance?: number
@@ -66,6 +71,29 @@ function buildHeightGrid(
 ): GroundOptimizedHeightGrid {
   const region = sampleGroundEffectiveHeightRegion(
     definition,
+    domain.minRow,
+    domain.maxRow,
+    domain.minColumn,
+    domain.maxColumn,
+  )
+  return {
+    minRow: region.minRow,
+    maxRow: region.maxRow,
+    minColumn: region.minColumn,
+    maxColumn: region.maxColumn,
+    stride: region.stride,
+    values: region.values,
+  }
+}
+
+function buildHeightGridFromSampler(
+  definition: GroundDynamicMesh,
+  sampler: GroundHeightFieldSampler,
+  domain: Pick<GroundOptimizedChunkDomain, 'minRow' | 'maxRow' | 'minColumn' | 'maxColumn'>,
+): GroundOptimizedHeightGrid {
+  const region = sampleGroundEffectiveHeightRegionFromSampler(
+    definition,
+    sampler,
     domain.minRow,
     domain.maxRow,
     domain.minColumn,
@@ -663,6 +691,63 @@ function buildGroundOptimizedMeshChunkData(
   )
 }
 
+function buildGroundOptimizedMeshChunkDataFromSampler(
+  definition: GroundDynamicMesh,
+  sampler: GroundHeightFieldSampler,
+  domain: GroundOptimizedChunkDomain,
+  options: Required<GroundOptimizedMeshBuildOptions>,
+): GroundOptimizedMeshChunkData {
+  const grid = buildHeightGridFromSampler(definition, sampler, domain)
+  const sourceVertexCount = (domain.rows + 1) * (domain.columns + 1)
+  const sourceTriangleCount = domain.rows * domain.columns * 2
+  const activeBounds = deriveActiveBounds(domain, grid, options.tolerance)
+  if (activeBounds && !boundsCoverDomain(activeBounds, domain)) {
+    const adaptiveRegion = buildAdaptiveRegionGrid(definition, grid, activeBounds, options)
+    return buildBoundedOptimizedMeshChunkData(
+      definition,
+      domain,
+      grid,
+      activeBounds,
+      adaptiveRegion,
+      sourceVertexCount,
+      sourceTriangleCount,
+    )
+  }
+
+  const selectedRows = new Set<number>([domain.minRow, domain.maxRow])
+  const selectedColumns = new Set<number>([domain.minColumn, domain.maxColumn])
+  collectAdaptiveGridLines(
+    definition,
+    grid,
+    domain.minRow,
+    domain.maxRow,
+    domain.minColumn,
+    domain.maxColumn,
+    0,
+    options,
+    selectedRows,
+    selectedColumns,
+  )
+
+  const initialRows = Array.from(selectedRows.values()).sort((left, right) => left - right)
+  const initialColumns = Array.from(selectedColumns.values()).sort((left, right) => left - right)
+  const { rows, columns } = pruneAdaptiveGridLines(
+    grid,
+    initialRows,
+    initialColumns,
+    options.tolerance,
+  )
+  return buildCartesianOptimizedMeshChunkData(
+    definition,
+    domain,
+    grid,
+    rows,
+    columns,
+    sourceVertexCount,
+    sourceTriangleCount,
+  )
+}
+
 export function hasGroundOptimizedMeshData(definition: GroundDynamicMesh | null | undefined): boolean {
   const mesh = definition?.optimizedMesh
   const sourceChunkCells = mesh?.sourceChunkCells
@@ -764,6 +849,146 @@ export function buildGroundOptimizedMeshData(
     sourceChunkCells,
     ...common,
   }
+}
+
+export function buildGroundOptimizedMeshDataFromSampler(
+  definition: GroundDynamicMesh,
+  sampler: GroundHeightFieldSampler,
+  options: GroundOptimizedMeshBuildOptions = {},
+): GroundOptimizedMeshData {
+  const rowsCount = Math.max(1, Math.trunc(definition.rows))
+  const columnsCount = Math.max(1, Math.trunc(definition.columns))
+  const sourceChunkCells = resolveGroundChunkCells(definition)
+  const chunkCells = deriveOptimizedRenderChunkCells(definition, sourceChunkCells, options.renderChunkCells)
+  const normalizedOptions: Required<GroundOptimizedMeshBuildOptions> = {
+    tolerance: clampFinite(options.tolerance, 0.02, 0.0001, 10),
+    maxSamplesPerAxis: clampInteger(options.maxSamplesPerAxis, 6, 2, 16),
+    maxSubdivisionDepth: clampInteger(options.maxSubdivisionDepth, 10, 1, 24),
+    renderChunkCells: chunkCells,
+  }
+  const rowChunkCount = Math.max(1, Math.ceil(rowsCount / chunkCells))
+  const columnChunkCount = Math.max(1, Math.ceil(columnsCount / chunkCells))
+  const chunks: GroundOptimizedMeshChunkData[] = []
+  let sourceVertexCount = 0
+  let sourceTriangleCount = 0
+  let optimizedVertexCount = 0
+  let optimizedTriangleCount = 0
+  let optimizedRowCount = 0
+  let optimizedColumnCount = 0
+
+  for (let chunkRow = 0; chunkRow < rowChunkCount; chunkRow += 1) {
+    for (let chunkColumn = 0; chunkColumn < columnChunkCount; chunkColumn += 1) {
+      const domain = computeChunkDomain(definition, chunkRow, chunkColumn, chunkCells)
+      const chunk = buildGroundOptimizedMeshChunkDataFromSampler(definition, sampler, domain, normalizedOptions)
+      chunks.push(chunk)
+      sourceVertexCount += chunk.sourceVertexCount
+      sourceTriangleCount += chunk.sourceTriangleCount
+      optimizedVertexCount += chunk.vertexCount
+      optimizedTriangleCount += chunk.triangleCount
+      optimizedRowCount += chunk.optimizedRowCount
+      optimizedColumnCount += chunk.optimizedColumnCount
+    }
+  }
+
+  return {
+    sourceChunkCells,
+    chunkCells,
+    chunkCount: chunks.length,
+    chunks,
+    sourceVertexCount,
+    sourceTriangleCount,
+    optimizedVertexCount,
+    optimizedTriangleCount,
+    optimizedRowCount,
+    optimizedColumnCount,
+  }
+}
+
+function boundsIntersectGroundOptimizedChunk(
+  bounds: GroundContourBounds,
+  chunk: Pick<GroundOptimizedMeshChunkData, 'chunkRow' | 'chunkColumn' | 'startRow' | 'startColumn' | 'rows' | 'columns'>,
+): boolean {
+  const chunkBounds = {
+    minRow: chunk.startRow,
+    maxRow: chunk.startRow + chunk.rows,
+    minColumn: chunk.startColumn,
+    maxColumn: chunk.startColumn + chunk.columns,
+  }
+  return bounds.minRow <= chunkBounds.maxRow
+    && bounds.maxRow >= chunkBounds.minRow
+    && bounds.minColumn <= chunkBounds.maxColumn
+    && bounds.maxColumn >= chunkBounds.minColumn
+}
+
+function summarizeGroundOptimizedMeshChunks(
+  sourceChunkCells: number,
+  chunkCells: number,
+  chunks: GroundOptimizedMeshChunkData[],
+): GroundOptimizedMeshData {
+  let sourceVertexCount = 0
+  let sourceTriangleCount = 0
+  let optimizedVertexCount = 0
+  let optimizedTriangleCount = 0
+  let optimizedRowCount = 0
+  let optimizedColumnCount = 0
+
+  for (const chunk of chunks) {
+    sourceVertexCount += chunk.sourceVertexCount
+    sourceTriangleCount += chunk.sourceTriangleCount
+    optimizedVertexCount += chunk.vertexCount
+    optimizedTriangleCount += chunk.triangleCount
+    optimizedRowCount += chunk.optimizedRowCount
+    optimizedColumnCount += chunk.optimizedColumnCount
+  }
+
+  return {
+    sourceChunkCells,
+    chunkCells,
+    chunkCount: chunks.length,
+    chunks,
+    sourceVertexCount,
+    sourceTriangleCount,
+    optimizedVertexCount,
+    optimizedTriangleCount,
+    optimizedRowCount,
+    optimizedColumnCount,
+  }
+}
+
+export function rebuildGroundOptimizedMeshData(
+  definition: GroundDynamicMesh,
+  previousMesh: GroundOptimizedMeshData | null | undefined,
+  options: GroundOptimizedMeshBuildOptions = {},
+  dirtyBounds: GroundContourBounds | null = null,
+): GroundOptimizedMeshData {
+  const sourceChunkCells = resolveGroundChunkCells(definition)
+  const chunkCells = deriveOptimizedRenderChunkCells(definition, sourceChunkCells, options.renderChunkCells)
+  const normalizedOptions: Required<GroundOptimizedMeshBuildOptions> = {
+    tolerance: clampFinite(options.tolerance, 0.02, 0.0001, 10),
+    maxSamplesPerAxis: clampInteger(options.maxSamplesPerAxis, 6, 2, 16),
+    maxSubdivisionDepth: clampInteger(options.maxSubdivisionDepth, 10, 1, 24),
+    renderChunkCells: chunkCells,
+  }
+
+  const rowsCount = Math.max(1, Math.trunc(definition.rows))
+  const columnsCount = Math.max(1, Math.trunc(definition.columns))
+  const rowChunkCount = Math.max(1, Math.ceil(rowsCount / chunkCells))
+  const columnChunkCount = Math.max(1, Math.ceil(columnsCount / chunkCells))
+  const expectedChunkCount = rowChunkCount * columnChunkCount
+
+  if (!previousMesh || !dirtyBounds || previousMesh.chunkCells !== chunkCells || previousMesh.sourceChunkCells !== sourceChunkCells || !Array.isArray(previousMesh.chunks) || previousMesh.chunks.length !== expectedChunkCount) {
+    return buildGroundOptimizedMeshData(definition, options)
+  }
+
+  const chunks = previousMesh.chunks.map((chunk) => {
+    if (!boundsIntersectGroundOptimizedChunk(dirtyBounds, chunk)) {
+      return chunk
+    }
+    const domain = computeChunkDomain(definition, chunk.chunkRow, chunk.chunkColumn, chunkCells)
+    return buildGroundOptimizedMeshChunkData(definition, domain, normalizedOptions)
+  })
+
+  return summarizeGroundOptimizedMeshChunks(sourceChunkCells, chunkCells, chunks)
 }
 
 export function buildGroundOptimizedGeometry(mesh: GroundOptimizedMeshChunkData): THREE.BufferGeometry {

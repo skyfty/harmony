@@ -17,14 +17,7 @@ export async function createProjectWithDefaultScene(
   const project = await projectsStore.createProject(params.name)
   projectsStore.setActiveProject(project.id)
 
-  const widthCandidate = Number(params.defaultScene?.groundWidth)
-  const depthCandidate = Number(params.defaultScene?.groundDepth)
-
   const sceneId = await sceneStore.createScene(params.defaultScene?.name ?? 'Untitled Scene', {
-    groundSettings: {
-      width: Number.isFinite(widthCandidate) ? widthCandidate : undefined,
-      depth: Number.isFinite(depthCandidate) ? depthCandidate : undefined,
-    },
     planningData: params.defaultScene?.planningData ?? null,
   })
 
