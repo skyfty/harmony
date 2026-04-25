@@ -352,6 +352,42 @@
             />
           </view>
         </view>
+        <view v-if="activeCharacterControlNodeId" class="viewer-drive-action-row">
+          <button
+            class="viewer-drive-action-button"
+            :class="{ 'is-active': characterControlActionState.sprinting }"
+            type="button"
+            hover-class="none"
+            @tap="handleCharacterControlSprintTap"
+          >
+            <text class="viewer-drive-action-button__label">跑</text>
+          </button>
+          <button
+            class="viewer-drive-action-button"
+            type="button"
+            hover-class="none"
+            @tap="handleCharacterControlJumpTap"
+          >
+            <text class="viewer-drive-action-button__label">跳</text>
+          </button>
+          <button
+            class="viewer-drive-action-button"
+            :class="{ 'is-active': characterControlActionState.crouching }"
+            type="button"
+            hover-class="none"
+            @tap="handleCharacterControlCrouchTap"
+          >
+            <text class="viewer-drive-action-button__label">蹲</text>
+          </button>
+          <button
+            class="viewer-drive-action-button"
+            type="button"
+            hover-class="none"
+            @tap="handleCharacterControlInteractTap"
+          >
+            <text class="viewer-drive-action-button__label">交互</text>
+          </button>
+        </view>
       </view>
       <view v-if="vehicleDriveUi.visible" class="viewer-drive-speed-left-floating">
         <SpeedReadout :speed="vehicleSpeedKmh" :aria-hidden="true" />
@@ -685,6 +721,7 @@ import {
   clampCharacterControllerComponentProps,
   type CharacterControllerComponentProps,
 } from '@harmony/schema/components/definitions/characterControllerComponent';
+import type { CharacterControlRuntimeState } from '@harmony/schema/characterControlRuntime';
 import {
   signboardComponentDefinition,
   SIGNBOARD_COMPONENT_TYPE,
@@ -2485,6 +2522,17 @@ const activeCharacterControlNodeId = ref<string | null>(null);
 const vehicleDriveSeatNodeId = ref<string | null>(null);
 const vehicleDriveUiOverride = ref<'auto' | 'show' | 'hide'>('auto');
 const vehicleDriveExitBusy = ref(false);
+const characterControlActionState = reactive<{
+  sprinting: boolean;
+  crouching: boolean;
+  jumpStartedAtMs: number;
+  interactUntilMs: number;
+}>({
+  sprinting: false,
+  crouching: false,
+  jumpStartedAtMs: 0,
+  interactUntilMs: 0,
+});
 let vehicleDriveSteerable: number[] = [];
 let vehicleDriveWheelCount = 0;
 let vehicleDriveVehicle: CANNON.RaycastVehicle | null = null;
@@ -9070,6 +9118,34 @@ function resetActiveVehiclePose(): boolean {
   return vehicleDriveController.resetPose();
 }
 
+function handleCharacterControlJumpTap(): void {
+  if (!activeCharacterControlNodeId.value) {
+    return;
+  }
+  triggerCharacterControlJump(Date.now());
+}
+
+function handleCharacterControlInteractTap(): void {
+  if (!activeCharacterControlNodeId.value) {
+    return;
+  }
+  triggerCharacterControlInteract(Date.now());
+}
+
+function handleCharacterControlSprintTap(): void {
+  if (!activeCharacterControlNodeId.value) {
+    return;
+  }
+  characterControlActionState.sprinting = !characterControlActionState.sprinting;
+}
+
+function handleCharacterControlCrouchTap(): void {
+  if (!activeCharacterControlNodeId.value) {
+    return;
+  }
+  characterControlActionState.crouching = !characterControlActionState.crouching;
+}
+
 
 type VehicleDriveCameraUpdateOptions = {
   immediate?: boolean;
@@ -9727,6 +9803,11 @@ function handleCharacterControlEvent(event: Extract<BehaviorRuntimeEvent, { type
     pendingCharacterControlEvent.value = null;
   }
   activeCharacterControlNodeId.value = null;
+  characterControlActionState.sprinting = false;
+  characterControlActionState.crouching = false;
+  characterControlActionState.jumpStartedAtMs = 0;
+  characterControlActionState.interactUntilMs = 0;
+  characterControlAnimationClipState.clear();
   pendingCharacterControlEvent.value = event;
   activeCharacterControlNodeId.value = targetNodeId;
 }
@@ -9739,6 +9820,11 @@ function handleCharacterReleaseEvent(): void {
     pendingCharacterControlEvent.value = null;
   }
   activeCharacterControlNodeId.value = null;
+  characterControlActionState.sprinting = false;
+  characterControlActionState.crouching = false;
+  characterControlActionState.jumpStartedAtMs = 0;
+  characterControlActionState.interactUntilMs = 0;
+  characterControlAnimationClipState.clear();
   resetVehicleDriveInputs();
   setVehicleDriveUiOverride('hide');
 }
@@ -9749,12 +9835,61 @@ function resolveCharacterControllerComponent(
   return resolveEnabledComponentState<CharacterControllerComponentProps>(node, CHARACTER_CONTROLLER_COMPONENT_TYPE);
 }
 
-function playCharacterControlAnimation(nodeId: string, props: CharacterControllerComponentProps, movementMagnitude: number): void {
+const CHARACTER_CONTROL_JUMP_START_MS = 120;
+const CHARACTER_CONTROL_JUMP_LOOP_MS = 220;
+const CHARACTER_CONTROL_JUMP_LAND_MS = 160;
+const CHARACTER_CONTROL_INTERACT_MS = 220;
+
+function resolveCharacterControlRuntimeState(nowMs: number): CharacterControlRuntimeState {
+  const jumpElapsedMs = characterControlActionState.jumpStartedAtMs > 0
+    ? nowMs - characterControlActionState.jumpStartedAtMs
+    : Number.POSITIVE_INFINITY;
+  let jumpPhase: CharacterControlRuntimeState['jumpPhase'] = null;
+  if (jumpElapsedMs >= 0 && Number.isFinite(jumpElapsedMs)) {
+    if (jumpElapsedMs < CHARACTER_CONTROL_JUMP_START_MS) {
+      jumpPhase = 'start';
+    } else if (jumpElapsedMs < CHARACTER_CONTROL_JUMP_START_MS + CHARACTER_CONTROL_JUMP_LOOP_MS) {
+      jumpPhase = 'loop';
+    } else if (jumpElapsedMs < CHARACTER_CONTROL_JUMP_START_MS + CHARACTER_CONTROL_JUMP_LOOP_MS + CHARACTER_CONTROL_JUMP_LAND_MS) {
+      jumpPhase = 'land';
+    } else {
+      characterControlActionState.jumpStartedAtMs = 0;
+    }
+  }
+  const interacting = characterControlActionState.interactUntilMs > nowMs;
+  if (!interacting && characterControlActionState.interactUntilMs > 0) {
+    characterControlActionState.interactUntilMs = 0;
+  }
+  return {
+    sprinting: characterControlActionState.sprinting,
+    crouching: characterControlActionState.crouching,
+    jumpPhase,
+    interacting,
+  };
+}
+
+function triggerCharacterControlJump(nowMs: number): void {
+  if (characterControlActionState.jumpStartedAtMs > 0) {
+    return;
+  }
+  characterControlActionState.jumpStartedAtMs = nowMs;
+}
+
+function triggerCharacterControlInteract(nowMs: number): void {
+  characterControlActionState.interactUntilMs = nowMs + CHARACTER_CONTROL_INTERACT_MS;
+}
+
+function playCharacterControlAnimation(
+  nodeId: string,
+  props: CharacterControllerComponentProps,
+  movementMagnitude: number,
+  actionState: CharacterControlRuntimeState,
+): void {
   const controller = nodeAnimationControllers.get(nodeId);
   if (!controller) {
     return;
   }
-  const desiredClipName = chooseCharacterControlClipName(props, movementMagnitude);
+  const desiredClipName = chooseCharacterControlClipName(props, movementMagnitude, actionState);
   const currentClipName = characterControlAnimationClipState.get(nodeId) ?? null;
   const effectiveClipName = desiredClipName && desiredClipName.trim().length ? desiredClipName.trim() : null;
   if (currentClipName === effectiveClipName) {
@@ -9767,7 +9902,8 @@ function playCharacterControlAnimation(nodeId: string, props: CharacterControlle
     return;
   }
   controller.mixer.stopAllAction();
-  playAnimationClip(controller.mixer, clip, { loop: true });
+  const shouldLoop = actionState.jumpPhase === 'loop' || (actionState.jumpPhase === null && !actionState.interacting);
+  playAnimationClip(controller.mixer, clip, { loop: shouldLoop });
   characterControlAnimationClipState.set(nodeId, effectiveClipName);
 }
 
@@ -9785,6 +9921,12 @@ function updateCharacterControlForFrame(deltaSeconds: number): boolean {
   const props = clampCharacterControllerComponentProps(component.props);
   const moveX = Number(vehicleDriveInputFlags.right) - Number(vehicleDriveInputFlags.left);
   const moveZ = Number(vehicleDriveInputFlags.forward) - Number(vehicleDriveInputFlags.backward);
+  const nowMs = Date.now();
+  const actionState = {
+    ...resolveCharacterControlRuntimeState(nowMs),
+    moveX,
+    moveZ,
+  };
   const movementMagnitude = resolveCharacterControlMoveVector({
     camera: renderContext.camera,
     moveX,
@@ -9797,7 +9939,7 @@ function updateCharacterControlForFrame(deltaSeconds: number): boolean {
   });
   if (movementMagnitude > 0.001) {
     if (characterControlMoveScratch.lengthSq() > 1e-8) {
-      const speed = resolveCharacterControlSpeed(props, movementMagnitude);
+      const speed = resolveCharacterControlSpeed(props, movementMagnitude, actionState);
       object.position.addScaledVector(characterControlMoveScratch, Math.max(0, speed) * deltaSeconds);
       object.lookAt(object.position.clone().add(characterControlMoveScratch));
     }
@@ -9806,10 +9948,28 @@ function updateCharacterControlForFrame(deltaSeconds: number): boolean {
   if (groundMesh) {
     const groundHeight = sampleGroundHeight(groundMesh, object.position.x, object.position.z);
     if (Number.isFinite(groundHeight)) {
-      object.position.y = groundHeight + Math.max(0.1, props.colliderHeight * 0.5);
+      const baseHeight = groundHeight + Math.max(0.1, props.colliderHeight * 0.5);
+      if (actionState.jumpPhase) {
+        const elapsed = nowMs - characterControlActionState.jumpStartedAtMs;
+        const phaseElapsed = actionState.jumpPhase === 'start'
+          ? elapsed
+          : actionState.jumpPhase === 'loop'
+            ? elapsed - CHARACTER_CONTROL_JUMP_START_MS
+            : elapsed - CHARACTER_CONTROL_JUMP_START_MS - CHARACTER_CONTROL_JUMP_LOOP_MS;
+        const phaseDuration = actionState.jumpPhase === 'start'
+          ? CHARACTER_CONTROL_JUMP_START_MS
+          : actionState.jumpPhase === 'loop'
+            ? CHARACTER_CONTROL_JUMP_LOOP_MS
+            : CHARACTER_CONTROL_JUMP_LAND_MS;
+        const jumpProgress = Math.min(1, Math.max(0, phaseElapsed / phaseDuration));
+        const jumpHeight = Math.sin(jumpProgress * Math.PI) * Math.max(0.35, props.jumpImpulse * 0.18);
+        object.position.y = baseHeight + jumpHeight;
+      } else {
+        object.position.y = baseHeight;
+      }
     }
   }
-  playCharacterControlAnimation(nodeId, props, movementMagnitude);
+  playCharacterControlAnimation(nodeId, props, movementMagnitude, actionState);
   syncProtagonistCameraPose({ force: true, object, applyToCamera: true });
   return true;
 }
@@ -14276,6 +14436,46 @@ onUnmounted(() => {
 
 .viewer-drive-cluster--floating.is-fading {
   opacity: 0;
+}
+
+.viewer-drive-action-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+  max-width: 180px;
+}
+
+.viewer-drive-action-button {
+  min-width: 56px;
+  min-height: 40px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(153, 193, 255, 0.2);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(240, 246, 255, 0.82));
+  color: #274c69;
+  box-shadow: 0 8px 18px rgba(52, 87, 128, 0.12);
+  backdrop-filter: blur(12px) saturate(1.05);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.18s cubic-bezier(.2,.9,.2,1), background-color 0.18s ease, opacity 0.18s ease;
+}
+
+.viewer-drive-action-button.is-active {
+  background: linear-gradient(180deg, rgba(172, 230, 255, 0.96), rgba(117, 195, 255, 0.84));
+  color: #06314a;
+}
+
+.viewer-drive-action-button:active {
+  transform: translateY(1px) scale(0.98);
+}
+
+.viewer-drive-action-button__label {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1;
 }
 
 .viewer-drive-joystick {

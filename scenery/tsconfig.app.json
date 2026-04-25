@@ -16,6 +16,8 @@
   ],
   "compilerOptions": {
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
+    "noEmit": true,
+    "ignoreDeprecations": "6.0",
     "types": [],
     "baseUrl": ".",
     "target": "ES2020",

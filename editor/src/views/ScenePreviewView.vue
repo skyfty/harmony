@@ -234,6 +234,7 @@ import {
 } from '@schema/autoTourHelpers'
 import { syncAutoTourActiveNodesFromRuntime, resolveAutoTourFollowNodeId } from '@schema/autoTourSync'
 import { holdVehicleBrakeSafe } from '@schema/purePursuitRuntime'
+import type { CharacterControlRuntimeState } from '@schema/characterControlRuntime'
 import {
 	SIGNBOARD_CLOSE_FADE_DISTANCE,
 	SIGNBOARD_MIN_SCREEN_Y_PERCENT,
@@ -2859,6 +2860,17 @@ const steeringWheelRef = ref<HTMLDivElement | null>(null)
 const pendingCharacterControlEvent = ref<Extract<BehaviorRuntimeEvent, { type: 'character-control' }> | null>(null)
 const activeCharacterControlNodeId = ref<string | null>(null)
 const characterControlAnimationClipState = new Map<string, string | null>()
+const characterControlActionState = reactive<{
+	sprinting: boolean
+	crouching: boolean
+	jumpStartedAtMs: number
+	interactUntilMs: number
+}>({
+	sprinting: false,
+	crouching: false,
+	jumpStartedAtMs: 0,
+	interactUntilMs: 0,
+})
 const steeringWheelValue = ref(0)
 const steeringKeyboardValue = ref(0)
 const steeringKeyboardTarget = ref(0)
@@ -7197,6 +7209,22 @@ const vehicleDriveKeyboardMap: Record<string, DriveControlAction> = {
 	Space: 'brake',
 }
 
+type CharacterControlKeyboardAction = 'jump' | 'crouch' | 'sprint' | 'interact' | DriveControlAction
+
+const characterControlKeyboardMap: Record<string, CharacterControlKeyboardAction> = {
+	KeyW: 'forward',
+	KeyS: 'backward',
+	KeyA: 'left',
+	KeyD: 'right',
+	ShiftLeft: 'sprint',
+	ShiftRight: 'sprint',
+	ControlLeft: 'crouch',
+	ControlRight: 'crouch',
+	KeyC: 'crouch',
+	Space: 'jump',
+	KeyF: 'interact',
+}
+
 function updateVehicleDriveInputFromFlags(): void {
 	vehicleDriveInput.throttle = vehicleDriveInputFlags.forward === vehicleDriveInputFlags.backward
 		? 0
@@ -7241,9 +7269,44 @@ function handleVehicleDriveControlPointer(
 	setVehicleDriveControlFlag(action, pressed)
 }
 
+function handleCharacterControlKeyboardInput(event: KeyboardEvent, pressed: boolean): boolean {
+	if (!activeCharacterControlNodeId.value) {
+		return false
+	}
+	const action = characterControlKeyboardMap[event.code]
+	if (!action) {
+		return false
+	}
+	event.preventDefault()
+	switch (action) {
+		case 'jump':
+			if (pressed) {
+				triggerCharacterControlJump(Date.now())
+			}
+			return true
+		case 'interact':
+			if (pressed) {
+				triggerCharacterControlInteract(Date.now())
+			}
+			return true
+		case 'sprint':
+			characterControlActionState.sprinting = pressed
+			return true
+		case 'crouch':
+			characterControlActionState.crouching = pressed
+			return true
+		default:
+			setVehicleDriveControlFlag(action, pressed)
+			return true
+	}
+}
+
 function handleVehicleDriveKeyboardInput(event: KeyboardEvent, pressed: boolean): boolean {
 	if (!vehicleDriveState.active && !activeCharacterControlNodeId.value) {
 		return false
+	}
+	if (activeCharacterControlNodeId.value && handleCharacterControlKeyboardInput(event, pressed)) {
+		return true
 	}
 	const action = vehicleDriveKeyboardMap[event.code]
 	if (!action) {
@@ -7632,12 +7695,59 @@ function resolveCharacterControllerComponent(
 	return resolveEnabledComponentState<CharacterControllerComponentProps>(node, CHARACTER_CONTROLLER_COMPONENT_TYPE)
 }
 
-function playCharacterControlAnimation(nodeId: string, props: CharacterControllerComponentProps, movementMagnitude: number): void {
+const CHARACTER_CONTROL_JUMP_START_MS = 120
+const CHARACTER_CONTROL_JUMP_LOOP_MS = 220
+const CHARACTER_CONTROL_JUMP_LAND_MS = 160
+const CHARACTER_CONTROL_INTERACT_MS = 220
+
+function resolveCharacterControlRuntimeState(nowMs: number): CharacterControlRuntimeState {
+	const jumpElapsedMs = characterControlActionState.jumpStartedAtMs > 0 ? nowMs - characterControlActionState.jumpStartedAtMs : Number.POSITIVE_INFINITY
+	let jumpPhase: CharacterControlRuntimeState['jumpPhase'] = null
+	if (jumpElapsedMs >= 0 && Number.isFinite(jumpElapsedMs)) {
+		if (jumpElapsedMs < CHARACTER_CONTROL_JUMP_START_MS) {
+			jumpPhase = 'start'
+		} else if (jumpElapsedMs < CHARACTER_CONTROL_JUMP_START_MS + CHARACTER_CONTROL_JUMP_LOOP_MS) {
+			jumpPhase = 'loop'
+		} else if (jumpElapsedMs < CHARACTER_CONTROL_JUMP_START_MS + CHARACTER_CONTROL_JUMP_LOOP_MS + CHARACTER_CONTROL_JUMP_LAND_MS) {
+			jumpPhase = 'land'
+		} else {
+			characterControlActionState.jumpStartedAtMs = 0
+		}
+	}
+	const interacting = characterControlActionState.interactUntilMs > nowMs
+	if (!interacting && characterControlActionState.interactUntilMs > 0) {
+		characterControlActionState.interactUntilMs = 0
+	}
+	return {
+		sprinting: characterControlActionState.sprinting,
+		crouching: characterControlActionState.crouching,
+		jumpPhase,
+		interacting,
+	}
+}
+
+function triggerCharacterControlJump(nowMs: number): void {
+	if (characterControlActionState.jumpStartedAtMs > 0) {
+		return
+	}
+	characterControlActionState.jumpStartedAtMs = nowMs
+}
+
+function triggerCharacterControlInteract(nowMs: number): void {
+	characterControlActionState.interactUntilMs = nowMs + CHARACTER_CONTROL_INTERACT_MS
+}
+
+function playCharacterControlAnimation(
+	nodeId: string,
+	props: CharacterControllerComponentProps,
+	movementMagnitude: number,
+	actionState: CharacterControlRuntimeState,
+): void {
 	const controller = nodeAnimationControllers.get(nodeId)
 	if (!controller) {
 		return
 	}
-	const desiredClipName = chooseCharacterControlClipName(props, movementMagnitude)
+	const desiredClipName = chooseCharacterControlClipName(props, movementMagnitude, actionState)
 	const currentClipName = characterControlAnimationClipState.get(nodeId) ?? null
 	const effectiveClipName = desiredClipName && desiredClipName.trim().length ? desiredClipName.trim() : null
 	if (currentClipName === effectiveClipName) {
@@ -7650,7 +7760,8 @@ function playCharacterControlAnimation(nodeId: string, props: CharacterControlle
 		return
 	}
 	controller.mixer.stopAllAction()
-	playAnimationClip(controller.mixer, clip, { loop: true })
+	const shouldLoop = actionState.jumpPhase === 'loop' || (actionState.jumpPhase === null && !actionState.interacting)
+	playAnimationClip(controller.mixer, clip, { loop: shouldLoop })
 	characterControlAnimationClipState.set(nodeId, effectiveClipName)
 }
 
@@ -7668,6 +7779,12 @@ function updateCharacterControlForFrame(delta: number): boolean {
 	const props = clampCharacterControllerComponentProps(component.props)
 	const moveX = Number(vehicleDriveInputFlags.right) - Number(vehicleDriveInputFlags.left)
 	const moveZ = Number(vehicleDriveInputFlags.forward) - Number(vehicleDriveInputFlags.backward)
+	const nowMs = Date.now()
+	const actionState = {
+		...resolveCharacterControlRuntimeState(nowMs),
+		moveX,
+		moveZ,
+	}
 	const movementMagnitude = resolveCharacterControlMoveVector({
 		camera,
 		moveX,
@@ -7680,7 +7797,7 @@ function updateCharacterControlForFrame(delta: number): boolean {
 	})
 	if (movementMagnitude > 0.001) {
 		if (characterControlMoveScratch.lengthSq() > 1e-8) {
-			const speed = resolveCharacterControlSpeed(props, movementMagnitude)
+			const speed = resolveCharacterControlSpeed(props, movementMagnitude, actionState)
 			object.position.addScaledVector(characterControlMoveScratch, Math.max(0, speed) * delta)
 			object.lookAt(object.position.clone().add(characterControlMoveScratch))
 		}
@@ -7688,10 +7805,22 @@ function updateCharacterControlForFrame(delta: number): boolean {
 	if (cachedGroundDynamicMesh) {
 		const groundHeight = sampleGroundHeight(cachedGroundDynamicMesh, object.position.x, object.position.z)
 		if (Number.isFinite(groundHeight)) {
-			object.position.y = groundHeight + Math.max(0.1, props.colliderHeight * 0.5)
+			const baseHeight = groundHeight + Math.max(0.1, props.colliderHeight * 0.5)
+			if (actionState.jumpPhase) {
+				const jumpProgress =
+					actionState.jumpPhase === 'start'
+						? Math.min(1, (nowMs - characterControlActionState.jumpStartedAtMs) / CHARACTER_CONTROL_JUMP_START_MS)
+						: actionState.jumpPhase === 'loop'
+							? Math.min(1, (nowMs - characterControlActionState.jumpStartedAtMs - CHARACTER_CONTROL_JUMP_START_MS) / CHARACTER_CONTROL_JUMP_LOOP_MS)
+							: Math.min(1, (nowMs - characterControlActionState.jumpStartedAtMs - CHARACTER_CONTROL_JUMP_START_MS - CHARACTER_CONTROL_JUMP_LOOP_MS) / CHARACTER_CONTROL_JUMP_LAND_MS)
+				const jumpHeight = Math.sin(Math.min(1, Math.max(0, jumpProgress)) * Math.PI) * Math.max(0.35, props.jumpImpulse * 0.18)
+				object.position.y = baseHeight + jumpHeight
+			} else {
+				object.position.y = baseHeight
+			}
 		}
 	}
-	playCharacterControlAnimation(nodeId, props, movementMagnitude)
+	playCharacterControlAnimation(nodeId, props, movementMagnitude, actionState)
 	syncProtagonistCameraPose({ force: true, object, applyToCamera: true })
 	return true
 }
@@ -7728,6 +7857,11 @@ function handleCharacterControlEvent(event: Extract<BehaviorRuntimeEvent, { type
 		pendingCharacterControlEvent.value = null
 	}
 	activeCharacterControlNodeId.value = null
+	characterControlActionState.sprinting = false
+	characterControlActionState.crouching = false
+	characterControlActionState.jumpStartedAtMs = 0
+	characterControlActionState.interactUntilMs = 0
+	characterControlAnimationClipState.clear()
 	pendingCharacterControlEvent.value = event
 	activeCharacterControlNodeId.value = targetNodeId
 	controlMode.value = 'first-person'
@@ -7766,6 +7900,11 @@ function handleCharacterReleaseEvent(): void {
 		pendingCharacterControlEvent.value = null
 	}
 	activeCharacterControlNodeId.value = null
+	characterControlActionState.sprinting = false
+	characterControlActionState.crouching = false
+	characterControlActionState.jumpStartedAtMs = 0
+	characterControlActionState.interactUntilMs = 0
+	characterControlAnimationClipState.clear()
 	if (controlMode.value !== 'third-person') {
 		controlMode.value = 'third-person'
 	}
@@ -8676,6 +8815,14 @@ function handleKeyDown(event: KeyboardEvent) {
 	if (isInputLikeElement(event.target)) {
 		return
 	}
+	if (event.code === 'Escape' && activeCharacterControlNodeId.value) {
+		event.preventDefault()
+		handleCharacterReleaseEvent()
+		return
+	}
+	if (handleCharacterControlKeyboardInput(event, true)) {
+		return
+	}
 	if (event.code === 'KeyQ') {
 		rotationState.q = true
 		return
@@ -8721,6 +8868,9 @@ function handleKeyUp(event: KeyboardEvent) {
 		rotationState.e = false
 		return
 	}
+	if (handleCharacterControlKeyboardInput(event, false)) {
+		return
+	}
 	if (handleVehicleDriveKeyboardInput(event, false)) {
 		return
 	}
@@ -8733,6 +8883,7 @@ function handleKeyUp(event: KeyboardEvent) {
  * - First-person: apply keyboard yaw (Q/E), update controls, apply look tween, clamp pitch.
  * - Orbit: update orbit look tween, update controls, persist last orbit camera+target.
  */
+	resetVehicleDriveInputs()
 function updateCameraControlsForFrame(
 	delta: number,
 	activeCamera: THREE.PerspectiveCamera,
