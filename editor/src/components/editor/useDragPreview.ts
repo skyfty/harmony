@@ -7,6 +7,7 @@ import { loadObjectFromFile } from '@schema/assetImport'
 import { getCachedModelObject, getOrLoadModelObject } from '@schema/modelObjectCache'
 import { setDragPreviewReady } from '@/utils/dragPreviewRegistry'
 import { deserializeLodPreset, resolveFirstLodModelAssetId } from '@/utils/lodPreset'
+import { cloneObject3DShared } from '@/utils/prefabPreviewCache'
 import { acquirePrefabPreviewRoot, type PrefabPreviewHandle } from '@/utils/prefabPreviewBuilder'
 import type { AssetCacheStoreLike } from '@/stores/assetCacheStore'
 import { isBuildPresetAsset } from '@/utils/buildPresetAsset'
@@ -172,7 +173,7 @@ export function useDragPreview(options: Options): DragPreviewController {
     dragPreviewLoadToken += 1
     clearObject(true)
 
-    const previewObject = object.clone(true)
+    const previewObject = cloneObject3DShared(object)
     applyPreviewVisualTweaks(previewObject)
     dragPreviewObject = previewObject
     dragPreviewAssetId = previewId
@@ -213,7 +214,7 @@ export function useDragPreview(options: Options): DragPreviewController {
       }
 
       // Clone to avoid mutating cached modelObjectCache entries.
-      const previewObject = baseGroup.object.clone(true)
+      const previewObject = cloneObject3DShared(baseGroup.object)
       applyPreviewVisualTweaks(previewObject)
       dragPreviewObject = previewObject
       dragPreviewAssetId = previewId

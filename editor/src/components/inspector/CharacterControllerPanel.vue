@@ -157,6 +157,7 @@ const clipItems = computed(() => clipOptions.value)
           :model-value="normalizedProps.label"
           label="Label"
           density="compact"
+          variant="underlined"
           hide-details
           @update:model-value="(value) => updateField('label', String(value ?? ''))"
         />
@@ -167,6 +168,7 @@ const clipItems = computed(() => clipOptions.value)
             type="number"
             label="Walk speed"
             density="compact"
+          variant="underlined"
             hide-details
             @update:model-value="(value) => updateField('walkSpeed', Number(value))"
           />
@@ -174,6 +176,7 @@ const clipItems = computed(() => clipOptions.value)
             :model-value="normalizedProps.runSpeed"
             type="number"
             label="Run speed"
+          variant="underlined"
             density="compact"
             hide-details
             @update:model-value="(value) => updateField('runSpeed', Number(value))"
@@ -184,11 +187,13 @@ const clipItems = computed(() => clipOptions.value)
             label="Sprint speed"
             density="compact"
             hide-details
+          variant="underlined"
             @update:model-value="(value) => updateField('sprintSpeed', Number(value))"
           />
           <v-text-field
             :model-value="normalizedProps.turnRateDegreesPerSecond"
             type="number"
+          variant="underlined"
             label="Turn rate (deg/s)"
             density="compact"
             hide-details
@@ -197,6 +202,7 @@ const clipItems = computed(() => clipOptions.value)
           <v-text-field
             :model-value="normalizedProps.jumpImpulse"
             type="number"
+          variant="underlined"
             label="Jump impulse"
             density="compact"
             hide-details
@@ -206,6 +212,7 @@ const clipItems = computed(() => clipOptions.value)
             :model-value="normalizedProps.airControl"
             type="number"
             step="0.05"
+          variant="underlined"
             label="Air control"
             density="compact"
             hide-details
@@ -214,6 +221,7 @@ const clipItems = computed(() => clipOptions.value)
           <v-text-field
             :model-value="normalizedProps.stepHeight"
             type="number"
+          variant="underlined"
             step="0.05"
             label="Step height"
             density="compact"
@@ -223,6 +231,7 @@ const clipItems = computed(() => clipOptions.value)
           <v-text-field
             :model-value="normalizedProps.slopeLimitDegrees"
             type="number"
+          variant="underlined"
             label="Slope limit"
             density="compact"
             hide-details
@@ -231,6 +240,7 @@ const clipItems = computed(() => clipOptions.value)
           <v-text-field
             :model-value="normalizedProps.colliderRadius"
             type="number"
+          variant="underlined"
             step="0.05"
             label="Collider radius"
             density="compact"
@@ -241,6 +251,7 @@ const clipItems = computed(() => clipOptions.value)
             :model-value="normalizedProps.colliderHeight"
             type="number"
             step="0.05"
+          variant="underlined"
             label="Collider height"
             density="compact"
             hide-details

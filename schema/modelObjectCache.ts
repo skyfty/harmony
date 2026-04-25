@@ -10,7 +10,6 @@ import {
   Vector3,
   type Material,
 } from 'three'
-import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import { addMesh as markInstancedBoundsDirty } from './instancedBoundsTracker'
 import { createWallRepeatScaleMaterialVariant, ensureWallMaterialRepeatWrapU } from './material'
 import { shouldUseReceiverOnlyForDenseInstancedMesh } from './sceneCsm'
@@ -154,6 +153,21 @@ function normalizeImportedModelMaterial(material: Material): void {
   const typed = material as Material & { transparent?: boolean; alphaTest?: number }
   typed.transparent = false
   typed.alphaTest = IMPORTED_MODEL_ALPHA_TEST
+}
+
+function initializeInstancedMeshMorphTargets(mesh: InstancedMesh): void {
+  const morphAttributes = mesh.geometry.morphAttributes
+  const morphTargets = morphAttributes.position || morphAttributes.normal || morphAttributes.color || null
+  if (!morphTargets || morphTargets.length === 0) {
+    return
+  }
+
+  mesh.morphTargetInfluences = new Array(morphTargets.length).fill(0)
+  mesh.morphTargetDictionary = {}
+  for (let index = 0; index < morphTargets.length; index += 1) {
+    const morphTarget = morphTargets[index]
+    mesh.morphTargetDictionary[morphTarget.name || String(index)] = index
+  }
 }
 
 export function getOrCreateModelObjectRepeatVariant(
@@ -550,6 +564,7 @@ function buildModelAssetEntry(assetId: string, prepared: Object3D): ModelAssetEn
     mesh.castShadow = true
     mesh.receiveShadow = true
     mesh.frustumCulled = true
+    initializeInstancedMeshMorphTargets(mesh)
     const handleId = `${assetId}:${index}:${mesh.uuid}`
     mesh.userData.assetId = assetId
     mesh.userData.instancingHandleId = handleId
@@ -650,8 +665,6 @@ function resizeInstancedMesh(mesh: InstancedMesh, capacity: number): void {
 }
 
 function extractSubmeshes(root: Object3D): ParsedSubmesh[] {
-  const mergeBuckets = new Map<string, BufferGeometry[]>()
-  const materials = new Map<string, Material>()
   const submeshes: ParsedSubmesh[] = []
 
   const rootInverse = new Matrix4().copy(root.matrixWorld).invert()
@@ -675,13 +688,13 @@ function extractSubmeshes(root: Object3D): ParsedSubmesh[] {
     const isMergeable = !Array.isArray(material)
     if (isMergeable) {
       const resolvedMaterial = material as Material
-      normalizeImportedModelMaterial(resolvedMaterial)
-      const key = resolvedMaterial.uuid
-      if (!mergeBuckets.has(key)) {
-        mergeBuckets.set(key, [])
-        materials.set(key, resolvedMaterial.clone())
-      }
-      mergeBuckets.get(key)!.push(localGeometry)
+      const clonedMaterial = resolvedMaterial.clone()
+      normalizeImportedModelMaterial(clonedMaterial)
+      submeshes.push({
+        key: mesh.uuid,
+        geometry: localGeometry,
+        material: clonedMaterial,
+      })
       return
     }
 
@@ -702,23 +715,6 @@ function extractSubmeshes(root: Object3D): ParsedSubmesh[] {
       key: `${mesh.uuid}`,
       geometry: localGeometry,
       material: clonedMaterials,
-    })
-  })
-
-  mergeBuckets.forEach((geometries, key) => {
-    const merged = geometries.length > 1 ? mergeGeometries(geometries, false) : geometries[0]
-    if (!merged) {
-      return
-    }
-    const material = materials.get(key)
-    if (!material) {
-      return
-    }
-    normalizeImportedModelMaterial(material)
-    submeshes.push({
-      key,
-      geometry: merged,
-      material,
     })
   })
 

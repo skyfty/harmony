@@ -97,5 +97,54 @@ export function cloneObject3DShared(root: THREE.Object3D): THREE.Object3D {
     }
   })
 
-  return hasSkinnedMesh ? (cloneSkeleton(root) as THREE.Object3D) : root.clone(true)
+  const clone = hasSkinnedMesh ? (cloneSkeleton(root) as THREE.Object3D) : root.clone(true)
+  copyMorphTargetState(root, clone)
+  return clone
+}
+
+function copyMorphTargetState(sourceRoot: THREE.Object3D, cloneRoot: THREE.Object3D): void {
+  const sourceNodes = sourceRoot.children.slice()
+  const cloneNodes = cloneRoot.children.slice()
+
+  const stack: Array<[THREE.Object3D, THREE.Object3D]> = []
+  for (let i = 0; i < Math.min(sourceNodes.length, cloneNodes.length); i++) {
+    stack.push([sourceNodes[i]!, cloneNodes[i]!])
+  }
+
+  while (stack.length > 0) {
+    const [sourceNode, cloneNode] = stack.pop()!
+    const sourceMesh = sourceNode as THREE.Mesh & {
+      morphTargetDictionary?: Record<string, number>
+      morphTargetInfluences?: number[]
+    }
+    const cloneMesh = cloneNode as THREE.Mesh & {
+      morphTargetDictionary?: Record<string, number>
+      morphTargetInfluences?: number[]
+    }
+
+    const sourceGeometry = sourceMesh.geometry as THREE.BufferGeometry | undefined
+    const morphAttributes = sourceGeometry?.morphAttributes
+    const morphTargets = morphAttributes?.position || morphAttributes?.normal || morphAttributes?.color || null
+
+    if (sourceMesh.morphTargetInfluences && sourceMesh.morphTargetInfluences.length > 0) {
+      cloneMesh.morphTargetInfluences = sourceMesh.morphTargetInfluences.slice()
+    } else if (morphTargets && morphTargets.length > 0) {
+      cloneMesh.morphTargetInfluences = new Array(morphTargets.length).fill(0)
+    }
+    if (sourceMesh.morphTargetDictionary) {
+      cloneMesh.morphTargetDictionary = { ...sourceMesh.morphTargetDictionary }
+    } else if (morphTargets && morphTargets.length > 0) {
+      const dictionary: Record<string, number> = {}
+      morphTargets.forEach((_, index) => {
+        dictionary[index] = index
+      })
+      cloneMesh.morphTargetDictionary = dictionary
+    }
+
+    const sourceChildren = sourceNode.children
+    const cloneChildren = cloneNode.children
+    for (let i = 0; i < Math.min(sourceChildren.length, cloneChildren.length); i++) {
+      stack.push([sourceChildren[i]!, cloneChildren[i]!])
+    }
+  }
 }

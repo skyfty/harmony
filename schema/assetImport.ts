@@ -60,12 +60,30 @@ function normalizeImportedMeshMaterials(object: THREE.Object3D): void {
   })
 }
 
+function describeObjectPath(object: THREE.Object3D): string {
+  const parts: string[] = []
+  let current: THREE.Object3D | null = object
+
+  while (current) {
+    parts.push(current.name || current.type || current.uuid)
+    current = current.parent
+  }
+
+  return parts.reverse().join(' / ')
+}
+
 export function prepareImportedObject(object: THREE.Object3D) {
   object.removeFromParent()
 
   object.traverse((child: THREE.Object3D) => {
     const mesh = child as THREE.Mesh
     if (mesh?.isMesh) {
+      const geometry = mesh.geometry as THREE.BufferGeometry | undefined
+      const morphAttributes = geometry?.morphAttributes
+      const morphTargets = morphAttributes?.position || morphAttributes?.normal || morphAttributes?.color || null
+      if (morphTargets && morphTargets.length > 0 && !mesh.morphTargetInfluences) {
+        mesh.morphTargetInfluences = new Array(morphTargets.length).fill(0)
+      }
       mesh.castShadow = true
       mesh.receiveShadow = true
     }
