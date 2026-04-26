@@ -5840,7 +5840,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!definition || !groundMesh) {
 			return false
 		}
-		updateGroundChunks(groundMesh, definition, options.getCamera(), { force: true })
 
 		const category = options.scatterCategory.value
 		const preset = getScatterPreset(category)
@@ -5965,7 +5964,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!definition || !groundMesh) {
 			return false
 		}
-		updateGroundChunks(groundMesh, definition, options.getCamera(), { force: true })
 		const startPoint = resolveScatterPointFromEvent(event, definition, groundMesh)
 		if (!startPoint) {
 			return false
@@ -6726,7 +6724,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!definition || !groundMesh) {
 			return false
 		}
-		updateGroundChunks(groundMesh, definition, options.getCamera(), { force: true })
 		if (!raycastGroundPoint(event, scatterPointerHelper)) {
 			return false
 		}
