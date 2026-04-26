@@ -2045,6 +2045,10 @@ function syncPreviewInfiniteGroundChunkCollisions(
 		loadChunkData: (record) => loadPreviewGroundChunkCollisionDataBuffer(sceneId, record),
 	})
 	syncPreviewInfiniteGroundChunkDebugSources(groundObject)
+	if (isRigidbodyDebugVisible.value) {
+		syncRigidbodyDebugHelpers()
+		updateRigidbodyDebugTransforms()
+	}
 }
 
 function syncPreviewInfiniteGroundChunkManifest(
