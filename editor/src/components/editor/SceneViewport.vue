@@ -226,6 +226,7 @@ import {
   createGroundMesh,
   getVisibleInfiniteGroundChunkKeys,
   isGroundChunkStreamingEnabled,
+  refreshInfiniteGroundBaseChunkVisibilityForCamera,
   setInfiniteGroundHiddenChunkKeys,
   setGroundRuntimeOptimizedChunksEnabled,
   syncGroundChunkLoadingMode,
@@ -474,6 +475,7 @@ let viewportGroundChunkManifestRecords: Record<string, GroundChunkManifestRecord
 let viewportGroundChunkManifestLoadToken = 0
 let viewportGroundChunkManifestLoadPromise: Promise<void> | null = null
 let viewportGroundChunkSaveToken = 0
+const viewportInfiniteGroundChunkPreviewHiddenKeysMap = new WeakMap<THREE.Object3D, Set<string>>()
 
 type ViewportInfiniteGroundChunkRuntime = {
   group: THREE.Group
@@ -3587,7 +3589,28 @@ const groundEditor = createGroundEditor({
 	chunkKeys?: string[]
 	chunkCells: number
   }) => {
-	refreshViewportInfiniteGroundChunkMeshes(groundObject, definition, chunkKeys ?? null)
+  console.debug('[SceneViewport] sculpt preview', {
+    nodeId: typeof groundObject.userData?.nodeId === 'string' ? groundObject.userData.nodeId : null,
+    chunkKeys: chunkKeys ?? [],
+    previewChunkCount: viewportInfiniteGroundChunkPreviewHiddenKeysMap.get(groundObject)?.size ?? 0,
+    manifestChunkCount: Object.keys(viewportGroundChunkManifestRecords).length,
+  })
+  const hiddenChunkKeys = new Set<string>(Object.keys(viewportGroundChunkManifestRecords))
+  for (const key of chunkKeys ?? []) {
+    if (typeof key === 'string' && key.length > 0) {
+      hiddenChunkKeys.add(key)
+    }
+  }
+  if (setInfiniteGroundHiddenChunkKeys(groundObject, hiddenChunkKeys)) {
+    refreshInfiniteGroundBaseChunkVisibilityForCamera(groundObject, definition, camera)
+    lastGroundChunkSetSignatureForPlacement = null
+    const ownerNodeId = typeof groundObject.userData?.nodeId === 'string' ? groundObject.userData.nodeId : ''
+    if (ownerNodeId) {
+      refreshPlacementSurfaceTargetsForNode(ownerNodeId)
+      placementSurfaceTargetsDirty = true
+    }
+  }
+	setViewportInfiniteGroundChunkPreviewHiddenKeys(groundObject, chunkKeys ?? null)
   },
   onSculptCommitApplied: ({ groundObject, definition, affectedRegion, chunkKeys, chunkCells }: {
     groundObject: THREE.Object3D
@@ -3596,12 +3619,19 @@ const groundEditor = createGroundEditor({
     chunkKeys?: string[]
     chunkCells: number
   }) => {
+    console.debug('[SceneViewport] sculpt commit', {
+      nodeId: typeof groundObject.userData?.nodeId === 'string' ? groundObject.userData.nodeId : null,
+      chunkKeys: chunkKeys ?? [],
+      manifestChunkCount: Object.keys(viewportGroundChunkManifestRecords).length,
+    })
     const signature = computeGroundDynamicMeshSignature(definition)
     const signatureTarget = resolveGroundSignatureTarget(groundObject)
     const userData = signatureTarget.userData ?? (signatureTarget.userData = {})
     userData[GROUND_SCULPT_SKIP_REFRESH_SIGNATURE_KEY] = signature
     userData[DYNAMIC_MESH_SIGNATURE_KEY] = signature
     pendingViewportGroundOptimizedRebuild = true
+    setViewportInfiniteGroundChunkPreviewHiddenKeys(groundObject, null)
+    refreshViewportInfiniteGroundChunkMeshes(groundObject, definition, chunkKeys ?? null)
     void persistViewportInfiniteGroundChunks({
       groundObject,
       definition,
@@ -21438,6 +21468,39 @@ function clearViewportInfiniteGroundChunkRuntime(groundObject: THREE.Object3D): 
   runtime.pendingLoads.clear()
   runtime.sceneId = null
   runtime.revision = -1
+  viewportInfiniteGroundChunkPreviewHiddenKeysMap.delete(groundObject)
+}
+
+function applyViewportInfiniteGroundChunkPreviewVisibility(groundObject: THREE.Object3D): void {
+  const runtime = viewportInfiniteGroundChunkRuntimeMap.get(groundObject)
+  if (!runtime) {
+    return
+  }
+  const hiddenKeys = viewportInfiniteGroundChunkPreviewHiddenKeysMap.get(groundObject)
+  runtime.meshes.forEach((mesh, key) => {
+    mesh.visible = !(hiddenKeys?.has(key) === true)
+  })
+}
+
+function setViewportInfiniteGroundChunkPreviewHiddenKeys(groundObject: THREE.Object3D, chunkKeys: Iterable<string> | null): void {
+  if (!chunkKeys) {
+    viewportInfiniteGroundChunkPreviewHiddenKeysMap.delete(groundObject)
+    applyViewportInfiniteGroundChunkPreviewVisibility(groundObject)
+    return
+  }
+
+  const hiddenKeys = new Set<string>()
+  for (const key of chunkKeys) {
+    if (typeof key === 'string' && key.length > 0) {
+      hiddenKeys.add(key)
+    }
+  }
+  if (hiddenKeys.size > 0) {
+    viewportInfiniteGroundChunkPreviewHiddenKeysMap.set(groundObject, hiddenKeys)
+  } else {
+    viewportInfiniteGroundChunkPreviewHiddenKeysMap.delete(groundObject)
+  }
+  applyViewportInfiniteGroundChunkPreviewVisibility(groundObject)
 }
 
 function refreshViewportInfiniteGroundChunkMeshes(
@@ -21472,6 +21535,8 @@ function refreshViewportInfiniteGroundChunkMeshes(
     const nextGeometry = buildViewportInfiniteGroundChunkGeometry(record, previewHeights, fallbackHeight)
     const previousGeometry = mesh.geometry
     mesh.geometry = nextGeometry
+    const hiddenKeys = viewportInfiniteGroundChunkPreviewHiddenKeysMap.get(groundObject)
+    mesh.visible = !(hiddenKeys?.has(key) === true)
     try {
       previousGeometry?.dispose?.()
     } catch (_error) {
@@ -21687,6 +21752,8 @@ function syncViewportInfiniteGroundChunkMeshes(
           }
         }
         activeRuntime.group.add(mesh)
+        const hiddenKeys = viewportInfiniteGroundChunkPreviewHiddenKeysMap.get(groundObject)
+        mesh.visible = !(hiddenKeys?.has(record.key) === true)
         activeRuntime.meshes.set(record.key, mesh)
         lastGroundChunkSetSignatureForPlacement = null
       })

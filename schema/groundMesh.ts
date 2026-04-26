@@ -324,6 +324,20 @@ function resolveGroundRuntimeMaterial(root: THREE.Group, state: GroundRuntimeSta
     return cachedMaterial
   }
 
+  let resolvedChildMaterial: THREE.Material | undefined
+  root.traverse((child) => {
+    if (resolvedChildMaterial || !(child as THREE.Mesh).isMesh) {
+      return
+    }
+    const meshMaterial = (child as THREE.Mesh).material
+    resolvedChildMaterial = Array.isArray(meshMaterial)
+      ? (meshMaterial[0] as THREE.Material | undefined)
+      : (meshMaterial as THREE.Material | undefined)
+  })
+  if (resolvedChildMaterial) {
+    return resolvedChildMaterial
+  }
+
   const firstExistingChunk = state.chunks.values().next().value as GroundChunkRuntime | undefined
   const existingMaterial = firstExistingChunk?.mesh?.material
   const resolvedExistingMaterial = Array.isArray(existingMaterial)
@@ -2649,24 +2663,7 @@ function ensureChunkMesh(
     return existing
   }
   const spec = computeChunkSpec(definition, chunkRow, chunkColumn, state.chunkCells)
-  const cachedMaterialValue = (root.userData as Record<string, unknown> | undefined)?.groundMaterial
-  const cachedMaterial = Array.isArray(cachedMaterialValue)
-    ? (cachedMaterialValue[0] as THREE.Material | undefined)
-    : (cachedMaterialValue as THREE.Material | undefined)
-
-  let material: THREE.Material | undefined = cachedMaterial
-  if (!material) {
-    const firstExistingChunk = state.chunks.values().next().value as GroundChunkRuntime | undefined
-    const existingMaterial = firstExistingChunk?.mesh?.material
-    material = Array.isArray(existingMaterial) ? (existingMaterial[0] as THREE.Material | undefined) : (existingMaterial as THREE.Material | undefined)
-  }
-
-  if (!material && cachedPrototypeMesh) {
-    const prototypeMaterial = cachedPrototypeMesh.material
-    material = Array.isArray(prototypeMaterial)
-      ? (prototypeMaterial[0] as THREE.Material | undefined)
-      : (prototypeMaterial as THREE.Material | undefined)
-  }
+  let material = resolveGroundRuntimeMaterial(root, state)
 
   // Fallback placeholder (shared material should be set/cached by SceneGraph/editor).
   if (!material) {
@@ -2740,6 +2737,27 @@ function updateInfiniteGroundBaseChunks(
   const renderRadiusChunks = resolveInfiniteRenderRadiusChunks(definition)
   const desiredCapacity = (renderRadiusChunks * 2 + 1) * (renderRadiusChunks * 2 + 1)
   const baseRuntime = ensureInfiniteBaseChunkRuntime(root, state, definition, desiredCapacity)
+  refreshInfiniteGroundBaseChunkVisibility(root, definition, camera, baseRuntime)
+}
+
+function refreshInfiniteGroundBaseChunkVisibility(
+  target: THREE.Object3D,
+  definition: GroundDynamicMesh,
+  camera: THREE.Camera | null,
+  baseRuntime?: InfiniteGroundBaseChunkRuntime,
+): void {
+  const root = resolveGroundRuntimeGroup(target)
+  if (!root) {
+    return
+  }
+
+  const state = ensureGroundRuntimeState(root, definition)
+  const runtime = baseRuntime ?? state.baseChunkRuntime
+  if (!runtime) {
+    return
+  }
+
+  const renderRadiusChunks = resolveInfiniteRenderRadiusChunks(definition)
   const chunkSizeMeters = resolveInfiniteChunkSizeMeters(definition)
 
   let localX = 0
@@ -2761,7 +2779,7 @@ function updateInfiniteGroundBaseChunks(
   for (let chunkZ = centerCoord.chunkZ - renderRadiusChunks; chunkZ <= centerCoord.chunkZ + renderRadiusChunks; chunkZ += 1) {
     for (let chunkX = centerCoord.chunkX - renderRadiusChunks; chunkX <= centerCoord.chunkX + renderRadiusChunks; chunkX += 1) {
       const key = formatGroundChunkKey(chunkX, chunkZ)
-      if (baseRuntime.hiddenChunkKeys.has(key)) {
+      if (runtime.hiddenChunkKeys.has(key)) {
         continue
       }
       const origin = resolveGroundChunkOrigin({ chunkX, chunkZ }, chunkSizeMeters)
@@ -2770,17 +2788,17 @@ function updateInfiniteGroundBaseChunks(
         definition.baseHeight ?? 0,
         origin.z + chunkSizeMeters * 0.5,
       )
-      baseRuntime.mesh.setMatrixAt(instanceIndex, infiniteGroundMatrixHelper)
+      runtime.mesh.setMatrixAt(instanceIndex, infiniteGroundMatrixHelper)
       nextVisibleChunkKeys.add(key)
       nextOrderedChunkKeys.push(key)
       instanceIndex += 1
     }
   }
 
-  baseRuntime.mesh.count = instanceIndex
-  baseRuntime.mesh.instanceMatrix.needsUpdate = true
-  baseRuntime.visibleChunkKeys = nextVisibleChunkKeys
-  baseRuntime.orderedChunkKeys = nextOrderedChunkKeys
+  runtime.mesh.count = instanceIndex
+  runtime.mesh.instanceMatrix.needsUpdate = true
+  runtime.visibleChunkKeys = nextVisibleChunkKeys
+  runtime.orderedChunkKeys = nextOrderedChunkKeys
 }
 
 function disposeChunk(runtime: GroundChunkRuntime): void {
@@ -4217,6 +4235,47 @@ export function updateGroundMeshRegion(
   return updated
 }
 
+export function ensureGroundChunkMeshesForKeys(
+  target: THREE.Object3D,
+  definition: GroundRuntimeDynamicMesh,
+  chunkKeys: Iterable<string> | null | undefined,
+): boolean {
+  const group = resolveGroundRuntimeGroup(target)
+  if (!group || !chunkKeys) {
+    return false
+  }
+
+  const state = groundRuntimeStateMap.get(group) ?? ensureGroundRuntimeState(group, definition)
+  const rows = Math.max(1, Math.trunc(definition.rows))
+  const columns = Math.max(1, Math.trunc(definition.columns))
+  const maxChunkRowIndex = Math.max(0, Math.floor((rows - 1) / state.chunkCells))
+  const maxChunkColumnIndex = Math.max(0, Math.floor((columns - 1) / state.chunkCells))
+  const visited = new Set<string>()
+  let created = false
+
+  for (const key of chunkKeys) {
+    if (typeof key !== 'string' || key.length === 0) {
+      continue
+    }
+    const indices = resolveRuntimeChunkIndexFromSharedKey(key, maxChunkRowIndex, maxChunkColumnIndex)
+    if (!indices) {
+      continue
+    }
+    const runtimeKey = groundChunkKey(indices.row, indices.column)
+    if (visited.has(runtimeKey)) {
+      continue
+    }
+    visited.add(runtimeKey)
+    if (state.chunks.has(runtimeKey)) {
+      continue
+    }
+    ensureChunkMesh(group, state, definition, indices.row, indices.column)
+    created = true
+  }
+
+  return created
+}
+
 export function resolveInfiniteGroundChunkKeyFromInstanceId(
   target: THREE.Object3D,
   instanceId: number | null | undefined,
@@ -4285,6 +4344,14 @@ export function setInfiniteGroundHiddenChunkKeys(
 
   baseRuntime.hiddenChunkKeys = nextHiddenChunkKeys
   return true
+}
+
+export function refreshInfiniteGroundBaseChunkVisibilityForCamera(
+  target: THREE.Object3D,
+  definition: GroundDynamicMesh,
+  camera: THREE.Camera | null,
+): void {
+  refreshInfiniteGroundBaseChunkVisibility(target, definition, camera)
 }
 
 function averageNormalsOnEdge(params: {

@@ -26,6 +26,7 @@ import {
 	type TerrainScatterStoreSnapshot,
 } from '@schema/terrain-scatter'
 import {
+	ensureGroundChunkMeshesForKeys,
 	sculptGround,
 	sampleGroundHeight,
 	resolveGroundEffectiveHeightAtVertex,
@@ -4424,6 +4425,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			markSculptSessionTouchedChunkKeys(sculptSessionState, { minX, maxX, minZ, maxZ })
 		}
 		const touchedChunkKeys = sculptSessionState?.nodeId === session.nodeId ? sculptSessionState.touchedChunkKeys : null
+		ensureGroundChunkMeshesForKeys(session.groundObject, session.definition, touchedChunkKeys)
 		updateGroundMeshRegion(session.groundObject, session.definition, region, { touchedChunkKeys })
 		const seamPaddingCells = operation === 'raise' || operation === 'depress'
 			? Math.max(4, Math.ceil(Math.max(session.definition.cellSize * 4, options.brushDepth.value * (0.75 + options.brushSlope.value)) / session.definition.cellSize))
@@ -7046,6 +7048,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			sculptSessionState.dirty = true
 		}
 		const touchedChunkKeys = sculptSessionState?.nodeId === groundNode.id ? sculptSessionState.touchedChunkKeys : null
+		ensureGroundChunkMeshesForKeys(groundObject, definition, touchedChunkKeys)
 		updateGroundMeshRegion(groundObject, definition, mergedRegion, { touchedChunkKeys })
 		// Stitch normals across chunk boundaries to prevent visible seams.
 		const padded: GroundGeometryUpdateRegion = {
