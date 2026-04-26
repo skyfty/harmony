@@ -266,7 +266,36 @@ function cloneGroundSurfaceChunks(definition: GroundDynamicMesh, nodeId?: string
 	if (!source) {
 		return null
 	}
-	return JSON.parse(JSON.stringify(source)) as GroundSurfaceChunkTextureMap
+	const nextChunks: GroundSurfaceChunkTextureMap = {}
+	for (const [key, value] of Object.entries(source)) {
+		nextChunks[key] = {
+			textureAssetId: value.textureAssetId,
+			revision: value.revision,
+		}
+	}
+	return nextChunks
+}
+
+function resolveGroundSurfaceChunksSnapshot(definition: GroundDynamicMesh, nodeId: string): GroundSurfaceChunkTextureMap | null {
+	const sceneId = useSceneStore().currentSceneId
+	if (!sceneId) {
+		return definition.groundSurfaceChunks ?? null
+	}
+	const paintStore = useGroundPaintStore()
+	const runtimeState = paintStore.getSceneGroundPaint(sceneId)
+	if (!runtimeState || runtimeState.nodeId !== nodeId) {
+		return definition.groundSurfaceChunks ?? null
+	}
+	const runtimeVersion = paintStore.getSceneRuntimeVersion(sceneId)
+	if (paintSessionState && paintSessionState.nodeId === nodeId && paintSessionState.previewGroundSurfaceChunksSceneRuntimeVersion === runtimeVersion) {
+		return paintSessionState.previewGroundSurfaceChunks
+	}
+	const snapshot = cloneGroundSurfaceChunks(definition, nodeId)
+	if (paintSessionState && paintSessionState.nodeId === nodeId) {
+		paintSessionState.previewGroundSurfaceChunks = snapshot
+		paintSessionState.previewGroundSurfaceChunksSceneRuntimeVersion = runtimeVersion
+	}
+	return snapshot
 }
 
 function createCompositionCanvas(width: number, height: number): OffscreenCanvas | HTMLCanvasElement | null {
@@ -604,7 +633,14 @@ async function bakeDirtyGroundSurfaceChunks(params: {
 	if (!dirtyChunks.length) {
 		return params.groundSurfaceChunks
 	}
-	const nextChunks = params.groundSurfaceChunks ? JSON.parse(JSON.stringify(params.groundSurfaceChunks)) as GroundSurfaceChunkTextureMap : {}
+	const nextChunks: GroundSurfaceChunkTextureMap = params.groundSurfaceChunks
+		? Object.fromEntries(
+			Object.entries(params.groundSurfaceChunks).map(([key, value]) => [key, {
+				textureAssetId: value.textureAssetId,
+				revision: value.revision,
+			}]),
+		) as GroundSurfaceChunkTextureMap
+		: {}
 	const cache = useAssetCacheStore()
 	const assetsToRegister: ProjectAsset[] = []
 	for (const chunk of dirtyChunks) {
@@ -821,6 +857,7 @@ type PaintSessionState = {
 	liveSurfacePreviewFlushRafId: number | null
 	terrainPaintSurfacePreviewDebounceTimerId: number | null
 	previewGroundSurfaceChunks: GroundSurfaceChunkTextureMap | null
+	previewGroundSurfaceChunksSceneRuntimeVersion: number
 	previewEmitToken: number
 }
 
@@ -1785,18 +1822,19 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				const groundObject = getGroundObject()
 				const definition = groundNode.dynamicMesh as GroundDynamicMesh
 				const session = ensurePaintSession(definition, groundNode.id)
+				const loadedChunkKeys = new Set(
+					groundObject
+						? collectVisibleTerrainPaintChunks(groundObject).map((chunk) => chunk.key)
+						: [],
+				)
 				Object.entries(session.previewGroundSurfaceChunks ?? {}).forEach(([key]) => {
+					if (!loadedChunkKeys.has(key)) {
+						return
+					}
 					const parts = key.split(':')
 					const chunkRow = Number.parseInt(parts[0] ?? '', 10)
 					const chunkColumn = Number.parseInt(parts[1] ?? '', 10)
 					if (!Number.isFinite(chunkRow) || !Number.isFinite(chunkColumn)) {
-						return
-					}
-					// Only prewarm if the chunk mesh is currently present (loaded).
-					const loaded = groundObject
-						? !!groundObject.children.find((child: THREE.Object3D) => (child as any)?.userData?.groundChunk?.chunkRow === chunkRow && (child as any)?.userData?.groundChunk?.chunkColumn === chunkColumn)
-						: false
-					if (!loaded) {
 						return
 					}
 					void ensurePaintChunkState(session, { key, chunkRow, chunkColumn })
@@ -2408,7 +2446,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		const session = ensurePaintSession(definition, groundNode.id)
 		session.definition = definition
 		session.chunkCells = resolveGroundChunkCells(definition)
-		session.previewGroundSurfaceChunks = cloneGroundSurfaceChunks(definition, session.nodeId)
+		session.previewGroundSurfaceChunks = resolveGroundSurfaceChunksSnapshot(definition, session.nodeId)
+		const sceneId = typeof options.sceneStore.currentSceneId === 'string' ? options.sceneStore.currentSceneId.trim() : ''
+		session.previewGroundSurfaceChunksSceneRuntimeVersion = sceneId ? useGroundPaintStore().getSceneRuntimeVersion(sceneId) : 0
 		session.chunkStates = new Map()
 		session.hasPendingChanges = false
 		session.liveSurfacePreviewPendingChunkKeys.clear()
@@ -3547,7 +3587,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				? {
 					...runtimeDefinition,
 					terrainPaint: null,
-					groundSurfaceChunks: cloneGroundSurfaceChunks(runtimeDefinition, node.id),
+					groundSurfaceChunks: resolveGroundSurfaceChunksSnapshot(runtimeDefinition, node.id),
 				}
 				: runtimeDefinition
 			if (sculptSessionState && sculptSessionState.nodeId === node.id) {
@@ -3689,6 +3729,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		}
 		revokePaintPreviewUrls(paintSessionState)
 		const chunkCells = resolveGroundChunkCells(definition)
+		const sceneId = typeof options.sceneStore.currentSceneId === 'string' ? options.sceneStore.currentSceneId.trim() : ''
 		paintSessionState = {
 			nodeId,
 			definition,
@@ -3699,7 +3740,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			liveSurfacePreviewPendingChunkKeys: new Map(),
 			liveSurfacePreviewFlushRafId: null,
 			terrainPaintSurfacePreviewDebounceTimerId: null,
-			previewGroundSurfaceChunks: cloneGroundSurfaceChunks(definition, nodeId),
+			previewGroundSurfaceChunks: resolveGroundSurfaceChunksSnapshot(definition, nodeId),
+			previewGroundSurfaceChunksSceneRuntimeVersion: sceneId ? useGroundPaintStore().getSceneRuntimeVersion(sceneId) : 0,
 			previewEmitToken: 0,
 		}
 		return paintSessionState
@@ -3709,14 +3751,24 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		session: PaintSessionState,
 		chunkKeys: Set<string> | null = null,
 	): Promise<GroundSurfaceChunkTextureMap | null> {
-		const nextChunks = session.previewGroundSurfaceChunks ? JSON.parse(JSON.stringify(session.previewGroundSurfaceChunks)) as GroundSurfaceChunkTextureMap : {}
-		for (const chunk of session.chunkStates.values()) {
+		const targetChunks = Array.from(session.chunkStates.values()).filter((chunk) => {
 			if (chunkKeys && !chunkKeys.has(chunk.key)) {
-				continue
+				return false
 			}
-			if (!chunk.dirty || chunk.previewEncodedRevision === chunk.surfaceRevision) {
-				continue
-			}
+			return chunk.dirty && chunk.previewEncodedRevision !== chunk.surfaceRevision
+		})
+		if (!targetChunks.length) {
+			return session.previewGroundSurfaceChunks
+		}
+		const nextChunks: GroundSurfaceChunkTextureMap = session.previewGroundSurfaceChunks
+			? Object.fromEntries(
+				Object.entries(session.previewGroundSurfaceChunks).map(([key, value]) => [key, {
+					textureAssetId: value.textureAssetId,
+					revision: value.revision,
+				}]),
+			) as GroundSurfaceChunkTextureMap
+			: {}
+		for (const chunk of targetChunks) {
 			const blob = await encodePaintSurfaceDataToBlob(chunk.surfaceData, chunk.resolution)
 			if (!blob || typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') {
 				continue
@@ -4263,6 +4315,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				reason: 'editor-local-paint',
 			})
 			session.previewGroundSurfaceChunks = nextGroundSurfaceChunks
+			session.previewGroundSurfaceChunksSceneRuntimeVersion = useGroundPaintStore().getSceneRuntimeVersion(sceneId)
 			session.liveSurfacePreviewPendingChunkKeys.clear()
 			if (session.terrainPaintSurfacePreviewDebounceTimerId !== null) {
 				window.clearTimeout(session.terrainPaintSurfacePreviewDebounceTimerId)
