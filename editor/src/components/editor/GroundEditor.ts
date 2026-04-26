@@ -158,6 +158,13 @@ export type GroundEditorOptions = {
 		maxChunkChangesPerUpdate?: number
 		maxBindingChangesPerUpdate?: number
 	}
+	onSculptPreviewApplied?: (payload: {
+		groundObject: THREE.Object3D
+		definition: GroundRuntimeDynamicMesh
+		affectedRegion: GroundGeometryUpdateRegion | null
+		chunkKeys?: string[]
+		chunkCells: number
+	}) => void
 	onSculptCommitApplied?: (payload: {
 		groundObject: THREE.Object3D
 		definition: GroundRuntimeDynamicMesh
@@ -4428,6 +4435,15 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			maxColumn: Math.min(session.definition.columns, region.maxColumn + seamPaddingCells),
 		}
 		stitchGroundChunkNormals(session.groundObject, session.definition, padded, touchedChunkKeys)
+		if (session.definition.terrainMode === 'infinite') {
+			options.onSculptPreviewApplied?.({
+				groundObject: session.groundObject,
+				definition: session.definition,
+				affectedRegion: sculptSessionState?.affectedRegion ?? region,
+				chunkKeys: touchedChunkKeys ? Array.from(touchedChunkKeys) : undefined,
+				chunkCells: resolveChunkCellsForDefinition(session.definition),
+			})
+		}
 		commitSculptSession(getGroundNodeFromScene())
 		return true
 	}
@@ -7039,6 +7055,15 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			maxColumn: Math.min(definition.columns, mergedRegion.maxColumn + 2),
 		}
 		stitchGroundChunkNormals(groundObject, definition, padded, touchedChunkKeys)
+		if (definition.terrainMode === 'infinite') {
+			options.onSculptPreviewApplied?.({
+				groundObject,
+				definition,
+				affectedRegion: sculptSessionState?.affectedRegion ?? mergedRegion,
+				chunkKeys: touchedChunkKeys ? Array.from(touchedChunkKeys) : undefined,
+				chunkCells: resolveChunkCellsForDefinition(definition),
+			})
+		}
 		if (sculptSessionState && sculptSessionState.nodeId === groundNode.id) {
 			sculptSessionState.affectedRegion = mergeRegions(sculptSessionState.affectedRegion, mergedRegion)
 		}

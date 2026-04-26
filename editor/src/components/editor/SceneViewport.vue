@@ -3580,6 +3580,15 @@ const groundEditor = createGroundEditor({
   restoreOrbitAfterGroundSelection,
   isAltOverrideActive: () => isAltOverrideActive,
   prepareGroundRuntimeDefinition: applyViewportGroundRuntimeMode,
+  onSculptPreviewApplied: ({ groundObject, definition, chunkKeys }: {
+	groundObject: THREE.Object3D
+	definition: GroundRuntimeDynamicMesh
+	affectedRegion: { minRow: number; maxRow: number; minColumn: number; maxColumn: number } | null
+	chunkKeys?: string[]
+	chunkCells: number
+  }) => {
+	refreshViewportInfiniteGroundChunkMeshes(groundObject, definition, chunkKeys ?? null)
+  },
   onSculptCommitApplied: ({ groundObject, definition, affectedRegion, chunkKeys, chunkCells }: {
     groundObject: THREE.Object3D
     definition: GroundRuntimeDynamicMesh
@@ -21429,6 +21438,46 @@ function clearViewportInfiniteGroundChunkRuntime(groundObject: THREE.Object3D): 
   runtime.pendingLoads.clear()
   runtime.sceneId = null
   runtime.revision = -1
+}
+
+function refreshViewportInfiniteGroundChunkMeshes(
+  groundObject: THREE.Object3D,
+  groundDefinition: GroundRuntimeDynamicMesh,
+  chunkKeys: Iterable<string> | null = null,
+): void {
+  if (groundDefinition.terrainMode !== 'infinite') {
+    return
+  }
+  const runtime = viewportInfiniteGroundChunkRuntimeMap.get(groundObject)
+  if (!runtime || !runtime.meshes.size) {
+    return
+  }
+  const filteredKeys = chunkKeys ? Array.from(chunkKeys).map((value) => (typeof value === 'string' ? value.trim() : '')).filter(Boolean) : null
+  const fallbackHeight = typeof groundDefinition.baseHeight === 'number' && Number.isFinite(groundDefinition.baseHeight)
+    ? groundDefinition.baseHeight
+    : 0
+
+  runtime.meshes.forEach((mesh, key) => {
+    if (filteredKeys && !filteredKeys.includes(key)) {
+      return
+    }
+    const record = viewportGroundChunkManifestRecords[key]
+    if (!record) {
+      return
+    }
+    const previewData = buildGroundChunkDataFromManifestRecord(groundDefinition, record)
+    const previewHeights = previewData.heights instanceof Float32Array
+      ? previewData.heights
+      : Float32Array.from(previewData.heights)
+    const nextGeometry = buildViewportInfiniteGroundChunkGeometry(record, previewHeights, fallbackHeight)
+    const previousGeometry = mesh.geometry
+    mesh.geometry = nextGeometry
+    try {
+      previousGeometry?.dispose?.()
+    } catch (_error) {
+      /* noop */
+    }
+  })
 }
 
 function resolveViewportGroundChunkMaterial(groundObject: THREE.Object3D): THREE.Material {
