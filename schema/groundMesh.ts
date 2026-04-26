@@ -722,29 +722,96 @@ function hasRuntimeGroundHeightOverrides(definition: GroundRuntimeDynamicMesh): 
   return false
 }
 
-function getGroundLocalEditTiles(definition: GroundDynamicMesh): GroundLocalEditTileData[] {
-  const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
-  const source = runtimeDefinition.localEditTiles
-  return source && typeof source === 'object' ? Object.values(source) : []
+function invalidateGroundLocalEditTileCaches(definition: GroundRuntimeDynamicMesh): void {
+  definition.runtimeLocalEditTileArrayCache = undefined
+  definition.runtimeLocalEditTileLookupCache = undefined
+  definition.runtimeLocalEditTileSourceRef = undefined
 }
 
-function resolveGroundLocalEditTileGridOrigin(definition: GroundDynamicMesh): { originX: number; originZ: number } {
+function ensureGroundLocalEditTileCaches(
+  definition: GroundDynamicMesh,
+): {
+  tiles: GroundLocalEditTileData[]
+  lookup: Map<string, GroundLocalEditTileData>
+} {
   const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
-  if (isInfiniteGroundDefinition(runtimeDefinition)) {
+  const source = runtimeDefinition.localEditTiles && typeof runtimeDefinition.localEditTiles === 'object'
+    ? runtimeDefinition.localEditTiles
+    : null
+
+  if (!source) {
+    runtimeDefinition.runtimeLocalEditTileArrayCache = []
+    runtimeDefinition.runtimeLocalEditTileLookupCache = new Map<string, GroundLocalEditTileData>()
+    runtimeDefinition.runtimeLocalEditTileSourceRef = null
     return {
+      tiles: runtimeDefinition.runtimeLocalEditTileArrayCache,
+      lookup: runtimeDefinition.runtimeLocalEditTileLookupCache,
+    }
+  }
+
+  if (
+    runtimeDefinition.runtimeLocalEditTileSourceRef !== source
+    || !Array.isArray(runtimeDefinition.runtimeLocalEditTileArrayCache)
+    || !(runtimeDefinition.runtimeLocalEditTileLookupCache instanceof Map)
+  ) {
+    const tiles = Object.values(source)
+    const lookup = new Map<string, GroundLocalEditTileData>()
+    for (const tile of tiles) {
+      lookup.set(formatGroundLocalEditTileKey(tile.tileRow, tile.tileColumn), tile)
+    }
+    runtimeDefinition.runtimeLocalEditTileArrayCache = tiles
+    runtimeDefinition.runtimeLocalEditTileLookupCache = lookup
+    runtimeDefinition.runtimeLocalEditTileSourceRef = source
+  }
+
+  return {
+    tiles: runtimeDefinition.runtimeLocalEditTileArrayCache,
+    lookup: runtimeDefinition.runtimeLocalEditTileLookupCache,
+  }
+}
+
+function getGroundLocalEditTiles(definition: GroundDynamicMesh): GroundLocalEditTileData[] {
+  return ensureGroundLocalEditTileCaches(definition).tiles
+}
+
+function resolveGroundLocalEditTileGridOriginFromRuntime(
+  definition: GroundRuntimeDynamicMesh,
+): { originX: number; originZ: number } {
+  if (isInfiniteGroundDefinition(definition)) {
+    const cached = definition.runtimeLocalEditTileGridOriginCache
+    if (cached?.cacheKey === 'infinite') {
+      return cached
+    }
+    const next = {
+      cacheKey: 'infinite',
       originX: 0,
       originZ: 0,
     }
+    definition.runtimeLocalEditTileGridOriginCache = next
+    return next
   }
+
   const spanMeters = resolveGroundWorkingSpanMeters(definition)
-  return {
+  const cacheKey = `bounded:${spanMeters}`
+  const cached = definition.runtimeLocalEditTileGridOriginCache
+  if (cached?.cacheKey === cacheKey) {
+    return cached
+  }
+  const next = {
+    cacheKey,
     originX: -spanMeters * 0.5,
     originZ: -spanMeters * 0.5,
   }
+  definition.runtimeLocalEditTileGridOriginCache = next
+  return next
 }
 
-function resolveGroundLocalEditTileCoordAtWorld(
-  definition: GroundDynamicMesh,
+function resolveGroundLocalEditTileGridOrigin(definition: GroundDynamicMesh): { originX: number; originZ: number } {
+  return resolveGroundLocalEditTileGridOriginFromRuntime(ensureGroundRuntimeDefinition(definition))
+}
+
+function resolveGroundLocalEditTileCoordAtWorldFromRuntime(
+  definition: GroundRuntimeDynamicMesh,
   x: number,
   z: number,
   tileSizeMeters: number,
@@ -752,11 +819,10 @@ function resolveGroundLocalEditTileCoordAtWorld(
   if (!Number.isFinite(tileSizeMeters) || tileSizeMeters <= 0) {
     return null
   }
-  const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
-  const { originX, originZ } = resolveGroundLocalEditTileGridOrigin(runtimeDefinition)
+  const { originX, originZ } = resolveGroundLocalEditTileGridOriginFromRuntime(definition)
   const tileColumn = Math.floor((x - originX) / tileSizeMeters)
   const tileRow = Math.floor((z - originZ) / tileSizeMeters)
-  if (!isInfiniteGroundDefinition(runtimeDefinition) && (tileRow < 0 || tileColumn < 0)) {
+  if (!isInfiniteGroundDefinition(definition) && (tileRow < 0 || tileColumn < 0)) {
     return null
   }
   if (!Number.isFinite(tileRow) || !Number.isFinite(tileColumn)) {
@@ -766,6 +832,15 @@ function resolveGroundLocalEditTileCoordAtWorld(
     tileRow,
     tileColumn,
   }
+}
+
+function resolveGroundLocalEditTileCoordAtWorld(
+  definition: GroundDynamicMesh,
+  x: number,
+  z: number,
+  tileSizeMeters: number,
+): { tileRow: number; tileColumn: number } | null {
+  return resolveGroundLocalEditTileCoordAtWorldFromRuntime(ensureGroundRuntimeDefinition(definition), x, z, tileSizeMeters)
 }
 
 function resolveGroundLocalEditTileWorldMin(
@@ -781,28 +856,25 @@ function resolveGroundLocalEditTileWorldMin(
   }
 }
 
-function findGroundLocalEditTileAtWorld(
-  definition: GroundDynamicMesh,
+function findGroundLocalEditTileAtWorldFromRuntime(
+  definition: GroundRuntimeDynamicMesh,
   x: number,
   z: number,
 ): GroundLocalEditTileData | null {
-  const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
-  const tileSizeMeters = Number(runtimeDefinition.editTileSizeMeters)
+  const tileSizeMeters = Number(definition.editTileSizeMeters)
   if (!Number.isFinite(tileSizeMeters) || tileSizeMeters <= 0) {
     return null
   }
-  const coord = resolveGroundLocalEditTileCoordAtWorld(runtimeDefinition, x, z, tileSizeMeters)
+  const coord = resolveGroundLocalEditTileCoordAtWorldFromRuntime(definition, x, z, tileSizeMeters)
   if (!coord) {
     return null
   }
   const key = formatGroundLocalEditTileKey(coord.tileRow, coord.tileColumn)
-  const directMatch = runtimeDefinition.localEditTiles?.[key] ?? null
+  const directMatch = definition.localEditTiles?.[key] ?? null
   if (directMatch) {
     return directMatch
   }
-  return getGroundLocalEditTiles(runtimeDefinition).find((tile) => (
-    tile.tileRow === coord.tileRow && tile.tileColumn === coord.tileColumn
-  )) ?? null
+  return ensureGroundLocalEditTileCaches(definition).lookup.get(key) ?? null
 }
 
 function sampleGroundLocalEditHeightAtWorld(
@@ -811,7 +883,7 @@ function sampleGroundLocalEditHeightAtWorld(
   z: number,
 ): number | null {
   const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
-  const tile = findGroundLocalEditTileAtWorld(runtimeDefinition, x, z)
+  const tile = findGroundLocalEditTileAtWorldFromRuntime(runtimeDefinition, x, z)
   if (!tile) {
     return null
   }
@@ -820,7 +892,9 @@ function sampleGroundLocalEditHeightAtWorld(
   if (!Number.isFinite(tileSizeMeters) || tileSizeMeters <= 0 || resolution <= 0) {
     return null
   }
-  const { minX, minZ } = resolveGroundLocalEditTileWorldMin(runtimeDefinition, tile.tileRow, tile.tileColumn, tileSizeMeters)
+  const { originX, originZ } = resolveGroundLocalEditTileGridOriginFromRuntime(runtimeDefinition)
+  const minX = originX + tile.tileColumn * tileSizeMeters
+  const minZ = originZ + tile.tileRow * tileSizeMeters
   const maxX = minX + tileSizeMeters
   const maxZ = minZ + tileSizeMeters
   if (x < minX || x > maxX || z < minZ || z > maxZ) {
@@ -1052,6 +1126,56 @@ export function sampleGroundEffectiveHeightRegion(
   }
 }
 
+function sampleGroundEffectiveHeightRegionWithoutLocalEdit(
+  definition: GroundRuntimeDynamicMesh,
+  minRowInput: number,
+  maxRowInput: number,
+  minColumnInput: number,
+  maxColumnInput: number,
+): GroundEffectiveHeightRegion {
+  const baseRegion = computeGroundBaseHeightRegion(definition, minRowInput, maxRowInput, minColumnInput, maxColumnInput)
+  const { minRow, maxRow, minColumn, maxColumn, stride, values: baseValues } = baseRegion
+  const values = new Float32Array(baseValues.length)
+  let heightMin = 0
+  let heightMax = 0
+
+  if (stride <= 0 || maxRow < minRow || maxColumn < minColumn) {
+    return { ...baseRegion, values, heightMin, heightMax }
+  }
+
+  const gridSize = resolveGroundWorkingGridSize(definition)
+  const manualHeightMap = definition.manualHeightMap
+  const planningHeightMap = definition.planningHeightMap
+
+  for (let row = minRow; row <= maxRow; row += 1) {
+    const baseOffset = (row - minRow) * stride
+    for (let column = minColumn; column <= maxColumn; column += 1) {
+      const offset = baseOffset + (column - minColumn)
+      const base = baseValues[offset] ?? 0
+      const heightIndex = getGroundVertexIndex(gridSize.columns, row, column)
+      const manualRaw = manualHeightMap[heightIndex]
+      const planningRaw = planningHeightMap[heightIndex]
+      const manual = typeof manualRaw === 'number' && Number.isFinite(manualRaw) ? manualRaw : base
+      const planning = typeof planningRaw === 'number' && Number.isFinite(planningRaw) ? planningRaw : base
+      const effective = planning + (manual - base)
+      values[offset] = effective
+      heightMin = Math.min(heightMin, effective)
+      heightMax = Math.max(heightMax, effective)
+    }
+  }
+
+  return {
+    minRow,
+    maxRow,
+    minColumn,
+    maxColumn,
+    stride,
+    values,
+    heightMin,
+    heightMax,
+  }
+}
+
 export function resolveGroundEffectiveHeightAtVertexFromSampler(
   definition: GroundDynamicMesh,
   sampler: GroundHeightFieldSampler,
@@ -1265,6 +1389,7 @@ function ensureGroundLocalEditTileStorage(
     updatedAt: existing?.updatedAt,
   }
   runtimeDefinition.localEditTiles[key] = created
+  invalidateGroundLocalEditTileCaches(runtimeDefinition)
   return created
 }
 
@@ -2509,6 +2634,7 @@ function buildGroundChunkGeometry(definition: GroundRuntimeDynamicMesh, spec: Gr
     return createGroundOptimizedChunkGeometry(optimizedChunk)
   }
 
+  const chunkHasLocalEditTile = chunkIntersectsGroundLocalEditTile(definition, spec)
   const gridSize = resolveGroundWorkingGridSize(definition)
   const columns = gridSize.columns
   const rows = gridSize.rows
@@ -2528,13 +2654,26 @@ function buildGroundChunkGeometry(definition: GroundRuntimeDynamicMesh, spec: Gr
   const halfDepth = spanMeters * 0.5
   const startX = -halfWidth + spec.startColumn * definition.cellSize
   const startZ = -halfDepth + spec.startRow * definition.cellSize
+  const heightRegion = !chunkHasLocalEditTile
+    ? sampleGroundEffectiveHeightRegionWithoutLocalEdit(
+        definition,
+        spec.startRow,
+        spec.startRow + spec.rows,
+        spec.startColumn,
+        spec.startColumn + spec.columns,
+      )
+    : null
+  const heightValues = heightRegion?.values ?? null
+  const heightStride = heightRegion?.stride ?? 0
 
   let vertexIndex = 0
   for (let localRow = 0; localRow <= chunkRows; localRow += 1) {
     const z = startZ + localRow * layout.stepZ
     for (let localColumn = 0; localColumn <= chunkColumns; localColumn += 1) {
       const x = startX + localColumn * layout.stepX
-      const height = sampleGroundHeight(definition, x, z)
+      const height = heightValues
+        ? (heightValues[localRow * heightStride + localColumn] ?? 0)
+        : sampleGroundHeight(definition, x, z)
       const columnRatio = columns === 0 ? 0 : clampInclusive((x + halfWidth) / Math.max(spanMeters, Number.EPSILON), 0, 1)
       const rowRatio = rows === 0 ? 0 : clampInclusive((z + halfDepth) / Math.max(spanMeters, Number.EPSILON), 0, 1)
 
@@ -3649,6 +3788,7 @@ function updateChunkGeometry(geometry: THREE.BufferGeometry, definition: GroundR
     return applyGroundOptimizedChunkGeometry(geometry, optimizedChunk)
   }
 
+  const chunkHasLocalEditTile = chunkIntersectsGroundLocalEditTile(definition, spec)
   const gridSize = resolveGroundWorkingGridSize(definition)
   const columns = gridSize.columns
   const rows = gridSize.rows
@@ -3666,13 +3806,26 @@ function updateChunkGeometry(geometry: THREE.BufferGeometry, definition: GroundR
   const halfDepth = spanMeters * 0.5
   const startX = -halfWidth + spec.startColumn * definition.cellSize
   const startZ = -halfDepth + spec.startRow * definition.cellSize
+  const heightRegion = !chunkHasLocalEditTile
+    ? sampleGroundEffectiveHeightRegionWithoutLocalEdit(
+        definition,
+        spec.startRow,
+        spec.startRow + spec.rows,
+        spec.startColumn,
+        spec.startColumn + spec.columns,
+      )
+    : null
+  const heightValues = heightRegion?.values ?? null
+  const heightStride = heightRegion?.stride ?? 0
 
   let vertexIndex = 0
   for (let localRow = 0; localRow <= chunkRows; localRow += 1) {
     const z = startZ + localRow * layout.stepZ
     for (let localColumn = 0; localColumn <= chunkColumns; localColumn += 1) {
       const x = startX + localColumn * layout.stepX
-      const height = sampleGroundHeight(definition, x, z)
+      const height = heightValues
+        ? (heightValues[localRow * heightStride + localColumn] ?? 0)
+        : sampleGroundHeight(definition, x, z)
       const columnRatio = columns === 0 ? 0 : clampInclusive((x + halfWidth) / Math.max(spanMeters, Number.EPSILON), 0, 1)
       const rowRatio = rows === 0 ? 0 : clampInclusive((z + halfDepth) / Math.max(spanMeters, Number.EPSILON), 0, 1)
       positionAttr.setXYZ(vertexIndex, x, height, z)
@@ -3700,16 +3853,14 @@ function updateChunkGeometryRegion(
     return applyGroundOptimizedChunkGeometry(geometry, optimizedChunk)
   }
 
-  if (chunkIntersectsGroundLocalEditTile(definition, spec)) {
-    return false
-  }
-
-  const chunkColumns = Math.max(1, Math.trunc(spec.columns))
-  const chunkRows = Math.max(1, Math.trunc(spec.rows))
+  const layout = resolveGroundChunkGeometryLayout(definition, spec)
+  const chunkColumns = Math.max(1, Math.trunc(layout.segmentColumns))
+  const chunkRows = Math.max(1, Math.trunc(layout.segmentRows))
   const vertexColumns = chunkColumns + 1
   const expectedVertexCount = (chunkColumns + 1) * (chunkRows + 1)
   const positionAttr = geometry.getAttribute('position') as THREE.BufferAttribute | undefined
-  if (!positionAttr || positionAttr.count !== expectedVertexCount) {
+  const uvAttr = geometry.getAttribute('uv') as THREE.BufferAttribute | undefined
+  if (!positionAttr || !uvAttr || positionAttr.count !== expectedVertexCount || uvAttr.count !== expectedVertexCount) {
     return false
   }
 
@@ -3717,24 +3868,36 @@ function updateChunkGeometryRegion(
   const halfWidth = spanMeters * 0.5
   const halfDepth = spanMeters * 0.5
   const cellSize = definition.cellSize
+  const startX = -halfWidth + spec.startColumn * cellSize
+  const startZ = -halfDepth + spec.startRow * cellSize
+  const chunkMaxX = startX + chunkColumns * layout.stepX
+  const chunkMaxZ = startZ + chunkRows * layout.stepZ
 
-  const startRow = clampInclusive(region.minRow, spec.startRow, spec.startRow + chunkRows)
-  const endRow = clampInclusive(region.maxRow, spec.startRow, spec.startRow + chunkRows)
-  const startColumn = clampInclusive(region.minColumn, spec.startColumn, spec.startColumn + chunkColumns)
-  const endColumn = clampInclusive(region.maxColumn, spec.startColumn, spec.startColumn + chunkColumns)
-  const heightRegion = sampleGroundEffectiveHeightRegion(definition, startRow, endRow, startColumn, endColumn)
-  const heightValues = heightRegion.values
-  const heightStride = heightRegion.stride
+  const regionStartRow = clampInclusive(region.minRow, spec.startRow, spec.startRow + spec.rows)
+  const regionEndRow = clampInclusive(region.maxRow, spec.startRow, spec.startRow + spec.rows)
+  const regionStartColumn = clampInclusive(region.minColumn, spec.startColumn, spec.startColumn + spec.columns)
+  const regionEndColumn = clampInclusive(region.maxColumn, spec.startColumn, spec.startColumn + spec.columns)
 
-  for (let row = startRow; row <= endRow; row += 1) {
-    const z = -halfDepth + row * cellSize
-    const localRow = row - spec.startRow
-    const heightOffset = (row - startRow) * heightStride
-    for (let column = startColumn; column <= endColumn; column += 1) {
-      const x = -halfWidth + column * cellSize
-      const localColumn = column - spec.startColumn
+  const updateMinX = -halfWidth + regionStartColumn * cellSize
+  const updateMaxX = -halfWidth + regionEndColumn * cellSize
+  const updateMinZ = -halfDepth + regionStartRow * cellSize
+  const updateMaxZ = -halfDepth + regionEndRow * cellSize
+
+  const startLocalColumn = clampInclusive(Math.floor((Math.max(startX, updateMinX) - startX) / layout.stepX), 0, chunkColumns)
+  const endLocalColumn = clampInclusive(Math.ceil((Math.min(chunkMaxX, updateMaxX) - startX) / layout.stepX), 0, chunkColumns)
+  const startLocalRow = clampInclusive(Math.floor((Math.max(startZ, updateMinZ) - startZ) / layout.stepZ), 0, chunkRows)
+  const endLocalRow = clampInclusive(Math.ceil((Math.min(chunkMaxZ, updateMaxZ) - startZ) / layout.stepZ), 0, chunkRows)
+
+  if (startLocalColumn > endLocalColumn || startLocalRow > endLocalRow) {
+    return true
+  }
+
+  for (let localRow = startLocalRow; localRow <= endLocalRow; localRow += 1) {
+    const z = startZ + localRow * layout.stepZ
+    for (let localColumn = startLocalColumn; localColumn <= endLocalColumn; localColumn += 1) {
+      const x = startX + localColumn * layout.stepX
       const vertexIndex = localRow * vertexColumns + localColumn
-      const height = heightValues[heightOffset + (column - startColumn)] ?? 0
+      const height = sampleGroundHeight(definition, x, z)
       positionAttr.setXYZ(vertexIndex, x, height, z)
     }
   }
@@ -4283,16 +4446,10 @@ export function updateGroundMeshRegion(
       if (!(geometry instanceof THREE.BufferGeometry)) {
         continue
       }
-      const fullChunkRegion: GroundGeometryUpdateRegion = {
-        minRow: entry.spec.startRow,
-        maxRow: entry.spec.startRow + entry.spec.rows,
-        minColumn: entry.spec.startColumn,
-        maxColumn: entry.spec.startColumn + entry.spec.columns,
-      }
       const ok = refreshChunkRuntimeGeometry(entry, definition, {
-		region: fullChunkRegion,
-		computeNormals: options.computeNormals,
-	})
+        region,
+        computeNormals: options.computeNormals,
+      })
       updated = updated || ok
     }
     return updated
@@ -4308,9 +4465,9 @@ export function updateGroundMeshRegion(
       return
     }
     const ok = refreshChunkRuntimeGeometry(entry, definition, {
-		region,
-		computeNormals: options.computeNormals,
-	})
+      region,
+      computeNormals: options.computeNormals,
+    })
     updated = updated || ok
   })
   return updated

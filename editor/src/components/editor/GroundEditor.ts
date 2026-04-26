@@ -1261,6 +1261,7 @@ type SculptSessionState = {
 	dirty: boolean
 	affectedRegion: GroundGeometryUpdateRegion | null
 	touchedChunkKeys: Set<string>
+	chunksPrimed: boolean
 }
 
 type SculptPolygonSessionState = {
@@ -1549,6 +1550,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	brushMesh.rotation.x = -Math.PI / 2
 	brushMesh.visible = false
 	brushMesh.renderOrder = 999
+	let lastBrushUpdateSignature: string | null = null
 
 	const scatterPreviewGroup = new THREE.Group()
 	scatterPreviewGroup.name = 'ScatterHoverPreview'
@@ -3656,6 +3658,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			dirty: false,
 			affectedRegion: null,
 			touchedChunkKeys: new Set<string>(),
+			chunksPrimed: false,
 		}
 		return sessionDefinition
 	}
@@ -6972,7 +6975,23 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			brushMesh.visible = false
 			return
 		}
-		updateGroundChunks(groundObject, definition, options.getCamera())
+		const brushUpdateSignature = [
+			event.pointerId,
+			event.clientX,
+			event.clientY,
+			options.activeBuildTool.value,
+			options.groundPanelTab.value,
+			options.scatterEraseModeActive.value ? 1 : 0,
+			scatterModeEnabled() ? 1 : 0,
+			options.brushRadius.value,
+			options.brushOperation.value ?? '',
+			isPainting.value ? 1 : 0,
+			isSculpting.value ? 1 : 0,
+		].join('|')
+		if (brushMesh.visible && brushUpdateSignature === lastBrushUpdateSignature) {
+			return
+		}
+		lastBrushUpdateSignature = brushUpdateSignature
 
 		options.pointer.set(x, y)
 		options.raycaster.setFromCamera(options.pointer, camera)
@@ -7037,7 +7056,10 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 		const groundObject = getGroundObject()
 		if (!groundObject) return
-		updateGroundChunks(groundObject, definition, options.getCamera())
+		if (sculptSessionState && !sculptSessionState.chunksPrimed) {
+			updateGroundChunks(groundObject, definition, options.getCamera(), { force: true })
+			sculptSessionState.chunksPrimed = true
+		}
 
 		const localPoint = groundObject.worldToLocal(brushMesh.position.clone())
 		localPoint.y -= 0.1

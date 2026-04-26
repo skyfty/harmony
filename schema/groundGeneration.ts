@@ -395,6 +395,9 @@ export function computeGroundBaseHeightAtVertex(
   row: number,
   column: number,
 ): number {
-  const region = computeGroundBaseHeightRegion(mesh, row, row, column, column)
-  return region.values[0] ?? 0
+  const cachedGrid = getOrCreateGroundBaseHeightGrid(mesh)
+  const clampedRow = clampRegionIndex(row, 0, cachedGrid.rows)
+  const clampedColumn = clampRegionIndex(column, 0, cachedGrid.columns)
+  const stride = cachedGrid.columns + 1
+  return cachedGrid.values[clampedRow * stride + clampedColumn] ?? 0
 }

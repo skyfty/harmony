@@ -1922,6 +1922,14 @@ export type GroundRuntimeDynamicMesh = GroundDynamicMesh & {
   manualHeightMap: GroundHeightMap
   planningHeightMap: GroundHeightMap
   localEditTiles?: GroundLocalEditTileMap | null
+  runtimeLocalEditTileArrayCache?: GroundLocalEditTileData[]
+  runtimeLocalEditTileLookupCache?: Map<string, GroundLocalEditTileData>
+  runtimeLocalEditTileSourceRef?: GroundLocalEditTileMap | null
+  runtimeLocalEditTileGridOriginCache?: {
+    cacheKey: string
+    originX: number
+    originZ: number
+  }
   /** Runtime-only hydration state used to distinguish untouched sidecar restore from in-session edits. */
   runtimeHydratedHeightState?: 'pristine' | 'dirty'
   /** Runtime-only guard to bypass optimized streamed chunk geometry when sidecar/runtime overrides are active. */
