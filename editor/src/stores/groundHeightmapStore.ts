@@ -686,6 +686,14 @@ function buildSceneGroundSidecar(groundNode: SceneNode | null): ArrayBuffer | nu
     planningMetadata: state.planningMetadata ?? definition.planningMetadata ?? null,
     getManualHeight: (row, column) => getTileHeightMapValue(state, 'manual', row, column),
     getPlanningHeight: (row, column) => getTileHeightMapValue(state, 'planning', row, column),
+    sampleHeightRegion: (kind, minRowInput, maxRowInput, minColumnInput, maxColumnInput) => sampleRuntimeHeightRegion(
+      state,
+      kind,
+      minRowInput,
+      maxRowInput,
+      minColumnInput,
+      maxColumnInput,
+    ),
   }
   return serializeGroundHeightSidecarFromSampler(sampler)
 }
@@ -718,6 +726,14 @@ export const useGroundHeightmapStore = defineStore('groundHeightmap', {
         columns: state.columns,
         getManualHeight: (row, column) => getTileHeightMapValue(state, 'manual', row, column),
         getPlanningHeight: (row, column) => getTileHeightMapValue(state, 'planning', row, column),
+        sampleHeightRegion: (kind, minRowInput, maxRowInput, minColumnInput, maxColumnInput) => sampleRuntimeHeightRegion(
+          state,
+          kind,
+          minRowInput,
+          maxRowInput,
+          minColumnInput,
+          maxColumnInput,
+        ),
       }
     },
     markOptimizedMeshDirtyBounds(

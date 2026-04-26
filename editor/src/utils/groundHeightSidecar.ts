@@ -25,6 +25,20 @@ export type GroundHeightSidecarSampler = {
   planningMetadata?: GroundPlanningMetadata | null
   getManualHeight: (row: number, column: number) => number
   getPlanningHeight: (row: number, column: number) => number
+  sampleHeightRegion?: (
+    kind: 'manual' | 'planning',
+    minRowInput: number,
+    maxRowInput: number,
+    minColumnInput: number,
+    maxColumnInput: number,
+  ) => {
+    minRow: number
+    maxRow: number
+    minColumn: number
+    maxColumn: number
+    stride: number
+    values: ArrayLike<number>
+  }
 }
 
 export function getGroundHeightSidecarByteLength(definition: GroundDynamicMesh): number {
@@ -207,12 +221,25 @@ function writeGroundHeightSidecarValues(
   const planningOffset = manualOffset + vertexCount * Float64Array.BYTES_PER_ELEMENT
   const manual = new Float64Array(buffer, manualOffset, vertexCount)
   const planning = new Float64Array(buffer, planningOffset, vertexCount)
+  const sampleHeightRegion = typeof sampler.sampleHeightRegion === 'function'
+    ? sampler.sampleHeightRegion.bind(sampler)
+    : null
+  const manualRegion = sampleHeightRegion
+    ? sampleHeightRegion('manual', 0, sampler.rows, 0, sampler.columns)
+    : null
+  const planningRegion = sampleHeightRegion
+    ? sampleHeightRegion('planning', 0, sampler.rows, 0, sampler.columns)
+    : null
 
   for (let row = 0; row <= sampler.rows; row += 1) {
     for (let column = 0; column <= sampler.columns; column += 1) {
       const index = row * (sampler.columns + 1) + column
-      const manualHeight = Number(sampler.getManualHeight(row, column))
-      const planningHeight = Number(sampler.getPlanningHeight(row, column))
+      const manualHeight = manualRegion
+        ? Number(manualRegion.values[(row - manualRegion.minRow) * manualRegion.stride + (column - manualRegion.minColumn)])
+        : Number(sampler.getManualHeight(row, column))
+      const planningHeight = planningRegion
+        ? Number(planningRegion.values[(row - planningRegion.minRow) * planningRegion.stride + (column - planningRegion.minColumn)])
+        : Number(sampler.getPlanningHeight(row, column))
       manual[index] = Number.isFinite(manualHeight) ? manualHeight : Number.NaN
       planning[index] = Number.isFinite(planningHeight) ? planningHeight : Number.NaN
     }
