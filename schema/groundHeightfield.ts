@@ -1,5 +1,6 @@
 import type { SceneNode, GroundDynamicMesh } from './index'
 import type { RigidbodyPhysicsShape } from './components'
+import { resolveGroundWorkingGridSize, resolveGroundWorkingSpanMeters } from './index'
 import { resolveGroundEffectiveHeightAtVertex, sampleGroundEffectiveHeightRegion } from './groundMesh'
 
 export type GroundHeightfieldData = {
@@ -269,8 +270,9 @@ function findLargestCommonStride(rowSpan: number, columnSpan: number, maxStride:
 }
 
 function buildGroundRegionSampleGrid(node: SceneNode, mesh: GroundDynamicMesh): GroundRegionSample {
-  const rows = Math.max(1, Number.isFinite(mesh.rows) ? Math.floor(mesh.rows) : 0)
-  const columns = Math.max(1, Number.isFinite(mesh.columns) ? Math.floor(mesh.columns) : 0)
+  const gridSize = resolveGroundWorkingGridSize(mesh)
+  const rows = gridSize.rows
+  const columns = gridSize.columns
   const { scaleY } = resolveNodeScaleVector(node.scale)
   const sample = sampleGroundEffectiveHeightRegion(
     mesh as GroundDynamicMesh & { manualHeightMap: Float64Array; planningHeightMap: Float64Array },
@@ -321,8 +323,9 @@ function resolveGroundHorizontalMetrics(node: SceneNode, mesh: GroundDynamicMesh
   const { scaleX, scaleZ } = resolveNodeScaleVector(node.scale)
   const uniformHorizontalScale = Math.max(MIN_ELEMENT_SIZE, (Math.abs(scaleX) + Math.abs(scaleZ)) * 0.5)
   const baseElementSize = Math.max(MIN_ELEMENT_SIZE, rawCellSize * uniformHorizontalScale)
-  const halfWidth = Math.max(MIN_ELEMENT_SIZE, Math.max(1, Math.floor(mesh.columns)) * baseElementSize) * 0.5
-  const halfDepth = Math.max(MIN_ELEMENT_SIZE, Math.max(1, Math.floor(mesh.rows)) * baseElementSize) * 0.5
+  const spanMeters = resolveGroundWorkingSpanMeters(mesh)
+  const halfWidth = Math.max(MIN_ELEMENT_SIZE, spanMeters * uniformHorizontalScale) * 0.5
+  const halfDepth = Math.max(MIN_ELEMENT_SIZE, spanMeters * uniformHorizontalScale) * 0.5
   return { baseElementSize, halfWidth, halfDepth }
 }
 
@@ -457,10 +460,9 @@ function buildTiledGroundCollisionData(
   node: SceneNode,
   mesh: GroundDynamicMesh,
 ): GroundCollisionData | null {
-  const rawRows = Number.isFinite(mesh.rows) ? Math.floor(mesh.rows) : 0
-  const rawColumns = Number.isFinite(mesh.columns) ? Math.floor(mesh.columns) : 0
-  const rows = Math.max(1, rawRows)
-  const columns = Math.max(1, rawColumns)
+  const gridSize = resolveGroundWorkingGridSize(mesh)
+  const rows = gridSize.rows
+  const columns = gridSize.columns
   if (rows <= 0 || columns <= 0) {
     return null
   }
@@ -497,10 +499,9 @@ function buildNearFieldGroundCollisionData(
   node: SceneNode,
   mesh: GroundDynamicMesh,
 ): GroundCollisionData | null {
-  const rawRows = Number.isFinite(mesh.rows) ? Math.floor(mesh.rows) : 0
-  const rawColumns = Number.isFinite(mesh.columns) ? Math.floor(mesh.columns) : 0
-  const rows = Math.max(1, rawRows)
-  const columns = Math.max(1, rawColumns)
+  const gridSize = resolveGroundWorkingGridSize(mesh)
+  const rows = gridSize.rows
+  const columns = gridSize.columns
   if (rows <= 0 || columns <= 0) {
     return null
   }
@@ -539,10 +540,9 @@ export function buildAdaptiveGroundCollisionData(
   node: SceneNode,
   mesh: GroundDynamicMesh,
 ): GroundCollisionData | null {
-  const rawRows = Number.isFinite(mesh.rows) ? Math.floor(mesh.rows) : 0
-  const rawColumns = Number.isFinite(mesh.columns) ? Math.floor(mesh.columns) : 0
-  const rows = Math.max(1, rawRows)
-  const columns = Math.max(1, rawColumns)
+  const gridSize = resolveGroundWorkingGridSize(mesh)
+  const rows = gridSize.rows
+  const columns = gridSize.columns
   if (rows <= 0 || columns <= 0) {
     return null
   }
@@ -625,10 +625,10 @@ export function computeGroundHeightfieldChunkHash(
   for (let sr = 0; sr <= spec.rows; sr += sampleStepRow) {
     const physicsRowVertex = Math.min(pointsZ - 1, spec.startRow + sr)
     const flippedPhysicsRowVertex = (pointsZ - 1) - physicsRowVertex
-    const sourceRow = mapPhysicsVertexToSourceVertex(flippedPhysicsRowVertex, plan.stride, mesh.rows)
+    const sourceRow = mapPhysicsVertexToSourceVertex(flippedPhysicsRowVertex, plan.stride, plan.rows)
     for (let sc = 0; sc <= spec.columns; sc += sampleStepColumn) {
       const physicsColumnVertex = Math.min(pointsX - 1, spec.startColumn + sc)
-      const sourceColumn = mapPhysicsVertexToSourceVertex(physicsColumnVertex, plan.stride, mesh.columns)
+      const sourceColumn = mapPhysicsVertexToSourceVertex(physicsColumnVertex, plan.stride, plan.columns)
       const baseHeight = resolveGroundEffectiveHeightAtVertex(mesh, sourceRow, sourceColumn)
       const height = baseHeight * scaleY
       const normalized = Math.round(height * 1000)
@@ -644,10 +644,9 @@ export function buildGroundHeightfieldChunkPlan(
   mesh: GroundDynamicMesh,
   options: GroundHeightfieldChunkOptions = {},
 ): GroundHeightfieldChunkPlan | null {
-  const rawRows = Number.isFinite(mesh.rows) ? Math.floor(mesh.rows) : 0
-  const rawColumns = Number.isFinite(mesh.columns) ? Math.floor(mesh.columns) : 0
-  const sourceRows = Math.max(1, rawRows)
-  const sourceColumns = Math.max(1, rawColumns)
+  const gridSize = resolveGroundWorkingGridSize(mesh)
+  const sourceRows = gridSize.rows
+  const sourceColumns = gridSize.columns
 
   const stride = resolveStride(sourceRows, sourceColumns, options)
   const rows = Math.max(1, Math.ceil(sourceRows / stride))
@@ -713,13 +712,13 @@ export function buildGroundHeightfieldChunkData(
   const matrix: number[][] = []
   for (let localColumnVertex = 0; localColumnVertex < pointsX; localColumnVertex += 1) {
     const physicsColumnVertex = spec.startColumn + localColumnVertex
-    const sourceColumnVertex = mapPhysicsVertexToSourceVertex(physicsColumnVertex, plan.stride, mesh.columns)
+    const sourceColumnVertex = mapPhysicsVertexToSourceVertex(physicsColumnVertex, plan.stride, plan.columns)
 
     const columnValues: number[] = []
     for (let localRowVertex = pointsZ - 1; localRowVertex >= 0; localRowVertex -= 1) {
       const physicsRowVertex = spec.startRow + localRowVertex
       const flippedPhysicsRowVertex = (plan.pointsZ - 1) - physicsRowVertex
-      const sourceRowVertex = mapPhysicsVertexToSourceVertex(flippedPhysicsRowVertex, plan.stride, mesh.rows)
+      const sourceRowVertex = mapPhysicsVertexToSourceVertex(flippedPhysicsRowVertex, plan.stride, plan.rows)
       const baseHeight = resolveGroundEffectiveHeightAtVertex(mesh, sourceRowVertex, sourceColumnVertex)
       columnValues.push(baseHeight * scaleY)
     }
@@ -750,10 +749,9 @@ export function buildGroundHeightfieldData(
   node: SceneNode,
   mesh: GroundDynamicMesh,
 ): GroundHeightfieldData | null {
-  const rawRows = Number.isFinite(mesh.rows) ? Math.floor(mesh.rows) : 0
-  const rawColumns = Number.isFinite(mesh.columns) ? Math.floor(mesh.columns) : 0
-  const rows = Math.max(1, rawRows)
-  const columns = Math.max(1, rawColumns)
+  const gridSize = resolveGroundWorkingGridSize(mesh)
+  const rows = gridSize.rows
+  const columns = gridSize.columns
   const pointsX = columns + 1
   const pointsZ = rows + 1
   if (pointsX <= 1 || pointsZ <= 1) {

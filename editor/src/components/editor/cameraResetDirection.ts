@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import type { SceneNode } from '@schema/index'
+import { resolveGroundWorkingSpanMeters } from '@schema/index'
 import { findSceneNode, setBoundingBoxFromObject } from './sceneUtils'
 
 export type CameraResetDirection = 'pos-x' | 'neg-x' | 'pos-y' | 'neg-y' | 'pos-z' | 'neg-z'
@@ -82,8 +83,9 @@ export function createCameraResetDirectionController(deps: CameraResetDependenci
     }
 
     const definition = groundNode.dynamicMesh
-    const width = Math.abs(Number(definition.width))
-    const depth = Math.abs(Number(definition.depth))
+    const span = Math.abs(resolveGroundWorkingSpanMeters(definition))
+    const width = span
+    const depth = span
     if (!Number.isFinite(width) || !Number.isFinite(depth) || width <= 1e-6 || depth <= 1e-6) {
       return null
     }

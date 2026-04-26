@@ -5,6 +5,7 @@ import type {
 	Vector3Like,
 	GroundDynamicMesh,
 } from './index'
+import { resolveGroundWorkingSpanMeters } from './index'
 import { isGroundDynamicMesh } from './groundHeightfield'
 
 export const DEFAULT_AIR_WALL_HEIGHT = 8
@@ -102,17 +103,13 @@ export function buildGroundAirWallDefinitions(options: BuildGroundAirWallOptions
 	if (!mesh || !isGroundDynamicMesh(mesh)) {
 		return []
 	}
-	const baseWidth = mesh.width
-	const baseDepth = mesh.depth
-	if (!Number.isFinite(baseWidth) || !Number.isFinite(baseDepth) || baseWidth <= 0 || baseDepth <= 0) {
-		return []
-	}
 	const { position, scale, quaternion, bounds } = resolveGroundTransform(groundNode, groundObject)
 	const wallThickness = Math.max(MIN_DIMENSION, thickness ?? DEFAULT_AIR_WALL_THICKNESS)
 	const wallHeightBase = Math.max(MIN_DIMENSION, height ?? DEFAULT_AIR_WALL_HEIGHT)
 	const padding = Math.max(0, verticalPadding ?? DEFAULT_AIR_WALL_VERTICAL_PADDING)
-	const worldWidth = Math.max(MIN_DIMENSION, baseWidth * Math.abs(scale.x))
-	const worldDepth = Math.max(MIN_DIMENSION, baseDepth * Math.abs(scale.z))
+	const spanMeters = resolveGroundWorkingSpanMeters(mesh)
+	const worldWidth = Math.max(MIN_DIMENSION, spanMeters * Math.abs(scale.x))
+	const worldDepth = Math.max(MIN_DIMENSION, spanMeters * Math.abs(scale.z))
 	const halfWidth = worldWidth * 0.5
 	const halfDepth = worldDepth * 0.5
 	let wallHeight = wallHeightBase

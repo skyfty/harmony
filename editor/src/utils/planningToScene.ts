@@ -31,6 +31,7 @@ import type {
 } from '@/types/planning-scene-data'
 import { useGroundHeightmapStore } from '@/stores/groundHeightmapStore'
 import { useSceneStore } from '@/stores/sceneStore'
+import { resolveGroundWorkingGridSize, resolveGroundWorkingSpanMeters } from '@schema'
 import {
   PLANNING_IMAGES_COMPONENT_TYPE,
   RIGIDBODY_COMPONENT_TYPE,
@@ -601,7 +602,8 @@ function resetGroundPlanningContours(definition: GroundRuntimeDynamicMesh): { de
     return { definition, changed: false }
   }
 
-  const clearedPlanningHeightMap = createGroundHeightMap(definition.rows, definition.columns)
+  const gridSize = resolveGroundWorkingGridSize(definition)
+  const clearedPlanningHeightMap = createGroundHeightMap(gridSize.rows, gridSize.columns)
   for (let index = 0; index < clearedPlanningHeightMap.length; index += 1) {
     clearedPlanningHeightMap[index] = GROUND_HEIGHT_UNSET_VALUE
   }
@@ -636,9 +638,10 @@ function derivePlanningContourBounds(definition: GroundRuntimeDynamicMesh): Grou
   let maxColumn = Number.NEGATIVE_INFINITY
   let found = false
 
-  for (let row = 0; row <= definition.rows; row += 1) {
-    for (let column = 0; column <= definition.columns; column += 1) {
-      const value = definition.planningHeightMap[getGroundVertexIndex(definition.columns, row, column)]
+  const gridSize = resolveGroundWorkingGridSize(definition)
+  for (let row = 0; row <= gridSize.rows; row += 1) {
+    for (let column = 0; column <= gridSize.columns; column += 1) {
+      const value = definition.planningHeightMap[getGroundVertexIndex(gridSize.columns, row, column)]
       if (typeof value !== 'number' || !Number.isFinite(value)) {
         continue
       }
@@ -720,9 +723,9 @@ function syncPlanningHeightState(
   )
   useGroundHeightmapStore().markOptimizedMeshDirtyBounds(groundNode.id, groundNode.dynamicMesh as GroundDynamicMesh, {
     startRow: 0,
-    endRow: definition.rows,
+    endRow: resolveGroundWorkingGridSize(definition).rows,
     startColumn: 0,
-    endColumn: definition.columns,
+    endColumn: resolveGroundWorkingGridSize(definition).columns,
   })
 }
 
@@ -1177,11 +1180,12 @@ function boundsFromPlanningPolygon(definition: GroundDynamicMesh, polyPoints: Pl
   const maxCol = Math.ceil((bounds.maxX + margin) / cell)
   const minRow = Math.floor((bounds.minY - margin) / cell)
   const maxRow = Math.ceil((bounds.maxY + margin) / cell)
+  const gridSize = resolveGroundWorkingGridSize(definition)
   return {
-    minRow: clampInt(minRow, 0, Math.trunc(definition.rows)),
-    maxRow: clampInt(maxRow, 0, Math.trunc(definition.rows)),
-    minColumn: clampInt(minCol, 0, Math.trunc(definition.columns)),
-    maxColumn: clampInt(maxCol, 0, Math.trunc(definition.columns)),
+    minRow: clampInt(minRow, 0, Math.trunc(gridSize.rows)),
+    maxRow: clampInt(maxRow, 0, Math.trunc(gridSize.rows)),
+    minColumn: clampInt(minCol, 0, Math.trunc(gridSize.columns)),
+    maxColumn: clampInt(maxCol, 0, Math.trunc(gridSize.columns)),
   }
 }
 
@@ -1210,7 +1214,8 @@ function setHeightOverrideValueForContours(
   value: number,
   baseHeightMap?: GroundRuntimeDynamicMesh['planningHeightMap'] | null,
 ): void {
-  const index = getGroundVertexIndex(definition.columns, row, column)
+  const gridSize = resolveGroundWorkingGridSize(definition)
+  const index = getGroundVertexIndex(gridSize.columns, row, column)
   const base = baseHeightMap ? Number(baseHeightMap[index]) : Number.NaN
   const effectiveBase = Number.isFinite(base) ? base : computeGroundBaseHeightAtVertex(definition, row, column)
   let rounded = Math.round(value * 100) / 100
@@ -1364,7 +1369,8 @@ async function applyPlanningTerrainContoursToGround(options: {
 
   const rewriteBounds = unionBounds(previousBounds, nextBounds)
   if (!rewriteBounds) {
-    const clearedPlanningHeightMap = createClearedGroundHeightMap(definition.planningHeightMap, definition.rows, definition.columns)
+    const gridSize = resolveGroundWorkingGridSize(definition)
+    const clearedPlanningHeightMap = createClearedGroundHeightMap(definition.planningHeightMap, gridSize.rows, gridSize.columns)
     const cleared = { ...definition }
     cleared.planningHeightMap = clearedPlanningHeightMap
     cleared.planningMetadata = {
@@ -1505,7 +1511,8 @@ async function applyPlanningTerrainContoursToGround(options: {
     for (let col = minCol; col <= maxCol; col += 1) {
       const localCol = col - minCol
       const h = heightGrid[localRow * cols + localCol]!
-      const base = options.baseHeightMap ? Number(options.baseHeightMap[getGroundVertexIndex(definition.columns, row, col)]) : Number.NaN
+        const gridSize = resolveGroundWorkingGridSize(definition)
+        const base = options.baseHeightMap ? Number(options.baseHeightMap[getGroundVertexIndex(gridSize.columns, row, col)]) : Number.NaN
       const effectiveBase = Number.isFinite(base)
         ? base
         : computeGroundBaseHeightAtVertex(definition, row, col)
@@ -1586,14 +1593,15 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
 
 
   // Ensure ground exists when missing.
-  const groundWidth = Number(sceneStore.groundSettings?.width ?? 100)
-  const groundDepth = Number(sceneStore.groundSettings?.depth ?? 100)
+  const groundSpanMeters = resolveGroundWorkingSpanMeters(sceneStore.groundSettings)
+  const groundWidth = groundSpanMeters
+  const groundDepth = groundSpanMeters
 
-  const planningUnitsToMeters = resolvePlanningUnitsToMeters(planningData, groundWidth, groundDepth)
+  const planningUnitsToMeters = resolvePlanningUnitsToMeters(planningData, groundSpanMeters, groundSpanMeters)
 
   if (!sceneStore.groundNode) {
     emitProgress(options, 'Creating ground…', 5)
-    sceneStore.setGroundDimensions({ width: groundWidth, depth: groundDepth })
+    sceneStore.setGroundInfiniteSettings({})
     await yieldController.maybeYield(true)
   }
 
@@ -1717,9 +1725,9 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
         definition: groundDefinition as GroundRuntimeDynamicMesh,
         terrainDem,
         startRow: demImportBounds?.minRow ?? 0,
-        endRow: demImportBounds?.maxRow ?? Math.max(1, Math.trunc(groundDefinition.rows)),
+        endRow: demImportBounds?.maxRow ?? Math.max(1, resolveGroundWorkingGridSize(groundDefinition).rows),
         startColumn: demImportBounds?.minColumn ?? 0,
-        endColumn: demImportBounds?.maxColumn ?? Math.max(1, Math.trunc(groundDefinition.columns)),
+        endColumn: demImportBounds?.maxColumn ?? Math.max(1, resolveGroundWorkingGridSize(groundDefinition).columns),
       })
       groundDefinition = applyPlanningDemRegionToGround(
         sceneStore,

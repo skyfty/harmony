@@ -41,6 +41,7 @@ import {
   savePlanningDemToIndexedDB as savePlanningDemToStorage,
   storePlanningDemBlobByHash,
 } from '@/utils/planningDemStorage'
+import { resolveGroundWorkingSpanMeters } from '@schema'
 import {
   demImportResultToTerrainData,
   parsePlanningDemFile,
@@ -470,11 +471,10 @@ const renameFieldElByLayerId = new Map<string, HTMLElement>()
 const activeLayer = computed(() => layers.value.find((layer) => layer.id === activeLayerId.value) ?? layers.value[0])
 
 const sceneGroundSize = computed(() => {
-  const width = Number(sceneStore.groundSettings?.width ?? 100)
-  const height = Number(sceneStore.groundSettings?.depth ?? 100)
+  const spanMeters = resolveGroundWorkingSpanMeters(sceneStore.groundSettings)
   return {
-    width: Number.isFinite(width) ? width : 100,
-    height: Number.isFinite(height) ? height : 100,
+    width: Number.isFinite(spanMeters) ? spanMeters : 100,
+    height: Number.isFinite(spanMeters) ? spanMeters : 100,
   }
 })
 const visibleLayerIds = computed(() => new Set(layers.value.filter((layer) => layer.visible).map((layer) => layer.id)))

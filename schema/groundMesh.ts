@@ -19,6 +19,8 @@ import {
   resolveGroundEditCellSize,
   resolveGroundEditTileResolution,
   resolveGroundEditTileSizeMeters,
+  resolveGroundWorkingGridSize,
+  resolveGroundWorkingSpanMeters,
   type GroundChunkData,
   type GroundChunkManifestRecord,
   type GroundDynamicMesh,
@@ -68,6 +70,8 @@ type InfiniteGroundBaseChunkRuntime = {
   visibleChunkKeys: Set<string>
   orderedChunkKeys: string[]
   hiddenChunkKeys: Set<string>
+  hiddenChunkKeysVersion: number
+  lastVisibilitySignature: string
 }
 
 type GroundCellTriangleDefinition = {
@@ -234,11 +238,13 @@ function resolveOptimizedMesh(definition: GroundDynamicMesh | null | undefined):
 }
 
 function definitionStructureSignature(definition: GroundDynamicMesh): string {
-  const columns = Math.max(1, Math.trunc(definition.columns))
-  const rows = Math.max(1, Math.trunc(definition.rows))
+  const gridSize = resolveGroundWorkingGridSize(definition)
+  const columns = gridSize.columns
+  const rows = gridSize.rows
   const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
-  const width = Number.isFinite(definition.width) && definition.width > 0 ? definition.width : columns * cellSize
-  const depth = Number.isFinite(definition.depth) && definition.depth > 0 ? definition.depth : rows * cellSize
+  const spanMeters = resolveGroundWorkingSpanMeters(definition)
+  const width = spanMeters
+  const depth = spanMeters
   const runtimeDefinition = definition as GroundRuntimeDynamicMesh
   const optimizedMesh = definition.optimizedMesh
   const optimizedSignature = optimizedMesh
@@ -407,6 +413,8 @@ function ensureInfiniteBaseChunkRuntime(
     visibleChunkKeys: new Set(),
     orderedChunkKeys: [],
     hiddenChunkKeys: new Set(),
+    hiddenChunkKeysVersion: 0,
+    lastVisibilitySignature: '',
   }
   state.baseChunkRuntime = runtime
   return runtime
@@ -615,8 +623,9 @@ export function areAllGroundChunksLoaded(target: THREE.Object3D, definition: Gro
   }
   const state = ensureGroundRuntimeState(root, definition)
   const chunkCells = state.chunkCells
-  const rows = Math.max(1, Math.trunc(definition.rows))
-  const columns = Math.max(1, Math.trunc(definition.columns))
+  const gridSize = resolveGroundWorkingGridSize(definition)
+  const rows = gridSize.rows
+  const columns = gridSize.columns
   const maxChunkRowIndex = Math.max(0, Math.floor((rows - 1) / chunkCells))
   const maxChunkColumnIndex = Math.max(0, Math.floor((columns - 1) / chunkCells))
   const totalChunkCount = (maxChunkRowIndex + 1) * (maxChunkColumnIndex + 1)
@@ -625,9 +634,7 @@ export function areAllGroundChunksLoaded(target: THREE.Object3D, definition: Gro
 
 function resolveGroundChunkRadius(definition: GroundDynamicMesh): number {
   // Default to a moderate radius; keep streaming window smaller by default.
-  const width = Number.isFinite(definition.width) ? definition.width : 0
-  const depth = Number.isFinite(definition.depth) ? definition.depth : 0
-  const halfDiagonal = Math.sqrt(Math.max(0, width) ** 2 + Math.max(0, depth) ** 2) * 0.5
+  const halfDiagonal = resolveGroundWorkingSpanMeters(definition) * 0.5
   // Bound the streaming radius so we don't accidentally load the entire ground for mid-sized scenes.
   // Keep a small minimum to avoid thrashing when the camera jitters.
   return Math.max(80, Math.min(2000, Math.min(DEFAULT_GROUND_CHUNK_RADIUS_METERS, halfDiagonal)))
@@ -648,15 +655,16 @@ function clampVertexIndex(value: number, max: number): number {
 
 function ensureGroundRuntimeDefinition(definition: GroundDynamicMesh): GroundRuntimeDynamicMesh {
   const runtimeDefinition = definition as GroundRuntimeDynamicMesh
+  const gridSize = resolveGroundWorkingGridSize(runtimeDefinition)
   runtimeDefinition.manualHeightMap = ensureGroundHeightMap(
     runtimeDefinition.manualHeightMap,
-    runtimeDefinition.rows,
-    runtimeDefinition.columns,
+    gridSize.rows,
+    gridSize.columns,
   )
   runtimeDefinition.planningHeightMap = ensureGroundHeightMap(
     runtimeDefinition.planningHeightMap,
-    runtimeDefinition.rows,
-    runtimeDefinition.columns,
+    gridSize.rows,
+    gridSize.columns,
   )
   if (!Array.isArray(runtimeDefinition.runtimeLoadedTileKeys)) {
     runtimeDefinition.runtimeLoadedTileKeys = []
@@ -676,6 +684,18 @@ function hasRuntimeGroundHeightOverrides(definition: GroundRuntimeDynamicMesh): 
   }
 
   if (definition.runtimeHydratedHeightState === 'pristine') {
+    definition.runtimeDisableOptimizedChunks = false
+    return false
+  }
+
+  const manualOverrideCount = definition.runtimeManualHeightOverrideCount
+  const planningOverrideCount = definition.runtimePlanningHeightOverrideCount
+  if (Number.isFinite(manualOverrideCount) || Number.isFinite(planningOverrideCount)) {
+    if ((manualOverrideCount ?? 0) > 0 || (planningOverrideCount ?? 0) > 0) {
+      definition.runtimeHydratedHeightState = 'dirty'
+      definition.runtimeDisableOptimizedChunks = true
+      return true
+    }
     definition.runtimeDisableOptimizedChunks = false
     return false
   }
@@ -716,9 +736,10 @@ function resolveGroundLocalEditTileGridOrigin(definition: GroundDynamicMesh): { 
       originZ: 0,
     }
   }
+  const spanMeters = resolveGroundWorkingSpanMeters(definition)
   return {
-    originX: -runtimeDefinition.width * 0.5,
-    originZ: -runtimeDefinition.depth * 0.5,
+    originX: -spanMeters * 0.5,
+    originZ: -spanMeters * 0.5,
   }
 }
 
@@ -839,8 +860,9 @@ function chunkIntersectsGroundLocalEditTile(definition: GroundDynamicMesh, spec:
   if (!tiles.length) {
     return false
   }
-  const halfWidth = runtimeDefinition.width * 0.5
-  const halfDepth = runtimeDefinition.depth * 0.5
+  const spanMeters = resolveGroundWorkingSpanMeters(runtimeDefinition)
+  const halfWidth = spanMeters * 0.5
+  const halfDepth = spanMeters * 0.5
   const cellSize = Number.isFinite(runtimeDefinition.cellSize) && runtimeDefinition.cellSize > 1e-6
     ? runtimeDefinition.cellSize
     : 1
@@ -907,7 +929,8 @@ function getPlanningVertexHeight(definition: GroundRuntimeDynamicMesh, row: numb
   // planningHeightMap 保存的是“规划/自动生成层”的绝对高度。
   // 它表示在基础地形之上，规划阶段希望该顶点呈现的目标基准高度；
   // 如果没有显式记录，则回退到基础高度，表示规划层对该点没有额外改动。
-  const raw = definition.planningHeightMap[getGroundVertexIndex(definition.columns, row, column)]
+  const gridSize = resolveGroundWorkingGridSize(definition)
+  const raw = definition.planningHeightMap[getGroundVertexIndex(gridSize.columns, row, column)]
   if (typeof raw === 'number' && Number.isFinite(raw)) {
     return raw
   }
@@ -936,8 +959,9 @@ export function resolveGroundEffectiveHeightAtVertex(definition: GroundDynamicMe
   const cellSize = Number.isFinite(runtimeDefinition.cellSize) && runtimeDefinition.cellSize > 1e-6
     ? runtimeDefinition.cellSize
     : 1
-  const halfWidth = runtimeDefinition.width * 0.5
-  const halfDepth = runtimeDefinition.depth * 0.5
+  const spanMeters = resolveGroundWorkingSpanMeters(runtimeDefinition)
+  const halfWidth = spanMeters * 0.5
+  const halfDepth = spanMeters * 0.5
   const localEditSample = sampleGroundLocalEditHeightAtWorld(
     runtimeDefinition,
     -halfWidth + column * cellSize,
@@ -948,7 +972,8 @@ export function resolveGroundEffectiveHeightAtVertex(definition: GroundDynamicMe
   }
   // 原始程序化地形高度。
   const base = computeGroundBaseHeightAtVertex(runtimeDefinition, row, column)
-  const heightIndex = getGroundVertexIndex(runtimeDefinition.columns, row, column)
+  const gridSize = resolveGroundWorkingGridSize(runtimeDefinition)
+  const heightIndex = getGroundVertexIndex(gridSize.columns, row, column)
   // 用户手工雕刻后的绝对高度；若无手工覆盖则退回 base。
   const manualRaw = runtimeDefinition.manualHeightMap[heightIndex]
   const manual = typeof manualRaw === 'number' && Number.isFinite(manualRaw) ? manualRaw : base
@@ -1001,7 +1026,8 @@ export function sampleGroundEffectiveHeightRegion(
       const effective = useLocalEditTiles
         ? resolveGroundEffectiveHeightAtVertex(runtimeDefinition, row, column)
         : (() => {
-            const heightIndex = getGroundVertexIndex(runtimeDefinition.columns, row, column)
+            const gridSize = resolveGroundWorkingGridSize(runtimeDefinition)
+            const heightIndex = getGroundVertexIndex(gridSize.columns, row, column)
             const manualRaw = manualHeightMap[heightIndex]
             const planningRaw = planningHeightMap[heightIndex]
             const manual = typeof manualRaw === 'number' && Number.isFinite(manualRaw) ? manualRaw : base
@@ -1114,7 +1140,8 @@ export function resolveGroundManualHeightForEffectiveTarget(
 }
 
 function setHeightOverrideValue(definition: GroundRuntimeDynamicMesh, map: GroundHeightMap, row: number, column: number, value: number): void {
-  const heightIndex = getGroundVertexIndex(definition.columns, row, column)
+  const gridSize = resolveGroundWorkingGridSize(definition)
+  const heightIndex = getGroundVertexIndex(gridSize.columns, row, column)
   const baseHeight = computeGroundBaseHeightAtVertex(definition, row, column)
   let rounded = Math.round(value * 100) / 100
   let baseRounded = Math.round(baseHeight * 100) / 100
@@ -1345,8 +1372,9 @@ function resolveGroundSculptSampleWindow(
   bounds: { minX: number; maxX: number; minZ: number; maxZ: number },
 ): GroundSculptSampleWindow {
   const infinite = isInfiniteGroundDefinition(definition)
-  const originX = infinite ? 0 : -definition.width * 0.5
-  const originZ = infinite ? 0 : -definition.depth * 0.5
+  const spanMeters = resolveGroundWorkingSpanMeters(definition)
+  const originX = infinite ? 0 : -spanMeters * 0.5
+  const originZ = infinite ? 0 : -spanMeters * 0.5
   const minColumnRaw = Math.floor((bounds.minX - originX) / sampleStep)
   const maxColumnRaw = Math.ceil((bounds.maxX - originX) / sampleStep)
   const minRowRaw = Math.floor((bounds.minZ - originZ) / sampleStep)
@@ -1361,8 +1389,8 @@ function resolveGroundSculptSampleWindow(
       maxRow: maxRowRaw,
     }
   }
-  const maxColumnBound = Math.max(0, Math.ceil(definition.width / Math.max(sampleStep, Number.EPSILON)))
-  const maxRowBound = Math.max(0, Math.ceil(definition.depth / Math.max(sampleStep, Number.EPSILON)))
+  const maxColumnBound = Math.max(0, Math.ceil(spanMeters / Math.max(sampleStep, Number.EPSILON)))
+  const maxRowBound = Math.max(0, Math.ceil(spanMeters / Math.max(sampleStep, Number.EPSILON)))
   return {
     originX,
     originZ,
@@ -1415,10 +1443,12 @@ function accumulateGroundDeltaAtPoint(
   }
 
   const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1
-  const halfWidth = definition.width * 0.5
-  const halfDepth = definition.depth * 0.5
-  const columns = Math.max(1, definition.columns)
-  const rows = Math.max(1, definition.rows)
+  const spanMeters = resolveGroundWorkingSpanMeters(definition)
+  const halfWidth = spanMeters * 0.5
+  const halfDepth = spanMeters * 0.5
+  const gridSize = resolveGroundWorkingGridSize(definition)
+  const columns = gridSize.columns
+  const rows = gridSize.rows
   const localColumnFloat = Math.max(0, Math.min(columns, (x + halfWidth) / cellSize))
   const localRowFloat = Math.max(0, Math.min(rows, (z + halfDepth) / cellSize))
   const column0 = Math.max(0, Math.min(columns, Math.floor(localColumnFloat)))
@@ -1451,7 +1481,8 @@ function applyAccumulatedGroundDeltas(
   accumulator: Map<number, GroundHeightDeltaAccumulatorEntry>,
 ): boolean {
   let modified = false
-  const columns = Math.max(1, definition.columns)
+  const gridSize = resolveGroundWorkingGridSize(definition)
+  const columns = gridSize.columns
   accumulator.forEach((entry, index) => {
     if (!(entry.weight > 0) || !Number.isFinite(entry.delta)) {
       return
@@ -1827,8 +1858,9 @@ function resolveGroundCellTriangleDefinitions(
   const cellSize = Number.isFinite(runtimeDefinition.cellSize) && runtimeDefinition.cellSize > 1e-6
     ? runtimeDefinition.cellSize
     : 1
-  const halfWidth = runtimeDefinition.width * 0.5
-  const halfDepth = runtimeDefinition.depth * 0.5
+  const spanMeters = resolveGroundWorkingSpanMeters(runtimeDefinition)
+  const halfWidth = spanMeters * 0.5
+  const halfDepth = spanMeters * 0.5
 
   const x0 = -halfWidth + column * cellSize
   const x1 = x0 + cellSize
@@ -1933,8 +1965,9 @@ function buildGroundPlanarSliceRegionPolygon(
   const cellSize = Number.isFinite(runtimeDefinition.cellSize) && runtimeDefinition.cellSize > 1e-6
     ? runtimeDefinition.cellSize
     : 1
-  const halfWidth = runtimeDefinition.width * 0.5
-  const halfDepth = runtimeDefinition.depth * 0.5
+  const spanMeters = resolveGroundWorkingSpanMeters(runtimeDefinition)
+  const halfWidth = spanMeters * 0.5
+  const halfDepth = spanMeters * 0.5
   const x0 = -halfWidth + region.startColumn * cellSize
   const x1 = -halfWidth + region.endColumn * cellSize
   const z0 = -halfDepth + region.startRow * cellSize
@@ -2099,10 +2132,12 @@ function appendGroundSliceClip(
 
 export function sampleGroundTriangleHeight(definition: GroundDynamicMesh, x: number, z: number): number {
   const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
-  const columns = Math.max(1, runtimeDefinition.columns)
-  const rows = Math.max(1, runtimeDefinition.rows)
-  const halfWidth = runtimeDefinition.width * 0.5
-  const halfDepth = runtimeDefinition.depth * 0.5
+  const gridSize = resolveGroundWorkingGridSize(runtimeDefinition)
+  const columns = gridSize.columns
+  const rows = gridSize.rows
+  const spanMeters = resolveGroundWorkingSpanMeters(runtimeDefinition)
+  const halfWidth = spanMeters * 0.5
+  const halfDepth = spanMeters * 0.5
   const cellSize = Number.isFinite(runtimeDefinition.cellSize) && runtimeDefinition.cellSize > 1e-6
     ? runtimeDefinition.cellSize
     : 1
@@ -2148,10 +2183,12 @@ export function sliceGroundTrianglesByPolygon(
     return { vertices: [], indices: [] }
   }
 
-  const columns = Math.max(1, runtimeDefinition.columns)
-  const rows = Math.max(1, runtimeDefinition.rows)
-  const halfWidth = runtimeDefinition.width * 0.5
-  const halfDepth = runtimeDefinition.depth * 0.5
+  const gridSize = resolveGroundWorkingGridSize(runtimeDefinition)
+  const columns = gridSize.columns
+  const rows = gridSize.rows
+  const spanMeters = resolveGroundWorkingSpanMeters(runtimeDefinition)
+  const halfWidth = spanMeters * 0.5
+  const halfDepth = spanMeters * 0.5
   const cellSize = Number.isFinite(runtimeDefinition.cellSize) && runtimeDefinition.cellSize > 1e-6
     ? runtimeDefinition.cellSize
     : 1
@@ -2245,10 +2282,12 @@ export function sampleGroundHeight(definition: GroundDynamicMesh, x: number, z: 
   if (Number.isFinite(localEditSample)) {
     return localEditSample as number
   }
-  const columns = Math.max(1, runtimeDefinition.columns)
-  const rows = Math.max(1, runtimeDefinition.rows)
-  const halfWidth = runtimeDefinition.width * 0.5
-  const halfDepth = runtimeDefinition.depth * 0.5
+  const gridSize = resolveGroundWorkingGridSize(runtimeDefinition)
+  const columns = gridSize.columns
+  const rows = gridSize.rows
+  const spanMeters = resolveGroundWorkingSpanMeters(runtimeDefinition)
+  const halfWidth = spanMeters * 0.5
+  const halfDepth = spanMeters * 0.5
   const cellSize = Number.isFinite(runtimeDefinition.cellSize) && runtimeDefinition.cellSize > 1e-6
     ? runtimeDefinition.cellSize
     : 1
@@ -2343,8 +2382,9 @@ export function sampleGroundNormal(
 }
 
 function buildGroundGeometry(definition: GroundRuntimeDynamicMesh): THREE.BufferGeometry {
-  const columns = Math.max(1, definition.columns)
-  const rows = Math.max(1, definition.rows)
+  const gridSize = resolveGroundWorkingGridSize(definition)
+  const columns = gridSize.columns
+  const rows = gridSize.rows
   const vertexColumns = columns + 1
   const vertexRows = rows + 1
   const vertexCount = vertexColumns * vertexRows
@@ -2353,8 +2393,9 @@ function buildGroundGeometry(definition: GroundRuntimeDynamicMesh): THREE.Buffer
   const uvs = new Float32Array(vertexCount * 2)
   const indices = new Uint32Array(columns * rows * 6)
 
-  const halfWidth = definition.width * 0.5
-  const halfDepth = definition.depth * 0.5
+  const spanMeters = resolveGroundWorkingSpanMeters(definition)
+  const halfWidth = spanMeters * 0.5
+  const halfDepth = spanMeters * 0.5
   const cellSize = definition.cellSize
   const heightRegion = sampleGroundEffectiveHeightRegion(definition, 0, rows, 0, columns)
   const heightValues = heightRegion.values
@@ -2468,8 +2509,9 @@ function buildGroundChunkGeometry(definition: GroundRuntimeDynamicMesh, spec: Gr
     return createGroundOptimizedChunkGeometry(optimizedChunk)
   }
 
-  const columns = Math.max(1, definition.columns)
-  const rows = Math.max(1, definition.rows)
+  const gridSize = resolveGroundWorkingGridSize(definition)
+  const columns = gridSize.columns
+  const rows = gridSize.rows
   const layout = resolveGroundChunkGeometryLayout(definition, spec)
   const chunkColumns = layout.segmentColumns
   const chunkRows = layout.segmentRows
@@ -2481,8 +2523,9 @@ function buildGroundChunkGeometry(definition: GroundRuntimeDynamicMesh, spec: Gr
   const uvs = new Float32Array(vertexCount * 2)
   const indices = new Uint32Array(chunkColumns * chunkRows * 6)
 
-  const halfWidth = definition.width * 0.5
-  const halfDepth = definition.depth * 0.5
+  const spanMeters = resolveGroundWorkingSpanMeters(definition)
+  const halfWidth = spanMeters * 0.5
+  const halfDepth = spanMeters * 0.5
   const startX = -halfWidth + spec.startColumn * definition.cellSize
   const startZ = -halfDepth + spec.startRow * definition.cellSize
 
@@ -2492,8 +2535,8 @@ function buildGroundChunkGeometry(definition: GroundRuntimeDynamicMesh, spec: Gr
     for (let localColumn = 0; localColumn <= chunkColumns; localColumn += 1) {
       const x = startX + localColumn * layout.stepX
       const height = sampleGroundHeight(definition, x, z)
-      const columnRatio = columns === 0 ? 0 : clampInclusive((x + halfWidth) / Math.max(definition.width, Number.EPSILON), 0, 1)
-      const rowRatio = rows === 0 ? 0 : clampInclusive((z + halfDepth) / Math.max(definition.depth, Number.EPSILON), 0, 1)
+      const columnRatio = columns === 0 ? 0 : clampInclusive((x + halfWidth) / Math.max(spanMeters, Number.EPSILON), 0, 1)
+      const rowRatio = rows === 0 ? 0 : clampInclusive((z + halfDepth) / Math.max(spanMeters, Number.EPSILON), 0, 1)
 
       positions[vertexIndex * 3 + 0] = x
       positions[vertexIndex * 3 + 1] = height
@@ -2540,8 +2583,9 @@ function buildGroundChunkGeometry(definition: GroundRuntimeDynamicMesh, spec: Gr
 }
 
 function computeChunkSpec(definition: GroundDynamicMesh, chunkRow: number, chunkColumn: number, chunkCells: number): GroundChunkSpec {
-  const rows = Math.max(1, Math.trunc(definition.rows))
-  const columns = Math.max(1, Math.trunc(definition.columns))
+  const gridSize = resolveGroundWorkingGridSize(definition)
+  const rows = gridSize.rows
+  const columns = gridSize.columns
   const startRow = chunkRow * chunkCells
   const startColumn = chunkColumn * chunkCells
   const rowsRemaining = rows - startRow
@@ -2772,6 +2816,10 @@ function refreshInfiniteGroundBaseChunkVisibility(
   }
 
   const centerCoord = resolveGroundChunkCoordFromWorldPosition(localX, localZ, chunkSizeMeters)
+  const nextVisibilitySignature = `${centerCoord.chunkX}|${centerCoord.chunkZ}|${renderRadiusChunks}|${chunkSizeMeters}|${runtime.hiddenChunkKeysVersion}`
+  if (runtime.lastVisibilitySignature === nextVisibilitySignature) {
+    return
+  }
   const nextVisibleChunkKeys = new Set<string>()
   const nextOrderedChunkKeys: string[] = []
   let instanceIndex = 0
@@ -2799,6 +2847,7 @@ function refreshInfiniteGroundBaseChunkVisibility(
   runtime.mesh.instanceMatrix.needsUpdate = true
   runtime.visibleChunkKeys = nextVisibleChunkKeys
   runtime.orderedChunkKeys = nextOrderedChunkKeys
+  runtime.lastVisibilitySignature = nextVisibilitySignature
 }
 
 function disposeChunk(runtime: GroundChunkRuntime): void {
@@ -2825,7 +2874,8 @@ export function applyGroundGeneration(
   const normalized = normalizeGroundGenerationSettings(settings)
   definition.generation = normalized
   // Generation is evaluated on demand; keep explicit edits as sparse absolute overrides.
-  definition.planningHeightMap = createGroundHeightMap(definition.rows, definition.columns)
+  const gridSize = resolveGroundWorkingGridSize(definition)
+  definition.planningHeightMap = createGroundHeightMap(gridSize.rows, gridSize.columns)
   return normalized
 }
 
@@ -3221,11 +3271,13 @@ function computePolygonRaiseDepressProfile(distanceToBoundary: number, rampWidth
 
 export function sculptGround(definition: GroundRuntimeDynamicMesh, params: SculptParams): boolean {
   const { point, radius, strength, shape, operation, targetHeight, polygonPoints, depth, slope } = params
-  const halfWidth = definition.width * 0.5
-  const halfDepth = definition.depth * 0.5
+  const spanMeters = resolveGroundWorkingSpanMeters(definition)
+  const halfWidth = spanMeters * 0.5
+  const halfDepth = spanMeters * 0.5
   const cellSize = definition.cellSize
-  const columns = definition.columns
-  const rows = definition.rows
+  const gridSize = resolveGroundWorkingGridSize(definition)
+  const columns = gridSize.columns
+  const rows = gridSize.rows
 
   // Point is in local coordinates
   const localX = point.x
@@ -3455,8 +3507,9 @@ export function sculptGround(definition: GroundRuntimeDynamicMesh, params: Sculp
 }
 
 export function updateGroundGeometry(geometry: THREE.BufferGeometry, definition: GroundRuntimeDynamicMesh): boolean {
-  const columns = Math.max(1, definition.columns)
-  const rows = Math.max(1, definition.rows)
+  const gridSize = resolveGroundWorkingGridSize(definition)
+  const columns = gridSize.columns
+  const rows = gridSize.rows
   const vertexColumns = columns + 1
   const vertexRows = rows + 1
   const expectedVertexCount = vertexColumns * vertexRows
@@ -3468,8 +3521,9 @@ export function updateGroundGeometry(geometry: THREE.BufferGeometry, definition:
     return false
   }
 
-  const halfWidth = definition.width * 0.5
-  const halfDepth = definition.depth * 0.5
+  const spanMeters = resolveGroundWorkingSpanMeters(definition)
+  const halfWidth = spanMeters * 0.5
+  const halfDepth = spanMeters * 0.5
   const cellSize = definition.cellSize
   const heightRegion = sampleGroundEffectiveHeightRegion(definition, 0, rows, 0, columns)
   const heightValues = heightRegion.values
@@ -3595,8 +3649,9 @@ function updateChunkGeometry(geometry: THREE.BufferGeometry, definition: GroundR
     return applyGroundOptimizedChunkGeometry(geometry, optimizedChunk)
   }
 
-  const columns = Math.max(1, Math.trunc(definition.columns))
-  const rows = Math.max(1, Math.trunc(definition.rows))
+  const gridSize = resolveGroundWorkingGridSize(definition)
+  const columns = gridSize.columns
+  const rows = gridSize.rows
   const layout = resolveGroundChunkGeometryLayout(definition, spec)
   const chunkColumns = layout.segmentColumns
   const chunkRows = layout.segmentRows
@@ -3606,8 +3661,9 @@ function updateChunkGeometry(geometry: THREE.BufferGeometry, definition: GroundR
   if (!positionAttr || !uvAttr || positionAttr.count !== expectedVertexCount || uvAttr.count !== expectedVertexCount) {
     return false
   }
-  const halfWidth = definition.width * 0.5
-  const halfDepth = definition.depth * 0.5
+  const spanMeters = resolveGroundWorkingSpanMeters(definition)
+  const halfWidth = spanMeters * 0.5
+  const halfDepth = spanMeters * 0.5
   const startX = -halfWidth + spec.startColumn * definition.cellSize
   const startZ = -halfDepth + spec.startRow * definition.cellSize
 
@@ -3617,8 +3673,8 @@ function updateChunkGeometry(geometry: THREE.BufferGeometry, definition: GroundR
     for (let localColumn = 0; localColumn <= chunkColumns; localColumn += 1) {
       const x = startX + localColumn * layout.stepX
       const height = sampleGroundHeight(definition, x, z)
-      const columnRatio = columns === 0 ? 0 : clampInclusive((x + halfWidth) / Math.max(definition.width, Number.EPSILON), 0, 1)
-      const rowRatio = rows === 0 ? 0 : clampInclusive((z + halfDepth) / Math.max(definition.depth, Number.EPSILON), 0, 1)
+      const columnRatio = columns === 0 ? 0 : clampInclusive((x + halfWidth) / Math.max(spanMeters, Number.EPSILON), 0, 1)
+      const rowRatio = rows === 0 ? 0 : clampInclusive((z + halfDepth) / Math.max(spanMeters, Number.EPSILON), 0, 1)
       positionAttr.setXYZ(vertexIndex, x, height, z)
       uvAttr.setXY(vertexIndex, columnRatio, 1 - rowRatio)
       vertexIndex += 1
@@ -3657,8 +3713,9 @@ function updateChunkGeometryRegion(
     return false
   }
 
-  const halfWidth = definition.width * 0.5
-  const halfDepth = definition.depth * 0.5
+  const spanMeters = resolveGroundWorkingSpanMeters(definition)
+  const halfWidth = spanMeters * 0.5
+  const halfDepth = spanMeters * 0.5
   const cellSize = definition.cellSize
 
   const startRow = clampInclusive(region.minRow, spec.startRow, spec.startRow + chunkRows)
@@ -3687,6 +3744,30 @@ function updateChunkGeometryRegion(
   }
   geometry.computeBoundingBox()
   geometry.computeBoundingSphere()
+  return true
+}
+
+function refreshChunkRuntimeGeometry(
+  runtime: GroundChunkRuntime,
+  definition: GroundRuntimeDynamicMesh,
+  options: {
+    region?: GroundGeometryUpdateRegion
+    computeNormals?: boolean
+  } = {},
+): boolean {
+  const currentGeometry = runtime.mesh.geometry
+  if (!(currentGeometry instanceof THREE.BufferGeometry)) {
+    runtime.mesh.geometry = buildGroundChunkGeometry(definition, runtime.spec)
+    return true
+  }
+  const updated = options.region
+    ? updateChunkGeometryRegion(currentGeometry, definition, runtime.spec, options.region, { computeNormals: options.computeNormals })
+    : updateChunkGeometry(currentGeometry, definition, runtime.spec)
+  if (updated) {
+    return true
+  }
+  currentGeometry.dispose()
+  runtime.mesh.geometry = buildGroundChunkGeometry(definition, runtime.spec)
   return true
 }
 
@@ -3766,8 +3847,9 @@ export function updateGroundChunks(
   const minIntervalMs = Math.max(0, Math.trunc(Number.isFinite(options.minIntervalMs as number) ? (options.minIntervalMs as number) : 120))
 
   const chunkCells = state.chunkCells
-  const rows = Math.max(1, Math.trunc(definition.rows))
-  const columns = Math.max(1, Math.trunc(definition.columns))
+  const gridSize = resolveGroundWorkingGridSize(definition)
+  const rows = gridSize.rows
+  const columns = gridSize.columns
   const maxChunkRowIndex = Math.max(0, Math.floor((rows - 1) / chunkCells))
   const maxChunkColumnIndex = Math.max(0, Math.floor((columns - 1) / chunkCells))
 
@@ -3800,8 +3882,9 @@ export function updateGroundChunks(
     : Math.max(cellSize * 2, chunkWorldSize * 0.25)
   const moveThresholdSq = moveThreshold * moveThreshold
 
-  const halfWidth = definition.width * 0.5
-  const halfDepth = definition.depth * 0.5
+  const spanMeters = resolveGroundWorkingSpanMeters(definition)
+  const halfWidth = spanMeters * 0.5
+  const halfDepth = spanMeters * 0.5
   const minLoadColumn = clampInclusive(Math.floor((localX - loadRadius + halfWidth) / cellSize), 0, columns)
   const maxLoadColumn = clampInclusive(Math.ceil((localX + loadRadius + halfWidth) / cellSize), 0, columns)
   const minLoadRow = clampInclusive(Math.floor((localZ - loadRadius + halfDepth) / cellSize), 0, rows)
@@ -4032,8 +4115,9 @@ export function ensureAllGroundChunks(target: THREE.Object3D, definition: Ground
   }
   const state = ensureGroundRuntimeState(root, definition)
   const chunkCells = state.chunkCells
-  const rows = Math.max(1, Math.trunc(definition.rows))
-  const columns = Math.max(1, Math.trunc(definition.columns))
+  const gridSize = resolveGroundWorkingGridSize(definition)
+  const rows = gridSize.rows
+  const columns = gridSize.columns
   const maxChunkRowIndex = Math.max(0, Math.floor((rows - 1) / chunkCells))
   const maxChunkColumnIndex = Math.max(0, Math.floor((columns - 1) / chunkCells))
 
@@ -4096,13 +4180,7 @@ export function updateGroundMesh(target: THREE.Object3D, definition: GroundDynam
   const state = groundRuntimeStateMap.get(group)
   if (state) {
     state.chunks.forEach((entry) => {
-      if (entry.mesh.geometry instanceof THREE.BufferGeometry) {
-        const ok = updateChunkGeometry(entry.mesh.geometry as THREE.BufferGeometry, runtimeDefinition, entry.spec)
-        if (!ok) {
-          entry.mesh.geometry.dispose()
-          entry.mesh.geometry = buildGroundChunkGeometry(runtimeDefinition, entry.spec)
-        }
-      }
+      refreshChunkRuntimeGeometry(entry, runtimeDefinition)
     })
   }
   applyGroundTextureToObject(group, runtimeDefinition)
@@ -4176,8 +4254,9 @@ export function updateGroundMeshRegion(
     return false
   }
   const chunkCells = state.chunkCells
-  const rows = Math.max(1, Math.trunc(definition.rows))
-  const columns = Math.max(1, Math.trunc(definition.columns))
+  const gridSize = resolveGroundWorkingGridSize(definition)
+  const rows = gridSize.rows
+  const columns = gridSize.columns
   const maxChunkRowIndex = Math.max(0, Math.floor((rows - 1) / chunkCells))
   const maxChunkColumnIndex = Math.max(0, Math.floor((columns - 1) / chunkCells))
   const filteredChunkKeys = options.touchedChunkKeys
@@ -4210,7 +4289,10 @@ export function updateGroundMeshRegion(
         minColumn: entry.spec.startColumn,
         maxColumn: entry.spec.startColumn + entry.spec.columns,
       }
-      const ok = updateChunkGeometryRegion(geometry, definition, entry.spec, fullChunkRegion, options)
+      const ok = refreshChunkRuntimeGeometry(entry, definition, {
+		region: fullChunkRegion,
+		computeNormals: options.computeNormals,
+	})
       updated = updated || ok
     }
     return updated
@@ -4225,11 +4307,10 @@ export function updateGroundMeshRegion(
     if (!overlaps) {
       return
     }
-    const geometry = entry.mesh.geometry
-    if (!(geometry instanceof THREE.BufferGeometry)) {
-      return
-    }
-    const ok = updateChunkGeometryRegion(geometry, definition, entry.spec, region, options)
+    const ok = refreshChunkRuntimeGeometry(entry, definition, {
+		region,
+		computeNormals: options.computeNormals,
+	})
     updated = updated || ok
   })
   return updated
@@ -4246,8 +4327,9 @@ export function ensureGroundChunkMeshesForKeys(
   }
 
   const state = groundRuntimeStateMap.get(group) ?? ensureGroundRuntimeState(group, definition)
-  const rows = Math.max(1, Math.trunc(definition.rows))
-  const columns = Math.max(1, Math.trunc(definition.columns))
+  const gridSize = resolveGroundWorkingGridSize(definition)
+  const rows = gridSize.rows
+  const columns = gridSize.columns
   const maxChunkRowIndex = Math.max(0, Math.floor((rows - 1) / state.chunkCells))
   const maxChunkColumnIndex = Math.max(0, Math.floor((columns - 1) / state.chunkCells))
   const visited = new Set<string>()
@@ -4343,6 +4425,8 @@ export function setInfiniteGroundHiddenChunkKeys(
   }
 
   baseRuntime.hiddenChunkKeys = nextHiddenChunkKeys
+  baseRuntime.hiddenChunkKeysVersion += 1
+  baseRuntime.lastVisibilitySignature = ''
   return true
 }
 
@@ -4481,8 +4565,9 @@ export function stitchGroundChunkNormals(
     return false
   }
   const chunkCells = state.chunkCells
-  const rows = Math.max(1, Math.trunc(definition.rows))
-  const columns = Math.max(1, Math.trunc(definition.columns))
+  const gridSize = resolveGroundWorkingGridSize(definition)
+  const rows = gridSize.rows
+  const columns = gridSize.columns
   const maxChunkRowIndex = Math.max(0, Math.floor((rows - 1) / chunkCells))
   const maxChunkColumnIndex = Math.max(0, Math.floor((columns - 1) / chunkCells))
 

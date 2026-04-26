@@ -1,4 +1,4 @@
-import { parseTerrainPaintChunkKey, resolveTerrainPaintChunkBounds, type GroundDynamicMesh, type SceneNode } from '@schema'
+import { parseTerrainPaintChunkKey, resolveTerrainPaintChunkBounds, resolveGroundWorkingSpanMeters, type GroundDynamicMesh, type SceneNode } from '@schema'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import { computeBlobHash } from '@/utils/blob'
@@ -61,8 +61,9 @@ function createCompositionCanvas(width: number, height: number): { canvas: Canva
 }
 
 function computeBakedTextureSize(definition: GroundDynamicMesh, maxResolution: number): { width: number; height: number } {
-  const groundWidth = normalizeDimension(definition.width)
-  const groundDepth = normalizeDimension(definition.depth)
+  const groundSpan = normalizeDimension(resolveGroundWorkingSpanMeters(definition))
+  const groundWidth = groundSpan
+  const groundDepth = groundSpan
   const maxDimension = Math.max(groundWidth, groundDepth, 1)
   const normalizedMax = Math.max(MIN_BAKED_GROUND_RESOLUTION, Math.round(maxResolution))
   const width = Math.max(
@@ -256,8 +257,9 @@ async function renderGroundSurfaceChunks(
   if (!chunkEntries.length) {
     return false
   }
-  const groundWidth = Math.max(1e-6, normalizeDimension(definition.width))
-  const groundDepth = Math.max(1e-6, normalizeDimension(definition.depth))
+  const groundSpan = Math.max(1e-6, normalizeDimension(resolveGroundWorkingSpanMeters(definition)))
+  const groundWidth = groundSpan
+  const groundDepth = groundSpan
   const halfWidth = groundWidth * 0.5
   const halfDepth = groundDepth * 0.5
   let drewAny = false

@@ -42,6 +42,8 @@ import {
 	type GroundChunkManifestRecord,
 	type GroundSurfaceChunkTextureMap,
 	type GroundRuntimeDynamicMesh,
+		resolveGroundWorkingGridSize,
+		resolveGroundWorkingSpanMeters,
 	type LanternSlideDefinition,
 	type SceneAssetRegistryEntry,
 	type SceneJsonExportDocument,
@@ -2165,12 +2167,11 @@ function resolveGroundViewportWorldSize(): { width: number; depth: number } | nu
 	const dynamicMesh = groundNode && isGroundDynamicMesh(groundNode.dynamicMesh)
 		? groundNode.dynamicMesh
 		: null
-	const baseWidth = Number.isFinite(dynamicMesh?.width)
-		? Math.max(0, Number(dynamicMesh?.width))
-		: Math.max(0, Number(document.groundSettings?.width ?? 0))
-	const baseDepth = Number.isFinite(dynamicMesh?.depth)
-		? Math.max(0, Number(dynamicMesh?.depth))
-		: Math.max(0, Number(document.groundSettings?.depth ?? 0))
+	const baseSpan = dynamicMesh
+		? resolveGroundWorkingSpanMeters(dynamicMesh)
+		: Math.max(0, Number(document.groundSettings?.chunkSizeMeters ?? 0)) * Math.max(1, Math.trunc(Number(document.groundSettings?.renderRadiusChunks ?? document.groundSettings?.collisionRadiusChunks ?? 1))) * 2
+	const baseWidth = baseSpan
+	const baseDepth = baseSpan
 	if (baseWidth <= 0 || baseDepth <= 0) {
 		return null
 	}
@@ -2369,8 +2370,9 @@ function ensureGroundChunkDebugGroup(groundObject: THREE.Object3D): THREE.Group 
 }
 
 function computeTotalGroundChunkCount(definition: GroundDynamicMesh, chunkCells: number): number {
-	const rows = Math.max(1, Math.trunc(definition.rows))
-	const columns = Math.max(1, Math.trunc(definition.columns))
+	const gridSize = resolveGroundWorkingGridSize(definition)
+	const rows = Math.max(1, Math.trunc(gridSize.rows))
+	const columns = Math.max(1, Math.trunc(gridSize.columns))
 	const safeCells = Math.max(1, Math.trunc(chunkCells))
 	const rowChunks = Math.ceil(rows / safeCells)
 	const columnChunks = Math.ceil(columns / safeCells)
@@ -2416,11 +2418,13 @@ function computeTargetGroundChunkCount(
 	groundObject: THREE.Object3D,
 	activeCamera: THREE.PerspectiveCamera,
 ): number {
-	const columns = Math.max(1, Math.trunc(definition.columns))
-	const rows = Math.max(1, Math.trunc(definition.rows))
+	const gridSize = resolveGroundWorkingGridSize(definition)
+	const columns = Math.max(1, Math.trunc(gridSize.columns))
+	const rows = Math.max(1, Math.trunc(gridSize.rows))
 	const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
-	const width = Number.isFinite(definition.width) && definition.width > 0 ? definition.width : columns * cellSize
-	const depth = Number.isFinite(definition.depth) && definition.depth > 0 ? definition.depth : rows * cellSize
+	const span = resolveGroundWorkingSpanMeters(definition)
+	const width = span > 0 ? span : columns * cellSize
+	const depth = span > 0 ? span : rows * cellSize
 	const safeCells = Math.max(1, Math.trunc(chunkCells))
 	const rowChunks = Math.max(1, Math.ceil(rows / safeCells))
 	const columnChunks = Math.max(1, Math.ceil(columns / safeCells))

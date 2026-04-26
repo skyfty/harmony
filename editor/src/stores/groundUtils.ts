@@ -10,6 +10,7 @@ import {
   type GroundGenerationSettings,
   type GroundSettings,
   type SceneNode,
+  resolveGroundWorkingGridSize,
 } from '@schema'
 import type { SceneMaterialProps, SceneNodeMaterial, SceneMaterialType } from '@/types/material'
 import type { Vector3 } from 'three'
@@ -141,10 +142,6 @@ export function cloneGroundDynamicMesh(definition: GroundDynamicMeshLike): Groun
     renderRadiusChunks: definition.renderRadiusChunks ?? DEFAULT_GROUND_RENDER_RADIUS_CHUNKS,
     collisionRadiusChunks: definition.collisionRadiusChunks ?? DEFAULT_GROUND_COLLISION_RADIUS_CHUNKS,
     chunkManifestRevision: Number.isFinite(definition.chunkManifestRevision) ? Math.max(0, Math.trunc(definition.chunkManifestRevision as number)) : 0,
-    width: definition.width,
-    depth: definition.depth,
-    rows: definition.rows,
-    columns: definition.columns,
     cellSize: definition.cellSize,
     storageMode: definition.storageMode,
     tileSizeMeters: definition.tileSizeMeters,
@@ -294,22 +291,12 @@ export function resolveGroundCreationProfile(
 export function createGroundDynamicMeshDefinition(overrides: Partial<GroundDynamicMesh> = {}, settings?: GroundSettings): GroundDynamicMesh {
   const baseSettings = normalizeGroundSettings(settings ?? null)
   const o = overrides as Partial<GroundDynamicMeshLike>
-  const normalizedWidth = overrides.width !== undefined
-    ? normalizeGroundDimension(overrides.width as unknown, baseSettings.width)
-    : baseSettings.width
-  const normalizedDepth = overrides.depth !== undefined
-    ? normalizeGroundDimension(overrides.depth as unknown, baseSettings.depth)
-    : baseSettings.depth
   const creationProfile = resolveGroundCreationProfile(
-    normalizedWidth,
-    normalizedDepth,
+    baseSettings.width,
+    baseSettings.depth,
     overrides.cellSize ?? DEFAULT_GROUND_CELL_SIZE,
   )
   const cellSize = overrides.cellSize ?? creationProfile.cellSize
-  const derivedColumns = overrides.columns ?? Math.max(1, Math.round(normalizedWidth / Math.max(cellSize, 1e-6)))
-  const derivedRows = overrides.rows ?? Math.max(1, Math.round(normalizedDepth / Math.max(cellSize, 1e-6)))
-  const width = overrides.width !== undefined ? normalizedWidth : derivedColumns * cellSize
-  const depth = overrides.depth !== undefined ? normalizedDepth : derivedRows * cellSize
   const initialGeneration = cloneGroundGenerationSettings(overrides.generation) ?? null
   const definition: GroundDynamicMesh = {
     type: 'Ground',
@@ -319,10 +306,6 @@ export function createGroundDynamicMeshDefinition(overrides: Partial<GroundDynam
     renderRadiusChunks: overrides.renderRadiusChunks ?? baseSettings.renderRadiusChunks ?? DEFAULT_GROUND_RENDER_RADIUS_CHUNKS,
     collisionRadiusChunks: overrides.collisionRadiusChunks ?? baseSettings.collisionRadiusChunks ?? DEFAULT_GROUND_COLLISION_RADIUS_CHUNKS,
     chunkManifestRevision: Number.isFinite(overrides.chunkManifestRevision) ? Math.max(0, Math.trunc(overrides.chunkManifestRevision as number)) : 0,
-    width,
-    depth,
-    rows: derivedRows,
-    columns: derivedColumns,
     cellSize,
     storageMode: creationProfile.storageMode,
     tileSizeMeters: creationProfile.tileSizeMeters,
@@ -361,10 +344,11 @@ export function createGroundDynamicMeshDefinition(overrides: Partial<GroundDynam
 }
 
 export function normalizeGroundBounds(definition: GroundDynamicMesh, bounds: GroundRegionBounds): GroundRegionBounds {
-  const minRow = Math.max(0, Math.min(definition.rows, Math.min(bounds.minRow, bounds.maxRow)))
-  const maxRow = Math.max(0, Math.min(definition.rows, Math.max(bounds.minRow, bounds.maxRow)))
-  const minColumn = Math.max(0, Math.min(definition.columns, Math.min(bounds.minColumn, bounds.maxColumn)))
-  const maxColumn = Math.max(0, Math.min(definition.columns, Math.max(bounds.minColumn, bounds.maxColumn)))
+  const gridSize = resolveGroundWorkingGridSize(definition)
+  const minRow = Math.max(0, Math.min(gridSize.rows, Math.min(bounds.minRow, bounds.maxRow)))
+  const maxRow = Math.max(0, Math.min(gridSize.rows, Math.max(bounds.minRow, bounds.maxRow)))
+  const minColumn = Math.max(0, Math.min(gridSize.columns, Math.min(bounds.minColumn, bounds.maxColumn)))
+  const maxColumn = Math.max(0, Math.min(gridSize.columns, Math.max(bounds.minColumn, bounds.maxColumn)))
   return { minRow, maxRow, minColumn, maxColumn }
 }
 
@@ -373,16 +357,17 @@ export function applyGroundRegionTransform(
   bounds: GroundRegionBounds,
   transform: (current: number, row: number, column: number) => number,
 ): { definition: GroundRuntimeDynamicMesh; changed: boolean } {
+  const gridSize = resolveGroundWorkingGridSize(definition)
   const getBaseHeight = (row: number, column: number): number => computeGroundBaseHeightAtVertex(definition, row, column)
   const getManualHeight = (row: number, column: number): number => {
-    const raw = definition.manualHeightMap[getGroundVertexIndex(definition.columns, row, column)]
+    const raw = definition.manualHeightMap[getGroundVertexIndex(gridSize.columns, row, column)]
     if (typeof raw === 'number' && Number.isFinite(raw)) {
       return raw
     }
     return getBaseHeight(row, column)
   }
   const getPlanningHeight = (row: number, column: number): number => {
-    const raw = definition.planningHeightMap[getGroundVertexIndex(definition.columns, row, column)]
+    const raw = definition.planningHeightMap[getGroundVertexIndex(gridSize.columns, row, column)]
     if (typeof raw === 'number' && Number.isFinite(raw)) {
       return raw
     }
@@ -409,7 +394,7 @@ export function applyGroundRegionTransform(
   let changed = false
   for (let row = normalized.minRow; row <= normalized.maxRow; row += 1) {
     for (let column = normalized.minColumn; column <= normalized.maxColumn; column += 1) {
-      const heightIndex = getGroundVertexIndex(definition.columns, row, column)
+      const heightIndex = getGroundVertexIndex(gridSize.columns, row, column)
       const previousStored = nextHeightMap[heightIndex] ?? Number.NaN
       const currentEffective = resolveEffectiveHeight(row, column)
       const nextEffective = transform(currentEffective, row, column)

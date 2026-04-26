@@ -36,7 +36,8 @@ function buildLegacyGroundTerrainManifest(
   mesh: GroundDynamicMesh,
   coarseTerrainPath: string | null,
 ): GroundTerrainPackageManifest {
-  const creationProfile = resolveGroundCreationProfile(mesh.width, mesh.depth, mesh.cellSize)
+  const legacyMesh = mesh as GroundDynamicMesh & Record<string, number | undefined>
+  const creationProfile = resolveGroundCreationProfile(Number(legacyMesh.width ?? 0), Number(legacyMesh.depth ?? 0), mesh.cellSize)
   const tileResolution = Math.max(1, Math.trunc(mesh.tileResolution ?? creationProfile.tileResolution))
   const terrainTilesRootPath = `scenes/${encodeURIComponent(sceneId)}/ground-tiles/`
   const collisionManifestPath = `scenes/${encodeURIComponent(sceneId)}/ground-collision.json`
@@ -45,10 +46,6 @@ function buildLegacyGroundTerrainManifest(
     version: GROUND_TERRAIN_PACKAGE_VERSION,
     scenePath: `scenes/${encodeURIComponent(sceneId)}/scene.bin`,
     storageMode: 'tiled',
-    width: mesh.width,
-    depth: mesh.depth,
-    rows: mesh.rows,
-    columns: mesh.columns,
     cellSize: mesh.cellSize,
     tileSizeMeters: Math.max(128, Math.round(mesh.tileSizeMeters ?? creationProfile.tileSizeMeters)),
     tileResolution,
@@ -59,8 +56,8 @@ function buildLegacyGroundTerrainManifest(
     terrainTilesRootPath,
     collisionManifestPath,
     tiles: buildGroundTerrainTileEntries({
-      rows: mesh.rows,
-      columns: mesh.columns,
+      rows: Number(legacyMesh.rows ?? 0),
+      columns: Number(legacyMesh.columns ?? 0),
       tileResolution,
       terrainTilesRootPath,
       collisionRootPath: `scenes/${encodeURIComponent(sceneId)}/ground-collision/`,
@@ -78,7 +75,8 @@ function upgradeGroundNodeTerrainMetadata(
     return false
   }
 
-  const creationProfile = resolveGroundCreationProfile(dynamicMesh.width, dynamicMesh.depth, dynamicMesh.cellSize)
+  const legacyMesh = dynamicMesh as GroundDynamicMesh & Record<string, number | undefined>
+  const creationProfile = resolveGroundCreationProfile(Number(legacyMesh.width ?? 0), Number(legacyMesh.depth ?? 0), dynamicMesh.cellSize)
   const nextDynamicMesh = dynamicMesh as GroundDynamicMesh & Record<string, unknown>
   if (nextDynamicMesh.storageMode === undefined) {
     nextDynamicMesh.storageMode = creationProfile.storageMode

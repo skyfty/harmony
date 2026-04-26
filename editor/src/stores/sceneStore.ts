@@ -30,6 +30,8 @@ import {
   getGroundVertexIndex,
   createPrimitiveMesh,
   resolveServerAssetDownloadUrl,
+  resolveGroundWorkingGridSize,
+  resolveGroundWorkingSpanMeters,
   WATER_SURFACE_MESH_USERDATA_KEY,
   cloneWaterSurfaceMeshMetadata,
   createWaterSurfaceRuntimeMesh,
@@ -1615,10 +1617,6 @@ function cloneGroundDynamicMesh(definition: GroundDynamicMesh): GroundDynamicMes
   const planningMetadata = manualDeepClone(definition.planningMetadata)
   const result: GroundDynamicMesh = {
     type: 'Ground',
-    width: definition.width,
-    depth: definition.depth,
-    rows: definition.rows,
-    columns: definition.columns,
     cellSize: definition.cellSize,
     chunkStreamingEnabled: definition.chunkStreamingEnabled,
     surfaceRevision: Number.isFinite(definition.surfaceRevision) ? Math.max(0, Math.trunc(definition.surfaceRevision as number)) : 0,
@@ -1821,9 +1819,9 @@ function commitGroundHeightMapRuntimeEdit(
   }
   useGroundHeightmapStore().markOptimizedMeshDirtyBounds(nodeId, definition, manualRegion ?? {
     startRow: 0,
-    endRow: definition.rows,
+    endRow: 0,
     startColumn: 0,
-    endColumn: definition.columns,
+    endColumn: 0,
   })
   refreshLandformNodesForGroundChange(store, nodeId, resolvedDirtyBounds)
   finalizeDynamicMeshRuntimePatch(store, nodeId, 'Ground')
@@ -1868,9 +1866,9 @@ function commitGroundLocalEditTilesRuntimeEdit(
     endColumn: affectedRegion.maxColumn,
   } : {
     startRow: 0,
-    endRow: definition.rows,
+    endRow: 0,
     startColumn: 0,
-    endColumn: definition.columns,
+    endColumn: 0,
   })
   refreshLandformNodesForGroundChange(store, nodeId, resolvedDirtyBounds)
   finalizeDynamicMeshRuntimePatch(store, nodeId, 'Ground')
@@ -2482,8 +2480,9 @@ function computeGroundDirtyBoundsXZ(
   let maxRow = Number.NEGATIVE_INFINITY
   let minColumn = Number.POSITIVE_INFINITY
   let maxColumn = Number.NEGATIVE_INFINITY
-  const columns = Math.max(1, Math.trunc(definition.columns))
-  const rows = Math.max(1, Math.trunc(definition.rows))
+  const gridSize = resolveGroundWorkingGridSize(definition)
+  const columns = gridSize.columns
+  const rows = gridSize.rows
 
   for (let index = 0; index < total; index += 1) {
     const previous = previousHeightMap[index] ?? 0
@@ -2508,8 +2507,9 @@ function computeGroundDirtyBoundsXZ(
   const expandedMinColumn = Math.max(0, Math.floor(minColumn) - 1)
   const expandedMaxColumn = Math.min(columns, Math.ceil(maxColumn) + 1)
 
-  const halfWidth = definition.width * 0.5
-  const halfDepth = definition.depth * 0.5
+  const spanMeters = resolveGroundWorkingSpanMeters(definition)
+  const halfWidth = spanMeters * 0.5
+  const halfDepth = spanMeters * 0.5
   const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1
   const localMinX = -halfWidth + expandedMinColumn * cellSize
   const localMaxX = -halfWidth + expandedMaxColumn * cellSize
@@ -2538,14 +2538,16 @@ function computeGroundDirtyBoundsXZFromRegion(
   if (!region) {
     return null
   }
-  const columns = Math.max(1, Math.trunc(definition.columns))
-  const rows = Math.max(1, Math.trunc(definition.rows))
+  const gridSize = resolveGroundWorkingGridSize(definition)
+  const columns = gridSize.columns
+  const rows = gridSize.rows
   const expandedMinRow = Math.max(0, Math.floor(region.minRow) - 1)
   const expandedMaxRow = Math.min(rows, Math.ceil(region.maxRow) + 1)
   const expandedMinColumn = Math.max(0, Math.floor(region.minColumn) - 1)
   const expandedMaxColumn = Math.min(columns, Math.ceil(region.maxColumn) + 1)
-  const halfWidth = definition.width * 0.5
-  const halfDepth = definition.depth * 0.5
+  const spanMeters = resolveGroundWorkingSpanMeters(definition)
+  const halfWidth = spanMeters * 0.5
+  const halfDepth = spanMeters * 0.5
   const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1
   const localMinX = -halfWidth + expandedMinColumn * cellSize
   const localMaxX = -halfWidth + expandedMaxColumn * cellSize
@@ -2570,8 +2572,9 @@ function computeGroundDirtyBoundsFromRegionXZ(
   definition: GroundRuntimeDynamicMesh,
   bounds: GroundRegionBounds,
 ): WorldBoundsXZ | null {
-  const rows = Math.max(1, Math.trunc(definition.rows))
-  const columns = Math.max(1, Math.trunc(definition.columns))
+  const gridSize = resolveGroundWorkingGridSize(definition)
+  const rows = gridSize.rows
+  const columns = gridSize.columns
   const normalizedMinRow = Math.max(0, Math.min(rows, Math.min(bounds.minRow, bounds.maxRow)))
   const normalizedMaxRow = Math.max(0, Math.min(rows, Math.max(bounds.minRow, bounds.maxRow)))
   const normalizedMinColumn = Math.max(0, Math.min(columns, Math.min(bounds.minColumn, bounds.maxColumn)))
@@ -2581,8 +2584,9 @@ function computeGroundDirtyBoundsFromRegionXZ(
   const expandedMinColumn = Math.max(0, Math.floor(normalizedMinColumn) - 1)
   const expandedMaxColumn = Math.min(columns, Math.ceil(normalizedMaxColumn) + 1)
 
-  const halfWidth = definition.width * 0.5
-  const halfDepth = definition.depth * 0.5
+  const spanMeters = resolveGroundWorkingSpanMeters(definition)
+  const halfWidth = spanMeters * 0.5
+  const halfDepth = spanMeters * 0.5
   const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1
   const localMinX = -halfWidth + expandedMinColumn * cellSize
   const localMaxX = -halfWidth + expandedMaxColumn * cellSize
@@ -2612,11 +2616,12 @@ function buildGroundManualRegionFromHeightMap(
   if (!(vertexRows > 0) || !(vertexColumns > 0)) {
     return null
   }
+  const gridSize = resolveGroundWorkingGridSize(definition)
   const values = new Float64Array(vertexRows * vertexColumns)
   for (let row = normalized.minRow; row <= normalized.maxRow; row += 1) {
     const rowOffset = (row - normalized.minRow) * vertexColumns
     for (let column = normalized.minColumn; column <= normalized.maxColumn; column += 1) {
-      const source = Number(definition.manualHeightMap[getGroundVertexIndex(definition.columns, row, column)])
+      const source = Number(definition.manualHeightMap[getGroundVertexIndex(gridSize.columns, row, column)])
       values[rowOffset + (column - normalized.minColumn)] = Number.isFinite(source) ? source : GROUND_HEIGHT_UNSET_VALUE
     }
   }
@@ -6850,13 +6855,10 @@ function createContentHistoryEntry(store: SceneState): SceneHistoryEntry {
 function resolveGroundSettingsFromNodes(nodes: SceneNode[], fallback: GroundSettings): GroundSettings {
   const base = cloneGroundSettings(fallback)
   const groundNode = findGroundNode(nodes)
-  const definition = groundNode?.dynamicMesh?.type === 'Ground' ? groundNode.dynamicMesh : null
-  if (!definition) {
+  if (!groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
     return base
   }
   return cloneGroundSettings({
-    width: Number.isFinite(definition.width) ? Number(definition.width) : base.width,
-    depth: Number.isFinite(definition.depth) ? Number(definition.depth) : base.depth,
     enableAirWall: base.enableAirWall,
     editorScatterDynamicStreamingEnabled: base.editorScatterDynamicStreamingEnabled,
     editorScatterVisible: base.editorScatterVisible,
@@ -8985,50 +8987,6 @@ export const useSceneStore = defineStore('scene', {
         ...this.groundSettings,
         editorScatterVisible: next,
       }
-
-      commitSceneSnapshot(this)
-      return true
-    },
-    setGroundDimensions(payload: { width?: number; depth?: number }) {
-      const requested = {
-        width: payload.width ?? this.groundSettings.width,
-        depth: payload.depth ?? this.groundSettings.depth,
-      }
-      const normalized = cloneGroundSettings(requested)
-      if (
-        Math.abs(normalized.width - this.groundSettings.width) < 1e-6 &&
-        Math.abs(normalized.depth - this.groundSettings.depth) < 1e-6
-      ) {
-        return false
-      }
-
-      // This operation may resize/regenerate ground meshes; use a content snapshot for correctness.
-      this.captureHistorySnapshot()
-
-      this.groundSettings = normalized
-
-      const clonedNodes = cloneSceneNodes(this.nodes)
-      const existingGround = findGroundNode(clonedNodes)
-      if (existingGround) {
-        existingGround.dynamicMesh = createGroundDynamicMeshDefinition(
-          existingGround.dynamicMesh?.type === 'Ground'
-            ? {
-                ...(existingGround.dynamicMesh as GroundDynamicMesh),
-                width: normalized.width,
-                depth: normalized.depth,
-              }
-            : {
-                width: normalized.width,
-                depth: normalized.depth,
-              },
-          normalized,
-        )
-      }
-      const updatedNodes = ensureEnvironmentNode(
-        ensureGroundNode(clonedNodes, normalized),
-        this.environment,
-      )
-      this.nodes = updatedNodes
 
       commitSceneSnapshot(this)
       return true

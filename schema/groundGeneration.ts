@@ -1,4 +1,5 @@
 import { type GroundDynamicMesh, type GroundGenerationSettings } from './index'
+import { resolveGroundWorkingGridSize, resolveGroundWorkingSpanMeters } from './index'
 
 type PerlinNoise3D = (x: number, y: number, z: number) => number
 type VoronoiNoise2D = (x: number, z: number) => number
@@ -226,23 +227,22 @@ function getGenerationRuntime(settings: GroundGenerationSettings): GenerationRun
 }
 
 function buildGroundBaseHeightGridSignature(
-  mesh: Pick<GroundDynamicMesh, 'columns' | 'rows' | 'cellSize' | 'width' | 'depth' | 'generation'>,
+  mesh: Pick<GroundDynamicMesh, 'cellSize' | 'chunkSizeMeters' | 'renderRadiusChunks' | 'collisionRadiusChunks' | 'generation'>,
 ): string {
   const generation = mesh.generation ? normalizeGroundGenerationSettings(mesh.generation) : null
   const generationSignature = generation ? buildGenerationSignature(generation) : 'none'
   const cellSize = Number.isFinite(mesh.cellSize) && mesh.cellSize > 0 ? mesh.cellSize : 1
-  const columns = Math.max(1, Math.trunc(mesh.columns))
-  const rows = Math.max(1, Math.trunc(mesh.rows))
-  const width = Number.isFinite(mesh.width) && mesh.width > 0 ? mesh.width : columns * cellSize
-  const depth = Number.isFinite(mesh.depth) && mesh.depth > 0 ? mesh.depth : rows * cellSize
-  return `${rows}|${columns}|${cellSize}|${width}|${depth}|${generationSignature}`
+  const gridSize = resolveGroundWorkingGridSize(mesh)
+  const spanMeters = resolveGroundWorkingSpanMeters(mesh)
+  return `${gridSize.rows}|${gridSize.columns}|${cellSize}|${spanMeters}|${spanMeters}|${generationSignature}`
 }
 
 function getOrCreateGroundBaseHeightGrid(
-  mesh: Pick<GroundDynamicMesh, 'columns' | 'rows' | 'cellSize' | 'width' | 'depth' | 'generation'>,
+  mesh: Pick<GroundDynamicMesh, 'cellSize' | 'chunkSizeMeters' | 'renderRadiusChunks' | 'collisionRadiusChunks' | 'generation'>,
 ): GroundBaseHeightGridCacheEntry {
-  const columns = Math.max(1, Math.trunc(mesh.columns))
-  const rows = Math.max(1, Math.trunc(mesh.rows))
+  const gridSize = resolveGroundWorkingGridSize(mesh)
+  const columns = gridSize.columns
+  const rows = gridSize.rows
   const signature = buildGroundBaseHeightGridSignature(mesh)
   const cached = groundBaseHeightGridCache.get(signature)
   if (cached) {
@@ -272,8 +272,9 @@ function getOrCreateGroundBaseHeightGrid(
 
   const runtime = getGenerationRuntime(normalized)
   const cellSize = Number.isFinite(mesh.cellSize) && mesh.cellSize > 0 ? mesh.cellSize : 1
-  const width = Number.isFinite(mesh.width) && mesh.width > 0 ? mesh.width : columns * cellSize
-  const depth = Number.isFinite(mesh.depth) && mesh.depth > 0 ? mesh.depth : rows * cellSize
+  const spanMeters = resolveGroundWorkingSpanMeters(mesh)
+  const width = spanMeters
+  const depth = spanMeters
   const halfWidth = width * 0.5
   const halfDepth = depth * 0.5
 
@@ -356,14 +357,15 @@ function clampRegionIndex(value: number, min: number, max: number): number {
 }
 
 export function computeGroundBaseHeightRegion(
-  mesh: Pick<GroundDynamicMesh, 'columns' | 'rows' | 'cellSize' | 'width' | 'depth' | 'generation'>,
+  mesh: Pick<GroundDynamicMesh, 'cellSize' | 'chunkSizeMeters' | 'renderRadiusChunks' | 'collisionRadiusChunks' | 'generation'>,
   minRowInput: number,
   maxRowInput: number,
   minColumnInput: number,
   maxColumnInput: number,
 ): GroundBaseHeightRegion {
-  const columns = Math.max(1, Math.trunc(mesh.columns))
-  const rows = Math.max(1, Math.trunc(mesh.rows))
+  const gridSize = resolveGroundWorkingGridSize(mesh)
+  const columns = gridSize.columns
+  const rows = gridSize.rows
   const minRow = clampRegionIndex(minRowInput, 0, rows)
   const maxRow = clampRegionIndex(maxRowInput, 0, rows)
   const minColumn = clampRegionIndex(minColumnInput, 0, columns)
@@ -389,7 +391,7 @@ export function computeGroundBaseHeightRegion(
 }
 
 export function computeGroundBaseHeightAtVertex(
-  mesh: Pick<GroundDynamicMesh, 'columns' | 'rows' | 'cellSize' | 'width' | 'depth' | 'generation'>,
+  mesh: Pick<GroundDynamicMesh, 'cellSize' | 'chunkSizeMeters' | 'renderRadiusChunks' | 'collisionRadiusChunks' | 'generation'>,
   row: number,
   column: number,
 ): number {

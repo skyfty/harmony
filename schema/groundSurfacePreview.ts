@@ -3,6 +3,7 @@ import type {
   GroundDynamicMesh,
   SceneNode,
 } from './index'
+import { resolveGroundWorkingSpanMeters } from './index'
 import { stableSerialize } from './stableSerialize'
 // resolveEnabledComponentState removed with Landforms feature
 import {
@@ -162,9 +163,10 @@ function resolveTextureImageSource(texture: THREE.Texture | null | undefined): C
 }
 
 function buildGroundSurfacePreviewStructureSignature(definition: GroundDynamicMesh, options: GroundSurfacePreviewOptions): string {
+  const spanMeters = resolveGroundWorkingSpanMeters(definition)
   return stableSerialize({
-    width: normalizeDimension(definition.width),
-    depth: normalizeDimension(definition.depth),
+    width: normalizeDimension(spanMeters),
+    depth: normalizeDimension(spanMeters),
     textureDataUrl: definition.textureDataUrl ?? null,
     maxResolution: options.maxResolution ?? DEFAULT_GROUND_SURFACE_PREVIEW_MAX_RESOLUTION,
   } satisfies GroundSurfacePreviewStructureSignature)
@@ -400,8 +402,9 @@ function createCompositionCanvas(width: number, height: number): { canvas: Canva
 }
 
 function computePreviewTextureSize(definition: GroundDynamicMesh, maxResolution: number): { width: number; height: number } {
-  const groundWidth = normalizeDimension(definition.width)
-  const groundDepth = normalizeDimension(definition.depth)
+  const spanMeters = resolveGroundWorkingSpanMeters(definition)
+  const groundWidth = normalizeDimension(spanMeters)
+  const groundDepth = normalizeDimension(spanMeters)
   const maxDimension = Math.max(groundWidth, groundDepth, 1)
   const normalizedMax = Math.max(MIN_GROUND_SURFACE_PREVIEW_RESOLUTION, Math.round(maxResolution))
   const width = Math.max(
@@ -586,8 +589,9 @@ function forEachGroundPreviewMaterial(root: THREE.Object3D, visitor: (material: 
 }
 
 function applyGroundSurfacePreviewToMaterialMap(root: THREE.Object3D, texture: THREE.Texture, definition: GroundDynamicMesh): void {
-  const width = Math.max(1e-6, normalizeDimension(definition.width))
-  const depth = Math.max(1e-6, normalizeDimension(definition.depth))
+  const spanMeters = resolveGroundWorkingSpanMeters(definition)
+  const width = Math.max(1e-6, normalizeDimension(spanMeters))
+  const depth = Math.max(1e-6, normalizeDimension(spanMeters))
   forEachGroundPreviewMaterial(root, (material) => {
     const state = installGroundSurfacePreviewShaderHooks(material)
     state.overlayTexture = texture
@@ -657,8 +661,9 @@ export function syncGroundSurfaceLiveChunkPreviews(params: {
     }
   }
 
-  const groundWidth = Math.max(1e-6, normalizeDimension(dynamicMesh.width))
-  const groundDepth = Math.max(1e-6, normalizeDimension(dynamicMesh.depth))
+  const spanMeters = resolveGroundWorkingSpanMeters(dynamicMesh)
+  const groundWidth = Math.max(1e-6, normalizeDimension(spanMeters))
+  const groundDepth = Math.max(1e-6, normalizeDimension(spanMeters))
   const halfWidth = groundWidth * 0.5
   const halfDepth = groundDepth * 0.5
   for (const preview of validPreviews) {
@@ -754,8 +759,9 @@ async function composeGroundSurfaceChunksIntoCanvas(params: {
     return false
   }
 
-  const groundWidth = Math.max(1e-6, normalizeDimension(definition.width))
-  const groundDepth = Math.max(1e-6, normalizeDimension(definition.depth))
+  const spanMeters = resolveGroundWorkingSpanMeters(definition)
+  const groundWidth = Math.max(1e-6, normalizeDimension(spanMeters))
+  const groundDepth = Math.max(1e-6, normalizeDimension(spanMeters))
   const halfWidth = groundWidth * 0.5
   const halfDepth = groundDepth * 0.5
   const drawableChunks = chunkEntries.filter((entry) => typeof entry.textureAssetId === 'string' && entry.textureAssetId.trim().length)
@@ -857,8 +863,8 @@ async function composeGroundSurfaceChunksIntoCanvas(params: {
 
 function buildGroundSurfacePreviewSignature(definition: GroundDynamicMesh, options: GroundSurfacePreviewOptions): string {
   return stableSerialize({
-    width: normalizeDimension(definition.width),
-    depth: normalizeDimension(definition.depth),
+    width: normalizeDimension(resolveGroundWorkingSpanMeters(definition)),
+    depth: normalizeDimension(resolveGroundWorkingSpanMeters(definition)),
     textureDataUrl: definition.textureDataUrl ?? null,
     groundSurfaceChunks: definition.groundSurfaceChunks ?? null,
     previewRevision: options.previewRevision ?? 0,

@@ -82,6 +82,7 @@ import type {
   Vector3Like,
   WallDynamicMesh,
 } from '@schema/index'
+import { resolveGroundWorkingGridSize, resolveGroundWorkingSpanMeters } from '@schema/index'
 import {
   buildRegionDynamicMeshFromLocalVertices,
   createGradientBackgroundDome,
@@ -562,9 +563,10 @@ function clampGroundNoiseStrength(value: number): number {
 }
 
 function buildGroundGenerationPayload(definition?: GroundDynamicMesh | null): GroundGenerationSettings {
+  const groundSpan = definition ? resolveGroundWorkingSpanMeters(definition) : 80
   const fallback: GroundGenerationSettings = {
     mode: 'perlin',
-    noiseScale: Math.max(10, definition?.width ?? 80),
+    noiseScale: Math.max(10, groundSpan),
     noiseAmplitude: 6,
     noiseStrength: 1,
   }
@@ -587,8 +589,9 @@ function applyGroundGenerationPatch(patch: Partial<GroundGenerationSettings>) {
     ...buildGroundGenerationPayload(definition),
     ...patch,
   }
-  nextGeneration.worldWidth = definition.width
-  nextGeneration.worldDepth = definition.depth
+  const groundSpan = resolveGroundWorkingSpanMeters(definition)
+  nextGeneration.worldWidth = groundSpan
+  nextGeneration.worldDepth = groundSpan
   sceneStore.updateGroundNodeDynamicMesh(ground.id, { generation: nextGeneration })
 }
 
@@ -1472,12 +1475,14 @@ function resolveGroundSignatureTarget(object: THREE.Object3D): THREE.Object3D {
 }
 
 function computeGroundDynamicMeshSignature(definition: GroundDynamicMesh): string {
+  const gridSize = resolveGroundWorkingGridSize(definition)
+  const span = resolveGroundWorkingSpanMeters(definition)
   return hashString(stableSerialize({
-    rows: Math.max(1, Math.trunc(definition.rows)),
-    columns: Math.max(1, Math.trunc(definition.columns)),
+    rows: Math.max(1, Math.trunc(gridSize.rows)),
+    columns: Math.max(1, Math.trunc(gridSize.columns)),
     cellSize: Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1,
-    width: Number.isFinite(definition.width) ? definition.width : 0,
-    depth: Number.isFinite(definition.depth) ? definition.depth : 0,
+    width: span,
+    depth: span,
     generation: definition.generation ?? null,
     heightComposition: definition.heightComposition ?? { mode: 'planning_plus_manual' },
     surfaceRevision: Number.isFinite(definition.surfaceRevision)
@@ -19268,8 +19273,9 @@ function intersectRayWithGroundHeightfieldWorld(ray: THREE.Ray): THREE.Vector3 |
   heightfieldRayMatrixHelper.copy(groundObject.matrixWorld).invert()
   heightfieldRayHelper.copy(ray).applyMatrix4(heightfieldRayMatrixHelper)
 
-  const halfWidth = Number(groundDefinition.width) * 0.5
-  const halfDepth = Number(groundDefinition.depth) * 0.5
+  const halfSpan = resolveGroundWorkingSpanMeters(groundDefinition) * 0.5
+  const halfWidth = halfSpan
+  const halfDepth = halfSpan
   if (!Number.isFinite(halfWidth) || !Number.isFinite(halfDepth) || halfWidth <= 0 || halfDepth <= 0) {
     return null
   }
@@ -21272,8 +21278,9 @@ function collectViewportGroundChunkKeysFromRegion(
   const cellSize = typeof cellSizeCandidate === 'number' && Number.isFinite(cellSizeCandidate) && cellSizeCandidate > 1e-6
     ? cellSizeCandidate
     : 1
-  const halfWidth = (typeof definition.width === 'number' && Number.isFinite(definition.width) ? definition.width : 0) * 0.5
-  const halfDepth = (typeof definition.depth === 'number' && Number.isFinite(definition.depth) ? definition.depth : 0) * 0.5
+  const halfSpan = resolveGroundWorkingSpanMeters(definition) * 0.5
+  const halfWidth = halfSpan
+  const halfDepth = halfSpan
 
   const minX = affectedRegion.minColumn * cellSize - halfWidth
   const maxX = affectedRegion.maxColumn * cellSize - halfWidth

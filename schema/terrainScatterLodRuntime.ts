@@ -33,6 +33,7 @@ import {
   type ModelInstanceGroup,
 } from './modelObjectCache'
 import { resolveGroundChunkCells, resolveGroundChunkRadiusMeters } from './groundMesh'
+import { resolveGroundWorkingGridSize, resolveGroundWorkingSpanMeters } from './index'
 
 export const LOD_PRESET_FORMAT_VERSION = 1
 
@@ -243,13 +244,15 @@ function clampFinite(value: unknown, fallback: number): number {
 }
 
 function computeGroundChunkKeyFromLocal(definition: GroundDynamicMesh, chunkCells: number, localX: number, localZ: number): string {
-  const halfWidth = definition.width * 0.5
-  const halfDepth = definition.depth * 0.5
+  const spanMeters = resolveGroundWorkingSpanMeters(definition)
+  const halfWidth = spanMeters * 0.5
+  const halfDepth = spanMeters * 0.5
   const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
   const normalizedColumn = (localX + halfWidth) / cellSize
   const normalizedRow = (localZ + halfDepth) / cellSize
-  const column = THREE.MathUtils.clamp(Math.floor(normalizedColumn), 0, Math.max(0, definition.columns - 1))
-  const row = THREE.MathUtils.clamp(Math.floor(normalizedRow), 0, Math.max(0, definition.rows - 1))
+  const gridSize = resolveGroundWorkingGridSize(definition)
+  const column = THREE.MathUtils.clamp(Math.floor(normalizedColumn), 0, Math.max(0, gridSize.columns - 1))
+  const row = THREE.MathUtils.clamp(Math.floor(normalizedRow), 0, Math.max(0, gridSize.rows - 1))
   const chunkRow = Math.floor(row / Math.max(1, chunkCells))
   const chunkColumn = Math.floor(column / Math.max(1, chunkCells))
   return `${chunkRow}:${chunkColumn}`
@@ -268,8 +271,9 @@ function computeChunkKeysInRadius(
   }
 
   const chunkCellCount = Math.max(1, Math.round(chunkCells))
-  const halfWidth = definition.width * 0.5
-  const halfDepth = definition.depth * 0.5
+  const spanMeters = resolveGroundWorkingSpanMeters(definition)
+  const halfWidth = spanMeters * 0.5
+  const halfDepth = spanMeters * 0.5
   const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
 
   const minColumnUnclamped = Math.floor((localX - effectiveRadius + halfWidth) / cellSize)
@@ -277,10 +281,11 @@ function computeChunkKeysInRadius(
   const minRowUnclamped = Math.floor((localZ - effectiveRadius + halfDepth) / cellSize)
   const maxRowUnclamped = Math.ceil((localZ + effectiveRadius + halfDepth) / cellSize)
 
-  const minColumn = THREE.MathUtils.clamp(minColumnUnclamped, 0, Math.max(0, definition.columns - 1))
-  const maxColumn = THREE.MathUtils.clamp(maxColumnUnclamped, 0, Math.max(0, definition.columns - 1))
-  const minRow = THREE.MathUtils.clamp(minRowUnclamped, 0, Math.max(0, definition.rows - 1))
-  const maxRow = THREE.MathUtils.clamp(maxRowUnclamped, 0, Math.max(0, definition.rows - 1))
+  const gridSize = resolveGroundWorkingGridSize(definition)
+  const minColumn = THREE.MathUtils.clamp(minColumnUnclamped, 0, Math.max(0, gridSize.columns - 1))
+  const maxColumn = THREE.MathUtils.clamp(maxColumnUnclamped, 0, Math.max(0, gridSize.columns - 1))
+  const minRow = THREE.MathUtils.clamp(minRowUnclamped, 0, Math.max(0, gridSize.rows - 1))
+  const maxRow = THREE.MathUtils.clamp(maxRowUnclamped, 0, Math.max(0, gridSize.rows - 1))
 
   const minChunkColumn = Math.floor(minColumn / chunkCellCount)
   const maxChunkColumn = Math.floor(maxColumn / chunkCellCount)

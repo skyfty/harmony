@@ -11,6 +11,7 @@ import {
   sampleGroundEffectiveHeightRegion,
   sampleGroundEffectiveHeightRegionFromSampler,
 } from './groundMesh'
+import { resolveGroundWorkingGridSize, resolveGroundWorkingSpanMeters } from './index'
 
 export type GroundOptimizedMeshBuildOptions = {
   tolerance?: number
@@ -58,11 +59,11 @@ function clampInteger(value: number | undefined, fallback: number, min: number, 
 }
 
 function computeVertexX(definition: GroundDynamicMesh, column: number): number {
-  return -definition.width * 0.5 + column * definition.cellSize
+  return -resolveGroundWorkingSpanMeters(definition) * 0.5 + column * definition.cellSize
 }
 
 function computeVertexZ(definition: GroundDynamicMesh, row: number): number {
-  return -definition.depth * 0.5 + row * definition.cellSize
+  return -resolveGroundWorkingSpanMeters(definition) * 0.5 + row * definition.cellSize
 }
 
 function buildHeightGrid(
@@ -450,8 +451,9 @@ function buildCartesianOptimizedMeshChunkData(
   sourceVertexCount: number,
   sourceTriangleCount: number,
 ): GroundOptimizedMeshChunkData {
-  const rowsCount = Math.max(1, Math.trunc(definition.rows))
-  const columnsCount = Math.max(1, Math.trunc(definition.columns))
+  const gridSize = resolveGroundWorkingGridSize(definition)
+  const rowsCount = gridSize.rows
+  const columnsCount = gridSize.columns
   const vertexCount = rows.length * columns.length
   const positions = new Array<number>(vertexCount * 3)
   const uvs = new Array<number>(vertexCount * 2)
@@ -519,8 +521,9 @@ function buildBoundedOptimizedMeshChunkData(
   sourceVertexCount: number,
   sourceTriangleCount: number,
 ): GroundOptimizedMeshChunkData {
-  const rowsCount = Math.max(1, Math.trunc(definition.rows))
-  const columnsCount = Math.max(1, Math.trunc(definition.columns))
+  const gridSize = resolveGroundWorkingGridSize(definition)
+  const rowsCount = gridSize.rows
+  const columnsCount = gridSize.columns
   const positions: number[] = []
   const uvs: number[] = []
   const indices: number[] = []
@@ -615,8 +618,9 @@ function computeChunkDomain(
   chunkColumn: number,
   chunkCells: number,
 ): GroundOptimizedChunkDomain {
-  const totalRows = Math.max(1, Math.trunc(definition.rows))
-  const totalColumns = Math.max(1, Math.trunc(definition.columns))
+  const gridSize = resolveGroundWorkingGridSize(definition)
+  const totalRows = gridSize.rows
+  const totalColumns = gridSize.columns
   const startRow = chunkRow * chunkCells
   const startColumn = chunkColumn * chunkCells
   const rows = Math.max(1, Math.min(chunkCells, totalRows - startRow))
@@ -782,8 +786,9 @@ function deriveOptimizedRenderChunkCells(
   sourceChunkCells: number,
   requestedChunkCells?: number,
 ): number {
-  const rowsCount = Math.max(1, Math.trunc(definition.rows))
-  const columnsCount = Math.max(1, Math.trunc(definition.columns))
+  const gridSize = resolveGroundWorkingGridSize(definition)
+  const rowsCount = gridSize.rows
+  const columnsCount = gridSize.columns
   const maxChunkCells = Math.max(sourceChunkCells, Math.max(rowsCount, columnsCount))
   if (Number.isFinite(requestedChunkCells) && (requestedChunkCells as number) > 0) {
     return clampInteger(requestedChunkCells, sourceChunkCells, sourceChunkCells, maxChunkCells)
@@ -799,8 +804,9 @@ export function buildGroundOptimizedMeshData(
   definition: GroundDynamicMesh,
   options: GroundOptimizedMeshBuildOptions = {},
 ): GroundOptimizedMeshData {
-  const rowsCount = Math.max(1, Math.trunc(definition.rows))
-  const columnsCount = Math.max(1, Math.trunc(definition.columns))
+  const gridSize = resolveGroundWorkingGridSize(definition)
+  const rowsCount = gridSize.rows
+  const columnsCount = gridSize.columns
   const sourceChunkCells = resolveGroundChunkCells(definition)
   const chunkCells = deriveOptimizedRenderChunkCells(definition, sourceChunkCells, options.renderChunkCells)
   const normalizedOptions: Required<GroundOptimizedMeshBuildOptions> = {
@@ -856,8 +862,9 @@ export function buildGroundOptimizedMeshDataFromSampler(
   sampler: GroundHeightFieldSampler,
   options: GroundOptimizedMeshBuildOptions = {},
 ): GroundOptimizedMeshData {
-  const rowsCount = Math.max(1, Math.trunc(definition.rows))
-  const columnsCount = Math.max(1, Math.trunc(definition.columns))
+  const gridSize = resolveGroundWorkingGridSize(definition)
+  const rowsCount = gridSize.rows
+  const columnsCount = gridSize.columns
   const sourceChunkCells = resolveGroundChunkCells(definition)
   const chunkCells = deriveOptimizedRenderChunkCells(definition, sourceChunkCells, options.renderChunkCells)
   const normalizedOptions: Required<GroundOptimizedMeshBuildOptions> = {
@@ -970,8 +977,9 @@ export function rebuildGroundOptimizedMeshData(
     renderChunkCells: chunkCells,
   }
 
-  const rowsCount = Math.max(1, Math.trunc(definition.rows))
-  const columnsCount = Math.max(1, Math.trunc(definition.columns))
+  const gridSize = resolveGroundWorkingGridSize(definition)
+  const rowsCount = gridSize.rows
+  const columnsCount = gridSize.columns
   const rowChunkCount = Math.max(1, Math.ceil(rowsCount / chunkCells))
   const columnChunkCount = Math.max(1, Math.ceil(columnsCount / chunkCells))
   const expectedChunkCount = rowChunkCount * columnChunkCount

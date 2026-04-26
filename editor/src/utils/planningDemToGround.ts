@@ -6,6 +6,8 @@ import {
   resolveGroundEditCellSize,
   resolveGroundEditTileResolution,
   resolveGroundEditTileSizeMeters,
+  resolveGroundWorkingGridSize,
+  resolveGroundWorkingSpanMeters,
   type GroundPlanningMetadata,
 } from '@schema'
 import type { PlanningTerrainDemData } from '@/types/planning-scene-data'
@@ -118,7 +120,7 @@ function buildPlanningDemRegionFromPreparedSource(options: {
 }
 
 export function buildPlanningDemLocalEditTilesForRegion(options: {
-  definition: Pick<GroundRuntimeDynamicMesh, 'width' | 'depth' | 'editTileSizeMeters' | 'tileSizeMeters' | 'editTileResolution' | 'tileResolution' | 'cellSize'>
+  definition: GroundRuntimeDynamicMesh
   source: PlanningDemRasterSource
   startRow: number
   endRow: number
@@ -131,23 +133,22 @@ export function buildPlanningDemLocalEditTilesForRegion(options: {
     return null
   }
   const cellSize = Number.isFinite(options.definition.cellSize) && options.definition.cellSize > 0 ? options.definition.cellSize : 1
-  const halfWidth = options.definition.width * 0.5
-  const halfDepth = options.definition.depth * 0.5
-  const minX = -halfWidth + options.startColumn * cellSize
-  const maxX = -halfWidth + options.endColumn * cellSize
-  const minZ = -halfDepth + options.startRow * cellSize
-  const maxZ = -halfDepth + options.endRow * cellSize
-  const startTileColumn = Math.max(0, Math.floor((minX + halfWidth) / tileSizeMeters))
-  const endTileColumn = Math.max(startTileColumn, Math.floor((maxX + halfWidth) / tileSizeMeters))
-  const startTileRow = Math.max(0, Math.floor((minZ + halfDepth) / tileSizeMeters))
-  const endTileRow = Math.max(startTileRow, Math.floor((maxZ + halfDepth) / tileSizeMeters))
+  const halfSpan = resolveGroundWorkingSpanMeters(options.definition) * 0.5
+  const minX = -halfSpan + options.startColumn * cellSize
+  const maxX = -halfSpan + options.endColumn * cellSize
+  const minZ = -halfSpan + options.startRow * cellSize
+  const maxZ = -halfSpan + options.endRow * cellSize
+  const startTileColumn = Math.max(0, Math.floor((minX + halfSpan) / tileSizeMeters))
+  const endTileColumn = Math.max(startTileColumn, Math.floor((maxX + halfSpan) / tileSizeMeters))
+  const startTileRow = Math.max(0, Math.floor((minZ + halfSpan) / tileSizeMeters))
+  const endTileRow = Math.max(startTileRow, Math.floor((maxZ + halfSpan) / tileSizeMeters))
   const result: GroundLocalEditTileMap = {}
 
   for (let tileRow = startTileRow; tileRow <= endTileRow; tileRow += 1) {
     for (let tileColumn = startTileColumn; tileColumn <= endTileColumn; tileColumn += 1) {
       const key = formatGroundLocalEditTileKey(tileRow, tileColumn)
-      const tileMinX = -halfWidth + tileColumn * tileSizeMeters
-      const tileMinZ = -halfDepth + tileRow * tileSizeMeters
+      const tileMinX = -halfSpan + tileColumn * tileSizeMeters
+      const tileMinZ = -halfSpan + tileRow * tileSizeMeters
       const values = new Array<number>((resolution + 1) * (resolution + 1))
       for (let row = 0; row <= resolution; row += 1) {
         const z = tileMinZ + (row / resolution) * tileSizeMeters
@@ -262,8 +263,9 @@ async function resolvePlanningDemPreparedSource(options: {
 
   const demWidth = parsed.width
   const demHeight = parsed.height
-  const targetRows = Math.max(1, Math.trunc(definition.rows))
-  const targetColumns = Math.max(1, Math.trunc(definition.columns))
+  const gridSize = resolveGroundWorkingGridSize(definition)
+  const targetRows = Math.max(1, Math.trunc(gridSize.rows))
+  const targetColumns = Math.max(1, Math.trunc(gridSize.columns))
   const targetCellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
   const localEditCellSize = resolveGroundEditCellSize(definition)
   const localEditTileSizeMeters = resolveGroundEditTileSizeMeters(definition)
@@ -327,15 +329,14 @@ async function resolvePlanningDemPreparedSource(options: {
 }
 
 export function resolvePlanningDemTargetWorldBounds(
-  definition: Pick<GroundRuntimeDynamicMesh, 'width' | 'depth'>,
+  definition: GroundRuntimeDynamicMesh,
 ): PlanningDemTargetWorldBounds {
-  const width = Number.isFinite(definition.width) && definition.width > 0 ? definition.width : 1
-  const depth = Number.isFinite(definition.depth) && definition.depth > 0 ? definition.depth : 1
+  const span = resolveGroundWorkingSpanMeters(definition)
   return {
-    minX: -width * 0.5,
-    minZ: -depth * 0.5,
-    maxX: width * 0.5,
-    maxZ: depth * 0.5,
+    minX: -span * 0.5,
+    minZ: -span * 0.5,
+    maxX: span * 0.5,
+    maxZ: span * 0.5,
   }
 }
 
@@ -343,7 +344,7 @@ export function createPlanningDemRasterSource(options: {
   rasterData: ArrayLike<number>
   width: number
   height: number
-  definition: Pick<GroundRuntimeDynamicMesh, 'width' | 'depth'>
+  definition: GroundRuntimeDynamicMesh
 }): PlanningDemRasterSource {
   return {
     rasterData: options.rasterData,
@@ -368,7 +369,7 @@ export function samplePlanningDemHeightAtWorld(
 }
 
 export function buildPlanningDemHeightRegion(options: {
-  definition: Pick<GroundRuntimeDynamicMesh, 'width' | 'depth' | 'rows' | 'columns' | 'cellSize'>
+  definition: GroundRuntimeDynamicMesh
   source: PlanningDemRasterSource
   startRow: number
   endRow: number
@@ -376,8 +377,9 @@ export function buildPlanningDemHeightRegion(options: {
   endColumn: number
 }): PlanningDemHeightRegion {
   const { definition, source } = options
-  const rows = Math.max(1, Math.trunc(definition.rows))
-  const columns = Math.max(1, Math.trunc(definition.columns))
+  const gridSize = resolveGroundWorkingGridSize(definition)
+  const rows = Math.max(1, Math.trunc(gridSize.rows))
+  const columns = Math.max(1, Math.trunc(gridSize.columns))
   const startRow = Math.max(0, Math.min(rows, Math.trunc(options.startRow)))
   const endRow = Math.max(startRow, Math.min(rows, Math.trunc(options.endRow)))
   const startColumn = Math.max(0, Math.min(columns, Math.trunc(options.startColumn)))
@@ -386,14 +388,13 @@ export function buildPlanningDemHeightRegion(options: {
   const vertexColumns = endColumn - startColumn + 1
   const values = new Float64Array(vertexRows * vertexColumns)
   const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
-  const halfWidth = (Number.isFinite(definition.width) && definition.width > 0 ? definition.width : columns * cellSize) * 0.5
-  const halfDepth = (Number.isFinite(definition.depth) && definition.depth > 0 ? definition.depth : rows * cellSize) * 0.5
+  const halfSpan = resolveGroundWorkingSpanMeters(definition) * 0.5
 
   for (let row = startRow; row <= endRow; row += 1) {
-    const z = -halfDepth + row * cellSize
+    const z = -halfSpan + row * cellSize
     const targetRowOffset = (row - startRow) * vertexColumns
     for (let column = startColumn; column <= endColumn; column += 1) {
-      const x = -halfWidth + column * cellSize
+      const x = -halfSpan + column * cellSize
       const sampled = samplePlanningDemHeightAtWorld(source, x, z)
       values[targetRowOffset + (column - startColumn)] = Number.isFinite(sampled) ? sampled : 0
     }
@@ -411,7 +412,7 @@ export function buildPlanningDemHeightRegion(options: {
 }
 
 export function buildPlanningDemTileHeightRegion(options: {
-  definition: Pick<GroundRuntimeDynamicMesh, 'width' | 'depth' | 'rows' | 'columns' | 'cellSize'>
+  definition: GroundRuntimeDynamicMesh
   source: PlanningDemRasterSource
   tileLayout: PlanningDemSourceTileLayout
   tileRow: number
@@ -420,8 +421,9 @@ export function buildPlanningDemTileHeightRegion(options: {
   const { definition, source, tileLayout } = options
   const normalizedTileRow = Math.max(0, Math.min(tileLayout.tileRows - 1, Math.trunc(options.tileRow)))
   const normalizedTileColumn = Math.max(0, Math.min(tileLayout.tileColumns - 1, Math.trunc(options.tileColumn)))
-  const rows = Math.max(1, Math.trunc(definition.rows))
-  const columns = Math.max(1, Math.trunc(definition.columns))
+  const gridSize = resolveGroundWorkingGridSize(definition)
+  const rows = Math.max(1, Math.trunc(gridSize.rows))
+  const columns = Math.max(1, Math.trunc(gridSize.columns))
   const startRow = Math.max(0, Math.floor((normalizedTileRow / tileLayout.tileRows) * rows))
   const endRow = normalizedTileRow === tileLayout.tileRows - 1
     ? rows
@@ -513,7 +515,7 @@ export async function buildPlanningDemGroundTileData(options: {
 }
 
 export function resolvePlanningDemSourceTileLayout(options: {
-  definition: Pick<GroundRuntimeDynamicMesh, 'width' | 'depth' | 'editTileSizeMeters' | 'tileSizeMeters' | 'editTileResolution' | 'tileResolution' | 'cellSize'>
+  definition: GroundRuntimeDynamicMesh
   demWidth: number
   demHeight: number
   worldBounds: { minX: number; minY: number; maxX: number; maxY: number } | null
@@ -521,8 +523,9 @@ export function resolvePlanningDemSourceTileLayout(options: {
   const { definition, demWidth, demHeight, worldBounds } = options
   const localEditCellSize = resolveGroundEditCellSize(definition)
   const localEditTileSizeMeters = resolveGroundEditTileSizeMeters(definition)
-  const worldWidth = worldBounds ? Math.abs(worldBounds.maxX - worldBounds.minX) : Math.max(localEditTileSizeMeters, definition.width)
-  const worldHeight = worldBounds ? Math.abs(worldBounds.maxY - worldBounds.minY) : Math.max(localEditTileSizeMeters, definition.depth)
+  const worldSpan = resolveGroundWorkingSpanMeters(definition)
+  const worldWidth = worldBounds ? Math.abs(worldBounds.maxX - worldBounds.minX) : Math.max(localEditTileSizeMeters, worldSpan)
+  const worldHeight = worldBounds ? Math.abs(worldBounds.maxY - worldBounds.minY) : Math.max(localEditTileSizeMeters, worldSpan)
   const tileColumns = Math.max(1, Math.ceil(worldWidth / Math.max(localEditTileSizeMeters, Number.EPSILON)))
   const tileRows = Math.max(1, Math.ceil(worldHeight / Math.max(localEditTileSizeMeters, Number.EPSILON)))
   const tileWorldWidth = worldWidth / tileColumns
@@ -549,8 +552,9 @@ export async function buildPlanningDemGroundData(options: {
   applyOrthophoto?: boolean
 }): Promise<PlanningDemGroundConversionResult> {
   const { definition, terrainDem } = options
-  const rows = Math.max(1, Math.trunc(definition.rows))
-  const columns = Math.max(1, Math.trunc(definition.columns))
+  const gridSize = resolveGroundWorkingGridSize(definition)
+  const rows = Math.max(1, Math.trunc(gridSize.rows))
+  const columns = Math.max(1, Math.trunc(gridSize.columns))
   const heightMap = createGroundHeightMap(rows, columns)
   const prepared = await resolvePlanningDemPreparedSource({ definition, terrainDem })
   const fullRegionResult = buildPlanningDemRegionFromPreparedSource({

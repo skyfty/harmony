@@ -1848,14 +1848,6 @@ export interface GroundDynamicMesh {
   collisionRadiusChunks?: number
   /** Monotonic revision for the infinite terrain chunk manifest. */
   chunkManifestRevision?: number
-  /** @deprecated Infinite terrain no longer uses a fixed scene-wide ground width. */
-  width: number
-  /** @deprecated Infinite terrain no longer uses a fixed scene-wide ground depth. */
-  depth: number
-  /** @deprecated Infinite terrain no longer uses a fixed scene-wide row count. */
-  rows: number
-  /** @deprecated Infinite terrain no longer uses a fixed scene-wide column count. */
-  columns: number
   cellSize: number
   storageMode?: 'full' | 'tiled'
   tileSizeMeters?: number
@@ -1935,6 +1927,44 @@ export type GroundRuntimeDynamicMesh = GroundDynamicMesh & {
   /** Runtime-only guard to bypass optimized streamed chunk geometry when sidecar/runtime overrides are active. */
   runtimeDisableOptimizedChunks?: boolean
   runtimeLoadedTileKeys?: string[]
+  runtimeManualHeightOverrideCount?: number
+  runtimePlanningHeightOverrideCount?: number
+}
+
+function clampPositiveGroundMetric(value: number | null | undefined, fallback: number): number {
+  const numeric = Number(value)
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : fallback
+}
+
+function resolveGroundChunkWindowRadiusMeters(definition: Pick<GroundDynamicMesh, 'chunkSizeMeters' | 'renderRadiusChunks' | 'collisionRadiusChunks'>): number {
+  const chunkSizeMeters = clampPositiveGroundMetric(definition.chunkSizeMeters, GROUND_TERRAIN_CHUNK_SIZE_METERS)
+  const radiusChunks = Math.max(
+    1,
+    Math.trunc(
+      Number.isFinite(definition.renderRadiusChunks) && definition.renderRadiusChunks! > 0
+        ? definition.renderRadiusChunks!
+        : definition.collisionRadiusChunks ?? 0,
+    ),
+  )
+  return chunkSizeMeters * radiusChunks
+}
+
+export function resolveGroundWorkingSpanMeters(
+  definition: Pick<GroundDynamicMesh, 'chunkSizeMeters' | 'renderRadiusChunks' | 'collisionRadiusChunks'>,
+): number {
+  return Math.max(GROUND_TERRAIN_CHUNK_SIZE_METERS, resolveGroundChunkWindowRadiusMeters(definition) * 2)
+}
+
+export function resolveGroundWorkingGridSize(
+  definition: Pick<GroundDynamicMesh, 'cellSize' | 'chunkSizeMeters' | 'renderRadiusChunks' | 'collisionRadiusChunks'>,
+): { rows: number; columns: number } {
+  const cellSize = clampPositiveGroundMetric(definition.cellSize, 1)
+  const spanMeters = resolveGroundWorkingSpanMeters(definition)
+  const count = Math.max(1, Math.round(spanMeters / cellSize))
+  return {
+    rows: count,
+    columns: count,
+  }
 }
 
 export type GroundOptimizedMeshData = {
@@ -1989,10 +2019,6 @@ export type GroundTerrainPackageManifest = {
   version: typeof GROUND_TERRAIN_PACKAGE_VERSION
   scenePath: string
   storageMode: 'tiled'
-  width: number
-  depth: number
-  rows: number
-  columns: number
   cellSize: number
   tileSizeMeters: number
   tileResolution: number

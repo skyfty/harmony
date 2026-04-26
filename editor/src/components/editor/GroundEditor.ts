@@ -9,7 +9,12 @@ import type {
 	SceneNode,
 	Vector3Like,
 } from '@schema'
-import { resolveGroundChunkCoordFromWorldPosition, resolveGroundEditCellSize } from '@schema'
+import {
+	resolveGroundChunkCoordFromWorldPosition,
+	resolveGroundEditCellSize,
+	resolveGroundWorkingGridSize,
+	resolveGroundWorkingSpanMeters,
+} from '@schema'
 import {
 	deleteTerrainScatterStore,
 	ensureTerrainScatterStore,
@@ -565,13 +570,15 @@ function resolvePaintChunkBounds(
 	chunkRow: number,
 	chunkColumn: number,
 ): TerrainPaintChunkBounds | null {
-	const halfWidth = definition.width * 0.5
-	const halfDepth = definition.depth * 0.5
+	const spanMeters = resolveGroundWorkingSpanMeters(definition)
+	const halfWidth = spanMeters * 0.5
+	const halfDepth = spanMeters * 0.5
 	const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
 	const startColumn = chunkColumn * Math.max(1, chunkCells)
 	const startRow = chunkRow * Math.max(1, chunkCells)
-	const effectiveColumns = Math.max(0, Math.min(chunkCells, Math.max(0, definition.columns - startColumn)))
-	const effectiveRows = Math.max(0, Math.min(chunkCells, Math.max(0, definition.rows - startRow)))
+	const gridSize = resolveGroundWorkingGridSize(definition)
+	const effectiveColumns = Math.max(0, Math.min(chunkCells, Math.max(0, gridSize.columns - startColumn)))
+	const effectiveRows = Math.max(0, Math.min(chunkCells, Math.max(0, gridSize.rows - startRow)))
 	const width = effectiveColumns * cellSize
 	const depth = effectiveRows * cellSize
 	if (!(width > 0) || !(depth > 0)) {
@@ -888,8 +895,9 @@ function collectPaintChunksOverlappedByBrush(
 		return []
 	}
 	const chunkCellCount = Math.max(1, Math.round(chunkCells))
-	const halfWidth = definition.width * 0.5
-	const halfDepth = definition.depth * 0.5
+	const spanMeters = resolveGroundWorkingSpanMeters(definition)
+	const halfWidth = spanMeters * 0.5
+	const halfDepth = spanMeters * 0.5
 	const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
 	const r2 = radius * radius
 
@@ -898,10 +906,11 @@ function collectPaintChunksOverlappedByBrush(
 	const minRowUnclamped = Math.floor((localZ - radius + halfDepth) / cellSize)
 	const maxRowUnclamped = Math.ceil((localZ + radius + halfDepth) / cellSize)
 
-	const minColumn = THREE.MathUtils.clamp(minColumnUnclamped, 0, Math.max(0, definition.columns - 1))
-	const maxColumn = THREE.MathUtils.clamp(maxColumnUnclamped, 0, Math.max(0, definition.columns - 1))
-	const minRow = THREE.MathUtils.clamp(minRowUnclamped, 0, Math.max(0, definition.rows - 1))
-	const maxRow = THREE.MathUtils.clamp(maxRowUnclamped, 0, Math.max(0, definition.rows - 1))
+	const gridSize = resolveGroundWorkingGridSize(definition)
+	const minColumn = THREE.MathUtils.clamp(minColumnUnclamped, 0, Math.max(0, gridSize.columns - 1))
+	const maxColumn = THREE.MathUtils.clamp(maxColumnUnclamped, 0, Math.max(0, gridSize.columns - 1))
+	const minRow = THREE.MathUtils.clamp(minRowUnclamped, 0, Math.max(0, gridSize.rows - 1))
+	const maxRow = THREE.MathUtils.clamp(maxRowUnclamped, 0, Math.max(0, gridSize.rows - 1))
 
 	const minChunkColumn = Math.floor(minColumn / chunkCellCount)
 	const maxChunkColumn = Math.floor(maxColumn / chunkCellCount)
@@ -954,13 +963,15 @@ function getScatterChunkKeyFromLocal(
 	localX: number,
 	localZ: number,
 ): { key: string; chunkRow: number; chunkColumn: number } {
-	const halfWidth = definition.width * 0.5
-	const halfDepth = definition.depth * 0.5
+	const spanMeters = resolveGroundWorkingSpanMeters(definition)
+	const halfWidth = spanMeters * 0.5
+	const halfDepth = spanMeters * 0.5
 	const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
 	const normalizedColumn = (localX + halfWidth) / cellSize
 	const normalizedRow = (localZ + halfDepth) / cellSize
-	const column = THREE.MathUtils.clamp(Math.floor(normalizedColumn), 0, Math.max(0, definition.columns - 1))
-	const row = THREE.MathUtils.clamp(Math.floor(normalizedRow), 0, Math.max(0, definition.rows - 1))
+	const gridSize = resolveGroundWorkingGridSize(definition)
+	const column = THREE.MathUtils.clamp(Math.floor(normalizedColumn), 0, Math.max(0, gridSize.columns - 1))
+	const row = THREE.MathUtils.clamp(Math.floor(normalizedRow), 0, Math.max(0, gridSize.rows - 1))
 	const chunkRow = Math.floor(row / Math.max(1, chunkCells))
 	const chunkColumn = Math.floor(column / Math.max(1, chunkCells))
 	return { key: `${chunkRow}:${chunkColumn}`, chunkRow, chunkColumn }
@@ -969,9 +980,8 @@ function getScatterChunkKeyFromLocal(
 const DEFAULT_SCATTER_CHUNK_RADIUS_METERS = 200
 
 function resolveScatterChunkStreamingRadiusMeters(definition: GroundDynamicMesh): number {
-	const width = Number.isFinite(definition.width) ? definition.width : 0
-	const depth = Number.isFinite(definition.depth) ? definition.depth : 0
-	const halfDiagonal = Math.sqrt(Math.max(0, width) ** 2 + Math.max(0, depth) ** 2) * 0.5
+	const spanMeters = resolveGroundWorkingSpanMeters(definition)
+	const halfDiagonal = Math.sqrt(Math.max(0, spanMeters) ** 2 + Math.max(0, spanMeters) ** 2) * 0.5
 	return Math.max(80, Math.min(2000, Math.min(DEFAULT_SCATTER_CHUNK_RADIUS_METERS, halfDiagonal)))
 }
 
@@ -988,8 +998,9 @@ function computeScatterChunkKeysInRadius(
 	}
 
 	const chunkCellCount = Math.max(1, Math.round(chunkCells))
-	const halfWidth = definition.width * 0.5
-	const halfDepth = definition.depth * 0.5
+	const spanMeters = resolveGroundWorkingSpanMeters(definition)
+	const halfWidth = spanMeters * 0.5
+	const halfDepth = spanMeters * 0.5
 	const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
 
 	const minColumnUnclamped = Math.floor((localX - effectiveRadius + halfWidth) / cellSize)
@@ -997,10 +1008,11 @@ function computeScatterChunkKeysInRadius(
 	const minRowUnclamped = Math.floor((localZ - effectiveRadius + halfDepth) / cellSize)
 	const maxRowUnclamped = Math.ceil((localZ + effectiveRadius + halfDepth) / cellSize)
 
-	const minColumn = THREE.MathUtils.clamp(minColumnUnclamped, 0, Math.max(0, definition.columns - 1))
-	const maxColumn = THREE.MathUtils.clamp(maxColumnUnclamped, 0, Math.max(0, definition.columns - 1))
-	const minRow = THREE.MathUtils.clamp(minRowUnclamped, 0, Math.max(0, definition.rows - 1))
-	const maxRow = THREE.MathUtils.clamp(maxRowUnclamped, 0, Math.max(0, definition.rows - 1))
+	const gridSize = resolveGroundWorkingGridSize(definition)
+	const minColumn = THREE.MathUtils.clamp(minColumnUnclamped, 0, Math.max(0, gridSize.columns - 1))
+	const maxColumn = THREE.MathUtils.clamp(maxColumnUnclamped, 0, Math.max(0, gridSize.columns - 1))
+	const minRow = THREE.MathUtils.clamp(minRowUnclamped, 0, Math.max(0, gridSize.rows - 1))
+	const maxRow = THREE.MathUtils.clamp(maxRowUnclamped, 0, Math.max(0, gridSize.rows - 1))
 
 	const minChunkColumn = Math.floor(minColumn / chunkCellCount)
 	const maxChunkColumn = Math.floor(maxColumn / chunkCellCount)
@@ -1862,8 +1874,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (definition.terrainMode === 'infinite') {
 			return Number.isFinite(groundLocalVertexHelper.x) && Number.isFinite(groundLocalVertexHelper.z)
 		}
-		const halfWidth = definition.width * 0.5
-		const halfDepth = definition.depth * 0.5
+		const spanMeters = resolveGroundWorkingSpanMeters(definition)
+		const halfWidth = spanMeters * 0.5
+		const halfDepth = spanMeters * 0.5
 		return (
 			Number.isFinite(groundLocalVertexHelper.x) &&
 			Number.isFinite(groundLocalVertexHelper.z) &&
@@ -3986,10 +3999,11 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		const safeRadiusSq = Math.max(radiusSq, 1e-6)
 		const pixelWidth = bounds.width / res
 		const pixelDepth = bounds.depth / res
-		const definitionWidth = Math.max(definition.width, 1e-6)
-		const definitionDepth = Math.max(definition.depth, 1e-6)
-		const halfWidth = definition.width * 0.5
-		const halfDepth = definition.depth * 0.5
+		const spanMeters = Math.max(resolveGroundWorkingSpanMeters(definition), 1e-6)
+		const definitionWidth = spanMeters
+		const definitionDepth = spanMeters
+		const halfWidth = spanMeters * 0.5
+		const halfDepth = spanMeters * 0.5
 		const invDefinitionWidth = 1 / definitionWidth
 		const invDefinitionDepth = 1 / definitionDepth
 		const invLocalBrushWidth = 1 / Math.max(radiusX * 2, 1e-6)
@@ -4411,13 +4425,15 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			minZ = Math.min(minZ, point.z)
 			maxZ = Math.max(maxZ, point.z)
 		}
-		const halfWidth = session.definition.width * 0.5
-		const halfDepth = session.definition.depth * 0.5
+		const spanMeters = resolveGroundWorkingSpanMeters(session.definition)
+		const halfWidth = spanMeters * 0.5
+		const halfDepth = spanMeters * 0.5
+		const gridSize = resolveGroundWorkingGridSize(session.definition)
 		const region: GroundGeometryUpdateRegion = {
 			minRow: Math.max(0, Math.floor((minZ + halfDepth) / session.definition.cellSize)),
-			maxRow: Math.min(session.definition.rows, Math.ceil((maxZ + halfDepth) / session.definition.cellSize)),
+			maxRow: Math.min(gridSize.rows, Math.ceil((maxZ + halfDepth) / session.definition.cellSize)),
 			minColumn: Math.max(0, Math.floor((minX + halfWidth) / session.definition.cellSize)),
-			maxColumn: Math.min(session.definition.columns, Math.ceil((maxX + halfWidth) / session.definition.cellSize)),
+			maxColumn: Math.min(gridSize.columns, Math.ceil((maxX + halfWidth) / session.definition.cellSize)),
 		}
 		if (sculptSessionState && sculptSessionState.nodeId === session.nodeId) {
 			sculptSessionState.dirty = true
@@ -4432,9 +4448,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			: 2
 		const padded: GroundGeometryUpdateRegion = {
 			minRow: Math.max(0, region.minRow - seamPaddingCells),
-			maxRow: Math.min(session.definition.rows, region.maxRow + seamPaddingCells),
+			maxRow: Math.min(gridSize.rows, region.maxRow + seamPaddingCells),
 			minColumn: Math.max(0, region.minColumn - seamPaddingCells),
-			maxColumn: Math.min(session.definition.columns, region.maxColumn + seamPaddingCells),
+			maxColumn: Math.min(gridSize.columns, region.maxColumn + seamPaddingCells),
 		}
 		stitchGroundChunkNormals(session.groundObject, session.definition, padded, touchedChunkKeys)
 		if (session.definition.terrainMode === 'infinite') {
@@ -4526,20 +4542,23 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (definition.terrainMode === 'infinite') {
 			return point
 		}
-		const halfWidth = definition.width * 0.5
-		const halfDepth = definition.depth * 0.5
+		const spanMeters = resolveGroundWorkingSpanMeters(definition)
+		const halfWidth = spanMeters * 0.5
+		const halfDepth = spanMeters * 0.5
 		point.x = THREE.MathUtils.clamp(point.x, -halfWidth, halfWidth)
 		point.z = THREE.MathUtils.clamp(point.z, -halfDepth, halfDepth)
 		return point
 	}
 
 	function getGroundCellFromPoint(definition: GroundDynamicMesh, point: THREE.Vector3): { row: number; column: number } {
-		const halfWidth = definition.width * 0.5
-		const halfDepth = definition.depth * 0.5
+		const spanMeters = resolveGroundWorkingSpanMeters(definition)
+		const halfWidth = spanMeters * 0.5
+		const halfDepth = spanMeters * 0.5
 		const normalizedColumn = (point.x + halfWidth) / definition.cellSize
 		const normalizedRow = (point.z + halfDepth) / definition.cellSize
-		const column = THREE.MathUtils.clamp(Math.floor(normalizedColumn), 0, Math.max(0, definition.columns - 1))
-		const row = THREE.MathUtils.clamp(Math.floor(normalizedRow), 0, Math.max(0, definition.rows - 1))
+		const gridSize = resolveGroundWorkingGridSize(definition)
+		const column = THREE.MathUtils.clamp(Math.floor(normalizedColumn), 0, Math.max(0, gridSize.columns - 1))
+		const row = THREE.MathUtils.clamp(Math.floor(normalizedRow), 0, Math.max(0, gridSize.rows - 1))
 		return { row, column }
 	}
 
@@ -4634,8 +4653,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return null
 		}
 		if (definition.terrainMode !== 'infinite') {
-			const halfWidth = definition.width * 0.5
-			const halfDepth = definition.depth * 0.5
+			const spanMeters = resolveGroundWorkingSpanMeters(definition)
+			const halfWidth = spanMeters * 0.5
+			const halfDepth = spanMeters * 0.5
 			if (
 				localPoint.x < -halfWidth ||
 				localPoint.x > halfWidth ||
@@ -6695,8 +6715,10 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		const minColumn = Math.min(start.column, end.column)
 		const maxColumn = Math.max(start.column, end.column)
 
-		const halfWidth = definition.width * 0.5
-		const halfDepth = definition.depth * 0.5
+		const spanMeters = resolveGroundWorkingSpanMeters(definition)
+		const halfWidth = spanMeters * 0.5
+		const halfDepth = spanMeters * 0.5
+		const gridSize = resolveGroundWorkingGridSize(definition)
 		const cellSize = definition.cellSize
 
 		const minX = -halfWidth + minColumn * cellSize
@@ -6705,9 +6727,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		const maxZ = -halfDepth + (maxRow + 1) * cellSize
 
 		const vertexMinRow = minRow
-		const vertexMaxRow = Math.min(definition.rows, maxRow + 1)
+		const vertexMaxRow = Math.min(gridSize.rows, maxRow + 1)
 		const vertexMinColumn = minColumn
-		const vertexMaxColumn = Math.min(definition.columns, maxColumn + 1)
+		const vertexMaxColumn = Math.min(gridSize.columns, maxColumn + 1)
 
 		const heights = [
 			getGroundVertexHeight(definition, vertexMinRow, vertexMinColumn),
@@ -6729,11 +6751,12 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function cellSelectionToVertexBounds(selection: GroundCellSelection, definition: GroundDynamicMesh) {
+		const gridSize = resolveGroundWorkingGridSize(definition)
 		return {
 			minRow: selection.minRow,
-			maxRow: Math.min(definition.rows, selection.maxRow + 1),
+			maxRow: Math.min(gridSize.rows, selection.maxRow + 1),
 			minColumn: selection.minColumn,
-			maxColumn: Math.min(definition.columns, selection.maxColumn + 1),
+			maxColumn: Math.min(gridSize.columns, selection.maxColumn + 1),
 		}
 	}
 
@@ -6745,8 +6768,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return
 		}
 
-		const halfWidth = definition.width * 0.5
-		const halfDepth = definition.depth * 0.5
+		const spanMeters = resolveGroundWorkingSpanMeters(definition)
+		const halfWidth = spanMeters * 0.5
+		const halfDepth = spanMeters * 0.5
 		const cellSize = definition.cellSize
 
 		const minX = -halfWidth + selection.minColumn * cellSize
@@ -7015,17 +7039,19 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 			if (modified) {
 				anyModified = true
-				const halfWidth = definition.width * 0.5
-				const halfDepth = definition.depth * 0.5
+				const spanMeters = resolveGroundWorkingSpanMeters(definition)
+				const halfWidth = spanMeters * 0.5
+				const halfDepth = spanMeters * 0.5
 				const minColumn = Math.floor((point.x - radius + halfWidth) / cellSize)
 				const maxColumn = Math.ceil((point.x + radius + halfWidth) / cellSize)
 				const minRow = Math.floor((point.z - radius + halfDepth) / cellSize)
 				const maxRow = Math.ceil((point.z + radius + halfDepth) / cellSize)
+				const gridSize = resolveGroundWorkingGridSize(definition)
 				const region: GroundGeometryUpdateRegion = {
 					minRow: Math.max(0, minRow),
-					maxRow: Math.min(definition.rows, maxRow),
+					maxRow: Math.min(gridSize.rows, maxRow),
 					minColumn: Math.max(0, minColumn),
-					maxColumn: Math.min(definition.columns, maxColumn),
+					maxColumn: Math.min(gridSize.columns, maxColumn),
 				}
 				mergedRegion = mergeRegions(mergedRegion, region)
 				markSculptSessionTouchedChunkKeys(sculptSessionState, {
@@ -7048,14 +7074,15 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			sculptSessionState.dirty = true
 		}
 		const touchedChunkKeys = sculptSessionState?.nodeId === groundNode.id ? sculptSessionState.touchedChunkKeys : null
+		const gridSize = resolveGroundWorkingGridSize(definition)
 		ensureGroundChunkMeshesForKeys(groundObject, definition, touchedChunkKeys)
 		updateGroundMeshRegion(groundObject, definition, mergedRegion, { touchedChunkKeys })
 		// Stitch normals across chunk boundaries to prevent visible seams.
 		const padded: GroundGeometryUpdateRegion = {
 			minRow: Math.max(0, mergedRegion.minRow - 2),
-			maxRow: Math.min(definition.rows, mergedRegion.maxRow + 2),
+			maxRow: Math.min(gridSize.rows, mergedRegion.maxRow + 2),
 			minColumn: Math.max(0, mergedRegion.minColumn - 2),
-			maxColumn: Math.min(definition.columns, mergedRegion.maxColumn + 2),
+			maxColumn: Math.min(gridSize.columns, mergedRegion.maxColumn + 2),
 		}
 		stitchGroundChunkNormals(groundObject, definition, padded, touchedChunkKeys)
 		if (definition.terrainMode === 'infinite') {

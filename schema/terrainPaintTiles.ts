@@ -1,11 +1,11 @@
 import { resolveGroundChunkCells } from './groundMesh'
+import { resolveGroundWorkingGridSize, resolveGroundWorkingSpanMeters } from './index'
 
 type TerrainPaintGroundDefinition = {
   cellSize: number
-  width: number
-  depth: number
-  rows: number
-  columns: number
+  chunkSizeMeters?: number
+  renderRadiusChunks?: number
+  collisionRadiusChunks?: number
 }
 
 export type TerrainPaintChunkKeyParts = {
@@ -85,16 +85,18 @@ export function resolveTerrainPaintChunkBounds(
   definition: TerrainPaintGroundDefinition,
   chunkRow: number,
   chunkColumn: number,
-  chunkCells = resolveGroundChunkCells(definition as Parameters<typeof resolveGroundChunkCells>[0]),
+  chunkCells = resolveGroundChunkCells(definition as unknown as Parameters<typeof resolveGroundChunkCells>[0]),
 ): TerrainPaintChunkBounds | null {
   const cellSize = clampFinite(definition.cellSize, 1)
   const normalizedChunkCells = Math.max(1, Math.trunc(chunkCells))
-  const halfWidth = clampFinite(definition.width, 0) * 0.5
-  const halfDepth = clampFinite(definition.depth, 0) * 0.5
+  const spanMeters = resolveGroundWorkingSpanMeters(definition)
+  const halfWidth = spanMeters * 0.5
+  const halfDepth = spanMeters * 0.5
   const startColumn = Math.max(0, Math.trunc(chunkColumn) * normalizedChunkCells)
   const startRow = Math.max(0, Math.trunc(chunkRow) * normalizedChunkCells)
-  const effectiveColumns = Math.max(0, Math.min(normalizedChunkCells, Math.max(0, Math.trunc(definition.columns) - startColumn)))
-  const effectiveRows = Math.max(0, Math.min(normalizedChunkCells, Math.max(0, Math.trunc(definition.rows) - startRow)))
+  const gridSize = resolveGroundWorkingGridSize(definition)
+  const effectiveColumns = Math.max(0, Math.min(normalizedChunkCells, Math.max(0, gridSize.columns - startColumn)))
+  const effectiveRows = Math.max(0, Math.min(normalizedChunkCells, Math.max(0, gridSize.rows - startRow)))
   const width = effectiveColumns * cellSize
   const depth = effectiveRows * cellSize
   if (!(width > 0) || !(depth > 0)) {

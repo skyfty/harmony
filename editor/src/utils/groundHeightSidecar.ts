@@ -3,6 +3,7 @@ import {
   type GroundDynamicMesh,
   type GroundRuntimeDynamicMesh,
   type GroundPlanningMetadata,
+  resolveGroundWorkingGridSize,
 } from '@schema'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 
@@ -28,7 +29,8 @@ export type GroundHeightSidecarSampler = {
 
 export function getGroundHeightSidecarByteLength(definition: GroundDynamicMesh): number {
   const metadataPayload = encodePlanningMetadataPayload(definition.planningMetadata ?? null)
-  return GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES + metadataPayload.byteLength + getGroundVertexCount(definition.rows, definition.columns) * Float64Array.BYTES_PER_ELEMENT * 2
+  const gridSize = resolveGroundWorkingGridSize(definition)
+  return GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES + metadataPayload.byteLength + getGroundVertexCount(gridSize.rows, gridSize.columns) * Float64Array.BYTES_PER_ELEMENT * 2
 }
 
 function normalizePlanningDemSourceMetadata(metadata: GroundPlanningMetadata['demSource']): GroundPlanningMetadata['demSource'] {
@@ -218,12 +220,13 @@ function writeGroundHeightSidecarValues(
 }
 
 export function serializeGroundHeightSidecar(definition: GroundRuntimeDynamicMesh): ArrayBuffer {
+  const gridSize = resolveGroundWorkingGridSize(definition)
   return serializeGroundHeightSidecarFromSampler({
-    rows: definition.rows,
-    columns: definition.columns,
+    rows: gridSize.rows,
+    columns: gridSize.columns,
     planningMetadata: definition.planningMetadata ?? null,
-    getManualHeight: (row, column) => definition.manualHeightMap[row * (definition.columns + 1) + column] ?? Number.NaN,
-    getPlanningHeight: (row, column) => definition.planningHeightMap[row * (definition.columns + 1) + column] ?? Number.NaN,
+    getManualHeight: (row, column) => definition.manualHeightMap[row * (gridSize.columns + 1) + column] ?? Number.NaN,
+    getPlanningHeight: (row, column) => definition.planningHeightMap[row * (gridSize.columns + 1) + column] ?? Number.NaN,
   })
 }
 
@@ -264,7 +267,8 @@ export function createGroundRuntimeMeshFromSidecar(
   definition: GroundDynamicMesh,
   sidecar: ArrayBuffer | null | undefined,
 ): GroundRuntimeDynamicMesh {
-  const vertexCount = getGroundVertexCount(definition.rows, definition.columns)
+  const gridSize = resolveGroundWorkingGridSize(definition)
+  const vertexCount = getGroundVertexCount(gridSize.rows, gridSize.columns)
   if (!sidecar) {
     throw new Error(`Missing ${GROUND_HEIGHTMAP_SIDECAR_FILENAME}`)
   }

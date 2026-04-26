@@ -16,6 +16,7 @@ import {
   parseGroundChunkKey,
   SCENE_PACKAGE_FORMAT,
   SCENE_PACKAGE_VERSION,
+  resolveGroundWorkingGridSize,
   type GroundChunkManifest,
   type GroundTerrainPackageManifest,
   type GroundTerrainPackageTileEntry,
@@ -207,10 +208,11 @@ function buildGroundTerrainPackageManifest(
   const sceneRootPath = `scenes/${encodeURIComponent(sceneId)}`
   const terrainTilesRootPath = `${sceneRootPath}/ground-tiles/`
   const collisionRootPath = `${sceneRootPath}/ground-collision/`
+  const gridSize = resolveGroundWorkingGridSize(definition)
   const tileResolution = Math.max(1, Math.round(definition.tileResolution ?? 64))
   const tiles = buildGroundTerrainTileEntries({
-    rows: definition.rows,
-    columns: definition.columns,
+    rows: gridSize.rows,
+    columns: gridSize.columns,
     tileResolution,
     terrainTilesRootPath,
     collisionRootPath,
@@ -220,10 +222,6 @@ function buildGroundTerrainPackageManifest(
     version: GROUND_TERRAIN_PACKAGE_VERSION,
     scenePath: `${sceneRootPath}/scene.bin`,
     storageMode: 'tiled',
-    width: definition.width,
-    depth: definition.depth,
-    rows: definition.rows,
-    columns: definition.columns,
     cellSize: definition.cellSize,
     tileSizeMeters: Math.max(128, Math.round(definition.tileSizeMeters ?? definition.cellSize)),
     tileResolution,

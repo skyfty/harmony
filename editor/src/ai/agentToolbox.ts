@@ -14,19 +14,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value)
 }
 
-function parseNumber(value: unknown): number | undefined {
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return value
-  }
-  if (typeof value === 'string' && value.trim().length) {
-    const numeric = Number(value)
-    if (Number.isFinite(numeric)) {
-      return numeric
-    }
-  }
-  return undefined
-}
-
 function parseBoolean(value: unknown): boolean | undefined {
   if (typeof value === 'boolean') {
     return value
@@ -54,9 +41,9 @@ function parseVector3(value: unknown): Vector3Like | undefined {
   if (!isRecord(value)) {
     return undefined
   }
-  const x = parseNumber(value.x)
-  const y = parseNumber(value.y)
-  const z = parseNumber(value.z)
+  const x = typeof value.x === 'number' && Number.isFinite(value.x) ? value.x : undefined
+  const y = typeof value.y === 'number' && Number.isFinite(value.y) ? value.y : undefined
+  const z = typeof value.z === 'number' && Number.isFinite(value.z) ? value.z : undefined
   if (x === undefined || y === undefined || z === undefined) {
     return undefined
   }
@@ -193,37 +180,6 @@ const tools: SceneAgentTool[] = [
   },
   {
     definition: {
-      name: 'set_ground_dimensions',
-      description: '调整场景地面的宽度与深度。',
-      parameters: {
-        type: 'object',
-        properties: {
-          width: { type: 'number', minimum: 0.01 },
-          depth: { type: 'number', minimum: 0.01 },
-        },
-      },
-    },
-    execute: (store, args) => {
-      const width = parseNumber(args?.width)
-      const depth = parseNumber(args?.depth)
-      if (width === undefined && depth === undefined) {
-        throw new Error('需要提供新的宽度或深度。')
-      }
-      const payload: { width?: number; depth?: number } = {}
-      if (width !== undefined && width > 0) {
-        payload.width = width
-      }
-      if (depth !== undefined && depth > 0) {
-        payload.depth = depth
-      }
-      if (!payload.width && !payload.depth) {
-        throw new Error('地面尺寸必须为正数。')
-      }
-      store.setGroundDimensions(payload)
-    },
-  },
-  {
-    definition: {
       name: 'set_viewport_grid_visible',
       description: '控制视口网格线的显示状态。',
       parameters: {
@@ -259,7 +215,7 @@ const tools: SceneAgentTool[] = [
       if (value === undefined) {
         throw new Error('需要提供布尔值以设置阴影开关。')
       }
-  store.setShadowsEnabled(value)
+      store.setShadowsEnabled(value)
     },
   },
   {
