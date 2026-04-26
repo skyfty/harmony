@@ -33,6 +33,7 @@ import {
 import {
 	ensureGroundChunkMeshesForKeys,
 	sculptGround,
+	sampleGroundEffectiveHeightRegion,
 	sampleGroundHeight,
 	resolveGroundEffectiveHeightAtVertex,
 	stitchGroundChunkNormals,
@@ -3468,6 +3469,40 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		previousGeometry?.dispose()
 	}
 
+	function sampleGroundHeightFromRegion(
+		definition: GroundDynamicMesh,
+		region: ReturnType<typeof sampleGroundEffectiveHeightRegion>,
+		x: number,
+		z: number,
+	): number {
+		const gridSize = resolveGroundWorkingGridSize(definition)
+		const spanMeters = resolveGroundWorkingSpanMeters(definition)
+		const halfWidth = spanMeters * 0.5
+		const halfDepth = spanMeters * 0.5
+		const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6
+			? definition.cellSize
+			: 1
+		const localColumnFloat = THREE.MathUtils.clamp((x + halfWidth) / cellSize, 0, gridSize.columns)
+		const localRowFloat = THREE.MathUtils.clamp((z + halfDepth) / cellSize, 0, gridSize.rows)
+		const column0 = THREE.MathUtils.clamp(Math.floor(localColumnFloat), region.minColumn, region.maxColumn)
+		const row0 = THREE.MathUtils.clamp(Math.floor(localRowFloat), region.minRow, region.maxRow)
+		const column1 = THREE.MathUtils.clamp(column0 + 1, region.minColumn, region.maxColumn)
+		const row1 = THREE.MathUtils.clamp(row0 + 1, region.minRow, region.maxRow)
+		const tx = THREE.MathUtils.clamp(localColumnFloat - column0, 0, 1)
+		const tz = THREE.MathUtils.clamp(localRowFloat - row0, 0, 1)
+		const read = (row: number, column: number): number => {
+			const offset = (row - region.minRow) * region.stride + (column - region.minColumn)
+			return region.values[offset] ?? 0
+		}
+		const h00 = read(row0, column0)
+		const h10 = read(row0, column1)
+		const h01 = read(row1, column0)
+		const h11 = read(row1, column1)
+		const hx0 = h00 + (h10 - h00) * tx
+		const hx1 = h01 + (h11 - h01) * tx
+		return hx0 + (hx1 - hx0) * tz
+	}
+
 	function conformBrushToTerrain(definition: GroundDynamicMesh, groundObject: THREE.Object3D) {
 		const geometry = brushMesh.geometry
 		const positionAttribute = geometry.getAttribute('position')
@@ -3482,6 +3517,11 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 		brushMesh.updateMatrixWorld(true)
 		groundObject.updateMatrixWorld(true)
+		const projectedLocalPoints = new Float32Array(positionAttribute.count * 2)
+		let minLocalX = Number.POSITIVE_INFINITY
+		let maxLocalX = Number.NEGATIVE_INFINITY
+		let minLocalZ = Number.POSITIVE_INFINITY
+		let maxLocalZ = Number.NEGATIVE_INFINITY
 
 		for (let index = 0; index < positionAttribute.count; index += 1) {
 			const baseIndex = index * 3
@@ -3496,9 +3536,32 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 			groundLocalVertexHelper.copy(brushWorldVertexHelper)
 			groundObject.worldToLocal(groundLocalVertexHelper)
+			projectedLocalPoints[index * 2 + 0] = groundLocalVertexHelper.x
+			projectedLocalPoints[index * 2 + 1] = groundLocalVertexHelper.z
+			minLocalX = Math.min(minLocalX, groundLocalVertexHelper.x)
+			maxLocalX = Math.max(maxLocalX, groundLocalVertexHelper.x)
+			minLocalZ = Math.min(minLocalZ, groundLocalVertexHelper.z)
+			maxLocalZ = Math.max(maxLocalZ, groundLocalVertexHelper.z)
+		}
 
-			const height = sampleGroundHeight(definition, groundLocalVertexHelper.x, groundLocalVertexHelper.z)
-			groundLocalVertexHelper.y = height
+		const spanMeters = resolveGroundWorkingSpanMeters(definition)
+		const halfWidth = spanMeters * 0.5
+		const halfDepth = spanMeters * 0.5
+		const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6
+			? definition.cellSize
+			: 1
+		const gridSize = resolveGroundWorkingGridSize(definition)
+		const minColumn = THREE.MathUtils.clamp(Math.floor((minLocalX + halfWidth) / cellSize), 0, gridSize.columns)
+		const maxColumn = THREE.MathUtils.clamp(Math.ceil((maxLocalX + halfWidth) / cellSize), 0, gridSize.columns)
+		const minRow = THREE.MathUtils.clamp(Math.floor((minLocalZ + halfDepth) / cellSize), 0, gridSize.rows)
+		const maxRow = THREE.MathUtils.clamp(Math.ceil((maxLocalZ + halfDepth) / cellSize), 0, gridSize.rows)
+		const heightRegion = sampleGroundEffectiveHeightRegion(definition, minRow, maxRow, minColumn, maxColumn)
+
+		for (let index = 0; index < positionAttribute.count; index += 1) {
+			const localX = projectedLocalPoints[index * 2 + 0] ?? 0
+			const localZ = projectedLocalPoints[index * 2 + 1] ?? 0
+			const height = sampleGroundHeightFromRegion(definition, heightRegion, localX, localZ)
+			groundLocalVertexHelper.set(localX, height, localZ)
 
 			groundWorldVertexHelper.copy(groundLocalVertexHelper)
 			groundObject.localToWorld(groundWorldVertexHelper)
@@ -4369,21 +4432,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		definition: GroundRuntimeDynamicMesh,
 		groundObject: THREE.Object3D,
 	): THREE.Vector3 | null {
-		const camera = options.getCamera()
-		if (!camera || !options.canvasRef.value) {
-			return null
-		}
-		const rect = options.canvasRef.value.getBoundingClientRect()
-		if (rect.width === 0 || rect.height === 0) {
-			return null
-		}
-		options.pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
-		options.pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
-		options.raycaster.setFromCamera(options.pointer, camera)
-		const hit = options.raycaster.intersectObject(groundObject, true)[0] ?? null
-		if (hit?.point) {
-			return hit.point.clone()
-		}
 		if (!raycastGroundPoint(event, groundPointerHelper)) {
 			return null
 		}
@@ -6956,9 +7004,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return
 		}
 
-		const x = ((event.clientX - rect.left) / rect.width) * 2 - 1
-		const y = -((event.clientY - rect.top) / rect.height) * 2 + 1
-
 		const groundNode = getGroundNodeFromScene()
 		if (groundNode?.dynamicMesh?.type !== 'Ground') {
 			brushMesh.visible = false
@@ -6993,25 +7038,22 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		}
 		lastBrushUpdateSignature = brushUpdateSignature
 
-		options.pointer.set(x, y)
-		options.raycaster.setFromCamera(options.pointer, camera)
-		const intersects = options.raycaster.intersectObject(groundObject, true)
-		const hit = intersects[0]
-		if (hit) {
+		const targetPoint = resolveGroundSurfacePointFromEvent(event, definition, groundObject)
+		if (targetPoint) {
 			if (options.groundPanelTab.value === 'terrain' && getActiveBrushShape() === 'polygon' && !scatterModeEnabled()) {
 				brushMesh.visible = false
 				return
 			}
-			let targetPoint = hit.point.clone()
+			let brushTargetPoint = targetPoint
 			if (scatterModeEnabled()) {
 				const snapped = resolveScatterPointFromEvent(event, definition, groundObject)
 				if (!snapped) {
 					brushMesh.visible = false
 					return
 				}
-				targetPoint = snapped
+				brushTargetPoint = snapped
 			}
-			brushMesh.position.copy(targetPoint)
+			brushMesh.position.copy(brushTargetPoint)
 			brushMesh.rotation.set(-Math.PI / 2, 0, 0)
 			if (options.scatterEraseModeActive.value) {
 				const scale = resolveScatterEraseRadius()

@@ -1922,6 +1922,20 @@ export type GroundRuntimeDynamicMesh = GroundDynamicMesh & {
   manualHeightMap: GroundHeightMap
   planningHeightMap: GroundHeightMap
   localEditTiles?: GroundLocalEditTileMap | null
+  runtimeSampleHeightRegion?: (
+    kind: 'manual' | 'planning',
+    minRowInput: number,
+    maxRowInput: number,
+    minColumnInput: number,
+    maxColumnInput: number,
+  ) => {
+    minRow: number
+    maxRow: number
+    minColumn: number
+    maxColumn: number
+    stride: number
+    values: ArrayLike<number>
+  }
   runtimeLocalEditTileArrayCache?: GroundLocalEditTileData[]
   runtimeLocalEditTileLookupCache?: Map<string, GroundLocalEditTileData>
   runtimeLocalEditTileSourceRef?: GroundLocalEditTileMap | null

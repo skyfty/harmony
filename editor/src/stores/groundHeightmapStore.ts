@@ -79,9 +79,95 @@ export type GroundHeightRuntimeState = {
 export type GroundRuntimeDynamicMesh = GroundDynamicMesh & {
   manualHeightMap: GroundHeightMap
   planningHeightMap: GroundHeightMap
+  runtimeSampleHeightRegion?: (
+    kind: 'manual' | 'planning',
+    minRowInput: number,
+    maxRowInput: number,
+    minColumnInput: number,
+    maxColumnInput: number,
+  ) => {
+    minRow: number
+    maxRow: number
+    minColumn: number
+    maxColumn: number
+    stride: number
+    values: ArrayLike<number>
+  }
   runtimeHydratedHeightState?: 'pristine' | 'dirty'
   runtimeDisableOptimizedChunks?: boolean
   runtimeLoadedTileKeys?: string[]
+  runtimeManualHeightOverrideCount?: number
+  runtimePlanningHeightOverrideCount?: number
+}
+
+function clampRegionIndex(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) {
+    return min
+  }
+  if (value < min) {
+    return min
+  }
+  if (value > max) {
+    return max
+  }
+  return Math.floor(value)
+}
+
+function sampleRuntimeHeightRegion(
+  state: GroundHeightRuntimeState,
+  kind: 'manual' | 'planning',
+  minRowInput: number,
+  maxRowInput: number,
+  minColumnInput: number,
+  maxColumnInput: number,
+): {
+  minRow: number
+  maxRow: number
+  minColumn: number
+  maxColumn: number
+  stride: number
+  values: Float64Array
+} {
+  const minRow = clampRegionIndex(minRowInput, 0, state.rows)
+  const maxRow = clampRegionIndex(maxRowInput, 0, state.rows)
+  const minColumn = clampRegionIndex(minColumnInput, 0, state.columns)
+  const maxColumn = clampRegionIndex(maxColumnInput, 0, state.columns)
+  const stride = Math.max(0, maxColumn - minColumn + 1)
+  const values = new Float64Array(Math.max(0, maxRow - minRow + 1) * stride).fill(GROUND_HEIGHT_UNSET_VALUE)
+
+  if (stride <= 0 || maxRow < minRow || maxColumn < minColumn) {
+    return { minRow, maxRow, minColumn, maxColumn, stride, values }
+  }
+
+  const minTileRow = Math.floor(minRow / Math.max(1, state.tileResolution))
+  const maxTileRow = Math.floor(maxRow / Math.max(1, state.tileResolution))
+  const minTileColumn = Math.floor(minColumn / Math.max(1, state.tileResolution))
+  const maxTileColumn = Math.floor(maxColumn / Math.max(1, state.tileResolution))
+
+  for (let tileRow = minTileRow; tileRow <= maxTileRow; tileRow += 1) {
+    for (let tileColumn = minTileColumn; tileColumn <= maxTileColumn; tileColumn += 1) {
+      const key = `${tileRow}:${tileColumn}`
+      registerRuntimeLoadedTileKey(state, key)
+      const tile = state.tiles.get(key)
+      if (!tile) {
+        continue
+      }
+      const rowStart = Math.max(minRow, tile.startRow)
+      const rowEnd = Math.min(maxRow, tile.startRow + tile.rows)
+      const columnStart = Math.max(minColumn, tile.startColumn)
+      const columnEnd = Math.min(maxColumn, tile.startColumn + tile.columns)
+      const source = kind === 'manual' ? tile.manualHeightMap : tile.planningHeightMap
+      for (let row = rowStart; row <= rowEnd; row += 1) {
+        const targetOffset = (row - minRow) * stride + (columnStart - minColumn)
+        const sourceOffset = (row - tile.startRow) * (tile.columns + 1) + (columnStart - tile.startColumn)
+        for (let column = columnStart; column <= columnEnd; column += 1) {
+          values[targetOffset + (column - columnStart)] = source[sourceOffset + (column - columnStart)] ?? GROUND_HEIGHT_UNSET_VALUE
+        }
+      }
+    }
+  }
+
+  return { minRow, maxRow, minColumn, maxColumn, stride, values }
 }
 
 function resolveRuntimeLoadedTileKeys(definition: GroundDynamicMesh): string[] {
@@ -517,6 +603,14 @@ function resolveRuntimeMeshView(
       manualHeightMap: state.cachedManualHeightMap as GroundHeightMap,
       planningHeightMap: state.cachedPlanningHeightMap as GroundHeightMap,
       localEditTiles: state.cachedLocalEditTiles,
+      runtimeSampleHeightRegion: (kind, minRowInput, maxRowInput, minColumnInput, maxColumnInput) => sampleRuntimeHeightRegion(
+        state,
+        kind,
+        minRowInput,
+        maxRowInput,
+        minColumnInput,
+        maxColumnInput,
+      ),
       planningMetadata: state.cachedPlanningMetadata,
       runtimeHydratedHeightState: state.runtimeHydratedHeightState,
       runtimeDisableOptimizedChunks: state.runtimeDisableOptimizedChunks,

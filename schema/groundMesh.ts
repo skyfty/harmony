@@ -1143,6 +1143,15 @@ function sampleGroundEffectiveHeightRegionWithoutLocalEdit(
     return { ...baseRegion, values, heightMin, heightMax }
   }
 
+  const sampleRegion = typeof definition.runtimeSampleHeightRegion === 'function'
+    ? definition.runtimeSampleHeightRegion.bind(definition)
+    : null
+  const manualRegion = sampleRegion
+    ? sampleRegion('manual', minRow, maxRow, minColumn, maxColumn)
+    : null
+  const planningRegion = sampleRegion
+    ? sampleRegion('planning', minRow, maxRow, minColumn, maxColumn)
+    : null
   const gridSize = resolveGroundWorkingGridSize(definition)
   const manualHeightMap = definition.manualHeightMap
   const planningHeightMap = definition.planningHeightMap
@@ -1152,9 +1161,21 @@ function sampleGroundEffectiveHeightRegionWithoutLocalEdit(
     for (let column = minColumn; column <= maxColumn; column += 1) {
       const offset = baseOffset + (column - minColumn)
       const base = baseValues[offset] ?? 0
-      const heightIndex = getGroundVertexIndex(gridSize.columns, row, column)
-      const manualRaw = manualHeightMap[heightIndex]
-      const planningRaw = planningHeightMap[heightIndex]
+      const manualOffset = manualRegion
+        ? (row - manualRegion.minRow) * manualRegion.stride + (column - manualRegion.minColumn)
+        : -1
+      const planningOffset = planningRegion
+        ? (row - planningRegion.minRow) * planningRegion.stride + (column - planningRegion.minColumn)
+        : -1
+      const heightIndex = manualRegion || planningRegion
+        ? -1
+        : getGroundVertexIndex(gridSize.columns, row, column)
+      const manualRaw = manualRegion
+        ? manualRegion.values[manualOffset]
+        : manualHeightMap[heightIndex]
+      const planningRaw = planningRegion
+        ? planningRegion.values[planningOffset]
+        : planningHeightMap[heightIndex]
       const manual = typeof manualRaw === 'number' && Number.isFinite(manualRaw) ? manualRaw : base
       const planning = typeof planningRaw === 'number' && Number.isFinite(planningRaw) ? planningRaw : base
       const effective = planning + (manual - base)
@@ -2628,6 +2649,53 @@ function applyGroundOptimizedChunkGeometry(
   return true
 }
 
+function computeHeightfieldNormals(
+  positions: Float32Array,
+  normals: Float32Array,
+  rows: number,
+  columns: number,
+  stepX: number,
+  stepZ: number,
+): void {
+  const safeStepX = Math.max(Math.abs(stepX), Number.EPSILON)
+  const safeStepZ = Math.max(Math.abs(stepZ), Number.EPSILON)
+  const vertexColumns = columns + 1
+
+  for (let row = 0; row <= rows; row += 1) {
+    const rowUp = row > 0 ? row - 1 : row
+    const rowDown = row < rows ? row + 1 : row
+    const sampleSpanZ = Math.max(1, rowDown - rowUp) * safeStepZ
+
+    for (let column = 0; column <= columns; column += 1) {
+      const columnLeft = column > 0 ? column - 1 : column
+      const columnRight = column < columns ? column + 1 : column
+      const sampleSpanX = Math.max(1, columnRight - columnLeft) * safeStepX
+
+      const centerIndex = row * vertexColumns + column
+      const leftIndex = row * vertexColumns + columnLeft
+      const rightIndex = row * vertexColumns + columnRight
+      const upIndex = rowUp * vertexColumns + column
+      const downIndex = rowDown * vertexColumns + column
+
+      const leftHeight = positions[leftIndex * 3 + 1] ?? 0
+      const rightHeight = positions[rightIndex * 3 + 1] ?? 0
+      const upHeight = positions[upIndex * 3 + 1] ?? 0
+      const downHeight = positions[downIndex * 3 + 1] ?? 0
+
+      const slopeX = (rightHeight - leftHeight) / sampleSpanX
+      const slopeZ = (downHeight - upHeight) / sampleSpanZ
+      const nx = -slopeX
+      const ny = 1
+      const nz = -slopeZ
+      const invLength = 1 / Math.max(Math.hypot(nx, ny, nz), Number.EPSILON)
+
+      normals[centerIndex * 3 + 0] = nx * invLength
+      normals[centerIndex * 3 + 1] = ny * invLength
+      normals[centerIndex * 3 + 2] = nz * invLength
+    }
+  }
+}
+
 function buildGroundChunkGeometry(definition: GroundRuntimeDynamicMesh, spec: GroundChunkSpec): THREE.BufferGeometry {
   const optimizedChunk = resolveOptimizedChunkForSpec(definition, spec)
   if (optimizedChunk) {
@@ -2715,7 +2783,7 @@ function buildGroundChunkGeometry(definition: GroundRuntimeDynamicMesh, spec: Gr
   geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3))
   geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2))
   geometry.setIndex(new THREE.BufferAttribute(indices, 1))
-  geometry.computeVertexNormals()
+  computeHeightfieldNormals(positions, normals, chunkRows, chunkColumns, layout.stepX, layout.stepZ)
   geometry.computeBoundingBox()
   geometry.computeBoundingSphere()
   return geometry
@@ -3654,9 +3722,10 @@ export function updateGroundGeometry(geometry: THREE.BufferGeometry, definition:
   const expectedVertexCount = vertexColumns * vertexRows
 
   const positionAttr = geometry.getAttribute('position') as THREE.BufferAttribute | undefined
+  const normalAttr = geometry.getAttribute('normal') as THREE.BufferAttribute | undefined
   const uvAttr = geometry.getAttribute('uv') as THREE.BufferAttribute | undefined
 
-  if (!positionAttr || positionAttr.count !== expectedVertexCount || !uvAttr || uvAttr.count !== expectedVertexCount) {
+  if (!positionAttr || positionAttr.count !== expectedVertexCount || !normalAttr || normalAttr.count !== expectedVertexCount || !uvAttr || uvAttr.count !== expectedVertexCount) {
     return false
   }
 
@@ -3683,8 +3752,9 @@ export function updateGroundGeometry(geometry: THREE.BufferGeometry, definition:
   }
 
   positionAttr.needsUpdate = true
+  computeHeightfieldNormals(positionAttr.array as Float32Array, normalAttr.array as Float32Array, rows, columns, cellSize, cellSize)
+  normalAttr.needsUpdate = true
   uvAttr.needsUpdate = true
-  geometry.computeVertexNormals()
   geometry.computeBoundingBox()
   geometry.computeBoundingSphere()
   return true
@@ -3797,8 +3867,9 @@ function updateChunkGeometry(geometry: THREE.BufferGeometry, definition: GroundR
   const chunkRows = layout.segmentRows
   const expectedVertexCount = (chunkColumns + 1) * (chunkRows + 1)
   const positionAttr = geometry.getAttribute('position') as THREE.BufferAttribute | undefined
+  const normalAttr = geometry.getAttribute('normal') as THREE.BufferAttribute | undefined
   const uvAttr = geometry.getAttribute('uv') as THREE.BufferAttribute | undefined
-  if (!positionAttr || !uvAttr || positionAttr.count !== expectedVertexCount || uvAttr.count !== expectedVertexCount) {
+  if (!positionAttr || !normalAttr || !uvAttr || positionAttr.count !== expectedVertexCount || normalAttr.count !== expectedVertexCount || uvAttr.count !== expectedVertexCount) {
     return false
   }
   const spanMeters = resolveGroundWorkingSpanMeters(definition)
@@ -3834,8 +3905,9 @@ function updateChunkGeometry(geometry: THREE.BufferGeometry, definition: GroundR
     }
   }
   positionAttr.needsUpdate = true
+  computeHeightfieldNormals(positionAttr.array as Float32Array, normalAttr.array as Float32Array, chunkRows, chunkColumns, layout.stepX, layout.stepZ)
+  normalAttr.needsUpdate = true
   uvAttr.needsUpdate = true
-  geometry.computeVertexNormals()
   geometry.computeBoundingBox()
   geometry.computeBoundingSphere()
   return true
