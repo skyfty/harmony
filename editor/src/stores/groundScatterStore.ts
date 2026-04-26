@@ -77,6 +77,9 @@ function buildPayload(sceneId: string, groundNode: SceneNode | null): GroundScat
   }
   const state = ensureRuntimeState(sceneId, groundNode.id)
   const terrainScatter = saveTerrainScatterSnapshot(groundNode.id) ?? state.terrainScatter ?? null
+  if (!terrainScatter) {
+    return null
+  }
   state.terrainScatter = terrainScatter
   return {
     groundNodeId: groundNode.id,

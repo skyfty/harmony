@@ -873,7 +873,10 @@ async function resolveSceneGroundHeightSidecarForWrite(workspaceId: string, docu
 async function resolveSceneGroundScatterSidecarForWrite(workspaceId: string, document: StoredSceneDocument): Promise<ArrayBuffer | null> {
   const sceneStore = useSceneStore()
   if (sceneStore.currentSceneId === document.id) {
-    return useGroundScatterStore().buildSceneDocumentSidecar(document.id, findGroundNodeInDocument(document))
+    const currentSidecar = useGroundScatterStore().buildSceneDocumentSidecar(document.id, findGroundNodeInDocument(document))
+    if (currentSidecar) {
+      return currentSidecar
+    }
   }
   return await readSceneGroundScatterSidecar(workspaceId, document.id)
 }

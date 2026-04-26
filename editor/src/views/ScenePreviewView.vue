@@ -1940,19 +1940,21 @@ async function resolvePreviewGroundHeightSidecar(
 	if (preferredSidecar) {
 		return preferredSidecar
 	}
+	if (groundNode && isGroundDynamicMesh(groundNode.dynamicMesh)) {
+		try {
+			const runtimeSidecar = useGroundHeightmapStore().buildSceneDocumentSidecar(groundNode)
+			if (runtimeSidecar) {
+				return runtimeSidecar
+			}
+		} catch (error) {
+			console.warn('[ScenePreview] Failed to synthesize ground height sidecar', error)
+		}
+	}
 	const storedSidecar = await useScenesStore().loadGroundHeightSidecar(documentId)
 	if (storedSidecar) {
 		return storedSidecar
 	}
-	if (!groundNode || !isGroundDynamicMesh(groundNode.dynamicMesh)) {
-		return null
-	}
-	try {
-		return useGroundHeightmapStore().buildSceneDocumentSidecar(groundNode)
-	} catch (error) {
-		console.warn('[ScenePreview] Failed to synthesize ground height sidecar', error)
-		return null
-	}
+	return null
 }
 
 async function syncGroundCache(document: SceneJsonExportDocument | null): Promise<void> {
