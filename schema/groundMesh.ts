@@ -3931,8 +3931,9 @@ function updateChunkGeometryRegion(
   const vertexColumns = chunkColumns + 1
   const expectedVertexCount = (chunkColumns + 1) * (chunkRows + 1)
   const positionAttr = geometry.getAttribute('position') as THREE.BufferAttribute | undefined
+  const normalAttr = geometry.getAttribute('normal') as THREE.BufferAttribute | undefined
   const uvAttr = geometry.getAttribute('uv') as THREE.BufferAttribute | undefined
-  if (!positionAttr || !uvAttr || positionAttr.count !== expectedVertexCount || uvAttr.count !== expectedVertexCount) {
+  if (!positionAttr || !normalAttr || !uvAttr || positionAttr.count !== expectedVertexCount || normalAttr.count !== expectedVertexCount || uvAttr.count !== expectedVertexCount) {
     return false
   }
 
@@ -3975,7 +3976,8 @@ function updateChunkGeometryRegion(
   }
   positionAttr.needsUpdate = true
   if (options.computeNormals !== false) {
-    geometry.computeVertexNormals()
+    computeHeightfieldNormals(positionAttr.array as Float32Array, normalAttr.array as Float32Array, chunkRows, chunkColumns, layout.stepX, layout.stepZ)
+    normalAttr.needsUpdate = true
   }
   geometry.computeBoundingBox()
   geometry.computeBoundingSphere()
