@@ -166,7 +166,8 @@ function initializeInstancedMeshMorphTargets(mesh: InstancedMesh): void {
   mesh.morphTargetDictionary = {}
   for (let index = 0; index < morphTargets.length; index += 1) {
     const morphTarget = morphTargets[index]
-    mesh.morphTargetDictionary[morphTarget.name || String(index)] = index
+    const morphTargetName = morphTarget?.name || String(index)
+    mesh.morphTargetDictionary[morphTargetName] = index
   }
 }
 

@@ -512,7 +512,8 @@ import {
   syncGroundChunkLoadingMode,
   sampleGroundHeight,
 } from '@harmony/schema/groundMesh';
-import { clearInfiniteGroundChunkMeshes, resolveVisibleInfiniteGroundChunkManifestRecords, syncInfiniteGroundChunkMeshes } from '@harmony/schema/groundChunkManifestRuntime';
+import { clearInfiniteGroundChunkMeshes, syncInfiniteGroundChunkMeshes } from '@harmony/schema/groundChunkManifestRuntime';
+import { createInfiniteGroundChunkColliderRuntime } from '@harmony/schema/infiniteGroundChunkCollisions';
 import { buildGroundAirWallDefinitions } from '@harmony/schema/airWall';
 
 import {
@@ -623,7 +624,6 @@ import type {
   Vector3Like,
 } from '@harmony/schema/index';
 import {
-  deserializeGroundChunkData,
   GROUND_TERRAIN_PACKAGE_FORMAT,
   GROUND_TERRAIN_PACKAGE_VERSION,
 } from '@harmony/schema/index';
@@ -1903,17 +1903,18 @@ const rigidbodyMaterialCache = new Map<string, RigidbodyMaterialEntry>();
 const rigidbodyContactMaterialKeys = new Set<string>();
 const vehicleInstances = new Map<string, VehicleInstanceWithWheels>();
 const vehicleRaycastInWorld = new Set<string>();
-const infiniteGroundChunkCollisionInstances = new Map<string, RigidbodyInstance>();
-const infiniteGroundChunkCollisionPendingLoads = new Map<string, Promise<void>>();
-const infiniteGroundChunkCollisionDesiredKeys = new Set<string>();
-let infiniteGroundChunkCollisionSourceId: string | null = null;
-let infiniteGroundChunkCollisionManifestRevision = -1;
 const groundHeightfieldCache = new Map<string, GroundHeightfieldCacheEntry>();
 const floorShapeCache = new Map<string, FloorShapeCacheEntry>();
 const wallTrimeshCache = new Map<string, WallTrimeshCacheEntry>();
 const physicsGravity = new CANNON.Vec3(0, -DEFAULT_ENVIRONMENT_GRAVITY, 0);
 let physicsContactRestitution = DEFAULT_ENVIRONMENT_RESTITUTION;
 let physicsContactFriction = DEFAULT_ENVIRONMENT_FRICTION;
+const infiniteGroundChunkCollisionRuntime = createInfiniteGroundChunkColliderRuntime({
+  getPhysicsWorld: () => physicsWorld,
+  ensurePhysicsWorld: () => ensurePhysicsWorld(),
+  createBody: (node, component, shapeDefinition, object) => createRigidbodyBody(node, component, shapeDefinition, object),
+  loggerTag: '[SceneViewer]',
+});
 // On WeChat iOS, 30 Hz physics is sufficient for 1–2 dynamic bodies and halves step cost.
 const PHYSICS_FIXED_TIMESTEP = isWeChatMiniProgram ? 1 / 30 : 1 / 60;
 // Fewer substeps needed at 30 Hz; each covers more sim time.
@@ -4636,176 +4637,8 @@ function resolveViewerGroundChunkManifestState(
   };
 }
 
-function removeInfiniteGroundChunkCollisionBody(chunkKey: string): void {
-  const instance = infiniteGroundChunkCollisionInstances.get(chunkKey) ?? null;
-  if (!instance) {
-    return;
-  }
-  removeRigidbodyInstanceBodies(physicsWorld, instance);
-  infiniteGroundChunkCollisionInstances.delete(chunkKey);
-}
-
 function clearInfiniteGroundChunkCollisionBodies(): void {
-  infiniteGroundChunkCollisionInstances.forEach((_instance, chunkKey) => {
-    removeInfiniteGroundChunkCollisionBody(chunkKey);
-  });
-  infiniteGroundChunkCollisionDesiredKeys.clear();
-  infiniteGroundChunkCollisionPendingLoads.clear();
-  infiniteGroundChunkCollisionSourceId = null;
-  infiniteGroundChunkCollisionManifestRevision = -1;
-}
-
-function buildInfiniteGroundChunkCollisionShape(
-  record: GroundChunkManifestRecord,
-  buffer: ArrayBuffer | null,
-  fallbackHeight: number,
-): { shapeDefinition: RigidbodyPhysicsShape; signature: string } | null {
-  const resolution = Math.max(1, Math.trunc(record.resolution));
-  const vertexColumns = resolution + 1;
-  const vertexRows = resolution + 1;
-  const expectedVertexCount = vertexColumns * vertexRows;
-  const decoded = deserializeGroundChunkData(buffer);
-  const heights = decoded?.header?.resolution === resolution && decoded.heights.length === expectedVertexCount
-    ? decoded.heights
-    : null;
-  const matrix: number[][] = [];
-  let heightHash = 0;
-
-  for (let column = 0; column < vertexColumns; column += 1) {
-    const columnValues: number[] = [];
-    for (let row = vertexRows - 1; row >= 0; row -= 1) {
-      const heightIndex = row * vertexColumns + column;
-      const height = heights?.[heightIndex] ?? fallbackHeight;
-      columnValues.push(height);
-      heightHash = (heightHash * 31 + Math.round(height * 1000)) >>> 0;
-    }
-    matrix.push(columnValues);
-  }
-
-  return {
-    shapeDefinition: {
-      kind: 'heightfield',
-      matrix,
-      elementSize: record.chunkSizeMeters / resolution,
-      width: record.chunkSizeMeters,
-      depth: record.chunkSizeMeters,
-      offset: [-record.chunkSizeMeters * 0.5, -record.chunkSizeMeters * 0.5, 0],
-      applyScale: false,
-    },
-    signature: `${record.key}|${record.revision}|${resolution}|${heightHash.toString(16)}`,
-  };
-}
-
-function createInfiniteGroundChunkCollisionProxy(
-  groundObject: THREE.Object3D,
-  record: GroundChunkManifestRecord,
-): THREE.Object3D {
-  const proxy = new THREE.Object3D();
-  const worldCenter = groundObject.localToWorld(
-    new THREE.Vector3(
-      record.originX + record.chunkSizeMeters * 0.5,
-      0,
-      record.originZ + record.chunkSizeMeters * 0.5,
-    ),
-  );
-  const worldPosition = new THREE.Vector3();
-  const worldQuaternion = new THREE.Quaternion();
-  const worldScale = new THREE.Vector3();
-  groundObject.matrixWorld.decompose(worldPosition, worldQuaternion, worldScale);
-  proxy.position.copy(worldCenter);
-  proxy.quaternion.copy(worldQuaternion);
-  proxy.scale.copy(worldScale);
-  proxy.updateMatrixWorld(true);
-  return proxy;
-}
-
-function ensureInfiniteGroundChunkCollisionBody(
-  groundObject: THREE.Object3D,
-  groundDefinition: GroundRuntimeDynamicMesh,
-  state: {
-    sourceId: string;
-    manifestRevision: number;
-    manifestRecords: Record<string, GroundChunkManifestRecord>;
-  },
-  record: GroundChunkManifestRecord,
-): void {
-  if (infiniteGroundChunkCollisionInstances.has(record.key) || infiniteGroundChunkCollisionPendingLoads.has(record.key)) {
-    return;
-  }
-  const fallbackHeight = typeof groundDefinition.baseHeight === 'number' && Number.isFinite(groundDefinition.baseHeight)
-    ? groundDefinition.baseHeight
-    : 0;
-  const pending = loadViewerGroundChunkDataBuffer(record)
-    .then((buffer) => {
-      if (
-        infiniteGroundChunkCollisionSourceId !== state.sourceId
-        || infiniteGroundChunkCollisionManifestRevision !== state.manifestRevision
-      ) {
-        return;
-      }
-      if (!infiniteGroundChunkCollisionDesiredKeys.has(record.key)) {
-        return;
-      }
-      const activeRecord = state.manifestRecords[record.key] ?? null;
-      if (!activeRecord || activeRecord.revision !== record.revision || infiniteGroundChunkCollisionInstances.has(record.key)) {
-        return;
-      }
-      const built = buildInfiniteGroundChunkCollisionShape(record, buffer, fallbackHeight);
-      if (!built) {
-        return;
-      }
-      const bodyEntry = createSharedRigidbodyBody(
-        {
-          node: {
-            id: `__groundChunkCollision:${record.key}`,
-            name: `Ground Chunk Collision ${record.key}`,
-            nodeType: 'Mesh',
-            position: { x: 0, y: 0, z: 0 },
-            rotation: { x: 0, y: 0, z: 0 },
-            scale: { x: 1, y: 1, z: 1 },
-            visible: true,
-          } as SceneNode,
-          component: {
-            id: `__groundChunkCollisionRigidbody:${record.key}`,
-            type: RIGIDBODY_COMPONENT_TYPE,
-            enabled: true,
-            props: clampRigidbodyComponentProps({ bodyType: 'STATIC', mass: 0 }),
-          },
-          shapeDefinition: built.shapeDefinition,
-          object: createInfiniteGroundChunkCollisionProxy(groundObject, record),
-        },
-        {
-          world: ensurePhysicsWorld(),
-          groundHeightfieldCache,
-          floorShapeCache,
-          wallTrimeshCache,
-          rigidbodyMaterialCache,
-          rigidbodyContactMaterialKeys,
-          contactSettings: physicsContactSettings,
-          loggerTag: '[SceneViewer]',
-        },
-      );
-      if (!bodyEntry) {
-        return;
-      }
-      physicsWorld?.addBody(bodyEntry.body);
-      infiniteGroundChunkCollisionInstances.set(record.key, {
-        nodeId: `__groundChunkCollision:${record.key}`,
-        body: bodyEntry.body,
-        bodies: [bodyEntry.body],
-        object: null,
-        orientationAdjustment: bodyEntry.orientationAdjustment,
-        syncObjectFromBody: false,
-        signature: built.signature,
-      });
-    })
-    .catch((error) => {
-      console.warn('[SceneViewer] Failed to load ground chunk collision', record.key, error);
-    })
-    .finally(() => {
-      infiniteGroundChunkCollisionPendingLoads.delete(record.key);
-    });
-  infiniteGroundChunkCollisionPendingLoads.set(record.key, pending);
+  infiniteGroundChunkCollisionRuntime.clear();
 }
 
 function syncViewerInfiniteGroundChunkCollisions(
@@ -4813,51 +4646,16 @@ function syncViewerInfiniteGroundChunkCollisions(
   groundDefinition: GroundRuntimeDynamicMesh,
   activeCamera: THREE.PerspectiveCamera,
 ): void {
-  if (!physicsEnvironmentEnabled.value || groundDefinition.terrainMode !== 'infinite') {
-    clearInfiniteGroundChunkCollisionBodies();
-    return;
-  }
   const state = resolveViewerGroundChunkManifestState(groundObject, groundDefinition);
-  if (!state) {
-    clearInfiniteGroundChunkCollisionBodies();
-    return;
-  }
-
-  if (
-    infiniteGroundChunkCollisionSourceId !== state.sourceId
-    || infiniteGroundChunkCollisionManifestRevision !== state.manifestRevision
-  ) {
-    clearInfiniteGroundChunkCollisionBodies();
-    infiniteGroundChunkCollisionSourceId = state.sourceId;
-    infiniteGroundChunkCollisionManifestRevision = state.manifestRevision;
-  }
-
-  const visibleRecords = resolveVisibleInfiniteGroundChunkManifestRecords(groundObject, groundDefinition, activeCamera, state.manifestRecords);
-  const desiredKeys = new Set(visibleRecords.map((record) => record.key));
-
-  infiniteGroundChunkCollisionDesiredKeys.clear();
-  desiredKeys.forEach((chunkKey) => {
-    infiniteGroundChunkCollisionDesiredKeys.add(chunkKey);
-  });
-
-  infiniteGroundChunkCollisionInstances.forEach((_instance, chunkKey) => {
-    if (!desiredKeys.has(chunkKey)) {
-      removeInfiniteGroundChunkCollisionBody(chunkKey);
-    }
-  });
-
-  infiniteGroundChunkCollisionPendingLoads.forEach((_pending, chunkKey) => {
-    if (!desiredKeys.has(chunkKey)) {
-      infiniteGroundChunkCollisionPendingLoads.delete(chunkKey);
-    }
-  });
-
-  if (!desiredKeys.size) {
-    return;
-  }
-
-  visibleRecords.forEach((record) => {
-    ensureInfiniteGroundChunkCollisionBody(groundObject, groundDefinition, state, record);
+  infiniteGroundChunkCollisionRuntime.sync({
+    enabled: physicsEnvironmentEnabled.value,
+    groundObject,
+    groundDefinition,
+    camera: activeCamera,
+    sourceId: state?.sourceId ?? (currentSceneId.value ?? currentDocument?.id ?? '').trim() || 'viewer-ground',
+    manifestRevision: state?.manifestRevision ?? 0,
+    manifestRecords: state?.manifestRecords ?? {},
+    loadChunkData: (record) => loadViewerGroundChunkDataBuffer(record),
   });
 }
 
@@ -6006,7 +5804,7 @@ function isFloorDynamicMeshForPhysics(mesh: unknown): mesh is { type: 'Floor'; t
 
 function hasAutoGeneratedDynamicShape(mesh: unknown): boolean {
   if (isGroundDynamicMesh(mesh as GroundDynamicMesh | null | undefined)) {
-    return true;
+    return (mesh as GroundDynamicMesh).terrainMode !== 'infinite';
   }
   if (!isFloorDynamicMeshForPhysics(mesh)) {
     return false;
