@@ -15,6 +15,7 @@ function createGroundDefinition(overrides = {}) {
   const columns = overrides.columns ?? 4
   return {
     type: 'Ground',
+    terrainMode: overrides.terrainMode ?? 'bounded',
     width: overrides.width ?? columns * 10,
     depth: overrides.depth ?? rows * 10,
     rows,
@@ -98,6 +99,31 @@ function testSculptWritesLocalEditTiles() {
   assert.equal(manualHasFinite, false, 'fine sculpting should not write coarse manual overrides by default')
 }
 
+function testInfiniteSculptWritesWorldSpaceLocalEditTilesOutsideBounds() {
+  const definition = createGroundDefinition({
+    terrainMode: 'infinite',
+    rows: 8,
+    columns: 8,
+    width: 80,
+    depth: 80,
+    cellSize: 10,
+    editTileSizeMeters: 10,
+    editTileResolution: 10,
+  })
+  const changed = sculptGround(definition, {
+    point: { x: -85, y: 0, z: -85 },
+    radius: 4,
+    strength: 1,
+    shape: 'circle',
+    operation: 'raise',
+  })
+  assert.equal(changed, true, 'infinite sculpting should modify terrain outside the old bounded extents')
+  const expectedTileKey = formatGroundLocalEditTileKey(-9, -9)
+  assert.ok(definition.localEditTiles?.[expectedTileKey], 'infinite sculpting should create a world-space local edit tile with negative coordinates when needed')
+  const sampledHeight = sampleGroundHeight(definition, -85, -85)
+  assert.ok(sampledHeight > 0, 'infinite sculpting outside the old bounded extents should affect sampled height at the sculpt point')
+}
+
 function testLocalEditTilesDoNotGloballyDisableOptimizedMesh() {
   const tile = createFlatLocalEditTile({
     tileRow: 0,
@@ -134,6 +160,7 @@ function testLocalEditTilesDoNotGloballyDisableOptimizedMesh() {
 
 testLocalEditTileSampling()
 testSculptWritesLocalEditTiles()
+testInfiniteSculptWritesWorldSpaceLocalEditTilesOutsideBounds()
 testLocalEditTilesDoNotGloballyDisableOptimizedMesh()
 
 console.log('ground-local-edit regression checks passed')

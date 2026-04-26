@@ -1682,7 +1682,8 @@ export function serializeGroundChunkData(data: GroundChunkData): ArrayBuffer {
   prefixView[2] = headerBytes.byteLength
 
   new Uint8Array(buffer, GROUND_CHUNK_DATA_PREFIX_BYTES, headerBytes.byteLength).set(headerBytes)
-  new Float32Array(buffer, GROUND_CHUNK_DATA_PREFIX_BYTES + headerBytes.byteLength, heights.length).set(heights)
+  new Uint8Array(buffer, GROUND_CHUNK_DATA_PREFIX_BYTES + headerBytes.byteLength, heights.byteLength)
+    .set(new Uint8Array(heights.buffer, heights.byteOffset, heights.byteLength))
   return buffer
 }
 

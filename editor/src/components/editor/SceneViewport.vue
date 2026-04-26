@@ -3580,10 +3580,11 @@ const groundEditor = createGroundEditor({
   restoreOrbitAfterGroundSelection,
   isAltOverrideActive: () => isAltOverrideActive,
   prepareGroundRuntimeDefinition: applyViewportGroundRuntimeMode,
-  onSculptCommitApplied: ({ groundObject, definition, affectedRegion, chunkCells }: {
+  onSculptCommitApplied: ({ groundObject, definition, affectedRegion, chunkKeys, chunkCells }: {
     groundObject: THREE.Object3D
     definition: GroundRuntimeDynamicMesh
     affectedRegion: { minRow: number; maxRow: number; minColumn: number; maxColumn: number } | null
+    chunkKeys?: string[]
     chunkCells: number
   }) => {
     const signature = computeGroundDynamicMeshSignature(definition)
@@ -3596,6 +3597,7 @@ const groundEditor = createGroundEditor({
       groundObject,
       definition,
       affectedRegion,
+      chunkKeys,
       chunkCells,
     })
   },

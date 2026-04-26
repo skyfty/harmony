@@ -9,7 +9,7 @@ import type {
 	SceneNode,
 	Vector3Like,
 } from '@schema'
-import { resolveGroundEditCellSize } from '@schema'
+import { resolveGroundChunkCoordFromWorldPosition, resolveGroundEditCellSize } from '@schema'
 import {
 	deleteTerrainScatterStore,
 	ensureTerrainScatterStore,
@@ -162,6 +162,7 @@ export type GroundEditorOptions = {
 		groundObject: THREE.Object3D
 		definition: GroundRuntimeDynamicMesh
 		affectedRegion: GroundGeometryUpdateRegion | null
+		chunkKeys?: string[]
 		chunkCells: number
 	}) => void
 	onGroundChunkContentCommitApplied?: (payload: {
@@ -3542,6 +3543,43 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		return options.objectMap.get(GROUND_NODE_ID) ?? null
 	}
 
+	function collectInfiniteGroundChunkKeysFromWorldBounds(
+		definition: GroundRuntimeDynamicMesh,
+		bounds: { minX: number; maxX: number; minZ: number; maxZ: number },
+	): string[] {
+		if (definition.terrainMode !== 'infinite') {
+			return []
+		}
+		const chunkSizeMeters = typeof definition.chunkSizeMeters === 'number' && Number.isFinite(definition.chunkSizeMeters) && definition.chunkSizeMeters > 0
+			? definition.chunkSizeMeters
+			: 100
+		const minCoord = resolveGroundChunkCoordFromWorldPosition(bounds.minX, bounds.minZ, chunkSizeMeters)
+		const maxCoord = resolveGroundChunkCoordFromWorldPosition(bounds.maxX, bounds.maxZ, chunkSizeMeters)
+		const minChunkX = Math.min(minCoord.chunkX, maxCoord.chunkX)
+		const maxChunkX = Math.max(minCoord.chunkX, maxCoord.chunkX)
+		const minChunkZ = Math.min(minCoord.chunkZ, maxCoord.chunkZ)
+		const maxChunkZ = Math.max(minCoord.chunkZ, maxCoord.chunkZ)
+		const keys: string[] = []
+		for (let chunkZ = minChunkZ; chunkZ <= maxChunkZ; chunkZ += 1) {
+			for (let chunkX = minChunkX; chunkX <= maxChunkX; chunkX += 1) {
+				keys.push(`${chunkX}:${chunkZ}`)
+			}
+		}
+		return keys
+	}
+
+	function markSculptSessionTouchedChunkKeys(
+		session: { nodeId: string; touchedChunkKeys: Set<string>; definition: GroundRuntimeDynamicMesh } | null | undefined,
+		bounds: { minX: number; maxX: number; minZ: number; maxZ: number },
+	): void {
+		if (!session || session.definition.terrainMode !== 'infinite') {
+			return
+		}
+		collectInfiniteGroundChunkKeysFromWorldBounds(session.definition, bounds).forEach((chunkKey) => {
+			session.touchedChunkKeys.add(chunkKey)
+		})
+	}
+
 	function ensureSculptSession(definition: GroundRuntimeDynamicMesh, nodeId: string): GroundRuntimeDynamicMesh {
 		if (sculptSessionState && sculptSessionState.nodeId === nodeId) {
 			return sculptSessionState.definition
@@ -3577,9 +3615,15 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return false
 		}
 		const committedDefinition = sculptSessionState.definition
-		const usesLocalEditTiles = resolveGroundEditCellSize(committedDefinition) < Math.max(committedDefinition.cellSize, Number.EPSILON)
+		const usesLocalEditTiles = (
+			committedDefinition.terrainMode === 'infinite'
+			|| resolveGroundEditCellSize(committedDefinition) < Math.max(committedDefinition.cellSize, Number.EPSILON)
+		)
 			&& !!committedDefinition.localEditTiles
 			&& Object.keys(committedDefinition.localEditTiles).length > 0
+		const chunkKeys = sculptSessionState.touchedChunkKeys.size
+			? Array.from(sculptSessionState.touchedChunkKeys)
+			: undefined
 		const committed = usesLocalEditTiles
 			? options.sceneStore.commitGroundLocalEditTilesEdit(
 				targetNode.id,
@@ -3598,6 +3642,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				groundObject,
 				definition: committedDefinition,
 				affectedRegion: sculptSessionState.affectedRegion,
+				chunkKeys,
 				chunkCells: resolveChunkCellsForDefinition(committedDefinition),
 			})
 		}
@@ -4369,8 +4414,10 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (sculptSessionState && sculptSessionState.nodeId === session.nodeId) {
 			sculptSessionState.dirty = true
 			sculptSessionState.affectedRegion = mergeRegions(sculptSessionState.affectedRegion, region)
+			markSculptSessionTouchedChunkKeys(sculptSessionState, { minX, maxX, minZ, maxZ })
 		}
-		updateGroundMeshRegion(session.groundObject, session.definition, region)
+		const touchedChunkKeys = sculptSessionState?.nodeId === session.nodeId ? sculptSessionState.touchedChunkKeys : null
+		updateGroundMeshRegion(session.groundObject, session.definition, region, { touchedChunkKeys })
 		const seamPaddingCells = operation === 'raise' || operation === 'depress'
 			? Math.max(4, Math.ceil(Math.max(session.definition.cellSize * 4, options.brushDepth.value * (0.75 + options.brushSlope.value)) / session.definition.cellSize))
 			: 2
@@ -4380,7 +4427,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			minColumn: Math.max(0, region.minColumn - seamPaddingCells),
 			maxColumn: Math.min(session.definition.columns, region.maxColumn + seamPaddingCells),
 		}
-		stitchGroundChunkNormals(session.groundObject, session.definition, padded)
+		stitchGroundChunkNormals(session.groundObject, session.definition, padded, touchedChunkKeys)
 		commitSculptSession(getGroundNodeFromScene())
 		return true
 	}
@@ -6963,6 +7010,12 @@ export function createGroundEditor(options: GroundEditorOptions) {
 					maxColumn: Math.min(definition.columns, maxColumn),
 				}
 				mergedRegion = mergeRegions(mergedRegion, region)
+				markSculptSessionTouchedChunkKeys(sculptSessionState, {
+					minX: point.x - radius,
+					maxX: point.x + radius,
+					minZ: point.z - radius,
+					maxZ: point.z + radius,
+				})
 			}
 		}
 
@@ -6976,7 +7029,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (sculptSessionState && sculptSessionState.nodeId === groundNode.id) {
 			sculptSessionState.dirty = true
 		}
-		updateGroundMeshRegion(groundObject, definition, mergedRegion)
+		const touchedChunkKeys = sculptSessionState?.nodeId === groundNode.id ? sculptSessionState.touchedChunkKeys : null
+		updateGroundMeshRegion(groundObject, definition, mergedRegion, { touchedChunkKeys })
 		// Stitch normals across chunk boundaries to prevent visible seams.
 		const padded: GroundGeometryUpdateRegion = {
 			minRow: Math.max(0, mergedRegion.minRow - 2),
@@ -6984,7 +7038,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			minColumn: Math.max(0, mergedRegion.minColumn - 2),
 			maxColumn: Math.min(definition.columns, mergedRegion.maxColumn + 2),
 		}
-		stitchGroundChunkNormals(groundObject, definition, padded)
+		stitchGroundChunkNormals(groundObject, definition, padded, touchedChunkKeys)
 		if (sculptSessionState && sculptSessionState.nodeId === groundNode.id) {
 			sculptSessionState.affectedRegion = mergeRegions(sculptSessionState.affectedRegion, mergedRegion)
 		}

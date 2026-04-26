@@ -10,6 +10,7 @@ import {
   ensureGroundHeightMap,
   formatGroundChunkKey,
   formatGroundLocalEditTileKey,
+  parseGroundChunkKey,
   GROUND_TERRAIN_CHUNK_SIZE_METERS,
   getGroundVertexIndex,
   GROUND_HEIGHT_UNSET_VALUE,
@@ -188,6 +189,33 @@ function createPerlinNoise(seed?: number) {
 
 function groundChunkKey(chunkRow: number, chunkColumn: number): GroundChunkKey {
   return `${chunkRow}:${chunkColumn}`
+}
+
+function resolveRuntimeChunkIndexFromSharedKey(
+  key: string,
+  maxChunkRowIndex: number,
+  maxChunkColumnIndex: number,
+): { row: number; column: number } | null {
+  const parsed = parseGroundChunkKey(key)
+  if (parsed) {
+    return {
+      row: clampInclusive(parsed.chunkZ, 0, maxChunkRowIndex),
+      column: clampInclusive(parsed.chunkX, 0, maxChunkColumnIndex),
+    }
+  }
+  const parts = key.split(':')
+  if (parts.length !== 2) {
+    return null
+  }
+  const row = Number(parts[0])
+  const column = Number(parts[1])
+  if (!Number.isFinite(row) || !Number.isFinite(column)) {
+    return null
+  }
+  return {
+    row: clampInclusive(Math.trunc(row), 0, maxChunkRowIndex),
+    column: clampInclusive(Math.trunc(column), 0, maxChunkColumnIndex),
+  }
 }
 
 function resolveOptimizedMesh(definition: GroundDynamicMesh | null | undefined): GroundOptimizedMeshData | null {
@@ -666,6 +694,58 @@ function getGroundLocalEditTiles(definition: GroundDynamicMesh): GroundLocalEdit
   return source && typeof source === 'object' ? Object.values(source) : []
 }
 
+function resolveGroundLocalEditTileGridOrigin(definition: GroundDynamicMesh): { originX: number; originZ: number } {
+  const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
+  if (isInfiniteGroundDefinition(runtimeDefinition)) {
+    return {
+      originX: 0,
+      originZ: 0,
+    }
+  }
+  return {
+    originX: -runtimeDefinition.width * 0.5,
+    originZ: -runtimeDefinition.depth * 0.5,
+  }
+}
+
+function resolveGroundLocalEditTileCoordAtWorld(
+  definition: GroundDynamicMesh,
+  x: number,
+  z: number,
+  tileSizeMeters: number,
+): { tileRow: number; tileColumn: number } | null {
+  if (!Number.isFinite(tileSizeMeters) || tileSizeMeters <= 0) {
+    return null
+  }
+  const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
+  const { originX, originZ } = resolveGroundLocalEditTileGridOrigin(runtimeDefinition)
+  const tileColumn = Math.floor((x - originX) / tileSizeMeters)
+  const tileRow = Math.floor((z - originZ) / tileSizeMeters)
+  if (!isInfiniteGroundDefinition(runtimeDefinition) && (tileRow < 0 || tileColumn < 0)) {
+    return null
+  }
+  if (!Number.isFinite(tileRow) || !Number.isFinite(tileColumn)) {
+    return null
+  }
+  return {
+    tileRow,
+    tileColumn,
+  }
+}
+
+function resolveGroundLocalEditTileWorldMin(
+  definition: GroundDynamicMesh,
+  tileRow: number,
+  tileColumn: number,
+  tileSizeMeters: number,
+): { minX: number; minZ: number } {
+  const { originX, originZ } = resolveGroundLocalEditTileGridOrigin(definition)
+  return {
+    minX: originX + tileColumn * tileSizeMeters,
+    minZ: originZ + tileRow * tileSizeMeters,
+  }
+}
+
 function findGroundLocalEditTileAtWorld(
   definition: GroundDynamicMesh,
   x: number,
@@ -673,23 +753,20 @@ function findGroundLocalEditTileAtWorld(
 ): GroundLocalEditTileData | null {
   const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
   const tileSizeMeters = Number(runtimeDefinition.editTileSizeMeters)
-  const halfWidth = runtimeDefinition.width * 0.5
-  const halfDepth = runtimeDefinition.depth * 0.5
   if (!Number.isFinite(tileSizeMeters) || tileSizeMeters <= 0) {
     return null
   }
-  const tileColumn = Math.floor((x + halfWidth) / tileSizeMeters)
-  const tileRow = Math.floor((z + halfDepth) / tileSizeMeters)
-  if (tileRow < 0 || tileColumn < 0) {
+  const coord = resolveGroundLocalEditTileCoordAtWorld(runtimeDefinition, x, z, tileSizeMeters)
+  if (!coord) {
     return null
   }
-  const key = formatGroundLocalEditTileKey(tileRow, tileColumn)
+  const key = formatGroundLocalEditTileKey(coord.tileRow, coord.tileColumn)
   const directMatch = runtimeDefinition.localEditTiles?.[key] ?? null
   if (directMatch) {
     return directMatch
   }
   return getGroundLocalEditTiles(runtimeDefinition).find((tile) => (
-    tile.tileRow === tileRow && tile.tileColumn === tileColumn
+    tile.tileRow === coord.tileRow && tile.tileColumn === coord.tileColumn
   )) ?? null
 }
 
@@ -708,10 +785,7 @@ function sampleGroundLocalEditHeightAtWorld(
   if (!Number.isFinite(tileSizeMeters) || tileSizeMeters <= 0 || resolution <= 0) {
     return null
   }
-  const halfWidth = runtimeDefinition.width * 0.5
-  const halfDepth = runtimeDefinition.depth * 0.5
-  const minX = -halfWidth + tile.tileColumn * tileSizeMeters
-  const minZ = -halfDepth + tile.tileRow * tileSizeMeters
+  const { minX, minZ } = resolveGroundLocalEditTileWorldMin(runtimeDefinition, tile.tileRow, tile.tileColumn, tileSizeMeters)
   const maxX = minX + tileSizeMeters
   const maxZ = minZ + tileSizeMeters
   if (x < minX || x > maxX || z < minZ || z > maxZ) {
@@ -765,9 +839,8 @@ function chunkIntersectsGroundLocalEditTile(definition: GroundDynamicMesh, spec:
     if (!Number.isFinite(tileSizeMeters) || tileSizeMeters <= 0) {
       return false
     }
-    const tileMinX = -halfWidth + tile.tileColumn * tileSizeMeters
+    const { minX: tileMinX, minZ: tileMinZ } = resolveGroundLocalEditTileWorldMin(runtimeDefinition, tile.tileRow, tile.tileColumn, tileSizeMeters)
     const tileMaxX = tileMinX + tileSizeMeters
-    const tileMinZ = -halfDepth + tile.tileRow * tileSizeMeters
     const tileMaxZ = tileMinZ + tileSizeMeters
     return tileMaxX > chunkMinX
       && tileMinX < chunkMaxX
@@ -898,6 +971,7 @@ export function sampleGroundEffectiveHeightRegion(
   const values = new Float32Array(total)
   const manualHeightMap = runtimeDefinition.manualHeightMap
   const planningHeightMap = runtimeDefinition.planningHeightMap
+  const useLocalEditTiles = shouldUseGroundLocalEditTiles(runtimeDefinition)
   let heightMin = 0
   let heightMax = 0
 
@@ -910,12 +984,16 @@ export function sampleGroundEffectiveHeightRegion(
     for (let column = minColumn; column <= maxColumn; column += 1) {
       const offset = baseOffset + (column - minColumn)
       const base = baseValues[offset] ?? 0
-      const heightIndex = getGroundVertexIndex(runtimeDefinition.columns, row, column)
-      const manualRaw = manualHeightMap[heightIndex]
-      const planningRaw = planningHeightMap[heightIndex]
-      const manual = typeof manualRaw === 'number' && Number.isFinite(manualRaw) ? manualRaw : base
-      const planning = typeof planningRaw === 'number' && Number.isFinite(planningRaw) ? planningRaw : base
-      const effective = planning + (manual - base)
+      const effective = useLocalEditTiles
+        ? resolveGroundEffectiveHeightAtVertex(runtimeDefinition, row, column)
+        : (() => {
+            const heightIndex = getGroundVertexIndex(runtimeDefinition.columns, row, column)
+            const manualRaw = manualHeightMap[heightIndex]
+            const planningRaw = planningHeightMap[heightIndex]
+            const manual = typeof manualRaw === 'number' && Number.isFinite(manualRaw) ? manualRaw : base
+            const planning = typeof planningRaw === 'number' && Number.isFinite(planningRaw) ? planningRaw : base
+            return planning + (manual - base)
+          })()
       values[offset] = effective
       heightMin = Math.min(heightMin, effective)
       heightMax = Math.max(heightMax, effective)
@@ -1104,8 +1182,11 @@ type GroundHeightDeltaAccumulatorEntry = {
 }
 
 function shouldUseGroundLocalEditTiles(definition: GroundRuntimeDynamicMesh): boolean {
-  const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1
   const editCellSize = resolveGroundEditCellSize(definition)
+  if (isInfiniteGroundDefinition(definition)) {
+    return editCellSize > 0
+  }
+  const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1
   return editCellSize > 0 && editCellSize < cellSize
 }
 
@@ -1203,22 +1284,18 @@ function resolveGroundLocalEditVertexPlacement(
   if (!(tileSizeMeters > 0) || !(resolution > 0)) {
     return null
   }
-  const halfWidth = definition.width * 0.5
-  const halfDepth = definition.depth * 0.5
-  const tileColumn = Math.floor((x + halfWidth) / tileSizeMeters)
-  const tileRow = Math.floor((z + halfDepth) / tileSizeMeters)
-  if (tileRow < 0 || tileColumn < 0) {
+  const coord = resolveGroundLocalEditTileCoordAtWorld(definition, x, z, tileSizeMeters)
+  if (!coord) {
     return null
   }
-  const minX = -halfWidth + tileColumn * tileSizeMeters
-  const minZ = -halfDepth + tileRow * tileSizeMeters
+  const { minX, minZ } = resolveGroundLocalEditTileWorldMin(definition, coord.tileRow, coord.tileColumn, tileSizeMeters)
   const localX = clampInclusive((x - minX) / Math.max(tileSizeMeters, Number.EPSILON), 0, 1) * resolution
   const localZ = clampInclusive((z - minZ) / Math.max(tileSizeMeters, Number.EPSILON), 0, 1) * resolution
   const column0 = clampVertexIndex(Math.floor(localX), resolution)
   const row0 = clampVertexIndex(Math.floor(localZ), resolution)
   return {
-    tileRow,
-    tileColumn,
+    tileRow: coord.tileRow,
+    tileColumn: coord.tileColumn,
     tileSizeMeters,
     resolution,
     row0,
@@ -1237,6 +1314,49 @@ function resolveGroundSculptSubdivisions(definition: GroundRuntimeDynamicMesh): 
     return 1
   }
   return Math.max(1, Math.min(8, Math.ceil(cellSize / editCellSize)))
+}
+
+type GroundSculptSampleWindow = {
+  originX: number
+  originZ: number
+  minColumn: number
+  maxColumn: number
+  minRow: number
+  maxRow: number
+}
+
+function resolveGroundSculptSampleWindow(
+  definition: GroundRuntimeDynamicMesh,
+  sampleStep: number,
+  bounds: { minX: number; maxX: number; minZ: number; maxZ: number },
+): GroundSculptSampleWindow {
+  const infinite = isInfiniteGroundDefinition(definition)
+  const originX = infinite ? 0 : -definition.width * 0.5
+  const originZ = infinite ? 0 : -definition.depth * 0.5
+  const minColumnRaw = Math.floor((bounds.minX - originX) / sampleStep)
+  const maxColumnRaw = Math.ceil((bounds.maxX - originX) / sampleStep)
+  const minRowRaw = Math.floor((bounds.minZ - originZ) / sampleStep)
+  const maxRowRaw = Math.ceil((bounds.maxZ - originZ) / sampleStep)
+  if (infinite) {
+    return {
+      originX,
+      originZ,
+      minColumn: minColumnRaw,
+      maxColumn: maxColumnRaw,
+      minRow: minRowRaw,
+      maxRow: maxRowRaw,
+    }
+  }
+  const maxColumnBound = Math.max(0, Math.ceil(definition.width / Math.max(sampleStep, Number.EPSILON)))
+  const maxRowBound = Math.max(0, Math.ceil(definition.depth / Math.max(sampleStep, Number.EPSILON)))
+  return {
+    originX,
+    originZ,
+    minColumn: Math.max(0, minColumnRaw),
+    maxColumn: Math.min(maxColumnBound, Math.max(0, maxColumnRaw)),
+    minRow: Math.max(0, minRowRaw),
+    maxRow: Math.min(maxRowBound, Math.max(0, maxRowRaw)),
+  }
 }
 
 function accumulateGroundDeltaAtPoint(
@@ -1335,10 +1455,9 @@ function applyAccumulatedGroundDeltas(
         entry.resolution,
       )
       const resolution = Math.max(1, Math.trunc(tile.resolution))
-      const halfWidth = definition.width * 0.5
-      const halfDepth = definition.depth * 0.5
-      const x = -halfWidth + tileColumn * tile.tileSizeMeters + (localColumn / resolution) * tile.tileSizeMeters
-      const z = -halfDepth + tileRow * tile.tileSizeMeters + (localRow / resolution) * tile.tileSizeMeters
+      const { minX, minZ } = resolveGroundLocalEditTileWorldMin(definition, tileRow, tileColumn, tile.tileSizeMeters)
+      const x = minX + (localColumn / resolution) * tile.tileSizeMeters
+      const z = minZ + (localRow / resolution) * tile.tileSizeMeters
       const storedHeight = getGroundLocalEditTileStoredValue(tile, localRow, localColumn)
       const currentHeight = storedHeight ?? sampleGroundHeight(definition, x, z)
       const nextHeight = currentHeight + entry.delta / entry.weight
@@ -1363,27 +1482,30 @@ function applyCircularRaiseDepressSubsampled(
 ): boolean {
   const { point, radius, strength, operation } = params
   const subdivisions = resolveGroundSculptSubdivisions(definition)
-  if (subdivisions <= 1) {
+  const useInfiniteLocalEditWindow = isInfiniteGroundDefinition(definition) && shouldUseGroundLocalEditTiles(definition)
+  if (subdivisions <= 1 && !useInfiniteLocalEditWindow) {
     return false
   }
   const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1
-  const sampleStep = cellSize / subdivisions
-  const halfWidth = definition.width * 0.5
-  const halfDepth = definition.depth * 0.5
+  const sampleStep = useInfiniteLocalEditWindow
+    ? Math.min(cellSize, Math.max(resolveGroundEditCellSize(definition), Number.EPSILON))
+    : cellSize / subdivisions
   const localX = point.x
   const localZ = point.z
-  const minColumn = Math.max(0, Math.floor((localX - radius + halfWidth) / sampleStep))
-  const maxColumn = Math.max(0, Math.ceil((localX + radius + halfWidth) / sampleStep))
-  const minRow = Math.max(0, Math.floor((localZ - radius + halfDepth) / sampleStep))
-  const maxRow = Math.max(0, Math.ceil((localZ + radius + halfDepth) / sampleStep))
+  const window = resolveGroundSculptSampleWindow(definition, sampleStep, {
+    minX: localX - radius,
+    maxX: localX + radius,
+    minZ: localZ - radius,
+    maxZ: localZ + radius,
+  })
   const direction = operation === 'depress' ? -1 : 1
   const accumulator = new Map<number, GroundHeightDeltaAccumulatorEntry>()
-  const sampleWeight = 1 / (subdivisions * subdivisions)
+  const sampleWeight = 1 / (Math.max(1, subdivisions) * Math.max(1, subdivisions))
 
-  for (let row = minRow; row <= maxRow; row += 1) {
-    const z = -halfDepth + row * sampleStep
-    for (let column = minColumn; column <= maxColumn; column += 1) {
-      const x = -halfWidth + column * sampleStep
+  for (let row = window.minRow; row <= window.maxRow; row += 1) {
+    const z = window.originZ + row * sampleStep
+    for (let column = window.minColumn; column <= window.maxColumn; column += 1) {
+      const x = window.originX + column * sampleStep
       const dx = x - localX
       const dz = z - localZ
       const distSq = dx * dx + dz * dz
@@ -1410,29 +1532,27 @@ function applyPolygonRaiseDepressSubsampled(
   params: Pick<SculptParams, 'operation' | 'strength' | 'depth' | 'slope'>,
 ): boolean {
   const subdivisions = resolveGroundSculptSubdivisions(definition)
-  if (subdivisions <= 1) {
+  const useInfiniteLocalEditWindow = isInfiniteGroundDefinition(definition) && shouldUseGroundLocalEditTiles(definition)
+  if (subdivisions <= 1 && !useInfiniteLocalEditWindow) {
     return false
   }
   const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1
-  const sampleStep = cellSize / subdivisions
-  const halfWidth = definition.width * 0.5
-  const halfDepth = definition.depth * 0.5
-  const minColumn = Math.max(0, Math.floor((polygonBounds.minX + halfWidth) / sampleStep))
-  const maxColumn = Math.max(0, Math.ceil((polygonBounds.maxX + halfWidth) / sampleStep))
-  const minRow = Math.max(0, Math.floor((polygonBounds.minZ + halfDepth) / sampleStep))
-  const maxRow = Math.max(0, Math.ceil((polygonBounds.maxZ + halfDepth) / sampleStep))
+  const sampleStep = useInfiniteLocalEditWindow
+    ? Math.min(cellSize, Math.max(resolveGroundEditCellSize(definition), Number.EPSILON))
+    : cellSize / subdivisions
+  const window = resolveGroundSculptSampleWindow(definition, sampleStep, polygonBounds)
   const direction = params.operation === 'depress' ? -1 : 1
   const effectiveDepth = Number.isFinite(params.depth) ? Math.max(0, params.depth ?? 0) : 0
   const effectiveSlope = Number.isFinite(params.slope) ? params.slope ?? 0.5 : 0.5
   const accumulator = new Map<number, GroundHeightDeltaAccumulatorEntry>()
-  const sampleWeight = 1 / (subdivisions * subdivisions)
+  const sampleWeight = 1 / (Math.max(1, subdivisions) * Math.max(1, subdivisions))
   const candidates: Array<{ x: number; z: number; boundaryDistance: number }> = []
   let maxBoundaryDistance = 0
 
-  for (let row = minRow; row <= maxRow; row += 1) {
-    const z = -halfDepth + row * sampleStep
-    for (let column = minColumn; column <= maxColumn; column += 1) {
-      const x = -halfWidth + column * sampleStep
+  for (let row = window.minRow; row <= window.maxRow; row += 1) {
+    const z = window.originZ + row * sampleStep
+    for (let column = window.minColumn; column <= window.maxColumn; column += 1) {
+      const x = window.originX + column * sampleStep
       const samplePoint = { x, z }
       if (!isPointInsideSculptPolygonXZ(samplePoint, normalizedPolygon)) {
         continue
@@ -1467,26 +1587,29 @@ function applyCircularSurfaceSubsampled(
 ): boolean {
   const { point, radius, strength, operation, targetHeight } = params
   const subdivisions = resolveGroundSculptSubdivisions(definition)
-  if (subdivisions <= 1) {
+  const useInfiniteLocalEditWindow = isInfiniteGroundDefinition(definition) && shouldUseGroundLocalEditTiles(definition)
+  if (subdivisions <= 1 && !useInfiniteLocalEditWindow) {
     return false
   }
   const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1
-  const sampleStep = cellSize / subdivisions
-  const halfWidth = definition.width * 0.5
-  const halfDepth = definition.depth * 0.5
+  const sampleStep = useInfiniteLocalEditWindow
+    ? Math.min(cellSize, Math.max(resolveGroundEditCellSize(definition), Number.EPSILON))
+    : cellSize / subdivisions
   const localX = point.x
   const localZ = point.z
-  const minColumn = Math.max(0, Math.floor((localX - radius + halfWidth) / sampleStep))
-  const maxColumn = Math.max(0, Math.ceil((localX + radius + halfWidth) / sampleStep))
-  const minRow = Math.max(0, Math.floor((localZ - radius + halfDepth) / sampleStep))
-  const maxRow = Math.max(0, Math.ceil((localZ + radius + halfDepth) / sampleStep))
+  const window = resolveGroundSculptSampleWindow(definition, sampleStep, {
+    minX: localX - radius,
+    maxX: localX + radius,
+    minZ: localZ - radius,
+    maxZ: localZ + radius,
+  })
   const accumulator = new Map<number, GroundHeightDeltaAccumulatorEntry>()
-  const sampleWeight = 1 / (subdivisions * subdivisions)
+  const sampleWeight = 1 / (Math.max(1, subdivisions) * Math.max(1, subdivisions))
 
-  for (let row = minRow; row <= maxRow; row += 1) {
-    const z = -halfDepth + row * sampleStep
-    for (let column = minColumn; column <= maxColumn; column += 1) {
-      const x = -halfWidth + column * sampleStep
+  for (let row = window.minRow; row <= window.maxRow; row += 1) {
+    const z = window.originZ + row * sampleStep
+    for (let column = window.minColumn; column <= window.maxColumn; column += 1) {
+      const x = window.originX + column * sampleStep
       const dx = x - localX
       const dz = z - localZ
       const distSq = dx * dx + dz * dz
@@ -1524,15 +1647,17 @@ function applyCircularSurfaceSubsampled(
     const smoothingBand = Math.max(cellSize * 1.5, radius * 0.35)
     if (smoothingBand > 0) {
       const smoothingRadius = radius + smoothingBand
-      const minSmoothColumn = Math.max(0, Math.floor((localX - smoothingRadius + halfWidth) / sampleStep))
-      const maxSmoothColumn = Math.max(0, Math.ceil((localX + smoothingRadius + halfWidth) / sampleStep))
-      const minSmoothRow = Math.max(0, Math.floor((localZ - smoothingRadius + halfDepth) / sampleStep))
-      const maxSmoothRow = Math.max(0, Math.ceil((localZ + smoothingRadius + halfDepth) / sampleStep))
+      const smoothWindow = resolveGroundSculptSampleWindow(definition, sampleStep, {
+        minX: localX - smoothingRadius,
+        maxX: localX + smoothingRadius,
+        minZ: localZ - smoothingRadius,
+        maxZ: localZ + smoothingRadius,
+      })
       const smoothingStrengthBase = Math.min(1, 0.2 + strength * 0.15)
-      for (let row = minSmoothRow; row <= maxSmoothRow; row += 1) {
-        const z = -halfDepth + row * sampleStep
-        for (let column = minSmoothColumn; column <= maxSmoothColumn; column += 1) {
-          const x = -halfWidth + column * sampleStep
+      for (let row = smoothWindow.minRow; row <= smoothWindow.maxRow; row += 1) {
+        const z = smoothWindow.originZ + row * sampleStep
+        for (let column = smoothWindow.minColumn; column <= smoothWindow.maxColumn; column += 1) {
+          const x = smoothWindow.originX + column * sampleStep
           const dx = x - localX
           const dz = z - localZ
           const dist = Math.sqrt(dx * dx + dz * dz)
@@ -1564,24 +1689,22 @@ function applyPolygonSurfaceSubsampled(
   params: Pick<SculptParams, 'operation' | 'strength' | 'targetHeight'>,
 ): boolean {
   const subdivisions = resolveGroundSculptSubdivisions(definition)
-  if (subdivisions <= 1) {
+  const useInfiniteLocalEditWindow = isInfiniteGroundDefinition(definition) && shouldUseGroundLocalEditTiles(definition)
+  if (subdivisions <= 1 && !useInfiniteLocalEditWindow) {
     return false
   }
   const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1
-  const sampleStep = cellSize / subdivisions
-  const halfWidth = definition.width * 0.5
-  const halfDepth = definition.depth * 0.5
-  const minColumn = Math.max(0, Math.floor((polygonBounds.minX + halfWidth) / sampleStep))
-  const maxColumn = Math.max(0, Math.ceil((polygonBounds.maxX + halfWidth) / sampleStep))
-  const minRow = Math.max(0, Math.floor((polygonBounds.minZ + halfDepth) / sampleStep))
-  const maxRow = Math.max(0, Math.ceil((polygonBounds.maxZ + halfDepth) / sampleStep))
+  const sampleStep = useInfiniteLocalEditWindow
+    ? Math.min(cellSize, Math.max(resolveGroundEditCellSize(definition), Number.EPSILON))
+    : cellSize / subdivisions
+  const window = resolveGroundSculptSampleWindow(definition, sampleStep, polygonBounds)
   const accumulator = new Map<number, GroundHeightDeltaAccumulatorEntry>()
-  const sampleWeight = 1 / (subdivisions * subdivisions)
+  const sampleWeight = 1 / (Math.max(1, subdivisions) * Math.max(1, subdivisions))
 
-  for (let row = minRow; row <= maxRow; row += 1) {
-    const z = -halfDepth + row * sampleStep
-    for (let column = minColumn; column <= maxColumn; column += 1) {
-      const x = -halfWidth + column * sampleStep
+  for (let row = window.minRow; row <= window.maxRow; row += 1) {
+    const z = window.originZ + row * sampleStep
+    for (let column = window.minColumn; column <= window.maxColumn; column += 1) {
+      const x = window.originX + column * sampleStep
       const samplePoint = { x, z }
       if (!isPointInsideSculptPolygonXZ(samplePoint, normalizedPolygon)) {
         continue
@@ -4024,7 +4147,7 @@ export function updateGroundMeshRegion(
   target: THREE.Object3D,
   definition: GroundRuntimeDynamicMesh,
   region: GroundGeometryUpdateRegion,
-  options: { computeNormals?: boolean } = {},
+  options: { computeNormals?: boolean; touchedChunkKeys?: Iterable<string> | null } = {},
 ): boolean {
   const group = resolveGroundRuntimeGroup(target)
   if (!group) {
@@ -4034,7 +4157,46 @@ export function updateGroundMeshRegion(
   if (!state) {
     return false
   }
+  const chunkCells = state.chunkCells
+  const rows = Math.max(1, Math.trunc(definition.rows))
+  const columns = Math.max(1, Math.trunc(definition.columns))
+  const maxChunkRowIndex = Math.max(0, Math.floor((rows - 1) / chunkCells))
+  const maxChunkColumnIndex = Math.max(0, Math.floor((columns - 1) / chunkCells))
+  const filteredChunkKeys = options.touchedChunkKeys
+    ? Array.from(options.touchedChunkKeys).filter((key) => typeof key === 'string' && key.length > 0)
+    : []
   let updated = false
+  if (filteredChunkKeys.length) {
+    const visited = new Set<string>()
+    for (const key of filteredChunkKeys) {
+      const indices = resolveRuntimeChunkIndexFromSharedKey(key, maxChunkRowIndex, maxChunkColumnIndex)
+      if (!indices) {
+        continue
+      }
+      const runtimeKey = groundChunkKey(indices.row, indices.column)
+      if (visited.has(runtimeKey)) {
+        continue
+      }
+      visited.add(runtimeKey)
+      const entry = state.chunks.get(runtimeKey)
+      if (!entry) {
+        continue
+      }
+      const geometry = entry.mesh.geometry
+      if (!(geometry instanceof THREE.BufferGeometry)) {
+        continue
+      }
+      const fullChunkRegion: GroundGeometryUpdateRegion = {
+        minRow: entry.spec.startRow,
+        maxRow: entry.spec.startRow + entry.spec.rows,
+        minColumn: entry.spec.startColumn,
+        maxColumn: entry.spec.startColumn + entry.spec.columns,
+      }
+      const ok = updateChunkGeometryRegion(geometry, definition, entry.spec, fullChunkRegion, options)
+      updated = updated || ok
+    }
+    return updated
+  }
   state.chunks.forEach((entry) => {
     const overlaps = !(
       region.maxRow < entry.spec.startRow ||
@@ -4290,17 +4452,12 @@ export function stitchGroundChunkNormals(
 
     let stitched = false
     for (const key of filteredChunkKeys) {
-      const parts = key.split(':')
-      if (parts.length !== 2) {
+      const indices = resolveRuntimeChunkIndexFromSharedKey(key, maxChunkRowIndex, maxChunkColumnIndex)
+      if (!indices) {
         continue
       }
-      const chunkRow = Number(parts[0])
-      const chunkColumn = Number(parts[1])
-      if (!Number.isFinite(chunkRow) || !Number.isFinite(chunkColumn)) {
-        continue
-      }
-      const row = clampInclusive(Math.trunc(chunkRow), 0, maxChunkRowIndex)
-      const column = clampInclusive(Math.trunc(chunkColumn), 0, maxChunkColumnIndex)
+      const row = indices.row
+      const column = indices.column
 
       stitched = stitchEdge(row, column, 'right') || stitched
       stitched = stitchEdge(row, column, 'down') || stitched
