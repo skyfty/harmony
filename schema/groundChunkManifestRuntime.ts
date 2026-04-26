@@ -199,6 +199,7 @@ export function resolveVisibleInfiniteGroundChunkManifestRecords(
     : 0
 
   groundObject.updateMatrixWorld(true)
+  camera.updateMatrixWorld(true)
   const cameraWorld = new THREE.Vector3()
   camera.getWorldPosition(cameraWorld)
   const cameraLocal = groundObject.worldToLocal(cameraWorld)
