@@ -1614,22 +1614,14 @@ function manualDeepClone<T>(source: T): T {
 }
 
 function cloneGroundDynamicMesh(definition: GroundDynamicMesh): GroundDynamicMesh {
-  const planningMetadata = manualDeepClone(definition.planningMetadata)
-  const result: GroundDynamicMesh = {
-    type: 'Ground',
-    cellSize: definition.cellSize,
-    chunkStreamingEnabled: definition.chunkStreamingEnabled,
-    surfaceRevision: Number.isFinite(definition.surfaceRevision) ? Math.max(0, Math.trunc(definition.surfaceRevision as number)) : 0,
-    heightComposition: { ...(definition.heightComposition ?? { mode: 'planning_plus_manual' }) },
-    planningMetadata: planningMetadata ?? null,
-    terrainScatterInstancesUpdatedAt: definition.terrainScatterInstancesUpdatedAt,
-    textureDataUrl: definition.textureDataUrl ?? null,
-    textureName: definition.textureName ?? null,
-    generation: cloneGroundGenerationSettings(definition.generation) ?? null,
-  }
-  if (definition.optimizedMesh !== undefined) {
-    result.optimizedMesh = manualDeepClone(definition.optimizedMesh)
-  }
+  const result = manualDeepClone(definition) as GroundDynamicMesh
+  result.type = 'Ground'
+  result.surfaceRevision = Number.isFinite(definition.surfaceRevision) ? Math.max(0, Math.trunc(definition.surfaceRevision as number)) : 0
+  result.heightComposition = { ...(definition.heightComposition ?? { mode: 'planning_plus_manual' }) }
+  result.planningMetadata = manualDeepClone(definition.planningMetadata) as GroundDynamicMesh['planningMetadata'] ?? null
+  result.textureDataUrl = definition.textureDataUrl ?? null
+  result.textureName = definition.textureName ?? null
+  result.generation = cloneGroundGenerationSettings(definition.generation) ?? null
   if (definition.castShadow !== undefined) {
     result.castShadow = definition.castShadow
   }
