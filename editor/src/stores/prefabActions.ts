@@ -140,6 +140,16 @@ function buildPrefabDependencyAliasMap(
   return aliases
 }
 
+function remapDependencyAssetToCanonicalId(asset: ProjectAsset, canonicalAssetId: string): ProjectAsset {
+  if (asset.id === canonicalAssetId) {
+    return asset
+  }
+  return {
+    ...asset,
+    id: canonicalAssetId,
+  }
+}
+
 function resolveDependencyRegistryIdentity(
   assetId: string,
   prefabAssetRegistry: Record<string, SceneAssetRegistryEntry> | null,
@@ -189,7 +199,7 @@ function findExistingDependencyAsset(
 ): ProjectAsset | null {
   const direct = store.findAssetInCatalog(assetId) ?? store.getAsset(assetId)
   if (direct) {
-    return direct
+    return remapDependencyAssetToCanonicalId(direct, assetId)
   }
 
   const identity = resolveDependencyRegistryIdentity(assetId, prefabAssetRegistry)
@@ -201,7 +211,7 @@ function findExistingDependencyAsset(
     if (identity.registryKey && existingAssetId === identity.registryKey) {
       const existing = store.findAssetInCatalog(existingAssetId) ?? store.getAsset(existingAssetId)
       if (existing) {
-        return existing
+        return remapDependencyAssetToCanonicalId(existing, assetId)
       }
     }
 
@@ -211,7 +221,7 @@ function findExistingDependencyAsset(
     if (identity.serverAssetId && entryServerAssetId === identity.serverAssetId) {
       const existing = store.findAssetInCatalog(existingAssetId) ?? store.getAsset(existingAssetId)
       if (existing) {
-        return existing
+        return remapDependencyAssetToCanonicalId(existing, assetId)
       }
     }
 
@@ -221,7 +231,7 @@ function findExistingDependencyAsset(
     if (identity.zipPath && entryZipPath === identity.zipPath) {
       const existing = store.findAssetInCatalog(existingAssetId) ?? store.getAsset(existingAssetId)
       if (existing) {
-        return existing
+        return remapDependencyAssetToCanonicalId(existing, assetId)
       }
     }
   }

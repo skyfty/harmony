@@ -772,12 +772,18 @@ function filterAssetRegistryByCatalog(
   })
 
   const nextRegistry: Record<string, SceneAssetRegistryEntry> = {}
+  const droppedAssetIds: string[] = []
   Object.entries(assetRegistry).forEach(([assetId, entry]) => {
     if (!retainedIds.has(assetId) || !entry) {
+      if (entry) {
+        droppedAssetIds.push(assetId)
+      }
       return
     }
     nextRegistry[assetId] = { ...entry }
   })
+
+
   return nextRegistry
 }
 
@@ -864,8 +870,7 @@ function upsertAssetsIntoCatalogAndIndex(
     const nextRegistryEntry = buildRegistryEntryFromSource(registeredAsset, source)
     if (nextRegistryEntry) {
       nextAssetRegistry[assetId] = nextRegistryEntry
-    }
-
+    } 
     registeredAssets.push(registeredAsset)
   })
 
@@ -5349,6 +5354,7 @@ export async function buildAssetRegistryForExport(
   const assetCatalog = runtimeAwareScene.assetCatalog ?? {}
   const summaryEntries = new Map<string, SceneResourceSummaryEntry>()
   const exportAssetIds = new Set<string>()
+
 
   usedAssetIds.forEach((assetId) => {
     const asset = getAssetFromCatalog(assetCatalog, assetId)
@@ -11521,6 +11527,7 @@ export const useSceneStore = defineStore('scene', {
       } else {
         this.assetRegistry = filterAssetRegistryByCatalog(this.assetRegistry, normalizedCatalog)
       }
+
       this.assetCatalog = mergeCatalogAssetMetadataFromIndex(normalizedCatalog)
       this.refreshProjectTree()
       if (options?.commitSnapshot) {
@@ -17773,7 +17780,9 @@ export const useSceneStore = defineStore('scene', {
       const rootWorldPosition = metaPayload?.rootWorldPosition
       const hasMultiRoots = rootsFromPayload.length > 1
 
-      const commonPrefabAssetRegistry = sanitizeSceneAssetRegistry(parsedEnvelope?.assetRegistry) ?? {}
+      const rawPrefabAssetRegistry = parsedEnvelope?.assetRegistry
+      const commonPrefabAssetRegistry = sanitizeSceneAssetRegistry(rawPrefabAssetRegistry) ?? {}
+
 
       const applyWorldToParentLocal = (node: SceneNode, worldMatrix: Matrix4, targetParentId: string | null) => {
         let parentInverse = new Matrix4().identity()
@@ -18189,8 +18198,9 @@ export const useSceneStore = defineStore('scene', {
         const importedAssetCatalog = isAssetCatalog(entry.assetCatalog)
           ? (entry.assetCatalog as Record<string, ProjectAsset[]>)
           : undefined
-        const importedAssetRegistry = sanitizeSceneAssetRegistry((entry as { assetRegistry?: unknown }).assetRegistry) ?? {}
-
+        const rawImportedAssetRegistry = (entry as { assetRegistry?: unknown }).assetRegistry
+        const importedAssetRegistry = sanitizeSceneAssetRegistry(rawImportedAssetRegistry) ?? {}
+ 
         const sceneDocument = createSceneDocument(uniqueName, {
           nodes: entry.nodes as SceneNode[],
           projectId,
@@ -18319,7 +18329,9 @@ export const useSceneStore = defineStore('scene', {
         const importedAssetCatalog = isAssetCatalog(entry.assetCatalog)
           ? (entry.assetCatalog as Record<string, ProjectAsset[]>)
           : undefined
-        const importedAssetRegistry = sanitizeSceneAssetRegistry((entry as { assetRegistry?: unknown }).assetRegistry) ?? {}
+        const rawImportedAssetRegistry = (entry as { assetRegistry?: unknown }).assetRegistry
+        const importedAssetRegistry = sanitizeSceneAssetRegistry(rawImportedAssetRegistry) ?? {}
+  
 
         const sceneDocument = createSceneDocument(uniqueName, {
           nodes: entry.nodes as SceneNode[],
