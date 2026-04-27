@@ -74,6 +74,12 @@ type InfiniteGroundBaseChunkRuntime = {
   lastVisibilitySignature: string
 }
 
+type InfiniteGroundFarChunkRuntime = {
+  mesh: THREE.InstancedMesh
+  capacity: number
+  lastVisibilitySignature: string
+}
+
 type GroundCellTriangleDefinition = {
   vertices: [THREE.Vector2, THREE.Vector2, THREE.Vector2]
   heights: [number, number, number]
@@ -100,6 +106,7 @@ type GroundRuntimeState = {
   castShadow: boolean
   chunks: Map<GroundChunkKey, GroundChunkRuntime>
   baseChunkRuntime: InfiniteGroundBaseChunkRuntime | null
+  farChunkRuntime: InfiniteGroundFarChunkRuntime | null
   lastChunkUpdateAt: number
 
   desiredSignature: string
@@ -115,6 +122,14 @@ type GroundRuntimeState = {
 
 const groundRuntimeStateMap = new WeakMap<THREE.Object3D, GroundRuntimeState>()
 let cachedPrototypeMesh: THREE.Mesh | null = null
+const infiniteGroundFrustumMatrix = new THREE.Matrix4()
+const infiniteGroundFrustum = new THREE.Frustum()
+const infiniteGroundChunkSphereCenter = new THREE.Vector3()
+const infiniteGroundChunkSphere = new THREE.Sphere(infiniteGroundChunkSphereCenter, 1)
+const infiniteGroundCameraDirectionWorld = new THREE.Vector3()
+const infiniteGroundCameraDirectionLocalPoint = new THREE.Vector3()
+const infiniteGroundCameraForward = new THREE.Vector3()
+const infiniteGroundCameraRight = new THREE.Vector3()
 
 function createSeededRandom(seed: number): () => number {
   let value = seed % 2147483647
@@ -289,6 +304,46 @@ function resolveInfiniteRenderRadiusChunks(definition: GroundDynamicMesh): numbe
   return 4
 }
 
+function isInfiniteFarHorizonEnabled(definition: GroundDynamicMesh): boolean {
+  if (!isInfiniteGroundDefinition(definition)) {
+    return false
+  }
+  return definition.farHorizonEnabled !== false
+}
+
+function resolveInfiniteFarHorizonDistanceMeters(
+  definition: GroundDynamicMesh,
+  camera: THREE.Camera | null | undefined,
+): number {
+  const explicit = Number(definition.farHorizonDistanceMeters)
+  if (Number.isFinite(explicit) && explicit > 0) {
+    return Math.max(200, explicit)
+  }
+  const perspectiveFar = camera instanceof THREE.PerspectiveCamera && Number.isFinite(camera.far)
+    ? camera.far
+    : Number.NaN
+  if (Number.isFinite(perspectiveFar) && perspectiveFar > 0) {
+    return Math.max(2000, Math.min(12000, perspectiveFar * 0.75))
+  }
+  return 6000
+}
+
+function resolveInfiniteFarHorizonFlatness(camera: THREE.Camera): number {
+  camera.getWorldDirection(infiniteGroundCameraDirectionWorld)
+  const horizontalMagnitude = Math.sqrt(
+    infiniteGroundCameraDirectionWorld.x * infiniteGroundCameraDirectionWorld.x
+    + infiniteGroundCameraDirectionWorld.z * infiniteGroundCameraDirectionWorld.z,
+  )
+  return THREE.MathUtils.clamp(horizontalMagnitude, 0, 1)
+}
+
+function resolveInfiniteFarChunkSizeMeters(definition: GroundDynamicMesh, camera: THREE.Camera | null | undefined): number {
+  const nearChunkSize = resolveInfiniteChunkSizeMeters(definition)
+  const flatness = camera ? resolveInfiniteFarHorizonFlatness(camera) : 0
+  const densityFactor = THREE.MathUtils.lerp(4, 8, flatness)
+  return Math.max(nearChunkSize * densityFactor, 320)
+}
+
 function buildInfiniteGroundBaseChunkGeometry(chunkSizeMeters: number): THREE.BufferGeometry {
   const halfSize = chunkSizeMeters * 0.5
   const positions = new Float32Array([
@@ -418,6 +473,282 @@ function ensureInfiniteBaseChunkRuntime(
   }
   state.baseChunkRuntime = runtime
   return runtime
+}
+
+function ensureInfiniteFarChunkRuntime(
+  root: THREE.Group,
+  state: GroundRuntimeState,
+  definition: GroundDynamicMesh,
+  camera: THREE.Camera,
+  desiredCapacity: number,
+): InfiniteGroundFarChunkRuntime {
+  const nextCapacity = Math.max(1, Math.trunc(desiredCapacity))
+  const chunkSizeMeters = resolveInfiniteFarChunkSizeMeters(definition, camera)
+  const existing = state.farChunkRuntime
+  const existingChunkSize = existing?.mesh.geometry.boundingBox
+    ? existing.mesh.geometry.boundingBox.max.x - existing.mesh.geometry.boundingBox.min.x
+    : Number.NaN
+  if (existing && existing.capacity >= nextCapacity && Math.abs(existingChunkSize - chunkSizeMeters) < 1e-6) {
+    existing.mesh.receiveShadow = true
+    return existing
+  }
+
+  if (existing) {
+    existing.mesh.removeFromParent()
+    existing.mesh.geometry?.dispose?.()
+  }
+
+  const mesh = new THREE.InstancedMesh(
+    buildInfiniteGroundBaseChunkGeometry(chunkSizeMeters),
+    resolveGroundRuntimeMaterial(root, state),
+    nextCapacity,
+  )
+  mesh.name = 'GroundFarHorizonChunks'
+  mesh.castShadow = false
+  mesh.receiveShadow = true
+  mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+  mesh.frustumCulled = false
+  mesh.count = 0
+  mesh.renderOrder = -1
+  mesh.userData.dynamicMeshType = 'Ground'
+  mesh.userData.groundFarHorizonChunks = true
+  mesh.raycast = () => {}
+  root.add(mesh)
+
+  const runtime: InfiniteGroundFarChunkRuntime = {
+    mesh,
+    capacity: nextCapacity,
+    lastVisibilitySignature: '',
+  }
+  state.farChunkRuntime = runtime
+  return runtime
+}
+
+function disposeInfiniteFarChunkRuntime(state: GroundRuntimeState): void {
+  if (!state.farChunkRuntime) {
+    return
+  }
+  state.farChunkRuntime.mesh.removeFromParent()
+  state.farChunkRuntime.mesh.geometry?.dispose?.()
+  state.farChunkRuntime = null
+}
+
+function resolveInfiniteNearChunkWindowBounds(
+  centerCoord: { chunkX: number; chunkZ: number },
+  chunkSizeMeters: number,
+  renderRadiusChunks: number,
+): { minX: number; maxX: number; minZ: number; maxZ: number } {
+  const minX = (centerCoord.chunkX - renderRadiusChunks) * chunkSizeMeters
+  const maxX = (centerCoord.chunkX + renderRadiusChunks + 1) * chunkSizeMeters
+  const minZ = (centerCoord.chunkZ - renderRadiusChunks) * chunkSizeMeters
+  const maxZ = (centerCoord.chunkZ + renderRadiusChunks + 1) * chunkSizeMeters
+  return { minX, maxX, minZ, maxZ }
+}
+
+function intersectsGroundBounds(
+  minX: number,
+  maxX: number,
+  minZ: number,
+  maxZ: number,
+  bounds: { minX: number; maxX: number; minZ: number; maxZ: number },
+): boolean {
+  return minX < bounds.maxX && maxX > bounds.minX && minZ < bounds.maxZ && maxZ > bounds.minZ
+}
+
+function resolveInfiniteFarHorizonFootprint(
+  root: THREE.Group,
+  camera: THREE.Camera,
+  cameraLocal: THREE.Vector3,
+  farDistanceMeters: number,
+  farChunkSizeMeters: number,
+  nearBounds: { minX: number; maxX: number; minZ: number; maxZ: number },
+): {
+  centerX: number
+  centerZ: number
+  forwardX: number
+  forwardZ: number
+  rightX: number
+  rightZ: number
+  outerForwardRadius: number
+  outerSideRadius: number
+  innerForwardRadius: number
+  innerSideRadius: number
+} {
+  camera.getWorldDirection(infiniteGroundCameraDirectionWorld)
+  infiniteGroundCameraDirectionLocalPoint.copy(camera.position)
+  camera.getWorldPosition(infiniteGroundCameraDirectionLocalPoint)
+  infiniteGroundCameraDirectionLocalPoint.add(infiniteGroundCameraDirectionWorld)
+  root.worldToLocal(infiniteGroundCameraDirectionLocalPoint)
+
+  infiniteGroundCameraForward
+    .copy(infiniteGroundCameraDirectionLocalPoint)
+    .sub(cameraLocal)
+    .setY(0)
+
+  if (infiniteGroundCameraForward.lengthSq() <= 1e-6) {
+    infiniteGroundCameraForward.set(0, 0, -1)
+  } else {
+    infiniteGroundCameraForward.normalize()
+  }
+
+  infiniteGroundCameraRight.set(-infiniteGroundCameraForward.z, 0, infiniteGroundCameraForward.x)
+
+  const nearHalfWidth = Math.max(farChunkSizeMeters, (nearBounds.maxX - nearBounds.minX) * 0.5)
+  const nearHalfDepth = Math.max(farChunkSizeMeters, (nearBounds.maxZ - nearBounds.minZ) * 0.5)
+  const nearRadius = Math.max(nearHalfWidth, nearHalfDepth)
+
+  let horizontalHalfFov = Math.PI * 0.35
+  if (camera instanceof THREE.PerspectiveCamera) {
+    const verticalHalfFov = THREE.MathUtils.degToRad(camera.fov) * 0.5
+    horizontalHalfFov = Math.atan(Math.tan(verticalHalfFov) * Math.max(0.5, camera.aspect || 1))
+  }
+
+  const outerForwardRadius = farDistanceMeters + farChunkSizeMeters * 1.5
+  const outerSideRadius = Math.max(
+    nearRadius + farChunkSizeMeters,
+    Math.tan(horizontalHalfFov) * farDistanceMeters + farChunkSizeMeters * 1.5,
+  )
+  const innerForwardRadius = Math.max(nearRadius * 0.8, farChunkSizeMeters)
+  const innerSideRadius = Math.max(nearRadius * 0.65, farChunkSizeMeters)
+  const forwardShift = Math.max(0, outerForwardRadius - innerForwardRadius) * 0.35
+
+  return {
+    centerX: cameraLocal.x + infiniteGroundCameraForward.x * forwardShift,
+    centerZ: cameraLocal.z + infiniteGroundCameraForward.z * forwardShift,
+    forwardX: infiniteGroundCameraForward.x,
+    forwardZ: infiniteGroundCameraForward.z,
+    rightX: infiniteGroundCameraRight.x,
+    rightZ: infiniteGroundCameraRight.z,
+    outerForwardRadius,
+    outerSideRadius,
+    innerForwardRadius,
+    innerSideRadius,
+  }
+}
+
+function isWithinInfiniteFarHorizonFootprint(
+  chunkCenterX: number,
+  chunkCenterZ: number,
+  footprint: ReturnType<typeof resolveInfiniteFarHorizonFootprint>,
+  chunkRadius: number,
+): boolean {
+  const deltaX = chunkCenterX - footprint.centerX
+  const deltaZ = chunkCenterZ - footprint.centerZ
+  const forwardDistance = deltaX * footprint.forwardX + deltaZ * footprint.forwardZ
+  const sideDistance = deltaX * footprint.rightX + deltaZ * footprint.rightZ
+
+  const outerForwardRadius = Math.max(chunkRadius, footprint.outerForwardRadius + chunkRadius)
+  const outerSideRadius = Math.max(chunkRadius, footprint.outerSideRadius + chunkRadius)
+  const innerForwardRadius = Math.max(1, footprint.innerForwardRadius - chunkRadius)
+  const innerSideRadius = Math.max(1, footprint.innerSideRadius - chunkRadius)
+
+  const outerNormalized =
+    (forwardDistance * forwardDistance) / (outerForwardRadius * outerForwardRadius)
+    + (sideDistance * sideDistance) / (outerSideRadius * outerSideRadius)
+  if (outerNormalized > 1) {
+    return false
+  }
+
+  const innerNormalized =
+    (forwardDistance * forwardDistance) / (innerForwardRadius * innerForwardRadius)
+    + (sideDistance * sideDistance) / (innerSideRadius * innerSideRadius)
+  return innerNormalized >= 1
+}
+
+function refreshInfiniteGroundFarChunkVisibility(
+  target: THREE.Object3D,
+  definition: GroundDynamicMesh,
+  camera: THREE.Camera | null,
+  farRuntime?: InfiniteGroundFarChunkRuntime,
+): void {
+  const root = resolveGroundRuntimeGroup(target)
+  if (!root) {
+    return
+  }
+
+  const state = ensureGroundRuntimeState(root, definition)
+  if (!isInfiniteFarHorizonEnabled(definition) || !camera) {
+    disposeInfiniteFarChunkRuntime(state)
+    return
+  }
+
+  const nearChunkSizeMeters = resolveInfiniteChunkSizeMeters(definition)
+  const renderRadiusChunks = resolveInfiniteRenderRadiusChunks(definition)
+  const farChunkSizeMeters = resolveInfiniteFarChunkSizeMeters(definition, camera)
+  const farDistanceMeters = resolveInfiniteFarHorizonDistanceMeters(definition, camera)
+  const farRadiusChunks = Math.max(renderRadiusChunks + 1, Math.ceil(farDistanceMeters / farChunkSizeMeters))
+  const desiredCapacity = Math.max(1, (farRadiusChunks * 2 + 1) * (farRadiusChunks * 2 + 1))
+  const runtime = farRuntime ?? ensureInfiniteFarChunkRuntime(root, state, definition, camera, desiredCapacity)
+
+  root.updateMatrixWorld(true)
+  camera.updateMatrixWorld(true)
+  const cameraWorld = new THREE.Vector3()
+  camera.getWorldPosition(cameraWorld)
+  const cameraLocal = root.worldToLocal(cameraWorld)
+  const nearCenterCoord = resolveGroundChunkCoordFromWorldPosition(cameraLocal.x, cameraLocal.z, nearChunkSizeMeters)
+  const farCenterCoord = resolveGroundChunkCoordFromWorldPosition(cameraLocal.x, cameraLocal.z, farChunkSizeMeters)
+  const nearBounds = resolveInfiniteNearChunkWindowBounds(nearCenterCoord, nearChunkSizeMeters, renderRadiusChunks)
+  const footprint = resolveInfiniteFarHorizonFootprint(root, camera, cameraLocal, farDistanceMeters, farChunkSizeMeters, nearBounds)
+  const cameraQuaternion = new THREE.Quaternion()
+  camera.getWorldQuaternion(cameraQuaternion)
+  const projectionSignature = `${camera.projectionMatrix.elements[0]?.toFixed(4) ?? '0'}|${camera.projectionMatrix.elements[5]?.toFixed(4) ?? '0'}`
+  const nextVisibilitySignature = `${farCenterCoord.chunkX}|${farCenterCoord.chunkZ}|${farRadiusChunks}|${farChunkSizeMeters}|${nearBounds.minX.toFixed(1)}|${nearBounds.maxX.toFixed(1)}|${nearBounds.minZ.toFixed(1)}|${nearBounds.maxZ.toFixed(1)}|${footprint.centerX.toFixed(1)}|${footprint.centerZ.toFixed(1)}|${footprint.outerForwardRadius.toFixed(1)}|${footprint.outerSideRadius.toFixed(1)}|${cameraQuaternion.x.toFixed(4)}|${cameraQuaternion.y.toFixed(4)}|${cameraQuaternion.z.toFixed(4)}|${cameraQuaternion.w.toFixed(4)}|${projectionSignature}`
+  if (runtime.lastVisibilitySignature === nextVisibilitySignature) {
+    return
+  }
+
+  infiniteGroundFrustumMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)
+  infiniteGroundFrustum.setFromProjectionMatrix(infiniteGroundFrustumMatrix)
+
+  let instanceIndex = 0
+  const halfChunkSize = farChunkSizeMeters * 0.5
+  const chunkSphereRadius = Math.sqrt(farChunkSizeMeters * farChunkSizeMeters * 0.5)
+  const chunkCenterRadius = Math.sqrt(halfChunkSize * halfChunkSize * 2)
+
+  for (let chunkZ = farCenterCoord.chunkZ - farRadiusChunks; chunkZ <= farCenterCoord.chunkZ + farRadiusChunks; chunkZ += 1) {
+    for (let chunkX = farCenterCoord.chunkX - farRadiusChunks; chunkX <= farCenterCoord.chunkX + farRadiusChunks; chunkX += 1) {
+      const origin = resolveGroundChunkOrigin({ chunkX, chunkZ }, farChunkSizeMeters)
+      const minX = origin.x
+      const maxX = origin.x + farChunkSizeMeters
+      const minZ = origin.z
+      const maxZ = origin.z + farChunkSizeMeters
+      if (intersectsGroundBounds(minX, maxX, minZ, maxZ, nearBounds)) {
+        continue
+      }
+
+      if (!isWithinInfiniteFarHorizonFootprint(
+        origin.x + halfChunkSize,
+        origin.z + halfChunkSize,
+        footprint,
+        chunkCenterRadius,
+      )) {
+        continue
+      }
+
+      infiniteGroundChunkSphereCenter.set(
+        origin.x + halfChunkSize,
+        definition.baseHeight ?? 0,
+        origin.z + halfChunkSize,
+      )
+      root.localToWorld(infiniteGroundChunkSphereCenter)
+      infiniteGroundChunkSphere.radius = chunkSphereRadius
+      if (!infiniteGroundFrustum.intersectsSphere(infiniteGroundChunkSphere)) {
+        continue
+      }
+
+      infiniteGroundMatrixHelper.makeTranslation(
+        origin.x + halfChunkSize,
+        definition.baseHeight ?? 0,
+        origin.z + halfChunkSize,
+      )
+      runtime.mesh.setMatrixAt(instanceIndex, infiniteGroundMatrixHelper)
+      instanceIndex += 1
+    }
+  }
+
+  runtime.mesh.count = instanceIndex
+  runtime.mesh.instanceMatrix.needsUpdate = true
+  runtime.lastVisibilitySignature = nextVisibilitySignature
 }
 
 function clampInclusive(value: number, min: number, max: number): number {
@@ -2838,6 +3169,7 @@ function ensureGroundRuntimeState(root: THREE.Object3D, definition: GroundDynami
       existing.baseChunkRuntime.hiddenChunkKeys.clear()
       existing.baseChunkRuntime = null
     }
+    disposeInfiniteFarChunkRuntime(existing)
 
     existing.meshPool.forEach((entries) => {
       entries.forEach((mesh) => {
@@ -2859,6 +3191,7 @@ function ensureGroundRuntimeState(root: THREE.Object3D, definition: GroundDynami
     castShadow: desiredCastShadow,
     chunks: new Map(),
     baseChunkRuntime: null,
+    farChunkRuntime: null,
     lastChunkUpdateAt: 0,
 
     desiredSignature: '',
@@ -2989,6 +3322,7 @@ function updateInfiniteGroundBaseChunks(
   const desiredCapacity = (renderRadiusChunks * 2 + 1) * (renderRadiusChunks * 2 + 1)
   const baseRuntime = ensureInfiniteBaseChunkRuntime(root, state, definition, desiredCapacity)
   refreshInfiniteGroundBaseChunkVisibility(root, definition, camera, baseRuntime)
+  refreshInfiniteGroundFarChunkVisibility(root, definition, camera, state.farChunkRuntime ?? undefined)
 }
 
 function refreshInfiniteGroundBaseChunkVisibility(

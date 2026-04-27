@@ -8987,6 +8987,8 @@ export const useSceneStore = defineStore('scene', {
       chunkSizeMeters?: number
       baseHeight?: number
       renderRadiusChunks?: number
+      farHorizonEnabled?: boolean
+      farHorizonDistanceMeters?: number
       collisionRadiusChunks?: number
     }) {
       const requested = {
@@ -8994,6 +8996,8 @@ export const useSceneStore = defineStore('scene', {
         chunkSizeMeters: payload.chunkSizeMeters ?? this.groundSettings.chunkSizeMeters,
         baseHeight: payload.baseHeight ?? this.groundSettings.baseHeight,
         renderRadiusChunks: payload.renderRadiusChunks ?? this.groundSettings.renderRadiusChunks,
+        farHorizonEnabled: payload.farHorizonEnabled ?? this.groundSettings.farHorizonEnabled,
+        farHorizonDistanceMeters: payload.farHorizonDistanceMeters ?? this.groundSettings.farHorizonDistanceMeters,
         collisionRadiusChunks: payload.collisionRadiusChunks ?? this.groundSettings.collisionRadiusChunks,
       }
       const normalized = cloneGroundSettings(requested)
@@ -9001,6 +9005,8 @@ export const useSceneStore = defineStore('scene', {
         Math.abs((normalized.chunkSizeMeters ?? 0) - (this.groundSettings.chunkSizeMeters ?? 0)) >= 1e-6
         || Math.abs((normalized.baseHeight ?? 0) - (this.groundSettings.baseHeight ?? 0)) >= 1e-6
         || Math.abs((normalized.renderRadiusChunks ?? 0) - (this.groundSettings.renderRadiusChunks ?? 0)) >= 1e-6
+        || normalized.farHorizonEnabled !== this.groundSettings.farHorizonEnabled
+        || Math.abs((normalized.farHorizonDistanceMeters ?? 0) - (this.groundSettings.farHorizonDistanceMeters ?? 0)) >= 1e-6
         || Math.abs((normalized.collisionRadiusChunks ?? 0) - (this.groundSettings.collisionRadiusChunks ?? 0)) >= 1e-6
       if (!changed) {
         return false
@@ -9020,6 +9026,8 @@ export const useSceneStore = defineStore('scene', {
                 chunkSizeMeters: normalized.chunkSizeMeters,
                 baseHeight: normalized.baseHeight,
                 renderRadiusChunks: normalized.renderRadiusChunks,
+                farHorizonEnabled: normalized.farHorizonEnabled,
+                farHorizonDistanceMeters: normalized.farHorizonDistanceMeters,
                 collisionRadiusChunks: normalized.collisionRadiusChunks,
               }
             : {
@@ -9027,6 +9035,8 @@ export const useSceneStore = defineStore('scene', {
                 chunkSizeMeters: normalized.chunkSizeMeters,
                 baseHeight: normalized.baseHeight,
                 renderRadiusChunks: normalized.renderRadiusChunks,
+                farHorizonEnabled: normalized.farHorizonEnabled,
+                farHorizonDistanceMeters: normalized.farHorizonDistanceMeters,
                 collisionRadiusChunks: normalized.collisionRadiusChunks,
               },
           normalized,

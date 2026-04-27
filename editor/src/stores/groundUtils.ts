@@ -19,6 +19,8 @@ import { computeGroundBaseHeightAtVertex } from '@schema/groundGeneration'
 const DEFAULT_GROUND_CELL_SIZE = 1
 const DEFAULT_GROUND_EXTENT = 100
 const DEFAULT_GROUND_RENDER_RADIUS_CHUNKS = 4
+const DEFAULT_GROUND_FAR_HORIZON_ENABLED = true
+const DEFAULT_GROUND_FAR_HORIZON_DISTANCE_METERS = 6000
 const DEFAULT_GROUND_COLLISION_RADIUS_CHUNKS = 2
 const MIN_GROUND_EXTENT = 1
 const HEIGHT_EPSILON = 1e-5
@@ -140,6 +142,8 @@ export function cloneGroundDynamicMesh(definition: GroundDynamicMeshLike): Groun
     chunkSizeMeters: definition.chunkSizeMeters ?? GROUND_TERRAIN_CHUNK_SIZE_METERS,
     baseHeight: definition.baseHeight ?? 0,
     renderRadiusChunks: definition.renderRadiusChunks ?? DEFAULT_GROUND_RENDER_RADIUS_CHUNKS,
+    farHorizonEnabled: definition.farHorizonEnabled ?? DEFAULT_GROUND_FAR_HORIZON_ENABLED,
+    farHorizonDistanceMeters: definition.farHorizonDistanceMeters ?? DEFAULT_GROUND_FAR_HORIZON_DISTANCE_METERS,
     collisionRadiusChunks: definition.collisionRadiusChunks ?? DEFAULT_GROUND_COLLISION_RADIUS_CHUNKS,
     chunkManifestRevision: Number.isFinite(definition.chunkManifestRevision) ? Math.max(0, Math.trunc(definition.chunkManifestRevision as number)) : 0,
     cellSize: definition.cellSize,
@@ -192,6 +196,8 @@ export function normalizeGroundSettings(settings: Partial<GroundSettings> | null
     chunkSizeMeters: normalizeGroundDimension(settings?.chunkSizeMeters as unknown, GROUND_TERRAIN_CHUNK_SIZE_METERS),
     baseHeight: typeof settings?.baseHeight === 'number' && Number.isFinite(settings.baseHeight) ? settings.baseHeight : 0,
     renderRadiusChunks: Math.max(1, Math.trunc(typeof settings?.renderRadiusChunks === 'number' && Number.isFinite(settings.renderRadiusChunks) ? settings.renderRadiusChunks : DEFAULT_GROUND_RENDER_RADIUS_CHUNKS)),
+    farHorizonEnabled: settings?.farHorizonEnabled !== false,
+    farHorizonDistanceMeters: normalizeGroundDimension(settings?.farHorizonDistanceMeters as unknown, DEFAULT_GROUND_FAR_HORIZON_DISTANCE_METERS),
     collisionRadiusChunks: Math.max(1, Math.trunc(typeof settings?.collisionRadiusChunks === 'number' && Number.isFinite(settings.collisionRadiusChunks) ? settings.collisionRadiusChunks : DEFAULT_GROUND_COLLISION_RADIUS_CHUNKS)),
     enableAirWall: settings?.enableAirWall === true,
     editorScatterDynamicStreamingEnabled: settings?.editorScatterDynamicStreamingEnabled !== false,
@@ -304,6 +310,8 @@ export function createGroundDynamicMeshDefinition(overrides: Partial<GroundDynam
     chunkSizeMeters: overrides.chunkSizeMeters ?? baseSettings.chunkSizeMeters ?? GROUND_TERRAIN_CHUNK_SIZE_METERS,
     baseHeight: overrides.baseHeight ?? baseSettings.baseHeight ?? 0,
     renderRadiusChunks: overrides.renderRadiusChunks ?? baseSettings.renderRadiusChunks ?? DEFAULT_GROUND_RENDER_RADIUS_CHUNKS,
+    farHorizonEnabled: overrides.farHorizonEnabled ?? baseSettings.farHorizonEnabled ?? DEFAULT_GROUND_FAR_HORIZON_ENABLED,
+    farHorizonDistanceMeters: overrides.farHorizonDistanceMeters ?? baseSettings.farHorizonDistanceMeters ?? DEFAULT_GROUND_FAR_HORIZON_DISTANCE_METERS,
     collisionRadiusChunks: overrides.collisionRadiusChunks ?? baseSettings.collisionRadiusChunks ?? DEFAULT_GROUND_COLLISION_RADIUS_CHUNKS,
     chunkManifestRevision: Number.isFinite(overrides.chunkManifestRevision) ? Math.max(0, Math.trunc(overrides.chunkManifestRevision as number)) : 0,
     cellSize,

@@ -35,6 +35,18 @@ const renderRadiusChunks = computed({
     sceneStore.setGroundInfiniteSettings({ renderRadiusChunks: value })
   },
 })
+const farHorizonEnabled = computed({
+  get: () => groundDefinition.value?.farHorizonEnabled ?? sceneStore.groundSettings.farHorizonEnabled ?? true,
+  set: (value: boolean) => {
+    sceneStore.setGroundInfiniteSettings({ farHorizonEnabled: value })
+  },
+})
+const farHorizonDistanceMeters = computed({
+  get: () => groundDefinition.value?.farHorizonDistanceMeters ?? sceneStore.groundSettings.farHorizonDistanceMeters ?? 6000,
+  set: (value: number) => {
+    sceneStore.setGroundInfiniteSettings({ farHorizonDistanceMeters: value })
+  },
+})
 const collisionRadiusChunks = computed({
   get: () => groundDefinition.value?.collisionRadiusChunks ?? sceneStore.groundSettings.collisionRadiusChunks ?? 0,
   set: (value: number) => {
@@ -135,7 +147,7 @@ const editorScatterVisible = computed({
         <div class="ground-dimensions">
           <v-text-field
             v-model.number="renderRadiusChunks"
-            label="Render Radius"
+            label="Near Render Radius"
             type="number"
             density="compact"
             variant="underlined"
@@ -152,6 +164,26 @@ const editorScatterVisible = computed({
             min="1"
             step="1"
             suffix="chunks"
+          />
+        </div>
+
+        <div class="ground-dimensions">
+          <v-text-field
+            v-model.number="farHorizonDistanceMeters"
+            label="Far Horizon Distance"
+            type="number"
+            density="compact"
+            variant="underlined"
+            min="200"
+            step="100"
+            suffix="m"
+          />
+          <v-switch
+            v-model="farHorizonEnabled"
+            density="compact"
+            hide-details
+            color="primary"
+            label="Far Horizon Ring"
           />
         </div>
 

@@ -1142,6 +1142,10 @@ export interface GroundSettings {
   baseHeight?: number;
   /** Camera render window radius, in chunks, for infinite ground streaming. */
   renderRadiusChunks?: number;
+  /** When true, render a low-detail visual-only terrain ring beyond the editable chunk window. */
+  farHorizonEnabled?: boolean;
+  /** Approximate world-space distance for the visual-only far-horizon ring. */
+  farHorizonDistanceMeters?: number;
   /** Vehicle collision interest window radius, in chunks, for dynamic terrain physics. */
   collisionRadiusChunks?: number;
   /** When true, build static air-wall colliders around the ground perimeter. */
@@ -1844,6 +1848,10 @@ export interface GroundDynamicMesh {
   baseHeight?: number
   /** Camera render window radius, in chunks, for infinite terrain. */
   renderRadiusChunks?: number
+  /** When true, render a visual-only far-horizon ring around the high-detail chunk window. */
+  farHorizonEnabled?: boolean
+  /** Approximate world-space distance for the visual-only far-horizon ring. */
+  farHorizonDistanceMeters?: number
   /** Vehicle collision interest window radius, in chunks, for infinite terrain. */
   collisionRadiusChunks?: number
   /** Monotonic revision for the infinite terrain chunk manifest. */
