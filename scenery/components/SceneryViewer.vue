@@ -125,11 +125,10 @@
           <scroll-view
             v-if="infoBoardExpanded"
             scroll-y
-            scroll-with-animation
             show-scrollbar="false"
             class="viewer-info-board__body"
             :style="infoBoardBodyStyle"
-            :scroll-top="infoBoardScrollTop"
+            @tap="handleInfoBoardTap"
           >
             <text v-if="infoBoardOverlayLoading" class="viewer-info-board__loading">正在加载内容…</text>
             <text v-else class="viewer-info-board__content">{{ infoBoardOverlayContent }}</text>
@@ -2189,15 +2188,7 @@ const infoBoardOverlayNodeId = ref<string | null>(null);
 const infoBoardOverlayTitle = ref('展示板');
 const infoBoardOverlayContent = ref('');
 const infoBoardExpanded = ref(false);
-const infoBoardScrollTop = ref(0);
 let infoBoardOverlayGeneration = 0;
-let infoBoardScrollTimer: ReturnType<typeof setInterval> | null = null;
-let infoBoardScrollMeasureTimer: ReturnType<typeof setTimeout> | null = null;
-let infoBoardScrollTopValue = 0;
-let infoBoardScrollMaxTopValue = 0;
-let infoBoardScrollPageStepValue = 0;
-let infoBoardScrollNextPauseTopValue = 0;
-let infoBoardScrollHoldTicks = 0;
 let infoBoardAudioContext: ViewerInnerAudioContext | null = null;
 let infoBoardAudioResolved: ResolvedAssetUrl | null = null;
 
@@ -2351,8 +2342,6 @@ function expandInfoBoard(): void {
     return;
   }
   infoBoardExpanded.value = true;
-  infoBoardScrollTop.value = 0;
-  void measureInfoBoardAutoScroll();
 }
 
 function collapseInfoBoard(): void {
@@ -2360,7 +2349,6 @@ function collapseInfoBoard(): void {
     return;
   }
   infoBoardExpanded.value = false;
-  stopInfoBoardAutoScroll();
 }
 
 function toggleInfoBoardExpanded(): void {
@@ -2377,133 +2365,6 @@ function handleInfoBoardTap(): void {
     collapseInfoBoard();
   }
 }
-
-function stopInfoBoardAutoScroll(): void {
-  if (infoBoardScrollTimer) {
-    clearInterval(infoBoardScrollTimer);
-    infoBoardScrollTimer = null;
-  }
-  if (infoBoardScrollMeasureTimer) {
-    clearTimeout(infoBoardScrollMeasureTimer);
-    infoBoardScrollMeasureTimer = null;
-  }
-  infoBoardScrollTopValue = 0;
-  infoBoardScrollMaxTopValue = 0;
-  infoBoardScrollPageStepValue = 0;
-  infoBoardScrollNextPauseTopValue = 0;
-  infoBoardScrollHoldTicks = 0;
-}
-
-function startInfoBoardAutoScrollLoop(): void {
-  if (!infoBoardOverlayVisible.value || !infoBoardExpanded.value) {
-    return;
-  }
-  if (infoBoardScrollTimer) {
-    return;
-  }
-  infoBoardScrollTimer = setInterval(() => {
-    if (!infoBoardOverlayVisible.value || infoBoardScrollMaxTopValue <= 0) {
-      stopInfoBoardAutoScroll();
-      if (infoBoardOverlayVisible.value) {
-        infoBoardScrollTop.value = 0;
-      }
-      return;
-    }
-
-    if (infoBoardScrollHoldTicks > 0) {
-      infoBoardScrollHoldTicks -= 1;
-      return;
-    }
-
-    infoBoardScrollTopValue += 1;
-
-    if (infoBoardScrollTopValue >= infoBoardScrollNextPauseTopValue) {
-      infoBoardScrollTopValue = infoBoardScrollNextPauseTopValue;
-      infoBoardScrollHoldTicks = 30;
-      if (infoBoardScrollTopValue >= infoBoardScrollMaxTopValue) {
-        infoBoardScrollHoldTicks = 42;
-      }
-      infoBoardScrollNextPauseTopValue = Math.min(
-        infoBoardScrollTopValue + Math.max(infoBoardScrollPageStepValue, 1),
-        infoBoardScrollMaxTopValue,
-      );
-      if (infoBoardScrollTopValue >= infoBoardScrollMaxTopValue) {
-        infoBoardScrollTopValue = 0;
-        infoBoardScrollNextPauseTopValue = Math.min(infoBoardScrollPageStepValue, infoBoardScrollMaxTopValue);
-      }
-    }
-
-    infoBoardScrollTop.value = infoBoardScrollTopValue;
-  }, 40);
-}
-
-async function measureInfoBoardAutoScroll(): Promise<void> {
-  if (!infoBoardExpanded.value) {
-    stopInfoBoardAutoScroll();
-    return;
-  }
-  await nextTick();
-  if (infoBoardScrollMeasureTimer) {
-    clearTimeout(infoBoardScrollMeasureTimer);
-  }
-  infoBoardScrollMeasureTimer = setTimeout(() => {
-    infoBoardScrollMeasureTimer = null;
-    if (!infoBoardOverlayVisible.value || !infoBoardExpanded.value) {
-      stopInfoBoardAutoScroll();
-      return;
-    }
-
-    const query = uni.createSelectorQuery();
-    if (typeof query.in === 'function') {
-      query.in((pageInstance?.proxy as unknown) ?? null);
-    }
-
-    query
-      .select('.viewer-info-board__body')
-      .boundingClientRect()
-      .select('.viewer-info-board__content')
-      .boundingClientRect()
-      .exec((rects: unknown) => {
-        const items = (Array.isArray(rects) ? rects : []) as Array<UniApp.NodeInfo | null>;
-        const bodyRect = items[0];
-        const contentRect = items[1];
-        const bodyHeight = bodyRect?.height ?? 0;
-        const contentHeight = contentRect?.height ?? 0;
-        const nextMaxTop = Math.max(Math.ceil(contentHeight - bodyHeight), 0);
-
-        if (nextMaxTop <= 0) {
-          stopInfoBoardAutoScroll();
-          infoBoardScrollTop.value = 0;
-          return;
-        }
-
-        infoBoardScrollMaxTopValue = nextMaxTop;
-        infoBoardScrollPageStepValue = Math.max(Math.floor(bodyHeight), 1);
-        infoBoardScrollNextPauseTopValue = Math.min(infoBoardScrollPageStepValue, infoBoardScrollMaxTopValue);
-        infoBoardScrollTopValue = Math.min(infoBoardScrollTopValue, infoBoardScrollMaxTopValue);
-        infoBoardScrollTop.value = infoBoardScrollTopValue;
-        startInfoBoardAutoScrollLoop();
-      });
-  }, 0);
-}
-
-watch(
-  [infoBoardOverlayVisible, infoBoardOverlayLoading, infoBoardOverlayContent, infoBoardExpanded],
-  ([visible, _loading, _content, expanded]) => {
-    if (!visible) {
-      stopInfoBoardAutoScroll();
-      infoBoardScrollTop.value = 0;
-      return;
-    }
-    if (!expanded) {
-      stopInfoBoardAutoScroll();
-      infoBoardScrollTop.value = 0;
-      return;
-    }
-    void measureInfoBoardAutoScroll();
-  },
-  { flush: 'post' },
-);
 
 const lanternAssets = useLanternAssets({
   loadTextAssetContent: (assetId) => loadTextAssetContent(assetId),
@@ -3821,14 +3682,12 @@ function resetInfoBoardAudio(): void {
 
 function resetInfoBoardOverlay(): void {
   infoBoardOverlayGeneration += 1;
-  stopInfoBoardAutoScroll();
   infoBoardOverlayVisible.value = false;
   infoBoardOverlayLoading.value = false;
   infoBoardOverlayNodeId.value = null;
   infoBoardOverlayTitle.value = '展示板';
   infoBoardOverlayContent.value = '';
   infoBoardExpanded.value = false;
-  infoBoardScrollTop.value = 0;
   resetInfoBoardAudio();
 }
 
@@ -3865,7 +3724,6 @@ async function presentInfoBoard(event: Extract<BehaviorRuntimeEvent, { type: 'sh
   infoBoardOverlayLoading.value = false;
   infoBoardOverlayNodeId.value = event.nodeId;
   infoBoardExpanded.value = false;
-  infoBoardScrollTop.value = 0;
   {
     const title = typeof event.params.title === 'string' ? event.params.title.trim() : '';
     infoBoardOverlayTitle.value = title.length ? title : '展示板';
@@ -13359,15 +13217,6 @@ onUnmounted(() => {
   transition: box-shadow 0.18s ease, border-color 0.18s ease;
 }
 
-.viewer-info-board::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 0;
-  width: 100%;
-  height: 6rpx;
-  background: linear-gradient(90deg, #67d4ff 0%, #7cc6ff 42%, #9de58f 100%);
-}
 
 .viewer-info-board::after {
   content: '';

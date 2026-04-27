@@ -22,6 +22,7 @@ const titleDraft = ref('展示板')
 const contentDraft = ref('Information board content.')
 const contentAssetIdDraft = ref<string | null>(null)
 const audioAssetIdDraft = ref<string | null>(null)
+const TITLE_MAX_LENGTH = 56
 
 const contentDragActive = ref(false)
 const audioDragActive = ref(false)
@@ -32,10 +33,14 @@ const assetPickerTarget = ref<'content' | 'audio'>('content')
 const textAssetExtensions = ['txt']
 const audioAssetExtensions = ['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac', 'opus', 'webm']
 
+function normalizeTitle(value: string) {
+  return value.slice(0, TITLE_MAX_LENGTH)
+}
+
 watch(
   () => props.modelValue,
   (value) => {
-    titleDraft.value = typeof value?.title === 'string' ? value.title : '展示板'
+    titleDraft.value = typeof value?.title === 'string' ? normalizeTitle(value.title) : '展示板'
     contentDraft.value = typeof value?.content === 'string' ? value.content : 'Information board content.'
     contentAssetIdDraft.value = typeof value?.contentAssetId === 'string' && value.contentAssetId.trim().length ? value.contentAssetId : null
     audioAssetIdDraft.value = typeof value?.audioAssetId === 'string' && value.audioAssetId.trim().length ? value.audioAssetId : null
@@ -258,7 +263,7 @@ function clearAudioAsset() {
 }
 
 function setTitleDraft(value: string) {
-  titleDraft.value = value
+  titleDraft.value = normalizeTitle(value)
 }
 
 function setContentDraft(value: string) {

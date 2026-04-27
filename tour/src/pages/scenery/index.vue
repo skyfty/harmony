@@ -123,9 +123,21 @@ async function loadPunchProgress(): Promise<void> {
 }
 
 function handleBack(): void {
-  uni.navigateBack({
-    fail: () => {
-      void uni.reLaunch({ url: '/pages/home/index' });
+  uni.showModal({
+    title: '确认返回',
+    content: '确定要返回上一页吗？',
+    confirmText: '返回',
+    cancelText: '取消',
+    success: (result) => {
+      if (!result.confirm) {
+        return;
+      }
+
+      uni.navigateBack({
+        fail: () => {
+          void uni.reLaunch({ url: '/pages/home/index' });
+        },
+      });
     },
   });
 }
@@ -276,7 +288,6 @@ onUnload(() => {
   width: 32px;
   height: 32px;
   border-radius: 16px;
-  background: rgba(0, 0, 0, 0.42);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -284,10 +295,10 @@ onUnload(() => {
 }
 
 .floating-back__icon {
-  font-size: 24px;
+  font-size: 44px;
   color: #ffffff;
   line-height: 1;
-  margin-top: -2px;
+  margin-top: -8px;
 }
 
 .floating-title {
