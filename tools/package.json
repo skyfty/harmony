@@ -27,6 +27,8 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
+    "dev:dem-lab": "vite --config ./dem-lab/vite.config.ts",
+    "build:dem-lab": "vite build --config ./dem-lab/vite.config.ts",
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
     "prepare": "pnpm run build"
   },
@@ -36,10 +38,13 @@
   "packageManager": "pnpm@10.28.2",
   "dependencies": {
     "@resvg/resvg-js": "^2.6.2",
+    "geotiff": "^3.0.5",
+    "three": "^0.172.0",
     "svgo": "^4.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "@types/three": "^0.171.0",
     "typescript": "~5.6.3",
     "vite": "^5.4.14"
   }
