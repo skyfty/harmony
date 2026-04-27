@@ -328,19 +328,11 @@ function resolveInfiniteFarHorizonDistanceMeters(
   return 6000
 }
 
-function resolveInfiniteFarHorizonFlatness(camera: THREE.Camera): number {
-  camera.getWorldDirection(infiniteGroundCameraDirectionWorld)
-  const horizontalMagnitude = Math.sqrt(
-    infiniteGroundCameraDirectionWorld.x * infiniteGroundCameraDirectionWorld.x
-    + infiniteGroundCameraDirectionWorld.z * infiniteGroundCameraDirectionWorld.z,
-  )
-  return THREE.MathUtils.clamp(horizontalMagnitude, 0, 1)
-}
-
 function resolveInfiniteFarChunkSizeMeters(definition: GroundDynamicMesh, camera: THREE.Camera | null | undefined): number {
   const nearChunkSize = resolveInfiniteChunkSizeMeters(definition)
-  const flatness = camera ? resolveInfiniteFarHorizonFlatness(camera) : 0
-  const densityFactor = THREE.MathUtils.lerp(4, 8, flatness)
+  // Keep the far horizon chunk size stable so camera dolly/zoom does not make the
+  // terrain feel like it is slowly shrinking or re-scaling at distance.
+  const densityFactor = camera ? 6 : 6
   return Math.max(nearChunkSize * densityFactor, 320)
 }
 
@@ -4609,6 +4601,7 @@ export function updateGroundChunks(
 
   // Load chunks within the tighter load radius (nearest-first).
   let stitchRegion: GroundGeometryUpdateRegion | null = null
+  const touchedChunkKeys = new Set<string>()
   const mergeRegion = (current: GroundGeometryUpdateRegion | null, next: GroundGeometryUpdateRegion): GroundGeometryUpdateRegion => {
     if (!current) {
       return { ...next }
@@ -4635,6 +4628,7 @@ export function updateGroundChunks(
       }
       const runtime = ensureChunkMesh(root, state, definition, entry.chunkRow, entry.chunkColumn)
       createdCount += 1
+      touchedChunkKeys.add(runtime.key)
 
       stitchRegion = mergeRegion(stitchRegion, {
         minRow: runtime.spec.startRow,
@@ -4675,7 +4669,7 @@ export function updateGroundChunks(
 
   // Newly created chunks compute normals in isolation; stitch boundaries to avoid visible seams.
   if (stitchRegion) {
-    stitchGroundChunkNormals(root, definition, stitchRegion)
+    stitchGroundChunkNormals(root, definition, stitchRegion, touchedChunkKeys)
   }
 }
 
