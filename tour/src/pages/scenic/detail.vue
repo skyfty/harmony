@@ -57,33 +57,27 @@
               <text class="rating-count">({{ formatFavoriteCount(scenic.favoriteCount) }}点赞)</text>
             </view>
           </view>
-          <view
-            class="favorite-btn"
-            :class="{ 'favorite-btn--active': scenic.favorited }"
-            @tap="handleToggleFavorite"
-          >
-            <text class="favorite-btn__icon">{{ scenic.favorited ? '❤' : '♡' }}</text>
-            <text class="favorite-btn__label">点赞</text>
-          </view>
-        </view>
-
-        <view class="meta-rows">
-          <view class="meta-row meta-compact meta-compact--split">
-            <view class="meta-compact__left">
-              <text class="meta-address">{{ scenic.address || '未提供' }}</text>
-              <text v-if="scenic.distance" class="meta-distance">{{ scenic.distance }}</text>
+          <view class="title-actions">
+            <view
+              v-if="scenic.location"
+              class="meta-action meta-action--map"
+              @tap="openMap(scenic.location.lat, scenic.location.lng)"
+            >
+              📍
             </view>
-            <view class="meta-compact__right">
-              <text
-                v-if="scenic.location"
-                class="meta-action meta-action--map"
-                @tap="openMap(scenic.location.lat, scenic.location.lng)"
-                >📍</text>
-              <text
-                v-if="scenic.phone"
-                class="meta-action meta-action--phone"
-                @tap="callPhone(scenic.phone)"
-                >📞</text>
+            <view
+              v-if="scenic.phone"
+              class="meta-action meta-action--phone"
+              @tap="callPhone(scenic.phone)"
+            >
+              📞
+            </view>
+            <view
+              class="meta-action favorite-btn"
+              :class="{ 'favorite-btn--active': scenic.favorited }"
+              @tap="handleToggleFavorite"
+            >
+              <text class="favorite-btn__icon">{{ scenic.favorited ? '❤' : '♡' }}</text>
             </view>
           </view>
         </view>
@@ -490,13 +484,15 @@ function computeScenicCheckinRatio(): number {
   color: #8a94a6;
 }
 
+.title-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
 /* ---- Favorite button ---- */
 .favorite-btn {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-  padding: 8px 12px;
   flex-shrink: 0;
   transition: all 0.2s;
 }
@@ -512,17 +508,12 @@ function computeScenicCheckinRatio(): number {
 }
 
 .favorite-btn__icon {
-  font-size: 20px;
+  font-size: 18px;
   color: #8a94a6;
 }
 
 .favorite-btn--active .favorite-btn__icon {
   color: #e74c3c;
-}
-
-.favorite-btn__label {
-  font-size: 11px;
-  color: #8a94a6;
 }
 
 .progress-section {
@@ -620,42 +611,6 @@ function computeScenicCheckinRatio(): number {
   line-height: 22px;
 }
 
-/* ---- 地址/距离按行展示 ---- */
-.meta-rows {
-  margin-top: 12px;
-  background: #ffffff;
-  border-radius: 12px;
-  padding: 10px 12px;
-  border: 1px solid #f0f3f7;
-}
-.meta-row {
-  display: block;
-  padding: 8px 0;
-  border-bottom: 1px solid rgba(15, 23, 42, 0.03);
-}
-.meta-row:last-child {
-  border-bottom: none;
-}
-.meta-row.meta-compact {
-  border-bottom: none;
-  padding: 6px 0;
-}
-.meta-compact--split {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-.meta-compact__left {
-  flex: 1;
-  min-width: 0;
-}
-.meta-compact__right {
-  display: flex;
-  gap: 12px;
-  align-items: center;
-  margin-left: 12px;
-  flex-shrink: 0;
-}
 .meta-action {
   font-size: 18px;
   width: 36px;
@@ -669,35 +624,6 @@ function computeScenicCheckinRatio(): number {
 .meta-action:active { opacity: 0.8; transform: scale(0.96); }
 .meta-action--map { color: #3b82f6 }
 .meta-action--phone { color: #16a34a }
-.meta-label {
-  display: block;
-  font-size: 12px;
-  color: #8a94a6;
-}
-.meta-text {
-  display: block;
-  margin-top: 4px;
-  font-size: 14px;
-  color: #1a1f2e;
-  word-break: break-all;
-}
-
-/* 地址显著 */
-.meta-address {
-  display: block;
-  font-size: 16px;
-  font-weight: 700;
-  color: #161925;
-}
-
-/* 距离较小且颜色淡 */
-.meta-distance {
-  display: block;
-  margin-top: 6px;
-  font-size: 12px;
-  font-weight: 500;
-  color: #98a3b3;
-}
 
 /* ---- CTA button ---- */
 .cta-area {

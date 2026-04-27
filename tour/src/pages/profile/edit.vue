@@ -1,21 +1,25 @@
 <template>
   <view class="page">
+    <PageHeader title="编辑个人资料" />
     <MiniAuthRecovery />
     <view class="content">
       <view class="card">
-        <view class="avatar-row" @tap="handleAvatarTap">
-          <text class="label">头像</text>
+        <button
+          v-if="isWechatMiniProgram"
+          class="avatar-row avatar-row--button"
+          open-type="chooseAvatar"
+          @chooseavatar="handleChooseAvatar"
+        >
           <view class="avatar">
             <image v-if="form.avatarUrl" class="avatar-img" :src="form.avatarUrl" mode="aspectFill" />
             <text v-else class="avatar-text">{{ form.displayName.slice(0, 1) || 'U' }}</text>
           </view>
-          <button
-            v-if="isWechatMiniProgram"
-            class="avatar-action"
-            open-type="chooseAvatar"
-            @chooseavatar="handleChooseAvatar"
-          >选择头像</button>
-          <text v-else class="avatar-action">选择头像</text>
+        </button>
+        <view v-else class="avatar-row" @tap="handleAvatarTap">
+          <view class="avatar">
+            <image v-if="form.avatarUrl" class="avatar-img" :src="form.avatarUrl" mode="aspectFill" />
+            <text v-else class="avatar-text">{{ form.displayName.slice(0, 1) || 'U' }}</text>
+          </view>
         </view>
         <view class="field">
           <text class="label">昵称</text>
@@ -186,10 +190,26 @@ async function submitProfile() {
 .avatar-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
+  justify-content: center;
+  gap: 0;
   padding: 12px 0;
   border-bottom: 1px solid #f2f4f7;
+}
+
+.avatar-row--button {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border: none;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: inherit;
+}
+
+.avatar-row--button::after {
+  border: none;
 }
 
 .field {
@@ -224,9 +244,9 @@ async function submitProfile() {
 }
 
 .avatar {
-  width: 46px;
-  height: 46px;
-  border-radius: 23px;
+  width: 86px;
+  height: 86px;
+  border-radius: 43px;
   overflow: hidden;
   background: linear-gradient(145deg, rgba(63, 151, 255, 0.35), rgba(126, 198, 255, 0.2));
   display: flex;
@@ -242,18 +262,6 @@ async function submitProfile() {
 .avatar-text {
   color: #ffffff;
   font-weight: 700;
-}
-
-.avatar-action {
-  margin: 0;
-  border: 1px solid rgba(31, 122, 236, 0.3);
-  background: rgba(31, 122, 236, 0.08);
-  color: #1f7aec;
-  border-radius: 999px;
-  height: 30px;
-  line-height: 30px;
-  font-size: 12px;
-  padding: 0 12px;
 }
 
 .save {

@@ -60,8 +60,10 @@ import BottomNav from '@/components/BottomNav.vue';
 import MiniAuthRecovery from '@/components/MiniAuthRecovery.vue';
 import ScenicCard from '@/components/ScenicCard.vue';
 import { listScenics } from '@/api/mini';
+import { listAchievements } from '@/api/mini/achievements';
 import { redirectToNav, type NavKey } from '@/utils/navKey';
 import { applyLightNavigationBar } from '@/utils/safeArea';
+import type { ScenicCheckinProgressItem } from '@/types/achievement';
 import type { ScenicSummary } from '@/types/scenic';
 
 type HomeScenicSummary = ScenicSummary & {
@@ -72,6 +74,7 @@ type HomeScenicSummary = ScenicSummary & {
 
 const keyword = ref('');
 const scenics = ref<HomeScenicSummary[]>([]);
+const scenicCheckinProgresses = ref<ScenicCheckinProgressItem[]>([]);
 const listScenicsSafe = listScenics as (query?: {
   featured?: boolean;
   homepage?: boolean;
@@ -88,10 +91,12 @@ onMounted(() => {
   void reload().catch(() => {
     void uni.showToast({ title: '加载失败', icon: 'none' });
   });
+  void loadScenicCheckinProgresses();
 });
 
 onShow(() => {
   applyLightNavigationBar();
+  void loadScenicCheckinProgresses();
 });
 
 const filtered = computed(() => {
@@ -110,10 +115,37 @@ function openScenicSearch() {
 }
 
 function resolveScenicProgress(_scenicId: string): { percent: number; description: string } {
+  const progress = scenicCheckinProgresses.value.find((item) => item.scenicId === _scenicId) ?? null;
+  const checked = getSafeCount(progress?.checkedCount);
+  const total = getSafeCount(progress?.totalCount);
+  const ratio = total > 0 ? Math.min(checked / total, 1) : 0;
+  const percent = Math.round(ratio * 100);
+
   return {
-    percent: 0,
-    description: '打卡进度',
+    percent,
+    description:
+      ratio >= 1 && total > 0
+        ? '已完成该景区所有景点打卡'
+        : total > 0
+          ? `已完成该景区${checked}/${total}个景点打卡`
+          : '暂未开始该景区景点打卡',
   };
+}
+
+async function loadScenicCheckinProgresses(): Promise<void> {
+  try {
+    const achievementData = await listAchievements();
+    scenicCheckinProgresses.value = achievementData.scenicCheckinProgresses;
+  } catch {
+    scenicCheckinProgresses.value = [];
+  }
+}
+
+function getSafeCount(value: number | undefined): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.max(Number(value), 0);
 }
 
 function handleNavigate(key: NavKey) {
