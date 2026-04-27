@@ -61,28 +61,6 @@
           <text class="viewer-auto-tour-trigger__label">{{ floatingAutoTourPauseButton.label }}</text>
         </view>
       </button>
-      <view v-if="signboardOverlayEntries.length" class="viewer-signboard-layer" aria-hidden="true">
-        <view
-          v-for="entry in signboardOverlayEntries"
-          :key="entry.id"
-          class="viewer-signboard"
-          :class="{ 'viewer-signboard--vehicle': entry.referenceKind === 'vehicle' }"
-          :style="{
-            left: `${entry.xPercent}%`,
-            top: `${entry.yPercent}%`,
-            transform: `translate(-50%, -100%) scale(${entry.scale})`,
-            opacity: String(entry.opacity),
-          }"
-        >
-          <view class="viewer-signboard__pill">
-            <text class="viewer-signboard__name">{{ entry.label }}</text>
-            <text class="viewer-signboard__distance">{{ entry.distanceLabel }}</text>
-            <view v-if="entry.showPunchBadge" class="viewer-signboard__punch-badge" aria-hidden="true">
-              <text class="viewer-signboard__punch-badge-icon">✓</text>
-            </view>
-          </view>
-        </view>
-      </view>
       <view v-if="punchBadgeOverlayEntries.length" class="viewer-punch-badge-layer" aria-hidden="true">
         <view
           v-for="entry in punchBadgeOverlayEntries"
@@ -796,17 +774,13 @@ import {
   SIGNBOARD_CLOSE_FADE_DISTANCE,
   SIGNBOARD_MIN_SCREEN_Y_PERCENT,
   createSignboardPlacementSmoothingState,
-  createSignboardReferenceSmoothingState,
   DEFAULT_SIGNBOARD_PLACEMENT_SMOOTH_SPEED,
-  DEFAULT_SIGNBOARD_REFERENCE_SMOOTH_SPEED,
   computeSignboardPlacement,
-  resetSignboardReferenceSmoothingState,
   resolveSignboardAnchorWorldPosition,
-  resolveSignboardDisplayLabel,
   smoothSignboardPlacement,
-  smoothSignboardReference,
   type SignboardPlacementSmoothingState,
 } from '@harmony/schema/signboardOverlay';
+import { disposeSignboardBillboards, syncSignboardBillboards, type SignboardBillboardStyle } from '@harmony/schema/signboardBillboardRuntime';
 import { runWithProgrammaticCameraMutation, isProgrammaticCameraMutationActive } from '@harmony/schema/cameraGuard';
 import {
   addBehaviorRuntimeListener,
@@ -1782,17 +1756,27 @@ function shouldRunInstancedCulling(camera: THREE.Camera, nowMs: number): boolean
 const nodeObjectMap = new Map<string, THREE.Object3D>();
 const signboardNodeIds = new Set<string>();
 const punchNodeIds = new Set<string>();
-const signboardOverlayEntries = ref<Array<{
-  id: string;
-  label: string;
-  distanceLabel: string;
-  xPercent: number;
-  yPercent: number;
-  scale: number;
-  opacity: number;
-  referenceKind: 'camera' | 'vehicle';
-  showPunchBadge: boolean;
-}>>([]);
+const SCENERY_SIGNBOARD_BILLBOARD_STYLE: SignboardBillboardStyle = {
+  backgroundTopColor: 'rgba(255, 255, 255, 0.88)',
+  backgroundMiddleColor: 'rgba(244, 249, 255, 0.76)',
+  backgroundBottomColor: 'rgba(232, 241, 249, 0.68)',
+  borderColor: 'rgba(153, 193, 255, 0.22)',
+  glowColor: 'rgba(122, 198, 255, 0.10)',
+  sheenColor: 'rgba(255, 255, 255, 0.12)',
+  labelColor: '#12314d',
+  distanceColor: 'rgba(21, 50, 79, 0.68)',
+  dividerColor: 'rgba(107, 152, 198, 0.16)',
+  textShadowColor: 'rgba(255, 255, 255, 0.08)',
+  shadowColor: 'rgba(52, 87, 128, 0.16)',
+  shadowBlur: 5,
+  shadowOffsetY: 1,
+  punchBadgeBackgroundTopColor: 'rgba(255, 255, 255, 0.92)',
+  punchBadgeBackgroundBottomColor: 'rgba(244, 249, 255, 0.82)',
+  punchBadgeBorderColor: 'rgba(153, 193, 255, 0.24)',
+  punchBadgeTextColor: '#28506f',
+  punchBadgeShadowColor: 'rgba(83, 126, 173, 0.12)',
+  distanceTextAccentColor: '#c88c12',
+}
 const punchBadgeOverlayEntries = ref<Array<{
   id: string;
   xPercent: number;
@@ -1804,8 +1788,6 @@ const punchBadgeOverlayEntries = ref<Array<{
 const punchedNodeIds = ref<Set<string>>(new Set());
 const punchTotalCount = ref(0);
 const punchSceneRevision = ref(0);
-const signboardReferenceSmoothingState = createSignboardReferenceSmoothingState();
-const signboardPlacementSmoothingStates = new Map<string, SignboardPlacementSmoothingState>();
 const punchBadgePlacementSmoothingStates = new Map<string, SignboardPlacementSmoothingState>();
 const signboardReferenceScratch = new THREE.Vector3();
 const signboardAnchorScratch = new THREE.Vector3();
@@ -1815,10 +1797,6 @@ const overlayDistanceReferenceAnchorScratch = new THREE.Vector3();
 const behaviorBubbleAnchorScratch = new THREE.Vector3();
 const behaviorBubbleCameraScratch = new THREE.Vector3();
 const OVERLAY_HORIZONTAL_DISTANCE_Y_EPSILON = 1.5;
-const SIGNBOARD_REFERENCE_SMOOTH_SPEED = DEFAULT_SIGNBOARD_REFERENCE_SMOOTH_SPEED;
-const SIGNBOARD_PLACEMENT_SMOOTH_SPEED = DEFAULT_SIGNBOARD_PLACEMENT_SMOOTH_SPEED;
-const SIGNBOARD_NEAR_FADE_DISTANCE = SIGNBOARD_CLOSE_FADE_DISTANCE;
-const SIGNBOARD_MIN_VISIBLE_Y_PERCENT = SIGNBOARD_MIN_SCREEN_Y_PERCENT;
 const browserStoredPunchedNodeIds = ref<string[]>([]);
 
 const normalizedInitialPunchedNodeIds = computed(() => {
@@ -1885,11 +1863,6 @@ watch(normalizedInitialPunchedNodeIds, () => {
 function resetPunchOverlaySmoothing(): void {
   punchBadgePlacementSmoothingStates.clear();
   punchBadgeOverlayEntries.value = [];
-}
-
-function resetSignboardOverlaySmoothing(): void {
-  resetSignboardReferenceSmoothingState(signboardReferenceSmoothingState);
-  signboardPlacementSmoothingStates.clear();
 }
 
 let physicsWorld: CANNON.World | null = null;
@@ -3993,11 +3966,11 @@ const cancelBehaviorAlert = behaviorAlert.cancel;
 
 function rebuildPreviewNodeMap(document: SceneJsonExportDocument | null | undefined) {
   assetNodeIdMap.clear();
+  disposeSignboardBillboards(renderContext?.scene ?? null);
   rebuildSceneNodeIndex(document?.nodes ?? null, previewNodeMap, previewParentMap);
   signboardNodeIds.clear();
   punchNodeIds.clear();
   punchTotalCount.value = 0;
-  resetSignboardOverlaySmoothing();
   resetPunchOverlaySmoothing();
 
   if (Array.isArray(document?.punchPoints)) {
@@ -4092,7 +4065,7 @@ function resolveOverlayDistanceReferenceWorld(
   return overlayDistanceReferenceScratch;
 }
 
-function resolveSignboardReference(activeCamera: THREE.Camera): { position: THREE.Vector3; kind: 'camera' | 'vehicle'; nodeId: string | null } | null {
+function resolvePunchBadgeReference(activeCamera: THREE.Camera): { position: THREE.Vector3; kind: 'camera' | 'vehicle'; nodeId: string | null } {
   const manualDriveNode = vehicleDriveActive.value ? vehicleDriveNodeId.value : null;
   if (manualDriveNode) {
     if (resolveVehicleOrObjectWorldPosition({
@@ -4123,52 +4096,16 @@ function resolveSignboardReference(activeCamera: THREE.Camera): { position: THRE
   return { position: signboardReferenceScratch, kind: 'camera', nodeId: resolveCameraDistanceReferenceNodeId() };
 }
 
-function updateSignboardOverlayEntries(activeCamera: THREE.Camera, deltaSeconds: number): void {
-  if (!signboardNodeIds.size && !punchNodeIds.size) {
-    if (signboardOverlayEntries.value.length) {
-      signboardOverlayEntries.value = [];
-    }
+function updatePunchBadgeOverlayEntries(activeCamera: THREE.Camera, deltaSeconds: number): void {
+  if (!punchNodeIds.size) {
     if (punchBadgeOverlayEntries.value.length) {
       punchBadgeOverlayEntries.value = [];
     }
-    resetSignboardOverlaySmoothing();
     resetPunchOverlaySmoothing();
     return;
   }
 
-  const reference = resolveSignboardReference(activeCamera);
-  if (!reference) {
-    signboardOverlayEntries.value = [];
-    punchBadgeOverlayEntries.value = [];
-    resetSignboardOverlaySmoothing();
-    resetPunchOverlaySmoothing();
-    return;
-  }
-
-  const smoothedReferencePosition = smoothSignboardReference(signboardReferenceSmoothingState, {
-    targetWorld: reference.position,
-    deltaSeconds,
-    kind: reference.kind,
-    nodeId: reference.nodeId,
-    speed: SIGNBOARD_REFERENCE_SMOOTH_SPEED,
-  });
-  const smoothedReference = {
-    position: smoothedReferencePosition,
-    kind: reference.kind,
-    nodeId: reference.nodeId,
-  };
-
-  const nextEntries: Array<{
-    id: string;
-    label: string;
-    distanceLabel: string;
-    xPercent: number;
-    yPercent: number;
-    scale: number;
-    opacity: number;
-    referenceKind: 'camera' | 'vehicle';
-    showPunchBadge: boolean;
-  }> = [];
+  const reference = resolvePunchBadgeReference(activeCamera);
   const nextPunchBadgeEntries: Array<{
     id: string;
     xPercent: number;
@@ -4177,63 +4114,7 @@ function updateSignboardOverlayEntries(activeCamera: THREE.Camera, deltaSeconds:
     opacity: number;
     referenceKind: 'camera' | 'vehicle';
   }> = [];
-  const activePlacementNodeIds = new Set<string>();
   const activePunchBadgeNodeIds = new Set<string>();
-
-  for (const nodeId of signboardNodeIds) {
-    const node = resolveNodeById(nodeId);
-    const object = nodeObjectMap.get(nodeId) ?? null;
-    if (!node || !object || !isRuntimeObjectEffectivelyVisible(object)) {
-      continue;
-    }
-
-    const signboardState = node.components?.[SIGNBOARD_COMPONENT_TYPE] as SceneNodeComponentState<SignboardComponentProps> | undefined;
-    if (!signboardState?.enabled) {
-      continue;
-    }
-
-    const label = resolveSignboardDisplayLabel(signboardState.props?.label, node.name, nodeId);
-    if (!label) {
-      continue;
-    }
-
-    const isPunched = punchedNodeIds.value.has(nodeId) && punchNodeIds.has(nodeId);
-
-    resolveSignboardAnchorWorldPosition(object, signboardAnchorScratch);
-    const distanceReferenceWorld = resolveOverlayDistanceReferenceWorld(nodeId, signboardAnchorScratch, smoothedReference);
-    const placement = computeSignboardPlacement({
-      anchorWorld: signboardAnchorScratch,
-      referenceWorld: distanceReferenceWorld,
-      camera: activeCamera,
-      closeFadeDistance: SIGNBOARD_NEAR_FADE_DISTANCE,
-      minScreenYPercent: SIGNBOARD_MIN_VISIBLE_Y_PERCENT,
-    });
-    if (!placement) {
-      signboardPlacementSmoothingStates.delete(nodeId);
-      continue;
-    }
-
-    const placementState = signboardPlacementSmoothingStates.get(nodeId) ?? createSignboardPlacementSmoothingState();
-    signboardPlacementSmoothingStates.set(nodeId, placementState);
-    const smoothedPlacement = smoothSignboardPlacement(placementState, {
-      placement,
-      deltaSeconds,
-      speed: SIGNBOARD_PLACEMENT_SMOOTH_SPEED,
-    });
-    activePlacementNodeIds.add(nodeId);
-
-    nextEntries.push({
-      id: nodeId,
-      label,
-      distanceLabel: smoothedPlacement.distanceLabel,
-      xPercent: smoothedPlacement.xPercent,
-      yPercent: smoothedPlacement.yPercent,
-      scale: smoothedPlacement.scale,
-      opacity: smoothedPlacement.opacity,
-      referenceKind: reference.kind,
-      showPunchBadge: isPunched,
-    });
-  }
 
   for (const nodeId of punchNodeIds) {
     if (signboardNodeIds.has(nodeId) || !punchedNodeIds.value.has(nodeId)) {
@@ -4252,13 +4133,13 @@ function updateSignboardOverlayEntries(activeCamera: THREE.Camera, deltaSeconds:
     }
 
     resolveSignboardAnchorWorldPosition(object, signboardAnchorScratch);
-    const distanceReferenceWorld = resolveOverlayDistanceReferenceWorld(nodeId, signboardAnchorScratch, smoothedReference);
+    const distanceReferenceWorld = resolveOverlayDistanceReferenceWorld(nodeId, signboardAnchorScratch, reference);
     const placement = computeSignboardPlacement({
       anchorWorld: signboardAnchorScratch,
       referenceWorld: distanceReferenceWorld,
       camera: activeCamera,
-      closeFadeDistance: SIGNBOARD_NEAR_FADE_DISTANCE,
-      minScreenYPercent: SIGNBOARD_MIN_VISIBLE_Y_PERCENT,
+      closeFadeDistance: SIGNBOARD_CLOSE_FADE_DISTANCE,
+      minScreenYPercent: SIGNBOARD_MIN_SCREEN_Y_PERCENT,
     });
     if (!placement) {
       punchBadgePlacementSmoothingStates.delete(nodeId);
@@ -4270,7 +4151,7 @@ function updateSignboardOverlayEntries(activeCamera: THREE.Camera, deltaSeconds:
     const smoothedPlacement = smoothSignboardPlacement(placementState, {
       placement,
       deltaSeconds,
-      speed: SIGNBOARD_PLACEMENT_SMOOTH_SPEED,
+      speed: DEFAULT_SIGNBOARD_PLACEMENT_SMOOTH_SPEED,
     });
     activePunchBadgeNodeIds.add(nodeId);
     nextPunchBadgeEntries.push({
@@ -4283,20 +4164,37 @@ function updateSignboardOverlayEntries(activeCamera: THREE.Camera, deltaSeconds:
     });
   }
 
-  for (const nodeId of signboardPlacementSmoothingStates.keys()) {
-    if (!activePlacementNodeIds.has(nodeId)) {
-      signboardPlacementSmoothingStates.delete(nodeId);
-    }
-  }
-
   for (const nodeId of punchBadgePlacementSmoothingStates.keys()) {
     if (!activePunchBadgeNodeIds.has(nodeId)) {
       punchBadgePlacementSmoothingStates.delete(nodeId);
     }
   }
 
-  signboardOverlayEntries.value = nextEntries;
   punchBadgeOverlayEntries.value = nextPunchBadgeEntries;
+}
+
+function resolveSceneSignboardLabel(nodeId: string): string {
+  const node = resolveNodeById(nodeId);
+  if (!node) {
+    return nodeId
+  }
+
+  const signboardState = node.components?.[SIGNBOARD_COMPONENT_TYPE] as SceneNodeComponentState<SignboardComponentProps> | undefined;
+  const label = typeof signboardState?.props?.label === 'string' ? signboardState.props.label : '';
+  const nodeName = typeof node.name === 'string' ? node.name : '';
+  return label.trim() || nodeName.trim() || nodeId;
+}
+
+function syncSceneSignboards(): void {
+  syncSignboardBillboards({
+    scene: renderContext?.scene ?? null,
+    camera: renderContext?.camera ?? null,
+    nodeObjectMap,
+    signboardNodeIds,
+    resolveLabel: resolveSceneSignboardLabel,
+    isPunched: (nodeId: string) => punchedNodeIds.value.has(nodeId),
+    appearance: SCENERY_SIGNBOARD_BILLBOARD_STYLE,
+  });
 }
 
 function resolveClickBehaviorAncestorNodeId(nodeId: string | null): string | null {
@@ -11794,6 +11692,7 @@ function teardownRenderer() {
   stopInstancedMeshSubscription = null;
   stopBillboardMeshSubscription?.();
   stopBillboardMeshSubscription = null;
+  disposeSignboardBillboards(renderContext?.scene ?? null);
   clearInstancedMeshes();
   disposeObject(scene);
   disposeMaterialTextureCache();
@@ -12255,7 +12154,8 @@ function startRenderLoop(
         }
 
           updateBehaviorProximity();
-          updateSignboardOverlayEntries(camera, deltaSeconds);
+          updatePunchBadgeOverlayEntries(camera, deltaSeconds);
+          syncSceneSignboards();
 
         // Keep chunked ground meshes in sync with camera position.
         const cachedGround = dynamicGroundCache;
@@ -12788,45 +12688,6 @@ onUnmounted(() => {
   flex: 1;
   background-color: #e9eef5;
   isolation: isolate;
-}
-
-.viewer-signboard-layer {
-  position: absolute;
-  inset: 0;
-  z-index: 1450;
-  pointer-events: none;
-  overflow: hidden;
-}
-
-.viewer-signboard {
-  position: absolute;
-  transform-origin: center bottom;
-  transition: opacity 0.12s linear, transform 0.12s ease-out;
-  will-change: transform, opacity;
-}
-
-.viewer-signboard__pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 14rpx;
-  padding: 16rpx 22rpx;
-  border-radius: 999rpx;
-  border: 1px solid rgba(153, 193, 255, 0.22);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(244, 249, 255, 0.76)),
-    linear-gradient(135deg, rgba(255, 255, 255, 0.12), rgba(210, 232, 255, 0.08));
-  box-shadow: 0 16rpx 36rpx rgba(52, 87, 128, 0.14), 0 4rpx 10rpx rgba(83, 126, 173, 0.06);
-  backdrop-filter: blur(16px) saturate(1.06);
-  color: #15324f;
-  white-space: nowrap;
-  flex-wrap: nowrap;
-}
-
-.viewer-signboard--vehicle .viewer-signboard__pill {
-  border-color: rgba(255, 198, 104, 0.24);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(255, 250, 240, 0.76)),
-    linear-gradient(135deg, rgba(255, 198, 104, 0.1), rgba(255, 255, 255, 0.06));
 }
 
 .viewer-punch-summary {
