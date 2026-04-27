@@ -234,13 +234,12 @@ import {
 	DEFAULT_SIGNBOARD_PLACEMENT_SMOOTH_SPEED,
 	DEFAULT_SIGNBOARD_REFERENCE_SMOOTH_SPEED,
 	computeSignboardPlacement,
-	resetSignboardReferenceSmoothingState,
 	resolveSignboardAnchorWorldPosition,
-	resolveSignboardDisplayLabel,
 	smoothSignboardPlacement,
 	smoothSignboardReference,
 	type SignboardPlacementSmoothingState,
 } from '@schema/signboardOverlay'
+import { disposeSignboardBillboards, syncSignboardBillboards, type SignboardBillboardStyle } from '@schema/signboardBillboardRuntime'
 import type {
 	GuideboardComponentProps,
 	LodFaceCameraForwardAxis,
@@ -1781,18 +1780,28 @@ const STEERING_KEYBOARD_RETURN_SPEED = 7
 const STEERING_KEYBOARD_CATCH_SPEED = 18
 const nodeObjectMap = new Map<string, THREE.Object3D>()
 const signboardNodeIds = new Set<string>()
+const SCENE_PREVIEW_SIGNBOARD_BILLBOARD_STYLE: SignboardBillboardStyle = {
+	backgroundTopColor: 'rgba(10, 16, 28, 0.92)',
+	backgroundMiddleColor: 'rgba(18, 28, 42, 0.88)',
+	backgroundBottomColor: 'rgba(20, 36, 54, 0.82)',
+	borderColor: 'rgba(159, 214, 255, 0.22)',
+	glowColor: 'rgba(122, 198, 255, 0.12)',
+	sheenColor: 'rgba(255, 255, 255, 0.08)',
+	labelColor: '#f7fbff',
+	distanceColor: 'rgba(231, 244, 255, 0.82)',
+	dividerColor: 'rgba(255, 255, 255, 0.18)',
+	textShadowColor: 'rgba(0, 0, 0, 0.24)',
+	shadowColor: 'rgba(4, 31, 56, 0.28)',
+	shadowBlur: 6,
+	shadowOffsetY: 1,
+	punchBadgeBackgroundTopColor: 'rgba(242, 255, 248, 0.98)',
+	punchBadgeBackgroundBottomColor: 'rgba(226, 255, 239, 0.94)',
+	punchBadgeBorderColor: 'rgba(115, 231, 170, 0.34)',
+	punchBadgeTextColor: '#2f8f67',
+	punchBadgeShadowColor: 'rgba(115, 231, 170, 0.26)',
+	distanceTextAccentColor: '#c88c12',
+}
 const punchNodeIds = new Set<string>()
-const signboardOverlayEntries = ref<Array<{
-	id: string
-	label: string
-	distanceLabel: string
-	xPercent: number
-	yPercent: number
-	scale: number
-	opacity: number
-	referenceKind: 'camera' | 'vehicle'
-	showPunchBadge: boolean
-}>>([])
 const punchBadgeOverlayEntries = ref<Array<{
 	id: string
 	xPercent: number
@@ -1804,7 +1813,6 @@ const punchBadgeOverlayEntries = ref<Array<{
 const punchedNodeIds = ref<Set<string>>(new Set())
 const browserStoredPunchedNodeIds = ref<string[]>([])
 const signboardReferenceSmoothingState = createSignboardReferenceSmoothingState()
-const signboardPlacementSmoothingStates = new Map<string, SignboardPlacementSmoothingState>()
 const punchBadgePlacementSmoothingStates = new Map<string, SignboardPlacementSmoothingState>()
 const signboardReferenceScratch = new THREE.Vector3()
 const signboardAnchorScratch = new THREE.Vector3()
@@ -1815,15 +1823,6 @@ const behaviorBubbleAnchorScratch = new THREE.Vector3()
 const behaviorBubbleCameraScratch = new THREE.Vector3()
 const behaviorBubbleSeenKeys = new Set<string>()
 const OVERLAY_HORIZONTAL_DISTANCE_Y_EPSILON = 1.5
-const SIGNBOARD_REFERENCE_SMOOTH_SPEED = DEFAULT_SIGNBOARD_REFERENCE_SMOOTH_SPEED
-const SIGNBOARD_PLACEMENT_SMOOTH_SPEED = DEFAULT_SIGNBOARD_PLACEMENT_SMOOTH_SPEED
-const SIGNBOARD_NEAR_FADE_DISTANCE = SIGNBOARD_CLOSE_FADE_DISTANCE
-const SIGNBOARD_MIN_VISIBLE_Y_PERCENT = SIGNBOARD_MIN_SCREEN_Y_PERCENT
-
-function resetSignboardOverlaySmoothing(): void {
-	resetSignboardReferenceSmoothingState(signboardReferenceSmoothingState)
-	signboardPlacementSmoothingStates.clear()
-}
 
 function resetPunchOverlaySmoothing(): void {
 	punchBadgePlacementSmoothingStates.clear()
@@ -2485,10 +2484,10 @@ function isGuideboardEffectActive(props: Partial<GuideboardComponentProps> | nul
 }
 
 function rebuildPreviewNodeMap(document: SceneJsonExportDocument | null | undefined): void {
+	disposeSignboardBillboards(scene)
 	rebuildSceneNodeIndex(document?.nodes ?? null, previewNodeMap, previewParentMap)
 	signboardNodeIds.clear()
 	punchNodeIds.clear()
-	resetSignboardOverlaySmoothing()
 	resetPunchOverlaySmoothing()
 	if (Array.isArray(document?.punchPoints)) {
 		document.punchPoints.forEach((point) => {
@@ -2588,24 +2587,42 @@ function resolveSignboardReference(): { position: THREE.Vector3; kind: 'camera' 
 	return { position: signboardReferenceScratch, kind: 'camera', nodeId: resolveCameraDistanceReferenceNodeId() }
 }
 
+function resolveSceneSignboardLabel(nodeId: string): string {
+	const node = resolveNodeById(nodeId)
+	if (!node) {
+		return nodeId
+	}
+	const signboardState = node.components?.[SIGNBOARD_COMPONENT_TYPE] as
+		| SceneNodeComponentState<SignboardComponentProps>
+		| undefined
+	const label = typeof signboardState?.props?.label === 'string' ? signboardState.props.label.trim() : ''
+	const nodeName = typeof node.name === 'string' ? node.name.trim() : ''
+	return label || nodeName || nodeId
+}
 
-function updateSignboardOverlayEntries(activeCamera: THREE.Camera, deltaSeconds: number): void {
-	if (!signboardNodeIds.size && !punchNodeIds.size) {
-		if (signboardOverlayEntries.value.length) {
-			signboardOverlayEntries.value = []
-		}
+function syncSceneSignboards(activeScene: THREE.Scene | null, activeCamera: THREE.Camera | null): void {
+	syncSignboardBillboards({
+		scene: activeScene,
+		camera: activeCamera,
+		nodeObjectMap,
+		signboardNodeIds,
+		resolveLabel: resolveSceneSignboardLabel,
+		isPunched: (nodeId: string) => punchedNodeIds.value.has(nodeId),
+		appearance: SCENE_PREVIEW_SIGNBOARD_BILLBOARD_STYLE,
+	})
+}
+
+function updatePunchBadgeOverlayEntries(activeCamera: THREE.Camera, deltaSeconds: number): void {
+	if (!punchNodeIds.size) {
 		if (punchBadgeOverlayEntries.value.length) {
 			punchBadgeOverlayEntries.value = []
 		}
-		resetSignboardOverlaySmoothing()
 		resetPunchOverlaySmoothing()
 		return
 	}
 	const reference = resolveSignboardReference()
 	if (!reference) {
-		signboardOverlayEntries.value = []
 		punchBadgeOverlayEntries.value = []
-		resetSignboardOverlaySmoothing()
 		resetPunchOverlaySmoothing()
 		return
 	}
@@ -2614,24 +2631,13 @@ function updateSignboardOverlayEntries(activeCamera: THREE.Camera, deltaSeconds:
 		deltaSeconds,
 		kind: reference.kind,
 		nodeId: reference.nodeId,
-		speed: SIGNBOARD_REFERENCE_SMOOTH_SPEED,
+		speed: DEFAULT_SIGNBOARD_REFERENCE_SMOOTH_SPEED,
 	})
 	const smoothedReference = {
 		position: smoothedReferencePosition,
 		kind: reference.kind,
 		nodeId: reference.nodeId,
 	}
-	const nextEntries: Array<{
-		id: string
-		label: string
-		distanceLabel: string
-		xPercent: number
-		yPercent: number
-		scale: number
-		opacity: number
-		referenceKind: 'camera' | 'vehicle'
-		showPunchBadge: boolean
-	}> = []
 	const nextPunchBadgeEntries: Array<{
 		id: string
 		xPercent: number
@@ -2640,58 +2646,7 @@ function updateSignboardOverlayEntries(activeCamera: THREE.Camera, deltaSeconds:
 		opacity: number
 		referenceKind: 'camera' | 'vehicle'
 	}> = []
-	const activePlacementNodeIds = new Set<string>()
 	const activePunchBadgeNodeIds = new Set<string>()
-	for (const nodeId of signboardNodeIds) {
-		const node = resolveNodeById(nodeId)
-		const object = nodeObjectMap.get(nodeId) ?? null
-		if (!node || !object || !isRuntimeObjectEffectivelyVisible(object)) {
-			continue
-		}
-		const signboardState = node.components?.[SIGNBOARD_COMPONENT_TYPE] as
-			| SceneNodeComponentState<SignboardComponentProps>
-			| undefined
-		if (!signboardState?.enabled) {
-			continue
-		}
-		const label = resolveSignboardDisplayLabel(signboardState.props?.label, node.name, nodeId)
-		if (!label) {
-			continue
-		}
-		const isPunched = punchedNodeIds.value.has(nodeId) && punchNodeIds.has(nodeId)
-		resolveSignboardAnchorWorldPosition(object, signboardAnchorScratch)
-		const distanceReferenceWorld = resolveOverlayDistanceReferenceWorld(nodeId, signboardAnchorScratch, smoothedReference)
-		const placement = computeSignboardPlacement({
-			anchorWorld: signboardAnchorScratch,
-			referenceWorld: distanceReferenceWorld,
-			camera: activeCamera,
-			closeFadeDistance: SIGNBOARD_NEAR_FADE_DISTANCE,
-			minScreenYPercent: SIGNBOARD_MIN_VISIBLE_Y_PERCENT,
-		})
-		if (!placement) {
-			signboardPlacementSmoothingStates.delete(nodeId)
-			continue
-		}
-		const placementState = signboardPlacementSmoothingStates.get(nodeId) ?? createSignboardPlacementSmoothingState()
-		signboardPlacementSmoothingStates.set(nodeId, placementState)
-		const smoothedPlacement = smoothSignboardPlacement(placementState, {
-			placement,
-			deltaSeconds,
-			speed: SIGNBOARD_PLACEMENT_SMOOTH_SPEED,
-		})
-		activePlacementNodeIds.add(nodeId)
-		nextEntries.push({
-			id: nodeId,
-			label,
-			distanceLabel: smoothedPlacement.distanceLabel,
-			xPercent: smoothedPlacement.xPercent,
-			yPercent: smoothedPlacement.yPercent,
-			scale: smoothedPlacement.scale,
-			opacity: smoothedPlacement.opacity,
-			referenceKind: reference.kind,
-			showPunchBadge: isPunched,
-		})
-	}
 	for (const nodeId of punchNodeIds) {
 		if (signboardNodeIds.has(nodeId) || !punchedNodeIds.value.has(nodeId)) {
 			continue
@@ -2713,8 +2668,8 @@ function updateSignboardOverlayEntries(activeCamera: THREE.Camera, deltaSeconds:
 			anchorWorld: signboardAnchorScratch,
 			referenceWorld: distanceReferenceWorld,
 			camera: activeCamera,
-			closeFadeDistance: SIGNBOARD_NEAR_FADE_DISTANCE,
-			minScreenYPercent: SIGNBOARD_MIN_VISIBLE_Y_PERCENT,
+			closeFadeDistance: SIGNBOARD_CLOSE_FADE_DISTANCE,
+			minScreenYPercent: SIGNBOARD_MIN_SCREEN_Y_PERCENT,
 		})
 		if (!placement) {
 			punchBadgePlacementSmoothingStates.delete(nodeId)
@@ -2725,7 +2680,7 @@ function updateSignboardOverlayEntries(activeCamera: THREE.Camera, deltaSeconds:
 		const smoothedPlacement = smoothSignboardPlacement(placementState, {
 			placement,
 			deltaSeconds,
-			speed: SIGNBOARD_PLACEMENT_SMOOTH_SPEED,
+			speed: DEFAULT_SIGNBOARD_PLACEMENT_SMOOTH_SPEED,
 		})
 		activePunchBadgeNodeIds.add(nodeId)
 		nextPunchBadgeEntries.push({
@@ -2737,17 +2692,11 @@ function updateSignboardOverlayEntries(activeCamera: THREE.Camera, deltaSeconds:
 			referenceKind: reference.kind,
 		})
 	}
-	for (const nodeId of signboardPlacementSmoothingStates.keys()) {
-		if (!activePlacementNodeIds.has(nodeId)) {
-			signboardPlacementSmoothingStates.delete(nodeId)
-		}
-	}
 	for (const nodeId of punchBadgePlacementSmoothingStates.keys()) {
 		if (!activePunchBadgeNodeIds.has(nodeId)) {
 			punchBadgePlacementSmoothingStates.delete(nodeId)
 		}
 	}
-	signboardOverlayEntries.value = nextEntries
 	punchBadgeOverlayEntries.value = nextPunchBadgeEntries
 }
 
@@ -8906,7 +8855,8 @@ function startAnimationLoop() {
 		updateVehicleCameraForFrame(delta, vehicleFollowCameraActive, activeCamera, vehicleTransformDriveUpdated)
 		updateCameraDependentSystemsForFrame(activeCamera, delta)
 		updateBillboardInstanceCameraWorldPosition(activeCamera.position)
-		updateSignboardOverlayEntries(activeCamera, delta)
+		updatePunchBadgeOverlayEntries(activeCamera, delta)
+		syncSceneSignboards(currentScene, activeCamera)
 		updateInfoBoardOverlayPlacement(activeCamera)
 		updatePerFrameDiagnostics(delta)
 		if (gradientBackgroundDome) {
@@ -12571,6 +12521,7 @@ onBeforeUnmount(() => {
 	stopInstancedMeshSubscription = null
 	stopBillboardMeshSubscription?.()
 	stopBillboardMeshSubscription = null
+	disposeSignboardBillboards(scene)
 	window.removeEventListener('resize', handleResize)
 	document.removeEventListener('fullscreenchange', handleFullscreenChange)
 	window.removeEventListener('keydown', handleKeyDown)
@@ -12641,28 +12592,6 @@ watch(
 			</div>
 		</v-alert>
 		<div ref="containerRef" class="scene-preview__canvas"></div>
-		<div v-if="signboardOverlayEntries.length" class="scene-preview__signboard-layer" aria-hidden="true">
-			<div
-				v-for="entry in signboardOverlayEntries"
-				:key="entry.id"
-				class="scene-preview__signboard"
-				:class="{ 'scene-preview__signboard--vehicle': entry.referenceKind === 'vehicle' }"
-				:style="{
-					left: `${entry.xPercent}%`,
-					top: `${entry.yPercent}%`,
-					'--signboard-scale': String(entry.scale),
-					'--signboard-opacity': String(entry.opacity),
-				}"
-			>
-				<div class="scene-preview__signboard-pill">
-					<span class="scene-preview__signboard-name">{{ entry.label }}</span>
-					<span class="scene-preview__signboard-distance">{{ entry.distanceLabel }}</span>
-					<div v-if="entry.showPunchBadge" class="scene-preview__signboard-punch-badge" aria-hidden="true">
-						<span class="scene-preview__signboard-punch-badge-icon">✓</span>
-					</div>
-				</div>
-			</div>
-		</div>
 		<div v-if="punchBadgeOverlayEntries.length" class="scene-preview__punch-badge-layer" aria-hidden="true">
 			<div
 				v-for="entry in punchBadgeOverlayEntries"
@@ -13483,84 +13412,6 @@ watch(
 	width: 100%;
 	height: 100%;
 	display: block;
-}
-
-.scene-preview__signboard-layer {
-	position: absolute;
-	inset: 0;
-	z-index: 2150;
-	pointer-events: none;
-	overflow: hidden;
-}
-
-.scene-preview__signboard {
-	position: absolute;
-	transform: translate(-50%, -100%) scale(var(--signboard-scale, 1));
-	transform-origin: center bottom;
-	opacity: var(--signboard-opacity, 1);
-	transition: opacity 120ms linear, transform 120ms ease-out;
-	will-change: transform, opacity;
-}
-
-.scene-preview__signboard-pill {
-	display: inline-flex;
-	align-items: center;
-	gap: 10px;
-	padding: 10px 14px;
-	border-radius: 999px;
-	border: 1px solid rgba(149, 223, 255, 0.32);
-	background: linear-gradient(135deg, rgba(8, 20, 34, 0.88), rgba(18, 44, 62, 0.82));
-	box-shadow: 0 14px 30px rgba(0, 0, 0, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.08);
-	backdrop-filter: blur(10px);
-	color: #eff8ff;
-	white-space: nowrap;
-	flex-wrap: nowrap;
-}
-
-.scene-preview__signboard--vehicle .scene-preview__signboard-pill {
-	border-color: rgba(255, 210, 127, 0.36);
-	background: linear-gradient(135deg, rgba(36, 22, 8, 0.88), rgba(62, 44, 18, 0.82));
-}
-
-.scene-preview__signboard-name {
-	display: inline-block;
-	font-size: 0.84rem;
-	font-weight: 700;
-	letter-spacing: 0.02em;
-	max-width: 220px;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-
-.scene-preview__signboard-distance {
-	display: inline-block;
-	padding-left: 10px;
-	border-left: 1px solid rgba(255, 255, 255, 0.14);
-	font-size: 0.76rem;
-	font-family: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
-	color: rgba(226, 242, 255, 0.82);
-	white-space: nowrap;
-}
-
-.scene-preview__signboard-punch-badge {
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	min-width: 20px;
-	height: 20px;
-	padding: 0 6px;
-	margin-left: 4px;
-	border-radius: 999px;
-	border: 1px solid rgba(115, 231, 170, 0.34);
-	background: rgba(20, 48, 34, 0.82);
-	color: #d8ffea;
-}
-
-.scene-preview__signboard-punch-badge-icon {
-	font-size: 0.72rem;
-	font-weight: 700;
-	line-height: 1;
 }
 
 .scene-preview__punch-badge-layer {

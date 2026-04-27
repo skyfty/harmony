@@ -75,6 +75,8 @@ export type {
 
 export { computePlaySoundDistanceGain, resolvePlaySoundSourcePoint } from './soundDistance'
 
+export { disposeSignboardBillboards, syncSignboardBillboards } from './signboardBillboardRuntime'
+
 export { getDefaultUvDebugTexture, createUvDebugMaterial } from './debugTextures'
 
 export {
