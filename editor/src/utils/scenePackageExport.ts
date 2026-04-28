@@ -4,6 +4,8 @@ import type {
   SceneAssetRegistryEntry,
   SceneJsonExportDocument,
   ProjectExportBundleProjectConfig,
+  ProjectExportBundleMetadata,
+  ProjectExportBundleResourceBreakdown,
 } from '@schema'
 import {
   encodeScenePackageSceneDocument,
@@ -788,6 +790,175 @@ function countSceneCheckpoints(document: SceneJsonExportDocument | null | undefi
   return computed.length
 }
 
+function countSceneNodes(nodes: SceneJsonExportDocument['nodes'] | null | undefined): number {
+  if (!Array.isArray(nodes)) {
+    return 0
+  }
+  let total = 0
+  for (const node of nodes) {
+    if (!node || typeof node !== 'object') {
+      continue
+    }
+    total += 1
+    const children = (node as { children?: SceneJsonExportDocument['nodes'] }).children
+    total += countSceneNodes(children)
+  }
+  return total
+}
+
+function resourceEntrySize(entry: ScenePackageResourceEntry, files: Record<string, Uint8Array>): number {
+  const explicit = Number(entry.size)
+  if (Number.isFinite(explicit) && explicit > 0) {
+    return Math.floor(explicit)
+  }
+  return files[entry.path]?.byteLength ?? 0
+}
+
+function addBreakdownBytes(
+  breakdown: ProjectExportBundleResourceBreakdown,
+  key: keyof ProjectExportBundleResourceBreakdown,
+  value: number,
+): void {
+  if (!Number.isFinite(value) || value <= 0) {
+    return
+  }
+  breakdown[key] += Math.floor(value)
+}
+
+function isTerrainPackagePath(path: string): boolean {
+  return path.includes('/ground-tiles/')
+    || path.includes('/ground-collision/')
+    || path.includes('/ground/chunks/')
+    || path.endsWith('/ground-terrain.json')
+    || path.endsWith('/ground-collision.json')
+    || path.endsWith('/ground-chunk-manifest.json')
+}
+
+function isSceneDocumentPath(path: string): boolean {
+  return /^scenes\/[^/]+\/scene\.bin$/u.test(path)
+}
+
+function buildProjectExportMetadata(options: {
+  createdAt: string
+  checkpointTotal: number
+  files: Record<string, Uint8Array>
+  manifestBytes: number
+  projectBytes: number
+  project: ProjectExportBundleProjectConfig
+  resources: ScenePackageResourceEntry[]
+  scenes: ScenePackageExportScene[]
+}): ProjectExportBundleMetadata {
+  const breakdown: ProjectExportBundleResourceBreakdown = {
+    localAssetBytes: 0,
+    embeddedAssetBytes: 0,
+    planningImageBytes: 0,
+    terrainBytes: 0,
+    sidecarBytes: 0,
+    sceneDocumentBytes: 0,
+    manifestBytes: options.manifestBytes,
+    projectBytes: options.projectBytes,
+    otherBytes: 0,
+  }
+  const resourcePathSet = new Set(options.resources.map((entry) => entry.path))
+  const resourceBytesBySceneId = new Map<string, number>()
+
+  for (const entry of options.resources) {
+    const size = resourceEntrySize(entry, options.files)
+    if (entry.resourceType === 'localAsset') {
+      addBreakdownBytes(breakdown, 'localAssetBytes', size)
+    } else if (entry.resourceType === 'planningImage') {
+      addBreakdownBytes(breakdown, 'planningImageBytes', size)
+    } else if (entry.resourceType === 'terrainWeightmap') {
+      addBreakdownBytes(breakdown, 'terrainBytes', size)
+    } else if (entry.resourceType === 'other') {
+      addBreakdownBytes(breakdown, 'embeddedAssetBytes', size)
+    } else {
+      addBreakdownBytes(breakdown, 'otherBytes', size)
+    }
+
+    const match = entry.path.match(/^scenes\/([^/]+)\//u)
+    if (match?.[1]) {
+      const sceneId = decodeURIComponent(match[1])
+      resourceBytesBySceneId.set(sceneId, (resourceBytesBySceneId.get(sceneId) ?? 0) + size)
+    }
+  }
+
+  for (const [path, bytes] of Object.entries(options.files)) {
+    if (resourcePathSet.has(path)) {
+      continue
+    }
+    const size = bytes.byteLength
+    if (isSceneDocumentPath(path)) {
+      addBreakdownBytes(breakdown, 'sceneDocumentBytes', size)
+    } else if (isTerrainPackagePath(path)) {
+      addBreakdownBytes(breakdown, 'terrainBytes', size)
+    } else if (path === 'manifest.json') {
+      addBreakdownBytes(breakdown, 'manifestBytes', size)
+    } else if (path === 'project/project.json') {
+      addBreakdownBytes(breakdown, 'projectBytes', size)
+    } else if (path.startsWith('scenes/')) {
+      addBreakdownBytes(breakdown, 'sidecarBytes', size)
+    } else {
+      addBreakdownBytes(breakdown, 'otherBytes', size)
+    }
+  }
+
+  const sceneSummaries = options.scenes.map((scene) => {
+    const encodedSceneId = encodeURIComponent(scene.id)
+    const sceneRoot = `scenes/${encodedSceneId}/`
+    let sceneDocumentBytes = 0
+    let sidecarBytes = 0
+    for (const [path, bytes] of Object.entries(options.files)) {
+      if (!path.startsWith(sceneRoot) || resourcePathSet.has(path)) {
+        continue
+      }
+      if (path === `${sceneRoot}scene.bin`) {
+        sceneDocumentBytes += bytes.byteLength
+      } else {
+        sidecarBytes += bytes.byteLength
+      }
+    }
+    return {
+      sceneId: scene.id,
+      name: typeof scene.document?.name === 'string' ? scene.document.name : null,
+      checkpointTotal: countSceneCheckpoints(scene.document),
+      nodeCount: countSceneNodes(scene.document?.nodes),
+      sceneDocumentBytes,
+      sidecarBytes,
+      resourceBytes: resourceBytesBySceneId.get(scene.id) ?? 0,
+    }
+  })
+
+  const fileBytes = Object.values(options.files).reduce((sum, bytes) => sum + bytes.byteLength, 0)
+  const manifestResourceBytes = options.resources.reduce((sum, entry) => sum + resourceEntrySize(entry, options.files), 0)
+  const nodeCountTotal = sceneSummaries.reduce((sum, scene) => sum + scene.nodeCount, 0)
+
+  return {
+    generatedAt: options.createdAt,
+    sceneCount: options.scenes.length,
+    sceneOrder: [...options.project.sceneOrder],
+    checkpointTotal: options.checkpointTotal,
+    nodeCountTotal,
+    resourceCount: options.resources.length,
+    manifestResourceBytes,
+    uncompressedEntryBytes: fileBytes + options.manifestBytes + options.projectBytes,
+    zipEntryCount: Object.keys(options.files).length + 2,
+    breakdown,
+    largestResources: options.resources
+      .map((entry) => ({
+        logicalId: entry.logicalId,
+        resourceType: entry.resourceType,
+        path: entry.path,
+        size: resourceEntrySize(entry, options.files),
+        mimeType: entry.mimeType ?? null,
+        ext: entry.ext ?? null,
+      }))
+      .sort((left, right) => right.size - left.size)
+      .slice(0, 10),
+    sceneSummaries,
+  }
+}
+
 async function resolvePlanningImageBlob(image: {
   imageHash?: string | null
   url?: string | null
@@ -912,11 +1083,10 @@ export async function exportScenePackageZip(payload: {
   for (const scene of payload.scenes) {
     checkpointTotal += countSceneCheckpoints(scene.document)
   }
-  const projectWithCheckpointTotal: ProjectExportBundleProjectConfig = {
+  let projectWithCheckpointTotal: ProjectExportBundleProjectConfig = {
     ...payload.project,
     checkpointTotal,
   }
-  files[projectPath] = jsonBytes(projectWithCheckpointTotal)
   emitSceneExportEvent(payload.reportEvent, {
     phase: 'project',
     level: 'info',
@@ -1343,7 +1513,34 @@ export async function exportScenePackageZip(payload: {
     resources,
   }
 
-  files['manifest.json'] = jsonBytes(manifest)
+  const manifestBytes = jsonBytes(manifest)
+  let projectBytes = jsonBytes(projectWithCheckpointTotal)
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const metadata = buildProjectExportMetadata({
+      createdAt,
+      checkpointTotal,
+      files,
+      manifestBytes: manifestBytes.byteLength,
+      projectBytes: projectBytes.byteLength,
+      project: projectWithCheckpointTotal,
+      resources,
+      scenes: payload.scenes,
+    })
+    const nextProject = {
+      ...projectWithCheckpointTotal,
+      metadata,
+    }
+    const nextProjectBytes = jsonBytes(nextProject)
+    projectWithCheckpointTotal = nextProject
+    if (nextProjectBytes.byteLength === projectBytes.byteLength) {
+      projectBytes = nextProjectBytes
+      break
+    }
+    projectBytes = nextProjectBytes
+  }
+
+  files[projectPath] = projectBytes
+  files['manifest.json'] = manifestBytes
   emitSceneExportEvent(payload.reportEvent, {
     phase: 'manifest',
     level: 'info',
