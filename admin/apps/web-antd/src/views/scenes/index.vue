@@ -4,6 +4,7 @@ import type { Rule } from 'ant-design-vue/es/form';
 import type { SceneCreatePayload, SceneItem, SceneUpdatePayload } from '#/api';
 
 import { computed, reactive, ref } from 'vue';
+import { useRouter } from 'vue-router';
 
 import { useVbenVxeGrid } from '#/adapter/vxe-table';
 import { createSceneApi, deleteSceneApi, listScenesApi, updateSceneApi } from '#/api';
@@ -11,7 +12,7 @@ import { $t } from '#/locales';
 import { formatFileSize } from '#/utils/format';
 
 import { Button, Form, Input, message, Modal, Space, Upload, Tooltip } from 'ant-design-vue';
-import { EditOutlined, DeleteOutlined } from '@ant-design/icons-vue';
+import { DeleteOutlined, EditOutlined, InfoCircleOutlined } from '@ant-design/icons-vue';
 
 interface SceneFormModel {
   fileList: UploadFile[];
@@ -19,6 +20,7 @@ interface SceneFormModel {
 }
 
 const t = (key: string, args?: Record<string, unknown>) => $t(key as never, args as never);
+const router = useRouter();
 
 const sceneFormRef = ref<FormInstance>();
 const sceneModalOpen = ref(false);
@@ -68,6 +70,10 @@ function openEditSceneModal(record: SceneItem) {
   sceneFormModel.name = record.name || '';
   sceneFormModel.fileList = [];
   sceneModalOpen.value = true;
+}
+
+function openSceneDetail(record: SceneItem) {
+  router.push({ name: 'SceneDetail', params: { id: record.id } });
 }
 
 function closeSceneModal() {
@@ -176,7 +182,7 @@ const [SceneGrid, sceneGridApi] = useVbenVxeGrid<SceneItem>({
         align: 'left',
         field: 'actions',
         fixed: 'right',
-        minWidth: 180,
+        minWidth: 220,
         slots: { default: 'actions' },
         title: t('page.scenes.index.table.actions'),
       },
@@ -228,6 +234,11 @@ const [SceneGrid, sceneGridApi] = useVbenVxeGrid<SceneItem>({
 
       <template #actions="{ row }">
         <Space>
+          <Tooltip :title="t('page.scenes.index.actions.detail')">
+            <Button size="small" type="text" @click="openSceneDetail(row)">
+              <InfoCircleOutlined />
+            </Button>
+          </Tooltip>
           <Tooltip :title="t('page.scenes.index.actions.edit')">
             <Button v-access:code="'scene:write'" size="small" type="text" @click="openEditSceneModal(row)">
               <EditOutlined />
