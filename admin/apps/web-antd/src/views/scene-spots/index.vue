@@ -9,13 +9,13 @@ import { useVbenVxeGrid } from '#/adapter/vxe-table';
 import {
   createSceneSpotApi,
   deleteSceneSpotApi,
-  getSceneApi,
   getSceneSpotApi,
   listSceneSpotsApi,
   listScenesApi,
   listSceneSpotCategoriesApi,
   updateSceneSpotApi,
 } from '#/api';
+import { apiURL } from '#/api/request';
 import { $t } from '#/locales';
 
 import { Button, Form, Input, InputNumber, message, Modal, Select, Space, Switch, Upload, Tooltip, Tabs } from 'ant-design-vue';
@@ -116,6 +116,11 @@ const WECHAT_MINI_PROGRAM_APP_ID = 'wxbee5b017bdf26cc1';
 const WECHAT_MINI_PROGRAM_SCENERY_PATH = 'pages/scenery/index';
 const DEFAULT_VEHICLE_IDENTIFIER = 'car1';
 const WECHAT_QR_RULE_LINK_BASE = 'https://v.touchmagic.cn';
+
+function buildScenePackageDownloadUrl(sceneId: string): string {
+  const base = apiURL.replace(/\/+$/u, '')
+  return `${base}/mini/scenes/${encodeURIComponent(sceneId)}/package`
+}
 
 const uploadProps: UploadProps = {
   accept: 'image/*',
@@ -377,21 +382,21 @@ function openComments(row: SceneSpotItem) {
   });
 }
 
-function buildWechatQRCodeQuery(sceneFileUrl: string, row: SceneSpotItem) {
-  return `packageUrl=${encodeURIComponent(sceneFileUrl)}&sceneSpotId=${encodeURIComponent(row.id)}&sceneId=${encodeURIComponent(row.sceneId)}&scenicTitle=${encodeURIComponent(row.title)}&vehicleIdentifier=${encodeURIComponent(DEFAULT_VEHICLE_IDENTIFIER)}`;
+function buildWechatQRCodeQuery(scenePackageUrl: string, row: SceneSpotItem) {
+  return `packageUrl=${encodeURIComponent(scenePackageUrl)}&sceneSpotId=${encodeURIComponent(row.id)}&sceneId=${encodeURIComponent(row.sceneId)}&scenicTitle=${encodeURIComponent(row.title)}&vehicleIdentifier=${encodeURIComponent(DEFAULT_VEHICLE_IDENTIFIER)}`;
 }
 
-function buildWechatQRCodeLink(sceneFileUrl: string, row: SceneSpotItem) {
-  return `${WECHAT_QR_RULE_LINK_BASE}?${buildWechatQRCodeQuery(sceneFileUrl, row)}`;
+function buildWechatQRCodeLink(scenePackageUrl: string, row: SceneSpotItem) {
+  return `${WECHAT_QR_RULE_LINK_BASE}?${buildWechatQRCodeQuery(scenePackageUrl, row)}`;
 }
 
-function buildWechatUrlScheme(sceneFileUrl: string, row: SceneSpotItem) {
-  const query = buildWechatQRCodeQuery(sceneFileUrl, row);
+function buildWechatUrlScheme(scenePackageUrl: string, row: SceneSpotItem) {
+  const query = buildWechatQRCodeQuery(scenePackageUrl, row);
   return `weixin://dl/business/?appid=${WECHAT_MINI_PROGRAM_APP_ID}&path=${WECHAT_MINI_PROGRAM_SCENERY_PATH}&query=${encodeURIComponent(query)}&env_version=release`;
 }
 
-function buildWechatMiniProgramPath(sceneFileUrl: string, row: SceneSpotItem) {
-  return `${WECHAT_MINI_PROGRAM_SCENERY_PATH}?${buildWechatQRCodeQuery(sceneFileUrl, row)}`;
+function buildWechatMiniProgramPath(scenePackageUrl: string, row: SceneSpotItem) {
+  return `${WECHAT_MINI_PROGRAM_SCENERY_PATH}?${buildWechatQRCodeQuery(scenePackageUrl, row)}`;
 }
 
 function closeWechatQRCodeModal() {
@@ -425,22 +430,14 @@ async function openWechatQRCode(row: SceneSpotItem) {
 
   wechatQRCodeLoadingRowId.value = row.id;
   try {
-    const scene = await getSceneApi(row.sceneId);
-    const sceneFileUrl = typeof scene.fileUrl === 'string' ? scene.fileUrl.trim() : '';
-    if (!sceneFileUrl) {
-      message.error(t('page.sceneSpots.index.wechatQr.message.sceneFileUrlMissing'));
-      return;
-    }
-
-    const query = buildWechatQRCodeQuery(sceneFileUrl, row);
+    const scenePackageUrl = buildScenePackageDownloadUrl(row.sceneId);
+    const query = buildWechatQRCodeQuery(scenePackageUrl, row);
     wechatDecodedQueryValue.value = query;
-    wechatQRCodeValue.value = buildWechatQRCodeLink(sceneFileUrl, row);
-    wechatUrlSchemeValue.value = buildWechatUrlScheme(sceneFileUrl, row);
-    wechatMiniProgramPathValue.value = buildWechatMiniProgramPath(sceneFileUrl, row);
+    wechatQRCodeValue.value = buildWechatQRCodeLink(scenePackageUrl, row);
+    wechatUrlSchemeValue.value = buildWechatUrlScheme(scenePackageUrl, row);
+    wechatMiniProgramPathValue.value = buildWechatMiniProgramPath(scenePackageUrl, row);
     wechatQRCodeActiveTab.value = 'wechat-rule-link';
     wechatQRCodeModalOpen.value = true;
-  } catch {
-    message.error(t('page.sceneSpots.index.wechatQr.message.loadFailed'));
   } finally {
     if (wechatQRCodeLoadingRowId.value === row.id) {
       wechatQRCodeLoadingRowId.value = null;

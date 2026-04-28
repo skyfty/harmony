@@ -66,6 +66,81 @@
           "required": "请上传场景文件"
         }
       }
+    },
+    "detail": {
+      "title": "场景包详情",
+      "noMetadata": "此场景包缺少导出统计元数据，请重新从 editor 导出并上传新包以查看完整成本分析。",
+      "buttons": {
+        "back": "返回"
+      },
+      "stats": {
+        "packageSize": "ZIP 下载大小",
+        "resourceSize": "资源大小",
+        "sceneCount": "场景数",
+        "nodeCount": "节点数"
+      },
+      "fields": {
+        "id": "ID",
+        "name": "名称",
+        "fileUrl": "场景文件地址",
+        "fileSize": "ZIP 下载大小",
+        "uncompressedEntryBytes": "包内原始大小",
+        "resourceCount": "资源数量",
+        "checkpointTotal": "检查点总数",
+        "zipEntryCount": "ZIP 文件条目数",
+        "generatedAt": "统计生成时间",
+        "createdAt": "创建时间",
+        "updatedAt": "更新时间"
+      },
+      "cost": {
+        "unitPrice": "CDN 单价（元/GB）",
+        "downloadCount": "预计下载次数",
+        "packageTraffic": "预计出流量",
+        "packageCost": "ZIP 下载成本",
+        "resourceCost": "资源口径成本"
+      },
+      "breakdown": {
+        "localAssetBytes": "本地资产",
+        "embeddedAssetBytes": "共享嵌入资产",
+        "planningImageBytes": "规划图",
+        "terrainBytes": "地形与碰撞数据",
+        "sidecarBytes": "场景 Sidecar",
+        "sceneDocumentBytes": "场景文档",
+        "manifestBytes": "Manifest",
+        "projectBytes": "Project 元数据",
+        "otherBytes": "其他"
+      },
+      "resourceTypes": {
+        "localAsset": "本地资产",
+        "planningImage": "规划图",
+        "terrainWeightmap": "地形权重图",
+        "lightmap": "光照贴图",
+        "navmesh": "导航网格",
+        "baked": "烘焙资源",
+        "other": "其他"
+      },
+      "tables": {
+        "breakdown": {
+          "title": "资源分类统计",
+          "type": "类型",
+          "size": "大小"
+        },
+        "resources": {
+          "title": "最大资源",
+          "logicalId": "资源 ID",
+          "resourceType": "类型",
+          "path": "包内路径",
+          "size": "大小"
+        },
+        "scenes": {
+          "title": "场景统计",
+          "name": "名称",
+          "sceneId": "场景 ID",
+          "nodeCount": "节点数",
+          "checkpointTotal": "检查点",
+          "totalBytes": "合计大小"
+        }
+      }
     }
   },
   "sceneSpots": {

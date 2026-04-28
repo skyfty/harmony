@@ -21,6 +21,18 @@ import type { ProductDocument, SceneDocument } from '@/types/models'
 
 const COMMENT_CONTENT_MAX_LENGTH = 500
 
+function buildScenePackageDownloadUrl(ctx: Context, sceneId: string): string {
+  return new URL(`/api/mini/scenes/${encodeURIComponent(sceneId)}/package`, ctx.origin).toString()
+}
+
+function ensureSceneId(ctx: Context): string {
+  const { id } = ctx.params as { id?: string }
+  if (!id || typeof id !== 'string' || !Types.ObjectId.isValid(id)) {
+    ctx.throw(400, 'Invalid scene id')
+  }
+  return id
+}
+
 function toStringValue(value: unknown, fallback = ''): string {
   return typeof value === 'string' ? value : fallback
 }
@@ -168,17 +180,34 @@ export async function deleteSceneSpotComment(ctx: Context): Promise<void> {
   ctx.body = {}
 }
 
-function buildSceneDto(scene: any) {
+function buildSceneDto(ctx: Context, scene: any) {
   return {
     id: String(scene._id),
     name: scene.name,
-    fileUrl: scene.fileUrl,
+    fileUrl: buildScenePackageDownloadUrl(ctx, String(scene._id)),
     fileKey: scene.fileKey,
     fileSize: typeof scene.fileSize === 'number' ? scene.fileSize : 0,
   }
 }
 
-function buildSceneSpotSummaryDto(spot: any, scene: any) {
+export async function downloadScenePackage(ctx: Context): Promise<void> {
+  const sceneId = ensureSceneId(ctx)
+  const scene = await SceneModel.findById(sceneId).lean().exec()
+  if (!scene) {
+    ctx.throw(404, 'Scene not found')
+  }
+  const fileUrl = typeof scene.fileUrl === 'string' ? scene.fileUrl.trim() : ''
+  if (!fileUrl) {
+    ctx.throw(404, 'Scene package not found')
+  }
+
+  ctx.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0')
+  ctx.set('Pragma', 'no-cache')
+  ctx.set('Expires', '0')
+  ctx.redirect(fileUrl)
+}
+
+function buildSceneSpotSummaryDto(ctx: Context, spot: any, scene: any) {
   return {
     id: String(spot._id),
     sceneId: String(spot.sceneId),
@@ -202,7 +231,7 @@ function buildSceneSpotSummaryDto(spot: any, scene: any) {
         : null,
     favorited: false,
     userRating: null,
-    scene: buildSceneDto(scene),
+    scene: buildSceneDto(ctx, scene),
   }
 }
 
@@ -353,7 +382,7 @@ export async function listHomepageSceneSpots(ctx: Context): Promise<void> {
     .map((spot) => {
       const scene = sceneById.get(String(spot.sceneId))
       if (!scene) return null
-      const dto = buildSceneSpotSummaryDto(spot, scene)
+      const dto = buildSceneSpotSummaryDto(ctx, spot, scene)
       // annotate which homepage bucket this spot came from
       const tag = homepageTagById.get(String(spot._id))
       if (tag) (dto as any).homepageTag = tag
@@ -443,7 +472,7 @@ export async function listSceneSpots(ctx: Context): Promise<void> {
       if (!scene) {
         return null
       }
-      const dto = buildSceneSpotSummaryDto(spot, scene)
+      const dto = buildSceneSpotSummaryDto(ctx, spot, scene)
       return withInteractionState(dto, interactionBySpotId.get(String(spot._id)))
     })
     .filter(Boolean)
@@ -476,7 +505,10 @@ export async function getSceneSpot(ctx: Context): Promise<void> {
     : null
 
   ctx.body = {
-    sceneSpot: withInteractionState(buildSceneSpotSummaryDto(spot, scene), interaction as SceneSpotInteractionLean | null),
+    sceneSpot: withInteractionState(
+      buildSceneSpotSummaryDto(ctx, spot, scene),
+      interaction as SceneSpotInteractionLean | null,
+    ),
   }
 }
 
@@ -499,8 +531,8 @@ export async function getSceneSpotEntry(ctx: Context): Promise<void> {
   ctx.body = {
     sceneId: String(scene._id),
     sceneSpotId: String(spot._id),
-    packageUrl: scene.fileUrl,
-    sceneUrl: scene.fileUrl,
+    packageUrl: buildScenePackageDownloadUrl(ctx, String(scene._id)),
+    sceneUrl: buildScenePackageDownloadUrl(ctx, String(scene._id)),
   }
 }
 

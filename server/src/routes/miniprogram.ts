@@ -6,6 +6,7 @@ import {
   listHomepageSceneSpots,
   getSceneSpot,
   getSceneSpotEntry,
+  downloadScenePackage,
   listSceneProducts,
   toggleSceneSpotFavorite,
   rateSceneSpot,
@@ -114,6 +115,7 @@ miniRouter.get('/scene-spots/home', optionalMiniAuth, listHomepageSceneSpots)
 miniRouter.get('/scene-spots', optionalMiniAuth, listSceneSpots)
 miniRouter.get('/scene-spots/:id', optionalMiniAuth, getSceneSpot)
 miniRouter.get('/scene-spots/:id/entry', optionalMiniAuth, getSceneSpotEntry)
+miniRouter.get('/scenes/:id/package', optionalMiniAuth, downloadScenePackage)
 miniRouter.get('/scene-spots/:id/comments', optionalMiniAuth, listSceneSpotComments)
 miniRouter.get('/scene-spot-categories', optionalMiniAuth, listSceneSpotCategories)
 miniRouter.get('/scenes/:id/products', optionalMiniAuth, listSceneProducts)

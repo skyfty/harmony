@@ -893,6 +893,7 @@ export interface SceneDocument extends Document<Types.ObjectId> {
   fileUrl: string
   fileSize: number
   checkpointTotal: number
+  metadata?: Record<string, unknown> | null
   fileType?: string | null
   originalFilename?: string | null
   publishedBy: Types.ObjectId | null
