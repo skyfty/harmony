@@ -21422,6 +21422,8 @@ async function persistViewportInfiniteGroundChunks(params: {
     return
   }
 
+  params.definition.chunkManifestRevision = nextRevision
+
   const groundNode = getGroundNodeFromStore()
   if (groundNode?.dynamicMesh?.type === 'Ground') {
     sceneStore.updateGroundNodeDynamicMesh(groundNode.id, {

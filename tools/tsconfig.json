@@ -3,6 +3,7 @@
     "target": "ES2022",
     "module": "ES2022",
     "moduleResolution": "Bundler",
+    "allowArbitraryExtensions": true,
     "lib": ["ES2022"],
     "declaration": true,
     "declarationMap": true,
@@ -12,5 +13,5 @@
     "types": ["node"],
     "resolveJsonModule": true
   },
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*.ts", "src/**/*.d.ts"]
 }

@@ -598,28 +598,29 @@ function resolveRuntimeMeshView(
     state.cachedPlanningHeightMap = createHeightMapViewFromTiles(state, 'planning')
     state.cachedLocalEditTiles = serializeRuntimeLocalEditTiles(state.localEditTiles)
     state.cachedPlanningMetadata = clonePlanningMetadata(state.planningMetadata ?? definition.planningMetadata ?? null)
-    state.cachedRuntimeMesh = {
-      ...definition,
-      manualHeightMap: state.cachedManualHeightMap as GroundHeightMap,
-      planningHeightMap: state.cachedPlanningHeightMap as GroundHeightMap,
-      localEditTiles: state.cachedLocalEditTiles,
-      runtimeSampleHeightRegion: (kind, minRowInput, maxRowInput, minColumnInput, maxColumnInput) => sampleRuntimeHeightRegion(
-        state,
-        kind,
-        minRowInput,
-        maxRowInput,
-        minColumnInput,
-        maxColumnInput,
-      ),
-      planningMetadata: state.cachedPlanningMetadata,
-      runtimeHydratedHeightState: state.runtimeHydratedHeightState,
-      runtimeDisableOptimizedChunks: state.runtimeDisableOptimizedChunks,
-      runtimeLoadedTileKeys: state.runtimeLoadedTileKeys ?? [],
-      runtimeManualHeightOverrideCount: state.manualHeightOverrideCount,
-      runtimePlanningHeightOverrideCount: state.planningHeightOverrideCount,
-      surfaceRevision: Number.isFinite(state.surfaceRevision) ? Math.max(0, Math.trunc(state.surfaceRevision as number)) : definition.surfaceRevision,
-    }
     state.cachedRuntimeMeshVersion = state.runtimeMeshVersion
+  }
+
+  state.cachedRuntimeMesh = {
+    ...definition,
+    manualHeightMap: state.cachedManualHeightMap as GroundHeightMap,
+    planningHeightMap: state.cachedPlanningHeightMap as GroundHeightMap,
+    localEditTiles: state.cachedLocalEditTiles,
+    runtimeSampleHeightRegion: (kind, minRowInput, maxRowInput, minColumnInput, maxColumnInput) => sampleRuntimeHeightRegion(
+      state,
+      kind,
+      minRowInput,
+      maxRowInput,
+      minColumnInput,
+      maxColumnInput,
+    ),
+    planningMetadata: state.cachedPlanningMetadata,
+    runtimeHydratedHeightState: state.runtimeHydratedHeightState,
+    runtimeDisableOptimizedChunks: state.runtimeDisableOptimizedChunks,
+    runtimeLoadedTileKeys: state.runtimeLoadedTileKeys ?? [],
+    runtimeManualHeightOverrideCount: state.manualHeightOverrideCount,
+    runtimePlanningHeightOverrideCount: state.planningHeightOverrideCount,
+    surfaceRevision: Number.isFinite(state.surfaceRevision) ? Math.max(0, Math.trunc(state.surfaceRevision as number)) : definition.surfaceRevision,
   }
 
   return state.cachedRuntimeMesh as GroundRuntimeDynamicMesh

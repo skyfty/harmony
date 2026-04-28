@@ -1243,6 +1243,48 @@ function sampleGroundLocalEditHeightAtWorld(
   const h10 = read(row0, column1)
   const h01 = read(row1, column0)
   const h11 = read(row1, column1)
+  const blendEpsilon = 1e-6
+  const usesLeftColumn = blendX <= blendEpsilon
+  const usesRightColumn = blendX >= 1 - blendEpsilon
+  const usesTopRow = blendZ <= blendEpsilon
+  const usesBottomRow = blendZ >= 1 - blendEpsilon
+
+  if (usesLeftColumn && usesTopRow) {
+    return h00
+  }
+  if (usesRightColumn && usesTopRow) {
+    return h10
+  }
+  if (usesLeftColumn && usesBottomRow) {
+    return h01
+  }
+  if (usesRightColumn && usesBottomRow) {
+    return h11
+  }
+  if (usesLeftColumn) {
+    if (h00 === null || h01 === null) {
+      return null
+    }
+    return h00 + (h01 - h00) * blendZ
+  }
+  if (usesRightColumn) {
+    if (h10 === null || h11 === null) {
+      return null
+    }
+    return h10 + (h11 - h10) * blendZ
+  }
+  if (usesTopRow) {
+    if (h00 === null || h10 === null) {
+      return null
+    }
+    return h00 + (h10 - h00) * blendX
+  }
+  if (usesBottomRow) {
+    if (h01 === null || h11 === null) {
+      return null
+    }
+    return h01 + (h11 - h01) * blendX
+  }
   if (h00 === null || h10 === null || h01 === null || h11 === null) {
     return null
   }
