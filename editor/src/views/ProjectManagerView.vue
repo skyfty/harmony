@@ -272,7 +272,6 @@ async function handleExportProject(projectId: string): Promise<void> {
           <v-card :class="['pm-project', { 'pm-project--active': projectsStore.activeProjectId === p.id }]" variant="elevated">
             <v-card-title class="pm-project__title">{{ p.name }}</v-card-title>
             <v-card-subtitle>{{ p.sceneCount }} scenes</v-card-subtitle>
-            <v-card-text class="pm-project__meta">{{ p.id }}</v-card-text>
             <v-card-actions>
               <v-btn color="primary" variant="flat" @click="handleOpenProject({ projectId: p.id, sceneId: p.lastEditedSceneId })">Open</v-btn>
               <v-btn

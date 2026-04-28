@@ -85,6 +85,17 @@ export interface PlanningDemPreparedSource {
   planningMetadata: GroundPlanningMetadata
 }
 
+function resolvePlanningDemLocalEditTileOrigin(definition: GroundRuntimeDynamicMesh): { originX: number; originZ: number } {
+  if (definition.terrainMode === 'infinite') {
+    return { originX: 0, originZ: 0 }
+  }
+  const halfSpan = resolveGroundWorkingSpanMeters(definition) * 0.5
+  return {
+    originX: -halfSpan,
+    originZ: -halfSpan,
+  }
+}
+
 function buildPlanningDemRegionFromPreparedSource(options: {
   definition: GroundRuntimeDynamicMesh
   prepared: PlanningDemPreparedSource
@@ -133,22 +144,25 @@ export function buildPlanningDemLocalEditTilesForRegion(options: {
     return null
   }
   const cellSize = Number.isFinite(options.definition.cellSize) && options.definition.cellSize > 0 ? options.definition.cellSize : 1
-  const halfSpan = resolveGroundWorkingSpanMeters(options.definition) * 0.5
-  const minX = -halfSpan + options.startColumn * cellSize
-  const maxX = -halfSpan + options.endColumn * cellSize
-  const minZ = -halfSpan + options.startRow * cellSize
-  const maxZ = -halfSpan + options.endRow * cellSize
-  const startTileColumn = Math.max(0, Math.floor((minX + halfSpan) / tileSizeMeters))
-  const endTileColumn = Math.max(startTileColumn, Math.floor((maxX + halfSpan) / tileSizeMeters))
-  const startTileRow = Math.max(0, Math.floor((minZ + halfSpan) / tileSizeMeters))
-  const endTileRow = Math.max(startTileRow, Math.floor((maxZ + halfSpan) / tileSizeMeters))
+  const { originX, originZ } = resolvePlanningDemLocalEditTileOrigin(options.definition)
+  const minX = resolvePlanningDemTargetWorldBounds(options.definition).minX + options.startColumn * cellSize
+  const maxX = resolvePlanningDemTargetWorldBounds(options.definition).minX + options.endColumn * cellSize
+  const minZ = resolvePlanningDemTargetWorldBounds(options.definition).minZ + options.startRow * cellSize
+  const maxZ = resolvePlanningDemTargetWorldBounds(options.definition).minZ + options.endRow * cellSize
+  const normalizeTileIndex = (value: number) => options.definition.terrainMode === 'infinite'
+    ? Math.floor(value)
+    : Math.max(0, Math.floor(value))
+  const startTileColumn = normalizeTileIndex((minX - originX) / tileSizeMeters)
+  const endTileColumn = Math.max(startTileColumn, normalizeTileIndex((maxX - originX) / tileSizeMeters))
+  const startTileRow = normalizeTileIndex((minZ - originZ) / tileSizeMeters)
+  const endTileRow = Math.max(startTileRow, normalizeTileIndex((maxZ - originZ) / tileSizeMeters))
   const result: GroundLocalEditTileMap = {}
 
   for (let tileRow = startTileRow; tileRow <= endTileRow; tileRow += 1) {
     for (let tileColumn = startTileColumn; tileColumn <= endTileColumn; tileColumn += 1) {
       const key = formatGroundLocalEditTileKey(tileRow, tileColumn)
-      const tileMinX = -halfSpan + tileColumn * tileSizeMeters
-      const tileMinZ = -halfSpan + tileRow * tileSizeMeters
+      const tileMinX = originX + tileColumn * tileSizeMeters
+      const tileMinZ = originZ + tileRow * tileSizeMeters
       const values = new Array<number>((resolution + 1) * (resolution + 1))
       for (let row = 0; row <= resolution; row += 1) {
         const z = tileMinZ + (row / resolution) * tileSizeMeters
@@ -234,11 +248,11 @@ function computeDemSampleStepAxis(parsedWidth: number, parsedHeight: number, wor
   const span = axis === 'x'
     ? Math.abs(worldBounds.maxX - worldBounds.minX)
     : Math.abs(worldBounds.maxY - worldBounds.minY)
-  const samples = axis === 'x' ? parsedWidth : parsedHeight
-  if (!(span > 0) || !(samples > 0)) {
+  const segments = Math.max(1, (axis === 'x' ? parsedWidth : parsedHeight) - 1)
+  if (!(span > 0) || !(segments > 0)) {
     return null
   }
-  return span / Math.max(1, samples)
+  return span / segments
 }
 
 async function resolvePlanningDemPreparedSource(options: {

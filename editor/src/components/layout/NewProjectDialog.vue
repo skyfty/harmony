@@ -59,7 +59,6 @@ function handleConfirm() {
  
         <SceneCreatorPane
           v-model:sceneName="defaultSceneName"
-          v-model:planningData="defaultPlanningData"
         />
       </v-card-text>
       <v-card-actions>
