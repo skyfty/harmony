@@ -130,6 +130,7 @@ const infiniteGroundCameraDirectionWorld = new THREE.Vector3()
 const infiniteGroundCameraDirectionLocalPoint = new THREE.Vector3()
 const infiniteGroundCameraForward = new THREE.Vector3()
 const infiniteGroundCameraRight = new THREE.Vector3()
+const infiniteGroundCameraQuaternion = new THREE.Quaternion()
 
 function createSeededRandom(seed: number): () => number {
   let value = seed % 2147483647
@@ -288,6 +289,8 @@ function isInfiniteGroundDefinition(definition: GroundDynamicMesh | null | undef
   return definition?.terrainMode === 'infinite'
 }
 
+const MAX_INFINITE_RENDER_RADIUS_CHUNKS = 64
+
 function resolveInfiniteChunkSizeMeters(definition: GroundDynamicMesh): number {
   const explicit = Number(definition.chunkSizeMeters)
   if (Number.isFinite(explicit) && explicit > 0) {
@@ -299,7 +302,7 @@ function resolveInfiniteChunkSizeMeters(definition: GroundDynamicMesh): number {
 function resolveInfiniteRenderRadiusChunks(definition: GroundDynamicMesh): number {
   const explicit = Number(definition.renderRadiusChunks)
   if (Number.isFinite(explicit) && explicit > 0) {
-    return Math.max(1, Math.trunc(explicit))
+    return Math.max(1, Math.min(MAX_INFINITE_RENDER_RADIUS_CHUNKS, Math.trunc(explicit)))
   }
   return 4
 }
@@ -535,6 +538,185 @@ function resolveInfiniteNearChunkWindowBounds(
   const minZ = (centerCoord.chunkZ - renderRadiusChunks) * chunkSizeMeters
   const maxZ = (centerCoord.chunkZ + renderRadiusChunks + 1) * chunkSizeMeters
   return { minX, maxX, minZ, maxZ }
+}
+
+type InfiniteGroundVisibleChunkWindow = {
+  minChunkX: number
+  maxChunkX: number
+  minChunkZ: number
+  maxChunkZ: number
+  localBounds: { minX: number; maxX: number; minZ: number; maxZ: number }
+  centerCoord: { chunkX: number; chunkZ: number }
+}
+
+const infiniteGroundViewportSamplePoints: ReadonlyArray<readonly [number, number]> = [
+  [-1, -1],
+  [0, -1],
+  [1, -1],
+  [-1, 0],
+  [0, 0],
+  [1, 0],
+  [-1, 1],
+  [0, 1],
+  [1, 1],
+]
+
+const infiniteGroundVisibleWindowPlane = new THREE.Plane()
+const infiniteGroundVisibleWindowPlanePoint = new THREE.Vector3()
+const infiniteGroundVisibleWindowPlaneNormal = new THREE.Vector3()
+const infiniteGroundVisibleWindowCameraWorld = new THREE.Vector3()
+const infiniteGroundVisibleWindowSampleWorld = new THREE.Vector3()
+const infiniteGroundVisibleWindowSampleLocal = new THREE.Vector3()
+const infiniteGroundVisibleWindowRayOrigin = new THREE.Vector3()
+const infiniteGroundVisibleWindowRayDirection = new THREE.Vector3()
+const infiniteGroundVisibleWindowRay = new THREE.Ray()
+
+function resolveInfiniteGroundChunkRangeFromBounds(
+  minValue: number,
+  maxValue: number,
+  chunkSizeMeters: number,
+): { minChunk: number; maxChunk: number } {
+  const safeChunkSize = Math.max(1e-6, chunkSizeMeters)
+  const minChunk = Math.floor(minValue / safeChunkSize)
+  const maxChunk = Math.ceil((maxValue - safeChunkSize * 1e-6) / safeChunkSize) - 1
+  return {
+    minChunk,
+    maxChunk: Math.max(minChunk, maxChunk),
+  }
+}
+
+function resolveInfiniteGroundVisibleLocalBounds(
+  root: THREE.Object3D,
+  definition: GroundDynamicMesh,
+  camera: THREE.Camera | null,
+  chunkSizeMeters: number,
+  renderRadiusChunks: number,
+): { minX: number; maxX: number; minZ: number; maxZ: number; centerCoord: { chunkX: number; chunkZ: number } } {
+  root.updateMatrixWorld(true)
+
+  const baseHeight = typeof definition.baseHeight === 'number' && Number.isFinite(definition.baseHeight)
+    ? definition.baseHeight
+    : 0
+
+  let localX = 0
+  let localZ = 0
+  if (camera) {
+    camera.updateMatrixWorld(true)
+    if ((camera as THREE.PerspectiveCamera).isPerspectiveCamera || (camera as THREE.OrthographicCamera).isOrthographicCamera) {
+      ;(camera as THREE.PerspectiveCamera | THREE.OrthographicCamera).updateProjectionMatrix()
+    }
+    camera.getWorldPosition(infiniteGroundVisibleWindowCameraWorld)
+    infiniteGroundVisibleWindowSampleLocal.copy(infiniteGroundVisibleWindowCameraWorld)
+    root.worldToLocal(infiniteGroundVisibleWindowSampleLocal)
+    localX = infiniteGroundVisibleWindowSampleLocal.x
+    localZ = infiniteGroundVisibleWindowSampleLocal.z
+  }
+
+  const centerCoord = resolveGroundChunkCoordFromWorldPosition(localX, localZ, chunkSizeMeters)
+  const fallbackBounds = resolveInfiniteNearChunkWindowBounds(centerCoord, chunkSizeMeters, renderRadiusChunks)
+
+  if (!camera) {
+    return {
+      ...fallbackBounds,
+      centerCoord,
+    }
+  }
+
+  infiniteGroundVisibleWindowPlanePoint.set(0, baseHeight, 0)
+  root.localToWorld(infiniteGroundVisibleWindowPlanePoint)
+  infiniteGroundVisibleWindowPlaneNormal.set(0, 1, 0)
+  root.getWorldQuaternion(infiniteGroundCameraQuaternion)
+  infiniteGroundVisibleWindowPlaneNormal.applyQuaternion(infiniteGroundCameraQuaternion).normalize()
+  infiniteGroundVisibleWindowPlane.setFromNormalAndCoplanarPoint(
+    infiniteGroundVisibleWindowPlaneNormal,
+    infiniteGroundVisibleWindowPlanePoint,
+  )
+
+  let minX = Number.POSITIVE_INFINITY
+  let maxX = Number.NEGATIVE_INFINITY
+  let minZ = Number.POSITIVE_INFINITY
+  let maxZ = Number.NEGATIVE_INFINITY
+  let sumX = 0
+  let sumZ = 0
+  let intersectionCount = 0
+
+  for (const [ndcX, ndcY] of infiniteGroundViewportSamplePoints) {
+    if ((camera as THREE.OrthographicCamera).isOrthographicCamera) {
+      infiniteGroundVisibleWindowRayOrigin.set(ndcX, ndcY, -1).unproject(camera)
+      camera.getWorldDirection(infiniteGroundVisibleWindowRayDirection)
+    } else {
+      camera.getWorldPosition(infiniteGroundVisibleWindowRayOrigin)
+      infiniteGroundVisibleWindowSampleWorld.set(ndcX, ndcY, 0.5).unproject(camera)
+      infiniteGroundVisibleWindowRayDirection
+        .copy(infiniteGroundVisibleWindowSampleWorld)
+        .sub(infiniteGroundVisibleWindowRayOrigin)
+        .normalize()
+    }
+
+    if (infiniteGroundVisibleWindowRayDirection.lengthSq() <= 1e-12) {
+      continue
+    }
+
+    infiniteGroundVisibleWindowRay.set(
+      infiniteGroundVisibleWindowRayOrigin,
+      infiniteGroundVisibleWindowRayDirection,
+    )
+    if (!infiniteGroundVisibleWindowRay.intersectPlane(infiniteGroundVisibleWindowPlane, infiniteGroundVisibleWindowSampleWorld)) {
+      continue
+    }
+
+    infiniteGroundVisibleWindowSampleLocal.copy(infiniteGroundVisibleWindowSampleWorld)
+    root.worldToLocal(infiniteGroundVisibleWindowSampleLocal)
+    minX = Math.min(minX, infiniteGroundVisibleWindowSampleLocal.x)
+    maxX = Math.max(maxX, infiniteGroundVisibleWindowSampleLocal.x)
+    minZ = Math.min(minZ, infiniteGroundVisibleWindowSampleLocal.z)
+    maxZ = Math.max(maxZ, infiniteGroundVisibleWindowSampleLocal.z)
+    sumX += infiniteGroundVisibleWindowSampleLocal.x
+    sumZ += infiniteGroundVisibleWindowSampleLocal.z
+    intersectionCount += 1
+  }
+
+  if (intersectionCount <= 0) {
+    return {
+      ...fallbackBounds,
+      centerCoord,
+    }
+  }
+
+  const focusX = sumX / intersectionCount
+  const focusZ = sumZ / intersectionCount
+  const paddingMeters = chunkSizeMeters
+  return {
+    minX: Math.min(fallbackBounds.minX, focusX - paddingMeters),
+    maxX: Math.max(fallbackBounds.maxX, focusX + paddingMeters),
+    minZ: Math.min(fallbackBounds.minZ, focusZ - paddingMeters),
+    maxZ: Math.max(fallbackBounds.maxZ, focusZ + paddingMeters),
+    centerCoord,
+  }
+}
+
+export function resolveInfiniteGroundVisibleChunkWindow(
+  root: THREE.Object3D,
+  definition: GroundDynamicMesh,
+  camera: THREE.Camera | null,
+): InfiniteGroundVisibleChunkWindow {
+  const chunkSizeMeters = resolveInfiniteChunkSizeMeters(definition)
+  const renderRadiusChunks = resolveInfiniteRenderRadiusChunks(definition)
+  const localBounds = resolveInfiniteGroundVisibleLocalBounds(root, definition, camera, chunkSizeMeters, renderRadiusChunks)
+  const centeredMinChunkX = localBounds.centerCoord.chunkX - renderRadiusChunks
+  const centeredMaxChunkX = localBounds.centerCoord.chunkX + renderRadiusChunks
+  const centeredMinChunkZ = localBounds.centerCoord.chunkZ - renderRadiusChunks
+  const centeredMaxChunkZ = localBounds.centerCoord.chunkZ + renderRadiusChunks
+  const xRange = resolveInfiniteGroundChunkRangeFromBounds(localBounds.minX, localBounds.maxX, chunkSizeMeters)
+  const zRange = resolveInfiniteGroundChunkRangeFromBounds(localBounds.minZ, localBounds.maxZ, chunkSizeMeters)
+  return {
+    minChunkX: Math.min(centeredMinChunkX, xRange.minChunk),
+    maxChunkX: Math.max(centeredMaxChunkX, xRange.maxChunk),
+    minChunkZ: Math.min(centeredMinChunkZ, zRange.minChunk),
+    maxChunkZ: Math.max(centeredMaxChunkZ, zRange.maxChunk),
+    localBounds,
+    centerCoord: localBounds.centerCoord,
+  }
 }
 
 function intersectsGroundBounds(
@@ -3352,10 +3534,13 @@ function updateInfiniteGroundBaseChunks(
     state.pendingDestroys = []
   }
 
-  const renderRadiusChunks = resolveInfiniteRenderRadiusChunks(definition)
-  const desiredCapacity = (renderRadiusChunks * 2 + 1) * (renderRadiusChunks * 2 + 1)
+  const visibleWindow = resolveInfiniteGroundVisibleChunkWindow(root, definition, camera)
+  const desiredCapacity = Math.max(
+    1,
+    (visibleWindow.maxChunkX - visibleWindow.minChunkX + 1) * (visibleWindow.maxChunkZ - visibleWindow.minChunkZ + 1),
+  )
   const baseRuntime = ensureInfiniteBaseChunkRuntime(root, state, definition, desiredCapacity)
-  refreshInfiniteGroundBaseChunkVisibility(root, definition, camera, baseRuntime)
+  refreshInfiniteGroundBaseChunkVisibility(root, definition, camera, baseRuntime, visibleWindow)
   refreshInfiniteGroundFarChunkVisibility(root, definition, camera, state.farChunkRuntime ?? undefined)
 }
 
@@ -3364,6 +3549,7 @@ function refreshInfiniteGroundBaseChunkVisibility(
   definition: GroundDynamicMesh,
   camera: THREE.Camera | null,
   baseRuntime?: InfiniteGroundBaseChunkRuntime,
+  visibleWindowOverride?: InfiniteGroundVisibleChunkWindow,
 ): void {
   const root = resolveGroundRuntimeGroup(target)
   if (!root) {
@@ -3376,22 +3562,10 @@ function refreshInfiniteGroundBaseChunkVisibility(
     return
   }
 
-  const renderRadiusChunks = resolveInfiniteRenderRadiusChunks(definition)
   const chunkSizeMeters = resolveInfiniteChunkSizeMeters(definition)
 
-  let localX = 0
-  let localZ = 0
-  if (camera) {
-    root.updateMatrixWorld(true)
-    const cameraWorld = new THREE.Vector3()
-    camera.getWorldPosition(cameraWorld)
-    const cameraLocal = root.worldToLocal(cameraWorld)
-    localX = cameraLocal.x
-    localZ = cameraLocal.z
-  }
-
-  const centerCoord = resolveGroundChunkCoordFromWorldPosition(localX, localZ, chunkSizeMeters)
-  const nextVisibilitySignature = `${centerCoord.chunkX}|${centerCoord.chunkZ}|${renderRadiusChunks}|${chunkSizeMeters}|${runtime.hiddenChunkKeysVersion}`
+  const visibleWindow = visibleWindowOverride ?? resolveInfiniteGroundVisibleChunkWindow(root, definition, camera)
+  const nextVisibilitySignature = `${visibleWindow.minChunkX}|${visibleWindow.maxChunkX}|${visibleWindow.minChunkZ}|${visibleWindow.maxChunkZ}|${chunkSizeMeters}|${runtime.hiddenChunkKeysVersion}`
   if (runtime.lastVisibilitySignature === nextVisibilitySignature) {
     return
   }
@@ -3399,8 +3573,8 @@ function refreshInfiniteGroundBaseChunkVisibility(
   const nextOrderedChunkKeys: string[] = []
   let instanceIndex = 0
 
-  for (let chunkZ = centerCoord.chunkZ - renderRadiusChunks; chunkZ <= centerCoord.chunkZ + renderRadiusChunks; chunkZ += 1) {
-    for (let chunkX = centerCoord.chunkX - renderRadiusChunks; chunkX <= centerCoord.chunkX + renderRadiusChunks; chunkX += 1) {
+  for (let chunkZ = visibleWindow.minChunkZ; chunkZ <= visibleWindow.maxChunkZ; chunkZ += 1) {
+    for (let chunkX = visibleWindow.minChunkX; chunkX <= visibleWindow.maxChunkX; chunkX += 1) {
       const key = formatGroundChunkKey(chunkX, chunkZ)
       if (runtime.hiddenChunkKeys.has(key)) {
         continue

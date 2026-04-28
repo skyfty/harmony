@@ -241,6 +241,7 @@ import {
   syncGroundSurfacePreviewForGround,
   type GroundSurfaceLiveChunkPreview,
 } from '@schema/groundSurfacePreview'
+import { resolveVisibleInfiniteGroundChunkManifestRecords } from '@schema/groundChunkManifestRuntime'
 // resolveEnabledComponentState removed from here; import not used
 import { createRoadGroup, updateRoadGroup } from '@schema/roadMesh'
 import { createFloorGroup, updateFloorGroup } from '@schema/floorMesh'
@@ -21801,31 +21802,7 @@ function resolveVisibleManifestChunkRecords(
   if (!camera) {
     return []
   }
-  const chunkSizeCandidate = groundDefinition.chunkSizeMeters
-  const chunkSizeMeters = typeof chunkSizeCandidate === 'number' && Number.isFinite(chunkSizeCandidate) && chunkSizeCandidate > 0
-    ? chunkSizeCandidate
-    : 100
-  const renderRadiusCandidate = groundDefinition.renderRadiusChunks
-  const renderRadiusChunks = typeof renderRadiusCandidate === 'number' && Number.isFinite(renderRadiusCandidate) && renderRadiusCandidate >= 0
-    ? Math.max(0, Math.trunc(renderRadiusCandidate))
-    : 0
-
-  groundObject.updateMatrixWorld(true)
-  const cameraWorld = new THREE.Vector3()
-  camera.getWorldPosition(cameraWorld)
-  const cameraLocal = groundObject.worldToLocal(cameraWorld)
-  const centerCoord = resolveGroundChunkCoordFromWorldPosition(cameraLocal.x, cameraLocal.z, chunkSizeMeters)
-  const visibleRecords: GroundChunkManifestRecord[] = []
-  for (let chunkZ = centerCoord.chunkZ - renderRadiusChunks; chunkZ <= centerCoord.chunkZ + renderRadiusChunks; chunkZ += 1) {
-    for (let chunkX = centerCoord.chunkX - renderRadiusChunks; chunkX <= centerCoord.chunkX + renderRadiusChunks; chunkX += 1) {
-      const key = `${chunkX}:${chunkZ}`
-      const record = manifestRecords[key]
-      if (record) {
-        visibleRecords.push(record)
-      }
-    }
-  }
-  return visibleRecords
+  return resolveVisibleInfiniteGroundChunkManifestRecords(groundObject, groundDefinition, camera, manifestRecords)
 }
 
 function syncViewportInfiniteGroundChunkMeshes(
