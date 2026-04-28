@@ -19,6 +19,8 @@ import { useAuthStore } from '#/store';
 
 const { apiURL } = useAppConfig(import.meta.env, import.meta.env.PROD);
 
+export { apiURL };
+
 function createRequestClient(baseURL: string, options?: RequestClientOptions) {
   const client = new RequestClient({
     ...options,
