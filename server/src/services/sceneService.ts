@@ -32,6 +32,7 @@ export type SceneData = {
   fileUrl: string
   fileSize: number
   checkpointTotal: number
+  metadata: Record<string, unknown> | null
   fileType: string | null
   originalFilename: string | null
   publishedBy: string | null
@@ -61,6 +62,11 @@ export type SceneUpdatePayload = {
 }
 
 type SceneDocLike = SceneDocument & { _id: Types.ObjectId }
+
+type ParsedScenePackageMetadata = {
+  checkpointTotal: number
+  metadata: Record<string, unknown> | null
+}
 
 function sanitizeString(value: unknown): string | null {
   if (typeof value !== 'string') {
@@ -96,19 +102,58 @@ function resolveAbsolutePath(fileKey: string): string {
   return absolute
 }
 
-async function parseCheckpointTotalFromSceneFile(file: UploadedFilePayload): Promise<number> {
+function asPlainRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null
+  }
+  return value as Record<string, unknown>
+}
+
+function parseNonNegativeInteger(value: unknown): number {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 0
+}
+
+function buildManifestMetadataFallback(manifestRaw: unknown): Record<string, unknown> | null {
+  const manifest = asPlainRecord(manifestRaw)
+  const resources = Array.isArray(manifest?.resources) ? manifest.resources : []
+  if (!resources.length) {
+    return null
+  }
+  const manifestResourceBytes = resources.reduce((sum, entry) => {
+    const record = asPlainRecord(entry)
+    return sum + parseNonNegativeInteger(record?.size)
+  }, 0)
+  return {
+    generatedAt: typeof manifest?.createdAt === 'string' ? manifest.createdAt : new Date().toISOString(),
+    sceneCount: Array.isArray(manifest?.scenes) ? manifest.scenes.length : 0,
+    resourceCount: resources.length,
+    manifestResourceBytes,
+  }
+}
+
+async function parseScenePackageMetadataFromSceneFile(file: UploadedFilePayload): Promise<ParsedScenePackageMetadata> {
   try {
     const sourcePath = file.filepath
     if (!sourcePath) {
-      return 0
+      return { checkpointTotal: 0, metadata: null }
     }
     const zipBytes = await fs.readFile(sourcePath)
     const pkg = unzipScenePackage(zipBytes)
     const projectRaw = JSON.parse(readTextFileFromScenePackage(pkg, 'project/project.json')) as Record<string, unknown>
-    const parsed = Number(projectRaw?.checkpointTotal)
-    return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 0
+    const checkpointTotal = parseNonNegativeInteger(projectRaw?.checkpointTotal)
+    const metadata = asPlainRecord(projectRaw?.metadata)
+    if (metadata) {
+      return { checkpointTotal, metadata }
+    }
+    try {
+      const manifestRaw = JSON.parse(readTextFileFromScenePackage(pkg, 'manifest.json'))
+      return { checkpointTotal, metadata: buildManifestMetadataFallback(manifestRaw) }
+    } catch {
+      return { checkpointTotal, metadata: null }
+    }
   } catch {
-    return 0
+    return { checkpointTotal: 0, metadata: null }
   }
 }
 
@@ -165,6 +210,7 @@ function mapSceneDocument(scene: SceneDocLike): SceneData {
     fileUrl: scene.fileUrl,
     fileSize: scene.fileSize ?? 0,
     checkpointTotal: typeof scene.checkpointTotal === 'number' && scene.checkpointTotal > 0 ? Math.floor(scene.checkpointTotal) : 0,
+    metadata: asPlainRecord(scene.metadata),
     fileType: sanitizeString(scene.fileType),
     originalFilename: sanitizeString(scene.originalFilename),
     publishedBy,
@@ -206,7 +252,7 @@ export async function listScenes(query: SceneListQuery): Promise<{ data: SceneDa
 }
 
 export async function createScene(payload: SceneCreatePayload): Promise<SceneData> {
-  const checkpointTotal = await parseCheckpointTotalFromSceneFile(payload.file)
+  const packageMetadata = await parseScenePackageMetadataFromSceneFile(payload.file)
   const stored = await storeSceneFile(payload.file)
   try {
     const created = await SceneModel.create({
@@ -214,7 +260,8 @@ export async function createScene(payload: SceneCreatePayload): Promise<SceneDat
       fileKey: stored.fileKey,
       fileUrl: stored.fileUrl,
       fileSize: stored.fileSize,
-      checkpointTotal,
+      checkpointTotal: packageMetadata.checkpointTotal,
+      metadata: packageMetadata.metadata,
       fileType: stored.fileType,
       originalFilename: stored.originalFilename,
       publishedBy: new Types.ObjectId(payload.publishedBy),
@@ -233,9 +280,9 @@ export async function updateScene(id: string, payload: SceneUpdatePayload): Prom
     return null
   }
   let newFile: StoredSceneFile | null = null
-  let newCheckpointTotal: number | null = null
+  let newPackageMetadata: ParsedScenePackageMetadata | null = null
   if (payload.file) {
-    newCheckpointTotal = await parseCheckpointTotalFromSceneFile(payload.file)
+    newPackageMetadata = await parseScenePackageMetadataFromSceneFile(payload.file)
     newFile = await storeSceneFile(payload.file)
   }
   const previousFileKey = scene.fileKey
@@ -246,7 +293,8 @@ export async function updateScene(id: string, payload: SceneUpdatePayload): Prom
     scene.fileKey = newFile.fileKey
     scene.fileUrl = newFile.fileUrl
     scene.fileSize = newFile.fileSize
-    scene.checkpointTotal = newCheckpointTotal ?? 0
+    scene.checkpointTotal = newPackageMetadata?.checkpointTotal ?? 0
+    scene.metadata = newPackageMetadata?.metadata ?? null
     scene.fileType = newFile.fileType
     scene.originalFilename = newFile.originalFilename
   }

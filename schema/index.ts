@@ -307,6 +307,52 @@ export const PROJECT_EXPORT_BUNDLE_FORMAT_VERSION = 1 as const
 
 export type ProjectExportSceneKind = 'embedded' | 'external'
 
+export interface ProjectExportBundleResourceBreakdown {
+  localAssetBytes: number
+  embeddedAssetBytes: number
+  planningImageBytes: number
+  terrainBytes: number
+  sidecarBytes: number
+  sceneDocumentBytes: number
+  manifestBytes: number
+  projectBytes: number
+  otherBytes: number
+}
+
+export interface ProjectExportBundleResourceSummary {
+  logicalId: string
+  resourceType: string
+  path: string
+  size: number
+  mimeType?: string | null
+  ext?: string | null
+}
+
+export interface ProjectExportBundleSceneSummary {
+  sceneId: string
+  name?: string | null
+  checkpointTotal: number
+  nodeCount: number
+  sceneDocumentBytes: number
+  sidecarBytes: number
+  resourceBytes: number
+}
+
+export interface ProjectExportBundleMetadata {
+  generatedAt: string
+  sceneCount: number
+  sceneOrder: string[]
+  checkpointTotal: number
+  nodeCountTotal: number
+  resourceCount: number
+  manifestResourceBytes: number
+  uncompressedEntryBytes: number
+  zipEntryCount: number
+  breakdown: ProjectExportBundleResourceBreakdown
+  largestResources: ProjectExportBundleResourceSummary[]
+  sceneSummaries: ProjectExportBundleSceneSummary[]
+}
+
 export interface ProjectExportBundleProjectConfig {
   id: string
   name: string
@@ -326,6 +372,10 @@ export interface ProjectExportBundleProjectConfig {
    * Total number of checkpoints across all scenes in the exported zip package.
    */
   checkpointTotal?: number
+  /**
+   * Export-time package statistics used for admin cost estimation and diagnostics.
+   */
+  metadata?: ProjectExportBundleMetadata
 }
 
 export type SceneNodeDownloadStatus = 'idle' | 'downloading' | 'ready' | 'error';

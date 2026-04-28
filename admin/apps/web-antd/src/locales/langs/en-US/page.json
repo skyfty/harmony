@@ -42,6 +42,7 @@
         "title": "Scene Management",
         "name": "Name",
         "fileUrl": "Scene File URL",
+        "checkpointTotal": "Checkpoint Total",
         "fileSize": "File Size (B)",
         "updatedAt": "Updated At",
         "actions": "Actions"
@@ -63,6 +64,81 @@
           "label": "Scene File",
           "button": "Select File",
           "required": "Please upload scene file"
+        }
+      }
+    },
+    "detail": {
+      "title": "Scene Package Detail",
+      "noMetadata": "This scene package does not include export statistics. Export and upload a new package from editor to see the full cost analysis.",
+      "buttons": {
+        "back": "Back"
+      },
+      "stats": {
+        "packageSize": "ZIP Download Size",
+        "resourceSize": "Resource Size",
+        "sceneCount": "Scenes",
+        "nodeCount": "Nodes"
+      },
+      "fields": {
+        "id": "ID",
+        "name": "Name",
+        "fileUrl": "Scene File URL",
+        "fileSize": "ZIP Download Size",
+        "uncompressedEntryBytes": "Uncompressed Entries",
+        "resourceCount": "Resources",
+        "checkpointTotal": "Checkpoint Total",
+        "zipEntryCount": "ZIP Entries",
+        "generatedAt": "Generated At",
+        "createdAt": "Created At",
+        "updatedAt": "Updated At"
+      },
+      "cost": {
+        "unitPrice": "CDN Unit Price (CNY/GB)",
+        "downloadCount": "Estimated Downloads",
+        "packageTraffic": "Estimated Traffic",
+        "packageCost": "ZIP Download Cost",
+        "resourceCost": "Resource Cost"
+      },
+      "breakdown": {
+        "localAssetBytes": "Local Assets",
+        "embeddedAssetBytes": "Shared Embedded Assets",
+        "planningImageBytes": "Planning Images",
+        "terrainBytes": "Terrain and Collision Data",
+        "sidecarBytes": "Scene Sidecars",
+        "sceneDocumentBytes": "Scene Documents",
+        "manifestBytes": "Manifest",
+        "projectBytes": "Project Metadata",
+        "otherBytes": "Other"
+      },
+      "resourceTypes": {
+        "localAsset": "Local Asset",
+        "planningImage": "Planning Image",
+        "terrainWeightmap": "Terrain Weightmap",
+        "lightmap": "Lightmap",
+        "navmesh": "Navmesh",
+        "baked": "Baked Resource",
+        "other": "Other"
+      },
+      "tables": {
+        "breakdown": {
+          "title": "Resource Breakdown",
+          "type": "Type",
+          "size": "Size"
+        },
+        "resources": {
+          "title": "Largest Resources",
+          "logicalId": "Resource ID",
+          "resourceType": "Type",
+          "path": "Package Path",
+          "size": "Size"
+        },
+        "scenes": {
+          "title": "Scene Statistics",
+          "name": "Name",
+          "sceneId": "Scene ID",
+          "nodeCount": "Nodes",
+          "checkpointTotal": "Checkpoints",
+          "totalBytes": "Total Size"
         }
       }
     }

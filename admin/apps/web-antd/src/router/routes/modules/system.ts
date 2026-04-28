@@ -13,6 +13,15 @@ const routes: RouteRecordRaw[] = [
     },
   },
   {
+    name: 'SceneDetail',
+    path: '/scenes/:id',
+    component: () => import('#/views/scenes/detail.vue'),
+    meta: {
+      title: $t('page.scenes.detail.title'),
+      hideInMenu: true,
+    },
+  },
+  {
     meta: {
       icon: 'lucide:map-pinned',
       title: '景点管理',

@@ -19,12 +19,59 @@ export interface SceneItem {
   fileUrl: string;
   fileSize: number;
   checkpointTotal: number;
+  metadata?: null | ScenePackageMetadata;
   fileType?: null | string;
   originalFilename?: null | string;
   publishedBy?: null | string;
   publishedByType: 'Admin' | 'User';
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ScenePackageResourceBreakdown {
+  localAssetBytes?: number;
+  embeddedAssetBytes?: number;
+  planningImageBytes?: number;
+  terrainBytes?: number;
+  sidecarBytes?: number;
+  sceneDocumentBytes?: number;
+  manifestBytes?: number;
+  projectBytes?: number;
+  otherBytes?: number;
+}
+
+export interface ScenePackageResourceSummary {
+  ext?: null | string;
+  logicalId: string;
+  mimeType?: null | string;
+  path: string;
+  resourceType: string;
+  size: number;
+}
+
+export interface ScenePackageSceneSummary {
+  checkpointTotal: number;
+  name?: null | string;
+  nodeCount: number;
+  resourceBytes: number;
+  sceneDocumentBytes: number;
+  sceneId: string;
+  sidecarBytes: number;
+}
+
+export interface ScenePackageMetadata {
+  breakdown?: ScenePackageResourceBreakdown;
+  checkpointTotal?: number;
+  generatedAt?: string;
+  largestResources?: ScenePackageResourceSummary[];
+  manifestResourceBytes?: number;
+  nodeCountTotal?: number;
+  resourceCount?: number;
+  sceneCount?: number;
+  sceneOrder?: string[];
+  sceneSummaries?: ScenePackageSceneSummary[];
+  uncompressedEntryBytes?: number;
+  zipEntryCount?: number;
 }
 
 export interface SceneCreatePayload {
