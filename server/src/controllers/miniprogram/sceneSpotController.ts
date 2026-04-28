@@ -21,6 +21,18 @@ import type { ProductDocument, SceneDocument } from '@/types/models'
 
 const COMMENT_CONTENT_MAX_LENGTH = 500
 
+function buildScenePackageDownloadUrl(ctx: Context, sceneId: string): string {
+  return new URL(`/api/mini/scenes/${encodeURIComponent(sceneId)}/package`, ctx.origin).toString()
+}
+
+function ensureSceneId(ctx: Context): string {
+  const { id } = ctx.params as { id?: string }
+  if (!id || typeof id !== 'string' || !Types.ObjectId.isValid(id)) {
+    ctx.throw(400, 'Invalid scene id')
+  }
+  return id
+}
+
 function toStringValue(value: unknown, fallback = ''): string {
   return typeof value === 'string' ? value : fallback
 }
@@ -176,6 +188,23 @@ function buildSceneDto(scene: any) {
     fileKey: scene.fileKey,
     fileSize: typeof scene.fileSize === 'number' ? scene.fileSize : 0,
   }
+}
+
+export async function downloadScenePackage(ctx: Context): Promise<void> {
+  const sceneId = ensureSceneId(ctx)
+  const scene = await SceneModel.findById(sceneId).lean().exec()
+  if (!scene) {
+    ctx.throw(404, 'Scene not found')
+  }
+  const fileUrl = typeof scene.fileUrl === 'string' ? scene.fileUrl.trim() : ''
+  if (!fileUrl) {
+    ctx.throw(404, 'Scene package not found')
+  }
+
+  ctx.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0')
+  ctx.set('Pragma', 'no-cache')
+  ctx.set('Expires', '0')
+  ctx.redirect(fileUrl)
 }
 
 function buildSceneSpotSummaryDto(spot: any, scene: any) {
@@ -499,8 +528,8 @@ export async function getSceneSpotEntry(ctx: Context): Promise<void> {
   ctx.body = {
     sceneId: String(scene._id),
     sceneSpotId: String(spot._id),
-    packageUrl: scene.fileUrl,
-    sceneUrl: scene.fileUrl,
+    packageUrl: buildScenePackageDownloadUrl(ctx, String(scene._id)),
+    sceneUrl: buildScenePackageDownloadUrl(ctx, String(scene._id)),
   }
 }
 
