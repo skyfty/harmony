@@ -481,7 +481,7 @@ const viewportInfiniteGroundChunkPreviewHiddenKeysMap = new WeakMap<THREE.Object
 type ViewportInfiniteGroundChunkRuntime = {
   group: THREE.Group
   meshes: Map<string, THREE.Mesh>
-  pendingLoads: Map<string, Promise<void>>
+  pendingLoads: Map<string, { revision: number; promise: Promise<void> }>
   sceneId: string | null
   revision: number
 }
@@ -21704,13 +21704,13 @@ function syncViewportInfiniteGroundChunkMeshes(
   manifestRecords: Record<string, GroundChunkManifestRecord>,
 ): void {
   const runtime = ensureViewportInfiniteGroundChunkRuntime(groundObject)
-  if (runtime.sceneId !== sceneId || runtime.revision !== manifestRevision) {
+  if (runtime.sceneId !== sceneId) {
     runtime.meshes.forEach((mesh) => disposeViewportInfiniteGroundChunkMesh(mesh))
     runtime.meshes.clear()
     runtime.pendingLoads.clear()
     runtime.sceneId = sceneId
-    runtime.revision = manifestRevision
   }
+  runtime.revision = manifestRevision
 
   const visibleRecords = resolveVisibleManifestChunkRecords(groundObject, groundDefinition, manifestRecords)
   const desiredKeys = new Set(visibleRecords.map((record) => record.key))
@@ -21731,13 +21731,20 @@ function syncViewportInfiniteGroundChunkMeshes(
     : 0
 
   for (const record of visibleRecords) {
-    if (runtime.meshes.has(record.key) || runtime.pendingLoads.has(record.key)) {
+    const existingMesh = runtime.meshes.get(record.key)
+    const existingRevision = Number((existingMesh?.userData as Record<string, unknown> | undefined)?.groundChunkRecordRevision)
+    if (existingMesh && existingRevision === record.revision) {
+      continue
+    }
+    const pendingLoad = runtime.pendingLoads.get(record.key)
+    if (pendingLoad?.revision === record.revision) {
       continue
     }
     const pending = scenesStore.loadGroundChunkData(sceneId, record.key)
       .then((buffer) => {
         const activeRuntime = viewportInfiniteGroundChunkRuntimeMap.get(groundObject)
-        if (!activeRuntime || activeRuntime.sceneId !== sceneId || activeRuntime.revision !== manifestRevision) {
+        const activePending = activeRuntime?.pendingLoads.get(record.key)
+        if (!activeRuntime || activeRuntime.sceneId !== sceneId || activePending?.revision !== record.revision) {
           return
         }
         const activeRecord = viewportGroundChunkManifestRecords[record.key]
@@ -21747,23 +21754,43 @@ function syncViewportInfiniteGroundChunkMeshes(
         const parsedCoord = parseGroundChunkKey(record.key)
         const heights = decodeViewportGroundChunkHeights(buffer, record.resolution)
         const geometry = buildViewportInfiniteGroundChunkGeometry(record, heights, fallbackHeight)
-        const mesh = new THREE.Mesh(geometry, resolveViewportGroundChunkMaterial(groundObject))
-        mesh.name = `GroundRuntimeChunk:${record.key}`
-        mesh.receiveShadow = true
-        mesh.castShadow = groundDefinition.castShadow === true
-        mesh.userData.dynamicMeshType = 'Ground'
-        mesh.userData.groundRuntimeChunk = true
-        mesh.userData.groundChunkKey = record.key
-        if (parsedCoord) {
-          mesh.userData.groundChunk = {
-            chunkRow: parsedCoord.chunkZ,
-            chunkColumn: parsedCoord.chunkX,
+        const currentMesh = activeRuntime.meshes.get(record.key)
+        if (currentMesh) {
+          const previousGeometry = currentMesh.geometry
+          currentMesh.geometry = geometry
+          currentMesh.castShadow = groundDefinition.castShadow === true
+          currentMesh.userData.groundChunkRecordRevision = record.revision
+          if (parsedCoord) {
+            currentMesh.userData.groundChunk = {
+              chunkRow: parsedCoord.chunkZ,
+              chunkColumn: parsedCoord.chunkX,
+            }
           }
+          try {
+            previousGeometry?.dispose?.()
+          } catch (_error) {
+            /* noop */
+          }
+        } else {
+          const mesh = new THREE.Mesh(geometry, resolveViewportGroundChunkMaterial(groundObject))
+          mesh.name = `GroundRuntimeChunk:${record.key}`
+          mesh.receiveShadow = true
+          mesh.castShadow = groundDefinition.castShadow === true
+          mesh.userData.dynamicMeshType = 'Ground'
+          mesh.userData.groundRuntimeChunk = true
+          mesh.userData.groundChunkKey = record.key
+          mesh.userData.groundChunkRecordRevision = record.revision
+          if (parsedCoord) {
+            mesh.userData.groundChunk = {
+              chunkRow: parsedCoord.chunkZ,
+              chunkColumn: parsedCoord.chunkX,
+            }
+          }
+          activeRuntime.group.add(mesh)
+          const hiddenKeys = viewportInfiniteGroundChunkPreviewHiddenKeysMap.get(groundObject)
+          mesh.visible = !(hiddenKeys?.has(record.key) === true)
+          activeRuntime.meshes.set(record.key, mesh)
         }
-        activeRuntime.group.add(mesh)
-        const hiddenKeys = viewportInfiniteGroundChunkPreviewHiddenKeysMap.get(groundObject)
-        mesh.visible = !(hiddenKeys?.has(record.key) === true)
-        activeRuntime.meshes.set(record.key, mesh)
         lastGroundChunkSetSignatureForPlacement = null
       })
       .catch((error) => {
@@ -21771,9 +21798,12 @@ function syncViewportInfiniteGroundChunkMeshes(
       })
       .finally(() => {
         const activeRuntime = viewportInfiniteGroundChunkRuntimeMap.get(groundObject)
-        activeRuntime?.pendingLoads.delete(record.key)
+        const activePending = activeRuntime?.pendingLoads.get(record.key)
+        if (activePending?.revision === record.revision) {
+          activeRuntime?.pendingLoads.delete(record.key)
+        }
       })
-    runtime.pendingLoads.set(record.key, pending)
+    runtime.pendingLoads.set(record.key, { revision: record.revision, promise: pending })
   }
 
   if (changed) {
