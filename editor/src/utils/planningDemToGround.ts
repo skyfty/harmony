@@ -1,11 +1,11 @@
 import type { GroundHeightMap, GroundLocalEditTileMap, GroundRuntimeDynamicMesh } from '@schema'
 import {
+  GROUND_TERRAIN_CHUNK_SIZE_METERS,
   createGroundHeightMap,
   formatGroundLocalEditTileKey,
   getGroundVertexIndex,
   resolveGroundEditCellSize,
   resolveGroundEditTileResolution,
-  resolveGroundEditTileSizeMeters,
   resolveGroundWorkingGridSize,
   resolveGroundWorkingSpanMeters,
   type GroundPlanningMetadata,
@@ -96,6 +96,23 @@ function resolvePlanningDemLocalEditTileOrigin(definition: GroundRuntimeDynamicM
   }
 }
 
+function resolvePlanningDemChunkSizeMeters(): number {
+  return GROUND_TERRAIN_CHUNK_SIZE_METERS
+}
+
+function resolvePlanningDemChunkTileRange(options: {
+  minWorld: number
+  maxWorld: number
+  originWorld: number
+  chunkSizeMeters: number
+}): { startTile: number; endTile: number } {
+  const safeChunkSize = Number.isFinite(options.chunkSizeMeters) && options.chunkSizeMeters > 0 ? options.chunkSizeMeters : resolvePlanningDemChunkSizeMeters()
+  const epsilon = Math.max(1e-9, safeChunkSize * 1e-9)
+  const startTile = Math.floor((options.minWorld - options.originWorld) / safeChunkSize)
+  const endTile = Math.max(startTile, Math.floor((options.maxWorld - options.originWorld + epsilon) / safeChunkSize))
+  return { startTile, endTile }
+}
+
 function buildPlanningDemRegionFromPreparedSource(options: {
   definition: GroundRuntimeDynamicMesh
   prepared: PlanningDemPreparedSource
@@ -138,24 +155,30 @@ export function buildPlanningDemLocalEditTilesForRegion(options: {
   startColumn: number
   endColumn: number
 }): GroundLocalEditTileMap | null {
-  const tileSizeMeters = resolveGroundEditTileSizeMeters(options.definition)
+  const tileSizeMeters = resolvePlanningDemChunkSizeMeters()
   const resolution = resolveGroundEditTileResolution(options.definition)
   if (!(tileSizeMeters > 0) || !(resolution > 0)) {
     return null
   }
   const cellSize = Number.isFinite(options.definition.cellSize) && options.definition.cellSize > 0 ? options.definition.cellSize : 1
   const { originX, originZ } = resolvePlanningDemLocalEditTileOrigin(options.definition)
-  const minX = resolvePlanningDemTargetWorldBounds(options.definition).minX + options.startColumn * cellSize
-  const maxX = resolvePlanningDemTargetWorldBounds(options.definition).minX + options.endColumn * cellSize
-  const minZ = resolvePlanningDemTargetWorldBounds(options.definition).minZ + options.startRow * cellSize
-  const maxZ = resolvePlanningDemTargetWorldBounds(options.definition).minZ + options.endRow * cellSize
-  const normalizeTileIndex = (value: number) => options.definition.terrainMode === 'infinite'
-    ? Math.floor(value)
-    : Math.max(0, Math.floor(value))
-  const startTileColumn = normalizeTileIndex((minX - originX) / tileSizeMeters)
-  const endTileColumn = Math.max(startTileColumn, normalizeTileIndex((maxX - originX) / tileSizeMeters))
-  const startTileRow = normalizeTileIndex((minZ - originZ) / tileSizeMeters)
-  const endTileRow = Math.max(startTileRow, normalizeTileIndex((maxZ - originZ) / tileSizeMeters))
+  const worldBounds = resolvePlanningDemTargetWorldBounds(options.definition)
+  const minX = worldBounds.minX + options.startColumn * cellSize
+  const maxX = worldBounds.minX + options.endColumn * cellSize
+  const minZ = worldBounds.minZ + options.startRow * cellSize
+  const maxZ = worldBounds.minZ + options.endRow * cellSize
+  const { startTile: startTileColumn, endTile: endTileColumn } = resolvePlanningDemChunkTileRange({
+    minWorld: minX,
+    maxWorld: maxX,
+    originWorld: originX,
+    chunkSizeMeters: tileSizeMeters,
+  })
+  const { startTile: startTileRow, endTile: endTileRow } = resolvePlanningDemChunkTileRange({
+    minWorld: minZ,
+    maxWorld: maxZ,
+    originWorld: originZ,
+    chunkSizeMeters: tileSizeMeters,
+  })
   const result: GroundLocalEditTileMap = {}
 
   for (let tileRow = startTileRow; tileRow <= endTileRow; tileRow += 1) {
@@ -282,7 +305,7 @@ async function resolvePlanningDemPreparedSource(options: {
   const targetColumns = Math.max(1, Math.trunc(gridSize.columns))
   const targetCellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
   const localEditCellSize = resolveGroundEditCellSize(definition)
-  const localEditTileSizeMeters = resolveGroundEditTileSizeMeters(definition)
+  const localEditTileSizeMeters = resolvePlanningDemChunkSizeMeters()
   const localEditTileResolution = resolveGroundEditTileResolution(definition)
   const tileLayout = resolvePlanningDemSourceTileLayout({
     definition,
@@ -536,14 +559,14 @@ export function resolvePlanningDemSourceTileLayout(options: {
 }): PlanningDemSourceTileLayout {
   const { definition, demWidth, demHeight, worldBounds } = options
   const localEditCellSize = resolveGroundEditCellSize(definition)
-  const localEditTileSizeMeters = resolveGroundEditTileSizeMeters(definition)
+  const localEditTileSizeMeters = resolvePlanningDemChunkSizeMeters()
   const worldSpan = resolveGroundWorkingSpanMeters(definition)
   const worldWidth = worldBounds ? Math.abs(worldBounds.maxX - worldBounds.minX) : Math.max(localEditTileSizeMeters, worldSpan)
   const worldHeight = worldBounds ? Math.abs(worldBounds.maxY - worldBounds.minY) : Math.max(localEditTileSizeMeters, worldSpan)
   const tileColumns = Math.max(1, Math.ceil(worldWidth / Math.max(localEditTileSizeMeters, Number.EPSILON)))
   const tileRows = Math.max(1, Math.ceil(worldHeight / Math.max(localEditTileSizeMeters, Number.EPSILON)))
-  const tileWorldWidth = worldWidth / tileColumns
-  const tileWorldHeight = worldHeight / tileRows
+  const tileWorldWidth = localEditTileSizeMeters
+  const tileWorldHeight = localEditTileSizeMeters
   const sourceSamplesPerTileX = Math.max(1, Math.ceil(demWidth / tileColumns))
   const sourceSamplesPerTileY = Math.max(1, Math.ceil(demHeight / tileRows))
   const targetSamplesPerTileX = Math.max(1, Math.ceil(tileWorldWidth / Math.max(localEditCellSize, Number.EPSILON)) + 1)
