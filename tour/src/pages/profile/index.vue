@@ -46,17 +46,6 @@
       </view>
 
       <view class="card">
-        <view class="row">
-          <text class="label">消息提醒</text>
-          <switch :checked="settings.notify" @change="(e:any)=>toggle('notify', !!e.detail.value)" />
-        </view>
-        <view class="row">
-          <text class="label">自动下载资源</text>
-          <switch :checked="settings.autoDownload" @change="(e:any)=>toggle('autoDownload', !!e.detail.value)" />
-        </view>
-      </view>
-
-      <view class="card">
         <view class="row" @tap="show('使用指南（mock）')"><text class="label">使用指南</text><text class="arrow">›</text></view>
         <view class="row" @tap="show('隐私政策（mock）')"><text class="label">隐私政策</text><text class="arrow">›</text></view>
         <view class="row" @tap="show('已是最新版本（mock）')"><text class="label">版本更新</text><text class="arrow">›</text></view>

@@ -124,9 +124,9 @@ async function loadPunchProgress(): Promise<void> {
 
 function handleBack(): void {
   uni.showModal({
-    title: '确认返回',
-    content: '确定要返回上一页吗？',
-    confirmText: '返回',
+    title: '确认离开',
+    content: '确定要离开景区吗？',
+    confirmText: '离开',
     cancelText: '取消',
     success: (result) => {
       if (!result.confirm) {

@@ -356,6 +356,7 @@ function updateSignboardEntry(
   resolveLabel: (nodeId: string) => string,
   isPunched: (nodeId: string) => boolean,
   style: SignboardBillboardStyle,
+  distanceReferenceWorld?: THREE.Vector3 | null,
 ): void {
   let entry = signboardEntries.get(nodeId)
   if (!object) {
@@ -371,7 +372,8 @@ function updateSignboardEntry(
   object.updateWorldMatrix(true, true)
   resolveSignboardAnchorWorldPosition(object, signboardAnchorScratch, SIGNBOARD_WORLD_Y_OFFSET + BILLBOARD_WORLD_Y_OFFSET)
   camera.getWorldPosition(signboardCameraScratch)
-  const distanceMeters = signboardAnchorScratch.distanceTo(signboardCameraScratch)
+  const distanceReference = distanceReferenceWorld ?? signboardCameraScratch
+  const distanceMeters = signboardAnchorScratch.distanceTo(distanceReference)
   const opacity = computeOpacity(distanceMeters)
   const distanceText = formatSignboardDistance(distanceMeters)
 
@@ -404,8 +406,9 @@ export function syncSignboardBillboards(params: {
   resolveLabel: (nodeId: string) => string
   isPunched?: (nodeId: string) => boolean
   appearance?: Partial<SignboardBillboardStyle>
+  distanceReferenceWorld?: THREE.Vector3 | null
 }): void {
-  const { scene, camera, nodeObjectMap, signboardNodeIds, resolveLabel } = params
+  const { scene, camera, nodeObjectMap, signboardNodeIds, resolveLabel, distanceReferenceWorld } = params
   if (!scene || !camera) {
     return
   }
@@ -422,7 +425,16 @@ export function syncSignboardBillboards(params: {
   }
 
   signboardNodeIds.forEach((nodeId) => {
-    updateSignboardEntry(scene, camera, nodeId, nodeObjectMap.get(nodeId) ?? null, resolveLabel, isPunched, style)
+    updateSignboardEntry(
+      scene,
+      camera,
+      nodeId,
+      nodeObjectMap.get(nodeId) ?? null,
+      resolveLabel,
+      isPunched,
+      style,
+      distanceReferenceWorld,
+    )
   })
 }
 

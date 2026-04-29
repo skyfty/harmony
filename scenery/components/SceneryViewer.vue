@@ -4186,14 +4186,17 @@ function resolveSceneSignboardLabel(nodeId: string): string {
 }
 
 function syncSceneSignboards(): void {
+  const renderCamera = renderContext?.camera ?? null;
+  const distanceReference = renderCamera ? resolvePunchBadgeReference(renderCamera) : null;
   syncSignboardBillboards({
     scene: renderContext?.scene ?? null,
-    camera: renderContext?.camera ?? null,
+    camera: renderCamera,
     nodeObjectMap,
     signboardNodeIds,
     resolveLabel: resolveSceneSignboardLabel,
     isPunched: (nodeId: string) => punchedNodeIds.value.has(nodeId),
     appearance: SCENERY_SIGNBOARD_BILLBOARD_STYLE,
+    distanceReferenceWorld: distanceReference?.position ?? null,
   });
 }
 
