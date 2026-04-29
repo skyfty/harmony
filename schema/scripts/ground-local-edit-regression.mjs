@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 
 import {
+  GROUND_HEIGHT_UNSET_VALUE,
   createGroundHeightMap,
   formatGroundLocalEditTileKey,
 } from '../dist/index.js'
@@ -59,19 +60,43 @@ function createFlatLocalEditTile({ tileRow, tileColumn, tileSizeMeters, resoluti
 
 function testLocalEditTileSampling() {
   const tile = createFlatLocalEditTile({
-    tileRow: 1,
-    tileColumn: 1,
+    tileRow: 0,
+    tileColumn: 0,
     tileSizeMeters: 10,
     resolution: 10,
     value: 5,
   })
   const definition = createGroundDefinition({
+    terrainMode: 'infinite',
     localEditTiles: { [tile.key]: tile },
   })
-  const insideHeight = sampleGroundHeight(definition, -5, -5)
+  const insideHeight = sampleGroundHeight(definition, 5, 5)
   const outsideHeight = sampleGroundHeight(definition, -19, -19)
   assert.equal(insideHeight, 5, 'sampling inside a local edit tile should return the tile height')
   assert.ok(Math.abs(outsideHeight) < 0.1, 'sampling outside a local edit tile should not use the direct local tile height')
+}
+
+function testLocalEditTileEdgeSamplingUsesOnlyRequiredCorners() {
+  const resolution = 2
+  const values = new Array((resolution + 1) * (resolution + 1)).fill(GROUND_HEIGHT_UNSET_VALUE)
+  values[0 * (resolution + 1) + 0] = 2
+  values[1 * (resolution + 1) + 0] = 6
+  const tile = {
+    key: formatGroundLocalEditTileKey(0, 0),
+    tileRow: 0,
+    tileColumn: 0,
+    tileSizeMeters: 10,
+    resolution,
+    values,
+    source: 'manual',
+    updatedAt: Date.now(),
+  }
+  const definition = createGroundDefinition({
+    terrainMode: 'infinite',
+    localEditTiles: { [tile.key]: tile },
+  })
+  const sampledHeight = sampleGroundHeight(definition, 0, 2.5)
+  assert.equal(sampledHeight, 4, 'sampling on an exact local-edit edge should interpolate only along that edge instead of falling back to the base height')
 }
 
 function testSculptWritesLocalEditTiles() {
@@ -159,6 +184,7 @@ function testLocalEditTilesDoNotGloballyDisableOptimizedMesh() {
 }
 
 testLocalEditTileSampling()
+testLocalEditTileEdgeSamplingUsesOnlyRequiredCorners()
 testSculptWritesLocalEditTiles()
 testInfiniteSculptWritesWorldSpaceLocalEditTilesOutsideBounds()
 testLocalEditTilesDoNotGloballyDisableOptimizedMesh()

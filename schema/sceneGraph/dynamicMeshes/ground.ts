@@ -28,20 +28,11 @@ export async function buildGroundMesh(
   if ('groundTerrainPackageManifest' in sourceUserData) {
     userData.groundTerrainPackageManifest = sourceUserData.groundTerrainPackageManifest ?? null;
   }
-  if ('groundTerrainManifestPath' in sourceUserData) {
-    userData.groundTerrainManifestPath = sourceUserData.groundTerrainManifestPath ?? null;
-  }
   if ('groundChunkManifest' in sourceUserData) {
     userData.groundChunkManifest = sourceUserData.groundChunkManifest ?? null;
   }
   if ('groundChunkManifestPath' in sourceUserData) {
     userData.groundChunkManifestPath = sourceUserData.groundChunkManifestPath ?? null;
-  }
-  if ('groundTerrainTilesRootPath' in sourceUserData) {
-    userData.groundTerrainTilesRootPath = sourceUserData.groundTerrainTilesRootPath ?? null;
-  }
-  if ('groundCollisionPath' in sourceUserData) {
-    userData.groundCollisionPath = sourceUserData.groundCollisionPath ?? null;
   }
   groundObject.userData = userData;
 

@@ -38,18 +38,12 @@ export type GroundCreationWarningLevel = 'none' | 'info' | 'caution' | 'severe'
 
 export type GroundCreationProfile = {
   quality: GroundCreationQuality
-  storageMode: 'full' | 'tiled'
   cellSize: number
   rows: number
   columns: number
-  tileSizeMeters: number
-  tileResolution: number
-  globalLodCellSize: number
-  activeEditWindowRadius: number
   editTileSizeMeters: number
   editTileResolution: number
   editCellSize: number
-  collisionMode: 'full-heightfield' | 'tiled-heightfield' | 'near-field-only'
   estimatedVertexCount: number
   estimatedHeightBytes: number
   estimatedTileCount: number
@@ -147,15 +141,8 @@ export function cloneGroundDynamicMesh(definition: GroundDynamicMeshLike): Groun
     collisionRadiusChunks: definition.collisionRadiusChunks ?? DEFAULT_GROUND_COLLISION_RADIUS_CHUNKS,
     chunkManifestRevision: Number.isFinite(definition.chunkManifestRevision) ? Math.max(0, Math.trunc(definition.chunkManifestRevision as number)) : 0,
     cellSize: definition.cellSize,
-    storageMode: definition.storageMode,
-    tileSizeMeters: definition.tileSizeMeters,
-    tileResolution: definition.tileResolution,
-    globalLodCellSize: definition.globalLodCellSize,
-    activeEditWindowRadius: definition.activeEditWindowRadius,
     editTileSizeMeters: definition.editTileSizeMeters,
     editTileResolution: definition.editTileResolution,
-    collisionMode: definition.collisionMode,
-    chunkStreamingEnabled: definition.chunkStreamingEnabled,
     surfaceRevision: Number.isFinite(definition.surfaceRevision) ? Math.max(0, Math.trunc(definition.surfaceRevision as number)) : 0,
     heightComposition: { ...(definition.heightComposition ?? { mode: 'planning_plus_manual' as const }) },
     planningMetadata: manualDeepCloneLocal(definition.planningMetadata ?? null) as unknown as GroundDynamicMesh['planningMetadata'],
@@ -222,14 +209,12 @@ export function resolveGroundCreationProfile(
   const denseRows = Math.max(1, Math.ceil(safeDepth / normalizedBaseCellSize))
   const denseVertexCount = (denseColumns + 1) * (denseRows + 1)
 
-  let storageMode: 'full' | 'tiled' = 'full'
   let quality: GroundCreationQuality = 'high'
   let warningLevel: GroundCreationWarningLevel = 'none'
   let warningMessage: string | null = null
   let cellSize = normalizedBaseCellSize
 
   if (denseVertexCount > GROUND_CREATION_HIGH_VERTEX_BUDGET) {
-    storageMode = 'tiled'
     quality = 'balanced'
     warningLevel = 'info'
     cellSize = Math.max(normalizedBaseCellSize, Math.ceil(Math.max(safeWidth, safeDepth) / GROUND_CREATION_AXIS_TARGET))
@@ -241,11 +226,7 @@ export function resolveGroundCreationProfile(
   const estimatedVertexCount = (columns + 1) * (rows + 1)
   const estimatedHeightBytes = estimatedVertexCount * Float64Array.BYTES_PER_ELEMENT * 2
   const estimatedTileCount = Math.max(1, Math.ceil(columns / GROUND_CREATION_AXIS_TARGET) * Math.ceil(rows / GROUND_CREATION_AXIS_TARGET))
-  const tileSizeMeters = Math.max(128, Math.min(512, Math.ceil(Math.max(safeWidth, safeDepth) / Math.max(1, Math.ceil(Math.sqrt(estimatedTileCount))))))
-  const tileResolution = Math.max(32, Math.min(128, Math.ceil(tileSizeMeters / cellSize)))
-  const globalLodCellSize = Math.max(cellSize * 2, Math.ceil(Math.max(safeWidth, safeDepth) / Math.max(1, GROUND_CREATION_AXIS_TARGET * 2)))
-  const activeEditWindowRadius = Math.max(tileSizeMeters, Math.min(tileSizeMeters * 2, Math.ceil(Math.max(safeWidth, safeDepth) / 8)))
-  const editTileSizeMeters = Math.max(cellSize, Math.min(tileSizeMeters, GROUND_CREATION_EDIT_TILE_WORLD_TARGET))
+  const editTileSizeMeters = Math.max(cellSize, Math.min(Math.max(safeWidth, safeDepth), GROUND_CREATION_EDIT_TILE_WORLD_TARGET))
   const editTileResolution = Math.max(
     GROUND_CREATION_EDIT_TILE_MIN_RESOLUTION,
     Math.min(
@@ -254,14 +235,8 @@ export function resolveGroundCreationProfile(
     ),
   )
   const editCellSize = editTileSizeMeters / editTileResolution
-  const collisionMode: 'full-heightfield' | 'tiled-heightfield' | 'near-field-only' = estimatedVertexCount <= GROUND_CREATION_HIGH_VERTEX_BUDGET
-    ? 'full-heightfield'
-    : estimatedVertexCount <= GROUND_CREATION_BALANCED_VERTEX_BUDGET
-      ? 'tiled-heightfield'
-      : 'near-field-only'
 
   if (estimatedVertexCount > GROUND_CREATION_BALANCED_VERTEX_BUDGET) {
-    storageMode = 'tiled'
     quality = 'constrained'
     warningLevel = 'caution'
     warningMessage = '地形工作集较大，系统将优先保留近场高精编辑 tile，并在远场使用更粗的显示分辨率。'
@@ -274,18 +249,12 @@ export function resolveGroundCreationProfile(
 
   return {
     quality,
-    storageMode,
     cellSize,
     rows,
     columns,
-    tileSizeMeters,
-    tileResolution,
-    globalLodCellSize,
-    activeEditWindowRadius,
     editTileSizeMeters,
     editTileResolution,
     editCellSize,
-    collisionMode,
     estimatedVertexCount,
     estimatedHeightBytes,
     estimatedTileCount,
@@ -315,15 +284,8 @@ export function createGroundDynamicMeshDefinition(overrides: Partial<GroundDynam
     collisionRadiusChunks: overrides.collisionRadiusChunks ?? baseSettings.collisionRadiusChunks ?? DEFAULT_GROUND_COLLISION_RADIUS_CHUNKS,
     chunkManifestRevision: Number.isFinite(overrides.chunkManifestRevision) ? Math.max(0, Math.trunc(overrides.chunkManifestRevision as number)) : 0,
     cellSize,
-    storageMode: creationProfile.storageMode,
-    tileSizeMeters: creationProfile.tileSizeMeters,
-    tileResolution: creationProfile.tileResolution,
-    globalLodCellSize: creationProfile.globalLodCellSize,
-    activeEditWindowRadius: creationProfile.activeEditWindowRadius,
     editTileSizeMeters: creationProfile.editTileSizeMeters,
     editTileResolution: creationProfile.editTileResolution,
-    collisionMode: creationProfile.collisionMode,
-      chunkStreamingEnabled: overrides.chunkStreamingEnabled ?? true,
     surfaceRevision: Number.isFinite(overrides.surfaceRevision) ? Math.max(0, Math.trunc(overrides.surfaceRevision as number)) : 0,
     heightComposition: {
       mode: overrides.heightComposition?.mode ?? 'planning_plus_manual',

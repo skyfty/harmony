@@ -16,12 +16,6 @@ export interface ScenePackageSceneEntry {
   path: string;
   /** Optional editor-only planning sidecar path, e.g. `scenes/<sceneId>/planning.json` */
   planningPath?: string;
-  /** Ground terrain manifest path for tiled scenes, e.g. `scenes/<sceneId>/ground-terrain.json` */
-  groundTerrainManifestPath?: string;
-  /** Ground terrain tiles root path for tiled scenes, e.g. `scenes/<sceneId>/ground-tiles/` */
-  groundTerrainTilesRootPath?: string;
-  /** Ground collision metadata path for tiled scenes, e.g. `scenes/<sceneId>/ground-collision.json` */
-  groundCollisionPath?: string;
   /** Optional infinite ground chunk manifest path, e.g. `scenes/<sceneId>/ground-chunk-manifest.json` */
   groundChunkManifestPath?: string;
   /** Legacy Ground height sidecar path kept only while exporters are being migrated away from the old format. */

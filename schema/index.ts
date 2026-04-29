@@ -1645,7 +1645,7 @@ export interface GroundSurfaceChunkTextureRef {
 
 export type GroundSurfaceChunkTextureMap = Record<string, GroundSurfaceChunkTextureRef>
 
-export type GroundTerrainMode = 'bounded' | 'infinite'
+export type GroundTerrainMode = 'infinite'
 
 export type GroundChunkSource = 'manual' | 'dem' | 'import' | 'paint' | 'scatter'
 
@@ -1909,19 +1909,11 @@ export interface GroundDynamicMesh {
   /** Monotonic revision for the infinite terrain chunk manifest. */
   chunkManifestRevision?: number
   cellSize: number
-  storageMode?: 'full' | 'tiled'
-  tileSizeMeters?: number
-  tileResolution?: number
-  globalLodCellSize?: number
-  activeEditWindowRadius?: number
   /** Sparse authoring tile world size used to preserve local edit fidelity independently of far-field render resolution. */
   editTileSizeMeters?: number
   /** Authoring tile vertex resolution for local sculpt and imported terrain detail. */
   editTileResolution?: number
-  collisionMode?: 'full-heightfield' | 'tiled-heightfield' | 'near-field-only'
   optimizedMesh?: GroundOptimizedMeshData | null
-  /** When false, load all terrain chunks eagerly instead of streaming them around the camera. */
-  chunkStreamingEnabled?: boolean
   /** Monotonic revision for changes that affect rendered ground surface heights. */
   surfaceRevision?: number
   heightComposition: {
@@ -1944,33 +1936,25 @@ export interface GroundDynamicMesh {
   terrainPaintBakedTextureAssetId?: string | null
 }
 
-export function resolveGroundEditTileSizeMeters(definition: Pick<GroundDynamicMesh, 'editTileSizeMeters' | 'tileSizeMeters' | 'cellSize'>): number {
+export function resolveGroundEditTileSizeMeters(definition: Pick<GroundDynamicMesh, 'editTileSizeMeters' | 'cellSize'>): number {
   const fallbackCellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
   const explicit = Number(definition.editTileSizeMeters)
   if (Number.isFinite(explicit) && explicit > 0) {
     return Math.max(fallbackCellSize, explicit)
   }
-  const tileSize = Number(definition.tileSizeMeters)
-  if (Number.isFinite(tileSize) && tileSize > 0) {
-    return Math.max(fallbackCellSize, tileSize)
-  }
   return fallbackCellSize
 }
 
-export function resolveGroundEditTileResolution(definition: Pick<GroundDynamicMesh, 'editTileResolution' | 'tileResolution'>): number {
+export function resolveGroundEditTileResolution(definition: Pick<GroundDynamicMesh, 'editTileResolution'>): number {
   const explicit = Number(definition.editTileResolution)
   if (Number.isFinite(explicit) && explicit > 0) {
     return Math.max(1, Math.round(explicit))
-  }
-  const fallback = Number(definition.tileResolution)
-  if (Number.isFinite(fallback) && fallback > 0) {
-    return Math.max(1, Math.round(fallback))
   }
   return 1
 }
 
 export function resolveGroundEditCellSize(
-  definition: Pick<GroundDynamicMesh, 'editTileSizeMeters' | 'tileSizeMeters' | 'editTileResolution' | 'tileResolution' | 'cellSize'>,
+  definition: Pick<GroundDynamicMesh, 'editTileSizeMeters' | 'editTileResolution' | 'cellSize'>,
 ): number {
   const tileSizeMeters = resolveGroundEditTileSizeMeters(definition)
   const resolution = resolveGroundEditTileResolution(definition)

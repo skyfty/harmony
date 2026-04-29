@@ -2,9 +2,7 @@ import {
   decodeScenePackageSceneDocument,
   type GroundChunkManifest,
   readBinaryFileFromScenePackage,
-  readTextFileFromScenePackage,
   unzipScenePackage,
-  type GroundTerrainPackageManifest,
   type ScenePackageSceneEntry,
 } from '@schema'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
@@ -24,7 +22,6 @@ export type LoadedStoredScenePackage = {
   groundPaintSidecars: Record<string, ArrayBuffer | null>
   groundChunkManifests: Record<string, GroundChunkManifest | null>
   groundChunkData: Record<string, Record<string, ArrayBuffer | null>>
-  groundTerrainManifests: Record<string, GroundTerrainPackageManifest | null>
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -242,8 +239,6 @@ export async function loadStoredScenesFromScenePackage(zipBytes: ArrayBuffer): P
   const groundPaintSidecars: Record<string, ArrayBuffer | null> = {}
   const groundChunkManifests: Record<string, GroundChunkManifest | null> = {}
   const groundChunkData: Record<string, Record<string, ArrayBuffer | null>> = {}
-  const groundTerrainManifests: Record<string, GroundTerrainPackageManifest | null> = {}
-
   for (const sceneEntry of zip.manifest.scenes ?? []) {
     const rawScene = decodeScenePackageSceneDocument(readBinaryFileFromScenePackage(zip, sceneEntry.path)) as unknown
     if (!isPlainObject(rawScene)) {
@@ -255,9 +250,6 @@ export async function loadStoredScenesFromScenePackage(zipBytes: ArrayBuffer): P
     groundPaintSidecars[sceneEntry.sceneId] = extractGroundPaintSidecarFromPackage(zip, sceneEntry, sceneDocument)
     groundChunkManifests[sceneEntry.sceneId] = extractGroundChunkManifestFromPackage(zip, sceneEntry)
     groundChunkData[sceneEntry.sceneId] = extractGroundChunkDataFromPackage(zip, groundChunkManifests[sceneEntry.sceneId] ?? null)
-    groundTerrainManifests[sceneEntry.sceneId] = sceneEntry.groundTerrainManifestPath
-      ? JSON.parse(readTextFileFromScenePackage(zip, sceneEntry.groundTerrainManifestPath)) as GroundTerrainPackageManifest
-      : null
     const withPlanning = await applyPlanningSidecarToScene(zip, sceneEntry, sceneDocument)
     scenes.push(withPlanning)
   }
@@ -270,6 +262,5 @@ export async function loadStoredScenesFromScenePackage(zipBytes: ArrayBuffer): P
     groundPaintSidecars,
     groundChunkManifests,
     groundChunkData,
-    groundTerrainManifests,
   }
 }

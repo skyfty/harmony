@@ -1,9 +1,5 @@
 import {
-  GROUND_TERRAIN_PACKAGE_FORMAT,
-  GROUND_TERRAIN_PACKAGE_VERSION,
-  buildGroundTerrainTileEntries,
   type GroundDynamicMesh,
-  type GroundTerrainPackageManifest,
   type SceneNode,
 } from '@schema'
 import { resolveGroundCreationProfile } from '@/stores/groundUtils'
@@ -20,109 +16,28 @@ function isLegacyGroundNode(dynamicMesh: { type?: unknown } | null | undefined):
     dynamicMesh
     && dynamicMesh.type === 'Ground'
     && (
-      candidate?.storageMode === undefined
-      || candidate?.tileResolution === undefined
-      || candidate?.globalLodCellSize === undefined
-      || candidate?.activeEditWindowRadius === undefined
-      || candidate?.editTileSizeMeters === undefined
+      candidate?.editTileSizeMeters === undefined
       || candidate?.editTileResolution === undefined
-      || candidate?.collisionMode === undefined
     ),
   )
 }
 
-function buildLegacyGroundTerrainManifest(
-  sceneId: string,
-  mesh: GroundDynamicMesh,
-  coarseTerrainPath: string | null,
-): GroundTerrainPackageManifest {
-  const legacyMesh = mesh as GroundDynamicMesh & Record<string, number | undefined>
-  const creationProfile = resolveGroundCreationProfile(Number(legacyMesh.width ?? 0), Number(legacyMesh.depth ?? 0), mesh.cellSize)
-  const tileResolution = Math.max(1, Math.trunc(mesh.tileResolution ?? creationProfile.tileResolution))
-  const terrainTilesRootPath = `scenes/${encodeURIComponent(sceneId)}/ground-tiles/`
-  const collisionManifestPath = `scenes/${encodeURIComponent(sceneId)}/ground-collision.json`
-  return {
-    format: GROUND_TERRAIN_PACKAGE_FORMAT,
-    version: GROUND_TERRAIN_PACKAGE_VERSION,
-    scenePath: `scenes/${encodeURIComponent(sceneId)}/scene.bin`,
-    storageMode: 'tiled',
-    cellSize: mesh.cellSize,
-    tileSizeMeters: Math.max(128, Math.round(mesh.tileSizeMeters ?? creationProfile.tileSizeMeters)),
-    tileResolution,
-    globalLodCellSize: Math.max(1, Math.round(mesh.globalLodCellSize ?? creationProfile.globalLodCellSize)),
-    activeEditWindowRadius: Math.max(1, Math.round(mesh.activeEditWindowRadius ?? creationProfile.activeEditWindowRadius)),
-    collisionMode: mesh.collisionMode ?? creationProfile.collisionMode,
-    coarseTerrainPath,
-    terrainTilesRootPath,
-    collisionManifestPath,
-    tiles: buildGroundTerrainTileEntries({
-      rows: Number(legacyMesh.rows ?? 0),
-      columns: Number(legacyMesh.columns ?? 0),
-      tileResolution,
-      terrainTilesRootPath,
-      collisionRootPath: `scenes/${encodeURIComponent(sceneId)}/ground-collision/`,
-    }) as GroundTerrainPackageManifest['tiles'],
-  }
-}
-
 function upgradeGroundNodeTerrainMetadata(
-  sceneId: string,
   node: SceneNode,
-  options: { hasLegacyHeightSidecar?: boolean } = {},
 ): boolean {
   const dynamicMesh = node.dynamicMesh
   if (!isLegacyGroundNode(dynamicMesh)) {
     return false
   }
 
-  const legacyMesh = dynamicMesh as GroundDynamicMesh & Record<string, number | undefined>
-  const creationProfile = resolveGroundCreationProfile(Number(legacyMesh.width ?? 0), Number(legacyMesh.depth ?? 0), dynamicMesh.cellSize)
   const nextDynamicMesh = dynamicMesh as GroundDynamicMesh & Record<string, unknown>
-  if (nextDynamicMesh.storageMode === undefined) {
-    nextDynamicMesh.storageMode = creationProfile.storageMode
-  }
-  if (nextDynamicMesh.tileSizeMeters === undefined) {
-    nextDynamicMesh.tileSizeMeters = creationProfile.tileSizeMeters
-  }
-  if (nextDynamicMesh.tileResolution === undefined) {
-    nextDynamicMesh.tileResolution = creationProfile.tileResolution
-  }
-  if (nextDynamicMesh.globalLodCellSize === undefined) {
-    nextDynamicMesh.globalLodCellSize = creationProfile.globalLodCellSize
-  }
-  if (nextDynamicMesh.activeEditWindowRadius === undefined) {
-    nextDynamicMesh.activeEditWindowRadius = creationProfile.activeEditWindowRadius
-  }
   if (nextDynamicMesh.editTileSizeMeters === undefined) {
+    const creationProfile = resolveGroundCreationProfile(0, 0, dynamicMesh.cellSize)
     nextDynamicMesh.editTileSizeMeters = creationProfile.editTileSizeMeters
   }
   if (nextDynamicMesh.editTileResolution === undefined) {
+    const creationProfile = resolveGroundCreationProfile(0, 0, dynamicMesh.cellSize)
     nextDynamicMesh.editTileResolution = creationProfile.editTileResolution
-  }
-  if (nextDynamicMesh.collisionMode === undefined) {
-    nextDynamicMesh.collisionMode = creationProfile.collisionMode
-  }
-  if (nextDynamicMesh.chunkStreamingEnabled === undefined) {
-    nextDynamicMesh.chunkStreamingEnabled = creationProfile.storageMode === 'tiled'
-  }
-
-  const existingUserData = node.userData && typeof node.userData === 'object'
-    ? (node.userData as Record<string, unknown>)
-    : {}
-  const hasExistingTerrainManifest = Boolean(existingUserData.groundTerrainPackageManifest) || typeof existingUserData.groundTerrainManifestPath === 'string'
-
-  if (creationProfile.storageMode !== 'tiled' || hasExistingTerrainManifest) {
-    return true
-  }
-
-  const coarseTerrainPath = options.hasLegacyHeightSidecar ? `scenes/${encodeURIComponent(sceneId)}/ground-heightmaps.bin` : null
-  const manifest = buildLegacyGroundTerrainManifest(sceneId, nextDynamicMesh, coarseTerrainPath)
-  node.userData = {
-    ...existingUserData,
-    groundTerrainPackageManifest: manifest,
-    groundTerrainManifestPath: `scenes/${encodeURIComponent(sceneId)}/ground-terrain.json`,
-    groundTerrainTilesRootPath: manifest.terrainTilesRootPath,
-    groundCollisionPath: manifest.collisionManifestPath,
   }
   return true
 }
@@ -140,7 +55,7 @@ export function migrateLegacyGroundTerrainDocument(
     if (!node || node.dynamicMesh?.type !== 'Ground') {
       continue
     }
-    const converted = upgradeGroundNodeTerrainMetadata(document.id, node, options)
+    const converted = upgradeGroundNodeTerrainMetadata(node)
     if (converted) {
       convertedGroundCount += 1
     }

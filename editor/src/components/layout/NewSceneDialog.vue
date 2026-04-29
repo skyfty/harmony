@@ -253,7 +253,6 @@ function cancel() {
       <v-card-text>
         <SceneCreatorPane
           v-model:sceneName="sceneName"
-          v-model:planningData="planningData"
           :confirmError="confirmError"
         />
       </v-card-text>

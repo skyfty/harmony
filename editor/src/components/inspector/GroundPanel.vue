@@ -16,7 +16,7 @@ const selectedGroundNode = computed(() => {
 
 const groundDefinition = computed(() => selectedGroundNode.value?.dynamicMesh as GroundDynamicMesh | undefined)
 
-const terrainModeLabel = computed(() => groundDefinition.value?.terrainMode === 'bounded' ? 'Bounded' : 'Infinite')
+const terrainModeLabel = computed(() => 'Infinite')
 const chunkSizeMeters = computed({
   get: () => groundDefinition.value?.chunkSizeMeters ?? sceneStore.groundSettings.chunkSizeMeters ?? 100,
   set: (value: number) => {

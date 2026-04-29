@@ -38,6 +38,7 @@ import {
   extractWaterSurfaceMeshMetadataFromUserData,
   normalizeWaterSurfaceMeshInput,
 } from '@schema'
+import { resolveGroundRuntimeChunkCells } from '@schema/groundMesh'
 import { DEFAULT_COLOR, DEFAULT_INTENSITY } from '@schema/lightDefaults'
 import { migrateLegacyGroundTerrainDocument } from '@/utils/legacyGroundTerrainMigration'
 import type {
@@ -1814,12 +1815,11 @@ function commitGroundHeightMapRuntimeEdit(
   } else {
     useGroundHeightmapStore().replaceManualHeightMap(nodeId, definition, manualHeightMap)
   }
-  useGroundHeightmapStore().markOptimizedMeshDirtyBounds(nodeId, definition, manualRegion ?? {
-    startRow: 0,
-    endRow: 0,
-    startColumn: 0,
-    endColumn: 0,
-  })
+  useGroundHeightmapStore().markOptimizedMeshDirtyChunkKeys(
+    nodeId,
+    definition,
+    resolveGroundDirtyChunkKeysFromRegion(definition, manualRegion),
+  )
   refreshLandformNodesForGroundChange(store, nodeId, resolvedDirtyBounds)
   finalizeDynamicMeshRuntimePatch(store, nodeId, 'Ground')
   persistGroundHeightSidecarForNode(target)
@@ -1856,17 +1856,11 @@ function commitGroundLocalEditTilesRuntimeEdit(
   runtimeDefinition.runtimeDisableOptimizedChunks = true
   runtimeDefinition.localEditTiles = localEditTiles
   useGroundHeightmapStore().replaceLocalEditTiles(nodeId, definition, localEditTiles)
-  useGroundHeightmapStore().markOptimizedMeshDirtyBounds(nodeId, definition, affectedRegion ? {
-    startRow: affectedRegion.minRow,
-    endRow: affectedRegion.maxRow,
-    startColumn: affectedRegion.minColumn,
-    endColumn: affectedRegion.maxColumn,
-  } : {
-    startRow: 0,
-    endRow: 0,
-    startColumn: 0,
-    endColumn: 0,
-  })
+  useGroundHeightmapStore().markOptimizedMeshDirtyChunkKeys(
+    nodeId,
+    definition,
+    resolveGroundDirtyChunkKeysFromRegion(definition, affectedRegion),
+  )
   refreshLandformNodesForGroundChange(store, nodeId, resolvedDirtyBounds)
   finalizeDynamicMeshRuntimePatch(store, nodeId, 'Ground')
   persistGroundHeightSidecarForNode(target)
@@ -1889,19 +1883,18 @@ function refreshGroundOptimizedMeshRuntime(
 
   const groundHeightmapStore = useGroundHeightmapStore()
   const runtimeDefinition = groundHeightmapStore.resolveGroundRuntimeMesh(nodeId, target.dynamicMesh)
-  const runtimeState = groundHeightmapStore.getNodeGroundHeightmap(nodeId)
   const heightSampler = groundHeightmapStore.resolveGroundRuntimeHeightSampler(nodeId, target.dynamicMesh)
+  const dirtyBounds = groundHeightmapStore.consumeOptimizedMeshDirtyBounds(nodeId, runtimeDefinition)
   const optimizedMesh = rebuildOptimizedGroundMeshForDefinition(
     runtimeDefinition,
     target.dynamicMesh.optimizedMesh,
     {},
-    runtimeState?.optimizedMeshDirtyBounds ?? null,
+    dirtyBounds,
     heightSampler,
   )
   markGroundOptimizedMeshReady(runtimeDefinition, optimizedMesh)
   markGroundOptimizedMeshReady(target.dynamicMesh, optimizedMesh)
   groundHeightmapStore.syncRuntimeGroundState(nodeId, runtimeDefinition)
-  groundHeightmapStore.clearOptimizedMeshDirtyBounds(nodeId, runtimeDefinition)
   finalizeDynamicMeshRuntimePatch(store, nodeId, 'Ground')
   persistGroundHeightSidecarForNode(target)
   return true
@@ -2603,6 +2596,31 @@ function computeGroundDirtyBoundsFromRegionXZ(
   }
 }
 
+function resolveGroundDirtyChunkKeysFromRegion(
+  definition: GroundDynamicMesh,
+  region: GroundPlanningHeightRegion | { minRow: number; maxRow: number; minColumn: number; maxColumn: number } | null,
+): string[] | null {
+  if (!region) {
+    return null
+  }
+  const chunkCells = Math.max(1, resolveGroundRuntimeChunkCells(definition))
+  const startRow = 'startRow' in region ? region.startRow : region.minRow
+  const endRow = 'endRow' in region ? region.endRow : region.maxRow
+  const startColumn = 'startColumn' in region ? region.startColumn : region.minColumn
+  const endColumn = 'endColumn' in region ? region.endColumn : region.maxColumn
+  const minRow = Math.max(0, Math.floor(startRow / chunkCells) - 1)
+  const maxRow = Math.max(0, Math.floor(endRow / chunkCells) + 1)
+  const minColumn = Math.max(0, Math.floor(startColumn / chunkCells) - 1)
+  const maxColumn = Math.max(0, Math.floor(endColumn / chunkCells) + 1)
+  const chunkKeys: string[] = []
+  for (let row = minRow; row <= maxRow; row += 1) {
+    for (let column = minColumn; column <= maxColumn; column += 1) {
+      chunkKeys.push(`${row}:${column}`)
+    }
+  }
+  return chunkKeys
+}
+
 function buildGroundManualRegionFromHeightMap(
   definition: GroundRuntimeDynamicMesh,
   bounds: GroundRegionBounds,
@@ -2805,27 +2823,6 @@ function getLightPreset(type: LightNodeType) {
 
 type ExternalSceneImportContext = {
   assetCache: ReturnType<typeof useAssetCacheStore>
-  registerAsset: (asset: ProjectAsset, options: { categoryId?: string }) => ProjectAsset
-  converted: Set<Object3D>
-  textureRefs: Map<Texture, SceneMaterialTextureRef>
-  textureSequence: number
-  modelAssetId: string | null
-}
-
-function toHexColor(color: Color | null | undefined, fallback = DEFAULT_COLOR): string {
-  if (!color) {
-    return fallback
-  }
-  return `#${color.getHexString()}`
-}
-
-function toVector(vec: Vector3 | Euler): THREE.Vector3 {
-  return createVector(vec.x, vec.y, vec.z)
-}
-
-function isRenderableObject(object: Object3D): boolean {
-  const candidate = object as Object3D & { isMesh?: boolean; isSkinnedMesh?: boolean; isPoints?: boolean; isLine?: boolean }
-  return Boolean(candidate.isMesh || candidate.isSkinnedMesh || candidate.isPoints || candidate.isLine)
 }
 
 function isBoneObject(object: Object3D): boolean {
@@ -7402,7 +7399,7 @@ function createSceneDocument(
             baseHeight: existingGroundMesh.baseHeight,
             renderRadiusChunks: existingGroundMesh.renderRadiusChunks,
             collisionRadiusChunks: existingGroundMesh.collisionRadiusChunks,
-            enableAirWall: existingGroundMesh.terrainMode === 'bounded' ? true : undefined,
+            enableAirWall: undefined,
           }
         : undefined),
   )
@@ -18163,7 +18160,6 @@ export const useSceneStore = defineStore('scene', {
         groundPaintSidecars,
         groundChunkManifests,
         groundChunkData,
-        groundTerrainManifests,
       } = await loadStoredScenesFromScenePackage(zipBytes)
       if (!Array.isArray(scenes) || !scenes.length) {
         throw new Error('Scene package does not contain any scene data')
@@ -18222,23 +18218,6 @@ export const useSceneStore = defineStore('scene', {
             ? ((entry as { environment?: Partial<EnvironmentSettings> | null }).environment ?? undefined)
             : undefined,
         })
-
-        const groundTerrainManifest = groundTerrainManifests[entry.id] ?? null
-        if (groundTerrainManifest && Array.isArray(sceneDocument.nodes)) {
-          const groundNode = sceneDocument.nodes.find((node) => node?.dynamicMesh?.type === 'Ground') ?? null
-          if (groundNode) {
-            const userData = groundNode.userData && typeof groundNode.userData === 'object'
-              ? { ...(groundNode.userData as Record<string, unknown>) }
-              : {}
-            groundNode.userData = {
-              ...userData,
-              groundTerrainPackageManifest: groundTerrainManifest,
-              groundTerrainManifestPath: null,
-              groundTerrainTilesRootPath: groundTerrainManifest.terrainTilesRootPath,
-              groundCollisionPath: groundTerrainManifest.collisionManifestPath,
-            }
-          }
-        }
 
         migrateLegacyGroundTerrainDocument(sceneDocument, {
           hasLegacyHeightSidecar: Boolean(groundHeightSidecars[entry.id]),

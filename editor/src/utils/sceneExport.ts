@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { SceneNodeMaterial } from '@/types/material'
-import { createPrimitiveGeometry, type EnvironmentSettings, type GroundDynamicMesh, type GroundRuntimeDynamicMesh, type NodeComponentType, type SceneAssetPreloadInfo, type SceneAssetRegistryEntry, type SceneJsonExportDocument, type SceneNode, type SceneNodeComponentMap, type SceneNodeComponentState, type SceneOutlineMesh, type SceneOutlineMeshMap, type ScenePunchPoint } from '@schema'
+import { createPrimitiveGeometry, type EnvironmentSettings, type GroundDynamicMesh, type NodeComponentType, type SceneAssetPreloadInfo, type SceneAssetRegistryEntry, type SceneJsonExportDocument, type SceneNode, type SceneNodeComponentMap, type SceneNodeComponentState, type SceneOutlineMesh, type SceneOutlineMeshMap, type ScenePunchPoint } from '@schema'
 import type { TerrainScatterStoreSnapshot } from '@schema/terrain-scatter'
 import type { SceneExportEventReporter, SceneExportOptions } from '@/types/scene-export'
 import type { SceneAssetValidationReport } from '@/utils/sceneAssetDiagnostics'
@@ -28,7 +28,7 @@ import {
   buildSphereShapeFromObject,
   buildCylinderShapeFromObject,
 } from '@/utils/rigidbodyCollider'
-import { createGroundMesh, ensureAllGroundChunks } from '@schema/groundMesh'
+import { createGroundMesh } from '@schema/groundMesh'
 import { createWallGroup } from '@schema/wallMesh'
 import { createRoadGroup, resolveRoadLocalHeightSampler } from '@schema/roadMesh'
 import {
@@ -831,7 +831,6 @@ function buildDynamicMeshObject(node: SceneNode, groundNode: SceneNode | null): 
     case 'Ground':
       {
         const ground = createGroundMesh(mesh)
-          ensureAllGroundChunks(ground, mesh as GroundRuntimeDynamicMesh)
         ground.updateMatrixWorld(true)
         return ground
       }

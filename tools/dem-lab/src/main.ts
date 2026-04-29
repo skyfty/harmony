@@ -1,4 +1,4 @@
-import './styles.css'
+import stylesText from './styles.css?raw'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { createBuiltInSampleDem, parseDemFile } from './dem'
@@ -17,21 +17,16 @@ if (!app) {
   throw new Error('App root is missing')
 }
 
+const styleElement = document.createElement('style')
+styleElement.textContent = stylesText
+document.head.appendChild(styleElement)
+
 app.innerHTML = `
   <div class="shell">
     <header class="hero">
       <div>
         <p class="eyebrow">Harmony terrain lab</p>
         <h1>DEM to Three.js mesh</h1>
-        <p class="lede">Load a local GeoTIFF DEM, inspect the sampled height field, and export the generated terrain for validation.</p>
-      </div>
-      <div class="hero-card">
-        <div class="hero-card-title">Quick path</div>
-        <ol>
-          <li>Choose or drop a DEM file</li>
-          <li>Inspect the generated mesh</li>
-          <li>Export OBJ or JSON</li>
-        </ol>
       </div>
     </header>
 
@@ -49,6 +44,7 @@ app.innerHTML = `
           <span class="file-picker-button">Select DEM</span>
           <span class="file-picker-copy">or drop a local GeoTIFF into the target area</span>
         </label>
+
         <div class="drop-zone" id="drop-zone">
           <strong>Drop a DEM file here</strong>
           <span>Supported: GeoTIFF / DEM raster files</span>
@@ -66,12 +62,41 @@ app.innerHTML = `
           <button id="export-json" disabled>Export JSON</button>
         </div>
 
+        <div class="import-progress" id="import-progress" hidden>
+          <div class="import-progress-head">
+            <span id="import-progress-label">Idle</span>
+            <span id="import-progress-value">0%</span>
+          </div>
+          <div class="import-progress-track" aria-hidden="true">
+            <div class="import-progress-bar" id="import-progress-bar"></div>
+          </div>
+        </div>
+
         <div class="stats" id="stats">
-          <div class="stat"><span>File</span><strong id="stat-file">-</strong></div>
-          <div class="stat"><span>Raster</span><strong id="stat-size">-</strong></div>
-          <div class="stat"><span>Elevation</span><strong id="stat-height">-</strong></div>
-          <div class="stat"><span>Mesh</span><strong id="stat-mesh">-</strong></div>
-          <div class="stat"><span>Bounds</span><strong id="stat-bounds">-</strong></div>
+          <div class="stats-grid">
+            <div class="stat"><span>File</span><strong id="stat-file">-</strong></div>
+            <div class="stat"><span>Raster</span><strong id="stat-size">-</strong></div>
+            <div class="stat"><span>Elevation</span><strong id="stat-height">-</strong></div>
+            <div class="stat"><span>Mesh</span><strong id="stat-mesh">-</strong></div>
+          </div>
+          <div class="stat stat-inline">
+            <span>Terrain span</span>
+            <strong id="stat-bounds">-</strong>
+          </div>
+          <div class="stats-meta">
+            <div class="stat-mini">
+              <span>Import mode</span>
+              <strong id="stat-mode">-</strong>
+            </div>
+            <div class="stat-mini">
+              <span>Source bounds</span>
+              <strong id="stat-source-bounds">-</strong>
+            </div>
+            <div class="stat-mini">
+              <span>Invalid samples</span>
+              <strong id="stat-invalid">-</strong>
+            </div>
+          </div>
         </div>
 
         <div class="preview-card">
@@ -112,6 +137,13 @@ const statSize = document.querySelector<HTMLElement>('#stat-size')!
 const statHeight = document.querySelector<HTMLElement>('#stat-height')!
 const statMesh = document.querySelector<HTMLElement>('#stat-mesh')!
 const statBounds = document.querySelector<HTMLElement>('#stat-bounds')!
+const statMode = document.querySelector<HTMLElement>('#stat-mode')!
+const statSourceBounds = document.querySelector<HTMLElement>('#stat-source-bounds')!
+const statInvalid = document.querySelector<HTMLElement>('#stat-invalid')!
+const importProgressElement = document.querySelector<HTMLDivElement>('#import-progress')!
+const importProgressLabel = document.querySelector<HTMLElement>('#import-progress-label')!
+const importProgressValue = document.querySelector<HTMLElement>('#import-progress-value')!
+const importProgressBar = document.querySelector<HTMLDivElement>('#import-progress-bar')!
 const previewImage = document.querySelector<HTMLImageElement>('#preview-image')!
 const exportObjButton = document.querySelector<HTMLButtonElement>('#export-obj')!
 const exportPlyButton = document.querySelector<HTMLButtonElement>('#export-ply')!
@@ -177,14 +209,22 @@ scene.add(new THREE.HemisphereLight('#88b7ff', '#13233d', 0.6))
 const gridHelper = new THREE.GridHelper(120, 24, '#31476b', '#20314b')
 scene.add(gridHelper)
 
+const debugPlane = new THREE.Mesh(
+  new THREE.PlaneGeometry(1400, 1400, 1, 1),
+  new THREE.MeshBasicMaterial({ color: '#17324d', transparent: true, opacity: 0.22, side: THREE.DoubleSide }),
+)
+debugPlane.rotation.x = -Math.PI / 2
+debugPlane.position.y = -12
+scene.add(debugPlane)
+
 const axesHelper = new THREE.AxesHelper(80)
 scene.add(axesHelper)
 
 const originMarker = new THREE.Mesh(
-  new THREE.SphereGeometry(4, 24, 16),
+  new THREE.SphereGeometry(10, 24, 16),
   new THREE.MeshBasicMaterial({ color: '#ff6a00' }),
 )
-originMarker.position.set(0, 138, 0)
+originMarker.position.set(0, 125, 0)
 scene.add(originMarker)
 
 const terrainGroup = new THREE.Group()
@@ -192,11 +232,48 @@ scene.add(terrainGroup)
 
 let currentObjectUrl: string | null = null
 
+function setViewportPlaceholderState(state: 'loading' | 'ready' | 'error', message?: string): void {
+  if (!viewportPlaceholder) { 
+    return
+  }
+  if (state === 'ready') {
+    viewportPlaceholder.remove()
+    return
+  }
+  viewportPlaceholder.textContent = message ?? (state === 'error' ? 'Failed to load DEM' : 'Loading built-in sample DEM...')
+  viewportPlaceholder.hidden = false
+  viewportPlaceholder.dataset.state = state
+}
+
 function setStatus(message: string, tone: 'idle' | 'ok' | 'error' = 'idle'): void {
   state.status = message
   statusChip.textContent = message
   statusChip.dataset.tone = tone
-  debugLog('Status updated', { message, tone })
+}
+
+function setImportProgress(progress: { label: string; value: number | null } | null): void {
+  if (!progress) {
+    importProgressElement.hidden = true
+    importProgressBar.style.width = '0%'
+    importProgressBar.dataset.mode = ''
+    importProgressLabel.textContent = 'Idle'
+    importProgressValue.textContent = '0%'
+    return
+  }
+
+  importProgressElement.hidden = false
+  importProgressLabel.textContent = progress.label
+  if (progress.value === null) {
+    importProgressValue.textContent = '...'
+    importProgressBar.dataset.mode = 'indeterminate'
+    importProgressBar.style.width = '42%'
+    return
+  }
+
+  const clamped = Math.max(0, Math.min(1, progress.value))
+  importProgressValue.textContent = `${Math.round(clamped * 100)}%`
+  importProgressBar.dataset.mode = 'determinate'
+  importProgressBar.style.width = `${Math.max(4, clamped * 100)}%`
 }
 
 function updateStats(): void {
@@ -208,8 +285,15 @@ function updateStats(): void {
   statMesh.textContent = state.terrain
     ? `${state.terrain.vertexCount.toLocaleString()} vertices, ${state.terrain.triangleCount.toLocaleString()} tris`
     : '-'
-  statBounds.textContent = state.dem?.worldBounds
-    ? `${state.dem.worldBounds.minX.toFixed(2)}, ${state.dem.worldBounds.minZ.toFixed(2)} → ${state.dem.worldBounds.maxX.toFixed(2)}, ${state.dem.worldBounds.maxZ.toFixed(2)}`
+  statBounds.textContent = state.dem
+    ? `${state.dem.renderSpace.boundsWidth.toFixed(1)} × ${state.dem.renderSpace.boundsDepth.toFixed(1)} ${state.dem.renderSpace.units === 'meters' ? 'm' : 'units'}`
+    : '-'
+  statMode.textContent = state.dem
+    ? `${state.dem.renderSpace.source}, cell ${state.dem.renderSpace.cellSizeX.toFixed(2)} × ${state.dem.renderSpace.cellSizeZ.toFixed(2)}`
+    : '-'
+  statSourceBounds.textContent = state.dem?.renderSpace.sourceBoundsText ?? '-'
+  statInvalid.textContent = state.dem
+    ? `${state.dem.invalidSampleCount.toLocaleString()}${state.dem.noDataValue !== null ? ` (NoData ${state.dem.noDataValue})` : ''}`
     : '-'
 }
 
@@ -240,27 +324,37 @@ function fitCameraToTerrain(mesh: THREE.Mesh): void {
   box.getCenter(center)
   const maxDim = Math.max(size.x, size.y, size.z, 1)
   const distance = maxDim * 1.6
+  const fogNear = Math.max(20, distance * 0.35)
+  const fogFar = Math.max(fogNear + 200, distance * 3)
   controls.target.copy(center)
   camera.position.set(center.x + distance, center.y + distance * 0.75, center.z + distance)
   camera.near = Math.max(0.1, maxDim / 100)
-  camera.far = Math.max(1000, maxDim * 20)
+  const actualDistance = camera.position.distanceTo(controls.target)
+  camera.far = Math.max(1000, actualDistance * 4, maxDim * 20)
   camera.updateProjectionMatrix()
+  if (scene.fog instanceof THREE.Fog) {
+    scene.fog.near = fogNear
+    scene.fog.far = fogFar
+  }
   controls.update()
   debugLog('Camera fitted to terrain', {
     center: { x: center.x, y: center.y, z: center.z },
     size: { x: size.x, y: size.y, z: size.z },
     distance,
+    actualDistance,
+    near: camera.near,
+    far: camera.far,
+    fogNear,
+    fogFar,
   })
 }
 
 function updatePreview(url: string | null): void {
   if (!url) {
     previewImage.removeAttribute('src')
-    debugLog('Preview cleared')
     return
   }
   previewImage.src = url
-  debugLog('Preview updated', { hasPreview: true, length: url.length })
 }
 
 function downloadText(filename: string, content: string, type: string): void {
@@ -281,105 +375,81 @@ function setButtonsEnabled(enabled: boolean): void {
   exportObjButton.disabled = !enabled
   exportPlyButton.disabled = !enabled
   exportJsonButton.disabled = !enabled
-  debugLog('Export buttons state changed', { enabled })
 }
 
 function loadDemResult(result: Awaited<ReturnType<typeof parseDemFile>> | ReturnType<typeof createBuiltInSampleDem>): void {
-  debugLog('Loading DEM result into terrain', {
-    filename: result.filename,
-    width: result.width,
-    height: result.height,
-    minElevation: result.minElevation,
-    maxElevation: result.maxElevation,
-    hasPreview: Boolean(result.previewDataUrl),
-  })
-  if (viewportPlaceholder) {
-    viewportPlaceholder.hidden = true
-  }
+  setViewportPlaceholderState('ready')
+  setImportProgress(null)
   const terrain = buildTerrainMesh(result, Number(verticalScaleInput.value) || 1)
-  debugLog('Terrain mesh built', {
-    vertexCount: terrain.vertexCount,
-    triangleCount: terrain.triangleCount,
-    boundsWidth: terrain.boundsWidth,
-    boundsDepth: terrain.boundsDepth,
-  })
 
   clearTerrain()
   terrainGroup.add(terrain.mesh)
   state.dem = result
   state.mesh = terrain.mesh
   state.terrain = terrain
-  debugLog('Terrain group updated', {
-    childCount: terrainGroup.children.length,
-    meshVisible: terrain.mesh.visible,
-    geometryType: terrain.mesh.geometry.type,
-    materialType: Array.isArray(terrain.mesh.material) ? 'multiple' : terrain.mesh.material.type,
-  })
-  debugLog('Viewport visibility markers', {
-    originMarkerVisible: originMarker.visible,
-    axesHelperVisible: axesHelper.visible,
-  })
   updatePreview(result.previewDataUrl)
   fitCameraToTerrain(terrain.mesh)
   updateStats()
   setButtonsEnabled(true)
+  debugLog('DEM import diagnostics', {
+    fileName: result.filename,
+    raster: { width: result.width, height: result.height },
+    elevation: { min: result.minElevation, max: result.maxElevation },
+    renderSpace: result.renderSpace,
+    invalidSampleCount: result.invalidSampleCount,
+    noDataValue: result.noDataValue,
+  })
 }
 
 async function loadDemFile(file: File): Promise<void> {
   try {
-    debugLog('Loading external DEM file', { name: file.name, type: file.type, size: file.size })
     setStatus(`Loading ${file.name}...`)
     setButtonsEnabled(false)
     state.fileName = file.name
     updateStats()
+    setImportProgress({ label: 'Starting import', value: 0 })
 
-    const dem = await parseDemFile(file)
-    debugLog('External DEM parsed', {
-      filename: dem.filename,
-      width: dem.width,
-      height: dem.height,
-      minElevation: dem.minElevation,
-      maxElevation: dem.maxElevation,
+    const dem = await parseDemFile(file, (progress) => {
+      const value = progress.phase === 'parsing'
+        ? null
+        : progress.total > 0
+          ? progress.loaded / progress.total
+          : null
+      setImportProgress({ label: progress.label, value })
     })
     loadDemResult(dem)
     setStatus(`Loaded ${file.name}`, 'ok')
   } catch (error) {
-    debugError('Failed to load external DEM', error)
     clearTerrain()
     state.dem = null
     state.fileName = file.name
     updatePreview(null)
     updateStats()
     setButtonsEnabled(false)
+    setImportProgress(null)
     setStatus(error instanceof Error ? error.message : 'Failed to load DEM', 'error')
   }
 }
 
 function loadSampleDem(): void {
   try {
-    debugLog('Loading built-in sample DEM')
     setStatus('Loading built-in sample DEM...')
     setButtonsEnabled(false)
+    setViewportPlaceholderState('loading', 'Loading built-in sample DEM...')
+    setImportProgress({ label: 'Generating sample terrain', value: null })
     const sample = createBuiltInSampleDem()
-    debugLog('Built-in sample DEM generated', {
-      filename: sample.filename,
-      width: sample.width,
-      height: sample.height,
-      minElevation: sample.minElevation,
-      maxElevation: sample.maxElevation,
-      hasPreview: Boolean(sample.previewDataUrl),
-    })
     state.fileName = sample.filename
     updateStats()
     loadDemResult(sample)
     setStatus('Loaded built-in sample DEM', 'ok')
   } catch (error) {
-    debugError('Failed to load built-in sample DEM', error)
     clearTerrain()
     state.dem = null
+    setViewportPlaceholderState('error', error instanceof Error ? error.message : 'Failed to load built-in sample DEM')
     updatePreview(null)
     updateStats()
     setButtonsEnabled(false)
+    setImportProgress(null)
     setStatus(error instanceof Error ? error.message : 'Failed to load built-in sample DEM', 'error')
   }
 }
@@ -454,7 +524,9 @@ exportJsonButton.addEventListener('click', () => {
 
 updatePreview(null)
 updateStats()
+setImportProgress(null)
 
+setViewportPlaceholderState('loading', 'Loading built-in sample DEM...')
 loadSampleDem()
 
 function resize(): void {
@@ -463,17 +535,10 @@ function resize(): void {
   renderer.setSize(width, height, false)
   camera.aspect = width / height
   camera.updateProjectionMatrix()
-  debugLog('Viewport resized', { width, height })
 }
 
 window.setTimeout(() => {
   resize()
-  debugLog('Deferred resize check', {
-    viewportWidth: viewportElement.clientWidth,
-    viewportHeight: viewportElement.clientHeight,
-    canvasWidth: renderer.domElement.clientWidth,
-    canvasHeight: renderer.domElement.clientHeight,
-  })
 }, 0)
 
 window.addEventListener('resize', resize)
@@ -482,44 +547,8 @@ resize()
 function animate(): void {
   controls.update()
   renderer.render(scene, camera)
-  if (!(window as unknown as { __DEM_LAB_FIRST_FRAME_LOGGED?: boolean }).__DEM_LAB_FIRST_FRAME_LOGGED) {
-    ;(window as unknown as { __DEM_LAB_FIRST_FRAME_LOGGED?: boolean }).__DEM_LAB_FIRST_FRAME_LOGGED = true
-    debugLog('First frame rendered', {
-      sceneChildren: scene.children.length,
-      terrainChildren: terrainGroup.children.length,
-      canvasSize: {
-        width: renderer.domElement.width,
-        height: renderer.domElement.height,
-      },
-    })
-  }
-  if ((window as unknown as { __DEM_LAB_RENDER_DIAG?: boolean }).__DEM_LAB_RENDER_DIAG) {
-    debugLog('Frame rendered', {
-      sceneChildren: scene.children.length,
-      terrainChildren: terrainGroup.children.length,
-      camera: {
-        x: camera.position.x,
-        y: camera.position.y,
-        z: camera.position.z,
-      },
-      target: {
-        x: controls.target.x,
-        y: controls.target.y,
-        z: controls.target.z,
-      },
-      output: {
-        width: renderer.domElement.width,
-        height: renderer.domElement.height,
-      },
-    })
-  }
   requestAnimationFrame(animate)
 }
 
-debugLog('DEM lab initialized', {
-  viewportWidth: viewportElement.clientWidth,
-  viewportHeight: viewportElement.clientHeight,
-  initialStatus: state.status,
-})
 
 animate()

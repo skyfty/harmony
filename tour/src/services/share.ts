@@ -39,10 +39,11 @@ function buildShareMessage(): ShareMessage {
   if (currentRoute === 'pages/scenery/index' && sceneryShareContext) {
     const path = sceneryShareContext.path
       || `/pages/scenery/index${buildQueryString(sceneryShareContext.query ?? {})}`;
-    return {
+    const message = {
       title: sceneryShareContext.title || defaultHomeShare.title,
       path,
     };
+    return message;
   }
 
   return defaultHomeShare;
@@ -52,10 +53,11 @@ function buildTimelineMessage(): ShareTimelineMessage {
   const currentRoute = getCurrentRoute();
   if (currentRoute === 'pages/scenery/index' && sceneryShareContext) {
     const query = buildQueryString(sceneryShareContext.query ?? {}).replace(/^\?/, '');
-    return {
+    const message = {
       title: sceneryShareContext.title || defaultHomeShare.title,
       query,
     };
+    return message;
   }
 
   return {

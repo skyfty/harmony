@@ -29,6 +29,11 @@ export interface PlanningDemImportResult {
   orthophoto?: PlanningTerrainOrthophotoData | null
 }
 
+type PlanningDemResolution = {
+  x: number
+  y: number
+}
+
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value)
 }
@@ -44,16 +49,110 @@ function normalizeBounds(raw: unknown): PlanningTerrainGeographicBounds | null {
   return { west, south, east, north, crs: null }
 }
 
-function normalizeWorldBounds(raw: PlanningTerrainGeographicBounds | null): PlanningTerrainWorldBounds | null {
-  if (!raw) {
+function normalizeResolution(raw: unknown): PlanningDemResolution | null {
+  if (!Array.isArray(raw) || raw.length < 2) {
     return null
   }
-  return {
-    minX: raw.west,
-    minY: raw.south,
-    maxX: raw.east,
-    maxY: raw.north,
+  const [rawX, rawY] = raw
+  if (!isFiniteNumber(rawX) || !isFiniteNumber(rawY)) {
+    return null
   }
+  const x = Math.abs(rawX)
+  const y = Math.abs(rawY)
+  if (x <= 1e-9 || y <= 1e-9) {
+    return null
+  }
+  return { x, y }
+}
+
+function isGeographicCoordinateSpace(
+  bounds: PlanningTerrainGeographicBounds | null,
+  geoKeys: Record<string, unknown> | null | undefined,
+): boolean {
+  const modelType = typeof geoKeys?.GTModelTypeGeoKey === 'number' ? Number(geoKeys.GTModelTypeGeoKey) : null
+  if (modelType === 2) {
+    return true
+  }
+  if (modelType === 1) {
+    return false
+  }
+  if (typeof geoKeys?.GeographicTypeGeoKey === 'number') {
+    return true
+  }
+  if (typeof geoKeys?.ProjectedCSTypeGeoKey === 'number') {
+    return false
+  }
+  if (!bounds) {
+    return false
+  }
+  return Math.abs(bounds.west) <= 180
+    && Math.abs(bounds.east) <= 180
+    && Math.abs(bounds.south) <= 90
+    && Math.abs(bounds.north) <= 90
+}
+
+function degreesToMeters(deltaLongitude: number, deltaLatitude: number, latitudeDegrees: number): { x: number; y: number } {
+  const latitudeRadians = latitudeDegrees * (Math.PI / 180)
+  const metersPerDegreeLatitude = 111_320
+  const metersPerDegreeLongitude = Math.max(1e-6, Math.cos(latitudeRadians)) * metersPerDegreeLatitude
+  return {
+    x: Math.abs(deltaLongitude) * metersPerDegreeLongitude,
+    y: Math.abs(deltaLatitude) * metersPerDegreeLatitude,
+  }
+}
+
+function normalizeWorldBounds(options: {
+  bounds: PlanningTerrainGeographicBounds | null
+  resolution: PlanningDemResolution | null
+  width: number
+  height: number
+  geographic: boolean
+}): PlanningTerrainWorldBounds | null {
+  const { bounds, resolution, width, height, geographic } = options
+  const widthSegments = Math.max(1, width - 1)
+  const heightSegments = Math.max(1, height - 1)
+
+  if (resolution) {
+    const centerLatitude = bounds ? (bounds.south + bounds.north) * 0.5 : 0
+    const cellSize = geographic
+      ? degreesToMeters(resolution.x, resolution.y, centerLatitude)
+      : { x: resolution.x, y: resolution.y }
+    return {
+      minX: 0,
+      minY: 0,
+      maxX: widthSegments * cellSize.x,
+      maxY: heightSegments * cellSize.y,
+    }
+  }
+
+  if (!bounds) {
+    return null
+  }
+  const centerLatitude = (bounds.south + bounds.north) * 0.5
+  const span = geographic
+    ? degreesToMeters(bounds.east - bounds.west, bounds.north - bounds.south, centerLatitude)
+    : {
+        x: Math.abs(bounds.east - bounds.west),
+        y: Math.abs(bounds.north - bounds.south),
+      }
+  return {
+    minX: 0,
+    minY: 0,
+    maxX: span.x,
+    maxY: span.y,
+  }
+}
+
+function computeSampleStepMeters(worldBounds: PlanningTerrainWorldBounds | null, width: number, height: number): number | null {
+  if (!worldBounds) {
+    return null
+  }
+  const widthSegments = Math.max(1, width - 1)
+  const heightSegments = Math.max(1, height - 1)
+  const stepX = Math.abs(worldBounds.maxX - worldBounds.minX) / widthSegments
+  const stepY = Math.abs(worldBounds.maxY - worldBounds.minY) / heightSegments
+  const validSteps = [stepX, stepY].filter((value) => Number.isFinite(value) && value > 0)
+  return validSteps.length ? Math.max(...validSteps) : null
 }
 
 function computeMinMax(values: ArrayLike<number>): { min: number | null; max: number | null } {
@@ -131,10 +230,18 @@ async function parsePlanningDemBuffer(buffer: ArrayBuffer, filename: string, mim
   const rasters = await readFirstBandRasters(image)
   const { min, max } = computeMinMax(rasters)
   const bbox = normalizeBounds(typeof image.getBoundingBox === 'function' ? image.getBoundingBox() : null)
+  const resolution = normalizeResolution(typeof image.getResolution === 'function' ? image.getResolution() : null)
+  const geoKeys = typeof image.getGeoKeys === 'function' ? image.getGeoKeys() : null
+  const geographic = isGeographicCoordinateSpace(bbox, geoKeys)
+  const worldBounds = normalizeWorldBounds({
+    bounds: bbox,
+    resolution,
+    width,
+    height,
+    geographic,
+  })
   const preview = min !== null && max !== null ? sampleRasterToPreview(rasters, width, height, min, max) : null
-  const sampleStepMeters = bbox
-    ? Math.max((bbox.east - bbox.west) / Math.max(1, width), (bbox.north - bbox.south) / Math.max(1, height))
-    : null
+  const sampleStepMeters = computeSampleStepMeters(worldBounds, width, height)
 
   return {
     sourceFileHash,
@@ -147,7 +254,7 @@ async function parsePlanningDemBuffer(buffer: ArrayBuffer, filename: string, mim
     maxElevation: max,
     sampleStepMeters,
     geographicBounds: bbox,
-    worldBounds: normalizeWorldBounds(bbox),
+    worldBounds,
     preview,
     orthophoto: null,
   }

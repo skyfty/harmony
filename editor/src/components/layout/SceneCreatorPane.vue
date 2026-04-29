@@ -1,19 +1,12 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import type { PlanningSceneData, PlanningTerrainDemData } from '@/types/planning-scene-data'
-import { parsePlanningDemFile, demImportResultToTerrainData } from '@/utils/planningDemImport'
-import { buildPlanningDataFromDem } from '@/utils/planningDemSceneSizing'
-import { storePlanningDemBlobByHash } from '@/utils/planningDemStorage'
-
 const props = defineProps<{
   sceneName: string
-  planningData?: PlanningSceneData | null
   confirmError?: string | null
 }>()
 
 const emit = defineEmits<{
   (e: 'update:sceneName', value: string): void
-  (e: 'update:planningData', value: PlanningSceneData | null): void
 }>()
 
 const name = computed({
@@ -21,57 +14,6 @@ const name = computed({
   set: (v: string) => emit('update:sceneName', v),
 })
 
-const planningData = computed({
-  get: () => props.planningData ?? null,
-  set: (v: PlanningSceneData | null) => emit('update:planningData', v),
-})
-
-const demFileInputRef = ref<HTMLInputElement | null>(null)
-const demImportError = ref<string | null>(null)
-const demImportName = ref<string | null>(null)
-const isImportingDem = ref(false)
-const importedDem = computed<PlanningTerrainDemData | null>(() => planningData.value?.terrain?.dem ?? null)
-
-function isPlanningDemFile(file: File): boolean {
-  const name = file.name.toLowerCase()
-  return name.endsWith('.tif') || name.endsWith('.tiff') || file.type.includes('tiff') || file.type.includes('geotiff')
-}
-
-function handleDemImportClick() {
-  demFileInputRef.value?.click()
-}
-
-function clearDemImport() {
-  demImportError.value = null
-  demImportName.value = null
-  planningData.value = null
-}
-
-async function handleDemFileChange(event: Event) {
-  const input = event.target as HTMLInputElement | null
-  if (!input?.files?.length || isImportingDem.value) {
-    return
-  }
-  const file = input.files[0]!
-  input.value = ''
-  demImportError.value = null
-  isImportingDem.value = true
-
-  try {
-    if (!isPlanningDemFile(file)) {
-      throw new Error('Only GeoTIFF .tif or .tiff files are supported for DEM import.')
-    }
-    const result = await parsePlanningDemFile(file)
-    await storePlanningDemBlobByHash(result.sourceFileHash, file)
-    const dem = demImportResultToTerrainData(result)
-    planningData.value = buildPlanningDataFromDem(dem)
-    demImportName.value = file.name
-  } catch (error) {
-    demImportError.value = error instanceof Error ? error.message : 'Failed to import DEM file.'
-  } finally {
-    isImportingDem.value = false
-  }
-}
 </script>
 
 <template>
@@ -86,59 +28,6 @@ async function handleDemFileChange(event: Event) {
     autofocus
   />
 
-  <div class="scene-creator-dem-import">
-    <div class="scene-creator-dem-import__header">
-      <div class="scene-creator-dem-import__title">DEM Import</div>
-      <div class="scene-creator-dem-import__actions">
-        <v-btn
-          size="small"
-          variant="tonal"
-          color="primary"
-          :loading="isImportingDem"
-          @click="handleDemImportClick"
-        >
-          Import DEM
-        </v-btn>
-        <v-btn
-          size="small"
-          variant="text"
-          color="error"
-          :disabled="!planningData"
-          @click="clearDemImport"
-        >
-          Clear
-        </v-btn>
-      </div>
-    </div>
-    <input
-      ref="demFileInputRef"
-      type="file"
-      accept=".tif,.tiff"
-      class="sr-only"
-      @change="handleDemFileChange"
-    >
-    <div v-if="importedDem" class="scene-creator-dem-import__body">
-      <div class="scene-creator-dem-import__meta">
-        <div class="scene-creator-dem-import__row"><span>File</span><strong>{{ demImportName || importedDem.filename || 'Unnamed DEM' }}</strong></div>
-        <div class="scene-creator-dem-import__row"><span>Size</span><strong>{{ importedDem.width ?? '—' }} × {{ importedDem.height ?? '—' }}</strong></div>
-        <div class="scene-creator-dem-import__row"><span>Elevation</span><strong>{{ importedDem.minElevation ?? '—' }} → {{ importedDem.maxElevation ?? '—' }}</strong></div>
-      </div>
-      <div class="scene-creator-dem-import__preview-placeholder">Imported DEM will be attached to the new scene.</div>
-    </div>
-    <div v-else class="scene-creator-dem-import__empty">
-      Import a DEM to attach chunked terrain source data to the new scene.
-    </div>
-    <v-alert
-      v-if="demImportError"
-      class="mt-3"
-      type="error"
-      density="comfortable"
-      border="start"
-      border-color="error"
-    >
-      {{ demImportError }}
-    </v-alert>
-  </div>
 
   <v-alert
     v-if="props.confirmError"

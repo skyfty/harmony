@@ -11,12 +11,38 @@ export const GROUND_HEIGHTMAP_SIDECAR_FILENAME = 'ground-heightmaps.bin'
 export const GROUND_HEIGHTMAP_SIDECAR_VERSION = 3
 
 const GROUND_HEIGHTMAP_SIDECAR_MAGIC = 0x48474d32
-const GROUND_HEIGHTMAP_SIDECAR_V2_HEADER_BYTES = 32
 const GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES = 40
 const EMPTY_BOUND = -1
+const FLOAT64_ALIGNMENT_BYTES = Float64Array.BYTES_PER_ELEMENT
 
 type GroundHeightSidecarHeader = {
   planningMetadata: GroundPlanningMetadata | null
+}
+
+type GroundHeightSidecarLayout = {
+  metadataByteLength: number
+  manualOffset: number
+  planningOffset: number
+  totalByteLength: number
+}
+
+function alignToFloat64Boundary(byteLength: number): number {
+  return Math.ceil(byteLength / FLOAT64_ALIGNMENT_BYTES) * FLOAT64_ALIGNMENT_BYTES
+}
+
+function resolveGroundHeightSidecarLayout(metadataByteLength: number, vertexCount: number): GroundHeightSidecarLayout {
+  return resolveGroundHeightSidecarLayoutFromHeader(GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES, metadataByteLength, vertexCount)
+}
+
+function resolveGroundHeightSidecarLayoutFromHeader(headerByteLength: number, metadataByteLength: number, vertexCount: number): GroundHeightSidecarLayout {
+  const manualOffset = alignToFloat64Boundary(headerByteLength + metadataByteLength)
+  const planningOffset = manualOffset + vertexCount * FLOAT64_ALIGNMENT_BYTES
+  return {
+    metadataByteLength,
+    manualOffset,
+    planningOffset,
+    totalByteLength: planningOffset + vertexCount * FLOAT64_ALIGNMENT_BYTES,
+  }
 }
 
 export type GroundHeightSidecarSampler = {
@@ -44,7 +70,7 @@ export type GroundHeightSidecarSampler = {
 export function getGroundHeightSidecarByteLength(definition: GroundDynamicMesh): number {
   const metadataPayload = encodePlanningMetadataPayload(definition.planningMetadata ?? null)
   const gridSize = resolveGroundWorkingGridSize(definition)
-  return GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES + metadataPayload.byteLength + getGroundVertexCount(gridSize.rows, gridSize.columns) * Float64Array.BYTES_PER_ELEMENT * 2
+  return resolveGroundHeightSidecarLayout(metadataPayload.byteLength, getGroundVertexCount(gridSize.rows, gridSize.columns)).totalByteLength
 }
 
 function normalizePlanningDemSourceMetadata(metadata: GroundPlanningMetadata['demSource']): GroundPlanningMetadata['demSource'] {
@@ -180,7 +206,7 @@ function writeSidecarHeader(view: DataView, metadata: GroundPlanningMetadata | n
 function readSidecarHeader(view: DataView): GroundHeightSidecarHeader {
   const magic = view.getUint32(0, true)
   const version = view.getUint32(4, true)
-  if (magic !== GROUND_HEIGHTMAP_SIDECAR_MAGIC || (version !== 2 && version !== GROUND_HEIGHTMAP_SIDECAR_VERSION)) {
+  if (magic !== GROUND_HEIGHTMAP_SIDECAR_MAGIC || version !== GROUND_HEIGHTMAP_SIDECAR_VERSION) {
     throw new Error(`Invalid ${GROUND_HEIGHTMAP_SIDECAR_FILENAME} header`)
   }
   const minRow = view.getInt32(8, true)
@@ -196,12 +222,10 @@ function readSidecarHeader(view: DataView): GroundHeightSidecarHeader {
         generatedAt: hasGeneratedAt ? generatedAt : undefined,
       }
     : null
-  if (version === GROUND_HEIGHTMAP_SIDECAR_VERSION) {
-    const metadataByteLength = view.getUint32(32, true)
-    if (metadataByteLength > 0) {
-      const metadataBytes = new Uint8Array(view.buffer, GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES, metadataByteLength)
-      planningMetadata = decodePlanningMetadataPayload(metadataBytes) ?? planningMetadata
-    }
+  const metadataByteLength = view.getUint32(32, true)
+  if (metadataByteLength > 0) {
+    const metadataBytes = new Uint8Array(view.buffer, GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES, metadataByteLength)
+    planningMetadata = decodePlanningMetadataPayload(metadataBytes) ?? planningMetadata
   }
   return {
     planningMetadata,
@@ -214,13 +238,12 @@ function writeGroundHeightSidecarValues(
   sampler: GroundHeightSidecarSampler,
 ): void {
   const vertexCount = getGroundVertexCount(sampler.rows, sampler.columns)
+  const layout = resolveGroundHeightSidecarLayout(metadataPayload.byteLength, vertexCount)
   const view = new DataView(buffer, 0, GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES)
   writeSidecarHeader(view, sampler.planningMetadata ?? null)
   new Uint8Array(buffer, GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES, metadataPayload.byteLength).set(metadataPayload)
-  const manualOffset = GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES + metadataPayload.byteLength
-  const planningOffset = manualOffset + vertexCount * Float64Array.BYTES_PER_ELEMENT
-  const manual = new Float64Array(buffer, manualOffset, vertexCount)
-  const planning = new Float64Array(buffer, planningOffset, vertexCount)
+  const manual = new Float64Array(buffer, layout.manualOffset, vertexCount)
+  const planning = new Float64Array(buffer, layout.planningOffset, vertexCount)
   const sampleHeightRegion = typeof sampler.sampleHeightRegion === 'function'
     ? sampler.sampleHeightRegion.bind(sampler)
     : null
@@ -259,7 +282,7 @@ export function serializeGroundHeightSidecar(definition: GroundRuntimeDynamicMes
 
 export function serializeGroundHeightSidecarFromSampler(sampler: GroundHeightSidecarSampler): ArrayBuffer {
   const metadataPayload = encodePlanningMetadataPayload(sampler.planningMetadata ?? null)
-  const buffer = new ArrayBuffer(GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES + metadataPayload.byteLength + getGroundVertexCount(sampler.rows, sampler.columns) * Float64Array.BYTES_PER_ELEMENT * 2)
+  const buffer = new ArrayBuffer(resolveGroundHeightSidecarLayout(metadataPayload.byteLength, getGroundVertexCount(sampler.rows, sampler.columns)).totalByteLength)
   writeGroundHeightSidecarValues(buffer, metadataPayload, sampler)
   return buffer
 }
@@ -299,23 +322,41 @@ export function createGroundRuntimeMeshFromSidecar(
   if (!sidecar) {
     throw new Error(`Missing ${GROUND_HEIGHTMAP_SIDECAR_FILENAME}`)
   }
-  const buffer = sidecar
+  let buffer = sidecar
+  if (buffer.byteLength < 8) {
+    throw new Error(`Invalid ${GROUND_HEIGHTMAP_SIDECAR_FILENAME} header`)
+  }
   const version = new DataView(buffer, 0, 8).getUint32(4, true)
-  const headerByteLength = version === 2 ? GROUND_HEIGHTMAP_SIDECAR_V2_HEADER_BYTES : GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES
+  if (version !== GROUND_HEIGHTMAP_SIDECAR_VERSION) {
+    throw new Error(`Invalid ${GROUND_HEIGHTMAP_SIDECAR_FILENAME} header`)
+  }
+  const headerByteLength = GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES
+  if (buffer.byteLength < headerByteLength) {
+    throw new Error(`Invalid ${GROUND_HEIGHTMAP_SIDECAR_FILENAME} header`)
+  }
   if (buffer.byteLength < headerByteLength + vertexCount * Float64Array.BYTES_PER_ELEMENT * 2) {
     throw new Error(`Invalid ${GROUND_HEIGHTMAP_SIDECAR_FILENAME} size: received ${buffer.byteLength}`)
   }
-  const metadataByteLength = version === GROUND_HEIGHTMAP_SIDECAR_VERSION ? new DataView(buffer, 0, GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES).getUint32(32, true) : 0
-  const expectedByteLength = headerByteLength + metadataByteLength + vertexCount * Float64Array.BYTES_PER_ELEMENT * 2
-  if (buffer.byteLength !== expectedByteLength) {
+  const metadataByteLength = new DataView(buffer, 0, GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES).getUint32(32, true)
+  if (headerByteLength + metadataByteLength > buffer.byteLength) {
+    throw new Error(`Invalid ${GROUND_HEIGHTMAP_SIDECAR_FILENAME} header`)
+  }
+  const layout = resolveGroundHeightSidecarLayoutFromHeader(headerByteLength, metadataByteLength, vertexCount)
+  const expectedByteLength = layout.totalByteLength
+  if (buffer.byteLength > expectedByteLength) {
+    const trailingBytes = new Uint8Array(buffer, expectedByteLength)
+    const hasNonZeroTrailingBytes = trailingBytes.some((byte) => byte !== 0)
+    if (hasNonZeroTrailingBytes) {
+      throw new Error(`Invalid ${GROUND_HEIGHTMAP_SIDECAR_FILENAME} size: expected ${expectedByteLength}, received ${buffer.byteLength}`)
+    }
+    buffer = buffer.slice(0, expectedByteLength)
+  } else if (buffer.byteLength !== expectedByteLength) {
     throw new Error(`Invalid ${GROUND_HEIGHTMAP_SIDECAR_FILENAME} size: expected ${expectedByteLength}, received ${buffer.byteLength}`)
   }
 
   const header = readSidecarHeader(new DataView(buffer, 0, headerByteLength + metadataByteLength))
-  const manualOffset = headerByteLength + metadataByteLength
-  const planningOffset = manualOffset + vertexCount * Float64Array.BYTES_PER_ELEMENT
-  const manualHeightMap = new Float64Array(buffer, manualOffset, vertexCount)
-  const planningHeightMap = new Float64Array(buffer, planningOffset, vertexCount)
+  const manualHeightMap = new Float64Array(buffer, layout.manualOffset, vertexCount)
+  const planningHeightMap = new Float64Array(buffer, layout.planningOffset, vertexCount)
   return {
     ...definition,
     manualHeightMap,

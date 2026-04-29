@@ -18,8 +18,10 @@ export function buildTerrainMesh(result: DemImportResult, verticalScale = 1): Te
   const height = Math.max(1, Math.floor(result.height))
   const widthSegments = Math.max(0, width - 1)
   const heightSegments = Math.max(0, height - 1)
-  const boundsWidth = Math.max(1, result.worldBounds ? Math.abs(result.worldBounds.maxX - result.worldBounds.minX) : width - 1)
-  const boundsDepth = Math.max(1, result.worldBounds ? Math.abs(result.worldBounds.maxZ - result.worldBounds.minZ) : height - 1)
+  const vertexCount = width * height
+  const boundsWidth = Math.max(1, result.renderSpace.boundsWidth)
+  const boundsDepth = Math.max(1, result.renderSpace.boundsDepth)
+  const horizontalSpan = Math.max(boundsWidth, boundsDepth)
   const halfWidth = boundsWidth * 0.5
   const halfDepth = boundsDepth * 0.5
   const positions = new Float32Array(width * height * 3)
@@ -28,6 +30,8 @@ export function buildTerrainMesh(result: DemImportResult, verticalScale = 1): Te
   const minHeight = result.minElevation ?? 0
   const maxHeight = result.maxElevation ?? 1
   const heightRange = Math.max(1e-6, maxHeight - minHeight)
+  const autoVerticalExaggeration = Math.max(1, Math.min(6, (horizontalSpan / Math.max(heightRange, 1)) * 0.8))
+  const effectiveVerticalScale = verticalScale * autoVerticalExaggeration
 
   let offset = 0
   for (let row = 0; row < height; row += 1) {
@@ -39,7 +43,8 @@ export function buildTerrainMesh(result: DemImportResult, verticalScale = 1): Te
       const sourceIndex = row * width + column
       const elevation = Number(result.rasterData[sourceIndex])
       const normalized = Number.isFinite(elevation) ? Math.max(0, Math.min(1, (elevation - minHeight) / heightRange)) : 0
-      const y = Number.isFinite(elevation) ? elevation * verticalScale : 0
+      const relativeElevation = Number.isFinite(elevation) ? elevation - minHeight : 0
+      const y = relativeElevation * effectiveVerticalScale
       positions[offset] = x
       positions[offset + 1] = y
       positions[offset + 2] = z
@@ -93,11 +98,22 @@ export function buildTerrainMesh(result: DemImportResult, verticalScale = 1): Te
   const mesh = new THREE.Mesh(geometry, material)
   mesh.castShadow = false
   mesh.receiveShadow = true
+  mesh.frustumCulled = false
+
+  const shouldRenderWireframe = vertexCount <= 65_536
+  if (shouldRenderWireframe) {
+    const wireframe = new THREE.LineSegments(
+      new THREE.WireframeGeometry(geometry),
+      new THREE.LineBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0.85 }),
+    )
+    wireframe.frustumCulled = false
+    mesh.add(wireframe)
+  }
 
   return {
     mesh,
     geometry,
-    vertexCount: positions.length / 3,
+    vertexCount,
     triangleCount: indices.length / 3,
     boundsWidth,
     boundsDepth,
@@ -129,8 +145,11 @@ export function exportTerrainAsJson(result: DemImportResult, terrain: TerrainBui
       height: result.height,
       minElevation: result.minElevation,
       maxElevation: result.maxElevation,
+      invalidSampleCount: result.invalidSampleCount,
+      noDataValue: result.noDataValue,
       geographicBounds: result.geographicBounds,
       worldBounds: result.worldBounds,
+      renderSpace: result.renderSpace,
     },
     terrain: {
       vertexCount: terrain.vertexCount,

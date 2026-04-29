@@ -180,8 +180,8 @@ onLoad((query: Record<string, unknown> | undefined) => {
   packageCacheKey.value = decodeQueryValue(mergedRecord.packageCacheKey);
   scenicTitle.value = typeof mergedRecord.scenicTitle === 'string'
     ? decodeQueryValue(mergedRecord.scenicTitle)
-    : typeof mergedRecord.sceneName === 'string'
-      ? decodeQueryValue(mergedRecord.sceneName)
+        : typeof mergedRecord.sceneName === 'string'
+          ? decodeQueryValue(mergedRecord.sceneName)
       : '';
   sceneSpotId.value = decodeQueryValue(mergedRecord.sceneSpotId);
   sceneId.value = decodeQueryValue(mergedRecord.sceneId);
@@ -190,7 +190,6 @@ onLoad((query: Record<string, unknown> | undefined) => {
     : getSelectedVehicleIdentifier();
   setSceneryShareContext({
     title: scenicTitle.value || '景区导览',
-    path: '/pages/scenery/index',
     query: {
       projectId: projectId.value,
       packageUrl: packageUrl.value,
