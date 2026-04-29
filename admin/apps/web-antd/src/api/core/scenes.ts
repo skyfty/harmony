@@ -62,6 +62,12 @@ export interface ScenePackageSceneSummary {
 export interface ScenePackageMetadata {
   breakdown?: ScenePackageResourceBreakdown;
   checkpointTotal?: number;
+  packageAssetBytes?: number;
+  packageAssetCount?: number;
+  serverAssetBytes?: number;
+  serverAssetCount?: number;
+  assetBytes?: number;
+  assetCount?: number;
   generatedAt?: string;
   largestResources?: ScenePackageResourceSummary[];
   manifestResourceBytes?: number;
