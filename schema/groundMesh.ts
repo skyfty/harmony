@@ -87,6 +87,7 @@ type GroundRuntimeState = {
   chunkCells: number
   castShadow: boolean
   chunks: Map<GroundChunkKey, GroundChunkRuntime>
+  flatChunkBatches: Map<string, GroundFlatChunkBatchRuntime>
   hiddenChunkKeys: Set<string>
   hiddenChunkKeysVersion: number
   lastChunkUpdateAt: number
@@ -100,6 +101,13 @@ type GroundRuntimeState = {
 
   meshPool: Map<string, THREE.Mesh[]>
   poolMaxPerSize: number
+}
+
+type GroundFlatChunkBatchRuntime = {
+  specKey: string
+  spec: GroundChunkSpec
+  mesh: THREE.InstancedMesh
+  chunkKeys: string[]
 }
 
 const groundRuntimeStateMap = new WeakMap<THREE.Object3D, GroundRuntimeState>()
@@ -187,14 +195,14 @@ function groundChunkKey(chunkRow: number, chunkColumn: number): GroundChunkKey {
 
 function resolveRuntimeChunkIndexFromSharedKey(
   key: string,
-  maxChunkRowIndex: number,
-  maxChunkColumnIndex: number,
 ): { row: number; column: number } | null {
+  // 现在 ground 只保留无限地形语义，shared key 直接被视为真实 chunk 坐标。
+  // 不再保留有限模式的边界裁剪参数，避免后续维护者误以为这里还有“场景上限”。
   const parsed = parseGroundChunkKey(key)
   if (parsed) {
     return {
-      row: clampInclusive(parsed.chunkZ, 0, maxChunkRowIndex),
-      column: clampInclusive(parsed.chunkX, 0, maxChunkColumnIndex),
+      row: Math.trunc(parsed.chunkZ),
+      column: Math.trunc(parsed.chunkX),
     }
   }
   const parts = key.split(':')
@@ -207,8 +215,8 @@ function resolveRuntimeChunkIndexFromSharedKey(
     return null
   }
   return {
-    row: clampInclusive(Math.trunc(row), 0, maxChunkRowIndex),
-    column: clampInclusive(Math.trunc(column), 0, maxChunkColumnIndex),
+    row: Math.trunc(row),
+    column: Math.trunc(column),
   }
 }
 
@@ -260,12 +268,15 @@ function definitionStructureSignature(definition: GroundDynamicMesh): string {
 }
 
 function isInfiniteGroundDefinition(definition: GroundDynamicMesh | null | undefined): boolean {
+  // 这个判断是整个无限地形链路的总开关。
+  // 一旦进入 infinite 模式，后面的窗口计算、chunk 索引、法线 stitching 和预热逻辑都不能再依赖固定场景边界。
   return definition?.terrainMode === 'infinite'
 }
 
-const MAX_INFINITE_RENDER_RADIUS_CHUNKS = 64
-
 function resolveInfiniteChunkSizeMeters(definition: GroundDynamicMesh): number {
+  // 这是无限地形最基础的尺度换算：世界坐标里移动多少米，对应 chunk 坐标跨过一格。
+  // 如果这里算错，后面所有 chunkKey、窗口边界、拾取和实例平铺的位置都会整体偏移。
+  // 没有显式配置时回退到默认值，保证旧场景数据缺少该字段时依然能运行。
   const explicit = Number(definition.chunkSizeMeters)
   if (Number.isFinite(explicit) && explicit > 0) {
     return explicit
@@ -274,9 +285,13 @@ function resolveInfiniteChunkSizeMeters(definition: GroundDynamicMesh): number {
 }
 
 function resolveInfiniteRenderRadiusChunks(definition: GroundDynamicMesh): number {
+  // 这个值不是“场景上限”，只是相机周围的保留半径：
+  // - 太小会导致边缘 chunk 频繁进出视野，产生抖动；
+  // - 太大只会增加内存和创建成本，不应该再被人为截断成一个固定上限。
+  // 因此这里只保留最小值保护，防止 0 或负数把窗口直接退化掉。
   const explicit = Number(definition.renderRadiusChunks)
   if (Number.isFinite(explicit) && explicit > 0) {
-    return Math.max(1, Math.min(MAX_INFINITE_RENDER_RADIUS_CHUNKS, Math.trunc(explicit)))
+    return Math.max(1, Math.trunc(explicit))
   }
   return 4
 }
@@ -331,11 +346,22 @@ function resolveGroundRuntimeMaterial(root: THREE.Group, state: GroundRuntimeSta
   })
 }
 
+function buildFlatGroundChunkGeometry(spec: GroundChunkSpec, cellSize: number): THREE.PlaneGeometry {
+  // flat chunk 不需要为每个 chunk 单独生成地形起伏网格，因为它本身代表的是“没有局部雕刻的平坦区块”。
+  // 这里生成的只是一个按 chunk 尺寸裁出来的平面，后续通过 InstancedMesh 批量复制和摆放。
+  // 真正的高度信息来自共享的地形采样链，不在这里重复计算。
+  const width = Math.max(1, Math.trunc(spec.columns)) * cellSize
+  const depth = Math.max(1, Math.trunc(spec.rows)) * cellSize
+  return new THREE.PlaneGeometry(width, depth, 1, 1)
+}
+
 function resolveInfiniteNearChunkWindowBounds(
   centerCoord: { chunkX: number; chunkZ: number },
   chunkSizeMeters: number,
   renderRadiusChunks: number,
 ): { minX: number; maxX: number; minZ: number; maxZ: number } {
+  // 这个函数只做兜底：如果相机视锥求交失败、或者调用时根本没有相机，就至少根据中心 chunk 算出一个可用窗口。
+  // 它不是全局边界，也不是“最大渲染范围”，只是为了避免窗口被算成空集，导致 chunk 一帧都不加载。
   const minX = (centerCoord.chunkX - renderRadiusChunks) * chunkSizeMeters
   const maxX = (centerCoord.chunkX + renderRadiusChunks + 1) * chunkSizeMeters
   const minZ = (centerCoord.chunkZ - renderRadiusChunks) * chunkSizeMeters
@@ -374,20 +400,6 @@ const infiniteGroundVisibleWindowRayOrigin = new THREE.Vector3()
 const infiniteGroundVisibleWindowRayDirection = new THREE.Vector3()
 const infiniteGroundVisibleWindowRay = new THREE.Ray()
 
-function resolveInfiniteGroundChunkRangeFromBounds(
-  minValue: number,
-  maxValue: number,
-  chunkSizeMeters: number,
-): { minChunk: number; maxChunk: number } {
-  const safeChunkSize = Math.max(1e-6, chunkSizeMeters)
-  const minChunk = Math.floor(minValue / safeChunkSize)
-  const maxChunk = Math.ceil((maxValue - safeChunkSize * 1e-6) / safeChunkSize) - 1
-  return {
-    minChunk,
-    maxChunk: Math.max(minChunk, maxChunk),
-  }
-}
-
 function resolveInfiniteGroundVisibleLocalBounds(
   root: THREE.Object3D,
   definition: GroundDynamicMesh,
@@ -395,6 +407,9 @@ function resolveInfiniteGroundVisibleLocalBounds(
   chunkSizeMeters: number,
   renderRadiusChunks: number,
 ): { minX: number; maxX: number; minZ: number; maxZ: number; centerCoord: { chunkX: number; chunkZ: number } } {
+  // 这个函数的职责非常窄：只回答“相机当前能看见哪一块地面”。
+  // 它不参与任何 chunk 上限判断，也不负责决定地形最多能延伸多远。
+  // 如果这里和窗口上限逻辑混在一起，后面很容易再次把无限地形误写回有限地形。
   root.updateMatrixWorld(true)
 
   const baseHeight = typeof definition.baseHeight === 'number' && Number.isFinite(definition.baseHeight)
@@ -419,6 +434,8 @@ function resolveInfiniteGroundVisibleLocalBounds(
   const fallbackBounds = resolveInfiniteNearChunkWindowBounds(centerCoord, chunkSizeMeters, renderRadiusChunks)
 
   if (!camera) {
+    // 没有相机时，视锥采样无从谈起，只能回退到“中心 chunk + 半径”的保底窗口。
+    // 这样做的目的不是精确，而是确保至少有一圈 chunk 可见，避免初始化阶段出现空场景。
     return {
       ...fallbackBounds,
       centerCoord,
@@ -444,6 +461,8 @@ function resolveInfiniteGroundVisibleLocalBounds(
   let intersectionCount = 0
 
   for (const [ndcX, ndcY] of infiniteGroundViewportSamplePoints) {
+    // 用 3x3 采样点覆盖整个视口，是为了避免“只采中心点”导致窗口偏窄，进而出现相机平移后 chunk 跟不上视野边缘的情况。
+    // 这也是为什么窗口看起来不像纯粹由相机位置决定，而是由“中心 + 视锥边缘”共同决定。
     if ((camera as THREE.OrthographicCamera).isOrthographicCamera) {
       infiniteGroundVisibleWindowRayOrigin.set(ndcX, ndcY, -1).unproject(camera)
       camera.getWorldDirection(infiniteGroundVisibleWindowRayDirection)
@@ -480,6 +499,8 @@ function resolveInfiniteGroundVisibleLocalBounds(
   }
 
   if (intersectionCount <= 0) {
+    // 如果所有采样点都没和地面平面稳定相交，就继续沿用保底窗口。
+    // 宁可多加载一点，也不要把窗口算成空的；空窗口会直接表现成“相机动了但地形不再延伸”。
     return {
       ...fallbackBounds,
       centerCoord,
@@ -490,6 +511,10 @@ function resolveInfiniteGroundVisibleLocalBounds(
   const focusZ = sumZ / intersectionCount
   const paddingMeters = chunkSizeMeters
   return {
+    // 最终窗口取“保底中心窗口”和“视锥求交窗口”的并集。
+    // 这么做可以兼顾两个目标：
+    // 1) 相机中心附近始终保留足够 chunk；
+    // 2) 视野边缘提前补 chunk，避免平移时边缘突然露白。
     minX: Math.min(fallbackBounds.minX, focusX - paddingMeters),
     maxX: Math.max(fallbackBounds.maxX, focusX + paddingMeters),
     minZ: Math.min(fallbackBounds.minZ, focusZ - paddingMeters),
@@ -503,6 +528,8 @@ export function resolveInfiniteGroundVisibleChunkWindow(
   definition: GroundDynamicMesh,
   camera: THREE.Camera | null,
 ): InfiniteGroundVisibleChunkWindow {
+  // 这是无限地形的总入口之一：它输出“当前需要保留/加载的 chunk 范围”。
+  // 这里不能夹带任何全局最大边界，否则 infinite 模式会在移动若干次后再次卡死在某个上限上。
   const chunkSizeMeters = resolveInfiniteChunkSizeMeters(definition)
   const renderRadiusChunks = resolveInfiniteRenderRadiusChunks(definition)
   const localBounds = resolveInfiniteGroundVisibleLocalBounds(root, definition, camera, chunkSizeMeters, renderRadiusChunks)
@@ -510,13 +537,11 @@ export function resolveInfiniteGroundVisibleChunkWindow(
   const centeredMaxChunkX = localBounds.centerCoord.chunkX + renderRadiusChunks
   const centeredMinChunkZ = localBounds.centerCoord.chunkZ - renderRadiusChunks
   const centeredMaxChunkZ = localBounds.centerCoord.chunkZ + renderRadiusChunks
-  const xRange = resolveInfiniteGroundChunkRangeFromBounds(localBounds.minX, localBounds.maxX, chunkSizeMeters)
-  const zRange = resolveInfiniteGroundChunkRangeFromBounds(localBounds.minZ, localBounds.maxZ, chunkSizeMeters)
   return {
-    minChunkX: Math.min(centeredMinChunkX, xRange.minChunk),
-    maxChunkX: Math.max(centeredMaxChunkX, xRange.maxChunk),
-    minChunkZ: Math.min(centeredMinChunkZ, zRange.minChunk),
-    maxChunkZ: Math.max(centeredMaxChunkZ, zRange.maxChunk),
+    minChunkX: centeredMinChunkX,
+    maxChunkX: centeredMaxChunkX,
+    minChunkZ: centeredMinChunkZ,
+    maxChunkZ: centeredMaxChunkZ,
     localBounds,
     centerCoord: localBounds.centerCoord,
   }
@@ -2988,6 +3013,16 @@ function ensureGroundRuntimeState(root: THREE.Object3D, definition: GroundDynami
       entry.mesh.removeFromParent()
     })
 
+    existing.flatChunkBatches.forEach((batch) => {
+      batch.mesh.removeFromParent()
+      try {
+        ;(batch.mesh.geometry as any)?.dispose?.()
+      } catch (_error) {
+        /* noop */
+      }
+    })
+    existing.flatChunkBatches.clear()
+
     existing.meshPool.forEach((entries) => {
       entries.forEach((mesh) => {
         try {
@@ -3007,6 +3042,7 @@ function ensureGroundRuntimeState(root: THREE.Object3D, definition: GroundDynami
     chunkCells,
     castShadow: desiredCastShadow,
     chunks: new Map(),
+    flatChunkBatches: new Map(),
     hiddenChunkKeys: new Set(),
     hiddenChunkKeysVersion: 0,
     lastChunkUpdateAt: 0,
@@ -3029,6 +3065,121 @@ function chunkPoolKey(spec: GroundChunkSpec): string {
   const rows = Math.max(1, Math.trunc(spec.rows))
   const columns = Math.max(1, Math.trunc(spec.columns))
   return `${rows}x${columns}`
+}
+
+function disposeGroundFlatChunkBatch(batch: GroundFlatChunkBatchRuntime): void {
+  batch.mesh.removeFromParent()
+  try {
+    ;(batch.mesh.geometry as any)?.dispose?.()
+  } catch (_error) {
+    /* noop */
+  }
+}
+
+function refreshGroundFlatChunkBatchInstances(
+  batch: GroundFlatChunkBatchRuntime,
+  definition: GroundRuntimeDynamicMesh,
+  chunkCells: number,
+  chunkKeys: string[],
+): void {
+  // 这一段把一组“完全平坦、没有局部雕刻”的 chunk 变成 InstancedMesh 批次。
+  // 这么做的收益是：
+  // - 所有平坦 chunk 共享几何和材质；
+  // - 相机移动时只改 instance 矩阵，不需要每个 chunk 都重建 Mesh；
+  // - 大多数地形都能走这条快路径，只有被局部雕刻影响的 chunk 才保留独立 Mesh。
+  const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
+  const halfWidth = resolveGroundWorkingSpanMeters(definition) * 0.5
+  const halfDepth = resolveGroundWorkingSpanMeters(definition) * 0.5
+  const instanceMatrix = new THREE.Matrix4()
+  const instancePosition = new THREE.Vector3()
+  const instanceRotation = new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0))
+  const instanceScale = new THREE.Vector3(1, 1, 1)
+
+  batch.mesh.count = chunkKeys.length
+  chunkKeys.forEach((key, index) => {
+    // 这里不要直接用 key 里的 row/column 去猜位置，而要回到 chunkSpec。
+    // 原因是 chunkSpec 已经包含 startRow/startColumn/rows/columns 的完整切片信息，
+    // 这样即使边缘 chunk 尺寸不满整格，instance 的位置也不会算偏。
+    const indices = parseGroundChunkKey(key)
+    if (!indices) {
+      return
+    }
+    const chunkSpec = computeChunkSpec(definition, indices.chunkZ, indices.chunkX, chunkCells)
+    instancePosition.set(
+      -halfWidth + (chunkSpec.startColumn + chunkSpec.columns * 0.5) * cellSize,
+      0,
+      -halfDepth + (chunkSpec.startRow + chunkSpec.rows * 0.5) * cellSize,
+    )
+    instanceMatrix.compose(instancePosition, instanceRotation, instanceScale)
+    batch.mesh.setMatrixAt(index, instanceMatrix)
+  })
+  batch.mesh.instanceMatrix.needsUpdate = true
+  batch.mesh.userData.groundChunkBatch = {
+    specKey: batch.specKey,
+    chunkKeys: [...chunkKeys],
+  }
+  batch.chunkKeys = [...chunkKeys]
+}
+
+function syncGroundFlatChunkBatches(
+  root: THREE.Group,
+  state: GroundRuntimeState,
+  definition: GroundRuntimeDynamicMesh,
+  desiredFlatChunkGroups: Map<string, { spec: GroundChunkSpec; keys: string[] }>,
+): void {
+  // 这里只同步 flat chunk 批次，不碰雕刻 chunk 的独立 Mesh。
+  // 这条分离非常关键：一旦 flat / sculpted 混在同一个集合里，后续释放、拾取、以及编辑后的降级/升级都会很难维护。
+  if (desiredFlatChunkGroups.size === 0) {
+    state.flatChunkBatches.forEach((batch) => disposeGroundFlatChunkBatch(batch))
+    state.flatChunkBatches.clear()
+    return
+  }
+
+  const material = resolveGroundRuntimeMaterial(root, state)
+  const nextBatches = new Map<string, GroundFlatChunkBatchRuntime>()
+
+  desiredFlatChunkGroups.forEach((group, specKey) => {
+    const existing = state.flatChunkBatches.get(specKey)
+    if (existing) {
+      // 同规格批次直接复用，不重新创建 geometry。
+      // 这里只刷新 instance 数量和矩阵，是为了避免每次相机移动都把 InstancedMesh 整体重建一遍。
+      existing.spec = group.spec
+      refreshGroundFlatChunkBatchInstances(existing, definition, state.chunkCells, group.keys)
+      nextBatches.set(specKey, existing)
+      return
+    }
+
+    // 只有首次出现的规格才新建 geometry + InstancedMesh。
+    // 这意味着绝大多数 chunk 进入缓存后，后续只是换矩阵，不再重复分配大块几何资源。
+    const geometry = buildFlatGroundChunkGeometry(group.spec, Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1)
+    const mesh = new THREE.InstancedMesh(geometry, material, group.keys.length)
+    mesh.name = `GroundFlatChunks:${specKey}`
+    mesh.receiveShadow = true
+    mesh.castShadow = state.castShadow
+    mesh.userData.dynamicMeshType = 'Ground'
+    mesh.userData.groundChunkBatch = {
+      specKey,
+      chunkKeys: [...group.keys],
+    }
+
+    const batch: GroundFlatChunkBatchRuntime = {
+      specKey,
+      spec: group.spec,
+      mesh,
+      chunkKeys: [],
+    }
+    refreshGroundFlatChunkBatchInstances(batch, definition, state.chunkCells, group.keys)
+    root.add(mesh)
+    nextBatches.set(specKey, batch)
+  })
+
+  state.flatChunkBatches.forEach((batch, specKey) => {
+    if (!nextBatches.has(specKey)) {
+      // 本帧不再需要的平坦批次直接释放，避免它们在场景树里残留并继续参与渲染/拾取。
+      disposeGroundFlatChunkBatch(batch)
+    }
+  })
+  state.flatChunkBatches = nextBatches
 }
 
 function releaseChunkToPool(state: GroundRuntimeState, runtime: GroundChunkRuntime): void {
@@ -4128,25 +4279,27 @@ export function updateGroundChunks(
 ): void {  
   const root = resolveGroundRuntimeGroup(target)
   if (!root) {
+    // 没有找到运行时 ground group，说明当前对象还没挂上地形运行状态；这时直接退出，不做任何加载/卸载。
     return
   }
 
   const state = ensureGroundRuntimeState(root, definition)
   const now = Date.now()
   const force = options.force === true
+  // 这个节流不是为了“少做事”，而是为了避免相机每一帧都触发大规模 chunk 重算。
+  // 在无限地形里窗口更新本来就频繁，所以这里保留一个默认冷却间隔。
   const minIntervalMs = Math.max(0, Math.trunc(Number.isFinite(options.minIntervalMs as number) ? (options.minIntervalMs as number) : 120))
 
   const chunkCells = state.chunkCells
-  const gridSize = resolveGroundWorkingGridSize(definition)
-  const rows = gridSize.rows
-  const columns = gridSize.columns
-  const maxChunkRowIndex = Math.max(0, Math.floor((rows - 1) / chunkCells))
-  const maxChunkColumnIndex = Math.max(0, Math.floor((columns - 1) / chunkCells))
+  // isInfinite 是这整个函数里最重要的分支开关：
+  // 它决定窗口是否可以跨越 0..N 的固定边界，以及 chunk key 是否允许保留真实坐标。
+  const isInfinite = isInfiniteGroundDefinition(definition)
+  // cellSize 是单个网格单元在世界坐标里的尺寸。
+  // 后面所有 loadRadius / unloadRadius / chunk 中心点位置，都要乘这个值才能从“格子数”换成“米”。
   const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
 
   let localX = 0
   let localZ = 0
-  const isInfinite = isInfiniteGroundDefinition(definition)
   const visibleWindow = camera && isInfinite ? resolveInfiniteGroundVisibleChunkWindow(root, definition, camera) : null
   const loadRadius = visibleWindow
     ? Math.max(1, Math.max(
@@ -4157,8 +4310,8 @@ export function updateGroundChunks(
       ? options.radius
       : resolveGroundChunkRadius(definition))
 
-  // Retain chunks slightly beyond the load radius to reduce popping/churn when the camera
-  // hovers near a chunk boundary.
+  // unloadRadius 比 loadRadius 稍大一圈，目的是给相机微小抖动和边界切换留缓冲。
+  // 如果两者完全一致，chunk 会在边缘来回创建/销毁，表现成明显的闪烁和抖动。
   const unloadRadius = loadRadius + Math.max(1, chunkCells) * cellSize
 
   if (camera) {
@@ -4173,6 +4326,8 @@ export function updateGroundChunks(
   const dxMoved = localX - (state.lastCameraLocalX ?? 0)
   const dzMoved = localZ - (state.lastCameraLocalZ ?? 0)
   const movedSq = dxMoved * dxMoved + dzMoved * dzMoved
+  // 只有在相机真的移动过一定距离时，才值得重新构建窗口和重排 chunk 队列。
+  // 否则相机只是轻微抖动，也会造成不必要的加载/卸载波动。
   const chunkWorldSize = Math.max(1, chunkCells) * cellSize
   const moveThreshold = Number.isFinite(options.minCameraMoveMeters as number)
     ? Math.max(0, Number(options.minCameraMoveMeters))
@@ -4180,35 +4335,38 @@ export function updateGroundChunks(
       ? Math.max(cellSize * 2, chunkWorldSize * 0.01)
       : Math.max(cellSize * 2, chunkWorldSize * 0.1))
   const moveThresholdSq = moveThreshold * moveThreshold
+  // 无限地形里 chunk 坐标只需要保持整数语义，不再额外夹到任何最大边界。
+  const normalizeChunkRow = (value: number) => Math.trunc(value)
+  const normalizeChunkColumn = (value: number) => Math.trunc(value)
 
   const spanMeters = resolveGroundWorkingSpanMeters(definition)
   const halfWidth = spanMeters * 0.5
   const halfDepth = spanMeters * 0.5
   const minLoadChunkColumn = visibleWindow
-    ? clampInclusive(visibleWindow.minChunkX, 0, maxChunkColumnIndex)
-    : clampInclusive(Math.floor((localX - loadRadius + halfWidth) / cellSize / chunkCells), 0, maxChunkColumnIndex)
+    ? normalizeChunkColumn(visibleWindow.minChunkX)
+    : normalizeChunkColumn(Math.floor((localX - loadRadius + halfWidth) / cellSize / chunkCells))
   const maxLoadChunkColumn = visibleWindow
-    ? clampInclusive(visibleWindow.maxChunkX, 0, maxChunkColumnIndex)
-    : clampInclusive(Math.floor((localX + loadRadius + halfWidth) / cellSize / chunkCells), 0, maxChunkColumnIndex)
+    ? normalizeChunkColumn(visibleWindow.maxChunkX)
+    : normalizeChunkColumn(Math.floor((localX + loadRadius + halfWidth) / cellSize / chunkCells))
   const minLoadChunkRow = visibleWindow
-    ? clampInclusive(visibleWindow.minChunkZ, 0, maxChunkRowIndex)
-    : clampInclusive(Math.floor((localZ - loadRadius + halfDepth) / cellSize / chunkCells), 0, maxChunkRowIndex)
+    ? normalizeChunkRow(visibleWindow.minChunkZ)
+    : normalizeChunkRow(Math.floor((localZ - loadRadius + halfDepth) / cellSize / chunkCells))
   const maxLoadChunkRow = visibleWindow
-    ? clampInclusive(visibleWindow.maxChunkZ, 0, maxChunkRowIndex)
-    : clampInclusive(Math.floor((localZ + loadRadius + halfDepth) / cellSize / chunkCells), 0, maxChunkRowIndex)
+    ? normalizeChunkRow(visibleWindow.maxChunkZ)
+    : normalizeChunkRow(Math.floor((localZ + loadRadius + halfDepth) / cellSize / chunkCells))
 
   const minUnloadChunkColumn = visibleWindow
-    ? clampInclusive(visibleWindow.minChunkX - 1, 0, maxChunkColumnIndex)
-    : clampInclusive(Math.floor((localX - unloadRadius + halfWidth) / cellSize / chunkCells), 0, maxChunkColumnIndex)
+    ? normalizeChunkColumn(visibleWindow.minChunkX - 1)
+    : normalizeChunkColumn(Math.floor((localX - unloadRadius + halfWidth) / cellSize / chunkCells))
   const maxUnloadChunkColumn = visibleWindow
-    ? clampInclusive(visibleWindow.maxChunkX + 1, 0, maxChunkColumnIndex)
-    : clampInclusive(Math.floor((localX + unloadRadius + halfWidth) / cellSize / chunkCells), 0, maxChunkColumnIndex)
+    ? normalizeChunkColumn(visibleWindow.maxChunkX + 1)
+    : normalizeChunkColumn(Math.floor((localX + unloadRadius + halfWidth) / cellSize / chunkCells))
   const minUnloadChunkRow = visibleWindow
-    ? clampInclusive(visibleWindow.minChunkZ - 1, 0, maxChunkRowIndex)
-    : clampInclusive(Math.floor((localZ - unloadRadius + halfDepth) / cellSize / chunkCells), 0, maxChunkRowIndex)
+    ? normalizeChunkRow(visibleWindow.minChunkZ - 1)
+    : normalizeChunkRow(Math.floor((localZ - unloadRadius + halfDepth) / cellSize / chunkCells))
   const maxUnloadChunkRow = visibleWindow
-    ? clampInclusive(visibleWindow.maxChunkZ + 1, 0, maxChunkRowIndex)
-    : clampInclusive(Math.floor((localZ + unloadRadius + halfDepth) / cellSize / chunkCells), 0, maxChunkRowIndex)
+    ? normalizeChunkRow(visibleWindow.maxChunkZ + 1)
+    : normalizeChunkRow(Math.floor((localZ + unloadRadius + halfDepth) / cellSize / chunkCells))
 
   const nextDesiredSignature = [
     chunkCells,
@@ -4224,16 +4382,20 @@ export function updateGroundChunks(
     visibleWindow ? `${visibleWindow.centerCoord.chunkX}:${visibleWindow.centerCoord.chunkZ}:${visibleWindow.minChunkX}:${visibleWindow.maxChunkX}:${visibleWindow.minChunkZ}:${visibleWindow.maxChunkZ}` : 'no-visible-window',
     state.hiddenChunkKeysVersion,
   ].join('|')
+  // 这个 signature 是“当前应该保留哪些 chunk”的摘要；只要它变了，就说明窗口发生了实质变化。
   const desiredWindowChanged = nextDesiredSignature !== state.desiredSignature
   const hasPendingWork = state.pendingCreates.length > 0 || state.pendingDestroys.length > 0
+  let desiredFlatChunkGroups: Map<string, { spec: GroundChunkSpec; keys: string[] }> | null = null
 
   // Force mode should at least guarantee the camera's core chunk exists.
   let allowBypassInterval = false
   if (force && camera) {
-    const cameraColumn = clampInclusive(Math.floor((localX + halfWidth) / cellSize), 0, columns)
-    const cameraRow = clampInclusive(Math.floor((localZ + halfDepth) / cellSize), 0, rows)
-    const cameraChunkColumn = clampInclusive(Math.floor(cameraColumn / chunkCells), 0, maxChunkColumnIndex)
-    const cameraChunkRow = clampInclusive(Math.floor(cameraRow / chunkCells), 0, maxChunkRowIndex)
+    // force 模式下至少确保相机正下方的核心 chunk 已经存在，避免强刷时先出现空洞。
+    // 这条逻辑的目的不是优化，而是保证调试、手动刷新或初始化时“中心不会缺块”。
+    const cameraColumn = Math.floor((localX + halfWidth) / cellSize)
+    const cameraRow = Math.floor((localZ + halfDepth) / cellSize)
+    const cameraChunkColumn = normalizeChunkColumn(Math.floor(cameraColumn / chunkCells))
+    const cameraChunkRow = normalizeChunkRow(Math.floor(cameraRow / chunkCells))
     const coreKey = groundChunkKey(cameraChunkRow, cameraChunkColumn)
     if (!state.chunks.has(coreKey)) {
       allowBypassInterval = true
@@ -4241,12 +4403,14 @@ export function updateGroundChunks(
   }
 
   if (!allowBypassInterval && now - state.lastChunkUpdateAt < minIntervalMs) {
+    // 冷却时间内直接返回，避免同一帧内因为多个系统重复调用而把 chunk 队列反复打乱。
     return
   }
 
   if (!force) {
     // Only update when the camera moved enough (or when we have pending work).
     if (!hasPendingWork && !desiredWindowChanged && movedSq < moveThresholdSq) {
+      // 相机没明显移动、窗口也没变化、队列里也没有待处理工作时，什么都不做。
       return
     }
   }
@@ -4256,19 +4420,26 @@ export function updateGroundChunks(
   state.lastCameraLocalZ = localZ
 
   // Rebuild pending queues when the desired window changes.
-  if (nextDesiredSignature !== state.desiredSignature) {
+  if (force || nextDesiredSignature !== state.desiredSignature) {
+    // 只有当目标窗口真的变化时，才重建创建/销毁队列。
+    // 这样可以把“持续加载”与“窗口变化”分离开，避免每一帧都重新排序整个 chunk 集合。
     state.desiredSignature = nextDesiredSignature
 
     // Create queue (nearest-first).
+    // 创建队列按距离从近到远排序，保证相机附近优先出现内容，远处 chunk 可以稍后再补。
     const creates: Array<{ key: GroundChunkKey; chunkRow: number; chunkColumn: number; priority: number; distSq: number }> = []
+    const flatChunkGroups = new Map<string, { spec: GroundChunkSpec; keys: string[] }>()
+    const transitionToFlatKeys = new Set<string>()
 
     // Prefer a 3x3 core around the camera chunk in force mode.
     let forceCore: Set<string> | null = null
     if (force && camera) {
-      const cameraColumn = clampInclusive(Math.floor((localX + halfWidth) / cellSize), 0, columns)
-      const cameraRow = clampInclusive(Math.floor((localZ + halfDepth) / cellSize), 0, rows)
-      const cameraChunkColumn = clampInclusive(Math.floor(cameraColumn / chunkCells), 0, maxChunkColumnIndex)
-      const cameraChunkRow = clampInclusive(Math.floor(cameraRow / chunkCells), 0, maxChunkRowIndex)
+      // forceCore 是一个 3x3 核心区优先集合：调试或强刷时先保中心，再补外围。
+      // 这样即使预算很小，也能先让相机周围看起来“站稳”，而不是先加载远处 chunk。
+      const cameraColumn = Math.floor((localX + halfWidth) / cellSize)
+      const cameraRow = Math.floor((localZ + halfDepth) / cellSize)
+      const cameraChunkColumn = normalizeChunkColumn(Math.floor(cameraColumn / chunkCells))
+      const cameraChunkRow = normalizeChunkRow(Math.floor(cameraRow / chunkCells))
       forceCore = new Set<string>()
       for (let dr = -1; dr <= 1; dr += 1) {
         for (let dc = -1; dc <= 1; dc += 1) {
@@ -4285,27 +4456,65 @@ export function updateGroundChunks(
     for (let cr = minLoadChunkRow; cr <= maxLoadChunkRow; cr += 1) {
       for (let cc = minLoadChunkColumn; cc <= maxLoadChunkColumn; cc += 1) {
         const key = groundChunkKey(cr, cc)
+        // 已经存在的 chunk 或被隐藏的 chunk，不应该再次进入创建队列。
         if (state.chunks.has(key) || state.hiddenChunkKeys.has(key)) {
           continue
         }
 
         const spec = computeChunkSpec(definition, cr, cc, chunkCells)
+        // 先算出这个 chunk 的中心点位置，再与相机位置比较，用于创建优先级排序。
         const centerX = -halfWidth + (spec.startColumn + spec.columns * 0.5) * cellSize
         const centerZ = -halfDepth + (spec.startRow + spec.rows * 0.5) * cellSize
         const dx = centerX - localX
         const dz = centerZ - localZ
         const priority = forceCore && forceCore.has(key) ? -1 : 0
-        creates.push({ key, chunkRow: cr, chunkColumn: cc, priority, distSq: dx * dx + dz * dz })
+        if (chunkIntersectsGroundLocalEditTile(definition, spec)) {
+          // 只要这个 chunk 覆盖到了局部雕刻瓦片，就必须走独立 Mesh 路径，不能并入平面实例批次。
+          // 因为一旦并入实例批次，单独的雕刻编辑就无法只改这一块，而必须把整批都拆开，代价更高。
+          creates.push({ key, chunkRow: cr, chunkColumn: cc, priority, distSq: dx * dx + dz * dz })
+        } else {
+          // 没有局部雕刻的 chunk 进入 flat 分组，后续会被合并成 InstancedMesh 批次。
+          // 这就是 hybrid 方案的关键：大部分地形走快路径，只有少量被编辑过的区域保留慢路径。
+          if (state.chunks.has(key)) {
+            transitionToFlatKeys.add(key)
+          }
+          // flat chunk 按 spec 分组，是为了让相同尺寸的 chunk 共用一套 InstancedMesh 几何。
+          const specKey = chunkPoolKey(spec)
+          const entry = flatChunkGroups.get(specKey)
+          if (entry) {
+            entry.keys.push(key)
+          } else {
+            flatChunkGroups.set(specKey, {
+              spec,
+              keys: [key],
+            })
+          }
+        }
       }
     }
 
     creates.sort((a, b) => (a.priority - b.priority) || (a.distSq - b.distSq))
     state.pendingCreates = creates
+    // flat 分组不直接创建 Mesh，而是先收集起来，后面统一交给 syncGroundFlatChunkBatches(...) 同步。
+    desiredFlatChunkGroups = flatChunkGroups
+
+    transitionToFlatKeys.forEach((key) => {
+      // 当 chunk 从独立 Mesh 退回平面实例时，必须先释放旧 Mesh，避免同一块地形同时存在两份渲染对象。
+      // 这个步骤如果漏掉，会出现“画面看起来没问题，但内存/渲染数量一直上涨”的隐性问题。
+      const runtime = state.chunks.get(key)
+      if (!runtime) {
+        return
+      }
+      releaseChunkToPool(state, runtime)
+      state.chunks.delete(key)
+    })
 
     // Destroy queue (farthest-first outside unload radius).
+    // 卸载队列按距离从远到近排序，优先删除最远的 chunk，保留相机附近的内容。
     const destroys: Array<{ key: GroundChunkKey; distSq: number }> = []
     state.chunks.forEach((entry, key) => {
       if (state.hiddenChunkKeys.has(key)) {
+        // 隐藏的 chunk 直接视为“必须卸载”，并给一个无穷大距离，确保它们总是最先被清理。
         destroys.push({ key, distSq: Number.POSITIVE_INFINITY })
         return
       }
@@ -4315,9 +4524,11 @@ export function updateGroundChunks(
         entry.chunkColumn >= minUnloadChunkColumn &&
         entry.chunkColumn <= maxUnloadChunkColumn
       ) {
+        // 落在卸载缓冲区里的 chunk 继续保留，避免相机稍微挪动时立刻把它删掉。
         return
       }
       const spec = entry.spec
+      // 对于真正要卸载的 chunk，再按它的中心点与相机距离排序，越远越先删。
       const centerX = -halfWidth + (spec.startColumn + spec.columns * 0.5) * cellSize
       const centerZ = -halfDepth + (spec.startRow + spec.rows * 0.5) * cellSize
       const dx = centerX - localX
@@ -4328,6 +4539,7 @@ export function updateGroundChunks(
     state.pendingDestroys = destroys
   } else {
     // Drop stale pending work.
+    // 如果窗口没变，就只清理那些因为外部状态变化而变得不再有效的待处理项，不重新构建整个队列。
     if (state.pendingCreates.length) {
       state.pendingCreates = state.pendingCreates.filter((entry) => !state.chunks.has(entry.key))
     }
@@ -4336,18 +4548,29 @@ export function updateGroundChunks(
     }
   }
 
+  if (desiredFlatChunkGroups) {
+    // 每次窗口变化后，同步 flat 批次，这一步决定了“平铺延伸”的实际可见范围。
+    // 如果这里不更新，chunk 可能已经创建/删除了，但平面实例还停留在旧位置，看起来就像“地形不跟着相机走”。
+    syncGroundFlatChunkBatches(root, state, definition, desiredFlatChunkGroups)
+  }
+
   const defaultBudget: GroundChunkBudget | null = camera
     ? ({ maxCreatePerUpdate: 6, maxDestroyPerUpdate: 8 } satisfies GroundChunkBudget)
     : null
+  // 没有显式预算时，给摄像机驱动的更新一个保守默认值：
+  // 创建数量不要太大，否则会卡；销毁数量也不要太大，否则会导致边缘内容瞬间消失。
   const effectiveBudget: GroundChunkBudget | null = options.budget === undefined ? defaultBudget : (options.budget as GroundChunkBudget | null)
   const maxCreate = effectiveBudget ? (Number.isFinite(effectiveBudget.maxCreatePerUpdate as number) ? Math.max(0, Math.trunc(effectiveBudget.maxCreatePerUpdate as number)) : Number.POSITIVE_INFINITY) : Number.POSITIVE_INFINITY
   const maxDestroy = effectiveBudget ? (Number.isFinite(effectiveBudget.maxDestroyPerUpdate as number) ? Math.max(0, Math.trunc(effectiveBudget.maxDestroyPerUpdate as number)) : Number.POSITIVE_INFINITY) : Number.POSITIVE_INFINITY
   const maxMs = effectiveBudget ? (Number.isFinite(effectiveBudget.maxMs as number) ? Math.max(0, Number(effectiveBudget.maxMs)) : Number.POSITIVE_INFINITY) : Number.POSITIVE_INFINITY
   const budgetStart = Date.now()
 
+  // 这个闭包把“预算剩余时间”统一成一个判断，后面创建/卸载都能复用。
   const withinTimeBudget = () => (Date.now() - budgetStart) <= maxMs
 
   // Load chunks within the tighter load radius (nearest-first).
+  // 下面开始真正执行队列：先创建，再卸载。
+  // 这样做的好处是窗口变化时优先补内容，避免先删后建导致地形短暂空洞。
   let stitchRegion: GroundGeometryUpdateRegion | null = null
   const touchedChunkKeys = new Set<string>()
   const mergeRegion = (current: GroundGeometryUpdateRegion | null, next: GroundGeometryUpdateRegion): GroundGeometryUpdateRegion => {
@@ -4368,6 +4591,7 @@ export function updateGroundChunks(
     let processed = 0
     for (processed = 0; processed < pending.length; processed += 1) {
       if (createdCount >= maxCreate || !withinTimeBudget()) {
+        // 预算用完就停止创建，避免一帧内创建过多 chunk 导致卡顿。
         break
       }
       const entry = pending[processed]!
@@ -4378,6 +4602,7 @@ export function updateGroundChunks(
       createdCount += 1
       touchedChunkKeys.add(runtime.key)
 
+      // 新 chunk 创建后，记下它影响的地形区域，后面统一做法线 stitching。
       stitchRegion = mergeRegion(stitchRegion, {
         minRow: runtime.spec.startRow,
         maxRow: runtime.spec.startRow + Math.max(1, runtime.spec.rows),
@@ -4387,6 +4612,7 @@ export function updateGroundChunks(
     }
 
     // Keep remaining items (and drop any that got created).
+    // 已创建的条目从待创建列表中移除，剩下的继续留待下一帧处理。
     state.pendingCreates = pending
       .slice(processed)
       .filter((entry) => !state.chunks.has(entry.key))
@@ -4399,6 +4625,7 @@ export function updateGroundChunks(
     let processed = 0
     for (processed = 0; processed < pending.length; processed += 1) {
       if (destroyedCount >= maxDestroy || !withinTimeBudget()) {
+        // 同样，卸载也受预算约束，防止一口气删太多 chunk 造成画面跳变或主线程抖动。
         break
       }
       const entry = pending[processed]!
@@ -4406,10 +4633,12 @@ export function updateGroundChunks(
       if (!runtime) {
         continue
       }
+      // 先把 runtime 放回池子或释放资源，再从 state.chunks 中移除，避免引用悬空。
       releaseChunkToPool(state, runtime)
       state.chunks.delete(entry.key)
       destroyedCount += 1
     }
+    // 卸载完成后，保留还没来得及处理的剩余项，等下一帧继续。
     state.pendingDestroys = pending
       .slice(processed)
       .filter((entry) => state.chunks.has(entry.key))
@@ -4417,6 +4646,7 @@ export function updateGroundChunks(
 
   // Newly created chunks compute normals in isolation; stitch boundaries to avoid visible seams.
   if (stitchRegion) {
+    // 新 chunk 是独立算法线的，边界上会天然有一点不连续；这里统一 stitching，避免块与块之间出现明暗断层。
     stitchGroundChunkNormals(root, definition, stitchRegion, touchedChunkKeys)
   }
 }
@@ -4540,12 +4770,9 @@ export function updateGroundMeshRegion(
   if (!state) {
     return false
   }
-  const chunkCells = state.chunkCells
-  const gridSize = resolveGroundWorkingGridSize(definition)
-  const rows = gridSize.rows
-  const columns = gridSize.columns
-  const maxChunkRowIndex = Math.max(0, Math.floor((rows - 1) / chunkCells))
-  const maxChunkColumnIndex = Math.max(0, Math.floor((columns - 1) / chunkCells))
+  // touchedChunkKeys 表示“这次编辑真实波及到哪些 chunk”，比整块 region 扫描更精准。
+  // region 只是一个大概范围，而 chunk key 才是能精确驱动重建、同步和 stitching 的最小单位。
+  // 现在只保留无限地形语义，所以这里不再做任何 0..maxIndex 裁剪。
   const filteredChunkKeys = options.touchedChunkKeys
     ? Array.from(options.touchedChunkKeys).filter((key) => typeof key === 'string' && key.length > 0)
     : []
@@ -4553,7 +4780,7 @@ export function updateGroundMeshRegion(
   if (filteredChunkKeys.length) {
     const visited = new Set<string>()
     for (const key of filteredChunkKeys) {
-      const indices = resolveRuntimeChunkIndexFromSharedKey(key, maxChunkRowIndex, maxChunkColumnIndex)
+      const indices = resolveRuntimeChunkIndexFromSharedKey(key)
       if (!indices) {
         continue
       }
@@ -4564,10 +4791,6 @@ export function updateGroundMeshRegion(
       visited.add(runtimeKey)
       const entry = state.chunks.get(runtimeKey)
       if (!entry) {
-        continue
-      }
-      const geometry = entry.mesh.geometry
-      if (!(geometry instanceof THREE.BufferGeometry)) {
         continue
       }
       const ok = refreshChunkRuntimeGeometry(entry, definition, {
@@ -4608,11 +4831,8 @@ export function ensureGroundChunkMeshesForKeys(
   }
 
   const state = groundRuntimeStateMap.get(group) ?? ensureGroundRuntimeState(group, definition)
-  const gridSize = resolveGroundWorkingGridSize(definition)
-  const rows = gridSize.rows
-  const columns = gridSize.columns
-  const maxChunkRowIndex = Math.max(0, Math.floor((rows - 1) / state.chunkCells))
-  const maxChunkColumnIndex = Math.max(0, Math.floor((columns - 1) / state.chunkCells))
+  // 这个接口给编辑器侧“按 key 预热 chunk”使用。
+  // 现在 ground 已经只有无限模式，因此这里直接把 key 当作真实 chunk 坐标，不再进行边界裁剪。
   const visited = new Set<string>()
   let created = false
 
@@ -4620,7 +4840,7 @@ export function ensureGroundChunkMeshesForKeys(
     if (typeof key !== 'string' || key.length === 0) {
       continue
     }
-    const indices = resolveRuntimeChunkIndexFromSharedKey(key, maxChunkRowIndex, maxChunkColumnIndex)
+    const indices = resolveRuntimeChunkIndexFromSharedKey(key)
     if (!indices) {
       continue
     }
@@ -4641,10 +4861,20 @@ export function ensureGroundChunkMeshesForKeys(
 
 export function resolveInfiniteGroundChunkKeyFromInstanceId(
   target: THREE.Object3D,
+  instanceId: number,
 ): string | null {
   const group = resolveGroundRuntimeGroup(target)
   if (!group) {
     return null
+  }
+  const batchData = (target as any)?.userData?.groundChunkBatch as { chunkKeys?: string[] } | undefined
+  if (batchData && Array.isArray(batchData.chunkKeys)) {
+    if (Number.isInteger(instanceId) && instanceId >= 0 && instanceId < batchData.chunkKeys.length) {
+      const batchKey = batchData.chunkKeys[instanceId]
+      if (typeof batchKey === 'string' && batchKey.length > 0) {
+        return batchKey
+      }
+    }
   }
   const directChunk = (target as any)?.userData?.groundChunk as { chunkRow?: number; chunkColumn?: number } | undefined
   if (directChunk && Number.isInteger(directChunk.chunkRow) && Number.isInteger(directChunk.chunkColumn)) {
@@ -4662,7 +4892,13 @@ export function getVisibleInfiniteGroundChunkKeys(target: THREE.Object3D): strin
   if (!state) {
     return []
   }
-  return Array.from(state.chunks.keys())
+  // 返回当前场景里已经可见的所有 chunk key，包括普通 chunk Mesh 和 flat InstancedMesh 批次。
+  // 这个集合常被拾取、可见范围同步和调试工具复用，所以一定要同时覆盖两条渲染路径。
+  const visibleKeys = new Set<string>(state.chunks.keys())
+  state.flatChunkBatches.forEach((batch) => {
+    batch.chunkKeys.forEach((key) => visibleKeys.add(key))
+  })
+  return Array.from(visibleKeys)
 }
 
 export function setInfiniteGroundHiddenChunkKeys(
@@ -4698,10 +4934,14 @@ export function setInfiniteGroundHiddenChunkKeys(
     return false
   }
 
+  // 隐藏 chunk 的语义是“这批 key 本轮不该再参与加载或渲染”。
+  // 所以普通 chunk 和 flat 批次都要一起清掉，否则就会出现“key 已经隐藏了，但画面里还留着旧实例”的错觉。
   state.hiddenChunkKeys = nextHiddenChunkKeys
   state.hiddenChunkKeysVersion += 1
   state.desiredSignature = ''
   state.pendingCreates = state.pendingCreates.filter((entry) => !nextHiddenChunkKeys.has(entry.key))
+  state.flatChunkBatches.forEach((batch) => disposeGroundFlatChunkBatch(batch))
+  state.flatChunkBatches.clear()
   state.chunks.forEach((runtime, key) => {
     if (!nextHiddenChunkKeys.has(key)) {
       return
@@ -4838,17 +5078,14 @@ export function stitchGroundChunkNormals(
   if (!state) {
     return false
   }
-  const chunkCells = state.chunkCells
-  const gridSize = resolveGroundWorkingGridSize(definition)
-  const rows = gridSize.rows
-  const columns = gridSize.columns
-  const maxChunkRowIndex = Math.max(0, Math.floor((rows - 1) / chunkCells))
-  const maxChunkColumnIndex = Math.max(0, Math.floor((columns - 1) / chunkCells))
+  void definition
 
   const filteredChunkKeys = touchedChunkKeys ? Array.from(touchedChunkKeys).filter((key) => typeof key === 'string' && key.length > 0) : []
   if (filteredChunkKeys.length) {
     const visitedEdges = new Set<string>()
     const stitchEdge = (anchorRow: number, anchorColumn: number, mode: 'right' | 'down'): boolean => {
+      // 只有相邻 chunk 都是独立 Mesh 时，边界法线拼接才有意义；flat 批次不参与这条流程。
+      // flat chunk 没有独立雕刻边界，强行拼接只会让逻辑复杂但结果没有收益。
       const edgeKey = `${mode}:${anchorRow}:${anchorColumn}`
       if (visitedEdges.has(edgeKey)) {
         return false
@@ -4878,7 +5115,7 @@ export function stitchGroundChunkNormals(
 
     let stitched = false
     for (const key of filteredChunkKeys) {
-      const indices = resolveRuntimeChunkIndexFromSharedKey(key, maxChunkRowIndex, maxChunkColumnIndex)
+      const indices = resolveRuntimeChunkIndexFromSharedKey(key)
       if (!indices) {
         continue
       }
@@ -4896,17 +5133,19 @@ export function stitchGroundChunkNormals(
     }
     return stitched
   }
-
-  let minChunkRow = 0
-  let maxChunkRow = maxChunkRowIndex
-  let minChunkColumn = 0
-  let maxChunkColumn = maxChunkColumnIndex
-  if (region) {
-    minChunkRow = clampInclusive(Math.floor(region.minRow / chunkCells) - 1, 0, maxChunkRowIndex)
-    maxChunkRow = clampInclusive(Math.floor(region.maxRow / chunkCells) + 1, 0, maxChunkRowIndex)
-    minChunkColumn = clampInclusive(Math.floor(region.minColumn / chunkCells) - 1, 0, maxChunkColumnIndex)
-    maxChunkColumn = clampInclusive(Math.floor(region.maxColumn / chunkCells) + 1, 0, maxChunkColumnIndex)
+  if (!region) {
+    return false
   }
+
+  // 目前 ground 只保留无限模式，因此没有“整网格批量扫描”的必要。
+  // 没有 touchedChunkKeys 时，说明这次更新没有足够精确的 chunk 级信息可用于法线拼接。
+  return false
+
+  /*
+  const minChunkRow = Math.floor(region.minRow / chunkCells) - 1
+  const maxChunkRow = Math.floor(region.maxRow / chunkCells) + 1
+  const minChunkColumn = Math.floor(region.minColumn / chunkCells) - 1
+  const maxChunkColumn = Math.floor(region.maxColumn / chunkCells) + 1
 
   let stitched = false
   for (let r = minChunkRow; r <= maxChunkRow; r += 1) {
@@ -4944,6 +5183,7 @@ export function stitchGroundChunkNormals(
     }
   }
   return stitched
+  */
 }
 
 export function releaseGroundMeshCache(disposeResources = true) {
