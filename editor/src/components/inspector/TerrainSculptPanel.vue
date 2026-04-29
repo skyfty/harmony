@@ -11,7 +11,6 @@ const BRUSH_STRENGTH_MAX = 10
 const BRUSH_STRENGTH_STEP = 0.1
 
 const BRUSH_DEPTH_MIN = 0.1
-const BRUSH_DEPTH_MAX = 50
 const BRUSH_DEPTH_STEP = 0.1
 
 const BRUSH_SLOPE_MIN = 0
@@ -148,13 +147,13 @@ function formatNumericValue(value: number): string {
   return Number.isFinite(value) ? value.toFixed(VALUE_PRECISION) : (0).toFixed(VALUE_PRECISION)
 }
 
-function parseAndNormalize(raw: string, fallback: number, min: number, max: number, step: number): number {
+function parseAndNormalize(raw: string, fallback: number, min: number, max: number | undefined, step: number): number {
   const parsed = Number.parseFloat(raw)
   const base = Number.isFinite(parsed) ? parsed : fallback
-  const clamped = clampValue(base, min, max)
+  const clamped = Number.isFinite(max) ? clampValue(base, min, max) : Math.max(min, base)
   const stepped = snapToStep(clamped, min, step)
   const normalized = Number(stepped.toFixed(VALUE_PRECISION))
-  return clampValue(normalized, min, max)
+  return Number.isFinite(max) ? clampValue(normalized, min, max) : Math.max(min, normalized)
 }
 
 function commitBrushRadiusInput() {
@@ -186,7 +185,7 @@ function commitBrushDepthInput() {
     brushDepthInput.value,
     props.brushDepth,
     BRUSH_DEPTH_MIN,
-    BRUSH_DEPTH_MAX,
+    undefined,
     BRUSH_DEPTH_STEP,
   )
   brushDepthModel.value = normalized
@@ -302,7 +301,6 @@ function commitNoiseStrengthInput() {
           type="number"
           suffix="m"
           :min="BRUSH_DEPTH_MIN"
-          :max="BRUSH_DEPTH_MAX"
           :step="BRUSH_DEPTH_STEP"
           variant="underlined"
           density="compact"
