@@ -95,9 +95,13 @@
       "cost": {
         "unitPrice": "CDN 单价（元/GB）",
         "downloadCount": "预计下载次数",
-        "packageTraffic": "预计出流量",
-        "packageCost": "ZIP 下载成本",
-        "resourceCost": "资源口径成本"
+        "packageAssetCount": "包内资产数量",
+        "packageAssetSize": "包内资产大小",
+        "packageAssetCost": "包内资产成本",
+        "serverAssetCount": "Server 资产数量",
+        "serverAssetSize": "Server 资产大小",
+        "serverAssetCost": "Server 资产成本",
+        "totalCost": "总成本"
       },
       "breakdown": {
         "localAssetBytes": "本地资产",

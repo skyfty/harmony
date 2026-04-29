@@ -21,20 +21,26 @@ const scene = ref<null | SceneItem>(null);
 const unitPriceCnyPerGb = ref(0.24);
 const downloadCount = ref(1);
 
-const currencyFormatter = new Intl.NumberFormat('zh-CN', {
-  currency: 'CNY',
-  maximumFractionDigits: 2,
-  minimumFractionDigits: 2,
-  style: 'currency',
-});
-
 const metadata = computed(() => scene.value?.metadata ?? null);
 
-const packageGb = computed(() => bytesToGb(scene.value?.fileSize));
-const resourceGb = computed(() => bytesToGb(metadata.value?.manifestResourceBytes));
+const packageAssetCount = computed(() => safeNumber(metadata.value?.packageAssetCount));
+const packageAssetBytes = computed(() => safeNumber(metadata.value?.packageAssetBytes ?? metadata.value?.manifestResourceBytes));
+const serverAssetCount = computed(() => safeNumber(metadata.value?.serverAssetCount));
+const serverAssetBytes = computed(() => safeNumber(metadata.value?.serverAssetBytes));
 
-const packageCost = computed(() => calculateCost(packageGb.value));
-const resourceCost = computed(() => calculateCost(resourceGb.value));
+const packageAssetGb = computed(() => bytesToGb(packageAssetBytes.value));
+const serverAssetGb = computed(() => bytesToGb(serverAssetBytes.value));
+
+const packageAssetCost = computed(() => calculateCost(packageAssetGb.value));
+const serverAssetCost = computed(() => calculateCost(serverAssetGb.value));
+const totalCost = computed(() => packageAssetCost.value + serverAssetCost.value);
+
+const currencyFormatter = new Intl.NumberFormat('zh-CN', {
+  currency: 'CNY',
+  maximumFractionDigits: 4,
+  minimumFractionDigits: 4,
+  style: 'currency',
+});
 
 const breakdownRows = computed(() => {
   const breakdown = metadata.value?.breakdown ?? {};
@@ -189,15 +195,29 @@ onMounted(load);
             <InputNumber v-model:value="downloadCount" :min="1" :precision="0" :step="100" />
           </Space>
         </div>
+        <div class="scene-detail-cost-summary">
+          <Tag color="blue">{{ t('page.scenes.detail.cost.totalCost') }}：{{ formatCurrency(totalCost) }}</Tag>
+        </div>
         <Row :gutter="16">
           <Col :xs="24" :md="8">
-            <Statistic :title="t('page.scenes.detail.cost.packageTraffic')" :value="formatGb(packageGb)" />
+            <Statistic :title="t('page.scenes.detail.cost.packageAssetCount')" :value="formatNumber(packageAssetCount)" />
           </Col>
           <Col :xs="24" :md="8">
-            <Statistic :title="t('page.scenes.detail.cost.packageCost')" :value="formatCurrency(packageCost)" />
+            <Statistic :title="t('page.scenes.detail.cost.packageAssetSize')" :value="formatGb(packageAssetGb)" />
           </Col>
           <Col :xs="24" :md="8">
-            <Statistic :title="t('page.scenes.detail.cost.resourceCost')" :value="formatCurrency(resourceCost)" />
+            <Statistic :title="t('page.scenes.detail.cost.packageAssetCost')" :value="formatCurrency(packageAssetCost)" />
+          </Col>
+        </Row>
+        <Row :gutter="16" class="scene-detail-cost-row">
+          <Col :xs="24" :md="8">
+            <Statistic :title="t('page.scenes.detail.cost.serverAssetCount')" :value="formatNumber(serverAssetCount)" />
+          </Col>
+          <Col :xs="24" :md="8">
+            <Statistic :title="t('page.scenes.detail.cost.serverAssetSize')" :value="formatGb(serverAssetGb)" />
+          </Col>
+          <Col :xs="24" :md="8">
+            <Statistic :title="t('page.scenes.detail.cost.serverAssetCost')" :value="formatCurrency(serverAssetCost)" />
           </Col>
         </Row>
       </div>
@@ -268,6 +288,14 @@ onMounted(load);
 
 .scene-detail-cost-controls {
   margin-bottom: 12px;
+}
+
+.scene-detail-cost-summary {
+  margin-bottom: 12px;
+}
+
+.scene-detail-cost-row {
+  margin-top: 12px;
 }
 
 .scene-detail-section h4 {
