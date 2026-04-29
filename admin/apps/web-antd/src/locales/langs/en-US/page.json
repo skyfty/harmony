@@ -97,7 +97,8 @@
         "downloadCount": "Estimated Downloads",
         "packageTraffic": "Estimated Traffic",
         "packageCost": "ZIP Download Cost",
-        "resourceCost": "Resource Cost"
+        "resourceCost": "Resource Cost",
+        "totalCost": "Total Cost"
       },
       "breakdown": {
         "localAssetBytes": "Local Assets",
