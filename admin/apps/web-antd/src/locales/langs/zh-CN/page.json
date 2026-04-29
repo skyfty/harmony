@@ -97,7 +97,8 @@
         "downloadCount": "预计下载次数",
         "packageTraffic": "预计出流量",
         "packageCost": "ZIP 下载成本",
-        "resourceCost": "资源口径成本"
+        "resourceCost": "资源口径成本",
+        "totalCost": "总成本"
       },
       "breakdown": {
         "localAssetBytes": "本地资产",
