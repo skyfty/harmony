@@ -95,9 +95,12 @@
       "cost": {
         "unitPrice": "CDN Unit Price (CNY/GB)",
         "downloadCount": "Estimated Downloads",
-        "packageTraffic": "Estimated Traffic",
-        "packageCost": "ZIP Download Cost",
-        "resourceCost": "Resource Cost",
+        "packageAssetCount": "Package Asset Count",
+        "packageAssetSize": "Package Asset Size",
+        "packageAssetCost": "Package Asset Cost",
+        "serverAssetCount": "Server Asset Count",
+        "serverAssetSize": "Server Asset Size",
+        "serverAssetCost": "Server Asset Cost",
         "totalCost": "Total Cost"
       },
       "breakdown": {

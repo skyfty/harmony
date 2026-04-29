@@ -345,6 +345,12 @@ export interface ProjectExportBundleMetadata {
   checkpointTotal: number
   nodeCountTotal: number
   resourceCount: number
+  packageAssetCount: number
+  packageAssetBytes: number
+  serverAssetCount: number
+  serverAssetBytes: number
+  assetCount: number
+  assetBytes: number
   manifestResourceBytes: number
   uncompressedEntryBytes: number
   zipEntryCount: number

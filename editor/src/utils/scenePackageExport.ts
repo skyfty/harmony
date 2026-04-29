@@ -746,6 +746,44 @@ function isSceneDocumentPath(path: string): boolean {
   return /^scenes\/[^/]+\/scene\.bin$/u.test(path)
 }
 
+function isPackageAssetResourceType(resourceType: string): boolean {
+  return resourceType === 'localAsset' || resourceType === 'planningImage' || resourceType === 'terrainWeightmap'
+}
+
+function buildAssetSourceTotals(resources: ScenePackageResourceEntry[]): {
+  assetBytes: number
+  assetCount: number
+  packageAssetBytes: number
+  packageAssetCount: number
+  serverAssetBytes: number
+  serverAssetCount: number
+} {
+  let packageAssetBytes = 0
+  let packageAssetCount = 0
+  let serverAssetBytes = 0
+  let serverAssetCount = 0
+
+  for (const entry of resources) {
+    const size = resourceEntrySize(entry, {})
+    if (isPackageAssetResourceType(entry.resourceType)) {
+      packageAssetBytes += size
+      packageAssetCount += 1
+    } else {
+      serverAssetBytes += size
+      serverAssetCount += 1
+    }
+  }
+
+  return {
+    assetBytes: packageAssetBytes + serverAssetBytes,
+    assetCount: packageAssetCount + serverAssetCount,
+    packageAssetBytes,
+    packageAssetCount,
+    serverAssetBytes,
+    serverAssetCount,
+  }
+}
+
 function buildProjectExportMetadata(options: {
   createdAt: string
   checkpointTotal: number
@@ -840,6 +878,7 @@ function buildProjectExportMetadata(options: {
   const fileBytes = Object.values(options.files).reduce((sum, bytes) => sum + bytes.byteLength, 0)
   const manifestResourceBytes = options.resources.reduce((sum, entry) => sum + resourceEntrySize(entry, options.files), 0)
   const nodeCountTotal = sceneSummaries.reduce((sum, scene) => sum + scene.nodeCount, 0)
+  const assetSourceTotals = buildAssetSourceTotals(options.resources)
 
   return {
     generatedAt: options.createdAt,
@@ -848,6 +887,12 @@ function buildProjectExportMetadata(options: {
     checkpointTotal: options.checkpointTotal,
     nodeCountTotal,
     resourceCount: options.resources.length,
+    packageAssetCount: assetSourceTotals.packageAssetCount,
+    packageAssetBytes: assetSourceTotals.packageAssetBytes,
+    serverAssetCount: assetSourceTotals.serverAssetCount,
+    serverAssetBytes: assetSourceTotals.serverAssetBytes,
+    assetCount: assetSourceTotals.assetCount,
+    assetBytes: assetSourceTotals.assetBytes,
     manifestResourceBytes,
     uncompressedEntryBytes: fileBytes + options.manifestBytes + options.projectBytes,
     zipEntryCount: Object.keys(options.files).length + 2,
