@@ -794,11 +794,7 @@ function isSceneDocumentPath(path: string): boolean {
   return /^scenes\/[^/]+\/scene\.bin$/u.test(path)
 }
 
-function isPackageAssetResourceType(resourceType: string): boolean {
-  return resourceType === 'localAsset' || resourceType === 'planningImage' || resourceType === 'terrainWeightmap'
-}
-
-function buildAssetSourceTotals(resources: ScenePackageResourceEntry[]): {
+function buildAssetSourceTotals(scenes: ScenePackageExportScene[]): {
   assetBytes: number
   assetCount: number
   packageAssetBytes: number
@@ -811,14 +807,18 @@ function buildAssetSourceTotals(resources: ScenePackageResourceEntry[]): {
   let serverAssetBytes = 0
   let serverAssetCount = 0
 
-  for (const entry of resources) {
-    const size = resourceEntrySize(entry, {})
-    if (isPackageAssetResourceType(entry.resourceType)) {
-      packageAssetBytes += size
-      packageAssetCount += 1
-    } else {
-      serverAssetBytes += size
-      serverAssetCount += 1
+  for (const scene of scenes) {
+    const assets = Array.isArray(scene.document?.resourceSummary?.assets) ? scene.document.resourceSummary.assets : []
+    for (const asset of assets) {
+      const size = Math.floor(Number(asset?.bytes) || 0)
+      const isEmbedded = asset?.embedded === true || asset?.source === 'embedded'
+      if (isEmbedded) {
+        packageAssetBytes += size
+        packageAssetCount += 1
+      } else {
+        serverAssetBytes += size
+        serverAssetCount += 1
+      }
     }
   }
 
@@ -926,7 +926,7 @@ function buildProjectExportMetadata(options: {
   const fileBytes = Object.values(options.files).reduce((sum, bytes) => sum + bytes.byteLength, 0)
   const manifestResourceBytes = options.resources.reduce((sum, entry) => sum + resourceEntrySize(entry, options.files), 0)
   const nodeCountTotal = sceneSummaries.reduce((sum, scene) => sum + scene.nodeCount, 0)
-  const assetSourceTotals = buildAssetSourceTotals(options.resources)
+  const assetSourceTotals = buildAssetSourceTotals(options.scenes)
 
   return {
     generatedAt: options.createdAt,
