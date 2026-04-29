@@ -85,6 +85,21 @@ export interface PlanningDemPreparedSource {
   planningMetadata: GroundPlanningMetadata
 }
 
+function resolvePlanningDemSourceSpan(options: {
+  demWidth: number
+  demHeight: number
+  worldBounds: { minX: number; minY: number; maxX: number; maxY: number } | null
+}): { widthMeters: number; depthMeters: number } {
+  const widthFromBounds = options.worldBounds ? Math.abs(options.worldBounds.maxX - options.worldBounds.minX) : 0
+  const depthFromBounds = options.worldBounds ? Math.abs(options.worldBounds.maxY - options.worldBounds.minY) : 0
+  const widthMeters = widthFromBounds > 0 ? widthFromBounds : Math.max(1, options.demWidth - 1)
+  const depthMeters = depthFromBounds > 0 ? depthFromBounds : Math.max(1, options.demHeight - 1)
+  return {
+    widthMeters: Math.max(widthMeters, Number.EPSILON),
+    depthMeters: Math.max(depthMeters, Number.EPSILON),
+  }
+}
+
 function resolvePlanningDemLocalEditTileOrigin(definition: GroundRuntimeDynamicMesh): { originX: number; originZ: number } {
   if (definition.terrainMode === 'infinite') {
     return { originX: 0, originZ: 0 }
@@ -94,6 +109,36 @@ function resolvePlanningDemLocalEditTileOrigin(definition: GroundRuntimeDynamicM
     originX: -halfSpan,
     originZ: -halfSpan,
   }
+}
+
+function stringifyPlanningDemDebugObject(value: unknown): string {
+  const seen = new WeakSet<object>()
+  return JSON.stringify(value, (_key, currentValue) => {
+    if (typeof currentValue === 'bigint') {
+      return currentValue.toString()
+    }
+    if (typeof currentValue === 'function') {
+      return '[Function]'
+    }
+    if (currentValue instanceof Error) {
+      return {
+        name: currentValue.name,
+        message: currentValue.message,
+        stack: currentValue.stack ?? null,
+      }
+    }
+    if (currentValue && typeof currentValue === 'object') {
+      if (seen.has(currentValue)) {
+        return '[Circular]'
+      }
+      seen.add(currentValue)
+    }
+    return currentValue
+  }, 2)
+}
+
+function logPlanningDemDebug(stage: string, payload: unknown): void {
+  console.log(`[PlanningDemToGround] ${stage} ${stringifyPlanningDemDebugObject(payload)}`)
 }
 
 function resolvePlanningDemChunkSizeMeters(): number {
@@ -123,6 +168,14 @@ function buildPlanningDemRegionFromPreparedSource(options: {
   textureDataUrl?: string | null
   textureName?: string | null
 }): PlanningDemRegionConversionResult {
+  logPlanningDemDebug('buildPlanningDemRegionFromPreparedSource:start', {
+    startRow: options.startRow,
+    endRow: options.endRow,
+    startColumn: options.startColumn,
+    endColumn: options.endColumn,
+    cellSize: Number.isFinite(options.definition.cellSize) && options.definition.cellSize > 0 ? options.definition.cellSize : 1,
+    terrainMode: options.definition.terrainMode,
+  })
   const region = buildPlanningDemHeightRegion({
     definition: options.definition,
     source: options.prepared.rasterSource,
@@ -162,11 +215,18 @@ export function buildPlanningDemLocalEditTilesForRegion(options: {
   }
   const cellSize = Number.isFinite(options.definition.cellSize) && options.definition.cellSize > 0 ? options.definition.cellSize : 1
   const { originX, originZ } = resolvePlanningDemLocalEditTileOrigin(options.definition)
-  const worldBounds = resolvePlanningDemTargetWorldBounds(options.definition)
-  const minX = worldBounds.minX + options.startColumn * cellSize
-  const maxX = worldBounds.minX + options.endColumn * cellSize
-  const minZ = worldBounds.minZ + options.startRow * cellSize
-  const maxZ = worldBounds.minZ + options.endRow * cellSize
+  const terrainBounds = resolvePlanningDemTargetWorldBounds(options.definition)
+  const regionMinX = terrainBounds.minX + options.startColumn * cellSize
+  const regionMaxX = terrainBounds.minX + options.endColumn * cellSize
+  const regionMinZ = terrainBounds.minZ + options.startRow * cellSize
+  const regionMaxZ = terrainBounds.minZ + options.endRow * cellSize
+  const minX = Math.max(regionMinX, options.source.targetWorldBounds.minX)
+  const maxX = Math.min(regionMaxX, options.source.targetWorldBounds.maxX)
+  const minZ = Math.max(regionMinZ, options.source.targetWorldBounds.minZ)
+  const maxZ = Math.min(regionMaxZ, options.source.targetWorldBounds.maxZ)
+  if (!(maxX > minX) || !(maxZ > minZ)) {
+    return null
+  }
   const { startTile: startTileColumn, endTile: endTileColumn } = resolvePlanningDemChunkTileRange({
     minWorld: minX,
     maxWorld: maxX,
@@ -178,6 +238,22 @@ export function buildPlanningDemLocalEditTilesForRegion(options: {
     maxWorld: maxZ,
     originWorld: originZ,
     chunkSizeMeters: tileSizeMeters,
+  })
+  logPlanningDemDebug('buildPlanningDemLocalEditTilesForRegion:start', {
+    startRow: options.startRow,
+    endRow: options.endRow,
+    startColumn: options.startColumn,
+    endColumn: options.endColumn,
+    tileSizeMeters,
+    resolution,
+    originX,
+    originZ,
+    tileRange: {
+      startTileColumn,
+      endTileColumn,
+      startTileRow,
+      endTileRow,
+    },
   })
   const result: GroundLocalEditTileMap = {}
 
@@ -207,7 +283,13 @@ export function buildPlanningDemLocalEditTilesForRegion(options: {
     }
   }
 
-  return Object.keys(result).length ? result : null
+  const tileKeys = Object.keys(result)
+  logPlanningDemDebug('buildPlanningDemLocalEditTilesForRegion:end', {
+    tileCount: tileKeys.length,
+    firstTileKey: tileKeys[0] ?? null,
+    lastTileKey: tileKeys[tileKeys.length - 1] ?? null,
+  })
+  return tileKeys.length ? result : null
 }
 
 function clamp01(value: number): number {
@@ -307,23 +389,52 @@ async function resolvePlanningDemPreparedSource(options: {
   const localEditCellSize = resolveGroundEditCellSize(definition)
   const localEditTileSizeMeters = resolvePlanningDemChunkSizeMeters()
   const localEditTileResolution = resolveGroundEditTileResolution(definition)
+  const targetWorldBounds = resolvePlanningDemTargetWorldBounds(definition, {
+    demWidth,
+    demHeight,
+    worldBounds: parsed.worldBounds,
+  })
   const tileLayout = resolvePlanningDemSourceTileLayout({
     definition,
     demWidth,
     demHeight,
     worldBounds: parsed.worldBounds,
+    targetWorldBounds,
   })
   const rasterSource = createPlanningDemRasterSource({
     rasterData,
     width: demWidth,
     height: demHeight,
-    definition,
+    targetWorldBounds,
   })
   const sampleStepX = computeDemSampleStepAxis(demWidth, demHeight, parsed.worldBounds, 'x')
   const sampleStepY = computeDemSampleStepAxis(demWidth, demHeight, parsed.worldBounds, 'y')
   const effectiveSourceStep = [sampleStepX, sampleStepY, parsed.sampleStepMeters]
     .filter((value): value is number => Number.isFinite(value as number) && (value as number) > 0)
     .reduce<number | null>((smallest, value) => smallest === null ? value : Math.min(smallest, value), null)
+
+  logPlanningDemDebug('resolvePlanningDemPreparedSource:parsed', {
+    filename: parsed.filename,
+    mimeType: parsed.mimeType,
+    sourceFileHash: parsed.sourceFileHash,
+    width: demWidth,
+    height: demHeight,
+    minElevation: parsed.minElevation,
+    maxElevation: parsed.maxElevation,
+    sampleStepMeters: parsed.sampleStepMeters,
+    sampleStepX,
+    sampleStepY,
+    worldBounds: parsed.worldBounds,
+    targetRows,
+    targetColumns,
+    targetCellSize,
+    localEditCellSize,
+    localEditTileSizeMeters,
+    localEditTileResolution,
+    tileLayout,
+    detailLimitedByGroundGrid: effectiveSourceStep !== null && targetCellSize > effectiveSourceStep,
+    detailLimitedByEditResolution: effectiveSourceStep !== null && localEditCellSize > effectiveSourceStep,
+  })
 
   return {
     parsed,
@@ -367,13 +478,32 @@ async function resolvePlanningDemPreparedSource(options: {
 
 export function resolvePlanningDemTargetWorldBounds(
   definition: GroundRuntimeDynamicMesh,
+  source?: {
+    demWidth: number
+    demHeight: number
+    worldBounds: { minX: number; minY: number; maxX: number; maxY: number } | null
+  },
 ): PlanningDemTargetWorldBounds {
   const span = resolveGroundWorkingSpanMeters(definition)
+  if (!source) {
+    return {
+      minX: -span * 0.5,
+      minZ: -span * 0.5,
+      maxX: span * 0.5,
+      maxZ: span * 0.5,
+    }
+  }
+  const sourceSpan = resolvePlanningDemSourceSpan(source)
+  const fitScale = span > 0
+    ? span / Math.max(sourceSpan.widthMeters, sourceSpan.depthMeters, Number.EPSILON)
+    : 1
+  const targetWidth = sourceSpan.widthMeters * fitScale
+  const targetDepth = sourceSpan.depthMeters * fitScale
   return {
-    minX: -span * 0.5,
-    minZ: -span * 0.5,
-    maxX: span * 0.5,
-    maxZ: span * 0.5,
+    minX: -targetWidth * 0.5,
+    minZ: -targetDepth * 0.5,
+    maxX: targetWidth * 0.5,
+    maxZ: targetDepth * 0.5,
   }
 }
 
@@ -381,13 +511,13 @@ export function createPlanningDemRasterSource(options: {
   rasterData: ArrayLike<number>
   width: number
   height: number
-  definition: GroundRuntimeDynamicMesh
+  targetWorldBounds: PlanningDemTargetWorldBounds
 }): PlanningDemRasterSource {
   return {
     rasterData: options.rasterData,
     width: options.width,
     height: options.height,
-    targetWorldBounds: resolvePlanningDemTargetWorldBounds(options.definition),
+    targetWorldBounds: options.targetWorldBounds,
   }
 }
 
@@ -493,6 +623,18 @@ export async function buildPlanningDemGroundRegionData(options: {
   endColumn: number
   applyOrthophoto?: boolean
 }): Promise<PlanningDemRegionConversionResult> {
+  logPlanningDemDebug('buildPlanningDemGroundRegionData:start', {
+    terrainDem: {
+      filename: options.terrainDem.filename ?? null,
+      sourceFileHash: options.terrainDem.sourceFileHash ?? null,
+      mimeType: options.terrainDem.mimeType ?? null,
+    },
+    startRow: options.startRow,
+    endRow: options.endRow,
+    startColumn: options.startColumn,
+    endColumn: options.endColumn,
+    applyOrthophoto: options.applyOrthophoto !== false,
+  })
   const prepared = await resolvePlanningDemPreparedSource({
     definition: options.definition,
     terrainDem: options.terrainDem,
@@ -556,13 +698,13 @@ export function resolvePlanningDemSourceTileLayout(options: {
   demWidth: number
   demHeight: number
   worldBounds: { minX: number; minY: number; maxX: number; maxY: number } | null
+  targetWorldBounds: PlanningDemTargetWorldBounds
 }): PlanningDemSourceTileLayout {
-  const { definition, demWidth, demHeight, worldBounds } = options
+  const { definition, demWidth, demHeight, targetWorldBounds } = options
   const localEditCellSize = resolveGroundEditCellSize(definition)
   const localEditTileSizeMeters = resolvePlanningDemChunkSizeMeters()
-  const worldSpan = resolveGroundWorkingSpanMeters(definition)
-  const worldWidth = worldBounds ? Math.abs(worldBounds.maxX - worldBounds.minX) : Math.max(localEditTileSizeMeters, worldSpan)
-  const worldHeight = worldBounds ? Math.abs(worldBounds.maxY - worldBounds.minY) : Math.max(localEditTileSizeMeters, worldSpan)
+  const worldWidth = Math.max(localEditTileSizeMeters, targetWorldBounds.maxX - targetWorldBounds.minX)
+  const worldHeight = Math.max(localEditTileSizeMeters, targetWorldBounds.maxZ - targetWorldBounds.minZ)
   const tileColumns = Math.max(1, Math.ceil(worldWidth / Math.max(localEditTileSizeMeters, Number.EPSILON)))
   const tileRows = Math.max(1, Math.ceil(worldHeight / Math.max(localEditTileSizeMeters, Number.EPSILON)))
   const tileWorldWidth = localEditTileSizeMeters
@@ -589,6 +731,21 @@ export async function buildPlanningDemGroundData(options: {
   applyOrthophoto?: boolean
 }): Promise<PlanningDemGroundConversionResult> {
   const { definition, terrainDem } = options
+  logPlanningDemDebug('buildPlanningDemGroundData:start', {
+    terrainDem: {
+      filename: terrainDem.filename ?? null,
+      sourceFileHash: terrainDem.sourceFileHash ?? null,
+      mimeType: terrainDem.mimeType ?? null,
+    },
+    definition: {
+      terrainMode: definition.terrainMode,
+      cellSize: definition.cellSize,
+      chunkSizeMeters: definition.chunkSizeMeters ?? null,
+      renderRadiusChunks: definition.renderRadiusChunks ?? null,
+      surfaceRevision: definition.surfaceRevision ?? null,
+    },
+    applyOrthophoto: options.applyOrthophoto !== false,
+  })
   const gridSize = resolveGroundWorkingGridSize(definition)
   const rows = Math.max(1, Math.trunc(gridSize.rows))
   const columns = Math.max(1, Math.trunc(gridSize.columns))
@@ -613,6 +770,14 @@ export async function buildPlanningDemGroundData(options: {
   const texture = await resolvePlanningDemOrthophotoTexture({
     terrainDem,
     applyOrthophoto: options.applyOrthophoto,
+  })
+
+  logPlanningDemDebug('buildPlanningDemGroundData:end', {
+    planningHeightMapLength: heightMap.length,
+    localEditTileCount: fullRegionResult.localEditTiles ? Object.keys(fullRegionResult.localEditTiles).length : 0,
+    planningMetadata: fullRegionResult.planningMetadata,
+    textureName: texture.textureName,
+    textureDataUrl: texture.textureDataUrl ? '[data-url]' : null,
   })
 
   return {

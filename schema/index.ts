@@ -1645,7 +1645,7 @@ export interface GroundSurfaceChunkTextureRef {
 
 export type GroundSurfaceChunkTextureMap = Record<string, GroundSurfaceChunkTextureRef>
 
-export type GroundTerrainMode = 'bounded' | 'infinite'
+export type GroundTerrainMode = 'infinite'
 
 export type GroundChunkSource = 'manual' | 'dem' | 'import' | 'paint' | 'scatter'
 

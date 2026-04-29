@@ -18,6 +18,7 @@ import {
   type TerrainScatterStoreSnapshot,
 } from '@schema/terrain-scatter'
 import { sampleGroundHeight } from '@schema/groundMesh'
+import { resolveGroundRuntimeChunkCells } from '@schema/groundMesh'
 import { computeGroundBaseHeightAtVertex } from '@schema/groundGeneration'
 import {
   getPointsBounds,
@@ -721,19 +722,19 @@ function syncPlanningHeightState(
     definition.planningHeightMap,
     definition.planningMetadata ?? null,
   )
-  useGroundHeightmapStore().markOptimizedMeshDirtyBounds(groundNode.id, groundNode.dynamicMesh as GroundDynamicMesh, {
-    startRow: 0,
-    endRow: resolveGroundWorkingGridSize(definition).rows,
-    startColumn: 0,
-    endColumn: resolveGroundWorkingGridSize(definition).columns,
-  })
+  useGroundHeightmapStore().markOptimizedMeshDirtyChunkKeys(
+    groundNode.id,
+    groundNode.dynamicMesh as GroundDynamicMesh,
+    resolvePlanningDirtyChunkKeysForFullGrid(definition),
+  )
 }
 
-function syncPlanningHeightRegionState(
+function syncGroundCoverageRegionState(
   sceneStore: ConvertPlanningToSceneOptions['sceneStore'],
   groundNode: SceneNode,
   definition: GroundRuntimeDynamicMesh,
   region: PlanningDemHeightRegion,
+  dirtyChunkKeys: Iterable<string> | null,
 ): GroundRuntimeDynamicMesh {
   const sceneId = typeof sceneStore.currentSceneId === 'string' ? sceneStore.currentSceneId.trim() : ''
   if (!sceneId) {
@@ -749,14 +750,28 @@ function syncPlanningHeightRegionState(
   definition.surfaceRevision = nextRevision
   definition.runtimeHydratedHeightState = 'dirty'
   definition.runtimeDisableOptimizedChunks = true
-  const groundHeightmapStore = useGroundHeightmapStore()
-  groundHeightmapStore.replacePlanningHeightRegion(
-    groundNode.id,
-    definition,
-    region,
-    definition.planningMetadata ?? null,
+  console.log(
+    `[PlanningToScene] syncGroundCoverageRegionState ${JSON.stringify({
+      sceneId,
+      nodeId: groundNode.id,
+      nextRevision,
+      region: {
+        startRow: region.startRow,
+        endRow: region.endRow,
+        startColumn: region.startColumn,
+        endColumn: region.endColumn,
+        vertexRows: region.vertexRows,
+        vertexColumns: region.vertexColumns,
+      },
+      runtimeFlags: {
+        runtimeHydratedHeightState: definition.runtimeHydratedHeightState,
+        runtimeDisableOptimizedChunks: definition.runtimeDisableOptimizedChunks,
+      },
+    }, null, 2)}`,
   )
-  groundHeightmapStore.markOptimizedMeshDirtyBounds(groundNode.id, definition, region)
+  const groundHeightmapStore = useGroundHeightmapStore()
+  groundHeightmapStore.updatePlanningMetadata(groundNode.id, definition, definition.planningMetadata ?? null)
+  groundHeightmapStore.markOptimizedMeshDirtyChunkKeys(groundNode.id, definition, dirtyChunkKeys)
   return groundHeightmapStore.resolveGroundRuntimeMesh(groundNode.id, definition)
 }
 
@@ -778,12 +793,67 @@ function applyPlanningDemRegionToGround(
         }
       : definition.localEditTiles ?? null,
   } satisfies GroundRuntimeDynamicMesh
-  const nextGround = syncPlanningHeightRegionState(sceneStore, groundNode, nextGroundSeed, region)
+  const dirtyChunkKeys = localEditTiles
+    ? Object.keys(localEditTiles)
+    : resolvePlanningDirtyChunkKeysFromRegion(definition, region)
   if (localEditTiles) {
-    useGroundHeightmapStore().replaceLocalEditTiles(groundNode.id, nextGround, nextGround.localEditTiles ?? null)
+    useGroundHeightmapStore().replaceLocalEditTiles(groundNode.id, nextGroundSeed, nextGroundSeed.localEditTiles ?? null)
   }
+  const nextGround = syncGroundCoverageRegionState(sceneStore, groundNode, nextGroundSeed, region, dirtyChunkKeys)
+  console.log(
+    `[PlanningToScene] applyPlanningDemRegionToGround ${JSON.stringify({
+      sceneId: sceneStore.currentSceneId ?? null,
+      nodeId: groundNode.id,
+      region: {
+        startRow: region.startRow,
+        endRow: region.endRow,
+        startColumn: region.startColumn,
+        endColumn: region.endColumn,
+        vertexRows: region.vertexRows,
+        vertexColumns: region.vertexColumns,
+      },
+      localEditTileCount: localEditTiles ? Object.keys(localEditTiles).length : 0,
+      planningMetadata: planningMetadata ?? null,
+      runtimeFlags: {
+        surfaceRevision: nextGround.surfaceRevision ?? null,
+        runtimeHydratedHeightState: nextGround.runtimeHydratedHeightState ?? null,
+        runtimeDisableOptimizedChunks: nextGround.runtimeDisableOptimizedChunks ?? null,
+      },
+    }, null, 2)}`,
+  )
   sceneStore.updateGroundNodeDynamicMesh(groundNode.id, nextGround)
   return nextGround
+}
+
+function resolvePlanningDirtyChunkKeysFromRegion(
+  definition: GroundRuntimeDynamicMesh,
+  region: PlanningDemHeightRegion,
+): string[] {
+  const chunkCells = Math.max(1, resolveGroundRuntimeChunkCells(definition))
+  const minChunkRow = Math.max(0, Math.floor(region.startRow / chunkCells))
+  const maxChunkRow = Math.max(0, Math.floor(region.endRow / chunkCells))
+  const minChunkColumn = Math.max(0, Math.floor(region.startColumn / chunkCells))
+  const maxChunkColumn = Math.max(0, Math.floor(region.endColumn / chunkCells))
+  const chunkKeys: string[] = []
+  for (let chunkRow = minChunkRow; chunkRow <= maxChunkRow; chunkRow += 1) {
+    for (let chunkColumn = minChunkColumn; chunkColumn <= maxChunkColumn; chunkColumn += 1) {
+      chunkKeys.push(`${chunkRow}:${chunkColumn}`)
+    }
+  }
+  return chunkKeys
+}
+
+function resolvePlanningDirtyChunkKeysForFullGrid(definition: GroundRuntimeDynamicMesh): string[] {
+  const gridSize = resolveGroundWorkingGridSize(definition)
+  return resolvePlanningDirtyChunkKeysFromRegion(definition, {
+    startRow: 0,
+    endRow: gridSize.rows,
+    startColumn: 0,
+    endColumn: gridSize.columns,
+    vertexRows: gridSize.rows + 1,
+    vertexColumns: gridSize.columns + 1,
+    values: new Float64Array((gridSize.rows + 1) * (gridSize.columns + 1)),
+  })
 }
 
 function resolvePlanningUnitsToMeters(planningData: PlanningSceneData, groundWidth: number, groundDepth: number): number {

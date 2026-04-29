@@ -1912,20 +1912,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		groundLocalVertexHelper.copy(worldPoint)
 		groundMesh.updateMatrixWorld(true)
 		groundMesh.worldToLocal(groundLocalVertexHelper)
-		if (definition.terrainMode === 'infinite') {
-			return Number.isFinite(groundLocalVertexHelper.x) && Number.isFinite(groundLocalVertexHelper.z)
-		}
-		const spanMeters = resolveGroundWorkingSpanMeters(definition)
-		const halfWidth = spanMeters * 0.5
-		const halfDepth = spanMeters * 0.5
-		return (
-			Number.isFinite(groundLocalVertexHelper.x) &&
-			Number.isFinite(groundLocalVertexHelper.z) &&
-			groundLocalVertexHelper.x >= -halfWidth &&
-			groundLocalVertexHelper.x <= halfWidth &&
-			groundLocalVertexHelper.z >= -halfDepth &&
-			groundLocalVertexHelper.z <= halfDepth
-		)
+		return Number.isFinite(groundLocalVertexHelper.x) && Number.isFinite(groundLocalVertexHelper.z)
 	}
 
 	function updateScatterHoverPreview(event: PointerEvent): void {
@@ -3673,9 +3660,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		definition: GroundRuntimeDynamicMesh,
 		bounds: { minX: number; maxX: number; minZ: number; maxZ: number },
 	): string[] {
-		if (definition.terrainMode !== 'infinite') {
-			return []
-		}
 		const chunkSizeMeters = typeof definition.chunkSizeMeters === 'number' && Number.isFinite(definition.chunkSizeMeters) && definition.chunkSizeMeters > 0
 			? definition.chunkSizeMeters
 			: 100
@@ -3698,7 +3682,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		session: { nodeId: string; touchedChunkKeys: Set<string>; definition: GroundRuntimeDynamicMesh } | null | undefined,
 		bounds: { minX: number; maxX: number; minZ: number; maxZ: number },
 	): void {
-		if (!session || session.definition.terrainMode !== 'infinite') {
+		if (!session) {
 			return
 		}
 		collectInfiniteGroundChunkKeysFromWorldBounds(session.definition, bounds).forEach((chunkKey) => {
@@ -3742,10 +3726,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return false
 		}
 		const committedDefinition = sculptSessionState.definition
-		const usesLocalEditTiles = (
-			committedDefinition.terrainMode === 'infinite'
-			|| resolveGroundEditCellSize(committedDefinition) < Math.max(committedDefinition.cellSize, Number.EPSILON)
-		)
+		const usesLocalEditTiles = resolveGroundEditCellSize(committedDefinition) < Math.max(committedDefinition.cellSize, Number.EPSILON)
 			&& !!committedDefinition.localEditTiles
 			&& Object.keys(committedDefinition.localEditTiles).length > 0
 		const chunkKeys = sculptSessionState.touchedChunkKeys.size
@@ -4557,15 +4538,13 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			maxColumn: Math.min(gridSize.columns, region.maxColumn + seamPaddingCells),
 		}
 		stitchGroundChunkNormals(session.groundObject, session.definition, padded, touchedChunkKeys)
-		if (session.definition.terrainMode === 'infinite') {
-			options.onSculptPreviewApplied?.({
-				groundObject: session.groundObject,
-				definition: session.definition,
-				affectedRegion: sculptSessionState?.affectedRegion ?? region,
-				chunkKeys: touchedChunkKeys ? Array.from(touchedChunkKeys) : undefined,
-				chunkCells: resolveChunkCellsForDefinition(session.definition),
-			})
-		}
+		options.onSculptPreviewApplied?.({
+			groundObject: session.groundObject,
+			definition: session.definition,
+			affectedRegion: sculptSessionState?.affectedRegion ?? region,
+			chunkKeys: touchedChunkKeys ? Array.from(touchedChunkKeys) : undefined,
+			chunkCells: resolveChunkCellsForDefinition(session.definition),
+		})
 		commitSculptSession(getGroundNodeFromScene())
 		return true
 	}
@@ -4643,14 +4622,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function clampPointToGround(definition: GroundDynamicMesh, point: THREE.Vector3): THREE.Vector3 {
-		if (definition.terrainMode === 'infinite') {
-			return point
-		}
-		const spanMeters = resolveGroundWorkingSpanMeters(definition)
-		const halfWidth = spanMeters * 0.5
-		const halfDepth = spanMeters * 0.5
-		point.x = THREE.MathUtils.clamp(point.x, -halfWidth, halfWidth)
-		point.z = THREE.MathUtils.clamp(point.z, -halfDepth, halfDepth)
 		return point
 	}
 
@@ -4756,22 +4727,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!Number.isFinite(localPoint.x) || !Number.isFinite(localPoint.z)) {
 			return null
 		}
-		if (definition.terrainMode !== 'infinite') {
-			const spanMeters = resolveGroundWorkingSpanMeters(definition)
-			const halfWidth = spanMeters * 0.5
-			const halfDepth = spanMeters * 0.5
-			if (
-				localPoint.x < -halfWidth ||
-				localPoint.x > halfWidth ||
-				localPoint.z < -halfDepth ||
-				localPoint.z > halfDepth
-			) {
-				return null
-			}
-		}
-		const height = definition.terrainMode === 'infinite'
-			? (typeof definition.baseHeight === 'number' && Number.isFinite(definition.baseHeight) ? definition.baseHeight : 0)
-			: sampleGroundHeight(definition, localPoint.x, localPoint.z)
+		const height = sampleGroundHeight(definition, localPoint.x, localPoint.z)
 		localPoint.y = height
 		groundMesh.localToWorld(localPoint)
 		return localPoint
@@ -7199,15 +7155,13 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			maxColumn: Math.min(gridSize.columns, mergedRegion.maxColumn + 2),
 		}
 		stitchGroundChunkNormals(groundObject, definition, padded, touchedChunkKeys)
-		if (definition.terrainMode === 'infinite') {
-			options.onSculptPreviewApplied?.({
-				groundObject,
-				definition,
-				affectedRegion: sculptSessionState?.affectedRegion ?? mergedRegion,
-				chunkKeys: touchedChunkKeys ? Array.from(touchedChunkKeys) : undefined,
-				chunkCells: resolveChunkCellsForDefinition(definition),
-			})
-		}
+		options.onSculptPreviewApplied?.({
+			groundObject,
+			definition,
+			affectedRegion: sculptSessionState?.affectedRegion ?? mergedRegion,
+			chunkKeys: touchedChunkKeys ? Array.from(touchedChunkKeys) : undefined,
+			chunkCells: resolveChunkCellsForDefinition(definition),
+		})
 		if (sculptSessionState && sculptSessionState.nodeId === groundNode.id) {
 			sculptSessionState.affectedRegion = mergeRegions(sculptSessionState.affectedRegion, mergedRegion)
 		}

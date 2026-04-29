@@ -13,6 +13,7 @@ import {
   type GroundPlanningMetadata,
   type SceneNode,
 } from '@schema'
+import { resolveGroundRuntimeChunkCells } from '@schema/groundMesh'
 import {
   createGroundRuntimeMeshFromSidecar,
   serializeGroundHeightSidecarFromSampler,
@@ -61,6 +62,7 @@ export type GroundHeightRuntimeState = {
   localEditTiles: Map<string, GroundLocalEditTileState>
   planningMetadata: GroundPlanningMetadata | null
   optimizedMeshDirtyBounds: GroundContourBounds | null
+  optimizedMeshDirtyChunkKeys: Set<string>
   runtimeHydratedHeightState?: 'pristine' | 'dirty'
   runtimeDisableOptimizedChunks?: boolean
   runtimeLoadedTileKeys?: string[]
@@ -435,6 +437,78 @@ function mergeGroundContourBounds(
   }
 }
 
+function normalizeGroundChunkKey(key: string): string | null {
+  if (typeof key !== 'string') {
+    return null
+  }
+  const trimmed = key.trim()
+  if (!trimmed) {
+    return null
+  }
+  const parts = trimmed.split(':')
+  if (parts.length !== 2) {
+    return null
+  }
+  const row = Number(parts[0])
+  const column = Number(parts[1])
+  if (!Number.isFinite(row) || !Number.isFinite(column)) {
+    return null
+  }
+  return `${Math.trunc(row)}:${Math.trunc(column)}`
+}
+
+function parseGroundChunkKeyFromDirtyKey(key: string): { chunkRow: number; chunkColumn: number } | null {
+  const normalized = normalizeGroundChunkKey(key)
+  if (!normalized) {
+    return null
+  }
+  const [rowText, columnText] = normalized.split(':')
+  const chunkRow = Number(rowText)
+  const chunkColumn = Number(columnText)
+  if (!Number.isFinite(chunkRow) || !Number.isFinite(chunkColumn)) {
+    return null
+  }
+  return {
+    chunkRow: Math.trunc(chunkRow),
+    chunkColumn: Math.trunc(chunkColumn),
+  }
+}
+
+function expandGroundContourBoundsFromChunkKeys(
+  definition: GroundDynamicMesh,
+  chunkKeys: Iterable<string>,
+): GroundContourBounds | null {
+  const chunkCells = Math.max(1, resolveGroundRuntimeChunkCells(definition))
+  let minRow = Number.POSITIVE_INFINITY
+  let maxRow = Number.NEGATIVE_INFINITY
+  let minColumn = Number.POSITIVE_INFINITY
+  let maxColumn = Number.NEGATIVE_INFINITY
+  for (const key of chunkKeys) {
+    const indices = parseGroundChunkKeyFromDirtyKey(key)
+    if (!indices) {
+      continue
+    }
+    const startRow = indices.chunkRow * chunkCells
+    const startColumn = indices.chunkColumn * chunkCells
+    const endRow = startRow + chunkCells
+    const endColumn = startColumn + chunkCells
+    minRow = Math.min(minRow, startRow)
+    maxRow = Math.max(maxRow, endRow)
+    minColumn = Math.min(minColumn, startColumn)
+    maxColumn = Math.max(maxColumn, endColumn)
+  }
+  if (!Number.isFinite(minRow) || !Number.isFinite(maxRow) || !Number.isFinite(minColumn) || !Number.isFinite(maxColumn)) {
+    return null
+  }
+  const gridSize = resolveGroundWorkingGridSize(definition)
+  return {
+    minRow: Math.max(0, Math.floor(minRow)),
+    maxRow: Math.min(gridSize.rows, Math.ceil(maxRow)),
+    minColumn: Math.max(0, Math.floor(minColumn)),
+    maxColumn: Math.min(gridSize.columns, Math.ceil(maxColumn)),
+  }
+}
+
 function expandGroundContourBounds(
   bounds: { startRow: number; endRow: number; startColumn: number; endColumn: number },
   rows: number,
@@ -467,6 +541,7 @@ function createRuntimeState(nodeId: string, definition: GroundDynamicMesh): Grou
     localEditTiles: cloneRuntimeLocalEditTiles(definition.localEditTiles ?? null),
     planningMetadata: clonePlanningMetadata(definition.planningMetadata ?? null),
     optimizedMeshDirtyBounds: null,
+    optimizedMeshDirtyChunkKeys: new Set<string>(),
     runtimeHydratedHeightState: (definition as GroundRuntimeDynamicMesh).runtimeHydratedHeightState,
     runtimeDisableOptimizedChunks: (definition as GroundRuntimeDynamicMesh).runtimeDisableOptimizedChunks,
     runtimeLoadedTileKeys: resolveRuntimeLoadedTileKeys(definition),
@@ -593,7 +668,8 @@ function resolveRuntimeMeshView(
   state: GroundHeightRuntimeState,
   definition: GroundDynamicMesh,
 ): GroundRuntimeDynamicMesh {
-  if (state.cachedRuntimeMeshVersion !== state.runtimeMeshVersion) {
+  const cacheHit = state.cachedRuntimeMeshVersion === state.runtimeMeshVersion
+  if (!cacheHit) {
     state.cachedManualHeightMap = createHeightMapViewFromTiles(state, 'manual')
     state.cachedPlanningHeightMap = createHeightMapViewFromTiles(state, 'planning')
     state.cachedLocalEditTiles = serializeRuntimeLocalEditTiles(state.localEditTiles)
@@ -622,6 +698,7 @@ function resolveRuntimeMeshView(
     runtimePlanningHeightOverrideCount: state.planningHeightOverrideCount,
     surfaceRevision: Number.isFinite(state.surfaceRevision) ? Math.max(0, Math.trunc(state.surfaceRevision as number)) : definition.surfaceRevision,
   }
+  return state.cachedRuntimeMesh as GroundRuntimeDynamicMesh
 
   return state.cachedRuntimeMesh as GroundRuntimeDynamicMesh
 }
@@ -748,12 +825,48 @@ export const useGroundHeightmapStore = defineStore('groundHeightmap', {
         state.optimizedMeshDirtyBounds,
         bounds ? expandGroundContourBounds(bounds, gridSize.rows, gridSize.columns, 1) : null,
       )
+      state.optimizedMeshDirtyChunkKeys.clear()
+      touchRuntimeMeshState(state)
+      return state
+    },
+    markOptimizedMeshDirtyChunkKeys(
+      nodeId: string,
+      definition: GroundDynamicMesh,
+      chunkKeys: Iterable<string> | null | undefined,
+    ): GroundHeightRuntimeState {
+      const state = ensureNodeRuntimeState(nodeId, definition)
+      if (!chunkKeys) {
+        return state
+      }
+      for (const key of chunkKeys) {
+        const normalized = normalizeGroundChunkKey(key)
+        if (!normalized) {
+          continue
+        }
+        state.optimizedMeshDirtyChunkKeys.add(normalized)
+      }
+      state.optimizedMeshDirtyBounds = mergeGroundContourBounds(
+        state.optimizedMeshDirtyBounds,
+        expandGroundContourBoundsFromChunkKeys(definition, state.optimizedMeshDirtyChunkKeys),
+      )
+      touchRuntimeMeshState(state)
       return state
     },
     clearOptimizedMeshDirtyBounds(nodeId: string, definition: GroundDynamicMesh): GroundHeightRuntimeState {
       const state = ensureNodeRuntimeState(nodeId, definition)
       state.optimizedMeshDirtyBounds = null
+      state.optimizedMeshDirtyChunkKeys.clear()
+      touchRuntimeMeshState(state)
       return state
+    },
+    consumeOptimizedMeshDirtyBounds(nodeId: string, definition: GroundDynamicMesh): GroundContourBounds | null {
+      const state = ensureNodeRuntimeState(nodeId, definition)
+      const dirtyBounds = state.optimizedMeshDirtyBounds
+      const chunkBounds = expandGroundContourBoundsFromChunkKeys(definition, state.optimizedMeshDirtyChunkKeys)
+      state.optimizedMeshDirtyBounds = null
+      state.optimizedMeshDirtyChunkKeys.clear()
+      touchRuntimeMeshState(state)
+      return mergeGroundContourBounds(dirtyBounds, chunkBounds)
     },
     ensureNodeGroundHeightmap(nodeId: string, definition: GroundDynamicMesh): GroundHeightRuntimeState {
       return ensureNodeRuntimeState(nodeId, definition)
