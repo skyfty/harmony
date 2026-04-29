@@ -21524,9 +21524,9 @@ async function persistViewportInfiniteGroundChunks(params: {
 
   const groundNode = getGroundNodeFromStore()
   if (groundNode?.dynamicMesh?.type === 'Ground') {
-    sceneStore.updateGroundNodeDynamicMesh(groundNode.id, {
-      chunkManifestRevision: nextRevision,
-    })
+      sceneStore.updateGroundNodeDynamicMesh(groundNode.id, {
+        chunkManifestRevision: nextRevision,
+      })
   }
 
   viewportGroundChunkManifestSceneId = sceneId
@@ -21817,9 +21817,18 @@ function buildViewportInfiniteGroundChunkGeometry(
   const cellSize = record.chunkSizeMeters / resolution
   const positions = new Float32Array(vertexCount * 3)
   const uvs = new Float32Array(vertexCount * 2)
+  const normals = new Float32Array(vertexCount * 3)
   const indices = vertexCount > 65535
     ? new Uint32Array(resolution * resolution * 6)
     : new Uint16Array(resolution * resolution * 6)
+
+  const sampleHeight = (row: number, column: number): number => {
+    const safeRow = Math.max(0, Math.min(resolution, row))
+    const safeColumn = Math.max(0, Math.min(resolution, column))
+    const heightIndex = safeRow * vertexColumns + safeColumn
+    const sampled = heightValues?.[heightIndex]
+    return Number.isFinite(sampled) ? sampled : fallbackHeight
+  }
 
   let vertexIndex = 0
   for (let row = 0; row < vertexRows; row += 1) {
@@ -21831,6 +21840,26 @@ function buildViewportInfiniteGroundChunkGeometry(
       uvs[vertexIndex * 2 + 0] = column / resolution
       uvs[vertexIndex * 2 + 1] = 1 - row / resolution
       vertexIndex += 1
+    }
+  }
+
+  let normalIndex = 0
+  for (let row = 0; row < vertexRows; row += 1) {
+    for (let column = 0; column < vertexColumns; column += 1) {
+      const heightLeft = sampleHeight(row, column - 1)
+      const heightRight = sampleHeight(row, column + 1)
+      const heightUp = sampleHeight(row - 1, column)
+      const heightDown = sampleHeight(row + 1, column)
+
+      const normalX = heightLeft - heightRight
+      const normalY = 2 * cellSize
+      const normalZ = heightUp - heightDown
+      const length = Math.sqrt((normalX * normalX) + (normalY * normalY) + (normalZ * normalZ)) || 1
+
+      normals[normalIndex + 0] = normalX / length
+      normals[normalIndex + 1] = normalY / length
+      normals[normalIndex + 2] = normalZ / length
+      normalIndex += 3
     }
   }
 
@@ -21854,8 +21883,8 @@ function buildViewportInfiniteGroundChunkGeometry(
   const geometry = new THREE.BufferGeometry()
   geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
   geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2))
+  geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3))
   geometry.setIndex(new THREE.BufferAttribute(indices, 1))
-  geometry.computeVertexNormals()
   geometry.computeBoundingBox()
   geometry.computeBoundingSphere()
   return geometry
