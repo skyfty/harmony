@@ -14433,11 +14433,6 @@ function animate() {
   }
 
   if (instancedBoundsHasPending()) {
-    console.log('[SceneViewport] flushInstancedBounds.afterGroundStreaming', {
-      cameraMovedThisFrame,
-      viewportCameraIsMoving,
-      effectiveDelta,
-    })
     flushInstancedBounds()
   }
 

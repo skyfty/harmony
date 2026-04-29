@@ -3061,9 +3061,6 @@ function refreshGroundFlatChunkBatchInstances(
   // - 所有平坦 chunk 共享几何和材质；
   // - 相机移动时只改 instance 矩阵，不需要每个 chunk 都重建 Mesh；
   // - 大多数地形都能走这条快路径，只有被局部雕刻影响的 chunk 才保留独立 Mesh。
-  const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
-  const halfWidth = resolveGroundWorkingSpanMeters(definition) * 0.5
-  const halfDepth = resolveGroundWorkingSpanMeters(definition) * 0.5
   const instanceMatrix = new THREE.Matrix4()
   const instancePosition = new THREE.Vector3()
   const instanceRotation = new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0))
@@ -3080,18 +3077,6 @@ function refreshGroundFlatChunkBatchInstances(
     chunkSizeMeters: number
   }> = []
   const chunkSizeMeters = resolveInfiniteChunkSizeMeters(definition)
-  const expectedFirstCenter = chunkKeys.length > 0 ? resolveRuntimeChunkIndexFromRuntimeKey(chunkKeys[0]!) : null
-  const expectedLastCenter = chunkKeys.length > 0 ? resolveRuntimeChunkIndexFromRuntimeKey(chunkKeys[chunkKeys.length - 1]!) : null
-  const batchSummary = {
-    specKey: batch.specKey,
-    count: chunkKeys.length,
-    firstKey: chunkKeys[0] ?? null,
-    lastKey: chunkKeys[chunkKeys.length - 1] ?? null,
-    geometryRows: batch.spec.rows,
-    geometryColumns: batch.spec.columns,
-    expectedFirstCenter,
-    expectedLastCenter,
-  }
 
   batch.mesh.count = chunkKeys.length
   chunkKeys.forEach((key, index) => {
@@ -3126,42 +3111,11 @@ function refreshGroundFlatChunkBatchInstances(
   })
   batch.mesh.instanceMatrix.needsUpdate = true
   markInstancedBoundsDirty(batch.mesh)
-  batch.mesh.updateMatrixWorld(true)
-  const meshWorldPosition = new THREE.Vector3()
-  const meshWorldScale = new THREE.Vector3()
-  const meshWorldQuaternion = new THREE.Quaternion()
-  batch.mesh.matrixWorld.decompose(meshWorldPosition, meshWorldQuaternion, meshWorldScale)
-
-  const spacingSamples = sampleInstances.length >= 2
-    ? {
-        deltaX: sampleInstances[1]!.x - sampleInstances[0]!.x,
-        deltaZ: sampleInstances[1]!.z - sampleInstances[0]!.z,
-      }
-    : null
   batch.mesh.userData.groundChunkBatch = {
     specKey: batch.specKey,
     chunkKeys: [...chunkKeys],
   }
   batch.chunkKeys = [...chunkKeys]
-  logGroundDebugThrottled('refreshGroundFlatChunkBatchInstances', {
-    ...batchSummary,
-    cellSize,
-    halfWidth,
-    halfDepth,
-    chunkSizeMeters,
-    meshWorldPosition: {
-      x: meshWorldPosition.x,
-      y: meshWorldPosition.y,
-      z: meshWorldPosition.z,
-    },
-    meshWorldScale: {
-      x: meshWorldScale.x,
-      y: meshWorldScale.y,
-      z: meshWorldScale.z,
-    },
-    spacingSamples,
-    samples: sampleInstances,
-  }, 750)
 }
 
 function syncGroundFlatChunkBatches(
@@ -3180,21 +3134,6 @@ function syncGroundFlatChunkBatches(
 
   const material = resolveGroundRuntimeMaterial(root, state)
   const nextBatches = new Map<string, GroundFlatChunkBatchRuntime>()
-  const desiredSummary = Array.from(desiredFlatChunkGroups.entries()).map(([specKey, group]) => ({
-    specKey,
-    count: group.keys.length,
-    firstKey: group.keys[0] ?? null,
-    lastKey: group.keys[group.keys.length - 1] ?? null,
-    rows: group.spec.rows,
-    columns: group.spec.columns,
-  }))
-
-  logGroundDebugThrottled('syncGroundFlatChunkBatches', {
-    root: root.name || root.uuid,
-    desiredBatchCount: desiredFlatChunkGroups.size,
-    existingBatchCount: state.flatChunkBatches.size,
-    desiredSummary,
-  }, 750)
 
   desiredFlatChunkGroups.forEach((group, specKey) => {
     const existing = state.flatChunkBatches.get(specKey)
@@ -3337,48 +3276,6 @@ type GroundChunkBudget = {
   maxCreatePerUpdate?: number
   maxDestroyPerUpdate?: number
   maxMs?: number
-}
-
-function stringifyGroundDebugObject(value: unknown): string {
-  const seen = new WeakSet<object>()
-  return JSON.stringify(value, (_key, currentValue) => {
-    if (typeof currentValue === 'bigint') {
-      return currentValue.toString()
-    }
-    if (typeof currentValue === 'function') {
-      return '[Function]'
-    }
-    if (currentValue instanceof Error) {
-      return {
-        name: currentValue.name,
-        message: currentValue.message,
-        stack: currentValue.stack ?? null,
-      }
-    }
-    if (currentValue && typeof currentValue === 'object') {
-      if (seen.has(currentValue)) {
-        return '[Circular]'
-      }
-      seen.add(currentValue)
-    }
-    return currentValue
-  }, 2)
-}
-
-function logGroundDebug(stage: string, payload: unknown): void {
-  console.log(`[GroundMesh] ${stage} ${stringifyGroundDebugObject(payload)}`)
-}
-
-const groundDebugLogAtByStage = new Map<string, number>()
-
-function logGroundDebugThrottled(stage: string, payload: unknown, minIntervalMs = 500): void {
-  const now = Date.now()
-  const lastAt = groundDebugLogAtByStage.get(stage) ?? 0
-  if (now - lastAt < minIntervalMs) {
-    return
-  }
-  groundDebugLogAtByStage.set(stage, now)
-  logGroundDebug(stage, payload)
 }
 
 export function applyGroundGeneration(
@@ -4580,49 +4477,6 @@ export function updateGroundChunks(
     state.pendingCreates = creates
     // flat 分组不直接创建 Mesh，而是先收集起来，后面统一交给 syncGroundFlatChunkBatches(...) 同步。
     desiredFlatChunkGroups = flatChunkGroups
-
-    logGroundDebugThrottled('updateGroundChunks.rebuildWindow', {
-      root: root.name || root.uuid,
-      camera: camera ? camera.type : null,
-      localX,
-      localZ,
-      visibleWindow: visibleWindow
-        ? {
-            minChunkX: visibleWindow.minChunkX,
-            maxChunkX: visibleWindow.maxChunkX,
-            minChunkZ: visibleWindow.minChunkZ,
-            maxChunkZ: visibleWindow.maxChunkZ,
-            centerChunkX: visibleWindow.centerCoord.chunkX,
-            centerChunkZ: visibleWindow.centerCoord.chunkZ,
-          }
-        : null,
-      loadRadius,
-      unloadRadius,
-      loadRange: {
-        minLoadChunkRow,
-        maxLoadChunkRow,
-        minLoadChunkColumn,
-        maxLoadChunkColumn,
-      },
-      unloadRange: {
-        minUnloadChunkRow,
-        maxUnloadChunkRow,
-        minUnloadChunkColumn,
-        maxUnloadChunkColumn,
-      },
-      pendingCreates: creates.length,
-      flatChunkGroups: flatChunkGroups.size,
-      transitionToFlat: transitionToFlatKeys.size,
-      hiddenChunkKeys: state.hiddenChunkKeys.size,
-      flatChunkGroupSummary: Array.from(flatChunkGroups.entries()).map(([specKey, group]) => ({
-        specKey,
-        count: group.keys.length,
-        firstKey: group.keys[0] ?? null,
-        lastKey: group.keys[group.keys.length - 1] ?? null,
-        rows: group.spec.rows,
-        columns: group.spec.columns,
-      })),
-    }, 750)
 
     transitionToFlatKeys.forEach((key) => {
       // 当 chunk 从独立 Mesh 退回平面实例时，必须先释放旧 Mesh，避免同一块地形同时存在两份渲染对象。
