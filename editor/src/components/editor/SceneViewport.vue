@@ -21425,6 +21425,7 @@ function maybeAutoPersistViewportInfiniteGroundChunks(
     affectedRegion: null,
     chunkKeys: missingChunkKeys,
     chunkCells: 1,
+    persistSceneState: false,
   })
     .then(() => {
       viewportGroundChunkAutoPersistCompletedSignature = signature
@@ -21446,7 +21447,9 @@ async function persistViewportInfiniteGroundChunks(params: {
   affectedRegion: { minRow: number; maxRow: number; minColumn: number; maxColumn: number } | null
   chunkKeys?: readonly string[] | null
   chunkCells: number
+  persistSceneState?: boolean
 }): Promise<void> {
+  const shouldPersistSceneState = params.persistSceneState !== false
   const sceneId = typeof sceneStore.currentSceneId === 'string' ? sceneStore.currentSceneId.trim() : ''
   if (!sceneId) {
     return
@@ -21522,11 +21525,15 @@ async function persistViewportInfiniteGroundChunks(params: {
 
   params.definition.chunkManifestRevision = nextRevision
 
-  const groundNode = getGroundNodeFromStore()
-  if (groundNode?.dynamicMesh?.type === 'Ground') {
-      sceneStore.updateGroundNodeDynamicMesh(groundNode.id, {
-        chunkManifestRevision: nextRevision,
+  if (shouldPersistSceneState) {
+    const groundNode = getGroundNodeFromStore()
+    if (groundNode?.dynamicMesh?.type === 'Ground') {
+      await sceneStore.withHistorySuppressed(async () => {
+        sceneStore.updateGroundNodeDynamicMesh(groundNode.id, {
+          chunkManifestRevision: nextRevision,
+        })
       })
+    }
   }
 
   viewportGroundChunkManifestSceneId = sceneId
@@ -21558,7 +21565,9 @@ async function persistViewportInfiniteGroundChunks(params: {
     lastGroundChunkSetSignatureForPlacement = null
   }
   syncViewportInfiniteGroundChunkMeshes(params.groundObject, params.definition, sceneId, nextRevision, nextManifestRecords)
-  await sceneStore.saveActiveScene({ force: true })
+  if (shouldPersistSceneState) {
+    await sceneStore.saveActiveScene({ force: true })
+  }
 }
 
 function ensureViewportInfiniteGroundChunkRuntime(groundObject: THREE.Object3D): ViewportInfiniteGroundChunkRuntime {
