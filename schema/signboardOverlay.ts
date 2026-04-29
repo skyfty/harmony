@@ -176,10 +176,10 @@ export function formatSignboardDistance(distanceMeters: number): string {
   if (distanceMeters >= 1000) {
     return `${(distanceMeters / 1000).toFixed(distanceMeters >= 10000 ? 0 : 1)} km`
   }
-  if (distanceMeters >= 100) {
-    return `${Math.round(distanceMeters)} m`
+  if (distanceMeters >= 10) {
+    return `${distanceMeters.toFixed(1)} m`
   }
-  return `${distanceMeters.toFixed(distanceMeters >= 10 ? 1 : 0)} m`
+  return `${distanceMeters.toFixed(2)} m`
 }
 
 export function resolveSignboardAnchorWorldPosition(
