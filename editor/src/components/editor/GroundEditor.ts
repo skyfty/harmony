@@ -1901,7 +1901,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function isPointerOverGround(
-		definition: GroundDynamicMesh,
 		groundMesh: THREE.Object3D,
 		worldPoint: THREE.Vector3,
 	): boolean {
@@ -4418,7 +4417,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		}
 		const localPoint = groundPointerHelper.clone()
 		groundObject.worldToLocal(localPoint)
-		clampPointToGround(definition, localPoint)
+		clampPointToGround(localPoint)
 		localPoint.y = sampleGroundHeight(definition, localPoint.x, localPoint.z)
 		return groundObject.localToWorld(localPoint)
 	}
@@ -4621,7 +4620,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		return true
 	}
 
-	function clampPointToGround(definition: GroundDynamicMesh, point: THREE.Vector3): THREE.Vector3 {
+	function clampPointToGround(point: THREE.Vector3): THREE.Vector3 {
 		return point
 	}
 
@@ -4742,7 +4741,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			options.clearVertexSnap?.()
 			return null
 		}
-		if (!isPointerOverGround(definition, groundMesh, scatterPointerHelper)) {
+		if (!isPointerOverGround(groundMesh, scatterPointerHelper)) {
 			options.clearVertexSnap?.()
 			return null
 		}
@@ -4766,7 +4765,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!raycastGroundPoint(event, scatterPointerHelper)) {
 			return null
 		}
-		if (!isPointerOverGround(definition, groundMesh, scatterPointerHelper)) {
+		if (!isPointerOverGround(groundMesh, scatterPointerHelper)) {
 			return null
 		}
 		return projectScatterPointToGround(definition, groundMesh, scatterPointerHelper)
@@ -6683,7 +6682,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!raycastGroundPoint(event, scatterPointerHelper)) {
 			return false
 		}
-		if (!isPointerOverGround(definition, groundMesh, scatterPointerHelper)) {
+		if (!isPointerOverGround(groundMesh, scatterPointerHelper)) {
 			return false
 		}
 		const eraseRadius = resolveScatterEraseRadius()
@@ -6717,7 +6716,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!raycastGroundPoint(event, scatterPointerHelper)) {
 			return false
 		}
-		if (!isPointerOverGround(scatterEraseState.definition, scatterEraseState.groundMesh, scatterPointerHelper)) {
+		if (!isPointerOverGround(scatterEraseState.groundMesh, scatterPointerHelper)) {
 			event.preventDefault()
 			event.stopPropagation()
 			event.stopImmediatePropagation()
@@ -6925,7 +6924,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			}
 			return false
 		}
-		clampPointToGround(definition, groundPointerHelper)
+		clampPointToGround(groundPointerHelper)
 		const cell = getGroundCellFromPoint(definition, groundPointerHelper)
 		const changed = cell.row !== groundSelectionDragState.currentRow || cell.column !== groundSelectionDragState.currentColumn
 		if (changed) {
@@ -7473,7 +7472,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			event.stopImmediatePropagation()
 			return true
 		}
-		clampPointToGround(definition, groundPointerHelper)
+		clampPointToGround(groundPointerHelper)
 		const cell = getGroundCellFromPoint(definition, groundPointerHelper)
 
 		if (!groundSelectionDragState) {

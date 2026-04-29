@@ -76,6 +76,14 @@ export function clearInfiniteGroundChunkMeshes(groundObject: THREE.Object3D): vo
   runtime.revision = -1
 }
 
+export function getLoadedInfiniteGroundChunkKeys(groundObject: THREE.Object3D): string[] {
+  const runtime = infiniteGroundChunkMeshRuntimeMap.get(groundObject)
+  if (!runtime || runtime.meshes.size === 0) {
+    return []
+  }
+  return Array.from(runtime.meshes.keys())
+}
+
 function resolveInfiniteGroundChunkMaterial(groundObject: THREE.Object3D): THREE.Material {
   const cachedMaterialValue = (groundObject.userData as Record<string, unknown> | undefined)?.groundMaterial
   const cachedMaterial = Array.isArray(cachedMaterialValue)
@@ -261,6 +269,7 @@ export function syncInfiniteGroundChunkMeshes(params: SyncInfiniteGroundChunkMes
         mesh.name = `GroundRuntimeChunk:${record.key}`
         mesh.receiveShadow = true
         mesh.castShadow = params.groundDefinition.castShadow === true
+        mesh.frustumCulled = false
         mesh.userData.dynamicMeshType = 'Ground'
         mesh.userData.groundRuntimeChunk = true
         mesh.userData.groundChunkKey = record.key

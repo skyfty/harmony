@@ -92,7 +92,7 @@ import {
 	syncGroundChunkLoadingMode,
 	sampleGroundHeight,
 } from '@schema/groundMesh'
-import { clearInfiniteGroundChunkMeshes, syncInfiniteGroundChunkMeshes } from '@schema/groundChunkManifestRuntime'
+import { clearInfiniteGroundChunkMeshes, getLoadedInfiniteGroundChunkKeys, syncInfiniteGroundChunkMeshes } from '@schema/groundChunkManifestRuntime'
 import { createInfiniteGroundChunkColliderRuntime, type InfiniteGroundChunkColliderDebugEntry } from '@schema/infiniteGroundChunkCollisions'
 import {
 	createSceneCsmShadowRuntime,
@@ -2074,7 +2074,6 @@ function syncPreviewInfiniteGroundChunkManifest(
 	}
 
 	if (previewGroundChunkManifestSceneId === sceneId && previewGroundChunkManifestRevision === manifestRevision) {
-		setInfiniteGroundHiddenChunkKeys(groundObject, Object.keys(previewGroundChunkManifestRecords))
 		syncInfiniteGroundChunkMeshes({
 			groundObject,
 			groundDefinition,
@@ -2085,6 +2084,7 @@ function syncPreviewInfiniteGroundChunkManifest(
 			loadChunkData: (record) => useScenesStore().loadGroundChunkData(sceneId, record.key),
 			resolveActiveRecord: (chunkKey) => previewGroundChunkManifestRecords[chunkKey] ?? null,
 		})
+		setInfiniteGroundHiddenChunkKeys(groundObject, getLoadedInfiniteGroundChunkKeys(groundObject))
 		return
 	}
 
@@ -2121,7 +2121,6 @@ function syncPreviewInfiniteGroundChunkManifest(
 				if (!currentGroundObject) {
 					return
 				}
-				setInfiniteGroundHiddenChunkKeys(currentGroundObject, Object.keys(manifestRecords))
 				syncInfiniteGroundChunkMeshes({
 					groundObject: currentGroundObject,
 					groundDefinition: currentDefinition,
@@ -2132,6 +2131,7 @@ function syncPreviewInfiniteGroundChunkManifest(
 					loadChunkData: (record) => useScenesStore().loadGroundChunkData(sceneId, record.key),
 					resolveActiveRecord: (chunkKey) => previewGroundChunkManifestRecords[chunkKey] ?? null,
 				})
+				setInfiniteGroundHiddenChunkKeys(currentGroundObject, getLoadedInfiniteGroundChunkKeys(currentGroundObject))
 			})
 			.catch((error) => {
 				if (loadToken !== previewGroundChunkManifestLoadToken) {

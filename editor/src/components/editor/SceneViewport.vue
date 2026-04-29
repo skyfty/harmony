@@ -240,7 +240,7 @@ import {
   syncGroundSurfacePreviewForGround,
   type GroundSurfaceLiveChunkPreview,
 } from '@schema/groundSurfacePreview'
-import { resolveVisibleInfiniteGroundChunkManifestRecords } from '@schema/groundChunkManifestRuntime'
+import { getLoadedInfiniteGroundChunkKeys, resolveVisibleInfiniteGroundChunkManifestRecords } from '@schema/groundChunkManifestRuntime'
 // resolveEnabledComponentState removed from here; import not used
 import { createRoadGroup, updateRoadGroup } from '@schema/roadMesh'
 import { createFloorGroup, updateFloorGroup } from '@schema/floorMesh'
@@ -21561,10 +21561,10 @@ async function persistViewportInfiniteGroundChunks(params: {
     })
   }
 
-  if (setInfiniteGroundHiddenChunkKeys(params.groundObject, Object.keys(nextManifestRecords))) {
+  syncViewportInfiniteGroundChunkMeshes(params.groundObject, params.definition, sceneId, nextRevision, nextManifestRecords)
+  if (setInfiniteGroundHiddenChunkKeys(params.groundObject, getLoadedInfiniteGroundChunkKeys(params.groundObject))) {
     lastGroundChunkSetSignatureForPlacement = null
   }
-  syncViewportInfiniteGroundChunkMeshes(params.groundObject, params.definition, sceneId, nextRevision, nextManifestRecords)
   if (shouldPersistSceneState) {
     await sceneStore.saveActiveScene({ force: true })
   }
@@ -21744,6 +21744,7 @@ function upsertViewportInfiniteGroundChunkMeshFromChunkData(params: {
     const previousGeometry = currentMesh.geometry
     currentMesh.geometry = geometry
     currentMesh.castShadow = params.groundDefinition.castShadow === true
+    currentMesh.frustumCulled = false
     currentMesh.userData.groundChunkRecordRevision = params.record.revision
     if (parsedCoord) {
       currentMesh.userData.groundChunk = {
@@ -21761,6 +21762,7 @@ function upsertViewportInfiniteGroundChunkMeshFromChunkData(params: {
     mesh.name = `GroundRuntimeChunk:${params.record.key}`
     mesh.receiveShadow = true
     mesh.castShadow = params.groundDefinition.castShadow === true
+    mesh.frustumCulled = false
     mesh.userData.dynamicMeshType = 'Ground'
     mesh.userData.groundRuntimeChunk = true
     mesh.userData.groundChunkKey = params.record.key
@@ -21835,8 +21837,8 @@ function buildViewportInfiniteGroundChunkGeometry(
     const safeRow = Math.max(0, Math.min(resolution, row))
     const safeColumn = Math.max(0, Math.min(resolution, column))
     const heightIndex = safeRow * vertexColumns + safeColumn
-    const sampled = heightValues?.[heightIndex]
-    return Number.isFinite(sampled) ? sampled : fallbackHeight
+    const sampledHeight = heightValues?.[heightIndex] ?? fallbackHeight
+    return Number.isFinite(sampledHeight) ? sampledHeight : fallbackHeight
   }
 
   let vertexIndex = 0
@@ -22051,11 +22053,11 @@ function syncViewportInfiniteGroundChunkManifest(
   }
 
   if (viewportGroundChunkManifestSceneId === sceneId && viewportGroundChunkManifestRevision === manifestRevision) {
-    const manifestKeys = Object.keys(viewportGroundChunkManifestRecords)
-    if (setInfiniteGroundHiddenChunkKeys(groundObject, manifestKeys)) {
+    syncViewportInfiniteGroundChunkMeshes(groundObject, groundDefinition, sceneId, manifestRevision, viewportGroundChunkManifestRecords)
+    const loadedManifestKeys = getLoadedInfiniteGroundChunkKeys(groundObject)
+    if (setInfiniteGroundHiddenChunkKeys(groundObject, loadedManifestKeys)) {
       lastGroundChunkSetSignatureForPlacement = null
     }
-    syncViewportInfiniteGroundChunkMeshes(groundObject, groundDefinition, sceneId, manifestRevision, viewportGroundChunkManifestRecords)
     if (allowAutoPersist && !viewportCameraIsMoving) {
       maybeAutoPersistViewportInfiniteGroundChunks(groundObject, groundDefinition, sceneId, manifestRevision, viewportGroundChunkManifestRecords)
     }
@@ -22098,8 +22100,8 @@ function syncViewportInfiniteGroundChunkManifest(
         if (currentSceneId !== sceneId || currentRevision !== manifestRevision) {
           return
         }
-        const manifestKeys = Object.keys(manifestRecords)
-        if (setInfiniteGroundHiddenChunkKeys(currentGroundObject, manifestKeys)) {
+        const loadedManifestKeys = getLoadedInfiniteGroundChunkKeys(currentGroundObject)
+        if (setInfiniteGroundHiddenChunkKeys(currentGroundObject, loadedManifestKeys)) {
           lastGroundChunkSetSignatureForPlacement = null
         }
         syncViewportInfiniteGroundChunkMeshes(currentGroundObject, currentDefinition, sceneId, manifestRevision, manifestRecords)
