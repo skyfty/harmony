@@ -1,6 +1,6 @@
 import type { SceneNode, GroundDynamicMesh } from './index'
 import type { RigidbodyPhysicsShape } from './components'
-import { resolveGroundWorkingGridSize, resolveGroundWorkingSpanMeters } from './index'
+import { resolveGroundEditTileResolution, resolveGroundEditTileSizeMeters, resolveGroundWorkingGridSize, resolveGroundWorkingSpanMeters } from './index'
 import { resolveGroundEffectiveHeightAtVertex, sampleGroundEffectiveHeightRegion } from './groundMesh'
 
 export type GroundHeightfieldData = {
@@ -447,9 +447,7 @@ function pushAdaptiveGroundCollisionSegments(
 }
 
 function resolveGroundCollisionTileSpan(mesh: GroundDynamicMesh): number {
-  const tileResolution = typeof mesh.tileResolution === 'number' && Number.isFinite(mesh.tileResolution)
-    ? Math.trunc(mesh.tileResolution)
-    : NaN
+  const tileResolution = Math.trunc(resolveGroundEditTileResolution(mesh))
   if (Number.isFinite(tileResolution) && tileResolution > 0) {
     return Math.max(1, tileResolution)
   }
@@ -509,9 +507,10 @@ function buildNearFieldGroundCollisionData(
   const metrics = resolveGroundHorizontalMetrics(node, mesh)
   const rootSample = buildGroundRegionSampleGrid(node, mesh)
   const tileSpan = resolveGroundCollisionTileSpan(mesh)
-  const activeWindowRadiusMeters = typeof mesh.activeEditWindowRadius === 'number' && Number.isFinite(mesh.activeEditWindowRadius)
-    ? Math.max(1, Math.trunc(mesh.activeEditWindowRadius / Math.max(metrics.baseElementSize, MIN_ELEMENT_SIZE)))
-    : tileSpan * 2
+  const activeWindowRadiusMeters = Math.max(
+    tileSpan * 2,
+    Math.trunc(resolveGroundEditTileSizeMeters(mesh) / Math.max(metrics.baseElementSize, MIN_ELEMENT_SIZE)),
+  )
   const halfWindow = Math.max(tileSpan, Math.min(Math.max(rows, columns), activeWindowRadiusMeters))
   const centerRow = Math.floor((rootSample.startRow + rootSample.endRow) * 0.5)
   const centerColumn = Math.floor((rootSample.startColumn + rootSample.endColumn) * 0.5)
@@ -547,11 +546,12 @@ export function buildAdaptiveGroundCollisionData(
     return null
   }
 
-  if (mesh.collisionMode === 'near-field-only') {
+  const estimatedSampleCount = (rows + 1) * (columns + 1)
+  if (estimatedSampleCount > DEFAULT_MAX_SAMPLE_POINTS * 2) {
     return buildNearFieldGroundCollisionData(node, mesh)
   }
 
-  if (mesh.collisionMode === 'tiled-heightfield') {
+  if (estimatedSampleCount > DEFAULT_MAX_SAMPLE_POINTS) {
     return buildTiledGroundCollisionData(node, mesh)
   }
 

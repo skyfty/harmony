@@ -14432,6 +14432,15 @@ function animate() {
     prof.groundStreaming = performance.now() - t_gc0
   }
 
+  if (instancedBoundsHasPending()) {
+    console.log('[SceneViewport] flushInstancedBounds.afterGroundStreaming', {
+      cameraMovedThisFrame,
+      viewportCameraIsMoving,
+      effectiveDelta,
+    })
+    flushInstancedBounds()
+  }
+
   const t0_scatter = performance.now()
   updateScatterLod()
   updateInstancedCullingAndBinding()
@@ -22101,7 +22110,7 @@ function syncViewportGroundRenderMode(options: { rebuildOptimizedMesh?: boolean 
   syncViewportGroundChunks(groundObject, groundDefinition)
 }
 
-function updateGroundChunkStreaming(allowAutoPersist = true) {
+function updateGroundChunkStreaming(_allowAutoPersist = true) {
   if (!camera) {
     return
   }
@@ -22120,7 +22129,7 @@ function updateGroundChunkStreaming(allowAutoPersist = true) {
   if (!groundDefinition) {
     return
   }
-  syncViewportGroundChunks(groundObject, groundDefinition, false)
+  syncViewportGroundChunks(groundObject, groundDefinition, _allowAutoPersist)
 
   // Ground chunk meshes are streamed in/out without emitting scene patches.
   // Refresh placement raycast targets when the chunk set changes; otherwise asset placement
