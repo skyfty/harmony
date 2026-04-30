@@ -3684,7 +3684,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!session) {
 			return
 		}
-		collectInfiniteGroundChunkKeysFromWorldBounds(session.definition, bounds).forEach((chunkKey) => {
+		const chunkKeys = collectInfiniteGroundChunkKeysFromWorldBounds(session.definition, bounds)
+		chunkKeys.forEach((chunkKey) => {
 			session.touchedChunkKeys.add(chunkKey)
 		})
 	}
