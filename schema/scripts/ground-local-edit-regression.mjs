@@ -70,7 +70,7 @@ function testLocalEditTileSampling() {
     terrainMode: 'infinite',
     localEditTiles: { [tile.key]: tile },
   })
-  const insideHeight = sampleGroundHeight(definition, 5, 5)
+  const insideHeight = sampleGroundHeight(definition, 0, 0)
   const outsideHeight = sampleGroundHeight(definition, -19, -19)
   assert.equal(insideHeight, 5, 'sampling inside a local edit tile should return the tile height')
   assert.ok(Math.abs(outsideHeight) < 0.1, 'sampling outside a local edit tile should not use the direct local tile height')
@@ -95,7 +95,7 @@ function testLocalEditTileEdgeSamplingUsesOnlyRequiredCorners() {
     terrainMode: 'infinite',
     localEditTiles: { [tile.key]: tile },
   })
-  const sampledHeight = sampleGroundHeight(definition, 0, 2.5)
+  const sampledHeight = sampleGroundHeight(definition, -5, -2.5)
   assert.equal(sampledHeight, 4, 'sampling on an exact local-edit edge should interpolate only along that edge instead of falling back to the base height')
 }
 
@@ -143,7 +143,7 @@ function testInfiniteSculptWritesWorldSpaceLocalEditTilesOutsideBounds() {
     operation: 'raise',
   })
   assert.equal(changed, true, 'infinite sculpting should modify terrain outside the old bounded extents')
-  const expectedTileKey = formatGroundLocalEditTileKey(-9, -9)
+  const expectedTileKey = formatGroundLocalEditTileKey(-8, -8)
   assert.ok(definition.localEditTiles?.[expectedTileKey], 'infinite sculpting should create a world-space local edit tile with negative coordinates when needed')
   const sampledHeight = sampleGroundHeight(definition, -85, -85)
   assert.ok(sampledHeight > 0, 'infinite sculpting outside the old bounded extents should affect sampled height at the sculpt point')

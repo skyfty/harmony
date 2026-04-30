@@ -729,6 +729,18 @@ function syncPlanningHeightState(
   )
 }
 
+/**
+ * 同步地面覆盖区域的运行时状态
+ * 该函数将规划DEM高度区域的变更同步到地面网格的运行时表示，
+ * 包括更新表面版本号、标记高度数据为脏状态、禁用优化的分块处理
+ * 
+ * @param sceneStore - 场景存储对象，包含当前场景的元数据
+ * @param groundNode - 地面场景节点，包含动态网格定义
+ * @param definition - 地面运行时动态网格定义，包含高度图和元数据
+ * @param region - 规划DEM高度区域，定义了受影响的行列范围
+ * @param dirtyChunkKeys - 需要标记为脏的分块键集合，用于优化更新
+ * @returns 更新后的地面运行时动态网格对象
+ */
 function syncGroundCoverageRegionState(
   sceneStore: ConvertPlanningToSceneOptions['sceneStore'],
   groundNode: SceneNode,
@@ -736,45 +748,56 @@ function syncGroundCoverageRegionState(
   region: PlanningDemHeightRegion,
   dirtyChunkKeys: Iterable<string> | null,
 ): GroundRuntimeDynamicMesh {
+  // 获取并验证当前场景ID，确保场景已被持久化
   const sceneId = typeof sceneStore.currentSceneId === 'string' ? sceneStore.currentSceneId.trim() : ''
   if (!sceneId) {
     throw new Error('Planning height runtime state cannot be synchronized before the scene is persisted')
   }
+  
+  // 获取地面节点的运行时动态网格定义
   const groundRuntimeDefinition = groundNode.dynamicMesh as GroundRuntimeDynamicMesh
+  
+  // 计算下一个表面版本号
+  // 如果现有版本号是有效数字，则在其基础上加1；否则设置为1
   const nextRevision = Number.isFinite(groundRuntimeDefinition.surfaceRevision)
     ? Math.max(0, Math.trunc(groundRuntimeDefinition.surfaceRevision as number)) + 1
     : 1
+  
+  // 更新运行时动态网格的版本和状态标志
   groundRuntimeDefinition.surfaceRevision = nextRevision
-  groundRuntimeDefinition.runtimeHydratedHeightState = 'dirty'
-  groundRuntimeDefinition.runtimeDisableOptimizedChunks = true
+  groundRuntimeDefinition.runtimeHydratedHeightState = 'dirty' // 标记高度数据需要重新水合
+  groundRuntimeDefinition.runtimeDisableOptimizedChunks = true // 禁用优化的分块处理，强制完整更新
+  
+  // 同步更新定义对象的相同字段
   definition.surfaceRevision = nextRevision
   definition.runtimeHydratedHeightState = 'dirty'
   definition.runtimeDisableOptimizedChunks = true
-  console.log(
-    `[PlanningToScene] syncGroundCoverageRegionState ${JSON.stringify({
-      sceneId,
-      nodeId: groundNode.id,
-      nextRevision,
-      region: {
-        startRow: region.startRow,
-        endRow: region.endRow,
-        startColumn: region.startColumn,
-        endColumn: region.endColumn,
-        vertexRows: region.vertexRows,
-        vertexColumns: region.vertexColumns,
-      },
-      runtimeFlags: {
-        runtimeHydratedHeightState: definition.runtimeHydratedHeightState,
-        runtimeDisableOptimizedChunks: definition.runtimeDisableOptimizedChunks,
-      },
-    }, null, 2)}`,
-  )
+  
+  // 获取地面高度图存储实例
   const groundHeightmapStore = useGroundHeightmapStore()
+  
+  // 更新高度图存储中的规划元数据
   groundHeightmapStore.updatePlanningMetadata(groundNode.id, definition, definition.planningMetadata ?? null)
+  
+  // 标记需要更新的优化分块键
   groundHeightmapStore.markOptimizedMeshDirtyChunkKeys(groundNode.id, definition, dirtyChunkKeys)
+  
+  // 从存储中解析并返回更新后的地面运行时网格
   return groundHeightmapStore.resolveGroundRuntimeMesh(groundNode.id, definition)
 }
 
+/**
+ * 将规划DEM高度区域应用到地面
+ * 该函数负责同步规划数据中的高度信息到地面网格的运行时表示
+ * 
+ * @param sceneStore - 场景存储对象，用于更新地面网格信息
+ * @param groundNode - 地面场景节点
+ * @param definition - 地面运行时动态网格定义
+ * @param region - 规划DEM高度区域（包含行列范围、顶点数等）
+ * @param planningMetadata - 规划元数据
+ * @param localEditTiles - 本地编辑图块，默认为null
+ * @returns 更新后的地面运行时动态网格
+ */
 function applyPlanningDemRegionToGround(
   sceneStore: ConvertPlanningToSceneOptions['sceneStore'],
   groundNode: SceneNode,
@@ -783,9 +806,11 @@ function applyPlanningDemRegionToGround(
   planningMetadata: GroundRuntimeDynamicMesh['planningMetadata'],
   localEditTiles: GroundRuntimeDynamicMesh['localEditTiles'] = null,
 ): GroundRuntimeDynamicMesh {
+  // 创建下一个地面种子对象，包含更新的规划元数据和本地编辑图块
   const nextGroundSeed = {
     ...definition,
     planningMetadata,
+    // 合并现有的本地编辑图块与新的本地编辑图块
     localEditTiles: localEditTiles
       ? {
           ...(definition.localEditTiles ?? {}),
@@ -793,35 +818,25 @@ function applyPlanningDemRegionToGround(
         }
       : definition.localEditTiles ?? null,
   } satisfies GroundRuntimeDynamicMesh
+  
+  // 确定需要标记为脏的区块键
+  // 如果有本地编辑图块，则使用其键；否则根据区域计算脏区块键
   const dirtyChunkKeys = localEditTiles
     ? Object.keys(localEditTiles)
     : resolvePlanningDirtyChunkKeysFromRegion(definition, region)
+  
+  // 如果存在本地编辑图块，将其替换到高度图存储中
   if (localEditTiles) {
     useGroundHeightmapStore().replaceLocalEditTiles(groundNode.id, nextGroundSeed, nextGroundSeed.localEditTiles ?? null)
   }
+  
+  // 同步地面覆盖区域状态，返回最新的地面运行时网格
   const nextGround = syncGroundCoverageRegionState(sceneStore, groundNode, nextGroundSeed, region, dirtyChunkKeys)
-  console.log(
-    `[PlanningToScene] applyPlanningDemRegionToGround ${JSON.stringify({
-      sceneId: sceneStore.currentSceneId ?? null,
-      nodeId: groundNode.id,
-      region: {
-        startRow: region.startRow,
-        endRow: region.endRow,
-        startColumn: region.startColumn,
-        endColumn: region.endColumn,
-        vertexRows: region.vertexRows,
-        vertexColumns: region.vertexColumns,
-      },
-      localEditTileCount: localEditTiles ? Object.keys(localEditTiles).length : 0,
-      planningMetadata: planningMetadata ?? null,
-      runtimeFlags: {
-        surfaceRevision: nextGround.surfaceRevision ?? null,
-        runtimeHydratedHeightState: nextGround.runtimeHydratedHeightState ?? null,
-        runtimeDisableOptimizedChunks: nextGround.runtimeDisableOptimizedChunks ?? null,
-      },
-    }, null, 2)}`,
-  )
+
+  // 更新场景存储中的地面节点动态网格
   sceneStore.updateGroundNodeDynamicMesh(groundNode.id, nextGround)
+  
+  // 返回更新后的地面运行时动态网格
   return nextGround
 }
 
@@ -1781,16 +1796,37 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
       await yieldController.maybeYield(true)
     }
 
+    // 获取规划数据中的数字高程模型(DEM)数据,如果不存在则为null
     const terrainDem = planningData.terrain?.dem ?? null
+    // 标记DEM数据是否已成功应用到地形中
     let demApplied = false
+    // 检查是否存在有效的DEM数据源(通过sourceFileHash判断)
     if (terrainDem?.sourceFileHash) {
+      // 根据轮廓多边形和地形定义,计算DEM导入的边界范围
       const demImportBounds = resolvePlanningContourPolygonBounds({
         definition: groundDefinition as GroundRuntimeDynamicMesh,
         contourPolygons,
         defaultBlendMeters: PLANNING_TERRAIN_CONTOUR_BLEND_METERS,
       })
+      // 更新进度条显示"正在导入DEM…",进度为18%
       emitProgress(options, 'Importing DEM…', 18)
       await yieldController.maybeYield(true)
+      // 构建并处理DEM数据,将其转换为地面区域数据
+      // 包括指定的行列范围(从demImportBounds或默认网格范围)
+      // 调用buildPlanningDemGroundRegionData处理DEM数据，生成地面区域数据
+      // 参数说明：
+      //   - definition: GroundRuntimeDynamicMesh - 地面运行时动态网格定义，包含网格尺寸和配置信息
+      //                  示例: {gridSizeX: 100, gridSizeY: 100, heightData: [...]}
+      //   - terrainDem: DEM数据源对象，包含高程图像和元数据
+      //                  示例: {sourceFileHash: "abc123", data: ArrayBuffer}
+      //   - startRow: 数字 - DEM导入起始行索引，若demImportBounds存在则使用其minRow，否则为0
+      //              示例: 10 (表示从第10行开始)
+      //   - endRow: 数字 - DEM导入结束行索引，默认为网格总行数
+      //            示例: 950 (表示到第950行结束)，若未指定则为 Math.max(1, gridRows)
+      //   - startColumn: 数字 - DEM导入起始列索引，若demImportBounds存在则使用其minColumn，否则为0
+      //                  示例: 5 (表示从第5列开始)
+      //   - endColumn: 数字 - DEM导入结束列索引，默认为网格总列数
+      //              示例: 1000 (表示到第1000列结束)，若未指定则为 Math.max(1, gridColumns)
       const demResult = await buildPlanningDemGroundRegionData({
         definition: groundDefinition as GroundRuntimeDynamicMesh,
         terrainDem,
@@ -1799,6 +1835,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
         startColumn: demImportBounds?.minColumn ?? 0,
         endColumn: demImportBounds?.maxColumn ?? Math.max(1, resolveGroundWorkingGridSize(groundDefinition).columns),
       })
+      // 将处理后的DEM区域数据应用到地面定义中,更新高度信息和编辑瓦片
       groundDefinition = applyPlanningDemRegionToGround(
         sceneStore,
         groundNode,
@@ -1807,7 +1844,9 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
         demResult.planningMetadata,
         demResult.localEditTiles,
       )
+      // 标记DEM已应用,后续可用作基础高度图
       demApplied = true
+      // 将DEM生成的纹理数据保存到场景存储中
       sceneStore.setGroundTexture({
         dataUrl: demResult.textureDataUrl,
         name: demResult.textureName,

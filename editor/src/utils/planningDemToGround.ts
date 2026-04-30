@@ -4,6 +4,7 @@ import {
   createGroundHeightMap,
   formatGroundLocalEditTileKey,
   getGroundVertexIndex,
+  resolveInfiniteGroundGridOriginMeters,
   resolveGroundEditCellSize,
   resolveGroundEditTileResolution,
   resolveGroundWorkingGridSize,
@@ -87,6 +88,13 @@ export interface PlanningDemPreparedSource {
   planningMetadata: GroundPlanningMetadata
 }
 
+interface PlanningDemCoveredGridRegion {
+  startRow: number
+  endRow: number
+  startColumn: number
+  endColumn: number
+}
+
 function resolvePlanningDemSourceSpan(options: {
   demWidth: number
   demHeight: number
@@ -104,7 +112,8 @@ function resolvePlanningDemSourceSpan(options: {
 
 function resolvePlanningDemLocalEditTileOrigin(definition: GroundRuntimeDynamicMesh): { originX: number; originZ: number } {
   if (definition.terrainMode === 'infinite') {
-    return { originX: 0, originZ: 0 }
+    const origin = resolveInfiniteGroundGridOriginMeters(resolvePlanningDemChunkSizeMeters())
+    return { originX: origin, originZ: origin }
   }
   const halfSpan = resolveGroundWorkingSpanMeters(definition) * 0.5
   return {
@@ -158,6 +167,52 @@ function resolvePlanningDemChunkTileRange(options: {
   const startTile = Math.floor((options.minWorld - options.originWorld) / safeChunkSize)
   const endTile = Math.max(startTile, Math.floor((options.maxWorld - options.originWorld + epsilon) / safeChunkSize))
   return { startTile, endTile }
+}
+
+function resolvePlanningDemCoveredGridRegion(options: {
+  definition: GroundRuntimeDynamicMesh
+  source: PlanningDemRasterSource
+  startRow: number
+  endRow: number
+  startColumn: number
+  endColumn: number
+}): PlanningDemCoveredGridRegion {
+  const gridSize = resolveGroundWorkingGridSize(options.definition)
+  const rows = Math.max(1, Math.trunc(gridSize.rows))
+  const columns = Math.max(1, Math.trunc(gridSize.columns))
+  const requestedStartRow = Math.max(0, Math.min(rows, Math.trunc(options.startRow)))
+  const requestedEndRow = Math.max(requestedStartRow, Math.min(rows, Math.trunc(options.endRow)))
+  const requestedStartColumn = Math.max(0, Math.min(columns, Math.trunc(options.startColumn)))
+  const requestedEndColumn = Math.max(requestedStartColumn, Math.min(columns, Math.trunc(options.endColumn)))
+  const terrainBounds = resolvePlanningDemTargetWorldBounds(options.definition)
+  const overlapMinX = Math.max(terrainBounds.minX, options.source.targetWorldBounds.minX)
+  const overlapMaxX = Math.min(terrainBounds.maxX, options.source.targetWorldBounds.maxX)
+  const overlapMinZ = Math.max(terrainBounds.minZ, options.source.targetWorldBounds.minZ)
+  const overlapMaxZ = Math.min(terrainBounds.maxZ, options.source.targetWorldBounds.maxZ)
+  const cellSize = Number.isFinite(options.definition.cellSize) && options.definition.cellSize > 0 ? options.definition.cellSize : 1
+  const epsilon = Math.max(1e-9, cellSize * 1e-9)
+  const overlapStartColumn = Math.max(0, Math.min(columns, Math.ceil((overlapMinX - terrainBounds.minX - epsilon) / cellSize)))
+  const overlapEndColumn = Math.max(overlapStartColumn, Math.min(columns, Math.floor((overlapMaxX - terrainBounds.minX + epsilon) / cellSize)))
+  const overlapStartRow = Math.max(0, Math.min(rows, Math.ceil((overlapMinZ - terrainBounds.minZ - epsilon) / cellSize)))
+  const overlapEndRow = Math.max(overlapStartRow, Math.min(rows, Math.floor((overlapMaxZ - terrainBounds.minZ + epsilon) / cellSize)))
+  const startRow = Math.max(overlapStartRow, requestedStartRow)
+  const endRow = Math.min(overlapEndRow, requestedEndRow)
+  const startColumn = Math.max(overlapStartColumn, requestedStartColumn)
+  const endColumn = Math.min(overlapEndColumn, requestedEndColumn)
+  if (startRow > endRow || startColumn > endColumn) {
+    return {
+      startRow: rows + 1,
+      endRow: rows,
+      startColumn: columns + 1,
+      endColumn: columns,
+    }
+  }
+  return {
+    startRow,
+    endRow,
+    startColumn,
+    endColumn,
+  }
 }
 
 function buildPlanningDemRegionFromPreparedSource(options: {
@@ -501,8 +556,8 @@ export function resolvePlanningDemTargetWorldBounds(
     worldBounds: { minX: number; minY: number; maxX: number; maxY: number } | null
   },
 ): PlanningDemTargetWorldBounds {
-  const span = resolveGroundWorkingSpanMeters(definition)
   if (!source) {
+    const span = resolveGroundWorkingSpanMeters(definition)
     return {
       minX: -span * 0.5,
       minZ: -span * 0.5,
@@ -511,16 +566,11 @@ export function resolvePlanningDemTargetWorldBounds(
     }
   }
   const sourceSpan = resolvePlanningDemSourceSpan(source)
-  const fitScale = span > 0
-    ? span / Math.max(sourceSpan.widthMeters, sourceSpan.depthMeters, Number.EPSILON)
-    : 1
-  const targetWidth = sourceSpan.widthMeters * fitScale
-  const targetDepth = sourceSpan.depthMeters * fitScale
   return {
-    minX: -targetWidth * 0.5,
-    minZ: -targetDepth * 0.5,
-    maxX: targetWidth * 0.5,
-    maxZ: targetDepth * 0.5,
+    minX: -sourceSpan.widthMeters * 0.5,
+    minZ: -sourceSpan.depthMeters * 0.5,
+    maxX: sourceSpan.widthMeters * 0.5,
+    maxZ: sourceSpan.depthMeters * 0.5,
   }
 }
 
@@ -584,15 +634,16 @@ export function buildPlanningDemHeightRegion(options: {
   endColumn: number
 }): PlanningDemHeightRegion {
   const { definition, source } = options
-  const gridSize = resolveGroundWorkingGridSize(definition)
-  const rows = Math.max(1, Math.trunc(gridSize.rows))
-  const columns = Math.max(1, Math.trunc(gridSize.columns))
-  const startRow = Math.max(0, Math.min(rows, Math.trunc(options.startRow)))
-  const endRow = Math.max(startRow, Math.min(rows, Math.trunc(options.endRow)))
-  const startColumn = Math.max(0, Math.min(columns, Math.trunc(options.startColumn)))
-  const endColumn = Math.max(startColumn, Math.min(columns, Math.trunc(options.endColumn)))
-  const vertexRows = endRow - startRow + 1
-  const vertexColumns = endColumn - startColumn + 1
+  const { startRow, endRow, startColumn, endColumn } = resolvePlanningDemCoveredGridRegion({
+    definition,
+    source,
+    startRow: options.startRow,
+    endRow: options.endRow,
+    startColumn: options.startColumn,
+    endColumn: options.endColumn,
+  })
+  const vertexRows = Math.max(0, endRow - startRow + 1)
+  const vertexColumns = Math.max(0, endColumn - startColumn + 1)
   const values = new Float64Array(vertexRows * vertexColumns)
   const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
   const halfSpan = resolveGroundWorkingSpanMeters(definition) * 0.5

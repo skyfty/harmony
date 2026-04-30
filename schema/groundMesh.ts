@@ -13,6 +13,7 @@ import {
   GROUND_TERRAIN_CHUNK_SIZE_METERS,
   getGroundVertexIndex,
   GROUND_HEIGHT_UNSET_VALUE,
+  resolveInfiniteGroundGridOriginMeters,
   resolveGroundChunkCoordFromWorldPosition,
   resolveGroundEditCellSize,
   resolveGroundEditTileResolution,
@@ -946,22 +947,30 @@ function getGroundLocalEditTiles(definition: GroundDynamicMesh): GroundLocalEdit
 
 function resolveGroundLocalEditTileGridOriginFromRuntime(
   definition: GroundRuntimeDynamicMesh,
-): { originX: number; originZ: number } {
+  tileSizeMeters = resolveGroundEditTileSizeMeters(definition),
+): { cacheKey: string; originX: number; originZ: number } {
+  const safeTileSize = Number.isFinite(tileSizeMeters) && tileSizeMeters > 0
+    ? tileSizeMeters
+    : resolveGroundEditTileSizeMeters(definition)
+  const cacheKey = `infinite:${safeTileSize}`
   const cached = definition.runtimeLocalEditTileGridOriginCache
-  if (cached?.cacheKey === 'infinite') {
+  if (cached?.cacheKey === cacheKey) {
     return cached
   }
   const next = {
-    cacheKey: 'infinite',
-    originX: 0,
-    originZ: 0,
+    cacheKey,
+    originX: resolveInfiniteGroundGridOriginMeters(safeTileSize),
+    originZ: resolveInfiniteGroundGridOriginMeters(safeTileSize),
   }
   definition.runtimeLocalEditTileGridOriginCache = next
   return next
 }
 
-function resolveGroundLocalEditTileGridOrigin(definition: GroundDynamicMesh): { originX: number; originZ: number } {
-  return resolveGroundLocalEditTileGridOriginFromRuntime(ensureGroundRuntimeDefinition(definition))
+function resolveGroundLocalEditTileGridOrigin(
+  definition: GroundDynamicMesh,
+  tileSizeMeters = resolveGroundEditTileSizeMeters(definition),
+): { originX: number; originZ: number } {
+  return resolveGroundLocalEditTileGridOriginFromRuntime(ensureGroundRuntimeDefinition(definition), tileSizeMeters)
 }
 
 function resolveGroundLocalEditTileCoordAtWorldFromRuntime(
@@ -973,7 +982,7 @@ function resolveGroundLocalEditTileCoordAtWorldFromRuntime(
   if (!Number.isFinite(tileSizeMeters) || tileSizeMeters <= 0) {
     return null
   }
-  const { originX, originZ } = resolveGroundLocalEditTileGridOriginFromRuntime(definition)
+  const { originX, originZ } = resolveGroundLocalEditTileGridOriginFromRuntime(definition, tileSizeMeters)
   const tileColumn = Math.floor((x - originX) / tileSizeMeters)
   const tileRow = Math.floor((z - originZ) / tileSizeMeters)
   if (!Number.isFinite(tileRow) || !Number.isFinite(tileColumn)) {
@@ -1000,7 +1009,7 @@ function resolveGroundLocalEditTileWorldMin(
   tileColumn: number,
   tileSizeMeters: number,
 ): { minX: number; minZ: number } {
-  const { originX, originZ } = resolveGroundLocalEditTileGridOrigin(definition)
+  const { originX, originZ } = resolveGroundLocalEditTileGridOrigin(definition, tileSizeMeters)
   return {
     minX: originX + tileColumn * tileSizeMeters,
     minZ: originZ + tileRow * tileSizeMeters,
@@ -1043,7 +1052,7 @@ function sampleGroundLocalEditHeightAtWorld(
   if (!Number.isFinite(tileSizeMeters) || tileSizeMeters <= 0 || resolution <= 0) {
     return null
   }
-  const { originX, originZ } = resolveGroundLocalEditTileGridOriginFromRuntime(runtimeDefinition)
+  const { originX, originZ } = resolveGroundLocalEditTileGridOriginFromRuntime(runtimeDefinition, tileSizeMeters)
   const minX = originX + tile.tileColumn * tileSizeMeters
   const minZ = originZ + tile.tileRow * tileSizeMeters
   const maxX = minX + tileSizeMeters

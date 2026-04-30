@@ -26,13 +26,23 @@ const toGroundSource = fs.readFileSync(toGroundFilePath, 'utf8')
 
 assert.match(
   toGroundSource,
-  /function resolvePlanningDemLocalEditTileOrigin\(definition: GroundRuntimeDynamicMesh\): \{ originX: number; originZ: number \} \{[\s\S]*definition\.terrainMode === 'infinite'[\s\S]*originX: 0, originZ: 0/,
-  'planningDemToGround should align infinite DEM local-edit tiles to the runtime local-edit origin',
+  /function resolvePlanningDemLocalEditTileOrigin\(definition: GroundRuntimeDynamicMesh\): \{ originX: number; originZ: number \} \{[\s\S]*definition\.terrainMode === 'infinite'[\s\S]*resolveInfiniteGroundGridOriginMeters\(resolvePlanningDemChunkSizeMeters\(\)\)/,
+  'planningDemToGround should align infinite DEM local-edit tiles to the centered runtime local-edit origin',
 )
 assert.match(
   toGroundSource,
   /const segments = Math\.max\(1, \(axis === 'x' \? parsedWidth : parsedHeight\) - 1\)/,
   'planningDemToGround should derive source sample step from raster segments to avoid off-by-one shrinkage',
+)
+assert.match(
+  toGroundSource,
+  /return \{\s*minX: -sourceSpan\.widthMeters \* 0\.5,[\s\S]*maxZ: sourceSpan\.depthMeters \* 0\.5,\s*\}/,
+  'planningDemToGround should keep DEM target world bounds in source meters centered at the world origin instead of fitting to the ground span',
+)
+assert.match(
+  toGroundSource,
+  /function resolvePlanningDemCoveredGridRegion\([\s\S]*overlapMinX = Math\.max\(terrainBounds\.minX, options\.source\.targetWorldBounds\.minX\)[\s\S]*Math\.ceil\(\(overlapMinX - terrainBounds\.minX - epsilon\) \/ cellSize\)[\s\S]*Math\.floor\(\(overlapMaxX - terrainBounds\.minX \+ epsilon\) \/ cellSize\)/,
+  'planningDemToGround should clip DEM writes to the actual DEM-covered overlap region instead of stretching across the full ground span',
 )
 
 console.log('planning-dem-metric-space regression checks passed')

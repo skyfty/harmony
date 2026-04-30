@@ -1848,10 +1848,20 @@ export function resolveGroundChunkCoordFromWorldPosition(
   const safeChunkSize = Number.isFinite(chunkSizeMeters) && chunkSizeMeters > 0
     ? chunkSizeMeters
     : GROUND_TERRAIN_CHUNK_SIZE_METERS
+  const origin = resolveInfiniteGroundGridOriginMeters(safeChunkSize)
   return {
-    chunkX: Math.floor(worldX / safeChunkSize),
-    chunkZ: Math.floor(worldZ / safeChunkSize),
+    chunkX: Math.floor((worldX - origin) / safeChunkSize),
+    chunkZ: Math.floor((worldZ - origin) / safeChunkSize),
   }
+}
+
+export function resolveInfiniteGroundGridOriginMeters(
+  gridSizeMeters = GROUND_TERRAIN_CHUNK_SIZE_METERS,
+): number {
+  const safeGridSize = Number.isFinite(gridSizeMeters) && gridSizeMeters > 0
+    ? gridSizeMeters
+    : GROUND_TERRAIN_CHUNK_SIZE_METERS
+  return -safeGridSize * 0.5
 }
 
 export function resolveGroundChunkOrigin(
@@ -1861,9 +1871,10 @@ export function resolveGroundChunkOrigin(
   const safeChunkSize = Number.isFinite(chunkSizeMeters) && chunkSizeMeters > 0
     ? chunkSizeMeters
     : GROUND_TERRAIN_CHUNK_SIZE_METERS
+  const origin = resolveInfiniteGroundGridOriginMeters(safeChunkSize)
   return {
-    x: Math.trunc(coord.chunkX) * safeChunkSize,
-    z: Math.trunc(coord.chunkZ) * safeChunkSize,
+    x: origin + Math.trunc(coord.chunkX) * safeChunkSize,
+    z: origin + Math.trunc(coord.chunkZ) * safeChunkSize,
   }
 }
 
