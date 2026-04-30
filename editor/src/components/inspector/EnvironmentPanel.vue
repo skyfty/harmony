@@ -26,6 +26,7 @@ const environmentSettings = computed(() => storeEnvironmentSettings.value)
 const backgroundModeOptions: Array<{ title: string; value: EnvironmentBackgroundMode }> = [
   { title: 'Solid Color', value: 'solidColor' },
   { title: 'HDRI', value: 'hdri' },
+  { title: 'Fast HDRI', value: 'fastHdri' },
   { title: 'SkyCube', value: 'skycube' },
 ]
 
@@ -95,7 +96,7 @@ const orientationPreset = computed<EnvironmentOrientationPreset>(() => environme
 const rotationDegrees = computed<EnvironmentRotationDegrees>(() => environmentSettings.value.environmentRotationDegrees ?? { x: 0, y: 0, z: 0 })
 const showOrientationControls = computed(() => {
   const bgMode = environmentSettings.value.background.mode
-  return bgMode === 'hdri' || bgMode === 'skycube'
+  return bgMode === 'hdri' || bgMode === 'fastHdri' || bgMode === 'skycube'
 })
 
 const fogModeOptions: Array<{ title: string; value: EnvironmentFogMode }> = [
@@ -197,7 +198,7 @@ const backgroundAsset = computed(() => {
 const backgroundAssetLabel = computed(() => {
   const asset = backgroundAsset.value
   if (!asset) {
-    return 'Drag HDRI asset here'
+    return 'Drag HDRI / Fast HDRI asset here'
   }
   return asset.name?.trim().length ? asset.name : asset.id
 })
@@ -214,7 +215,7 @@ const backgroundPreviewStyle = computed(() => resolveAssetPreviewStyle(backgroun
 
 const assetDialogTitle = computed(() => {
   if (assetDialogTarget.value === 'background') {
-    return 'Select Background HDRI'
+    return 'Select Background HDRI / Fast HDRI'
   }
   if (assetDialogTarget.value === 'skycubeZip') {
     return 'Select SkyCube'
@@ -467,7 +468,7 @@ function handleGradientExponentInput(value: unknown) {
 }
 
 function clearBackgroundAsset() {
-  if (environmentSettings.value.background.mode !== 'hdri') {
+  if (environmentSettings.value.background.mode !== 'hdri' && environmentSettings.value.background.mode !== 'fastHdri') {
     return
   }
   sceneStore.patchEnvironmentSettings({
@@ -1527,7 +1528,7 @@ function handleBackgroundDrop(event: DragEvent) {
             class="asset-tile"
             :class="{
               'is-active-drop': isBackgroundDropActive,
-              'is-inactive': environmentSettings.background.mode !== 'hdri',
+              'is-inactive': environmentSettings.background.mode !== 'hdri' && environmentSettings.background.mode !== 'fastHdri',
             }"
             @dragenter="handleBackgroundDragEnter"
             @dragover="handleBackgroundDragOver"
@@ -1540,7 +1541,7 @@ function handleBackgroundDrop(event: DragEvent) {
               :style="backgroundPreviewStyle"
               role="button"
               tabindex="0"
-              :title="backgroundAsset ? 'Change HDRI asset' : 'Select HDRI asset'"
+              :title="backgroundAsset ? 'Change HDRI / Fast HDRI asset' : 'Select HDRI / Fast HDRI asset'"
               @click="openAssetDialog('background', $event)"
               @keydown.enter.prevent="openAssetDialog('background')"
               @keydown.space.prevent="openAssetDialog('background')"
@@ -1564,7 +1565,7 @@ function handleBackgroundDrop(event: DragEvent) {
                 icon="mdi-close"
                 size="x-small"
                 variant="text"
-                :disabled="environmentSettings.background.mode !== 'hdri' || !backgroundAsset"
+                :disabled="(environmentSettings.background.mode !== 'hdri' && environmentSettings.background.mode !== 'fastHdri') || !backgroundAsset"
                 title="Clear background HDRI"
                 @click.stop="clearBackgroundAsset"
               />

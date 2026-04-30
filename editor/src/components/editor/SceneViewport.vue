@@ -12505,7 +12505,7 @@ const environmentSignature = computed(() => {
       : 'zip'
 
   const hdriBackgroundKey =
-    background.mode === 'hdri' && background.hdriAssetId
+    (background.mode === 'hdri' || background.mode === 'fastHdri') && background.hdriAssetId
       ? computeEnvironmentAssetReloadKey(background.hdriAssetId)
       : null
 
@@ -13836,9 +13836,11 @@ function applyEnvironmentReflectionFromBackground(background: EnvironmentSetting
   if (!scene) {
     return false
   }
-  void background
-  // Background modes do not contribute a separate reflection environment here.
-  scene.environment = null
+  if ((background.mode === 'hdri' || background.mode === 'fastHdri') && backgroundTexture) {
+    scene.environment = backgroundTexture
+  } else {
+    scene.environment = null
+  }
   scene.environmentIntensity = 1
   return true
 }
@@ -14045,7 +14047,7 @@ async function applyBackgroundSettings(background: EnvironmentSettings['backgrou
     return true
   }
 
-  if (!background.hdriAssetId) {
+  if ((background.mode !== 'hdri' && background.mode !== 'fastHdri') || !background.hdriAssetId) {
     disposeGradientBackgroundResources()
     disposeBackgroundResources()
     scene.background = new THREE.Color(background.solidColor)

@@ -318,7 +318,7 @@ function sanitizeEnvironmentAssetReferences<T>(value: T): T {
     }
     const section: Record<string, unknown> = { ...raw }
     const mode = typeof section.mode === 'string' ? section.mode.toLowerCase() : ''
-    if (mode !== 'hdri') {
+    if (mode !== 'hdri' && mode !== 'fasthdri') {
       delete section.hdriAssetId
     }
     if (mode !== 'skycube') {

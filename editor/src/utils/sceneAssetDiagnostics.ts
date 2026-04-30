@@ -735,11 +735,11 @@ function buildEnvironmentIssues(scene: AssetLookupScene): SceneAssetDiagnosticIs
   const issues: SceneAssetDiagnosticIssue[] = []
   const environment = cloneEnvironmentSettings(scene.environment as EnvironmentSettings | null | undefined)
   const background = environment.background
-  if (background.mode === 'hdri' && !background.hdriAssetId) {
+  if ((background.mode === 'hdri' || background.mode === 'fastHdri') && !background.hdriAssetId) {
     issues.push({
       severity: 'error',
       code: 'environment-misconfiguration',
-      message: '环境背景已设置为 HDRI，但未配置 hdriAssetId。',
+      message: '环境背景已设置为 HDRI / FastHDRI，但未配置 hdriAssetId。',
       path: 'environment.background.hdriAssetId',
       category: 'environment',
       references: [],
