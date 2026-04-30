@@ -2920,9 +2920,8 @@ function buildGroundChunkGeometry(definition: GroundRuntimeDynamicMesh, spec: Gr
     return createGroundOptimizedChunkGeometry(optimizedChunk)
   }
 
-  const gridSize = resolveGroundWorkingGridSize(definition)
-  const columns = gridSize.columns
-  const rows = gridSize.rows
+  const columns = Math.max(1, Math.trunc(spec.columns))
+  const rows = Math.max(1, Math.trunc(spec.rows))
   const layout = resolveGroundChunkGeometryLayout(definition, spec)
   const chunkColumns = layout.segmentColumns
   const chunkRows = layout.segmentRows
@@ -2934,11 +2933,11 @@ function buildGroundChunkGeometry(definition: GroundRuntimeDynamicMesh, spec: Gr
   const uvs = new Float32Array(vertexCount * 2)
   const indices = new Uint32Array(chunkColumns * chunkRows * 6)
 
-  const spanMeters = resolveGroundWorkingSpanMeters(definition)
-  const halfWidth = spanMeters * 0.5
-  const halfDepth = spanMeters * 0.5
-  const startX = -halfWidth + spec.startColumn * definition.cellSize
-  const startZ = -halfDepth + spec.startRow * definition.cellSize
+  const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1
+  const chunkSizeMeters = resolveInfiniteChunkSizeMeters(definition)
+  const chunkOrigin = resolveInfiniteGroundGridOriginMeters(chunkSizeMeters)
+  const startX = chunkOrigin + spec.startColumn * cellSize
+  const startZ = chunkOrigin + spec.startRow * cellSize
   const heightRegion = sampleGroundEffectiveHeightRegionWithoutLocalEdit(
     definition,
     spec.startRow,
@@ -2955,8 +2954,8 @@ function buildGroundChunkGeometry(definition: GroundRuntimeDynamicMesh, spec: Gr
     for (let localColumn = 0; localColumn <= chunkColumns; localColumn += 1) {
       const x = startX + localColumn * layout.stepX
       const height = heightValues[localRow * heightStride + localColumn] ?? sampleGroundHeight(definition, x, z)
-      const columnRatio = columns === 0 ? 0 : clampInclusive((x + halfWidth) / Math.max(spanMeters, Number.EPSILON), 0, 1)
-      const rowRatio = rows === 0 ? 0 : clampInclusive((z + halfDepth) / Math.max(spanMeters, Number.EPSILON), 0, 1)
+      const columnRatio = columns === 0 ? 0 : clampInclusive((x - chunkOrigin) / Math.max(chunkSizeMeters, Number.EPSILON), 0, 1)
+      const rowRatio = rows === 0 ? 0 : clampInclusive((z - chunkOrigin) / Math.max(chunkSizeMeters, Number.EPSILON), 0, 1)
 
       positions[vertexIndex * 3 + 0] = x
       positions[vertexIndex * 3 + 1] = height
@@ -3125,6 +3124,7 @@ function refreshGroundFlatChunkBatchInstances(
     chunkSizeMeters: number
   }> = []
   const chunkSizeMeters = resolveInfiniteChunkSizeMeters(definition)
+  const chunkOrigin = resolveInfiniteGroundGridOriginMeters(chunkSizeMeters)
 
   batch.mesh.count = chunkKeys.length
   if (chunkKeys.length > batch.instanceCapacity) {
@@ -3139,8 +3139,8 @@ function refreshGroundFlatChunkBatchInstances(
       return
     }
     const chunkSpec = computeChunkSpec(definition, indices.row, indices.column)
-    const centerX = indices.column * chunkSizeMeters + (chunkSizeMeters * 0.5)
-    const centerZ = indices.row * chunkSizeMeters + (chunkSizeMeters * 0.5)
+    const centerX = chunkOrigin + (indices.column * chunkSizeMeters) + (chunkSizeMeters * 0.5)
+    const centerZ = chunkOrigin + (indices.row * chunkSizeMeters) + (chunkSizeMeters * 0.5)
     const centerY = sampleGroundHeight(definition, centerX, centerZ)
     instancePosition.set(centerX, centerY, centerZ)
     if (sampleInstances.length < 4) {
@@ -4967,7 +4967,7 @@ export function getVisibleInfiniteGroundChunkKeys(target: THREE.Object3D): strin
   state.flatChunkBatches.forEach((batch) => {
     batch.chunkKeys.forEach((key) => visibleKeys.add(key))
   })
-  return Array.from(visibleKeys)
+  return Array.from(visibleKeys).filter((key) => !state.hiddenChunkKeys.has(key))
 }
 
 export function setInfiniteGroundHiddenChunkKeys(
@@ -5016,6 +5016,30 @@ export function setInfiniteGroundHiddenChunkKeys(
     }
     releaseChunkToPool(state, runtime)
     state.chunks.delete(key)
+  })
+  state.flatChunkBatches.forEach((batch, specKey) => {
+    const nextKeys = batch.chunkKeys.filter((key) => !nextHiddenChunkKeys.has(key))
+    if (nextKeys.length === batch.chunkKeys.length) {
+      return
+    }
+    batch.chunkKeys = nextKeys
+    batch.mesh.count = nextKeys.length
+    batch.mesh.instanceMatrix.needsUpdate = true
+    batch.mesh.visible = nextKeys.length > 0
+    if (!nextKeys.length) {
+      batch.mesh.removeFromParent()
+      try {
+        ;(batch.mesh.geometry as any)?.dispose?.()
+      } catch (_error) {
+        /* noop */
+      }
+      state.flatChunkBatches.delete(specKey)
+    } else {
+      batch.mesh.userData.groundChunkBatch = {
+        specKey,
+        chunkKeys: [...nextKeys],
+      }
+    }
   })
   return true
 }

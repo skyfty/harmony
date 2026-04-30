@@ -21378,9 +21378,11 @@ async function persistViewportInfiniteGroundChunks(params: {
       }
     }
   }
-  for (const key of collectViewportGroundChunkKeysFromRegion(params.definition, params.affectedRegion, params.chunkCells)) {
-    if (key) {
-      chunkKeySet.add(key)
+  if (!chunkKeySet.size) {
+    for (const key of collectViewportGroundChunkKeysFromRegion(params.definition, params.affectedRegion, params.chunkCells)) {
+      if (key) {
+        chunkKeySet.add(key)
+      }
     }
   }
   const chunkKeys = Array.from(chunkKeySet)
@@ -21689,55 +21691,6 @@ function createViewportInfiniteGroundChunkDataFromHeights(record: GroundChunkMan
       source: record.source ?? null,
     },
     heights: nextHeights,
-  }
-}
-
-function summarizeViewportGroundChunkHeights(record: Pick<GroundChunkManifestRecord, 'resolution'>, heights: Float32Array | number[] | null | undefined): {
-  nonZeroCount: number
-  minValue: number
-  minIndex: number
-  minRow: number
-  minColumn: number
-  maxValue: number
-  maxIndex: number
-  maxRow: number
-  maxColumn: number
-} {
-  const source = heights instanceof Float32Array || Array.isArray(heights) ? heights : []
-  let nonZeroCount = 0
-  let minValue = Number.POSITIVE_INFINITY
-  let minIndex = -1
-  let maxValue = Number.NEGATIVE_INFINITY
-  let maxIndex = -1
-  for (let index = 0; index < source.length; index += 1) {
-    const value = Number(source[index])
-    if (!Number.isFinite(value)) {
-      continue
-    }
-    if (Math.abs(value) > 1e-6) {
-      nonZeroCount += 1
-    }
-    if (value < minValue) {
-      minValue = value
-      minIndex = index
-    }
-    if (value > maxValue) {
-      maxValue = value
-      maxIndex = index
-    }
-  }
-  const resolution = Math.max(1, Math.trunc(record.resolution))
-  const vertexColumns = resolution + 1
-  return {
-    nonZeroCount,
-    minValue: Number.isFinite(minValue) ? minValue : 0,
-    minIndex,
-    minRow: minIndex >= 0 ? Math.floor(minIndex / vertexColumns) : -1,
-    minColumn: minIndex >= 0 ? minIndex % vertexColumns : -1,
-    maxValue: Number.isFinite(maxValue) ? maxValue : 0,
-    maxIndex,
-    maxRow: maxIndex >= 0 ? Math.floor(maxIndex / vertexColumns) : -1,
-    maxColumn: maxIndex >= 0 ? maxIndex % vertexColumns : -1,
   }
 }
 

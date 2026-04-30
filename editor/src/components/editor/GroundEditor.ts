@@ -3677,14 +3677,43 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		return keys
 	}
 
+	function collectInfiniteGroundChunkKeysFromLocalBounds(
+		groundObject: THREE.Object3D,
+		definition: GroundRuntimeDynamicMesh,
+		bounds: { minX: number; maxX: number; minZ: number; maxZ: number },
+	): string[] {
+		const corners = [
+			new THREE.Vector3(bounds.minX, 0, bounds.minZ),
+			new THREE.Vector3(bounds.minX, 0, bounds.maxZ),
+			new THREE.Vector3(bounds.maxX, 0, bounds.minZ),
+			new THREE.Vector3(bounds.maxX, 0, bounds.maxZ),
+		]
+		let minX = Number.POSITIVE_INFINITY
+		let maxX = Number.NEGATIVE_INFINITY
+		let minZ = Number.POSITIVE_INFINITY
+		let maxZ = Number.NEGATIVE_INFINITY
+		for (const corner of corners) {
+			groundObject.localToWorld(corner)
+			minX = Math.min(minX, corner.x)
+			maxX = Math.max(maxX, corner.x)
+			minZ = Math.min(minZ, corner.z)
+			maxZ = Math.max(maxZ, corner.z)
+		}
+		if (!Number.isFinite(minX) || !Number.isFinite(maxX) || !Number.isFinite(minZ) || !Number.isFinite(maxZ)) {
+			return []
+		}
+		return collectInfiniteGroundChunkKeysFromWorldBounds(definition, { minX, maxX, minZ, maxZ })
+	}
+
 	function markSculptSessionTouchedChunkKeys(
+		groundObject: THREE.Object3D,
 		session: { nodeId: string; touchedChunkKeys: Set<string>; definition: GroundRuntimeDynamicMesh } | null | undefined,
 		bounds: { minX: number; maxX: number; minZ: number; maxZ: number },
 	): void {
 		if (!session) {
 			return
 		}
-		const chunkKeys = collectInfiniteGroundChunkKeysFromWorldBounds(session.definition, bounds)
+		const chunkKeys = collectInfiniteGroundChunkKeysFromLocalBounds(groundObject, session.definition, bounds)
 		chunkKeys.forEach((chunkKey) => {
 			session.touchedChunkKeys.add(chunkKey)
 		})
@@ -4523,7 +4552,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (sculptSessionState && sculptSessionState.nodeId === session.nodeId) {
 			sculptSessionState.dirty = true
 			sculptSessionState.affectedRegion = mergeRegions(sculptSessionState.affectedRegion, region)
-			markSculptSessionTouchedChunkKeys(sculptSessionState, { minX, maxX, minZ, maxZ })
+			markSculptSessionTouchedChunkKeys(session.groundObject, sculptSessionState, { minX, maxX, minZ, maxZ })
 		}
 		const touchedChunkKeys = sculptSessionState?.nodeId === session.nodeId ? sculptSessionState.touchedChunkKeys : null
 		ensureGroundChunkMeshesForKeys(session.groundObject, session.definition, touchedChunkKeys)
@@ -7124,7 +7153,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 					maxColumn: Math.min(gridSize.columns, maxColumn),
 				}
 				mergedRegion = mergeRegions(mergedRegion, region)
-				markSculptSessionTouchedChunkKeys(sculptSessionState, {
+				markSculptSessionTouchedChunkKeys(groundObject, sculptSessionState, {
 					minX: point.x - radius,
 					maxX: point.x + radius,
 					minZ: point.z - radius,
