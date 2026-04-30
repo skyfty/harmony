@@ -61,6 +61,8 @@ export interface PlanningDemRasterSource {
   width: number
   height: number
   targetWorldBounds: PlanningDemTargetWorldBounds
+  sampleStepX: number
+  sampleStepZ: number
 }
 
 export interface PlanningDemHeightRegion {
@@ -292,14 +294,7 @@ export function buildPlanningDemLocalEditTilesForRegion(options: {
   return tileKeys.length ? result : null
 }
 
-function clamp01(value: number): number {
-  if (!Number.isFinite(value)) {
-    return 0
-  }
-  return Math.max(0, Math.min(1, value))
-}
-
-function sampleArrayLikeBilinear(values: ArrayLike<number>, width: number, height: number, x: number, y: number): number {
+function sampleArrayLikeBilinearFinite(values: ArrayLike<number>, width: number, height: number, x: number, y: number): number {
   const clampedX = Math.max(0, Math.min(Math.max(0, width - 1), x))
   const clampedY = Math.max(0, Math.min(Math.max(0, height - 1), y))
   const x0 = Math.floor(clampedX)
@@ -309,14 +304,28 @@ function sampleArrayLikeBilinear(values: ArrayLike<number>, width: number, heigh
   const tx = clampedX - x0
   const ty = clampedY - y0
 
-  const v00 = Number(values[y0 * width + x0])
-  const v10 = Number(values[y0 * width + x1])
-  const v01 = Number(values[y1 * width + x0])
-  const v11 = Number(values[y1 * width + x1])
+  const corners = [
+    { index: y0 * width + x0, weight: (1 - tx) * (1 - ty) },
+    { index: y0 * width + x1, weight: tx * (1 - ty) },
+    { index: y1 * width + x0, weight: (1 - tx) * ty },
+    { index: y1 * width + x1, weight: tx * ty },
+  ]
 
-  const a = v00 + (v10 - v00) * tx
-  const b = v01 + (v11 - v01) * tx
-  return a + (b - a) * ty
+  let weightedSum = 0
+  let totalWeight = 0
+  for (const corner of corners) {
+    const value = Number(values[corner.index])
+    if (!Number.isFinite(value)) {
+      continue
+    }
+    weightedSum += value * corner.weight
+    totalWeight += corner.weight
+  }
+  if (totalWeight > 0) {
+    return weightedSum / totalWeight
+  }
+
+  return 0
 }
 
 function blobToDataUrl(blob: Blob): Promise<string> {
@@ -521,12 +530,29 @@ export function createPlanningDemRasterSource(options: {
   height: number
   targetWorldBounds: PlanningDemTargetWorldBounds
 }): PlanningDemRasterSource {
+  const worldWidth = Math.max(Number.EPSILON, options.targetWorldBounds.maxX - options.targetWorldBounds.minX)
+  const worldDepth = Math.max(Number.EPSILON, options.targetWorldBounds.maxZ - options.targetWorldBounds.minZ)
+  const widthSegments = Math.max(1, options.width - 1)
+  const heightSegments = Math.max(1, options.height - 1)
   return {
     rasterData: options.rasterData,
     width: options.width,
     height: options.height,
     targetWorldBounds: options.targetWorldBounds,
+    sampleStepX: worldWidth / widthSegments,
+    sampleStepZ: worldDepth / heightSegments,
   }
+}
+
+function resolvePlanningDemSampleCoordinate(world: number, minWorld: number, sampleStep: number, maxIndex: number): number {
+  if (!(maxIndex > 0)) {
+    return 0
+  }
+  const safeStep = Math.max(Number.EPSILON, sampleStep)
+  const rawIndex = (world - minWorld) / safeStep
+  const clampedIndex = Math.max(0, Math.min(maxIndex, rawIndex))
+  const roundedIndex = Math.round(clampedIndex)
+  return Math.abs(clampedIndex - roundedIndex) <= 1e-7 ? roundedIndex : clampedIndex
 }
 
 export function samplePlanningDemHeightAtWorld(
@@ -534,13 +560,19 @@ export function samplePlanningDemHeightAtWorld(
   x: number,
   z: number,
 ): number {
-  const worldWidth = Math.max(Number.EPSILON, source.targetWorldBounds.maxX - source.targetWorldBounds.minX)
-  const worldDepth = Math.max(Number.EPSILON, source.targetWorldBounds.maxZ - source.targetWorldBounds.minZ)
-  const tx = clamp01((x - source.targetWorldBounds.minX) / worldWidth)
-  const tz = clamp01((z - source.targetWorldBounds.minZ) / worldDepth)
-  const demX = tx * Math.max(0, source.width - 1)
-  const demY = tz * Math.max(0, source.height - 1)
-  return sampleArrayLikeBilinear(source.rasterData, source.width, source.height, demX, demY)
+  const demX = resolvePlanningDemSampleCoordinate(
+    x,
+    source.targetWorldBounds.minX,
+    source.sampleStepX,
+    Math.max(0, source.width - 1),
+  )
+  const demY = resolvePlanningDemSampleCoordinate(
+    z,
+    source.targetWorldBounds.minZ,
+    source.sampleStepZ,
+    Math.max(0, source.height - 1),
+  )
+  return sampleArrayLikeBilinearFinite(source.rasterData, source.width, source.height, demX, demY)
 }
 
 export function buildPlanningDemHeightRegion(options: {
@@ -713,12 +745,14 @@ export function resolvePlanningDemSourceTileLayout(options: {
   const localEditTileSizeMeters = resolvePlanningDemChunkSizeMeters()
   const worldWidth = Math.max(localEditTileSizeMeters, targetWorldBounds.maxX - targetWorldBounds.minX)
   const worldHeight = Math.max(localEditTileSizeMeters, targetWorldBounds.maxZ - targetWorldBounds.minZ)
+  const sourceStepX = worldWidth / Math.max(1, demWidth - 1)
+  const sourceStepY = worldHeight / Math.max(1, demHeight - 1)
   const tileColumns = Math.max(1, Math.ceil(worldWidth / Math.max(localEditTileSizeMeters, Number.EPSILON)))
   const tileRows = Math.max(1, Math.ceil(worldHeight / Math.max(localEditTileSizeMeters, Number.EPSILON)))
   const tileWorldWidth = localEditTileSizeMeters
   const tileWorldHeight = localEditTileSizeMeters
-  const sourceSamplesPerTileX = Math.max(1, Math.ceil(demWidth / tileColumns))
-  const sourceSamplesPerTileY = Math.max(1, Math.ceil(demHeight / tileRows))
+  const sourceSamplesPerTileX = Math.max(1, Math.ceil(tileWorldWidth / Math.max(sourceStepX, Number.EPSILON)) + 1)
+  const sourceSamplesPerTileY = Math.max(1, Math.ceil(tileWorldHeight / Math.max(sourceStepY, Number.EPSILON)) + 1)
   const targetSamplesPerTileX = Math.max(1, Math.ceil(tileWorldWidth / Math.max(localEditCellSize, Number.EPSILON)) + 1)
   const targetSamplesPerTileY = Math.max(1, Math.ceil(tileWorldHeight / Math.max(localEditCellSize, Number.EPSILON)) + 1)
   return {
