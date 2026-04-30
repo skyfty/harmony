@@ -1,4 +1,4 @@
-export type EnvironmentBackgroundMode = 'solidColor' | 'hdri' | 'skycube'
+export type EnvironmentBackgroundMode = 'solidColor' | 'hdri' | 'fastHdri' | 'skycube'
 export type EnvironmentFogMode = 'none' | 'linear' | 'exp'
 export type EnvironmentNorthDirection = '+X' | '-X' | '+Z' | '-Z'
 

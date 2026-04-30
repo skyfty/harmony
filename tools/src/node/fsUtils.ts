@@ -20,9 +20,15 @@ export function writeJsonPretty(filePath: string, value: unknown): void {
   fs.writeFileSync(filePath, JSON.stringify(value, null, 2) + "\n");
 }
 
+type DirentLike = {
+  name: string;
+  isDirectory(): boolean;
+  isFile(): boolean;
+};
+
 export type ShouldCopy = (
   relPosixPathFromRoot: string,
-  entry: fs.Dirent,
+  entry: DirentLike,
   srcAbsPath: string,
 ) => boolean;
 

@@ -291,6 +291,8 @@ export function cloneEnvironmentSettings(
   let backgroundMode: EnvironmentSettings['background']['mode'] = 'solidColor'
   if (backgroundSource?.mode === 'hdri') {
     backgroundMode = 'hdri'
+  } else if (backgroundSource?.mode === 'fastHdri') {
+    backgroundMode = 'fastHdri'
   } else if (backgroundSource?.mode === 'skycube') {
     backgroundMode = 'skycube'
   } else if (backgroundSource?.mode === 'solidColor') {

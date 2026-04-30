@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "prepare:shared": "node ./scripts/prepare-shared.mjs",
-    "prepare:tools": "pnpm --dir ../tools run build",
+    "prepare:tools": "pnpm exec tsc -p ../tools/tsconfig.build.json",
     "sync:scenery": "node ../tools/dist/cli-bin.js sync-scenery --mode subpackage-uni-modules",
     "predev:mp-weixin": "pnpm run prepare:shared && pnpm run prepare:tools && pnpm run sync:scenery",
     "dev:mp-weixin": "pnpm exec cross-env DEBUG=none uni -p mp-weixin --mode mp-weixin.development",

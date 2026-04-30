@@ -9807,7 +9807,7 @@ async function applyBackgroundSettings(
 		scene.background = skyCubeTexture
 		return true
 	}
-	if (background.mode !== 'hdri' || !background.hdriAssetId) {
+	if ((background.mode !== 'hdri' && background.mode !== 'fastHdri') || !background.hdriAssetId) {
 		disposeGradientBackgroundDome(gradientBackgroundDome)
 		gradientBackgroundDome = null
 		disposeBackgroundResources()
@@ -9842,8 +9842,11 @@ function applyEnvironmentReflectionFromBackground(background: EnvironmentSetting
 	if (!scene) {
 		return false
 	}
-	void background
-	scene.environment = null
+	if ((background.mode === 'hdri' || background.mode === 'fastHdri') && backgroundTexture) {
+		scene.environment = backgroundTexture
+	} else {
+		scene.environment = null
+	}
 	scene.environmentIntensity = 1
 	return true
 }
@@ -9913,7 +9916,7 @@ const environmentAssetSignature = computed(() => {
 			gradientExponent: background.mode === 'solidColor' ? (background.gradientExponent ?? null) : null,
 			skycubeFormat,
 			hdriKey:
-				background.mode === 'hdri' && background.hdriAssetId
+				(background.mode === 'hdri' || background.mode === 'fastHdri') && background.hdriAssetId
 					? computeEnvironmentAssetReloadKey(background.hdriAssetId)
 					: null,
 			skycubeKeys:

@@ -1,24 +1,31 @@
-import { cmdGeneratePagesJson } from "./commands/generatePagesJson.js";
-import { cmdFixEsmExtensions } from "./commands/fixEsmExtensions.js";
-import { cmdProcessSvgIcons } from "./commands/processSvgIcons.js";
-import { cmdSyncScenery } from "./commands/syncScenery.js";
-
 export async function main(argv: string[]): Promise<void> {
   const [command, ...rest] = argv;
 
   switch (command) {
     case "sync-scenery":
-      await cmdSyncScenery(rest);
-      return;
+      {
+        const { cmdSyncScenery } = await import("./commands/syncScenery.js");
+        await cmdSyncScenery(rest);
+        return;
+      }
     case "generate-pages-json":
-      await cmdGeneratePagesJson(rest);
-      return;
+      {
+        const { cmdGeneratePagesJson } = await import("./commands/generatePagesJson.js");
+        await cmdGeneratePagesJson(rest);
+        return;
+      }
     case "fix-esm-extensions":
-      await cmdFixEsmExtensions(rest);
-      return;
+      {
+        const { cmdFixEsmExtensions } = await import("./commands/fixEsmExtensions.js");
+        await cmdFixEsmExtensions(rest);
+        return;
+      }
     case "process-svg-icons":
-      await cmdProcessSvgIcons(rest);
-      return;
+      {
+        const { cmdProcessSvgIcons } = await import("./commands/processSvgIcons.js");
+        await cmdProcessSvgIcons(rest);
+        return;
+      }
     case "--help":
     case "-h":
     case undefined:
