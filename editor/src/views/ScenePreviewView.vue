@@ -4,6 +4,7 @@ import * as THREE from 'three'
 import * as CANNON from 'cannon-es'
 import { FirstPersonControls } from 'three/examples/jsm/controls/FirstPersonControls.js'
 import { MapControls } from 'three/examples/jsm/controls/MapControls.js'
+import type { KTX2Loader } from 'three/examples/jsm/loaders/KTX2Loader.js'
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js'
 import Stats from 'three/examples/jsm/libs/stats.module.js'
 import {
@@ -1334,6 +1335,10 @@ const behaviorProximityThresholdCache = new Map<string, BehaviorProximityThresho
 
 
 const rgbeLoader = new RGBELoader().setDataType(THREE.FloatType)
+const FAST_HDR_KTX2_TRANSCODER_PATH = 'https://cdn.jsdelivr.net/npm/three@0.172.0/examples/jsm/libs/basis/'
+type KTX2LoaderClass = new (manager?: THREE.LoadingManager) => KTX2Loader
+let ktx2LoaderClassPromise: Promise<KTX2LoaderClass> | null = null
+let ktx2LoaderInstance: KTX2Loader | null = null
 const textureLoader = new THREE.TextureLoader()
 const materialTextureCache = new Map<string, THREE.Texture>()
 const pendingMaterialTextureRequests = new Map<string, Promise<THREE.Texture | null>>()
@@ -1474,6 +1479,27 @@ function resolveEnvironmentCsmSettings(settings: EnvironmentSettings): Environme
 		shadowMapSize: csm?.shadowMapSize ?? DEFAULT_SCENE_CSM_CONFIG.shadowMapSize,
 		shadowBias: csm?.shadowBias ?? DEFAULT_SCENE_CSM_CONFIG.shadowBias,
 	}
+}
+
+async function createKtx2Loader(): Promise<KTX2Loader | null> {
+	if (!renderer) {
+		return null
+	}
+	if (!ktx2LoaderClassPromise) {
+		ktx2LoaderClassPromise = import('three/examples/jsm/loaders/KTX2Loader.js').then(
+			(module) => module.KTX2Loader as KTX2LoaderClass,
+		)
+	}
+	const LoaderClass = await ktx2LoaderClassPromise
+	if (!ktx2LoaderInstance) {
+		ktx2LoaderInstance = new LoaderClass().setTranscoderPath(FAST_HDR_KTX2_TRANSCODER_PATH).detectSupport(renderer)
+	}
+	return ktx2LoaderInstance
+}
+
+function disposeKtx2Loader() {
+	ktx2LoaderInstance?.dispose?.()
+	ktx2LoaderInstance = null
 }
 
 function resolvePreviewSceneCsmConfig(): SceneCsmConfig {
@@ -8999,8 +9025,19 @@ async function loadEnvironmentTextureFromAsset(
 	if (!resolved) {
 		return null
 	}
+	const extension = inferEnvironmentAssetExtension(assetId, resolved)
+	const mimeType = resolved.mimeType?.toLowerCase() ?? ''
 	const dispose = resolved.dispose
 	try {
+		if (extension === 'ktx2' || mimeType.includes('ktx2') || mimeType.includes('basis')) {
+			const ktx2Loader = await createKtx2Loader()
+			if (!ktx2Loader) {
+				return null
+			}
+			const texture = await ktx2Loader.loadAsync(resolved.url)
+			texture.mapping = THREE.CubeUVReflectionMapping
+			return { texture, dispose }
+		}
 		const texture = await rgbeLoader.loadAsync(resolved.url)
 		texture.mapping = THREE.EquirectangularReflectionMapping
 		texture.needsUpdate = true
@@ -9428,7 +9465,18 @@ watch(
 
 function disposeEnvironmentResources() {
 	disposeBackgroundResources()
+	disposeKtx2Loader()
 	backgroundLoadToken += 1
+}
+
+function inferEnvironmentAssetExtension(assetId: string, resolved: ResolvedAssetUrl | null): string {
+	const target = (resolved?.url ?? assetId) ?? ''
+	const sanitized = target.split('#')[0]?.split('?')[0] ?? ''
+	const index = sanitized.lastIndexOf('.')
+	if (index === -1) {
+		return ''
+	}
+	return sanitized.slice(index + 1).toLowerCase()
 }
 
 function resolveTextureExtension(entry: AssetCacheEntry | null, ref: SceneMaterialTextureRef): string {

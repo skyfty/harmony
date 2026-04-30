@@ -106,6 +106,7 @@ const IMAGE_LIKE_EXTENSIONS = new Set<string>([
   'tga',
   'hdr',
   'exr',
+  'ktx2'
 ])
 
 const KNOWN_ASSET_EXTENSIONS_DESC = Object.keys(ASSET_TYPE_BY_EXTENSION)
@@ -132,6 +133,7 @@ const MIME_BY_EXTENSION: Record<string, string> = {
   // textures / hdri
   hdr: 'image/vnd.radiance',
   exr: 'image/exr',
+  ktx2:'image/ktx2',
 
   // videos
   mp4: 'video/mp4',
@@ -386,6 +388,13 @@ export function isHdriLikeExtension(extension: string | null | undefined): boole
     || normalized === 'exr'
 }
 
+export function isKtx2LikeExtension(extension: string | null | undefined): boolean {
+  const normalized = normalizeExtension(extension)
+  if (!normalized) {
+    return false
+  }
+  return normalized === 'ktx2'
+}
 export function isSkyCubeArchiveExtension(extension: string | null | undefined): boolean {
   const normalized = normalizeExtension(extension)
   if (!normalized) {
