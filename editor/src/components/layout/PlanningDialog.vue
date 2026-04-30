@@ -44,6 +44,8 @@ import {
 import { resolveGroundWorkingSpanMeters } from '@schema'
 import {
   demImportResultToTerrainData,
+  isPlanningDemHeightmapImageSource,
+  isSupportedPlanningDemSource,
   parsePlanningDemFile,
   parsePlanningDemBlob,
 } from '@/utils/planningDemImport'
@@ -1805,6 +1807,87 @@ const selectedImage = computed<PlanningImage | null>(() => {
 
 const selectedDem = computed<PlanningTerrainDemData | null>(() => {
   return activeDemId.value ? (planningTerrain.value.dem ?? null) : null
+})
+
+const currentDemUsesHeightmapImage = computed<boolean>(() => {
+  const dem = planningTerrain.value.dem
+  if (!dem) {
+    return false
+  }
+  return isPlanningDemHeightmapImageSource(dem.filename ?? '', dem.mimeType ?? null)
+})
+
+const selectedDemUsesHeightmapImage = computed<boolean>(() => {
+  const dem = selectedDem.value
+  if (!dem) {
+    return false
+  }
+  return isPlanningDemHeightmapImageSource(dem.filename ?? '', dem.mimeType ?? null)
+})
+
+async function refreshPlanningDemPreview(): Promise<void> {
+  const terrainDem = planningTerrain.value.dem
+  if (!terrainDem?.sourceFileHash) {
+    planningDemPreviewUrl.value = null
+    return
+  }
+  const blob = await loadPlanningDemBlobByHash(terrainDem.sourceFileHash)
+  if (!blob) {
+    planningDemPreviewUrl.value = null
+    return
+  }
+  const parsed = await parsePlanningDemBlob(
+    blob,
+    terrainDem.filename ?? 'DEM',
+    (terrainDem.mimeType ?? blob.type) || null,
+    {
+      minElevation: terrainDem.minElevation ?? null,
+      maxElevation: terrainDem.maxElevation ?? null,
+    },
+  )
+  planningDemPreviewUrl.value = parsed.preview?.dataUrl ?? null
+}
+
+const selectedDemMinElevationModel = computed<number | null>({
+  get: () => {
+    const value = selectedDem.value?.minElevation
+    return Number.isFinite(Number(value)) ? Number(value) : null
+  },
+  set: (value: number | null) => {
+    const dem = selectedDem.value
+    if (!dem || !selectedDemUsesHeightmapImage.value) {
+      return
+    }
+    dem.minElevation = Number.isFinite(Number(value)) ? Number(value) : 0
+    if (Number.isFinite(Number(dem.maxElevation)) && Number(dem.maxElevation) < Number(dem.minElevation)) {
+      dem.maxElevation = Number(dem.minElevation)
+    }
+    markPlanningDirty()
+    void refreshPlanningDemPreview().catch((error) => {
+      console.warn('Failed to refresh planning DEM preview', error)
+    })
+  },
+})
+
+const selectedDemMaxElevationModel = computed<number | null>({
+  get: () => {
+    const value = selectedDem.value?.maxElevation
+    return Number.isFinite(Number(value)) ? Number(value) : null
+  },
+  set: (value: number | null) => {
+    const dem = selectedDem.value
+    if (!dem || !selectedDemUsesHeightmapImage.value) {
+      return
+    }
+    dem.maxElevation = Number.isFinite(Number(value)) ? Number(value) : 255
+    if (Number.isFinite(Number(dem.minElevation)) && Number(dem.maxElevation) < Number(dem.minElevation)) {
+      dem.minElevation = Number(dem.maxElevation)
+    }
+    markPlanningDirty()
+    void refreshPlanningDemPreview().catch((error) => {
+      console.warn('Failed to refresh planning DEM preview', error)
+    })
+  },
 })
 
 function formatOptionalNumber(value: number | null | undefined, fractionDigits = 2): string {
@@ -4596,8 +4679,7 @@ function clearPlanningDemImport() {
 }
 
 function isPlanningDemFile(file: File): boolean {
-  const name = file.name.toLowerCase()
-  return name.endsWith('.tif') || name.endsWith('.tiff') || file.type.includes('tiff') || file.type.includes('geotiff')
+  return isSupportedPlanningDemSource(file.name, file.type || null)
 }
 
 function isPlanningOrthophotoFile(file: File): boolean {
@@ -4609,9 +4691,12 @@ async function loadPlanningDemFile(file: File) {
   demImportError.value = null
   try {
     if (!isPlanningDemFile(file)) {
-      throw new Error('Only GeoTIFF .tif or .tiff files are supported for DEM import.')
+      throw new Error('Only GeoTIFF or image heightmap files are supported for DEM import.')
     }
-    const result = await parsePlanningDemFile(file)
+    const result = await parsePlanningDemFile(file, {
+      minElevation: planningTerrain.value.dem?.minElevation ?? null,
+      maxElevation: planningTerrain.value.dem?.maxElevation ?? null,
+    })
     await storePlanningDemBlobByHash(result.sourceFileHash, file)
     const nextDem = demImportResultToTerrainData(result)
     planningTerrain.value = {
@@ -5263,7 +5348,15 @@ async function hydratePlanningDemResources() {
     if (!blob || demHydrationToken.value !== token) {
       return
     }
-    const parsed = await parsePlanningDemBlob(blob, terrainDem.filename ?? 'DEM', (terrainDem.mimeType ?? blob.type) || null)
+    const parsed = await parsePlanningDemBlob(
+      blob,
+      terrainDem.filename ?? 'DEM',
+      (terrainDem.mimeType ?? blob.type) || null,
+      {
+        minElevation: terrainDem.minElevation ?? null,
+        maxElevation: terrainDem.maxElevation ?? null,
+      },
+    )
     if (demHydrationToken.value !== token) {
       return
     }
@@ -5380,7 +5473,7 @@ onBeforeUnmount(() => {
               <input
                 ref="demFileInputRef"
                 type="file"
-                accept=".tif,.tiff"
+                accept=".tif,.tiff,.png,.jpg,.jpeg,.webp,image/*"
                 class="sr-only"
                 @change="handleDemFileChange"
               >
@@ -5400,8 +5493,8 @@ onBeforeUnmount(() => {
                   @click="handleDemLayerSelect"
                 >
                   <div class="layer-content">
-                    <div class="layer-name">DEM Layer</div>
-                    <div class="layer-meta">GeoTIFF elevation source</div>
+                    <div class="layer-name">DEM / Heightmap Layer</div>
+                    <div class="layer-meta">{{ currentDemUsesHeightmapImage ? 'Image heightmap source' : 'GeoTIFF elevation source' }}</div>
                   </div>
                 </v-list-item>
               </v-list>
@@ -5411,7 +5504,7 @@ onBeforeUnmount(() => {
                 <div v-else class="dem-import-panel__empty">Preview will appear here after import.</div>
               </div>
             </div>
-            <div v-else class="dem-import-panel__empty">Import a GeoTIFF DEM to generate terrain heightmap data.</div>
+            <div v-else class="dem-import-panel__empty">Import a GeoTIFF DEM or image heightmap to generate terrain heightmap data.</div>
           </section>
           <section class="image-layer-panel">
             <header>
@@ -6128,8 +6221,26 @@ onBeforeUnmount(() => {
               <div class="property-panel__meta-row"><span>Source hash</span><strong>{{ formatShortHash(selectedDem.sourceFileHash) }}</strong></div>
               <div class="property-panel__meta-row"><span>File</span><strong>{{ selectedDem.filename || 'Unnamed DEM' }}</strong></div>
               <div class="property-panel__meta-row"><span>MIME</span><strong>{{ selectedDem.mimeType || '—' }}</strong></div>
+              <div class="property-panel__meta-row"><span>Source type</span><strong>{{ selectedDemUsesHeightmapImage ? 'Image heightmap' : 'GeoTIFF DEM' }}</strong></div>
               <div class="property-panel__meta-row"><span>Size</span><strong>{{ selectedDem.width ?? '—' }} × {{ selectedDem.height ?? '—' }}</strong></div>
               <div class="property-panel__meta-row"><span>Elevation</span><strong>{{ selectedDem.minElevation ?? '—' }} → {{ selectedDem.maxElevation ?? '—' }}</strong></div>
+              <div v-if="selectedDemUsesHeightmapImage" class="property-panel__sub-block">
+                <div class="property-panel__section-title property-panel__section-title--muted">Heightmap Range</div>
+                <v-text-field
+                  v-model.number="selectedDemMinElevationModel"
+                  type="number"
+                  density="compact"
+                  label="Min elevation (m)"
+                  hide-details
+                />
+                <v-text-field
+                  v-model.number="selectedDemMaxElevationModel"
+                  type="number"
+                  density="compact"
+                  label="Max elevation (m)"
+                  hide-details
+                />
+              </div>
               <div class="property-panel__meta-row"><span>Sample step</span><strong>{{ formatOptionalNumber(selectedDem.sampleStepMeters) }} m</strong></div>
               <div class="property-panel__meta-row"><span>Geographic bounds</span><strong>{{ formatBoundsLine(selectedDem.geographicBounds) }}</strong></div>
               <div class="property-panel__meta-row"><span>World bounds</span><strong>{{ formatBoundsLine(selectedDem.worldBounds) }}</strong></div>

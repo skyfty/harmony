@@ -399,8 +399,9 @@ export function computeGroundBaseHeightRegion(
       return { minRow, maxRow, minColumn, maxColumn, stride, values }
     }
 
-    const chunkSizeMeters = Number.isFinite(mesh.chunkSizeMeters) && mesh.chunkSizeMeters > 0
-      ? mesh.chunkSizeMeters
+    const explicitChunkSizeMeters = Number(mesh.chunkSizeMeters)
+    const chunkSizeMeters = Number.isFinite(explicitChunkSizeMeters) && explicitChunkSizeMeters > 0
+      ? explicitChunkSizeMeters
       : GROUND_TERRAIN_CHUNK_SIZE_METERS
     const spanMeters = Math.max(GROUND_TERRAIN_CHUNK_SIZE_METERS, chunkSizeMeters * 2)
     const halfWidth = spanMeters * 0.5
@@ -451,8 +452,9 @@ export function computeGroundBaseHeightAtVertex(
 ): number {
   if (mesh.terrainMode === 'infinite') {
     const cellSize = Number.isFinite(mesh.cellSize) && mesh.cellSize > 0 ? mesh.cellSize : 1
-    const chunkSizeMeters = Number.isFinite(mesh.chunkSizeMeters) && mesh.chunkSizeMeters > 0
-      ? mesh.chunkSizeMeters
+    const explicitChunkSizeMeters = Number(mesh.chunkSizeMeters)
+    const chunkSizeMeters = Number.isFinite(explicitChunkSizeMeters) && explicitChunkSizeMeters > 0
+      ? explicitChunkSizeMeters
       : GROUND_TERRAIN_CHUNK_SIZE_METERS
     const spanMeters = Math.max(GROUND_TERRAIN_CHUNK_SIZE_METERS, chunkSizeMeters * 2)
     const halfWidth = spanMeters * 0.5

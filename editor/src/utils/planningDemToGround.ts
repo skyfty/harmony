@@ -374,7 +374,15 @@ async function resolvePlanningDemPreparedSource(options: {
     throw new Error('DEM blob is missing from storage')
   }
 
-  const parsed = await parsePlanningDemBlob(blob, terrainDem.filename ?? 'DEM', (terrainDem.mimeType ?? blob.type) || null)
+  const parsed = await parsePlanningDemBlob(
+    blob,
+    terrainDem.filename ?? 'DEM',
+    (terrainDem.mimeType ?? blob.type) || null,
+    {
+      minElevation: terrainDem.minElevation ?? null,
+      maxElevation: terrainDem.maxElevation ?? null,
+    },
+  )
   const rasterData = parsed.rasterData
   if (!rasterData || !parsed.width || !parsed.height) {
     throw new Error('DEM raster is empty')

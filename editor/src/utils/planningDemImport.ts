@@ -29,13 +29,41 @@ export interface PlanningDemImportResult {
   orthophoto?: PlanningTerrainOrthophotoData | null
 }
 
+export interface PlanningDemImportOptions {
+  minElevation?: number | null
+  maxElevation?: number | null
+}
+
 type PlanningDemResolution = {
   x: number
   y: number
 }
 
+const PLANNING_DEM_IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp']
+
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value)
+}
+
+function isSupportedImageHeightmapMimeType(mimeType: string | null | undefined): boolean {
+  return typeof mimeType === 'string' && mimeType.startsWith('image/')
+}
+
+export function isPlanningDemGeoTiffSource(filename: string, mimeType: string | null | undefined): boolean {
+  const normalizedName = filename.trim().toLowerCase()
+  return normalizedName.endsWith('.tif')
+    || normalizedName.endsWith('.tiff')
+    || (typeof mimeType === 'string' && (mimeType.includes('tiff') || mimeType.includes('geotiff')))
+}
+
+export function isPlanningDemHeightmapImageSource(filename: string, mimeType: string | null | undefined): boolean {
+  const normalizedName = filename.trim().toLowerCase()
+  return isSupportedImageHeightmapMimeType(mimeType)
+    || PLANNING_DEM_IMAGE_EXTENSIONS.some((extension) => normalizedName.endsWith(extension))
+}
+
+export function isSupportedPlanningDemSource(filename: string, mimeType: string | null | undefined): boolean {
+  return isPlanningDemGeoTiffSource(filename, mimeType) || isPlanningDemHeightmapImageSource(filename, mimeType)
 }
 
 function normalizeBounds(raw: unknown): PlanningTerrainGeographicBounds | null {
@@ -221,7 +249,102 @@ async function readFirstBandRasters(image: any): Promise<ArrayLike<number>> {
   return rasters as ArrayLike<number>
 }
 
-async function parsePlanningDemBuffer(buffer: ArrayBuffer, filename: string, mimeType: string | null): Promise<PlanningDemImportResult> {
+function resolveImageHeightmapElevationRange(options?: PlanningDemImportOptions): { minElevation: number; maxElevation: number } {
+  const minElevation = Number(options?.minElevation)
+  const maxElevation = Number(options?.maxElevation)
+  const normalizedMin = Number.isFinite(minElevation) ? minElevation : 0
+  const normalizedMax = Number.isFinite(maxElevation) ? maxElevation : 255
+  if (normalizedMax >= normalizedMin) {
+    return {
+      minElevation: normalizedMin,
+      maxElevation: normalizedMax,
+    }
+  }
+  return {
+    minElevation: normalizedMax,
+    maxElevation: normalizedMin,
+  }
+}
+
+function loadImageElementFromBlob(blob: Blob): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(blob)
+    const image = new Image()
+    image.onload = () => {
+      try {
+        URL.revokeObjectURL(url)
+      } catch {}
+      resolve(image)
+    }
+    image.onerror = () => {
+      try {
+        URL.revokeObjectURL(url)
+      } catch {}
+      reject(new Error('Unable to decode heightmap image.'))
+    }
+    image.src = url
+  })
+}
+
+async function parsePlanningHeightmapImageBuffer(
+  buffer: ArrayBuffer,
+  filename: string,
+  mimeType: string | null,
+  options?: PlanningDemImportOptions,
+): Promise<PlanningDemImportResult> {
+  const sourceFileHash = await computeSha256Hex(buffer)
+  const imageBlob = new Blob([buffer], { type: mimeType ?? 'application/octet-stream' })
+  const image = await loadImageElementFromBlob(imageBlob)
+  const width = Math.max(1, Math.trunc(image.naturalWidth))
+  const height = Math.max(1, Math.trunc(image.naturalHeight))
+  const canvas = document.createElement('canvas')
+  canvas.width = width
+  canvas.height = height
+  const context = canvas.getContext('2d', { willReadFrequently: true })
+  if (!context) {
+    throw new Error('Unable to create heightmap canvas context.')
+  }
+  context.drawImage(image, 0, 0, width, height)
+  const pixels = context.getImageData(0, 0, width, height).data
+  const { minElevation, maxElevation } = resolveImageHeightmapElevationRange(options)
+  const range = maxElevation - minElevation
+  const rasterData = new Float32Array(width * height)
+
+  for (let index = 0; index < rasterData.length; index += 1) {
+    const pixelOffset = index * 4
+    const red = pixels[pixelOffset] ?? 0
+    const green = pixels[pixelOffset + 1] ?? 0
+    const blue = pixels[pixelOffset + 2] ?? 0
+    const grayscale = (0.299 * red + 0.587 * green + 0.114 * blue) / 255
+    rasterData[index] = minElevation + grayscale * range
+  }
+
+  const preview = sampleRasterToPreview(rasterData, width, height, minElevation, maxElevation)
+  const worldBounds: PlanningTerrainWorldBounds = {
+    minX: 0,
+    minY: 0,
+    maxX: Math.max(1, width - 1),
+    maxY: Math.max(1, height - 1),
+  }
+
+  return {
+    sourceFileHash,
+    filename,
+    mimeType,
+    width,
+    height,
+    rasterData,
+    minElevation,
+    maxElevation,
+    sampleStepMeters: computeSampleStepMeters(worldBounds, width, height),
+    geographicBounds: null,
+    worldBounds,
+    preview,
+    orthophoto: null,
+  }
+}
+
+async function parsePlanningGeoTiffBuffer(buffer: ArrayBuffer, filename: string, mimeType: string | null): Promise<PlanningDemImportResult> {
   const sourceFileHash = await computeSha256Hex(buffer)
   const tiff = await fromArrayBuffer(buffer)
   const image = await tiff.getImage()
@@ -260,14 +383,34 @@ async function parsePlanningDemBuffer(buffer: ArrayBuffer, filename: string, mim
   }
 }
 
-export async function parsePlanningDemFile(file: File): Promise<PlanningDemImportResult> {
-  const buffer = await file.arrayBuffer()
-  return parsePlanningDemBuffer(buffer, file.name, file.type || null)
+async function parsePlanningDemBuffer(
+  buffer: ArrayBuffer,
+  filename: string,
+  mimeType: string | null,
+  options?: PlanningDemImportOptions,
+): Promise<PlanningDemImportResult> {
+  if (isPlanningDemGeoTiffSource(filename, mimeType)) {
+    return parsePlanningGeoTiffBuffer(buffer, filename, mimeType)
+  }
+  if (isPlanningDemHeightmapImageSource(filename, mimeType)) {
+    return parsePlanningHeightmapImageBuffer(buffer, filename, mimeType, options)
+  }
+  throw new Error('Only GeoTIFF or image heightmap files are supported for DEM import.')
 }
 
-export async function parsePlanningDemBlob(blob: Blob, filename = 'DEM', mimeType: string | null = blob.type || null): Promise<PlanningDemImportResult> {
+export async function parsePlanningDemFile(file: File, options?: PlanningDemImportOptions): Promise<PlanningDemImportResult> {
+  const buffer = await file.arrayBuffer()
+  return parsePlanningDemBuffer(buffer, file.name, file.type || null, options)
+}
+
+export async function parsePlanningDemBlob(
+  blob: Blob,
+  filename = 'DEM',
+  mimeType: string | null = blob.type || null,
+  options?: PlanningDemImportOptions,
+): Promise<PlanningDemImportResult> {
   const buffer = await blob.arrayBuffer()
-  return parsePlanningDemBuffer(buffer, filename, mimeType)
+  return parsePlanningDemBuffer(buffer, filename, mimeType, options)
 }
 
 export function demImportResultToTerrainData(result: PlanningDemImportResult): PlanningTerrainDemData {
