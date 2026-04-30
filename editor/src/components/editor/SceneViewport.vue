@@ -239,7 +239,7 @@ import {
   syncGroundSurfacePreviewForGround,
   type GroundSurfaceLiveChunkPreview,
 } from '@schema/groundSurfacePreview'
-import { getLoadedInfiniteGroundChunkKeys, resolveVisibleInfiniteGroundChunkManifestRecords } from '@schema/groundChunkManifestRuntime'
+import { resolveVisibleInfiniteGroundChunkManifestRecords } from '@schema/groundChunkManifestRuntime'
 // resolveEnabledComponentState removed from here; import not used
 import { createRoadGroup, updateRoadGroup } from '@schema/roadMesh'
 import { createFloorGroup, updateFloorGroup } from '@schema/floorMesh'
@@ -21380,14 +21380,53 @@ async function persistViewportInfiniteGroundChunks(params: {
     return
   }
 
-  const chunkKeys = Array.isArray(params.chunkKeys) && params.chunkKeys.length > 0
-    ? Array.from(new Set(params.chunkKeys.map((value) => (typeof value === 'string' ? value.trim() : '')).filter(Boolean)))
-    : collectViewportGroundChunkKeysFromRegion(params.definition, params.affectedRegion, params.chunkCells)
+  const chunkKeySet = new Set<string>()
+  if (Array.isArray(params.chunkKeys)) {
+    for (const value of params.chunkKeys) {
+      const normalized = typeof value === 'string' ? value.trim() : ''
+      if (normalized) {
+        chunkKeySet.add(normalized)
+      }
+    }
+  }
+  for (const key of collectViewportGroundChunkKeysFromRegion(params.definition, params.affectedRegion, params.chunkCells)) {
+    if (key) {
+      chunkKeySet.add(key)
+    }
+  }
+  const chunkKeys = Array.from(chunkKeySet)
   if (!chunkKeys.length) {
     return
   }
 
   const saveToken = ++viewportGroundChunkSaveToken
+  const baseRevision = Math.max(0, Math.trunc(params.definition.chunkManifestRevision ?? 0))
+  const updatedAt = Date.now()
+  const nextRevisionCandidate = Math.max(1, baseRevision + 1)
+  const chunkDataByKey = new Map<string, ViewportInfiniteGroundChunkData>()
+
+  for (const chunkKey of chunkKeys) {
+    const previewRecord = createViewportGroundChunkManifestRecord(
+      params.definition,
+      chunkKey,
+      nextRevisionCandidate,
+      updatedAt,
+      null,
+    )
+    if (!previewRecord) {
+      continue
+    }
+    chunkDataByKey.set(chunkKey, buildGroundChunkDataFromManifestRecord(params.definition, previewRecord))
+  }
+
+  console.debug('[SceneViewport] ground chunk persist start', stableSerialize({
+    sceneId,
+    chunkKeys,
+    baseRevision,
+    nextRevisionCandidate,
+    chunkDataKeys: Array.from(chunkDataByKey.keys()),
+  }))
+
   const manifest = await scenesStore.loadGroundChunkManifest(sceneId)
   if (saveToken !== viewportGroundChunkSaveToken) {
     return
@@ -21397,11 +21436,9 @@ async function persistViewportInfiniteGroundChunks(params: {
   const nextRevision = Math.max(
     1,
     Math.trunc(manifest?.revision ?? 0) + 1,
-    Math.trunc(params.definition.chunkManifestRevision ?? 0) + 1,
+    nextRevisionCandidate,
   )
-  const updatedAt = Date.now()
   const dirtyRecords: GroundChunkManifestRecord[] = []
-  const dirtyChunkData = new Map<string, ViewportInfiniteGroundChunkData>()
 
   for (const chunkKey of chunkKeys) {
     const existingRecord = nextManifestRecords[chunkKey] ?? null
@@ -21412,20 +21449,45 @@ async function persistViewportInfiniteGroundChunks(params: {
       updatedAt,
       existingRecord,
     )
+    const chunkData = chunkDataByKey.get(chunkKey)
     if (!nextRecord) {
       continue
     }
-    const chunkData = buildGroundChunkDataFromManifestRecord(params.definition, nextRecord)
+    if (!chunkData) {
+      continue
+    }
+    const encoded = serializeGroundChunkData({
+      header: {
+        ...chunkData.header,
+        revision: nextRevision,
+        updatedAt,
+        source: nextRecord.source ?? chunkData.header.source ?? null,
+        key: nextRecord.key,
+        chunkX: nextRecord.chunkX,
+        chunkZ: nextRecord.chunkZ,
+        originX: nextRecord.originX,
+        originZ: nextRecord.originZ,
+        chunkSizeMeters: nextRecord.chunkSizeMeters,
+        resolution: nextRecord.resolution,
+        cellSize: nextRecord.chunkSizeMeters / Math.max(1, nextRecord.resolution),
+        heightMin: chunkData.header.heightMin,
+        heightMax: chunkData.header.heightMax,
+      },
+      heights: chunkData.heights,
+    })
     nextRecord.heightMin = chunkData.header.heightMin
     nextRecord.heightMax = chunkData.header.heightMax
-    dirtyChunkData.set(
-      chunkKey,
-      chunkData,
-    )
-    const encoded = serializeGroundChunkData(chunkData)
     await scenesStore.saveGroundChunkData(sceneId, chunkKey, encoded, { syncServer: false })
     nextManifestRecords[chunkKey] = nextRecord
     dirtyRecords.push(nextRecord)
+    console.debug('[SceneViewport] ground chunk persist chunk', stableSerialize({
+      sceneId,
+      chunkKey,
+      existingRevision: existingRecord?.revision ?? null,
+      nextRevision,
+      heightMin: nextRecord.heightMin,
+      heightMax: nextRecord.heightMax,
+    }))
   }
 
   if (!dirtyRecords.length || saveToken !== viewportGroundChunkSaveToken) {
@@ -21472,7 +21534,7 @@ async function persistViewportInfiniteGroundChunks(params: {
     if (!visibleManifestChunkKeys.has(record.key)) {
       continue
     }
-    const dirtyChunkDataItem = dirtyChunkData.get(record.key)
+    const dirtyChunkDataItem = chunkDataByKey.get(record.key)
     if (!dirtyChunkDataItem) {
       continue
     }
@@ -21487,7 +21549,7 @@ async function persistViewportInfiniteGroundChunks(params: {
   }
 
   syncViewportInfiniteGroundChunkMeshes(params.groundObject, params.definition, sceneId, nextRevision, nextManifestRecords)
-  if (setInfiniteGroundHiddenChunkKeys(params.groundObject, getLoadedInfiniteGroundChunkKeys(params.groundObject))) {
+  if (setInfiniteGroundHiddenChunkKeys(params.groundObject, Object.keys(nextManifestRecords))) {
     lastGroundChunkSetSignatureForPlacement = null
   }
   if (shouldPersistSceneState) {
@@ -21974,8 +22036,8 @@ function syncViewportInfiniteGroundChunkManifest(
 
   if (viewportGroundChunkManifestSceneId === sceneId && viewportGroundChunkManifestRevision === manifestRevision) {
     syncViewportInfiniteGroundChunkMeshes(groundObject, groundDefinition, sceneId, manifestRevision, viewportGroundChunkManifestRecords)
-    const loadedManifestKeys = getLoadedInfiniteGroundChunkKeys(groundObject)
-    if (setInfiniteGroundHiddenChunkKeys(groundObject, loadedManifestKeys)) {
+    const hiddenManifestKeys = Object.keys(viewportGroundChunkManifestRecords)
+    if (setInfiniteGroundHiddenChunkKeys(groundObject, hiddenManifestKeys)) {
       lastGroundChunkSetSignatureForPlacement = null
     }
     return
@@ -22017,8 +22079,8 @@ function syncViewportInfiniteGroundChunkManifest(
         if (currentSceneId !== sceneId || currentRevision !== manifestRevision) {
           return
         }
-        const loadedManifestKeys = getLoadedInfiniteGroundChunkKeys(currentGroundObject)
-        if (setInfiniteGroundHiddenChunkKeys(currentGroundObject, loadedManifestKeys)) {
+        const hiddenManifestKeys = Object.keys(viewportGroundChunkManifestRecords)
+        if (setInfiniteGroundHiddenChunkKeys(currentGroundObject, hiddenManifestKeys)) {
           lastGroundChunkSetSignatureForPlacement = null
         }
         syncViewportInfiniteGroundChunkMeshes(currentGroundObject, currentDefinition, sceneId, manifestRevision, manifestRecords)
