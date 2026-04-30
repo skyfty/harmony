@@ -5041,242 +5041,198 @@ export function setInfiniteGroundHiddenChunkKeys(
       }
     }
   })
-  return true
-}
-
-function averageNormalsOnEdge(params: {
-  geometryA: THREE.BufferGeometry
-  specA: GroundChunkSpec
-  geometryB: THREE.BufferGeometry
-  specB: GroundChunkSpec
-  mode: 'right' | 'down'
-}): boolean {
-  const { geometryA, specA, geometryB, specB, mode } = params
-  const normalAttrA = geometryA.getAttribute('normal') as THREE.BufferAttribute | undefined
-  const normalAttrB = geometryB.getAttribute('normal') as THREE.BufferAttribute | undefined
-  if (!normalAttrA || !normalAttrB) {
-    return false
-  }
-  const normalsA = normalAttrA.array as Float32Array
-  const normalsB = normalAttrB.array as Float32Array
-  if (!(normalsA instanceof Float32Array) || !(normalsB instanceof Float32Array)) {
-    return false
+    return true
   }
 
-  const colsA = Math.max(1, Math.trunc(specA.columns))
-  const rowsA = Math.max(1, Math.trunc(specA.rows))
-  const colsB = Math.max(1, Math.trunc(specB.columns))
-  const rowsB = Math.max(1, Math.trunc(specB.rows))
-  const vertexColumnsA = colsA + 1
-  const vertexColumnsB = colsB + 1
-
-  let touched = false
-  if (mode === 'right') {
-    const edgeColumnA = specA.startColumn + colsA
-    if (edgeColumnA !== specB.startColumn) {
+  function averageNormalsOnEdge(params: {
+    geometryA: THREE.BufferGeometry
+    specA: GroundChunkSpec
+    geometryB: THREE.BufferGeometry
+    specB: GroundChunkSpec
+    mode: 'right' | 'down'
+  }): boolean {
+    const { geometryA, specA, geometryB, specB, mode } = params
+    const normalAttrA = geometryA.getAttribute('normal') as THREE.BufferAttribute | undefined
+    const normalAttrB = geometryB.getAttribute('normal') as THREE.BufferAttribute | undefined
+    if (!normalAttrA || !normalAttrB) {
       return false
     }
-    const rowStart = Math.max(specA.startRow, specB.startRow)
-    const rowEnd = Math.min(specA.startRow + rowsA, specB.startRow + rowsB)
-    for (let row = rowStart; row <= rowEnd; row += 1) {
-      const localRowA = row - specA.startRow
-      const localRowB = row - specB.startRow
-      const idxA = localRowA * vertexColumnsA + colsA
-      const idxB = localRowB * vertexColumnsB + 0
-      const a3 = idxA * 3
-      const b3 = idxB * 3
-      if (a3 + 2 >= normalsA.length || b3 + 2 >= normalsB.length) {
-        continue
-      }
-      const ax = normalsA[a3] ?? 0
-      const ay = normalsA[a3 + 1] ?? 0
-      const az = normalsA[a3 + 2] ?? 0
-      const bx = normalsB[b3] ?? 0
-      const by = normalsB[b3 + 1] ?? 0
-      const bz = normalsB[b3 + 2] ?? 0
-      let nx = ax + bx
-      let ny = ay + by
-      let nz = az + bz
-      const len = Math.hypot(nx, ny, nz) || 1
-      nx /= len
-      ny /= len
-      nz /= len
-      normalsA[a3] = nx
-      normalsA[a3 + 1] = ny
-      normalsA[a3 + 2] = nz
-      normalsB[b3] = nx
-      normalsB[b3 + 1] = ny
-      normalsB[b3 + 2] = nz
-      touched = true
-    }
-  } else {
-    const edgeRowA = specA.startRow + rowsA
-    if (edgeRowA !== specB.startRow) {
+    const normalsA = normalAttrA.array as Float32Array
+    const normalsB = normalAttrB.array as Float32Array
+    if (!(normalsA instanceof Float32Array) || !(normalsB instanceof Float32Array)) {
       return false
     }
-    const colStart = Math.max(specA.startColumn, specB.startColumn)
-    const colEnd = Math.min(specA.startColumn + colsA, specB.startColumn + colsB)
-    for (let col = colStart; col <= colEnd; col += 1) {
-      const localColA = col - specA.startColumn
-      const localColB = col - specB.startColumn
-      const idxA = rowsA * vertexColumnsA + localColA
-      const idxB = 0 * vertexColumnsB + localColB
-      const a3 = idxA * 3
-      const b3 = idxB * 3
-      if (a3 + 2 >= normalsA.length || b3 + 2 >= normalsB.length) {
-        continue
-      }
-      const ax = normalsA[a3] ?? 0
-      const ay = normalsA[a3 + 1] ?? 0
-      const az = normalsA[a3 + 2] ?? 0
-      const bx = normalsB[b3] ?? 0
-      const by = normalsB[b3 + 1] ?? 0
-      const bz = normalsB[b3 + 2] ?? 0
-      let nx = ax + bx
-      let ny = ay + by
-      let nz = az + bz
-      const len = Math.hypot(nx, ny, nz) || 1
-      nx /= len
-      ny /= len
-      nz /= len
-      normalsA[a3] = nx
-      normalsA[a3 + 1] = ny
-      normalsA[a3 + 2] = nz
-      normalsB[b3] = nx
-      normalsB[b3 + 1] = ny
-      normalsB[b3 + 2] = nz
-      touched = true
-    }
-  }
 
-  if (touched) {
-    normalAttrA.needsUpdate = true
-    normalAttrB.needsUpdate = true
-  }
-  return touched
-}
+    const colsA = Math.max(1, Math.trunc(specA.columns))
+    const rowsA = Math.max(1, Math.trunc(specA.rows))
+    const colsB = Math.max(1, Math.trunc(specB.columns))
+    const rowsB = Math.max(1, Math.trunc(specB.rows))
+    const vertexColumnsA = colsA + 1
+    const vertexColumnsB = colsB + 1
 
-export function stitchGroundChunkNormals(
-  target: THREE.Object3D,
-  definition: GroundRuntimeDynamicMesh,
-  region: GroundGeometryUpdateRegion | null = null,
-  touchedChunkKeys: Iterable<string> | null = null,
-): boolean {
-  const group = resolveGroundRuntimeGroup(target)
-  if (!group) {
-    return false
-  }
-  const state = groundRuntimeStateMap.get(group)
-  if (!state) {
-    return false
-  }
-  void definition
-
-  const filteredChunkKeys = touchedChunkKeys ? Array.from(touchedChunkKeys).filter((key) => typeof key === 'string' && key.length > 0) : []
-  if (filteredChunkKeys.length) {
-    const visitedEdges = new Set<string>()
-    const stitchEdge = (anchorRow: number, anchorColumn: number, mode: 'right' | 'down'): boolean => {
-      // 只有相邻 chunk 都是独立 Mesh 时，边界法线拼接才有意义；flat 批次不参与这条流程。
-      // flat chunk 没有独立雕刻边界，强行拼接只会让逻辑复杂但结果没有收益。
-      const edgeKey = `${mode}:${anchorRow}:${anchorColumn}`
-      if (visitedEdges.has(edgeKey)) {
+    let touched = false
+    if (mode === 'right') {
+      const edgeColumnA = specA.startColumn + colsA
+      if (edgeColumnA !== specB.startColumn) {
         return false
       }
-      visitedEdges.add(edgeKey)
-
-      const current = state.chunks.get(groundChunkKey(anchorRow, anchorColumn))
-      if (!current || !(current.mesh.geometry instanceof THREE.BufferGeometry)) {
+      const rowStart = Math.max(specA.startRow, specB.startRow)
+      const rowEnd = Math.min(specA.startRow + rowsA, specB.startRow + rowsB)
+      for (let row = rowStart; row <= rowEnd; row += 1) {
+        const localRowA = row - specA.startRow
+        const localRowB = row - specB.startRow
+        const idxA = localRowA * vertexColumnsA + colsA
+        const idxB = localRowB * vertexColumnsB + 0
+        const a3 = idxA * 3
+        const b3 = idxB * 3
+        if (a3 + 2 >= normalsA.length || b3 + 2 >= normalsB.length) {
+          continue
+        }
+        const ax = normalsA[a3] ?? 0
+        const ay = normalsA[a3 + 1] ?? 0
+        const az = normalsA[a3 + 2] ?? 0
+        const bx = normalsB[b3] ?? 0
+        const by = normalsB[b3 + 1] ?? 0
+        const bz = normalsB[b3 + 2] ?? 0
+        let nx = ax + bx
+        let ny = ay + by
+        let nz = az + bz
+        const len = Math.hypot(nx, ny, nz) || 1
+        nx /= len
+        ny /= len
+        nz /= len
+        normalsA[a3] = nx
+        normalsA[a3 + 1] = ny
+        normalsA[a3 + 2] = nz
+        normalsB[b3] = nx
+        normalsB[b3 + 1] = ny
+        normalsB[b3 + 2] = nz
+        touched = true
+      }
+    } else {
+      const edgeRowA = specA.startRow + rowsA
+      if (edgeRowA !== specB.startRow) {
         return false
       }
-
-      const neighbor = mode === 'right'
-        ? state.chunks.get(groundChunkKey(anchorRow, anchorColumn + 1))
-        : state.chunks.get(groundChunkKey(anchorRow + 1, anchorColumn))
-      if (!neighbor || !(neighbor.mesh.geometry instanceof THREE.BufferGeometry)) {
-        return false
+      const colStart = Math.max(specA.startColumn, specB.startColumn)
+      const colEnd = Math.min(specA.startColumn + colsA, specB.startColumn + colsB)
+      for (let col = colStart; col <= colEnd; col += 1) {
+        const localColA = col - specA.startColumn
+        const localColB = col - specB.startColumn
+        const idxA = rowsA * vertexColumnsA + localColA
+        const idxB = 0 * vertexColumnsB + localColB
+        const a3 = idxA * 3
+        const b3 = idxB * 3
+        if (a3 + 2 >= normalsA.length || b3 + 2 >= normalsB.length) {
+          continue
+        }
+        const ax = normalsA[a3] ?? 0
+        const ay = normalsA[a3 + 1] ?? 0
+        const az = normalsA[a3 + 2] ?? 0
+        const bx = normalsB[b3] ?? 0
+        const by = normalsB[b3 + 1] ?? 0
+        const bz = normalsB[b3 + 2] ?? 0
+        let nx = ax + bx
+        let ny = ay + by
+        let nz = az + bz
+        const len = Math.hypot(nx, ny, nz) || 1
+        nx /= len
+        ny /= len
+        nz /= len
+        normalsA[a3] = nx
+        normalsA[a3 + 1] = ny
+        normalsA[a3 + 2] = nz
+        normalsB[b3] = nx
+        normalsB[b3 + 1] = ny
+        normalsB[b3 + 2] = nz
+        touched = true
       }
-
-      return averageNormalsOnEdge({
-        geometryA: current.mesh.geometry,
-        specA: current.spec,
-        geometryB: neighbor.mesh.geometry,
-        specB: neighbor.spec,
-        mode,
-      })
     }
 
-    let stitched = false
-    for (const key of filteredChunkKeys) {
-      const indices = resolveRuntimeChunkIndexFromSharedKey(key)
-      if (!indices) {
-        continue
-      }
-      const row = indices.row
-      const column = indices.column
-
-      stitched = stitchEdge(row, column, 'right') || stitched
-      stitched = stitchEdge(row, column, 'down') || stitched
-      if (column > 0) {
-        stitched = stitchEdge(row, column - 1, 'right') || stitched
-      }
-      if (row > 0) {
-        stitched = stitchEdge(row - 1, column, 'down') || stitched
-      }
+    if (touched) {
+      normalAttrA.needsUpdate = true
+      normalAttrB.needsUpdate = true
     }
-    return stitched
-  }
-  if (!region) {
-    return false
+    return touched
   }
 
-  // 目前 ground 只保留无限模式，因此没有“整网格批量扫描”的必要。
-  // 没有 touchedChunkKeys 时，说明这次更新没有足够精确的 chunk 级信息可用于法线拼接。
-  return false
+  export function stitchGroundChunkNormals(
+    target: THREE.Object3D,
+    definition: GroundRuntimeDynamicMesh,
+    region: GroundGeometryUpdateRegion | null = null,
+    touchedChunkKeys: Iterable<string> | null = null,
+  ): boolean {
+    const group = resolveGroundRuntimeGroup(target)
+    if (!group) {
+      return false
+    }
+    const state = groundRuntimeStateMap.get(group)
+    if (!state) {
+      return false
+    }
+    void definition
 
-  /*
-  const minChunkRow = Math.floor(region.minRow / chunkCells) - 1
-  const maxChunkRow = Math.floor(region.maxRow / chunkCells) + 1
-  const minChunkColumn = Math.floor(region.minColumn / chunkCells) - 1
-  const maxChunkColumn = Math.floor(region.maxColumn / chunkCells) + 1
+    const filteredChunkKeys = touchedChunkKeys ? Array.from(touchedChunkKeys).filter((key) => typeof key === 'string' && key.length > 0) : []
+    if (filteredChunkKeys.length) {
+      const visitedEdges = new Set<string>()
+      const stitchEdge = (anchorRow: number, anchorColumn: number, mode: 'right' | 'down'): boolean => {
+        // 只有相邻 chunk 都是独立 Mesh 时，边界法线拼接才有意义；flat 批次不参与这条流程。
+        // flat chunk 没有独立雕刻边界，强行拼接只会让逻辑复杂但结果没有收益。
+        const edgeKey = `${mode}:${anchorRow}:${anchorColumn}`
+        if (visitedEdges.has(edgeKey)) {
+          return false
+        }
+        visitedEdges.add(edgeKey)
 
-  let stitched = false
-  for (let r = minChunkRow; r <= maxChunkRow; r += 1) {
-    for (let c = minChunkColumn; c <= maxChunkColumn; c += 1) {
-      const current = state.chunks.get(groundChunkKey(r, c))
-      if (!current) {
-        continue
-      }
-      const geometryA = current.mesh.geometry
-      if (!(geometryA instanceof THREE.BufferGeometry)) {
-        continue
-      }
-      // Stitch with right neighbor.
-      const right = state.chunks.get(groundChunkKey(r, c + 1))
-      if (right && right.mesh.geometry instanceof THREE.BufferGeometry) {
-        stitched = averageNormalsOnEdge({
-          geometryA,
+        const current = state.chunks.get(groundChunkKey(anchorRow, anchorColumn))
+        if (!current || !(current.mesh.geometry instanceof THREE.BufferGeometry)) {
+          return false
+        }
+
+        const neighbor = mode === 'right'
+          ? state.chunks.get(groundChunkKey(anchorRow, anchorColumn + 1))
+          : state.chunks.get(groundChunkKey(anchorRow + 1, anchorColumn))
+        if (!neighbor || !(neighbor.mesh.geometry instanceof THREE.BufferGeometry)) {
+          return false
+        }
+
+        return averageNormalsOnEdge({
+          geometryA: current.mesh.geometry,
           specA: current.spec,
-          geometryB: right.mesh.geometry,
-          specB: right.spec,
-          mode: 'right',
-        }) || stitched
+          geometryB: neighbor.mesh.geometry,
+          specB: neighbor.spec,
+          mode,
+        })
       }
-      // Stitch with down neighbor.
-      const down = state.chunks.get(groundChunkKey(r + 1, c))
-      if (down && down.mesh.geometry instanceof THREE.BufferGeometry) {
-        stitched = averageNormalsOnEdge({
-          geometryA,
-          specA: current.spec,
-          geometryB: down.mesh.geometry,
-          specB: down.spec,
-          mode: 'down',
-        }) || stitched
+
+      let stitched = false
+      for (const key of filteredChunkKeys) {
+        const indices = resolveRuntimeChunkIndexFromSharedKey(key)
+        if (!indices) {
+          continue
+        }
+        const row = indices.row
+        const column = indices.column
+
+        stitched = stitchEdge(row, column, 'right') || stitched
+        stitched = stitchEdge(row, column, 'down') || stitched
+        if (column > 0) {
+          stitched = stitchEdge(row, column - 1, 'right') || stitched
+        }
+        if (row > 0) {
+          stitched = stitchEdge(row - 1, column, 'down') || stitched
+        }
       }
+      return stitched
     }
+    if (!region) {
+      return false
+    }
+
+    // 目前 ground 只保留无限模式，因此没有“整网格批量扫描”的必要。
+    // 没有 touchedChunkKeys 时，说明这次更新没有足够精确的 chunk 级信息可用于法线拼接。
+    return false
   }
-  return stitched
-  */
-}
 
 export function releaseGroundMeshCache(disposeResources = true) {
   if (!cachedPrototypeMesh) {
