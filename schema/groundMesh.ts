@@ -224,6 +224,22 @@ function resolveRuntimeChunkIndexFromRuntimeKey(
   }
 }
 
+function resolveSharedGroundChunkKeyFromRuntimeKey(key: string): string | null {
+  const indices = resolveRuntimeChunkIndexFromRuntimeKey(key)
+  if (!indices) {
+    return null
+  }
+  return `${indices.column}:${indices.row}`
+}
+
+function resolveRuntimeGroundChunkKeyFromSharedKey(key: string): string | null {
+  const parsed = parseGroundChunkKey(key)
+  if (!parsed) {
+    return null
+  }
+  return groundChunkKey(parsed.chunkZ, parsed.chunkX)
+}
+
 function resolveRuntimeChunkIndexFromSharedKey(
   key: string,
 ): { row: number; column: number } | null {
@@ -4963,11 +4979,25 @@ export function getVisibleInfiniteGroundChunkKeys(target: THREE.Object3D): strin
   }
   // 返回当前场景里已经可见的所有 chunk key，包括普通 chunk Mesh 和 flat InstancedMesh 批次。
   // 这个集合常被拾取、可见范围同步和调试工具复用，所以一定要同时覆盖两条渲染路径。
-  const visibleKeys = new Set<string>(state.chunks.keys())
-  state.flatChunkBatches.forEach((batch) => {
-    batch.chunkKeys.forEach((key) => visibleKeys.add(key))
+  const visibleKeys = new Set<string>()
+  state.chunks.forEach((_runtime, key) => {
+    const sharedKey = resolveSharedGroundChunkKeyFromRuntimeKey(key)
+    if (sharedKey) {
+      visibleKeys.add(sharedKey)
+    }
   })
-  return Array.from(visibleKeys).filter((key) => !state.hiddenChunkKeys.has(key))
+  state.flatChunkBatches.forEach((batch) => {
+    batch.chunkKeys.forEach((key) => {
+      const sharedKey = resolveSharedGroundChunkKeyFromRuntimeKey(key)
+      if (sharedKey) {
+        visibleKeys.add(sharedKey)
+      }
+    })
+  })
+  return Array.from(visibleKeys).filter((key) => {
+    const runtimeKey = resolveRuntimeGroundChunkKeyFromSharedKey(key)
+    return runtimeKey ? !state.hiddenChunkKeys.has(runtimeKey) : false
+  })
 }
 
 export function setInfiniteGroundHiddenChunkKeys(
@@ -4987,7 +5017,10 @@ export function setInfiniteGroundHiddenChunkKeys(
   const nextHiddenChunkKeys = new Set<string>()
   for (const key of chunkKeys) {
     if (typeof key === 'string' && key.length > 0) {
-      nextHiddenChunkKeys.add(key)
+      const runtimeKey = resolveRuntimeGroundChunkKeyFromSharedKey(key)
+      if (runtimeKey) {
+        nextHiddenChunkKeys.add(runtimeKey)
+      }
     }
   }
 

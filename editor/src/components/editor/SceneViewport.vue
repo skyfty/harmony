@@ -21663,6 +21663,7 @@ function refreshViewportInfiniteGroundChunkMeshes(
       : Float32Array.from(previewData.heights), fallbackHeight)
     const previousGeometry = mesh.geometry
     mesh.geometry = nextGeometry
+    mesh.userData.groundChunkRecordRevision = record.revision
     const hiddenKeys = viewportInfiniteGroundChunkPreviewHiddenKeysMap.get(groundObject)
     mesh.visible = !(hiddenKeys?.has(key) === true)
     try {
