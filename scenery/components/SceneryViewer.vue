@@ -423,6 +423,7 @@ import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
+import type { KTX2Loader } from 'three/examples/jsm/loaders/KTX2Loader.js';
 import type { UseCanvasResult } from '@minisheep/three-platform-adapter';
 import PlatformCanvas from './PlatformCanvas.vue';
 import LanternImageFrame from './LanternImageFrame.vue';
@@ -1011,6 +1012,9 @@ let sceneDownloadTask: SceneRequestTask | null = null;
 const DEFAULT_RGBE_DATA_TYPE = isWeChatMiniProgram ? THREE.UnsignedByteType : THREE.FloatType;
 type RGBELoaderClass = new (manager?: THREE.LoadingManager) => RGBELoader;
 let rgbeLoaderClassPromise: Promise<RGBELoaderClass> | null = null;
+type KTX2LoaderClass = new (manager?: THREE.LoadingManager) => KTX2Loader;
+let ktx2LoaderClassPromise: Promise<KTX2LoaderClass> | null = null;
+let ktx2LoaderInstance: KTX2Loader | null = null;
 
 async function createRgbELoader(manager?: THREE.LoadingManager): Promise<RGBELoader> {
   if (!rgbeLoaderClassPromise) {
@@ -1019,7 +1023,25 @@ async function createRgbELoader(manager?: THREE.LoadingManager): Promise<RGBELoa
     );
   }
   const LoaderClass = await rgbeLoaderClassPromise;
-  return new LoaderClass(manager).setDataType(DEFAULT_RGBE_DATA_TYPE);
+  return new LoaderClass(manager);
+}
+
+async function createKtx2Loader(renderer: THREE.WebGLRenderer): Promise<KTX2Loader> {
+  if (!ktx2LoaderClassPromise) {
+    ktx2LoaderClassPromise = import('@minisheep/three-platform-adapter/override/jsm/loaders/KTX2Loader.js').then(
+      (module) => module.KTX2Loader as KTX2LoaderClass,
+    );
+  }
+  const LoaderClass = await ktx2LoaderClassPromise;
+  if (!ktx2LoaderInstance) {
+    ktx2LoaderInstance = new LoaderClass().detectSupport(renderer);
+  }
+  return ktx2LoaderInstance;
+}
+
+function disposeKtx2Loader() {
+  ktx2LoaderInstance?.dispose?.();
+  ktx2LoaderInstance = null;
 }
 
 function getGroundVertexCount(rows: number, columns: number): number {
@@ -10363,8 +10385,19 @@ async function loadEnvironmentTextureFromAsset(
     return null;
   }
   const extension = inferEnvironmentAssetExtension(assetId, resolve);
-  const mimeType = resolve.mimeType ?? null;
+  const mimeType = resolve.mimeType?.toLowerCase() ?? '';
+  const dispose = resolve.dispose;
   try {
+    if (extension === 'ktx2' || mimeType.includes('ktx2') || mimeType.includes('basis')) {
+      const renderer = renderContext?.renderer ?? null;
+      if (!renderer) {
+        return null;
+      }
+      const ktx2Loader = await createKtx2Loader(renderer);
+      const texture = await ktx2Loader.loadAsync(resolve.url);
+      texture.mapping = THREE.CubeUVReflectionMapping;
+      return { texture, dispose };
+    }
     if (extension === 'exr' || (mimeType && mimeType.toLowerCase().includes('exr'))) {
       // EXR not supported in this environment; use texture loader fallback.
       const texture = await textureLoader.loadAsync(resolve.url);
@@ -10374,7 +10407,7 @@ async function loadEnvironmentTextureFromAsset(
       texture.minFilter = THREE.NearestFilter;
       texture.needsUpdate = true;
       ensureFloatTextureFilterCompatibility(texture);
-      return { texture };
+      return { texture, dispose };
     }
     if (extension === 'hdr' || extension === 'hdri' || resolve.mimeType === 'image/vnd.radiance') {
       const hdrLoader = await createRgbELoader();
@@ -10385,7 +10418,7 @@ async function loadEnvironmentTextureFromAsset(
       texture.minFilter = THREE.NearestFilter;
       texture.needsUpdate = true;
       ensureFloatTextureFilterCompatibility(texture);
-      return { texture };
+      return { texture, dispose };
     }
     const texture = await textureLoader.loadAsync(resolve.url);
     texture.mapping = THREE.EquirectangularReflectionMapping;
@@ -10395,7 +10428,7 @@ async function loadEnvironmentTextureFromAsset(
     texture.flipY = false;
     texture.needsUpdate = true;
     ensureFloatTextureFilterCompatibility(texture);
-    return { texture };
+    return { texture, dispose };
   } catch (error) {
     console.warn('[SceneViewer] Failed to load environment texture', assetId, error);
     return null;
@@ -10758,6 +10791,7 @@ async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
 
 function disposeEnvironmentResources() {
   disposeBackgroundResources();
+  disposeKtx2Loader();
   backgroundLoadToken += 1;
   pendingEnvironmentSettings = null;
   activeEnvironmentSettings = cloneEnvironmentSettings(DEFAULT_ENVIRONMENT_SETTINGS);

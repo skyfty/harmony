@@ -1,10 +1,17 @@
 import * as THREE from 'three'
 import { createGltfLoader } from '@schema/loader'
-import { createThumbnailFromCanvas, generateAssetThumbnail, ASSET_THUMBNAIL_HEIGHT, ASSET_THUMBNAIL_WIDTH } from '@/utils/assetThumbnail'
+import {
+  createThumbnailFromCanvas,
+  generateAssetThumbnail,
+  generateKtx2TextureThumbnail,
+  ASSET_THUMBNAIL_HEIGHT,
+  ASSET_THUMBNAIL_WIDTH,
+} from '@/utils/assetThumbnail'
 import { extractExtension } from '@/utils/blob'
 import type { ProjectAsset, ProjectAssetMetadata, ProjectAssetModelStats } from '@/types/project-asset'
 
-const IMAGE_ASSET_TYPES = new Set<ProjectAsset['type']>(['image', 'texture'])
+const IMAGE_ASSET_TYPES = new Set<ProjectAsset['type']>(['image'])
+const TEXTURE_ASSET_TYPES = new Set<ProjectAsset['type']>(['texture'])
 const MODEL_ASSET_TYPES = new Set<ProjectAsset['type']>(['model', 'mesh', 'prefab'])
 
 export type LocalAssetImportPhase = 'extract-metadata' | 'generate-thumbnail'
@@ -30,6 +37,43 @@ export async function prepareLocalAssetImport(
   options: PrepareLocalAssetImportOptions = {},
 ): Promise<PreparedLocalAssetImport> {
   assertNotAborted(options.signal)
+
+  if (isTextureAsset(asset, file)) {
+    options.onPhase?.('extract-metadata')
+
+    if (isKtx2File(file)) {
+      options.onPhase?.('generate-thumbnail')
+      const textureThumbnail = await generateKtx2TextureThumbnail(
+        asset,
+        file,
+        ASSET_THUMBNAIL_WIDTH,
+        ASSET_THUMBNAIL_HEIGHT,
+      )
+
+      return {
+        imageWidth: textureThumbnail.imageWidth,
+        imageHeight: textureThumbnail.imageHeight,
+        thumbnailDataUrl: await readBlobAsDataUrl(textureThumbnail.thumbnailFile, options.signal),
+      }
+    }
+
+    const imageMeta = await readImageMetadata(file, options.signal)
+    assertNotAborted(options.signal)
+
+    options.onPhase?.('generate-thumbnail')
+    const thumbnailFile = await generateAssetThumbnail({
+      asset,
+      file,
+      width: ASSET_THUMBNAIL_WIDTH,
+      height: ASSET_THUMBNAIL_HEIGHT,
+    })
+
+    return {
+      imageWidth: imageMeta.width,
+      imageHeight: imageMeta.height,
+      thumbnailDataUrl: await readBlobAsDataUrl(thumbnailFile, options.signal),
+    }
+  }
 
   if (IMAGE_ASSET_TYPES.has(asset.type)) {
     options.onPhase?.('extract-metadata')
@@ -109,6 +153,15 @@ export async function renderModelFileThumbnailDataUrl(
 function isGltfLikeFile(file: File): boolean {
   const extension = extractExtension(file.name)?.toLowerCase()
   return extension === 'glb' || extension === 'gltf'
+}
+
+function isKtx2File(file: File): boolean {
+  const extension = extractExtension(file.name)?.toLowerCase()
+  return extension === 'ktx2' || file.type.toLowerCase().includes('ktx2')
+}
+
+function isTextureAsset(asset: ProjectAsset, file: File): boolean {
+  return TEXTURE_ASSET_TYPES.has(asset.type) || isKtx2File(file)
 }
 
 async function readImageMetadata(file: File, signal?: AbortSignal): Promise<{ width: number; height: number }> {

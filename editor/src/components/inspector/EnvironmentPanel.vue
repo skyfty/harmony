@@ -59,6 +59,8 @@ type AssetDialogTarget = 'background' | 'skycubeZip' | SkyCubeFaceKey
 const assetDialogTarget = ref<AssetDialogTarget | null>(null)
 
 const HDRI_ASSET_TYPE = 'hdri' as const
+const BACKGROUND_ASSET_TYPE = 'image,texture,hdri,file' as const
+const BACKGROUND_ASSET_EXTENSIONS = ['hdr', 'hdri', 'rgbe', 'exr', 'ktx2', 'png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'tif', 'tiff', 'avif', 'heic', 'heif', 'ico', 'svg'] as const
 const SKYCUBE_ASSET_TYPE = 'image,texture,file' as const
 
 const skyCubeFormatOptions: Array<{ title: string; value: SkyCubeBackgroundFormat }> = [
@@ -206,7 +208,7 @@ const backgroundAssetLabel = computed(() => {
 const backgroundAssetHint = computed(() => {
   const asset = backgroundAsset.value
   if (!asset) {
-    return 'Supports HDR (.hdr, .exr) or image textures'
+    return 'Supports HDR (.hdr, .exr), KTX2 (.ktx2), or image textures'
   }
   return asset.id
 })
@@ -234,12 +236,15 @@ const assetDialogAssetType = computed(() => {
     return HDRI_ASSET_TYPE
   }
   if (assetDialogTarget.value === 'background') {
-    return HDRI_ASSET_TYPE
+    return BACKGROUND_ASSET_TYPE
   }
   return SKYCUBE_ASSET_TYPE
 })
 
 const assetDialogExtensions = computed(() => {
+  if (assetDialogTarget.value === 'background') {
+    return [...BACKGROUND_ASSET_EXTENSIONS]
+  }
   if (assetDialogTarget.value === 'skycubeZip') {
     return ['skycube']
   }
@@ -801,7 +806,7 @@ function inferAssetExtension(asset: ProjectAsset | null): string | null {
 }
 
 function isHdrExtension(extension: string | null): boolean {
-  return isHdriLikeExtension(extension)
+  return isHdriLikeExtension(extension) || extension === 'ktx2'
 }
 
 function isImageExtension(extension: string | null): boolean {
@@ -816,7 +821,8 @@ function isEnvironmentAsset(asset: ProjectAsset | null): asset is ProjectAsset {
     return true
   }
   if (asset.type === 'file') {
-    return isHdrExtension(inferAssetExtension(asset))
+    const extension = inferAssetExtension(asset)
+    return isHdrExtension(extension) || isImageExtension(extension)
   }
   return false
 }
@@ -1028,9 +1034,11 @@ function applyEnvironmentAsset(target: 'background' | 'environment', asset: Proj
   if (target !== 'background') {
     return
   }
+  const extension = inferAssetExtension(asset)
+  const mode: EnvironmentBackgroundMode = extension === 'ktx2' ? 'fastHdri' : 'hdri'
   sceneStore.patchEnvironmentSettings({
     background: {
-      mode: 'hdri',
+      mode,
       solidColor: environmentSettings.value.background.solidColor,
       gradientTopColor: environmentSettings.value.background.gradientTopColor ?? null,
       gradientOffset: environmentSettings.value.background.gradientOffset ?? DEFAULT_GRADIENT_OFFSET,

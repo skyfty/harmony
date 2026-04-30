@@ -1,12 +1,14 @@
 import Pica from 'pica'
 import * as THREE from 'three'
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js'
+import type { KTX2Loader } from 'three/examples/jsm/loaders/KTX2Loader.js'
 import { getLastExtensionFromFilenameOrUrl, isSkyCubeArchiveExtension } from '@schema/assetTypeConversion'
 import { disposeSkyCubeTexture, extractSkycubeZipFaces, loadSkyCubeTexture } from '@schema/skyCubeTexture'
 import type { ProjectAsset } from '@/types/project-asset'
 import { usesTransparentThumbnailBackground } from '@/utils/assetThumbnailTransparency'
 
-const IMAGE_ASSET_TYPES = new Set<ProjectAsset['type']>(['image', 'texture'])
+const IMAGE_ASSET_TYPES = new Set<ProjectAsset['type']>(['image'])
+const TEXTURE_ASSET_TYPES = new Set<ProjectAsset['type']>(['texture'])
 const MODEL_ASSET_TYPES = new Set<ProjectAsset['type']>(['model', 'mesh', 'prefab'])
 const HDRI_ASSET_TYPES = new Set<ProjectAsset['type']>(['hdri'])
 
@@ -16,8 +18,13 @@ const IMAGE_OUTPUT_QUALITY = 0.9
 const MODEL_OUTPUT_TYPE = 'image/png'
 const ALPHA_THRESHOLD = 10
 const MODEL_MARGIN_RATIO = 0.08
+const FAST_HDR_KTX2_TRANSCODER_PATH = 'https://cdn.jsdelivr.net/npm/three@0.172.0/examples/jsm/libs/basis/'
 
 const thumbnailResizer = typeof window !== 'undefined' ? Pica() : null
+type KTX2LoaderClass = new (manager?: THREE.LoadingManager) => KTX2Loader
+
+let ktx2LoaderClassPromise: Promise<KTX2LoaderClass> | null = null
+let ktx2LoaderInstance: KTX2Loader | null = null
 
 export const ASSET_THUMBNAIL_WIDTH = 192
 export const ASSET_THUMBNAIL_HEIGHT = 96
@@ -47,6 +54,16 @@ export async function generateAssetThumbnail(options: GenerateThumbnailOptions):
     return blobToFile(blob, buildThumbnailFilename(options.asset, 'jpg'))
   }
 
+  if (TEXTURE_ASSET_TYPES.has(options.asset.type)) {
+    if (isKtx2File(options.file)) {
+      const textureThumbnail = await generateKtx2TextureThumbnail(options.asset, options.file, width, height)
+      return textureThumbnail.thumbnailFile
+    }
+
+    const blob = await generateImageThumbnail(options.file, width, height)
+    return blobToFile(blob, buildThumbnailFilename(options.asset, 'jpg'))
+  }
+
   if (IMAGE_ASSET_TYPES.has(options.asset.type)) {
     const blob = await generateImageThumbnail(options.file, width, height)
     return blobToFile(blob, buildThumbnailFilename(options.asset, 'jpg'))
@@ -60,6 +77,12 @@ export async function generateAssetThumbnail(options: GenerateThumbnailOptions):
 
   const blob = await generateDefaultThumbnail(options.asset, width, height)
   return blobToFile(blob, buildThumbnailFilename(options.asset, 'png'))
+}
+
+export interface TextureThumbnailData {
+  imageWidth: number
+  imageHeight: number
+  thumbnailFile: File
 }
 
 export interface CanvasThumbnailOptions {
@@ -127,6 +150,29 @@ async function generateImageThumbnail(file: File, width: number, height: number)
   return canvasToBlob(targetCanvas, IMAGE_OUTPUT_TYPE, IMAGE_OUTPUT_QUALITY)
 }
 
+export async function generateKtx2TextureThumbnail(
+  asset: ProjectAsset,
+  file: File,
+  width: number,
+  height: number,
+): Promise<TextureThumbnailData> {
+  if (!isKtx2File(file)) {
+    throw new Error('Unsupported texture format')
+  }
+
+  const textureResult = await loadKtx2Texture(file)
+  try {
+    const thumbnailFile = await renderTextureThumbnail(asset, textureResult.texture, width, height)
+    return {
+      imageWidth: textureResult.imageWidth,
+      imageHeight: textureResult.imageHeight,
+      thumbnailFile,
+    }
+  } finally {
+    textureResult.texture.dispose()
+  }
+}
+
 async function generateDefaultThumbnail(asset: ProjectAsset, width: number, height: number): Promise<Blob> {
   const canvas = ensureCanvas(width, height)
   const context = canvas.getContext('2d')
@@ -156,6 +202,109 @@ async function generateDefaultThumbnail(asset: ProjectAsset, width: number, heig
   context.fillText(label, width / 2, height / 2)
 
   return canvasToBlob(canvas, MODEL_OUTPUT_TYPE)
+}
+
+async function renderTextureThumbnail(
+  asset: ProjectAsset,
+  texture: THREE.Texture,
+  width: number,
+  height: number,
+): Promise<File> {
+  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true })
+  renderer.outputColorSpace = THREE.SRGBColorSpace
+  renderer.setClearColor(0x000000, 0)
+  renderer.setSize(512, 512, false)
+
+  const scene = new THREE.Scene()
+  const camera = new THREE.OrthographicCamera(-1.2, 1.2, 1.2, -1.2, 0.1, 10)
+  camera.position.z = 2
+
+  const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true })
+  const plane = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), material)
+  const { width: textureWidth, height: textureHeight } = resolveTextureDimensions(texture)
+  const textureAspect = textureWidth > 0 && textureHeight > 0 ? textureWidth / textureHeight : 1
+  if (textureAspect >= 1) {
+    plane.scale.set(textureAspect, 1, 1)
+  } else {
+    plane.scale.set(1, 1 / Math.max(textureAspect, 1e-6), 1)
+  }
+  scene.add(plane)
+
+  try {
+    renderer.render(scene, camera)
+    return await createThumbnailFromCanvas(asset, renderer.domElement, { width, height })
+  } finally {
+    plane.geometry.dispose()
+    material.dispose()
+    scene.remove(plane)
+    renderer.dispose()
+    if (typeof renderer.forceContextLoss === 'function') {
+      renderer.forceContextLoss()
+    }
+  }
+}
+
+export async function loadKtx2Texture(file: File): Promise<{ texture: THREE.Texture; imageWidth: number; imageHeight: number }> {
+  if (typeof document === 'undefined') {
+    throw new Error('KTX2 thumbnail generation requires a browser environment')
+  }
+
+  const objectUrl = URL.createObjectURL(file)
+  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
+  renderer.outputColorSpace = THREE.SRGBColorSpace
+
+  try {
+    const loader = await createKtx2Loader(renderer)
+    if (!loader) {
+      throw new Error('Failed to initialize KTX2 loader')
+    }
+    const texture = await loader.loadAsync(objectUrl)
+    const dimensions = resolveTextureDimensions(texture)
+    return {
+      texture,
+      imageWidth: dimensions.width,
+      imageHeight: dimensions.height,
+    }
+  } finally {
+    URL.revokeObjectURL(objectUrl)
+    renderer.dispose()
+    if (typeof renderer.forceContextLoss === 'function') {
+      renderer.forceContextLoss()
+    }
+  }
+}
+
+export async function createKtx2Loader(renderer: THREE.WebGLRenderer): Promise<KTX2Loader | null> {
+  if (typeof window === 'undefined') {
+    return null
+  }
+
+  if (!ktx2LoaderClassPromise) {
+    ktx2LoaderClassPromise = import('three/examples/jsm/loaders/KTX2Loader.js').then(
+      (module) => module.KTX2Loader as KTX2LoaderClass,
+    )
+  }
+
+  const LoaderClass = await ktx2LoaderClassPromise
+  if (!ktx2LoaderInstance) {
+    ktx2LoaderInstance = new LoaderClass().setTranscoderPath(FAST_HDR_KTX2_TRANSCODER_PATH).detectSupport(renderer)
+  }
+  return ktx2LoaderInstance
+}
+
+function resolveTextureDimensions(texture: THREE.Texture): { width: number; height: number } {
+  const image = texture.image as { width?: number; height?: number } | undefined
+  const sourceData = texture.source?.data as { width?: number; height?: number } | undefined
+  const width = image?.width ?? sourceData?.width ?? 0
+  const height = image?.height ?? sourceData?.height ?? 0
+  return {
+    width: width > 0 ? width : 1,
+    height: height > 0 ? height : 1,
+  }
+}
+
+function isKtx2File(file: File): boolean {
+  return file.name.toLowerCase().endsWith('.ktx2') || file.type.toLowerCase().includes('ktx2')
 }
 
 async function generateHdriThumbnail(file: File, width: number, height: number): Promise<Blob> {

@@ -58,7 +58,7 @@ import type {
 import { TransformControls } from '@/utils/transformControls.js'
 import Stats from 'three/examples/jsm/libs/stats.module.js'
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js'
-
+import { createKtx2Loader } from '@/utils/assetThumbnail'
 // RectAreaLight support removed; no import from lightsRuntime required.
 
 import type {
@@ -92,6 +92,7 @@ import {
   extractSkycubeZipFaces,
   getLastExtensionFromFilenameOrUrl,
   isHdriLikeExtension,
+  isKtx2LikeExtension,
   isVideoLikeExtension,
   formatGroundChunkDataPath,
   loadSkyCubeTexture,
@@ -1303,6 +1304,7 @@ const rgbeLoader = new RGBELoader().setDataType(THREE.FloatType)
 const textureCache = new Map<string, THREE.Texture>()
 const pendingTextureRequests = new Map<string, Promise<THREE.Texture | null>>()
 
+  
 // Node types that may require swapping in a store-managed runtime Object3D.
 // NOTE: This must use SceneNode.nodeType values (e.g. 'WarpGate'), not component type strings (e.g. 'warpGate').
 const usesRuntimeObjectTypes = new Set<string>([
@@ -13864,6 +13866,14 @@ async function loadEnvironmentTextureFromAsset(assetId: string): Promise<THREE.T
   const { url, extension } = resolved
 
     try {
+      if (isKtx2LikeExtension(extension)) {
+        const ktx2Loader = await createKtx2Loader(renderer);
+        const texture = await ktx2Loader.loadAsync(url)
+        texture.mapping = THREE.CubeUVReflectionMapping
+        texture.colorSpace = THREE.SRGBColorSpace
+        texture.needsUpdate = true
+        return texture
+      }
       if (isHdriLikeExtension(extension)) {
         const texture = await rgbeLoader.loadAsync(url)
         texture.mapping = THREE.EquirectangularReflectionMapping
