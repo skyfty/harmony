@@ -9,6 +9,7 @@ type VehicleApiDto = {
   name: string
   description?: string
   coverUrl?: string
+  prefabUrl?: string
   isActive?: boolean
   owned?: boolean
   isCurrent?: boolean
@@ -36,6 +37,7 @@ type UserVehicleApiDto = {
     name: string
     description?: string
     coverUrl?: string
+    prefabUrl?: string
     isActive?: boolean
   } | null
 }
@@ -62,6 +64,7 @@ export async function listVehicles(): Promise<Vehicle[]> {
       description: vehicle.description ?? '',
       summary: vehicle.description ?? '',
       coverUrl,
+      prefabUrl: vehicle.prefabUrl ?? '',
       status,
       owned,
       isCurrent: Boolean(vehicle.isCurrent),
@@ -151,6 +154,7 @@ export async function listUserVehicles(): Promise<UserVehicle[]> {
           name: row.vehicle.name,
           description: row.vehicle.description ?? '',
           coverUrl: row.vehicle.coverUrl ?? '',
+          prefabUrl: row.vehicle.prefabUrl ?? '',
           isActive: row.vehicle.isActive !== false,
           maxSpeed: typeof row.vehicle.maxSpeed === 'number' ? row.vehicle.maxSpeed : undefined,
           acceleration: typeof row.vehicle.acceleration === 'number' ? row.vehicle.acceleration : undefined,

@@ -13,6 +13,9 @@ import type {
   SceneBehaviorMap,
   ShowAlertBehaviorParams,
   ShowBehaviorParams,
+  SpawnPrefabBehaviorParams,
+  RuntimePrefabInitializationMode,
+  RuntimePrefabPlacementOptions,
   WatchBehaviorParams,
   ShowPurposeBehaviorParams,
   TriggerBehaviorParams,
@@ -59,6 +62,18 @@ export type BehaviorRuntimeEvent =
       /** Movement duration in seconds. */
       duration: number
       token: string
+    }
+  | {
+      type: 'spawn-prefab'
+      nodeId: string
+      action: BehaviorEventType
+      sequenceId: string
+      behaviorSequenceId: string
+      behaviorId: string
+      assetId: string
+      targetNodeId: string | null
+      initializationMode: RuntimePrefabInitializationMode
+      placement: RuntimePrefabPlacementOptions
     }
   | {
       type: 'show-alert'
@@ -506,6 +521,22 @@ function createMoveCameraEvent(state: BehaviorSequenceState, behavior: SceneBeha
   }
 }
 
+function createSpawnPrefabEvent(state: BehaviorSequenceState, behavior: SceneBehavior): BehaviorRuntimeEvent {
+  const params = behavior.script.params as SpawnPrefabBehaviorParams
+  return {
+    type: 'spawn-prefab',
+    nodeId: state.nodeId,
+    action: state.action,
+    sequenceId: state.id,
+    behaviorSequenceId: state.behaviorSequenceId,
+    behaviorId: behavior.id,
+    assetId: params.assetId ?? '',
+    targetNodeId: params.targetNodeId ?? state.nodeId,
+    initializationMode: params.initializationMode === 'render-only' ? 'render-only' : 'full',
+    placement: params.placement ?? { alignment: 'origin', offset: null },
+  }
+}
+
 function createShowAlertEvent(state: BehaviorSequenceState, behavior: SceneBehavior): BehaviorRuntimeEvent {
   const token = createToken(state.id, state.index)
   pendingTokens.set(token, {
@@ -909,6 +940,25 @@ function advanceSequence(state: BehaviorSequenceState): BehaviorRuntimeEvent[] {
       case 'moveTo':
         events.push(createMoveCameraEvent(state, behavior))
         return events
+      case 'spawnPrefab': {
+        const params = script.params as SpawnPrefabBehaviorParams
+        if (!params.assetId) {
+          events.push({
+            type: 'sequence-error',
+            nodeId: state.nodeId,
+            action: state.action,
+            sequenceId: state.id,
+            behaviorSequenceId: state.behaviorSequenceId,
+            behaviorId: behavior.id,
+            message: 'Spawn prefab behavior requires a prefab asset.',
+          })
+          events.push(finalizeSequence(state, 'failure', behavior.id, 'Missing prefab asset'))
+          return events
+        }
+        events.push(createSpawnPrefabEvent(state, behavior))
+        state.index += 1
+        continue
+      }
       case 'showAlert':
         events.push(createShowAlertEvent(state, behavior))
         return events

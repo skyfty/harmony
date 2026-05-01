@@ -15,6 +15,7 @@ type VehiclePayload = {
   isDefault?: boolean
   maxSpeed?: number
   acceleration?: number
+  prefabUrl?: string
   braking?: number
   handling?: number
   mass?: number
@@ -52,6 +53,7 @@ function mapVehicle(row: any) {
     acceleration: typeof row.acceleration === 'number' ? row.acceleration : undefined,
     braking: typeof row.braking === 'number' ? row.braking : undefined,
     handling: typeof row.handling === 'number' ? row.handling : undefined,
+    prefabUrl: row.prefabUrl ?? '',
     mass: typeof row.mass === 'number' ? row.mass : undefined,
     drag: typeof row.drag === 'number' ? row.drag : undefined,
     isActive: row.isActive !== false,
@@ -102,6 +104,7 @@ function mapUserVehicle(row: any) {
           name: vehicle.name ?? '',
           description: vehicle.description ?? '',
           coverUrl: vehicle.coverUrl ?? '',
+          prefabUrl: vehicle.prefabUrl ?? '',
           isActive: vehicle.isActive !== false,
           isDefault: vehicle.isDefault === true,
         }
@@ -161,6 +164,7 @@ export async function createVehicle(ctx: Context): Promise<void> {
   const name = toStringValue(body.name)
   const description = toStringValue(body.description) ?? ''
   const coverUrl = toStringValue(body.coverUrl) ?? ''
+  const prefabUrl = toStringValue(body.prefabUrl) ?? ''
   if (!identifier) {
     ctx.throw(400, 'identifier is required')
   }
@@ -199,6 +203,7 @@ export async function createVehicle(ctx: Context): Promise<void> {
       name,
       description,
       coverUrl,
+      prefabUrl,
       isActive: body.isActive !== false,
       isDefault: body.isDefault === true,
       maxSpeed: typeof body.maxSpeed === 'number' ? body.maxSpeed : undefined,
@@ -256,6 +261,10 @@ export async function updateVehicle(ctx: Context): Promise<void> {
         body.coverUrl === undefined
           ? (current as any).coverUrl ?? ''
           : (toStringValue(body.coverUrl) ?? ''),
+      prefabUrl:
+        body.prefabUrl === undefined
+          ? (current as any).prefabUrl ?? ''
+          : (toStringValue(body.prefabUrl) ?? ''),
       isActive: body.isActive === undefined ? current.isActive : body.isActive === true,
       isDefault: body.isDefault === undefined ? current.isDefault : body.isDefault === true,
       maxSpeed: body.maxSpeed === undefined ? (current as any).maxSpeed : Number(body.maxSpeed),
@@ -358,7 +367,7 @@ export async function listUserVehicles(ctx: Context): Promise<void> {
       .populate('userId', 'username displayName')
       .populate(
         'vehicleId',
-        'identifier name description coverUrl isActive isDefault maxSpeed acceleration braking handling mass drag',
+        'identifier name description coverUrl prefabUrl isActive isDefault maxSpeed acceleration braking handling mass drag',
       )
       .sort({ ownedAt: -1, createdAt: -1 })
       .skip(skip)
@@ -385,7 +394,7 @@ export async function getUserVehicle(ctx: Context): Promise<void> {
     .populate('userId', 'username displayName')
     .populate(
       'vehicleId',
-      'identifier name description coverUrl isActive isDefault maxSpeed acceleration braking handling mass drag',
+      'identifier name description coverUrl prefabUrl isActive isDefault maxSpeed acceleration braking handling mass drag',
     )
     .lean()
     .exec()

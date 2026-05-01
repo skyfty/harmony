@@ -25,6 +25,7 @@ export interface VehicleItem {
   name: string;
   description: string;
   coverUrl: string;
+  prefabUrl: string;
   isActive: boolean;
   productId?: null | string;
   createdAt: string;
@@ -43,6 +44,7 @@ export interface VehiclePayload {
   name?: string;
   description?: string;
   coverUrl?: string;
+  prefabUrl?: string;
   isActive?: boolean;
 }
 
@@ -61,6 +63,7 @@ export interface UserVehicleItem {
     name: string;
     description: string;
     coverUrl: string;
+    prefabUrl?: string;
     isActive: boolean;
   } | null;
   ownedAt?: string | null;

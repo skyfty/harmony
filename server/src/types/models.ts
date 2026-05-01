@@ -549,6 +549,8 @@ export interface VehicleDocument extends Document<Types.ObjectId> {
   description?: string
   /** 中文：车辆封面 URL */
   coverUrl?: string
+  /** 中文：车辆 prefab 下载地址 */
+  prefabUrl?: string
   /** 中文：是否启用 */
   isActive: boolean
   /** 中文：是否默认车辆 */

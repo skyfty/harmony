@@ -416,6 +416,7 @@ type SceneryProps = {
   physicsInterpolation?: boolean;
   serverAssetBaseUrl?: string;
   initialPunchedNodeIds?: string[];
+  runtimePrefabSpawns?: RuntimePrefabSpawnRequest[];
 };
 
 const props = defineProps<SceneryProps>();
@@ -444,6 +445,14 @@ import {
   createTerrainScatterLodRuntime,
   type SceneGraphBuildOptions,
 } from '@harmony/schema/sceneGraph';
+import {
+  cloneRuntimePrefabNode,
+  createRuntimePrefabDocument,
+  parseRuntimePrefabData,
+  type RuntimePrefabInitializationMode,
+  type RuntimePrefabPlacementOptions,
+  type RuntimePrefabSpawnRequest,
+} from '@harmony/schema';
 import { createInstancedBvhFrustumCuller } from '@harmony/schema/instancedBvhFrustumCuller';
 import ResourceCache from '@harmony/schema/ResourceCache';
 import { AssetCache, AssetLoader, configureAssetDownloadHostMirrors, type AssetCacheEntry } from '@harmony/schema/assetCache';
@@ -1282,6 +1291,11 @@ let pendingEnvironmentSettings: EnvironmentSettings | null = null;
 let activeEnvironmentSettings = cloneEnvironmentSettings(DEFAULT_ENVIRONMENT_SETTINGS);
 let renderContext: RenderContext | null = null;
 let currentDocument: SceneJsonExportDocument | null = null;
+const pendingRuntimePrefabSpawnRequests: RuntimePrefabSpawnRequest[] = [];
+const appliedRuntimePrefabSpawnKeys = new Set<string>();
+const spawnedRuntimePrefabRoots = new Map<string, { root: THREE.Object3D; mode: RuntimePrefabInitializationMode }>();
+let runtimePrefabBehaviorCounter = 0;
+let runtimePrefabFlushInFlight = false;
 let groundSurfacePreviewLoadToken = 0;
 let dynamicGroundCache: { nodeId: string; node: SceneNode; dynamicMesh: GroundRuntimeDynamicMesh } | null = null;
 let sceneGraphRoot: THREE.Object3D | null = null;
@@ -3513,6 +3527,341 @@ async function loadTextAssetContent(assetId: string): Promise<string | null> {
   return null;
 }
 
+function buildRuntimePrefabRequestKey(request: RuntimePrefabSpawnRequest): string {
+  const requestId = typeof request.requestId === 'string' ? request.requestId.trim() : '';
+  if (requestId.length) {
+    return requestId;
+  }
+  return JSON.stringify({
+    assetId: request.assetId ?? null,
+    assetUrl: request.assetUrl ?? null,
+    targetNodeId: request.targetNodeId ?? null,
+    targetNodeName: request.targetNodeName ?? null,
+    position: request.position ?? null,
+    rotation: request.rotation ?? null,
+    scale: request.scale ?? null,
+    initializationMode: request.initializationMode ?? 'full',
+    placement: request.placement ?? null,
+  });
+}
+
+function normalizeRuntimePrefabMode(value: unknown): RuntimePrefabInitializationMode {
+  return value === 'render-only' ? 'render-only' : 'full';
+}
+
+function normalizeRuntimePrefabPlacement(value: unknown): RuntimePrefabPlacementOptions {
+  const candidate = value && typeof value === 'object'
+    ? value as Partial<RuntimePrefabPlacementOptions>
+    : null;
+  const alignment = candidate?.alignment === 'bottom-to-anchor' || candidate?.alignment === 'center-to-anchor' || candidate?.alignment === 'place-on-surface' || candidate?.alignment === 'custom-offset'
+    ? candidate.alignment
+    : 'origin';
+  return {
+    alignment,
+    offset: cloneVectorLikeValue(candidate?.offset),
+  };
+}
+
+function normalizeRuntimePrefabRequest(request: RuntimePrefabSpawnRequest | null | undefined): RuntimePrefabSpawnRequest | null {
+  if (!request || typeof request !== 'object') {
+    return null;
+  }
+  const assetId = typeof request.assetId === 'string' ? request.assetId.trim() : '';
+  const assetUrl = typeof request.assetUrl === 'string' ? request.assetUrl.trim() : '';
+  if (!assetId && !assetUrl) {
+    return null;
+  }
+  return {
+    requestId: typeof request.requestId === 'string' ? request.requestId.trim() || null : null,
+    assetId: assetId || null,
+    assetUrl: assetUrl || null,
+    targetNodeId: typeof request.targetNodeId === 'string' ? request.targetNodeId.trim() || null : null,
+    targetNodeName: typeof request.targetNodeName === 'string' ? request.targetNodeName.trim() || null : null,
+    position: request.position ?? null,
+    rotation: request.rotation ?? null,
+    scale: request.scale ?? null,
+    initializationMode: normalizeRuntimePrefabMode(request.initializationMode),
+    placement: normalizeRuntimePrefabPlacement(request.placement),
+  };
+}
+
+function findSceneNodeByName(nodes: SceneNode[] | undefined | null, name: string): SceneNode | null {
+  if (!Array.isArray(nodes) || !name.trim().length) {
+    return null;
+  }
+  const targetName = name.trim();
+  const stack = [...nodes];
+  while (stack.length) {
+    const node = stack.pop();
+    if (!node) {
+      continue;
+    }
+    if ((node.name ?? '').trim() === targetName) {
+      return node;
+    }
+    if (Array.isArray(node.children) && node.children.length) {
+      stack.push(...node.children);
+    }
+  }
+  return null;
+}
+
+function resolveRuntimePrefabAnchorNodeId(request: RuntimePrefabSpawnRequest): string | null {
+  const explicitNodeId = typeof request.targetNodeId === 'string' ? request.targetNodeId.trim() : '';
+  if (explicitNodeId.length) {
+    return explicitNodeId;
+  }
+  const targetNodeName = typeof request.targetNodeName === 'string' ? request.targetNodeName.trim() : '';
+  if (targetNodeName.length) {
+    const byName = findSceneNodeByName(currentDocument?.nodes ?? null, targetNodeName);
+    if (byName?.id) {
+      return byName.id;
+    }
+  }
+  return protagonistNodeId ?? null;
+}
+
+function cloneVectorLikeValue(value: Vector3Like | null | undefined): Vector3Like | null {
+  if (!value) {
+    return null;
+  }
+  return {
+    x: Number.isFinite(value.x) ? value.x : 0,
+    y: Number.isFinite(value.y) ? value.y : 0,
+    z: Number.isFinite(value.z) ? value.z : 0,
+  };
+}
+
+function resolveRuntimePrefabAnchorTransform(request: RuntimePrefabSpawnRequest): {
+  position: Vector3Like | null;
+  rotation: Vector3Like | null;
+} {
+  const explicitPosition = cloneVectorLikeValue(request.position);
+  const explicitRotation = cloneVectorLikeValue(request.rotation);
+  if (explicitPosition || explicitRotation) {
+    return {
+      position: explicitPosition,
+      rotation: explicitRotation,
+    };
+  }
+
+  const anchorNodeId = resolveRuntimePrefabAnchorNodeId(request);
+  if (!anchorNodeId) {
+    return { position: null, rotation: null };
+  }
+  const anchorObject = nodeObjectMap.get(anchorNodeId) ?? null;
+  if (!anchorObject) {
+    return { position: null, rotation: null };
+  }
+
+  const worldPosition = new THREE.Vector3();
+  const worldQuaternion = new THREE.Quaternion();
+  const worldEuler = new THREE.Euler();
+  anchorObject.getWorldPosition(worldPosition);
+  anchorObject.getWorldQuaternion(worldQuaternion);
+  worldEuler.setFromQuaternion(worldQuaternion, 'XYZ');
+  return {
+    position: { x: worldPosition.x, y: worldPosition.y, z: worldPosition.z },
+    rotation: { x: worldEuler.x, y: worldEuler.y, z: worldEuler.z },
+  };
+}
+
+function applyRuntimePrefabTransform(node: SceneNode, request: RuntimePrefabSpawnRequest): {
+  position: Vector3Like | null;
+  rotation: Vector3Like | null;
+} {
+  const anchor = resolveRuntimePrefabAnchorTransform(request);
+  const position = cloneVectorLikeValue(request.position) ?? anchor.position;
+  const rotation = cloneVectorLikeValue(request.rotation) ?? anchor.rotation;
+  const scale = cloneVectorLikeValue(request.scale);
+  if (position) {
+    node.position = position;
+  }
+  if (rotation) {
+    node.rotation = rotation;
+  }
+  if (scale) {
+    node.scale = scale;
+  }
+  return { position, rotation };
+}
+
+function applyRuntimePrefabPlacement(
+  root: THREE.Object3D,
+  placementValue: RuntimePrefabPlacementOptions | null | undefined,
+  anchorPosition: Vector3Like | null,
+  supportRoot: THREE.Object3D | null,
+): void {
+  const placement = normalizeRuntimePrefabPlacement(placementValue);
+  const offset = cloneVectorLikeValue(placement.offset);
+  if (placement.alignment !== 'origin' && placement.alignment !== 'custom-offset') {
+    root.updateWorldMatrix(true, true);
+    const bounds = new THREE.Box3().setFromObject(root);
+    if (!bounds.isEmpty()) {
+      if (placement.alignment === 'bottom-to-anchor') {
+        const anchorY = anchorPosition?.y ?? root.position.y;
+        root.position.y += anchorY - bounds.min.y;
+      } else if (placement.alignment === 'place-on-surface' && supportRoot) {
+        const surfaceY = resolveRuntimePrefabSurfaceY(anchorPosition, root, supportRoot);
+        if (surfaceY !== null) {
+          root.position.y += surfaceY - bounds.min.y;
+        }
+      } else if (placement.alignment === 'center-to-anchor' && anchorPosition) {
+        const center = bounds.getCenter(new THREE.Vector3());
+        root.position.x += anchorPosition.x - center.x;
+        root.position.y += anchorPosition.y - center.y;
+        root.position.z += anchorPosition.z - center.z;
+      }
+    }
+  }
+  if (offset) {
+    root.position.x += offset.x;
+    root.position.y += offset.y;
+    root.position.z += offset.z;
+  }
+}
+
+function resolveRuntimePrefabSurfaceY(
+  anchorPosition: Vector3Like | null,
+  root: THREE.Object3D,
+  supportRoot: THREE.Object3D,
+): number | null {
+  const sampleX = anchorPosition?.x ?? root.position.x;
+  const sampleZ = anchorPosition?.z ?? root.position.z;
+  if (!Number.isFinite(sampleX) || !Number.isFinite(sampleZ)) {
+    return null;
+  }
+  const raycaster = new THREE.Raycaster();
+  raycaster.set(new THREE.Vector3(sampleX, 100000, sampleZ), new THREE.Vector3(0, -1, 0));
+  raycaster.far = 200000;
+  const intersections = raycaster.intersectObject(supportRoot, true);
+  const hit = intersections.find((entry: THREE.Intersection) => entry.object.visible && Number.isFinite(entry.point.y));
+  return hit?.point.y ?? null;
+}
+
+function mergeRuntimePrefabAssetRegistry(document: SceneJsonExportDocument, runtimeDocument: SceneJsonExportDocument): void {
+  const incoming = runtimeDocument.assetRegistry;
+  if (!incoming || !Object.keys(incoming).length) {
+    return;
+  }
+  document.assetRegistry = {
+    ...(document.assetRegistry ?? {}),
+    ...incoming,
+  };
+}
+
+function clearSpawnedRuntimePrefabRoots(): void {
+  const scene = renderContext?.scene ?? null;
+  spawnedRuntimePrefabRoots.forEach(({ root }) => {
+    if (scene) {
+      scene.remove(root);
+    }
+    disposeObject(root);
+  });
+  spawnedRuntimePrefabRoots.clear();
+}
+
+async function resolveRuntimePrefabSourceText(request: RuntimePrefabSpawnRequest): Promise<string | null> {
+  if (request.assetId) {
+    return await loadTextAssetContent(request.assetId);
+  }
+  if (request.assetUrl) {
+    return await fetchTextFromUrl(request.assetUrl);
+  }
+  return null;
+}
+
+async function spawnRuntimePrefabRequest(request: RuntimePrefabSpawnRequest): Promise<boolean> {
+  const scene = renderContext?.scene ?? null;
+  const document = currentDocument;
+  if (!scene || !document) {
+    return false;
+  }
+
+  const requestKey = buildRuntimePrefabRequestKey(request);
+  const raw = await resolveRuntimePrefabSourceText(request);
+  if (!raw) {
+    return false;
+  }
+
+  const prefab = parseRuntimePrefabData(raw);
+  const cloned = cloneRuntimePrefabNode(prefab);
+  const anchorTransform = applyRuntimePrefabTransform(cloned.root, request);
+  const runtimeDocument = createRuntimePrefabDocument(prefab, cloned.root);
+  const buildOptions: SceneGraphBuildOptions = {};
+  if (typeof props.serverAssetBaseUrl === 'string' && props.serverAssetBaseUrl.trim().length) {
+    buildOptions.serverAssetBaseUrl = props.serverAssetBaseUrl.trim();
+  }
+  const resourceCache = ensureResourceCache(runtimeDocument, buildOptions);
+  const graph = await buildSceneGraph(runtimeDocument, resourceCache, buildOptions);
+  applyWeChatShadowPolicy(graph.root);
+  applyRuntimePrefabPlacement(graph.root, request.placement, anchorTransform.position, sceneGraphRoot ?? scene);
+
+  scene.add(graph.root);
+  spawnedRuntimePrefabRoots.set(requestKey, {
+    root: graph.root,
+    mode: normalizeRuntimePrefabMode(request.initializationMode),
+  });
+
+  if (normalizeRuntimePrefabMode(request.initializationMode) === 'full') {
+    mergeRuntimePrefabAssetRegistry(document, runtimeDocument);
+    document.nodes = [...(document.nodes ?? []), cloned.root];
+    document.updatedAt = new Date().toISOString();
+    rebuildPreviewNodeMap(document);
+    viewerResourceCache = ensureResourceCache(document, buildOptions);
+    registerSceneSubtree(graph.root);
+    refreshMultiuserNodeReferences(document);
+    refreshBehaviorProximityCandidates();
+    syncPhysicsBodiesForDocument(document);
+  }
+
+  return true;
+}
+
+async function flushPendingRuntimePrefabSpawnRequests(): Promise<void> {
+  if (runtimePrefabFlushInFlight || !renderContext || !currentDocument) {
+    return;
+  }
+  runtimePrefabFlushInFlight = true;
+  try {
+    while (pendingRuntimePrefabSpawnRequests.length) {
+      const request = pendingRuntimePrefabSpawnRequests.shift();
+      if (!request) {
+        continue;
+      }
+      const key = buildRuntimePrefabRequestKey(request);
+      if (appliedRuntimePrefabSpawnKeys.has(key)) {
+        continue;
+      }
+      const spawned = await spawnRuntimePrefabRequest(request);
+      if (spawned) {
+        appliedRuntimePrefabSpawnKeys.add(key);
+      }
+    }
+  } finally {
+    runtimePrefabFlushInFlight = false;
+  }
+}
+
+function queueRuntimePrefabSpawnRequest(request: RuntimePrefabSpawnRequest, options: { dedupe?: boolean } = {}): void {
+  const normalized = normalizeRuntimePrefabRequest(request);
+  if (!normalized) {
+    return;
+  }
+  const key = buildRuntimePrefabRequestKey(normalized);
+  const shouldDedupe = options.dedupe !== false;
+  if (shouldDedupe) {
+    if (appliedRuntimePrefabSpawnKeys.has(key)) {
+      return;
+    }
+    if (pendingRuntimePrefabSpawnRequests.some((entry) => buildRuntimePrefabRequestKey(entry) === key)) {
+      return;
+    }
+  }
+  pendingRuntimePrefabSpawnRequests.push(normalized);
+  void flushPendingRuntimePrefabSpawnRequests();
+}
+
 function resetInfoBoardAudio(): void {
   if (infoBoardAudioContext) {
     try {
@@ -5665,6 +6014,17 @@ function resolveInterpolatedBodyPosition(body: CANNON.Body, target: THREE.Vector
   return target.copy(state.prevPos).lerp(state.currPos, physicsInterpolationAlpha);
 }
 
+function resolveRigidbodyBindingObject(
+  component: SceneNodeComponentState<RigidbodyComponentProps>,
+  fallbackObject: THREE.Object3D | null,
+): THREE.Object3D | null {
+  const targetNodeId = typeof component.props?.targetNodeId === 'string' ? component.props.targetNodeId.trim() : '';
+  if (targetNodeId) {
+    return nodeObjectMap.get(targetNodeId) ?? null;
+  }
+  return fallbackObject;
+}
+
 function ensureRigidbodyBindingForObject(nodeId: string, object: THREE.Object3D): void {
   if (!physicsWorld || !currentDocument) {
     return;
@@ -5677,8 +6037,12 @@ function ensureRigidbodyBindingForObject(nodeId: string, object: THREE.Object3D)
   if (!node || !component || !object) {
     return;
   }
+  const bindingObject = resolveRigidbodyBindingObject(component, object);
+  if (!bindingObject) {
+    return;
+  }
   if (isRoadDynamicMesh(node.dynamicMesh) && (component.props as RigidbodyComponentProps | undefined)?.bodyType === 'STATIC') {
-    ensureRoadRigidbodyInstance(node, component, object);
+    ensureRoadRigidbodyInstance(node, component, bindingObject);
     return;
   }
   if (!shapeDefinition && requiresMetadata && !hasBoundaryWall) {
@@ -5686,20 +6050,20 @@ function ensureRigidbodyBindingForObject(nodeId: string, object: THREE.Object3D)
   }
   const existing = rigidbodyInstances.get(nodeId);
   if (existing) {
-    existing.object = object;
-    syncSharedBodyFromObject(existing.body, object, existing.orientationAdjustment);
+    existing.object = bindingObject;
+    syncSharedBodyFromObject(existing.body, bindingObject, existing.orientationAdjustment);
 
     scenePreviewPerf.applyAggressiveSleepForNonInteractiveDynamic({
       nodeId,
       body: existing.body,
       isVehicle: Boolean(resolveVehicleComponent(node)),
-      isProtagonist: Boolean(object.userData?.protagonist),
+      isProtagonist: Boolean(bindingObject.userData?.protagonist),
     });
 
     ensureVehicleBindingForNode(nodeId);
     return;
   }
-  const bodyEntry = createRigidbodyBody(node, component, shapeDefinition, object);
+  const bodyEntry = createRigidbodyBody(node, component, shapeDefinition, bindingObject);
   if (!bodyEntry) {
     return;
   }
@@ -5708,7 +6072,7 @@ function ensureRigidbodyBindingForObject(nodeId: string, object: THREE.Object3D)
     nodeId,
     body: bodyEntry.body,
     isVehicle: Boolean(resolveVehicleComponent(node)),
-    isProtagonist: Boolean(object.userData?.protagonist),
+    isProtagonist: Boolean(bindingObject.userData?.protagonist),
   });
 
   physicsWorld.addBody(bodyEntry.body);
@@ -5716,7 +6080,7 @@ function ensureRigidbodyBindingForObject(nodeId: string, object: THREE.Object3D)
     nodeId,
     body: bodyEntry.body,
     bodies: [bodyEntry.body],
-    object,
+    object: bindingObject,
     orientationAdjustment: bodyEntry.orientationAdjustment,
   });
   ensureVehicleBindingForNode(nodeId);
@@ -5794,7 +6158,7 @@ function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null):
     desiredIds.add(node.id);
     const component = resolvePhysicsRigidbodyComponent(node);
     const shapeDefinition = extractRigidbodyShape(component);
-    const object = nodeObjectMap.get(node.id) ?? null;
+    const object = component ? resolveRigidbodyBindingObject(component, nodeObjectMap.get(node.id) ?? null) : null;
     const requiresMetadata = !hasAutoGeneratedDynamicShapeForNode(node.dynamicMesh, node);
     const hasBoundaryWall = Boolean(resolveBoundaryWallComponent(node));
     if (!component || !object) {
@@ -9683,6 +10047,16 @@ function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
     case 'move-camera':
       handleMoveCameraEvent(event);
       break;
+    case 'spawn-prefab':
+      runtimePrefabBehaviorCounter += 1;
+      queueRuntimePrefabSpawnRequest({
+        requestId: `behavior:${event.sequenceId}:${event.behaviorId}:${runtimePrefabBehaviorCounter}`,
+        assetId: event.assetId,
+        targetNodeId: event.targetNodeId,
+        initializationMode: event.initializationMode,
+        placement: event.placement,
+      }, { dedupe: false });
+      break;
     case 'show-bubble':
       presentBehaviorBubble(event);
       break;
@@ -11181,6 +11555,9 @@ function teardownRenderer() {
   activeBehaviorDelayTimers.clear();
   clearBehaviorSounds();
   resetAnimationControllers();
+  pendingRuntimePrefabSpawnRequests.length = 0;
+  appliedRuntimePrefabSpawnKeys.clear();
+  clearSpawnedRuntimePrefabRoots();
   previewNodeMap.clear();
   autoTourRuntime.reset();
   activeAutoTourNodeIds.clear();
@@ -11745,6 +12122,9 @@ function cleanupForUnrelatedSceneSwitch(): void {
   activeBehaviorDelayTimers.clear();
   clearBehaviorSounds();
   resetAnimationControllers();
+  pendingRuntimePrefabSpawnRequests.length = 0;
+  appliedRuntimePrefabSpawnKeys.clear();
+  clearSpawnedRuntimePrefabRoots();
 
   previewNodeMap.clear();
   autoTourRuntime.reset();
@@ -11850,6 +12230,7 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   await mountGraphAndSyncSubsystems(payload, graph.root, resourceCache, canvas, camera);
   applyNominateOverridesForCurrentScene();
   applyDefaultSteerDriveForCurrentScene();
+  await flushPendingRuntimePrefabSpawnRequests();
 
   if (token !== initializeToken || sceneGraphRoot !== graph.root) {
     return;
@@ -12049,6 +12430,32 @@ watch(
     applyDefaultSteerDriveForCurrentScene();
   },
 );
+
+watch(
+  () => props.runtimePrefabSpawns,
+  (requests: RuntimePrefabSpawnRequest[] | undefined) => {
+    if (!Array.isArray(requests) || !requests.length) {
+      return;
+    }
+    requests.forEach((request) => {
+      queueRuntimePrefabSpawnRequest(request);
+    });
+  },
+  { deep: true, immediate: true },
+);
+
+defineExpose({
+  async spawnRuntimePrefab(request: RuntimePrefabSpawnRequest): Promise<void> {
+    queueRuntimePrefabSpawnRequest(request, { dedupe: false });
+    await flushPendingRuntimePrefabSpawnRequests();
+  },
+  async spawnRuntimePrefabs(requests: RuntimePrefabSpawnRequest[]): Promise<void> {
+    requests.forEach((request) => {
+      queueRuntimePrefabSpawnRequest(request, { dedupe: false });
+    });
+    await flushPendingRuntimePrefabSpawnRequests();
+  },
+});
 
 function cleanupRuntime(): void {
   dismissBehaviorBubble({ type: 'continue' });

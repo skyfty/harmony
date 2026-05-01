@@ -7,6 +7,7 @@ export interface Vehicle {
   description: string;
   summary: string;
   coverUrl: string;
+  prefabUrl: string;
   status: VehicleStatus;
   owned: boolean;
   isCurrent: boolean;
@@ -30,6 +31,7 @@ export interface UserVehicle {
     name: string;
     description: string;
     coverUrl: string;
+    prefabUrl?: string;
     isActive: boolean;
     maxSpeed?: number;
     acceleration?: number;

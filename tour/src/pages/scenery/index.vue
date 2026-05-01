@@ -1,11 +1,22 @@
 <template>
   <view class="page">
-    <view class="floating-back" :style="{ top: `${backButtonTop}px` }" @tap="handleBack">
-      <text class="floating-back__icon">‹</text>
+    <view
+      class="floating-back"
+      :style="{ top: `${backButtonTop}px` }"
+      @tap="handleBack"
+    >
+      <text class="floating-back__icon">
+        ‹
+      </text>
     </view>
 
-    <view class="floating-title" :style="{ top: `${backButtonTop}px` }">
-      <text class="floating-title__text">{{ scenicTitle || '未命名景区' }}</text>
+    <view
+      class="floating-title"
+      :style="{ top: `${backButtonTop}px` }"
+    >
+      <text class="floating-title__text">
+        {{ scenicTitle || '未命名景区' }}
+      </text>
     </view>
 
     <SceneryViewer
@@ -14,6 +25,7 @@
       :package-cache-key="packageCacheKey"
       :nominate-state-map="nominateStateMap"
       :default-steer-identifier="selectedVehicleIdentifier"
+      :runtime-prefab-spawns="runtimePrefabSpawns"
       :server-asset-base-url="serverAssetBaseUrl"
       :debug-console-enabled="false"
       :debug-console-default-expanded="true"
@@ -21,7 +33,6 @@
       :initial-punched-node-ids="initialPunchedNodeIds"
       @punch="handlePunch"
     />
-
   </view>
 </template>
 
@@ -39,8 +50,14 @@ import {
 } from '@harmony/utils/mini-client';
 import { parseQueryString } from '@harmony/utils';
 import { getTopSafeAreaMetrics } from '@/utils/safeArea';
-import { getSelectedVehicleIdentifier } from '@/utils/vehicleSelection';
+import { getSelectedVehicle, getSelectedVehicleIdentifier } from '@/utils/vehicleSelection';
 import { clearSceneryShareContext, setSceneryShareContext } from '@/services/share';
+
+defineOptions({
+  name: 'SceneryPage',
+});
+
+type RuntimePrefabPlacementAlignment = 'origin' | 'bottom-to-anchor' | 'center-to-anchor' | 'place-on-surface' | 'custom-offset';
 
 const projectId = ref<string>('');
 const packageUrl = ref<string>('');
@@ -50,6 +67,14 @@ const sceneSpotId = ref<string>('');
 const sceneId = ref<string>('');
 const enterAt = ref<number>(0);
 const selectedVehicleIdentifier = ref<string>('');
+const selectedVehiclePrefabUrl = ref<string>('');
+const explicitPrefabUrl = ref<string>('');
+const explicitPrefabTargetNodeId = ref<string>('');
+const explicitPrefabTargetNodeName = ref<string>('');
+const explicitPrefabPosition = ref<{ x: number; y: number; z: number } | null>(null);
+const explicitPrefabRotation = ref<{ x: number; y: number; z: number } | null>(null);
+const explicitPrefabPlacementAlignment = ref<RuntimePrefabPlacementAlignment | null>(null);
+const explicitPrefabPlacementOffset = ref<{ x: number; y: number; z: number } | null>(null);
 const backButtonTop = ref<number>(8);
 const initialPunchedNodeIds = ref<string[]>([]);
 const serverAssetBaseUrl = getDownloadCdnBaseUrl();
@@ -65,6 +90,65 @@ const nominateStateMap = computed(() => {
     },
   };
 });
+
+const runtimePrefabSpawns = computed(() => {
+  const prefabUrl = explicitPrefabUrl.value.trim() || selectedVehiclePrefabUrl.value.trim();
+  if (!prefabUrl) {
+    return [];
+  }
+  return [{
+    requestId: explicitPrefabUrl.value.trim().length
+      ? `route-prefab:${prefabUrl}`
+      : `vehicle-prefab:${selectedVehicleIdentifier.value.trim() || prefabUrl}`,
+    assetUrl: prefabUrl,
+    targetNodeId: explicitPrefabTargetNodeId.value.trim() || null,
+    targetNodeName: explicitPrefabTargetNodeName.value.trim() || null,
+    position: explicitPrefabPosition.value,
+    rotation: explicitPrefabRotation.value,
+    initializationMode: 'full' as const,
+    placement: {
+      alignment: explicitPrefabPlacementAlignment.value ?? 'place-on-surface',
+      offset: explicitPrefabPlacementOffset.value,
+    },
+  }];
+});
+
+function decodePlacementAlignment(value: unknown): RuntimePrefabPlacementAlignment | null {
+  const decoded = decodeQueryValue(value);
+  if (
+    decoded === 'origin'
+    || decoded === 'bottom-to-anchor'
+    || decoded === 'center-to-anchor'
+    || decoded === 'place-on-surface'
+    || decoded === 'custom-offset'
+  ) {
+    return decoded;
+  }
+  return null;
+}
+
+function decodeNumericQueryValue(value: unknown): number | null {
+  const decoded = decodeQueryValue(value);
+  if (!decoded.length) {
+    return null;
+  }
+  const numeric = Number(decoded);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function decodeVector3QueryValue(record: Record<string, unknown>, prefix: string): { x: number; y: number; z: number } | null {
+  const x = decodeNumericQueryValue(record[`${prefix}X`]);
+  const y = decodeNumericQueryValue(record[`${prefix}Y`]);
+  const z = decodeNumericQueryValue(record[`${prefix}Z`]);
+  if (x === null && y === null && z === null) {
+    return null;
+  }
+  return {
+    x: x ?? 0,
+    y: y ?? 0,
+    z: z ?? 0,
+  };
+}
 
 function syncBackButtonTop(): void {
   const metrics = getTopSafeAreaMetrics();
@@ -115,7 +199,7 @@ async function loadPunchProgress(): Promise<void> {
       scenicId: sceneSpotId.value,
     });
     initialPunchedNodeIds.value = Array.isArray(progress.punchedNodeIds)
-      ? (progress.punchedNodeIds as string[]).filter((nodeId: string) => nodeId.trim().length > 0)
+      ? progress.punchedNodeIds.filter((nodeId) => nodeId.trim().length > 0)
       : [];
   } catch {
     initialPunchedNodeIds.value = [];
@@ -166,7 +250,7 @@ function decodeQueryValue(value: unknown): string {
 onLoad((query: Record<string, unknown> | undefined) => {
   syncBackButtonTop();
 
-  const record = (query ?? {}) as Record<string, unknown>;
+  const record: Record<string, unknown> = query ?? {};
   const qrQuery = typeof record.q === 'string' ? extractQueryFromQrLink(record.q) : {};
   const mergedRecord = {
     ...qrQuery,
@@ -188,6 +272,22 @@ onLoad((query: Record<string, unknown> | undefined) => {
   selectedVehicleIdentifier.value = typeof mergedRecord.vehicleIdentifier === 'string'
     ? decodeQueryValue(mergedRecord.vehicleIdentifier)
     : getSelectedVehicleIdentifier();
+  {
+    const selectedVehicle = getSelectedVehicle();
+    const selectedPrefabUrl = selectedVehicle && typeof selectedVehicle === 'object'
+      ? (selectedVehicle as { prefabUrl?: unknown }).prefabUrl
+      : null;
+    selectedVehiclePrefabUrl.value = typeof selectedPrefabUrl === 'string'
+      ? selectedPrefabUrl.trim()
+      : '';
+  }
+  explicitPrefabUrl.value = decodeQueryValue(mergedRecord.prefabUrl);
+  explicitPrefabTargetNodeId.value = decodeQueryValue(mergedRecord.prefabTargetNodeId);
+  explicitPrefabTargetNodeName.value = decodeQueryValue(mergedRecord.prefabTargetNodeName);
+  explicitPrefabPosition.value = decodeVector3QueryValue(mergedRecord, 'prefabPosition');
+  explicitPrefabRotation.value = decodeVector3QueryValue(mergedRecord, 'prefabRotation');
+  explicitPrefabPlacementAlignment.value = decodePlacementAlignment(mergedRecord.prefabPlacement);
+  explicitPrefabPlacementOffset.value = decodeVector3QueryValue(mergedRecord, 'prefabOffset');
   setSceneryShareContext({
     title: scenicTitle.value || '景区导览',
     query: {
@@ -198,6 +298,10 @@ onLoad((query: Record<string, unknown> | undefined) => {
       sceneSpotId: sceneSpotId.value,
       sceneId: sceneId.value,
       vehicleIdentifier: selectedVehicleIdentifier.value,
+      prefabUrl: explicitPrefabUrl.value,
+      prefabTargetNodeId: explicitPrefabTargetNodeId.value,
+      prefabTargetNodeName: explicitPrefabTargetNodeName.value,
+      prefabPlacement: explicitPrefabPlacementAlignment.value ?? '',
     },
   });
 

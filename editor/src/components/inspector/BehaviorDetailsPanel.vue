@@ -18,6 +18,7 @@ import { useSceneStore } from '@/stores/sceneStore'
 import { instantiateBehaviorPrefab } from '@/utils/behaviorPrefab'
 import DelayParams from '@/components/inspector/behavior/DelayParams.vue'
 import MoveToParams from '@/components/inspector/behavior/MoveToParams.vue'
+import SpawnPrefabParams from '@/components/inspector/behavior/SpawnPrefabParams.vue'
 import ShowAlertParams from '@/components/inspector/behavior/ShowAlertParams.vue'
 import BubbleParams from '@/components/inspector/behavior/BubbleParams.vue'
 import PlaySoundParams from '@/components/inspector/behavior/PlaySoundParams.vue'
@@ -90,6 +91,7 @@ const dragState = reactive({
 const PARAMETER_COMPONENTS: Partial<Record<BehaviorScriptType, unknown>> = {
   delay: DelayParams,
   moveTo: MoveToParams,
+  spawnPrefab: SpawnPrefabParams,
   showAlert: ShowAlertParams,
   bubble: BubbleParams,
   playSound: PlaySoundParams,
@@ -216,7 +218,8 @@ function applyDefaultTarget(step: SceneBehavior): void {
     scriptType !== 'watch' &&
     scriptType !== 'animation' &&
     scriptType !== 'moveTo' &&
-    scriptType !== 'playSound'
+    scriptType !== 'playSound' &&
+    scriptType !== 'spawnPrefab'
   ) {
     return
   }

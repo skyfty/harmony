@@ -33,8 +33,10 @@ import {
 	computePlaySoundDistanceGain,
 	resolvePlaySoundSourcePoint,
 	createGradientBackgroundDome,
+	cloneRuntimePrefabNode,
 	disposeSkyCubeTexture,
 	disposeGradientBackgroundDome,
+	createRuntimePrefabDocument,
 	type GradientBackgroundDome,
 	type GroundDynamicMesh,
 	type GroundSurfaceChunkTextureMap,
@@ -45,7 +47,10 @@ import {
 	type SceneNode,
 	type SceneNodeComponentState,
 	type SceneMaterialTextureRef,
+	type RuntimePrefabInitializationMode,
+	type RuntimePrefabPlacementOptions,
 	type Vector3Like,
+	parseRuntimePrefabData,
 	loadSkyCubeTexture,
 	extractSkycubeZipFaces,
 } from '@schema/index'
@@ -797,6 +802,7 @@ function cleanupForUnrelatedSceneSwitch(): void {
 	clearBehaviorSounds()
 	resetAnimationControllers()
 	waterRuntime.reset()
+	clearRuntimePrefabPreviewRoots()
 	forceInitialDocumentGraphOnNextSnapshot = true
 }
 
@@ -1614,6 +1620,7 @@ const MAP_CONTROL_DEFAULTS = {
 }
 let animationFrameHandle = 0
 let currentDocument: SceneJsonExportDocument | null = null
+const runtimePrefabPreviewRoots = new Set<THREE.Object3D>()
 type PreviewWindowWithNominateState = Window & {
 	__HARMONY_PREVIEW_NOMINATE_STATE__?: NominateExternalStateMap | null
 }
@@ -5376,6 +5383,221 @@ async function loadTextAssetContent(assetId: string): Promise<string | null> {
 	return null
 }
 
+function normalizeRuntimePrefabMode(value: unknown): RuntimePrefabInitializationMode {
+	return value === 'render-only' ? 'render-only' : 'full'
+}
+
+function cloneVectorLikeValue(value: Vector3Like | null | undefined): Vector3Like | null {
+	if (!value) {
+		return null
+	}
+	return {
+		x: Number.isFinite(value.x) ? value.x : 0,
+		y: Number.isFinite(value.y) ? value.y : 0,
+		z: Number.isFinite(value.z) ? value.z : 0,
+	}
+}
+
+function normalizeRuntimePrefabPlacement(value: unknown): RuntimePrefabPlacementOptions {
+	const candidate = value && typeof value === 'object'
+		? value as Partial<RuntimePrefabPlacementOptions>
+		: null
+	const alignment = candidate?.alignment === 'bottom-to-anchor' || candidate?.alignment === 'center-to-anchor' || candidate?.alignment === 'place-on-surface' || candidate?.alignment === 'custom-offset'
+		? candidate.alignment
+		: 'origin'
+	return {
+		alignment,
+		offset: cloneVectorLikeValue(candidate?.offset),
+	}
+}
+
+function mergeRuntimePrefabAssetRegistry(document: SceneJsonExportDocument, runtimeDocument: SceneJsonExportDocument): void {
+	const incoming = runtimeDocument.assetRegistry
+	if (!incoming || !Object.keys(incoming).length) {
+		return
+	}
+	document.assetRegistry = {
+		...(document.assetRegistry ?? {}),
+		...incoming,
+	}
+}
+
+function clearRuntimePrefabPreviewRoots(): void {
+	runtimePrefabPreviewRoots.forEach((root) => {
+		root.parent?.remove(root)
+		disposeObjectResources(root)
+	})
+	runtimePrefabPreviewRoots.clear()
+}
+
+function findSceneNodeByName(nodes: SceneNode[] | undefined | null, name: string): SceneNode | null {
+	if (!Array.isArray(nodes) || !name.trim().length) {
+		return null
+	}
+	const targetName = name.trim()
+	const stack = [...nodes]
+	while (stack.length) {
+		const node = stack.pop()
+		if (!node) {
+			continue
+		}
+		if ((node.name ?? '').trim() === targetName) {
+			return node
+		}
+		if (Array.isArray(node.children) && node.children.length) {
+			stack.push(...node.children)
+		}
+	}
+	return null
+}
+
+function resolveRuntimePrefabAnchorNodeId(targetNodeId: string | null | undefined, targetNodeName?: string | null): string | null {
+	const explicitNodeId = typeof targetNodeId === 'string' ? targetNodeId.trim() : ''
+	if (explicitNodeId.length) {
+		return explicitNodeId
+	}
+	const explicitNodeName = typeof targetNodeName === 'string' ? targetNodeName.trim() : ''
+	if (explicitNodeName.length) {
+		const byName = findSceneNodeByName(currentDocument?.nodes ?? null, explicitNodeName)
+		if (byName?.id) {
+			return byName.id
+		}
+	}
+	return resolveCameraDistanceReferenceNodeId()
+}
+
+function resolveRuntimePrefabAnchorTransform(targetNodeId: string | null | undefined, targetNodeName?: string | null): {
+	position: Vector3Like | null
+	rotation: Vector3Like | null
+} {
+	const anchorNodeId = resolveRuntimePrefabAnchorNodeId(targetNodeId, targetNodeName)
+	if (!anchorNodeId) {
+		return { position: null, rotation: null }
+	}
+	const anchorObject = nodeObjectMap.get(anchorNodeId) ?? null
+	if (!anchorObject) {
+		return { position: null, rotation: null }
+	}
+	const worldPosition = new THREE.Vector3()
+	const worldQuaternion = new THREE.Quaternion()
+	const worldEuler = new THREE.Euler()
+	anchorObject.getWorldPosition(worldPosition)
+	anchorObject.getWorldQuaternion(worldQuaternion)
+	worldEuler.setFromQuaternion(worldQuaternion, 'XYZ')
+	return {
+		position: { x: worldPosition.x, y: worldPosition.y, z: worldPosition.z },
+		rotation: { x: worldEuler.x, y: worldEuler.y, z: worldEuler.z },
+	}
+}
+
+function applyRuntimePrefabPlacement(
+	root: THREE.Object3D,
+	placementValue: RuntimePrefabPlacementOptions | null | undefined,
+	anchorPosition: Vector3Like | null,
+	supportRoot: THREE.Object3D | null,
+): void {
+	const placement = normalizeRuntimePrefabPlacement(placementValue)
+	const offset = cloneVectorLikeValue(placement.offset)
+	if (placement.alignment !== 'origin' && placement.alignment !== 'custom-offset') {
+		root.updateWorldMatrix(true, true)
+		const bounds = new THREE.Box3().setFromObject(root)
+		if (!bounds.isEmpty()) {
+			if (placement.alignment === 'bottom-to-anchor') {
+				const anchorY = anchorPosition?.y ?? root.position.y
+				root.position.y += anchorY - bounds.min.y
+			} else if (placement.alignment === 'place-on-surface' && supportRoot) {
+				const surfaceY = resolveRuntimePrefabSurfaceY(anchorPosition, root, supportRoot)
+				if (surfaceY !== null) {
+					root.position.y += surfaceY - bounds.min.y
+				}
+			} else if (placement.alignment === 'center-to-anchor' && anchorPosition) {
+				const center = bounds.getCenter(new THREE.Vector3())
+				root.position.x += anchorPosition.x - center.x
+				root.position.y += anchorPosition.y - center.y
+				root.position.z += anchorPosition.z - center.z
+			}
+		}
+	}
+	if (offset) {
+		root.position.x += offset.x
+		root.position.y += offset.y
+		root.position.z += offset.z
+	}
+}
+
+function resolveRuntimePrefabSurfaceY(
+	anchorPosition: Vector3Like | null,
+	root: THREE.Object3D,
+	supportRoot: THREE.Object3D,
+): number | null {
+	const sampleX = anchorPosition?.x ?? root.position.x
+	const sampleZ = anchorPosition?.z ?? root.position.z
+	if (!Number.isFinite(sampleX) || !Number.isFinite(sampleZ)) {
+		return null
+	}
+	const raycaster = new THREE.Raycaster()
+	raycaster.set(new THREE.Vector3(sampleX, 100000, sampleZ), new THREE.Vector3(0, -1, 0))
+	raycaster.far = 200000
+	const intersections = raycaster.intersectObject(supportRoot, true)
+	const hit = intersections.find((entry) => entry.object.visible && Number.isFinite(entry.point.y))
+	return hit?.point.y ?? null
+}
+
+async function spawnBehaviorRuntimePrefab(event: Extract<BehaviorRuntimeEvent, { type: 'spawn-prefab' }>): Promise<void> {
+	if (!event.assetId || !currentDocument || !rootGroup || !scene) {
+		return
+	}
+	const raw = await loadTextAssetContent(event.assetId)
+	if (!raw) {
+		appendWarningMessage(`Failed to load prefab asset: ${event.assetId}`)
+		return
+	}
+	const prefab = parseRuntimePrefabData(raw)
+	const cloned = cloneRuntimePrefabNode(prefab)
+	const anchor = resolveRuntimePrefabAnchorTransform(event.targetNodeId, null)
+	if (anchor.position) {
+		cloned.root.position = anchor.position
+	}
+	if (anchor.rotation) {
+		cloned.root.rotation = anchor.rotation
+	}
+	const runtimeDocument = createRuntimePrefabDocument(prefab, cloned.root)
+	const localAssetOverrides = await buildPreviewLocalAssetOverrides(runtimeDocument)
+	const buildOptions: SceneGraphBuildOptions = {
+		serverAssetBaseUrl: readServerDownloadBaseUrl(),
+		materialFactoryOptions: {
+			hdrLoader: rgbeLoader,
+		},
+	}
+	const mergedAssetOverrides = mergePreviewAssetOverrides(
+		activeScenePackageAssetOverrides,
+		Object.keys(localAssetOverrides).length ? localAssetOverrides : undefined,
+	)
+	if (mergedAssetOverrides) {
+		buildOptions.assetOverrides = mergedAssetOverrides
+	}
+	const resourceCache = ensureEditorResourceCache(runtimeDocument, buildOptions)
+	const graph = await buildSceneGraph(runtimeDocument, resourceCache, buildOptions)
+	applyRuntimePrefabPlacement(graph.root, event.placement, anchor.position, rootGroup)
+	rootGroup.add(graph.root)
+	runtimePrefabPreviewRoots.add(graph.root)
+
+	if (normalizeRuntimePrefabMode(event.initializationMode) === 'full') {
+		mergeRuntimePrefabAssetRegistry(currentDocument, runtimeDocument)
+		currentDocument.nodes = [...(currentDocument.nodes ?? []), cloned.root]
+		currentDocument.updatedAt = new Date().toISOString()
+		rebuildPreviewNodeMap(currentDocument)
+		registerSubtree(graph.root)
+		syncPhysicsBodiesForDocument(currentDocument)
+		await syncTerrainScatterInstances(currentDocument, editorResourceCache)
+		refreshBehaviorProximityCandidates()
+	}
+	warningMessages.value = [...warningMessages.value, ...graph.warnings]
+	if (isRigidbodyDebugVisible.value) {
+		syncRigidbodyDebugHelpers()
+	}
+}
+
 async function ensureLanternText(assetId: string): Promise<void> {
 	const trimmed = assetId.trim()
 	if (!trimmed.length) {
@@ -7883,6 +8105,9 @@ function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
 			break
 		case 'move-camera':
 			handleMoveCameraEvent(event)
+			break
+		case 'spawn-prefab':
+			void spawnBehaviorRuntimePrefab(event)
 			break
 		case 'show-bubble':
 			presentBehaviorBubble(event)
@@ -11244,6 +11469,17 @@ function ensureVehicleBindingForNode(nodeId: string): void {
 	}
 }
 
+function resolveRigidbodyBindingObject(
+	component: SceneNodeComponentState<RigidbodyComponentProps>,
+	fallbackObject: THREE.Object3D | null,
+): THREE.Object3D | null {
+	const targetNodeId = typeof component.props?.targetNodeId === 'string' ? component.props.targetNodeId.trim() : ''
+	if (targetNodeId) {
+		return nodeObjectMap.get(targetNodeId) ?? null
+	}
+	return fallbackObject
+}
+
 function ensureRigidbodyBindingForObject(nodeId: string, object: THREE.Object3D): void {
 	if (!physicsWorld || !currentDocument) {
 		return
@@ -11256,8 +11492,12 @@ function ensureRigidbodyBindingForObject(nodeId: string, object: THREE.Object3D)
 	if (!node || !component || !object) {
 		return
 	}
+	const bindingObject = resolveRigidbodyBindingObject(component, object)
+	if (!bindingObject) {
+		return
+	}
 	if (isRoadDynamicMesh(node.dynamicMesh) && (component.props as RigidbodyComponentProps | undefined)?.bodyType === 'STATIC') {
-		ensureRoadRigidbodyInstance(node, component, object)
+		ensureRoadRigidbodyInstance(node, component, bindingObject)
 		refreshRigidbodyDebugHelper(nodeId)
 		return
 	}
@@ -11266,19 +11506,19 @@ function ensureRigidbodyBindingForObject(nodeId: string, object: THREE.Object3D)
 	}
 	const existing = rigidbodyInstances.get(nodeId)
 	if (existing) {
-		existing.object = object
-		syncSharedBodyFromObject(existing.body, object, existing.orientationAdjustment)
+		existing.object = bindingObject
+		syncSharedBodyFromObject(existing.body, bindingObject, existing.orientationAdjustment)
 		scenePreviewPerf.applyAggressiveSleepForNonInteractiveDynamic({
 			nodeId,
 			body: existing.body,
 			isVehicle: Boolean(resolveVehicleComponent(node)),
-			isProtagonist: Boolean(object.userData?.protagonist),
+			isProtagonist: Boolean(bindingObject.userData?.protagonist),
 		})
 		ensureVehicleBindingForNode(nodeId)
 		refreshRigidbodyDebugHelper(nodeId)
 		return
 	}
-	const bodyEntry = createRigidbodyBody(node, component, shapeDefinition, object)
+	const bodyEntry = createRigidbodyBody(node, component, shapeDefinition, bindingObject)
 	if (!bodyEntry) {
 		return
 	}
@@ -11286,14 +11526,14 @@ function ensureRigidbodyBindingForObject(nodeId: string, object: THREE.Object3D)
 		nodeId,
 		body: bodyEntry.body,
 		isVehicle: Boolean(resolveVehicleComponent(node)),
-		isProtagonist: Boolean(object.userData?.protagonist),
+		isProtagonist: Boolean(bindingObject.userData?.protagonist),
 	})
 	physicsWorld.addBody(bodyEntry.body)
 	rigidbodyInstances.set(nodeId, {
 		nodeId,
 		body: bodyEntry.body,
 		bodies: [bodyEntry.body],
-		object,
+		object: bindingObject,
 		orientationAdjustment: bodyEntry.orientationAdjustment,
 	})
 	refreshRigidbodyDebugHelper(nodeId)
@@ -11379,7 +11619,7 @@ function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null):
 		desiredIds.add(node.id)
 		const component = resolvePhysicsRigidbodyComponent(node)
 		const shapeDefinition = extractRigidbodyShape(component)
-		const object = nodeObjectMap.get(node.id) ?? null
+		const object = component ? resolveRigidbodyBindingObject(component, nodeObjectMap.get(node.id) ?? null) : null
 		const requiresMetadata = !hasAutoGeneratedDynamicShape(node.dynamicMesh, node)
 		const hasBoundaryWall = Boolean(resolveBoundaryWallComponent(node))
 		if (!component || !object) {
@@ -12316,6 +12556,7 @@ async function updateScene(document: SceneJsonExportDocument) {
 	resetAssetResolutionCaches()
 	releaseTerrainScatterInstances()
 	resetProtagonistPoseState()
+	clearRuntimePrefabPreviewRoots()
 
 	refreshResourceAssetInfo(document)
 	disposeSkyResources()
@@ -12546,6 +12787,7 @@ onBeforeUnmount(() => {
 	if (typeof window !== 'undefined') {
 		window.removeEventListener('harmony-preview-nominate-change', syncPreviewNominateStateMap)
 	}
+	clearRuntimePrefabPreviewRoots()
 	dismissBehaviorBubble({ type: 'continue' })
 	rendererInitialized = false
 	if (steeringWheelState.dragging) {
