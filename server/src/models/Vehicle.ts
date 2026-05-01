@@ -7,6 +7,7 @@ const vehicleSchema = new Schema<VehicleDocument>(
     name: { type: String, required: true, trim: true },
     description: { type: String, default: '' },
     coverUrl: { type: String, required: true, default: '' },
+    prefabUrl: { type: String, default: '' },
     isActive: { type: Boolean, default: true },
     isDefault: { type: Boolean, default: false },
     // Performance / tuning attributes

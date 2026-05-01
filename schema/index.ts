@@ -14,6 +14,7 @@ export const PROTAGONIST_NODE_ID = 'harmony:protagonist'
 
 export { AssetCache, AssetLoader } from './assetCache'
 export type { AssetCacheEntry, AssetCacheStatus, AssetSource, AssetLoadOptions, AssetLoadPersistenceOptions } from './assetCache'
+export * from './runtimePrefab'
 export {
   createIndexedDbPersistentAssetStorage,
   createNoopPersistentAssetStorage,
@@ -649,9 +650,44 @@ export type SceneNodeOutlineMesh = SceneOutlineMesh
 
 export type BehaviorEventType = 'click' | 'approach' | 'depart' | 'perform'
 
+export type RuntimePrefabInitializationMode = 'full' | 'render-only'
+
+export type RuntimePrefabPlacementAlignment = 'origin' | 'bottom-to-anchor' | 'center-to-anchor' | 'place-on-surface' | 'custom-offset'
+
+export interface RuntimePrefabPlacementOptions {
+  /** Controls how the generated prefab bounds are aligned to the spawn anchor. */
+  alignment: RuntimePrefabPlacementAlignment
+  /** Optional final world-space offset after the base alignment is applied. */
+  offset?: Vector3Like | null
+}
+
+export interface RuntimePrefabSpawnRequest {
+  /** Optional stable caller-generated id for de-duplication/tracking. */
+  requestId?: string | null
+  /** Existing registered scene/project asset id for a prefab asset. */
+  assetId?: string | null
+  /** External direct download URL when the prefab does not exist in the asset registry. */
+  assetUrl?: string | null
+  /** Explicit node id used as the spawn anchor. */
+  targetNodeId?: string | null
+  /** Optional node name fallback used by runtime injection APIs. */
+  targetNodeName?: string | null
+  /** Explicit world position override. */
+  position?: Vector3Like | null
+  /** Explicit world rotation override in Euler radians. */
+  rotation?: Vector3Like | null
+  /** Explicit world scale override. */
+  scale?: Vector3Like | null
+  /** Controls whether runtime systems are fully initialized or only visuals are created. */
+  initializationMode?: RuntimePrefabInitializationMode
+  /** Controls how the prefab instance is positioned relative to the spawn anchor. */
+  placement?: RuntimePrefabPlacementOptions | null
+}
+
 export type BehaviorScriptType =
   | 'delay'
   | 'moveTo'
+  | 'spawnPrefab'
   | 'showAlert'
   | 'bubble'
   | 'playSound'
@@ -686,6 +722,17 @@ export interface MoveToBehaviorParams {
   targetNodeId: string | null
   /** Camera travel duration in seconds. */
   duration: number
+}
+
+export interface SpawnPrefabBehaviorParams {
+  /** Prefab asset id from the asset registry. */
+  assetId: string | null
+  /** Node whose world transform is used as the spawn anchor. Defaults to the behavior owner node. */
+  targetNodeId: string | null
+  /** Whether the spawned instance initializes runtime systems or only visual rendering. */
+  initializationMode: RuntimePrefabInitializationMode
+  /** Controls how the prefab instance is positioned relative to the spawn anchor. */
+  placement: RuntimePrefabPlacementOptions
 }
 
 export interface ShowAlertBehaviorParams {
@@ -926,6 +973,10 @@ export type SceneBehaviorScriptBinding =
   | {
       type: 'moveTo'
       params: MoveToBehaviorParams
+    }
+  | {
+      type: 'spawnPrefab'
+      params: SpawnPrefabBehaviorParams
     }
   | {
       type: 'showAlert'

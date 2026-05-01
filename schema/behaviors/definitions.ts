@@ -5,6 +5,7 @@ import type {
   DelayBehaviorParams,
   LookBehaviorParams,
   MoveToBehaviorParams,
+  SpawnPrefabBehaviorParams,
   SceneBehavior,
   SceneBehaviorMap,
   SceneBehaviorScriptBinding,
@@ -37,6 +38,8 @@ import type {
   LoadSceneBehaviorParams,
   ExitSceneBehaviorParams,
   PunchBehaviorParams,
+  RuntimePrefabInitializationMode,
+  RuntimePrefabPlacementOptions,
 } from '../index'
 
 export interface BehaviorActionDefinition {
@@ -254,6 +257,36 @@ function normalizeSceneId(value: string | null | undefined): string {
   return value.trim()
 }
 
+function normalizeRuntimePrefabInitializationMode(
+  value: string | null | undefined,
+): RuntimePrefabInitializationMode {
+  return value === 'render-only' ? 'render-only' : 'full'
+}
+
+function normalizeVector3Like(value: unknown): { x: number; y: number; z: number } | null {
+  if (!value || typeof value !== 'object') {
+    return null
+  }
+  const candidate = value as Partial<{ x: unknown; y: unknown; z: unknown }>
+  const x = typeof candidate.x === 'number' && Number.isFinite(candidate.x) ? candidate.x : 0
+  const y = typeof candidate.y === 'number' && Number.isFinite(candidate.y) ? candidate.y : 0
+  const z = typeof candidate.z === 'number' && Number.isFinite(candidate.z) ? candidate.z : 0
+  return { x, y, z }
+}
+
+function normalizeRuntimePrefabPlacement(value: unknown): RuntimePrefabPlacementOptions {
+  const candidate = value && typeof value === 'object'
+    ? value as Partial<RuntimePrefabPlacementOptions>
+    : null
+  const alignment = candidate?.alignment === 'bottom-to-anchor' || candidate?.alignment === 'center-to-anchor' || candidate?.alignment === 'place-on-surface' || candidate?.alignment === 'custom-offset'
+    ? candidate.alignment
+    : 'origin'
+  return {
+    alignment,
+    offset: normalizeVector3Like(candidate?.offset),
+  }
+}
+
 const scriptDefinitions: BehaviorScriptDefinition[] = [
   {
     id: 'delay',
@@ -275,6 +308,23 @@ const scriptDefinitions: BehaviorScriptDefinition[] = [
       return {
         targetNodeId: null,
         duration: 0.8,
+      }
+    },
+  },
+  {
+    id: 'spawnPrefab',
+    label: 'Spawn Prefab',
+    description: 'Create a prefab instance at the chosen node transform.',
+    icon: 'mdi-cube-send',
+    createDefaultParams(): SpawnPrefabBehaviorParams {
+      return {
+        assetId: null,
+        targetNodeId: null,
+        initializationMode: 'full',
+        placement: {
+          alignment: 'origin',
+          offset: null,
+        },
       }
     },
   },
@@ -1177,6 +1227,18 @@ export function ensureBehaviorParams(
           params: {
             targetNodeId: params?.targetNodeId ?? null,
             duration: Math.max(0, params?.duration ?? 0.6),
+          },
+        }
+      }
+      case 'spawnPrefab': {
+        const params = script.params as Partial<SpawnPrefabBehaviorParams> | undefined
+        return {
+          type: 'spawnPrefab',
+          params: {
+            assetId: normalizeAssetId(params?.assetId),
+            targetNodeId: normalizeTargetNodeId(params?.targetNodeId),
+            initializationMode: normalizeRuntimePrefabInitializationMode(params?.initializationMode),
+            placement: normalizeRuntimePrefabPlacement(params?.placement),
           },
         }
       }

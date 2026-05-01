@@ -34,6 +34,7 @@ interface VehicleFormModel {
   name: string;
   description: string;
   coverUrl: string;
+  prefabUrl: string;
   isActive: boolean;
   isDefault: boolean;
   maxSpeed: number;
@@ -54,6 +55,7 @@ const vehicleFormModel = reactive<VehicleFormModel>({
   name: '',
   description: '',
   coverUrl: '',
+  prefabUrl: '',
   isActive: true,
   isDefault: false,
   maxSpeed: 120,
@@ -108,6 +110,7 @@ function resetForm() {
   vehicleFormModel.name = '';
   vehicleFormModel.description = '';
   vehicleFormModel.coverUrl = '';
+  vehicleFormModel.prefabUrl = '';
   vehicleFormModel.isActive = true;
   vehicleFormModel.isDefault = false;
   imageFileList.value = [];
@@ -128,6 +131,7 @@ async function openEditModal(row: VehicleItem) {
     vehicleFormModel.name = data.name || '';
     vehicleFormModel.description = data.description || '';
     vehicleFormModel.coverUrl = data.coverUrl || '';
+    vehicleFormModel.prefabUrl = data.prefabUrl || '';
     vehicleFormModel.isActive = data.isActive !== false;
     vehicleFormModel.isDefault = data.isDefault !== false;
     vehicleFormModel.maxSpeed = typeof data.maxSpeed === 'number' ? data.maxSpeed : vehicleFormModel.maxSpeed;
@@ -170,6 +174,7 @@ async function submitVehicle() {
       name: vehicleFormModel.name.trim(),
       description: vehicleFormModel.description.trim(),
       coverUrl: coverUrl || '',
+      prefabUrl: vehicleFormModel.prefabUrl.trim(),
       isActive: vehicleFormModel.isActive,
       isDefault: vehicleFormModel.isDefault,
       maxSpeed: Number(vehicleFormModel.maxSpeed),
@@ -350,6 +355,9 @@ const [VehicleGrid, vehicleGridApi] = useVbenVxeGrid<VehicleItem>({
           </Tabs.TabPane>
 
           <Tabs.TabPane key="other" tab="其他字段">
+            <Form.Item label="Prefab URL" name="prefabUrl">
+              <Input v-model:value="vehicleFormModel.prefabUrl" placeholder="车辆 prefab 下载地址" />
+            </Form.Item>
             <Form.Item label="最大速度 (km/h)">
               <InputNumber v-model:value="vehicleFormModel.maxSpeed" :min="0" :max="400" style="width: 100%" />
             </Form.Item>
