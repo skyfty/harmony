@@ -13783,7 +13783,13 @@ async function loadEnvironmentTextureFromAsset(assetId: string): Promise<THREE.T
 
     try {
       if (isKtx2LikeExtension(extension)) {
+        if (!renderer) {
+          return null
+        }
         const ktx2Loader = await createKtx2Loader(renderer);
+        if (!ktx2Loader) {
+          return null
+        }
         const texture = await ktx2Loader.loadAsync(url)
         texture.mapping = THREE.CubeUVReflectionMapping
         texture.colorSpace = THREE.SRGBColorSpace
