@@ -179,6 +179,7 @@ import {
 	effectComponentDefinition,
 	rigidbodyComponentDefinition,
 	vehicleComponentDefinition,
+	steerComponentDefinition,
 	waterComponentDefinition,
 	protagonistComponentDefinition,
 	signboardComponentDefinition,
@@ -199,6 +200,7 @@ import {
 	RIGIDBODY_COMPONENT_TYPE,
 	RIGIDBODY_METADATA_KEY,
 	VEHICLE_COMPONENT_TYPE,
+	STEER_COMPONENT_TYPE,
 	AUTO_TOUR_COMPONENT_TYPE,
 	WALL_COMPONENT_TYPE,
 	BOUNDARY_WALL_COMPONENT_TYPE,
@@ -214,6 +216,7 @@ import {
 	clampVehicleComponentProps,
 	clampCharacterControllerComponentProps,
 	clampLodComponentProps,
+	clampSteerComponentProps,
 	forEachWaterRuntimeHandle,
 	resolveLodRenderTarget,
 	resolveModelCollisionComponentPropsFromNode,
@@ -268,6 +271,7 @@ import type {
     
 	VehicleComponentProps,
 	VehicleWheelProps,
+	SteerComponentProps,
 	WarpGateComponentProps,
 } from '@schema/components'
 import { setBoundingBoxFromObject } from '@/components/editor/sceneUtils'
@@ -1043,7 +1047,7 @@ previewComponentManager.registerDefinition(warpGateComponentDefinition)
 previewComponentManager.registerDefinition(effectComponentDefinition)
 previewComponentManager.registerDefinition(rigidbodyComponentDefinition)
 previewComponentManager.registerDefinition(vehicleComponentDefinition)
-previewComponentManager.registerDefinition(characterControllerComponentDefinition)
+previewComponentManager.registerDefinition(steerComponentDefinition)
 previewComponentManager.registerDefinition(waterComponentDefinition)
 previewComponentManager.registerDefinition(behaviorComponentDefinition)
 previewComponentManager.registerDefinition(protagonistComponentDefinition)
@@ -1215,6 +1219,7 @@ const vehicleDriveState = reactive<VehicleDriveRuntimeState>({
 
 const vehicleDriveUiOverride = ref<'auto' | 'show' | 'hide'>('auto')
 const pendingVehicleDriveEvent = ref<Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }> | null>(null)
+const pendingDefaultSteerDriveEvent = ref<Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }> | null>(null)
 const vehicleDrivePromptBusy = ref(false)
 const vehicleDriveExitBusy = ref(false)
 const activeAutoTourNodeIds = reactive(new Set<string>())
@@ -3392,6 +3397,72 @@ function resolveVehicleComponent(
 	node: SceneNode | null | undefined,
 ): SceneNodeComponentState<VehicleComponentProps> | null {
 	return resolveEnabledComponentState<VehicleComponentProps>(node, VEHICLE_COMPONENT_TYPE)
+}
+
+function resolveSteerComponent(
+	node: SceneNode | null | undefined,
+): SceneNodeComponentState<SteerComponentProps> | null {
+	return resolveEnabledComponentState<SteerComponentProps>(node, STEER_COMPONENT_TYPE)
+}
+
+function findNodeById(nodes: SceneNode[] | null | undefined, targetId: string): SceneNode | null {
+	if (!Array.isArray(nodes) || !targetId.trim().length) {
+		return null
+	}
+	const stack = [...nodes]
+	while (stack.length) {
+		const node = stack.pop()
+		if (!node) {
+			continue
+		}
+		if (node.id === targetId) {
+			return node
+		}
+		if (Array.isArray(node.children) && node.children.length) {
+			stack.push(...node.children)
+		}
+	}
+	return null
+}
+
+function resolveDefaultSteerBinding(document: SceneJsonExportDocument): string | null {
+	const nodes = Array.isArray(document.nodes) ? document.nodes : []
+	const stack = [...nodes]
+	while (stack.length) {
+		const node = stack.pop()
+		if (!node) {
+			continue
+		}
+		const steer = resolveSteerComponent(node)
+		if (steer) {
+			const props = clampSteerComponentProps(steer.props)
+			if (!props.autoEnterOnSceneLoad || !props.targetNodeId) {
+				continue
+			}
+			const targetNode = findNodeById(nodes, props.targetNodeId)
+			if (resolveVehicleComponent(targetNode)) {
+				return props.targetNodeId
+			}
+		}
+		if (Array.isArray(node.children) && node.children.length) {
+			stack.push(...node.children)
+		}
+	}
+	return null
+}
+
+function buildDefaultSteerDriveEvent(nodeId: string): Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }> {
+	return {
+		type: 'vehicle-drive',
+		nodeId,
+		action: 'click',
+		sequenceId: '__manual_vehicle_drive__',
+		behaviorSequenceId: '__scene-preview-default-steer__',
+		behaviorId: '__scene-preview-default-steer__',
+		targetNodeId: nodeId,
+		seatNodeId: null,
+		token: `scene-preview-default-steer:${nodeId}`,
+	}
 }
 
 function resolveAutoTourComponent(
@@ -7184,6 +7255,8 @@ async function buildPreviewRuntimeDocument(
 	document: SceneJsonExportDocument,
 	options: { groundHeightSidecar?: ArrayBuffer | null; groundScatterSidecar?: ArrayBuffer | null; groundPaintSidecar?: ArrayBuffer | null } = {},
 ): Promise<SceneJsonExportDocument> {
+	const defaultSteerNodeId = resolveDefaultSteerBinding(document)
+	pendingDefaultSteerDriveEvent.value = defaultSteerNodeId ? buildDefaultSteerDriveEvent(defaultSteerNodeId) : null
 	const groundNode = findGroundNode(document.nodes)
 	const sidecar = await resolvePreviewGroundHeightSidecar(document.id, groundNode, options.groundHeightSidecar)
 	const scatterSidecar = options.groundScatterSidecar ?? await useScenesStore().loadGroundScatterSidecar(document.id)
@@ -8280,6 +8353,28 @@ function handleVehicleDebusEvent(): void {
 		return
 	}
 	stopVehicleDriveMode({ resolution: { type: 'continue' } })
+}
+
+function activatePendingDefaultSteerDriveIfNeeded(): void {
+	const event = pendingDefaultSteerDriveEvent.value
+	if (!event || vehicleDriveState.active) {
+		return
+	}
+	pendingDefaultSteerDriveEvent.value = null
+	if (event.sequenceId === '__manual_vehicle_drive__' && controlMode.value !== 'third-person') {
+		controlMode.value = 'third-person'
+	}
+	vehicleDrivePromptBusy.value = true
+	try {
+		const result = startVehicleDriveMode(event)
+		if (!result.success) {
+			appendWarningMessage(result.message ?? 'Failed to start default steer drive.')
+			return
+		}
+		handleShowVehicleCockpitEvent()
+	} finally {
+		vehicleDrivePromptBusy.value = false
+	}
 }
 
 function handleShowVehicleCockpitEvent(): void {
@@ -13166,6 +13261,7 @@ async function updateScene(document: SceneJsonExportDocument) {
 		)
 	}
 	applyPreviewNominateOverrides()
+	activatePendingDefaultSteerDriveIfNeeded()
 }
 
 function applySnapshot(snapshot: ScenePreviewSnapshot) {
