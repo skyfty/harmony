@@ -447,6 +447,7 @@ type SceneryProps = {
   projectId?: string;
   packageUrl?: string;
   packageCacheKey?: string;
+  defaultSteerIdentifier?: string;
   nominateStateMap?: NominateExternalStateMap;
   physicsInterpolation?: boolean;
   serverAssetBaseUrl?: string;
@@ -697,6 +698,12 @@ import {
   type VehicleComponentProps,
   type VehicleWheelProps,
 } from '@harmony/schema/components/definitions/vehicleComponent';
+import {
+  steerComponentDefinition,
+  STEER_COMPONENT_TYPE,
+  clampSteerComponentProps,
+  type SteerComponentProps,
+} from '@harmony/schema/components/definitions/steerComponent';
 import {
   waterComponentDefinition,
 } from '@harmony/schema/components/definitions/waterComponent';
@@ -1661,6 +1668,7 @@ previewComponentManager.registerDefinition(behaviorComponentDefinition);
 previewComponentManager.registerDefinition(rigidbodyComponentDefinition);
 previewComponentManager.registerDefinition(vehicleComponentDefinition);
 previewComponentManager.registerDefinition(characterControllerComponentDefinition);
+previewComponentManager.registerDefinition(steerComponentDefinition);
 previewComponentManager.registerDefinition(waterComponentDefinition);
 previewComponentManager.registerDefinition(protagonistComponentDefinition);
 previewComponentManager.registerDefinition(lodComponentDefinition);
@@ -2603,6 +2611,7 @@ const vehicleDriveUi = computed(() => {
 });
 
 const pendingVehicleDriveEvent = ref<Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }> | null>(null);
+const pendingDefaultSteerDriveEvent = ref<Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }> | null>(null);
 const vehicleDrivePromptBusy = ref(false);
 const activeAutoTourNodeIds = reactive(new Set<string>());
 
@@ -3704,11 +3713,13 @@ function normalizeRuntimePrefabRequest(request: RuntimePrefabSpawnRequest | null
   }
   const assetId = typeof request.assetId === 'string' ? request.assetId.trim() : '';
   const assetUrl = typeof request.assetUrl === 'string' ? request.assetUrl.trim() : '';
+  const vehicleIdentifier = typeof request.vehicleIdentifier === 'string' ? request.vehicleIdentifier.trim() : '';
   if (!assetId && !assetUrl) {
     return null;
   }
   return {
     requestId: typeof request.requestId === 'string' ? request.requestId.trim() || null : null,
+    vehicleIdentifier: vehicleIdentifier || null,
     assetId: assetId || null,
     assetUrl: assetUrl || null,
     targetNodeId: typeof request.targetNodeId === 'string' ? request.targetNodeId.trim() || null : null,
@@ -3942,6 +3953,177 @@ async function collectRuntimePrefabAssetRegistry(
     Object.assign(merged, entry.assetRegistry);
   });
   return Object.keys(merged).length ? merged : null;
+}
+
+type ResolvedSteerBinding = {
+  steerNodeId: string;
+  steerNode: SceneNode;
+  steerComponent: SceneNodeComponentState<SteerComponentProps>;
+  steerProps: SteerComponentProps;
+  targetNodeId: string;
+};
+
+function cloneScenePreviewDocument(document: SceneJsonExportDocument): SceneJsonExportDocument {
+  return JSON.parse(JSON.stringify(document)) as SceneJsonExportDocument;
+}
+
+function findFirstVehicleNodeId(node: SceneNode | null | undefined): string | null {
+  if (!node) {
+    return null;
+  }
+  const stack: SceneNode[] = [node];
+  while (stack.length) {
+    const current = stack.pop();
+    if (!current) {
+      continue;
+    }
+    if (resolveEnabledComponentState<VehicleComponentProps>(current, VEHICLE_COMPONENT_TYPE)) {
+      return current.id ?? null;
+    }
+    if (Array.isArray(current.children) && current.children.length) {
+      stack.push(...current.children);
+    }
+  }
+  return null;
+}
+
+function replaceSceneNodeById(nodes: SceneNode[] | undefined | null, nodeId: string, replacement: SceneNode): boolean {
+  if (!Array.isArray(nodes) || !nodeId.trim().length) {
+    return false;
+  }
+  const index = nodes.findIndex((node) => node?.id === nodeId);
+  if (index >= 0) {
+    nodes.splice(index, 1, replacement);
+    return true;
+  }
+  for (const node of nodes) {
+    if (replaceSceneNodeById(node.children, nodeId, replacement)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function applySteerTargetTransform(targetNode: SceneNode, replacementRoot: SceneNode): void {
+  replacementRoot.position = cloneVectorLikeValue(targetNode.position) ?? cloneVectorLikeValue(replacementRoot.position) ?? { x: 0, y: 0, z: 0 };
+  replacementRoot.rotation = cloneVectorLikeValue(targetNode.rotation) ?? cloneVectorLikeValue(replacementRoot.rotation) ?? { x: 0, y: 0, z: 0 };
+  replacementRoot.scale = cloneVectorLikeValue(targetNode.scale) ?? cloneVectorLikeValue(replacementRoot.scale) ?? { x: 1, y: 1, z: 1 };
+  if (typeof targetNode.visible === 'boolean') {
+    replacementRoot.visible = targetNode.visible;
+  }
+  if (typeof targetNode.name === 'string' && targetNode.name.trim().length) {
+    replacementRoot.name = targetNode.name;
+  }
+}
+
+function resolveDefaultSteerBinding(
+  document: SceneJsonExportDocument,
+  defaultSteerIdentifier: string | null,
+): ResolvedSteerBinding | null {
+  const stack: SceneNode[] = Array.isArray(document.nodes) ? [...document.nodes] : [];
+  let fallback: ResolvedSteerBinding | null = null;
+  while (stack.length) {
+    const node = stack.pop();
+    if (!node) {
+      continue;
+    }
+    const steerComponent = resolveEnabledComponentState<SteerComponentProps>(node, STEER_COMPONENT_TYPE);
+    if (steerComponent) {
+      const steerProps = clampSteerComponentProps(steerComponent.props ?? null);
+      if (steerProps.targetType === 'vehicle' && steerProps.targetNodeId && steerProps.autoEnterOnSceneLoad) {
+        const binding: ResolvedSteerBinding = {
+          steerNodeId: node.id,
+          steerNode: node,
+          steerComponent,
+          steerProps,
+          targetNodeId: steerProps.targetNodeId,
+        };
+        if (defaultSteerIdentifier && steerProps.defaultIdentifier === defaultSteerIdentifier) {
+          return binding;
+        }
+        fallback ??= binding;
+      }
+    }
+    if (Array.isArray(node.children) && node.children.length) {
+      stack.push(...node.children);
+    }
+  }
+  return fallback;
+}
+
+function findMatchingSteerRuntimePrefabRequest(
+  requests: RuntimePrefabSpawnRequest[] | undefined,
+  vehicleIdentifier: string | null,
+): RuntimePrefabSpawnRequest | null {
+  if (!Array.isArray(requests) || !requests.length) {
+    return null;
+  }
+  const normalized = requests
+    .map((request) => normalizeRuntimePrefabRequest(request))
+    .filter((request): request is RuntimePrefabSpawnRequest => Boolean(request));
+  if (!normalized.length) {
+    return null;
+  }
+  if (vehicleIdentifier) {
+    const matched = normalized.find((request) => request.vehicleIdentifier === vehicleIdentifier);
+    if (matched) {
+      return matched;
+    }
+  }
+  return normalized.length === 1 ? normalized[0] : null;
+}
+
+async function prepareRenderPayloadForDefaultSteer(payload: ScenePreviewPayload): Promise<ScenePreviewPayload> {
+  pendingDefaultSteerDriveEvent.value = null;
+  const defaultSteerIdentifier = typeof props.defaultSteerIdentifier === 'string'
+    ? props.defaultSteerIdentifier.trim() || null
+    : null;
+  const binding = resolveDefaultSteerBinding(payload.document, defaultSteerIdentifier);
+  if (!binding) {
+    return payload;
+  }
+
+  let finalTargetNodeId = binding.targetNodeId;
+  let nextPayload = payload;
+  const matchedRequest = findMatchingSteerRuntimePrefabRequest(props.runtimePrefabSpawns, defaultSteerIdentifier);
+  if (matchedRequest) {
+    const source = await resolveRuntimePrefabSource(matchedRequest);
+    if (source) {
+      const nextDocument = cloneScenePreviewDocument(payload.document);
+      const documentNodeMap = new Map<string, SceneNode>();
+      const documentParentMap = new Map<string, string | null>();
+      rebuildSceneNodeIndex(nextDocument.nodes ?? null, documentNodeMap, documentParentMap);
+      const targetNode = resolveSceneNodeById(documentNodeMap, binding.targetNodeId);
+      const steerHostNode = resolveSceneNodeById(documentNodeMap, binding.steerNodeId);
+      const steerHostComponent = steerHostNode
+        ? resolveEnabledComponentState<SteerComponentProps>(steerHostNode, STEER_COMPONENT_TYPE)
+        : null;
+      if (targetNode && steerHostNode && steerHostComponent) {
+        const cloned = cloneRuntimePrefabNode(source.prefab);
+        applySteerTargetTransform(targetNode, cloned.root);
+        const replacementVehicleNodeId = findFirstVehicleNodeId(cloned.root) ?? cloned.root.id ?? null;
+        if (replacementVehicleNodeId && replaceSceneNodeById(nextDocument.nodes, targetNode.id, cloned.root)) {
+          steerHostComponent.props = clampSteerComponentProps({
+            ...(steerHostComponent.props ?? {}),
+            targetNodeId: replacementVehicleNodeId,
+            defaultIdentifier: defaultSteerIdentifier ?? binding.steerProps.defaultIdentifier ?? null,
+          });
+          nextDocument.updatedAt = new Date().toISOString();
+          finalTargetNodeId = replacementVehicleNodeId;
+          nextPayload = {
+            ...payload,
+            document: nextDocument,
+          };
+          appliedRuntimePrefabSpawnKeys.add(buildRuntimePrefabRequestKey(matchedRequest));
+        }
+      }
+    }
+  }
+
+  if (finalTargetNodeId) {
+    pendingDefaultSteerDriveEvent.value = buildFloatingAutoTourDriveEvent(finalTargetNodeId, null);
+  }
+  return nextPayload;
 }
 
 function clearSpawnedRuntimePrefabRoots(): void {
@@ -9837,6 +10019,15 @@ function stopFloatingAutoTourAndResumeManualDrive(
   return true;
 }
 
+function activatePendingDefaultSteerDriveIfNeeded(): void {
+  const event = pendingDefaultSteerDriveEvent.value;
+  if (!event) {
+    return;
+  }
+  pendingDefaultSteerDriveEvent.value = null;
+  handleVehicleDriveEvent(event);
+}
+
 function handleFloatingAutoTourTap(): void {
   const button = floatingAutoTourButton.value;
   if (!button.visible || button.disabled || !button.nodeId) {
@@ -11957,7 +12148,11 @@ async function startRenderIfReady() {
           },
         }
       : previewPayload.value;
-    await initializeRenderer(renderPayload, canvasResult, token);
+    const preparedPayload = await prepareRenderPayloadForDefaultSteer(renderPayload);
+    if (token !== initializeToken) {
+      return;
+    }
+    await initializeRenderer(preparedPayload, canvasResult, token);
     if (token === initializeToken && !error.value) {
       hasRenderedSceneOnce = true;
       emit('loaded');
@@ -12129,6 +12324,7 @@ function teardownRenderer() {
   resetAnimationControllers();
   pendingRuntimePrefabSpawnRequests.length = 0;
   appliedRuntimePrefabSpawnKeys.clear();
+  pendingDefaultSteerDriveEvent.value = null;
   clearSpawnedRuntimePrefabRoots();
   previewNodeMap.clear();
   autoTourRuntime.reset();
@@ -12701,6 +12897,7 @@ function cleanupForUnrelatedSceneSwitch(): void {
   resetAnimationControllers();
   pendingRuntimePrefabSpawnRequests.length = 0;
   appliedRuntimePrefabSpawnKeys.clear();
+  pendingDefaultSteerDriveEvent.value = null;
   clearSpawnedRuntimePrefabRoots();
 
   previewNodeMap.clear();
@@ -12813,6 +13010,7 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
 
   // Phase 5: apply view settings (camera alignment, environment, projection).
   applyDocumentViewSettings(payload.document, camera);
+  activatePendingDefaultSteerDriveIfNeeded();
   markInstancedCullingDirty();
 
   // Phase 6: start the render loop.
