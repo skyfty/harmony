@@ -373,6 +373,8 @@ const physicsQuaternionHelper = new THREE.Quaternion()
 const physicsScaleHelper = new THREE.Vector3()
 const syncBodyQuaternionHelper = new THREE.Quaternion()
 const bodyQuaternionHelper = new THREE.Quaternion()
+const bodyParentQuaternionHelper = new THREE.Quaternion()
+const bodyWorldPositionHelper = new THREE.Vector3()
 // Removed unused wall helper variables to satisfy noUnusedLocals
 const wallAxisXHelper = new THREE.Vector3(1, 0, 0)
 const wallStartHelper = new THREE.Vector3()
@@ -1631,12 +1633,21 @@ export function syncObjectFromBody(
 	if (!object) {
 		return
 	}
-	object.position.set(body.position.x, body.position.y, body.position.z)
+	bodyWorldPositionHelper.set(body.position.x, body.position.y, body.position.z)
 	bodyQuaternionHelper.set(body.quaternion.x, body.quaternion.y, body.quaternion.z, body.quaternion.w)
 	if (orientationAdjustment) {
 		bodyQuaternionHelper.multiply(orientationAdjustment.threeInverse)
 	}
-	object.quaternion.copy(bodyQuaternionHelper)
+	if (object.parent) {
+		object.parent.updateMatrixWorld(true)
+		object.position.copy(bodyWorldPositionHelper)
+		object.parent.worldToLocal(object.position)
+		object.parent.getWorldQuaternion(bodyParentQuaternionHelper).invert()
+		object.quaternion.copy(bodyParentQuaternionHelper).multiply(bodyQuaternionHelper)
+	} else {
+		object.position.copy(bodyWorldPositionHelper)
+		object.quaternion.copy(bodyQuaternionHelper)
+	}
 	object.updateMatrixWorld(true)
 	afterSync?.(object)
 }
