@@ -459,6 +459,13 @@ const emit = defineEmits<{
 const sceneStore = useSceneStore()
 
 function canCompleteNodePick(nodeId: string): boolean {
+  const node = findSceneNode(sceneStore.nodes, nodeId)
+  if (!node) {
+    return false
+  }
+  if (nodePickerStore.owner === 'steer-target') {
+    return Boolean(node.components?.[VEHICLE_COMPONENT_TYPE])
+  }
   return true
 }
 

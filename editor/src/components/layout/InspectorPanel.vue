@@ -26,6 +26,7 @@ import BoundaryWallPanel from '@/components/inspector/BoundaryWallPanel.vue'
 import OnlinePanel from '@/components/inspector/OnlinePanel.vue'
 import RigidbodyPanel from '@/components/inspector/RigidbodyPanel.vue'
 import VehiclePanel from '@/components/inspector/VehiclePanel.vue'
+import SteerPanel from '@/components/inspector/SteerPanel.vue'
 import LodPanel from '@/components/inspector/LodPanel.vue'
 import GuideRoutePanel from '@/components/inspector/GuideRoutePanel.vue'
 import AutoTourPanel from '@/components/inspector/AutoTourPanel.vue'
@@ -55,6 +56,7 @@ import {
   PLANNING_IMAGES_COMPONENT_TYPE,
   RIGIDBODY_COMPONENT_TYPE,
   VEHICLE_COMPONENT_TYPE,
+  STEER_COMPONENT_TYPE,
   VIEW_POINT_COMPONENT_TYPE,
   WARP_GATE_COMPONENT_TYPE,
   WALL_COMPONENT_TYPE,
@@ -612,6 +614,7 @@ watch(
                 @close-wheel-details="handleVehiclePanelRequestCloseWheelDetails"
                 @open-suspension-editor="handleOpenVehicleSuspensionEditor"
               />
+              <SteerPanel v-else-if="component.type === STEER_COMPONENT_TYPE" />
               <FloorPanel v-else-if="component.type === FLOOR_COMPONENT_TYPE" />
               <LandformPanel v-else-if="component.type === LANDFORM_COMPONENT_TYPE" />
               <ModelCollisionPanel v-else-if="component.type === MODEL_COLLISION_COMPONENT_TYPE" />
