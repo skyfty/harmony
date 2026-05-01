@@ -448,7 +448,6 @@ type SceneryProps = {
   packageUrl?: string;
   packageCacheKey?: string;
   nominateStateMap?: NominateExternalStateMap;
-  defaultSteerIdentifier?: string;
   physicsInterpolation?: boolean;
   serverAssetBaseUrl?: string;
   initialPunchedNodeIds?: string[];
@@ -746,11 +745,6 @@ import {
   applyNominateStateMapToRuntime,
   type NominateExternalStateMap,
 } from '@harmony/schema/components/definitions/nominateComponent';
-import {
-  steerComponentDefinition,
-  buildSteerResolvedEntryMap,
-  findDefaultSteerResolvedEntry,
-} from '@harmony/schema/components/definitions/steerComponent';
 import {
   preloadableComponentDefinition,
 } from '@harmony/schema/components/definitions/preloadableComponent';
@@ -1676,12 +1670,11 @@ previewComponentManager.registerDefinition(autoTourComponentDefinition);
 previewComponentManager.registerDefinition(purePursuitComponentDefinition);
 previewComponentManager.registerDefinition(sceneStateAnchorComponentDefinition);
 previewComponentManager.registerDefinition(nominateComponentDefinition);
-previewComponentManager.registerDefinition(steerComponentDefinition);
 previewComponentManager.registerDefinition(preloadableComponentDefinition);
 
 const previewNodeMap = new Map<string, SceneNode>();
 const previewParentMap = new Map<string, string | null>();
-let appliedDefaultSteerDriveKey: string | null = null;
+const hiddenVehicleDriveNodeIds = new Set<string>();
 const assetNodeIdMap = new Map<string, Set<string>>();
 const multiuserNodeIds = new Set<string>();
 const multiuserNodeObjects = new Map<string, THREE.Object3D>();
@@ -3893,6 +3886,64 @@ function mergeRuntimePrefabAssetRegistry(document: SceneJsonExportDocument, runt
   };
 }
 
+type ResolvedRuntimePrefabSource = {
+  prefab: ReturnType<typeof parseRuntimePrefabData>;
+  assetRegistry: Record<string, SceneAssetRegistryEntry> | null;
+};
+
+const runtimePrefabSourceCache = new Map<string, Promise<ResolvedRuntimePrefabSource | null>>();
+
+async function resolveRuntimePrefabSource(request: RuntimePrefabSpawnRequest): Promise<ResolvedRuntimePrefabSource | null> {
+  const normalized = normalizeRuntimePrefabRequest(request);
+  if (!normalized) {
+    return null;
+  }
+
+  const requestKey = buildRuntimePrefabRequestKey(normalized);
+  const cached = runtimePrefabSourceCache.get(requestKey);
+  if (cached) {
+    return await cached;
+  }
+
+  const task = (async () => {
+    const raw = await resolveRuntimePrefabSourceText(normalized);
+    if (!raw) {
+      return null;
+    }
+    const prefab = parseRuntimePrefabData(raw);
+    return {
+      prefab,
+      assetRegistry: prefab.assetRegistry
+        ? JSON.parse(JSON.stringify(prefab.assetRegistry)) as Record<string, SceneAssetRegistryEntry>
+        : null,
+    };
+  })().catch((error) => {
+    console.warn('[SceneViewer] Failed to resolve runtime prefab source', requestKey, error);
+    return null;
+  });
+
+  runtimePrefabSourceCache.set(requestKey, task);
+  return await task;
+}
+
+async function collectRuntimePrefabAssetRegistry(
+  requests: RuntimePrefabSpawnRequest[] | undefined,
+): Promise<Record<string, SceneAssetRegistryEntry> | null> {
+  if (!Array.isArray(requests) || !requests.length) {
+    return null;
+  }
+
+  const resolved = await Promise.all(requests.map((request) => resolveRuntimePrefabSource(request)));
+  const merged: Record<string, SceneAssetRegistryEntry> = {};
+  resolved.forEach((entry) => {
+    if (!entry?.assetRegistry) {
+      return;
+    }
+    Object.assign(merged, entry.assetRegistry);
+  });
+  return Object.keys(merged).length ? merged : null;
+}
+
 function clearSpawnedRuntimePrefabRoots(): void {
   const scene = renderContext?.scene ?? null;
   spawnedRuntimePrefabRoots.forEach(({ root }) => {
@@ -3922,12 +3973,12 @@ async function spawnRuntimePrefabRequest(request: RuntimePrefabSpawnRequest): Pr
   }
 
   const requestKey = buildRuntimePrefabRequestKey(request);
-  const raw = await resolveRuntimePrefabSourceText(request);
-  if (!raw) {
+  const source = await resolveRuntimePrefabSource(request);
+  if (!source) {
     return false;
   }
 
-  const prefab = parseRuntimePrefabData(raw);
+  const { prefab } = source;
   const cloned = cloneRuntimePrefabNode(prefab);
   const anchorTransform = applyRuntimePrefabTransform(cloned.root, request);
   const runtimeDocument = createRuntimePrefabDocument(prefab, cloned.root);
@@ -4631,54 +4682,27 @@ function resolveNodeById(nodeId: string): SceneNode | null {
   return resolveSceneNodeById(previewNodeMap, nodeId);
 }
 
-function normalizeSteerIdentifier(value: unknown): string {
-  return typeof value === 'string' ? value.trim() : '';
+function setVehicleDriveNodeVisibility(nodeId: string, visible: boolean): void {
+  const object = nodeObjectMap.get(nodeId);
+  if (object) {
+    object.visible = visible;
+    syncInstancedTransform(object);
+  }
+  const node = resolveNodeById(nodeId);
+  if (node) {
+    node.visible = visible;
+  }
+  updateBehaviorVisibility(nodeId, visible);
 }
 
-function resetAppliedDefaultSteerDriveKey(): void {
-  appliedDefaultSteerDriveKey = null;
-}
-
-function applyDefaultSteerDriveForCurrentScene(): void {
-  const document = currentDocument;
-  const identifier = normalizeSteerIdentifier(props.defaultSteerIdentifier);
-  const defaultEntry = !identifier && document
-    ? findDefaultSteerResolvedEntry(document.nodes)
-    : null;
-  if (!document || (!identifier && !defaultEntry) || !renderContext) {
-    if (!identifier) {
-      resetAppliedDefaultSteerDriveKey();
-    }
+function restoreHiddenVehicleDriveNodes(): void {
+  if (!hiddenVehicleDriveNodeIds.size) {
     return;
   }
-  const entry = identifier
-    ? (buildSteerResolvedEntryMap(document.nodes).get(identifier)?.[0] ?? null)
-    : defaultEntry;
-  const sourceKey = identifier || (defaultEntry ? `entry:${defaultEntry.id}` : '');
-  const attemptKey = `${document.id ?? ''}:${sourceKey}:${entry?.targetNode.id ?? '__missing__'}`;
-  if (appliedDefaultSteerDriveKey === attemptKey) {
-    return;
-  }
-  appliedDefaultSteerDriveKey = attemptKey;
-  if (!entry) {
-    return;
-  }
-  const result = vehicleDriveController.startDrive(
-    {
-      nodeId: entry.targetNode.id,
-      targetNodeId: entry.targetNode.id,
-    },
-    {
-      camera: renderContext.camera,
-      mapControls: renderContext.controls,
-    },
-  );
-  if (!result.success) {
-    return;
-  }
-  vehicleDriveCameraFollowState.initialized = false;
-  purposeActiveMode.value = 'watch';
-  updateVehicleDriveCamera(0, { immediate: true });
+  hiddenVehicleDriveNodeIds.forEach((nodeId) => {
+    setVehicleDriveNodeVisibility(nodeId, true);
+  });
+  hiddenVehicleDriveNodeIds.clear();
 }
 
 function findGroundNode(nodes: SceneNode[] | undefined | null): SceneNode | null {
@@ -4702,7 +4726,6 @@ function findGroundNode(nodes: SceneNode[] | undefined | null): SceneNode | null
 }
 
 function refreshDynamicGroundCache(document: SceneJsonExportDocument | null): void {
-  groundSurfacePreviewLoadToken += 1;
   if (!document) {
     dynamicGroundCache = null;
     return;
@@ -5885,6 +5908,7 @@ function resetPhysicsWorld(): void {
   vehicleDriveCameraFollowState.initialized = false;
   deactivateJoystick(true);
   setVehicleDriveUiOverride('hide');
+  hiddenVehicleDriveNodeIds.clear();
 }
 
 function createRigidbodyBody(
@@ -10292,6 +10316,7 @@ function handleVehicleDebusEvent(): void {
     { resolution: { type: 'continue' }, preserveCamera: false },
     renderContext ? { camera: renderContext.camera, mapControls: renderContext.controls } : { camera: null },
   );
+  restoreHiddenVehicleDriveNodes();
   setVehicleDriveUiOverride('hide');
   activeVehicleDriveEvent.value = null;
 }
@@ -11915,7 +11940,24 @@ async function startRenderIfReady() {
 
   try {
     await ensureRendererContext(canvasResult);
-    await initializeRenderer(previewPayload.value, canvasResult, token);
+    resourcePreload.label = '正在准备车辆资源...';
+    const runtimePrefabAssetRegistry = await collectRuntimePrefabAssetRegistry(props.runtimePrefabSpawns);
+    if (token !== initializeToken) {
+      return;
+    }
+    const renderPayload = runtimePrefabAssetRegistry && previewPayload.value
+      ? {
+          ...previewPayload.value,
+          document: {
+            ...previewPayload.value.document,
+            assetRegistry: {
+              ...(previewPayload.value.document.assetRegistry ?? {}),
+              ...runtimePrefabAssetRegistry,
+            },
+          },
+        }
+      : previewPayload.value;
+    await initializeRenderer(renderPayload, canvasResult, token);
     if (token === initializeToken && !error.value) {
       hasRenderedSceneOnce = true;
       emit('loaded');
@@ -12726,7 +12768,6 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
 
   // Phase 1: bind state for the new payload.
   currentDocument = payload.document;
-  resetAppliedDefaultSteerDriveKey();
   refreshDynamicGroundCache(currentDocument);
   setActiveMultiuserSceneId(payload.document.id ?? null);
   resetProtagonistPoseState();
@@ -12764,7 +12805,6 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   // Phase 4: mount the graph and synchronously initialize scene-dependent subsystems.
   await mountGraphAndSyncSubsystems(payload, graph.root, resourceCache, canvas, camera);
   applyNominateOverridesForCurrentScene();
-  applyDefaultSteerDriveForCurrentScene();
   await flushPendingRuntimePrefabSpawnRequests();
 
   if (token !== initializeToken || sceneGraphRoot !== graph.root) {
@@ -12959,14 +12999,6 @@ watch(
 );
 
 watch(
-  () => props.defaultSteerIdentifier,
-  () => {
-    resetAppliedDefaultSteerDriveKey();
-    applyDefaultSteerDriveForCurrentScene();
-  },
-);
-
-watch(
   () => props.runtimePrefabSpawns,
   (requests: RuntimePrefabSpawnRequest[] | undefined) => {
     if (!Array.isArray(requests) || !requests.length) {
@@ -12994,7 +13026,6 @@ defineExpose({
 
 function cleanupRuntime(): void {
   dismissBehaviorBubble({ type: 'continue' });
-  resetAppliedDefaultSteerDriveKey();
   removeBehaviorRuntimeListener(behaviorRuntimeListener);
   teardownRenderer();
   if (resizeListener) {
@@ -13010,6 +13041,7 @@ function cleanupRuntime(): void {
   clearBehaviorSounds();
   resetInfoBoardOverlay();
   resetSceneDownloadState();
+  runtimePrefabSourceCache.clear();
   waterRuntime.reset();
   sharedResourceCache = null;
   lanternViewerInstance = null;

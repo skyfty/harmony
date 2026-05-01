@@ -1574,20 +1574,6 @@ let lastPreviewBroadcastRevision = 0
 
 let latestScenePreviewBroadcastTaskId = 0
 
-function readDefaultSteerIdentifierFromLocation(): string {
-  if (typeof window === 'undefined') {
-    return ''
-  }
-  try {
-    const url = new URL(window.location.href)
-    return typeof url.searchParams.get('defaultSteerIdentifier') === 'string'
-      ? (url.searchParams.get('defaultSteerIdentifier') ?? '').trim()
-      : ''
-  } catch {
-    return ''
-  }
-}
-
 function pruneEmptyGroundScatterLayers(groundNode: SceneNode | null | undefined): void {
   const dynamicMesh = groundNode?.dynamicMesh
   if (!groundNode || dynamicMesh?.type !== 'Ground') {
@@ -1636,7 +1622,6 @@ async function broadcastScenePreview(document: StoredSceneDocument, isStale?: ()
       document: exportDocument,
       timestamp: new Date().toISOString(),
       diagnosticsSummary: exportBundle.diagnostics.summary,
-      defaultSteerIdentifier: readDefaultSteerIdentifierFromLocation() || undefined,
     })
   } catch (error) {
     console.warn('[SceneStore] Failed to broadcast preview update', error)

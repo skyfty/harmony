@@ -17,6 +17,7 @@ Use this skill when adding or changing interaction-driven behavior in the Harmon
 - `server/` owns APIs, storage, and realtime services.
 - `editor/`, `admin/`, `uploader/`, `viewer/`, and `exhibition/` are app-specific frontends.
 - Frontend runtime config is loaded from `/config/app-config.json`.
+- Any mini-program `scenery` directory copy is a temporary sync target; when changing scenery runtime behavior, edit `scenery/components/SceneryViewer.vue` first and keep app-local copies in sync only if needed for the current task.
 
 ## Asset Reference Naming
 - Any field that stores an asset reference must be named with an `assetId` suffix, for example `modelAssetId`, `billboardAssetId`, `sourceAssetId`, or `serverAssetId`.

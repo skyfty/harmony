@@ -6,7 +6,6 @@ import type { HierarchyTreeItem } from '@/types/hierarchy-tree-item'
 import type { NodePickerOwner } from '@/stores/nodePickerStore'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useNodePickerStore } from '@/stores/nodePickerStore'
-import { VEHICLE_COMPONENT_TYPE } from '@schema/components'
 
 type ExposedMethods = {
   cancelPicking: () => void
@@ -193,11 +192,7 @@ function canAcceptNodeId(nodeId: string | null | undefined): boolean {
   if (!nodeId) {
     return true
   }
-  if (props.owner !== 'steer-target') {
-    return true
-  }
-  const node = findNodeById(nodes.value, nodeId)
-  return Boolean(node?.components?.[VEHICLE_COMPONENT_TYPE]?.enabled)
+  return true
 }
 
 function handleKeydown(event: KeyboardEvent) {

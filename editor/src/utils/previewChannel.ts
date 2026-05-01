@@ -7,7 +7,6 @@ export interface ScenePreviewSnapshot {
   document: SceneJsonExportDocument
   timestamp: string
   diagnosticsSummary?: SceneAssetDiagnosticsSummary
-  defaultSteerIdentifier?: string
 }
 
 type PreviewListener = (snapshot: ScenePreviewSnapshot) => void

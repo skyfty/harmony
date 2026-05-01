@@ -188,9 +188,7 @@ import {
 	purePursuitComponentDefinition,
 	sceneStateAnchorComponentDefinition,
 	nominateComponentDefinition,
-	steerComponentDefinition,
 	SIGNBOARD_COMPONENT_TYPE,
-	findDefaultSteerResolvedEntry,
 	applyNominateStateMapToRuntime,
 	type NominateExternalStateMap,
 	GUIDEBOARD_COMPONENT_TYPE,
@@ -1055,7 +1053,6 @@ previewComponentManager.registerDefinition(autoTourComponentDefinition)
 previewComponentManager.registerDefinition(purePursuitComponentDefinition)
 previewComponentManager.registerDefinition(sceneStateAnchorComponentDefinition)
 previewComponentManager.registerDefinition(nominateComponentDefinition)
-previewComponentManager.registerDefinition(steerComponentDefinition)
 
 const previewNodeMap = new Map<string, SceneNode>()
 const previewParentMap = new Map<string, string | null>()
@@ -7784,35 +7781,6 @@ function startVehicleDriveMode(
 	return { success: true }
 }
 
-function applyDefaultSteerDriveForCurrentScene(): void {
-	const document = currentDocument
-	const defaultEntry = document ? findDefaultSteerResolvedEntry(document.nodes) : null
-	if (!document || !defaultEntry) {
-		resetAppliedDefaultSteerDriveKey()
-		return
-	}
-	const entry = defaultEntry
-	const attemptKey = `${document.id ?? ''}:entry:${entry.id}:${entry.targetNode.id}`
-	if (appliedDefaultSteerDriveKey === attemptKey) {
-		return
-	}
-	appliedDefaultSteerDriveKey = attemptKey
-	if (!entry) {
-		return
-	}
-	startVehicleDriveMode({
-		type: 'vehicle-drive',
-		nodeId: entry.targetNode.id,
-		action: 'click',
-		sequenceId: '__steer-default__',
-		behaviorSequenceId: '__steer-default__',
-		behaviorId: '__steer-default__',
-		targetNodeId: entry.targetNode.id,
-		seatNodeId: null,
-		token: `steer:${attemptKey}`,
-	})
-}
-
 function stopVehicleDriveMode(options: { resolution?: BehaviorEventResolution; preserveCamera?: boolean } = {}): void {
 	if (!vehicleDriveState.active) {
 		return
@@ -13198,7 +13166,6 @@ async function updateScene(document: SceneJsonExportDocument) {
 		)
 	}
 	applyPreviewNominateOverrides()
-	applyDefaultSteerDriveForCurrentScene()
 }
 
 function applySnapshot(snapshot: ScenePreviewSnapshot) {
@@ -13326,7 +13293,6 @@ onBeforeUnmount(() => {
 		releaseSteeringWheelPointer()
 	}
 	removeBehaviorRuntimeListener(behaviorRuntimeListener)
-	resetAppliedDefaultSteerDriveKey()
 	activeBehaviorDelayTimers.forEach((handle) => window.clearTimeout(handle))
 	activeBehaviorDelayTimers.clear()
 	activeBehaviorAnimations.forEach((cancel) => {

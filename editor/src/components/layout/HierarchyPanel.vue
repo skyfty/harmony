@@ -15,7 +15,7 @@ import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 import type { HierarchyTreeItem } from '@/types/hierarchy-tree-item'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { SceneNode } from '@schema'
-import { PROTAGONIST_COMPONENT_TYPE, VEHICLE_COMPONENT_TYPE } from '@schema/components'
+import { PROTAGONIST_COMPONENT_TYPE } from '@schema/components'
 import { getNodeIcon } from '@/types/node-icons'
 import AddNodeMenu from '../common/AddNodeMenu.vue'
 import AssetReferenceSearchDialog from './AssetReferenceSearchDialog.vue'
@@ -1267,11 +1267,7 @@ function findNodeById(tree: SceneNode[] | undefined, targetId: string): SceneNod
 }
 
 function canCompleteNodePick(nodeId: string): boolean {
-  if (nodePickerStore.owner !== 'steer-target') {
-    return true
-  }
-  const node = findNodeById(sceneStore.nodes, nodeId)
-  return Boolean(node?.components?.[VEHICLE_COMPONENT_TYPE]?.enabled)
+  return true
 }
 
 function handleNodeClick(event: MouseEvent, nodeId: string) {

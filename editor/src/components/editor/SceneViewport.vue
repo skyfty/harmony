@@ -490,11 +490,7 @@ type ViewportInfiniteGroundChunkRuntime = {
 const viewportInfiniteGroundChunkRuntimeMap = new WeakMap<THREE.Object3D, ViewportInfiniteGroundChunkRuntime>()
 
 function canCompleteNodePick(nodeId: string): boolean {
-  if (nodePickerStore.owner !== 'steer-target') {
-    return true
-  }
-  const node = findSceneNode(sceneStore.nodes, nodeId)
-  return Boolean(node?.components?.[VEHICLE_COMPONENT_TYPE]?.enabled)
+  return true
 }
 
 const protagonistPreviewNodeId = computed(() => {
