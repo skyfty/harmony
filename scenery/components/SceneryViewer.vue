@@ -1878,6 +1878,7 @@ type PhysicsInterpolationState = {
 const physicsInterpolationStates = new WeakMap<CANNON.Body, PhysicsInterpolationState>();
 const physicsInterpolationPos = new THREE.Vector3();
 const physicsInterpolationQuat = new THREE.Quaternion();
+const physicsInterpolationParentQuat = new THREE.Quaternion();
 let physicsInterpolationEnabled = false;
 let physicsInterpolationAlpha = 0;
 let physicsAccumulator = 0;
@@ -3796,6 +3797,11 @@ async function spawnRuntimePrefabRequest(request: RuntimePrefabSpawnRequest): Pr
   const graph = await buildSceneGraph(runtimeDocument, resourceCache, buildOptions);
   applyWeChatShadowPolicy(graph.root);
   applyRuntimePrefabPlacement(graph.root, request.placement, anchorTransform.position, sceneGraphRoot ?? scene);
+  cloned.root.position = {
+    x: graph.root.position.x,
+    y: graph.root.position.y,
+    z: graph.root.position.z,
+  };
 
   scene.add(graph.root);
   spawnedRuntimePrefabRoots.set(requestKey, {
@@ -5998,7 +6004,14 @@ function syncObjectFromInterpolated(
   if (orientationAdjustment) {
     physicsInterpolationQuat.multiply(orientationAdjustment.threeInverse);
   }
-  object.quaternion.copy(physicsInterpolationQuat);
+  if (object.parent) {
+    object.parent.updateMatrixWorld(true);
+    object.parent.worldToLocal(object.position);
+    object.parent.getWorldQuaternion(physicsInterpolationParentQuat).invert();
+    object.quaternion.copy(physicsInterpolationParentQuat).multiply(physicsInterpolationQuat);
+  } else {
+    object.quaternion.copy(physicsInterpolationQuat);
+  }
   object.updateMatrixWorld(true);
   afterSync?.(object);
 }

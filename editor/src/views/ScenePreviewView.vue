@@ -5579,6 +5579,11 @@ async function spawnBehaviorRuntimePrefab(event: Extract<BehaviorRuntimeEvent, {
 	const resourceCache = ensureEditorResourceCache(runtimeDocument, buildOptions)
 	const graph = await buildSceneGraph(runtimeDocument, resourceCache, buildOptions)
 	applyRuntimePrefabPlacement(graph.root, event.placement, anchor.position, rootGroup)
+	cloned.root.position = {
+		x: graph.root.position.x,
+		y: graph.root.position.y,
+		z: graph.root.position.z,
+	}
 	rootGroup.add(graph.root)
 	runtimePrefabPreviewRoots.add(graph.root)
 
