@@ -11236,6 +11236,44 @@ function computeConvexSegmentsBounds(segments: Array<{ shape: Extract<RigidbodyP
 	return bounds
 }
 
+function resolveRigidbodyDebugLocalOffset(
+	shape: RigidbodyPhysicsShape,
+	runtimeObject: THREE.Object3D | null,
+): { offset: THREE.Vector3; normalizedLegacyWorldOffset: boolean } {
+	const [ox = 0, oy = 0, oz = 0] = shape.kind === 'heightfield' ? [0, 0, 0] : shape.offset ?? [0, 0, 0]
+	const rawOffset = new THREE.Vector3(ox, oy, oz)
+	if (!runtimeObject || shape.kind !== 'convex' || shape.applyScale !== true) {
+		return {
+			offset: rawOffset,
+			normalizedLegacyWorldOffset: false,
+		}
+	}
+	runtimeObject.updateMatrixWorld(true)
+	runtimeObject.getWorldPosition(rigidbodyDebugPositionHelper)
+	runtimeObject.getWorldScale(rigidbodyDebugScaleHelper)
+	rigidbodyDebugScaleHelper.set(
+		Math.abs(rigidbodyDebugScaleHelper.x) > 1e-8 ? Math.abs(rigidbodyDebugScaleHelper.x) : 1,
+		Math.abs(rigidbodyDebugScaleHelper.y) > 1e-8 ? Math.abs(rigidbodyDebugScaleHelper.y) : 1,
+		Math.abs(rigidbodyDebugScaleHelper.z) > 1e-8 ? Math.abs(rigidbodyDebugScaleHelper.z) : 1,
+	)
+	const worldOffsetCandidate = new THREE.Vector3(
+		rawOffset.x * rigidbodyDebugScaleHelper.x,
+		rawOffset.y * rigidbodyDebugScaleHelper.y,
+		rawOffset.z * rigidbodyDebugScaleHelper.z,
+	)
+	if (worldOffsetCandidate.distanceTo(rigidbodyDebugPositionHelper) > 1e-4) {
+		return {
+			offset: rawOffset,
+			normalizedLegacyWorldOffset: false,
+		}
+	}
+	const correctedOffset = runtimeObject.worldToLocal(worldOffsetCandidate.clone())
+	return {
+		offset: correctedOffset,
+		normalizedLegacyWorldOffset: true,
+	}
+}
+
 function removeRigidbodyDebugHelper(nodeId: string): void {
 	const helper = rigidbodyDebugHelpers.get(nodeId)
 	if (!helper) {
@@ -11286,6 +11324,7 @@ function disposeRigidbodyDebugHelpers(): void {
 function ensureRigidbodyDebugHelperForShape(
 	nodeId: string,
 	parentNodeId: string,
+	runtimeObject: THREE.Object3D | null,
 	shape: RigidbodyPhysicsShape,
 	category: RigidbodyDebugHelperCategory,
 	localScale: THREE.Vector3,
@@ -11308,12 +11347,11 @@ function ensureRigidbodyDebugHelperForShape(
 	helperGroup.name = `RigidbodyDebugHelper:${nodeId}`
 	lineSegments.name = `RigidbodyDebugLines:${nodeId}`
 	lineSegments.renderOrder = 9999
-	const offsetTuple = shape.kind === 'heightfield' ? [0, 0, 0] : shape.offset ?? [0, 0, 0]
-	const [ox = 0, oy = 0, oz = 0] = offsetTuple
-	console.log(`[RigidbodyDebugShape] nodeId=${JSON.stringify(nodeId)} parentNodeId=${JSON.stringify(parentNodeId)} category=${JSON.stringify(category)} shapeKind=${JSON.stringify(shape.kind)} applyScale=${String(shape.applyScale === true)} offset=${formatDebugVector(new THREE.Vector3(ox, oy, oz))} localScale=${formatDebugVector(localScale)}`)
+	const localOffsetResult = resolveRigidbodyDebugLocalOffset(shape, runtimeObject)
+	console.log(`[RigidbodyDebugShape] nodeId=${JSON.stringify(nodeId)} parentNodeId=${JSON.stringify(parentNodeId)} category=${JSON.stringify(category)} shapeKind=${JSON.stringify(shape.kind)} applyScale=${String(shape.applyScale === true)} offset=${formatDebugVector(localOffsetResult.offset)} localScale=${formatDebugVector(localScale)} normalizedLegacyWorldOffset=${String(localOffsetResult.normalizedLegacyWorldOffset)}`)
 	// Offset is expressed in the same local-space units as the shape definition.
 	// The helper is parented to the bound runtime object, so this translation stays in object-local space.
-	lineSegments.position.set(ox, oy, oz)
+	lineSegments.position.copy(localOffsetResult.offset)
 	helperGroup.add(lineSegments)
 	helperGroup.visible = false
 	helperGroup.scale.copy(localScale)
@@ -11575,6 +11613,8 @@ function refreshRigidbodyDebugHelper(nodeId: string): void {
 	}
 	const scale = new THREE.Vector3(1, 1, 1)
 	const bindingObject = component ? resolveRigidbodyBindingObject(component, nodeObjectMap.get(nodeId) ?? null) : null
+	const parentNodeId = targetNodeId && targetNode ? targetNodeId : nodeId
+	const parentRuntimeObject = bindingObject ?? (parentNodeId ? nodeObjectMap.get(parentNodeId) ?? null : null)
 	if (shapeDefinition.applyScale) {
 		const object = bindingObject ?? (node ? nodeObjectMap.get(node.id) ?? null : null)
 		if (object) {
@@ -11591,8 +11631,7 @@ function refreshRigidbodyDebugHelper(nodeId: string): void {
 			Math.abs(scale.z) > 1e-8 ? 1 / scale.z : 1,
 		)
 	}
-	const parentNodeId = targetNodeId && targetNode ? targetNodeId : nodeId
-	ensureRigidbodyDebugHelperForShape(nodeId, parentNodeId, shapeDefinition, category, scale)
+	ensureRigidbodyDebugHelperForShape(nodeId, parentNodeId, parentRuntimeObject, shapeDefinition, category, scale)
 	updateRigidbodyDebugHelperTransform(nodeId)
 }
 

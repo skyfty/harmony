@@ -157,7 +157,9 @@ function cloneRuntimeObject(runtimeObject: THREE.Object3D, node: SceneNode, appl
     applyNodeTransformFromState(instancedClone, node, { applyPositionRotation })
     return instancedClone
   }
-  return runtimeObject.clone(true)
+  const clone = runtimeObject.clone(true)
+  applyNodeTransformFromState(clone, node, { applyPositionRotation })
+  return clone
 }
 
 function cloneNodeForPreview(node: SceneNode, isRoot = false): THREE.Object3D | null {
