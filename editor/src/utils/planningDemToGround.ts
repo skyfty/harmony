@@ -165,7 +165,7 @@ function resolvePlanningDemChunkTileRange(options: {
   const safeChunkSize = Number.isFinite(options.chunkSizeMeters) && options.chunkSizeMeters > 0 ? options.chunkSizeMeters : resolvePlanningDemChunkSizeMeters()
   const epsilon = Math.max(1e-9, safeChunkSize * 1e-9)
   const startTile = Math.floor((options.minWorld - options.originWorld) / safeChunkSize)
-  const endTile = Math.max(startTile, Math.floor((options.maxWorld - options.originWorld + epsilon) / safeChunkSize))
+  const endTile = Math.max(startTile, Math.floor((options.maxWorld - options.originWorld - epsilon) / safeChunkSize))
   return { startTile, endTile }
 }
 
@@ -192,9 +192,9 @@ function resolvePlanningDemCoveredGridRegion(options: {
   const cellSize = Number.isFinite(options.definition.cellSize) && options.definition.cellSize > 0 ? options.definition.cellSize : 1
   const epsilon = Math.max(1e-9, cellSize * 1e-9)
   const overlapStartColumn = Math.max(0, Math.min(columns, Math.ceil((overlapMinX - terrainBounds.minX - epsilon) / cellSize)))
-  const overlapEndColumn = Math.max(overlapStartColumn, Math.min(columns, Math.floor((overlapMaxX - terrainBounds.minX + epsilon) / cellSize)))
+  const overlapEndColumn = Math.max(overlapStartColumn, Math.min(columns, Math.floor((overlapMaxX - terrainBounds.minX - epsilon) / cellSize)))
   const overlapStartRow = Math.max(0, Math.min(rows, Math.ceil((overlapMinZ - terrainBounds.minZ - epsilon) / cellSize)))
-  const overlapEndRow = Math.max(overlapStartRow, Math.min(rows, Math.floor((overlapMaxZ - terrainBounds.minZ + epsilon) / cellSize)))
+  const overlapEndRow = Math.max(overlapStartRow, Math.min(rows, Math.floor((overlapMaxZ - terrainBounds.minZ - epsilon) / cellSize)))
   const startRow = Math.max(overlapStartRow, requestedStartRow)
   const endRow = Math.min(overlapEndRow, requestedEndRow)
   const startColumn = Math.max(overlapStartColumn, requestedStartColumn)
