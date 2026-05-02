@@ -470,6 +470,12 @@ async function handleConfirmGround() {
 
   const definition: GroundDynamicMesh = {
     type: 'Ground',
+    worldBounds: {
+      minX: -width * 0.5,
+      maxX: width * 0.5,
+      minZ: -depth * 0.5,
+      maxZ: depth * 0.5,
+    },
     width,
     depth,
     rows,

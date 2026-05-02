@@ -11,7 +11,7 @@ import {
   sampleGroundEffectiveHeightRegion,
   sampleGroundEffectiveHeightRegionFromSampler,
 } from './groundMesh'
-import { resolveGroundWorkingGridSize, resolveGroundWorkingSpanMeters } from './index'
+import { resolveGroundWorldBounds, resolveGroundWorkingGridSize } from './index'
 
 export type GroundOptimizedMeshBuildOptions = {
   tolerance?: number
@@ -59,11 +59,11 @@ function clampInteger(value: number | undefined, fallback: number, min: number, 
 }
 
 function computeVertexX(definition: GroundDynamicMesh, column: number): number {
-  return -resolveGroundWorkingSpanMeters(definition) * 0.5 + column * definition.cellSize
+  return resolveGroundWorldBounds(definition).minX + column * definition.cellSize
 }
 
 function computeVertexZ(definition: GroundDynamicMesh, row: number): number {
-  return -resolveGroundWorkingSpanMeters(definition) * 0.5 + row * definition.cellSize
+  return resolveGroundWorldBounds(definition).minZ + row * definition.cellSize
 }
 
 function buildHeightGrid(

@@ -3,7 +3,7 @@ import type {
   GroundDynamicMesh,
   SceneNode,
 } from './index'
-import { resolveGroundWorkingSpanMeters } from './index'
+import { resolveGroundWorldBounds } from './index'
 import { stableSerialize } from './stableSerialize'
 // resolveEnabledComponentState removed with Landforms feature
 import {
@@ -61,10 +61,19 @@ type GroundSurfaceChunkDrawEntry = {
 }
 
 type GroundSurfacePreviewStructureSignature = {
+  minX: number
+  minZ: number
   width: number
   depth: number
   textureDataUrl: string | null
   maxResolution: number
+}
+
+type GroundSurfacePreviewMetrics = {
+  minX: number
+  minZ: number
+  width: number
+  depth: number
 }
 
 type GroundSurfacePreviewRuntimeState = {
@@ -162,11 +171,23 @@ function resolveTextureImageSource(texture: THREE.Texture | null | undefined): C
   return image ?? null
 }
 
+function resolveGroundSurfacePreviewMetrics(definition: GroundDynamicMesh): GroundSurfacePreviewMetrics {
+  const bounds = resolveGroundWorldBounds(definition)
+  return {
+    minX: bounds.minX,
+    minZ: bounds.minZ,
+    width: normalizeDimension(bounds.maxX - bounds.minX),
+    depth: normalizeDimension(bounds.maxZ - bounds.minZ),
+  }
+}
+
 function buildGroundSurfacePreviewStructureSignature(definition: GroundDynamicMesh, options: GroundSurfacePreviewOptions): string {
-  const spanMeters = resolveGroundWorkingSpanMeters(definition)
+  const metrics = resolveGroundSurfacePreviewMetrics(definition)
   return stableSerialize({
-    width: normalizeDimension(spanMeters),
-    depth: normalizeDimension(spanMeters),
+    minX: metrics.minX,
+    minZ: metrics.minZ,
+    width: metrics.width,
+    depth: metrics.depth,
     textureDataUrl: definition.textureDataUrl ?? null,
     maxResolution: options.maxResolution ?? DEFAULT_GROUND_SURFACE_PREVIEW_MAX_RESOLUTION,
   } satisfies GroundSurfacePreviewStructureSignature)
@@ -301,18 +322,18 @@ function resolveGroundChunkPixelRect(
   bounds: TerrainPaintChunkBounds,
   groundWidth: number,
   groundDepth: number,
-  halfWidth: number,
-  halfDepth: number,
+  groundMinX: number,
+  groundMinZ: number,
   canvasWidth: number,
   canvasHeight: number,
 ): GroundSurfaceChunkPixelRect | null {
   if (!(canvasWidth > 0) || !(canvasHeight > 0)) {
     return null
   }
-  const minPxX = ((bounds.minX + halfWidth) / groundWidth) * canvasWidth
-  const minPxY = ((bounds.minZ + halfDepth) / groundDepth) * canvasHeight
-  const maxPxX = ((bounds.minX + bounds.width + halfWidth) / groundWidth) * canvasWidth
-  const maxPxY = ((bounds.minZ + bounds.depth + halfDepth) / groundDepth) * canvasHeight
+  const minPxX = ((bounds.minX - groundMinX) / groundWidth) * canvasWidth
+  const minPxY = ((bounds.minZ - groundMinZ) / groundDepth) * canvasHeight
+  const maxPxX = ((bounds.minX + bounds.width - groundMinX) / groundWidth) * canvasWidth
+  const maxPxY = ((bounds.minZ + bounds.depth - groundMinZ) / groundDepth) * canvasHeight
   const drawX = clampInt(Math.floor(minPxX), 0, Math.max(0, canvasWidth - 1))
   const drawY = clampInt(Math.floor(minPxY), 0, Math.max(0, canvasHeight - 1))
   const drawRight = clampInt(Math.ceil(maxPxX), drawX + 1, canvasWidth)
@@ -402,9 +423,9 @@ function createCompositionCanvas(width: number, height: number): { canvas: Canva
 }
 
 function computePreviewTextureSize(definition: GroundDynamicMesh, maxResolution: number): { width: number; height: number } {
-  const spanMeters = resolveGroundWorkingSpanMeters(definition)
-  const groundWidth = normalizeDimension(spanMeters)
-  const groundDepth = normalizeDimension(spanMeters)
+  const metrics = resolveGroundSurfacePreviewMetrics(definition)
+  const groundWidth = metrics.width
+  const groundDepth = metrics.depth
   const maxDimension = Math.max(groundWidth, groundDepth, 1)
   const normalizedMax = Math.max(MIN_GROUND_SURFACE_PREVIEW_RESOLUTION, Math.round(maxResolution))
   const width = Math.max(
@@ -589,13 +610,13 @@ function forEachGroundPreviewMaterial(root: THREE.Object3D, visitor: (material: 
 }
 
 function applyGroundSurfacePreviewToMaterialMap(root: THREE.Object3D, texture: THREE.Texture, definition: GroundDynamicMesh): void {
-  const spanMeters = resolveGroundWorkingSpanMeters(definition)
-  const width = Math.max(1e-6, normalizeDimension(spanMeters))
-  const depth = Math.max(1e-6, normalizeDimension(spanMeters))
+  const metrics = resolveGroundSurfacePreviewMetrics(definition)
+  const width = Math.max(1e-6, metrics.width)
+  const depth = Math.max(1e-6, metrics.depth)
   forEachGroundPreviewMaterial(root, (material) => {
     const state = installGroundSurfacePreviewShaderHooks(material)
     state.overlayTexture = texture
-    state.overlayBounds.set(-width * 0.5, -depth * 0.5, width, depth)
+    state.overlayBounds.set(metrics.minX, metrics.minZ, width, depth)
     updateGroundSurfacePreviewShaderUniforms(state)
   })
 }
@@ -661,18 +682,16 @@ export function syncGroundSurfaceLiveChunkPreviews(params: {
     }
   }
 
-  const spanMeters = resolveGroundWorkingSpanMeters(dynamicMesh)
-  const groundWidth = Math.max(1e-6, normalizeDimension(spanMeters))
-  const groundDepth = Math.max(1e-6, normalizeDimension(spanMeters))
-  const halfWidth = groundWidth * 0.5
-  const halfDepth = groundDepth * 0.5
+  const metrics = resolveGroundSurfacePreviewMetrics(dynamicMesh)
+  const groundWidth = Math.max(1e-6, metrics.width)
+  const groundDepth = Math.max(1e-6, metrics.depth)
   for (const preview of validPreviews) {
     const drawRect = resolveGroundChunkPixelRect(
       preview.bounds,
       groundWidth,
       groundDepth,
-      halfWidth,
-      halfDepth,
+      metrics.minX,
+      metrics.minZ,
       width,
       height,
     )
@@ -759,11 +778,9 @@ async function composeGroundSurfaceChunksIntoCanvas(params: {
     return false
   }
 
-  const spanMeters = resolveGroundWorkingSpanMeters(definition)
-  const groundWidth = Math.max(1e-6, normalizeDimension(spanMeters))
-  const groundDepth = Math.max(1e-6, normalizeDimension(spanMeters))
-  const halfWidth = groundWidth * 0.5
-  const halfDepth = groundDepth * 0.5
+  const metrics = resolveGroundSurfacePreviewMetrics(definition)
+  const groundWidth = Math.max(1e-6, metrics.width)
+  const groundDepth = Math.max(1e-6, metrics.depth)
   const drawableChunks = chunkEntries.filter((entry) => typeof entry.textureAssetId === 'string' && entry.textureAssetId.trim().length)
 
   let drewAny = false
@@ -819,8 +836,8 @@ async function composeGroundSurfaceChunksIntoCanvas(params: {
         entry.bounds,
         groundWidth,
         groundDepth,
-        halfWidth,
-        halfDepth,
+        metrics.minX,
+        metrics.minZ,
         width,
         height,
       )
@@ -862,9 +879,12 @@ async function composeGroundSurfaceChunksIntoCanvas(params: {
 }
 
 function buildGroundSurfacePreviewSignature(definition: GroundDynamicMesh, options: GroundSurfacePreviewOptions): string {
+  const metrics = resolveGroundSurfacePreviewMetrics(definition)
   return stableSerialize({
-    width: normalizeDimension(resolveGroundWorkingSpanMeters(definition)),
-    depth: normalizeDimension(resolveGroundWorkingSpanMeters(definition)),
+    minX: metrics.minX,
+    minZ: metrics.minZ,
+    width: metrics.width,
+    depth: metrics.depth,
     textureDataUrl: definition.textureDataUrl ?? null,
     groundSurfaceChunks: definition.groundSurfaceChunks ?? null,
     previewRevision: options.previewRevision ?? 0,

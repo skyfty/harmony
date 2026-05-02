@@ -33,7 +33,7 @@ import {
   type ModelInstanceGroup,
 } from './modelObjectCache'
 import { resolveGroundChunkCells, resolveGroundChunkRadiusMeters } from './groundMesh'
-import { resolveGroundWorkingGridSize, resolveGroundWorkingSpanMeters } from './index'
+import { resolveGroundWorldBounds, resolveGroundWorkingGridSize } from './index'
 
 export const LOD_PRESET_FORMAT_VERSION = 1
 
@@ -244,12 +244,10 @@ function clampFinite(value: unknown, fallback: number): number {
 }
 
 function computeGroundChunkKeyFromLocal(definition: GroundDynamicMesh, chunkCells: number, localX: number, localZ: number): string {
-  const spanMeters = resolveGroundWorkingSpanMeters(definition)
-  const halfWidth = spanMeters * 0.5
-  const halfDepth = spanMeters * 0.5
+  const bounds = resolveGroundWorldBounds(definition)
   const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
-  const normalizedColumn = (localX + halfWidth) / cellSize
-  const normalizedRow = (localZ + halfDepth) / cellSize
+  const normalizedColumn = (localX - bounds.minX) / cellSize
+  const normalizedRow = (localZ - bounds.minZ) / cellSize
   const gridSize = resolveGroundWorkingGridSize(definition)
   const column = THREE.MathUtils.clamp(Math.floor(normalizedColumn), 0, Math.max(0, gridSize.columns - 1))
   const row = THREE.MathUtils.clamp(Math.floor(normalizedRow), 0, Math.max(0, gridSize.rows - 1))
@@ -271,15 +269,13 @@ function computeChunkKeysInRadius(
   }
 
   const chunkCellCount = Math.max(1, Math.round(chunkCells))
-  const spanMeters = resolveGroundWorkingSpanMeters(definition)
-  const halfWidth = spanMeters * 0.5
-  const halfDepth = spanMeters * 0.5
+  const bounds = resolveGroundWorldBounds(definition)
   const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
 
-  const minColumnUnclamped = Math.floor((localX - effectiveRadius + halfWidth) / cellSize)
-  const maxColumnUnclamped = Math.ceil((localX + effectiveRadius + halfWidth) / cellSize)
-  const minRowUnclamped = Math.floor((localZ - effectiveRadius + halfDepth) / cellSize)
-  const maxRowUnclamped = Math.ceil((localZ + effectiveRadius + halfDepth) / cellSize)
+  const minColumnUnclamped = Math.floor((localX - effectiveRadius - bounds.minX) / cellSize)
+  const maxColumnUnclamped = Math.ceil((localX + effectiveRadius - bounds.minX) / cellSize)
+  const minRowUnclamped = Math.floor((localZ - effectiveRadius - bounds.minZ) / cellSize)
+  const maxRowUnclamped = Math.ceil((localZ + effectiveRadius - bounds.minZ) / cellSize)
 
   const gridSize = resolveGroundWorkingGridSize(definition)
   const minColumn = THREE.MathUtils.clamp(minColumnUnclamped, 0, Math.max(0, gridSize.columns - 1))

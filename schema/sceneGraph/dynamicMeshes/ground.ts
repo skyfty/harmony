@@ -28,6 +28,15 @@ export async function buildGroundMesh(
   if ('groundTerrainPackageManifest' in sourceUserData) {
     userData.groundTerrainPackageManifest = sourceUserData.groundTerrainPackageManifest ?? null;
   }
+  if ('runtimeTerrainDatasetManifest' in sourceUserData) {
+    userData.runtimeTerrainDatasetManifest = sourceUserData.runtimeTerrainDatasetManifest ?? null;
+  }
+  if ('runtimeTerrainDatasetEnabled' in sourceUserData) {
+    userData.runtimeTerrainDatasetEnabled = sourceUserData.runtimeTerrainDatasetEnabled ?? null;
+  }
+  if ('runtimeTerrainHeightSampler' in sourceUserData) {
+    userData.runtimeTerrainHeightSampler = sourceUserData.runtimeTerrainHeightSampler ?? null;
+  }
   if ('groundChunkManifest' in sourceUserData) {
     userData.groundChunkManifest = sourceUserData.groundChunkManifest ?? null;
   }

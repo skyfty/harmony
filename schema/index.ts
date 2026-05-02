@@ -138,6 +138,72 @@ export type {
 } from './scenePackage'
 
 export {
+  QUANTIZED_TERRAIN_MESH_FORMAT,
+  QUANTIZED_TERRAIN_MESH_VERSION,
+  clampQuantizedTerrainValue,
+  decodeQuantizedTerrainMeshGeometry,
+  dequantizeTerrainAxis,
+  dequantizeTerrainHeight,
+  deserializeQuantizedTerrainMesh,
+  quantizeTerrainAxis,
+  quantizeTerrainHeight,
+  serializeQuantizedTerrainMesh,
+} from './quantizedTerrainMesh'
+export type {
+  QuantizedTerrainMeshBoundingSphere,
+  QuantizedTerrainMeshData,
+  QuantizedTerrainMeshDecodedGeometry,
+  QuantizedTerrainMeshDecodedVertex,
+  QuantizedTerrainMeshHeader,
+  QuantizedTerrainMeshTileBounds,
+  QuantizedTerrainMeshTileId,
+  QuantizedTerrainMeshVec3,
+} from './quantizedTerrainMesh'
+
+export {
+  QUANTIZED_TERRAIN_DATASET_FORMAT,
+  QUANTIZED_TERRAIN_DATASET_VERSION,
+  buildQuantizedTerrainRegionPackPath,
+  buildQuantizedTerrainRootManifestPath,
+  clampQuantizedTerrainLevel,
+  formatQuantizedTerrainRegionKey,
+  formatQuantizedTerrainTileKey,
+  getQuantizedTerrainChildMask,
+  getQuantizedTerrainChildTileIds,
+  getQuantizedTerrainParentTileId,
+  isValidQuantizedTerrainLevel,
+  parseQuantizedTerrainRegionKey,
+  parseQuantizedTerrainTileKey,
+  resolveQuantizedTerrainRegionIdForTile,
+  resolveQuantizedTerrainTileBounds,
+  resolveQuantizedTerrainTileSpanMeters,
+} from './quantizedTerrainDataset'
+export type {
+  QuantizedTerrainDatasetAvailabilityRange,
+  QuantizedTerrainDatasetBoundingSphere,
+  QuantizedTerrainDatasetBounds,
+  QuantizedTerrainDatasetRegionManifest,
+  QuantizedTerrainDatasetRegionPackIndex,
+  QuantizedTerrainDatasetRootManifest,
+  QuantizedTerrainDatasetTileRef,
+  QuantizedTerrainRegionId,
+  QuantizedTerrainTileId,
+} from './quantizedTerrainDataset'
+
+export {
+  QUANTIZED_TERRAIN_PACK_FORMAT,
+  QUANTIZED_TERRAIN_PACK_VERSION,
+  deserializeQuantizedTerrainPack,
+  readQuantizedTerrainPackEntry,
+  serializeQuantizedTerrainPack,
+} from './quantizedTerrainPack'
+export type {
+  QuantizedTerrainPackData,
+  QuantizedTerrainPackEntry,
+  QuantizedTerrainPackHeader,
+} from './quantizedTerrainPack'
+
+export {
   GROUND_SCATTER_SIDECAR_FILENAME,
   GROUND_SCATTER_SIDECAR_VERSION,
   serializeGroundScatterSidecar,
@@ -1194,6 +1260,8 @@ export interface GroundSettings {
   width: number;
   /** @deprecated Infinite terrain no longer uses a fixed scene-wide ground depth. */
   depth: number;
+  /** Optional authored rectangular world bounds for large finite terrain regions. */
+  worldBounds?: GroundWorldBounds | null;
   /** World-space size of one terrain chunk. Defaults to 100m. */
   chunkSizeMeters?: number;
   /** Runtime flat terrain height used for chunks without persisted terrain data. */
@@ -1653,6 +1721,20 @@ export type GroundSurfaceChunkTextureMap = Record<string, GroundSurfaceChunkText
 
 export type GroundTerrainMode = 'infinite'
 
+export interface GroundWorldBounds {
+  minX: number
+  maxX: number
+  minZ: number
+  maxZ: number
+}
+
+export interface GroundChunkBounds {
+  minChunkX: number
+  maxChunkX: number
+  minChunkZ: number
+  maxChunkZ: number
+}
+
 export type GroundChunkSource = 'manual' | 'dem' | 'import' | 'paint' | 'scatter'
 
 export interface GroundChunkCoord {
@@ -1683,6 +1765,8 @@ export interface GroundChunkManifest {
   sceneId: string
   chunkSizeMeters: number
   baseHeight: number
+  worldBounds?: GroundWorldBounds | null
+  chunkBounds?: GroundChunkBounds | null
   revision: number
   updatedAt: number
   chunks: Record<GroundChunkKey, GroundChunkManifestRecord>
@@ -1911,6 +1995,8 @@ export function normalizeGroundSurfaceChunkTextureMap(
 export interface GroundDynamicMesh {
   type: 'Ground'
   terrainMode?: GroundTerrainMode
+  /** Optional authored rectangular world bounds for large finite terrain regions. */
+  worldBounds?: GroundWorldBounds | null
   /** Infinite terrain chunk size in meters. Defaults to 100m. */
   chunkSizeMeters?: number
   /** Flat runtime fallback height for chunks without persisted terrain data. */
@@ -1944,6 +2030,11 @@ export interface GroundDynamicMesh {
   textureDataUrl?: string | null
   textureName?: string | null
   generation?: GroundGenerationSettings | null
+  /** Runtime-only sampler backed by a terrain dataset / scene-package payload. */
+  runtimeTerrainHeightSampler?: GroundTerrainHeightSampler | null
+  /** Runtime-only dataset metadata hydrated by the viewer. */
+  runtimeTerrainDatasetManifest?: unknown
+  runtimeTerrainDatasetEnabled?: boolean
   /** Sparse local high-resolution authoring tiles for Terrain Tools and DEM-preserved detail. */
   localEditTiles?: GroundLocalEditTileMap | null
   terrainScatter?: TerrainScatterStoreSnapshot | null
@@ -1977,6 +2068,10 @@ export function resolveGroundEditCellSize(
   const resolution = resolveGroundEditTileResolution(definition)
   const fallbackCellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
   return Math.max(Number.EPSILON, Math.min(fallbackCellSize, tileSizeMeters / resolution))
+}
+
+export type GroundTerrainHeightSampler = {
+  sampleHeightAtWorld: (x: number, z: number) => number | null
 }
 
 export type GroundRuntimeDynamicMesh = GroundDynamicMesh & {
@@ -2019,6 +2114,37 @@ function clampPositiveGroundMetric(value: number | null | undefined, fallback: n
   return Number.isFinite(numeric) && numeric > 0 ? numeric : fallback
 }
 
+function clampFiniteGroundCoordinate(value: unknown): number | null {
+  const numeric = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(numeric) ? numeric : null
+}
+
+export function normalizeGroundWorldBounds(bounds: GroundWorldBounds | null | undefined): GroundWorldBounds | null {
+  if (!bounds || typeof bounds !== 'object') {
+    return null
+  }
+  const minX = clampFiniteGroundCoordinate(bounds.minX)
+  const maxX = clampFiniteGroundCoordinate(bounds.maxX)
+  const minZ = clampFiniteGroundCoordinate(bounds.minZ)
+  const maxZ = clampFiniteGroundCoordinate(bounds.maxZ)
+  if (minX === null || maxX === null || minZ === null || maxZ === null) {
+    return null
+  }
+  const normalizedMinX = Math.min(minX, maxX)
+  const normalizedMaxX = Math.max(minX, maxX)
+  const normalizedMinZ = Math.min(minZ, maxZ)
+  const normalizedMaxZ = Math.max(minZ, maxZ)
+  if (normalizedMaxX - normalizedMinX <= Number.EPSILON || normalizedMaxZ - normalizedMinZ <= Number.EPSILON) {
+    return null
+  }
+  return {
+    minX: normalizedMinX,
+    maxX: normalizedMaxX,
+    minZ: normalizedMinZ,
+    maxZ: normalizedMaxZ,
+  }
+}
+
 function resolveGroundChunkWindowRadiusMeters(definition: Pick<GroundDynamicMesh, 'chunkSizeMeters' | 'renderRadiusChunks' | 'collisionRadiusChunks'>): number {
   const chunkSizeMeters = clampPositiveGroundMetric(definition.chunkSizeMeters, GROUND_TERRAIN_CHUNK_SIZE_METERS)
   const radiusChunks = Math.max(
@@ -2032,21 +2158,53 @@ function resolveGroundChunkWindowRadiusMeters(definition: Pick<GroundDynamicMesh
   return chunkSizeMeters * radiusChunks
 }
 
+export function resolveGroundWorldBounds(
+  definition: Pick<GroundDynamicMesh, 'worldBounds' | 'chunkSizeMeters' | 'renderRadiusChunks' | 'collisionRadiusChunks'>,
+): GroundWorldBounds {
+  const normalizedBounds = normalizeGroundWorldBounds(definition.worldBounds)
+  if (normalizedBounds) {
+    return normalizedBounds
+  }
+  const spanMeters = Math.max(GROUND_TERRAIN_CHUNK_SIZE_METERS, resolveGroundChunkWindowRadiusMeters(definition) * 2)
+  const halfSpan = spanMeters * 0.5
+  return {
+    minX: -halfSpan,
+    maxX: halfSpan,
+    minZ: -halfSpan,
+    maxZ: halfSpan,
+  }
+}
+
+export function resolveGroundChunkBounds(
+  definition: Pick<GroundDynamicMesh, 'worldBounds' | 'chunkSizeMeters' | 'renderRadiusChunks' | 'collisionRadiusChunks'>,
+): GroundChunkBounds {
+  const chunkSizeMeters = clampPositiveGroundMetric(definition.chunkSizeMeters, GROUND_TERRAIN_CHUNK_SIZE_METERS)
+  const bounds = resolveGroundWorldBounds(definition)
+  const minCoord = resolveGroundChunkCoordFromWorldPosition(bounds.minX, bounds.minZ, chunkSizeMeters)
+  const maxCoord = resolveGroundChunkCoordFromWorldPosition(bounds.maxX - Number.EPSILON, bounds.maxZ - Number.EPSILON, chunkSizeMeters)
+  return {
+    minChunkX: Math.min(minCoord.chunkX, maxCoord.chunkX),
+    maxChunkX: Math.max(minCoord.chunkX, maxCoord.chunkX),
+    minChunkZ: Math.min(minCoord.chunkZ, maxCoord.chunkZ),
+    maxChunkZ: Math.max(minCoord.chunkZ, maxCoord.chunkZ),
+  }
+}
+
 export function resolveGroundWorkingSpanMeters(
-  definition: Pick<GroundDynamicMesh, 'chunkSizeMeters' | 'renderRadiusChunks' | 'collisionRadiusChunks'>,
+  definition: Pick<GroundDynamicMesh, 'worldBounds' | 'chunkSizeMeters' | 'renderRadiusChunks' | 'collisionRadiusChunks'>,
 ): number {
-  return Math.max(GROUND_TERRAIN_CHUNK_SIZE_METERS, resolveGroundChunkWindowRadiusMeters(definition) * 2)
+  const bounds = resolveGroundWorldBounds(definition)
+  return Math.max(GROUND_TERRAIN_CHUNK_SIZE_METERS, bounds.maxX - bounds.minX, bounds.maxZ - bounds.minZ)
 }
 
 export function resolveGroundWorkingGridSize(
-  definition: Pick<GroundDynamicMesh, 'cellSize' | 'chunkSizeMeters' | 'renderRadiusChunks' | 'collisionRadiusChunks'>,
+  definition: Pick<GroundDynamicMesh, 'cellSize' | 'worldBounds' | 'chunkSizeMeters' | 'renderRadiusChunks' | 'collisionRadiusChunks'>,
 ): { rows: number; columns: number } {
   const cellSize = clampPositiveGroundMetric(definition.cellSize, 1)
-  const spanMeters = resolveGroundWorkingSpanMeters(definition)
-  const count = Math.max(1, Math.round(spanMeters / cellSize))
+  const bounds = resolveGroundWorldBounds(definition)
   return {
-    rows: count,
-    columns: count,
+    rows: Math.max(1, Math.round((bounds.maxZ - bounds.minZ) / cellSize)),
+    columns: Math.max(1, Math.round((bounds.maxX - bounds.minX) / cellSize)),
   }
 }
 

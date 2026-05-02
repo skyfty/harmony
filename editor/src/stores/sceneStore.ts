@@ -29,9 +29,9 @@ import {
   GROUND_HEIGHT_UNSET_VALUE,
   getGroundVertexIndex,
   createPrimitiveMesh,
+  resolveGroundWorldBounds,
   resolveServerAssetDownloadUrl,
   resolveGroundWorkingGridSize,
-  resolveGroundWorkingSpanMeters,
   WATER_SURFACE_MESH_USERDATA_KEY,
   cloneWaterSurfaceMeshMetadata,
   createWaterSurfaceRuntimeMesh,
@@ -41,6 +41,7 @@ import {
 import { resolveGroundRuntimeChunkCells } from '@schema/groundMesh'
 import { DEFAULT_COLOR, DEFAULT_INTENSITY } from '@schema/lightDefaults'
 import { migrateLegacyGroundTerrainDocument } from '@/utils/legacyGroundTerrainMigration'
+import { createScenesStoreTerrainDatasetHeightSampler } from '@/utils/terrainDatasetRuntime'
 import type {
   AssetSourceMetadata,
   BehaviorComponentProps,
@@ -2497,14 +2498,12 @@ function computeGroundDirtyBoundsXZ(
   const expandedMinColumn = Math.max(0, Math.floor(minColumn) - 1)
   const expandedMaxColumn = Math.min(columns, Math.ceil(maxColumn) + 1)
 
-  const spanMeters = resolveGroundWorkingSpanMeters(definition)
-  const halfWidth = spanMeters * 0.5
-  const halfDepth = spanMeters * 0.5
+  const groundBounds = resolveGroundWorldBounds(definition)
   const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1
-  const localMinX = -halfWidth + expandedMinColumn * cellSize
-  const localMaxX = -halfWidth + expandedMaxColumn * cellSize
-  const localMinZ = -halfDepth + expandedMinRow * cellSize
-  const localMaxZ = -halfDepth + expandedMaxRow * cellSize
+  const localMinX = groundBounds.minX + expandedMinColumn * cellSize
+  const localMaxX = groundBounds.minX + expandedMaxColumn * cellSize
+  const localMinZ = groundBounds.minZ + expandedMinRow * cellSize
+  const localMaxZ = groundBounds.minZ + expandedMaxRow * cellSize
 
   const position = groundNode.position ?? { x: 0, y: 0, z: 0 }
   const scale = groundNode.scale ?? { x: 1, y: 1, z: 1 }
@@ -2535,14 +2534,12 @@ function computeGroundDirtyBoundsXZFromRegion(
   const expandedMaxRow = Math.min(rows, Math.ceil(region.maxRow) + 1)
   const expandedMinColumn = Math.max(0, Math.floor(region.minColumn) - 1)
   const expandedMaxColumn = Math.min(columns, Math.ceil(region.maxColumn) + 1)
-  const spanMeters = resolveGroundWorkingSpanMeters(definition)
-  const halfWidth = spanMeters * 0.5
-  const halfDepth = spanMeters * 0.5
+  const groundBounds = resolveGroundWorldBounds(definition)
   const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1
-  const localMinX = -halfWidth + expandedMinColumn * cellSize
-  const localMaxX = -halfWidth + expandedMaxColumn * cellSize
-  const localMinZ = -halfDepth + expandedMinRow * cellSize
-  const localMaxZ = -halfDepth + expandedMaxRow * cellSize
+  const localMinX = groundBounds.minX + expandedMinColumn * cellSize
+  const localMaxX = groundBounds.minX + expandedMaxColumn * cellSize
+  const localMinZ = groundBounds.minZ + expandedMinRow * cellSize
+  const localMaxZ = groundBounds.minZ + expandedMaxRow * cellSize
   const position = groundNode.position ?? { x: 0, y: 0, z: 0 }
   const scale = groundNode.scale ?? { x: 1, y: 1, z: 1 }
   const worldX0 = position.x + localMinX * scale.x
@@ -2574,14 +2571,12 @@ function computeGroundDirtyBoundsFromRegionXZ(
   const expandedMinColumn = Math.max(0, Math.floor(normalizedMinColumn) - 1)
   const expandedMaxColumn = Math.min(columns, Math.ceil(normalizedMaxColumn) + 1)
 
-  const spanMeters = resolveGroundWorkingSpanMeters(definition)
-  const halfWidth = spanMeters * 0.5
-  const halfDepth = spanMeters * 0.5
+  const groundBounds = resolveGroundWorldBounds(definition)
   const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1
-  const localMinX = -halfWidth + expandedMinColumn * cellSize
-  const localMaxX = -halfWidth + expandedMaxColumn * cellSize
-  const localMinZ = -halfDepth + expandedMinRow * cellSize
-  const localMaxZ = -halfDepth + expandedMaxRow * cellSize
+  const localMinX = groundBounds.minX + expandedMinColumn * cellSize
+  const localMaxX = groundBounds.minX + expandedMaxColumn * cellSize
+  const localMinZ = groundBounds.minZ + expandedMinRow * cellSize
+  const localMaxZ = groundBounds.minZ + expandedMaxRow * cellSize
   const position = groundNode.position ?? { x: 0, y: 0, z: 0 }
   const scale = groundNode.scale ?? { x: 1, y: 1, z: 1 }
   const worldX0 = position.x + localMinX * scale.x
@@ -6853,7 +6848,17 @@ function resolveGroundSettingsFromNodes(nodes: SceneNode[], fallback: GroundSett
   if (!groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
     return base
   }
+  const groundMesh = groundNode.dynamicMesh
   return cloneGroundSettings({
+    width: base.width,
+    depth: base.depth,
+    worldBounds: groundMesh.worldBounds ?? base.worldBounds,
+    chunkSizeMeters: groundMesh.chunkSizeMeters ?? base.chunkSizeMeters,
+    baseHeight: groundMesh.baseHeight ?? base.baseHeight,
+    renderRadiusChunks: groundMesh.renderRadiusChunks ?? base.renderRadiusChunks,
+    farHorizonEnabled: groundMesh.farHorizonEnabled ?? base.farHorizonEnabled,
+    farHorizonDistanceMeters: groundMesh.farHorizonDistanceMeters ?? base.farHorizonDistanceMeters,
+    collisionRadiusChunks: groundMesh.collisionRadiusChunks ?? base.collisionRadiusChunks,
     enableAirWall: base.enableAirWall,
     editorScatterDynamicStreamingEnabled: base.editorScatterDynamicStreamingEnabled,
     editorScatterVisible: base.editorScatterVisible,
@@ -7395,6 +7400,7 @@ function createSceneDocument(
     options.groundSettings
       ?? (existingGroundMesh
         ? {
+            worldBounds: existingGroundMesh.worldBounds,
             chunkSizeMeters: existingGroundMesh.chunkSizeMeters,
             baseHeight: existingGroundMesh.baseHeight,
             renderRadiusChunks: existingGroundMesh.renderRadiusChunks,
@@ -18006,6 +18012,7 @@ export const useSceneStore = defineStore('scene', {
     async selectScene(sceneId: string, options: { setLastEdited?: boolean; forceReload?: boolean } = {}) {
       // Invalidate any in-flight scene-bound async work as early as possible.
       this.sceneSwitchToken += 1
+      const sceneSwitchToken = this.sceneSwitchToken
       const forceReload = options.forceReload === true
       const scenesStore = useScenesStore()
       const sceneReady = await scenesStore.ensureSceneBundleAvailable(sceneId)
@@ -18042,6 +18049,21 @@ export const useSceneStore = defineStore('scene', {
         scene.nodes = sceneNodes
         attachRuntimeGroundSidecarsToDocument(scene)
         this.applySceneDocumentToState(scene)
+        const terrainDatasetManifest = await scenesStore.loadTerrainDatasetManifest(scene.id)
+        const terrainSampler = await createScenesStoreTerrainDatasetHeightSampler(scene.id)
+        if (sceneSwitchToken !== this.sceneSwitchToken) {
+          return false
+        }
+        if (this.groundNode && this.groundNode.dynamicMesh?.type === 'Ground') {
+          const runtimeGround = this.groundNode.dynamicMesh as GroundDynamicMesh & {
+            runtimeTerrainDatasetManifest?: unknown
+            runtimeTerrainDatasetEnabled?: boolean
+            runtimeTerrainHeightSampler?: unknown
+          }
+          runtimeGround.runtimeTerrainDatasetManifest = terrainDatasetManifest
+          runtimeGround.runtimeTerrainDatasetEnabled = Boolean(terrainSampler)
+          runtimeGround.runtimeTerrainHeightSampler = terrainSampler
+        }
       } finally {
         this.isSceneReady = true
       }
@@ -18160,6 +18182,8 @@ export const useSceneStore = defineStore('scene', {
         groundPaintSidecars,
         groundChunkManifests,
         groundChunkData,
+        terrainDatasetManifests,
+        terrainDatasetRegionPacks,
       } = await loadStoredScenesFromScenePackage(zipBytes)
       if (!Array.isArray(scenes) || !scenes.length) {
         throw new Error('Scene package does not contain any scene data')
@@ -18179,6 +18203,8 @@ export const useSceneStore = defineStore('scene', {
       const importedGroundPaintSidecars = new Map<string, ArrayBuffer | null>()
       const importedGroundChunkManifests = new Map<string, GroundChunkManifest | null>()
       const importedGroundChunkData = new Map<string, Record<string, ArrayBuffer | null>>()
+      const importedTerrainDatasetManifests = new Map<string, import('@schema').QuantizedTerrainDatasetRootManifest | null>()
+      const importedTerrainDatasetRegionPacks = new Map<string, Record<string, ArrayBuffer | null>>()
       const renamedScenes: Array<{ originalName: string; renamedName: string }> = []
 
       for (let index = 0; index < scenes.length; index += 1) {
@@ -18232,6 +18258,8 @@ export const useSceneStore = defineStore('scene', {
         importedGroundPaintSidecars.set(sceneDocument.id, groundPaintSidecars[entry.id] ?? null)
         importedGroundChunkManifests.set(sceneDocument.id, groundChunkManifests[entry.id] ?? null)
         importedGroundChunkData.set(sceneDocument.id, groundChunkData[entry.id] ?? {})
+        importedTerrainDatasetManifests.set(sceneDocument.id, terrainDatasetManifests[entry.id] ?? null)
+        importedTerrainDatasetRegionPacks.set(sceneDocument.id, terrainDatasetRegionPacks[entry.id] ?? {})
       }
 
       await scenesStore.saveSceneDocuments(
@@ -18251,6 +18279,12 @@ export const useSceneStore = defineStore('scene', {
           ),
           groundChunkData: Object.fromEntries(
             imported.map((sceneDocument) => [sceneDocument.id, importedGroundChunkData.get(sceneDocument.id) ?? {}]),
+          ),
+          terrainDatasetManifests: Object.fromEntries(
+            imported.map((sceneDocument) => [sceneDocument.id, importedTerrainDatasetManifests.get(sceneDocument.id) ?? null]),
+          ),
+          terrainDatasetRegionPacks: Object.fromEntries(
+            imported.map((sceneDocument) => [sceneDocument.id, importedTerrainDatasetRegionPacks.get(sceneDocument.id) ?? {}]),
           ),
         },
       )

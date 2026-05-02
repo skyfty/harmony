@@ -32,6 +32,21 @@ export interface PlanningDemImportResult {
 export interface PlanningDemImportOptions {
   minElevation?: number | null
   maxElevation?: number | null
+  metersPerPixel?: number | null
+  worldBoundsOverride?: PlanningTerrainWorldBounds | null
+}
+
+export interface PlanningDemWindowedGeoTiffSource {
+  width: number
+  height: number
+  geographicBounds: PlanningTerrainGeographicBounds | null
+  worldBounds: PlanningTerrainWorldBounds | null
+  sampleStepMeters: number | null
+  readWindow(options: {
+    window: [number, number, number, number]
+    width?: number
+    height?: number
+  }): Promise<ArrayLike<number>>
 }
 
 type PlanningDemResolution = {
@@ -183,6 +198,55 @@ function computeSampleStepMeters(worldBounds: PlanningTerrainWorldBounds | null,
   return validSteps.length ? Math.max(...validSteps) : null
 }
 
+function normalizeWorldBoundsOverride(raw: PlanningTerrainWorldBounds | null | undefined): PlanningTerrainWorldBounds | null {
+  if (!raw) {
+    return null
+  }
+  const minX = Number(raw.minX)
+  const minY = Number(raw.minY)
+  const maxX = Number(raw.maxX)
+  const maxY = Number(raw.maxY)
+  if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) {
+    return null
+  }
+  if (!(maxX > minX) || !(maxY > minY)) {
+    return null
+  }
+  return { minX, minY, maxX, maxY }
+}
+
+function resolveImageHeightmapWorldBounds(
+  width: number,
+  height: number,
+  options?: PlanningDemImportOptions,
+): PlanningTerrainWorldBounds {
+  const overriddenBounds = normalizeWorldBoundsOverride(options?.worldBoundsOverride ?? null)
+  if (overriddenBounds) {
+    return overriddenBounds
+  }
+
+  const metersPerPixel = Number(options?.metersPerPixel)
+  if (Number.isFinite(metersPerPixel) && metersPerPixel > 0) {
+    const halfWidth = Math.max(1, width - 1) * metersPerPixel * 0.5
+    const halfHeight = Math.max(1, height - 1) * metersPerPixel * 0.5
+    return {
+      minX: -halfWidth,
+      minY: -halfHeight,
+      maxX: halfWidth,
+      maxY: halfHeight,
+    }
+  }
+
+  const halfWidth = Math.max(1, width - 1) * 0.5
+  const halfHeight = Math.max(1, height - 1) * 0.5
+  return {
+    minX: -halfWidth,
+    minY: -halfHeight,
+    maxX: halfWidth,
+    maxY: halfHeight,
+  }
+}
+
 function computeMinMax(values: ArrayLike<number>): { min: number | null; max: number | null } {
   let min = Number.POSITIVE_INFINITY
   let max = Number.NEGATIVE_INFINITY
@@ -297,6 +361,9 @@ async function parsePlanningHeightmapImageBuffer(
   const image = await loadImageElementFromBlob(imageBlob)
   const width = Math.max(1, Math.trunc(image.naturalWidth))
   const height = Math.max(1, Math.trunc(image.naturalHeight))
+  if (width < 2 || height < 2) {
+    throw new Error(`PNG heightmap validation failed: the image must be at least 2x2 pixels, but received ${width}x${height}. Please fix the file in QGIS or Photoshop and re-export it.`)
+  }
   const canvas = document.createElement('canvas')
   canvas.width = width
   canvas.height = height
@@ -309,23 +376,38 @@ async function parsePlanningHeightmapImageBuffer(
   const { minElevation, maxElevation } = resolveImageHeightmapElevationRange(options)
   const range = maxElevation - minElevation
   const rasterData = new Float32Array(width * height)
+  let nonGrayscalePixelCount = 0
+  let translucentPixelCount = 0
 
   for (let index = 0; index < rasterData.length; index += 1) {
     const pixelOffset = index * 4
     const red = pixels[pixelOffset] ?? 0
     const green = pixels[pixelOffset + 1] ?? 0
     const blue = pixels[pixelOffset + 2] ?? 0
+    const alpha = pixels[pixelOffset + 3] ?? 255
+    if (Math.abs(red - green) > 1 || Math.abs(red - blue) > 1 || Math.abs(green - blue) > 1) {
+      nonGrayscalePixelCount += 1
+    }
+    if (alpha < 255) {
+      translucentPixelCount += 1
+    }
     const grayscale = (0.299 * red + 0.587 * green + 0.114 * blue) / 255
     rasterData[index] = minElevation + grayscale * range
   }
 
-  const preview = sampleRasterToPreview(rasterData, width, height, minElevation, maxElevation)
-  const worldBounds: PlanningTerrainWorldBounds = {
-    minX: 0,
-    minY: 0,
-    maxX: Math.max(1, width - 1),
-    maxY: Math.max(1, height - 1),
+  if (nonGrayscalePixelCount > 0 || translucentPixelCount > 0) {
+    const issues: string[] = []
+    if (nonGrayscalePixelCount > 0) {
+      issues.push(`${nonGrayscalePixelCount} non-grayscale pixels`)
+    }
+    if (translucentPixelCount > 0) {
+      issues.push(`${translucentPixelCount} translucent pixels`)
+    }
+    throw new Error(`PNG heightmap validation failed: found ${issues.join(' and ')}. Use QGIS or Photoshop to export a fully opaque grayscale PNG heightmap, then re-import it.`)
   }
+
+  const preview = sampleRasterToPreview(rasterData, width, height, minElevation, maxElevation)
+  const worldBounds = resolveImageHeightmapWorldBounds(width, height, options)
 
   return {
     sourceFileHash,
@@ -365,6 +447,9 @@ async function parsePlanningGeoTiffBuffer(buffer: ArrayBuffer, filename: string,
   })
   const preview = min !== null && max !== null ? sampleRasterToPreview(rasters, width, height, min, max) : null
   const sampleStepMeters = computeSampleStepMeters(worldBounds, width, height)
+  if (!worldBounds || !sampleStepMeters) {
+    throw new Error('GeoTIFF validation failed: unable to determine world scale from GeoTIFF metadata. Re-export the DEM with valid georeferencing in QGIS, or convert it to a PNG heightmap and provide meters-per-pixel during import.')
+  }
 
   return {
     sourceFileHash,
@@ -429,5 +514,52 @@ export function demImportResultToTerrainData(result: PlanningDemImportResult): P
     previewHash: result.preview ? result.sourceFileHash : null,
     previewSize: result.preview ? { width: result.preview.width, height: result.preview.height } : null,
     orthophoto: result.orthophoto ?? null,
+  }
+}
+
+export async function openPlanningDemWindowedGeoTiffSource(
+  blob: Blob,
+  filename = 'DEM',
+  mimeType: string | null = blob.type || null,
+): Promise<PlanningDemWindowedGeoTiffSource | null> {
+  if (!isPlanningDemGeoTiffSource(filename, mimeType)) {
+    return null
+  }
+  const buffer = await blob.arrayBuffer()
+  const tiff = await fromArrayBuffer(buffer)
+  const image = await tiff.getImage()
+  const width = image.getWidth()
+  const height = image.getHeight()
+  const bbox = normalizeBounds(typeof image.getBoundingBox === 'function' ? image.getBoundingBox() : null)
+  const resolution = normalizeResolution(typeof image.getResolution === 'function' ? image.getResolution() : null)
+  const geoKeys = typeof image.getGeoKeys === 'function' ? image.getGeoKeys() : null
+  const geographic = isGeographicCoordinateSpace(bbox, geoKeys)
+  const worldBounds = normalizeWorldBounds({
+    bounds: bbox,
+    resolution,
+    width,
+    height,
+    geographic,
+  })
+  const sampleStepMeters = computeSampleStepMeters(worldBounds, width, height)
+  return {
+    width,
+    height,
+    geographicBounds: bbox,
+    worldBounds,
+    sampleStepMeters,
+    async readWindow(options: { window: [number, number, number, number]; width?: number; height?: number }): Promise<ArrayLike<number>> {
+      const rasters = await image.readRasters({
+        window: options.window,
+        width: options.width,
+        height: options.height,
+        interleave: true,
+        resampleMethod: 'bilinear',
+      })
+      if (Array.isArray(rasters)) {
+        return rasters[0] as ArrayLike<number>
+      }
+      return rasters as ArrayLike<number>
+    },
   }
 }

@@ -8,6 +8,8 @@ import type {
   ProjectExportBundleResourceBreakdown,
 } from '@schema'
 import {
+  buildQuantizedTerrainRegionPackPath,
+  buildQuantizedTerrainRootManifestPath,
   encodeScenePackageSceneDocument,
   formatGroundChunkDataPath,
   GROUND_SCATTER_SIDECAR_FILENAME,
@@ -16,6 +18,7 @@ import {
   SCENE_PACKAGE_FORMAT,
   SCENE_PACKAGE_VERSION,
   type GroundChunkManifest,
+  type QuantizedTerrainDatasetRootManifest,
   type ScenePackageManifestV1,
   type ScenePackageResourceEntry,
 } from '@schema'
@@ -233,6 +236,56 @@ async function buildGroundChunkPackageManifest(
       ...manifest,
       sceneId,
       chunks: nextChunks,
+    },
+    files,
+  }
+}
+
+async function buildTerrainDatasetPackageFiles(
+  sceneId: string,
+  manifest: QuantizedTerrainDatasetRootManifest | null,
+  loadRegionPack: (regionKey: string) => Promise<ArrayBuffer | null>,
+): Promise<{ rootManifestPath: string; regionsPath: string; manifest: QuantizedTerrainDatasetRootManifest; files: Record<string, Uint8Array> } | null> {
+  if (!manifest || !Array.isArray(manifest.regions) || !manifest.regions.length) {
+    return null
+  }
+
+  const sceneRootPath = `scenes/${encodeURIComponent(sceneId)}`
+  const terrainRoot = `${sceneRootPath}/terrain`
+  const regionsPath = `${terrainRoot}/regions`
+  const files: Record<string, Uint8Array> = {}
+  const nextRegions: QuantizedTerrainDatasetRootManifest['regions'] = []
+
+  for (const region of manifest.regions) {
+    const regionKey = typeof region?.regionKey === 'string' ? region.regionKey.trim() : ''
+    if (!regionKey) {
+      continue
+    }
+    const regionPack = await loadRegionPack(regionKey)
+    if (!(regionPack instanceof ArrayBuffer)) {
+      continue
+    }
+    const packagedPath = buildQuantizedTerrainRegionPackPath(region.regionId, regionsPath)
+    nextRegions.push({
+      ...region,
+      path: packagedPath,
+      byteLength: regionPack.byteLength,
+    })
+    files[packagedPath] = new Uint8Array(regionPack)
+  }
+
+  if (!nextRegions.length) {
+    return null
+  }
+
+  const rootManifestPath = buildQuantizedTerrainRootManifestPath(terrainRoot)
+  return {
+    rootManifestPath,
+    regionsPath: `${regionsPath}/`,
+    manifest: {
+      ...manifest,
+      scenePath: sceneRootPath,
+      regions: nextRegions,
     },
     files,
   }
@@ -1241,6 +1294,7 @@ export async function exportScenePackageZip(payload: {
     let groundChunkManifestPath: string | undefined
     let groundScatterPath: string | undefined
     let groundPaintPath: string | undefined
+    let terrainDataset: ScenePackageManifestV1['scenes'][number]['terrainDataset'] | undefined
 
     // Collect local asset IDs from effective registry and explicit local source metadata.
     const sidecarSource = typeof structuredClone === 'function'
@@ -1288,6 +1342,31 @@ export async function exportScenePackageZip(payload: {
           sceneName,
           detail: groundChunkManifestPath,
           message: `已写入无限地形 chunk manifest`,
+        })
+      }
+
+      const storedTerrainDatasetManifest = await scenesStore.loadTerrainDatasetManifest(scene.id)
+      const packagedTerrainDataset = await buildTerrainDatasetPackageFiles(
+        scene.id,
+        storedTerrainDatasetManifest,
+        (regionKey) => scenesStore.loadTerrainDatasetRegionPack(scene.id, regionKey),
+      )
+      if (packagedTerrainDataset) {
+        terrainDataset = {
+          datasetId: packagedTerrainDataset.manifest.datasetId,
+          rootManifestPath: packagedTerrainDataset.rootManifestPath,
+          regionsPath: packagedTerrainDataset.regionsPath,
+        }
+        files[packagedTerrainDataset.rootManifestPath] = jsonBytes(packagedTerrainDataset.manifest)
+        Object.assign(files, packagedTerrainDataset.files)
+        emitSceneExportEvent(payload.reportEvent, {
+          phase: 'sidecar',
+          level: 'info',
+          status: 'completed',
+          sceneId: scene.id,
+          sceneName,
+          detail: packagedTerrainDataset.rootManifestPath,
+          message: `已写入 quantized terrain dataset`,
         })
       }
     }
@@ -1469,6 +1548,7 @@ export async function exportScenePackageZip(payload: {
       groundHeightsPath,
       groundScatterPath,
       groundPaintPath,
+      terrainDataset,
     })
   }
 

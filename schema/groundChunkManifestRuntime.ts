@@ -3,6 +3,7 @@ import * as THREE from 'three'
 import {
   deserializeGroundChunkData,
   parseGroundChunkKey,
+  resolveGroundChunkBounds,
   type GroundChunkManifestRecord,
   type GroundRuntimeDynamicMesh,
 } from './index'
@@ -198,9 +199,14 @@ export function resolveVisibleInfiniteGroundChunkManifestRecords(
   manifestRecords: Record<string, GroundChunkManifestRecord>,
 ): GroundChunkManifestRecord[] {
   const visibleWindow = resolveInfiniteGroundVisibleChunkWindow(groundObject, groundDefinition, camera)
+  const authoredChunkBounds = resolveGroundChunkBounds(groundDefinition)
   const visibleRecords: GroundChunkManifestRecord[] = []
-  for (let chunkZ = visibleWindow.minChunkZ; chunkZ <= visibleWindow.maxChunkZ; chunkZ += 1) {
-    for (let chunkX = visibleWindow.minChunkX; chunkX <= visibleWindow.maxChunkX; chunkX += 1) {
+  const minChunkZ = Math.max(visibleWindow.minChunkZ, authoredChunkBounds.minChunkZ)
+  const maxChunkZ = Math.min(visibleWindow.maxChunkZ, authoredChunkBounds.maxChunkZ)
+  const minChunkX = Math.max(visibleWindow.minChunkX, authoredChunkBounds.minChunkX)
+  const maxChunkX = Math.min(visibleWindow.maxChunkX, authoredChunkBounds.maxChunkX)
+  for (let chunkZ = minChunkZ; chunkZ <= maxChunkZ; chunkZ += 1) {
+    for (let chunkX = minChunkX; chunkX <= maxChunkX; chunkX += 1) {
       const key = `${chunkX}:${chunkZ}`
       const record = manifestRecords[key]
       if (record) {

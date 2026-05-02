@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import type { SceneNode } from '@schema/index'
-import { resolveGroundWorkingSpanMeters } from '@schema/index'
+import { resolveGroundWorldBounds } from '@schema/index'
 import { findSceneNode, setBoundingBoxFromObject } from './sceneUtils'
 
 export type CameraResetDirection = 'pos-x' | 'neg-x' | 'pos-y' | 'neg-y' | 'pos-z' | 'neg-z'
@@ -83,9 +83,9 @@ export function createCameraResetDirectionController(deps: CameraResetDependenci
     }
 
     const definition = groundNode.dynamicMesh
-    const span = Math.abs(resolveGroundWorkingSpanMeters(definition))
-    const width = span
-    const depth = span
+    const bounds = resolveGroundWorldBounds(definition)
+    const width = Math.abs(bounds.maxX - bounds.minX)
+    const depth = Math.abs(bounds.maxZ - bounds.minZ)
     if (!Number.isFinite(width) || !Number.isFinite(depth) || width <= 1e-6 || depth <= 1e-6) {
       return null
     }
@@ -135,13 +135,15 @@ export function createCameraResetDirectionController(deps: CameraResetDependenci
     }
     cameraResetFitUpHelper.normalize()
 
-    const halfWidth = width * 0.5
-    const halfDepth = depth * 0.5
+    cameraResetFitTargetHelper
+      .set((bounds.minX + bounds.maxX) * 0.5, 0, (bounds.minZ + bounds.maxZ) * 0.5)
+      .applyMatrix4(cameraResetFitMatrixHelper)
+
     const corners: Array<[number, number]> = [
-      [-halfWidth, -halfDepth],
-      [halfWidth, -halfDepth],
-      [-halfWidth, halfDepth],
-      [halfWidth, halfDepth],
+      [bounds.minX, bounds.minZ],
+      [bounds.maxX, bounds.minZ],
+      [bounds.minX, bounds.maxZ],
+      [bounds.maxX, bounds.maxZ],
     ]
 
     let maxHorizontal = 0

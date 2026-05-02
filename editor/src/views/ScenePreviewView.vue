@@ -44,7 +44,7 @@ import {
 	type GroundSurfaceChunkTextureMap,
 	type GroundRuntimeDynamicMesh,
 		resolveGroundWorkingGridSize,
-		resolveGroundWorkingSpanMeters,
+		resolveGroundWorldBounds,
 	type LanternSlideDefinition,
 	type SceneAssetRegistryEntry,
 	type SceneJsonExportDocument,
@@ -2185,11 +2185,9 @@ function resolveGroundViewportWorldSize(): { width: number; depth: number } | nu
 	const dynamicMesh = groundNode && isGroundDynamicMesh(groundNode.dynamicMesh)
 		? groundNode.dynamicMesh
 		: null
-	const baseSpan = dynamicMesh
-		? resolveGroundWorkingSpanMeters(dynamicMesh)
-		: Math.max(0, Number(document.groundSettings?.chunkSizeMeters ?? 0)) * Math.max(1, Math.trunc(Number(document.groundSettings?.renderRadiusChunks ?? document.groundSettings?.collisionRadiusChunks ?? 1))) * 2
-	const baseWidth = baseSpan
-	const baseDepth = baseSpan
+	const baseBounds = resolveGroundWorldBounds(dynamicMesh ?? document.groundSettings)
+	const baseWidth = baseBounds.maxX - baseBounds.minX
+	const baseDepth = baseBounds.maxZ - baseBounds.minZ
 	if (baseWidth <= 0 || baseDepth <= 0) {
 		return null
 	}
@@ -2440,9 +2438,7 @@ function computeTargetGroundChunkCount(
 	const columns = Math.max(1, Math.trunc(gridSize.columns))
 	const rows = Math.max(1, Math.trunc(gridSize.rows))
 	const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
-	const span = resolveGroundWorkingSpanMeters(definition)
-	const width = span > 0 ? span : columns * cellSize
-	const depth = span > 0 ? span : rows * cellSize
+	const bounds = resolveGroundWorldBounds(definition)
 	const safeCells = Math.max(1, Math.trunc(chunkCells))
 	const rowChunks = Math.max(1, Math.ceil(rows / safeCells))
 	const columnChunks = Math.max(1, Math.ceil(columns / safeCells))
@@ -2456,15 +2452,13 @@ function computeTargetGroundChunkCount(
 	activeCamera.getWorldPosition(groundChunkDebugCameraWorldHelper)
 	groundChunkDebugCameraLocalHelper.copy(groundChunkDebugCameraWorldHelper).applyMatrix4(groundChunkDebugRootInverseHelper)
 
-	const halfWidth = width * 0.5
-	const halfDepth = depth * 0.5
 	const chunkColumn = Math.max(
 		0,
-		Math.min(columnChunks - 1, Math.floor((groundChunkDebugCameraLocalHelper.x + halfWidth) / chunkSizeMeters)),
+		Math.min(columnChunks - 1, Math.floor((groundChunkDebugCameraLocalHelper.x - bounds.minX) / chunkSizeMeters)),
 	)
 	const chunkRow = Math.max(
 		0,
-		Math.min(rowChunks - 1, Math.floor((groundChunkDebugCameraLocalHelper.z + halfDepth) / chunkSizeMeters)),
+		Math.min(rowChunks - 1, Math.floor((groundChunkDebugCameraLocalHelper.z - bounds.minZ) / chunkSizeMeters)),
 	)
 
 	const minRow = Math.max(0, chunkRow - radiusChunks)
