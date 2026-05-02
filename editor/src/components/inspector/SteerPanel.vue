@@ -19,7 +19,7 @@ const TARGET_TYPE_OPTIONS = STEER_TARGET_TYPES.map((value) => ({
 }))
 
 const sceneStore = useSceneStore()
-const { selectedNode } = storeToRefs(sceneStore)
+const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)
 
 const steerComponent = computed(() => {
   const component = selectedNode.value?.components?.[STEER_COMPONENT_TYPE]
@@ -31,6 +31,24 @@ const steerComponent = computed(() => {
 
 const normalizedProps = computed(() => clampSteerComponentProps(steerComponent.value?.props ?? null))
 const isComponentEnabled = computed(() => steerComponent.value?.enabled !== false)
+
+function handleToggleComponent() {
+  const component = steerComponent.value
+  const nodeId = selectedNodeId.value
+  if (!component || !nodeId) {
+    return
+  }
+  sceneStore.toggleNodeComponentEnabled(nodeId, component.id)
+}
+
+function handleRemoveComponent() {
+  const component = steerComponent.value
+  const nodeId = selectedNodeId.value
+  if (!component || !nodeId) {
+    return
+  }
+  sceneStore.removeNodeComponent(nodeId, component.id)
+}
 
 function updateProps(patch: Partial<SteerComponentProps>) {
   const nodeId = selectedNode.value?.id ?? null
@@ -68,7 +86,34 @@ function handleAutoEnterChange(value: boolean | null) {
       <div class="steer-panel-header">
         <span class="steer-panel-title">Steer</span>
         <v-spacer />
-        <span class="steer-panel-subtitle">{{ normalizedProps.targetType }}</span>
+        <v-menu
+          v-if="steerComponent"
+          location="bottom end"
+          origin="auto"
+          transition="fade-transition"
+        >
+          <template #activator="{ props }">
+            <v-btn
+              v-bind="props"
+              icon
+              variant="text"
+              size="small"
+              class="component-menu-btn"
+              @click.stop
+            >
+              <v-icon size="18">mdi-dots-vertical</v-icon>
+            </v-btn>
+          </template>
+          <v-list density="compact">
+            <v-list-item @click.stop="handleToggleComponent()">
+              <v-list-item-title>{{ steerComponent.enabled ? 'Disable' : 'Enable' }}</v-list-item-title>
+            </v-list-item>
+            <v-divider class="component-menu-divider" inset />
+            <v-list-item @click.stop="handleRemoveComponent()">
+              <v-list-item-title>Remove</v-list-item-title>
+            </v-list-item>
+          </v-list>
+        </v-menu>
       </div>
     </v-expansion-panel-title>
     <v-expansion-panel-text>
@@ -139,6 +184,14 @@ function handleAutoEnterChange(value: boolean | null) {
   font-size: 0.78rem;
   opacity: 0.78;
   text-transform: capitalize;
+}
+
+.component-menu-btn {
+  color: rgba(233, 236, 241, 0.82);
+}
+
+.component-menu-divider {
+  margin-inline: 0.6rem;
 }
 
 .steer-panel-fields {
