@@ -1,5 +1,6 @@
 import type { GroundHeightMap, GroundLocalEditTileMap, GroundRuntimeDynamicMesh } from '@schema'
 import {
+  GROUND_HEIGHT_UNSET_VALUE,
   GROUND_TERRAIN_CHUNK_SIZE_METERS,
   createGroundHeightMap,
   formatGroundLocalEditTileKey,
@@ -122,36 +123,6 @@ function resolvePlanningDemLocalEditTileOrigin(definition: GroundRuntimeDynamicM
   }
 }
 
-function stringifyPlanningDemDebugObject(value: unknown): string {
-  const seen = new WeakSet<object>()
-  return JSON.stringify(value, (_key, currentValue) => {
-    if (typeof currentValue === 'bigint') {
-      return currentValue.toString()
-    }
-    if (typeof currentValue === 'function') {
-      return '[Function]'
-    }
-    if (currentValue instanceof Error) {
-      return {
-        name: currentValue.name,
-        message: currentValue.message,
-        stack: currentValue.stack ?? null,
-      }
-    }
-    if (currentValue && typeof currentValue === 'object') {
-      if (seen.has(currentValue)) {
-        return '[Circular]'
-      }
-      seen.add(currentValue)
-    }
-    return currentValue
-  }, 2)
-}
-
-function logPlanningDemDebug(stage: string, payload: unknown): void {
-  console.log(`[PlanningDemToGround] ${stage} ${stringifyPlanningDemDebugObject(payload)}`)
-}
-
 function resolvePlanningDemChunkSizeMeters(): number {
   return GROUND_TERRAIN_CHUNK_SIZE_METERS
 }
@@ -225,14 +196,6 @@ function buildPlanningDemRegionFromPreparedSource(options: {
   textureDataUrl?: string | null
   textureName?: string | null
 }): PlanningDemRegionConversionResult {
-  logPlanningDemDebug('buildPlanningDemRegionFromPreparedSource:start', {
-    startRow: options.startRow,
-    endRow: options.endRow,
-    startColumn: options.startColumn,
-    endColumn: options.endColumn,
-    cellSize: Number.isFinite(options.definition.cellSize) && options.definition.cellSize > 0 ? options.definition.cellSize : 1,
-    terrainMode: options.definition.terrainMode,
-  })
   const region = buildPlanningDemHeightRegion({
     definition: options.definition,
     source: options.prepared.rasterSource,
@@ -296,22 +259,6 @@ export function buildPlanningDemLocalEditTilesForRegion(options: {
     originWorld: originZ,
     chunkSizeMeters: tileSizeMeters,
   })
-  logPlanningDemDebug('buildPlanningDemLocalEditTilesForRegion:start', {
-    startRow: options.startRow,
-    endRow: options.endRow,
-    startColumn: options.startColumn,
-    endColumn: options.endColumn,
-    tileSizeMeters,
-    resolution,
-    originX,
-    originZ,
-    tileRange: {
-      startTileColumn,
-      endTileColumn,
-      startTileRow,
-      endTileRow,
-    },
-  })
   const result: GroundLocalEditTileMap = {}
 
   for (let tileRow = startTileRow; tileRow <= endTileRow; tileRow += 1) {
@@ -320,11 +267,22 @@ export function buildPlanningDemLocalEditTilesForRegion(options: {
       const tileMinX = originX + tileColumn * tileSizeMeters
       const tileMinZ = originZ + tileRow * tileSizeMeters
       const values = new Array<number>((resolution + 1) * (resolution + 1))
+      let finiteValueCount = 0
       for (let row = 0; row <= resolution; row += 1) {
         const z = tileMinZ + (row / resolution) * tileSizeMeters
         for (let column = 0; column <= resolution; column += 1) {
           const x = tileMinX + (column / resolution) * tileSizeMeters
-          values[row * (resolution + 1) + column] = samplePlanningDemHeightAtWorld(options.source, x, z)
+          const withinSourceBounds = x >= options.source.targetWorldBounds.minX
+            && x <= options.source.targetWorldBounds.maxX
+            && z >= options.source.targetWorldBounds.minZ
+            && z <= options.source.targetWorldBounds.maxZ
+          const sampled = withinSourceBounds
+            ? samplePlanningDemHeightAtWorld(options.source, x, z)
+            : GROUND_HEIGHT_UNSET_VALUE
+          values[row * (resolution + 1) + column] = sampled
+          if (Number.isFinite(sampled)) {
+            finiteValueCount += 1
+          }
         }
       }
       result[key] = {
@@ -340,13 +298,7 @@ export function buildPlanningDemLocalEditTilesForRegion(options: {
     }
   }
 
-  const tileKeys = Object.keys(result)
-  logPlanningDemDebug('buildPlanningDemLocalEditTilesForRegion:end', {
-    tileCount: tileKeys.length,
-    firstTileKey: tileKeys[0] ?? null,
-    lastTileKey: tileKeys[tileKeys.length - 1] ?? null,
-  })
-  return tileKeys.length ? result : null
+  return Object.keys(result).length ? result : null
 }
 
 function sampleArrayLikeBilinearFinite(values: ArrayLike<number>, width: number, height: number, x: number, y: number): number {
@@ -487,29 +439,6 @@ export async function resolvePlanningDemPreparedSource(options: {
   const effectiveSourceStep = [sampleStepX, sampleStepY, parsed.sampleStepMeters]
     .filter((value): value is number => Number.isFinite(value as number) && (value as number) > 0)
     .reduce<number | null>((smallest, value) => smallest === null ? value : Math.min(smallest, value), null)
-
-  logPlanningDemDebug('resolvePlanningDemPreparedSource:parsed', {
-    filename: parsed.filename,
-    mimeType: parsed.mimeType,
-    sourceFileHash: parsed.sourceFileHash,
-    width: demWidth,
-    height: demHeight,
-    minElevation: parsed.minElevation,
-    maxElevation: parsed.maxElevation,
-    sampleStepMeters: parsed.sampleStepMeters,
-    sampleStepX,
-    sampleStepY,
-    worldBounds: parsed.worldBounds,
-    targetRows,
-    targetColumns,
-    targetCellSize,
-    localEditCellSize,
-    localEditTileSizeMeters,
-    localEditTileResolution,
-    tileLayout,
-    detailLimitedByGroundGrid: effectiveSourceStep !== null && targetCellSize > effectiveSourceStep,
-    detailLimitedByEditResolution: effectiveSourceStep !== null && localEditCellSize > effectiveSourceStep,
-  })
 
   return {
     parsed,
@@ -717,18 +646,6 @@ export async function buildPlanningDemGroundRegionData(options: {
   endColumn: number
   applyOrthophoto?: boolean
 }): Promise<PlanningDemRegionConversionResult> {
-  logPlanningDemDebug('buildPlanningDemGroundRegionData:start', {
-    terrainDem: {
-      filename: options.terrainDem.filename ?? null,
-      sourceFileHash: options.terrainDem.sourceFileHash ?? null,
-      mimeType: options.terrainDem.mimeType ?? null,
-    },
-    startRow: options.startRow,
-    endRow: options.endRow,
-    startColumn: options.startColumn,
-    endColumn: options.endColumn,
-    applyOrthophoto: options.applyOrthophoto !== false,
-  })
   const prepared = await resolvePlanningDemPreparedSource({
     definition: options.definition,
     terrainDem: options.terrainDem,
@@ -827,21 +744,6 @@ export async function buildPlanningDemGroundData(options: {
   applyOrthophoto?: boolean
 }): Promise<PlanningDemGroundConversionResult> {
   const { definition, terrainDem } = options
-  logPlanningDemDebug('buildPlanningDemGroundData:start', {
-    terrainDem: {
-      filename: terrainDem.filename ?? null,
-      sourceFileHash: terrainDem.sourceFileHash ?? null,
-      mimeType: terrainDem.mimeType ?? null,
-    },
-    definition: {
-      terrainMode: definition.terrainMode,
-      cellSize: definition.cellSize,
-      chunkSizeMeters: definition.chunkSizeMeters ?? null,
-      renderRadiusChunks: definition.renderRadiusChunks ?? null,
-      surfaceRevision: definition.surfaceRevision ?? null,
-    },
-    applyOrthophoto: options.applyOrthophoto !== false,
-  })
   const gridSize = resolveGroundWorkingGridSize(definition)
   const rows = Math.max(1, Math.trunc(gridSize.rows))
   const columns = Math.max(1, Math.trunc(gridSize.columns))
@@ -866,14 +768,6 @@ export async function buildPlanningDemGroundData(options: {
   const texture = await resolvePlanningDemOrthophotoTexture({
     terrainDem,
     applyOrthophoto: options.applyOrthophoto,
-  })
-
-  logPlanningDemDebug('buildPlanningDemGroundData:end', {
-    planningHeightMapLength: heightMap.length,
-    localEditTileCount: fullRegionResult.localEditTiles ? Object.keys(fullRegionResult.localEditTiles).length : 0,
-    planningMetadata: fullRegionResult.planningMetadata,
-    textureName: texture.textureName,
-    textureDataUrl: texture.textureDataUrl ? '[data-url]' : null,
   })
 
   return {

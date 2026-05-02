@@ -51,25 +51,6 @@ const GROUND_TRIANGLE_SLICE_PLANAR_TOLERANCE = 0.004
 const GROUND_FLAT_TILING_RADIUS_MULTIPLIER = 8
 const GROUND_FLAT_TILING_MIN_RADIUS_CHUNKS = 32
 
-function stringifyGroundDebugObject(value: unknown): string {
-  const seen = new WeakSet<object>()
-  return JSON.stringify(value, (_key, currentValue) => {
-    if (typeof currentValue === 'bigint') {
-      return currentValue.toString()
-    }
-    if (typeof currentValue === 'function') {
-      return '[Function]'
-    }
-    if (currentValue && typeof currentValue === 'object') {
-      if (seen.has(currentValue)) {
-        return '[Circular]'
-      }
-      seen.add(currentValue)
-    }
-    return currentValue
-  })
-}
-
 type GroundChunkKey = string
 
 type GroundChunkSpec = {
@@ -1299,28 +1280,6 @@ function resolveGroundChunkGeometryLayout(definition: GroundRuntimeDynamicMesh, 
   const baseCellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1
   const localEditCellSize = resolveGroundChunkLocalEditCellSize(definition, spec)
   if (localEditCellSize <= baseCellSize) {
-    if (getGroundLocalEditTiles(definition).length > 0) {
-      console.log(`[groundMesh] chunkGeometryLayout ${stringifyGroundDebugObject({
-        spec,
-        baseCellSize,
-        localEditCellSize,
-        segmentRows: baseRows,
-        segmentColumns: baseColumns,
-        stepX: baseCellSize,
-        stepZ: baseCellSize,
-        planningDemSource: definition.planningMetadata?.demSource
-          ? {
-              targetCellSize: definition.planningMetadata.demSource.targetCellSize,
-              localEditCellSize: definition.planningMetadata.demSource.localEditCellSize,
-              localEditTileSizeMeters: definition.planningMetadata.demSource.localEditTileSizeMeters,
-              localEditTileResolution: definition.planningMetadata.demSource.localEditTileResolution,
-              sampleStepMeters: definition.planningMetadata.demSource.sampleStepMeters,
-              sampleStepX: definition.planningMetadata.demSource.sampleStepX,
-              sampleStepY: definition.planningMetadata.demSource.sampleStepY,
-            }
-          : null,
-      })}`)
-    }
     return {
       segmentRows: baseRows,
       segmentColumns: baseColumns,
@@ -1332,26 +1291,6 @@ function resolveGroundChunkGeometryLayout(definition: GroundRuntimeDynamicMesh, 
   const worldDepth = baseRows * baseCellSize
   const segmentColumns = Math.max(1, Math.ceil(worldWidth / localEditCellSize))
   const segmentRows = Math.max(1, Math.ceil(worldDepth / localEditCellSize))
-  console.log(`[groundMesh] chunkGeometryLayout ${stringifyGroundDebugObject({
-    spec,
-    baseCellSize,
-    localEditCellSize,
-    segmentRows,
-    segmentColumns,
-    stepX: worldWidth / segmentColumns,
-    stepZ: worldDepth / segmentRows,
-    planningDemSource: definition.planningMetadata?.demSource
-      ? {
-          targetCellSize: definition.planningMetadata.demSource.targetCellSize,
-          localEditCellSize: definition.planningMetadata.demSource.localEditCellSize,
-          localEditTileSizeMeters: definition.planningMetadata.demSource.localEditTileSizeMeters,
-          localEditTileResolution: definition.planningMetadata.demSource.localEditTileResolution,
-          sampleStepMeters: definition.planningMetadata.demSource.sampleStepMeters,
-          sampleStepX: definition.planningMetadata.demSource.sampleStepX,
-          sampleStepY: definition.planningMetadata.demSource.sampleStepY,
-        }
-      : null,
-  })}`)
   return {
     segmentRows,
     segmentColumns,
@@ -1421,6 +1360,10 @@ export function resolveGroundEffectiveHeightAtVertex(definition: GroundDynamicMe
   const planning = typeof planningRaw === 'number' && Number.isFinite(planningRaw) ? planningRaw : base
   // 保留 manual 相对 base 的编辑增量，再把这个增量叠加到 planning 上，得到最终显示/采样高度。
   return planning + (manual - base)
+}
+
+function sampleGroundHeightOutsideWorkingBounds(): number {
+  return 0
 }
 
 export type GroundEffectiveHeightRegion = GroundBaseHeightRegion & {
@@ -2738,6 +2681,9 @@ export function sampleGroundHeight(definition: GroundDynamicMesh, x: number, z: 
     ? runtimeDefinition.cellSize
     : 1
   const bounds = resolveGroundGridWorldBounds(runtimeDefinition)
+  if (x < bounds.minX || x > bounds.maxX || z < bounds.minZ || z > bounds.maxZ) {
+    return sampleGroundHeightOutsideWorkingBounds()
+  }
 
   const localColumnFloat = clampInclusive((x - bounds.minX) / cellSize, 0, columns)
   const localRowFloat = clampInclusive((z - bounds.minZ) / cellSize, 0, rows)
@@ -2778,6 +2724,9 @@ function sampleGroundHeightWithVertexCache(
   const cellSize = Number.isFinite(runtimeDefinition.cellSize) && runtimeDefinition.cellSize > 1e-6
     ? runtimeDefinition.cellSize
     : 1
+  if (x < bounds.minX || x > bounds.maxX || z < bounds.minZ || z > bounds.maxZ) {
+    return sampleGroundHeightOutsideWorkingBounds()
+  }
 
   const localColumnFloat = clampInclusive((x - bounds.minX) / cellSize, 0, columns)
   const localRowFloat = clampInclusive((z - bounds.minZ) / cellSize, 0, rows)
@@ -3245,17 +3194,6 @@ function refreshGroundFlatChunkBatchInstances(
   // - 所有平坦 chunk 共享几何和材质；
   // - 相机移动时只改 instance 矩阵，不需要每个 chunk 都重建 Mesh；
   // - 大多数地形都能走这条快路径，只有被局部雕刻影响的 chunk 才保留独立 Mesh。
-  const sampleInstances: Array<{
-    index: number
-    key: string
-    chunkRow: number
-    chunkColumn: number
-    x: number
-    z: number
-    rows: number
-    columns: number
-    chunkSizeMeters: number
-  }> = []
   let writtenCount = 0
   const chunkSizeMeters = resolveInfiniteChunkSizeMeters(definition)
   const chunkOrigin = resolveInfiniteGroundGridOriginMeters(chunkSizeMeters)
@@ -3271,24 +3209,10 @@ function refreshGroundFlatChunkBatchInstances(
     if (!indices) {
       return
     }
-    const chunkSpec = computeChunkSpec(definition, indices.row, indices.column)
     const centerX = chunkOrigin + (indices.column * chunkSizeMeters) + (chunkSizeMeters * 0.5)
     const centerZ = chunkOrigin + (indices.row * chunkSizeMeters) + (chunkSizeMeters * 0.5)
     const centerY = sampleGroundHeight(definition, centerX, centerZ)
     groundFlatChunkInstancePosition.set(centerX, centerY, centerZ)
-    if (sampleInstances.length < 4) {
-      sampleInstances.push({
-        index,
-        key,
-        chunkRow: indices.row,
-        chunkColumn: indices.column,
-        x: groundFlatChunkInstancePosition.x,
-        z: groundFlatChunkInstancePosition.z,
-        rows: chunkSpec.rows,
-        columns: chunkSpec.columns,
-        chunkSizeMeters,
-      })
-    }
     groundFlatChunkInstanceMatrix.compose(groundFlatChunkInstancePosition, groundFlatChunkInstanceRotation, groundFlatChunkInstanceScale)
     batch.mesh.setMatrixAt(index, groundFlatChunkInstanceMatrix)
     writtenCount += 1
