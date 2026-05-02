@@ -24,8 +24,8 @@
   },
   "packageManager": "pnpm@10.28.2",
   "dependencies": {
+    "@harmony/physics-bridge": "file:../physics-bridge",
     "@harmony/physics-core": "file:../physics-core",
-    "@harmony/physics-worker-runtime": "file:../physics-worker-runtime",
     "ammojs3": "^0.0.11"
   },
   "devDependencies": {

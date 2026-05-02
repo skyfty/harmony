@@ -9,7 +9,7 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,
-    "lib": ["ES2020", "DOM", "WebWorker"],
+    "lib": ["ES2020", "DOM"],
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
@@ -20,8 +20,7 @@
     "noFallthroughCasesInSwitch": true,
     "baseUrl": ".",
     "paths": {
-      "@harmony/physics-core": ["../physics-core/src/index.ts"],
-      "@harmony/physics-worker-runtime": ["../physics-worker-runtime/src/index.ts"]
+      "@harmony/physics-core": ["../physics-core/src/index.ts"]
     }
   },
   "include": ["src/**/*.ts"]

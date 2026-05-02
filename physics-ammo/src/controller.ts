@@ -1,5 +1,5 @@
 import type { PhysicsBridgeInitResult, PhysicsInitOptions, PhysicsRaycastHit, PhysicsSceneAsset } from '@harmony/physics-core'
-import type { PhysicsWorkerController } from '@harmony/physics-worker-runtime'
+import type { PhysicsWorkerController } from '@harmony/physics-bridge'
 import { AmmoModuleLoader, type AmmoModuleFactory } from './ammoLoader'
 import { AmmoPhysicsWorld } from './world'
 

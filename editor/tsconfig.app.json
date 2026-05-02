@@ -13,10 +13,8 @@
       "@harmony/physics-core/*": ["../physics-core/src/*"],
       "@harmony/physics-ammo": ["../physics-ammo/src/index.ts"],
       "@harmony/physics-ammo/*": ["../physics-ammo/src/*"],
-      "@harmony/physics-host-web": ["../physics-host-web/src/index.ts"],
-      "@harmony/physics-host-web/*": ["../physics-host-web/src/*"],
-      "@harmony/physics-worker-runtime": ["../physics-worker-runtime/src/index.ts"],
-      "@harmony/physics-worker-runtime/*": ["../physics-worker-runtime/src/*"],
+      "@harmony/physics-bridge": ["../physics-bridge/src/index.ts"],
+      "@harmony/physics-bridge/*": ["../physics-bridge/src/*"],
       "@three-examples/*": [
         "node_modules/@types/three/examples/jsm/*",
         "node_modules/three/examples/jsm/*"

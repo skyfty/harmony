@@ -11,18 +11,16 @@ import type {
   PhysicsWorkerRequest,
   PhysicsWorkerResponse,
 } from '@harmony/physics-core'
-import { attachPhysicsWorkerRuntime, createNoopPhysicsWorkerController, type PhysicsWorkerController } from '@harmony/physics-worker-runtime'
+import { attachPhysicsWorkerRuntime, createNoopPhysicsWorkerController, type PhysicsWorkerController } from './runtime'
 
-export type WechatWorkerLike = {
+export type PhysicsWebWorkerLike = {
   postMessage: (message: PhysicsWorkerRequest) => void
   terminate: () => void
-  onMessage: (callback: (event: { data: PhysicsWorkerResponse }) => void) => void
+  onmessage: ((event: MessageEvent<PhysicsWorkerResponse>) => void) | null
 }
 
-export type CreateWechatPhysicsBridgeOptions = {
-  subpackageName: string
-  loadSubpackage: (name: string) => Promise<void>
-  createWorker: () => WechatWorkerLike
+export type CreateWebPhysicsBridgeOptions = {
+  workerFactory: () => PhysicsWebWorkerLike
 }
 
 type InMemoryWorkerScope = {
@@ -35,21 +33,20 @@ type PendingRequest = {
   reject: (error: Error) => void
 }
 
-class WechatPhysicsBridge implements PhysicsBridge {
-  private readonly options: CreateWechatPhysicsBridgeOptions
-  private worker: WechatWorkerLike | null = null
+class WebPhysicsBridge implements PhysicsBridge {
+  private readonly workerFactory: () => PhysicsWebWorkerLike
+  private worker: PhysicsWebWorkerLike | null = null
   private nextRequestId = 1
   private pendingRequests = new Map<number, PendingRequest>()
 
-  constructor(options: CreateWechatPhysicsBridgeOptions) {
-    this.options = options
+  constructor(options: CreateWebPhysicsBridgeOptions) {
+    this.workerFactory = options.workerFactory
   }
 
   async init(options: PhysicsInitOptions): Promise<PhysicsBridgeInitResult> {
     if (!this.worker) {
-      await this.options.loadSubpackage(this.options.subpackageName)
-      this.worker = this.options.createWorker()
-      this.worker.onMessage((event) => this.handleWorkerMessage(event.data))
+      this.worker = this.workerFactory()
+      this.worker.onmessage = (event) => this.handleWorkerMessage(event)
     }
     return this.request('init', options)
   }
@@ -79,12 +76,11 @@ class WechatPhysicsBridge implements PhysicsBridge {
   }
 
   async destroy(): Promise<void> {
-    if (!this.worker) {
-      return
+    if (this.worker) {
+      await this.request('destroy', null)
+      this.worker.terminate()
+      this.worker = null
     }
-    await this.request('destroy', null)
-    this.worker.terminate()
-    this.worker = null
   }
 
   private request<TRequest extends PhysicsWorkerRequest['type']>(
@@ -92,7 +88,7 @@ class WechatPhysicsBridge implements PhysicsBridge {
     payload: Extract<PhysicsWorkerRequest, { type: TRequest }>['payload'],
   ): Promise<Extract<PhysicsWorkerResponse, { ok: true; type: TRequest }>['payload']> {
     if (!this.worker) {
-      return Promise.reject(new Error('Physics wechat bridge is not initialized'))
+      return Promise.reject(new Error('Physics web bridge is not initialized'))
     }
     const id = this.nextRequestId++
     return new Promise((resolve, reject) => {
@@ -101,7 +97,8 @@ class WechatPhysicsBridge implements PhysicsBridge {
     })
   }
 
-  private handleWorkerMessage(response: PhysicsWorkerResponse): void {
+  private handleWorkerMessage(event: MessageEvent<PhysicsWorkerResponse>): void {
+    const response = event.data
     const pending = this.pendingRequests.get(response.id)
     if (!pending) {
       return
@@ -115,16 +112,16 @@ class WechatPhysicsBridge implements PhysicsBridge {
   }
 }
 
-export function createWechatPhysicsBridge(options: CreateWechatPhysicsBridgeOptions): PhysicsBridge {
-  return new WechatPhysicsBridge(options)
+export function createWebPhysicsBridge(options: CreateWebPhysicsBridgeOptions): PhysicsBridge {
+  return new WebPhysicsBridge(options)
 }
 
-export function createInMemoryWechatPhysicsWorker(
+export function createInMemoryWebPhysicsWorker(
   controller: PhysicsWorkerController = createNoopPhysicsWorkerController(),
-): WechatWorkerLike {
+): PhysicsWebWorkerLike {
   let terminated = false
-  let hostListener: ((event: { data: PhysicsWorkerResponse }) => void) | null = null
-  const host: WechatWorkerLike = {
+  const host: PhysicsWebWorkerLike = {
+    onmessage: null,
     postMessage(message) {
       if (terminated || !scope.onmessage) {
         return
@@ -137,23 +134,20 @@ export function createInMemoryWechatPhysicsWorker(
     },
     terminate() {
       terminated = true
-      hostListener = null
+      host.onmessage = null
       scope.onmessage = null
-    },
-    onMessage(callback) {
-      hostListener = callback
     },
   }
 
   const scope: InMemoryWorkerScope = {
     onmessage: null,
     postMessage(message) {
-      if (terminated || !hostListener) {
+      if (terminated) {
         return
       }
       queueMicrotask(() => {
         if (!terminated) {
-          hostListener?.({ data: message })
+          host.onmessage?.({ data: message } as MessageEvent<PhysicsWorkerResponse>)
         }
       })
     },
@@ -163,10 +157,8 @@ export function createInMemoryWechatPhysicsWorker(
   return host
 }
 
-export function createNoopWechatPhysicsBridge(subpackageName = 'physics'): PhysicsBridge {
-  return createWechatPhysicsBridge({
-    subpackageName,
-    async loadSubpackage() {},
-    createWorker: () => createInMemoryWechatPhysicsWorker(),
+export function createNoopWebPhysicsBridge(): PhysicsBridge {
+  return createWebPhysicsBridge({
+    workerFactory: () => createInMemoryWebPhysicsWorker(),
   })
 }

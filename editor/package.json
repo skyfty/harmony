@@ -14,9 +14,8 @@
   "packageManager": "pnpm@10.28.2",
   "dependencies": {
     "@harmony/physics-ammo": "file:../physics-ammo",
+    "@harmony/physics-bridge": "file:../physics-bridge",
     "@harmony/physics-core": "file:../physics-core",
-    "@harmony/physics-host-web": "file:../physics-host-web",
-    "@harmony/physics-worker-runtime": "file:../physics-worker-runtime",
     "@harmony/schema": "file:../schema",
     "@mdi/font": "^7.4.47",
     "@rollup/plugin-replace": "^6.0.3",

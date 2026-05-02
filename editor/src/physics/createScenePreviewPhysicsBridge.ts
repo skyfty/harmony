@@ -10,7 +10,7 @@ import type {
   PhysicsVehicleInputCommand,
 } from '@harmony/physics-core'
 
-type WebRuntimeBridgeModule = typeof import('@harmony/physics-host-web')
+type BridgeRuntimeModule = typeof import('@harmony/physics-bridge')
 type AmmoRuntimeModule = typeof import('@harmony/physics-ammo')
 
 class LazyScenePreviewPhysicsBridge implements PhysicsBridge {
@@ -77,7 +77,7 @@ class LazyScenePreviewPhysicsBridge implements PhysicsBridge {
   private async createBridge(): Promise<PhysicsBridge> {
     const [{ createWebPhysicsBridge, createInMemoryWebPhysicsWorker }, { createAmmoPhysicsController, createDefaultAmmoModuleFactory }] =
       await Promise.all([
-        import('@harmony/physics-host-web') as Promise<WebRuntimeBridgeModule>,
+        import('@harmony/physics-bridge') as Promise<BridgeRuntimeModule>,
         import('@harmony/physics-ammo') as Promise<AmmoRuntimeModule>,
       ])
 

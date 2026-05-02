@@ -10,7 +10,7 @@ import type {
   PhysicsVehicleInputCommand,
 } from '@harmony/physics-core'
 
-type WechatRuntimeBridgeModule = typeof import('@harmony/physics-host-wechat')
+type BridgeRuntimeModule = typeof import('@harmony/physics-bridge')
 type AmmoRuntimeModule = typeof import('@harmony/physics-ammo')
 
 async function loadWechatPhysicsSubpackage(name: string): Promise<void> {
@@ -101,7 +101,7 @@ class LazySceneryPhysicsBridge implements PhysicsBridge {
     await loadWechatPhysicsSubpackage('physics')
     const [{ createWechatPhysicsBridge, createInMemoryWechatPhysicsWorker }, { createAmmoPhysicsController, createDefaultAmmoModuleFactory }] =
       await Promise.all([
-        import('@harmony/physics-host-wechat') as Promise<WechatRuntimeBridgeModule>,
+        import('@harmony/physics-bridge') as Promise<BridgeRuntimeModule>,
         import('@harmony/physics-ammo') as Promise<AmmoRuntimeModule>,
       ])
 

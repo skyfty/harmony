@@ -1,5 +1,5 @@
 {
-  "name": "@harmony/physics-worker-runtime",
+  "name": "@harmony/physics-bridge",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -9,10 +9,6 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
-    },
-    "./worker": {
-      "types": "./dist/worker.d.ts",
-      "default": "./dist/worker.js"
     }
   },
   "files": [

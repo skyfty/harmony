@@ -26,12 +26,8 @@ export default defineConfig({
         replacement: fileURLToPath(new URL('../physics-ammo/src', import.meta.url)),
       },
       {
-        find: '@harmony/physics-host-wechat',
-        replacement: fileURLToPath(new URL('../physics-host-wechat/src', import.meta.url)),
-      },
-      {
-        find: '@harmony/physics-worker-runtime',
-        replacement: fileURLToPath(new URL('../physics-worker-runtime/src', import.meta.url)),
+        find: '@harmony/physics-bridge',
+        replacement: fileURLToPath(new URL('../physics-bridge/src', import.meta.url)),
       },
       // Keep this app decoupled from monorepo-relative imports.
       // scene-viewer and @harmony/schema are resolved from node_modules.
@@ -78,14 +74,12 @@ export default defineConfig({
         'pages/physics/chunks/vendor': [
           '@harmony/physics-core',
           '@harmony/physics-ammo',
-          '@harmony/physics-host-wechat',
-          '@harmony/physics-worker-runtime',
+          '@harmony/physics-bridge',
           'ammojs3',
           'ammojs3/**',
           '**/harmony/physics-core/**',
           '**/harmony/physics-ammo/**',
-          '**/harmony/physics-host-wechat/**',
-          '**/harmony/physics-worker-runtime/**',
+          '**/harmony/physics-bridge/**',
           '**/node_modules/ammojs3/**',
         ],
         'pages/scenery/chunks/vendor': [

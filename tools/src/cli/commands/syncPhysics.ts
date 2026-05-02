@@ -30,10 +30,10 @@ function resolveMaybe(p: string | undefined, base: string): string {
 
 function inferRepoRoot(cwd: string): string {
   const direct = cwd;
-  if (fs.existsSync(path.join(direct, "physics-host-wechat"))) return direct;
+  if (fs.existsSync(path.join(direct, "physics-bridge"))) return direct;
 
   const parent = path.resolve(cwd, "..");
-  if (fs.existsSync(path.join(parent, "physics-host-wechat"))) return parent;
+  if (fs.existsSync(path.join(parent, "physics-bridge"))) return parent;
 
   return cwd;
 }

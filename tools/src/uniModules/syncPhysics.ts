@@ -47,7 +47,7 @@ function defaultShouldCopyFactory(sourceRoot: string): ShouldCopy {
 }
 
 function physicsRootFromRepo(repoRoot: string): string {
-  return path.resolve(repoRoot, "physics-host-wechat");
+  return path.resolve(repoRoot, "physics-bridge");
 }
 
 function resolveDestFromProjectRoot(projectRoot: string, dest: string): string {
@@ -64,7 +64,7 @@ export function syncPhysicsToSubpackageUniModules(options: SyncPhysicsToSubpacka
     : path.resolve(options.projectRoot, `src/${subpackageRoot}/uni_modules/${moduleName}`);
 
   if (!fs.existsSync(physicsRoot)) {
-    throw new Error(`physics-host-wechat root not found: ${physicsRoot}`);
+    throw new Error(`physics-bridge root not found: ${physicsRoot}`);
   }
 
   rmrf(dest);
@@ -75,5 +75,5 @@ export function syncPhysicsToSubpackageUniModules(options: SyncPhysicsToSubpacka
     return shouldCopy(toPosixPath(rel), entry, srcAbsPath);
   });
 
-  console.log(`[harmony-tools] synced physics-host-wechat -> ${dest}`);
+  console.log(`[harmony-tools] synced physics-bridge -> ${dest}`);
 }
