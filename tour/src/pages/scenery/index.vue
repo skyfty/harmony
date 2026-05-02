@@ -101,6 +101,7 @@ const runtimePrefabSpawns = computed(() => {
       ? `route-prefab:${prefabUrl}`
       : `vehicle-prefab:${selectedVehicleIdentifier.value.trim() || prefabUrl}`,
     assetUrl: prefabUrl,
+    preloadPolicy: 'before-entry' as const,
     targetNodeId: explicitPrefabTargetNodeId.value.trim() || null,
     targetNodeName: explicitPrefabTargetNodeName.value.trim() || null,
     position: explicitPrefabPosition.value,

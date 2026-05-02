@@ -3303,6 +3303,100 @@ function mergeSceneAssetOverrides(
   };
 }
 
+type RuntimePrefabPreloadContext = {
+  assetRegistry: Record<string, SceneAssetRegistryEntry> | null;
+  meshAssetIds: string[];
+  warmAssetIds: string[];
+};
+
+function shouldPreloadRuntimePrefabRequest(request: RuntimePrefabSpawnRequest | null | undefined): boolean {
+  return request?.preloadPolicy === 'before-entry';
+}
+
+function normalizeAssetIdList(assetIds: Iterable<string>): string[] {
+  const uniqueIds = new Set<string>();
+  for (const assetId of assetIds) {
+    if (typeof assetId !== 'string') {
+      continue;
+    }
+    const trimmed = assetId.trim();
+    if (trimmed) {
+      uniqueIds.add(trimmed);
+    }
+  }
+  return Array.from(uniqueIds).sort();
+}
+
+function collectRuntimePrefabAssetIds(assetRegistry: Record<string, SceneAssetRegistryEntry>): {
+  meshAssetIds: string[];
+  warmAssetIds: string[];
+} {
+  const meshAssetIds = new Set<string>();
+  const warmAssetIds = new Set<string>();
+
+  Object.entries(assetRegistry).forEach(([assetId, entry]) => {
+    const normalizedAssetId = typeof assetId === 'string' ? assetId.trim() : '';
+    if (!normalizedAssetId) {
+      return;
+    }
+    warmAssetIds.add(normalizedAssetId);
+
+    const assetType = entry?.assetType ?? inferAssetTypeOrNull(normalizedAssetId);
+    if (assetType === 'model' || assetType === 'mesh') {
+      meshAssetIds.add(normalizedAssetId);
+    }
+  });
+
+  return {
+    meshAssetIds: normalizeAssetIdList(meshAssetIds),
+    warmAssetIds: normalizeAssetIdList(warmAssetIds),
+  };
+}
+
+function mergeAssetPreloadMeshInfo(
+  assetPreload: SceneJsonExportDocument['assetPreload'] | undefined,
+  assetIds: string[],
+): SceneJsonExportDocument['assetPreload'] | undefined {
+  const normalizedAssetIds = normalizeAssetIdList(assetIds);
+  const existingMesh = assetPreload?.mesh;
+  const mergedAll = new Set<string>(normalizeAssetIdList(existingMesh?.all ?? []));
+  const mergedEssential = new Set<string>(normalizeAssetIdList(existingMesh?.essential ?? []));
+
+  normalizedAssetIds.forEach((assetId) => {
+    mergedAll.add(assetId);
+    mergedEssential.add(assetId);
+  });
+
+  if (!mergedAll.size && !mergedEssential.size) {
+    return assetPreload;
+  }
+
+  return {
+    mesh: {
+      all: Array.from(mergedAll).sort(),
+      essential: Array.from(mergedEssential).sort(),
+    },
+  };
+}
+
+function createSceneGraphBuildOptions(payload: ScenePreviewPayload, onProgress?: SceneGraphBuildOptions['onProgress']): SceneGraphBuildOptions {
+  const buildOptions: SceneGraphBuildOptions = {};
+  const mergedAssetOverrides = mergeSceneAssetOverrides(
+    payload.assetOverrides,
+    activeScenePackageAssetOverrides ?? undefined,
+  );
+  if (mergedAssetOverrides) {
+    buildOptions.assetOverrides = mergedAssetOverrides;
+  }
+  if (typeof props.serverAssetBaseUrl === 'string' && props.serverAssetBaseUrl.trim().length) {
+    buildOptions.serverAssetBaseUrl = props.serverAssetBaseUrl.trim();
+  }
+  if (onProgress) {
+    buildOptions.onProgress = onProgress;
+  }
+  return buildOptions;
+}
+
 function getArrayBufferView(bytes: Uint8Array): ArrayBuffer {
   const safe = new ArrayBuffer(bytes.byteLength);
   new Uint8Array(safe).set(bytes);
@@ -3795,22 +3889,42 @@ async function resolveRuntimePrefabSource(request: RuntimePrefabSpawnRequest): P
   return await task;
 }
 
-async function collectRuntimePrefabAssetRegistry(
+async function collectRuntimePrefabPreloadContext(
   requests: RuntimePrefabSpawnRequest[] | undefined,
-): Promise<Record<string, SceneAssetRegistryEntry> | null> {
+): Promise<RuntimePrefabPreloadContext | null> {
   if (!Array.isArray(requests) || !requests.length) {
     return null;
   }
 
-  const resolved = await Promise.all(requests.map((request) => resolveRuntimePrefabSource(request)));
-  const merged: Record<string, SceneAssetRegistryEntry> = {};
+  const selectedRequests = requests.filter((request) => shouldPreloadRuntimePrefabRequest(request));
+  if (!selectedRequests.length) {
+    return null;
+  }
+
+  const resolved = await Promise.all(selectedRequests.map((request) => resolveRuntimePrefabSource(request)));
+  const mergedAssetRegistry: Record<string, SceneAssetRegistryEntry> = {};
+  const meshAssetIds = new Set<string>();
+  const warmAssetIds = new Set<string>();
+
   resolved.forEach((entry) => {
     if (!entry?.assetRegistry) {
       return;
     }
-    Object.assign(merged, entry.assetRegistry);
+    Object.assign(mergedAssetRegistry, entry.assetRegistry);
+    const assetIds = collectRuntimePrefabAssetIds(entry.assetRegistry);
+    assetIds.meshAssetIds.forEach((assetId) => meshAssetIds.add(assetId));
+    assetIds.warmAssetIds.forEach((assetId) => warmAssetIds.add(assetId));
   });
-  return Object.keys(merged).length ? merged : null;
+
+  if (!Object.keys(mergedAssetRegistry).length && !meshAssetIds.size && !warmAssetIds.size) {
+    return null;
+  }
+
+  return {
+    assetRegistry: Object.keys(mergedAssetRegistry).length ? mergedAssetRegistry : null,
+    meshAssetIds: normalizeAssetIdList(meshAssetIds),
+    warmAssetIds: normalizeAssetIdList(warmAssetIds),
+  };
 }
 
 type ResolvedSteerBinding = {
@@ -11614,26 +11728,41 @@ async function startRenderIfReady() {
 
   try {
     await ensureRendererContext(canvasResult);
-    resourcePreload.label = '正在准备车辆资源...';
-    const runtimePrefabAssetRegistry = await collectRuntimePrefabAssetRegistry(props.runtimePrefabSpawns);
+    resourcePreload.label = '正在准备运行时 prefab 资源...';
+    const runtimePrefabPreloadContext = await collectRuntimePrefabPreloadContext(props.runtimePrefabSpawns);
     if (token !== initializeToken) {
       return;
     }
-    const renderPayload = runtimePrefabAssetRegistry && previewPayload.value
+    const renderPayload = runtimePrefabPreloadContext && previewPayload.value
       ? {
           ...previewPayload.value,
           document: {
             ...previewPayload.value.document,
-            assetRegistry: {
-              ...(previewPayload.value.document.assetRegistry ?? {}),
-              ...runtimePrefabAssetRegistry,
-            },
+            assetRegistry: runtimePrefabPreloadContext.assetRegistry
+              ? {
+                  ...(previewPayload.value.document.assetRegistry ?? {}),
+                  ...runtimePrefabPreloadContext.assetRegistry,
+                }
+              : previewPayload.value.document.assetRegistry,
+            assetPreload: mergeAssetPreloadMeshInfo(
+              previewPayload.value.document.assetPreload,
+              runtimePrefabPreloadContext.meshAssetIds,
+            ),
           },
         }
       : previewPayload.value;
     const preparedPayload = await prepareRenderPayloadForDefaultSteer(renderPayload);
     if (token !== initializeToken) {
       return;
+    }
+    if (runtimePrefabPreloadContext) {
+      const prewarmBuildOptions = createSceneGraphBuildOptions(preparedPayload);
+      const resourceCache = ensureResourceCache(preparedPayload.document, prewarmBuildOptions);
+      viewerResourceCache = resourceCache;
+      await warmRuntimePrefabAssetsBeforeSceneEntry(resourceCache, runtimePrefabPreloadContext);
+      if (token !== initializeToken) {
+        return;
+      }
     }
     await initializeRenderer(preparedPayload, canvasResult, token);
     if (token === initializeToken && !error.value) {
@@ -12001,37 +12130,25 @@ async function buildSceneGraphWithProgress(
   let resourceCache: ResourceCache | null = null;
   try {
     lazyLoadMeshesEnabled = payload.document.lazyLoadMeshes !== false;
-    const buildOptions: SceneGraphBuildOptions = {
-      onProgress: (info) => {
-        resourcePreload.total = info.total;
-        resourcePreload.loaded = info.loaded;
+    const buildOptions = createSceneGraphBuildOptions(payload, (info) => {
+      resourcePreload.total = info.total;
+      resourcePreload.loaded = info.loaded;
 
-        if (typeof info.bytesTotal === 'number' && Number.isFinite(info.bytesTotal) && info.bytesTotal > 0) {
-          resourcePreload.totalBytes = info.bytesTotal;
-        }
-        if (typeof info.bytesLoaded === 'number' && Number.isFinite(info.bytesLoaded) && info.bytesLoaded >= 0) {
-          resourcePreload.loadedBytes = info.bytesLoaded;
-        }
+      if (typeof info.bytesTotal === 'number' && Number.isFinite(info.bytesTotal) && info.bytesTotal > 0) {
+        resourcePreload.totalBytes = info.bytesTotal;
+      }
+      if (typeof info.bytesLoaded === 'number' && Number.isFinite(info.bytesLoaded) && info.bytesLoaded >= 0) {
+        resourcePreload.loadedBytes = info.bytesLoaded;
+      }
 
-        const fallbackLabel = info.assetId ? `加载 ${info.assetId}` : '正在加载资源';
-        resourcePreload.label = info.message || fallbackLabel;
+      const fallbackLabel = info.assetId ? `加载 ${info.assetId}` : '正在加载资源';
+      resourcePreload.label = info.message || fallbackLabel;
 
-        const stillLoadingByCount = info.total > 0 && info.loaded < info.total;
-        const stillLoadingByBytes =
-         resourcePreload.total > 0 && resourcePreload.totalBytes > 0 && resourcePreload.loadedBytes < resourcePreload.totalBytes;
-        resourcePreload.active = stillLoadingByCount || stillLoadingByBytes;
-      },
-    };
-    const mergedAssetOverrides = mergeSceneAssetOverrides(
-      payload.assetOverrides,
-      activeScenePackageAssetOverrides ?? undefined,
-    );
-    if (mergedAssetOverrides) {
-      buildOptions.assetOverrides = mergedAssetOverrides;
-    }
-    if (typeof props.serverAssetBaseUrl === 'string' && props.serverAssetBaseUrl.trim().length) {
-      buildOptions.serverAssetBaseUrl = props.serverAssetBaseUrl.trim();
-    }
+      const stillLoadingByCount = info.total > 0 && info.loaded < info.total;
+      const stillLoadingByBytes =
+        resourcePreload.total > 0 && resourcePreload.totalBytes > 0 && resourcePreload.loadedBytes < resourcePreload.totalBytes;
+      resourcePreload.active = stillLoadingByCount || stillLoadingByBytes;
+    });
 
     resourceCache = ensureResourceCache(payload.document, buildOptions);
     viewerResourceCache = resourceCache;
@@ -12099,6 +12216,34 @@ async function prepareInstancedNodesIfPossible(
     });
   } catch (error) {
     console.warn('[SceneViewer] Failed to prepare instanced nodes', error);
+  }
+}
+
+async function warmRuntimePrefabAssetsBeforeSceneEntry(
+  resourceCache: ResourceCache,
+  preloadContext: RuntimePrefabPreloadContext,
+): Promise<void> {
+  const assetIds = preloadContext.warmAssetIds.length ? preloadContext.warmAssetIds : preloadContext.meshAssetIds;
+  if (!assetIds.length) {
+    return;
+  }
+
+  resourcePreload.active = true;
+  resourcePreload.total = assetIds.length;
+  resourcePreload.loaded = 0;
+  resourcePreload.totalBytes = 0;
+  resourcePreload.loadedBytes = 0;
+  resourcePreload.label = '正在准备运行时 prefab 资源...';
+
+  for (let index = 0; index < assetIds.length; index += 1) {
+    const assetId = assetIds[index];
+    try {
+      await resourceCache.acquireAssetEntry(assetId);
+    } catch (error) {
+      console.warn('[SceneViewer] Failed to prewarm runtime prefab asset', assetId, error);
+    } finally {
+      resourcePreload.loaded = index + 1;
+    }
   }
 }
 
