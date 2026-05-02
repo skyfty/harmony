@@ -2479,6 +2479,54 @@ function computeTargetGroundChunkCount(
 	return Math.max(1, Math.min(target, rowChunks * columnChunks))
 }
 
+function buildGroundChunkDebugWindowSummary(
+	definition: GroundDynamicMesh,
+	chunkCells: number,
+	groundObject: THREE.Object3D,
+	activeCamera: THREE.PerspectiveCamera,
+): Record<string, unknown> {
+	const gridSize = resolveGroundWorkingGridSize(definition)
+	const columns = Math.max(1, Math.trunc(gridSize.columns))
+	const rows = Math.max(1, Math.trunc(gridSize.rows))
+	const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
+	const bounds = resolveGroundWorldBounds(definition)
+	const safeCells = Math.max(1, Math.trunc(chunkCells))
+	const rowChunks = Math.max(1, Math.ceil(rows / safeCells))
+	const columnChunks = Math.max(1, Math.ceil(columns / safeCells))
+	const chunkSizeMeters = Math.max(1e-6, safeCells * cellSize)
+	const radiusMeters = resolveGroundChunkRadiusMeters(definition)
+	const radiusChunks = Math.max(0, Math.ceil(radiusMeters / chunkSizeMeters))
+
+	groundObject.updateWorldMatrix(true, false)
+	groundChunkDebugRootInverseHelper.copy(groundObject.matrixWorld).invert()
+	activeCamera.getWorldPosition(groundChunkDebugCameraWorldHelper)
+	groundChunkDebugCameraLocalHelper.copy(groundChunkDebugCameraWorldHelper).applyMatrix4(groundChunkDebugRootInverseHelper)
+
+	const chunkColumn = Math.max(
+		0,
+		Math.min(columnChunks - 1, Math.floor((groundChunkDebugCameraLocalHelper.x - bounds.minX) / chunkSizeMeters)),
+	)
+	const chunkRow = Math.max(
+		0,
+		Math.min(rowChunks - 1, Math.floor((groundChunkDebugCameraLocalHelper.z - bounds.minZ) / chunkSizeMeters)),
+	)
+
+	return {
+		cellSize,
+		chunkCells: safeCells,
+		chunkSizeMeters,
+		rows,
+		columns,
+		rowChunks,
+		columnChunks,
+		radiusMeters,
+		radiusChunks,
+		cameraChunkRow: chunkRow,
+		cameraChunkColumn: chunkColumn,
+		bounds,
+	}
+}
+
 function syncGroundChunkStreamingDebug(
 	groundObject: THREE.Object3D,
 	definition: GroundDynamicMesh,
@@ -2593,6 +2641,14 @@ function syncGroundChunkStreamingDebug(
 	if (signature !== lastGroundChunkDebugSignature && now - lastGroundChunkDebugLogAt >= 250) {
 		lastGroundChunkDebugLogAt = now
 		lastGroundChunkDebugSignature = signature
+		console.log('[ground-chunk-debug]', {
+			loadedChunks,
+			target,
+			total,
+			visibleChunks: renderSnapshot.visibleChunkCount,
+			chunkKeys: renderSnapshot.chunkKeys,
+			...buildGroundChunkDebugWindowSummary(definition, effectiveChunkCells, groundObject, activeCamera),
+		})
 	}
 }
 
@@ -9566,11 +9622,9 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
 			syncPreviewInfiniteGroundChunkManifest(groundObject, cachedGroundDynamicMesh as GroundRuntimeDynamicMesh, activeCamera)
 				syncPreviewInfiniteGroundChunkCollisions(groundObject, cachedGroundDynamicMesh as GroundRuntimeDynamicMesh, activeCamera)
 			syncGroundSurfacePreviewForGroundNode(groundObject, cachedGroundNode, cachedGroundDynamicMesh)
-			if (isGroundChunkStreamingDebugVisible.value || isGroundChunkStatsVisible.value) {
-				syncGroundChunkStreamingDebug(groundObject, cachedGroundDynamicMesh, activeCamera, {
-					renderHelpers: isGroundChunkStreamingDebugVisible.value,
-				})
-			}
+			syncGroundChunkStreamingDebug(groundObject, cachedGroundDynamicMesh, activeCamera, {
+				renderHelpers: isGroundChunkStreamingDebugVisible.value,
+			})
 		}
 	}
 }

@@ -4839,42 +4839,6 @@ export function updateGroundChunks(
     // 新 chunk 是独立算法线的，边界上会天然有一点不连续；这里统一 stitching，避免块与块之间出现明暗断层。
     stitchGroundChunkNormals(root, definition, stitchRegion, touchedChunkKeys)
   }
-
-  if (desiredWindowChanged || createdCount > 0 || destroyedCount > 0) {
-    const chunkKeys = Array.from(state.chunks.keys()).sort()
-    const localEditTiles = getGroundLocalEditTiles(runtimeDefinition)
-    console.log('[GroundMesh] updateGroundChunks', JSON.stringify({
-      chunkCells,
-      cellSize,
-      chunkSizeMeters,
-      cameraChunkCoord,
-      loadRadiusChunks,
-      unloadRadiusChunks,
-      loadWindow: {
-        minRow: minLoadChunkRow,
-        maxRow: maxLoadChunkRow,
-        minColumn: minLoadChunkColumn,
-        maxColumn: maxLoadChunkColumn,
-      },
-      flatWindow: {
-        minRow: flatMinLoadChunkRow,
-        maxRow: flatMaxLoadChunkRow,
-        minColumn: flatMinLoadChunkColumn,
-        maxColumn: flatMaxLoadChunkColumn,
-      },
-      localEditTileCount: localEditTiles.length,
-      localEditTileKeys: localEditTiles.length <= 32 ? localEditTiles.map((tile) => tile.key) : localEditTiles.slice(0, 32).map((tile) => tile.key),
-      createdCount,
-      destroyedCount,
-      loadedChunkCount: state.chunks.size,
-      independentChunkCount: state.chunks.size,
-      flatChunkBatchCount: state.flatChunkBatches.size,
-      pendingCreateCount: state.pendingCreates.length,
-      pendingDestroyCount: state.pendingDestroys.length,
-      loadedChunkKeys: chunkKeys.length <= 32 ? chunkKeys : chunkKeys.slice(0, 32),
-    }))
-  }
-
 }
 
 export function syncGroundChunkLoadingMode(

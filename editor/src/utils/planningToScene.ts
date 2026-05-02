@@ -73,6 +73,14 @@ const PLANNING_TERRAIN_WATER_SURFACE_EXPAND_M = 0.35
 const PLANNING_TERRAIN_AIR_WALL_OUTSET_M = 0.35
 const WATER_OPACITY_EPSILON = 1e-3
 
+function formatPlanningDemDebugValue(value: unknown): string {
+  try {
+    return JSON.stringify(value, null, 2)
+  } catch (error) {
+    return `<<unserializable debug value: ${String(error)}>>`
+  }
+}
+
 function normalizePlanningDemBoundsForGround(bounds: PlanningTerrainWorldBounds | null | undefined): {
   minX: number
   maxX: number
@@ -1733,6 +1741,7 @@ function removePlanningScatterLayers(store: TerrainScatterStore) {
 export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOptions): Promise<{ rootNodeId: string }> {
   const { sceneStore, planningData } = options
   const yieldController = createYieldController({ signal: options.signal, minIntervalMs: 12 })
+  const hadGroundNodeBeforeConversion = sceneStore.groundNode?.dynamicMesh?.type === 'Ground'
 
   return await sceneStore.withScenePatchesSuppressed(async () => {
     throwIfAborted(options.signal)
@@ -1749,11 +1758,14 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
   if (sceneStore.groundNode?.dynamicMesh?.type === 'Ground' && demGroundBounds) {
     const currentGroundDefinition = sceneStore.groundNode.dynamicMesh as GroundDynamicMesh
     const currentGroundBounds = resolveGroundWorldBounds(currentGroundDefinition)
-    const mergedGroundBounds = mergeGroundBounds(currentGroundBounds, demGroundBounds)
-    if (groundBoundsChanged(currentGroundBounds, mergedGroundBounds)) {
+    const nextGroundBounds = hadGroundNodeBeforeConversion
+      ? mergeGroundBounds(currentGroundBounds, demGroundBounds)
+      : demGroundBounds
+
+    if (groundBoundsChanged(currentGroundBounds, nextGroundBounds)) {
       sceneStore.updateGroundNodeDynamicMesh(sceneStore.groundNode.id, {
         ...currentGroundDefinition,
-        worldBounds: mergedGroundBounds,
+        worldBounds: nextGroundBounds,
       })
       await yieldController.maybeYield(true)
     }
