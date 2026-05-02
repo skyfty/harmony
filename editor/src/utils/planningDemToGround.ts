@@ -96,8 +96,107 @@ export interface PlanningDemPreparedSource {
   planningMetadata: GroundPlanningMetadata
 }
 
+export interface PlanningDemLocalEditTileBuildPlan {
+  tileSizeMeters: number
+  resolution: number
+  originX: number
+  originZ: number
+  startTileRow: number
+  endTileRow: number
+  startTileColumn: number
+  endTileColumn: number
+  totalTileRows: number
+  totalTileColumns: number
+  totalTiles: number
+  sourceWidth: number
+  sourceHeight: number
+  sourceBounds: PlanningDemTargetWorldBounds
+}
+
+export interface PlanningDemHeightRegionBuildPlan {
+  startRow: number
+  endRow: number
+  startColumn: number
+  endColumn: number
+  vertexRows: number
+  vertexColumns: number
+  cellSize: number
+  boundsMinX: number
+  boundsMinZ: number
+  sourceWidth: number
+  sourceHeight: number
+  sourceBounds: PlanningDemTargetWorldBounds
+}
+
 const MAX_EAGER_DEM_LOCAL_EDIT_TILE_COUNT = 4096
 const MAX_EAGER_DEM_LOCAL_EDIT_SAMPLE_COUNT = 500_000
+
+type PlanningDemLocalEditTileRecord = {
+  key: string
+  tileRow: number
+  tileColumn: number
+  tileSizeMeters: number
+  resolution: number
+  values: number[]
+  source: 'dem'
+  updatedAt: number
+}
+
+type PlanningDemLocalEditTilesWorkerRequest = {
+  kind: 'build-planning-dem-local-edit-tiles'
+  requestId: number
+  plan: PlanningDemLocalEditTileBuildPlan
+  rasterData: Float64Array
+}
+
+type PlanningDemHeightRegionWorkerRequest = {
+  kind: 'build-planning-dem-height-region'
+  requestId: number
+  plan: PlanningDemHeightRegionBuildPlan
+  rasterData: Float64Array
+}
+
+type PlanningDemLocalEditTilesWorkerResponse = {
+  kind: 'build-planning-dem-local-edit-tiles-result'
+  requestId: number
+  tiles: PlanningDemLocalEditTileRecord[]
+  error?: string
+}
+
+type PlanningDemHeightRegionWorkerResponse = {
+  kind: 'build-planning-dem-height-region-result'
+  requestId: number
+  region: {
+    startRow: number
+    endRow: number
+    startColumn: number
+    endColumn: number
+    vertexRows: number
+    vertexColumns: number
+    values: ArrayBuffer
+  }
+  error?: string
+}
+
+let planningDemLocalEditTilesWorker: Worker | null = null
+let planningDemLocalEditTilesRequestId = 0
+const pendingPlanningDemLocalEditTilesRequests = new Map<
+  number,
+  {
+    resolve: (response: PlanningDemLocalEditTilesWorkerResponse) => void
+    reject: (error: Error) => void
+  }
+>()
+
+let planningDemHeightRegionWorker: Worker | null = null
+let planningDemHeightRegionRequestId = 0
+const pendingPlanningDemHeightRegionRequests = new Map<
+  number,
+  {
+    resolve: (response: PlanningDemHeightRegionWorkerResponse) => void
+    reject: (error: Error) => void
+  }
+>()
 
 interface PlanningDemCoveredGridRegion {
   startRow: number
@@ -132,6 +231,84 @@ function createThrottledPlanningDemProgressReporter(
       loaded: safeLoaded,
       total: safeTotal,
     })
+  }
+}
+
+function getPlanningDemLocalEditTilesWorker(): Worker | null {
+  if (typeof Worker === 'undefined') {
+    return null
+  }
+  if (planningDemLocalEditTilesWorker) {
+    return planningDemLocalEditTilesWorker
+  }
+  try {
+    planningDemLocalEditTilesWorker = new Worker(new URL('@/workers/planningDemLocalEditTiles.worker.ts', import.meta.url), {
+      type: 'module',
+    })
+    planningDemLocalEditTilesWorker.onmessage = (event: MessageEvent<PlanningDemLocalEditTilesWorkerResponse>) => {
+      const data = event.data
+      if (!data || data.kind !== 'build-planning-dem-local-edit-tiles-result') {
+        return
+      }
+      const pending = pendingPlanningDemLocalEditTilesRequests.get(data.requestId)
+      if (!pending) {
+        return
+      }
+      pendingPlanningDemLocalEditTilesRequests.delete(data.requestId)
+      pending.resolve(data)
+    }
+    planningDemLocalEditTilesWorker.onerror = (event) => {
+      console.warn('DEM local edit tile Worker 出错：', event)
+      const pendingRequests = Array.from(pendingPlanningDemLocalEditTilesRequests.values())
+      pendingPlanningDemLocalEditTilesRequests.clear()
+      for (const pending of pendingRequests) {
+        pending.reject(new Error('DEM local edit tile Worker failed'))
+      }
+    }
+    return planningDemLocalEditTilesWorker
+  } catch (error) {
+    console.warn('无法初始化 DEM local edit tile Worker，将回退到主线程计算：', error)
+    planningDemLocalEditTilesWorker = null
+    return null
+  }
+}
+
+function getPlanningDemHeightRegionWorker(): Worker | null {
+  if (typeof Worker === 'undefined') {
+    return null
+  }
+  if (planningDemHeightRegionWorker) {
+    return planningDemHeightRegionWorker
+  }
+  try {
+    planningDemHeightRegionWorker = new Worker(new URL('@/workers/planningDemLocalEditTiles.worker.ts', import.meta.url), {
+      type: 'module',
+    })
+    planningDemHeightRegionWorker.onmessage = (event: MessageEvent<PlanningDemHeightRegionWorkerResponse>) => {
+      const data = event.data
+      if (!data || data.kind !== 'build-planning-dem-height-region-result') {
+        return
+      }
+      const pending = pendingPlanningDemHeightRegionRequests.get(data.requestId)
+      if (!pending) {
+        return
+      }
+      pendingPlanningDemHeightRegionRequests.delete(data.requestId)
+      pending.resolve(data)
+    }
+    planningDemHeightRegionWorker.onerror = (event) => {
+      console.warn('DEM height region Worker 出错：', event)
+      const pendingRequests = Array.from(pendingPlanningDemHeightRegionRequests.values())
+      pendingPlanningDemHeightRegionRequests.clear()
+      for (const pending of pendingRequests) {
+        pending.reject(new Error('DEM height region Worker failed'))
+      }
+    }
+    return planningDemHeightRegionWorker
+  } catch (error) {
+    console.warn('无法初始化 DEM height region Worker，将回退到主线程计算：', error)
+    planningDemHeightRegionWorker = null
+    return null
   }
 }
 
@@ -268,45 +445,99 @@ function resolvePlanningDemCoveredGridRegion(options: {
   }
 }
 
-function buildPlanningDemRegionFromPreparedSource(options: {
+function resolvePlanningDemHeightRegionBuildPlan(options: {
   definition: GroundRuntimeDynamicMesh
-  prepared: PlanningDemPreparedSource
+  source: PlanningDemRasterSource
   startRow: number
   endRow: number
   startColumn: number
   endColumn: number
-  textureDataUrl?: string | null
-  textureName?: string | null
-  onProgress?: (payload: PlanningDemBuildProgress) => void
-}): PlanningDemRegionConversionResult {
-  const reportProgress = createThrottledPlanningDemProgressReporter(options.onProgress)
-  const region = buildPlanningDemHeightRegion({
+}): PlanningDemHeightRegionBuildPlan | null {
+  const { startRow, endRow, startColumn, endColumn } = resolvePlanningDemCoveredGridRegion({
     definition: options.definition,
-    source: options.prepared.rasterSource,
+    source: options.source,
     startRow: options.startRow,
     endRow: options.endRow,
     startColumn: options.startColumn,
     endColumn: options.endColumn,
-    onProgress: (payload) => reportProgress(payload),
   })
+  const vertexRows = Math.max(0, endRow - startRow + 1)
+  const vertexColumns = Math.max(0, endColumn - startColumn + 1)
   return {
-    region,
-    localEditTiles: buildPlanningDemLocalEditTilesForRegion({
-      definition: options.definition,
-      source: options.prepared.rasterSource,
-      startRow: region.startRow,
-      endRow: region.endRow,
-      startColumn: region.startColumn,
-      endColumn: region.endColumn,
-      onProgress: (payload) => reportProgress(payload),
-    }),
-    planningMetadata: options.prepared.planningMetadata,
-    textureDataUrl: options.textureDataUrl ?? null,
-    textureName: options.textureName ?? null,
+    startRow,
+    endRow,
+    startColumn,
+    endColumn,
+    vertexRows,
+    vertexColumns,
+    cellSize: Number.isFinite(options.definition.cellSize) && options.definition.cellSize > 0 ? options.definition.cellSize : 1,
+    boundsMinX: resolveGroundWorldBounds(options.definition).minX,
+    boundsMinZ: resolveGroundWorldBounds(options.definition).minZ,
+    sourceWidth: options.source.width,
+    sourceHeight: options.source.height,
+    sourceBounds: options.source.targetWorldBounds,
   }
 }
 
-export function buildPlanningDemLocalEditTilesForRegion(options: {
+function buildPlanningDemHeightRegionSyncFromPlan(
+  plan: PlanningDemHeightRegionBuildPlan,
+  source: PlanningDemRasterSource,
+  onProgress?: (payload: PlanningDemBuildProgress) => void,
+): PlanningDemHeightRegion {
+  const values = new Float64Array(plan.vertexRows * plan.vertexColumns)
+  const reportProgress = createThrottledPlanningDemProgressReporter(onProgress)
+
+  reportProgress({
+    phase: 'sample-region',
+    loaded: 0,
+    total: plan.vertexRows,
+    label: 'Sampling terrain heights…',
+    detail: plan.vertexRows > 0 ? `0/${plan.vertexRows} rows` : '0 rows',
+  }, true)
+
+  for (let row = plan.startRow; row <= plan.endRow; row += 1) {
+    const z = plan.boundsMinZ + row * plan.cellSize
+    const targetRowOffset = (row - plan.startRow) * plan.vertexColumns
+    let x = plan.boundsMinX + plan.startColumn * plan.cellSize
+    for (let column = plan.startColumn; column <= plan.endColumn; column += 1) {
+      const sampled = samplePlanningDemHeightAtWorld(source, x, z)
+      values[targetRowOffset + (column - plan.startColumn)] = Number.isFinite(sampled) ? sampled : 0
+      x += plan.cellSize
+    }
+    const loadedRows = row - plan.startRow + 1
+    reportProgress({
+      phase: 'sample-region',
+      loaded: loadedRows,
+      total: plan.vertexRows,
+      label: 'Sampling terrain heights…',
+      detail: `${loadedRows}/${plan.vertexRows} rows`,
+    }, loadedRows === plan.vertexRows)
+  }
+
+  return {
+    startRow: plan.startRow,
+    endRow: plan.endRow,
+    startColumn: plan.startColumn,
+    endColumn: plan.endColumn,
+    vertexRows: plan.vertexRows,
+    vertexColumns: plan.vertexColumns,
+    values,
+  }
+}
+
+function buildPlanningDemHeightRegionFromWorkerResult(region: PlanningDemHeightRegionWorkerResponse['region']): PlanningDemHeightRegion {
+  return {
+    startRow: region.startRow,
+    endRow: region.endRow,
+    startColumn: region.startColumn,
+    endColumn: region.endColumn,
+    vertexRows: region.vertexRows,
+    vertexColumns: region.vertexColumns,
+    values: new Float64Array(region.values),
+  }
+}
+
+async function buildPlanningDemHeightRegionAsync(options: {
   definition: GroundRuntimeDynamicMesh
   source: PlanningDemRasterSource
   startRow: number
@@ -314,7 +545,66 @@ export function buildPlanningDemLocalEditTilesForRegion(options: {
   startColumn: number
   endColumn: number
   onProgress?: (payload: PlanningDemBuildProgress) => void
-}): GroundLocalEditTileMap | null {
+}): Promise<PlanningDemHeightRegion> {
+  const plan = resolvePlanningDemHeightRegionBuildPlan(options)
+  if (!plan) {
+    return {
+      startRow: options.startRow,
+      endRow: options.endRow,
+      startColumn: options.startColumn,
+      endColumn: options.endColumn,
+      vertexRows: 0,
+      vertexColumns: 0,
+      values: new Float64Array(0),
+    }
+  }
+  const worker = getPlanningDemHeightRegionWorker()
+  if (!worker) {
+    return buildPlanningDemHeightRegionSyncFromPlan(plan, options.source, options.onProgress)
+  }
+
+  const reportProgress = createThrottledPlanningDemProgressReporter(options.onProgress)
+  reportProgress({
+    phase: 'sample-region',
+    loaded: 0,
+    total: plan.vertexRows,
+    label: 'Sampling terrain heights…',
+    detail: plan.vertexRows > 0 ? `0/${plan.vertexRows} rows` : '0 rows',
+  }, true)
+
+  const rasterData = Float64Array.from(options.source.rasterData)
+  const requestId = ++planningDemHeightRegionRequestId
+  const response = await new Promise<PlanningDemHeightRegionWorkerResponse>((resolve, reject) => {
+    pendingPlanningDemHeightRegionRequests.set(requestId, { resolve, reject })
+    try {
+      const request: PlanningDemHeightRegionWorkerRequest = {
+        kind: 'build-planning-dem-height-region',
+        requestId,
+        plan,
+        rasterData,
+      }
+      worker.postMessage(request, [rasterData.buffer])
+    } catch (error) {
+      pendingPlanningDemHeightRegionRequests.delete(requestId)
+      reject(error instanceof Error ? error : new Error(String(error)))
+    }
+  })
+
+  if (response.error) {
+    throw new Error(response.error)
+  }
+
+  return buildPlanningDemHeightRegionFromWorkerResult(response.region)
+}
+
+function resolvePlanningDemLocalEditTileBuildPlan(options: {
+  definition: GroundRuntimeDynamicMesh
+  source: PlanningDemRasterSource
+  startRow: number
+  endRow: number
+  startColumn: number
+  endColumn: number
+}): PlanningDemLocalEditTileBuildPlan | null {
   const tileSizeMeters = resolvePlanningDemChunkSizeMeters()
   const resolution = resolvePlanningDemLocalEditTileResolution({
     definition: options.definition,
@@ -359,66 +649,223 @@ export function buildPlanningDemLocalEditTilesForRegion(options: {
   })) {
     return null
   }
-  const result: GroundLocalEditTileMap = {}
   const totalTileRows = Math.max(0, endTileRow - startTileRow + 1)
   const totalTileColumns = Math.max(0, endTileColumn - startTileColumn + 1)
   const totalTiles = totalTileRows * totalTileColumns
-  const reportProgress = createThrottledPlanningDemProgressReporter(options.onProgress)
+  return {
+    tileSizeMeters,
+    resolution,
+    originX,
+    originZ,
+    startTileRow,
+    endTileRow,
+    startTileColumn,
+    endTileColumn,
+    totalTileRows,
+    totalTileColumns,
+    totalTiles,
+    sourceWidth: options.source.width,
+    sourceHeight: options.source.height,
+    sourceBounds: options.source.targetWorldBounds,
+  }
+}
+
+function buildPlanningDemLocalEditTilesForRegionSyncFromPlan(
+  plan: PlanningDemLocalEditTileBuildPlan,
+  source: PlanningDemRasterSource,
+  onProgress?: (payload: PlanningDemBuildProgress) => void,
+): GroundLocalEditTileMap | null {
+  if (!(plan.totalTiles > 0)) {
+    return null
+  }
+  const result: GroundLocalEditTileMap = {}
+  const reportProgress = createThrottledPlanningDemProgressReporter(onProgress)
+  const samplesPerAxis = plan.resolution + 1
+  const sampleStepMeters = plan.tileSizeMeters / plan.resolution
 
   reportProgress({
     phase: 'build-edit-tiles',
     loaded: 0,
-    total: totalTiles,
+    total: plan.totalTiles,
     label: 'Generating terrain edit tiles…',
-    detail: totalTiles > 0 ? `0/${totalTiles} tiles` : '0 tiles',
+    detail: plan.totalTiles > 0 ? `0/${plan.totalTiles} tiles` : '0 tiles',
   }, true)
 
-  for (let tileRow = startTileRow; tileRow <= endTileRow; tileRow += 1) {
-    for (let tileColumn = startTileColumn; tileColumn <= endTileColumn; tileColumn += 1) {
+  for (let tileRow = plan.startTileRow; tileRow <= plan.endTileRow; tileRow += 1) {
+    for (let tileColumn = plan.startTileColumn; tileColumn <= plan.endTileColumn; tileColumn += 1) {
       const key = formatGroundLocalEditTileKey(tileRow, tileColumn)
-      const tileMinX = originX + tileColumn * tileSizeMeters
-      const tileMinZ = originZ + tileRow * tileSizeMeters
-      const values = new Array<number>((resolution + 1) * (resolution + 1))
-      let finiteValueCount = 0
-      for (let row = 0; row <= resolution; row += 1) {
-        const z = tileMinZ + (row / resolution) * tileSizeMeters
-        for (let column = 0; column <= resolution; column += 1) {
-          const x = tileMinX + (column / resolution) * tileSizeMeters
-          const withinSourceBounds = x >= options.source.targetWorldBounds.minX
-            && x <= options.source.targetWorldBounds.maxX
-            && z >= options.source.targetWorldBounds.minZ
-            && z <= options.source.targetWorldBounds.maxZ
-          const sampled = withinSourceBounds
-            ? samplePlanningDemHeightAtWorld(options.source, x, z)
+      const tileMinX = plan.originX + tileColumn * plan.tileSizeMeters
+      const tileMinZ = plan.originZ + tileRow * plan.tileSizeMeters
+      const values = new Array<number>(samplesPerAxis * samplesPerAxis)
+      for (let row = 0; row <= plan.resolution; row += 1) {
+        const z = tileMinZ + row * sampleStepMeters
+        const rowOffset = row * samplesPerAxis
+        const rowWithinSourceBounds = z >= plan.sourceBounds.minZ && z <= plan.sourceBounds.maxZ
+        for (let column = 0; column <= plan.resolution; column += 1) {
+          const x = tileMinX + column * sampleStepMeters
+          const withinSourceBounds = rowWithinSourceBounds
+            && x >= plan.sourceBounds.minX
+            && x <= plan.sourceBounds.maxX
+          values[rowOffset + column] = withinSourceBounds
+            ? samplePlanningDemHeightAtWorld(source, x, z)
             : GROUND_HEIGHT_UNSET_VALUE
-          values[row * (resolution + 1) + column] = sampled
-          if (Number.isFinite(sampled)) {
-            finiteValueCount += 1
-          }
         }
       }
       result[key] = {
         key,
         tileRow,
         tileColumn,
-        tileSizeMeters,
-        resolution,
+        tileSizeMeters: plan.tileSizeMeters,
+        resolution: plan.resolution,
         values,
         source: 'dem',
         updatedAt: Date.now(),
       }
-      const loadedTiles = (tileRow - startTileRow) * totalTileColumns + (tileColumn - startTileColumn) + 1
+      const loadedTiles = (tileRow - plan.startTileRow) * plan.totalTileColumns + (tileColumn - plan.startTileColumn) + 1
       reportProgress({
         phase: 'build-edit-tiles',
         loaded: loadedTiles,
-        total: totalTiles,
+        total: plan.totalTiles,
         label: 'Generating terrain edit tiles…',
-        detail: `${loadedTiles}/${totalTiles} tiles`,
-      }, loadedTiles === totalTiles)
+        detail: `${loadedTiles}/${plan.totalTiles} tiles`,
+      }, loadedTiles === plan.totalTiles)
     }
   }
 
   return Object.keys(result).length ? result : null
+}
+
+function buildPlanningDemLocalEditTilesFromWorkerResult(result: PlanningDemLocalEditTilesWorkerResponse['tiles']): GroundLocalEditTileMap | null {
+  if (!result.length) {
+    return null
+  }
+  const tiles: GroundLocalEditTileMap = {}
+  for (const tile of result) {
+    tiles[tile.key] = {
+      key: tile.key,
+      tileRow: tile.tileRow,
+      tileColumn: tile.tileColumn,
+      tileSizeMeters: tile.tileSizeMeters,
+      resolution: tile.resolution,
+      values: tile.values,
+      source: tile.source,
+      updatedAt: tile.updatedAt,
+    }
+  }
+  return tiles
+}
+
+async function buildPlanningDemLocalEditTilesForRegionAsync(options: {
+  definition: GroundRuntimeDynamicMesh
+  source: PlanningDemRasterSource
+  startRow: number
+  endRow: number
+  startColumn: number
+  endColumn: number
+  onProgress?: (payload: PlanningDemBuildProgress) => void
+}): Promise<GroundLocalEditTileMap | null> {
+  const plan = resolvePlanningDemLocalEditTileBuildPlan(options)
+  if (!plan) {
+    return null
+  }
+  const worker = getPlanningDemLocalEditTilesWorker()
+  if (!worker) {
+    return buildPlanningDemLocalEditTilesForRegionSyncFromPlan(plan, options.source, options.onProgress)
+  }
+  const reportProgress = createThrottledPlanningDemProgressReporter(options.onProgress)
+  reportProgress({
+    phase: 'build-edit-tiles',
+    loaded: 0,
+    total: plan.totalTiles,
+    label: 'Generating terrain edit tiles…',
+    detail: plan.totalTiles > 0 ? `0/${plan.totalTiles} tiles` : '0 tiles',
+  }, true)
+
+  const rasterData = Float64Array.from(options.source.rasterData)
+  const requestId = ++planningDemLocalEditTilesRequestId
+  const response = await new Promise<PlanningDemLocalEditTilesWorkerResponse>((resolve, reject) => {
+    pendingPlanningDemLocalEditTilesRequests.set(requestId, { resolve, reject })
+    try {
+      const request: PlanningDemLocalEditTilesWorkerRequest = {
+        kind: 'build-planning-dem-local-edit-tiles',
+        requestId,
+        plan,
+        rasterData,
+      }
+      worker.postMessage(request, [rasterData.buffer])
+    } catch (error) {
+      pendingPlanningDemLocalEditTilesRequests.delete(requestId)
+      reject(error instanceof Error ? error : new Error(String(error)))
+    }
+  })
+
+  if (response.error) {
+    throw new Error(response.error)
+  }
+
+  reportProgress({
+    phase: 'build-edit-tiles',
+    loaded: plan.totalTiles,
+    total: plan.totalTiles,
+    label: 'Generating terrain edit tiles…',
+    detail: `${plan.totalTiles}/${plan.totalTiles} tiles`,
+  }, true)
+
+  return buildPlanningDemLocalEditTilesFromWorkerResult(response.tiles)
+}
+
+async function buildPlanningDemRegionFromPreparedSource(options: {
+  definition: GroundRuntimeDynamicMesh
+  prepared: PlanningDemPreparedSource
+  startRow: number
+  endRow: number
+  startColumn: number
+  endColumn: number
+  textureDataUrl?: string | null
+  textureName?: string | null
+  onProgress?: (payload: PlanningDemBuildProgress) => void
+}): Promise<PlanningDemRegionConversionResult> {
+  const reportProgress = createThrottledPlanningDemProgressReporter(options.onProgress)
+  const region = await buildPlanningDemHeightRegionAsync({
+    definition: options.definition,
+    source: options.prepared.rasterSource,
+    startRow: options.startRow,
+    endRow: options.endRow,
+    startColumn: options.startColumn,
+    endColumn: options.endColumn,
+    onProgress: (payload) => reportProgress(payload),
+  })
+  return {
+    region,
+    localEditTiles: await buildPlanningDemLocalEditTilesForRegionAsync({
+      definition: options.definition,
+      source: options.prepared.rasterSource,
+      startRow: region.startRow,
+      endRow: region.endRow,
+      startColumn: region.startColumn,
+      endColumn: region.endColumn,
+      onProgress: (payload) => reportProgress(payload),
+    }),
+    planningMetadata: options.prepared.planningMetadata,
+    textureDataUrl: options.textureDataUrl ?? null,
+    textureName: options.textureName ?? null,
+  }
+}
+
+export function buildPlanningDemLocalEditTilesForRegion(options: {
+  definition: GroundRuntimeDynamicMesh
+  source: PlanningDemRasterSource
+  startRow: number
+  endRow: number
+  startColumn: number
+  endColumn: number
+  onProgress?: (payload: PlanningDemBuildProgress) => void
+}): GroundLocalEditTileMap | null {
+  const plan = resolvePlanningDemLocalEditTileBuildPlan(options)
+  if (!plan) {
+    return null
+  }
+  return buildPlanningDemLocalEditTilesForRegionSyncFromPlan(plan, options.source, options.onProgress)
 }
 
 function sampleArrayLikeBilinearFinite(values: ArrayLike<number>, width: number, height: number, x: number, y: number): number {
@@ -430,23 +877,35 @@ function sampleArrayLikeBilinearFinite(values: ArrayLike<number>, width: number,
   const y1 = Math.min(height - 1, y0 + 1)
   const tx = clampedX - x0
   const ty = clampedY - y0
-
-  const corners = [
-    { index: y0 * width + x0, weight: (1 - tx) * (1 - ty) },
-    { index: y0 * width + x1, weight: tx * (1 - ty) },
-    { index: y1 * width + x0, weight: (1 - tx) * ty },
-    { index: y1 * width + x1, weight: tx * ty },
-  ]
-
   let weightedSum = 0
   let totalWeight = 0
-  for (const corner of corners) {
-    const value = Number(values[corner.index])
-    if (!Number.isFinite(value)) {
-      continue
-    }
-    weightedSum += value * corner.weight
-    totalWeight += corner.weight
+
+  const weight00 = (1 - tx) * (1 - ty)
+  const value00 = Number(values[y0 * width + x0])
+  if (Number.isFinite(value00)) {
+    weightedSum += value00 * weight00
+    totalWeight += weight00
+  }
+
+  const weight10 = tx * (1 - ty)
+  const value10 = Number(values[y0 * width + x1])
+  if (Number.isFinite(value10)) {
+    weightedSum += value10 * weight10
+    totalWeight += weight10
+  }
+
+  const weight01 = (1 - tx) * ty
+  const value01 = Number(values[y1 * width + x0])
+  if (Number.isFinite(value01)) {
+    weightedSum += value01 * weight01
+    totalWeight += weight01
+  }
+
+  const weight11 = tx * ty
+  const value11 = Number(values[y1 * width + x1])
+  if (Number.isFinite(value11)) {
+    weightedSum += value11 * weight11
+    totalWeight += weight11
   }
   if (totalWeight > 0) {
     return weightedSum / totalWeight
@@ -690,57 +1149,19 @@ export function buildPlanningDemHeightRegion(options: {
   endColumn: number
   onProgress?: (payload: PlanningDemBuildProgress) => void
 }): PlanningDemHeightRegion {
-  const { definition, source } = options
-  const { startRow, endRow, startColumn, endColumn } = resolvePlanningDemCoveredGridRegion({
-    definition,
-    source,
-    startRow: options.startRow,
-    endRow: options.endRow,
-    startColumn: options.startColumn,
-    endColumn: options.endColumn,
-  })
-  const vertexRows = Math.max(0, endRow - startRow + 1)
-  const vertexColumns = Math.max(0, endColumn - startColumn + 1)
-  const values = new Float64Array(vertexRows * vertexColumns)
-  const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
-  const bounds = resolveGroundWorldBounds(definition)
-  const reportProgress = createThrottledPlanningDemProgressReporter(options.onProgress)
-
-  reportProgress({
-    phase: 'sample-region',
-    loaded: 0,
-    total: vertexRows,
-    label: 'Sampling terrain heights…',
-    detail: vertexRows > 0 ? `0/${vertexRows} rows` : '0 rows',
-  }, true)
-
-  for (let row = startRow; row <= endRow; row += 1) {
-    const z = bounds.minZ + row * cellSize
-    const targetRowOffset = (row - startRow) * vertexColumns
-    for (let column = startColumn; column <= endColumn; column += 1) {
-      const x = bounds.minX + column * cellSize
-      const sampled = samplePlanningDemHeightAtWorld(source, x, z)
-      values[targetRowOffset + (column - startColumn)] = Number.isFinite(sampled) ? sampled : 0
+  const plan = resolvePlanningDemHeightRegionBuildPlan(options)
+  if (!plan) {
+    return {
+      startRow: options.startRow,
+      endRow: options.endRow,
+      startColumn: options.startColumn,
+      endColumn: options.endColumn,
+      vertexRows: 0,
+      vertexColumns: 0,
+      values: new Float64Array(0),
     }
-    const loadedRows = row - startRow + 1
-    reportProgress({
-      phase: 'sample-region',
-      loaded: loadedRows,
-      total: vertexRows,
-      label: 'Sampling terrain heights…',
-      detail: `${loadedRows}/${vertexRows} rows`,
-    }, loadedRows === vertexRows)
   }
-
-  return {
-    startRow,
-    endRow,
-    startColumn,
-    endColumn,
-    vertexRows,
-    vertexColumns,
-    values,
-  }
+  return buildPlanningDemHeightRegionSyncFromPlan(plan, options.source, options.onProgress)
 }
 
 export function buildPlanningDemTileHeightRegion(options: {
@@ -863,7 +1284,7 @@ export async function buildPlanningDemGroundTileData(options: {
   })
   return {
     region,
-    localEditTiles: buildPlanningDemLocalEditTilesForRegion({
+    localEditTiles: await buildPlanningDemLocalEditTilesForRegionAsync({
       definition: options.definition,
       source: prepared.rasterSource,
       startRow: region.startRow,
@@ -940,7 +1361,7 @@ export async function buildPlanningDemGroundData(options: {
   const columns = Math.max(1, Math.trunc(gridSize.columns))
   const heightMap = createGroundHeightMap(rows, columns)
   const prepared = await resolvePlanningDemPreparedSource({ definition, terrainDem })
-  const fullRegionResult = buildPlanningDemRegionFromPreparedSource({
+  const fullRegionResult = await buildPlanningDemRegionFromPreparedSource({
     definition,
     prepared,
     startRow: 0,

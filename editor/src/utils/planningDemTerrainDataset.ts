@@ -14,10 +14,10 @@ import type { PlanningTerrainDemData } from '@/types/planning-scene-data'
 import {
   resolvePlanningDemTargetWorldBounds,
   resolvePlanningDemPreparedSource,
-  samplePlanningDemHeightAtWorld,
   type PlanningDemPreparedSource,
   type PlanningDemRasterSource,
 } from '@/utils/planningDemToGround'
+import { samplePlanningDemHeightGridFromWorldBounds } from '@/wasm/planningDemSampling'
 import { loadPlanningDemBlobByHash } from '@/utils/planningDemStorage'
 import { isPlanningDemGeoTiffSource, openPlanningDemWindowedGeoTiffSource } from '@/utils/planningDemImport'
 
@@ -290,7 +290,7 @@ function buildTileMeshFromHeightField(options: {
     v[index] = Math.round((vertex.row / rows) * 32767)
     const normalizedHeight = maxHeight - minHeight <= Number.EPSILON
       ? 0
-      : ((heights[sourceIndex] - minHeight) / (maxHeight - minHeight)) * 32767
+      : ((heights[sourceIndex]! - minHeight) / (maxHeight - minHeight)) * 32767
     heightValues[index] = Math.max(0, Math.min(32767, Math.round(normalizedHeight)))
   }
 
@@ -393,25 +393,22 @@ function buildTileHeightFieldFromRasterSource(options: {
   const sourceStepX = Math.max(Number.EPSILON, source.sampleStepX * (2 ** shift))
   const sourceStepZ = Math.max(Number.EPSILON, source.sampleStepZ * (2 ** shift))
   const tileBounds = resolveQuantizedTerrainTileBounds(tileId, worldBounds, worldBounds.minY, worldBounds.maxY)
-  const width = Math.max(Number.EPSILON, tileBounds.maxX - tileBounds.minX)
-  const depth = Math.max(Number.EPSILON, tileBounds.maxZ - tileBounds.minZ)
-  const columns = Math.max(1, Math.ceil(width / sourceStepX))
-  const rows = Math.max(1, Math.ceil(depth / sourceStepZ))
-  const heights = new Float64Array((rows + 1) * (columns + 1))
+  const columns = Math.max(1, Math.ceil(Math.max(Number.EPSILON, tileBounds.maxX - tileBounds.minX) / sourceStepX))
+  const rows = Math.max(1, Math.ceil(Math.max(Number.EPSILON, tileBounds.maxZ - tileBounds.minZ) / sourceStepZ))
+  const heights = samplePlanningDemHeightGridFromWorldBounds({
+    source,
+    startX: tileBounds.minX,
+    startZ: tileBounds.minZ,
+    endX: tileBounds.maxX,
+    endZ: tileBounds.maxZ,
+    rows,
+    columns,
+  })
   let minHeight = Number.POSITIVE_INFINITY
   let maxHeight = Number.NEGATIVE_INFINITY
-  for (let row = 0; row <= rows; row += 1) {
-    const vRatio = row / rows
-    const z = tileBounds.minZ + depth * vRatio
-    for (let column = 0; column <= columns; column += 1) {
-      const uRatio = column / columns
-      const x = tileBounds.minX + width * uRatio
-      const sample = samplePlanningDemHeightAtWorld(source, x, z)
-      const height = Number.isFinite(sample) ? sample : 0
-      heights[row * (columns + 1) + column] = height
-      minHeight = Math.min(minHeight, height)
-      maxHeight = Math.max(maxHeight, height)
-    }
+  for (const height of heights) {
+    minHeight = Math.min(minHeight, height)
+    maxHeight = Math.max(maxHeight, height)
   }
   if (!Number.isFinite(minHeight) || !Number.isFinite(maxHeight)) {
     minHeight = 0

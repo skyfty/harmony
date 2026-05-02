@@ -6,3 +6,10 @@ export type {
   GroundPaintBrushKernelOutput,
   GroundPaintWasmBindings,
 } from './groundPaint'
+export {
+  createPlanningDemSamplingSource,
+  ensurePlanningDemSamplingWasm,
+  samplePlanningDemHeightGrid,
+  samplePlanningDemHeightGridFromWorldBounds,
+  type PlanningDemHeightGridSampleOptions,
+} from './planningDemSampling'
