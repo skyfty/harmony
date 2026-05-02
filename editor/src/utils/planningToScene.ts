@@ -3,6 +3,7 @@ import type {
   GroundDynamicMesh,
   GroundHeightMap,
   GroundRuntimeDynamicMesh,
+  QuantizedTerrainDatasetRootManifest,
   SceneNode,
 } from '@schema'
 import { GROUND_HEIGHT_UNSET_VALUE, createGroundHeightMap, getGroundVertexIndex } from '@schema'
@@ -46,13 +47,26 @@ import {
 } from '@schema/components'
 import { generateUuid } from '@/utils/uuid'
 import { releaseScatterInstance } from '@/utils/terrainScatterRuntime'
-import { buildPlanningDemGroundRegionData, type PlanningDemHeightRegion } from '@/utils/planningDemToGround'
+import { buildPlanningDemGroundRegionData, type PlanningDemBuildProgress, type PlanningDemHeightRegion } from '@/utils/planningDemToGround'
 import { buildPlanningDemTerrainDataset } from '@/utils/planningDemTerrainDataset'
+import { createScenesStoreTerrainDatasetHeightSampler } from '@/utils/terrainDatasetRuntime'
 
 
 export type PlanningConversionProgress = {
   step: string
   progress: number
+  phase?: string
+  loaded?: number
+  total?: number
+  detail?: string
+}
+
+type PlanningConversionSubProgress = {
+  phase: string
+  loaded: number
+  total: number
+  label: string
+  detail?: string
 }
 
 export type ConvertPlanningToSceneOptions = {
@@ -72,14 +86,6 @@ const PLANNING_TERRAIN_WATER_SURFACE_OFFSET_M = 0.5
 const PLANNING_TERRAIN_WATER_SURFACE_EXPAND_M = 0.35
 const PLANNING_TERRAIN_AIR_WALL_OUTSET_M = 0.35
 const WATER_OPACITY_EPSILON = 1e-3
-
-function formatPlanningDemDebugValue(value: unknown): string {
-  try {
-    return JSON.stringify(value, null, 2)
-  } catch (error) {
-    return `<<unserializable debug value: ${String(error)}>>`
-  }
-}
 
 function normalizePlanningDemBoundsForGround(bounds: PlanningTerrainWorldBounds | null | undefined): {
   minX: number
@@ -426,6 +432,75 @@ async function createTerrainWaterSurface(options: {
 
 function emitProgress(options: ConvertPlanningToSceneOptions, step: string, progress: number) {
   options.onProgress?.({ step, progress: clampProgress(progress) })
+}
+
+function formatProgressDetail(payload: { loaded?: number; total?: number; detail?: string }): string | undefined {
+  if (typeof payload.detail === 'string' && payload.detail.trim()) {
+    return payload.detail.trim()
+  }
+  if (Number.isFinite(payload.loaded) && Number.isFinite(payload.total) && (payload.total ?? 0) > 0) {
+    const total = Math.max(1, Math.trunc(payload.total!))
+    const loaded = Math.max(0, Math.min(Math.trunc(payload.loaded ?? 0), total))
+    return `${loaded}/${total}`
+  }
+  return undefined
+}
+
+function emitDetailedProgress(
+  options: ConvertPlanningToSceneOptions,
+  step: string,
+  progress: number,
+  payload: Partial<Omit<PlanningConversionProgress, 'step' | 'progress'>> = {},
+) {
+  options.onProgress?.({
+    step,
+    progress: clampProgress(progress),
+    ...payload,
+  })
+}
+
+function createThrottledSubProgressReporter(
+  onProgress?: (payload: PlanningConversionSubProgress) => void,
+  minIntervalMs = 50,
+): (payload: PlanningConversionSubProgress, force?: boolean) => void {
+  if (!onProgress) {
+    return () => {}
+  }
+  let lastReportedAt = -Infinity
+  return (payload, force = false) => {
+    const total = Number.isFinite(payload.total) && payload.total > 0 ? Math.trunc(payload.total) : 1
+    const loaded = Number.isFinite(payload.loaded)
+      ? Math.max(0, Math.min(Math.trunc(payload.loaded), total))
+      : 0
+    const timestamp = nowMs()
+    if (!force && loaded < total && timestamp - lastReportedAt < minIntervalMs) {
+      return
+    }
+    lastReportedAt = timestamp
+    onProgress({
+      ...payload,
+      loaded,
+      total,
+    })
+  }
+}
+
+function createWindowedProgressEmitter(
+  options: ConvertPlanningToSceneOptions,
+  window: { start: number; end: number },
+): (payload: PlanningConversionSubProgress) => void {
+  const span = Math.max(0, window.end - window.start)
+  return (payload) => {
+    const total = Number.isFinite(payload.total) && payload.total > 0 ? payload.total : 1
+    const loaded = Number.isFinite(payload.loaded) ? Math.max(0, Math.min(payload.loaded, total)) : 0
+    const fraction = total > 0 ? loaded / total : 1
+    emitDetailedProgress(options, payload.label, window.start + span * fraction, {
+      phase: payload.phase,
+      loaded,
+      total,
+      detail: formatProgressDetail(payload),
+    })
+  }
 }
 
 function throwIfAborted(signal: AbortSignal | undefined) {
@@ -885,6 +960,13 @@ function applyPlanningDemRegionToGround(
   // 如果存在本地编辑图块，将其替换到高度图存储中
   if (localEditTiles) {
     useGroundHeightmapStore().replaceLocalEditTiles(groundNode.id, nextGroundSeed, nextGroundSeed.localEditTiles ?? null)
+  } else {
+    useGroundHeightmapStore().replacePlanningHeightRegion(
+      groundNode.id,
+      nextGroundSeed,
+      region,
+      planningMetadata ?? null,
+    )
   }
   
   // 同步地面覆盖区域状态，返回最新的地面运行时网格
@@ -894,6 +976,27 @@ function applyPlanningDemRegionToGround(
   sceneStore.updateGroundNodeDynamicMesh(groundNode.id, nextGround)
   
   // 返回更新后的地面运行时动态网格
+  return nextGround
+}
+
+async function syncGroundTerrainDatasetRuntime(options: {
+  sceneStore: ConvertPlanningToSceneOptions['sceneStore']
+  groundNode: SceneNode
+  definition: GroundRuntimeDynamicMesh
+  manifest: QuantizedTerrainDatasetRootManifest | null
+}): Promise<GroundRuntimeDynamicMesh> {
+  const sceneId = typeof options.sceneStore.currentSceneId === 'string' ? options.sceneStore.currentSceneId.trim() : ''
+  if (!sceneId) {
+    return options.definition
+  }
+  const sampler = options.manifest ? await createScenesStoreTerrainDatasetHeightSampler(sceneId) : null
+  const nextGround = {
+    ...options.definition,
+    runtimeTerrainDatasetManifest: options.manifest,
+    runtimeTerrainDatasetEnabled: Boolean(sampler),
+    runtimeTerrainHeightSampler: sampler,
+  } satisfies GroundRuntimeDynamicMesh
+  options.sceneStore.updateGroundNodeDynamicMesh(options.groundNode.id, nextGround)
   return nextGround
 }
 
@@ -1484,9 +1587,11 @@ async function applyPlanningTerrainContoursToGround(options: {
   blendMeters?: number
   smoothingPasses?: number
   smoothingRadius?: number
+  onProgress?: (payload: PlanningConversionSubProgress) => void
 }): Promise<GroundRuntimeDynamicMesh> {
   const defaultBlendMeters = normalizeContourBlendMeters(options.blendMeters, PLANNING_TERRAIN_CONTOUR_BLEND_METERS)
   const definition = options.definition
+  const reportProgress = createThrottledSubProgressReporter(options.onProgress)
   const polygons = (Array.isArray(options.contourPolygons) ? options.contourPolygons : [])
     .map((poly) => {
       const height = normalizeContourHeightMeters(poly.terrainHeightMeters)
@@ -1556,6 +1661,15 @@ async function applyPlanningTerrainContoursToGround(options: {
     localCols: number
   }
   const polyGrids: PolyGrid[] = []
+  const totalPolygonCount = Math.max(1, polygons.length)
+
+  reportProgress({
+    phase: 'prepare-contours',
+    loaded: 0,
+    total: totalPolygonCount,
+    label: 'Preparing terrain contours…',
+    detail: polygons.length ? `0/${polygons.length} contours` : '0 contours',
+  }, true)
 
   for (let polyIndex = 0; polyIndex < polygons.length; polyIndex += 1) {
     throwIfAborted(options.signal)
@@ -1613,12 +1727,29 @@ async function applyPlanningTerrainContoursToGround(options: {
     }
 
     polyGrids.push({ blendGrid, height, r0, r1, c0, c1, localCols })
+    const loadedPolygons = polyIndex + 1
+    reportProgress({
+      phase: 'prepare-contours',
+      loaded: loadedPolygons,
+      total: totalPolygonCount,
+      label: 'Preparing terrain contours…',
+      detail: `${loadedPolygons}/${polygons.length} contours`,
+    }, loadedPolygons === polygons.length)
   }
 
   // --- Phase 2: Compose heights via iterative lerp across sorted polygons ---
   const heightGrid = new Float32Array(rows * cols)
   // Track maximum blend weight at each vertex for post-blur masking.
   const weightGrid = new Float32Array(rows * cols)
+  const composeRowTotal = Math.max(1, rows)
+
+  reportProgress({
+    phase: 'compose-heights',
+    loaded: 0,
+    total: composeRowTotal,
+    label: 'Composing terrain heights…',
+    detail: rows > 0 ? `0/${rows} rows` : '0 rows',
+  }, true)
 
   for (let row = minRow; row <= maxRow; row += 1) {
     if ((row & 63) === 0) {
@@ -1647,17 +1778,48 @@ async function applyPlanningTerrainContoursToGround(options: {
       heightGrid[idx] = h
       weightGrid[idx] = maxWeight
     }
+    const loadedRows = row - minRow + 1
+    reportProgress({
+      phase: 'compose-heights',
+      loaded: loadedRows,
+      total: composeRowTotal,
+      label: 'Composing terrain heights…',
+      detail: `${loadedRows}/${rows} rows`,
+    }, loadedRows === rows)
   }
 
   // --- Phase 2.5: Smooth the composed height grid to soften polygon edges ---
   const smoothPasses = Math.max(0, Math.round(options.smoothingPasses ?? PLANNING_TERRAIN_CONTOUR_SMOOTH_PASSES))
   const smoothRadius = Math.max(0, Math.round(options.smoothingRadius ?? PLANNING_TERRAIN_CONTOUR_SMOOTH_RADIUS))
   if (smoothPasses > 0 && smoothRadius > 0) {
+    reportProgress({
+      phase: 'smooth-heights',
+      loaded: 0,
+      total: smoothPasses,
+      label: 'Smoothing terrain heights…',
+      detail: `0/${smoothPasses} passes`,
+    }, true)
     await blurHeightGrid(heightGrid, rows, cols, smoothRadius, smoothPasses, weightGrid, options.signal, options.yieldController)
+    reportProgress({
+      phase: 'smooth-heights',
+      loaded: smoothPasses,
+      total: smoothPasses,
+      label: 'Smoothing terrain heights…',
+      detail: `${smoothPasses}/${smoothPasses} passes`,
+    }, true)
   }
 
   // --- Phase 3: Write final heights into planningHeightMap ---
   const nextHeightMap = definition.planningHeightMap
+  const writeRowTotal = Math.max(1, rows)
+
+  reportProgress({
+    phase: 'write-heights',
+    loaded: 0,
+    total: writeRowTotal,
+    label: 'Writing terrain heights…',
+    detail: rows > 0 ? `0/${rows} rows` : '0 rows',
+  }, true)
   for (let row = minRow; row <= maxRow; row += 1) {
     if ((row & 63) === 0) {
       await options.yieldController.maybeYield()
@@ -1673,6 +1835,14 @@ async function applyPlanningTerrainContoursToGround(options: {
         : computeGroundBaseHeightAtVertex(definition, row, col)
       setHeightOverrideValueForContours(definition, nextHeightMap, row, col, effectiveBase + h, options.baseHeightMap ?? null)
     }
+    const writtenRows = row - minRow + 1
+    reportProgress({
+      phase: 'write-heights',
+      loaded: writtenRows,
+      total: writeRowTotal,
+      label: 'Writing terrain heights…',
+      detail: `${writtenRows}/${rows} rows`,
+    }, writtenRows === rows)
   }
 
   const next = {
@@ -1909,6 +2079,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
       // 更新进度条显示"正在导入DEM…",进度为18%
       emitProgress(options, 'Importing DEM…', 18)
       await yieldController.maybeYield(true)
+      const emitDemProgress = createWindowedProgressEmitter(options, { start: 18, end: 24 })
       // 构建并处理DEM数据,将其转换为地面区域数据
       // 包括指定的行列范围(从demImportBounds或默认网格范围)
       // 调用buildPlanningDemGroundRegionData处理DEM数据，生成地面区域数据
@@ -1932,8 +2103,14 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
         endRow: demImportBounds?.maxRow ?? Math.max(1, resolveGroundWorkingGridSize(groundDefinition).rows),
         startColumn: demImportBounds?.minColumn ?? 0,
         endColumn: demImportBounds?.maxColumn ?? Math.max(1, resolveGroundWorkingGridSize(groundDefinition).columns),
+        onProgress: (payload: PlanningDemBuildProgress) => {
+          emitDemProgress(payload)
+        },
       })
       // 将处理后的DEM区域数据应用到地面定义中,更新高度信息和编辑瓦片
+      emitDetailedProgress(options, 'Applying DEM to terrain…', 24, {
+        phase: 'apply-dem',
+      })
       groundDefinition = applyPlanningDemRegionToGround(
         sceneStore,
         groundNode,
@@ -1952,20 +2129,41 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
 
       const activeSceneId = sceneStore.currentSceneId
       if (activeSceneId) {
+        emitDetailedProgress(options, 'Building terrain dataset…', 26, {
+          phase: 'build-terrain-dataset',
+        })
         const dataset = await buildPlanningDemTerrainDataset({
           definition: groundDefinition as GroundRuntimeDynamicMesh,
           terrainDem,
           datasetId: `${activeSceneId}-terrain-dem`,
         })
+        emitDetailedProgress(options, 'Syncing terrain dataset…', 28, {
+          phase: 'sync-terrain-dataset',
+        })
         await scenesStore.replaceTerrainDatasetBundle(activeSceneId, dataset.manifest, dataset.regionPacks, { syncServer: false })
+        groundDefinition = await syncGroundTerrainDatasetRuntime({
+          sceneStore,
+          groundNode,
+          definition: groundDefinition as GroundRuntimeDynamicMesh,
+          manifest: dataset.manifest,
+        })
+        emitDetailedProgress(options, 'Terrain dataset ready…', 29, {
+          phase: 'terrain-dataset-ready',
+        })
       }
       await yieldController.maybeYield(true)
     } else if (sceneStore.currentSceneId) {
       await scenesStore.replaceTerrainDatasetBundle(sceneStore.currentSceneId, null, {}, { syncServer: false })
+      groundDefinition = await syncGroundTerrainDatasetRuntime({
+        sceneStore,
+        groundNode,
+        definition: groundDefinition as GroundRuntimeDynamicMesh,
+        manifest: null,
+      })
     }
 
     if (contourPolygons.length) {
-      emitProgress(options, 'Sculpting terrain…', 19)
+      emitProgress(options, 'Sculpting terrain…', 30)
       await yieldController.maybeYield(true)
       try {
         const next = await applyPlanningTerrainContoursToGround({
@@ -1977,6 +2175,21 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
           blendMeters: PLANNING_TERRAIN_CONTOUR_BLEND_METERS,
           smoothingPasses: PLANNING_TERRAIN_CONTOUR_SMOOTH_PASSES,
           smoothingRadius: PLANNING_TERRAIN_CONTOUR_SMOOTH_RADIUS,
+          onProgress: (payload) => {
+            const contourUnits = Math.max(1, contourPolygons.length)
+            const loaded = Number.isFinite(payload.loaded) ? Math.max(0, Math.min(payload.loaded, payload.total || contourUnits)) : 0
+            const total = Number.isFinite(payload.total) && payload.total > 0 ? payload.total : contourUnits
+            const contourFraction = total > 0 ? loaded / total : 1
+            const overallFraction = totalUnits > 0
+              ? Math.min(1, Math.max(0, (doneUnits + contourFraction * contourUnits) / totalUnits))
+              : 1
+            emitDetailedProgress(options, payload.label, 30 + 65 * overallFraction, {
+              phase: payload.phase,
+              loaded,
+              total,
+              detail: formatProgressDetail(payload),
+            })
+          },
         })
         groundDefinition = next
         syncPlanningHeightState(sceneStore, groundNode, next as GroundRuntimeDynamicMesh)
@@ -1992,8 +2205,8 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
   const groundHeightAt = (x: number, z: number) => (groundDefinition ? sampleGroundHeight(groundDefinition, x, z) : 0)
 
   const emitUnitProgress = (label: string, unitFraction: number) => {
-    const base = 20
-    const span = 75
+    const base = 30
+    const span = 65
     const safeUnitFraction = Math.min(1, Math.max(0, unitFraction))
     const fraction = totalUnits > 0 ? (doneUnits + safeUnitFraction) / totalUnits : 1
     emitProgress(options, label, base + span * fraction)

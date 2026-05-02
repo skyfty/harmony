@@ -1204,12 +1204,15 @@ async function handleConvertTo3DScene() {
         planningData,
         overwriteExisting: false,
         signal: abortController.signal,
-        onProgress: ({ step, progress }) => {
+        onProgress: ({ step, progress, detail }) => {
           if (abortController.signal.aborted) return
+          const message = typeof detail === 'string' && detail.trim()
+            ? `${step} (${detail.trim()})`
+            : step
           uiStore.updateLoadingOverlay({
             mode: 'determinate',
             progress,
-            message: step,
+            message,
             closable: false,
             autoClose: false,
           })

@@ -6,7 +6,6 @@ import {
   formatGroundLocalEditTileKey,
   getGroundVertexIndex,
   resolveInfiniteGroundGridOriginMeters,
-  resolveGroundEditCellSize,
   resolveGroundEditTileResolution,
   resolveGroundWorldBounds,
   resolveGroundWorkingGridSize,
@@ -38,6 +37,14 @@ export interface PlanningDemTileConversionResult {
   planningMetadata: GroundPlanningMetadata
   textureDataUrl: string | null
   textureName: string | null
+}
+
+export interface PlanningDemBuildProgress {
+  phase: 'load-source' | 'load-orthophoto' | 'sample-region' | 'build-edit-tiles'
+  loaded: number
+  total: number
+  label: string
+  detail?: string
 }
 
 export interface PlanningDemSourceTileLayout {
@@ -89,11 +96,43 @@ export interface PlanningDemPreparedSource {
   planningMetadata: GroundPlanningMetadata
 }
 
+const MAX_EAGER_DEM_LOCAL_EDIT_TILE_COUNT = 4096
+const MAX_EAGER_DEM_LOCAL_EDIT_SAMPLE_COUNT = 500_000
+
 interface PlanningDemCoveredGridRegion {
   startRow: number
   endRow: number
   startColumn: number
   endColumn: number
+}
+
+function nowMs(): number {
+  const perf = typeof performance !== 'undefined' ? performance : undefined
+  return typeof perf?.now === 'function' ? perf.now() : Date.now()
+}
+
+function createThrottledPlanningDemProgressReporter(
+  onProgress?: (payload: PlanningDemBuildProgress) => void,
+  minIntervalMs = 50,
+): (payload: PlanningDemBuildProgress, force?: boolean) => void {
+  if (!onProgress) {
+    return () => {}
+  }
+  let lastReportedAt = -Infinity
+  return (payload, force = false) => {
+    const safeTotal = Number.isFinite(payload.total) && payload.total > 0 ? payload.total : 1
+    const safeLoaded = Number.isFinite(payload.loaded) ? Math.max(0, Math.min(payload.loaded, safeTotal)) : 0
+    const timestamp = nowMs()
+    if (!force && safeLoaded < safeTotal && timestamp - lastReportedAt < minIntervalMs) {
+      return
+    }
+    lastReportedAt = timestamp
+    onProgress({
+      ...payload,
+      loaded: safeLoaded,
+      total: safeTotal,
+    })
+  }
 }
 
 function resolvePlanningDemSourceSpan(options: {
@@ -125,6 +164,49 @@ function resolvePlanningDemLocalEditTileOrigin(definition: GroundRuntimeDynamicM
 
 function resolvePlanningDemChunkSizeMeters(): number {
   return GROUND_TERRAIN_CHUNK_SIZE_METERS
+}
+
+function resolvePlanningDemLocalEditTileResolution(options: {
+  definition: GroundRuntimeDynamicMesh
+  sampleStepX?: number | null
+  sampleStepZ?: number | null
+}): number {
+  const configuredResolution = resolveGroundEditTileResolution(options.definition)
+  const tileSizeMeters = resolvePlanningDemChunkSizeMeters()
+  const sourceSteps = [options.sampleStepX, options.sampleStepZ]
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value) && value > 0)
+
+  if (!(tileSizeMeters > 0) || !sourceSteps.length) {
+    return configuredResolution
+  }
+
+  const sourceLimitedResolution = sourceSteps.reduce((currentMax, step) => {
+    const segments = Math.max(1, Math.round(tileSizeMeters / Math.max(step, Number.EPSILON)))
+    return Math.max(currentMax, segments)
+  }, 1)
+
+  return Math.max(1, Math.min(configuredResolution, sourceLimitedResolution))
+}
+
+function shouldBuildPlanningDemLocalEditTiles(options: {
+  startTileRow: number
+  endTileRow: number
+  startTileColumn: number
+  endTileColumn: number
+  resolution: number
+}): boolean {
+  const tileRows = Math.max(0, options.endTileRow - options.startTileRow + 1)
+  const tileColumns = Math.max(0, options.endTileColumn - options.startTileColumn + 1)
+  const tileCount = tileRows * tileColumns
+  if (tileCount <= 0) {
+    return false
+  }
+  if (tileCount > MAX_EAGER_DEM_LOCAL_EDIT_TILE_COUNT) {
+    return false
+  }
+  const samplesPerTile = (Math.max(1, options.resolution) + 1) * (Math.max(1, options.resolution) + 1)
+  return tileCount * samplesPerTile <= MAX_EAGER_DEM_LOCAL_EDIT_SAMPLE_COUNT
 }
 
 function resolvePlanningDemChunkTileRange(options: {
@@ -195,7 +277,9 @@ function buildPlanningDemRegionFromPreparedSource(options: {
   endColumn: number
   textureDataUrl?: string | null
   textureName?: string | null
+  onProgress?: (payload: PlanningDemBuildProgress) => void
 }): PlanningDemRegionConversionResult {
+  const reportProgress = createThrottledPlanningDemProgressReporter(options.onProgress)
   const region = buildPlanningDemHeightRegion({
     definition: options.definition,
     source: options.prepared.rasterSource,
@@ -203,6 +287,7 @@ function buildPlanningDemRegionFromPreparedSource(options: {
     endRow: options.endRow,
     startColumn: options.startColumn,
     endColumn: options.endColumn,
+    onProgress: (payload) => reportProgress(payload),
   })
   return {
     region,
@@ -213,6 +298,7 @@ function buildPlanningDemRegionFromPreparedSource(options: {
       endRow: region.endRow,
       startColumn: region.startColumn,
       endColumn: region.endColumn,
+      onProgress: (payload) => reportProgress(payload),
     }),
     planningMetadata: options.prepared.planningMetadata,
     textureDataUrl: options.textureDataUrl ?? null,
@@ -227,9 +313,14 @@ export function buildPlanningDemLocalEditTilesForRegion(options: {
   endRow: number
   startColumn: number
   endColumn: number
+  onProgress?: (payload: PlanningDemBuildProgress) => void
 }): GroundLocalEditTileMap | null {
   const tileSizeMeters = resolvePlanningDemChunkSizeMeters()
-  const resolution = resolveGroundEditTileResolution(options.definition)
+  const resolution = resolvePlanningDemLocalEditTileResolution({
+    definition: options.definition,
+    sampleStepX: options.source.sampleStepX,
+    sampleStepZ: options.source.sampleStepZ,
+  })
   if (!(tileSizeMeters > 0) || !(resolution > 0)) {
     return null
   }
@@ -259,7 +350,28 @@ export function buildPlanningDemLocalEditTilesForRegion(options: {
     originWorld: originZ,
     chunkSizeMeters: tileSizeMeters,
   })
+  if (!shouldBuildPlanningDemLocalEditTiles({
+    startTileRow,
+    endTileRow,
+    startTileColumn,
+    endTileColumn,
+    resolution,
+  })) {
+    return null
+  }
   const result: GroundLocalEditTileMap = {}
+  const totalTileRows = Math.max(0, endTileRow - startTileRow + 1)
+  const totalTileColumns = Math.max(0, endTileColumn - startTileColumn + 1)
+  const totalTiles = totalTileRows * totalTileColumns
+  const reportProgress = createThrottledPlanningDemProgressReporter(options.onProgress)
+
+  reportProgress({
+    phase: 'build-edit-tiles',
+    loaded: 0,
+    total: totalTiles,
+    label: 'Generating terrain edit tiles…',
+    detail: totalTiles > 0 ? `0/${totalTiles} tiles` : '0 tiles',
+  }, true)
 
   for (let tileRow = startTileRow; tileRow <= endTileRow; tileRow += 1) {
     for (let tileColumn = startTileColumn; tileColumn <= endTileColumn; tileColumn += 1) {
@@ -295,6 +407,14 @@ export function buildPlanningDemLocalEditTilesForRegion(options: {
         source: 'dem',
         updatedAt: Date.now(),
       }
+      const loadedTiles = (tileRow - startTileRow) * totalTileColumns + (tileColumn - startTileColumn) + 1
+      reportProgress({
+        phase: 'build-edit-tiles',
+        loaded: loadedTiles,
+        total: totalTiles,
+        label: 'Generating terrain edit tiles…',
+        detail: `${loadedTiles}/${totalTiles} tiles`,
+      }, loadedTiles === totalTiles)
     }
   }
 
@@ -413,9 +533,7 @@ export async function resolvePlanningDemPreparedSource(options: {
   const targetRows = Math.max(1, Math.trunc(gridSize.rows))
   const targetColumns = Math.max(1, Math.trunc(gridSize.columns))
   const targetCellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
-  const localEditCellSize = resolveGroundEditCellSize(definition)
   const localEditTileSizeMeters = resolvePlanningDemChunkSizeMeters()
-  const localEditTileResolution = resolveGroundEditTileResolution(definition)
   const targetWorldBounds = resolvePlanningDemTargetWorldBounds(definition, {
     demWidth,
     demHeight,
@@ -436,6 +554,12 @@ export async function resolvePlanningDemPreparedSource(options: {
   })
   const sampleStepX = computeDemSampleStepAxis(demWidth, demHeight, parsed.worldBounds, 'x')
   const sampleStepY = computeDemSampleStepAxis(demWidth, demHeight, parsed.worldBounds, 'y')
+  const localEditTileResolution = resolvePlanningDemLocalEditTileResolution({
+    definition,
+    sampleStepX: rasterSource.sampleStepX,
+    sampleStepZ: rasterSource.sampleStepZ,
+  })
+  const localEditCellSize = localEditTileSizeMeters / localEditTileResolution
   const effectiveSourceStep = [sampleStepX, sampleStepY, parsed.sampleStepMeters]
     .filter((value): value is number => Number.isFinite(value as number) && (value as number) > 0)
     .reduce<number | null>((smallest, value) => smallest === null ? value : Math.min(smallest, value), null)
@@ -564,6 +688,7 @@ export function buildPlanningDemHeightRegion(options: {
   endRow: number
   startColumn: number
   endColumn: number
+  onProgress?: (payload: PlanningDemBuildProgress) => void
 }): PlanningDemHeightRegion {
   const { definition, source } = options
   const { startRow, endRow, startColumn, endColumn } = resolvePlanningDemCoveredGridRegion({
@@ -579,6 +704,15 @@ export function buildPlanningDemHeightRegion(options: {
   const values = new Float64Array(vertexRows * vertexColumns)
   const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
   const bounds = resolveGroundWorldBounds(definition)
+  const reportProgress = createThrottledPlanningDemProgressReporter(options.onProgress)
+
+  reportProgress({
+    phase: 'sample-region',
+    loaded: 0,
+    total: vertexRows,
+    label: 'Sampling terrain heights…',
+    detail: vertexRows > 0 ? `0/${vertexRows} rows` : '0 rows',
+  }, true)
 
   for (let row = startRow; row <= endRow; row += 1) {
     const z = bounds.minZ + row * cellSize
@@ -588,6 +722,14 @@ export function buildPlanningDemHeightRegion(options: {
       const sampled = samplePlanningDemHeightAtWorld(source, x, z)
       values[targetRowOffset + (column - startColumn)] = Number.isFinite(sampled) ? sampled : 0
     }
+    const loadedRows = row - startRow + 1
+    reportProgress({
+      phase: 'sample-region',
+      loaded: loadedRows,
+      total: vertexRows,
+      label: 'Sampling terrain heights…',
+      detail: `${loadedRows}/${vertexRows} rows`,
+    }, loadedRows === vertexRows)
   }
 
   return {
@@ -645,15 +787,45 @@ export async function buildPlanningDemGroundRegionData(options: {
   startColumn: number
   endColumn: number
   applyOrthophoto?: boolean
+  onProgress?: (payload: PlanningDemBuildProgress) => void
 }): Promise<PlanningDemRegionConversionResult> {
+  const reportProgress = createThrottledPlanningDemProgressReporter(options.onProgress)
+  reportProgress({
+    phase: 'load-source',
+    loaded: 0,
+    total: 1,
+    label: 'Loading DEM source…',
+    detail: '0/1',
+  }, true)
   const prepared = await resolvePlanningDemPreparedSource({
     definition: options.definition,
     terrainDem: options.terrainDem,
   })
+  reportProgress({
+    phase: 'load-source',
+    loaded: 1,
+    total: 1,
+    label: 'Loading DEM source…',
+    detail: '1/1',
+  }, true)
+  reportProgress({
+    phase: 'load-orthophoto',
+    loaded: 0,
+    total: 1,
+    label: 'Loading orthophoto…',
+    detail: '0/1',
+  }, true)
   const texture = await resolvePlanningDemOrthophotoTexture({
     terrainDem: options.terrainDem,
     applyOrthophoto: options.applyOrthophoto,
   })
+  reportProgress({
+    phase: 'load-orthophoto',
+    loaded: 1,
+    total: 1,
+    label: texture.textureDataUrl ? 'Loading orthophoto…' : 'Skipping orthophoto…',
+    detail: '1/1',
+  }, true)
   return buildPlanningDemRegionFromPreparedSource({
     definition: options.definition,
     prepared,
@@ -663,6 +835,7 @@ export async function buildPlanningDemGroundRegionData(options: {
     endColumn: options.endColumn,
     textureDataUrl: texture.textureDataUrl,
     textureName: texture.textureName,
+    onProgress: (payload) => reportProgress(payload),
   })
 }
 
@@ -712,12 +885,17 @@ export function resolvePlanningDemSourceTileLayout(options: {
   targetWorldBounds: PlanningDemTargetWorldBounds
 }): PlanningDemSourceTileLayout {
   const { definition, demWidth, demHeight, targetWorldBounds } = options
-  const localEditCellSize = resolveGroundEditCellSize(definition)
   const localEditTileSizeMeters = resolvePlanningDemChunkSizeMeters()
   const worldWidth = Math.max(localEditTileSizeMeters, targetWorldBounds.maxX - targetWorldBounds.minX)
   const worldHeight = Math.max(localEditTileSizeMeters, targetWorldBounds.maxZ - targetWorldBounds.minZ)
   const sourceStepX = worldWidth / Math.max(1, demWidth - 1)
   const sourceStepY = worldHeight / Math.max(1, demHeight - 1)
+  const localEditTileResolution = resolvePlanningDemLocalEditTileResolution({
+    definition,
+    sampleStepX: sourceStepX,
+    sampleStepZ: sourceStepY,
+  })
+  const localEditCellSize = localEditTileSizeMeters / localEditTileResolution
   const { originX, originZ } = resolvePlanningDemLocalEditTileOrigin(definition)
   const tileColumnRange = resolvePlanningDemChunkTileRange({
     minWorld: targetWorldBounds.minX,

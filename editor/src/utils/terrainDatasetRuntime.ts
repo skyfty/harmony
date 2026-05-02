@@ -2,7 +2,9 @@ import {
   dequantizeTerrainHeight,
   deserializeQuantizedTerrainMesh,
   deserializeQuantizedTerrainPack,
+  formatQuantizedTerrainRegionKey,
   formatQuantizedTerrainTileKey,
+  resolveQuantizedTerrainRegionIdForTile,
   type GroundTerrainHeightSampler,
   type QuantizedTerrainDatasetRootManifest,
   type QuantizedTerrainMeshData,
@@ -89,36 +91,72 @@ export async function createScenesStoreTerrainDatasetHeightSampler(sceneId: stri
   })
 
   const packCache = new Map<string, ReturnType<typeof deserializeQuantizedTerrainPack> | null>()
+  const packPromiseCache = new Map<string, Promise<ReturnType<typeof deserializeQuantizedTerrainPack> | null>>()
   const tileCache = new Map<string, QuantizedTerrainMeshData | null>()
+  const tilePromiseCache = new Map<string, Promise<QuantizedTerrainMeshData | null>>()
+
   const loadRegionPack = async (regionKey: string) => {
     if (packCache.has(regionKey)) {
       return packCache.get(regionKey) ?? null
     }
+    const existingPromise = packPromiseCache.get(regionKey)
+    if (existingPromise) {
+      return await existingPromise
+    }
+
     const region = regionByKey.get(regionKey) ?? null
     if (!region) {
       packCache.set(regionKey, null)
       return null
     }
-    const packBuffer = await scenesStore.loadTerrainDatasetRegionPack(normalizedSceneId, region.regionKey)
-    if (!packBuffer) {
-      packCache.set(regionKey, null)
-      return null
+    const promise = (async () => {
+      const packBuffer = await scenesStore.loadTerrainDatasetRegionPack(normalizedSceneId, region.regionKey)
+      if (!packBuffer) {
+        packCache.set(regionKey, null)
+        return null
+      }
+      const pack = deserializeQuantizedTerrainPack(packBuffer)
+      packCache.set(regionKey, pack)
+      return pack
+    })()
+    packPromiseCache.set(regionKey, promise)
+    try {
+      return await promise
+    } finally {
+      packPromiseCache.delete(regionKey)
     }
-    const pack = deserializeQuantizedTerrainPack(packBuffer)
-    packCache.set(regionKey, pack)
-    return pack
   }
 
-  for (const region of manifest.regions) {
-    const pack = await loadRegionPack(region.regionKey)
-    if (!pack) {
-      continue
+  const loadTile = async (level: number, x: number, y: number): Promise<QuantizedTerrainMeshData | null> => {
+    const tileKey = formatQuantizedTerrainTileKey(level, x, y)
+    if (tileCache.has(tileKey)) {
+      return tileCache.get(tileKey) ?? null
     }
-    for (const [tileKey, buffer] of Object.entries(pack.entries)) {
-      if (tileCache.has(tileKey)) {
-        continue
+    const existingPromise = tilePromiseCache.get(tileKey)
+    if (existingPromise) {
+      return await existingPromise
+    }
+
+    const regionId = resolveQuantizedTerrainRegionIdForTile({ level, x, y }, manifest.regionLevel)
+    const regionKey = formatQuantizedTerrainRegionKey(regionId.level, regionId.x, regionId.y)
+    const promise = (async () => {
+      const pack = await loadRegionPack(regionKey)
+      if (!pack) {
+        tileCache.set(tileKey, null)
+        return null
       }
-      tileCache.set(tileKey, deserializeQuantizedTerrainMesh(buffer))
+      for (const [entryTileKey, buffer] of Object.entries(pack.entries)) {
+        if (!tileCache.has(entryTileKey)) {
+          tileCache.set(entryTileKey, deserializeQuantizedTerrainMesh(buffer))
+        }
+      }
+      return tileCache.get(tileKey) ?? null
+    })()
+    tilePromiseCache.set(tileKey, promise)
+    try {
+      return await promise
+    } finally {
+      tilePromiseCache.delete(tileKey)
     }
   }
 
@@ -145,6 +183,9 @@ export async function createScenesStoreTerrainDatasetHeightSampler(sceneId: stri
         const parentY = Math.floor(tileY / (2 ** shift))
         const tileKey = formatQuantizedTerrainTileKey(level, parentX, parentY)
         const tileData = tileCache.get(tileKey) ?? null
+        if (!tileData && !tileCache.has(tileKey)) {
+          void loadTile(level, parentX, parentY)
+        }
         if (!tileData) {
           continue
         }
