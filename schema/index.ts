@@ -652,6 +652,8 @@ export type BehaviorEventType = 'click' | 'approach' | 'depart' | 'perform'
 
 export type RuntimePrefabInitializationMode = 'full' | 'render-only'
 
+export type RuntimePrefabPreloadPolicy = 'none' | 'before-entry'
+
 export type RuntimePrefabPlacementAlignment = 'origin' | 'bottom-to-anchor' | 'center-to-anchor' | 'place-on-surface' | 'custom-offset'
 
 export interface RuntimePrefabPlacementOptions {
@@ -680,6 +682,8 @@ export interface RuntimePrefabSpawnRequest {
   rotation?: Vector3Like | null
   /** Explicit world scale override. */
   scale?: Vector3Like | null
+  /** Controls whether the runtime prefab should be preloaded before scene entry. */
+  preloadPolicy?: RuntimePrefabPreloadPolicy | null
   /** Controls whether runtime systems are fully initialized or only visuals are created. */
   initializationMode?: RuntimePrefabInitializationMode
   /** Controls how the prefab instance is positioned relative to the spawn anchor. */
