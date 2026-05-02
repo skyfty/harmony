@@ -50,6 +50,7 @@ const GROUND_TRIANGLE_SLICE_EPSILON = 1e-6
 const GROUND_TRIANGLE_SLICE_PLANAR_TOLERANCE = 0.004
 const GROUND_FLAT_TILING_RADIUS_MULTIPLIER = 8
 const GROUND_FLAT_TILING_MIN_RADIUS_CHUNKS = 32
+const GROUND_LOCAL_EDIT_TILE_COVERAGE_BUCKET_CHUNKS = 4
 
 type GroundChunkKey = string
 
@@ -945,7 +946,10 @@ function hasRuntimeGroundHeightOverrides(definition: GroundRuntimeDynamicMesh): 
 function invalidateGroundLocalEditTileCaches(definition: GroundRuntimeDynamicMesh): void {
   definition.runtimeLocalEditTileArrayCache = undefined
   definition.runtimeLocalEditTileLookupCache = undefined
+  definition.runtimeLocalEditTileCoverageIndexCache = undefined
   definition.runtimeLocalEditTileSourceRef = undefined
+  definition.runtimeLocalEditTileCoverageIndexSourceRef = undefined
+  definition.runtimeLocalEditTileCoverageIndexBucketChunks = undefined
 }
 
 function ensureGroundLocalEditTileCaches(
@@ -962,7 +966,10 @@ function ensureGroundLocalEditTileCaches(
   if (!source) {
     runtimeDefinition.runtimeLocalEditTileArrayCache = []
     runtimeDefinition.runtimeLocalEditTileLookupCache = new Map<string, GroundLocalEditTileData>()
+    runtimeDefinition.runtimeLocalEditTileCoverageIndexCache = new Map<string, GroundLocalEditTileData[]>()
     runtimeDefinition.runtimeLocalEditTileSourceRef = null
+    runtimeDefinition.runtimeLocalEditTileCoverageIndexSourceRef = null
+    runtimeDefinition.runtimeLocalEditTileCoverageIndexBucketChunks = GROUND_LOCAL_EDIT_TILE_COVERAGE_BUCKET_CHUNKS
     return {
       tiles: runtimeDefinition.runtimeLocalEditTileArrayCache,
       lookup: runtimeDefinition.runtimeLocalEditTileLookupCache,
@@ -988,6 +995,93 @@ function ensureGroundLocalEditTileCaches(
     tiles: runtimeDefinition.runtimeLocalEditTileArrayCache,
     lookup: runtimeDefinition.runtimeLocalEditTileLookupCache,
   }
+}
+
+function resolveGroundLocalEditTileCoverageBucketKey(chunkRow: number, chunkColumn: number, bucketChunks = GROUND_LOCAL_EDIT_TILE_COVERAGE_BUCKET_CHUNKS): string {
+  const safeBucketChunks = Math.max(1, Math.trunc(bucketChunks))
+  return `${Math.floor(chunkRow / safeBucketChunks)}:${Math.floor(chunkColumn / safeBucketChunks)}`
+}
+
+function ensureGroundLocalEditTileCoverageIndex(
+  definition: GroundRuntimeDynamicMesh,
+): Map<string, GroundLocalEditTileData[]> {
+  const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
+  const tiles = getGroundLocalEditTiles(runtimeDefinition)
+  const bucketChunks = GROUND_LOCAL_EDIT_TILE_COVERAGE_BUCKET_CHUNKS
+  const sourceRef = runtimeDefinition.localEditTiles && typeof runtimeDefinition.localEditTiles === 'object'
+    ? runtimeDefinition.localEditTiles
+    : null
+
+  if (
+    runtimeDefinition.runtimeLocalEditTileCoverageIndexCache instanceof Map
+    && runtimeDefinition.runtimeLocalEditTileCoverageIndexSourceRef === sourceRef
+    && runtimeDefinition.runtimeLocalEditTileCoverageIndexBucketChunks === bucketChunks
+  ) {
+    return runtimeDefinition.runtimeLocalEditTileCoverageIndexCache
+  }
+
+  const index = new Map<string, GroundLocalEditTileData[]>()
+  if (tiles.length) {
+    const chunkSizeMeters = resolveInfiniteChunkSizeMeters(runtimeDefinition)
+    for (const tile of tiles) {
+      const tileSizeMeters = Number(tile.tileSizeMeters)
+      if (!Number.isFinite(tileSizeMeters) || tileSizeMeters <= 0) {
+        continue
+      }
+      const { minX, minZ } = resolveGroundLocalEditTileWorldMinFromRuntime(runtimeDefinition, tile.tileRow, tile.tileColumn, tileSizeMeters)
+      const maxX = minX + tileSizeMeters
+      const maxZ = minZ + tileSizeMeters
+      const minChunk = resolveGroundChunkCoordFromWorldPosition(minX, minZ, chunkSizeMeters)
+      const maxChunk = resolveGroundChunkCoordFromWorldPosition(maxX - Number.EPSILON, maxZ - Number.EPSILON, chunkSizeMeters)
+      const minBucketRow = Math.floor(minChunk.chunkZ / bucketChunks)
+      const maxBucketRow = Math.floor(maxChunk.chunkZ / bucketChunks)
+      const minBucketColumn = Math.floor(minChunk.chunkX / bucketChunks)
+      const maxBucketColumn = Math.floor(maxChunk.chunkX / bucketChunks)
+
+      for (let bucketRow = minBucketRow; bucketRow <= maxBucketRow; bucketRow += 1) {
+        for (let bucketColumn = minBucketColumn; bucketColumn <= maxBucketColumn; bucketColumn += 1) {
+          const bucketKey = resolveGroundLocalEditTileCoverageBucketKey(bucketRow, bucketColumn, bucketChunks)
+          const bucket = index.get(bucketKey)
+          if (bucket) {
+            bucket.push(tile)
+          } else {
+            index.set(bucketKey, [tile])
+          }
+        }
+      }
+    }
+  }
+
+  runtimeDefinition.runtimeLocalEditTileCoverageIndexCache = index
+  runtimeDefinition.runtimeLocalEditTileCoverageIndexSourceRef = sourceRef
+  runtimeDefinition.runtimeLocalEditTileCoverageIndexBucketChunks = bucketChunks
+  return index
+}
+
+function getGroundLocalEditTileCandidatesForChunk(
+  runtimeDefinition: GroundRuntimeDynamicMesh,
+  spec: GroundChunkSpec,
+  tiles: ReadonlyArray<GroundLocalEditTileData> = getGroundLocalEditTiles(runtimeDefinition),
+): ReadonlyArray<GroundLocalEditTileData> {
+  if (!tiles.length) {
+    return tiles
+  }
+
+  const index = ensureGroundLocalEditTileCoverageIndex(runtimeDefinition)
+  if (!index.size) {
+    return tiles
+  }
+
+  const cellSize = Number.isFinite(runtimeDefinition.cellSize) && runtimeDefinition.cellSize > 1e-6
+    ? runtimeDefinition.cellSize
+    : 1
+  const chunkSizeMeters = resolveInfiniteChunkSizeMeters(runtimeDefinition)
+  const chunkOrigin = resolveInfiniteGroundGridOriginMeters(chunkSizeMeters)
+  const chunkMinX = chunkOrigin + spec.startColumn * cellSize
+  const chunkMinZ = chunkOrigin + spec.startRow * cellSize
+  const chunkCoord = resolveGroundChunkCoordFromWorldPosition(chunkMinX, chunkMinZ, chunkSizeMeters)
+  const bucketKey = resolveGroundLocalEditTileCoverageBucketKey(chunkCoord.chunkZ, chunkCoord.chunkX)
+  return index.get(bucketKey) ?? []
 }
 
 function getGroundLocalEditTiles(definition: GroundDynamicMesh): GroundLocalEditTileData[] {
@@ -1059,6 +1153,19 @@ function resolveGroundLocalEditTileWorldMin(
   tileSizeMeters: number,
 ): { minX: number; minZ: number } {
   const { originX, originZ } = resolveGroundLocalEditTileGridOrigin(definition, tileSizeMeters)
+  return {
+    minX: originX + tileColumn * tileSizeMeters,
+    minZ: originZ + tileRow * tileSizeMeters,
+  }
+}
+
+function resolveGroundLocalEditTileWorldMinFromRuntime(
+  definition: GroundRuntimeDynamicMesh,
+  tileRow: number,
+  tileColumn: number,
+  tileSizeMeters: number,
+): { minX: number; minZ: number } {
+  const { originX, originZ } = resolveGroundLocalEditTileGridOriginFromRuntime(definition, tileSizeMeters)
   return {
     minX: originX + tileColumn * tileSizeMeters,
     minZ: originZ + tileRow * tileSizeMeters,
@@ -1184,24 +1291,25 @@ function chunkIntersectsGroundLocalEditTileFromRuntime(
   spec: GroundChunkSpec,
   tiles: ReadonlyArray<GroundLocalEditTileData> = getGroundLocalEditTiles(runtimeDefinition),
 ): boolean {
-  if (!tiles.length) {
+  const candidateTiles = getGroundLocalEditTileCandidatesForChunk(runtimeDefinition, spec, tiles)
+  if (!candidateTiles.length) {
     return false
   }
   const cellSize = Number.isFinite(runtimeDefinition.cellSize) && runtimeDefinition.cellSize > 1e-6
     ? runtimeDefinition.cellSize
     : 1
-    const chunkSizeMeters = resolveGroundEditTileSizeMeters(runtimeDefinition)
+  const chunkSizeMeters = resolveGroundEditTileSizeMeters(runtimeDefinition)
   const chunkOrigin = resolveInfiniteGroundGridOriginMeters(chunkSizeMeters)
   const chunkMinX = chunkOrigin + spec.startColumn * cellSize
   const chunkMaxX = chunkOrigin + (spec.startColumn + spec.columns) * cellSize
   const chunkMinZ = chunkOrigin + spec.startRow * cellSize
   const chunkMaxZ = chunkOrigin + (spec.startRow + spec.rows) * cellSize
-  return tiles.some((tile) => {
+  return candidateTiles.some((tile) => {
     const tileSizeMeters = Number(tile.tileSizeMeters)
     if (!Number.isFinite(tileSizeMeters) || tileSizeMeters <= 0) {
       return false
     }
-    const { minX: tileMinX, minZ: tileMinZ } = resolveGroundLocalEditTileWorldMin(runtimeDefinition, tile.tileRow, tile.tileColumn, tileSizeMeters)
+    const { minX: tileMinX, minZ: tileMinZ } = resolveGroundLocalEditTileWorldMinFromRuntime(runtimeDefinition, tile.tileRow, tile.tileColumn, tileSizeMeters)
     const tileMaxX = tileMinX + tileSizeMeters
     const tileMaxZ = tileMinZ + tileSizeMeters
     return tileMaxX > chunkMinX
@@ -1244,19 +1352,20 @@ function resolveGroundChunkWorldBoundsFromSpec(
   function resolveGroundChunkLocalEditCellSize(definition: GroundRuntimeDynamicMesh, spec: GroundChunkSpec): number {
     const baseCellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1
     const tiles = getGroundLocalEditTiles(definition)
-    if (!tiles.length || !chunkIntersectsGroundLocalEditTileFromRuntime(definition, spec, tiles)) {
+    const candidateTiles = getGroundLocalEditTileCandidatesForChunk(definition, spec, tiles)
+    if (!candidateTiles.length) {
       return baseCellSize
     }
 
     const { minX: chunkMinX, maxX: chunkMaxX, minZ: chunkMinZ, maxZ: chunkMaxZ } = resolveGroundChunkWorldBoundsFromSpec(definition, spec)
 
     let hasImportedTiles = false
-    for (const tile of tiles) {
+    for (const tile of candidateTiles) {
       const tileSizeMeters = Number(tile.tileSizeMeters)
       if (!Number.isFinite(tileSizeMeters) || tileSizeMeters <= 0) {
         return baseCellSize
       }
-      const { minX: tileMinX, minZ: tileMinZ } = resolveGroundLocalEditTileWorldMin(definition, tile.tileRow, tile.tileColumn, tileSizeMeters)
+      const { minX: tileMinX, minZ: tileMinZ } = resolveGroundLocalEditTileWorldMinFromRuntime(definition, tile.tileRow, tile.tileColumn, tileSizeMeters)
       const tileMaxX = tileMinX + tileSizeMeters
       const tileMaxZ = tileMinZ + tileSizeMeters
       if (!(tileMaxX > chunkMinX && tileMinX < chunkMaxX && tileMaxZ > chunkMinZ && tileMinZ < chunkMaxZ)) {

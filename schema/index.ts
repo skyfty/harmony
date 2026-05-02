@@ -2147,7 +2147,10 @@ export type GroundRuntimeDynamicMesh = GroundDynamicMesh & {
   }
   runtimeLocalEditTileArrayCache?: GroundLocalEditTileData[]
   runtimeLocalEditTileLookupCache?: Map<string, GroundLocalEditTileData>
+  runtimeLocalEditTileCoverageIndexCache?: Map<string, GroundLocalEditTileData[]>
   runtimeLocalEditTileSourceRef?: GroundLocalEditTileMap | null
+  runtimeLocalEditTileCoverageIndexSourceRef?: GroundLocalEditTileMap | null
+  runtimeLocalEditTileCoverageIndexBucketChunks?: number
   runtimeLocalEditTileGridOriginCache?: {
     cacheKey: string
     originX: number
