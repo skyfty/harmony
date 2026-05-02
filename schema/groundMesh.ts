@@ -997,6 +997,47 @@ function ensureGroundLocalEditTileCaches(
   }
 }
 
+function ensureGroundLocalEditTileCachesFromRuntime(
+  definition: GroundRuntimeDynamicMesh,
+): {
+  tiles: GroundLocalEditTileData[]
+  lookup: Map<string, GroundLocalEditTileData>
+} {
+  const source = definition.localEditTiles && typeof definition.localEditTiles === 'object'
+    ? definition.localEditTiles
+    : null
+
+  if (!source) {
+    definition.runtimeLocalEditTileArrayCache = []
+    definition.runtimeLocalEditTileLookupCache = new Map<string, GroundLocalEditTileData>()
+    definition.runtimeLocalEditTileSourceRef = null
+    return {
+      tiles: definition.runtimeLocalEditTileArrayCache,
+      lookup: definition.runtimeLocalEditTileLookupCache,
+    }
+  }
+
+  if (
+    definition.runtimeLocalEditTileSourceRef !== source
+    || !Array.isArray(definition.runtimeLocalEditTileArrayCache)
+    || !(definition.runtimeLocalEditTileLookupCache instanceof Map)
+  ) {
+    const tiles = Object.values(source)
+    const lookup = new Map<string, GroundLocalEditTileData>()
+    for (const tile of tiles) {
+      lookup.set(formatGroundLocalEditTileKey(tile.tileRow, tile.tileColumn), tile)
+    }
+    definition.runtimeLocalEditTileArrayCache = tiles
+    definition.runtimeLocalEditTileLookupCache = lookup
+    definition.runtimeLocalEditTileSourceRef = source
+  }
+
+  return {
+    tiles: definition.runtimeLocalEditTileArrayCache,
+    lookup: definition.runtimeLocalEditTileLookupCache,
+  }
+}
+
 function resolveGroundLocalEditTileCoverageBucketKey(chunkRow: number, chunkColumn: number, bucketChunks = GROUND_LOCAL_EDIT_TILE_COVERAGE_BUCKET_CHUNKS): string {
   const safeBucketChunks = Math.max(1, Math.trunc(bucketChunks))
   return `${Math.floor(chunkRow / safeBucketChunks)}:${Math.floor(chunkColumn / safeBucketChunks)}`
@@ -1005,8 +1046,8 @@ function resolveGroundLocalEditTileCoverageBucketKey(chunkRow: number, chunkColu
 function ensureGroundLocalEditTileCoverageIndex(
   definition: GroundRuntimeDynamicMesh,
 ): Map<string, GroundLocalEditTileData[]> {
-  const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
-  const tiles = getGroundLocalEditTiles(runtimeDefinition)
+  const runtimeDefinition = definition
+  const tiles = ensureGroundLocalEditTileCachesFromRuntime(runtimeDefinition).tiles
   const bucketChunks = GROUND_LOCAL_EDIT_TILE_COVERAGE_BUCKET_CHUNKS
   const sourceRef = runtimeDefinition.localEditTiles && typeof runtimeDefinition.localEditTiles === 'object'
     ? runtimeDefinition.localEditTiles
@@ -1061,7 +1102,7 @@ function ensureGroundLocalEditTileCoverageIndex(
 function getGroundLocalEditTileCandidatesForChunk(
   runtimeDefinition: GroundRuntimeDynamicMesh,
   spec: GroundChunkSpec,
-  tiles: ReadonlyArray<GroundLocalEditTileData> = getGroundLocalEditTiles(runtimeDefinition),
+  tiles: ReadonlyArray<GroundLocalEditTileData> = ensureGroundLocalEditTileCachesFromRuntime(runtimeDefinition).tiles,
 ): ReadonlyArray<GroundLocalEditTileData> {
   if (!tiles.length) {
     return tiles
@@ -4586,7 +4627,7 @@ export function updateGroundChunks(
   // 后面所有 loadRadius / unloadRadius / chunk 中心点位置，都要乘这个值才能从“格子数”换成“米”。
   const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
   const chunkSizeMeters = resolveInfiniteChunkSizeMeters(definition)
-  const localEditTiles = getGroundLocalEditTiles(runtimeDefinition)
+  const localEditTiles = ensureGroundLocalEditTileCachesFromRuntime(runtimeDefinition).tiles
 
   let localX = 0
   let localZ = 0
