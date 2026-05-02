@@ -316,7 +316,7 @@ function definitionStructureSignature(definition: GroundDynamicMesh): string {
   const gridSize = resolveGroundWorkingGridSize(definition)
   const columns = gridSize.columns
   const rows = gridSize.rows
-  const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
+    const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1
   const bounds = resolveGroundWorldBounds(definition)
   const width = bounds.maxX - bounds.minX
   const depth = bounds.maxZ - bounds.minZ
@@ -1183,7 +1183,6 @@ function chunkIntersectsGroundLocalEditTileFromRuntime(
   runtimeDefinition: GroundRuntimeDynamicMesh,
   spec: GroundChunkSpec,
   tiles: ReadonlyArray<GroundLocalEditTileData> = getGroundLocalEditTiles(runtimeDefinition),
-  bounds: { minX: number; maxX: number; minZ: number; maxZ: number } = resolveGroundGridWorldBounds(runtimeDefinition),
 ): boolean {
   if (!tiles.length) {
     return false
@@ -1191,10 +1190,12 @@ function chunkIntersectsGroundLocalEditTileFromRuntime(
   const cellSize = Number.isFinite(runtimeDefinition.cellSize) && runtimeDefinition.cellSize > 1e-6
     ? runtimeDefinition.cellSize
     : 1
-  const chunkMinX = bounds.minX + spec.startColumn * cellSize
-  const chunkMaxX = bounds.minX + (spec.startColumn + spec.columns) * cellSize
-  const chunkMinZ = bounds.minZ + spec.startRow * cellSize
-  const chunkMaxZ = bounds.minZ + (spec.startRow + spec.rows) * cellSize
+    const chunkSizeMeters = resolveGroundEditTileSizeMeters(runtimeDefinition)
+  const chunkOrigin = resolveInfiniteGroundGridOriginMeters(chunkSizeMeters)
+  const chunkMinX = chunkOrigin + spec.startColumn * cellSize
+  const chunkMaxX = chunkOrigin + (spec.startColumn + spec.columns) * cellSize
+  const chunkMinZ = chunkOrigin + spec.startRow * cellSize
+  const chunkMaxZ = chunkOrigin + (spec.startRow + spec.rows) * cellSize
   return tiles.some((tile) => {
     const tileSizeMeters = Number(tile.tileSizeMeters)
     if (!Number.isFinite(tileSizeMeters) || tileSizeMeters <= 0) {
@@ -1208,6 +1209,21 @@ function chunkIntersectsGroundLocalEditTileFromRuntime(
       && tileMaxZ > chunkMinZ
       && tileMinZ < chunkMaxZ
   })
+}
+
+function resolveGroundChunkWorldBoundsFromSpec(
+  definition: GroundRuntimeDynamicMesh,
+  spec: GroundChunkSpec,
+): { minX: number; maxX: number; minZ: number; maxZ: number } {
+  const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1
+  const chunkSizeMeters = resolveInfiniteChunkSizeMeters(definition)
+  const chunkOrigin = resolveInfiniteGroundGridOriginMeters(chunkSizeMeters)
+  return {
+    minX: chunkOrigin + spec.startColumn * cellSize,
+    maxX: chunkOrigin + (spec.startColumn + spec.columns) * cellSize,
+    minZ: chunkOrigin + spec.startRow * cellSize,
+    maxZ: chunkOrigin + (spec.startRow + spec.rows) * cellSize,
+  }
 }
 
   function resolveImportedLocalEditCellSize(definition: GroundRuntimeDynamicMesh): number | null {
@@ -1232,14 +1248,7 @@ function chunkIntersectsGroundLocalEditTileFromRuntime(
       return baseCellSize
     }
 
-    const bounds = resolveGroundGridWorldBounds(definition)
-    const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6
-      ? definition.cellSize
-      : 1
-    const chunkMinX = bounds.minX + spec.startColumn * cellSize
-    const chunkMaxX = bounds.minX + (spec.startColumn + spec.columns) * cellSize
-    const chunkMinZ = bounds.minZ + spec.startRow * cellSize
-    const chunkMaxZ = bounds.minZ + (spec.startRow + spec.rows) * cellSize
+    const { minX: chunkMinX, maxX: chunkMaxX, minZ: chunkMinZ, maxZ: chunkMaxZ } = resolveGroundChunkWorldBoundsFromSpec(definition, spec)
 
     let hasImportedTiles = false
     for (const tile of tiles) {
@@ -4261,11 +4270,11 @@ function updateChunkGeometry(geometry: THREE.BufferGeometry, definition: GroundR
   if (!positionAttr || !normalAttr || !uvAttr || positionAttr.count !== expectedVertexCount || normalAttr.count !== expectedVertexCount || uvAttr.count !== expectedVertexCount) {
     return false
   }
-  const bounds = resolveGroundGridWorldBounds(definition)
-  const groundWidth = Math.max(Number.EPSILON, bounds.maxX - bounds.minX)
-  const groundDepth = Math.max(Number.EPSILON, bounds.maxZ - bounds.minZ)
-  const startX = bounds.minX + spec.startColumn * definition.cellSize
-  const startZ = bounds.minZ + spec.startRow * definition.cellSize
+  const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1
+  const chunkSizeMeters = resolveInfiniteChunkSizeMeters(definition)
+  const chunkOrigin = resolveInfiniteGroundGridOriginMeters(chunkSizeMeters)
+  const startX = chunkOrigin + spec.startColumn * cellSize
+  const startZ = chunkOrigin + spec.startRow * cellSize
   const importedLocalEditCellSize = resolveGroundChunkLocalEditCellSize(definition, spec)
   const useWorldSpaceHeightSampling = importedLocalEditCellSize > (Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1)
   const heightRegion = sampleGroundEffectiveHeightRegionWithoutLocalEdit(
@@ -4286,8 +4295,8 @@ function updateChunkGeometry(geometry: THREE.BufferGeometry, definition: GroundR
       const height = useWorldSpaceHeightSampling
         ? sampleGroundHeight(definition, x, z)
         : heightValues[localRow * heightStride + localColumn] ?? sampleGroundHeight(definition, x, z)
-      const columnRatio = columns === 0 ? 0 : clampInclusive((x - bounds.minX) / groundWidth, 0, 1)
-      const rowRatio = rows === 0 ? 0 : clampInclusive((z - bounds.minZ) / groundDepth, 0, 1)
+      const columnRatio = columns === 0 ? 0 : clampInclusive((x - chunkOrigin) / Math.max(chunkSizeMeters, Number.EPSILON), 0, 1)
+      const rowRatio = rows === 0 ? 0 : clampInclusive((z - chunkOrigin) / Math.max(chunkSizeMeters, Number.EPSILON), 0, 1)
       positionAttr.setXYZ(vertexIndex, x, height, z)
       uvAttr.setXY(vertexIndex, columnRatio, 1 - rowRatio)
       vertexIndex += 1
@@ -4326,22 +4335,20 @@ function updateChunkGeometryRegion(
     return false
   }
 
-  const cellSize = definition.cellSize
-  const bounds = resolveGroundGridWorldBounds(definition)
-  const startX = bounds.minX + spec.startColumn * cellSize
-  const startZ = bounds.minZ + spec.startRow * cellSize
-  const chunkMaxX = startX + chunkColumns * layout.stepX
-  const chunkMaxZ = startZ + chunkRows * layout.stepZ
+  const { minX: chunkMinX, maxX: chunkMaxX, minZ: chunkMinZ, maxZ: chunkMaxZ } = resolveGroundChunkWorldBoundsFromSpec(definition, spec)
+  const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1
+  const startX = chunkMinX
+  const startZ = chunkMinZ
 
   const regionStartRow = clampInclusive(region.minRow, spec.startRow, spec.startRow + spec.rows)
   const regionEndRow = clampInclusive(region.maxRow, spec.startRow, spec.startRow + spec.rows)
   const regionStartColumn = clampInclusive(region.minColumn, spec.startColumn, spec.startColumn + spec.columns)
   const regionEndColumn = clampInclusive(region.maxColumn, spec.startColumn, spec.startColumn + spec.columns)
 
-  const updateMinX = bounds.minX + regionStartColumn * cellSize
-  const updateMaxX = bounds.minX + regionEndColumn * cellSize
-  const updateMinZ = bounds.minZ + regionStartRow * cellSize
-  const updateMaxZ = bounds.minZ + regionEndRow * cellSize
+  const updateMinX = chunkMinX + (regionStartColumn - spec.startColumn) * cellSize
+  const updateMaxX = chunkMinX + (regionEndColumn - spec.startColumn) * cellSize
+  const updateMinZ = chunkMinZ + (regionStartRow - spec.startRow) * cellSize
+  const updateMaxZ = chunkMinZ + (regionEndRow - spec.startRow) * cellSize
 
   const startLocalColumn = clampInclusive(Math.floor((Math.max(startX, updateMinX) - startX) / layout.stepX), 0, chunkColumns)
   const endLocalColumn = clampInclusive(Math.ceil((Math.min(chunkMaxX, updateMaxX) - startX) / layout.stepX), 0, chunkColumns)
@@ -4471,7 +4478,6 @@ export function updateGroundChunks(
   const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
   const chunkSizeMeters = resolveInfiniteChunkSizeMeters(definition)
   const localEditTiles = getGroundLocalEditTiles(runtimeDefinition)
-  const localEditBounds = resolveGroundGridWorldBounds(runtimeDefinition)
 
   let localX = 0
   let localZ = 0
@@ -4622,7 +4628,7 @@ export function updateGroundChunks(
         const dx = centerX - localX
         const dz = centerZ - localZ
         const priority = forceCore && forceCore.has(key) ? -1 : 0
-        if (chunkIntersectsGroundLocalEditTileFromRuntime(runtimeDefinition, spec, localEditTiles, localEditBounds)) {
+        if (chunkIntersectsGroundLocalEditTileFromRuntime(runtimeDefinition, spec, localEditTiles)) {
           // 只要这个 chunk 覆盖到了局部雕刻瓦片，就必须走独立 Mesh 路径，不能并入平面实例批次。
           // 因为一旦并入实例批次，单独的雕刻编辑就无法只改这一块，而必须把整批都拆开，代价更高。
           creates.push({ key, chunkRow: cr, chunkColumn: cc, priority, distSq: dx * dx + dz * dz })
@@ -4715,7 +4721,7 @@ export function updateGroundChunks(
       }
 
       const spec = computeChunkSpec(definition, cr, cc)
-      if (chunkIntersectsGroundLocalEditTileFromRuntime(runtimeDefinition, spec, localEditTiles, localEditBounds)) {
+      if (chunkIntersectsGroundLocalEditTileFromRuntime(runtimeDefinition, spec, localEditTiles)) {
         continue
       }
 
@@ -4832,6 +4838,41 @@ export function updateGroundChunks(
   if (stitchRegion) {
     // 新 chunk 是独立算法线的，边界上会天然有一点不连续；这里统一 stitching，避免块与块之间出现明暗断层。
     stitchGroundChunkNormals(root, definition, stitchRegion, touchedChunkKeys)
+  }
+
+  if (desiredWindowChanged || createdCount > 0 || destroyedCount > 0) {
+    const chunkKeys = Array.from(state.chunks.keys()).sort()
+    const localEditTiles = getGroundLocalEditTiles(runtimeDefinition)
+    console.log('[GroundMesh] updateGroundChunks', JSON.stringify({
+      chunkCells,
+      cellSize,
+      chunkSizeMeters,
+      cameraChunkCoord,
+      loadRadiusChunks,
+      unloadRadiusChunks,
+      loadWindow: {
+        minRow: minLoadChunkRow,
+        maxRow: maxLoadChunkRow,
+        minColumn: minLoadChunkColumn,
+        maxColumn: maxLoadChunkColumn,
+      },
+      flatWindow: {
+        minRow: flatMinLoadChunkRow,
+        maxRow: flatMaxLoadChunkRow,
+        minColumn: flatMinLoadChunkColumn,
+        maxColumn: flatMaxLoadChunkColumn,
+      },
+      localEditTileCount: localEditTiles.length,
+      localEditTileKeys: localEditTiles.length <= 32 ? localEditTiles.map((tile) => tile.key) : localEditTiles.slice(0, 32).map((tile) => tile.key),
+      createdCount,
+      destroyedCount,
+      loadedChunkCount: state.chunks.size,
+      independentChunkCount: state.chunks.size,
+      flatChunkBatchCount: state.flatChunkBatches.size,
+      pendingCreateCount: state.pendingCreates.length,
+      pendingDestroyCount: state.pendingDestroys.length,
+      loadedChunkKeys: chunkKeys.length <= 32 ? chunkKeys : chunkKeys.slice(0, 32),
+    }))
   }
 
 }

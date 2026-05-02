@@ -838,7 +838,9 @@ export const useGroundHeightmapStore = defineStore('groundHeightmap', {
       if (!chunkKeys) {
         return state
       }
-      for (const key of chunkKeys) {
+      const receivedChunkKeys = Array.from(chunkKeys).filter((key) => typeof key === 'string' && key.length > 0)
+      const existingChunkKeys = Array.from(state.optimizedMeshDirtyChunkKeys)
+      for (const key of receivedChunkKeys) {
         const normalized = normalizeGroundChunkKey(key)
         if (!normalized) {
           continue

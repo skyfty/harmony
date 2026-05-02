@@ -29,6 +29,7 @@ import type {
   PlanningPolygonData,
   PlanningPolylineData,
   PlanningSceneData,
+  PlanningTerrainWorldBounds,
 } from '@/types/planning-scene-data'
 import { useGroundHeightmapStore } from '@/stores/groundHeightmapStore'
 import { useSceneStore } from '@/stores/sceneStore'
@@ -71,6 +72,52 @@ const PLANNING_TERRAIN_WATER_SURFACE_OFFSET_M = 0.5
 const PLANNING_TERRAIN_WATER_SURFACE_EXPAND_M = 0.35
 const PLANNING_TERRAIN_AIR_WALL_OUTSET_M = 0.35
 const WATER_OPACITY_EPSILON = 1e-3
+
+function normalizePlanningDemBoundsForGround(bounds: PlanningTerrainWorldBounds | null | undefined): {
+  minX: number
+  maxX: number
+  minZ: number
+  maxZ: number
+} | null {
+  if (!bounds) {
+    return null
+  }
+  const minX = Number(bounds.minX)
+  const maxX = Number(bounds.maxX)
+  const minZ = Number(bounds.minY)
+  const maxZ = Number(bounds.maxY)
+  if (!Number.isFinite(minX) || !Number.isFinite(maxX) || !Number.isFinite(minZ) || !Number.isFinite(maxZ)) {
+    return null
+  }
+  return {
+    minX: Math.min(minX, maxX),
+    maxX: Math.max(minX, maxX),
+    minZ: Math.min(minZ, maxZ),
+    maxZ: Math.max(minZ, maxZ),
+  }
+}
+
+function mergeGroundBounds(
+  currentBounds: { minX: number; maxX: number; minZ: number; maxZ: number },
+  nextBounds: { minX: number; maxX: number; minZ: number; maxZ: number },
+): { minX: number; maxX: number; minZ: number; maxZ: number } {
+  return {
+    minX: Math.min(currentBounds.minX, nextBounds.minX),
+    maxX: Math.max(currentBounds.maxX, nextBounds.maxX),
+    minZ: Math.min(currentBounds.minZ, nextBounds.minZ),
+    maxZ: Math.max(currentBounds.maxZ, nextBounds.maxZ),
+  }
+}
+
+function groundBoundsChanged(
+  currentBounds: { minX: number; maxX: number; minZ: number; maxZ: number },
+  nextBounds: { minX: number; maxX: number; minZ: number; maxZ: number },
+): boolean {
+  return Math.abs(currentBounds.minX - nextBounds.minX) > 1e-6
+    || Math.abs(currentBounds.maxX - nextBounds.maxX) > 1e-6
+    || Math.abs(currentBounds.minZ - nextBounds.minZ) > 1e-6
+    || Math.abs(currentBounds.maxZ - nextBounds.maxZ) > 1e-6
+}
 
 export function isPlanningImageConversionNode(node: SceneNode | null | undefined): boolean {
   if (!node || typeof node !== 'object') {
@@ -718,6 +765,7 @@ function syncPlanningHeightState(
   definition.surfaceRevision = nextRevision
   definition.runtimeHydratedHeightState = 'dirty'
   definition.runtimeDisableOptimizedChunks = true
+  const fullGridDirtyChunkKeys = resolvePlanningDirtyChunkKeysForFullGrid(definition)
   useGroundHeightmapStore().replacePlanningHeightMap(
     groundNode.id,
     groundNode.dynamicMesh as GroundDynamicMesh,
@@ -727,7 +775,7 @@ function syncPlanningHeightState(
   useGroundHeightmapStore().markOptimizedMeshDirtyChunkKeys(
     groundNode.id,
     groundNode.dynamicMesh as GroundDynamicMesh,
-    resolvePlanningDirtyChunkKeysForFullGrid(definition),
+    fullGridDirtyChunkKeys,
   )
 }
 
@@ -747,7 +795,6 @@ function syncGroundCoverageRegionState(
   sceneStore: ConvertPlanningToSceneOptions['sceneStore'],
   groundNode: SceneNode,
   definition: GroundRuntimeDynamicMesh,
-  region: PlanningDemHeightRegion,
   dirtyChunkKeys: Iterable<string> | null,
 ): GroundRuntimeDynamicMesh {
   // 获取并验证当前场景ID，确保场景已被持久化
@@ -833,7 +880,7 @@ function applyPlanningDemRegionToGround(
   }
   
   // 同步地面覆盖区域状态，返回最新的地面运行时网格
-  const nextGround = syncGroundCoverageRegionState(sceneStore, groundNode, nextGroundSeed, region, dirtyChunkKeys)
+  const nextGround = syncGroundCoverageRegionState(sceneStore, groundNode, nextGroundSeed, dirtyChunkKeys)
 
   // 更新场景存储中的地面节点动态网格
   sceneStore.updateGroundNodeDynamicMesh(groundNode.id, nextGround)
@@ -1696,6 +1743,20 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
     emitProgress(options, 'Creating ground…', 5)
     sceneStore.setGroundInfiniteSettings({})
     await yieldController.maybeYield(true)
+  }
+
+  const demGroundBounds = normalizePlanningDemBoundsForGround(planningData.terrain?.dem?.worldBounds ?? null)
+  if (sceneStore.groundNode?.dynamicMesh?.type === 'Ground' && demGroundBounds) {
+    const currentGroundDefinition = sceneStore.groundNode.dynamicMesh as GroundDynamicMesh
+    const currentGroundBounds = resolveGroundWorldBounds(currentGroundDefinition)
+    const mergedGroundBounds = mergeGroundBounds(currentGroundBounds, demGroundBounds)
+    if (groundBoundsChanged(currentGroundBounds, mergedGroundBounds)) {
+      sceneStore.updateGroundNodeDynamicMesh(sceneStore.groundNode.id, {
+        ...currentGroundDefinition,
+        worldBounds: mergedGroundBounds,
+      })
+      await yieldController.maybeYield(true)
+    }
   }
 
   // Use the actual ground node bounds when available; groundSettings can lag behind

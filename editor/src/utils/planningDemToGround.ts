@@ -718,8 +718,21 @@ export function resolvePlanningDemSourceTileLayout(options: {
   const worldHeight = Math.max(localEditTileSizeMeters, targetWorldBounds.maxZ - targetWorldBounds.minZ)
   const sourceStepX = worldWidth / Math.max(1, demWidth - 1)
   const sourceStepY = worldHeight / Math.max(1, demHeight - 1)
-  const tileColumns = Math.max(1, Math.ceil(worldWidth / Math.max(localEditTileSizeMeters, Number.EPSILON)))
-  const tileRows = Math.max(1, Math.ceil(worldHeight / Math.max(localEditTileSizeMeters, Number.EPSILON)))
+  const { originX, originZ } = resolvePlanningDemLocalEditTileOrigin(definition)
+  const tileColumnRange = resolvePlanningDemChunkTileRange({
+    minWorld: targetWorldBounds.minX,
+    maxWorld: targetWorldBounds.maxX,
+    originWorld: originX,
+    chunkSizeMeters: localEditTileSizeMeters,
+  })
+  const tileRowRange = resolvePlanningDemChunkTileRange({
+    minWorld: targetWorldBounds.minZ,
+    maxWorld: targetWorldBounds.maxZ,
+    originWorld: originZ,
+    chunkSizeMeters: localEditTileSizeMeters,
+  })
+  const tileColumns = Math.max(1, tileColumnRange.endTile - tileColumnRange.startTile + 1)
+  const tileRows = Math.max(1, tileRowRange.endTile - tileRowRange.startTile + 1)
   const tileWorldWidth = localEditTileSizeMeters
   const tileWorldHeight = localEditTileSizeMeters
   const sourceSamplesPerTileX = Math.max(1, Math.ceil(tileWorldWidth / Math.max(sourceStepX, Number.EPSILON)) + 1)

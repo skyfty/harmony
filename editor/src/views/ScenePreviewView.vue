@@ -9624,6 +9624,16 @@ function syncRendererDebugForFrame(currentRenderer: THREE.WebGLRenderer, current
 			groundVisibleChunkTriangleEstimate: rendererDebug.groundChunkTriangles,
 			triangleLabelMeaning: 'sceneTriangleEstimate traverses visible meshes; gpuRenderTrianglesRaw comes from renderer.info.render.triangles',
 		})
+		console.info('[ScenePreview][GroundChunks]', JSON.stringify({
+			loaded: groundChunkDebug.loaded,
+			target: groundChunkDebug.target,
+			total: groundChunkDebug.total,
+			pending: groundChunkDebug.pending,
+			unloaded: groundChunkDebug.unloaded,
+			visible: groundChunkDebug.visible,
+			visibleChunkKeys: groundRenderSnapshot.chunkKeys,
+			loadedMinusVisible: groundChunkDebug.loaded - groundChunkDebug.visible,
+		}))
 	}
 }
 
