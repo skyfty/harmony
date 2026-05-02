@@ -102,6 +102,9 @@ type GroundRuntimeState = {
   flatTilingMaxChunkColumn: number
   hiddenChunkKeys: Set<string>
   hiddenChunkKeysVersion: number
+  visibleChunkKeysCache: string[]
+  visibleChunkKeysVersion: number
+  visibleChunkKeysCacheVersion: number
   lastChunkUpdateAt: number
 
   desiredSignature: string
@@ -3319,6 +3322,9 @@ function ensureGroundRuntimeState(root: THREE.Object3D, definition: GroundDynami
     flatTilingMaxChunkColumn: 0,
     hiddenChunkKeys: new Set(),
     hiddenChunkKeysVersion: 0,
+    visibleChunkKeysCache: [],
+    visibleChunkKeysVersion: 0,
+    visibleChunkKeysCacheVersion: -1,
     lastChunkUpdateAt: 0,
 
     desiredSignature: '',
@@ -3335,6 +3341,10 @@ function ensureGroundRuntimeState(root: THREE.Object3D, definition: GroundDynami
   }
   groundRuntimeStateMap.set(root, next)
   return next
+}
+
+function markGroundVisibleChunkKeysDirty(state: GroundRuntimeState): void {
+  state.visibleChunkKeysVersion += 1
 }
 
 function chunkPoolKey(spec: GroundChunkSpec): string {
@@ -3443,6 +3453,7 @@ function syncGroundFlatChunkBatches(
 
   const material = resolveGroundRuntimeMaterial(root, state)
   const nextBatches = new Map<string, GroundFlatChunkBatchRuntime>(state.flatChunkBatches)
+  let changed = false
 
   desiredFlatChunkGroups.forEach((group, specKey) => {
     const existing = state.flatChunkBatches.get(specKey)
@@ -3479,14 +3490,17 @@ function syncGroundFlatChunkBatches(
         existing.mesh = resizedMesh
         existing.instanceCapacity = nextKeys.length
         root.add(resizedMesh)
+        changed = true
       }
       existing.spec = group.spec
       if (needsResize || !preservesExistingOrder) {
         // 同规格批次直接复用，不重新创建 geometry。
         // 这里会把新进入视野的 flat chunk 追加进缓存，但不会把已经加载的旧 chunk 因为相机移动而删掉。
         refreshGroundFlatChunkBatchInstances(existing, definition, nextKeys)
+        changed = true
       } else if (nextKeys.length > existingKeys.length) {
         appendGroundFlatChunkBatchInstances(existing, definition, nextKeys.slice(existingKeys.length))
+        changed = true
       }
       nextBatches.set(specKey, existing)
       return
@@ -3516,15 +3530,20 @@ function syncGroundFlatChunkBatches(
     refreshGroundFlatChunkBatchInstances(batch, definition, group.keys)
     root.add(mesh)
     nextBatches.set(specKey, batch)
+    changed = true
   })
 
   nextBatches.forEach((batch) => {
     const nextKeys = batch.chunkKeys.filter((key) => !state.chunks.has(key) && !state.hiddenChunkKeys.has(key))
     if (nextKeys.length !== batch.chunkKeys.length) {
       refreshGroundFlatChunkBatchInstances(batch, definition, nextKeys)
+      changed = true
     }
   })
   state.flatChunkBatches = nextBatches
+  if (changed) {
+    markGroundVisibleChunkKeysDirty(state)
+  }
 }
 
 function releaseChunkToPool(state: GroundRuntimeState, runtime: GroundChunkRuntime): void {
@@ -3607,6 +3626,7 @@ function ensureChunkMesh(
   root.add(mesh)
   const runtime: GroundChunkRuntime = { key, chunkRow, chunkColumn, spec, mesh }
   state.chunks.set(key, runtime)
+  markGroundVisibleChunkKeysDirty(state)
   return runtime
 }
 
@@ -4815,6 +4835,7 @@ export function updateGroundChunks(
       }
       releaseChunkToPool(state, runtime)
       state.chunks.delete(key)
+      markGroundVisibleChunkKeysDirty(state)
     })
 
     // Destroy queue (farthest-first outside unload radius).
@@ -4976,6 +4997,7 @@ export function updateGroundChunks(
       // 先把 runtime 放回池子或释放资源，再从 state.chunks 中移除，避免引用悬空。
       releaseChunkToPool(state, runtime)
       state.chunks.delete(entry.key)
+      markGroundVisibleChunkKeysDirty(state)
       destroyedCount += 1
     }
     // 卸载完成后，保留还没来得及处理的剩余项，等下一帧继续。
@@ -5220,10 +5242,17 @@ export function getVisibleInfiniteGroundChunkKeys(target: THREE.Object3D): strin
   if (!state) {
     return []
   }
+  if (state.visibleChunkKeysCacheVersion === state.visibleChunkKeysVersion) {
+    return state.visibleChunkKeysCache
+  }
+
   // 返回当前场景里已经可见的所有 chunk key，包括普通 chunk Mesh 和 flat InstancedMesh 批次。
   // 这个集合常被拾取、可见范围同步和调试工具复用，所以一定要同时覆盖两条渲染路径。
   const visibleKeys = new Set<string>()
   state.chunks.forEach((_runtime, key) => {
+    if (state.hiddenChunkKeys.has(key)) {
+      return
+    }
     const sharedKey = resolveSharedGroundChunkKeyFromRuntimeKey(key)
     if (sharedKey) {
       visibleKeys.add(sharedKey)
@@ -5231,16 +5260,19 @@ export function getVisibleInfiniteGroundChunkKeys(target: THREE.Object3D): strin
   })
   state.flatChunkBatches.forEach((batch) => {
     batch.chunkKeys.forEach((key) => {
+      if (state.hiddenChunkKeys.has(key)) {
+        return
+      }
       const sharedKey = resolveSharedGroundChunkKeyFromRuntimeKey(key)
       if (sharedKey) {
         visibleKeys.add(sharedKey)
       }
     })
   })
-  return Array.from(visibleKeys).filter((key) => {
-    const runtimeKey = resolveRuntimeGroundChunkKeyFromSharedKey(key)
-    return runtimeKey ? !state.hiddenChunkKeys.has(runtimeKey) : false
-  })
+
+  state.visibleChunkKeysCache = Array.from(visibleKeys)
+  state.visibleChunkKeysCacheVersion = state.visibleChunkKeysVersion
+  return state.visibleChunkKeysCache
 }
 
 export function setInfiniteGroundHiddenChunkKeys(
@@ -5284,6 +5316,7 @@ export function setInfiniteGroundHiddenChunkKeys(
   // 所以普通 chunk 和 flat 批次都要一起清掉，否则就会出现“key 已经隐藏了，但画面里还留着旧实例”的错觉。
   state.hiddenChunkKeys = nextHiddenChunkKeys
   state.hiddenChunkKeysVersion += 1
+  markGroundVisibleChunkKeysDirty(state)
   state.desiredSignature = ''
   state.pendingCreates = state.pendingCreates.filter((entry) => !nextHiddenChunkKeys.has(entry.key))
   state.chunks.forEach((runtime, key) => {
@@ -5292,6 +5325,7 @@ export function setInfiniteGroundHiddenChunkKeys(
     }
     releaseChunkToPool(state, runtime)
     state.chunks.delete(key)
+    markGroundVisibleChunkKeysDirty(state)
   })
   state.flatChunkBatches.forEach((batch, specKey) => {
     const nextKeys = batch.chunkKeys.filter((key) => !nextHiddenChunkKeys.has(key))
@@ -5316,6 +5350,7 @@ export function setInfiniteGroundHiddenChunkKeys(
         chunkKeys: [...nextKeys],
       }
     }
+    markGroundVisibleChunkKeysDirty(state)
   })
     return true
   }
