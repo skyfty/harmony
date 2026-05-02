@@ -1,5 +1,5 @@
-import { GROUND_TERRAIN_CHUNK_SIZE_METERS, type GroundDynamicMesh, type GroundGenerationSettings } from './index'
-import { resolveGroundWorkingGridSize, resolveGroundWorkingSpanMeters } from './index'
+import { type GroundDynamicMesh, type GroundGenerationSettings } from './index'
+import { resolveGroundWorldBounds, resolveGroundWorkingGridSize } from './index'
 
 type PerlinNoise3D = (x: number, y: number, z: number) => number
 type VoronoiNoise2D = (x: number, z: number) => number
@@ -227,18 +227,20 @@ function getGenerationRuntime(settings: GroundGenerationSettings): GenerationRun
 }
 
 function buildGroundBaseHeightGridSignature(
-  mesh: Pick<GroundDynamicMesh, 'cellSize' | 'chunkSizeMeters' | 'renderRadiusChunks' | 'collisionRadiusChunks' | 'generation' | 'terrainMode'>,
+  mesh: Pick<GroundDynamicMesh, 'cellSize' | 'worldBounds' | 'chunkSizeMeters' | 'renderRadiusChunks' | 'collisionRadiusChunks' | 'generation' | 'terrainMode'>,
 ): string {
   const generation = mesh.generation ? normalizeGroundGenerationSettings(mesh.generation) : null
   const generationSignature = generation ? buildGenerationSignature(generation) : 'none'
   const cellSize = Number.isFinite(mesh.cellSize) && mesh.cellSize > 0 ? mesh.cellSize : 1
   const gridSize = resolveGroundWorkingGridSize(mesh)
-  const spanMeters = resolveGroundWorkingSpanMeters(mesh)
-  return `${gridSize.rows}|${gridSize.columns}|${cellSize}|${spanMeters}|${spanMeters}|${generationSignature}`
+  const bounds = resolveGroundWorldBounds(mesh)
+  const width = bounds.maxX - bounds.minX
+  const depth = bounds.maxZ - bounds.minZ
+  return `${gridSize.rows}|${gridSize.columns}|${cellSize}|${width}|${depth}|${generationSignature}`
 }
 
 function getOrCreateGroundBaseHeightGrid(
-  mesh: Pick<GroundDynamicMesh, 'cellSize' | 'chunkSizeMeters' | 'renderRadiusChunks' | 'collisionRadiusChunks' | 'generation' | 'terrainMode'>,
+  mesh: Pick<GroundDynamicMesh, 'cellSize' | 'worldBounds' | 'chunkSizeMeters' | 'renderRadiusChunks' | 'collisionRadiusChunks' | 'generation' | 'terrainMode'>,
 ): GroundBaseHeightGridCacheEntry {
   const gridSize = resolveGroundWorkingGridSize(mesh)
   const columns = gridSize.columns
@@ -272,21 +274,17 @@ function getOrCreateGroundBaseHeightGrid(
 
   const runtime = getGenerationRuntime(normalized)
   const cellSize = Number.isFinite(mesh.cellSize) && mesh.cellSize > 0 ? mesh.cellSize : 1
-  const spanMeters = resolveGroundWorkingSpanMeters(mesh)
-  const width = spanMeters
-  const depth = spanMeters
-  const halfWidth = width * 0.5
-  const halfDepth = depth * 0.5
+  const bounds = resolveGroundWorldBounds(mesh)
 
   for (let row = 0; row <= rows; row += 1) {
     const baseOffset = row * stride
-    const z = -halfDepth + row * cellSize
+    const z = bounds.minZ + row * cellSize
     const edgeRowFactor = normalized.edgeFalloff && normalized.edgeFalloff > 0
       ? Math.pow(1 - Math.min(1, Math.abs((row / rows) * 2 - 1)), normalized.edgeFalloff)
       : 1
 
     for (let column = 0; column <= columns; column += 1) {
-      const x = -halfWidth + column * cellSize
+      const x = bounds.minX + column * cellSize
       let height = sampleBaseValue(runtime, x, z) * (normalized.noiseAmplitude ?? 0)
       if (runtime.useDetail && runtime.detailNoise) {
         height += runtime.detailNoise(x / runtime.detailScale, z / runtime.detailScale, 0.5) * runtime.detailAmplitude
@@ -380,7 +378,7 @@ function clampRegionIndex(value: number, min: number, max: number): number {
 }
 
 export function computeGroundBaseHeightRegion(
-  mesh: Pick<GroundDynamicMesh, 'cellSize' | 'chunkSizeMeters' | 'renderRadiusChunks' | 'collisionRadiusChunks' | 'generation' | 'terrainMode'>,
+  mesh: Pick<GroundDynamicMesh, 'cellSize' | 'worldBounds' | 'chunkSizeMeters' | 'renderRadiusChunks' | 'collisionRadiusChunks' | 'generation' | 'terrainMode'>,
   minRowInput: number,
   maxRowInput: number,
   minColumnInput: number,
@@ -399,18 +397,12 @@ export function computeGroundBaseHeightRegion(
       return { minRow, maxRow, minColumn, maxColumn, stride, values }
     }
 
-    const explicitChunkSizeMeters = Number(mesh.chunkSizeMeters)
-    const chunkSizeMeters = Number.isFinite(explicitChunkSizeMeters) && explicitChunkSizeMeters > 0
-      ? explicitChunkSizeMeters
-      : GROUND_TERRAIN_CHUNK_SIZE_METERS
-    const spanMeters = Math.max(GROUND_TERRAIN_CHUNK_SIZE_METERS, chunkSizeMeters * 2)
-    const halfWidth = spanMeters * 0.5
-    const halfDepth = spanMeters * 0.5
+    const bounds = resolveGroundWorldBounds(mesh)
     for (let row = minRow; row <= maxRow; row += 1) {
       const baseOffset = (row - minRow) * stride
-      const z = -halfDepth + row * cellSize
+      const z = bounds.minZ + row * cellSize
       for (let column = minColumn; column <= maxColumn; column += 1) {
-        const x = -halfWidth + column * cellSize
+        const x = bounds.minX + column * cellSize
         values[baseOffset + (column - minColumn)] = sampleGroundBaseHeightAtWorld(mesh, x, z)
       }
     }
@@ -446,21 +438,15 @@ export function computeGroundBaseHeightRegion(
 }
 
 export function computeGroundBaseHeightAtVertex(
-  mesh: Pick<GroundDynamicMesh, 'cellSize' | 'chunkSizeMeters' | 'renderRadiusChunks' | 'collisionRadiusChunks' | 'generation' | 'terrainMode'>,
+  mesh: Pick<GroundDynamicMesh, 'cellSize' | 'worldBounds' | 'chunkSizeMeters' | 'renderRadiusChunks' | 'collisionRadiusChunks' | 'generation' | 'terrainMode'>,
   row: number,
   column: number,
 ): number {
   if (mesh.terrainMode === 'infinite') {
     const cellSize = Number.isFinite(mesh.cellSize) && mesh.cellSize > 0 ? mesh.cellSize : 1
-    const explicitChunkSizeMeters = Number(mesh.chunkSizeMeters)
-    const chunkSizeMeters = Number.isFinite(explicitChunkSizeMeters) && explicitChunkSizeMeters > 0
-      ? explicitChunkSizeMeters
-      : GROUND_TERRAIN_CHUNK_SIZE_METERS
-    const spanMeters = Math.max(GROUND_TERRAIN_CHUNK_SIZE_METERS, chunkSizeMeters * 2)
-    const halfWidth = spanMeters * 0.5
-    const halfDepth = spanMeters * 0.5
-    const x = -halfWidth + column * cellSize
-    const z = -halfDepth + row * cellSize
+    const bounds = resolveGroundWorldBounds(mesh)
+    const x = bounds.minX + column * cellSize
+    const z = bounds.minZ + row * cellSize
     return sampleGroundBaseHeightAtWorld(mesh, x, z)
   }
 

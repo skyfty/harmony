@@ -19,7 +19,6 @@ import type {
   PlanningSceneData,
   PlanningTerrainDemData,
   PlanningTerrainData,
-  PlanningTerrainBudget,
   PlanningTerrainControlPoint,
   PlanningTerrainFalloff,
   PlanningTerrainGeographicBounds,
@@ -41,13 +40,14 @@ import {
   savePlanningDemToIndexedDB as savePlanningDemToStorage,
   storePlanningDemBlobByHash,
 } from '@/utils/planningDemStorage'
-import { resolveGroundWorkingSpanMeters } from '@schema'
+import { resolveGroundWorldBounds } from '@schema'
 import {
   demImportResultToTerrainData,
   isPlanningDemHeightmapImageSource,
   isSupportedPlanningDemSource,
   parsePlanningDemFile,
   parsePlanningDemBlob,
+  type PlanningDemImportOptions,
 } from '@/utils/planningDemImport'
 
 
@@ -395,21 +395,6 @@ function isTerrainEmptyForSnapshot(snapshot: PlanningTerrainData | null | undefi
   return true
 }
 
-function computeTerrainBudget(data: PlanningTerrainData | null | undefined): PlanningTerrainBudget {
-  try {
-    const cellSize = Number(data?.grid?.cellSize ?? 1)
-    const w = Math.max(1, sceneGroundSize.value.width)
-    const h = Math.max(1, sceneGroundSize.value.height)
-    const cols = Math.max(1, Math.ceil(w / Math.max(1e-6, cellSize)))
-    const rows = Math.max(1, Math.ceil(h / Math.max(1e-6, cellSize)))
-    const vertexCount = cols * rows
-    const limited = vertexCount > TERRAIN_VERTEX_COUNT_LIMIT
-    return { vertexCount, expectedKeys: Object.keys(data?.overrides?.cells ?? {}).length, limited }
-  } catch {
-    return { vertexCount: 0, expectedKeys: 0, limited: false }
-  }
-}
-
 // Terrain brush removed: Terrain layer uses polygon/rectangle tools only.
 
 // Temporary guides that follow the mouse (not added to the persistent guides list)
@@ -473,13 +458,102 @@ const renameFieldElByLayerId = new Map<string, HTMLElement>()
 const activeLayer = computed(() => layers.value.find((layer) => layer.id === activeLayerId.value) ?? layers.value[0])
 
 const sceneGroundSize = computed(() => {
-  const spanMeters = resolveGroundWorkingSpanMeters(sceneStore.groundSettings)
+  const bounds = resolveGroundWorldBounds(sceneStore.groundSettings)
+  const width = bounds.maxX - bounds.minX
+  const height = bounds.maxZ - bounds.minZ
   return {
-    width: Number.isFinite(spanMeters) ? spanMeters : 100,
-    height: Number.isFinite(spanMeters) ? spanMeters : 100,
+    width: Number.isFinite(width) ? width : 100,
+    height: Number.isFinite(height) ? height : 100,
   }
 })
 const visibleLayerIds = computed(() => new Set(layers.value.filter((layer) => layer.visible).map((layer) => layer.id)))
+
+const DEFAULT_PNG_HEIGHTMAP_METERS_PER_PIXEL = 30
+
+function resolvePlanningWorldSpan(bounds: PlanningTerrainWorldBounds | null | undefined): { width: number; height: number } | null {
+  if (!bounds) {
+    return null
+  }
+  const width = Math.abs(Number(bounds.maxX) - Number(bounds.minX))
+  const height = Math.abs(Number(bounds.maxY) - Number(bounds.minY))
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    return null
+  }
+  return { width, height }
+}
+
+function resolvePlanningHeightmapMetersPerPixel(data: PlanningTerrainDemData | null | undefined): number | null {
+  if (!data || !isPlanningDemHeightmapImageSource(data.filename ?? '', data.mimeType ?? null)) {
+    return null
+  }
+  const span = resolvePlanningWorldSpan(data.worldBounds)
+  const width = Math.max(1, Math.trunc(Number(data.width)))
+  const height = Math.max(1, Math.trunc(Number(data.height)))
+  if (!span || width < 2 || height < 2) {
+    return null
+  }
+  const stepX = span.width / Math.max(1, width - 1)
+  const stepY = span.height / Math.max(1, height - 1)
+  if (!Number.isFinite(stepX) || !Number.isFinite(stepY) || stepX <= 0 || stepY <= 0) {
+    return null
+  }
+  return Math.abs(stepX - stepY) <= 1e-6 ? stepX : (stepX + stepY) * 0.5
+}
+
+function resolveRecommendedTerrainCellSize(data: PlanningTerrainDemData | null | undefined): number | null {
+  if (!data) {
+    return null
+  }
+  const span = resolvePlanningWorldSpan(data.worldBounds)
+  if (!span) {
+    return null
+  }
+  const maxSpan = Math.max(span.width, span.height)
+  if (!(maxSpan > 0)) {
+    return null
+  }
+  const budgetCellSize = maxSpan / Math.sqrt(TERRAIN_VERTEX_COUNT_LIMIT)
+  const sampleStep = Number(data.sampleStepMeters)
+  const sourceDrivenCellSize = Number.isFinite(sampleStep) && sampleStep > 0 ? sampleStep : 1
+  const recommended = Math.max(sourceDrivenCellSize, budgetCellSize)
+  return Math.min(20, Math.max(0.1, Number(recommended.toFixed(2))))
+}
+
+function buildPlanningDemParseOptions(
+  terrainDem: PlanningTerrainDemData | null | undefined,
+  overrides: Partial<PlanningDemImportOptions> = {},
+): PlanningDemImportOptions {
+  const isHeightmapImage = Boolean(terrainDem && isPlanningDemHeightmapImageSource(terrainDem.filename ?? '', terrainDem.mimeType ?? null))
+  return {
+    minElevation: terrainDem?.minElevation ?? null,
+    maxElevation: terrainDem?.maxElevation ?? null,
+    worldBoundsOverride: isHeightmapImage ? (terrainDem?.worldBounds ?? null) : null,
+    ...overrides,
+  }
+}
+
+function validatePlanningDemImport(file: File): { metersPerPixel?: number } {
+  const mimeType = file.type || null
+  if (!isSupportedPlanningDemSource(file.name, mimeType)) {
+    throw new Error('Only GeoTIFF (.tif, .tiff) and PNG heightmaps are supported for DEM import.')
+  }
+  const usesImageHeightmap = isPlanningDemHeightmapImageSource(file.name, mimeType)
+  if (!usesImageHeightmap) {
+    return {}
+  }
+  const normalizedName = file.name.trim().toLowerCase()
+  const isPng = normalizedName.endsWith('.png') || mimeType === 'image/png'
+  if (!isPng) {
+    throw new Error('Image DEM import only accepts grayscale PNG heightmaps. Convert the file in QGIS or Photoshop to a fully opaque grayscale PNG, then re-import it.')
+  }
+  const metersPerPixel = DEFAULT_PNG_HEIGHTMAP_METERS_PER_PIXEL
+  if (!Number.isFinite(metersPerPixel) || metersPerPixel <= 0) {
+    throw new Error('PNG heightmap import requires a valid meters-per-pixel value greater than 0. Enter the real-world scale before importing.')
+  }
+  return {
+    metersPerPixel: Number(metersPerPixel.toFixed(6)),
+  }
+}
 
 // Top of the layer list (earlier in list) = higher layer; SVG elements drawn later appear on top.
 // Drawing order is not used when only the active layer is shown.
@@ -1825,6 +1899,66 @@ const selectedDemUsesHeightmapImage = computed<boolean>(() => {
   return isPlanningDemHeightmapImageSource(dem.filename ?? '', dem.mimeType ?? null)
 })
 
+const selectedDemMetersPerPixel = computed<number | null>({
+  get: () => resolvePlanningHeightmapMetersPerPixel(selectedDem.value),
+  set: (value: number | null) => {
+    const dem = selectedDem.value
+    if (!dem || !selectedDemUsesHeightmapImage.value) {
+      return
+    }
+    const metersPerPixel = Number(value)
+    if (!Number.isFinite(metersPerPixel) || metersPerPixel <= 0) {
+      return
+    }
+    const width = Math.max(1, Math.trunc(Number(dem.width)))
+    const height = Math.max(1, Math.trunc(Number(dem.height)))
+    if (width < 2 || height < 2) {
+      return
+    }
+    const centerX = dem.worldBounds ? (Number(dem.worldBounds.minX) + Number(dem.worldBounds.maxX)) * 0.5 : 0
+    const centerY = dem.worldBounds ? (Number(dem.worldBounds.minY) + Number(dem.worldBounds.maxY)) * 0.5 : 0
+    const halfWidth = (width - 1) * metersPerPixel * 0.5
+    const halfHeight = (height - 1) * metersPerPixel * 0.5
+    dem.worldBounds = {
+      minX: centerX - halfWidth,
+      minY: centerY - halfHeight,
+      maxX: centerX + halfWidth,
+      maxY: centerY + halfHeight,
+    }
+    dem.sampleStepMeters = metersPerPixel
+    markPlanningDirty()
+  },
+})
+const selectedDemWorldSpan = computed<{ width: number; height: number } | null>(() => resolvePlanningWorldSpan(selectedDem.value?.worldBounds))
+const recommendedTerrainCellSize = computed<number | null>(() => resolveRecommendedTerrainCellSize(planningTerrain.value.dem))
+const terrainCellSizeRecommendationReason = computed<string | null>(() => {
+  const dem = planningTerrain.value.dem
+  const recommended = recommendedTerrainCellSize.value
+  if (!dem || !recommended) {
+    return null
+  }
+  const span = resolvePlanningWorldSpan(dem.worldBounds)
+  if (!span) {
+    return null
+  }
+  const current = terrainCellSizeModel.value
+  const sampleStep = Number(dem.sampleStepMeters)
+  const sourceStepLabel = Number.isFinite(sampleStep) && sampleStep > 0 ? `${sampleStep.toFixed(2)} m source step` : 'available terrain coverage'
+  const sizeLabel = `${Math.round(span.width)} x ${Math.round(span.height)} m extent`
+  if (current + 1e-6 < recommended) {
+    return `${sizeLabel}; recommend ${recommended.toFixed(2)} m terrain cell size to stay within the working-grid budget while matching ${sourceStepLabel}.`
+  }
+  return `${sizeLabel}; current terrain cell size is compatible with the working-grid budget.`
+})
+
+function applyRecommendedTerrainCellSize() {
+  const recommended = recommendedTerrainCellSize.value
+  if (!recommended) {
+    return
+  }
+  terrainCellSizeModel.value = recommended
+}
+
 async function refreshPlanningDemPreview(): Promise<void> {
   const terrainDem = planningTerrain.value.dem
   if (!terrainDem?.sourceFileHash) {
@@ -1840,10 +1974,7 @@ async function refreshPlanningDemPreview(): Promise<void> {
     blob,
     terrainDem.filename ?? 'DEM',
     (terrainDem.mimeType ?? blob.type) || null,
-    {
-      minElevation: terrainDem.minElevation ?? null,
-      maxElevation: terrainDem.maxElevation ?? null,
-    },
+    buildPlanningDemParseOptions(terrainDem),
   )
   planningDemPreviewUrl.value = parsed.preview?.dataUrl ?? null
 }
@@ -1995,9 +2126,6 @@ const terrainContourWaterPresetModel = computed<WaterPresetId | null>({
     markPlanningDirty()
   },
 })
-
-const terrainBudget = computed(() => computeTerrainBudget(planningTerrain.value))
-const terrainLimited = computed(() => terrainBudget.value.limited)
 
 const terrainCellSizeModel = computed<number>({
   get: () => {
@@ -4678,10 +4806,6 @@ function clearPlanningDemImport() {
   markPlanningDirty()
 }
 
-function isPlanningDemFile(file: File): boolean {
-  return isSupportedPlanningDemSource(file.name, file.type || null)
-}
-
 function isPlanningOrthophotoFile(file: File): boolean {
   const name = file.name.toLowerCase()
   return file.type.startsWith('image/') || name.endsWith('.png') || name.endsWith('.jpg') || name.endsWith('.jpeg') || name.endsWith('.webp')
@@ -4690,13 +4814,8 @@ function isPlanningOrthophotoFile(file: File): boolean {
 async function loadPlanningDemFile(file: File) {
   demImportError.value = null
   try {
-    if (!isPlanningDemFile(file)) {
-      throw new Error('Only GeoTIFF or image heightmap files are supported for DEM import.')
-    }
-    const result = await parsePlanningDemFile(file, {
-      minElevation: planningTerrain.value.dem?.minElevation ?? null,
-      maxElevation: planningTerrain.value.dem?.maxElevation ?? null,
-    })
+    const validation = validatePlanningDemImport(file)
+    const result = await parsePlanningDemFile(file, buildPlanningDemParseOptions(planningTerrain.value.dem, validation))
     await storePlanningDemBlobByHash(result.sourceFileHash, file)
     const nextDem = demImportResultToTerrainData(result)
     planningTerrain.value = {
@@ -5266,8 +5385,6 @@ void reorderPlanningImages
 // Keep terrain-related symbols to avoid unused-local errors (terrain panel removed)
 void terrainContourHeightModel
 void terrainContourBlendModel
-void terrainLimited
-void terrainCellSizeModel
 void terrainNoiseEnabledModel
 void terrainNoiseModeOptions
 void terrainNoiseModeModel
@@ -5352,10 +5469,7 @@ async function hydratePlanningDemResources() {
       blob,
       terrainDem.filename ?? 'DEM',
       (terrainDem.mimeType ?? blob.type) || null,
-      {
-        minElevation: terrainDem.minElevation ?? null,
-        maxElevation: terrainDem.maxElevation ?? null,
-      },
+      buildPlanningDemParseOptions(terrainDem),
     )
     if (demHydrationToken.value !== token) {
       return
@@ -5470,10 +5584,13 @@ onBeforeUnmount(() => {
                 </div>
               </div>
               <div v-if="demImportError" class="upload-error">{{ demImportError }}</div>
+              <div class="dem-import-panel__hint">
+                PNG heightmap defaults to 30 m/px on import and can be edited in the DEM properties panel after import. Use QGIS or Photoshop to fix scale and raster quality before importing.
+              </div>
               <input
                 ref="demFileInputRef"
                 type="file"
-                accept=".tif,.tiff,.png,.jpg,.jpeg,.webp,image/*"
+                accept=".tif,.tiff,.png"
                 class="sr-only"
                 @change="handleDemFileChange"
               >
@@ -5498,11 +5615,6 @@ onBeforeUnmount(() => {
                   </div>
                 </v-list-item>
               </v-list>
-              <div class="dem-import-panel__preview">
-                <img v-if="planningDemPreviewUrl" :src="planningDemPreviewUrl" alt="DEM preview">
-                <img v-else-if="planningOrthophotoPreviewUrl" :src="planningOrthophotoPreviewUrl" alt="Orthophoto preview">
-                <div v-else class="dem-import-panel__empty">Preview will appear here after import.</div>
-              </div>
             </div>
             <div v-else class="dem-import-panel__empty">Import a GeoTIFF DEM or image heightmap to generate terrain heightmap data.</div>
           </section>
@@ -6224,7 +6336,22 @@ onBeforeUnmount(() => {
               <div class="property-panel__meta-row"><span>Source type</span><strong>{{ selectedDemUsesHeightmapImage ? 'Image heightmap' : 'GeoTIFF DEM' }}</strong></div>
               <div class="property-panel__meta-row"><span>Size</span><strong>{{ selectedDem.width ?? '—' }} × {{ selectedDem.height ?? '—' }}</strong></div>
               <div class="property-panel__meta-row"><span>Elevation</span><strong>{{ selectedDem.minElevation ?? '—' }} → {{ selectedDem.maxElevation ?? '—' }}</strong></div>
+              <div v-if="selectedDemWorldSpan" class="property-panel__meta-row"><span>World span</span><strong>{{ formatOptionalNumber(selectedDemWorldSpan.width) }} × {{ formatOptionalNumber(selectedDemWorldSpan.height) }} m</strong></div>
               <div v-if="selectedDemUsesHeightmapImage" class="property-panel__sub-block">
+                <div class="property-panel__section-title property-panel__section-title--muted">Heightmap Scale</div>
+                <v-text-field
+                  v-model.number="selectedDemMetersPerPixel"
+                  type="number"
+                  density="compact"
+                  label="Meters per pixel"
+                  suffix="m/px"
+                  min="0.000001"
+                  step="0.1"
+                  hide-details
+                />
+                <div class="property-panel__hint">
+                  Change this when the PNG was preprocessed in QGIS or Photoshop and you need a different real-world scale.
+                </div>
                 <div class="property-panel__section-title property-panel__section-title--muted">Heightmap Range</div>
                 <v-text-field
                   v-model.number="selectedDemMinElevationModel"
@@ -6240,6 +6367,30 @@ onBeforeUnmount(() => {
                   label="Max elevation (m)"
                   hide-details
                 />
+              </div>
+              <div class="property-panel__sub-block">
+                <div class="property-panel__section-title property-panel__section-title--muted">Conversion Grid</div>
+                <v-text-field
+                  v-model.number="terrainCellSizeModel"
+                  type="number"
+                  density="compact"
+                  label="Terrain cell size (m)"
+                  min="0.1"
+                  max="20"
+                  step="0.1"
+                  hide-details
+                />
+                <div v-if="terrainCellSizeRecommendationReason" class="property-panel__hint">{{ terrainCellSizeRecommendationReason }}</div>
+                <v-btn
+                  v-if="recommendedTerrainCellSize"
+                  size="small"
+                  variant="text"
+                  color="primary"
+                  class="property-panel__inline-action"
+                  @click="applyRecommendedTerrainCellSize"
+                >
+                  Apply recommended {{ formatOptionalNumber(recommendedTerrainCellSize) }} m cell size
+                </v-btn>
               </div>
               <div class="property-panel__meta-row"><span>Sample step</span><strong>{{ formatOptionalNumber(selectedDem.sampleStepMeters) }} m</strong></div>
               <div class="property-panel__meta-row"><span>Geographic bounds</span><strong>{{ formatBoundsLine(selectedDem.geographicBounds) }}</strong></div>
@@ -6435,6 +6586,12 @@ onBeforeUnmount(() => {
   gap: 10px;
 }
 
+.dem-import-panel__hint {
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: rgba(244, 246, 251, 0.68);
+}
+
 .dem-layer-list {
   padding: 0;
   background: transparent;
@@ -6448,7 +6605,6 @@ onBeforeUnmount(() => {
   font-size: 0.72rem;
 }
 
-.dem-import-panel__preview,
 .dem-import-panel__empty {
   width: 100%;
   height: 96px;
@@ -6485,6 +6641,7 @@ onBeforeUnmount(() => {
   margin-top: 8px;
   color: #ff8a65;
   font-size: 0.85rem;
+  white-space: pre-line;
 }
 
 .layer-item.active {
@@ -6580,6 +6737,18 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+.property-panel__hint {
+  margin-top: 4px;
+  font-size: 0.76rem;
+  line-height: 1.45;
+  color: rgba(244, 246, 251, 0.68);
+}
+
+.property-panel__inline-action {
+  align-self: flex-start;
+  padding-left: 0;
 }
 
 .property-panel__density-title {

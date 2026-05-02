@@ -8,6 +8,8 @@ type BuildTerrainGridRequest = {
 	cellSize: number
 	width: number
 	depth: number
+	minX?: number
+	minZ?: number
 	majorSpacing: number
 	minorSpacing: number
 	lineOffset: number
@@ -92,8 +94,8 @@ function buildGridSegmentsInWorker(message: BuildTerrainGridRequest): { minor: F
 	const cellSize = Math.max(1e-4, message.cellSize)
 	const width = Math.max(Math.abs(message.width), columns * cellSize)
 	const depth = Math.max(Math.abs(message.depth), rows * cellSize)
-	const halfWidth = width * 0.5
-	const halfDepth = depth * 0.5
+	const minX = Number.isFinite(message.minX) ? Number(message.minX) : -width * 0.5
+	const minZ = Number.isFinite(message.minZ) ? Number(message.minZ) : -depth * 0.5
 	const stepX = columns > 0 ? width / columns : 0
 	const stepZ = rows > 0 ? depth / rows : 0
 
@@ -119,10 +121,10 @@ function buildGridSegmentsInWorker(message: BuildTerrainGridRequest): { minor: F
 	const xCoords = new Float32Array(sampledColumnCount)
 	const zCoords = new Float32Array(sampledRowCount)
 	for (let columnIndex = sampleMinColumn; columnIndex <= sampleMaxColumn; columnIndex += 1) {
-		xCoords[columnIndex - sampleMinColumn] = -halfWidth + columnIndex * stepX
+		xCoords[columnIndex - sampleMinColumn] = minX + columnIndex * stepX
 	}
 	for (let rowIndex = sampleMinRow; rowIndex <= sampleMaxRow; rowIndex += 1) {
-		zCoords[rowIndex - sampleMinRow] = -halfDepth + rowIndex * stepZ
+		zCoords[rowIndex - sampleMinRow] = minZ + rowIndex * stepZ
 	}
 
 	const stride = sampledColumnCount

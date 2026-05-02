@@ -12,7 +12,10 @@
     "type-check:asset-types": "tsc -p tsconfig.asset-types.json --noEmit",
     "check": "pnpm run type-check && pnpm run type-check:asset-types",
     "check:ground-local-edit": "pnpm run build && node ./scripts/fix-esm-extensions.mjs ./dist && node ./scripts/ground-local-edit-regression.mjs",
-    "check:infinite-ground-visibility": "pnpm run build && node ./scripts/fix-esm-extensions.mjs ./dist && node ./scripts/infinite-ground-visibility-regression.mjs"
+    "check:infinite-ground-visibility": "pnpm run build && node ./scripts/fix-esm-extensions.mjs ./dist && node ./scripts/infinite-ground-visibility-regression.mjs",
+    "check:quantized-terrain-mesh": "pnpm run build && node ./scripts/fix-esm-extensions.mjs ./dist && node ./scripts/quantized-terrain-mesh-regression.mjs",
+    "check:quantized-terrain-dataset": "pnpm run build && node ./scripts/fix-esm-extensions.mjs ./dist && node ./scripts/quantized-terrain-dataset-regression.mjs",
+    "check:quantized-terrain-pack": "pnpm run build && node ./scripts/fix-esm-extensions.mjs ./dist && node ./scripts/quantized-terrain-pack-regression.mjs"
   },
   "engines": {
     "pnpm": ">=10.0.0"

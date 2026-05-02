@@ -5,7 +5,7 @@ import type {
 	Vector3Like,
 	GroundDynamicMesh,
 } from './index'
-import { resolveGroundWorkingSpanMeters } from './index'
+import { resolveGroundWorldBounds } from './index'
 import { isGroundDynamicMesh } from './groundHeightfield'
 
 export const DEFAULT_AIR_WALL_HEIGHT = 8
@@ -107,9 +107,11 @@ export function buildGroundAirWallDefinitions(options: BuildGroundAirWallOptions
 	const wallThickness = Math.max(MIN_DIMENSION, thickness ?? DEFAULT_AIR_WALL_THICKNESS)
 	const wallHeightBase = Math.max(MIN_DIMENSION, height ?? DEFAULT_AIR_WALL_HEIGHT)
 	const padding = Math.max(0, verticalPadding ?? DEFAULT_AIR_WALL_VERTICAL_PADDING)
-	const spanMeters = resolveGroundWorkingSpanMeters(mesh)
-	const worldWidth = Math.max(MIN_DIMENSION, spanMeters * Math.abs(scale.x))
-	const worldDepth = Math.max(MIN_DIMENSION, spanMeters * Math.abs(scale.z))
+	const groundBounds = resolveGroundWorldBounds(mesh)
+	const localCenterX = (groundBounds.minX + groundBounds.maxX) * 0.5
+	const localCenterZ = (groundBounds.minZ + groundBounds.maxZ) * 0.5
+	const worldWidth = Math.max(MIN_DIMENSION, (groundBounds.maxX - groundBounds.minX) * Math.abs(scale.x))
+	const worldDepth = Math.max(MIN_DIMENSION, (groundBounds.maxZ - groundBounds.minZ) * Math.abs(scale.z))
 	const halfWidth = worldWidth * 0.5
 	const halfDepth = worldDepth * 0.5
 	let wallHeight = wallHeightBase
@@ -130,6 +132,9 @@ export function buildGroundAirWallDefinitions(options: BuildGroundAirWallOptions
 	const forwardAxis = new THREE.Vector3(0, 0, 1).applyQuaternion(quaternion).normalize()
 	const upAxis = new THREE.Vector3(0, 1, 0).applyQuaternion(quaternion).normalize()
 	const yawQuaternionHelper = new THREE.Quaternion()
+	const groundCenter = position.clone()
+		.addScaledVector(rightAxis, localCenterX * scale.x)
+		.addScaledVector(forwardAxis, localCenterZ * scale.z)
 	const result: AirWallDefinition[] = []
 	const pushWall = (
 		key: string,
@@ -138,7 +143,7 @@ export function buildGroundAirWallDefinitions(options: BuildGroundAirWallOptions
 		offsetDistance: number,
 		debugYaw: number,
 	) => {
-		const center = position.clone().add(offsetAxis.clone().multiplyScalar(offsetDistance))
+		const center = groundCenter.clone().add(offsetAxis.clone().multiplyScalar(offsetDistance))
 		const bodyPosition = new CANNON.Vec3(center.x, wallCenterY, center.z)
 		const bodyQuaternion = quaternion.clone()
 		const debugQuaternion = quaternion.clone().multiply(yawQuaternionHelper.setFromAxisAngle(upAxis, debugYaw))

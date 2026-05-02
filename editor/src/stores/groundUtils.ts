@@ -10,6 +10,7 @@ import {
   type GroundGenerationSettings,
   type GroundSettings,
   type SceneNode,
+  normalizeGroundWorldBounds,
   resolveGroundWorkingGridSize,
 } from '@schema'
 import type { SceneMaterialProps, SceneNodeMaterial, SceneMaterialType } from '@/types/material'
@@ -133,6 +134,7 @@ export function cloneGroundDynamicMesh(definition: GroundDynamicMeshLike): Groun
   const result: GroundDynamicMeshResult = {
     type: 'Ground',
     terrainMode: definition.terrainMode ?? 'infinite',
+    worldBounds: normalizeGroundWorldBounds(definition.worldBounds) ?? null,
     chunkSizeMeters: definition.chunkSizeMeters ?? GROUND_TERRAIN_CHUNK_SIZE_METERS,
     baseHeight: definition.baseHeight ?? 0,
     renderRadiusChunks: definition.renderRadiusChunks ?? DEFAULT_GROUND_RENDER_RADIUS_CHUNKS,
@@ -177,9 +179,18 @@ export function normalizeGroundDimension(value: unknown, fallback: number): numb
 }
 
 export function normalizeGroundSettings(settings: Partial<GroundSettings> | null | undefined): GroundSettings {
+  const width = normalizeGroundDimension(settings?.width as unknown, DEFAULT_GROUND_EXTENT)
+  const depth = normalizeGroundDimension(settings?.depth as unknown, DEFAULT_GROUND_EXTENT)
+  const normalizedWorldBounds = normalizeGroundWorldBounds(settings?.worldBounds)
   return {
-    width: normalizeGroundDimension(settings?.width as unknown, DEFAULT_GROUND_EXTENT),
-    depth: normalizeGroundDimension(settings?.depth as unknown, DEFAULT_GROUND_EXTENT),
+    width,
+    depth,
+    worldBounds: normalizedWorldBounds ?? {
+      minX: -width * 0.5,
+      maxX: width * 0.5,
+      minZ: -depth * 0.5,
+      maxZ: depth * 0.5,
+    },
     chunkSizeMeters: normalizeGroundDimension(settings?.chunkSizeMeters as unknown, GROUND_TERRAIN_CHUNK_SIZE_METERS),
     baseHeight: typeof settings?.baseHeight === 'number' && Number.isFinite(settings.baseHeight) ? settings.baseHeight : 0,
     renderRadiusChunks: Math.max(1, Math.trunc(typeof settings?.renderRadiusChunks === 'number' && Number.isFinite(settings.renderRadiusChunks) ? settings.renderRadiusChunks : DEFAULT_GROUND_RENDER_RADIUS_CHUNKS)),
@@ -273,9 +284,18 @@ export function createGroundDynamicMeshDefinition(overrides: Partial<GroundDynam
   )
   const cellSize = overrides.cellSize ?? creationProfile.cellSize
   const initialGeneration = cloneGroundGenerationSettings(overrides.generation) ?? null
+  const worldBounds = normalizeGroundWorldBounds(overrides.worldBounds)
+    ?? normalizeGroundWorldBounds(baseSettings.worldBounds)
+    ?? {
+      minX: -baseSettings.width * 0.5,
+      maxX: baseSettings.width * 0.5,
+      minZ: -baseSettings.depth * 0.5,
+      maxZ: baseSettings.depth * 0.5,
+    }
   const definition: GroundDynamicMesh = {
     type: 'Ground',
     terrainMode: overrides.terrainMode ?? 'infinite',
+    worldBounds,
     chunkSizeMeters: overrides.chunkSizeMeters ?? baseSettings.chunkSizeMeters ?? GROUND_TERRAIN_CHUNK_SIZE_METERS,
     baseHeight: overrides.baseHeight ?? baseSettings.baseHeight ?? 0,
     renderRadiusChunks: overrides.renderRadiusChunks ?? baseSettings.renderRadiusChunks ?? DEFAULT_GROUND_RENDER_RADIUS_CHUNKS,
@@ -307,7 +327,8 @@ export function createGroundDynamicMeshDefinition(overrides: Partial<GroundDynam
   }
 
   if (initialGeneration) {
-    // applyGroundGeneration is editor-specific; caller can apply if needed.
+    initialGeneration.worldWidth = worldBounds.maxX - worldBounds.minX
+    initialGeneration.worldDepth = worldBounds.maxZ - worldBounds.minZ
   }
 
   return definition

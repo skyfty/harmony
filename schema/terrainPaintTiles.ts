@@ -1,8 +1,9 @@
 import { resolveGroundChunkCells } from './groundMesh'
-import { resolveGroundWorkingGridSize, resolveGroundWorkingSpanMeters } from './index'
+import { resolveGroundWorldBounds, resolveGroundWorkingGridSize } from './index'
 
 type TerrainPaintGroundDefinition = {
   cellSize: number
+  worldBounds?: { minX: number; maxX: number; minZ: number; maxZ: number } | null
   chunkSizeMeters?: number
   renderRadiusChunks?: number
   collisionRadiusChunks?: number
@@ -89,9 +90,7 @@ export function resolveTerrainPaintChunkBounds(
 ): TerrainPaintChunkBounds | null {
   const cellSize = clampFinite(definition.cellSize, 1)
   const normalizedChunkCells = Math.max(1, Math.trunc(chunkCells))
-  const spanMeters = resolveGroundWorkingSpanMeters(definition)
-  const halfWidth = spanMeters * 0.5
-  const halfDepth = spanMeters * 0.5
+  const bounds = resolveGroundWorldBounds(definition)
   const startColumn = Math.max(0, Math.trunc(chunkColumn) * normalizedChunkCells)
   const startRow = Math.max(0, Math.trunc(chunkRow) * normalizedChunkCells)
   const gridSize = resolveGroundWorkingGridSize(definition)
@@ -103,8 +102,8 @@ export function resolveTerrainPaintChunkBounds(
     return null
   }
   return {
-    minX: -halfWidth + startColumn * cellSize,
-    minZ: -halfDepth + startRow * cellSize,
+    minX: bounds.minX + startColumn * cellSize,
+    minZ: bounds.minZ + startRow * cellSize,
     width,
     depth,
   }

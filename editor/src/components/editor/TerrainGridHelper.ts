@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import type { GroundDynamicMesh } from '@schema'
-import { resolveGroundWorkingSpanMeters } from '@schema'
+import { resolveGroundWorldBounds } from '@schema'
 import { GRID_MAJOR_SPACING } from './constants'
 
 const MAJOR_COLOR = '#ffc107'
@@ -218,10 +218,10 @@ export class TerrainGridHelper extends THREE.Object3D {
       return
     }
 
-    const span = Math.max(Math.abs(resolveGroundWorkingSpanMeters(definition)), 1e-5)
-    const width = span
-    const depth = span
-    this.bounds.set(-width * 0.5, -depth * 0.5, width, depth)
+    const bounds = resolveGroundWorldBounds(definition)
+    const width = Math.max(Math.abs(bounds.maxX - bounds.minX), 1e-5)
+    const depth = Math.max(Math.abs(bounds.maxZ - bounds.minZ), 1e-5)
+    this.bounds.set(bounds.minX, bounds.minZ, width, depth)
 
     const nextMaterials = new Set<THREE.MeshStandardMaterial>()
     forEachGroundMaterial(root, (material) => {

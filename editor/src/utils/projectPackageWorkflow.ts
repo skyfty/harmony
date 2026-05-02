@@ -180,6 +180,8 @@ export async function runProjectImportWorkflow(options: {
     const preparedPaintSidecars: Record<string, ArrayBuffer | null> = {}
     const preparedChunkManifests: Record<string, GroundChunkManifest | null> = {}
     const preparedChunkData: Record<string, Record<string, ArrayBuffer | null>> = {}
+    const preparedTerrainDatasetManifests: Record<string, import('@schema').QuantizedTerrainDatasetRootManifest | null> = {}
+    const preparedTerrainDatasetRegionPacks: Record<string, Record<string, ArrayBuffer | null>> = {}
 
     loaded.scenes.forEach((scene, index) => {
       const oldId = scene.id
@@ -206,6 +208,8 @@ export async function runProjectImportWorkflow(options: {
       preparedPaintSidecars[nextId] = loaded.groundPaintSidecars[oldId] ?? null
       preparedChunkManifests[nextId] = loaded.groundChunkManifests[oldId] ?? null
       preparedChunkData[nextId] = loaded.groundChunkData[oldId] ?? {}
+      preparedTerrainDatasetManifests[nextId] = loaded.terrainDatasetManifests[oldId] ?? null
+      preparedTerrainDatasetRegionPacks[nextId] = loaded.terrainDatasetRegionPacks[oldId] ?? {}
     })
 
     await scenesStore.saveSceneDocuments(preparedScenes, {
@@ -214,6 +218,8 @@ export async function runProjectImportWorkflow(options: {
       groundPaintSidecars: preparedPaintSidecars,
       groundChunkManifests: preparedChunkManifests,
       groundChunkData: preparedChunkData,
+      terrainDatasetManifests: preparedTerrainDatasetManifests,
+      terrainDatasetRegionPacks: preparedTerrainDatasetRegionPacks,
     })
 
     for (const scene of preparedScenes) {

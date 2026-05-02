@@ -82,7 +82,7 @@ import type {
   Vector3Like,
   WallDynamicMesh,
 } from '@schema/index'
-import { resolveGroundWorkingGridSize, resolveGroundWorkingSpanMeters } from '@schema/index'
+import { resolveGroundWorkingGridSize } from '@schema/index'
 import {
   buildRegionDynamicMeshFromLocalVertices,
   createGradientBackgroundDome,
@@ -98,7 +98,9 @@ import {
   loadSkyCubeTexture,
   parseGroundChunkKey,
   resolveGroundChunkCoordFromWorldPosition,
+  resolveGroundChunkBounds,
   resolveGroundChunkOrigin,
+  resolveGroundWorldBounds,
   serializeGroundChunkData,
 } from '@schema/index'
 import { buildGroundChunkDataFromManifestRecord } from '@schema/groundMesh'
@@ -567,10 +569,12 @@ function clampGroundNoiseStrength(value: number): number {
 }
 
 function buildGroundGenerationPayload(definition?: GroundDynamicMesh | null): GroundGenerationSettings {
-  const groundSpan = definition ? resolveGroundWorkingSpanMeters(definition) : 80
+  const bounds = definition ? resolveGroundWorldBounds(definition) : null
+  const groundWidth = bounds ? bounds.maxX - bounds.minX : 80
+  const groundDepth = bounds ? bounds.maxZ - bounds.minZ : 80
   const fallback: GroundGenerationSettings = {
     mode: 'perlin',
-    noiseScale: Math.max(10, groundSpan),
+    noiseScale: Math.max(10, Math.max(groundWidth, groundDepth)),
     noiseAmplitude: 6,
     noiseStrength: 1,
   }
@@ -593,9 +597,9 @@ function applyGroundGenerationPatch(patch: Partial<GroundGenerationSettings>) {
     ...buildGroundGenerationPayload(definition),
     ...patch,
   }
-  const groundSpan = resolveGroundWorkingSpanMeters(definition)
-  nextGeneration.worldWidth = groundSpan
-  nextGeneration.worldDepth = groundSpan
+  const bounds = resolveGroundWorldBounds(definition)
+  nextGeneration.worldWidth = bounds.maxX - bounds.minX
+  nextGeneration.worldDepth = bounds.maxZ - bounds.minZ
   sceneStore.updateGroundNodeDynamicMesh(ground.id, { generation: nextGeneration })
 }
 
@@ -1481,13 +1485,12 @@ function resolveGroundSignatureTarget(object: THREE.Object3D): THREE.Object3D {
 
 function computeGroundDynamicMeshSignature(definition: GroundDynamicMesh): string {
   const gridSize = resolveGroundWorkingGridSize(definition)
-  const span = resolveGroundWorkingSpanMeters(definition)
+  const bounds = resolveGroundWorldBounds(definition)
   return hashString(stableSerialize({
     rows: Math.max(1, Math.trunc(gridSize.rows)),
     columns: Math.max(1, Math.trunc(gridSize.columns)),
     cellSize: Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1,
-    width: span,
-    depth: span,
+    worldBounds: bounds,
     generation: definition.generation ?? null,
     heightComposition: definition.heightComposition ?? { mode: 'planning_plus_manual' },
     surfaceRevision: Number.isFinite(definition.surfaceRevision)
@@ -19352,10 +19355,10 @@ function intersectRayWithGroundHeightfieldWorld(ray: THREE.Ray): THREE.Vector3 |
   heightfieldRayMatrixHelper.copy(groundObject.matrixWorld).invert()
   heightfieldRayHelper.copy(ray).applyMatrix4(heightfieldRayMatrixHelper)
 
-  const halfSpan = resolveGroundWorkingSpanMeters(groundDefinition) * 0.5
-  const halfWidth = halfSpan
-  const halfDepth = halfSpan
-  if (!Number.isFinite(halfWidth) || !Number.isFinite(halfDepth) || halfWidth <= 0 || halfDepth <= 0) {
+  const bounds = resolveGroundWorldBounds(groundDefinition)
+  const width = bounds.maxX - bounds.minX
+  const depth = bounds.maxZ - bounds.minZ
+  if (!Number.isFinite(width) || !Number.isFinite(depth) || width <= 0 || depth <= 0) {
     return null
   }
 
@@ -19384,10 +19387,10 @@ function intersectRayWithGroundHeightfieldWorld(ray: THREE.Ray): THREE.Vector3 |
     return tMax >= tMin
   }
 
-  if (!updateSlab(origin.x, dir.x, -halfWidth, halfWidth)) {
+  if (!updateSlab(origin.x, dir.x, bounds.minX, bounds.maxX)) {
     return null
   }
-  if (!updateSlab(origin.z, dir.z, -halfDepth, halfDepth)) {
+  if (!updateSlab(origin.z, dir.z, bounds.minZ, bounds.maxZ)) {
     return null
   }
   if (!Number.isFinite(tMin) || !Number.isFinite(tMax) || tMax < 0) {
@@ -21358,14 +21361,12 @@ function collectViewportGroundChunkKeysFromRegion(
   const cellSize = typeof cellSizeCandidate === 'number' && Number.isFinite(cellSizeCandidate) && cellSizeCandidate > 1e-6
     ? cellSizeCandidate
     : 1
-  const halfSpan = resolveGroundWorkingSpanMeters(definition) * 0.5
-  const halfWidth = halfSpan
-  const halfDepth = halfSpan
+  const bounds = resolveGroundWorldBounds(definition)
 
-  const minX = affectedRegion.minColumn * cellSize - halfWidth
-  const maxX = affectedRegion.maxColumn * cellSize - halfWidth
-  const minZ = affectedRegion.minRow * cellSize - halfDepth
-  const maxZ = affectedRegion.maxRow * cellSize - halfDepth
+  const minX = bounds.minX + affectedRegion.minColumn * cellSize
+  const maxX = bounds.minX + affectedRegion.maxColumn * cellSize
+  const minZ = bounds.minZ + affectedRegion.minRow * cellSize
+  const maxZ = bounds.minZ + affectedRegion.maxRow * cellSize
 
   const minCoord = resolveGroundChunkCoordFromWorldPosition(minX, minZ, chunkSizeMeters)
   const maxCoord = resolveGroundChunkCoordFromWorldPosition(maxX, maxZ, chunkSizeMeters)
@@ -21567,6 +21568,8 @@ async function persistViewportInfiniteGroundChunks(params: {
     baseHeight: typeof params.definition.baseHeight === 'number' && Number.isFinite(params.definition.baseHeight)
       ? params.definition.baseHeight
       : 0,
+    worldBounds: resolveGroundWorldBounds(params.definition),
+    chunkBounds: resolveGroundChunkBounds(params.definition),
     revision: nextRevision,
     updatedAt,
     chunks: nextManifestRecords,
@@ -21778,14 +21781,12 @@ function resolveAffectedGroundRegionWorldBounds(
   if (!(cellSize > 0)) {
     return null
   }
-  const spanMeters = resolveGroundWorkingSpanMeters(definition)
-  const halfWidth = spanMeters * 0.5
-  const halfDepth = spanMeters * 0.5
+  const bounds = resolveGroundWorldBounds(definition)
   return {
-    minX: -halfWidth + affectedRegion.minColumn * cellSize,
-    maxX: -halfWidth + affectedRegion.maxColumn * cellSize,
-    minZ: -halfDepth + affectedRegion.minRow * cellSize,
-    maxZ: -halfDepth + affectedRegion.maxRow * cellSize,
+    minX: bounds.minX + affectedRegion.minColumn * cellSize,
+    maxX: bounds.minX + affectedRegion.maxColumn * cellSize,
+    minZ: bounds.minZ + affectedRegion.minRow * cellSize,
+    maxZ: bounds.minZ + affectedRegion.maxRow * cellSize,
   }
 }
 

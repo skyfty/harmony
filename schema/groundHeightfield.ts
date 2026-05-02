@@ -1,6 +1,6 @@
 import type { SceneNode, GroundDynamicMesh } from './index'
 import type { RigidbodyPhysicsShape } from './components'
-import { resolveGroundEditTileResolution, resolveGroundEditTileSizeMeters, resolveGroundWorkingGridSize, resolveGroundWorkingSpanMeters } from './index'
+import { resolveGroundEditTileResolution, resolveGroundEditTileSizeMeters, resolveGroundWorldBounds, resolveGroundWorkingGridSize } from './index'
 import { resolveGroundEffectiveHeightAtVertex, sampleGroundEffectiveHeightRegion } from './groundMesh'
 
 export type GroundHeightfieldData = {
@@ -49,6 +49,8 @@ export type GroundHeightfieldChunkPlan = {
   depth: number
   halfWidth: number
   halfDepth: number
+  minX: number
+  minZ: number
 }
 
 export type GroundHeightfieldChunkData = {
@@ -107,6 +109,9 @@ type GroundHorizontalMetrics = {
   baseElementSize: number
   halfWidth: number
   halfDepth: number
+  minX: number
+  minZ: number
+  maxZ: number
 }
 
 export function isGroundDynamicMesh(value: SceneNode['dynamicMesh'] | null | undefined): value is GroundDynamicMesh {
@@ -323,10 +328,19 @@ function resolveGroundHorizontalMetrics(node: SceneNode, mesh: GroundDynamicMesh
   const { scaleX, scaleZ } = resolveNodeScaleVector(node.scale)
   const uniformHorizontalScale = Math.max(MIN_ELEMENT_SIZE, (Math.abs(scaleX) + Math.abs(scaleZ)) * 0.5)
   const baseElementSize = Math.max(MIN_ELEMENT_SIZE, rawCellSize * uniformHorizontalScale)
-  const spanMeters = resolveGroundWorkingSpanMeters(mesh)
-  const halfWidth = Math.max(MIN_ELEMENT_SIZE, spanMeters * uniformHorizontalScale) * 0.5
-  const halfDepth = Math.max(MIN_ELEMENT_SIZE, spanMeters * uniformHorizontalScale) * 0.5
-  return { baseElementSize, halfWidth, halfDepth }
+  const bounds = resolveGroundWorldBounds(mesh)
+  const width = Math.max(MIN_ELEMENT_SIZE, (bounds.maxX - bounds.minX) * uniformHorizontalScale)
+  const depth = Math.max(MIN_ELEMENT_SIZE, (bounds.maxZ - bounds.minZ) * uniformHorizontalScale)
+  const minX = bounds.minX * uniformHorizontalScale
+  const minZ = bounds.minZ * uniformHorizontalScale
+  return {
+    baseElementSize,
+    halfWidth: width * 0.5,
+    halfDepth: depth * 0.5,
+    minX,
+    minZ,
+    maxZ: minZ + depth,
+  }
 }
 
 function buildGroundCollisionSegment(
@@ -357,8 +371,8 @@ function buildGroundCollisionSegment(
   const width = Math.max(MIN_ELEMENT_SIZE, sample.columnSpan * metrics.baseElementSize)
   const depth = Math.max(MIN_ELEMENT_SIZE, sample.rowSpan * metrics.baseElementSize)
   const offset: [number, number, number] = [
-    -metrics.halfWidth + sample.startColumn * metrics.baseElementSize,
-    metrics.halfDepth - sample.endRow * metrics.baseElementSize,
+    metrics.minX + sample.startColumn * metrics.baseElementSize,
+    metrics.maxZ - sample.endRow * metrics.baseElementSize,
     0,
   ]
   const key = groundRegionKey(sample.startRow, sample.endRow, sample.startColumn, sample.endColumn)
@@ -666,9 +680,12 @@ export function buildGroundHeightfieldChunkPlan(
   const depth = Math.max(MIN_ELEMENT_SIZE, rows * elementSize)
   const halfWidth = Math.max(0, width * 0.5)
   const halfDepth = Math.max(0, depth * 0.5)
+  const bounds = resolveGroundWorldBounds(mesh)
+  const minX = bounds.minX * uniformHorizontalScale
+  const minZ = bounds.minZ * uniformHorizontalScale
 
   const chunkCells = clampInt(options.chunkCells, 8, 512, DEFAULT_CHUNK_CELLS)
-  const signature = `${columns}|${rows}|${stride}|${chunkCells}|${Math.round(rawCellSize * 1000)}|${Math.round(width * 1000)}|${Math.round(depth * 1000)}`
+  const signature = `${columns}|${rows}|${stride}|${chunkCells}|${Math.round(rawCellSize * 1000)}|${Math.round(width * 1000)}|${Math.round(depth * 1000)}|${Math.round(minX * 1000)}|${Math.round(minZ * 1000)}`
 
   return {
     signature,
@@ -683,6 +700,8 @@ export function buildGroundHeightfieldChunkPlan(
     depth,
     halfWidth,
     halfDepth,
+    minX,
+    minZ,
   }
 }
 
@@ -726,8 +745,8 @@ export function buildGroundHeightfieldChunkData(
   }
 
   const offset: [number, number, number] = [
-    -plan.halfWidth + spec.startColumn * plan.elementSize,
-    -plan.halfDepth + spec.startRow * plan.elementSize,
+    plan.minX + spec.startColumn * plan.elementSize,
+    plan.minZ + spec.startRow * plan.elementSize,
     0,
   ]
 
@@ -782,12 +801,13 @@ export function buildGroundHeightfieldData(
     matrix.push(columnValues)
   }
 
-  const width = Math.max(MIN_ELEMENT_SIZE, columns * elementSize)
-  const depth = Math.max(MIN_ELEMENT_SIZE, rows * elementSize)
+  const bounds = resolveGroundWorldBounds(mesh)
+  const width = Math.max(MIN_ELEMENT_SIZE, (bounds.maxX - bounds.minX) * uniformHorizontalScale)
+  const depth = Math.max(MIN_ELEMENT_SIZE, (bounds.maxZ - bounds.minZ) * uniformHorizontalScale)
   const halfWidth = Math.max(0, width * 0.5)
   const halfDepth = Math.max(0, depth * 0.5)
-  const offset: [number, number, number] = [-halfWidth, -halfDepth, 0]
-  const signature = `${columns}|${rows}|${Math.round(rawCellSize * 1000)}|${Math.round(width * 1000)}|${Math.round(depth * 1000)}|${heightHash.toString(16)}`
+  const offset: [number, number, number] = [bounds.minX * uniformHorizontalScale, bounds.minZ * uniformHorizontalScale, 0]
+  const signature = `${columns}|${rows}|${Math.round(rawCellSize * 1000)}|${Math.round(width * 1000)}|${Math.round(depth * 1000)}|${Math.round(offset[0] * 1000)}|${Math.round(offset[1] * 1000)}|${heightHash.toString(16)}`
 
   return {
     matrix,

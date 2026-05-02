@@ -32,7 +32,8 @@ import type {
 } from '@/types/planning-scene-data'
 import { useGroundHeightmapStore } from '@/stores/groundHeightmapStore'
 import { useSceneStore } from '@/stores/sceneStore'
-import { resolveGroundWorkingGridSize, resolveGroundWorkingSpanMeters } from '@schema'
+import { useScenesStore } from '@/stores/scenesStore'
+import { resolveGroundWorkingGridSize, resolveGroundWorldBounds } from '@schema'
 import {
   PLANNING_IMAGES_COMPONENT_TYPE,
   RIGIDBODY_COMPONENT_TYPE,
@@ -45,6 +46,7 @@ import {
 import { generateUuid } from '@/utils/uuid'
 import { releaseScatterInstance } from '@/utils/terrainScatterRuntime'
 import { buildPlanningDemGroundRegionData, type PlanningDemHeightRegion } from '@/utils/planningDemToGround'
+import { buildPlanningDemTerrainDataset } from '@/utils/planningDemTerrainDataset'
 
 
 export type PlanningConversionProgress = {
@@ -299,8 +301,8 @@ async function createTerrainWaterSurface(options: {
   rootNodeId: string
   planningLayerId: string
   poly: PlanningPolygonData
-  groundWidth: number
-  groundDepth: number
+  groundMinX: number
+  groundMinZ: number
   groundHeightAt: (x: number, z: number) => number
 }): Promise<SceneNode | null> {
   const presetId = normalizePlanningWaterPresetId(options.poly.terrainWaterPresetId)
@@ -310,7 +312,7 @@ async function createTerrainWaterSurface(options: {
   }
 
   const contour = options.poly.points
-    .map((point) => toWorldPoint(point, options.groundWidth, options.groundDepth, 0))
+    .map((point) => toWorldPoint(point, options.groundMinX, options.groundMinZ, 0))
     .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.z))
 
   if (contour.length < 3) {
@@ -948,6 +950,17 @@ function normalizePlanningPoints(points: PlanningPoint[] | undefined, unitsToMet
   })
 }
 
+function offsetPlanningPointsToGroundLocal(points: PlanningPoint[] | undefined, groundMinX: number, groundMinZ: number): PlanningPoint[] {
+  if (!Array.isArray(points) || points.length === 0) return []
+  const offsetX = Number.isFinite(groundMinX) ? groundMinX : 0
+  const offsetZ = Number.isFinite(groundMinZ) ? groundMinZ : 0
+  return points.map((point) => ({
+    ...point,
+    x: (Number.isFinite(Number(point?.x)) ? Number(point.x) : 0) + offsetX,
+    y: (Number.isFinite(Number(point?.y)) ? Number(point.y) : 0) + offsetZ,
+  }))
+}
+
 function clamp01(value: number, fallback = 1): number {
   const numeric = Number(value)
   if (!Number.isFinite(numeric)) {
@@ -958,14 +971,14 @@ function clamp01(value: number, fallback = 1): number {
 
 function toWorldPoint(
   p: PlanningPoint,
-  groundWidth: number,
-  groundDepth: number,
+  groundMinX: number,
+  groundMinZ: number,
   y = 0,
 ): { x: number; y: number; z: number } {
   return {
-    x: p.x - groundWidth * 0.5,
+    x: groundMinX + p.x,
     y,
-    z: p.y - groundDepth * 0.5,
+    z: groundMinZ + p.y,
   }
 }
 
@@ -1261,10 +1274,11 @@ function boundsFromPlanningPolygon(definition: GroundDynamicMesh, polyPoints: Pl
   if (!bounds) return null
   const cell = Math.max(1e-6, Number(definition.cellSize) || 1)
   const margin = Math.max(0, marginMeters)
-  const minCol = Math.floor((bounds.minX - margin) / cell)
-  const maxCol = Math.ceil((bounds.maxX + margin) / cell)
-  const minRow = Math.floor((bounds.minY - margin) / cell)
-  const maxRow = Math.ceil((bounds.maxY + margin) / cell)
+  const groundBounds = resolveGroundWorldBounds(definition)
+  const minCol = Math.floor((bounds.minX - margin - groundBounds.minX) / cell)
+  const maxCol = Math.ceil((bounds.maxX + margin - groundBounds.minX) / cell)
+  const minRow = Math.floor((bounds.minY - margin - groundBounds.minZ) / cell)
+  const maxRow = Math.ceil((bounds.maxY + margin - groundBounds.minZ) / cell)
   const gridSize = resolveGroundWorkingGridSize(definition)
   return {
     minRow: clampInt(minRow, 0, Math.trunc(gridSize.rows)),
@@ -1445,6 +1459,7 @@ async function applyPlanningTerrainContoursToGround(options: {
   })
 
   const previousBounds = derivePlanningContourBounds(definition)
+  const groundBounds = resolveGroundWorldBounds(definition)
 
   let nextBounds: GroundContourBounds | null = null
   for (const item of polygons) {
@@ -1517,10 +1532,10 @@ async function applyPlanningTerrainContoursToGround(options: {
       if ((row & 31) === 0) {
         await options.yieldController.maybeYield()
       }
-      const py = row * cell
+      const py = groundBounds.minZ + row * cell
       const localRow = row - r0
       for (let col = c0; col <= c1; col += 1) {
-        const px = col * cell
+        const px = groundBounds.minX + col * cell
         const sdf = signedDistanceToPolygon(px, py, points)
         const idx = localRow * localCols + (col - c0)
         sdfGrid[idx] = sdf
@@ -1677,18 +1692,24 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
     emitProgress(options, 'Preparing…', 0)
 
 
-  // Ensure ground exists when missing.
-  const groundSpanMeters = resolveGroundWorkingSpanMeters(sceneStore.groundSettings)
-  const groundWidth = groundSpanMeters
-  const groundDepth = groundSpanMeters
-
-  const planningUnitsToMeters = resolvePlanningUnitsToMeters(planningData, groundSpanMeters, groundSpanMeters)
-
   if (!sceneStore.groundNode) {
     emitProgress(options, 'Creating ground…', 5)
     sceneStore.setGroundInfiniteSettings({})
     await yieldController.maybeYield(true)
   }
+
+  // Use the actual ground node bounds when available; groundSettings can lag behind
+  // an existing node's persisted worldBounds during scene conversion.
+  const activeGroundDefinition = sceneStore.groundNode?.dynamicMesh?.type === 'Ground'
+    ? sceneStore.groundNode.dynamicMesh
+    : sceneStore.groundSettings
+  const groundBounds = resolveGroundWorldBounds(activeGroundDefinition)
+  const groundWidth = groundBounds.maxX - groundBounds.minX
+  const groundDepth = groundBounds.maxZ - groundBounds.minZ
+  const groundMinX = groundBounds.minX
+  const groundMinZ = groundBounds.minZ
+
+  const planningUnitsToMeters = resolvePlanningUnitsToMeters(planningData, groundWidth, groundDepth)
 
   const activeLayerIds = planningData.layers
     .filter((layer) => layer.conversionEnabled !== false)
@@ -1785,7 +1806,10 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
     const contourPolygons = polygons.filter((poly) => {
       if (!poly?.points || poly.points.length < 3) return false
       return resolveLayerKindFromPlanningData(planningData, poly.layerId) === 'terrain'
-    })
+    }).map((poly) => ({
+      ...poly,
+      points: offsetPlanningPointsToGroundLocal(poly.points, groundMinX, groundMinZ),
+    }))
 
     const resetContours = resetGroundPlanningContours(groundDefinition as GroundRuntimeDynamicMesh)
     if (resetContours.changed) {
@@ -1800,6 +1824,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
     const terrainDem = planningData.terrain?.dem ?? null
     // 标记DEM数据是否已成功应用到地形中
     let demApplied = false
+    const scenesStore = useScenesStore()
     // 检查是否存在有效的DEM数据源(通过sourceFileHash判断)
     if (terrainDem?.sourceFileHash) {
       // 根据轮廓多边形和地形定义,计算DEM导入的边界范围
@@ -1851,7 +1876,19 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
         dataUrl: demResult.textureDataUrl,
         name: demResult.textureName,
       })
+
+      const activeSceneId = sceneStore.currentSceneId
+      if (activeSceneId) {
+        const dataset = await buildPlanningDemTerrainDataset({
+          definition: groundDefinition as GroundRuntimeDynamicMesh,
+          terrainDem,
+          datasetId: `${activeSceneId}-terrain-dem`,
+        })
+        await scenesStore.replaceTerrainDatasetBundle(activeSceneId, dataset.manifest, dataset.regionPacks, { syncServer: false })
+      }
       await yieldController.maybeYield(true)
+    } else if (sceneStore.currentSceneId) {
+      await scenesStore.replaceTerrainDatasetBundle(sceneStore.currentSceneId, null, {}, { syncServer: false })
     }
 
     if (contourPolygons.length) {
@@ -1912,7 +1949,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
           x: Number(image.position?.x) + width * 0.5,
           y: Number(image.position?.y) + height * 0.5,
         }
-        const worldCenter = toWorldPoint(center, groundWidth, groundDepth, 0)
+        const worldCenter = toWorldPoint(center, groundMinX, groundMinZ, 0)
         const groundY = groundHeightAt(worldCenter.x, worldCenter.z)
         imageEntries.push({
           id: image.id,
@@ -2002,7 +2039,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
             ? poly.name.trim()
             : (layerName ? `${layerName} Terrain` : 'Planning Terrain')
           const terrainBoundary = poly.points
-            .map((point) => toWorldPoint(point, groundWidth, groundDepth, 0))
+            .map((point) => toWorldPoint(point, groundMinX, groundMinZ, 0))
             .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.z))
           const expandedBoundary = expandWorldPolygonRadially(terrainBoundary, PLANNING_TERRAIN_AIR_WALL_OUTSET_M)
           const segments = expandedBoundary.map((start, index) => {
@@ -2035,8 +2072,8 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
           rootNodeId: root.id,
           planningLayerId: layerId,
           poly,
-          groundWidth,
-          groundDepth,
+          groundMinX,
+          groundMinZ,
           groundHeightAt,
         })
       }

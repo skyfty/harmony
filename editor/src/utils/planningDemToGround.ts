@@ -7,13 +7,13 @@ import {
   resolveInfiniteGroundGridOriginMeters,
   resolveGroundEditCellSize,
   resolveGroundEditTileResolution,
+  resolveGroundWorldBounds,
   resolveGroundWorkingGridSize,
-  resolveGroundWorkingSpanMeters,
   type GroundPlanningMetadata,
 } from '@schema'
 import type { PlanningTerrainDemData } from '@/types/planning-scene-data'
 import { loadPlanningDemBlobByHash } from '@/utils/planningDemStorage'
-import { parsePlanningDemBlob } from '@/utils/planningDemImport'
+import { isPlanningDemHeightmapImageSource, parsePlanningDemBlob } from '@/utils/planningDemImport'
 
 export interface PlanningDemGroundConversionResult {
   planningHeightMap: GroundHeightMap
@@ -115,10 +115,10 @@ function resolvePlanningDemLocalEditTileOrigin(definition: GroundRuntimeDynamicM
     const origin = resolveInfiniteGroundGridOriginMeters(resolvePlanningDemChunkSizeMeters())
     return { originX: origin, originZ: origin }
   }
-  const halfSpan = resolveGroundWorkingSpanMeters(definition) * 0.5
+  const bounds = resolveGroundWorldBounds(definition)
   return {
-    originX: -halfSpan,
-    originZ: -halfSpan,
+    originX: bounds.minX,
+    originZ: bounds.minZ,
   }
 }
 
@@ -424,7 +424,7 @@ function computeDemSampleStepAxis(parsedWidth: number, parsedHeight: number, wor
   return span / segments
 }
 
-async function resolvePlanningDemPreparedSource(options: {
+export async function resolvePlanningDemPreparedSource(options: {
   definition: GroundRuntimeDynamicMesh
   terrainDem: PlanningTerrainDemData
 }): Promise<PlanningDemPreparedSource> {
@@ -445,6 +445,9 @@ async function resolvePlanningDemPreparedSource(options: {
     {
       minElevation: terrainDem.minElevation ?? null,
       maxElevation: terrainDem.maxElevation ?? null,
+      worldBoundsOverride: isPlanningDemHeightmapImageSource(terrainDem.filename ?? '', terrainDem.mimeType ?? null)
+        ? (terrainDem.worldBounds ?? null)
+        : null,
     },
   )
   const rasterData = parsed.rasterData
@@ -557,12 +560,12 @@ export function resolvePlanningDemTargetWorldBounds(
   },
 ): PlanningDemTargetWorldBounds {
   if (!source) {
-    const span = resolveGroundWorkingSpanMeters(definition)
+    const bounds = resolveGroundWorldBounds(definition)
     return {
-      minX: -span * 0.5,
-      minZ: -span * 0.5,
-      maxX: span * 0.5,
-      maxZ: span * 0.5,
+      minX: bounds.minX,
+      minZ: bounds.minZ,
+      maxX: bounds.maxX,
+      maxZ: bounds.maxZ,
     }
   }
   const sourceSpan = resolvePlanningDemSourceSpan(source)
@@ -646,13 +649,13 @@ export function buildPlanningDemHeightRegion(options: {
   const vertexColumns = Math.max(0, endColumn - startColumn + 1)
   const values = new Float64Array(vertexRows * vertexColumns)
   const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
-  const halfSpan = resolveGroundWorkingSpanMeters(definition) * 0.5
+  const bounds = resolveGroundWorldBounds(definition)
 
   for (let row = startRow; row <= endRow; row += 1) {
-    const z = -halfSpan + row * cellSize
+    const z = bounds.minZ + row * cellSize
     const targetRowOffset = (row - startRow) * vertexColumns
     for (let column = startColumn; column <= endColumn; column += 1) {
-      const x = -halfSpan + column * cellSize
+      const x = bounds.minX + column * cellSize
       const sampled = samplePlanningDemHeightAtWorld(source, x, z)
       values[targetRowOffset + (column - startColumn)] = Number.isFinite(sampled) ? sampled : 0
     }

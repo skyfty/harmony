@@ -1,5 +1,13 @@
 export const SCENE_PACKAGE_FORMAT = 'harmony-scene-package' as const;
-export const SCENE_PACKAGE_VERSION = 7 as const;
+export const SCENE_PACKAGE_VERSION = 8 as const;
+
+export interface ScenePackageTerrainDatasetEntry {
+  datasetId: string;
+  /** Path within ZIP, e.g. `scenes/<sceneId>/terrain/root.json` */
+  rootManifestPath: string;
+  /** Region pack directory within ZIP, e.g. `scenes/<sceneId>/terrain/regions/` */
+  regionsPath?: string;
+}
 
 export type ScenePackageResourceType =
   | 'localAsset'
@@ -24,6 +32,8 @@ export interface ScenePackageSceneEntry {
   groundScatterPath?: string;
   /** Optional ground paint sidecar path, e.g. `scenes/<sceneId>/ground-paint.bin` */
   groundPaintPath?: string;
+  /** Optional local quantized terrain dataset entry for large terrain scenes. */
+  terrainDataset?: ScenePackageTerrainDatasetEntry;
 }
 
 export interface ScenePackageProjectEntry {
