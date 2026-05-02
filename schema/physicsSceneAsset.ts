@@ -36,6 +36,9 @@ const nodeEulerHelper = new THREE.Euler()
 const worldPositionHelper = new THREE.Vector3()
 const worldQuaternionHelper = new THREE.Quaternion()
 const worldScaleHelper = new THREE.Vector3()
+const legacyConvexOffsetWorldHelper = new THREE.Vector3()
+const legacyConvexOffsetLocalHelper = new THREE.Vector3()
+const legacyConvexOffsetInverseQuaternionHelper = new THREE.Quaternion()
 const unitScaleHelper = new THREE.Vector3(1, 1, 1)
 const transformComposePositionHelper = new THREE.Vector3()
 const transformComposeChildPositionHelper = new THREE.Vector3()
@@ -203,6 +206,36 @@ function getShapeScale(shape: RigidbodyPhysicsShape, worldScale: THREE.Vector3):
     return [1, 1, 1]
   }
   return [worldScale.x, worldScale.y, worldScale.z]
+}
+
+function normalizeLegacyConvexWorldOffset(
+  shape: RigidbodyPhysicsShape,
+  worldScale: THREE.Vector3,
+  bodyWorldPosition: THREE.Vector3,
+  bodyWorldQuaternion: THREE.Quaternion,
+): RigidbodyPhysicsShape {
+  if (shape.kind !== 'convex' || shape.applyScale !== true || !shape.offset) {
+    return shape
+  }
+  legacyConvexOffsetWorldHelper.set(
+    (shape.offset[0] ?? 0) * worldScale.x,
+    (shape.offset[1] ?? 0) * worldScale.y,
+    (shape.offset[2] ?? 0) * worldScale.z,
+  )
+  if (legacyConvexOffsetWorldHelper.distanceToSquared(bodyWorldPosition) > 1e-8) {
+    return shape
+  }
+  legacyConvexOffsetLocalHelper.copy(legacyConvexOffsetWorldHelper).sub(bodyWorldPosition)
+  legacyConvexOffsetInverseQuaternionHelper.copy(bodyWorldQuaternion).invert()
+  legacyConvexOffsetLocalHelper.applyQuaternion(legacyConvexOffsetInverseQuaternionHelper)
+  return {
+    ...shape,
+    offset: [
+      Math.abs(worldScale.x) > 1e-8 ? legacyConvexOffsetLocalHelper.x / worldScale.x : 0,
+      Math.abs(worldScale.y) > 1e-8 ? legacyConvexOffsetLocalHelper.y / worldScale.y : 0,
+      Math.abs(worldScale.z) > 1e-8 ? legacyConvexOffsetLocalHelper.z / worldScale.z : 0,
+    ],
+  }
 }
 
 function pushShapeDescriptor(
@@ -470,6 +503,8 @@ function buildRoadShapeInstances(
 function buildRigidbodyShapeInstances(
   node: SceneNode,
   worldScale: THREE.Vector3,
+  bodyWorldPosition: THREE.Vector3,
+  bodyWorldQuaternion: THREE.Quaternion,
   nextShapeId: () => number,
   shapes: PhysicsShapeDesc[],
 ): BuildShapeInstance[] {
@@ -513,7 +548,10 @@ function buildRigidbodyShapeInstances(
     }
   }
 
-  const shape = extractRigidbodyShape(resolveRigidbodyComponent(node))
+  const rawShape = extractRigidbodyShape(resolveRigidbodyComponent(node))
+  const shape = rawShape
+    ? normalizeLegacyConvexWorldOffset(rawShape, worldScale, bodyWorldPosition, bodyWorldQuaternion)
+    : null
   if (!shape) {
     return []
   }
@@ -576,7 +614,14 @@ export function buildPhysicsSceneAsset(document: SceneJsonExportDocument): Physi
         rigidbodyState.props as Partial<RigidbodyComponentProps> | null | undefined,
       )
       const materialId = ensureMaterialId(rigidbodyProps)
-      const primaryShapeInstances = buildRigidbodyShapeInstances(node, worldScaleHelper, nextShapeId, asset.shapes)
+      const primaryShapeInstances = buildRigidbodyShapeInstances(
+        node,
+        worldScaleHelper,
+        worldPositionHelper,
+        worldQuaternionHelper,
+        nextShapeId,
+        asset.shapes,
+      )
       const floorShapeInstances = buildFloorShapeInstances(node, worldScaleHelper, nextShapeId, asset.shapes, floorShapeCache)
       const wallShapeInstances = buildWallShapeInstances(node, nextShapeId, asset.shapes, wallShapeCache)
       const modelCollisionShapeInstances = buildModelCollisionShapeInstances(node, worldScaleHelper, nextShapeId, asset.shapes)
