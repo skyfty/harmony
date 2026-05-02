@@ -18,6 +18,7 @@
     "esModuleInterop": true,
     "baseUrl": ".",
     "paths": {
+      "@harmony/physics-core": ["./types/physics-core.d.ts"],
       "@harmony/schema": ["./index.ts"],
       "@harmony/schema/*": ["./*"]
     }

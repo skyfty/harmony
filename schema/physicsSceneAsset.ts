@@ -154,10 +154,12 @@ function resolvePhysicsSceneRigidbodyComponent(
     return null
   }
   const hasBoundaryWall = Boolean(resolveBoundaryWallComponent(node))
+  const hasGround = isGroundDynamicMesh(node.dynamicMesh)
+  const hasRoad = isRoadDynamicMesh(node.dynamicMesh)
   const hasWall = node.dynamicMesh?.type === 'Wall'
   const hasFloor = node.dynamicMesh?.type === 'Floor'
   const hasModelCollision = Boolean(resolveModelCollisionComponentPropsFromNode(node)?.faces?.length)
-  if (!hasBoundaryWall && !hasWall && !hasFloor && !hasModelCollision) {
+  if (!hasBoundaryWall && !hasGround && !hasRoad && !hasWall && !hasFloor && !hasModelCollision) {
     return null
   }
   return {
@@ -592,8 +594,8 @@ export function buildPhysicsSceneAsset(document: SceneJsonExportDocument): Physi
         let shapeId = shapeInstances[0]!.shapeId
         if (
           shapeInstances.length > 1
-          || shapeInstances[0]!.transform.position.some((value) => Math.abs(value) > 1e-6)
-          || shapeInstances[0]!.transform.rotation.some((value, index) => Math.abs(value - (index === 3 ? 1 : 0)) > 1e-6)
+          || shapeInstances[0]!.transform.position.some((value: number) => Math.abs(value) > 1e-6)
+          || shapeInstances[0]!.transform.rotation.some((value: number, index: number) => Math.abs(value - (index === 3 ? 1 : 0)) > 1e-6)
         ) {
           const children: PhysicsCompoundChildDesc[] = shapeInstances.map((entry) => ({
             shapeId: entry.shapeId,
@@ -664,21 +666,23 @@ export function buildPhysicsSceneAsset(document: SceneJsonExportDocument): Physi
   if (groundNode && isGroundDynamicMesh(groundNode.dynamicMesh) && document.groundSettings?.enableAirWall !== false) {
     const staticMaterialId = ensureMaterialId(clampRigidbodyComponentProps({ bodyType: 'STATIC' }))
     if (groundWorldTransform && groundWorldScale) {
+      const resolvedGroundWorldTransform = groundWorldTransform as PhysicsTransform
+      const resolvedGroundWorldScale = groundWorldScale as PhysicsVector3
       groundAirWallPositionHelper.set(
-        groundWorldTransform.position[0],
-        groundWorldTransform.position[1],
-        groundWorldTransform.position[2],
+        resolvedGroundWorldTransform.position[0],
+        resolvedGroundWorldTransform.position[1],
+        resolvedGroundWorldTransform.position[2],
       )
       groundAirWallQuaternionHelper.set(
-        groundWorldTransform.rotation[0],
-        groundWorldTransform.rotation[1],
-        groundWorldTransform.rotation[2],
-        groundWorldTransform.rotation[3],
+        resolvedGroundWorldTransform.rotation[0],
+        resolvedGroundWorldTransform.rotation[1],
+        resolvedGroundWorldTransform.rotation[2],
+        resolvedGroundWorldTransform.rotation[3],
       )
       groundAirWallScaleHelper.set(
-        groundWorldScale[0],
-        groundWorldScale[1],
-        groundWorldScale[2],
+        resolvedGroundWorldScale[0],
+        resolvedGroundWorldScale[1],
+        resolvedGroundWorldScale[2],
       )
       const groundObject = new THREE.Object3D()
       groundObject.position.copy(groundAirWallPositionHelper)

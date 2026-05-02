@@ -8,12 +8,12 @@ importers:
 
   .:
     dependencies:
+      '@harmony/physics-core':
+        specifier: file:../physics-core
+        version: file:../physics-core
       '@msgpack/msgpack':
         specifier: ^3.1.3
         version: 3.1.3
-      cannon-es:
-        specifier: ^0.20.0
-        version: 0.20.0
       fflate:
         specifier: ^0.8.2
         version: 0.8.2
@@ -47,6 +47,10 @@ importers:
         version: 5.9.3
 
 packages:
+
+  '@harmony/physics-core@file:../physics-core':
+    resolution: {directory: ../physics-core, type: directory}
+    engines: {pnpm: '>=10.0.0'}
 
   '@harmony/tools@file:../tools':
     resolution: {directory: ../tools, type: directory}
@@ -155,9 +159,6 @@ packages:
   boolbase@1.0.0:
     resolution: {integrity: sha512-JZOSA7Mo9sNGB8+UjSgzdLtokWAky1zbztM3WRLCbZ70/3cTANmQmOdR7y2g+J0e2WXywy1yS468tY+IruqEww==}
 
-  cannon-es@0.20.0:
-    resolution: {integrity: sha512-eZhWTZIkFOnMAJOgfXJa9+b3kVlvG+FX4mdkpePev/w/rP5V8NRquGyEozcjPfEoXUlb+p7d9SUcmDSn14prOA==}
-
   commander@11.1.0:
     resolution: {integrity: sha512-yPVavfyCcRhmorC7rWlkHn15b4wDVgVmBA7kV4QVBsF7kv/9TKJAbAXVTxvTnwP8HHKjRCJDClKbciiYS7p0DQ==}
     engines: {node: '>=16'}
@@ -260,6 +261,8 @@ packages:
 
 snapshots:
 
+  '@harmony/physics-core@file:../physics-core': {}
+
   '@harmony/tools@file:../tools':
     dependencies:
       '@resvg/resvg-js': 2.6.2
@@ -336,8 +339,6 @@ snapshots:
   '@webgpu/types@0.1.69': {}
 
   boolbase@1.0.0: {}
-
-  cannon-es@0.20.0: {}
 
   commander@11.1.0: {}
 

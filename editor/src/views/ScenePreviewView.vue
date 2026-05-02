@@ -87,6 +87,7 @@ import {
 	buildGroundCollisionDebugShapesFromNode,
 	isGroundDynamicMesh,
 } from '@schema/groundHeightfield'
+import { resolveModelCollisionFaceSegments } from '@schema/physicsShapeResolvers'
 import {
 	buildRoadHeightfieldShapes,
 	isRoadDynamicMesh,
@@ -418,8 +419,8 @@ type SceneViewControlSnapshot = {
 const sceneStateById = new Map<string, SceneViewControlSnapshot>()
 const previousSceneById = new Map<string, string>()
 
-const isGroundWireframeVisible = ref(false)
-const isOtherRigidbodyWireframeVisible = ref(false)
+const isGroundWireframeVisible = ref(true)
+const isOtherRigidbodyWireframeVisible = ref(true)
 const isGroundChunkStreamingDebugVisible = ref(false)
 const isInstancedCullingVisualizationVisible = ref(false)
 const instancedLodFrustumCuller = createInstancedBvhFrustumCuller()
@@ -2088,7 +2089,15 @@ type AirWallDebugEntry = {
 const airWallDebugEntries = new Map<string, AirWallDebugEntry>()
 const airWallDebugMeshes = new Map<string, THREE.Mesh>()
 type RigidbodyDebugHelperCategory = 'ground' | 'rigidbody'
-type RigidbodyDebugHelper = { group: THREE.Group; signature: string; category: RigidbodyDebugHelperCategory; scale: THREE.Vector3 }
+type RigidbodyDebugHelperParentSpace = 'scene' | 'runtimeObject'
+type RigidbodyDebugHelper = {
+	group: THREE.Group
+	signature: string
+	category: RigidbodyDebugHelperCategory
+	scale: THREE.Vector3
+	parentSpace: RigidbodyDebugHelperParentSpace
+	parentNodeId: string
+}
 const rigidbodyDebugHelpers = new Map<string, RigidbodyDebugHelper>()
 let rigidbodyDebugGroup: THREE.Group | null = null
 let airWallDebugGroup: THREE.Group | null = null
@@ -11194,6 +11203,39 @@ function computeRigidbodyShapeSignature(shape: RigidbodyPhysicsShape): string {
 	return JSON.stringify(shape)
 }
 
+function formatDebugNumber(value: number): string {
+	return Number.isFinite(value) ? value.toFixed(3) : 'NaN'
+}
+
+function formatDebugVector(vector: THREE.Vector3): string {
+	return `[${formatDebugNumber(vector.x)},${formatDebugNumber(vector.y)},${formatDebugNumber(vector.z)}]`
+}
+
+function formatDebugBox(box: THREE.Box3): string {
+	return box.isEmpty() ? 'empty' : `min${formatDebugVector(box.min)} max${formatDebugVector(box.max)}`
+}
+
+function formatDebugObject(object: THREE.Object3D | null | undefined): string {
+	if (!object) {
+		return 'null'
+	}
+	return JSON.stringify({
+		name: object.name || '',
+		type: object.type || object.constructor.name || 'Object3D',
+		uuid: object.uuid || '',
+	})
+}
+
+function computeConvexSegmentsBounds(segments: Array<{ shape: Extract<RigidbodyPhysicsShape, { kind: 'convex' }> }>): THREE.Box3 {
+	const bounds = new THREE.Box3()
+	segments.forEach((segment) => {
+		segment.shape.vertices.forEach((vertex) => {
+			bounds.expandByPoint(new THREE.Vector3(vertex[0] ?? 0, vertex[1] ?? 0, vertex[2] ?? 0))
+		})
+	})
+	return bounds
+}
+
 function removeRigidbodyDebugHelper(nodeId: string): void {
 	const helper = rigidbodyDebugHelpers.get(nodeId)
 	if (!helper) {
@@ -11228,8 +11270,6 @@ function resolveRigidbodyDebugVisibilityObject(nodeId: string, fallback: THREE.O
 	return fallback ?? null
 }
 
-}
-
 function clearRigidbodyDebugHelpers(): void {
 	rigidbodyDebugHelpers.forEach((_helper, nodeId) => removeRigidbodyDebugHelper(nodeId))
 }
@@ -11244,14 +11284,15 @@ function disposeRigidbodyDebugHelpers(): void {
 }
 
 function ensureRigidbodyDebugHelperForShape(
-  nodeId: string,
-  shape: RigidbodyPhysicsShape,
-  category: RigidbodyDebugHelperCategory,
-  worldScale: THREE.Vector3,
+	nodeId: string,
+	parentNodeId: string,
+	shape: RigidbodyPhysicsShape,
+	category: RigidbodyDebugHelperCategory,
+	localScale: THREE.Vector3,
 ): void {
 	const signature = computeRigidbodyShapeSignature(shape)
 	const existing = rigidbodyDebugHelpers.get(nodeId)
-	if (existing?.signature === signature) {
+	if (existing?.signature === signature && existing.parentSpace === 'runtimeObject' && existing.parentNodeId === parentNodeId) {
 		return
 	}
 	removeRigidbodyDebugHelper(nodeId)
@@ -11269,14 +11310,85 @@ function ensureRigidbodyDebugHelperForShape(
 	lineSegments.renderOrder = 9999
 	const offsetTuple = shape.kind === 'heightfield' ? [0, 0, 0] : shape.offset ?? [0, 0, 0]
 	const [ox = 0, oy = 0, oz = 0] = offsetTuple
+	console.log(`[RigidbodyDebugShape] nodeId=${JSON.stringify(nodeId)} parentNodeId=${JSON.stringify(parentNodeId)} category=${JSON.stringify(category)} shapeKind=${JSON.stringify(shape.kind)} applyScale=${String(shape.applyScale === true)} offset=${formatDebugVector(new THREE.Vector3(ox, oy, oz))} localScale=${formatDebugVector(localScale)}`)
 	// Offset is expressed in the same local-space units as the shape definition.
-	// When applyScale is enabled we scale the whole helper group, which also scales this translation.
+	// The helper is parented to the bound runtime object, so this translation stays in object-local space.
 	lineSegments.position.set(ox, oy, oz)
 	helperGroup.add(lineSegments)
 	helperGroup.visible = false
-	helperGroup.scale.copy(shape.applyScale ? worldScale : new THREE.Vector3(1, 1, 1))
+	helperGroup.scale.copy(localScale)
 	container.add(helperGroup)
-	rigidbodyDebugHelpers.set(nodeId, { group: helperGroup, signature, category, scale: helperGroup.scale.clone() })
+	rigidbodyDebugHelpers.set(nodeId, {
+		group: helperGroup,
+		signature,
+		category,
+		scale: helperGroup.scale.clone(),
+		parentSpace: 'runtimeObject',
+		parentNodeId,
+	})
+}
+
+function ensureModelCollisionDebugHelper(
+	nodeId: string,
+	parentNodeId: string,
+	runtimeObject: THREE.Object3D,
+	definition: NonNullable<ReturnType<typeof resolveModelCollisionComponentPropsFromNode>>,
+	category: RigidbodyDebugHelperCategory,
+): void {
+	const segments = resolveModelCollisionFaceSegments({
+		type: 'ModelCollision',
+		defaultThickness: definition.defaultThickness,
+		faces: definition.faces,
+	})
+	if (!segments.length) {
+		removeRigidbodyDebugHelper(nodeId)
+		return
+	}
+	const collisionBounds = computeConvexSegmentsBounds(segments)
+	console.log(`[ModelCollisionDebug] nodeId=${JSON.stringify(nodeId)} parentNodeId=${JSON.stringify(parentNodeId)} runtimeObject=${formatDebugObject(runtimeObject)} faceCount=${definition.faces.length} segments=${segments.length} bounds=${formatDebugBox(collisionBounds)}`)
+	const signature = `model-collision-segments:${definition.defaultThickness}:${definition.faces
+		.map((face) => {
+			const vertices = Array.isArray(face?.vertices)
+				? face.vertices
+					.map((vertex) => `${Number(vertex?.x)},${Number(vertex?.y)},${Number(vertex?.z)}`)
+					.join(';')
+				: ''
+			return `${face.id}:${face.thickness ?? ''}:${vertices}`
+		})
+		.join('|')}`
+	const existing = rigidbodyDebugHelpers.get(nodeId)
+	if (existing?.signature === signature && existing.parentSpace === 'runtimeObject' && existing.parentNodeId === parentNodeId) {
+		if (existing.group.parent !== runtimeObject) {
+			runtimeObject.add(existing.group)
+		}
+		return
+	}
+	removeRigidbodyDebugHelper(nodeId)
+	const helperGroup = new THREE.Group()
+	helperGroup.name = `RigidbodyDebugHelper:${nodeId}`
+	helperGroup.visible = false
+	helperGroup.scale.set(1, 1, 1)
+	segments.forEach((segment, index) => {
+		const lines = buildConvexDebugLines(segment.shape)
+		if (!lines) {
+			return
+		}
+		lines.name = `ModelCollisionDebugLines:${nodeId}:${index}`
+		lines.renderOrder = 9999
+		helperGroup.add(lines)
+	})
+	if (!helperGroup.children.length) {
+		return
+	}
+	runtimeObject.add(helperGroup)
+	rigidbodyDebugHelpers.set(nodeId, {
+		group: helperGroup,
+		signature,
+		category,
+		scale: new THREE.Vector3(1, 1, 1),
+		parentSpace: 'runtimeObject',
+		parentNodeId,
+	})
 }
 
 function ensureRoadHeightfieldDebugHelper(
@@ -11335,6 +11447,8 @@ function ensureRoadHeightfieldDebugHelper(
 		signature,
 		category: 'rigidbody',
 		scale: new THREE.Vector3(1, 1, 1),
+		parentSpace: 'scene',
+		parentNodeId: nodeId,
 	})
 }
 
@@ -11380,6 +11494,8 @@ function ensureGroundHeightfieldDebugHelper(
 		signature,
 		category,
 		scale: new THREE.Vector3(1, 1, 1),
+		parentSpace: 'scene',
+		parentNodeId: nodeId,
 	})
 }
 
@@ -11388,8 +11504,7 @@ function refreshRigidbodyDebugHelper(nodeId: string): void {
 		return
 	}
 	const node = resolveNodeById(nodeId)
-	const component = resolveRigidbodyComponent(node)
-	const instance = rigidbodyInstances.get(nodeId) ?? null
+	const component = resolvePhysicsRigidbodyComponent(node)
 	const isGroundNode = Boolean(node && isGroundDynamicMesh(node.dynamicMesh))
 	const groundNode = currentDocument ? findGroundNode(currentDocument.nodes) : null
 	const roadEntry =
@@ -11427,6 +11542,27 @@ function refreshRigidbodyDebugHelper(nodeId: string): void {
 		updateRigidbodyDebugHelperTransform(nodeId)
 		return
 	}
+	const rigidbodyBindingObject = component ? resolveRigidbodyBindingObject(component, nodeObjectMap.get(nodeId) ?? null) : null
+	const targetNodeId = typeof component?.props?.targetNodeId === 'string' ? component.props.targetNodeId.trim() : ''
+	const targetNode = targetNodeId ? resolveNodeById(targetNodeId) : null
+	const modelCollisionNode = targetNode ?? node
+	const modelCollisionDefinition = resolveModelCollisionComponentPropsFromNode(modelCollisionNode)
+	if (modelCollisionDefinition?.faces?.length) {
+		const category: RigidbodyDebugHelperCategory = 'rigidbody'
+		if (!isRigidbodyDebugCategoryVisible(category)) {
+			removeRigidbodyDebugHelper(nodeId)
+			return
+		}
+		const parentNodeId = targetNodeId && targetNode ? targetNodeId : nodeId
+		const runtimeObject = targetNodeId && targetNode ? nodeObjectMap.get(targetNodeId) ?? rigidbodyBindingObject : rigidbodyBindingObject
+		if (!runtimeObject) {
+			removeRigidbodyDebugHelper(nodeId)
+			return
+		}
+		ensureModelCollisionDebugHelper(nodeId, parentNodeId, runtimeObject, modelCollisionDefinition, category)
+		updateRigidbodyDebugHelperTransform(nodeId)
+		return
+	}
 	let shapeDefinition = extractRigidbodyShape(component)
 	if (!shapeDefinition) {
 		removeRigidbodyDebugHelper(nodeId)
@@ -11438,14 +11574,25 @@ function refreshRigidbodyDebugHelper(nodeId: string): void {
 		return
 	}
 	const scale = new THREE.Vector3(1, 1, 1)
+	const bindingObject = component ? resolveRigidbodyBindingObject(component, nodeObjectMap.get(nodeId) ?? null) : null
 	if (shapeDefinition.applyScale) {
-		const object = node ? nodeObjectMap.get(node.id) ?? null : null
+		const object = bindingObject ?? (node ? nodeObjectMap.get(node.id) ?? null : null)
 		if (object) {
 			object.updateMatrixWorld(true)
 			object.getWorldScale(scale)
+			scale.set(1, 1, 1)
 		}
+	} else if (bindingObject) {
+		bindingObject.updateMatrixWorld(true)
+		bindingObject.getWorldScale(scale)
+		scale.set(
+			Math.abs(scale.x) > 1e-8 ? 1 / scale.x : 1,
+			Math.abs(scale.y) > 1e-8 ? 1 / scale.y : 1,
+			Math.abs(scale.z) > 1e-8 ? 1 / scale.z : 1,
+		)
 	}
-	ensureRigidbodyDebugHelperForShape(nodeId, shapeDefinition, category, scale)
+	const parentNodeId = targetNodeId && targetNode ? targetNodeId : nodeId
+	ensureRigidbodyDebugHelperForShape(nodeId, parentNodeId, shapeDefinition, category, scale)
 	updateRigidbodyDebugHelperTransform(nodeId)
 }
 
@@ -11457,8 +11604,31 @@ function updateRigidbodyDebugHelperTransform(nodeId: string): void {
 	if (!helper) {
 		return
 	}
-	const instance = rigidbodyInstances.get(nodeId) ?? null
+	if (helper.parentSpace === 'runtimeObject') {
+		const object = resolveRigidbodyDebugVisibilityObject(helper.parentNodeId, nodeObjectMap.get(helper.parentNodeId) ?? null)
+		if (!object) {
+			helper.group.visible = false
+			return
+		}
+		const reparented = helper.group.parent !== object
+		if (helper.group.parent !== object) {
+			object.add(helper.group)
+		}
+		helper.group.position.set(0, 0, 0)
+		helper.group.quaternion.set(0, 0, 0, 1)
+		helper.group.scale.copy(helper.scale)
+		helper.group.visible = isRuntimeObjectEffectivelyVisible(object) && isRigidbodyDebugCategoryVisible(helper.category)
+		helper.group.updateMatrixWorld(true)
+		object.updateMatrixWorld(true)
+		object.getWorldPosition(rigidbodyDebugPositionHelper)
+		object.getWorldScale(rigidbodyDebugScaleHelper)
+		if (reparented) {
+			console.log(`[RigidbodyDebugTransform] nodeId=${JSON.stringify(nodeId)} parentNodeId=${JSON.stringify(helper.parentNodeId)} parentObject=${formatDebugObject(object)} worldPosition=${formatDebugVector(rigidbodyDebugPositionHelper)} worldScale=${formatDebugVector(rigidbodyDebugScaleHelper)} reparented=${String(reparented)} visible=${String(helper.group.visible)}`)
+		}
+		return
+	}
 	const node = resolveNodeById(nodeId)
+	const component = resolvePhysicsRigidbodyComponent(node)
 	const groundNode = currentDocument ? findGroundNode(currentDocument.nodes) : null
 	const roadDebugEntry =
 		node
@@ -11505,7 +11675,7 @@ function updateRigidbodyDebugHelperTransform(nodeId: string): void {
 		helper.group.quaternion.copy(rigidbodyDebugQuaternionHelper)
 		visible = isRuntimeObjectEffectivelyVisible(resolveRigidbodyDebugVisibilityObject(nodeId, rigidbody.object))
 	} else {
-		const object = resolveRigidbodyDebugVisibilityObject(nodeId, nodeObjectMap.get(nodeId) ?? null)
+		const object = component ? resolveRigidbodyBindingObject(component, nodeObjectMap.get(nodeId) ?? null) : resolveRigidbodyDebugVisibilityObject(nodeId, nodeObjectMap.get(nodeId) ?? null)
 		if (!object) {
 			helper.group.visible = false
 			return

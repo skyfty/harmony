@@ -1,0 +1,53 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .:
+    dependencies:
+      '@harmony/physics-bridge':
+        specifier: file:../physics-bridge
+        version: file:../physics-bridge
+      '@harmony/physics-core':
+        specifier: file:../physics-core
+        version: file:../physics-core
+      ammojs3:
+        specifier: ^0.0.11
+        version: 0.0.11
+    devDependencies:
+      typescript:
+        specifier: ~5.6.3
+        version: 5.6.3
+
+packages:
+
+  '@harmony/physics-bridge@file:../physics-bridge':
+    resolution: {directory: ../physics-bridge, type: directory}
+    engines: {pnpm: '>=10.0.0'}
+
+  '@harmony/physics-core@file:../physics-core':
+    resolution: {directory: ../physics-core, type: directory}
+    engines: {pnpm: '>=10.0.0'}
+
+  ammojs3@0.0.11:
+    resolution: {integrity: sha512-pfnMm0XvTLjzCt+ytdpV3aIgooxQzexjkC2DbTyiGsAk8ECEBPxJ8gOQ/m0CE+d9pf9ToPMK8PZJR7jP1h6lOA==}
+
+  typescript@5.6.3:
+    resolution: {integrity: sha512-hjcS1mhfuyi4WW8IWtjP7brDrG2cuDZukyrYrSauoXGNgx0S7zceP07adYkJycEr56BOUTNPzbInooiN3fn1qw==}
+    engines: {node: '>=14.17'}
+    hasBin: true
+
+snapshots:
+
+  '@harmony/physics-bridge@file:../physics-bridge':
+    dependencies:
+      '@harmony/physics-core': file:../physics-core
+
+  '@harmony/physics-core@file:../physics-core': {}
+
+  ammojs3@0.0.11: {}
+
+  typescript@5.6.3: {}

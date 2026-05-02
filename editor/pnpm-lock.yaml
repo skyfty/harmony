@@ -8,6 +8,15 @@ importers:
 
   .:
     dependencies:
+      '@harmony/physics-ammo':
+        specifier: file:../physics-ammo
+        version: file:../physics-ammo
+      '@harmony/physics-bridge':
+        specifier: file:../physics-bridge
+        version: file:../physics-bridge
+      '@harmony/physics-core':
+        specifier: file:../physics-core
+        version: file:../physics-core
       '@harmony/schema':
         specifier: file:../schema
         version: file:../schema
@@ -26,9 +35,6 @@ importers:
       camera-controls:
         specifier: ^3.1.2
         version: 3.1.2(three@0.172.0)
-      cannon-es:
-        specifier: ^0.20.0
-        version: 0.20.0
       fflate:
         specifier: ^0.8.2
         version: 0.8.2
@@ -293,6 +299,18 @@ packages:
     engines: {node: '>=18'}
     cpu: [x64]
     os: [win32]
+
+  '@harmony/physics-ammo@file:../physics-ammo':
+    resolution: {directory: ../physics-ammo, type: directory}
+    engines: {pnpm: '>=10.0.0'}
+
+  '@harmony/physics-bridge@file:../physics-bridge':
+    resolution: {directory: ../physics-bridge, type: directory}
+    engines: {pnpm: '>=10.0.0'}
+
+  '@harmony/physics-core@file:../physics-core':
+    resolution: {directory: ../physics-core, type: directory}
+    engines: {pnpm: '>=10.0.0'}
 
   '@harmony/schema@file:../schema':
     resolution: {directory: ../schema, type: directory}
@@ -703,6 +721,9 @@ packages:
   alien-signals@3.1.2:
     resolution: {integrity: sha512-d9dYqZTS90WLiU0I5c6DHj/HcKkF8ZyGN3G5x8wSbslulz70KOxaqCT0hQCo9KOyhVqzqGojvNdJXoTumZOtcw==}
 
+  ammojs3@0.0.11:
+    resolution: {integrity: sha512-pfnMm0XvTLjzCt+ytdpV3aIgooxQzexjkC2DbTyiGsAk8ECEBPxJ8gOQ/m0CE+d9pf9ToPMK8PZJR7jP1h6lOA==}
+
   arg@4.1.3:
     resolution: {integrity: sha512-58S9QDqG0Xx27YwPSt9fJxivjYl432YCwfDMfZ+71RAqUrZef7LrKQZ3LHLOwCS4FLNBplP533Zx895SeOCHvA==}
 
@@ -716,9 +737,6 @@ packages:
     engines: {node: '>=22.0.0', npm: '>=10.5.1'}
     peerDependencies:
       three: '>=0.126.1'
-
-  cannon-es@0.20.0:
-    resolution: {integrity: sha512-eZhWTZIkFOnMAJOgfXJa9+b3kVlvG+FX4mdkpePev/w/rP5V8NRquGyEozcjPfEoXUlb+p7d9SUcmDSn14prOA==}
 
   chokidar@4.0.3:
     resolution: {integrity: sha512-Qgzu8kfBvo+cA4962jnP1KkS6Dop5NS6g7R5LFYJr4b8Ub94PPQXUksCw9PvXoeXPRRddRNC5C1JQUR2SMGtnA==}
@@ -1206,10 +1224,22 @@ snapshots:
   '@esbuild/win32-x64@0.27.3':
     optional: true
 
+  '@harmony/physics-ammo@file:../physics-ammo':
+    dependencies:
+      '@harmony/physics-bridge': file:../physics-bridge
+      '@harmony/physics-core': file:../physics-core
+      ammojs3: 0.0.11
+
+  '@harmony/physics-bridge@file:../physics-bridge':
+    dependencies:
+      '@harmony/physics-core': file:../physics-core
+
+  '@harmony/physics-core@file:../physics-core': {}
+
   '@harmony/schema@file:../schema':
     dependencies:
+      '@harmony/physics-core': file:../physics-core
       '@msgpack/msgpack': 3.1.3
-      cannon-es: 0.20.0
       fflate: 0.8.2
       polygon-clipping: 0.15.7
       robust-predicates: 1.1.0
@@ -1547,6 +1577,8 @@ snapshots:
 
   alien-signals@3.1.2: {}
 
+  ammojs3@0.0.11: {}
+
   arg@4.1.3: {}
 
   camera-controls@2.10.1(three@0.172.0):
@@ -1556,8 +1588,6 @@ snapshots:
   camera-controls@3.1.2(three@0.172.0):
     dependencies:
       three: 0.172.0
-
-  cannon-es@0.20.0: {}
 
   chokidar@4.0.3:
     dependencies:

@@ -1,3 +1,5 @@
+import wasmUrl from 'ammojs3/dist/ammo.wasm.wasm?url'
+
 export type AmmoModuleFactory<TModule> = () => Promise<TModule>
 
 type AmmoBootstrapFactory<TModule> = (target?: Record<string, unknown>) => Promise<TModule>
@@ -15,14 +17,9 @@ function resolveAmmoBootstrapFactory<TModule>(module: unknown): AmmoBootstrapFac
 export function createDefaultAmmoModuleFactory<TModule = unknown>(): AmmoModuleFactory<TModule> {
   return async () => {
     const importedModulePromise = import('ammojs3/dist/ammo.wasm.js')
-    // @ts-expect-error Vite/uni resolves wasm asset URLs at build time.
-    const wasmUrlPromise = import('ammojs3/dist/ammo.wasm.wasm?url') as Promise<{ default: string }>
-    const [importedModule, { default: wasmUrl }] = await Promise.all([
-      importedModulePromise,
-      wasmUrlPromise,
-    ])
+    const importedModule = await importedModulePromise
     const bootstrap = resolveAmmoBootstrapFactory<TModule>(importedModule)
-    return bootstrap({
+    return bootstrap.call(globalThis, {
       locateFile(path: string) {
         if (path === 'ammo.wasm.wasm') {
           return wasmUrl

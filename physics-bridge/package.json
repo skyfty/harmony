@@ -15,9 +15,9 @@
     "dist/**/*"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -b tsconfig.json",
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
-    "prepare": "pnpm run build"
+    "prepack": "pnpm run build"
   },
   "engines": {
     "pnpm": ">=10.0.0"
