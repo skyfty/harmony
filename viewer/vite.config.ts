@@ -52,6 +52,10 @@ export default {
       alias: {
         '@schema': fileURLToPath(new URL('../schema', import.meta.url)),
         '@harmony/schema': fileURLToPath(new URL('../schema', import.meta.url)),
+        '@harmony/physics-core': fileURLToPath(new URL('../physics-core/src', import.meta.url)),
+        '@harmony/physics-ammo': fileURLToPath(new URL('../physics-ammo/src', import.meta.url)),
+        '@harmony/physics-host-wechat': fileURLToPath(new URL('../physics-host-wechat/src', import.meta.url)),
+        '@harmony/physics-worker-runtime': fileURLToPath(new URL('../physics-worker-runtime/src', import.meta.url)),
         'vue': vueRuntimeAlias,
         // Ensure modules imported from files outside project root (e.g. ../schema)
         // resolve "three" to this package's installed dependency
@@ -87,7 +91,7 @@ export default {
         },
       }),
       createMpChunkSplitterPlugin({
-        subpackages: ['pages/scenery'],
+        subpackages: ['pages/scenery', 'pages/physics'],
         singleChunkMode: true,
         packageSizeLimit: 1.8 * 1024 * 1024
       }),
@@ -96,6 +100,16 @@ export default {
       // 这里强制 three 相关依赖进入 scenery 子包，避免主包膨胀
       toCustomChunkPlugin({
         manualChunks: {
+          'pages/physics/chunks/vendor': [
+            '@harmony/physics-core',
+            '@harmony/physics-ammo',
+            '@harmony/physics-host-wechat',
+            '@harmony/physics-worker-runtime',
+            '**/harmony/physics-core/**',
+            '**/harmony/physics-ammo/**',
+            '**/harmony/physics-host-wechat/**',
+            '**/harmony/physics-worker-runtime/**',
+          ],
           'pages/scenery/chunks/vendor': [
             '@minisheep/three-platform-adapter',
             '@minisheep/three-platform-adapter/wechat',

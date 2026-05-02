@@ -30,6 +30,22 @@ export default defineConfig({
         find: '@schema',
         replacement: resolveDir('../schema'),
       },
+      {
+        find: '@harmony/physics-core',
+        replacement: resolveDir('../physics-core/src'),
+      },
+      {
+        find: '@harmony/physics-ammo',
+        replacement: resolveDir('../physics-ammo/src'),
+      },
+      {
+        find: '@harmony/physics-host-web',
+        replacement: resolveDir('../physics-host-web/src'),
+      },
+      {
+        find: '@harmony/physics-worker-runtime',
+        replacement: resolveDir('../physics-worker-runtime/src'),
+      },
       // keep using the short @schema alias; no runtime alias needed for @harmony/schema
       {
         find: 'cannon-es',

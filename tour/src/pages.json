@@ -26,6 +26,13 @@
       "pages": [
         { "path": "index" }
       ]
+    },
+    {
+      "root": "pages/physics",
+      "name": "physics",
+      "pages": [
+        { "path": "index" }
+      ]
     }
   ],
   "globalStyle": {

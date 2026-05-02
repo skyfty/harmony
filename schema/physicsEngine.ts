@@ -764,7 +764,7 @@ function buildModelCollisionTrianglePrismShape(
 	}
 }
 
-function resolveModelCollisionFaceSegments(definition: ModelCollisionDynamicMesh): Array<{ shape: Extract<RigidbodyPhysicsShape, { kind: 'convex' }> }> {
+export function resolveModelCollisionFaceSegments(definition: ModelCollisionDynamicMesh): Array<{ shape: Extract<RigidbodyPhysicsShape, { kind: 'convex' }> }> {
 	const segments: Array<{ shape: Extract<RigidbodyPhysicsShape, { kind: 'convex' }> }> = []
 	for (const face of Array.isArray(definition.faces) ? definition.faces : []) {
 		const vertices = sanitizeModelCollisionVertices(face?.vertices ?? [])
@@ -862,7 +862,7 @@ export function resolveFloorShape(
 
 // findWallRenderMesh removed (unused)
 
-function resolveWallShape(params: {
+export function resolveWallShape(params: {
 	node: SceneNode
 	definition: WallDynamicMesh
 	cache: WallTrimeshCache

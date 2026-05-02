@@ -54,6 +54,9 @@ import {
 	loadSkyCubeTexture,
 	extractSkycubeZipFaces,
 } from '@schema/index'
+import { buildPhysicsSceneAsset } from '@schema/physicsSceneAsset'
+import { PHYSICS_BODY_TRANSFORM_STRIDE, type PhysicsBridge, type PhysicsSceneAsset, type PhysicsStepFrame } from '@harmony/physics-core'
+import { createScenePreviewPhysicsBridge } from '@/physics/createScenePreviewPhysicsBridge'
  
 import {
 	applyMaterialOverrides,
@@ -2061,6 +2064,25 @@ function shouldUpdateCameraDependentSystems(activeCamera: THREE.PerspectiveCamer
 }
 
 let physicsWorld: CANNON.World | null = null
+let physicsBridge: PhysicsBridge | null = null
+let physicsBridgeInitPromise: Promise<PhysicsBridge> | null = null
+let physicsBridgeStepPromise: Promise<void> | null = null
+let physicsBridgeBodySyncPromise: Promise<void> | null = null
+let physicsBridgeVehicleInputPromise: Promise<void> | null = null
+let physicsBridgeSceneLoaded = false
+let physicsBridgeSceneRequestId = 0
+const physicsBridgeBodyIdByNodeId = new Map<string, number>()
+const physicsBridgeNodeIdByBodyId = new Map<number, string>()
+const physicsBridgeVehicleIdByNodeId = new Map<string, number>()
+type PhysicsBridgeBodyFrameState = {
+	position: THREE.Vector3
+	quaternion: THREE.Quaternion
+	motionState: number
+}
+const physicsBridgeFrameBodiesByNodeId = new Map<string, PhysicsBridgeBodyFrameState>()
+const physicsBridgeSyncPositionHelper = new THREE.Vector3()
+const physicsBridgeSyncQuaternionHelper = new THREE.Quaternion()
+const physicsBridgeSyncParentQuaternionHelper = new THREE.Quaternion()
 const physicsEnvironmentEnabled = ref(true)
 const rigidbodyInstances = new Map<string, RigidbodyInstance>()
 const airWallBodies = new Map<string, CANNON.Body>()
@@ -8892,6 +8914,9 @@ function updatePlaybackSystemsForFrame(delta: number): boolean {
 		transformDriveUpdated = !physicsEnvironmentEnabled.value
 	}
 	stepPhysicsWorld(delta)
+	syncScenePreviewPhysicsBridgeVehicleInput()
+	syncScenePreviewPhysicsBridgeBodyTransforms()
+	stepScenePreviewPhysicsBridge(delta)
 	updateVehicleSpeedFromVehicle()
 	updateVehicleWheelVisuals(delta)
 	return transformDriveUpdated
@@ -10241,6 +10266,7 @@ function syncInstancedTransform(object: THREE.Object3D | null) {
 
 
 function resetPhysicsWorld(): void {
+	void disposeScenePreviewPhysicsBridgeScene()
 	if (vehicleDriveState.active) {
 		stopVehicleDriveMode({ resolution: { type: 'abort', message: 'Physics environment reset.' } })
 	}
@@ -10276,6 +10302,333 @@ function resetPhysicsWorld(): void {
 	rigidbodyMaterialCache.clear()
 	rigidbodyContactMaterialKeys.clear()
 	scenePreviewPerf.reset()
+}
+
+async function ensureScenePreviewPhysicsBridgeReady(): Promise<PhysicsBridge> {
+	if (physicsBridgeInitPromise) {
+		return physicsBridgeInitPromise
+	}
+	if (!physicsBridge) {
+		physicsBridge = createScenePreviewPhysicsBridge()
+	}
+	physicsBridgeInitPromise = physicsBridge.init({
+		world: {
+			gravity: [physicsGravity.x, physicsGravity.y, physicsGravity.z],
+			fixedTimeStepMs: PHYSICS_FIXED_TIMESTEP * 1000,
+			maxSubSteps: PHYSICS_MAX_SUB_STEPS,
+		},
+	}).then(() => physicsBridge!)
+		.catch((error) => {
+			physicsBridgeInitPromise = null
+			console.warn('[ScenePreview] Failed to initialize physics bridge', error)
+			throw error
+		})
+	return physicsBridgeInitPromise
+}
+
+function updateScenePreviewPhysicsBridgeIndex(asset: PhysicsSceneAsset): void {
+	physicsBridgeBodyIdByNodeId.clear()
+	physicsBridgeNodeIdByBodyId.clear()
+	physicsBridgeVehicleIdByNodeId.clear()
+	physicsBridgeFrameBodiesByNodeId.clear()
+	asset.bodies.forEach((body) => {
+		if (!body.userDataKey) {
+			return
+		}
+		physicsBridgeBodyIdByNodeId.set(body.userDataKey, body.id)
+		physicsBridgeNodeIdByBodyId.set(body.id, body.userDataKey)
+	})
+	asset.vehicles.forEach((vehicle) => {
+		const nodeId = physicsBridgeNodeIdByBodyId.get(vehicle.bodyId)
+		if (!nodeId) {
+			return
+		}
+		physicsBridgeVehicleIdByNodeId.set(nodeId, vehicle.id)
+	})
+}
+
+async function loadScenePreviewPhysicsBridgeScene(document: SceneJsonExportDocument | null): Promise<void> {
+	const requestId = ++physicsBridgeSceneRequestId
+	if (!document) {
+		await disposeScenePreviewPhysicsBridgeScene()
+		return
+	}
+	const asset = buildPhysicsSceneAsset(document)
+	try {
+		const bridge = await ensureScenePreviewPhysicsBridgeReady()
+		await bridge.loadScene(asset)
+		if (requestId !== physicsBridgeSceneRequestId) {
+			return
+		}
+		updateScenePreviewPhysicsBridgeIndex(asset)
+		physicsBridgeSceneLoaded = true
+	} catch (error) {
+		console.warn('[ScenePreview] Failed to load physics bridge scene', error)
+	}
+}
+
+function consumeScenePreviewPhysicsBridgeStepFrame(frame: PhysicsStepFrame): void {
+	if (
+		frame.bodyCount <= 0
+		|| frame.bodyTransforms.length === 0
+		|| frame.bodyTransforms.length < frame.bodyCount * PHYSICS_BODY_TRANSFORM_STRIDE
+	) {
+		return
+	}
+	for (let index = 0; index < frame.bodyCount; index += 1) {
+		const bodyId = frame.bodyMeta?.[index]
+		if (typeof bodyId !== 'number') {
+			continue
+		}
+		const nodeId = physicsBridgeNodeIdByBodyId.get(bodyId)
+		if (!nodeId) {
+			continue
+		}
+		const base = index * PHYSICS_BODY_TRANSFORM_STRIDE
+		const existing = physicsBridgeFrameBodiesByNodeId.get(nodeId)
+		if (existing) {
+			existing.position.set(
+				frame.bodyTransforms[base] ?? 0,
+				frame.bodyTransforms[base + 1] ?? 0,
+				frame.bodyTransforms[base + 2] ?? 0,
+			)
+			existing.quaternion.set(
+				frame.bodyTransforms[base + 3] ?? 0,
+				frame.bodyTransforms[base + 4] ?? 0,
+				frame.bodyTransforms[base + 5] ?? 0,
+				frame.bodyTransforms[base + 6] ?? 1,
+			).normalize()
+			existing.motionState = frame.bodyTransforms[base + 7] ?? 0
+			continue
+		}
+		physicsBridgeFrameBodiesByNodeId.set(nodeId, {
+			position: new THREE.Vector3(
+				frame.bodyTransforms[base] ?? 0,
+				frame.bodyTransforms[base + 1] ?? 0,
+				frame.bodyTransforms[base + 2] ?? 0,
+			),
+			quaternion: new THREE.Quaternion(
+				frame.bodyTransforms[base + 3] ?? 0,
+				frame.bodyTransforms[base + 4] ?? 0,
+				frame.bodyTransforms[base + 5] ?? 0,
+				frame.bodyTransforms[base + 6] ?? 1,
+			).normalize(),
+			motionState: frame.bodyTransforms[base + 7] ?? 0,
+		})
+	}
+	applyScenePreviewPhysicsBridgeFrameToObjects()
+}
+
+function applyScenePreviewPhysicsBridgeFrameToObjects(): void {
+	if (!physicsBridgeFrameBodiesByNodeId.size) {
+		return
+	}
+	physicsBridgeFrameBodiesByNodeId.forEach((state, nodeId) => {
+		if (vehicleInstances.has(nodeId)) {
+			return
+		}
+		const rigidbodyEntry = rigidbodyInstances.get(nodeId)
+		if (rigidbodyEntry) {
+			if (rigidbodyEntry.syncObjectFromBody === false || !rigidbodyEntry.object) {
+				return
+			}
+			applyScenePreviewPhysicsBridgeTransformToObject(
+				rigidbodyEntry.object,
+				state.position,
+				state.quaternion,
+				rigidbodyEntry.orientationAdjustment,
+			)
+			return
+		}
+		const node = resolveNodeById(nodeId)
+		const bindingObject = node
+			? resolveRigidbodyBindingObject(
+				resolvePhysicsRigidbodyComponent(node),
+				nodeObjectMap.get(nodeId) ?? null,
+			)
+			: null
+		if (!bindingObject) {
+			return
+		}
+		applyScenePreviewPhysicsBridgeTransformToObject(bindingObject, state.position, state.quaternion, null)
+	})
+}
+
+function shouldUseScenePreviewPhysicsBridgeFrameForNode(nodeId: string): boolean {
+	return physicsBridgeSceneLoaded && physicsBridgeFrameBodiesByNodeId.has(nodeId) && !vehicleInstances.has(nodeId)
+}
+
+function applyScenePreviewPhysicsBridgeTransformToObject(
+	object: THREE.Object3D,
+	worldPosition: THREE.Vector3,
+	worldQuaternion: THREE.Quaternion,
+	orientationAdjustment: RigidbodyOrientationAdjustment | null,
+): void {
+	physicsBridgeSyncPositionHelper.copy(worldPosition)
+	physicsBridgeSyncQuaternionHelper.copy(worldQuaternion)
+	if (orientationAdjustment) {
+		physicsBridgeSyncQuaternionHelper.multiply(orientationAdjustment.threeInverse)
+	}
+	if (object.parent) {
+		object.parent.updateMatrixWorld(true)
+		object.position.copy(physicsBridgeSyncPositionHelper)
+		object.parent.worldToLocal(object.position)
+		object.parent.getWorldQuaternion(physicsBridgeSyncParentQuaternionHelper).invert()
+		object.quaternion.copy(physicsBridgeSyncParentQuaternionHelper).multiply(physicsBridgeSyncQuaternionHelper)
+	} else {
+		object.position.copy(physicsBridgeSyncPositionHelper)
+		object.quaternion.copy(physicsBridgeSyncQuaternionHelper)
+	}
+	object.updateMatrixWorld(true)
+	syncInstancedTransform(object)
+}
+
+function stepScenePreviewPhysicsBridge(delta: number): void {
+	if (
+		delta <= 0
+		|| !physicsEnvironmentEnabled.value
+		|| !physicsBridge
+		|| !physicsBridgeSceneLoaded
+		|| physicsBridgeStepPromise
+	) {
+		return
+	}
+	const bridge = physicsBridge
+	physicsBridgeStepPromise = bridge.step(delta * 1000)
+		.then((frame) => {
+			if (bridge !== physicsBridge) {
+				return
+			}
+			consumeScenePreviewPhysicsBridgeStepFrame(frame)
+		})
+		.catch((error) => {
+			console.warn('[ScenePreview] Failed to step physics bridge', error)
+		})
+		.finally(() => {
+			physicsBridgeStepPromise = null
+		})
+}
+
+function syncScenePreviewPhysicsBridgeBodyTransforms(): void {
+	if (
+		!physicsBridge
+		|| !physicsBridgeSceneLoaded
+		|| physicsBridgeBodySyncPromise
+		|| !rigidbodyInstances.size
+		|| !physicsBridgeBodyIdByNodeId.size
+	) {
+		return
+	}
+	const bridge = physicsBridge
+	const commands: Array<Promise<void>> = []
+	rigidbodyInstances.forEach((entry, nodeId) => {
+		if (entry.body.type === CANNON.Body.STATIC) {
+			return
+		}
+		const bodyId = physicsBridgeBodyIdByNodeId.get(nodeId)
+		if (typeof bodyId !== 'number') {
+			return
+		}
+		commands.push(
+			bridge.setBodyTransform({
+				bodyId,
+				transform: {
+					position: [entry.body.position.x, entry.body.position.y, entry.body.position.z],
+					rotation: [entry.body.quaternion.x, entry.body.quaternion.y, entry.body.quaternion.z, entry.body.quaternion.w],
+				},
+			}),
+		)
+	})
+	if (!commands.length) {
+		return
+	}
+	physicsBridgeBodySyncPromise = Promise.allSettled(commands)
+		.catch(() => {
+			// Promise.allSettled should not reject, keep a guard anyway.
+		})
+		.then(() => undefined)
+		.finally(() => {
+			physicsBridgeBodySyncPromise = null
+		})
+}
+
+function syncScenePreviewPhysicsBridgeVehicleInput(): void {
+	if (
+		!physicsBridge
+		|| !physicsBridgeSceneLoaded
+		|| physicsBridgeVehicleInputPromise
+	) {
+		return
+	}
+	const activeNodeId = vehicleDriveState.active ? vehicleDriveState.nodeId : null
+	if (!activeNodeId) {
+		return
+	}
+	const vehicleId = physicsBridgeVehicleIdByNodeId.get(activeNodeId)
+	if (typeof vehicleId !== 'number') {
+		return
+	}
+	const bridge = physicsBridge
+	physicsBridgeVehicleInputPromise = bridge.setVehicleInput({
+		vehicleId,
+		steering: vehicleDriveInput.steering,
+		throttle: vehicleDriveInput.throttle,
+		brake: vehicleDriveInput.brake,
+	})
+		.catch((error) => {
+			console.warn('[ScenePreview] Failed to sync physics bridge vehicle input', error)
+		})
+		.finally(() => {
+			physicsBridgeVehicleInputPromise = null
+		})
+}
+
+async function disposeScenePreviewPhysicsBridgeScene(): Promise<void> {
+	physicsBridgeSceneRequestId += 1
+	physicsBridgeBodyIdByNodeId.clear()
+	physicsBridgeNodeIdByBodyId.clear()
+	physicsBridgeVehicleIdByNodeId.clear()
+	physicsBridgeFrameBodiesByNodeId.clear()
+	if (!physicsBridge || !physicsBridgeSceneLoaded) {
+		physicsBridgeStepPromise = null
+		physicsBridgeBodySyncPromise = null
+		physicsBridgeVehicleInputPromise = null
+		return
+	}
+	try {
+		await physicsBridge.disposeScene()
+	} catch (error) {
+		console.warn('[ScenePreview] Failed to dispose physics bridge scene', error)
+	} finally {
+		physicsBridgeSceneLoaded = false
+		physicsBridgeStepPromise = null
+		physicsBridgeBodySyncPromise = null
+		physicsBridgeVehicleInputPromise = null
+		physicsBridgeFrameBodiesByNodeId.clear()
+	}
+}
+
+async function destroyScenePreviewPhysicsBridge(): Promise<void> {
+	if (!physicsBridge) {
+		return
+	}
+	try {
+		await disposeScenePreviewPhysicsBridgeScene()
+		await physicsBridge.destroy()
+	} catch (error) {
+		console.warn('[ScenePreview] Failed to destroy physics bridge', error)
+	} finally {
+		physicsBridge = null
+		physicsBridgeInitPromise = null
+		physicsBridgeStepPromise = null
+		physicsBridgeBodySyncPromise = null
+		physicsBridgeVehicleInputPromise = null
+		physicsBridgeBodyIdByNodeId.clear()
+		physicsBridgeNodeIdByBodyId.clear()
+		physicsBridgeVehicleIdByNodeId.clear()
+		physicsBridgeFrameBodiesByNodeId.clear()
+		physicsBridgeSceneLoaded = false
+	}
 }
 
 const physicsContactSettings: PhysicsContactSettings = {
@@ -11373,16 +11726,27 @@ function updateRigidbodyDebugHelperTransform(nodeId: string): void {
 	const categoryEnabled = isRigidbodyDebugCategoryVisible(helper.category)
 	const rigidbody = rigidbodyInstances.get(nodeId)
 	let visible = true
+	const bridgeFrameState = shouldUseScenePreviewPhysicsBridgeFrameForNode(nodeId)
+		? physicsBridgeFrameBodiesByNodeId.get(nodeId) ?? null
+		: null
 	if (rigidbody) {
-		helper.group.position.set(rigidbody.body.position.x, rigidbody.body.position.y, rigidbody.body.position.z)
-		rigidbodyDebugQuaternionHelper.set(
-			rigidbody.body.quaternion.x,
-			rigidbody.body.quaternion.y,
-			rigidbody.body.quaternion.z,
-			rigidbody.body.quaternion.w,
-		)
-		if (rigidbody.orientationAdjustment) {
-			rigidbodyDebugQuaternionHelper.multiply(rigidbody.orientationAdjustment.threeInverse)
+		if (bridgeFrameState && !vehicleInstances.has(nodeId)) {
+			helper.group.position.copy(bridgeFrameState.position)
+			rigidbodyDebugQuaternionHelper.copy(bridgeFrameState.quaternion)
+			if (rigidbody.orientationAdjustment) {
+				rigidbodyDebugQuaternionHelper.multiply(rigidbody.orientationAdjustment.threeInverse)
+			}
+		} else {
+			helper.group.position.set(rigidbody.body.position.x, rigidbody.body.position.y, rigidbody.body.position.z)
+			rigidbodyDebugQuaternionHelper.set(
+				rigidbody.body.quaternion.x,
+				rigidbody.body.quaternion.y,
+				rigidbody.body.quaternion.z,
+				rigidbody.body.quaternion.w,
+			)
+			if (rigidbody.orientationAdjustment) {
+				rigidbodyDebugQuaternionHelper.multiply(rigidbody.orientationAdjustment.threeInverse)
+			}
 		}
 		helper.group.quaternion.copy(rigidbodyDebugQuaternionHelper)
 		visible = isRuntimeObjectEffectivelyVisible(resolveRigidbodyDebugVisibilityObject(nodeId, rigidbody.object))
@@ -11732,6 +12096,7 @@ function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null):
 		syncAirWallsForDocument(null)
 		return
 	}
+	void loadScenePreviewPhysicsBridgeScene(document)
 	const world = ensurePhysicsWorld()
 	const rigidbodyNodes = collectRigidbodyNodes(document.nodes)
 	const desiredIds = new Set<string>()
@@ -11932,6 +12297,9 @@ function stepPhysicsWorld(delta: number): void {
 			if (!vehicle) {
 				return
 			}
+		}
+		if (shouldUseScenePreviewPhysicsBridgeFrameForNode(entry.nodeId)) {
+			return
 		}
 		syncSharedObjectFromBody(entry, syncInstancedTransform)
 	})
@@ -12888,6 +13256,7 @@ onMounted(() => {
 	] = resolveDisplayBoardMediaSource
 	addBehaviorRuntimeListener(behaviorRuntimeListener)
 	initRenderer()
+	void ensureScenePreviewPhysicsBridgeReady()
 
 	livePreviewEnabled = true
 	unsubscribe = subscribeToScenePreview((snapshot) => {
@@ -12939,6 +13308,7 @@ onBeforeUnmount(() => {
 	window.removeEventListener('keydown', handleKeyDown)
 	window.removeEventListener('keyup', handleKeyUp)
 	window.removeEventListener('resize', handleLanternViewportResize)
+	void destroyScenePreviewPhysicsBridge()
 	disposeScene()
 	disposeEnvironmentResources()
 	disposeSkyResources()

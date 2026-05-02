@@ -31,6 +31,14 @@
     "paths": {
       "@/*": ["./src/*"],
       "@schema/*": ["../schema/*"],
+      "@harmony/physics-core": ["../physics-core/src/index.ts"],
+      "@harmony/physics-core/*": ["../physics-core/src/*"],
+      "@harmony/physics-ammo": ["../physics-ammo/src/index.ts"],
+      "@harmony/physics-ammo/*": ["../physics-ammo/src/*"],
+      "@harmony/physics-host-wechat": ["../physics-host-wechat/src/index.ts"],
+      "@harmony/physics-host-wechat/*": ["../physics-host-wechat/src/*"],
+      "@harmony/physics-worker-runtime": ["../physics-worker-runtime/src/index.ts"],
+      "@harmony/physics-worker-runtime/*": ["../physics-worker-runtime/src/*"],
       "@harmony/utils": ["../utils/src/index.ts"],
       "@harmony/utils/*": ["../utils/src/*"]
     }

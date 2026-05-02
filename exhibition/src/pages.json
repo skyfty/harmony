@@ -81,6 +81,14 @@
           "path": "index"
         }
       ]
+    },
+    {
+      "root": "pages/physics",
+      "pages": [
+        {
+          "path": "index"
+        }
+      ]
     }
   ],
   "globalStyle": {

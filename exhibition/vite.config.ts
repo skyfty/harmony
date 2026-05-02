@@ -17,6 +17,22 @@ export default defineConfig({
         find: '@harmony/schema',
         replacement: fileURLToPath(new URL('../schema', import.meta.url)),
       },
+      {
+        find: '@harmony/physics-core',
+        replacement: fileURLToPath(new URL('../physics-core/src', import.meta.url)),
+      },
+      {
+        find: '@harmony/physics-ammo',
+        replacement: fileURLToPath(new URL('../physics-ammo/src', import.meta.url)),
+      },
+      {
+        find: '@harmony/physics-host-wechat',
+        replacement: fileURLToPath(new URL('../physics-host-wechat/src', import.meta.url)),
+      },
+      {
+        find: '@harmony/physics-worker-runtime',
+        replacement: fileURLToPath(new URL('../physics-worker-runtime/src', import.meta.url)),
+      },
       // Keep this app decoupled from monorepo-relative imports.
       // scene-viewer and @harmony/schema are resolved from node_modules.
 
@@ -50,7 +66,7 @@ export default defineConfig({
       },
     }),
     createMpChunkSplitterPlugin({
-      subpackages: ['pages/scenery'],
+      subpackages: ['pages/scenery', 'pages/physics'],
       singleChunkMode: true,
       packageSizeLimit: 1.8 * 1024 * 1024
     }),
@@ -59,6 +75,16 @@ export default defineConfig({
     // 这里强制 three 相关依赖进入 scenery 子包，避免主包膨胀
     toCustomChunkPlugin({
       manualChunks: {
+        'pages/physics/chunks/vendor': [
+          '@harmony/physics-core',
+          '@harmony/physics-ammo',
+          '@harmony/physics-host-wechat',
+          '@harmony/physics-worker-runtime',
+          '**/harmony/physics-core/**',
+          '**/harmony/physics-ammo/**',
+          '**/harmony/physics-host-wechat/**',
+          '**/harmony/physics-worker-runtime/**',
+        ],
         'pages/scenery/chunks/vendor': [
           '@minisheep/three-platform-adapter',
           '@minisheep/three-platform-adapter/wechat',
