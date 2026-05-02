@@ -96,6 +96,9 @@ const editingId = ref<null | string>(null);
 const assetFormRef = ref<FormInstance>();
 const assetFileList = ref<UploadFile[]>([]);
 const thumbnailFileList = ref<UploadFile[]>([]);
+const downloadModalOpen = ref(false);
+const downloadSubmitting = ref(false);
+const downloadAsset = ref<ResourceAssetItem | null>(null);
 const categories = ref<ResourceCategoryItem[]>([]);
 const tags = ref<ResourceTagItem[]>([]);
 const series = ref<ResourceSeriesItem[]>([]);
@@ -154,6 +157,7 @@ const seriesOptions = computed(() => series.value.map((item) => ({ label: item.n
 
 const modalTitle = computed(() => (editingId.value ? '编辑资产' : '新增资产'));
 const directoryModalTitle = computed(() => (directoryModalMode.value === 'create' ? '新建分类' : '编辑分类'));
+const downloadAddress = computed(() => downloadAsset.value?.downloadUrl || downloadAsset.value?.url || '');
 
 const assetUploadProps: UploadProps = {
   beforeUpload: () => false,
@@ -930,6 +934,24 @@ async function handleDownload(row: ResourceAssetItem) {
   window.URL.revokeObjectURL(objectUrl);
 }
 
+function openDownloadModal(row: ResourceAssetItem) {
+  downloadAsset.value = row;
+  downloadModalOpen.value = true;
+}
+
+async function confirmDownload() {
+  if (!downloadAsset.value) {
+    return;
+  }
+  downloadSubmitting.value = true;
+  try {
+    await handleDownload(downloadAsset.value);
+    downloadModalOpen.value = false;
+  } finally {
+    downloadSubmitting.value = false;
+  }
+}
+
 function getThumbnailUrl(row: ResourceAssetItem) {
   return row.thumbnailUrl || row.previewUrl || row.url || '';
 }
@@ -1264,7 +1286,7 @@ onMounted(async () => {
         <template v-else-if="column.key === 'actions'">
           <Space>
             <Tooltip title="下载">
-              <Button type="text" size="small" @click="handleDownload(asAssetRecord(record))">
+              <Button type="text" size="small" @click="openDownloadModal(asAssetRecord(record))">
                 <DownloadOutlined />
               </Button>
             </Tooltip>
@@ -1389,6 +1411,19 @@ onMounted(async () => {
 
     <Modal :open="previewVisible" :title="previewTitle" :footer="null" @cancel="previewVisible = false">
       <img alt="preview" style="width: 100%" :src="previewImage" />
+    </Modal>
+
+    <Modal
+      :open="downloadModalOpen"
+      title="下载资产"
+      :footer="null"
+      :confirm-loading="downloadSubmitting"
+      @cancel="downloadModalOpen = false"
+    >
+      <Space.Compact style="width: 100%">
+        <Input :value="downloadAddress" readonly placeholder="资产下载地址" style="flex: 1" />
+        <Button type="primary" :loading="downloadSubmitting" @click="confirmDownload">下载</Button>
+      </Space.Compact>
     </Modal>
 
     <Modal
