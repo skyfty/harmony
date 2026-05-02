@@ -14205,6 +14205,62 @@ function applyFogSettings(settings: EnvironmentSettings) {
   }
 }
 
+function resolveFogBackgroundMix(settings: EnvironmentSettings): number {
+  if (settings.fogMode === 'linear') {
+    const far = Math.max(1, settings.fogFar)
+    return THREE.MathUtils.clamp(1 - Math.min(far / 600, 1), 0.2, 0.85)
+  }
+  if (settings.fogMode === 'exp') {
+    return THREE.MathUtils.clamp(Math.max(0, settings.fogDensity) * 24, 0.2, 0.85)
+  }
+  return 0
+}
+
+function syncFogBackgroundDome(settings: EnvironmentSettings) {
+  if (!scene) {
+    return
+  }
+  const fogMix = resolveFogBackgroundMix(settings)
+  const gradientTopColor = typeof settings.background.gradientTopColor === 'string' ? settings.background.gradientTopColor.trim() : ''
+  const topColor = gradientTopColor || settings.background.solidColor
+  const bottomColor = settings.background.solidColor
+  const offset = typeof settings.background.gradientOffset === 'number' && Number.isFinite(settings.background.gradientOffset)
+    ? settings.background.gradientOffset
+    : 33
+  const exponent = typeof settings.background.gradientExponent === 'number' && Number.isFinite(settings.background.gradientExponent)
+    ? settings.background.gradientExponent
+    : 0.6
+
+  if (!gradientBackgroundDome) {
+    if (!fogMix) {
+      return
+    }
+    gradientBackgroundDome = createGradientBackgroundDome({
+      topColor,
+      bottomColor,
+      offset,
+      exponent,
+      fogColor: settings.fogColor,
+      fogMix,
+    })
+    gradientBackgroundDome.mesh.userData = { ...(gradientBackgroundDome.mesh.userData ?? {}), editorOnly: true }
+    ;(gradientBackgroundDome.mesh as any).raycast = () => {}
+    scene.add(gradientBackgroundDome.mesh)
+    return
+  }
+
+  gradientBackgroundDome.uniforms.topColor.value.set(topColor)
+  gradientBackgroundDome.uniforms.bottomColor.value.set(bottomColor)
+  gradientBackgroundDome.uniforms.fogColor.value.set(settings.fogColor)
+  gradientBackgroundDome.uniforms.fogMix.value = fogMix
+  if (typeof settings.background.gradientOffset === 'number' && Number.isFinite(settings.background.gradientOffset)) {
+    gradientBackgroundDome.uniforms.offset.value = settings.background.gradientOffset
+  }
+  if (typeof settings.background.gradientExponent === 'number' && Number.isFinite(settings.background.gradientExponent)) {
+    gradientBackgroundDome.uniforms.exponent.value = settings.background.gradientExponent
+  }
+}
+
 function disableFog() {
   if (!scene) {
     return
@@ -14245,6 +14301,7 @@ async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
   }
   applyRendererShadowSetting()
   syncSceneCsmSunFromEnvironment(snapshot)
+  syncFogBackgroundDome(snapshot)
   updateFogForSelection()
 }
 

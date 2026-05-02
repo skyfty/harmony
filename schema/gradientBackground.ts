@@ -5,6 +5,8 @@ export type GradientBackgroundSettingsInput = {
   bottomColor: THREE.ColorRepresentation
   offset?: number
   exponent?: number
+  fogColor?: THREE.ColorRepresentation
+  fogMix?: number
 }
 
 export type GradientBackgroundDome = {
@@ -16,6 +18,8 @@ export type GradientBackgroundDome = {
     bottomColor: { value: THREE.Color }
     offset: { value: number }
     exponent: { value: number }
+    fogColor: { value: THREE.Color }
+    fogMix: { value: number }
   }
 }
 
@@ -36,13 +40,16 @@ const FRAGMENT_SHADER = `
   uniform vec3 bottomColor;
   uniform float offset;
   uniform float exponent;
+  uniform vec3 fogColor;
+  uniform float fogMix;
 
   varying vec3 vWorldPosition;
 
   void main() {
     float h = normalize( vWorldPosition + vec3( 0.0, offset, 0.0 ) ).y;
     float t = max( pow( max( h, 0.0 ), exponent ), 0.0 );
-    gl_FragColor = vec4( mix( bottomColor, topColor, t ), 1.0 );
+    vec3 baseColor = mix( bottomColor, topColor, t );
+    gl_FragColor = vec4( mix( baseColor, fogColor, clamp( fogMix, 0.0, 1.0 ) ), 1.0 );
   }
 `
 
@@ -52,6 +59,8 @@ export function createGradientBackgroundDome(settings: GradientBackgroundSetting
     bottomColor: { value: new THREE.Color(settings.bottomColor) },
     offset: { value: Number.isFinite(settings.offset as number) ? (settings.offset as number) : DEFAULT_OFFSET },
     exponent: { value: Number.isFinite(settings.exponent as number) ? (settings.exponent as number) : DEFAULT_EXPONENT },
+    fogColor: { value: new THREE.Color(settings.fogColor ?? settings.bottomColor) },
+    fogMix: { value: Number.isFinite(settings.fogMix as number) ? Math.max(0, Math.min(1, settings.fogMix as number)) : 0 },
   } as const
 
   const geometry = new THREE.SphereGeometry(4000, 32, 15)
