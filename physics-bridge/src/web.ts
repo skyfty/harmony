@@ -28,8 +28,8 @@ type InMemoryWorkerScope = {
   postMessage: (message: PhysicsWorkerResponse, transferables?: Transferable[]) => void
 }
 
-type PendingRequest = {
-  resolve: (value: unknown) => void
+type PendingRequest<TPayload = unknown> = {
+  resolve: (value: TPayload) => void
   reject: (error: Error) => void
 }
 
@@ -48,7 +48,7 @@ class WebPhysicsBridge implements PhysicsBridge {
       this.worker = this.workerFactory()
       this.worker.onmessage = (event) => this.handleWorkerMessage(event)
     }
-    return this.request('init', options)
+    return this.request('init', options) as Promise<PhysicsBridgeInitResult>
   }
 
   async loadScene(asset: PhysicsSceneAsset): Promise<void> {
@@ -56,7 +56,7 @@ class WebPhysicsBridge implements PhysicsBridge {
   }
 
   async step(deltaMs: number): Promise<PhysicsStepFrame> {
-    return this.request('step', { deltaMs })
+    return this.request('step', { deltaMs }) as Promise<PhysicsStepFrame>
   }
 
   async setBodyTransform(command: PhysicsBodyTransformCommand): Promise<void> {
@@ -68,7 +68,7 @@ class WebPhysicsBridge implements PhysicsBridge {
   }
 
   async raycast(command: PhysicsRaycastCommand): Promise<PhysicsRaycastHit | null> {
-    return this.request('raycast', command)
+    return this.request('raycast', command) as Promise<PhysicsRaycastHit | null>
   }
 
   async disposeScene(): Promise<void> {
@@ -86,12 +86,12 @@ class WebPhysicsBridge implements PhysicsBridge {
   private request<TRequest extends PhysicsWorkerRequest['type']>(
     type: TRequest,
     payload: Extract<PhysicsWorkerRequest, { type: TRequest }>['payload'],
-  ): Promise<Extract<PhysicsWorkerResponse, { ok: true; type: TRequest }>['payload']> {
+  ): Promise<unknown> {
     if (!this.worker) {
       return Promise.reject(new Error('Physics web bridge is not initialized'))
     }
     const id = this.nextRequestId++
-    return new Promise((resolve, reject) => {
+    return new Promise<unknown>((resolve, reject) => {
       this.pendingRequests.set(id, { resolve, reject })
       this.worker?.postMessage({ id, type, payload } as Extract<PhysicsWorkerRequest, { type: TRequest }>)
     })
@@ -108,7 +108,7 @@ class WebPhysicsBridge implements PhysicsBridge {
       pending.reject(new Error(response.error.message))
       return
     }
-    pending.resolve(response.payload)
+    pending.resolve(response.payload as never)
   }
 }
 

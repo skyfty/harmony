@@ -197,10 +197,6 @@ function scaleShapeOffset(shape: RigidbodyPhysicsShape, worldScale: THREE.Vector
   return [ox * worldScale.x, oy * worldScale.y, oz * worldScale.z]
 }
 
-function toCanonicalHeightfieldOffset(offset: PhysicsVector3): PhysicsVector3 {
-  return [offset[0], offset[2], -offset[1]]
-}
-
 function getShapeScale(shape: RigidbodyPhysicsShape, worldScale: THREE.Vector3): PhysicsVector3 {
   if (shape.applyScale !== true) {
     return [1, 1, 1]
@@ -354,7 +350,7 @@ function buildShapeInstancesFromDefinition(
       heights: values,
       minHeight: Number.isFinite(minHeight) ? minHeight : 0,
       maxHeight: Number.isFinite(maxHeight) ? maxHeight : 0,
-      localOffset: toCanonicalHeightfieldOffset(scaledOffset),
+      localOffset: scaledOffset,
     })
     return [{ shapeId, transform: { position: [0, 0, 0], rotation: identityPhysicsRotation } }]
   }
@@ -535,7 +531,7 @@ function buildRigidbodyShapeInstances(
           heights: values,
           minHeight: Number.isFinite(minHeight) ? minHeight : 0,
           maxHeight: Number.isFinite(maxHeight) ? maxHeight : 0,
-          localOffset: toCanonicalHeightfieldOffset([segment.offset[0], segment.offset[1], segment.offset[2]]),
+          localOffset: [segment.offset[0], segment.offset[1], segment.offset[2]],
         })
         return {
           shapeId,

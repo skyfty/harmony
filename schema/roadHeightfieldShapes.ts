@@ -520,7 +520,7 @@ function buildHeightfieldShapeFromSeries({
   const matrix: number[][] = []
   for (let col = 0; col < pointsX; col += 1) {
     const columnValues: number[] = []
-    for (let row = pointsZ - 1; row >= 0; row -= 1) {
+    for (let row = 0; row < pointsZ; row += 1) {
       const uAlong = pointsZ > 1 ? row / (pointsZ - 1) : 0
       const indexFloat = startIndex + uAlong * span
       const i0 = Math.max(0, Math.min(heights.length - 1, Math.floor(indexFloat)))
@@ -539,7 +539,7 @@ function buildHeightfieldShapeFromSeries({
     elementSize,
     width,
     depth,
-    offset: [-halfWidth, -halfDepth, 0],
+    offset: [-halfWidth, 0, -halfDepth],
     applyScale: false,
   }
 }

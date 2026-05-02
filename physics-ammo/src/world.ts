@@ -22,6 +22,9 @@ import {
 
 type AmmoApi = {
   destroy: (object: unknown) => void
+  _malloc: (size: number) => number
+  _free: (ptr: number) => void
+  HEAPF32: Float32Array
   btVector3: new (x?: number, y?: number, z?: number) => any
   btQuaternion: new (x?: number, y?: number, z?: number, w?: number) => any
   btTransform: new () => any
@@ -33,6 +36,17 @@ type AmmoApi = {
   btCylinderShape: new (halfExtents: unknown) => any
   btConvexHullShape: new () => any
   btCompoundShape: new (enableDynamicAabbTree?: boolean) => any
+  btHeightfieldTerrainShape: new (
+    heightStickWidth: number,
+    heightStickLength: number,
+    heightfieldData: unknown,
+    heightScale: number,
+    minHeight: number,
+    maxHeight: number,
+    upAxis: number,
+    hdt: 'PHY_FLOAT',
+    flipQuadEdges: boolean,
+  ) => any
   btTriangleMesh: new (use32bitIndices?: boolean, use4componentVertices?: boolean) => any
   btBvhTriangleMeshShape: new (meshInterface: unknown, useQuantizedAabbCompression: boolean, buildBvh?: boolean) => any
   btConvexTriangleMeshShape?: new (meshInterface: unknown, calcAabb?: boolean) => any
@@ -563,7 +577,7 @@ export class AmmoPhysicsWorld {
     }
 
     if (shapeDesc.kind === 'heightfield') {
-      return this.buildTriangleMeshShape(buildHeightfieldMesh(shapeDesc), dynamic)
+      return this.buildHeightfieldTerrainShape(shapeDesc, dynamic)
     }
 
     if (shapeDesc.kind === 'static-mesh') {
@@ -594,6 +608,67 @@ export class AmmoPhysicsWorld {
     return {
       shape,
       cleanup,
+    }
+  }
+
+  private buildHeightfieldTerrainShape(shapeDesc: PhysicsHeightfieldDesc, dynamic: boolean): BuiltAmmoShape {
+    const ammo = this.ammo
+    if (!ammo) {
+      throw new Error('Ammo module is not loaded')
+    }
+    if (dynamic) {
+      throw new Error(`Ammo heightfield shapes do not support dynamic rigid bodies: ${shapeDesc.id}`)
+    }
+
+    const rows = Math.max(2, shapeDesc.rows | 0)
+    const columns = Math.max(2, shapeDesc.columns | 0)
+    const heights = buildAmmoHeightfieldHeights(shapeDesc)
+    const { minHeight, maxHeight } = resolveHeightfieldRange(shapeDesc, heights)
+    const dataPtr = ammo._malloc(heights.byteLength)
+    ammo.HEAPF32.set(heights, dataPtr >>> 2)
+
+    const heightfieldShape = new ammo.btHeightfieldTerrainShape(
+      columns,
+      rows,
+      dataPtr,
+      1,
+      minHeight,
+      maxHeight,
+      1,
+      'PHY_FLOAT',
+      false,
+    )
+    const localScaling = createAmmoVector3(ammo, [Math.max(1e-4, shapeDesc.elementSize), 1, Math.max(1e-4, shapeDesc.elementSize)])
+    heightfieldShape.setLocalScaling(localScaling)
+
+    const cleanup: Array<() => void> = [
+      () => ammo._free(dataPtr),
+      () => ammo.destroy(heightfieldShape),
+      () => ammo.destroy(localScaling),
+    ]
+
+    const centeredOffset = resolveAmmoHeightfieldOffset(shapeDesc, minHeight, maxHeight)
+    if (isZeroVector(centeredOffset)) {
+      return {
+        shape: heightfieldShape,
+        cleanup,
+      }
+    }
+
+    const compoundShape = new ammo.btCompoundShape(true)
+    const childTransform = createAmmoTransform(ammo, {
+      position: centeredOffset,
+      rotation: [0, 0, 0, 1],
+    })
+    compoundShape.addChildShape(childTransform, heightfieldShape)
+
+    return {
+      shape: compoundShape,
+      cleanup: [
+        ...cleanup,
+        () => ammo.destroy(compoundShape),
+        () => ammo.destroy(childTransform),
+      ],
     }
   }
 
@@ -666,46 +741,71 @@ export class AmmoPhysicsWorld {
   }
 }
 
-function buildHeightfieldMesh(shape: PhysicsHeightfieldDesc): PhysicsStaticMeshDesc {
-  const triangleCount = Math.max(0, (shape.columns - 1) * (shape.rows - 1) * 2)
-  const vertices = new Float32Array(triangleCount * 9)
+function buildAmmoHeightfieldHeights(shape: PhysicsHeightfieldDesc): Float32Array {
+  const heights = new Float32Array(shape.rows * shape.columns)
   let offset = 0
-  const baseOffset = shape.localOffset ?? [0, 0, 0]
-
-  const writeVertex = (x: number, y: number, z: number): void => {
-    vertices[offset] = x + baseOffset[0]
-    vertices[offset + 1] = y + baseOffset[1]
-    vertices[offset + 2] = z + baseOffset[2]
-    offset += 3
-  }
-
-  for (let row = 0; row < shape.rows - 1; row += 1) {
-    for (let column = 0; column < shape.columns - 1; column += 1) {
-      const x0 = column * shape.elementSize
-      const x1 = (column + 1) * shape.elementSize
-      const z0 = row * shape.elementSize
-      const z1 = (row + 1) * shape.elementSize
-      const h00 = getHeightfieldHeight(shape, row, column)
-      const h10 = getHeightfieldHeight(shape, row, column + 1)
-      const h01 = getHeightfieldHeight(shape, row + 1, column)
-      const h11 = getHeightfieldHeight(shape, row + 1, column + 1)
-
-      writeVertex(x0, h00, z0)
-      writeVertex(x1, h10, z0)
-      writeVertex(x0, h01, z1)
-
-      writeVertex(x1, h10, z0)
-      writeVertex(x1, h11, z1)
-      writeVertex(x0, h01, z1)
+  for (let row = 0; row < shape.rows; row += 1) {
+    for (let column = 0; column < shape.columns; column += 1) {
+      heights[offset] = getHeightfieldHeight(shape, row, column)
+      offset += 1
     }
   }
+  return heights
+}
 
-  return {
-    id: shape.id,
-    kind: 'static-mesh',
-    vertices,
-    indices: new Uint32Array(0),
+function resolveHeightfieldMinHeight(shape: PhysicsHeightfieldDesc, heights: Float32Array): number {
+  if (typeof shape.minHeight === 'number' && Number.isFinite(shape.minHeight)) {
+    return shape.minHeight
   }
+  let minHeight = Number.POSITIVE_INFINITY
+  for (let index = 0; index < heights.length; index += 1) {
+    minHeight = Math.min(minHeight, heights[index] ?? 0)
+  }
+  return Number.isFinite(minHeight) ? minHeight : 0
+}
+
+function resolveHeightfieldMaxHeight(shape: PhysicsHeightfieldDesc, heights: Float32Array): number {
+  if (typeof shape.maxHeight === 'number' && Number.isFinite(shape.maxHeight)) {
+    return shape.maxHeight
+  }
+  let maxHeight = Number.NEGATIVE_INFINITY
+  for (let index = 0; index < heights.length; index += 1) {
+    maxHeight = Math.max(maxHeight, heights[index] ?? 0)
+  }
+  return Number.isFinite(maxHeight) ? maxHeight : 0
+}
+
+function resolveHeightfieldRange(
+  shape: PhysicsHeightfieldDesc,
+  heights: Float32Array,
+): { minHeight: number; maxHeight: number } {
+  const minHeight = resolveHeightfieldMinHeight(shape, heights)
+  const maxHeight = resolveHeightfieldMaxHeight(shape, heights)
+  if (maxHeight - minHeight > 1e-4) {
+    return { minHeight, maxHeight }
+  }
+  const midpoint = (minHeight + maxHeight) * 0.5
+  return {
+    minHeight: midpoint - 5e-5,
+    maxHeight: midpoint + 5e-5,
+  }
+}
+
+function resolveAmmoHeightfieldOffset(
+  shape: PhysicsHeightfieldDesc,
+  minHeight: number,
+  maxHeight: number,
+): PhysicsVector3 {
+  const baseOffset = shape.localOffset ?? [0, 0, 0]
+  return [
+    baseOffset[0] + Math.max(0, (shape.columns - 1) * shape.elementSize * 0.5),
+    baseOffset[1] + (minHeight + maxHeight) * 0.5,
+    baseOffset[2] + Math.max(0, (shape.rows - 1) * shape.elementSize * 0.5),
+  ]
+}
+
+function isZeroVector(vector: PhysicsVector3): boolean {
+  return Math.abs(vector[0]) <= 1e-6 && Math.abs(vector[1]) <= 1e-6 && Math.abs(vector[2]) <= 1e-6
 }
 
 function resolveSteerableWheelIndices(vehicle: PhysicsVehicleDesc): number[] {

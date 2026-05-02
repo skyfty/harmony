@@ -341,7 +341,7 @@ function buildGroundCollisionSegment(
   for (let localColumn = 0; localColumn <= columns; localColumn += 1) {
     const sourceColumn = sample.startColumn + localColumn * safeStride
     const columnValues: number[] = []
-    for (let localRow = rows; localRow >= 0; localRow -= 1) {
+    for (let localRow = 0; localRow <= rows; localRow += 1) {
       const sourceRow = sample.startRow + localRow * safeStride
       const height = getRegionSampleHeight(sample, sourceRow, sourceColumn)
       columnValues.push(height)
@@ -355,8 +355,8 @@ function buildGroundCollisionSegment(
   const depth = Math.max(MIN_ELEMENT_SIZE, sample.rowSpan * metrics.baseElementSize)
   const offset: [number, number, number] = [
     -metrics.halfWidth + sample.startColumn * metrics.baseElementSize,
-    metrics.halfDepth - sample.endRow * metrics.baseElementSize,
     0,
+    -metrics.halfDepth + sample.startRow * metrics.baseElementSize,
   ]
   const key = groundRegionKey(sample.startRow, sample.endRow, sample.startColumn, sample.endColumn)
   const signature = `${key}|${safeStride}|${rows}|${columns}|${Math.round(width * 1000)}|${Math.round(depth * 1000)}|${hash.toString(16)}`
@@ -524,8 +524,7 @@ export function computeGroundHeightfieldChunkHash(
 
   for (let sr = 0; sr <= spec.rows; sr += sampleStepRow) {
     const physicsRowVertex = Math.min(pointsZ - 1, spec.startRow + sr)
-    const flippedPhysicsRowVertex = (pointsZ - 1) - physicsRowVertex
-    const sourceRow = mapPhysicsVertexToSourceVertex(flippedPhysicsRowVertex, plan.stride, mesh.rows)
+    const sourceRow = mapPhysicsVertexToSourceVertex(physicsRowVertex, plan.stride, mesh.rows)
     for (let sc = 0; sc <= spec.columns; sc += sampleStepColumn) {
       const physicsColumnVertex = Math.min(pointsX - 1, spec.startColumn + sc)
       const sourceColumn = mapPhysicsVertexToSourceVertex(physicsColumnVertex, plan.stride, mesh.columns)
@@ -616,10 +615,9 @@ export function buildGroundHeightfieldChunkData(
     const sourceColumnVertex = mapPhysicsVertexToSourceVertex(physicsColumnVertex, plan.stride, mesh.columns)
 
     const columnValues: number[] = []
-    for (let localRowVertex = pointsZ - 1; localRowVertex >= 0; localRowVertex -= 1) {
+    for (let localRowVertex = 0; localRowVertex < pointsZ; localRowVertex += 1) {
       const physicsRowVertex = spec.startRow + localRowVertex
-      const flippedPhysicsRowVertex = (plan.pointsZ - 1) - physicsRowVertex
-      const sourceRowVertex = mapPhysicsVertexToSourceVertex(flippedPhysicsRowVertex, plan.stride, mesh.rows)
+      const sourceRowVertex = mapPhysicsVertexToSourceVertex(physicsRowVertex, plan.stride, mesh.rows)
       const baseHeight = resolveGroundEffectiveHeightAtVertex(mesh, sourceRowVertex, sourceColumnVertex)
       columnValues.push(baseHeight * scaleY)
     }
@@ -628,8 +626,8 @@ export function buildGroundHeightfieldChunkData(
 
   const offset: [number, number, number] = [
     -plan.halfWidth + spec.startColumn * plan.elementSize,
-    -plan.halfDepth + spec.startRow * plan.elementSize,
     0,
+    -plan.halfDepth + spec.startRow * plan.elementSize,
   ]
 
   return {
@@ -670,10 +668,7 @@ export function buildGroundHeightfieldData(
   for (let column = 0; column < pointsX; column += 1) {
     const columnValues: number[] = []
 
-    // Cannon heightfields use the first index for the X axis and the second for Y.
-    // Our ground grid increases Z when row increases, so we need to flip the row
-    // order to keep the physics heightfield aligned with the rendered geometry.
-    for (let row = pointsZ - 1; row >= 0; row -= 1) {
+    for (let row = 0; row < pointsZ; row += 1) {
       const baseHeight = resolveGroundEffectiveHeightAtVertex(mesh, row, column)
       const height = baseHeight * scaleY
       columnValues.push(height)
@@ -688,7 +683,7 @@ export function buildGroundHeightfieldData(
   const depth = Math.max(MIN_ELEMENT_SIZE, rows * elementSize)
   const halfWidth = Math.max(0, width * 0.5)
   const halfDepth = Math.max(0, depth * 0.5)
-  const offset: [number, number, number] = [-halfWidth, -halfDepth, 0]
+  const offset: [number, number, number] = [-halfWidth, 0, -halfDepth]
   const signature = `${columns}|${rows}|${Math.round(rawCellSize * 1000)}|${Math.round(width * 1000)}|${Math.round(depth * 1000)}|${heightHash.toString(16)}`
 
   return {

@@ -23,7 +23,6 @@ export interface PhysicsWorkerController {
 
 export function createNoopPhysicsWorkerController(): PhysicsWorkerController {
   let frame = 0
-  let scene: PhysicsSceneAsset | null = null
   return {
     async init() {
       return {
@@ -32,7 +31,6 @@ export function createNoopPhysicsWorkerController(): PhysicsWorkerController {
       }
     },
     async loadScene(asset) {
-      scene = asset
       return {
         bodyCount: asset.bodies.length,
         vehicleCount: asset.vehicles.length,
@@ -48,10 +46,8 @@ export function createNoopPhysicsWorkerController(): PhysicsWorkerController {
       return null
     },
     async disposeScene() {
-      scene = null
     },
     async destroy() {
-      scene = null
     },
   }
 }
@@ -77,7 +73,10 @@ function serializeError(id: number, error: unknown): PhysicsWorkerResponse {
 }
 
 export function attachPhysicsWorkerRuntime(
-  scope: Pick<DedicatedWorkerGlobalScope, 'onmessage' | 'postMessage'>,
+  scope: {
+    onmessage: ((event: MessageEvent<PhysicsWorkerRequest>) => void) | null
+    postMessage: (message: PhysicsWorkerResponse, transferables?: Transferable[]) => void
+  },
   controller: PhysicsWorkerController,
 ): void {
   scope.onmessage = async (event: MessageEvent<PhysicsWorkerRequest>) => {
