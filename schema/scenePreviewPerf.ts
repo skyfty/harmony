@@ -1,5 +1,16 @@
 import * as THREE from 'three'
-import { Body } from 'cannon-es'
+
+type BodyLike = {
+	type: number
+	allowSleep?: boolean
+	sleepSpeedLimit?: number
+	sleepTimeLimit?: number
+	velocity?: { x: number; y: number; z: number }
+	angularVelocity?: { x: number; y: number; z: number }
+	sleepState?: number
+}
+
+const BODY_TYPE_DYNAMIC = 1
 
 export type ScenePreviewPerfOptions = {
 	isWeChatMiniProgram?: boolean
@@ -26,19 +37,19 @@ export type ScenePreviewPerfController = {
 
 	applyAggressiveSleepForNonInteractiveDynamic(params: {
 		nodeId: string
-		body: Body
+		body: BodyLike
 		isVehicle: boolean
 		isProtagonist: boolean
 	}): void
 
-	registerProtagonist(nodeId: string, body?: Body | null): void
+	registerProtagonist(nodeId: string, body?: BodyLike | null): void
 	clearProtagonist(): void
 
-	shouldSyncNonInteractiveSleepingBody(params: { nodeId: string; body: Body; nowMs?: number }): boolean
+	shouldSyncNonInteractiveSleepingBody(params: { nodeId: string; body: BodyLike; nowMs?: number }): boolean
 
 	shouldUpdateWheelVisuals(params: {
 		nodeId: string | null
-		body: Body
+		body: BodyLike
 		manualActive: boolean
 		tourActive: boolean
 		nowMs?: number
@@ -154,7 +165,7 @@ export function createScenePreviewPerfController(options: ScenePreviewPerfOption
 		return false
 	}
 
-	function registerProtagonist(nodeId: string, body?: Body | null): void {
+	function registerProtagonist(nodeId: string, body?: BodyLike | null): void {
 		protagonistNodeId = nodeId
 		nonInteractiveDynamicNodeIds.delete(nodeId)
 		nonInteractiveSleepingLastSyncAtMs.delete(nodeId)
@@ -173,7 +184,7 @@ export function createScenePreviewPerfController(options: ScenePreviewPerfOption
 
 	function applyAggressiveSleepForNonInteractiveDynamic(params: {
 		nodeId: string
-		body: Body
+		body: BodyLike
 		isVehicle: boolean
 		isProtagonist: boolean
 	}): void {
@@ -182,7 +193,7 @@ export function createScenePreviewPerfController(options: ScenePreviewPerfOption
 			return
 		}
 
-		const isDynamic = body.type === Body.DYNAMIC
+		const isDynamic = body.type === BODY_TYPE_DYNAMIC
 		if (!isDynamic) {
 			nonInteractiveDynamicNodeIds.delete(nodeId)
 			nonInteractiveSleepingLastSyncAtMs.delete(nodeId)
@@ -216,7 +227,7 @@ export function createScenePreviewPerfController(options: ScenePreviewPerfOption
 		}
 	}
 
-	function shouldSyncNonInteractiveSleepingBody(params: { nodeId: string; body: Body; nowMs?: number }): boolean {
+	function shouldSyncNonInteractiveSleepingBody(params: { nodeId: string; body: BodyLike; nowMs?: number }): boolean {
 		const { nodeId, body } = params
 		if (nonInteractiveSleepingVisualSyncIntervalMs <= 0) {
 			return true
@@ -226,8 +237,7 @@ export function createScenePreviewPerfController(options: ScenePreviewPerfOption
 			return true
 		}
 
-		type SleepStateBody = Body & { sleepState?: number }
-		const sleepState = (body as SleepStateBody).sleepState
+		const sleepState = body.sleepState
 		const sleeping = typeof sleepState === 'number' ? sleepState !== 0 : false
 		if (!sleeping) {
 			nonInteractiveSleepingLastSyncAtMs.delete(nodeId)
@@ -245,7 +255,7 @@ export function createScenePreviewPerfController(options: ScenePreviewPerfOption
 
 	function shouldUpdateWheelVisuals(params: {
 		nodeId: string | null
-		body: Body
+		body: BodyLike
 		manualActive: boolean
 		tourActive: boolean
 		nowMs?: number

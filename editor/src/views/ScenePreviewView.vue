@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, type ComponentPublicInstance } from 'vue'
 import * as THREE from 'three'
-import * as CANNON from 'cannon-es'
 import { FirstPersonControls } from 'three/examples/jsm/controls/FirstPersonControls.js'
 import { MapControls } from 'three/examples/jsm/controls/MapControls.js'
 import type { KTX2Loader } from 'three/examples/jsm/loaders/KTX2Loader.js'
@@ -89,6 +88,11 @@ import {
 	isGroundDynamicMesh,
 } from '@schema/groundHeightfield'
 import {
+	buildRoadHeightfieldShapes,
+	isRoadDynamicMesh,
+	type RoadHeightfieldShapesEntry,
+} from '@schema/roadHeightfieldShapes'
+import {
 	areAllGroundChunksLoaded,
 	ensureAllGroundChunks,
 	isGroundChunkStreamingEnabled,
@@ -108,23 +112,10 @@ import {
 import { buildGroundAirWallDefinitions } from '@schema/airWall'
 import { createDefaultGroundSurfacePreviewLoaders, syncGroundSurfacePreviewForGround } from '@schema/groundSurfacePreview'
 import {
-	ensurePhysicsWorld as ensureSharedPhysicsWorld,
-	createRigidbodyBody as createSharedRigidbodyBody,
+	type PhysicsBodyBindingEntry as RigidbodyInstance,
+	type PhysicsOrientationAdjustment as RigidbodyOrientationAdjustment,
 	syncBodyFromObject as syncSharedBodyFromObject,
-	syncObjectFromBody as syncSharedObjectFromBody,
-	removeRigidbodyInstanceBodies,
-	ensureRoadHeightfieldRigidbodyInstance,
-	resolveRoadHeightfieldDebugSegments,
-	isRoadDynamicMesh,
-	type GroundHeightfieldCacheEntry,
-	type FloorShapeCacheEntry,
-	type WallTrimeshCacheEntry,
-	type PhysicsContactSettings,
-	type RigidbodyInstance,
-	type RigidbodyMaterialEntry,
-	type RigidbodyOrientationAdjustment,
-	type RoadHeightfieldDebugCache,
-} from '@schema/physicsEngine'
+} from '@schema/physicsBodySync'
 import { loadNodeObject } from '@schema/modelAssetLoader'
 import {
 	getCachedModelObject,
@@ -219,7 +210,8 @@ import {
 	SCENE_STATE_ANCHOR_COMPONENT_TYPE,
 	} from '@schema/components'
 import { VehicleDriveController } from '@schema/VehicleDriveController'
-import type { VehicleDriveRuntimeState } from '@schema/VehicleDriveController'
+import type { VehicleDriveRuntimeState, VehicleDriveVehicle } from '@schema/VehicleDriveController'
+import { createBridgeVehicleProxy } from '@schema/bridgeVehicleProxy'
 import {
 	FollowCameraController,
 	computeFollowLerpAlpha,
@@ -2063,12 +2055,12 @@ function shouldUpdateCameraDependentSystems(activeCamera: THREE.PerspectiveCamer
 	return true
 }
 
-let physicsWorld: CANNON.World | null = null
 let physicsBridge: PhysicsBridge | null = null
 let physicsBridgeInitPromise: Promise<PhysicsBridge> | null = null
 let physicsBridgeStepPromise: Promise<void> | null = null
 let physicsBridgeBodySyncPromise: Promise<void> | null = null
 let physicsBridgeVehicleInputPromise: Promise<void> | null = null
+let physicsBridgeLastDrivenVehicleId: number | null = null
 let physicsBridgeSceneLoaded = false
 let physicsBridgeSceneRequestId = 0
 const physicsBridgeBodyIdByNodeId = new Map<string, number>()
@@ -2083,9 +2075,10 @@ const physicsBridgeFrameBodiesByNodeId = new Map<string, PhysicsBridgeBodyFrameS
 const physicsBridgeSyncPositionHelper = new THREE.Vector3()
 const physicsBridgeSyncQuaternionHelper = new THREE.Quaternion()
 const physicsBridgeSyncParentQuaternionHelper = new THREE.Quaternion()
+const physicsBridgeBodySyncPositionHelper = new THREE.Vector3()
+const physicsBridgeBodySyncQuaternionHelper = new THREE.Quaternion()
 const physicsEnvironmentEnabled = ref(true)
 const rigidbodyInstances = new Map<string, RigidbodyInstance>()
-const airWallBodies = new Map<string, CANNON.Body>()
 type AirWallDebugEntry = {
 	key: string
 	halfExtents: [number, number, number]
@@ -2097,7 +2090,6 @@ const airWallDebugMeshes = new Map<string, THREE.Mesh>()
 type RigidbodyDebugHelperCategory = 'ground' | 'rigidbody'
 type RigidbodyDebugHelper = { group: THREE.Group; signature: string; category: RigidbodyDebugHelperCategory; scale: THREE.Vector3 }
 const rigidbodyDebugHelpers = new Map<string, RigidbodyDebugHelper>()
-const roadHeightfieldDebugCache: RoadHeightfieldDebugCache = new Map()
 let rigidbodyDebugGroup: THREE.Group | null = null
 let airWallDebugGroup: THREE.Group | null = null
 const rigidbodyDebugMaterial = new THREE.LineBasicMaterial({
@@ -2424,8 +2416,6 @@ function syncGroundChunkStreamingDebug(
 	}
 }
 
-const rigidbodyMaterialCache = new Map<string, RigidbodyMaterialEntry>()
-const rigidbodyContactMaterialKeys = new Set<string>()
 type VehicleWheelBinding = {
 	nodeId: string | null
 	object: THREE.Object3D | null
@@ -2439,15 +2429,10 @@ type VehicleWheelBinding = {
 	basePosition: THREE.Vector3
 	baseScale: THREE.Vector3
 }
-type VehicleWheelSetupEntry = {
-	config: VehicleWheelProps
-	point: CANNON.Vec3
-	direction: CANNON.Vec3
-	axle: CANNON.Vec3
-}
 type VehicleInstance = {
+	source: 'bridge'
 	nodeId: string
-	vehicle: CANNON.RaycastVehicle
+	vehicle: VehicleDriveVehicle
 	wheelCount: number
 	steerableWheelIndices: number[]
 	wheelBindings: VehicleWheelBinding[]
@@ -2461,25 +2446,38 @@ type VehicleInstance = {
 	lastChassisPosition: THREE.Vector3
 	hasChassisPositionSample: boolean
 	initialChassisQuaternion: THREE.Quaternion
+	bridgeBodyId?: number | null
+	vehicleId?: number | null
+	lastBridgeFramePosition?: THREE.Vector3
+	hasBridgeFrameSample?: boolean
 }
+type HostPhysicsVec3 = VehicleDriveVehicle['chassisBody']['position']
+
+function createHostPhysicsVec3(x = 0, y = 0, z = 0): HostPhysicsVec3 {
+	return {
+		x,
+		y,
+		z,
+		set(nextX: number, nextY: number, nextZ: number) {
+			this.x = nextX
+			this.y = nextY
+			this.z = nextZ
+			return this
+		},
+		lengthSquared() {
+			return this.x * this.x + this.y * this.y + this.z * this.z
+		},
+	}
+}
+
+const LEGACY_STATIC_BODY_TYPE = 2
 const vehicleInstances = new Map<string, VehicleInstance>()
-const vehicleRaycastInWorld = new Set<string>()
-const groundHeightfieldCache = new Map<string, GroundHeightfieldCacheEntry>()
-const floorShapeCache = new Map<string, FloorShapeCacheEntry>()
-const wallTrimeshCache = new Map<string, WallTrimeshCacheEntry>()
-const physicsGravity = new CANNON.Vec3(0, -DEFAULT_ENVIRONMENT_GRAVITY, 0)
+const physicsGravity = createHostPhysicsVec3(0, -DEFAULT_ENVIRONMENT_GRAVITY, 0)
 let physicsContactRestitution = DEFAULT_ENVIRONMENT_RESTITUTION
 let physicsContactFriction = DEFAULT_ENVIRONMENT_FRICTION
-const vehicleIdleFreezeLastLogMs = new Map<string, number>()
 const PHYSICS_FIXED_TIMESTEP = 1 / 60
 const PHYSICS_MAX_SUB_STEPS = 5
 const PHYSICS_MAX_ACCUMULATOR = PHYSICS_FIXED_TIMESTEP * PHYSICS_MAX_SUB_STEPS
-const PHYSICS_SOLVER_ITERATIONS = 18
-const PHYSICS_SOLVER_TOLERANCE = 5e-4
-const PHYSICS_CONTACT_STIFFNESS = 1e9
-const PHYSICS_CONTACT_RELAXATION = 4
-const PHYSICS_FRICTION_STIFFNESS = 1e9
-const PHYSICS_FRICTION_RELAXATION = 4
 const rotationState = { q: false, e: false }
 const defaultFirstPersonState = {
 	position: new THREE.Vector3(0, CAMERA_HEIGHT, 0),
@@ -2915,7 +2913,6 @@ const vehicleDriveController = new VehicleDriveController(
 		resolveNodeById,
 		resolveRigidbodyComponent,
 		resolveVehicleComponent,
-		ensurePhysicsWorld,
 		isPhysicsEnabled: () => physicsEnvironmentEnabled.value,
 		ensureVehicleBindingForNode,
 		normalizeNodeId,
@@ -4820,7 +4817,6 @@ watch(volumePercent, (value) => {
 watch([isGroundWireframeVisible, isOtherRigidbodyWireframeVisible], ([groundEnabled, otherEnabled]) => {
 	if (!physicsEnvironmentEnabled.value) {
 		disposeRigidbodyDebugHelpers()
-		roadHeightfieldDebugCache.clear()
 		setAirWallDebugVisibility(false)
 		return
 	}
@@ -4833,14 +4829,12 @@ watch([isGroundWireframeVisible, isOtherRigidbodyWireframeVisible], ([groundEnab
 		return
 	}
 	disposeRigidbodyDebugHelpers()
-	roadHeightfieldDebugCache.clear()
 	setAirWallDebugVisibility(false)
 })
 
 watch(physicsEnvironmentEnabled, (enabled) => {
 	if (!enabled) {
 		disposeRigidbodyDebugHelpers()
-		roadHeightfieldDebugCache.clear()
 		setAirWallDebugVisibility(false)
 		return
 	}
@@ -9482,12 +9476,6 @@ function applyPhysicsEnvironmentSettings(settings: EnvironmentSettings) {
 		1,
 		DEFAULT_ENVIRONMENT_FRICTION,
 	)
-	if (physicsWorld) {
-		physicsWorld.gravity.set(physicsGravity.x, physicsGravity.y, physicsGravity.z)
-		physicsWorld.defaultContactMaterial.friction = physicsContactFriction
-		physicsWorld.defaultContactMaterial.restitution = physicsContactRestitution
-		physicsWorld.defaultContactMaterial.contactEquationStiffness = 1000
-	}
 }
 
 async function applyBackgroundSettings(
@@ -10006,7 +9994,6 @@ function registerSubtree(object: THREE.Object3D, pending?: Map<string, THREE.Obj
 				return
 			}
 			nodeObjectMap.set(nodeId, child)
-			ensureRigidbodyBindingForObject(nodeId, child)
 			pending?.delete(nodeId)
 			attachRuntimeForNode(nodeId, child)
 			syncInteractionLayersForNode(nodeId, child)
@@ -10267,41 +10254,7 @@ function syncInstancedTransform(object: THREE.Object3D | null) {
 
 function resetPhysicsWorld(): void {
 	void disposeScenePreviewPhysicsBridgeScene()
-	if (vehicleDriveState.active) {
-		stopVehicleDriveMode({ resolution: { type: 'abort', message: 'Physics environment reset.' } })
-	}
-	const world = physicsWorld
-	if (world) {
-		vehicleInstances.forEach(({ vehicle }) => {
-			try {
-				vehicle.removeFromWorld(world)
-			} catch (error) {
-				console.warn('[ScenePreview] Failed to remove vehicle', error)
-			}
-		})
-		rigidbodyInstances.forEach((instance) => removeRigidbodyInstanceBodies(world, instance))
-		airWallBodies.forEach((body) => {
-			try {
-				world.removeBody(body)
-			} catch (error) {
-				console.warn('[ScenePreview] Failed to remove air wall body', error)
-			}
-		})
-	}
-	vehicleInstances.clear()
-	vehicleRaycastInWorld.clear()
-	rigidbodyInstances.clear()
-	airWallBodies.clear()
-	clearAirWallDebugMeshes()
-	clearRigidbodyDebugHelpers()
-	disposeAirWallDebugGroup()
-	physicsWorld = null
-	groundHeightfieldCache.clear()
-	floorShapeCache.clear()
-	wallTrimeshCache.clear()
-	rigidbodyMaterialCache.clear()
-	rigidbodyContactMaterialKeys.clear()
-	scenePreviewPerf.reset()
+	clearLegacyPhysicsWorld()
 }
 
 async function ensureScenePreviewPhysicsBridgeReady(): Promise<PhysicsBridge> {
@@ -10345,6 +10298,13 @@ function updateScenePreviewPhysicsBridgeIndex(asset: PhysicsSceneAsset): void {
 		}
 		physicsBridgeVehicleIdByNodeId.set(nodeId, vehicle.id)
 	})
+	vehicleInstances.forEach((instance, nodeId) => {
+		if (instance.source !== 'bridge') {
+			return
+		}
+		instance.bridgeBodyId = physicsBridgeBodyIdByNodeId.get(nodeId) ?? null
+		instance.vehicleId = physicsBridgeVehicleIdByNodeId.get(nodeId) ?? null
+	})
 }
 
 async function loadScenePreviewPhysicsBridgeScene(document: SceneJsonExportDocument | null): Promise<void> {
@@ -10365,6 +10325,34 @@ async function loadScenePreviewPhysicsBridgeScene(document: SceneJsonExportDocum
 	} catch (error) {
 		console.warn('[ScenePreview] Failed to load physics bridge scene', error)
 	}
+}
+
+function syncScenePreviewBridgeVehicleFromFrame(nodeId: string, state: PhysicsBridgeBodyFrameState): void {
+	const instance = vehicleInstances.get(nodeId)
+	if (!instance || instance.source !== 'bridge') {
+		return
+	}
+	const chassisBody = instance.vehicle.chassisBody
+	const lastPosition = instance.lastBridgeFramePosition ?? new THREE.Vector3()
+	if (instance.hasBridgeFrameSample) {
+		const invStep = PHYSICS_FIXED_TIMESTEP > 1e-6 ? 1 / PHYSICS_FIXED_TIMESTEP : 0
+		chassisBody.velocity.set(
+			(state.position.x - lastPosition.x) * invStep,
+			(state.position.y - lastPosition.y) * invStep,
+			(state.position.z - lastPosition.z) * invStep,
+		)
+	} else {
+		chassisBody.velocity.set(0, 0, 0)
+	}
+	chassisBody.angularVelocity.set(0, 0, 0)
+	chassisBody.position.set(state.position.x, state.position.y, state.position.z)
+	chassisBody.quaternion.x = state.quaternion.x
+	chassisBody.quaternion.y = state.quaternion.y
+	chassisBody.quaternion.z = state.quaternion.z
+	chassisBody.quaternion.w = state.quaternion.w
+	lastPosition.copy(state.position)
+	instance.lastBridgeFramePosition = lastPosition
+	instance.hasBridgeFrameSample = true
 }
 
 function consumeScenePreviewPhysicsBridgeStepFrame(frame: PhysicsStepFrame): void {
@@ -10399,9 +10387,10 @@ function consumeScenePreviewPhysicsBridgeStepFrame(frame: PhysicsStepFrame): voi
 				frame.bodyTransforms[base + 6] ?? 1,
 			).normalize()
 			existing.motionState = frame.bodyTransforms[base + 7] ?? 0
+			syncScenePreviewBridgeVehicleFromFrame(nodeId, existing)
 			continue
 		}
-		physicsBridgeFrameBodiesByNodeId.set(nodeId, {
+		const createdState: PhysicsBridgeBodyFrameState = {
 			position: new THREE.Vector3(
 				frame.bodyTransforms[base] ?? 0,
 				frame.bodyTransforms[base + 1] ?? 0,
@@ -10414,7 +10403,9 @@ function consumeScenePreviewPhysicsBridgeStepFrame(frame: PhysicsStepFrame): voi
 				frame.bodyTransforms[base + 6] ?? 1,
 			).normalize(),
 			motionState: frame.bodyTransforms[base + 7] ?? 0,
-		})
+		}
+		physicsBridgeFrameBodiesByNodeId.set(nodeId, createdState)
+		syncScenePreviewBridgeVehicleFromFrame(nodeId, createdState)
 	}
 	applyScenePreviewPhysicsBridgeFrameToObjects()
 }
@@ -10424,9 +10415,6 @@ function applyScenePreviewPhysicsBridgeFrameToObjects(): void {
 		return
 	}
 	physicsBridgeFrameBodiesByNodeId.forEach((state, nodeId) => {
-		if (vehicleInstances.has(nodeId)) {
-			return
-		}
 		const rigidbodyEntry = rigidbodyInstances.get(nodeId)
 		if (rigidbodyEntry) {
 			if (rigidbodyEntry.syncObjectFromBody === false || !rigidbodyEntry.object) {
@@ -10455,7 +10443,7 @@ function applyScenePreviewPhysicsBridgeFrameToObjects(): void {
 }
 
 function shouldUseScenePreviewPhysicsBridgeFrameForNode(nodeId: string): boolean {
-	return physicsBridgeSceneLoaded && physicsBridgeFrameBodiesByNodeId.has(nodeId) && !vehicleInstances.has(nodeId)
+	return physicsBridgeSceneLoaded && physicsBridgeFrameBodiesByNodeId.has(nodeId)
 }
 
 function applyScenePreviewPhysicsBridgeTransformToObject(
@@ -10514,27 +10502,71 @@ function syncScenePreviewPhysicsBridgeBodyTransforms(): void {
 		!physicsBridge
 		|| !physicsBridgeSceneLoaded
 		|| physicsBridgeBodySyncPromise
-		|| !rigidbodyInstances.size
 		|| !physicsBridgeBodyIdByNodeId.size
 	) {
 		return
 	}
 	const bridge = physicsBridge
 	const commands: Array<Promise<void>> = []
+	const syncedNodeIds = new Set<string>()
 	rigidbodyInstances.forEach((entry, nodeId) => {
-		if (entry.body.type === CANNON.Body.STATIC) {
+		if (entry.body.type === LEGACY_STATIC_BODY_TYPE) {
 			return
 		}
 		const bodyId = physicsBridgeBodyIdByNodeId.get(nodeId)
 		if (typeof bodyId !== 'number') {
 			return
 		}
+		syncedNodeIds.add(nodeId)
 		commands.push(
 			bridge.setBodyTransform({
 				bodyId,
 				transform: {
 					position: [entry.body.position.x, entry.body.position.y, entry.body.position.z],
 					rotation: [entry.body.quaternion.x, entry.body.quaternion.y, entry.body.quaternion.z, entry.body.quaternion.w],
+				},
+			}),
+		)
+	})
+	physicsBridgeBodyIdByNodeId.forEach((bodyId, nodeId) => {
+		if (syncedNodeIds.has(nodeId)) {
+			return
+		}
+		const node = resolveNodeById(nodeId)
+		const component = resolvePhysicsRigidbodyComponent(node)
+		if (!node || !component || component.props.bodyType === 'STATIC') {
+			return
+		}
+		const object = resolveRigidbodyBindingObject(component, nodeObjectMap.get(nodeId) ?? null)
+		if (!object) {
+			return
+		}
+		object.updateMatrixWorld(true)
+		object.getWorldPosition(physicsBridgeBodySyncPositionHelper)
+		object.getWorldQuaternion(physicsBridgeBodySyncQuaternionHelper).normalize()
+		const frameState = physicsBridgeFrameBodiesByNodeId.get(nodeId)
+		if (
+			frameState
+			&& frameState.position.distanceToSquared(physicsBridgeBodySyncPositionHelper) <= 1e-8
+			&& Math.abs(frameState.quaternion.dot(physicsBridgeBodySyncQuaternionHelper)) >= 1 - 1e-6
+		) {
+			return
+		}
+		commands.push(
+			bridge.setBodyTransform({
+				bodyId,
+				transform: {
+					position: [
+						physicsBridgeBodySyncPositionHelper.x,
+						physicsBridgeBodySyncPositionHelper.y,
+						physicsBridgeBodySyncPositionHelper.z,
+					],
+					rotation: [
+						physicsBridgeBodySyncQuaternionHelper.x,
+						physicsBridgeBodySyncQuaternionHelper.y,
+						physicsBridgeBodySyncQuaternionHelper.z,
+						physicsBridgeBodySyncQuaternionHelper.w,
+					],
 				},
 			}),
 		)
@@ -10562,6 +10594,23 @@ function syncScenePreviewPhysicsBridgeVehicleInput(): void {
 	}
 	const activeNodeId = vehicleDriveState.active ? vehicleDriveState.nodeId : null
 	if (!activeNodeId) {
+		if (typeof physicsBridgeLastDrivenVehicleId !== 'number') {
+			return
+		}
+		const bridge = physicsBridge
+		physicsBridgeVehicleInputPromise = bridge.setVehicleInput({
+			vehicleId: physicsBridgeLastDrivenVehicleId,
+			steering: 0,
+			throttle: 0,
+			brake: 1,
+		})
+			.catch((error) => {
+				console.warn('[ScenePreview] Failed to clear physics bridge vehicle input', error)
+			})
+			.finally(() => {
+				physicsBridgeLastDrivenVehicleId = null
+				physicsBridgeVehicleInputPromise = null
+			})
 		return
 	}
 	const vehicleId = physicsBridgeVehicleIdByNodeId.get(activeNodeId)
@@ -10569,6 +10618,15 @@ function syncScenePreviewPhysicsBridgeVehicleInput(): void {
 		return
 	}
 	const bridge = physicsBridge
+	if (typeof physicsBridgeLastDrivenVehicleId === 'number' && physicsBridgeLastDrivenVehicleId !== vehicleId) {
+		void bridge.setVehicleInput({
+			vehicleId: physicsBridgeLastDrivenVehicleId,
+			steering: 0,
+			throttle: 0,
+			brake: 1,
+		}).catch(() => {})
+	}
+	physicsBridgeLastDrivenVehicleId = vehicleId
 	physicsBridgeVehicleInputPromise = bridge.setVehicleInput({
 		vehicleId,
 		steering: vehicleDriveInput.steering,
@@ -10589,10 +10647,12 @@ async function disposeScenePreviewPhysicsBridgeScene(): Promise<void> {
 	physicsBridgeNodeIdByBodyId.clear()
 	physicsBridgeVehicleIdByNodeId.clear()
 	physicsBridgeFrameBodiesByNodeId.clear()
+	physicsBridgeLastDrivenVehicleId = null
 	if (!physicsBridge || !physicsBridgeSceneLoaded) {
 		physicsBridgeStepPromise = null
 		physicsBridgeBodySyncPromise = null
 		physicsBridgeVehicleInputPromise = null
+		physicsBridgeLastDrivenVehicleId = null
 		return
 	}
 	try {
@@ -10604,6 +10664,7 @@ async function disposeScenePreviewPhysicsBridgeScene(): Promise<void> {
 		physicsBridgeStepPromise = null
 		physicsBridgeBodySyncPromise = null
 		physicsBridgeVehicleInputPromise = null
+		physicsBridgeLastDrivenVehicleId = null
 		physicsBridgeFrameBodiesByNodeId.clear()
 	}
 }
@@ -10627,50 +10688,12 @@ async function destroyScenePreviewPhysicsBridge(): Promise<void> {
 		physicsBridgeNodeIdByBodyId.clear()
 		physicsBridgeVehicleIdByNodeId.clear()
 		physicsBridgeFrameBodiesByNodeId.clear()
+		physicsBridgeLastDrivenVehicleId = null
 		physicsBridgeSceneLoaded = false
 	}
 }
 
-const physicsContactSettings: PhysicsContactSettings = {
-	contactEquationStiffness: PHYSICS_CONTACT_STIFFNESS,
-	contactEquationRelaxation: PHYSICS_CONTACT_RELAXATION,
-	frictionEquationStiffness: PHYSICS_FRICTION_STIFFNESS,
-	frictionEquationRelaxation: PHYSICS_FRICTION_RELAXATION,
-}
-
-function ensurePhysicsWorld(): CANNON.World {
-	return ensureSharedPhysicsWorld({
-		world: physicsWorld,
-		setWorld: (world) => {
-			physicsWorld = world
-		},
-		gravity: physicsGravity,
-		solverIterations: PHYSICS_SOLVER_ITERATIONS,
-		solverTolerance: PHYSICS_SOLVER_TOLERANCE,
-		contactFriction: physicsContactFriction,
-		contactRestitution: physicsContactRestitution,
-		contactSettings: physicsContactSettings,
-		rigidbodyMaterialCache,
-		rigidbodyContactMaterialKeys,
-	})
-}
-
 function removeAirWalls(): void {
-	const world = physicsWorld
-	if (!world) {
-		airWallBodies.clear()
-		airWallDebugEntries.clear()
-		clearAirWallDebugMeshes()
-		return
-	}
-	airWallBodies.forEach((body) => {
-		try {
-			world.removeBody(body)
-		} catch (error) {
-			console.warn('[ScenePreview] Failed to remove air wall body', error)
-		}
-	})
-	airWallBodies.clear()
 	airWallDebugEntries.clear()
 	clearAirWallDebugMeshes()
 }
@@ -10681,8 +10704,7 @@ function syncAirWallsForDocument(sceneDocument: SceneJsonExportDocument | null):
 		return
 	}
 	const airWallEnabled = sceneDocument.groundSettings?.enableAirWall !== false
-	const world = physicsWorld
-	if (!world || !airWallEnabled) {
+	if (!airWallEnabled) {
 		return
 	}
 	const groundNode = findGroundNode(sceneDocument.nodes)
@@ -10699,24 +10721,6 @@ function syncAirWallsForDocument(sceneDocument: SceneJsonExportDocument | null):
 		if (![hx, hy, hz].every((value) => Number.isFinite(value) && value > 0)) {
 			return
 		}
-		const shape = new CANNON.Box(new CANNON.Vec3(hx, hy, hz))
-		const body = new CANNON.Body({ mass: 0 })
-		body.type = CANNON.Body.STATIC
-		if (world.defaultMaterial) {
-			body.material = world.defaultMaterial
-		}
-		body.addShape(shape)
-		body.position.copy(definition.bodyPosition)
-		body.quaternion.set(
-			definition.bodyQuaternion.x,
-			definition.bodyQuaternion.y,
-			definition.bodyQuaternion.z,
-			definition.bodyQuaternion.w,
-		)
-		body.updateMassProperties()
-		body.aabbNeedsUpdate = true
-		world.addBody(body)
-		airWallBodies.set(definition.key, body)
 		const debugEntry: AirWallDebugEntry = {
 			key: definition.key,
 			halfExtents: definition.halfExtents,
@@ -10730,75 +10734,21 @@ function syncAirWallsForDocument(sceneDocument: SceneJsonExportDocument | null):
 	})
 }
 
-function createRigidbodyBody(
-	node: SceneNode,
-	component: SceneNodeComponentState<RigidbodyComponentProps>,
-	shapeDefinition: RigidbodyPhysicsShape | null,
-	object: THREE.Object3D,
-): { body: CANNON.Body; orientationAdjustment: RigidbodyOrientationAdjustment | null } | null {
-	const world = ensurePhysicsWorld()
-	return createSharedRigidbodyBody(
-		{ node, component, shapeDefinition, object },
-		{
-			world,
-			groundHeightfieldCache,
-			floorShapeCache,
-			wallTrimeshCache,
-			rigidbodyMaterialCache,
-			rigidbodyContactMaterialKeys,
-			contactSettings: physicsContactSettings,
-			loggerTag: '[ScenePreview]',
-		},
-	)
-}
-
-function ensureRoadRigidbodyInstance(
-	node: SceneNode,
-	rigidbodyComponent: SceneNodeComponentState<RigidbodyComponentProps>,
-	object: THREE.Object3D,
-): void {
-	if (!physicsWorld || !currentDocument) {
-		return
+function clearLegacyPhysicsWorld(): void {
+	if (vehicleDriveState.active) {
+		stopVehicleDriveMode({ resolution: { type: 'abort', message: 'Physics environment reset.' } })
 	}
-	const groundNode = findGroundNode(currentDocument.nodes)
-	if (!groundNode || !isGroundDynamicMesh(groundNode.dynamicMesh)) {
-		removeRigidbodyInstance(node.id)
-		return
-	}
-	const world = ensurePhysicsWorld()
-	const existing = rigidbodyInstances.get(node.id) ?? null
-	const result = ensureRoadHeightfieldRigidbodyInstance({
-		roadNode: node,
-		rigidbodyComponent,
-		roadObject: object,
-		groundNode,
-		world,
-		existingInstance: existing,
-		createBody: (n, c, s, o) => createRigidbodyBody(n, c, s, o),
-		loggerTag: '[ScenePreview]',
-	})
-	if (!result.instance) {
-		if (result.shouldRemoveExisting) {
-			removeRigidbodyInstance(node.id)
-		}
-		return
-	}
-	// Ensure the instance map is up-to-date for both reuse and replacement cases.
-	rigidbodyInstances.set(node.id, result.instance)
+	vehicleInstances.clear()
+	rigidbodyInstances.clear()
+	clearAirWallDebugMeshes()
+	clearRigidbodyDebugHelpers()
+	disposeAirWallDebugGroup()
+	scenePreviewPerf.reset()
 }
 
 function removeRigidbodyInstance(nodeId: string): void {
-	const entry = rigidbodyInstances.get(nodeId)
-	if (!entry) {
-		return
-	}
-	removeRigidbodyInstanceBodies(physicsWorld, entry)
 	rigidbodyInstances.delete(nodeId)
 	scenePreviewPerf.notifyRemovedNode(nodeId)
-	groundHeightfieldCache.delete(nodeId)
-	floorShapeCache.delete(nodeId)
-	wallTrimeshCache.delete(nodeId)
-	roadHeightfieldDebugCache.delete(nodeId)
 	removeVehicleInstance(nodeId)
 }
 
@@ -10885,13 +10835,13 @@ function normalizeVehicleVector(value: VehicleVectorValue): [number, number, num
 	return null
 }
 
-function tupleToVec3(tuple: VehicleVectorValue, fallback?: Vector3Like): CANNON.Vec3 | null {
+function tupleToVec3(tuple: VehicleVectorValue, fallback?: Vector3Like): HostPhysicsVec3 | null {
 	const normalized = normalizeVehicleVector(tuple) ?? (fallback ? normalizeVehicleVector(fallback) : null)
 	if (!normalized) {
 		return null
 	}
 	const [x, y, z] = normalized
-	return new CANNON.Vec3(x, y, z)
+	return createHostPhysicsVec3(x, y, z)
 }
 
 function isRigidbodyDebugCategoryVisible(category: RigidbodyDebugHelperCategory): boolean {
@@ -11198,37 +11148,6 @@ function buildHeightfieldDebugLines(
 	return lines
 }
 
-function buildTrimeshDebugLines(trimesh: CANNON.Trimesh): THREE.LineSegments | null {
-	type TrimeshRaw = { vertices?: ArrayLike<number>; indices?: ArrayLike<number> }
-	const raw = trimesh as unknown as TrimeshRaw
-	const vertices = raw.vertices
-	const indices = raw.indices
-	if (!vertices || !indices) {
-		return null
-	}
-	const vertexCount = Math.floor(vertices.length / 3)
-	if (vertexCount < 3 || indices.length < 3) {
-		return null
-	}
-	const baseGeometry = new THREE.BufferGeometry()
-	const positions = new Float32Array(vertexCount * 3)
-	for (let i = 0; i < positions.length; i += 1) {
-		positions[i] = Number(vertices[i] ?? 0)
-	}
-	// Use 32-bit indices; avoids overflow for large meshes.
-	const indexArray = new Uint32Array(indices.length)
-	for (let i = 0; i < indexArray.length; i += 1) {
-		indexArray[i] = (Number(indices[i] ?? 0) | 0) >>> 0
-	}
-	baseGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
-	baseGeometry.setIndex(new THREE.BufferAttribute(indexArray, 1))
-	const edges = new THREE.EdgesGeometry(baseGeometry)
-	baseGeometry.dispose()
-	const lines = new THREE.LineSegments(edges, rigidbodyDebugMaterial)
-	lines.frustumCulled = false
-	return lines
-}
-
 function buildRigidbodyDebugLineSegments(shape: RigidbodyPhysicsShape): THREE.LineSegments | null {
 	if (shape.kind === 'box') {
 		return buildBoxDebugLines(shape)
@@ -11290,93 +11209,6 @@ function removeRigidbodyDebugHelper(nodeId: string): void {
 	rigidbodyDebugHelpers.delete(nodeId)
 }
 
-function buildBodyShapeDebugLines(shape: CANNON.Shape): THREE.LineSegments | null {
-	if (shape instanceof CANNON.Box) {
-		const halfExtents = (shape as any).halfExtents as { x?: unknown; y?: unknown; z?: unknown } | undefined
-		const hx = Number(halfExtents?.x)
-		const hy = Number(halfExtents?.y)
-		const hz = Number(halfExtents?.z)
-		if (![hx, hy, hz].every((value) => Number.isFinite(value) && value > 0)) {
-			return null
-		}
-		return buildBoxDebugLines({ kind: 'box', halfExtents: [hx, hy, hz], offset: [0, 0, 0], applyScale: false })
-	}
-	if (shape instanceof CANNON.Sphere) {
-		const radius = Number((shape as any).radius)
-		if (!Number.isFinite(radius) || radius <= 0) {
-			return null
-		}
-		return buildSphereDebugLines({ kind: 'sphere', radius, offset: [0, 0, 0], applyScale: false })
-	}
-	if (shape instanceof CANNON.ConvexPolyhedron) {
-		const rawShape = shape as unknown as {
-			vertices?: Array<{ x?: unknown; y?: unknown; z?: unknown }>
-			faces?: number[][]
-		}
-		const vertices = Array.isArray(rawShape.vertices)
-			? rawShape.vertices
-				.map((vertex) => {
-					const x = Number(vertex?.x)
-					const y = Number(vertex?.y)
-					const z = Number(vertex?.z)
-					return Number.isFinite(x + y + z) ? ([x, y, z] as [number, number, number]) : null
-				})
-				.filter((vertex): vertex is [number, number, number] => Boolean(vertex))
-			: []
-		const faces = Array.isArray(rawShape.faces)
-			? rawShape.faces.map((face) => (Array.isArray(face) ? face.map((value) => Math.trunc(Number(value))) : []))
-			: []
-		if (!vertices.length || !faces.length) {
-			return null
-		}
-		return buildConvexDebugLines({
-			kind: 'convex',
-			vertices,
-			faces,
-			offset: [0, 0, 0],
-			applyScale: false,
-		})
-	}
-	if (shape instanceof CANNON.Trimesh) {
-		return buildTrimeshDebugLines(shape)
-	}
-	return null
-}
-
-function computeBodyShapeDebugSignature(shape: CANNON.Shape, offset: CANNON.Vec3 | undefined, orientation: CANNON.Quaternion | undefined): string {
-	let base = shape.type.toString()
-	if (shape instanceof CANNON.Box) {
-		const halfExtents = (shape as any).halfExtents as { x?: unknown; y?: unknown; z?: unknown } | undefined
-		base = `box:${Number(halfExtents?.x) ?? 0}:${Number(halfExtents?.y) ?? 0}:${Number(halfExtents?.z) ?? 0}`
-	} else if (shape instanceof CANNON.Sphere) {
-		base = `sphere:${Number((shape as any).radius) ?? 0}`
-	} else if (shape instanceof CANNON.ConvexPolyhedron) {
-		const rawShape = shape as unknown as { vertices?: ArrayLike<{ x?: unknown; y?: unknown; z?: unknown }>; faces?: ArrayLike<ArrayLike<number>> }
-		const vertexCount = rawShape.vertices?.length ?? 0
-		const faceCount = rawShape.faces?.length ?? 0
-		let hash = 2166136261
-		const fnv = (value: number) => {
-			hash ^= value
-			hash = Math.imul(hash, 16777619) >>> 0
-		}
-		for (let index = 0; index < vertexCount; index += 1) {
-			const vertex = rawShape.vertices?.[index]
-			fnv(Math.round((Number(vertex?.x) || 0) * 1000) | 0)
-			fnv(Math.round((Number(vertex?.y) || 0) * 1000) | 0)
-			fnv(Math.round((Number(vertex?.z) || 0) * 1000) | 0)
-		}
-		base = `convex:${vertexCount}:${faceCount}:${hash.toString(16)}`
-	}
-	const ox = Number(offset?.x) || 0
-	const oy = Number(offset?.y) || 0
-	const oz = Number(offset?.z) || 0
-	const qx = Number(orientation?.x) || 0
-	const qy = Number(orientation?.y) || 0
-	const qz = Number(orientation?.z) || 0
-	const qw = Number(orientation?.w)
-	return `${base}@${Math.round(ox * 1000)},${Math.round(oy * 1000)},${Math.round(oz * 1000)}:${Math.round(qx * 1000)},${Math.round(qy * 1000)},${Math.round(qz * 1000)},${Math.round((Number.isFinite(qw) ? qw : 1) * 1000)}`
-}
-
 function findWaterRuntimeRenderObject(nodeId: string): THREE.Object3D | null {
 	let found: THREE.Object3D | null = null
 	forEachWaterRuntimeHandle((handle) => {
@@ -11396,65 +11228,6 @@ function resolveRigidbodyDebugVisibilityObject(nodeId: string, fallback: THREE.O
 	return fallback ?? null
 }
 
-function ensureRigidbodyDebugHelperForBodyShapes(
-	nodeId: string,
-	body: CANNON.Body,
-	category: RigidbodyDebugHelperCategory,
-): boolean {
-	const shapes = Array.isArray(body.shapes) ? body.shapes : []
-	if (!shapes.length) {
-		removeRigidbodyDebugHelper(nodeId)
-		return false
-	}
-	const signature = `body-shapes:${shapes.map((shape, index) => computeBodyShapeDebugSignature(shape, body.shapeOffsets[index], body.shapeOrientations[index])).join('|')}`
-	const existing = rigidbodyDebugHelpers.get(nodeId)
-	if (existing?.signature === signature) {
-		return true
-	}
-	removeRigidbodyDebugHelper(nodeId)
-	const container = ensureRigidbodyDebugGroup()
-	if (!container) {
-		return false
-	}
-	const helperGroup = new THREE.Group()
-	helperGroup.name = `RigidbodyDebugHelper:${nodeId}`
-	helperGroup.visible = false
-	helperGroup.scale.set(1, 1, 1)
-	let addedLineCount = 0
-	shapes.forEach((shape, index) => {
-		const lines = buildBodyShapeDebugLines(shape)
-		if (!lines) {
-			return
-		}
-		lines.name = `RigidbodyBodyShapeDebugLines:${nodeId}:${index}`
-		lines.renderOrder = 9999
-		const segmentGroup = new THREE.Group()
-		segmentGroup.name = `RigidbodyBodyShapeDebugSegment:${nodeId}:${index}`
-		const offset = body.shapeOffsets[index]
-		const orientation = body.shapeOrientations[index]
-		segmentGroup.position.set(Number(offset?.x) || 0, Number(offset?.y) || 0, Number(offset?.z) || 0)
-		segmentGroup.quaternion.set(
-			Number(orientation?.x) || 0,
-			Number(orientation?.y) || 0,
-			Number(orientation?.z) || 0,
-			Number.isFinite(Number(orientation?.w)) ? Number(orientation?.w) : 1,
-		)
-		segmentGroup.add(lines)
-		helperGroup.add(segmentGroup)
-		addedLineCount += 1
-	})
-	if (!addedLineCount) {
-		helperGroup.clear()
-		return false
-	}
-	container.add(helperGroup)
-	rigidbodyDebugHelpers.set(nodeId, {
-		group: helperGroup,
-		signature,
-		category,
-		scale: new THREE.Vector3(1, 1, 1),
-	})
-	return true
 }
 
 function clearRigidbodyDebugHelpers(): void {
@@ -11508,20 +11281,9 @@ function ensureRigidbodyDebugHelperForShape(
 
 function ensureRoadHeightfieldDebugHelper(
 	nodeId: string,
-	entry: { signature: string; bodies: CANNON.Body[] },
+	entry: RoadHeightfieldShapesEntry,
 ): void {
-	const debugEntry = resolveRoadHeightfieldDebugSegments({
-		nodeId,
-		signature: entry.signature,
-		bodies: entry.bodies,
-		cache: roadHeightfieldDebugCache,
-		debugEnabled: isRigidbodyDebugVisible.value,
-	})
-	if (!debugEntry) {
-		removeRigidbodyDebugHelper(nodeId)
-		return
-	}
-	const signature = `heightfield-segments:${debugEntry.signature}`
+	const signature = `heightfield-segments:${entry.signature}`
 	const existing = rigidbodyDebugHelpers.get(nodeId)
 	if (existing?.signature === signature) {
 		return
@@ -11536,7 +11298,7 @@ function ensureRoadHeightfieldDebugHelper(
 	helperGroup.visible = false
 	// Heightfield debug segments are generated in world units.
 	helperGroup.scale.set(1, 1, 1)
-	debugEntry.segments.forEach((segment, index) => {
+	entry.segments.forEach((segment, index) => {
 		const lines = buildRigidbodyDebugLineSegments(segment.shape)
 		if (!lines) {
 			return
@@ -11549,6 +11311,21 @@ function ensureRoadHeightfieldDebugHelper(
 			...(segmentGroup.userData ?? {}),
 			__harmonyRoadSegmentKind: segment.shape.kind,
 		}
+		segmentGroup.position.set(
+			segment.transform.position[0],
+			segment.transform.position[1],
+			segment.transform.position[2],
+		)
+		rigidbodyDebugQuaternionHelper.set(
+			segment.transform.rotation[0],
+			segment.transform.rotation[1],
+			segment.transform.rotation[2],
+			segment.transform.rotation[3],
+		)
+		if (segment.shape.kind === 'heightfield') {
+			rigidbodyDebugQuaternionHelper.multiply(heightfieldDebugOrientationInverse)
+		}
+		segmentGroup.quaternion.copy(rigidbodyDebugQuaternionHelper)
 		segmentGroup.add(lines)
 		helperGroup.add(segmentGroup)
 	})
@@ -11613,11 +11390,18 @@ function refreshRigidbodyDebugHelper(nodeId: string): void {
 	const node = resolveNodeById(nodeId)
 	const component = resolveRigidbodyComponent(node)
 	const instance = rigidbodyInstances.get(nodeId) ?? null
-	const roadEntry =
-		instance && instance.signature && Array.isArray(instance.bodies) && instance.bodies.length > 1
-			? { signature: instance.signature, bodies: instance.bodies }
-			: null
 	const isGroundNode = Boolean(node && isGroundDynamicMesh(node.dynamicMesh))
+	const groundNode = currentDocument ? findGroundNode(currentDocument.nodes) : null
+	const roadEntry =
+		node
+		&& groundNode
+		&& isRoadDynamicMesh(node.dynamicMesh)
+		&& component?.props?.bodyType === 'STATIC'
+			? buildRoadHeightfieldShapes({
+				roadNode: node,
+				groundNode,
+			})
+			: null
 	if (roadEntry) {
 		const category: RigidbodyDebugHelperCategory = 'rigidbody'
 		if (!isRigidbodyDebugCategoryVisible(category)) {
@@ -11642,17 +11426,6 @@ function refreshRigidbodyDebugHelper(nodeId: string): void {
 		ensureGroundHeightfieldDebugHelper(nodeId, shapes, category)
 		updateRigidbodyDebugHelperTransform(nodeId)
 		return
-	}
-	if (instance && Array.isArray(instance.body.shapes) && instance.body.shapes.length > 0) {
-		const category: RigidbodyDebugHelperCategory = 'rigidbody'
-		if (!isRigidbodyDebugCategoryVisible(category)) {
-			removeRigidbodyDebugHelper(nodeId)
-			return
-		}
-		if (ensureRigidbodyDebugHelperForBodyShapes(nodeId, instance.body, category)) {
-			updateRigidbodyDebugHelperTransform(nodeId)
-			return
-		}
 	}
 	let shapeDefinition = extractRigidbodyShape(component)
 	if (!shapeDefinition) {
@@ -11685,42 +11458,23 @@ function updateRigidbodyDebugHelperTransform(nodeId: string): void {
 		return
 	}
 	const instance = rigidbodyInstances.get(nodeId) ?? null
-	const multiBodyEntry =
-		instance && instance.signature && Array.isArray(instance.bodies) && instance.bodies.length > 1
-			? { signature: instance.signature, bodies: instance.bodies }
+	const node = resolveNodeById(nodeId)
+	const groundNode = currentDocument ? findGroundNode(currentDocument.nodes) : null
+	const roadDebugEntry =
+		node
+		&& groundNode
+		&& isRoadDynamicMesh(node.dynamicMesh)
+			? buildRoadHeightfieldShapes({
+				roadNode: node,
+				groundNode,
+			})
 			: null
-	if (multiBodyEntry) {
+	if (roadDebugEntry) {
 		const categoryEnabled = isRigidbodyDebugCategoryVisible(helper.category)
 		const object = resolveRigidbodyDebugVisibilityObject(nodeId, nodeObjectMap.get(nodeId) ?? null)
 		const visible = object ? isRuntimeObjectEffectivelyVisible(object) : true
 		helper.group.visible = visible && categoryEnabled
-		if (!helper.group.visible) {
-			return
-		}
-		const children = helper.group.children
-		for (let i = 0; i < Math.min(children.length, multiBodyEntry.bodies.length); i += 1) {
-			const child = children[i]
-			const body = multiBodyEntry.bodies[i]
-			if (!child || !body) {
-				continue
-			}
-			child.position.set(body.position.x, body.position.y, body.position.z)
-			rigidbodyDebugQuaternionHelper.set(
-				body.quaternion.x,
-				body.quaternion.y,
-				body.quaternion.z,
-				body.quaternion.w,
-			)
-			const segmentKind = (child.userData as { __harmonyRoadSegmentKind?: string } | undefined)?.__harmonyRoadSegmentKind
-			if (segmentKind === 'heightfield') {
-				// Heightfields are rotated -90° around X in physics; undo that here so the debug
-				// geometry (built in render-space convention) lies on the surface.
-				rigidbodyDebugQuaternionHelper.multiply(heightfieldDebugOrientationInverse)
-			}
-			child.quaternion.copy(rigidbodyDebugQuaternionHelper)
-			child.scale.copy(helper.scale)
-			child.updateMatrixWorld(true)
-		}
+		helper.group.updateMatrixWorld(true)
 		return
 	}
 	const categoryEnabled = isRigidbodyDebugCategoryVisible(helper.category)
@@ -11792,14 +11546,11 @@ function syncRigidbodyDebugHelpers(): void {
 	})
 }
 
-function createVehicleInstance(
+function createBridgeVehicleInstance(
 	node: SceneNode,
 	component: SceneNodeComponentState<VehicleComponentProps>,
-	rigidbody: RigidbodyInstance,
+	object: THREE.Object3D,
 ): VehicleInstance | null {
-	if (!physicsWorld || !rigidbody.object) {
-		return null
-	}
 	const props = clampVehicleComponentProps(component.props)
 	const rightAxis = clampVehicleAxisIndex(props.indexRightAxis)
 	const upAxis = clampVehicleAxisIndex(props.indexUpAxis)
@@ -11809,19 +11560,16 @@ function createVehicleInstance(
 	const axisForwardVector = resolveVehicleAxisVector(forwardAxis)
 	const wheelEntries = (props.wheels ?? [])
 		.map((wheel) => {
-			const point = tupleToVec3(wheel.chassisConnectionPointLocal)
-			const direction = tupleToVec3(wheel.directionLocal, DEFAULT_DIRECTION)
 			const axle = tupleToVec3(wheel.axleLocal, DEFAULT_AXLE)
-			if (!point || !direction || !axle) {
+			if (!axle) {
 				return null
 			}
-			return { config: wheel, point, direction, axle }
+			return { config: wheel, axle }
 		})
-		.filter((entry): entry is VehicleWheelSetupEntry => Boolean(entry))
+		.filter((entry): entry is { config: VehicleWheelProps; axle: HostPhysicsVec3 } => Boolean(entry))
 	if (!wheelEntries.length) {
 		return null
 	}
-	const wheelCount = wheelEntries.length
 	let steerableWheelIndices = wheelEntries.reduce<number[]>((indices, entry, index) => {
 		if (entry.config.isFrontWheel) {
 			indices.push(index)
@@ -11829,44 +11577,26 @@ function createVehicleInstance(
 		return indices
 	}, [])
 	if (!steerableWheelIndices.length) {
-		steerableWheelIndices = wheelCount >= 2
-			? [0, 1].filter((index) => index < wheelCount)
-			: Array.from({ length: wheelCount }, (_unused, index) => index)
+		steerableWheelIndices = wheelEntries.length >= 2
+			? [0, 1].filter((index) => index < wheelEntries.length)
+			: Array.from({ length: wheelEntries.length }, (_unused, index) => index)
 	}
-	const vehicle = new CANNON.RaycastVehicle({
-		chassisBody: rigidbody.body,
-		indexRightAxis: rightAxis,
-		indexUpAxis: upAxis,
-		indexForwardAxis: forwardAxis,
-	})
-	const wheelBindings: VehicleWheelBinding[] = []
-	wheelEntries.forEach(({ config, point, direction, axle }, index) => {
-		vehicle.addWheel({
-			chassisConnectionPointLocal: point,
-			directionLocal: direction,
-			axleLocal: axle,
-			suspensionRestLength: config.suspensionRestLength,
-			suspensionStiffness: config.suspensionStiffness,
-			dampingRelaxation: config.dampingRelaxation,
-			dampingCompression: config.dampingCompression,
-			frictionSlip: config.frictionSlip,
-			maxSuspensionTravel: config.maxSuspensionTravel,
-			maxSuspensionForce: config.maxSuspensionForce,
-			useCustomSlidingRotationalSpeed: config.useCustomSlidingRotationalSpeed,
-			customSlidingRotationalSpeed: config.customSlidingRotationalSpeed,
-			isFrontWheel: config.isFrontWheel,
-			rollInfluence: config.rollInfluence,
-			radius: config.radius,
-		})
+	object.updateMatrixWorld(true)
+	object.getWorldPosition(physicsBridgeSyncPositionHelper)
+	object.getWorldQuaternion(physicsBridgeSyncQuaternionHelper).normalize()
+	const vehicle = createBridgeVehicleProxy(
+		physicsBridgeSyncPositionHelper,
+		physicsBridgeSyncQuaternionHelper,
+		wheelEntries.length,
+	)
+	const wheelBindings: VehicleWheelBinding[] = wheelEntries.map(({ config, axle }, index) => {
 		const axis = new THREE.Vector3(axle.x, axle.y, axle.z)
 		if (axis.lengthSq() < 1e-6) {
 			axis.copy(defaultWheelAxisVector)
 		}
 		axis.normalize()
 		const wheelObject = config.nodeId ? nodeObjectMap.get(config.nodeId) ?? null : null
-		const basePosition = wheelObject ? wheelObject.position.clone() : new THREE.Vector3()
-		const baseScale = wheelObject ? wheelObject.scale.clone() : new THREE.Vector3(1, 1, 1)
-		wheelBindings.push({
+		return {
 			nodeId: config.nodeId ?? null,
 			object: wheelObject,
 			radius: Math.max(config.radius, VEHICLE_WHEEL_MIN_RADIUS),
@@ -11876,27 +11606,15 @@ function createVehicleInstance(
 			spinAngle: 0,
 			lastSteeringAngle: 0,
 			baseQuaternion: wheelObject ? wheelObject.quaternion.clone() : new THREE.Quaternion(),
-			basePosition,
-			baseScale,
-		})
+			basePosition: wheelObject ? wheelObject.position.clone() : new THREE.Vector3(),
+			baseScale: wheelObject ? wheelObject.scale.clone() : new THREE.Vector3(1, 1, 1),
+		}
 	})
-	vehicle.addToWorld(physicsWorld)
-	vehicleRaycastInWorld.add(node.id)
-	const initialChassisPosition = new THREE.Vector3(
-		rigidbody.body.position.x,
-		rigidbody.body.position.y,
-		rigidbody.body.position.z,
-	)
-	const initialChassisQuaternion = new THREE.Quaternion(
-		rigidbody.body.quaternion.x,
-		rigidbody.body.quaternion.y,
-		rigidbody.body.quaternion.z,
-		rigidbody.body.quaternion.w,
-	).normalize()
 	return {
+		source: 'bridge',
 		nodeId: node.id,
 		vehicle,
-		wheelCount,
+		wheelCount: wheelEntries.length,
 		steerableWheelIndices,
 		wheelBindings,
 		forwardAxis: axisForwardVector.clone(),
@@ -11906,9 +11624,13 @@ function createVehicleInstance(
 		axisRightIndex: rightAxis,
 		axisUpIndex: upAxis,
 		axisForwardIndex: forwardAxis,
-		lastChassisPosition: initialChassisPosition,
+		lastChassisPosition: physicsBridgeSyncPositionHelper.clone(),
 		hasChassisPositionSample: false,
-		initialChassisQuaternion,
+		initialChassisQuaternion: physicsBridgeSyncQuaternionHelper.clone(),
+		bridgeBodyId: physicsBridgeBodyIdByNodeId.get(node.id) ?? null,
+		vehicleId: physicsBridgeVehicleIdByNodeId.get(node.id) ?? null,
+		lastBridgeFramePosition: physicsBridgeSyncPositionHelper.clone(),
+		hasBridgeFrameSample: false,
 	}
 }
 
@@ -11920,34 +11642,23 @@ function removeVehicleInstance(nodeId: string): void {
 	if (vehicleDriveState.active && vehicleDriveState.nodeId === nodeId) {
 		stopVehicleDriveMode({ resolution: { type: 'abort', message: 'Vehicle instance was removed.' } })
 	}
-	if (physicsWorld) {
-		try {
-			entry.vehicle.removeFromWorld(physicsWorld)
-		} catch (error) {
-			console.warn('[ScenePreview] Failed to remove vehicle instance', error)
-		}
-	}
 	vehicleInstances.delete(nodeId)
-	vehicleRaycastInWorld.delete(nodeId)
 	scenePreviewPerf.notifyRemovedNode(nodeId)
 }
 
 function ensureVehicleBindingForNode(nodeId: string): void {
-	if (!physicsWorld) {
-		return
-	}
 	const node = resolveNodeById(nodeId)
 	const component = resolveVehicleComponent(node)
 	if (!node || !component) {
 		removeVehicleInstance(nodeId)
 		return
 	}
-	const rigidbody = rigidbodyInstances.get(nodeId)
-	if (!rigidbody || !rigidbody.object) {
+	const object = nodeObjectMap.get(nodeId) ?? null
+	if (!object) {
 		return
 	}
 	removeVehicleInstance(nodeId)
-	const instance = createVehicleInstance(node, component, rigidbody)
+	const instance = createBridgeVehicleInstance(node, component, object)
 	if (instance) {
 		vehicleInstances.set(nodeId, instance)
 	}
@@ -11962,66 +11673,6 @@ function resolveRigidbodyBindingObject(
 		return nodeObjectMap.get(targetNodeId) ?? null
 	}
 	return fallbackObject
-}
-
-function ensureRigidbodyBindingForObject(nodeId: string, object: THREE.Object3D): void {
-	if (!physicsWorld || !currentDocument) {
-		return
-	}
-	const node = resolveNodeById(nodeId)
-	const component = resolvePhysicsRigidbodyComponent(node)
-	const shapeDefinition = extractRigidbodyShape(component)
-	const requiresMetadata = !hasAutoGeneratedDynamicShape(node?.dynamicMesh, node)
-	const hasBoundaryWall = Boolean(resolveBoundaryWallComponent(node))
-	if (!node || !component || !object) {
-		return
-	}
-	const bindingObject = resolveRigidbodyBindingObject(component, object)
-	if (!bindingObject) {
-		return
-	}
-	if (isRoadDynamicMesh(node.dynamicMesh) && (component.props as RigidbodyComponentProps | undefined)?.bodyType === 'STATIC') {
-		ensureRoadRigidbodyInstance(node, component, bindingObject)
-		refreshRigidbodyDebugHelper(nodeId)
-		return
-	}
-	if (!shapeDefinition && requiresMetadata && !hasBoundaryWall) {
-		return
-	}
-	const existing = rigidbodyInstances.get(nodeId)
-	if (existing) {
-		existing.object = bindingObject
-		syncSharedBodyFromObject(existing.body, bindingObject, existing.orientationAdjustment)
-		scenePreviewPerf.applyAggressiveSleepForNonInteractiveDynamic({
-			nodeId,
-			body: existing.body,
-			isVehicle: Boolean(resolveVehicleComponent(node)),
-			isProtagonist: Boolean(bindingObject.userData?.protagonist),
-		})
-		ensureVehicleBindingForNode(nodeId)
-		refreshRigidbodyDebugHelper(nodeId)
-		return
-	}
-	const bodyEntry = createRigidbodyBody(node, component, shapeDefinition, bindingObject)
-	if (!bodyEntry) {
-		return
-	}
-	scenePreviewPerf.applyAggressiveSleepForNonInteractiveDynamic({
-		nodeId,
-		body: bodyEntry.body,
-		isVehicle: Boolean(resolveVehicleComponent(node)),
-		isProtagonist: Boolean(bindingObject.userData?.protagonist),
-	})
-	physicsWorld.addBody(bodyEntry.body)
-	rigidbodyInstances.set(nodeId, {
-		nodeId,
-		body: bodyEntry.body,
-		bodies: [bodyEntry.body],
-		object: bindingObject,
-		orientationAdjustment: bodyEntry.orientationAdjustment,
-	})
-	refreshRigidbodyDebugHelper(nodeId)
-	ensureVehicleBindingForNode(nodeId)
 }
 
 function collectRigidbodyNodes(nodes: SceneNode[] | undefined | null): SceneNode[] {
@@ -12067,7 +11718,7 @@ function collectVehicleNodes(nodes: SceneNode[] | undefined | null): SceneNode[]
 }
 
 function syncVehicleBindingsForDocument(document: SceneJsonExportDocument | null): void {
-	if (!document || !physicsWorld) {
+	if (!document) {
 		if (!vehicleInstances.size) {
 			return
 		}
@@ -12097,212 +11748,14 @@ function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null):
 		return
 	}
 	void loadScenePreviewPhysicsBridgeScene(document)
-	const world = ensurePhysicsWorld()
-	const rigidbodyNodes = collectRigidbodyNodes(document.nodes)
-	const desiredIds = new Set<string>()
-	rigidbodyNodes.forEach((node) => {
-		desiredIds.add(node.id)
-		const component = resolvePhysicsRigidbodyComponent(node)
-		const shapeDefinition = extractRigidbodyShape(component)
-		const object = component ? resolveRigidbodyBindingObject(component, nodeObjectMap.get(node.id) ?? null) : null
-		const requiresMetadata = !hasAutoGeneratedDynamicShape(node.dynamicMesh, node)
-		const hasBoundaryWall = Boolean(resolveBoundaryWallComponent(node))
-		if (!component || !object) {
-			return
-		}
-		if (isRoadDynamicMesh(node.dynamicMesh) && (component.props as RigidbodyComponentProps | undefined)?.bodyType === 'STATIC') {
-			ensureRoadRigidbodyInstance(node, component, object)
-			refreshRigidbodyDebugHelper(node.id)
-			return
-		}
-		if (!shapeDefinition && requiresMetadata && !hasBoundaryWall) {
-			return
-		}
-		const existing = rigidbodyInstances.get(node.id)
-		if (existing) {
-			removeRigidbodyInstanceBodies(world, existing)
-			rigidbodyInstances.delete(node.id)
-			scenePreviewPerf.notifyRemovedNode(node.id)
-		}
-		const bodyEntry = createRigidbodyBody(node, component, shapeDefinition, object)
-		if (!bodyEntry) {
-			return
-		}
-		scenePreviewPerf.applyAggressiveSleepForNonInteractiveDynamic({
-			nodeId: node.id,
-			body: bodyEntry.body,
-			isVehicle: Boolean(resolveVehicleComponent(node)),
-			isProtagonist: Boolean(object.userData?.protagonist),
-		})
-		world.addBody(bodyEntry.body)
-		rigidbodyInstances.set(node.id, {
-			nodeId: node.id,
-			body: bodyEntry.body,
-			bodies: [bodyEntry.body],
-			object,
-			orientationAdjustment: bodyEntry.orientationAdjustment,
-		})
-		refreshRigidbodyDebugHelper(node.id)
-	})
-	rigidbodyInstances.forEach((entry, nodeId) => {
-		if (!desiredIds.has(nodeId)) {
-			removeRigidbodyInstanceBodies(world, entry)
-			rigidbodyInstances.delete(nodeId)
-			scenePreviewPerf.notifyRemovedNode(nodeId)
-			removeRigidbodyDebugHelper(nodeId)
-		}
-	})
-	groundHeightfieldCache.forEach((_entry, nodeId) => {
-		if (!desiredIds.has(nodeId)) {
-			groundHeightfieldCache.delete(nodeId)
-		}
-	})
-
+	clearLegacyPhysicsWorld()
 	syncVehicleBindingsForDocument(document)
 	syncAirWallsForDocument(document)
 }
 
 function stepPhysicsWorld(delta: number): void {
-	if (!physicsEnvironmentEnabled.value || !physicsWorld || !rigidbodyInstances.size) {
-		physicsAccumulator = 0
-		return
-	}
-
-	// RaycastVehicle registers postStep callbacks that can introduce micro-jitter even when idle.
-	// When not in manual drive nor auto-tour, remove the vehicle from the world to fully freeze it.
-	const world = physicsWorld
-	vehicleInstances.forEach((instance) => {
-		const nodeId = instance.nodeId
-		if (!nodeId) {
-			return
-		}
-		const manualActive = vehicleDriveState.active && vehicleDriveState.nodeId === nodeId
-		const tourActive = activeAutoTourNodeIds.has(nodeId)
-		const shouldBeInWorld = manualActive || tourActive
-		const isInWorld = vehicleRaycastInWorld.has(nodeId)
-		if (shouldBeInWorld && !isInWorld) {
-			try {
-				instance.vehicle.addToWorld(world)
-				vehicleRaycastInWorld.add(nodeId)
-			} catch (error) {
-				console.warn('[ScenePreview] Failed to add vehicle to world', error)
-			}
-			return
-		}
-		if (!shouldBeInWorld && isInWorld) {
-			try {
-				instance.vehicle.removeFromWorld(world)
-				vehicleRaycastInWorld.delete(nodeId)
-			} catch (error) {
-				console.warn('[ScenePreview] Failed to remove vehicle from world', error)
-			}
-			const chassisBody = instance.vehicle?.chassisBody
-			if (chassisBody) {
-				try {
-					chassisBody.allowSleep = true
-					chassisBody.sleepSpeedLimit = Math.max(0.05, chassisBody.sleepSpeedLimit ?? 0)
-					chassisBody.sleepTimeLimit = Math.max(0.05, chassisBody.sleepTimeLimit ?? 0)
-					chassisBody.velocity.set(0, 0, 0)
-					chassisBody.angularVelocity.set(0, 0, 0)
-					;(chassisBody as CANNON.Body & { sleep?: () => void }).sleep?.()
-				} catch {
-					// best-effort
-				}
-			}
-		}
-	})
-	const clampedDelta = Math.min(Math.max(0, delta), PHYSICS_MAX_ACCUMULATOR)
-	physicsAccumulator = Math.min(PHYSICS_MAX_ACCUMULATOR, physicsAccumulator + clampedDelta)
-	let subSteps = 0
-	try {
-		while (physicsAccumulator >= PHYSICS_FIXED_TIMESTEP && subSteps < PHYSICS_MAX_SUB_STEPS) {
-			physicsWorld.step(PHYSICS_FIXED_TIMESTEP)
-			physicsAccumulator -= PHYSICS_FIXED_TIMESTEP
-			subSteps += 1
-		}
-	} catch (error) {
-		console.warn('[ScenePreview] Physics step failed', error)
-	}
-	if (physicsAccumulator > PHYSICS_FIXED_TIMESTEP) {
-		physicsAccumulator = PHYSICS_FIXED_TIMESTEP
-	}
-
-	// Ensure vehicles are truly static after exiting drive/auto-tour.
-	// If a vehicle wakes up or drifts when no controller is active, hard-stop it and log for debugging.
-	const nowMs = Date.now()
-	vehicleInstances.forEach((instance) => {
-		const nodeId = instance.nodeId
-		if (!nodeId) {
-			return
-		}
-		const manualActive = vehicleDriveState.active && vehicleDriveState.nodeId === nodeId
-		const tourActive = activeAutoTourNodeIds.has(nodeId)
-		if (manualActive || tourActive) {
-			return
-		}
-		const chassisBody = instance.vehicle?.chassisBody
-		if (!chassisBody) {
-			return
-		}
-		const vx = chassisBody.velocity?.x ?? 0
-		const vy = chassisBody.velocity?.y ?? 0
-		const vz = chassisBody.velocity?.z ?? 0
-		const wx = chassisBody.angularVelocity?.x ?? 0
-		const wy = chassisBody.angularVelocity?.y ?? 0
-		const wz = chassisBody.angularVelocity?.z ?? 0
-		// forces/torque not needed here
-		const speedSq = vx * vx + vy * vy + vz * vz
-		const angSq = wx * wx + wy * wy + wz * wz
-		type SleepStateBody = CANNON.Body & { sleepState?: number }
-		const sleepState = (chassisBody as SleepStateBody).sleepState
-		const drifting = speedSq > 1e-10 || angSq > 1e-10
-		const awake = sleepState === 0
-		if (!drifting && !awake) {
-			return
-		}
-
-		const lastLog = vehicleIdleFreezeLastLogMs.get(nodeId) ?? 0
-		if (nowMs - lastLog > 750) {
-			vehicleIdleFreezeLastLogMs.set(nodeId, nowMs)
-			// idle drift detected; forcing stop (no debug log)
-		}
-		try {
-			chassisBody.allowSleep = true
-			chassisBody.sleepSpeedLimit = Math.max(0.05, chassisBody.sleepSpeedLimit ?? 0)
-			chassisBody.sleepTimeLimit = Math.max(0.05, chassisBody.sleepTimeLimit ?? 0)
-			for (let index = 0; index < instance.wheelCount; index += 1) {
-				instance.vehicle.applyEngineForce(0, index)
-				instance.vehicle.setSteeringValue(0, index)
-				instance.vehicle.setBrake(VEHICLE_BRAKE_FORCE, index)
-			}
-			chassisBody.velocity.set(0, 0, 0)
-			chassisBody.angularVelocity.set(0, 0, 0)
-			;(chassisBody as CANNON.Body & { sleep?: () => void }).sleep?.()
-		} catch {
-			// best-effort
-		}
-	})
-	rigidbodyInstances.forEach((entry) => {
-		if (entry.syncObjectFromBody === false) {
-			return
-		}
-		if (!scenePreviewPerf.shouldSyncNonInteractiveSleepingBody({ nodeId: entry.nodeId, body: entry.body, nowMs })) {
-			return
-		}
-		// AutoTour non-vehicle branch moves the render object directly; do not overwrite it from physics.
-		const nodeState = resolveNodeById(entry.nodeId)
-		const isAutoTourActive = activeAutoTourNodeIds.has(entry.nodeId)
-		if (isAutoTourActive) {
-			const vehicle = resolveEnabledComponentState<VehicleComponentProps>(nodeState, VEHICLE_COMPONENT_TYPE)
-			if (!vehicle) {
-				return
-			}
-		}
-		if (shouldUseScenePreviewPhysicsBridgeFrameForNode(entry.nodeId)) {
-			return
-		}
-		syncSharedObjectFromBody(entry, syncInstancedTransform)
-	})
+	void delta
+	physicsAccumulator = 0
 }
 
 function updateVehicleWheelVisuals(delta: number): void {

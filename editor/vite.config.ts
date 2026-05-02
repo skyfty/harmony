@@ -48,10 +48,6 @@ export default defineConfig({
       },
       // keep using the short @schema alias; no runtime alias needed for @harmony/schema
       {
-        find: 'cannon-es',
-        replacement: resolveDir('./node_modules/cannon-es'),
-      },
-      {
         find: '@three-examples',
         replacement: withTrailingSlash(resolveDir('./node_modules/three/examples/jsm/')),
       },
@@ -80,7 +76,7 @@ export default defineConfig({
             if (id.includes('/schema/') || id.includes('/home/sky/harmony/schema')) return 'vendor_schema'
             if (id.includes('/node_modules/vuetify') || id.includes('/node_modules/@vuetify')) return 'vendor_vuetify'
             if (id.includes('/node_modules/@harmony') || id.includes('/node_modules/../schema')) return 'vendor_schema'
-            if (id.includes('/node_modules/cannon-es')) return 'vendor_physics'
+            if (id.includes('/node_modules/ammojs3')) return 'vendor_physics'
             return 'vendor'
           }
         },

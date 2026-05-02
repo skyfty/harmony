@@ -1,5 +1,4 @@
 import * as THREE from 'three'
-import * as CANNON from 'cannon-es'
 import {
   FollowCameraController,
   computeFollowLerpAlpha,
@@ -71,6 +70,8 @@ export type VehicleDriveChassisBody = {
   allowSleep?: boolean
   sleepSpeedLimit?: number
   sleepTimeLimit?: number
+  sleep?: () => unknown
+  wakeUp?: () => unknown
 }
 
 export type VehicleDriveVec3 = {
@@ -129,7 +130,6 @@ export type VehicleDriveControllerDeps = {
   resolveNodeById: (id: string) => SceneNode | null | undefined
   resolveRigidbodyComponent: (node: SceneNode | null | undefined) => SceneNodeComponentState<RigidbodyComponentProps> | null | undefined
   resolveVehicleComponent: (node: SceneNode | null | undefined) => SceneNodeComponentState<VehicleComponentProps> | null | undefined
-  ensurePhysicsWorld: () => void
   isPhysicsEnabled?: () => boolean
   ensureVehicleBindingForNode: (nodeId: string) => void
   normalizeNodeId: (id: string | null | undefined) => string | null
@@ -641,7 +641,6 @@ export class VehicleDriveController {
     if (!rigidbodyComponent || !physicsEnabled) {
       return { success: true, mode: 'transform', vehicleObject }
     }
-    this.deps.ensurePhysicsWorld()
     this.deps.ensureVehicleBindingForNode(normalized)
     const instance = this.deps.vehicleInstances.get(normalized)
     const rigidbody = this.deps.rigidbodyInstances.get(normalized)
@@ -781,7 +780,7 @@ export class VehicleDriveController {
         chassisBody.sleepTimeLimit = Math.max(0.05, chassisBody.sleepTimeLimit ?? 0)
         chassisBody.velocity.set(0, 0, 0)
         chassisBody.angularVelocity.set(0, 0, 0)
-        ;(chassisBody as CANNON.Body & { sleep?: () => void }).sleep?.()
+        chassisBody.sleep?.()
       } catch {
         // best-effort
       }
@@ -796,7 +795,7 @@ export class VehicleDriveController {
         body.sleepTimeLimit = Math.max(0.05, body.sleepTimeLimit ?? 0)
         body.velocity.set(0, 0, 0)
         body.angularVelocity.set(0, 0, 0)
-        ;(body as CANNON.Body & { sleep?: () => void }).sleep?.()
+        body.sleep?.()
       } catch {
         // best-effort
       }
@@ -1139,8 +1138,69 @@ export class VehicleDriveController {
     }
     const rigidbody = this.deps.rigidbodyInstances.get(state.nodeId)
     const instance = this.deps.vehicleInstances.get(state.nodeId)
-    if (!rigidbody || !instance || !rigidbody.body || !rigidbody.object) {
+    if (!instance) {
       return false
+    }
+    if (!rigidbody || !rigidbody.body || !rigidbody.object) {
+      const object = this.getTransformVehicleObject(state.nodeId)
+      if (!object) {
+        return false
+      }
+      const temp = this.temp
+      object.updateMatrixWorld(true)
+      object.getWorldPosition(temp.cameraForward)
+      const chassisBody = instance.vehicle?.chassisBody ?? null
+      const chassisPosition = temp.seatPosition.set(
+        chassisBody?.position?.x ?? temp.cameraForward.x,
+        chassisBody?.position?.y ?? temp.cameraForward.y,
+        chassisBody?.position?.z ?? temp.cameraForward.z,
+      )
+      chassisPosition.y += VEHICLE_RESET_LIFT
+      const sourceQuaternion = temp.tempQuaternion
+      if (instance.initialChassisQuaternion) {
+        sourceQuaternion.copy(instance.initialChassisQuaternion)
+      } else {
+        object.getWorldQuaternion(sourceQuaternion)
+      }
+      const worldForward = temp.seatForward.copy(instance.axisForward).applyQuaternion(sourceQuaternion)
+      if (worldForward.lengthSq() < 1e-6) {
+        worldForward.set(0, 0, 1)
+      }
+      worldForward.y = 0
+      if (worldForward.lengthSq() < 1e-6) {
+        worldForward.set(0, 0, 1)
+      } else {
+        worldForward.normalize()
+      }
+      const worldUp = temp.seatUp.set(0, 1, 0)
+      const worldRight = temp.seatRight.copy(worldUp).cross(worldForward)
+      if (worldRight.lengthSq() < 1e-6) {
+        worldRight.set(1, 0, 0)
+      } else {
+        worldRight.normalize()
+      }
+      const correctedForward = temp.cameraForward.copy(worldRight).cross(worldUp)
+      if (correctedForward.lengthSq() < 1e-6) {
+        correctedForward.set(0, 0, 1)
+      } else {
+        correctedForward.normalize()
+      }
+      temp.cameraMatrix.makeBasis(worldRight, worldUp, correctedForward)
+      temp.resetQuaternion.setFromRotationMatrix(temp.cameraMatrix)
+      this.setObjectWorldPose(object, chassisPosition, temp.resetQuaternion)
+      this.notifyVehicleObjectTransformUpdated(state.nodeId, object)
+      if (chassisBody) {
+        chassisBody.position.set(chassisPosition.x, chassisPosition.y, chassisPosition.z)
+        chassisBody.velocity.set(0, 0, 0)
+        chassisBody.angularVelocity.set(0, 0, 0)
+        chassisBody.quaternion.x = temp.resetQuaternion.x
+        chassisBody.quaternion.y = temp.resetQuaternion.y
+        chassisBody.quaternion.z = temp.resetQuaternion.z
+        chassisBody.quaternion.w = temp.resetQuaternion.w
+      }
+      this.resetSpeedGovernor()
+      this.bindings.cameraFollowState.initialized = false
+      return true
     }
     const temp = this.temp
     const chassisPosition = temp.seatPosition.set(

@@ -99,7 +99,7 @@ class LazySceneryPhysicsBridge implements PhysicsBridge {
 
   private async createBridge(): Promise<PhysicsBridge> {
     await loadWechatPhysicsSubpackage('physics')
-    const [{ createWechatPhysicsBridge, createInMemoryWechatPhysicsWorker }, { createAmmoPhysicsController }] =
+    const [{ createWechatPhysicsBridge, createInMemoryWechatPhysicsWorker }, { createAmmoPhysicsController, createDefaultAmmoModuleFactory }] =
       await Promise.all([
         import('@harmony/physics-host-wechat') as Promise<WechatRuntimeBridgeModule>,
         import('@harmony/physics-ammo') as Promise<AmmoRuntimeModule>,
@@ -109,7 +109,7 @@ class LazySceneryPhysicsBridge implements PhysicsBridge {
       subpackageName: 'physics',
       loadSubpackage: loadWechatPhysicsSubpackage,
       createWorker: () => createInMemoryWechatPhysicsWorker(createAmmoPhysicsController({
-        moduleFactory: async () => ({}),
+        moduleFactory: createDefaultAmmoModuleFactory(),
       })),
     })
   }

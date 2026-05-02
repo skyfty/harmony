@@ -172,10 +172,13 @@ export default {
             '@harmony/physics-ammo',
             '@harmony/physics-host-wechat',
             '@harmony/physics-worker-runtime',
+            'ammojs3',
+            'ammojs3/**',
             '**/harmony/physics-core/**',
             '**/harmony/physics-ammo/**',
             '**/harmony/physics-host-wechat/**',
             '**/harmony/physics-worker-runtime/**',
+            '**/node_modules/ammojs3/**',
           ],
           'pages/scenery/chunks/vendor': [
             '@minisheep/three-platform-adapter',

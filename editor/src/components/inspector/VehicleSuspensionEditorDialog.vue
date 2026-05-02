@@ -23,10 +23,20 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { TransformControls } from '@/utils/transformControls.js'
 import { computed, nextTick, onUnmounted, reactive, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import * as CANNON from 'cannon-es'
 import { useSceneStore, getRuntimeObject } from '@/stores/sceneStore'
 import { getCachedModelObject } from '@schema/modelObjectCache'
 import { setBoundingBoxFromObject } from '@/components/editor/sceneUtils'
+import { createScenePreviewPhysicsBridge } from '@/physics/createScenePreviewPhysicsBridge'
+import {
+  PHYSICS_BODY_TRANSFORM_STRIDE,
+  PHYSICS_WHEEL_TRANSFORM_STRIDE,
+  type PhysicsBridge,
+  type PhysicsCompoundChildDesc,
+  type PhysicsSceneAsset,
+  type PhysicsShapeDesc,
+  type PhysicsStepFrame,
+  type PhysicsVector3,
+} from '@harmony/physics-core'
 import {
   VEHICLE_COMPONENT_TYPE,
   clampVehicleComponentProps,
@@ -34,6 +44,7 @@ import {
   type VehicleWheelProps,
   RIGIDBODY_COMPONENT_TYPE,
   RIGIDBODY_METADATA_KEY,
+  clampRigidbodyComponentProps,
   type RigidbodyComponentProps,
   type RigidbodyComponentMetadata,
   type RigidbodyPhysicsShape,
@@ -63,14 +74,11 @@ const vehicleComponent = computed<SceneNodeComponentState<VehicleComponentProps>
 const normalizedProps = computed(() => clampVehicleComponentProps(vehicleComponent.value?.props ?? null))
 const wheelEntries = computed(() => normalizedProps.value.wheels ?? [])
 const isDisabled = computed(() => !vehicleComponent.value?.enabled)
-const panelStyle = computed(() => {
-  // Center the dialog on screen; ignore anchor to avoid sitting too low.
-  return {
-    top: '50%',
-    left: '50%',
-    transform: 'translate(-50%, -50%)',
-  }
-})
+const panelStyle = computed(() => ({
+  top: '50%',
+  left: '50%',
+  transform: 'translate(-50%, -50%)',
+}))
 
 const previewContainerRef = ref<HTMLDivElement | null>(null)
 const isReady = ref(false)
@@ -91,24 +99,60 @@ let frontGroup: Group | null = null
 let rearGroup: Group | null = null
 let groundMesh: Mesh | null = null
 let chassisBodyMesh: Mesh | null = null
-let chassisShapeOffset: CANNON.Vec3 | null = null
 let connectionPointMeshes: Mesh[] = []
 let resizeObserver: ResizeObserver | null = null
-let physicsWorld: CANNON.World | null = null
-let groundBody: CANNON.Body | null = null
-let chassisBody: CANNON.Body | null = null
-let vehicle: CANNON.RaycastVehicle | null = null
+let physicsBridge: PhysicsBridge | null = null
+let physicsBridgeInitPromise: Promise<PhysicsBridge> | null = null
+let physicsSceneRequestId = 0
+let physicsSceneLoaded = false
+let physicsStepInFlight = false
+let pendingPhysicsDeltaMs = 0
+let chassisPreviewBaseY = 1
 let animationFrame: number | null = null
 let wheelPreviewMeshes: Mesh[] = []
+
 const tempBox = new Box3()
 const tempSize = new Vector3()
+const tempWheelDirection = new Vector3()
+const tempWheelLocalPosition = new Vector3()
+const tempWheelWorldPosition = new Vector3()
+
+const PREVIEW_GROUND_SHAPE_ID = 1
+const PREVIEW_CHASSIS_SHAPE_ID = 10
+const PREVIEW_CHASSIS_COMPOUND_SHAPE_ID = 11
+const PREVIEW_GROUND_BODY_ID = 1
+const PREVIEW_CHASSIS_BODY_ID = 2
+const PREVIEW_GROUND_MATERIAL_ID = 1
+const PREVIEW_CHASSIS_MATERIAL_ID = 2
+const PREVIEW_VEHICLE_ID = 1
+const IDENTITY_ROTATION: [number, number, number, number] = [0, 0, 0, 1]
 
 type AxisIndex = 0 | 1 | 2
+
+type ChassisColliderInfo = {
+  shapeDescriptors: PhysicsShapeDesc[]
+  rootShapeId: number
+  halfHeight: number
+  offset: PhysicsVector3
+  visual:
+    | { kind: 'box'; halfExtents: PhysicsVector3 }
+    | { kind: 'sphere'; radius: number }
+    | { kind: 'cylinder'; radiusTop: number; radiusBottom: number; height: number }
+    | { kind: 'convex'; size: Vector3 }
+}
 
 function normalizeAxisIndex(axis: number | undefined): AxisIndex {
   if (axis === 1) return 1
   if (axis === 2) return 2
   return 0
+}
+
+function toPhysicsVector3(x: number, y: number, z: number): PhysicsVector3 {
+  return [x, y, z]
+}
+
+function isZeroPhysicsVector(vector: PhysicsVector3): boolean {
+  return Math.abs(vector[0]) < 1e-6 && Math.abs(vector[1]) < 1e-6 && Math.abs(vector[2]) < 1e-6
 }
 
 function getAxisValue(vector: { x: number; y: number; z: number }, axis: AxisIndex): number {
@@ -186,6 +230,10 @@ function disposePreview() {
     transformControls.dispose?.()
   }
   transformControls = null
+  if (chassisGroup && chassisBodyMesh) {
+    chassisGroup.remove(chassisBodyMesh)
+  }
+  wheelPreviewMeshes.forEach((mesh) => previewScene?.remove(mesh))
   const scene = previewScene
   previewScene = null
   camera = null
@@ -197,14 +245,10 @@ function disposePreview() {
     scene?.remove(groundMesh)
   }
   groundMesh = null
-  if (chassisBodyMesh) {
-    scene?.remove(chassisBodyMesh)
-  }
   chassisBodyMesh = null
-  chassisShapeOffset = null
   connectionPointMeshes = []
   wheelPreviewMeshes = []
-  disposePhysics()
+  void disposePhysics()
   isReady.value = false
   loadError.value = null
   if (animationFrame !== null) {
@@ -213,11 +257,27 @@ function disposePreview() {
   }
 }
 
-function disposePhysics() {
-  vehicle = null
-  chassisBody = null
-  groundBody = null
-  physicsWorld = null
+async function disposePhysics() {
+  const bridge = physicsBridge
+  physicsSceneRequestId += 1
+  physicsSceneLoaded = false
+  physicsStepInFlight = false
+  pendingPhysicsDeltaMs = 0
+  physicsBridgeInitPromise = null
+  physicsBridge = null
+  if (!bridge) {
+    return
+  }
+  try {
+    await bridge.disposeScene()
+  } catch (error) {
+    console.warn('[VehicleSuspensionEditorDialog] Failed to dispose physics scene', error)
+  }
+  try {
+    await bridge.destroy()
+  } catch (error) {
+    console.warn('[VehicleSuspensionEditorDialog] Failed to destroy physics bridge', error)
+  }
 }
 
 function initPreview() {
@@ -239,15 +299,13 @@ function initPreview() {
   const hemi = new HemisphereLight(0xbfd4ff, 0xdde3ed, 0.55)
   const dir = new DirectionalLight(0xffffff, 1.15)
   dir.position.set(6, 9, 7)
-  dir.castShadow = false
-  previewScene.add(ambient)
-  previewScene.add(hemi)
-  previewScene.add(dir)
+  previewScene.add(ambient, hemi, dir)
 
-  const groundMaterial = new MeshStandardMaterial({ color: '#cdd6e5', roughness: 0.9, metalness: 0 })
-  groundMesh = new Mesh(new PlaneGeometry(60, 60), groundMaterial)
+  groundMesh = new Mesh(
+    new PlaneGeometry(60, 60),
+    new MeshStandardMaterial({ color: '#cdd6e5', roughness: 0.9, metalness: 0 }),
+  )
   groundMesh.rotation.x = -Math.PI / 2
-  groundMesh.position.y = 0
   previewScene.add(groundMesh)
 
   orbitControls = new OrbitControls(camera, renderer.domElement)
@@ -266,7 +324,7 @@ function initPreview() {
 
   rebuildModel()
   rebuildHandles()
-  rebuildPhysics()
+  void rebuildPhysics()
   startRenderLoop()
 
   resizeObserver = new ResizeObserver(() => resizeRenderer())
@@ -288,6 +346,7 @@ function rebuildModel() {
   if (chassisGroup) {
     previewScene.remove(chassisGroup)
   }
+  wheelPreviewMeshes.forEach((mesh) => previewScene.remove(mesh))
   chassisGroup = new Group()
   previewScene.add(chassisGroup)
 
@@ -304,19 +363,19 @@ function rebuildModel() {
   const bounds = previewModelGroup ? setBoundingBoxFromObject(previewModelGroup, tempBox.makeEmpty()) : null
   const size = bounds && !bounds.isEmpty() ? bounds.getSize(tempSize) : new Vector3(2, 1, 4)
   const center = bounds && !bounds.isEmpty() ? bounds.getCenter(new Vector3()) : new Vector3(0, size.y * 0.5, 0)
-  chassisGroup.position.set(-center.x, -center.y, -center.z)
+  chassisGroup.position.set(0, 0, 0)
 
   if (camera) {
     const distance = Math.max(size.x, size.y, size.z) * 1.6
     camera.position.set(distance, distance, distance)
-    orbitControls?.target.set(0, size.y * 0.5, 0)
+    orbitControls?.target.set(center.x, center.y, center.z)
   }
 }
 
 function rebuildHandles() {
   if (!chassisGroup) return
-  connectionPointMeshes.forEach((mesh) => chassisGroup?.remove(mesh))
-  wheelPreviewMeshes.forEach((mesh) => chassisGroup?.remove(mesh))
+  connectionPointMeshes.forEach((mesh) => chassisGroup.remove(mesh))
+  wheelPreviewMeshes.forEach((mesh) => previewScene?.remove(mesh))
   if (frontGroup) chassisGroup.remove(frontGroup)
   if (rearGroup) chassisGroup.remove(rearGroup)
   connectionPointMeshes = []
@@ -329,7 +388,6 @@ function rebuildHandles() {
   const sphereGeo = new SphereGeometry(0.08, 14, 10)
   const frontColor = new Color('#4cc9f0')
   const rearColor = new Color('#5ad29c')
-
   const frontCenter = computeGroupCenter(true)
   const rearCenter = computeGroupCenter(false)
   frontGroup.position.copy(frontCenter)
@@ -344,21 +402,13 @@ function rebuildHandles() {
     )
     const marker = new Mesh(
       sphereGeo,
-      new MeshStandardMaterial({ color: isFront ? frontColor : rearColor })
+      new MeshStandardMaterial({ color: isFront ? frontColor : rearColor }),
     )
     marker.position.copy(localPos)
     marker.userData.wheelId = wheel.id
     marker.userData.isFront = isFront
     connectionPointMeshes.push(marker)
     targetGroup.add(marker)
-
-    const dir = new Vector3(wheel.directionLocal.x, wheel.directionLocal.y, wheel.directionLocal.z)
-    if (dir.lengthSq() < 1e-6) {
-      dir.set(0, -1, 0)
-    } else {
-      dir.normalize()
-    }
-    const centerPos = localPos.clone().addScaledVector(dir, wheel.suspensionRestLength)
 
     const wheelMesh = new Mesh(
       new SphereGeometry(Math.max(1e-3, wheel.radius), 18, 12),
@@ -367,12 +417,11 @@ function rebuildHandles() {
         wireframe: true,
         opacity: 0.7,
         transparent: true,
-      })
+      }),
     )
-    wheelMesh.position.copy(centerPos)
     wheelMesh.userData.wheelId = wheel.id
     wheelPreviewMeshes.push(wheelMesh)
-    targetGroup.add(wheelMesh)
+    previewScene?.add(wheelMesh)
   }
 
   wheelEntries.value.forEach((wheel) => {
@@ -382,6 +431,7 @@ function rebuildHandles() {
 
   uiState.spacing = computeUniformSpacing()
   attachActiveHandle()
+  updateWheelPreviewMeshesFromRestPose(chassisPreviewBaseY)
 }
 
 function computeGroupCenter(isFront: boolean): Vector3 {
@@ -425,7 +475,6 @@ function alignAxlesVertical() {
   const frontCenter = computeGroupCenter(true)
   const rearCenter = computeGroupCenter(false)
   const targetY = (frontCenter.y + rearCenter.y) * 0.5
-
   const shiftGroupY = (isFront: boolean, center: Vector3) => {
     const delta = targetY - center.y
     patchGroupWheels(isFront, (wheel) => ({
@@ -436,7 +485,6 @@ function alignAxlesVertical() {
       },
     }))
   }
-
   shiftGroupY(true, frontCenter)
   shiftGroupY(false, rearCenter)
 }
@@ -445,7 +493,6 @@ function alignAxlesHorizontal() {
   const frontCenter = computeGroupCenter(true)
   const rearCenter = computeGroupCenter(false)
   const targetZ = (frontCenter.z + rearCenter.z) * 0.5
-
   const shiftGroupZ = (isFront: boolean, center: Vector3) => {
     const delta = targetZ - center.z
     patchGroupWheels(isFront, (wheel) => ({
@@ -456,7 +503,6 @@ function alignAxlesHorizontal() {
       },
     }))
   }
-
   shiftGroupZ(true, frontCenter)
   shiftGroupZ(false, rearCenter)
 }
@@ -464,35 +510,28 @@ function alignAxlesHorizontal() {
 function equalizeTrackWidth() {
   const front = computeGroupSpacing(true)
   const rear = computeGroupSpacing(false)
-  const target = Math.max(front, rear)
-  handleSpacingChange(target)
+  handleSpacingChange(Math.max(front, rear))
 }
 
 function handleHandleMove() {
   if (!transformControls || !chassisGroup || !transformControls.object) return
-  const target = transformControls.object
-  const isFront = target === frontGroup
-  applyHandleDelta(isFront)
+  applyHandleDelta(transformControls.object === frontGroup)
 }
 
 function handleHandleCommit() {
-  // Only commit wheel positions after releasing the mouse to avoid mid-drag writes.
   handleHandleMove()
 }
 
 function applyHandleDelta(isFront: boolean) {
-  const group = isFront ? frontGroup : rearGroup
-  if (!group || !chassisGroup) return
-  const chassis = chassisGroup
+  if (!chassisGroup) return
   const updates = new Map<string, Vector3>()
   connectionPointMeshes
     .filter((mesh) => mesh.userData?.isFront === isFront && mesh.userData?.wheelId)
     .forEach((mesh) => {
       const worldPos = mesh.getWorldPosition(new Vector3())
-      chassis.worldToLocal(worldPos)
+      chassisGroup?.worldToLocal(worldPos)
       updates.set(mesh.userData.wheelId as string, worldPos.clone())
     })
-
   patchGroupWheels(isFront, (wheel) => {
     const next = updates.get(wheel.id)
     if (!next) return wheel
@@ -508,8 +547,11 @@ function patchGroupWheels(isFront: boolean, mutator: (wheel: VehicleWheelProps) 
   const nodeId = selectedNodeId.value
   if (!component || !nodeId) return
   const current = clampVehicleComponentProps(component.props as VehicleComponentProps)
-  const next = current.wheels.map((wheel) => (wheel.isFrontWheel === isFront ? mutator(wheel) : wheel))
-  sceneStore.updateNodeComponentProps(nodeId, component.id, { wheels: next })
+  sceneStore.updateNodeComponentProps(
+    nodeId,
+    component.id,
+    { wheels: current.wheels.map((wheel) => (wheel.isFrontWheel === isFront ? mutator(wheel) : wheel)) },
+  )
 }
 
 function patchAllWheels(mutator: (wheel: VehicleWheelProps) => VehicleWheelProps) {
@@ -517,8 +559,7 @@ function patchAllWheels(mutator: (wheel: VehicleWheelProps) => VehicleWheelProps
   const nodeId = selectedNodeId.value
   if (!component || !nodeId) return
   const current = clampVehicleComponentProps(component.props as VehicleComponentProps)
-  const next = current.wheels.map((wheel) => mutator(wheel))
-  sceneStore.updateNodeComponentProps(nodeId, component.id, { wheels: next })
+  sceneStore.updateNodeComponentProps(nodeId, component.id, { wheels: current.wheels.map((wheel) => mutator(wheel)) })
 }
 
 const numericControls: Array<{ key: keyof VehicleWheelProps; label: string; min: number; max: number; step: number }> = [
@@ -602,98 +643,296 @@ function handleSpacingInputChange(value: string | number) {
   handleSpacingChange(parsed)
 }
 
-function rebuildPhysics() {
-  if (!chassisGroup) return
-  disposePhysics()
-  physicsWorld = new CANNON.World({ gravity: new CANNON.Vec3(0, -9.82, 0) })
-  groundBody = new CANNON.Body({ mass: 0 })
-  groundBody.addShape(new CANNON.Plane())
-  groundBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0)
-  physicsWorld.addBody(groundBody)
+function getRigidbodyPreviewProps(): RigidbodyComponentProps {
+  const node = selectedNode.value
+  const rigidbodyComponent = node?.components?.[RIGIDBODY_COMPONENT_TYPE] as SceneNodeComponentState<RigidbodyComponentProps> | undefined
+  return clampRigidbodyComponentProps(rigidbodyComponent?.props ?? null)
+}
 
-  const collider = resolveChassisColliderShape()
-  const baseY = Math.max(0.05, collider.halfHeight - collider.offset.y) + 0.3
-
-  if (chassisBodyMesh) {
-    previewScene?.remove(chassisBodyMesh)
+async function ensurePreviewPhysicsBridgeReady(): Promise<PhysicsBridge> {
+  if (physicsBridgeInitPromise) {
+    return physicsBridgeInitPromise
   }
-  const bodyVisualMaterial = new MeshStandardMaterial({ color: '#4c7dff', transparent: true, opacity: 0.16, roughness: 0.6, metalness: 0 })
-  chassisBodyMesh = buildChassisVisualMesh(collider, bodyVisualMaterial)
-  chassisShapeOffset = collider.offset
-  if (chassisBodyMesh) {
-    previewScene?.add(chassisBodyMesh)
-  }
-
-  chassisBody = new CANNON.Body({ mass: 600 })
-  chassisBody.addShape(collider.shape, collider.offset)
-  chassisBody.position.set(0, baseY, 0)
-  physicsWorld.addBody(chassisBody)
-
-  vehicle = new CANNON.RaycastVehicle({
-    chassisBody,
-    indexRightAxis: normalizedProps.value.indexRightAxis,
-    indexUpAxis: normalizedProps.value.indexUpAxis,
-    indexForwardAxis: normalizedProps.value.indexForwardAxis,
-  })
-
-  wheelEntries.value.forEach((wheel) => {
-    vehicle?.addWheel({
-      chassisConnectionPointLocal: new CANNON.Vec3(
-        wheel.chassisConnectionPointLocal.x,
-        wheel.chassisConnectionPointLocal.y,
-        wheel.chassisConnectionPointLocal.z,
-      ),
-      directionLocal: new CANNON.Vec3(wheel.directionLocal.x, wheel.directionLocal.y, wheel.directionLocal.z),
-      axleLocal: new CANNON.Vec3(wheel.axleLocal.x, wheel.axleLocal.y, wheel.axleLocal.z),
-      suspensionRestLength: wheel.suspensionRestLength,
-      suspensionStiffness: wheel.suspensionStiffness,
-      dampingRelaxation: wheel.dampingRelaxation,
-      dampingCompression: wheel.dampingCompression,
-      frictionSlip: wheel.frictionSlip,
-      maxSuspensionTravel: wheel.maxSuspensionTravel,
-      maxSuspensionForce: wheel.maxSuspensionForce,
-      rollInfluence: wheel.rollInfluence,
-      radius: wheel.radius,
-      customSlidingRotationalSpeed: wheel.customSlidingRotationalSpeed,
-      useCustomSlidingRotationalSpeed: wheel.useCustomSlidingRotationalSpeed,
-      isFrontWheel: wheel.isFrontWheel,
+  const bridge = physicsBridge ?? createScenePreviewPhysicsBridge()
+  physicsBridge = bridge
+  physicsBridgeInitPromise = bridge.init({
+    world: {
+      gravity: [0, -9.82, 0],
+      fixedTimeStepMs: 1000 / 60,
+      maxSubSteps: 4,
+    },
+  }).then(() => bridge)
+    .catch((error) => {
+      physicsBridgeInitPromise = null
+      console.warn('[VehicleSuspensionEditorDialog] Failed to initialize physics bridge', error)
+      throw error
     })
+  return physicsBridgeInitPromise
+}
+
+async function rebuildPhysics() {
+  if (!chassisGroup) return
+  const requestId = ++physicsSceneRequestId
+  const bridge = await ensurePreviewPhysicsBridgeReady().catch((error) => {
+    loadError.value = error instanceof Error ? error.message : 'Failed to initialize physics preview.'
+    return null
   })
-  vehicle.addToWorld(physicsWorld)
-}
-
-function updateVisualsFromPhysics(deltaTime: number) {
-  if (!physicsWorld || !vehicle || !chassisGroup || !chassisBody) return
-  physicsWorld.step(1 / 60, deltaTime)
-  vehicle.updateVehicle(1 / 60)
-  for (let index = 0; index < vehicle.wheelInfos.length; index += 1) {
-    vehicle.updateWheelTransform(index)
+  if (!bridge || requestId !== physicsSceneRequestId) {
+    return
   }
 
-  chassisGroup.position.set(chassisBody.position.x, chassisBody.position.y, chassisBody.position.z)
-  chassisGroup.quaternion.set(chassisBody.quaternion.x, chassisBody.quaternion.y, chassisBody.quaternion.z, chassisBody.quaternion.w)
+  physicsSceneLoaded = false
+  physicsStepInFlight = false
+  pendingPhysicsDeltaMs = 0
+  const collider = resolveChassisColliderShape()
+  const baseY = Math.max(0.05, collider.halfHeight - collider.offset[1]) + 0.3
+  chassisPreviewBaseY = baseY
+
   if (chassisBodyMesh) {
-    const offset = chassisShapeOffset
-    if (offset) {
-      const rotated = new CANNON.Vec3()
-      chassisBody.quaternion.vmult(offset, rotated)
-      chassisBodyMesh.position.set(
-        chassisBody.position.x + rotated.x,
-        chassisBody.position.y + rotated.y,
-        chassisBody.position.z + rotated.z,
-      )
-    } else {
-      chassisBodyMesh.position.set(chassisBody.position.x, chassisBody.position.y, chassisBody.position.z)
+    chassisGroup.remove(chassisBodyMesh)
+  }
+  chassisBodyMesh = buildChassisVisualMesh(
+    collider,
+    new MeshStandardMaterial({ color: '#4c7dff', transparent: true, opacity: 0.16, roughness: 0.6, metalness: 0 }),
+  )
+  if (chassisBodyMesh) {
+    chassisGroup.add(chassisBodyMesh)
+  }
+
+  chassisGroup.position.set(0, baseY, 0)
+  chassisGroup.quaternion.identity()
+  chassisGroup.updateMatrixWorld(true)
+  updateWheelPreviewMeshesFromRestPose(baseY)
+
+  try {
+    await bridge.loadScene(buildPreviewPhysicsSceneAsset(collider, baseY))
+    if (requestId !== physicsSceneRequestId) {
+      return
     }
-    chassisBodyMesh.quaternion.set(chassisBody.quaternion.x, chassisBody.quaternion.y, chassisBody.quaternion.z, chassisBody.quaternion.w)
+    loadError.value = null
+    physicsSceneLoaded = true
+  } catch (error) {
+    if (requestId !== physicsSceneRequestId) {
+      return
+    }
+    loadError.value = error instanceof Error ? error.message : 'Failed to load physics preview.'
+    console.warn('[VehicleSuspensionEditorDialog] Failed to rebuild physics preview', error)
   }
 }
 
-type ChassisColliderInfo = {
-  shape: CANNON.Shape
-  halfHeight: number
-  offset: CANNON.Vec3
-  visual: { kind: 'box'; halfExtents: CANNON.Vec3 } | { kind: 'sphere'; radius: number } | { kind: 'cylinder'; radiusTop: number; radiusBottom: number; height: number } | { kind: 'convex'; size: Vector3; center: Vector3 }
+function buildPreviewPhysicsSceneAsset(collider: ChassisColliderInfo, baseY: number): PhysicsSceneAsset {
+  const rigidbodyProps = getRigidbodyPreviewProps()
+  return {
+    format: 'harmony-physics',
+    version: 1,
+    materials: [
+      { id: PREVIEW_GROUND_MATERIAL_ID, friction: 1, restitution: 0 },
+      { id: PREVIEW_CHASSIS_MATERIAL_ID, friction: rigidbodyProps.friction, restitution: rigidbodyProps.restitution },
+    ],
+    shapes: [
+      {
+        id: PREVIEW_GROUND_SHAPE_ID,
+        kind: 'box',
+        halfExtents: [40, 0.5, 40],
+      },
+      ...collider.shapeDescriptors,
+    ],
+    bodies: [
+      {
+        id: PREVIEW_GROUND_BODY_ID,
+        type: 'static',
+        mass: 0,
+        materialId: PREVIEW_GROUND_MATERIAL_ID,
+        shapeId: PREVIEW_GROUND_SHAPE_ID,
+        transform: {
+          position: [0, -0.5, 0],
+          rotation: IDENTITY_ROTATION,
+        },
+      },
+      {
+        id: PREVIEW_CHASSIS_BODY_ID,
+        type: 'dynamic',
+        mass: Math.max(1, rigidbodyProps.mass || 600),
+        materialId: PREVIEW_CHASSIS_MATERIAL_ID,
+        shapeId: collider.rootShapeId,
+        transform: {
+          position: [0, baseY, 0],
+          rotation: IDENTITY_ROTATION,
+        },
+        linearDamping: rigidbodyProps.linearDamping,
+        angularDamping: rigidbodyProps.angularDamping,
+      },
+    ],
+    vehicles: [
+      {
+        id: PREVIEW_VEHICLE_ID,
+        bodyId: PREVIEW_CHASSIS_BODY_ID,
+        indexRightAxis: normalizeAxisIndex(normalizedProps.value.indexRightAxis),
+        indexUpAxis: normalizeAxisIndex(normalizedProps.value.indexUpAxis),
+        indexForwardAxis: normalizeAxisIndex(normalizedProps.value.indexForwardAxis),
+        wheels: wheelEntries.value.map((wheel, index) => ({
+          id: index + 1,
+          radius: Math.max(1e-3, wheel.radius),
+          isFrontWheel: wheel.isFrontWheel,
+          connectionPoint: toPhysicsVector3(
+            wheel.chassisConnectionPointLocal.x,
+            wheel.chassisConnectionPointLocal.y,
+            wheel.chassisConnectionPointLocal.z,
+          ),
+          direction: toPhysicsVector3(wheel.directionLocal.x, wheel.directionLocal.y, wheel.directionLocal.z),
+          axle: toPhysicsVector3(wheel.axleLocal.x, wheel.axleLocal.y, wheel.axleLocal.z),
+          suspensionRestLength: Math.max(1e-3, wheel.suspensionRestLength),
+          suspensionStiffness: Math.max(0, wheel.suspensionStiffness),
+          dampingRelaxation: Math.max(0, wheel.dampingRelaxation),
+          dampingCompression: Math.max(0, wheel.dampingCompression),
+          frictionSlip: Math.max(1e-3, wheel.frictionSlip),
+          rollInfluence: Math.max(0, wheel.rollInfluence),
+          maxSuspensionTravel: Math.max(0, wheel.maxSuspensionTravel),
+          maxSuspensionForce: Math.max(0, wheel.maxSuspensionForce),
+        })),
+      },
+    ],
+  }
+}
+
+function updateWheelPreviewMeshesFromRestPose(baseY: number) {
+  if (!chassisGroup) return
+  chassisGroup.position.set(0, baseY, 0)
+  chassisGroup.quaternion.identity()
+  chassisGroup.updateMatrixWorld(true)
+  wheelEntries.value.forEach((wheel, index) => {
+    const wheelMesh = wheelPreviewMeshes[index]
+    if (!wheelMesh) return
+    tempWheelDirection.set(wheel.directionLocal.x, wheel.directionLocal.y, wheel.directionLocal.z)
+    if (tempWheelDirection.lengthSq() < 1e-6) {
+      tempWheelDirection.set(0, -1, 0)
+    } else {
+      tempWheelDirection.normalize()
+    }
+    tempWheelLocalPosition.set(
+      wheel.chassisConnectionPointLocal.x,
+      wheel.chassisConnectionPointLocal.y,
+      wheel.chassisConnectionPointLocal.z,
+    ).addScaledVector(tempWheelDirection, wheel.suspensionRestLength)
+    tempWheelWorldPosition.copy(tempWheelLocalPosition)
+    chassisGroup.localToWorld(tempWheelWorldPosition)
+    wheelMesh.position.copy(tempWheelWorldPosition)
+    wheelMesh.quaternion.identity()
+  })
+}
+
+function queuePreviewPhysicsStep(deltaMs: number) {
+  pendingPhysicsDeltaMs += Math.max(0, deltaMs)
+  flushPreviewPhysicsStep()
+}
+
+function flushPreviewPhysicsStep() {
+  const bridge = physicsBridge
+  if (!bridge || !physicsSceneLoaded || physicsStepInFlight || pendingPhysicsDeltaMs <= 0) {
+    return
+  }
+  const deltaMs = pendingPhysicsDeltaMs
+  pendingPhysicsDeltaMs = 0
+  physicsStepInFlight = true
+  void bridge.step(deltaMs)
+    .then((frame) => {
+      if (bridge !== physicsBridge || !physicsSceneLoaded) {
+        return
+      }
+      applyPhysicsStepFrame(frame)
+    })
+    .catch((error) => {
+      if (bridge !== physicsBridge) {
+        return
+      }
+      loadError.value = error instanceof Error ? error.message : 'Failed to step physics preview.'
+      console.warn('[VehicleSuspensionEditorDialog] Failed to step physics preview', error)
+    })
+    .finally(() => {
+      if (bridge !== physicsBridge) {
+        return
+      }
+      physicsStepInFlight = false
+      if (pendingPhysicsDeltaMs > 0) {
+        queueMicrotask(() => flushPreviewPhysicsStep())
+      }
+    })
+}
+
+function applyPhysicsStepFrame(frame: PhysicsStepFrame) {
+  if (chassisGroup && frame.bodyMeta) {
+    for (let index = 0; index < frame.bodyCount; index += 1) {
+      if (frame.bodyMeta[index] !== PREVIEW_CHASSIS_BODY_ID) {
+        continue
+      }
+      const base = index * PHYSICS_BODY_TRANSFORM_STRIDE
+      chassisGroup.position.set(
+        frame.bodyTransforms[base] ?? 0,
+        frame.bodyTransforms[base + 1] ?? chassisPreviewBaseY,
+        frame.bodyTransforms[base + 2] ?? 0,
+      )
+      chassisGroup.quaternion.set(
+        frame.bodyTransforms[base + 3] ?? 0,
+        frame.bodyTransforms[base + 4] ?? 0,
+        frame.bodyTransforms[base + 5] ?? 0,
+        frame.bodyTransforms[base + 6] ?? 1,
+      ).normalize()
+      chassisGroup.updateMatrixWorld(true)
+      break
+    }
+  }
+  for (let index = 0; index < frame.wheelCount; index += 1) {
+    const base = index * PHYSICS_WHEEL_TRANSFORM_STRIDE
+    if ((frame.wheelTransforms[base] ?? 0) !== PREVIEW_VEHICLE_ID) {
+      continue
+    }
+    const wheelIndex = frame.wheelTransforms[base + 1] ?? -1
+    const wheelMesh = wheelPreviewMeshes[wheelIndex]
+    if (!wheelMesh) {
+      continue
+    }
+    wheelMesh.position.set(
+      frame.wheelTransforms[base + 2] ?? 0,
+      frame.wheelTransforms[base + 3] ?? 0,
+      frame.wheelTransforms[base + 4] ?? 0,
+    )
+    wheelMesh.quaternion.set(
+      frame.wheelTransforms[base + 5] ?? 0,
+      frame.wheelTransforms[base + 6] ?? 0,
+      frame.wheelTransforms[base + 7] ?? 0,
+      frame.wheelTransforms[base + 8] ?? 1,
+    ).normalize()
+  }
+}
+
+function wrapChassisShapeWithOffset(baseShape: PhysicsShapeDesc, offset: PhysicsVector3): {
+  descriptors: PhysicsShapeDesc[]
+  rootShapeId: number
+} {
+  if (isZeroPhysicsVector(offset)) {
+    return {
+      descriptors: [baseShape],
+      rootShapeId: baseShape.id,
+    }
+  }
+  const child: PhysicsCompoundChildDesc = {
+    shapeId: baseShape.id,
+    transform: {
+      position: offset,
+      rotation: IDENTITY_ROTATION,
+    },
+  }
+  return {
+    descriptors: [
+      baseShape,
+      {
+        id: PREVIEW_CHASSIS_COMPOUND_SHAPE_ID,
+        kind: 'compound',
+        children: [child],
+      },
+    ],
+    rootShapeId: PREVIEW_CHASSIS_COMPOUND_SHAPE_ID,
+  }
 }
 
 function resolveChassisColliderShape(): ChassisColliderInfo {
@@ -708,37 +947,46 @@ function resolveChassisColliderShape(): ChassisColliderInfo {
   }
 
   const scale = resolveNodeScaleFactors(node)
-  const makeOffset = (raw?: [number, number, number] | null) => {
+  const makeOffset = (raw?: [number, number, number] | null): PhysicsVector3 => {
     const nx = raw?.[0] ?? 0
     const ny = raw?.[1] ?? 0
     const nz = raw?.[2] ?? 0
-    if (metadataShape.applyScale) {
-      return new CANNON.Vec3(nx * scale.x, ny * scale.y, nz * scale.z)
-    }
-    return new CANNON.Vec3(nx, ny, nz)
+    return metadataShape.applyScale
+      ? [nx * scale.x, ny * scale.y, nz * scale.z]
+      : [nx, ny, nz]
   }
-
-  const offset = makeOffset((metadataShape as any).offset)
+  const offset = makeOffset((metadataShape as { offset?: [number, number, number] | null }).offset)
 
   const resolveBox = (shape: Extract<RigidbodyPhysicsShape, { kind: 'box' }>): ChassisColliderInfo => {
-    const hx = shape.applyScale ? shape.halfExtents[0] * scale.x : shape.halfExtents[0]
-    const hy = shape.applyScale ? shape.halfExtents[1] * scale.y : shape.halfExtents[1]
-    const hz = shape.applyScale ? shape.halfExtents[2] * scale.z : shape.halfExtents[2]
-    const halfExtents = new CANNON.Vec3(Math.max(1e-4, hx), Math.max(1e-4, hy), Math.max(1e-4, hz))
+    const halfExtents = toPhysicsVector3(
+      Math.max(1e-4, shape.applyScale ? shape.halfExtents[0] * scale.x : shape.halfExtents[0]),
+      Math.max(1e-4, shape.applyScale ? shape.halfExtents[1] * scale.y : shape.halfExtents[1]),
+      Math.max(1e-4, shape.applyScale ? shape.halfExtents[2] * scale.z : shape.halfExtents[2]),
+    )
+    const wrapped = wrapChassisShapeWithOffset({
+      id: PREVIEW_CHASSIS_SHAPE_ID,
+      kind: 'box',
+      halfExtents,
+    }, offset)
     return {
-      shape: new CANNON.Box(halfExtents),
-      halfHeight: halfExtents.y,
+      shapeDescriptors: wrapped.descriptors,
+      rootShapeId: wrapped.rootShapeId,
+      halfHeight: halfExtents[1],
       offset,
       visual: { kind: 'box', halfExtents },
     }
   }
 
   const resolveSphere = (shape: Extract<RigidbodyPhysicsShape, { kind: 'sphere' }>): ChassisColliderInfo => {
-    const dominantScale = Math.max(scale.x, scale.y, scale.z)
-    const radius = shape.applyScale ? shape.radius * dominantScale : shape.radius
-    const safeRadius = Math.max(1e-4, radius)
+    const safeRadius = Math.max(1e-4, shape.applyScale ? shape.radius * Math.max(scale.x, scale.y, scale.z) : shape.radius)
+    const wrapped = wrapChassisShapeWithOffset({
+      id: PREVIEW_CHASSIS_SHAPE_ID,
+      kind: 'sphere',
+      radius: safeRadius,
+    }, offset)
     return {
-      shape: new CANNON.Sphere(safeRadius),
+      shapeDescriptors: wrapped.descriptors,
+      rootShapeId: wrapped.rootShapeId,
       halfHeight: safeRadius,
       offset,
       visual: { kind: 'sphere', radius: safeRadius },
@@ -747,56 +995,69 @@ function resolveChassisColliderShape(): ChassisColliderInfo {
 
   const resolveCylinder = (shape: Extract<RigidbodyPhysicsShape, { kind: 'cylinder' }>): ChassisColliderInfo => {
     const horizontalScale = Math.max(scale.x, scale.z)
-    const radiusTop = shape.applyScale ? shape.radiusTop * horizontalScale : shape.radiusTop
-    const radiusBottom = shape.applyScale ? shape.radiusBottom * horizontalScale : shape.radiusBottom
-    const height = shape.applyScale ? shape.height * scale.y : shape.height
-    const segments = Math.max(4, shape.segments ?? 16)
-    const safeTop = Math.max(1e-4, radiusTop)
-    const safeBottom = Math.max(1e-4, radiusBottom)
-    const safeHeight = Math.max(1e-4, height)
+    const radiusTop = Math.max(1e-4, shape.applyScale ? shape.radiusTop * horizontalScale : shape.radiusTop)
+    const radiusBottom = Math.max(1e-4, shape.applyScale ? shape.radiusBottom * horizontalScale : shape.radiusBottom)
+    const height = Math.max(1e-4, shape.applyScale ? shape.height * scale.y : shape.height)
+    const wrapped = wrapChassisShapeWithOffset({
+      id: PREVIEW_CHASSIS_SHAPE_ID,
+      kind: 'cylinder',
+      radiusTop,
+      radiusBottom,
+      height,
+      segments: Math.max(4, shape.segments ?? 16),
+    }, offset)
     return {
-      shape: new CANNON.Cylinder(safeTop, safeBottom, safeHeight, segments),
-      halfHeight: safeHeight * 0.5,
+      shapeDescriptors: wrapped.descriptors,
+      rootShapeId: wrapped.rootShapeId,
+      halfHeight: height * 0.5,
       offset,
-      visual: { kind: 'cylinder', radiusTop: safeTop, radiusBottom: safeBottom, height: safeHeight },
+      visual: { kind: 'cylinder', radiusTop, radiusBottom, height },
     }
   }
 
   const resolveConvex = (shape: Extract<RigidbodyPhysicsShape, { kind: 'convex' }>): ChassisColliderInfo => {
-    const vertices = (shape.vertices ?? []).map((vertex) => {
-      const [x, y, z] = vertex
-      const vx = shape.applyScale ? x * scale.x : x
-      const vy = shape.applyScale ? y * scale.y : y
-      const vz = shape.applyScale ? z * scale.z : z
-      return new CANNON.Vec3(vx, vy, vz)
-    })
-    const faces = (shape.faces ?? []).map((face) => face.slice())
-    if (!vertices.length || !faces.length) {
+    const vertices = (shape.vertices ?? []).map(([x, y, z]) => ([
+      shape.applyScale ? x * scale.x : x,
+      shape.applyScale ? y * scale.y : y,
+      shape.applyScale ? z * scale.z : z,
+    ] as PhysicsVector3))
+    if (!vertices.length) {
       return defaultCollider
     }
-
     const bounds = vertices.reduce(
-      (acc, v) => {
-        acc.min.x = Math.min(acc.min.x, v.x)
-        acc.min.y = Math.min(acc.min.y, v.y)
-        acc.min.z = Math.min(acc.min.z, v.z)
-        acc.max.x = Math.max(acc.max.x, v.x)
-        acc.max.y = Math.max(acc.max.y, v.y)
-        acc.max.z = Math.max(acc.max.z, v.z)
+      (acc, vertex) => {
+        acc.min.x = Math.min(acc.min.x, vertex[0])
+        acc.min.y = Math.min(acc.min.y, vertex[1])
+        acc.min.z = Math.min(acc.min.z, vertex[2])
+        acc.max.x = Math.max(acc.max.x, vertex[0])
+        acc.max.y = Math.max(acc.max.y, vertex[1])
+        acc.max.z = Math.max(acc.max.z, vertex[2])
         return acc
       },
-      { min: new CANNON.Vec3(Infinity, Infinity, Infinity), max: new CANNON.Vec3(-Infinity, -Infinity, -Infinity) },
+      { min: new Vector3(Infinity, Infinity, Infinity), max: new Vector3(-Infinity, -Infinity, -Infinity) },
     )
-    const center = bounds.min.vadd(bounds.max).scale(0.5)
-    const adjustedVertices = vertices.map((v) => v.vsub(center))
-    const halfHeight = Math.max(1e-4, (bounds.max.y - bounds.min.y) * 0.5)
-    const visualSize = new Vector3(bounds.max.x - bounds.min.x, bounds.max.y - bounds.min.y, bounds.max.z - bounds.min.z)
-
+    const center = bounds.min.clone().add(bounds.max).multiplyScalar(0.5)
+    const hullVertices = new Float32Array(vertices.length * 3)
+    vertices.forEach((vertex, index) => {
+      hullVertices[index * 3] = vertex[0] - center.x
+      hullVertices[index * 3 + 1] = vertex[1] - center.y
+      hullVertices[index * 3 + 2] = vertex[2] - center.z
+    })
+    const worldOffset = toPhysicsVector3(offset[0] + center.x, offset[1] + center.y, offset[2] + center.z)
+    const wrapped = wrapChassisShapeWithOffset({
+      id: PREVIEW_CHASSIS_SHAPE_ID,
+      kind: 'convex-hull',
+      vertices: hullVertices,
+    }, worldOffset)
     return {
-      shape: new CANNON.ConvexPolyhedron({ vertices: adjustedVertices, faces }),
-      halfHeight,
-      offset: offset.vadd(center),
-      visual: { kind: 'convex', size: visualSize, center: new Vector3(center.x, center.y, center.z) },
+      shapeDescriptors: wrapped.descriptors,
+      rootShapeId: wrapped.rootShapeId,
+      halfHeight: Math.max(1e-4, (bounds.max.y - bounds.min.y) * 0.5),
+      offset: worldOffset,
+      visual: {
+        kind: 'convex',
+        size: new Vector3(bounds.max.x - bounds.min.x, bounds.max.y - bounds.min.y, bounds.max.z - bounds.min.z),
+      },
     }
   }
 
@@ -817,11 +1078,23 @@ function resolveChassisColliderShape(): ChassisColliderInfo {
 function buildFallbackCollider(): ChassisColliderInfo {
   const bounds = previewModelGroup ? setBoundingBoxFromObject(previewModelGroup, tempBox.makeEmpty()) : null
   const size = bounds && !bounds.isEmpty() ? bounds.getSize(tempSize) : new Vector3(2, 1, 4)
-  const halfExtents = new CANNON.Vec3(Math.max(0.1, size.x * 0.5), Math.max(0.1, size.y * 0.5), Math.max(0.1, size.z * 0.5))
+  const center = bounds && !bounds.isEmpty() ? bounds.getCenter(new Vector3()) : new Vector3(0, size.y * 0.5, 0)
+  const halfExtents = toPhysicsVector3(
+    Math.max(0.1, size.x * 0.5),
+    Math.max(0.1, size.y * 0.5),
+    Math.max(0.1, size.z * 0.5),
+  )
+  const offset = toPhysicsVector3(center.x, center.y, center.z)
+  const wrapped = wrapChassisShapeWithOffset({
+    id: PREVIEW_CHASSIS_SHAPE_ID,
+    kind: 'box',
+    halfExtents,
+  }, offset)
   return {
-    shape: new CANNON.Box(halfExtents),
-    halfHeight: halfExtents.y,
-    offset: new CANNON.Vec3(0, 0, 0),
+    shapeDescriptors: wrapped.descriptors,
+    rootShapeId: wrapped.rootShapeId,
+    halfHeight: halfExtents[1],
+    offset,
     visual: { kind: 'box', halfExtents },
   }
 }
@@ -829,26 +1102,31 @@ function buildFallbackCollider(): ChassisColliderInfo {
 function buildChassisVisualMesh(collider: ChassisColliderInfo, material: MeshStandardMaterial): Mesh | null {
   switch (collider.visual.kind) {
     case 'box': {
-      const halfExtents = collider.visual.halfExtents
-      const mesh = new Mesh(new BoxGeometry(halfExtents.x * 2, halfExtents.y * 2, halfExtents.z * 2), material)
-      mesh.position.set(collider.offset.x, collider.offset.y, collider.offset.z)
+      const [hx, hy, hz] = collider.visual.halfExtents
+      const mesh = new Mesh(new BoxGeometry(hx * 2, hy * 2, hz * 2), material)
+      mesh.position.set(collider.offset[0], collider.offset[1], collider.offset[2])
       return mesh
     }
     case 'sphere': {
       const mesh = new Mesh(new SphereGeometry(collider.visual.radius, 24, 16), material)
-      mesh.position.set(collider.offset.x, collider.offset.y, collider.offset.z)
+      mesh.position.set(collider.offset[0], collider.offset[1], collider.offset[2])
       return mesh
     }
     case 'cylinder': {
-      const { radiusTop, radiusBottom, height } = collider.visual
-      const mesh = new Mesh(new CylinderGeometry(radiusTop, radiusBottom, height, 24), material)
-      mesh.position.set(collider.offset.x, collider.offset.y, collider.offset.z)
+      const mesh = new Mesh(new CylinderGeometry(collider.visual.radiusTop, collider.visual.radiusBottom, collider.visual.height, 24), material)
+      mesh.position.set(collider.offset[0], collider.offset[1], collider.offset[2])
       return mesh
     }
     case 'convex': {
-      const size = collider.visual.size
-      const mesh = new Mesh(new BoxGeometry(Math.max(1e-4, size.x), Math.max(1e-4, size.y), Math.max(1e-4, size.z)), material)
-      mesh.position.set(collider.offset.x, collider.offset.y, collider.offset.z)
+      const mesh = new Mesh(
+        new BoxGeometry(
+          Math.max(1e-4, collider.visual.size.x),
+          Math.max(1e-4, collider.visual.size.y),
+          Math.max(1e-4, collider.visual.size.z),
+        ),
+        material,
+      )
+      mesh.position.set(collider.offset[0], collider.offset[1], collider.offset[2])
       return mesh
     }
     default:
@@ -861,10 +1139,9 @@ function startRenderLoop() {
   const clock = new Clock()
   const renderLoop = () => {
     animationFrame = requestAnimationFrame(renderLoop)
-    const dt = clock.getDelta()
-    updateVisualsFromPhysics(dt)
+    queuePreviewPhysicsStep(clock.getDelta() * 1000)
     orbitControls?.update()
-    renderer?.render(previewScene as Scene, camera as PerspectiveCamera)
+    renderer?.render(previewScene, camera)
   }
   renderLoop()
 }
@@ -873,9 +1150,7 @@ watch(
   () => props.visible,
   (visible) => {
     if (visible) {
-      nextTick(() => {
-        initPreview()
-      })
+      nextTick(() => initPreview())
     } else {
       disposePreview()
     }
@@ -888,9 +1163,19 @@ watch(
   () => {
     if (!props.visible) return
     rebuildHandles()
-    rebuildPhysics()
+    void rebuildPhysics()
   },
   { deep: true },
+)
+
+watch(
+  () => selectedNodeId.value,
+  () => {
+    if (!props.visible) return
+    rebuildModel()
+    rebuildHandles()
+    void rebuildPhysics()
+  },
 )
 
 watch(activeHandle, () => attachActiveHandle())

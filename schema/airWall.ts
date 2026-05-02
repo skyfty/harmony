@@ -1,5 +1,4 @@
 import * as THREE from 'three'
-import * as CANNON from 'cannon-es'
 import type {
 	SceneNode,
 	Vector3Like,
@@ -14,7 +13,7 @@ export const DEFAULT_AIR_WALL_VERTICAL_PADDING = 0.5
 export type AirWallDefinition = {
 	key: string
 	halfExtents: [number, number, number]
-	bodyPosition: CANNON.Vec3
+	bodyPosition: [number, number, number]
 	bodyQuaternion: THREE.Quaternion
 	debugPosition: THREE.Vector3
 	debugQuaternion: THREE.Quaternion
@@ -142,7 +141,7 @@ export function buildGroundAirWallDefinitions(options: BuildGroundAirWallOptions
 		debugYaw: number,
 	) => {
 		const center = position.clone().add(offsetAxis.clone().multiplyScalar(offsetDistance))
-		const bodyPosition = new CANNON.Vec3(center.x, wallCenterY, center.z)
+		const bodyPosition: [number, number, number] = [center.x, wallCenterY, center.z]
 		const bodyQuaternion = quaternion.clone()
 		const debugQuaternion = quaternion.clone().multiply(yawQuaternionHelper.setFromAxisAngle(upAxis, debugYaw))
 		const debugPosition = new THREE.Vector3(center.x, wallCenterY, center.z)

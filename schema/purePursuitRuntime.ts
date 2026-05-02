@@ -1,5 +1,4 @@
 import * as THREE from 'three'
-import * as CANNON from 'cannon-es'
 import type { PurePursuitComponentProps, VehicleComponentProps } from './components'
 import { buildPolylineMetricData, projectPointToPolyline, samplePolylineAtS } from './polylineProgress'
 
@@ -186,7 +185,7 @@ export function clearVehicleControlDebugLog(nodeId?: string): void {
 }
 
 export type PurePursuitVehicleInstanceLike = {
-  vehicle: CANNON.RaycastVehicle
+  vehicle: PurePursuitVehicleLike
   wheelCount: number
   steerableWheelIndices: number[]
   axisForward: THREE.Vector3
@@ -662,4 +661,31 @@ export function holdVehicleBrakeSafe(params: {
     // eslint-disable-next-line no-console
     console.warn('[PurePursuitRuntime] vehicle hold brake failed', error)
   }
+}
+type PurePursuitVehicleVec3Like = {
+  x: number
+  y: number
+  z: number
+  set?: (x: number, y: number, z: number) => unknown
+}
+
+type PurePursuitVehicleQuaternionLike = {
+  x: number
+  y: number
+  z: number
+  w: number
+}
+
+type PurePursuitVehicleLike = {
+  chassisBody: {
+    position: PurePursuitVehicleVec3Like
+    velocity: PurePursuitVehicleVec3Like
+    angularVelocity: PurePursuitVehicleVec3Like
+    quaternion: PurePursuitVehicleQuaternionLike
+  }
+  wheelCount?: number
+  wheelInfos: unknown[]
+  applyEngineForce: (force: number, wheelIndex: number) => void
+  setSteeringValue: (value: number, wheelIndex: number) => void
+  setBrake: (brake: number, wheelIndex: number) => void
 }

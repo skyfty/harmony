@@ -1,9 +1,11 @@
 import * as THREE from 'three'
 import { PHYSICS_SCENE_ASSET_VERSION, type PhysicsBodyDesc, type PhysicsBodyType, type PhysicsCompoundChildDesc, type PhysicsMaterialDesc, type PhysicsSceneAsset, type PhysicsShapeDesc, type PhysicsTransform, type PhysicsVector3, type PhysicsVehicleDesc, type PhysicsVehicleWheelDesc } from '@harmony/physics-core'
 import type { SceneJsonExportDocument, SceneNode, SceneNodeComponentState, Vector3Like } from './index'
+import { buildGroundAirWallDefinitions } from './airWall'
 import { buildBoundaryWallSegments } from './boundaryWall'
 import { buildAdaptiveGroundCollisionData, isGroundDynamicMesh } from './groundHeightfield'
-import { resolveFloorShape, resolveModelCollisionFaceSegments, resolveWallShape, type FloorShapeCache, type WallTrimeshCache } from './physicsEngine'
+import { resolveFloorShape, resolveModelCollisionFaceSegments, resolveWallShape, type FloorShapeCache, type WallTrimeshCache } from './physicsShapeResolvers'
+import { buildRoadHeightfieldShapes, isRoadDynamicMesh } from './roadHeightfieldShapes'
 import {
   BOUNDARY_WALL_COMPONENT_TYPE,
   RIGIDBODY_COMPONENT_TYPE,
@@ -34,6 +36,14 @@ const nodeEulerHelper = new THREE.Euler()
 const worldPositionHelper = new THREE.Vector3()
 const worldQuaternionHelper = new THREE.Quaternion()
 const worldScaleHelper = new THREE.Vector3()
+const unitScaleHelper = new THREE.Vector3(1, 1, 1)
+const transformComposePositionHelper = new THREE.Vector3()
+const transformComposeChildPositionHelper = new THREE.Vector3()
+const transformComposeQuaternionHelper = new THREE.Quaternion()
+const transformComposeChildQuaternionHelper = new THREE.Quaternion()
+const groundAirWallPositionHelper = new THREE.Vector3()
+const groundAirWallQuaternionHelper = new THREE.Quaternion()
+const groundAirWallScaleHelper = new THREE.Vector3()
 const identityPhysicsRotation: PhysicsTransform['rotation'] = [0, 0, 0, 1]
 
 function createEmptyPhysicsSceneAsset(): PhysicsSceneAsset {
@@ -161,6 +171,22 @@ function resolvePhysicsSceneRigidbodyComponent(
   }
 }
 
+function findGroundNode(nodes: SceneNode[] | null | undefined): SceneNode | null {
+  if (!Array.isArray(nodes)) {
+    return null
+  }
+  for (const node of nodes) {
+    if (isGroundDynamicMesh(node.dynamicMesh)) {
+      return node
+    }
+    const nested = findGroundNode(Array.isArray(node.children) ? node.children : null)
+    if (nested) {
+      return nested
+    }
+  }
+  return null
+}
+
 function scaleShapeOffset(shape: RigidbodyPhysicsShape, worldScale: THREE.Vector3): PhysicsVector3 {
   const [ox = 0, oy = 0, oz = 0] = shape.offset ?? [0, 0, 0]
   return [ox * worldScale.x, oy * worldScale.y, oz * worldScale.z]
@@ -183,6 +209,29 @@ function pushShapeDescriptor(
 ): number {
   shapes.push(shape)
   return shape.id
+}
+
+function composePhysicsTransform(base: PhysicsTransform, local: PhysicsTransform): PhysicsTransform {
+  transformComposePositionHelper.set(base.position[0], base.position[1], base.position[2])
+  transformComposeChildPositionHelper.set(local.position[0], local.position[1], local.position[2])
+  transformComposeQuaternionHelper.set(base.rotation[0], base.rotation[1], base.rotation[2], base.rotation[3])
+  transformComposeChildQuaternionHelper.set(local.rotation[0], local.rotation[1], local.rotation[2], local.rotation[3])
+  transformComposeChildPositionHelper.applyQuaternion(transformComposeQuaternionHelper)
+  transformComposePositionHelper.add(transformComposeChildPositionHelper)
+  transformComposeQuaternionHelper.multiply(transformComposeChildQuaternionHelper)
+  return {
+    position: [
+      transformComposePositionHelper.x,
+      transformComposePositionHelper.y,
+      transformComposePositionHelper.z,
+    ],
+    rotation: [
+      transformComposeQuaternionHelper.x,
+      transformComposeQuaternionHelper.y,
+      transformComposeQuaternionHelper.z,
+      transformComposeQuaternionHelper.w,
+    ],
+  }
 }
 
 function buildShapeInstancesFromDefinition(
@@ -295,10 +344,7 @@ function buildBoundaryWallShapeInstances(
   })
   const children: BuildShapeInstance[] = []
   segments.forEach((segment) => {
-    const halfExtents = (segment.shape as { halfExtents?: { x?: number; y?: number; z?: number } }).halfExtents
-    const hx = halfExtents?.x
-    const hy = halfExtents?.y
-    const hz = halfExtents?.z
+    const [hx, hy, hz] = segment.halfExtents
     if (![hx, hy, hz].every((value) => typeof value === 'number' && Number.isFinite(value) && value > 0)) {
       return
     }
@@ -353,17 +399,14 @@ function buildWallShapeInstances(
     return []
   }
   return entry.segments.flatMap((segment) => {
-    const halfExtents = (segment.shape as { halfExtents?: { x?: number; y?: number; z?: number } }).halfExtents
-    const hx = halfExtents?.x
-    const hy = halfExtents?.y
-    const hz = halfExtents?.z
+    const [hx, hy, hz] = segment.halfExtents
     if (![hx, hy, hz].every((value) => typeof value === 'number' && Number.isFinite(value) && value > 0)) {
       return []
     }
     const shapeId = pushShapeDescriptor(shapes, {
       id: nextShapeId(),
       kind: 'box',
-      halfExtents: [hx as number, hy as number, hz as number],
+      halfExtents: [hx, hy, hz],
     })
     return [{
       shapeId,
@@ -390,6 +433,36 @@ function buildModelCollisionShapeInstances(
     faces: modelCollisionComponent.faces,
     defaultThickness: modelCollisionComponent.defaultThickness,
   }).flatMap((segment) => buildShapeInstancesFromDefinition(segment.shape, worldScale, nextShapeId, shapes))
+}
+
+function buildRoadShapeInstances(
+  node: SceneNode,
+  groundNode: SceneNode | null,
+  nextShapeId: () => number,
+  shapes: PhysicsShapeDesc[],
+): BuildShapeInstance[] {
+  if (!isRoadDynamicMesh(node.dynamicMesh) || !groundNode || !isGroundDynamicMesh(groundNode.dynamicMesh)) {
+    return []
+  }
+  const built = buildRoadHeightfieldShapes({
+    roadNode: node,
+    groundNode,
+  })
+  if (!built) {
+    return []
+  }
+  return built.segments.flatMap((segment) => {
+    const instances = buildShapeInstancesFromDefinition(
+      segment.shape,
+      unitScaleHelper,
+      nextShapeId,
+      shapes,
+    )
+    return instances.map((entry) => ({
+      shapeId: entry.shapeId,
+      transform: composePhysicsTransform(segment.transform, entry.transform),
+    }))
+  })
 }
 
 function buildRigidbodyShapeInstances(
@@ -451,6 +524,9 @@ export function buildPhysicsSceneAsset(document: SceneJsonExportDocument): Physi
   const bodyIdsByNodeId = new Map<string, number>()
   const floorShapeCache: FloorShapeCache = new Map()
   const wallShapeCache: WallTrimeshCache = new Map()
+  const groundNode = findGroundNode(document.nodes)
+  let groundWorldTransform: PhysicsTransform | null = null
+  let groundWorldScale: PhysicsVector3 | null = null
   let nextMaterialId = 1
   let nextShapeIdValue = 1
   let nextBodyId = 1
@@ -488,6 +564,10 @@ export function buildPhysicsSceneAsset(document: SceneJsonExportDocument): Physi
       ? parentWorldMatrix.clone().multiply(localMatrix)
       : localMatrix
     worldMatrix.decompose(worldPositionHelper, worldQuaternionHelper, worldScaleHelper)
+    if (!groundWorldTransform && groundNode && node.id === groundNode.id && isGroundDynamicMesh(node.dynamicMesh)) {
+      groundWorldTransform = toPhysicsTransform(worldPositionHelper, worldQuaternionHelper)
+      groundWorldScale = [worldScaleHelper.x, worldScaleHelper.y, worldScaleHelper.z]
+    }
 
     if (rigidbodyState) {
       const rigidbodyProps = clampRigidbodyComponentProps(
@@ -498,12 +578,14 @@ export function buildPhysicsSceneAsset(document: SceneJsonExportDocument): Physi
       const floorShapeInstances = buildFloorShapeInstances(node, worldScaleHelper, nextShapeId, asset.shapes, floorShapeCache)
       const wallShapeInstances = buildWallShapeInstances(node, nextShapeId, asset.shapes, wallShapeCache)
       const modelCollisionShapeInstances = buildModelCollisionShapeInstances(node, worldScaleHelper, nextShapeId, asset.shapes)
+      const roadShapeInstances = buildRoadShapeInstances(node, groundNode, nextShapeId, asset.shapes)
       const boundaryWallInstances = buildBoundaryWallShapeInstances(node, nextShapeId, asset.shapes)
       const shapeInstances = [
         ...primaryShapeInstances,
         ...floorShapeInstances,
         ...wallShapeInstances,
         ...modelCollisionShapeInstances,
+        ...roadShapeInstances,
         ...boundaryWallInstances,
       ]
       if (shapeInstances.length > 0) {
@@ -578,5 +660,69 @@ export function buildPhysicsSceneAsset(document: SceneJsonExportDocument): Physi
   }
 
   document.nodes.forEach((node) => visitNode(node, parentWorldMatrixHelper.identity()))
+
+  if (groundNode && isGroundDynamicMesh(groundNode.dynamicMesh) && document.groundSettings?.enableAirWall !== false) {
+    const staticMaterialId = ensureMaterialId(clampRigidbodyComponentProps({ bodyType: 'STATIC' }))
+    if (groundWorldTransform && groundWorldScale) {
+      groundAirWallPositionHelper.set(
+        groundWorldTransform.position[0],
+        groundWorldTransform.position[1],
+        groundWorldTransform.position[2],
+      )
+      groundAirWallQuaternionHelper.set(
+        groundWorldTransform.rotation[0],
+        groundWorldTransform.rotation[1],
+        groundWorldTransform.rotation[2],
+        groundWorldTransform.rotation[3],
+      )
+      groundAirWallScaleHelper.set(
+        groundWorldScale[0],
+        groundWorldScale[1],
+        groundWorldScale[2],
+      )
+      const groundObject = new THREE.Object3D()
+      groundObject.position.copy(groundAirWallPositionHelper)
+      groundObject.quaternion.copy(groundAirWallQuaternionHelper)
+      groundObject.scale.copy(groundAirWallScaleHelper)
+      groundObject.updateMatrixWorld(true)
+      const airWallDefinitions = buildGroundAirWallDefinitions({
+        groundNode,
+        groundObject,
+      })
+      airWallDefinitions.forEach((definition) => {
+        const [hx, hy, hz] = definition.halfExtents
+        if (![hx, hy, hz].every((value) => Number.isFinite(value) && value > 0)) {
+          return
+        }
+        const shapeId = pushShapeDescriptor(asset.shapes, {
+          id: nextShapeId(),
+          kind: 'box',
+          halfExtents: [hx, hy, hz],
+        })
+        asset.bodies.push({
+          id: nextBodyId++,
+          type: 'static',
+          mass: 0,
+          materialId: staticMaterialId,
+          shapeId,
+          transform: {
+            position: [
+              definition.bodyPosition[0],
+              definition.bodyPosition[1],
+              definition.bodyPosition[2],
+            ],
+            rotation: [
+              definition.bodyQuaternion.x,
+              definition.bodyQuaternion.y,
+              definition.bodyQuaternion.z,
+              definition.bodyQuaternion.w,
+            ],
+          },
+          userDataKey: null,
+        })
+      })
+    }
+  }
+
   return asset
 }

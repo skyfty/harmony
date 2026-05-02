@@ -1,5 +1,4 @@
 import * as THREE from 'three'
-import * as CANNON from 'cannon-es'
 import type { FloorDynamicMesh, LandformDynamicMesh, RegionDynamicMesh, SceneNode, Vector3Like, WallDynamicMesh } from './index'
 import { extractWaterSurfaceMeshMetadataFromUserData } from './index'
 import { WATER_COMPONENT_TYPE } from './components'
@@ -9,7 +8,7 @@ import { compileWallSegmentsFromDefinition } from './wallLayout'
 import type { BoundaryWallComponentProps, BoundaryWallCustomLoop } from './components'
 
 export type BoundaryWallShapeSegment = {
-  shape: CANNON.Box
+  halfExtents: [number, number, number]
   offset: [number, number, number]
   orientation: [number, number, number, number]
 }
@@ -231,7 +230,7 @@ function buildPlanarBoundaryWallSegments(params: {
       const centerY = baseY + halfHeight
       quaternionHelper.setFromUnitVectors(axisXHelper, unitDirectionHelper)
       segments.push({
-        shape: new CANNON.Box(new CANNON.Vec3(Math.max(BOUNDARY_EPSILON, length * 0.5), halfHeight, halfThickness)),
+        halfExtents: [Math.max(BOUNDARY_EPSILON, length * 0.5), halfHeight, halfThickness],
         offset: [centerX, centerY, centerZ],
         orientation: [quaternionHelper.x, quaternionHelper.y, quaternionHelper.z, quaternionHelper.w],
       })
@@ -362,7 +361,7 @@ function buildWaterBoundaryWallSegments(
     const centerZ = baseZ + halfHeight
     quaternionHelper.setFromUnitVectors(axisXHelper, unitDirectionHelper)
     segments.push({
-      shape: new CANNON.Box(new CANNON.Vec3(Math.max(BOUNDARY_EPSILON, length * 0.5), halfThickness, halfHeight)),
+      halfExtents: [Math.max(BOUNDARY_EPSILON, length * 0.5), halfThickness, halfHeight],
       offset: [centerX, centerY, centerZ],
       orientation: [quaternionHelper.x, quaternionHelper.y, quaternionHelper.z, quaternionHelper.w],
     })

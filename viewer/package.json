@@ -35,6 +35,7 @@
     "@harmony/utils": "file:../utils",
     "@minisheep/mini-program-polyfill-core": "^1.1.5",
     "@vue/shared": "^3.5.13",
+    "ammojs3": "^0.0.11",
     "event-target-shim": "^6.0.2",
     "web-streams-polyfill": "^3.2.1",
     "cannon-es": "^0.20.0",

@@ -1,9 +1,7 @@
 import * as THREE from 'three'
-import * as CANNON from 'cannon-es'
 import type { SceneNode } from './index'
 import { resolveEnabledComponentState } from './componentRuntimeUtils'
 import { applyPurePursuitVehicleControlSafe, holdVehicleBrakeSafe, isAutoTourDebugEnabled, pushVehicleControlDebugEvent } from './purePursuitRuntime'
-import { syncBodyFromObject } from './physicsEngine'
 import type { PolylineMetricData } from './polylineProgress'
 import { buildPolylineMetricData, buildPolylineVertexArcLengths, projectPointToPolyline, samplePolylineAtS } from './polylineProgress'
 import {
@@ -21,8 +19,41 @@ import {
   type VehicleComponentProps,
 } from './components'
 
+type AutoTourVehicleVec3Like = {
+  x: number
+  y: number
+  z: number
+  set: (x: number, y: number, z: number) => unknown
+}
+
+type AutoTourVehicleQuaternionLike = {
+  x: number
+  y: number
+  z: number
+  w: number
+}
+
+type AutoTourVehicleLike = {
+  chassisBody: {
+    position: AutoTourVehicleVec3Like
+    velocity: AutoTourVehicleVec3Like
+    angularVelocity: AutoTourVehicleVec3Like
+    quaternion: AutoTourVehicleQuaternionLike
+    allowSleep?: boolean
+    sleepSpeedLimit?: number
+    sleepTimeLimit?: number
+    sleep?: () => unknown
+    wakeUp?: () => unknown
+  }
+  wheelCount?: number
+  wheelInfos: unknown[]
+  applyEngineForce: (force: number, wheelIndex: number) => void
+  setSteeringValue: (value: number, wheelIndex: number) => void
+  setBrake: (brake: number, wheelIndex: number) => void
+}
+
 export type AutoTourVehicleInstanceLike = {
-  vehicle: CANNON.RaycastVehicle
+  vehicle: AutoTourVehicleLike
   wheelCount: number
   steerableWheelIndices: number[]
   axisForward: THREE.Vector3
@@ -137,6 +168,9 @@ const AUTO_TOUR_DIRECT_MOVE_CORNER_BLEND_FACTOR = 0.75
 // When loop=false, treat near-identical start/end points as accidental duplicates and drop the last one.
 // Keep this small to avoid altering legitimately-close routes.
 const AUTO_TOUR_END_DUPLICATE_EPSILON_METERS = 0.05
+const autoTourSyncBodyPosition = new THREE.Vector3()
+const autoTourSyncBodyQuaternion = new THREE.Quaternion()
+const autoTourSyncBodyScale = new THREE.Vector3()
 
 
 function expSmoothingAlpha(smoothing: number, deltaSeconds: number): number {
@@ -171,6 +205,18 @@ function setVector3Like(target: any, x: number, y: number, z: number): void {
   target.x = x
   target.y = y
   target.z = z
+}
+
+function syncVehicleBodyFromObject(body: AutoTourVehicleLike['chassisBody'], object: THREE.Object3D): void {
+  object.updateMatrixWorld(true)
+  object.matrixWorld.decompose(autoTourSyncBodyPosition, autoTourSyncBodyQuaternion, autoTourSyncBodyScale)
+  body.position.set(autoTourSyncBodyPosition.x, autoTourSyncBodyPosition.y, autoTourSyncBodyPosition.z)
+  body.quaternion.x = autoTourSyncBodyQuaternion.x
+  body.quaternion.y = autoTourSyncBodyQuaternion.y
+  body.quaternion.z = autoTourSyncBodyQuaternion.z
+  body.quaternion.w = autoTourSyncBodyQuaternion.w
+  body.velocity.set(0, 0, 0)
+  body.angularVelocity.set(0, 0, 0)
 }
 
 function syncNodeTransformFromObject(node: SceneNode, object: THREE.Object3D): void {
@@ -1170,7 +1216,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
 
           // If this is a vehicle node being moved via direct transforms, keep the physics chassis in sync.
           if (directMoveVehicle && hasVehicleInstance) {
-            syncBodyFromObject(vehicleInstance!.vehicle.chassisBody, nodeObject!)
+            syncVehicleBodyFromObject(vehicleInstance!.vehicle.chassisBody, nodeObject!)
             holdVehicleBrakeSafe({
               vehicleInstance: vehicleInstance! as any,
               brakeForce: vehicleProps.brakeForceMax * 6,
@@ -1490,7 +1536,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
 
       // Keep physics chassis in sync for vehicle nodes that are moved via direct transforms.
       if (directMoveVehicle && hasVehicleInstance) {
-        syncBodyFromObject(vehicleInstance!.vehicle.chassisBody, nodeObject!)
+        syncVehicleBodyFromObject(vehicleInstance!.vehicle.chassisBody, nodeObject!)
         holdVehicleBrakeSafe({
           vehicleInstance: vehicleInstance! as any,
           brakeForce: vehicleProps.brakeForceMax * 6,

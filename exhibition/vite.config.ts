@@ -80,10 +80,13 @@ export default defineConfig({
           '@harmony/physics-ammo',
           '@harmony/physics-host-wechat',
           '@harmony/physics-worker-runtime',
+          'ammojs3',
+          'ammojs3/**',
           '**/harmony/physics-core/**',
           '**/harmony/physics-ammo/**',
           '**/harmony/physics-host-wechat/**',
           '**/harmony/physics-worker-runtime/**',
+          '**/node_modules/ammojs3/**',
         ],
         'pages/scenery/chunks/vendor': [
           '@minisheep/three-platform-adapter',
@@ -92,8 +95,7 @@ export default defineConfig({
           'three',
           'three/addons/**',
           'three/examples/**',
-          'three/examples/jsm/**',
-          'cannon'
+          'three/examples/jsm/**'
         ]
       }
     }),

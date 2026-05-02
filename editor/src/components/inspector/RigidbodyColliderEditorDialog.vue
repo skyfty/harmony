@@ -32,7 +32,7 @@ const emit = defineEmits<{
   (event: 'close'): void
 }>()
 
-type ColliderShapeKind = 'box' | 'sphere' | 'convex'
+type ColliderShapeKind = 'box' | 'sphere' | 'cylinder' | 'convex'
 
 type EditableShape = {
   kind: ColliderShapeKind
@@ -44,6 +44,7 @@ const COLLIDER_SHAPE_OPTIONS: Array<{ label: string; value: ColliderShapeKind }>
   { label: 'Convex (Mesh)', value: 'convex' },
   { label: 'Box', value: 'box' },
   { label: 'Sphere', value: 'sphere' },
+  { label: 'Cylinder', value: 'cylinder' },
 ]
 
 const sceneStore = useSceneStore()
@@ -245,6 +246,9 @@ function normalizeColliderKind(type: string | null | undefined): ColliderShapeKi
   if (type === 'convex') {
     return 'convex'
   }
+  if (type === 'cylinder') {
+    return 'cylinder'
+  }
   if (type === 'sphere') {
     return 'sphere'
   }
@@ -281,6 +285,13 @@ function constrainColliderTransform() {
     const average = (colliderGroup.scale.x + colliderGroup.scale.y + colliderGroup.scale.z) / 3
     const safe = Math.max(0.05, average)
     colliderGroup.scale.set(safe, safe, safe)
+  } else if (colliderKind.value === 'cylinder') {
+    const radial = Math.max(0.05, (colliderGroup.scale.x + colliderGroup.scale.z) * 0.5)
+    colliderGroup.scale.set(
+      radial,
+      Math.max(0.05, colliderGroup.scale.y),
+      radial,
+    )
   } else {
     colliderGroup.scale.set(
       Math.max(0.05, colliderGroup.scale.x),
@@ -354,6 +365,8 @@ function rebuildColliderGeometry(kind: ColliderShapeKind, options: { forceConvex
     geometry = previewConvexGeometry
   } else if (kind === 'sphere') {
     geometry = new THREE.SphereGeometry(0.5, 36, 24)
+  } else if (kind === 'cylinder') {
+    geometry = new THREE.CylinderGeometry(0.5, 0.5, 1, 32)
   } else if (kind === 'box') {
     geometry = new THREE.BoxGeometry(1, 1, 1)
   }
@@ -487,6 +500,20 @@ function convertMetadataShape(shape: RigidbodyPhysicsShape, kind: ColliderShapeK
     return {
       kind: 'sphere',
       dimensions: new THREE.Vector3(diameter, diameter, diameter),
+      offset: actualOffset,
+    }
+  }
+  if (shape.kind === 'cylinder' && kind === 'cylinder') {
+    const radiusTop = Math.max(0.05, shape.radiusTop * scaleX)
+    const radiusBottom = Math.max(0.05, shape.radiusBottom * scaleZ)
+    const radialDiameter = Math.max(0.05, Math.max(radiusTop, radiusBottom) * 2)
+    return {
+      kind: 'cylinder',
+      dimensions: new THREE.Vector3(
+        radialDiameter,
+        Math.max(0.05, shape.height * scaleY),
+        radialDiameter,
+      ),
       offset: actualOffset,
     }
   }
@@ -756,6 +783,21 @@ function buildMetadataPayload(): { shape: RigidbodyPhysicsShape; convexSimplify?
       shape: {
         kind: 'sphere',
         radius: Math.max(1e-4, radius / dominant),
+        offset: [offset.x / scale.x, offset.y / scale.y, offset.z / scale.z],
+        applyScale: true,
+      },
+    }
+  }
+
+  if (colliderKind.value === 'cylinder') {
+    const radius = Math.max(colliderGroup.scale.x, colliderGroup.scale.z) * 0.5
+    return {
+      shape: {
+        kind: 'cylinder',
+        radiusTop: Math.max(1e-4, radius / scale.x),
+        radiusBottom: Math.max(1e-4, radius / scale.z),
+        height: Math.max(1e-4, colliderGroup.scale.y / scale.y),
+        segments: 32,
         offset: [offset.x / scale.x, offset.y / scale.y, offset.z / scale.z],
         applyScale: true,
       },

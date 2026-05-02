@@ -15,8 +15,10 @@ export function createAmmoPhysicsController<TAmmoModule>(
   let initialized = false
 
   return {
-    async init(_initOptions: PhysicsInitOptions): Promise<PhysicsBridgeInitResult> {
-      await loader.load()
+    async init(initOptions: PhysicsInitOptions): Promise<PhysicsBridgeInitResult> {
+      const ammo = await loader.load()
+      world.setModule(ammo)
+      world.setWorldSettings(initOptions.world)
       initialized = true
       return {
         backend: 'ammo',
@@ -47,14 +49,17 @@ export function createAmmoPhysicsController<TAmmoModule>(
       }
       world.setVehicleInput(command)
     },
-    async raycast(): Promise<PhysicsRaycastHit | null> {
-      return null
+    async raycast(command): Promise<PhysicsRaycastHit | null> {
+      if (!initialized) {
+        throw new Error('Ammo physics controller is not initialized')
+      }
+      return world.raycast(command)
     },
     async disposeScene() {
       world.disposeScene()
     },
     async destroy() {
-      world.disposeScene()
+      world.disposeWorld()
     },
   }
 }

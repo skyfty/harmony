@@ -75,7 +75,7 @@ class LazyScenePreviewPhysicsBridge implements PhysicsBridge {
   }
 
   private async createBridge(): Promise<PhysicsBridge> {
-    const [{ createWebPhysicsBridge, createInMemoryWebPhysicsWorker }, { createAmmoPhysicsController }] =
+    const [{ createWebPhysicsBridge, createInMemoryWebPhysicsWorker }, { createAmmoPhysicsController, createDefaultAmmoModuleFactory }] =
       await Promise.all([
         import('@harmony/physics-host-web') as Promise<WebRuntimeBridgeModule>,
         import('@harmony/physics-ammo') as Promise<AmmoRuntimeModule>,
@@ -83,7 +83,7 @@ class LazyScenePreviewPhysicsBridge implements PhysicsBridge {
 
     return createWebPhysicsBridge({
       workerFactory: () => createInMemoryWebPhysicsWorker(createAmmoPhysicsController({
-        moduleFactory: async () => ({}),
+        moduleFactory: createDefaultAmmoModuleFactory(),
       })),
     })
   }

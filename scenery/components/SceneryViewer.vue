@@ -384,7 +384,6 @@ import { effectScope, watchEffect, ref, computed, onMounted, onUnmounted, watch,
 import '@minisheep/three-platform-adapter/wechat';
 // #endif
 import * as THREE from 'three';
-import * as CANNON from 'cannon-es';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
 import type { KTX2Loader } from 'three/examples/jsm/loaders/KTX2Loader.js';
@@ -467,26 +466,11 @@ import {
   isGroundChunkStreamingEnabled,
   updateGroundChunks,
 } from '@harmony/schema/groundMesh';
-import { buildGroundAirWallDefinitions } from '@harmony/schema/airWall';
-
 import {
-  ensurePhysicsWorld as ensureSharedPhysicsWorld,
-  createRigidbodyBody as createSharedRigidbodyBody,
+  type PhysicsBodyBindingEntry as RigidbodyInstance,
+  type PhysicsOrientationAdjustment as RigidbodyOrientationAdjustment,
   syncBodyFromObject as syncSharedBodyFromObject,
-  syncObjectFromBody as syncSharedObjectFromBody,
-  removeRigidbodyInstanceBodies,
-  ensureRoadHeightfieldRigidbodyInstance,
-  isRoadDynamicMesh,
-  COLLISION_GROUP_STATIC_ENV,
-  COLLISION_MASK_STATIC_ENV,
-  type GroundHeightfieldCacheEntry,
-  type FloorShapeCacheEntry,
-  type WallTrimeshCacheEntry,
-  type PhysicsContactSettings,
-  type RigidbodyInstance,
-  type RigidbodyMaterialEntry,
-  type RigidbodyOrientationAdjustment,
-} from '@harmony/schema/physicsEngine';
+} from '@harmony/schema/physicsBodySync';
 import { loadNodeObject } from '@harmony/schema/modelAssetLoader';
 
 import { inferAssetTypeOrNull, inferMimeTypeFromAssetId } from '@harmony/schema/assetTypeConversion'
@@ -716,7 +700,9 @@ import {
   type VehicleDriveInputState,
   type VehicleDriveOrbitMode,
   type VehicleInstance,
+  type VehicleDriveVehicle,
 } from '@harmony/schema/VehicleDriveController';
+import { createBridgeVehicleProxy } from '@harmony/schema/bridgeVehicleProxy';
 import {
   FollowCameraController,
   type CameraFollowState,
@@ -1839,12 +1825,12 @@ function resetPunchOverlaySmoothing(): void {
   punchBadgeOverlayEntries.value = [];
 }
 
-let physicsWorld: CANNON.World | null = null;
 let physicsBridge: PhysicsBridge | null = null;
 let physicsBridgeInitPromise: Promise<PhysicsBridge> | null = null;
 let physicsBridgeStepPromise: Promise<void> | null = null;
 let physicsBridgeBodySyncPromise: Promise<void> | null = null;
 let physicsBridgeVehicleInputPromise: Promise<void> | null = null;
+let physicsBridgeLastDrivenVehicleId: number | null = null;
 let physicsBridgeSceneLoaded = false;
 let physicsBridgeSceneRequestId = 0;
 const physicsBridgeBodyIdByNodeId = new Map<string, number>();
@@ -1859,34 +1845,20 @@ const physicsBridgeFrameBodiesByNodeId = new Map<string, PhysicsBridgeBodyFrameS
 const physicsBridgeSyncPositionHelper = new THREE.Vector3();
 const physicsBridgeSyncQuaternionHelper = new THREE.Quaternion();
 const physicsBridgeSyncParentQuaternionHelper = new THREE.Quaternion();
+const physicsBridgeBodySyncPositionHelper = new THREE.Vector3();
+const physicsBridgeBodySyncQuaternionHelper = new THREE.Quaternion();
 const physicsEnvironmentEnabled = ref(true);
 const rigidbodyInstances = new Map<string, RigidbodyInstance>();
 let protagonistNodeId: string | null = null;
 
-const airWallBodies = new Map<string, CANNON.Body>();
-const rigidbodyMaterialCache = new Map<string, RigidbodyMaterialEntry>();
-const rigidbodyContactMaterialKeys = new Set<string>();
 const vehicleInstances = new Map<string, VehicleInstanceWithWheels>();
-const vehicleRaycastInWorld = new Set<string>();
-const groundHeightfieldCache = new Map<string, GroundHeightfieldCacheEntry>();
-const floorShapeCache = new Map<string, FloorShapeCacheEntry>();
-const wallTrimeshCache = new Map<string, WallTrimeshCacheEntry>();
-const physicsGravity = new CANNON.Vec3(0, -DEFAULT_ENVIRONMENT_GRAVITY, 0);
+const physicsGravity = createHostPhysicsVec3(0, -DEFAULT_ENVIRONMENT_GRAVITY, 0);
 let physicsContactRestitution = DEFAULT_ENVIRONMENT_RESTITUTION;
 let physicsContactFriction = DEFAULT_ENVIRONMENT_FRICTION;
 // On WeChat iOS, 30 Hz physics is sufficient for 1–2 dynamic bodies and halves step cost.
 const PHYSICS_FIXED_TIMESTEP = isWeChatMiniProgram ? 1 / 30 : 1 / 60;
 // Fewer substeps needed at 30 Hz; each covers more sim time.
 const PHYSICS_MAX_SUB_STEPS = isWeChatMiniProgram ? 4 : 5;
-// 8 solver iterations is enough for simple ground-contact on mobile; 18 for desktop accuracy.
-const PHYSICS_SOLVER_ITERATIONS = isWeChatMiniProgram ? 8 : 18;
-const PHYSICS_SOLVER_TOLERANCE = 5e-4
-const vehicleIdleFreezeLastLogMs = new Map<string, number>();
-// Lower stiffness on WeChat converges faster in GSSolver with fewer iterations.
-const PHYSICS_CONTACT_STIFFNESS = isWeChatMiniProgram ? 1e7 : 1e9;
-const PHYSICS_CONTACT_RELAXATION = 4
-const PHYSICS_FRICTION_STIFFNESS = isWeChatMiniProgram ? 1e7 : 1e9;
-const PHYSICS_FRICTION_RELAXATION = 4
 const PHYSICS_MAX_ACCUMULATOR = PHYSICS_FIXED_TIMESTEP * PHYSICS_MAX_SUB_STEPS;
 type PhysicsInterpolationState = {
   prevPos: THREE.Vector3;
@@ -1896,27 +1868,46 @@ type PhysicsInterpolationState = {
   hasSample: boolean;
 };
 
-const physicsInterpolationStates = new WeakMap<CANNON.Body, PhysicsInterpolationState>();
-const physicsInterpolationPos = new THREE.Vector3();
-const physicsInterpolationQuat = new THREE.Quaternion();
-const physicsInterpolationParentQuat = new THREE.Quaternion();
-let physicsInterpolationEnabled = false;
-let physicsInterpolationAlpha = 0;
-let physicsAccumulator = 0;
+type PhysicsBodyVectorLike = {
+  x: number;
+  y: number;
+  z: number;
+  set: (x: number, y: number, z: number) => unknown;
+};
 
-type CannonSleepExtensions = {
+type PhysicsBodyQuaternionLike = {
+  x: number;
+  y: number;
+  z: number;
+  w: number;
+};
+
+type PhysicsBodyLike = {
+  position: PhysicsBodyVectorLike;
+  velocity: PhysicsBodyVectorLike;
+  angularVelocity: PhysicsBodyVectorLike;
+  quaternion: PhysicsBodyQuaternionLike;
+  allowSleep?: boolean;
+  sleepSpeedLimit?: number;
+  sleepTimeLimit?: number;
   sleep?: () => void;
   sleepState?: number;
 };
 
-function trySleepBody(body: CANNON.Body | null | undefined): void {
+const physicsInterpolationStates = new WeakMap<PhysicsBodyLike, PhysicsInterpolationState>();
+const physicsInterpolationPos = new THREE.Vector3();
+let physicsInterpolationEnabled = false;
+let physicsInterpolationAlpha = 0;
+let physicsAccumulator = 0;
+
+function trySleepBody(body: PhysicsBodyLike | null | undefined): void {
   if (!body) {
     return;
   }
-  (body as CANNON.Body & CannonSleepExtensions).sleep?.();
+  body.sleep?.();
 }
 
-function resetPhysicsInterpolationState(body: CANNON.Body | null | undefined): void {
+function resetPhysicsInterpolationState(body: PhysicsBodyLike | null | undefined): void {
   if (!body) {
     return;
   }
@@ -1958,11 +1949,11 @@ function applyObjectWorldPose(object: THREE.Object3D, worldPosition: THREE.Vecto
   object.updateMatrixWorld(true);
 }
 
-function getBodySleepState(body: CANNON.Body | null | undefined): number | undefined {
+function getBodySleepState(body: PhysicsBodyLike | null | undefined): number | undefined {
   if (!body) {
     return undefined;
   }
-  return (body as CANNON.Body & CannonSleepExtensions).sleepState;
+  return body.sleepState;
 }
 
 const wheelForwardHelper = new THREE.Vector3();
@@ -2081,12 +2072,38 @@ type VehicleWheelBinding = {
 };
 
 type VehicleInstanceWithWheels = VehicleInstance & {
-  vehicle: CANNON.RaycastVehicle;
+  source: 'bridge';
+  vehicle: VehicleDriveVehicle;
   wheelBindings: VehicleWheelBinding[];
   forwardAxis: THREE.Vector3;
   lastChassisPosition: THREE.Vector3;
   hasChassisPositionSample: boolean;
+  bridgeBodyId?: number | null;
+  vehicleId?: number | null;
+  lastBridgeFramePosition?: THREE.Vector3;
+  hasBridgeFrameSample?: boolean;
 };
+
+type HostPhysicsVec3 = VehicleDriveVehicle['chassisBody']['position'];
+
+function createHostPhysicsVec3(x = 0, y = 0, z = 0): HostPhysicsVec3 {
+  return {
+    x,
+    y,
+    z,
+    set(nextX: number, nextY: number, nextZ: number) {
+      this.x = nextX;
+      this.y = nextY;
+      this.z = nextZ;
+      return this;
+    },
+    lengthSquared() {
+      return this.x * this.x + this.y * this.y + this.z * this.z;
+    },
+  };
+}
+
+const LEGACY_STATIC_BODY_TYPE = 2;
 
 type Viewer = {
   isShown?: boolean;
@@ -2350,7 +2367,7 @@ const vehicleDriveUiOverride = ref<'auto' | 'show' | 'hide'>('auto');
 const vehicleDriveExitBusy = ref(false);
 let vehicleDriveSteerable: number[] = [];
 let vehicleDriveWheelCount = 0;
-let vehicleDriveVehicle: CANNON.RaycastVehicle | null = null;
+let vehicleDriveVehicle: VehicleDriveVehicle | null = null;
 const vehicleDriveInputFlags = reactive<VehicleDriveControlFlags>({
   forward: false,
   backward: false,
@@ -2487,7 +2504,7 @@ const vehicleDriveStateBridge: import('@harmony/schema/VehicleDriveController').
   get vehicle() {
     return vehicleDriveVehicle;
   },
-  set vehicle(value: CANNON.RaycastVehicle | null) {
+  set vehicle(value: VehicleDriveVehicle | null) {
     vehicleDriveVehicle = value;
   },
   get steerableWheelIndices() {
@@ -2736,7 +2753,6 @@ const vehicleDriveController = new VehicleDriveController(
     resolveNodeById,
     resolveRigidbodyComponent,
     resolveVehicleComponent,
-    ensurePhysicsWorld,
     isPhysicsEnabled: () => physicsEnvironmentEnabled.value,
     ensureVehicleBindingForNode,
     normalizeNodeId,
@@ -2779,7 +2795,7 @@ const vehicleDriveController = new VehicleDriveController(
       if (!vehicleDriveActive.value || vehicleDriveNodeId.value !== nodeId) {
         return false;
       }
-      resolveInterpolatedBodyPosition(chassisBody as unknown as CANNON.Body, target);
+      resolveInterpolatedBodyPosition(chassisBody as PhysicsBodyLike, target);
       return true;
     },
 
@@ -5818,7 +5834,6 @@ function registerSceneSubtree(root: THREE.Object3D): void {
     }
 
     nodeObjectMap.set(nodeId, object);
-    ensureRigidbodyBindingForObject(nodeId, object);
     attachRuntimeForNode(nodeId, object);
 
     syncInteractionLayersForNode(nodeId, object);
@@ -5856,128 +5871,21 @@ function registerSceneSubtree(root: THREE.Object3D): void {
   sceneCsmShadowRuntime?.registerObject(root);
 }
 
-const physicsContactSettings: PhysicsContactSettings = {
-  contactEquationStiffness: PHYSICS_CONTACT_STIFFNESS,
-  contactEquationRelaxation: PHYSICS_CONTACT_RELAXATION,
-  frictionEquationStiffness: PHYSICS_FRICTION_STIFFNESS,
-  frictionEquationRelaxation: PHYSICS_FRICTION_RELAXATION,
-};
-
-function ensurePhysicsWorld(): CANNON.World {
-  return ensureSharedPhysicsWorld({
-    world: physicsWorld,
-    setWorld: (world) => {
-      physicsWorld = world;
-    },
-    gravity: physicsGravity,
-    solverIterations: PHYSICS_SOLVER_ITERATIONS,
-    solverTolerance: PHYSICS_SOLVER_TOLERANCE,
-    contactFriction: physicsContactFriction,
-    contactRestitution: physicsContactRestitution,
-    contactSettings: physicsContactSettings,
-    rigidbodyMaterialCache,
-    rigidbodyContactMaterialKeys,
-    // Fast approximate quaternion normalization on WeChat to save per-body CPU cost.
-    quatNormalizeFast: isWeChatMiniProgram,
-    quatNormalizeSkip: isWeChatMiniProgram ? 4 : 0,
-  });
-}
-
 function removeAirWalls(): void {
-  const world = physicsWorld;
-  if (!world) {
-    airWallBodies.clear();
-    return;
-  }
-  airWallBodies.forEach((body) => {
-    try {
-      world.removeBody(body);
-    } catch (error) {
-      console.warn('[SceneViewer] Failed to remove air wall body', error);
-    }
-  });
-  airWallBodies.clear();
+  // Air walls are authored into the bridge scene asset and no longer need a
+  // duplicated legacy world sync path here.
 }
 
 function syncAirWallsForDocument(sceneDocument: SceneJsonExportDocument | null): void {
   removeAirWalls();
-  if (!sceneDocument) {
-    return;
-  }
-  const airWallEnabled = sceneDocument.groundSettings?.enableAirWall !== false;
-  const world = physicsWorld;
-  if (!world || !airWallEnabled) {
-    return;
-  }
-  const groundNode = findGroundNode(sceneDocument.nodes);
-  if (!groundNode || !isGroundDynamicMesh(groundNode.dynamicMesh)) {
-    return;
-  }
-  const groundObject = nodeObjectMap.get(groundNode.id) ?? null;
-  const definitions = buildGroundAirWallDefinitions({ groundNode, groundObject });
-  if (!definitions.length) {
-    return;
-  }
-  definitions.forEach((definition) => {
-    const [hx, hy, hz] = definition.halfExtents;
-    if (![hx, hy, hz].every((value) => Number.isFinite(value) && value > 0)) {
-      return;
-    }
-    const shape = new CANNON.Box(new CANNON.Vec3(hx, hy, hz));
-    const body = new CANNON.Body({ mass: 0 });
-    body.type = CANNON.Body.STATIC;
-    body.collisionFilterGroup = COLLISION_GROUP_STATIC_ENV;
-    body.collisionFilterMask = COLLISION_MASK_STATIC_ENV;
-    if (world.defaultMaterial) {
-      body.material = world.defaultMaterial;
-    }
-    body.addShape(shape);
-    body.position.copy(definition.bodyPosition);
-    body.quaternion.set(
-      definition.bodyQuaternion.x,
-      definition.bodyQuaternion.y,
-      definition.bodyQuaternion.z,
-      definition.bodyQuaternion.w,
-    );
-    body.updateMassProperties();
-    body.aabbNeedsUpdate = true;
-    world.addBody(body);
-    airWallBodies.set(definition.key, body);
-  });
+  void sceneDocument;
 }
 
-function resetPhysicsWorld(): void {
-  void disposeSceneryPhysicsBridgeScene();
-  const world = physicsWorld;
-  if (world) {
-    vehicleInstances.forEach(({ vehicle }) => {
-      try {
-        vehicle.removeFromWorld(world);
-      } catch (error) {
-        console.warn('[SceneViewer] Failed to remove vehicle', error);
-      }
-    });
-    rigidbodyInstances.forEach((instance) => removeRigidbodyInstanceBodies(world, instance));
-    airWallBodies.forEach((body) => {
-      try {
-        world.removeBody(body);
-      } catch (error) {
-        console.warn('[SceneViewer] Failed to remove air wall body', error);
-      }
-    });
-  }
+function clearLegacyPhysicsWorld(): void {
   vehicleInstances.clear();
-  vehicleRaycastInWorld.clear();
   rigidbodyInstances.clear();
   protagonistNodeId = null;
   scenePreviewPerf.reset();
-  airWallBodies.clear();
-  physicsWorld = null;
-  groundHeightfieldCache.clear();
-  floorShapeCache.clear();
-  wallTrimeshCache.clear();
-  rigidbodyMaterialCache.clear();
-  rigidbodyContactMaterialKeys.clear();
   vehicleDriveActive.value = false;
   vehicleDriveNodeId.value = null;
   vehicleDriveToken.value = null;
@@ -5992,6 +5900,11 @@ function resetPhysicsWorld(): void {
   deactivateJoystick(true);
   setVehicleDriveUiOverride('hide');
   hiddenVehicleDriveNodeIds.clear();
+}
+
+function resetPhysicsWorld(): void {
+  void disposeSceneryPhysicsBridgeScene();
+  clearLegacyPhysicsWorld();
 }
 
 async function ensureSceneryPhysicsBridgeReady(): Promise<PhysicsBridge> {
@@ -6035,6 +5948,13 @@ function updateSceneryPhysicsBridgeIndex(asset: PhysicsSceneAsset): void {
     }
     physicsBridgeVehicleIdByNodeId.set(nodeId, vehicle.id);
   });
+  vehicleInstances.forEach((instance, nodeId) => {
+    if (instance.source !== 'bridge') {
+      return;
+    }
+    instance.bridgeBodyId = physicsBridgeBodyIdByNodeId.get(nodeId) ?? null;
+    instance.vehicleId = physicsBridgeVehicleIdByNodeId.get(nodeId) ?? null;
+  });
 }
 
 async function loadSceneryPhysicsBridgeScene(document: SceneJsonExportDocument | null): Promise<void> {
@@ -6055,6 +5975,34 @@ async function loadSceneryPhysicsBridgeScene(document: SceneJsonExportDocument |
   } catch (error) {
     console.warn('[SceneViewer] Failed to load physics bridge scene', error);
   }
+}
+
+function syncSceneryBridgeVehicleFromFrame(nodeId: string, state: PhysicsBridgeBodyFrameState): void {
+  const instance = vehicleInstances.get(nodeId);
+  if (!instance || instance.source !== 'bridge') {
+    return;
+  }
+  const chassisBody = instance.vehicle.chassisBody;
+  const lastPosition = instance.lastBridgeFramePosition ?? new THREE.Vector3();
+  if (instance.hasBridgeFrameSample) {
+    const invStep = PHYSICS_FIXED_TIMESTEP > 1e-6 ? 1 / PHYSICS_FIXED_TIMESTEP : 0;
+    chassisBody.velocity.set(
+      (state.position.x - lastPosition.x) * invStep,
+      (state.position.y - lastPosition.y) * invStep,
+      (state.position.z - lastPosition.z) * invStep,
+    );
+  } else {
+    chassisBody.velocity.set(0, 0, 0);
+  }
+  chassisBody.angularVelocity.set(0, 0, 0);
+  chassisBody.position.set(state.position.x, state.position.y, state.position.z);
+  chassisBody.quaternion.x = state.quaternion.x;
+  chassisBody.quaternion.y = state.quaternion.y;
+  chassisBody.quaternion.z = state.quaternion.z;
+  chassisBody.quaternion.w = state.quaternion.w;
+  lastPosition.copy(state.position);
+  instance.lastBridgeFramePosition = lastPosition;
+  instance.hasBridgeFrameSample = true;
 }
 
 function consumeSceneryPhysicsBridgeStepFrame(frame: PhysicsStepFrame): void {
@@ -6089,9 +6037,10 @@ function consumeSceneryPhysicsBridgeStepFrame(frame: PhysicsStepFrame): void {
         frame.bodyTransforms[base + 6] ?? 1,
       ).normalize();
       existing.motionState = frame.bodyTransforms[base + 7] ?? 0;
+      syncSceneryBridgeVehicleFromFrame(nodeId, existing);
       continue;
     }
-    physicsBridgeFrameBodiesByNodeId.set(nodeId, {
+    const createdState: PhysicsBridgeBodyFrameState = {
       position: new THREE.Vector3(
         frame.bodyTransforms[base] ?? 0,
         frame.bodyTransforms[base + 1] ?? 0,
@@ -6104,7 +6053,9 @@ function consumeSceneryPhysicsBridgeStepFrame(frame: PhysicsStepFrame): void {
         frame.bodyTransforms[base + 6] ?? 1,
       ).normalize(),
       motionState: frame.bodyTransforms[base + 7] ?? 0,
-    });
+    };
+    physicsBridgeFrameBodiesByNodeId.set(nodeId, createdState);
+    syncSceneryBridgeVehicleFromFrame(nodeId, createdState);
   }
   applySceneryPhysicsBridgeFrameToObjects();
 }
@@ -6114,9 +6065,6 @@ function applySceneryPhysicsBridgeFrameToObjects(): void {
     return;
   }
   physicsBridgeFrameBodiesByNodeId.forEach((state, nodeId) => {
-    if (vehicleInstances.has(nodeId)) {
-      return;
-    }
     const rigidbodyEntry = rigidbodyInstances.get(nodeId);
     if (rigidbodyEntry) {
       if (rigidbodyEntry.syncObjectFromBody === false || !rigidbodyEntry.object) {
@@ -6145,7 +6093,7 @@ function applySceneryPhysicsBridgeFrameToObjects(): void {
 }
 
 function shouldUseSceneryPhysicsBridgeFrameForNode(nodeId: string): boolean {
-  return physicsBridgeSceneLoaded && physicsBridgeFrameBodiesByNodeId.has(nodeId) && !vehicleInstances.has(nodeId);
+  return physicsBridgeSceneLoaded && physicsBridgeFrameBodiesByNodeId.has(nodeId);
 }
 
 function applySceneryPhysicsBridgeTransformToObject(
@@ -6204,27 +6152,71 @@ function syncSceneryPhysicsBridgeBodyTransforms(): void {
     !physicsBridge
     || !physicsBridgeSceneLoaded
     || physicsBridgeBodySyncPromise
-    || !rigidbodyInstances.size
     || !physicsBridgeBodyIdByNodeId.size
   ) {
     return;
   }
   const bridge = physicsBridge;
   const commands: Array<Promise<void>> = [];
+  const syncedNodeIds = new Set<string>();
   rigidbodyInstances.forEach((entry, nodeId) => {
-    if (entry.body.type === CANNON.Body.STATIC) {
+    if (entry.body.type === LEGACY_STATIC_BODY_TYPE) {
       return;
     }
     const bodyId = physicsBridgeBodyIdByNodeId.get(nodeId);
     if (typeof bodyId !== 'number') {
       return;
     }
+    syncedNodeIds.add(nodeId);
     commands.push(
       bridge.setBodyTransform({
         bodyId,
         transform: {
           position: [entry.body.position.x, entry.body.position.y, entry.body.position.z],
           rotation: [entry.body.quaternion.x, entry.body.quaternion.y, entry.body.quaternion.z, entry.body.quaternion.w],
+        },
+      }),
+    );
+  });
+  physicsBridgeBodyIdByNodeId.forEach((bodyId, nodeId) => {
+    if (syncedNodeIds.has(nodeId)) {
+      return;
+    }
+    const node = resolveNodeById(nodeId);
+    const component = resolvePhysicsRigidbodyComponent(node);
+    if (!node || !component || component.props.bodyType === 'STATIC') {
+      return;
+    }
+    const object = resolveRigidbodyBindingObject(component, nodeObjectMap.get(nodeId) ?? null);
+    if (!object) {
+      return;
+    }
+    object.updateMatrixWorld(true);
+    object.getWorldPosition(physicsBridgeBodySyncPositionHelper);
+    object.getWorldQuaternion(physicsBridgeBodySyncQuaternionHelper).normalize();
+    const frameState = physicsBridgeFrameBodiesByNodeId.get(nodeId);
+    if (
+      frameState
+      && frameState.position.distanceToSquared(physicsBridgeBodySyncPositionHelper) <= 1e-8
+      && Math.abs(frameState.quaternion.dot(physicsBridgeBodySyncQuaternionHelper)) >= 1 - 1e-6
+    ) {
+      return;
+    }
+    commands.push(
+      bridge.setBodyTransform({
+        bodyId,
+        transform: {
+          position: [
+            physicsBridgeBodySyncPositionHelper.x,
+            physicsBridgeBodySyncPositionHelper.y,
+            physicsBridgeBodySyncPositionHelper.z,
+          ],
+          rotation: [
+            physicsBridgeBodySyncQuaternionHelper.x,
+            physicsBridgeBodySyncQuaternionHelper.y,
+            physicsBridgeBodySyncQuaternionHelper.z,
+            physicsBridgeBodySyncQuaternionHelper.w,
+          ],
         },
       }),
     );
@@ -6252,6 +6244,23 @@ function syncSceneryPhysicsBridgeVehicleInput(): void {
   }
   const activeNodeId = vehicleDriveActive.value ? vehicleDriveNodeId.value : null;
   if (!activeNodeId) {
+    if (typeof physicsBridgeLastDrivenVehicleId !== 'number') {
+      return;
+    }
+    const bridge = physicsBridge;
+    physicsBridgeVehicleInputPromise = bridge.setVehicleInput({
+      vehicleId: physicsBridgeLastDrivenVehicleId,
+      steering: 0,
+      throttle: 0,
+      brake: 1,
+    })
+      .catch((error) => {
+        console.warn('[SceneViewer] Failed to clear physics bridge vehicle input', error);
+      })
+      .finally(() => {
+        physicsBridgeLastDrivenVehicleId = null;
+        physicsBridgeVehicleInputPromise = null;
+      });
     return;
   }
   const vehicleId = physicsBridgeVehicleIdByNodeId.get(activeNodeId);
@@ -6259,6 +6268,15 @@ function syncSceneryPhysicsBridgeVehicleInput(): void {
     return;
   }
   const bridge = physicsBridge;
+  if (typeof physicsBridgeLastDrivenVehicleId === 'number' && physicsBridgeLastDrivenVehicleId !== vehicleId) {
+    void bridge.setVehicleInput({
+      vehicleId: physicsBridgeLastDrivenVehicleId,
+      steering: 0,
+      throttle: 0,
+      brake: 1,
+    }).catch(() => {});
+  }
+  physicsBridgeLastDrivenVehicleId = vehicleId;
   physicsBridgeVehicleInputPromise = bridge.setVehicleInput({
     vehicleId,
     steering: vehicleDriveInput.steering,
@@ -6279,10 +6297,12 @@ async function disposeSceneryPhysicsBridgeScene(): Promise<void> {
   physicsBridgeNodeIdByBodyId.clear();
   physicsBridgeVehicleIdByNodeId.clear();
   physicsBridgeFrameBodiesByNodeId.clear();
+  physicsBridgeLastDrivenVehicleId = null;
   if (!physicsBridge || !physicsBridgeSceneLoaded) {
     physicsBridgeStepPromise = null;
     physicsBridgeBodySyncPromise = null;
     physicsBridgeVehicleInputPromise = null;
+    physicsBridgeLastDrivenVehicleId = null;
     return;
   }
   try {
@@ -6294,6 +6314,7 @@ async function disposeSceneryPhysicsBridgeScene(): Promise<void> {
     physicsBridgeStepPromise = null;
     physicsBridgeBodySyncPromise = null;
     physicsBridgeVehicleInputPromise = null;
+    physicsBridgeLastDrivenVehicleId = null;
     physicsBridgeFrameBodiesByNodeId.clear();
   }
 }
@@ -6317,46 +6338,17 @@ async function destroySceneryPhysicsBridge(): Promise<void> {
     physicsBridgeNodeIdByBodyId.clear();
     physicsBridgeVehicleIdByNodeId.clear();
     physicsBridgeFrameBodiesByNodeId.clear();
+    physicsBridgeLastDrivenVehicleId = null;
     physicsBridgeSceneLoaded = false;
   }
 }
 
-function createRigidbodyBody(
-  node: SceneNode,
-  component: SceneNodeComponentState<RigidbodyComponentProps>,
-  shapeDefinition: RigidbodyPhysicsShape | null,
-  object: THREE.Object3D,
-): { body: CANNON.Body; orientationAdjustment: RigidbodyOrientationAdjustment | null } | null {
-  const world = ensurePhysicsWorld();
-  return createSharedRigidbodyBody(
-    { node, component, shapeDefinition, object },
-    {
-      world,
-      groundHeightfieldCache,
-      floorShapeCache,
-      wallTrimeshCache,
-      rigidbodyMaterialCache,
-      rigidbodyContactMaterialKeys,
-      contactSettings: physicsContactSettings,
-      loggerTag: '[SceneViewer]',
-    },
-  );
-}
-
 function removeRigidbodyInstance(nodeId: string): void {
-  const entry = rigidbodyInstances.get(nodeId);
-  if (!entry) {
-    return;
-  }
-  removeRigidbodyInstanceBodies(physicsWorld, entry);
   rigidbodyInstances.delete(nodeId);
   scenePreviewPerf.notifyRemovedNode(nodeId);
   if (protagonistNodeId === nodeId) {
     protagonistNodeId = null;
   }
-  groundHeightfieldCache.delete(nodeId);
-  floorShapeCache.delete(nodeId);
-  wallTrimeshCache.delete(nodeId);
   removeVehicleInstance(nodeId);
 }
 
@@ -6384,44 +6376,6 @@ function hasAutoGeneratedDynamicShapeForNode(mesh: unknown, node: SceneNode | nu
     return true;
   }
   return Boolean(resolveModelCollisionComponentPropsFromNode(node)?.faces?.length);
-}
-
-function ensureRoadRigidbodyInstance(node: SceneNode, component: SceneNodeComponentState<RigidbodyComponentProps>, object: THREE.Object3D) {
-  if (!physicsWorld || !currentDocument) {
-    return;
-  }
-  if (!isRoadDynamicMesh(node.dynamicMesh)) {
-    removeRigidbodyInstance(node.id);
-    return;
-  }
-  if ((component.props as RigidbodyComponentProps | undefined)?.bodyType !== 'STATIC') {
-    removeRigidbodyInstance(node.id);
-    return;
-  }
-  const groundNode = findGroundNode(currentDocument.nodes);
-  if (!groundNode || !isGroundDynamicMesh(groundNode.dynamicMesh)) {
-    removeRigidbodyInstance(node.id);
-    return;
-  }
-  const world = ensurePhysicsWorld();
-  const existing = rigidbodyInstances.get(node.id) ?? null;
-  const result = ensureRoadHeightfieldRigidbodyInstance({
-    roadNode: node,
-    rigidbodyComponent: component,
-    roadObject: object,
-    groundNode,
-    world,
-    existingInstance: existing,
-    createBody: (n, c, s, o) => createRigidbodyBody(n, c, s, o),
-    loggerTag: '[SceneViewer]',
-  });
-  if (!result.instance) {
-    if (result.shouldRemoveExisting) {
-      removeRigidbodyInstance(node.id);
-    }
-    return;
-  }
-  rigidbodyInstances.set(node.id, result.instance);
 }
 
 function clampVehicleAxisIndex(value: number): 0 | 1 | 2 {
@@ -6475,23 +6429,20 @@ function normalizeVehicleVector(value: VehicleVectorValue): [number, number, num
   return null;
 }
 
-function tupleToVec3(tuple: VehicleVectorValue, fallback?: Vector3Like): CANNON.Vec3 | null {
+function tupleToVec3(tuple: VehicleVectorValue, fallback?: Vector3Like): HostPhysicsVec3 | null {
   const normalized = normalizeVehicleVector(tuple) ?? (fallback ? normalizeVehicleVector(fallback) : null);
   if (!normalized) {
     return null;
   }
   const [x, y, z] = normalized;
-  return new CANNON.Vec3(x, y, z);
+  return createHostPhysicsVec3(x, y, z);
 }
 
-function createVehicleInstance(
+function createBridgeVehicleInstance(
   node: SceneNode,
   component: SceneNodeComponentState<VehicleComponentProps>,
-  rigidbody: RigidbodyInstance,
+  object: THREE.Object3D,
 ): VehicleInstanceWithWheels | null {
-  if (!physicsWorld || !rigidbody.object) {
-    return null;
-  }
   const props = clampVehicleComponentProps(component.props);
   const rightAxis = clampVehicleAxisIndex(props.indexRightAxis);
   const upAxis = clampVehicleAxisIndex(props.indexUpAxis);
@@ -6501,19 +6452,16 @@ function createVehicleInstance(
   const axisForwardVector = resolveVehicleAxisVector(forwardAxis).clone();
   const wheelEntries = (props.wheels ?? [])
     .map((wheel) => {
-      const point = tupleToVec3(wheel.chassisConnectionPointLocal);
-      const direction = tupleToVec3(wheel.directionLocal, DEFAULT_DIRECTION);
       const axle = tupleToVec3(wheel.axleLocal, DEFAULT_AXLE);
-      if (!point || !direction || !axle) {
+      if (!axle) {
         return null;
       }
-      return { config: wheel, point, direction, axle };
+      return { config: wheel, axle };
     })
-    .filter((entry): entry is { config: VehicleWheelProps; point: CANNON.Vec3; direction: CANNON.Vec3; axle: CANNON.Vec3 } => Boolean(entry));
+    .filter((entry): entry is { config: VehicleWheelProps; axle: HostPhysicsVec3 } => Boolean(entry));
   if (!wheelEntries.length) {
     return null;
   }
-  const wheelCount = wheelEntries.length;
   let steerableWheelIndices = wheelEntries.reduce<number[]>((indices, entry, index) => {
     if (entry.config.isFrontWheel) {
       indices.push(index);
@@ -6521,44 +6469,26 @@ function createVehicleInstance(
     return indices;
   }, []);
   if (!steerableWheelIndices.length) {
-    steerableWheelIndices = wheelCount >= 2
-      ? [0, 1].filter((index) => index < wheelCount)
-      : Array.from({ length: wheelCount }, (_unused, index) => index);
+    steerableWheelIndices = wheelEntries.length >= 2
+      ? [0, 1].filter((index) => index < wheelEntries.length)
+      : Array.from({ length: wheelEntries.length }, (_unused, index) => index);
   }
-  const vehicle = new CANNON.RaycastVehicle({
-    chassisBody: rigidbody.body,
-    indexRightAxis: rightAxis,
-    indexUpAxis: upAxis,
-    indexForwardAxis: forwardAxis,
-  });
-  const wheelBindings: VehicleWheelBinding[] = [];
-  wheelEntries.forEach(({ config, point, direction, axle }, index) => {
-    vehicle.addWheel({
-      chassisConnectionPointLocal: point,
-      directionLocal: direction,
-      axleLocal: axle,
-      suspensionRestLength: config.suspensionRestLength,
-      suspensionStiffness: config.suspensionStiffness,
-      dampingRelaxation: config.dampingRelaxation,
-      dampingCompression: config.dampingCompression,
-      frictionSlip: config.frictionSlip,
-      maxSuspensionTravel: config.maxSuspensionTravel,
-      maxSuspensionForce: config.maxSuspensionForce,
-      useCustomSlidingRotationalSpeed: config.useCustomSlidingRotationalSpeed,
-      customSlidingRotationalSpeed: config.customSlidingRotationalSpeed,
-      isFrontWheel: config.isFrontWheel,
-      rollInfluence: config.rollInfluence,
-      radius: config.radius,
-    });
+  object.updateMatrixWorld(true);
+  object.getWorldPosition(physicsBridgeSyncPositionHelper);
+  object.getWorldQuaternion(physicsBridgeSyncQuaternionHelper).normalize();
+  const vehicle = createBridgeVehicleProxy(
+    physicsBridgeSyncPositionHelper,
+    physicsBridgeSyncQuaternionHelper,
+    wheelEntries.length,
+  );
+  const wheelBindings: VehicleWheelBinding[] = wheelEntries.map(({ config, axle }, index) => {
     const axis = new THREE.Vector3(axle.x, axle.y, axle.z);
     if (axis.lengthSq() < 1e-6) {
       axis.copy(defaultWheelAxisVector);
     }
     axis.normalize();
     const wheelObject = config.nodeId ? nodeObjectMap.get(config.nodeId) ?? null : null;
-    const basePosition = wheelObject ? wheelObject.position.clone() : new THREE.Vector3();
-    const baseScale = wheelObject ? wheelObject.scale.clone() : new THREE.Vector3(1, 1, 1);
-    wheelBindings.push({
+    return {
       nodeId: config.nodeId ?? null,
       object: wheelObject,
       radius: Math.max(config.radius, VEHICLE_WHEEL_MIN_RADIUS),
@@ -6568,27 +6498,15 @@ function createVehicleInstance(
       spinAngle: 0,
       lastSteeringAngle: 0,
       baseQuaternion: wheelObject ? wheelObject.quaternion.clone() : new THREE.Quaternion(),
-      basePosition,
-      baseScale,
-    });
+      basePosition: wheelObject ? wheelObject.position.clone() : new THREE.Vector3(),
+      baseScale: wheelObject ? wheelObject.scale.clone() : new THREE.Vector3(1, 1, 1),
+    };
   });
-  vehicle.addToWorld(physicsWorld);
-  vehicleRaycastInWorld.add(node.id);
-  const initialChassisPosition = new THREE.Vector3(
-    rigidbody.body.position.x,
-    rigidbody.body.position.y,
-    rigidbody.body.position.z,
-  );
-  const initialChassisQuaternion = new THREE.Quaternion(
-    rigidbody.body.quaternion.x,
-    rigidbody.body.quaternion.y,
-    rigidbody.body.quaternion.z,
-    rigidbody.body.quaternion.w,
-  ).normalize();
   return {
+    source: 'bridge',
     nodeId: node.id,
     vehicle,
-    wheelCount,
+    wheelCount: wheelEntries.length,
     steerableWheelIndices,
     wheelBindings,
     forwardAxis: axisForwardVector.clone(),
@@ -6598,9 +6516,13 @@ function createVehicleInstance(
     axisRight: axisRightVector,
     axisUp: axisUpVector,
     axisForward: axisForwardVector,
-    lastChassisPosition: initialChassisPosition,
+    lastChassisPosition: physicsBridgeSyncPositionHelper.clone(),
     hasChassisPositionSample: false,
-    initialChassisQuaternion,
+    initialChassisQuaternion: physicsBridgeSyncQuaternionHelper.clone(),
+    bridgeBodyId: physicsBridgeBodyIdByNodeId.get(node.id) ?? null,
+    vehicleId: physicsBridgeVehicleIdByNodeId.get(node.id) ?? null,
+    lastBridgeFramePosition: physicsBridgeSyncPositionHelper.clone(),
+    hasBridgeFrameSample: false,
   };
 }
 
@@ -6609,40 +6531,29 @@ function removeVehicleInstance(nodeId: string): void {
   if (!entry) {
     return;
   }
-  if (physicsWorld) {
-    try {
-      entry.vehicle.removeFromWorld(physicsWorld);
-    } catch (error) {
-      console.warn('[SceneViewer] Failed to remove vehicle instance', error);
-    }
-  }
   vehicleInstances.delete(nodeId);
-  vehicleRaycastInWorld.delete(nodeId);
   scenePreviewPerf.notifyRemovedNode(nodeId);
 }
 
 function ensureVehicleBindingForNode(nodeId: string): void {
-  if (!physicsWorld) {
-    return;
-  }
   const node = resolveNodeById(nodeId);
   const component = resolveVehicleComponent(node);
   if (!node || !component) {
     removeVehicleInstance(nodeId);
     return;
   }
-  const rigidbody = rigidbodyInstances.get(nodeId);
-  if (!rigidbody || !rigidbody.object) {
+  const object = nodeObjectMap.get(nodeId) ?? null;
+  if (!object) {
     return;
   }
   removeVehicleInstance(nodeId);
-  const instance = createVehicleInstance(node, component, rigidbody);
+  const instance = createBridgeVehicleInstance(node, component, object);
   if (instance) {
     vehicleInstances.set(nodeId, instance);
   }
 }
 
-function getPhysicsInterpolationState(body: CANNON.Body): PhysicsInterpolationState {
+function getPhysicsInterpolationState(body: PhysicsBodyLike): PhysicsInterpolationState {
   let state = physicsInterpolationStates.get(body);
   if (!state) {
     state = {
@@ -6657,34 +6568,7 @@ function getPhysicsInterpolationState(body: CANNON.Body): PhysicsInterpolationSt
   return state;
 }
 
-function syncObjectFromInterpolated(
-  entry: Pick<RigidbodyInstance, 'object' | 'orientationAdjustment'>,
-  position: THREE.Vector3,
-  quaternion: THREE.Quaternion,
-  afterSync?: (object: THREE.Object3D) => void,
-): void {
-  const { object, orientationAdjustment } = entry;
-  if (!object) {
-    return;
-  }
-  object.position.copy(position);
-  physicsInterpolationQuat.copy(quaternion);
-  if (orientationAdjustment) {
-    physicsInterpolationQuat.multiply(orientationAdjustment.threeInverse);
-  }
-  if (object.parent) {
-    object.parent.updateMatrixWorld(true);
-    object.parent.worldToLocal(object.position);
-    object.parent.getWorldQuaternion(physicsInterpolationParentQuat).invert();
-    object.quaternion.copy(physicsInterpolationParentQuat).multiply(physicsInterpolationQuat);
-  } else {
-    object.quaternion.copy(physicsInterpolationQuat);
-  }
-  object.updateMatrixWorld(true);
-  afterSync?.(object);
-}
-
-function resolveInterpolatedBodyPosition(body: CANNON.Body, target: THREE.Vector3): THREE.Vector3 {
+function resolveInterpolatedBodyPosition(body: PhysicsBodyLike, target: THREE.Vector3): THREE.Vector3 {
   if (!physicsInterpolationEnabled) {
     return target.set(body.position.x, body.position.y, body.position.z);
   }
@@ -6704,88 +6588,6 @@ function resolveRigidbodyBindingObject(
     return nodeObjectMap.get(targetNodeId) ?? null;
   }
   return fallbackObject;
-}
-
-function ensureRigidbodyBindingForObject(nodeId: string, object: THREE.Object3D): void {
-  if (!physicsWorld || !currentDocument) {
-    return;
-  }
-  const node = resolveNodeById(nodeId);
-  const component = resolvePhysicsRigidbodyComponent(node);
-  const shapeDefinition = extractRigidbodyShape(component);
-  const requiresMetadata = !hasAutoGeneratedDynamicShapeForNode(node?.dynamicMesh, node);
-  const hasBoundaryWall = Boolean(resolveBoundaryWallComponent(node));
-  if (!node || !component || !object) {
-    return;
-  }
-  const bindingObject = resolveRigidbodyBindingObject(component, object);
-  if (!bindingObject) {
-    return;
-  }
-  if (isRoadDynamicMesh(node.dynamicMesh) && (component.props as RigidbodyComponentProps | undefined)?.bodyType === 'STATIC') {
-    ensureRoadRigidbodyInstance(node, component, bindingObject);
-    return;
-  }
-  if (!shapeDefinition && requiresMetadata && !hasBoundaryWall) {
-    return;
-  }
-  const existing = rigidbodyInstances.get(nodeId);
-  if (existing) {
-    existing.object = bindingObject;
-    syncSharedBodyFromObject(existing.body, bindingObject, existing.orientationAdjustment);
-
-    scenePreviewPerf.applyAggressiveSleepForNonInteractiveDynamic({
-      nodeId,
-      body: existing.body,
-      isVehicle: Boolean(resolveVehicleComponent(node)),
-      isProtagonist: Boolean(bindingObject.userData?.protagonist),
-    });
-
-    ensureVehicleBindingForNode(nodeId);
-    return;
-  }
-  const bodyEntry = createRigidbodyBody(node, component, shapeDefinition, bindingObject);
-  if (!bodyEntry) {
-    return;
-  }
-
-  scenePreviewPerf.applyAggressiveSleepForNonInteractiveDynamic({
-    nodeId,
-    body: bodyEntry.body,
-    isVehicle: Boolean(resolveVehicleComponent(node)),
-    isProtagonist: Boolean(bindingObject.userData?.protagonist),
-  });
-
-  physicsWorld.addBody(bodyEntry.body);
-  rigidbodyInstances.set(nodeId, {
-    nodeId,
-    body: bodyEntry.body,
-    bodies: [bodyEntry.body],
-    object: bindingObject,
-    orientationAdjustment: bodyEntry.orientationAdjustment,
-  });
-  ensureVehicleBindingForNode(nodeId);
-}
-
-function collectRigidbodyNodes(nodes: SceneNode[] | undefined | null): SceneNode[] {
-  const collected: SceneNode[] = [];
-  if (!Array.isArray(nodes)) {
-    return collected;
-  }
-  const stack: SceneNode[] = [...nodes];
-  while (stack.length) {
-    const node = stack.pop();
-    if (!node) {
-      continue;
-    }
-    if (resolvePhysicsRigidbodyComponent(node)) {
-      collected.push(node);
-    }
-    if (Array.isArray(node.children) && node.children.length) {
-      stack.push(...node.children);
-    }
-  }
-  return collected;
 }
 
 function collectVehicleNodes(nodes: SceneNode[] | undefined | null): SceneNode[] {
@@ -6833,306 +6635,16 @@ function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null):
     return;
   }
   void loadSceneryPhysicsBridgeScene(document);
-  const world = ensurePhysicsWorld();
-  const rigidbodyNodes = collectRigidbodyNodes(document.nodes);
-  const desiredIds = new Set<string>();
-  rigidbodyNodes.forEach((node) => {
-    desiredIds.add(node.id);
-    const component = resolvePhysicsRigidbodyComponent(node);
-    const shapeDefinition = extractRigidbodyShape(component);
-    const object = component ? resolveRigidbodyBindingObject(component, nodeObjectMap.get(node.id) ?? null) : null;
-    const requiresMetadata = !hasAutoGeneratedDynamicShapeForNode(node.dynamicMesh, node);
-    const hasBoundaryWall = Boolean(resolveBoundaryWallComponent(node));
-    if (!component || !object) {
-      return;
-    }
-    if (isRoadDynamicMesh(node.dynamicMesh) && (component.props as RigidbodyComponentProps | undefined)?.bodyType === 'STATIC') {
-      ensureRoadRigidbodyInstance(node, component, object);
-      return;
-    }
-    if (!shapeDefinition && requiresMetadata && !hasBoundaryWall) {
-      return;
-    }
-    const existing = rigidbodyInstances.get(node.id);
-    if (existing) {
-      removeRigidbodyInstanceBodies(world, existing);
-      rigidbodyInstances.delete(node.id);
-      scenePreviewPerf.notifyRemovedNode(node.id);
-    }
-    const bodyEntry = createRigidbodyBody(node, component, shapeDefinition, object);
-    if (!bodyEntry) {
-      return;
-    }
-
-    scenePreviewPerf.applyAggressiveSleepForNonInteractiveDynamic({
-      nodeId: node.id,
-      body: bodyEntry.body,
-      isVehicle: Boolean(resolveVehicleComponent(node)),
-      isProtagonist: Boolean(object.userData?.protagonist),
-    });
-
-    world.addBody(bodyEntry.body);
-    rigidbodyInstances.set(node.id, {
-      nodeId: node.id,
-      body: bodyEntry.body,
-      bodies: [bodyEntry.body],
-      object,
-      orientationAdjustment: bodyEntry.orientationAdjustment,
-    });
-  });
-  rigidbodyInstances.forEach((entry, nodeId) => {
-    if (!desiredIds.has(nodeId)) {
-      removeRigidbodyInstanceBodies(world, entry);
-      rigidbodyInstances.delete(nodeId);
-      scenePreviewPerf.notifyRemovedNode(nodeId);
-    }
-  });
-  groundHeightfieldCache.forEach((_entry, nodeId) => {
-    if (!desiredIds.has(nodeId)) {
-      groundHeightfieldCache.delete(nodeId);
-    }
-  });
+  clearLegacyPhysicsWorld();
   syncVehicleInstancesForDocument(document);
   syncAirWallsForDocument(document);
 }
 
 function stepPhysicsWorld(delta: number): number {
-  if (!physicsEnvironmentEnabled.value) {
-    physicsAccumulator = 0;
-    physicsInterpolationAlpha = 0;
-    return 0;
-  }
-  if (!physicsWorld || !rigidbodyInstances.size) {
-    return 0;
-  }
-
-  // RaycastVehicle registers postStep callbacks that can introduce micro-jitter even when idle.
-  // When not in manual drive nor auto-tour, remove the vehicle from the world to fully freeze it.
-  const world = physicsWorld;
-  vehicleInstances.forEach((instance) => {
-    const nodeId = instance.nodeId;
-    if (!nodeId) {
-      return;
-    }
-    const manualActive = vehicleDriveActive.value && vehicleDriveNodeId.value === nodeId;
-    const tourActive = activeAutoTourNodeIds.has(nodeId);
-    const shouldBeInWorld = manualActive || tourActive;
-    const isInWorld = vehicleRaycastInWorld.has(nodeId);
-
-    if (shouldBeInWorld && !isInWorld) {
-      try {
-        instance.vehicle.addToWorld(world);
-        vehicleRaycastInWorld.add(nodeId);
-      } catch (error) {
-        console.warn('[SceneViewer] Failed to add vehicle to world', error);
-      }
-      return;
-    }
-    if (!shouldBeInWorld && isInWorld) {
-      try {
-        instance.vehicle.removeFromWorld(world);
-        vehicleRaycastInWorld.delete(nodeId);
-      } catch (error) {
-        console.warn('[SceneViewer] Failed to remove vehicle from world', error);
-      }
-      const chassisBody = instance.vehicle?.chassisBody;
-      if (chassisBody) {
-        try {
-          chassisBody.allowSleep = true;
-          chassisBody.sleepSpeedLimit = Math.max(0.05, chassisBody.sleepSpeedLimit ?? 0);
-          chassisBody.sleepTimeLimit = Math.max(0.05, chassisBody.sleepTimeLimit ?? 0);
-          chassisBody.velocity.set(0, 0, 0);
-          chassisBody.angularVelocity.set(0, 0, 0);
-          trySleepBody(chassisBody);
-        } catch {
-          // best-effort
-        }
-      }
-    }
-  });
-  let subSteps = 0;
-  // Skip world.step() entirely when no dynamic body is awake and no vehicle/tour is active.
-  // This eliminates all broadphase + solver cost while the scene is at rest.
-  const hasActiveController = vehicleDriveActive.value || activeAutoTourNodeIds.size > 0;
-  let anyDynamicAwake = hasActiveController;
-  if (!anyDynamicAwake) {
-    const bodies = physicsWorld.bodies;
-    for (let bi = 0, bLen = bodies.length; bi < bLen; bi += 1) {
-      const b = bodies[bi];
-      if (b.type === CANNON.Body.DYNAMIC && (b as any).sleepState === 0) {
-        anyDynamicAwake = true;
-        break;
-      }
-    }
-  }
-  if (physicsInterpolationEnabled) {
-    const clampedDelta = Math.min(Math.max(0, delta), PHYSICS_MAX_ACCUMULATOR);
-    physicsAccumulator = Math.min(PHYSICS_MAX_ACCUMULATOR, physicsAccumulator + clampedDelta);
-    const world = physicsWorld;
-    if (!anyDynamicAwake) {
-      // All dynamics sleeping – drain accumulator without stepping.
-      physicsAccumulator = 0;
-    } else {
-      // Prepare previous state before stepping.
-      rigidbodyInstances.forEach((entry) => {
-        const body = entry.body;
-        const state = getPhysicsInterpolationState(body);
-        if (!state.hasSample) {
-          state.prevPos.set(body.position.x, body.position.y, body.position.z);
-          state.currPos.copy(state.prevPos);
-          state.prevQuat.set(body.quaternion.x, body.quaternion.y, body.quaternion.z, body.quaternion.w);
-          state.currQuat.copy(state.prevQuat);
-          state.hasSample = true;
-        } else {
-          state.prevPos.copy(state.currPos);
-          state.prevQuat.copy(state.currQuat);
-        }
-      });
-      try {
-        while (physicsAccumulator >= PHYSICS_FIXED_TIMESTEP && subSteps < PHYSICS_MAX_SUB_STEPS) {
-          if (vehicleDriveActive.value) {
-            // Keep vehicle control smoothing stable by advancing it at the same fixed timestep as physics.
-            applyVehicleDriveForces(PHYSICS_FIXED_TIMESTEP);
-          }
-          world.step(PHYSICS_FIXED_TIMESTEP);
-          physicsAccumulator -= PHYSICS_FIXED_TIMESTEP;
-          subSteps += 1;
-        }
-      } catch (error) {
-        console.warn('[SceneViewer] Physics step failed', error);
-      }
-      if (physicsAccumulator > PHYSICS_FIXED_TIMESTEP) {
-        physicsAccumulator = PHYSICS_FIXED_TIMESTEP;
-      }
-    }
-    physicsInterpolationAlpha = PHYSICS_FIXED_TIMESTEP > 0
-      ? Math.min(1, Math.max(0, physicsAccumulator / PHYSICS_FIXED_TIMESTEP))
-      : 0;
-    if (subSteps > 0) {
-      rigidbodyInstances.forEach((entry) => {
-        const body = entry.body;
-        const state = getPhysicsInterpolationState(body);
-        state.currPos.set(body.position.x, body.position.y, body.position.z);
-        state.currQuat.set(body.quaternion.x, body.quaternion.y, body.quaternion.z, body.quaternion.w);
-      });
-    }
-  } else {
-    const clampedDelta = Math.min(Math.max(0, delta), PHYSICS_MAX_ACCUMULATOR);
-    physicsAccumulator = Math.min(PHYSICS_MAX_ACCUMULATOR, physicsAccumulator + clampedDelta);
-    if (!anyDynamicAwake) {
-      // All dynamics sleeping – drain accumulator without stepping.
-      physicsAccumulator = 0;
-    } else {
-      try {
-        while (physicsAccumulator >= PHYSICS_FIXED_TIMESTEP && subSteps < PHYSICS_MAX_SUB_STEPS) {
-          if (vehicleDriveActive.value) {
-            applyVehicleDriveForces(PHYSICS_FIXED_TIMESTEP);
-          }
-          physicsWorld.step(PHYSICS_FIXED_TIMESTEP);
-          physicsAccumulator -= PHYSICS_FIXED_TIMESTEP;
-          subSteps += 1;
-        }
-      } catch (error) {
-        console.warn('[SceneViewer] Physics step failed', error);
-      }
-      if (physicsAccumulator > PHYSICS_FIXED_TIMESTEP) {
-        physicsAccumulator = PHYSICS_FIXED_TIMESTEP;
-      }
-    }
-  }
-  // Ensure vehicles are truly static after exiting drive/auto-tour.
-  // If a vehicle wakes up or drifts when no controller is active, hard-stop it and log for debugging.
-  const nowMs = Date.now();
-  vehicleInstances.forEach((instance) => {
-    const nodeId = instance.nodeId;
-    if (!nodeId) {
-      return;
-    }
-    const manualActive = vehicleDriveActive.value && vehicleDriveNodeId.value === nodeId;
-    const tourActive = activeAutoTourNodeIds.has(nodeId);
-    if (manualActive || tourActive) {
-      return;
-    }
-    const chassisBody = instance.vehicle?.chassisBody;
-    if (!chassisBody) {
-      return;
-    }
-    const vx = chassisBody.velocity?.x ?? 0;
-    const vy = chassisBody.velocity?.y ?? 0;
-    const vz = chassisBody.velocity?.z ?? 0;
-    const wx = chassisBody.angularVelocity?.x ?? 0;
-    const wy = chassisBody.angularVelocity?.y ?? 0;
-    const wz = chassisBody.angularVelocity?.z ?? 0;
-    const speedSq = vx * vx + vy * vy + vz * vz;
-    const angSq = wx * wx + wy * wy + wz * wz;
-    const sleepState = getBodySleepState(chassisBody);
-    const drifting = speedSq > 1e-10 || angSq > 1e-10;
-    const awake = sleepState === 0;
-    if (!drifting && !awake) {
-      return;
-    }
-
-    const lastLog = vehicleIdleFreezeLastLogMs.get(nodeId) ?? 0;
-    if (nowMs - lastLog > 750) {
-      vehicleIdleFreezeLastLogMs.set(nodeId, nowMs);
-      // idle drift detected; forcing stop (no debug log)
-    }
-    try {
-      chassisBody.allowSleep = true;
-      chassisBody.sleepSpeedLimit = Math.max(0.05, chassisBody.sleepSpeedLimit ?? 0);
-      chassisBody.sleepTimeLimit = Math.max(0.05, chassisBody.sleepTimeLimit ?? 0);
-      const wheelCount = Math.max(0, instance.wheelCount || instance.vehicle.wheelInfos.length || 0);
-      for (let index = 0; index < wheelCount; index += 1) {
-        instance.vehicle.applyEngineForce(0, index);
-        instance.vehicle.setSteeringValue(0, index);
-        instance.vehicle.setBrake(VEHICLE_BRAKE_FORCE, index);
-      }
-      chassisBody.velocity.set(0, 0, 0);
-      chassisBody.angularVelocity.set(0, 0, 0);
-      trySleepBody(chassisBody);
-    } catch {
-      // best-effort
-    }
-  });
-  rigidbodyInstances.forEach((entry) => {
-    if (entry.syncObjectFromBody === false) {
-      return;
-    }
-
-    if (!scenePreviewPerf.shouldSyncNonInteractiveSleepingBody({ nodeId: entry.nodeId, body: entry.body, nowMs })) {
-      return;
-    }
-
-    // AutoTour non-vehicle branch moves the render object directly; do not overwrite it from physics
-    // unless the tour is actually active for this node.
-    const isAutoTourActive = activeAutoTourNodeIds.has(entry.nodeId);
-    if (isAutoTourActive) {
-      const nodeState = resolveNodeById(entry.nodeId);
-      const vehicle = resolveEnabledComponentState<VehicleComponentProps>(nodeState, VEHICLE_COMPONENT_TYPE);
-      if (!vehicle) {
-        return;
-      }
-    }
-    if (physicsInterpolationEnabled) {
-      if (shouldUseSceneryPhysicsBridgeFrameForNode(entry.nodeId)) {
-        return;
-      }
-      const body = entry.body;
-      const state = physicsInterpolationStates.get(body);
-      if (state && state.hasSample) {
-        physicsInterpolationPos.copy(state.prevPos).lerp(state.currPos, physicsInterpolationAlpha);
-        physicsInterpolationQuat.copy(state.prevQuat).slerp(state.currQuat, physicsInterpolationAlpha);
-        syncObjectFromInterpolated(entry, physicsInterpolationPos, physicsInterpolationQuat, syncInstancedTransform);
-        return;
-      }
-    }
-    if (shouldUseSceneryPhysicsBridgeFrameForNode(entry.nodeId)) {
-      return;
-    }
-    syncSharedObjectFromBody(entry, syncInstancedTransform);
-  });
-
-  return subSteps;
+  void delta;
+  physicsAccumulator = 0;
+  physicsInterpolationAlpha = 0;
+  return 0;
 }
 
 function updateVehicleWheelVisuals(delta: number): void {
@@ -7161,7 +6673,7 @@ function updateVehicleWheelVisuals(delta: number): void {
       return;
     }
 
-    resolveInterpolatedBodyPosition(chassisBody as CANNON.Body, wheelChassisPositionHelper);
+    resolveInterpolatedBodyPosition(chassisBody as PhysicsBodyLike, wheelChassisPositionHelper);
     wheelQuaternionHelper
       .set(chassisBody.quaternion.x, chassisBody.quaternion.y, chassisBody.quaternion.z, chassisBody.quaternion.w)
       .normalize();
@@ -10078,7 +9590,7 @@ function applyAutoTourVehicleHoldBrake(nodeId: string): void {
     const chassisBody = vehicleInstance.vehicle.chassisBody;
     chassisBody.velocity.set(0, 0, 0);
     chassisBody.angularVelocity.set(0, 0, 0);
-    trySleepBody(chassisBody);
+    trySleepBody(chassisBody as PhysicsBodyLike);
   } catch {
     // best-effort
   }
@@ -10152,9 +9664,9 @@ function applyAutoTourSnapToVehicle(nodeId: string, snap: AutoTourRouteSnapResul
     }
     chassisBody.velocity.set(0, 0, 0);
     chassisBody.angularVelocity.set(0, 0, 0);
-    resetPhysicsInterpolationState(chassisBody);
+    resetPhysicsInterpolationState(chassisBody as PhysicsBodyLike);
     holdVehicleBrakeSafe({ vehicleInstance, brakeForce });
-    trySleepBody(chassisBody);
+    trySleepBody(chassisBody as PhysicsBodyLike);
   }
 
   return object;
@@ -11095,11 +10607,6 @@ function applyPhysicsEnvironmentSettings(settings: EnvironmentSettings) {
     1,
     DEFAULT_ENVIRONMENT_FRICTION,
   );
-  if (physicsWorld) {
-    physicsWorld.gravity.set(physicsGravity.x, physicsGravity.y, physicsGravity.z);
-    physicsWorld.defaultContactMaterial.friction = physicsContactFriction;
-    physicsWorld.defaultContactMaterial.restitution = physicsContactRestitution;
-  }
 }
 
 async function applyBackgroundSettings(
