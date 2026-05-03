@@ -13,7 +13,7 @@ export type DemRenderSpace = {
   cellSizeX: number
   cellSizeZ: number
   units: 'meters' | 'source-units'
-  source: 'projected-resolution' | 'projected-bounds' | 'geographic-bounds' | 'raster-fallback'
+  source: 'projected-resolution' | 'projected-bounds' | 'geographic-bounds' | 'raster-fallback' | 'image-heightmap'
   sourceBoundsText: string | null
 }
 
@@ -43,6 +43,9 @@ export type DemSampleOptions = {
   width?: number
   height?: number
   geographicBounds?: DemBounds
+  metersPerPixel?: number
+  minElevation?: number
+  maxElevation?: number
 }
 
 export type DemImportProgress = {
@@ -303,6 +306,132 @@ function buildPreviewImage(values: ArrayLike<number>, width: number, height: num
   return canvas.toDataURL('image/png')
 }
 
+function isImageHeightmapSource(filename: string, mimeType: string | null): boolean {
+  if (mimeType === 'image/png') {
+    return true
+  }
+  return /\.png$/i.test(filename)
+}
+
+function loadImageElementFromBlob(blob: Blob): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(blob)
+    const image = new Image()
+    image.onload = () => {
+      try {
+        URL.revokeObjectURL(url)
+      } catch {}
+      resolve(image)
+    }
+    image.onerror = () => {
+      try {
+        URL.revokeObjectURL(url)
+      } catch {}
+      reject(new Error('Unable to decode PNG heightmap.'))
+    }
+    image.src = url
+  })
+}
+
+function normalizeElevationRange(options?: DemSampleOptions): { minElevation: number; maxElevation: number } {
+  const requestedMin = Number(options?.minElevation)
+  const requestedMax = Number(options?.maxElevation)
+  const minElevation = Number.isFinite(requestedMin) ? requestedMin : 0
+  const maxElevation = Number.isFinite(requestedMax) ? requestedMax : 255
+  return maxElevation >= minElevation
+    ? { minElevation, maxElevation }
+    : { minElevation: maxElevation, maxElevation: minElevation }
+}
+
+async function parseImageHeightmapBuffer(buffer: ArrayBuffer, filename: string, mimeType: string | null, options?: DemSampleOptions): Promise<DemImportResult> {
+  const blob = new Blob([buffer], { type: mimeType ?? 'application/octet-stream' })
+  const image = await loadImageElementFromBlob(blob)
+  const width = Math.max(1, Math.floor(image.naturalWidth))
+  const height = Math.max(1, Math.floor(image.naturalHeight))
+  if (width < 2 || height < 2) {
+    throw new Error(`PNG heightmap validation failed: the image must be at least 2x2 pixels, but received ${width}x${height}.`)
+  }
+
+  const canvas = document.createElement('canvas')
+  canvas.width = width
+  canvas.height = height
+  const context = canvas.getContext('2d', { willReadFrequently: true })
+  if (!context) {
+    throw new Error('Unable to create PNG heightmap canvas context.')
+  }
+  context.drawImage(image, 0, 0, width, height)
+  const pixels = context.getImageData(0, 0, width, height).data
+
+  const { minElevation, maxElevation } = normalizeElevationRange(options)
+  const rasterData = new Float32Array(width * height)
+  const elevationRange = maxElevation - minElevation
+  let nonGrayscalePixelCount = 0
+  let translucentPixelCount = 0
+
+  for (let index = 0; index < rasterData.length; index += 1) {
+    const pixelOffset = index * 4
+    const red = pixels[pixelOffset] ?? 0
+    const green = pixels[pixelOffset + 1] ?? 0
+    const blue = pixels[pixelOffset + 2] ?? 0
+    const alpha = pixels[pixelOffset + 3] ?? 255
+    if (Math.abs(red - green) > 1 || Math.abs(red - blue) > 1 || Math.abs(green - blue) > 1) {
+      nonGrayscalePixelCount += 1
+    }
+    if (alpha < 255) {
+      translucentPixelCount += 1
+    }
+    const grayscale = (0.299 * red + 0.587 * green + 0.114 * blue) / 255
+    rasterData[index] = minElevation + grayscale * elevationRange
+  }
+
+  if (nonGrayscalePixelCount > 0 || translucentPixelCount > 0) {
+    const issues: string[] = []
+    if (nonGrayscalePixelCount > 0) {
+      issues.push(`${nonGrayscalePixelCount} non-grayscale pixels`)
+    }
+    if (translucentPixelCount > 0) {
+      issues.push(`${translucentPixelCount} translucent pixels`)
+    }
+    throw new Error(`PNG heightmap validation failed: found ${issues.join(' and ')}. Use a fully opaque grayscale PNG heightmap.`)
+  }
+
+  const metersPerPixel = Number.isFinite(Number(options?.metersPerPixel)) && Number(options?.metersPerPixel) > 0
+    ? Number(options?.metersPerPixel)
+    : 20
+  const boundsWidth = Math.max(1, (width - 1) * metersPerPixel)
+  const boundsDepth = Math.max(1, (height - 1) * metersPerPixel)
+  const renderSpace: DemRenderSpace = {
+    boundsWidth,
+    boundsDepth,
+    cellSizeX: metersPerPixel,
+    cellSizeZ: metersPerPixel,
+    units: 'meters',
+    source: 'image-heightmap',
+    sourceBoundsText: null,
+  }
+
+  return {
+    filename,
+    mimeType,
+    width,
+    height,
+    rasterData,
+    minElevation,
+    maxElevation,
+    invalidSampleCount: 0,
+    noDataValue: null,
+    geographicBounds: null,
+    worldBounds: {
+      minX: -renderSpace.boundsWidth * 0.5,
+      minZ: -renderSpace.boundsDepth * 0.5,
+      maxX: renderSpace.boundsWidth * 0.5,
+      maxZ: renderSpace.boundsDepth * 0.5,
+    },
+    renderSpace,
+    previewDataUrl: buildPreviewImage(rasterData, width, height, minElevation, maxElevation),
+  }
+}
+
 export function buildPreviewDataUrl(values: ArrayLike<number>, width: number, height: number): string | null {
   const { min, max } = computeMinMax(values)
   if (min === null || max === null) {
@@ -373,10 +502,14 @@ async function readFirstBandRasters(image: DemImageLike): Promise<ArrayLike<numb
   return rasters as ArrayLike<number>
 }
 
-export async function parseDemFile(file: File, onProgress?: (progress: DemImportProgress) => void): Promise<DemImportResult> {
-  onProgress?.({ phase: 'reading', loaded: 0, total: file.size, label: 'Reading file' })
-  const buffer = await readFileAsArrayBuffer(file, onProgress)
-  onProgress?.({ phase: 'parsing', loaded: file.size, total: file.size, label: 'Decoding GeoTIFF' })
+async function parseDemBuffer(buffer: ArrayBuffer, filename: string, mimeType: string | null, onProgress?: (progress: DemImportProgress) => void, options?: DemSampleOptions): Promise<DemImportResult> {
+  if (isImageHeightmapSource(filename, mimeType)) {
+    onProgress?.({ phase: 'parsing', loaded: buffer.byteLength, total: buffer.byteLength, label: 'Decoding PNG heightmap' })
+    onProgress?.({ phase: 'processing', loaded: 0, total: buffer.byteLength, label: 'Analyzing raster' })
+    return parseImageHeightmapBuffer(buffer, filename, mimeType, options)
+  }
+
+  onProgress?.({ phase: 'parsing', loaded: buffer.byteLength, total: buffer.byteLength, label: 'Decoding GeoTIFF' })
   const tiff = await fromArrayBuffer(buffer)
   const image = await tiff.getImage() as DemImageLike
   const width = image.getWidth()
@@ -403,8 +536,8 @@ export async function parseDemFile(file: File, onProgress?: (progress: DemImport
   const renderSpace = buildRenderSpace(width, height, geographicBounds, resolution, isGeographic)
 
   return {
-    filename: file.name,
-    mimeType: file.type || null,
+    filename,
+    mimeType,
     width,
     height,
     rasterData,
@@ -422,4 +555,15 @@ export async function parseDemFile(file: File, onProgress?: (progress: DemImport
     renderSpace,
     previewDataUrl: minElevation !== null && maxElevation !== null ? buildPreviewImage(rasterData, width, height, minElevation, maxElevation) : null,
   }
+}
+
+export async function parseDemFile(file: File, onProgress?: (progress: DemImportProgress) => void, options?: DemSampleOptions): Promise<DemImportResult> {
+  onProgress?.({ phase: 'reading', loaded: 0, total: file.size, label: 'Reading file' })
+  const buffer = await readFileAsArrayBuffer(file, onProgress)
+  return parseDemBuffer(buffer, file.name, file.type || null, onProgress, options)
+}
+
+export async function parseDemBlob(blob: Blob, filename = 'DEM', mimeType: string | null = blob.type || null, options?: DemSampleOptions): Promise<DemImportResult> {
+  const buffer = await blob.arrayBuffer()
+  return parseDemBuffer(buffer, filename, mimeType, undefined, options)
 }

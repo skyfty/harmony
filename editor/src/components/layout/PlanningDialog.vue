@@ -18,6 +18,8 @@ import type {
   PlanningPolylineData,
   PlanningSceneData,
   PlanningTerrainDemData,
+  PlanningTerrainDemHeightmapEncoding,
+  PlanningTerrainDemHeightmapEncodingMode,
   PlanningTerrainData,
   PlanningTerrainControlPoint,
   PlanningTerrainFalloff,
@@ -42,6 +44,10 @@ import {
 } from '@/utils/planningDemStorage'
 import { resolveGroundWorldBounds } from '@schema'
 import {
+  createCustomRangeHeightmapEncoding,
+  createStrictQgis16BitHeightmapEncoding,
+  DEFAULT_IMAGE_HEIGHTMAP_MAX_ELEVATION,
+  DEFAULT_IMAGE_HEIGHTMAP_MIN_ELEVATION,
   demImportResultToTerrainData,
   isPlanningDemHeightmapImageSource,
   isSupportedPlanningDemSource,
@@ -294,7 +300,7 @@ function createDefaultPlanningTerrain(): PlanningTerrainData {
   return {
     version: 1,
     mode: 'normal',
-    grid: { cellSize: 1 },
+    grid: { cellSize: 20 },
     noise: { enabled: false, seed: 1337, mode: 'perlin', noiseScale: 40, noiseAmplitude: 1, noiseStrength: 1, detailScale: 1, detailAmplitude: 0, edgeFalloff: 0 },
     controlPoints: [],
     ridgeValleyLines: [],
@@ -347,6 +353,22 @@ function clonePlanningTerrainOrthophotoData(data: PlanningTerrainOrthophotoData 
   }
 }
 
+function clonePlanningTerrainDemHeightmapEncoding(data: PlanningTerrainDemHeightmapEncoding | null | undefined): PlanningTerrainDemHeightmapEncoding | null {
+  if (!data) {
+    return null
+  }
+  return {
+    version: 1,
+    sourceFormat: 'png',
+    mode: data.mode === 'custom-range' ? 'custom-range' : 'strict-qgis-16bit',
+    bitDepth: data.bitDepth === 8 ? 8 : 16,
+    channels: Math.max(1, Math.trunc(Number(data.channels) || 1)),
+    signed: Boolean(data.signed),
+    zeroCode: Number.isFinite(Number(data.zeroCode)) ? Number(data.zeroCode) : null,
+    metersPerUnit: Number.isFinite(Number(data.metersPerUnit)) ? Number(data.metersPerUnit) : null,
+  }
+}
+
 function clonePlanningTerrainDemData(data: PlanningTerrainDemData | null | undefined): PlanningTerrainDemData | null {
   if (!data) {
     return null
@@ -363,6 +385,7 @@ function clonePlanningTerrainDemData(data: PlanningTerrainDemData | null | undef
     sampleStepMeters: data.sampleStepMeters ?? null,
     geographicBounds: clonePlanningTerrainGeographicBounds(data.geographicBounds ?? null),
     worldBounds: clonePlanningTerrainWorldBounds(data.worldBounds ?? null),
+    heightmapEncoding: clonePlanningTerrainDemHeightmapEncoding(data.heightmapEncoding ?? null),
     previewHash: data.previewHash ?? null,
     previewSize: data.previewSize ? { width: data.previewSize.width, height: data.previewSize.height } : null,
     orthophoto: clonePlanningTerrainOrthophotoData(data.orthophoto ?? null),
@@ -468,7 +491,7 @@ const sceneGroundSize = computed(() => {
 })
 const visibleLayerIds = computed(() => new Set(layers.value.filter((layer) => layer.visible).map((layer) => layer.id)))
 
-const DEFAULT_PNG_HEIGHTMAP_METERS_PER_PIXEL = 30
+const DEFAULT_PNG_HEIGHTMAP_METERS_PER_PIXEL = 20
 
 function resolvePlanningWorldSpan(bounds: PlanningTerrainWorldBounds | null | undefined): { width: number; height: number } | null {
   if (!bounds) {
@@ -525,6 +548,7 @@ function buildPlanningDemParseOptions(
 ): PlanningDemImportOptions {
   const isHeightmapImage = Boolean(terrainDem && isPlanningDemHeightmapImageSource(terrainDem.filename ?? '', terrainDem.mimeType ?? null))
   return {
+    heightmapEncoding: clonePlanningTerrainDemHeightmapEncoding(terrainDem?.heightmapEncoding ?? null),
     minElevation: terrainDem?.minElevation ?? null,
     maxElevation: terrainDem?.maxElevation ?? null,
     worldBoundsOverride: isHeightmapImage ? (terrainDem?.worldBounds ?? null) : null,
@@ -532,7 +556,7 @@ function buildPlanningDemParseOptions(
   }
 }
 
-function validatePlanningDemImport(file: File): { metersPerPixel?: number } {
+function validatePlanningDemImport(file: File): Partial<PlanningDemImportOptions> {
   const mimeType = file.type || null
   if (!isSupportedPlanningDemSource(file.name, mimeType)) {
     throw new Error('Only GeoTIFF (.tif, .tiff) and PNG heightmaps are supported for DEM import.')
@@ -552,6 +576,7 @@ function validatePlanningDemImport(file: File): { metersPerPixel?: number } {
   }
   return {
     metersPerPixel: Number(metersPerPixel.toFixed(6)),
+    heightmapEncoding: createStrictQgis16BitHeightmapEncoding(),
   }
 }
 
@@ -1415,6 +1440,9 @@ function normalizePlanningTerrain(raw: unknown): PlanningTerrainData {
     const worldBounds = dem.worldBounds && typeof dem.worldBounds === 'object'
       ? dem.worldBounds as Record<string, unknown>
       : null
+    const heightmapEncoding = dem.heightmapEncoding && typeof dem.heightmapEncoding === 'object'
+      ? dem.heightmapEncoding as Record<string, unknown>
+      : null
     const orthophoto = dem.orthophoto && typeof dem.orthophoto === 'object'
       ? dem.orthophoto as Record<string, unknown>
       : null
@@ -1443,6 +1471,18 @@ function normalizePlanningTerrain(raw: unknown): PlanningTerrainData {
             minY: Number(worldBounds.minY),
             maxX: Number(worldBounds.maxX),
             maxY: Number(worldBounds.maxY),
+          }
+        : undefined,
+      heightmapEncoding: heightmapEncoding && (heightmapEncoding.mode === 'custom-range' || heightmapEncoding.mode === 'strict-qgis-16bit')
+        ? {
+            version: 1,
+            sourceFormat: 'png',
+            mode: heightmapEncoding.mode,
+            bitDepth: Number(heightmapEncoding.bitDepth) === 8 ? 8 : 16,
+            channels: Number.isFinite(Number(heightmapEncoding.channels)) ? Math.max(1, Math.trunc(Number(heightmapEncoding.channels))) : 1,
+            signed: Boolean(heightmapEncoding.signed),
+            zeroCode: Number.isFinite(Number(heightmapEncoding.zeroCode)) ? Number(heightmapEncoding.zeroCode) : null,
+            metersPerUnit: Number.isFinite(Number(heightmapEncoding.metersPerUnit)) ? Number(heightmapEncoding.metersPerUnit) : null,
           }
         : undefined,
       previewHash: typeof dem.previewHash === 'string' ? dem.previewHash : null,
@@ -1902,6 +1942,105 @@ const selectedDemUsesHeightmapImage = computed<boolean>(() => {
   return isPlanningDemHeightmapImageSource(dem.filename ?? '', dem.mimeType ?? null)
 })
 
+function resolvePlanningTerrainDemHeightmapMode(
+  dem: PlanningTerrainDemData | null | undefined,
+): PlanningTerrainDemHeightmapEncodingMode | null {
+  if (!dem || !isPlanningDemHeightmapImageSource(dem.filename ?? '', dem.mimeType ?? null)) {
+    return null
+  }
+  if (dem.heightmapEncoding?.mode === 'custom-range' || dem.heightmapEncoding?.mode === 'strict-qgis-16bit') {
+    return dem.heightmapEncoding.mode
+  }
+  return 'strict-qgis-16bit'
+}
+
+function createPlanningTerrainDemEncodingForMode(
+  mode: PlanningTerrainDemHeightmapEncodingMode,
+  current: PlanningTerrainDemHeightmapEncoding | null | undefined,
+): PlanningTerrainDemHeightmapEncoding {
+  if (mode === 'strict-qgis-16bit') {
+    return createStrictQgis16BitHeightmapEncoding()
+  }
+  const bitDepth = current?.bitDepth === 16 ? 16 : 8
+  const channels = Number.isFinite(Number(current?.channels)) ? Math.max(1, Math.trunc(Number(current?.channels))) : 1
+  return createCustomRangeHeightmapEncoding(bitDepth, channels)
+}
+
+const planningDemHeightmapModeOptions = [
+  { label: 'Strict QGIS 16-bit', value: 'strict-qgis-16bit' },
+  { label: 'Custom Range Mapping', value: 'custom-range' },
+] as const
+
+const selectedDemHeightmapMode = computed<PlanningTerrainDemHeightmapEncodingMode | null>(() => {
+  return resolvePlanningTerrainDemHeightmapMode(selectedDem.value)
+})
+
+const selectedDemUsesStrictHeightmapEncoding = computed<boolean>(() => {
+  return selectedDemHeightmapMode.value === 'strict-qgis-16bit'
+})
+
+const selectedDemUsesCustomHeightmapRange = computed<boolean>(() => {
+  return selectedDemHeightmapMode.value === 'custom-range'
+})
+
+const selectedDemHeightmapModeDescription = computed<string | null>(() => {
+  if (!selectedDemUsesHeightmapImage.value) {
+    return null
+  }
+  if (selectedDemUsesStrictHeightmapEncoding.value) {
+    return 'Strict rule: QGIS must export a 16-bit grayscale PNG where code 32768 maps to 0 m and each code step equals 1 m.'
+  }
+  return 'Custom range mode remaps grayscale values into the editable min/max elevation range. Use this only for non-standard heightmaps.'
+})
+
+async function reloadPlanningDemFromSource(): Promise<void> {
+  const terrainDem = planningTerrain.value.dem
+  if (!terrainDem?.sourceFileHash) {
+    return
+  }
+  const blob = await loadPlanningDemBlobByHash(terrainDem.sourceFileHash)
+  if (!blob) {
+    throw new Error('DEM blob is missing from storage')
+  }
+  const parsed = await parsePlanningDemBlob(
+    blob,
+    terrainDem.filename ?? 'DEM',
+    (terrainDem.mimeType ?? blob.type) || null,
+    buildPlanningDemParseOptions(terrainDem),
+  )
+  const nextDem = demImportResultToTerrainData(parsed)
+  nextDem.orthophoto = clonePlanningTerrainOrthophotoData(terrainDem.orthophoto ?? null)
+  planningTerrain.value = {
+    ...planningTerrain.value,
+    dem: nextDem,
+  }
+  planningDemPreviewUrl.value = parsed.preview?.dataUrl ?? null
+  markPlanningDirty()
+}
+
+const selectedDemHeightmapModeModel = computed<PlanningTerrainDemHeightmapEncodingMode | null>({
+  get: () => selectedDemHeightmapMode.value,
+  set: (value) => {
+    const dem = selectedDem.value
+    if (!dem || !selectedDemUsesHeightmapImage.value || !value) {
+      return
+    }
+    const currentMode = resolvePlanningTerrainDemHeightmapMode(dem)
+    if (currentMode === value) {
+      return
+    }
+    dem.heightmapEncoding = createPlanningTerrainDemEncodingForMode(value, dem.heightmapEncoding ?? null)
+    if (value === 'custom-range') {
+      dem.minElevation = Number.isFinite(Number(dem.minElevation)) ? Number(dem.minElevation) : DEFAULT_IMAGE_HEIGHTMAP_MIN_ELEVATION
+      dem.maxElevation = Number.isFinite(Number(dem.maxElevation)) ? Number(dem.maxElevation) : DEFAULT_IMAGE_HEIGHTMAP_MAX_ELEVATION
+    }
+    markPlanningDirty()
+    void reloadPlanningDemFromSource().catch((error) => {
+      console.warn('Failed to reload planning DEM after mode change', error)
+    })
+  },
+})
+
 const selectedDemMetersPerPixel = computed<number | null>({
   get: () => resolvePlanningHeightmapMetersPerPixel(selectedDem.value),
   set: (value: number | null) => {
@@ -1989,10 +2128,10 @@ const selectedDemMinElevationModel = computed<number | null>({
   },
   set: (value: number | null) => {
     const dem = selectedDem.value
-    if (!dem || !selectedDemUsesHeightmapImage.value) {
+    if (!dem || !selectedDemUsesHeightmapImage.value || !selectedDemUsesCustomHeightmapRange.value) {
       return
     }
-    dem.minElevation = Number.isFinite(Number(value)) ? Number(value) : 0
+    dem.minElevation = Number.isFinite(Number(value)) ? Number(value) : DEFAULT_IMAGE_HEIGHTMAP_MIN_ELEVATION
     if (Number.isFinite(Number(dem.maxElevation)) && Number(dem.maxElevation) < Number(dem.minElevation)) {
       dem.maxElevation = Number(dem.minElevation)
     }
@@ -2010,10 +2149,10 @@ const selectedDemMaxElevationModel = computed<number | null>({
   },
   set: (value: number | null) => {
     const dem = selectedDem.value
-    if (!dem || !selectedDemUsesHeightmapImage.value) {
+    if (!dem || !selectedDemUsesHeightmapImage.value || !selectedDemUsesCustomHeightmapRange.value) {
       return
     }
-    dem.maxElevation = Number.isFinite(Number(value)) ? Number(value) : 255
+    dem.maxElevation = Number.isFinite(Number(value)) ? Number(value) : DEFAULT_IMAGE_HEIGHTMAP_MAX_ELEVATION
     if (Number.isFinite(Number(dem.minElevation)) && Number(dem.maxElevation) < Number(dem.minElevation)) {
       dem.minElevation = Number(dem.maxElevation)
     }
@@ -2132,8 +2271,8 @@ const terrainContourWaterPresetModel = computed<WaterPresetId | null>({
 
 const terrainCellSizeModel = computed<number>({
   get: () => {
-    const raw = Number(planningTerrain.value?.grid?.cellSize ?? 1)
-    return Number.isFinite(raw) && raw >= 0.1 ? raw : 1
+    const raw = Number(planningTerrain.value?.grid?.cellSize ?? 20)
+    return Number.isFinite(raw) && raw >= 0.1 ? raw : 20
   },
   set: (value: number) => {
     const next = Number(value)
@@ -4867,6 +5006,7 @@ async function loadPlanningOrthophotoFile(file: File) {
       sampleStepMeters: null,
       geographicBounds: null,
       worldBounds: null,
+      heightmapEncoding: null,
       previewHash: null,
       previewSize: null,
       orthophoto: null,
@@ -6355,21 +6495,34 @@ onBeforeUnmount(() => {
                 <div class="property-panel__hint">
                   Change this when the PNG was preprocessed in QGIS or Photoshop and you need a different real-world scale.
                 </div>
-                <div class="property-panel__section-title property-panel__section-title--muted">Heightmap Range</div>
-                <v-text-field
-                  v-model.number="selectedDemMinElevationModel"
-                  type="number"
+                <div class="property-panel__section-title property-panel__section-title--muted">Heightmap Mapping</div>
+                <v-select
+                  v-model="selectedDemHeightmapModeModel"
+                  :items="planningDemHeightmapModeOptions"
+                  item-title="label"
+                  item-value="value"
                   density="compact"
-                  label="Min elevation (m)"
                   hide-details
+                  label="Heightmap mode"
                 />
-                <v-text-field
-                  v-model.number="selectedDemMaxElevationModel"
-                  type="number"
-                  density="compact"
-                  label="Max elevation (m)"
-                  hide-details
-                />
+                <div class="property-panel__hint">{{ selectedDemHeightmapModeDescription }}</div>
+                <template v-if="selectedDemUsesCustomHeightmapRange">
+                  <div class="property-panel__section-title property-panel__section-title--muted">Heightmap Range</div>
+                  <v-text-field
+                    v-model.number="selectedDemMinElevationModel"
+                    type="number"
+                    density="compact"
+                    label="Min elevation (m)"
+                    hide-details
+                  />
+                  <v-text-field
+                    v-model.number="selectedDemMaxElevationModel"
+                    type="number"
+                    density="compact"
+                    label="Max elevation (m)"
+                    hide-details
+                  />
+                </template>
               </div>
               <div class="property-panel__sub-block">
                 <div class="property-panel__section-title property-panel__section-title--muted">Conversion Grid</div>

@@ -422,9 +422,9 @@ function resolvePlanningDemCoveredGridRegion(options: {
   const cellSize = Number.isFinite(options.definition.cellSize) && options.definition.cellSize > 0 ? options.definition.cellSize : 1
   const epsilon = Math.max(1e-9, cellSize * 1e-9)
   const overlapStartColumn = Math.max(0, Math.min(columns, Math.ceil((overlapMinX - terrainBounds.minX - epsilon) / cellSize)))
-  const overlapEndColumn = Math.max(overlapStartColumn, Math.min(columns, Math.floor((overlapMaxX - terrainBounds.minX - epsilon) / cellSize)))
+  const overlapEndColumn = Math.max(overlapStartColumn, Math.min(columns, Math.floor((overlapMaxX - terrainBounds.minX + epsilon) / cellSize)))
   const overlapStartRow = Math.max(0, Math.min(rows, Math.ceil((overlapMinZ - terrainBounds.minZ - epsilon) / cellSize)))
-  const overlapEndRow = Math.max(overlapStartRow, Math.min(rows, Math.floor((overlapMaxZ - terrainBounds.minZ - epsilon) / cellSize)))
+  const overlapEndRow = Math.max(overlapStartRow, Math.min(rows, Math.floor((overlapMaxZ - terrainBounds.minZ + epsilon) / cellSize)))
   const startRow = Math.max(overlapStartRow, requestedStartRow)
   const endRow = Math.min(overlapEndRow, requestedEndRow)
   const startColumn = Math.max(overlapStartColumn, requestedStartColumn)
@@ -974,6 +974,7 @@ export async function resolvePlanningDemPreparedSource(options: {
     terrainDem.filename ?? 'DEM',
     (terrainDem.mimeType ?? blob.type) || null,
     {
+      heightmapEncoding: terrainDem.heightmapEncoding ?? null,
       minElevation: terrainDem.minElevation ?? null,
       maxElevation: terrainDem.maxElevation ?? null,
       worldBoundsOverride: isPlanningDemHeightmapImageSource(terrainDem.filename ?? '', terrainDem.mimeType ?? null)

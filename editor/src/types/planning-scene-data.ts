@@ -184,6 +184,19 @@ export interface PlanningTerrainOrthophotoData {
   visible?: boolean
 }
 
+export type PlanningTerrainDemHeightmapEncodingMode = 'strict-qgis-16bit' | 'custom-range'
+
+export interface PlanningTerrainDemHeightmapEncoding {
+  version: 1
+  sourceFormat: 'png'
+  mode: PlanningTerrainDemHeightmapEncodingMode
+  bitDepth: 8 | 16
+  channels: number
+  signed: boolean
+  zeroCode: number | null
+  metersPerUnit: number | null
+}
+
 export interface PlanningTerrainDemData {
   version: 1
   sourceFileHash?: string | null
@@ -196,6 +209,7 @@ export interface PlanningTerrainDemData {
   sampleStepMeters?: number | null
   geographicBounds?: PlanningTerrainGeographicBounds | null
   worldBounds?: PlanningTerrainWorldBounds | null
+  heightmapEncoding?: PlanningTerrainDemHeightmapEncoding | null
   previewHash?: string | null
   previewSize?: { width: number; height: number } | null
   orthophoto?: PlanningTerrainOrthophotoData | null
