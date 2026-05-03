@@ -38,6 +38,9 @@ importers:
       '@vue/shared':
         specifier: ^3.5.13
         version: 3.5.28
+      ammojs3:
+        specifier: ^0.0.11
+        version: 0.0.11
       cannon-es:
         specifier: ^0.20.0
         version: 0.20.0
@@ -1119,6 +1122,10 @@ packages:
     resolution: {integrity: sha512-d9zaMRSTIKDLhctzH12MtXvJKSSUhaHcjV+2Z+GK+EEY7XKpP5yR4x+N3TAcHTcu963nIr+TMcCb4DBCYX1z6Q==}
     engines: {node: ^12.22.0 || ^14.17.0 || >=16.0.0}
 
+  '@harmony/physics-core@file:../physics-core':
+    resolution: {directory: ../physics-core, type: directory}
+    engines: {pnpm: '>=10.0.0'}
+
   '@harmony/scenery@file:../scenery':
     resolution: {directory: ../scenery, type: directory}
     engines: {pnpm: '>=10.0.0'}
@@ -2090,6 +2097,9 @@ packages:
 
   alien-signals@1.0.13:
     resolution: {integrity: sha512-OGj9yyTnJEttvzhTUWuscOvtqxq5vrhF7vL9oS0xJ2mK0ItPYP1/y+vCFebfxoEyAz0++1AIwJ5CMr+Fk3nDmg==}
+
+  ammojs3@0.0.11:
+    resolution: {integrity: sha512-pfnMm0XvTLjzCt+ytdpV3aIgooxQzexjkC2DbTyiGsAk8ECEBPxJ8gOQ/m0CE+d9pf9ToPMK8PZJR7jP1h6lOA==}
 
   ansi-escapes@4.3.2:
     resolution: {integrity: sha512-gKXj5ALrKWQLsYG9jlTRmR/xKluxHV+Z9QEwNIgCfM1/uwPMCuzVVnh5mwTd+OuBZcwSIMbqssNWRm1lE51QaQ==}
@@ -5751,6 +5761,8 @@ snapshots:
 
   '@eslint/js@8.57.1': {}
 
+  '@harmony/physics-core@file:../physics-core': {}
+
   '@harmony/scenery@file:../scenery(three@0.172.0)':
     dependencies:
       '@harmony/schema': file:../schema
@@ -5762,8 +5774,8 @@ snapshots:
 
   '@harmony/schema@file:../schema':
     dependencies:
+      '@harmony/physics-core': file:../physics-core
       '@msgpack/msgpack': 3.1.3
-      cannon-es: 0.20.0
       fflate: 0.8.2
       polygon-clipping: 0.15.7
       robust-predicates: 1.1.0
@@ -6915,6 +6927,8 @@ snapshots:
       uri-js: 4.4.1
 
   alien-signals@1.0.13: {}
+
+  ammojs3@0.0.11: {}
 
   ansi-escapes@4.3.2:
     dependencies:

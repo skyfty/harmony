@@ -2054,8 +2054,6 @@ let protagonistPoseSynced = false;
 const JOYSTICK_INPUT_RADIUS = 64;
 const JOYSTICK_VISUAL_RANGE = 44;
 const JOYSTICK_DEADZONE = 0.25;
-const VEHICLE_SMOOTH_STOP_TRIGGER_SPEED = 0.6;
-const VEHICLE_SMOOTH_STOP_MIN_THROTTLE = 0.05;
 
 type VehicleWheelBinding = {
   nodeId: string | null;
@@ -9064,19 +9062,6 @@ function cancelVehicleSmoothStop(): void {
   vehicleDriveController.clearSmoothStop();
 }
 
-function requestVehicleSmoothStop(): void {
-  if (!vehicleDriveActive.value) {
-    return;
-  }
-  if (Math.abs(vehicleDriveInput.throttle) > VEHICLE_SMOOTH_STOP_MIN_THROTTLE) {
-    return;
-  }
-  if (vehicleSpeed.value <= VEHICLE_SMOOTH_STOP_TRIGGER_SPEED) {
-    return;
-  }
-  vehicleDriveController.requestSmoothStop({ initialSpeed: vehicleSpeed.value });
-}
-
 function handleDrivePadTouchStart(event: TouchEvent): void {
   if (!vehicleDriveUi.value.visible) {
     return;
@@ -9174,7 +9159,6 @@ function handleDrivePadMouseMove(event: MouseEvent): void {
 function handleDrivePadMouseUp(): void {
   if (joystickState.pointerId === DRIVE_PAD_MOUSE_POINTER_ID) {
     deactivateJoystick(true);
-    requestVehicleSmoothStop();
     scheduleDrivePadFade();
   }
   detachDrivePadMouseListeners();
@@ -9226,7 +9210,6 @@ function handleJoystickTouchEnd(event: TouchEvent): void {
     return;
   }
   deactivateJoystick(true);
-  requestVehicleSmoothStop();
 }
 
 function recomputeVehicleDriveInputs(): void {

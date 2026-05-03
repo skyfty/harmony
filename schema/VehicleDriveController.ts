@@ -191,6 +191,8 @@ const VEHICLE_SPEED_GOVERNOR_BRAKE_MAX_RATIO = 0.18
 const VEHICLE_COASTING_DAMPING = 0.04
 // 平滑停车默认阻尼
 const VEHICLE_SMOOTH_STOP_DEFAULT_DAMPING = 0.18
+// 松开驱动输入后的柔刹阻尼；需高于 transform coasting 阈值才会明显收尾
+const VEHICLE_RELEASE_SMOOTH_STOP_DAMPING = 0.32
 // 平滑停车最大阻尼
 const VEHICLE_SMOOTH_STOP_MAX_DAMPING = 0.45
 // 平滑停车速度阈值
@@ -201,6 +203,10 @@ const VEHICLE_SMOOTH_STOP_FINAL_SPEED = 0.05
 const VEHICLE_SMOOTH_STOP_FINAL_SPEED_SQ = VEHICLE_SMOOTH_STOP_FINAL_SPEED * VEHICLE_SMOOTH_STOP_FINAL_SPEED
 // 平滑停车最小混合比
 const VEHICLE_SMOOTH_STOP_MIN_BLEND = 0.25
+// 释放驱动输入后触发柔刹的最小速度
+const VEHICLE_SMOOTH_STOP_RELEASE_TRIGGER_SPEED = 0.18
+// 释放驱动输入的节流死区
+const VEHICLE_SMOOTH_STOP_INPUT_DEADZONE = 0.05
 // 最大转向角（弧度）
 const VEHICLE_STEER_ANGLE = THREE.MathUtils.degToRad(26)
 // 转向开始衰减的速度（m/s）
@@ -367,6 +373,7 @@ export class VehicleDriveController {
     stopSpeedSq: VEHICLE_SMOOTH_STOP_SPEED_THRESHOLD_SQ,
     initialSpeedSq: VEHICLE_SMOOTH_STOP_SPEED_THRESHOLD_SQ,
   }
+  private suppressReleaseSmoothStop = false
 
   constructor(deps: VehicleDriveControllerDeps, bindings: VehicleDriveControllerBindings) {
     this.deps = deps
@@ -482,7 +489,35 @@ export class VehicleDriveController {
     input.brake = 0
     input.steering = 0
     this.clearSmoothStop()
+    this.suppressReleaseSmoothStop = true
     this.recomputeInputs()
+  }
+
+  private maybeTriggerReleaseSmoothStop(previousThrottle: number, previousBrake: number): void {
+    if (this.suppressReleaseSmoothStop) {
+      this.suppressReleaseSmoothStop = false
+      return
+    }
+    if (!this.state.active) {
+      return
+    }
+    const nextThrottle = Math.abs(this.input.throttle)
+    const nextBrake = Math.abs(this.input.brake)
+    const wasDriving = Math.abs(previousThrottle) > VEHICLE_SMOOTH_STOP_INPUT_DEADZONE
+    const isDriving = nextThrottle > VEHICLE_SMOOTH_STOP_INPUT_DEADZONE
+    const wasBraking = Math.abs(previousBrake) > VEHICLE_SMOOTH_STOP_INPUT_DEADZONE
+    const isBraking = nextBrake > VEHICLE_SMOOTH_STOP_INPUT_DEADZONE
+    if (!wasDriving || isDriving || wasBraking || isBraking) {
+      return
+    }
+    const currentSpeed = this.getCurrentSpeed()
+    if (currentSpeed <= VEHICLE_SMOOTH_STOP_RELEASE_TRIGGER_SPEED) {
+      return
+    }
+    this.requestSmoothStop({
+      damping: VEHICLE_RELEASE_SMOOTH_STOP_DAMPING,
+      initialSpeed: currentSpeed,
+    })
   }
 
   setControlFlag(action: keyof VehicleDriveControlFlags, active: boolean): void {
@@ -504,6 +539,8 @@ export class VehicleDriveController {
   }
 
   recomputeInputs(): void {
+    const previousThrottle = this.input.throttle
+    const previousBrake = this.input.brake
     const { input, inputFlags, bindings } = this
     // Start with any analog inputs (e.g., joystick) then override with digital flags/keyboard when present.
     let throttle = clampAxisScalar(input.throttle)
@@ -530,6 +567,10 @@ export class VehicleDriveController {
     input.throttle = throttle
     input.steering = clampAxisScalar(steering)
     input.brake = clampAxisScalar(brake)
+    if (Math.abs(input.throttle) > VEHICLE_SMOOTH_STOP_INPUT_DEADZONE || Math.abs(input.brake) > VEHICLE_SMOOTH_STOP_INPUT_DEADZONE) {
+      this.clearSmoothStop()
+    }
+    this.maybeTriggerReleaseSmoothStop(previousThrottle, previousBrake)
   }
 
   getCurrentSpeed(): number {
