@@ -1,7 +1,7 @@
 import stylesText from './styles.css?raw'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
-import { createBuiltInSampleDem, parseDemFile } from './dem'
+import { createBuiltInSampleDem, parseDemBlob, parseDemFile } from './dem'
 import { buildTerrainMesh, exportTerrainAsJson, exportTerrainAsObj, exportTerrainAsPly } from './terrain'
 
 type AppState = {
@@ -36,18 +36,19 @@ app.innerHTML = `
           <h2>Import</h2>
           <span class="chip" id="status-chip">Waiting for file</span>
         </div>
-        <div class="actions actions-single">
+        <div class="actions">
           <button id="load-sample-dem">Load built-in sample DEM</button>
+          <button id="load-heightmap-sample">Load PNG heightmap sample</button>
         </div>
         <label class="file-picker" for="dem-file-input">
-          <input id="dem-file-input" type="file" accept=".tif,.tiff,image/tiff" />
+          <input id="dem-file-input" type="file" accept=".tif,.tiff,.png,image/tiff,image/png" />
           <span class="file-picker-button">Select DEM</span>
-          <span class="file-picker-copy">or drop a local GeoTIFF into the target area</span>
+          <span class="file-picker-copy">or drop a local GeoTIFF / PNG heightmap into the target area</span>
         </label>
 
         <div class="drop-zone" id="drop-zone">
           <strong>Drop a DEM file here</strong>
-          <span>Supported: GeoTIFF / DEM raster files</span>
+          <span>Supported: GeoTIFF / PNG grayscale heightmaps</span>
         </div>
 
         <div class="field-row">
@@ -149,6 +150,7 @@ const exportObjButton = document.querySelector<HTMLButtonElement>('#export-obj')
 const exportPlyButton = document.querySelector<HTMLButtonElement>('#export-ply')!
 const exportJsonButton = document.querySelector<HTMLButtonElement>('#export-json')!
 const loadSampleButton = document.querySelector<HTMLButtonElement>('#load-sample-dem')!
+const loadHeightmapSampleButton = document.querySelector<HTMLButtonElement>('#load-heightmap-sample')!
 const viewportElement = document.querySelector<HTMLDivElement>('#viewport')!
 const viewportPlaceholder = document.querySelector<HTMLDivElement>('#viewport-placeholder')!
 const verticalScaleInput = document.querySelector<HTMLInputElement>('#vertical-scale')!
@@ -431,6 +433,29 @@ async function loadDemFile(file: File): Promise<void> {
   }
 }
 
+async function loadDemBlob(blob: Blob, filename: string, mimeType: string | null): Promise<void> {
+  try {
+    setStatus(`Loading ${filename}...`)
+    setButtonsEnabled(false)
+    state.fileName = filename
+    updateStats()
+    setImportProgress({ label: 'Starting import', value: 0 })
+
+    const dem = await parseDemBlob(blob, filename, mimeType, { metersPerPixel: 20 })
+    loadDemResult(dem)
+    setStatus(`Loaded ${filename}`, 'ok')
+  } catch (error) {
+    clearTerrain()
+    state.dem = null
+    state.fileName = filename
+    updatePreview(null)
+    updateStats()
+    setButtonsEnabled(false)
+    setImportProgress(null)
+    setStatus(error instanceof Error ? error.message : 'Failed to load DEM', 'error')
+  }
+}
+
 function loadSampleDem(): void {
   try {
     setStatus('Loading built-in sample DEM...')
@@ -463,6 +488,35 @@ fileInput.addEventListener('change', () => {
 
 loadSampleButton.addEventListener('click', () => {
   loadSampleDem()
+})
+
+loadHeightmapSampleButton.addEventListener('click', () => {
+  void (async () => {
+    try {
+      setStatus('Loading PNG heightmap sample...')
+      setButtonsEnabled(false)
+      setViewportPlaceholderState('loading', 'Loading PNG heightmap sample...')
+      setImportProgress({ label: 'Fetching PNG heightmap sample', value: null })
+      const sampleUrl = new URL('../test-fixtures/heightmap-1000m-1000m-20m.png', import.meta.url)
+      const response = await fetch(sampleUrl)
+      if (!response.ok) {
+        throw new Error(`Failed to fetch PNG heightmap sample: ${response.status} ${response.statusText}`)
+      }
+      const blob = await response.blob()
+      await loadDemBlob(blob, 'heightmap-1000m-1000m-20m.png', 'image/png')
+      setStatus('Loaded PNG heightmap sample', 'ok')
+    } catch (error) {
+      clearTerrain()
+      state.dem = null
+      state.fileName = 'heightmap-1000m-1000m-20m.png'
+      setViewportPlaceholderState('error', error instanceof Error ? error.message : 'Failed to load PNG heightmap sample')
+      updatePreview(null)
+      updateStats()
+      setButtonsEnabled(false)
+      setImportProgress(null)
+      setStatus(error instanceof Error ? error.message : 'Failed to load PNG heightmap sample', 'error')
+    }
+  })()
 })
 
 dropZone.addEventListener('dragover', (event) => {
