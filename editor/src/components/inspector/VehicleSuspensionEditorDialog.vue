@@ -343,18 +343,20 @@ function resizeRenderer() {
 
 function rebuildModel() {
   if (!previewScene || !selectedNode.value) return
+  const scene = previewScene
   if (chassisGroup) {
-    previewScene.remove(chassisGroup)
+    scene.remove(chassisGroup)
   }
-  wheelPreviewMeshes.forEach((mesh) => previewScene.remove(mesh))
-  chassisGroup = new Group()
-  previewScene.add(chassisGroup)
+  wheelPreviewMeshes.forEach((mesh) => scene.remove(mesh))
+  const group = new Group()
+  chassisGroup = group
+  scene.add(group)
 
   const clone = cloneNodeForPreview(selectedNode.value)
   if (clone) {
     clone.position.set(0, 0, 0)
     clone.rotation.set(0, 0, 0)
-    chassisGroup.add(clone)
+    group.add(clone)
     previewModelGroup = clone
   } else {
     previewModelGroup = null
@@ -363,7 +365,7 @@ function rebuildModel() {
   const bounds = previewModelGroup ? setBoundingBoxFromObject(previewModelGroup, tempBox.makeEmpty()) : null
   const size = bounds && !bounds.isEmpty() ? bounds.getSize(tempSize) : new Vector3(2, 1, 4)
   const center = bounds && !bounds.isEmpty() ? bounds.getCenter(new Vector3()) : new Vector3(0, size.y * 0.5, 0)
-  chassisGroup.position.set(0, 0, 0)
+  group.position.set(0, 0, 0)
 
   if (camera) {
     const distance = Math.max(size.x, size.y, size.z) * 1.6
@@ -374,16 +376,17 @@ function rebuildModel() {
 
 function rebuildHandles() {
   if (!chassisGroup) return
-  connectionPointMeshes.forEach((mesh) => chassisGroup.remove(mesh))
+  const group = chassisGroup
+  connectionPointMeshes.forEach((mesh) => group.remove(mesh))
   wheelPreviewMeshes.forEach((mesh) => previewScene?.remove(mesh))
-  if (frontGroup) chassisGroup.remove(frontGroup)
-  if (rearGroup) chassisGroup.remove(rearGroup)
+  if (frontGroup) group.remove(frontGroup)
+  if (rearGroup) group.remove(rearGroup)
   connectionPointMeshes = []
   wheelPreviewMeshes = []
 
   frontGroup = new Group()
   rearGroup = new Group()
-  chassisGroup.add(frontGroup, rearGroup)
+  group.add(frontGroup, rearGroup)
 
   const sphereGeo = new SphereGeometry(0.08, 14, 10)
   const frontColor = new Color('#4cc9f0')
@@ -672,6 +675,7 @@ async function ensurePreviewPhysicsBridgeReady(): Promise<PhysicsBridge> {
 
 async function rebuildPhysics() {
   if (!chassisGroup) return
+  const group = chassisGroup
   const requestId = ++physicsSceneRequestId
   const bridge = await ensurePreviewPhysicsBridgeReady().catch((error) => {
     loadError.value = error instanceof Error ? error.message : 'Failed to initialize physics preview.'
@@ -689,19 +693,19 @@ async function rebuildPhysics() {
   chassisPreviewBaseY = baseY
 
   if (chassisBodyMesh) {
-    chassisGroup.remove(chassisBodyMesh)
+    group.remove(chassisBodyMesh)
   }
   chassisBodyMesh = buildChassisVisualMesh(
     collider,
     new MeshStandardMaterial({ color: '#4c7dff', transparent: true, opacity: 0.16, roughness: 0.6, metalness: 0 }),
   )
   if (chassisBodyMesh) {
-    chassisGroup.add(chassisBodyMesh)
+    group.add(chassisBodyMesh)
   }
 
-  chassisGroup.position.set(0, baseY, 0)
-  chassisGroup.quaternion.identity()
-  chassisGroup.updateMatrixWorld(true)
+  group.position.set(0, baseY, 0)
+  group.quaternion.identity()
+  group.updateMatrixWorld(true)
   updateWheelPreviewMeshesFromRestPose(baseY)
 
   try {
@@ -797,9 +801,10 @@ function buildPreviewPhysicsSceneAsset(collider: ChassisColliderInfo, baseY: num
 
 function updateWheelPreviewMeshesFromRestPose(baseY: number) {
   if (!chassisGroup) return
-  chassisGroup.position.set(0, baseY, 0)
-  chassisGroup.quaternion.identity()
-  chassisGroup.updateMatrixWorld(true)
+  const group = chassisGroup
+  group.position.set(0, baseY, 0)
+  group.quaternion.identity()
+  group.updateMatrixWorld(true)
   wheelEntries.value.forEach((wheel, index) => {
     const wheelMesh = wheelPreviewMeshes[index]
     if (!wheelMesh) return
@@ -815,7 +820,7 @@ function updateWheelPreviewMeshesFromRestPose(baseY: number) {
       wheel.chassisConnectionPointLocal.z,
     ).addScaledVector(tempWheelDirection, wheel.suspensionRestLength)
     tempWheelWorldPosition.copy(tempWheelLocalPosition)
-    chassisGroup.localToWorld(tempWheelWorldPosition)
+    group.localToWorld(tempWheelWorldPosition)
     wheelMesh.position.copy(tempWheelWorldPosition)
     wheelMesh.quaternion.identity()
   })
@@ -1136,12 +1141,15 @@ function buildChassisVisualMesh(collider: ChassisColliderInfo, material: MeshSta
 
 function startRenderLoop() {
   if (!renderer || !previewScene || !camera) return
+  const activeRenderer = renderer
+  const scene = previewScene
+  const activeCamera = camera
   const clock = new Clock()
   const renderLoop = () => {
     animationFrame = requestAnimationFrame(renderLoop)
     queuePreviewPhysicsStep(clock.getDelta() * 1000)
     orbitControls?.update()
-    renderer?.render(previewScene, camera)
+    activeRenderer.render(scene, activeCamera)
   }
   renderLoop()
 }

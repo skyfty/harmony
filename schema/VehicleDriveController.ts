@@ -179,24 +179,6 @@ type VehicleDriveDebugPayload = Record<string, unknown>
 
 const isWeChatMiniProgram = Boolean((globalThis as typeof globalThis & { wx?: { getSystemInfoSync?: () => unknown } }).wx
   && typeof (globalThis as typeof globalThis & { wx?: { getSystemInfoSync?: () => unknown } }).wx?.getSystemInfoSync === 'function')
-
-function formatVehicleDriveDebugValue(value: unknown): unknown {
-  if (typeof value === 'number') {
-    return Number.isFinite(value) ? Number(value.toFixed(3)) : String(value)
-  }
-  if (Array.isArray(value)) {
-    return value.map(item => formatVehicleDriveDebugValue(item))
-  }
-  if (value && typeof value === 'object') {
-    const entries = Object.entries(value as Record<string, unknown>)
-    return Object.fromEntries(entries.map(([key, entryValue]) => [key, formatVehicleDriveDebugValue(entryValue)]))
-  }
-  return value
-}
-
-function formatVehicleDriveDebugPayload(payload: VehicleDriveDebugPayload): string {
-  return JSON.stringify(formatVehicleDriveDebugValue(payload))
-}
 // 车辆引擎最大推力
 // WeChat mini-program: lower acceleration to reduce high-speed hitching/jerk.
 const VEHICLE_ENGINE_FORCE = 320
@@ -494,7 +476,7 @@ export class VehicleDriveController {
     this.smoothStopDebugLastSampleAt = 0
   }
 
-  clearSmoothStop(reason = 'unspecified', payload: VehicleDriveDebugPayload = {}): void {
+  clearSmoothStop(_reason = 'unspecified', _payload: VehicleDriveDebugPayload = {}): void {
     this.smoothStopState.active = false
     this.smoothStopState.damping = VEHICLE_SMOOTH_STOP_DEFAULT_DAMPING
     this.smoothStopState.maxDamping = VEHICLE_SMOOTH_STOP_MAX_DAMPING
@@ -1117,7 +1099,6 @@ export class VehicleDriveController {
         let damping = VEHICLE_COASTING_DAMPING
         let blend = 0
         let targetDamping = damping
-        let releaseBrakeForce = 0
         if (smoothStop.active) {
           const startSpeedSq = Math.max(1e-4, smoothStop.initialSpeedSq)
           const progress = startSpeedSq > 0 ? 1 - Math.min(1, speedSq / startSpeedSq) : 1
@@ -1125,7 +1106,6 @@ export class VehicleDriveController {
           blend = Math.max(smoothStop.minBlend, Math.min(1, eased))
           targetDamping = Math.min(smoothStop.damping, smoothStop.maxDamping)
           damping = THREE.MathUtils.lerp(VEHICLE_COASTING_DAMPING, targetDamping, blend)
-          releaseBrakeForce = VEHICLE_BRAKE_FORCE * VEHICLE_RELEASE_SMOOTH_STOP_BRAKE_RATIO * blend
         }
         const clampedDamping = Math.min(0.95, Math.max(0, damping))
         const factor = isWeChatMiniProgram

@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 
 type BodyLike = {
-	type: number
+	type?: number
 	allowSleep?: boolean
 	sleepSpeedLimit?: number
 	sleepTimeLimit?: number

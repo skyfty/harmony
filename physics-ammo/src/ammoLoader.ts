@@ -1,3 +1,5 @@
+/// <reference path="./ammojs3.d.ts" />
+
 import wasmUrl from 'ammojs3/dist/ammo.wasm.wasm?url'
 
 export type AmmoModuleFactory<TModule> = () => Promise<TModule>

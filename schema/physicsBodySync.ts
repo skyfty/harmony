@@ -21,6 +21,7 @@ export type PhysicsBodyLike = {
   quaternion: PhysicsBodyQuaternionLike
   velocity: PhysicsBodyVec3Like
   angularVelocity: PhysicsBodyVec3Like
+  sleep?: () => unknown
 }
 
 export type PhysicsOrientationAdjustment = {
