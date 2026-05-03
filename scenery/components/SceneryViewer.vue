@@ -2765,8 +2765,10 @@ const vehicleDriveController = new VehicleDriveController(
     onResolveBehaviorToken: (token, resolution) => resolveBehaviorToken(token, resolution),
 
     // Use one shared follow-camera tuning profile across platforms.
+    followCameraDistanceScale: () => 1.5,
     followCameraVelocityLerpSpeed: () => 0,
     followCameraTuning: () => ({
+      distanceMax: 16,
       positionLerpSpeed: 0,
       targetLerpSpeed: 0,
       headingLerpSpeed: 0,
