@@ -37,6 +37,19 @@ const pollingInterval =
     ? parsedPollingInterval
     : 300;
 
+function resolveAssetFileName(assetInfo: { name?: string }): string | undefined {
+  if (!isMp) {
+    return undefined;
+  }
+
+  const assetName = assetInfo.name ?? '';
+  if (/ammo\.wasm(?:\.[a-z0-9]+)?\.wasm$/i.test(assetName)) {
+    return 'pages/physics/wasms/[name]-[hash][extname]';
+  }
+
+  return undefined;
+}
+
 function rewriteWorkerWasmPaths() {
   const rewriteSource = (fileName: string, source: string) => {
     if (!fileName.startsWith('workers/') || !source.includes('setWASMInstantiateInputMapper')) {
@@ -113,6 +126,13 @@ export default {
     },
     build: {
       target: buildTarget,
+      rollupOptions: {
+        output: {
+          assetFileNames(assetInfo) {
+            return resolveAssetFileName(assetInfo) ?? 'assets/[name].[hash][extname]';
+          },
+        },
+      },
     },
     resolve: {
       alias: {

@@ -5966,6 +5966,10 @@ async function loadSceneryPhysicsBridgeScene(document: SceneJsonExportDocument |
     return;
   }
   const asset = buildPhysicsSceneAsset(document);
+  if (asset.shapes.length === 0 && asset.bodies.length === 0 && asset.vehicles.length === 0) {
+    await disposeSceneryPhysicsBridgeScene();
+    return;
+  }
   try {
     const bridge = await ensureSceneryPhysicsBridgeReady();
     await bridge.loadScene(asset);
@@ -12448,7 +12452,6 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   if (!renderContext) {
     throw new Error('Render context missing');
   }
-  await ensureSceneryPhysicsBridgeReady();
   const { scene, renderer, camera, controls } = renderContext;
   activeCameraWatchTween = null;
   const { canvas } = result;

@@ -35,6 +35,19 @@ const pollingInterval =
     ? parsedPollingInterval
     : 300;
 
+function resolveAssetFileName(assetInfo: { name?: string }): string | undefined {
+  if (!isMp) {
+    return undefined;
+  }
+
+  const assetName = assetInfo.name ?? '';
+  if (/ammo\.wasm(?:\.[a-z0-9]+)?\.wasm$/i.test(assetName)) {
+    return 'pages/physics/wasms/[name]-[hash][extname]';
+  }
+
+  return undefined;
+}
+
 export default {
     optimizeDeps: {
       exclude: ['@minisheep/three-platform-adapter'],
@@ -47,6 +60,13 @@ export default {
     },
     build: {
       target: buildTarget,
+      rollupOptions: {
+        output: {
+          assetFileNames(assetInfo) {
+            return resolveAssetFileName(assetInfo) ?? 'assets/[name].[hash][extname]';
+          },
+        },
+      },
     },
     resolve: {
       alias: {
