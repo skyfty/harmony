@@ -19,6 +19,9 @@ import {
 	createAutoTourRuntime,
 	createWaterRuntime,
 	createScenePreviewPerfController,
+	createPhysicsBridgeVehicleInputSyncState,
+	resetPhysicsBridgeVehicleInputSyncState,
+	syncPhysicsBridgeVehicleInput,
 	forEachInstanceWorldMatrix,
 	getInstanceLayoutBindingId,
 	getInstanceLayoutCount,
@@ -54,7 +57,7 @@ import {
 	extractSkycubeZipFaces,
 } from '@schema/index'
 import { buildPhysicsSceneAsset } from '@schema/physicsSceneAsset'
-import { PHYSICS_BODY_TRANSFORM_STRIDE, type PhysicsBridge, type PhysicsSceneAsset, type PhysicsStepFrame } from '@harmony/physics-core'
+import { PHYSICS_BODY_TRANSFORM_STRIDE, type PhysicsBridge, type PhysicsSceneAsset, type PhysicsStepFrame, type PhysicsTransform } from '@harmony/physics-core'
 import { createScenePreviewPhysicsBridge } from '@/physics/createScenePreviewPhysicsBridge'
  
 import {
@@ -2063,10 +2066,7 @@ let physicsBridge: PhysicsBridge | null = null
 let physicsBridgeInitPromise: Promise<PhysicsBridge> | null = null
 let physicsBridgeStepPromise: Promise<void> | null = null
 let physicsBridgeBodySyncPromise: Promise<void> | null = null
-let physicsBridgeVehicleInputPromise: Promise<void> | null = null
-let physicsBridgeLastDrivenVehicleId: number | null = null
-let physicsBridgeLastDrivenNodeId: string | null = null
-let physicsBridgeDriveMotionInputActive = false
+const physicsBridgeVehicleInputSyncState = createPhysicsBridgeVehicleInputSyncState()
 let physicsBridgeSceneLoaded = false
 let physicsBridgeSceneRequestId = 0
 const physicsBridgeBodyIdByNodeId = new Map<string, number>()
@@ -2083,7 +2083,6 @@ const physicsBridgeSyncQuaternionHelper = new THREE.Quaternion()
 const physicsBridgeSyncParentQuaternionHelper = new THREE.Quaternion()
 const physicsBridgeBodySyncPositionHelper = new THREE.Vector3()
 const physicsBridgeBodySyncQuaternionHelper = new THREE.Quaternion()
-const PHYSICS_BRIDGE_VEHICLE_STOP_INPUT_DEADZONE = 0.05
 const physicsEnvironmentEnabled = ref(true)
 const rigidbodyInstances = new Map<string, RigidbodyInstance>()
 type AirWallDebugEntry = {
@@ -7477,14 +7476,6 @@ const vehicleDriveKeyboardMap: Record<string, DriveControlAction> = {
 	Space: 'brake',
 }
 
-function formatVehicleDriveViewDebugPayload(payload: Record<string, unknown>): string {
-	return JSON.stringify(payload)
-}
-
-function logVehicleDriveViewDebug(event: string, payload: Record<string, unknown>): void {
-	console.log(`[ScenePreviewVehicleDrive] ${event} ${formatVehicleDriveViewDebugPayload(payload)}`)
-}
-
 function updateVehicleDriveInputFromFlags(): void {
 	vehicleDriveInput.analogThrottle = 0
 	vehicleDriveInput.analogSteering = 0
@@ -7507,39 +7498,13 @@ function resetVehicleDriveInputs(): void {
 
 function setVehicleDriveControlFlag(action: DriveControlAction, pressed: boolean): void {
 	if (!vehicleDriveState.active) {
-		logVehicleDriveViewDebug('skipSetControlFlag', {
-			action,
-			pressed,
-			reason: 'inactiveDriveState',
-		})
 		return
 	}
 	if (vehicleDriveInputFlags[action] === pressed) {
-		logVehicleDriveViewDebug('skipSetControlFlag', {
-			action,
-			pressed,
-			reason: 'flagAlreadyMatched',
-			flags: { ...vehicleDriveInputFlags },
-		})
 		return
 	}
-	logVehicleDriveViewDebug('setControlFlag', {
-		action,
-		pressed,
-		flagsBefore: { ...vehicleDriveInputFlags },
-	})
 	vehicleDriveController.setControlFlag(action, pressed)
 	updateVehicleDriveInputFromFlags()
-	logVehicleDriveViewDebug('setControlFlagApplied', {
-		action,
-		pressed,
-		flagsAfter: { ...vehicleDriveInputFlags },
-		input: {
-			throttle: vehicleDriveInput.throttle,
-			brake: vehicleDriveInput.brake,
-			steering: vehicleDriveInput.steering,
-		},
-	})
 }
 
 function handleVehicleDriveControlPointer(
@@ -7561,13 +7526,6 @@ function handleVehicleDriveKeyboardInput(event: KeyboardEvent, pressed: boolean)
 	if (!action) {
 		return false
 	}
-	logVehicleDriveViewDebug('keyboardInput', {
-		code: event.code,
-		pressed,
-		action,
-		repeat: event.repeat,
-		target: event.target instanceof Element ? event.target.tagName : String(event.target),
-	})
 	event.preventDefault()
 	setVehicleDriveControlFlag(action, pressed)
 	return true
@@ -8827,14 +8785,6 @@ function handleWindowBlur() {
 	if (!vehicleDriveState.active) {
 		return
 	}
-	logVehicleDriveViewDebug('windowBlur', {
-		flags: { ...vehicleDriveInputFlags },
-		input: {
-			throttle: vehicleDriveInput.throttle,
-			brake: vehicleDriveInput.brake,
-			steering: vehicleDriveInput.steering,
-		},
-	})
 }
 
 function handleKeyDown(event: KeyboardEvent) {
@@ -8875,12 +8825,6 @@ function handleKeyDown(event: KeyboardEvent) {
 }
 
 function handleKeyUp(event: KeyboardEvent) {
-	logVehicleDriveViewDebug('windowKeyUp', {
-		code: event.code,
-		repeat: event.repeat,
-		driveActive: vehicleDriveState.active,
-		target: event.target instanceof Element ? event.target.tagName : String(event.target),
-	})
 	if (sceneSwitching.value) {
 		return
 	}
@@ -10662,7 +10606,7 @@ function syncScenePreviewPhysicsBridgeBodyTransforms(): void {
 
 function resolveScenePreviewPhysicsBridgeVehicleStopTransform(
 	nodeId: string,
-): { position: Vec3Tuple; rotation: QuatTuple } | null {
+): PhysicsTransform | null {
 	const frameState = physicsBridgeFrameBodiesByNodeId.get(nodeId)
 	if (frameState) {
 		return {
@@ -10686,7 +10630,9 @@ function resolveScenePreviewPhysicsBridgeVehicleStopTransform(
 	const node = resolveNodeById(nodeId)
 	const component = resolvePhysicsRigidbodyComponent(node)
 	const object = node
-		? resolveRigidbodyBindingObject(component, nodeObjectMap.get(nodeId) ?? null)
+		? component
+			? resolveRigidbodyBindingObject(component, nodeObjectMap.get(nodeId) ?? null)
+			: nodeObjectMap.get(nodeId) ?? null
 		: null
 	if (!object) {
 		return null
@@ -10709,128 +10655,37 @@ function resolveScenePreviewPhysicsBridgeVehicleStopTransform(
 	}
 }
 
-async function stopScenePreviewPhysicsBridgeVehicleImmediately(
-	bridge: PhysicsBridge,
-	nodeId: string,
-): Promise<void> {
-	const bodyId = physicsBridgeBodyIdByNodeId.get(nodeId)
-	if (typeof bodyId !== 'number') {
-		return
-	}
-	const transform = resolveScenePreviewPhysicsBridgeVehicleStopTransform(nodeId)
-	if (!transform) {
-		return
-	}
+function resetScenePreviewPhysicsBridgeVehicleLocalState(nodeId: string, transform: PhysicsTransform): void {
 	const instance = vehicleInstances.get(nodeId)
 	const chassisBody = instance?.vehicle.chassisBody ?? null
-	if (chassisBody) {
-		chassisBody.velocity.set(0, 0, 0)
-		chassisBody.angularVelocity.set(0, 0, 0)
-		if (instance) {
-			instance.lastBridgeFramePosition = new THREE.Vector3(...transform.position)
-			instance.hasBridgeFrameSample = false
-			instance.lastChassisPosition.set(...transform.position)
-			instance.hasChassisPositionSample = false
-		}
+	if (!chassisBody) {
+		return
 	}
-	await bridge.setBodyTransform({
-		bodyId,
-		transform,
-		resetVelocity: true,
-	})
+	chassisBody.velocity.set(0, 0, 0)
+	chassisBody.angularVelocity.set(0, 0, 0)
+	instance.lastBridgeFramePosition = new THREE.Vector3(...transform.position)
+	instance.hasBridgeFrameSample = false
+	instance.lastChassisPosition.set(...transform.position)
+	instance.hasChassisPositionSample = false
 }
 
 function syncScenePreviewPhysicsBridgeVehicleInput(): void {
-	if (
-		!physicsBridge
-		|| !physicsBridgeSceneLoaded
-		|| physicsBridgeVehicleInputPromise
-	) {
-		return
-	}
-	const activeNodeId = vehicleDriveState.active ? vehicleDriveState.nodeId : null
-	if (!activeNodeId) {
-		if (typeof physicsBridgeLastDrivenVehicleId !== 'number') {
-			physicsBridgeLastDrivenNodeId = null
-			physicsBridgeDriveMotionInputActive = false
-			return
-		}
-		const bridge = physicsBridge
-		const lastDrivenNodeId = physicsBridgeLastDrivenNodeId
-		const inputPromise = bridge.setVehicleInput({
-			vehicleId: physicsBridgeLastDrivenVehicleId,
-			steering: 0,
-			throttle: 0,
-			brake: 1,
-		})
-		const stopPromise = lastDrivenNodeId
-			? stopScenePreviewPhysicsBridgeVehicleImmediately(bridge, lastDrivenNodeId)
-			: Promise.resolve()
-		physicsBridgeVehicleInputPromise = Promise.allSettled([inputPromise, stopPromise])
-			.then((results) => {
-				results.forEach((result) => {
-					if (result.status === 'rejected') {
-						console.warn('[ScenePreview] Failed to clear physics bridge vehicle input', result.reason)
-					}
-				})
-			})
-			.then(() => undefined)
-			.finally(() => {
-				physicsBridgeLastDrivenVehicleId = null
-				physicsBridgeLastDrivenNodeId = null
-				physicsBridgeDriveMotionInputActive = false
-				physicsBridgeVehicleInputPromise = null
-			})
-		return
-	}
-	const vehicleId = physicsBridgeVehicleIdByNodeId.get(activeNodeId)
-	if (typeof vehicleId !== 'number') {
-		return
-	}
-	const bridge = physicsBridge
-	if (typeof physicsBridgeLastDrivenVehicleId === 'number' && physicsBridgeLastDrivenVehicleId !== vehicleId) {
-		const lastDrivenNodeId = physicsBridgeLastDrivenNodeId
-		const inputPromise = bridge.setVehicleInput({
-			vehicleId: physicsBridgeLastDrivenVehicleId,
-			steering: 0,
-			throttle: 0,
-			brake: 1,
-		})
-		const stopPromise = lastDrivenNodeId
-			? stopScenePreviewPhysicsBridgeVehicleImmediately(bridge, lastDrivenNodeId)
-			: Promise.resolve()
-		void Promise.allSettled([inputPromise, stopPromise])
-		physicsBridgeDriveMotionInputActive = false
-	}
-	const motionInputActive =
-		Math.abs(vehicleDriveInput.throttle) > PHYSICS_BRIDGE_VEHICLE_STOP_INPUT_DEADZONE
-		|| Math.abs(vehicleDriveInput.brake) > PHYSICS_BRIDGE_VEHICLE_STOP_INPUT_DEADZONE
-	const shouldStopImmediately = physicsBridgeDriveMotionInputActive && !motionInputActive
-	const bridgeBrake = motionInputActive ? vehicleDriveInput.brake : 1
-	physicsBridgeLastDrivenVehicleId = vehicleId
-	physicsBridgeLastDrivenNodeId = activeNodeId
-	physicsBridgeDriveMotionInputActive = motionInputActive
-	const inputPromise = bridge.setVehicleInput({
-		vehicleId,
-		steering: vehicleDriveInput.steering,
-		throttle: vehicleDriveInput.throttle,
-		brake: bridgeBrake,
+	syncPhysicsBridgeVehicleInput({
+		state: physicsBridgeVehicleInputSyncState,
+		bridge: physicsBridge,
+		sceneLoaded: physicsBridgeSceneLoaded,
+		activeNodeId: vehicleDriveState.active ? vehicleDriveState.nodeId : null,
+		vehicleIdByNodeId: physicsBridgeVehicleIdByNodeId,
+		input: {
+			steering: vehicleDriveInput.steering,
+			throttle: vehicleDriveInput.throttle,
+			brake: vehicleDriveInput.brake,
+		},
+		resolveBodyId: (nodeId) => physicsBridgeBodyIdByNodeId.get(nodeId),
+		resolveStopTransform: resolveScenePreviewPhysicsBridgeVehicleStopTransform,
+		resetLocalVehicleState: resetScenePreviewPhysicsBridgeVehicleLocalState,
+		warningPrefix: '[ScenePreview]',
 	})
-	const stopPromise = shouldStopImmediately
-		? stopScenePreviewPhysicsBridgeVehicleImmediately(bridge, activeNodeId)
-		: Promise.resolve()
-	physicsBridgeVehicleInputPromise = Promise.allSettled([inputPromise, stopPromise])
-		.then((results) => {
-			results.forEach((result) => {
-				if (result.status === 'rejected') {
-					console.warn('[ScenePreview] Failed to sync physics bridge vehicle input', result.reason)
-				}
-			})
-		})
-		.then(() => undefined)
-		.finally(() => {
-			physicsBridgeVehicleInputPromise = null
-		})
 }
 
 async function disposeScenePreviewPhysicsBridgeScene(): Promise<void> {
@@ -10839,16 +10694,11 @@ async function disposeScenePreviewPhysicsBridgeScene(): Promise<void> {
 	physicsBridgeNodeIdByBodyId.clear()
 	physicsBridgeVehicleIdByNodeId.clear()
 	physicsBridgeFrameBodiesByNodeId.clear()
-	physicsBridgeLastDrivenVehicleId = null
-	physicsBridgeLastDrivenNodeId = null
-	physicsBridgeDriveMotionInputActive = false
+	resetPhysicsBridgeVehicleInputSyncState(physicsBridgeVehicleInputSyncState)
 	if (!physicsBridge || !physicsBridgeSceneLoaded) {
 		physicsBridgeStepPromise = null
 		physicsBridgeBodySyncPromise = null
-		physicsBridgeVehicleInputPromise = null
-		physicsBridgeLastDrivenVehicleId = null
-		physicsBridgeLastDrivenNodeId = null
-		physicsBridgeDriveMotionInputActive = false
+		resetPhysicsBridgeVehicleInputSyncState(physicsBridgeVehicleInputSyncState)
 		return
 	}
 	try {
@@ -10859,10 +10709,7 @@ async function disposeScenePreviewPhysicsBridgeScene(): Promise<void> {
 		physicsBridgeSceneLoaded = false
 		physicsBridgeStepPromise = null
 		physicsBridgeBodySyncPromise = null
-		physicsBridgeVehicleInputPromise = null
-		physicsBridgeLastDrivenVehicleId = null
-		physicsBridgeLastDrivenNodeId = null
-		physicsBridgeDriveMotionInputActive = false
+		resetPhysicsBridgeVehicleInputSyncState(physicsBridgeVehicleInputSyncState)
 		physicsBridgeFrameBodiesByNodeId.clear()
 	}
 }
@@ -10881,14 +10728,11 @@ async function destroyScenePreviewPhysicsBridge(): Promise<void> {
 		physicsBridgeInitPromise = null
 		physicsBridgeStepPromise = null
 		physicsBridgeBodySyncPromise = null
-		physicsBridgeVehicleInputPromise = null
 		physicsBridgeBodyIdByNodeId.clear()
 		physicsBridgeNodeIdByBodyId.clear()
 		physicsBridgeVehicleIdByNodeId.clear()
 		physicsBridgeFrameBodiesByNodeId.clear()
-		physicsBridgeLastDrivenVehicleId = null
-		physicsBridgeLastDrivenNodeId = null
-		physicsBridgeDriveMotionInputActive = false
+		resetPhysicsBridgeVehicleInputSyncState(physicsBridgeVehicleInputSyncState)
 		physicsBridgeSceneLoaded = false
 	}
 }
@@ -11851,9 +11695,7 @@ function updateRigidbodyDebugHelperTransform(nodeId: string): void {
 		object.updateMatrixWorld(true)
 		object.getWorldPosition(rigidbodyDebugPositionHelper)
 		object.getWorldScale(rigidbodyDebugScaleHelper)
-		if (reparented) {
-			console.log(`[RigidbodyDebugTransform] nodeId=${JSON.stringify(nodeId)} parentNodeId=${JSON.stringify(helper.parentNodeId)} parentObject=${formatDebugObject(object)} worldPosition=${formatDebugVector(rigidbodyDebugPositionHelper)} worldScale=${formatDebugVector(rigidbodyDebugScaleHelper)} reparented=${String(reparented)} visible=${String(helper.group.visible)}`)
-		}
+
 		return
 	}
 	const node = resolveNodeById(nodeId)
@@ -11920,12 +11762,6 @@ function updateRigidbodyDebugHelperTransform(nodeId: string): void {
 	helper.group.updateMatrixWorld(true)
 }
 
-function updateRigidbodyDebugTransforms(): void {
-	if (!isRigidbodyDebugVisible.value || !rigidbodyDebugHelpers.size) {
-		return
-	}
-	rigidbodyDebugHelpers.forEach((_entry, nodeId) => updateRigidbodyDebugHelperTransform(nodeId))
-}
 
 function syncRigidbodyDebugHelpers(): void {
 	if (!isRigidbodyDebugVisible.value) {

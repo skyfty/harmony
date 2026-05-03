@@ -231,6 +231,17 @@ export type {
 export { createScenePreviewPerfController } from './scenePreviewPerf'
 export type { ScenePreviewPerfController, ScenePreviewPerfOptions } from './scenePreviewPerf'
 
+export {
+  PHYSICS_BRIDGE_VEHICLE_STOP_INPUT_DEADZONE,
+  createPhysicsBridgeVehicleInputSyncState,
+  resetPhysicsBridgeVehicleInputSyncState,
+  syncPhysicsBridgeVehicleInput,
+} from './physicsBridgeVehicleInputSync'
+export type {
+  PhysicsBridgeVehicleInputSyncOptions,
+  PhysicsBridgeVehicleInputSyncState,
+} from './physicsBridgeVehicleInputSync'
+
 export * from './instancedBillboardCache'
 
 export { resolveEnabledComponentState } from './componentRuntimeUtils'
