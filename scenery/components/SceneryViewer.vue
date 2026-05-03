@@ -1831,6 +1831,8 @@ let physicsBridgeStepPromise: Promise<void> | null = null;
 let physicsBridgeBodySyncPromise: Promise<void> | null = null;
 let physicsBridgeVehicleInputPromise: Promise<void> | null = null;
 let physicsBridgeLastDrivenVehicleId: number | null = null;
+let physicsBridgeLastDrivenNodeId: string | null = null;
+let physicsBridgeDriveMotionInputActive = false;
 let physicsBridgeSceneLoaded = false;
 let physicsBridgeSceneRequestId = 0;
 const physicsBridgeBodyIdByNodeId = new Map<string, number>();
@@ -1847,6 +1849,7 @@ const physicsBridgeSyncQuaternionHelper = new THREE.Quaternion();
 const physicsBridgeSyncParentQuaternionHelper = new THREE.Quaternion();
 const physicsBridgeBodySyncPositionHelper = new THREE.Vector3();
 const physicsBridgeBodySyncQuaternionHelper = new THREE.Quaternion();
+const PHYSICS_BRIDGE_VEHICLE_STOP_INPUT_DEADZONE = 0.05;
 const physicsEnvironmentEnabled = ref(true);
 const rigidbodyInstances = new Map<string, RigidbodyInstance>();
 let protagonistNodeId: string | null = null;
@@ -6232,6 +6235,88 @@ function syncSceneryPhysicsBridgeBodyTransforms(): void {
     });
 }
 
+function resolveSceneryPhysicsBridgeVehicleStopTransform(
+  nodeId: string,
+): { position: SceneStackVec3Tuple; rotation: SceneStackQuatTuple } | null {
+  const frameState = physicsBridgeFrameBodiesByNodeId.get(nodeId);
+  if (frameState) {
+    return {
+      position: [frameState.position.x, frameState.position.y, frameState.position.z],
+      rotation: [frameState.quaternion.x, frameState.quaternion.y, frameState.quaternion.z, frameState.quaternion.w],
+    };
+  }
+  const instance = vehicleInstances.get(nodeId);
+  const chassisBody = instance?.vehicle.chassisBody ?? null;
+  if (chassisBody) {
+    return {
+      position: [chassisBody.position.x, chassisBody.position.y, chassisBody.position.z],
+      rotation: [
+        chassisBody.quaternion.x,
+        chassisBody.quaternion.y,
+        chassisBody.quaternion.z,
+        chassisBody.quaternion.w,
+      ],
+    };
+  }
+  const node = resolveNodeById(nodeId);
+  const component = resolvePhysicsRigidbodyComponent(node);
+  const object = node
+    ? component
+      ? resolveRigidbodyBindingObject(component, nodeObjectMap.get(nodeId) ?? null)
+      : nodeObjectMap.get(nodeId) ?? null
+    : null;
+  if (!object) {
+    return null;
+  }
+  object.updateMatrixWorld(true);
+  object.getWorldPosition(physicsBridgeBodySyncPositionHelper);
+  object.getWorldQuaternion(physicsBridgeBodySyncQuaternionHelper).normalize();
+  return {
+    position: [
+      physicsBridgeBodySyncPositionHelper.x,
+      physicsBridgeBodySyncPositionHelper.y,
+      physicsBridgeBodySyncPositionHelper.z,
+    ],
+    rotation: [
+      physicsBridgeBodySyncQuaternionHelper.x,
+      physicsBridgeBodySyncQuaternionHelper.y,
+      physicsBridgeBodySyncQuaternionHelper.z,
+      physicsBridgeBodySyncQuaternionHelper.w,
+    ],
+  };
+}
+
+async function stopSceneryPhysicsBridgeVehicleImmediately(
+  bridge: PhysicsBridge,
+  nodeId: string,
+): Promise<void> {
+  const bodyId = physicsBridgeBodyIdByNodeId.get(nodeId);
+  if (typeof bodyId !== 'number') {
+    return;
+  }
+  const transform = resolveSceneryPhysicsBridgeVehicleStopTransform(nodeId);
+  if (!transform) {
+    return;
+  }
+  const instance = vehicleInstances.get(nodeId);
+  const chassisBody = instance?.vehicle.chassisBody ?? null;
+  if (chassisBody) {
+    chassisBody.velocity.set(0, 0, 0);
+    chassisBody.angularVelocity.set(0, 0, 0);
+    if (instance) {
+      instance.lastBridgeFramePosition = new THREE.Vector3(...transform.position);
+      instance.hasBridgeFrameSample = false;
+      instance.lastChassisPosition.set(...transform.position);
+      instance.hasChassisPositionSample = false;
+    }
+  }
+  await bridge.setBodyTransform({
+    bodyId,
+    transform,
+    resetVelocity: true,
+  });
+}
+
 function syncSceneryPhysicsBridgeVehicleInput(): void {
   if (
     !physicsBridge
@@ -6243,20 +6328,34 @@ function syncSceneryPhysicsBridgeVehicleInput(): void {
   const activeNodeId = vehicleDriveActive.value ? vehicleDriveNodeId.value : null;
   if (!activeNodeId) {
     if (typeof physicsBridgeLastDrivenVehicleId !== 'number') {
+      physicsBridgeLastDrivenNodeId = null;
+      physicsBridgeDriveMotionInputActive = false;
       return;
     }
     const bridge = physicsBridge;
-    physicsBridgeVehicleInputPromise = bridge.setVehicleInput({
+    const lastDrivenNodeId = physicsBridgeLastDrivenNodeId;
+    const inputPromise = bridge.setVehicleInput({
       vehicleId: physicsBridgeLastDrivenVehicleId,
       steering: 0,
       throttle: 0,
       brake: 1,
-    })
-      .catch((error) => {
-        console.warn('[SceneViewer] Failed to clear physics bridge vehicle input', error);
+    });
+    const stopPromise = lastDrivenNodeId
+      ? stopSceneryPhysicsBridgeVehicleImmediately(bridge, lastDrivenNodeId)
+      : Promise.resolve();
+    physicsBridgeVehicleInputPromise = Promise.allSettled([inputPromise, stopPromise])
+      .then((results) => {
+        results.forEach((result) => {
+          if (result.status === 'rejected') {
+            console.warn('[SceneViewer] Failed to clear physics bridge vehicle input', result.reason);
+          }
+        });
       })
+      .then(() => undefined)
       .finally(() => {
         physicsBridgeLastDrivenVehicleId = null;
+        physicsBridgeLastDrivenNodeId = null;
+        physicsBridgeDriveMotionInputActive = false;
         physicsBridgeVehicleInputPromise = null;
       });
     return;
@@ -6267,23 +6366,45 @@ function syncSceneryPhysicsBridgeVehicleInput(): void {
   }
   const bridge = physicsBridge;
   if (typeof physicsBridgeLastDrivenVehicleId === 'number' && physicsBridgeLastDrivenVehicleId !== vehicleId) {
-    void bridge.setVehicleInput({
+    const lastDrivenNodeId = physicsBridgeLastDrivenNodeId;
+    const inputPromise = bridge.setVehicleInput({
       vehicleId: physicsBridgeLastDrivenVehicleId,
       steering: 0,
       throttle: 0,
       brake: 1,
-    }).catch(() => {});
+    });
+    const stopPromise = lastDrivenNodeId
+      ? stopSceneryPhysicsBridgeVehicleImmediately(bridge, lastDrivenNodeId)
+      : Promise.resolve();
+    void Promise.allSettled([inputPromise, stopPromise]);
+    physicsBridgeDriveMotionInputActive = false;
   }
+  const motionInputActive =
+    Math.abs(vehicleDriveInput.throttle) > PHYSICS_BRIDGE_VEHICLE_STOP_INPUT_DEADZONE
+    || Math.abs(vehicleDriveInput.brake) > PHYSICS_BRIDGE_VEHICLE_STOP_INPUT_DEADZONE;
+  const shouldStopImmediately = physicsBridgeDriveMotionInputActive && !motionInputActive;
+  const bridgeBrake = motionInputActive ? vehicleDriveInput.brake : 1;
   physicsBridgeLastDrivenVehicleId = vehicleId;
-  physicsBridgeVehicleInputPromise = bridge.setVehicleInput({
+  physicsBridgeLastDrivenNodeId = activeNodeId;
+  physicsBridgeDriveMotionInputActive = motionInputActive;
+  const inputPromise = bridge.setVehicleInput({
     vehicleId,
     steering: vehicleDriveInput.steering,
     throttle: vehicleDriveInput.throttle,
-    brake: vehicleDriveInput.brake,
-  })
-    .catch((error) => {
-      console.warn('[SceneViewer] Failed to sync physics bridge vehicle input', error);
+    brake: bridgeBrake,
+  });
+  const stopPromise = shouldStopImmediately
+    ? stopSceneryPhysicsBridgeVehicleImmediately(bridge, activeNodeId)
+    : Promise.resolve();
+  physicsBridgeVehicleInputPromise = Promise.allSettled([inputPromise, stopPromise])
+    .then((results) => {
+      results.forEach((result) => {
+        if (result.status === 'rejected') {
+          console.warn('[SceneViewer] Failed to sync physics bridge vehicle input', result.reason);
+        }
+      });
     })
+    .then(() => undefined)
     .finally(() => {
       physicsBridgeVehicleInputPromise = null;
     });
@@ -6296,11 +6417,15 @@ async function disposeSceneryPhysicsBridgeScene(): Promise<void> {
   physicsBridgeVehicleIdByNodeId.clear();
   physicsBridgeFrameBodiesByNodeId.clear();
   physicsBridgeLastDrivenVehicleId = null;
+  physicsBridgeLastDrivenNodeId = null;
+  physicsBridgeDriveMotionInputActive = false;
   if (!physicsBridge || !physicsBridgeSceneLoaded) {
     physicsBridgeStepPromise = null;
     physicsBridgeBodySyncPromise = null;
     physicsBridgeVehicleInputPromise = null;
     physicsBridgeLastDrivenVehicleId = null;
+    physicsBridgeLastDrivenNodeId = null;
+    physicsBridgeDriveMotionInputActive = false;
     return;
   }
   try {
@@ -6313,6 +6438,8 @@ async function disposeSceneryPhysicsBridgeScene(): Promise<void> {
     physicsBridgeBodySyncPromise = null;
     physicsBridgeVehicleInputPromise = null;
     physicsBridgeLastDrivenVehicleId = null;
+    physicsBridgeLastDrivenNodeId = null;
+    physicsBridgeDriveMotionInputActive = false;
     physicsBridgeFrameBodiesByNodeId.clear();
   }
 }
@@ -6337,6 +6464,8 @@ async function destroySceneryPhysicsBridge(): Promise<void> {
     physicsBridgeVehicleIdByNodeId.clear();
     physicsBridgeFrameBodiesByNodeId.clear();
     physicsBridgeLastDrivenVehicleId = null;
+    physicsBridgeLastDrivenNodeId = null;
+    physicsBridgeDriveMotionInputActive = false;
     physicsBridgeSceneLoaded = false;
   }
 }
@@ -9217,6 +9346,9 @@ function recomputeVehicleDriveInputs(): void {
   const throttleFromJoystick = clampAxisScalar(joystickInput.throttle);
   const steeringFromJoystick = clampAxisScalar(joystickInput.steering);
   // Keep joystick contribution, then let controller clamp and merge with flags/keyboard.
+  vehicleDriveInput.analogThrottle = throttleFromJoystick;
+  vehicleDriveInput.analogSteering = -steeringFromJoystick;
+  vehicleDriveInput.analogBrake = 0;
   vehicleDriveInput.throttle = throttleFromJoystick;
   vehicleDriveInput.steering = -steeringFromJoystick;
   vehicleDriveInput.brake = vehicleDriveInputFlags.brake ? 1 : 0;

@@ -576,9 +576,9 @@ export function resolveWallShape(params: {
       const rawThickness = Number((segment as any)?.thickness)
       const visibleHeight = Number.isFinite(rawHeight) ? Math.max(eps, rawHeight) : 3
       const height = forbiddenCollider ? Math.max(visibleHeight, WALL_FORBIDDEN_COLLIDER_HEIGHT) : visibleHeight
-      const thickness = Number.isFinite(rawWidth)
-        ? Math.max(eps, rawWidth)
-        : (Number.isFinite(rawThickness) ? Math.max(eps, rawThickness) : 0.2)
+      const thickness = Number.isFinite(rawThickness)
+        ? Math.max(eps, rawThickness)
+        : (Number.isFinite(rawWidth) ? Math.max(eps, rawWidth) : 0.2)
 
       const hx = Math.max(eps, length * 0.5)
       const hy = Math.max(eps, height * 0.5)

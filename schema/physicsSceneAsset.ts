@@ -610,19 +610,21 @@ export function buildPhysicsSceneAsset(document: SceneJsonExportDocument): Physi
         rigidbodyState.props as Partial<RigidbodyComponentProps> | null | undefined,
       )
       const materialId = ensureMaterialId(rigidbodyProps)
-      const primaryShapeInstances = buildRigidbodyShapeInstances(
-        node,
-        worldScaleHelper,
-        worldPositionHelper,
-        worldQuaternionHelper,
-        nextShapeId,
-        asset.shapes,
-      )
       const floorShapeInstances = buildFloorShapeInstances(node, worldScaleHelper, nextShapeId, asset.shapes, floorShapeCache)
       const wallShapeInstances = buildWallShapeInstances(node, nextShapeId, asset.shapes, wallShapeCache)
       const modelCollisionShapeInstances = buildModelCollisionShapeInstances(node, worldScaleHelper, nextShapeId, asset.shapes)
       const roadShapeInstances = buildRoadShapeInstances(node, groundNode, nextShapeId, asset.shapes)
       const boundaryWallInstances = buildBoundaryWallShapeInstances(node, nextShapeId, asset.shapes)
+      const primaryShapeInstances = wallShapeInstances.length > 0
+        ? []
+        : buildRigidbodyShapeInstances(
+          node,
+          worldScaleHelper,
+          worldPositionHelper,
+          worldQuaternionHelper,
+          nextShapeId,
+          asset.shapes,
+        )
       const shapeInstances = [
         ...primaryShapeInstances,
         ...floorShapeInstances,

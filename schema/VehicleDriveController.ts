@@ -36,6 +36,9 @@ export type VehicleDriveInputState = {
   throttle: number
   steering: number
   brake: number
+  analogThrottle?: number
+  analogSteering?: number
+  analogBrake?: number
 }
 
 export type VehicleDriveRuntimeState = {
@@ -172,8 +175,28 @@ export type VehicleDriveCameraContext = {
   desiredOrbitTarget?: THREE.Vector3
 } & CameraFollowContext
 
+type VehicleDriveDebugPayload = Record<string, unknown>
+
 const isWeChatMiniProgram = Boolean((globalThis as typeof globalThis & { wx?: { getSystemInfoSync?: () => unknown } }).wx
   && typeof (globalThis as typeof globalThis & { wx?: { getSystemInfoSync?: () => unknown } }).wx?.getSystemInfoSync === 'function')
+
+function formatVehicleDriveDebugValue(value: unknown): unknown {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? Number(value.toFixed(3)) : String(value)
+  }
+  if (Array.isArray(value)) {
+    return value.map(item => formatVehicleDriveDebugValue(item))
+  }
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+    return Object.fromEntries(entries.map(([key, entryValue]) => [key, formatVehicleDriveDebugValue(entryValue)]))
+  }
+  return value
+}
+
+function formatVehicleDriveDebugPayload(payload: VehicleDriveDebugPayload): string {
+  return JSON.stringify(formatVehicleDriveDebugValue(payload))
+}
 // 车辆引擎最大推力
 // WeChat mini-program: lower acceleration to reduce high-speed hitching/jerk.
 const VEHICLE_ENGINE_FORCE = 320
@@ -191,10 +214,10 @@ const VEHICLE_SPEED_GOVERNOR_BRAKE_MAX_RATIO = 0.18
 const VEHICLE_COASTING_DAMPING = 0.04
 // 平滑停车默认阻尼
 const VEHICLE_SMOOTH_STOP_DEFAULT_DAMPING = 0.18
-// 松开驱动输入后的柔刹阻尼；需高于 transform coasting 阈值才会明显收尾
-const VEHICLE_RELEASE_SMOOTH_STOP_DAMPING = 0.32
 // 平滑停车最大阻尼
 const VEHICLE_SMOOTH_STOP_MAX_DAMPING = 0.45
+// 松开驱动输入时叠加的轻刹强度比例
+const VEHICLE_RELEASE_SMOOTH_STOP_BRAKE_RATIO = 0.22
 // 平滑停车速度阈值
 const VEHICLE_SMOOTH_STOP_SPEED_THRESHOLD = 0.14
 const VEHICLE_SMOOTH_STOP_SPEED_THRESHOLD_SQ = VEHICLE_SMOOTH_STOP_SPEED_THRESHOLD * VEHICLE_SMOOTH_STOP_SPEED_THRESHOLD
@@ -203,8 +226,6 @@ const VEHICLE_SMOOTH_STOP_FINAL_SPEED = 0.05
 const VEHICLE_SMOOTH_STOP_FINAL_SPEED_SQ = VEHICLE_SMOOTH_STOP_FINAL_SPEED * VEHICLE_SMOOTH_STOP_FINAL_SPEED
 // 平滑停车最小混合比
 const VEHICLE_SMOOTH_STOP_MIN_BLEND = 0.25
-// 释放驱动输入后触发柔刹的最小速度
-const VEHICLE_SMOOTH_STOP_RELEASE_TRIGGER_SPEED = 0.18
 // 释放驱动输入的节流死区
 const VEHICLE_SMOOTH_STOP_INPUT_DEADZONE = 0.05
 // 最大转向角（弧度）
@@ -370,10 +391,14 @@ export class VehicleDriveController {
   private readonly smoothStopState = {
     active: false,
     damping: VEHICLE_SMOOTH_STOP_DEFAULT_DAMPING,
+    maxDamping: VEHICLE_SMOOTH_STOP_MAX_DAMPING,
+    minBlend: VEHICLE_SMOOTH_STOP_MIN_BLEND,
     stopSpeedSq: VEHICLE_SMOOTH_STOP_SPEED_THRESHOLD_SQ,
+    finalSpeedSq: VEHICLE_SMOOTH_STOP_FINAL_SPEED_SQ,
     initialSpeedSq: VEHICLE_SMOOTH_STOP_SPEED_THRESHOLD_SQ,
   }
   private suppressReleaseSmoothStop = false
+  private smoothStopDebugLastSampleAt = 0
 
   constructor(deps: VehicleDriveControllerDeps, bindings: VehicleDriveControllerBindings) {
     this.deps = deps
@@ -444,27 +469,61 @@ export class VehicleDriveController {
     this.bindings.uiOverride.value = mode
   }
 
-  requestSmoothStop(options: { damping?: number; stopSpeed?: number; initialSpeed?: number } = {}): void {
+  private debugLog(event: string, payload: VehicleDriveDebugPayload): void {
+    console.log(`[VehicleDriveController] ${event} ${formatVehicleDriveDebugPayload(payload)}`)
+  }
+
+  requestSmoothStop(options: { damping?: number; stopSpeed?: number; finalSpeed?: number; initialSpeed?: number; minBlend?: number; maxDamping?: number } = {}): void {
     if (!this.state.active) {
       return
     }
     const damping = typeof options.damping === 'number' ? options.damping : VEHICLE_SMOOTH_STOP_DEFAULT_DAMPING
     const stopSpeed = typeof options.stopSpeed === 'number' ? options.stopSpeed : VEHICLE_SMOOTH_STOP_SPEED_THRESHOLD
+    const finalSpeed = typeof options.finalSpeed === 'number' ? options.finalSpeed : VEHICLE_SMOOTH_STOP_FINAL_SPEED
     const initialSpeed = typeof options.initialSpeed === 'number' && Number.isFinite(options.initialSpeed)
       ? Math.max(options.initialSpeed, stopSpeed)
       : Math.sqrt(this.smoothStopState.stopSpeedSq)
+    const maxDamping = typeof options.maxDamping === 'number' ? options.maxDamping : VEHICLE_SMOOTH_STOP_MAX_DAMPING
+    const minBlend = typeof options.minBlend === 'number' ? options.minBlend : VEHICLE_SMOOTH_STOP_MIN_BLEND
     this.smoothStopState.active = true
     this.smoothStopState.damping = Math.max(
       VEHICLE_COASTING_DAMPING,
-      Math.min(VEHICLE_SMOOTH_STOP_MAX_DAMPING, damping),
+      Math.min(maxDamping, damping),
     )
+    this.smoothStopState.maxDamping = Math.max(VEHICLE_COASTING_DAMPING, maxDamping)
+    this.smoothStopState.minBlend = THREE.MathUtils.clamp(minBlend, 0, 1)
     this.smoothStopState.stopSpeedSq = Math.max(1e-4, stopSpeed * stopSpeed)
+    this.smoothStopState.finalSpeedSq = Math.max(1e-4, finalSpeed * finalSpeed)
     this.smoothStopState.initialSpeedSq = Math.max(this.smoothStopState.stopSpeedSq, initialSpeed * initialSpeed, 1e-4)
+    this.smoothStopDebugLastSampleAt = 0
+    this.debugLog('requestSmoothStop', {
+      nodeId: this.state.nodeId,
+      damping: this.smoothStopState.damping,
+      maxDamping: this.smoothStopState.maxDamping,
+      minBlend: this.smoothStopState.minBlend,
+      stopSpeed: Math.sqrt(this.smoothStopState.stopSpeedSq),
+      finalSpeed: Math.sqrt(this.smoothStopState.finalSpeedSq),
+      initialSpeed: Math.sqrt(this.smoothStopState.initialSpeedSq),
+    })
   }
 
-  clearSmoothStop(): void {
+  clearSmoothStop(reason = 'unspecified', payload: VehicleDriveDebugPayload = {}): void {
+    const wasActive = this.smoothStopState.active
     this.smoothStopState.active = false
+    this.smoothStopState.damping = VEHICLE_SMOOTH_STOP_DEFAULT_DAMPING
+    this.smoothStopState.maxDamping = VEHICLE_SMOOTH_STOP_MAX_DAMPING
+    this.smoothStopState.minBlend = VEHICLE_SMOOTH_STOP_MIN_BLEND
+    this.smoothStopState.stopSpeedSq = VEHICLE_SMOOTH_STOP_SPEED_THRESHOLD_SQ
+    this.smoothStopState.finalSpeedSq = VEHICLE_SMOOTH_STOP_FINAL_SPEED_SQ
     this.smoothStopState.initialSpeedSq = VEHICLE_SMOOTH_STOP_SPEED_THRESHOLD_SQ
+    this.smoothStopDebugLastSampleAt = 0
+    if (wasActive) {
+      this.debugLog('clearSmoothStop', {
+        nodeId: this.state.nodeId,
+        reason,
+        ...payload,
+      })
+    }
   }
 
   private resetSpeedGovernor(): void {
@@ -472,6 +531,36 @@ export class VehicleDriveController {
     this.speedGovernorBrakeAssist = 0
     this.speedGovernorSmoothedForwardSpeedAbs = 0
     this.speedGovernorOverHardCap = false
+  }
+
+  private stopVehicleBodyImmediately(vehicle: VehicleDriveVehicle, wheelCount: number, chassisBody: VehicleDriveChassisBody | null): void {
+    if (!chassisBody) {
+      return
+    }
+    try {
+      chassisBody.wakeUp?.()
+    } catch {
+      // best-effort
+    }
+    try {
+      for (let index = 0; index < wheelCount; index += 1) {
+        vehicle.applyEngineForce(0, index)
+        vehicle.setSteeringValue(0, index)
+        vehicle.setBrake(VEHICLE_BRAKE_FORCE, index)
+      }
+    } catch {
+      // best-effort
+    }
+    try {
+      chassisBody.allowSleep = true
+      chassisBody.sleepSpeedLimit = Math.max(0.05, chassisBody.sleepSpeedLimit ?? 0)
+      chassisBody.sleepTimeLimit = Math.max(0.05, chassisBody.sleepTimeLimit ?? 0)
+      chassisBody.velocity.set(0, 0, 0)
+      chassisBody.angularVelocity.set(0, 0, 0)
+      chassisBody.sleep?.()
+    } catch {
+      // best-effort
+    }
   }
 
   resetInputs(): void {
@@ -488,6 +577,9 @@ export class VehicleDriveController {
     input.throttle = 0
     input.brake = 0
     input.steering = 0
+    input.analogThrottle = 0
+    input.analogSteering = 0
+    input.analogBrake = 0
     this.clearSmoothStop()
     this.suppressReleaseSmoothStop = true
     this.recomputeInputs()
@@ -496,9 +588,17 @@ export class VehicleDriveController {
   private maybeTriggerReleaseSmoothStop(previousThrottle: number, previousBrake: number): void {
     if (this.suppressReleaseSmoothStop) {
       this.suppressReleaseSmoothStop = false
+      this.debugLog('skipReleaseSmoothStop', {
+        nodeId: this.state.nodeId,
+        reason: 'suppressedAfterReset',
+      })
       return
     }
     if (!this.state.active) {
+      this.debugLog('skipReleaseSmoothStop', {
+        nodeId: this.state.nodeId,
+        reason: 'inactiveDriveState',
+      })
       return
     }
     const nextThrottle = Math.abs(this.input.throttle)
@@ -508,15 +608,48 @@ export class VehicleDriveController {
     const wasBraking = Math.abs(previousBrake) > VEHICLE_SMOOTH_STOP_INPUT_DEADZONE
     const isBraking = nextBrake > VEHICLE_SMOOTH_STOP_INPUT_DEADZONE
     if (!wasDriving || isDriving || wasBraking || isBraking) {
+      this.debugLog('skipReleaseSmoothStop', {
+        nodeId: this.state.nodeId,
+        reason: 'releaseConditionsNotMet',
+        previousThrottle,
+        previousBrake,
+        nextThrottle,
+        nextBrake,
+        wasDriving,
+        isDriving,
+        wasBraking,
+        isBraking,
+      })
       return
     }
     const currentSpeed = this.getCurrentSpeed()
-    if (currentSpeed <= VEHICLE_SMOOTH_STOP_RELEASE_TRIGGER_SPEED) {
+    this.debugLog('triggerReleaseImmediateStop', {
+      nodeId: this.state.nodeId,
+      previousThrottle,
+      previousBrake,
+      currentSpeed,
+    })
+    const nodeId = this.state.nodeId
+    const instance = nodeId ? this.deps.vehicleInstances.get(nodeId) ?? null : null
+    const vehicle = instance?.vehicle ?? null
+    const chassisBody = vehicle?.chassisBody ?? null
+    if (vehicle && chassisBody) {
+      const wheelCount = instance?.wheelCount ?? vehicle.wheelInfos.length
+      this.stopVehicleBodyImmediately(vehicle, wheelCount, chassisBody)
+      this.transformDriveState.speed = 0
+      this.transformDriveState.velocityWorld.set(0, 0, 0)
+      this.transformDriveState.yaw = this.transformDriveState.yaw
+      this.clearSmoothStop('releaseImmediateStop', {
+        currentSpeed,
+      })
       return
     }
-    this.requestSmoothStop({
-      damping: VEHICLE_RELEASE_SMOOTH_STOP_DAMPING,
-      initialSpeed: currentSpeed,
+
+    this.transformDriveState.speed = 0
+    this.transformDriveState.velocityWorld.set(0, 0, 0)
+    this.clearSmoothStop('releaseImmediateStop', {
+      currentSpeed,
+      path: 'transform',
     })
   }
 
@@ -543,9 +676,9 @@ export class VehicleDriveController {
     const previousBrake = this.input.brake
     const { input, inputFlags, bindings } = this
     // Start with any analog inputs (e.g., joystick) then override with digital flags/keyboard when present.
-    let throttle = clampAxisScalar(input.throttle)
-    let steering = clampAxisScalar(input.steering)
-    let brake = clampAxisScalar(input.brake)
+    let throttle = clampAxisScalar(typeof input.analogThrottle === 'number' ? input.analogThrottle : input.throttle)
+    let steering = clampAxisScalar(typeof input.analogSteering === 'number' ? input.analogSteering : input.steering)
+    let brake = clampAxisScalar(typeof input.analogBrake === 'number' ? input.analogBrake : input.brake)
 
     if (inputFlags.forward && !inputFlags.backward) {
       throttle = 1
@@ -568,7 +701,11 @@ export class VehicleDriveController {
     input.steering = clampAxisScalar(steering)
     input.brake = clampAxisScalar(brake)
     if (Math.abs(input.throttle) > VEHICLE_SMOOTH_STOP_INPUT_DEADZONE || Math.abs(input.brake) > VEHICLE_SMOOTH_STOP_INPUT_DEADZONE) {
-      this.clearSmoothStop()
+      this.clearSmoothStop('inputReapplied', {
+        throttle: input.throttle,
+        brake: input.brake,
+        steering: input.steering,
+      })
     }
     this.maybeTriggerReleaseSmoothStop(previousThrottle, previousBrake)
   }
@@ -904,8 +1041,12 @@ export class VehicleDriveController {
     const brakeInput = this.input.brake
     const smoothStop = this.smoothStopState
 
-    if (Math.abs(throttle) > 0.05) {
-      smoothStop.active = false
+    if (Math.abs(throttle) > 0.05 && smoothStop.active) {
+      this.clearSmoothStop('physicsThrottleReapplied', {
+        throttle,
+        brakeInput,
+        steeringInput,
+      })
     }
     const engineForceRaw = throttle * VEHICLE_ENGINE_FORCE
     let engineForce = engineForceRaw
@@ -1021,13 +1162,17 @@ export class VehicleDriveController {
 
       if (Math.abs(throttle) < 0.05) {
         let damping = VEHICLE_COASTING_DAMPING
+        let blend = 0
+        let targetDamping = damping
+        let releaseBrakeForce = 0
         if (smoothStop.active) {
           const startSpeedSq = Math.max(1e-4, smoothStop.initialSpeedSq)
           const progress = startSpeedSq > 0 ? 1 - Math.min(1, speedSq / startSpeedSq) : 1
           const eased = progress > 0 ? progress * progress : 0
-          const blend = Math.max(VEHICLE_SMOOTH_STOP_MIN_BLEND, Math.min(1, eased))
-          const targetDamping = Math.min(smoothStop.damping, VEHICLE_SMOOTH_STOP_MAX_DAMPING)
+          blend = Math.max(smoothStop.minBlend, Math.min(1, eased))
+          targetDamping = Math.min(smoothStop.damping, smoothStop.maxDamping)
           damping = THREE.MathUtils.lerp(VEHICLE_COASTING_DAMPING, targetDamping, blend)
+          releaseBrakeForce = VEHICLE_BRAKE_FORCE * VEHICLE_RELEASE_SMOOTH_STOP_BRAKE_RATIO * blend
         }
         const clampedDamping = Math.min(0.95, Math.max(0, damping))
         const factor = isWeChatMiniProgram
@@ -1036,9 +1181,34 @@ export class VehicleDriveController {
         velocity.set(velocity.x * factor, velocity.y * factor, velocity.z * factor)
         if (smoothStop.active) {
           const nextSpeedSq = velocity.lengthSquared()
-          if (nextSpeedSq <= VEHICLE_SMOOTH_STOP_FINAL_SPEED_SQ) {
-            velocity.set(0, 0, 0)
-            smoothStop.active = false
+          const now = Date.now()
+          if (this.smoothStopDebugLastSampleAt === 0 || now - this.smoothStopDebugLastSampleAt >= 120) {
+            this.smoothStopDebugLastSampleAt = now
+            this.debugLog('smoothStopSamplePhysics', {
+              nodeId: state.nodeId,
+              speedBefore: Math.sqrt(Math.max(0, speedSq)),
+              speedAfter: Math.sqrt(Math.max(0, nextSpeedSq)),
+              damping,
+              factor,
+              blend,
+              targetDamping,
+              releaseBrakeForce,
+              brakeInput,
+              throttle,
+              finalSpeed: Math.sqrt(smoothStop.finalSpeedSq),
+              velocity: {
+                x: velocity.x,
+                y: velocity.y,
+                z: velocity.z,
+              },
+            })
+          }
+          if (nextSpeedSq <= smoothStop.finalSpeedSq) {
+            this.stopVehicleBodyImmediately(vehicle, instance.wheelCount ?? vehicle.wheelInfos.length, chassisBody)
+            this.clearSmoothStop('physicsFinalSnap', {
+              speedAfter: Math.sqrt(Math.max(0, nextSpeedSq)),
+              finalSpeed: Math.sqrt(smoothStop.finalSpeedSq),
+            })
             speedSq = 0
           } else {
             speedSq = nextSpeedSq
@@ -1058,7 +1228,10 @@ export class VehicleDriveController {
       steeringValue *= 1 - 0.65 * slowRatio
     }
     const baseBrakeForce = brakeInput * VEHICLE_BRAKE_FORCE
-    const brakeForce = Math.min(VEHICLE_BRAKE_FORCE, Math.max(0, baseBrakeForce + this.speedGovernorBrakeAssist))
+    const releaseBrakeForce = this.smoothStopState.active
+      ? VEHICLE_BRAKE_FORCE * VEHICLE_RELEASE_SMOOTH_STOP_BRAKE_RATIO * this.smoothStopState.minBlend
+      : 0
+    const brakeForce = Math.min(VEHICLE_BRAKE_FORCE, Math.max(0, baseBrakeForce + this.speedGovernorBrakeAssist + releaseBrakeForce))
     for (let index = 0; index < vehicle.wheelInfos.length; index += 1) {
       vehicle.setBrake(brakeForce, index)
     }
@@ -1107,9 +1280,14 @@ export class VehicleDriveController {
     } else {
       let decel = TRANSFORM_DRIVE_COAST_DECELERATION
       if (this.smoothStopState.active) {
+        const releaseBrakeDecel = TRANSFORM_DRIVE_BRAKE_DECELERATION * VEHICLE_RELEASE_SMOOTH_STOP_BRAKE_RATIO * this.smoothStopState.minBlend
         decel = Math.max(
           decel,
-          Math.min(TRANSFORM_DRIVE_BRAKE_DECELERATION, this.smoothStopState.damping * TRANSFORM_DRIVE_BRAKE_DECELERATION),
+          Math.min(
+            TRANSFORM_DRIVE_BRAKE_DECELERATION,
+            Math.max(this.smoothStopState.damping, VEHICLE_RELEASE_SMOOTH_STOP_BRAKE_RATIO) * TRANSFORM_DRIVE_BRAKE_DECELERATION,
+            releaseBrakeDecel,
+          ),
         )
       }
       speed = THREE.MathUtils.damp(speed, 0, decel, dt)
@@ -1117,6 +1295,22 @@ export class VehicleDriveController {
 
     if (Math.abs(speed) < TRANSFORM_DRIVE_MIN_SPEED_EPSILON) {
       speed = 0
+    }
+    if (this.smoothStopState.active) {
+      const now = Date.now()
+      if (this.smoothStopDebugLastSampleAt === 0 || now - this.smoothStopDebugLastSampleAt >= 120) {
+        this.smoothStopDebugLastSampleAt = now
+        this.debugLog('smoothStopSampleTransform', {
+          nodeId,
+          speed,
+          throttle,
+          brakeInput,
+          damping: this.smoothStopState.damping,
+          maxDamping: this.smoothStopState.maxDamping,
+          minBlend: this.smoothStopState.minBlend,
+          finalSpeed: Math.sqrt(this.smoothStopState.finalSpeedSq),
+        })
+      }
     }
 
     const absSpeed = Math.abs(speed)
@@ -1146,10 +1340,13 @@ export class VehicleDriveController {
     this.notifyVehicleObjectTransformUpdated(nodeId, object)
     this.transformDriveState.speed = speed
 
-    if (this.smoothStopState.active && absSpeed <= VEHICLE_SMOOTH_STOP_FINAL_SPEED) {
+    if (this.smoothStopState.active && absSpeed * absSpeed <= this.smoothStopState.finalSpeedSq) {
       this.transformDriveState.speed = 0
       this.transformDriveState.velocityWorld.set(0, 0, 0)
-      this.clearSmoothStop()
+      this.clearSmoothStop('transformFinalSnap', {
+        speed: absSpeed,
+        finalSpeed: Math.sqrt(this.smoothStopState.finalSpeedSq),
+      })
     }
   }
 

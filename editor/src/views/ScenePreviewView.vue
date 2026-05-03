@@ -1188,6 +1188,9 @@ type VehicleDriveInputState = {
 	throttle: number
 	steering: number
 	brake: number
+	analogThrottle?: number
+	analogSteering?: number
+	analogBrake?: number
 }
 
 const vehicleDriveState = reactive<VehicleDriveRuntimeState>({
@@ -2062,6 +2065,8 @@ let physicsBridgeStepPromise: Promise<void> | null = null
 let physicsBridgeBodySyncPromise: Promise<void> | null = null
 let physicsBridgeVehicleInputPromise: Promise<void> | null = null
 let physicsBridgeLastDrivenVehicleId: number | null = null
+let physicsBridgeLastDrivenNodeId: string | null = null
+let physicsBridgeDriveMotionInputActive = false
 let physicsBridgeSceneLoaded = false
 let physicsBridgeSceneRequestId = 0
 const physicsBridgeBodyIdByNodeId = new Map<string, number>()
@@ -2078,6 +2083,7 @@ const physicsBridgeSyncQuaternionHelper = new THREE.Quaternion()
 const physicsBridgeSyncParentQuaternionHelper = new THREE.Quaternion()
 const physicsBridgeBodySyncPositionHelper = new THREE.Vector3()
 const physicsBridgeBodySyncQuaternionHelper = new THREE.Quaternion()
+const PHYSICS_BRIDGE_VEHICLE_STOP_INPUT_DEADZONE = 0.05
 const physicsEnvironmentEnabled = ref(true)
 const rigidbodyInstances = new Map<string, RigidbodyInstance>()
 type AirWallDebugEntry = {
@@ -7471,7 +7477,18 @@ const vehicleDriveKeyboardMap: Record<string, DriveControlAction> = {
 	Space: 'brake',
 }
 
+function formatVehicleDriveViewDebugPayload(payload: Record<string, unknown>): string {
+	return JSON.stringify(payload)
+}
+
+function logVehicleDriveViewDebug(event: string, payload: Record<string, unknown>): void {
+	console.log(`[ScenePreviewVehicleDrive] ${event} ${formatVehicleDriveViewDebugPayload(payload)}`)
+}
+
 function updateVehicleDriveInputFromFlags(): void {
+	vehicleDriveInput.analogThrottle = 0
+	vehicleDriveInput.analogSteering = 0
+	vehicleDriveInput.analogBrake = 0
 	vehicleDriveInput.throttle = vehicleDriveInputFlags.forward === vehicleDriveInputFlags.backward
 		? 0
 		: vehicleDriveInputFlags.forward
@@ -7490,13 +7507,39 @@ function resetVehicleDriveInputs(): void {
 
 function setVehicleDriveControlFlag(action: DriveControlAction, pressed: boolean): void {
 	if (!vehicleDriveState.active) {
+		logVehicleDriveViewDebug('skipSetControlFlag', {
+			action,
+			pressed,
+			reason: 'inactiveDriveState',
+		})
 		return
 	}
 	if (vehicleDriveInputFlags[action] === pressed) {
+		logVehicleDriveViewDebug('skipSetControlFlag', {
+			action,
+			pressed,
+			reason: 'flagAlreadyMatched',
+			flags: { ...vehicleDriveInputFlags },
+		})
 		return
 	}
+	logVehicleDriveViewDebug('setControlFlag', {
+		action,
+		pressed,
+		flagsBefore: { ...vehicleDriveInputFlags },
+	})
 	vehicleDriveController.setControlFlag(action, pressed)
 	updateVehicleDriveInputFromFlags()
+	logVehicleDriveViewDebug('setControlFlagApplied', {
+		action,
+		pressed,
+		flagsAfter: { ...vehicleDriveInputFlags },
+		input: {
+			throttle: vehicleDriveInput.throttle,
+			brake: vehicleDriveInput.brake,
+			steering: vehicleDriveInput.steering,
+		},
+	})
 }
 
 function handleVehicleDriveControlPointer(
@@ -7518,6 +7561,13 @@ function handleVehicleDriveKeyboardInput(event: KeyboardEvent, pressed: boolean)
 	if (!action) {
 		return false
 	}
+	logVehicleDriveViewDebug('keyboardInput', {
+		code: event.code,
+		pressed,
+		action,
+		repeat: event.repeat,
+		target: event.target instanceof Element ? event.target.tagName : String(event.target),
+	})
 	event.preventDefault()
 	setVehicleDriveControlFlag(action, pressed)
 	return true
@@ -8705,6 +8755,7 @@ function initRenderer() {
 
 	window.addEventListener('resize', handleResize)
 	document.addEventListener('fullscreenchange', handleFullscreenChange)
+	window.addEventListener('blur', handleWindowBlur)
 	window.addEventListener('keydown', handleKeyDown)
 	window.addEventListener('keyup', handleKeyUp)
 
@@ -8772,6 +8823,20 @@ function handleFullscreenChange() {
 	isFullscreen.value = Boolean(document.fullscreenElement)
 }
 
+function handleWindowBlur() {
+	if (!vehicleDriveState.active) {
+		return
+	}
+	logVehicleDriveViewDebug('windowBlur', {
+		flags: { ...vehicleDriveInputFlags },
+		input: {
+			throttle: vehicleDriveInput.throttle,
+			brake: vehicleDriveInput.brake,
+			steering: vehicleDriveInput.steering,
+		},
+	})
+}
+
 function handleKeyDown(event: KeyboardEvent) {
 	if (sceneSwitching.value) {
 		return
@@ -8810,6 +8875,12 @@ function handleKeyDown(event: KeyboardEvent) {
 }
 
 function handleKeyUp(event: KeyboardEvent) {
+	logVehicleDriveViewDebug('windowKeyUp', {
+		code: event.code,
+		repeat: event.repeat,
+		driveActive: vehicleDriveState.active,
+		target: event.target instanceof Element ? event.target.tagName : String(event.target),
+	})
 	if (sceneSwitching.value) {
 		return
 	}
@@ -10589,6 +10660,86 @@ function syncScenePreviewPhysicsBridgeBodyTransforms(): void {
 		})
 }
 
+function resolveScenePreviewPhysicsBridgeVehicleStopTransform(
+	nodeId: string,
+): { position: Vec3Tuple; rotation: QuatTuple } | null {
+	const frameState = physicsBridgeFrameBodiesByNodeId.get(nodeId)
+	if (frameState) {
+		return {
+			position: [frameState.position.x, frameState.position.y, frameState.position.z],
+			rotation: [frameState.quaternion.x, frameState.quaternion.y, frameState.quaternion.z, frameState.quaternion.w],
+		}
+	}
+	const instance = vehicleInstances.get(nodeId)
+	const chassisBody = instance?.vehicle.chassisBody ?? null
+	if (chassisBody) {
+		return {
+			position: [chassisBody.position.x, chassisBody.position.y, chassisBody.position.z],
+			rotation: [
+				chassisBody.quaternion.x,
+				chassisBody.quaternion.y,
+				chassisBody.quaternion.z,
+				chassisBody.quaternion.w,
+			],
+		}
+	}
+	const node = resolveNodeById(nodeId)
+	const component = resolvePhysicsRigidbodyComponent(node)
+	const object = node
+		? resolveRigidbodyBindingObject(component, nodeObjectMap.get(nodeId) ?? null)
+		: null
+	if (!object) {
+		return null
+	}
+	object.updateMatrixWorld(true)
+	object.getWorldPosition(physicsBridgeBodySyncPositionHelper)
+	object.getWorldQuaternion(physicsBridgeBodySyncQuaternionHelper).normalize()
+	return {
+		position: [
+			physicsBridgeBodySyncPositionHelper.x,
+			physicsBridgeBodySyncPositionHelper.y,
+			physicsBridgeBodySyncPositionHelper.z,
+		],
+		rotation: [
+			physicsBridgeBodySyncQuaternionHelper.x,
+			physicsBridgeBodySyncQuaternionHelper.y,
+			physicsBridgeBodySyncQuaternionHelper.z,
+			physicsBridgeBodySyncQuaternionHelper.w,
+		],
+	}
+}
+
+async function stopScenePreviewPhysicsBridgeVehicleImmediately(
+	bridge: PhysicsBridge,
+	nodeId: string,
+): Promise<void> {
+	const bodyId = physicsBridgeBodyIdByNodeId.get(nodeId)
+	if (typeof bodyId !== 'number') {
+		return
+	}
+	const transform = resolveScenePreviewPhysicsBridgeVehicleStopTransform(nodeId)
+	if (!transform) {
+		return
+	}
+	const instance = vehicleInstances.get(nodeId)
+	const chassisBody = instance?.vehicle.chassisBody ?? null
+	if (chassisBody) {
+		chassisBody.velocity.set(0, 0, 0)
+		chassisBody.angularVelocity.set(0, 0, 0)
+		if (instance) {
+			instance.lastBridgeFramePosition = new THREE.Vector3(...transform.position)
+			instance.hasBridgeFrameSample = false
+			instance.lastChassisPosition.set(...transform.position)
+			instance.hasChassisPositionSample = false
+		}
+	}
+	await bridge.setBodyTransform({
+		bodyId,
+		transform,
+		resetVelocity: true,
+	})
+}
+
 function syncScenePreviewPhysicsBridgeVehicleInput(): void {
 	if (
 		!physicsBridge
@@ -10600,20 +10751,34 @@ function syncScenePreviewPhysicsBridgeVehicleInput(): void {
 	const activeNodeId = vehicleDriveState.active ? vehicleDriveState.nodeId : null
 	if (!activeNodeId) {
 		if (typeof physicsBridgeLastDrivenVehicleId !== 'number') {
+			physicsBridgeLastDrivenNodeId = null
+			physicsBridgeDriveMotionInputActive = false
 			return
 		}
 		const bridge = physicsBridge
-		physicsBridgeVehicleInputPromise = bridge.setVehicleInput({
+		const lastDrivenNodeId = physicsBridgeLastDrivenNodeId
+		const inputPromise = bridge.setVehicleInput({
 			vehicleId: physicsBridgeLastDrivenVehicleId,
 			steering: 0,
 			throttle: 0,
 			brake: 1,
 		})
-			.catch((error) => {
-				console.warn('[ScenePreview] Failed to clear physics bridge vehicle input', error)
+		const stopPromise = lastDrivenNodeId
+			? stopScenePreviewPhysicsBridgeVehicleImmediately(bridge, lastDrivenNodeId)
+			: Promise.resolve()
+		physicsBridgeVehicleInputPromise = Promise.allSettled([inputPromise, stopPromise])
+			.then((results) => {
+				results.forEach((result) => {
+					if (result.status === 'rejected') {
+						console.warn('[ScenePreview] Failed to clear physics bridge vehicle input', result.reason)
+					}
+				})
 			})
+			.then(() => undefined)
 			.finally(() => {
 				physicsBridgeLastDrivenVehicleId = null
+				physicsBridgeLastDrivenNodeId = null
+				physicsBridgeDriveMotionInputActive = false
 				physicsBridgeVehicleInputPromise = null
 			})
 		return
@@ -10624,23 +10789,45 @@ function syncScenePreviewPhysicsBridgeVehicleInput(): void {
 	}
 	const bridge = physicsBridge
 	if (typeof physicsBridgeLastDrivenVehicleId === 'number' && physicsBridgeLastDrivenVehicleId !== vehicleId) {
-		void bridge.setVehicleInput({
+		const lastDrivenNodeId = physicsBridgeLastDrivenNodeId
+		const inputPromise = bridge.setVehicleInput({
 			vehicleId: physicsBridgeLastDrivenVehicleId,
 			steering: 0,
 			throttle: 0,
 			brake: 1,
-		}).catch(() => {})
+		})
+		const stopPromise = lastDrivenNodeId
+			? stopScenePreviewPhysicsBridgeVehicleImmediately(bridge, lastDrivenNodeId)
+			: Promise.resolve()
+		void Promise.allSettled([inputPromise, stopPromise])
+		physicsBridgeDriveMotionInputActive = false
 	}
+	const motionInputActive =
+		Math.abs(vehicleDriveInput.throttle) > PHYSICS_BRIDGE_VEHICLE_STOP_INPUT_DEADZONE
+		|| Math.abs(vehicleDriveInput.brake) > PHYSICS_BRIDGE_VEHICLE_STOP_INPUT_DEADZONE
+	const shouldStopImmediately = physicsBridgeDriveMotionInputActive && !motionInputActive
+	const bridgeBrake = motionInputActive ? vehicleDriveInput.brake : 1
 	physicsBridgeLastDrivenVehicleId = vehicleId
-	physicsBridgeVehicleInputPromise = bridge.setVehicleInput({
+	physicsBridgeLastDrivenNodeId = activeNodeId
+	physicsBridgeDriveMotionInputActive = motionInputActive
+	const inputPromise = bridge.setVehicleInput({
 		vehicleId,
 		steering: vehicleDriveInput.steering,
 		throttle: vehicleDriveInput.throttle,
-		brake: vehicleDriveInput.brake,
+		brake: bridgeBrake,
 	})
-		.catch((error) => {
-			console.warn('[ScenePreview] Failed to sync physics bridge vehicle input', error)
+	const stopPromise = shouldStopImmediately
+		? stopScenePreviewPhysicsBridgeVehicleImmediately(bridge, activeNodeId)
+		: Promise.resolve()
+	physicsBridgeVehicleInputPromise = Promise.allSettled([inputPromise, stopPromise])
+		.then((results) => {
+			results.forEach((result) => {
+				if (result.status === 'rejected') {
+					console.warn('[ScenePreview] Failed to sync physics bridge vehicle input', result.reason)
+				}
+			})
 		})
+		.then(() => undefined)
 		.finally(() => {
 			physicsBridgeVehicleInputPromise = null
 		})
@@ -10653,11 +10840,15 @@ async function disposeScenePreviewPhysicsBridgeScene(): Promise<void> {
 	physicsBridgeVehicleIdByNodeId.clear()
 	physicsBridgeFrameBodiesByNodeId.clear()
 	physicsBridgeLastDrivenVehicleId = null
+	physicsBridgeLastDrivenNodeId = null
+	physicsBridgeDriveMotionInputActive = false
 	if (!physicsBridge || !physicsBridgeSceneLoaded) {
 		physicsBridgeStepPromise = null
 		physicsBridgeBodySyncPromise = null
 		physicsBridgeVehicleInputPromise = null
 		physicsBridgeLastDrivenVehicleId = null
+		physicsBridgeLastDrivenNodeId = null
+		physicsBridgeDriveMotionInputActive = false
 		return
 	}
 	try {
@@ -10670,6 +10861,8 @@ async function disposeScenePreviewPhysicsBridgeScene(): Promise<void> {
 		physicsBridgeBodySyncPromise = null
 		physicsBridgeVehicleInputPromise = null
 		physicsBridgeLastDrivenVehicleId = null
+		physicsBridgeLastDrivenNodeId = null
+		physicsBridgeDriveMotionInputActive = false
 		physicsBridgeFrameBodiesByNodeId.clear()
 	}
 }
@@ -10694,6 +10887,8 @@ async function destroyScenePreviewPhysicsBridge(): Promise<void> {
 		physicsBridgeVehicleIdByNodeId.clear()
 		physicsBridgeFrameBodiesByNodeId.clear()
 		physicsBridgeLastDrivenVehicleId = null
+		physicsBridgeLastDrivenNodeId = null
+		physicsBridgeDriveMotionInputActive = false
 		physicsBridgeSceneLoaded = false
 	}
 }
@@ -12962,6 +13157,7 @@ onBeforeUnmount(() => {
 	disposeSignboardBillboards(scene)
 	window.removeEventListener('resize', handleResize)
 	document.removeEventListener('fullscreenchange', handleFullscreenChange)
+	window.removeEventListener('blur', handleWindowBlur)
 	window.removeEventListener('keydown', handleKeyDown)
 	window.removeEventListener('keyup', handleKeyUp)
 	window.removeEventListener('resize', handleLanternViewportResize)
