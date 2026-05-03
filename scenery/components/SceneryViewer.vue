@@ -949,7 +949,6 @@ let viewerResourceCache: ResourceCache | null = null;
 let activeScenePackageAssetOverrides: SceneGraphBuildOptions['assetOverrides'] | null = null;
 let activeScenePackagePkg: ScenePackageUnzipped | null = null;
 let sceneDownloadTask: SceneRequestTask | null = null;
-const DEFAULT_RGBE_DATA_TYPE = isWeChatMiniProgram ? THREE.UnsignedByteType : THREE.FloatType;
 type RGBELoaderClass = new (manager?: THREE.LoadingManager) => RGBELoader;
 let rgbeLoaderClassPromise: Promise<RGBELoaderClass> | null = null;
 type KTX2LoaderClass = new (manager?: THREE.LoadingManager) => KTX2Loader;
@@ -997,7 +996,7 @@ async function createKtx2Loader(renderer: THREE.WebGLRenderer): Promise<KTX2Load
 async function loadKtx2TextureFromUrl(url: string, renderer: THREE.WebGLRenderer): Promise<THREE.Texture> {
   const ktx2Loader = await createKtx2Loader(renderer);
   const buffer = await requestBinaryFromUrl(url);
-  return await new Promise<THREE.Texture>((resolve, reject) => {
+  return new Promise<THREE.Texture>((resolve, reject) => {
     (ktx2Loader as unknown as {
       parse: (data: ArrayBuffer, onLoad: (texture: THREE.Texture) => void, onError?: (error: unknown) => void) => void;
     }).parse(buffer, resolve, reject);
@@ -10536,75 +10535,6 @@ function isRgbEEnvironmentTexture(extension: string, mimeType: string): boolean 
   return extension === 'hdr' || extension === 'hdri' || extension === 'rgbe' || mimeType === 'image/vnd.radiance';
 }
 
-function truncateEnvironmentDebugText(value: string, maxLength = 240): string {
-  if (value.length <= maxLength) {
-    return value;
-  }
-  return `${value.slice(0, maxLength)}...`;
-}
-
-function inferEnvironmentDebugUrlKind(url: string): string {
-  if (url.startsWith('blob:')) {
-    return 'blob';
-  }
-  if (url.startsWith('data:')) {
-    return 'data-url';
-  }
-  if (/^https?:\/\//i.test(url)) {
-    return 'remote-url';
-  }
-  if (url.startsWith('/')) {
-    return 'absolute-path';
-  }
-  return 'unknown';
-}
-
-async function logEnvironmentTextureSource(
-  assetId: string,
-  resolve: ResolvedAssetUrl,
-  extension: string,
-  mimeType: string,
-): Promise<void> {
-  const url = resolve.url;
-  console.info('[SceneViewer] Environment texture source', {
-    assetId,
-    extension: extension || null,
-    mimeType: mimeType || null,
-    urlKind: inferEnvironmentDebugUrlKind(url),
-    url: truncateEnvironmentDebugText(url),
-  });
-
-  if (typeof fetch !== 'function') {
-    console.info('[SceneViewer] Environment texture header unavailable: fetch is not available', { assetId });
-    return;
-  }
-
-  try {
-    const response = await fetch(url, { headers: { Range: 'bytes=0-63' } });
-    const buffer = await response.arrayBuffer();
-    const bytes = new Uint8Array(buffer).slice(0, 64);
-    const hex = Array.from(bytes)
-      .map((byte) => byte.toString(16).padStart(2, '0'))
-      .join(' ');
-    const ascii = Array.from(bytes)
-      .map((byte) => (byte >= 32 && byte <= 126 ? String.fromCharCode(byte) : '.'))
-      .join('');
-
-    console.info('[SceneViewer] Environment texture first bytes', {
-      assetId,
-      status: response.status,
-      contentType: response.headers.get('content-type'),
-      contentLength: response.headers.get('content-length'),
-      contentRange: response.headers.get('content-range'),
-      byteLength: buffer.byteLength,
-      ascii,
-      hex,
-    });
-  } catch (error) {
-    console.warn('[SceneViewer] Failed to inspect environment texture bytes', assetId, error);
-  }
-}
-
 async function loadEnvironmentTextureFromAsset(
   assetId: string,
 ): Promise<{ texture: THREE.Texture; dispose?: () => void } | null> {
@@ -10616,7 +10546,6 @@ async function loadEnvironmentTextureFromAsset(
   const mimeType = resolve.mimeType?.toLowerCase() ?? '';
   const dispose = resolve.dispose;
   try {
-    await logEnvironmentTextureSource(assetId, resolve, extension, mimeType);
     if (isKtx2EnvironmentTexture(extension, mimeType)) {
       const renderer = renderContext?.renderer ?? null;
       if (!renderer) {
@@ -10964,7 +10893,6 @@ async function applyBackgroundSettings(
 }
 
 let lastAppliedBackground: EnvironmentSettings['background'] | null = null;
-let lastEnvironmentTextureRotationLogKey = '';
 
 function applyEnvironmentReflectionFromBackground(background: EnvironmentSettings['background']): boolean {
   const scene = renderContext?.scene ?? null;
@@ -10999,24 +10927,6 @@ function applyEnvironmentTextureRotation(settings: EnvironmentSettings): void {
   );
   scene.backgroundRotation.copy(euler);
   scene.environmentRotation.copy(euler);
-
-  const backgroundMode = settings.background.mode;
-  if (backgroundMode === 'hdri' || backgroundMode === 'fastHdri' || backgroundMode === 'skycube') {
-    const logKey = JSON.stringify({
-      mode: backgroundMode,
-      preset: settings.environmentOrientationPreset ?? 'yUp',
-      rotationDegrees: rot,
-      radians: {
-        x: euler.x,
-        y: euler.y,
-        z: euler.z,
-      },
-    });
-    if (logKey !== lastEnvironmentTextureRotationLogKey) {
-      lastEnvironmentTextureRotationLogKey = logKey;
-      console.info('[SceneViewer] Environment texture rotation applied', JSON.parse(logKey));
-    }
-  }
 }
 
 async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
@@ -11048,7 +10958,6 @@ function disposeEnvironmentResources() {
   backgroundLoadToken += 1;
   pendingEnvironmentSettings = null;
   activeEnvironmentSettings = cloneEnvironmentSettings(DEFAULT_ENVIRONMENT_SETTINGS);
-  lastEnvironmentTextureRotationLogKey = '';
 }
 
 function resetRemovedSkyState() {
