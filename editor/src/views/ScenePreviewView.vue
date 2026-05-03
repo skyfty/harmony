@@ -2108,10 +2108,6 @@ const rigidbodyDebugMaterial = new THREE.LineBasicMaterial({
 })
 rigidbodyDebugMaterial.depthTest = false
 rigidbodyDebugMaterial.depthWrite = false
-const heightfieldDebugOrientationInverse = new THREE.Quaternion().setFromAxisAngle(
-	new THREE.Vector3(1, 0, 0),
-	Math.PI / 2,
-)
 const airWallDebugMaterial = new THREE.MeshBasicMaterial({
 	color: 0x80c7ff,
 	transparent: true,
@@ -11110,11 +11106,9 @@ function buildHeightfieldDebugLines(
 		return null
 	}
 	const stepX = columnCount > 1 ? width / (columnCount - 1) : width
-	// The physics heightfield is rotated -90° around X, which flips the Z direction.
-	// Mirror that here so the debug lines line up with the rendered ground.
-	const stepZ = rowCount > 1 ? -depth / (rowCount - 1) : -depth
+	const stepZ = rowCount > 1 ? depth / (rowCount - 1) : depth
 	const originX = -width * 0.5
-	const originZ = depth * 0.5
+	const originZ = -depth * 0.5
 	const positions: number[] = []
 	const sampleHeight = (columnIndex: number, rowIndex: number): number => {
 		const column = shape.matrix[columnIndex]
@@ -11472,10 +11466,11 @@ function ensureRoadHeightfieldDebugHelper(
 			segment.transform.rotation[2],
 			segment.transform.rotation[3],
 		)
-		if (segment.shape.kind === 'heightfield') {
-			rigidbodyDebugQuaternionHelper.multiply(heightfieldDebugOrientationInverse)
-		}
 		segmentGroup.quaternion.copy(rigidbodyDebugQuaternionHelper)
+		if (segment.shape.kind === 'heightfield') {
+			const [ox = 0, oy = 0, oz = 0] = segment.shape.offset ?? [0, 0, 0]
+			lines.position.set(ox + segment.shape.width * 0.5, oy, oz + segment.shape.depth * 0.5)
+		}
 		segmentGroup.add(lines)
 		helperGroup.add(segmentGroup)
 	})
@@ -11522,8 +11517,8 @@ function ensureGroundHeightfieldDebugHelper(
 		lines.renderOrder = 9999
 		const [ox = 0, oy = 0, oz = 0] = shape.offset ?? [0, 0, 0]
 		const centerX = ox + shape.width * 0.5
-		const centerZ = -oy - shape.depth * 0.5
-		lines.position.set(centerX, oz, centerZ)
+		const centerZ = oz + shape.depth * 0.5
+		lines.position.set(centerX, oy, centerZ)
 		helperGroup.add(lines)
 	})
 	container.add(helperGroup)

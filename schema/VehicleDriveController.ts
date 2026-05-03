@@ -643,8 +643,7 @@ export class VehicleDriveController {
     }
     this.deps.ensureVehicleBindingForNode(normalized)
     const instance = this.deps.vehicleInstances.get(normalized)
-    const rigidbody = this.deps.rigidbodyInstances.get(normalized)
-    if (!instance || !rigidbody) {
+    if (!instance) {
       return { success: false, message: '车辆尚未准备就绪，请稍后再试。' }
     }
     return { success: true, mode: 'physics', instance, vehicleObject }
