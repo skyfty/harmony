@@ -1,4 +1,5 @@
 import { fromArrayBuffer } from 'geotiff'
+import { GROUND_TERRAIN_CHUNK_SIZE_METERS } from '@schema'
 import type {
   PlanningTerrainDemData,
   PlanningTerrainGeographicBounds,
@@ -54,6 +55,18 @@ type PlanningDemResolution = {
   y: number
 }
 
+type PlanningGeoTiffImageLike = {
+  getBoundingBox?: () => unknown
+  getFileDirectory?: () => Record<string, unknown> | null | undefined
+  getGDALNoData?: () => number | string | null | undefined
+  getGeoKeys?: () => Record<string, unknown> | null | undefined
+  getHeight: () => number
+  getResolution?: () => unknown
+  getWidth: () => number
+  readRasters: (options: { interleave: true }) => Promise<ArrayLike<number> | ArrayLike<number>[]>
+  fileDirectory?: Record<string, unknown> | null | undefined
+}
+
 export const PLANNING_PNG_HEIGHTMAP_CONTRACT = {
   seaLevelGray: 32,
   metersPerGray: 20,
@@ -61,14 +74,14 @@ export const PLANNING_PNG_HEIGHTMAP_CONTRACT = {
   maxElevation: 4460,
 } as const
 
-const PLANNING_DEM_IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp']
+const PLANNING_DEM_IMAGE_EXTENSIONS = ['.png']
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value)
 }
 
 function isSupportedImageHeightmapMimeType(mimeType: string | null | undefined): boolean {
-  return typeof mimeType === 'string' && mimeType.startsWith('image/')
+  return typeof mimeType === 'string' && mimeType.trim().toLowerCase() === 'image/png'
 }
 
 export function isPlanningDemGeoTiffSource(filename: string, mimeType: string | null | undefined): boolean {
@@ -113,6 +126,130 @@ function normalizeResolution(raw: unknown): PlanningDemResolution | null {
     return null
   }
   return { x, y }
+}
+
+function normalizeNumericValue(raw: unknown): number | null {
+  if (typeof raw === 'number' && Number.isFinite(raw)) {
+    return raw
+  }
+  if (typeof raw === 'string' && raw.trim()) {
+    const numeric = Number(raw)
+    return Number.isFinite(numeric) ? numeric : null
+  }
+  return null
+}
+
+function normalizeTagNumberArray(raw: unknown): number[] | null {
+  if (!Array.isArray(raw) && !(raw instanceof Float32Array) && !(raw instanceof Float64Array)) {
+    return null
+  }
+  const values = Array.from(raw as ArrayLike<unknown>, (value) => normalizeNumericValue(value))
+  if (values.some((value) => value === null)) {
+    return null
+  }
+  return values as number[]
+}
+
+function getGeoTiffFileDirectory(image: PlanningGeoTiffImageLike): Record<string, unknown> | null {
+  if (typeof image.getFileDirectory === 'function') {
+    const directory = image.getFileDirectory()
+    if (directory && typeof directory === 'object') {
+      return directory
+    }
+  }
+  if (image.fileDirectory && typeof image.fileDirectory === 'object') {
+    return image.fileDirectory
+  }
+  return null
+}
+
+function hasGeoTiffRotationOrSkew(fileDirectory: Record<string, unknown> | null): boolean {
+  if (!fileDirectory) {
+    return false
+  }
+  const transform = normalizeTagNumberArray(fileDirectory.ModelTransformation ?? fileDirectory.ModelTransformationTag)
+  if (!transform) {
+    return false
+  }
+  if (transform.length < 16) {
+    return true
+  }
+  const epsilon = 1e-9
+  return Math.abs(transform[1] ?? 0) > epsilon
+    || Math.abs(transform[2] ?? 0) > epsilon
+    || Math.abs(transform[4] ?? 0) > epsilon
+    || Math.abs(transform[6] ?? 0) > epsilon
+    || Math.abs(transform[8] ?? 0) > epsilon
+    || Math.abs(transform[9] ?? 0) > epsilon
+}
+
+function hasProjectedGeoTiffCrs(geoKeys: Record<string, unknown> | null | undefined): boolean {
+  const modelType = normalizeNumericValue(geoKeys?.GTModelTypeGeoKey)
+  if (modelType === 1) {
+    return true
+  }
+  return normalizeNumericValue(geoKeys?.ProjectedCSTypeGeoKey) !== null
+}
+
+const PLANNING_DEM_SQUARE_RESOLUTION_RELATIVE_TOLERANCE = 0.005
+
+function isSquareResolution(resolution: PlanningDemResolution): boolean {
+  const larger = Math.max(resolution.x, resolution.y)
+  const smaller = Math.min(resolution.x, resolution.y)
+  if (!(larger > 0) || !(smaller > 0)) {
+    return false
+  }
+  return (larger - smaller) / larger <= PLANNING_DEM_SQUARE_RESOLUTION_RELATIVE_TOLERANCE
+}
+
+function createCenteredWorldBounds(spanX: number, spanY: number): PlanningTerrainWorldBounds | null {
+  if (!Number.isFinite(spanX) || !Number.isFinite(spanY) || spanX <= 0 || spanY <= 0) {
+    return null
+  }
+  const halfWidth = spanX * 0.5
+  const halfHeight = spanY * 0.5
+  return {
+    minX: -halfWidth,
+    minY: -halfHeight,
+    maxX: halfWidth,
+    maxY: halfHeight,
+  }
+}
+
+function countInvalidRasterSamples(values: ArrayLike<number>, noDataValue: number | null): number {
+  let invalidSampleCount = 0
+  for (let index = 0; index < values.length; index += 1) {
+    const value = Number(values[index])
+    const isNoData = noDataValue !== null && Math.abs(value - noDataValue) <= 1e-6
+    if (!Number.isFinite(value) || isNoData) {
+      invalidSampleCount += 1
+    }
+  }
+  return invalidSampleCount
+}
+
+export function resolvePlanningDemTargetChunkResolution(
+  sampleStepMeters: number | null | undefined,
+  chunkSizeMeters = GROUND_TERRAIN_CHUNK_SIZE_METERS,
+): number | null {
+  const safeSampleStep = Number(sampleStepMeters)
+  const safeChunkSize = Number(chunkSizeMeters)
+  if (!Number.isFinite(safeSampleStep) || safeSampleStep <= 0 || !Number.isFinite(safeChunkSize) || safeChunkSize <= 0) {
+    return null
+  }
+  return Math.max(1, Math.min(2048, Math.round(safeChunkSize / safeSampleStep)))
+}
+
+export function resolvePlanningDemAppliedSampleStepMeters(
+  targetChunkResolution: number | null | undefined,
+  chunkSizeMeters = GROUND_TERRAIN_CHUNK_SIZE_METERS,
+): number | null {
+  const safeResolution = Number(targetChunkResolution)
+  const safeChunkSize = Number(chunkSizeMeters)
+  if (!Number.isFinite(safeResolution) || safeResolution <= 0 || !Number.isFinite(safeChunkSize) || safeChunkSize <= 0) {
+    return null
+  }
+  return safeChunkSize / Math.round(safeResolution)
 }
 
 function isGeographicCoordinateSpace(
@@ -167,12 +304,7 @@ function normalizeWorldBounds(options: {
     const cellSize = geographic
       ? degreesToMeters(resolution.x, resolution.y, centerLatitude)
       : { x: resolution.x, y: resolution.y }
-    return {
-      minX: 0,
-      minY: 0,
-      maxX: widthSegments * cellSize.x,
-      maxY: heightSegments * cellSize.y,
-    }
+    return createCenteredWorldBounds(widthSegments * cellSize.x, heightSegments * cellSize.y)
   }
 
   if (!bounds) {
@@ -185,12 +317,7 @@ function normalizeWorldBounds(options: {
         x: Math.abs(bounds.east - bounds.west),
         y: Math.abs(bounds.north - bounds.south),
       }
-  return {
-    minX: 0,
-    minY: 0,
-    maxX: span.x,
-    maxY: span.y,
-  }
+  return createCenteredWorldBounds(span.x, span.y)
 }
 
 function computeSampleStepMeters(worldBounds: PlanningTerrainWorldBounds | null, width: number, height: number): number | null {
@@ -312,7 +439,7 @@ function sampleRasterToPreview(values: ArrayLike<number>, width: number, height:
   }
 }
 
-async function readFirstBandRasters(image: any): Promise<ArrayLike<number>> {
+async function readFirstBandRasters(image: PlanningGeoTiffImageLike): Promise<ArrayLike<number>> {
   const rasters = await image.readRasters({ interleave: true })
   if (Array.isArray(rasters)) {
     return rasters[0] as ArrayLike<number>
@@ -424,18 +551,50 @@ async function parsePlanningHeightmapImageBuffer(
   }
 }
 
-async function parsePlanningGeoTiffBuffer(buffer: ArrayBuffer, filename: string, mimeType: string | null): Promise<PlanningDemImportResult> {
+async function parsePlanningGeoTiffBuffer(
+  buffer: ArrayBuffer,
+  filename: string,
+  mimeType: string | null,
+  options?: PlanningDemImportOptions,
+): Promise<PlanningDemImportResult> {
   const sourceFileHash = await computeSha256Hex(buffer)
   const tiff = await fromArrayBuffer(buffer)
-  const image = await tiff.getImage()
+  const image = await tiff.getImage() as PlanningGeoTiffImageLike
   const width = image.getWidth()
   const height = image.getHeight()
+  if (width < 2 || height < 2) {
+    throw new Error(`GeoTIFF validation failed: the raster must be at least 2x2 samples, but received ${width}x${height}. Re-export the DEM from QGIS with a valid elevation grid.`)
+  }
   const rasters = await readFirstBandRasters(image)
+  const noDataValue = normalizeNumericValue(typeof image.getGDALNoData === 'function' ? image.getGDALNoData() : null)
+  const invalidSampleCount = countInvalidRasterSamples(rasters, noDataValue)
+  if (invalidSampleCount > 0) {
+    throw new Error(`GeoTIFF validation failed: found ${invalidSampleCount} invalid or NoData elevation samples. Fill or clip NoData areas in QGIS before importing the DEM.`)
+  }
   const { min, max } = computeMinMax(rasters)
   const bbox = normalizeBounds(typeof image.getBoundingBox === 'function' ? image.getBoundingBox() : null)
-  const resolution = normalizeResolution(typeof image.getResolution === 'function' ? image.getResolution() : null)
+  const requestedMetersPerPixel = Number(options?.metersPerPixel)
+  const overrideResolution = Number.isFinite(requestedMetersPerPixel) && requestedMetersPerPixel > 0
+    ? { x: requestedMetersPerPixel, y: requestedMetersPerPixel }
+    : null
+  const resolution = overrideResolution ?? normalizeResolution(typeof image.getResolution === 'function' ? image.getResolution() : null)
   const geoKeys = typeof image.getGeoKeys === 'function' ? image.getGeoKeys() : null
+  if (!hasProjectedGeoTiffCrs(geoKeys)) {
+    throw new Error('GeoTIFF validation failed: the DEM must use a projected CRS with meter units. Reproject the raster to a metric CRS in QGIS before importing.')
+  }
   const geographic = isGeographicCoordinateSpace(bbox, geoKeys)
+  if (geographic) {
+    throw new Error('GeoTIFF validation failed: geographic CRS is not supported for direct DEM import. Reproject the raster to a projected meter-based CRS in QGIS before importing.')
+  }
+  if (!resolution) {
+    throw new Error('GeoTIFF validation failed: unable to determine raster resolution. Re-export the DEM from QGIS with explicit pixel size metadata.')
+  }
+  if (!isSquareResolution(resolution)) {
+    throw new Error(`GeoTIFF validation failed: pixel size must be square within ${Math.round(PLANNING_DEM_SQUARE_RESOLUTION_RELATIVE_TOLERANCE * 100)}% tolerance, but received ${resolution.x} x ${resolution.y}. Resample to square pixels in QGIS before importing.`)
+  }
+  if (hasGeoTiffRotationOrSkew(getGeoTiffFileDirectory(image))) {
+    throw new Error('GeoTIFF validation failed: rotated or skewed rasters are not supported. Warp the DEM to a north-up raster in QGIS before importing.')
+  }
   const worldBounds = normalizeWorldBounds({
     bounds: bbox,
     resolution,
@@ -446,7 +605,7 @@ async function parsePlanningGeoTiffBuffer(buffer: ArrayBuffer, filename: string,
   const preview = min !== null && max !== null ? sampleRasterToPreview(rasters, width, height, min, max) : null
   const sampleStepMeters = computeSampleStepMeters(worldBounds, width, height)
   if (!worldBounds || !sampleStepMeters) {
-    throw new Error('GeoTIFF validation failed: unable to determine world scale from GeoTIFF metadata. Re-export the DEM with valid georeferencing in QGIS, or convert it to a PNG heightmap and provide meters-per-pixel during import.')
+    throw new Error('GeoTIFF validation failed: unable to determine projected world scale from GeoTIFF metadata. Re-export the DEM from QGIS with valid projected bounds and pixel size metadata.')
   }
 
   return {
@@ -473,7 +632,7 @@ async function parsePlanningDemBuffer(
   options?: PlanningDemImportOptions,
 ): Promise<PlanningDemImportResult> {
   if (isPlanningDemGeoTiffSource(filename, mimeType)) {
-    return parsePlanningGeoTiffBuffer(buffer, filename, mimeType)
+    return parsePlanningGeoTiffBuffer(buffer, filename, mimeType, options)
   }
   if (isPlanningDemHeightmapImageSource(filename, mimeType)) {
     return parsePlanningHeightmapImageBuffer(buffer, filename, mimeType, options)
@@ -497,6 +656,7 @@ export async function parsePlanningDemBlob(
 }
 
 export function demImportResultToTerrainData(result: PlanningDemImportResult): PlanningTerrainDemData {
+  const targetChunkResolution = resolvePlanningDemTargetChunkResolution(result.sampleStepMeters)
   return {
     version: 1,
     sourceFileHash: result.sourceFileHash,
@@ -507,6 +667,10 @@ export function demImportResultToTerrainData(result: PlanningDemImportResult): P
     minElevation: result.minElevation,
     maxElevation: result.maxElevation,
     sampleStepMeters: result.sampleStepMeters,
+    sourceSampleStepMeters: result.sampleStepMeters,
+    appliedSampleStepMeters: result.sampleStepMeters,
+    targetChunkResolution,
+    resolutionMode: 'auto',
     geographicBounds: result.geographicBounds,
     worldBounds: result.worldBounds,
     previewHash: result.preview ? result.sourceFileHash : null,
@@ -525,13 +689,31 @@ export async function openPlanningDemWindowedGeoTiffSource(
   }
   const buffer = await blob.arrayBuffer()
   const tiff = await fromArrayBuffer(buffer)
-  const image = await tiff.getImage()
+  const image = await tiff.getImage() as PlanningGeoTiffImageLike
   const width = image.getWidth()
   const height = image.getHeight()
+  if (width < 2 || height < 2) {
+    throw new Error(`GeoTIFF validation failed: the raster must be at least 2x2 samples, but received ${width}x${height}. Re-export the DEM from QGIS with a valid elevation grid.`)
+  }
   const bbox = normalizeBounds(typeof image.getBoundingBox === 'function' ? image.getBoundingBox() : null)
   const resolution = normalizeResolution(typeof image.getResolution === 'function' ? image.getResolution() : null)
   const geoKeys = typeof image.getGeoKeys === 'function' ? image.getGeoKeys() : null
+  if (!hasProjectedGeoTiffCrs(geoKeys)) {
+    throw new Error('GeoTIFF validation failed: the DEM must use a projected CRS with meter units. Reproject the raster to a metric CRS in QGIS before importing.')
+  }
   const geographic = isGeographicCoordinateSpace(bbox, geoKeys)
+  if (geographic) {
+    throw new Error('GeoTIFF validation failed: geographic CRS is not supported for direct DEM import. Reproject the raster to a projected meter-based CRS in QGIS before importing.')
+  }
+  if (!resolution) {
+    throw new Error('GeoTIFF validation failed: unable to determine raster resolution. Re-export the DEM from QGIS with explicit pixel size metadata.')
+  }
+  if (!isSquareResolution(resolution)) {
+    throw new Error(`GeoTIFF validation failed: pixel size must be square within ${Math.round(PLANNING_DEM_SQUARE_RESOLUTION_RELATIVE_TOLERANCE * 100)}% tolerance, but received ${resolution.x} x ${resolution.y}. Resample to square pixels in QGIS before importing.`)
+  }
+  if (hasGeoTiffRotationOrSkew(getGeoTiffFileDirectory(image))) {
+    throw new Error('GeoTIFF validation failed: rotated or skewed rasters are not supported. Warp the DEM to a north-up raster in QGIS before importing.')
+  }
   const worldBounds = normalizeWorldBounds({
     bounds: bbox,
     resolution,

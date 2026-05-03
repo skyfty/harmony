@@ -348,7 +348,11 @@ function resolvePlanningDemLocalEditTileResolution(options: {
   sampleStepX?: number | null
   sampleStepZ?: number | null
 }): number {
+  const explicitConfiguredResolution = Number(options.definition.editTileResolution)
   const configuredResolution = resolveGroundEditTileResolution(options.definition)
+  if (Number.isFinite(explicitConfiguredResolution) && explicitConfiguredResolution > 0) {
+    return configuredResolution
+  }
   const tileSizeMeters = resolvePlanningDemChunkSizeMeters()
   const sourceSteps = [options.sampleStepX, options.sampleStepZ]
     .map((value) => Number(value))
@@ -960,6 +964,17 @@ export async function resolvePlanningDemPreparedSource(options: {
   terrainDem: PlanningTerrainDemData
 }): Promise<PlanningDemPreparedSource> {
   const { definition, terrainDem } = options
+  if (terrainDem.resolutionMode !== 'auto' && terrainDem.resolutionMode !== 'manual') {
+    throw new Error('DEM resolution mode is missing or invalid')
+  }
+  const appliedSampleStepMeters = Number(terrainDem.appliedSampleStepMeters)
+  if (!Number.isFinite(appliedSampleStepMeters) || appliedSampleStepMeters <= 0) {
+    throw new Error('DEM applied sample step is missing or invalid')
+  }
+  const targetChunkResolution = Number(terrainDem.targetChunkResolution)
+  if (!Number.isFinite(targetChunkResolution) || targetChunkResolution <= 0) {
+    throw new Error('DEM chunk subdivision resolution is missing or invalid')
+  }
   const demHash = typeof terrainDem.sourceFileHash === 'string' ? terrainDem.sourceFileHash.trim() : ''
   if (!demHash) {
     throw new Error('DEM source hash is missing')
@@ -1041,6 +1056,7 @@ export async function resolvePlanningDemPreparedSource(options: {
         sampleStepMeters: parsed.sampleStepMeters,
         sampleStepX,
         sampleStepY,
+        appliedSampleStepMeters,
         worldBounds: parsed.worldBounds
           ? {
               minX: parsed.worldBounds.minX,
@@ -1054,7 +1070,7 @@ export async function resolvePlanningDemPreparedSource(options: {
         targetCellSize,
         localEditCellSize,
         localEditTileSizeMeters,
-        localEditTileResolution,
+        localEditTileResolution: Math.round(targetChunkResolution),
         tileLayout,
         detailLimitedByGroundGrid: effectiveSourceStep !== null && targetCellSize > effectiveSourceStep,
         detailLimitedByEditResolution: effectiveSourceStep !== null && localEditCellSize > effectiveSourceStep,

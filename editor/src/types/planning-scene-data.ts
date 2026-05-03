@@ -184,6 +184,8 @@ export interface PlanningTerrainOrthophotoData {
   visible?: boolean
 }
 
+export type PlanningTerrainDemResolutionMode = 'auto' | 'manual'
+
 export interface PlanningTerrainDemData {
   version: 1
   sourceFileHash?: string | null
@@ -194,6 +196,10 @@ export interface PlanningTerrainDemData {
   minElevation?: number | null
   maxElevation?: number | null
   sampleStepMeters?: number | null
+  sourceSampleStepMeters?: number | null
+  appliedSampleStepMeters?: number | null
+  targetChunkResolution?: number | null
+  resolutionMode?: PlanningTerrainDemResolutionMode | null
   geographicBounds?: PlanningTerrainGeographicBounds | null
   worldBounds?: PlanningTerrainWorldBounds | null
   previewHash?: string | null

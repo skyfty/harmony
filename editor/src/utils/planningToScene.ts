@@ -6,7 +6,7 @@ import type {
   QuantizedTerrainDatasetRootManifest,
   SceneNode,
 } from '@schema'
-import { GROUND_HEIGHT_UNSET_VALUE, createGroundHeightMap, getGroundVertexIndex } from '@schema'
+import { GROUND_HEIGHT_UNSET_VALUE, GROUND_TERRAIN_CHUNK_SIZE_METERS, createGroundHeightMap, getGroundVertexIndex } from '@schema'
 import {
   ensureTerrainScatterStore,
   getTerrainScatterStore,
@@ -103,12 +103,29 @@ function normalizePlanningDemBoundsForGround(bounds: PlanningTerrainWorldBounds 
   if (!Number.isFinite(minX) || !Number.isFinite(maxX) || !Number.isFinite(minZ) || !Number.isFinite(maxZ)) {
     return null
   }
-  return {
-    minX: Math.min(minX, maxX),
-    maxX: Math.max(minX, maxX),
-    minZ: Math.min(minZ, maxZ),
-    maxZ: Math.max(minZ, maxZ),
+  const normalizedMinX = Math.min(minX, maxX)
+  const normalizedMaxX = Math.max(minX, maxX)
+  const normalizedMinZ = Math.min(minZ, maxZ)
+  const normalizedMaxZ = Math.max(minZ, maxZ)
+  const centerX = (normalizedMinX + normalizedMaxX) * 0.5
+  const centerZ = (normalizedMinZ + normalizedMaxZ) * 0.5
+  if (Math.abs(centerX) > 1e-6 || Math.abs(centerZ) > 1e-6) {
+    return null
   }
+  return {
+    minX: normalizedMinX,
+    maxX: normalizedMaxX,
+    minZ: normalizedMinZ,
+    maxZ: normalizedMaxZ,
+  }
+}
+
+function resolvePlanningDemGroundResolution(dem: PlanningSceneData['terrain'] extends { dem?: infer T } ? T : never): number {
+  const targetChunkResolution = Number((dem as PlanningTerrainDemData | null | undefined)?.targetChunkResolution)
+  if (!Number.isFinite(targetChunkResolution) || targetChunkResolution <= 0) {
+    throw new Error('Planning DEM chunk subdivision resolution is missing or invalid')
+  }
+  return Math.max(1, Math.round(targetChunkResolution))
 }
 
 function mergeGroundBounds(
@@ -1924,18 +1941,28 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
     await yieldController.maybeYield(true)
   }
 
-  const demGroundBounds = normalizePlanningDemBoundsForGround(planningData.terrain?.dem?.worldBounds ?? null)
+  const planningDem = planningData.terrain?.dem ?? null
+  const demGroundBounds = normalizePlanningDemBoundsForGround(planningDem?.worldBounds ?? null)
+  if (planningDem && !demGroundBounds) {
+    throw new Error('Planning DEM world bounds are missing, invalid, or not centered on the world origin')
+  }
   if (sceneStore.groundNode?.dynamicMesh?.type === 'Ground' && demGroundBounds) {
     const currentGroundDefinition = sceneStore.groundNode.dynamicMesh as GroundDynamicMesh
     const currentGroundBounds = resolveGroundWorldBounds(currentGroundDefinition)
+    const nextEditTileResolution = resolvePlanningDemGroundResolution(planningDem)
     const nextGroundBounds = hadGroundNodeBeforeConversion
       ? mergeGroundBounds(currentGroundBounds, demGroundBounds)
       : demGroundBounds
 
-    if (groundBoundsChanged(currentGroundBounds, nextGroundBounds)) {
+    const needsResolutionUpdate = Number(currentGroundDefinition.editTileResolution) !== nextEditTileResolution
+      || Number(currentGroundDefinition.editTileSizeMeters) !== GROUND_TERRAIN_CHUNK_SIZE_METERS
+
+    if (groundBoundsChanged(currentGroundBounds, nextGroundBounds) || needsResolutionUpdate) {
       sceneStore.updateGroundNodeDynamicMesh(sceneStore.groundNode.id, {
         ...currentGroundDefinition,
         worldBounds: nextGroundBounds,
+        editTileSizeMeters: GROUND_TERRAIN_CHUNK_SIZE_METERS,
+        editTileResolution: nextEditTileResolution,
       })
       await yieldController.maybeYield(true)
     }

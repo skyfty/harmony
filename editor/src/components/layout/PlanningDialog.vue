@@ -40,7 +40,7 @@ import {
   savePlanningDemToIndexedDB as savePlanningDemToStorage,
   storePlanningDemBlobByHash,
 } from '@/utils/planningDemStorage'
-import { resolveGroundWorldBounds } from '@schema'
+import { GROUND_TERRAIN_CHUNK_SIZE_METERS, resolveGroundWorldBounds } from '@schema'
 import {
   demImportResultToTerrainData,
   isPlanningDemHeightmapImageSource,
@@ -48,6 +48,8 @@ import {
   parsePlanningDemFile,
   parsePlanningDemBlob,
   PLANNING_PNG_HEIGHTMAP_CONTRACT,
+  resolvePlanningDemAppliedSampleStepMeters,
+  resolvePlanningDemTargetChunkResolution,
   type PlanningDemImportOptions,
 } from '@/utils/planningDemImport'
 
@@ -362,6 +364,10 @@ function clonePlanningTerrainDemData(data: PlanningTerrainDemData | null | undef
     minElevation: data.minElevation ?? null,
     maxElevation: data.maxElevation ?? null,
     sampleStepMeters: data.sampleStepMeters ?? null,
+    sourceSampleStepMeters: data.sourceSampleStepMeters ?? null,
+    appliedSampleStepMeters: data.appliedSampleStepMeters ?? null,
+    targetChunkResolution: data.targetChunkResolution ?? null,
+    resolutionMode: data.resolutionMode ?? null,
     geographicBounds: clonePlanningTerrainGeographicBounds(data.geographicBounds ?? null),
     worldBounds: clonePlanningTerrainWorldBounds(data.worldBounds ?? null),
     previewHash: data.previewHash ?? null,
@@ -499,6 +505,19 @@ function resolvePlanningHeightmapMetersPerPixel(data: PlanningTerrainDemData | n
     return null
   }
   return Math.abs(stepX - stepY) <= 1e-6 ? stepX : (stepX + stepY) * 0.5
+}
+
+function resolvePlanningDemAppliedSampleStep(data: PlanningTerrainDemData | null | undefined): number | null {
+  const applied = Number(data?.appliedSampleStepMeters)
+  if (Number.isFinite(applied) && applied > 0) {
+    return applied
+  }
+  const source = Number(data?.sourceSampleStepMeters)
+  if (Number.isFinite(source) && source > 0) {
+    return source
+  }
+  const fallback = Number(data?.sampleStepMeters)
+  return Number.isFinite(fallback) && fallback > 0 ? fallback : null
 }
 
 function resolveRecommendedTerrainCellSize(data: PlanningTerrainDemData | null | undefined): number | null {
@@ -1408,25 +1427,79 @@ function normalizePlanningTerrain(raw: unknown): PlanningTerrainData {
 
   const dem = payload.dem && typeof payload.dem === 'object' ? payload.dem as Record<string, unknown> : null
   if (dem) {
+    const requireFinitePositive = (value: unknown, label: string): number => {
+      const numeric = Number(value)
+      if (!Number.isFinite(numeric) || numeric <= 0) {
+        throw new Error(`DEM config validation failed: ${label} is missing or invalid.`)
+      }
+      return numeric
+    }
+    const requireFiniteInteger = (value: unknown, label: string, minimum = 1): number => {
+      const numeric = Number(value)
+      if (!Number.isFinite(numeric) || numeric < minimum) {
+        throw new Error(`DEM config validation failed: ${label} is missing or invalid.`)
+      }
+      return Math.trunc(numeric)
+    }
+    const sourceFileHash = typeof dem.sourceFileHash === 'string' ? dem.sourceFileHash.trim() : ''
+    if (!sourceFileHash) {
+      throw new Error('DEM config validation failed: sourceFileHash is missing.')
+    }
+    const filename = typeof dem.filename === 'string' ? dem.filename.trim() : ''
+    if (!filename) {
+      throw new Error('DEM config validation failed: filename is missing.')
+    }
+    const mimeType = typeof dem.mimeType === 'string' ? dem.mimeType : null
+    const width = requireFiniteInteger(dem.width, 'width', 2)
+    const height = requireFiniteInteger(dem.height, 'height', 2)
+    const sampleStepMeters = requireFinitePositive(dem.sampleStepMeters, 'sampleStepMeters')
+    const sourceSampleStepMeters = requireFinitePositive(dem.sourceSampleStepMeters, 'sourceSampleStepMeters')
+    const appliedSampleStepMeters = requireFinitePositive(dem.appliedSampleStepMeters, 'appliedSampleStepMeters')
+    const targetChunkResolution = requireFiniteInteger(dem.targetChunkResolution, 'targetChunkResolution')
+    const resolutionMode = dem.resolutionMode === 'auto' || dem.resolutionMode === 'manual'
+      ? dem.resolutionMode
+      : null
+    if (!resolutionMode) {
+      throw new Error('DEM config validation failed: resolutionMode is missing or invalid.')
+    }
     const geographicBounds = dem.geographicBounds && typeof dem.geographicBounds === 'object'
       ? dem.geographicBounds as Record<string, unknown>
       : null
     const worldBounds = dem.worldBounds && typeof dem.worldBounds === 'object'
       ? dem.worldBounds as Record<string, unknown>
       : null
+    if (!worldBounds) {
+      throw new Error('DEM config validation failed: worldBounds are missing.')
+    }
+    const minX = Number(worldBounds.minX)
+    const minY = Number(worldBounds.minY)
+    const maxX = Number(worldBounds.maxX)
+    const maxY = Number(worldBounds.maxY)
+    if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY) || !(maxX > minX) || !(maxY > minY)) {
+      throw new Error('DEM config validation failed: worldBounds are invalid.')
+    }
+    const centerX = (minX + maxX) * 0.5
+    const centerY = (minY + maxY) * 0.5
+    if (Math.abs(centerX) > 1e-6 || Math.abs(centerY) > 1e-6) {
+      throw new Error('DEM config validation failed: worldBounds must stay centered on the world origin.')
+    }
     const orthophoto = dem.orthophoto && typeof dem.orthophoto === 'object'
       ? dem.orthophoto as Record<string, unknown>
       : null
     next.dem = {
       version: 1,
-      sourceFileHash: typeof dem.sourceFileHash === 'string' ? dem.sourceFileHash : undefined,
-      filename: typeof dem.filename === 'string' ? dem.filename : null,
-      mimeType: typeof dem.mimeType === 'string' ? dem.mimeType : null,
-      width: Number.isFinite(Number(dem.width)) ? Math.max(0, Math.trunc(Number(dem.width))) : undefined,
-      height: Number.isFinite(Number(dem.height)) ? Math.max(0, Math.trunc(Number(dem.height))) : undefined,
+      sourceFileHash,
+      filename,
+      mimeType,
+      width,
+      height,
       minElevation: Number.isFinite(Number(dem.minElevation)) ? Number(dem.minElevation) : undefined,
       maxElevation: Number.isFinite(Number(dem.maxElevation)) ? Number(dem.maxElevation) : undefined,
-      sampleStepMeters: Number.isFinite(Number(dem.sampleStepMeters)) ? Number(dem.sampleStepMeters) : undefined,
+      sampleStepMeters,
+      sourceSampleStepMeters,
+      appliedSampleStepMeters,
+      targetChunkResolution,
+      resolutionMode,
       geographicBounds: geographicBounds && Number.isFinite(Number(geographicBounds.west)) && Number.isFinite(Number(geographicBounds.south)) && Number.isFinite(Number(geographicBounds.east)) && Number.isFinite(Number(geographicBounds.north))
         ? {
             west: Number(geographicBounds.west),
@@ -1436,14 +1509,12 @@ function normalizePlanningTerrain(raw: unknown): PlanningTerrainData {
             crs: typeof geographicBounds.crs === 'string' ? geographicBounds.crs : null,
           }
         : undefined,
-      worldBounds: worldBounds && Number.isFinite(Number(worldBounds.minX)) && Number.isFinite(Number(worldBounds.minY)) && Number.isFinite(Number(worldBounds.maxX)) && Number.isFinite(Number(worldBounds.maxY))
-        ? {
-            minX: Number(worldBounds.minX),
-            minY: Number(worldBounds.minY),
-            maxX: Number(worldBounds.maxX),
-            maxY: Number(worldBounds.maxY),
-          }
-        : undefined,
+      worldBounds: {
+        minX,
+        minY,
+        maxX,
+        maxY,
+      },
       previewHash: typeof dem.previewHash === 'string' ? dem.previewHash : null,
       previewSize: Number.isFinite(Number((dem.previewSize as Record<string, unknown> | null | undefined)?.width)) && Number.isFinite(Number((dem.previewSize as Record<string, unknown> | null | undefined)?.height))
         ? {
@@ -1501,7 +1572,12 @@ function loadPlanningFromScene() {
     planningGuides.value = data.guides.map((guide: PlanningGuideData) => normalizeGuide(guide)).filter((g): g is PlanningGuide => !!g)
   }
 
-  planningTerrain.value = normalizePlanningTerrain(data.terrain)
+  try {
+    planningTerrain.value = normalizePlanningTerrain(data.terrain)
+  } catch (error) {
+    demImportError.value = error instanceof Error ? error.message : 'Failed to load DEM configuration.'
+    throw error
+  }
 
   if (data.activeLayerId) {
     activeLayerId.value = data.activeLayerId
@@ -1928,6 +2004,55 @@ const selectedDemMetersPerPixel = computed<number | null>({
       maxY: centerY + halfHeight,
     }
     dem.sampleStepMeters = metersPerPixel
+    dem.sourceSampleStepMeters = metersPerPixel
+    dem.appliedSampleStepMeters = metersPerPixel
+    dem.targetChunkResolution = resolvePlanningDemTargetChunkResolution(metersPerPixel)
+    dem.resolutionMode = 'manual'
+    markPlanningDirty()
+  },
+})
+const selectedDemAppliedSampleStep = computed<number | null>({
+  get: () => resolvePlanningDemAppliedSampleStep(selectedDem.value),
+  set: (value: number | null) => {
+    const dem = selectedDem.value
+    if (!dem || selectedDemUsesHeightmapImage.value) {
+      return
+    }
+    const appliedSampleStepMeters = Number(value)
+    if (!Number.isFinite(appliedSampleStepMeters) || appliedSampleStepMeters <= 0) {
+      return
+    }
+    dem.appliedSampleStepMeters = Number(appliedSampleStepMeters.toFixed(6))
+    dem.targetChunkResolution = resolvePlanningDemTargetChunkResolution(dem.appliedSampleStepMeters)
+    dem.resolutionMode = 'manual'
+    markPlanningDirty()
+  },
+})
+const selectedDemTargetChunkResolution = computed<number | null>({
+  get: () => {
+    const resolution = Number(selectedDem.value?.targetChunkResolution)
+    return Number.isFinite(resolution) && resolution > 0 ? Math.round(resolution) : null
+  },
+  set: (value: number | null) => {
+    const dem = selectedDem.value
+    if (!dem) {
+      return
+    }
+    const resolution = Number(value)
+    if (!Number.isFinite(resolution) || resolution <= 0) {
+      return
+    }
+    dem.targetChunkResolution = Math.max(1, Math.round(resolution))
+    const appliedSampleStepMeters = resolvePlanningDemAppliedSampleStepMeters(dem.targetChunkResolution)
+    if (!appliedSampleStepMeters) {
+      return
+    }
+    dem.appliedSampleStepMeters = Number(appliedSampleStepMeters.toFixed(6))
+    dem.resolutionMode = 'manual'
+    if (selectedDemUsesHeightmapImage.value) {
+      selectedDemMetersPerPixel.value = dem.appliedSampleStepMeters
+      return
+    }
     markPlanningDirty()
   },
 })
@@ -1944,7 +2069,7 @@ const terrainCellSizeRecommendationReason = computed<string | null>(() => {
     return null
   }
   const current = terrainCellSizeModel.value
-  const sampleStep = Number(dem.sampleStepMeters)
+  const sampleStep = Number(dem.sourceSampleStepMeters ?? dem.sampleStepMeters)
   const sourceStepLabel = Number.isFinite(sampleStep) && sampleStep > 0 ? `${sampleStep.toFixed(2)} m source step` : 'available terrain coverage'
   const sizeLabel = `${Math.round(span.width)} x ${Math.round(span.height)} m extent`
   if (current + 1e-6 < recommended) {
@@ -4802,6 +4927,10 @@ async function loadPlanningOrthophotoFile(file: File) {
       minElevation: null,
       maxElevation: null,
       sampleStepMeters: null,
+      sourceSampleStepMeters: null,
+      appliedSampleStepMeters: null,
+      targetChunkResolution: null,
+      resolutionMode: null,
       geographicBounds: null,
       worldBounds: null,
       previewHash: null,
@@ -5429,6 +5558,7 @@ async function hydratePlanningDemResources() {
       }
     }
   } catch (error) {
+    demImportError.value = error instanceof Error ? error.message : 'Failed to hydrate planning DEM resources.'
     console.warn('Failed to hydrate planning DEM resources', error)
   }
 }
@@ -5524,9 +5654,7 @@ onBeforeUnmount(() => {
                 </div>
               </div>
               <div v-if="demImportError" class="upload-error">{{ demImportError }}</div>
-              <div class="dem-import-panel__hint">
-                PNG heightmaps must follow the Harmony DEM protocol in QGIS: fixed grayscale mapping and fully opaque grayscale output. See editor/docs/planning-dem-png-protocol.md. World scale still defaults to 30 m/px and can be adjusted after import.
-              </div>
+
               <input
                 ref="demFileInputRef"
                 type="file"
@@ -6297,6 +6425,32 @@ onBeforeUnmount(() => {
                   {{ planningPngHeightmapProtocolHint }}
                 </div>
               </div>
+              <div v-else class="property-panel__sub-block">
+                <div class="property-panel__section-title property-panel__section-title--muted">Sculpt Resolution</div>
+                <v-text-field
+                  v-model.number="selectedDemAppliedSampleStep"
+                  type="number"
+                  density="compact"
+                  label="Applied sample step"
+                  suffix="m/sample"
+                  min="0.000001"
+                  step="0.1"
+                  hide-details
+                />
+                <v-text-field
+                  v-model.number="selectedDemTargetChunkResolution"
+                  type="number"
+                  density="compact"
+                  :label="`Chunk subdivisions (${GROUND_TERRAIN_CHUNK_SIZE_METERS}m)`"
+                  suffix="seg"
+                  min="1"
+                  step="1"
+                  hide-details
+                />
+                <div class="property-panel__hint">
+                  Applied sample step drives DEM sculpt sampling. Chunk subdivisions are written into the ground edit tile mesh resolution.
+                </div>
+              </div>
               <div class="property-panel__sub-block">
                 <div class="property-panel__section-title property-panel__section-title--muted">Conversion Grid</div>
                 <v-text-field
@@ -6321,7 +6475,9 @@ onBeforeUnmount(() => {
                   Apply recommended {{ formatOptionalNumber(recommendedTerrainCellSize) }} m cell size
                 </v-btn>
               </div>
-              <div class="property-panel__meta-row"><span>Sample step</span><strong>{{ formatOptionalNumber(selectedDem.sampleStepMeters) }} m</strong></div>
+              <div class="property-panel__meta-row"><span>Source sample step</span><strong>{{ formatOptionalNumber(selectedDem.sourceSampleStepMeters ?? selectedDem.sampleStepMeters) }} m</strong></div>
+              <div class="property-panel__meta-row"><span>Applied sample step</span><strong>{{ formatOptionalNumber(selectedDem.appliedSampleStepMeters) }} m</strong></div>
+              <div class="property-panel__meta-row"><span>Chunk subdivisions</span><strong>{{ selectedDem.targetChunkResolution ?? '—' }}</strong></div>
               <div class="property-panel__meta-row"><span>Geographic bounds</span><strong>{{ formatBoundsLine(selectedDem.geographicBounds) }}</strong></div>
               <div class="property-panel__meta-row"><span>World bounds</span><strong>{{ formatBoundsLine(selectedDem.worldBounds) }}</strong></div>
               <div class="property-panel__meta-row"><span>Preview size</span><strong>{{ formatOptionalSize(selectedDem.previewSize) }}</strong></div>
