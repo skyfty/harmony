@@ -1,10 +1,23 @@
 import type {
-  PhysicsBridge,
   PhysicsTransform,
-  PhysicsVehicleInputCommand,
 } from '@harmony/physics-core'
 
 export const PHYSICS_BRIDGE_VEHICLE_STOP_INPUT_DEADZONE = 0.05
+
+type PhysicsBridgeVehicleControlInput = {
+  steering: number
+  throttle: number
+  brake: number
+}
+
+type PhysicsBridgeVehicleInputSyncBridge = {
+  setVehicleInput: (command: { vehicleId: number } & PhysicsBridgeVehicleControlInput) => Promise<void>
+  setBodyTransform: (command: {
+    bodyId: number
+    transform: PhysicsTransform
+    resetVelocity?: boolean
+  }) => Promise<void>
+}
 
 export type PhysicsBridgeVehicleInputSyncState = {
   pendingPromise: Promise<void> | null
@@ -15,11 +28,11 @@ export type PhysicsBridgeVehicleInputSyncState = {
 
 export type PhysicsBridgeVehicleInputSyncOptions = {
   state: PhysicsBridgeVehicleInputSyncState
-  bridge: PhysicsBridge | null
+  bridge: PhysicsBridgeVehicleInputSyncBridge | null
   sceneLoaded: boolean
   activeNodeId: string | null
   vehicleIdByNodeId: ReadonlyMap<string, number>
-  input: Pick<PhysicsVehicleInputCommand, 'steering' | 'throttle' | 'brake'>
+  input: PhysicsBridgeVehicleControlInput
   resolveBodyId: (nodeId: string) => number | null | undefined
   resolveStopTransform: (nodeId: string) => PhysicsTransform | null
   resetLocalVehicleState?: (nodeId: string, transform: PhysicsTransform) => void

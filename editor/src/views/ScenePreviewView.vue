@@ -11762,6 +11762,14 @@ function updateRigidbodyDebugHelperTransform(nodeId: string): void {
 	helper.group.updateMatrixWorld(true)
 }
 
+function updateRigidbodyDebugTransforms(): void {
+	if (!isRigidbodyDebugVisible.value) {
+		return
+	}
+	rigidbodyDebugHelpers.forEach((_helper, nodeId) => {
+		updateRigidbodyDebugHelperTransform(nodeId)
+	})
+}
 
 function syncRigidbodyDebugHelpers(): void {
 	if (!isRigidbodyDebugVisible.value) {

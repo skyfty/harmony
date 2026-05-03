@@ -469,10 +469,6 @@ export class VehicleDriveController {
     this.bindings.uiOverride.value = mode
   }
 
-  private debugLog(event: string, payload: VehicleDriveDebugPayload): void {
-    console.log(`[VehicleDriveController] ${event} ${formatVehicleDriveDebugPayload(payload)}`)
-  }
-
   requestSmoothStop(options: { damping?: number; stopSpeed?: number; finalSpeed?: number; initialSpeed?: number; minBlend?: number; maxDamping?: number } = {}): void {
     if (!this.state.active) {
       return
@@ -496,19 +492,9 @@ export class VehicleDriveController {
     this.smoothStopState.finalSpeedSq = Math.max(1e-4, finalSpeed * finalSpeed)
     this.smoothStopState.initialSpeedSq = Math.max(this.smoothStopState.stopSpeedSq, initialSpeed * initialSpeed, 1e-4)
     this.smoothStopDebugLastSampleAt = 0
-    this.debugLog('requestSmoothStop', {
-      nodeId: this.state.nodeId,
-      damping: this.smoothStopState.damping,
-      maxDamping: this.smoothStopState.maxDamping,
-      minBlend: this.smoothStopState.minBlend,
-      stopSpeed: Math.sqrt(this.smoothStopState.stopSpeedSq),
-      finalSpeed: Math.sqrt(this.smoothStopState.finalSpeedSq),
-      initialSpeed: Math.sqrt(this.smoothStopState.initialSpeedSq),
-    })
   }
 
   clearSmoothStop(reason = 'unspecified', payload: VehicleDriveDebugPayload = {}): void {
-    const wasActive = this.smoothStopState.active
     this.smoothStopState.active = false
     this.smoothStopState.damping = VEHICLE_SMOOTH_STOP_DEFAULT_DAMPING
     this.smoothStopState.maxDamping = VEHICLE_SMOOTH_STOP_MAX_DAMPING
@@ -517,13 +503,6 @@ export class VehicleDriveController {
     this.smoothStopState.finalSpeedSq = VEHICLE_SMOOTH_STOP_FINAL_SPEED_SQ
     this.smoothStopState.initialSpeedSq = VEHICLE_SMOOTH_STOP_SPEED_THRESHOLD_SQ
     this.smoothStopDebugLastSampleAt = 0
-    if (wasActive) {
-      this.debugLog('clearSmoothStop', {
-        nodeId: this.state.nodeId,
-        reason,
-        ...payload,
-      })
-    }
   }
 
   private resetSpeedGovernor(): void {
@@ -588,17 +567,9 @@ export class VehicleDriveController {
   private maybeTriggerReleaseSmoothStop(previousThrottle: number, previousBrake: number): void {
     if (this.suppressReleaseSmoothStop) {
       this.suppressReleaseSmoothStop = false
-      this.debugLog('skipReleaseSmoothStop', {
-        nodeId: this.state.nodeId,
-        reason: 'suppressedAfterReset',
-      })
       return
     }
     if (!this.state.active) {
-      this.debugLog('skipReleaseSmoothStop', {
-        nodeId: this.state.nodeId,
-        reason: 'inactiveDriveState',
-      })
       return
     }
     const nextThrottle = Math.abs(this.input.throttle)
@@ -608,27 +579,9 @@ export class VehicleDriveController {
     const wasBraking = Math.abs(previousBrake) > VEHICLE_SMOOTH_STOP_INPUT_DEADZONE
     const isBraking = nextBrake > VEHICLE_SMOOTH_STOP_INPUT_DEADZONE
     if (!wasDriving || isDriving || wasBraking || isBraking) {
-      this.debugLog('skipReleaseSmoothStop', {
-        nodeId: this.state.nodeId,
-        reason: 'releaseConditionsNotMet',
-        previousThrottle,
-        previousBrake,
-        nextThrottle,
-        nextBrake,
-        wasDriving,
-        isDriving,
-        wasBraking,
-        isBraking,
-      })
       return
     }
     const currentSpeed = this.getCurrentSpeed()
-    this.debugLog('triggerReleaseImmediateStop', {
-      nodeId: this.state.nodeId,
-      previousThrottle,
-      previousBrake,
-      currentSpeed,
-    })
     const nodeId = this.state.nodeId
     const instance = nodeId ? this.deps.vehicleInstances.get(nodeId) ?? null : null
     const vehicle = instance?.vehicle ?? null
@@ -1184,24 +1137,6 @@ export class VehicleDriveController {
           const now = Date.now()
           if (this.smoothStopDebugLastSampleAt === 0 || now - this.smoothStopDebugLastSampleAt >= 120) {
             this.smoothStopDebugLastSampleAt = now
-            this.debugLog('smoothStopSamplePhysics', {
-              nodeId: state.nodeId,
-              speedBefore: Math.sqrt(Math.max(0, speedSq)),
-              speedAfter: Math.sqrt(Math.max(0, nextSpeedSq)),
-              damping,
-              factor,
-              blend,
-              targetDamping,
-              releaseBrakeForce,
-              brakeInput,
-              throttle,
-              finalSpeed: Math.sqrt(smoothStop.finalSpeedSq),
-              velocity: {
-                x: velocity.x,
-                y: velocity.y,
-                z: velocity.z,
-              },
-            })
           }
           if (nextSpeedSq <= smoothStop.finalSpeedSq) {
             this.stopVehicleBodyImmediately(vehicle, instance.wheelCount ?? vehicle.wheelInfos.length, chassisBody)
@@ -1300,16 +1235,6 @@ export class VehicleDriveController {
       const now = Date.now()
       if (this.smoothStopDebugLastSampleAt === 0 || now - this.smoothStopDebugLastSampleAt >= 120) {
         this.smoothStopDebugLastSampleAt = now
-        this.debugLog('smoothStopSampleTransform', {
-          nodeId,
-          speed,
-          throttle,
-          brakeInput,
-          damping: this.smoothStopState.damping,
-          maxDamping: this.smoothStopState.maxDamping,
-          minBlend: this.smoothStopState.minBlend,
-          finalSpeed: Math.sqrt(this.smoothStopState.finalSpeedSq),
-        })
       }
     }
 
