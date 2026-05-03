@@ -47,6 +47,7 @@ import {
   isSupportedPlanningDemSource,
   parsePlanningDemFile,
   parsePlanningDemBlob,
+  PLANNING_PNG_HEIGHTMAP_CONTRACT,
   type PlanningDemImportOptions,
 } from '@/utils/planningDemImport'
 
@@ -525,12 +526,12 @@ function buildPlanningDemParseOptions(
 ): PlanningDemImportOptions {
   const isHeightmapImage = Boolean(terrainDem && isPlanningDemHeightmapImageSource(terrainDem.filename ?? '', terrainDem.mimeType ?? null))
   return {
-    minElevation: terrainDem?.minElevation ?? null,
-    maxElevation: terrainDem?.maxElevation ?? null,
     worldBoundsOverride: isHeightmapImage ? (terrainDem?.worldBounds ?? null) : null,
     ...overrides,
   }
 }
+
+const planningPngHeightmapProtocolHint = `Harmony PNG DEM protocol: gray ${PLANNING_PNG_HEIGHTMAP_CONTRACT.seaLevelGray} = 0m, ${PLANNING_PNG_HEIGHTMAP_CONTRACT.metersPerGray}m per gray, valid range ${PLANNING_PNG_HEIGHTMAP_CONTRACT.minElevation}m to ${PLANNING_PNG_HEIGHTMAP_CONTRACT.maxElevation}m.`
 
 function validatePlanningDemImport(file: File): { metersPerPixel?: number } {
   const mimeType = file.type || null
@@ -544,7 +545,7 @@ function validatePlanningDemImport(file: File): { metersPerPixel?: number } {
   const normalizedName = file.name.trim().toLowerCase()
   const isPng = normalizedName.endsWith('.png') || mimeType === 'image/png'
   if (!isPng) {
-    throw new Error('Image DEM import only accepts grayscale PNG heightmaps. Convert the file in QGIS or Photoshop to a fully opaque grayscale PNG, then re-import it.')
+    throw new Error(`Image DEM import only accepts grayscale PNG heightmaps. Re-export the file from QGIS using the Harmony PNG DEM protocol. ${planningPngHeightmapProtocolHint}`)
   }
   const metersPerPixel = DEFAULT_PNG_HEIGHTMAP_METERS_PER_PIXEL
   if (!Number.isFinite(metersPerPixel) || metersPerPixel <= 0) {
@@ -643,7 +644,6 @@ function computeRectResizeFromConstraint(constraint: RectResizeConstraint, desir
     heightAbs = eps
   }
 
-  // Keep a minimum size so the rectangle doesn't collapse.
   const minSide = 0.2
   widthAbs = Math.max(widthAbs, minSide)
   heightAbs = Math.max(heightAbs, minSide)
@@ -675,7 +675,6 @@ function computeRectResizeFromConstraint(constraint: RectResizeConstraint, desir
     nextByIndex: (index: number) => pointForKey(constraint.cornerKeyByIndex[index]!),
   }
 }
-
 
 function polylineLength(points: PlanningPoint[]) {
   if (points.length < 2) return 0
@@ -1961,68 +1960,6 @@ function applyRecommendedTerrainCellSize() {
   }
   terrainCellSizeModel.value = recommended
 }
-
-async function refreshPlanningDemPreview(): Promise<void> {
-  const terrainDem = planningTerrain.value.dem
-  if (!terrainDem?.sourceFileHash) {
-    planningDemPreviewUrl.value = null
-    return
-  }
-  const blob = await loadPlanningDemBlobByHash(terrainDem.sourceFileHash)
-  if (!blob) {
-    planningDemPreviewUrl.value = null
-    return
-  }
-  const parsed = await parsePlanningDemBlob(
-    blob,
-    terrainDem.filename ?? 'DEM',
-    (terrainDem.mimeType ?? blob.type) || null,
-    buildPlanningDemParseOptions(terrainDem),
-  )
-  planningDemPreviewUrl.value = parsed.preview?.dataUrl ?? null
-}
-
-const selectedDemMinElevationModel = computed<number | null>({
-  get: () => {
-    const value = selectedDem.value?.minElevation
-    return Number.isFinite(Number(value)) ? Number(value) : null
-  },
-  set: (value: number | null) => {
-    const dem = selectedDem.value
-    if (!dem || !selectedDemUsesHeightmapImage.value) {
-      return
-    }
-    dem.minElevation = Number.isFinite(Number(value)) ? Number(value) : 0
-    if (Number.isFinite(Number(dem.maxElevation)) && Number(dem.maxElevation) < Number(dem.minElevation)) {
-      dem.maxElevation = Number(dem.minElevation)
-    }
-    markPlanningDirty()
-    void refreshPlanningDemPreview().catch((error) => {
-      console.warn('Failed to refresh planning DEM preview', error)
-    })
-  },
-})
-
-const selectedDemMaxElevationModel = computed<number | null>({
-  get: () => {
-    const value = selectedDem.value?.maxElevation
-    return Number.isFinite(Number(value)) ? Number(value) : null
-  },
-  set: (value: number | null) => {
-    const dem = selectedDem.value
-    if (!dem || !selectedDemUsesHeightmapImage.value) {
-      return
-    }
-    dem.maxElevation = Number.isFinite(Number(value)) ? Number(value) : 255
-    if (Number.isFinite(Number(dem.minElevation)) && Number(dem.maxElevation) < Number(dem.minElevation)) {
-      dem.minElevation = Number(dem.maxElevation)
-    }
-    markPlanningDirty()
-    void refreshPlanningDemPreview().catch((error) => {
-      console.warn('Failed to refresh planning DEM preview', error)
-    })
-  },
-})
 
 function formatOptionalNumber(value: number | null | undefined, fractionDigits = 2): string {
   return Number.isFinite(Number(value)) ? Number(value).toFixed(fractionDigits) : '—'
@@ -5588,7 +5525,7 @@ onBeforeUnmount(() => {
               </div>
               <div v-if="demImportError" class="upload-error">{{ demImportError }}</div>
               <div class="dem-import-panel__hint">
-                PNG heightmap defaults to 30 m/px on import and can be edited in the DEM properties panel after import. Use QGIS or Photoshop to fix scale and raster quality before importing.
+                PNG heightmaps must follow the Harmony DEM protocol in QGIS: fixed grayscale mapping and fully opaque grayscale output. See editor/docs/planning-dem-png-protocol.md. World scale still defaults to 30 m/px and can be adjusted after import.
               </div>
               <input
                 ref="demFileInputRef"
@@ -6353,23 +6290,12 @@ onBeforeUnmount(() => {
                   hide-details
                 />
                 <div class="property-panel__hint">
-                  Change this when the PNG was preprocessed in QGIS or Photoshop and you need a different real-world scale.
+                  Change this only when the imported PNG uses a different real-world spacing. The grayscale-to-elevation contract itself is fixed.
                 </div>
-                <div class="property-panel__section-title property-panel__section-title--muted">Heightmap Range</div>
-                <v-text-field
-                  v-model.number="selectedDemMinElevationModel"
-                  type="number"
-                  density="compact"
-                  label="Min elevation (m)"
-                  hide-details
-                />
-                <v-text-field
-                  v-model.number="selectedDemMaxElevationModel"
-                  type="number"
-                  density="compact"
-                  label="Max elevation (m)"
-                  hide-details
-                />
+                <div class="property-panel__section-title property-panel__section-title--muted">Heightmap Protocol</div>
+                <div class="property-panel__hint">
+                  {{ planningPngHeightmapProtocolHint }}
+                </div>
               </div>
               <div class="property-panel__sub-block">
                 <div class="property-panel__section-title property-panel__section-title--muted">Conversion Grid</div>

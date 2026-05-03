@@ -54,6 +54,13 @@ type PlanningDemResolution = {
   y: number
 }
 
+export const PLANNING_PNG_HEIGHTMAP_CONTRACT = {
+  seaLevelGray: 32,
+  metersPerGray: 20,
+  minElevation: -640,
+  maxElevation: 4460,
+} as const
+
 const PLANNING_DEM_IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp']
 
 function isFiniteNumber(value: unknown): value is number {
@@ -313,21 +320,9 @@ async function readFirstBandRasters(image: any): Promise<ArrayLike<number>> {
   return rasters as ArrayLike<number>
 }
 
-function resolveImageHeightmapElevationRange(options?: PlanningDemImportOptions): { minElevation: number; maxElevation: number } {
-  const minElevation = Number(options?.minElevation)
-  const maxElevation = Number(options?.maxElevation)
-  const normalizedMin = Number.isFinite(minElevation) ? minElevation : 0
-  const normalizedMax = Number.isFinite(maxElevation) ? maxElevation : 255
-  if (normalizedMax >= normalizedMin) {
-    return {
-      minElevation: normalizedMin,
-      maxElevation: normalizedMax,
-    }
-  }
-  return {
-    minElevation: normalizedMax,
-    maxElevation: normalizedMin,
-  }
+export function decodePlanningPngHeightmapElevation(grayValue: number): number {
+  const normalizedGrayValue = Math.max(0, Math.min(255, Math.round(grayValue)))
+  return (normalizedGrayValue - PLANNING_PNG_HEIGHTMAP_CONTRACT.seaLevelGray) * PLANNING_PNG_HEIGHTMAP_CONTRACT.metersPerGray
 }
 
 function loadImageElementFromBlob(blob: Blob): Promise<HTMLImageElement> {
@@ -362,7 +357,7 @@ async function parsePlanningHeightmapImageBuffer(
   const width = Math.max(1, Math.trunc(image.naturalWidth))
   const height = Math.max(1, Math.trunc(image.naturalHeight))
   if (width < 2 || height < 2) {
-    throw new Error(`PNG heightmap validation failed: the image must be at least 2x2 pixels, but received ${width}x${height}. Please fix the file in QGIS or Photoshop and re-export it.`)
+    throw new Error(`PNG heightmap validation failed: the image must be at least 2x2 pixels, but received ${width}x${height}. Re-export the heightmap from QGIS using the Harmony PNG DEM protocol.`)
   }
   const canvas = document.createElement('canvas')
   canvas.width = width
@@ -373,8 +368,6 @@ async function parsePlanningHeightmapImageBuffer(
   }
   context.drawImage(image, 0, 0, width, height)
   const pixels = context.getImageData(0, 0, width, height).data
-  const { minElevation, maxElevation } = resolveImageHeightmapElevationRange(options)
-  const range = maxElevation - minElevation
   const rasterData = new Float32Array(width * height)
   let nonGrayscalePixelCount = 0
   let translucentPixelCount = 0
@@ -391,8 +384,7 @@ async function parsePlanningHeightmapImageBuffer(
     if (alpha < 255) {
       translucentPixelCount += 1
     }
-    const grayscale = (0.299 * red + 0.587 * green + 0.114 * blue) / 255
-    rasterData[index] = minElevation + grayscale * range
+    rasterData[index] = decodePlanningPngHeightmapElevation(red)
   }
 
   if (nonGrayscalePixelCount > 0 || translucentPixelCount > 0) {
@@ -403,10 +395,16 @@ async function parsePlanningHeightmapImageBuffer(
     if (translucentPixelCount > 0) {
       issues.push(`${translucentPixelCount} translucent pixels`)
     }
-    throw new Error(`PNG heightmap validation failed: found ${issues.join(' and ')}. Use QGIS or Photoshop to export a fully opaque grayscale PNG heightmap, then re-import it.`)
+    throw new Error(`PNG heightmap validation failed: found ${issues.join(' and ')}. Export a fully opaque grayscale PNG from QGIS using the Harmony PNG DEM protocol (gray 32 = 0m, 20m per gray).`)
   }
 
-  const preview = sampleRasterToPreview(rasterData, width, height, minElevation, maxElevation)
+  const preview = sampleRasterToPreview(
+    rasterData,
+    width,
+    height,
+    PLANNING_PNG_HEIGHTMAP_CONTRACT.minElevation,
+    PLANNING_PNG_HEIGHTMAP_CONTRACT.maxElevation,
+  )
   const worldBounds = resolveImageHeightmapWorldBounds(width, height, options)
 
   return {
@@ -416,8 +414,8 @@ async function parsePlanningHeightmapImageBuffer(
     width,
     height,
     rasterData,
-    minElevation,
-    maxElevation,
+    minElevation: PLANNING_PNG_HEIGHTMAP_CONTRACT.minElevation,
+    maxElevation: PLANNING_PNG_HEIGHTMAP_CONTRACT.maxElevation,
     sampleStepMeters: computeSampleStepMeters(worldBounds, width, height),
     geographicBounds: null,
     worldBounds,
