@@ -966,6 +966,21 @@ async function createRgbELoader(manager?: THREE.LoadingManager): Promise<RGBELoa
   return new LoaderClass(manager);
 }
 
+async function loadRgbETextureFromUrl(url: string, manager?: THREE.LoadingManager): Promise<THREE.DataTexture> {
+  const hdrLoader = await createRgbELoader(manager);
+  const buffer = await requestBinaryFromUrl(url);
+  const texData = hdrLoader.parse(buffer);
+  const texture = new THREE.DataTexture(texData.data as any, texData.width, texData.height);
+  texture.type = texData.type;
+  texture.colorSpace = THREE.LinearSRGBColorSpace;
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  texture.generateMipmaps = false;
+  texture.flipY = true;
+  texture.needsUpdate = true;
+  return texture;
+}
+
 async function createKtx2Loader(renderer: THREE.WebGLRenderer): Promise<KTX2Loader> {
   if (!ktx2LoaderClassPromise) {
     ktx2LoaderClassPromise = import('@minisheep/three-platform-adapter/override/jsm/loaders/KTX2Loader.js').then(
@@ -977,6 +992,16 @@ async function createKtx2Loader(renderer: THREE.WebGLRenderer): Promise<KTX2Load
     ktx2LoaderInstance = new LoaderClass().detectSupport(renderer);
   }
   return ktx2LoaderInstance;
+}
+
+async function loadKtx2TextureFromUrl(url: string, renderer: THREE.WebGLRenderer): Promise<THREE.Texture> {
+  const ktx2Loader = await createKtx2Loader(renderer);
+  const buffer = await requestBinaryFromUrl(url);
+  return await new Promise<THREE.Texture>((resolve, reject) => {
+    (ktx2Loader as unknown as {
+      parse: (data: ArrayBuffer, onLoad: (texture: THREE.Texture) => void, onError?: (error: unknown) => void) => void;
+    }).parse(buffer, resolve, reject);
+  });
 }
 
 function disposeKtx2Loader() {
@@ -1533,8 +1558,7 @@ async function resolveMaterialTexture(ref: SceneMaterialTextureRef): Promise<THR
       try {
       let texture: THREE.Texture;
       if (extension === 'hdr' || extension === 'hdri' || extension === 'rgbe') {
-        const hdrLoader = await createRgbELoader();
-        texture = await hdrLoader.loadAsync(source);
+        texture = await loadRgbETextureFromUrl(source);
       } else {
         // EXR is not available in all module environments; fall back to image loader.
         texture = await textureLoader.loadAsync(source);
@@ -10500,6 +10524,87 @@ function inferEnvironmentAssetExtension(assetId: string, resolve: ResolvedAssetU
   return sanitized.slice(index + 1).toLowerCase();
 }
 
+function isKtx2EnvironmentTexture(extension: string, mimeType: string): boolean {
+  return extension === 'ktx2' || mimeType.includes('ktx2') || mimeType.includes('basis');
+}
+
+function isExrEnvironmentTexture(extension: string, mimeType: string): boolean {
+  return extension === 'exr' || mimeType.includes('exr');
+}
+
+function isRgbEEnvironmentTexture(extension: string, mimeType: string): boolean {
+  return extension === 'hdr' || extension === 'hdri' || extension === 'rgbe' || mimeType === 'image/vnd.radiance';
+}
+
+function truncateEnvironmentDebugText(value: string, maxLength = 240): string {
+  if (value.length <= maxLength) {
+    return value;
+  }
+  return `${value.slice(0, maxLength)}...`;
+}
+
+function inferEnvironmentDebugUrlKind(url: string): string {
+  if (url.startsWith('blob:')) {
+    return 'blob';
+  }
+  if (url.startsWith('data:')) {
+    return 'data-url';
+  }
+  if (/^https?:\/\//i.test(url)) {
+    return 'remote-url';
+  }
+  if (url.startsWith('/')) {
+    return 'absolute-path';
+  }
+  return 'unknown';
+}
+
+async function logEnvironmentTextureSource(
+  assetId: string,
+  resolve: ResolvedAssetUrl,
+  extension: string,
+  mimeType: string,
+): Promise<void> {
+  const url = resolve.url;
+  console.info('[SceneViewer] Environment texture source', {
+    assetId,
+    extension: extension || null,
+    mimeType: mimeType || null,
+    urlKind: inferEnvironmentDebugUrlKind(url),
+    url: truncateEnvironmentDebugText(url),
+  });
+
+  if (typeof fetch !== 'function') {
+    console.info('[SceneViewer] Environment texture header unavailable: fetch is not available', { assetId });
+    return;
+  }
+
+  try {
+    const response = await fetch(url, { headers: { Range: 'bytes=0-63' } });
+    const buffer = await response.arrayBuffer();
+    const bytes = new Uint8Array(buffer).slice(0, 64);
+    const hex = Array.from(bytes)
+      .map((byte) => byte.toString(16).padStart(2, '0'))
+      .join(' ');
+    const ascii = Array.from(bytes)
+      .map((byte) => (byte >= 32 && byte <= 126 ? String.fromCharCode(byte) : '.'))
+      .join('');
+
+    console.info('[SceneViewer] Environment texture first bytes', {
+      assetId,
+      status: response.status,
+      contentType: response.headers.get('content-type'),
+      contentLength: response.headers.get('content-length'),
+      contentRange: response.headers.get('content-range'),
+      byteLength: buffer.byteLength,
+      ascii,
+      hex,
+    });
+  } catch (error) {
+    console.warn('[SceneViewer] Failed to inspect environment texture bytes', assetId, error);
+  }
+}
+
 async function loadEnvironmentTextureFromAsset(
   assetId: string,
 ): Promise<{ texture: THREE.Texture; dispose?: () => void } | null> {
@@ -10511,17 +10616,18 @@ async function loadEnvironmentTextureFromAsset(
   const mimeType = resolve.mimeType?.toLowerCase() ?? '';
   const dispose = resolve.dispose;
   try {
-    if (extension === 'ktx2' || mimeType.includes('ktx2') || mimeType.includes('basis')) {
+    await logEnvironmentTextureSource(assetId, resolve, extension, mimeType);
+    if (isKtx2EnvironmentTexture(extension, mimeType)) {
       const renderer = renderContext?.renderer ?? null;
       if (!renderer) {
         return null;
       }
-      const ktx2Loader = await createKtx2Loader(renderer);
-      const texture = await ktx2Loader.loadAsync(resolve.url);
+      const texture = await loadKtx2TextureFromUrl(resolve.url, renderer);
       texture.mapping = THREE.CubeUVReflectionMapping;
+      texture.needsUpdate = true;
       return { texture, dispose };
     }
-    if (extension === 'exr' || (mimeType && mimeType.toLowerCase().includes('exr'))) {
+    if (isExrEnvironmentTexture(extension, mimeType)) {
       // EXR not supported in this environment; use texture loader fallback.
       const texture = await textureLoader.loadAsync(resolve.url);
       texture.mapping = THREE.EquirectangularReflectionMapping;
@@ -10532,11 +10638,9 @@ async function loadEnvironmentTextureFromAsset(
       ensureFloatTextureFilterCompatibility(texture);
       return { texture, dispose };
     }
-    if (extension === 'hdr' || extension === 'hdri' || resolve.mimeType === 'image/vnd.radiance') {
-      const hdrLoader = await createRgbELoader();
-      const texture = await hdrLoader.loadAsync(resolve.url);
+    if (isRgbEEnvironmentTexture(extension, mimeType)) {
+      const texture = await loadRgbETextureFromUrl(resolve.url);
       texture.mapping = THREE.EquirectangularReflectionMapping;
-      texture.flipY = false;
       texture.magFilter = THREE.NearestFilter;
       texture.minFilter = THREE.NearestFilter;
       texture.needsUpdate = true;
@@ -10860,6 +10964,7 @@ async function applyBackgroundSettings(
 }
 
 let lastAppliedBackground: EnvironmentSettings['background'] | null = null;
+let lastEnvironmentTextureRotationLogKey = '';
 
 function applyEnvironmentReflectionFromBackground(background: EnvironmentSettings['background']): boolean {
   const scene = renderContext?.scene ?? null;
@@ -10876,6 +10981,44 @@ function applyEnvironmentReflectionFromBackground(background: EnvironmentSetting
   return true;
 }
 
+function degreesToRadians(value: number): number {
+  return (value * Math.PI) / 180;
+}
+
+function applyEnvironmentTextureRotation(settings: EnvironmentSettings): void {
+  const scene = renderContext?.scene ?? null;
+  if (!scene) {
+    return;
+  }
+  const rot = settings.environmentRotationDegrees ?? { x: 0, y: 0, z: 0 };
+  const euler = new THREE.Euler(
+    degreesToRadians(rot.x ?? 0),
+    degreesToRadians(rot.y ?? 0),
+    degreesToRadians(rot.z ?? 0),
+    'XYZ',
+  );
+  scene.backgroundRotation.copy(euler);
+  scene.environmentRotation.copy(euler);
+
+  const backgroundMode = settings.background.mode;
+  if (backgroundMode === 'hdri' || backgroundMode === 'fastHdri' || backgroundMode === 'skycube') {
+    const logKey = JSON.stringify({
+      mode: backgroundMode,
+      preset: settings.environmentOrientationPreset ?? 'yUp',
+      rotationDegrees: rot,
+      radians: {
+        x: euler.x,
+        y: euler.y,
+        z: euler.z,
+      },
+    });
+    if (logKey !== lastEnvironmentTextureRotationLogKey) {
+      lastEnvironmentTextureRotationLogKey = logKey;
+      console.info('[SceneViewer] Environment texture rotation applied', JSON.parse(logKey));
+    }
+  }
+}
+
 async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
   const scene = renderContext?.scene ?? null;
   const snapshot = cloneEnvironmentSettings(settings);
@@ -10889,15 +11032,7 @@ async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
   const backgroundApplied = await applyBackgroundSettings(snapshot.background);
   const environmentApplied = applyEnvironmentReflectionFromBackground(snapshot.background);
 
-  const rot = snapshot.environmentRotationDegrees ?? { x: 0, y: 0, z: 0 };
-  const euler = new THREE.Euler(
-    (rot.x * Math.PI) / 180,
-    (rot.y * Math.PI) / 180,
-    (rot.z * Math.PI) / 180,
-    'XYZ',
-  );
-  scene.backgroundRotation.copy(euler);
-  scene.environmentRotation.copy(euler);
+  applyEnvironmentTextureRotation(snapshot);
   applyRendererShadowSetting();
   syncSceneCsmSunFromEnvironment();
   if (backgroundApplied && environmentApplied) {
@@ -10913,6 +11048,7 @@ function disposeEnvironmentResources() {
   backgroundLoadToken += 1;
   pendingEnvironmentSettings = null;
   activeEnvironmentSettings = cloneEnvironmentSettings(DEFAULT_ENVIRONMENT_SETTINGS);
+  lastEnvironmentTextureRotationLogKey = '';
 }
 
 function resetRemovedSkyState() {
