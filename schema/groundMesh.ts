@@ -662,11 +662,18 @@ export function resolveInfiniteGroundVisibleChunkWindow(
   const centeredMaxChunkX = localBounds.centerCoord.chunkX + renderRadiusChunks
   const centeredMinChunkZ = localBounds.centerCoord.chunkZ - renderRadiusChunks
   const centeredMaxChunkZ = localBounds.centerCoord.chunkZ + renderRadiusChunks
+  const epsilon = Math.max(1e-9, chunkSizeMeters * 1e-9)
+  const boundsMinCoord = resolveGroundChunkCoordFromWorldPosition(localBounds.minX, localBounds.minZ, chunkSizeMeters)
+  const boundsMaxCoord = resolveGroundChunkCoordFromWorldPosition(
+    localBounds.maxX - epsilon,
+    localBounds.maxZ - epsilon,
+    chunkSizeMeters,
+  )
   return {
-    minChunkX: centeredMinChunkX,
-    maxChunkX: centeredMaxChunkX,
-    minChunkZ: centeredMinChunkZ,
-    maxChunkZ: centeredMaxChunkZ,
+    minChunkX: Math.min(centeredMinChunkX, boundsMinCoord.chunkX),
+    maxChunkX: Math.max(centeredMaxChunkX, boundsMaxCoord.chunkX),
+    minChunkZ: Math.min(centeredMinChunkZ, boundsMinCoord.chunkZ),
+    maxChunkZ: Math.max(centeredMaxChunkZ, boundsMaxCoord.chunkZ),
     localBounds,
     centerCoord: localBounds.centerCoord,
   }

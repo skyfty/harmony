@@ -103,7 +103,7 @@ import {
   resolveGroundWorldBounds,
   serializeGroundChunkData,
 } from '@schema/index'
-import { buildGroundChunkDataFromManifestRecord } from '@schema/groundMesh'
+import { buildGroundChunkDataFromManifestRecord, resolveInfiniteGroundVisibleChunkWindow } from '@schema/groundMesh'
 import {
   createSceneCsmShadowRuntime,
   DEFAULT_SCENE_CSM_CONFIG,
@@ -485,11 +485,45 @@ type ViewportInfiniteGroundChunkRuntime = {
   group: THREE.Group
   meshes: Map<string, THREE.Mesh>
   pendingLoads: Map<string, { revision: number; promise: Promise<void> }>
+  lastDesiredAt: Map<string, number>
   sceneId: string | null
   revision: number
 }
 
 const viewportInfiniteGroundChunkRuntimeMap = new WeakMap<THREE.Object3D, ViewportInfiniteGroundChunkRuntime>()
+const VIEWPORT_INFINITE_GROUND_CHUNK_UNLOAD_GRACE_MS = 1200
+const VIEWPORT_INFINITE_GROUND_CHUNK_UNLOAD_PADDING_CHUNKS = 1
+const VIEWPORT_INFINITE_GROUND_CHUNK_FADE_IN_MS = 180
+
+function setViewportChunkMeshMaterialOpacity(mesh: THREE.Mesh, opacity: number): void {
+  const material = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material
+  if (!material) {
+    return
+  }
+  material.transparent = opacity < 0.999
+  material.opacity = opacity
+  material.needsUpdate = true
+}
+
+function updateViewportInfiniteGroundChunkFadeState(mesh: THREE.Mesh, now = Date.now()): number {
+  const fadeStartedAt = Number((mesh.userData as Record<string, unknown> | undefined)?.groundChunkFadeStartedAt)
+  const fadeDurationMs = Number((mesh.userData as Record<string, unknown> | undefined)?.groundChunkFadeDurationMs)
+  if (!Number.isFinite(fadeStartedAt) || !Number.isFinite(fadeDurationMs) || fadeDurationMs <= 0) {
+    setViewportChunkMeshMaterialOpacity(mesh, 1)
+    return 1
+  }
+  const progress = THREE.MathUtils.clamp((now - fadeStartedAt) / fadeDurationMs, 0, 1)
+  setViewportChunkMeshMaterialOpacity(mesh, progress)
+  if (progress >= 1) {
+    delete (mesh.userData as Record<string, unknown>).groundChunkFadeStartedAt
+    delete (mesh.userData as Record<string, unknown>).groundChunkFadeDurationMs
+  }
+  return progress
+}
+
+function isViewportInfiniteGroundChunkReadyToReplaceFallback(mesh: THREE.Mesh): boolean {
+  return updateViewportInfiniteGroundChunkFadeState(mesh) >= 0.999
+}
 
 function canCompleteNodePick(nodeId: string): boolean {
   const node = findSceneNode(sceneStore.nodes, nodeId)
@@ -3598,13 +3632,8 @@ const groundEditor = createGroundEditor({
 	chunkKeys?: string[]
 	chunkCells: number
   }) => {
-  const hiddenChunkKeys = new Set<string>(Object.keys(viewportGroundChunkManifestRecords))
-  for (const key of chunkKeys ?? []) {
-    if (typeof key === 'string' && key.length > 0) {
-      hiddenChunkKeys.add(key)
-    }
-  }
-  if (setInfiniteGroundHiddenChunkKeys(groundObject, hiddenChunkKeys)) {
+  setViewportInfiniteGroundChunkPreviewHiddenKeys(groundObject, chunkKeys ?? null)
+  if (syncViewportInfiniteGroundFallbackHiddenKeys(groundObject)) {
     lastGroundChunkSetSignatureForPlacement = null
     const ownerNodeId = typeof groundObject.userData?.nodeId === 'string' ? groundObject.userData.nodeId : ''
     if (ownerNodeId) {
@@ -3612,7 +3641,6 @@ const groundEditor = createGroundEditor({
       placementSurfaceTargetsDirty = true
     }
   }
-	setViewportInfiniteGroundChunkPreviewHiddenKeys(groundObject, chunkKeys ?? null)
   },
   onSculptCommitApplied: ({ groundObject, definition, affectedRegion, chunkKeys, chunkCells }: {
     groundObject: THREE.Object3D
@@ -3629,6 +3657,9 @@ const groundEditor = createGroundEditor({
     pendingViewportGroundOptimizedRebuild = true
     setViewportInfiniteGroundChunkPreviewHiddenKeys(groundObject, null)
     refreshViewportInfiniteGroundChunkMeshes(groundObject, definition, chunkKeys ?? null)
+    if (syncViewportInfiniteGroundFallbackHiddenKeys(groundObject)) {
+      lastGroundChunkSetSignatureForPlacement = null
+    }
     void persistViewportInfiniteGroundChunks({
       groundObject,
       definition,
@@ -21336,6 +21367,12 @@ function disposeViewportInfiniteGroundChunkMesh(mesh: THREE.Mesh): void {
   } catch (_error) {
     /* noop */
   }
+  try {
+    const material = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material
+    material?.dispose?.()
+  } catch (_error) {
+    /* noop */
+  }
 }
 
 function collectViewportGroundChunkKeysFromRegion(
@@ -21611,8 +21648,9 @@ async function persistViewportInfiniteGroundChunks(params: {
     })
   }
 
-  syncViewportInfiniteGroundChunkMeshes(params.groundObject, params.definition, sceneId, nextRevision, nextManifestRecords)
-  if (setInfiniteGroundHiddenChunkKeys(params.groundObject, Object.keys(nextManifestRecords))) {
+  const streamingDefinition = resolveViewportGroundStreamingDefinition(params.groundObject, params.definition)
+  syncViewportInfiniteGroundChunkMeshes(params.groundObject, streamingDefinition, sceneId, nextRevision, nextManifestRecords)
+  if (syncViewportInfiniteGroundFallbackHiddenKeys(params.groundObject)) {
     lastGroundChunkSetSignatureForPlacement = null
   }
   if (shouldPersistSceneState) {
@@ -21640,6 +21678,7 @@ function ensureViewportInfiniteGroundChunkRuntime(groundObject: THREE.Object3D):
     group,
     meshes: new Map(),
     pendingLoads: new Map(),
+    lastDesiredAt: new Map(),
     sceneId: null,
     revision: -1,
   }
@@ -21655,6 +21694,7 @@ function clearViewportInfiniteGroundChunkRuntime(groundObject: THREE.Object3D): 
   runtime.meshes.forEach((mesh) => disposeViewportInfiniteGroundChunkMesh(mesh))
   runtime.meshes.clear()
   runtime.pendingLoads.clear()
+  runtime.lastDesiredAt.clear()
   runtime.sceneId = null
   runtime.revision = -1
   viewportInfiniteGroundChunkPreviewHiddenKeysMap.delete(groundObject)
@@ -21690,6 +21730,29 @@ function setViewportInfiniteGroundChunkPreviewHiddenKeys(groundObject: THREE.Obj
     viewportInfiniteGroundChunkPreviewHiddenKeysMap.delete(groundObject)
   }
   applyViewportInfiniteGroundChunkPreviewVisibility(groundObject)
+}
+
+function getLoadedViewportInfiniteGroundChunkKeys(groundObject: THREE.Object3D): string[] {
+  const runtime = viewportInfiniteGroundChunkRuntimeMap.get(groundObject)
+  if (!runtime || runtime.meshes.size === 0) {
+    return []
+  }
+  const previewHiddenKeys = viewportInfiniteGroundChunkPreviewHiddenKeysMap.get(groundObject)
+  const loadedKeys: string[] = []
+  runtime.meshes.forEach((mesh, key) => {
+    if (previewHiddenKeys?.has(key)) {
+      return
+    }
+    if (!isViewportInfiniteGroundChunkReadyToReplaceFallback(mesh)) {
+      return
+    }
+    loadedKeys.push(key)
+  })
+  return loadedKeys
+}
+
+function syncViewportInfiniteGroundFallbackHiddenKeys(groundObject: THREE.Object3D): boolean {
+  return setInfiniteGroundHiddenChunkKeys(groundObject, getLoadedViewportInfiniteGroundChunkKeys(groundObject))
 }
 
 function refreshViewportInfiniteGroundChunkMeshes(
@@ -21860,6 +21923,7 @@ function upsertViewportInfiniteGroundChunkMeshFromChunkData(params: {
     runtime.meshes.forEach((mesh) => disposeViewportInfiniteGroundChunkMesh(mesh))
     runtime.meshes.clear()
     runtime.pendingLoads.clear()
+    runtime.lastDesiredAt.clear()
     runtime.sceneId = params.sceneId
   }
   runtime.revision = params.manifestRevision
@@ -21893,7 +21957,10 @@ function upsertViewportInfiniteGroundChunkMeshFromChunkData(params: {
       /* noop */
     }
   } else {
-    const mesh = new THREE.Mesh(geometry, resolveViewportGroundChunkMaterial(params.groundObject))
+    const material = resolveViewportGroundChunkMaterial(params.groundObject).clone()
+    material.transparent = true
+    material.opacity = 0
+    const mesh = new THREE.Mesh(geometry, material)
     mesh.name = `GroundRuntimeChunk:${params.record.key}`
     mesh.receiveShadow = true
     mesh.castShadow = params.groundDefinition.castShadow === true
@@ -21908,6 +21975,9 @@ function upsertViewportInfiniteGroundChunkMeshFromChunkData(params: {
         chunkColumn: parsedCoord.chunkX,
       }
     }
+    mesh.userData.groundChunkFadeStartedAt = Date.now()
+    mesh.userData.groundChunkFadeDurationMs = VIEWPORT_INFINITE_GROUND_CHUNK_FADE_IN_MS
+    updateViewportInfiniteGroundChunkFadeState(mesh)
     runtime.group.add(mesh)
     runtime.meshes.set(params.record.key, mesh)
   }
@@ -21918,6 +21988,7 @@ function upsertViewportInfiniteGroundChunkMeshFromChunkData(params: {
     mesh.visible = !(hiddenKeys?.has(params.record.key) === true)
   }
   runtime.pendingLoads.delete(params.record.key)
+  syncViewportInfiniteGroundFallbackHiddenKeys(params.groundObject)
   lastGroundChunkSetSignatureForPlacement = null
 }
 
@@ -22068,6 +22139,53 @@ function resolveVisibleManifestChunkRecords(
   return resolveVisibleInfiniteGroundChunkManifestRecords(groundObject, groundDefinition, camera, manifestRecords)
 }
 
+function resolveViewportGroundChunkRetainKeys(
+  groundObject: THREE.Object3D,
+  groundDefinition: GroundRuntimeDynamicMesh,
+): Set<string> {
+  if (!camera) {
+    return new Set<string>()
+  }
+  const visibleWindow = resolveInfiniteGroundVisibleChunkWindow(groundObject, groundDefinition, camera)
+  const authoredChunkBounds = resolveGroundChunkBounds(groundDefinition)
+  const padding = VIEWPORT_INFINITE_GROUND_CHUNK_UNLOAD_PADDING_CHUNKS
+  const minChunkZ = Math.max(authoredChunkBounds.minChunkZ, visibleWindow.minChunkZ - padding)
+  const maxChunkZ = Math.min(authoredChunkBounds.maxChunkZ, visibleWindow.maxChunkZ + padding)
+  const minChunkX = Math.max(authoredChunkBounds.minChunkX, visibleWindow.minChunkX - padding)
+  const maxChunkX = Math.min(authoredChunkBounds.maxChunkX, visibleWindow.maxChunkX + padding)
+  const retainedKeys = new Set<string>()
+  for (let chunkZ = minChunkZ; chunkZ <= maxChunkZ; chunkZ += 1) {
+    for (let chunkX = minChunkX; chunkX <= maxChunkX; chunkX += 1) {
+      retainedKeys.add(`${chunkX}:${chunkZ}`)
+    }
+  }
+  return retainedKeys
+}
+
+function resolveViewportGroundStreamingDefinition(
+  groundObject: THREE.Object3D,
+  groundDefinition: GroundRuntimeDynamicMesh,
+): GroundRuntimeDynamicMesh {
+  const chunkSizeCandidate = Number(groundDefinition.chunkSizeMeters)
+  const chunkSizeMeters = Number.isFinite(chunkSizeCandidate) && chunkSizeCandidate > 0
+    ? chunkSizeCandidate
+    : 100
+  const dynamicRadiusMeters = resolveDynamicGroundStreamingRadiusMeters(groundObject)
+  const dynamicRadiusChunks = Math.max(1, Math.ceil(dynamicRadiusMeters / chunkSizeMeters))
+  const authoredRadiusCandidate = Number(groundDefinition.renderRadiusChunks)
+  const authoredRadiusChunks = Number.isFinite(authoredRadiusCandidate) && authoredRadiusCandidate > 0
+    ? Math.max(1, Math.trunc(authoredRadiusCandidate))
+    : 1
+  const renderRadiusChunks = Math.max(authoredRadiusChunks, dynamicRadiusChunks)
+  if (renderRadiusChunks === authoredRadiusChunks) {
+    return groundDefinition
+  }
+  return {
+    ...groundDefinition,
+    renderRadiusChunks,
+  }
+}
+
 function syncViewportInfiniteGroundChunkMeshes(
   groundObject: THREE.Object3D,
   groundDefinition: GroundRuntimeDynamicMesh,
@@ -22080,21 +22198,34 @@ function syncViewportInfiniteGroundChunkMeshes(
     runtime.meshes.forEach((mesh) => disposeViewportInfiniteGroundChunkMesh(mesh))
     runtime.meshes.clear()
     runtime.pendingLoads.clear()
+    runtime.lastDesiredAt.clear()
     runtime.sceneId = sceneId
   }
   runtime.revision = manifestRevision
 
   const visibleRecords = resolveVisibleManifestChunkRecords(groundObject, groundDefinition, manifestRecords)
   const desiredKeys = new Set(visibleRecords.map((record) => record.key))
+  const retainedKeys = resolveViewportGroundChunkRetainKeys(groundObject, groundDefinition)
+  const now = Date.now()
+  desiredKeys.forEach((key) => runtime.lastDesiredAt.set(key, now))
   let changed = false
 
   runtime.meshes.forEach((mesh, key) => {
+    updateViewportInfiniteGroundChunkFadeState(mesh, now)
     if (desiredKeys.has(key)) {
+      return
+    }
+    if (retainedKeys.has(key)) {
+      return
+    }
+    const lastDesiredAt = runtime.lastDesiredAt.get(key) ?? 0
+    if (now - lastDesiredAt <= VIEWPORT_INFINITE_GROUND_CHUNK_UNLOAD_GRACE_MS) {
       return
     }
     disposeViewportInfiniteGroundChunkMesh(mesh)
     runtime.meshes.delete(key)
     runtime.pendingLoads.delete(key)
+    runtime.lastDesiredAt.delete(key)
     changed = true
   })
 
@@ -22160,8 +22291,9 @@ function syncViewportGroundChunks(
   groundObject: THREE.Object3D,
   groundDefinition: GroundRuntimeDynamicMesh,
 ): void {
-  syncGroundChunkLoadingMode(groundObject, groundDefinition, camera)
-  syncViewportInfiniteGroundChunkManifest(groundObject, groundDefinition)
+  const streamingDefinition = resolveViewportGroundStreamingDefinition(groundObject, groundDefinition)
+  syncGroundChunkLoadingMode(groundObject, streamingDefinition, camera)
+  syncViewportInfiniteGroundChunkManifest(groundObject, streamingDefinition)
 }
 
 function syncViewportInfiniteGroundChunkManifest(
@@ -22184,8 +22316,7 @@ function syncViewportInfiniteGroundChunkManifest(
 
   if (viewportGroundChunkManifestSceneId === sceneId && viewportGroundChunkManifestRevision === manifestRevision) {
     syncViewportInfiniteGroundChunkMeshes(groundObject, groundDefinition, sceneId, manifestRevision, viewportGroundChunkManifestRecords)
-    const hiddenManifestKeys = Object.keys(viewportGroundChunkManifestRecords)
-    if (setInfiniteGroundHiddenChunkKeys(groundObject, hiddenManifestKeys)) {
+    if (syncViewportInfiniteGroundFallbackHiddenKeys(groundObject)) {
       lastGroundChunkSetSignatureForPlacement = null
     }
     return
@@ -22227,11 +22358,11 @@ function syncViewportInfiniteGroundChunkManifest(
         if (currentSceneId !== sceneId || currentRevision !== manifestRevision) {
           return
         }
-        const hiddenManifestKeys = Object.keys(viewportGroundChunkManifestRecords)
-        if (setInfiniteGroundHiddenChunkKeys(currentGroundObject, hiddenManifestKeys)) {
+        const currentStreamingDefinition = resolveViewportGroundStreamingDefinition(currentGroundObject, currentDefinition)
+        syncViewportInfiniteGroundChunkMeshes(currentGroundObject, currentStreamingDefinition, sceneId, manifestRevision, manifestRecords)
+        if (syncViewportInfiniteGroundFallbackHiddenKeys(currentGroundObject)) {
           lastGroundChunkSetSignatureForPlacement = null
         }
-        syncViewportInfiniteGroundChunkMeshes(currentGroundObject, currentDefinition, sceneId, manifestRevision, manifestRecords)
       })
       .catch((error) => {
         if (loadToken !== viewportGroundChunkManifestLoadToken) {

@@ -499,7 +499,7 @@ import {
   syncGroundChunkLoadingMode,
   sampleGroundHeight,
 } from '@harmony/schema/groundMesh';
-import { clearInfiniteGroundChunkMeshes, syncInfiniteGroundChunkMeshes } from '@harmony/schema/groundChunkManifestRuntime';
+import { clearInfiniteGroundChunkMeshes, getLoadedInfiniteGroundChunkKeys, syncInfiniteGroundChunkMeshes } from '@harmony/schema/groundChunkManifestRuntime';
 import { createInfiniteGroundChunkColliderRuntime } from '@harmony/schema/infiniteGroundChunkCollisions';
 import { buildGroundAirWallDefinitions } from '@harmony/schema/airWall';
 
@@ -5119,7 +5119,6 @@ function syncViewerInfiniteGroundChunkManifest(
     return;
   }
   const { sourceId, manifestRevision, manifestRecords } = manifestState;
-  setInfiniteGroundHiddenChunkKeys(groundObject, Object.keys(manifestRecords));
   syncInfiniteGroundChunkMeshes({
     groundObject,
     groundDefinition,
@@ -5130,6 +5129,7 @@ function syncViewerInfiniteGroundChunkManifest(
     resolveActiveRecord: (chunkKey) => manifestRecords[chunkKey] ?? null,
     loadChunkData: loadViewerGroundChunkDataBuffer,
   });
+  setInfiniteGroundHiddenChunkKeys(groundObject, getLoadedInfiniteGroundChunkKeys(groundObject));
 }
 
 function resolveGroundViewportWorldSize(): { width: number; depth: number } | null {

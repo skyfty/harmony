@@ -6514,7 +6514,7 @@ onBeforeUnmount(() => {
                   class="mt-2"
                   @click="applyRecommendedDemMinElevation"
                 >
-                  一键贴地
+                  Apply Recommended Elevation
                 </v-btn>
                 <div class="property-panel__section-title property-panel__section-title--muted">Sculpt Resolution</div>
                 <v-text-field
@@ -6553,10 +6553,10 @@ onBeforeUnmount(() => {
                 <div v-if="terrainCellSizeRecommendationReason" class="property-panel__hint">{{ terrainCellSizeRecommendationReason }}</div>
                 <v-btn
                   v-if="recommendedTerrainCellSize"
-                  size="small"
-                  variant="text"
+                  block
+                  variant="tonal"
                   color="primary"
-                  class="property-panel__inline-action"
+                  class="mt-2"
                   @click="applyRecommendedTerrainCellSize"
                 >
                   Apply {{ formatOptionalNumber(recommendedTerrainCellSize) }} m cell size
