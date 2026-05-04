@@ -981,35 +981,6 @@ function applyPlanningDemRegionToGround(
     regionHeightMin = Math.min(regionHeightMin, value)
     regionHeightMax = Math.max(regionHeightMax, value)
   }
-  console.info(`[DEM] Ground apply baseline check\n${JSON.stringify({
-    ground: {
-      nodeId: groundNode.id,
-      baseHeight: Number.isFinite(definition.baseHeight) ? definition.baseHeight : 0,
-      generation: definition.generation ?? null,
-      hasRuntimeTerrainDataset: Boolean(definition.runtimeTerrainDatasetEnabled),
-    },
-    importRegion: {
-      startRow: region.startRow,
-      endRow: region.endRow,
-      startColumn: region.startColumn,
-      endColumn: region.endColumn,
-      vertexRows: region.vertexRows,
-      vertexColumns: region.vertexColumns,
-      rebasedHeightSummary: {
-        finiteCount: regionHeightFiniteCount,
-        min: regionHeightFiniteCount > 0 ? regionHeightMin : null,
-        max: regionHeightFiniteCount > 0 ? regionHeightMax : null,
-      },
-    },
-    groundBaseHeightSummary: {
-      finiteCount: baseHeightFiniteCount,
-      min: baseHeightFiniteCount > 0 ? baseHeightMin : null,
-      max: baseHeightFiniteCount > 0 ? baseHeightMax : null,
-    },
-    localEditTiles: localEditTiles ? {
-      tileCount: Object.keys(localEditTiles).length,
-    } : null,
-  }, null, 2)}`)
   // 创建下一个地面种子对象，包含更新的规划元数据和本地编辑图块
   const nextGroundSeed = {
     ...definition,
@@ -1056,18 +1027,6 @@ function applyPlanningDemRegionToGround(
   
   // 同步地面覆盖区域状态，返回最新的地面运行时网格
   const nextGround = syncGroundCoverageRegionState(sceneStore, groundNode, nextGroundSeed, dirtyChunkKeys)
-
-  console.info(`[DEM] Ground definition lifecycle | applyPlanningDemRegionToGround\n${JSON.stringify({
-    nodeId: groundNode.id,
-    localEditTileCounts: {
-      definitionBeforeMerge: definition.localEditTiles ? Object.keys(definition.localEditTiles).length : 0,
-      incomingTiles: localEditTiles ? Object.keys(localEditTiles).length : 0,
-      mergedSeed: mergedLocalEditTiles ? Object.keys(mergedLocalEditTiles).length : 0,
-      groundNodeDynamicMesh: groundRuntimeDefinition?.localEditTiles ? Object.keys(groundRuntimeDefinition.localEditTiles).length : 0,
-      nextGroundAfterCoverageSync: nextGround.localEditTiles ? Object.keys(nextGround.localEditTiles).length : 0,
-    },
-    dirtyChunkKeyCount: dirtyChunkKeys?.length ?? 0,
-  }, null, 2)}`)
 
   // 更新场景存储中的地面节点动态网格
   sceneStore.updateGroundNodeDynamicMesh(groundNode.id, nextGround)

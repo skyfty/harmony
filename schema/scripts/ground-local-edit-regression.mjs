@@ -7,6 +7,8 @@ import {
 } from '../dist/index.js'
 import {
   analyzeGroundOptimizedMeshUsage,
+  createGroundMesh,
+  releaseGroundMeshCache,
   sampleGroundHeight,
   sculptGround,
 } from '../dist/groundMesh.js'
@@ -183,10 +185,53 @@ function testLocalEditTilesDoNotGloballyDisableOptimizedMesh() {
   assert.equal(usage.reason, 'optimized-ready', 'optimized mesh should remain globally available when only local edit tiles are present')
 }
 
+function testLocalEditCoverageIndexDoesNotClampToCentralEightByEightChunks() {
+  const localEditTiles = {}
+  for (let tileRow = -8; tileRow <= 7; tileRow += 1) {
+    for (let tileColumn = -8; tileColumn <= 7; tileColumn += 1) {
+      const tile = createFlatLocalEditTile({
+        tileRow,
+        tileColumn,
+        tileSizeMeters: 100,
+        resolution: 1,
+        value: 1,
+      })
+      localEditTiles[tile.key] = tile
+    }
+  }
+
+  const definition = createGroundDefinition({
+    terrainMode: 'infinite',
+    rows: 8,
+    columns: 8,
+    cellSize: 10,
+    chunkSizeMeters: 100,
+    editTileSizeMeters: 100,
+    editTileResolution: 1,
+    localEditTiles,
+  })
+
+  const ground = createGroundMesh(definition)
+  let independentChunkMeshCount = 0
+  ground.traverse((child) => {
+    if (child?.isMesh && typeof child.name === 'string' && child.name.startsWith('GroundChunk:')) {
+      independentChunkMeshCount += 1
+    }
+  })
+  releaseGroundMeshCache()
+
+  assert.equal(
+    independentChunkMeshCount,
+    16 * 16,
+    'local edit tile coverage should classify all imported DEM chunks, not only the central 8x8 chunk window',
+  )
+}
+
 testLocalEditTileSampling()
 testLocalEditTileEdgeSamplingUsesOnlyRequiredCorners()
 testSculptWritesLocalEditTiles()
 testInfiniteSculptWritesWorldSpaceLocalEditTilesOutsideBounds()
 testLocalEditTilesDoNotGloballyDisableOptimizedMesh()
+testLocalEditCoverageIndexDoesNotClampToCentralEightByEightChunks()
 
 console.log('ground-local-edit regression checks passed')
