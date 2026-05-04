@@ -37,6 +37,7 @@ export interface PlanningDemImportOptions {
   maxElevation?: number | null
   metersPerPixel?: number | null
   worldBoundsOverride?: PlanningTerrainWorldBounds | null
+  createPreview?: boolean
 }
 
 export interface PlanningDemWindowedGeoTiffSource {
@@ -434,6 +435,9 @@ function sampleRasterToPreview(values: ArrayLike<number>, width: number, height:
   if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
     return null
   }
+  if (typeof document === 'undefined' || typeof document.createElement !== 'function') {
+    return null
+  }
   const maxPreviewSize = 512
   const previewScale = Math.min(1, maxPreviewSize / Math.max(width, height))
   const previewWidth = Math.max(1, Math.round(width * previewScale))
@@ -557,13 +561,15 @@ async function parsePlanningHeightmapImageBuffer(
     throw new Error(`PNG heightmap validation failed: found ${issues.join(' and ')}. Export a fully opaque grayscale PNG from QGIS using the Harmony PNG DEM protocol (gray 32 = 0m, 20m per gray).`)
   }
 
-  const preview = sampleRasterToPreview(
-    rasterData,
-    width,
-    height,
-    PLANNING_PNG_HEIGHTMAP_CONTRACT.minElevation,
-    PLANNING_PNG_HEIGHTMAP_CONTRACT.maxElevation,
-  )
+  const preview = options?.createPreview === false
+    ? null
+    : sampleRasterToPreview(
+        rasterData,
+        width,
+        height,
+        PLANNING_PNG_HEIGHTMAP_CONTRACT.minElevation,
+        PLANNING_PNG_HEIGHTMAP_CONTRACT.maxElevation,
+      )
   const worldBounds = resolveImageHeightmapWorldBounds(width, height, options)
 
   return {
@@ -641,7 +647,9 @@ async function parsePlanningGeoTiffBuffer(
     height,
     geographic,
   })
-  const preview = effectiveMinElevation !== null && effectiveMaxElevation !== null
+  const preview = options?.createPreview === false
+    ? null
+    : effectiveMinElevation !== null && effectiveMaxElevation !== null
     ? sampleRasterToPreview(rasters, width, height, effectiveMinElevation, effectiveMaxElevation)
     : null
   const sampleStepMeters = computeSampleStepMeters(worldBounds, width, height)

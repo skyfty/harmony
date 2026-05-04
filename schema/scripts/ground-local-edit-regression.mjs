@@ -11,6 +11,7 @@ import {
   releaseGroundMeshCache,
   sampleGroundHeight,
   sculptGround,
+  updateGroundChunks,
 } from '../dist/groundMesh.js'
 
 function createGroundDefinition(overrides = {}) {
@@ -212,6 +213,7 @@ function testLocalEditCoverageIndexDoesNotClampToCentralEightByEightChunks() {
   })
 
   const ground = createGroundMesh(definition)
+  updateGroundChunks(ground, definition, null, { budget: null, force: true, minIntervalMs: 0 })
   let independentChunkMeshCount = 0
   ground.traverse((child) => {
     if (child?.isMesh && typeof child.name === 'string' && child.name.startsWith('GroundChunk:')) {

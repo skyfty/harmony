@@ -797,6 +797,7 @@ async function buildPlanningDemHeightRegionAsync(options: {
   startColumn: number
   endColumn: number
   onProgress?: (payload: PlanningDemBuildProgress) => void
+  preferWorker?: boolean
 }): Promise<PlanningDemHeightRegion> {
   const plan = resolvePlanningDemHeightRegionBuildPlan(options)
   if (!plan) {
@@ -810,7 +811,7 @@ async function buildPlanningDemHeightRegionAsync(options: {
       values: new Float64Array(0),
     }
   }
-  const worker = getPlanningDemHeightRegionWorker()
+  const worker = options.preferWorker === false ? null : getPlanningDemHeightRegionWorker()
   if (!worker) {
     return buildPlanningDemHeightRegionSyncFromPlan(plan, options.source, options.onProgress)
   }
@@ -1018,12 +1019,13 @@ async function buildPlanningDemLocalEditTilesForRegionAsync(options: {
   startColumn: number
   endColumn: number
   onProgress?: (payload: PlanningDemBuildProgress) => void
+  preferWorker?: boolean
 }): Promise<GroundLocalEditTileMap | null> {
   const plan = resolvePlanningDemLocalEditTileBuildPlan(options)
   if (!plan) {
     return null
   }
-  const worker = getPlanningDemLocalEditTilesWorker()
+  const worker = options.preferWorker === false ? null : getPlanningDemLocalEditTilesWorker()
   if (!worker) {
     return buildPlanningDemLocalEditTilesForRegionSyncFromPlan(plan, options.source, options.onProgress)
   }
@@ -1069,7 +1071,7 @@ async function buildPlanningDemLocalEditTilesForRegionAsync(options: {
   return buildPlanningDemLocalEditTilesFromWorkerResult(response.tiles)
 }
 
-async function buildPlanningDemRegionFromPreparedSource(options: {
+export async function buildPlanningDemRegionFromPreparedSource(options: {
   definition: GroundRuntimeDynamicMesh
   prepared: PlanningDemPreparedSource
   startRow: number
@@ -1079,6 +1081,7 @@ async function buildPlanningDemRegionFromPreparedSource(options: {
   textureDataUrl?: string | null
   textureName?: string | null
   onProgress?: (payload: PlanningDemBuildProgress) => void
+  preferWorker?: boolean
 }): Promise<PlanningDemRegionConversionResult> {
   const reportProgress = createThrottledPlanningDemProgressReporter(options.onProgress)
   const region = await buildPlanningDemHeightRegionAsync({
@@ -1089,6 +1092,7 @@ async function buildPlanningDemRegionFromPreparedSource(options: {
     startColumn: options.startColumn,
     endColumn: options.endColumn,
     onProgress: (payload) => reportProgress(payload),
+    preferWorker: options.preferWorker,
   })
   return {
     region,
@@ -1100,6 +1104,7 @@ async function buildPlanningDemRegionFromPreparedSource(options: {
       startColumn: region.startColumn,
       endColumn: region.endColumn,
       onProgress: (payload) => reportProgress(payload),
+      preferWorker: options.preferWorker,
     }),
     planningMetadata: options.prepared.planningMetadata,
     textureDataUrl: options.textureDataUrl ?? null,
@@ -1178,7 +1183,7 @@ function blobToDataUrl(blob: Blob): Promise<string> {
   })
 }
 
-async function resolvePlanningDemOrthophotoTexture(options: {
+export async function resolvePlanningDemOrthophotoTexture(options: {
   terrainDem: PlanningTerrainDemData
   applyOrthophoto?: boolean
 }): Promise<{ textureDataUrl: string | null; textureName: string | null }> {
@@ -1242,6 +1247,7 @@ export async function resolvePlanningDemPreparedSource(options: {
     {
       minElevation: terrainDem.minElevation ?? null,
       maxElevation: terrainDem.maxElevation ?? null,
+      createPreview: false,
       worldBoundsOverride: isPlanningDemHeightmapImageSource(terrainDem.filename ?? '', terrainDem.mimeType ?? null)
         ? (terrainDem.worldBounds ?? null)
         : null,

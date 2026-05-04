@@ -12,9 +12,13 @@ import {
 } from '@schema'
 import type { PlanningTerrainDemData } from '@/types/planning-scene-data'
 import {
+  buildPlanningDemRegionFromPreparedSource,
   resolvePlanningDemTargetWorldBounds,
   resolvePlanningDemPreparedSource,
+  resolvePlanningDemOrthophotoTexture,
+  type PlanningDemBuildProgress,
   type PlanningDemPreparedSource,
+  type PlanningDemRegionConversionResult,
   type PlanningDemRasterSource,
 } from '@/utils/planningDemToGround'
 import { samplePlanningDemHeightGridFromWorldBounds } from '@/wasm/planningDemSampling'
@@ -27,11 +31,58 @@ export interface PlanningDemTerrainDatasetBuildOptions {
   datasetId?: string
   leafTileSegments?: number
   regionLevel?: number | null
+  preparedSource?: PlanningDemPreparedSource
 }
 
 export interface PlanningDemTerrainDatasetBuildResult {
   manifest: QuantizedTerrainDatasetRootManifest
   regionPacks: Record<string, ArrayBuffer>
+}
+
+export interface PlanningDemTerrainConversionBuildOptions extends PlanningDemTerrainDatasetBuildOptions {
+  startRow: number
+  endRow: number
+  startColumn: number
+  endColumn: number
+  applyOrthophoto?: boolean
+  onProgress?: (payload: PlanningDemBuildProgress) => void
+}
+
+export interface PlanningDemTerrainConversionBuildResult {
+  demResult: PlanningDemRegionConversionResult
+  dataset: PlanningDemTerrainDatasetBuildResult
+}
+
+export type PlanningDemTerrainDatasetWorkerRequest = {
+  kind: 'build-planning-dem-terrain-dataset'
+  requestId: number
+  options: PlanningDemTerrainDatasetBuildOptions
+}
+
+export type PlanningDemTerrainConversionWorkerRequest = {
+  kind: 'build-planning-dem-terrain-conversion'
+  requestId: number
+  options: Omit<PlanningDemTerrainConversionBuildOptions, 'onProgress'>
+}
+
+export type PlanningDemTerrainDatasetWorkerResponse = {
+  kind: 'build-planning-dem-terrain-dataset-result'
+  requestId: number
+  result: PlanningDemTerrainDatasetBuildResult | null
+  error?: string
+}
+
+export type PlanningDemTerrainConversionWorkerResponse = {
+  kind: 'build-planning-dem-terrain-conversion-result'
+  requestId: number
+  result: PlanningDemTerrainConversionBuildResult | null
+  error?: string
+}
+
+export type PlanningDemTerrainConversionWorkerProgressResponse = {
+  kind: 'build-planning-dem-terrain-conversion-progress'
+  requestId: number
+  progress: PlanningDemBuildProgress
 }
 
 type TileBuildRecord = {
@@ -46,6 +97,17 @@ type TileBuildRecord = {
 const DEFAULT_LEAF_TILE_SEGMENTS = 64
 const MIN_TILE_SEGMENTS = 8
 const MAX_TILE_SEGMENTS = 128
+
+let planningDemTerrainDatasetWorker: Worker | null = null
+let planningDemTerrainDatasetRequestId = 0
+const pendingPlanningDemTerrainDatasetRequests = new Map<
+  number,
+  {
+    resolve: (response: PlanningDemTerrainDatasetWorkerResponse | PlanningDemTerrainConversionWorkerResponse) => void
+    reject: (error: Error) => void
+    onProgress?: (payload: PlanningDemBuildProgress) => void
+  }
+>()
 
 type RasterSourceMetrics = {
   width: number
@@ -504,18 +566,347 @@ function buildRegionIndex(options: {
   }
 }
 
+function getPlanningDemTerrainDatasetWorker(): Worker | null {
+  if (typeof Worker === 'undefined') {
+    return null
+  }
+  if (planningDemTerrainDatasetWorker) {
+    return planningDemTerrainDatasetWorker
+  }
+  try {
+    planningDemTerrainDatasetWorker = new Worker(new URL('@/workers/planningDemTerrainDataset.worker.ts', import.meta.url), {
+      type: 'module',
+    })
+    planningDemTerrainDatasetWorker.onmessage = (event: MessageEvent<PlanningDemTerrainDatasetWorkerResponse | PlanningDemTerrainConversionWorkerResponse | PlanningDemTerrainConversionWorkerProgressResponse>) => {
+      const data = event.data
+      if (data?.kind === 'build-planning-dem-terrain-conversion-progress') {
+        pendingPlanningDemTerrainDatasetRequests.get(data.requestId)?.onProgress?.(data.progress)
+        return
+      }
+      if (!data || (data.kind !== 'build-planning-dem-terrain-dataset-result' && data.kind !== 'build-planning-dem-terrain-conversion-result')) {
+        return
+      }
+      const pending = pendingPlanningDemTerrainDatasetRequests.get(data.requestId)
+      if (!pending) {
+        return
+      }
+      pendingPlanningDemTerrainDatasetRequests.delete(data.requestId)
+      pending.resolve(data)
+    }
+    planningDemTerrainDatasetWorker.onerror = (event) => {
+      console.warn('[PlanningDEM] Terrain dataset Worker failed', event)
+      const pendingRequests = Array.from(pendingPlanningDemTerrainDatasetRequests.values())
+      pendingPlanningDemTerrainDatasetRequests.clear()
+      for (const pending of pendingRequests) {
+        pending.reject(new Error('DEM terrain dataset Worker failed'))
+      }
+      planningDemTerrainDatasetWorker?.terminate()
+      planningDemTerrainDatasetWorker = null
+    }
+    return planningDemTerrainDatasetWorker
+  } catch (error) {
+    console.warn('[PlanningDEM] Unable to initialize terrain dataset Worker; falling back to main thread', error)
+    planningDemTerrainDatasetWorker = null
+    return null
+  }
+}
+
+function clonePlanningDemTerrainDatasetDefinitionForWorker(definition: GroundRuntimeDynamicMesh): GroundRuntimeDynamicMesh {
+  const source = definition as unknown as Record<string, unknown>
+  const clone: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(source)) {
+    if (typeof value === 'function') {
+      continue
+    }
+    if (key.startsWith('runtime') && key !== 'runtimeHydratedHeightState' && key !== 'runtimeDisableOptimizedChunks' && key !== 'runtimeLoadedTileKeys') {
+      continue
+    }
+    if (key === 'manualHeightMap' || key === 'planningHeightMap' || key === 'localEditTiles') {
+      continue
+    }
+    const clonedValue = clonePlanningDemWorkerValue(value)
+    if (clonedValue !== undefined) {
+      clone[key] = clonedValue
+    }
+  }
+  return clone as unknown as GroundRuntimeDynamicMesh
+}
+
+function clonePlanningDemTerrainDemForWorker(terrainDem: PlanningTerrainDemData): PlanningTerrainDemData {
+  return clonePlanningDemWorkerValue(terrainDem) as PlanningTerrainDemData
+}
+
+function clonePlanningDemWorkerValue(value: unknown): unknown {
+  if (value == null) {
+    return value
+  }
+  const valueType = typeof value
+  if (valueType === 'string' || valueType === 'number' || valueType === 'boolean') {
+    return value
+  }
+  if (valueType === 'bigint' || valueType === 'symbol' || valueType === 'function') {
+    return undefined
+  }
+  if (value instanceof ArrayBuffer) {
+    return value.slice(0)
+  }
+  if (ArrayBuffer.isView(value)) {
+    return (value as { slice?: () => unknown }).slice?.()
+  }
+  if (Array.isArray(value)) {
+    const result: unknown[] = []
+    for (const entry of value) {
+      const clonedEntry = clonePlanningDemWorkerValue(entry)
+      if (clonedEntry !== undefined) {
+        result.push(clonedEntry)
+      }
+    }
+    return result
+  }
+  if (typeof value === 'object') {
+    const result: Record<string, unknown> = {}
+    for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+      const clonedEntry = clonePlanningDemWorkerValue(entry)
+      if (clonedEntry !== undefined) {
+        result[key] = clonedEntry
+      }
+    }
+    return result
+  }
+  return undefined
+}
+
+function collectPlanningDemTerrainDatasetTransferables(result: PlanningDemTerrainDatasetBuildResult): Transferable[] {
+  return Object.values(result.regionPacks).filter((value): value is ArrayBuffer => value instanceof ArrayBuffer)
+}
+
+function collectPlanningDemTerrainConversionTransferables(result: PlanningDemTerrainConversionBuildResult): Transferable[] {
+  const transferables = collectPlanningDemTerrainDatasetTransferables(result.dataset)
+  const valuesBuffer = result.demResult.region.values.buffer
+  if (valuesBuffer instanceof ArrayBuffer) {
+    transferables.push(valuesBuffer)
+  }
+  return transferables
+}
+
+export function buildPlanningDemTerrainDatasetWorkerResponse(
+  requestId: number,
+  result: PlanningDemTerrainDatasetBuildResult,
+): PlanningDemTerrainDatasetWorkerResponse {
+  return {
+    kind: 'build-planning-dem-terrain-dataset-result',
+    requestId,
+    result,
+  }
+}
+
+export function collectPlanningDemTerrainDatasetWorkerTransferables(
+  result: PlanningDemTerrainDatasetBuildResult,
+): Transferable[] {
+  return collectPlanningDemTerrainDatasetTransferables(result)
+}
+
+export function buildPlanningDemTerrainConversionWorkerResponse(
+  requestId: number,
+  result: PlanningDemTerrainConversionBuildResult,
+): PlanningDemTerrainConversionWorkerResponse {
+  return {
+    kind: 'build-planning-dem-terrain-conversion-result',
+    requestId,
+    result,
+  }
+}
+
+export function collectPlanningDemTerrainConversionWorkerTransferables(
+  result: PlanningDemTerrainConversionBuildResult,
+): Transferable[] {
+  return collectPlanningDemTerrainConversionTransferables(result)
+}
+
+export async function buildPlanningDemTerrainDatasetInWorker(
+  options: PlanningDemTerrainDatasetBuildOptions,
+): Promise<PlanningDemTerrainDatasetBuildResult> {
+  const worker = getPlanningDemTerrainDatasetWorker()
+  if (!worker) {
+    return buildPlanningDemTerrainDataset(options)
+  }
+
+  const requestId = ++planningDemTerrainDatasetRequestId
+  const response = await new Promise<PlanningDemTerrainDatasetWorkerResponse | PlanningDemTerrainConversionWorkerResponse>((resolve, reject) => {
+    pendingPlanningDemTerrainDatasetRequests.set(requestId, { resolve, reject })
+    try {
+      const request: PlanningDemTerrainDatasetWorkerRequest = {
+        kind: 'build-planning-dem-terrain-dataset',
+        requestId,
+        options: {
+          ...options,
+          definition: clonePlanningDemTerrainDatasetDefinitionForWorker(options.definition),
+          terrainDem: clonePlanningDemTerrainDemForWorker(options.terrainDem),
+          preparedSource: undefined,
+        },
+      }
+      worker.postMessage(request)
+    } catch {
+      pendingPlanningDemTerrainDatasetRequests.delete(requestId)
+      void buildPlanningDemTerrainDataset(options)
+        .then((result) => resolve(buildPlanningDemTerrainDatasetWorkerResponse(requestId, result)))
+        .catch((fallbackError) => {
+          reject(fallbackError instanceof Error ? fallbackError : new Error(String(fallbackError)))
+        })
+    }
+  })
+
+  if (response.error) {
+    throw new Error(response.error)
+  }
+  if (response.kind !== 'build-planning-dem-terrain-dataset-result') {
+    throw new Error('DEM terrain dataset Worker returned an unexpected response')
+  }
+  if (!response.result) {
+    throw new Error('DEM terrain dataset Worker returned an empty result')
+  }
+  return response.result
+}
+
+export async function buildPlanningDemTerrainConversionInWorker(
+  options: PlanningDemTerrainConversionBuildOptions,
+): Promise<PlanningDemTerrainConversionBuildResult> {
+  const worker = getPlanningDemTerrainDatasetWorker()
+  if (!worker) {
+    return buildPlanningDemTerrainConversion(options)
+  }
+
+  const { onProgress, ...workerOptions } = options
+  const requestId = ++planningDemTerrainDatasetRequestId
+  const response = await new Promise<PlanningDemTerrainDatasetWorkerResponse | PlanningDemTerrainConversionWorkerResponse>((resolve, reject) => {
+    pendingPlanningDemTerrainDatasetRequests.set(requestId, { resolve, reject, onProgress })
+    try {
+      const request: PlanningDemTerrainConversionWorkerRequest = {
+        kind: 'build-planning-dem-terrain-conversion',
+        requestId,
+        options: {
+          ...workerOptions,
+          definition: clonePlanningDemTerrainDatasetDefinitionForWorker(options.definition),
+          terrainDem: clonePlanningDemTerrainDemForWorker(options.terrainDem),
+          preparedSource: undefined,
+        },
+      }
+      worker.postMessage(request)
+    } catch {
+      pendingPlanningDemTerrainDatasetRequests.delete(requestId)
+      void buildPlanningDemTerrainConversion(options)
+        .then((result) => resolve(buildPlanningDemTerrainConversionWorkerResponse(requestId, result)))
+        .catch((fallbackError) => {
+          reject(fallbackError instanceof Error ? fallbackError : new Error(String(fallbackError)))
+        })
+    }
+  })
+
+  if (response.error) {
+    throw new Error(response.error)
+  }
+  if (response.kind !== 'build-planning-dem-terrain-conversion-result') {
+    throw new Error('DEM terrain conversion Worker returned an unexpected response')
+  }
+  if (!response.result) {
+    throw new Error('DEM terrain conversion Worker returned an empty result')
+  }
+  return response.result
+}
+
+export async function buildPlanningDemTerrainConversion(
+  options: PlanningDemTerrainConversionBuildOptions,
+): Promise<PlanningDemTerrainConversionBuildResult> {
+  const reportProgress = options.onProgress
+  reportProgress?.({
+    phase: 'load-source',
+    loaded: 0,
+    total: 1,
+    label: 'Loading DEM source…',
+    detail: '0/1',
+  })
+  const prepared = await resolvePlanningDemPreparedSource({
+    definition: options.definition,
+    terrainDem: options.terrainDem,
+  })
+  reportProgress?.({
+    phase: 'load-source',
+    loaded: 1,
+    total: 1,
+    label: 'Loading DEM source…',
+    detail: '1/1',
+  })
+  reportProgress?.({
+    phase: 'load-orthophoto',
+    loaded: 0,
+    total: 1,
+    label: 'Loading orthophoto…',
+    detail: '0/1',
+  })
+  const texture = await resolvePlanningDemOrthophotoTexture({
+    terrainDem: options.terrainDem,
+    applyOrthophoto: options.applyOrthophoto,
+  })
+  reportProgress?.({
+    phase: 'load-orthophoto',
+    loaded: 1,
+    total: 1,
+    label: texture.textureDataUrl ? 'Loading orthophoto…' : 'Skipping orthophoto…',
+    detail: '1/1',
+  })
+
+  const demResult = await buildPlanningDemRegionFromPreparedSource({
+    definition: options.definition,
+    prepared,
+    startRow: options.startRow,
+    endRow: options.endRow,
+    startColumn: options.startColumn,
+    endColumn: options.endColumn,
+    textureDataUrl: texture.textureDataUrl,
+    textureName: texture.textureName,
+    onProgress: reportProgress,
+    preferWorker: false,
+  })
+  reportProgress?.({
+    phase: 'build-edit-tiles',
+    loaded: 1,
+    total: 1,
+    label: 'Building terrain dataset…',
+    detail: '1/1',
+  })
+  const dataset = await buildPlanningDemTerrainDataset({
+    definition: options.definition,
+    terrainDem: options.terrainDem,
+    datasetId: options.datasetId,
+    leafTileSegments: options.leafTileSegments,
+    regionLevel: options.regionLevel,
+    preparedSource: prepared,
+  })
+
+  return { demResult, dataset }
+}
+
 export async function buildPlanningDemTerrainDataset(
   options: PlanningDemTerrainDatasetBuildOptions,
 ): Promise<PlanningDemTerrainDatasetBuildResult> {
   const leafTileSegments = clampFiniteInteger(options.leafTileSegments, DEFAULT_LEAF_TILE_SEGMENTS, MIN_TILE_SEGMENTS, MAX_TILE_SEGMENTS)
   const demHash = typeof options.terrainDem.sourceFileHash === 'string' ? options.terrainDem.sourceFileHash.trim() : ''
   const isGeoTiff = isPlanningDemGeoTiffSource(options.terrainDem.filename ?? '', options.terrainDem.mimeType ?? null)
-  let prepared: PlanningDemPreparedSource | null = null
+  let prepared: PlanningDemPreparedSource | null = options.preparedSource ?? null
   let windowedGeoTiffSource: NonNullable<Awaited<ReturnType<typeof openPlanningDemWindowedGeoTiffSource>>> | null = null
   let sourceMetrics: RasterSourceMetrics
   let datasetBounds: QuantizedTerrainDatasetBounds
 
-  if (isGeoTiff && demHash) {
+  if (prepared) {
+    sourceMetrics = {
+      width: prepared.rasterSource.width,
+      height: prepared.rasterSource.height,
+      targetWorldBounds: prepared.rasterSource.targetWorldBounds,
+      sampleStepX: prepared.rasterSource.sampleStepX,
+      sampleStepZ: prepared.rasterSource.sampleStepZ,
+    }
+    datasetBounds = resolveDatasetBounds(prepared)
+  } else if (isGeoTiff && demHash) {
     const blob = await loadPlanningDemBlobByHash(demHash)
     if (!blob) {
       throw new Error('DEM blob is missing from storage')

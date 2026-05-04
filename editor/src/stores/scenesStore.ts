@@ -1826,14 +1826,18 @@ export const useScenesStore = defineStore('scenes', {
       )
 
       await writeSceneTerrainDatasetManifest(this.workspaceId, sceneId, manifest)
-      for (const regionKey of existingRegionKeys) {
-        if (!nextRegionKeys.has(regionKey)) {
-          await writeSceneTerrainDatasetRegionPack(this.workspaceId, sceneId, regionKey, null)
+      const writeRegionPackBatch = async (entries: Array<[string, ArrayBuffer | null]>) => {
+        const batchSize = 8
+        for (let index = 0; index < entries.length; index += batchSize) {
+          await Promise.all(entries.slice(index, index + batchSize).map(([regionKey, buffer]) => (
+            writeSceneTerrainDatasetRegionPack(this.workspaceId, sceneId, regionKey, buffer)
+          )))
         }
       }
-      for (const [regionKey, buffer] of Object.entries(regionPacks)) {
-        await writeSceneTerrainDatasetRegionPack(this.workspaceId, sceneId, regionKey, buffer ?? null)
-      }
+      await writeRegionPackBatch(Array.from(existingRegionKeys)
+        .filter((regionKey) => !nextRegionKeys.has(regionKey))
+        .map((regionKey) => [regionKey, null]))
+      await writeRegionPackBatch(Object.entries(regionPacks).map(([regionKey, buffer]) => [regionKey, buffer ?? null]))
 
       if (options.syncServer !== false && this.workspaceType === 'user') {
         const sceneStore = useSceneStore()

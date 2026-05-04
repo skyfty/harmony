@@ -4927,9 +4927,9 @@ export function updateGroundChunks(
   // 已经存在的 flat chunk 会一直保留，直到它被雕刻 chunk 替代。
   syncGroundFlatChunkBatches(root, state, definition, desiredFlatChunkGroups)
 
-  const defaultBudget: GroundChunkBudget | null = camera
+  const defaultBudget: GroundChunkBudget = camera
     ? ({ maxCreatePerUpdate: 6, maxDestroyPerUpdate: 8 } satisfies GroundChunkBudget)
-    : null
+    : ({ maxCreatePerUpdate: 12, maxDestroyPerUpdate: 16, maxMs: 8 } satisfies GroundChunkBudget)
   // 没有显式预算时，给摄像机驱动的更新一个保守默认值：
   // 创建数量不要太大，否则会卡；销毁数量也不要太大，否则会导致边缘内容瞬间消失。
   const effectiveBudget: GroundChunkBudget | null = options.budget === undefined ? defaultBudget : (options.budget as GroundChunkBudget | null)
