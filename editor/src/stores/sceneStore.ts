@@ -9651,9 +9651,15 @@ export const useSceneStore = defineStore('scene', {
         this.updateNodeDynamicMesh(nodeId, dynamicMesh)
         return
       }
+      const existingLocalEditTileCount = target.dynamicMesh && typeof target.dynamicMesh === 'object' && target.dynamicMesh?.localEditTiles
+        ? Object.keys(target.dynamicMesh.localEditTiles as Record<string, unknown>).length
+        : 0
       const incoming = dynamicMesh && typeof dynamicMesh === 'object'
         ? { ...(dynamicMesh as Record<string, unknown>) }
         : dynamicMesh
+      const incomingLocalEditTileCount = incoming && typeof incoming === 'object' && Object.prototype.hasOwnProperty.call(incoming, 'localEditTiles') && (incoming as Record<string, unknown>).localEditTiles
+        ? Object.keys((incoming as Record<string, unknown>).localEditTiles as Record<string, unknown>).length
+        : 0
       let shouldPersistScatterSidecar = false
       let shouldPersistPaintSidecar = false
       if (incoming && typeof incoming === 'object' && this.currentSceneId) {
@@ -9690,6 +9696,17 @@ export const useSceneStore = defineStore('scene', {
         })
       }
       finalizeDynamicMeshRuntimePatch(this, nodeId, resolveDynamicMeshType(target.dynamicMesh))
+      const mergedLocalEditTileCount = target.dynamicMesh && typeof target.dynamicMesh === 'object' && target.dynamicMesh?.localEditTiles
+        ? Object.keys(target.dynamicMesh.localEditTiles as Record<string, unknown>).length
+        : 0
+      console.info(`[Ground] Ground definition lifecycle | updateGroundNodeDynamicMesh\n${JSON.stringify({
+        nodeId,
+        localEditTileCounts: {
+          existingBeforeMerge: existingLocalEditTileCount,
+          incomingPatch: incomingLocalEditTileCount,
+          targetAfterMerge: mergedLocalEditTileCount,
+        },
+      }, null, 2)}`)
       persistGroundHeightSidecarForNode(target)
       if (shouldPersistScatterSidecar) {
         persistGroundScatterSidecarForNode(target)

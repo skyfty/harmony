@@ -1589,6 +1589,7 @@ export interface GroundPlanningDemSourceMetadata {
   height: number
   minElevation?: number | null
   maxElevation?: number | null
+  elevationOffsetMeters?: number | null
   sampleStepMeters?: number | null
   appliedSampleStepMeters?: number | null
   sampleStepX?: number | null

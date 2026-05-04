@@ -21,6 +21,8 @@ export interface PlanningDemImportResult {
   width: number
   height: number
   rasterData?: ArrayLike<number>
+  rawMinElevation: number | null
+  recommendedAppliedMinElevation: number | null
   minElevation: number | null
   maxElevation: number | null
   sampleStepMeters: number | null
@@ -192,6 +194,8 @@ function hasProjectedGeoTiffCrs(geoKeys: Record<string, unknown> | null | undefi
 }
 
 const PLANNING_DEM_SQUARE_RESOLUTION_RELATIVE_TOLERANCE = 0.005
+const PLANNING_DEM_MAX_INVALID_SAMPLE_RATIO = 0.05
+const PLANNING_DEM_MAX_INVALID_SAMPLE_COUNT = 4096
 
 function isSquareResolution(resolution: PlanningDemResolution): boolean {
   const larger = Math.max(resolution.x, resolution.y)
@@ -226,6 +230,17 @@ function countInvalidRasterSamples(values: ArrayLike<number>, noDataValue: numbe
     }
   }
   return invalidSampleCount
+}
+
+function isPlanningDemInvalidSampleCountAcceptable(invalidSampleCount: number, totalSampleCount: number): boolean {
+  if (!(invalidSampleCount > 0)) {
+    return true
+  }
+  if (!(totalSampleCount > 0)) {
+    return false
+  }
+  return invalidSampleCount <= PLANNING_DEM_MAX_INVALID_SAMPLE_COUNT
+    && invalidSampleCount / totalSampleCount <= PLANNING_DEM_MAX_INVALID_SAMPLE_RATIO
 }
 
 export function resolvePlanningDemTargetChunkResolution(
@@ -398,6 +413,23 @@ function computeMinMax(values: ArrayLike<number>): { min: number | null; max: nu
   return { min, max }
 }
 
+function computeLowPercentile(values: ArrayLike<number>, percentile = 0.05): number | null {
+  const finiteValues: number[] = []
+  for (let index = 0; index < values.length; index += 1) {
+    const value = Number(values[index])
+    if (Number.isFinite(value)) {
+      finiteValues.push(value)
+    }
+  }
+  if (!finiteValues.length) {
+    return null
+  }
+  finiteValues.sort((a, b) => a - b)
+  const safePercentile = Math.min(1, Math.max(0, percentile))
+  const index = Math.max(0, Math.min(finiteValues.length - 1, Math.floor((finiteValues.length - 1) * safePercentile)))
+  return finiteValues[index] ?? null
+}
+
 function sampleRasterToPreview(values: ArrayLike<number>, width: number, height: number, minValue: number, maxValue: number): PlanningDemPreviewResult | null {
   if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
     return null
@@ -541,6 +573,7 @@ async function parsePlanningHeightmapImageBuffer(
     width,
     height,
     rasterData,
+    rawMinElevation: PLANNING_PNG_HEIGHTMAP_CONTRACT.minElevation,
     minElevation: PLANNING_PNG_HEIGHTMAP_CONTRACT.minElevation,
     maxElevation: PLANNING_PNG_HEIGHTMAP_CONTRACT.maxElevation,
     sampleStepMeters: computeSampleStepMeters(worldBounds, width, height),
@@ -568,10 +601,16 @@ async function parsePlanningGeoTiffBuffer(
   const rasters = await readFirstBandRasters(image)
   const noDataValue = normalizeNumericValue(typeof image.getGDALNoData === 'function' ? image.getGDALNoData() : null)
   const invalidSampleCount = countInvalidRasterSamples(rasters, noDataValue)
-  if (invalidSampleCount > 0) {
-    throw new Error(`GeoTIFF validation failed: found ${invalidSampleCount} invalid or NoData elevation samples. Fill or clip NoData areas in QGIS before importing the DEM.`)
+  if (!isPlanningDemInvalidSampleCountAcceptable(invalidSampleCount, width * height)) {
+    const invalidSampleRatio = width > 0 && height > 0 ? (invalidSampleCount / (width * height)) * 100 : 100
+    throw new Error(`GeoTIFF validation failed: found ${invalidSampleCount} invalid or NoData elevation samples (${invalidSampleRatio.toFixed(2)}%). Harmony currently allows up to ${PLANNING_DEM_MAX_INVALID_SAMPLE_COUNT} invalid samples and ${Math.round(PLANNING_DEM_MAX_INVALID_SAMPLE_RATIO * 100)}% of the raster. Fill or clip NoData areas in QGIS before importing the DEM.`)
   }
   const { min, max } = computeMinMax(rasters)
+  const recommendedAppliedMinElevation = computeLowPercentile(rasters, 0.05)
+  const overriddenMinElevation = normalizeNumericValue(options?.minElevation)
+  const overriddenMaxElevation = normalizeNumericValue(options?.maxElevation)
+  const effectiveMinElevation = overriddenMinElevation ?? min
+  const effectiveMaxElevation = overriddenMaxElevation ?? max
   const bbox = normalizeBounds(typeof image.getBoundingBox === 'function' ? image.getBoundingBox() : null)
   const requestedMetersPerPixel = Number(options?.metersPerPixel)
   const overrideResolution = Number.isFinite(requestedMetersPerPixel) && requestedMetersPerPixel > 0
@@ -602,7 +641,9 @@ async function parsePlanningGeoTiffBuffer(
     height,
     geographic,
   })
-  const preview = min !== null && max !== null ? sampleRasterToPreview(rasters, width, height, min, max) : null
+  const preview = effectiveMinElevation !== null && effectiveMaxElevation !== null
+    ? sampleRasterToPreview(rasters, width, height, effectiveMinElevation, effectiveMaxElevation)
+    : null
   const sampleStepMeters = computeSampleStepMeters(worldBounds, width, height)
   if (!worldBounds || !sampleStepMeters) {
     throw new Error('GeoTIFF validation failed: unable to determine projected world scale from GeoTIFF metadata. Re-export the DEM from QGIS with valid projected bounds and pixel size metadata.')
@@ -615,8 +656,10 @@ async function parsePlanningGeoTiffBuffer(
     width,
     height,
     rasterData: rasters,
-    minElevation: min,
-    maxElevation: max,
+    rawMinElevation: min,
+    recommendedAppliedMinElevation,
+    minElevation: effectiveMinElevation,
+    maxElevation: effectiveMaxElevation,
     sampleStepMeters,
     geographicBounds: bbox,
     worldBounds,
@@ -664,6 +707,8 @@ export function demImportResultToTerrainData(result: PlanningDemImportResult): P
     mimeType: result.mimeType,
     width: result.width,
     height: result.height,
+    rawMinElevation: result.rawMinElevation,
+    recommendedAppliedMinElevation: result.recommendedAppliedMinElevation,
     minElevation: result.minElevation,
     maxElevation: result.maxElevation,
     sampleStepMeters: result.sampleStepMeters,

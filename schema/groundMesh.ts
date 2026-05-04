@@ -128,6 +128,18 @@ type GroundFlatChunkBatchRuntime = {
   instanceCapacity: number
 }
 
+const loggedGroundChunkGeometryLayouts = new Set<string>()
+const loggedGroundChunkLocalEditDecisions = new Set<string>()
+const loggedGroundDefinitionLifecycleStates = new Set<string>()
+
+function logGroundChunkGeometryLayoutDebug(message: string): void {
+  console.info(message)
+}
+
+function logGroundDebugObject(label: string, payload: Record<string, unknown>): void {
+  console.info(`${label}\n${JSON.stringify(payload, null, 2)}`)
+}
+
 const groundRuntimeStateMap = new WeakMap<THREE.Object3D, GroundRuntimeState>()
 let cachedPrototypeMesh: THREE.Mesh | null = null
 const infiniteGroundCameraQuaternion = new THREE.Quaternion()
@@ -1404,6 +1416,8 @@ function resolveGroundChunkWorldBoundsFromSpec(
     const { minX: chunkMinX, maxX: chunkMaxX, minZ: chunkMinZ, maxZ: chunkMaxZ } = resolveGroundChunkWorldBoundsFromSpec(definition, spec)
 
     let hasImportedTiles = false
+    const overlappingImportedTileKeys: string[] = []
+    const overlappingNonDemTileKeys: string[] = []
     for (const tile of candidateTiles) {
       const tileSizeMeters = Number(tile.tileSizeMeters)
       if (!Number.isFinite(tileSizeMeters) || tileSizeMeters <= 0) {
@@ -1416,9 +1430,11 @@ function resolveGroundChunkWorldBoundsFromSpec(
         continue
       }
       if (tile.source !== 'dem') {
+        overlappingNonDemTileKeys.push(formatGroundLocalEditTileKey(tile.tileRow, tile.tileColumn))
         return baseCellSize
       }
       hasImportedTiles = true
+      overlappingImportedTileKeys.push(formatGroundLocalEditTileKey(tile.tileRow, tile.tileColumn))
     }
 
     if (!hasImportedTiles) {
@@ -1426,7 +1442,50 @@ function resolveGroundChunkWorldBoundsFromSpec(
     }
 
     const importedCellSize = resolveImportedLocalEditCellSize(definition)
-    return importedCellSize ? Math.max(baseCellSize, importedCellSize) : baseCellSize
+    const resolvedCellSize = importedCellSize ? Math.max(baseCellSize, importedCellSize) : baseCellSize
+    const demSource = definition.planningMetadata?.demSource ?? null
+    const logKey = demSource?.sourceFileHash
+      ? `dem-local-edit:${demSource.sourceFileHash}:${spec.startRow}:${spec.startColumn}:${spec.rows}:${spec.columns}`
+      : `dem-local-edit:${spec.startRow}:${spec.startColumn}:${spec.rows}:${spec.columns}`
+    if (!loggedGroundChunkLocalEditDecisions.has(logKey)) {
+      loggedGroundChunkLocalEditDecisions.add(logKey)
+      logGroundDebugObject('[GroundMesh] DEM local edit chunk decision', {
+        source: demSource ? {
+          filename: demSource.filename ?? null,
+          sourceFileHash: demSource.sourceFileHash ?? null,
+          sampleStepMeters: demSource.sampleStepMeters ?? null,
+          sampleStepX: demSource.sampleStepX ?? null,
+          sampleStepY: demSource.sampleStepY ?? null,
+        } : null,
+        chunk: {
+          startRow: spec.startRow,
+          startColumn: spec.startColumn,
+          rows: spec.rows,
+          columns: spec.columns,
+          worldBounds: {
+            minX: chunkMinX,
+            maxX: chunkMaxX,
+            minZ: chunkMinZ,
+            maxZ: chunkMaxZ,
+          },
+        },
+        localEditTiles: {
+          totalTileCount: tiles.length,
+          candidateTileCount: candidateTiles.length,
+          overlappingImportedTileCount: overlappingImportedTileKeys.length,
+          overlappingImportedTileKeys: overlappingImportedTileKeys.slice(0, 12),
+          overlappingNonDemTileCount: overlappingNonDemTileKeys.length,
+          overlappingNonDemTileKeys: overlappingNonDemTileKeys.slice(0, 12),
+        },
+        resolution: {
+          baseCellSize,
+          importedCellSize,
+          resolvedCellSize,
+        },
+      })
+    }
+
+    return resolvedCellSize
   }
 
 type GroundChunkGeometryLayout = {
@@ -1453,6 +1512,19 @@ function resolveGroundChunkGeometryLayout(definition: GroundRuntimeDynamicMesh, 
   const worldDepth = baseRows * baseCellSize
   const segmentColumns = Math.max(1, Math.ceil(worldWidth / localEditCellSize))
   const segmentRows = Math.max(1, Math.ceil(worldDepth / localEditCellSize))
+  const demSource = definition.planningMetadata?.demSource ?? null
+  const logKey = demSource?.sourceFileHash
+    ? `dem-source:${demSource.sourceFileHash}`
+    : `${spec.startRow}:${spec.startColumn}:${spec.rows}:${spec.columns}:${baseCellSize}:${localEditCellSize}:${segmentRows}:${segmentColumns}`
+  if (!loggedGroundChunkGeometryLayouts.has(logKey)) {
+    loggedGroundChunkGeometryLayouts.add(logKey)
+    const sourceLabel = demSource?.filename
+      ? `${demSource.filename}${demSource.sourceFileHash ? `(${demSource.sourceFileHash.slice(0, 8)})` : ''}`
+      : (demSource?.sourceFileHash ?? 'unknown-source')
+    logGroundChunkGeometryLayoutDebug(
+      `[GroundMesh] DEM chunk geometry layout | source=${sourceLabel} | chunk=${spec.startRow}:${spec.startColumn} ${spec.rows}x${spec.columns} | baseCell=${baseCellSize} localEditCell=${localEditCellSize.toFixed(3)} | segments=${segmentRows}x${segmentColumns} step=${(worldWidth / segmentColumns).toFixed(3)}x${(worldDepth / segmentRows).toFixed(3)}`,
+    )
+  }
   return {
     segmentRows,
     segmentColumns,
@@ -4665,6 +4737,32 @@ export function updateGroundChunks(
   }
 
   const cameraChunkCoord = resolveGroundChunkCoordFromWorldPosition(localX, localZ, chunkSizeMeters)
+  const definitionLocalEditTileCount = definition.localEditTiles && typeof definition.localEditTiles === 'object'
+    ? Object.keys(definition.localEditTiles).length
+    : 0
+  const runtimeCachedLocalEditTileCount = localEditTiles.length
+  const lifecycleLogSignature = [
+    definitionLocalEditTileCount,
+    runtimeCachedLocalEditTileCount,
+    cameraChunkCoord.chunkX,
+    cameraChunkCoord.chunkZ,
+  ].join('|')
+  if (!loggedGroundDefinitionLifecycleStates.has(lifecycleLogSignature)) {
+    loggedGroundDefinitionLifecycleStates.add(lifecycleLogSignature)
+    logGroundDebugObject('[GroundMesh] Ground definition lifecycle | updateGroundChunks', {
+      terrainMode: definition.terrainMode,
+      cameraChunkCoord,
+      localEditTileCounts: {
+        definition: definitionLocalEditTileCount,
+        runtimeCache: runtimeCachedLocalEditTileCount,
+      },
+      runtimeFlags: {
+        runtimeHydratedHeightState: definition.runtimeHydratedHeightState ?? null,
+        runtimeDisableOptimizedChunks: definition.runtimeDisableOptimizedChunks ?? null,
+        runtimeLoadedTileKeyCount: definition.runtimeLoadedTileKeys?.length ?? 0,
+      },
+    })
+  }
   const loadRadiusChunks = resolveInfiniteFlatTilingRadiusChunks(definition)
   updateInfiniteFlatTilingBounds(state, cameraChunkCoord, loadRadiusChunks)
   const unloadRadiusChunks = loadRadiusChunks + Math.max(4, Math.ceil(loadRadiusChunks * 0.5))
@@ -4760,6 +4858,8 @@ export function updateGroundChunks(
     // Create queue (nearest-first).
     // 创建队列按距离从近到远排序，保证相机附近优先出现内容，远处 chunk 可以稍后再补。
     const creates: Array<{ key: GroundChunkKey; chunkRow: number; chunkColumn: number; priority: number; distSq: number }> = []
+    let sculptedChunkCountInLoadWindow = 0
+    let flatChunkCountInLoadWindow = 0
 
     // Prefer a 3x3 core around the camera chunk in force mode.
     let forceCore: Set<string> | null = null
@@ -4801,10 +4901,12 @@ export function updateGroundChunks(
         if (chunkIntersectsGroundLocalEditTileFromRuntime(runtimeDefinition, spec, localEditTiles)) {
           // 只要这个 chunk 覆盖到了局部雕刻瓦片，就必须走独立 Mesh 路径，不能并入平面实例批次。
           // 因为一旦并入实例批次，单独的雕刻编辑就无法只改这一块，而必须把整批都拆开，代价更高。
+          sculptedChunkCountInLoadWindow += 1
           creates.push({ key, chunkRow: cr, chunkColumn: cc, priority, distSq: dx * dx + dz * dz })
         } else {
           // 没有局部雕刻的 chunk 进入 flat 分组，后续会被合并成 InstancedMesh 批次。
           // 这就是 hybrid 方案的关键：大部分地形走快路径，只有少量被编辑过的区域保留慢路径。
+          flatChunkCountInLoadWindow += 1
           if (state.chunks.has(key)) {
             transitionToFlatKeys.add(key)
           }
@@ -4821,6 +4923,64 @@ export function updateGroundChunks(
           }
         }
       }
+    }
+
+    const loadWindowChunkRows = Math.max(0, maxLoadChunkRow - minLoadChunkRow + 1)
+    const loadWindowChunkColumns = Math.max(0, maxLoadChunkColumn - minLoadChunkColumn + 1)
+    const loadWindowChunkCount = loadWindowChunkRows * loadWindowChunkColumns
+    const flatPreviewCount = Array.from(flatChunkGroups.values()).reduce((sum, group) => sum + group.keys.length, 0)
+    const nextDebugSignature = [
+      nextDesiredSignature,
+      creates.length,
+      sculptedChunkCountInLoadWindow,
+      flatChunkCountInLoadWindow,
+      flatPreviewCount,
+      localEditTiles.length,
+    ].join('|')
+    if (state.lastDebugLogSignature !== nextDebugSignature || now - state.lastDebugLogAt > 1000) {
+      state.lastDebugLogSignature = nextDebugSignature
+      state.lastDebugLogAt = now
+      logGroundDebugObject('[GroundMesh] Infinite chunk window summary', {
+        terrainMode: definition.terrainMode,
+        cameraLocalPosition: {
+          x: localX,
+          z: localZ,
+        },
+        cameraChunkCoord,
+        runtimeConfig: {
+          chunkSizeMeters: resolveInfiniteChunkSizeMeters(definition),
+          chunkCells,
+          renderRadiusChunks: loadRadiusChunks,
+          unloadRadiusChunks,
+        },
+        loadWindow: {
+          minChunkRow: minLoadChunkRow,
+          maxChunkRow: maxLoadChunkRow,
+          minChunkColumn: minLoadChunkColumn,
+          maxChunkColumn: maxLoadChunkColumn,
+          rows: loadWindowChunkRows,
+          columns: loadWindowChunkColumns,
+          totalChunks: loadWindowChunkCount,
+        },
+        localEditTiles: {
+          totalTileCount: localEditTiles.length,
+        },
+        classification: {
+          sculptedChunkCountInLoadWindow,
+          flatChunkCountInLoadWindow,
+          pendingCreateCount: creates.length,
+          transitionToFlatCount: transitionToFlatKeys.size,
+          flatChunkPreviewCount: flatPreviewCount,
+          flatChunkGroupCount: flatChunkGroups.size,
+        },
+        samples: {
+          pendingCreateKeys: creates.slice(0, 12).map((entry) => entry.key),
+          flatGroupSizes: Array.from(flatChunkGroups.entries()).slice(0, 6).map(([specKey, group]) => ({
+            specKey,
+            count: group.keys.length,
+          })),
+        },
+      })
     }
 
     creates.sort((a, b) => (a.priority - b.priority) || (a.distSq - b.distSq))

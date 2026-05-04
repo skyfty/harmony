@@ -193,6 +193,8 @@ export interface PlanningTerrainDemData {
   mimeType?: string | null
   width?: number
   height?: number
+  rawMinElevation?: number | null
+  recommendedAppliedMinElevation?: number | null
   minElevation?: number | null
   maxElevation?: number | null
   sampleStepMeters?: number | null

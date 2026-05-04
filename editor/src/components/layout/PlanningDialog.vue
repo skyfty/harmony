@@ -361,6 +361,8 @@ function clonePlanningTerrainDemData(data: PlanningTerrainDemData | null | undef
     mimeType: data.mimeType ?? null,
     width: data.width,
     height: data.height,
+    rawMinElevation: data.rawMinElevation ?? null,
+    recommendedAppliedMinElevation: data.recommendedAppliedMinElevation ?? null,
     minElevation: data.minElevation ?? null,
     maxElevation: data.maxElevation ?? null,
     sampleStepMeters: data.sampleStepMeters ?? null,
@@ -544,7 +546,9 @@ function buildPlanningDemParseOptions(
   overrides: Partial<PlanningDemImportOptions> = {},
 ): PlanningDemImportOptions {
   const isHeightmapImage = Boolean(terrainDem && isPlanningDemHeightmapImageSource(terrainDem.filename ?? '', terrainDem.mimeType ?? null))
+  const minElevation = Number(terrainDem?.minElevation)
   return {
+    minElevation: Number.isFinite(minElevation) ? minElevation : null,
     worldBoundsOverride: isHeightmapImage ? (terrainDem?.worldBounds ?? null) : null,
     ...overrides,
   }
@@ -1486,6 +1490,8 @@ function normalizePlanningTerrain(raw: unknown): PlanningTerrainData {
     const orthophoto = dem.orthophoto && typeof dem.orthophoto === 'object'
       ? dem.orthophoto as Record<string, unknown>
       : null
+    const rawMinElevation = Number.isFinite(Number(dem.rawMinElevation)) ? Number(dem.rawMinElevation) : undefined
+    const recommendedAppliedMinElevation = Number.isFinite(Number(dem.recommendedAppliedMinElevation)) ? Number(dem.recommendedAppliedMinElevation) : undefined
     next.dem = {
       version: 1,
       sourceFileHash,
@@ -1493,6 +1499,8 @@ function normalizePlanningTerrain(raw: unknown): PlanningTerrainData {
       mimeType,
       width,
       height,
+      rawMinElevation,
+      recommendedAppliedMinElevation,
       minElevation: Number.isFinite(Number(dem.minElevation)) ? Number(dem.minElevation) : undefined,
       maxElevation: Number.isFinite(Number(dem.maxElevation)) ? Number(dem.maxElevation) : undefined,
       sampleStepMeters,
@@ -1977,6 +1985,37 @@ const selectedDemUsesHeightmapImage = computed<boolean>(() => {
   return isPlanningDemHeightmapImageSource(dem.filename ?? '', dem.mimeType ?? null)
 })
 
+const selectedDemRawMinElevation = computed<number | null>(() => {
+  const dem = selectedDem.value
+  if (!dem) {
+    return null
+  }
+  const raw = Number(dem.rawMinElevation)
+  if (Number.isFinite(raw)) {
+    return raw
+  }
+  const fallback = Number(dem.minElevation)
+  return Number.isFinite(fallback) ? fallback : null
+})
+
+const selectedDemAppliedMinElevation = computed<number | null>(() => {
+  const dem = selectedDem.value
+  if (!dem) {
+    return null
+  }
+  const applied = Number(dem.minElevation)
+  return Number.isFinite(applied) ? applied : null
+})
+
+const selectedDemRecommendedAppliedMinElevation = computed<number | null>(() => {
+  const dem = selectedDem.value
+  if (!dem) {
+    return null
+  }
+  const recommended = Number(dem.recommendedAppliedMinElevation)
+  return Number.isFinite(recommended) ? recommended : null
+})
+
 const selectedDemMetersPerPixel = computed<number | null>({
   get: () => resolvePlanningHeightmapMetersPerPixel(selectedDem.value),
   set: (value: number | null) => {
@@ -2028,6 +2067,24 @@ const selectedDemAppliedSampleStep = computed<number | null>({
     markPlanningDirty()
   },
 })
+const selectedDemMinElevation = computed<number | null>({
+  get: () => {
+    const minElevation = Number(selectedDem.value?.minElevation)
+    return Number.isFinite(minElevation) ? minElevation : null
+  },
+  set: (value: number | null) => {
+    const dem = selectedDem.value
+    if (!dem || selectedDemUsesHeightmapImage.value) {
+      return
+    }
+    const minElevation = Number(value)
+    if (!Number.isFinite(minElevation)) {
+      return
+    }
+    dem.minElevation = Number(minElevation.toFixed(3))
+    markPlanningDirty()
+  },
+})
 const selectedDemTargetChunkResolution = computed<number | null>({
   get: () => {
     const resolution = Number(selectedDem.value?.targetChunkResolution)
@@ -2056,6 +2113,16 @@ const selectedDemTargetChunkResolution = computed<number | null>({
     markPlanningDirty()
   },
 })
+
+function applyRecommendedDemMinElevation() {
+  const dem = selectedDem.value
+  const recommended = selectedDemRecommendedAppliedMinElevation.value
+  if (!dem || recommended === null) {
+    return
+  }
+  dem.minElevation = Number(recommended.toFixed(3))
+  markPlanningDirty()
+}
 const selectedDemWorldSpan = computed<{ width: number; height: number } | null>(() => resolvePlanningWorldSpan(selectedDem.value?.worldBounds))
 const recommendedTerrainCellSize = computed<number | null>(() => resolveRecommendedTerrainCellSize(planningTerrain.value.dem))
 const terrainCellSizeRecommendationReason = computed<string | null>(() => {
@@ -6403,7 +6470,10 @@ onBeforeUnmount(() => {
               <div class="property-panel__meta-row"><span>MIME</span><strong>{{ selectedDem.mimeType || '—' }}</strong></div>
               <div class="property-panel__meta-row"><span>Source type</span><strong>{{ selectedDemUsesHeightmapImage ? 'Image heightmap' : 'GeoTIFF DEM' }}</strong></div>
               <div class="property-panel__meta-row"><span>Size</span><strong>{{ selectedDem.width ?? '—' }} × {{ selectedDem.height ?? '—' }}</strong></div>
-              <div class="property-panel__meta-row"><span>Elevation</span><strong>{{ selectedDem.minElevation ?? '—' }} → {{ selectedDem.maxElevation ?? '—' }}</strong></div>
+              <div class="property-panel__meta-row"><span>Raw min elevation</span><strong>{{ selectedDemRawMinElevation ?? '—' }} m</strong></div>
+              <div class="property-panel__meta-row"><span>Applied min elevation</span><strong>{{ selectedDemAppliedMinElevation ?? '—' }} m</strong></div>
+              <div class="property-panel__meta-row"><span>Recommended baseline</span><strong>{{ selectedDemRecommendedAppliedMinElevation ?? '—' }} m</strong></div>
+              <div class="property-panel__meta-row"><span>Max elevation</span><strong>{{ selectedDem.maxElevation ?? '—' }} m</strong></div>
               <div v-if="selectedDemWorldSpan" class="property-panel__meta-row"><span>World span</span><strong>{{ formatOptionalNumber(selectedDemWorldSpan.width) }} × {{ formatOptionalNumber(selectedDemWorldSpan.height) }} m</strong></div>
               <div v-if="selectedDemUsesHeightmapImage" class="property-panel__sub-block">
                 <div class="property-panel__section-title property-panel__section-title--muted">Heightmap Scale</div>
@@ -6426,6 +6496,29 @@ onBeforeUnmount(() => {
                 </div>
               </div>
               <div v-else class="property-panel__sub-block">
+                <div class="property-panel__section-title property-panel__section-title--muted">Elevation Baseline</div>
+                <v-text-field
+                  v-model.number="selectedDemMinElevation"
+                  type="number"
+                  density="compact"
+                  label="Min elevation"
+                  suffix="m"
+                  step="1"
+                  hide-details
+                />
+                <v-btn
+                  v-if="selectedDemRecommendedAppliedMinElevation !== null"
+                  block
+                  variant="tonal"
+                  color="primary"
+                  class="mt-2"
+                  @click="applyRecommendedDemMinElevation"
+                >
+                  一键贴地
+                </v-btn>
+                <div class="property-panel__hint">
+                  This value is passed into Planning Diagram Conversion as the DEM baseline. Conversion rebasing will subtract this value instead of the raw GeoTIFF minimum. The one-click button applies the recommended baseline computed from the imported raster.
+                </div>
                 <div class="property-panel__section-title property-panel__section-title--muted">Sculpt Resolution</div>
                 <v-text-field
                   v-model.number="selectedDemAppliedSampleStep"

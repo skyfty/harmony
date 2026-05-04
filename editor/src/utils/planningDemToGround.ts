@@ -72,6 +72,7 @@ export interface PlanningDemRasterSource {
   targetWorldBounds: PlanningDemTargetWorldBounds
   sampleStepX: number
   sampleStepZ: number
+  elevationOffsetMeters: number
 }
 
 export interface PlanningDemHeightRegion {
@@ -111,6 +112,7 @@ export interface PlanningDemLocalEditTileBuildPlan {
   sourceWidth: number
   sourceHeight: number
   sourceBounds: PlanningDemTargetWorldBounds
+  elevationOffsetMeters: number
 }
 
 export interface PlanningDemHeightRegionBuildPlan {
@@ -126,10 +128,262 @@ export interface PlanningDemHeightRegionBuildPlan {
   sourceWidth: number
   sourceHeight: number
   sourceBounds: PlanningDemTargetWorldBounds
+  elevationOffsetMeters: number
 }
 
 const MAX_EAGER_DEM_LOCAL_EDIT_TILE_COUNT = 4096
 const MAX_EAGER_DEM_LOCAL_EDIT_SAMPLE_COUNT = 500_000
+
+function formatPlanningDemDebugObject(label: string, payload: Record<string, unknown>): string {
+  return `${label}\n${JSON.stringify(payload, null, 2)}`
+}
+
+function logPlanningDemDebugObject(label: string, payload: Record<string, unknown>): void {
+  console.info(formatPlanningDemDebugObject(label, payload))
+}
+
+function summarizePlanningDemFiniteValues(values: ArrayLike<number>): {
+  finiteCount: number
+  min: number | null
+  max: number | null
+} {
+  let finiteCount = 0
+  let min = Number.POSITIVE_INFINITY
+  let max = Number.NEGATIVE_INFINITY
+  for (let index = 0; index < values.length; index += 1) {
+    const value = Number(values[index])
+    if (!Number.isFinite(value) || value === GROUND_HEIGHT_UNSET_VALUE) {
+      continue
+    }
+    finiteCount += 1
+    min = Math.min(min, value)
+    max = Math.max(max, value)
+  }
+  return {
+    finiteCount,
+    min: finiteCount > 0 ? min : null,
+    max: finiteCount > 0 ? max : null,
+  }
+}
+
+function summarizePlanningDemLocalEditTileValues(localEditTiles: GroundLocalEditTileMap | null): {
+  tileCount: number
+  finiteCount: number
+  min: number | null
+  max: number | null
+} {
+  if (!localEditTiles) {
+    return {
+      tileCount: 0,
+      finiteCount: 0,
+      min: null,
+      max: null,
+    }
+  }
+  let finiteCount = 0
+  let min = Number.POSITIVE_INFINITY
+  let max = Number.NEGATIVE_INFINITY
+  const tiles = Object.values(localEditTiles)
+  for (const tile of tiles) {
+    const summary = summarizePlanningDemFiniteValues(tile.values)
+    finiteCount += summary.finiteCount
+    if (summary.min !== null) {
+      min = Math.min(min, summary.min)
+    }
+    if (summary.max !== null) {
+      max = Math.max(max, summary.max)
+    }
+  }
+  return {
+    tileCount: tiles.length,
+    finiteCount,
+    min: finiteCount > 0 ? min : null,
+    max: finiteCount > 0 ? max : null,
+  }
+}
+
+function summarizePlanningDemLocalEditTile(plan: PlanningDemLocalEditTileBuildPlan, tileRow: number, tileColumn: number): Record<string, unknown> {
+  const key = formatGroundLocalEditTileKey(tileRow, tileColumn)
+  const tileMinX = plan.originX + tileColumn * plan.tileSizeMeters
+  const tileMinZ = plan.originZ + tileRow * plan.tileSizeMeters
+  return {
+    key,
+    tileRow,
+    tileColumn,
+    tileSizeMeters: plan.tileSizeMeters,
+    resolution: plan.resolution,
+    vertexCountPerAxis: plan.resolution + 1,
+    cellCountPerAxis: plan.resolution,
+    sampleStepMeters: plan.tileSizeMeters / plan.resolution,
+    tileMinX,
+    tileMinZ,
+    tileMaxX: tileMinX + plan.tileSizeMeters,
+    tileMaxZ: tileMinZ + plan.tileSizeMeters,
+  }
+}
+
+function arePlanningDemWorldBoundsEqual(
+  left: { minX: number; minZ: number; maxX: number; maxZ: number },
+  right: { minX: number; minZ: number; maxX: number; maxZ: number },
+  epsilon = 1e-6,
+): boolean {
+  return Math.abs(left.minX - right.minX) <= epsilon
+    && Math.abs(left.minZ - right.minZ) <= epsilon
+    && Math.abs(left.maxX - right.maxX) <= epsilon
+    && Math.abs(left.maxZ - right.maxZ) <= epsilon
+}
+
+function summarizePlanningDemChunkCoverage(options: {
+  localEditTiles: GroundLocalEditTileMap | null
+  originX: number
+  originZ: number
+}): Record<string, unknown> {
+  if (!options.localEditTiles) {
+    return {
+      occupiedChunkCount: 0,
+      occupiedTileRowRange: null,
+      occupiedTileColumnRange: null,
+      occupiedWorldBounds: null,
+      occupiedChunkSpanText: 'no occupied chunks',
+    }
+  }
+
+  const orderedTiles = Object.values(options.localEditTiles)
+    .slice()
+    .sort((left, right) => (left.tileRow - right.tileRow) || (left.tileColumn - right.tileColumn))
+
+  if (!orderedTiles.length) {
+    return {
+      occupiedChunkCount: 0,
+      occupiedTileRowRange: null,
+      occupiedTileColumnRange: null,
+      occupiedWorldBounds: null,
+      occupiedChunkSpanText: 'no occupied chunks',
+    }
+  }
+
+  const rowValues = orderedTiles.map((tile) => tile.tileRow)
+  const columnValues = orderedTiles.map((tile) => tile.tileColumn)
+  const tileSizeMeters = orderedTiles[0]!.tileSizeMeters
+  const minTileRow = Math.min(...rowValues)
+  const maxTileRow = Math.max(...rowValues)
+  const minTileColumn = Math.min(...columnValues)
+  const maxTileColumn = Math.max(...columnValues)
+  const firstChunk = orderedTiles[0]!
+  const lastChunk = orderedTiles[orderedTiles.length - 1]!
+
+  return {
+    occupiedChunkCount: orderedTiles.length,
+    occupiedTileRowRange: {
+      start: minTileRow,
+      end: maxTileRow,
+      count: maxTileRow - minTileRow + 1,
+    },
+    occupiedTileColumnRange: {
+      start: minTileColumn,
+      end: maxTileColumn,
+      count: maxTileColumn - minTileColumn + 1,
+    },
+    occupiedWorldBounds: {
+      minX: options.originX + minTileColumn * tileSizeMeters,
+      minZ: options.originZ + minTileRow * tileSizeMeters,
+      maxX: options.originX + (maxTileColumn + 1) * tileSizeMeters,
+      maxZ: options.originZ + (maxTileRow + 1) * tileSizeMeters,
+    },
+    occupiedChunkSpanText: `${firstChunk.key} -> ${lastChunk.key}`,
+    firstChunk: {
+      key: firstChunk.key,
+      tileRow: firstChunk.tileRow,
+      tileColumn: firstChunk.tileColumn,
+    },
+    lastChunk: {
+      key: lastChunk.key,
+      tileRow: lastChunk.tileRow,
+      tileColumn: lastChunk.tileColumn,
+    },
+  }
+}
+
+function summarizePlanningDemRegionWorldBounds(
+  definition: GroundRuntimeDynamicMesh,
+  region: Pick<PlanningDemHeightRegion, 'startRow' | 'endRow' | 'startColumn' | 'endColumn' | 'vertexRows' | 'vertexColumns'>,
+): Record<string, unknown> {
+  const groundBounds = resolveGroundWorldBounds(definition)
+  const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
+  return {
+    cellSize,
+    minX: groundBounds.minX + region.startColumn * cellSize,
+    minZ: groundBounds.minZ + region.startRow * cellSize,
+    maxX: groundBounds.minX + region.endColumn * cellSize,
+    maxZ: groundBounds.minZ + region.endRow * cellSize,
+    vertexRows: region.vertexRows,
+    vertexColumns: region.vertexColumns,
+  }
+}
+
+function summarizePlanningDemConversionPosition(options: {
+  definition: GroundRuntimeDynamicMesh
+  source: PlanningDemRasterSource
+  chunkCoverage: Record<string, unknown>
+}): Record<string, unknown> {
+  const groundBounds = resolveGroundWorldBounds(options.definition)
+  const chunkOrigin = resolvePlanningDemLocalEditTileOrigin(options.definition)
+  const sourceBounds = options.source.targetWorldBounds
+  const sourceCenter = {
+    x: (sourceBounds.minX + sourceBounds.maxX) * 0.5,
+    z: (sourceBounds.minZ + sourceBounds.maxZ) * 0.5,
+  }
+
+  return {
+    terrainMode: options.definition.terrainMode,
+    groundWorldBounds: groundBounds,
+    sourceWorldBounds: sourceBounds,
+    sourceWorldCenter: sourceCenter,
+    sourceCenteredAtOrigin: Math.abs(sourceCenter.x) <= 1e-6 && Math.abs(sourceCenter.z) <= 1e-6,
+    sourceBoundsMatchGroundBounds: arePlanningDemWorldBoundsEqual(groundBounds, sourceBounds),
+    sourceWorldSpanMeters: {
+      width: sourceBounds.maxX - sourceBounds.minX,
+      depth: sourceBounds.maxZ - sourceBounds.minZ,
+    },
+    chunkGrid: {
+      chunkSizeMeters: resolvePlanningDemChunkSizeMeters(),
+      originX: chunkOrigin.originX,
+      originZ: chunkOrigin.originZ,
+    },
+    chunkCoverage: options.chunkCoverage,
+  }
+}
+
+function summarizePlanningDemSculptPrecision(options: {
+  definition: GroundRuntimeDynamicMesh
+  source: PlanningDemRasterSource
+}): Record<string, unknown> {
+  const localEditTileSizeMeters = resolvePlanningDemChunkSizeMeters()
+  const configuredResolution = resolveGroundEditTileResolution(options.definition)
+  const effectiveResolution = resolvePlanningDemLocalEditTileResolution({
+    definition: options.definition,
+    sampleStepX: options.source.sampleStepX,
+    sampleStepZ: options.source.sampleStepZ,
+  })
+  const effectiveCellSize = localEditTileSizeMeters / Math.max(1, effectiveResolution)
+  const sourceSampleStepMeters = Math.max(options.source.sampleStepX, options.source.sampleStepZ)
+
+  return {
+    localEditTileSizeMeters,
+    configuredResolution,
+    effectiveResolution,
+    effectiveCellSize,
+    sourceSampleStepX: options.source.sampleStepX,
+    sourceSampleStepZ: options.source.sampleStepZ,
+    sourceSampleStepMeters,
+    sourceSamplesPerChunkX: localEditTileSizeMeters / Math.max(options.source.sampleStepX, Number.EPSILON),
+    sourceSamplesPerChunkZ: localEditTileSizeMeters / Math.max(options.source.sampleStepZ, Number.EPSILON),
+    cellSizeMatchesSourceStepX: Math.abs(effectiveCellSize - options.source.sampleStepX) <= Math.max(1e-6, options.source.sampleStepX * 0.05),
+    cellSizeMatchesSourceStepZ: Math.abs(effectiveCellSize - options.source.sampleStepZ) <= Math.max(1e-6, options.source.sampleStepZ * 0.05),
+    detailLimitedByEditResolutionX: effectiveCellSize > options.source.sampleStepX,
+    detailLimitedByEditResolutionZ: effectiveCellSize > options.source.sampleStepZ,
+  }
+}
 
 type PlanningDemLocalEditTileRecord = {
   key: string
@@ -480,6 +734,7 @@ function resolvePlanningDemHeightRegionBuildPlan(options: {
     sourceWidth: options.source.width,
     sourceHeight: options.source.height,
     sourceBounds: options.source.targetWorldBounds,
+    elevationOffsetMeters: options.source.elevationOffsetMeters,
   }
 }
 
@@ -656,6 +911,26 @@ function resolvePlanningDemLocalEditTileBuildPlan(options: {
   const totalTileRows = Math.max(0, endTileRow - startTileRow + 1)
   const totalTileColumns = Math.max(0, endTileColumn - startTileColumn + 1)
   const totalTiles = totalTileRows * totalTileColumns
+  logPlanningDemDebugObject('[DEM] Local edit tile build plan', {
+    tilePlan: {
+      tileSizeMeters,
+      resolution,
+      vertexCountPerAxis: resolution + 1,
+      cellCountPerAxis: resolution,
+      sampleStepMeters: tileSizeMeters / resolution,
+      originX,
+      originZ,
+      startTileRow,
+      endTileRow,
+      startTileColumn,
+      endTileColumn,
+      totalTileRows,
+      totalTileColumns,
+      totalTiles,
+    },
+    sourceBounds: options.source.targetWorldBounds,
+    elevationOffsetMeters: options.source.elevationOffsetMeters,
+  })
   return {
     tileSizeMeters,
     resolution,
@@ -671,6 +946,7 @@ function resolvePlanningDemLocalEditTileBuildPlan(options: {
     sourceWidth: options.source.width,
     sourceHeight: options.source.height,
     sourceBounds: options.source.targetWorldBounds,
+    elevationOffsetMeters: options.source.elevationOffsetMeters,
   }
 }
 
@@ -700,6 +976,12 @@ function buildPlanningDemLocalEditTilesForRegionSyncFromPlan(
       const key = formatGroundLocalEditTileKey(tileRow, tileColumn)
       const tileMinX = plan.originX + tileColumn * plan.tileSizeMeters
       const tileMinZ = plan.originZ + tileRow * plan.tileSizeMeters
+      if (tileRow === plan.startTileRow && tileColumn === plan.startTileColumn) {
+        logPlanningDemDebugObject('[DEM] Local edit tile sample', {
+          tile: summarizePlanningDemLocalEditTile(plan, tileRow, tileColumn),
+          sourceBounds: plan.sourceBounds,
+        })
+      }
       const values = new Array<number>(samplesPerAxis * samplesPerAxis)
       for (let row = 0; row <= plan.resolution; row += 1) {
         const z = tileMinZ + row * sampleStepMeters
@@ -805,6 +1087,31 @@ async function buildPlanningDemLocalEditTilesForRegionAsync(options: {
 
   if (response.error) {
     throw new Error(response.error)
+  }
+
+  if (response.tiles.length > 0) {
+    const firstTile = response.tiles[0]!
+    logPlanningDemDebugObject('[DEM] Local edit tile worker result', {
+      tileCount: response.tiles.length,
+      firstTile: {
+        key: firstTile.key,
+        tileRow: firstTile.tileRow,
+        tileColumn: firstTile.tileColumn,
+        tileSizeMeters: firstTile.tileSizeMeters,
+        resolution: firstTile.resolution,
+        vertexCountPerAxis: firstTile.resolution + 1,
+        cellCountPerAxis: firstTile.resolution,
+      },
+      expectedPlan: {
+        totalTiles: plan.totalTiles,
+        totalTileRows: plan.totalTileRows,
+        totalTileColumns: plan.totalTileColumns,
+        resolution: plan.resolution,
+        vertexCountPerAxis: plan.resolution + 1,
+        cellCountPerAxis: plan.resolution,
+        sampleStepMeters: plan.tileSizeMeters / plan.resolution,
+      },
+    })
   }
 
   reportProgress({
@@ -1020,11 +1327,13 @@ export async function resolvePlanningDemPreparedSource(options: {
     worldBounds: parsed.worldBounds,
     targetWorldBounds,
   })
+  const elevationOffsetMeters = Number.isFinite(parsed.minElevation) ? Math.max(0, Number(parsed.minElevation)) : 0
   const rasterSource = createPlanningDemRasterSource({
     rasterData,
     width: demWidth,
     height: demHeight,
     targetWorldBounds,
+    elevationOffsetMeters,
   })
   const sampleStepX = computeDemSampleStepAxis(demWidth, demHeight, parsed.worldBounds, 'x')
   const sampleStepY = computeDemSampleStepAxis(demWidth, demHeight, parsed.worldBounds, 'y')
@@ -1037,6 +1346,34 @@ export async function resolvePlanningDemPreparedSource(options: {
   const effectiveSourceStep = [sampleStepX, sampleStepY, parsed.sampleStepMeters]
     .filter((value): value is number => Number.isFinite(value as number) && (value as number) > 0)
     .reduce<number | null>((smallest, value) => smallest === null ? value : Math.min(smallest, value), null)
+
+  logPlanningDemDebugObject('[DEM] Source and conversion seed', {
+    sourceFile: {
+      filename: parsed.filename,
+      mimeType: parsed.mimeType,
+      sourceFileHash: parsed.sourceFileHash,
+      width: demWidth,
+      height: demHeight,
+      sampleStepMeters: parsed.sampleStepMeters,
+      sourceSampleStepMeters: appliedSampleStepMeters,
+      geographicBounds: parsed.geographicBounds,
+      worldBounds: parsed.worldBounds,
+      minElevation: parsed.minElevation,
+      maxElevation: parsed.maxElevation,
+      elevationOffsetMeters,
+    },
+    conversionSeed: {
+      targetRows,
+      targetColumns,
+      targetCellSize,
+      localEditTileSizeMeters,
+      localEditTileResolution: Math.round(targetChunkResolution),
+      localEditCellSize,
+      tileLayout,
+      detailLimitedByGroundGrid: effectiveSourceStep !== null && targetCellSize > effectiveSourceStep,
+      detailLimitedByEditResolution: effectiveSourceStep !== null && localEditCellSize > effectiveSourceStep,
+    },
+  })
 
   return {
     parsed,
@@ -1057,6 +1394,7 @@ export async function resolvePlanningDemPreparedSource(options: {
         sampleStepX,
         sampleStepY,
         appliedSampleStepMeters,
+        elevationOffsetMeters,
         worldBounds: parsed.worldBounds
           ? {
               minX: parsed.worldBounds.minX,
@@ -1110,6 +1448,7 @@ export function createPlanningDemRasterSource(options: {
   width: number
   height: number
   targetWorldBounds: PlanningDemTargetWorldBounds
+  elevationOffsetMeters?: number
 }): PlanningDemRasterSource {
   const worldWidth = Math.max(Number.EPSILON, options.targetWorldBounds.maxX - options.targetWorldBounds.minX)
   const worldDepth = Math.max(Number.EPSILON, options.targetWorldBounds.maxZ - options.targetWorldBounds.minZ)
@@ -1122,6 +1461,7 @@ export function createPlanningDemRasterSource(options: {
     targetWorldBounds: options.targetWorldBounds,
     sampleStepX: worldWidth / widthSegments,
     sampleStepZ: worldDepth / heightSegments,
+    elevationOffsetMeters: Number.isFinite(options.elevationOffsetMeters) ? Math.max(0, Number(options.elevationOffsetMeters)) : 0,
   }
 }
 
@@ -1153,7 +1493,7 @@ export function samplePlanningDemHeightAtWorld(
     source.sampleStepZ,
     Math.max(0, source.height - 1),
   )
-  return sampleArrayLikeBilinearFinite(source.rasterData, source.width, source.height, demX, demY)
+  return sampleArrayLikeBilinearFinite(source.rasterData, source.width, source.height, demX, demY) - source.elevationOffsetMeters
 }
 
 export function buildPlanningDemHeightRegion(options: {
@@ -1263,7 +1603,7 @@ export async function buildPlanningDemGroundRegionData(options: {
     label: texture.textureDataUrl ? 'Loading orthophoto…' : 'Skipping orthophoto…',
     detail: '1/1',
   }, true)
-  return buildPlanningDemRegionFromPreparedSource({
+  const result = await buildPlanningDemRegionFromPreparedSource({
     definition: options.definition,
     prepared,
     startRow: options.startRow,
@@ -1274,6 +1614,44 @@ export async function buildPlanningDemGroundRegionData(options: {
     textureName: texture.textureName,
     onProgress: (payload) => reportProgress(payload),
   })
+  const localEditTileOrigin = resolvePlanningDemLocalEditTileOrigin(options.definition)
+  const chunkCoverage = summarizePlanningDemChunkCoverage({
+    localEditTiles: result.localEditTiles,
+    originX: localEditTileOrigin.originX,
+    originZ: localEditTileOrigin.originZ,
+  })
+  logPlanningDemDebugObject('[DEM] Region height rebasing check', {
+    source: {
+      filename: prepared.parsed.filename,
+      originalMinElevation: prepared.parsed.minElevation,
+      originalMaxElevation: prepared.parsed.maxElevation,
+      elevationOffsetMeters: prepared.rasterSource.elevationOffsetMeters,
+    },
+    region: {
+      startRow: result.region.startRow,
+      endRow: result.region.endRow,
+      startColumn: result.region.startColumn,
+      endColumn: result.region.endColumn,
+      vertexRows: result.region.vertexRows,
+      vertexColumns: result.region.vertexColumns,
+      worldBounds: summarizePlanningDemRegionWorldBounds(options.definition, result.region),
+      heightSummary: summarizePlanningDemFiniteValues(result.region.values),
+    },
+    localEditTiles: {
+      values: summarizePlanningDemLocalEditTileValues(result.localEditTiles),
+      coverage: chunkCoverage,
+    },
+    conversionPosition: summarizePlanningDemConversionPosition({
+      definition: options.definition,
+      source: prepared.rasterSource,
+      chunkCoverage,
+    }),
+    sculptPrecision: summarizePlanningDemSculptPrecision({
+      definition: options.definition,
+      source: prepared.rasterSource,
+    }),
+  })
+  return result
 }
 
 export async function buildPlanningDemGroundTileData(options: {
@@ -1392,6 +1770,53 @@ export async function buildPlanningDemGroundData(options: {
       heightMap[getGroundVertexIndex(columns, row, column)] = fullRegion.values[sourceOffset + (column - fullRegion.startColumn)] ?? 0
     }
   }
+  const localEditTiles = buildPlanningDemLocalEditTilesForRegion({
+    definition,
+    source: prepared.rasterSource,
+    startRow: 0,
+    endRow: rows,
+    startColumn: 0,
+    endColumn: columns,
+  })
+
+  const localEditTileOrigin = resolvePlanningDemLocalEditTileOrigin(definition)
+  const chunkCoverage = summarizePlanningDemChunkCoverage({
+    localEditTiles,
+    originX: localEditTileOrigin.originX,
+    originZ: localEditTileOrigin.originZ,
+  })
+
+  logPlanningDemDebugObject('[DEM] Ground chunk conversion result', {
+    ground: {
+      worldBounds: resolveGroundWorldBounds(definition),
+      chunkSizeMeters: GROUND_TERRAIN_CHUNK_SIZE_METERS,
+      occupiedChunkCount: localEditTiles ? Object.keys(localEditTiles).length : 0,
+      chunkGrid: {
+        rows,
+        columns,
+      },
+      conversionPosition: {
+        originX: resolveInfiniteGroundGridOriginMeters(GROUND_TERRAIN_CHUNK_SIZE_METERS),
+        originZ: resolveInfiniteGroundGridOriginMeters(GROUND_TERRAIN_CHUNK_SIZE_METERS),
+      },
+    },
+    localEditTiles: chunkCoverage,
+    conversionPositionCheck: summarizePlanningDemConversionPosition({
+      definition,
+      source: prepared.rasterSource,
+      chunkCoverage,
+    }),
+    sculptPrecision: summarizePlanningDemSculptPrecision({
+      definition,
+      source: prepared.rasterSource,
+    }),
+    compareWithSource: {
+      sourceWidth: prepared.planningMetadata.demSource?.width,
+      sourceHeight: prepared.planningMetadata.demSource?.height,
+      sourceWorldBounds: prepared.planningMetadata.demSource?.worldBounds,
+      sourceTileLayout: prepared.planningMetadata.demSource?.tileLayout,
+    },
+  })
 
   const texture = await resolvePlanningDemOrthophotoTexture({
     terrainDem,
@@ -1400,14 +1825,7 @@ export async function buildPlanningDemGroundData(options: {
 
   return {
     planningHeightMap: heightMap,
-    localEditTiles: buildPlanningDemLocalEditTilesForRegion({
-      definition,
-      source: prepared.rasterSource,
-      startRow: 0,
-      endRow: rows,
-      startColumn: 0,
-      endColumn: columns,
-    }),
+    localEditTiles,
     planningMetadata: fullRegionResult.planningMetadata,
     textureDataUrl: texture.textureDataUrl,
     textureName: texture.textureName ?? (prepared.parsed.orthophoto ? terrainDem.orthophoto?.filename ?? terrainDem.filename ?? 'Orthophoto' : null),

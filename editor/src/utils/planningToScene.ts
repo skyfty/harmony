@@ -955,6 +955,61 @@ function applyPlanningDemRegionToGround(
   planningMetadata: GroundRuntimeDynamicMesh['planningMetadata'],
   localEditTiles: GroundRuntimeDynamicMesh['localEditTiles'] = null,
 ): GroundRuntimeDynamicMesh {
+  let baseHeightMin = Number.POSITIVE_INFINITY
+  let baseHeightMax = Number.NEGATIVE_INFINITY
+  let baseHeightFiniteCount = 0
+  for (let row = region.startRow; row <= region.endRow; row += 1) {
+    for (let column = region.startColumn; column <= region.endColumn; column += 1) {
+      const baseHeight = computeGroundBaseHeightAtVertex(definition, row, column)
+      if (!Number.isFinite(baseHeight)) {
+        continue
+      }
+      baseHeightFiniteCount += 1
+      baseHeightMin = Math.min(baseHeightMin, baseHeight)
+      baseHeightMax = Math.max(baseHeightMax, baseHeight)
+    }
+  }
+  let regionHeightMin = Number.POSITIVE_INFINITY
+  let regionHeightMax = Number.NEGATIVE_INFINITY
+  let regionHeightFiniteCount = 0
+  for (let index = 0; index < region.values.length; index += 1) {
+    const value = Number(region.values[index])
+    if (!Number.isFinite(value)) {
+      continue
+    }
+    regionHeightFiniteCount += 1
+    regionHeightMin = Math.min(regionHeightMin, value)
+    regionHeightMax = Math.max(regionHeightMax, value)
+  }
+  console.info(`[DEM] Ground apply baseline check\n${JSON.stringify({
+    ground: {
+      nodeId: groundNode.id,
+      baseHeight: Number.isFinite(definition.baseHeight) ? definition.baseHeight : 0,
+      generation: definition.generation ?? null,
+      hasRuntimeTerrainDataset: Boolean(definition.runtimeTerrainDatasetEnabled),
+    },
+    importRegion: {
+      startRow: region.startRow,
+      endRow: region.endRow,
+      startColumn: region.startColumn,
+      endColumn: region.endColumn,
+      vertexRows: region.vertexRows,
+      vertexColumns: region.vertexColumns,
+      rebasedHeightSummary: {
+        finiteCount: regionHeightFiniteCount,
+        min: regionHeightFiniteCount > 0 ? regionHeightMin : null,
+        max: regionHeightFiniteCount > 0 ? regionHeightMax : null,
+      },
+    },
+    groundBaseHeightSummary: {
+      finiteCount: baseHeightFiniteCount,
+      min: baseHeightFiniteCount > 0 ? baseHeightMin : null,
+      max: baseHeightFiniteCount > 0 ? baseHeightMax : null,
+    },
+    localEditTiles: localEditTiles ? {
+      tileCount: Object.keys(localEditTiles).length,
+    } : null,
+  }, null, 2)}`)
   // 创建下一个地面种子对象，包含更新的规划元数据和本地编辑图块
   const nextGroundSeed = {
     ...definition,
@@ -967,6 +1022,19 @@ function applyPlanningDemRegionToGround(
         }
       : definition.localEditTiles ?? null,
   } satisfies GroundRuntimeDynamicMesh
+  const mergedLocalEditTiles = nextGroundSeed.localEditTiles ?? null
+  const groundRuntimeDefinition = groundNode.dynamicMesh?.type === 'Ground'
+    ? groundNode.dynamicMesh as GroundRuntimeDynamicMesh
+    : null
+
+  // Keep any live references aligned with the DEM-imported runtime state before
+  // downstream systems read from the store or cached editor sessions.
+  definition.planningMetadata = planningMetadata
+  definition.localEditTiles = mergedLocalEditTiles
+  if (groundRuntimeDefinition) {
+    groundRuntimeDefinition.planningMetadata = planningMetadata
+    groundRuntimeDefinition.localEditTiles = mergedLocalEditTiles
+  }
   
   // 确定需要标记为脏的区块键
   // 如果有本地编辑图块，则使用其键；否则根据区域计算脏区块键
@@ -976,7 +1044,7 @@ function applyPlanningDemRegionToGround(
   
   // 如果存在本地编辑图块，将其替换到高度图存储中
   if (localEditTiles) {
-    useGroundHeightmapStore().replaceLocalEditTiles(groundNode.id, nextGroundSeed, nextGroundSeed.localEditTiles ?? null)
+    useGroundHeightmapStore().replaceLocalEditTiles(groundNode.id, nextGroundSeed, mergedLocalEditTiles)
   } else {
     useGroundHeightmapStore().replacePlanningHeightRegion(
       groundNode.id,
@@ -988,6 +1056,18 @@ function applyPlanningDemRegionToGround(
   
   // 同步地面覆盖区域状态，返回最新的地面运行时网格
   const nextGround = syncGroundCoverageRegionState(sceneStore, groundNode, nextGroundSeed, dirtyChunkKeys)
+
+  console.info(`[DEM] Ground definition lifecycle | applyPlanningDemRegionToGround\n${JSON.stringify({
+    nodeId: groundNode.id,
+    localEditTileCounts: {
+      definitionBeforeMerge: definition.localEditTiles ? Object.keys(definition.localEditTiles).length : 0,
+      incomingTiles: localEditTiles ? Object.keys(localEditTiles).length : 0,
+      mergedSeed: mergedLocalEditTiles ? Object.keys(mergedLocalEditTiles).length : 0,
+      groundNodeDynamicMesh: groundRuntimeDefinition?.localEditTiles ? Object.keys(groundRuntimeDefinition.localEditTiles).length : 0,
+      nextGroundAfterCoverageSync: nextGround.localEditTiles ? Object.keys(nextGround.localEditTiles).length : 0,
+    },
+    dirtyChunkKeyCount: dirtyChunkKeys?.length ?? 0,
+  }, null, 2)}`)
 
   // 更新场景存储中的地面节点动态网格
   sceneStore.updateGroundNodeDynamicMesh(groundNode.id, nextGround)

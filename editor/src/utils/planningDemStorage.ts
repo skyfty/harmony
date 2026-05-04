@@ -128,6 +128,8 @@ function clonePlanningTerrainDemData(data: PlanningTerrainDemData | null | undef
     mimeType: data.mimeType ?? null,
     width: data.width,
     height: data.height,
+    rawMinElevation: data.rawMinElevation ?? null,
+    recommendedAppliedMinElevation: data.recommendedAppliedMinElevation ?? null,
     minElevation: data.minElevation ?? null,
     maxElevation: data.maxElevation ?? null,
     sampleStepMeters: data.sampleStepMeters ?? null,
