@@ -96,15 +96,21 @@ type GroundRuntimeState = {
   chunks: Map<GroundChunkKey, GroundChunkRuntime>
   flatChunkBatches: Map<string, GroundFlatChunkBatchRuntime>
   flatTilingInitialized: boolean
+  flatTilingVersion: number
   flatTilingMinChunkRow: number
   flatTilingMaxChunkRow: number
   flatTilingMinChunkColumn: number
   flatTilingMaxChunkColumn: number
+  flatChunkKeys: Set<string>
+  lastFlatChunkSyncTilingVersion: number
+  lastFlatChunkSyncHiddenChunkKeysVersion: number
   hiddenChunkKeys: Set<string>
   hiddenChunkKeysVersion: number
   visibleChunkKeysCache: string[]
   visibleChunkKeysVersion: number
   visibleChunkKeysCacheVersion: number
+  visibleChunkSignatureCache: string
+  visibleChunkSignatureCacheVersion: number
   lastChunkUpdateAt: number
 
   desiredSignature: string
@@ -126,6 +132,7 @@ type GroundFlatChunkBatchRuntime = {
   mesh: THREE.InstancedMesh
   chunkKeys: string[]
   instanceCapacity: number
+  instanceHeightCache: Map<string, number>
 }
 
 const groundRuntimeStateMap = new WeakMap<THREE.Object3D, GroundRuntimeState>()
@@ -259,11 +266,11 @@ function resolveRuntimeChunkIndexFromRuntimeKey(
 }
 
 function resolveSharedGroundChunkKeyFromRuntimeKey(key: string): string | null {
-  const indices = resolveRuntimeChunkIndexFromRuntimeKey(key)
-  if (!indices) {
+  const separatorIndex = key.indexOf(':')
+  if (separatorIndex <= 0 || separatorIndex >= key.length - 1) {
     return null
   }
-  return `${indices.column}:${indices.row}`
+  return `${key.slice(separatorIndex + 1)}:${key.slice(0, separatorIndex)}`
 }
 
 function resolveRuntimeGroundChunkKeyFromSharedKey(key: string): string | null {
@@ -380,7 +387,7 @@ function updateInfiniteFlatTilingBounds(
   state: GroundRuntimeState,
   cameraChunkCoord: { chunkX: number; chunkZ: number },
   loadRadiusChunks: number,
-): void {
+): boolean {
   const minChunkRow = Math.trunc(cameraChunkCoord.chunkZ - loadRadiusChunks)
   const maxChunkRow = Math.trunc(cameraChunkCoord.chunkZ + loadRadiusChunks)
   const minChunkColumn = Math.trunc(cameraChunkCoord.chunkX - loadRadiusChunks)
@@ -388,17 +395,30 @@ function updateInfiniteFlatTilingBounds(
 
   if (!state.flatTilingInitialized) {
     state.flatTilingInitialized = true
+    state.flatTilingVersion += 1
     state.flatTilingMinChunkRow = minChunkRow
     state.flatTilingMaxChunkRow = maxChunkRow
     state.flatTilingMinChunkColumn = minChunkColumn
     state.flatTilingMaxChunkColumn = maxChunkColumn
-    return
+    return true
   }
 
-  state.flatTilingMinChunkRow = Math.min(state.flatTilingMinChunkRow, minChunkRow)
-  state.flatTilingMaxChunkRow = Math.max(state.flatTilingMaxChunkRow, maxChunkRow)
-  state.flatTilingMinChunkColumn = Math.min(state.flatTilingMinChunkColumn, minChunkColumn)
-  state.flatTilingMaxChunkColumn = Math.max(state.flatTilingMaxChunkColumn, maxChunkColumn)
+  const nextMinChunkRow = Math.min(state.flatTilingMinChunkRow, minChunkRow)
+  const nextMaxChunkRow = Math.max(state.flatTilingMaxChunkRow, maxChunkRow)
+  const nextMinChunkColumn = Math.min(state.flatTilingMinChunkColumn, minChunkColumn)
+  const nextMaxChunkColumn = Math.max(state.flatTilingMaxChunkColumn, maxChunkColumn)
+  const changed = nextMinChunkRow !== state.flatTilingMinChunkRow
+    || nextMaxChunkRow !== state.flatTilingMaxChunkRow
+    || nextMinChunkColumn !== state.flatTilingMinChunkColumn
+    || nextMaxChunkColumn !== state.flatTilingMaxChunkColumn
+  if (changed) {
+    state.flatTilingVersion += 1
+    state.flatTilingMinChunkRow = nextMinChunkRow
+    state.flatTilingMaxChunkRow = nextMaxChunkRow
+    state.flatTilingMinChunkColumn = nextMinChunkColumn
+    state.flatTilingMaxChunkColumn = nextMaxChunkColumn
+  }
+  return changed
 }
 
 function resolveGroundRuntimeMaterial(root: THREE.Group, state: GroundRuntimeState): THREE.Material {
@@ -3332,6 +3352,23 @@ function ensureGroundRuntimeState(root: THREE.Object3D, definition: GroundDynami
   const chunkCells = resolveRuntimeChunkCells(definition)
   const desiredCastShadow = definition.castShadow === true
   if (existing && existing.definitionSignature === signature && existing.chunkCells === chunkCells) {
+    existing.flatTilingVersion = Number.isFinite(existing.flatTilingVersion) ? existing.flatTilingVersion : 0
+    existing.flatChunkKeys = existing.flatChunkKeys instanceof Set ? existing.flatChunkKeys : new Set<string>()
+    if (existing.flatChunkKeys.size === 0 && existing.flatChunkBatches.size > 0) {
+      syncGroundFlatChunkKeyCache(existing)
+    }
+    existing.lastFlatChunkSyncTilingVersion = Number.isFinite(existing.lastFlatChunkSyncTilingVersion)
+      ? existing.lastFlatChunkSyncTilingVersion
+      : -1
+    existing.lastFlatChunkSyncHiddenChunkKeysVersion = Number.isFinite(existing.lastFlatChunkSyncHiddenChunkKeysVersion)
+      ? existing.lastFlatChunkSyncHiddenChunkKeysVersion
+      : -1
+    existing.visibleChunkSignatureCache = typeof existing.visibleChunkSignatureCache === 'string'
+      ? existing.visibleChunkSignatureCache
+      : ''
+    existing.visibleChunkSignatureCacheVersion = Number.isFinite(existing.visibleChunkSignatureCacheVersion)
+      ? existing.visibleChunkSignatureCacheVersion
+      : -1
     if (existing.castShadow !== desiredCastShadow) {
       existing.castShadow = desiredCastShadow
       for (const runtime of existing.chunks.values()) {
@@ -3379,15 +3416,21 @@ function ensureGroundRuntimeState(root: THREE.Object3D, definition: GroundDynami
     chunks: new Map(),
     flatChunkBatches: new Map(),
     flatTilingInitialized: false,
+    flatTilingVersion: 0,
     flatTilingMinChunkRow: 0,
     flatTilingMaxChunkRow: 0,
     flatTilingMinChunkColumn: 0,
     flatTilingMaxChunkColumn: 0,
+    flatChunkKeys: new Set(),
+    lastFlatChunkSyncTilingVersion: -1,
+    lastFlatChunkSyncHiddenChunkKeysVersion: -1,
     hiddenChunkKeys: new Set(),
     hiddenChunkKeysVersion: 0,
     visibleChunkKeysCache: [],
     visibleChunkKeysVersion: 0,
     visibleChunkKeysCacheVersion: -1,
+    visibleChunkSignatureCache: '',
+    visibleChunkSignatureCacheVersion: -1,
     lastChunkUpdateAt: 0,
 
     desiredSignature: '',
@@ -3410,10 +3453,44 @@ function markGroundVisibleChunkKeysDirty(state: GroundRuntimeState): void {
   state.visibleChunkKeysVersion += 1
 }
 
+function updateGroundChunkSignatureHash(hash: number, key: string): number {
+  let next = hash | 0
+  for (let index = 0; index < key.length; index += 1) {
+    next = ((next * 33) ^ key.charCodeAt(index)) | 0
+  }
+  return next
+}
+
 function chunkPoolKey(spec: GroundChunkSpec): string {
   const rows = Math.max(1, Math.trunc(spec.rows))
   const columns = Math.max(1, Math.trunc(spec.columns))
   return `${rows}x${columns}`
+}
+
+function sampleGroundFlatChunkInstanceHeight(
+  batch: GroundFlatChunkBatchRuntime,
+  definition: GroundRuntimeDynamicMesh,
+  key: string,
+  x: number,
+  z: number,
+): number {
+  const cached = batch.instanceHeightCache.get(key)
+  if (typeof cached === 'number' && Number.isFinite(cached)) {
+    return cached
+  }
+  const height = sampleGroundHeight(definition, x, z)
+  batch.instanceHeightCache.set(key, height)
+  return height
+}
+
+function syncGroundFlatChunkKeyCache(state: GroundRuntimeState): void {
+  const keys = new Set<string>()
+  state.flatChunkBatches.forEach((batch) => {
+    batch.chunkKeys.forEach((key) => {
+      keys.add(key)
+    })
+  })
+  state.flatChunkKeys = keys
 }
 
 function refreshGroundFlatChunkBatchInstances(
@@ -3443,7 +3520,7 @@ function refreshGroundFlatChunkBatchInstances(
     }
     const centerX = chunkOrigin + (indices.column * chunkSizeMeters) + (chunkSizeMeters * 0.5)
     const centerZ = chunkOrigin + (indices.row * chunkSizeMeters) + (chunkSizeMeters * 0.5)
-    const centerY = sampleGroundHeight(definition, centerX, centerZ)
+    const centerY = sampleGroundFlatChunkInstanceHeight(batch, definition, key, centerX, centerZ)
     groundFlatChunkInstancePosition.set(centerX, centerY, centerZ)
     groundFlatChunkInstanceMatrix.compose(groundFlatChunkInstancePosition, groundFlatChunkInstanceRotation, groundFlatChunkInstanceScale)
     batch.mesh.setMatrixAt(index, groundFlatChunkInstanceMatrix)
@@ -3482,7 +3559,7 @@ function appendGroundFlatChunkBatchInstances(
 
     const centerX = chunkOrigin + (indices.column * chunkSizeMeters) + (chunkSizeMeters * 0.5)
     const centerZ = chunkOrigin + (indices.row * chunkSizeMeters) + (chunkSizeMeters * 0.5)
-    const centerY = sampleGroundHeight(definition, centerX, centerZ)
+    const centerY = sampleGroundFlatChunkInstanceHeight(batch, definition, key, centerX, centerZ)
     groundFlatChunkInstancePosition.set(centerX, centerY, centerZ)
     groundFlatChunkInstanceMatrix.compose(groundFlatChunkInstancePosition, groundFlatChunkInstanceRotation, groundFlatChunkInstanceScale)
     batch.mesh.setMatrixAt(writeIndex, groundFlatChunkInstanceMatrix)
@@ -3510,7 +3587,7 @@ function syncGroundFlatChunkBatches(
   // 这里只同步 flat chunk 批次，不碰雕刻 chunk 的独立 Mesh。
   // 这条分离非常关键：一旦 flat / sculpted 混在同一个集合里，后续释放、拾取、以及编辑后的降级/升级都会很难维护。
   // 这里的策略是“窗口只负责补充新出现的 flat chunk”，而不是把窗口外已经创建过的 flat chunk 再卸载掉。
-  if (desiredFlatChunkGroups.size === 0) {
+  if (desiredFlatChunkGroups.size === 0 && state.flatChunkBatches.size === 0) {
     return
   }
 
@@ -3555,6 +3632,9 @@ function syncGroundFlatChunkBatches(
         root.add(resizedMesh)
         changed = true
       }
+      if (!(existing.instanceHeightCache instanceof Map)) {
+        existing.instanceHeightCache = new Map<string, number>()
+      }
       existing.spec = group.spec
       if (needsResize || !preservesExistingOrder) {
         // 同规格批次直接复用，不重新创建 geometry。
@@ -3589,6 +3669,7 @@ function syncGroundFlatChunkBatches(
       mesh,
       chunkKeys: [],
       instanceCapacity: group.keys.length,
+      instanceHeightCache: new Map<string, number>(),
     }
     refreshGroundFlatChunkBatchInstances(batch, definition, group.keys)
     root.add(mesh)
@@ -3597,6 +3678,9 @@ function syncGroundFlatChunkBatches(
   })
 
   nextBatches.forEach((batch) => {
+    if (!(batch.instanceHeightCache instanceof Map)) {
+      batch.instanceHeightCache = new Map<string, number>()
+    }
     const nextKeys = batch.chunkKeys.filter((key) => !state.chunks.has(key) && !state.hiddenChunkKeys.has(key))
     if (nextKeys.length !== batch.chunkKeys.length) {
       refreshGroundFlatChunkBatchInstances(batch, definition, nextKeys)
@@ -3605,6 +3689,7 @@ function syncGroundFlatChunkBatches(
   })
   state.flatChunkBatches = nextBatches
   if (changed) {
+    syncGroundFlatChunkKeyCache(state)
     markGroundVisibleChunkKeysDirty(state)
   }
 }
@@ -4732,7 +4817,7 @@ export function updateGroundChunks(
   const cameraChunkCoord = resolveGroundChunkCoordFromWorldPosition(localX, localZ, chunkSizeMeters)
 
   const loadRadiusChunks = resolveInfiniteFlatTilingRadiusChunks(definition)
-  updateInfiniteFlatTilingBounds(state, cameraChunkCoord, loadRadiusChunks)
+  const flatTilingChanged = updateInfiniteFlatTilingBounds(state, cameraChunkCoord, loadRadiusChunks)
   const unloadRadiusChunks = loadRadiusChunks + Math.max(4, Math.ceil(loadRadiusChunks * 0.5))
 
   const dxMoved = localX - (state.lastCameraLocalX ?? 0)
@@ -4805,7 +4890,7 @@ export function updateGroundChunks(
     return
   }
 
-  if (!force && definition.terrainMode !== 'infinite') {
+  if (!force) {
     // Only update when the camera moved enough (or when we have pending work).
     if (!hasPendingWork && !desiredWindowChanged && movedSq < moveThresholdSq) {
       // 相机没明显移动、窗口也没变化、队列里也没有待处理工作时，什么都不做。
@@ -4855,7 +4940,7 @@ export function updateGroundChunks(
       for (let cc = minLoadChunkColumn; cc <= maxLoadChunkColumn; cc += 1) {
         const key = groundChunkKey(cr, cc)
         // 已经存在的 chunk 或被隐藏的 chunk，不应该再次进入创建队列。
-        if (state.chunks.has(key) || state.hiddenChunkKeys.has(key)) {
+        if (state.chunks.has(key) || state.flatChunkKeys.has(key) || state.hiddenChunkKeys.has(key)) {
           continue
         }
 
@@ -4948,6 +5033,12 @@ export function updateGroundChunks(
   }
 
   // flat 分组不直接创建 Mesh，而是先收集起来，后面统一交给 syncGroundFlatChunkBatches(...) 同步。
+  const shouldSyncFlatChunks = force
+    || flatTilingChanged
+    || state.lastFlatChunkSyncTilingVersion < 0
+    || state.lastFlatChunkSyncHiddenChunkKeysVersion !== state.hiddenChunkKeysVersion
+
+  if (shouldSyncFlatChunks) {
   for (let cr = flatMinLoadChunkRow; cr <= flatMaxLoadChunkRow; cr += 1) {
     for (let cc = flatMinLoadChunkColumn; cc <= flatMaxLoadChunkColumn; cc += 1) {
       if (
@@ -4957,7 +5048,7 @@ export function updateGroundChunks(
         continue
       }
       const key = groundChunkKey(cr, cc)
-      if (state.chunks.has(key) || state.hiddenChunkKeys.has(key)) {
+      if (state.chunks.has(key) || state.flatChunkKeys.has(key) || state.hiddenChunkKeys.has(key)) {
         continue
       }
 
@@ -4984,6 +5075,9 @@ export function updateGroundChunks(
   // 同步 flat 批次。这里不会按视锥销毁，只会把新进入大平铺范围的 chunk 追加进实例批次。
   // 已经存在的 flat chunk 会一直保留，直到它被雕刻 chunk 替代。
   syncGroundFlatChunkBatches(root, state, definition, desiredFlatChunkGroups)
+  state.lastFlatChunkSyncTilingVersion = state.flatTilingVersion
+  state.lastFlatChunkSyncHiddenChunkKeysVersion = state.hiddenChunkKeysVersion
+  }
 
   const defaultBudget: GroundChunkBudget = camera
     ? ({ maxCreatePerUpdate: 6, maxDestroyPerUpdate: 8 } satisfies GroundChunkBudget)
@@ -5343,6 +5437,42 @@ export function getVisibleInfiniteGroundChunkKeys(target: THREE.Object3D): strin
   state.visibleChunkKeysCache = Array.from(visibleKeys)
   state.visibleChunkKeysCacheVersion = state.visibleChunkKeysVersion
   return state.visibleChunkKeysCache
+}
+
+export function getVisibleInfiniteGroundChunkSignature(target: THREE.Object3D): string {
+  const group = resolveGroundRuntimeGroup(target)
+  if (!group) {
+    return '0:0'
+  }
+  const state = groundRuntimeStateMap.get(group)
+  if (!state) {
+    return '0:0'
+  }
+  if (state.visibleChunkSignatureCacheVersion === state.visibleChunkKeysVersion) {
+    return state.visibleChunkSignatureCache
+  }
+
+  let count = 0
+  let hash = 0
+  state.chunks.forEach((_runtime, key) => {
+    if (state.hiddenChunkKeys.has(key)) {
+      return
+    }
+    count += 1
+    hash = updateGroundChunkSignatureHash(hash, key)
+  })
+  state.flatChunkKeys.forEach((key) => {
+    if (state.chunks.has(key) || state.hiddenChunkKeys.has(key)) {
+      return
+    }
+    count += 1
+    hash = updateGroundChunkSignatureHash(hash, key)
+  })
+
+  const signature = `${count}:${hash}`
+  state.visibleChunkSignatureCache = signature
+  state.visibleChunkSignatureCacheVersion = state.visibleChunkKeysVersion
+  return signature
 }
 
 export function setInfiniteGroundHiddenChunkKeys(

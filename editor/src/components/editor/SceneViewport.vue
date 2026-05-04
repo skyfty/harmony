@@ -228,7 +228,7 @@ import type { WaterBuildShape } from '@/types/water-build-shape'
 import type { WallBuildShape } from '@/types/wall-build-shape'
 import {
   createGroundMesh,
-  getVisibleInfiniteGroundChunkKeys,
+  getVisibleInfiniteGroundChunkSignature,
   setInfiniteGroundHiddenChunkKeys,
   setGroundRuntimeOptimizedChunksEnabled,
   syncGroundChunkLoadingMode,
@@ -21308,15 +21308,9 @@ let lastGroundChunkSetSignatureCheckAt = 0
 
 
 function computeGroundChunkSetSignatureForPlacement(groundObject: THREE.Object3D): string {
-  const infiniteChunkKeys = getVisibleInfiniteGroundChunkKeys(groundObject)
-  if (infiniteChunkKeys.length) {
-    let hash = 0
-    for (const key of infiniteChunkKeys) {
-      for (let index = 0; index < key.length; index += 1) {
-        hash = ((hash * 33) ^ key.charCodeAt(index)) | 0
-      }
-    }
-    return `${infiniteChunkKeys.length}:${hash}`
+  const infiniteSignature = getVisibleInfiniteGroundChunkSignature(groundObject)
+  if (infiniteSignature !== '0:0') {
+    return infiniteSignature
   }
 
   let count = 0
