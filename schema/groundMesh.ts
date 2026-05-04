@@ -3464,6 +3464,52 @@ function ensureGroundRuntimeState(root: THREE.Object3D, definition: GroundDynami
   return next
 }
 
+function clearGroundRuntimeChunkState(state: GroundRuntimeState): void {
+  state.pendingCreates = []
+  state.pendingDestroys = []
+  state.desiredSignature = ''
+  state.flatTilingInitialized = false
+  state.flatTilingVersion = 0
+  state.flatTilingMinChunkRow = 0
+  state.flatTilingMaxChunkRow = 0
+  state.flatTilingMinChunkColumn = 0
+  state.flatTilingMaxChunkColumn = 0
+  state.hiddenChunkKeys = new Set<string>()
+  state.hiddenChunkKeysVersion += 1
+  state.flatChunkKeys = new Set<string>()
+  state.lastFlatChunkSyncTilingVersion = -1
+  state.lastFlatChunkSyncHiddenChunkKeysVersion = -1
+  state.visibleChunkKeysCache = []
+  state.visibleChunkKeysVersion += 1
+  state.visibleChunkKeysCacheVersion = -1
+  state.visibleChunkSignatureCache = ''
+  state.visibleChunkSignatureCacheVersion = -1
+  state.chunks.forEach((runtime) => {
+    releaseChunkToPool(state, runtime)
+  })
+  state.chunks.clear()
+  state.flatChunkBatches.forEach((batch) => {
+    batch.mesh.removeFromParent()
+    try {
+      ;(batch.mesh.geometry as any)?.dispose?.()
+    } catch (_error) {
+      /* noop */
+    }
+  })
+  state.flatChunkBatches.clear()
+  state.meshPool.forEach((entries) => {
+    entries.forEach((mesh) => {
+      try {
+        ;(mesh.geometry as any)?.dispose?.()
+      } catch (_error) {
+        /* noop */
+      }
+    })
+  })
+  state.meshPool.clear()
+  markGroundVisibleChunkKeysDirty(state)
+}
+
 function markGroundVisibleChunkKeysDirty(state: GroundRuntimeState): void {
   state.visibleChunkKeysVersion += 1
 }
@@ -4803,6 +4849,13 @@ export function updateGroundChunks(
 
   const state = ensureGroundRuntimeState(root, definition)
   const runtimeDefinition = definition
+  const manifestRevision = Number.isFinite(runtimeDefinition.chunkManifestRevision)
+    ? Math.max(0, Math.trunc(runtimeDefinition.chunkManifestRevision as number))
+    : 0
+  if (manifestRevision > 0) {
+    clearGroundRuntimeChunkState(state)
+    return
+  }
   const now = Date.now()
   const force = options.force === true
   const minIntervalMs = Math.max(0, Math.trunc(Number.isFinite(options.minIntervalMs as number) ? (options.minIntervalMs as number) : 120))
