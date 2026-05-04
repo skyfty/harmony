@@ -229,6 +229,7 @@ import type { WallBuildShape } from '@/types/wall-build-shape'
 import {
   createGroundMesh,
   getVisibleInfiniteGroundChunkSignature,
+  resolveGroundRuntimeChunkCells,
   setInfiniteGroundHiddenChunkKeys,
   setGroundRuntimeOptimizedChunksEnabled,
   syncGroundChunkLoadingMode,
@@ -251,6 +252,7 @@ import { useTerrainStore, type GroundPanelTab, type TerrainPaintBrushSettings } 
 import { useScenesStore } from '@/stores/scenesStore'
 import type { TerrainScatterBrushShape, TerrainScatterCategory } from '@schema/terrain-scatter'
 import { hashString, stableSerialize } from '@schema/stableSerialize'
+import { logGroundPersistenceDebug } from '@/utils/groundPersistenceDebug'
 import { ViewportGizmo } from '@/utils/gizmo/ViewportGizmo'
 import { TerrainGridHelper } from './TerrainGridHelper'
 import { useTerrainGridController } from './useTerrainGridController'
@@ -477,7 +479,8 @@ let viewportGroundChunkManifestRevision = -1
 let viewportGroundChunkManifestRecords: Record<string, GroundChunkManifestRecord> = {}
 let viewportGroundChunkManifestLoadToken = 0
 let viewportGroundChunkManifestLoadPromise: Promise<void> | null = null
-let viewportGroundChunkSaveToken = 0
+let viewportGroundChunkPersistQueue: Promise<void> = Promise.resolve()
+const viewportGroundChunkAutoPersistSignatureMap = new WeakMap<THREE.Object3D, string>()
 const viewportInfiniteGroundChunkPreviewHiddenKeysMap = new WeakMap<THREE.Object3D, Set<string>>()
 type ViewportInfiniteGroundChunkData = ReturnType<typeof buildGroundChunkDataFromManifestRecord>
 
@@ -488,6 +491,20 @@ type ViewportInfiniteGroundChunkRuntime = {
   lastDesiredAt: Map<string, number>
   sceneId: string | null
   revision: number
+}
+
+function summarizeViewportGroundPersistenceDefinition(definition: GroundRuntimeDynamicMesh | null | undefined): Record<string, unknown> {
+  const localEditTileCount = definition?.localEditTiles && typeof definition.localEditTiles === 'object'
+    ? Object.keys(definition.localEditTiles).length
+    : 0
+  return {
+    terrainMode: definition?.terrainMode ?? null,
+    chunkManifestRevision: definition?.chunkManifestRevision ?? null,
+    surfaceRevision: definition?.surfaceRevision ?? null,
+    localEditTileCount,
+    chunkSizeMeters: definition?.chunkSizeMeters ?? null,
+    renderRadiusChunks: definition?.renderRadiusChunks ?? null,
+  }
 }
 
 const viewportInfiniteGroundChunkRuntimeMap = new WeakMap<THREE.Object3D, ViewportInfiniteGroundChunkRuntime>()
@@ -21470,6 +21487,13 @@ async function persistViewportInfiniteGroundChunks(params: {
   const shouldPersistSceneState = params.persistSceneState !== false
   const sceneId = typeof sceneStore.currentSceneId === 'string' ? sceneStore.currentSceneId.trim() : ''
   if (!sceneId) {
+    logGroundPersistenceDebug('SceneViewport', 'persistGroundChunks.skipped', {
+      reason: 'missing-scene-id',
+      affectedRegion: params.affectedRegion,
+      chunkCells: params.chunkCells,
+      requestedChunkKeyCount: Array.isArray(params.chunkKeys) ? params.chunkKeys.length : 0,
+      ground: summarizeViewportGroundPersistenceDefinition(params.definition),
+    })
     return
   }
 
@@ -21491,171 +21515,211 @@ async function persistViewportInfiniteGroundChunks(params: {
   }
   const chunkKeys = Array.from(chunkKeySet)
   if (!chunkKeys.length) {
-    return
-  }
-
-  const saveToken = ++viewportGroundChunkSaveToken
-  const baseRevision = Math.max(0, Math.trunc(params.definition.chunkManifestRevision ?? 0))
-  const updatedAt = Date.now()
-  const nextRevisionCandidate = Math.max(1, baseRevision + 1)
-  const chunkDataByKey = new Map<string, ViewportInfiniteGroundChunkData>()
-
-  for (const chunkKey of chunkKeys) {
-    const previewRecord = createViewportGroundChunkManifestRecord(
-      params.definition,
-      chunkKey,
-      nextRevisionCandidate,
-      updatedAt,
-      null,
-    )
-    if (!previewRecord) {
-      continue
-    }
-    chunkDataByKey.set(chunkKey, buildGroundChunkDataFromManifestRecord(params.definition, previewRecord))
-  }
-
-  const manifest = await scenesStore.loadGroundChunkManifest(sceneId)
-  if (saveToken !== viewportGroundChunkSaveToken) {
-    return
-  }
-
-  const nextManifestRecords: Record<string, GroundChunkManifestRecord> = { ...(manifest?.chunks ?? {}) }
-  const nextRevision = Math.max(
-    1,
-    Math.trunc(manifest?.revision ?? 0) + 1,
-    nextRevisionCandidate,
-  )
-  const dirtyRecords: GroundChunkManifestRecord[] = []
-  const affectedRegionWorldBounds = resolveAffectedGroundRegionWorldBounds(params.definition, params.affectedRegion)
-
-  for (const chunkKey of chunkKeys) {
-    const existingRecord = nextManifestRecords[chunkKey] ?? null
-    const nextRecord = createViewportGroundChunkManifestRecord(
-      params.definition,
-      chunkKey,
-      nextRevision,
-      updatedAt,
-      existingRecord,
-    )
-    const chunkData = chunkDataByKey.get(chunkKey)
-    if (!nextRecord) {
-      continue
-    }
-    if (!chunkData) {
-      continue
-    }
-    let existingChunkData: ViewportInfiniteGroundChunkData | null = null
-    if (existingRecord) {
-      const existingBuffer = await scenesStore.loadGroundChunkData(sceneId, chunkKey)
-      const decodedExistingChunkData = deserializeGroundChunkData(existingBuffer)
-      existingChunkData = decodedExistingChunkData && Math.max(1, Math.trunc(decodedExistingChunkData.header.resolution)) === Math.max(1, Math.trunc(nextRecord.resolution))
-        ? decodedExistingChunkData
-        : createViewportInfiniteGroundChunkDataFromHeights(
-          nextRecord,
-          decodeViewportGroundChunkHeights(existingBuffer, nextRecord.resolution),
-        )
-    }
-    const mergedChunkData = mergeViewportGroundChunkPersistData({
-      record: nextRecord,
-      nextChunkData: chunkData,
-      existingChunkData,
-      affectedRegionWorldBounds,
+    logGroundPersistenceDebug('SceneViewport', 'persistGroundChunks.skipped', {
+      reason: 'no-chunk-keys',
+      sceneId,
+      affectedRegion: params.affectedRegion,
+      chunkCells: params.chunkCells,
+      requestedChunkKeyCount: Array.isArray(params.chunkKeys) ? params.chunkKeys.length : 0,
+      ground: summarizeViewportGroundPersistenceDefinition(params.definition),
     })
-    const encoded = serializeGroundChunkData({
-      header: {
-        ...mergedChunkData.header,
+    return
+  }
+
+  logGroundPersistenceDebug('SceneViewport', 'persistGroundChunks.start', {
+    sceneId,
+    chunkKeys,
+    affectedRegion: params.affectedRegion,
+    chunkCells: params.chunkCells,
+    shouldPersistSceneState,
+    ground: summarizeViewportGroundPersistenceDefinition(params.definition),
+  })
+
+  if (shouldPersistSceneState && params.affectedRegion) {
+    await sceneStore.saveActiveScene({ force: true })
+    logGroundPersistenceDebug('SceneViewport', 'persistGroundChunks.sceneSavedBeforeChunks', {
+      sceneId,
+      affectedRegion: params.affectedRegion,
+      ground: summarizeViewportGroundPersistenceDefinition(params.definition),
+    })
+  }
+
+  const persistTask = viewportGroundChunkPersistQueue
+    .catch(() => undefined)
+    .then(async () => {
+      const baseRevision = Math.max(0, Math.trunc(params.definition.chunkManifestRevision ?? 0))
+      const updatedAt = Date.now()
+      const nextRevisionCandidate = Math.max(1, baseRevision + 1)
+      const chunkDataByKey = new Map<string, ViewportInfiniteGroundChunkData>()
+
+      for (const chunkKey of chunkKeys) {
+        const previewRecord = createViewportGroundChunkManifestRecord(
+          params.definition,
+          chunkKey,
+          nextRevisionCandidate,
+          updatedAt,
+          null,
+        )
+        if (!previewRecord) {
+          continue
+        }
+        chunkDataByKey.set(chunkKey, buildGroundChunkDataFromManifestRecord(params.definition, previewRecord))
+      }
+
+      const manifest = await scenesStore.loadGroundChunkManifest(sceneId)
+      logGroundPersistenceDebug('SceneViewport', 'persistGroundChunks.manifestLoaded', {
+        sceneId,
+        requestedChunkKeys: chunkKeys,
+        manifestRevision: manifest?.revision ?? null,
+        manifestChunkCount: manifest?.chunks ? Object.keys(manifest.chunks).length : 0,
+      })
+      const nextManifestRecords: Record<string, GroundChunkManifestRecord> = { ...(manifest?.chunks ?? {}) }
+      const nextRevision = Math.max(
+        1,
+        Math.trunc(manifest?.revision ?? 0) + 1,
+        nextRevisionCandidate,
+      )
+      const dirtyRecords: GroundChunkManifestRecord[] = []
+      const affectedRegionWorldBounds = resolveAffectedGroundRegionWorldBounds(params.definition, params.affectedRegion)
+
+      for (const chunkKey of chunkKeys) {
+        const existingRecord = nextManifestRecords[chunkKey] ?? null
+        const nextRecord = createViewportGroundChunkManifestRecord(
+          params.definition,
+          chunkKey,
+          nextRevision,
+          updatedAt,
+          existingRecord,
+        )
+        const chunkData = chunkDataByKey.get(chunkKey)
+        if (!nextRecord || !chunkData) {
+          continue
+        }
+        let existingChunkData: ViewportInfiniteGroundChunkData | null = null
+        if (existingRecord) {
+          const existingBuffer = await scenesStore.loadGroundChunkData(sceneId, chunkKey)
+          const decodedExistingChunkData = deserializeGroundChunkData(existingBuffer)
+          existingChunkData = decodedExistingChunkData && Math.max(1, Math.trunc(decodedExistingChunkData.header.resolution)) === Math.max(1, Math.trunc(nextRecord.resolution))
+            ? decodedExistingChunkData
+            : createViewportInfiniteGroundChunkDataFromHeights(
+              nextRecord,
+              decodeViewportGroundChunkHeights(existingBuffer, nextRecord.resolution),
+            )
+        }
+        const mergedChunkData = mergeViewportGroundChunkPersistData({
+          record: nextRecord,
+          nextChunkData: chunkData,
+          existingChunkData,
+          affectedRegionWorldBounds,
+        })
+        const encoded = serializeGroundChunkData({
+          header: {
+            ...mergedChunkData.header,
+            revision: nextRevision,
+            updatedAt,
+            source: nextRecord.source ?? mergedChunkData.header.source ?? null,
+            key: nextRecord.key,
+            chunkX: nextRecord.chunkX,
+            chunkZ: nextRecord.chunkZ,
+            originX: nextRecord.originX,
+            originZ: nextRecord.originZ,
+            chunkSizeMeters: nextRecord.chunkSizeMeters,
+            resolution: nextRecord.resolution,
+            cellSize: nextRecord.chunkSizeMeters / Math.max(1, nextRecord.resolution),
+            heightMin: mergedChunkData.header.heightMin,
+            heightMax: mergedChunkData.header.heightMax,
+          },
+          heights: mergedChunkData.heights,
+        })
+        nextRecord.heightMin = mergedChunkData.header.heightMin
+        nextRecord.heightMax = mergedChunkData.header.heightMax
+        await scenesStore.saveGroundChunkData(sceneId, chunkKey, encoded, { syncServer: false })
+        nextManifestRecords[chunkKey] = nextRecord
+        dirtyRecords.push(nextRecord)
+        chunkDataByKey.set(chunkKey, mergedChunkData)
+      }
+
+      if (!dirtyRecords.length) {
+        return
+      }
+
+      const nextManifest = {
+        version: 1 as const,
+        sceneId,
+        chunkSizeMeters: Math.max(1, Math.trunc(params.definition.chunkSizeMeters ?? 100)),
+        baseHeight: typeof params.definition.baseHeight === 'number' && Number.isFinite(params.definition.baseHeight)
+          ? params.definition.baseHeight
+          : 0,
+        worldBounds: resolveGroundWorldBounds(params.definition),
+        chunkBounds: resolveGroundChunkBounds(params.definition),
         revision: nextRevision,
         updatedAt,
-        source: nextRecord.source ?? mergedChunkData.header.source ?? null,
-        key: nextRecord.key,
-        chunkX: nextRecord.chunkX,
-        chunkZ: nextRecord.chunkZ,
-        originX: nextRecord.originX,
-        originZ: nextRecord.originZ,
-        chunkSizeMeters: nextRecord.chunkSizeMeters,
-        resolution: nextRecord.resolution,
-        cellSize: nextRecord.chunkSizeMeters / Math.max(1, nextRecord.resolution),
-        heightMin: mergedChunkData.header.heightMin,
-        heightMax: mergedChunkData.header.heightMax,
-      },
-      heights: mergedChunkData.heights,
-    })
-    nextRecord.heightMin = mergedChunkData.header.heightMin
-    nextRecord.heightMax = mergedChunkData.header.heightMax
-    await scenesStore.saveGroundChunkData(sceneId, chunkKey, encoded, { syncServer: false })
-    nextManifestRecords[chunkKey] = nextRecord
-    dirtyRecords.push(nextRecord)
-    chunkDataByKey.set(chunkKey, mergedChunkData)
-  }
-
-  if (!dirtyRecords.length || saveToken !== viewportGroundChunkSaveToken) {
-    return
-  }
-
-  const nextManifest = {
-    version: 1 as const,
-    sceneId,
-    chunkSizeMeters: Math.max(1, Math.trunc(params.definition.chunkSizeMeters ?? 100)),
-    baseHeight: typeof params.definition.baseHeight === 'number' && Number.isFinite(params.definition.baseHeight)
-      ? params.definition.baseHeight
-      : 0,
-    worldBounds: resolveGroundWorldBounds(params.definition),
-    chunkBounds: resolveGroundChunkBounds(params.definition),
-    revision: nextRevision,
-    updatedAt,
-    chunks: nextManifestRecords,
-  }
-  await scenesStore.saveGroundChunkManifest(sceneId, nextManifest, { syncServer: false })
-  if (saveToken !== viewportGroundChunkSaveToken) {
-    return
-  }
-
-  params.definition.chunkManifestRevision = nextRevision
-
-  if (shouldPersistSceneState) {
-    const groundNode = getGroundNodeFromStore()
-    if (groundNode?.dynamicMesh?.type === 'Ground') {
-      await sceneStore.withHistorySuppressed(async () => {
-        sceneStore.updateGroundNodeDynamicMesh(groundNode.id, {
-          chunkManifestRevision: nextRevision,
-        })
+        chunks: nextManifestRecords,
+      }
+      await scenesStore.saveGroundChunkManifest(sceneId, nextManifest, { syncServer: false })
+      logGroundPersistenceDebug('SceneViewport', 'persistGroundChunks.manifestSaved', {
+        sceneId,
+        revision: nextRevision,
+        chunkCount: Object.keys(nextManifestRecords).length,
+        dirtyChunkKeys: dirtyRecords.map((record) => record.key),
       })
-    }
-  }
 
-  viewportGroundChunkManifestSceneId = sceneId
-  viewportGroundChunkManifestRevision = nextRevision
-  viewportGroundChunkManifestRecords = nextManifestRecords
+      params.definition.chunkManifestRevision = nextRevision
 
-  const visibleManifestChunkKeys = new Set(
-    resolveVisibleManifestChunkRecords(params.groundObject, params.definition, nextManifestRecords).map((record) => record.key),
-  )
-  for (const record of dirtyRecords) {
-    if (!visibleManifestChunkKeys.has(record.key)) {
-      continue
-    }
-    const dirtyChunkDataItem = chunkDataByKey.get(record.key)
-    if (!dirtyChunkDataItem) {
-      continue
-    }
-    upsertViewportInfiniteGroundChunkMeshFromChunkData({
-      groundObject: params.groundObject,
-      groundDefinition: params.definition,
-      sceneId,
-      manifestRevision: nextRevision,
-      record,
-      chunkData: dirtyChunkDataItem,
+      if (shouldPersistSceneState) {
+        const groundNode = getGroundNodeFromStore()
+        if (groundNode?.dynamicMesh?.type === 'Ground') {
+          await sceneStore.withHistorySuppressed(async () => {
+            sceneStore.updateGroundNodeDynamicMesh(groundNode.id, {
+              chunkManifestRevision: nextRevision,
+            })
+          })
+        }
+      }
+
+      viewportGroundChunkManifestSceneId = sceneId
+      viewportGroundChunkManifestRevision = nextRevision
+      viewportGroundChunkManifestRecords = nextManifestRecords
+
+      const visibleManifestChunkKeys = new Set(
+        resolveVisibleManifestChunkRecords(params.groundObject, params.definition, nextManifestRecords).map((record) => record.key),
+      )
+      for (const record of dirtyRecords) {
+        if (!visibleManifestChunkKeys.has(record.key)) {
+          continue
+        }
+        const dirtyChunkDataItem = chunkDataByKey.get(record.key)
+        if (!dirtyChunkDataItem) {
+          continue
+        }
+        upsertViewportInfiniteGroundChunkMeshFromChunkData({
+          groundObject: params.groundObject,
+          groundDefinition: params.definition,
+          sceneId,
+          manifestRevision: nextRevision,
+          record,
+          chunkData: dirtyChunkDataItem,
+        })
+      }
+
+      const streamingDefinition = resolveViewportGroundStreamingDefinition(params.groundObject, params.definition)
+      syncViewportInfiniteGroundChunkMeshes(params.groundObject, streamingDefinition, sceneId, nextRevision, nextManifestRecords)
+      if (syncViewportInfiniteGroundFallbackHiddenKeys(params.groundObject)) {
+        lastGroundChunkSetSignatureForPlacement = null
+      }
+      if (shouldPersistSceneState) {
+        await sceneStore.saveActiveScene({ force: true })
+        logGroundPersistenceDebug('SceneViewport', 'persistGroundChunks.sceneSavedAfterChunks', {
+          sceneId,
+          revision: nextRevision,
+          chunkCount: Object.keys(nextManifestRecords).length,
+          ground: summarizeViewportGroundPersistenceDefinition(params.definition),
+        })
+      }
     })
-  }
 
-  const streamingDefinition = resolveViewportGroundStreamingDefinition(params.groundObject, params.definition)
-  syncViewportInfiniteGroundChunkMeshes(params.groundObject, streamingDefinition, sceneId, nextRevision, nextManifestRecords)
-  if (syncViewportInfiniteGroundFallbackHiddenKeys(params.groundObject)) {
-    lastGroundChunkSetSignatureForPlacement = null
-  }
-  if (shouldPersistSceneState) {
-    await sceneStore.saveActiveScene({ force: true })
-  }
+  viewportGroundChunkPersistQueue = persistTask.catch(() => undefined)
+  await persistTask
 
 }
 
@@ -21918,6 +21982,18 @@ function upsertViewportInfiniteGroundChunkMeshFromChunkData(params: {
   record: GroundChunkManifestRecord
   chunkData: ViewportInfiniteGroundChunkData
 }): void {
+  logGroundPersistenceDebug('SceneViewport', 'rebuildChunkMesh.start', {
+    sceneId: params.sceneId,
+    manifestRevision: params.manifestRevision,
+    record: {
+      key: params.record.key,
+      revision: params.record.revision,
+      resolution: params.record.resolution,
+      chunkX: params.record.chunkX,
+      chunkZ: params.record.chunkZ,
+    },
+    heightsLength: params.chunkData.heights.length,
+  })
   const runtime = ensureViewportInfiniteGroundChunkRuntime(params.groundObject)
   if (runtime.sceneId !== params.sceneId) {
     runtime.meshes.forEach((mesh) => disposeViewportInfiniteGroundChunkMesh(mesh))
@@ -21990,6 +22066,13 @@ function upsertViewportInfiniteGroundChunkMeshFromChunkData(params: {
   runtime.pendingLoads.delete(params.record.key)
   syncViewportInfiniteGroundFallbackHiddenKeys(params.groundObject)
   lastGroundChunkSetSignatureForPlacement = null
+  logGroundPersistenceDebug('SceneViewport', 'rebuildChunkMesh.done', {
+    sceneId: params.sceneId,
+    manifestRevision: params.manifestRevision,
+    recordKey: params.record.key,
+    recordRevision: params.record.revision,
+    meshCount: runtime.meshes.size,
+  })
 }
 
 function resolveViewportGroundChunkMaterial(groundObject: THREE.Object3D): THREE.Material {
@@ -22239,8 +22322,22 @@ function syncViewportInfiniteGroundChunkMeshes(
     if (pendingLoad?.revision === record.revision) {
       continue
     }
+    logGroundPersistenceDebug('SceneViewport', 'loadChunkData.start', {
+      sceneId,
+      manifestRevision,
+      chunkKey: record.key,
+      recordRevision: record.revision,
+      desiredVisibleChunkCount: visibleRecords.length,
+    })
     const pending = scenesStore.loadGroundChunkData(sceneId, record.key)
       .then((buffer) => {
+        logGroundPersistenceDebug('SceneViewport', 'loadChunkData.done', {
+          sceneId,
+          manifestRevision,
+          chunkKey: record.key,
+          recordRevision: record.revision,
+          byteLength: buffer?.byteLength ?? 0,
+        })
         const activeRuntime = viewportInfiniteGroundChunkRuntimeMap.get(groundObject)
         const activePending = activeRuntime?.pendingLoads.get(record.key)
         if (!activeRuntime || activeRuntime.sceneId !== sceneId || activePending?.revision !== record.revision) {
@@ -22296,6 +22393,59 @@ function syncViewportGroundChunks(
   syncViewportInfiniteGroundChunkManifest(groundObject, streamingDefinition)
 }
 
+function maybeAutoPersistViewportInfiniteGroundChunks(
+  groundObject: THREE.Object3D,
+  groundDefinition: GroundRuntimeDynamicMesh,
+  sceneId: string,
+  manifestRevision: number,
+): void {
+  if (!sceneId || manifestRevision > 0 || groundDefinition.terrainMode !== 'infinite') {
+    viewportGroundChunkAutoPersistSignatureMap.delete(groundObject)
+    return
+  }
+  const localEditTiles = groundDefinition.localEditTiles && typeof groundDefinition.localEditTiles === 'object'
+    ? groundDefinition.localEditTiles
+    : null
+  const chunkKeys = localEditTiles
+    ? Object.keys(localEditTiles).filter((key) => key.length > 0)
+    : []
+  if (!chunkKeys.length) {
+    return
+  }
+  const surfaceRevision = Number.isFinite(groundDefinition.surfaceRevision)
+    ? Math.max(0, Math.trunc(groundDefinition.surfaceRevision as number))
+    : 0
+  const signature = `${sceneId}:${surfaceRevision}:${chunkKeys.length}`
+  if (viewportGroundChunkAutoPersistSignatureMap.get(groundObject) === signature) {
+    return
+  }
+  viewportGroundChunkAutoPersistSignatureMap.set(groundObject, signature)
+  logGroundPersistenceDebug('SceneViewport', 'persistGroundChunks.autoRecover.start', {
+    sceneId,
+    manifestRevision,
+    surfaceRevision,
+    chunkKeyCount: chunkKeys.length,
+    chunkCells: Math.max(1, resolveGroundRuntimeChunkCells(groundDefinition)),
+    ground: summarizeViewportGroundPersistenceDefinition(groundDefinition),
+  })
+  void persistViewportInfiniteGroundChunks({
+    groundObject,
+    definition: groundDefinition,
+    affectedRegion: null,
+    chunkKeys,
+    chunkCells: Math.max(1, resolveGroundRuntimeChunkCells(groundDefinition)),
+  }).catch((error) => {
+    viewportGroundChunkAutoPersistSignatureMap.delete(groundObject)
+    logGroundPersistenceDebug('SceneViewport', 'persistGroundChunks.autoRecover.failed', {
+      sceneId,
+      manifestRevision,
+      surfaceRevision,
+      chunkKeyCount: chunkKeys.length,
+      error,
+    })
+  })
+}
+
 function syncViewportInfiniteGroundChunkManifest(
   groundObject: THREE.Object3D,
   groundDefinition: GroundRuntimeDynamicMesh,
@@ -22306,6 +22456,12 @@ function syncViewportInfiniteGroundChunkManifest(
     : 0
 
   if (!sceneId || manifestRevision <= 0) {
+    logGroundPersistenceDebug('SceneViewport', 'loadChunkManifest.skipped', {
+      sceneId,
+      manifestRevision,
+      ground: summarizeViewportGroundPersistenceDefinition(groundDefinition),
+    })
+    maybeAutoPersistViewportInfiniteGroundChunks(groundObject, groundDefinition, sceneId, manifestRevision)
     setInfiniteGroundHiddenChunkKeys(groundObject, [])
     clearViewportInfiniteGroundChunkRuntime(groundObject)
     viewportGroundChunkManifestSceneId = sceneId || null
@@ -22327,6 +22483,12 @@ function syncViewportInfiniteGroundChunkManifest(
 
   if (!viewportGroundChunkManifestLoadPromise) {
     const loadToken = ++viewportGroundChunkManifestLoadToken
+    logGroundPersistenceDebug('SceneViewport', 'loadChunkManifest.start', {
+      sceneId,
+      manifestRevision,
+      loadToken,
+      ground: summarizeViewportGroundPersistenceDefinition(groundDefinition),
+    })
     viewportGroundChunkManifestLoadPromise = scenesStore.loadGroundChunkManifest(sceneId)
       .then((manifest) => {
         if (loadToken !== viewportGroundChunkManifestLoadToken) {
@@ -22335,6 +22497,14 @@ function syncViewportInfiniteGroundChunkManifest(
         const manifestRecords = manifest?.revision === manifestRevision
           ? { ...(manifest.chunks ?? {}) }
           : {}
+        logGroundPersistenceDebug('SceneViewport', 'loadChunkManifest.done', {
+          sceneId,
+          manifestRevision,
+          loadToken,
+          loadedManifestRevision: manifest?.revision ?? null,
+          loadedChunkCount: manifest?.chunks ? Object.keys(manifest.chunks).length : 0,
+          appliedChunkCount: Object.keys(manifestRecords).length,
+        })
         viewportGroundChunkManifestSceneId = sceneId
         viewportGroundChunkManifestRevision = manifestRevision
         viewportGroundChunkManifestRecords = manifestRecords

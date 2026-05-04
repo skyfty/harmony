@@ -19,6 +19,7 @@ import {
   serializeGroundHeightSidecarFromSampler,
   type GroundHeightSidecarSampler,
 } from '@/utils/groundHeightSidecar'
+import { logGroundPersistenceDebug } from '@/utils/groundPersistenceDebug'
 
 const runtimeGroundHeightmaps = new Map<string, GroundHeightRuntimeState>()
 
@@ -100,6 +101,19 @@ export type GroundRuntimeDynamicMesh = GroundDynamicMesh & {
   runtimeLoadedTileKeys?: string[]
   runtimeManualHeightOverrideCount?: number
   runtimePlanningHeightOverrideCount?: number
+}
+
+function summarizeGroundRuntimeDefinition(definition: GroundDynamicMesh | null | undefined): Record<string, unknown> {
+  const localEditTileCount = definition?.localEditTiles && typeof definition.localEditTiles === 'object'
+    ? Object.keys(definition.localEditTiles).length
+    : 0
+  return {
+    terrainMode: definition?.terrainMode ?? null,
+    chunkManifestRevision: definition?.chunkManifestRevision ?? null,
+    surfaceRevision: definition?.surfaceRevision ?? null,
+    localEditTileCount,
+    hasPlanningMetadata: Boolean(definition?.planningMetadata),
+  }
 }
 
 function clampRegionIndex(value: number, min: number, max: number): number {
@@ -708,8 +722,16 @@ function replaceRuntimeGroundHeightmapsFromSidecar(
   sidecar: ArrayBuffer | null,
 ): void {
   const definition = asGroundDynamicMesh(groundNode)
+  logGroundPersistenceDebug('GroundHeightmapStore', 'replaceRuntimeGroundHeightmapsFromSidecar.start', {
+    nodeId: groundNode?.id ?? null,
+    sidecarByteLength: sidecar?.byteLength ?? 0,
+    ground: summarizeGroundRuntimeDefinition(definition),
+  })
   if (!groundNode || !definition) {
     runtimeGroundHeightmaps.clear()
+    logGroundPersistenceDebug('GroundHeightmapStore', 'replaceRuntimeGroundHeightmapsFromSidecar.cleared', {
+      reason: 'missing-ground-node-or-definition',
+    })
     return
   }
   const runtimeGroundDefinition = definition as GroundRuntimeDynamicMesh
@@ -720,6 +742,10 @@ function replaceRuntimeGroundHeightmapsFromSidecar(
     delete runtimeGroundDefinition.runtimeLoadedTileKeys
     delete runtimeGroundDefinition.runtimeManualHeightOverrideCount
     delete runtimeGroundDefinition.runtimePlanningHeightOverrideCount
+    logGroundPersistenceDebug('GroundHeightmapStore', 'replaceRuntimeGroundHeightmapsFromSidecar.noSidecar', {
+      nodeId: groundNode.id,
+      ground: summarizeGroundRuntimeDefinition(definition),
+    })
     return
   }
   const runtimeDefinition = createGroundRuntimeMeshFromSidecar(definition, sidecar)
@@ -742,6 +768,18 @@ function replaceRuntimeGroundHeightmapsFromSidecar(
   created.planningHeightOverrideCount = runtimeDefinition.runtimePlanningHeightOverrideCount ?? created.planningHeightOverrideCount
   created.surfaceRevision = Number.isFinite(runtimeDefinition.surfaceRevision) ? Math.max(0, Math.trunc(runtimeDefinition.surfaceRevision as number)) : 0
   runtimeGroundHeightmaps.set(groundNode.id, created)
+  logGroundPersistenceDebug('GroundHeightmapStore', 'replaceRuntimeGroundHeightmapsFromSidecar.done', {
+    nodeId: groundNode.id,
+    sidecarByteLength: sidecar.byteLength,
+    runtime: {
+      rows: created.rows,
+      columns: created.columns,
+      tileResolution: created.tileResolution,
+      localEditTileCount: created.localEditTiles.size,
+      surfaceRevision: created.surfaceRevision ?? null,
+    },
+    ground: summarizeGroundRuntimeDefinition(runtimeDefinition),
+  })
 }
 
 function ensureSceneGroundHeightmap(groundNode: SceneNode | null): void {
@@ -780,6 +818,11 @@ export const useGroundHeightmapStore = defineStore('groundHeightmap', {
   actions: {
     async hydrateSceneDocument(groundNode: SceneNode | null, sidecar: ArrayBuffer | null): Promise<void> {
       replaceRuntimeGroundHeightmapsFromSidecar(groundNode, sidecar)
+      logGroundPersistenceDebug('GroundHeightmapStore', 'hydrateSceneDocument.done', {
+        nodeId: groundNode?.id ?? null,
+        sidecarByteLength: sidecar?.byteLength ?? 0,
+        ground: summarizeGroundRuntimeDefinition(asGroundDynamicMesh(groundNode)),
+      })
     },
     clearSceneDocument(): void {
       runtimeGroundHeightmaps.clear()

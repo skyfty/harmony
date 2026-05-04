@@ -9,6 +9,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { buildServerApiUrl } from '@/api/serverApiConfig'
 import { exportScenePackageZip } from '@/utils/scenePackageExport'
 import { ensureOptimizedGroundMeshOnDocument } from '@/utils/groundOptimizedMeshExport'
+import { logGroundPersistenceDebug } from '@/utils/groundPersistenceDebug'
 import { migrateLegacyGroundTerrainDocument } from '@/utils/legacyGroundTerrainMigration'
 import {
   stripGroundHeightMapsFromSceneDocument,
@@ -288,6 +289,22 @@ function findGroundNode(nodes: SceneNode[]): SceneNode | null {
 
 function findGroundNodeInDocument(document: StoredSceneDocument): SceneNode | null {
   return findGroundNode(document.nodes)
+}
+
+function summarizeGroundNodePersistence(node: SceneNode | null): Record<string, unknown> {
+  const dynamicMesh = node?.dynamicMesh?.type === 'Ground' ? node.dynamicMesh : null
+  const localEditTileCount = dynamicMesh?.localEditTiles && typeof dynamicMesh.localEditTiles === 'object'
+    ? Object.keys(dynamicMesh.localEditTiles).length
+    : 0
+  return {
+    nodeId: node?.id ?? null,
+    hasGroundNode: Boolean(node),
+    terrainMode: dynamicMesh?.terrainMode ?? null,
+    chunkManifestRevision: dynamicMesh?.chunkManifestRevision ?? null,
+    surfaceRevision: dynamicMesh?.surfaceRevision ?? null,
+    localEditTileCount,
+    hasOptimizedMesh: Boolean(dynamicMesh?.optimizedMesh),
+  }
 }
 
 // Deeply unwrap Vue proxies so IndexedDB receives cloneable values.
@@ -575,12 +592,28 @@ async function writeSceneGroundPaintSidecar(workspaceId: string, sceneId: string
 async function readSceneGroundChunkManifest(workspaceId: string, sceneId: string): Promise<GroundChunkManifest | null> {
   if (!isIndexedDbAvailable()) {
     const manifest = getMemoryGroundChunkManifests(workspaceId).get(sceneId)
+    logGroundPersistenceDebug('ScenesStore', 'readGroundChunkManifest.done', {
+      workspaceId,
+      sceneId,
+      storage: 'memory',
+      found: Boolean(manifest),
+      revision: manifest?.revision ?? null,
+      chunkCount: manifest?.chunks ? Object.keys(manifest.chunks).length : 0,
+    })
     return manifest ? cloneForIndexedDb(manifest) : null
   }
   const db = await openDatabase(workspaceId)
   const tx = db.transaction(STORE_GROUND_CHUNK_MANIFESTS, 'readonly')
   const store = tx.objectStore(STORE_GROUND_CHUNK_MANIFESTS)
   const entry = await requestToPromise<{ id: string; manifest: GroundChunkManifest } | undefined>(store.get(sceneId))
+  logGroundPersistenceDebug('ScenesStore', 'readGroundChunkManifest.done', {
+    workspaceId,
+    sceneId,
+    storage: 'indexeddb',
+    found: Boolean(entry?.manifest),
+    revision: entry?.manifest?.revision ?? null,
+    chunkCount: entry?.manifest?.chunks ? Object.keys(entry.manifest.chunks).length : 0,
+  })
   return entry?.manifest ? cloneForIndexedDb(entry.manifest) : null
 }
 
@@ -589,6 +622,12 @@ async function writeSceneGroundChunkManifest(
   sceneId: string,
   manifest: GroundChunkManifest | null,
 ): Promise<void> {
+  logGroundPersistenceDebug('ScenesStore', 'writeGroundChunkManifest.start', {
+    workspaceId,
+    sceneId,
+    revision: manifest?.revision ?? null,
+    chunkCount: manifest?.chunks ? Object.keys(manifest.chunks).length : 0,
+  })
   if (!isIndexedDbAvailable()) {
     const bucket = getMemoryGroundChunkManifests(workspaceId)
     if (manifest) {
@@ -596,6 +635,13 @@ async function writeSceneGroundChunkManifest(
     } else {
       bucket.delete(sceneId)
     }
+    logGroundPersistenceDebug('ScenesStore', 'writeGroundChunkManifest.done', {
+      workspaceId,
+      sceneId,
+      storage: 'memory',
+      revision: manifest?.revision ?? null,
+      chunkCount: manifest?.chunks ? Object.keys(manifest.chunks).length : 0,
+    })
     return
   }
   const db = await openDatabase(workspaceId)
@@ -611,6 +657,13 @@ async function writeSceneGroundChunkManifest(
     tx.onerror = () => reject(tx.error ?? new Error('Failed to write scene ground chunk manifest'))
     tx.onabort = () => reject(tx.error ?? new Error('Scene ground chunk manifest write aborted'))
   })
+  logGroundPersistenceDebug('ScenesStore', 'writeGroundChunkManifest.done', {
+    workspaceId,
+    sceneId,
+    storage: 'indexeddb',
+    revision: manifest?.revision ?? null,
+    chunkCount: manifest?.chunks ? Object.keys(manifest.chunks).length : 0,
+  })
 }
 
 async function readSceneGroundChunkData(
@@ -621,12 +674,28 @@ async function readSceneGroundChunkData(
   const storageKey = getGroundChunkDataStorageKey(sceneId, chunkKey)
   if (!isIndexedDbAvailable()) {
     const buffer = getMemoryGroundChunkData(workspaceId).get(storageKey)
+    logGroundPersistenceDebug('ScenesStore', 'readGroundChunkData.done', {
+      workspaceId,
+      sceneId,
+      chunkKey,
+      storage: 'memory',
+      found: Boolean(buffer),
+      byteLength: buffer?.byteLength ?? 0,
+    })
     return buffer ? cloneArrayBuffer(buffer) : null
   }
   const db = await openDatabase(workspaceId)
   const tx = db.transaction(STORE_GROUND_CHUNK_DATA, 'readonly')
   const store = tx.objectStore(STORE_GROUND_CHUNK_DATA)
   const entry = await requestToPromise<{ id: string; buffer: ArrayBuffer } | undefined>(store.get(storageKey))
+  logGroundPersistenceDebug('ScenesStore', 'readGroundChunkData.done', {
+    workspaceId,
+    sceneId,
+    chunkKey,
+    storage: 'indexeddb',
+    found: Boolean(entry?.buffer),
+    byteLength: entry?.buffer?.byteLength ?? 0,
+  })
   return entry?.buffer ?? null
 }
 
@@ -637,6 +706,12 @@ async function writeSceneGroundChunkData(
   data: ArrayBuffer | null,
 ): Promise<void> {
   const storageKey = getGroundChunkDataStorageKey(sceneId, chunkKey)
+  logGroundPersistenceDebug('ScenesStore', 'writeGroundChunkData.start', {
+    workspaceId,
+    sceneId,
+    chunkKey,
+    byteLength: data?.byteLength ?? 0,
+  })
   if (!isIndexedDbAvailable()) {
     const bucket = getMemoryGroundChunkData(workspaceId)
     if (data) {
@@ -644,6 +719,13 @@ async function writeSceneGroundChunkData(
     } else {
       bucket.delete(storageKey)
     }
+    logGroundPersistenceDebug('ScenesStore', 'writeGroundChunkData.done', {
+      workspaceId,
+      sceneId,
+      chunkKey,
+      storage: 'memory',
+      byteLength: data?.byteLength ?? 0,
+    })
     return
   }
   const db = await openDatabase(workspaceId)
@@ -658,6 +740,13 @@ async function writeSceneGroundChunkData(
     tx.oncomplete = () => resolve()
     tx.onerror = () => reject(tx.error ?? new Error('Failed to write scene ground chunk data'))
     tx.onabort = () => reject(tx.error ?? new Error('Scene ground chunk data write aborted'))
+  })
+  logGroundPersistenceDebug('ScenesStore', 'writeGroundChunkData.done', {
+    workspaceId,
+    sceneId,
+    chunkKey,
+    storage: 'indexeddb',
+    byteLength: data?.byteLength ?? 0,
   })
 }
 
@@ -941,12 +1030,22 @@ async function readSceneDocument(
   id: string,
   options: { hydrateGroundRuntime?: boolean } = {},
 ): Promise<StoredSceneDocument | null> {
+  logGroundPersistenceDebug('ScenesStore', 'readSceneDocument.start', {
+    workspaceId,
+    sceneId: id,
+    hydrateGroundRuntime: options.hydrateGroundRuntime === true,
+  })
   const groundHeightmapStore = useGroundHeightmapStore()
   const groundScatterStore = useGroundScatterStore()
   const groundPaintStore = useGroundPaintStore()
   if (!isIndexedDbAvailable()) {
     const document = getMemoryWorkspace(workspaceId).get(id)
     if (!document) {
+      logGroundPersistenceDebug('ScenesStore', 'readSceneDocument.miss', {
+        workspaceId,
+        sceneId: id,
+        storage: 'memory',
+      })
       return null
     }
     const hydrated = cloneForIndexedDb(document)
@@ -965,6 +1064,13 @@ async function readSceneDocument(
       const paintSidecar = await readSceneGroundPaintSidecar(workspaceId, hydrated.id)
       await groundPaintStore.hydrateSceneDocument(hydrated.id, findGroundNodeInDocument(hydrated), paintSidecar)
     }
+    logGroundPersistenceDebug('ScenesStore', 'readSceneDocument.done', {
+      workspaceId,
+      sceneId: id,
+      storage: 'memory',
+      hydrateGroundRuntime: options.hydrateGroundRuntime === true,
+      ground: summarizeGroundNodePersistence(findGroundNodeInDocument(hydrated)),
+    })
     return stripGroundHeightMapsFromSceneDocument(hydrated)
   }
   const db = await openDatabase(workspaceId)
@@ -972,6 +1078,11 @@ async function readSceneDocument(
   const docs = tx.objectStore(STORE_DOCUMENTS)
   const result = await requestToPromise<StoredSceneDocument | undefined>(docs.get(id))
   if (!result) {
+    logGroundPersistenceDebug('ScenesStore', 'readSceneDocument.miss', {
+      workspaceId,
+      sceneId: id,
+      storage: 'indexeddb',
+    })
     return null
   }
   ensureOptimizedGroundMeshOnDocument(result)
@@ -989,6 +1100,13 @@ async function readSceneDocument(
     const paintSidecar = await readSceneGroundPaintSidecar(workspaceId, result.id)
     await groundPaintStore.hydrateSceneDocument(result.id, findGroundNodeInDocument(result), paintSidecar)
   }
+  logGroundPersistenceDebug('ScenesStore', 'readSceneDocument.done', {
+    workspaceId,
+    sceneId: id,
+    storage: 'indexeddb',
+    hydrateGroundRuntime: options.hydrateGroundRuntime === true,
+    ground: summarizeGroundNodePersistence(findGroundNodeInDocument(result)),
+  })
   return stripGroundHeightMapsFromSceneDocument(result)
 }
 
@@ -1113,11 +1231,26 @@ async function writeSceneDocument(workspaceId: string, document: StoredSceneDocu
   const sidecar = await resolveSceneGroundHeightSidecarForWrite(workspaceId, document)
   const scatterSidecar = await resolveSceneGroundScatterSidecarForWrite(workspaceId, document)
   const paintSidecar = await resolveSceneGroundPaintSidecarForWrite(workspaceId, document)
+  logGroundPersistenceDebug('ScenesStore', 'writeSceneDocument.start', {
+    workspaceId,
+    sceneId: document.id,
+    ground: summarizeGroundNodePersistence(findGroundNodeInDocument(prepared)),
+    sidecarByteLength: sidecar?.byteLength ?? 0,
+    scatterSidecarByteLength: scatterSidecar?.byteLength ?? 0,
+    paintSidecarByteLength: paintSidecar?.byteLength ?? 0,
+  })
   if (!isIndexedDbAvailable()) {
     getMemoryWorkspace(workspaceId).set(prepared.id, prepared)
     await writeSceneGroundHeightSidecar(workspaceId, prepared.id, sidecar)
     await writeSceneGroundScatterSidecar(workspaceId, prepared.id, scatterSidecar)
     await writeSceneGroundPaintSidecar(workspaceId, prepared.id, paintSidecar)
+    logGroundPersistenceDebug('ScenesStore', 'writeSceneDocument.done', {
+      workspaceId,
+      sceneId: prepared.id,
+      storage: 'memory',
+      ground: summarizeGroundNodePersistence(findGroundNodeInDocument(prepared)),
+      sidecarByteLength: sidecar?.byteLength ?? 0,
+    })
     return
   }
   const db = await openDatabase(workspaceId)
@@ -1148,6 +1281,13 @@ async function writeSceneDocument(workspaceId: string, document: StoredSceneDocu
     tx.oncomplete = () => resolve()
     tx.onerror = () => reject(tx.error ?? new Error('Failed to write scene document'))
     tx.onabort = () => reject(tx.error ?? new Error('Scene write aborted'))
+  })
+  logGroundPersistenceDebug('ScenesStore', 'writeSceneDocument.done', {
+    workspaceId,
+    sceneId: prepared.id,
+    storage: 'indexeddb',
+    ground: summarizeGroundNodePersistence(findGroundNodeInDocument(prepared)),
+    sidecarByteLength: sidecar?.byteLength ?? 0,
   })
 }
 
