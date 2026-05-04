@@ -175,7 +175,6 @@ import { useAssetCacheStore } from './assetCacheStore'
 import { useGroundHeightmapStore, type GroundPlanningHeightRegion, type GroundRuntimeDynamicMesh } from './groundHeightmapStore'
 import { attachGroundScatterRuntimeToNode, useGroundScatterStore } from './groundScatterStore'
 import { attachGroundPaintRuntimeToNode, useGroundPaintStore } from './groundPaintStore'
-import { logGroundPersistenceDebug } from '@/utils/groundPersistenceDebug'
 import { useUiStore } from './uiStore'
 import { useScenesStore, type SceneWorkspaceType } from './scenesStore'
 import { updateSceneAssets } from './ensureSceneAssetsReady'
@@ -1643,23 +1642,6 @@ function normalizeGroundSurfaceRevision(value: unknown): number {
   return Math.max(0, Math.trunc(value as number))
 }
 
-function summarizeGroundNodeForPersistenceDebug(node: SceneNode | null | undefined): Record<string, unknown> {
-  const dynamicMesh = node?.dynamicMesh?.type === 'Ground' ? node.dynamicMesh : null
-  const localEditTileCount = dynamicMesh?.localEditTiles && typeof dynamicMesh.localEditTiles === 'object'
-    ? Object.keys(dynamicMesh.localEditTiles).length
-    : 0
-  return {
-    nodeId: node?.id ?? null,
-    hasGroundNode: !!node,
-    terrainMode: dynamicMesh?.terrainMode ?? null,
-    chunkManifestRevision: dynamicMesh?.chunkManifestRevision ?? null,
-    surfaceRevision: dynamicMesh?.surfaceRevision ?? null,
-    localEditTileCount,
-    runtimeHydratedHeightState: dynamicMesh?.runtimeHydratedHeightState ?? null,
-    runtimeDisableOptimizedChunks: dynamicMesh?.runtimeDisableOptimizedChunks ?? null,
-  }
-}
-
 function shouldBumpGroundSurfaceRevision(incoming: Record<string, any>): boolean {
   return Object.prototype.hasOwnProperty.call(incoming, 'generation')
     || Object.prototype.hasOwnProperty.call(incoming, 'heightComposition')
@@ -1859,23 +1841,8 @@ function commitGroundLocalEditTilesRuntimeEdit(
 ): boolean {
   const target = findNodeById(store.nodes, nodeId)
   if (!target || target.dynamicMesh?.type !== 'Ground' || !store.currentSceneId) {
-    logGroundPersistenceDebug('SceneStore', 'commitGroundLocalEditTiles.skipped', {
-      nodeId,
-      hasTarget: !!target,
-      currentSceneId: store.currentSceneId ?? null,
-      targetType: target?.dynamicMesh?.type ?? null,
-      incomingLocalEditTileCount: localEditTiles ? Object.keys(localEditTiles).length : 0,
-      affectedRegion,
-    })
     return false
   }
-  logGroundPersistenceDebug('SceneStore', 'commitGroundLocalEditTiles.start', {
-    nodeId,
-    sceneId: store.currentSceneId,
-    affectedRegion,
-    incomingLocalEditTileCount: localEditTiles ? Object.keys(localEditTiles).length : 0,
-    targetGround: summarizeGroundNodeForPersistenceDebug(target),
-  })
   const runtimeDefinition = definition as GroundRuntimeDynamicMesh
   const targetRuntimeDefinition = target.dynamicMesh as GroundRuntimeDynamicMesh
   const resolvedDirtyBounds = computeGroundDirtyBoundsXZFromRegion(target, runtimeDefinition, affectedRegion)
@@ -1898,16 +1865,6 @@ function commitGroundLocalEditTilesRuntimeEdit(
   refreshLandformNodesForGroundChange(store, nodeId, resolvedDirtyBounds)
   finalizeDynamicMeshRuntimePatch(store, nodeId, 'Ground')
   persistGroundHeightSidecarForNode(target)
-  logGroundPersistenceDebug('SceneStore', 'commitGroundLocalEditTiles.done', {
-    nodeId,
-    sceneId: store.currentSceneId,
-    targetGround: summarizeGroundNodeForPersistenceDebug(target),
-    definition: {
-      surfaceRevision: definition.surfaceRevision ?? null,
-      chunkManifestRevision: definition.chunkManifestRevision ?? null,
-      localEditTileCount: definition.localEditTiles ? Object.keys(definition.localEditTiles).length : 0,
-    },
-  })
   return true
 }
 
@@ -17993,12 +17950,6 @@ export const useSceneStore = defineStore('scene', {
 
       const scenesStore = useScenesStore()
       const document = buildSceneDocumentFromState(this)
-      logGroundPersistenceDebug('SceneStore', 'saveActiveScene.documentBuilt', {
-        sceneId: document.id,
-        force: options.force === true,
-        hasUnsavedChanges: this.hasUnsavedChanges,
-        ground: summarizeGroundNodeForPersistenceDebug(findNodeById(document.nodes, GROUND_NODE_ID)),
-      })
 
       const existing = await scenesStore.loadSceneDocument(document.id)
       const projectsStore = useProjectsStore()

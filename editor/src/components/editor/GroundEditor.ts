@@ -78,7 +78,6 @@ import type { NodeHitResult } from '@/types/scene-viewport-node-hit-result'
 import { SCATTER_BRUSH_RADIUS_MAX, type TerrainPaintBrushSettings } from '@/stores/terrainStore'
 import { useGroundPaintStore } from '@/stores/groundPaintStore'
 import { useGroundHeightmapStore } from '@/stores/groundHeightmapStore'
-import { logGroundPersistenceDebug } from '@/utils/groundPersistenceDebug'
 import { useGroundScatterStore } from '@/stores/groundScatterStore'
 
 import { assetProvider, terrainScatterPresets } from '@/resources/projectProviders/asset'
@@ -3770,15 +3769,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				sculptSessionState.heightMap,
 			)
 		const groundObject = getGroundObject()
-		logGroundPersistenceDebug('GroundEditor', 'sculptCommit.bridge', {
-			targetNodeId: targetNode.id,
-			usesLocalEditTiles,
-			hasGroundObject: !!groundObject,
-			affectedRegion: sculptSessionState.affectedRegion,
-			chunkKeyCount: chunkKeys?.length ?? 0,
-			chunkCells: resolveChunkCellsForDefinition(committedDefinition),
-			localEditTileCount: committedDefinition.localEditTiles ? Object.keys(committedDefinition.localEditTiles).length : 0,
-		})
 		if (groundObject) {
 			options.onSculptCommitApplied?.({
 				groundObject,
