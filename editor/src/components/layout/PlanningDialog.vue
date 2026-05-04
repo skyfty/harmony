@@ -6516,9 +6516,6 @@ onBeforeUnmount(() => {
                 >
                   一键贴地
                 </v-btn>
-                <div class="property-panel__hint">
-                  This value is passed into Planning Diagram Conversion as the DEM baseline. Conversion rebasing will subtract this value instead of the raw GeoTIFF minimum. The one-click button applies the recommended baseline computed from the imported raster.
-                </div>
                 <div class="property-panel__section-title property-panel__section-title--muted">Sculpt Resolution</div>
                 <v-text-field
                   v-model.number="selectedDemAppliedSampleStep"
@@ -6540,9 +6537,6 @@ onBeforeUnmount(() => {
                   step="1"
                   hide-details
                 />
-                <div class="property-panel__hint">
-                  Applied sample step drives DEM sculpt sampling. Chunk subdivisions are written into the ground edit tile mesh resolution.
-                </div>
               </div>
               <div class="property-panel__sub-block">
                 <div class="property-panel__section-title property-panel__section-title--muted">Conversion Grid</div>
@@ -6565,7 +6559,7 @@ onBeforeUnmount(() => {
                   class="property-panel__inline-action"
                   @click="applyRecommendedTerrainCellSize"
                 >
-                  Apply recommended {{ formatOptionalNumber(recommendedTerrainCellSize) }} m cell size
+                  Apply {{ formatOptionalNumber(recommendedTerrainCellSize) }} m cell size
                 </v-btn>
               </div>
               <div class="property-panel__meta-row"><span>Source sample step</span><strong>{{ formatOptionalNumber(selectedDem.sourceSampleStepMeters ?? selectedDem.sampleStepMeters) }} m</strong></div>
