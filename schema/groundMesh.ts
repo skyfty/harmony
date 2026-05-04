@@ -1411,6 +1411,14 @@ function resolveGroundChunkWorldBoundsFromSpec(
     if (!demSource) {
       return null
     }
+    const effectiveCellSize = Number(demSource.localEditCellSize)
+    if (Number.isFinite(effectiveCellSize) && effectiveCellSize > 0) {
+      return Math.max(1e-6, effectiveCellSize)
+    }
+    const appliedSampleStepMeters = Number(demSource.appliedSampleStepMeters)
+    if (Number.isFinite(appliedSampleStepMeters) && appliedSampleStepMeters > 0) {
+      return Math.max(1e-6, appliedSampleStepMeters)
+    }
     const candidates = [demSource.sampleStepMeters, demSource.sampleStepX, demSource.sampleStepY]
       .map((value) => Number(value))
       .filter((value) => Number.isFinite(value) && value > 0)
