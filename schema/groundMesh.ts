@@ -1237,12 +1237,12 @@ function findGroundLocalEditTileAtWorldFromRuntime(
   return ensureGroundLocalEditTileCaches(definition).lookup.get(key) ?? null
 }
 
-function sampleGroundLocalEditHeightAtWorld(
-  definition: GroundDynamicMesh,
+
+function sampleGroundLocalEditHeightAtWorldFromRuntime(
+  runtimeDefinition: GroundRuntimeDynamicMesh,
   x: number,
   z: number,
 ): number | null {
-  const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
   const tile = findGroundLocalEditTileAtWorldFromRuntime(runtimeDefinition, x, z)
   if (!tile) {
     return null
@@ -1499,7 +1499,7 @@ function getPlanningVertexHeight(definition: GroundRuntimeDynamicMesh, row: numb
  */
 export function resolveGroundEffectiveHeightAtVertex(definition: GroundDynamicMesh, row: number, column: number): number {
   const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
-  const localEditSample = sampleGroundLocalEditHeightAtWorld(
+  const localEditSample = sampleGroundLocalEditHeightAtWorldFromRuntime(
     runtimeDefinition,
     resolveGroundWorldXForColumn(runtimeDefinition, column),
     resolveGroundWorldZForRow(runtimeDefinition, row),
@@ -1554,6 +1554,17 @@ export function sampleGroundEffectiveHeightRegion(
   minColumnInput: number,
   maxColumnInput: number,
 ): GroundEffectiveHeightRegion {
+  return sampleGroundEffectiveHeightRegionInternal(definition, minRowInput, maxRowInput, minColumnInput, maxColumnInput, true)
+}
+
+function sampleGroundEffectiveHeightRegionInternal(
+  definition: GroundDynamicMesh,
+  minRowInput: number,
+  maxRowInput: number,
+  minColumnInput: number,
+  maxColumnInput: number,
+  includeLocalEdit: boolean,
+): GroundEffectiveHeightRegion {
   const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
   const baseRegion = computeGroundBaseHeightRegion(runtimeDefinition, minRowInput, maxRowInput, minColumnInput, maxColumnInput)
   const { minRow, maxRow, minColumn, maxColumn, stride, values: baseValues } = baseRegion
@@ -1566,12 +1577,55 @@ export function sampleGroundEffectiveHeightRegion(
     return { ...baseRegion, values, heightMin, heightMax }
   }
 
+  const gridSize = resolveGroundWorkingGridSize(runtimeDefinition)
+  const manualRegion = runtimeDefinition.runtimeSampleHeightRegion?.('manual', minRow, maxRow, minColumn, maxColumn)
+  const planningRegion = runtimeDefinition.runtimeSampleHeightRegion?.('planning', minRow, maxRow, minColumn, maxColumn)
+  const canUseManualRegion = manualRegion
+    && manualRegion.minRow === minRow
+    && manualRegion.maxRow === maxRow
+    && manualRegion.minColumn === minColumn
+    && manualRegion.maxColumn === maxColumn
+    && manualRegion.stride === stride
+  const canUsePlanningRegion = planningRegion
+    && planningRegion.minRow === minRow
+    && planningRegion.maxRow === maxRow
+    && planningRegion.minColumn === minColumn
+    && planningRegion.maxColumn === maxColumn
+    && planningRegion.stride === stride
+  const manualValues = canUseManualRegion ? manualRegion.values : null
+  const planningValues = canUsePlanningRegion ? planningRegion.values : null
+  const terrainSampler = runtimeDefinition.runtimeTerrainHeightSampler as GroundTerrainHeightSampler | null | undefined
+  const bounds = includeLocalEdit || terrainSampler ? resolveGroundGridWorldBounds(runtimeDefinition) : null
+  const cellSize = Number.isFinite(runtimeDefinition.cellSize) && runtimeDefinition.cellSize > 1e-6
+    ? runtimeDefinition.cellSize
+    : 1
+
   for (let row = minRow; row <= maxRow; row += 1) {
     const baseOffset = (row - minRow) * stride
+    const worldZ = bounds ? bounds.minZ + row * cellSize : 0
     for (let column = minColumn; column <= maxColumn; column += 1) {
       const offset = baseOffset + (column - minColumn)
-      void baseValues[offset]
-      const effective = resolveGroundEffectiveHeightAtVertex(runtimeDefinition, row, column)
+      const base = baseValues[offset] ?? 0
+      const worldX = bounds ? bounds.minX + column * cellSize : 0
+      const localEditSample = includeLocalEdit
+        ? sampleGroundLocalEditHeightAtWorldFromRuntime(runtimeDefinition, worldX, worldZ)
+        : null
+      let effective: number
+      if (Number.isFinite(localEditSample)) {
+        effective = localEditSample as number
+      } else {
+        const sampled = terrainSampler ? terrainSampler.sampleHeightAtWorld(worldX, worldZ) : null
+        if (Number.isFinite(sampled)) {
+          effective = sampled as number
+        } else {
+          const heightIndex = getGroundVertexIndex(gridSize.columns, row, column)
+          const manualRaw = manualValues ? manualValues[offset] : runtimeDefinition.manualHeightMap[heightIndex]
+          const planningRaw = planningValues ? planningValues[offset] : runtimeDefinition.planningHeightMap[heightIndex]
+          const manual = typeof manualRaw === 'number' && Number.isFinite(manualRaw) ? manualRaw : base
+          const planning = typeof planningRaw === 'number' && Number.isFinite(planningRaw) ? planningRaw : base
+          effective = planning + (manual - base)
+        }
+      }
       values[offset] = effective
       heightMin = Math.min(heightMin, effective)
       heightMax = Math.max(heightMax, effective)
@@ -1597,7 +1651,7 @@ function sampleGroundEffectiveHeightRegionWithoutLocalEdit(
   minColumnInput: number,
   maxColumnInput: number,
 ): GroundEffectiveHeightRegion {
-  return sampleGroundEffectiveHeightRegion(definition, minRowInput, maxRowInput, minColumnInput, maxColumnInput)
+  return sampleGroundEffectiveHeightRegionInternal(definition, minRowInput, maxRowInput, minColumnInput, maxColumnInput, false)
 }
 
 export function resolveGroundEffectiveHeightAtVertexFromSampler(
@@ -2839,7 +2893,7 @@ export function sliceGroundTrianglesByPolygon(
 
 export function sampleGroundHeight(definition: GroundDynamicMesh, x: number, z: number): number {
   const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
-  const localEditSample = sampleGroundLocalEditHeightAtWorld(runtimeDefinition, x, z)
+  const localEditSample = sampleGroundLocalEditHeightAtWorldFromRuntime(runtimeDefinition, x, z)
   if (Number.isFinite(localEditSample)) {
     return localEditSample as number
   }
@@ -2882,7 +2936,7 @@ function sampleGroundHeightWithVertexCache(
   vertexHeightCache: Map<number, number>,
 ): number {
   const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
-  const localEditSample = sampleGroundLocalEditHeightAtWorld(runtimeDefinition, x, z)
+  const localEditSample = sampleGroundLocalEditHeightAtWorldFromRuntime(runtimeDefinition, x, z)
   if (Number.isFinite(localEditSample)) {
     return localEditSample as number
   }
@@ -3191,15 +3245,17 @@ function buildGroundChunkGeometry(definition: GroundRuntimeDynamicMesh, spec: Gr
   const startZ = chunkOrigin + spec.startRow * cellSize
   const importedLocalEditCellSize = resolveGroundChunkLocalEditCellSize(definition, spec)
   const useWorldSpaceHeightSampling = importedLocalEditCellSize > cellSize
-  const heightRegion = sampleGroundEffectiveHeightRegionWithoutLocalEdit(
-    definition,
-    spec.startRow,
-    spec.startRow + spec.rows,
-    spec.startColumn,
-    spec.startColumn + spec.columns,
-  )
-  const heightValues = heightRegion.values
-  const heightStride = heightRegion.stride
+  const heightRegion = useWorldSpaceHeightSampling
+    ? null
+    : sampleGroundEffectiveHeightRegionWithoutLocalEdit(
+      definition,
+      spec.startRow,
+      spec.startRow + spec.rows,
+      spec.startColumn,
+      spec.startColumn + spec.columns,
+    )
+  const heightValues = heightRegion?.values
+  const heightStride = heightRegion?.stride ?? 0
 
   let vertexIndex = 0
   for (let localRow = 0; localRow <= chunkRows; localRow += 1) {
@@ -3208,7 +3264,7 @@ function buildGroundChunkGeometry(definition: GroundRuntimeDynamicMesh, spec: Gr
       const x = startX + localColumn * layout.stepX
       const height = useWorldSpaceHeightSampling
         ? sampleGroundHeight(definition, x, z)
-        : heightValues[localRow * heightStride + localColumn] ?? sampleGroundHeight(definition, x, z)
+        : heightValues?.[localRow * heightStride + localColumn] ?? sampleGroundHeight(definition, x, z)
       const columnRatio = columns === 0 ? 0 : clampInclusive((x - chunkOrigin) / Math.max(chunkSizeMeters, Number.EPSILON), 0, 1)
       const rowRatio = rows === 0 ? 0 : clampInclusive((z - chunkOrigin) / Math.max(chunkSizeMeters, Number.EPSILON), 0, 1)
 
@@ -4454,15 +4510,17 @@ function updateChunkGeometry(geometry: THREE.BufferGeometry, definition: GroundR
   const startZ = chunkOrigin + spec.startRow * cellSize
   const importedLocalEditCellSize = resolveGroundChunkLocalEditCellSize(definition, spec)
   const useWorldSpaceHeightSampling = importedLocalEditCellSize > (Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1)
-  const heightRegion = sampleGroundEffectiveHeightRegionWithoutLocalEdit(
-    definition,
-    spec.startRow,
-    spec.startRow + spec.rows,
-    spec.startColumn,
-    spec.startColumn + spec.columns,
-  )
-  const heightValues = heightRegion.values
-  const heightStride = heightRegion.stride
+  const heightRegion = useWorldSpaceHeightSampling
+    ? null
+    : sampleGroundEffectiveHeightRegionWithoutLocalEdit(
+      definition,
+      spec.startRow,
+      spec.startRow + spec.rows,
+      spec.startColumn,
+      spec.startColumn + spec.columns,
+    )
+  const heightValues = heightRegion?.values
+  const heightStride = heightRegion?.stride ?? 0
 
   let vertexIndex = 0
   for (let localRow = 0; localRow <= chunkRows; localRow += 1) {
@@ -4471,7 +4529,7 @@ function updateChunkGeometry(geometry: THREE.BufferGeometry, definition: GroundR
       const x = startX + localColumn * layout.stepX
       const height = useWorldSpaceHeightSampling
         ? sampleGroundHeight(definition, x, z)
-        : heightValues[localRow * heightStride + localColumn] ?? sampleGroundHeight(definition, x, z)
+        : heightValues?.[localRow * heightStride + localColumn] ?? sampleGroundHeight(definition, x, z)
       const columnRatio = columns === 0 ? 0 : clampInclusive((x - chunkOrigin) / Math.max(chunkSizeMeters, Number.EPSILON), 0, 1)
       const rowRatio = rows === 0 ? 0 : clampInclusive((z - chunkOrigin) / Math.max(chunkSizeMeters, Number.EPSILON), 0, 1)
       positionAttr.setXYZ(vertexIndex, x, height, z)
