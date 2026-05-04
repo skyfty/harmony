@@ -2628,28 +2628,6 @@ function syncGroundChunkStreamingDebug(
 	groundChunkDebug.unloaded = Math.max(0, total - loadedChunks)
 	groundChunkDebug.visible = renderSnapshot.visibleChunkCount
 	groundChunkDebug.triangleEstimate = renderSnapshot.estimatedTriangles
-
-	const signature = [
-		loadedChunks,
-		target,
-		total,
-		groundChunkDebug.pending,
-		renderSnapshot.visibleChunkCount,
-		renderSnapshot.estimatedTriangles,
-		renderSnapshot.chunkKeys.join(','),
-	].join('|')
-	if (signature !== lastGroundChunkDebugSignature && now - lastGroundChunkDebugLogAt >= 250) {
-		lastGroundChunkDebugLogAt = now
-		lastGroundChunkDebugSignature = signature
-		console.log('[ground-chunk-debug]', {
-			loadedChunks,
-			target,
-			total,
-			visibleChunks: renderSnapshot.visibleChunkCount,
-			chunkKeys: renderSnapshot.chunkKeys,
-			...buildGroundChunkDebugWindowSummary(definition, effectiveChunkCells, groundObject, activeCamera),
-		})
-	}
 }
 
 const rigidbodyMaterialCache = new Map<string, RigidbodyMaterialEntry>()
@@ -9658,37 +9636,6 @@ function syncRendererDebugForFrame(currentRenderer: THREE.WebGLRenderer, current
 	rendererDebug.groundVisibleChunks = groundRenderSnapshot.visibleChunkCount
 	rendererDebug.geometries = currentRenderer.info?.memory?.geometries ?? 0
 	rendererDebug.textures = currentRenderer.info?.memory?.textures ?? 0
-
-	const now = performance.now()
-	const signature = [
-		rendererDebug.calls,
-		rendererDebug.triangles,
-		rendererDebug.renderTriangles,
-		rendererDebug.groundChunkTriangles,
-		rendererDebug.groundVisibleChunks,
-	].join('|')
-	if (signature !== lastRendererDebugSignature && now - lastRendererDebugLogAt >= 250) {
-		lastRendererDebugLogAt = now
-		lastRendererDebugSignature = signature
-		console.info('[ScenePreview][Renderer] frame stats', {
-			drawCalls: rendererDebug.calls,
-			sceneTriangleEstimate: rendererDebug.triangles,
-			gpuRenderTrianglesRaw: rendererDebug.renderTriangles,
-			groundVisibleChunkCount: rendererDebug.groundVisibleChunks,
-			groundVisibleChunkTriangleEstimate: rendererDebug.groundChunkTriangles,
-			triangleLabelMeaning: 'sceneTriangleEstimate traverses visible meshes; gpuRenderTrianglesRaw comes from renderer.info.render.triangles',
-		})
-		console.info('[ScenePreview][GroundChunks]', JSON.stringify({
-			loaded: groundChunkDebug.loaded,
-			target: groundChunkDebug.target,
-			total: groundChunkDebug.total,
-			pending: groundChunkDebug.pending,
-			unloaded: groundChunkDebug.unloaded,
-			visible: groundChunkDebug.visible,
-			visibleChunkKeys: groundRenderSnapshot.chunkKeys,
-			loadedMinusVisible: groundChunkDebug.loaded - groundChunkDebug.visible,
-		}))
-	}
 }
 
 function syncInstancedMatrixUploadEstimateForFrame(): void {
