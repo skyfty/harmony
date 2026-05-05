@@ -401,7 +401,6 @@
         <template v-if="debugMode === 'full'">
           <text class="viewer-debug-line">Renderer: {{ rendererDebug.width }}x{{ rendererDebug.height }} @PR {{ rendererDebug.pixelRatio }}, calls {{ rendererDebug.calls }}, tris {{ rendererDebug.triangles }}, r-tris {{ rendererDebug.renderTriangles }}</text>
           <text class="viewer-debug-line">Instancing: mesh {{ instancingDebug.instancedMeshActive }}/{{ instancingDebug.instancedMeshAssets }}, instances {{ instancingDebug.instancedInstanceCount }}, lod {{ instancingDebug.lodVisible }}/{{ instancingDebug.lodTotal }}, scatter {{ instancingDebug.scatterVisible }}/{{ instancingDebug.scatterTotal }}</text>
-          <text class="viewer-debug-line">Ground: loaded {{ groundChunkDebug.loaded }}/{{ groundChunkDebug.target }}/{{ groundChunkDebug.total }}</text>
         </template>
       </view>
     </view>
@@ -838,7 +837,6 @@ interface ScenePreviewPayload {
   updatedAt?: string;
   assetOverrides?: SceneGraphBuildOptions['assetOverrides'];
   terrain?: ScenePackageTerrainEntry | null;
-  compiledGround?: CompiledGroundManifest | null;
 };
 
 type RequestedMode = 'project' | null;
@@ -924,7 +922,6 @@ type ScenePackageSceneEntry =
       updatedAt: string | null;
       document: SceneJsonExportDocument;
       terrain?: ScenePackageTerrainEntry | null;
-      compiledGround?: CompiledGroundManifest | null;
     }
   | {
       kind: 'external';
@@ -934,7 +931,6 @@ type ScenePackageSceneEntry =
       updatedAt: string | null;
       sceneJsonUrl: string;
       terrain?: ScenePackageTerrainEntry | null;
-      compiledGround?: CompiledGroundManifest | null;
     };
 
 type ScenePackageProjectData = {
@@ -1072,11 +1068,9 @@ const {
   debugFps,
   instancingDebug,
   rendererDebug,
-  groundChunkDebug,
   updateDebugFps,
   syncInstancingDebugCounters,
   syncRendererDebug,
-  syncGroundChunkDebugCounters,
 } = useDebugOverlay();
 
 const debugOverlayAriaLabel = computed(() => (debugMode.value === 'full' ? '调试信息，当前 full 模式，点击切换为 fps 模式' : '调试信息，当前 fps 模式，点击切换为 full 模式'));
@@ -3612,7 +3606,6 @@ function hydrateGroundSidecarFromPackage(
     if (groundNode) {
       groundNode.userData = {
         ...(groundNode.userData ?? {}),
-        compiledGroundEnabled: true,
         compiledGroundManifest,
       };
     }
@@ -5053,10 +5046,6 @@ function refreshDynamicGroundCache(document: SceneJsonExportDocument | null): vo
   }
 }
 
-function shouldUseInfiniteGroundChunkCollisionStreaming(node: SceneNode | null | undefined): boolean {
-  return Boolean(node && isGroundDynamicMesh(node.dynamicMesh));
-}
-
 function resolveViewerCompiledGroundManifest(
   groundObject: THREE.Object3D,
 ): CompiledGroundManifest | null {
@@ -5068,11 +5057,11 @@ function resolveViewerCompiledGroundManifest(
     : null;
 }
 
-function clearInfiniteGroundChunkCollisionBodies(): void {
+function clearViewerCompiledGroundCollisionBodies(): void {
   compiledGroundCollisionRuntime.clear();
 }
 
-function syncViewerInfiniteGroundChunkCollisions(
+function syncViewerCompiledGroundCollision(
   groundObject: THREE.Object3D,
   activeCamera: THREE.PerspectiveCamera,
 ): void {
@@ -5102,7 +5091,7 @@ function syncViewerInfiniteGroundChunkCollisions(
   });
 }
 
-function syncViewerInfiniteGroundChunkManifest(
+function syncViewerCompiledGroundRender(
   groundObject: THREE.Object3D,
   groundDefinition: GroundRuntimeDynamicMesh,
   camera: THREE.PerspectiveCamera,
@@ -6183,7 +6172,7 @@ function resetPhysicsWorld(): void {
       }
     });
   }
-  clearInfiniteGroundChunkCollisionBodies();
+  clearViewerCompiledGroundCollisionBodies();
   compiledGroundCollisionRuntime.clear();
   vehicleInstances.clear();
   vehicleRaycastInWorld.clear();
@@ -6603,7 +6592,7 @@ function ensureRigidbodyBindingForObject(nodeId: string, object: THREE.Object3D)
     return;
   }
   const node = resolveNodeById(nodeId);
-  if (shouldUseInfiniteGroundChunkCollisionStreaming(node)) {
+  if (node && isGroundDynamicMesh(node.dynamicMesh)) {
     removeRigidbodyInstance(nodeId);
     return;
   }
@@ -6732,7 +6721,7 @@ function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null):
   const rigidbodyNodes = collectRigidbodyNodes(document.nodes);
   const desiredIds = new Set<string>();
   rigidbodyNodes.forEach((node) => {
-    if (shouldUseInfiniteGroundChunkCollisionStreaming(node)) {
+    if (isGroundDynamicMesh(node.dynamicMesh)) {
       removeRigidbodyInstance(node.id);
       return;
     }
@@ -11787,9 +11776,6 @@ function parseScenePackageToProjectData(pkg: ScenePackageUnzipped): ScenePackage
     if (hasGround && !compiledGroundPath) {
       throw new Error(`Scene ${sceneEntry.sceneId} is missing compiled ground package`);
     }
-    const compiledGround = compiledGroundPath
-      ? (JSON.parse(readTextFileFromScenePackage(pkg, compiledGroundPath)) as CompiledGroundManifest)
-      : null;
     scenes.push({
       kind: 'embedded',
       id,
@@ -11798,7 +11784,6 @@ function parseScenePackageToProjectData(pkg: ScenePackageUnzipped): ScenePackage
       updatedAt: typeof documentMeta.updatedAt === 'string' ? documentMeta.updatedAt : null,
       document,
       terrain,
-      compiledGround,
     });
   });
 
@@ -11946,7 +11931,6 @@ async function switchToProjectScene(sceneId: string): Promise<void> {
       origin: entry.kind === 'embedded' ? 'scene-package' : entry.sceneJsonUrl,
       assetOverrides: activeScenePackageAssetOverrides ?? undefined,
       terrain: entry.terrain ?? null,
-      compiledGround: entry.compiledGround ?? null,
       createdAt: document.createdAt,
       updatedAt: document.updatedAt,
     };
@@ -12739,7 +12723,7 @@ function startRenderLoop(
           if (cachedGroundBeforePhysics) {
             const groundObject = nodeObjectMap.get(cachedGroundBeforePhysics.nodeId) ?? null;
             if (groundObject) {
-              syncViewerInfiniteGroundChunkCollisions(groundObject, camera);
+              syncViewerCompiledGroundCollision(groundObject, camera);
             }
           }
           stepPhysicsWorld(deltaSeconds);
@@ -12761,37 +12745,30 @@ function startRenderLoop(
           updatePunchBadgeOverlayEntries(camera, deltaSeconds);
           syncSceneSignboards();
 
-        // Keep chunked ground meshes in sync with camera position.
+        // Keep compiled ground render and the far flat shell in sync with camera position.
         const cachedGround = dynamicGroundCache;
         if (cachedGround) {
           const groundObject = nodeObjectMap.get(cachedGround.nodeId) ?? null;
           if (groundObject) {
-            const readonlyTerrainEnabled = Boolean((cachedGround.dynamicMesh as GroundRuntimeDynamicMesh & { runtimeTerrainDatasetEnabled?: boolean }).runtimeTerrainDatasetEnabled);
             const compiledManifest = resolveViewerCompiledGroundManifest(groundObject);
             setInfiniteGroundHiddenChunkKeys(
               groundObject,
               compiledManifest ? collectCompiledGroundCoveredChunkKeys(compiledManifest) : [],
             );
-            // syncGroundChunkLoadingMode also drives the far flat InstancedMesh tiling used to hide
-            // infinite-ground edges at high altitude and during driving. Readonly terrain still needs
-            // that visual shell, even though it does not use legacy chunk manifest streaming.
+            // syncGroundChunkLoadingMode is retained only for the far flat InstancedMesh shell that
+            // hides infinite-ground edges at high altitude and during driving.
             syncGroundChunkLoadingMode(
               groundObject,
               cachedGround.dynamicMesh,
               camera,
-              readonlyTerrainEnabled && isWeChatMiniProgram
+              isWeChatMiniProgram
                 ? {
                     radius: WECHAT_READONLY_TERRAIN_FLAT_TILING_RADIUS_CHUNKS,
                     budget: WECHAT_READONLY_TERRAIN_CHUNK_SYNC_BUDGET,
                   }
                 : undefined,
             );
-            if (!readonlyTerrainEnabled) {
-              syncViewerInfiniteGroundChunkManifest(groundObject, cachedGround.dynamicMesh, camera);
-            }
-            if (debugEnabled.value && debugMode.value === 'full') {
-              syncGroundChunkDebugCounters(groundObject, cachedGround.dynamicMesh, camera);
-            }
+            syncViewerCompiledGroundRender(groundObject, cachedGround.dynamicMesh, camera);
           }
         }
 
