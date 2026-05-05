@@ -268,12 +268,12 @@ function groundChunkKey(chunkRow: number, chunkColumn: number): GroundChunkKey {
 function resolveRuntimeChunkIndexFromRuntimeKey(
   key: string,
 ): { row: number; column: number } | null {
-  const parts = key.split(':')
-  if (parts.length !== 2) {
+  const separatorIndex = key.indexOf(':')
+  if (separatorIndex <= 0 || separatorIndex >= key.length - 1 || key.indexOf(':', separatorIndex + 1) !== -1) {
     return null
   }
-  const row = Number(parts[0])
-  const column = Number(parts[1])
+  const row = Number(key.slice(0, separatorIndex))
+  const column = Number(key.slice(separatorIndex + 1))
   if (!Number.isFinite(row) || !Number.isFinite(column)) {
     return null
   }
@@ -3562,6 +3562,33 @@ function syncGroundFlatChunkKeyCache(state: GroundRuntimeState): void {
   state.flatChunkKeys = keys
 }
 
+function resolveGroundFlatChunkBatchCapacity(requiredCount: number, currentCapacity = 0): number {
+  const required = Math.max(1, Math.trunc(requiredCount))
+  const current = Math.max(0, Math.trunc(currentCapacity))
+  if (required <= current) {
+    return current
+  }
+  if (current <= 0) {
+    return Math.max(16, required)
+  }
+  return Math.max(required, Math.ceil(current * 1.5))
+}
+
+function copyGroundFlatChunkInstanceMatrices(
+  source: THREE.InstancedMesh,
+  target: THREE.InstancedMesh,
+  instanceCount: number,
+): void {
+  const copyLength = Math.max(0, Math.trunc(instanceCount)) * 16
+  if (copyLength <= 0) {
+    return
+  }
+  const sourceArray = source.instanceMatrix.array as Float32Array
+  const targetArray = target.instanceMatrix.array as Float32Array
+  targetArray.set(sourceArray.subarray(0, copyLength), 0)
+  target.instanceMatrix.needsUpdate = true
+}
+
 function refreshGroundFlatChunkBatchInstances(
   batch: GroundFlatChunkBatchRuntime,
   definition: GroundRuntimeDynamicMesh,
@@ -3577,7 +3604,7 @@ function refreshGroundFlatChunkBatchInstances(
   const chunkOrigin = resolveInfiniteGroundGridOriginMeters(chunkSizeMeters)
 
   if (chunkKeys.length > batch.instanceCapacity) {
-    batch.instanceCapacity = chunkKeys.length
+    batch.instanceCapacity = resolveGroundFlatChunkBatchCapacity(chunkKeys.length, batch.instanceCapacity)
   }
   chunkKeys.forEach((key, index) => {
     // 这里不要直接用 key 里的 row/column 去猜位置，而要回到 chunkSpec。
@@ -3679,17 +3706,20 @@ function syncGroundFlatChunkBatches(
       const preservesExistingOrder = existingKeys.length <= nextKeys.length
         && existingKeys.every((key, index) => key === nextKeys[index])
       if (needsResize) {
+        const nextCapacity = resolveGroundFlatChunkBatchCapacity(nextKeys.length, existing.instanceCapacity)
         const geometry = buildFlatGroundChunkGeometry(group.spec, Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1)
-        const resizedMesh = new THREE.InstancedMesh(geometry, material, nextKeys.length)
+        const resizedMesh = new THREE.InstancedMesh(geometry, material, nextCapacity)
         resizedMesh.name = existing.mesh.name
         resizedMesh.receiveShadow = existing.mesh.receiveShadow
         resizedMesh.castShadow = existing.mesh.castShadow
         resizedMesh.frustumCulled = false
+        resizedMesh.count = existing.mesh.count
         resizedMesh.userData.dynamicMeshType = 'Ground'
         resizedMesh.userData.groundChunkBatch = {
           specKey,
-          chunkKeys: [...nextKeys],
+          chunkKeys: [...existingKeys],
         }
+        copyGroundFlatChunkInstanceMatrices(existing.mesh, resizedMesh, existingKeys.length)
         existing.mesh.removeFromParent()
         try {
           ;(existing.mesh.geometry as any)?.dispose?.()
@@ -3697,7 +3727,7 @@ function syncGroundFlatChunkBatches(
           /* noop */
         }
         existing.mesh = resizedMesh
-        existing.instanceCapacity = nextKeys.length
+        existing.instanceCapacity = nextCapacity
         root.add(resizedMesh)
         changed = true
       }
@@ -3705,7 +3735,7 @@ function syncGroundFlatChunkBatches(
         existing.instanceHeightCache = new Map<string, number>()
       }
       existing.spec = group.spec
-      if (needsResize || !preservesExistingOrder) {
+      if (!preservesExistingOrder) {
         // 同规格批次直接复用，不重新创建 geometry。
         // 这里会把新进入视野的 flat chunk 追加进缓存，但不会把已经加载的旧 chunk 因为相机移动而删掉。
         refreshGroundFlatChunkBatchInstances(existing, definition, nextKeys)
@@ -3721,7 +3751,8 @@ function syncGroundFlatChunkBatches(
     // 只有首次出现的规格才新建 geometry + InstancedMesh。
     // 这意味着绝大多数 chunk 进入缓存后，后续只是换矩阵，不再重复分配大块几何资源。
     const geometry = buildFlatGroundChunkGeometry(group.spec, Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1)
-    const mesh = new THREE.InstancedMesh(geometry, material, group.keys.length)
+    const instanceCapacity = resolveGroundFlatChunkBatchCapacity(group.keys.length)
+    const mesh = new THREE.InstancedMesh(geometry, material, instanceCapacity)
     mesh.name = `GroundFlatChunks:${specKey}`
     mesh.receiveShadow = true
     mesh.castShadow = state.castShadow
@@ -3737,7 +3768,7 @@ function syncGroundFlatChunkBatches(
       spec: group.spec,
       mesh,
       chunkKeys: [],
-      instanceCapacity: group.keys.length,
+      instanceCapacity,
       instanceHeightCache: new Map<string, number>(),
     }
     refreshGroundFlatChunkBatchInstances(batch, definition, group.keys)
