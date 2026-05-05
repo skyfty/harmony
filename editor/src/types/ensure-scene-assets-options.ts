@@ -1,9 +1,19 @@
 import type { SceneNode } from  '@schema'
 
+export interface EnsureSceneAssetsProgress {
+  step: string
+  detail?: string
+  progress: number
+  completed: number
+  total: number
+  assetId?: string
+}
+
 export interface EnsureSceneAssetsOptions {
   nodes?: SceneNode[]
   showOverlay?: boolean
   refreshViewport?: boolean
+  onProgress?: (progress: EnsureSceneAssetsProgress) => void
 
   /**
    * When set, the store will aggregate download progress of all assets required by `nodes`

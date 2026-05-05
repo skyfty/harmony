@@ -2,7 +2,7 @@ import type { WatchStopHandle } from 'vue'
 import type { Object3D } from 'three'
 import type { SceneNode } from '@schema'
 import { cloneImportedObject } from '@schema/assetImport'
-import type { EnsureSceneAssetsOptions } from '@/types/ensure-scene-assets-options'
+import type { EnsureSceneAssetsOptions, EnsureSceneAssetsProgress } from '@/types/ensure-scene-assets-options'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ModelInstanceGroup } from '@schema/modelObjectCache'
 import {
@@ -133,8 +133,24 @@ export async function updateSceneAssets(args: {
     return Math.max(0, Math.min(100, Math.round(numeric)))
   }
 
+  const emitProgress = (payload: EnsureSceneAssetsProgress) => {
+    options.onProgress?.({
+      ...payload,
+      progress: clampPercent(payload.progress),
+      completed: Math.max(0, Math.trunc(payload.completed)),
+      total: Math.max(0, Math.trunc(payload.total)),
+    })
+  }
+
   const targetNodes = Array.isArray(options.nodes) ? options.nodes : defaultNodes
   if (!targetNodes.length) {
+    emitProgress({
+      step: 'Scene assets ready',
+      detail: 'No scene assets need loading.',
+      progress: 100,
+      completed: 0,
+      total: 0,
+    })
     if (options.showOverlay) {
       ui.hideLoadingOverlay(true)
     }
@@ -149,6 +165,13 @@ export async function updateSceneAssets(args: {
   ]))
 
   if (allAssetIds.length === 0) {
+    emitProgress({
+      step: 'Scene assets ready',
+      detail: 'No referenced assets found in the scene.',
+      progress: 100,
+      completed: 0,
+      total: 0,
+    })
     if (options.showOverlay) {
       ui.hideLoadingOverlay(true)
     }
@@ -261,12 +284,22 @@ export async function updateSceneAssets(args: {
           0,
           Math.min(100, Math.round(((watchArgs.completedBeforeAsset + normalizedProgress / 100) / watchArgs.overlayTotal) * 100)),
         )
-        ui.updateLoadingOverlay({
-          message: `Downloading asset: ${displayName} (${normalizedProgress}%)`,
+        emitProgress({
+          step: 'Downloading scene assets',
+          detail: `${displayName} (${normalizedProgress}%)`,
           progress: aggregateProgress,
-          mode: 'determinate',
+          completed: watchArgs.completedBeforeAsset,
+          total: watchArgs.overlayTotal,
+          assetId: watchArgs.assetId,
         })
-        ui.updateLoadingProgress(aggregateProgress, { autoClose: false })
+        if (shouldShowOverlay) {
+          ui.updateLoadingOverlay({
+            message: `Downloading asset: ${displayName} (${normalizedProgress}%)`,
+            progress: aggregateProgress,
+            mode: 'determinate',
+          })
+          ui.updateLoadingProgress(aggregateProgress, { autoClose: false })
+        }
       },
       { immediate: true },
     )
@@ -302,7 +335,7 @@ export async function updateSceneAssets(args: {
       }
       let stopDownloadWatcher: WatchStopHandle | null = null
       try {
-        if (shouldShowOverlay) {
+        if (shouldShowOverlay || typeof options.onProgress === 'function') {
           stopDownloadWatcher = startAssetDownloadOverlayWatcher({
             assetId,
             assetLabel,
@@ -458,6 +491,14 @@ export async function updateSceneAssets(args: {
   const errors: AssetLoadError[] = []
   let queuedRuntimeRefreshPatches = false
 
+  emitProgress({
+    step: 'Preparing scene assets',
+    detail: `${total} assets queued for loading.`,
+    progress: 0,
+    completed: 0,
+    total,
+  })
+
   try {
     for (const assetId of allAssetIds) {
       const nodesForAsset = runtimeAssetNodeMap.get(assetId) ?? []
@@ -467,6 +508,14 @@ export async function updateSceneAssets(args: {
       const fallbackDownloadUrl = normalizeUrl(asset?.downloadUrl) ?? normalizeUrl(asset?.description)
 
       try {
+        emitProgress({
+          step: 'Loading scene assets',
+          detail: `${assetLabel} (${completed + 1}/${total})`,
+          progress: total > 0 ? Math.round((completed / total) * 100) : 100,
+          completed,
+          total,
+          assetId,
+        })
         if (shouldShowOverlay) {
           ui.updateLoadingOverlay({
             message: `Loading asset: ${assetLabel}`,
@@ -487,6 +536,14 @@ export async function updateSceneAssets(args: {
 
         // Component/material dependencies should be prefetched but do not produce runtime objects.
         if (!shouldBuildRuntime) {
+          emitProgress({
+            step: 'Prepared scene dependency',
+            detail: assetLabel,
+            progress: total > 0 ? Math.round(((completed + 1) / total) * 100) : 100,
+            completed: completed + 1,
+            total,
+            assetId,
+          })
           continue
         }
 
@@ -510,6 +567,14 @@ export async function updateSceneAssets(args: {
         const message = (error as Error).message ?? 'Unknown error'
         errors.push({ assetId, message })
         console.warn(`Failed to load asset ${assetId}`, error)
+        emitProgress({
+          step: 'Scene asset failed',
+          detail: `${assetLabel}: ${message}`,
+          progress: total > 0 ? Math.round((completed / total) * 100) : 100,
+          completed,
+          total,
+          assetId,
+        })
         if (shouldShowOverlay) {
           ui.updateLoadingOverlay({
             message: `Failed to load asset ${assetLabel}: ${message}`,
@@ -519,6 +584,14 @@ export async function updateSceneAssets(args: {
         }
       } finally {
         completed += 1
+        emitProgress({
+          step: errors.length === 0 ? 'Scene assets readying' : 'Continuing after asset error',
+          detail: `${completed}/${total} assets processed.`,
+          progress: total > 0 ? Math.round((completed / total) * 100) : 100,
+          completed,
+          total,
+          assetId,
+        })
         if (shouldShowOverlay) {
           const percent = Math.round((completed / total) * 100)
           ui.updateLoadingProgress(percent, { autoClose: false })
@@ -583,6 +656,16 @@ export async function updateSceneAssets(args: {
       queuedRuntimeRefreshPatches = true
     }
   }
+
+  emitProgress({
+    step: errors.length === 0 ? 'Scene assets ready' : 'Scene assets completed with warnings',
+    detail: errors.length === 0
+      ? `${completed}/${total} assets loaded successfully.`
+      : `${errors.length} assets failed to load. Check console logs for details.`,
+    progress: 100,
+    completed,
+    total,
+  })
 
   return { queuedRuntimeRefreshPatches }
 }

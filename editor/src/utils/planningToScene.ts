@@ -2441,7 +2441,18 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
 
   if (sceneStore.groundNode?.dynamicMesh?.type === 'Ground') {
     emitProgress(options, 'Compiling terrain cache…', 99)
-    await sceneStore.ensureCurrentSceneCompiledGroundReady({ forceRebuild: true })
+    emitDetailedProgress(options, 'Compiling terrain cache…', 99, {
+      phase: 'compiled-ground',
+      detail: 'Checking compiled terrain cache...',
+    })
+    await sceneStore.ensureCurrentSceneCompiledGroundReady({
+      onStatus: (status) => {
+        emitDetailedProgress(options, status.step, 99 + status.progress * 0.01, {
+          phase: `compiled-ground:${status.phase}`,
+          detail: status.detail,
+        })
+      },
+    })
     await yieldController.maybeYield(true)
   }
   emitProgress(options, 'Done', 100)

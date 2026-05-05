@@ -1193,6 +1193,34 @@ async function handleConvertTo3DScene() {
   convertingTo3DScene.value = true
 
   const abortController = new AbortController()
+  const progressDetails: Array<{ label: string; description: string }> = []
+  const updateConversionProgress = (payload: { step: string; progress?: number; detail?: string }) => {
+    const step = payload.step.trim()
+    const description = typeof payload.detail === 'string' && payload.detail.trim()
+      ? payload.detail.trim()
+      : `Progress ${Math.max(0, Math.min(100, Math.round(payload.progress ?? 0)))}%`
+    const existingIndex = progressDetails.findIndex((item) => item.label === step)
+    if (existingIndex >= 0) {
+      progressDetails.splice(existingIndex, 1)
+    }
+    progressDetails.unshift({ label: step, description })
+    if (progressDetails.length > 6) {
+      progressDetails.length = 6
+    }
+    const message = typeof payload.detail === 'string' && payload.detail.trim()
+      ? `${step} (${payload.detail.trim()})`
+      : step
+    uiStore.updateLoadingOverlay({
+      mode: 'determinate',
+      progress: payload.progress ?? 0,
+      message,
+      detailsTitle: '转换详情',
+      details: progressDetails,
+      detailsExpanded: true,
+      closable: false,
+      autoClose: false,
+    })
+  }
 
   try {
     uiStore.showLoadingOverlay({
@@ -1204,6 +1232,9 @@ async function handleConvertTo3DScene() {
       cancelable: true,
       cancelText: '取消',
       autoClose: false,
+      detailsTitle: '转换详情',
+      details: [],
+      detailsExpanded: true,
     })
     uiStore.setLoadingOverlayCancelHandler(() => abortController.abort())
 
@@ -1212,6 +1243,11 @@ async function handleConvertTo3DScene() {
     await nextTick()
 
     if (!planningData) {
+      updateConversionProgress({
+        step: 'Removing converted content',
+        progress: 50,
+        detail: 'Clearing previously generated planning nodes.',
+      })
       uiStore.updateLoadingOverlay({
         mode: 'determinate',
         progress: 50,
@@ -1228,6 +1264,7 @@ async function handleConvertTo3DScene() {
         signal: abortController.signal,
         onProgress: ({ step, progress, detail }) => {
           if (abortController.signal.aborted) return
+          updateConversionProgress({ step, progress, detail })
           const message = typeof detail === 'string' && detail.trim()
             ? `${step} (${detail.trim()})`
             : step
@@ -1247,10 +1284,20 @@ async function handleConvertTo3DScene() {
       }
     }
 
+    updateConversionProgress({
+      step: 'Saving converted scene',
+      progress: 100,
+      detail: 'Persisting converted terrain, scene graph, and cache references.',
+    })
+    await sceneStore.saveActiveScene({ force: true })
+
     uiStore.updateLoadingOverlay({
       mode: 'determinate',
       progress: 100,
       message: 'Conversion complete.',
+      detailsTitle: '转换详情',
+      details: progressDetails,
+      detailsExpanded: true,
       closable: true,
       cancelable: false,
       autoClose: true,
@@ -1277,6 +1324,9 @@ async function handleConvertTo3DScene() {
       mode: 'determinate',
       progress: 100,
       message,
+      detailsTitle: '转换详情',
+      details: progressDetails,
+      detailsExpanded: true,
       closable: true,
       cancelable: false,
       autoClose: false,

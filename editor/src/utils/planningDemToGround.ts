@@ -40,7 +40,14 @@ export interface PlanningDemTileConversionResult {
 }
 
 export interface PlanningDemBuildProgress {
-  phase: 'load-source' | 'load-orthophoto' | 'sample-region' | 'build-edit-tiles'
+  phase:
+    | 'load-source'
+    | 'load-orthophoto'
+    | 'sample-region'
+    | 'build-edit-tiles'
+    | 'build-terrain-dataset-fields'
+    | 'build-terrain-dataset-meshes'
+    | 'build-terrain-dataset-regions'
   loaded: number
   total: number
   label: string

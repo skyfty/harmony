@@ -32,6 +32,7 @@ export interface PlanningDemTerrainDatasetBuildOptions {
   leafTileSegments?: number
   regionLevel?: number | null
   preparedSource?: PlanningDemPreparedSource
+  onProgress?: (payload: PlanningDemBuildProgress) => void
 }
 
 export interface PlanningDemTerrainDatasetBuildResult {
@@ -56,7 +57,7 @@ export interface PlanningDemTerrainConversionBuildResult {
 export type PlanningDemTerrainDatasetWorkerRequest = {
   kind: 'build-planning-dem-terrain-dataset'
   requestId: number
-  options: PlanningDemTerrainDatasetBuildOptions
+  options: Omit<PlanningDemTerrainDatasetBuildOptions, 'onProgress'>
 }
 
 export type PlanningDemTerrainConversionWorkerRequest = {
@@ -138,6 +139,60 @@ function clampFiniteInteger(value: unknown, fallback: number, min: number, max: 
     return fallback
   }
   return Math.max(min, Math.min(max, Math.trunc(numeric)))
+}
+
+function nowMs(): number {
+  const perf = typeof performance !== 'undefined' ? performance : undefined
+  return typeof perf?.now === 'function' ? perf.now() : Date.now()
+}
+
+function createThrottledTerrainDatasetProgressReporter(
+  onProgress?: (payload: PlanningDemBuildProgress) => void,
+  minIntervalMs = 50,
+): (payload: PlanningDemBuildProgress, force?: boolean) => void {
+  if (!onProgress) {
+    return () => {}
+  }
+  let lastReportedAt = -Infinity
+  return (payload, force = false) => {
+    const safeTotal = Number.isFinite(payload.total) && payload.total > 0 ? payload.total : 1
+    const safeLoaded = Number.isFinite(payload.loaded) ? Math.max(0, Math.min(payload.loaded, safeTotal)) : 0
+    const timestamp = nowMs()
+    if (!force && safeLoaded < safeTotal && timestamp - lastReportedAt < minIntervalMs) {
+      return
+    }
+    lastReportedAt = timestamp
+    onProgress({
+      ...payload,
+      loaded: safeLoaded,
+      total: safeTotal,
+    })
+  }
+}
+
+function countTerrainTilesThroughLevel(maxLevel: number): number {
+  let total = 0
+  for (let level = 0; level <= maxLevel; level += 1) {
+    const tileCountPerAxis = 2 ** level
+    total += tileCountPerAxis * tileCountPerAxis
+  }
+  return total
+}
+
+function formatTerrainDatasetTileDetail(
+  completed: number,
+  total: number,
+  tileId: Pick<QuantizedTerrainMeshTileId, 'level' | 'x' | 'y'>,
+): string {
+  return `${completed}/${total} - L${tileId.level} (${tileId.x}, ${tileId.y})`
+}
+
+function formatTerrainDatasetRegionDetail(
+  completed: number,
+  total: number,
+  regionKey: string,
+): string {
+  return `${completed}/${total} - ${regionKey}`
 }
 
 function resolveDatasetBounds(prepared: PlanningDemPreparedSource): QuantizedTerrainDatasetBounds {
@@ -726,11 +781,22 @@ export function collectPlanningDemTerrainConversionWorkerTransferables(
 export async function buildPlanningDemTerrainDatasetInWorker(
   options: PlanningDemTerrainDatasetBuildOptions,
 ): Promise<PlanningDemTerrainDatasetBuildResult> {
+  if (typeof options.onProgress === 'function') {
+    return buildPlanningDemTerrainDataset(options)
+  }
   const worker = getPlanningDemTerrainDatasetWorker()
   if (!worker) {
     return buildPlanningDemTerrainDataset(options)
   }
 
+  const workerOptions: Omit<PlanningDemTerrainDatasetBuildOptions, 'onProgress'> = {
+    definition: options.definition,
+    terrainDem: options.terrainDem,
+    datasetId: options.datasetId,
+    leafTileSegments: options.leafTileSegments,
+    regionLevel: options.regionLevel,
+    preparedSource: options.preparedSource,
+  }
   const requestId = ++planningDemTerrainDatasetRequestId
   const response = await new Promise<PlanningDemTerrainDatasetWorkerResponse | PlanningDemTerrainConversionWorkerResponse>((resolve, reject) => {
     pendingPlanningDemTerrainDatasetRequests.set(requestId, { resolve, reject })
@@ -739,7 +805,7 @@ export async function buildPlanningDemTerrainDatasetInWorker(
         kind: 'build-planning-dem-terrain-dataset',
         requestId,
         options: {
-          ...options,
+          ...workerOptions,
           definition: clonePlanningDemTerrainDatasetDefinitionForWorker(options.definition),
           terrainDem: clonePlanningDemTerrainDemForWorker(options.terrainDem),
           preparedSource: undefined,
@@ -867,13 +933,6 @@ export async function buildPlanningDemTerrainConversion(
     onProgress: reportProgress,
     preferWorker: false,
   })
-  reportProgress?.({
-    phase: 'build-edit-tiles',
-    loaded: 1,
-    total: 1,
-    label: 'Building terrain dataset…',
-    detail: '1/1',
-  })
   const dataset = await buildPlanningDemTerrainDataset({
     definition: options.definition,
     terrainDem: options.terrainDem,
@@ -881,6 +940,7 @@ export async function buildPlanningDemTerrainConversion(
     leafTileSegments: options.leafTileSegments,
     regionLevel: options.regionLevel,
     preparedSource: prepared,
+    onProgress: reportProgress,
   })
 
   return { demResult, dataset }
@@ -889,6 +949,8 @@ export async function buildPlanningDemTerrainConversion(
 export async function buildPlanningDemTerrainDataset(
   options: PlanningDemTerrainDatasetBuildOptions,
 ): Promise<PlanningDemTerrainDatasetBuildResult> {
+  const reportProgress = createThrottledTerrainDatasetProgressReporter(options.onProgress)
+  const startedAt = Date.now()
   const leafTileSegments = clampFiniteInteger(options.leafTileSegments, DEFAULT_LEAF_TILE_SEGMENTS, MIN_TILE_SEGMENTS, MAX_TILE_SEGMENTS)
   const demHash = typeof options.terrainDem.sourceFileHash === 'string' ? options.terrainDem.sourceFileHash.trim() : ''
   const isGeoTiff = isPlanningDemGeoTiffSource(options.terrainDem.filename ?? '', options.terrainDem.mimeType ?? null)
@@ -963,8 +1025,24 @@ export async function buildPlanningDemTerrainDataset(
   const datasetId = typeof options.datasetId === 'string' && options.datasetId.trim().length
     ? options.datasetId.trim()
     : `terrain-${demHash || Date.now()}`
+  const totalTileCount = countTerrainTilesThroughLevel(maxLevel)
+
+  reportProgress({
+    phase: 'build-terrain-dataset-fields',
+    loaded: 0,
+    total: totalTileCount,
+    label: 'Building terrain dataset fields...',
+    detail: `Preparing ${totalTileCount} height fields across ${maxLevel + 1} levels.`,
+  }, true)
+  console.info('[PlanningDemTerrainDataset] Building terrain dataset', {
+    datasetId,
+    maxLevel,
+    regionLevel,
+    totalTileCount,
+  })
 
   const tileFieldLevels = new Map<number, Map<string, TileHeightField>>()
+  let builtFieldCount = 0
   for (let level = maxLevel; level >= 0; level -= 1) {
     const levelFields = new Map<string, TileHeightField>()
     const tileCountPerAxis = 2 ** level
@@ -1010,12 +1088,40 @@ export async function buildPlanningDemTerrainDataset(
           tileField = buildParentHeightFieldFromChildren(children)
         }
         levelFields.set(tileKey, tileField)
+        builtFieldCount += 1
+        reportProgress({
+          phase: 'build-terrain-dataset-fields',
+          loaded: builtFieldCount,
+          total: totalTileCount,
+          label: 'Building terrain dataset fields...',
+          detail: formatTerrainDatasetTileDetail(builtFieldCount, totalTileCount, tileId),
+        })
       }
     }
     tileFieldLevels.set(level, levelFields)
   }
+  reportProgress({
+    phase: 'build-terrain-dataset-fields',
+    loaded: totalTileCount,
+    total: totalTileCount,
+    label: 'Building terrain dataset fields...',
+    detail: `Built ${totalTileCount} terrain height fields.`,
+  }, true)
+  console.info('[PlanningDemTerrainDataset] Height fields ready', {
+    datasetId,
+    totalTileCount,
+    elapsedMs: Date.now() - startedAt,
+  })
 
   const tiles: TileBuildRecord[] = []
+  reportProgress({
+    phase: 'build-terrain-dataset-meshes',
+    loaded: 0,
+    total: totalTileCount,
+    label: 'Encoding terrain dataset tiles...',
+    detail: `Serializing ${totalTileCount} terrain tiles.`,
+  }, true)
+  let builtMeshCount = 0
   for (let level = 0; level <= maxLevel; level += 1) {
     const tileCountPerAxis = 2 ** level
     const levelFields = tileFieldLevels.get(level)
@@ -1051,9 +1157,29 @@ export async function buildPlanningDemTerrainDataset(
           regionPath,
           serializedMesh,
         })
+        builtMeshCount += 1
+        reportProgress({
+          phase: 'build-terrain-dataset-meshes',
+          loaded: builtMeshCount,
+          total: totalTileCount,
+          label: 'Encoding terrain dataset tiles...',
+          detail: formatTerrainDatasetTileDetail(builtMeshCount, totalTileCount, tileId),
+        })
       }
     }
   }
+  reportProgress({
+    phase: 'build-terrain-dataset-meshes',
+    loaded: totalTileCount,
+    total: totalTileCount,
+    label: 'Encoding terrain dataset tiles...',
+    detail: `Serialized ${totalTileCount} terrain tiles.`,
+  }, true)
+  console.info('[PlanningDemTerrainDataset] Terrain tiles encoded', {
+    datasetId,
+    totalTileCount,
+    elapsedMs: Date.now() - startedAt,
+  })
 
   const regionTileMap = new Map<string, TileBuildRecord[]>()
   for (const tile of tiles) {
@@ -1067,6 +1193,15 @@ export async function buildPlanningDemTerrainDataset(
 
   const regions: QuantizedTerrainDatasetRegionPackIndex[] = []
   const regionPacks: Record<string, ArrayBuffer> = {}
+  const totalRegionCount = Math.max(1, regionTileMap.size)
+  reportProgress({
+    phase: 'build-terrain-dataset-regions',
+    loaded: 0,
+    total: totalRegionCount,
+    label: 'Packing terrain dataset regions...',
+    detail: `Preparing ${totalRegionCount} region packs.`,
+  }, true)
+  let packedRegionCount = 0
   for (const [regionKey, regionTiles] of regionTileMap.entries()) {
     const entries = Object.fromEntries(regionTiles.map((tile) => [tile.tileKey, tile.serializedMesh]))
     const serializedPack = serializeQuantizedTerrainPack({
@@ -1087,9 +1222,36 @@ export async function buildPlanningDemTerrainDataset(
       regionId: resolveQuantizedTerrainRegionIdForTile(regionTiles[0]!.tileId, regionLevel),
       byteLength: serializedPack.byteLength,
     })
+    packedRegionCount += 1
+    reportProgress({
+      phase: 'build-terrain-dataset-regions',
+      loaded: packedRegionCount,
+      total: totalRegionCount,
+      label: 'Packing terrain dataset regions...',
+      detail: formatTerrainDatasetRegionDetail(packedRegionCount, totalRegionCount, regionKey),
+    })
   }
+  reportProgress({
+    phase: 'build-terrain-dataset-regions',
+    loaded: totalRegionCount,
+    total: totalRegionCount,
+    label: 'Packing terrain dataset regions...',
+    detail: `Packed ${totalRegionCount} region files.`,
+  }, true)
+  console.info('[PlanningDemTerrainDataset] Region packs ready', {
+    datasetId,
+    totalRegionCount,
+    elapsedMs: Date.now() - startedAt,
+  })
 
   regions.sort((left, right) => left.regionKey.localeCompare(right.regionKey))
+
+  console.info('[PlanningDemTerrainDataset] Terrain dataset complete', {
+    datasetId,
+    totalTileCount,
+    totalRegionCount,
+    elapsedMs: Date.now() - startedAt,
+  })
 
   return {
     manifest: {

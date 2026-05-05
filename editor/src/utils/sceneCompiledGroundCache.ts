@@ -96,11 +96,21 @@ export type EnsureSceneCompiledGroundOptions = {
   forceRebuild?: boolean
   sourceSignature?: string
   onProgress?: (progress: CompiledGroundBuildProgress) => void
+  onStatus?: (status: SceneCompiledGroundEnsureStatus) => void
+  loadFallbackPackage?: () => Promise<SceneCompiledGroundPackage | null>
 }
 
 export type RebuildSceneCompiledGroundChunksOptions = {
   sourceSignature?: string
   onProgress?: (progress: CompiledGroundBuildProgress) => void
+  onStatus?: (status: SceneCompiledGroundEnsureStatus) => void
+}
+
+export type SceneCompiledGroundEnsureStatus = {
+  step: string
+  detail?: string
+  progress: number
+  phase: 'cache' | 'build-render' | 'build-collision' | 'persist' | 'ready'
 }
 
 export const SCENE_COMPILED_GROUND_PROFILE_VERSION = 1
@@ -122,9 +132,51 @@ const CACHE_DB_NAME = 'harmony-scene-compiled-ground-v2'
 const CACHE_DB_VERSION = 1
 const CACHE_META_STORE = 'meta'
 const CACHE_TILE_STORE = 'tiles'
-
 let sceneCompiledGroundDbPromise: Promise<IDBDatabase | null> | null = null
 const sceneCompiledGroundMemoryCache = new Map<string, SceneCompiledGroundMemoryCacheEntry>()
+
+function roundElapsedMs(startedAt: number): number {
+  return Math.max(0, Math.round(Date.now() - startedAt))
+}
+
+function emitEnsureStatus(
+  callback: EnsureSceneCompiledGroundOptions['onStatus'] | RebuildSceneCompiledGroundChunksOptions['onStatus'] | undefined,
+  status: SceneCompiledGroundEnsureStatus,
+): void {
+  callback?.({
+    ...status,
+    progress: Math.max(0, Math.min(100, Math.round(status.progress))),
+  })
+}
+
+function formatTileProgress(progress: CompiledGroundBuildProgress): string {
+  const total = Math.max(0, Math.trunc(progress.total))
+  const completed = Math.max(0, Math.min(Math.trunc(progress.completed), total))
+  const tileKey = typeof progress.tileKey === 'string' && progress.tileKey.trim()
+    ? ` (${progress.tileKey.trim()})`
+    : ''
+  return `${completed}/${total} tiles${tileKey}`
+}
+
+function mapCompiledGroundBuildProgress(progress: CompiledGroundBuildProgress): SceneCompiledGroundEnsureStatus {
+  const total = Math.max(1, Math.trunc(progress.total))
+  const completed = Math.max(0, Math.min(Math.trunc(progress.completed), total))
+  const fraction = completed / total
+  if (progress.phase === 'render') {
+    return {
+      step: 'Building terrain render tiles',
+      detail: formatTileProgress(progress),
+      progress: 15 + fraction * 55,
+      phase: 'build-render',
+    }
+  }
+  return {
+    step: 'Building terrain collision tiles',
+    detail: formatTileProgress(progress),
+    progress: 70 + fraction * 20,
+    phase: 'build-collision',
+  }
+}
 
 function getIndexStorageKey(buildKey: string): string {
   return `${CACHE_KEY_PREFIX}${buildKey}:index`
@@ -137,6 +189,7 @@ function sanitizePathSegment(value: string): string {
 function getTileStorageKey(buildKey: string, path: string): string {
   return `${CACHE_KEY_PREFIX}${buildKey}:tile:${sanitizePathSegment(path)}`
 }
+
 
 function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   if (bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength) {
@@ -390,26 +443,6 @@ function findGroundNode(nodes: SceneNode[]): SceneNode | null {
   return null
 }
 
-function summarizeLocalEditTileSignature(dynamicGround: GroundDynamicMesh): string {
-  const localEditTiles = dynamicGround.localEditTiles && typeof dynamicGround.localEditTiles === 'object'
-    ? Object.values(dynamicGround.localEditTiles)
-    : []
-  if (!localEditTiles.length) {
-    return 'none'
-  }
-  let maxUpdatedAt = 0
-  const resolutionBuckets = new Map<number, number>()
-  for (const tile of localEditTiles) {
-    const resolution = Math.max(1, Math.trunc(Number(tile?.resolution) || 0))
-    resolutionBuckets.set(resolution, (resolutionBuckets.get(resolution) ?? 0) + 1)
-    const updatedAt = Number(tile?.updatedAt)
-    if (Number.isFinite(updatedAt)) {
-      maxUpdatedAt = Math.max(maxUpdatedAt, updatedAt)
-    }
-  }
-  return `${localEditTiles.length}:${maxUpdatedAt}:${Array.from(resolutionBuckets.entries()).sort((a, b) => a[0] - b[0]).map(([resolution, count]) => `${resolution}x${count}`).join(',')}`
-}
-
 export function computeSceneCompiledGroundBuildKey(
   sceneId: string,
   dynamicGround: GroundDynamicMesh | null,
@@ -418,22 +451,9 @@ export function computeSceneCompiledGroundBuildKey(
   if (!dynamicGround) {
     return `${sceneId}|no-ground`
   }
-  const worldBounds = dynamicGround.worldBounds ?? null
-  const heightComposition = dynamicGround.heightComposition ?? null
   return [
     sceneId,
     dynamicGround.terrainMode ?? 'finite',
-    dynamicGround.chunkSizeMeters ?? '',
-    dynamicGround.baseHeight ?? '',
-    dynamicGround.cellSize ?? '',
-    dynamicGround.editTileSizeMeters ?? '',
-    dynamicGround.editTileResolution ?? '',
-    worldBounds?.minX ?? '',
-    worldBounds?.minZ ?? '',
-    worldBounds?.maxX ?? '',
-    worldBounds?.maxZ ?? '',
-    heightComposition?.mode ?? '',
-    heightComposition?.policyVersion ?? '',
     terrainDatasetId ?? '',
     `scene-profile:${SCENE_COMPILED_GROUND_PROFILE_VERSION}`,
     SCENE_COMPILED_GROUND_BUILD_OPTIONS.renderChunksPerTile,
@@ -450,37 +470,7 @@ export function computeSceneCompiledGroundSourceSignature(
   dynamicGround: GroundDynamicMesh | null,
   terrainDatasetId: string | null = null,
 ): string {
-  if (!dynamicGround) {
-    return `${sceneId}|no-ground`
-  }
-  const worldBounds = dynamicGround.worldBounds ?? null
-  const heightComposition = dynamicGround.heightComposition ?? null
-  return [
-    sceneId,
-    dynamicGround.terrainMode ?? 'finite',
-    dynamicGround.surfaceRevision ?? 0,
-    dynamicGround.chunkManifestRevision ?? 0,
-    dynamicGround.chunkSizeMeters ?? '',
-    dynamicGround.baseHeight ?? '',
-    dynamicGround.cellSize ?? '',
-    dynamicGround.editTileSizeMeters ?? '',
-    dynamicGround.editTileResolution ?? '',
-    worldBounds?.minX ?? '',
-    worldBounds?.minZ ?? '',
-    worldBounds?.maxX ?? '',
-    worldBounds?.maxZ ?? '',
-    heightComposition?.mode ?? '',
-    heightComposition?.policyVersion ?? '',
-    terrainDatasetId ?? '',
-    summarizeLocalEditTileSignature(dynamicGround),
-    `scene-profile:${SCENE_COMPILED_GROUND_PROFILE_VERSION}`,
-    SCENE_COMPILED_GROUND_BUILD_OPTIONS.renderChunksPerTile,
-    SCENE_COMPILED_GROUND_BUILD_OPTIONS.collisionChunksPerTile,
-    SCENE_COMPILED_GROUND_BUILD_OPTIONS.renderSampleStepMultiplier,
-    SCENE_COMPILED_GROUND_BUILD_OPTIONS.minRenderSampleStepMeters,
-    SCENE_COMPILED_GROUND_BUILD_OPTIONS.collisionSampleStepMultiplier,
-    SCENE_COMPILED_GROUND_BUILD_OPTIONS.minCollisionSampleStepMeters,
-  ].join('|')
+  return computeSceneCompiledGroundBuildKey(sceneId, dynamicGround, terrainDatasetId)
 }
 
 export function resolveSceneCompiledGroundPackagePaths(sceneId: string): {
@@ -868,21 +858,120 @@ export async function ensureSceneCompiledGroundPackage(
   buildKey: string,
   options: EnsureSceneCompiledGroundOptions = {},
 ): Promise<SceneCompiledGroundPackage> {
+  const startedAt = Date.now()
+  emitEnsureStatus(options.onStatus, {
+    step: 'Checking terrain cache',
+    detail: 'Looking for compiled terrain tiles in cache...',
+    progress: 5,
+    phase: 'cache',
+  })
   if (!options.forceRebuild) {
+    const cacheStartedAt = Date.now()
     const cached = await loadSceneCompiledGroundPackageFromCache(buildKey, {
       sourceSignature: options.sourceSignature,
     })
+    console.info('[SceneCompiledGroundCache] Cache lookup finished', {
+      sceneId: document.id,
+      buildKey,
+      status: cached.diagnostics.status,
+      elapsedMs: roundElapsedMs(cacheStartedAt),
+      indexedFileCount: cached.diagnostics.indexedFileCount,
+      loadedFileCount: cached.diagnostics.loadedFileCount,
+      missingFileCount: cached.diagnostics.missingFileCount,
+      renderTileCount: cached.diagnostics.renderTileCount,
+      collisionTileCount: cached.diagnostics.collisionTileCount,
+      totalBytes: cached.diagnostics.totalBytes,
+    })
     if (cached.pkg) {
+      emitEnsureStatus(options.onStatus, {
+        step: 'Loaded terrain cache',
+        detail: `${cached.diagnostics.loadedFileCount} cached files ready in ${cached.diagnostics.elapsedMs} ms.`,
+        progress: 100,
+        phase: 'ready',
+      })
       return cached.pkg
     }
+    if (typeof options.loadFallbackPackage === 'function') {
+      const fallbackStartedAt = Date.now()
+      const fallbackPkg = await options.loadFallbackPackage()
+      if (fallbackPkg) {
+        console.info('[SceneCompiledGroundCache] Restored terrain cache from scene-local fallback', {
+          sceneId: document.id,
+          buildKey,
+          elapsedMs: roundElapsedMs(fallbackStartedAt),
+          renderTileCount: fallbackPkg.manifest.renderTiles.length,
+          collisionTileCount: fallbackPkg.manifest.collisionTiles.length,
+          fileCount: fallbackPkg.files.size,
+        })
+        await saveSceneCompiledGroundPackageToCache(buildKey, fallbackPkg, options.sourceSignature ?? '')
+        emitEnsureStatus(options.onStatus, {
+          step: 'Loaded terrain cache fallback',
+          detail: `${fallbackPkg.files.size} cached files restored from scene storage.`,
+          progress: 100,
+          phase: 'ready',
+        })
+        return fallbackPkg
+      }
+    }
+    emitEnsureStatus(options.onStatus, {
+      step: options.forceRebuild ? 'Rebuilding terrain cache' : 'Terrain cache unavailable',
+      detail: `Cache ${cached.diagnostics.status}; rebuilding compiled terrain tiles...`,
+      progress: 10,
+      phase: 'cache',
+    })
+  } else {
+    console.info('[SceneCompiledGroundCache] Skipping cache lookup because rebuild was forced', {
+      sceneId: document.id,
+      buildKey,
+    })
+    emitEnsureStatus(options.onStatus, {
+      step: 'Rebuilding terrain cache',
+      detail: 'Forced rebuild requested.',
+      progress: 10,
+      phase: 'cache',
+    })
   }
+  const buildStartedAt = Date.now()
   const built = await buildSceneCompiledGroundPackage(document, {
-    onProgress: options.onProgress,
+    onProgress: (progress) => {
+      options.onProgress?.(progress)
+      emitEnsureStatus(options.onStatus, mapCompiledGroundBuildProgress(progress))
+    },
   })
   if (!built) {
     throw new Error(`Compiled ground build failed for scene ${document.id}`)
   }
+  console.info('[SceneCompiledGroundCache] Terrain build finished', {
+    sceneId: document.id,
+    buildKey,
+    elapsedMs: roundElapsedMs(buildStartedAt),
+    renderTileCount: built.manifest.renderTiles.length,
+    collisionTileCount: built.manifest.collisionTiles.length,
+    fileCount: built.files.size,
+  })
+  emitEnsureStatus(options.onStatus, {
+    step: 'Saving terrain cache',
+    detail: `Persisting ${built.files.size} compiled files...`,
+    progress: 92,
+    phase: 'persist',
+  })
+  const persistStartedAt = Date.now()
   await saveSceneCompiledGroundPackageToCache(buildKey, built, options.sourceSignature ?? '')
+  console.info('[SceneCompiledGroundCache] Terrain cache persisted', {
+    sceneId: document.id,
+    buildKey,
+    elapsedMs: roundElapsedMs(persistStartedAt),
+    totalElapsedMs: roundElapsedMs(startedAt),
+    renderTileCount: built.manifest.renderTiles.length,
+    collisionTileCount: built.manifest.collisionTiles.length,
+    fileCount: built.files.size,
+  })
+  emitEnsureStatus(options.onStatus, {
+    step: 'Terrain cache ready',
+    detail: `${built.manifest.renderTiles.length + built.manifest.collisionTiles.length} tiles ready.`,
+    progress: 100,
+    phase: 'ready',
+  })
   return built
 }
 
@@ -901,9 +990,16 @@ export async function rebuildSceneCompiledGroundPackageChunks(
     return ensureSceneCompiledGroundPackage(document, buildKey, {
       sourceSignature: options.sourceSignature,
       onProgress: options.onProgress,
+      onStatus: options.onStatus,
     })
   }
 
+  emitEnsureStatus(options.onStatus, {
+    step: 'Checking existing terrain cache',
+    detail: `Looking for ${normalizedChunkKeys.length} chunk updates in cache...`,
+    progress: 5,
+    phase: 'cache',
+  })
   const cached = await loadSceneCompiledGroundPackageFromCache(buildKey, {
     allowStale: true,
   })
@@ -912,19 +1008,44 @@ export async function rebuildSceneCompiledGroundPackageChunks(
       forceRebuild: true,
       sourceSignature: options.sourceSignature,
       onProgress: options.onProgress,
+      onStatus: options.onStatus,
     })
   }
 
+  const patchStartedAt = Date.now()
   const patch = await buildSceneCompiledGroundPackage(document, {
     includedTileKeys: normalizedChunkKeys,
-    onProgress: options.onProgress,
+    onProgress: (progress) => {
+      options.onProgress?.(progress)
+      emitEnsureStatus(options.onStatus, mapCompiledGroundBuildProgress(progress))
+    },
   })
   if (!patch) {
     throw new Error(`Compiled ground partial rebuild failed for scene ${document.id}`)
   }
 
   const merged = mergeSceneCompiledGroundPackages(cached.pkg, patch)
+  emitEnsureStatus(options.onStatus, {
+    step: 'Saving terrain cache',
+    detail: `Persisting ${normalizedChunkKeys.length} rebuilt chunks...`,
+    progress: 92,
+    phase: 'persist',
+  })
   await saveSceneCompiledGroundPackageToCache(buildKey, merged, options.sourceSignature ?? '')
+  console.info('[SceneCompiledGroundCache] Partial terrain cache rebuild finished', {
+    sceneId: document.id,
+    buildKey,
+    chunkCount: normalizedChunkKeys.length,
+    elapsedMs: roundElapsedMs(patchStartedAt),
+    renderTileCount: patch.manifest.renderTiles.length,
+    collisionTileCount: patch.manifest.collisionTiles.length,
+  })
+  emitEnsureStatus(options.onStatus, {
+    step: 'Terrain cache ready',
+    detail: `${normalizedChunkKeys.length} chunks refreshed.`,
+    progress: 100,
+    phase: 'ready',
+  })
   return merged
 }
 

@@ -48,6 +48,7 @@ import {
   computeSceneCompiledGroundSourceSignature,
   ensureSceneCompiledGroundPackage,
   rebuildSceneCompiledGroundPackageChunks,
+  type SceneCompiledGroundEnsureStatus,
   type SceneCompiledGroundPackage,
 } from '@/utils/sceneCompiledGroundCache'
 import type {
@@ -96,7 +97,7 @@ import type { ClipboardEnvelope, ClipboardMeta, QuaternionJson } from '@/types/p
 import type { DetachResult } from '@/types/detach-result'
 import type { DuplicateContext } from '@/types/duplicate-context'
 import type { EditorTool } from '@/types/editor-tool'
-import type { EnsureSceneAssetsOptions } from '@/types/ensure-scene-assets-options'
+import type { EnsureSceneAssetsOptions, EnsureSceneAssetsProgress } from '@/types/ensure-scene-assets-options'
 import type { PanelVisibilityState } from '@/types/panel-visibility-state'
 import type { PanelPlacementState, PanelPlacement } from '@/types/panel-placement-state'
 import type { HierarchyTreeItem } from '@/types/hierarchy-tree-item'
@@ -1942,6 +1943,45 @@ function createCompiledGroundSourceDocument(store: Pick<SceneState, 'currentScen
     id: sceneId,
     nodes: store.nodes as unknown as SceneJsonExportDocument['nodes'],
   } as SceneJsonExportDocument
+}
+
+type SceneLoadProgress = {
+  step: string
+  progress: number
+  detail?: string
+}
+
+type SelectSceneOptions = {
+  setLastEdited?: boolean
+  forceReload?: boolean
+  showLoadingOverlay?: boolean
+  onProgress?: (progress: SceneLoadProgress) => void
+}
+
+function emitSceneLoadProgress(
+  callback: SelectSceneOptions['onProgress'],
+  payload: SceneLoadProgress,
+): void {
+  callback?.({
+    ...payload,
+    progress: Math.max(0, Math.min(100, Math.round(payload.progress))),
+  })
+}
+
+function mapAssetLoadProgressToSceneLoad(progress: EnsureSceneAssetsProgress): SceneLoadProgress {
+  return {
+    step: progress.step,
+    detail: progress.detail,
+    progress: 36 + progress.progress * 0.28,
+  }
+}
+
+function mapCompiledGroundStatusToSceneLoad(status: SceneCompiledGroundEnsureStatus): SceneLoadProgress {
+  return {
+    step: status.step,
+    detail: status.detail,
+    progress: 82 + status.progress * 0.16,
+  }
 }
 
 function commitGroundScatterRuntimeEdit(
@@ -8747,7 +8787,12 @@ export const useSceneStore = defineStore('scene', {
       }
       return this.compiledGroundFiles.get(normalizedPath) ?? null
     },
-    async ensureCurrentSceneCompiledGroundReady(options: { forceRebuild?: boolean } = {}): Promise<boolean> {
+    async ensureCurrentSceneCompiledGroundReady(
+      options: {
+        forceRebuild?: boolean
+        onStatus?: (status: SceneCompiledGroundEnsureStatus) => void
+      } = {},
+    ): Promise<boolean> {
       const document = createCompiledGroundSourceDocument(this)
       const groundNode = this.groundNode
       if (!document || !groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
@@ -8769,11 +8814,33 @@ export const useSceneStore = defineStore('scene', {
       const pkg = await ensureSceneCompiledGroundPackage(document, buildKey, {
         forceRebuild: options.forceRebuild === true,
         sourceSignature,
+        onStatus: options.onStatus,
+        loadFallbackPackage: options.forceRebuild === true
+          ? undefined
+          : async () => {
+              const fallback = await scenesStore.loadCompiledGroundBundle(document.id)
+              if (!fallback) {
+                return null
+              }
+              if (fallback.buildKey !== buildKey || fallback.sourceSignature !== sourceSignature) {
+                return null
+              }
+              return {
+                manifest: fallback.manifest,
+                files: new Map<string, ArrayBuffer>(Object.entries(fallback.files)),
+              }
+            },
       })
       if (document.id !== this.currentSceneId) {
         return false
       }
       applyCompiledGroundPackageToStore(this, buildKey, pkg)
+      await scenesStore.saveCompiledGroundBundle(document.id, {
+        buildKey,
+        sourceSignature,
+        manifest: pkg.manifest,
+        files: Object.fromEntries(pkg.files),
+      })
       return true
     },
     async rebuildCurrentSceneCompiledGroundChunks(
@@ -8806,6 +8873,12 @@ export const useSceneStore = defineStore('scene', {
           return false
         }
         applyCompiledGroundPackageToStore(this, buildKey, rebuilt)
+        await scenesStore.saveCompiledGroundBundle(document.id, {
+          buildKey,
+          sourceSignature,
+          manifest: rebuilt.manifest,
+          files: Object.fromEntries(rebuilt.files),
+        })
         return true
       }
       const rebuilt = await rebuildSceneCompiledGroundPackageChunks(document, buildKey, chunkKeys, {
@@ -8815,6 +8888,12 @@ export const useSceneStore = defineStore('scene', {
         return false
       }
       applyCompiledGroundPackageToStore(this, buildKey, rebuilt)
+      await scenesStore.saveCompiledGroundBundle(document.id, {
+        buildKey,
+        sourceSignature,
+        manifest: rebuilt.manifest,
+        files: Object.fromEntries(rebuilt.files),
+      })
       return true
     },
     appendUndoEntry(entry: SceneHistoryEntry, options: { resetRedo?: boolean } = {}) {
@@ -18167,32 +18246,73 @@ export const useSceneStore = defineStore('scene', {
       return sceneDocument.id
     },
     
-    async selectScene(sceneId: string, options: { setLastEdited?: boolean; forceReload?: boolean } = {}) {
+    async selectScene(sceneId: string, options: SelectSceneOptions = {}) {
       // Invalidate any in-flight scene-bound async work as early as possible.
       this.sceneSwitchToken += 1
       const sceneSwitchToken = this.sceneSwitchToken
       this.clearCurrentCompiledGroundPackage()
       const forceReload = options.forceReload === true
+      const showLoadingOverlay = options.showLoadingOverlay ?? !options.onProgress
+      const startedAt = typeof performance !== 'undefined' && typeof performance.now === 'function'
+        ? performance.now()
+        : Date.now()
+      const getElapsedMs = () => {
+        const now = typeof performance !== 'undefined' && typeof performance.now === 'function'
+          ? performance.now()
+          : Date.now()
+        return Math.max(0, Math.round(now - startedAt))
+      }
+      const reportProgress = (step: string, progress: number, detail?: string) => {
+        emitSceneLoadProgress(options.onProgress, { step, progress, detail })
+      }
+      const logStage = (stage: string, extra: Record<string, unknown> = {}) => {
+        console.info('[SceneStore] selectScene progress', {
+          sceneId,
+          stage,
+          elapsedMs: getElapsedMs(),
+          ...extra,
+        })
+      }
       const scenesStore = useScenesStore()
+      reportProgress('Checking scene bundle', 8, 'Verifying local scene data and remote bundle state...')
       const sceneReady = await scenesStore.ensureSceneBundleAvailable(sceneId)
+      logStage('bundle-checked', { sceneReady })
       if (!sceneReady) {
         return false
       }
       if (!forceReload && sceneId === this.currentSceneId) {
         this.isSceneReady = false
         try {
-          await this.ensureSceneAssetsReady({ showOverlay: true })
+          reportProgress('Refreshing scene assets', 36, 'Reloading runtime assets for the current scene...')
+          await this.ensureSceneAssetsReady({
+            showOverlay: showLoadingOverlay,
+            onProgress: (progress) => {
+              const mapped = mapAssetLoadProgressToSceneLoad(progress)
+              reportProgress(mapped.step, mapped.progress, mapped.detail)
+            },
+          })
         } finally {
           this.isSceneReady = true
         }
+        reportProgress('Scene ready', 100, 'Current scene assets refreshed.')
+        logStage('current-scene-refreshed')
         return true
       }
+      reportProgress('Reading scene document', 16, 'Loading scene document and ground sidecars...')
       const scene = await scenesStore.loadSceneDocument(sceneId, { hydrateGroundRuntime: true })
+      logStage('document-loaded', {
+        loaded: Boolean(scene),
+        nodeCount: scene?.nodes?.length ?? 0,
+      })
       if (!scene) {
         return false
       }
 
+      reportProgress('Migrating embedded assets', 24, 'Hydrating embedded assets and runtime sidecars...')
       const embeddedMigration = await hydrateSceneDocumentWithEmbeddedAssets(scene)
+      logStage('embedded-assets-hydrated', {
+        migratedEmbeddedAssets: embeddedMigration.migratedEmbeddedAssets,
+      })
 
       this.nodes.forEach((node) => releaseRuntimeTree(node))
 
@@ -18201,15 +18321,30 @@ export const useSceneStore = defineStore('scene', {
         const sceneNodes = cloneSceneNodes(scene.nodes)
         await this.ensureSceneAssetsReady({
           nodes: sceneNodes,
-          showOverlay: true,
+          showOverlay: showLoadingOverlay,
           refreshViewport: false,
+          onProgress: (progress) => {
+            const mapped = mapAssetLoadProgressToSceneLoad(progress)
+            reportProgress(mapped.step, mapped.progress, mapped.detail)
+          },
         })
+        logStage('scene-assets-ready')
 
         scene.nodes = sceneNodes
+        reportProgress('Applying scene data', 66, 'Syncing scene graph into editor state...')
         attachRuntimeGroundSidecarsToDocument(scene)
         this.applySceneDocumentToState(scene)
+        logStage('scene-state-applied', { currentSceneId: this.currentSceneId })
+        reportProgress('Loading terrain dataset', 72, 'Reading terrain dataset manifest...')
         const terrainDatasetManifest = await scenesStore.loadTerrainDatasetManifest(scene.id)
+        logStage('terrain-dataset-manifest-loaded', {
+          hasManifest: Boolean(terrainDatasetManifest),
+        })
+        reportProgress('Preparing terrain sampler', 76, 'Creating terrain height sampler...')
         const terrainSampler = await createScenesStoreTerrainDatasetHeightSampler(scene.id)
+        logStage('terrain-sampler-ready', {
+          hasSampler: Boolean(terrainSampler),
+        })
         if (sceneSwitchToken !== this.sceneSwitchToken) {
           return false
         }
@@ -18223,7 +18358,19 @@ export const useSceneStore = defineStore('scene', {
           runtimeGround.runtimeTerrainDatasetEnabled = Boolean(terrainSampler)
           runtimeGround.runtimeTerrainHeightSampler = terrainSampler
         }
-        await this.ensureCurrentSceneCompiledGroundReady()
+        reportProgress('Compiling terrain cache', 82, 'Checking compiled terrain cache...')
+        await this.ensureCurrentSceneCompiledGroundReady({
+          onStatus: (status) => {
+            const mapped = mapCompiledGroundStatusToSceneLoad(status)
+            reportProgress(mapped.step, mapped.progress, mapped.detail)
+          },
+        })
+        logStage('compiled-ground-ready', {
+          compiledGroundBuildKey: this.compiledGroundBuildKey,
+          renderTileCount: this.compiledGroundManifest?.renderTiles?.length ?? 0,
+          collisionTileCount: this.compiledGroundManifest?.collisionTiles?.length ?? 0,
+        })
+        reportProgress('Scene ready', 100, 'Scene graph, assets, and terrain cache are ready.')
       } finally {
         this.isSceneReady = true
       }
@@ -18238,6 +18385,7 @@ export const useSceneStore = defineStore('scene', {
           console.warn('[SceneStore] Failed to persist embedded-asset migration result', error)
         })
       }
+      logStage('completed')
       return true
     },
     async deleteScene(sceneId: string): Promise<{ deleted: boolean; projectId: string | null; hasRemainingScenes: boolean }> {
