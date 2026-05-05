@@ -27,8 +27,12 @@ export default defineConfig({
         replacement: resolveDir('./src'),
       },
       {
-        find: '@schema',
-        replacement: resolveDir('../schema'),
+        find: /^@schema$/,
+        replacement: resolveDir('../schema/index.ts'),
+      },
+      {
+        find: /^@schema\//,
+        replacement: withTrailingSlash(resolveDir('../schema/')),
       },
       // keep using the short @schema alias; no runtime alias needed for @harmony/schema
       {

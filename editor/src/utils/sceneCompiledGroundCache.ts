@@ -1,7 +1,6 @@
 import {
   COMPILED_GROUND_MANIFEST_VERSION,
   computeCompiledGroundManifestRevision,
-  isGroundDynamicMesh,
   isIndexedDbPersistentAssetStorageSupported,
   type CompiledGroundBounds,
   type CompiledGroundCollisionTileRecord,
@@ -16,6 +15,7 @@ import {
   resolvePreferredCompiledGroundWorkerCount,
   type CompiledGroundBuildProgress,
 } from './compiledGroundExport'
+import { isGroundDynamicMesh } from '@schema/groundHeightfield'
 
 export type SceneCompiledGroundPackage = {
   manifest: CompiledGroundManifest
