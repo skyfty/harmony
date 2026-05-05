@@ -74,7 +74,10 @@ import { prepareStoredSceneJsonExportBundle } from '@/utils/sceneExport'
 import { type SceneAssetDiagnosticsSummary } from '@/utils/sceneAssetDiagnostics'
 import { collectRuntimeModelNodesByAssetId } from '@/utils/sceneAssetCollectors'
 import { createGroundRuntimeMeshFromSidecar } from '@/utils/groundHeightSidecar'
-import { buildCompiledGroundPackageFilesAsync } from '@/utils/compiledGroundExport'
+import {
+	buildCompiledGroundPackageFilesAsync,
+	resolvePreferredCompiledGroundWorkerCount,
+} from '@/utils/compiledGroundExport'
 import {
 	loadPreviewCompiledGroundPackageFromCache,
 	savePreviewCompiledGroundPackageToCache,
@@ -1697,6 +1700,8 @@ let cachedCompiledGroundManifest: CompiledGroundManifest | null = null
 let cachedCompiledGroundSceneId: string | null = null
 let cachedCompiledGroundFiles = new Map<string, ArrayBuffer>()
 let cachedCompiledGroundBuildKey: string | null = null
+let lastCompiledGroundPreviewSyncLogAt = 0
+let lastCompiledGroundPreviewSyncSignature = ''
 let groundSurfacePreviewLoadToken = 0
 let unsubscribe: (() => void) | null = null
 let livePreviewEnabled = true
@@ -7123,6 +7128,16 @@ function toStableArrayBuffer(bytes: Uint8Array): ArrayBuffer {
 	return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
 }
 
+const PREVIEW_COMPILED_GROUND_PROFILE_VERSION = 2
+const PREVIEW_COMPILED_GROUND_BUILD_OPTIONS = Object.freeze({
+	renderChunksPerTile: 8,
+	collisionChunksPerTile: 4,
+	renderSampleStepMultiplier: 4,
+	minRenderSampleStepMeters: 4,
+	collisionSampleStepMultiplier: 2,
+	minCollisionSampleStepMeters: 4,
+})
+
 function computePreviewCompiledGroundBuildKey(documentId: string, dynamicGround: GroundDynamicMesh | null): string {
 	if (!dynamicGround) {
 		return `${documentId}|no-ground`
@@ -7145,6 +7160,13 @@ function computePreviewCompiledGroundBuildKey(documentId: string, dynamicGround:
 		worldBounds?.maxZ ?? '',
 		heightComposition?.mode ?? '',
 		heightComposition?.policyVersion ?? '',
+		`preview-profile:${PREVIEW_COMPILED_GROUND_PROFILE_VERSION}`,
+		PREVIEW_COMPILED_GROUND_BUILD_OPTIONS.renderChunksPerTile,
+		PREVIEW_COMPILED_GROUND_BUILD_OPTIONS.collisionChunksPerTile,
+		PREVIEW_COMPILED_GROUND_BUILD_OPTIONS.renderSampleStepMultiplier,
+		PREVIEW_COMPILED_GROUND_BUILD_OPTIONS.minRenderSampleStepMeters,
+		PREVIEW_COMPILED_GROUND_BUILD_OPTIONS.collisionSampleStepMultiplier,
+		PREVIEW_COMPILED_GROUND_BUILD_OPTIONS.minCollisionSampleStepMeters,
 	].join('|')
 }
 
@@ -7228,7 +7250,21 @@ async function buildPreviewRuntimeDocument(
 		} else {
 			setPreviewStatus('Loading ground cache', { detail: 'Checking local compiled terrain cache...' })
 			await nextTick()
-			const cachedPackage = await loadPreviewCompiledGroundPackageFromCache(compiledBuildKey)
+			const cacheLoad = await loadPreviewCompiledGroundPackageFromCache(compiledBuildKey)
+			const cachedPackage = cacheLoad.pkg
+			console.info('[ScenePreview] Compiled ground cache load result', {
+				sceneId: document.id,
+				buildKey: cacheLoad.diagnostics.buildKey,
+				status: cacheLoad.diagnostics.status,
+				elapsedMs: cacheLoad.diagnostics.elapsedMs,
+				indexedFileCount: cacheLoad.diagnostics.indexedFileCount,
+				loadedFileCount: cacheLoad.diagnostics.loadedFileCount,
+				missingFileCount: cacheLoad.diagnostics.missingFileCount,
+				renderTiles: cacheLoad.diagnostics.renderTileCount,
+				collisionTiles: cacheLoad.diagnostics.collisionTileCount,
+				totalBytes: cacheLoad.diagnostics.totalBytes,
+				totalMiB: Math.round((cacheLoad.diagnostics.totalBytes / (1024 * 1024)) * 10) / 10,
+			})
 			if (cachedPackage) {
 				console.info('[ScenePreview] Reused persisted compiled ground cache', {
 					sceneId: document.id,
@@ -7246,6 +7282,25 @@ async function buildPreviewRuntimeDocument(
 				cachedCompiledGroundSceneId = document.id
 				cachedCompiledGroundFiles = cachedPackage.files
 				compiledPackage = cachedPackage
+			} else if (cacheLoad.diagnostics.status === 'partial' || cacheLoad.diagnostics.status === 'corrupt') {
+				console.warn('[ScenePreview] Persisted compiled ground cache was invalid and has been purged; rebuilding', {
+					sceneId: document.id,
+					buildKey: compiledBuildKey,
+					status: cacheLoad.diagnostics.status,
+					indexedFileCount: cacheLoad.diagnostics.indexedFileCount,
+					loadedFileCount: cacheLoad.diagnostics.loadedFileCount,
+					missingFileCount: cacheLoad.diagnostics.missingFileCount,
+				})
+				statusMessage.value = 'Ground cache invalid, rebuilding...'
+				setPreviewStatus('Loading ground cache', {
+					detail: 'Cached terrain package was incomplete; rebuilding',
+					progress: 0,
+				})
+			} else {
+				console.info('[ScenePreview] No persisted compiled ground cache found; building terrain package', {
+					sceneId: document.id,
+					buildKey: compiledBuildKey,
+				})
 			}
 		}
 		if (!compiledPackage) {
@@ -7255,12 +7310,17 @@ async function buildPreviewRuntimeDocument(
 			statusMessage.value = 'Compiling ground...'
 			setPreviewStatus('Compiling ground', { detail: 'Preparing static preview terrain...', progress: 0 })
 			await nextTick()
+			const compiledGroundWorkerCount = resolvePreferredCompiledGroundWorkerCount()
 			console.info('[ScenePreview] Compiled ground build started', {
 				sceneId: document.id,
 				buildKey: compiledBuildKey,
+				workerCount: compiledGroundWorkerCount,
+				buildOptions: PREVIEW_COMPILED_GROUND_BUILD_OPTIONS,
 			})
 			const built = await buildCompiledGroundPackageFilesAsync(document, {
 				yieldEveryTiles: 2,
+				workerCount: compiledGroundWorkerCount,
+				...PREVIEW_COMPILED_GROUND_BUILD_OPTIONS,
 				onProgress: (progress) => {
 					const now = performance.now()
 					const statusKey = `${progress.phase}:${progress.completed}/${progress.total}`
@@ -7322,13 +7382,26 @@ async function buildPreviewRuntimeDocument(
 				totalMiB: Math.round((compiledPackageBytes / (1024 * 1024)) * 10) / 10,
 			})
 			if (compiledPackageBytes <= PREVIEW_COMPILED_GROUND_PERSIST_MAX_BYTES) {
-				void savePreviewCompiledGroundPackageToCache(compiledBuildKey, compiledPackage).catch((error) => {
-					console.warn('[ScenePreview] Failed to persist compiled ground cache', {
-						sceneId: document.id,
-						buildKey: compiledBuildKey,
-						error,
-					})
-				})
+				void (async () => {
+					const cacheSaveStartedAt = performance.now()
+					try {
+						await savePreviewCompiledGroundPackageToCache(compiledBuildKey, compiledPackage)
+						console.info('[ScenePreview] Persisted compiled ground cache saved', {
+							sceneId: document.id,
+							buildKey: compiledBuildKey,
+							fileCount: compiledPackage.files.size,
+							totalBytes: compiledPackageBytes,
+							totalMiB: Math.round((compiledPackageBytes / (1024 * 1024)) * 10) / 10,
+							elapsedMs: Math.round(performance.now() - cacheSaveStartedAt),
+						})
+					} catch (error) {
+						console.warn('[ScenePreview] Failed to persist compiled ground cache', {
+							sceneId: document.id,
+							buildKey: compiledBuildKey,
+							error,
+						})
+					}
+				})()
 			} else {
 				console.info('[ScenePreview] Skipped persisted compiled ground cache because package is too large', {
 					sceneId: document.id,

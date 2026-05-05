@@ -25,6 +25,7 @@ export type CompiledGroundBuildWorkerTilesRequest = {
   kind: 'compiled-ground-build-tiles'
   requestId: number
   phase: 'render' | 'collision'
+  renderSampleStepMeters?: number
   collisionSampleStepMeters?: number
   jobs: CompiledGroundTileJob[]
 }

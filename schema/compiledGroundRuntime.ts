@@ -12,6 +12,8 @@ type CompiledGroundRenderRuntime = {
   pendingLoads: Map<string, Promise<void>>
   sourceId: string | null
   revision: number
+  lastDebugLogAt: number
+  lastDebugSignature: string
 }
 
 type SyncCompiledGroundRenderTilesParams = {
@@ -45,6 +47,8 @@ function ensureCompiledGroundRenderRuntime(groundObject: THREE.Object3D): Compil
     pendingLoads: new Map(),
     sourceId: null,
     revision: -1,
+    lastDebugLogAt: 0,
+    lastDebugSignature: '',
   }
   renderRuntimeMap.set(groundObject, runtime)
   return runtime
@@ -69,6 +73,8 @@ export function clearCompiledGroundRenderTiles(groundObject: THREE.Object3D): vo
   runtime.pendingLoads.clear()
   runtime.sourceId = null
   runtime.revision = -1
+  runtime.lastDebugLogAt = 0
+  runtime.lastDebugSignature = ''
 }
 
 function resolveGroundMaterial(groundObject: THREE.Object3D): THREE.Material {
@@ -163,6 +169,39 @@ export function syncCompiledGroundRenderTiles(params: SyncCompiledGroundRenderTi
     retainRadiusTiles,
   )
   const desiredKeys = new Set(desired.map((record) => record.key))
+  params.camera.getWorldPosition(cameraLocalHelper)
+  params.groundObject.worldToLocal(cameraLocalHelper)
+  const debugSignature = [
+    params.sourceId,
+    params.revision,
+    desired.length,
+    runtime.meshes.size,
+    runtime.pendingLoads.size,
+    Math.round(cameraLocalHelper.x),
+    Math.round(cameraLocalHelper.z),
+  ].join('|')
+  const now = Date.now()
+  if (
+    debugSignature !== runtime.lastDebugSignature
+    && (desired.length === 0 || runtime.meshes.size === 0 || now - runtime.lastDebugLogAt >= 1000)
+  ) {
+    runtime.lastDebugSignature = debugSignature
+    runtime.lastDebugLogAt = now
+    console.info('[CompiledGroundRender] Sync window', {
+      sourceId: params.sourceId,
+      revision: params.revision,
+      desiredTiles: desired.length,
+      retainedTiles: retainedKeys.size,
+      loadedMeshes: runtime.meshes.size,
+      pendingLoads: runtime.pendingLoads.size,
+      activeRadiusTiles,
+      retainRadiusTiles,
+      cameraLocalX: Math.round(cameraLocalHelper.x),
+      cameraLocalZ: Math.round(cameraLocalHelper.z),
+      bounds: params.manifest.bounds,
+      sampleTileKeys: desired.slice(0, 6).map((record) => record.key),
+    })
+  }
 
   runtime.meshes.forEach((mesh, key) => {
     if (desiredKeys.has(key) || retainedKeys.has(key)) {
@@ -183,8 +222,22 @@ export function syncCompiledGroundRenderTiles(params: SyncCompiledGroundRenderTi
         if (!activeRuntime || activeRuntime.sourceId !== params.sourceId || activeRuntime.revision !== params.revision) {
           return
         }
+        if (!(buffer instanceof ArrayBuffer)) {
+          console.warn('[CompiledGroundRender] Missing tile buffer', {
+            sourceId: params.sourceId,
+            tileKey: record.key,
+            path: record.path,
+          })
+          return
+        }
         const geometry = buildGeometryFromTileBuffer(buffer)
         if (!geometry) {
+          console.warn('[CompiledGroundRender] Failed to decode tile geometry', {
+            sourceId: params.sourceId,
+            tileKey: record.key,
+            path: record.path,
+            byteLength: buffer.byteLength,
+          })
           return
         }
         const mesh = new THREE.Mesh(geometry, material)
@@ -196,6 +249,15 @@ export function syncCompiledGroundRenderTiles(params: SyncCompiledGroundRenderTi
         mesh.userData.compiledGroundTileKey = record.key
         activeRuntime.group.add(mesh)
         activeRuntime.meshes.set(record.key, mesh)
+        if (activeRuntime.meshes.size <= 3 || activeRuntime.meshes.size % 8 === 0) {
+          console.info('[CompiledGroundRender] Tile mesh attached', {
+            sourceId: params.sourceId,
+            tileKey: record.key,
+            loadedMeshes: activeRuntime.meshes.size,
+            pendingLoads: activeRuntime.pendingLoads.size,
+            vertexCount: (geometry.getAttribute('position')?.count ?? 0),
+          })
+        }
       })
       .finally(() => {
         renderRuntimeMap.get(params.groundObject)?.pendingLoads.delete(record.key)

@@ -41,7 +41,10 @@ import { buildAssetRegistryAliasMap, normalizeAssetIdWithRegistry } from '@/util
 import {
   stripGroundHeightMapsFromSceneDocument,
 } from '@/utils/groundHeightSidecar'
-import { buildCompiledGroundPackageFilesAsync } from '@/utils/compiledGroundExport'
+import {
+  buildCompiledGroundPackageFilesAsync,
+  resolvePreferredCompiledGroundWorkerCount,
+} from '@/utils/compiledGroundExport'
 import { collectPunchPointsFromNodes } from './sceneExport'
 import {
   buildSceneAssetReferenceSummaryMap,
@@ -1211,17 +1214,19 @@ export async function exportScenePackageZip(payload: {
       const compiledGroundStartedAt = typeof performance !== 'undefined' ? performance.now() : Date.now()
       let lastCompiledGroundProgressAt = compiledGroundStartedAt
       let lastCompiledGroundProgressKey = ''
+      const compiledGroundWorkerCount = resolvePreferredCompiledGroundWorkerCount()
       emitSceneExportEvent(payload.reportEvent, {
         phase: 'sidecar',
         level: 'info',
         status: 'running',
         sceneId: scene.id,
         sceneName,
-        detail: 'compiled-ground',
-        message: 'Building compiled ground package...',
+        detail: `compiled-ground workers=${compiledGroundWorkerCount}`,
+        message: `Building compiled ground package (${compiledGroundWorkerCount} workers)...`,
       })
       const compiledGroundPackage = await buildCompiledGroundPackageFilesAsync(sidecarSource as SceneJsonExportDocument, {
         yieldEveryTiles: 2,
+        workerCount: compiledGroundWorkerCount,
         onProgress: (progress) => {
           const now = typeof performance !== 'undefined' ? performance.now() : Date.now()
           const progressKey = `${progress.phase}:${progress.completed}/${progress.total}`

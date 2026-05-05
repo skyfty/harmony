@@ -67,6 +67,7 @@ self.onmessage = (event: MessageEvent<CompiledGroundBuildWorkerRequest>) => {
           job.minZ,
           job.widthMeters,
           job.depthMeters,
+          Math.max(1e-6, message.renderSampleStepMeters ?? 1),
         )
         if (!built) {
           continue

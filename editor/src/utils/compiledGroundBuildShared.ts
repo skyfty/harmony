@@ -104,8 +104,12 @@ export function buildRenderTileGeometry(
   minZ: number,
   widthMeters: number,
   depthMeters: number,
+  sampleStepMeters?: number,
 ): CompiledGroundRenderTileData | null {
-  const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1
+  const baseCellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1
+  const cellSize = Number.isFinite(sampleStepMeters) && (sampleStepMeters ?? 0) > 1e-6
+    ? Math.max(baseCellSize, Number(sampleStepMeters))
+    : baseCellSize
   const columns = Math.max(1, Math.round(widthMeters / cellSize))
   const rows = Math.max(1, Math.round(depthMeters / cellSize))
   const stepX = widthMeters / columns

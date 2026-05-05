@@ -59,6 +59,7 @@ type CompiledGroundBuildContext = {
     maxX: number
     maxZ: number
   }
+  renderSampleStepMeters: number
   renderTileSizeMeters: number
   collisionTileSizeMeters: number
   collisionSampleStepMeters: number
@@ -77,13 +78,19 @@ type BuildCompiledGroundAsyncOptions = {
   yieldControl?: () => Promise<void>
   workerCount?: number
   workerBatchSize?: number
+  renderChunksPerTile?: number
+  collisionChunksPerTile?: number
+  renderSampleStepMultiplier?: number
+  minRenderSampleStepMeters?: number
+  collisionSampleStepMultiplier?: number
+  minCollisionSampleStepMeters?: number
 }
 
 const DEFAULT_RENDER_CHUNKS_PER_TILE = 4
 const DEFAULT_COLLISION_CHUNKS_PER_TILE = 1
 const DEFAULT_COLLISION_SAMPLE_STEP_METERS = 2
 const DEFAULT_COMPILED_GROUND_WORKER_BATCH_SIZE = 1
-const MAX_COMPILED_GROUND_WORKERS = 4
+const MAX_COMPILED_GROUND_WORKERS = 8
 
 type CompiledGroundBuildWorkerRuntime = {
   worker: Worker
@@ -155,6 +162,10 @@ function resolveCompiledGroundWorkerCount(explicitCount?: number): number {
   return Math.max(2, Math.min(MAX_COMPILED_GROUND_WORKERS, hardwareConcurrency - 1))
 }
 
+export function resolvePreferredCompiledGroundWorkerCount(explicitCount?: number): number {
+  return resolveCompiledGroundWorkerCount(explicitCount)
+}
+
 function createCompiledGroundBuildWorkerRuntime(): CompiledGroundBuildWorkerRuntime | null {
   if (typeof Worker === 'undefined') {
     return null
@@ -222,7 +233,10 @@ function requestCompiledGroundWorker(
   })
 }
 
-function prepareCompiledGroundBuildContext(document: SceneJsonExportDocument): CompiledGroundBuildContext | null {
+function prepareCompiledGroundBuildContext(
+  document: SceneJsonExportDocument,
+  options: BuildCompiledGroundAsyncOptions = {},
+): CompiledGroundBuildContext | null {
   const groundNode = findGroundNode(document.nodes)
   if (!groundNode || !isGroundDynamicMesh(groundNode.dynamicMesh)) {
     return null
@@ -237,6 +251,25 @@ function prepareCompiledGroundBuildContext(document: SceneJsonExportDocument): C
   const chunkSizeMeters = Number.isFinite(definition.chunkSizeMeters) && definition.chunkSizeMeters! > 0
     ? Number(definition.chunkSizeMeters)
     : 100
+  const renderChunksPerTile = Number.isFinite(options.renderChunksPerTile) && (options.renderChunksPerTile ?? 0) > 0
+    ? Math.max(1, Math.trunc(options.renderChunksPerTile as number))
+    : DEFAULT_RENDER_CHUNKS_PER_TILE
+  const collisionChunksPerTile = Number.isFinite(options.collisionChunksPerTile) && (options.collisionChunksPerTile ?? 0) > 0
+    ? Math.max(1, Math.trunc(options.collisionChunksPerTile as number))
+    : DEFAULT_COLLISION_CHUNKS_PER_TILE
+  const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? Number(definition.cellSize) : 1
+  const renderSampleStepMultiplier = Number.isFinite(options.renderSampleStepMultiplier) && (options.renderSampleStepMultiplier ?? 0) > 0
+    ? Math.max(1, Number(options.renderSampleStepMultiplier))
+    : 1
+  const minRenderSampleStepMeters = Number.isFinite(options.minRenderSampleStepMeters) && (options.minRenderSampleStepMeters ?? 0) > 0
+    ? Math.max(1e-6, Number(options.minRenderSampleStepMeters))
+    : cellSize
+  const collisionSampleStepMultiplier = Number.isFinite(options.collisionSampleStepMultiplier) && (options.collisionSampleStepMultiplier ?? 0) > 0
+    ? Math.max(1, Number(options.collisionSampleStepMultiplier))
+    : 1
+  const minCollisionSampleStepMeters = Number.isFinite(options.minCollisionSampleStepMeters) && (options.minCollisionSampleStepMeters ?? 0) > 0
+    ? Math.max(1e-6, Number(options.minCollisionSampleStepMeters))
+    : DEFAULT_COLLISION_SAMPLE_STEP_METERS
   const coveredChunkOrigin = resolveGroundChunkOrigin({
     chunkX: coveredChunkBounds.minChunkX,
     chunkZ: coveredChunkBounds.minChunkZ,
@@ -251,11 +284,15 @@ function prepareCompiledGroundBuildContext(document: SceneJsonExportDocument): C
     maxX: coveredChunkMaxOrigin.x + chunkSizeMeters,
     maxZ: coveredChunkMaxOrigin.z + chunkSizeMeters,
   }
-  const renderTileSizeMeters = chunkSizeMeters * DEFAULT_RENDER_CHUNKS_PER_TILE
-  const collisionTileSizeMeters = chunkSizeMeters * DEFAULT_COLLISION_CHUNKS_PER_TILE
+  const renderTileSizeMeters = chunkSizeMeters * renderChunksPerTile
+  const collisionTileSizeMeters = chunkSizeMeters * collisionChunksPerTile
+  const renderSampleStepMeters = Math.max(
+    cellSize * renderSampleStepMultiplier,
+    minRenderSampleStepMeters,
+  )
   const collisionSampleStepMeters = Math.max(
-    Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1,
-    DEFAULT_COLLISION_SAMPLE_STEP_METERS,
+    cellSize * collisionSampleStepMultiplier,
+    minCollisionSampleStepMeters,
   )
   const renderColumns = Math.max(1, Math.ceil((coverageBounds.maxX - coverageBounds.minX) / renderTileSizeMeters))
   const renderRows = Math.max(1, Math.ceil((coverageBounds.maxZ - coverageBounds.minZ) / renderTileSizeMeters))
@@ -272,6 +309,7 @@ function prepareCompiledGroundBuildContext(document: SceneJsonExportDocument): C
     coveredChunkBounds,
     chunkSizeMeters,
     coverageBounds,
+    renderSampleStepMeters,
     renderTileSizeMeters,
     collisionTileSizeMeters,
     collisionSampleStepMeters,
@@ -291,7 +329,15 @@ function appendRenderTile(context: CompiledGroundBuildContext, row: number, colu
   const minZ = context.coverageBounds.minZ + row * context.renderTileSizeMeters
   const widthMeters = Math.min(context.renderTileSizeMeters, context.coverageBounds.maxX - minX)
   const depthMeters = Math.min(context.renderTileSizeMeters, context.coverageBounds.maxZ - minZ)
-  const built = buildRenderTileGeometry(context.definition, context.worldBounds, minX, minZ, widthMeters, depthMeters)
+  const built = buildRenderTileGeometry(
+    context.definition,
+    context.worldBounds,
+    minX,
+    minZ,
+    widthMeters,
+    depthMeters,
+    context.renderSampleStepMeters,
+  )
   if (!built) {
     return key
   }
@@ -436,6 +482,7 @@ async function buildCompiledGroundPhaseWithWorkers(
         ? {
           kind: 'compiled-ground-build-tiles',
           phase,
+          renderSampleStepMeters: context.renderSampleStepMeters,
           jobs: batchJobs,
         }
         : {
@@ -525,7 +572,7 @@ async function buildCompiledGroundPackageFilesWithWorkersAsync(
   document: SceneJsonExportDocument,
   options: BuildCompiledGroundAsyncOptions = {},
 ): Promise<CompiledGroundExportResult | null> {
-  const context = prepareCompiledGroundBuildContext(document)
+  const context = prepareCompiledGroundBuildContext(document, options)
   if (!context) {
     return null
   }
@@ -623,7 +670,7 @@ export async function buildCompiledGroundPackageFilesAsync(
     console.warn('[CompiledGround] Worker build failed; falling back to main thread', error)
   }
 
-  const context = prepareCompiledGroundBuildContext(document)
+  const context = prepareCompiledGroundBuildContext(document, options)
   if (!context) {
     return null
   }
