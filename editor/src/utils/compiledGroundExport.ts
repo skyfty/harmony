@@ -166,6 +166,17 @@ export function resolvePreferredCompiledGroundWorkerCount(explicitCount?: number
   return resolveCompiledGroundWorkerCount(explicitCount)
 }
 
+function hasRuntimeTerrainHeightSampler(definition: GroundDynamicMesh): boolean {
+  const sampler = (definition as GroundDynamicMesh & {
+    runtimeTerrainHeightSampler?: unknown
+  }).runtimeTerrainHeightSampler
+  return Boolean(
+    sampler
+    && typeof sampler === 'object'
+    && typeof (sampler as { sampleHeightAtWorld?: unknown }).sampleHeightAtWorld === 'function'
+  )
+}
+
 function createCompiledGroundBuildWorkerRuntime(): CompiledGroundBuildWorkerRuntime | null {
   if (typeof Worker === 'undefined') {
     return null
@@ -574,6 +585,9 @@ async function buildCompiledGroundPackageFilesWithWorkersAsync(
 ): Promise<CompiledGroundExportResult | null> {
   const context = prepareCompiledGroundBuildContext(document, options)
   if (!context) {
+    return null
+  }
+  if (hasRuntimeTerrainHeightSampler(context.definition)) {
     return null
   }
 

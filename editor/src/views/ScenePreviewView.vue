@@ -7144,6 +7144,14 @@ function computePreviewCompiledGroundBuildKey(documentId: string, dynamicGround:
 	}
 	const worldBounds = dynamicGround.worldBounds ?? null
 	const heightComposition = dynamicGround.heightComposition ?? null
+	const runtimeTerrainDatasetManifest = (dynamicGround as GroundDynamicMesh & {
+		runtimeTerrainDatasetManifest?: { datasetId?: string | null } | null
+		runtimeTerrainDatasetEnabled?: boolean
+	}).runtimeTerrainDatasetManifest ?? null
+	const runtimeTerrainDatasetEnabled = (dynamicGround as GroundDynamicMesh & {
+		runtimeTerrainDatasetManifest?: { datasetId?: string | null } | null
+		runtimeTerrainDatasetEnabled?: boolean
+	}).runtimeTerrainDatasetEnabled === true
 	return [
 		documentId,
 		dynamicGround.terrainMode ?? 'finite',
@@ -7160,6 +7168,8 @@ function computePreviewCompiledGroundBuildKey(documentId: string, dynamicGround:
 		worldBounds?.maxZ ?? '',
 		heightComposition?.mode ?? '',
 		heightComposition?.policyVersion ?? '',
+		runtimeTerrainDatasetEnabled ? 'terrain-dataset:on' : 'terrain-dataset:off',
+		runtimeTerrainDatasetManifest?.datasetId ?? '',
 		`preview-profile:${PREVIEW_COMPILED_GROUND_PROFILE_VERSION}`,
 		PREVIEW_COMPILED_GROUND_BUILD_OPTIONS.renderChunksPerTile,
 		PREVIEW_COMPILED_GROUND_BUILD_OPTIONS.collisionChunksPerTile,
@@ -7191,11 +7201,33 @@ async function buildPreviewRuntimeDocument(
 		groundNode.dynamicMesh = createGroundRuntimeMeshFromSidecar(groundNode.dynamicMesh, sidecar)
 	}
 	if (groundNode) {
+		const terrainDatasetManifest = await useScenesStore().loadTerrainDatasetManifest(document.id)
+		const terrainHeightSampler = terrainDatasetManifest
+			? await createScenesStoreTerrainDatasetHeightSampler(document.id)
+			: null
+		;(groundNode.dynamicMesh as GroundRuntimeDynamicMesh & {
+			runtimeTerrainDatasetManifest?: unknown
+			runtimeTerrainDatasetEnabled?: boolean
+			runtimeTerrainHeightSampler?: unknown
+		}).runtimeTerrainDatasetManifest = terrainDatasetManifest
+		;(groundNode.dynamicMesh as GroundRuntimeDynamicMesh & {
+			runtimeTerrainDatasetManifest?: unknown
+			runtimeTerrainDatasetEnabled?: boolean
+			runtimeTerrainHeightSampler?: unknown
+		}).runtimeTerrainDatasetEnabled = Boolean(terrainHeightSampler)
+		;(groundNode.dynamicMesh as GroundRuntimeDynamicMesh & {
+			runtimeTerrainDatasetManifest?: unknown
+			runtimeTerrainDatasetEnabled?: boolean
+			runtimeTerrainHeightSampler?: unknown
+		}).runtimeTerrainHeightSampler = terrainHeightSampler
 		const paintStore = useGroundPaintStore()
 		const dynamicGround = isGroundDynamicMesh(groundNode.dynamicMesh)
 			? (groundNode.dynamicMesh as GroundDynamicMesh & {
 				terrainScatter?: unknown
 				groundSurfaceChunks?: unknown
+				runtimeTerrainDatasetManifest?: unknown
+				runtimeTerrainDatasetEnabled?: unknown
+				runtimeTerrainHeightSampler?: unknown
 			})
 			: null
 		const embeddedScatter = dynamicGround?.terrainScatter
@@ -7310,12 +7342,18 @@ async function buildPreviewRuntimeDocument(
 			statusMessage.value = 'Compiling ground...'
 			setPreviewStatus('Compiling ground', { detail: 'Preparing static preview terrain...', progress: 0 })
 			await nextTick()
-			const compiledGroundWorkerCount = resolvePreferredCompiledGroundWorkerCount()
+			const hasTerrainHeightSampler = Boolean(
+				dynamicGround
+				&& typeof dynamicGround.runtimeTerrainHeightSampler === 'object'
+				&& dynamicGround.runtimeTerrainHeightSampler,
+			)
+			const compiledGroundWorkerCount = hasTerrainHeightSampler ? 1 : resolvePreferredCompiledGroundWorkerCount()
 			console.info('[ScenePreview] Compiled ground build started', {
 				sceneId: document.id,
 				buildKey: compiledBuildKey,
 				workerCount: compiledGroundWorkerCount,
 				buildOptions: PREVIEW_COMPILED_GROUND_BUILD_OPTIONS,
+				hasTerrainHeightSampler,
 			})
 			const built = await buildCompiledGroundPackageFilesAsync(document, {
 				yieldEveryTiles: 2,
@@ -9696,6 +9734,32 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
 				const revision = Number.isFinite(compiledManifest.revision)
 					? Math.max(0, Math.trunc(compiledManifest.revision))
 					: computeCompiledGroundManifestRevision(compiledManifest)
+				const compiledGroundPreviewSyncSignature = [
+					cachedCompiledGroundSceneId,
+					revision,
+					compiledManifest.renderTiles.length,
+					compiledManifest.collisionTiles.length,
+					cachedCompiledGroundFiles.size,
+					groundObject.visible ? 1 : 0,
+				].join('|')
+				const now = performance.now()
+				if (
+					compiledGroundPreviewSyncSignature !== lastCompiledGroundPreviewSyncSignature
+					|| now - lastCompiledGroundPreviewSyncLogAt >= 1500
+				) {
+					lastCompiledGroundPreviewSyncSignature = compiledGroundPreviewSyncSignature
+					lastCompiledGroundPreviewSyncLogAt = now
+					console.info('[ScenePreview] Compiled ground render sync requested', {
+						sceneId: cachedCompiledGroundSceneId,
+						revision,
+						renderTiles: compiledManifest.renderTiles.length,
+						collisionTiles: compiledManifest.collisionTiles.length,
+						cachedFileCount: cachedCompiledGroundFiles.size,
+						groundObjectVisible: groundObject.visible,
+						groundObjectName: groundObject.name,
+						groundNodeId: cachedGroundNodeId,
+					})
+				}
 				syncCompiledGroundRenderTiles({
 					groundObject,
 					groundDefinition: cachedGroundDynamicMesh as GroundRuntimeDynamicMesh,
@@ -9706,6 +9770,17 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
 					loadTileData: async (record) => cachedCompiledGroundFiles.get(record.path) ?? null,
 				})
 			} else {
+				const now = performance.now()
+				if (now - lastCompiledGroundPreviewSyncLogAt >= 1500) {
+					lastCompiledGroundPreviewSyncLogAt = now
+					console.warn('[ScenePreview] Compiled ground render sync skipped', {
+						hasManifest: Boolean(compiledManifest),
+						cachedCompiledGroundSceneId,
+						currentDocumentId: currentDocument?.id ?? null,
+						cachedFileCount: cachedCompiledGroundFiles.size,
+						groundNodeId: cachedGroundNodeId,
+					})
+				}
 				clearCompiledGroundRenderTiles(groundObject)
 			}
 			syncPreviewInfiniteGroundChunkCollisionBodies(
