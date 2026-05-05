@@ -1632,8 +1632,8 @@ let followCameraControlDirty = false
 let rendererInitialized = false
 let suppressControlModeApply = false
 const MAP_CONTROL_DEFAULTS = {
-	minDistance: 1,
-	maxDistance: 200,
+	minDistance: 0,
+	maxDistance: Number.POSITIVE_INFINITY,
 	enablePan: true,
 }
 let animationFrameHandle = 0
@@ -9121,7 +9121,8 @@ function initControls() {
 	mapControls = new MapControls(camera, renderer.domElement)
 	mapControls.enableDamping = false
 	mapControls.dampingFactor = 0.08
-	mapControls.maxPolarAngle = Math.PI / 2 - 0.05
+	mapControls.minPolarAngle = 0
+	mapControls.maxPolarAngle = Math.PI
 	mapControls.minDistance = MAP_CONTROL_DEFAULTS.minDistance
 	mapControls.maxDistance = MAP_CONTROL_DEFAULTS.maxDistance
 	mapControls.enablePan = MAP_CONTROL_DEFAULTS.enablePan
