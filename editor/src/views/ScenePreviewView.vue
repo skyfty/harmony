@@ -75,16 +75,11 @@ import { type SceneAssetDiagnosticsSummary } from '@/utils/sceneAssetDiagnostics
 import { collectRuntimeModelNodesByAssetId } from '@/utils/sceneAssetCollectors'
 import { createGroundRuntimeMeshFromSidecar } from '@/utils/groundHeightSidecar'
 import {
-	buildCompiledGroundPackageFilesAsync,
-	resolvePreferredCompiledGroundWorkerCount,
-} from '@/utils/compiledGroundExport'
-import {
-	loadPreviewCompiledGroundPackageFromCache,
-	savePreviewCompiledGroundPackageToCache,
-	estimatePreviewCompiledGroundPackageBytes,
-	PREVIEW_COMPILED_GROUND_PERSIST_MAX_BYTES,
-	type PreviewCompiledGroundPackage,
-} from '@/utils/previewCompiledGroundCache'
+	computeSceneCompiledGroundBuildKey,
+	computeSceneCompiledGroundSourceSignature,
+	loadSceneCompiledGroundPackageFromCache,
+	type SceneCompiledGroundPackage,
+} from '@/utils/sceneCompiledGroundCache'
 import { createScenesStoreTerrainDatasetHeightSampler } from '@/utils/terrainDatasetRuntime'
 import { useGroundHeightmapStore } from '@/stores/groundHeightmapStore'
 import { useScenesStore } from '@/stores/scenesStore'
@@ -7121,102 +7116,6 @@ function isSceneJsonExportDocument(raw: unknown): raw is SceneJsonExportDocument
 	return typeof candidate.id === 'string' && Array.isArray(candidate.nodes)
 }
 
-function toStableArrayBuffer(bytes: Uint8Array): ArrayBuffer {
-	if (bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength) {
-		return bytes.buffer as ArrayBuffer
-	}
-	return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
-}
-
-const PREVIEW_COMPILED_GROUND_PROFILE_VERSION = 3
-const PREVIEW_COMPILED_GROUND_BUILD_OPTIONS = Object.freeze({
-	renderChunksPerTile: 8,
-	collisionChunksPerTile: 4,
-	renderSampleStepMultiplier: 4,
-	minRenderSampleStepMeters: 4,
-	collisionSampleStepMultiplier: 2,
-	minCollisionSampleStepMeters: 4,
-})
-
-function summarizePreviewGroundLocalEditTiles(dynamicGround: GroundRuntimeDynamicMesh | null | undefined): {
-	totalTiles: number
-	resolutionSummary: Array<{ resolution: number; count: number }>
-	sourceSummary: Array<{ source: string; count: number }>
-} {
-	const tileMap = dynamicGround?.localEditTiles && typeof dynamicGround.localEditTiles === 'object'
-		? dynamicGround.localEditTiles
-		: null
-	if (!tileMap) {
-		return {
-			totalTiles: 0,
-			resolutionSummary: [],
-			sourceSummary: [],
-		}
-	}
-	const resolutionCount = new Map<number, number>()
-	const sourceCount = new Map<string, number>()
-	for (const tile of Object.values(tileMap)) {
-		if (!tile || typeof tile !== 'object') {
-			continue
-		}
-		const resolution = Math.max(1, Math.trunc(Number(tile.resolution) || 0))
-		resolutionCount.set(resolution, (resolutionCount.get(resolution) ?? 0) + 1)
-		const source = typeof tile.source === 'string' && tile.source.trim().length ? tile.source.trim() : 'unknown'
-		sourceCount.set(source, (sourceCount.get(source) ?? 0) + 1)
-	}
-	return {
-		totalTiles: Object.keys(tileMap).length,
-		resolutionSummary: Array.from(resolutionCount.entries())
-			.map(([resolution, count]) => ({ resolution, count }))
-			.sort((left, right) => left.resolution - right.resolution),
-		sourceSummary: Array.from(sourceCount.entries())
-			.map(([source, count]) => ({ source, count }))
-			.sort((left, right) => left.source.localeCompare(right.source)),
-	}
-}
-
-function computePreviewCompiledGroundBuildKey(documentId: string, dynamicGround: GroundDynamicMesh | null): string {
-	if (!dynamicGround) {
-		return `${documentId}|no-ground`
-	}
-	const worldBounds = dynamicGround.worldBounds ?? null
-	const heightComposition = dynamicGround.heightComposition ?? null
-	const runtimeTerrainDatasetManifest = (dynamicGround as GroundDynamicMesh & {
-		runtimeTerrainDatasetManifest?: { datasetId?: string | null } | null
-		runtimeTerrainDatasetEnabled?: boolean
-	}).runtimeTerrainDatasetManifest ?? null
-	const runtimeTerrainDatasetEnabled = (dynamicGround as GroundDynamicMesh & {
-		runtimeTerrainDatasetManifest?: { datasetId?: string | null } | null
-		runtimeTerrainDatasetEnabled?: boolean
-	}).runtimeTerrainDatasetEnabled === true
-	return [
-		documentId,
-		dynamicGround.terrainMode ?? 'finite',
-		dynamicGround.surfaceRevision ?? 0,
-		dynamicGround.chunkManifestRevision ?? 0,
-		dynamicGround.chunkSizeMeters ?? '',
-		dynamicGround.baseHeight ?? '',
-		dynamicGround.cellSize ?? '',
-		dynamicGround.editTileSizeMeters ?? '',
-		dynamicGround.editTileResolution ?? '',
-		worldBounds?.minX ?? '',
-		worldBounds?.minZ ?? '',
-		worldBounds?.maxX ?? '',
-		worldBounds?.maxZ ?? '',
-		heightComposition?.mode ?? '',
-		heightComposition?.policyVersion ?? '',
-		runtimeTerrainDatasetEnabled ? 'terrain-dataset:on' : 'terrain-dataset:off',
-		runtimeTerrainDatasetManifest?.datasetId ?? '',
-		`preview-profile:${PREVIEW_COMPILED_GROUND_PROFILE_VERSION}`,
-		PREVIEW_COMPILED_GROUND_BUILD_OPTIONS.renderChunksPerTile,
-		PREVIEW_COMPILED_GROUND_BUILD_OPTIONS.collisionChunksPerTile,
-		PREVIEW_COMPILED_GROUND_BUILD_OPTIONS.renderSampleStepMultiplier,
-		PREVIEW_COMPILED_GROUND_BUILD_OPTIONS.minRenderSampleStepMeters,
-		PREVIEW_COMPILED_GROUND_BUILD_OPTIONS.collisionSampleStepMultiplier,
-		PREVIEW_COMPILED_GROUND_BUILD_OPTIONS.minCollisionSampleStepMeters,
-	].join('|')
-}
-
 async function buildPreviewRuntimeDocument(
 	document: SceneJsonExportDocument,
 	options: { groundHeightSidecar?: ArrayBuffer | null; groundScatterSidecar?: ArrayBuffer | null; groundPaintSidecar?: ArrayBuffer | null } = {},
@@ -7309,8 +7208,17 @@ async function buildPreviewRuntimeDocument(
 		}
 		attachGroundScatterRuntimeToNode(document.id, groundNode)
 		attachGroundPaintRuntimeToNode(document.id, groundNode)
-		const compiledBuildKey = computePreviewCompiledGroundBuildKey(document.id, dynamicGround)
-		let compiledPackage: PreviewCompiledGroundPackage | null = null
+		const compiledBuildKey = computeSceneCompiledGroundBuildKey(
+			document.id,
+			dynamicGround,
+			terrainDatasetManifest?.datasetId ?? null,
+		)
+		const compiledSourceSignature = computeSceneCompiledGroundSourceSignature(
+			document.id,
+			dynamicGround,
+			terrainDatasetManifest?.datasetId ?? null,
+		)
+		let compiledPackage: SceneCompiledGroundPackage | null = null
 		if (compiledBuildKey === cachedCompiledGroundBuildKey && cachedCompiledGroundManifest) {
 			compiledPackage = {
 				manifest: cachedCompiledGroundManifest,
@@ -7319,7 +7227,9 @@ async function buildPreviewRuntimeDocument(
 		} else {
 			setPreviewStatus('Loading ground cache', { detail: 'Checking local compiled terrain cache...' })
 			await nextTick()
-			const cacheLoad = await loadPreviewCompiledGroundPackageFromCache(compiledBuildKey)
+			const cacheLoad = await loadSceneCompiledGroundPackageFromCache(compiledBuildKey, {
+				sourceSignature: compiledSourceSignature,
+			})
 			const cachedPackage = cacheLoad.pkg
 			console.info('[ScenePreview] Compiled ground cache load result', {
 				sceneId: document.id,
@@ -7352,7 +7262,7 @@ async function buildPreviewRuntimeDocument(
 				cachedCompiledGroundFiles = cachedPackage.files
 				compiledPackage = cachedPackage
 			} else if (cacheLoad.diagnostics.status === 'partial' || cacheLoad.diagnostics.status === 'corrupt') {
-				console.warn('[ScenePreview] Persisted compiled ground cache was invalid and has been purged; rebuilding', {
+				console.error('[ScenePreview] Persisted compiled ground cache is invalid', {
 					sceneId: document.id,
 					buildKey: compiledBuildKey,
 					status: cacheLoad.diagnostics.status,
@@ -7360,151 +7270,35 @@ async function buildPreviewRuntimeDocument(
 					loadedFileCount: cacheLoad.diagnostics.loadedFileCount,
 					missingFileCount: cacheLoad.diagnostics.missingFileCount,
 				})
-				statusMessage.value = 'Ground cache invalid, rebuilding...'
-				setPreviewStatus('Loading ground cache', {
-					detail: 'Cached terrain package was incomplete; rebuilding',
-					progress: 0,
-				})
-			} else {
-				console.info('[ScenePreview] No persisted compiled ground cache found; building terrain package', {
-					sceneId: document.id,
-					buildKey: compiledBuildKey,
-				})
-			}
-		}
-		if (!compiledPackage) {
-			const buildStartedAt = performance.now()
-			let lastProgressLoggedAt = buildStartedAt
-			let lastStatusKey = ''
-			statusMessage.value = 'Compiling ground...'
-			setPreviewStatus('Compiling ground', { detail: 'Preparing static preview terrain...', progress: 0 })
-			await nextTick()
-			const hasTerrainHeightSampler = Boolean(
-				dynamicGround
-				&& typeof dynamicGround.runtimeTerrainHeightSampler === 'object'
-				&& dynamicGround.runtimeTerrainHeightSampler,
-			)
-			const localEditTileSummary = summarizePreviewGroundLocalEditTiles(dynamicGround)
-			const compiledGroundWorkerCount = hasTerrainHeightSampler ? 1 : resolvePreferredCompiledGroundWorkerCount()
-			console.info('[ScenePreview] Compiled ground build started', {
-				sceneId: document.id,
-				buildKey: compiledBuildKey,
-				workerCount: compiledGroundWorkerCount,
-				buildOptions: PREVIEW_COMPILED_GROUND_BUILD_OPTIONS,
-				hasTerrainHeightSampler,
-				localEditTileCount: localEditTileSummary.totalTiles,
-				localEditResolutionSummary: localEditTileSummary.resolutionSummary,
-				localEditSourceSummary: localEditTileSummary.sourceSummary,
-			})
-			let loggedRenderTileDiagnostics = 0
-			const built = await buildCompiledGroundPackageFilesAsync(document, {
-				yieldEveryTiles: 2,
-				workerCount: compiledGroundWorkerCount,
-				...PREVIEW_COMPILED_GROUND_BUILD_OPTIONS,
-				onRenderTileBuilt: (payload) => {
-					if (loggedRenderTileDiagnostics >= 10) {
-						return
-					}
-					loggedRenderTileDiagnostics += 1
-					console.info('[ScenePreview] Render tile precision diagnostic', {
-						sceneId: document.id,
-						tileKey: payload.tileKey,
-						vertexCount: payload.vertexCount,
-						triangleCount: payload.triangleCount,
-						chunkCount: payload.diagnostics.length,
-						chunks: payload.diagnostics.slice(0, 12).map((entry) => ({
-							chunkKey: entry.chunkKey,
-							sampleStepMeters: entry.sampleStepMeters,
-							localEditTileKey: entry.localEditTileKey,
-							localEditSource: entry.localEditSource,
-							localEditResolution: entry.localEditResolution,
-							localEditCellSize: entry.localEditCellSize,
-							regionWidthMeters: entry.regionWidthMeters,
-							regionDepthMeters: entry.regionDepthMeters,
-						})),
-					})
-				},
-				onProgress: (progress) => {
-					const now = performance.now()
-					const statusKey = `${progress.phase}:${progress.completed}/${progress.total}`
-					if (statusKey !== lastStatusKey && (progress.completed === 1 || progress.completed === progress.total || now - lastProgressLoggedAt >= 200)) {
-						lastStatusKey = statusKey
-						lastProgressLoggedAt = now
-						statusMessage.value = progress.phase === 'render'
-							? `Compiling ground mesh ${progress.completed}/${progress.total}...`
-							: `Compiling ground collision ${progress.completed}/${progress.total}...`
-						const detail = progress.phase === 'render'
-							? `Building mesh tiles ${progress.completed}/${progress.total}`
-							: `Building collision tiles ${progress.completed}/${progress.total}`
-						setPreviewStatus('Compiling ground', {
-							detail,
-							progress: progress.total > 0 ? (progress.completed / progress.total) * 100 : 0,
-						})
-					}
-				},
-			})
-			if (!built) {
 				cachedCompiledGroundBuildKey = null
 				cachedCompiledGroundManifest = null
 				cachedCompiledGroundSceneId = null
 				cachedCompiledGroundFiles = new Map()
-				throw new Error(`Compiled ground build failed for preview scene ${document.id}`)
-			}
-			console.info('[ScenePreview] Compiled ground build completed', {
-				sceneId: document.id,
-				renderTiles: built.manifest.renderTiles.length,
-				collisionTiles: built.manifest.collisionTiles.length,
-				elapsedMs: Math.round(performance.now() - buildStartedAt),
-			})
-			setPreviewStatus('Compiling ground', { detail: 'Static terrain ready', progress: 100 })
-			const fileMap = new Map<string, ArrayBuffer>()
-			Object.entries(built.files).forEach(([path, bytes]) => {
-				fileMap.set(path, toStableArrayBuffer(bytes))
-			})
-			cachedCompiledGroundBuildKey = compiledBuildKey
-			cachedCompiledGroundManifest = built.manifest
-			cachedCompiledGroundSceneId = document.id
-			cachedCompiledGroundFiles = fileMap
-			compiledPackage = {
-				manifest: built.manifest,
-				files: fileMap,
-			}
-			const compiledPackageBytes = estimatePreviewCompiledGroundPackageBytes(compiledPackage)
-			console.info('[ScenePreview] Compiled ground package memory footprint', {
-				sceneId: document.id,
-				buildKey: compiledBuildKey,
-				totalBytes: compiledPackageBytes,
-				totalMiB: Math.round((compiledPackageBytes / (1024 * 1024)) * 10) / 10,
-			})
-			if (compiledPackageBytes <= PREVIEW_COMPILED_GROUND_PERSIST_MAX_BYTES) {
-				void (async () => {
-					const cacheSaveStartedAt = performance.now()
-					try {
-						await savePreviewCompiledGroundPackageToCache(compiledBuildKey, compiledPackage)
-						console.info('[ScenePreview] Persisted compiled ground cache saved', {
-							sceneId: document.id,
-							buildKey: compiledBuildKey,
-							fileCount: compiledPackage.files.size,
-							totalBytes: compiledPackageBytes,
-							totalMiB: Math.round((compiledPackageBytes / (1024 * 1024)) * 10) / 10,
-							elapsedMs: Math.round(performance.now() - cacheSaveStartedAt),
-						})
-					} catch (error) {
-						console.warn('[ScenePreview] Failed to persist compiled ground cache', {
-							sceneId: document.id,
-							buildKey: compiledBuildKey,
-							error,
-						})
-					}
-				})()
+				statusMessage.value = 'Ground cache invalid.'
+				setPreviewStatus('Ground cache invalid', {
+					detail: 'Reopen the scene in editor to rebuild compiled terrain.',
+					progress: 100,
+				})
+				throw new Error(`Compiled ground cache is invalid for preview scene ${document.id}`)
 			} else {
-				console.info('[ScenePreview] Skipped persisted compiled ground cache because package is too large', {
+				console.error('[ScenePreview] Missing compiled ground cache for preview', {
 					sceneId: document.id,
 					buildKey: compiledBuildKey,
-					totalBytes: compiledPackageBytes,
-					limitBytes: PREVIEW_COMPILED_GROUND_PERSIST_MAX_BYTES,
 				})
+				cachedCompiledGroundBuildKey = null
+				cachedCompiledGroundManifest = null
+				cachedCompiledGroundSceneId = null
+				cachedCompiledGroundFiles = new Map()
+				statusMessage.value = 'Ground cache missing.'
+				setPreviewStatus('Ground cache missing', {
+					detail: 'Open the scene in editor once to build compiled terrain.',
+					progress: 100,
+				})
+				throw new Error(`Compiled ground cache missing for preview scene ${document.id}`)
 			}
+		}
+		if (!compiledPackage) {
+			throw new Error(`Compiled ground cache missing for preview scene ${document.id}`)
 		}
 		if (compiledPackage) {
 			groundNode.userData = {

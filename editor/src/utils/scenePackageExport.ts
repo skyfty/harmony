@@ -42,9 +42,12 @@ import {
   stripGroundHeightMapsFromSceneDocument,
 } from '@/utils/groundHeightSidecar'
 import {
-  buildCompiledGroundPackageFilesAsync,
-  resolvePreferredCompiledGroundWorkerCount,
-} from '@/utils/compiledGroundExport'
+  computeSceneCompiledGroundBuildKey,
+  computeSceneCompiledGroundSourceSignature,
+  getSceneCompiledGroundPackageFileBytes,
+  loadSceneCompiledGroundPackageFromCache,
+  resolveSceneCompiledGroundPackagePaths,
+} from '@/utils/sceneCompiledGroundCache'
 import { collectPunchPointsFromNodes } from './sceneExport'
 import {
   buildSceneAssetReferenceSummaryMap,
@@ -1212,58 +1215,44 @@ export async function exportScenePackageZip(payload: {
       : await scenesStore.loadGroundPaintSidecar(scene.id)
     if (groundNode?.dynamicMesh?.type === 'Ground') {
       const compiledGroundStartedAt = typeof performance !== 'undefined' ? performance.now() : Date.now()
-      let lastCompiledGroundProgressAt = compiledGroundStartedAt
-      let lastCompiledGroundProgressKey = ''
-      const compiledGroundWorkerCount = resolvePreferredCompiledGroundWorkerCount()
+      const compiledGroundBuildKey = computeSceneCompiledGroundBuildKey(
+        scene.id,
+        groundNode.dynamicMesh,
+        storedTerrainDatasetManifest?.datasetId ?? null,
+      )
+      const compiledGroundSourceSignature = computeSceneCompiledGroundSourceSignature(
+        scene.id,
+        groundNode.dynamicMesh,
+        storedTerrainDatasetManifest?.datasetId ?? null,
+      )
       emitSceneExportEvent(payload.reportEvent, {
         phase: 'sidecar',
         level: 'info',
         status: 'running',
         sceneId: scene.id,
         sceneName,
-        detail: `compiled-ground workers=${compiledGroundWorkerCount}`,
-        message: `Building compiled ground package (${compiledGroundWorkerCount} workers)...`,
+        detail: compiledGroundBuildKey,
+        message: 'Loading compiled ground cache...',
       })
-      const compiledGroundPackage = await buildCompiledGroundPackageFilesAsync(sidecarSource as SceneJsonExportDocument, {
-        yieldEveryTiles: 2,
-        workerCount: compiledGroundWorkerCount,
-        onProgress: (progress) => {
-          const now = typeof performance !== 'undefined' ? performance.now() : Date.now()
-          const progressKey = `${progress.phase}:${progress.completed}/${progress.total}`
-          if (
-            progressKey === lastCompiledGroundProgressKey
-            || (progress.completed !== 1 && progress.completed !== progress.total && now - lastCompiledGroundProgressAt < 200)
-          ) {
-            return
-          }
-          lastCompiledGroundProgressKey = progressKey
-          lastCompiledGroundProgressAt = now
-          emitSceneExportEvent(payload.reportEvent, {
-            phase: 'sidecar',
-            level: 'info',
-            status: 'running',
-            sceneId: scene.id,
-            sceneName,
-            current: progress.completed,
-            total: progress.total,
-            progress: progress.total > 0 ? progress.completed / progress.total : undefined,
-            detail: progress.tileKey,
-            message: progress.phase === 'render'
-              ? `Building compiled ground mesh ${progress.completed}/${progress.total}`
-              : `Building compiled ground collision ${progress.completed}/${progress.total}`,
-          })
-        },
+      const cacheLoad = await loadSceneCompiledGroundPackageFromCache(compiledGroundBuildKey, {
+        sourceSignature: compiledGroundSourceSignature,
       })
+      const compiledGroundPackage = cacheLoad.pkg
       if (!compiledGroundPackage) {
-        throw new Error(`Compiled ground export failed for scene ${scene.id}`)
+        throw new Error(
+          cacheLoad.diagnostics.status === 'partial' || cacheLoad.diagnostics.status === 'corrupt'
+            ? `Compiled ground cache is invalid for scene ${scene.id}. Reopen the scene in editor to rebuild terrain cache before export.`
+            : `Compiled ground cache is missing for scene ${scene.id}. Open the scene in editor to build terrain cache before export.`,
+        )
       }
+      const compiledGroundPaths = resolveSceneCompiledGroundPackagePaths(scene.id)
       compiledGround = {
-        manifestPath: compiledGroundPackage.manifestPath,
-        renderRootPath: compiledGroundPackage.renderRootPath,
-        collisionRootPath: compiledGroundPackage.collisionRootPath,
+        manifestPath: compiledGroundPaths.manifestPath,
+        renderRootPath: compiledGroundPaths.renderRootPath,
+        collisionRootPath: compiledGroundPaths.collisionRootPath,
       }
-      files[compiledGroundPackage.manifestPath] = jsonBytes(compiledGroundPackage.manifest)
-      Object.assign(files, compiledGroundPackage.files)
+      files[compiledGroundPaths.manifestPath] = jsonBytes(compiledGroundPackage.manifest)
+      Object.assign(files, getSceneCompiledGroundPackageFileBytes(compiledGroundPackage))
       const sceneGroundNode = findGroundNode(sidecarSource.nodes)
       if (sceneGroundNode) {
         sceneGroundNode.userData = {
@@ -1278,8 +1267,8 @@ export async function exportScenePackageZip(payload: {
         status: 'completed',
         sceneId: scene.id,
         sceneName,
-        detail: compiledGroundPackage.manifestPath,
-        message: `Compiled ground package written (${Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - compiledGroundStartedAt)} ms)`,
+        detail: compiledGroundPaths.manifestPath,
+        message: `Compiled ground cache packaged (${Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - compiledGroundStartedAt)} ms)`,
       })
 
       const packagedTerrainDataset = await buildTerrainDatasetPackageFiles(

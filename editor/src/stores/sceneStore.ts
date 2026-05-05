@@ -42,11 +42,20 @@ import { resolveGroundRuntimeChunkCells } from '@schema/groundMesh'
 import { DEFAULT_COLOR, DEFAULT_INTENSITY } from '@schema/lightDefaults'
 import { migrateLegacyGroundTerrainDocument } from '@/utils/legacyGroundTerrainMigration'
 import { createScenesStoreTerrainDatasetHeightSampler } from '@/utils/terrainDatasetRuntime'
+import {
+  clearSceneCompiledGroundPackageMemoryCache,
+  computeSceneCompiledGroundBuildKey,
+  computeSceneCompiledGroundSourceSignature,
+  ensureSceneCompiledGroundPackage,
+  rebuildSceneCompiledGroundPackageChunks,
+  type SceneCompiledGroundPackage,
+} from '@/utils/sceneCompiledGroundCache'
 import type {
   AssetSourceMetadata,
   BehaviorComponentProps,
   BehaviorEventType,
   CameraNodeProperties,
+  CompiledGroundManifest,
   GroundChunkManifest,
   GroundDynamicMesh,
   GroundHeightMap,
@@ -58,6 +67,7 @@ import type {
   NodeComponentType,
   SceneBehavior,
   SceneDynamicMesh,
+  SceneJsonExportDocument,
   SceneNode,
   SceneNodeComponentMap,
   SceneNodeComponentState,
@@ -1106,6 +1116,9 @@ declare module '@/types/scene-state' {
     sceneGraphStructureVersion: number
     sceneNodePropertyVersion: number
     pendingScenePatches: ScenePatch[]
+    compiledGroundBuildKey: string | null
+    compiledGroundManifest: CompiledGroundManifest | null
+    compiledGroundFiles: Map<string, ArrayBuffer>
 
     prefabAssetDownloadProgress: Record<
       string,
@@ -1899,6 +1912,36 @@ function refreshGroundOptimizedMeshRuntime(
   finalizeDynamicMeshRuntimePatch(store, nodeId, 'Ground')
   persistGroundHeightSidecarForNode(target)
   return true
+}
+
+function applyCompiledGroundPackageToStore(
+  store: Pick<SceneState, 'compiledGroundBuildKey' | 'compiledGroundManifest' | 'compiledGroundFiles' | 'groundNode'>,
+  buildKey: string,
+  pkg: SceneCompiledGroundPackage | null,
+): void {
+  const normalizedBuildKey = typeof buildKey === 'string' ? buildKey.trim() : ''
+  store.compiledGroundBuildKey = normalizedBuildKey || null
+  store.compiledGroundManifest = pkg?.manifest ?? null
+  store.compiledGroundFiles = pkg?.files ? new Map<string, ArrayBuffer>(pkg.files) : new Map<string, ArrayBuffer>()
+  if (store.groundNode?.dynamicMesh?.type !== 'Ground') {
+    return
+  }
+  store.groundNode.userData = {
+    ...(store.groundNode.userData ?? {}),
+    compiledGroundEnabled: Boolean(pkg?.manifest),
+    compiledGroundManifest: pkg?.manifest ?? null,
+  }
+}
+
+function createCompiledGroundSourceDocument(store: Pick<SceneState, 'currentSceneId' | 'nodes'>): SceneJsonExportDocument | null {
+  const sceneId = typeof store.currentSceneId === 'string' ? store.currentSceneId.trim() : ''
+  if (!sceneId) {
+    return null
+  }
+  return {
+    id: sceneId,
+    nodes: store.nodes as unknown as SceneJsonExportDocument['nodes'],
+  } as SceneJsonExportDocument
 }
 
 function commitGroundScatterRuntimeEdit(
@@ -7681,6 +7724,9 @@ function createInitialSceneState(): SceneState {
     sceneGraphStructureVersion: 0,
     sceneNodePropertyVersion: 0,
     pendingScenePatches: [],
+    compiledGroundBuildKey: null,
+    compiledGroundManifest: null,
+    compiledGroundFiles: new Map<string, ArrayBuffer>(),
     workspaceId: '',
     workspaceType: 'local',
     workspaceLabel: 'Local User',
@@ -7736,6 +7782,9 @@ function resetSceneStateToNoSelection(store: SceneState) {
   store.sceneGraphStructureVersion = 0
   store.sceneNodePropertyVersion = 0
   store.pendingScenePatches = []
+  store.compiledGroundBuildKey = null
+  store.compiledGroundManifest = null
+  store.compiledGroundFiles = new Map<string, ArrayBuffer>()
   store.workspaceId = ''
   store.workspaceType = 'local'
   store.workspaceLabel = 'Local User'
@@ -8686,6 +8735,87 @@ export const useSceneStore = defineStore('scene', {
       normalizeCurrentSceneMeta(this)
       const snapshot = buildSceneDocumentFromState(this)
       return snapshot
+    },
+    clearCurrentCompiledGroundPackage() {
+      clearSceneCompiledGroundPackageMemoryCache(this.compiledGroundBuildKey)
+      applyCompiledGroundPackageToStore(this, '', null)
+    },
+    getCurrentCompiledGroundTileData(path: string): ArrayBuffer | null {
+      const normalizedPath = typeof path === 'string' ? path.trim() : ''
+      if (!normalizedPath) {
+        return null
+      }
+      return this.compiledGroundFiles.get(normalizedPath) ?? null
+    },
+    async ensureCurrentSceneCompiledGroundReady(options: { forceRebuild?: boolean } = {}): Promise<boolean> {
+      const document = createCompiledGroundSourceDocument(this)
+      const groundNode = this.groundNode
+      if (!document || !groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
+        applyCompiledGroundPackageToStore(this, '', null)
+        return false
+      }
+      const scenesStore = useScenesStore()
+      const terrainDatasetManifest = await scenesStore.loadTerrainDatasetManifest(document.id)
+      const buildKey = computeSceneCompiledGroundBuildKey(
+        document.id,
+        groundNode.dynamicMesh,
+        terrainDatasetManifest?.datasetId ?? null,
+      )
+      const sourceSignature = computeSceneCompiledGroundSourceSignature(
+        document.id,
+        groundNode.dynamicMesh,
+        terrainDatasetManifest?.datasetId ?? null,
+      )
+      const pkg = await ensureSceneCompiledGroundPackage(document, buildKey, {
+        forceRebuild: options.forceRebuild === true,
+        sourceSignature,
+      })
+      if (document.id !== this.currentSceneId) {
+        return false
+      }
+      applyCompiledGroundPackageToStore(this, buildKey, pkg)
+      return true
+    },
+    async rebuildCurrentSceneCompiledGroundChunks(
+      nodeId: string,
+      chunkKeys: string[],
+    ): Promise<boolean> {
+      const document = createCompiledGroundSourceDocument(this)
+      const groundNode = this.groundNode
+      if (!document || !groundNode || groundNode.id !== nodeId || groundNode.dynamicMesh?.type !== 'Ground') {
+        return false
+      }
+      const scenesStore = useScenesStore()
+      const terrainDatasetManifest = await scenesStore.loadTerrainDatasetManifest(document.id)
+      const buildKey = computeSceneCompiledGroundBuildKey(
+        document.id,
+        groundNode.dynamicMesh,
+        terrainDatasetManifest?.datasetId ?? null,
+      )
+      const sourceSignature = computeSceneCompiledGroundSourceSignature(
+        document.id,
+        groundNode.dynamicMesh,
+        terrainDatasetManifest?.datasetId ?? null,
+      )
+      if (this.compiledGroundBuildKey && this.compiledGroundBuildKey !== buildKey) {
+        const rebuilt = await ensureSceneCompiledGroundPackage(document, buildKey, {
+          forceRebuild: true,
+          sourceSignature,
+        })
+        if (document.id !== this.currentSceneId) {
+          return false
+        }
+        applyCompiledGroundPackageToStore(this, buildKey, rebuilt)
+        return true
+      }
+      const rebuilt = await rebuildSceneCompiledGroundPackageChunks(document, buildKey, chunkKeys, {
+        sourceSignature,
+      })
+      if (document.id !== this.currentSceneId) {
+        return false
+      }
+      applyCompiledGroundPackageToStore(this, buildKey, rebuilt)
+      return true
     },
     appendUndoEntry(entry: SceneHistoryEntry, options: { resetRedo?: boolean } = {}) {
       const nextUndoStack = [...this.undoStack, entry]
@@ -9714,7 +9844,16 @@ export const useSceneStore = defineStore('scene', {
       definition: GroundDynamicMesh,
       manualHeightMap: GroundHeightMap,
     ) {
-      return commitGroundHeightMapRuntimeEdit(this, nodeId, definition, manualHeightMap)
+      const committed = commitGroundHeightMapRuntimeEdit(this, nodeId, definition, manualHeightMap)
+      if (committed) {
+        const dirtyChunkKeys = resolveGroundDirtyChunkKeysFromRegion(definition, null)
+        if (dirtyChunkKeys?.length) {
+          void this.rebuildCurrentSceneCompiledGroundChunks(nodeId, dirtyChunkKeys).catch((error) => {
+            console.warn('[SceneStore] Failed to rebuild compiled ground after heightmap edit', error)
+          })
+        }
+      }
+      return committed
     },
     commitGroundLocalEditTilesEdit(
       nodeId: string,
@@ -9722,7 +9861,16 @@ export const useSceneStore = defineStore('scene', {
       localEditTiles: GroundLocalEditTileMap | null,
       affectedRegion: { minRow: number; maxRow: number; minColumn: number; maxColumn: number } | null = null,
     ) {
-      return commitGroundLocalEditTilesRuntimeEdit(this, nodeId, definition, localEditTiles, affectedRegion)
+      const committed = commitGroundLocalEditTilesRuntimeEdit(this, nodeId, definition, localEditTiles, affectedRegion)
+      if (committed) {
+        const dirtyChunkKeys = resolveGroundDirtyChunkKeysFromRegion(definition, affectedRegion)
+        if (dirtyChunkKeys?.length) {
+          void this.rebuildCurrentSceneCompiledGroundChunks(nodeId, dirtyChunkKeys).catch((error) => {
+            console.warn('[SceneStore] Failed to rebuild compiled ground after local edit tile update', error)
+          })
+        }
+      }
+      return committed
     },
     refreshGroundOptimizedMesh(nodeId: string) {
       return refreshGroundOptimizedMeshRuntime(this, nodeId)
@@ -18023,6 +18171,7 @@ export const useSceneStore = defineStore('scene', {
       // Invalidate any in-flight scene-bound async work as early as possible.
       this.sceneSwitchToken += 1
       const sceneSwitchToken = this.sceneSwitchToken
+      this.clearCurrentCompiledGroundPackage()
       const forceReload = options.forceReload === true
       const scenesStore = useScenesStore()
       const sceneReady = await scenesStore.ensureSceneBundleAvailable(sceneId)
@@ -18074,6 +18223,7 @@ export const useSceneStore = defineStore('scene', {
           runtimeGround.runtimeTerrainDatasetEnabled = Boolean(terrainSampler)
           runtimeGround.runtimeTerrainHeightSampler = terrainSampler
         }
+        await this.ensureCurrentSceneCompiledGroundReady()
       } finally {
         this.isSceneReady = true
       }
@@ -18411,6 +18561,7 @@ export const useSceneStore = defineStore('scene', {
           const groundNode = findGroundNode(this.nodes)
           attachGroundScatterRuntimeToNode(this.currentSceneId, groundNode)
           attachGroundPaintRuntimeToNode(this.currentSceneId, groundNode)
+          await this.ensureCurrentSceneCompiledGroundReady()
         }
         await this.refreshRuntimeState({ showOverlay: true, refreshViewport: false })
       } finally {

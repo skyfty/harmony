@@ -238,6 +238,14 @@ import {
   sampleGroundHeight,
 } from '@schema/groundMesh'
 import {
+  collectCompiledGroundCoveredChunkKeys,
+  computeCompiledGroundManifestRevision,
+} from '@schema/compiledGround'
+import {
+  clearCompiledGroundRenderTiles,
+  syncCompiledGroundRenderTiles,
+} from '@schema/compiledGroundRuntime'
+import {
   createDefaultGroundSurfacePreviewLoaders,
   syncGroundSurfaceLiveChunkPreviews,
   syncGroundSurfacePreviewForGround,
@@ -21726,6 +21734,7 @@ function syncViewportGroundChunks(
   groundObject: THREE.Object3D,
   groundDefinition: GroundRuntimeDynamicMesh,
 ): void {
+  syncViewportCompiledGroundTiles(groundObject, groundDefinition)
   const streamingDefinition = resolveViewportGroundStreamingDefinition(groundObject, groundDefinition)
   syncGroundChunkLoadingMode(groundObject, streamingDefinition, camera)
   const sceneId = typeof sceneStore.currentSceneId === 'string' ? sceneStore.currentSceneId.trim() : ''
@@ -21733,6 +21742,35 @@ function syncViewportGroundChunks(
     ? Math.max(0, Math.trunc(streamingDefinition.chunkManifestRevision as number))
     : 0
   maybeAutoPersistViewportInfiniteGroundChunks(groundObject, streamingDefinition, sceneId, manifestRevision)
+}
+
+function syncViewportCompiledGroundTiles(
+  groundObject: THREE.Object3D,
+  groundDefinition: GroundRuntimeDynamicMesh,
+): void {
+  const manifest = sceneStore.compiledGroundManifest
+  const buildKey = typeof sceneStore.compiledGroundBuildKey === 'string'
+    ? sceneStore.compiledGroundBuildKey.trim()
+    : ''
+  if (!manifest || !buildKey) {
+    setInfiniteGroundHiddenChunkKeys(groundObject, [])
+    clearCompiledGroundRenderTiles(groundObject)
+    return
+  }
+
+  setInfiniteGroundHiddenChunkKeys(groundObject, collectCompiledGroundCoveredChunkKeys(manifest))
+  const revision = Number.isFinite(manifest.revision)
+    ? Math.max(0, Math.trunc(manifest.revision))
+    : computeCompiledGroundManifestRevision(manifest)
+  syncCompiledGroundRenderTiles({
+    groundObject,
+    groundDefinition,
+    camera,
+    sourceId: buildKey,
+    revision,
+    manifest,
+    loadTileData: async (record) => sceneStore.getCurrentCompiledGroundTileData(record.path),
+  })
 }
 
 function maybeAutoPersistViewportInfiniteGroundChunks(
@@ -21788,6 +21826,10 @@ function syncViewportGroundRenderMode(options: { rebuildOptimizedMesh?: boolean 
   const groundObject = resolveGroundRuntimeObjectFromMap(objectMap, groundNode.id) ?? undefined
   const groundDefinition = resolveGroundDynamicMeshDefinition()
   if (!groundObject || !groundDefinition) {
+    if (groundObject) {
+      setInfiniteGroundHiddenChunkKeys(groundObject, [])
+      clearCompiledGroundRenderTiles(groundObject)
+    }
     return
   }
 

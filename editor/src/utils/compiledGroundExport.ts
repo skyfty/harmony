@@ -85,6 +85,7 @@ type BuildCompiledGroundAsyncOptions = {
     triangleCount: number
     diagnostics: CompiledGroundRenderChunkDiagnostic[]
   }) => void
+  includedTileKeys?: string[]
   yieldControl?: () => Promise<void>
   workerCount?: number
   workerBatchSize?: number
@@ -101,6 +102,20 @@ const DEFAULT_COLLISION_CHUNKS_PER_TILE = 1
 const DEFAULT_COLLISION_SAMPLE_STEP_METERS = 2
 const DEFAULT_COMPILED_GROUND_WORKER_BATCH_SIZE = 1
 const MAX_COMPILED_GROUND_WORKERS = 8
+
+function resolveIncludedTileKeySet(options: BuildCompiledGroundAsyncOptions): Set<string> | null {
+  if (!Array.isArray(options.includedTileKeys) || options.includedTileKeys.length === 0) {
+    return null
+  }
+  const set = new Set<string>()
+  for (const value of options.includedTileKeys) {
+    const normalized = typeof value === 'string' ? value.trim() : ''
+    if (normalized) {
+      set.add(normalized)
+    }
+  }
+  return set.size > 0 ? set : null
+}
 
 type CompiledGroundBuildWorkerRuntime = {
   worker: Worker
@@ -482,26 +497,32 @@ async function buildCompiledGroundPhaseWithWorkers(
   options: BuildCompiledGroundAsyncOptions,
   workers: CompiledGroundBuildWorkerRuntime[],
 ): Promise<void> {
-  const total = phase === 'render'
-    ? context.renderRows * context.renderColumns
-    : context.collisionRows * context.collisionColumns
-  if (total <= 0) {
-    return
-  }
-
+  const includedTileKeys = resolveIncludedTileKeySet(options)
   const jobs: CompiledGroundTileJob[] = []
   if (phase === 'render') {
     for (let row = 0; row < context.renderRows; row += 1) {
       for (let column = 0; column < context.renderColumns; column += 1) {
-        jobs.push(createRenderTileJob(context, row, column))
+        const job = createRenderTileJob(context, row, column)
+        if (includedTileKeys && !includedTileKeys.has(job.key)) {
+          continue
+        }
+        jobs.push(job)
       }
     }
   } else {
     for (let row = 0; row < context.collisionRows; row += 1) {
       for (let column = 0; column < context.collisionColumns; column += 1) {
-        jobs.push(createCollisionTileJob(context, row, column))
+        const job = createCollisionTileJob(context, row, column)
+        if (includedTileKeys && !includedTileKeys.has(job.key)) {
+          continue
+        }
+        jobs.push(job)
       }
     }
+  }
+  const total = jobs.length
+  if (total <= 0) {
+    return
   }
 
   const batchSize = Math.max(1, Math.trunc(options.workerBatchSize ?? DEFAULT_COMPILED_GROUND_WORKER_BATCH_SIZE))
@@ -720,15 +741,34 @@ export async function buildCompiledGroundPackageFilesAsync(
   }
   const yieldEveryTiles = Math.max(1, Math.trunc(options.yieldEveryTiles ?? 4))
   const yieldControl = options.yieldControl ?? (() => new Promise<void>((resolve) => setTimeout(resolve, 0)))
-  const renderTotal = context.renderRows * context.renderColumns
-  const collisionTotal = context.collisionRows * context.collisionColumns
+  const includedTileKeys = resolveIncludedTileKeySet(options)
+  const renderTotal = includedTileKeys
+    ? Array.from({ length: context.renderRows * context.renderColumns }).reduce((sum, _unused, index) => {
+      const row = Math.floor(index / context.renderColumns)
+      const column = index % context.renderColumns
+      const key = formatCompiledGroundTileKey(row, column)
+      return sum + (includedTileKeys.has(key) ? 1 : 0)
+    }, 0)
+    : context.renderRows * context.renderColumns
+  const collisionTotal = includedTileKeys
+    ? Array.from({ length: context.collisionRows * context.collisionColumns }).reduce((sum, _unused, index) => {
+      const row = Math.floor(index / context.collisionColumns)
+      const column = index % context.collisionColumns
+      const key = formatCompiledGroundTileKey(row, column)
+      return sum + (includedTileKeys.has(key) ? 1 : 0)
+    }, 0)
+    : context.collisionRows * context.collisionColumns
   let completedSinceYield = 0
   let renderCompleted = 0
   let collisionCompleted = 0
 
   for (let row = 0; row < context.renderRows; row += 1) {
     for (let column = 0; column < context.renderColumns; column += 1) {
-      const tileKey = appendRenderTile(context, row, column, options)
+      const tileKey = formatCompiledGroundTileKey(row, column)
+      if (includedTileKeys && !includedTileKeys.has(tileKey)) {
+        continue
+      }
+      appendRenderTile(context, row, column, options)
       renderCompleted += 1
       completedSinceYield += 1
       options.onProgress?.({
@@ -746,7 +786,11 @@ export async function buildCompiledGroundPackageFilesAsync(
 
   for (let row = 0; row < context.collisionRows; row += 1) {
     for (let column = 0; column < context.collisionColumns; column += 1) {
-      const tileKey = appendCollisionTile(context, row, column)
+      const tileKey = formatCompiledGroundTileKey(row, column)
+      if (includedTileKeys && !includedTileKeys.has(tileKey)) {
+        continue
+      }
+      appendCollisionTile(context, row, column)
       collisionCompleted += 1
       completedSinceYield += 1
       options.onProgress?.({
