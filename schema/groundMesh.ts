@@ -28,6 +28,7 @@ import {
   type GroundHeightMap,
   type GroundPlanningMetadata,
   type GroundLocalEditTileData,
+  type GroundLocalEditTileMap,
   type GroundOptimizedMeshChunkData,
   type GroundOptimizedMeshData,
   type GroundRuntimeDynamicMesh,
@@ -51,6 +52,23 @@ const GROUND_TRIANGLE_SLICE_PLANAR_TOLERANCE = 0.004
 const GROUND_FLAT_TILING_RADIUS_MULTIPLIER = 8
 const GROUND_FLAT_TILING_MIN_RADIUS_CHUNKS = 32
 const GROUND_LOCAL_EDIT_TILE_COVERAGE_BUCKET_CHUNKS = 4
+
+type GroundLocalEditTileCache = {
+  tiles: GroundLocalEditTileData[]
+  lookup: Map<string, GroundLocalEditTileData>
+}
+
+type GroundLocalEditTileCoverageIndexCache = {
+  cacheKey: string
+  index: Map<string, GroundLocalEditTileData[]>
+}
+
+const EMPTY_GROUND_LOCAL_EDIT_TILE_CACHE: GroundLocalEditTileCache = {
+  tiles: [],
+  lookup: new Map<string, GroundLocalEditTileData>(),
+}
+const groundLocalEditTileCacheBySource = new WeakMap<GroundLocalEditTileMap, GroundLocalEditTileCache>()
+const groundLocalEditTileCoverageIndexBySource = new WeakMap<GroundLocalEditTileMap, GroundLocalEditTileCoverageIndexCache>()
 
 type GroundChunkKey = string
 
@@ -974,12 +992,38 @@ function hasRuntimeGroundHeightOverrides(definition: GroundRuntimeDynamicMesh): 
 }
 
 function invalidateGroundLocalEditTileCaches(definition: GroundRuntimeDynamicMesh): void {
+  const source = definition.localEditTiles && typeof definition.localEditTiles === 'object'
+    ? definition.localEditTiles
+    : null
+  if (source) {
+    groundLocalEditTileCacheBySource.delete(source)
+    groundLocalEditTileCoverageIndexBySource.delete(source)
+  }
   definition.runtimeLocalEditTileArrayCache = undefined
   definition.runtimeLocalEditTileLookupCache = undefined
   definition.runtimeLocalEditTileCoverageIndexCache = undefined
   definition.runtimeLocalEditTileSourceRef = undefined
   definition.runtimeLocalEditTileCoverageIndexSourceRef = undefined
   definition.runtimeLocalEditTileCoverageIndexBucketChunks = undefined
+}
+
+function resolveGroundLocalEditTileCacheFromSource(source: GroundLocalEditTileMap | null): GroundLocalEditTileCache {
+  if (!source) {
+    return EMPTY_GROUND_LOCAL_EDIT_TILE_CACHE
+  }
+  const cached = groundLocalEditTileCacheBySource.get(source)
+  if (cached) {
+    return cached
+  }
+
+  const tiles = Object.values(source)
+  const lookup = new Map<string, GroundLocalEditTileData>()
+  for (const tile of tiles) {
+    lookup.set(formatGroundLocalEditTileKey(tile.tileRow, tile.tileColumn), tile)
+  }
+  const next = { tiles, lookup }
+  groundLocalEditTileCacheBySource.set(source, next)
+  return next
 }
 
 function ensureGroundLocalEditTileCaches(
@@ -994,8 +1038,8 @@ function ensureGroundLocalEditTileCaches(
     : null
 
   if (!source) {
-    runtimeDefinition.runtimeLocalEditTileArrayCache = []
-    runtimeDefinition.runtimeLocalEditTileLookupCache = new Map<string, GroundLocalEditTileData>()
+    runtimeDefinition.runtimeLocalEditTileArrayCache = EMPTY_GROUND_LOCAL_EDIT_TILE_CACHE.tiles
+    runtimeDefinition.runtimeLocalEditTileLookupCache = EMPTY_GROUND_LOCAL_EDIT_TILE_CACHE.lookup
     runtimeDefinition.runtimeLocalEditTileCoverageIndexCache = new Map<string, GroundLocalEditTileData[]>()
     runtimeDefinition.runtimeLocalEditTileSourceRef = null
     runtimeDefinition.runtimeLocalEditTileCoverageIndexSourceRef = null
@@ -1011,13 +1055,9 @@ function ensureGroundLocalEditTileCaches(
     || !Array.isArray(runtimeDefinition.runtimeLocalEditTileArrayCache)
     || !(runtimeDefinition.runtimeLocalEditTileLookupCache instanceof Map)
   ) {
-    const tiles = Object.values(source)
-    const lookup = new Map<string, GroundLocalEditTileData>()
-    for (const tile of tiles) {
-      lookup.set(formatGroundLocalEditTileKey(tile.tileRow, tile.tileColumn), tile)
-    }
-    runtimeDefinition.runtimeLocalEditTileArrayCache = tiles
-    runtimeDefinition.runtimeLocalEditTileLookupCache = lookup
+    const cache = resolveGroundLocalEditTileCacheFromSource(source)
+    runtimeDefinition.runtimeLocalEditTileArrayCache = cache.tiles
+    runtimeDefinition.runtimeLocalEditTileLookupCache = cache.lookup
     runtimeDefinition.runtimeLocalEditTileSourceRef = source
   }
 
@@ -1038,8 +1078,8 @@ function ensureGroundLocalEditTileCachesFromRuntime(
     : null
 
   if (!source) {
-    definition.runtimeLocalEditTileArrayCache = []
-    definition.runtimeLocalEditTileLookupCache = new Map<string, GroundLocalEditTileData>()
+    definition.runtimeLocalEditTileArrayCache = EMPTY_GROUND_LOCAL_EDIT_TILE_CACHE.tiles
+    definition.runtimeLocalEditTileLookupCache = EMPTY_GROUND_LOCAL_EDIT_TILE_CACHE.lookup
     definition.runtimeLocalEditTileSourceRef = null
     return {
       tiles: definition.runtimeLocalEditTileArrayCache,
@@ -1052,13 +1092,9 @@ function ensureGroundLocalEditTileCachesFromRuntime(
     || !Array.isArray(definition.runtimeLocalEditTileArrayCache)
     || !(definition.runtimeLocalEditTileLookupCache instanceof Map)
   ) {
-    const tiles = Object.values(source)
-    const lookup = new Map<string, GroundLocalEditTileData>()
-    for (const tile of tiles) {
-      lookup.set(formatGroundLocalEditTileKey(tile.tileRow, tile.tileColumn), tile)
-    }
-    definition.runtimeLocalEditTileArrayCache = tiles
-    definition.runtimeLocalEditTileLookupCache = lookup
+    const cache = resolveGroundLocalEditTileCacheFromSource(source)
+    definition.runtimeLocalEditTileArrayCache = cache.tiles
+    definition.runtimeLocalEditTileLookupCache = cache.lookup
     definition.runtimeLocalEditTileSourceRef = source
   }
 
@@ -1082,18 +1118,30 @@ function ensureGroundLocalEditTileCoverageIndex(
   const sourceRef = runtimeDefinition.localEditTiles && typeof runtimeDefinition.localEditTiles === 'object'
     ? runtimeDefinition.localEditTiles
     : null
+  const chunkSizeMeters = resolveInfiniteChunkSizeMeters(runtimeDefinition)
+  const sharedCoverageCacheKey = `${bucketChunks}:${chunkSizeMeters}`
 
   if (
-    runtimeDefinition.runtimeLocalEditTileCoverageIndexCache instanceof Map
+    !sourceRef
+    && runtimeDefinition.runtimeLocalEditTileCoverageIndexCache instanceof Map
     && runtimeDefinition.runtimeLocalEditTileCoverageIndexSourceRef === sourceRef
     && runtimeDefinition.runtimeLocalEditTileCoverageIndexBucketChunks === bucketChunks
   ) {
     return runtimeDefinition.runtimeLocalEditTileCoverageIndexCache
   }
 
+  if (sourceRef) {
+    const shared = groundLocalEditTileCoverageIndexBySource.get(sourceRef)
+    if (shared?.cacheKey === sharedCoverageCacheKey) {
+      runtimeDefinition.runtimeLocalEditTileCoverageIndexCache = shared.index
+      runtimeDefinition.runtimeLocalEditTileCoverageIndexSourceRef = sourceRef
+      runtimeDefinition.runtimeLocalEditTileCoverageIndexBucketChunks = bucketChunks
+      return shared.index
+    }
+  }
+
   const index = new Map<string, GroundLocalEditTileData[]>()
   if (tiles.length) {
-    const chunkSizeMeters = resolveInfiniteChunkSizeMeters(runtimeDefinition)
     for (const tile of tiles) {
       const tileSizeMeters = Number(tile.tileSizeMeters)
       if (!Number.isFinite(tileSizeMeters) || tileSizeMeters <= 0) {
@@ -1126,6 +1174,12 @@ function ensureGroundLocalEditTileCoverageIndex(
   runtimeDefinition.runtimeLocalEditTileCoverageIndexCache = index
   runtimeDefinition.runtimeLocalEditTileCoverageIndexSourceRef = sourceRef
   runtimeDefinition.runtimeLocalEditTileCoverageIndexBucketChunks = bucketChunks
+  if (sourceRef) {
+    groundLocalEditTileCoverageIndexBySource.set(sourceRef, {
+      cacheKey: sharedCoverageCacheKey,
+      index,
+    })
+  }
   return index
 }
 
@@ -4812,7 +4866,13 @@ export function updateGroundChunks(
   // 后面所有 loadRadius / unloadRadius / chunk 中心点位置，都要乘这个值才能从“格子数”换成“米”。
   const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
   const chunkSizeMeters = resolveInfiniteChunkSizeMeters(definition)
-  const localEditTiles = ensureGroundLocalEditTileCachesFromRuntime(runtimeDefinition).tiles
+  let localEditTilesCache: GroundLocalEditTileData[] | null = null
+  const getLocalEditTiles = (): GroundLocalEditTileData[] => {
+    if (!localEditTilesCache) {
+      localEditTilesCache = ensureGroundLocalEditTileCachesFromRuntime(runtimeDefinition).tiles
+    }
+    return localEditTilesCache
+  }
 
   let localX = 0
   let localZ = 0
@@ -4922,6 +4982,7 @@ export function updateGroundChunks(
     // 只有当目标窗口真的变化时，才重建创建/销毁队列。
     // 这样可以把“持续加载”与“窗口变化”分离开，避免每一帧都重新排序整个 chunk 集合。
     state.desiredSignature = nextDesiredSignature
+    const localEditTiles = getLocalEditTiles()
 
     // Create queue (nearest-first).
     // 创建队列按距离从近到远排序，保证相机附近优先出现内容，远处 chunk 可以稍后再补。
@@ -5054,44 +5115,45 @@ export function updateGroundChunks(
     || state.lastFlatChunkSyncHiddenChunkKeysVersion !== state.hiddenChunkKeysVersion
 
   if (shouldSyncFlatChunks) {
-  for (let cr = flatMinLoadChunkRow; cr <= flatMaxLoadChunkRow; cr += 1) {
-    for (let cc = flatMinLoadChunkColumn; cc <= flatMaxLoadChunkColumn; cc += 1) {
-      if (
-        cr >= minLoadChunkRow && cr <= maxLoadChunkRow &&
-        cc >= minLoadChunkColumn && cc <= maxLoadChunkColumn
-      ) {
-        continue
-      }
-      const key = groundChunkKey(cr, cc)
-      if (state.chunks.has(key) || state.flatChunkKeys.has(key) || state.hiddenChunkKeys.has(key)) {
-        continue
-      }
+    const localEditTiles = getLocalEditTiles()
+    for (let cr = flatMinLoadChunkRow; cr <= flatMaxLoadChunkRow; cr += 1) {
+      for (let cc = flatMinLoadChunkColumn; cc <= flatMaxLoadChunkColumn; cc += 1) {
+        if (
+          cr >= minLoadChunkRow && cr <= maxLoadChunkRow &&
+          cc >= minLoadChunkColumn && cc <= maxLoadChunkColumn
+        ) {
+          continue
+        }
+        const key = groundChunkKey(cr, cc)
+        if (state.chunks.has(key) || state.flatChunkKeys.has(key) || state.hiddenChunkKeys.has(key)) {
+          continue
+        }
 
-      const spec = computeChunkSpec(definition, cr, cc)
-      if (chunkIntersectsGroundLocalEditTileFromRuntime(runtimeDefinition, spec, localEditTiles)) {
-        continue
-      }
+        const spec = computeChunkSpec(definition, cr, cc)
+        if (chunkIntersectsGroundLocalEditTileFromRuntime(runtimeDefinition, spec, localEditTiles)) {
+          continue
+        }
 
-      const specKey = chunkPoolKey(spec)
-      const entry = flatChunkGroups.get(specKey)
-      if (entry) {
-        entry.keys.push(key)
-      } else {
-        flatChunkGroups.set(specKey, {
-          spec,
-          keys: [key],
-        })
+        const specKey = chunkPoolKey(spec)
+        const entry = flatChunkGroups.get(specKey)
+        if (entry) {
+          entry.keys.push(key)
+        } else {
+          flatChunkGroups.set(specKey, {
+            spec,
+            keys: [key],
+          })
+        }
       }
     }
-  }
 
-  desiredFlatChunkGroups = flatChunkGroups
+    desiredFlatChunkGroups = flatChunkGroups
 
   // 同步 flat 批次。这里不会按视锥销毁，只会把新进入大平铺范围的 chunk 追加进实例批次。
   // 已经存在的 flat chunk 会一直保留，直到它被雕刻 chunk 替代。
-  syncGroundFlatChunkBatches(root, state, definition, desiredFlatChunkGroups)
-  state.lastFlatChunkSyncTilingVersion = state.flatTilingVersion
-  state.lastFlatChunkSyncHiddenChunkKeysVersion = state.hiddenChunkKeysVersion
+    syncGroundFlatChunkBatches(root, state, definition, desiredFlatChunkGroups)
+    state.lastFlatChunkSyncTilingVersion = state.flatTilingVersion
+    state.lastFlatChunkSyncHiddenChunkKeysVersion = state.hiddenChunkKeysVersion
   }
 
   const defaultBudget: GroundChunkBudget = camera
@@ -5452,6 +5514,18 @@ export function getVisibleInfiniteGroundChunkKeys(target: THREE.Object3D): strin
   state.visibleChunkKeysCache = Array.from(visibleKeys)
   state.visibleChunkKeysCacheVersion = state.visibleChunkKeysVersion
   return state.visibleChunkKeysCache
+}
+
+export function getVisibleInfiniteGroundChunkVersion(target: THREE.Object3D): number | null {
+  const group = resolveGroundRuntimeGroup(target)
+  if (!group) {
+    return null
+  }
+  const state = groundRuntimeStateMap.get(group)
+  if (!state) {
+    return null
+  }
+  return state.visibleChunkKeysVersion
 }
 
 export function getVisibleInfiniteGroundChunkSignature(target: THREE.Object3D): string {

@@ -228,7 +228,7 @@ import type { WaterBuildShape } from '@/types/water-build-shape'
 import type { WallBuildShape } from '@/types/wall-build-shape'
 import {
   createGroundMesh,
-  getVisibleInfiniteGroundChunkSignature,
+  getVisibleInfiniteGroundChunkVersion,
   resolveGroundRuntimeChunkCells,
   setInfiniteGroundHiddenChunkKeys,
   setGroundRuntimeOptimizedChunksEnabled,
@@ -21286,9 +21286,9 @@ let lastGroundChunkSetSignatureCheckAt = 0
 
 
 function computeGroundChunkSetSignatureForPlacement(groundObject: THREE.Object3D): string {
-  const infiniteSignature = getVisibleInfiniteGroundChunkSignature(groundObject)
-  if (infiniteSignature !== '0:0') {
-    return infiniteSignature
+  const infiniteVersion = getVisibleInfiniteGroundChunkVersion(groundObject)
+  if (typeof infiniteVersion === 'number') {
+    return `infinite:${infiniteVersion}`
   }
 
   let count = 0
