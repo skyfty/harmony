@@ -39,6 +39,7 @@ import { addMesh as markInstancedBoundsDirty } from './instancedBoundsTracker'
 import {
   computeGroundBaseHeightAtVertex,
   computeGroundBaseHeightRegion,
+  sampleGroundBaseHeightAtWorld,
   type GroundBaseHeightRegion,
   normalizeGroundGenerationSettings,
 } from './groundGeneration'
@@ -153,13 +154,104 @@ type GroundFlatChunkBatchRuntime = {
   instanceHeightCache: Map<string, number>
 }
 
+type GroundWorldBoundsCacheEntry = {
+  key: string
+  bounds: ReturnType<typeof resolveGroundWorldBounds>
+}
+
+type GroundWorkingGridSizeCacheEntry = {
+  key: string
+  gridSize: { rows: number; columns: number }
+}
+
+type GroundDefinitionStructureSignatureCacheEntry = {
+  baseKey: string
+  localEditTiles: GroundLocalEditTileMap | null
+  signature: string
+}
+
+type GroundHeightSamplingContext = {
+  bounds: ReturnType<typeof resolveGroundWorldBounds>
+  cellSize: number
+  rows: number
+  columns: number
+  terrainSampler: GroundTerrainHeightSampler | null
+}
+
 const groundRuntimeStateMap = new WeakMap<THREE.Object3D, GroundRuntimeState>()
+const groundWorldBoundsCache = new WeakMap<object, GroundWorldBoundsCacheEntry>()
+const groundWorkingGridSizeCache = new WeakMap<object, GroundWorkingGridSizeCacheEntry>()
+const groundDefinitionStructureSignatureCache = new WeakMap<object, GroundDefinitionStructureSignatureCacheEntry>()
 let cachedPrototypeMesh: THREE.Mesh | null = null
 const infiniteGroundCameraQuaternion = new THREE.Quaternion()
 const groundFlatChunkInstanceMatrix = new THREE.Matrix4()
 const groundFlatChunkInstancePosition = new THREE.Vector3()
 const groundFlatChunkInstanceRotation = new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0))
 const groundFlatChunkInstanceScale = new THREE.Vector3(1, 1, 1)
+
+function resolveGroundWorldBoundsCached(
+  definition: Pick<GroundDynamicMesh, 'worldBounds' | 'chunkSizeMeters' | 'renderRadiusChunks' | 'collisionRadiusChunks'>,
+): ReturnType<typeof resolveGroundWorldBounds> {
+  const rawBounds = definition.worldBounds
+  const key = rawBounds && typeof rawBounds === 'object'
+    ? [
+      Number(rawBounds.minX),
+      Number(rawBounds.maxX),
+      Number(rawBounds.minZ),
+      Number(rawBounds.maxZ),
+      Number(definition.chunkSizeMeters),
+      Number(definition.renderRadiusChunks),
+      Number(definition.collisionRadiusChunks),
+    ].join('|')
+    : [
+      'none',
+      Number(definition.chunkSizeMeters),
+      Number(definition.renderRadiusChunks),
+      Number(definition.collisionRadiusChunks),
+    ].join('|')
+  const cached = groundWorldBoundsCache.get(definition as object)
+  if (cached?.key === key) {
+    return cached.bounds
+  }
+  const bounds = resolveGroundWorldBounds(definition)
+  groundWorldBoundsCache.set(definition as object, { key, bounds })
+  return bounds
+}
+
+function resolveGroundWorkingGridSizeCached(
+  definition: Pick<GroundDynamicMesh, 'cellSize' | 'worldBounds' | 'chunkSizeMeters' | 'renderRadiusChunks' | 'collisionRadiusChunks'>,
+): { rows: number; columns: number } {
+  const bounds = resolveGroundWorldBoundsCached(definition)
+  const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
+  const key = [
+    cellSize,
+    bounds.minX,
+    bounds.maxX,
+    bounds.minZ,
+    bounds.maxZ,
+  ].join('|')
+  const cached = groundWorkingGridSizeCache.get(definition as object)
+  if (cached?.key === key) {
+    return cached.gridSize
+  }
+  const gridSize = {
+    rows: Math.max(1, Math.round((bounds.maxZ - bounds.minZ) / cellSize)),
+    columns: Math.max(1, Math.round((bounds.maxX - bounds.minX) / cellSize)),
+  }
+  groundWorkingGridSizeCache.set(definition as object, { key, gridSize })
+  return gridSize
+}
+
+function createGroundHeightSamplingContext(definition: GroundRuntimeDynamicMesh): GroundHeightSamplingContext {
+  const gridSize = resolveGroundWorkingGridSizeCached(definition)
+  return {
+    bounds: resolveGroundWorldBoundsCached(definition),
+    cellSize: Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1,
+    rows: gridSize.rows,
+    columns: gridSize.columns,
+    terrainSampler: (definition.runtimeTerrainHeightSampler as GroundTerrainHeightSampler | null | undefined) ?? null,
+  }
+}
 
 function resolveGroundGridWorldBounds(
   definition: Pick<GroundDynamicMesh, 'worldBounds' | 'chunkSizeMeters' | 'renderRadiusChunks' | 'collisionRadiusChunks'>,
@@ -341,12 +433,16 @@ function resolveOptimizedMesh(definition: GroundDynamicMesh | null | undefined):
   return optimizedMesh
 }
 
+function invalidateGroundDefinitionStructureSignature(definition: GroundDynamicMesh): void {
+  groundDefinitionStructureSignatureCache.delete(definition as object)
+}
+
 function definitionStructureSignature(definition: GroundDynamicMesh): string {
-  const gridSize = resolveGroundWorkingGridSize(definition)
+  const gridSize = resolveGroundWorkingGridSizeCached(definition)
   const columns = gridSize.columns
   const rows = gridSize.rows
-    const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1
-  const bounds = resolveGroundWorldBounds(definition)
+  const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1
+  const bounds = resolveGroundWorldBoundsCached(definition)
   const width = bounds.maxX - bounds.minX
   const depth = bounds.maxZ - bounds.minZ
   const runtimeDefinition = definition as GroundRuntimeDynamicMesh
@@ -361,6 +457,26 @@ function definitionStructureSignature(definition: GroundDynamicMesh): string {
     ? runtimeDefinition.runtimeLoadedTileKeys.length
     : 0
   const tileResolution = Math.trunc(resolveGroundEditTileResolution(definition))
+  const localEditTileSource = runtimeDefinition.localEditTiles && typeof runtimeDefinition.localEditTiles === 'object'
+    ? runtimeDefinition.localEditTiles
+    : null
+  const baseKey = [
+    columns,
+    rows,
+    cellSize.toFixed(6),
+    width.toFixed(6),
+    depth.toFixed(6),
+    surfaceRevision,
+    optimizedSignature,
+    optimizedChunkState,
+    hydratedHeightState,
+    tileResolution,
+    loadedTileCount,
+  ].join('|')
+  const cached = groundDefinitionStructureSignatureCache.get(definition as object)
+  if (cached?.baseKey === baseKey && cached.localEditTiles === localEditTileSource) {
+    return cached.signature
+  }
   const localEditTiles = runtimeDefinition.localEditTiles && typeof runtimeDefinition.localEditTiles === 'object'
     ? Object.values(runtimeDefinition.localEditTiles)
     : []
@@ -370,7 +486,13 @@ function definitionStructureSignature(definition: GroundDynamicMesh): string {
       return Number.isFinite(updatedAt) ? Math.max(maxUpdatedAt, Math.trunc(updatedAt)) : maxUpdatedAt
     }, 0)}`
     : 'none'
-  return `${columns}|${rows}|${cellSize.toFixed(6)}|${width.toFixed(6)}|${depth.toFixed(6)}|${surfaceRevision}|${optimizedSignature}|${optimizedChunkState}|${hydratedHeightState}|${tileResolution}|${loadedTileCount}|${localEditSignature}`
+  const signature = `${baseKey}|${localEditSignature}`
+  groundDefinitionStructureSignatureCache.set(definition as object, {
+    baseKey,
+    localEditTiles: localEditTileSource,
+    signature,
+  })
+  return signature
 }
 
 function resolveInfiniteChunkSizeMeters(definition: GroundDynamicMesh): number {
@@ -915,7 +1037,7 @@ function clampVertexIndex(value: number, max: number): number {
 
 function ensureGroundRuntimeDefinition(definition: GroundDynamicMesh): GroundRuntimeDynamicMesh {
   const runtimeDefinition = definition as GroundRuntimeDynamicMesh
-  const gridSize = resolveGroundWorkingGridSize(runtimeDefinition)
+  const gridSize = resolveGroundWorkingGridSizeCached(runtimeDefinition)
   runtimeDefinition.manualHeightMap = ensureGroundHeightMap(
     runtimeDefinition.manualHeightMap,
     gridSize.rows,
@@ -992,6 +1114,7 @@ function hasRuntimeGroundHeightOverrides(definition: GroundRuntimeDynamicMesh): 
 }
 
 function invalidateGroundLocalEditTileCaches(definition: GroundRuntimeDynamicMesh): void {
+  invalidateGroundDefinitionStructureSignature(definition)
   const source = definition.localEditTiles && typeof definition.localEditTiles === 'object'
     ? definition.localEditTiles
     : null
@@ -1315,7 +1438,7 @@ function findGroundLocalEditTileAtWorldFromRuntime(
   if (directMatch) {
     return directMatch
   }
-  return ensureGroundLocalEditTileCaches(definition).lookup.get(key) ?? null
+  return ensureGroundLocalEditTileCachesFromRuntime(definition).lookup.get(key) ?? null
 }
 
 
@@ -2016,6 +2139,7 @@ function setGroundLocalEditTileValue(
   tile.values[index] = Number.isFinite(value) ? value : GROUND_HEIGHT_UNSET_VALUE
   tile.updatedAt = Date.now()
   tile.source = tile.source === 'dem' || tile.source === 'mixed' ? 'mixed' : source
+  invalidateGroundDefinitionStructureSignature(definition)
 }
 
 function getGroundLocalEditTileStoredValue(
@@ -2986,13 +3110,13 @@ export function sampleGroundHeight(definition: GroundDynamicMesh, x: number, z: 
   if (Number.isFinite(localEditSample)) {
     return localEditSample as number
   }
-  const gridSize = resolveGroundWorkingGridSize(runtimeDefinition)
+  const gridSize = resolveGroundWorkingGridSizeCached(runtimeDefinition)
   const columns = gridSize.columns
   const rows = gridSize.rows
   const cellSize = Number.isFinite(runtimeDefinition.cellSize) && runtimeDefinition.cellSize > 1e-6
     ? runtimeDefinition.cellSize
     : 1
-  const bounds = resolveGroundGridWorldBounds(runtimeDefinition)
+  const bounds = resolveGroundWorldBoundsCached(runtimeDefinition)
   if (x < bounds.minX || x > bounds.maxX || z < bounds.minZ || z > bounds.maxZ) {
     return sampleGroundHeightOutsideWorkingBounds()
   }
@@ -3018,6 +3142,63 @@ export function sampleGroundHeight(definition: GroundDynamicMesh, x: number, z: 
   return hx0 + (hx1 - hx0) * tz
 }
 
+function resolveGroundEffectiveHeightAtVertexWithoutLocalEdit(
+  definition: GroundRuntimeDynamicMesh,
+  row: number,
+  column: number,
+  context: GroundHeightSamplingContext,
+): number {
+  const x = context.bounds.minX + column * context.cellSize
+  const z = context.bounds.minZ + row * context.cellSize
+  if (context.terrainSampler) {
+    const sampled = context.terrainSampler.sampleHeightAtWorld(x, z)
+    if (Number.isFinite(sampled)) {
+      return sampled as number
+    }
+  }
+  const base = definition.terrainMode === 'infinite'
+    ? sampleGroundBaseHeightAtWorld(definition, x, z)
+    : computeGroundBaseHeightAtVertex(definition, row, column)
+  const heightIndex = getGroundVertexIndex(context.columns, row, column)
+  const manualRaw = definition.manualHeightMap[heightIndex]
+  const manual = typeof manualRaw === 'number' && Number.isFinite(manualRaw) ? manualRaw : base
+  const planningRaw = definition.planningHeightMap[heightIndex]
+  const planning = typeof planningRaw === 'number' && Number.isFinite(planningRaw) ? planningRaw : base
+  return planning + (manual - base)
+}
+
+function sampleGroundHeightWithoutLocalEditFromRuntime(
+  definition: GroundRuntimeDynamicMesh,
+  x: number,
+  z: number,
+  context: GroundHeightSamplingContext,
+): number {
+  const bounds = context.bounds
+  if (x < bounds.minX || x > bounds.maxX || z < bounds.minZ || z > bounds.maxZ) {
+    return sampleGroundHeightOutsideWorkingBounds()
+  }
+
+  const localColumnFloat = clampInclusive((x - bounds.minX) / context.cellSize, 0, context.columns)
+  const localRowFloat = clampInclusive((z - bounds.minZ) / context.cellSize, 0, context.rows)
+
+  const column0 = clampVertexIndex(Math.floor(localColumnFloat), context.columns)
+  const row0 = clampVertexIndex(Math.floor(localRowFloat), context.rows)
+  const column1 = clampVertexIndex(column0 + 1, context.columns)
+  const row1 = clampVertexIndex(row0 + 1, context.rows)
+
+  const tx = clampInclusive(localColumnFloat - column0, 0, 1)
+  const tz = clampInclusive(localRowFloat - row0, 0, 1)
+
+  const h00 = resolveGroundEffectiveHeightAtVertexWithoutLocalEdit(definition, row0, column0, context)
+  const h10 = resolveGroundEffectiveHeightAtVertexWithoutLocalEdit(definition, row0, column1, context)
+  const h01 = resolveGroundEffectiveHeightAtVertexWithoutLocalEdit(definition, row1, column0, context)
+  const h11 = resolveGroundEffectiveHeightAtVertexWithoutLocalEdit(definition, row1, column1, context)
+
+  const hx0 = h00 + (h10 - h00) * tx
+  const hx1 = h01 + (h11 - h01) * tx
+  return hx0 + (hx1 - hx0) * tz
+}
+
 function sampleGroundHeightWithVertexCache(
   definition: GroundDynamicMesh,
   x: number,
@@ -3029,10 +3210,10 @@ function sampleGroundHeightWithVertexCache(
   if (Number.isFinite(localEditSample)) {
     return localEditSample as number
   }
-  const gridSize = resolveGroundWorkingGridSize(runtimeDefinition)
+  const gridSize = resolveGroundWorkingGridSizeCached(runtimeDefinition)
   const columns = gridSize.columns
   const rows = gridSize.rows
-  const bounds = resolveGroundWorldBounds(runtimeDefinition)
+  const bounds = resolveGroundWorldBoundsCached(runtimeDefinition)
   const cellSize = Number.isFinite(runtimeDefinition.cellSize) && runtimeDefinition.cellSize > 1e-6
     ? runtimeDefinition.cellSize
     : 1
@@ -3542,12 +3723,13 @@ function sampleGroundFlatChunkInstanceHeight(
   key: string,
   x: number,
   z: number,
+  context: GroundHeightSamplingContext,
 ): number {
   const cached = batch.instanceHeightCache.get(key)
   if (typeof cached === 'number' && Number.isFinite(cached)) {
     return cached
   }
-  const height = sampleGroundHeight(definition, x, z)
+  const height = sampleGroundHeightWithoutLocalEditFromRuntime(definition, x, z, context)
   batch.instanceHeightCache.set(key, height)
   return height
 }
@@ -3602,6 +3784,7 @@ function refreshGroundFlatChunkBatchInstances(
   let writtenCount = 0
   const chunkSizeMeters = resolveInfiniteChunkSizeMeters(definition)
   const chunkOrigin = resolveInfiniteGroundGridOriginMeters(chunkSizeMeters)
+  const heightSamplingContext = createGroundHeightSamplingContext(definition)
 
   if (chunkKeys.length > batch.instanceCapacity) {
     batch.instanceCapacity = resolveGroundFlatChunkBatchCapacity(chunkKeys.length, batch.instanceCapacity)
@@ -3616,7 +3799,7 @@ function refreshGroundFlatChunkBatchInstances(
     }
     const centerX = chunkOrigin + (indices.column * chunkSizeMeters) + (chunkSizeMeters * 0.5)
     const centerZ = chunkOrigin + (indices.row * chunkSizeMeters) + (chunkSizeMeters * 0.5)
-    const centerY = sampleGroundFlatChunkInstanceHeight(batch, definition, key, centerX, centerZ)
+    const centerY = sampleGroundFlatChunkInstanceHeight(batch, definition, key, centerX, centerZ, heightSamplingContext)
     groundFlatChunkInstancePosition.set(centerX, centerY, centerZ)
     groundFlatChunkInstanceMatrix.compose(groundFlatChunkInstancePosition, groundFlatChunkInstanceRotation, groundFlatChunkInstanceScale)
     batch.mesh.setMatrixAt(index, groundFlatChunkInstanceMatrix)
@@ -3645,6 +3828,7 @@ function appendGroundFlatChunkBatchInstances(
   const nextKeys = [...batch.chunkKeys]
   const chunkSizeMeters = resolveInfiniteChunkSizeMeters(definition)
   const chunkOrigin = resolveInfiniteGroundGridOriginMeters(chunkSizeMeters)
+  const heightSamplingContext = createGroundHeightSamplingContext(definition)
   let writeIndex = batch.chunkKeys.length
 
   chunkKeys.forEach((key) => {
@@ -3655,7 +3839,7 @@ function appendGroundFlatChunkBatchInstances(
 
     const centerX = chunkOrigin + (indices.column * chunkSizeMeters) + (chunkSizeMeters * 0.5)
     const centerZ = chunkOrigin + (indices.row * chunkSizeMeters) + (chunkSizeMeters * 0.5)
-    const centerY = sampleGroundFlatChunkInstanceHeight(batch, definition, key, centerX, centerZ)
+    const centerY = sampleGroundFlatChunkInstanceHeight(batch, definition, key, centerX, centerZ, heightSamplingContext)
     groundFlatChunkInstancePosition.set(centerX, centerY, centerZ)
     groundFlatChunkInstanceMatrix.compose(groundFlatChunkInstancePosition, groundFlatChunkInstanceRotation, groundFlatChunkInstanceScale)
     batch.mesh.setMatrixAt(writeIndex, groundFlatChunkInstanceMatrix)
