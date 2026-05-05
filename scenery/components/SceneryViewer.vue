@@ -593,11 +593,14 @@ import {
   readTextFileFromScenePackage,
   type ScenePackageUnzipped,
 } from '@harmony/schema/scenePackageZip';
+import {
+  createTerrainDatasetHeightSamplerFromScenePackage,
+  readTerrainDatasetManifestFromScenePackage,
+} from '../common/utils/terrainDatasetPackage';
 import type {
   AutoTourRouteSnapResult,
   GroundChunkManifest,
   GroundChunkManifestRecord,
-  GroundTerrainPackageManifest,
   SceneNode,
   SceneNodeComponentState,
   SceneJsonExportDocument,
@@ -608,11 +611,8 @@ import type {
   LanternSlideDefinition,
   SceneResourceSummary,
   SceneResourceSummaryEntry,
+  ScenePackageTerrainEntry,
   Vector3Like,
-} from '@harmony/schema/index';
-import {
-  GROUND_TERRAIN_PACKAGE_FORMAT,
-  GROUND_TERRAIN_PACKAGE_VERSION,
 } from '@harmony/schema/index';
 import { isPointInsideRegionXZ } from '@harmony/schema/index';
 import { applyMirroredScaleToObject, syncMirroredMeshMaterials } from '@harmony/schema/mirror';
@@ -831,12 +831,7 @@ interface ScenePreviewPayload {
   createdAt?: string;
   updatedAt?: string;
   assetOverrides?: SceneGraphBuildOptions['assetOverrides'];
-  terrain?: SceneTerrainPackageBundle | null;
-}
-
-type SceneTerrainPackageBundle = {
-  manifestPath: string;
-  manifest: GroundTerrainPackageManifest;
+  terrain?: ScenePackageTerrainEntry | null;
 };
 
 type RequestedMode = 'project' | null;
@@ -921,7 +916,7 @@ type ScenePackageSceneEntry =
       createdAt: string | null;
       updatedAt: string | null;
       document: SceneJsonExportDocument;
-      terrain?: SceneTerrainPackageBundle | null;
+      terrain?: ScenePackageTerrainEntry | null;
     }
   | {
       kind: 'external';
@@ -930,7 +925,7 @@ type ScenePackageSceneEntry =
       createdAt: string | null;
       updatedAt: string | null;
       sceneJsonUrl: string;
-      terrain?: SceneTerrainPackageBundle | null;
+      terrain?: ScenePackageTerrainEntry | null;
     };
 
 type ScenePackageProjectData = {
@@ -1707,6 +1702,12 @@ const instancedLodFrustumCuller = createInstancedBvhFrustumCuller();
 const TERRAIN_SCATTER_LOD_UPDATE_INTERVAL_MS = isWeChatMiniProgram ? 320 : 200;
 const TERRAIN_SCATTER_VISIBILITY_UPDATE_INTERVAL_MS = isWeChatMiniProgram ? 120 : 33;
 const TERRAIN_SCATTER_MAX_BINDING_CHANGES_PER_UPDATE = isWeChatMiniProgram ? 120 : 200;
+const WECHAT_READONLY_TERRAIN_FLAT_TILING_RADIUS_CHUNKS = 20;
+const WECHAT_READONLY_TERRAIN_CHUNK_SYNC_BUDGET = {
+  maxCreatePerUpdate: 4,
+  maxDestroyPerUpdate: 6,
+  maxMs: 4,
+};
 const terrainScatterRuntime = createTerrainScatterLodRuntime({
     lodUpdateIntervalMs: TERRAIN_SCATTER_LOD_UPDATE_INTERVAL_MS,
     visibilityUpdateIntervalMs: TERRAIN_SCATTER_VISIBILITY_UPDATE_INTERVAL_MS,
@@ -3557,58 +3558,39 @@ function normalizeDisplayBoardAssetId(candidate: string): string {
   return withoutScheme.trim()
 }
 
-function readGroundTerrainManifestFromPackage(pkg: ScenePackageUnzipped, manifestPath: string | null | undefined): SceneTerrainPackageBundle | null {
-  const trimmedPath = typeof manifestPath === 'string' ? manifestPath.trim() : ''
-  if (!trimmedPath) {
-    return null
+function hydrateGroundSidecarFromPackage(
+  pkg: ScenePackageUnzipped,
+  sceneEntry: {
+    sceneId: string;
+    path: string;
+    terrain?: { datasetId: string; rootManifestPath: string; regionsPath?: string };
+  },
+  document: SceneJsonExportDocument,
+): SceneJsonExportDocument {
+  const definition = findFirstGroundDynamicMesh(document) as GroundRuntimeDynamicMesh | null;
+  if (!definition) {
+    return document;
   }
-  const manifestText = readTextFileFromScenePackage(pkg, trimmedPath)
-  const raw = JSON.parse(manifestText) as unknown
-  if (!raw || typeof raw !== 'object') {
-    throw new Error(`场景包内 ground terrain manifest 无效：${trimmedPath}`)
-  }
-  const candidate = raw as GroundTerrainPackageManifest
-  if (candidate.format !== GROUND_TERRAIN_PACKAGE_FORMAT || candidate.version !== GROUND_TERRAIN_PACKAGE_VERSION) {
-    throw new Error(`场景包内 ground terrain manifest 版本不匹配：${trimmedPath}`)
-  }
-  return {
-    manifestPath: trimmedPath,
-    manifest: candidate,
-  }
-}
 
-function readGroundChunkManifestFromPackage(pkg: ScenePackageUnzipped, manifestPath: string | null | undefined): GroundChunkManifest | null {
-  const trimmedPath = typeof manifestPath === 'string' ? manifestPath.trim() : ''
-  if (!trimmedPath) {
-    return null
-  }
-  const manifestText = readTextFileFromScenePackage(pkg, trimmedPath)
-  const raw = JSON.parse(manifestText) as unknown
-  if (!raw || typeof raw !== 'object') {
-    throw new Error(`场景包内 ground chunk manifest 无效：${trimmedPath}`)
-  }
-  const candidate = raw as GroundChunkManifest
-  if (candidate.version !== 1 || typeof candidate.sceneId !== 'string' || !candidate.chunks || typeof candidate.chunks !== 'object') {
-    throw new Error(`场景包内 ground chunk manifest 结构不正确：${trimmedPath}`)
-  }
-  return candidate
-}
+  const terrainDatasetManifest = readTerrainDatasetManifestFromScenePackage(pkg, sceneEntry);
+  const terrainHeightSampler = createTerrainDatasetHeightSamplerFromScenePackage(pkg, sceneEntry);
+  (definition as GroundDynamicMesh & {
+    runtimeTerrainDatasetManifest?: unknown;
+    runtimeTerrainDatasetEnabled?: boolean;
+    runtimeTerrainHeightSampler?: unknown;
+  }).runtimeTerrainDatasetManifest = terrainDatasetManifest;
+  (definition as GroundDynamicMesh & {
+    runtimeTerrainDatasetManifest?: unknown;
+    runtimeTerrainDatasetEnabled?: boolean;
+    runtimeTerrainHeightSampler?: unknown;
+  }).runtimeTerrainDatasetEnabled = Boolean(terrainHeightSampler);
+  (definition as GroundDynamicMesh & {
+    runtimeTerrainDatasetManifest?: unknown;
+    runtimeTerrainDatasetEnabled?: boolean;
+    runtimeTerrainHeightSampler?: unknown;
+  }).runtimeTerrainHeightSampler = terrainHeightSampler;
 
-async function loadViewerGroundChunkDataBuffer(record: GroundChunkManifestRecord): Promise<ArrayBuffer | null> {
-  const dataPath = typeof record.dataPath === 'string' ? record.dataPath.trim() : '';
-  if (!dataPath) {
-    return null;
-  }
-  const packagedBytes = activeScenePackagePkg?.files?.[dataPath] ?? null;
-  if (packagedBytes) {
-    const buffer = new ArrayBuffer(packagedBytes.byteLength);
-    new Uint8Array(buffer).set(packagedBytes);
-    return buffer;
-  }
-  if (dataPath.startsWith('/') || /^(https?:)?\/\//i.test(dataPath)) {
-    return await requestBinaryFromUrl(dataPath);
-  }
-  return null;
+  return document;
 }
 
 async function resolveAssetUrlReference(candidate: string): Promise<ResolvedAssetUrl | null> {
@@ -5095,15 +5077,19 @@ function syncViewerInfiniteGroundChunkCollisions(
   activeCamera: THREE.PerspectiveCamera,
 ): void {
   const state = resolveViewerGroundChunkManifestState(groundObject, groundDefinition);
+  if ((groundDefinition as GroundRuntimeDynamicMesh & { runtimeTerrainDatasetEnabled?: boolean }).runtimeTerrainDatasetEnabled) {
+    clearInfiniteGroundChunkCollisionBodies();
+    return;
+  }
   infiniteGroundChunkCollisionRuntime.sync({
     enabled: physicsEnvironmentEnabled.value,
     groundObject,
     groundDefinition,
     camera: activeCamera,
-    sourceId: state?.sourceId ?? (currentSceneId.value ?? currentDocument?.id ?? '').trim() || 'viewer-ground',
+    sourceId: state?.sourceId ?? (((currentSceneId.value ?? currentDocument?.id ?? '').trim()) || 'viewer-ground'),
     manifestRevision: state?.manifestRevision ?? 0,
     manifestRecords: state?.manifestRecords ?? {},
-    loadChunkData: (record) => loadViewerGroundChunkDataBuffer(record),
+    loadChunkData: async () => null,
   });
 }
 
@@ -5113,6 +5099,11 @@ function syncViewerInfiniteGroundChunkManifest(
   camera: THREE.PerspectiveCamera,
 ): void {
   const manifestState = resolveViewerGroundChunkManifestState(groundObject, groundDefinition);
+  if ((groundDefinition as GroundRuntimeDynamicMesh & { runtimeTerrainDatasetEnabled?: boolean }).runtimeTerrainDatasetEnabled) {
+    setInfiniteGroundHiddenChunkKeys(groundObject, []);
+    clearInfiniteGroundChunkMeshes(groundObject);
+    return;
+  }
   if (!manifestState) {
     setInfiniteGroundHiddenChunkKeys(groundObject, []);
     clearInfiniteGroundChunkMeshes(groundObject);
@@ -5127,7 +5118,7 @@ function syncViewerInfiniteGroundChunkManifest(
     manifestRevision,
     manifestRecords,
     resolveActiveRecord: (chunkKey) => manifestRecords[chunkKey] ?? null,
-    loadChunkData: loadViewerGroundChunkDataBuffer,
+    loadChunkData: async () => null,
   });
   setInfiniteGroundHiddenChunkKeys(groundObject, getLoadedInfiniteGroundChunkKeys(groundObject));
 }
@@ -10763,7 +10754,7 @@ async function waitForSceneReady(expectedSceneId: string, timeoutMs = 30000): Pr
 
     const stop = watch(
       () => [loading.value, sceneSwitching.value, currentSceneId.value] as const,
-      ([isLoading, isSwitching, sceneId]) => {
+      ([isLoading, isSwitching, sceneId]: readonly [boolean, boolean, string | null]) => {
         if (!isLoading && !isSwitching && sceneId === expected) {
           clearTimeout(timeout);
           stop();
@@ -11556,11 +11547,6 @@ function parseSceneDocument(payload: unknown): SceneJsonExportDocument {
   throw new Error('场景数据格式不正确');
 }
 
-const GROUND_HEIGHTMAP_SIDECAR_MAGIC = 0x48474d32;
-const GROUND_HEIGHTMAP_SIDECAR_VERSION = 2;
-const GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES = 32;
-const EMPTY_GROUND_BOUND = -1;
-
 function findFirstGroundDynamicMesh(document: SceneJsonExportDocument): GroundDynamicMesh | null {
   const stack = [...document.nodes];
   while (stack.length) {
@@ -11576,241 +11562,6 @@ function findFirstGroundDynamicMesh(document: SceneJsonExportDocument): GroundDy
     }
   }
   return null;
-}
-
-function hydrateGroundSidecarFromPackage(
-  pkg: ScenePackageUnzipped,
-  sceneEntry: { sceneId: string; path: string; groundHeightsPath?: string; groundScatterPath?: string; groundPaintPath?: string },
-  document: SceneJsonExportDocument,
-): SceneJsonExportDocument {
-  const definition = findFirstGroundDynamicMesh(document) as GroundRuntimeDynamicMesh | null;
-  if (!definition) {
-    return document;
-  }
-  if (!sceneEntry.groundHeightsPath) {
-    throw new Error(`场景 ${sceneEntry.sceneId} 缺少 ground 高度 sidecar 路径`);
-  }
-  const sidecarBytes = pkg.files[sceneEntry.groundHeightsPath];
-  if (!sidecarBytes) {
-    throw new Error(`场景 ${sceneEntry.sceneId} 缺少 ground 高度 sidecar 文件`);
-  }
-
-  const sidecarBuffer = sidecarBytes.buffer.slice(sidecarBytes.byteOffset, sidecarBytes.byteOffset + sidecarBytes.byteLength);
-  const vertexCount = getGroundVertexCount(definition.rows, definition.columns);
-  const expectedByteLength = GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES + vertexCount * Float64Array.BYTES_PER_ELEMENT * 2;
-  if (sidecarBuffer.byteLength !== expectedByteLength) {
-    throw new Error(
-      `场景 ${sceneEntry.sceneId} 的 ground sidecar 大小异常：期望 ${expectedByteLength}，实际 ${sidecarBuffer.byteLength}`,
-    );
-  }
-
-  const headerView = new DataView(sidecarBuffer, 0, GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES);
-  const magic = headerView.getUint32(0, true);
-  const version = headerView.getUint32(4, true);
-  if (magic !== GROUND_HEIGHTMAP_SIDECAR_MAGIC || version !== GROUND_HEIGHTMAP_SIDECAR_VERSION) {
-    throw new Error(`场景 ${sceneEntry.sceneId} 的 ground sidecar 头无效`);
-  }
-
-  const minRow = headerView.getInt32(8, true);
-  const maxRow = headerView.getInt32(12, true);
-  const minColumn = headerView.getInt32(16, true);
-  const maxColumn = headerView.getInt32(20, true);
-  const generatedAt = headerView.getFloat64(24, true);
-  const hasBounds = minRow !== EMPTY_GROUND_BOUND && maxRow !== EMPTY_GROUND_BOUND && minColumn !== EMPTY_GROUND_BOUND && maxColumn !== EMPTY_GROUND_BOUND;
-  const hasGeneratedAt = Number.isFinite(generatedAt);
-
-  definition.manualHeightMap = new Float64Array(sidecarBuffer, GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES, vertexCount);
-  definition.planningHeightMap = new Float64Array(
-    sidecarBuffer,
-    GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES + vertexCount * Float64Array.BYTES_PER_ELEMENT,
-    vertexCount,
-  );
-  definition.planningMetadata = hasBounds || hasGeneratedAt
-    ? {
-        contourBounds: hasBounds ? { minRow, maxRow, minColumn, maxColumn } : null,
-        generatedAt: hasGeneratedAt ? generatedAt : undefined,
-      }
-    : null;
-  definition.surfaceRevision = Number.isFinite(definition.surfaceRevision)
-    ? Math.max(0, Math.trunc(definition.surfaceRevision as number))
-    : 0;
-  (definition as GroundDynamicMesh & {
-    runtimeHydratedHeightState?: 'pristine' | 'dirty';
-    runtimeDisableOptimizedChunks?: boolean;
-  }).runtimeHydratedHeightState = 'pristine';
-  definition.runtimeDisableOptimizedChunks = false;
-
-  const scatterSidecarPath = typeof sceneEntry.groundScatterPath === 'string' ? sceneEntry.groundScatterPath.trim() : '';
-  if (!scatterSidecarPath) {
-    definition.terrainScatter = null;
-  } else {
-    const scatterSidecarBytes = pkg.files[scatterSidecarPath];
-    if (!scatterSidecarBytes) {
-      throw new Error(`场景 ${sceneEntry.sceneId} 缺少 ground scatter sidecar 文件`);
-    }
-    const scatterSidecarBuffer = new ArrayBuffer(scatterSidecarBytes.byteLength);
-    new Uint8Array(scatterSidecarBuffer).set(scatterSidecarBytes);
-    const scatterPayload = deserializeGroundScatterSidecar(scatterSidecarBuffer);
-    definition.terrainScatter = scatterPayload.terrainScatter;
-  }
-
-  const paintSidecarPath = typeof sceneEntry.groundPaintPath === 'string' ? sceneEntry.groundPaintPath.trim() : '';
-  if (!paintSidecarPath) {
-    definition.terrainPaint = null;
-    definition.groundSurfaceChunks = null;
-  } else {
-    const paintSidecarBytes = pkg.files[paintSidecarPath];
-    if (!paintSidecarBytes) {
-      throw new Error(`场景 ${sceneEntry.sceneId} 缺少 ground paint sidecar 文件`);
-    }
-    const paintSidecarBuffer = new ArrayBuffer(paintSidecarBytes.byteLength);
-    new Uint8Array(paintSidecarBuffer).set(paintSidecarBytes);
-    const paintPayload = deserializeGroundPaintSidecar(paintSidecarBuffer);
-    definition.terrainPaint = null;
-    definition.groundSurfaceChunks = paintPayload.groundSurfaceChunks ?? null;
-  }
-
-  return document;
-}
-
-let projectSceneSwitchToken = 0;
-
-async function switchToProjectScene(sceneId: string): Promise<void> {
-  projectSceneSwitchToken += 1;
-  const token = projectSceneSwitchToken;
-
-  const trimmed = (sceneId ?? '').trim();
-  if (!trimmed) {
-    return;
-  }
-  const entry = projectSceneIndex.get(trimmed) ?? null;
-  if (!entry) {
-    warnings.value = [...warnings.value, `未找到场景：${trimmed}`];
-    return;
-  }
-  loading.value = true;
-  error.value = null;
-  try {
-    if (entry.kind === 'embedded') {
-      if (token !== projectSceneSwitchToken) {
-        return;
-      }
-
-      const sceneOverrides = activeScenePackageAssetOverrides ?? undefined;
-      const terrain = entry.terrain ?? null;
-
-      previewPayload.value = {
-        document: entry.document,
-        title: entry.document.name || entry.name || '场景预览',
-        origin: 'scene-package',
-        assetOverrides: sceneOverrides,
-        terrain,
-        createdAt: entry.document.createdAt,
-        updatedAt: entry.document.updatedAt,
-      };
-      currentSceneId.value = entry.id;
-      return;
-    }
-    if (entry.kind === 'external') {
-      const document = await requestSceneDocument(entry.sceneJsonUrl);
-      if (token !== projectSceneSwitchToken) {
-        return;
-      }
-
-      // External scene JSON: clear any active scene-package overrides.
-      activeScenePackageAssetOverrides = null;
-
-      previewPayload.value = {
-        document,
-        title: document.name || entry.name || '场景预览',
-        origin: entry.sceneJsonUrl,
-        assetOverrides: undefined,
-        terrain: entry.terrain ?? null,
-        createdAt: document.createdAt,
-        updatedAt: document.updatedAt,
-      };
-      currentSceneId.value = entry.id;
-      return;
-    }
-  } finally {
-    if (token === projectSceneSwitchToken) {
-      loading.value = false;
-    }
-  }
-}
-
-async function loadProjectFromBundle(bundle: ScenePackageProjectData): Promise<void> {
-  error.value = null;
-  projectBundle.value = bundle;
-  projectSceneIndex.clear();
-  bundle.scenes.forEach((scene: ScenePackageSceneEntry) => {
-    if (scene && typeof scene.id === 'string') {
-      projectSceneIndex.set(scene.id, scene);
-    }
-  });
-
-  const initialId = bundle.project.defaultSceneId || bundle.project.sceneOrder?.[0] || null;
-  if (!initialId) {
-    error.value = '工程未设置默认场景';
-    previewPayload.value = null;
-    loading.value = false;
-    return;
-  }
-
-  requestedMode.value = 'project';
-  await switchToProjectScene(initialId);
-}
-
-function requestBinary(url: string): Promise<ArrayBuffer> {
-  return new Promise((resolve, reject) => {
-    if (sceneDownloadTask) {
-      sceneDownloadTask.abort();
-      sceneDownloadTask = null;
-    }
-    const task = uni.request({
-      url,
-      method: 'GET',
-      responseType: 'arraybuffer',
-      timeout: SCENE_DOWNLOAD_TIMEOUT,
-      success: (res: { statusCode?: number; data: unknown }) => {
-        const statusCode = typeof res.statusCode === 'number' ? res.statusCode : 200;
-        if (statusCode >= 400) {
-          reject(new Error(`场景包下载失败（${statusCode}）`));
-          return;
-        }
-        const buffer = res.data as ArrayBuffer;
-        if (!buffer || typeof buffer.byteLength !== 'number') {
-          reject(new Error('场景包下载失败（响应不是二进制数据）'));
-          return;
-        }
-        resolve(buffer);
-      },
-      fail: (requestError: { errMsg?: unknown } | null) => {
-        const message =
-          requestError && typeof requestError === 'object' && 'errMsg' in requestError
-            ? String((requestError as { errMsg: unknown }).errMsg)
-            : '场景包下载失败';
-        reject(new Error(message));
-      },
-      complete: () => {
-        sceneDownloadTask = null;
-      },
-    }) as SceneRequestTask;
-    sceneDownloadTask = task;
-    task?.onProgressUpdate?.((info: SceneDownloadProgress) => {
-      sceneDownload.phase = 'download';
-      if (typeof info.progress === 'number' && Number.isFinite(info.progress)) {
-        sceneDownload.percent = info.progress;
-        sceneDownload.label = `正在下载场景包… ${Math.max(0, Math.min(100, Math.round(info.progress)))}%`;
-      }
-      if (typeof info.totalBytesWritten === 'number') {
-        sceneDownload.loaded = info.totalBytesWritten;
-      }
-      if (typeof info.totalBytesExpectedToWrite === 'number') {
-        sceneDownload.total = info.totalBytesExpectedToWrite;
-      }
-    });
-  });
 }
 
 async function loadProjectFromScenePackageUrl(url: string, cacheKey?: string): Promise<void> {
@@ -11842,7 +11593,7 @@ async function loadProjectFromScenePackageUrl(url: string, cacheKey?: string): P
 
     sceneDownload.phase = 'download';
     sceneDownload.label = '正在下载场景包…';
-    const buffer = await requestBinary(url);
+    const buffer = await requestBinaryFromUrl(url);
     sceneDownload.phase = 'parse';
     sceneDownload.label = '正在解析场景包…';
     await loadProjectFromScenePackageBytes(buffer);
@@ -11981,40 +11732,6 @@ function parseScenePackageToProjectData(pkg: ScenePackageUnzipped): ScenePackage
       throw new Error(`场景包内场景数据无效：${sceneEntry.path}`);
     }
     const document = hydrateGroundSidecarFromPackage(pkg, sceneEntry, sceneRaw as SceneJsonExportDocument);
-    const terrain = readGroundTerrainManifestFromPackage(pkg, sceneEntry.groundTerrainManifestPath);
-    const groundChunkManifest = readGroundChunkManifestFromPackage(pkg, sceneEntry.groundChunkManifestPath);
-    if (terrain) {
-      const groundNode = Array.isArray(document.nodes)
-        ? document.nodes.find((node) => node?.dynamicMesh?.type === 'Ground')
-        : null;
-      if (groundNode) {
-        const userData = groundNode.userData && typeof groundNode.userData === 'object'
-          ? (groundNode.userData as Record<string, unknown>)
-          : {};
-        groundNode.userData = {
-          ...userData,
-          groundTerrainPackageManifest: terrain.manifest,
-          groundTerrainManifestPath: terrain.manifestPath,
-          groundTerrainTilesRootPath: terrain.manifest.terrainTilesRootPath,
-          groundCollisionPath: terrain.manifest.collisionManifestPath,
-        };
-      }
-    }
-    if (groundChunkManifest) {
-      const groundNode = Array.isArray(document.nodes)
-        ? document.nodes.find((node) => node?.dynamicMesh?.type === 'Ground')
-        : null;
-      if (groundNode) {
-        const userData = groundNode.userData && typeof groundNode.userData === 'object'
-          ? (groundNode.userData as Record<string, unknown>)
-          : {};
-        groundNode.userData = {
-          ...userData,
-          groundChunkManifest,
-          groundChunkManifestPath: sceneEntry.groundChunkManifestPath ?? null,
-        };
-      }
-    }
     const assetRegistry: Record<string, SceneAssetRegistryEntry> = {
       ...(document.assetRegistry ?? {}),
     };
@@ -12047,6 +11764,7 @@ function parseScenePackageToProjectData(pkg: ScenePackageUnzipped): ScenePackage
     const documentMeta = document as SceneJsonExportDocument & { createdAt?: unknown; updatedAt?: unknown };
     document.resourceSummary = buildDocumentResourceSummary(document);
     const id = sceneEntry.sceneId;
+    const terrain = sceneEntry.terrain ?? null;
     scenes.push({
       kind: 'embedded',
       id,
@@ -12081,7 +11799,21 @@ async function loadProjectFromScenePackageBytes(buffer: ArrayBuffer): Promise<vo
   sceneDownload.label = '正在解析场景数据…';
   const projectData = parseScenePackageToProjectData(activeScenePackagePkg);
   sceneDownload.label = '正在组装场景索引…';
-  await loadProjectFromBundle(projectData);
+  projectBundle.value = projectData;
+  projectSceneIndex.clear();
+  projectData.scenes.forEach((scene) => {
+    projectSceneIndex.set(scene.id, scene);
+  });
+
+  const initialSceneId = projectData.project.defaultSceneId || projectData.project.sceneOrder[0] || null;
+  if (!initialSceneId) {
+    error.value = '工程未设置默认场景';
+    previewPayload.value = null;
+    return;
+  }
+
+  currentProjectId.value = projectData.project.id || currentProjectId.value;
+  await switchToProjectScene(initialSceneId);
 }
 
 async function loadProjectFromScenePackagePointer(pointer: ScenePackagePointer): Promise<void> {
@@ -12162,6 +11894,45 @@ function requestSceneDocument(url: string): Promise<SceneJsonExportDocument> {
   });
 }
 
+async function switchToProjectScene(sceneId: string): Promise<void> {
+  const trimmed = (sceneId ?? '').trim();
+  if (!trimmed) {
+    return;
+  }
+
+  const entry = projectSceneIndex.get(trimmed) ?? null;
+  if (!entry) {
+    warnings.value = [...warnings.value, `未找到场景：${trimmed}`];
+    return;
+  }
+
+  loading.value = true;
+  error.value = null;
+
+  try {
+    const document = entry.kind === 'embedded'
+      ? entry.document
+      : await requestSceneDocument(entry.sceneJsonUrl);
+
+    previewPayload.value = {
+      document,
+      title: document.name || entry.name || '场景预览',
+      origin: entry.kind === 'embedded' ? 'scene-package' : entry.sceneJsonUrl,
+      assetOverrides: activeScenePackageAssetOverrides ?? undefined,
+      terrain: entry.terrain ?? null,
+      createdAt: document.createdAt,
+      updatedAt: document.updatedAt,
+    };
+    currentSceneId.value = trimmed;
+  } catch (switchError) {
+    const message = switchError instanceof Error ? switchError.message : '场景切换失败';
+    error.value = message;
+    throw switchError;
+  } finally {
+    loading.value = false;
+  }
+}
+
 function resetSceneDownloadState(): void {
   sceneDownload.active = false;
   sceneDownload.phase = 'download';
@@ -12188,7 +11959,7 @@ function formatByteSize(value: number): string {
 
 watch(
   previewPayload,
-  (payload) => {
+  (payload: ScenePreviewPayload | null) => {
     if (!bootstrapFinished.value) {
       return;
     }
@@ -12968,8 +12739,24 @@ function startRenderLoop(
         if (cachedGround) {
           const groundObject = nodeObjectMap.get(cachedGround.nodeId) ?? null;
           if (groundObject) {
-            syncGroundChunkLoadingMode(groundObject, cachedGround.dynamicMesh, camera);
-            syncViewerInfiniteGroundChunkManifest(groundObject, cachedGround.dynamicMesh, camera);
+            const readonlyTerrainEnabled = Boolean((cachedGround.dynamicMesh as GroundRuntimeDynamicMesh & { runtimeTerrainDatasetEnabled?: boolean }).runtimeTerrainDatasetEnabled);
+            // syncGroundChunkLoadingMode also drives the far flat InstancedMesh tiling used to hide
+            // infinite-ground edges at high altitude and during driving. Readonly terrain still needs
+            // that visual shell, even though it does not use legacy chunk manifest streaming.
+            syncGroundChunkLoadingMode(
+              groundObject,
+              cachedGround.dynamicMesh,
+              camera,
+              readonlyTerrainEnabled && isWeChatMiniProgram
+                ? {
+                    radius: WECHAT_READONLY_TERRAIN_FLAT_TILING_RADIUS_CHUNKS,
+                    budget: WECHAT_READONLY_TERRAIN_CHUNK_SYNC_BUDGET,
+                  }
+                : undefined,
+            );
+            if (!readonlyTerrainEnabled) {
+              syncViewerInfiniteGroundChunkManifest(groundObject, cachedGround.dynamicMesh, camera);
+            }
             if (debugEnabled.value && debugMode.value === 'full') {
               syncGroundChunkDebugCounters(groundObject, cachedGround.dynamicMesh, camera);
             }

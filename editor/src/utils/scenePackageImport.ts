@@ -3,6 +3,7 @@ import {
   type GroundChunkManifest,
   type QuantizedTerrainDatasetRootManifest,
   readBinaryFileFromScenePackage,
+  readTextFileFromScenePackage,
   unzipScenePackage,
   type ScenePackageSceneEntry,
 } from '@schema'
@@ -137,20 +138,10 @@ function extractGroundHeightSidecarFromPackage(
   sceneEntry: ScenePackageSceneEntry,
   rawScene: StoredSceneDocument,
 ): ArrayBuffer | null {
-  const hasGroundNode = Array.isArray(rawScene.nodes)
-    && rawScene.nodes.some((node) => node?.dynamicMesh?.type === 'Ground')
-  if (!hasGroundNode) {
-    return null
-  }
-  const sidecarPath = sceneEntry.groundHeightsPath
-  if (!sidecarPath) {
-    throw new Error(`Scene bundle entry ${sceneEntry.sceneId} is missing ground height sidecar path`)
-  }
-  const bytes = zip.files[sidecarPath]
-  if (!bytes) {
-    throw new Error(`Missing ground height sidecar in scene bundle: ${sidecarPath}`)
-  }
-  return new Uint8Array(bytes).buffer
+  void zip
+  void sceneEntry
+  void rawScene
+  return null
 }
 
 function extractGroundScatterSidecarFromPackage(
@@ -199,11 +190,9 @@ function extractGroundChunkManifestFromPackage(
   zip: ReturnType<typeof unzipScenePackage>,
   sceneEntry: ScenePackageSceneEntry,
 ): GroundChunkManifest | null {
-  const manifestPath = typeof sceneEntry.groundChunkManifestPath === 'string' ? sceneEntry.groundChunkManifestPath.trim() : ''
-  if (!manifestPath) {
-    return null
-  }
-  return JSON.parse(readTextFileFromScenePackage(zip, manifestPath)) as GroundChunkManifest
+  void zip
+  void sceneEntry
+  return null
 }
 
 function extractGroundChunkDataFromPackage(
@@ -234,8 +223,8 @@ function extractTerrainDatasetManifestFromPackage(
   zip: ReturnType<typeof unzipScenePackage>,
   sceneEntry: ScenePackageSceneEntry,
 ): QuantizedTerrainDatasetRootManifest | null {
-  const manifestPath = typeof sceneEntry.terrainDataset?.rootManifestPath === 'string'
-    ? sceneEntry.terrainDataset.rootManifestPath.trim()
+  const manifestPath = typeof sceneEntry.terrain?.rootManifestPath === 'string'
+    ? sceneEntry.terrain.rootManifestPath.trim()
     : ''
   if (!manifestPath) {
     return null

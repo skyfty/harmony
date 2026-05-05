@@ -135,6 +135,7 @@ export type {
   ScenePackageProjectEntry,
   ScenePackageResourceEntry,
   ScenePackageResourceType,
+  ScenePackageTerrainEntry,
   ScenePackageSceneEntry,
 } from './scenePackage'
 

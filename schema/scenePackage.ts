@@ -1,7 +1,7 @@
 export const SCENE_PACKAGE_FORMAT = 'harmony-scene-package' as const;
-export const SCENE_PACKAGE_VERSION = 8 as const;
+export const SCENE_PACKAGE_VERSION = 9 as const;
 
-export interface ScenePackageTerrainDatasetEntry {
+export interface ScenePackageTerrainEntry {
   datasetId: string;
   /** Path within ZIP, e.g. `scenes/<sceneId>/terrain/root.json` */
   rootManifestPath: string;
@@ -24,16 +24,12 @@ export interface ScenePackageSceneEntry {
   path: string;
   /** Optional editor-only planning sidecar path, e.g. `scenes/<sceneId>/planning.json` */
   planningPath?: string;
-  /** Optional infinite ground chunk manifest path, e.g. `scenes/<sceneId>/ground-chunk-manifest.json` */
-  groundChunkManifestPath?: string;
-  /** Legacy Ground height sidecar path kept only while exporters are being migrated away from the old format. */
-  groundHeightsPath?: string;
   /** Optional ground scatter sidecar path, e.g. `scenes/<sceneId>/ground-scatter.bin` */
   groundScatterPath?: string;
   /** Optional ground paint sidecar path, e.g. `scenes/<sceneId>/ground-paint.bin` */
   groundPaintPath?: string;
-  /** Optional local quantized terrain dataset entry for large terrain scenes. */
-  terrainDataset?: ScenePackageTerrainDatasetEntry;
+  /** Readonly runtime terrain package entry used by preview/mobile viewers. */
+  terrain?: ScenePackageTerrainEntry;
 }
 
 export interface ScenePackageProjectEntry {

@@ -75,6 +75,7 @@ import { type SceneAssetDiagnosticsSummary } from '@/utils/sceneAssetDiagnostics
 import { collectRuntimeModelNodesByAssetId } from '@/utils/sceneAssetCollectors'
 import { createGroundRuntimeMeshFromSidecar } from '@/utils/groundHeightSidecar'
 import { attachOptimizedGroundMeshToDocument } from '@/utils/groundOptimizedMeshExport'
+import { createScenesStoreTerrainDatasetHeightSampler } from '@/utils/terrainDatasetRuntime'
 import { useGroundHeightmapStore } from '@/stores/groundHeightmapStore'
 import { useScenesStore } from '@/stores/scenesStore'
 import { attachGroundPaintRuntimeToNode, useGroundPaintStore } from '@/stores/groundPaintStore'
@@ -2021,6 +2022,39 @@ async function syncGroundCache(document: SceneJsonExportDocument | null): Promis
 		}
 	}
 	if (groundSurfacePreviewLoadToken !== loadToken) {
+		return
+	}
+	const terrainDatasetManifest = await useScenesStore().loadTerrainDatasetManifest(document.id)
+	const terrainHeightSampler = terrainDatasetManifest
+		? await createScenesStoreTerrainDatasetHeightSampler(document.id)
+		: null
+	if (groundSurfacePreviewLoadToken !== loadToken) {
+		return
+	}
+	;(groundNode.dynamicMesh as GroundRuntimeDynamicMesh & {
+		runtimeTerrainDatasetManifest?: unknown
+		runtimeTerrainDatasetEnabled?: boolean
+		runtimeTerrainHeightSampler?: unknown
+	}).runtimeTerrainDatasetManifest = terrainDatasetManifest
+	;(groundNode.dynamicMesh as GroundRuntimeDynamicMesh & {
+		runtimeTerrainDatasetManifest?: unknown
+		runtimeTerrainDatasetEnabled?: boolean
+		runtimeTerrainHeightSampler?: unknown
+	}).runtimeTerrainDatasetEnabled = Boolean(terrainHeightSampler)
+	;(groundNode.dynamicMesh as GroundRuntimeDynamicMesh & {
+		runtimeTerrainDatasetManifest?: unknown
+		runtimeTerrainDatasetEnabled?: boolean
+		runtimeTerrainHeightSampler?: unknown
+	}).runtimeTerrainHeightSampler = terrainHeightSampler
+	if (terrainHeightSampler) {
+		attachGroundScatterRuntimeToNode(document.id, groundNode)
+		attachGroundPaintRuntimeToNode(document.id, groundNode)
+		cachedGroundNodeId = groundNode.id
+		cachedGroundDynamicMesh = groundNode.dynamicMesh
+		cachedGroundNode = groundNode
+		if (scene && currentDocument?.id === document.id) {
+			void applyEnvironmentSettingsToScene(resolveDocumentEnvironment(document))
+		}
 		return
 	}
 	attachGroundScatterRuntimeToNode(document.id, groundNode)
