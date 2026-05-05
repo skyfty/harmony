@@ -9,6 +9,13 @@ export interface ScenePackageTerrainEntry {
   regionsPath?: string;
 }
 
+export interface ScenePackageCompiledGroundEntry {
+  /** Path within ZIP, e.g. `scenes/<sceneId>/compiled-ground/manifest.json` */
+  manifestPath: string;
+  renderRootPath?: string;
+  collisionRootPath?: string;
+}
+
 export type ScenePackageResourceType =
   | 'localAsset'
   | 'planningImage'
@@ -30,6 +37,8 @@ export interface ScenePackageSceneEntry {
   groundPaintPath?: string;
   /** Readonly runtime terrain package entry used by preview/mobile viewers. */
   terrain?: ScenePackageTerrainEntry;
+  /** Precompiled near-field ground package entry used by preview/mobile viewers. */
+  compiledGround?: ScenePackageCompiledGroundEntry;
 }
 
 export interface ScenePackageProjectEntry {

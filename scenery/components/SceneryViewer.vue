@@ -499,8 +499,15 @@ import {
   syncGroundChunkLoadingMode,
   sampleGroundHeight,
 } from '@harmony/schema/groundMesh';
-import { clearInfiniteGroundChunkMeshes, getLoadedInfiniteGroundChunkKeys, syncInfiniteGroundChunkMeshes } from '@harmony/schema/groundChunkManifestRuntime';
-import { createInfiniteGroundChunkColliderRuntime } from '@harmony/schema/infiniteGroundChunkCollisions';
+import { clearInfiniteGroundChunkMeshes } from '@harmony/schema/groundChunkManifestRuntime';
+import {
+  clearCompiledGroundRenderTiles,
+  collectCompiledGroundCoveredChunkKeys,
+  computeCompiledGroundManifestRevision,
+  createCompiledGroundCollisionRuntime,
+  syncCompiledGroundRenderTiles,
+  type CompiledGroundManifest,
+} from '@harmony/schema';
 import { buildGroundAirWallDefinitions } from '@harmony/schema/airWall';
 
 import {
@@ -599,8 +606,6 @@ import {
 } from '../common/utils/terrainDatasetPackage';
 import type {
   AutoTourRouteSnapResult,
-  GroundChunkManifest,
-  GroundChunkManifestRecord,
   SceneNode,
   SceneNodeComponentState,
   SceneJsonExportDocument,
@@ -611,6 +616,7 @@ import type {
   LanternSlideDefinition,
   SceneResourceSummary,
   SceneResourceSummaryEntry,
+  ScenePackageCompiledGroundEntry,
   ScenePackageTerrainEntry,
   Vector3Like,
 } from '@harmony/schema/index';
@@ -832,6 +838,7 @@ interface ScenePreviewPayload {
   updatedAt?: string;
   assetOverrides?: SceneGraphBuildOptions['assetOverrides'];
   terrain?: ScenePackageTerrainEntry | null;
+  compiledGround?: CompiledGroundManifest | null;
 };
 
 type RequestedMode = 'project' | null;
@@ -917,6 +924,7 @@ type ScenePackageSceneEntry =
       updatedAt: string | null;
       document: SceneJsonExportDocument;
       terrain?: ScenePackageTerrainEntry | null;
+      compiledGround?: CompiledGroundManifest | null;
     }
   | {
       kind: 'external';
@@ -926,6 +934,7 @@ type ScenePackageSceneEntry =
       updatedAt: string | null;
       sceneJsonUrl: string;
       terrain?: ScenePackageTerrainEntry | null;
+      compiledGround?: CompiledGroundManifest | null;
     };
 
 type ScenePackageProjectData = {
@@ -1919,7 +1928,7 @@ const wallTrimeshCache = new Map<string, WallTrimeshCacheEntry>();
 const physicsGravity = new CANNON.Vec3(0, -DEFAULT_ENVIRONMENT_GRAVITY, 0);
 let physicsContactRestitution = DEFAULT_ENVIRONMENT_RESTITUTION;
 let physicsContactFriction = DEFAULT_ENVIRONMENT_FRICTION;
-const infiniteGroundChunkCollisionRuntime = createInfiniteGroundChunkColliderRuntime({
+const compiledGroundCollisionRuntime = createCompiledGroundCollisionRuntime({
   getPhysicsWorld: () => physicsWorld,
   ensurePhysicsWorld: () => ensurePhysicsWorld(),
   createBody: (node, component, shapeDefinition, object) => createRigidbodyBody(node, component, shapeDefinition, object),
@@ -3564,6 +3573,7 @@ function hydrateGroundSidecarFromPackage(
     sceneId: string;
     path: string;
     terrain?: { datasetId: string; rootManifestPath: string; regionsPath?: string };
+    compiledGround?: ScenePackageCompiledGroundEntry | null;
   },
   document: SceneJsonExportDocument,
 ): SceneJsonExportDocument {
@@ -3589,6 +3599,26 @@ function hydrateGroundSidecarFromPackage(
     runtimeTerrainDatasetEnabled?: boolean;
     runtimeTerrainHeightSampler?: unknown;
   }).runtimeTerrainHeightSampler = terrainHeightSampler;
+
+  const compiledGroundManifestPath = typeof sceneEntry.compiledGround?.manifestPath === 'string'
+    ? sceneEntry.compiledGround.manifestPath.trim()
+    : '';
+  if (!compiledGroundManifestPath) {
+    throw new Error(`Scene ${sceneEntry.sceneId} is missing compiled ground manifest`);
+  }
+  try {
+    const compiledGroundManifest = JSON.parse(readTextFileFromScenePackage(pkg, compiledGroundManifestPath)) as CompiledGroundManifest;
+    const groundNode = findGroundNode(document.nodes);
+    if (groundNode) {
+      groundNode.userData = {
+        ...(groundNode.userData ?? {}),
+        compiledGroundEnabled: true,
+        compiledGroundManifest,
+      };
+    }
+  } catch (error) {
+    throw new Error(`Failed to hydrate compiled ground manifest ${compiledGroundManifestPath}: ${String(error)}`);
+  }
 
   return document;
 }
@@ -5024,72 +5054,51 @@ function refreshDynamicGroundCache(document: SceneJsonExportDocument | null): vo
 }
 
 function shouldUseInfiniteGroundChunkCollisionStreaming(node: SceneNode | null | undefined): boolean {
-  if (!node || !isGroundDynamicMesh(node.dynamicMesh)) {
-    return false;
-  }
-  const mesh = node.dynamicMesh as GroundRuntimeDynamicMesh;
-  const manifestRevision = Number.isFinite(mesh.chunkManifestRevision)
-    ? Math.max(0, Math.trunc(mesh.chunkManifestRevision as number))
-    : 0;
-  return manifestRevision > 0;
+  return Boolean(node && isGroundDynamicMesh(node.dynamicMesh));
 }
 
-function resolveViewerGroundChunkManifestState(
+function resolveViewerCompiledGroundManifest(
   groundObject: THREE.Object3D,
-  groundDefinition: GroundRuntimeDynamicMesh,
-): {
-  sourceId: string;
-  manifestRevision: number;
-  manifestRecords: Record<string, GroundChunkManifestRecord>;
-} | null {
-  const manifestRevision = Number.isFinite(groundDefinition.chunkManifestRevision)
-    ? Math.max(0, Math.trunc(groundDefinition.chunkManifestRevision as number))
-    : 0;
-  const sourceId = (currentSceneId.value ?? currentDocument?.id ?? '').trim();
-  const rawManifest = (groundObject.userData as Record<string, unknown> | undefined)?.groundChunkManifest
-    ?? (dynamicGroundCache?.node.userData as Record<string, unknown> | undefined)?.groundChunkManifest
+): CompiledGroundManifest | null {
+  const rawManifest = (groundObject.userData as Record<string, unknown> | undefined)?.compiledGroundManifest
+    ?? (dynamicGroundCache?.node.userData as Record<string, unknown> | undefined)?.compiledGroundManifest
     ?? null;
-  const manifest = rawManifest && typeof rawManifest === 'object'
-    ? rawManifest as GroundChunkManifest
+  return rawManifest && typeof rawManifest === 'object'
+    ? rawManifest as CompiledGroundManifest
     : null;
-  const manifestRecords = manifest?.revision === manifestRevision
-    ? { ...(manifest.chunks ?? {}) }
-    : {};
-
-  if (!sourceId || !manifestRevision || !Object.keys(manifestRecords).length) {
-    return null;
-  }
-
-  return {
-    sourceId,
-    manifestRevision,
-    manifestRecords,
-  };
 }
 
 function clearInfiniteGroundChunkCollisionBodies(): void {
-  infiniteGroundChunkCollisionRuntime.clear();
+  compiledGroundCollisionRuntime.clear();
 }
 
 function syncViewerInfiniteGroundChunkCollisions(
   groundObject: THREE.Object3D,
-  groundDefinition: GroundRuntimeDynamicMesh,
   activeCamera: THREE.PerspectiveCamera,
 ): void {
-  const state = resolveViewerGroundChunkManifestState(groundObject, groundDefinition);
-  if ((groundDefinition as GroundRuntimeDynamicMesh & { runtimeTerrainDatasetEnabled?: boolean }).runtimeTerrainDatasetEnabled) {
-    clearInfiniteGroundChunkCollisionBodies();
+  const compiledManifest = resolveViewerCompiledGroundManifest(groundObject);
+  if (!compiledManifest) {
+    compiledGroundCollisionRuntime.clear();
     return;
   }
-  infiniteGroundChunkCollisionRuntime.sync({
+  const revision = Number.isFinite(compiledManifest.revision)
+    ? Math.max(0, Math.trunc(compiledManifest.revision))
+    : computeCompiledGroundManifestRevision(compiledManifest);
+  compiledGroundCollisionRuntime.sync({
     enabled: physicsEnvironmentEnabled.value,
     groundObject,
-    groundDefinition,
     camera: activeCamera,
-    sourceId: state?.sourceId ?? (((currentSceneId.value ?? currentDocument?.id ?? '').trim()) || 'viewer-ground'),
-    manifestRevision: state?.manifestRevision ?? 0,
-    manifestRecords: state?.manifestRecords ?? {},
-    loadChunkData: async () => null,
+    sourceId: (currentSceneId.value ?? currentDocument?.id ?? '').trim() || 'viewer-ground',
+    revision,
+    manifest: compiledManifest,
+    loadTileData: async (record) => {
+      const pkg = activeScenePackagePkg;
+      if (!pkg) {
+        return null;
+      }
+      const bytes = pkg.files[record.path];
+      return bytes ? getArrayBufferView(bytes) : null;
+    },
   });
 }
 
@@ -5098,29 +5107,34 @@ function syncViewerInfiniteGroundChunkManifest(
   groundDefinition: GroundRuntimeDynamicMesh,
   camera: THREE.PerspectiveCamera,
 ): void {
-  const manifestState = resolveViewerGroundChunkManifestState(groundObject, groundDefinition);
-  if ((groundDefinition as GroundRuntimeDynamicMesh & { runtimeTerrainDatasetEnabled?: boolean }).runtimeTerrainDatasetEnabled) {
-    setInfiniteGroundHiddenChunkKeys(groundObject, []);
+  const compiledManifest = resolveViewerCompiledGroundManifest(groundObject);
+  if (!compiledManifest) {
+    clearCompiledGroundRenderTiles(groundObject);
     clearInfiniteGroundChunkMeshes(groundObject);
+    setInfiniteGroundHiddenChunkKeys(groundObject, []);
     return;
   }
-  if (!manifestState) {
-    setInfiniteGroundHiddenChunkKeys(groundObject, []);
-    clearInfiniteGroundChunkMeshes(groundObject);
-    return;
-  }
-  const { sourceId, manifestRevision, manifestRecords } = manifestState;
-  syncInfiniteGroundChunkMeshes({
+  const revision = Number.isFinite(compiledManifest.revision)
+    ? Math.max(0, Math.trunc(compiledManifest.revision))
+    : computeCompiledGroundManifestRevision(compiledManifest);
+  clearInfiniteGroundChunkMeshes(groundObject);
+  syncCompiledGroundRenderTiles({
     groundObject,
     groundDefinition,
     camera,
-    sourceId,
-    manifestRevision,
-    manifestRecords,
-    resolveActiveRecord: (chunkKey) => manifestRecords[chunkKey] ?? null,
-    loadChunkData: async () => null,
+    sourceId: (currentSceneId.value ?? currentDocument?.id ?? '').trim() || 'viewer-ground',
+    revision,
+    manifest: compiledManifest,
+    loadTileData: async (record) => {
+      const pkg = activeScenePackagePkg;
+      if (!pkg) {
+        return null;
+      }
+      const bytes = pkg.files[record.path];
+      return bytes ? getArrayBufferView(bytes) : null;
+    },
   });
-  setInfiniteGroundHiddenChunkKeys(groundObject, getLoadedInfiniteGroundChunkKeys(groundObject));
+  setInfiniteGroundHiddenChunkKeys(groundObject, collectCompiledGroundCoveredChunkKeys(compiledManifest));
 }
 
 function resolveGroundViewportWorldSize(): { width: number; depth: number } | null {
@@ -6170,6 +6184,7 @@ function resetPhysicsWorld(): void {
     });
   }
   clearInfiniteGroundChunkCollisionBodies();
+  compiledGroundCollisionRuntime.clear();
   vehicleInstances.clear();
   vehicleRaycastInWorld.clear();
   rigidbodyInstances.clear();
@@ -11765,6 +11780,16 @@ function parseScenePackageToProjectData(pkg: ScenePackageUnzipped): ScenePackage
     document.resourceSummary = buildDocumentResourceSummary(document);
     const id = sceneEntry.sceneId;
     const terrain = sceneEntry.terrain ?? null;
+    const hasGround = Boolean(findFirstGroundDynamicMesh(document));
+    const compiledGroundPath = typeof sceneEntry.compiledGround?.manifestPath === 'string'
+      ? sceneEntry.compiledGround.manifestPath.trim()
+      : '';
+    if (hasGround && !compiledGroundPath) {
+      throw new Error(`Scene ${sceneEntry.sceneId} is missing compiled ground package`);
+    }
+    const compiledGround = compiledGroundPath
+      ? (JSON.parse(readTextFileFromScenePackage(pkg, compiledGroundPath)) as CompiledGroundManifest)
+      : null;
     scenes.push({
       kind: 'embedded',
       id,
@@ -11773,6 +11798,7 @@ function parseScenePackageToProjectData(pkg: ScenePackageUnzipped): ScenePackage
       updatedAt: typeof documentMeta.updatedAt === 'string' ? documentMeta.updatedAt : null,
       document,
       terrain,
+      compiledGround,
     });
   });
 
@@ -11920,6 +11946,7 @@ async function switchToProjectScene(sceneId: string): Promise<void> {
       origin: entry.kind === 'embedded' ? 'scene-package' : entry.sceneJsonUrl,
       assetOverrides: activeScenePackageAssetOverrides ?? undefined,
       terrain: entry.terrain ?? null,
+      compiledGround: entry.compiledGround ?? null,
       createdAt: document.createdAt,
       updatedAt: document.updatedAt,
     };
@@ -12712,7 +12739,7 @@ function startRenderLoop(
           if (cachedGroundBeforePhysics) {
             const groundObject = nodeObjectMap.get(cachedGroundBeforePhysics.nodeId) ?? null;
             if (groundObject) {
-              syncViewerInfiniteGroundChunkCollisions(groundObject, cachedGroundBeforePhysics.dynamicMesh, camera);
+              syncViewerInfiniteGroundChunkCollisions(groundObject, camera);
             }
           }
           stepPhysicsWorld(deltaSeconds);
@@ -12740,6 +12767,11 @@ function startRenderLoop(
           const groundObject = nodeObjectMap.get(cachedGround.nodeId) ?? null;
           if (groundObject) {
             const readonlyTerrainEnabled = Boolean((cachedGround.dynamicMesh as GroundRuntimeDynamicMesh & { runtimeTerrainDatasetEnabled?: boolean }).runtimeTerrainDatasetEnabled);
+            const compiledManifest = resolveViewerCompiledGroundManifest(groundObject);
+            setInfiniteGroundHiddenChunkKeys(
+              groundObject,
+              compiledManifest ? collectCompiledGroundCoveredChunkKeys(compiledManifest) : [],
+            );
             // syncGroundChunkLoadingMode also drives the far flat InstancedMesh tiling used to hide
             // infinite-ground edges at high altitude and during driving. Readonly terrain still needs
             // that visual shell, even though it does not use legacy chunk manifest streaming.

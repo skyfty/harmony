@@ -132,12 +132,47 @@ export {
 export type {
   ScenePackageManifest,
   ScenePackageManifestV1,
+  ScenePackageCompiledGroundEntry,
   ScenePackageProjectEntry,
   ScenePackageResourceEntry,
   ScenePackageResourceType,
   ScenePackageTerrainEntry,
   ScenePackageSceneEntry,
 } from './scenePackage'
+
+export {
+  COMPILED_GROUND_MANIFEST_VERSION,
+  COMPILED_GROUND_RENDER_TILE_MAGIC,
+  COMPILED_GROUND_COLLISION_TILE_MAGIC,
+  computeCompiledGroundManifestRevision,
+  formatCompiledGroundTileKey,
+  serializeCompiledGroundRenderTile,
+  deserializeCompiledGroundRenderTile,
+  serializeCompiledGroundCollisionTile,
+  deserializeCompiledGroundCollisionTile,
+  collectCompiledGroundCoveredChunkKeys,
+  computeCompiledGroundBoundsFromPositions,
+} from './compiledGround'
+export type {
+  CompiledGroundBounds,
+  CompiledGroundChunkBounds,
+  CompiledGroundManifest,
+  CompiledGroundRenderTileRecord,
+  CompiledGroundCollisionTileRecord,
+  CompiledGroundRenderTileHeader,
+  CompiledGroundRenderTileData,
+  CompiledGroundCollisionTileHeader,
+  CompiledGroundCollisionTileData,
+} from './compiledGround'
+
+export {
+  clearCompiledGroundRenderTiles,
+  syncCompiledGroundRenderTiles,
+} from './compiledGroundRuntime'
+
+export {
+  createCompiledGroundCollisionRuntime,
+} from './compiledGroundCollisionRuntime'
 
 export {
   QUANTIZED_TERRAIN_MESH_FORMAT,

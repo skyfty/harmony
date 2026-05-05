@@ -34,8 +34,11 @@ export async function buildGroundMesh(
   if ('runtimeTerrainHeightSampler' in sourceUserData) {
     userData.runtimeTerrainHeightSampler = sourceUserData.runtimeTerrainHeightSampler ?? null;
   }
-  if ('groundChunkManifest' in sourceUserData) {
-    userData.groundChunkManifest = sourceUserData.groundChunkManifest ?? null;
+  if ('compiledGroundEnabled' in sourceUserData) {
+    userData.compiledGroundEnabled = sourceUserData.compiledGroundEnabled ?? null;
+  }
+  if ('compiledGroundManifest' in sourceUserData) {
+    userData.compiledGroundManifest = sourceUserData.compiledGroundManifest ?? null;
   }
   groundObject.userData = userData;
 

@@ -41,8 +41,8 @@ import {
 	disposeGradientBackgroundDome,
 	createRuntimePrefabDocument,
 	type GradientBackgroundDome,
+	type CompiledGroundManifest,
 	type GroundDynamicMesh,
-		type GroundChunkManifest,
 	type GroundSurfaceChunkTextureMap,
 	type GroundRuntimeDynamicMesh,
 		resolveGroundWorkingGridSize,
@@ -74,7 +74,7 @@ import { prepareStoredSceneJsonExportBundle } from '@/utils/sceneExport'
 import { type SceneAssetDiagnosticsSummary } from '@/utils/sceneAssetDiagnostics'
 import { collectRuntimeModelNodesByAssetId } from '@/utils/sceneAssetCollectors'
 import { createGroundRuntimeMeshFromSidecar } from '@/utils/groundHeightSidecar'
-import { attachOptimizedGroundMeshToDocument } from '@/utils/groundOptimizedMeshExport'
+import { buildCompiledGroundPackageFiles } from '@/utils/compiledGroundExport'
 import { createScenesStoreTerrainDatasetHeightSampler } from '@/utils/terrainDatasetRuntime'
 import { useGroundHeightmapStore } from '@/stores/groundHeightmapStore'
 import { useScenesStore } from '@/stores/scenesStore'
@@ -100,8 +100,13 @@ import {
 	syncGroundChunkLoadingMode,
 	sampleGroundHeight,
 } from '@schema/groundMesh'
-import { syncInfiniteGroundChunkMeshes } from '@schema/groundChunkManifestRuntime'
-import { createInfiniteGroundChunkColliderRuntime } from '@schema/infiniteGroundChunkCollisions'
+import {
+	clearCompiledGroundRenderTiles,
+	collectCompiledGroundCoveredChunkKeys,
+	computeCompiledGroundManifestRevision,
+	createCompiledGroundCollisionRuntime,
+	syncCompiledGroundRenderTiles,
+} from '@schema'
 import {
 	createSceneCsmShadowRuntime,
 	DEFAULT_SCENE_CSM_CONFIG,
@@ -1647,8 +1652,10 @@ function syncPreviewNominateStateMap(): void {
 let cachedGroundNodeId: string | null = null
 let cachedGroundDynamicMesh: GroundDynamicMesh | null = null
 let cachedGroundNode: SceneNode | null = null
-let cachedGroundChunkManifest: GroundChunkManifest | null = null
-let cachedGroundChunkManifestSceneId: string | null = null
+let cachedCompiledGroundManifest: CompiledGroundManifest | null = null
+let cachedCompiledGroundSceneId: string | null = null
+let cachedCompiledGroundFiles = new Map<string, ArrayBuffer>()
+let cachedCompiledGroundBuildKey: string | null = null
 let groundSurfacePreviewLoadToken = 0
 let unsubscribe: (() => void) | null = null
 let livePreviewEnabled = true
@@ -1657,7 +1664,7 @@ let queuedSnapshot: ScenePreviewSnapshot | null = null
 let lastSnapshotRevision = 0
 let protagonistPoseSynced = false
 
-const previewInfiniteGroundChunkCollisionRuntime = createInfiniteGroundChunkColliderRuntime({
+const previewCompiledGroundCollisionRuntime = createCompiledGroundCollisionRuntime({
 	getPhysicsWorld: () => physicsWorld,
 	ensurePhysicsWorld: () => ensurePhysicsWorld(),
 	createBody: (node, component, shapeDefinition, object) => createRigidbodyBody(node, component, shapeDefinition, object),
@@ -2038,11 +2045,34 @@ async function syncGroundCache(document: SceneJsonExportDocument | null): Promis
 }
 
 function clearPreviewInfiniteGroundChunkCollisionBodies(): void {
-	previewInfiniteGroundChunkCollisionRuntime.clear()
+	previewCompiledGroundCollisionRuntime.clear()
 	for (const nodeId of externalRigidbodyDebugSources.keys()) {
 		removeRigidbodyDebugHelper(nodeId)
 	}
 	externalRigidbodyDebugSources.clear()
+}
+
+function syncPreviewInfiniteGroundChunkCollisionBodies(
+	groundObject: THREE.Object3D,
+	activeCamera: THREE.PerspectiveCamera,
+): void {
+	const compiledManifest = ((groundObject.userData as Record<string, unknown> | undefined)?.compiledGroundManifest ?? null) as CompiledGroundManifest | null
+	if (!compiledManifest) {
+		previewCompiledGroundCollisionRuntime.clear()
+		return
+	}
+	const revision = Number.isFinite(compiledManifest.revision)
+		? Math.max(0, Math.trunc(compiledManifest.revision))
+		: computeCompiledGroundManifestRevision(compiledManifest)
+	previewCompiledGroundCollisionRuntime.sync({
+		enabled: physicsEnvironmentEnabled.value,
+		groundObject,
+		camera: activeCamera,
+		sourceId: currentDocument?.id?.trim() || 'preview-ground',
+		revision,
+		manifest: compiledManifest,
+		loadTileData: async (record) => cachedCompiledGroundFiles.get(record.path) ?? null,
+	})
 }
 
 function resolveGroundViewportWorldSize(): { width: number; depth: number } | null {
@@ -7045,19 +7075,28 @@ function isSceneJsonExportDocument(raw: unknown): raw is SceneJsonExportDocument
 	return typeof candidate.id === 'string' && Array.isArray(candidate.nodes)
 }
 
+function toClonedArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+	const buffer = new ArrayBuffer(bytes.byteLength)
+	new Uint8Array(buffer).set(bytes)
+	return buffer
+}
+
 async function buildPreviewRuntimeDocument(
 	document: SceneJsonExportDocument,
 	options: { groundHeightSidecar?: ArrayBuffer | null; groundScatterSidecar?: ArrayBuffer | null; groundPaintSidecar?: ArrayBuffer | null } = {},
 ): Promise<SceneJsonExportDocument> {
 	const defaultSteerNodeId = resolveDefaultSteerBinding(document)
 	pendingDefaultSteerDriveEvent.value = defaultSteerNodeId ? buildDefaultSteerDriveEvent(defaultSteerNodeId) : null
-	cachedGroundChunkManifest = null
-	cachedGroundChunkManifestSceneId = null
 	const groundNode = findGroundNode(document.nodes)
 	const sidecar = await resolvePreviewGroundHeightSidecar(document.id, groundNode, options.groundHeightSidecar)
 	const scatterSidecar = options.groundScatterSidecar ?? await useScenesStore().loadGroundScatterSidecar(document.id)
 	const paintSidecar = options.groundPaintSidecar ?? await useScenesStore().loadGroundPaintSidecar(document.id)
-	const groundChunkManifest = await useScenesStore().loadGroundChunkManifest(document.id)
+	if (!groundNode) {
+		cachedCompiledGroundBuildKey = null
+		cachedCompiledGroundManifest = null
+		cachedCompiledGroundSceneId = null
+		cachedCompiledGroundFiles = new Map()
+	}
 	const scatterStore = useGroundScatterStore()
 	if (groundNode && groundNode.dynamicMesh && sidecar && isGroundDynamicMesh(groundNode.dynamicMesh)) {
 		groundNode.dynamicMesh = createGroundRuntimeMeshFromSidecar(groundNode.dynamicMesh, sidecar)
@@ -7089,9 +7128,6 @@ async function buildPreviewRuntimeDocument(
 		} else {
 			await scatterStore.hydrateSceneDocument(document.id, groundNode, null)
 		}
-
-		cachedGroundChunkManifest = groundChunkManifest
-		cachedGroundChunkManifestSceneId = document.id
 		if (paintSidecar) {
 			await paintStore.hydrateSceneDocument(document.id, groundNode, paintSidecar)
 		} else {
@@ -7115,8 +7151,50 @@ async function buildPreviewRuntimeDocument(
 		}
 		attachGroundScatterRuntimeToNode(document.id, groundNode)
 		attachGroundPaintRuntimeToNode(document.id, groundNode)
+		const compiledBuildKey = [
+			document.id,
+			document.updatedAt ?? '',
+			(dynamicGround?.surfaceRevision ?? 0),
+			(dynamicGround?.chunkManifestRevision ?? 0),
+		].join('|')
+		let compiledPackage = null
+		if (compiledBuildKey === cachedCompiledGroundBuildKey && cachedCompiledGroundManifest) {
+			compiledPackage = {
+				manifest: cachedCompiledGroundManifest,
+				files: cachedCompiledGroundFiles,
+			}
+		} else {
+			const built = buildCompiledGroundPackageFiles(document)
+			if (!built) {
+				cachedCompiledGroundBuildKey = null
+				cachedCompiledGroundManifest = null
+				cachedCompiledGroundSceneId = null
+				cachedCompiledGroundFiles = new Map()
+				throw new Error(`Compiled ground build failed for preview scene ${document.id}`)
+			}
+			const fileMap = new Map<string, ArrayBuffer>()
+			Object.entries(built.files).forEach(([path, bytes]) => {
+				fileMap.set(path, toClonedArrayBuffer(bytes))
+			})
+			cachedCompiledGroundBuildKey = compiledBuildKey
+			cachedCompiledGroundManifest = built.manifest
+			cachedCompiledGroundSceneId = document.id
+			cachedCompiledGroundFiles = fileMap
+			compiledPackage = {
+				manifest: built.manifest,
+				files: fileMap,
+			}
+		}
+		if (compiledPackage) {
+			groundNode.userData = {
+				...(groundNode.userData ?? {}),
+				compiledGroundEnabled: true,
+				compiledGroundManifest: compiledPackage.manifest,
+			}
+			cachedCompiledGroundManifest = compiledPackage.manifest
+			cachedCompiledGroundSceneId = document.id
+		}
 	}
-	attachOptimizedGroundMeshToDocument(document)
 	return document
 }
 
@@ -9370,19 +9448,32 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
 		const groundObject = nodeObjectMap.get(cachedGroundNodeId) ?? null
 		if (groundObject) {
 			updateGroundMesh(groundObject, cachedGroundDynamicMesh)
+			const compiledManifest = ((groundObject.userData as Record<string, unknown> | undefined)?.compiledGroundManifest ?? null) as CompiledGroundManifest | null
+			setInfiniteGroundHiddenChunkKeys(
+				groundObject,
+				compiledManifest ? collectCompiledGroundCoveredChunkKeys(compiledManifest) : [],
+			)
 			syncGroundChunkLoadingMode(groundObject, cachedGroundDynamicMesh as GroundRuntimeDynamicMesh, activeCamera)
-			const groundChunkSceneId = cachedGroundChunkManifestSceneId
-			if (cachedGroundChunkManifest && groundChunkSceneId && groundChunkSceneId === currentDocument?.id) {
-				syncInfiniteGroundChunkMeshes({
+			if (compiledManifest && cachedCompiledGroundSceneId && cachedCompiledGroundSceneId === currentDocument?.id) {
+				const revision = Number.isFinite(compiledManifest.revision)
+					? Math.max(0, Math.trunc(compiledManifest.revision))
+					: computeCompiledGroundManifestRevision(compiledManifest)
+				syncCompiledGroundRenderTiles({
 					groundObject,
 					groundDefinition: cachedGroundDynamicMesh as GroundRuntimeDynamicMesh,
 					camera: activeCamera,
-					sourceId: groundChunkSceneId,
-					manifestRevision: cachedGroundChunkManifest.revision,
-					manifestRecords: cachedGroundChunkManifest.chunks,
-					loadChunkData: async (record) => useScenesStore().loadGroundChunkData(groundChunkSceneId, record.key),
+					sourceId: cachedCompiledGroundSceneId,
+					revision,
+					manifest: compiledManifest,
+					loadTileData: async (record) => cachedCompiledGroundFiles.get(record.path) ?? null,
 				})
+			} else {
+				clearCompiledGroundRenderTiles(groundObject)
 			}
+			syncPreviewInfiniteGroundChunkCollisionBodies(
+				groundObject,
+				activeCamera,
+			)
 			syncGroundSurfacePreviewForGroundNode(groundObject, cachedGroundNode, cachedGroundDynamicMesh)
 			syncGroundChunkStreamingDebug(groundObject, cachedGroundDynamicMesh, activeCamera, {
 				renderHelpers: isGroundChunkStreamingDebugVisible.value,
@@ -11947,6 +12038,14 @@ function ensureRigidbodyBindingForObject(nodeId: string, object: THREE.Object3D)
 		return
 	}
 	const node = resolveNodeById(nodeId)
+	if (node && isGroundDynamicMesh(node.dynamicMesh)) {
+		const existing = rigidbodyInstances.get(nodeId)
+		if (existing) {
+			removeRigidbodyInstanceBodies(physicsWorld, existing)
+			rigidbodyInstances.delete(nodeId)
+		}
+		return
+	}
 	const component = resolvePhysicsRigidbodyComponent(node)
 	const shapeDefinition = extractRigidbodyShape(component)
 	const requiresMetadata = !hasAutoGeneratedDynamicShape(node?.dynamicMesh, node)
@@ -12078,6 +12177,15 @@ function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null):
 	const rigidbodyNodes = collectRigidbodyNodes(document.nodes)
 	const desiredIds = new Set<string>()
 	rigidbodyNodes.forEach((node) => {
+		if (isGroundDynamicMesh(node.dynamicMesh)) {
+			const existing = rigidbodyInstances.get(node.id)
+			if (existing) {
+				removeRigidbodyInstanceBodies(world, existing)
+				rigidbodyInstances.delete(node.id)
+				scenePreviewPerf.notifyRemovedNode(node.id)
+			}
+			return
+		}
 		desiredIds.add(node.id)
 		const component = resolvePhysicsRigidbodyComponent(node)
 		const shapeDefinition = extractRigidbodyShape(component)

@@ -41,7 +41,7 @@ import { buildAssetRegistryAliasMap, normalizeAssetIdWithRegistry } from '@/util
 import {
   stripGroundHeightMapsFromSceneDocument,
 } from '@/utils/groundHeightSidecar'
-import { attachOptimizedGroundMeshToDocument } from '@/utils/groundOptimizedMeshExport'
+import { buildCompiledGroundPackageFiles } from '@/utils/compiledGroundExport'
 import { collectPunchPointsFromNodes } from './sceneExport'
 import {
   buildSceneAssetReferenceSummaryMap,
@@ -537,54 +537,6 @@ function findGroundNode(nodes: SceneJsonExportDocument['nodes']): SceneJsonExpor
     }
   }
   return null
-}
-
-function emitGroundOptimizationDiagnostics(
-  reportEvent: SceneExportEventReporter | undefined,
-  sceneId: string,
-  sceneName: string,
-  groundNode: SceneJsonExportDocument['nodes'][number] | null,
-): void {
-  const optimizedMesh = groundNode?.dynamicMesh?.type === 'Ground' ? groundNode.dynamicMesh.optimizedMesh : null
-  if (!optimizedMesh) {
-    return
-  }
-
-  const sourceTriangles = Math.max(0, Math.trunc(optimizedMesh.sourceTriangleCount ?? 0))
-  const optimizedTriangles = Math.max(0, Math.trunc(optimizedMesh.optimizedTriangleCount ?? 0))
-  const reduction = sourceTriangles > 0
-    ? Math.max(0, Math.min(1, 1 - optimizedTriangles / sourceTriangles))
-    : 0
-  const percentText = `${Math.round(reduction * 100)}%`
-  const detail = [
-    `sourceTriangles=${sourceTriangles}`,
-    `optimizedTriangles=${optimizedTriangles}`,
-    `chunkCells=${optimizedMesh.chunkCells}`,
-    `sourceChunkCells=${optimizedMesh.sourceChunkCells}`,
-    `chunkCount=${optimizedMesh.chunkCount}`,
-  ].join(', ')
-
-  emitSceneExportEvent(reportEvent, {
-    phase: 'diagnostics',
-    level: 'info',
-    status: 'completed',
-    sceneId,
-    sceneName,
-    detail,
-    message: `Ground optimized mesh reduced triangles by ${percentText} (${sourceTriangles} -> ${optimizedTriangles})`,
-  })
-
-  if (sourceTriangles > 0 && reduction < 0.15) {
-    emitSceneExportEvent(reportEvent, {
-      phase: 'diagnostics',
-      level: 'warning',
-      status: 'completed',
-      sceneId,
-      sceneName,
-      detail,
-      message: 'Ground optimized mesh produced limited simplification; inspect terrain flatness and render chunk sizing.',
-    })
-  }
 }
 
 function stripEditorOnlySceneFields(
@@ -1241,6 +1193,7 @@ export async function exportScenePackageZip(payload: {
     let groundScatterPath: string | undefined
     let groundPaintPath: string | undefined
     let terrain: ScenePackageManifestV1['scenes'][number]['terrain'] | undefined
+    let compiledGround: ScenePackageManifestV1['scenes'][number]['compiledGround'] | undefined
 
     // Collect local asset IDs from effective registry and explicit local source metadata.
     const sidecarSource = typeof structuredClone === 'function'
@@ -1255,8 +1208,34 @@ export async function exportScenePackageZip(payload: {
       ? useGroundPaintStore().buildSceneDocumentSidecar(scene.id, groundNode)
       : await scenesStore.loadGroundPaintSidecar(scene.id)
     if (groundNode?.dynamicMesh?.type === 'Ground') {
-      attachOptimizedGroundMeshToDocument(sidecarSource as SceneJsonExportDocument)
-      emitGroundOptimizationDiagnostics(payload.reportEvent, scene.id, sceneName, groundNode)
+      const compiledGroundPackage = buildCompiledGroundPackageFiles(sidecarSource as SceneJsonExportDocument)
+      if (!compiledGroundPackage) {
+        throw new Error(`Compiled ground export failed for scene ${scene.id}`)
+      }
+      compiledGround = {
+        manifestPath: compiledGroundPackage.manifestPath,
+        renderRootPath: compiledGroundPackage.renderRootPath,
+        collisionRootPath: compiledGroundPackage.collisionRootPath,
+      }
+      files[compiledGroundPackage.manifestPath] = jsonBytes(compiledGroundPackage.manifest)
+      Object.assign(files, compiledGroundPackage.files)
+      const sceneGroundNode = findGroundNode(sidecarSource.nodes)
+      if (sceneGroundNode) {
+        sceneGroundNode.userData = {
+          ...(sceneGroundNode.userData ?? {}),
+          compiledGroundEnabled: true,
+          compiledGroundManifest: compiledGroundPackage.manifest,
+        }
+      }
+      emitSceneExportEvent(payload.reportEvent, {
+        phase: 'sidecar',
+        level: 'info',
+        status: 'completed',
+        sceneId: scene.id,
+        sceneName,
+        detail: compiledGroundPackage.manifestPath,
+        message: 'Compiled ground package written',
+      })
 
       const packagedTerrainDataset = await buildTerrainDatasetPackageFiles(
         scene.id,
@@ -1446,6 +1425,7 @@ export async function exportScenePackageZip(payload: {
       groundScatterPath,
       groundPaintPath,
       terrain,
+      compiledGround,
     })
   }
 
