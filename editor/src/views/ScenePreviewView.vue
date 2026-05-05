@@ -42,6 +42,7 @@ import {
 	createRuntimePrefabDocument,
 	type GradientBackgroundDome,
 	type GroundDynamicMesh,
+		type GroundChunkManifest,
 	type GroundSurfaceChunkTextureMap,
 	type GroundRuntimeDynamicMesh,
 		resolveGroundWorkingGridSize,
@@ -95,10 +96,11 @@ import {
 	resolveGroundChunkRadiusMeters,
 	resolveGroundRuntimeChunkCells,
 	setInfiniteGroundHiddenChunkKeys,
+	updateGroundMesh,
 	syncGroundChunkLoadingMode,
 	sampleGroundHeight,
 } from '@schema/groundMesh'
-import { clearInfiniteGroundChunkMeshes, getLoadedInfiniteGroundChunkKeys, syncInfiniteGroundChunkMeshes } from '@schema/groundChunkManifestRuntime'
+import { syncInfiniteGroundChunkMeshes } from '@schema/groundChunkManifestRuntime'
 import { createInfiniteGroundChunkColliderRuntime } from '@schema/infiniteGroundChunkCollisions'
 import {
 	createSceneCsmShadowRuntime,
@@ -392,17 +394,22 @@ type ScenePreviewProjectPackage = {
 	scenes: ScenePreviewSceneEntry[]
 }
 
+type GroundChunkRenderSnapshot = {
+	visibleChunkCount: number
+	estimatedTriangles: number
+	chunkKeys: string[]
+}
+
 const projectBundle = ref<ScenePreviewProjectPackage | null>(null)
 const projectSceneIndex = new Map<string, ScenePreviewSceneEntry>()
 const liveUpdatesDisabledLabel = computed(() => {
-	if (projectBundle.value) {
-		return 'Live updates disabled (bundle mode).'
+	const sourceLabel = liveUpdatesDisabledSourceUrl.value
+	if (sourceLabel) {
+		return `Live updates disabled (${sourceLabel})`
 	}
-	if (liveUpdatesDisabledSourceUrl.value === 'manual-scene-navigation') {
-		return 'Live updates disabled (manual navigation).'
-	}
-	return 'Live updates disabled.'
+	return 'Live updates disabled'
 })
+
 const isPlaying = ref(true)
 const controlMode = ref<ControlMode>('third-person')
 const vehicleDriveCameraMode = ref<VehicleDriveCameraMode>('first-person')
@@ -464,7 +471,7 @@ const rendererDebug = reactive({
 	groundVisibleChunks: 0,
 	geometries: 0,
 	textures: 0,
-	})
+})
 
 function shouldIgnoreDebugTriangleObject(object: THREE.Object3D): boolean {
 	let current: THREE.Object3D | null = object
@@ -522,12 +529,6 @@ function estimateSceneTriangleCount(root: THREE.Object3D): number {
 	return total
 }
 
-type GroundChunkRenderSnapshot = {
-	visibleChunkCount: number
-	estimatedTriangles: number
-	chunkKeys: string[]
-}
-
 function collectGroundChunkRenderSnapshot(groundObject: THREE.Object3D | null | undefined): GroundChunkRenderSnapshot {
 	if (!groundObject) {
 		return {
@@ -553,15 +554,7 @@ function collectGroundChunkRenderSnapshot(groundObject: THREE.Object3D | null | 
 		visibleChunkCount += 1
 		const key = `${chunk.chunkRow}:${chunk.chunkColumn}`
 		chunkKeys.push(key)
-		const triangleCount = resolveGeometryTriangleCount(mesh.geometry)
-		if (triangleCount <= 0) {
-			return
-		}
-		if (mesh instanceof THREE.InstancedMesh) {
-			estimatedTriangles += triangleCount * Math.max(0, Math.trunc(mesh.count))
-			return
-		}
-		estimatedTriangles += triangleCount
+		estimatedTriangles += resolveGeometryTriangleCount(mesh.geometry)
 	})
 
 	chunkKeys.sort()
@@ -593,11 +586,6 @@ const groundChunkDebug = reactive({
 	visible: 0,
 	triangleEstimate: 0,
 })
-
-let lastGroundChunkDebugLogAt = 0
-let lastGroundChunkDebugSignature = ''
-let lastRendererDebugLogAt = 0
-let lastRendererDebugSignature = ''
 
 const rendererSizeHelper = new THREE.Vector2()
 const instancedMatrixUploadMeshes = new Set<THREE.InstancedMesh>()
@@ -1373,10 +1361,6 @@ const ENABLE_SCENE_PREVIEW_SURFACE_PREVIEW = true
 // Baked ground preview loader disabled — function removed.
 
 
-
-
-
-
 function syncGroundSurfacePreviewForGroundNode(groundObject: THREE.Object3D, groundNode: SceneNode, dynamicMesh: GroundDynamicMesh): void {
 	const usesSurfacePreview = ENABLE_SCENE_PREVIEW_SURFACE_PREVIEW
 		? syncGroundSurfacePreviewForGround(
@@ -1663,6 +1647,8 @@ function syncPreviewNominateStateMap(): void {
 let cachedGroundNodeId: string | null = null
 let cachedGroundDynamicMesh: GroundDynamicMesh | null = null
 let cachedGroundNode: SceneNode | null = null
+let cachedGroundChunkManifest: GroundChunkManifest | null = null
+let cachedGroundChunkManifestSceneId: string | null = null
 let groundSurfacePreviewLoadToken = 0
 let unsubscribe: (() => void) | null = null
 let livePreviewEnabled = true
@@ -2353,54 +2339,6 @@ function computeTargetGroundChunkCount(
 	return Math.max(1, Math.min(target, rowChunks * columnChunks))
 }
 
-function buildGroundChunkDebugWindowSummary(
-	definition: GroundDynamicMesh,
-	chunkCells: number,
-	groundObject: THREE.Object3D,
-	activeCamera: THREE.PerspectiveCamera,
-): Record<string, unknown> {
-	const gridSize = resolveGroundWorkingGridSize(definition)
-	const columns = Math.max(1, Math.trunc(gridSize.columns))
-	const rows = Math.max(1, Math.trunc(gridSize.rows))
-	const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
-	const bounds = resolveGroundWorldBounds(definition)
-	const safeCells = Math.max(1, Math.trunc(chunkCells))
-	const rowChunks = Math.max(1, Math.ceil(rows / safeCells))
-	const columnChunks = Math.max(1, Math.ceil(columns / safeCells))
-	const chunkSizeMeters = Math.max(1e-6, safeCells * cellSize)
-	const radiusMeters = resolveGroundChunkRadiusMeters(definition)
-	const radiusChunks = Math.max(0, Math.ceil(radiusMeters / chunkSizeMeters))
-
-	groundObject.updateWorldMatrix(true, false)
-	groundChunkDebugRootInverseHelper.copy(groundObject.matrixWorld).invert()
-	activeCamera.getWorldPosition(groundChunkDebugCameraWorldHelper)
-	groundChunkDebugCameraLocalHelper.copy(groundChunkDebugCameraWorldHelper).applyMatrix4(groundChunkDebugRootInverseHelper)
-
-	const chunkColumn = Math.max(
-		0,
-		Math.min(columnChunks - 1, Math.floor((groundChunkDebugCameraLocalHelper.x - bounds.minX) / chunkSizeMeters)),
-	)
-	const chunkRow = Math.max(
-		0,
-		Math.min(rowChunks - 1, Math.floor((groundChunkDebugCameraLocalHelper.z - bounds.minZ) / chunkSizeMeters)),
-	)
-
-	return {
-		cellSize,
-		chunkCells: safeCells,
-		chunkSizeMeters,
-		rows,
-		columns,
-		rowChunks,
-		columnChunks,
-		radiusMeters,
-		radiusChunks,
-		cameraChunkRow: chunkRow,
-		cameraChunkColumn: chunkColumn,
-		bounds,
-	}
-}
-
 function syncGroundChunkStreamingDebug(
 	groundObject: THREE.Object3D,
 	definition: GroundDynamicMesh,
@@ -2416,46 +2354,42 @@ function syncGroundChunkStreamingDebug(
 	const debugRoot = options.renderHelpers ? ensureGroundChunkDebugGroup(groundObject) : null
 	const keep = options.renderHelpers ? new Set<string>() : null
 	let loadedChunks = 0
-	let maxChunkCells = 0
-
-	groundObject.updateWorldMatrix(true, false)
+	const chunkCells = groundChunkCellsEstimate ?? resolveGroundRuntimeChunkCells(definition)
+	const total = computeTotalGroundChunkCount(definition, chunkCells)
+	const target = computeTargetGroundChunkCount(definition, chunkCells, groundObject, activeCamera)
 	groundChunkDebugRootInverseHelper.copy(groundObject.matrixWorld).invert()
+	groundObject.updateWorldMatrix(true, false)
 
-	groundObject.traverse((object: THREE.Object3D) => {
-		const mesh = object as THREE.Mesh
-		if (!mesh.isMesh) {
+	groundObject.traverseVisible((object) => {
+		if (!(object instanceof THREE.Mesh)) {
 			return
 		}
-		const chunk = (mesh.userData?.groundChunk ?? null) as GroundChunkUserData | null
+		const chunk = (object.userData?.groundChunk ?? null) as GroundChunkUserData | null
 		if (!chunk) {
 			return
 		}
 		loadedChunks += 1
-		maxChunkCells = Math.max(maxChunkCells, Math.max(chunk.rows, chunk.columns))
-
-		if (options.renderHelpers && debugRoot && keep) {
-			const key = `${chunk.chunkRow}:${chunk.chunkColumn}`
-			keep.add(key)
-
-			let entry = groundChunkDebugMeshes.get(key)
-			if (!entry) {
-				entry = createGroundChunkDebugEntry(key)
-				groundChunkDebugMeshes.set(key, entry)
-				debugRoot.add(entry)
-			}
-
-			mesh.updateWorldMatrix(true, false)
-			groundChunkDebugBoxHelper.setFromObject(mesh)
-			groundChunkDebugBoxHelper.applyMatrix4(groundChunkDebugRootInverseHelper)
-			groundChunkDebugBoxHelper.getCenter(groundChunkDebugCenterHelper)
-			groundChunkDebugBoxHelper.getSize(groundChunkDebugSizeHelper)
-			entry.position.copy(groundChunkDebugCenterHelper)
-			entry.scale.set(
-				Math.max(1e-6, groundChunkDebugSizeHelper.x),
-				Math.max(1e-6, groundChunkDebugSizeHelper.y),
-				Math.max(1e-6, groundChunkDebugSizeHelper.z),
-			)
+		const key = `${chunk.chunkRow}:${chunk.chunkColumn}`
+		keep?.add(key)
+		if (!debugRoot) {
+			return
 		}
+		let entry = groundChunkDebugMeshes.get(key)
+		if (!entry) {
+			entry = createGroundChunkDebugEntry(key)
+			groundChunkDebugMeshes.set(key, entry)
+			debugRoot.add(entry)
+		}
+		groundChunkDebugBoxHelper.setFromObject(object)
+		groundChunkDebugBoxHelper.applyMatrix4(groundChunkDebugRootInverseHelper)
+		groundChunkDebugBoxHelper.getCenter(groundChunkDebugCenterHelper)
+		groundChunkDebugBoxHelper.getSize(groundChunkDebugSizeHelper)
+		entry.position.copy(groundChunkDebugCenterHelper)
+		entry.scale.set(
+			Math.max(1e-6, groundChunkDebugSizeHelper.x),
+			Math.max(1e-6, groundChunkDebugSizeHelper.y),
+			Math.max(1e-6, groundChunkDebugSizeHelper.z),
+		)
 	})
 
 	if (options.renderHelpers && keep) {
@@ -2486,14 +2420,8 @@ function syncGroundChunkStreamingDebug(
 			entry.removeFromParent()
 			groundChunkDebugMeshes.delete(key)
 		})
-	}
+		}
 
-	if (maxChunkCells > 0) {
-		groundChunkCellsEstimate = Math.max(groundChunkCellsEstimate ?? 0, maxChunkCells)
-	}
-	const effectiveChunkCells = groundChunkCellsEstimate ?? resolveGroundRuntimeChunkCells(definition)
-	const total = computeTotalGroundChunkCount(definition, effectiveChunkCells)
-	const target = computeTargetGroundChunkCount(definition, effectiveChunkCells, groundObject, activeCamera)
 	const renderSnapshot = collectGroundChunkRenderSnapshot(groundObject)
 	groundChunkDebug.loaded = loadedChunks
 	groundChunkDebug.total = total
@@ -3052,31 +2980,21 @@ function syncVehicleSteeringValue(): void {
 	vehicleDriveInput.steering = clampSteeringScalar(steeringWheelValue.value)
 }
 
-function updateSteeringKeyboardValue(): void {
-	let nextTarget = 0
-	if (vehicleDriveInputFlags.left !== vehicleDriveInputFlags.right) {
-		nextTarget = vehicleDriveInputFlags.left ? 1 : -1
+function updateSteeringAutoCenter(delta: number): void {
+	if (!Number.isFinite(delta) || delta <= 0) {
+		return
 	}
-	steeringKeyboardTarget.value = nextTarget
-	if (nextTarget !== 0) {
-		steeringKeyboardValue.value = nextTarget
+	const target = steeringWheelState.dragging ? steeringWheelValue.value : 0
+	if (target === steeringWheelValue.value) {
+		return
 	}
-}
-
-function resetSteeringWheelValue(): void {
-	steeringWheelValue.value = 0
-	if (!steeringWheelState.dragging) {
-		syncVehicleSteeringValue()
+	const nextValue = THREE.MathUtils.damp(steeringWheelValue.value, target, 6, delta)
+	if (Math.abs(nextValue - steeringWheelValue.value) <= 1e-4) {
+		steeringWheelValue.value = target
+	} else {
+		steeringWheelValue.value = nextValue
 	}
-}
-
-function computeSteeringWheelPointerAngle(event: PointerEvent, target: HTMLElement): number {
-	const bounds = target.getBoundingClientRect()
-	const centerX = bounds.left + bounds.width / 2
-	const centerY = bounds.top + bounds.height / 2
-	const deltaX = event.clientX - centerX
-	const deltaY = event.clientY - centerY
-	return Math.atan2(deltaY, deltaX)
+	syncVehicleSteeringValue()
 }
 
 function setSteeringWheelDragActive(active: boolean): void {
@@ -3086,109 +3004,83 @@ function setSteeringWheelDragActive(active: boolean): void {
 	}
 }
 
-function handleSteeringWheelPointerDown(event: PointerEvent): void {
-	if (!vehicleDriveState.active) {
-		return
-	}
-	const wheel = steeringWheelRef.value
-	if (!wheel) {
-		return
-	}
-	const pointerAngle = computeSteeringWheelPointerAngle(event, wheel)
-	steeringWheelState.startPointerAngle = pointerAngle
-	steeringWheelState.startWheelAngle = steeringWheelValue.value * STEERING_WHEEL_MAX_RADIANS
-	steeringWheelState.pointerId = event.pointerId
-	setSteeringWheelDragActive(true)
-	try {
-		wheel.setPointerCapture(event.pointerId)
-	} catch (_error) {
-		/* noop */
-	}
-	event.preventDefault()
+function updateSteeringKeyboardValue(): void {
+	const leftPressed = vehicleDriveInputFlags.left && !vehicleDriveInputFlags.right
+	const rightPressed = vehicleDriveInputFlags.right && !vehicleDriveInputFlags.left
+	const nextValue = leftPressed ? -1 : rightPressed ? 1 : 0
+	steeringKeyboardTarget.value = nextValue
+	steeringKeyboardValue.value = nextValue
 }
 
-function applySteeringWheelAngle(angle: number): void {
-	const clampedAngle = THREE.MathUtils.clamp(angle, -STEERING_WHEEL_MAX_RADIANS, STEERING_WHEEL_MAX_RADIANS)
-	steeringWheelValue.value = clampSteeringScalar(clampedAngle / STEERING_WHEEL_MAX_RADIANS)
-	syncVehicleSteeringValue()
+function resetSteeringWheelValue(): void {
+	steeringWheelValue.value = 0
+	steeringWheelState.dragging = false
+	steeringWheelState.pointerId = -1
+	steeringWheelState.startPointerAngle = 0
+	steeringWheelState.startWheelAngle = 0
+	vehicleDriveInput.steering = 0
 }
 
-function handleSteeringWheelPointerMove(event: PointerEvent): void {
-	if (!steeringWheelState.dragging || event.pointerId !== steeringWheelState.pointerId) {
-		return
-	}
-	const wheel = steeringWheelRef.value
-	if (!wheel) {
-		return
-	}
-	const currentAngle = computeSteeringWheelPointerAngle(event, wheel)
-	const delta = currentAngle - steeringWheelState.startPointerAngle
-	const nextAngle = steeringWheelState.startWheelAngle + delta
-	applySteeringWheelAngle(nextAngle)
-	if (event.cancelable) {
-		event.preventDefault()
-	}
-}
-
-function releaseSteeringWheelPointer(event?: PointerEvent): void {
-	const wheel = steeringWheelRef.value
-	if (wheel && steeringWheelState.pointerId !== -1) {
-		try {
-			wheel.releasePointerCapture(steeringWheelState.pointerId)
-		} catch (_error) {
-			/* noop */
-		}
-	}
-	if (event?.cancelable) {
-		event.preventDefault()
-	}
+function releaseSteeringWheelPointer(): void {
 	setSteeringWheelDragActive(false)
 }
 
+function getSteeringWheelPointerAngle(event: PointerEvent): number | null {
+	const element = event.currentTarget
+	if (!(element instanceof HTMLElement)) {
+		return null
+	}
+	const bounds = element.getBoundingClientRect()
+	if (!(bounds.width > 0 && bounds.height > 0)) {
+		return null
+	}
+	const centerX = bounds.left + bounds.width * 0.5
+	const centerY = bounds.top + bounds.height * 0.5
+	return Math.atan2(event.clientY - centerY, event.clientX - centerX)
+}
+
+function normalizeSteeringWheelAngle(angle: number): number {
+	let nextAngle = angle
+	while (nextAngle > Math.PI) {
+		nextAngle -= Math.PI * 2
+	}
+	while (nextAngle < -Math.PI) {
+		nextAngle += Math.PI * 2
+	}
+	return nextAngle
+}
+
+function handleSteeringWheelPointerDown(event: PointerEvent): void {
+	const pointerAngle = getSteeringWheelPointerAngle(event)
+	if (pointerAngle === null) {
+		return
+	}
+	steeringWheelState.pointerId = event.pointerId
+	steeringWheelState.startPointerAngle = pointerAngle
+	steeringWheelState.startWheelAngle = steeringWheelValue.value * STEERING_WHEEL_MAX_RADIANS
+	setSteeringWheelDragActive(true)
+	;(event.currentTarget as HTMLElement | null)?.setPointerCapture?.(event.pointerId)
+}
+
+function handleSteeringWheelPointerMove(event: PointerEvent): void {
+	if (!steeringWheelState.dragging || steeringWheelState.pointerId !== event.pointerId) {
+		return
+	}
+	const pointerAngle = getSteeringWheelPointerAngle(event)
+	if (pointerAngle === null) {
+		return
+	}
+	const deltaAngle = normalizeSteeringWheelAngle(pointerAngle - steeringWheelState.startPointerAngle)
+	steeringWheelValue.value = clampSteeringScalar((steeringWheelState.startWheelAngle + deltaAngle) / STEERING_WHEEL_MAX_RADIANS)
+	syncVehicleSteeringValue()
+}
+
 function handleSteeringWheelPointerUp(event: PointerEvent): void {
-	if (event.pointerId !== steeringWheelState.pointerId) {
-		return
+	if (steeringWheelState.pointerId === event.pointerId) {
+		;(event.currentTarget as HTMLElement | null)?.releasePointerCapture?.(event.pointerId)
 	}
-	releaseSteeringWheelPointer(event)
-}
-
-function approachSteeringValue(current: number, target: number, rate: number, delta: number): number {
-	if (!Number.isFinite(current) || !Number.isFinite(target) || !Number.isFinite(delta) || rate <= 0 || delta <= 0) {
-		return target
-	}
-	const difference = target - current
-	if (Math.abs(difference) <= 1e-4) {
-		return target
-	}
-	const maxStep = rate * delta
-	if (Math.abs(difference) <= maxStep) {
-		return target
-	}
-	return current + Math.sign(difference) * maxStep
-}
-
-function updateSteeringAutoCenter(delta: number): void {
-	if (!Number.isFinite(delta) || delta <= 0) {
-		return
-	}
-	let steeringChanged = false
-	if (!steeringWheelState.dragging) {
-		const nextWheel = approachSteeringValue(steeringWheelValue.value, 0, STEERING_WHEEL_RETURN_SPEED, delta)
-		if (nextWheel !== steeringWheelValue.value) {
-			steeringWheelValue.value = nextWheel
-			steeringChanged = true
-		}
-	}
-	const target = steeringKeyboardTarget.value
-	const keyboardRate = target === 0 ? STEERING_KEYBOARD_RETURN_SPEED : STEERING_KEYBOARD_CATCH_SPEED
-	const nextKeyboard = approachSteeringValue(steeringKeyboardValue.value, target, keyboardRate, delta)
-	if (nextKeyboard !== steeringKeyboardValue.value) {
-		steeringKeyboardValue.value = clampSteeringScalar(nextKeyboard)
-		steeringChanged = true
-	}
-	if (steeringChanged) {
-		syncVehicleSteeringValue()
-	}
+	releaseSteeringWheelPointer()
+	syncVehicleSteeringValue()
 }
 
 const vehicleDriveCameraToggleConfig = computed(() => {
@@ -7159,10 +7051,13 @@ async function buildPreviewRuntimeDocument(
 ): Promise<SceneJsonExportDocument> {
 	const defaultSteerNodeId = resolveDefaultSteerBinding(document)
 	pendingDefaultSteerDriveEvent.value = defaultSteerNodeId ? buildDefaultSteerDriveEvent(defaultSteerNodeId) : null
+	cachedGroundChunkManifest = null
+	cachedGroundChunkManifestSceneId = null
 	const groundNode = findGroundNode(document.nodes)
 	const sidecar = await resolvePreviewGroundHeightSidecar(document.id, groundNode, options.groundHeightSidecar)
 	const scatterSidecar = options.groundScatterSidecar ?? await useScenesStore().loadGroundScatterSidecar(document.id)
 	const paintSidecar = options.groundPaintSidecar ?? await useScenesStore().loadGroundPaintSidecar(document.id)
+	const groundChunkManifest = await useScenesStore().loadGroundChunkManifest(document.id)
 	const scatterStore = useGroundScatterStore()
 	if (groundNode && groundNode.dynamicMesh && sidecar && isGroundDynamicMesh(groundNode.dynamicMesh)) {
 		groundNode.dynamicMesh = createGroundRuntimeMeshFromSidecar(groundNode.dynamicMesh, sidecar)
@@ -7195,24 +7090,28 @@ async function buildPreviewRuntimeDocument(
 			await scatterStore.hydrateSceneDocument(document.id, groundNode, null)
 		}
 
-		const embeddedPaintChunks = dynamicGround?.groundSurfaceChunks
-		const hasEmbeddedPaintChunks = Boolean(
-			embeddedPaintChunks
-			&& typeof embeddedPaintChunks === 'object'
-			&& !Array.isArray(embeddedPaintChunks)
-			&& Object.keys(embeddedPaintChunks as Record<string, unknown>).length > 0,
-		)
+		cachedGroundChunkManifest = groundChunkManifest
+		cachedGroundChunkManifestSceneId = document.id
 		if (paintSidecar) {
 			await paintStore.hydrateSceneDocument(document.id, groundNode, paintSidecar)
-		} else if (hasEmbeddedPaintChunks) {
-			paintStore.replaceGroundSurfaceChunks(
-				document.id,
-				groundNode.id,
-				embeddedPaintChunks as GroundSurfaceChunkTextureMap,
-				{ bumpRuntimeVersion: false, reason: 'preview-embedded-document' },
-			)
 		} else {
-			await paintStore.hydrateSceneDocument(document.id, groundNode, null)
+			const embeddedPaintChunks = dynamicGround?.groundSurfaceChunks
+			const hasEmbeddedPaintChunks = Boolean(
+				embeddedPaintChunks
+				&& typeof embeddedPaintChunks === 'object'
+				&& !Array.isArray(embeddedPaintChunks)
+				&& Object.keys(embeddedPaintChunks as Record<string, unknown>).length > 0,
+			)
+			if (hasEmbeddedPaintChunks) {
+				paintStore.replaceGroundSurfaceChunks(
+					document.id,
+					groundNode.id,
+					embeddedPaintChunks as GroundSurfaceChunkTextureMap,
+					{ bumpRuntimeVersion: false, reason: 'preview-embedded-document' },
+				)
+			} else {
+				await paintStore.hydrateSceneDocument(document.id, groundNode, null)
+			}
 		}
 		attachGroundScatterRuntimeToNode(document.id, groundNode)
 		attachGroundPaintRuntimeToNode(document.id, groundNode)
@@ -9470,7 +9369,20 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
 	if (cachedGroundNodeId && cachedGroundDynamicMesh && cachedGroundNode) {
 		const groundObject = nodeObjectMap.get(cachedGroundNodeId) ?? null
 		if (groundObject) {
+			updateGroundMesh(groundObject, cachedGroundDynamicMesh)
 			syncGroundChunkLoadingMode(groundObject, cachedGroundDynamicMesh as GroundRuntimeDynamicMesh, activeCamera)
+			const groundChunkSceneId = cachedGroundChunkManifestSceneId
+			if (cachedGroundChunkManifest && groundChunkSceneId && groundChunkSceneId === currentDocument?.id) {
+				syncInfiniteGroundChunkMeshes({
+					groundObject,
+					groundDefinition: cachedGroundDynamicMesh as GroundRuntimeDynamicMesh,
+					camera: activeCamera,
+					sourceId: groundChunkSceneId,
+					manifestRevision: cachedGroundChunkManifest.revision,
+					manifestRecords: cachedGroundChunkManifest.chunks,
+					loadChunkData: async (record) => useScenesStore().loadGroundChunkData(groundChunkSceneId, record.key),
+				})
+			}
 			syncGroundSurfacePreviewForGroundNode(groundObject, cachedGroundNode, cachedGroundDynamicMesh)
 			syncGroundChunkStreamingDebug(groundObject, cachedGroundDynamicMesh, activeCamera, {
 				renderHelpers: isGroundChunkStreamingDebugVisible.value,
