@@ -7128,7 +7128,7 @@ function toStableArrayBuffer(bytes: Uint8Array): ArrayBuffer {
 	return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
 }
 
-const PREVIEW_COMPILED_GROUND_PROFILE_VERSION = 2
+const PREVIEW_COMPILED_GROUND_PROFILE_VERSION = 3
 const PREVIEW_COMPILED_GROUND_BUILD_OPTIONS = Object.freeze({
 	renderChunksPerTile: 8,
 	collisionChunksPerTile: 4,
@@ -7137,6 +7137,43 @@ const PREVIEW_COMPILED_GROUND_BUILD_OPTIONS = Object.freeze({
 	collisionSampleStepMultiplier: 2,
 	minCollisionSampleStepMeters: 4,
 })
+
+function summarizePreviewGroundLocalEditTiles(dynamicGround: GroundRuntimeDynamicMesh | null | undefined): {
+	totalTiles: number
+	resolutionSummary: Array<{ resolution: number; count: number }>
+	sourceSummary: Array<{ source: string; count: number }>
+} {
+	const tileMap = dynamicGround?.localEditTiles && typeof dynamicGround.localEditTiles === 'object'
+		? dynamicGround.localEditTiles
+		: null
+	if (!tileMap) {
+		return {
+			totalTiles: 0,
+			resolutionSummary: [],
+			sourceSummary: [],
+		}
+	}
+	const resolutionCount = new Map<number, number>()
+	const sourceCount = new Map<string, number>()
+	for (const tile of Object.values(tileMap)) {
+		if (!tile || typeof tile !== 'object') {
+			continue
+		}
+		const resolution = Math.max(1, Math.trunc(Number(tile.resolution) || 0))
+		resolutionCount.set(resolution, (resolutionCount.get(resolution) ?? 0) + 1)
+		const source = typeof tile.source === 'string' && tile.source.trim().length ? tile.source.trim() : 'unknown'
+		sourceCount.set(source, (sourceCount.get(source) ?? 0) + 1)
+	}
+	return {
+		totalTiles: Object.keys(tileMap).length,
+		resolutionSummary: Array.from(resolutionCount.entries())
+			.map(([resolution, count]) => ({ resolution, count }))
+			.sort((left, right) => left.resolution - right.resolution),
+		sourceSummary: Array.from(sourceCount.entries())
+			.map(([source, count]) => ({ source, count }))
+			.sort((left, right) => left.source.localeCompare(right.source)),
+	}
+}
 
 function computePreviewCompiledGroundBuildKey(documentId: string, dynamicGround: GroundDynamicMesh | null): string {
 	if (!dynamicGround) {
@@ -7347,6 +7384,7 @@ async function buildPreviewRuntimeDocument(
 				&& typeof dynamicGround.runtimeTerrainHeightSampler === 'object'
 				&& dynamicGround.runtimeTerrainHeightSampler,
 			)
+			const localEditTileSummary = summarizePreviewGroundLocalEditTiles(dynamicGround)
 			const compiledGroundWorkerCount = hasTerrainHeightSampler ? 1 : resolvePreferredCompiledGroundWorkerCount()
 			console.info('[ScenePreview] Compiled ground build started', {
 				sceneId: document.id,
@@ -7354,11 +7392,38 @@ async function buildPreviewRuntimeDocument(
 				workerCount: compiledGroundWorkerCount,
 				buildOptions: PREVIEW_COMPILED_GROUND_BUILD_OPTIONS,
 				hasTerrainHeightSampler,
+				localEditTileCount: localEditTileSummary.totalTiles,
+				localEditResolutionSummary: localEditTileSummary.resolutionSummary,
+				localEditSourceSummary: localEditTileSummary.sourceSummary,
 			})
+			let loggedRenderTileDiagnostics = 0
 			const built = await buildCompiledGroundPackageFilesAsync(document, {
 				yieldEveryTiles: 2,
 				workerCount: compiledGroundWorkerCount,
 				...PREVIEW_COMPILED_GROUND_BUILD_OPTIONS,
+				onRenderTileBuilt: (payload) => {
+					if (loggedRenderTileDiagnostics >= 10) {
+						return
+					}
+					loggedRenderTileDiagnostics += 1
+					console.info('[ScenePreview] Render tile precision diagnostic', {
+						sceneId: document.id,
+						tileKey: payload.tileKey,
+						vertexCount: payload.vertexCount,
+						triangleCount: payload.triangleCount,
+						chunkCount: payload.diagnostics.length,
+						chunks: payload.diagnostics.slice(0, 12).map((entry) => ({
+							chunkKey: entry.chunkKey,
+							sampleStepMeters: entry.sampleStepMeters,
+							localEditTileKey: entry.localEditTileKey,
+							localEditSource: entry.localEditSource,
+							localEditResolution: entry.localEditResolution,
+							localEditCellSize: entry.localEditCellSize,
+							regionWidthMeters: entry.regionWidthMeters,
+							regionDepthMeters: entry.regionDepthMeters,
+						})),
+					})
+				},
 				onProgress: (progress) => {
 					const now = performance.now()
 					const statusKey = `${progress.phase}:${progress.completed}/${progress.total}`
@@ -7374,14 +7439,6 @@ async function buildPreviewRuntimeDocument(
 						setPreviewStatus('Compiling ground', {
 							detail,
 							progress: progress.total > 0 ? (progress.completed / progress.total) * 100 : 0,
-						})
-						console.info('[ScenePreview] Compiled ground progress', {
-							sceneId: document.id,
-							phase: progress.phase,
-							completed: progress.completed,
-							total: progress.total,
-							tileKey: progress.tileKey,
-							elapsedMs: Math.round(now - buildStartedAt),
 						})
 					}
 				},
@@ -9742,24 +9799,8 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
 					cachedCompiledGroundFiles.size,
 					groundObject.visible ? 1 : 0,
 				].join('|')
-				const now = performance.now()
-				if (
-					compiledGroundPreviewSyncSignature !== lastCompiledGroundPreviewSyncSignature
-					|| now - lastCompiledGroundPreviewSyncLogAt >= 1500
-				) {
-					lastCompiledGroundPreviewSyncSignature = compiledGroundPreviewSyncSignature
-					lastCompiledGroundPreviewSyncLogAt = now
-					console.info('[ScenePreview] Compiled ground render sync requested', {
-						sceneId: cachedCompiledGroundSceneId,
-						revision,
-						renderTiles: compiledManifest.renderTiles.length,
-						collisionTiles: compiledManifest.collisionTiles.length,
-						cachedFileCount: cachedCompiledGroundFiles.size,
-						groundObjectVisible: groundObject.visible,
-						groundObjectName: groundObject.name,
-						groundNodeId: cachedGroundNodeId,
-					})
-				}
+				lastCompiledGroundPreviewSyncSignature = compiledGroundPreviewSyncSignature
+				lastCompiledGroundPreviewSyncLogAt = performance.now()
 				syncCompiledGroundRenderTiles({
 					groundObject,
 					groundDefinition: cachedGroundDynamicMesh as GroundRuntimeDynamicMesh,
@@ -9770,17 +9811,6 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
 					loadTileData: async (record) => cachedCompiledGroundFiles.get(record.path) ?? null,
 				})
 			} else {
-				const now = performance.now()
-				if (now - lastCompiledGroundPreviewSyncLogAt >= 1500) {
-					lastCompiledGroundPreviewSyncLogAt = now
-					console.warn('[ScenePreview] Compiled ground render sync skipped', {
-						hasManifest: Boolean(compiledManifest),
-						cachedCompiledGroundSceneId,
-						currentDocumentId: currentDocument?.id ?? null,
-						cachedFileCount: cachedCompiledGroundFiles.size,
-						groundNodeId: cachedGroundNodeId,
-					})
-				}
 				clearCompiledGroundRenderTiles(groundObject)
 			}
 			syncPreviewInfiniteGroundChunkCollisionBodies(

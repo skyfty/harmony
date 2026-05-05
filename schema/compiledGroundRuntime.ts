@@ -171,7 +171,7 @@ export function syncCompiledGroundRenderTiles(params: SyncCompiledGroundRenderTi
   const desiredKeys = new Set(desired.map((record) => record.key))
   params.camera.getWorldPosition(cameraLocalHelper)
   params.groundObject.worldToLocal(cameraLocalHelper)
-  const debugSignature = [
+  runtime.lastDebugSignature = [
     params.sourceId,
     params.revision,
     desired.length,
@@ -180,28 +180,7 @@ export function syncCompiledGroundRenderTiles(params: SyncCompiledGroundRenderTi
     Math.round(cameraLocalHelper.x),
     Math.round(cameraLocalHelper.z),
   ].join('|')
-  const now = Date.now()
-  if (
-    debugSignature !== runtime.lastDebugSignature
-    && (desired.length === 0 || runtime.meshes.size === 0 || now - runtime.lastDebugLogAt >= 1000)
-  ) {
-    runtime.lastDebugSignature = debugSignature
-    runtime.lastDebugLogAt = now
-    console.info('[CompiledGroundRender] Sync window', {
-      sourceId: params.sourceId,
-      revision: params.revision,
-      desiredTiles: desired.length,
-      retainedTiles: retainedKeys.size,
-      loadedMeshes: runtime.meshes.size,
-      pendingLoads: runtime.pendingLoads.size,
-      activeRadiusTiles,
-      retainRadiusTiles,
-      cameraLocalX: Math.round(cameraLocalHelper.x),
-      cameraLocalZ: Math.round(cameraLocalHelper.z),
-      bounds: params.manifest.bounds,
-      sampleTileKeys: desired.slice(0, 6).map((record) => record.key),
-    })
-  }
+  runtime.lastDebugLogAt = Date.now()
 
   runtime.meshes.forEach((mesh, key) => {
     if (desiredKeys.has(key) || retainedKeys.has(key)) {
@@ -249,15 +228,6 @@ export function syncCompiledGroundRenderTiles(params: SyncCompiledGroundRenderTi
         mesh.userData.compiledGroundTileKey = record.key
         activeRuntime.group.add(mesh)
         activeRuntime.meshes.set(record.key, mesh)
-        if (activeRuntime.meshes.size <= 3 || activeRuntime.meshes.size % 8 === 0) {
-          console.info('[CompiledGroundRender] Tile mesh attached', {
-            sourceId: params.sourceId,
-            tileKey: record.key,
-            loadedMeshes: activeRuntime.meshes.size,
-            pendingLoads: activeRuntime.pendingLoads.size,
-            vertexCount: (geometry.getAttribute('position')?.count ?? 0),
-          })
-        }
       })
       .finally(() => {
         renderRuntimeMap.get(params.groundObject)?.pendingLoads.delete(record.key)

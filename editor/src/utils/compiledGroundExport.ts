@@ -20,6 +20,8 @@ import { isGroundDynamicMesh } from '@schema/groundHeightfield'
 import {
   buildCollisionTileData,
   buildRenderTileGeometry,
+  collectCompiledGroundRenderChunkDiagnostics,
+  type CompiledGroundRenderChunkDiagnostic,
 } from './compiledGroundBuildShared'
 import type {
   CompiledGroundBuildWorkerRequest,
@@ -75,6 +77,14 @@ type CompiledGroundBuildContext = {
 type BuildCompiledGroundAsyncOptions = {
   yieldEveryTiles?: number
   onProgress?: (progress: CompiledGroundBuildProgress) => void
+  onRenderTileBuilt?: (payload: {
+    tileKey: string
+    row: number
+    column: number
+    vertexCount: number
+    triangleCount: number
+    diagnostics: CompiledGroundRenderChunkDiagnostic[]
+  }) => void
   yieldControl?: () => Promise<void>
   workerCount?: number
   workerBatchSize?: number
@@ -334,7 +344,12 @@ function prepareCompiledGroundBuildContext(
   }
 }
 
-function appendRenderTile(context: CompiledGroundBuildContext, row: number, column: number): string {
+function appendRenderTile(
+  context: CompiledGroundBuildContext,
+  row: number,
+  column: number,
+  options?: BuildCompiledGroundAsyncOptions,
+): string {
   const key = formatCompiledGroundTileKey(row, column)
   const minX = context.coverageBounds.minX + column * context.renderTileSizeMeters
   const minZ = context.coverageBounds.minZ + row * context.renderTileSizeMeters
@@ -371,6 +386,21 @@ function appendRenderTile(context: CompiledGroundBuildContext, row: number, colu
     bounds: built.header.bounds,
     vertexCount: built.header.vertexCount,
     triangleCount: built.header.triangleCount,
+  })
+  options?.onRenderTileBuilt?.({
+    tileKey: key,
+    row,
+    column,
+    vertexCount: built.header.vertexCount,
+    triangleCount: built.header.triangleCount,
+    diagnostics: collectCompiledGroundRenderChunkDiagnostics(
+      context.definition,
+      minX,
+      minZ,
+      widthMeters,
+      depthMeters,
+      context.renderSampleStepMeters,
+    ),
   })
   return key
 }
@@ -698,7 +728,7 @@ export async function buildCompiledGroundPackageFilesAsync(
 
   for (let row = 0; row < context.renderRows; row += 1) {
     for (let column = 0; column < context.renderColumns; column += 1) {
-      const tileKey = appendRenderTile(context, row, column)
+      const tileKey = appendRenderTile(context, row, column, options)
       renderCompleted += 1
       completedSinceYield += 1
       options.onProgress?.({
