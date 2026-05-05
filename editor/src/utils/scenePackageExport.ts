@@ -41,7 +41,7 @@ import { buildAssetRegistryAliasMap, normalizeAssetIdWithRegistry } from '@/util
 import {
   stripGroundHeightMapsFromSceneDocument,
 } from '@/utils/groundHeightSidecar'
-import { buildCompiledGroundPackageFiles } from '@/utils/compiledGroundExport'
+import { buildCompiledGroundPackageFilesAsync } from '@/utils/compiledGroundExport'
 import { collectPunchPointsFromNodes } from './sceneExport'
 import {
   buildSceneAssetReferenceSummaryMap,
@@ -1208,7 +1208,47 @@ export async function exportScenePackageZip(payload: {
       ? useGroundPaintStore().buildSceneDocumentSidecar(scene.id, groundNode)
       : await scenesStore.loadGroundPaintSidecar(scene.id)
     if (groundNode?.dynamicMesh?.type === 'Ground') {
-      const compiledGroundPackage = buildCompiledGroundPackageFiles(sidecarSource as SceneJsonExportDocument)
+      const compiledGroundStartedAt = typeof performance !== 'undefined' ? performance.now() : Date.now()
+      let lastCompiledGroundProgressAt = compiledGroundStartedAt
+      let lastCompiledGroundProgressKey = ''
+      emitSceneExportEvent(payload.reportEvent, {
+        phase: 'sidecar',
+        level: 'info',
+        status: 'running',
+        sceneId: scene.id,
+        sceneName,
+        detail: 'compiled-ground',
+        message: 'Building compiled ground package...',
+      })
+      const compiledGroundPackage = await buildCompiledGroundPackageFilesAsync(sidecarSource as SceneJsonExportDocument, {
+        yieldEveryTiles: 2,
+        onProgress: (progress) => {
+          const now = typeof performance !== 'undefined' ? performance.now() : Date.now()
+          const progressKey = `${progress.phase}:${progress.completed}/${progress.total}`
+          if (
+            progressKey === lastCompiledGroundProgressKey
+            || (progress.completed !== 1 && progress.completed !== progress.total && now - lastCompiledGroundProgressAt < 200)
+          ) {
+            return
+          }
+          lastCompiledGroundProgressKey = progressKey
+          lastCompiledGroundProgressAt = now
+          emitSceneExportEvent(payload.reportEvent, {
+            phase: 'sidecar',
+            level: 'info',
+            status: 'running',
+            sceneId: scene.id,
+            sceneName,
+            current: progress.completed,
+            total: progress.total,
+            progress: progress.total > 0 ? progress.completed / progress.total : undefined,
+            detail: progress.tileKey,
+            message: progress.phase === 'render'
+              ? `Building compiled ground mesh ${progress.completed}/${progress.total}`
+              : `Building compiled ground collision ${progress.completed}/${progress.total}`,
+          })
+        },
+      })
       if (!compiledGroundPackage) {
         throw new Error(`Compiled ground export failed for scene ${scene.id}`)
       }
@@ -1234,7 +1274,7 @@ export async function exportScenePackageZip(payload: {
         sceneId: scene.id,
         sceneName,
         detail: compiledGroundPackage.manifestPath,
-        message: 'Compiled ground package written',
+        message: `Compiled ground package written (${Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - compiledGroundStartedAt)} ms)`,
       })
 
       const packagedTerrainDataset = await buildTerrainDatasetPackageFiles(

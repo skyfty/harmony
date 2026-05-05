@@ -74,7 +74,14 @@ import { prepareStoredSceneJsonExportBundle } from '@/utils/sceneExport'
 import { type SceneAssetDiagnosticsSummary } from '@/utils/sceneAssetDiagnostics'
 import { collectRuntimeModelNodesByAssetId } from '@/utils/sceneAssetCollectors'
 import { createGroundRuntimeMeshFromSidecar } from '@/utils/groundHeightSidecar'
-import { buildCompiledGroundPackageFiles } from '@/utils/compiledGroundExport'
+import { buildCompiledGroundPackageFilesAsync } from '@/utils/compiledGroundExport'
+import {
+	loadPreviewCompiledGroundPackageFromCache,
+	savePreviewCompiledGroundPackageToCache,
+	estimatePreviewCompiledGroundPackageBytes,
+	PREVIEW_COMPILED_GROUND_PERSIST_MAX_BYTES,
+	type PreviewCompiledGroundPackage,
+} from '@/utils/previewCompiledGroundCache'
 import { createScenesStoreTerrainDatasetHeightSampler } from '@/utils/terrainDatasetRuntime'
 import { useGroundHeightmapStore } from '@/stores/groundHeightmapStore'
 import { useScenesStore } from '@/stores/scenesStore'
@@ -343,6 +350,40 @@ type VehicleDriveOrbitMode = 'follow' | 'free'
 const containerRef = ref<HTMLDivElement | null>(null)
 const statsContainerRef = ref<HTMLDivElement | null>(null)
 const statusMessage = ref('Waiting for scene data...')
+type PreviewStatusState = {
+	active: boolean
+	label: string
+	detail: string
+	progress: number | null
+}
+const previewStatus = reactive<PreviewStatusState>({
+	active: false,
+	label: '',
+	detail: '',
+	progress: null,
+})
+const previewStatusProgressPercent = computed(() => {
+	if (typeof previewStatus.progress !== 'number' || !Number.isFinite(previewStatus.progress)) {
+		return 0
+	}
+	return Math.max(0, Math.min(100, Math.round(previewStatus.progress)))
+})
+
+function setPreviewStatus(label: string, options: { detail?: string; progress?: number | null } = {}): void {
+	previewStatus.active = true
+	previewStatus.label = label
+	previewStatus.detail = options.detail ?? ''
+	previewStatus.progress = typeof options.progress === 'number' && Number.isFinite(options.progress)
+		? Math.max(0, Math.min(100, options.progress))
+		: null
+}
+
+function clearPreviewStatus(): void {
+	previewStatus.active = false
+	previewStatus.label = ''
+	previewStatus.detail = ''
+	previewStatus.progress = null
+}
 
 const liveUpdatesDisabledSourceUrl = ref<string | null>(null)
 const isLiveUpdatesDisabled = computed(() => Boolean(liveUpdatesDisabledSourceUrl.value))
@@ -7075,10 +7116,36 @@ function isSceneJsonExportDocument(raw: unknown): raw is SceneJsonExportDocument
 	return typeof candidate.id === 'string' && Array.isArray(candidate.nodes)
 }
 
-function toClonedArrayBuffer(bytes: Uint8Array): ArrayBuffer {
-	const buffer = new ArrayBuffer(bytes.byteLength)
-	new Uint8Array(buffer).set(bytes)
-	return buffer
+function toStableArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+	if (bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength) {
+		return bytes.buffer as ArrayBuffer
+	}
+	return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
+}
+
+function computePreviewCompiledGroundBuildKey(documentId: string, dynamicGround: GroundDynamicMesh | null): string {
+	if (!dynamicGround) {
+		return `${documentId}|no-ground`
+	}
+	const worldBounds = dynamicGround.worldBounds ?? null
+	const heightComposition = dynamicGround.heightComposition ?? null
+	return [
+		documentId,
+		dynamicGround.terrainMode ?? 'finite',
+		dynamicGround.surfaceRevision ?? 0,
+		dynamicGround.chunkManifestRevision ?? 0,
+		dynamicGround.chunkSizeMeters ?? '',
+		dynamicGround.baseHeight ?? '',
+		dynamicGround.cellSize ?? '',
+		dynamicGround.editTileSizeMeters ?? '',
+		dynamicGround.editTileResolution ?? '',
+		worldBounds?.minX ?? '',
+		worldBounds?.minZ ?? '',
+		worldBounds?.maxX ?? '',
+		worldBounds?.maxZ ?? '',
+		heightComposition?.mode ?? '',
+		heightComposition?.policyVersion ?? '',
+	].join('|')
 }
 
 async function buildPreviewRuntimeDocument(
@@ -7151,20 +7218,76 @@ async function buildPreviewRuntimeDocument(
 		}
 		attachGroundScatterRuntimeToNode(document.id, groundNode)
 		attachGroundPaintRuntimeToNode(document.id, groundNode)
-		const compiledBuildKey = [
-			document.id,
-			document.updatedAt ?? '',
-			(dynamicGround?.surfaceRevision ?? 0),
-			(dynamicGround?.chunkManifestRevision ?? 0),
-		].join('|')
-		let compiledPackage = null
+		const compiledBuildKey = computePreviewCompiledGroundBuildKey(document.id, dynamicGround)
+		let compiledPackage: PreviewCompiledGroundPackage | null = null
 		if (compiledBuildKey === cachedCompiledGroundBuildKey && cachedCompiledGroundManifest) {
 			compiledPackage = {
 				manifest: cachedCompiledGroundManifest,
 				files: cachedCompiledGroundFiles,
 			}
 		} else {
-			const built = buildCompiledGroundPackageFiles(document)
+			setPreviewStatus('Loading ground cache', { detail: 'Checking local compiled terrain cache...' })
+			await nextTick()
+			const cachedPackage = await loadPreviewCompiledGroundPackageFromCache(compiledBuildKey)
+			if (cachedPackage) {
+				console.info('[ScenePreview] Reused persisted compiled ground cache', {
+					sceneId: document.id,
+					buildKey: compiledBuildKey,
+					renderTiles: cachedPackage.manifest.renderTiles.length,
+					collisionTiles: cachedPackage.manifest.collisionTiles.length,
+				})
+				statusMessage.value = 'Loaded cached ground.'
+				setPreviewStatus('Loading ground cache', {
+					detail: 'Loaded persisted static terrain cache',
+					progress: 100,
+				})
+				cachedCompiledGroundBuildKey = compiledBuildKey
+				cachedCompiledGroundManifest = cachedPackage.manifest
+				cachedCompiledGroundSceneId = document.id
+				cachedCompiledGroundFiles = cachedPackage.files
+				compiledPackage = cachedPackage
+			}
+		}
+		if (!compiledPackage) {
+			const buildStartedAt = performance.now()
+			let lastProgressLoggedAt = buildStartedAt
+			let lastStatusKey = ''
+			statusMessage.value = 'Compiling ground...'
+			setPreviewStatus('Compiling ground', { detail: 'Preparing static preview terrain...', progress: 0 })
+			await nextTick()
+			console.info('[ScenePreview] Compiled ground build started', {
+				sceneId: document.id,
+				buildKey: compiledBuildKey,
+			})
+			const built = await buildCompiledGroundPackageFilesAsync(document, {
+				yieldEveryTiles: 2,
+				onProgress: (progress) => {
+					const now = performance.now()
+					const statusKey = `${progress.phase}:${progress.completed}/${progress.total}`
+					if (statusKey !== lastStatusKey && (progress.completed === 1 || progress.completed === progress.total || now - lastProgressLoggedAt >= 200)) {
+						lastStatusKey = statusKey
+						lastProgressLoggedAt = now
+						statusMessage.value = progress.phase === 'render'
+							? `Compiling ground mesh ${progress.completed}/${progress.total}...`
+							: `Compiling ground collision ${progress.completed}/${progress.total}...`
+						const detail = progress.phase === 'render'
+							? `Building mesh tiles ${progress.completed}/${progress.total}`
+							: `Building collision tiles ${progress.completed}/${progress.total}`
+						setPreviewStatus('Compiling ground', {
+							detail,
+							progress: progress.total > 0 ? (progress.completed / progress.total) * 100 : 0,
+						})
+						console.info('[ScenePreview] Compiled ground progress', {
+							sceneId: document.id,
+							phase: progress.phase,
+							completed: progress.completed,
+							total: progress.total,
+							tileKey: progress.tileKey,
+							elapsedMs: Math.round(now - buildStartedAt),
+						})
+					}
+				},
+			})
 			if (!built) {
 				cachedCompiledGroundBuildKey = null
 				cachedCompiledGroundManifest = null
@@ -7172,9 +7295,16 @@ async function buildPreviewRuntimeDocument(
 				cachedCompiledGroundFiles = new Map()
 				throw new Error(`Compiled ground build failed for preview scene ${document.id}`)
 			}
+			console.info('[ScenePreview] Compiled ground build completed', {
+				sceneId: document.id,
+				renderTiles: built.manifest.renderTiles.length,
+				collisionTiles: built.manifest.collisionTiles.length,
+				elapsedMs: Math.round(performance.now() - buildStartedAt),
+			})
+			setPreviewStatus('Compiling ground', { detail: 'Static terrain ready', progress: 100 })
 			const fileMap = new Map<string, ArrayBuffer>()
 			Object.entries(built.files).forEach(([path, bytes]) => {
-				fileMap.set(path, toClonedArrayBuffer(bytes))
+				fileMap.set(path, toStableArrayBuffer(bytes))
 			})
 			cachedCompiledGroundBuildKey = compiledBuildKey
 			cachedCompiledGroundManifest = built.manifest
@@ -7183,6 +7313,29 @@ async function buildPreviewRuntimeDocument(
 			compiledPackage = {
 				manifest: built.manifest,
 				files: fileMap,
+			}
+			const compiledPackageBytes = estimatePreviewCompiledGroundPackageBytes(compiledPackage)
+			console.info('[ScenePreview] Compiled ground package memory footprint', {
+				sceneId: document.id,
+				buildKey: compiledBuildKey,
+				totalBytes: compiledPackageBytes,
+				totalMiB: Math.round((compiledPackageBytes / (1024 * 1024)) * 10) / 10,
+			})
+			if (compiledPackageBytes <= PREVIEW_COMPILED_GROUND_PERSIST_MAX_BYTES) {
+				void savePreviewCompiledGroundPackageToCache(compiledBuildKey, compiledPackage).catch((error) => {
+					console.warn('[ScenePreview] Failed to persist compiled ground cache', {
+						sceneId: document.id,
+						buildKey: compiledBuildKey,
+						error,
+					})
+				})
+			} else {
+				console.info('[ScenePreview] Skipped persisted compiled ground cache because package is too large', {
+					sceneId: document.id,
+					buildKey: compiledBuildKey,
+					totalBytes: compiledPackageBytes,
+					limitBytes: PREVIEW_COMPILED_GROUND_PERSIST_MAX_BYTES,
+				})
 			}
 		}
 		if (compiledPackage) {
@@ -7212,6 +7365,7 @@ async function switchToProjectScene(sceneId: string): Promise<void> {
 	const token = beginSceneSwitch()
 	try {
 		statusMessage.value = 'Loading scene...'
+		setPreviewStatus('Loading scene', { detail: 'Preparing preview document...' })
 		const timestamp = new Date().toISOString()
 		if (entry.kind === 'embedded') {
 			cleanupForUnrelatedSceneSwitch()
@@ -7228,6 +7382,7 @@ async function switchToProjectScene(sceneId: string): Promise<void> {
 			})
 			await waitApplied
 			statusMessage.value = ''
+			clearPreviewStatus()
 			return
 		}
 		if (entry.kind === 'external') {
@@ -7248,12 +7403,14 @@ async function switchToProjectScene(sceneId: string): Promise<void> {
 			})
 			await waitApplied
 			statusMessage.value = ''
+			clearPreviewStatus()
 			return
 		}
 	} catch (error) {
 		console.error('[ScenePreview] Failed to switch scene', error)
 		appendWarningMessage('Failed to load scene. Please try again later.')
 		statusMessage.value = 'Failed to load scene. Please try again later.'
+		setPreviewStatus('Scene load failed', { detail: 'Please try again later.' })
 	} finally {
 		await endSceneSwitch(token)
 	}
@@ -7285,11 +7442,13 @@ async function handleLoadSceneEvent(event: Extract<BehaviorRuntimeEvent, { type:
 	const token = beginSceneSwitch()
 	try {
 		statusMessage.value = 'Loading scene...'
+		setPreviewStatus('Loading scene', { detail: 'Preparing preview document...' })
 		const scenesStore = useScenesStore()
 		const document = await scenesStore.loadSceneDocument(sceneId)
 		if (!document) {
 			appendWarningMessage('Failed to load scene document.')
 			statusMessage.value = ''
+			clearPreviewStatus()
 			return
 		}
 		const exportDocument = await ensureScenePreviewExportDocument(document)
@@ -7306,10 +7465,12 @@ async function handleLoadSceneEvent(event: Extract<BehaviorRuntimeEvent, { type:
 			timestamp,
 		})
 		await waitApplied
+		clearPreviewStatus()
 	} catch (error) {
 		console.error('[ScenePreview] Failed to load scene', error)
 		appendWarningMessage('Failed to load scene. Please try again later.')
 		statusMessage.value = 'Failed to load scene. Please try again later.'
+		setPreviewStatus('Scene load failed', { detail: 'Please try again later.' })
 	} finally {
 		await endSceneSwitch(token)
 	}
@@ -7478,11 +7639,13 @@ async function restoreSceneFromSnapshot(sceneId: string, view: SceneViewControlS
 	const token = beginSceneSwitch()
 	try {
 		statusMessage.value = 'Loading scene...'
+		setPreviewStatus('Loading scene', { detail: 'Preparing preview document...' })
 		const scenesStore = useScenesStore()
 		const document = await scenesStore.loadSceneDocument(sceneId)
 		if (!document) {
 			appendWarningMessage('Failed to load scene document.')
 			statusMessage.value = ''
+			clearPreviewStatus()
 			return
 		}
 		const exportDocument = await ensureScenePreviewExportDocument(document)
@@ -7502,12 +7665,14 @@ async function restoreSceneFromSnapshot(sceneId: string, view: SceneViewControlS
 		if (sceneSwitchToken !== token) {
 			return
 		}
+		clearPreviewStatus()
 		applyViewControlSnapshot(view)
 		applySceneNodeTransformSnapshot(view.nodeTransforms)
 	} catch (error) {
 		console.error('[ScenePreview] Failed to restore scene', error)
 		appendWarningMessage('Failed to restore scene. Please try again later.')
 		statusMessage.value = 'Failed to load scene. Please try again later.'
+		setPreviewStatus('Scene restore failed', { detail: 'Please try again later.' })
 	} finally {
 		await endSceneSwitch(token)
 	}
@@ -13229,15 +13394,18 @@ function applySnapshot(snapshot: ScenePreviewSnapshot) {
 	}
 	isApplyingSnapshot = true
 	statusMessage.value = 'Syncing scene data...'
+	setPreviewStatus('Syncing scene', { detail: 'Applying preview snapshot...' })
 	void buildPreviewRuntimeDocument(snapshot.document)
 		.then((runtimeDocument) => updateScene(runtimeDocument))
 		.then(() => {
 			lastUpdateTime.value = snapshot.timestamp
 			statusMessage.value = ''
+			clearPreviewStatus()
 		})
 		.catch((error) => {
 			console.error('[ScenePreview] Failed to apply snapshot', error)
 			statusMessage.value = 'Failed to load scene. Please try again later.'
+			setPreviewStatus('Scene sync failed', { detail: 'Please try again later.' })
 		})
 		.finally(() => {
 			isApplyingSnapshot = false
@@ -13686,11 +13854,38 @@ watch(
 			</div>
 		</div>
 		<div
-			v-if="statusMessage || formattedLastUpdate"
+			v-if="previewStatus.active || statusMessage || formattedLastUpdate"
 			class="scene-preview__update-banner"
 		>
+			<div
+				v-if="previewStatus.active"
+				class="scene-preview__status-panel"
+			>
+				<div class="scene-preview__status-header">
+					<span class="scene-preview__status-label">{{ previewStatus.label }}</span>
+					<span
+						v-if="previewStatus.progress !== null"
+						class="scene-preview__status-value"
+					>
+						{{ previewStatusProgressPercent }}%
+					</span>
+				</div>
+				<div
+					v-if="previewStatus.detail"
+					class="scene-preview__status-detail"
+				>
+					{{ previewStatus.detail }}
+				</div>
+				<div class="scene-preview__progress-bar scene-preview__status-progress-bar">
+					<div
+						class="scene-preview__progress-bar-fill"
+						:class="{ 'scene-preview__progress-bar-fill--indeterminate': previewStatus.progress === null }"
+						:style="previewStatus.progress === null ? undefined : { '--progress': `${previewStatusProgressPercent}%` }"
+					/>
+				</div>
+			</div>
 			<v-chip
-				v-if="statusMessage"
+				v-else-if="statusMessage"
 				class="scene-preview__update-chip"
 				color="secondary"
 				variant="elevated"
@@ -14722,6 +14917,10 @@ watch(
 	left: 50%;
 	transform: translateX(-50%);
 	pointer-events: none;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 8px;
 }
 
 .scene-preview__update-chip {
@@ -14729,6 +14928,59 @@ watch(
 	background: rgba(18, 18, 32, 0.9);
 	color: #f5f7ff;
 	box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+}
+
+.scene-preview__status-panel {
+	pointer-events: auto;
+	min-width: 280px;
+	max-width: min(420px, calc(100vw - 32px));
+	padding: 12px 14px;
+	border-radius: 12px;
+	background: rgba(18, 18, 32, 0.92);
+	color: #f5f7ff;
+	box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+	backdrop-filter: blur(10px);
+}
+
+.scene-preview__status-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	font-size: 0.88rem;
+	font-weight: 600;
+}
+
+.scene-preview__status-label,
+.scene-preview__status-value {
+	white-space: nowrap;
+}
+
+.scene-preview__status-detail {
+	margin-top: 6px;
+	font-size: 0.78rem;
+	color: rgba(245, 247, 255, 0.76);
+}
+
+.scene-preview__status-progress-bar {
+	margin-top: 10px;
+}
+
+.scene-preview__progress-bar-fill--indeterminate {
+	width: 40% !important;
+	animation: scene-preview-progress-indeterminate 1.1s ease-in-out infinite;
+}
+
+@keyframes scene-preview-progress-indeterminate {
+	0% {
+		transform: translateX(-90%);
+	}
+	50% {
+		transform: translateX(60%);
+	}
+	100% {
+		transform: translateX(210%);
+	}
 }
 
 .scene-preview__mouse-hint {
