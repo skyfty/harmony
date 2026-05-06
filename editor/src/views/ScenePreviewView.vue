@@ -43,6 +43,7 @@ import {
 	type GradientBackgroundDome,
 	type CompiledGroundManifest,
 	type GroundDynamicMesh,
+	type GroundChunkManifest,
 	type GroundSurfaceChunkTextureMap,
 	type GroundRuntimeDynamicMesh,
 		resolveGroundWorkingGridSize,
@@ -111,6 +112,7 @@ import {
 	syncCompiledGroundRenderTiles,
 } from '@schema'
 import { collectLoadedCompiledGroundChunkKeys } from '@schema/compiledGroundRuntime'
+import { createInfiniteGroundChunkColliderRuntime } from '@schema/infiniteGroundChunkCollisions'
 
 import {
 	createSceneCsmShadowRuntime,
@@ -1698,6 +1700,7 @@ function syncPreviewNominateStateMap(): void {
 let cachedGroundNodeId: string | null = null
 let cachedGroundDynamicMesh: GroundDynamicMesh | null = null
 let cachedGroundNode: SceneNode | null = null
+let cachedGroundChunkManifest: GroundChunkManifest | null = null
 let cachedCompiledGroundManifest: CompiledGroundManifest | null = null
 let cachedCompiledGroundSceneId: string | null = null
 let cachedCompiledGroundFiles = new Map<string, ArrayBuffer>()
@@ -1717,6 +1720,10 @@ function resetPreviewCompiledGroundCache(): void {
 	cachedCompiledGroundManifest = null
 	cachedCompiledGroundSceneId = null
 	cachedCompiledGroundFiles = new Map()
+}
+
+function resetPreviewGroundChunkManifestCache(): void {
+	cachedGroundChunkManifest = null
 }
 
 function shouldUseCompiledGroundForPreview(
@@ -1749,6 +1756,13 @@ function shouldUseCompiledGroundForPreview(
 }
 
 const previewCompiledGroundCollisionRuntime = createCompiledGroundCollisionRuntime({
+	getPhysicsWorld: () => physicsWorld,
+	ensurePhysicsWorld: () => ensurePhysicsWorld(),
+	createBody: (node, component, shapeDefinition, object) => createRigidbodyBody(node, component, shapeDefinition, object),
+	loggerTag: '[ScenePreview]',
+})
+
+const previewInfiniteGroundChunkColliderRuntime = createInfiniteGroundChunkColliderRuntime({
 	getPhysicsWorld: () => physicsWorld,
 	ensurePhysicsWorld: () => ensurePhysicsWorld(),
 	createBody: (node, component, shapeDefinition, object) => createRigidbodyBody(node, component, shapeDefinition, object),
@@ -2130,6 +2144,7 @@ async function syncGroundCache(document: SceneJsonExportDocument | null): Promis
 
 function clearPreviewInfiniteGroundChunkCollisionBodies(): void {
 	previewCompiledGroundCollisionRuntime.clear()
+	previewInfiniteGroundChunkColliderRuntime.clear()
 	for (const nodeId of externalRigidbodyDebugSources.keys()) {
 		removeRigidbodyDebugHelper(nodeId)
 	}
@@ -2141,21 +2156,45 @@ function syncPreviewInfiniteGroundChunkCollisionBodies(
 	activeCamera: THREE.PerspectiveCamera,
 ): void {
 	const compiledManifest = ((groundObject.userData as Record<string, unknown> | undefined)?.compiledGroundManifest ?? null) as CompiledGroundManifest | null
-	if (!compiledManifest) {
-		previewCompiledGroundCollisionRuntime.clear()
+	if (compiledManifest) {
+		previewInfiniteGroundChunkColliderRuntime.clear()
+		const revision = Number.isFinite(compiledManifest.revision)
+			? Math.max(0, Math.trunc(compiledManifest.revision))
+			: computeCompiledGroundManifestRevision(compiledManifest)
+		previewCompiledGroundCollisionRuntime.sync({
+			enabled: physicsEnvironmentEnabled.value,
+			groundObject,
+			camera: activeCamera,
+			sourceId: currentDocument?.id?.trim() || 'preview-ground',
+			revision,
+			manifest: compiledManifest,
+			loadTileData: async (record) => cachedCompiledGroundFiles.get(record.path) ?? null,
+		})
 		return
 	}
-	const revision = Number.isFinite(compiledManifest.revision)
-		? Math.max(0, Math.trunc(compiledManifest.revision))
-		: computeCompiledGroundManifestRevision(compiledManifest)
-	previewCompiledGroundCollisionRuntime.sync({
+	previewCompiledGroundCollisionRuntime.clear()
+	const groundDefinition = cachedGroundDynamicMesh && isGroundDynamicMesh(cachedGroundDynamicMesh)
+		? cachedGroundDynamicMesh as GroundRuntimeDynamicMesh
+		: null
+	if (!groundDefinition) {
+		previewInfiniteGroundChunkColliderRuntime.clear()
+		return
+	}
+	previewInfiniteGroundChunkColliderRuntime.sync({
 		enabled: physicsEnvironmentEnabled.value,
 		groundObject,
-		camera: activeCamera,
 		sourceId: currentDocument?.id?.trim() || 'preview-ground',
-		revision,
-		manifest: compiledManifest,
-		loadTileData: async (record) => cachedCompiledGroundFiles.get(record.path) ?? null,
+		groundDefinition,
+		camera: activeCamera,
+		manifestRevision: cachedGroundChunkManifest?.revision,
+		manifestRecords: cachedGroundChunkManifest?.chunks,
+		loadChunkData: async (record) => {
+			const sceneId = currentDocument?.id?.trim() ?? ''
+			if (!sceneId) {
+				return null
+			}
+			return await useScenesStore().loadGroundChunkData(sceneId, record.key)
+		},
 	})
 }
 
@@ -7311,8 +7350,10 @@ async function buildPreviewRuntimeDocument(
 	const scatterSidecar = options.groundScatterSidecar ?? await useScenesStore().loadGroundScatterSidecar(document.id)
 	const paintSidecar = options.groundPaintSidecar ?? await useScenesStore().loadGroundPaintSidecar(document.id)
 	if (!groundNode) {
+		resetPreviewGroundChunkManifestCache()
 		resetPreviewCompiledGroundCache()
 	}
+	cachedGroundChunkManifest = groundNode ? await useScenesStore().loadGroundChunkManifest(document.id) : null
 	const scatterStore = useGroundScatterStore()
 	if (groundNode && groundNode.dynamicMesh && sidecar && isGroundDynamicMesh(groundNode.dynamicMesh)) {
 		groundNode.dynamicMesh = createGroundRuntimeMeshFromSidecar(groundNode.dynamicMesh, sidecar)
