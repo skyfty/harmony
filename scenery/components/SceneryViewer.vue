@@ -494,6 +494,7 @@ import { AssetCache, AssetLoader, configureAssetDownloadHostMirrors, type AssetC
 import { ASSET_DOWNLOAD_HOST_MIRRORS } from '@harmony/schema/assetDownloadMirrors';
 import { isGroundDynamicMesh } from '@harmony/schema/groundHeightfield';
 import {
+  clearGroundFlatChunkBatches,
   setInfiniteGroundHiddenChunkKeys,
   syncGroundChunkLoadingMode,
   sampleGroundHeight,
@@ -13224,7 +13225,8 @@ function startRenderLoop(
           updatePunchBadgeOverlayEntries(camera, deltaSeconds);
           syncSceneSignboards();
 
-        // Keep compiled ground render and the far flat shell in sync with camera position.
+        // Use compiled/sculpted ground when a manifest is present; otherwise keep the
+        // flat-chunk InstancedMesh infinite terrain path active for non-compiled scenes.
         const cachedGround = dynamicGroundCache;
         if (cachedGround) {
           const groundObject = nodeObjectMap.get(cachedGround.nodeId) ?? null;
@@ -13235,19 +13237,22 @@ function startRenderLoop(
               cachedGround.dynamicMesh,
             );
             syncViewerCompiledGroundRender(groundObject, streamingGroundDefinition, camera);
-            // syncGroundChunkLoadingMode is retained only for the far flat InstancedMesh shell that
-            // hides infinite-ground edges at high altitude and during driving.
-            syncGroundChunkLoadingMode(
-              groundObject,
-              streamingGroundDefinition,
-              camera,
-              isWeChatMiniProgram
-                ? {
-                    radius: WECHAT_READONLY_TERRAIN_FLAT_TILING_RADIUS_CHUNKS,
-                    budget: WECHAT_READONLY_TERRAIN_CHUNK_SYNC_BUDGET,
-                  }
-                : undefined,
-            );
+            const hasCompiledGroundManifest = resolveViewerCompiledGroundManifest(groundObject) !== null;
+            if (hasCompiledGroundManifest) {
+              clearGroundFlatChunkBatches(groundObject);
+            } else {
+              syncGroundChunkLoadingMode(
+                groundObject,
+                streamingGroundDefinition,
+                camera,
+                isWeChatMiniProgram
+                  ? {
+                      radius: WECHAT_READONLY_TERRAIN_FLAT_TILING_RADIUS_CHUNKS,
+                      budget: WECHAT_READONLY_TERRAIN_CHUNK_SYNC_BUDGET,
+                    }
+                  : undefined,
+              );
+            }
           }
         }
 
