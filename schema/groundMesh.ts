@@ -169,11 +169,6 @@ type GroundFlatTilingExpansion = {
   nextMaxChunkColumn: number
 }
 
-type GroundChunkRuntimeMaterialUserData = {
-  groundOwnedDebugMaterial?: THREE.Material
-  groundOwnedDebugMaterialSignature?: string
-}
-
 type GroundWorldBoundsCacheEntry = {
   key: string
   bounds: ReturnType<typeof resolveGroundWorldBounds>
@@ -699,86 +694,6 @@ function resolveGroundRuntimeMaterial(root: THREE.Group, state: GroundRuntimeSta
     color: '#707070',
     roughness: 1,
     metalness: 0.1,
-  })
-}
-
-const GROUND_DEBUG_CHUNK_WIREFRAME_COLORS = [
-  '#ff5c5c',
-  '#4dd2ff',
-  '#ffd24d',
-  '#7dff7d',
-] as const
-
-function resolveGroundChunkDebugWireframeColor(chunkRow: number, chunkColumn: number): string {
-  const rowBit = Math.abs(Math.trunc(chunkRow)) & 1
-  const columnBit = Math.abs(Math.trunc(chunkColumn)) & 1
-  return GROUND_DEBUG_CHUNK_WIREFRAME_COLORS[(rowBit << 1) | columnBit] ?? GROUND_DEBUG_CHUNK_WIREFRAME_COLORS[0]
-}
-
-function disposeOwnedGroundChunkMaterial(mesh: THREE.Mesh): void {
-  const userData = (mesh.userData ??= {}) as GroundChunkRuntimeMaterialUserData
-  const owned = userData.groundOwnedDebugMaterial
-  if (owned) {
-    owned.dispose?.()
-    delete userData.groundOwnedDebugMaterial
-    delete userData.groundOwnedDebugMaterialSignature
-  }
-}
-
-function resolveGroundChunkRuntimeMaterial(
-  root: THREE.Group,
-  state: GroundRuntimeState,
-  chunkRow: number,
-  chunkColumn: number,
-  mesh?: THREE.Mesh | null,
-): THREE.Material {
-  const baseMaterial = resolveGroundRuntimeMaterial(root, state)
-  const supportsWireframe = 'wireframe' in (baseMaterial as unknown as object)
-  const wireframeEnabled = supportsWireframe && (baseMaterial as THREE.Material & { wireframe?: boolean }).wireframe === true
-  if (!wireframeEnabled) {
-    if (mesh) {
-      disposeOwnedGroundChunkMaterial(mesh)
-    }
-    return baseMaterial
-  }
-
-  const debugColor = resolveGroundChunkDebugWireframeColor(chunkRow, chunkColumn)
-  const signature = `${baseMaterial.uuid}:${chunkRow & 1}:${chunkColumn & 1}:${debugColor}`
-  const userData = mesh ? ((mesh.userData ??= {}) as GroundChunkRuntimeMaterialUserData) : null
-  const existingOwned = userData?.groundOwnedDebugMaterial
-  if (mesh && existingOwned && userData?.groundOwnedDebugMaterialSignature === signature) {
-    return existingOwned
-  }
-
-  const clonedMaterial = baseMaterial.clone()
-  const typedCloned = clonedMaterial as THREE.Material & {
-    color?: THREE.Color
-    emissive?: THREE.Color
-  }
-  if (typedCloned.color instanceof THREE.Color) {
-    typedCloned.color.set(debugColor)
-  }
-  if (typedCloned.emissive instanceof THREE.Color) {
-    typedCloned.emissive.set('#000000')
-  }
-
-  if (mesh) {
-    disposeOwnedGroundChunkMaterial(mesh)
-    userData!.groundOwnedDebugMaterial = clonedMaterial
-    userData!.groundOwnedDebugMaterialSignature = signature
-  }
-  return clonedMaterial
-}
-
-function syncGroundChunkRuntimeMaterials(
-  root: THREE.Group,
-  state: GroundRuntimeState,
-): void {
-  state.chunks.forEach((runtime) => {
-    const nextMaterial = resolveGroundChunkRuntimeMaterial(root, state, runtime.chunkRow, runtime.chunkColumn, runtime.mesh)
-    if (runtime.mesh.material !== nextMaterial) {
-      runtime.mesh.material = nextMaterial
-    }
   })
 }
 
@@ -3832,7 +3747,6 @@ function ensureGroundRuntimeState(root: THREE.Object3D, definition: GroundDynami
 
   if (existing) {
     existing.chunks.forEach((entry) => {
-      disposeOwnedGroundChunkMaterial(entry.mesh)
       entry.mesh.geometry?.dispose?.()
       // Materials are managed externally (SceneGraph/editor), do not dispose here.
       entry.mesh.removeFromParent()
@@ -3850,7 +3764,6 @@ function ensureGroundRuntimeState(root: THREE.Object3D, definition: GroundDynami
 
     existing.meshPool.forEach((entries) => {
       entries.forEach((mesh) => {
-        disposeOwnedGroundChunkMaterial(mesh)
         try {
           ;(mesh.geometry as any)?.dispose?.()
         } catch (_error) {
@@ -4663,7 +4576,7 @@ function ensureChunkMesh(
   if (pool && pool.length === 0) {
     state.meshPool.delete(poolKey)
   }
-  let material = resolveGroundChunkRuntimeMaterial(root, state, chunkRow, chunkColumn, pooledMesh ?? null)
+  let material = resolveGroundRuntimeMaterial(root, state)
 
   // Fallback placeholder (shared material should be set/cached by SceneGraph/editor).
   if (!material) {
@@ -4708,7 +4621,6 @@ function ensureChunkMesh(
 }
 
 function disposeChunk(runtime: GroundChunkRuntime): void {
-  disposeOwnedGroundChunkMaterial(runtime.mesh)
   try {
     runtime.mesh.geometry?.dispose?.()
   } catch (_error) {
@@ -5718,7 +5630,6 @@ export function updateGroundChunks(
 
   const state = ensureGroundRuntimeState(root, definition)
   const runtimeDefinition = definition
-  syncGroundChunkRuntimeMaterials(root, state)
   const now = Date.now()
   const force = options.force === true
   const minIntervalMs = Math.max(0, Math.trunc(Number.isFinite(options.minIntervalMs as number) ? (options.minIntervalMs as number) : 120))

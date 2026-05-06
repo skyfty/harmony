@@ -20,16 +20,6 @@ type CompiledGroundRenderRuntime = {
   loadedChunkKeysCache: string[]
 }
 
-type CompiledGroundTileRuntimeMaterialUserData = {
-  compiledGroundOwnedDebugMaterial?: THREE.Material
-  compiledGroundOwnedDebugMaterialSignature?: string
-  compiledGroundTile?: boolean
-  compiledGroundTileKey?: string
-  compiledGroundTileRow?: number
-  compiledGroundTileColumn?: number
-  compiledGroundChunkKeys?: string[]
-}
-
 type SyncCompiledGroundRenderTilesParams = {
   groundObject: THREE.Object3D
   groundDefinition: {
@@ -63,12 +53,6 @@ const compiledGroundVisibleSampleLocal = new THREE.Vector3()
 const compiledGroundVisibleRayOrigin = new THREE.Vector3()
 const compiledGroundVisibleRayDirection = new THREE.Vector3()
 const compiledGroundVisibleRay = new THREE.Ray()
-const COMPILED_GROUND_DEBUG_TILE_WIREFRAME_COLORS = [
-  '#ff4df0',
-  '#4dffdb',
-  '#ff9f40',
-  '#8fff4d',
-] as const
 
 function createCompiledGroundViewportSamplePoints(stepsPerAxis: number): ReadonlyArray<readonly [number, number]> {
   const safeSteps = Math.max(2, Math.trunc(stepsPerAxis))
@@ -350,17 +334,6 @@ function ensureCompiledGroundRenderRuntime(groundObject: THREE.Object3D): Compil
 }
 
 function disposeCompiledGroundRenderMesh(mesh: THREE.Mesh): void {
-  const userData = (mesh.userData ??= {}) as CompiledGroundTileRuntimeMaterialUserData
-  const ownedMaterial = userData.compiledGroundOwnedDebugMaterial
-  if (ownedMaterial) {
-    try {
-      ownedMaterial.dispose?.()
-    } catch (_error) {
-      /* noop */
-    }
-    delete userData.compiledGroundOwnedDebugMaterial
-    delete userData.compiledGroundOwnedDebugMaterialSignature
-  }
   mesh.removeFromParent()
   try {
     mesh.geometry?.dispose?.()
@@ -444,9 +417,6 @@ function resolveGroundMaterial(groundObject: THREE.Object3D): THREE.Material {
     if (resolved || !(child as THREE.Mesh).isMesh) {
       return
     }
-    if ((child.userData as CompiledGroundTileRuntimeMaterialUserData | undefined)?.compiledGroundTile === true) {
-      return
-    }
     const material = (child as THREE.Mesh).material
     resolved = Array.isArray(material) ? (material[0] ?? null) : (material ?? null)
   })
@@ -480,92 +450,6 @@ function buildGeometryFromTileBuffer(buffer: ArrayBuffer | null): THREE.BufferGe
   geometry.computeBoundingBox()
   geometry.computeBoundingSphere()
   return geometry
-}
-
-function resolveCompiledGroundTileDebugWireframeColor(record: CompiledGroundRenderTileRecord): string {
-  const rowBit = Math.abs(Math.trunc(record.row)) & 1
-  const columnBit = Math.abs(Math.trunc(record.column)) & 1
-  return COMPILED_GROUND_DEBUG_TILE_WIREFRAME_COLORS[(rowBit << 1) | columnBit]
-    ?? COMPILED_GROUND_DEBUG_TILE_WIREFRAME_COLORS[0]
-}
-
-function disposeOwnedCompiledGroundTileMaterial(mesh: THREE.Mesh): void {
-  const userData = (mesh.userData ??= {}) as CompiledGroundTileRuntimeMaterialUserData
-  const ownedMaterial = userData.compiledGroundOwnedDebugMaterial
-  if (!ownedMaterial) {
-    return
-  }
-  try {
-    ownedMaterial.dispose?.()
-  } catch (_error) {
-    /* noop */
-  }
-  delete userData.compiledGroundOwnedDebugMaterial
-  delete userData.compiledGroundOwnedDebugMaterialSignature
-}
-
-function resolveCompiledGroundTileRuntimeMaterial(
-  baseMaterial: THREE.Material,
-  record: CompiledGroundRenderTileRecord,
-  mesh?: THREE.Mesh | null,
-): THREE.Material {
-  const supportsWireframe = 'wireframe' in (baseMaterial as unknown as object)
-  const wireframeEnabled = supportsWireframe && (baseMaterial as THREE.Material & { wireframe?: boolean }).wireframe === true
-  if (!wireframeEnabled) {
-    if (mesh) {
-      disposeOwnedCompiledGroundTileMaterial(mesh)
-    }
-    return baseMaterial
-  }
-
-  const debugColor = resolveCompiledGroundTileDebugWireframeColor(record)
-  const signature = `${baseMaterial.uuid}:${record.row & 1}:${record.column & 1}:${debugColor}`
-  const userData = mesh ? ((mesh.userData ??= {}) as CompiledGroundTileRuntimeMaterialUserData) : null
-  const existingOwned = userData?.compiledGroundOwnedDebugMaterial
-  if (mesh && existingOwned && userData?.compiledGroundOwnedDebugMaterialSignature === signature) {
-    return existingOwned
-  }
-
-  const clonedMaterial = baseMaterial.clone()
-  const typedCloned = clonedMaterial as THREE.Material & {
-    color?: THREE.Color
-    emissive?: THREE.Color
-  }
-  if (typedCloned.color instanceof THREE.Color) {
-    typedCloned.color.set(debugColor)
-  }
-  if (typedCloned.emissive instanceof THREE.Color) {
-    typedCloned.emissive.set('#000000')
-  }
-
-  if (mesh) {
-    disposeOwnedCompiledGroundTileMaterial(mesh)
-    userData!.compiledGroundOwnedDebugMaterial = clonedMaterial
-    userData!.compiledGroundOwnedDebugMaterialSignature = signature
-  }
-  return clonedMaterial
-}
-
-function syncCompiledGroundRenderTileMaterials(
-  runtime: CompiledGroundRenderRuntime,
-  manifest: CompiledGroundManifest,
-  baseMaterial: THREE.Material,
-): void {
-  const recordMap = resolveCompiledGroundRenderTileRecordMap(manifest)
-  runtime.meshes.forEach((mesh, key) => {
-    const record = recordMap.get(key)
-    if (!record) {
-      if (mesh.material !== baseMaterial) {
-        disposeOwnedCompiledGroundTileMaterial(mesh)
-        mesh.material = baseMaterial
-      }
-      return
-    }
-    const nextMaterial = resolveCompiledGroundTileRuntimeMaterial(baseMaterial, record, mesh)
-    if (mesh.material !== nextMaterial) {
-      mesh.material = nextMaterial
-    }
-  })
 }
 
 function resolveTileWindowRecords(
@@ -713,7 +597,6 @@ export function syncCompiledGroundRenderTiles(params: SyncCompiledGroundRenderTi
   })
 
   const material = resolveGroundMaterial(params.groundObject)
-  syncCompiledGroundRenderTileMaterials(runtime, params.manifest, material)
   for (const record of desired) {
     if (runtime.meshes.has(record.key) || runtime.pendingLoads.has(record.key)) {
       continue
@@ -742,22 +625,15 @@ export function syncCompiledGroundRenderTiles(params: SyncCompiledGroundRenderTi
           })
           return
         }
-        const mesh = new THREE.Mesh(
-          geometry,
-          resolveCompiledGroundTileRuntimeMaterial(material, record),
-        )
+        const mesh = new THREE.Mesh(geometry, material)
         mesh.name = `CompiledGroundTile:${record.key}`
         mesh.receiveShadow = true
         mesh.castShadow = params.groundDefinition.castShadow === true
         // Tile streaming is controlled explicitly from the screen-visible ground footprint first.
         // Some camera modes still want mesh-level frustum culling on top, so keep this caller-configurable.
         mesh.frustumCulled = tileFrustumCulled
-        const meshUserData = (mesh.userData ??= {}) as CompiledGroundTileRuntimeMaterialUserData
-        meshUserData.compiledGroundTile = true
-        meshUserData.compiledGroundTileKey = record.key
-        meshUserData.compiledGroundTileRow = record.row
-        meshUserData.compiledGroundTileColumn = record.column
-        meshUserData.compiledGroundChunkKeys = collectCompiledGroundRenderTileChunkKeys(params.manifest, record)
+        mesh.userData.compiledGroundTile = true
+        mesh.userData.compiledGroundTileKey = record.key
         activeRuntime.group.add(mesh)
         activeRuntime.meshes.set(record.key, mesh)
         activeRuntime.loadedChunkKeysVersion += 1
