@@ -139,9 +139,6 @@ type GroundRuntimeState = {
   desiredSignature: string
   lastCameraLocalX: number
   lastCameraLocalZ: number
-  lastDebugLogAt: number
-  lastDebugLogSignature: string
-
   pendingCreates: Array<{ key: GroundChunkKey; chunkRow: number; chunkColumn: number; priority: number; distSq: number }>
   pendingDestroys: Array<{ key: GroundChunkKey; distSq: number }>
 
@@ -212,7 +209,6 @@ const groundWorldBoundsCache = new WeakMap<object, GroundWorldBoundsCacheEntry>(
 const groundWorkingGridSizeCache = new WeakMap<object, GroundWorkingGridSizeCacheEntry>()
 const groundDefinitionStructureSignatureCache = new WeakMap<object, GroundDefinitionStructureSignatureCacheEntry>()
 const runtimeChunkIndexCache = new Map<string, { row: number; column: number }>()
-const groundOutOfBoundsDebugLogAt = new Map<string, number>()
 let groundFlatChunkInstanceMatrixBuilder: GroundFlatChunkInstanceMatrixBuilder | null = null
 let cachedPrototypeMesh: THREE.Mesh | null = null
 const infiniteGroundCameraQuaternion = new THREE.Quaternion()
@@ -387,51 +383,6 @@ function createPerlinNoise(seed?: number) {
         lerp(u, grad(P[AB + 1]!, xf, yf - 1, zf - 1), grad(P[BB + 1]!, xf - 1, yf - 1, zf - 1)),
       ),
     )
-  }
-}
-
-function formatGroundDebugString(value: unknown): string {
-  const seen = new WeakSet<object>()
-  try {
-    return JSON.stringify(value, (_key, currentValue) => {
-      if (!currentValue || typeof currentValue !== 'object') {
-        return currentValue
-      }
-      if (seen.has(currentValue as object)) {
-        return '[Circular]'
-      }
-      seen.add(currentValue as object)
-      if (currentValue instanceof Set) {
-        return Array.from(currentValue.values())
-      }
-      if (currentValue instanceof Map) {
-        return Array.from(currentValue.entries())
-      }
-      if (ArrayBuffer.isView(currentValue)) {
-        const viewLike = currentValue as ArrayBufferView & { length?: number }
-        return {
-          type: currentValue.constructor?.name ?? 'TypedArray',
-          length: Number.isFinite(viewLike.length) ? Number(viewLike.length) : currentValue.byteLength,
-        }
-      }
-      if (
-        'x' in (currentValue as Record<string, unknown>)
-        && 'y' in (currentValue as Record<string, unknown>)
-        && 'z' in (currentValue as Record<string, unknown>)
-      ) {
-        const vectorLike = currentValue as { x?: unknown; y?: unknown; z?: unknown }
-        if ([vectorLike.x, vectorLike.y, vectorLike.z].every((entry) => typeof entry === 'number')) {
-          return {
-            x: Number(vectorLike.x),
-            y: Number(vectorLike.y),
-            z: Number(vectorLike.z),
-          }
-        }
-      }
-      return currentValue
-    })
-  } catch (error) {
-    return `{"serializationError":${JSON.stringify(String(error))}}`
   }
 }
 
@@ -1886,36 +1837,6 @@ function sampleGroundHeightOutsideWorkingBounds(
   z: number,
   terrainSampler: GroundTerrainHeightSampler | null | undefined = null,
 ): number {
-  const chunkSizeMeters = resolveInfiniteChunkSizeMeters(definition)
-  const chunkCoord = resolveGroundChunkCoordFromWorldPosition(x, z, chunkSizeMeters)
-  const bounds = resolveGroundWorldBoundsCached(definition)
-  const logKey = [
-    definition.terrainMode ?? 'unknown',
-    chunkCoord.chunkX,
-    chunkCoord.chunkZ,
-    Math.round(bounds.minX),
-    Math.round(bounds.maxX),
-    Math.round(bounds.minZ),
-    Math.round(bounds.maxZ),
-  ].join('|')
-  const now = Date.now()
-  const lastLoggedAt = groundOutOfBoundsDebugLogAt.get(logKey) ?? 0
-  if (now - lastLoggedAt >= 1000) {
-    groundOutOfBoundsDebugLogAt.set(logKey, now)
-    console.warn(`[GroundFlatDebug] out-of-bounds-height ${formatGroundDebugString({
-      terrainMode: definition.terrainMode ?? 'unknown',
-      x: Math.round(x * 1000) / 1000,
-      z: Math.round(z * 1000) / 1000,
-      chunkCoord,
-      bounds: {
-        minX: Math.round(bounds.minX * 1000) / 1000,
-        maxX: Math.round(bounds.maxX * 1000) / 1000,
-        minZ: Math.round(bounds.minZ * 1000) / 1000,
-        maxZ: Math.round(bounds.maxZ * 1000) / 1000,
-      },
-      hasTerrainSampler: Boolean(terrainSampler),
-    })}`)
-  }
   if (definition.terrainMode === 'infinite') {
     if (terrainSampler) {
       const sampled = terrainSampler.sampleHeightAtWorld(x, z)
@@ -3881,8 +3802,6 @@ function ensureGroundRuntimeState(root: THREE.Object3D, definition: GroundDynami
     desiredSignature: '',
     lastCameraLocalX: 0,
     lastCameraLocalZ: 0,
-    lastDebugLogAt: 0,
-    lastDebugLogSignature: '',
 
     pendingCreates: [],
     pendingDestroys: [],
@@ -4475,15 +4394,6 @@ function syncGroundFlatChunkBatches(
       }
       existing.spec = group.spec
       if (nextKeysToAppend.length > 0) {
-        console.info(`[GroundFlatDebug] batch-append ${formatGroundDebugString({
-          specKey,
-          appendCount: nextKeysToAppend.length,
-          existingCount: existingKeys.length,
-          pendingCount: existing.pendingChunkKeys.size,
-          nextKeyCount,
-          instanceCapacity: existing.instanceCapacity,
-          sampleKeys: nextKeysToAppend.slice(0, 6),
-        })}`)
         // 同规格批次直接复用，不重新创建 geometry。
         // 这里会把新进入视野的 flat chunk 追加进缓存，但不会把已经加载的旧 chunk 因为相机移动而删掉。
         if (canBuildGroundFlatChunkInstancesAsync(definition)) {
@@ -4532,18 +4442,6 @@ function syncGroundFlatChunkBatches(
       instanceHeightCache: new Map<string, number>(),
       asyncBuildInFlight: false,
     }
-    console.info(`[GroundFlatDebug] batch-create ${formatGroundDebugString({
-      specKey,
-      keyCount: group.keys.length,
-      instanceCapacity,
-      spec: {
-        startRow: group.spec.startRow,
-        startColumn: group.spec.startColumn,
-        rows: group.spec.rows,
-        columns: group.spec.columns,
-      },
-      sampleKeys: prioritizedGroupKeys.slice(0, 6),
-    })}`)
     if (canBuildGroundFlatChunkInstancesAsync(definition)) {
       batch.pendingChunkKeys = new Set<string>(prioritizedGroupKeys)
       batchesNeedingAsyncBuild.add(batch)
@@ -4604,18 +4502,6 @@ function syncGroundFlatChunkBatches(
       const nextPendingKeySet = new Set<string>(nextPendingKeys)
       const removedLoadedKeys = batch.chunkKeys.filter((key) => !nextLoadedKeySet.has(key))
       const removedPendingKeys = Array.from(batch.pendingChunkKeys).filter((key) => !nextPendingKeySet.has(key))
-      if (removedLoadedKeys.length > 0 || removedPendingKeys.length > 0) {
-        console.info(`[GroundFlatDebug] batch-prune ${formatGroundDebugString({
-          specKey,
-          releaseWindow,
-          removedLoadedCount: removedLoadedKeys.length,
-          removedPendingCount: removedPendingKeys.length,
-          remainingLoadedCount: nextKeys.length,
-          remainingPendingCount: nextPendingKeys.length,
-          sampleLoadedKeys: removedLoadedKeys.slice(0, 6),
-          samplePendingKeys: removedPendingKeys.slice(0, 6),
-        })}`)
-      }
       batch.pendingChunkKeys = new Set<string>(nextPendingKeys)
       if (nextKeys.length !== batch.chunkKeys.length) {
         compactGroundFlatChunkBatchInstances(batch, nextKeys)
@@ -5882,8 +5768,6 @@ export function updateGroundChunks(
     // Create queue (nearest-first).
     // 创建队列按距离从近到远排序，保证相机附近优先出现内容，远处 chunk 可以稍后再补。
     const creates: Array<{ key: GroundChunkKey; chunkRow: number; chunkColumn: number; priority: number; distSq: number }> = []
-    let sculptedChunkCountInLoadWindow = 0
-    let flatChunkCountInLoadWindow = 0
 
     // Prefer a 3x3 core around the camera chunk in force mode.
     let forceCore: Set<string> | null = null
@@ -5925,12 +5809,10 @@ export function updateGroundChunks(
         if (chunkIntersectsGroundLocalEditTileFromRuntime(runtimeDefinition, spec, localEditTiles)) {
           // 只要这个 chunk 覆盖到了局部雕刻瓦片，就必须走独立 Mesh 路径，不能并入平面实例批次。
           // 因为一旦并入实例批次，单独的雕刻编辑就无法只改这一块，而必须把整批都拆开，代价更高。
-          sculptedChunkCountInLoadWindow += 1
           creates.push({ key, chunkRow: cr, chunkColumn: cc, priority, distSq: dx * dx + dz * dz })
         } else {
           // 没有局部雕刻的 chunk 进入 flat 分组，后续会被合并成 InstancedMesh 批次。
           // 这就是 hybrid 方案的关键：大部分地形走快路径，只有少量被编辑过的区域保留慢路径。
-          flatChunkCountInLoadWindow += 1
           if (state.chunks.has(key)) {
             transitionToFlatKeys.add(key)
           }
@@ -6010,8 +5892,6 @@ export function updateGroundChunks(
     || state.lastFlatChunkSyncTilingVersion < 0
     || state.lastFlatChunkSyncHiddenChunkKeysVersion !== state.hiddenChunkKeysVersion
 
-  const flatBatchCountBeforeSync = state.flatChunkBatches.size
-  const flatChunkKeyCountBeforeSync = state.flatChunkKeys.size
   if (shouldSyncFlatChunks) {
     const localEditTiles = getLocalEditTiles()
     const skipLoadWindow = {
@@ -6135,96 +6015,6 @@ export function updateGroundChunks(
     )
     state.lastFlatChunkSyncTilingVersion = state.flatTilingVersion
     state.lastFlatChunkSyncHiddenChunkKeysVersion = state.hiddenChunkKeysVersion
-  }
-
-  const nextDebugSignature = [
-    nextDesiredSignature,
-    force ? 'force' : 'normal',
-    shouldSyncFlatChunks ? 'sync-flat' : 'skip-flat',
-    flatTilingChanged ? 'tiling-changed' : 'tiling-stable',
-    desiredFlatChunkGroups?.size ?? -1,
-    state.flatChunkBatches.size,
-    state.flatChunkKeys.size,
-    state.pendingCreates.length,
-    state.pendingDestroys.length,
-  ].join('|')
-  if (nextDebugSignature !== state.lastDebugLogSignature || now - state.lastDebugLogAt >= 1000) {
-    state.lastDebugLogSignature = nextDebugSignature
-    state.lastDebugLogAt = now
-    const desiredFlatChunkKeyCount = desiredFlatChunkGroups
-      ? Array.from(desiredFlatChunkGroups.values()).reduce((sum, group) => sum + group.keys.length, 0)
-      : 0
-    console.info(`[GroundFlatDebug] update-window ${formatGroundDebugString({
-      cameraLocal: {
-        x: Math.round(localX * 1000) / 1000,
-        z: Math.round(localZ * 1000) / 1000,
-      },
-      cameraChunkCoord,
-      chunkSizeMeters,
-      chunkCells,
-      renderRadiusChunks: resolveInfiniteRenderRadiusChunks(definition),
-      loadRadiusChunks,
-      flatReleaseRadiusChunks,
-      unloadRadiusChunks,
-      moveThreshold,
-      movedSq: Math.round(movedSq * 1000) / 1000,
-      force,
-      desiredWindowChanged,
-      hasPendingWork,
-      flatTilingChanged,
-      flatTilingExpansion: flatTilingExpansion
-        ? {
-            hadPreviousBounds: flatTilingExpansion.hadPreviousBounds,
-            previous: {
-              minChunkRow: flatTilingExpansion.previousMinChunkRow,
-              maxChunkRow: flatTilingExpansion.previousMaxChunkRow,
-              minChunkColumn: flatTilingExpansion.previousMinChunkColumn,
-              maxChunkColumn: flatTilingExpansion.previousMaxChunkColumn,
-            },
-            next: {
-              minChunkRow: flatTilingExpansion.nextMinChunkRow,
-              maxChunkRow: flatTilingExpansion.nextMaxChunkRow,
-              minChunkColumn: flatTilingExpansion.nextMinChunkColumn,
-              maxChunkColumn: flatTilingExpansion.nextMaxChunkColumn,
-            },
-          }
-        : null,
-      loadWindow: {
-        minChunkRow: minLoadChunkRow,
-        maxChunkRow: maxLoadChunkRow,
-        minChunkColumn: minLoadChunkColumn,
-        maxChunkColumn: maxLoadChunkColumn,
-      },
-      flatWindow: {
-        minChunkRow: flatMinLoadChunkRow,
-        maxChunkRow: flatMaxLoadChunkRow,
-        minChunkColumn: flatMinLoadChunkColumn,
-        maxChunkColumn: flatMaxLoadChunkColumn,
-      },
-      flatReleaseWindow: {
-        minChunkRow: flatMinReleaseChunkRow,
-        maxChunkRow: flatMaxReleaseChunkRow,
-        minChunkColumn: flatMinReleaseChunkColumn,
-        maxChunkColumn: flatMaxReleaseChunkColumn,
-      },
-      shouldSyncFlatChunks,
-      desiredFlatChunkGroupCount: desiredFlatChunkGroups?.size ?? 0,
-      desiredFlatChunkKeyCount,
-      flatBatchCountBeforeSync,
-      flatBatchCountAfterSync: state.flatChunkBatches.size,
-      flatChunkKeyCountBeforeSync,
-      flatChunkKeyCountAfterSync: state.flatChunkKeys.size,
-      loadedChunkCount: state.chunks.size,
-      pendingCreates: state.pendingCreates.length,
-      pendingDestroys: state.pendingDestroys.length,
-      hiddenChunkCount: state.hiddenChunkKeys.size,
-      workingBounds: {
-        minX: Math.round(bounds.minX * 1000) / 1000,
-        maxX: Math.round(bounds.maxX * 1000) / 1000,
-        minZ: Math.round(bounds.minZ * 1000) / 1000,
-        maxZ: Math.round(bounds.maxZ * 1000) / 1000,
-      },
-    })}`)
   }
 
   const defaultBudget: GroundChunkBudget = camera

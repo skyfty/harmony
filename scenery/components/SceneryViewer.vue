@@ -5133,6 +5133,98 @@ function shouldEnableCompiledGroundTileFrustumCulling(): boolean {
     || (vehicleDriveActive.value && vehicleDriveCameraMode.value === 'first-person');
 }
 
+const VIEWER_GROUND_STREAMING_RADIUS_MIN_METERS = 200;
+const VIEWER_GROUND_STREAMING_RADIUS_HEIGHT_MAX_METERS = 2600;
+const VIEWER_GROUND_STREAMING_RADIUS_ABSOLUTE_CAP_METERS = 5000;
+const VIEWER_GROUND_STREAMING_RADIUS_FAR_CLIP_FACTOR = 0.58;
+const VIEWER_GROUND_STREAMING_RADIUS_FOV_BASE_DEGREES = 60;
+const VIEWER_GROUND_STREAMING_HEIGHT_START_METERS = 80;
+const VIEWER_GROUND_STREAMING_HEIGHT_END_METERS = 1200;
+const viewerGroundStreamingCameraWorldHelper = new THREE.Vector3();
+const viewerGroundStreamingGroundWorldHelper = new THREE.Vector3();
+
+function resolveViewerDynamicGroundStreamingRadiusMeters(
+  camera: THREE.PerspectiveCamera | null | undefined,
+  groundObject?: THREE.Object3D | null,
+): number {
+  if (!camera) {
+    return VIEWER_GROUND_STREAMING_RADIUS_MIN_METERS;
+  }
+
+  camera.getWorldPosition(viewerGroundStreamingCameraWorldHelper);
+  let relativeHeight = viewerGroundStreamingCameraWorldHelper.y;
+  if (groundObject) {
+    groundObject.getWorldPosition(viewerGroundStreamingGroundWorldHelper);
+    relativeHeight = viewerGroundStreamingCameraWorldHelper.y - viewerGroundStreamingGroundWorldHelper.y;
+  }
+
+  const normalizedHeight = THREE.MathUtils.clamp(
+    (Math.max(0, relativeHeight) - VIEWER_GROUND_STREAMING_HEIGHT_START_METERS)
+      / Math.max(1e-6, VIEWER_GROUND_STREAMING_HEIGHT_END_METERS - VIEWER_GROUND_STREAMING_HEIGHT_START_METERS),
+    0,
+    1,
+  );
+  const cameraLike = camera as THREE.PerspectiveCamera & { aspect?: number; fov?: number; far?: number };
+  const aspect = Number.isFinite(cameraLike.aspect) ? Math.max(0.2, Number(cameraLike.aspect)) : 16 / 9;
+  const fovDeg = Number.isFinite(cameraLike.fov) ? Number(cameraLike.fov) : VIEWER_GROUND_STREAMING_RADIUS_FOV_BASE_DEGREES;
+  const halfFovRad = THREE.MathUtils.degToRad(THREE.MathUtils.clamp(fovDeg, 25, 120) * 0.5);
+  const halfViewHeight = Math.max(0, relativeHeight) * Math.tan(halfFovRad);
+  const halfViewWidth = halfViewHeight * aspect;
+  const viewFootprintRadius = Math.sqrt(halfViewHeight * halfViewHeight + halfViewWidth * halfViewWidth);
+  const fovBaseHalfRad = THREE.MathUtils.degToRad(VIEWER_GROUND_STREAMING_RADIUS_FOV_BASE_DEGREES * 0.5);
+  const fovFactor = THREE.MathUtils.clamp(
+    Math.tan(halfFovRad) / Math.max(1e-6, Math.tan(fovBaseHalfRad)),
+    0.65,
+    2.2,
+  );
+  const radiusByHeight = THREE.MathUtils.lerp(
+    VIEWER_GROUND_STREAMING_RADIUS_MIN_METERS,
+    VIEWER_GROUND_STREAMING_RADIUS_HEIGHT_MAX_METERS,
+    normalizedHeight,
+  ) * fovFactor;
+  const desiredRadius = Math.max(radiusByHeight, viewFootprintRadius + 120);
+  const farDistance = Number.isFinite(cameraLike.far)
+    ? Math.max(0, Number(cameraLike.far))
+    : VIEWER_GROUND_STREAMING_RADIUS_ABSOLUTE_CAP_METERS;
+  const farClipCap = farDistance > 0
+    ? farDistance * VIEWER_GROUND_STREAMING_RADIUS_FAR_CLIP_FACTOR
+    : VIEWER_GROUND_STREAMING_RADIUS_ABSOLUTE_CAP_METERS;
+  const effectiveCap = Math.max(
+    VIEWER_GROUND_STREAMING_RADIUS_MIN_METERS,
+    Math.min(VIEWER_GROUND_STREAMING_RADIUS_ABSOLUTE_CAP_METERS, farClipCap),
+  );
+  return THREE.MathUtils.clamp(
+    desiredRadius,
+    VIEWER_GROUND_STREAMING_RADIUS_MIN_METERS,
+    effectiveCap,
+  );
+}
+
+function resolveViewerGroundStreamingDefinition(
+  camera: THREE.PerspectiveCamera | null | undefined,
+  groundObject: THREE.Object3D,
+  groundDefinition: GroundRuntimeDynamicMesh,
+): GroundRuntimeDynamicMesh {
+  const chunkSizeCandidate = Number(groundDefinition.chunkSizeMeters);
+  const chunkSizeMeters = Number.isFinite(chunkSizeCandidate) && chunkSizeCandidate > 0
+    ? chunkSizeCandidate
+    : 100;
+  const dynamicRadiusMeters = resolveViewerDynamicGroundStreamingRadiusMeters(camera, groundObject);
+  const dynamicRadiusChunks = Math.max(1, Math.ceil(dynamicRadiusMeters / chunkSizeMeters));
+  const authoredRadiusCandidate = Number(groundDefinition.renderRadiusChunks);
+  const authoredRadiusChunks = Number.isFinite(authoredRadiusCandidate) && authoredRadiusCandidate > 0
+    ? Math.max(1, Math.trunc(authoredRadiusCandidate))
+    : 1;
+  const renderRadiusChunks = Math.max(authoredRadiusChunks, dynamicRadiusChunks);
+  if (renderRadiusChunks === authoredRadiusChunks) {
+    return groundDefinition;
+  }
+  return {
+    ...groundDefinition,
+    renderRadiusChunks,
+  };
+}
+
 function resolveGroundViewportWorldSize(): { width: number; depth: number } | null {
   const document = currentDocument;
   if (!document) {
@@ -12762,6 +12854,11 @@ function startRenderLoop(
         if (cachedGround) {
           const groundObject = nodeObjectMap.get(cachedGround.nodeId) ?? null;
           if (groundObject) {
+            const streamingGroundDefinition = resolveViewerGroundStreamingDefinition(
+              camera,
+              groundObject,
+              cachedGround.dynamicMesh,
+            );
             const compiledManifest = resolveViewerCompiledGroundManifest(groundObject);
             setInfiniteGroundHiddenChunkKeys(
               groundObject,
@@ -12771,7 +12868,7 @@ function startRenderLoop(
             // hides infinite-ground edges at high altitude and during driving.
             syncGroundChunkLoadingMode(
               groundObject,
-              cachedGround.dynamicMesh,
+              streamingGroundDefinition,
               camera,
               isWeChatMiniProgram
                 ? {
@@ -12780,7 +12877,7 @@ function startRenderLoop(
                   }
                 : undefined,
             );
-            syncViewerCompiledGroundRender(groundObject, cachedGround.dynamicMesh, camera);
+            syncViewerCompiledGroundRender(groundObject, streamingGroundDefinition, camera);
           }
         }
 
