@@ -110,6 +110,7 @@ import {
 	createCompiledGroundCollisionRuntime,
 	syncCompiledGroundRenderTiles,
 } from '@schema'
+import { collectLoadedCompiledGroundChunkKeys } from '@schema/compiledGroundRuntime'
 
 import {
 	createSceneCsmShadowRuntime,
@@ -9723,14 +9724,12 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
 	if (cachedGroundNodeId && cachedGroundDynamicMesh && cachedGroundNode) {
 		const groundObject = nodeObjectMap.get(cachedGroundNodeId) ?? null
 		if (groundObject) {
-			setInfiniteGroundHiddenChunkKeys(groundObject, [])
 			const streamingGroundDefinition = resolvePreviewGroundStreamingDefinition(
 				activeCamera,
 				groundObject,
 				cachedGroundDynamicMesh as GroundRuntimeDynamicMesh,
 			)
 			const compiledManifest = ((groundObject.userData as Record<string, unknown> | undefined)?.compiledGroundManifest ?? null) as CompiledGroundManifest | null
-			syncGroundChunkLoadingMode(groundObject, streamingGroundDefinition, activeCamera)
 			if (compiledManifest && cachedCompiledGroundSceneId && cachedCompiledGroundSceneId === currentDocument?.id) {
 				const revision = Number.isFinite(compiledManifest.revision)
 					? Math.max(0, Math.trunc(compiledManifest.revision))
@@ -9756,9 +9755,15 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
 					streamingMode: 'runtime-camera',
 					tileFrustumCulled: shouldEnableCompiledGroundTileFrustumCulling(),
 				})
+				setInfiniteGroundHiddenChunkKeys(
+					groundObject,
+					collectLoadedCompiledGroundChunkKeys(groundObject, compiledManifest),
+				)
 			} else {
+				setInfiniteGroundHiddenChunkKeys(groundObject, [])
 				clearCompiledGroundRenderTiles(groundObject)
 			}
+			syncGroundChunkLoadingMode(groundObject, streamingGroundDefinition, activeCamera)
 			syncPreviewInfiniteGroundChunkCollisionBodies(
 				groundObject,
 				activeCamera,

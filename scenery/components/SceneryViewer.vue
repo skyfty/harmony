@@ -501,12 +501,12 @@ import {
 import { clearInfiniteGroundChunkMeshes } from '@harmony/schema/groundChunkManifestRuntime';
 import {
   clearCompiledGroundRenderTiles,
-  collectCompiledGroundCoveredChunkKeys,
   computeCompiledGroundManifestRevision,
   createCompiledGroundCollisionRuntime,
   syncCompiledGroundRenderTiles,
   type CompiledGroundManifest,
 } from '@harmony/schema';
+import { collectLoadedCompiledGroundChunkKeys } from '@harmony/schema/compiledGroundRuntime';
 import { buildGroundAirWallDefinitions } from '@harmony/schema/airWall';
 
 import {
@@ -5125,7 +5125,10 @@ function syncViewerCompiledGroundRender(
     streamingMode: 'runtime-camera',
     tileFrustumCulled: shouldEnableCompiledGroundTileFrustumCulling(),
   });
-  setInfiniteGroundHiddenChunkKeys(groundObject, collectCompiledGroundCoveredChunkKeys(compiledManifest));
+  setInfiniteGroundHiddenChunkKeys(
+    groundObject,
+    collectLoadedCompiledGroundChunkKeys(groundObject, compiledManifest),
+  );
 }
 
 function shouldEnableCompiledGroundTileFrustumCulling(): boolean {
@@ -12859,11 +12862,7 @@ function startRenderLoop(
               groundObject,
               cachedGround.dynamicMesh,
             );
-            const compiledManifest = resolveViewerCompiledGroundManifest(groundObject);
-            setInfiniteGroundHiddenChunkKeys(
-              groundObject,
-              compiledManifest ? collectCompiledGroundCoveredChunkKeys(compiledManifest) : [],
-            );
+            syncViewerCompiledGroundRender(groundObject, streamingGroundDefinition, camera);
             // syncGroundChunkLoadingMode is retained only for the far flat InstancedMesh shell that
             // hides infinite-ground edges at high altitude and during driving.
             syncGroundChunkLoadingMode(
@@ -12877,7 +12876,6 @@ function startRenderLoop(
                   }
                 : undefined,
             );
-            syncViewerCompiledGroundRender(groundObject, streamingGroundDefinition, camera);
           }
         }
 
