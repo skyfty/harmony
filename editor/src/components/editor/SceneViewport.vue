@@ -21284,6 +21284,7 @@ let lastGroundChunkSetSignatureCheckAt = 0
 let lastGroundStreamingSyncAt = 0
 let lastGroundStreamingSyncStateSignature: string | null = null
 let lastGroundStreamingWindowSignature: string | null = null
+let lastGroundStreamingCameraPoseSignature: string | null = null
 let lastGroundStreamingCompiledLoadedChunkVersion = -1
 
 
@@ -21896,17 +21897,34 @@ function updateGroundChunkStreaming() {
     cameraChunkCoord.chunkX,
     cameraChunkCoord.chunkZ,
   ].join('|')
+  const cameraPoseSignature = [
+    Math.round(dynamicGroundStreamingCameraWorldHelper.x * 2) / 2,
+    Math.round(dynamicGroundStreamingCameraWorldHelper.y * 2) / 2,
+    Math.round(dynamicGroundStreamingCameraWorldHelper.z * 2) / 2,
+    Math.round(camera.quaternion.x * 1000) / 1000,
+    Math.round(camera.quaternion.y * 1000) / 1000,
+    Math.round(camera.quaternion.z * 1000) / 1000,
+    Math.round(camera.quaternion.w * 1000) / 1000,
+    Math.round((mapControls?.target.x ?? 0) * 2) / 2,
+    Math.round((mapControls?.target.y ?? 0) * 2) / 2,
+    Math.round((mapControls?.target.z ?? 0) * 2) / 2,
+    Math.round((Number.isFinite(camera.zoom) ? camera.zoom : 1) * 1000) / 1000,
+  ].join('|')
   const compiledGroundWorkState = getCompiledGroundRenderWorkState(groundObject)
   const compiledPendingLoads = (compiledGroundWorkState?.pendingLoads ?? 0) > 0
   const compiledLoadedChunkVersion = compiledGroundWorkState?.loadedChunkKeysVersion ?? -1
   const stateChanged = lastGroundStreamingSyncStateSignature !== streamingStateSignature
   const windowChanged = lastGroundStreamingWindowSignature !== streamingWindowSignature
+  const cameraPoseChanged = lastGroundStreamingCameraPoseSignature !== cameraPoseSignature
   const compiledLoadedChunksChanged = lastGroundStreamingCompiledLoadedChunkVersion !== compiledLoadedChunkVersion
   const hasPendingWork = hasPendingGroundChunkWork(groundObject) || compiledPendingLoads
   const intervalMs = now - lastGroundStreamingSyncAt
+  // Keep camera-driven streaming warm during rotate/pan/zoom, even before chunk coordinates
+  // or the quantized radius window change, so async flat chunk work keeps getting serviced.
   const shouldSyncNow = lastGroundStreamingSyncAt <= 0
     || stateChanged
     || windowChanged
+    || (cameraPoseChanged && intervalMs >= GROUND_STREAMING_SYNC_MIN_INTERVAL_MS)
     || compiledLoadedChunksChanged
     || (hasPendingWork && intervalMs >= GROUND_STREAMING_SYNC_MIN_INTERVAL_MS)
   if (!shouldSyncNow) {
@@ -21917,6 +21935,7 @@ function updateGroundChunkStreaming() {
   lastGroundStreamingSyncAt = now
   lastGroundStreamingSyncStateSignature = streamingStateSignature
   lastGroundStreamingWindowSignature = streamingWindowSignature
+  lastGroundStreamingCameraPoseSignature = cameraPoseSignature
   lastGroundStreamingCompiledLoadedChunkVersion = compiledLoadedChunkVersion
 
   // Ground chunk meshes are streamed in/out without emitting scene patches.

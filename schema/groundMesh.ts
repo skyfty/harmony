@@ -50,8 +50,12 @@ const DEFAULT_GROUND_CHUNK_CELLS = 100
 const DEFAULT_GROUND_CHUNK_RADIUS_METERS = 200
 const GROUND_TRIANGLE_SLICE_EPSILON = 1e-6
 const GROUND_TRIANGLE_SLICE_PLANAR_TOLERANCE = 0.004
-const GROUND_FLAT_TILING_RADIUS_MULTIPLIER = 8
 const GROUND_FLAT_TILING_MIN_RADIUS_CHUNKS = 32
+const GROUND_FLAT_TILING_BUFFER_MIN_CHUNKS = 8
+const GROUND_FLAT_TILING_BUFFER_FACTOR = 0.5
+const GROUND_FLAT_TILING_RELEASE_BUFFER_MIN_CHUNKS = 12
+const GROUND_FLAT_TILING_RELEASE_BUFFER_FACTOR = 0.35
+const GROUND_FLAT_CHUNK_ASYNC_BUILD_BATCH_SIZE = 4096
 const GROUND_LOCAL_EDIT_TILE_COVERAGE_BUCKET_CHUNKS = 4
 
 type GroundLocalEditTileCache = {
@@ -404,9 +408,10 @@ function formatGroundDebugString(value: unknown): string {
         return Array.from(currentValue.entries())
       }
       if (ArrayBuffer.isView(currentValue)) {
+        const viewLike = currentValue as ArrayBufferView & { length?: number }
         return {
           type: currentValue.constructor?.name ?? 'TypedArray',
-          length: currentValue.length,
+          length: Number.isFinite(viewLike.length) ? Number(viewLike.length) : currentValue.byteLength,
         }
       }
       if (
@@ -611,7 +616,21 @@ function resolveInfiniteRenderRadiusChunks(definition: GroundDynamicMesh): numbe
 
 function resolveInfiniteFlatTilingRadiusChunks(definition: GroundDynamicMesh): number {
   const baseRadius = resolveInfiniteRenderRadiusChunks(definition)
-  return Math.max(GROUND_FLAT_TILING_MIN_RADIUS_CHUNKS, Math.trunc(baseRadius * GROUND_FLAT_TILING_RADIUS_MULTIPLIER))
+  const bufferChunks = Math.max(
+    GROUND_FLAT_TILING_BUFFER_MIN_CHUNKS,
+    Math.ceil(baseRadius * GROUND_FLAT_TILING_BUFFER_FACTOR),
+  )
+  return Math.max(GROUND_FLAT_TILING_MIN_RADIUS_CHUNKS, baseRadius + bufferChunks)
+}
+
+function resolveInfiniteFlatTilingReleaseRadiusChunks(definition: GroundDynamicMesh): number {
+  const loadRadiusChunks = resolveInfiniteFlatTilingRadiusChunks(definition)
+  const baseRadius = resolveInfiniteRenderRadiusChunks(definition)
+  const releaseBufferChunks = Math.max(
+    GROUND_FLAT_TILING_RELEASE_BUFFER_MIN_CHUNKS,
+    Math.ceil(baseRadius * GROUND_FLAT_TILING_RELEASE_BUFFER_FACTOR),
+  )
+  return loadRadiusChunks + releaseBufferChunks
 }
 
 function updateInfiniteFlatTilingBounds(
@@ -4125,6 +4144,40 @@ function appendGroundFlatChunkBatchInstanceMatrices(
   batch.chunkKeys = nextKeys
 }
 
+function compactGroundFlatChunkBatchInstances(
+  batch: GroundFlatChunkBatchRuntime,
+  chunkKeys: string[],
+): void {
+  const targetArray = batch.mesh.instanceMatrix.array as Float32Array
+  const sourceKeys = batch.chunkKeys
+  const sourceIndexByKey = new Map<string, number>()
+  sourceKeys.forEach((key, index) => {
+    sourceIndexByKey.set(key, index)
+  })
+  const nextKeys: string[] = []
+  let writeIndex = 0
+  chunkKeys.forEach((key) => {
+    const sourceIndex = sourceIndexByKey.get(key)
+    if (sourceIndex == null) {
+      return
+    }
+    if (writeIndex !== sourceIndex) {
+      targetArray.copyWithin(writeIndex * 16, sourceIndex * 16, (sourceIndex + 1) * 16)
+    }
+    nextKeys.push(key)
+    writeIndex += 1
+  })
+  batch.mesh.count = writeIndex
+  batch.mesh.instanceMatrix.needsUpdate = true
+  markInstancedBoundsDirty(batch.mesh)
+  batch.mesh.visible = writeIndex > 0
+  batch.mesh.userData.groundChunkBatch = {
+    specKey: batch.specKey,
+    chunkKeys: [...nextKeys],
+  }
+  batch.chunkKeys = nextKeys
+}
+
 function scheduleGroundFlatChunkBatchInstanceBuild(
   root: THREE.Group,
   _state: GroundRuntimeState,
@@ -4134,7 +4187,7 @@ function scheduleGroundFlatChunkBatchInstanceBuild(
   if (!groundFlatChunkInstanceMatrixBuilder || batch.asyncBuildInFlight || batch.pendingChunkKeys.size <= 0) {
     return
   }
-  const pendingChunkKeys = Array.from(batch.pendingChunkKeys)
+  const pendingChunkKeys = Array.from(batch.pendingChunkKeys).slice(0, GROUND_FLAT_CHUNK_ASYNC_BUILD_BATCH_SIZE)
   const definitionSignature = definitionStructureSignature(definition)
   batch.asyncBuildInFlight = true
   const request = groundFlatChunkInstanceMatrixBuilder({
@@ -4277,11 +4330,81 @@ function collectGroundFlatChunkGroupsInRange(
   }
 }
 
+function compareGroundFlatChunkKeyDistanceToCamera(
+  left: string,
+  right: string,
+  cameraChunkCoord: { chunkX: number; chunkZ: number } | null,
+): number {
+  if (!cameraChunkCoord) {
+    return 0
+  }
+  const leftIndex = resolveRuntimeChunkIndexFromRuntimeKey(left)
+  const rightIndex = resolveRuntimeChunkIndexFromRuntimeKey(right)
+  if (!leftIndex || !rightIndex) {
+    return 0
+  }
+  const leftRowDelta = Math.abs(leftIndex.row - cameraChunkCoord.chunkZ)
+  const leftColumnDelta = Math.abs(leftIndex.column - cameraChunkCoord.chunkX)
+  const rightRowDelta = Math.abs(rightIndex.row - cameraChunkCoord.chunkZ)
+  const rightColumnDelta = Math.abs(rightIndex.column - cameraChunkCoord.chunkX)
+  const leftRingDistance = Math.max(leftRowDelta, leftColumnDelta)
+  const rightRingDistance = Math.max(rightRowDelta, rightColumnDelta)
+  if (leftRingDistance !== rightRingDistance) {
+    return leftRingDistance - rightRingDistance
+  }
+  const leftManhattanDistance = leftRowDelta + leftColumnDelta
+  const rightManhattanDistance = rightRowDelta + rightColumnDelta
+  if (leftManhattanDistance !== rightManhattanDistance) {
+    return leftManhattanDistance - rightManhattanDistance
+  }
+  if (leftIndex.row !== rightIndex.row) {
+    return leftIndex.row - rightIndex.row
+  }
+  return leftIndex.column - rightIndex.column
+}
+
+function sortGroundFlatChunkKeysByCameraPriority(
+  chunkKeys: string[],
+  cameraChunkCoord: { chunkX: number; chunkZ: number } | null,
+): string[] {
+  if (!cameraChunkCoord || chunkKeys.length <= 1) {
+    return chunkKeys
+  }
+  chunkKeys.sort((left, right) => compareGroundFlatChunkKeyDistanceToCamera(left, right, cameraChunkCoord))
+  return chunkKeys
+}
+
+function isGroundFlatChunkKeyWithinChunkWindow(
+  key: string,
+  range: {
+    minChunkRow: number
+    maxChunkRow: number
+    minChunkColumn: number
+    maxChunkColumn: number
+  },
+): boolean {
+  const indices = resolveRuntimeChunkIndexFromRuntimeKey(key)
+  if (!indices) {
+    return false
+  }
+  return indices.row >= range.minChunkRow
+    && indices.row <= range.maxChunkRow
+    && indices.column >= range.minChunkColumn
+    && indices.column <= range.maxChunkColumn
+}
+
 function syncGroundFlatChunkBatches(
   root: THREE.Group,
   state: GroundRuntimeState,
   definition: GroundRuntimeDynamicMesh,
   desiredFlatChunkGroups: Map<string, { spec: GroundChunkSpec; keys: string[] }>,
+  cameraChunkCoord: { chunkX: number; chunkZ: number } | null = null,
+  releaseWindow: {
+    minChunkRow: number
+    maxChunkRow: number
+    minChunkColumn: number
+    maxChunkColumn: number
+  } | null = null,
 ): void {
   // 这里只同步 flat chunk 批次，不碰雕刻 chunk 的独立 Mesh。
   // 这条分离非常关键：一旦 flat / sculpted 混在同一个集合里，后续释放、拾取、以及编辑后的降级/升级都会很难维护。
@@ -4293,6 +4416,7 @@ function syncGroundFlatChunkBatches(
   const material = resolveGroundRuntimeMaterial(root, state)
   const nextBatches = new Map<string, GroundFlatChunkBatchRuntime>(state.flatChunkBatches)
   const hiddenChunkKeysChanged = state.lastFlatChunkSyncHiddenChunkKeysVersion !== state.hiddenChunkKeysVersion
+  const batchesNeedingAsyncBuild = new Set<GroundFlatChunkBatchRuntime>()
   let changed = false
 
   desiredFlatChunkGroups.forEach((group, specKey) => {
@@ -4313,10 +4437,15 @@ function syncGroundFlatChunkBatches(
           nextKeysToAppend.push(key)
         }
       })
-      const nextKeyCount = existingKeys.length + existing.pendingChunkKeys.size + nextKeysToAppend.length
-      const needsResize = nextKeyCount > existing.instanceCapacity
+      sortGroundFlatChunkKeysByCameraPriority(nextKeysToAppend, cameraChunkCoord)
+      const pendingKeyCountAfterAppend = existing.pendingChunkKeys.size + nextKeysToAppend.length
+      const nextKeyCount = existingKeys.length + pendingKeyCountAfterAppend
+      const capacityTargetCount = canBuildGroundFlatChunkInstancesAsync(definition)
+        ? existingKeys.length + Math.min(pendingKeyCountAfterAppend, GROUND_FLAT_CHUNK_ASYNC_BUILD_BATCH_SIZE)
+        : nextKeyCount
+      const needsResize = capacityTargetCount > existing.instanceCapacity
       if (needsResize) {
-        const nextCapacity = resolveGroundFlatChunkBatchCapacity(nextKeyCount, existing.instanceCapacity)
+        const nextCapacity = resolveGroundFlatChunkBatchCapacity(capacityTargetCount, existing.instanceCapacity)
         const geometry = buildFlatGroundChunkGeometry(group.spec, Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1)
         const resizedMesh = new THREE.InstancedMesh(geometry, material, nextCapacity)
         resizedMesh.name = existing.mesh.name
@@ -4358,11 +4487,11 @@ function syncGroundFlatChunkBatches(
         // 同规格批次直接复用，不重新创建 geometry。
         // 这里会把新进入视野的 flat chunk 追加进缓存，但不会把已经加载的旧 chunk 因为相机移动而删掉。
         if (canBuildGroundFlatChunkInstancesAsync(definition)) {
-          nextKeysToAppend.forEach((key) => {
-            existing.pendingChunkKeys.add(key)
-          })
-          syncGroundFlatChunkKeyCache(state)
-          scheduleGroundFlatChunkBatchInstanceBuild(root, state, existing, definition)
+          existing.pendingChunkKeys = new Set<string>([
+            ...nextKeysToAppend,
+            ...Array.from(existing.pendingChunkKeys),
+          ])
+          batchesNeedingAsyncBuild.add(existing)
         } else {
           appendGroundFlatChunkBatchInstances(existing, definition, nextKeysToAppend)
         }
@@ -4374,17 +4503,23 @@ function syncGroundFlatChunkBatches(
 
     // 只有首次出现的规格才新建 geometry + InstancedMesh。
     // 这意味着绝大多数 chunk 进入缓存后，后续只是换矩阵，不再重复分配大块几何资源。
+    const prioritizedGroupKeys = sortGroundFlatChunkKeysByCameraPriority([...group.keys], cameraChunkCoord)
     const geometry = buildFlatGroundChunkGeometry(group.spec, Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1)
-    const instanceCapacity = resolveGroundFlatChunkBatchCapacity(group.keys.length)
+    const initialInstanceTargetCount = canBuildGroundFlatChunkInstancesAsync(definition)
+      ? Math.min(prioritizedGroupKeys.length, GROUND_FLAT_CHUNK_ASYNC_BUILD_BATCH_SIZE)
+      : prioritizedGroupKeys.length
+    const instanceCapacity = resolveGroundFlatChunkBatchCapacity(initialInstanceTargetCount)
     const mesh = new THREE.InstancedMesh(geometry, material, instanceCapacity)
     mesh.name = `GroundFlatChunks:${specKey}`
     mesh.receiveShadow = true
     mesh.castShadow = state.castShadow
     mesh.frustumCulled = false
+    mesh.count = 0
+    mesh.visible = false
     mesh.userData.dynamicMeshType = 'Ground'
     mesh.userData.groundChunkBatch = {
       specKey,
-      chunkKeys: [...group.keys],
+      chunkKeys: [],
     }
 
     const batch: GroundFlatChunkBatchRuntime = {
@@ -4407,9 +4542,14 @@ function syncGroundFlatChunkBatches(
         rows: group.spec.rows,
         columns: group.spec.columns,
       },
-      sampleKeys: group.keys.slice(0, 6),
+      sampleKeys: prioritizedGroupKeys.slice(0, 6),
     })}`)
-    refreshGroundFlatChunkBatchInstances(batch, definition, group.keys)
+    if (canBuildGroundFlatChunkInstancesAsync(definition)) {
+      batch.pendingChunkKeys = new Set<string>(prioritizedGroupKeys)
+      batchesNeedingAsyncBuild.add(batch)
+    } else {
+      refreshGroundFlatChunkBatchInstances(batch, definition, prioritizedGroupKeys)
+    }
     root.add(mesh)
     nextBatches.set(specKey, batch)
     changed = true
@@ -4443,10 +4583,70 @@ function syncGroundFlatChunkBatches(
       }
     })
   }
+  if (releaseWindow) {
+    nextBatches.forEach((batch, specKey) => {
+      const nextKeys = batch.chunkKeys.filter((key) => {
+        if (state.chunks.has(key) || state.hiddenChunkKeys.has(key)) {
+          return false
+        }
+        return isGroundFlatChunkKeyWithinChunkWindow(key, releaseWindow)
+      })
+      const nextPendingKeys = Array.from(batch.pendingChunkKeys).filter((key) => {
+        if (state.chunks.has(key) || state.hiddenChunkKeys.has(key)) {
+          return false
+        }
+        return isGroundFlatChunkKeyWithinChunkWindow(key, releaseWindow)
+      })
+      if (nextKeys.length === batch.chunkKeys.length && nextPendingKeys.length === batch.pendingChunkKeys.size) {
+        return
+      }
+      const nextLoadedKeySet = new Set<string>(nextKeys)
+      const nextPendingKeySet = new Set<string>(nextPendingKeys)
+      const removedLoadedKeys = batch.chunkKeys.filter((key) => !nextLoadedKeySet.has(key))
+      const removedPendingKeys = Array.from(batch.pendingChunkKeys).filter((key) => !nextPendingKeySet.has(key))
+      if (removedLoadedKeys.length > 0 || removedPendingKeys.length > 0) {
+        console.info(`[GroundFlatDebug] batch-prune ${formatGroundDebugString({
+          specKey,
+          releaseWindow,
+          removedLoadedCount: removedLoadedKeys.length,
+          removedPendingCount: removedPendingKeys.length,
+          remainingLoadedCount: nextKeys.length,
+          remainingPendingCount: nextPendingKeys.length,
+          sampleLoadedKeys: removedLoadedKeys.slice(0, 6),
+          samplePendingKeys: removedPendingKeys.slice(0, 6),
+        })}`)
+      }
+      batch.pendingChunkKeys = new Set<string>(nextPendingKeys)
+      if (nextKeys.length !== batch.chunkKeys.length) {
+        compactGroundFlatChunkBatchInstances(batch, nextKeys)
+      }
+      if (!nextKeys.length && nextPendingKeys.length === 0) {
+        batch.mesh.removeFromParent()
+        try {
+          ;(batch.mesh.geometry as any)?.dispose?.()
+        } catch (_error) {
+          /* noop */
+        }
+        nextBatches.delete(specKey)
+      }
+      removedLoadedKeys.forEach((key) => {
+        batch.instanceHeightCache.delete(key)
+      })
+      removedPendingKeys.forEach((key) => {
+        batch.instanceHeightCache.delete(key)
+      })
+      changed = true
+    })
+  }
   state.flatChunkBatches = nextBatches
   if (changed) {
     syncGroundFlatChunkKeyCache(state)
     markGroundVisibleChunkKeysDirty(state)
+  }
+  if (batchesNeedingAsyncBuild.size > 0) {
+    batchesNeedingAsyncBuild.forEach((batch) => {
+      scheduleGroundFlatChunkBatchInstanceBuild(root, state, batch, definition)
+    })
   }
 }
 
@@ -5581,6 +5781,7 @@ export function updateGroundChunks(
   const cameraChunkCoord = resolveGroundChunkCoordFromWorldPosition(localX, localZ, chunkSizeMeters)
 
   const loadRadiusChunks = resolveInfiniteFlatTilingRadiusChunks(definition)
+  const flatReleaseRadiusChunks = resolveInfiniteFlatTilingReleaseRadiusChunks(definition)
   const flatTilingExpansion = updateInfiniteFlatTilingBounds(state, cameraChunkCoord, loadRadiusChunks)
   const flatTilingChanged = flatTilingExpansion !== null
   const unloadRadiusChunks = loadRadiusChunks + Math.max(4, Math.ceil(loadRadiusChunks * 0.5))
@@ -5608,6 +5809,10 @@ export function updateGroundChunks(
   const flatMaxLoadChunkColumn = normalizeChunkColumn(state.flatTilingMaxChunkColumn)
   const flatMinLoadChunkRow = normalizeChunkRow(state.flatTilingMinChunkRow)
   const flatMaxLoadChunkRow = normalizeChunkRow(state.flatTilingMaxChunkRow)
+  const flatMinReleaseChunkColumn = normalizeChunkColumn(cameraChunkCoord.chunkX - flatReleaseRadiusChunks)
+  const flatMaxReleaseChunkColumn = normalizeChunkColumn(cameraChunkCoord.chunkX + flatReleaseRadiusChunks)
+  const flatMinReleaseChunkRow = normalizeChunkRow(cameraChunkCoord.chunkZ - flatReleaseRadiusChunks)
+  const flatMaxReleaseChunkRow = normalizeChunkRow(cameraChunkCoord.chunkZ + flatReleaseRadiusChunks)
 
   const minUnloadChunkColumn = normalizeChunkColumn(cameraChunkCoord.chunkX - unloadRadiusChunks)
   const maxUnloadChunkColumn = normalizeChunkColumn(cameraChunkCoord.chunkX + unloadRadiusChunks)
@@ -5800,6 +6005,7 @@ export function updateGroundChunks(
 
   // flat 分组不直接创建 Mesh，而是先收集起来，后面统一交给 syncGroundFlatChunkBatches(...) 同步。
   const shouldSyncFlatChunks = force
+    || desiredWindowChanged
     || flatTilingChanged
     || state.lastFlatChunkSyncTilingVersion < 0
     || state.lastFlatChunkSyncHiddenChunkKeysVersion !== state.hiddenChunkKeysVersion
@@ -5815,10 +6021,14 @@ export function updateGroundChunks(
       maxChunkColumn: maxLoadChunkColumn,
     }
     const needsFullFlatChunkScan = force
+      || desiredWindowChanged
       || state.lastFlatChunkSyncTilingVersion < 0
       || state.lastFlatChunkSyncHiddenChunkKeysVersion !== state.hiddenChunkKeysVersion
       || !flatTilingExpansion
       || !flatTilingExpansion.hadPreviousBounds
+    // When the desired load window moves, overlap zones can transition from sculpted chunks
+    // back to flat instancing without any flat-tiling expansion. Re-scan the full flat window
+    // so those keys are re-collected instead of silently dropping out of the batched mesh.
 
     if (needsFullFlatChunkScan) {
       collectGroundFlatChunkGroupsInRange(
@@ -5910,7 +6120,19 @@ export function updateGroundChunks(
 
   // 同步 flat 批次。这里不会按视锥销毁，只会把新进入大平铺范围的 chunk 追加进实例批次。
   // 已经存在的 flat chunk 会一直保留，直到它被雕刻 chunk 替代。
-    syncGroundFlatChunkBatches(root, state, definition, desiredFlatChunkGroups)
+    syncGroundFlatChunkBatches(
+      root,
+      state,
+      definition,
+      desiredFlatChunkGroups,
+      cameraChunkCoord,
+      {
+        minChunkRow: flatMinReleaseChunkRow,
+        maxChunkRow: flatMaxReleaseChunkRow,
+        minChunkColumn: flatMinReleaseChunkColumn,
+        maxChunkColumn: flatMaxReleaseChunkColumn,
+      },
+    )
     state.lastFlatChunkSyncTilingVersion = state.flatTilingVersion
     state.lastFlatChunkSyncHiddenChunkKeysVersion = state.hiddenChunkKeysVersion
   }
@@ -5942,6 +6164,7 @@ export function updateGroundChunks(
       chunkCells,
       renderRadiusChunks: resolveInfiniteRenderRadiusChunks(definition),
       loadRadiusChunks,
+      flatReleaseRadiusChunks,
       unloadRadiusChunks,
       moveThreshold,
       movedSq: Math.round(movedSq * 1000) / 1000,
@@ -5977,6 +6200,12 @@ export function updateGroundChunks(
         maxChunkRow: flatMaxLoadChunkRow,
         minChunkColumn: flatMinLoadChunkColumn,
         maxChunkColumn: flatMaxLoadChunkColumn,
+      },
+      flatReleaseWindow: {
+        minChunkRow: flatMinReleaseChunkRow,
+        maxChunkRow: flatMaxReleaseChunkRow,
+        minChunkColumn: flatMinReleaseChunkColumn,
+        maxChunkColumn: flatMaxReleaseChunkColumn,
       },
       shouldSyncFlatChunks,
       desiredFlatChunkGroupCount: desiredFlatChunkGroups?.size ?? 0,
