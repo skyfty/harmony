@@ -3035,6 +3035,130 @@ function primeAutoTourCameraFollowTransition(object: THREE.Object3D, forwardWorl
   autoTourCameraFollowHasSample = true;
 }
 
+const VEHICLE_FOLLOW_CAMERA_TERRAIN_CLEARANCE = 0.75;
+const VEHICLE_FOLLOW_CAMERA_COLLISION_BUFFER = 0.45;
+const vehicleFollowCameraRaycaster = new THREE.Raycaster();
+const vehicleFollowCameraRayDirectionScratch = new THREE.Vector3();
+const vehicleFollowCameraWorldPointScratch = new THREE.Vector3();
+const vehicleFollowCameraGroundPointScratch = new THREE.Vector3();
+const vehicleFollowCameraGroundOriginScratch = new THREE.Vector3();
+const vehicleFollowCameraRaycastRootsScratch: THREE.Object3D[] = [];
+
+function isObjectDescendantOf(object: THREE.Object3D | null | undefined, ancestor: THREE.Object3D | null | undefined): boolean {
+  if (!object || !ancestor) {
+    return false;
+  }
+  let current: THREE.Object3D | null = object;
+  while (current) {
+    if (current === ancestor) {
+      return true;
+    }
+    current = current.parent;
+  }
+  return false;
+}
+
+function sampleViewerGroundHeightAtWorldPosition(worldX: number, worldZ: number): number | null {
+  const groundDefinition = dynamicGroundCache?.dynamicMesh ?? null;
+  if (!groundDefinition) {
+    return null;
+  }
+  const groundObject = dynamicGroundCache ? nodeObjectMap.get(dynamicGroundCache.nodeId) ?? null : null;
+  if (!groundObject) {
+    const height = sampleGroundHeight(groundDefinition, worldX, worldZ);
+    return Number.isFinite(height) ? height : null;
+  }
+  groundObject.updateMatrixWorld(true);
+  groundObject.getWorldPosition(vehicleFollowCameraGroundOriginScratch);
+  vehicleFollowCameraWorldPointScratch.set(worldX, vehicleFollowCameraGroundOriginScratch.y, worldZ);
+  groundObject.worldToLocal(vehicleFollowCameraWorldPointScratch);
+  const localHeight = sampleGroundHeight(
+    groundDefinition,
+    vehicleFollowCameraWorldPointScratch.x,
+    vehicleFollowCameraWorldPointScratch.z,
+  );
+  if (!Number.isFinite(localHeight)) {
+    return null;
+  }
+  vehicleFollowCameraGroundPointScratch.set(
+    vehicleFollowCameraWorldPointScratch.x,
+    localHeight,
+    vehicleFollowCameraWorldPointScratch.z,
+  );
+  groundObject.localToWorld(vehicleFollowCameraGroundPointScratch);
+  return Number.isFinite(vehicleFollowCameraGroundPointScratch.y)
+    ? vehicleFollowCameraGroundPointScratch.y
+    : null;
+}
+
+function collectViewerVehicleFollowCameraRaycastRoots(): THREE.Object3D[] {
+  vehicleFollowCameraRaycastRootsScratch.length = 0;
+  if (sceneGraphRoot) {
+    vehicleFollowCameraRaycastRootsScratch.push(sceneGraphRoot);
+  }
+  if (instancedMeshGroup.children.length > 0) {
+    vehicleFollowCameraRaycastRootsScratch.push(instancedMeshGroup);
+  }
+  return vehicleFollowCameraRaycastRootsScratch;
+}
+
+function constrainViewerVehicleFollowCameraPose(params: {
+  position: THREE.Vector3;
+  target: THREE.Vector3;
+  nodeId: string;
+  vehicleObject: THREE.Object3D | null;
+}): void {
+  const { position, target, nodeId, vehicleObject } = params;
+
+  const terrainHeight = sampleViewerGroundHeightAtWorldPosition(position.x, position.z);
+  if (terrainHeight !== null) {
+    position.y = Math.max(position.y, terrainHeight + VEHICLE_FOLLOW_CAMERA_TERRAIN_CLEARANCE);
+  }
+
+  const raycastRoots = collectViewerVehicleFollowCameraRaycastRoots();
+  if (!raycastRoots.length) {
+    return;
+  }
+
+  vehicleFollowCameraRayDirectionScratch.copy(position).sub(target);
+  const distance = vehicleFollowCameraRayDirectionScratch.length();
+  if (!Number.isFinite(distance) || distance <= 1e-4) {
+    return;
+  }
+  vehicleFollowCameraRayDirectionScratch.divideScalar(distance);
+  raycastRoots.forEach((root) => root.updateMatrixWorld(true));
+  vehicleFollowCameraRaycaster.set(target, vehicleFollowCameraRayDirectionScratch);
+  vehicleFollowCameraRaycaster.far = distance;
+  const intersections = vehicleFollowCameraRaycaster.intersectObjects(raycastRoots, true);
+  const hit = intersections.find((entry: THREE.Intersection) => {
+    if (!Number.isFinite(entry.distance) || entry.distance <= 1e-4 || !entry.object.visible) {
+      return false;
+    }
+    if (entry.object.userData?.hidden === true) {
+      return false;
+    }
+    if (isObjectDescendantOf(entry.object, vehicleObject)) {
+      return false;
+    }
+    const hitNodeId = normalizeNodeId(entry.object.userData?.nodeId as string | undefined);
+    if (hitNodeId && hitNodeId === nodeId) {
+      return false;
+    }
+    return true;
+  });
+  if (!hit) {
+    return;
+  }
+
+  const clampedDistance = Math.max(0, Math.min(distance, hit.distance - VEHICLE_FOLLOW_CAMERA_COLLISION_BUFFER));
+  position.copy(target).addScaledVector(vehicleFollowCameraRayDirectionScratch, clampedDistance);
+
+  const adjustedTerrainHeight = sampleViewerGroundHeightAtWorldPosition(position.x, position.z);
+  if (adjustedTerrainHeight !== null) {
+    position.y = Math.max(position.y, adjustedTerrainHeight + VEHICLE_FOLLOW_CAMERA_TERRAIN_CLEARANCE);
+  }
+}
+
 const vehicleDriveController = new VehicleDriveController(
   {
     vehicleInstances,
@@ -3054,6 +3178,9 @@ const vehicleDriveController = new VehicleDriveController(
     syncLastFirstPersonStateFromCamera,
     onToast: (message) => uni.showToast({ title: message, icon: 'none' }),
     onResolveBehaviorToken: (token, resolution) => resolveBehaviorToken(token, resolution),
+    constrainFollowCameraPose: ({ position, target, nodeId, vehicleObject }) => {
+      constrainViewerVehicleFollowCameraPose({ position, target, nodeId, vehicleObject });
+    },
 
     // Use one shared follow-camera tuning profile across platforms.
     followCameraVelocityLerpSpeed: () => 0,

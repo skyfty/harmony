@@ -142,6 +142,13 @@ export type VehicleDriveControllerDeps = {
   onToast?: (message: string) => void
   onResolveBehaviorToken?: (token: string, resolution: BehaviorEventResolution) => void
   followCameraDistanceScale?: number | (() => number)
+  constrainFollowCameraPose?: (params: {
+    position: THREE.Vector3
+    target: THREE.Vector3
+    anchor: THREE.Vector3
+    nodeId: string
+    vehicleObject: THREE.Object3D | null
+  }) => void
 
   // Follow camera fine tuning (optional, typically platform-specific).
   followCameraVelocityLerpSpeed?: number | (() => number)
@@ -1385,6 +1392,8 @@ export class VehicleDriveController {
 
     const updateOrbitLookTween = this.deps.updateOrbitLookTween
     const tuning = this.getFollowCameraTuning()
+    const followNodeId = this.deps.normalizeNodeId(this.state.nodeId)
+    const constrainFollowCameraPose = this.deps.constrainFollowCameraPose
 
     return this.followCameraController.update({
       follow,
@@ -1397,6 +1406,19 @@ export class VehicleDriveController {
       worldUp: VEHICLE_CAMERA_WORLD_UP,
       distanceScale: this.getFollowDistanceScale(),
       ...(tuning ? { tuning } : {}),
+      ...(followNodeId && constrainFollowCameraPose
+        ? {
+          constrainPose: ({ position, target, anchor }) => {
+            constrainFollowCameraPose({
+              position,
+              target,
+              anchor,
+              nodeId: followNodeId,
+              vehicleObject,
+            })
+          },
+        }
+        : {}),
       applyOrbitTween: options.applyOrbitTween ?? false,
       followControlsDirty: options.followControlsDirty ?? false,
       immediate: options.immediate ?? false,
