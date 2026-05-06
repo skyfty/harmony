@@ -393,6 +393,19 @@ export function collectLoadedCompiledGroundChunkKeys(
   return runtime.loadedChunkKeysCache
 }
 
+export function getCompiledGroundRenderWorkState(
+  groundObject: THREE.Object3D,
+): { pendingLoads: number; loadedChunkKeysVersion: number } | null {
+  const runtime = renderRuntimeMap.get(groundObject)
+  if (!runtime) {
+    return null
+  }
+  return {
+    pendingLoads: runtime.pendingLoads.size,
+    loadedChunkKeysVersion: runtime.loadedChunkKeysVersion,
+  }
+}
+
 function resolveGroundMaterial(groundObject: THREE.Object3D): THREE.Material {
   const cached = (groundObject.userData as Record<string, unknown> | undefined)?.groundMaterial
   if (cached && !Array.isArray(cached)) {
