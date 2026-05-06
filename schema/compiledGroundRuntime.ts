@@ -20,6 +20,14 @@ type CompiledGroundRenderRuntime = {
   loadedChunkKeysCache: string[]
 }
 
+type CompiledGroundRenderTileGridIndex = {
+  rows: Map<number, Map<number, CompiledGroundRenderTileRecord>>
+  minRow: number
+  maxRow: number
+  minColumn: number
+  maxColumn: number
+}
+
 type SyncCompiledGroundRenderTilesParams = {
   groundObject: THREE.Object3D
   groundDefinition: {
@@ -43,6 +51,7 @@ const renderRuntimeMap = new WeakMap<THREE.Object3D, CompiledGroundRenderRuntime
 const compiledGroundRenderTileRecordMapCache = new WeakMap<CompiledGroundManifest, Map<string, CompiledGroundRenderTileRecord>>()
 const compiledGroundRenderTileChunkKeyCache = new WeakMap<CompiledGroundManifest, Map<string, string[]>>()
 const compiledGroundRenderTileKeySetCache = new WeakMap<CompiledGroundManifest, Set<string>>()
+const compiledGroundRenderTileGridIndexCache = new WeakMap<CompiledGroundManifest, CompiledGroundRenderTileGridIndex>()
 const cameraLocalHelper = new THREE.Vector3()
 const compiledGroundCameraQuaternion = new THREE.Quaternion()
 const compiledGroundVisiblePlane = new THREE.Plane()
@@ -153,10 +162,12 @@ function resolveCompiledGroundVisibleLocalBounds(
   fallbackBounds: { minX: number; maxX: number; minZ: number; maxZ: number }
   centerRow: number
   centerColumn: number
+  cameraLocalX: number
+  cameraLocalZ: number
   intersectionCount: number
 } {
-  groundObject.updateMatrixWorld(true)
-  camera.updateMatrixWorld(true)
+  groundObject.updateWorldMatrix(true, false)
+  camera.updateWorldMatrix(true, false)
   if ((camera as THREE.PerspectiveCamera).isPerspectiveCamera || (camera as THREE.OrthographicCamera).isOrthographicCamera) {
     ;(camera as THREE.PerspectiveCamera | THREE.OrthographicCamera).updateProjectionMatrix()
   }
@@ -218,6 +229,8 @@ function resolveCompiledGroundVisibleLocalBounds(
       fallbackBounds,
       centerRow,
       centerColumn,
+      cameraLocalX: cameraLocalHelper.x,
+      cameraLocalZ: cameraLocalHelper.z,
       intersectionCount: 0,
     }
   }
@@ -232,23 +245,12 @@ function resolveCompiledGroundVisibleLocalBounds(
     fallbackBounds,
     centerRow,
     centerColumn,
+    cameraLocalX: cameraLocalHelper.x,
+    cameraLocalZ: cameraLocalHelper.z,
     intersectionCount,
   }
 }
 
-function doesCompiledGroundTileIntersectBounds(
-  record: CompiledGroundRenderTileRecord,
-  bounds: { minX: number; maxX: number; minZ: number; maxZ: number },
-): boolean {
-  const recordMinX = Number.isFinite(record.bounds?.minX) ? Number(record.bounds.minX) : record.centerX - record.widthMeters * 0.5
-  const recordMaxX = Number.isFinite(record.bounds?.maxX) ? Number(record.bounds.maxX) : record.centerX + record.widthMeters * 0.5
-  const recordMinZ = Number.isFinite(record.bounds?.minZ) ? Number(record.bounds.minZ) : record.centerZ - record.depthMeters * 0.5
-  const recordMaxZ = Number.isFinite(record.bounds?.maxZ) ? Number(record.bounds.maxZ) : record.centerZ + record.depthMeters * 0.5
-  return recordMaxX >= bounds.minX
-    && recordMinX <= bounds.maxX
-    && recordMaxZ >= bounds.minZ
-    && recordMinZ <= bounds.maxZ
-}
 
 function resolveCompiledGroundRenderTileRecordMap(
   manifest: CompiledGroundManifest,
@@ -263,6 +265,94 @@ function resolveCompiledGroundRenderTileRecordMap(
   }
   compiledGroundRenderTileRecordMapCache.set(manifest, next)
   return next
+}
+
+function resolveCompiledGroundRenderTileGridIndex(
+  manifest: CompiledGroundManifest,
+): CompiledGroundRenderTileGridIndex {
+  const cached = compiledGroundRenderTileGridIndexCache.get(manifest)
+  if (cached) {
+    return cached
+  }
+
+  const rows = new Map<number, Map<number, CompiledGroundRenderTileRecord>>()
+  let minRow = Number.POSITIVE_INFINITY
+  let maxRow = Number.NEGATIVE_INFINITY
+  let minColumn = Number.POSITIVE_INFINITY
+  let maxColumn = Number.NEGATIVE_INFINITY
+
+  for (const record of manifest.renderTiles) {
+    const row = Math.trunc(Number(record.row) || 0)
+    const column = Math.trunc(Number(record.column) || 0)
+    let rowEntries = rows.get(row)
+    if (!rowEntries) {
+      rowEntries = new Map<number, CompiledGroundRenderTileRecord>()
+      rows.set(row, rowEntries)
+    }
+    rowEntries.set(column, record)
+    minRow = Math.min(minRow, row)
+    maxRow = Math.max(maxRow, row)
+    minColumn = Math.min(minColumn, column)
+    maxColumn = Math.max(maxColumn, column)
+  }
+
+  const next: CompiledGroundRenderTileGridIndex = {
+    rows,
+    minRow: Number.isFinite(minRow) ? minRow : 0,
+    maxRow: Number.isFinite(maxRow) ? maxRow : -1,
+    minColumn: Number.isFinite(minColumn) ? minColumn : 0,
+    maxColumn: Number.isFinite(maxColumn) ? maxColumn : -1,
+  }
+  compiledGroundRenderTileGridIndexCache.set(manifest, next)
+  return next
+}
+
+function collectCompiledGroundRenderTilesInBounds(
+  manifest: CompiledGroundManifest,
+  bounds: { minX: number; maxX: number; minZ: number; maxZ: number },
+): CompiledGroundRenderTileRecord[] {
+  const index = resolveCompiledGroundRenderTileGridIndex(manifest)
+  if (index.maxRow < index.minRow || index.maxColumn < index.minColumn) {
+    return []
+  }
+
+  const tileSize = Math.max(1e-6, Number(manifest.renderTileSizeMeters) || 1)
+  const epsilon = Math.max(1e-9, tileSize * 1e-9)
+  const minColumn = Math.max(
+    index.minColumn,
+    Math.floor((bounds.minX - manifest.bounds.minX) / tileSize),
+  )
+  const maxColumn = Math.min(
+    index.maxColumn,
+    Math.floor((bounds.maxX - manifest.bounds.minX - epsilon) / tileSize),
+  )
+  const minRow = Math.max(
+    index.minRow,
+    Math.floor((bounds.minZ - manifest.bounds.minZ) / tileSize),
+  )
+  const maxRow = Math.min(
+    index.maxRow,
+    Math.floor((bounds.maxZ - manifest.bounds.minZ - epsilon) / tileSize),
+  )
+
+  if (maxColumn < minColumn || maxRow < minRow) {
+    return []
+  }
+
+  const records: CompiledGroundRenderTileRecord[] = []
+  for (let row = minRow; row <= maxRow; row += 1) {
+    const rowEntries = index.rows.get(row)
+    if (!rowEntries) {
+      continue
+    }
+    for (let column = minColumn; column <= maxColumn; column += 1) {
+      const record = rowEntries.get(column)
+      if (record) {
+        records.push(record)
+      }
+    }
+  }
+  return records
 }
 
 function resolveCompiledGroundChunkCoordFromWorldPosition(
@@ -508,17 +598,12 @@ function resolveTileWindowRecords(
   const retainedBounds = expandCompiledGroundLocalBounds(visibleLocal.visibleBounds, retainRadiusTiles * tileSize)
   const desired: Array<{ record: CompiledGroundRenderTileRecord; distSq: number }> = []
   const retainedKeys = new Set<string>()
-  camera.getWorldPosition(cameraLocalHelper)
-  groundObject.worldToLocal(cameraLocalHelper)
-  for (const record of manifest.renderTiles) {
-    if (doesCompiledGroundTileIntersectBounds(record, retainedBounds)) {
-      retainedKeys.add(record.key)
-    }
-    if (!doesCompiledGroundTileIntersectBounds(record, desiredBounds)) {
-      continue
-    }
-    const dx = record.centerX - cameraLocalHelper.x
-    const dz = record.centerZ - cameraLocalHelper.z
+  for (const record of collectCompiledGroundRenderTilesInBounds(manifest, retainedBounds)) {
+    retainedKeys.add(record.key)
+  }
+  for (const record of collectCompiledGroundRenderTilesInBounds(manifest, desiredBounds)) {
+    const dx = record.centerX - visibleLocal.cameraLocalX
+    const dz = record.centerZ - visibleLocal.cameraLocalZ
     desired.push({ record, distSq: dx * dx + dz * dz })
   }
   desired.sort((left, right) => left.distSq - right.distSq)

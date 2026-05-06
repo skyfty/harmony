@@ -48,7 +48,23 @@ type PendingEntry = {
   promise: Promise<void>
 }
 
+type CompiledGroundCollisionTileGridIndex = {
+  rows: Map<number, Map<number, CompiledGroundCollisionTileRecord>>
+  minRow: number
+  maxRow: number
+  minColumn: number
+  maxColumn: number
+}
+
+export type CompiledGroundCollisionDebugEntry = {
+  nodeId: string
+  tileKey: string
+  instance: RigidbodyInstance
+  shapes: HeightfieldShapeDefinition[]
+}
+
 const cameraLocalHelper = new THREE.Vector3()
+const compiledGroundCollisionTileGridIndexCache = new WeakMap<CompiledGroundManifest, CompiledGroundCollisionTileGridIndex>()
 
 function buildColliderNode(tileKey: string): SceneNode {
   return {
@@ -130,6 +146,8 @@ function resolveDesiredCollisionTiles(
   desired: CompiledGroundCollisionTileRecord[]
   retainedKeys: Set<string>
 } {
+  groundObject.updateWorldMatrix(true, false)
+  camera.updateWorldMatrix(true, false)
   camera.getWorldPosition(cameraLocalHelper)
   groundObject.worldToLocal(cameraLocalHelper)
   const tileSize = Math.max(1e-6, manifest.collisionTileSizeMeters)
@@ -137,15 +155,26 @@ function resolveDesiredCollisionTiles(
   const centerRow = Math.floor((cameraLocalHelper.z - manifest.bounds.minZ) / tileSize)
   const desired: Array<{ record: CompiledGroundCollisionTileRecord; distSq: number }> = []
   const retainedKeys = new Set<string>()
-  for (const record of manifest.collisionTiles) {
+  for (const record of collectCompiledGroundCollisionTilesInRange(
+    manifest,
+    centerRow - retainRadiusTiles,
+    centerRow + retainRadiusTiles,
+    centerColumn - retainRadiusTiles,
+    centerColumn + retainRadiusTiles,
+  )) {
     const dr = record.row - centerRow
     const dc = record.column - centerColumn
     if (Math.abs(dr) <= retainRadiusTiles && Math.abs(dc) <= retainRadiusTiles) {
       retainedKeys.add(record.key)
     }
-    if (Math.abs(dr) > activeRadiusTiles || Math.abs(dc) > activeRadiusTiles) {
-      continue
-    }
+  }
+  for (const record of collectCompiledGroundCollisionTilesInRange(
+    manifest,
+    centerRow - activeRadiusTiles,
+    centerRow + activeRadiusTiles,
+    centerColumn - activeRadiusTiles,
+    centerColumn + activeRadiusTiles,
+  )) {
     const dx = record.centerX - cameraLocalHelper.x
     const dz = record.centerZ - cameraLocalHelper.z
     desired.push({ record, distSq: dx * dx + dz * dz })
@@ -157,13 +186,91 @@ function resolveDesiredCollisionTiles(
   }
 }
 
+function resolveCompiledGroundCollisionTileGridIndex(
+  manifest: CompiledGroundManifest,
+): CompiledGroundCollisionTileGridIndex {
+  const cached = compiledGroundCollisionTileGridIndexCache.get(manifest)
+  if (cached) {
+    return cached
+  }
+
+  const rows = new Map<number, Map<number, CompiledGroundCollisionTileRecord>>()
+  let minRow = Number.POSITIVE_INFINITY
+  let maxRow = Number.NEGATIVE_INFINITY
+  let minColumn = Number.POSITIVE_INFINITY
+  let maxColumn = Number.NEGATIVE_INFINITY
+
+  for (const record of manifest.collisionTiles) {
+    const row = Math.trunc(Number(record.row) || 0)
+    const column = Math.trunc(Number(record.column) || 0)
+    let rowEntries = rows.get(row)
+    if (!rowEntries) {
+      rowEntries = new Map<number, CompiledGroundCollisionTileRecord>()
+      rows.set(row, rowEntries)
+    }
+    rowEntries.set(column, record)
+    minRow = Math.min(minRow, row)
+    maxRow = Math.max(maxRow, row)
+    minColumn = Math.min(minColumn, column)
+    maxColumn = Math.max(maxColumn, column)
+  }
+
+  const next: CompiledGroundCollisionTileGridIndex = {
+    rows,
+    minRow: Number.isFinite(minRow) ? minRow : 0,
+    maxRow: Number.isFinite(maxRow) ? maxRow : -1,
+    minColumn: Number.isFinite(minColumn) ? minColumn : 0,
+    maxColumn: Number.isFinite(maxColumn) ? maxColumn : -1,
+  }
+  compiledGroundCollisionTileGridIndexCache.set(manifest, next)
+  return next
+}
+
+function collectCompiledGroundCollisionTilesInRange(
+  manifest: CompiledGroundManifest,
+  minRow: number,
+  maxRow: number,
+  minColumn: number,
+  maxColumn: number,
+): CompiledGroundCollisionTileRecord[] {
+  const index = resolveCompiledGroundCollisionTileGridIndex(manifest)
+  if (index.maxRow < index.minRow || index.maxColumn < index.minColumn) {
+    return []
+  }
+
+  const clampedMinRow = Math.max(index.minRow, Math.trunc(minRow))
+  const clampedMaxRow = Math.min(index.maxRow, Math.trunc(maxRow))
+  const clampedMinColumn = Math.max(index.minColumn, Math.trunc(minColumn))
+  const clampedMaxColumn = Math.min(index.maxColumn, Math.trunc(maxColumn))
+  if (clampedMaxRow < clampedMinRow || clampedMaxColumn < clampedMinColumn) {
+    return []
+  }
+
+  const records: CompiledGroundCollisionTileRecord[] = []
+  for (let row = clampedMinRow; row <= clampedMaxRow; row += 1) {
+    const rowEntries = index.rows.get(row)
+    if (!rowEntries) {
+      continue
+    }
+    for (let column = clampedMinColumn; column <= clampedMaxColumn; column += 1) {
+      const record = rowEntries.get(column)
+      if (record) {
+        records.push(record)
+      }
+    }
+  }
+  return records
+}
+
 export function createCompiledGroundCollisionRuntime(
   deps: CompiledGroundCollisionRuntimeDeps,
 ): {
   clear: () => void
   sync: (params: SyncCompiledGroundCollisionTilesParams) => void
+  getDebugEntries: () => CompiledGroundCollisionDebugEntry[]
 } {
   const instances = new Map<string, RigidbodyInstance>()
+  const debugShapes = new Map<string, HeightfieldShapeDefinition[]>()
   const pending = new Map<string, PendingEntry>()
   let activeSourceId: string | null = null
   let activeRevision = -1
@@ -172,6 +279,7 @@ export function createCompiledGroundCollisionRuntime(
     const world = deps.getPhysicsWorld()
     instances.forEach((instance) => removeRigidbodyInstanceBodies(world, instance))
     instances.clear()
+    debugShapes.clear()
     pending.clear()
     activeSourceId = null
     activeRevision = -1
@@ -251,6 +359,7 @@ export function createCompiledGroundCollisionRuntime(
               signature: built.signature,
               syncObjectFromBody: false,
             })
+            debugShapes.set(record.key, [built.shapeDefinition])
           })
           .catch((error) => {
             console.warn(deps.loggerTag ?? '[CompiledGroundCollision]', 'Failed to load compiled ground collision tile', record.key, error)
@@ -269,5 +378,14 @@ export function createCompiledGroundCollisionRuntime(
   return {
     clear,
     sync,
+    getDebugEntries: () => Array.from(instances.entries()).map(([tileKey, instance]) => ({
+      nodeId: instance.nodeId,
+      tileKey,
+      instance,
+      shapes: debugShapes.get(tileKey)?.map((shape) => ({
+        ...shape,
+        matrix: shape.matrix.map((column) => [...column]),
+      })) ?? [],
+    })),
   }
 }

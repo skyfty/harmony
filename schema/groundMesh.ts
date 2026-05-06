@@ -1142,6 +1142,71 @@ function ensureGroundRuntimeDefinition(definition: GroundDynamicMesh): GroundRun
   return runtimeDefinition
 }
 
+function countGroundHeightOverrides(map: GroundHeightMap | null | undefined): number {
+  const length = map?.length ?? 0
+  let count = 0
+  for (let index = 0; index < length; index += 1) {
+    if (Number.isFinite(map![index])) {
+      count += 1
+    }
+  }
+  return count
+}
+
+function adjustRuntimeGroundHeightOverrideCount(
+  definition: GroundRuntimeDynamicMesh,
+  map: GroundHeightMap,
+  delta: number,
+): void {
+  if (!Number.isFinite(delta) || delta === 0) {
+    return
+  }
+
+  if (definition.runtimeManualHeightOverrideSourceRef === map && Number.isFinite(definition.runtimeManualHeightOverrideCount)) {
+    definition.runtimeManualHeightOverrideCount = Math.max(
+      0,
+      Math.trunc(definition.runtimeManualHeightOverrideCount as number) + Math.trunc(delta),
+    )
+    definition.runtimeManualHeightOverrideSourceLength = map.length
+    return
+  }
+
+  if (definition.runtimePlanningHeightOverrideSourceRef === map && Number.isFinite(definition.runtimePlanningHeightOverrideCount)) {
+    definition.runtimePlanningHeightOverrideCount = Math.max(
+      0,
+      Math.trunc(definition.runtimePlanningHeightOverrideCount as number) + Math.trunc(delta),
+    )
+    definition.runtimePlanningHeightOverrideSourceLength = map.length
+  }
+}
+
+function ensureRuntimeGroundHeightOverrideCounts(definition: GroundRuntimeDynamicMesh): void {
+  const manualHeightMap = definition.manualHeightMap
+  const planningHeightMap = definition.planningHeightMap
+  const manualLength = manualHeightMap?.length ?? 0
+  const planningLength = planningHeightMap?.length ?? 0
+
+  if (
+    definition.runtimeManualHeightOverrideSourceRef !== manualHeightMap
+    || definition.runtimeManualHeightOverrideSourceLength !== manualLength
+    || !Number.isFinite(definition.runtimeManualHeightOverrideCount)
+  ) {
+    definition.runtimeManualHeightOverrideCount = countGroundHeightOverrides(manualHeightMap)
+    definition.runtimeManualHeightOverrideSourceRef = manualHeightMap
+    definition.runtimeManualHeightOverrideSourceLength = manualLength
+  }
+
+  if (
+    definition.runtimePlanningHeightOverrideSourceRef !== planningHeightMap
+    || definition.runtimePlanningHeightOverrideSourceLength !== planningLength
+    || !Number.isFinite(definition.runtimePlanningHeightOverrideCount)
+  ) {
+    definition.runtimePlanningHeightOverrideCount = countGroundHeightOverrides(planningHeightMap)
+    definition.runtimePlanningHeightOverrideSourceRef = planningHeightMap
+    definition.runtimePlanningHeightOverrideSourceLength = planningLength
+  }
+}
+
 function hasRuntimeGroundHeightOverrides(definition: GroundRuntimeDynamicMesh): boolean {
   if (definition.runtimeDisableOptimizedChunks === true || definition.runtimeHydratedHeightState === 'dirty') {
     return true
@@ -1167,6 +1232,7 @@ function hasRuntimeGroundHeightOverrides(definition: GroundRuntimeDynamicMesh): 
     return true
   }
 
+  ensureRuntimeGroundHeightOverrideCounts(definition)
   const manualOverrideCount = definition.runtimeManualHeightOverrideCount
   const planningOverrideCount = definition.runtimePlanningHeightOverrideCount
   if (Number.isFinite(manualOverrideCount) || Number.isFinite(planningOverrideCount)) {
@@ -1177,24 +1243,6 @@ function hasRuntimeGroundHeightOverrides(definition: GroundRuntimeDynamicMesh): 
     }
     definition.runtimeDisableOptimizedChunks = false
     return false
-  }
-
-  const manualHeightMap = definition.manualHeightMap
-  const planningHeightMap = definition.planningHeightMap
-  const limit = Math.max(manualHeightMap?.length ?? 0, planningHeightMap?.length ?? 0)
-  for (let index = 0; index < limit; index += 1) {
-    const manual = manualHeightMap[index]
-    if (typeof manual === 'number' && Number.isFinite(manual)) {
-      definition.runtimeHydratedHeightState = 'dirty'
-      definition.runtimeDisableOptimizedChunks = true
-      return true
-    }
-    const planning = planningHeightMap[index]
-    if (typeof planning === 'number' && Number.isFinite(planning)) {
-      definition.runtimeHydratedHeightState = 'dirty'
-      definition.runtimeDisableOptimizedChunks = true
-      return true
-    }
   }
 
   definition.runtimeDisableOptimizedChunks = false
@@ -2059,6 +2107,8 @@ export function resolveGroundManualHeightForEffectiveTarget(
 function setHeightOverrideValue(definition: GroundRuntimeDynamicMesh, map: GroundHeightMap, row: number, column: number, value: number): void {
   const gridSize = resolveGroundWorkingGridSize(definition)
   const heightIndex = getGroundVertexIndex(gridSize.columns, row, column)
+  const previousValue = map[heightIndex]
+  const hadOverride = typeof previousValue === 'number' && Number.isFinite(previousValue)
   const baseHeight = computeGroundBaseHeightAtVertex(definition, row, column)
   let rounded = Math.round(value * 100) / 100
   let baseRounded = Math.round(baseHeight * 100) / 100
@@ -2066,9 +2116,15 @@ function setHeightOverrideValue(definition: GroundRuntimeDynamicMesh, map: Groun
   if (Object.is(baseRounded, -0)) baseRounded = 0
   if (rounded === baseRounded) {
     map[heightIndex] = GROUND_HEIGHT_UNSET_VALUE
+    if (hadOverride) {
+      adjustRuntimeGroundHeightOverrideCount(definition, map, -1)
+    }
     return
   }
   map[heightIndex] = rounded
+  if (!hadOverride) {
+    adjustRuntimeGroundHeightOverrideCount(definition, map, 1)
+  }
 }
 
 export function setManualHeightOverrideValue(definition: GroundRuntimeDynamicMesh, map: GroundHeightMap, row: number, column: number, value: number): void {

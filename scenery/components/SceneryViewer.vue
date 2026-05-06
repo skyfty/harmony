@@ -1732,15 +1732,57 @@ const TERRAIN_SCATTER_MOVE_THRESHOLD_M = isWeChatMiniProgram ? 0.12 : 0.06;
 const TERRAIN_SCATTER_ROT_THRESHOLD_DEG = isWeChatMiniProgram ? 0.8 : 0.3;
 const TERRAIN_SCATTER_MAX_STALE_MS = isWeChatMiniProgram ? 280 : 140;
 const TERRAIN_SCATTER_ROT_THRESHOLD_RAD = (TERRAIN_SCATTER_ROT_THRESHOLD_DEG * Math.PI) / 180;
+const COMPILED_GROUND_RENDER_MOVE_THRESHOLD_M = isWeChatMiniProgram ? 0.35 : 0;
+const COMPILED_GROUND_RENDER_ROT_THRESHOLD_DEG = isWeChatMiniProgram ? 1.2 : 0;
+const COMPILED_GROUND_RENDER_MAX_STALE_MS = isWeChatMiniProgram ? 180 : 0;
+const COMPILED_GROUND_RENDER_ROT_THRESHOLD_RAD = (COMPILED_GROUND_RENDER_ROT_THRESHOLD_DEG * Math.PI) / 180;
+const COMPILED_GROUND_COLLISION_MOVE_THRESHOLD_M = isWeChatMiniProgram ? 0.2 : 0;
+const COMPILED_GROUND_COLLISION_ROT_THRESHOLD_DEG = isWeChatMiniProgram ? 0.8 : 0;
+const COMPILED_GROUND_COLLISION_MAX_STALE_MS = isWeChatMiniProgram ? 90 : 0;
+const COMPILED_GROUND_COLLISION_ROT_THRESHOLD_RAD = (COMPILED_GROUND_COLLISION_ROT_THRESHOLD_DEG * Math.PI) / 180;
 const terrainScatterLastCameraPos = new THREE.Vector3();
 const terrainScatterLastCameraQuat = new THREE.Quaternion();
 const terrainScatterCameraPosScratch = new THREE.Vector3();
 const terrainScatterCameraQuatScratch = new THREE.Quaternion();
+const compiledGroundRenderLastCameraPos = new THREE.Vector3();
+const compiledGroundRenderLastCameraQuat = new THREE.Quaternion();
+const compiledGroundRenderCameraWorldPosScratch = new THREE.Vector3();
+const compiledGroundRenderCameraLocalPosScratch = new THREE.Vector3();
+const compiledGroundRenderCameraQuatScratch = new THREE.Quaternion();
+const compiledGroundCollisionLastCameraPos = new THREE.Vector3();
+const compiledGroundCollisionLastCameraQuat = new THREE.Quaternion();
+const compiledGroundCollisionCameraWorldPosScratch = new THREE.Vector3();
+const compiledGroundCollisionCameraLocalPosScratch = new THREE.Vector3();
+const compiledGroundCollisionCameraQuatScratch = new THREE.Quaternion();
 let terrainScatterLastUpdateAtMs = 0;
 let terrainScatterForceNextUpdate = true;
+let compiledGroundRenderLastUpdateAtMs = 0;
+let compiledGroundRenderForceNextUpdate = true;
+let compiledGroundRenderLastGroundObject: THREE.Object3D | null = null;
+let compiledGroundRenderLastManifest: CompiledGroundManifest | null = null;
+let compiledGroundRenderLastSourceId = '';
+let compiledGroundRenderLastRevision = -1;
+let compiledGroundRenderLastCenterRow = 0;
+let compiledGroundRenderLastCenterColumn = 0;
+let compiledGroundCollisionLastUpdateAtMs = 0;
+let compiledGroundCollisionForceNextUpdate = true;
+let compiledGroundCollisionLastGroundObject: THREE.Object3D | null = null;
+let compiledGroundCollisionLastManifest: CompiledGroundManifest | null = null;
+let compiledGroundCollisionLastSourceId = '';
+let compiledGroundCollisionLastRevision = -1;
+let compiledGroundCollisionLastCenterRow = 0;
+let compiledGroundCollisionLastCenterColumn = 0;
 
 function markTerrainScatterUpdateDirty(): void {
   terrainScatterForceNextUpdate = true;
+}
+
+function markCompiledGroundRenderUpdateDirty(): void {
+  compiledGroundRenderForceNextUpdate = true;
+}
+
+function markCompiledGroundCollisionUpdateDirty(): void {
+  compiledGroundCollisionForceNextUpdate = true;
 }
 
 function shouldRunTerrainScatterUpdate(camera: THREE.Camera, nowMs: number): boolean {
@@ -1781,6 +1823,190 @@ function shouldRunTerrainScatterUpdate(camera: THREE.Camera, nowMs: number): boo
       terrainScatterLastUpdateAtMs = nowMs;
       terrainScatterLastCameraPos.copy(terrainScatterCameraPosScratch);
       terrainScatterLastCameraQuat.copy(terrainScatterCameraQuatScratch);
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function commitCompiledGroundRenderUpdateState(
+  groundObject: THREE.Object3D,
+  manifest: CompiledGroundManifest,
+  sourceId: string,
+  revision: number,
+  centerRow: number,
+  centerColumn: number,
+  nowMs: number,
+): void {
+  compiledGroundRenderForceNextUpdate = false;
+  compiledGroundRenderLastUpdateAtMs = nowMs;
+  compiledGroundRenderLastGroundObject = groundObject;
+  compiledGroundRenderLastManifest = manifest;
+  compiledGroundRenderLastSourceId = sourceId;
+  compiledGroundRenderLastRevision = revision;
+  compiledGroundRenderLastCenterRow = centerRow;
+  compiledGroundRenderLastCenterColumn = centerColumn;
+  compiledGroundRenderLastCameraPos.copy(compiledGroundRenderCameraWorldPosScratch);
+  compiledGroundRenderLastCameraQuat.copy(compiledGroundRenderCameraQuatScratch);
+}
+
+function shouldRunCompiledGroundRenderUpdate(
+  groundObject: THREE.Object3D,
+  manifest: CompiledGroundManifest,
+  camera: THREE.Camera,
+  sourceId: string,
+  revision: number,
+  nowMs: number,
+): boolean {
+  if (!isWeChatMiniProgram) {
+    return true;
+  }
+
+  groundObject.updateWorldMatrix(true, false);
+  camera.updateWorldMatrix(true, false);
+  camera.getWorldPosition(compiledGroundRenderCameraWorldPosScratch);
+  compiledGroundRenderCameraLocalPosScratch.copy(compiledGroundRenderCameraWorldPosScratch);
+  groundObject.worldToLocal(compiledGroundRenderCameraLocalPosScratch);
+  camera.getWorldQuaternion(compiledGroundRenderCameraQuatScratch);
+
+  const tileSize = Math.max(1e-6, Number(manifest.renderTileSizeMeters) || 1);
+  const centerColumn = Math.floor((compiledGroundRenderCameraLocalPosScratch.x - manifest.bounds.minX) / tileSize);
+  const centerRow = Math.floor((compiledGroundRenderCameraLocalPosScratch.z - manifest.bounds.minZ) / tileSize);
+
+  if (
+    compiledGroundRenderForceNextUpdate
+    || compiledGroundRenderLastGroundObject !== groundObject
+    || compiledGroundRenderLastManifest !== manifest
+    || compiledGroundRenderLastSourceId !== sourceId
+    || compiledGroundRenderLastRevision !== revision
+  ) {
+    commitCompiledGroundRenderUpdateState(groundObject, manifest, sourceId, revision, centerRow, centerColumn, nowMs);
+    return true;
+  }
+
+  if (
+    centerRow !== compiledGroundRenderLastCenterRow
+    || centerColumn !== compiledGroundRenderLastCenterColumn
+  ) {
+    commitCompiledGroundRenderUpdateState(groundObject, manifest, sourceId, revision, centerRow, centerColumn, nowMs);
+    return true;
+  }
+
+  if (
+    COMPILED_GROUND_RENDER_MAX_STALE_MS > 0
+    && nowMs - compiledGroundRenderLastUpdateAtMs >= COMPILED_GROUND_RENDER_MAX_STALE_MS
+  ) {
+    commitCompiledGroundRenderUpdateState(groundObject, manifest, sourceId, revision, centerRow, centerColumn, nowMs);
+    return true;
+  }
+
+  const moveThresholdSq = COMPILED_GROUND_RENDER_MOVE_THRESHOLD_M * COMPILED_GROUND_RENDER_MOVE_THRESHOLD_M;
+  if (
+    moveThresholdSq > 0
+    && compiledGroundRenderCameraWorldPosScratch.distanceToSquared(compiledGroundRenderLastCameraPos) >= moveThresholdSq
+  ) {
+    commitCompiledGroundRenderUpdateState(groundObject, manifest, sourceId, revision, centerRow, centerColumn, nowMs);
+    return true;
+  }
+
+  if (COMPILED_GROUND_RENDER_ROT_THRESHOLD_RAD > 0) {
+    const dot = Math.min(1, Math.abs(compiledGroundRenderLastCameraQuat.dot(compiledGroundRenderCameraQuatScratch)));
+    const angle = 2 * Math.acos(dot);
+    if (Number.isFinite(angle) && angle >= COMPILED_GROUND_RENDER_ROT_THRESHOLD_RAD) {
+      commitCompiledGroundRenderUpdateState(groundObject, manifest, sourceId, revision, centerRow, centerColumn, nowMs);
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function commitCompiledGroundCollisionUpdateState(
+  groundObject: THREE.Object3D,
+  manifest: CompiledGroundManifest,
+  sourceId: string,
+  revision: number,
+  centerRow: number,
+  centerColumn: number,
+  nowMs: number,
+): void {
+  compiledGroundCollisionForceNextUpdate = false;
+  compiledGroundCollisionLastUpdateAtMs = nowMs;
+  compiledGroundCollisionLastGroundObject = groundObject;
+  compiledGroundCollisionLastManifest = manifest;
+  compiledGroundCollisionLastSourceId = sourceId;
+  compiledGroundCollisionLastRevision = revision;
+  compiledGroundCollisionLastCenterRow = centerRow;
+  compiledGroundCollisionLastCenterColumn = centerColumn;
+  compiledGroundCollisionLastCameraPos.copy(compiledGroundCollisionCameraWorldPosScratch);
+  compiledGroundCollisionLastCameraQuat.copy(compiledGroundCollisionCameraQuatScratch);
+}
+
+function shouldRunCompiledGroundCollisionUpdate(
+  groundObject: THREE.Object3D,
+  manifest: CompiledGroundManifest,
+  camera: THREE.Camera,
+  sourceId: string,
+  revision: number,
+  nowMs: number,
+): boolean {
+  if (!isWeChatMiniProgram) {
+    return true;
+  }
+
+  groundObject.updateWorldMatrix(true, false);
+  camera.updateWorldMatrix(true, false);
+  camera.getWorldPosition(compiledGroundCollisionCameraWorldPosScratch);
+  compiledGroundCollisionCameraLocalPosScratch.copy(compiledGroundCollisionCameraWorldPosScratch);
+  groundObject.worldToLocal(compiledGroundCollisionCameraLocalPosScratch);
+  camera.getWorldQuaternion(compiledGroundCollisionCameraQuatScratch);
+
+  const tileSize = Math.max(1e-6, Number(manifest.collisionTileSizeMeters) || 1);
+  const centerColumn = Math.floor((compiledGroundCollisionCameraLocalPosScratch.x - manifest.bounds.minX) / tileSize);
+  const centerRow = Math.floor((compiledGroundCollisionCameraLocalPosScratch.z - manifest.bounds.minZ) / tileSize);
+
+  if (
+    compiledGroundCollisionForceNextUpdate
+    || compiledGroundCollisionLastGroundObject !== groundObject
+    || compiledGroundCollisionLastManifest !== manifest
+    || compiledGroundCollisionLastSourceId !== sourceId
+    || compiledGroundCollisionLastRevision !== revision
+  ) {
+    commitCompiledGroundCollisionUpdateState(groundObject, manifest, sourceId, revision, centerRow, centerColumn, nowMs);
+    return true;
+  }
+
+  if (
+    centerRow !== compiledGroundCollisionLastCenterRow
+    || centerColumn !== compiledGroundCollisionLastCenterColumn
+  ) {
+    commitCompiledGroundCollisionUpdateState(groundObject, manifest, sourceId, revision, centerRow, centerColumn, nowMs);
+    return true;
+  }
+
+  if (
+    COMPILED_GROUND_COLLISION_MAX_STALE_MS > 0
+    && nowMs - compiledGroundCollisionLastUpdateAtMs >= COMPILED_GROUND_COLLISION_MAX_STALE_MS
+  ) {
+    commitCompiledGroundCollisionUpdateState(groundObject, manifest, sourceId, revision, centerRow, centerColumn, nowMs);
+    return true;
+  }
+
+  const moveThresholdSq = COMPILED_GROUND_COLLISION_MOVE_THRESHOLD_M * COMPILED_GROUND_COLLISION_MOVE_THRESHOLD_M;
+  if (
+    moveThresholdSq > 0
+    && compiledGroundCollisionCameraWorldPosScratch.distanceToSquared(compiledGroundCollisionLastCameraPos) >= moveThresholdSq
+  ) {
+    commitCompiledGroundCollisionUpdateState(groundObject, manifest, sourceId, revision, centerRow, centerColumn, nowMs);
+    return true;
+  }
+
+  if (COMPILED_GROUND_COLLISION_ROT_THRESHOLD_RAD > 0) {
+    const dot = Math.min(1, Math.abs(compiledGroundCollisionLastCameraQuat.dot(compiledGroundCollisionCameraQuatScratch)));
+    const angle = 2 * Math.acos(dot);
+    if (Number.isFinite(angle) && angle >= COMPILED_GROUND_COLLISION_ROT_THRESHOLD_RAD) {
+      commitCompiledGroundCollisionUpdateState(groundObject, manifest, sourceId, revision, centerRow, centerColumn, nowMs);
       return true;
     }
   }
@@ -1967,6 +2193,7 @@ const physicsInterpolationParentQuat = new THREE.Quaternion();
 let physicsInterpolationEnabled = false;
 let physicsInterpolationAlpha = 0;
 let physicsAccumulator = 0;
+let lastPhysicsPerformanceLogAt = 0;
 
 type CannonSleepExtensions = {
   sleep?: () => void;
@@ -5118,6 +5345,7 @@ function resolveViewerGroundChunkManifest(
 }
 
 function clearViewerCompiledGroundCollisionBodies(): void {
+  markCompiledGroundCollisionUpdateDirty();
   compiledGroundCollisionRuntime.clear();
   infiniteGroundChunkColliderRuntime.clear();
 }
@@ -5132,25 +5360,32 @@ function syncViewerCompiledGroundCollision(
     const revision = Number.isFinite(compiledManifest.revision)
       ? Math.max(0, Math.trunc(compiledManifest.revision))
       : computeCompiledGroundManifestRevision(compiledManifest);
-    compiledGroundCollisionRuntime.sync({
-      enabled: physicsEnvironmentEnabled.value,
-      groundObject,
-      camera: activeCamera,
-      sourceId: (currentSceneId.value ?? currentDocument?.id ?? '').trim() || 'viewer-ground',
-      revision,
-      manifest: compiledManifest,
-      loadTileData: async (record) => {
-        const pkg = activeScenePackagePkg;
-        if (!pkg) {
-          return null;
-        }
-        const bytes = pkg.files[record.path];
-        return bytes ? getArrayBufferView(bytes) : null;
-      },
-    });
+    const sourceId = (currentSceneId.value ?? currentDocument?.id ?? '').trim() || 'viewer-ground';
+    const nowMs = typeof performance !== 'undefined' && typeof performance.now === 'function'
+      ? performance.now()
+      : Date.now();
+    if (shouldRunCompiledGroundCollisionUpdate(groundObject, compiledManifest, activeCamera, sourceId, revision, nowMs)) {
+      compiledGroundCollisionRuntime.sync({
+        enabled: physicsEnvironmentEnabled.value,
+        groundObject,
+        camera: activeCamera,
+        sourceId,
+        revision,
+        manifest: compiledManifest,
+        loadTileData: async (record) => {
+          const pkg = activeScenePackagePkg;
+          if (!pkg) {
+            return null;
+          }
+          const bytes = pkg.files[record.path];
+          return bytes ? getArrayBufferView(bytes) : null;
+        },
+      });
+    }
     return;
   }
 
+  markCompiledGroundCollisionUpdateDirty();
   compiledGroundCollisionRuntime.clear();
   const groundDefinition = dynamicGroundCache?.dynamicMesh ?? null;
   if (!groundDefinition) {
@@ -5188,6 +5423,7 @@ function syncViewerCompiledGroundRender(
 ): void {
   const compiledManifest = resolveViewerCompiledGroundManifest(groundObject);
   if (!compiledManifest) {
+    markCompiledGroundRenderUpdateDirty();
     clearCompiledGroundRenderTiles(groundObject);
     clearInfiniteGroundChunkMeshes(groundObject);
     setInfiniteGroundHiddenChunkKeys(groundObject, []);
@@ -5196,25 +5432,44 @@ function syncViewerCompiledGroundRender(
   const revision = Number.isFinite(compiledManifest.revision)
     ? Math.max(0, Math.trunc(compiledManifest.revision))
     : computeCompiledGroundManifestRevision(compiledManifest);
+  const compiledGroundDefinition = {
+    castShadow: groundDefinition.castShadow === true,
+    chunkSizeMeters: Number.isFinite(groundDefinition.chunkSizeMeters)
+      ? Number(groundDefinition.chunkSizeMeters)
+      : undefined,
+    renderRadiusChunks: Number.isFinite(groundDefinition.renderRadiusChunks)
+      ? Number(groundDefinition.renderRadiusChunks)
+      : undefined,
+    collisionRadiusChunks: Number.isFinite(groundDefinition.collisionRadiusChunks)
+      ? Number(groundDefinition.collisionRadiusChunks)
+      : undefined,
+  };
+  const sourceId = (currentSceneId.value ?? currentDocument?.id ?? '').trim() || 'viewer-ground';
+  const tileFrustumCulled = shouldEnableCompiledGroundTileFrustumCulling();
+  const nowMs = typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now();
   clearInfiniteGroundChunkMeshes(groundObject);
-  syncCompiledGroundRenderTiles({
-    groundObject,
-    groundDefinition,
-    camera,
-    sourceId: (currentSceneId.value ?? currentDocument?.id ?? '').trim() || 'viewer-ground',
-    revision,
-    manifest: compiledManifest,
-    loadTileData: async (record) => {
-      const pkg = activeScenePackagePkg;
-      if (!pkg) {
-        return null;
-      }
-      const bytes = pkg.files[record.path];
-      return bytes ? getArrayBufferView(bytes) : null;
-    },
-    streamingMode: 'runtime-camera',
-    tileFrustumCulled: shouldEnableCompiledGroundTileFrustumCulling(),
-  });
+  if (shouldRunCompiledGroundRenderUpdate(groundObject, compiledManifest, camera, sourceId, revision, nowMs)) {
+    syncCompiledGroundRenderTiles({
+      groundObject,
+      groundDefinition: compiledGroundDefinition,
+      camera,
+      sourceId,
+      revision,
+      manifest: compiledManifest,
+      loadTileData: async (record) => {
+        const pkg = activeScenePackagePkg;
+        if (!pkg) {
+          return null;
+        }
+        const bytes = pkg.files[record.path];
+        return bytes ? getArrayBufferView(bytes) : null;
+      },
+      streamingMode: 'runtime-camera',
+      tileFrustumCulled,
+    });
+  }
   setInfiniteGroundHiddenChunkKeys(
     groundObject,
     collectLoadedCompiledGroundChunkKeys(groundObject, compiledManifest),
@@ -7031,6 +7286,7 @@ function stepPhysicsWorld(delta: number): number {
     }
   });
   let subSteps = 0;
+  const physicsStepStartedAt = performance.now();
   // Skip world.step() entirely when no dynamic body is awake and no vehicle/tour is active.
   // This eliminates all broadphase + solver cost while the scene is at rest.
   const hasActiveController = vehicleDriveActive.value || activeAutoTourNodeIds.size > 0;
@@ -7118,6 +7374,26 @@ function stepPhysicsWorld(delta: number): number {
       if (physicsAccumulator > PHYSICS_FIXED_TIMESTEP) {
         physicsAccumulator = PHYSICS_FIXED_TIMESTEP;
       }
+    }
+  }
+  const physicsStepElapsedMs = performance.now() - physicsStepStartedAt;
+  if (physicsStepElapsedMs >= 12) {
+    const now = Date.now();
+    if (now - lastPhysicsPerformanceLogAt >= 1500) {
+      console.warn(
+        '[SceneViewer] physics-step',
+        JSON.stringify({
+          elapsedMs: Math.round(physicsStepElapsedMs * 100) / 100,
+          subSteps,
+          worldBodyCount: physicsWorld.bodies.length,
+          rigidbodyInstanceCount: rigidbodyInstances.size,
+          vehicleInstanceCount: vehicleInstances.size,
+          vehicleRaycastCount: vehicleRaycastInWorld.size,
+          airWallBodyCount: airWallBodies.size,
+          gravityY: physicsWorld.gravity.y,
+        }),
+      );
+      lastPhysicsPerformanceLogAt = now;
     }
   }
   // Ensure vehicles are truly static after exiting drive/auto-tour.

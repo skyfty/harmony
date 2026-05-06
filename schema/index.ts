@@ -2201,6 +2201,10 @@ export type GroundRuntimeDynamicMesh = GroundDynamicMesh & {
   runtimeLoadedTileKeys?: string[]
   runtimeManualHeightOverrideCount?: number
   runtimePlanningHeightOverrideCount?: number
+  runtimeManualHeightOverrideSourceRef?: GroundHeightMap
+  runtimePlanningHeightOverrideSourceRef?: GroundHeightMap
+  runtimeManualHeightOverrideSourceLength?: number
+  runtimePlanningHeightOverrideSourceLength?: number
 }
 
 function clampPositiveGroundMetric(value: number | null | undefined, fallback: number): number {

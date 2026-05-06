@@ -2145,10 +2145,46 @@ async function syncGroundCache(document: SceneJsonExportDocument | null): Promis
 function clearPreviewInfiniteGroundChunkCollisionBodies(): void {
 	previewCompiledGroundCollisionRuntime.clear()
 	previewInfiniteGroundChunkColliderRuntime.clear()
+	lastGroundDebugExternalSyncSignature = ''
+	lastGroundDebugExternalSyncAt = 0
+	pendingExternalGroundDebugHelperIds.clear()
 	for (const nodeId of externalRigidbodyDebugSources.keys()) {
 		removeRigidbodyDebugHelper(nodeId)
 	}
 	externalRigidbodyDebugSources.clear()
+}
+
+function syncPreviewGroundCollisionDebugSources(groundObject: THREE.Object3D): void {
+	const nextSources = new Map<string, ExternalRigidbodyDebugSource>()
+	previewCompiledGroundCollisionRuntime.getDebugEntries().forEach((entry) => {
+		nextSources.set(entry.nodeId, {
+			instance: entry.instance,
+			category: 'ground',
+			visibilityObject: groundObject,
+			groundShapes: entry.shapes,
+		})
+	})
+	previewInfiniteGroundChunkColliderRuntime.getDebugEntries().forEach((entry) => {
+		nextSources.set(entry.nodeId, {
+			instance: entry.instance,
+			category: 'ground',
+			visibilityObject: groundObject,
+			groundShapes: entry.shapes,
+		})
+	})
+	const staleNodeIds = Array.from(externalRigidbodyDebugSources.keys()).filter((nodeId) => !nextSources.has(nodeId))
+	staleNodeIds.forEach((nodeId) => {
+		externalRigidbodyDebugSources.delete(nodeId)
+		removeRigidbodyDebugHelper(nodeId)
+	})
+	nextSources.forEach((source, nodeId) => {
+		externalRigidbodyDebugSources.set(nodeId, source)
+	})
+	if (isRigidbodyDebugVisible.value) {
+		lastGroundDebugExternalSyncSignature = ''
+		lastGroundDebugExternalSyncAt = 0
+		syncRigidbodyDebugHelpers()
+	}
 }
 
 function syncPreviewInfiniteGroundChunkCollisionBodies(
@@ -2170,6 +2206,7 @@ function syncPreviewInfiniteGroundChunkCollisionBodies(
 			manifest: compiledManifest,
 			loadTileData: async (record) => cachedCompiledGroundFiles.get(record.path) ?? null,
 		})
+		syncPreviewGroundCollisionDebugSources(groundObject)
 		return
 	}
 	previewCompiledGroundCollisionRuntime.clear()
@@ -2178,6 +2215,7 @@ function syncPreviewInfiniteGroundChunkCollisionBodies(
 		: null
 	if (!groundDefinition) {
 		previewInfiniteGroundChunkColliderRuntime.clear()
+		syncPreviewGroundCollisionDebugSources(groundObject)
 		return
 	}
 	previewInfiniteGroundChunkColliderRuntime.sync({
@@ -2196,6 +2234,7 @@ function syncPreviewInfiniteGroundChunkCollisionBodies(
 			return await useScenesStore().loadGroundChunkData(sceneId, record.key)
 		},
 	})
+	syncPreviewGroundCollisionDebugSources(groundObject)
 }
 
 function resolveGroundViewportWorldSize(): { width: number; depth: number } | null {
@@ -2753,6 +2792,15 @@ const lastOrbitState = {
 let animationMixers: THREE.AnimationMixer[] = []
 let effectRuntimeTickers: Array<(delta: number) => void> = []
 let physicsAccumulator = 0
+let lastPhysicsPerformanceLogAt = 0
+const GROUND_DEBUG_MAX_EXTERNAL_HELPERS = 8
+const GROUND_DEBUG_EXTERNAL_SYNC_INTERVAL_MS = 180
+const GROUND_DEBUG_EXTERNAL_BUILD_BUDGET = 2
+const groundDebugCameraWorldHelper = new THREE.Vector3()
+let lastGroundDebugExternalSyncAt = 0
+let lastGroundDebugExternalSyncSignature = ''
+let lastGroundDebugHelperLogAt = 0
+const pendingExternalGroundDebugHelperIds = new Set<string>()
 
 type WarpGateRuntimeRegistryEntry = {
 	tick?: (delta: number) => void
@@ -5057,15 +5105,36 @@ watch([isGroundWireframeVisible, isOtherRigidbodyWireframeVisible], ([groundEnab
 	}
 	const enabled = groundEnabled || otherEnabled
 	if (enabled) {
+		console.warn(
+			'[ScenePreview] toggle-rigidbody-debug',
+			JSON.stringify({
+				groundEnabled,
+				otherEnabled,
+				externalSourceCount: externalRigidbodyDebugSources.size,
+			}),
+		)
 		ensureRigidbodyDebugGroup()
-		syncRigidbodyDebugHelpers()
-		updateRigidbodyDebugTransforms()
+		if (groundEnabled && !otherEnabled && externalRigidbodyDebugSources.size > 0) {
+			lastGroundDebugExternalSyncSignature = ''
+			lastGroundDebugExternalSyncAt = 0
+			syncNearbyExternalGroundDebugHelpersIfNeeded()
+		} else {
+			syncRigidbodyDebugHelpers()
+		}
+		console.warn(
+			'[ScenePreview] debug-toggle-post-sync',
+			JSON.stringify({
+				helperCount: rigidbodyDebugHelpers.size,
+				pendingGroundHelperCount: pendingExternalGroundDebugHelperIds.size,
+			}),
+		)
 		setAirWallDebugVisibility(groundEnabled)
 		return
 	}
 	disposeRigidbodyDebugHelpers()
 	roadHeightfieldDebugCache.clear()
 	setAirWallDebugVisibility(false)
+	pendingExternalGroundDebugHelperIds.clear()
 })
 
 watch(physicsEnvironmentEnabled, (enabled) => {
@@ -9863,6 +9932,8 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
 function updatePerFrameDiagnostics(delta: number): void {
 	updateLazyPlaceholders(delta)
 	if (isRigidbodyDebugVisible.value) {
+		syncNearbyExternalGroundDebugHelpersIfNeeded()
+		processPendingExternalGroundDebugHelpers()
 		updateRigidbodyDebugTransforms()
 	}
 }
@@ -12066,6 +12137,7 @@ function refreshRigidbodyDebugHelper(nodeId: string): void {
 			? { signature: instance.signature, bodies: instance.bodies }
 			: null
 	const isGroundNode = Boolean(node && isGroundDynamicMesh(node.dynamicMesh))
+	const hasExternalGroundDebugSource = isGroundNode && externalRigidbodyDebugSources.size > 0
 	if (roadEntry) {
 		const category: RigidbodyDebugHelperCategory = 'rigidbody'
 		if (!isRigidbodyDebugCategoryVisible(category)) {
@@ -12077,12 +12149,32 @@ function refreshRigidbodyDebugHelper(nodeId: string): void {
 		return
 	}
 	if (isGroundNode && node) {
+		if (hasExternalGroundDebugSource) {
+			removeRigidbodyDebugHelper(nodeId)
+			return
+		}
 		const category: RigidbodyDebugHelperCategory = 'ground'
 		if (!isRigidbodyDebugCategoryVisible(category)) {
 			removeRigidbodyDebugHelper(nodeId)
 			return
 		}
+		const groundDebugStartedAt = performance.now()
 		const shapes = buildGroundCollisionDebugShapesFromNode(node)
+		const groundDebugElapsedMs = performance.now() - groundDebugStartedAt
+		if (groundDebugElapsedMs >= 12) {
+			const now = Date.now()
+			if (now - lastGroundDebugHelperLogAt >= 1000) {
+				console.warn(
+					'[ScenePreview] ground-node-debug-helper',
+					JSON.stringify({
+						nodeId,
+						elapsedMs: Math.round(groundDebugElapsedMs * 100) / 100,
+						shapeCount: shapes.length,
+					}),
+				)
+				lastGroundDebugHelperLogAt = now
+			}
+		}
 		if (!shapes.length) {
 			removeRigidbodyDebugHelper(nodeId)
 			return
@@ -12173,7 +12265,7 @@ function updateRigidbodyDebugHelperTransform(nodeId: string): void {
 		return
 	}
 	const categoryEnabled = isRigidbodyDebugCategoryVisible(helper.category)
-	const rigidbody = rigidbodyInstances.get(nodeId)
+	const rigidbody = rigidbodyInstances.get(nodeId) ?? externalSource?.instance ?? null
 	let visible = true
 	if (rigidbody) {
 		helper.group.position.set(rigidbody.body.position.x, rigidbody.body.position.y, rigidbody.body.position.z)
@@ -12214,10 +12306,113 @@ function updateRigidbodyDebugTransforms(): void {
 	rigidbodyDebugHelpers.forEach((_entry, nodeId) => updateRigidbodyDebugHelperTransform(nodeId))
 }
 
+function resolveGroundDebugExternalRadiusMeters(): number {
+	const dynamicGround = cachedGroundDynamicMesh && isGroundDynamicMesh(cachedGroundDynamicMesh)
+		? cachedGroundDynamicMesh
+		: null
+	const chunkSizeCandidate = Number(dynamicGround?.chunkSizeMeters)
+	const chunkSizeMeters = Number.isFinite(chunkSizeCandidate) && chunkSizeCandidate > 0
+		? chunkSizeCandidate
+		: 100
+	const collisionRadiusCandidate = Number(dynamicGround?.collisionRadiusChunks)
+	const renderRadiusCandidate = Number(dynamicGround?.renderRadiusChunks)
+	const radiusChunks = Number.isFinite(collisionRadiusCandidate) && collisionRadiusCandidate > 0
+		? Math.max(1, Math.trunc(collisionRadiusCandidate))
+		: Number.isFinite(renderRadiusCandidate) && renderRadiusCandidate > 0
+			? Math.max(1, Math.trunc(renderRadiusCandidate))
+			: 2
+	return Math.max(120, chunkSizeMeters * (radiusChunks + 1.5))
+}
+
+function collectNearbyExternalGroundDebugSourceIds(): string[] {
+	const entries = Array.from(externalRigidbodyDebugSources.entries())
+	if (!entries.length) {
+		return []
+	}
+	const activeCamera = camera
+	if (!activeCamera) {
+		return entries.slice(0, GROUND_DEBUG_MAX_EXTERNAL_HELPERS).map(([nodeId]) => nodeId)
+	}
+	activeCamera.getWorldPosition(groundDebugCameraWorldHelper)
+	const maxDistanceMeters = resolveGroundDebugExternalRadiusMeters()
+	const maxDistanceSq = maxDistanceMeters * maxDistanceMeters
+	const nearby: Array<{ nodeId: string; distSq: number }> = []
+	for (const [nodeId, source] of entries) {
+		if (source.category !== 'ground') {
+			nearby.push({ nodeId, distSq: -1 })
+			continue
+		}
+		const body = source.instance.body
+		const dx = body.position.x - groundDebugCameraWorldHelper.x
+		const dy = body.position.y - groundDebugCameraWorldHelper.y
+		const dz = body.position.z - groundDebugCameraWorldHelper.z
+		const distSq = dx * dx + dy * dy + dz * dz
+		if (distSq <= maxDistanceSq) {
+			nearby.push({ nodeId, distSq })
+		}
+	}
+	nearby.sort((left, right) => left.distSq - right.distSq)
+	return nearby.slice(0, GROUND_DEBUG_MAX_EXTERNAL_HELPERS).map((entry) => entry.nodeId)
+}
+
+function syncNearbyExternalGroundDebugHelpersIfNeeded(): void {
+	if (!isGroundWireframeVisible.value || !externalRigidbodyDebugSources.size) {
+		return
+	}
+	const nearbyNodeIds = collectNearbyExternalGroundDebugSourceIds()
+	const signature = nearbyNodeIds.join('|')
+	const now = performance.now()
+	if (
+		signature === lastGroundDebugExternalSyncSignature
+		&& now - lastGroundDebugExternalSyncAt < GROUND_DEBUG_EXTERNAL_SYNC_INTERVAL_MS
+	) {
+		return
+	}
+	lastGroundDebugExternalSyncSignature = signature
+	lastGroundDebugExternalSyncAt = now
+	nearbyNodeIds.forEach((nodeId) => pendingExternalGroundDebugHelperIds.add(nodeId))
+	console.warn(
+		'[ScenePreview] queue-nearby-ground-debug-helpers',
+		JSON.stringify({
+			nearbyNodeCount: nearbyNodeIds.length,
+			pendingCount: pendingExternalGroundDebugHelperIds.size,
+			maxHelpers: GROUND_DEBUG_MAX_EXTERNAL_HELPERS,
+			buildBudget: GROUND_DEBUG_EXTERNAL_BUILD_BUDGET,
+		}),
+	)
+}
+
+function processPendingExternalGroundDebugHelpers(): void {
+	if (!isGroundWireframeVisible.value || !pendingExternalGroundDebugHelperIds.size) {
+		return
+	}
+	const startedAt = performance.now()
+	let processed = 0
+	for (const nodeId of Array.from(pendingExternalGroundDebugHelperIds)) {
+		if (processed >= GROUND_DEBUG_EXTERNAL_BUILD_BUDGET) {
+			break
+		}
+		pendingExternalGroundDebugHelperIds.delete(nodeId)
+		refreshRigidbodyDebugHelper(nodeId)
+		processed += 1
+	}
+	if (processed > 0) {
+		console.warn(
+			'[ScenePreview] process-ground-debug-helper-batch',
+			JSON.stringify({
+				processed,
+				pendingCount: pendingExternalGroundDebugHelperIds.size,
+				elapsedMs: Math.round((performance.now() - startedAt) * 100) / 100,
+			}),
+		)
+	}
+}
+
 function syncRigidbodyDebugHelpers(): void {
 	if (!isRigidbodyDebugVisible.value) {
 		return
 	}
+	const syncStartedAt = performance.now()
 	const nodes = currentDocument?.nodes ?? []
 	const rigidbodyNodes = collectRigidbodyNodes(nodes)
 	const desiredIds = new Set<string>()
@@ -12225,15 +12420,37 @@ function syncRigidbodyDebugHelpers(): void {
 		desiredIds.add(node.id)
 		refreshRigidbodyDebugHelper(node.id)
 	})
+	const nearbyExternalSourceIds = new Set<string>(collectNearbyExternalGroundDebugSourceIds())
 	externalRigidbodyDebugSources.forEach((_source, nodeId) => {
+		if (!nearbyExternalSourceIds.has(nodeId)) {
+			return
+		}
 		desiredIds.add(nodeId)
-		refreshRigidbodyDebugHelper(nodeId)
+		if (rigidbodyDebugHelpers.has(nodeId)) {
+			refreshRigidbodyDebugHelper(nodeId)
+			return
+		}
+		pendingExternalGroundDebugHelperIds.add(nodeId)
 	})
 	rigidbodyDebugHelpers.forEach((_helper, nodeId) => {
 		if (!desiredIds.has(nodeId)) {
 			removeRigidbodyDebugHelper(nodeId)
 		}
 	})
+	const syncElapsedMs = performance.now() - syncStartedAt
+	if (syncElapsedMs >= 12) {
+		console.warn(
+			'[ScenePreview] sync-rigidbody-debug-helpers',
+			JSON.stringify({
+				elapsedMs: Math.round(syncElapsedMs * 100) / 100,
+				rigidbodyNodeCount: rigidbodyNodes.length,
+				externalSourceCount: externalRigidbodyDebugSources.size,
+				nearbyExternalSourceCount: nearbyExternalSourceIds.size,
+				helperCount: rigidbodyDebugHelpers.size,
+				groundWireframeEnabled: isGroundWireframeVisible.value,
+			}),
+		)
+	}
 }
 
 function createVehicleInstance(
@@ -12674,6 +12891,7 @@ function stepPhysicsWorld(delta: number): void {
 	const clampedDelta = Math.min(Math.max(0, delta), PHYSICS_MAX_ACCUMULATOR)
 	physicsAccumulator = Math.min(PHYSICS_MAX_ACCUMULATOR, physicsAccumulator + clampedDelta)
 	let subSteps = 0
+	const physicsStepStartedAt = performance.now()
 	try {
 		while (physicsAccumulator >= PHYSICS_FIXED_TIMESTEP && subSteps < PHYSICS_MAX_SUB_STEPS) {
 			physicsWorld.step(PHYSICS_FIXED_TIMESTEP)
@@ -12685,6 +12903,26 @@ function stepPhysicsWorld(delta: number): void {
 	}
 	if (physicsAccumulator > PHYSICS_FIXED_TIMESTEP) {
 		physicsAccumulator = PHYSICS_FIXED_TIMESTEP
+	}
+	const physicsStepElapsedMs = performance.now() - physicsStepStartedAt
+	if (physicsStepElapsedMs >= 12) {
+		const now = Date.now()
+		if (now - lastPhysicsPerformanceLogAt >= 1500) {
+			console.warn(
+				'[ScenePreview] physics-step',
+				JSON.stringify({
+					elapsedMs: Math.round(physicsStepElapsedMs * 100) / 100,
+					subSteps,
+					worldBodyCount: physicsWorld.bodies.length,
+					rigidbodyInstanceCount: rigidbodyInstances.size,
+					vehicleInstanceCount: vehicleInstances.size,
+					vehicleRaycastCount: vehicleRaycastInWorld.size,
+					airWallBodyCount: airWallBodies.size,
+					gravityY: physicsWorld.gravity.y,
+				}),
+			)
+			lastPhysicsPerformanceLogAt = now
+		}
 	}
 
 	// Ensure vehicles are truly static after exiting drive/auto-tour.
