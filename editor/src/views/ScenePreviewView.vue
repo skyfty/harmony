@@ -101,7 +101,6 @@ import {
 	resolveGroundChunkRadiusMeters,
 	resolveGroundRuntimeChunkCells,
 	setInfiniteGroundHiddenChunkKeys,
-	updateGroundMesh,
 	syncGroundChunkLoadingMode,
 	sampleGroundHeight,
 } from '@schema/groundMesh'
@@ -112,9 +111,6 @@ import {
 	syncCompiledGroundRenderTiles,
 } from '@schema'
 
-import {
-  collectLoadedCompiledGroundChunkKeys,
-} from '@schema/compiledGroundRuntime'
 import {
 	createSceneCsmShadowRuntime,
 	DEFAULT_SCENE_CSM_CONFIG,
@@ -2511,6 +2507,98 @@ function syncGroundChunkStreamingDebug(
 	groundChunkDebug.unloaded = Math.max(0, total - loadedChunks)
 	groundChunkDebug.visible = renderSnapshot.visibleChunkCount
 	groundChunkDebug.triangleEstimate = renderSnapshot.estimatedTriangles
+}
+
+const PREVIEW_GROUND_STREAMING_RADIUS_MIN_METERS = 200
+const PREVIEW_GROUND_STREAMING_RADIUS_HEIGHT_MAX_METERS = 2600
+const PREVIEW_GROUND_STREAMING_RADIUS_ABSOLUTE_CAP_METERS = 5000
+const PREVIEW_GROUND_STREAMING_RADIUS_FAR_CLIP_FACTOR = 0.58
+const PREVIEW_GROUND_STREAMING_RADIUS_FOV_BASE_DEGREES = 60
+const PREVIEW_GROUND_STREAMING_HEIGHT_START_METERS = 80
+const PREVIEW_GROUND_STREAMING_HEIGHT_END_METERS = 1200
+const previewGroundStreamingCameraWorldHelper = new THREE.Vector3()
+const previewGroundStreamingGroundWorldHelper = new THREE.Vector3()
+
+function resolvePreviewDynamicGroundStreamingRadiusMeters(
+	camera: THREE.PerspectiveCamera | null | undefined,
+	groundObject?: THREE.Object3D | null,
+): number {
+	if (!camera) {
+		return PREVIEW_GROUND_STREAMING_RADIUS_MIN_METERS
+	}
+
+	camera.getWorldPosition(previewGroundStreamingCameraWorldHelper)
+	let relativeHeight = previewGroundStreamingCameraWorldHelper.y
+	if (groundObject) {
+		groundObject.getWorldPosition(previewGroundStreamingGroundWorldHelper)
+		relativeHeight = previewGroundStreamingCameraWorldHelper.y - previewGroundStreamingGroundWorldHelper.y
+	}
+
+	const normalizedHeight = THREE.MathUtils.clamp(
+		(Math.max(0, relativeHeight) - PREVIEW_GROUND_STREAMING_HEIGHT_START_METERS)
+			/ Math.max(1e-6, PREVIEW_GROUND_STREAMING_HEIGHT_END_METERS - PREVIEW_GROUND_STREAMING_HEIGHT_START_METERS),
+		0,
+		1,
+	)
+	const cameraLike = camera as THREE.PerspectiveCamera & { aspect?: number; fov?: number; far?: number }
+	const aspect = Number.isFinite(cameraLike.aspect) ? Math.max(0.2, Number(cameraLike.aspect)) : 16 / 9
+	const fovDeg = Number.isFinite(cameraLike.fov) ? Number(cameraLike.fov) : PREVIEW_GROUND_STREAMING_RADIUS_FOV_BASE_DEGREES
+	const halfFovRad = THREE.MathUtils.degToRad(THREE.MathUtils.clamp(fovDeg, 25, 120) * 0.5)
+	const halfViewHeight = Math.max(0, relativeHeight) * Math.tan(halfFovRad)
+	const halfViewWidth = halfViewHeight * aspect
+	const viewFootprintRadius = Math.sqrt(halfViewHeight * halfViewHeight + halfViewWidth * halfViewWidth)
+	const fovBaseHalfRad = THREE.MathUtils.degToRad(PREVIEW_GROUND_STREAMING_RADIUS_FOV_BASE_DEGREES * 0.5)
+	const fovFactor = THREE.MathUtils.clamp(
+		Math.tan(halfFovRad) / Math.max(1e-6, Math.tan(fovBaseHalfRad)),
+		0.65,
+		2.2,
+	)
+	const radiusByHeight = THREE.MathUtils.lerp(
+		PREVIEW_GROUND_STREAMING_RADIUS_MIN_METERS,
+		PREVIEW_GROUND_STREAMING_RADIUS_HEIGHT_MAX_METERS,
+		normalizedHeight,
+	) * fovFactor
+	const desiredRadius = Math.max(radiusByHeight, viewFootprintRadius + 120)
+	const farDistance = Number.isFinite(cameraLike.far)
+		? Math.max(0, Number(cameraLike.far))
+		: PREVIEW_GROUND_STREAMING_RADIUS_ABSOLUTE_CAP_METERS
+	const farClipCap = farDistance > 0
+		? farDistance * PREVIEW_GROUND_STREAMING_RADIUS_FAR_CLIP_FACTOR
+		: PREVIEW_GROUND_STREAMING_RADIUS_ABSOLUTE_CAP_METERS
+	const effectiveCap = Math.max(
+		PREVIEW_GROUND_STREAMING_RADIUS_MIN_METERS,
+		Math.min(PREVIEW_GROUND_STREAMING_RADIUS_ABSOLUTE_CAP_METERS, farClipCap),
+	)
+	return THREE.MathUtils.clamp(
+		desiredRadius,
+		PREVIEW_GROUND_STREAMING_RADIUS_MIN_METERS,
+		effectiveCap,
+	)
+}
+
+function resolvePreviewGroundStreamingDefinition(
+	camera: THREE.PerspectiveCamera | null | undefined,
+	groundObject: THREE.Object3D,
+	groundDefinition: GroundRuntimeDynamicMesh,
+): GroundRuntimeDynamicMesh {
+	const chunkSizeCandidate = Number(groundDefinition.chunkSizeMeters)
+	const chunkSizeMeters = Number.isFinite(chunkSizeCandidate) && chunkSizeCandidate > 0
+		? chunkSizeCandidate
+		: 100
+	const dynamicRadiusMeters = resolvePreviewDynamicGroundStreamingRadiusMeters(camera, groundObject)
+	const dynamicRadiusChunks = Math.max(1, Math.ceil(dynamicRadiusMeters / chunkSizeMeters))
+	const authoredRadiusCandidate = Number(groundDefinition.renderRadiusChunks)
+	const authoredRadiusChunks = Number.isFinite(authoredRadiusCandidate) && authoredRadiusCandidate > 0
+		? Math.max(1, Math.trunc(authoredRadiusCandidate))
+		: 1
+	const renderRadiusChunks = Math.max(authoredRadiusChunks, dynamicRadiusChunks)
+	if (renderRadiusChunks === authoredRadiusChunks) {
+		return groundDefinition
+	}
+	return {
+		...groundDefinition,
+		renderRadiusChunks,
+	}
 }
 
 const rigidbodyMaterialCache = new Map<string, RigidbodyMaterialEntry>()
@@ -9635,9 +9723,14 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
 	if (cachedGroundNodeId && cachedGroundDynamicMesh && cachedGroundNode) {
 		const groundObject = nodeObjectMap.get(cachedGroundNodeId) ?? null
 		if (groundObject) {
-			updateGroundMesh(groundObject, cachedGroundDynamicMesh)
+			setInfiniteGroundHiddenChunkKeys(groundObject, [])
+			const streamingGroundDefinition = resolvePreviewGroundStreamingDefinition(
+				activeCamera,
+				groundObject,
+				cachedGroundDynamicMesh as GroundRuntimeDynamicMesh,
+			)
 			const compiledManifest = ((groundObject.userData as Record<string, unknown> | undefined)?.compiledGroundManifest ?? null) as CompiledGroundManifest | null
-			syncGroundChunkLoadingMode(groundObject, cachedGroundDynamicMesh as GroundRuntimeDynamicMesh, activeCamera)
+			syncGroundChunkLoadingMode(groundObject, streamingGroundDefinition, activeCamera)
 			if (compiledManifest && cachedCompiledGroundSceneId && cachedCompiledGroundSceneId === currentDocument?.id) {
 				const revision = Number.isFinite(compiledManifest.revision)
 					? Math.max(0, Math.trunc(compiledManifest.revision))
@@ -9654,7 +9747,7 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
 				lastCompiledGroundPreviewSyncLogAt = performance.now()
 				syncCompiledGroundRenderTiles({
 					groundObject,
-					groundDefinition: cachedGroundDynamicMesh as GroundRuntimeDynamicMesh,
+					groundDefinition: streamingGroundDefinition,
 					camera: activeCamera,
 					sourceId: cachedCompiledGroundSceneId,
 					revision,
@@ -9663,12 +9756,7 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
 					streamingMode: 'runtime-camera',
 					tileFrustumCulled: shouldEnableCompiledGroundTileFrustumCulling(),
 				})
-				setInfiniteGroundHiddenChunkKeys(
-					groundObject,
-					collectLoadedCompiledGroundChunkKeys(groundObject, compiledManifest),
-				)
 			} else {
-				setInfiniteGroundHiddenChunkKeys(groundObject, [])
 				clearCompiledGroundRenderTiles(groundObject)
 			}
 			syncPreviewInfiniteGroundChunkCollisionBodies(
@@ -9676,7 +9764,7 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
 				activeCamera,
 			)
 			syncGroundSurfacePreviewForGroundNode(groundObject, cachedGroundNode, cachedGroundDynamicMesh)
-			syncGroundChunkStreamingDebug(groundObject, cachedGroundDynamicMesh, activeCamera, {
+			syncGroundChunkStreamingDebug(groundObject, streamingGroundDefinition, activeCamera, {
 				renderHelpers: isGroundChunkStreamingDebugVisible.value,
 			})
 		}
