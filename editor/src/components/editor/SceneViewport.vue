@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { cloneGeometryForMirroredInstance } from '@schema/mirror'
 import { addWallOpeningToDefinition, removeWallOpeningFromDefinition, compileWallSegmentsFromDefinition } from '@schema/wallLayout'
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, reactive, type Ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, reactive, toRaw, type Ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import * as THREE from 'three'
 import { offsetPolyline } from '../../utils/overlayPlacementUtils'
@@ -3437,6 +3437,10 @@ const GROUND_STREAMING_RADIUS_FAR_CLIP_FACTOR = 0.58
 const GROUND_STREAMING_RADIUS_FOV_BASE_DEGREES = 60
 const GROUND_STREAMING_HEIGHT_START_METERS = 80
 const GROUND_STREAMING_HEIGHT_END_METERS = 1200
+const GROUND_STREAMING_SYNC_MIN_INTERVAL_MS = 90
+const GROUND_STREAMING_SYNC_MAX_INTERVAL_MS = 220
+const GROUND_STREAMING_SYNC_MOVE_THRESHOLD_METERS = 6
+const GROUND_STREAMING_SYNC_RADIUS_THRESHOLD_METERS = 18
 const dynamicGroundStreamingCameraWorldHelper = new THREE.Vector3()
 const dynamicGroundStreamingGroundWorldHelper = new THREE.Vector3()
 
@@ -14471,7 +14475,7 @@ function animate() {
   }
   if (typeof updateGroundChunkStreaming === 'function') {
     const t_gc0 = performance.now()
-    updateGroundChunkStreaming()
+    updateGroundChunkStreaming(cameraMovedThisFrame)
     prof.groundStreaming = performance.now() - t_gc0
   }
 
@@ -21291,6 +21295,11 @@ function updateWallObjectProperties(object: THREE.Object3D, node: SceneNode) {
 
 let lastGroundChunkSetSignatureForPlacement: string | null = null
 let lastGroundChunkSetSignatureCheckAt = 0
+let lastGroundStreamingSyncAt = 0
+let lastGroundStreamingSyncWorldX: number | null = null
+let lastGroundStreamingSyncWorldZ: number | null = null
+let lastGroundStreamingSyncRadiusMeters: number | null = null
+let lastGroundStreamingSyncStateSignature: string | null = null
 
 
 function computeGroundChunkSetSignatureForPlacement(groundObject: THREE.Object3D): string {
@@ -21748,7 +21757,8 @@ function syncViewportCompiledGroundTiles(
   groundObject: THREE.Object3D,
   groundDefinition: GroundRuntimeDynamicMesh,
 ): void {
-  const manifest = sceneStore.compiledGroundManifest
+  const manifestSource = sceneStore.compiledGroundManifest
+  const manifest = manifestSource ? toRaw(manifestSource) : null
   const buildKey = typeof sceneStore.compiledGroundBuildKey === 'string'
     ? sceneStore.compiledGroundBuildKey.trim()
     : ''
@@ -21838,7 +21848,7 @@ function syncViewportGroundRenderMode(options: { rebuildOptimizedMesh?: boolean 
   syncViewportGroundChunks(groundObject, groundDefinition)
 }
 
-function updateGroundChunkStreaming() {
+function updateGroundChunkStreaming(cameraMovedThisFrame = false) {
   if (!camera) {
     return
   }
@@ -21857,12 +21867,63 @@ function updateGroundChunkStreaming() {
   if (!groundDefinition) {
     return
   }
+  const now = Date.now()
+  const streamingMetrics = resolveDynamicGroundStreamingMetrics(groundObject)
+  camera.getWorldPosition(dynamicGroundStreamingCameraWorldHelper)
+  const worldX = dynamicGroundStreamingCameraWorldHelper.x
+  const worldZ = dynamicGroundStreamingCameraWorldHelper.z
+  const radiusMeters = streamingMetrics.radiusMeters
+  const buildKey = typeof sceneStore.compiledGroundBuildKey === 'string'
+    ? sceneStore.compiledGroundBuildKey.trim()
+    : ''
+  const manifestSource = sceneStore.compiledGroundManifest
+  const manifestRevision = Number.isFinite(manifestSource?.revision)
+    ? Math.max(0, Math.trunc(manifestSource.revision))
+    : 0
+  const surfaceRevision = Number.isFinite(groundDefinition.surfaceRevision)
+    ? Math.max(0, Math.trunc(groundDefinition.surfaceRevision as number))
+    : 0
+  const streamingStateSignature = [
+    buildKey,
+    manifestRevision,
+    groundDefinition.terrainMode,
+    surfaceRevision,
+  ].join('|')
+  const lastWorldX = lastGroundStreamingSyncWorldX
+  const lastWorldZ = lastGroundStreamingSyncWorldZ
+  const lastRadiusMeters = lastGroundStreamingSyncRadiusMeters
+  const movedSq = lastWorldX == null || lastWorldZ == null
+    ? Number.POSITIVE_INFINITY
+    : ((worldX - lastWorldX) * (worldX - lastWorldX) + (worldZ - lastWorldZ) * (worldZ - lastWorldZ))
+  const moveThresholdSq = GROUND_STREAMING_SYNC_MOVE_THRESHOLD_METERS * GROUND_STREAMING_SYNC_MOVE_THRESHOLD_METERS
+  const radiusDelta = lastRadiusMeters == null ? Number.POSITIVE_INFINITY : Math.abs(radiusMeters - lastRadiusMeters)
+  const stateChanged = lastGroundStreamingSyncStateSignature !== streamingStateSignature
+  const intervalMs = now - lastGroundStreamingSyncAt
+  const shouldSyncNow = lastGroundStreamingSyncAt <= 0
+    || stateChanged
+    || intervalMs >= GROUND_STREAMING_SYNC_MAX_INTERVAL_MS
+    || (
+      cameraMovedThisFrame
+      && intervalMs >= GROUND_STREAMING_SYNC_MIN_INTERVAL_MS
+      && (
+        movedSq >= moveThresholdSq
+        || radiusDelta >= GROUND_STREAMING_SYNC_RADIUS_THRESHOLD_METERS
+      )
+    )
+  if (!shouldSyncNow) {
+    return
+  }
+
   syncViewportGroundChunks(groundObject, groundDefinition)
+  lastGroundStreamingSyncAt = now
+  lastGroundStreamingSyncWorldX = worldX
+  lastGroundStreamingSyncWorldZ = worldZ
+  lastGroundStreamingSyncRadiusMeters = radiusMeters
+  lastGroundStreamingSyncStateSignature = streamingStateSignature
 
   // Ground chunk meshes are streamed in/out without emitting scene patches.
   // Refresh placement raycast targets when the chunk set changes; otherwise asset placement
   // may miss the visible ground and fall back to the y=0 plane, causing cursor/placement drift.
-  const now = Date.now()
   if (now - lastGroundChunkSetSignatureCheckAt < 140) {
     return
   }

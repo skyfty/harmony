@@ -14,6 +14,10 @@ type CompiledGroundRenderRuntime = {
   revision: number
   lastDebugLogAt: number
   lastDebugSignature: string
+  loadedChunkKeysVersion: number
+  loadedChunkKeysCacheVersion: number
+  loadedChunkKeysCacheManifest: CompiledGroundManifest | null
+  loadedChunkKeysCache: string[]
 }
 
 type SyncCompiledGroundRenderTilesParams = {
@@ -37,6 +41,7 @@ type SyncCompiledGroundRenderTilesParams = {
 const renderRuntimeMap = new WeakMap<THREE.Object3D, CompiledGroundRenderRuntime>()
 const compiledGroundRenderTileRecordMapCache = new WeakMap<CompiledGroundManifest, Map<string, CompiledGroundRenderTileRecord>>()
 const compiledGroundRenderTileChunkKeyCache = new WeakMap<CompiledGroundManifest, Map<string, string[]>>()
+const compiledGroundRenderTileKeySetCache = new WeakMap<CompiledGroundManifest, Set<string>>()
 const cameraLocalHelper = new THREE.Vector3()
 const compiledGroundCameraQuaternion = new THREE.Quaternion()
 const compiledGroundVisiblePlane = new THREE.Plane()
@@ -318,6 +323,10 @@ function ensureCompiledGroundRenderRuntime(groundObject: THREE.Object3D): Compil
     revision: -1,
     lastDebugLogAt: 0,
     lastDebugSignature: '',
+    loadedChunkKeysVersion: 0,
+    loadedChunkKeysCacheVersion: -1,
+    loadedChunkKeysCacheManifest: null,
+    loadedChunkKeysCache: [],
   }
   renderRuntimeMap.set(groundObject, runtime)
   return runtime
@@ -344,6 +353,10 @@ export function clearCompiledGroundRenderTiles(groundObject: THREE.Object3D): vo
   runtime.revision = -1
   runtime.lastDebugLogAt = 0
   runtime.lastDebugSignature = ''
+  runtime.loadedChunkKeysVersion += 1
+  runtime.loadedChunkKeysCacheVersion = -1
+  runtime.loadedChunkKeysCacheManifest = null
+  runtime.loadedChunkKeysCache = []
 }
 
 export function collectLoadedCompiledGroundChunkKeys(
@@ -357,6 +370,12 @@ export function collectLoadedCompiledGroundChunkKeys(
   if (!runtime || runtime.meshes.size <= 0) {
     return []
   }
+  if (
+    runtime.loadedChunkKeysCacheVersion === runtime.loadedChunkKeysVersion
+    && runtime.loadedChunkKeysCacheManifest === manifest
+  ) {
+    return runtime.loadedChunkKeysCache
+  }
   const recordMap = resolveCompiledGroundRenderTileRecordMap(manifest)
   const chunkKeys = new Set<string>()
   runtime.meshes.forEach((_mesh, tileKey) => {
@@ -368,7 +387,10 @@ export function collectLoadedCompiledGroundChunkKeys(
       chunkKeys.add(chunkKey)
     }
   })
-  return Array.from(chunkKeys)
+  runtime.loadedChunkKeysCacheManifest = manifest
+  runtime.loadedChunkKeysCacheVersion = runtime.loadedChunkKeysVersion
+  runtime.loadedChunkKeysCache = Array.from(chunkKeys)
+  return runtime.loadedChunkKeysCache
 }
 
 function resolveGroundMaterial(groundObject: THREE.Object3D): THREE.Material {
@@ -389,6 +411,16 @@ function resolveGroundMaterial(groundObject: THREE.Object3D): THREE.Material {
     roughness: 1,
     metalness: 0.1,
   })
+}
+
+function resolveCompiledGroundRenderTileKeySet(manifest: CompiledGroundManifest): Set<string> {
+  const cached = compiledGroundRenderTileKeySetCache.get(manifest)
+  if (cached) {
+    return cached
+  }
+  const next = new Set(manifest.renderTiles.map((record) => record.key))
+  compiledGroundRenderTileKeySetCache.set(manifest, next)
+  return next
 }
 
 function buildGeometryFromTileBuffer(buffer: ArrayBuffer | null): THREE.BufferGeometry | null {
@@ -424,19 +456,9 @@ function resolveTileWindowRecords(
   intersectionCount: number
 } {
   if (streamingMode === 'editor-overview') {
-    const desired = [...manifest.renderTiles]
-    camera.getWorldPosition(cameraLocalHelper)
-    groundObject.worldToLocal(cameraLocalHelper)
-    desired.sort((left, right) => {
-      const leftDx = left.centerX - cameraLocalHelper.x
-      const leftDz = left.centerZ - cameraLocalHelper.z
-      const rightDx = right.centerX - cameraLocalHelper.x
-      const rightDz = right.centerZ - cameraLocalHelper.z
-      return (leftDx * leftDx + leftDz * leftDz) - (rightDx * rightDx + rightDz * rightDz)
-    })
     return {
-      desired,
-      retainedKeys: new Set(manifest.renderTiles.map((record) => record.key)),
+      desired: manifest.renderTiles,
+      retainedKeys: resolveCompiledGroundRenderTileKeySet(manifest),
       visibleBounds: {
         minX: manifest.bounds.minX,
         maxX: manifest.bounds.maxX,
@@ -553,6 +575,7 @@ export function syncCompiledGroundRenderTiles(params: SyncCompiledGroundRenderTi
     }
     disposeCompiledGroundRenderMesh(mesh)
     runtime.meshes.delete(key)
+    runtime.loadedChunkKeysVersion += 1
   })
 
   const material = resolveGroundMaterial(params.groundObject)
@@ -595,6 +618,7 @@ export function syncCompiledGroundRenderTiles(params: SyncCompiledGroundRenderTi
         mesh.userData.compiledGroundTileKey = record.key
         activeRuntime.group.add(mesh)
         activeRuntime.meshes.set(record.key, mesh)
+        activeRuntime.loadedChunkKeysVersion += 1
       })
       .finally(() => {
         renderRuntimeMap.get(params.groundObject)?.pendingLoads.delete(record.key)
