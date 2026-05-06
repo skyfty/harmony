@@ -5122,6 +5122,7 @@ function syncViewerCompiledGroundRender(
       const bytes = pkg.files[record.path];
       return bytes ? getArrayBufferView(bytes) : null;
     },
+    streamingMode: 'runtime-camera',
   });
   setInfiniteGroundHiddenChunkKeys(groundObject, collectCompiledGroundCoveredChunkKeys(compiledManifest));
 }

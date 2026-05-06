@@ -238,11 +238,11 @@ import {
   sampleGroundHeight,
 } from '@schema/groundMesh'
 import {
-  collectCompiledGroundCoveredChunkKeys,
   computeCompiledGroundManifestRevision,
 } from '@schema/compiledGround'
 import {
   clearCompiledGroundRenderTiles,
+  collectLoadedCompiledGroundChunkKeys,
   syncCompiledGroundRenderTiles,
 } from '@schema/compiledGroundRuntime'
 import {
@@ -21758,7 +21758,6 @@ function syncViewportCompiledGroundTiles(
     return
   }
 
-  setInfiniteGroundHiddenChunkKeys(groundObject, collectCompiledGroundCoveredChunkKeys(manifest))
   const revision = Number.isFinite(manifest.revision)
     ? Math.max(0, Math.trunc(manifest.revision))
     : computeCompiledGroundManifestRevision(manifest)
@@ -21770,7 +21769,9 @@ function syncViewportCompiledGroundTiles(
     revision,
     manifest,
     loadTileData: async (record) => sceneStore.getCurrentCompiledGroundTileData(record.path),
+    streamingMode: 'editor-overview',
   })
+  setInfiniteGroundHiddenChunkKeys(groundObject, collectLoadedCompiledGroundChunkKeys(groundObject, manifest))
 }
 
 function maybeAutoPersistViewportInfiniteGroundChunks(

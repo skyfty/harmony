@@ -31,9 +31,12 @@ type SyncCompiledGroundRenderTilesParams = {
   loadTileData: (record: CompiledGroundRenderTileRecord) => Promise<ArrayBuffer | null>
   activeRadiusTiles?: number
   retainRadiusTiles?: number
+  streamingMode?: 'runtime-camera' | 'editor-overview'
 }
 
 const renderRuntimeMap = new WeakMap<THREE.Object3D, CompiledGroundRenderRuntime>()
+const compiledGroundRenderTileRecordMapCache = new WeakMap<CompiledGroundManifest, Map<string, CompiledGroundRenderTileRecord>>()
+const compiledGroundRenderTileChunkKeyCache = new WeakMap<CompiledGroundManifest, Map<string, string[]>>()
 const cameraLocalHelper = new THREE.Vector3()
 const compiledGroundCameraQuaternion = new THREE.Quaternion()
 const compiledGroundVisiblePlane = new THREE.Plane()
@@ -44,17 +47,21 @@ const compiledGroundVisibleSampleLocal = new THREE.Vector3()
 const compiledGroundVisibleRayOrigin = new THREE.Vector3()
 const compiledGroundVisibleRayDirection = new THREE.Vector3()
 const compiledGroundVisibleRay = new THREE.Ray()
-const compiledGroundViewportSamplePoints: ReadonlyArray<readonly [number, number]> = [
-  [-1, -1],
-  [0, -1],
-  [1, -1],
-  [-1, 0],
-  [0, 0],
-  [1, 0],
-  [-1, 1],
-  [0, 1],
-  [1, 1],
-]
+
+function createCompiledGroundViewportSamplePoints(stepsPerAxis: number): ReadonlyArray<readonly [number, number]> {
+  const safeSteps = Math.max(2, Math.trunc(stepsPerAxis))
+  const points: Array<readonly [number, number]> = []
+  for (let row = 0; row <= safeSteps; row += 1) {
+    const ndcY = -1 + (row / safeSteps) * 2
+    for (let column = 0; column <= safeSteps; column += 1) {
+      const ndcX = -1 + (column / safeSteps) * 2
+      points.push([ndcX, ndcY] as const)
+    }
+  }
+  return points
+}
+
+const compiledGroundViewportSamplePoints = createCompiledGroundViewportSamplePoints(8)
 
 function resolveCompiledGroundChunkSizeMeters(
   groundDefinition: { chunkSizeMeters?: number; renderRadiusChunks?: number; collisionRadiusChunks?: number },
@@ -237,6 +244,64 @@ function doesCompiledGroundTileIntersectBounds(
     && recordMinZ <= bounds.maxZ
 }
 
+function resolveCompiledGroundRenderTileRecordMap(
+  manifest: CompiledGroundManifest,
+): Map<string, CompiledGroundRenderTileRecord> {
+  const cached = compiledGroundRenderTileRecordMapCache.get(manifest)
+  if (cached) {
+    return cached
+  }
+  const next = new Map<string, CompiledGroundRenderTileRecord>()
+  for (const record of manifest.renderTiles) {
+    next.set(record.key, record)
+  }
+  compiledGroundRenderTileRecordMapCache.set(manifest, next)
+  return next
+}
+
+function resolveCompiledGroundChunkCoordFromWorldPosition(
+  worldX: number,
+  worldZ: number,
+  chunkSizeMeters: number,
+): { chunkX: number; chunkZ: number } {
+  const safeChunkSize = Math.max(1e-6, Number(chunkSizeMeters) || 1)
+  const origin = -safeChunkSize * 0.5
+  return {
+    chunkX: Math.floor((worldX - origin) / safeChunkSize),
+    chunkZ: Math.floor((worldZ - origin) / safeChunkSize),
+  }
+}
+
+function collectCompiledGroundRenderTileChunkKeys(
+  manifest: CompiledGroundManifest,
+  record: CompiledGroundRenderTileRecord,
+): string[] {
+  let cache = compiledGroundRenderTileChunkKeyCache.get(manifest)
+  if (!cache) {
+    cache = new Map<string, string[]>()
+    compiledGroundRenderTileChunkKeyCache.set(manifest, cache)
+  }
+  const cached = cache.get(record.key)
+  if (cached) {
+    return cached
+  }
+  const minX = Number.isFinite(record.bounds?.minX) ? Number(record.bounds.minX) : record.centerX - record.widthMeters * 0.5
+  const maxX = Number.isFinite(record.bounds?.maxX) ? Number(record.bounds.maxX) : record.centerX + record.widthMeters * 0.5
+  const minZ = Number.isFinite(record.bounds?.minZ) ? Number(record.bounds.minZ) : record.centerZ - record.depthMeters * 0.5
+  const maxZ = Number.isFinite(record.bounds?.maxZ) ? Number(record.bounds.maxZ) : record.centerZ + record.depthMeters * 0.5
+  const epsilon = Math.max(1e-9, Math.max(record.widthMeters, record.depthMeters, manifest.chunkSizeMeters) * 1e-9)
+  const minCoord = resolveCompiledGroundChunkCoordFromWorldPosition(minX, minZ, manifest.chunkSizeMeters)
+  const maxCoord = resolveCompiledGroundChunkCoordFromWorldPosition(maxX - epsilon, maxZ - epsilon, manifest.chunkSizeMeters)
+  const chunkKeys: string[] = []
+  for (let chunkZ = minCoord.chunkZ; chunkZ <= maxCoord.chunkZ; chunkZ += 1) {
+    for (let chunkX = minCoord.chunkX; chunkX <= maxCoord.chunkX; chunkX += 1) {
+      chunkKeys.push(`${chunkX}:${chunkZ}`)
+    }
+  }
+  cache.set(record.key, chunkKeys)
+  return chunkKeys
+}
+
 function ensureCompiledGroundRenderRuntime(groundObject: THREE.Object3D): CompiledGroundRenderRuntime {
   const existing = renderRuntimeMap.get(groundObject)
   if (existing) {
@@ -281,6 +346,31 @@ export function clearCompiledGroundRenderTiles(groundObject: THREE.Object3D): vo
   runtime.lastDebugSignature = ''
 }
 
+export function collectLoadedCompiledGroundChunkKeys(
+  groundObject: THREE.Object3D,
+  manifest: CompiledGroundManifest | null | undefined,
+): string[] {
+  if (!manifest) {
+    return []
+  }
+  const runtime = renderRuntimeMap.get(groundObject)
+  if (!runtime || runtime.meshes.size <= 0) {
+    return []
+  }
+  const recordMap = resolveCompiledGroundRenderTileRecordMap(manifest)
+  const chunkKeys = new Set<string>()
+  runtime.meshes.forEach((_mesh, tileKey) => {
+    const record = recordMap.get(tileKey)
+    if (!record) {
+      return
+    }
+    for (const chunkKey of collectCompiledGroundRenderTileChunkKeys(manifest, record)) {
+      chunkKeys.add(chunkKey)
+    }
+  })
+  return Array.from(chunkKeys)
+}
+
 function resolveGroundMaterial(groundObject: THREE.Object3D): THREE.Material {
   const cached = (groundObject.userData as Record<string, unknown> | undefined)?.groundMaterial
   if (cached && !Array.isArray(cached)) {
@@ -322,6 +412,7 @@ function resolveTileWindowRecords(
   camera: THREE.Camera,
   activeRadiusTiles: number,
   retainRadiusTiles: number,
+  streamingMode: 'runtime-camera' | 'editor-overview',
 ): {
   desired: CompiledGroundRenderTileRecord[]
   retainedKeys: Set<string>
@@ -332,6 +423,44 @@ function resolveTileWindowRecords(
   centerColumn: number
   intersectionCount: number
 } {
+  if (streamingMode === 'editor-overview') {
+    const desired = [...manifest.renderTiles]
+    camera.getWorldPosition(cameraLocalHelper)
+    groundObject.worldToLocal(cameraLocalHelper)
+    desired.sort((left, right) => {
+      const leftDx = left.centerX - cameraLocalHelper.x
+      const leftDz = left.centerZ - cameraLocalHelper.z
+      const rightDx = right.centerX - cameraLocalHelper.x
+      const rightDz = right.centerZ - cameraLocalHelper.z
+      return (leftDx * leftDx + leftDz * leftDz) - (rightDx * rightDx + rightDz * rightDz)
+    })
+    return {
+      desired,
+      retainedKeys: new Set(manifest.renderTiles.map((record) => record.key)),
+      visibleBounds: {
+        minX: manifest.bounds.minX,
+        maxX: manifest.bounds.maxX,
+        minZ: manifest.bounds.minZ,
+        maxZ: manifest.bounds.maxZ,
+      },
+      desiredBounds: {
+        minX: manifest.bounds.minX,
+        maxX: manifest.bounds.maxX,
+        minZ: manifest.bounds.minZ,
+        maxZ: manifest.bounds.maxZ,
+      },
+      retainedBounds: {
+        minX: manifest.bounds.minX,
+        maxX: manifest.bounds.maxX,
+        minZ: manifest.bounds.minZ,
+        maxZ: manifest.bounds.maxZ,
+      },
+      centerRow: 0,
+      centerColumn: 0,
+      intersectionCount: 0,
+    }
+  }
+
   const tileSize = Math.max(1e-6, manifest.renderTileSizeMeters)
   const visibleLocal = resolveCompiledGroundVisibleLocalBounds(
     groundObject,
@@ -379,6 +508,7 @@ export function syncCompiledGroundRenderTiles(params: SyncCompiledGroundRenderTi
     runtime.sourceId = params.sourceId
     runtime.revision = params.revision
   }
+  const streamingMode = params.streamingMode === 'editor-overview' ? 'editor-overview' : 'runtime-camera'
   const activeRadiusTiles = Math.max(
     1,
     Math.trunc(params.activeRadiusTiles ?? resolveDefaultCompiledGroundActiveRadiusTiles(params.groundDefinition, params.manifest)),
@@ -397,6 +527,7 @@ export function syncCompiledGroundRenderTiles(params: SyncCompiledGroundRenderTi
     params.camera,
     activeRadiusTiles,
     retainRadiusTiles,
+    streamingMode,
   )
   const desiredKeys = new Set(desired.map((record) => record.key))
   params.camera.getWorldPosition(cameraLocalHelper)
@@ -457,7 +588,9 @@ export function syncCompiledGroundRenderTiles(params: SyncCompiledGroundRenderTi
         mesh.name = `CompiledGroundTile:${record.key}`
         mesh.receiveShadow = true
         mesh.castShadow = params.groundDefinition.castShadow === true
-        mesh.frustumCulled = true
+        // Tile streaming is already controlled explicitly from the screen-visible ground footprint.
+        // Leaving per-mesh frustum culling enabled can drop far tiles early and create visible gaps.
+        mesh.frustumCulled = false
         mesh.userData.compiledGroundTile = true
         mesh.userData.compiledGroundTileKey = record.key
         activeRuntime.group.add(mesh)

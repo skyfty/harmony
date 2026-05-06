@@ -675,7 +675,9 @@ function resolveInfiniteGroundVisibleLocalBounds(
   // 这个函数的职责非常窄：只回答“相机当前能看见哪一块地面”。
   // 它不参与任何 chunk 上限判断，也不负责决定地形最多能延伸多远。
   // 如果这里和窗口上限逻辑混在一起，后面很容易再次把无限地形误写回有限地形。
-  root.updateMatrixWorld(true)
+  // Only the root world transform is needed for world/local conversion here.
+  // Avoid recursively updating every streamed child chunk on each camera tick.
+  root.updateWorldMatrix(true, false)
 
   const baseHeight = typeof definition.baseHeight === 'number' && Number.isFinite(definition.baseHeight)
     ? definition.baseHeight
@@ -5093,7 +5095,9 @@ export function updateGroundChunks(
   let localZ = 0
 
   if (camera) {
-    root.updateMatrixWorld(true)
+    // We only need the runtime group's world transform to convert camera space.
+    // Updating children recursively turns chunk streaming checks into a full-scene walk.
+    root.updateWorldMatrix(true, false)
   }
 
   if (camera) {

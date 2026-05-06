@@ -9603,6 +9603,7 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
 					revision,
 					manifest: compiledManifest,
 					loadTileData: async (record) => cachedCompiledGroundFiles.get(record.path) ?? null,
+					streamingMode: 'runtime-camera',
 				})
 			} else {
 				clearCompiledGroundRenderTiles(groundObject)
