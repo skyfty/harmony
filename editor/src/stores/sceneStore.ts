@@ -1934,6 +1934,35 @@ function applyCompiledGroundPackageToStore(
   }
 }
 
+function shouldUseCompiledGroundForDefinition(
+  dynamicGround: GroundDynamicMesh,
+  terrainDatasetId: string | null = null,
+): boolean {
+  const normalizedTerrainDatasetId = typeof terrainDatasetId === 'string' ? terrainDatasetId.trim() : ''
+  if (normalizedTerrainDatasetId) {
+    return true
+  }
+  if (dynamicGround.planningMetadata?.demSource) {
+    return true
+  }
+  const localEditTileCount = dynamicGround.localEditTiles && typeof dynamicGround.localEditTiles === 'object'
+    ? Object.keys(dynamicGround.localEditTiles).length
+    : 0
+  if (localEditTileCount > 0) {
+    return true
+  }
+  const surfaceRevision = Number.isFinite(dynamicGround.surfaceRevision)
+    ? Math.max(0, Math.trunc(dynamicGround.surfaceRevision as number))
+    : 0
+  if (surfaceRevision > 0) {
+    return true
+  }
+  const chunkManifestRevision = Number.isFinite(dynamicGround.chunkManifestRevision)
+    ? Math.max(0, Math.trunc(dynamicGround.chunkManifestRevision as number))
+    : 0
+  return chunkManifestRevision > 0
+}
+
 function createCompiledGroundSourceDocument(store: Pick<SceneState, 'currentSceneId' | 'nodes'>): SceneJsonExportDocument | null {
   const sceneId = typeof store.currentSceneId === 'string' ? store.currentSceneId.trim() : ''
   if (!sceneId) {
@@ -8801,6 +8830,11 @@ export const useSceneStore = defineStore('scene', {
       }
       const scenesStore = useScenesStore()
       const terrainDatasetManifest = await scenesStore.loadTerrainDatasetManifest(document.id)
+      if (!shouldUseCompiledGroundForDefinition(groundNode.dynamicMesh, terrainDatasetManifest?.datasetId ?? null)) {
+        applyCompiledGroundPackageToStore(this, '', null)
+        await scenesStore.saveCompiledGroundBundle(document.id, null)
+        return true
+      }
       const buildKey = computeSceneCompiledGroundBuildKey(
         document.id,
         groundNode.dynamicMesh,
@@ -8854,6 +8888,11 @@ export const useSceneStore = defineStore('scene', {
       }
       const scenesStore = useScenesStore()
       const terrainDatasetManifest = await scenesStore.loadTerrainDatasetManifest(document.id)
+      if (!shouldUseCompiledGroundForDefinition(groundNode.dynamicMesh, terrainDatasetManifest?.datasetId ?? null)) {
+        applyCompiledGroundPackageToStore(this, '', null)
+        await scenesStore.saveCompiledGroundBundle(document.id, null)
+        return false
+      }
       const buildKey = computeSceneCompiledGroundBuildKey(
         document.id,
         groundNode.dynamicMesh,

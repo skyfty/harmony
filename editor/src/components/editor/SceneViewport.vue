@@ -228,6 +228,7 @@ import type { WaterBuildShape } from '@/types/water-build-shape'
 import type { WallBuildShape } from '@/types/wall-build-shape'
 import {
   createGroundMesh,
+  getVisibleInfiniteGroundChunkKeys,
   getVisibleInfiniteGroundChunkVersion,
   hasPendingGroundChunkWork,
   resolveGroundRuntimeChunkCells,
@@ -21286,6 +21287,197 @@ let lastGroundStreamingSyncStateSignature: string | null = null
 let lastGroundStreamingWindowSignature: string | null = null
 let lastGroundStreamingCameraPoseSignature: string | null = null
 let lastGroundStreamingCompiledLoadedChunkVersion = -1
+let lastViewportGroundChunkDebugSignature: string | null = null
+
+function formatGroundDebugString(value: unknown): string {
+  try {
+    const serialized = JSON.stringify(value, (_key, entryValue) => {
+      if (ArrayBuffer.isView(entryValue)) {
+        const arrayView = entryValue as ArrayBufferView & { length?: number }
+        const sizeLabel = typeof arrayView.length === 'number'
+          ? `length=${arrayView.length}`
+          : `byteLength=${entryValue.byteLength}`
+        return `${entryValue.constructor.name}(${sizeLabel})`
+      }
+      if (entryValue instanceof ArrayBuffer) {
+        return `ArrayBuffer(byteLength=${entryValue.byteLength})`
+      }
+      if (entryValue instanceof Map) {
+        return { type: 'Map', size: entryValue.size }
+      }
+      if (entryValue instanceof Set) {
+        return { type: 'Set', size: entryValue.size }
+      }
+      return entryValue
+    }, 2)
+    return serialized ?? String(value)
+  } catch (error) {
+    return JSON.stringify({
+      error: error instanceof Error ? error.message : String(error),
+      fallback: String(value),
+    })
+  }
+}
+
+function summarizeGroundChunkKeysForDebug(keys: string[]): Record<string, unknown> {
+  const normalizedKeys = keys
+    .filter((key) => typeof key === 'string' && key.length > 0)
+    .slice()
+    .sort((left, right) => left.localeCompare(right))
+  const previewCount = 8
+  let minChunkX = Number.POSITIVE_INFINITY
+  let maxChunkX = Number.NEGATIVE_INFINITY
+  let minChunkZ = Number.POSITIVE_INFINITY
+  let maxChunkZ = Number.NEGATIVE_INFINITY
+
+  normalizedKeys.forEach((key) => {
+    const parsed = parseGroundChunkKey(key)
+    if (!parsed) {
+      return
+    }
+    minChunkX = Math.min(minChunkX, parsed.chunkX)
+    maxChunkX = Math.max(maxChunkX, parsed.chunkX)
+    minChunkZ = Math.min(minChunkZ, parsed.chunkZ)
+    maxChunkZ = Math.max(maxChunkZ, parsed.chunkZ)
+  })
+
+  return {
+    count: normalizedKeys.length,
+    previewStart: normalizedKeys.slice(0, previewCount),
+    previewEnd: normalizedKeys.length > previewCount ? normalizedKeys.slice(-previewCount) : [],
+    omittedCount: Math.max(0, normalizedKeys.length - (previewCount * 2)),
+    chunkXRange: Number.isFinite(minChunkX) && Number.isFinite(maxChunkX)
+      ? { min: minChunkX, max: maxChunkX }
+      : null,
+    chunkZRange: Number.isFinite(minChunkZ) && Number.isFinite(maxChunkZ)
+      ? { min: minChunkZ, max: maxChunkZ }
+      : null,
+  }
+}
+
+function logViewportGroundChunkDebug(
+  groundObject: THREE.Object3D,
+  groundDefinition: GroundRuntimeDynamicMesh,
+): void {
+  const sceneId = typeof sceneStore.currentSceneId === 'string' ? sceneStore.currentSceneId.trim() : ''
+  const chunkSizeMeters = Number.isFinite(groundDefinition.chunkSizeMeters) && groundDefinition.chunkSizeMeters! > 0
+    ? Number(groundDefinition.chunkSizeMeters)
+    : 100
+  const workingGridSize = resolveGroundWorkingGridSize(groundDefinition)
+  const runtimeChunkCells = Math.max(1, resolveGroundRuntimeChunkCells(groundDefinition))
+  const visibleChunkKeys = getVisibleInfiniteGroundChunkKeys(groundObject).slice().sort((left, right) => left.localeCompare(right))
+  const visibleDirectChunkMeshKeys: string[] = []
+  const visibleFlatBatchChunkKeys = new Set<string>()
+  const compiledGroundTileKeys: string[] = []
+  const compiledGroundCoveredChunkKeys = new Set<string>()
+  groundObject.traverse((child) => {
+    const directChunk = (child as any)?.userData?.groundChunk as { chunkRow?: number; chunkColumn?: number } | undefined
+    if (directChunk && Number.isInteger(directChunk.chunkRow) && Number.isInteger(directChunk.chunkColumn)) {
+      visibleDirectChunkMeshKeys.push(`${directChunk.chunkColumn}:${directChunk.chunkRow}`)
+    }
+    const batchChunkKeys = (child as any)?.userData?.groundChunkBatch?.chunkKeys
+    if (Array.isArray(batchChunkKeys)) {
+      batchChunkKeys.forEach((key) => {
+        if (typeof key === 'string' && key.length > 0) {
+          visibleFlatBatchChunkKeys.add(key)
+        }
+      })
+    }
+    const compiledGroundTileRow = (child as any)?.userData?.compiledGroundTileRow
+    const compiledGroundTileColumn = (child as any)?.userData?.compiledGroundTileColumn
+    if (Number.isInteger(compiledGroundTileRow) && Number.isInteger(compiledGroundTileColumn)) {
+      compiledGroundTileKeys.push(`${compiledGroundTileColumn}:${compiledGroundTileRow}`)
+    } else {
+      const compiledGroundTileKey = (child as any)?.userData?.compiledGroundTileKey
+      if (typeof compiledGroundTileKey === 'string' && compiledGroundTileKey.length > 0) {
+        compiledGroundTileKeys.push(compiledGroundTileKey)
+      }
+    }
+    const compiledChunkKeys = (child as any)?.userData?.compiledGroundChunkKeys
+    if (Array.isArray(compiledChunkKeys)) {
+      compiledChunkKeys.forEach((key) => {
+        if (typeof key === 'string' && key.length > 0) {
+          compiledGroundCoveredChunkKeys.add(key)
+        }
+      })
+    }
+  })
+  visibleDirectChunkMeshKeys.sort((left, right) => left.localeCompare(right))
+  const visibleFlatBatchChunkKeysSorted = Array.from(visibleFlatBatchChunkKeys).sort((left, right) => left.localeCompare(right))
+  compiledGroundTileKeys.sort((left, right) => left.localeCompare(right))
+  const compiledGroundCoveredChunkKeysSorted = Array.from(compiledGroundCoveredChunkKeys).sort((left, right) => left.localeCompare(right))
+  const localEditTileKeys = groundDefinition.localEditTiles
+    ? Object.keys(groundDefinition.localEditTiles).sort((left, right) => left.localeCompare(right))
+    : []
+  const worldBounds = resolveGroundWorldBounds(groundDefinition)
+  const cameraWorldPosition = camera
+    ? {
+        x: Math.round(camera.position.x * 1000) / 1000,
+        y: Math.round(camera.position.y * 1000) / 1000,
+        z: Math.round(camera.position.z * 1000) / 1000,
+      }
+    : null
+  const cameraChunkCoord = cameraWorldPosition
+    ? resolveGroundChunkCoordFromWorldPosition(cameraWorldPosition.x, cameraWorldPosition.z, chunkSizeMeters)
+    : null
+  const payload = {
+    event: 'sync-viewport-ground-chunks',
+    sceneId,
+    terrainMode: groundDefinition.terrainMode ?? 'infinite',
+    worldBounds,
+    workingGridSize,
+    chunkSizeMeters,
+    groundCellSizeMeters: groundDefinition.cellSize,
+    chunkSubdivision: {
+      rows: runtimeChunkCells,
+      columns: runtimeChunkCells,
+      cellSizeMeters: chunkSizeMeters / runtimeChunkCells,
+    },
+    renderRadiusChunks: groundDefinition.renderRadiusChunks ?? null,
+    cameraWorldPosition,
+    cameraChunkCoord,
+    visibleChunkCount: visibleChunkKeys.length,
+    visibleChunkKeySummary: summarizeGroundChunkKeysForDebug(visibleChunkKeys),
+    visibleDirectChunkMeshCount: visibleDirectChunkMeshKeys.length,
+    visibleDirectChunkMeshKeySummary: summarizeGroundChunkKeysForDebug(visibleDirectChunkMeshKeys),
+    visibleFlatBatchChunkCount: visibleFlatBatchChunkKeysSorted.length,
+    visibleFlatBatchChunkKeySummary: summarizeGroundChunkKeysForDebug(visibleFlatBatchChunkKeysSorted),
+    compiledGroundTileCount: compiledGroundTileKeys.length,
+    compiledGroundTileKeySummary: summarizeGroundChunkKeysForDebug(compiledGroundTileKeys),
+    compiledGroundCoveredChunkCount: compiledGroundCoveredChunkKeysSorted.length,
+    compiledGroundCoveredChunkKeySummary: summarizeGroundChunkKeysForDebug(compiledGroundCoveredChunkKeysSorted),
+    localEditTileCount: localEditTileKeys.length,
+    localEditTileKeySummary: summarizeGroundChunkKeysForDebug(localEditTileKeys),
+    hasPlanningDemMetadata: Boolean(groundDefinition.planningMetadata?.demSource),
+    planningDemSourceFileHash: groundDefinition.planningMetadata?.demSource?.sourceFileHash ?? null,
+    surfaceRevision: Number.isFinite(groundDefinition.surfaceRevision) ? Number(groundDefinition.surfaceRevision) : 0,
+    chunkManifestRevision: Number.isFinite(groundDefinition.chunkManifestRevision) ? Number(groundDefinition.chunkManifestRevision) : 0,
+  }
+  const signature = JSON.stringify({
+    sceneId: payload.sceneId,
+    terrainMode: payload.terrainMode,
+    worldBounds: payload.worldBounds,
+    workingGridSize: payload.workingGridSize,
+    chunkSizeMeters: payload.chunkSizeMeters,
+    chunkSubdivision: payload.chunkSubdivision,
+    renderRadiusChunks: payload.renderRadiusChunks,
+    cameraChunkCoord: payload.cameraChunkCoord,
+    visibleChunkKeySummary: payload.visibleChunkKeySummary,
+    visibleDirectChunkMeshKeySummary: payload.visibleDirectChunkMeshKeySummary,
+    visibleFlatBatchChunkKeySummary: payload.visibleFlatBatchChunkKeySummary,
+    compiledGroundTileKeySummary: payload.compiledGroundTileKeySummary,
+    compiledGroundCoveredChunkKeySummary: payload.compiledGroundCoveredChunkKeySummary,
+    localEditTileKeySummary: payload.localEditTileKeySummary,
+    planningDemSourceFileHash: payload.planningDemSourceFileHash,
+    surfaceRevision: payload.surfaceRevision,
+    chunkManifestRevision: payload.chunkManifestRevision,
+  })
+  if (signature === lastViewportGroundChunkDebugSignature) {
+    return
+  }
+  lastViewportGroundChunkDebugSignature = signature
+  console.info(`[GroundDebug] ${formatGroundDebugString(payload)}`)
+}
 
 
 function computeGroundChunkSetSignatureForPlacement(groundObject: THREE.Object3D): string {
@@ -21732,6 +21924,7 @@ function syncViewportGroundChunks(
   syncViewportCompiledGroundTiles(groundObject, groundDefinition)
   const streamingDefinition = resolveViewportGroundStreamingDefinition(groundObject, groundDefinition)
   syncGroundChunkLoadingMode(groundObject, streamingDefinition, camera)
+  logViewportGroundChunkDebug(groundObject, streamingDefinition)
   const sceneId = typeof sceneStore.currentSceneId === 'string' ? sceneStore.currentSceneId.trim() : ''
   const manifestRevision = Number.isFinite(streamingDefinition.chunkManifestRevision)
     ? Math.max(0, Math.trunc(streamingDefinition.chunkManifestRevision as number))
@@ -21861,8 +22054,9 @@ function updateGroundChunkStreaming() {
     ? sceneStore.compiledGroundBuildKey.trim()
     : ''
   const manifestSource = sceneStore.compiledGroundManifest
-  const manifestRevision = Number.isFinite(manifestSource?.revision)
-    ? Math.max(0, Math.trunc(manifestSource.revision))
+  const manifestRevisionCandidate = Number(manifestSource?.revision)
+  const manifestRevision = Number.isFinite(manifestRevisionCandidate)
+    ? Math.max(0, Math.trunc(manifestRevisionCandidate))
     : 0
   const surfaceRevision = Number.isFinite(groundDefinition.surfaceRevision)
     ? Math.max(0, Math.trunc(groundDefinition.surfaceRevision as number))

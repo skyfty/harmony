@@ -17,6 +17,7 @@ import type { SceneMaterialProps, SceneNodeMaterial, SceneMaterialType } from '@
 import type { Vector3 } from 'three'
 import { computeGroundBaseHeightAtVertex } from '@schema/groundGeneration'
 
+const GROUND_DEBUG_LOG_TAG = '[GroundDebug]'
 const DEFAULT_GROUND_CELL_SIZE = 1
 const DEFAULT_GROUND_EXTENT = 100
 const DEFAULT_GROUND_RENDER_RADIUS_CHUNKS = 4
@@ -89,6 +90,108 @@ function manualDeepCloneLocal(source: unknown): unknown {
 type GroundDynamicMeshLike = GroundDynamicMesh & { terrainScatter?: unknown; terrainPaint?: unknown }
 type GroundDynamicMeshResult = GroundDynamicMesh & { terrainScatter?: unknown; terrainPaint?: unknown }
 type GroundRuntimeDynamicMesh = GroundDynamicMesh & { manualHeightMap: Float64Array; planningHeightMap: Float64Array }
+let lastGroundNormalizationDebugSignature: string | null = null
+
+function formatGroundDebugString(value: unknown): string {
+  try {
+    const serialized = JSON.stringify(value, (_key, entryValue) => {
+      if (ArrayBuffer.isView(entryValue)) {
+        const arrayView = entryValue as ArrayBufferView & { length?: number }
+        const sizeLabel = typeof arrayView.length === 'number'
+          ? `length=${arrayView.length}`
+          : `byteLength=${entryValue.byteLength}`
+        return `${entryValue.constructor.name}(${sizeLabel})`
+      }
+      if (entryValue instanceof ArrayBuffer) {
+        return `ArrayBuffer(byteLength=${entryValue.byteLength})`
+      }
+      if (entryValue instanceof Map) {
+        return { type: 'Map', size: entryValue.size }
+      }
+      if (entryValue instanceof Set) {
+        return { type: 'Set', size: entryValue.size }
+      }
+      return entryValue
+    }, 2)
+    return serialized ?? String(value)
+  } catch (error) {
+    return JSON.stringify({
+      error: error instanceof Error ? error.message : String(error),
+      fallback: String(value),
+    })
+  }
+}
+
+function maybeLogGroundNormalization(
+  sourceNode: SceneNode,
+  normalizedDynamicMesh: GroundDynamicMesh,
+  settings?: GroundSettings,
+): void {
+  const sourceDynamicMesh = (sourceNode.dynamicMesh ?? null) as Record<string, unknown> | null
+  const gridSize = resolveGroundWorkingGridSize(normalizedDynamicMesh)
+  const normalizedChunkSizeMeters = Number(normalizedDynamicMesh.chunkSizeMeters)
+  const chunkSizeMeters = Number.isFinite(normalizedChunkSizeMeters) && normalizedChunkSizeMeters > 0
+    ? normalizedChunkSizeMeters
+    : GROUND_TERRAIN_CHUNK_SIZE_METERS
+  const chunkCells = Math.max(1, Math.round(chunkSizeMeters / Math.max(normalizedDynamicMesh.cellSize, Number.EPSILON)))
+  const normalizedEditTileResolution = Number(normalizedDynamicMesh.editTileResolution)
+  const editTileResolution = Number.isFinite(normalizedEditTileResolution) && normalizedEditTileResolution > 0
+    ? Math.max(1, Math.round(normalizedEditTileResolution))
+    : 1
+  const normalizedEditTileSizeMeters = Number(normalizedDynamicMesh.editTileSizeMeters)
+  const editTileSizeMeters = Number.isFinite(normalizedEditTileSizeMeters) && normalizedEditTileSizeMeters > 0
+    ? Math.max(normalizedDynamicMesh.cellSize, normalizedEditTileSizeMeters)
+    : normalizedDynamicMesh.cellSize
+  const payload = {
+    event: 'normalize-ground-scene-node',
+    nodeId: sourceNode.id,
+    nodeName: sourceNode.name,
+    sourceLegacyFields: {
+      width: sourceDynamicMesh && Number.isFinite(Number(sourceDynamicMesh.width)) ? Number(sourceDynamicMesh.width) : null,
+      depth: sourceDynamicMesh && Number.isFinite(Number(sourceDynamicMesh.depth)) ? Number(sourceDynamicMesh.depth) : null,
+      rows: sourceDynamicMesh && Number.isFinite(Number(sourceDynamicMesh.rows)) ? Number(sourceDynamicMesh.rows) : null,
+      columns: sourceDynamicMesh && Number.isFinite(Number(sourceDynamicMesh.columns)) ? Number(sourceDynamicMesh.columns) : null,
+      cellSize: sourceDynamicMesh && Number.isFinite(Number(sourceDynamicMesh.cellSize)) ? Number(sourceDynamicMesh.cellSize) : null,
+      chunkSizeMeters: sourceDynamicMesh && Number.isFinite(Number(sourceDynamicMesh.chunkSizeMeters)) ? Number(sourceDynamicMesh.chunkSizeMeters) : null,
+      terrainMode: sourceDynamicMesh?.terrainMode ?? null,
+      worldBounds: sourceDynamicMesh?.worldBounds ?? null,
+      renderRadiusChunks: sourceDynamicMesh && Number.isFinite(Number(sourceDynamicMesh.renderRadiusChunks)) ? Number(sourceDynamicMesh.renderRadiusChunks) : null,
+      editTileSizeMeters: sourceDynamicMesh && Number.isFinite(Number(sourceDynamicMesh.editTileSizeMeters)) ? Number(sourceDynamicMesh.editTileSizeMeters) : null,
+      editTileResolution: sourceDynamicMesh && Number.isFinite(Number(sourceDynamicMesh.editTileResolution)) ? Number(sourceDynamicMesh.editTileResolution) : null,
+    },
+    sceneGroundSettings: settings ? {
+      width: settings.width ?? null,
+      depth: settings.depth ?? null,
+      worldBounds: settings.worldBounds ?? null,
+      chunkSizeMeters: settings.chunkSizeMeters ?? null,
+      renderRadiusChunks: settings.renderRadiusChunks ?? null,
+    } : null,
+    normalizedGround: {
+      terrainMode: normalizedDynamicMesh.terrainMode ?? 'infinite',
+      worldBounds: normalizedDynamicMesh.worldBounds ?? null,
+      cellSize: normalizedDynamicMesh.cellSize,
+      workingGridSize: gridSize,
+      chunkSizeMeters,
+      chunkSubdivision: {
+        rows: chunkCells,
+        columns: chunkCells,
+        cellSizeMeters: chunkSizeMeters / chunkCells,
+      },
+      renderRadiusChunks: normalizedDynamicMesh.renderRadiusChunks ?? null,
+      editTileSizeMeters,
+      editTileResolution,
+      editTileCellSizeMeters: editTileSizeMeters / editTileResolution,
+      localEditTileCount: normalizedDynamicMesh.localEditTiles ? Object.keys(normalizedDynamicMesh.localEditTiles).length : 0,
+      hasPlanningDemMetadata: Boolean(normalizedDynamicMesh.planningMetadata?.demSource),
+    },
+  }
+  const signature = formatGroundDebugString(payload)
+  if (signature === lastGroundNormalizationDebugSignature) {
+    return
+  }
+  lastGroundNormalizationDebugSignature = signature
+  console.info(`${GROUND_DEBUG_LOG_TAG} ${signature}`)
+}
 
 function buildPrimaryGroundMaterialProps(
   createMaterialProps: GroundDeps['createMaterialProps'],
@@ -550,6 +653,7 @@ export function normalizeGroundSceneNodeWithDeps(deps: GroundDeps, node: SceneNo
     })()
 
     const normalizedDynamicMesh = createGroundDynamicMeshDefinition((node.dynamicMesh as GroundDynamicMesh) ?? {}, settings)
+    maybeLogGroundNormalization(node, normalizedDynamicMesh, settings)
     const primaryMaterialProps = buildPrimaryGroundMaterialProps(createMaterialProps, primaryMaterial)
 
     return {

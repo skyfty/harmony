@@ -113,7 +113,7 @@ export type SceneCompiledGroundEnsureStatus = {
   phase: 'cache' | 'build-render' | 'build-collision' | 'persist' | 'ready'
 }
 
-export const SCENE_COMPILED_GROUND_PROFILE_VERSION = 1
+export const SCENE_COMPILED_GROUND_PROFILE_VERSION = 2
 export const SCENE_COMPILED_GROUND_BUILD_OPTIONS = Object.freeze({
   renderChunksPerTile: 1,
   collisionChunksPerTile: 1,

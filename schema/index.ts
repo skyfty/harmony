@@ -2274,8 +2274,9 @@ export function resolveGroundChunkBounds(
 ): GroundChunkBounds {
   const chunkSizeMeters = clampPositiveGroundMetric(definition.chunkSizeMeters, GROUND_TERRAIN_CHUNK_SIZE_METERS)
   const bounds = resolveGroundWorldBounds(definition)
+  const maxEdgeEpsilon = Math.max(1e-9, chunkSizeMeters * 1e-9)
   const minCoord = resolveGroundChunkCoordFromWorldPosition(bounds.minX, bounds.minZ, chunkSizeMeters)
-  const maxCoord = resolveGroundChunkCoordFromWorldPosition(bounds.maxX - Number.EPSILON, bounds.maxZ - Number.EPSILON, chunkSizeMeters)
+  const maxCoord = resolveGroundChunkCoordFromWorldPosition(bounds.maxX - maxEdgeEpsilon, bounds.maxZ - maxEdgeEpsilon, chunkSizeMeters)
   return {
     minChunkX: Math.min(minCoord.chunkX, maxCoord.chunkX),
     maxChunkX: Math.max(minCoord.chunkX, maxCoord.chunkX),
