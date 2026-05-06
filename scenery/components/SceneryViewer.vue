@@ -3594,6 +3594,18 @@ function hydrateGroundSidecarFromPackage(
     runtimeTerrainHeightSampler?: unknown;
   }).runtimeTerrainHeightSampler = terrainHeightSampler;
 
+  if (!shouldUseCompiledGroundForViewer(definition, sceneEntry.terrain?.datasetId ?? null)) {
+    const groundNode = findGroundNode(document.nodes);
+    if (groundNode) {
+      groundNode.userData = {
+        ...(groundNode.userData ?? {}),
+        compiledGroundEnabled: false,
+        compiledGroundManifest: null,
+      };
+    }
+    return document;
+  }
+
   const compiledGroundManifestPath = typeof sceneEntry.compiledGround?.manifestPath === 'string'
     ? sceneEntry.compiledGround.manifestPath.trim()
     : '';
@@ -3614,6 +3626,35 @@ function hydrateGroundSidecarFromPackage(
   }
 
   return document;
+}
+
+function shouldUseCompiledGroundForViewer(
+  dynamicGround: GroundDynamicMesh,
+  terrainDatasetId: string | null = null,
+): boolean {
+  const normalizedTerrainDatasetId = typeof terrainDatasetId === 'string' ? terrainDatasetId.trim() : '';
+  if (normalizedTerrainDatasetId) {
+    return true;
+  }
+  if (dynamicGround.planningMetadata?.demSource) {
+    return true;
+  }
+  const localEditTileCount = dynamicGround.localEditTiles && typeof dynamicGround.localEditTiles === 'object'
+    ? Object.keys(dynamicGround.localEditTiles).length
+    : 0;
+  if (localEditTileCount > 0) {
+    return true;
+  }
+  const surfaceRevision = Number.isFinite(dynamicGround.surfaceRevision)
+    ? Math.max(0, Math.trunc(dynamicGround.surfaceRevision as number))
+    : 0;
+  if (surfaceRevision > 0) {
+    return true;
+  }
+  const chunkManifestRevision = Number.isFinite(dynamicGround.chunkManifestRevision)
+    ? Math.max(0, Math.trunc(dynamicGround.chunkManifestRevision as number))
+    : 0;
+  return chunkManifestRevision > 0;
 }
 
 async function resolveAssetUrlReference(candidate: string): Promise<ResolvedAssetUrl | null> {
@@ -11876,11 +11917,17 @@ function parseScenePackageToProjectData(pkg: ScenePackageUnzipped): ScenePackage
     document.resourceSummary = buildDocumentResourceSummary(document);
     const id = sceneEntry.sceneId;
     const terrain = sceneEntry.terrain ?? null;
-    const hasGround = Boolean(findFirstGroundDynamicMesh(document));
+    const groundDefinition = findFirstGroundDynamicMesh(document) as GroundDynamicMesh | null;
+    const hasGround = Boolean(groundDefinition);
     const compiledGroundPath = typeof sceneEntry.compiledGround?.manifestPath === 'string'
       ? sceneEntry.compiledGround.manifestPath.trim()
       : '';
-    if (hasGround && !compiledGroundPath) {
+    if (
+      hasGround
+      && groundDefinition
+      && shouldUseCompiledGroundForViewer(groundDefinition, terrain?.datasetId ?? null)
+      && !compiledGroundPath
+    ) {
       throw new Error(`Scene ${sceneEntry.sceneId} is missing compiled ground package`);
     }
     scenes.push({

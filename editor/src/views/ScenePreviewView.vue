@@ -1712,6 +1712,42 @@ let queuedSnapshot: ScenePreviewSnapshot | null = null
 let lastSnapshotRevision = 0
 let protagonistPoseSynced = false
 
+function resetPreviewCompiledGroundCache(): void {
+	cachedCompiledGroundBuildKey = null
+	cachedCompiledGroundManifest = null
+	cachedCompiledGroundSceneId = null
+	cachedCompiledGroundFiles = new Map()
+}
+
+function shouldUseCompiledGroundForPreview(
+	dynamicGround: GroundDynamicMesh,
+	terrainDatasetId: string | null = null,
+): boolean {
+	const normalizedTerrainDatasetId = typeof terrainDatasetId === 'string' ? terrainDatasetId.trim() : ''
+	if (normalizedTerrainDatasetId) {
+		return true
+	}
+	if (dynamicGround.planningMetadata?.demSource) {
+		return true
+	}
+	const localEditTileCount = dynamicGround.localEditTiles && typeof dynamicGround.localEditTiles === 'object'
+		? Object.keys(dynamicGround.localEditTiles).length
+		: 0
+	if (localEditTileCount > 0) {
+		return true
+	}
+	const surfaceRevision = Number.isFinite(dynamicGround.surfaceRevision)
+		? Math.max(0, Math.trunc(dynamicGround.surfaceRevision as number))
+		: 0
+	if (surfaceRevision > 0) {
+		return true
+	}
+	const chunkManifestRevision = Number.isFinite(dynamicGround.chunkManifestRevision)
+		? Math.max(0, Math.trunc(dynamicGround.chunkManifestRevision as number))
+		: 0
+	return chunkManifestRevision > 0
+}
+
 const previewCompiledGroundCollisionRuntime = createCompiledGroundCollisionRuntime({
 	getPhysicsWorld: () => physicsWorld,
 	ensurePhysicsWorld: () => ensurePhysicsWorld(),
@@ -7275,10 +7311,7 @@ async function buildPreviewRuntimeDocument(
 	const scatterSidecar = options.groundScatterSidecar ?? await useScenesStore().loadGroundScatterSidecar(document.id)
 	const paintSidecar = options.groundPaintSidecar ?? await useScenesStore().loadGroundPaintSidecar(document.id)
 	if (!groundNode) {
-		cachedCompiledGroundBuildKey = null
-		cachedCompiledGroundManifest = null
-		cachedCompiledGroundSceneId = null
-		cachedCompiledGroundFiles = new Map()
+		resetPreviewCompiledGroundCache()
 	}
 	const scatterStore = useGroundScatterStore()
 	if (groundNode && groundNode.dynamicMesh && sidecar && isGroundDynamicMesh(groundNode.dynamicMesh)) {
@@ -7356,6 +7389,19 @@ async function buildPreviewRuntimeDocument(
 		}
 		attachGroundScatterRuntimeToNode(document.id, groundNode)
 		attachGroundPaintRuntimeToNode(document.id, groundNode)
+		if (!dynamicGround || !shouldUseCompiledGroundForPreview(dynamicGround, terrainDatasetManifest?.datasetId ?? null)) {
+			resetPreviewCompiledGroundCache()
+			groundNode.userData = {
+				...(groundNode.userData ?? {}),
+				compiledGroundEnabled: false,
+				compiledGroundManifest: null,
+			}
+			console.info('[ScenePreview] Skipping compiled ground cache for preview', {
+				sceneId: document.id,
+				reason: 'ground-does-not-require-compiled-cache',
+			})
+			return document
+		}
 		const compiledBuildKey = computeSceneCompiledGroundBuildKey(
 			document.id,
 			dynamicGround,
@@ -7418,10 +7464,7 @@ async function buildPreviewRuntimeDocument(
 					loadedFileCount: cacheLoad.diagnostics.loadedFileCount,
 					missingFileCount: cacheLoad.diagnostics.missingFileCount,
 				})
-				cachedCompiledGroundBuildKey = null
-				cachedCompiledGroundManifest = null
-				cachedCompiledGroundSceneId = null
-				cachedCompiledGroundFiles = new Map()
+				resetPreviewCompiledGroundCache()
 				statusMessage.value = 'Ground cache invalid.'
 				setPreviewStatus('Ground cache invalid', {
 					detail: 'Reopen the scene in editor to rebuild compiled terrain.',
@@ -7433,10 +7476,7 @@ async function buildPreviewRuntimeDocument(
 					sceneId: document.id,
 					buildKey: compiledBuildKey,
 				})
-				cachedCompiledGroundBuildKey = null
-				cachedCompiledGroundManifest = null
-				cachedCompiledGroundSceneId = null
-				cachedCompiledGroundFiles = new Map()
+				resetPreviewCompiledGroundCache()
 				statusMessage.value = 'Ground cache missing.'
 				setPreviewStatus('Ground cache missing', {
 					detail: 'Open the scene in editor once to build compiled terrain.',
