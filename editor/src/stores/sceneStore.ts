@@ -18292,30 +18292,12 @@ export const useSceneStore = defineStore('scene', {
       this.clearCurrentCompiledGroundPackage()
       const forceReload = options.forceReload === true
       const showLoadingOverlay = options.showLoadingOverlay ?? !options.onProgress
-      const startedAt = typeof performance !== 'undefined' && typeof performance.now === 'function'
-        ? performance.now()
-        : Date.now()
-      const getElapsedMs = () => {
-        const now = typeof performance !== 'undefined' && typeof performance.now === 'function'
-          ? performance.now()
-          : Date.now()
-        return Math.max(0, Math.round(now - startedAt))
-      }
       const reportProgress = (step: string, progress: number, detail?: string) => {
         emitSceneLoadProgress(options.onProgress, { step, progress, detail })
-      }
-      const logStage = (stage: string, extra: Record<string, unknown> = {}) => {
-        console.info('[SceneStore] selectScene progress', {
-          sceneId,
-          stage,
-          elapsedMs: getElapsedMs(),
-          ...extra,
-        })
       }
       const scenesStore = useScenesStore()
       reportProgress('Checking scene bundle', 8, 'Verifying local scene data and remote bundle state...')
       const sceneReady = await scenesStore.ensureSceneBundleAvailable(sceneId)
-      logStage('bundle-checked', { sceneReady })
       if (!sceneReady) {
         return false
       }
@@ -18334,25 +18316,16 @@ export const useSceneStore = defineStore('scene', {
           this.isSceneReady = true
         }
         reportProgress('Scene ready', 100, 'Current scene assets refreshed.')
-        logStage('current-scene-refreshed')
         return true
       }
       reportProgress('Reading scene document', 16, 'Loading scene document and ground sidecars...')
       const scene = await scenesStore.loadSceneDocument(sceneId, { hydrateGroundRuntime: true })
-      logStage('document-loaded', {
-        loaded: Boolean(scene),
-        nodeCount: scene?.nodes?.length ?? 0,
-      })
       if (!scene) {
         return false
       }
 
       reportProgress('Migrating embedded assets', 24, 'Hydrating embedded assets and runtime sidecars...')
       const embeddedMigration = await hydrateSceneDocumentWithEmbeddedAssets(scene)
-      logStage('embedded-assets-hydrated', {
-        migratedEmbeddedAssets: embeddedMigration.migratedEmbeddedAssets,
-      })
-
       this.nodes.forEach((node) => releaseRuntimeTree(node))
 
       this.isSceneReady = false
@@ -18367,23 +18340,16 @@ export const useSceneStore = defineStore('scene', {
             reportProgress(mapped.step, mapped.progress, mapped.detail)
           },
         })
-        logStage('scene-assets-ready')
 
         scene.nodes = sceneNodes
         reportProgress('Applying scene data', 66, 'Syncing scene graph into editor state...')
         attachRuntimeGroundSidecarsToDocument(scene)
         this.applySceneDocumentToState(scene)
-        logStage('scene-state-applied', { currentSceneId: this.currentSceneId })
         reportProgress('Loading terrain dataset', 72, 'Reading terrain dataset manifest...')
         const terrainDatasetManifest = await scenesStore.loadTerrainDatasetManifest(scene.id)
-        logStage('terrain-dataset-manifest-loaded', {
-          hasManifest: Boolean(terrainDatasetManifest),
-        })
+
         reportProgress('Preparing terrain sampler', 76, 'Creating terrain height sampler...')
         const terrainSampler = await createScenesStoreTerrainDatasetHeightSampler(scene.id)
-        logStage('terrain-sampler-ready', {
-          hasSampler: Boolean(terrainSampler),
-        })
         if (sceneSwitchToken !== this.sceneSwitchToken) {
           return false
         }
@@ -18404,11 +18370,6 @@ export const useSceneStore = defineStore('scene', {
             reportProgress(mapped.step, mapped.progress, mapped.detail)
           },
         })
-        logStage('compiled-ground-ready', {
-          compiledGroundBuildKey: this.compiledGroundBuildKey,
-          renderTileCount: this.compiledGroundManifest?.renderTiles?.length ?? 0,
-          collisionTileCount: this.compiledGroundManifest?.collisionTiles?.length ?? 0,
-        })
         reportProgress('Scene ready', 100, 'Scene graph, assets, and terrain cache are ready.')
       } finally {
         this.isSceneReady = true
@@ -18424,7 +18385,6 @@ export const useSceneStore = defineStore('scene', {
           console.warn('[SceneStore] Failed to persist embedded-asset migration result', error)
         })
       }
-      logStage('completed')
       return true
     },
     async deleteScene(sceneId: string): Promise<{ deleted: boolean; projectId: string | null; hasRemainingScenes: boolean }> {

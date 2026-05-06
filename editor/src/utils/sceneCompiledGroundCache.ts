@@ -221,7 +221,6 @@ async function openSceneCompiledGroundDatabase(): Promise<IDBDatabase | null> {
     sceneCompiledGroundDbPromise = new Promise<IDBDatabase | null>((resolve) => {
       const request = globalThis.indexedDB.open(CACHE_DB_NAME, CACHE_DB_VERSION)
       request.onerror = () => {
-        console.warn('[SceneCompiledGroundCache] Failed to open IndexedDB cache', request.error)
         resolve(null)
       }
       request.onupgradeneeded = () => {
@@ -858,7 +857,6 @@ export async function ensureSceneCompiledGroundPackage(
   buildKey: string,
   options: EnsureSceneCompiledGroundOptions = {},
 ): Promise<SceneCompiledGroundPackage> {
-  const startedAt = Date.now()
   emitEnsureStatus(options.onStatus, {
     step: 'Checking terrain cache',
     detail: 'Looking for compiled terrain tiles in cache...',
@@ -866,21 +864,8 @@ export async function ensureSceneCompiledGroundPackage(
     phase: 'cache',
   })
   if (!options.forceRebuild) {
-    const cacheStartedAt = Date.now()
     const cached = await loadSceneCompiledGroundPackageFromCache(buildKey, {
       sourceSignature: options.sourceSignature,
-    })
-    console.info('[SceneCompiledGroundCache] Cache lookup finished', {
-      sceneId: document.id,
-      buildKey,
-      status: cached.diagnostics.status,
-      elapsedMs: roundElapsedMs(cacheStartedAt),
-      indexedFileCount: cached.diagnostics.indexedFileCount,
-      loadedFileCount: cached.diagnostics.loadedFileCount,
-      missingFileCount: cached.diagnostics.missingFileCount,
-      renderTileCount: cached.diagnostics.renderTileCount,
-      collisionTileCount: cached.diagnostics.collisionTileCount,
-      totalBytes: cached.diagnostics.totalBytes,
     })
     if (cached.pkg) {
       emitEnsureStatus(options.onStatus, {
@@ -892,17 +877,8 @@ export async function ensureSceneCompiledGroundPackage(
       return cached.pkg
     }
     if (typeof options.loadFallbackPackage === 'function') {
-      const fallbackStartedAt = Date.now()
       const fallbackPkg = await options.loadFallbackPackage()
       if (fallbackPkg) {
-        console.info('[SceneCompiledGroundCache] Restored terrain cache from scene-local fallback', {
-          sceneId: document.id,
-          buildKey,
-          elapsedMs: roundElapsedMs(fallbackStartedAt),
-          renderTileCount: fallbackPkg.manifest.renderTiles.length,
-          collisionTileCount: fallbackPkg.manifest.collisionTiles.length,
-          fileCount: fallbackPkg.files.size,
-        })
         await saveSceneCompiledGroundPackageToCache(buildKey, fallbackPkg, options.sourceSignature ?? '')
         emitEnsureStatus(options.onStatus, {
           step: 'Loaded terrain cache fallback',
@@ -920,10 +896,6 @@ export async function ensureSceneCompiledGroundPackage(
       phase: 'cache',
     })
   } else {
-    console.info('[SceneCompiledGroundCache] Skipping cache lookup because rebuild was forced', {
-      sceneId: document.id,
-      buildKey,
-    })
     emitEnsureStatus(options.onStatus, {
       step: 'Rebuilding terrain cache',
       detail: 'Forced rebuild requested.',
@@ -931,7 +903,6 @@ export async function ensureSceneCompiledGroundPackage(
       phase: 'cache',
     })
   }
-  const buildStartedAt = Date.now()
   const built = await buildSceneCompiledGroundPackage(document, {
     onProgress: (progress) => {
       options.onProgress?.(progress)
@@ -941,31 +912,13 @@ export async function ensureSceneCompiledGroundPackage(
   if (!built) {
     throw new Error(`Compiled ground build failed for scene ${document.id}`)
   }
-  console.info('[SceneCompiledGroundCache] Terrain build finished', {
-    sceneId: document.id,
-    buildKey,
-    elapsedMs: roundElapsedMs(buildStartedAt),
-    renderTileCount: built.manifest.renderTiles.length,
-    collisionTileCount: built.manifest.collisionTiles.length,
-    fileCount: built.files.size,
-  })
   emitEnsureStatus(options.onStatus, {
     step: 'Saving terrain cache',
     detail: `Persisting ${built.files.size} compiled files...`,
     progress: 92,
     phase: 'persist',
   })
-  const persistStartedAt = Date.now()
   await saveSceneCompiledGroundPackageToCache(buildKey, built, options.sourceSignature ?? '')
-  console.info('[SceneCompiledGroundCache] Terrain cache persisted', {
-    sceneId: document.id,
-    buildKey,
-    elapsedMs: roundElapsedMs(persistStartedAt),
-    totalElapsedMs: roundElapsedMs(startedAt),
-    renderTileCount: built.manifest.renderTiles.length,
-    collisionTileCount: built.manifest.collisionTiles.length,
-    fileCount: built.files.size,
-  })
   emitEnsureStatus(options.onStatus, {
     step: 'Terrain cache ready',
     detail: `${built.manifest.renderTiles.length + built.manifest.collisionTiles.length} tiles ready.`,
@@ -1012,7 +965,6 @@ export async function rebuildSceneCompiledGroundPackageChunks(
     })
   }
 
-  const patchStartedAt = Date.now()
   const patch = await buildSceneCompiledGroundPackage(document, {
     includedTileKeys: normalizedChunkKeys,
     onProgress: (progress) => {
@@ -1032,14 +984,7 @@ export async function rebuildSceneCompiledGroundPackageChunks(
     phase: 'persist',
   })
   await saveSceneCompiledGroundPackageToCache(buildKey, merged, options.sourceSignature ?? '')
-  console.info('[SceneCompiledGroundCache] Partial terrain cache rebuild finished', {
-    sceneId: document.id,
-    buildKey,
-    chunkCount: normalizedChunkKeys.length,
-    elapsedMs: roundElapsedMs(patchStartedAt),
-    renderTileCount: patch.manifest.renderTiles.length,
-    collisionTileCount: patch.manifest.collisionTiles.length,
-  })
+
   emitEnsureStatus(options.onStatus, {
     step: 'Terrain cache ready',
     detail: `${normalizedChunkKeys.length} chunks refreshed.`,
