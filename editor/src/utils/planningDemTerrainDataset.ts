@@ -1034,12 +1034,6 @@ export async function buildPlanningDemTerrainDataset(
     label: 'Building terrain dataset fields...',
     detail: `Preparing ${totalTileCount} height fields across ${maxLevel + 1} levels.`,
   }, true)
-  console.info('[PlanningDemTerrainDataset] Building terrain dataset', {
-    datasetId,
-    maxLevel,
-    regionLevel,
-    totalTileCount,
-  })
 
   const tileFieldLevels = new Map<number, Map<string, TileHeightField>>()
   let builtFieldCount = 0
@@ -1107,11 +1101,6 @@ export async function buildPlanningDemTerrainDataset(
     label: 'Building terrain dataset fields...',
     detail: `Built ${totalTileCount} terrain height fields.`,
   }, true)
-  console.info('[PlanningDemTerrainDataset] Height fields ready', {
-    datasetId,
-    totalTileCount,
-    elapsedMs: Date.now() - startedAt,
-  })
 
   const tiles: TileBuildRecord[] = []
   reportProgress({
@@ -1175,11 +1164,6 @@ export async function buildPlanningDemTerrainDataset(
     label: 'Encoding terrain dataset tiles...',
     detail: `Serialized ${totalTileCount} terrain tiles.`,
   }, true)
-  console.info('[PlanningDemTerrainDataset] Terrain tiles encoded', {
-    datasetId,
-    totalTileCount,
-    elapsedMs: Date.now() - startedAt,
-  })
 
   const regionTileMap = new Map<string, TileBuildRecord[]>()
   for (const tile of tiles) {
@@ -1238,20 +1222,8 @@ export async function buildPlanningDemTerrainDataset(
     label: 'Packing terrain dataset regions...',
     detail: `Packed ${totalRegionCount} region files.`,
   }, true)
-  console.info('[PlanningDemTerrainDataset] Region packs ready', {
-    datasetId,
-    totalRegionCount,
-    elapsedMs: Date.now() - startedAt,
-  })
 
   regions.sort((left, right) => left.regionKey.localeCompare(right.regionKey))
-
-  console.info('[PlanningDemTerrainDataset] Terrain dataset complete', {
-    datasetId,
-    totalTileCount,
-    totalRegionCount,
-    elapsedMs: Date.now() - startedAt,
-  })
 
   return {
     manifest: {

@@ -20,6 +20,9 @@ type SyncCompiledGroundRenderTilesParams = {
   groundObject: THREE.Object3D
   groundDefinition: {
     castShadow?: boolean
+    chunkSizeMeters?: number
+    renderRadiusChunks?: number
+    collisionRadiusChunks?: number
   }
   camera: THREE.Camera | null | undefined
   sourceId: string
@@ -32,6 +35,207 @@ type SyncCompiledGroundRenderTilesParams = {
 
 const renderRuntimeMap = new WeakMap<THREE.Object3D, CompiledGroundRenderRuntime>()
 const cameraLocalHelper = new THREE.Vector3()
+const compiledGroundCameraQuaternion = new THREE.Quaternion()
+const compiledGroundVisiblePlane = new THREE.Plane()
+const compiledGroundVisiblePlanePoint = new THREE.Vector3()
+const compiledGroundVisiblePlaneNormal = new THREE.Vector3()
+const compiledGroundVisibleSampleWorld = new THREE.Vector3()
+const compiledGroundVisibleSampleLocal = new THREE.Vector3()
+const compiledGroundVisibleRayOrigin = new THREE.Vector3()
+const compiledGroundVisibleRayDirection = new THREE.Vector3()
+const compiledGroundVisibleRay = new THREE.Ray()
+const compiledGroundViewportSamplePoints: ReadonlyArray<readonly [number, number]> = [
+  [-1, -1],
+  [0, -1],
+  [1, -1],
+  [-1, 0],
+  [0, 0],
+  [1, 0],
+  [-1, 1],
+  [0, 1],
+  [1, 1],
+]
+
+function resolveCompiledGroundChunkSizeMeters(
+  groundDefinition: { chunkSizeMeters?: number; renderRadiusChunks?: number; collisionRadiusChunks?: number },
+  manifest: CompiledGroundManifest,
+): number {
+  const explicit = Number(groundDefinition.chunkSizeMeters)
+  if (Number.isFinite(explicit) && explicit > 0) {
+    return explicit
+  }
+  return Math.max(1e-6, Number(manifest.chunkSizeMeters) || 1)
+}
+
+function resolveCompiledGroundChunkRadiusChunks(
+  groundDefinition: { renderRadiusChunks?: number; collisionRadiusChunks?: number },
+): number {
+  const renderRadiusChunks = Number(groundDefinition.renderRadiusChunks)
+  if (Number.isFinite(renderRadiusChunks) && renderRadiusChunks > 0) {
+    return Math.max(1, Math.trunc(renderRadiusChunks))
+  }
+  const collisionRadiusChunks = Number(groundDefinition.collisionRadiusChunks)
+  if (Number.isFinite(collisionRadiusChunks) && collisionRadiusChunks > 0) {
+    return Math.max(1, Math.trunc(collisionRadiusChunks))
+  }
+  return 1
+}
+
+function resolveDefaultCompiledGroundActiveRadiusTiles(
+  groundDefinition: { chunkSizeMeters?: number; renderRadiusChunks?: number; collisionRadiusChunks?: number },
+  manifest: CompiledGroundManifest,
+): number {
+  const chunkSizeMeters = resolveCompiledGroundChunkSizeMeters(groundDefinition, manifest)
+  const chunkRadiusChunks = resolveCompiledGroundChunkRadiusChunks(groundDefinition)
+  const tileSizeMeters = Math.max(1e-6, Number(manifest.renderTileSizeMeters) || 1)
+  return Math.max(1, Math.ceil((chunkRadiusChunks * chunkSizeMeters) / tileSizeMeters))
+}
+
+function resolveDefaultCompiledGroundRetainRadiusTiles(
+  activeRadiusTiles: number,
+  groundDefinition: { chunkSizeMeters?: number; renderRadiusChunks?: number; collisionRadiusChunks?: number },
+  manifest: CompiledGroundManifest,
+): number {
+  const chunkSizeMeters = resolveCompiledGroundChunkSizeMeters(groundDefinition, manifest)
+  const tileSizeMeters = Math.max(1e-6, Number(manifest.renderTileSizeMeters) || 1)
+  const retainPaddingTiles = Math.max(1, Math.ceil(chunkSizeMeters / tileSizeMeters))
+  return Math.max(activeRadiusTiles, activeRadiusTiles + retainPaddingTiles)
+}
+
+function buildCompiledGroundFallbackLocalBounds(
+  manifest: CompiledGroundManifest,
+  centerRow: number,
+  centerColumn: number,
+  radiusTiles: number,
+): { minX: number; maxX: number; minZ: number; maxZ: number } {
+  const tileSize = Math.max(1e-6, Number(manifest.renderTileSizeMeters) || 1)
+  return {
+    minX: manifest.bounds.minX + (centerColumn - radiusTiles) * tileSize,
+    maxX: manifest.bounds.minX + (centerColumn + radiusTiles + 1) * tileSize,
+    minZ: manifest.bounds.minZ + (centerRow - radiusTiles) * tileSize,
+    maxZ: manifest.bounds.minZ + (centerRow + radiusTiles + 1) * tileSize,
+  }
+}
+
+function expandCompiledGroundLocalBounds(
+  bounds: { minX: number; maxX: number; minZ: number; maxZ: number },
+  paddingMeters: number,
+): { minX: number; maxX: number; minZ: number; maxZ: number } {
+  const safePadding = Math.max(0, paddingMeters)
+  return {
+    minX: bounds.minX - safePadding,
+    maxX: bounds.maxX + safePadding,
+    minZ: bounds.minZ - safePadding,
+    maxZ: bounds.maxZ + safePadding,
+  }
+}
+
+function resolveCompiledGroundVisibleLocalBounds(
+  groundObject: THREE.Object3D,
+  manifest: CompiledGroundManifest,
+  camera: THREE.Camera,
+  fallbackRadiusTiles: number,
+): {
+  visibleBounds: { minX: number; maxX: number; minZ: number; maxZ: number }
+  fallbackBounds: { minX: number; maxX: number; minZ: number; maxZ: number }
+  centerRow: number
+  centerColumn: number
+  intersectionCount: number
+} {
+  groundObject.updateMatrixWorld(true)
+  camera.updateMatrixWorld(true)
+  if ((camera as THREE.PerspectiveCamera).isPerspectiveCamera || (camera as THREE.OrthographicCamera).isOrthographicCamera) {
+    ;(camera as THREE.PerspectiveCamera | THREE.OrthographicCamera).updateProjectionMatrix()
+  }
+
+  camera.getWorldPosition(cameraLocalHelper)
+  groundObject.worldToLocal(cameraLocalHelper)
+  const tileSize = Math.max(1e-6, Number(manifest.renderTileSizeMeters) || 1)
+  const centerColumn = Math.floor((cameraLocalHelper.x - manifest.bounds.minX) / tileSize)
+  const centerRow = Math.floor((cameraLocalHelper.z - manifest.bounds.minZ) / tileSize)
+  const fallbackBounds = buildCompiledGroundFallbackLocalBounds(manifest, centerRow, centerColumn, fallbackRadiusTiles)
+
+  compiledGroundVisiblePlanePoint.set(0, Number.isFinite(manifest.baseHeight) ? Number(manifest.baseHeight) : 0, 0)
+  groundObject.localToWorld(compiledGroundVisiblePlanePoint)
+  compiledGroundVisiblePlaneNormal.set(0, 1, 0)
+  groundObject.getWorldQuaternion(compiledGroundCameraQuaternion)
+  compiledGroundVisiblePlaneNormal.applyQuaternion(compiledGroundCameraQuaternion).normalize()
+  compiledGroundVisiblePlane.setFromNormalAndCoplanarPoint(
+    compiledGroundVisiblePlaneNormal,
+    compiledGroundVisiblePlanePoint,
+  )
+
+  let minX = Number.POSITIVE_INFINITY
+  let maxX = Number.NEGATIVE_INFINITY
+  let minZ = Number.POSITIVE_INFINITY
+  let maxZ = Number.NEGATIVE_INFINITY
+  let intersectionCount = 0
+
+  for (const [ndcX, ndcY] of compiledGroundViewportSamplePoints) {
+    if ((camera as THREE.OrthographicCamera).isOrthographicCamera) {
+      compiledGroundVisibleRayOrigin.set(ndcX, ndcY, -1).unproject(camera)
+      camera.getWorldDirection(compiledGroundVisibleRayDirection)
+    } else {
+      camera.getWorldPosition(compiledGroundVisibleRayOrigin)
+      compiledGroundVisibleSampleWorld.set(ndcX, ndcY, 0.5).unproject(camera)
+      compiledGroundVisibleRayDirection
+        .copy(compiledGroundVisibleSampleWorld)
+        .sub(compiledGroundVisibleRayOrigin)
+        .normalize()
+    }
+    if (compiledGroundVisibleRayDirection.lengthSq() <= 1e-12) {
+      continue
+    }
+    compiledGroundVisibleRay.set(compiledGroundVisibleRayOrigin, compiledGroundVisibleRayDirection)
+    if (!compiledGroundVisibleRay.intersectPlane(compiledGroundVisiblePlane, compiledGroundVisibleSampleWorld)) {
+      continue
+    }
+    compiledGroundVisibleSampleLocal.copy(compiledGroundVisibleSampleWorld)
+    groundObject.worldToLocal(compiledGroundVisibleSampleLocal)
+    minX = Math.min(minX, compiledGroundVisibleSampleLocal.x)
+    maxX = Math.max(maxX, compiledGroundVisibleSampleLocal.x)
+    minZ = Math.min(minZ, compiledGroundVisibleSampleLocal.z)
+    maxZ = Math.max(maxZ, compiledGroundVisibleSampleLocal.z)
+    intersectionCount += 1
+  }
+
+  if (intersectionCount <= 0) {
+    return {
+      visibleBounds: fallbackBounds,
+      fallbackBounds,
+      centerRow,
+      centerColumn,
+      intersectionCount: 0,
+    }
+  }
+
+  return {
+    visibleBounds: {
+      minX: Math.min(fallbackBounds.minX, minX),
+      maxX: Math.max(fallbackBounds.maxX, maxX),
+      minZ: Math.min(fallbackBounds.minZ, minZ),
+      maxZ: Math.max(fallbackBounds.maxZ, maxZ),
+    },
+    fallbackBounds,
+    centerRow,
+    centerColumn,
+    intersectionCount,
+  }
+}
+
+function doesCompiledGroundTileIntersectBounds(
+  record: CompiledGroundRenderTileRecord,
+  bounds: { minX: number; maxX: number; minZ: number; maxZ: number },
+): boolean {
+  const recordMinX = Number.isFinite(record.bounds?.minX) ? Number(record.bounds.minX) : record.centerX - record.widthMeters * 0.5
+  const recordMaxX = Number.isFinite(record.bounds?.maxX) ? Number(record.bounds.maxX) : record.centerX + record.widthMeters * 0.5
+  const recordMinZ = Number.isFinite(record.bounds?.minZ) ? Number(record.bounds.minZ) : record.centerZ - record.depthMeters * 0.5
+  const recordMaxZ = Number.isFinite(record.bounds?.maxZ) ? Number(record.bounds.maxZ) : record.centerZ + record.depthMeters * 0.5
+  return recordMaxX >= bounds.minX
+    && recordMinX <= bounds.maxX
+    && recordMaxZ >= bounds.minZ
+    && recordMinZ <= bounds.maxZ
+}
 
 function ensureCompiledGroundRenderRuntime(groundObject: THREE.Object3D): CompiledGroundRenderRuntime {
   const existing = renderRuntimeMap.get(groundObject)
@@ -121,21 +325,31 @@ function resolveTileWindowRecords(
 ): {
   desired: CompiledGroundRenderTileRecord[]
   retainedKeys: Set<string>
+  visibleBounds: { minX: number; maxX: number; minZ: number; maxZ: number }
+  desiredBounds: { minX: number; maxX: number; minZ: number; maxZ: number }
+  retainedBounds: { minX: number; maxX: number; minZ: number; maxZ: number }
+  centerRow: number
+  centerColumn: number
+  intersectionCount: number
 } {
-  camera.getWorldPosition(cameraLocalHelper)
-  groundObject.worldToLocal(cameraLocalHelper)
   const tileSize = Math.max(1e-6, manifest.renderTileSizeMeters)
-  const centerColumn = Math.floor((cameraLocalHelper.x - manifest.bounds.minX) / tileSize)
-  const centerRow = Math.floor((cameraLocalHelper.z - manifest.bounds.minZ) / tileSize)
+  const visibleLocal = resolveCompiledGroundVisibleLocalBounds(
+    groundObject,
+    manifest,
+    camera,
+    activeRadiusTiles,
+  )
+  const desiredBounds = expandCompiledGroundLocalBounds(visibleLocal.visibleBounds, activeRadiusTiles * tileSize)
+  const retainedBounds = expandCompiledGroundLocalBounds(visibleLocal.visibleBounds, retainRadiusTiles * tileSize)
   const desired: Array<{ record: CompiledGroundRenderTileRecord; distSq: number }> = []
   const retainedKeys = new Set<string>()
+  camera.getWorldPosition(cameraLocalHelper)
+  groundObject.worldToLocal(cameraLocalHelper)
   for (const record of manifest.renderTiles) {
-    const dr = record.row - centerRow
-    const dc = record.column - centerColumn
-    if (Math.abs(dr) <= retainRadiusTiles && Math.abs(dc) <= retainRadiusTiles) {
+    if (doesCompiledGroundTileIntersectBounds(record, retainedBounds)) {
       retainedKeys.add(record.key)
     }
-    if (Math.abs(dr) > activeRadiusTiles || Math.abs(dc) > activeRadiusTiles) {
+    if (!doesCompiledGroundTileIntersectBounds(record, desiredBounds)) {
       continue
     }
     const dx = record.centerX - cameraLocalHelper.x
@@ -146,6 +360,12 @@ function resolveTileWindowRecords(
   return {
     desired: desired.map((entry) => entry.record),
     retainedKeys,
+    visibleBounds: visibleLocal.visibleBounds,
+    desiredBounds,
+    retainedBounds,
+    centerRow: visibleLocal.centerRow,
+    centerColumn: visibleLocal.centerColumn,
+    intersectionCount: visibleLocal.intersectionCount,
   }
 }
 
@@ -159,8 +379,18 @@ export function syncCompiledGroundRenderTiles(params: SyncCompiledGroundRenderTi
     runtime.sourceId = params.sourceId
     runtime.revision = params.revision
   }
-  const activeRadiusTiles = Math.max(1, Math.trunc(params.activeRadiusTiles ?? 2))
-  const retainRadiusTiles = Math.max(activeRadiusTiles, Math.trunc(params.retainRadiusTiles ?? (activeRadiusTiles + 1)))
+  const activeRadiusTiles = Math.max(
+    1,
+    Math.trunc(params.activeRadiusTiles ?? resolveDefaultCompiledGroundActiveRadiusTiles(params.groundDefinition, params.manifest)),
+  )
+  const retainRadiusTiles = Math.max(
+    activeRadiusTiles,
+    Math.trunc(params.retainRadiusTiles ?? resolveDefaultCompiledGroundRetainRadiusTiles(
+      activeRadiusTiles,
+      params.groundDefinition,
+      params.manifest,
+    )),
+  )
   const { desired, retainedKeys } = resolveTileWindowRecords(
     params.groundObject,
     params.manifest,
@@ -171,16 +401,20 @@ export function syncCompiledGroundRenderTiles(params: SyncCompiledGroundRenderTi
   const desiredKeys = new Set(desired.map((record) => record.key))
   params.camera.getWorldPosition(cameraLocalHelper)
   params.groundObject.worldToLocal(cameraLocalHelper)
-  runtime.lastDebugSignature = [
+  const nextDebugSignature = [
     params.sourceId,
     params.revision,
     desired.length,
     runtime.meshes.size,
     runtime.pendingLoads.size,
+    activeRadiusTiles,
+    retainRadiusTiles,
     Math.round(cameraLocalHelper.x),
     Math.round(cameraLocalHelper.z),
   ].join('|')
-  runtime.lastDebugLogAt = Date.now()
+  const now = Date.now()
+  runtime.lastDebugLogAt = now
+  runtime.lastDebugSignature = nextDebugSignature
 
   runtime.meshes.forEach((mesh, key) => {
     if (desiredKeys.has(key) || retainedKeys.has(key)) {

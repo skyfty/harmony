@@ -141,7 +141,6 @@ export interface PlanningDemHeightRegionBuildPlan {
 const MAX_EAGER_DEM_LOCAL_EDIT_TILE_COUNT = 4096
 const MAX_EAGER_DEM_LOCAL_EDIT_SAMPLE_COUNT = 500_000
 
-
 function summarizePlanningDemFiniteValues(values: ArrayLike<number>): {
   finiteCount: number
   min: number | null
@@ -199,26 +198,6 @@ function summarizePlanningDemLocalEditTileValues(localEditTiles: GroundLocalEdit
     finiteCount,
     min: finiteCount > 0 ? min : null,
     max: finiteCount > 0 ? max : null,
-  }
-}
-
-function summarizePlanningDemLocalEditTile(plan: PlanningDemLocalEditTileBuildPlan, tileRow: number, tileColumn: number): Record<string, unknown> {
-  const key = formatGroundLocalEditTileKey(tileRow, tileColumn)
-  const tileMinX = plan.originX + tileColumn * plan.tileSizeMeters
-  const tileMinZ = plan.originZ + tileRow * plan.tileSizeMeters
-  return {
-    key,
-    tileRow,
-    tileColumn,
-    tileSizeMeters: plan.tileSizeMeters,
-    resolution: plan.resolution,
-    vertexCountPerAxis: plan.resolution + 1,
-    cellCountPerAxis: plan.resolution,
-    sampleStepMeters: plan.tileSizeMeters / plan.resolution,
-    tileMinX,
-    tileMinZ,
-    tileMaxX: tileMinX + plan.tileSizeMeters,
-    tileMaxZ: tileMinZ + plan.tileSizeMeters,
   }
 }
 
@@ -1101,18 +1080,19 @@ export async function buildPlanningDemRegionFromPreparedSource(options: {
     onProgress: (payload) => reportProgress(payload),
     preferWorker: options.preferWorker,
   })
+  const localEditTiles = await buildPlanningDemLocalEditTilesForRegionAsync({
+    definition: options.definition,
+    source: options.prepared.rasterSource,
+    startRow: region.startRow,
+    endRow: region.endRow,
+    startColumn: region.startColumn,
+    endColumn: region.endColumn,
+    onProgress: (payload) => reportProgress(payload),
+    preferWorker: options.preferWorker,
+  })
   return {
     region,
-    localEditTiles: await buildPlanningDemLocalEditTilesForRegionAsync({
-      definition: options.definition,
-      source: options.prepared.rasterSource,
-      startRow: region.startRow,
-      endRow: region.endRow,
-      startColumn: region.startColumn,
-      endColumn: region.endColumn,
-      onProgress: (payload) => reportProgress(payload),
-      preferWorker: options.preferWorker,
-    }),
+    localEditTiles,
     planningMetadata: options.prepared.planningMetadata,
     textureDataUrl: options.textureDataUrl ?? null,
     textureName: options.textureName ?? null,
