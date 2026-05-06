@@ -4104,6 +4104,9 @@ function scheduleGroundFlatChunkBatchInstanceBuild(
     })
     .finally(() => {
       const activeState = groundRuntimeStateMap.get(root)
+      if (!activeState) {
+        return
+      }
       const activeBatch = activeState?.flatChunkBatches.get(batch.specKey)
       if (!activeBatch || activeBatch !== batch) {
         return

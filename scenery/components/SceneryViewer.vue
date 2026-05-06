@@ -5123,8 +5123,14 @@ function syncViewerCompiledGroundRender(
       return bytes ? getArrayBufferView(bytes) : null;
     },
     streamingMode: 'runtime-camera',
+    tileFrustumCulled: shouldEnableCompiledGroundTileFrustumCulling(),
   });
   setInfiniteGroundHiddenChunkKeys(groundObject, collectCompiledGroundCoveredChunkKeys(compiledManifest));
+}
+
+function shouldEnableCompiledGroundTileFrustumCulling(): boolean {
+  return (purposeActiveMode.value === 'level' && !vehicleDriveActive.value)
+    || (vehicleDriveActive.value && vehicleDriveCameraMode.value === 'first-person');
 }
 
 function resolveGroundViewportWorldSize(): { width: number; depth: number } | null {
@@ -8324,6 +8330,11 @@ type ProtagonistPoseOptions = {
   object?: THREE.Object3D | null;
 };
 
+function resolveProtagonistCameraY(worldY: number): number {
+  // Keep the authored protagonist elevation, then lift the camera to eye height.
+  return worldY + HUMAN_EYE_HEIGHT;
+}
+
 function syncProtagonistCameraPose(options: ProtagonistPoseOptions = {}): boolean {
   if (!options.force && protagonistPoseSynced) {
     return false;
@@ -8341,7 +8352,7 @@ function syncProtagonistCameraPose(options: ProtagonistPoseOptions = {}): boolea
   } else {
     protagonistPoseDirection.normalize();
   }
-  protagonistPosePosition.y = HUMAN_EYE_HEIGHT;
+  protagonistPosePosition.y = resolveProtagonistCameraY(protagonistPosePosition.y);
   protagonistPoseTarget.copy(protagonistPosePosition).addScaledVector(protagonistPoseDirection, CAMERA_FORWARD_OFFSET);
   protagonistPoseSynced = true;
   if (options.applyToCamera) {

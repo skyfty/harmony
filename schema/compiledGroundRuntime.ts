@@ -36,6 +36,7 @@ type SyncCompiledGroundRenderTilesParams = {
   activeRadiusTiles?: number
   retainRadiusTiles?: number
   streamingMode?: 'runtime-camera' | 'editor-overview'
+  tileFrustumCulled?: boolean
 }
 
 const renderRuntimeMap = new WeakMap<THREE.Object3D, CompiledGroundRenderRuntime>()
@@ -544,6 +545,7 @@ export function syncCompiledGroundRenderTiles(params: SyncCompiledGroundRenderTi
     runtime.revision = params.revision
   }
   const streamingMode = params.streamingMode === 'editor-overview' ? 'editor-overview' : 'runtime-camera'
+  const tileFrustumCulled = params.tileFrustumCulled === true
   const activeRadiusTiles = Math.max(
     1,
     Math.trunc(params.activeRadiusTiles ?? resolveDefaultCompiledGroundActiveRadiusTiles(params.groundDefinition, params.manifest)),
@@ -583,6 +585,9 @@ export function syncCompiledGroundRenderTiles(params: SyncCompiledGroundRenderTi
   runtime.lastDebugSignature = nextDebugSignature
 
   runtime.meshes.forEach((mesh, key) => {
+    if (mesh.frustumCulled !== tileFrustumCulled) {
+      mesh.frustumCulled = tileFrustumCulled
+    }
     if (desiredKeys.has(key) || retainedKeys.has(key)) {
       return
     }
@@ -624,9 +629,9 @@ export function syncCompiledGroundRenderTiles(params: SyncCompiledGroundRenderTi
         mesh.name = `CompiledGroundTile:${record.key}`
         mesh.receiveShadow = true
         mesh.castShadow = params.groundDefinition.castShadow === true
-        // Tile streaming is already controlled explicitly from the screen-visible ground footprint.
-        // Leaving per-mesh frustum culling enabled can drop far tiles early and create visible gaps.
-        mesh.frustumCulled = false
+        // Tile streaming is controlled explicitly from the screen-visible ground footprint first.
+        // Some camera modes still want mesh-level frustum culling on top, so keep this caller-configurable.
+        mesh.frustumCulled = tileFrustumCulled
         mesh.userData.compiledGroundTile = true
         mesh.userData.compiledGroundTileKey = record.key
         activeRuntime.group.add(mesh)

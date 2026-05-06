@@ -107,11 +107,14 @@ import {
 } from '@schema/groundMesh'
 import {
 	clearCompiledGroundRenderTiles,
-	collectCompiledGroundCoveredChunkKeys,
 	computeCompiledGroundManifestRevision,
 	createCompiledGroundCollisionRuntime,
 	syncCompiledGroundRenderTiles,
 } from '@schema'
+
+import {
+  collectLoadedCompiledGroundChunkKeys,
+} from '@schema/compiledGroundRuntime'
 import {
 	createSceneCsmShadowRuntime,
 	DEFAULT_SCENE_CSM_CONFIG,
@@ -1458,11 +1461,18 @@ const tempOutlineSphere = new THREE.Sphere()
 const tempOutlineScale = new THREE.Vector3()
 
 const CAMERA_HEIGHT = 1.7
+const CAMERA_FORWARD_OFFSET = 1.5
 const DEFAULT_SCENE_CAMERA_FAR = 2000
 const FIRST_PERSON_ROTATION_SPEED = 25
 const FIRST_PERSON_MOVE_SPEED = 5
 const FIRST_PERSON_LOOK_SPEED = 0.06
 const FIRST_PERSON_PITCH_LIMIT = THREE.MathUtils.degToRad(75)
+const MAP_VIEW_MIN_POLAR_ANGLE = THREE.MathUtils.degToRad(10)
+const MAP_VIEW_MAX_POLAR_ANGLE = THREE.MathUtils.degToRad(88)
+const MAP_VIEW_ROTATE_SPEED = 0.6
+const MAP_VIEW_ZOOM_SPEED = 0.6
+const MAP_VIEW_PAN_SPEED = 1
+const MAP_VIEW_KEY_PAN_SPEED = 7.5
 const tempDirection = new THREE.Vector3()
 const tempTarget = new THREE.Vector3()
 const tempQuaternion = new THREE.Quaternion()
@@ -5052,6 +5062,56 @@ function updateCanvasCursor() {
 	canvas.style.cursor = 'default'
 }
 
+function resolvePreviewMapRadiusHint(distance: number): number {
+	const groundSize = resolveGroundViewportWorldSize()
+	if (groundSize) {
+		return Math.max(1, Math.hypot(groundSize.width, groundSize.depth) * 0.25)
+	}
+	return Math.max(1, distance)
+}
+
+function syncPreviewMapCameraClipPlanes(activeCamera: THREE.PerspectiveCamera, target: THREE.Vector3, radiusHint: number): void {
+	const distance = activeCamera.position.distanceTo(target)
+	const radiusUsed = Math.max(1e-3, radiusHint)
+	const near = Math.max(0.005, Math.min(radiusUsed * 0.5, distance / 50))
+	const far = Math.max(activeCamera.far, 200, distance + radiusUsed * 50, radiusUsed * 2000)
+	if (Math.abs(activeCamera.near - near) <= 1e-6 && Math.abs(activeCamera.far - far) <= 1e-6) {
+		return
+	}
+	activeCamera.near = near
+	activeCamera.far = far
+	activeCamera.updateProjectionMatrix()
+	sceneCsmShadowRuntime?.updateFrustums()
+	scenePreviewPerf.markInstancedCullingDirty()
+}
+
+function syncPreviewMapControls(activeCamera: THREE.PerspectiveCamera): void {
+	if (!mapControls || controlMode.value !== 'third-person' || vehicleDriveState.active) {
+		return
+	}
+	const target = mapControls.target
+	const distance = Math.max(1e-3, activeCamera.position.distanceTo(target))
+	const radiusUsed = resolvePreviewMapRadiusHint(distance)
+	const minDistanceBase = THREE.MathUtils.clamp(radiusUsed * 0.2, 0.2, 50)
+	const maxDistanceBase = THREE.MathUtils.clamp(Math.max(radiusUsed * 2000, 5000), 200, 200000)
+
+	mapControls.minPolarAngle = MAP_VIEW_MIN_POLAR_ANGLE
+	mapControls.maxPolarAngle = MAP_VIEW_MAX_POLAR_ANGLE
+	mapControls.minDistance = Math.max(0.02, Math.min(minDistanceBase, distance * 0.5))
+	mapControls.maxDistance = Math.max(maxDistanceBase, distance * 1.05)
+	mapControls.rotateSpeed = MAP_VIEW_ROTATE_SPEED
+	mapControls.zoomSpeed = MAP_VIEW_ZOOM_SPEED
+	mapControls.panSpeed = MAP_VIEW_PAN_SPEED
+	mapControls.keyPanSpeed = MAP_VIEW_KEY_PAN_SPEED
+	mapControls.enablePan = MAP_CONTROL_DEFAULTS.enablePan
+	syncPreviewMapCameraClipPlanes(activeCamera, target, radiusUsed)
+}
+
+function shouldEnableCompiledGroundTileFrustumCulling(): boolean {
+	return controlMode.value === 'first-person'
+		|| (vehicleDriveState.active && vehicleDriveCameraMode.value === 'first-person')
+}
+
 function applyMapControlFollowSettings(active: boolean) {
 	if (!mapControls) {
 		return
@@ -5060,6 +5120,10 @@ function applyMapControlFollowSettings(active: boolean) {
 		mapControls.enablePan = false
 		mapControls.minDistance = VEHICLE_FOLLOW_DISTANCE_MIN
 		mapControls.maxDistance = VEHICLE_FOLLOW_DISTANCE_MAX
+		return
+	}
+	if (camera) {
+		syncPreviewMapControls(camera)
 		return
 	}
 	mapControls.enablePan = MAP_CONTROL_DEFAULTS.enablePan
@@ -6512,6 +6576,11 @@ type ProtagonistPoseOptions = {
 	object?: THREE.Object3D | null
 }
 
+function resolveProtagonistCameraY(worldY: number): number {
+	// Keep the authored protagonist elevation, then lift the camera to eye height.
+	return worldY + CAMERA_HEIGHT
+}
+
 function syncProtagonistCameraPose(options: ProtagonistPoseOptions = {}): boolean {
 	if (!options.force && protagonistPoseSynced) {
 		return false
@@ -6530,29 +6599,19 @@ function syncProtagonistCameraPose(options: ProtagonistPoseOptions = {}): boolea
 	} else {
 		protagonistPoseDirection.normalize()
 	}
-	protagonistPosePosition.y = CAMERA_HEIGHT
+	protagonistPosePosition.y = resolveProtagonistCameraY(protagonistPosePosition.y)
 	lastFirstPersonState.position.copy(protagonistPosePosition)
 	lastFirstPersonState.direction.copy(protagonistPoseDirection)
 	protagonistPoseSynced = true
 	if (options.applyToCamera && !vehicleDriveState.active && camera) {
 		if (controlMode.value === 'first-person' && firstPersonControls) {
 			camera.position.copy(lastFirstPersonState.position)
-			camera.position.y = CAMERA_HEIGHT
-			protagonistPoseTarget.copy(camera.position).add(lastFirstPersonState.direction)
+			protagonistPoseTarget.copy(camera.position).addScaledVector(lastFirstPersonState.direction, CAMERA_FORWARD_OFFSET)
 			firstPersonControls.lookAt(protagonistPoseTarget.x, protagonistPoseTarget.y, protagonistPoseTarget.z)
 			clampFirstPersonPitch(true)
 			syncFirstPersonOrientation()
 			resetFirstPersonPointerDelta()
 			syncLastFirstPersonStateFromCamera()
-		} else if (mapControls) {
-			// Align orbit/map controls to protagonist pose: position the camera at the protagonist
-			// and set the controls' target to look in the protagonist's forward direction.
-			camera.position.copy(protagonistPosePosition)
-			camera.position.y = CAMERA_HEIGHT
-			protagonistPoseTarget.copy(protagonistPosePosition).addScaledVector(protagonistPoseDirection, VEHICLE_CAMERA_DEFAULT_LOOK_DISTANCE)
-			camera.lookAt(protagonistPoseTarget)
-			mapControls.target.copy(protagonistPoseTarget)
-			mapControls.update()
 		}
 	}
 	return true
@@ -6979,7 +7038,7 @@ function performWatchFocus(targetNodeId: string | null, caging = false): { succe
 	const isFirstPerson = controlMode.value === 'first-person' && Boolean(firstPersonControls)
 	if (isFirstPerson && firstPersonControls) {
 		activeCamera.getWorldDirection(tempDirection)
-		const startTarget = activeCamera.position.clone().add(tempDirection)
+		const startTarget = activeCamera.position.clone().addScaledVector(tempDirection, CAMERA_FORWARD_OFFSET)
 		if (startTarget.distanceToSquared(focusPoint) < 1e-6) {
 			firstPersonControls.lookAt(focusPoint.x, focusPoint.y, focusPoint.z)
 			clampFirstPersonPitch(true)
@@ -8253,7 +8312,7 @@ function updateCharacterControlForFrame(delta: number): boolean {
 		}
 	}
 	playCharacterControlAnimation(nodeId, props, movementMagnitude, actionState)
-	syncProtagonistCameraPose({ force: true, object, applyToCamera: true })
+	syncProtagonistCameraPose({ force: true, object, applyToCamera: controlMode.value === 'first-person' })
 	return true
 }
 
@@ -8897,7 +8956,7 @@ function clampFirstPersonPitch(force = false) {
 		Math.sin(clampedPitch),
 		-Math.cos(yaw) * cosPitch,
 	)
-	tempTarget.copy(camera.position).add(tempDirection)
+	tempTarget.copy(camera.position).addScaledVector(tempDirection, CAMERA_FORWARD_OFFSET)
 	camera.lookAt(tempTarget)
 	syncFirstPersonOrientation()
 	syncLastFirstPersonStateFromCamera()
@@ -8917,10 +8976,10 @@ function resetCameraToLevelView() {
 	if (controlMode.value === 'first-person' && firstPersonControls) {
 		tempDirection.set(0, 0, 0)
 		camera.getWorldDirection(tempDirection)
-		const startTarget = camera.position.clone().add(tempDirection)
+		const startTarget = camera.position.clone().addScaledVector(tempDirection, CAMERA_FORWARD_OFFSET)
 		const yaw = Math.atan2(tempDirection.x, -tempDirection.z)
 		tempDirection.set(Math.sin(yaw), 0, -Math.cos(yaw))
-		const levelTarget = camera.position.clone().add(tempDirection)
+		const levelTarget = camera.position.clone().addScaledVector(tempDirection, CAMERA_FORWARD_OFFSET)
 		if (startTarget.distanceToSquared(levelTarget) < 1e-6) {
 			firstPersonControls.lookAt(levelTarget.x, levelTarget.y, levelTarget.z)
 			clampFirstPersonPitch(true)
@@ -8959,7 +9018,7 @@ function resetCameraToLevelView() {
 		tempDirection.set(0, 0, 0)
 		const yaw = Math.atan2(tempDirection.x, -tempDirection.z)
 		tempDirection.set(Math.sin(yaw), 0, -Math.cos(yaw))
-		tempTarget.copy(camera.position).add(tempDirection)
+		tempTarget.copy(camera.position).addScaledVector(tempDirection, CAMERA_FORWARD_OFFSET)
 		camera.lookAt(tempTarget)
 	}
 	setCameraViewState('level')
@@ -9038,7 +9097,7 @@ function applyControlMode(mode: ControlMode) {
 	}
 	if (mode === 'first-person') {
 		activeCamera.position.copy(lastFirstPersonState.position)
-		const target = new THREE.Vector3().copy(lastFirstPersonState.position).add(lastFirstPersonState.direction)
+		const target = new THREE.Vector3().copy(lastFirstPersonState.position).addScaledVector(lastFirstPersonState.direction, CAMERA_FORWARD_OFFSET)
 		activeCamera.lookAt(target)
 		clampFirstPersonPitch(true)
 		syncFirstPersonOrientation()
@@ -9048,6 +9107,7 @@ function applyControlMode(mode: ControlMode) {
 		activeCamera.position.copy(lastOrbitState.position)
 		mapControls?.target.copy(lastOrbitState.target)
 		mapControls?.update()
+		syncPreviewMapControls(activeCamera)
 	}
 	updateCameraControlActivation()
 	scenePreviewPerf.markInstancedCullingDirty()
@@ -9225,8 +9285,8 @@ function initControls() {
 	mapControls = new MapControls(camera, renderer.domElement)
 	mapControls.enableDamping = false
 	mapControls.dampingFactor = 0.08
-	mapControls.minPolarAngle = 0
-	mapControls.maxPolarAngle = Math.PI
+	mapControls.minPolarAngle = MAP_VIEW_MIN_POLAR_ANGLE
+	mapControls.maxPolarAngle = MAP_VIEW_MAX_POLAR_ANGLE
 	mapControls.minDistance = MAP_CONTROL_DEFAULTS.minDistance
 	mapControls.maxDistance = MAP_CONTROL_DEFAULTS.maxDistance
 	mapControls.enablePan = MAP_CONTROL_DEFAULTS.enablePan
@@ -9369,6 +9429,7 @@ function updateCameraControlsForFrame(
 	if (mapControls && !followCameraActive) {
 		updateOrbitCameraLookTween(delta)
 		mapControls.update()
+		syncPreviewMapControls(activeCamera)
 		lastOrbitState.position.copy(activeCamera.position)
 		lastOrbitState.target.copy(mapControls.target)
 	}
@@ -9576,10 +9637,6 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
 		if (groundObject) {
 			updateGroundMesh(groundObject, cachedGroundDynamicMesh)
 			const compiledManifest = ((groundObject.userData as Record<string, unknown> | undefined)?.compiledGroundManifest ?? null) as CompiledGroundManifest | null
-			setInfiniteGroundHiddenChunkKeys(
-				groundObject,
-				compiledManifest ? collectCompiledGroundCoveredChunkKeys(compiledManifest) : [],
-			)
 			syncGroundChunkLoadingMode(groundObject, cachedGroundDynamicMesh as GroundRuntimeDynamicMesh, activeCamera)
 			if (compiledManifest && cachedCompiledGroundSceneId && cachedCompiledGroundSceneId === currentDocument?.id) {
 				const revision = Number.isFinite(compiledManifest.revision)
@@ -9604,8 +9661,14 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
 					manifest: compiledManifest,
 					loadTileData: async (record) => cachedCompiledGroundFiles.get(record.path) ?? null,
 					streamingMode: 'runtime-camera',
+					tileFrustumCulled: shouldEnableCompiledGroundTileFrustumCulling(),
 				})
+				setInfiniteGroundHiddenChunkKeys(
+					groundObject,
+					collectLoadedCompiledGroundChunkKeys(groundObject, compiledManifest),
+				)
 			} else {
+				setInfiniteGroundHiddenChunkKeys(groundObject, [])
 				clearCompiledGroundRenderTiles(groundObject)
 			}
 			syncPreviewInfiniteGroundChunkCollisionBodies(
@@ -10560,7 +10623,7 @@ function registerSubtree(object: THREE.Object3D, pending?: Map<string, THREE.Obj
 				syncInstancedTransform(child)
 			}
 				if (child.userData?.protagonist) {
-					const protagonistCameraActive = !vehicleDriveState.active && (controlMode.value === 'first-person' || cameraViewState.mode === 'level')
+					const protagonistCameraActive = !vehicleDriveState.active && controlMode.value === 'first-person'
 					syncProtagonistCameraPose({
 						object: child,
 						applyToCamera: protagonistCameraActive,
@@ -13190,7 +13253,7 @@ async function applyInitialDocumentGraph(
 	refreshAnimations()
 	initializeLazyPlaceholders(document)
 	syncPhysicsBodiesForDocument(document)
-	const protagonistCameraActive = !vehicleDriveState.active && (controlMode.value === 'first-person' || controlMode.value === 'third-person')
+	const protagonistCameraActive = !vehicleDriveState.active && controlMode.value === 'first-person'
 	syncProtagonistCameraPose({ force: true, applyToCamera: protagonistCameraActive })
 	if (isRigidbodyDebugVisible.value) {
 		syncRigidbodyDebugHelpers()
@@ -13223,7 +13286,7 @@ async function applyIncrementalDocumentGraph(
 	})
 	syncPhysicsBodiesForDocument(document)
 	await syncTerrainScatterInstances(document, resourceCache)
-	const protagonistCameraActive = !vehicleDriveState.active && (controlMode.value === 'first-person' || controlMode.value === 'third-person')
+	const protagonistCameraActive = !vehicleDriveState.active && controlMode.value === 'first-person'
 	syncProtagonistCameraPose({ force: true, applyToCamera: protagonistCameraActive })
 	if (isRigidbodyDebugVisible.value) {
 		syncRigidbodyDebugHelpers()
