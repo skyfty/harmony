@@ -6531,11 +6531,14 @@ export function setInfiniteGroundHiddenChunkKeys(
     if (nextKeys.length === batch.chunkKeys.length && nextPendingKeys.length === batch.pendingChunkKeys.size) {
       return
     }
-    batch.chunkKeys = nextKeys
+    const nextKeySet = new Set<string>(nextKeys)
+    const nextPendingKeySet = new Set<string>(nextPendingKeys)
+    const removedLoadedKeys = batch.chunkKeys.filter((key) => !nextKeySet.has(key))
+    const removedPendingKeys = Array.from(batch.pendingChunkKeys).filter((key) => !nextPendingKeySet.has(key))
     batch.pendingChunkKeys = new Set<string>(nextPendingKeys)
-    batch.mesh.count = nextKeys.length
-    batch.mesh.instanceMatrix.needsUpdate = true
-    batch.mesh.visible = nextKeys.length > 0
+    if (nextKeys.length !== batch.chunkKeys.length) {
+      compactGroundFlatChunkBatchInstances(batch, nextKeys)
+    }
     if (!nextKeys.length && nextPendingKeys.length === 0) {
       batch.mesh.removeFromParent()
       try {
@@ -6544,12 +6547,13 @@ export function setInfiniteGroundHiddenChunkKeys(
         /* noop */
       }
       state.flatChunkBatches.delete(specKey)
-    } else {
-      batch.mesh.userData.groundChunkBatch = {
-        specKey,
-        chunkKeys: [...nextKeys],
-      }
     }
+    removedLoadedKeys.forEach((key) => {
+      batch.instanceHeightCache.delete(key)
+    })
+    removedPendingKeys.forEach((key) => {
+      batch.instanceHeightCache.delete(key)
+    })
     markGroundVisibleChunkKeysDirty(state)
   })
   syncGroundFlatChunkKeyCache(state)
