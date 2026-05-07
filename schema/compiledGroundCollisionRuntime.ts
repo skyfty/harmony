@@ -122,17 +122,19 @@ function buildHeightfieldShapeFromTileBuffer(
     }
     matrix.push(columnValues)
   }
+  const width = columns * elementSize
+  const depth = rows * elementSize
   return {
     shapeDefinition: {
       kind: 'heightfield',
       matrix,
       elementSize,
-      width: record.widthMeters,
-      depth: record.depthMeters,
-      offset: [-record.widthMeters * 0.5, -record.depthMeters * 0.5, 0],
+      width,
+      depth,
+      offset: [-width * 0.5, -depth * 0.5, 0],
       applyScale: false,
     },
-    signature: `${record.key}|${rows}|${columns}|${Math.round(elementSize * 1000)}|${Math.round(record.widthMeters * 1000)}|${Math.round(record.depthMeters * 1000)}|${hash.toString(16)}`,
+    signature: `${record.key}|${rows}|${columns}|${Math.round(elementSize * 1000)}|${Math.round(width * 1000)}|${Math.round(depth * 1000)}|${hash.toString(16)}`,
   }
 }
 

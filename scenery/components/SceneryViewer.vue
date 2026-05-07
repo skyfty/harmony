@@ -1337,8 +1337,6 @@ function resolveSceneExposure(exposure: unknown): number {
     DEFAULT_SCENE_EXPOSURE * SCENE_VIEWER_EXPOSURE_BOOST,
   );
 }
-
-
 const purposeWatchIcon = '👁️';
 const purposeResetIcon = '↕️';
 const lanternCloseIcon = '✖️';
@@ -5489,9 +5487,7 @@ function syncViewerCompiledGroundCollision(
       ? Math.max(0, Math.trunc(compiledManifest.revision))
       : computeCompiledGroundManifestRevision(compiledManifest);
     const sourceId = (currentSceneId.value ?? currentDocument?.id ?? '').trim() || 'viewer-ground';
-    const nowMs = typeof performance !== 'undefined' && typeof performance.now === 'function'
-      ? performance.now()
-      : Date.now();
+    const nowMs = Date.now();
     if (shouldRunCompiledGroundCollisionUpdate(groundObject, compiledManifest, activeCamera, sourceId, revision, nowMs)) {
       compiledGroundCollisionRuntime.sync({
         enabled: physicsEnvironmentEnabled.value,
@@ -5574,9 +5570,7 @@ function syncViewerCompiledGroundRender(
   };
   const sourceId = (currentSceneId.value ?? currentDocument?.id ?? '').trim() || 'viewer-ground';
   const tileFrustumCulled = shouldEnableCompiledGroundTileFrustumCulling();
-  const nowMs = typeof performance !== 'undefined' && typeof performance.now === 'function'
-    ? performance.now()
-    : Date.now();
+  const nowMs = Date.now();
   clearInfiniteGroundChunkMeshes(groundObject);
   if (shouldRunCompiledGroundRenderUpdate(groundObject, compiledManifest, camera, sourceId, revision, nowMs)) {
     syncCompiledGroundRenderTiles({
@@ -6037,7 +6031,7 @@ function updateInstancedCullingAndLod(): void {
   if (!context) {
     return;
   }
-  const now = typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
+  const now = Date.now();
   const camera = context.camera;
   camera.updateMatrixWorld(true);
   instancedCullingProjView.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
@@ -7414,7 +7408,7 @@ function stepPhysicsWorld(delta: number): number {
     }
   });
   let subSteps = 0;
-  const physicsStepStartedAt = performance.now();
+  const physicsStepStartedAt = Date.now();
   // Skip world.step() entirely when no dynamic body is awake and no vehicle/tour is active.
   // This eliminates all broadphase + solver cost while the scene is at rest.
   const hasActiveController = vehicleDriveActive.value || activeAutoTourNodeIds.size > 0;
@@ -7504,7 +7498,7 @@ function stepPhysicsWorld(delta: number): number {
       }
     }
   }
-  const physicsStepElapsedMs = performance.now() - physicsStepStartedAt;
+  const physicsStepElapsedMs = Date.now() - physicsStepStartedAt;
   if (physicsStepElapsedMs >= 12) {
     const now = Date.now();
     if (now - lastPhysicsPerformanceLogAt >= 1500) {
@@ -8775,7 +8769,7 @@ function startTimedAnimation(
     onComplete();
     return;
   }
-  const startTime = typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now();
+  const startTime = Date.now();
   const raf = typeof requestAnimationFrame === 'function'
     ? requestAnimationFrame
     : ((callback: FrameRequestCallback) => {
@@ -8793,7 +8787,7 @@ function startTimedAnimation(
     activeBehaviorAnimations.delete(token);
   };
   const step = (timestamp: number) => {
-    const now = Number.isFinite(timestamp) ? timestamp : (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now());
+    const now = Number.isFinite(timestamp) ? timestamp : Date.now();
     const elapsed = Math.max(0, now - startTime);
     const alpha = Math.min(1, elapsed / durationMs);
     onUpdate(alpha);
@@ -13383,9 +13377,7 @@ function startRenderLoop(
           }
         }
 
-        const instancingNow = typeof performance !== 'undefined' && typeof performance.now === 'function'
-          ? performance.now()
-          : Date.now();
+        const instancingNow = Date.now();
           updateLazyPlaceholders(deltaSeconds);
         if (shouldRunTerrainScatterUpdate(camera, instancingNow)) {
           terrainScatterRuntime.update(camera, resolveGroundMeshObject);

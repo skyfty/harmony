@@ -115,12 +115,14 @@ self.onmessage = (event: MessageEvent<CompiledGroundBuildWorkerRequest>) => {
       built.header.row = job.row
       built.header.column = job.column
       const encodedTile = serializeCompiledGroundCollisionTile(built)
+      const builtWidthMeters = built.header.bounds.maxX - built.header.bounds.minX
+      const builtDepthMeters = built.header.bounds.maxZ - built.header.bounds.minZ
       collisionResults.push({
         key: job.key,
         row: job.row,
         column: job.column,
-        widthMeters: job.widthMeters,
-        depthMeters: job.depthMeters,
+        widthMeters: builtWidthMeters,
+        depthMeters: builtDepthMeters,
         bounds: built.header.bounds,
         rows: built.header.rows,
         columns: built.header.columns,

@@ -7664,26 +7664,9 @@ async function buildPreviewRuntimeDocument(
 				sourceSignature: compiledSourceSignature,
 			})
 			const cachedPackage = cacheLoad.pkg
-			console.info('[ScenePreview] Compiled ground cache load result', {
-				sceneId: document.id,
-				buildKey: cacheLoad.diagnostics.buildKey,
-				status: cacheLoad.diagnostics.status,
-				elapsedMs: cacheLoad.diagnostics.elapsedMs,
-				indexedFileCount: cacheLoad.diagnostics.indexedFileCount,
-				loadedFileCount: cacheLoad.diagnostics.loadedFileCount,
-				missingFileCount: cacheLoad.diagnostics.missingFileCount,
-				renderTiles: cacheLoad.diagnostics.renderTileCount,
-				collisionTiles: cacheLoad.diagnostics.collisionTileCount,
-				totalBytes: cacheLoad.diagnostics.totalBytes,
-				totalMiB: Math.round((cacheLoad.diagnostics.totalBytes / (1024 * 1024)) * 10) / 10,
-			})
+
 			if (cachedPackage) {
-				console.info('[ScenePreview] Reused persisted compiled ground cache', {
-					sceneId: document.id,
-					buildKey: compiledBuildKey,
-					renderTiles: cachedPackage.manifest.renderTiles.length,
-					collisionTiles: cachedPackage.manifest.collisionTiles.length,
-				})
+
 				statusMessage.value = 'Loaded cached ground.'
 				setPreviewStatus('Loading ground cache', {
 					detail: 'Loaded persisted static terrain cache',
@@ -7695,14 +7678,7 @@ async function buildPreviewRuntimeDocument(
 				cachedCompiledGroundFiles = cachedPackage.files
 				compiledPackage = cachedPackage
 			} else if (cacheLoad.diagnostics.status === 'partial' || cacheLoad.diagnostics.status === 'corrupt') {
-				console.error('[ScenePreview] Persisted compiled ground cache is invalid', {
-					sceneId: document.id,
-					buildKey: compiledBuildKey,
-					status: cacheLoad.diagnostics.status,
-					indexedFileCount: cacheLoad.diagnostics.indexedFileCount,
-					loadedFileCount: cacheLoad.diagnostics.loadedFileCount,
-					missingFileCount: cacheLoad.diagnostics.missingFileCount,
-				})
+
 				resetPreviewCompiledGroundCache()
 				statusMessage.value = 'Ground cache invalid.'
 				setPreviewStatus('Ground cache invalid', {

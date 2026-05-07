@@ -440,16 +440,18 @@ function appendCollisionTile(context: CompiledGroundBuildContext, row: number, c
   built.header.column = column
   const path = `${context.collisionRootPath}/tile_r${row}_c${column}.hfield`
   const encoded = serializeCompiledGroundCollisionTile(built)
+  const actualWidthMeters = built.header.bounds.maxX - built.header.bounds.minX
+  const actualDepthMeters = built.header.bounds.maxZ - built.header.bounds.minZ
   context.files[path] = new Uint8Array(encoded)
   context.collisionTiles.push({
     key,
     row,
     column,
-    centerX: minX + widthMeters * 0.5,
-    centerZ: minZ + depthMeters * 0.5,
+    centerX: built.header.bounds.minX + actualWidthMeters * 0.5,
+    centerZ: built.header.bounds.minZ + actualDepthMeters * 0.5,
     sizeMeters: context.collisionTileSizeMeters,
-    widthMeters,
-    depthMeters,
+    widthMeters: actualWidthMeters,
+    depthMeters: actualDepthMeters,
     path,
     bounds: built.header.bounds,
     rows: built.header.rows,
@@ -592,18 +594,18 @@ async function buildCompiledGroundPhaseWithWorkers(
       } else {
         for (const result of tileResponse.collisionResults ?? []) {
           const path = `${context.collisionRootPath}/tile_r${result.row}_c${result.column}.hfield`
-          const minX = context.coverageBounds.minX + result.column * context.collisionTileSizeMeters
-          const minZ = context.coverageBounds.minZ + result.row * context.collisionTileSizeMeters
+          const actualWidthMeters = result.bounds.maxX - result.bounds.minX
+          const actualDepthMeters = result.bounds.maxZ - result.bounds.minZ
           context.files[path] = new Uint8Array(result.encodedTile)
           context.collisionTiles.push({
             key: result.key,
             row: result.row,
             column: result.column,
-            centerX: minX + result.widthMeters * 0.5,
-            centerZ: minZ + result.depthMeters * 0.5,
+            centerX: result.bounds.minX + actualWidthMeters * 0.5,
+            centerZ: result.bounds.minZ + actualDepthMeters * 0.5,
             sizeMeters: context.collisionTileSizeMeters,
-            widthMeters: result.widthMeters,
-            depthMeters: result.depthMeters,
+            widthMeters: actualWidthMeters,
+            depthMeters: actualDepthMeters,
             path,
             bounds: result.bounds,
             rows: result.rows,

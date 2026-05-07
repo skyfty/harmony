@@ -5,6 +5,7 @@ import type {
 } from '@schema'
 import {
   computeCompiledGroundBoundsFromPositions,
+  formatGroundLocalEditTileKey,
   resolveGroundChunkCoordFromWorldPosition,
   resolveGroundChunkOrigin,
   resolveGroundWorldBounds,
@@ -109,7 +110,7 @@ function findCompiledGroundLocalEditTileForRegion(
 
   for (let chunkZ = minCoord.chunkZ; chunkZ <= maxCoord.chunkZ; chunkZ += 1) {
     for (let chunkX = minCoord.chunkX; chunkX <= maxCoord.chunkX; chunkX += 1) {
-      const key = `${chunkZ}:${chunkX}`
+      const key = formatGroundLocalEditTileKey(chunkZ, chunkX)
       const tile = localEditTileMap[key]
       if (tile && typeof tile === 'object') {
         return { key, tile }
@@ -171,7 +172,7 @@ function resolveCompiledGroundLocalEditSampleStepMeters(
 
   for (let chunkZ = minCoord.chunkZ; chunkZ <= maxCoord.chunkZ; chunkZ += 1) {
     for (let chunkX = minCoord.chunkX; chunkX <= maxCoord.chunkX; chunkX += 1) {
-      const tile = localEditTileMap[`${chunkZ}:${chunkX}`]
+      const tile = localEditTileMap[formatGroundLocalEditTileKey(chunkZ, chunkX)]
       if (!tile || typeof tile !== 'object') {
         continue
       }
@@ -579,7 +580,7 @@ export function buildCollisionTileData(
   depthMeters: number,
   sampleStepMeters: number,
 ): CompiledGroundCollisionTileData {
-  const step = resolveCompiledGroundRegionSampleStepMeters(
+  const targetStep = resolveCompiledGroundRegionSampleStepMeters(
     definition,
     minX,
     minZ,
@@ -587,20 +588,24 @@ export function buildCollisionTileData(
     depthMeters,
     sampleStepMeters,
   )
-  const columns = Math.max(1, Math.round(widthMeters / step))
-  const rows = Math.max(1, Math.round(depthMeters / step))
-  const stepX = widthMeters / columns
-  const stepZ = depthMeters / rows
-  const elementSize = Math.max(stepX, stepZ)
+  const columns = Math.max(1, Math.ceil(widthMeters / targetStep))
+  const rows = Math.max(1, Math.ceil(depthMeters / targetStep))
+  const elementSize = Math.max(
+    widthMeters / columns,
+    depthMeters / rows,
+    1e-6,
+  )
+  const actualWidthMeters = columns * elementSize
+  const actualDepthMeters = rows * elementSize
   const heights = new Float32Array((rows + 1) * (columns + 1))
   let minHeight = Number.POSITIVE_INFINITY
   let maxHeight = Number.NEGATIVE_INFINITY
 
   let offset = 0
   for (let row = 0; row <= rows; row += 1) {
-    const z = minZ + row * stepZ
+    const z = minZ + row * elementSize
     for (let column = 0; column <= columns; column += 1) {
-      const x = minX + column * stepX
+      const x = minX + column * elementSize
       const height = sampleCompiledGroundHeight(definition, worldBounds, x, z)
       const safeHeight = Number.isFinite(height) ? height : 0
       heights[offset] = safeHeight
@@ -620,9 +625,9 @@ export function buildCollisionTileData(
         minX,
         minY: Number.isFinite(minHeight) ? minHeight : 0,
         minZ,
-        maxX: minX + widthMeters,
+        maxX: minX + actualWidthMeters,
         maxY: Number.isFinite(maxHeight) ? maxHeight : 0,
-        maxZ: minZ + depthMeters,
+        maxZ: minZ + actualDepthMeters,
       },
       rows,
       columns,
