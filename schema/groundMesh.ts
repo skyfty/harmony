@@ -4609,7 +4609,7 @@ function ensureChunkMesh(
   mesh.name = `GroundChunk:${chunkRow},${chunkColumn}`
   mesh.receiveShadow = true
   mesh.castShadow = state.castShadow
-  mesh.frustumCulled = false
+  mesh.frustumCulled = true
   mesh.userData.dynamicMeshType = 'Ground'
   mesh.userData.groundChunk = { ...spec, chunkRow, chunkColumn }
   mesh.visible = true
