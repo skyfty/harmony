@@ -1416,7 +1416,12 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				}
 				mesh.geometry.computeVertexNormals()
 			})
-			stitchGroundChunkNormals(params.groundObject, params.definition, params.region ?? null)
+			stitchGroundChunkNormals(
+				params.groundObject,
+				params.definition,
+				params.region ?? null,
+				params.touchedChunkKeys ?? null,
+			)
 			return
 		}
 
@@ -1526,7 +1531,12 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3))
 			}
 		}
-		stitchGroundChunkNormals(params.groundObject, params.definition, params.region ?? null)
+		stitchGroundChunkNormals(
+			params.groundObject,
+			params.definition,
+			params.region ?? null,
+			params.touchedChunkKeys ?? null,
+		)
 	}
 
 	const assetCacheStore = useAssetCacheStore()
@@ -7428,7 +7438,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 					groundObject,
 					definition: runtimeDefinition,
 					region,
-						touchedChunkKeys,
+					touchedChunkKeys,
 					jobToken,
 				}).catch((error) => {
 					console.warn('地形法线异步构建失败，回退到主线程：', error)
@@ -7440,7 +7450,12 @@ export function createGroundEditor(options: GroundEditorOptions) {
 							}
 							mesh.geometry.computeVertexNormals()
 						})
-						stitchGroundChunkNormals(groundObject, runtimeDefinition, region ?? null)
+						stitchGroundChunkNormals(
+							groundObject,
+							runtimeDefinition,
+							region ?? null,
+							touchedChunkKeys,
+						)
 					} catch (_error) {
 						/* noop */
 					}

@@ -1,4 +1,4 @@
-import type { GroundHeightMap, GroundLocalEditTileMap, GroundRuntimeDynamicMesh } from '@schema'
+import type { GroundHeightMap, GroundLocalEditTileData, GroundLocalEditTileMap, GroundRuntimeDynamicMesh } from '@schema'
 import {
   GROUND_HEIGHT_UNSET_VALUE,
   GROUND_TERRAIN_CHUNK_SIZE_METERS,
@@ -753,7 +753,86 @@ function buildPlanningDemLocalEditTilesForRegionSyncFromPlan(
     }
   }
 
-  return Object.keys(result).length ? result : null
+  return Object.keys(result).length ? harmonizePlanningDemLocalEditTileBoundaryDerivatives(result) : null
+}
+
+function harmonizePlanningDemLocalEditTileBoundaryDerivatives(tiles: GroundLocalEditTileMap): GroundLocalEditTileMap {
+  const entries = Object.values(tiles)
+  if (!entries.length) {
+    return tiles
+  }
+
+  const lookup = new Map<string, GroundLocalEditTileData>()
+  for (const tile of entries) {
+    lookup.set(tile.key, tile)
+  }
+
+  const proposals = new Map<string, { tile: GroundLocalEditTileData; index: number; sum: number; count: number }>()
+  const propose = (tile: GroundLocalEditTileData, index: number, value: number) => {
+    if (!Number.isFinite(value) || index < 0 || index >= tile.values.length) {
+      return
+    }
+    const key = `${tile.key}:${index}`
+    const existing = proposals.get(key)
+    if (existing) {
+      existing.sum += value
+      existing.count += 1
+      return
+    }
+    proposals.set(key, { tile, index, sum: value, count: 1 })
+  }
+
+  const read = (tile: GroundLocalEditTileData, row: number, column: number, resolution: number): number | null => {
+    if (row < 0 || column < 0 || row > resolution || column > resolution) {
+      return null
+    }
+    const value = Number(tile.values[row * (resolution + 1) + column])
+    return Number.isFinite(value) ? value : null
+  }
+
+  for (const tile of entries) {
+    const resolution = Math.max(1, Math.trunc(Number(tile.resolution) || 0))
+    if (resolution < 2) {
+      continue
+    }
+
+    const rightNeighbor = lookup.get(formatGroundLocalEditTileKey(tile.tileRow, tile.tileColumn + 1))
+    if (rightNeighbor && rightNeighbor.resolution === tile.resolution && rightNeighbor.tileSizeMeters === tile.tileSizeMeters) {
+      for (let row = 0; row <= resolution; row += 1) {
+        const edge = read(tile, row, resolution, resolution)
+        const leftInner = read(tile, row, resolution - 1, resolution)
+        const rightInner = read(rightNeighbor, row, 1, resolution)
+        if (!Number.isFinite(edge) || !Number.isFinite(leftInner) || !Number.isFinite(rightInner)) {
+          continue
+        }
+        const averageSlope = (((edge as number) - (leftInner as number)) + ((rightInner as number) - (edge as number))) * 0.5
+        propose(tile, row * (resolution + 1) + (resolution - 1), (edge as number) - averageSlope)
+        propose(rightNeighbor, row * (resolution + 1) + 1, (edge as number) + averageSlope)
+      }
+    }
+
+    const downNeighbor = lookup.get(formatGroundLocalEditTileKey(tile.tileRow + 1, tile.tileColumn))
+    if (downNeighbor && downNeighbor.resolution === tile.resolution && downNeighbor.tileSizeMeters === tile.tileSizeMeters) {
+      for (let column = 0; column <= resolution; column += 1) {
+        const edge = read(tile, resolution, column, resolution)
+        const topInner = read(tile, resolution - 1, column, resolution)
+        const bottomInner = read(downNeighbor, 1, column, resolution)
+        if (!Number.isFinite(edge) || !Number.isFinite(topInner) || !Number.isFinite(bottomInner)) {
+          continue
+        }
+        const averageSlope = (((edge as number) - (topInner as number)) + ((bottomInner as number) - (edge as number))) * 0.5
+        propose(tile, (resolution - 1) * (resolution + 1) + column, (edge as number) - averageSlope)
+        propose(downNeighbor, (resolution + 1) + column, (edge as number) + averageSlope)
+      }
+    }
+  }
+
+  for (const proposal of proposals.values()) {
+    proposal.tile.values[proposal.index] = proposal.sum / Math.max(1, proposal.count)
+    proposal.tile.updatedAt = Date.now()
+  }
+
+  return tiles
 }
 
 function buildPlanningDemLocalEditTilesFromWorkerResult(result: PlanningDemLocalEditTilesWorkerResponse['tiles']): GroundLocalEditTileMap | null {
@@ -773,7 +852,7 @@ function buildPlanningDemLocalEditTilesFromWorkerResult(result: PlanningDemLocal
       updatedAt: tile.updatedAt,
     }
   }
-  return tiles
+  return harmonizePlanningDemLocalEditTileBoundaryDerivatives(tiles)
 }
 
 async function buildPlanningDemLocalEditTilesForRegionAsync(options: {

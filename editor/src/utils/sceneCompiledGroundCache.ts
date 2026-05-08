@@ -93,6 +93,7 @@ type SceneCompiledGroundTileStorageRecord = {
 export type EnsureSceneCompiledGroundOptions = {
   forceRebuild?: boolean
   sourceSignature?: string
+  workspaceId?: string | null
   onProgress?: (progress: CompiledGroundBuildProgress) => void
   onStatus?: (status: SceneCompiledGroundEnsureStatus) => void
   loadFallbackPackage?: () => Promise<SceneCompiledGroundPackage | null>
@@ -100,6 +101,7 @@ export type EnsureSceneCompiledGroundOptions = {
 
 export type RebuildSceneCompiledGroundChunksOptions = {
   sourceSignature?: string
+  workspaceId?: string | null
   onProgress?: (progress: CompiledGroundBuildProgress) => void
   onStatus?: (status: SceneCompiledGroundEnsureStatus) => void
 }
@@ -727,6 +729,7 @@ function toSceneCompiledGroundPackage(
 async function buildSceneCompiledGroundPackage(
   document: SceneJsonExportDocument,
   options: {
+    workspaceId?: string | null
     includedTileKeys?: string[]
     onProgress?: (progress: CompiledGroundBuildProgress) => void
   } = {},
@@ -734,6 +737,7 @@ async function buildSceneCompiledGroundPackage(
   const built = await buildCompiledGroundPackageFilesAsync(document, {
     yieldEveryTiles: 2,
     workerCount: resolvePreferredCompiledGroundWorkerCount(),
+    workspaceId: options.workspaceId ?? null,
     ...SCENE_COMPILED_GROUND_BUILD_OPTIONS,
     includedTileKeys: options.includedTileKeys,
     onProgress: options.onProgress,
@@ -874,6 +878,7 @@ export async function ensureSceneCompiledGroundPackage(
     })
   }
   const built = await buildSceneCompiledGroundPackage(document, {
+    workspaceId: options.workspaceId ?? null,
     onProgress: (progress) => {
       options.onProgress?.(progress)
       emitEnsureStatus(options.onStatus, mapCompiledGroundBuildProgress(progress))
@@ -912,6 +917,7 @@ export async function rebuildSceneCompiledGroundPackageChunks(
   if (!normalizedChunkKeys.length) {
     return ensureSceneCompiledGroundPackage(document, buildKey, {
       sourceSignature: options.sourceSignature,
+      workspaceId: options.workspaceId ?? null,
       onProgress: options.onProgress,
       onStatus: options.onStatus,
     })
@@ -930,6 +936,7 @@ export async function rebuildSceneCompiledGroundPackageChunks(
     return ensureSceneCompiledGroundPackage(document, buildKey, {
       forceRebuild: true,
       sourceSignature: options.sourceSignature,
+      workspaceId: options.workspaceId ?? null,
       onProgress: options.onProgress,
       onStatus: options.onStatus,
     })
@@ -937,6 +944,7 @@ export async function rebuildSceneCompiledGroundPackageChunks(
 
   const patch = await buildSceneCompiledGroundPackage(document, {
     includedTileKeys: normalizedChunkKeys,
+    workspaceId: options.workspaceId ?? null,
     onProgress: (progress) => {
       options.onProgress?.(progress)
       emitEnsureStatus(options.onStatus, mapCompiledGroundBuildProgress(progress))

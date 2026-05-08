@@ -17,6 +17,9 @@ export type CompiledGroundTileJob = {
 export type CompiledGroundBuildWorkerInitRequest = {
   kind: 'compiled-ground-init'
   requestId: number
+  sceneId: string
+  workspaceId: string | null
+  terrainDatasetEnabled: boolean
   definition: GroundDynamicMesh
   worldBounds: ReturnType<typeof resolveGroundWorldBounds>
 }

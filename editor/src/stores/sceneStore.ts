@@ -8911,6 +8911,7 @@ export const useSceneStore = defineStore('scene', {
       const pkg = await ensureSceneCompiledGroundPackage(document, buildKey, {
         forceRebuild: options.forceRebuild === true,
         sourceSignature,
+        workspaceId: this.workspaceId,
         onStatus: options.onStatus,
         loadFallbackPackage: options.forceRebuild === true
           ? undefined
@@ -8970,6 +8971,7 @@ export const useSceneStore = defineStore('scene', {
         const rebuilt = await ensureSceneCompiledGroundPackage(document, buildKey, {
           forceRebuild: true,
           sourceSignature,
+          workspaceId: this.workspaceId,
         })
         if (document.id !== this.currentSceneId) {
           return false
@@ -8985,6 +8987,7 @@ export const useSceneStore = defineStore('scene', {
       }
       const rebuilt = await rebuildSceneCompiledGroundPackageChunks(document, buildKey, chunkKeys, {
         sourceSignature,
+        workspaceId: this.workspaceId,
       })
       if (document.id !== this.currentSceneId) {
         return false

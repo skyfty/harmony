@@ -101,6 +101,7 @@ type BuildCompiledGroundAsyncOptions = {
   minRenderSampleStepMeters?: number
   collisionSampleStepMultiplier?: number
   minCollisionSampleStepMeters?: number
+  workspaceId?: string | null
 }
 
 const DEFAULT_RENDER_CHUNKS_PER_TILE = 4
@@ -197,15 +198,51 @@ export function resolvePreferredCompiledGroundWorkerCount(explicitCount?: number
   return resolveCompiledGroundWorkerCount(explicitCount)
 }
 
-function hasRuntimeTerrainHeightSampler(definition: GroundDynamicMesh): boolean {
-  const sampler = (definition as GroundDynamicMesh & {
-    runtimeTerrainHeightSampler?: unknown
-  }).runtimeTerrainHeightSampler
-  return Boolean(
-    sampler
-    && typeof sampler === 'object'
-    && typeof (sampler as { sampleHeightAtWorld?: unknown }).sampleHeightAtWorld === 'function'
-  )
+function cloneCompiledGroundWorkerValue(value: unknown): unknown {
+  if (value == null) {
+    return value
+  }
+  const valueType = typeof value
+  if (valueType === 'string' || valueType === 'number' || valueType === 'boolean') {
+    return value
+  }
+  if (valueType === 'bigint' || valueType === 'function' || valueType === 'symbol') {
+    return undefined
+  }
+  if (value instanceof ArrayBuffer) {
+    return value.slice(0)
+  }
+  if (ArrayBuffer.isView(value)) {
+    return (value as { slice?: () => unknown }).slice?.()
+  }
+  if (Array.isArray(value)) {
+    const result: unknown[] = []
+    value.forEach((entry) => {
+      const clonedEntry = cloneCompiledGroundWorkerValue(entry)
+      if (clonedEntry !== undefined) {
+        result.push(clonedEntry)
+      }
+    })
+    return result
+  }
+  if (typeof value === 'object') {
+    const result: Record<string, unknown> = {}
+    Object.entries(value as Record<string, unknown>).forEach(([key, entry]) => {
+      if (key === 'runtimeTerrainHeightSampler' || key === 'runtimeSampleHeightRegion') {
+        return
+      }
+      const clonedEntry = cloneCompiledGroundWorkerValue(entry)
+      if (clonedEntry !== undefined) {
+        result[key] = clonedEntry
+      }
+    })
+    return result
+  }
+  return undefined
+}
+
+function cloneCompiledGroundDefinitionForWorker(definition: GroundDynamicMesh): GroundDynamicMesh {
+  return cloneCompiledGroundWorkerValue(definition) as GroundDynamicMesh
 }
 
 function createCompiledGroundBuildWorkerRuntime(): CompiledGroundBuildWorkerRuntime | null {
@@ -470,6 +507,7 @@ function appendCollisionTile(context: CompiledGroundBuildContext, row: number, c
 async function initializeCompiledGroundWorkers(
   context: CompiledGroundBuildContext,
   count: number,
+  options: BuildCompiledGroundAsyncOptions,
 ): Promise<CompiledGroundBuildWorkerRuntime[] | null> {
   const workers: CompiledGroundBuildWorkerRuntime[] = []
   try {
@@ -483,7 +521,10 @@ async function initializeCompiledGroundWorkers(
     await Promise.all(workers.map(async (runtime) => {
       const response = await requestCompiledGroundWorker(runtime, {
         kind: 'compiled-ground-init',
-        definition: context.definition,
+        sceneId: context.sceneId,
+        workspaceId: options.workspaceId ?? null,
+        terrainDatasetEnabled: Boolean((context.definition as GroundDynamicMesh & { runtimeTerrainDatasetEnabled?: unknown }).runtimeTerrainDatasetEnabled),
+        definition: cloneCompiledGroundDefinitionForWorker(context.definition),
         worldBounds: context.worldBounds,
       })
       if (response.kind !== 'compiled-ground-init-result' || !response.ok) {
@@ -646,15 +687,12 @@ async function buildCompiledGroundPackageFilesWithWorkersAsync(
   if (!context) {
     return null
   }
-  if (hasRuntimeTerrainHeightSampler(context.definition)) {
-    return null
-  }
 
   const workerCount = resolveCompiledGroundWorkerCount(options.workerCount)
-  if (workerCount <= 1) {
+  if (workerCount <= 0) {
     return null
   }
-  const workers = await initializeCompiledGroundWorkers(context, workerCount)
+  const workers = await initializeCompiledGroundWorkers(context, workerCount, options)
   if (!workers?.length) {
     return null
   }

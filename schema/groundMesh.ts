@@ -1560,25 +1560,60 @@ function resolveGroundLocalEditTileWorldMinFromRuntime(
   }
 }
 
-function findGroundLocalEditTileAtWorldFromRuntime(
+function getGroundLocalEditHeightAtGlobalVertex(
   definition: GroundRuntimeDynamicMesh,
-  x: number,
-  z: number,
-): GroundLocalEditTileData | null {
-  const tileSizeMeters = Number(definition.editTileSizeMeters)
-  if (!Number.isFinite(tileSizeMeters) || tileSizeMeters <= 0) {
+  globalRow: number,
+  globalColumn: number,
+  resolution = resolveGroundEditTileResolution(definition),
+): number | null {
+  const safeResolution = Math.max(1, Math.trunc(resolution))
+  const { lookup } = ensureGroundLocalEditTileCachesFromRuntime(definition)
+  if (!(lookup instanceof Map) || lookup.size === 0) {
     return null
   }
-  const coord = resolveGroundLocalEditTileCoordAtWorldFromRuntime(definition, x, z, tileSizeMeters)
-  if (!coord) {
-    return null
+
+  const baseTileRow = Math.floor(globalRow / safeResolution)
+  const baseTileColumn = Math.floor(globalColumn / safeResolution)
+  const baseLocalRow = globalRow - baseTileRow * safeResolution
+  const baseLocalColumn = globalColumn - baseTileColumn * safeResolution
+
+  const candidateRows = baseLocalRow === 0
+    ? [
+      { tileRow: baseTileRow, localRow: 0 },
+      { tileRow: baseTileRow - 1, localRow: safeResolution },
+    ]
+    : [{ tileRow: baseTileRow, localRow: baseLocalRow }]
+  const candidateColumns = baseLocalColumn === 0
+    ? [
+      { tileColumn: baseTileColumn, localColumn: 0 },
+      { tileColumn: baseTileColumn - 1, localColumn: safeResolution },
+    ]
+    : [{ tileColumn: baseTileColumn, localColumn: baseLocalColumn }]
+
+  for (const rowCandidate of candidateRows) {
+    for (const columnCandidate of candidateColumns) {
+      const tile = lookup.get(formatGroundLocalEditTileKey(rowCandidate.tileRow, columnCandidate.tileColumn))
+      if (!tile) {
+        continue
+      }
+      const value = getGroundLocalEditTileStoredValue(tile, rowCandidate.localRow, columnCandidate.localColumn)
+      if (Number.isFinite(value)) {
+        return value
+      }
+    }
   }
-  const key = formatGroundLocalEditTileKey(coord.tileRow, coord.tileColumn)
-  const directMatch = definition.localEditTiles?.[key] ?? null
-  if (directMatch) {
-    return directMatch
-  }
-  return ensureGroundLocalEditTileCachesFromRuntime(definition).lookup.get(key) ?? null
+  return null
+}
+
+function interpolateCatmullRomScalar(p0: number, p1: number, p2: number, p3: number, t: number): number {
+  const t2 = t * t
+  const t3 = t2 * t
+  return 0.5 * (
+    (2 * p1)
+    + (-p0 + p2) * t
+    + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2
+    + (-p0 + 3 * p1 - 3 * p2 + p3) * t3
+  )
 }
 
 
@@ -1587,39 +1622,62 @@ function sampleGroundLocalEditHeightAtWorldFromRuntime(
   x: number,
   z: number,
 ): number | null {
-  const tile = findGroundLocalEditTileAtWorldFromRuntime(runtimeDefinition, x, z)
-  if (!tile) {
+  const tileSizeMeters = resolveGroundEditTileSizeMeters(runtimeDefinition)
+  const resolution = resolveGroundEditTileResolution(runtimeDefinition)
+  if (!(tileSizeMeters > 0) || !(resolution > 0)) {
     return null
   }
-  const tileSizeMeters = Number(tile.tileSizeMeters)
-  const resolution = Math.max(1, Math.trunc(Number(tile.resolution) || 0))
-  if (!Number.isFinite(tileSizeMeters) || tileSizeMeters <= 0 || resolution <= 0) {
+  const { lookup } = ensureGroundLocalEditTileCachesFromRuntime(runtimeDefinition)
+  if (!(lookup instanceof Map) || lookup.size === 0) {
     return null
   }
+
   const { originX, originZ } = resolveGroundLocalEditTileGridOriginFromRuntime(runtimeDefinition, tileSizeMeters)
-  const minX = originX + tile.tileColumn * tileSizeMeters
-  const minZ = originZ + tile.tileRow * tileSizeMeters
-  const maxX = minX + tileSizeMeters
-  const maxZ = minZ + tileSizeMeters
-  if (x < minX || x > maxX || z < minZ || z > maxZ) {
+  const cellSize = tileSizeMeters / Math.max(1, resolution)
+  if (!(cellSize > 0)) {
     return null
   }
-  const values = Array.isArray(tile.values) ? tile.values : []
-  const tx = clampInclusive((x - minX) / Math.max(tileSizeMeters, Number.EPSILON), 0, 1)
-  const tz = clampInclusive((z - minZ) / Math.max(tileSizeMeters, Number.EPSILON), 0, 1)
-  const sampleX = tx * resolution
-  const sampleZ = tz * resolution
-  const column0 = clampVertexIndex(Math.floor(sampleX), resolution)
-  const row0 = clampVertexIndex(Math.floor(sampleZ), resolution)
-  const column1 = clampVertexIndex(column0 + 1, resolution)
-  const row1 = clampVertexIndex(row0 + 1, resolution)
+  const sampleX = (x - originX) / Math.max(cellSize, Number.EPSILON)
+  const sampleZ = (z - originZ) / Math.max(cellSize, Number.EPSILON)
+  if (!Number.isFinite(sampleX) || !Number.isFinite(sampleZ)) {
+    return null
+  }
+  const column0 = Math.floor(sampleX)
+  const row0 = Math.floor(sampleZ)
+  const column1 = column0 + 1
+  const row1 = row0 + 1
   const blendX = clampInclusive(sampleX - column0, 0, 1)
   const blendZ = clampInclusive(sampleZ - row0, 0, 1)
-  const rowStride = resolution + 1
-  const read = (row: number, column: number): number | null => {
-    const raw = Number(values[row * rowStride + column])
-    return Number.isFinite(raw) ? raw : null
+
+  const read = (row: number, column: number): number | null => getGroundLocalEditHeightAtGlobalVertex(runtimeDefinition, row, column, resolution)
+  const cubicSamples: number[][] = []
+  let canUseCubic = true
+  for (let rowOffset = -1; rowOffset <= 2; rowOffset += 1) {
+    const sampleRow: number[] = []
+    for (let columnOffset = -1; columnOffset <= 2; columnOffset += 1) {
+      const value = read(row0 + rowOffset, column0 + columnOffset)
+      if (!Number.isFinite(value)) {
+        canUseCubic = false
+        break
+      }
+      sampleRow.push(value as number)
+    }
+    if (!canUseCubic) {
+      break
+    }
+    cubicSamples.push(sampleRow)
   }
+  if (canUseCubic && cubicSamples.length === 4 && cubicSamples.every((row) => row.length === 4)) {
+    const interpolatedRows = cubicSamples.map((row) => interpolateCatmullRomScalar(row[0]!, row[1]!, row[2]!, row[3]!, blendX))
+    return interpolateCatmullRomScalar(
+      interpolatedRows[0]!,
+      interpolatedRows[1]!,
+      interpolatedRows[2]!,
+      interpolatedRows[3]!,
+      blendZ,
+    )
+  }
+
   const h00 = read(row0, column0)
   const h10 = read(row0, column1)
   const h01 = read(row1, column0)
@@ -3604,6 +3662,27 @@ function computeHeightfieldNormals(
   }
 }
 
+function computeSampledGroundNormals(
+  definition: GroundRuntimeDynamicMesh,
+  positions: Float32Array,
+  normals: Float32Array,
+): void {
+  const normal = new THREE.Vector3()
+  const vertexCount = Math.min(
+    Math.floor(positions.length / 3),
+    Math.floor(normals.length / 3),
+  )
+  for (let vertexIndex = 0; vertexIndex < vertexCount; vertexIndex += 1) {
+    const offset = vertexIndex * 3
+    const x = positions[offset] ?? 0
+    const z = positions[offset + 2] ?? 0
+    sampleGroundSeamAwareNormal(definition, x, z, normal)
+    normals[offset] = normal.x
+    normals[offset + 1] = normal.y
+    normals[offset + 2] = normal.z
+  }
+}
+
 function buildGroundChunkGeometry(definition: GroundRuntimeDynamicMesh, spec: GroundChunkSpec): THREE.BufferGeometry {
   const optimizedChunk = resolveOptimizedChunkForSpec(definition, spec)
   if (optimizedChunk) {
@@ -3624,6 +3703,9 @@ function buildGroundChunkGeometry(definition: GroundRuntimeDynamicMesh, spec: Gr
   const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1
   const chunkSizeMeters = resolveInfiniteChunkSizeMeters(definition)
   const chunkOrigin = resolveInfiniteGroundGridOriginMeters(chunkSizeMeters)
+  const groundBounds = resolveGroundWorldBounds(definition)
+  const groundWidth = Math.max(groundBounds.maxX - groundBounds.minX, Number.EPSILON)
+  const groundDepth = Math.max(groundBounds.maxZ - groundBounds.minZ, Number.EPSILON)
   const startX = chunkOrigin + spec.startColumn * cellSize
   const startZ = chunkOrigin + spec.startRow * cellSize
   const importedLocalEditCellSize = resolveGroundChunkLocalEditCellSize(definition, spec)
@@ -3648,8 +3730,8 @@ function buildGroundChunkGeometry(definition: GroundRuntimeDynamicMesh, spec: Gr
       const height = useWorldSpaceHeightSampling
         ? sampleGroundHeight(definition, x, z)
         : heightValues?.[localRow * heightStride + localColumn] ?? sampleGroundHeight(definition, x, z)
-      const columnRatio = chunkColumns === 0 ? 0 : localColumn / chunkColumns
-      const rowRatio = chunkRows === 0 ? 0 : localRow / chunkRows
+      const u = clampInclusive((x - groundBounds.minX) / groundWidth, 0, 1)
+      const v = 1 - clampInclusive((z - groundBounds.minZ) / groundDepth, 0, 1)
 
       positions[vertexIndex * 3 + 0] = x
       positions[vertexIndex * 3 + 1] = height
@@ -3659,8 +3741,8 @@ function buildGroundChunkGeometry(definition: GroundRuntimeDynamicMesh, spec: Gr
       normals[vertexIndex * 3 + 1] = 1
       normals[vertexIndex * 3 + 2] = 0
 
-      uvs[vertexIndex * 2 + 0] = columnRatio
-      uvs[vertexIndex * 2 + 1] = 1 - rowRatio
+      uvs[vertexIndex * 2 + 0] = u
+      uvs[vertexIndex * 2 + 1] = v
 
       vertexIndex += 1
     }
@@ -3689,7 +3771,11 @@ function buildGroundChunkGeometry(definition: GroundRuntimeDynamicMesh, spec: Gr
   geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3))
   geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2))
   geometry.setIndex(new THREE.BufferAttribute(indices, 1))
-  computeHeightfieldNormals(positions, normals, chunkRows, chunkColumns, layout.stepX, layout.stepZ)
+  if (useWorldSpaceHeightSampling || shouldUseGroundLocalEditTiles(definition)) {
+    computeSampledGroundNormals(definition, positions, normals)
+  } else {
+    computeHeightfieldNormals(positions, normals, chunkRows, chunkColumns, layout.stepX, layout.stepZ)
+  }
   geometry.computeBoundingBox()
   geometry.computeBoundingSphere()
   return geometry
@@ -5751,7 +5837,7 @@ function applyGroundTextureToChunkMesh(
   }
 
   const uvBounds = summarizeGroundMeshUvBounds(mesh)
-  const hasOptimizedGlobalUv = Boolean(spec) && resolveOptimizedChunkForSpec(definition, spec) !== null
+  const hasOptimizedGlobalUv = spec ? resolveOptimizedChunkForSpec(definition, spec) !== null : false
   const useLocalUvWindow = !hasOptimizedGlobalUv && isGroundChunkLocalUvBounds(uvBounds)
   const meshBoundsWindow = useLocalUvWindow
     ? resolveGroundChunkTextureWindowFromMeshBounds(definition, mesh)
@@ -5770,7 +5856,7 @@ function applyGroundTextureToChunkMesh(
       repeatY: 1,
     }
   const signature = resolveGroundChunkTextureSignature(baseMaterial, source, window)
-  if (isGroundChunkTexturedMaterial(currentMaterial) && hasGroundTextureSignature(currentMaterial, signature)) {
+  if (currentMaterial && isGroundChunkTexturedMaterial(currentMaterial) && hasGroundTextureSignature(currentMaterial, signature)) {
     if (mesh.material !== currentMaterial) {
       mesh.material = currentMaterial
     }
@@ -5864,6 +5950,9 @@ function updateChunkGeometry(geometry: THREE.BufferGeometry, definition: GroundR
   const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1
   const chunkSizeMeters = resolveInfiniteChunkSizeMeters(definition)
   const chunkOrigin = resolveInfiniteGroundGridOriginMeters(chunkSizeMeters)
+  const groundBounds = resolveGroundWorldBounds(definition)
+  const groundWidth = Math.max(groundBounds.maxX - groundBounds.minX, Number.EPSILON)
+  const groundDepth = Math.max(groundBounds.maxZ - groundBounds.minZ, Number.EPSILON)
   const startX = chunkOrigin + spec.startColumn * cellSize
   const startZ = chunkOrigin + spec.startRow * cellSize
   const importedLocalEditCellSize = resolveGroundChunkLocalEditCellSize(definition, spec)
@@ -5887,15 +5976,19 @@ function updateChunkGeometry(geometry: THREE.BufferGeometry, definition: GroundR
       const height = useWorldSpaceHeightSampling
         ? sampleGroundHeight(definition, x, z)
         : heightValues?.[localRow * heightStride + localColumn] ?? sampleGroundHeight(definition, x, z)
-      const columnRatio = chunkColumns === 0 ? 0 : localColumn / chunkColumns
-      const rowRatio = chunkRows === 0 ? 0 : localRow / chunkRows
+      const u = clampInclusive((x - groundBounds.minX) / groundWidth, 0, 1)
+      const v = 1 - clampInclusive((z - groundBounds.minZ) / groundDepth, 0, 1)
       positionAttr.setXYZ(vertexIndex, x, height, z)
-      uvAttr.setXY(vertexIndex, columnRatio, 1 - rowRatio)
+      uvAttr.setXY(vertexIndex, u, v)
       vertexIndex += 1
     }
   }
   positionAttr.needsUpdate = true
-  computeHeightfieldNormals(positionAttr.array as Float32Array, normalAttr.array as Float32Array, chunkRows, chunkColumns, layout.stepX, layout.stepZ)
+  if (useWorldSpaceHeightSampling || shouldUseGroundLocalEditTiles(definition)) {
+    computeSampledGroundNormals(definition, positionAttr.array as Float32Array, normalAttr.array as Float32Array)
+  } else {
+    computeHeightfieldNormals(positionAttr.array as Float32Array, normalAttr.array as Float32Array, chunkRows, chunkColumns, layout.stepX, layout.stepZ)
+  }
   normalAttr.needsUpdate = true
   uvAttr.needsUpdate = true
   geometry.computeBoundingBox()
@@ -5962,7 +6055,11 @@ function updateChunkGeometryRegion(
   }
   positionAttr.needsUpdate = true
   if (options.computeNormals !== false) {
-    computeHeightfieldNormals(positionAttr.array as Float32Array, normalAttr.array as Float32Array, chunkRows, chunkColumns, layout.stepX, layout.stepZ)
+    if (shouldUseGroundLocalEditTiles(definition)) {
+      computeSampledGroundNormals(definition, positionAttr.array as Float32Array, normalAttr.array as Float32Array)
+    } else {
+      computeHeightfieldNormals(positionAttr.array as Float32Array, normalAttr.array as Float32Array, chunkRows, chunkColumns, layout.stepX, layout.stepZ)
+    }
     normalAttr.needsUpdate = true
   }
   geometry.computeBoundingBox()
@@ -7109,6 +7206,258 @@ export function setInfiniteGroundHiddenChunkKeys(
     return touched
   }
 
+  function averageNormalsAtChunkCorner(params: {
+    topLeft: GroundChunkRuntime
+    topRight: GroundChunkRuntime
+    bottomLeft: GroundChunkRuntime
+    bottomRight: GroundChunkRuntime
+  }): boolean {
+    const { topLeft, topRight, bottomLeft, bottomRight } = params
+    const geometryTopLeft = topLeft.mesh.geometry
+    const geometryTopRight = topRight.mesh.geometry
+    const geometryBottomLeft = bottomLeft.mesh.geometry
+    const geometryBottomRight = bottomRight.mesh.geometry
+    if (
+      !(geometryTopLeft instanceof THREE.BufferGeometry)
+      || !(geometryTopRight instanceof THREE.BufferGeometry)
+      || !(geometryBottomLeft instanceof THREE.BufferGeometry)
+      || !(geometryBottomRight instanceof THREE.BufferGeometry)
+    ) {
+      return false
+    }
+
+    const colsTopLeft = Math.max(1, Math.trunc(topLeft.spec.columns))
+    const rowsTopLeft = Math.max(1, Math.trunc(topLeft.spec.rows))
+    const colsTopRight = Math.max(1, Math.trunc(topRight.spec.columns))
+
+    const cornerRow = topLeft.spec.startRow + rowsTopLeft
+    const cornerColumn = topLeft.spec.startColumn + colsTopLeft
+    if (
+      topRight.spec.startColumn !== cornerColumn
+      || topRight.spec.startRow + rowsTopLeft < cornerRow
+      || bottomLeft.spec.startRow !== cornerRow
+      || bottomLeft.spec.startColumn + colsTopLeft < cornerColumn
+      || bottomRight.spec.startRow !== cornerRow
+      || bottomRight.spec.startColumn !== cornerColumn
+    ) {
+      return false
+    }
+
+    const normalAttrTopLeft = geometryTopLeft.getAttribute('normal') as THREE.BufferAttribute | undefined
+    const normalAttrTopRight = geometryTopRight.getAttribute('normal') as THREE.BufferAttribute | undefined
+    const normalAttrBottomLeft = geometryBottomLeft.getAttribute('normal') as THREE.BufferAttribute | undefined
+    const normalAttrBottomRight = geometryBottomRight.getAttribute('normal') as THREE.BufferAttribute | undefined
+    if (!normalAttrTopLeft || !normalAttrTopRight || !normalAttrBottomLeft || !normalAttrBottomRight) {
+      return false
+    }
+
+    const normalsTopLeft = normalAttrTopLeft.array as Float32Array
+    const normalsTopRight = normalAttrTopRight.array as Float32Array
+    const normalsBottomLeft = normalAttrBottomLeft.array as Float32Array
+    const normalsBottomRight = normalAttrBottomRight.array as Float32Array
+    if (
+      !(normalsTopLeft instanceof Float32Array)
+      || !(normalsTopRight instanceof Float32Array)
+      || !(normalsBottomLeft instanceof Float32Array)
+      || !(normalsBottomRight instanceof Float32Array)
+    ) {
+      return false
+    }
+
+    const vertexColumnsTopLeft = colsTopLeft + 1
+    const vertexColumnsTopRight = colsTopRight + 1
+    const vertexColumnsBottomLeft = Math.max(1, Math.trunc(bottomLeft.spec.columns)) + 1
+
+    const topLeftIndex = (rowsTopLeft * vertexColumnsTopLeft + colsTopLeft) * 3
+    const topRightIndex = (rowsTopLeft * vertexColumnsTopRight + 0) * 3
+    const bottomLeftIndex = (0 * vertexColumnsBottomLeft + Math.max(1, Math.trunc(bottomLeft.spec.columns))) * 3
+    const bottomRightIndex = 0
+
+    if (
+      topLeftIndex + 2 >= normalsTopLeft.length
+      || topRightIndex + 2 >= normalsTopRight.length
+      || bottomLeftIndex + 2 >= normalsBottomLeft.length
+      || bottomRightIndex + 2 >= normalsBottomRight.length
+    ) {
+      return false
+    }
+
+    let nx = (normalsTopLeft[topLeftIndex] ?? 0)
+      + (normalsTopRight[topRightIndex] ?? 0)
+      + (normalsBottomLeft[bottomLeftIndex] ?? 0)
+      + (normalsBottomRight[bottomRightIndex] ?? 0)
+    let ny = (normalsTopLeft[topLeftIndex + 1] ?? 0)
+      + (normalsTopRight[topRightIndex + 1] ?? 0)
+      + (normalsBottomLeft[bottomLeftIndex + 1] ?? 0)
+      + (normalsBottomRight[bottomRightIndex + 1] ?? 0)
+    let nz = (normalsTopLeft[topLeftIndex + 2] ?? 0)
+      + (normalsTopRight[topRightIndex + 2] ?? 0)
+      + (normalsBottomLeft[bottomLeftIndex + 2] ?? 0)
+      + (normalsBottomRight[bottomRightIndex + 2] ?? 0)
+    const length = Math.hypot(nx, ny, nz)
+    if (length <= 1e-12) {
+      nx = 0
+      ny = 1
+      nz = 0
+    } else {
+      nx /= length
+      ny /= length
+      nz /= length
+    }
+
+    normalsTopLeft[topLeftIndex] = nx
+    normalsTopLeft[topLeftIndex + 1] = ny
+    normalsTopLeft[topLeftIndex + 2] = nz
+    normalsTopRight[topRightIndex] = nx
+    normalsTopRight[topRightIndex + 1] = ny
+    normalsTopRight[topRightIndex + 2] = nz
+    normalsBottomLeft[bottomLeftIndex] = nx
+    normalsBottomLeft[bottomLeftIndex + 1] = ny
+    normalsBottomLeft[bottomLeftIndex + 2] = nz
+    normalsBottomRight[bottomRightIndex] = nx
+    normalsBottomRight[bottomRightIndex + 1] = ny
+    normalsBottomRight[bottomRightIndex + 2] = nz
+
+    normalAttrTopLeft.needsUpdate = true
+    normalAttrTopRight.needsUpdate = true
+    normalAttrBottomLeft.needsUpdate = true
+    normalAttrBottomRight.needsUpdate = true
+    return true
+  }
+
+  function sampleGroundSeamAwareNormal(
+    definition: GroundRuntimeDynamicMesh,
+    x: number,
+    z: number,
+    target?: THREE.Vector3,
+  ): THREE.Vector3 {
+    const result = sampleGroundNormal(definition, x, z, target)
+    if (!shouldUseGroundLocalEditTiles(definition)) {
+      return result
+    }
+
+    const tileSizeMeters = resolveGroundEditTileSizeMeters(definition)
+    const resolution = resolveGroundEditTileResolution(definition)
+    if (!(tileSizeMeters > 0) || !(resolution > 0)) {
+      return result
+    }
+    const { originX, originZ } = resolveGroundLocalEditTileGridOriginFromRuntime(definition, tileSizeMeters)
+    const localTileX = (x - originX) / tileSizeMeters
+    const localTileZ = (z - originZ) / tileSizeMeters
+    if (!Number.isFinite(localTileX) || !Number.isFinite(localTileZ)) {
+      return result
+    }
+
+    const localEditCellSize = tileSizeMeters / Math.max(1, resolution)
+    const baseSeamBandMeters = Math.max(localEditCellSize * 1.5, 0.1)
+    const baseSampleOffset = Math.max(localEditCellSize * 0.75, 0.05)
+    const maxSeamBandMeters = Math.max(baseSeamBandMeters, Math.min(tileSizeMeters * 0.18, localEditCellSize * 4))
+
+    const normalA = new THREE.Vector3().copy(result)
+    const normalB = new THREE.Vector3().copy(result)
+    const blended = new THREE.Vector3().copy(result)
+    const boundaryNormal = new THREE.Vector3().copy(result)
+
+    const tileFracX = localTileX - Math.floor(localTileX)
+    const tileFracZ = localTileZ - Math.floor(localTileZ)
+    const distToVerticalBoundary = Math.min(tileFracX, 1 - tileFracX) * tileSizeMeters
+    const distToHorizontalBoundary = Math.min(tileFracZ, 1 - tileFracZ) * tileSizeMeters
+
+    const blendBoundaryNormals = (
+      distanceToBoundary: number,
+      sampleLeft: () => void,
+      sampleRight: () => void,
+    ) => {
+      sampleLeft()
+      sampleRight()
+      const dot = clampInclusive(normalA.dot(normalB), -1, 1)
+      const mismatch = clampInclusive((1 - dot) * 0.5, 0, 1)
+      const slope = clampInclusive(1 - Math.min(result.y, normalA.y, normalB.y), 0, 1)
+      const adaptiveScale = 1 + slope * 1.75 + mismatch * 2.5
+      const seamBandMeters = clampInclusive(baseSeamBandMeters * adaptiveScale, baseSeamBandMeters, maxSeamBandMeters)
+      if (distanceToBoundary > seamBandMeters) {
+        return
+      }
+      const distanceBlend = 1 - clampInclusive(distanceToBoundary / seamBandMeters, 0, 1)
+      const boundaryBlend = clampInclusive(0.35 + mismatch * 0.45 + slope * 0.2, 0.35, 0.9)
+      boundaryNormal.copy(normalA).add(normalB)
+      if (boundaryNormal.lengthSq() <= 1e-12) {
+        boundaryNormal.copy(result)
+      } else {
+        boundaryNormal.normalize()
+      }
+      blended.copy(result).lerp(boundaryNormal, distanceBlend * boundaryBlend).normalize()
+      result.copy(blended)
+    }
+
+    if (distToVerticalBoundary <= maxSeamBandMeters) {
+      const boundaryIndex = Math.round(localTileX)
+      const boundaryX = originX + boundaryIndex * tileSizeMeters
+      const sampleOffset = clampInclusive(
+        baseSampleOffset * (1 + clampInclusive(1 - result.y, 0, 1) * 1.25),
+        baseSampleOffset,
+        Math.max(baseSampleOffset, localEditCellSize * 1.75),
+      )
+      blendBoundaryNormals(
+        distToVerticalBoundary,
+        () => sampleGroundNormal(definition, boundaryX - sampleOffset, z, normalA),
+        () => sampleGroundNormal(definition, boundaryX + sampleOffset, z, normalB),
+      )
+    }
+
+    if (distToHorizontalBoundary <= maxSeamBandMeters) {
+      const boundaryIndex = Math.round(localTileZ)
+      const boundaryZ = originZ + boundaryIndex * tileSizeMeters
+      const sampleOffset = clampInclusive(
+        baseSampleOffset * (1 + clampInclusive(1 - result.y, 0, 1) * 1.25),
+        baseSampleOffset,
+        Math.max(baseSampleOffset, localEditCellSize * 1.75),
+      )
+      blendBoundaryNormals(
+        distToHorizontalBoundary,
+        () => sampleGroundNormal(definition, x, boundaryZ - sampleOffset, normalA),
+        () => sampleGroundNormal(definition, x, boundaryZ + sampleOffset, normalB),
+      )
+    }
+
+    if (result.lengthSq() === 0) {
+      result.set(0, 1, 0)
+    }
+    return result.normalize()
+  }
+
+
+  function doesGroundChunkOverlapRegion(spec: GroundChunkSpec, region: GroundGeometryUpdateRegion): boolean {
+    return !(
+      region.maxRow < spec.startRow
+      || region.minRow > spec.startRow + spec.rows
+      || region.maxColumn < spec.startColumn
+      || region.minColumn > spec.startColumn + spec.columns
+    )
+  }
+
+  function collectSharedChunkKeysForStitchRegion(
+    state: GroundRuntimeState,
+    region: GroundGeometryUpdateRegion,
+  ): string[] {
+    const sharedKeys = new Set<string>()
+    for (const runtime of state.chunks.values()) {
+      if (!doesGroundChunkOverlapRegion(runtime.spec, region)) {
+        continue
+      }
+      sharedKeys.add(`${runtime.chunkRow}:${runtime.chunkColumn}`)
+      sharedKeys.add(`${runtime.chunkRow}:${runtime.chunkColumn + 1}`)
+      sharedKeys.add(`${runtime.chunkRow + 1}:${runtime.chunkColumn}`)
+      if (runtime.chunkColumn > Number.MIN_SAFE_INTEGER) {
+        sharedKeys.add(`${runtime.chunkRow}:${runtime.chunkColumn - 1}`)
+      }
+      if (runtime.chunkRow > Number.MIN_SAFE_INTEGER) {
+        sharedKeys.add(`${runtime.chunkRow - 1}:${runtime.chunkColumn}`)
+      }
+    }
+    return Array.from(sharedKeys)
+  }
+
   export function stitchGroundChunkNormals(
     target: THREE.Object3D,
     definition: GroundRuntimeDynamicMesh,
@@ -7125,9 +7474,15 @@ export function setInfiniteGroundHiddenChunkKeys(
     }
     void definition
 
-    const filteredChunkKeys = touchedChunkKeys ? Array.from(touchedChunkKeys).filter((key) => typeof key === 'string' && key.length > 0) : []
-    if (filteredChunkKeys.length) {
+    const filteredChunkKeys = touchedChunkKeys
+      ? Array.from(touchedChunkKeys).filter((key) => typeof key === 'string' && key.length > 0)
+      : []
+    const chunkKeysToStitch = filteredChunkKeys.length
+      ? filteredChunkKeys
+      : (region ? collectSharedChunkKeysForStitchRegion(state, region) : [])
+    if (chunkKeysToStitch.length) {
       const visitedEdges = new Set<string>()
+      const visitedCorners = new Set<string>()
       const stitchEdge = (anchorRow: number, anchorColumn: number, mode: 'right' | 'down'): boolean => {
         // 只有相邻 chunk 都是独立 Mesh 时，边界法线拼接才有意义；flat 批次不参与这条流程。
         // flat chunk 没有独立雕刻边界，强行拼接只会让逻辑复杂但结果没有收益。
@@ -7158,8 +7513,30 @@ export function setInfiniteGroundHiddenChunkKeys(
         })
       }
 
+      const stitchCorner = (anchorRow: number, anchorColumn: number): boolean => {
+        const cornerKey = `${anchorRow}:${anchorColumn}`
+        if (visitedCorners.has(cornerKey)) {
+          return false
+        }
+        visitedCorners.add(cornerKey)
+
+        const topLeft = state.chunks.get(groundChunkKey(anchorRow, anchorColumn))
+        const topRight = state.chunks.get(groundChunkKey(anchorRow, anchorColumn + 1))
+        const bottomLeft = state.chunks.get(groundChunkKey(anchorRow + 1, anchorColumn))
+        const bottomRight = state.chunks.get(groundChunkKey(anchorRow + 1, anchorColumn + 1))
+        if (!topLeft || !topRight || !bottomLeft || !bottomRight) {
+          return false
+        }
+        return averageNormalsAtChunkCorner({
+          topLeft,
+          topRight,
+          bottomLeft,
+          bottomRight,
+        })
+      }
+
       let stitched = false
-      for (const key of filteredChunkKeys) {
+      for (const key of chunkKeysToStitch) {
         const indices = resolveRuntimeChunkIndexFromSharedKey(key)
         if (!indices) {
           continue
@@ -7175,15 +7552,20 @@ export function setInfiniteGroundHiddenChunkKeys(
         if (row > 0) {
           stitched = stitchEdge(row - 1, column, 'down') || stitched
         }
+
+        stitched = stitchCorner(row, column) || stitched
+        if (column > 0) {
+          stitched = stitchCorner(row, column - 1) || stitched
+        }
+        if (row > 0) {
+          stitched = stitchCorner(row - 1, column) || stitched
+        }
+        if (row > 0 && column > 0) {
+          stitched = stitchCorner(row - 1, column - 1) || stitched
+        }
       }
       return stitched
     }
-    if (!region) {
-      return false
-    }
-
-    // 目前 ground 只保留无限模式，因此没有“整网格批量扫描”的必要。
-    // 没有 touchedChunkKeys 时，说明这次更新没有足够精确的 chunk 级信息可用于法线拼接。
     return false
   }
 
