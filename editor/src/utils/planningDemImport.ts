@@ -677,10 +677,6 @@ async function parsePlanningHeightmapImageBuffer(
   options?: PlanningDemImportOptions,
 ): Promise<PlanningDemImportResult> {
   const sourceFileHash = await computeSha256Hex(buffer)
-  const requestedEncoding = resolveRequestedHeightmapEncoding(options)
-  if (requestedEncoding.mode === 'strict-qgis-16bit') {
-    return parseStrictQgis16BitHeightmapPng(buffer, filename, mimeType, sourceFileHash, options)
-  }
   const imageBlob = new Blob([buffer], { type: mimeType ?? 'application/octet-stream' })
   const image = await loadImageElementFromBlob(imageBlob)
   const width = Math.max(1, Math.trunc(image.naturalWidth))
@@ -737,7 +733,6 @@ async function parsePlanningHeightmapImageBuffer(
         PLANNING_PNG_HEIGHTMAP_CONTRACT.maxElevation,
       )
   const worldBounds = resolveImageHeightmapWorldBounds(width, height, options)
-  const heightmapEncoding = createCustomRangeHeightmapEncoding(8, 1)
 
   return {
     sourceFileHash,
@@ -747,13 +742,11 @@ async function parsePlanningHeightmapImageBuffer(
     height,
     rasterData,
     rawMinElevation: PLANNING_PNG_HEIGHTMAP_CONTRACT.minElevation,
-    recommendedAppliedMinElevation: PLANNING_PNG_HEIGHTMAP_CONTRACT.minElevation,
     minElevation: PLANNING_PNG_HEIGHTMAP_CONTRACT.minElevation,
     maxElevation: PLANNING_PNG_HEIGHTMAP_CONTRACT.maxElevation,
     sampleStepMeters: computeSampleStepMeters(worldBounds, width, height),
     geographicBounds: null,
     worldBounds,
-    heightmapEncoding,
     preview,
     orthophoto: null,
   }
