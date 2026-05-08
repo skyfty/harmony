@@ -408,7 +408,6 @@ function buildRuntimeDetailedHeightfieldShape(
 		segmentRows,
 	}
 }
-
 function buildFlatBaseHeightfieldShape(
 	chunkKey: string,
 	chunkSizeMeters: number,
@@ -682,10 +681,7 @@ export function createInfiniteGroundChunkColliderRuntime(
 			if (!coord) {
 				return
 			}
-			const origin = resolveGroundChunkOrigin(coord, chunkSizeMeters)
-			const centerX = origin.x + chunkSizeMeters * 0.5
-			const centerZ = origin.z + chunkSizeMeters * 0.5
-			const flatHeight = sampleGroundHeight(params.groundDefinition, centerX, centerZ)
+			const flatHeight = baseHeight
 			const built = buildFlatBaseHeightfieldShape(chunkKey, chunkSizeMeters, flatHeight)
 			nextDesired.set(makeRuntimeKey('base-flat', chunkKey), {
 				runtimeKey: makeRuntimeKey('base-flat', chunkKey),

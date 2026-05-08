@@ -2186,8 +2186,8 @@ function syncPreviewInfiniteGroundChunkCollisionBodies(
 	activeCamera: THREE.PerspectiveCamera,
 ): void {
 	const compiledManifest = ((groundObject.userData as Record<string, unknown> | undefined)?.compiledGroundManifest ?? null) as CompiledGroundManifest | null
+	let excludedChunkKeys: string[] = []
 	if (compiledManifest) {
-		previewInfiniteGroundChunkColliderRuntime.clear()
 		const revision = Number.isFinite(compiledManifest.revision)
 			? Math.max(0, Math.trunc(compiledManifest.revision))
 			: computeCompiledGroundManifestRevision(compiledManifest)
@@ -2200,10 +2200,10 @@ function syncPreviewInfiniteGroundChunkCollisionBodies(
 			manifest: compiledManifest,
 			loadTileData: async (record) => cachedCompiledGroundFiles.get(record.path) ?? null,
 		})
-		syncPreviewGroundCollisionDebugSources(groundObject)
-		return
+		excludedChunkKeys = previewCompiledGroundCollisionRuntime.getActiveTileKeys()
+	} else {
+		previewCompiledGroundCollisionRuntime.clear()
 	}
-	previewCompiledGroundCollisionRuntime.clear()
 	const groundDefinition = cachedGroundDynamicMesh && isGroundDynamicMesh(cachedGroundDynamicMesh)
 		? cachedGroundDynamicMesh as GroundRuntimeDynamicMesh
 		: null
@@ -2220,6 +2220,7 @@ function syncPreviewInfiniteGroundChunkCollisionBodies(
 		camera: activeCamera,
 		manifestRevision: cachedGroundChunkManifest?.revision,
 		manifestRecords: cachedGroundChunkManifest?.chunks,
+		excludedChunkKeys,
 		loadChunkData: async (record) => {
 			const sceneId = currentDocument?.id?.trim() ?? ''
 			if (!sceneId) {
