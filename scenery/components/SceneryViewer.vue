@@ -3927,14 +3927,47 @@ function hydrateGroundSidecarFromPackage(
   sceneEntry: {
     sceneId: string;
     path: string;
+    groundScatterPath?: string;
+    groundPaintPath?: string;
     terrain?: { datasetId: string; rootManifestPath: string; regionsPath?: string };
     compiledGround?: ScenePackageCompiledGroundEntry | null;
   },
   document: SceneJsonExportDocument,
 ): SceneJsonExportDocument {
-  const definition = findFirstGroundDynamicMesh(document) as GroundRuntimeDynamicMesh | null;
+  const groundNode = findGroundNode(document.nodes);
+  const definition = groundNode?.dynamicMesh?.type === 'Ground'
+    ? (groundNode.dynamicMesh as GroundRuntimeDynamicMesh & {
+      terrainScatter?: unknown;
+      groundSurfaceChunks?: unknown;
+    })
+    : (findFirstGroundDynamicMesh(document) as (GroundRuntimeDynamicMesh & {
+      terrainScatter?: unknown;
+      groundSurfaceChunks?: unknown;
+    }) | null);
   if (!definition) {
     return document;
+  }
+
+  const groundNodeId = typeof groundNode?.id === 'string' ? groundNode.id.trim() : '';
+
+  if (sceneEntry.groundScatterPath) {
+    const scatterBytes = readBinaryFileFromScenePackage(pkg, sceneEntry.groundScatterPath);
+    const scatterPayload = deserializeGroundScatterSidecar(
+      Uint8Array.from(scatterBytes).buffer,
+    );
+    if (!groundNodeId || !scatterPayload.groundNodeId || scatterPayload.groundNodeId === groundNodeId) {
+      definition.terrainScatter = scatterPayload.terrainScatter ?? null;
+    }
+  }
+
+  if (sceneEntry.groundPaintPath) {
+    const paintBytes = readBinaryFileFromScenePackage(pkg, sceneEntry.groundPaintPath);
+    const paintPayload = deserializeGroundPaintSidecar(
+      Uint8Array.from(paintBytes).buffer,
+    );
+    if (!groundNodeId || !paintPayload.groundNodeId || paintPayload.groundNodeId === groundNodeId) {
+      definition.groundSurfaceChunks = paintPayload.groundSurfaceChunks ?? null;
+    }
   }
 
   const terrainDatasetManifest = readTerrainDatasetManifestFromScenePackage(pkg, sceneEntry);
@@ -3956,7 +3989,6 @@ function hydrateGroundSidecarFromPackage(
   }).runtimeTerrainHeightSampler = terrainHeightSampler;
 
   if (!shouldUseCompiledGroundForViewer(definition, sceneEntry.terrain?.datasetId ?? null)) {
-    const groundNode = findGroundNode(document.nodes);
     if (groundNode) {
       groundNode.userData = {
         ...(groundNode.userData ?? {}),
