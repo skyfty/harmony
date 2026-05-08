@@ -179,7 +179,7 @@ function resolveRuntimeLoadedTileKeys(definition: GroundDynamicMesh): string[] {
 
 function resolveRuntimeTileResolution(definition: GroundDynamicMesh): number {
   const gridSize = resolveGroundWorkingGridSize(definition)
-  return Math.max(1, Math.trunc(definition.tileResolution ?? gridSize.rows))
+  return Math.max(1, Math.trunc(definition.editTileResolution ?? gridSize.rows))
 }
 
 function createGroundHeightTileState(input: {
@@ -842,7 +842,6 @@ export const useGroundHeightmapStore = defineStore('groundHeightmap', {
         return state
       }
       const receivedChunkKeys = Array.from(chunkKeys).filter((key) => typeof key === 'string' && key.length > 0)
-      const existingChunkKeys = Array.from(state.optimizedMeshDirtyChunkKeys)
       for (const key of receivedChunkKeys) {
         const normalized = normalizeGroundChunkKey(key)
         if (!normalized) {

@@ -150,10 +150,11 @@ function formatNumericValue(value: number): string {
 function parseAndNormalize(raw: string, fallback: number, min: number, max: number | undefined, step: number): number {
   const parsed = Number.parseFloat(raw)
   const base = Number.isFinite(parsed) ? parsed : fallback
-  const clamped = Number.isFinite(max) ? clampValue(base, min, max) : Math.max(min, base)
+  const hasMax = typeof max === 'number' && Number.isFinite(max)
+  const clamped = hasMax ? clampValue(base, min, max) : Math.max(min, base)
   const stepped = snapToStep(clamped, min, step)
   const normalized = Number(stepped.toFixed(VALUE_PRECISION))
-  return Number.isFinite(max) ? clampValue(normalized, min, max) : Math.max(min, normalized)
+  return hasMax ? clampValue(normalized, min, max) : Math.max(min, normalized)
 }
 
 function commitBrushRadiusInput() {

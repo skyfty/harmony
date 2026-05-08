@@ -44,7 +44,6 @@ function upgradeGroundNodeTerrainMetadata(
 
 export function migrateLegacyGroundTerrainDocument(
   document: StoredSceneDocument,
-  options: { hasLegacyHeightSidecar?: boolean } = {},
 ): LegacyGroundTerrainUpgradeResult {
   if (!document || !Array.isArray(document.nodes)) {
     return { converted: false, convertedGroundCount: 0 }

@@ -1,9 +1,9 @@
 import { fromArrayBuffer } from 'geotiff'
+import { decode as decodePng, hasPngSignature } from 'fast-png'
 import { GROUND_TERRAIN_CHUNK_SIZE_METERS } from '@schema'
 import type {
   PlanningTerrainDemData,
   PlanningTerrainDemHeightmapEncoding,
-  PlanningTerrainDemHeightmapEncodingMode,
   PlanningTerrainGeographicBounds,
   PlanningTerrainOrthophotoData,
   PlanningTerrainWorldBounds,
@@ -40,6 +40,7 @@ export interface PlanningDemImportOptions {
   maxElevation?: number | null
   metersPerPixel?: number | null
   worldBoundsOverride?: PlanningTerrainWorldBounds | null
+  heightmapEncoding?: PlanningTerrainDemHeightmapEncoding | null
   createPreview?: boolean
 }
 
@@ -69,7 +70,13 @@ type PlanningGeoTiffImageLike = {
   getHeight: () => number
   getResolution?: () => unknown
   getWidth: () => number
-  readRasters: (options: { interleave: true }) => Promise<ArrayLike<number> | ArrayLike<number>[]>
+  readRasters: (options: {
+    interleave: true
+    window?: [number, number, number, number]
+    width?: number
+    height?: number
+    resampleMethod?: string
+  }) => Promise<ArrayLike<number> | ArrayLike<number>[]>
   fileDirectory?: Record<string, unknown> | null | undefined
 }
 
@@ -79,6 +86,41 @@ export const PLANNING_PNG_HEIGHTMAP_CONTRACT = {
   minElevation: -640,
   maxElevation: 4460,
 } as const
+
+export const DEFAULT_IMAGE_HEIGHTMAP_MIN_ELEVATION = PLANNING_PNG_HEIGHTMAP_CONTRACT.minElevation
+export const DEFAULT_IMAGE_HEIGHTMAP_MAX_ELEVATION = PLANNING_PNG_HEIGHTMAP_CONTRACT.maxElevation
+
+const STRICT_QGIS_HEIGHTMAP_ZERO_CODE = 32768
+const STRICT_QGIS_HEIGHTMAP_METERS_PER_UNIT = 1
+
+export function createStrictQgis16BitHeightmapEncoding(): PlanningTerrainDemHeightmapEncoding {
+  return {
+    version: 1,
+    sourceFormat: 'png',
+    mode: 'strict-qgis-16bit',
+    bitDepth: 16,
+    channels: 1,
+    signed: false,
+    zeroCode: STRICT_QGIS_HEIGHTMAP_ZERO_CODE,
+    metersPerUnit: STRICT_QGIS_HEIGHTMAP_METERS_PER_UNIT,
+  }
+}
+
+export function createCustomRangeHeightmapEncoding(
+  bitDepth: 8 | 16,
+  channels: number,
+): PlanningTerrainDemHeightmapEncoding {
+  return {
+    version: 1,
+    sourceFormat: 'png',
+    mode: 'custom-range',
+    bitDepth,
+    channels: Math.max(1, Math.trunc(Number(channels) || 1)),
+    signed: false,
+    zeroCode: null,
+    metersPerUnit: null,
+  }
+}
 
 const PLANNING_DEM_IMAGE_EXTENSIONS = ['.png']
 
@@ -615,6 +657,8 @@ function parseStrictQgis16BitHeightmapPng(
     width,
     height,
     rasterData,
+    rawMinElevation: minElevation,
+    recommendedAppliedMinElevation: minElevation,
     minElevation,
     maxElevation,
     sampleStepMeters: computeSampleStepMeters(worldBounds, width, height),
@@ -656,10 +700,6 @@ async function parsePlanningHeightmapImageBuffer(
   const rasterData = new Float32Array(width * height)
   let nonGrayscalePixelCount = 0
   let translucentPixelCount = 0
-  let actualMinValue = Number.POSITIVE_INFINITY
-  let actualMaxValue = Number.NEGATIVE_INFINITY
-
-  const grayscaleValues = new Float64Array(width * height)
 
   for (let index = 0; index < rasterData.length; index += 1) {
     const pixelOffset = index * 4
@@ -707,6 +747,7 @@ async function parsePlanningHeightmapImageBuffer(
     height,
     rasterData,
     rawMinElevation: PLANNING_PNG_HEIGHTMAP_CONTRACT.minElevation,
+    recommendedAppliedMinElevation: PLANNING_PNG_HEIGHTMAP_CONTRACT.minElevation,
     minElevation: PLANNING_PNG_HEIGHTMAP_CONTRACT.minElevation,
     maxElevation: PLANNING_PNG_HEIGHTMAP_CONTRACT.maxElevation,
     sampleStepMeters: computeSampleStepMeters(worldBounds, width, height),
@@ -726,7 +767,7 @@ async function parsePlanningGeoTiffBuffer(
 ): Promise<PlanningDemImportResult> {
   const sourceFileHash = await computeSha256Hex(buffer)
   const tiff = await fromArrayBuffer(buffer)
-  const image = await tiff.getImage() as PlanningGeoTiffImageLike
+  const image = await tiff.getImage() as unknown as PlanningGeoTiffImageLike
   const width = image.getWidth()
   const height = image.getHeight()
   if (width < 2 || height < 2) {
@@ -871,7 +912,7 @@ export async function openPlanningDemWindowedGeoTiffSource(
   }
   const buffer = await blob.arrayBuffer()
   const tiff = await fromArrayBuffer(buffer)
-  const image = await tiff.getImage() as PlanningGeoTiffImageLike
+  const image = await tiff.getImage() as unknown as PlanningGeoTiffImageLike
   const width = image.getWidth()
   const height = image.getHeight()
   if (width < 2 || height < 2) {

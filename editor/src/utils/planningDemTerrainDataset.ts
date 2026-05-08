@@ -950,7 +950,6 @@ export async function buildPlanningDemTerrainDataset(
   options: PlanningDemTerrainDatasetBuildOptions,
 ): Promise<PlanningDemTerrainDatasetBuildResult> {
   const reportProgress = createThrottledTerrainDatasetProgressReporter(options.onProgress)
-  const startedAt = Date.now()
   const leafTileSegments = clampFiniteInteger(options.leafTileSegments, DEFAULT_LEAF_TILE_SEGMENTS, MIN_TILE_SEGMENTS, MAX_TILE_SEGMENTS)
   const demHash = typeof options.terrainDem.sourceFileHash === 'string' ? options.terrainDem.sourceFileHash.trim() : ''
   const isGeoTiff = isPlanningDemGeoTiffSource(options.terrainDem.filename ?? '', options.terrainDem.mimeType ?? null)

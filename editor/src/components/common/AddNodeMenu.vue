@@ -324,6 +324,7 @@ const groundCreationProfile = computed(() => {
 })
 
 const groundCreationWarning = computed(() => groundCreationProfile.value.warningMessage)
+const groundCreationUsesStreamingProfile = computed(() => groundCreationProfile.value.quality !== 'high')
 
 watch(selectedGroundPresetId, (presetId) => {
   const preset = groundPresets.find((entry) => entry.id === presetId)
@@ -465,8 +466,6 @@ async function handleConfirmGround() {
   const targetFriction = Math.min(1, Math.max(0, preset?.physics?.friction ?? DEFAULT_RIGIDBODY_FRICTION))
   const targetRestitution = Math.min(1, Math.max(0, preset?.physics?.restitution ?? DEFAULT_RIGIDBODY_RESTITUTION))
   const cellSize = creationProfile.cellSize
-  const rows = Math.max(1, Math.ceil(depth / cellSize))
-  const columns = Math.max(1, Math.ceil(width / cellSize))
 
   const definition: GroundDynamicMesh = {
     type: 'Ground',
@@ -476,20 +475,9 @@ async function handleConfirmGround() {
       minZ: -depth * 0.5,
       maxZ: depth * 0.5,
     },
-    width,
-    depth,
-    rows,
-    columns,
     cellSize,
-    storageMode: creationProfile.storageMode,
-    tileSizeMeters: creationProfile.tileSizeMeters,
-    tileResolution: creationProfile.tileResolution,
-    globalLodCellSize: creationProfile.globalLodCellSize,
-    activeEditWindowRadius: creationProfile.activeEditWindowRadius,
     editTileSizeMeters: creationProfile.editTileSizeMeters,
     editTileResolution: creationProfile.editTileResolution,
-    collisionMode: creationProfile.collisionMode,
-    chunkStreamingEnabled: creationProfile.storageMode === 'tiled',
     heightComposition: { mode: 'planning_plus_manual' },
     planningMetadata: null,
     terrainScatterInstancesUpdatedAt: Date.now(),
@@ -607,7 +595,7 @@ function handleAddLight(type: string) {
           class="ground-dialog-hint"
         >
           {{ groundCreationWarning }}
-          <span v-if="groundCreationProfile.storageMode === 'tiled'">
+          <span v-if="groundCreationUsesStreamingProfile">
             推荐显示单元尺寸：{{ groundCreationProfile.cellSize }}m，局部编辑精度约 {{ groundCreationProfile.editCellSize.toFixed(2) }}m，预计瓦片数：{{ groundCreationProfile.estimatedTileCount }}。
           </span>
         </v-alert>

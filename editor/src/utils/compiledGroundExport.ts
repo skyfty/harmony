@@ -24,11 +24,17 @@ import {
   type CompiledGroundRenderChunkDiagnostic,
 } from './compiledGroundBuildShared'
 import type {
+  CompiledGroundBuildWorkerInitRequest,
   CompiledGroundBuildWorkerRequest,
   CompiledGroundBuildWorkerResponse,
+  CompiledGroundBuildWorkerTilesRequest,
   CompiledGroundBuildWorkerTilesResponse,
   CompiledGroundTileJob,
 } from './compiledGroundBuildWorkerProtocol'
+
+type CompiledGroundBuildWorkerRequestPayload =
+  | Omit<CompiledGroundBuildWorkerInitRequest, 'requestId'>
+  | Omit<CompiledGroundBuildWorkerTilesRequest, 'requestId'>
 
 type CompiledGroundExportResult = {
   manifestPath: string
@@ -256,7 +262,7 @@ function closeCompiledGroundBuildWorkerRuntime(runtime: CompiledGroundBuildWorke
 
 function requestCompiledGroundWorker(
   runtime: CompiledGroundBuildWorkerRuntime,
-  message: Omit<CompiledGroundBuildWorkerRequest, 'requestId'>,
+  message: CompiledGroundBuildWorkerRequestPayload,
 ): Promise<CompiledGroundBuildWorkerResponse> {
   return new Promise((resolve, reject) => {
     const requestId = runtime.nextRequestId
@@ -745,7 +751,7 @@ export async function buildCompiledGroundPackageFilesAsync(
   const yieldControl = options.yieldControl ?? (() => new Promise<void>((resolve) => setTimeout(resolve, 0)))
   const includedTileKeys = resolveIncludedTileKeySet(options)
   const renderTotal = includedTileKeys
-    ? Array.from({ length: context.renderRows * context.renderColumns }).reduce((sum, _unused, index) => {
+    ? Array.from({ length: context.renderRows * context.renderColumns }).reduce<number>((sum, _unused, index) => {
       const row = Math.floor(index / context.renderColumns)
       const column = index % context.renderColumns
       const key = formatCompiledGroundTileKey(row, column)
@@ -753,7 +759,7 @@ export async function buildCompiledGroundPackageFilesAsync(
     }, 0)
     : context.renderRows * context.renderColumns
   const collisionTotal = includedTileKeys
-    ? Array.from({ length: context.collisionRows * context.collisionColumns }).reduce((sum, _unused, index) => {
+    ? Array.from({ length: context.collisionRows * context.collisionColumns }).reduce<number>((sum, _unused, index) => {
       const row = Math.floor(index / context.collisionColumns)
       const column = index % context.collisionColumns
       const key = formatCompiledGroundTileKey(row, column)

@@ -99,7 +99,7 @@ function cloneGroundFlatChunkDefinitionForWorker(definition: GroundRuntimeDynami
       clone[key] = clonedValue
     }
   })
-  return clone as GroundRuntimeDynamicMesh
+  return clone as unknown as GroundRuntimeDynamicMesh
 }
 
 function buildGroundFlatChunkMatricesLocally(definition: GroundRuntimeDynamicMesh, chunkKeys: string[]): GroundFlatChunkInstanceMatrixBuildResult {

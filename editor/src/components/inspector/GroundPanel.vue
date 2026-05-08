@@ -72,17 +72,6 @@ const groundCastShadow = computed({
   },
 })
 
-const groundChunkStreamingEnabled = computed({
-  get: () => groundDefinition.value?.chunkStreamingEnabled === true,
-  set: (value: boolean) => {
-    const node = selectedGroundNode.value
-    if (!node || node.dynamicMesh?.type !== 'Ground') {
-      return
-    }
-    sceneStore.updateGroundNodeDynamicMesh(node.id, { chunkStreamingEnabled: value })
-  },
-})
-
 const editorScatterDynamicStreamingEnabled = computed({
   get: () => sceneStore.groundSettings.editorScatterDynamicStreamingEnabled !== false,
   set: (value: boolean) => {
@@ -201,14 +190,6 @@ const editorScatterVisible = computed({
         hide-details
         color="primary"
         label="Cast Ground Shadows"
-      />
-
-      <v-switch
-        v-model="groundChunkStreamingEnabled"
-        density="compact"
-        hide-details
-        color="primary"
-        label="Enable Terrain Chunk Streaming"
       />
 
       <v-switch

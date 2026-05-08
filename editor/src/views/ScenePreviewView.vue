@@ -219,7 +219,6 @@ import {
 	WALL_COMPONENT_TYPE,
 	BOUNDARY_WALL_COMPONENT_TYPE,
 	boundaryWallComponentDefinition,
-	characterControllerComponentDefinition,
 	LOD_COMPONENT_TYPE,
 	LOD_FACE_CAMERA_FORWARD_AXIS_X,
 	LOD_FACE_CAMERA_FORWARD_AXIS_Y,
@@ -1705,8 +1704,6 @@ let cachedCompiledGroundManifest: CompiledGroundManifest | null = null
 let cachedCompiledGroundSceneId: string | null = null
 let cachedCompiledGroundFiles = new Map<string, ArrayBuffer>()
 let cachedCompiledGroundBuildKey: string | null = null
-let lastCompiledGroundPreviewSyncLogAt = 0
-let lastCompiledGroundPreviewSyncSignature = ''
 let groundSurfacePreviewLoadToken = 0
 let unsubscribe: (() => void) | null = null
 let livePreviewEnabled = true
@@ -1919,9 +1916,6 @@ const VEHICLE_WHEEL_SPIN_EPSILON = 1e-4
 const VEHICLE_TRAVEL_EPSILON = 1e-5
 const STEERING_WHEEL_MAX_DEGREES = 135
 const STEERING_WHEEL_MAX_RADIANS = THREE.MathUtils.degToRad(STEERING_WHEEL_MAX_DEGREES)
-const STEERING_WHEEL_RETURN_SPEED = 4
-const STEERING_KEYBOARD_RETURN_SPEED = 7
-const STEERING_KEYBOARD_CATCH_SPEED = 18
 const nodeObjectMap = new Map<string, THREE.Object3D>()
 const signboardNodeIds = new Set<string>()
 const SCENE_PREVIEW_SIGNBOARD_BILLBOARD_STYLE: SignboardBillboardStyle = {
@@ -2246,7 +2240,11 @@ function resolveGroundViewportWorldSize(): { width: number; depth: number } | nu
 	const dynamicMesh = groundNode && isGroundDynamicMesh(groundNode.dynamicMesh)
 		? groundNode.dynamicMesh
 		: null
-	const baseBounds = resolveGroundWorldBounds(dynamicMesh ?? document.groundSettings)
+	const baseGroundDefinition = dynamicMesh ?? document.groundSettings
+	if (!baseGroundDefinition) {
+		return null
+	}
+	const baseBounds = resolveGroundWorldBounds(baseGroundDefinition)
 	const baseWidth = baseBounds.maxX - baseBounds.minX
 	const baseDepth = baseBounds.maxZ - baseBounds.minZ
 	if (baseWidth <= 0 || baseDepth <= 0) {
@@ -3146,7 +3144,6 @@ const vehicleDriveUi = computed(() => {
 	}
 })
 
-const steeringWheelRef = ref<HTMLDivElement | null>(null)
 const pendingCharacterControlEvent = ref<Extract<BehaviorRuntimeEvent, { type: 'character-control' }> | null>(null)
 const activeCharacterControlNodeId = ref<string | null>(null)
 const characterControlAnimationClipState = new Map<string, string | null>()
@@ -9989,16 +9986,6 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
 				const revision = Number.isFinite(compiledManifest.revision)
 					? Math.max(0, Math.trunc(compiledManifest.revision))
 					: computeCompiledGroundManifestRevision(compiledManifest)
-				const compiledGroundPreviewSyncSignature = [
-					cachedCompiledGroundSceneId,
-					revision,
-					compiledManifest.renderTiles.length,
-					compiledManifest.collisionTiles.length,
-					cachedCompiledGroundFiles.size,
-					groundObject.visible ? 1 : 0,
-				].join('|')
-				lastCompiledGroundPreviewSyncSignature = compiledGroundPreviewSyncSignature
-				lastCompiledGroundPreviewSyncLogAt = performance.now()
 				syncCompiledGroundRenderTiles({
 					groundObject,
 					groundDefinition: streamingGroundDefinition,
@@ -10344,60 +10331,6 @@ function applyFogSettings(settings: EnvironmentSettings) {
 	}
 }
 
-function resolveFogBackgroundMix(settings: EnvironmentSettings): number {
-	if (settings.fogMode === 'linear') {
-		const far = Math.max(1, settings.fogFar)
-		return THREE.MathUtils.clamp(1 - Math.min(far / 600, 1), 0.2, 0.85)
-	}
-	if (settings.fogMode === 'exp') {
-		return THREE.MathUtils.clamp(Math.max(0, settings.fogDensity) * 24, 0.2, 0.85)
-	}
-	return 0
-}
-
-function syncFogBackgroundDome(settings: EnvironmentSettings) {
-	if (!scene) {
-		return
-	}
-	const fogMix = resolveFogBackgroundMix(settings)
-	const gradientTopColor = typeof settings.background.gradientTopColor === 'string' ? settings.background.gradientTopColor.trim() : ''
-	const topColor = gradientTopColor || settings.background.solidColor
-	const bottomColor = settings.background.solidColor
-	const offset = typeof settings.background.gradientOffset === 'number' && Number.isFinite(settings.background.gradientOffset)
-		? settings.background.gradientOffset
-		: 33
-	const exponent = typeof settings.background.gradientExponent === 'number' && Number.isFinite(settings.background.gradientExponent)
-		? settings.background.gradientExponent
-		: 0.6
-
-	if (!gradientBackgroundDome) {
-		if (!fogMix) {
-			return
-		}
-		gradientBackgroundDome = createGradientBackgroundDome({
-			topColor,
-			bottomColor,
-			offset,
-			exponent,
-			fogColor: settings.fogColor,
-			fogMix,
-		})
-		;(gradientBackgroundDome.mesh as any).raycast = () => {}
-		scene.add(gradientBackgroundDome.mesh)
-		return
-	}
-
-	gradientBackgroundDome.uniforms.topColor.value.set(topColor)
-	gradientBackgroundDome.uniforms.bottomColor.value.set(bottomColor)
-	gradientBackgroundDome.uniforms.fogColor.value.set(settings.fogColor)
-	gradientBackgroundDome.uniforms.fogMix.value = fogMix
-	if (typeof settings.background.gradientOffset === 'number' && Number.isFinite(settings.background.gradientOffset)) {
-		gradientBackgroundDome.uniforms.offset.value = settings.background.gradientOffset
-	}
-	if (typeof settings.background.gradientExponent === 'number' && Number.isFinite(settings.background.gradientExponent)) {
-		gradientBackgroundDome.uniforms.exponent.value = settings.background.gradientExponent
-	}
-}
 
 function applyPhysicsEnvironmentSettings(settings: EnvironmentSettings) {
 	const gravity = clampNumber(settings.gravityStrength, 0, 100, DEFAULT_ENVIRONMENT_GRAVITY)
@@ -10687,7 +10620,6 @@ async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
 	)
 	scene.backgroundRotation.copy(euler)
 	scene.environmentRotation.copy(euler)
-	syncFogBackgroundDome(snapshot)
 
 	if (backgroundApplied && environmentApplied) {
 		pendingEnvironmentSettings = null

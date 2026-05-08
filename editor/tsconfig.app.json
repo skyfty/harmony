@@ -5,20 +5,18 @@
     "noEmit": true,
     "moduleResolution": "bundler",
     "types": ["vite/client", "vuetify"],
-    "ignoreDeprecations": "5.0",
-    "baseUrl": ".",
     "paths": {
-      "@/*": ["src/*"],
+      "@/*": ["./src/*"],
       "@schema": ["../schema/index.ts"],
       "@schema/*": ["../schema/*"],
       "@three-examples/*": [
-        "node_modules/@types/three/examples/jsm/*",
-        "node_modules/three/examples/jsm/*"
+        "./node_modules/@types/three/examples/jsm/*",
+        "./node_modules/three/examples/jsm/*"
       ],
-      "three": ["node_modules/@types/three"],
+      "three": ["./node_modules/@types/three"],
       "three/*": [
-        "node_modules/@types/three/*",
-        "node_modules/three/*"
+        "./node_modules/@types/three/*",
+        "./node_modules/three/*"
       ]
     },
 

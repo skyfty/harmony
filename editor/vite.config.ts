@@ -20,6 +20,9 @@ const pollingInterval = Number.isFinite(parsedPollingInterval) && parsedPollingI
 export default defineConfig({
   plugins: [vue(), vuetify({ autoImport: true })],
   cacheDir: path.join(os.tmpdir(), 'harmony-editor-vite'),
+  worker: {
+    format: 'es',
+  },
   resolve: {
     alias: [
       {

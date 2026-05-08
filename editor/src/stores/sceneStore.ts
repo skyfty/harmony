@@ -39,7 +39,7 @@ import {
   normalizeWaterSurfaceMeshInput,
 } from '@schema'
 import { resolveGroundRuntimeChunkCells } from '@schema/groundMesh'
-import { DEFAULT_COLOR, DEFAULT_INTENSITY } from '@schema/lightDefaults'
+import { DEFAULT_INTENSITY } from '@schema/lightDefaults'
 import { migrateLegacyGroundTerrainDocument } from '@/utils/legacyGroundTerrainMigration'
 import { createScenesStoreTerrainDatasetHeightSampler } from '@/utils/terrainDatasetRuntime'
 import {
@@ -2930,10 +2930,43 @@ function getLightPreset(type: LightNodeType) {
 
 type ExternalSceneImportContext = {
   assetCache: ReturnType<typeof useAssetCacheStore>
+  registerAsset: (asset: ProjectAsset, options?: {
+    categoryId?: string
+    source?: AssetSourceMetadata
+    internal?: boolean
+    isEditorOnly?: boolean
+    commitOptions?: { updateNodes?: boolean }
+    autoSave?: boolean
+  }) => ProjectAsset
+  converted: Set<Object3D>
+  textureRefs: Map<Texture, SceneMaterialTextureRef>
+  textureSequence: number
+  modelAssetId: string | null
 }
 
 function isBoneObject(object: Object3D): boolean {
   return object.type === 'Bone'
+}
+
+function isRenderableObject(object: Object3D): boolean {
+  const candidate = object as Object3D & {
+    isMesh?: boolean
+    isSkinnedMesh?: boolean
+    isLine?: boolean
+    isPoints?: boolean
+  }
+  return Boolean(candidate.isMesh || candidate.isSkinnedMesh || candidate.isLine || candidate.isPoints)
+}
+
+function toVector(vector: { x: number; y: number; z: number }): Vector3Like {
+  return { x: vector.x, y: vector.y, z: vector.z }
+}
+
+function toHexColor(color: Color | null | undefined, fallback = '#ffffff'): string {
+  if (!color) {
+    return fallback
+  }
+  return `#${color.getHexString()}`
 }
 
 function resolveLightTypeFromObject(light: Light): LightNodeType {
@@ -9899,15 +9932,9 @@ export const useSceneStore = defineStore('scene', {
         this.updateNodeDynamicMesh(nodeId, dynamicMesh)
         return
       }
-      const existingLocalEditTileCount = target.dynamicMesh && typeof target.dynamicMesh === 'object' && target.dynamicMesh?.localEditTiles
-        ? Object.keys(target.dynamicMesh.localEditTiles as Record<string, unknown>).length
-        : 0
       const incoming = dynamicMesh && typeof dynamicMesh === 'object'
         ? { ...(dynamicMesh as Record<string, unknown>) }
         : dynamicMesh
-      const incomingLocalEditTileCount = incoming && typeof incoming === 'object' && Object.prototype.hasOwnProperty.call(incoming, 'localEditTiles') && (incoming as Record<string, unknown>).localEditTiles
-        ? Object.keys((incoming as Record<string, unknown>).localEditTiles as Record<string, unknown>).length
-        : 0
       let shouldPersistScatterSidecar = false
       let shouldPersistPaintSidecar = false
       if (incoming && typeof incoming === 'object' && this.currentSceneId) {
@@ -9944,9 +9971,6 @@ export const useSceneStore = defineStore('scene', {
         })
       }
       finalizeDynamicMeshRuntimePatch(this, nodeId, resolveDynamicMeshType(target.dynamicMesh))
-      const mergedLocalEditTileCount = target.dynamicMesh && typeof target.dynamicMesh === 'object' && target.dynamicMesh?.localEditTiles
-        ? Object.keys(target.dynamicMesh.localEditTiles as Record<string, unknown>).length
-        : 0
 
       persistGroundHeightSidecarForNode(target)
       if (shouldPersistScatterSidecar) {
@@ -18552,9 +18576,7 @@ export const useSceneStore = defineStore('scene', {
             : undefined,
         })
 
-        migrateLegacyGroundTerrainDocument(sceneDocument, {
-          hasLegacyHeightSidecar: Boolean(groundHeightSidecars[entry.id]),
-        })
+        migrateLegacyGroundTerrainDocument(sceneDocument)
 
         await hydrateSceneDocumentWithEmbeddedAssets(sceneDocument)
         await persistPlanningImageLayersToIndexedDB(sceneDocument.id, sceneDocument.planningData?.images ?? [])

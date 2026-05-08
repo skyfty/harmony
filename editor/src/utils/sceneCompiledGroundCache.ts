@@ -8,14 +8,12 @@ import {
   type CompiledGroundRenderTileRecord,
   type GroundDynamicMesh,
   type SceneJsonExportDocument,
-  type SceneNode,
 } from '@schema'
 import {
   buildCompiledGroundPackageFilesAsync,
   resolvePreferredCompiledGroundWorkerCount,
   type CompiledGroundBuildProgress,
 } from './compiledGroundExport'
-import { isGroundDynamicMesh } from '@schema/groundHeightfield'
 
 export type SceneCompiledGroundPackage = {
   manifest: CompiledGroundManifest
@@ -127,17 +125,12 @@ const CACHE_FORMAT_VERSION = 2
 const CACHE_KEY_PREFIX = `scene-compiled-ground:v${CACHE_FORMAT_VERSION}:`
 const CACHE_CATALOG_KEY = `${CACHE_KEY_PREFIX}__catalog__`
 const CACHE_MAX_PACKAGES = 12
-const CACHE_BATCH_SIZE = 24
 const CACHE_DB_NAME = 'harmony-scene-compiled-ground-v2'
 const CACHE_DB_VERSION = 1
 const CACHE_META_STORE = 'meta'
 const CACHE_TILE_STORE = 'tiles'
 let sceneCompiledGroundDbPromise: Promise<IDBDatabase | null> | null = null
 const sceneCompiledGroundMemoryCache = new Map<string, SceneCompiledGroundMemoryCacheEntry>()
-
-function roundElapsedMs(startedAt: number): number {
-  return Math.max(0, Math.round(Date.now() - startedAt))
-}
 
 function emitEnsureStatus(
   callback: EnsureSceneCompiledGroundOptions['onStatus'] | RebuildSceneCompiledGroundChunksOptions['onStatus'] | undefined,
@@ -367,12 +360,6 @@ async function saveCatalog(catalog: SceneCompiledGroundCacheCatalog): Promise<vo
   })
 }
 
-async function runInBatches<T>(items: T[], callback: (item: T) => Promise<void>): Promise<void> {
-  for (let index = 0; index < items.length; index += CACHE_BATCH_SIZE) {
-    await Promise.all(items.slice(index, index + CACHE_BATCH_SIZE).map((item) => callback(item)))
-  }
-}
-
 async function loadPackageIndex(
   buildKey: string,
 ): Promise<SceneCompiledGroundCacheIndex | null> {
@@ -423,23 +410,6 @@ async function pruneCatalog(): Promise<void> {
   }
   catalog.entries = retained
   await saveCatalog(catalog)
-}
-
-function findGroundNode(nodes: SceneNode[]): SceneNode | null {
-  const stack = [...nodes]
-  while (stack.length > 0) {
-    const node = stack.pop()
-    if (!node) {
-      continue
-    }
-    if (isGroundDynamicMesh(node.dynamicMesh)) {
-      return node
-    }
-    if (Array.isArray(node.children) && node.children.length > 0) {
-      stack.push(...node.children)
-    }
-  }
-  return null
 }
 
 export function computeSceneCompiledGroundBuildKey(
