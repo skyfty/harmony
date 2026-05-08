@@ -933,7 +933,6 @@ const assetCacheStore = useAssetCacheStore()
 const editorAssetCache = createEditorRuntimeAssetCache()
 const editorAssetLoader = new AssetLoader(editorAssetCache)
 let editorResourceCache: ResourceCache | null = null
-let lastPreviewGroundTextureMaterialLogSignature = ''
 
 let activeScenePackageAssetOverrides: SceneGraphBuildOptions['assetOverrides'] | null = null
 
@@ -4696,14 +4695,6 @@ function clearAssetObjectUrlCache(): void {
 	assetObjectUrlCache.clear()
 }
 
-function logPreviewGroundTexture(stage: string, payload: Record<string, unknown> = {}): void {
-	try {
-		console.info(`[ScenePreview][GroundTexture] ${stage} ${JSON.stringify(payload)}`)
-	} catch (_error) {
-		console.info(`[ScenePreview][GroundTexture] ${stage}`)
-	}
-}
-
 const EXTERNAL_ASSET_PATTERN = /^(https?:)?\/\//i
 const LOCAL_EMBEDDED_ASSET_PREFIX = 'local::'
 
@@ -4809,31 +4800,16 @@ async function acquirePreviewAssetEntry(assetId: string): Promise<AssetCacheEntr
 	}
 	const cache = editorResourceCache
 	if (!cache) {
-		logPreviewGroundTexture('acquireAssetEntry:no-resource-cache', {
-			assetId: trimmed,
-		})
 		return await hydratePreviewAssetEntryFromLocalCache(trimmed)
 	}
 	try {
 		const resolved = await cache.acquireAssetEntry(trimmed)
 		if (resolved) {
-			logPreviewGroundTexture('acquireAssetEntry:resource-cache-hit', {
-				assetId: trimmed,
-				hasBlobUrl: Boolean(resolved.blobUrl),
-				hasDownloadUrl: Boolean(resolved.downloadUrl),
-			})
 			return resolved
 		}
-		logPreviewGroundTexture('acquireAssetEntry:resource-cache-miss', {
-			assetId: trimmed,
-		})
 		return await hydratePreviewAssetEntryFromLocalCache(trimmed)
 	} catch (error) {
 		console.warn('[ScenePreview] Failed to acquire asset entry', trimmed, error)
-		logPreviewGroundTexture('acquireAssetEntry:error', {
-			assetId: trimmed,
-			message: (error as Error)?.message ?? String(error),
-		})
 		return await hydratePreviewAssetEntryFromLocalCache(trimmed)
 	}
 }
@@ -4870,23 +4846,12 @@ function buildResolvedAssetUrl(assetId: string, entry: AssetCacheEntry | null): 
 
 async function resolveAssetUrlFromCache(assetId: string): Promise<ResolvedAssetUrl | null> {
 	const entry = await acquirePreviewAssetEntry(assetId)
-	const resolved = buildResolvedAssetUrl(assetId, entry)
-	logPreviewGroundTexture('resolveAssetUrlFromCache', {
-		assetId,
-		hasEntry: Boolean(entry),
-		hasBlobUrl: Boolean(entry?.blobUrl),
-		hasDownloadUrl: Boolean(entry?.downloadUrl),
-		resolvedUrlPrefix: resolved?.url ? resolved.url.slice(0, 32) : null,
-	})
-	return resolved
+	return buildResolvedAssetUrl(assetId, entry)
 }
 
 async function hydratePreviewGroundTextureFromAssetRegistry(document: SceneJsonExportDocument): Promise<void> {
 	const groundNode = findGroundNode(document.nodes)
 	if (!groundNode || !isGroundDynamicMesh(groundNode.dynamicMesh)) {
-		logPreviewGroundTexture('hydrate:skip-no-ground', {
-			sceneId: document.id,
-		})
 		return
 	}
 	const dynamicMesh = groundNode.dynamicMesh as GroundDynamicMesh & {
@@ -4896,23 +4861,10 @@ async function hydratePreviewGroundTextureFromAssetRegistry(document: SceneJsonE
 	}
 	const textureAssetId = typeof dynamicMesh.textureAssetId === 'string' ? dynamicMesh.textureAssetId.trim() : ''
 	if (!textureAssetId) {
-		logPreviewGroundTexture('hydrate:skip-no-asset-id', {
-			sceneId: document.id,
-			textureDataUrlPresent: Boolean(dynamicMesh.textureDataUrl),
-		})
 		return
 	}
-	logPreviewGroundTexture('hydrate:start', {
-		sceneId: document.id,
-		textureAssetId,
-		textureDataUrlPresent: Boolean(dynamicMesh.textureDataUrl),
-	})
 	const resolved = await resolveAssetUrlFromCache(textureAssetId)
 	if (!resolved?.url) {
-		logPreviewGroundTexture('hydrate:resolve-miss', {
-			sceneId: document.id,
-			textureAssetId,
-		})
 		return
 	}
 	dynamicMesh.textureDataUrl = resolved.url
@@ -4920,12 +4872,6 @@ async function hydratePreviewGroundTextureFromAssetRegistry(document: SceneJsonE
 	if ((!dynamicMesh.textureName || !dynamicMesh.textureName.trim()) && entry?.name) {
 		dynamicMesh.textureName = entry.name
 	}
-	logPreviewGroundTexture('hydrate:done', {
-		sceneId: document.id,
-		textureAssetId,
-		textureName: dynamicMesh.textureName ?? null,
-		resolvedUrlPrefix: resolved.url.slice(0, 32),
-	})
 }
 
 async function resolveAssetUrlReference(candidate: string): Promise<ResolvedAssetUrl | null> {
@@ -10934,16 +10880,6 @@ function refreshPreviewGroundRuntimeMaterials(targetObject: THREE.Object3D, node
 		applyMaterialConfigToMaterial(material, config, materialOverrideOptions)
 	} else {
 		restoreMaterialFromBaseline(material)
-	}
-	const groundTextureLogSignature = JSON.stringify({
-		nodeId: node.id,
-		textureAssetId: groundDefinition.textureAssetId ?? null,
-		hasTextureDataUrl: Boolean(groundDefinition.textureDataUrl),
-		textureName: groundDefinition.textureName ?? null,
-	})
-	if (groundTextureLogSignature !== lastPreviewGroundTextureMaterialLogSignature) {
-		lastPreviewGroundTextureMaterialLogSignature = groundTextureLogSignature
-		logPreviewGroundTexture('refreshPreviewGroundRuntimeMaterials', JSON.parse(groundTextureLogSignature) as Record<string, unknown>)
 	}
 	setGroundMaterial(groundObject, material)
 	applyGroundTextureToGroundObject(groundObject, groundDefinition)

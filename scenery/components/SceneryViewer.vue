@@ -1356,7 +1356,6 @@ let pendingEnvironmentSettings: EnvironmentSettings | null = null;
 let activeEnvironmentSettings = cloneEnvironmentSettings(DEFAULT_ENVIRONMENT_SETTINGS);
 let renderContext: RenderContext | null = null;
 let currentDocument: SceneJsonExportDocument | null = null;
-let lastViewerGroundTextureMaterialLogSignature = '';
 const pendingRuntimePrefabSpawnRequests: RuntimePrefabSpawnRequest[] = [];
 const appliedRuntimePrefabSpawnKeys = new Set<string>();
 const spawnedRuntimePrefabRoots = new Map<string, { root: THREE.Object3D; mode: RuntimePrefabInitializationMode }>();
@@ -1698,16 +1697,6 @@ function refreshViewerGroundRuntimeMaterials(targetObject: THREE.Object3D, node:
     applyMaterialConfigToMaterial(material, config, materialOverrideOptions);
   } else {
     restoreMaterialFromBaseline(material);
-  }
-  const groundTextureLogSignature = JSON.stringify({
-    nodeId: node.id,
-    textureAssetId: groundDefinition.textureAssetId ?? null,
-    hasTextureDataUrl: Boolean(groundDefinition.textureDataUrl),
-    textureName: groundDefinition.textureName ?? null,
-  });
-  if (groundTextureLogSignature !== lastViewerGroundTextureMaterialLogSignature) {
-    lastViewerGroundTextureMaterialLogSignature = groundTextureLogSignature;
-    logViewerGroundTexture('refreshViewerGroundRuntimeMaterials', JSON.parse(groundTextureLogSignature) as Record<string, unknown>);
   }
   setGroundMaterial(groundObject, material);
   applyGroundTextureToGroundObject(groundObject, groundDefinition);
@@ -3833,14 +3822,6 @@ function mergeSceneAssetOverrides(
   };
 }
 
-function logViewerGroundTexture(stage: string, payload: Record<string, unknown> = {}): void {
-  try {
-    console.info(`[SceneViewer][GroundTexture] ${stage} ${JSON.stringify(payload)}`);
-  } catch (_error) {
-    console.info(`[SceneViewer][GroundTexture] ${stage}`);
-  }
-}
-
 type RuntimePrefabPreloadContext = {
   assetRegistry: Record<string, SceneAssetRegistryEntry> | null;
   meshAssetIds: string[];
@@ -3951,26 +3932,12 @@ async function acquireViewerAssetEntry(assetId: string): Promise<AssetCacheEntry
   }
   const cache = viewerResourceCache ?? sharedResourceCache;
   if (!cache) {
-    logViewerGroundTexture('acquireAssetEntry:no-cache', {
-      assetId: trimmed,
-    });
     return null;
   }
   try {
-    const entry = await cache.acquireAssetEntry(trimmed);
-    logViewerGroundTexture('acquireAssetEntry', {
-      assetId: trimmed,
-      hasEntry: Boolean(entry),
-      hasBlobUrl: Boolean(entry?.blobUrl),
-      hasDownloadUrl: Boolean(entry?.downloadUrl),
-    });
-    return entry;
+    return await cache.acquireAssetEntry(trimmed);
   } catch (error) {
     console.warn('[SceneViewer] Failed to acquire asset entry', trimmed, error);
-    logViewerGroundTexture('acquireAssetEntry:error', {
-      assetId: trimmed,
-      message: (error as Error)?.message ?? String(error),
-    });
     return null;
   }
 }
@@ -4007,15 +3974,7 @@ function buildResolvedAssetUrl(assetId: string, entry: AssetCacheEntry | null): 
 
 async function resolveAssetUrlFromCache(assetId: string): Promise<ResolvedAssetUrl | null> {
   const entry = await acquireViewerAssetEntry(assetId);
-  const resolved = buildResolvedAssetUrl(assetId, entry);
-  logViewerGroundTexture('resolveAssetUrlFromCache', {
-    assetId,
-    hasEntry: Boolean(entry),
-    hasBlobUrl: Boolean(entry?.blobUrl),
-    hasDownloadUrl: Boolean(entry?.downloadUrl),
-    resolvedUrlPrefix: resolved?.url ? resolved.url.slice(0, 32) : null,
-  });
-  return resolved;
+  return buildResolvedAssetUrl(assetId, entry);
 }
 
 function inferMimeTypeFromUrl(url: string): string | null {
@@ -12269,27 +12228,14 @@ function hydrateGroundTextureFromPackagedAsset(
   }
   const textureAssetId = typeof groundDynamicMesh.textureAssetId === 'string' ? groundDynamicMesh.textureAssetId.trim() : '';
   if (!textureAssetId) {
-    logViewerGroundTexture('hydratePackage:skip-no-asset-id', {
-      sceneId: document.id,
-    });
     return;
   }
   const entry = document.assetRegistry?.[textureAssetId];
   if (!entry || entry.sourceType !== 'package') {
-    logViewerGroundTexture('hydratePackage:skip-non-package', {
-      sceneId: document.id,
-      textureAssetId,
-      sourceType: entry?.sourceType ?? null,
-    });
     return;
   }
   const zipPath = typeof entry.zipPath === 'string' ? entry.zipPath.trim() : '';
   if (!zipPath || !pkg?.files[zipPath]) {
-    logViewerGroundTexture('hydratePackage:missing-zip', {
-      sceneId: document.id,
-      textureAssetId,
-      zipPath,
-    });
     return;
   }
   const resolvedUrl = getOrCreateObjectUrl(
@@ -12298,12 +12244,6 @@ function hydrateGroundTextureFromPackagedAsset(
     inferMimeTypeFromAssetId(entry.name ?? zipPath) ?? undefined,
   );
   groundDynamicMesh.textureDataUrl = resolvedUrl;
-  logViewerGroundTexture('hydratePackage:done', {
-    sceneId: document.id,
-    textureAssetId,
-    zipPath,
-    resolvedUrlPrefix: resolvedUrl.slice(0, 32),
-  });
   if ((!groundDynamicMesh.textureName || !groundDynamicMesh.textureName.trim()) && entry.name) {
     groundDynamicMesh.textureName = entry.name;
   }
@@ -12323,26 +12263,11 @@ async function hydrateGroundTextureFromViewerAssetCache(
   }
   const textureAssetId = typeof groundDynamicMesh.textureAssetId === 'string' ? groundDynamicMesh.textureAssetId.trim() : '';
   if (!textureAssetId) {
-    logViewerGroundTexture('hydrateRuntime:skip-no-asset-id', {
-      sceneId: document.id,
-      hasTextureDataUrl: Boolean(groundDynamicMesh.textureDataUrl),
-    });
     return;
   }
-  logViewerGroundTexture('hydrateRuntime:start', {
-    sceneId: document.id,
-    textureAssetId,
-    hasOverride: Boolean(assetOverrides?.[textureAssetId]),
-    hasTextureDataUrl: Boolean(groundDynamicMesh.textureDataUrl),
-  });
   const override = assetOverrides?.[textureAssetId];
   if (typeof override === 'string' && override.trim().length) {
     groundDynamicMesh.textureDataUrl = override.trim();
-    logViewerGroundTexture('hydrateRuntime:override-string', {
-      sceneId: document.id,
-      textureAssetId,
-      resolvedUrlPrefix: groundDynamicMesh.textureDataUrl.slice(0, 32),
-    });
     const entry = document.assetRegistry?.[textureAssetId];
     if ((!groundDynamicMesh.textureName || !groundDynamicMesh.textureName.trim()) && entry?.name) {
       groundDynamicMesh.textureName = entry.name;
@@ -12351,12 +12276,6 @@ async function hydrateGroundTextureFromViewerAssetCache(
   }
   if (override instanceof ArrayBuffer) {
     groundDynamicMesh.textureDataUrl = getOrCreateObjectUrl(textureAssetId, override);
-    logViewerGroundTexture('hydrateRuntime:override-array-buffer', {
-      sceneId: document.id,
-      textureAssetId,
-      byteLength: override.byteLength,
-      resolvedUrlPrefix: groundDynamicMesh.textureDataUrl.slice(0, 32),
-    });
     const entry = document.assetRegistry?.[textureAssetId];
     if ((!groundDynamicMesh.textureName || !groundDynamicMesh.textureName.trim()) && entry?.name) {
       groundDynamicMesh.textureName = entry.name;
@@ -12371,12 +12290,6 @@ async function hydrateGroundTextureFromViewerAssetCache(
       getArrayBufferView(bytes),
       mimeType,
     );
-    logViewerGroundTexture('hydrateRuntime:override-bytes', {
-      sceneId: document.id,
-      textureAssetId,
-      byteLength: bytes instanceof ArrayBuffer ? bytes.byteLength : bytes.byteLength,
-      resolvedUrlPrefix: groundDynamicMesh.textureDataUrl.slice(0, 32),
-    });
     const entry = document.assetRegistry?.[textureAssetId];
     if ((!groundDynamicMesh.textureName || !groundDynamicMesh.textureName.trim()) && entry?.name) {
       groundDynamicMesh.textureName = entry.name;
@@ -12385,18 +12298,9 @@ async function hydrateGroundTextureFromViewerAssetCache(
   }
   const resolved = await resolveAssetUrlFromCache(textureAssetId);
   if (!resolved?.url) {
-    logViewerGroundTexture('hydrateRuntime:resolve-miss', {
-      sceneId: document.id,
-      textureAssetId,
-    });
     return;
   }
   groundDynamicMesh.textureDataUrl = resolved.url;
-  logViewerGroundTexture('hydrateRuntime:done', {
-    sceneId: document.id,
-    textureAssetId,
-    resolvedUrlPrefix: resolved.url.slice(0, 32),
-  });
   const entry = document.assetRegistry?.[textureAssetId];
   if ((!groundDynamicMesh.textureName || !groundDynamicMesh.textureName.trim()) && entry?.name) {
     groundDynamicMesh.textureName = entry.name;
