@@ -5329,7 +5329,11 @@ export function updateGroundGeometry(geometry: THREE.BufferGeometry, definition:
 }
 
 type GroundTextureMetadata = { groundDynamic?: boolean }
-type GroundRuntimeMaterialMetadata = { groundChunkTextured?: boolean }
+type GroundRuntimeMaterialMetadata = {
+  groundChunkTextured?: boolean
+  groundTextureSource?: string | null
+  groundTextureSignature?: string | null
+}
 type GroundRuntimeBaseTextureCache = {
   source: string | null
   texture: THREE.Texture | null
@@ -5373,9 +5377,90 @@ function isGroundChunkTexturedMaterial(material: THREE.Material | null | undefin
   return Boolean(userData?.groundChunkTextured)
 }
 
-function markGroundChunkTexturedMaterial(material: THREE.Material): void {
+function markGroundChunkTexturedMaterial(material: THREE.Material, signature: string, source: string | null): void {
   const userData = (material.userData ??= {}) as GroundRuntimeMaterialMetadata
   userData.groundChunkTextured = true
+  userData.groundTextureSignature = signature
+  userData.groundTextureSource = source
+}
+
+function clearGroundRuntimeMaterialMetadata(material: THREE.Material): void {
+  const userData = material.userData as GroundRuntimeMaterialMetadata | undefined
+  if (!userData) {
+    return
+  }
+  delete userData.groundChunkTextured
+  delete userData.groundTextureSignature
+  delete userData.groundTextureSource
+}
+
+function resolveGroundBaseMaterialSignature(baseMaterial: THREE.Material): string {
+  const baseStandard = baseMaterial as THREE.MeshStandardMaterial & {
+    metalness?: number
+    roughness?: number
+    flatShading?: boolean
+    envMapIntensity?: number
+  }
+  return [
+    baseMaterial.type,
+    baseMaterial.uuid,
+    baseMaterial.name,
+    baseMaterial.side,
+    baseMaterial.depthTest === false ? 0 : 1,
+    (baseMaterial as THREE.Material & { fog?: boolean }).fog === false ? 0 : 1,
+    (baseMaterial as THREE.Material & { toneMapped?: boolean }).toneMapped === false ? 0 : 1,
+    typeof baseStandard.roughness === 'number' ? Number(baseStandard.roughness.toFixed(6)) : 'na',
+    typeof baseStandard.metalness === 'number' ? Number(baseStandard.metalness.toFixed(6)) : 'na',
+    baseStandard.flatShading === true ? 1 : 0,
+    typeof baseStandard.envMapIntensity === 'number' ? Number(baseStandard.envMapIntensity.toFixed(6)) : 'na',
+  ].join('|')
+}
+
+function resolveGroundTextureWindowSignature(window: {
+  offsetX: number
+  offsetY: number
+  repeatX: number
+  repeatY: number
+}): string {
+  return [
+    Number(window.offsetX.toFixed(6)),
+    Number(window.offsetY.toFixed(6)),
+    Number(window.repeatX.toFixed(6)),
+    Number(window.repeatY.toFixed(6)),
+  ].join('|')
+}
+
+function resolveGroundChunkTextureSignature(
+  baseMaterial: THREE.Material,
+  source: string,
+  window: {
+    offsetX: number
+    offsetY: number
+    repeatX: number
+    repeatY: number
+  },
+): string {
+  return [
+    source,
+    resolveGroundBaseMaterialSignature(baseMaterial),
+    resolveGroundTextureWindowSignature(window),
+  ].join('|')
+}
+
+function hasGroundTextureSignature(material: THREE.Material | null | undefined, signature: string): boolean {
+  if (!material) {
+    return false
+  }
+  const userData = material.userData as GroundRuntimeMaterialMetadata | undefined
+  return userData?.groundTextureSignature === signature
+}
+
+function hasGroundTextureSource(material: THREE.Material | null | undefined, source: string): boolean {
+  if (!material) {
+    return false
+  }
+  const userData = material.userData as GroundRuntimeMaterialMetadata | undefined
+  return userData?.groundTextureSource === source
 }
 
 function disposeGroundChunkTexturedMaterial(material: THREE.Material | null | undefined): void {
@@ -5387,6 +5472,7 @@ function disposeGroundChunkTexturedMaterial(material: THREE.Material | null | un
     disposeGroundTexture(typed.map)
     typed.map = null
   }
+  clearGroundRuntimeMaterialMetadata(material)
   material.dispose()
 }
 
@@ -5403,6 +5489,7 @@ function clearGroundTextureFromMaterial(material: THREE.Material): void {
     typed.map = null
     typed.needsUpdate = true
   }
+  clearGroundRuntimeMaterialMetadata(material)
 }
 
 function applyGroundTextureToMaterial(material: THREE.Material, definition: GroundDynamicMesh): void {
@@ -5410,12 +5497,17 @@ function applyGroundTextureToMaterial(material: THREE.Material, definition: Grou
   if (!('map' in typed)) {
     return
   }
-  clearGroundTextureFromMaterial(material)
-  if (!definition.textureDataUrl) {
+  const source = typeof definition.textureDataUrl === 'string' ? definition.textureDataUrl : null
+  if (!source) {
+    clearGroundTextureFromMaterial(material)
     return
   }
+  if (isDynamicGroundTexture(typed.map) && hasGroundTextureSource(material, source)) {
+    return
+  }
+  clearGroundTextureFromMaterial(material)
 
-  const texture = textureLoader.load(definition.textureDataUrl, () => {
+  const texture = textureLoader.load(source, () => {
     typed.needsUpdate = true
   })
   texture.wrapS = THREE.ClampToEdgeWrapping
@@ -5425,6 +5517,9 @@ function applyGroundTextureToMaterial(material: THREE.Material, definition: Grou
   markDynamicGroundTexture(texture)
   typed.map = texture
   typed.needsUpdate = true
+  const userData = (material.userData ??= {}) as GroundRuntimeMaterialMetadata
+  userData.groundTextureSource = source
+  userData.groundTextureSignature = source
 }
 
 function resolveGroundRuntimeBaseTexture(root: THREE.Object3D, definition: GroundDynamicMesh): THREE.Texture | null {
@@ -5634,8 +5729,8 @@ function applyGroundTextureToChunkMesh(
   baseMaterial: THREE.Material,
 ): void {
   const currentMaterial = Array.isArray(mesh.material) ? (mesh.material[0] ?? null) : (mesh.material ?? null)
-  const uvBounds = summarizeGroundMeshUvBounds(mesh)
-  if (!definition.textureDataUrl) {
+  const source = typeof definition.textureDataUrl === 'string' ? definition.textureDataUrl : null
+  if (!source) {
     if (currentMaterial && currentMaterial !== baseMaterial) {
       disposeGroundChunkTexturedMaterial(currentMaterial)
     }
@@ -5655,10 +5750,7 @@ function applyGroundTextureToChunkMesh(
     return
   }
 
-  const nextMaterial = createGroundChunkTexturedMaterial(baseMaterial)
-  markGroundChunkTexturedMaterial(nextMaterial)
-  const typed = nextMaterial as THREE.MeshStandardMaterial & { map?: THREE.Texture | null; needsUpdate?: boolean }
-  const texture = baseTexture.clone()
+  const uvBounds = summarizeGroundMeshUvBounds(mesh)
   const hasOptimizedGlobalUv = Boolean(spec) && resolveOptimizedChunkForSpec(definition, spec) !== null
   const useLocalUvWindow = !hasOptimizedGlobalUv && isGroundChunkLocalUvBounds(uvBounds)
   const meshBoundsWindow = useLocalUvWindow
@@ -5677,6 +5769,18 @@ function applyGroundTextureToChunkMesh(
       repeatX: 1,
       repeatY: 1,
     }
+  const signature = resolveGroundChunkTextureSignature(baseMaterial, source, window)
+  if (isGroundChunkTexturedMaterial(currentMaterial) && hasGroundTextureSignature(currentMaterial, signature)) {
+    if (mesh.material !== currentMaterial) {
+      mesh.material = currentMaterial
+    }
+    return
+  }
+
+  const nextMaterial = createGroundChunkTexturedMaterial(baseMaterial)
+  markGroundChunkTexturedMaterial(nextMaterial, signature, source)
+  const typed = nextMaterial as THREE.MeshStandardMaterial & { map?: THREE.Texture | null; needsUpdate?: boolean }
+  const texture = baseTexture.clone()
   texture.wrapS = THREE.ClampToEdgeWrapping
   texture.wrapT = THREE.ClampToEdgeWrapping
   texture.offset.set(window.offsetX, window.offsetY)

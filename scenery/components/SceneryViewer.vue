@@ -3956,11 +3956,11 @@ function buildResolvedAssetUrl(assetId: string, entry: AssetCacheEntry | null): 
 		return null
 	}
 	const mimeType = entry.mimeType ?? inferMimeTypeFromAssetId(assetId)
-	if (entry.downloadUrl) {
-		return { url: entry.downloadUrl, mimeType }
-	}
 	if (entry.blobUrl) {
 		return { url: entry.blobUrl, mimeType }
+	}
+	if (entry.downloadUrl) {
+		return { url: entry.downloadUrl, mimeType }
 	}
   if (entry.blob) {
     const url = getOrCreateObjectUrl(assetId, entry.blob, mimeType ?? undefined)
@@ -12211,7 +12211,7 @@ function findFirstGroundDynamicMesh(document: SceneJsonExportDocument): GroundDy
   return null;
 }
 
-function applyGroundTextureDataUrlFromAssetRegistry(
+function hydrateGroundTextureFromPackagedAsset(
   document: SceneJsonExportDocument,
   pkg: ScenePackageUnzipped | null = null,
 ): void {
@@ -12228,34 +12228,60 @@ function applyGroundTextureDataUrlFromAssetRegistry(
     return;
   }
   const entry = document.assetRegistry?.[textureAssetId];
-  if (!entry) {
+  if (!entry || entry.sourceType !== 'package') {
     return;
   }
-  let resolvedUrl = '';
-  if (entry.sourceType === 'package') {
-    const zipPath = typeof entry.zipPath === 'string' ? entry.zipPath.trim() : '';
-    if (zipPath && pkg?.files[zipPath]) {
-      resolvedUrl = getOrCreateObjectUrl(
-        textureAssetId,
-        getArrayBufferView(pkg.files[zipPath]!),
-        inferMimeTypeFromAssetId(entry.name ?? zipPath) ?? undefined,
-      );
-    } else {
-      resolvedUrl = zipPath;
-    }
-    if (!resolvedUrl) {
-      resolvedUrl = typeof entry.inline === 'string' ? entry.inline.trim() : '';
-    }
-  } else if (entry.sourceType === 'url') {
-    resolvedUrl = typeof entry.url === 'string' ? entry.url.trim() : '';
-  } else if (entry.sourceType === 'server') {
-    resolvedUrl = typeof entry.resolvedUrl === 'string' ? entry.resolvedUrl.trim() : '';
-  }
-  if (!resolvedUrl) {
+  const zipPath = typeof entry.zipPath === 'string' ? entry.zipPath.trim() : '';
+  if (!zipPath || !pkg?.files[zipPath]) {
     return;
   }
+  const resolvedUrl = getOrCreateObjectUrl(
+    textureAssetId,
+    getArrayBufferView(pkg.files[zipPath]!),
+    inferMimeTypeFromAssetId(entry.name ?? zipPath) ?? undefined,
+  );
   groundDynamicMesh.textureDataUrl = resolvedUrl;
   if ((!groundDynamicMesh.textureName || !groundDynamicMesh.textureName.trim()) && entry.name) {
+    groundDynamicMesh.textureName = entry.name;
+  }
+}
+
+async function hydrateGroundTextureFromViewerAssetCache(
+  document: SceneJsonExportDocument,
+  assetOverrides: SceneGraphBuildOptions['assetOverrides'] | undefined = undefined,
+): Promise<void> {
+  const groundDynamicMesh = findFirstGroundDynamicMesh(document) as (GroundDynamicMesh & {
+    textureAssetId?: string | null;
+    textureDataUrl?: string | null;
+    textureName?: string | null;
+  }) | null;
+  if (!groundDynamicMesh) {
+    return;
+  }
+  const textureAssetId = typeof groundDynamicMesh.textureAssetId === 'string' ? groundDynamicMesh.textureAssetId.trim() : '';
+  if (!textureAssetId) {
+    return;
+  }
+  const override = assetOverrides?.[textureAssetId];
+  if (override?.bytes) {
+    groundDynamicMesh.textureDataUrl = getOrCreateObjectUrl(
+      textureAssetId,
+      getArrayBufferView(override.bytes),
+      override.mimeType ?? undefined,
+    );
+    const entry = document.assetRegistry?.[textureAssetId];
+    if ((!groundDynamicMesh.textureName || !groundDynamicMesh.textureName.trim()) && entry?.name) {
+      groundDynamicMesh.textureName = entry.name;
+    }
+    return;
+  }
+  const resolved = await resolveAssetUrlFromCache(textureAssetId);
+  if (!resolved?.url) {
+    return;
+  }
+  groundDynamicMesh.textureDataUrl = resolved.url;
+  const entry = document.assetRegistry?.[textureAssetId];
+  if ((!groundDynamicMesh.textureName || !groundDynamicMesh.textureName.trim()) && entry?.name) {
     groundDynamicMesh.textureName = entry.name;
   }
 }
@@ -12457,7 +12483,7 @@ function parseScenePackageToProjectData(pkg: ScenePackageUnzipped): ScenePackage
       };
     });
     document.assetRegistry = assetRegistry;
-    applyGroundTextureDataUrlFromAssetRegistry(document, pkg);
+    hydrateGroundTextureFromPackagedAsset(document, pkg);
     const documentMeta = document as SceneJsonExportDocument & { createdAt?: unknown; updatedAt?: unknown };
     document.resourceSummary = buildDocumentResourceSummary(document);
     const id = sceneEntry.sceneId;
@@ -12750,6 +12776,14 @@ async function startRenderIfReady() {
         }
       : previewPayload.value;
     const preparedPayload = await prepareRenderPayloadForDefaultSteer(renderPayload);
+    if (token !== initializeToken) {
+      return;
+    }
+    const mergedAssetOverrides = mergeSceneAssetOverrides(
+      preparedPayload.assetOverrides,
+      activeScenePackageAssetOverrides ?? undefined,
+    );
+    await hydrateGroundTextureFromViewerAssetCache(preparedPayload.document, mergedAssetOverrides);
     if (token !== initializeToken) {
       return;
     }
@@ -13467,7 +13501,6 @@ function startRenderLoop(
                   }
                 : undefined,
             );
-            applyGroundTextureToGroundObject(groundObject, streamingGroundDefinition);
           }
         }
 

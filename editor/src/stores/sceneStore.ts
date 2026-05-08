@@ -40,7 +40,6 @@ import {
 } from '@schema'
 import { resolveGroundRuntimeChunkCells } from '@schema/groundMesh'
 import { DEFAULT_INTENSITY } from '@schema/lightDefaults'
-import { migrateLegacyGroundTerrainDocument } from '@/utils/legacyGroundTerrainMigration'
 import { createScenesStoreTerrainDatasetHeightSampler } from '@/utils/terrainDatasetRuntime'
 import {
   clearSceneCompiledGroundPackageMemoryCache,
@@ -7653,6 +7652,7 @@ function buildSceneDocumentFromState(store: SceneState): StoredSceneDocument {
   const projectId = typeof meta.projectId === 'string' ? meta.projectId : ''
   const environment = cloneEnvironmentSettings(store.environment)
   const nodes = ensureEnvironmentNode(cloneSceneNodes(store.nodes), environment)
+  stripGroundTextureRuntimeUrlsFromNodes(nodes)
   const effectiveGroundSettings = resolveGroundSettingsFromNodes(nodes, store.groundSettings)
 
   const planningData = store.planningData
@@ -7681,6 +7681,33 @@ function buildSceneDocumentFromState(store: SceneState): StoredSceneDocument {
     resourceSummary: store.resourceSummary ? cloneSceneResourceSummary(store.resourceSummary) : undefined,
     planningData: normalizedPlanningData ?? undefined,
   }
+}
+
+function stripGroundTextureRuntimeUrlsFromNodes(nodes: SceneNode[]): void {
+  const visit = (entries: SceneNode[] | null | undefined): void => {
+    if (!Array.isArray(entries)) {
+      return
+    }
+    entries.forEach((node) => {
+      if (node.dynamicMesh?.type === 'Ground') {
+        const definition = node.dynamicMesh as GroundDynamicMesh & {
+          textureAssetId?: string | null
+          textureDataUrl?: string | null
+        }
+        const textureAssetId = typeof definition.textureAssetId === 'string' ? definition.textureAssetId.trim() : ''
+        if (textureAssetId && definition.textureDataUrl) {
+          node.dynamicMesh = {
+            ...definition,
+            textureDataUrl: null,
+          }
+        }
+      }
+      if (Array.isArray(node.children) && node.children.length > 0) {
+        visit(node.children)
+      }
+    })
+  }
+  visit(nodes)
 }
 
 function isPlanningDataEmpty(data: PlanningSceneData): boolean {
@@ -9388,7 +9415,7 @@ export const useSceneStore = defineStore('scene', {
       const nextName = payload.name ?? null
       if (!nextDataUrl) {
         const changed = this.setGroundTexture({ dataUrl: null, name: nextName, assetId: null })
-        return { changed, assetId: null as string | null }
+        return { changed, assetId: null as string | null, textureUrl: null as string | null }
       }
 
       const blob = dataUrlToBlob(nextDataUrl)
@@ -9398,7 +9425,7 @@ export const useSceneStore = defineStore('scene', {
       const filenameBase = trimmedName.length ? trimmedName : 'terrain-base-texture'
       const filename = extractExtension(filenameBase) ? filenameBase : `${filenameBase}.${inferredExtension}`
       const assetCache = useAssetCacheStore()
-      await assetCache.storeAssetBlob(assetId, {
+      const cachedEntry = await assetCache.storeAssetBlob(assetId, {
         blob,
         mimeType: blob.type || 'image/png',
         filename,
@@ -9420,11 +9447,15 @@ export const useSceneStore = defineStore('scene', {
       })
 
       const changed = this.setGroundTexture({
-        dataUrl: nextDataUrl,
+        dataUrl: cachedEntry.blobUrl ?? cachedEntry.downloadUrl ?? null,
         name: nextName ?? filename,
         assetId,
       })
-      return { changed, assetId }
+      return {
+        changed,
+        assetId,
+        textureUrl: cachedEntry.blobUrl ?? cachedEntry.downloadUrl ?? null,
+      }
     },
     setEnvironmentSettings(settings: EnvironmentSettings) {
       const normalized = cloneEnvironmentSettings(settings)
@@ -18637,10 +18668,6 @@ export const useSceneStore = defineStore('scene', {
           environment: isPlainRecord((entry as { environment?: unknown }).environment)
             ? ((entry as { environment?: Partial<EnvironmentSettings> | null }).environment ?? undefined)
             : undefined,
-        })
-
-        migrateLegacyGroundTerrainDocument(sceneDocument, {
-          hasLegacyHeightSidecar: Boolean(groundHeightSidecars[entry.id]),
         })
 
         await hydrateSceneDocumentWithEmbeddedAssets(sceneDocument)

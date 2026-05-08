@@ -589,65 +589,6 @@ function findGroundNode(nodes: SceneJsonExportDocument['nodes']): SceneJsonExpor
   return null
 }
 
-function resolveGroundTextureUrlFromRegistryEntry(
-  entry: SceneAssetRegistryEntry | null | undefined,
-  packagedAssetPathById: ReadonlyMap<string, string>,
-  assetId: string,
-): string | null {
-  const packagedPath = packagedAssetPathById.get(assetId) ?? null
-  if (packagedPath) {
-    return packagedPath
-  }
-  if (!entry) {
-    return null
-  }
-  if (entry.sourceType === 'url') {
-    const url = typeof entry.url === 'string' ? entry.url.trim() : ''
-    return url || null
-  }
-  if (entry.sourceType === 'server') {
-    const resolvedUrl = typeof entry.resolvedUrl === 'string' ? entry.resolvedUrl.trim() : ''
-    return resolvedUrl || null
-  }
-  const zipPath = typeof entry.zipPath === 'string' ? entry.zipPath.trim() : ''
-  if (zipPath && !zipPath.startsWith('local::')) {
-    return zipPath
-  }
-  const inline = typeof entry.inline === 'string' ? entry.inline.trim() : ''
-  return inline || null
-}
-
-function syncGroundTextureUrlsFromAssetRegistry(
-  document: SceneJsonExportDocument,
-  packagedAssetPathById: ReadonlyMap<string, string>,
-): void {
-  const groundNode = findGroundNode(document.nodes ?? [])
-  if (!groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
-    return
-  }
-  const dynamicMesh = groundNode.dynamicMesh as typeof groundNode.dynamicMesh & {
-    textureAssetId?: string | null
-    textureDataUrl?: string | null
-    textureName?: string | null
-  }
-  const textureAssetId = typeof dynamicMesh.textureAssetId === 'string' ? dynamicMesh.textureAssetId.trim() : ''
-  if (!textureAssetId) {
-    return
-  }
-  const nextUrl = resolveGroundTextureUrlFromRegistryEntry(
-    document.assetRegistry?.[textureAssetId],
-    packagedAssetPathById,
-    textureAssetId,
-  )
-  if (!nextUrl) {
-    return
-  }
-  dynamicMesh.textureDataUrl = nextUrl
-  if ((!dynamicMesh.textureName || !dynamicMesh.textureName.trim()) && document.assetRegistry?.[textureAssetId]?.name) {
-    dynamicMesh.textureName = document.assetRegistry[textureAssetId].name ?? null
-  }
-}
-
 function stripEditorOnlySceneFields(
   document: SceneExportDocumentWithEditorFields,
   retainedConfigAssetIds: ReadonlySet<string> = new Set<string>(),
@@ -1573,8 +1514,6 @@ export async function exportScenePackageZip(payload: {
         }
       })
     }
-    syncGroundTextureUrlsFromAssetRegistry(docClone, packagedAssetPathById)
-
     // Add the prepared binary scene document to files and manifest.
     files[scenePath] = encodeScenePackageSceneDocument(docClone)
     emitSceneExportEvent(payload.reportEvent, {

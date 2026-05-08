@@ -2215,6 +2215,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
         name: demGroundTexture.textureName,
       })
       demGroundTexture.textureAssetId = groundTextureResult.assetId
+      demGroundTexture.textureDataUrl = groundTextureResult.textureUrl
       groundDefinition = preserveGroundTextureFields(groundDefinition as GroundRuntimeDynamicMesh, demGroundTexture)
 
       if (activeSceneId && terrainDataset) {

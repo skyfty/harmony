@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
-import type { CompiledGroundManifest, GroundChunkManifest, QuantizedTerrainDatasetRootManifest, SceneNode } from '@schema'
+import type { CompiledGroundManifest, GroundChunkManifest, GroundDynamicMesh, QuantizedTerrainDatasetRootManifest, SceneNode } from '@schema'
+import type { ProjectAsset } from '@/types/project-asset'
 import type { SceneSummary } from '@/types/scene-summary'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import { toRaw, watch } from 'vue'
@@ -9,7 +10,6 @@ import { useAuthStore } from '@/stores/authStore'
 import { buildServerApiUrl } from '@/api/serverApiConfig'
 import { exportScenePackageZip } from '@/utils/scenePackageExport'
 import { ensureOptimizedGroundMeshOnDocument } from '@/utils/groundOptimizedMeshExport'
-import { migrateLegacyGroundTerrainDocument } from '@/utils/legacyGroundTerrainMigration'
 import {
   stripGroundHeightMapsFromSceneDocument,
 } from '@/utils/groundHeightSidecar'
@@ -17,6 +17,7 @@ import { loadStoredScenesFromScenePackage } from '@/utils/scenePackageImport'
 import { useGroundHeightmapStore } from './groundHeightmapStore'
 import { useGroundScatterStore } from './groundScatterStore'
 import { useGroundPaintStore } from './groundPaintStore'
+import { useAssetCacheStore } from './assetCacheStore'
 import { useSceneStore } from './sceneStore'
 
 export type SceneWorkspaceType = 'local' | 'user'
@@ -281,7 +282,9 @@ function getWorkspaceDbName(workspaceId: string): string {
 }
 
 function prepareSceneDocumentForPersistence(document: StoredSceneDocument): StoredSceneDocument {
-  return stripGroundHeightMapsFromSceneDocument(cloneForIndexedDb(document))
+  return stripGroundTextureRuntimeUrlForPersistence(
+    stripGroundHeightMapsFromSceneDocument(cloneForIndexedDb(document)),
+  )
 }
 
 function cloneArrayBuffer(value: ArrayBuffer): ArrayBuffer {
@@ -305,6 +308,79 @@ function findGroundNode(nodes: SceneNode[]): SceneNode | null {
 
 function findGroundNodeInDocument(document: StoredSceneDocument): SceneNode | null {
   return findGroundNode(document.nodes)
+}
+
+function findCatalogAssetById(document: Pick<StoredSceneDocument, 'assetCatalog'>, assetId: string): ProjectAsset | null {
+  const normalized = typeof assetId === 'string' ? assetId.trim() : ''
+  if (!normalized) {
+    return null
+  }
+  for (const list of Object.values(document.assetCatalog ?? {})) {
+    if (!Array.isArray(list)) {
+      continue
+    }
+    for (const asset of list) {
+      if (asset?.id === normalized) {
+        return asset
+      }
+    }
+  }
+  return null
+}
+
+function stripGroundTextureRuntimeUrlForPersistence(document: StoredSceneDocument): StoredSceneDocument {
+  const groundNode = findGroundNodeInDocument(document)
+  if (!groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
+    return document
+  }
+  const definition = groundNode.dynamicMesh as GroundDynamicMesh & {
+    textureAssetId?: string | null
+    textureDataUrl?: string | null
+  }
+  const textureAssetId = typeof definition.textureAssetId === 'string' ? definition.textureAssetId.trim() : ''
+  if (!textureAssetId || !definition.textureDataUrl) {
+    return document
+  }
+  groundNode.dynamicMesh = {
+    ...definition,
+    textureDataUrl: null,
+  }
+  return document
+}
+
+async function hydrateGroundTextureRuntimeUrl(document: StoredSceneDocument): Promise<void> {
+  const groundNode = findGroundNodeInDocument(document)
+  if (!groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
+    return
+  }
+  const definition = groundNode.dynamicMesh as GroundDynamicMesh & {
+    textureAssetId?: string | null
+    textureDataUrl?: string | null
+    textureName?: string | null
+  }
+  const textureAssetId = typeof definition.textureAssetId === 'string' ? definition.textureAssetId.trim() : ''
+  if (!textureAssetId) {
+    return
+  }
+  const asset = findCatalogAssetById(document, textureAssetId)
+  const assetCache = useAssetCacheStore()
+  const assetDownloadUrl = typeof asset?.downloadUrl === 'string' ? asset.downloadUrl.trim() : ''
+  const shouldUseAssetDownload = Boolean(asset && assetDownloadUrl && assetDownloadUrl !== textureAssetId)
+  let entry = null
+  try {
+    entry = shouldUseAssetDownload
+      ? await assetCache.ensureAssetEntry(textureAssetId, { asset: asset ?? undefined })
+      : await assetCache.ensureAssetEntry(textureAssetId, { contentHash: textureAssetId })
+  } catch (_error) {
+    entry = await assetCache.ensureAssetEntry(textureAssetId, { contentHash: textureAssetId })
+  }
+  const resolvedUrl = entry?.blobUrl
+    ?? entry?.downloadUrl
+    ?? (assetDownloadUrl && assetDownloadUrl !== textureAssetId ? assetDownloadUrl : null)
+  definition.textureDataUrl = resolvedUrl ?? null
+  if ((!definition.textureName || !definition.textureName.trim()) && asset?.name) {
+    definition.textureName = asset.name
+  }
 }
 
 // Deeply unwrap Vue proxies so IndexedDB receives cloneable values.
@@ -1034,12 +1110,6 @@ async function readSceneDocument(
     }
     const hydrated = cloneForIndexedDb(document)
     ensureOptimizedGroundMeshOnDocument(hydrated)
-    const migration = migrateLegacyGroundTerrainDocument(hydrated, {
-      hasLegacyHeightSidecar: Boolean(await readSceneGroundHeightSidecar(workspaceId, hydrated.id)),
-    })
-    if (migration.converted) {
-      await writeSceneDocument(workspaceId, hydrated)
-    }
     if (options.hydrateGroundRuntime) {
       const sidecar = await readSceneGroundHeightSidecar(workspaceId, hydrated.id)
       await groundHeightmapStore.hydrateSceneDocument(findGroundNodeInDocument(hydrated), sidecar)
@@ -1048,6 +1118,7 @@ async function readSceneDocument(
       const paintSidecar = await readSceneGroundPaintSidecar(workspaceId, hydrated.id)
       await groundPaintStore.hydrateSceneDocument(hydrated.id, findGroundNodeInDocument(hydrated), paintSidecar)
     }
+    await hydrateGroundTextureRuntimeUrl(hydrated)
     return stripGroundHeightMapsFromSceneDocument(hydrated)
   }
   const db = await openDatabase(workspaceId)
@@ -1058,12 +1129,6 @@ async function readSceneDocument(
     return null
   }
   ensureOptimizedGroundMeshOnDocument(result)
-  const migration = migrateLegacyGroundTerrainDocument(result, {
-    hasLegacyHeightSidecar: Boolean(await readSceneGroundHeightSidecar(workspaceId, result.id)),
-  })
-  if (migration.converted) {
-    await writeSceneDocument(workspaceId, result)
-  }
   if (options.hydrateGroundRuntime) {
     const sidecar = await readSceneGroundHeightSidecar(workspaceId, result.id)
     await groundHeightmapStore.hydrateSceneDocument(findGroundNodeInDocument(result), sidecar)
@@ -1072,6 +1137,7 @@ async function readSceneDocument(
     const paintSidecar = await readSceneGroundPaintSidecar(workspaceId, result.id)
     await groundPaintStore.hydrateSceneDocument(result.id, findGroundNodeInDocument(result), paintSidecar)
   }
+  await hydrateGroundTextureRuntimeUrl(result)
   return stripGroundHeightMapsFromSceneDocument(result)
 }
 
