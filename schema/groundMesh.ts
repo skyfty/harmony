@@ -5338,6 +5338,14 @@ type GroundRuntimeBaseTextureCache = {
   source: string | null
   texture: THREE.Texture | null
 }
+let lastGroundTextureApplySummarySignature = ''
+function logGroundTexture(stage: string, payload: Record<string, unknown> = {}): void {
+  try {
+    console.info(`[GroundTexture] ${stage} ${JSON.stringify(payload)}`)
+  } catch (_error) {
+    console.info(`[GroundTexture] ${stage}`)
+  }
+}
 function isDynamicGroundTexture(texture: THREE.Texture | null | undefined): boolean {
   if (!texture) {
     return false
@@ -5802,6 +5810,11 @@ function applyGroundTextureToObject(object: THREE.Object3D, definition: GroundDy
   const baseMaterial = cachedBaseMaterial && !Array.isArray(cachedBaseMaterial)
     ? cachedBaseMaterial as THREE.Material
     : null
+  let meshCount = 0
+  let groundChunkCount = 0
+  let compiledTileCount = 0
+  let plainMeshCount = 0
+  const sampleMeshes: Array<Record<string, unknown>> = []
   if (baseMaterial) {
     clearGroundTextureFromMaterial(baseMaterial)
   }
@@ -5810,6 +5823,7 @@ function applyGroundTextureToObject(object: THREE.Object3D, definition: GroundDy
     if (!mesh?.isMesh) {
       return
     }
+    meshCount += 1
     if (mesh.userData?.groundChunkBatch) {
       if (baseMaterial && mesh.material !== baseMaterial) {
         mesh.material = baseMaterial
@@ -5818,6 +5832,21 @@ function applyGroundTextureToObject(object: THREE.Object3D, definition: GroundDy
     }
     const chunkSpec = mesh.userData?.groundChunk as GroundChunkSpec | undefined
     const isCompiledGroundTile = mesh.userData?.compiledGroundTile === true
+    if (chunkSpec) {
+      groundChunkCount += 1
+    } else if (isCompiledGroundTile) {
+      compiledTileCount += 1
+    } else {
+      plainMeshCount += 1
+    }
+    if (sampleMeshes.length < 2) {
+      sampleMeshes.push({
+        meshName: mesh.name || null,
+        isGroundChunk: Boolean(chunkSpec),
+        isCompiledGroundTile,
+        hasTextureDataUrl: Boolean(definition.textureDataUrl),
+      })
+    }
     const currentMaterial = Array.isArray(mesh.material) ? (mesh.material[0] ?? null) : (mesh.material ?? null)
     const chunkBaseMaterial = baseMaterial ?? currentMaterial
     if (chunkSpec && chunkBaseMaterial) {
@@ -5832,6 +5861,20 @@ function applyGroundTextureToObject(object: THREE.Object3D, definition: GroundDy
       applyGroundTextureToMaterial(currentMaterial, definition)
     }
   })
+  const summarySignature = JSON.stringify({
+    objectName: object.name || null,
+    hasTextureDataUrl: Boolean(definition.textureDataUrl),
+    textureAssetId: typeof definition.textureAssetId === 'string' ? definition.textureAssetId : null,
+    meshCount,
+    groundChunkCount,
+    compiledTileCount,
+    plainMeshCount,
+    sampleMeshes,
+  })
+  if (summarySignature !== lastGroundTextureApplySummarySignature) {
+    lastGroundTextureApplySummarySignature = summarySignature
+    logGroundTexture('applyGroundTextureToObject', JSON.parse(summarySignature) as Record<string, unknown>)
+  }
 }
 
 export function applyGroundTextureToGroundObject(object: THREE.Object3D, definition: GroundDynamicMesh): void {

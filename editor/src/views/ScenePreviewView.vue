@@ -10092,6 +10092,7 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
 				clearCompiledGroundRenderTiles(groundObject)
 			}
 			syncGroundChunkLoadingMode(groundObject, streamingGroundDefinition, activeCamera)
+			applyGroundTextureToGroundObject(groundObject, streamingGroundDefinition)
 			syncPreviewInfiniteGroundChunkCollisionBodies(
 				groundObject,
 				activeCamera,
