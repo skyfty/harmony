@@ -212,7 +212,7 @@ import { createFloorGroup, updateFloorGroup } from '@schema/floorMesh'
 import { createLandformGroup, updateLandformGroup } from '@schema/landformMesh'
 import { createGuideRouteGroup } from '@schema/guideRouteMesh'
 import { buildRegionDynamicMeshFromLocalVertices, buildRegionDynamicMeshFromWorldPoints } from '@schema/regionUtils'
-import { computeBlobHash, blobToDataUrl, extractExtension } from '@/utils/blob'
+import { computeBlobHash, blobToDataUrl, dataUrlToBlob, extractExtension } from '@/utils/blob'
 import { ASSET_THUMBNAIL_HEIGHT, ASSET_THUMBNAIL_WIDTH } from '@/utils/assetThumbnail'
 import type { BehaviorPrefabData } from '@/utils/behaviorPrefab'
 import {
@@ -1642,6 +1642,7 @@ function cloneGroundDynamicMesh(definition: GroundDynamicMesh): GroundDynamicMes
   result.planningMetadata = manualDeepClone(definition.planningMetadata) as GroundDynamicMesh['planningMetadata'] ?? null
   result.textureDataUrl = definition.textureDataUrl ?? null
   result.textureName = definition.textureName ?? null
+  result.textureAssetId = definition.textureAssetId ?? null
   result.generation = cloneGroundGenerationSettings(definition.generation) ?? null
   if (definition.castShadow !== undefined) {
     result.castShadow = definition.castShadow
@@ -7319,6 +7320,7 @@ function captureRedoEntryFor(store: SceneState, entry: SceneHistoryEntry): Scene
         nodeId: entry.nodeId,
         dataUrl: definition?.textureDataUrl ?? null,
         name: definition?.textureName ?? null,
+        assetId: definition?.textureAssetId ?? null,
       }
     }
     case 'node-transform':
@@ -7427,6 +7429,7 @@ function applyHistoryEntry(store: SceneState, entry: SceneHistoryEntry): void {
         ...definition,
         textureDataUrl: entry.dataUrl,
         textureName: entry.name,
+        textureAssetId: entry.assetId,
       }
       replaceSceneNodes(store, [...store.nodes])
       break
@@ -9340,7 +9343,7 @@ export const useSceneStore = defineStore('scene', {
       commitSceneSnapshot(this)
       return true
     },
-    setGroundTexture(payload: { dataUrl: string | null; name?: string | null }) {
+    setGroundTexture(payload: { dataUrl: string | null; name?: string | null; assetId?: string | null }) {
       const groundNode = this.groundNode
       if (!groundNode) {
         return false
@@ -9351,7 +9354,12 @@ export const useSceneStore = defineStore('scene', {
       const definition = groundNode.dynamicMesh as GroundDynamicMesh
       const nextDataUrl = payload.dataUrl ?? null
       const nextName = payload.name ?? null
-      if (definition.textureDataUrl === nextDataUrl && definition.textureName === nextName) {
+      const nextAssetId = payload.assetId ?? null
+      if (
+        definition.textureDataUrl === nextDataUrl
+        && definition.textureName === nextName
+        && (definition.textureAssetId ?? null) === nextAssetId
+      ) {
         return false
       }
 
@@ -9360,18 +9368,63 @@ export const useSceneStore = defineStore('scene', {
         nodeId: groundNode.id,
         dataUrl: definition.textureDataUrl ?? null,
         name: definition.textureName ?? null,
+        assetId: definition.textureAssetId ?? null,
       })
 
       groundNode.dynamicMesh = {
         ...definition,
         textureDataUrl: nextDataUrl,
         textureName: nextName,
+        textureAssetId: nextAssetId,
       }
       this.nodes = [...this.nodes]
       finalizeDynamicMeshRuntimePatch(this, groundNode.id, 'Ground')
 
       commitSceneSnapshot(this)
       return true
+    },
+    async setGroundTextureFromDataUrl(payload: { dataUrl: string | null; name?: string | null }) {
+      const nextDataUrl = payload.dataUrl ?? null
+      const nextName = payload.name ?? null
+      if (!nextDataUrl) {
+        const changed = this.setGroundTexture({ dataUrl: null, name: nextName, assetId: null })
+        return { changed, assetId: null as string | null }
+      }
+
+      const blob = dataUrlToBlob(nextDataUrl)
+      const assetId = await computeBlobHash(blob)
+      const trimmedName = typeof nextName === 'string' ? nextName.trim() : ''
+      const inferredExtension = getExtensionFromMimeType(blob.type) ?? 'png'
+      const filenameBase = trimmedName.length ? trimmedName : 'terrain-base-texture'
+      const filename = extractExtension(filenameBase) ? filenameBase : `${filenameBase}.${inferredExtension}`
+      const assetCache = useAssetCacheStore()
+      await assetCache.storeAssetBlob(assetId, {
+        blob,
+        mimeType: blob.type || 'image/png',
+        filename,
+      })
+
+      this.registerAsset({
+        id: assetId,
+        name: filename,
+        extension: extractExtension(filename) ?? inferredExtension,
+        type: 'image',
+        downloadUrl: assetId,
+        previewColor: '#ffffff',
+        thumbnail: null,
+        description: 'Ground base texture',
+        gleaned: true,
+      }, {
+        source: { type: 'local' },
+        autoSave: false,
+      })
+
+      const changed = this.setGroundTexture({
+        dataUrl: nextDataUrl,
+        name: nextName ?? filename,
+        assetId,
+      })
+      return { changed, assetId }
     },
     setEnvironmentSettings(settings: EnvironmentSettings) {
       const normalized = cloneEnvironmentSettings(settings)

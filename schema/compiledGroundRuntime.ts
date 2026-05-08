@@ -5,6 +5,8 @@ import {
   type CompiledGroundManifest,
   type CompiledGroundRenderTileRecord,
 } from './compiledGround'
+import type { GroundDynamicMesh } from './index'
+import { applyGroundTextureToGroundObject } from './groundMesh'
 
 type CompiledGroundRenderRuntime = {
   group: THREE.Group
@@ -30,12 +32,7 @@ type CompiledGroundRenderTileGridIndex = {
 
 type SyncCompiledGroundRenderTilesParams = {
   groundObject: THREE.Object3D
-  groundDefinition: {
-    castShadow?: boolean
-    chunkSizeMeters?: number
-    renderRadiusChunks?: number
-    collisionRadiusChunks?: number
-  }
+  groundDefinition: GroundDynamicMesh
   camera: THREE.Camera | null | undefined
   sourceId: string
   revision: number
@@ -726,6 +723,7 @@ export function syncCompiledGroundRenderTiles(params: SyncCompiledGroundRenderTi
         activeRuntime.group.add(mesh)
         activeRuntime.meshes.set(record.key, mesh)
         activeRuntime.loadedChunkKeysVersion += 1
+        applyGroundTextureToGroundObject(params.groundObject, params.groundDefinition)
       })
       .finally(() => {
         renderRuntimeMap.get(params.groundObject)?.pendingLoads.delete(record.key)

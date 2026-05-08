@@ -10011,6 +10011,7 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
 				clearCompiledGroundRenderTiles(groundObject)
 			}
 			syncGroundChunkLoadingMode(groundObject, streamingGroundDefinition, activeCamera)
+			applyGroundTextureToGroundObject(groundObject, streamingGroundDefinition)
 			syncPreviewInfiniteGroundChunkCollisionBodies(
 				groundObject,
 				activeCamera,
@@ -10819,11 +10820,29 @@ function resolvePreviewGroundMaterial(targetObject: THREE.Object3D): THREE.Mater
 	return resolved
 }
 
+function resolvePreviewGroundRuntimeObject(targetObject: THREE.Object3D): THREE.Object3D {
+	const runtimeGroundObject = (targetObject.userData as Record<string, unknown> | undefined)?.groundMesh
+	return runtimeGroundObject && (runtimeGroundObject as THREE.Object3D).isObject3D
+		? runtimeGroundObject as THREE.Object3D
+		: targetObject
+}
+
+function resolvePreviewGroundRuntimeDefinition(node: SceneNode): GroundRuntimeDynamicMesh | null {
+	if (cachedGroundNodeId === node.id && cachedGroundDynamicMesh && isGroundDynamicMesh(cachedGroundDynamicMesh)) {
+		return cachedGroundDynamicMesh as GroundRuntimeDynamicMesh
+	}
+	return isGroundDynamicMesh(node.dynamicMesh)
+		? node.dynamicMesh as GroundRuntimeDynamicMesh
+		: null
+}
+
 function refreshPreviewGroundRuntimeMaterials(targetObject: THREE.Object3D, node: SceneNode): void {
-	if (!isGroundDynamicMesh(node.dynamicMesh)) {
+	const groundDefinition = resolvePreviewGroundRuntimeDefinition(node)
+	if (!groundDefinition) {
 		return
 	}
-	const material = resolvePreviewGroundMaterial(targetObject)
+	const groundObject = resolvePreviewGroundRuntimeObject(targetObject)
+	const material = resolvePreviewGroundMaterial(groundObject)
 	if (!material) {
 		return
 	}
@@ -10835,8 +10854,8 @@ function refreshPreviewGroundRuntimeMaterials(targetObject: THREE.Object3D, node
 	} else {
 		restoreMaterialFromBaseline(material)
 	}
-	setGroundMaterial(targetObject, material)
-	applyGroundTextureToGroundObject(targetObject, node.dynamicMesh)
+	setGroundMaterial(groundObject, material)
+	applyGroundTextureToGroundObject(groundObject, groundDefinition)
 }
 
 function disposeMaterialTextureCache() {

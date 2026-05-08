@@ -63,6 +63,7 @@ export type SceneHistoryEntry =
       nodeId: string
       dataUrl: string | null
       name: string | null
+      assetId: string | null
     }
   | {
       kind: 'node-transform'

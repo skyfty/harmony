@@ -2120,6 +2120,7 @@ export interface GroundDynamicMesh {
   terrainScatterInstancesUpdatedAt: number
   textureDataUrl?: string | null
   textureName?: string | null
+  textureAssetId?: string | null
   generation?: GroundGenerationSettings | null
   /** Runtime-only sampler backed by a terrain dataset / scene-package payload. */
   runtimeTerrainHeightSampler?: GroundTerrainHeightSampler | null

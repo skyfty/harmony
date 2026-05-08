@@ -158,12 +158,13 @@ function groundBoundsChanged(
 
 function preserveGroundTextureFields(
   definition: GroundRuntimeDynamicMesh,
-  texture: { textureDataUrl: string | null; textureName: string | null },
+  texture: { textureDataUrl: string | null; textureName: string | null; textureAssetId?: string | null },
 ): GroundRuntimeDynamicMesh {
   return {
     ...definition,
     textureDataUrl: texture.textureDataUrl,
     textureName: texture.textureName,
+    textureAssetId: texture.textureAssetId ?? null,
   }
 }
 
@@ -2207,11 +2208,13 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
       const demGroundTexture = {
         textureDataUrl: demResult.textureDataUrl,
         textureName: demResult.textureName,
+        textureAssetId: null as string | null,
       }
-      sceneStore.setGroundTexture({
+      const groundTextureResult = await sceneStore.setGroundTextureFromDataUrl({
         dataUrl: demGroundTexture.textureDataUrl,
         name: demGroundTexture.textureName,
       })
+      demGroundTexture.textureAssetId = groundTextureResult.assetId
       groundDefinition = preserveGroundTextureFields(groundDefinition as GroundRuntimeDynamicMesh, demGroundTexture)
 
       if (activeSceneId && terrainDataset) {

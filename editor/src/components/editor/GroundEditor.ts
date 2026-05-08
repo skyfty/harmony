@@ -7766,12 +7766,15 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return
 		}
 		const reader = new FileReader()
-		reader.onload = () => {
+		reader.onload = async () => {
 			const result = typeof reader.result === 'string' ? reader.result : null
 			if (!result) {
 				return
 			}
-			const changed = options.sceneStore.setGroundTexture({ dataUrl: result, name: file.name ?? null })
+			const { changed } = await options.sceneStore.setGroundTextureFromDataUrl({
+				dataUrl: result,
+				name: file.name ?? null,
+			})
 			if (!changed) {
 				return
 			}

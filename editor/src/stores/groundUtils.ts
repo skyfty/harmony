@@ -152,6 +152,7 @@ export function cloneGroundDynamicMesh(definition: GroundDynamicMeshLike): Groun
     terrainScatterInstancesUpdatedAt: definition.terrainScatterInstancesUpdatedAt,
     textureDataUrl: definition.textureDataUrl ?? null,
     textureName: definition.textureName ?? null,
+    textureAssetId: definition.textureAssetId ?? null,
     generation: cloneGroundGenerationSettings(definition.generation) ?? null,
     localEditTiles: manualDeepCloneLocal(definition.localEditTiles ?? null) as GroundDynamicMesh['localEditTiles'],
   }
@@ -317,6 +318,7 @@ export function createGroundDynamicMeshDefinition(overrides: Partial<GroundDynam
     terrainScatterInstancesUpdatedAt: Date.now(),
     textureDataUrl: overrides.textureDataUrl ?? null,
     textureName: overrides.textureName ?? null,
+    textureAssetId: overrides.textureAssetId ?? null,
     generation: initialGeneration,
   }
 

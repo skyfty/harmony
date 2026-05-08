@@ -1664,11 +1664,29 @@ function resolveViewerGroundMaterial(targetObject: THREE.Object3D): THREE.Materi
   return resolved;
 }
 
+function resolveViewerGroundRuntimeObject(targetObject: THREE.Object3D): THREE.Object3D {
+  const runtimeGroundObject = (targetObject.userData as Record<string, unknown> | undefined)?.groundMesh;
+  return runtimeGroundObject && (runtimeGroundObject as THREE.Object3D).isObject3D
+    ? runtimeGroundObject as THREE.Object3D
+    : targetObject;
+}
+
+function resolveViewerGroundRuntimeDefinition(node: SceneNode): GroundRuntimeDynamicMesh | null {
+  if (dynamicGroundCache?.nodeId === node.id && isGroundDynamicMesh(dynamicGroundCache.dynamicMesh)) {
+    return dynamicGroundCache.dynamicMesh;
+  }
+  return isGroundDynamicMesh(node.dynamicMesh)
+    ? node.dynamicMesh as GroundRuntimeDynamicMesh
+    : null;
+}
+
 function refreshViewerGroundRuntimeMaterials(targetObject: THREE.Object3D, node: SceneNode): void {
-  if (!isGroundDynamicMesh(node.dynamicMesh)) {
+  const groundDefinition = resolveViewerGroundRuntimeDefinition(node);
+  if (!groundDefinition) {
     return;
   }
-  const material = resolveViewerGroundMaterial(targetObject);
+  const groundObject = resolveViewerGroundRuntimeObject(targetObject);
+  const material = resolveViewerGroundMaterial(groundObject);
   if (!material) {
     return;
   }
@@ -1680,8 +1698,8 @@ function refreshViewerGroundRuntimeMaterials(targetObject: THREE.Object3D, node:
   } else {
     restoreMaterialFromBaseline(material);
   }
-  setGroundMaterial(targetObject, material);
-  applyGroundTextureToGroundObject(targetObject, node.dynamicMesh);
+  setGroundMaterial(groundObject, material);
+  applyGroundTextureToGroundObject(groundObject, groundDefinition);
 }
 
 function applyViewerNodeMaterialOverrides(targetObject: THREE.Object3D, node: SceneNode): void {
@@ -5638,18 +5656,6 @@ function syncViewerCompiledGroundRender(
   const revision = Number.isFinite(compiledManifest.revision)
     ? Math.max(0, Math.trunc(compiledManifest.revision))
     : computeCompiledGroundManifestRevision(compiledManifest);
-  const compiledGroundDefinition = {
-    castShadow: groundDefinition.castShadow === true,
-    chunkSizeMeters: Number.isFinite(groundDefinition.chunkSizeMeters)
-      ? Number(groundDefinition.chunkSizeMeters)
-      : undefined,
-    renderRadiusChunks: Number.isFinite(groundDefinition.renderRadiusChunks)
-      ? Number(groundDefinition.renderRadiusChunks)
-      : undefined,
-    collisionRadiusChunks: Number.isFinite(groundDefinition.collisionRadiusChunks)
-      ? Number(groundDefinition.collisionRadiusChunks)
-      : undefined,
-  };
   const sourceId = (currentSceneId.value ?? currentDocument?.id ?? '').trim() || 'viewer-ground';
   const tileFrustumCulled = shouldEnableCompiledGroundTileFrustumCulling();
   const nowMs = Date.now();
@@ -5657,7 +5663,7 @@ function syncViewerCompiledGroundRender(
   if (shouldRunCompiledGroundRenderUpdate(groundObject, compiledManifest, camera, sourceId, revision, nowMs)) {
     syncCompiledGroundRenderTiles({
       groundObject,
-      groundDefinition: compiledGroundDefinition,
+      groundDefinition,
       camera,
       sourceId,
       revision,
@@ -12205,6 +12211,55 @@ function findFirstGroundDynamicMesh(document: SceneJsonExportDocument): GroundDy
   return null;
 }
 
+function applyGroundTextureDataUrlFromAssetRegistry(
+  document: SceneJsonExportDocument,
+  pkg: ScenePackageUnzipped | null = null,
+): void {
+  const groundDynamicMesh = findFirstGroundDynamicMesh(document) as (GroundDynamicMesh & {
+    textureAssetId?: string | null;
+    textureDataUrl?: string | null;
+    textureName?: string | null;
+  }) | null;
+  if (!groundDynamicMesh) {
+    return;
+  }
+  const textureAssetId = typeof groundDynamicMesh.textureAssetId === 'string' ? groundDynamicMesh.textureAssetId.trim() : '';
+  if (!textureAssetId) {
+    return;
+  }
+  const entry = document.assetRegistry?.[textureAssetId];
+  if (!entry) {
+    return;
+  }
+  let resolvedUrl = '';
+  if (entry.sourceType === 'package') {
+    const zipPath = typeof entry.zipPath === 'string' ? entry.zipPath.trim() : '';
+    if (zipPath && pkg?.files[zipPath]) {
+      resolvedUrl = getOrCreateObjectUrl(
+        textureAssetId,
+        getArrayBufferView(pkg.files[zipPath]!),
+        inferMimeTypeFromAssetId(entry.name ?? zipPath) ?? undefined,
+      );
+    } else {
+      resolvedUrl = zipPath;
+    }
+    if (!resolvedUrl) {
+      resolvedUrl = typeof entry.inline === 'string' ? entry.inline.trim() : '';
+    }
+  } else if (entry.sourceType === 'url') {
+    resolvedUrl = typeof entry.url === 'string' ? entry.url.trim() : '';
+  } else if (entry.sourceType === 'server') {
+    resolvedUrl = typeof entry.resolvedUrl === 'string' ? entry.resolvedUrl.trim() : '';
+  }
+  if (!resolvedUrl) {
+    return;
+  }
+  groundDynamicMesh.textureDataUrl = resolvedUrl;
+  if ((!groundDynamicMesh.textureName || !groundDynamicMesh.textureName.trim()) && entry.name) {
+    groundDynamicMesh.textureName = entry.name;
+  }
+}
+
 async function loadProjectFromScenePackageUrl(url: string, cacheKey?: string): Promise<void> {
   error.value = null;
   activeScenePackageAssetOverrides = null;
@@ -12402,6 +12457,7 @@ function parseScenePackageToProjectData(pkg: ScenePackageUnzipped): ScenePackage
       };
     });
     document.assetRegistry = assetRegistry;
+    applyGroundTextureDataUrlFromAssetRegistry(document, pkg);
     const documentMeta = document as SceneJsonExportDocument & { createdAt?: unknown; updatedAt?: unknown };
     document.resourceSummary = buildDocumentResourceSummary(document);
     const id = sceneEntry.sceneId;
@@ -13411,6 +13467,7 @@ function startRenderLoop(
                   }
                 : undefined,
             );
+            applyGroundTextureToGroundObject(groundObject, streamingGroundDefinition);
           }
         }
 
