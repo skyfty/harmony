@@ -7684,6 +7684,20 @@ async function buildPreviewRuntimeDocument(
 				})
 				throw new Error(`Compiled ground cache is invalid for preview scene ${document.id}`)
 			} else {
+				const hasGroundChunkManifest = Boolean(cachedGroundChunkManifest)
+				if (!hasGroundChunkManifest) {
+					resetPreviewCompiledGroundCache()
+					groundNode.userData = {
+						...(groundNode.userData ?? {}),
+						compiledGroundEnabled: false,
+						compiledGroundManifest: null,
+					}
+					console.info('[ScenePreview] Skipping compiled ground cache for preview', {
+						sceneId: document.id,
+						reason: 'ground-cache-miss-without-chunk-manifest',
+					})
+					return document
+				}
 				console.error('[ScenePreview] Missing compiled ground cache for preview', {
 					sceneId: document.id,
 					buildKey: compiledBuildKey,
