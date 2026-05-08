@@ -225,6 +225,7 @@ export interface PlanningTerrainDemData {
   appliedSampleStepMeters?: number | null
   targetChunkResolution?: number | null
   resolutionMode?: PlanningTerrainDemResolutionMode | null
+  autoGenerateBaseTexture?: boolean
   projectedCrs?: string | null
   geographicBounds?: PlanningTerrainGeographicBounds | null
   projectedBounds?: PlanningTerrainProjectedBounds | null

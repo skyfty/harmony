@@ -44,24 +44,12 @@ export async function buildGroundMesh(
 
   updateGroundMesh(groundObject, meshInfo);
 
-  // Apply node materials across all ground chunks.
-  let groundTexture: THREE.Texture | null = null;
-  groundObject.traverse((child: THREE.Object3D) => {
-    const mesh = child as unknown as THREE.Mesh;
-    if (!groundTexture && mesh && (mesh as any).isMesh) {
-      groundTexture = deps.extractGroundTextureFromMaterial(mesh.material) ?? null;
-    }
-  });
-
   const materials = await deps.resolveNodeMaterials(node);
   const resolvedAssignment = deps.pickMaterialAssignment(materials);
   const resolvedMaterial = Array.isArray(resolvedAssignment) ? resolvedAssignment[0] : resolvedAssignment;
   if (resolvedMaterial) {
     const groundMaterial = resolvedMaterial.clone();
     setGroundMaterial(groundObject, groundMaterial);
-    if (groundTexture) {
-      deps.assignTextureToMaterial(groundMaterial, groundTexture);
-    }
   }
   applyGroundTextureToGroundObject(groundObject, meshInfo);
 

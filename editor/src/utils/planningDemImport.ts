@@ -768,6 +768,7 @@ export function demImportResultToTerrainData(result: PlanningDemImportResult): P
     appliedSampleStepMeters: result.sampleStepMeters,
     targetChunkResolution,
     resolutionMode: 'auto',
+    autoGenerateBaseTexture: true,
     projectedCrs: result.projectedCrs ?? null,
     geographicBounds: result.geographicBounds,
     projectedBounds: result.projectedBounds,

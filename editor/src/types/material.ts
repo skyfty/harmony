@@ -23,6 +23,7 @@ export {
   ensureMaterialType,
   ensureMeshMaterialsUnique,
   resetMaterialOverrides,
+  restoreMaterialFromBaseline,
   textureSettingsSignature,
 } from '@schema/material'
 
@@ -31,4 +32,3 @@ export type {
   MaterialTextureAssignmentOptions,
   MeshStandardTextureKey,
 } from '@schema/material'
-

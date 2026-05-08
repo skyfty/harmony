@@ -649,8 +649,7 @@ function getPlanningDemTerrainDatasetWorker(): Worker | null {
       pendingPlanningDemTerrainDatasetRequests.delete(data.requestId)
       pending.resolve(data)
     }
-    planningDemTerrainDatasetWorker.onerror = (event) => {
-      console.warn('[PlanningDEM] Terrain dataset Worker failed', event)
+    planningDemTerrainDatasetWorker.onerror = () => {
       const pendingRequests = Array.from(pendingPlanningDemTerrainDatasetRequests.values())
       pendingPlanningDemTerrainDatasetRequests.clear()
       for (const pending of pendingRequests) {
@@ -660,8 +659,7 @@ function getPlanningDemTerrainDatasetWorker(): Worker | null {
       planningDemTerrainDatasetWorker = null
     }
     return planningDemTerrainDatasetWorker
-  } catch (error) {
-    console.warn('[PlanningDEM] Unable to initialize terrain dataset Worker; falling back to main thread', error)
+  } catch {
     planningDemTerrainDatasetWorker = null
     return null
   }

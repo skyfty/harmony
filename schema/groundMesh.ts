@@ -663,9 +663,12 @@ function resolveGroundRuntimeMaterial(root: THREE.Group, state: GroundRuntimeSta
       return
     }
     const meshMaterial = (child as THREE.Mesh).material
-    resolvedChildMaterial = Array.isArray(meshMaterial)
+    const resolved = Array.isArray(meshMaterial)
       ? (meshMaterial[0] as THREE.Material | undefined)
       : (meshMaterial as THREE.Material | undefined)
+    if (resolved && !isGroundChunkTexturedMaterial(resolved)) {
+      resolvedChildMaterial = resolved
+    }
   })
   if (resolvedChildMaterial) {
     return resolvedChildMaterial
@@ -3607,8 +3610,6 @@ function buildGroundChunkGeometry(definition: GroundRuntimeDynamicMesh, spec: Gr
     return createGroundOptimizedChunkGeometry(optimizedChunk)
   }
 
-  const columns = Math.max(1, Math.trunc(spec.columns))
-  const rows = Math.max(1, Math.trunc(spec.rows))
   const layout = resolveGroundChunkGeometryLayout(definition, spec)
   const chunkColumns = layout.segmentColumns
   const chunkRows = layout.segmentRows
@@ -3647,8 +3648,8 @@ function buildGroundChunkGeometry(definition: GroundRuntimeDynamicMesh, spec: Gr
       const height = useWorldSpaceHeightSampling
         ? sampleGroundHeight(definition, x, z)
         : heightValues?.[localRow * heightStride + localColumn] ?? sampleGroundHeight(definition, x, z)
-      const columnRatio = columns === 0 ? 0 : clampInclusive((x - chunkOrigin) / Math.max(chunkSizeMeters, Number.EPSILON), 0, 1)
-      const rowRatio = rows === 0 ? 0 : clampInclusive((z - chunkOrigin) / Math.max(chunkSizeMeters, Number.EPSILON), 0, 1)
+      const columnRatio = chunkColumns === 0 ? 0 : localColumn / chunkColumns
+      const rowRatio = chunkRows === 0 ? 0 : localRow / chunkRows
 
       positions[vertexIndex * 3 + 0] = x
       positions[vertexIndex * 3 + 1] = height
@@ -4552,6 +4553,10 @@ function releaseChunkToPool(state: GroundRuntimeState, runtime: GroundChunkRunti
   }
 
   runtime.mesh.removeFromParent()
+  const material = Array.isArray(runtime.mesh.material) ? (runtime.mesh.material[0] ?? null) : (runtime.mesh.material ?? null)
+  if (material) {
+    disposeGroundChunkTexturedMaterial(material)
+  }
   runtime.mesh.visible = false
   bucket.push(runtime.mesh)
   state.meshPool.set(key, bucket)
@@ -4625,6 +4630,10 @@ function disposeChunk(runtime: GroundChunkRuntime): void {
     runtime.mesh.geometry?.dispose?.()
   } catch (_error) {
     /* noop */
+  }
+  const material = Array.isArray(runtime.mesh.material) ? (runtime.mesh.material[0] ?? null) : (runtime.mesh.material ?? null)
+  if (material) {
+    disposeGroundChunkTexturedMaterial(material)
   }
   runtime.mesh.removeFromParent()
 }
@@ -5320,7 +5329,11 @@ export function updateGroundGeometry(geometry: THREE.BufferGeometry, definition:
 }
 
 type GroundTextureMetadata = { groundDynamic?: boolean }
-
+type GroundRuntimeMaterialMetadata = { groundChunkTextured?: boolean }
+type GroundRuntimeBaseTextureCache = {
+  source: string | null
+  texture: THREE.Texture | null
+}
 function isDynamicGroundTexture(texture: THREE.Texture | null | undefined): boolean {
   if (!texture) {
     return false
@@ -5352,7 +5365,32 @@ function disposeGroundTexture(texture: THREE.Texture | null | undefined) {
   clearDynamicGroundFlag(texture)
 }
 
-function applyGroundTextureToMaterial(material: THREE.Material, definition: GroundDynamicMesh): void {
+function isGroundChunkTexturedMaterial(material: THREE.Material | null | undefined): boolean {
+  if (!material) {
+    return false
+  }
+  const userData = material.userData as GroundRuntimeMaterialMetadata | undefined
+  return Boolean(userData?.groundChunkTextured)
+}
+
+function markGroundChunkTexturedMaterial(material: THREE.Material): void {
+  const userData = (material.userData ??= {}) as GroundRuntimeMaterialMetadata
+  userData.groundChunkTextured = true
+}
+
+function disposeGroundChunkTexturedMaterial(material: THREE.Material | null | undefined): void {
+  if (!material || !isGroundChunkTexturedMaterial(material)) {
+    return
+  }
+  const typed = material as THREE.MeshStandardMaterial & { map?: THREE.Texture | null }
+  if (typed.map && isDynamicGroundTexture(typed.map)) {
+    disposeGroundTexture(typed.map)
+    typed.map = null
+  }
+  material.dispose()
+}
+
+function clearGroundTextureFromMaterial(material: THREE.Material): void {
   const typed = material as THREE.MeshStandardMaterial & { map?: THREE.Texture | null; needsUpdate?: boolean }
   if (!('map' in typed)) {
     return
@@ -5360,24 +5398,28 @@ function applyGroundTextureToMaterial(material: THREE.Material, definition: Grou
 
   const previousTexture = typed.map ?? null
   const wasDynamicTextureApplied = isDynamicGroundTexture(previousTexture)
-  if (definition.textureDataUrl && wasDynamicTextureApplied) {
+  if (wasDynamicTextureApplied) {
     disposeGroundTexture(previousTexture)
+    typed.map = null
+    typed.needsUpdate = true
   }
+}
 
+function applyGroundTextureToMaterial(material: THREE.Material, definition: GroundDynamicMesh): void {
+  const typed = material as THREE.MeshStandardMaterial & { map?: THREE.Texture | null; needsUpdate?: boolean }
+  if (!('map' in typed)) {
+    return
+  }
+  clearGroundTextureFromMaterial(material)
   if (!definition.textureDataUrl) {
-    if (wasDynamicTextureApplied) {
-      disposeGroundTexture(previousTexture)
-      typed.map = null
-      typed.needsUpdate = true
-    }
     return
   }
 
   const texture = textureLoader.load(definition.textureDataUrl, () => {
     typed.needsUpdate = true
   })
-  texture.wrapS = THREE.RepeatWrapping
-  texture.wrapT = THREE.RepeatWrapping
+  texture.wrapS = THREE.ClampToEdgeWrapping
+  texture.wrapT = THREE.ClampToEdgeWrapping
   texture.anisotropy = Math.min(16, texture.anisotropy || 8)
   texture.name = definition.textureName ?? 'GroundTexture'
   markDynamicGroundTexture(texture)
@@ -5385,17 +5427,268 @@ function applyGroundTextureToMaterial(material: THREE.Material, definition: Grou
   typed.needsUpdate = true
 }
 
+function resolveGroundRuntimeBaseTexture(root: THREE.Object3D, definition: GroundDynamicMesh): THREE.Texture | null {
+  const userData = (root.userData ??= {}) as Record<string, unknown>
+  const cached = (userData.groundRuntimeBaseTextureCache ?? null) as GroundRuntimeBaseTextureCache | null
+  const source = typeof definition.textureDataUrl === 'string' ? definition.textureDataUrl : null
+  if (!source) {
+    if (cached?.texture) {
+      disposeGroundTexture(cached.texture)
+    }
+    userData.groundRuntimeBaseTextureCache = {
+      source: null,
+      texture: null,
+    } satisfies GroundRuntimeBaseTextureCache
+    return null
+  }
+  if (cached && cached.source === source && cached.texture) {
+    return cached.texture
+  }
+  if (cached?.texture) {
+    disposeGroundTexture(cached.texture)
+  }
+  const texture = textureLoader.load(source)
+  texture.wrapS = THREE.ClampToEdgeWrapping
+  texture.wrapT = THREE.ClampToEdgeWrapping
+  texture.anisotropy = Math.min(16, texture.anisotropy || 8)
+  texture.name = definition.textureName ?? 'GroundTexture'
+  markDynamicGroundTexture(texture)
+  userData.groundRuntimeBaseTextureCache = {
+    source,
+    texture,
+  } satisfies GroundRuntimeBaseTextureCache
+  return texture
+}
+
+function resolveGroundChunkTextureWindow(
+  definition: GroundDynamicMesh,
+  spec: Pick<GroundChunkSpec, 'startRow' | 'startColumn' | 'rows' | 'columns'>,
+): {
+  offsetX: number
+  offsetY: number
+  repeatX: number
+  repeatY: number
+} {
+  const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1
+  const chunkSizeMeters = resolveInfiniteChunkSizeMeters(definition)
+  const chunkOrigin = resolveInfiniteGroundGridOriginMeters(chunkSizeMeters)
+  const bounds = resolveGroundWorldBounds(definition)
+  const groundWidth = Math.max(bounds.maxX - bounds.minX, Number.EPSILON)
+  const groundDepth = Math.max(bounds.maxZ - bounds.minZ, Number.EPSILON)
+  const startX = chunkOrigin + spec.startColumn * cellSize
+  const startZ = chunkOrigin + spec.startRow * cellSize
+  const endX = startX + spec.columns * cellSize
+  const endZ = startZ + spec.rows * cellSize
+  const minU = clampInclusive((startX - bounds.minX) / groundWidth, 0, 1)
+  const maxU = clampInclusive((endX - bounds.minX) / groundWidth, 0, 1)
+  const minZRatio = clampInclusive((startZ - bounds.minZ) / groundDepth, 0, 1)
+  const maxZRatio = clampInclusive((endZ - bounds.minZ) / groundDepth, 0, 1)
+  return {
+    offsetX: minU,
+    offsetY: 1 - maxZRatio,
+    repeatX: Math.max(maxU - minU, Number.EPSILON),
+    repeatY: Math.max(maxZRatio - minZRatio, Number.EPSILON),
+  }
+}
+
+function summarizeGroundMeshUvBounds(mesh: THREE.Mesh): {
+  minU: number
+  maxU: number
+  minV: number
+  maxV: number
+} | null {
+  const geometry = mesh.geometry
+  if (!(geometry instanceof THREE.BufferGeometry)) {
+    return null
+  }
+  const uvAttr = geometry.getAttribute('uv') as THREE.BufferAttribute | undefined
+  if (!uvAttr || uvAttr.count <= 0 || uvAttr.itemSize < 2) {
+    return null
+  }
+  let minU = Number.POSITIVE_INFINITY
+  let maxU = Number.NEGATIVE_INFINITY
+  let minV = Number.POSITIVE_INFINITY
+  let maxV = Number.NEGATIVE_INFINITY
+  for (let index = 0; index < uvAttr.count; index += 1) {
+    const u = uvAttr.getX(index)
+    const v = uvAttr.getY(index)
+    if (u < minU) {
+      minU = u
+    }
+    if (u > maxU) {
+      maxU = u
+    }
+    if (v < minV) {
+      minV = v
+    }
+    if (v > maxV) {
+      maxV = v
+    }
+  }
+  if (!Number.isFinite(minU) || !Number.isFinite(maxU) || !Number.isFinite(minV) || !Number.isFinite(maxV)) {
+    return null
+  }
+  return {
+    minU: Number(minU.toFixed(6)),
+    maxU: Number(maxU.toFixed(6)),
+    minV: Number(minV.toFixed(6)),
+    maxV: Number(maxV.toFixed(6)),
+  }
+}
+
+function isGroundChunkLocalUvBounds(
+  uvBounds: {
+    minU: number
+    maxU: number
+    minV: number
+    maxV: number
+  } | null,
+): boolean {
+  if (!uvBounds) {
+    return false
+  }
+  const epsilon = 1e-3
+  return Math.abs(uvBounds.minU - 0) <= epsilon
+    && Math.abs(uvBounds.maxU - 1) <= epsilon
+    && Math.abs(uvBounds.minV - 0) <= epsilon
+    && Math.abs(uvBounds.maxV - 1) <= epsilon
+}
+
+function resolveGroundChunkTextureWindowFromMeshBounds(
+  definition: GroundDynamicMesh,
+  mesh: THREE.Mesh,
+): {
+  offsetX: number
+  offsetY: number
+  repeatX: number
+  repeatY: number
+} | null {
+  const geometry = mesh.geometry
+  if (!(geometry instanceof THREE.BufferGeometry)) {
+    return null
+  }
+  if (!geometry.boundingBox) {
+    geometry.computeBoundingBox()
+  }
+  const bounds = geometry.boundingBox
+  if (!bounds) {
+    return null
+  }
+  const groundBounds = resolveGroundWorldBounds(definition)
+  const groundWidth = Math.max(groundBounds.maxX - groundBounds.minX, Number.EPSILON)
+  const groundDepth = Math.max(groundBounds.maxZ - groundBounds.minZ, Number.EPSILON)
+  const minU = clampInclusive((bounds.min.x - groundBounds.minX) / groundWidth, 0, 1)
+  const maxU = clampInclusive((bounds.max.x - groundBounds.minX) / groundWidth, 0, 1)
+  const minZRatio = clampInclusive((bounds.min.z - groundBounds.minZ) / groundDepth, 0, 1)
+  const maxZRatio = clampInclusive((bounds.max.z - groundBounds.minZ) / groundDepth, 0, 1)
+  return {
+    offsetX: minU,
+    offsetY: 1 - maxZRatio,
+    repeatX: Math.max(maxU - minU, Number.EPSILON),
+    repeatY: Math.max(maxZRatio - minZRatio, Number.EPSILON),
+  }
+}
+
+function applyGroundTextureToChunkMesh(
+  root: THREE.Object3D,
+  mesh: THREE.Mesh,
+  definition: GroundDynamicMesh,
+  spec: Pick<GroundChunkSpec, 'startRow' | 'startColumn' | 'rows' | 'columns'> | null,
+  baseMaterial: THREE.Material,
+): void {
+  const currentMaterial = Array.isArray(mesh.material) ? (mesh.material[0] ?? null) : (mesh.material ?? null)
+  const uvBounds = summarizeGroundMeshUvBounds(mesh)
+  if (!definition.textureDataUrl) {
+    if (currentMaterial && currentMaterial !== baseMaterial) {
+      disposeGroundChunkTexturedMaterial(currentMaterial)
+    }
+    if (mesh.material !== baseMaterial) {
+      mesh.material = baseMaterial
+    }
+    return
+  }
+  const baseTexture = resolveGroundRuntimeBaseTexture(root, definition)
+  if (!baseTexture) {
+    if (currentMaterial && currentMaterial !== baseMaterial) {
+      disposeGroundChunkTexturedMaterial(currentMaterial)
+    }
+    if (mesh.material !== baseMaterial) {
+      mesh.material = baseMaterial
+    }
+    return
+  }
+
+  const nextMaterial = baseMaterial.clone()
+  markGroundChunkTexturedMaterial(nextMaterial)
+  const typed = nextMaterial as THREE.MeshStandardMaterial & { map?: THREE.Texture | null; needsUpdate?: boolean }
+  const texture = baseTexture.clone()
+  const hasOptimizedGlobalUv = Boolean(spec) && resolveOptimizedChunkForSpec(definition, spec) !== null
+  const useLocalUvWindow = !hasOptimizedGlobalUv && isGroundChunkLocalUvBounds(uvBounds)
+  const meshBoundsWindow = useLocalUvWindow
+    ? resolveGroundChunkTextureWindowFromMeshBounds(definition, mesh)
+    : null
+  const window = useLocalUvWindow
+    ? (meshBoundsWindow ?? (spec ? resolveGroundChunkTextureWindow(definition, spec) : null) ?? {
+      offsetX: 0,
+      offsetY: 0,
+      repeatX: 1,
+      repeatY: 1,
+    })
+    : {
+      offsetX: 0,
+      offsetY: 0,
+      repeatX: 1,
+      repeatY: 1,
+    }
+  texture.wrapS = THREE.ClampToEdgeWrapping
+  texture.wrapT = THREE.ClampToEdgeWrapping
+  texture.offset.set(window.offsetX, window.offsetY)
+  texture.repeat.set(window.repeatX, window.repeatY)
+  texture.needsUpdate = true
+  markDynamicGroundTexture(texture)
+  typed.map = texture
+  typed.needsUpdate = true
+
+  if (currentMaterial && currentMaterial !== baseMaterial) {
+    disposeGroundChunkTexturedMaterial(currentMaterial)
+  }
+  mesh.material = nextMaterial
+}
+
 function applyGroundTextureToObject(object: THREE.Object3D, definition: GroundDynamicMesh): void {
+  const root = object as THREE.Object3D & { userData?: Record<string, unknown> }
+  const cachedBaseMaterial = (root.userData as Record<string, unknown> | undefined)?.groundMaterial
+  const baseMaterial = cachedBaseMaterial && !Array.isArray(cachedBaseMaterial)
+    ? cachedBaseMaterial as THREE.Material
+    : null
+  if (baseMaterial) {
+    clearGroundTextureFromMaterial(baseMaterial)
+  }
   object.traverse((child) => {
     const mesh = child as THREE.Mesh
     if (!mesh?.isMesh) {
       return
     }
-    const material = mesh.material
-    if (Array.isArray(material)) {
-      material.forEach((entry) => entry && applyGroundTextureToMaterial(entry, definition))
-    } else if (material) {
-      applyGroundTextureToMaterial(material, definition)
+    if (mesh.userData?.groundChunkBatch) {
+      if (baseMaterial && mesh.material !== baseMaterial) {
+        mesh.material = baseMaterial
+      }
+      return
+    }
+    const chunkSpec = mesh.userData?.groundChunk as GroundChunkSpec | undefined
+    const isCompiledGroundTile = mesh.userData?.compiledGroundTile === true
+    const currentMaterial = Array.isArray(mesh.material) ? (mesh.material[0] ?? null) : (mesh.material ?? null)
+    const chunkBaseMaterial = baseMaterial ?? currentMaterial
+    if (chunkSpec && chunkBaseMaterial) {
+      applyGroundTextureToChunkMesh(object, mesh, definition, chunkSpec, chunkBaseMaterial)
+      return
+    }
+    if (isCompiledGroundTile && chunkBaseMaterial) {
+      applyGroundTextureToChunkMesh(object, mesh, definition, null, chunkBaseMaterial)
+      return
+    }
+    if (currentMaterial) {
+      applyGroundTextureToMaterial(currentMaterial, definition)
     }
   })
 }
@@ -5417,9 +5710,6 @@ function updateChunkGeometry(geometry: THREE.BufferGeometry, definition: GroundR
     return applyGroundOptimizedChunkGeometry(geometry, optimizedChunk)
   }
 
-  const gridSize = resolveGroundWorkingGridSize(definition)
-  const columns = gridSize.columns
-  const rows = gridSize.rows
   const layout = resolveGroundChunkGeometryLayout(definition, spec)
   const chunkColumns = layout.segmentColumns
   const chunkRows = layout.segmentRows
@@ -5448,7 +5738,6 @@ function updateChunkGeometry(geometry: THREE.BufferGeometry, definition: GroundR
     )
   const heightValues = heightRegion?.values
   const heightStride = heightRegion?.stride ?? 0
-
   let vertexIndex = 0
   for (let localRow = 0; localRow <= chunkRows; localRow += 1) {
     const z = startZ + localRow * layout.stepZ
@@ -5457,8 +5746,8 @@ function updateChunkGeometry(geometry: THREE.BufferGeometry, definition: GroundR
       const height = useWorldSpaceHeightSampling
         ? sampleGroundHeight(definition, x, z)
         : heightValues?.[localRow * heightStride + localColumn] ?? sampleGroundHeight(definition, x, z)
-      const columnRatio = columns === 0 ? 0 : clampInclusive((x - chunkOrigin) / Math.max(chunkSizeMeters, Number.EPSILON), 0, 1)
-      const rowRatio = rows === 0 ? 0 : clampInclusive((z - chunkOrigin) / Math.max(chunkSizeMeters, Number.EPSILON), 0, 1)
+      const columnRatio = chunkColumns === 0 ? 0 : localColumn / chunkColumns
+      const rowRatio = chunkRows === 0 ? 0 : localRow / chunkRows
       positionAttr.setXYZ(vertexIndex, x, height, z)
       uvAttr.setXY(vertexIndex, columnRatio, 1 - rowRatio)
       vertexIndex += 1
@@ -5605,6 +5894,13 @@ export function setGroundMaterial(target: THREE.Object3D, material: THREE.Materi
   target.traverse((child) => {
     const mesh = child as THREE.Mesh
     if (mesh?.isMesh) {
+      if (mesh.userData?.groundChunk || mesh.userData?.compiledGroundTile) {
+        return
+      }
+      const currentMaterial = Array.isArray(mesh.material) ? (mesh.material[0] ?? null) : (mesh.material ?? null)
+      if (currentMaterial && currentMaterial !== resolvedMaterial) {
+        disposeGroundChunkTexturedMaterial(currentMaterial)
+      }
       mesh.material = resolvedMaterial
     }
   })

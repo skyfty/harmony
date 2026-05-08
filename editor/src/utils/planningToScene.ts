@@ -156,6 +156,17 @@ function groundBoundsChanged(
     || Math.abs(currentBounds.maxZ - nextBounds.maxZ) > 1e-6
 }
 
+function preserveGroundTextureFields(
+  definition: GroundRuntimeDynamicMesh,
+  texture: { textureDataUrl: string | null; textureName: string | null },
+): GroundRuntimeDynamicMesh {
+  return {
+    ...definition,
+    textureDataUrl: texture.textureDataUrl,
+    textureName: texture.textureName,
+  }
+}
+
 export function isPlanningImageConversionNode(node: SceneNode | null | undefined): boolean {
   if (!node || typeof node !== 'object') {
     return false
@@ -2193,10 +2204,15 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
       // 标记DEM已应用,后续可用作基础高度图
       demApplied = true
       // 将DEM生成的纹理数据保存到场景存储中
+      const demGroundTexture = {
+        textureDataUrl: demResult.textureDataUrl,
+        textureName: demResult.textureName,
+      }
       sceneStore.setGroundTexture({
-        dataUrl: demResult.textureDataUrl,
-        name: demResult.textureName,
+        dataUrl: demGroundTexture.textureDataUrl,
+        name: demGroundTexture.textureName,
       })
+      groundDefinition = preserveGroundTextureFields(groundDefinition as GroundRuntimeDynamicMesh, demGroundTexture)
 
       if (activeSceneId && terrainDataset) {
         emitDetailedProgress(options, 'Syncing terrain dataset…', 28, {
@@ -2209,6 +2225,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
           definition: groundDefinition as GroundRuntimeDynamicMesh,
           manifest: terrainDataset.manifest,
         })
+        groundDefinition = preserveGroundTextureFields(groundDefinition as GroundRuntimeDynamicMesh, demGroundTexture)
         emitDetailedProgress(options, 'Terrain dataset ready…', 29, {
           phase: 'terrain-dataset-ready',
         })
@@ -2253,9 +2270,17 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
             })
           },
         })
-        groundDefinition = next
+        const preservedNext = preserveGroundTextureFields(next as GroundRuntimeDynamicMesh, {
+          textureDataUrl: (sceneStore.groundNode?.dynamicMesh?.type === 'Ground'
+            ? sceneStore.groundNode.dynamicMesh.textureDataUrl ?? null
+            : null),
+          textureName: (sceneStore.groundNode?.dynamicMesh?.type === 'Ground'
+            ? sceneStore.groundNode.dynamicMesh.textureName ?? null
+            : null),
+        })
+        groundDefinition = preservedNext
         syncPlanningHeightState(sceneStore, groundNode, next as GroundRuntimeDynamicMesh)
-        sceneStore.updateGroundNodeDynamicMesh(groundNode.id, next)
+        sceneStore.updateGroundNodeDynamicMesh(groundNode.id, preservedNext)
         doneUnits += contourPolygons.length
       } catch (err) {
         console.warn('Failed to apply planning terrain contours', err)

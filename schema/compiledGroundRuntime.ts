@@ -507,7 +507,11 @@ function resolveGroundMaterial(groundObject: THREE.Object3D): THREE.Material {
     if (resolved || !(child as THREE.Mesh).isMesh) {
       return
     }
-    const material = (child as THREE.Mesh).material
+    const mesh = child as THREE.Mesh
+    if (mesh.userData?.groundChunk || mesh.userData?.compiledGroundTile) {
+      return
+    }
+    const material = mesh.material
     resolved = Array.isArray(material) ? (material[0] ?? null) : (material ?? null)
   })
   return resolved ?? new THREE.MeshStandardMaterial({

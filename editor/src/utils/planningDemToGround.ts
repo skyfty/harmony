@@ -1220,8 +1220,9 @@ async function resolvePlanningDemNaturalBaseTexture(options: {
   }
 
   context.putImageData(imageData, 0, 0)
+  const textureDataUrl = await terrainTextureCanvasToDataUrl(canvas)
   return {
-    textureDataUrl: await terrainTextureCanvasToDataUrl(canvas),
+    textureDataUrl,
     textureName: resolvePlanningDemBaseTextureName(options.terrainDem),
   }
 }
@@ -1232,13 +1233,15 @@ export async function resolvePlanningDemBaseTexture(options: {
   source: PlanningDemRasterSource
   applyOrthophoto?: boolean
 }): Promise<PlanningDemTextureResolution> {
-  const naturalTexture = await resolvePlanningDemNaturalBaseTexture({
-    definition: options.definition,
-    terrainDem: options.terrainDem,
-    source: options.source,
-  })
-  if (naturalTexture.textureDataUrl) {
-    return naturalTexture
+  if (options.terrainDem.autoGenerateBaseTexture !== false) {
+    const naturalTexture = await resolvePlanningDemNaturalBaseTexture({
+      definition: options.definition,
+      terrainDem: options.terrainDem,
+      source: options.source,
+    })
+    if (naturalTexture.textureDataUrl) {
+      return naturalTexture
+    }
   }
 
   const orthophoto = options.terrainDem.orthophoto
@@ -1249,8 +1252,9 @@ export async function resolvePlanningDemBaseTexture(options: {
   if (!orthoBlob) {
     return { textureDataUrl: null, textureName: null }
   }
+  const textureDataUrl = await blobToDataUrl(orthoBlob)
   return {
-    textureDataUrl: await blobToDataUrl(orthoBlob),
+    textureDataUrl,
     textureName: orthophoto.filename ?? options.terrainDem.filename ?? 'Orthophoto',
   }
 }

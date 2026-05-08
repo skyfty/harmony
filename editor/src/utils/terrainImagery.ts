@@ -99,20 +99,29 @@ function normalizeSourceBounds(dem: PlanningTerrainDemData): {
   return { west, south, east, north }
 }
 
-export function supportsAutomaticTerrainImagery(dem: PlanningTerrainDemData | null | undefined): boolean {
-  const projectedCrs = typeof dem?.projectedCrs === 'string' ? dem.projectedCrs.trim().toUpperCase() : ''
+export function getAutomaticTerrainImageryUnsupportedReason(
+  dem: PlanningTerrainDemData | null | undefined,
+): string | null {
+  if (!dem) {
+    return 'Import a DEM before fetching terrain imagery.'
+  }
+  const projectedCrs = typeof dem.projectedCrs === 'string' ? dem.projectedCrs.trim().toUpperCase() : ''
   if (!projectedCrs) {
-    return false
+    return 'Automatic terrain imagery requires a DEM with projected CRS metadata.'
   }
   if (!['EPSG:3857', 'EPSG:102100', 'EPSG:900913'].includes(projectedCrs)) {
-    return false
+    return `Automatic terrain imagery currently supports Web Mercator DEMs only. Current CRS: ${projectedCrs}.`
   }
   try {
-    normalizeSourceBounds(dem as PlanningTerrainDemData)
-    return true
-  } catch {
-    return false
+    normalizeSourceBounds(dem)
+    return null
+  } catch (error) {
+    return error instanceof Error ? error.message : 'DEM projected source bounds are invalid.'
   }
+}
+
+export function supportsAutomaticTerrainImagery(dem: PlanningTerrainDemData | null | undefined): boolean {
+  return getAutomaticTerrainImageryUnsupportedReason(dem) === null
 }
 
 export async function composeAutomaticTerrainImagery(

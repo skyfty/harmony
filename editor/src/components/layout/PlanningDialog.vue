@@ -55,7 +55,11 @@ import {
   resolvePlanningDemTargetChunkResolution,
   type PlanningDemImportOptions,
 } from '@/utils/planningDemImport'
-import { composeAutomaticTerrainImagery, supportsAutomaticTerrainImagery } from '@/utils/terrainImagery'
+import {
+  composeAutomaticTerrainImagery,
+  getAutomaticTerrainImageryUnsupportedReason,
+  supportsAutomaticTerrainImagery,
+} from '@/utils/terrainImagery'
 
 
 const props = defineProps<{ modelValue: boolean }>()
@@ -413,6 +417,7 @@ function clonePlanningTerrainDemData(data: PlanningTerrainDemData | null | undef
     appliedSampleStepMeters: data.appliedSampleStepMeters ?? null,
     targetChunkResolution: data.targetChunkResolution ?? null,
     resolutionMode: data.resolutionMode ?? null,
+    autoGenerateBaseTexture: data.autoGenerateBaseTexture !== false,
     projectedCrs: data.projectedCrs ?? null,
     geographicBounds: clonePlanningTerrainGeographicBounds(data.geographicBounds ?? null),
     projectedBounds: clonePlanningTerrainProjectedBounds(data.projectedBounds ?? null),
@@ -1639,6 +1644,7 @@ function normalizePlanningTerrain(raw: unknown): PlanningTerrainData {
       appliedSampleStepMeters,
       targetChunkResolution,
       resolutionMode,
+      autoGenerateBaseTexture: typeof dem.autoGenerateBaseTexture === 'boolean' ? dem.autoGenerateBaseTexture : true,
       projectedCrs: typeof dem.projectedCrs === 'string' ? dem.projectedCrs : null,
       geographicBounds: migratedLegacyProjectedBounds ? undefined : (normalizedGeographicBounds ?? undefined),
       projectedBounds: normalizedProjectedBounds ?? migratedLegacyProjectedBounds ?? undefined,
@@ -2099,7 +2105,18 @@ const selectedDem = computed<PlanningTerrainDemData | null>(() => {
   return activeDemId.value ? (planningTerrain.value.dem ?? null) : null
 })
 
+const autoFetchImageryUnsupportedReason = computed<string | null>(() => {
+  return getAutomaticTerrainImageryUnsupportedReason(planningTerrain.value.dem ?? null)
+})
+
 const canAutoFetchImagery = computed<boolean>(() => supportsAutomaticTerrainImagery(planningTerrain.value.dem ?? null))
+
+const autoFetchImageryButtonTitle = computed<string>(() => {
+  if (autoImageryBusy.value) {
+    return 'Fetching terrain imagery'
+  }
+  return autoFetchImageryUnsupportedReason.value ?? 'Auto fetch terrain imagery'
+})
 
 const currentDemUsesHeightmapImage = computed<boolean>(() => {
   const dem = planningTerrain.value.dem
@@ -2287,6 +2304,18 @@ const selectedDemTargetChunkResolution = computed<number | null>({
       selectedDemMetersPerPixel.value = dem.appliedSampleStepMeters
       return
     }
+    markPlanningDirty()
+  },
+})
+
+const selectedDemAutoGenerateBaseTextureModel = computed<boolean>({
+  get: () => selectedDem.value?.autoGenerateBaseTexture !== false,
+  set: (value: boolean) => {
+    const dem = selectedDem.value
+    if (!dem) {
+      return
+    }
+    dem.autoGenerateBaseTexture = value !== false
     markPlanningDirty()
   },
 })
@@ -5186,6 +5215,7 @@ async function loadPlanningOrthophotoFile(file: File) {
       appliedSampleStepMeters: null,
       targetChunkResolution: null,
       resolutionMode: null,
+      autoGenerateBaseTexture: true,
       projectedCrs: null,
       geographicBounds: null,
       worldBounds: null,
@@ -5947,7 +5977,7 @@ onBeforeUnmount(() => {
                     variant="text"
                     color="primary"
                     :disabled="autoImageryBusy || !canAutoFetchImagery"
-                    title="Auto fetch terrain imagery"
+                    :title="autoFetchImageryButtonTitle"
                     @click.stop="fetchAutomaticPlanningOrthophoto"
                   >
                     <v-icon>{{ autoImageryBusy ? 'mdi-loading mdi-spin' : 'mdi-satellite-variant' }}</v-icon>
@@ -5977,6 +6007,9 @@ onBeforeUnmount(() => {
               </div>
               <div v-if="demImportError" class="upload-error">{{ demImportError }}</div>
               <div v-else-if="autoImageryError" class="upload-error">{{ autoImageryError }}</div>
+              <div v-else-if="planningTerrain.dem && autoFetchImageryUnsupportedReason" class="dem-import-panel__hint">
+                {{ autoFetchImageryUnsupportedReason }}
+              </div>
 
               <input
                 ref="demFileInputRef"
@@ -6811,6 +6844,17 @@ onBeforeUnmount(() => {
                     hide-details
                   />
                 </template>
+              </div>
+              <div class="property-panel__sub-block">
+                <div class="property-panel__section-title property-panel__section-title--muted">Terrain Base Texture</div>
+                <v-switch
+                  v-model="selectedDemAutoGenerateBaseTextureModel"
+                  color="primary"
+                  density="compact"
+                  inset
+                  hide-details
+                  label="Auto generate terrain base texture"
+                />
               </div>
               <div class="property-panel__sub-block">
                 <div class="property-panel__section-title property-panel__section-title--muted">Conversion Grid</div>

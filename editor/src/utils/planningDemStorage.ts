@@ -140,6 +140,7 @@ function clonePlanningTerrainDemData(data: PlanningTerrainDemData | null | undef
     appliedSampleStepMeters: data.appliedSampleStepMeters ?? null,
     targetChunkResolution: data.targetChunkResolution ?? null,
     resolutionMode: data.resolutionMode ?? null,
+    autoGenerateBaseTexture: data.autoGenerateBaseTexture !== false,
     projectedCrs: data.projectedCrs ?? null,
     geographicBounds: data.geographicBounds ? { ...data.geographicBounds } : null,
     projectedBounds: data.projectedBounds ? { ...data.projectedBounds } : null,

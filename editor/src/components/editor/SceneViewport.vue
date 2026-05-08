@@ -118,6 +118,7 @@ import {
   applyMaterialConfigToMaterial,
   disposeMaterialOverrides,
   resetMaterialOverrides,
+  restoreMaterialFromBaseline,
   type MaterialTextureAssignmentOptions,
 } from '@/types/material'
 import {
@@ -227,11 +228,13 @@ import type { LandformBuildShape } from '@/types/landform-build-shape'
 import type { WaterBuildShape } from '@/types/water-build-shape'
 import type { WallBuildShape } from '@/types/wall-build-shape'
 import {
+  applyGroundTextureToGroundObject,
   createGroundMesh,
   getVisibleInfiniteGroundChunkVersion,
   hasPendingGroundChunkWork,
   resolveGroundRuntimeChunkCells,
   setInfiniteGroundHiddenChunkKeys,
+  setGroundMaterial,
   setGroundFlatChunkInstanceMatrixBuilder,
   setGroundRuntimeOptimizedChunksEnabled,
   syncGroundChunkLoadingMode,
@@ -1416,6 +1419,72 @@ function refreshFloorRuntimeMaterials(nodeId: string, targetObject: THREE.Object
     applyMaterialOverrides(materialTarget, node.materials, materialOverrideOptions)
   } else {
     resetMaterialOverrides(materialTarget)
+  }
+}
+
+function resolveSharedGroundRuntimeMaterial(targetObject: THREE.Object3D): THREE.Material | null {
+  const groundObject = resolveGroundRuntimeObject(targetObject)
+  if (!groundObject) {
+    return null
+  }
+  const cached = (groundObject.userData as Record<string, unknown> | undefined)?.groundMaterial
+  if (cached && !Array.isArray(cached)) {
+    return cached as THREE.Material
+  }
+  let resolved: THREE.Material | null = null
+  groundObject.traverse((child) => {
+    if (resolved || !(child as THREE.Mesh).isMesh) {
+      return
+    }
+    const mesh = child as THREE.Mesh
+    if (mesh.userData?.groundChunk || mesh.userData?.compiledGroundTile) {
+      return
+    }
+    const material = mesh.material
+    resolved = Array.isArray(material) ? (material[0] ?? null) : (material ?? null)
+  })
+  return resolved
+}
+
+function refreshGroundRuntimeMaterials(node: SceneNode, targetObject: THREE.Object3D): void {
+  if (node.dynamicMesh?.type !== 'Ground') {
+    return
+  }
+  const groundObject = resolveGroundRuntimeObject(targetObject)
+  const groundDefinition = resolveGroundDynamicMeshDefinition()
+  if (!groundObject || !groundDefinition) {
+    return
+  }
+  const material = resolveSharedGroundRuntimeMaterial(targetObject)
+  if (!material) {
+    return
+  }
+  const config = Array.isArray(node.materials) && node.materials.length > 0
+    ? node.materials[0] ?? null
+    : null
+  if (config) {
+    applyMaterialConfigToMaterial(material, config, materialOverrideOptions)
+  } else {
+    restoreMaterialFromBaseline(material)
+  }
+  setGroundMaterial(groundObject, material)
+  // Ground base textures are runtime-authored and should win over node albedo overrides.
+  applyGroundTextureToGroundObject(groundObject, groundDefinition)
+}
+
+function applyNodeMaterialOverrides(targetObject: THREE.Object3D, node: SceneNode): void {
+  if (node.dynamicMesh?.type === 'Ground') {
+    refreshGroundRuntimeMaterials(node, targetObject)
+    return
+  }
+  if (node.dynamicMesh?.type === 'Floor') {
+    refreshFloorRuntimeMaterials(node.id, targetObject)
+    return
+  }
+  if (node.materials && node.materials.length) {
+    applyMaterialOverrides(targetObject, node.materials, materialOverrideOptions)
+  } else {
+    resetMaterialOverrides(targetObject)
   }
 }
 
@@ -10864,13 +10933,7 @@ function applyNodeMaterialsOnly(object: THREE.Object3D, node: SceneNode): void {
   userData.nodeId = node.id
   userData.nodeType = node.nodeType ?? (node.light ? 'Light' : 'Mesh')
   userData.dynamicMeshType = node.dynamicMesh?.type ?? userData.dynamicMeshType ?? null
-  if (node.dynamicMesh?.type === 'Floor') {
-    refreshFloorRuntimeMaterials(node.id, object)
-  } else if (node.materials && node.materials.length) {
-    applyMaterialOverrides(object, node.materials, materialOverrideOptions)
-  } else {
-    resetMaterialOverrides(object)
-  }
+  applyNodeMaterialOverrides(object, node)
 }
 
 function shouldRefreshPlaceholderOverlaysFromPatches(patches: Array<{ type: string }>): boolean {
@@ -19773,7 +19836,7 @@ function applyTextureAssetToNode(
 
   const targetObject = objectMap.get(nodeId)
   if (targetObject && updatedNode?.materials) {
-    applyMaterialOverrides(targetObject, updatedNode.materials, materialOverrideOptions)
+    applyNodeMaterialOverrides(targetObject, updatedNode)
   }
   return true
 }
@@ -21191,13 +21254,7 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
     }
   }
 
-  if (node.dynamicMesh?.type === 'Floor') {
-    refreshFloorRuntimeMaterials(node.id, object)
-  } else if (node.materials && node.materials.length) {
-    applyMaterialOverrides(object, node.materials, materialOverrideOptions)
-  } else {
-    resetMaterialOverrides(object)
-  }
+  applyNodeMaterialOverrides(object, node)
 
 
   if (nodeType === 'WarpGate' && !hasRuntimeObject) {
@@ -22847,11 +22904,7 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
     removeInstancedPickProxy(object)
   }
 
-  if (node.materials && node.materials.length) {
-    applyMaterialOverrides(object, node.materials, materialOverrideOptions)
-  } else {
-    resetMaterialOverrides(object)
-  }
+  applyNodeMaterialOverrides(object, node)
 
   if (nodeType === 'WarpGate' && !sceneStore.hasRuntimeObject(node.id)) {
     applyWarpGatePlaceholderState(object, node)

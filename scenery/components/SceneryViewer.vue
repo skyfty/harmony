@@ -494,7 +494,9 @@ import { AssetCache, AssetLoader, configureAssetDownloadHostMirrors, type AssetC
 import { ASSET_DOWNLOAD_HOST_MIRRORS } from '@harmony/schema/assetDownloadMirrors';
 import { isGroundDynamicMesh } from '@harmony/schema/groundHeightfield';
 import {
+  applyGroundTextureToGroundObject,
   setInfiniteGroundHiddenChunkKeys,
+  setGroundMaterial,
   syncGroundChunkLoadingMode,
   sampleGroundHeight,
 } from '@harmony/schema/groundMesh';
@@ -822,7 +824,9 @@ import {
 } from '@harmony/schema/browserPunchProgress';
 import {
   applyMaterialOverrides,
+  applyMaterialConfigToMaterial,
   disposeMaterialTextures,
+  restoreMaterialFromBaseline,
   type MaterialTextureAssignmentOptions,
 } from '@harmony/schema/material';
 
@@ -1639,6 +1643,54 @@ const materialOverrideOptions: MaterialTextureAssignmentOptions = {
     }
   },
 };
+
+function resolveViewerGroundMaterial(targetObject: THREE.Object3D): THREE.Material | null {
+  const cached = (targetObject.userData as Record<string, unknown> | undefined)?.groundMaterial;
+  if (cached && !Array.isArray(cached)) {
+    return cached as THREE.Material;
+  }
+  let resolved: THREE.Material | null = null;
+  targetObject.traverse((child) => {
+    if (resolved || !(child as THREE.Mesh).isMesh) {
+      return;
+    }
+    const mesh = child as THREE.Mesh;
+    if (mesh.userData?.groundChunk || mesh.userData?.compiledGroundTile) {
+      return;
+    }
+    const material = mesh.material;
+    resolved = Array.isArray(material) ? (material[0] ?? null) : (material ?? null);
+  });
+  return resolved;
+}
+
+function refreshViewerGroundRuntimeMaterials(targetObject: THREE.Object3D, node: SceneNode): void {
+  if (!isGroundDynamicMesh(node.dynamicMesh)) {
+    return;
+  }
+  const material = resolveViewerGroundMaterial(targetObject);
+  if (!material) {
+    return;
+  }
+  const config = Array.isArray(node.materials) && node.materials.length > 0
+    ? node.materials[0] ?? null
+    : null;
+  if (config) {
+    applyMaterialConfigToMaterial(material, config, materialOverrideOptions);
+  } else {
+    restoreMaterialFromBaseline(material);
+  }
+  setGroundMaterial(targetObject, material);
+  applyGroundTextureToGroundObject(targetObject, node.dynamicMesh);
+}
+
+function applyViewerNodeMaterialOverrides(targetObject: THREE.Object3D, node: SceneNode): void {
+  if (isGroundDynamicMesh(node.dynamicMesh)) {
+    refreshViewerGroundRuntimeMaterials(targetObject, node);
+    return;
+  }
+  applyMaterialOverrides(targetObject, node.materials, materialOverrideOptions);
+}
 
 function disposeMaterialTextureCache(): void {
   materialTextureCache.forEach((texture) => texture.dispose?.());
@@ -6648,7 +6700,7 @@ function registerSceneSubtree(root: THREE.Object3D): void {
       updateBehaviorVisibility(nodeId, false);
     }
     if (nodeState) {
-      applyMaterialOverrides(object, nodeState.materials, materialOverrideOptions);
+      applyViewerNodeMaterialOverrides(object, nodeState);
     }
     syncInstancedTransform(object);
     if (object.userData?.protagonist) {
@@ -8407,7 +8459,7 @@ function updateNodeProperties(object: THREE.Object3D, node: SceneNode): void {
   } else {
     object.visible = true;
   }
-  applyMaterialOverrides(object, node.materials, materialOverrideOptions);
+  applyViewerNodeMaterialOverrides(object, node);
   // Material overrides may replace materials; re-apply mirror fix after overrides.
   syncMirroredMeshMaterials(object, node.mirror === 'horizontal' || node.mirror === 'vertical', node.mirror);
   updateBehaviorVisibility(node.id, object.visible);

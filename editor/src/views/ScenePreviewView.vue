@@ -64,7 +64,9 @@ import {
  
 import {
 	applyMaterialOverrides,
+	applyMaterialConfigToMaterial,
 	disposeMaterialTextures,
+	restoreMaterialFromBaseline,
 	type MaterialTextureAssignmentOptions,
 } from '@schema/material'
 import type { ScenePreviewSnapshot } from '@/utils/previewChannel'
@@ -99,9 +101,11 @@ import {
 	isGroundDynamicMesh,
 } from '@schema/groundHeightfield'
 import {
+	applyGroundTextureToGroundObject,
 	resolveGroundChunkRadiusMeters,
 	resolveGroundRuntimeChunkCells,
 	setInfiniteGroundHiddenChunkKeys,
+	setGroundMaterial,
 	syncGroundChunkLoadingMode,
 	sampleGroundHeight,
 } from '@schema/groundMesh'
@@ -1404,7 +1408,6 @@ const groundSurfacePreviewLoaders = createDefaultGroundSurfacePreviewLoaders(res
 const ENABLE_SCENE_PREVIEW_SURFACE_PREVIEW = true
 
 // Baked ground preview loader disabled — function removed.
-
 
 function syncGroundSurfacePreviewForGroundNode(groundObject: THREE.Object3D, groundNode: SceneNode, dynamicMesh: GroundDynamicMesh): void {
 	const usesSurfacePreview = ENABLE_SCENE_PREVIEW_SURFACE_PREVIEW
@@ -10796,6 +10799,46 @@ const materialOverrideOptions: MaterialTextureAssignmentOptions = {
 	},
 }
 
+function resolvePreviewGroundMaterial(targetObject: THREE.Object3D): THREE.Material | null {
+	const cached = (targetObject.userData as Record<string, unknown> | undefined)?.groundMaterial
+	if (cached && !Array.isArray(cached)) {
+		return cached as THREE.Material
+	}
+	let resolved: THREE.Material | null = null
+	targetObject.traverse((child) => {
+		if (resolved || !(child as THREE.Mesh).isMesh) {
+			return
+		}
+		const mesh = child as THREE.Mesh
+		if (mesh.userData?.groundChunk || mesh.userData?.compiledGroundTile) {
+			return
+		}
+		const material = mesh.material
+		resolved = Array.isArray(material) ? (material[0] ?? null) : (material ?? null)
+	})
+	return resolved
+}
+
+function refreshPreviewGroundRuntimeMaterials(targetObject: THREE.Object3D, node: SceneNode): void {
+	if (!isGroundDynamicMesh(node.dynamicMesh)) {
+		return
+	}
+	const material = resolvePreviewGroundMaterial(targetObject)
+	if (!material) {
+		return
+	}
+	const config = Array.isArray(node.materials) && node.materials.length > 0
+		? node.materials[0] ?? null
+		: null
+	if (config) {
+		applyMaterialConfigToMaterial(material, config, materialOverrideOptions)
+	} else {
+		restoreMaterialFromBaseline(material)
+	}
+	setGroundMaterial(targetObject, material)
+	applyGroundTextureToGroundObject(targetObject, node.dynamicMesh)
+}
+
 function disposeMaterialTextureCache() {
 	materialTextureCache.forEach((texture) => texture.dispose?.())
 	materialTextureCache.clear()
@@ -13248,7 +13291,11 @@ function updateNodeProperties(object: THREE.Object3D, node: SceneNode) {
 	}
 	updateNodeTransfrom(object, node)
 	updateBehaviorVisibility(node.id, object.visible)
-	applyMaterialOverrides(object, node.materials, materialOverrideOptions)
+	if (isGroundDynamicMesh(node.dynamicMesh)) {
+		refreshPreviewGroundRuntimeMaterials(object, node)
+	} else {
+		applyMaterialOverrides(object, node.materials, materialOverrideOptions)
+	}
 	// Material overrides may replace materials; re-apply mirror fix after overrides.
 	syncMirroredMeshMaterials(object, node.mirror === 'horizontal' || node.mirror === 'vertical', node.mirror)
 }

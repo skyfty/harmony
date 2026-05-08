@@ -9368,6 +9368,7 @@ export const useSceneStore = defineStore('scene', {
         textureName: nextName,
       }
       this.nodes = [...this.nodes]
+      finalizeDynamicMeshRuntimePatch(this, groundNode.id, 'Ground')
 
       commitSceneSnapshot(this)
       return true
