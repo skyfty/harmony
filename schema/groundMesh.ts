@@ -7357,6 +7357,11 @@ export function setInfiniteGroundHiddenChunkKeys(
     const normalB = new THREE.Vector3().copy(result)
     const blended = new THREE.Vector3().copy(result)
     const boundaryNormal = new THREE.Vector3().copy(result)
+    const cornerNormalA = new THREE.Vector3().copy(result)
+    const cornerNormalB = new THREE.Vector3().copy(result)
+    const cornerNormalC = new THREE.Vector3().copy(result)
+    const cornerNormalD = new THREE.Vector3().copy(result)
+    const cornerAverage = new THREE.Vector3().copy(result)
 
     const tileFracX = localTileX - Math.floor(localTileX)
     const tileFracZ = localTileZ - Math.floor(localTileZ)
@@ -7418,6 +7423,46 @@ export function setInfiniteGroundHiddenChunkKeys(
         () => sampleGroundNormal(definition, x, boundaryZ - sampleOffset, normalA),
         () => sampleGroundNormal(definition, x, boundaryZ + sampleOffset, normalB),
       )
+    }
+
+    const cornerDistance = Math.hypot(distToVerticalBoundary, distToHorizontalBoundary)
+    const cornerBandMeters = Math.max(maxSeamBandMeters * 1.15, localEditCellSize * 2)
+    if (distToVerticalBoundary <= cornerBandMeters && distToHorizontalBoundary <= cornerBandMeters) {
+      const boundaryX = originX + Math.round(localTileX) * tileSizeMeters
+      const boundaryZ = originZ + Math.round(localTileZ) * tileSizeMeters
+      const sampleOffset = clampInclusive(
+        baseSampleOffset * (1.15 + clampInclusive(1 - result.y, 0, 1) * 1.5),
+        baseSampleOffset,
+        Math.max(baseSampleOffset, localEditCellSize * 2.25),
+      )
+      sampleGroundNormal(definition, boundaryX - sampleOffset, boundaryZ - sampleOffset, cornerNormalA)
+      sampleGroundNormal(definition, boundaryX + sampleOffset, boundaryZ - sampleOffset, cornerNormalB)
+      sampleGroundNormal(definition, boundaryX - sampleOffset, boundaryZ + sampleOffset, cornerNormalC)
+      sampleGroundNormal(definition, boundaryX + sampleOffset, boundaryZ + sampleOffset, cornerNormalD)
+      cornerAverage
+        .copy(cornerNormalA)
+        .add(cornerNormalB)
+        .add(cornerNormalC)
+        .add(cornerNormalD)
+      if (cornerAverage.lengthSq() > 1e-12) {
+        cornerAverage.normalize()
+        const cornerDot = Math.min(
+          cornerAverage.dot(cornerNormalA),
+          cornerAverage.dot(cornerNormalB),
+          cornerAverage.dot(cornerNormalC),
+          cornerAverage.dot(cornerNormalD),
+        )
+        const cornerMismatch = clampInclusive((1 - clampInclusive(cornerDot, -1, 1)) * 0.5, 0, 1)
+        const cornerSlope = clampInclusive(
+          1 - Math.min(result.y, cornerNormalA.y, cornerNormalB.y, cornerNormalC.y, cornerNormalD.y),
+          0,
+          1,
+        )
+        const cornerBlend = (1 - clampInclusive(cornerDistance / cornerBandMeters, 0, 1))
+          * clampInclusive(0.5 + cornerMismatch * 0.3 + cornerSlope * 0.25, 0.5, 0.95)
+        blended.copy(result).lerp(cornerAverage, cornerBlend).normalize()
+        result.copy(blended)
+      }
     }
 
     if (result.lengthSq() === 0) {
