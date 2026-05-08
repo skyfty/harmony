@@ -18,7 +18,6 @@ import type {
   PlanningPolylineData,
   PlanningSceneData,
   PlanningTerrainDemData,
-  PlanningTerrainDemHeightmapEncoding,
   PlanningTerrainData,
   PlanningTerrainControlPoint,
   PlanningTerrainFalloff,
@@ -43,7 +42,6 @@ import {
 } from '@/utils/planningDemStorage'
 import { GROUND_TERRAIN_CHUNK_SIZE_METERS, resolveGroundWorldBounds } from '@schema'
 import {
-  createStrictQgis16BitHeightmapEncoding,
   demImportResultToTerrainData,
   isPlanningDemHeightmapImageSource,
   isSupportedPlanningDemSource,
@@ -299,7 +297,7 @@ function createDefaultPlanningTerrain(): PlanningTerrainData {
   return {
     version: 1,
     mode: 'normal',
-    grid: { cellSize: 20 },
+    grid: { cellSize: 1 },
     noise: { enabled: false, seed: 1337, mode: 'perlin', noiseScale: 40, noiseAmplitude: 1, noiseStrength: 1, detailScale: 1, detailAmplitude: 0, edgeFalloff: 0 },
     controlPoints: [],
     ridgeValleyLines: [],
@@ -352,22 +350,6 @@ function clonePlanningTerrainOrthophotoData(data: PlanningTerrainOrthophotoData 
   }
 }
 
-function clonePlanningTerrainDemHeightmapEncoding(data: PlanningTerrainDemHeightmapEncoding | null | undefined): PlanningTerrainDemHeightmapEncoding | null {
-  if (!data) {
-    return null
-  }
-  return {
-    version: 1,
-    sourceFormat: 'png',
-    mode: data.mode === 'custom-range' ? 'custom-range' : 'strict-qgis-16bit',
-    bitDepth: data.bitDepth === 8 ? 8 : 16,
-    channels: Math.max(1, Math.trunc(Number(data.channels) || 1)),
-    signed: Boolean(data.signed),
-    zeroCode: Number.isFinite(Number(data.zeroCode)) ? Number(data.zeroCode) : null,
-    metersPerUnit: Number.isFinite(Number(data.metersPerUnit)) ? Number(data.metersPerUnit) : null,
-  }
-}
-
 function clonePlanningTerrainDemData(data: PlanningTerrainDemData | null | undefined): PlanningTerrainDemData | null {
   if (!data) {
     return null
@@ -390,7 +372,6 @@ function clonePlanningTerrainDemData(data: PlanningTerrainDemData | null | undef
     resolutionMode: data.resolutionMode ?? null,
     geographicBounds: clonePlanningTerrainGeographicBounds(data.geographicBounds ?? null),
     worldBounds: clonePlanningTerrainWorldBounds(data.worldBounds ?? null),
-    heightmapEncoding: clonePlanningTerrainDemHeightmapEncoding(data.heightmapEncoding ?? null),
     previewHash: data.previewHash ?? null,
     previewSize: data.previewSize ? { width: data.previewSize.width, height: data.previewSize.height } : null,
     orthophoto: clonePlanningTerrainOrthophotoData(data.orthophoto ?? null),
@@ -496,7 +477,7 @@ const sceneGroundSize = computed(() => {
 })
 const visibleLayerIds = computed(() => new Set(layers.value.filter((layer) => layer.visible).map((layer) => layer.id)))
 
-const DEFAULT_PNG_HEIGHTMAP_METERS_PER_PIXEL = 20
+const DEFAULT_PNG_HEIGHTMAP_METERS_PER_PIXEL = 30
 
 function resolvePlanningWorldSpan(bounds: PlanningTerrainWorldBounds | null | undefined): { width: number; height: number } | null {
   if (!bounds) {
@@ -575,7 +556,7 @@ function buildPlanningDemParseOptions(
 
 const planningPngHeightmapProtocolHint = `Harmony PNG DEM protocol: gray ${PLANNING_PNG_HEIGHTMAP_CONTRACT.seaLevelGray} = 0m, ${PLANNING_PNG_HEIGHTMAP_CONTRACT.metersPerGray}m per gray, valid range ${PLANNING_PNG_HEIGHTMAP_CONTRACT.minElevation}m to ${PLANNING_PNG_HEIGHTMAP_CONTRACT.maxElevation}m.`
 
-function validatePlanningDemImport(file: File): { metersPerPixel?: number; heightmapEncoding?: PlanningTerrainDemHeightmapEncoding } {
+function validatePlanningDemImport(file: File): { metersPerPixel?: number } {
   const mimeType = file.type || null
   if (!isSupportedPlanningDemSource(file.name, mimeType)) {
     throw new Error('Only GeoTIFF (.tif, .tiff) and PNG heightmaps are supported for DEM import.')
@@ -595,7 +576,6 @@ function validatePlanningDemImport(file: File): { metersPerPixel?: number; heigh
   }
   return {
     metersPerPixel: Number(metersPerPixel.toFixed(6)),
-    heightmapEncoding: createStrictQgis16BitHeightmapEncoding(),
   }
 }
 
@@ -2155,58 +2135,6 @@ const selectedDemMinElevation = computed<number | null>({
     markPlanningDirty()
   },
 })
-const selectedDemHeightmapMode = computed<PlanningTerrainDemHeightmapEncoding['mode']>(() => {
-  const dem = selectedDem.value
-  if (!dem || !selectedDemUsesHeightmapImage.value) {
-    return 'strict-qgis-16bit'
-  }
-  return dem.heightmapEncoding?.mode === 'custom-range' ? 'custom-range' : 'strict-qgis-16bit'
-})
-const selectedDemHeightmapModeDescription = computed<string>(() => {
-  if (selectedDemHeightmapMode.value === 'custom-range') {
-    return 'Custom range mode maps image values to the manual min/max elevation range below.'
-  }
-  return 'Strict QGIS 16-bit mode decodes elevations directly from the exported grayscale values.'
-})
-const selectedDemUsesCustomHeightmapRange = computed<boolean>(() => {
-  return selectedDemUsesHeightmapImage.value && selectedDemHeightmapMode.value === 'custom-range'
-})
-const selectedDemMinElevationModel = computed<number | null>({
-  get: () => {
-    const minElevation = Number(selectedDem.value?.minElevation)
-    return Number.isFinite(minElevation) ? minElevation : null
-  },
-  set: (value: number | null) => {
-    const dem = selectedDem.value
-    if (!dem || !selectedDemUsesCustomHeightmapRange.value) {
-      return
-    }
-    const minElevation = Number(value)
-    if (!Number.isFinite(minElevation)) {
-      return
-    }
-    dem.minElevation = Number(minElevation.toFixed(3))
-    markPlanningDirty()
-  },
-})
-const selectedDemMaxElevationModel = computed<number | null>({
-  get: () => {
-    const maxElevation = Number(selectedDem.value?.maxElevation)
-    return Number.isFinite(maxElevation) ? maxElevation : null
-  },
-  set: (value: number | null) => {
-    const dem = selectedDem.value
-    if (!dem || !selectedDemUsesCustomHeightmapRange.value) {
-      return
-    }
-    const maxElevation = Number(value)
-    if (!Number.isFinite(maxElevation)) {
-      return
-    }
-    dem.maxElevation = Number(maxElevation.toFixed(3))
-    markPlanningDirty()
-  },
-})
 const selectedDemTargetChunkResolution = computed<number | null>({
   get: () => {
     const resolution = Number(selectedDem.value?.targetChunkResolution)
@@ -2383,8 +2311,8 @@ const terrainContourWaterPresetModel = computed<WaterPresetId | null>({
 
 const terrainCellSizeModel = computed<number>({
   get: () => {
-    const raw = Number(planningTerrain.value?.grid?.cellSize ?? 20)
-    return Number.isFinite(raw) && raw >= 0.1 ? raw : 20
+    const raw = Number(planningTerrain.value?.grid?.cellSize ?? 1)
+    return Number.isFinite(raw) && raw >= 0.1 ? raw : 1
   },
   set: (value: number) => {
     const next = Number(value)
@@ -5122,7 +5050,6 @@ async function loadPlanningOrthophotoFile(file: File) {
       resolutionMode: null,
       geographicBounds: null,
       worldBounds: null,
-      heightmapEncoding: null,
       previewHash: null,
       previewSize: null,
       orthophoto: null,
@@ -6660,24 +6587,6 @@ onBeforeUnmount(() => {
                   step="1"
                   hide-details
                 />
-                <div class="property-panel__hint">{{ selectedDemHeightmapModeDescription }}</div>
-                <template v-if="selectedDemUsesCustomHeightmapRange">
-                  <div class="property-panel__section-title property-panel__section-title--muted">Heightmap Range</div>
-                  <v-text-field
-                    v-model.number="selectedDemMinElevationModel"
-                    type="number"
-                    density="compact"
-                    label="Min elevation (m)"
-                    hide-details
-                  />
-                  <v-text-field
-                    v-model.number="selectedDemMaxElevationModel"
-                    type="number"
-                    density="compact"
-                    label="Max elevation (m)"
-                    hide-details
-                  />
-                </template>
               </div>
               <div class="property-panel__sub-block">
                 <div class="property-panel__section-title property-panel__section-title--muted">Conversion Grid</div>

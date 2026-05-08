@@ -1034,7 +1034,9 @@ async function readSceneDocument(
     }
     const hydrated = cloneForIndexedDb(document)
     ensureOptimizedGroundMeshOnDocument(hydrated)
-    const migration = migrateLegacyGroundTerrainDocument(hydrated)
+    const migration = migrateLegacyGroundTerrainDocument(hydrated, {
+      hasLegacyHeightSidecar: Boolean(await readSceneGroundHeightSidecar(workspaceId, hydrated.id)),
+    })
     if (migration.converted) {
       await writeSceneDocument(workspaceId, hydrated)
     }
@@ -1056,7 +1058,9 @@ async function readSceneDocument(
     return null
   }
   ensureOptimizedGroundMeshOnDocument(result)
-  const migration = migrateLegacyGroundTerrainDocument(result)
+  const migration = migrateLegacyGroundTerrainDocument(result, {
+    hasLegacyHeightSidecar: Boolean(await readSceneGroundHeightSidecar(workspaceId, result.id)),
+  })
   if (migration.converted) {
     await writeSceneDocument(workspaceId, result)
   }

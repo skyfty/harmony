@@ -1,9 +1,7 @@
 import { fromArrayBuffer } from 'geotiff'
-import { decode as decodePng, hasPngSignature } from 'fast-png'
 import { GROUND_TERRAIN_CHUNK_SIZE_METERS } from '@schema'
 import type {
   PlanningTerrainDemData,
-  PlanningTerrainDemHeightmapEncoding,
   PlanningTerrainGeographicBounds,
   PlanningTerrainOrthophotoData,
   PlanningTerrainWorldBounds,
@@ -30,7 +28,6 @@ export interface PlanningDemImportResult {
   sampleStepMeters: number | null
   geographicBounds: PlanningTerrainGeographicBounds | null
   worldBounds: PlanningTerrainWorldBounds | null
-  heightmapEncoding?: PlanningTerrainDemHeightmapEncoding | null
   preview: PlanningDemPreviewResult | null
   orthophoto?: PlanningTerrainOrthophotoData | null
 }
@@ -40,7 +37,6 @@ export interface PlanningDemImportOptions {
   maxElevation?: number | null
   metersPerPixel?: number | null
   worldBoundsOverride?: PlanningTerrainWorldBounds | null
-  heightmapEncoding?: PlanningTerrainDemHeightmapEncoding | null
   createPreview?: boolean
 }
 
@@ -70,13 +66,7 @@ type PlanningGeoTiffImageLike = {
   getHeight: () => number
   getResolution?: () => unknown
   getWidth: () => number
-  readRasters: (options: {
-    interleave: true
-    window?: [number, number, number, number]
-    width?: number
-    height?: number
-    resampleMethod?: string
-  }) => Promise<ArrayLike<number> | ArrayLike<number>[]>
+  readRasters: (options: { interleave: true }) => Promise<ArrayLike<number> | ArrayLike<number>[]>
   fileDirectory?: Record<string, unknown> | null | undefined
 }
 
@@ -86,41 +76,6 @@ export const PLANNING_PNG_HEIGHTMAP_CONTRACT = {
   minElevation: -640,
   maxElevation: 4460,
 } as const
-
-export const DEFAULT_IMAGE_HEIGHTMAP_MIN_ELEVATION = PLANNING_PNG_HEIGHTMAP_CONTRACT.minElevation
-export const DEFAULT_IMAGE_HEIGHTMAP_MAX_ELEVATION = PLANNING_PNG_HEIGHTMAP_CONTRACT.maxElevation
-
-const STRICT_QGIS_HEIGHTMAP_ZERO_CODE = 32768
-const STRICT_QGIS_HEIGHTMAP_METERS_PER_UNIT = 1
-
-export function createStrictQgis16BitHeightmapEncoding(): PlanningTerrainDemHeightmapEncoding {
-  return {
-    version: 1,
-    sourceFormat: 'png',
-    mode: 'strict-qgis-16bit',
-    bitDepth: 16,
-    channels: 1,
-    signed: false,
-    zeroCode: STRICT_QGIS_HEIGHTMAP_ZERO_CODE,
-    metersPerUnit: STRICT_QGIS_HEIGHTMAP_METERS_PER_UNIT,
-  }
-}
-
-export function createCustomRangeHeightmapEncoding(
-  bitDepth: 8 | 16,
-  channels: number,
-): PlanningTerrainDemHeightmapEncoding {
-  return {
-    version: 1,
-    sourceFormat: 'png',
-    mode: 'custom-range',
-    bitDepth,
-    channels: Math.max(1, Math.trunc(Number(channels) || 1)),
-    signed: false,
-    zeroCode: null,
-    metersPerUnit: null,
-  }
-}
 
 const PLANNING_DEM_IMAGE_EXTENSIONS = ['.png']
 
@@ -147,32 +102,6 @@ export function isPlanningDemHeightmapImageSource(filename: string, mimeType: st
 
 export function isSupportedPlanningDemSource(filename: string, mimeType: string | null | undefined): boolean {
   return isPlanningDemGeoTiffSource(filename, mimeType) || isPlanningDemHeightmapImageSource(filename, mimeType)
-}
-
-function cloneHeightmapEncoding(
-  encoding: PlanningTerrainDemHeightmapEncoding | null | undefined,
-): PlanningTerrainDemHeightmapEncoding | null {
-  if (!encoding) {
-    return null
-  }
-  return {
-    version: 1,
-    sourceFormat: 'png',
-    mode: encoding.mode === 'custom-range' ? 'custom-range' : 'strict-qgis-16bit',
-    bitDepth: encoding.bitDepth === 8 ? 8 : 16,
-    channels: Math.max(1, Math.trunc(Number(encoding.channels) || 1)),
-    signed: Boolean(encoding.signed),
-    zeroCode: Number.isFinite(Number(encoding.zeroCode)) ? Number(encoding.zeroCode) : null,
-    metersPerUnit: Number.isFinite(Number(encoding.metersPerUnit)) ? Number(encoding.metersPerUnit) : null,
-  }
-}
-
-function resolveRequestedHeightmapEncoding(options?: PlanningDemImportOptions): PlanningTerrainDemHeightmapEncoding {
-  const explicit = cloneHeightmapEncoding(options?.heightmapEncoding ?? null)
-  if (explicit) {
-    return explicit
-  }
-  return createStrictQgis16BitHeightmapEncoding()
 }
 
 function normalizeBounds(raw: unknown): PlanningTerrainGeographicBounds | null {
@@ -579,97 +508,6 @@ function loadImageElementFromBlob(blob: Blob): Promise<HTMLImageElement> {
   })
 }
 
-function parseStrictQgis16BitHeightmapPng(
-  buffer: ArrayBuffer,
-  filename: string,
-  mimeType: string | null,
-  sourceFileHash: string,
-  options?: PlanningDemImportOptions,
-): PlanningDemImportResult {
-  const requestedEncoding = resolveRequestedHeightmapEncoding(options)
-  const zeroCode = Number.isFinite(Number(requestedEncoding.zeroCode))
-    ? Number(requestedEncoding.zeroCode)
-    : STRICT_QGIS_HEIGHTMAP_ZERO_CODE
-  const metersPerUnit = Number.isFinite(Number(requestedEncoding.metersPerUnit)) && Number(requestedEncoding.metersPerUnit) > 0
-    ? Number(requestedEncoding.metersPerUnit)
-    : STRICT_QGIS_HEIGHTMAP_METERS_PER_UNIT
-  const isPng = hasPngSignature(new Uint8Array(buffer))
-    || filename.trim().toLowerCase().endsWith('.png')
-    || mimeType === 'image/png'
-  if (!isPng) {
-    throw new Error('PNG heightmap validation failed: strict QGIS mode only accepts 16-bit grayscale PNG files.')
-  }
-
-  const decoded = decodePng(buffer)
-  const width = Math.max(1, Math.trunc(decoded.width))
-  const height = Math.max(1, Math.trunc(decoded.height))
-  if (width < 2 || height < 2) {
-    throw new Error(`PNG heightmap validation failed: the image must be at least 2x2 pixels, but received ${width}x${height}. Re-export the raster from QGIS with at least 2x2 samples.`)
-  }
-  if (decoded.depth !== 16) {
-    throw new Error(`PNG heightmap validation failed: strict QGIS mode requires a 16-bit grayscale PNG, but received ${decoded.depth}-bit data.`)
-  }
-  if (decoded.channels !== 1) {
-    throw new Error(`PNG heightmap validation failed: strict QGIS mode requires a single-channel grayscale PNG, but received ${decoded.channels} channel(s).`)
-  }
-  if (decoded.palette?.length) {
-    throw new Error('PNG heightmap validation failed: indexed/palette PNG files are not supported. Export a true grayscale 16-bit PNG from QGIS.')
-  }
-  if (decoded.transparency?.length) {
-    throw new Error('PNG heightmap validation failed: transparency is not allowed in strict QGIS heightmaps. Export a fully opaque grayscale PNG.')
-  }
-  if (!(decoded.data instanceof Uint16Array)) {
-    throw new Error('PNG heightmap validation failed: decoded strict QGIS heightmap is not backed by 16-bit samples.')
-  }
-
-  const rasterData = new Float32Array(width * height)
-  let minEncodedValue = Number.POSITIVE_INFINITY
-  let maxEncodedValue = Number.NEGATIVE_INFINITY
-  let minElevation = Number.POSITIVE_INFINITY
-  let maxElevation = Number.NEGATIVE_INFINITY
-  for (let index = 0; index < decoded.data.length; index += 1) {
-    const encodedValue = decoded.data[index]!
-    const elevation = (encodedValue - zeroCode) * metersPerUnit
-    rasterData[index] = elevation
-    if (encodedValue < minEncodedValue) minEncodedValue = encodedValue
-    if (encodedValue > maxEncodedValue) maxEncodedValue = encodedValue
-    if (elevation < minElevation) minElevation = elevation
-    if (elevation > maxElevation) maxElevation = elevation
-  }
-
-  const heightmapEncoding: PlanningTerrainDemHeightmapEncoding = {
-    version: 1,
-    sourceFormat: 'png',
-    mode: 'strict-qgis-16bit',
-    bitDepth: 16,
-    channels: 1,
-    signed: true,
-    zeroCode,
-    metersPerUnit,
-  }
-  const preview = sampleRasterToPreview(rasterData, width, height, minElevation, maxElevation)
-  const worldBounds = resolveImageHeightmapWorldBounds(width, height, options)
-
-  return {
-    sourceFileHash,
-    filename,
-    mimeType,
-    width,
-    height,
-    rasterData,
-    rawMinElevation: minElevation,
-    recommendedAppliedMinElevation: minElevation,
-    minElevation,
-    maxElevation,
-    sampleStepMeters: computeSampleStepMeters(worldBounds, width, height),
-    geographicBounds: null,
-    worldBounds,
-    heightmapEncoding,
-    preview,
-    orthophoto: null,
-  }
-}
-
 async function parsePlanningHeightmapImageBuffer(
   buffer: ArrayBuffer,
   filename: string,
@@ -760,7 +598,7 @@ async function parsePlanningGeoTiffBuffer(
 ): Promise<PlanningDemImportResult> {
   const sourceFileHash = await computeSha256Hex(buffer)
   const tiff = await fromArrayBuffer(buffer)
-  const image = await tiff.getImage() as unknown as PlanningGeoTiffImageLike
+  const image = await tiff.getImage() as PlanningGeoTiffImageLike
   const width = image.getWidth()
   const height = image.getHeight()
   if (width < 2 || height < 2) {
@@ -888,7 +726,6 @@ export function demImportResultToTerrainData(result: PlanningDemImportResult): P
     resolutionMode: 'auto',
     geographicBounds: result.geographicBounds,
     worldBounds: result.worldBounds,
-    heightmapEncoding: cloneHeightmapEncoding(result.heightmapEncoding ?? null),
     previewHash: result.preview ? result.sourceFileHash : null,
     previewSize: result.preview ? { width: result.preview.width, height: result.preview.height } : null,
     orthophoto: result.orthophoto ?? null,
@@ -905,7 +742,7 @@ export async function openPlanningDemWindowedGeoTiffSource(
   }
   const buffer = await blob.arrayBuffer()
   const tiff = await fromArrayBuffer(buffer)
-  const image = await tiff.getImage() as unknown as PlanningGeoTiffImageLike
+  const image = await tiff.getImage() as PlanningGeoTiffImageLike
   const width = image.getWidth()
   const height = image.getHeight()
   if (width < 2 || height < 2) {
