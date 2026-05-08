@@ -5589,6 +5589,43 @@ function resolveGroundChunkTextureWindowFromMeshBounds(
   }
 }
 
+function createGroundChunkTexturedMaterial(baseMaterial: THREE.Material): THREE.MeshStandardMaterial {
+  const baseStandard = baseMaterial as THREE.MeshStandardMaterial & {
+    metalness?: number
+    roughness?: number
+    flatShading?: boolean
+    envMapIntensity?: number
+  }
+  const nextMaterial = new THREE.MeshStandardMaterial({
+    color: '#ffffff',
+    roughness: typeof baseStandard.roughness === 'number' ? baseStandard.roughness : 0.85,
+    metalness: typeof baseStandard.metalness === 'number' ? baseStandard.metalness : 0.05,
+  })
+  nextMaterial.name = baseMaterial.name ? `${baseMaterial.name} Terrain` : 'Ground Terrain'
+  nextMaterial.side = baseMaterial.side
+  nextMaterial.depthTest = baseMaterial.depthTest
+  nextMaterial.depthWrite = true
+  nextMaterial.transparent = false
+  nextMaterial.opacity = 1
+  nextMaterial.alphaTest = 0
+  nextMaterial.wireframe = false
+  nextMaterial.fog = (baseMaterial as THREE.Material & { fog?: boolean }).fog ?? nextMaterial.fog
+  nextMaterial.toneMapped = (baseMaterial as THREE.Material & { toneMapped?: boolean }).toneMapped ?? nextMaterial.toneMapped
+  nextMaterial.flatShading = Boolean(baseStandard.flatShading)
+  if (typeof baseStandard.envMapIntensity === 'number') {
+    nextMaterial.envMapIntensity = baseStandard.envMapIntensity
+  }
+  nextMaterial.emissive.set('#000000')
+  nextMaterial.emissiveIntensity = 0
+  nextMaterial.normalMap = null
+  nextMaterial.roughnessMap = null
+  nextMaterial.metalnessMap = null
+  nextMaterial.aoMap = null
+  nextMaterial.emissiveMap = null
+  nextMaterial.displacementMap = null
+  return nextMaterial
+}
+
 function applyGroundTextureToChunkMesh(
   root: THREE.Object3D,
   mesh: THREE.Mesh,
@@ -5618,7 +5655,7 @@ function applyGroundTextureToChunkMesh(
     return
   }
 
-  const nextMaterial = baseMaterial.clone()
+  const nextMaterial = createGroundChunkTexturedMaterial(baseMaterial)
   markGroundChunkTexturedMaterial(nextMaterial)
   const typed = nextMaterial as THREE.MeshStandardMaterial & { map?: THREE.Texture | null; needsUpdate?: boolean }
   const texture = baseTexture.clone()
