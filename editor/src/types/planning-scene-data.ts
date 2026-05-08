@@ -164,6 +164,14 @@ export interface PlanningTerrainGeographicBounds {
   crs?: string | null
 }
 
+export interface PlanningTerrainProjectedBounds {
+  west: number
+  south: number
+  east: number
+  north: number
+  crs?: string | null
+}
+
 export interface PlanningTerrainWorldBounds {
   minX: number
   minY: number
@@ -176,6 +184,9 @@ export interface PlanningTerrainOrthophotoData {
   sourceFileHash?: string | null
   filename?: string | null
   mimeType?: string | null
+  source?: 'manual-upload' | 'auto-imagery' | null
+  providerId?: string | null
+  providerLabel?: string | null
   width?: number
   height?: number
   previewHash?: string | null
@@ -214,7 +225,9 @@ export interface PlanningTerrainDemData {
   appliedSampleStepMeters?: number | null
   targetChunkResolution?: number | null
   resolutionMode?: PlanningTerrainDemResolutionMode | null
+  projectedCrs?: string | null
   geographicBounds?: PlanningTerrainGeographicBounds | null
+  projectedBounds?: PlanningTerrainProjectedBounds | null
   worldBounds?: PlanningTerrainWorldBounds | null
   heightmapEncoding?: PlanningTerrainDemHeightmapEncoding | null
   previewHash?: string | null

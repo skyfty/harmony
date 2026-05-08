@@ -39,6 +39,7 @@ export type GroundCreationWarningLevel = 'none' | 'info' | 'caution' | 'severe'
 
 export type GroundCreationProfile = {
   quality: GroundCreationQuality
+  storageMode: 'tiled'
   cellSize: number
   rows: number
   columns: number
@@ -260,6 +261,7 @@ export function resolveGroundCreationProfile(
 
   return {
     quality,
+    storageMode: 'tiled',
     cellSize,
     rows,
     columns,

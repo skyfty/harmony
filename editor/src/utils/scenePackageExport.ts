@@ -35,6 +35,7 @@ import type { PlanningSceneData } from '@/types/planning-scene-data'
 import type { PlanningScenePackageImageEntry, PlanningScenePackageSidecar } from '@/types/planning-package'
 import type { SceneExportEventReporter } from '@/types/scene-export'
 import { computeSha256Hex, getPlanningImageBlobByHash } from '@/utils/planningImageStorage'
+import { loadPlanningDemBlobByHash } from '@/utils/planningDemStorage'
 import { fetchResourceAsset } from '@/api/resourceAssets'
 import { mapServerAssetToProjectAsset } from '@/api/serverAssetTypes'
 import { buildAssetRegistryAliasMap, normalizeAssetIdWithRegistry } from '@/utils/assetRegistryIdNormalization'
@@ -1058,6 +1059,40 @@ async function buildPlanningSidecar(
     })
   }
 
+  let orthophoto: PlanningScenePackageSidecar['orthophoto'] = null
+  const orthophotoHash = typeof nextPlanningData.terrain?.dem?.orthophoto?.sourceFileHash === 'string'
+    ? nextPlanningData.terrain.dem.orthophoto.sourceFileHash.trim()
+    : ''
+  if (orthophotoHash) {
+    const orthophotoBlob = await loadPlanningDemBlobByHash(orthophotoHash)
+    if (!orthophotoBlob) {
+      throw new Error(`Missing planning orthophoto resource (imageHash=${orthophotoHash}); please reopen the orthophoto before exporting.`)
+    }
+    const orthophotoMimeType = nextPlanningData.terrain?.dem?.orthophoto?.mimeType ?? orthophotoBlob.type ?? 'application/octet-stream'
+    const orthophotoFilename = nextPlanningData.terrain?.dem?.orthophoto?.filename ?? 'orthophoto'
+    const orthophotoExt = inferExtFromFilename(orthophotoFilename) ?? inferExtFromMimeType(orthophotoMimeType) ?? 'bin'
+    const safeName = orthophotoHash.length > 16 ? orthophotoHash.slice(0, 16) : orthophotoHash
+    const orthophotoPath = `scenes/${encodedSceneId}/planning-resources/${safeName}.${orthophotoExt}`
+    if (!files[orthophotoPath]) {
+      files[orthophotoPath] = new Uint8Array(await orthophotoBlob.arrayBuffer())
+      resources.push({
+        logicalId: `planningOrthophoto::${sceneId}`,
+        resourceType: 'planningImage',
+        path: orthophotoPath,
+        ext: orthophotoExt,
+        mimeType: orthophotoMimeType,
+        size: orthophotoBlob.size,
+        hash: orthophotoHash,
+      })
+    }
+    orthophoto = {
+      sourceFileHash: orthophotoHash,
+      resourcePath: orthophotoPath,
+      filename: orthophotoFilename,
+      mimeType: orthophotoMimeType,
+    }
+  }
+
   const planningPath = `scenes/${encodedSceneId}/planning.json`
   return {
     planningPath,
@@ -1065,6 +1100,7 @@ async function buildPlanningSidecar(
       version: 1,
       planningData: nextPlanningData,
       images,
+      orthophoto,
     },
   }
 }

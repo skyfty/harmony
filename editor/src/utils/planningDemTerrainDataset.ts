@@ -13,6 +13,7 @@ import {
 import type { PlanningTerrainDemData } from '@/types/planning-scene-data'
 import {
   buildPlanningDemRegionFromPreparedSource,
+  resolvePlanningDemBaseTexture,
   resolvePlanningDemTargetWorldBounds,
   resolvePlanningDemPreparedSource,
   resolvePlanningDemOrthophotoTexture,
@@ -903,21 +904,23 @@ export async function buildPlanningDemTerrainConversion(
     detail: '1/1',
   })
   reportProgress?.({
-    phase: 'load-orthophoto',
+    phase: 'build-base-texture',
     loaded: 0,
     total: 1,
-    label: 'Loading orthophoto…',
+    label: 'Generating terrain base texture...',
     detail: '0/1',
   })
-  const texture = await resolvePlanningDemOrthophotoTexture({
+  const texture = await resolvePlanningDemBaseTexture({
+    definition: options.definition,
     terrainDem: options.terrainDem,
+    source: prepared.rasterSource,
     applyOrthophoto: options.applyOrthophoto,
   })
   reportProgress?.({
-    phase: 'load-orthophoto',
+    phase: 'build-base-texture',
     loaded: 1,
     total: 1,
-    label: texture.textureDataUrl ? 'Loading orthophoto…' : 'Skipping orthophoto…',
+    label: texture.textureDataUrl ? 'Terrain base texture ready...' : 'Skipping terrain base texture...',
     detail: '1/1',
   })
 

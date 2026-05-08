@@ -167,6 +167,19 @@ export const appConfig = {
   },
   assetStoragePath: path.resolve(process.cwd(), process.env.ASSET_STORAGE_PATH ?? './uploads'),
   assetPublicUrl: process.env.ASSET_PUBLIC_URL ?? 'http://localhost:4000/uploads',
+  terrainImagery: {
+    defaultProviderId: process.env.TERRAIN_IMAGERY_DEFAULT_PROVIDER_ID ?? 'esri-world-imagery',
+    xyzTileTemplate:
+      process.env.TERRAIN_IMAGERY_XYZ_TILE_TEMPLATE
+      ?? 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    xyzAttribution:
+      process.env.TERRAIN_IMAGERY_XYZ_ATTRIBUTION
+      ?? 'Tiles © Esri, Maxar, Earthstar Geographics, and the GIS User Community',
+    minZoom: Number(process.env.TERRAIN_IMAGERY_MIN_ZOOM ?? 0),
+    maxZoom: Number(process.env.TERRAIN_IMAGERY_MAX_ZOOM ?? 19),
+    maxOutputSize: Number(process.env.TERRAIN_IMAGERY_MAX_OUTPUT_SIZE ?? 4096),
+    requestTimeoutMs: Number(process.env.TERRAIN_IMAGERY_REQUEST_TIMEOUT_MS ?? 15000),
+  },
   editorPublicUrl: process.env.EDITOR_PUBLIC_URL ?? 'http://localhost:5173',
   editorUser: {
     username: process.env.EDITOR_USER_USERNAME ?? 'editor',

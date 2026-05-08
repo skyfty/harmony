@@ -13,6 +13,7 @@ import type { PlanningSceneData } from '@/types/planning-scene-data'
 import type { PlanningScenePackageImageEntry, PlanningScenePackageSidecar } from '@/types/planning-package'
 import { stripGroundHeightMapsFromSceneDocument } from '@/utils/groundHeightSidecar'
 import { storePlanningImageBlobByHash } from '@/utils/planningImageStorage'
+import { storePlanningDemBlobByHash } from '@/utils/planningDemStorage'
 
 export type LoadedScenePackageProject = Record<string, unknown>
 
@@ -65,6 +66,18 @@ function normalizePlanningSidecar(raw: unknown): PlanningScenePackageSidecar | n
     version: 1,
     planningData,
     images,
+    orthophoto: isPlainObject(raw.orthophoto)
+      ? {
+          sourceFileHash: typeof raw.orthophoto.sourceFileHash === 'string' && raw.orthophoto.sourceFileHash.trim().length
+            ? raw.orthophoto.sourceFileHash.trim()
+            : null,
+          resourcePath: typeof raw.orthophoto.resourcePath === 'string' && raw.orthophoto.resourcePath.trim().length
+            ? raw.orthophoto.resourcePath.trim()
+            : null,
+          filename: typeof raw.orthophoto.filename === 'string' ? raw.orthophoto.filename : null,
+          mimeType: typeof raw.orthophoto.mimeType === 'string' ? raw.orthophoto.mimeType : null,
+        }
+      : null,
   }
 }
 
@@ -125,6 +138,22 @@ async function applyPlanningSidecarToScene(
     }
     const blob = new Blob([new Uint8Array(bytes)], { type: entry.mimeType ?? image.mimeType ?? 'application/octet-stream' })
     await storePlanningImageBlobByHash(entry.imageHash, blob)
+  }
+
+  const orthophotoEntry = sidecar.orthophoto
+  if (
+    orthophotoEntry?.sourceFileHash
+    && orthophotoEntry.resourcePath
+    && nextPlanningData.terrain?.dem?.orthophoto
+  ) {
+    const bytes = zip.files[orthophotoEntry.resourcePath]
+    if (!bytes) {
+      throw new Error(`Missing planning orthophoto resource in scene bundle: ${orthophotoEntry.resourcePath}`)
+    }
+    const blob = new Blob([new Uint8Array(bytes)], {
+      type: orthophotoEntry.mimeType ?? nextPlanningData.terrain.dem.orthophoto.mimeType ?? 'application/octet-stream',
+    })
+    await storePlanningDemBlobByHash(orthophotoEntry.sourceFileHash, blob)
   }
 
   return {

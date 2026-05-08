@@ -13,6 +13,7 @@ import adminAuthRouter from './adminAuth'
 import miniAuthRouter from './miniAuth'
 import authRouter from './auth'
 import menuRouter from './menu'
+import terrainImageryRouter from './terrainImagery'
 import wechatPayRouter from './wechatPay'
 
 export const routes: Router[] = [
@@ -30,6 +31,7 @@ export const routes: Router[] = [
   miniAuthRouter,
   authRouter,
   menuRouter,
+  terrainImageryRouter,
   wechatPayRouter,
 ]
 

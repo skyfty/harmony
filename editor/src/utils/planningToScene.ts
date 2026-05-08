@@ -34,6 +34,7 @@ import type {
   PlanningTerrainWorldBounds,
 } from '@/types/planning-scene-data'
 import { useGroundHeightmapStore } from '@/stores/groundHeightmapStore'
+import { useGroundPaintStore } from '@/stores/groundPaintStore'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useScenesStore } from '@/stores/scenesStore'
 import { resolveGroundWorkingGridSize, resolveGroundWorldBounds } from '@schema'
@@ -50,6 +51,10 @@ import { generateUuid } from '@/utils/uuid'
 import { releaseScatterInstance } from '@/utils/terrainScatterRuntime'
 import { buildPlanningDemGroundRegionData, type PlanningDemBuildProgress, type PlanningDemHeightRegion, type PlanningDemRegionConversionResult } from '@/utils/planningDemToGround'
 import { buildPlanningDemTerrainConversionInWorker } from '@/utils/planningDemTerrainDataset'
+import {
+  buildGroundSurfaceChunksFromPlanningOrthophoto,
+  stripPlanningOrthophotoGeneratedGroundSurfaceChunks,
+} from '@/utils/terrainImageryChunkPatches'
 import { createScenesStoreTerrainDatasetHeightSampler } from '@/utils/terrainDatasetRuntime'
 
 
@@ -1994,6 +1999,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
   const groundMinZ = groundBounds.minZ
 
   const planningUnitsToMeters = resolvePlanningUnitsToMeters(planningData, groundWidth, groundDepth)
+  const terrainDem = planningData.terrain?.dem ?? null
 
   const activeLayerIds = planningData.layers
     .filter((layer) => layer.conversionEnabled !== false)
@@ -2419,6 +2425,54 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
           groundHeightAt,
         })
       }
+    }
+  }
+
+  const currentGroundSurfaceChunks = (sceneStore.groundNode?.dynamicMesh?.type === 'Ground'
+    ? sceneStore.groundNode.dynamicMesh.groundSurfaceChunks
+    : null) ?? (sceneStore.currentSceneId ? useGroundPaintStore().getSceneGroundPaint(sceneStore.currentSceneId)?.groundSurfaceChunks : null)
+
+  if (
+    groundNode
+    && groundDefinition
+    && terrainDem?.orthophoto?.sourceFileHash
+    && sceneStore.currentSceneId
+  ) {
+    emitDetailedProgress(options, 'Applying terrain imagery chunks...', 94, {
+      phase: 'ground-imagery-chunks',
+    })
+    const imageryChunks = await buildGroundSurfaceChunksFromPlanningOrthophoto({
+      terrainDem,
+      definition: groundDefinition as GroundRuntimeDynamicMesh,
+      groundNodeId: groundNode.id,
+      existingGroundSurfaceChunks: currentGroundSurfaceChunks,
+      registerAssets: sceneStore.registerAssets.bind(sceneStore),
+      revision: Date.now(),
+    })
+    sceneStore.commitGroundPaintEdit(groundNode.id, imageryChunks.groundSurfaceChunks)
+    if (imageryChunks.staleAssetIds.length > 0) {
+      await sceneStore.cleanUnusedAssetsByIds(imageryChunks.staleAssetIds)
+    }
+    emitDetailedProgress(options, 'Terrain imagery chunks ready', 95, {
+      phase: 'ground-imagery-chunks',
+      detail: `${imageryChunks.generatedChunkCount}/${imageryChunks.coverageChunkCount}`,
+    })
+    await yieldController.maybeYield(true)
+  } else if (groundNode && sceneStore.currentSceneId && currentGroundSurfaceChunks) {
+    const cleanup = stripPlanningOrthophotoGeneratedGroundSurfaceChunks({
+      groundSurfaceChunks: currentGroundSurfaceChunks,
+      getAsset: (assetId) => sceneStore.getAsset(assetId),
+    })
+    if (cleanup.removedChunkCount > 0) {
+      emitDetailedProgress(options, 'Clearing terrain imagery chunks...', 94, {
+        phase: 'ground-imagery-chunks',
+        detail: String(cleanup.removedChunkCount),
+      })
+      sceneStore.commitGroundPaintEdit(groundNode.id, cleanup.groundSurfaceChunks)
+      if (cleanup.removedAssetIds.length > 0) {
+        await sceneStore.cleanUnusedAssetsByIds(cleanup.removedAssetIds)
+      }
+      await yieldController.maybeYield(true)
     }
   }
 

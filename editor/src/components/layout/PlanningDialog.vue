@@ -18,11 +18,13 @@ import type {
   PlanningPolylineData,
   PlanningSceneData,
   PlanningTerrainDemData,
+  PlanningTerrainDemHeightmapEncoding,
   PlanningTerrainData,
   PlanningTerrainControlPoint,
   PlanningTerrainFalloff,
   PlanningTerrainGeographicBounds,
   PlanningTerrainOrthophotoData,
+  PlanningTerrainProjectedBounds,
   PlanningTerrainNoiseMode,
   PlanningTerrainRidgeValleyLine,
   PlanningTerrainWorldBounds,
@@ -42,6 +44,7 @@ import {
 } from '@/utils/planningDemStorage'
 import { GROUND_TERRAIN_CHUNK_SIZE_METERS, resolveGroundWorldBounds } from '@schema'
 import {
+  createStrictQgis16BitHeightmapEncoding,
   demImportResultToTerrainData,
   isPlanningDemHeightmapImageSource,
   isSupportedPlanningDemSource,
@@ -52,6 +55,7 @@ import {
   resolvePlanningDemTargetChunkResolution,
   type PlanningDemImportOptions,
 } from '@/utils/planningDemImport'
+import { composeAutomaticTerrainImagery, supportsAutomaticTerrainImagery } from '@/utils/terrainImagery'
 
 
 const props = defineProps<{ modelValue: boolean }>()
@@ -297,7 +301,7 @@ function createDefaultPlanningTerrain(): PlanningTerrainData {
   return {
     version: 1,
     mode: 'normal',
-    grid: { cellSize: 1 },
+    grid: { cellSize: 20 },
     noise: { enabled: false, seed: 1337, mode: 'perlin', noiseScale: 40, noiseAmplitude: 1, noiseStrength: 1, detailScale: 1, detailAmplitude: 0, edgeFalloff: 0 },
     controlPoints: [],
     ridgeValleyLines: [],
@@ -318,6 +322,26 @@ function clonePlanningTerrainGeographicBounds(bounds: PlanningTerrainGeographicB
     north: bounds.north,
     crs: bounds.crs ?? null,
   }
+}
+
+function clonePlanningTerrainProjectedBounds(bounds: PlanningTerrainProjectedBounds | null | undefined): PlanningTerrainProjectedBounds | null {
+  if (!bounds) {
+    return null
+  }
+  return {
+    west: bounds.west,
+    south: bounds.south,
+    east: bounds.east,
+    north: bounds.north,
+    crs: bounds.crs ?? null,
+  }
+}
+
+function looksLikeGeographicBounds(bounds: { west: number; south: number; east: number; north: number }): boolean {
+  return Math.abs(bounds.west) <= 180
+    && Math.abs(bounds.east) <= 180
+    && Math.abs(bounds.south) <= 90
+    && Math.abs(bounds.north) <= 90
 }
 
 function clonePlanningTerrainWorldBounds(bounds: PlanningTerrainWorldBounds | null | undefined): PlanningTerrainWorldBounds | null {
@@ -341,12 +365,31 @@ function clonePlanningTerrainOrthophotoData(data: PlanningTerrainOrthophotoData 
     sourceFileHash: data.sourceFileHash ?? null,
     filename: data.filename ?? null,
     mimeType: data.mimeType ?? null,
+    source: data.source ?? null,
+    providerId: data.providerId ?? null,
+    providerLabel: data.providerLabel ?? null,
     width: data.width,
     height: data.height,
     previewHash: data.previewHash ?? null,
     previewSize: data.previewSize ? { width: data.previewSize.width, height: data.previewSize.height } : null,
     opacity: data.opacity,
     visible: data.visible,
+  }
+}
+
+function clonePlanningTerrainDemHeightmapEncoding(data: PlanningTerrainDemHeightmapEncoding | null | undefined): PlanningTerrainDemHeightmapEncoding | null {
+  if (!data) {
+    return null
+  }
+  return {
+    version: 1,
+    sourceFormat: 'png',
+    mode: data.mode === 'custom-range' ? 'custom-range' : 'strict-qgis-16bit',
+    bitDepth: data.bitDepth === 8 ? 8 : 16,
+    channels: Math.max(1, Math.trunc(Number(data.channels) || 1)),
+    signed: Boolean(data.signed),
+    zeroCode: Number.isFinite(Number(data.zeroCode)) ? Number(data.zeroCode) : null,
+    metersPerUnit: Number.isFinite(Number(data.metersPerUnit)) ? Number(data.metersPerUnit) : null,
   }
 }
 
@@ -370,8 +413,11 @@ function clonePlanningTerrainDemData(data: PlanningTerrainDemData | null | undef
     appliedSampleStepMeters: data.appliedSampleStepMeters ?? null,
     targetChunkResolution: data.targetChunkResolution ?? null,
     resolutionMode: data.resolutionMode ?? null,
+    projectedCrs: data.projectedCrs ?? null,
     geographicBounds: clonePlanningTerrainGeographicBounds(data.geographicBounds ?? null),
+    projectedBounds: clonePlanningTerrainProjectedBounds(data.projectedBounds ?? null),
     worldBounds: clonePlanningTerrainWorldBounds(data.worldBounds ?? null),
+    heightmapEncoding: clonePlanningTerrainDemHeightmapEncoding(data.heightmapEncoding ?? null),
     previewHash: data.previewHash ?? null,
     previewSize: data.previewSize ? { width: data.previewSize.width, height: data.previewSize.height } : null,
     orthophoto: clonePlanningTerrainOrthophotoData(data.orthophoto ?? null),
@@ -399,6 +445,7 @@ function isTerrainEmptyForSnapshot(snapshot: PlanningTerrainData | null | undefi
     || typeof snapshot.dem.filename === 'string'
     || snapshot.dem.worldBounds
     || snapshot.dem.geographicBounds
+    || snapshot.dem.projectedBounds
     || snapshot.dem.orthophoto
   )) return false
   return true
@@ -430,6 +477,8 @@ const uploadError = ref<string | null>(null)
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const demFileInputRef = ref<HTMLInputElement | null>(null)
 const orthophotoFileInputRef = ref<HTMLInputElement | null>(null)
+const autoImageryBusy = ref(false)
+const autoImageryError = ref<string | null>(null)
 const demImportError = ref<string | null>(null)
 const planningDemPreviewUrl = ref<string | null>(null)
 const planningOrthophotoPreviewUrl = ref<string | null>(null)
@@ -477,7 +526,7 @@ const sceneGroundSize = computed(() => {
 })
 const visibleLayerIds = computed(() => new Set(layers.value.filter((layer) => layer.visible).map((layer) => layer.id)))
 
-const DEFAULT_PNG_HEIGHTMAP_METERS_PER_PIXEL = 30
+const DEFAULT_PNG_HEIGHTMAP_METERS_PER_PIXEL = 20
 
 function resolvePlanningWorldSpan(bounds: PlanningTerrainWorldBounds | null | undefined): { width: number; height: number } | null {
   if (!bounds) {
@@ -556,7 +605,7 @@ function buildPlanningDemParseOptions(
 
 const planningPngHeightmapProtocolHint = `Harmony PNG DEM protocol: gray ${PLANNING_PNG_HEIGHTMAP_CONTRACT.seaLevelGray} = 0m, ${PLANNING_PNG_HEIGHTMAP_CONTRACT.metersPerGray}m per gray, valid range ${PLANNING_PNG_HEIGHTMAP_CONTRACT.minElevation}m to ${PLANNING_PNG_HEIGHTMAP_CONTRACT.maxElevation}m.`
 
-function validatePlanningDemImport(file: File): { metersPerPixel?: number } {
+function validatePlanningDemImport(file: File): Partial<PlanningDemImportOptions> {
   const mimeType = file.type || null
   if (!isSupportedPlanningDemSource(file.name, mimeType)) {
     throw new Error('Only GeoTIFF (.tif, .tiff) and PNG heightmaps are supported for DEM import.')
@@ -576,6 +625,7 @@ function validatePlanningDemImport(file: File): { metersPerPixel?: number } {
   }
   return {
     metersPerPixel: Number(metersPerPixel.toFixed(6)),
+    heightmapEncoding: createStrictQgis16BitHeightmapEncoding(),
   }
 }
 
@@ -1519,6 +1569,37 @@ function normalizePlanningTerrain(raw: unknown): PlanningTerrainData {
     const geographicBounds = dem.geographicBounds && typeof dem.geographicBounds === 'object'
       ? dem.geographicBounds as Record<string, unknown>
       : null
+    const projectedBounds = dem.projectedBounds && typeof dem.projectedBounds === 'object'
+      ? dem.projectedBounds as Record<string, unknown>
+      : null
+    const normalizedGeographicBounds = geographicBounds && Number.isFinite(Number(geographicBounds.west)) && Number.isFinite(Number(geographicBounds.south)) && Number.isFinite(Number(geographicBounds.east)) && Number.isFinite(Number(geographicBounds.north))
+      ? {
+          west: Number(geographicBounds.west),
+          south: Number(geographicBounds.south),
+          east: Number(geographicBounds.east),
+          north: Number(geographicBounds.north),
+          crs: typeof geographicBounds.crs === 'string' ? geographicBounds.crs : null,
+        }
+      : null
+    const normalizedProjectedBounds = projectedBounds && Number.isFinite(Number(projectedBounds.west)) && Number.isFinite(Number(projectedBounds.south)) && Number.isFinite(Number(projectedBounds.east)) && Number.isFinite(Number(projectedBounds.north))
+      ? {
+          west: Number(projectedBounds.west),
+          south: Number(projectedBounds.south),
+          east: Number(projectedBounds.east),
+          north: Number(projectedBounds.north),
+          crs: typeof projectedBounds.crs === 'string' ? projectedBounds.crs : null,
+        }
+      : null
+    const migratedLegacyProjectedBounds = !normalizedProjectedBounds
+      && normalizedGeographicBounds
+      && typeof dem.projectedCrs === 'string'
+      && dem.projectedCrs.trim().length > 0
+      && !looksLikeGeographicBounds(normalizedGeographicBounds)
+      ? {
+          ...normalizedGeographicBounds,
+          crs: normalizedGeographicBounds.crs ?? dem.projectedCrs,
+        }
+      : null
     const worldBounds = dem.worldBounds && typeof dem.worldBounds === 'object'
       ? dem.worldBounds as Record<string, unknown>
       : null
@@ -1558,15 +1639,9 @@ function normalizePlanningTerrain(raw: unknown): PlanningTerrainData {
       appliedSampleStepMeters,
       targetChunkResolution,
       resolutionMode,
-      geographicBounds: geographicBounds && Number.isFinite(Number(geographicBounds.west)) && Number.isFinite(Number(geographicBounds.south)) && Number.isFinite(Number(geographicBounds.east)) && Number.isFinite(Number(geographicBounds.north))
-        ? {
-            west: Number(geographicBounds.west),
-            south: Number(geographicBounds.south),
-            east: Number(geographicBounds.east),
-            north: Number(geographicBounds.north),
-            crs: typeof geographicBounds.crs === 'string' ? geographicBounds.crs : null,
-          }
-        : undefined,
+      projectedCrs: typeof dem.projectedCrs === 'string' ? dem.projectedCrs : null,
+      geographicBounds: migratedLegacyProjectedBounds ? undefined : (normalizedGeographicBounds ?? undefined),
+      projectedBounds: normalizedProjectedBounds ?? migratedLegacyProjectedBounds ?? undefined,
       worldBounds: {
         minX,
         minY,
@@ -1586,6 +1661,11 @@ function normalizePlanningTerrain(raw: unknown): PlanningTerrainData {
             sourceFileHash: typeof orthophoto.sourceFileHash === 'string' ? orthophoto.sourceFileHash : undefined,
             filename: typeof orthophoto.filename === 'string' ? orthophoto.filename : null,
             mimeType: typeof orthophoto.mimeType === 'string' ? orthophoto.mimeType : null,
+            source: orthophoto.source === 'auto-imagery' || orthophoto.source === 'manual-upload'
+              ? orthophoto.source
+              : null,
+            providerId: typeof orthophoto.providerId === 'string' ? orthophoto.providerId : null,
+            providerLabel: typeof orthophoto.providerLabel === 'string' ? orthophoto.providerLabel : null,
             width: Number.isFinite(Number(orthophoto.width)) ? Math.max(0, Math.trunc(Number(orthophoto.width))) : undefined,
             height: Number.isFinite(Number(orthophoto.height)) ? Math.max(0, Math.trunc(Number(orthophoto.height))) : undefined,
             previewHash: typeof orthophoto.previewHash === 'string' ? orthophoto.previewHash : null,
@@ -2019,6 +2099,8 @@ const selectedDem = computed<PlanningTerrainDemData | null>(() => {
   return activeDemId.value ? (planningTerrain.value.dem ?? null) : null
 })
 
+const canAutoFetchImagery = computed<boolean>(() => supportsAutomaticTerrainImagery(planningTerrain.value.dem ?? null))
+
 const currentDemUsesHeightmapImage = computed<boolean>(() => {
   const dem = planningTerrain.value.dem
   if (!dem) {
@@ -2135,6 +2217,51 @@ const selectedDemMinElevation = computed<number | null>({
     markPlanningDirty()
   },
 })
+const selectedDemMaxElevationModel = computed<number | null>({
+  get: () => {
+    const maxElevation = Number(selectedDem.value?.maxElevation)
+    return Number.isFinite(maxElevation) ? maxElevation : null
+  },
+  set: (value: number | null) => {
+    const dem = selectedDem.value
+    if (!dem || selectedDemUsesHeightmapImage.value) {
+      return
+    }
+    const maxElevation = Number(value)
+    if (!Number.isFinite(maxElevation)) {
+      return
+    }
+    dem.maxElevation = Number(maxElevation.toFixed(3))
+    markPlanningDirty()
+  },
+})
+const selectedDemMinElevationModel = computed<number | null>({
+  get: () => selectedDemMinElevation.value,
+  set: (value: number | null) => {
+    const dem = selectedDem.value
+    if (!dem || selectedDemUsesHeightmapImage.value) {
+      return
+    }
+    const minElevation = Number(value)
+    if (!Number.isFinite(minElevation)) {
+      return
+    }
+    dem.minElevation = Number(minElevation.toFixed(3))
+    markPlanningDirty()
+  },
+})
+const selectedDemUsesCustomHeightmapRange = computed<boolean>(() => {
+  const dem = selectedDem.value
+  return Boolean(dem?.heightmapEncoding && dem.heightmapEncoding.mode === 'custom-range')
+})
+const selectedDemHeightmapModeDescription = computed<string>(() => {
+  if (!selectedDemUsesHeightmapImage.value) {
+    return '当前 DEM 使用常规高程导入模式。'
+  }
+  return selectedDemUsesCustomHeightmapRange.value
+    ? '当前使用自定义高度范围的 16 位高度图。'
+    : '当前使用严格 QGIS 16 位高度图编码。'
+})
 const selectedDemTargetChunkResolution = computed<number | null>({
   get: () => {
     const resolution = Number(selectedDem.value?.targetChunkResolution)
@@ -2212,7 +2339,7 @@ function formatOptionalSize(size: { width: number; height: number } | null | und
   return `${size.width} × ${size.height}`
 }
 
-function formatBoundsLine(bounds: PlanningTerrainGeographicBounds | PlanningTerrainWorldBounds | null | undefined): string {
+function formatBoundsLine(bounds: PlanningTerrainGeographicBounds | PlanningTerrainProjectedBounds | PlanningTerrainWorldBounds | null | undefined): string {
   if (!bounds) return '—'
   if ('west' in bounds) {
     const crs = bounds.crs ? `, ${bounds.crs}` : ''
@@ -2311,8 +2438,8 @@ const terrainContourWaterPresetModel = computed<WaterPresetId | null>({
 
 const terrainCellSizeModel = computed<number>({
   get: () => {
-    const raw = Number(planningTerrain.value?.grid?.cellSize ?? 1)
-    return Number.isFinite(raw) && raw >= 0.1 ? raw : 1
+    const raw = Number(planningTerrain.value?.grid?.cellSize ?? 20)
+    return Number.isFinite(raw) && raw >= 0.1 ? raw : 20
   },
   set: (value: number) => {
     const next = Number(value)
@@ -4980,6 +5107,8 @@ function clearPlanningDemImport() {
     dem: null,
   }
   demImportError.value = null
+  autoImageryError.value = null
+  autoImageryBusy.value = false
   planningDemPreviewUrl.value = null
   if (planningOrthophotoPreviewUrl.value) {
     try { URL.revokeObjectURL(planningOrthophotoPreviewUrl.value) } catch {}
@@ -4995,7 +5124,12 @@ function isPlanningOrthophotoFile(file: File): boolean {
 
 async function loadPlanningDemFile(file: File) {
   demImportError.value = null
+  autoImageryError.value = null
   try {
+    if (planningOrthophotoPreviewUrl.value) {
+      try { URL.revokeObjectURL(planningOrthophotoPreviewUrl.value) } catch {}
+    }
+    planningOrthophotoPreviewUrl.value = null
     const validation = validatePlanningDemImport(file)
     const result = await parsePlanningDemFile(file, buildPlanningDemParseOptions(planningTerrain.value.dem, validation))
     await storePlanningDemBlobByHash(result.sourceFileHash, file)
@@ -5014,6 +5148,7 @@ async function loadPlanningDemFile(file: File) {
 
 async function loadPlanningOrthophotoFile(file: File) {
   demImportError.value = null
+  autoImageryError.value = null
   try {
     if (!isPlanningOrthophotoFile(file)) {
       throw new Error('Only image files are supported for orthophoto import.')
@@ -5027,6 +5162,9 @@ async function loadPlanningOrthophotoFile(file: File) {
       sourceFileHash: hash,
       filename: file.name,
       mimeType: file.type || null,
+      source: 'manual-upload',
+      providerId: null,
+      providerLabel: null,
       width: image.naturalWidth,
       height: image.naturalHeight,
       previewHash: hash,
@@ -5048,8 +5186,10 @@ async function loadPlanningOrthophotoFile(file: File) {
       appliedSampleStepMeters: null,
       targetChunkResolution: null,
       resolutionMode: null,
+      projectedCrs: null,
       geographicBounds: null,
       worldBounds: null,
+      heightmapEncoding: null,
       previewHash: null,
       previewSize: null,
       orthophoto: null,
@@ -5068,6 +5208,60 @@ async function loadPlanningOrthophotoFile(file: File) {
     markPlanningDirty()
   } catch (error) {
     demImportError.value = error instanceof Error ? error.message : 'Failed to import orthophoto file.'
+  }
+}
+
+async function fetchAutomaticPlanningOrthophoto() {
+  demImportError.value = null
+  autoImageryError.value = null
+  const dem = planningTerrain.value.dem
+  if (!dem) {
+    autoImageryError.value = 'Import a DEM before fetching terrain imagery.'
+    return
+  }
+  if (!supportsAutomaticTerrainImagery(dem)) {
+    autoImageryError.value = 'Automatic terrain imagery currently supports Web Mercator GeoTIFF DEMs only.'
+    return
+  }
+  autoImageryBusy.value = true
+  try {
+    const composed = await composeAutomaticTerrainImagery(dem, {
+      maxOutputSize: 4096,
+    })
+    const buffer = await composed.blob.arrayBuffer()
+    const hash = await computeSha256Hex(buffer)
+    await storePlanningDemBlobByHash(hash, composed.blob)
+    const nextOrthophoto: PlanningTerrainOrthophotoData = {
+      version: 1,
+      sourceFileHash: hash,
+      filename: `${(dem.filename ?? 'terrain').replace(/\.[^.]+$/, '') || 'terrain'}-${composed.provider.id}.png`,
+      mimeType: composed.blob.type || 'image/png',
+      source: 'auto-imagery',
+      providerId: composed.provider.id,
+      providerLabel: composed.provider.label,
+      width: composed.width,
+      height: composed.height,
+      previewHash: hash,
+      previewSize: { width: composed.width, height: composed.height },
+      opacity: 1,
+      visible: true,
+    }
+    planningTerrain.value = {
+      ...planningTerrain.value,
+      dem: {
+        ...dem,
+        orthophoto: nextOrthophoto,
+      },
+    }
+    if (planningOrthophotoPreviewUrl.value) {
+      try { URL.revokeObjectURL(planningOrthophotoPreviewUrl.value) } catch {}
+    }
+    planningOrthophotoPreviewUrl.value = URL.createObjectURL(composed.blob)
+    markPlanningDirty()
+  } catch (error) {
+    autoImageryError.value = error instanceof Error ? error.message : 'Failed to fetch automatic terrain imagery.'
+  } finally {
+    autoImageryBusy.value = false
   }
 }
 
@@ -5752,6 +5946,17 @@ onBeforeUnmount(() => {
                     size="small"
                     variant="text"
                     color="primary"
+                    :disabled="autoImageryBusy || !canAutoFetchImagery"
+                    title="Auto fetch terrain imagery"
+                    @click.stop="fetchAutomaticPlanningOrthophoto"
+                  >
+                    <v-icon>{{ autoImageryBusy ? 'mdi-loading mdi-spin' : 'mdi-satellite-variant' }}</v-icon>
+                  </v-btn>
+                  <v-btn
+                    icon
+                    size="small"
+                    variant="text"
+                    color="primary"
                     title="Import orthophoto"
                     @click.stop="handleOrthophotoUploadClick"
                   >
@@ -5771,6 +5976,7 @@ onBeforeUnmount(() => {
                 </div>
               </div>
               <div v-if="demImportError" class="upload-error">{{ demImportError }}</div>
+              <div v-else-if="autoImageryError" class="upload-error">{{ autoImageryError }}</div>
 
               <input
                 ref="demFileInputRef"
@@ -6587,6 +6793,24 @@ onBeforeUnmount(() => {
                   step="1"
                   hide-details
                 />
+                <div class="property-panel__hint">{{ selectedDemHeightmapModeDescription }}</div>
+                <template v-if="selectedDemUsesCustomHeightmapRange">
+                  <div class="property-panel__section-title property-panel__section-title--muted">Heightmap Range</div>
+                  <v-text-field
+                    v-model.number="selectedDemMinElevationModel"
+                    type="number"
+                    density="compact"
+                    label="Min elevation (m)"
+                    hide-details
+                  />
+                  <v-text-field
+                    v-model.number="selectedDemMaxElevationModel"
+                    type="number"
+                    density="compact"
+                    label="Max elevation (m)"
+                    hide-details
+                  />
+                </template>
               </div>
               <div class="property-panel__sub-block">
                 <div class="property-panel__section-title property-panel__section-title--muted">Conversion Grid</div>
@@ -6615,11 +6839,15 @@ onBeforeUnmount(() => {
               <div class="property-panel__meta-row"><span>Source sample step</span><strong>{{ formatOptionalNumber(selectedDem.sourceSampleStepMeters ?? selectedDem.sampleStepMeters) }} m</strong></div>
               <div class="property-panel__meta-row"><span>Applied sample step</span><strong>{{ formatOptionalNumber(selectedDem.appliedSampleStepMeters) }} m</strong></div>
               <div class="property-panel__meta-row"><span>Chunk subdivisions</span><strong>{{ selectedDem.targetChunkResolution ?? '—' }}</strong></div>
+              <div class="property-panel__meta-row"><span>Projected bounds</span><strong>{{ formatBoundsLine(selectedDem.projectedBounds) }}</strong></div>
               <div class="property-panel__meta-row"><span>Geographic bounds</span><strong>{{ formatBoundsLine(selectedDem.geographicBounds) }}</strong></div>
               <div class="property-panel__meta-row"><span>World bounds</span><strong>{{ formatBoundsLine(selectedDem.worldBounds) }}</strong></div>
               <div class="property-panel__meta-row"><span>Preview size</span><strong>{{ formatOptionalSize(selectedDem.previewSize) }}</strong></div>
+              <div class="property-panel__meta-row"><span>Projected CRS</span><strong>{{ selectedDem.projectedCrs || '—' }}</strong></div>
               <div v-if="selectedDem.orthophoto" class="property-panel__sub-block">
                 <div class="property-panel__section-title property-panel__section-title--muted">Orthophoto</div>
+                <div class="property-panel__meta-row"><span>Source</span><strong>{{ selectedDem.orthophoto.source === 'auto-imagery' ? 'Auto imagery' : 'Manual upload' }}</strong></div>
+                <div v-if="selectedDem.orthophoto.providerLabel || selectedDem.orthophoto.providerId" class="property-panel__meta-row"><span>Provider</span><strong>{{ selectedDem.orthophoto.providerLabel || selectedDem.orthophoto.providerId }}</strong></div>
                 <div class="property-panel__meta-row"><span>Source hash</span><strong>{{ formatShortHash(selectedDem.orthophoto.sourceFileHash) }}</strong></div>
                 <div class="property-panel__meta-row"><span>File</span><strong>{{ selectedDem.orthophoto.filename || 'Unnamed image' }}</strong></div>
                 <div class="property-panel__meta-row"><span>MIME</span><strong>{{ selectedDem.orthophoto.mimeType || '—' }}</strong></div>

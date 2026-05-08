@@ -10,8 +10,16 @@ export interface PlanningScenePackageImageEntry {
   mimeType?: string | null
 }
 
+export interface PlanningScenePackageOrthophotoEntry {
+  sourceFileHash: string | null
+  resourcePath: string | null
+  filename?: string | null
+  mimeType?: string | null
+}
+
 export interface PlanningScenePackageSidecar {
   version: typeof PLANNING_SCENE_PACKAGE_VERSION
   planningData: PlanningSceneData | null
   images: PlanningScenePackageImageEntry[]
+  orthophoto?: PlanningScenePackageOrthophotoEntry | null
 }

@@ -43,6 +43,7 @@ export interface PlanningDemBuildProgress {
   phase:
     | 'load-source'
     | 'load-orthophoto'
+    | 'build-base-texture'
     | 'sample-region'
     | 'build-edit-tiles'
     | 'build-terrain-dataset-fields'
@@ -437,9 +438,9 @@ function resolvePlanningDemCoveredGridRegion(options: {
   const cellSize = Number.isFinite(options.definition.cellSize) && options.definition.cellSize > 0 ? options.definition.cellSize : 1
   const epsilon = Math.max(1e-9, cellSize * 1e-9)
   const overlapStartColumn = Math.max(0, Math.min(columns, Math.ceil((overlapMinX - terrainBounds.minX - epsilon) / cellSize)))
-  const overlapEndColumn = Math.max(overlapStartColumn, Math.min(columns, Math.floor((overlapMaxX - terrainBounds.minX + epsilon) / cellSize)))
+  const overlapEndColumn = Math.max(overlapStartColumn, Math.min(columns, Math.floor((overlapMaxX - terrainBounds.minX - epsilon) / cellSize)))
   const overlapStartRow = Math.max(0, Math.min(rows, Math.ceil((overlapMinZ - terrainBounds.minZ - epsilon) / cellSize)))
-  const overlapEndRow = Math.max(overlapStartRow, Math.min(rows, Math.floor((overlapMaxZ - terrainBounds.minZ + epsilon) / cellSize)))
+  const overlapEndRow = Math.max(overlapStartRow, Math.min(rows, Math.floor((overlapMaxZ - terrainBounds.minZ - epsilon) / cellSize)))
   const startRow = Math.max(overlapStartRow, requestedStartRow)
   const endRow = Math.min(overlapEndRow, requestedEndRow)
   const startColumn = Math.max(overlapStartColumn, requestedStartColumn)
@@ -948,10 +949,316 @@ function blobToDataUrl(blob: Blob): Promise<string> {
   })
 }
 
+type PlanningDemTextureResolution = {
+  textureDataUrl: string | null
+  textureName: string | null
+}
+
+type TerrainTextureCanvas = OffscreenCanvas | HTMLCanvasElement
+
+type TerrainTextureColor = {
+  r: number
+  g: number
+  b: number
+}
+
+function clamp01(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0
+  }
+  return Math.min(1, Math.max(0, value))
+}
+
+function lerp(left: number, right: number, alpha: number): number {
+  return left + (right - left) * clamp01(alpha)
+}
+
+function smoothstep(edge0: number, edge1: number, value: number): number {
+  if (!(edge1 > edge0)) {
+    return value >= edge1 ? 1 : 0
+  }
+  const t = clamp01((value - edge0) / (edge1 - edge0))
+  return t * t * (3 - 2 * t)
+}
+
+function mixTerrainColor(left: TerrainTextureColor, right: TerrainTextureColor, alpha: number): TerrainTextureColor {
+  return {
+    r: lerp(left.r, right.r, alpha),
+    g: lerp(left.g, right.g, alpha),
+    b: lerp(left.b, right.b, alpha),
+  }
+}
+
+function clampTerrainChannel(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0
+  }
+  return Math.max(0, Math.min(255, Math.round(value)))
+}
+
+function fract(value: number): number {
+  return value - Math.floor(value)
+}
+
+function hashNoise2(x: number, y: number): number {
+  const seed = Math.sin(x * 127.1 + y * 311.7) * 43758.5453123
+  return fract(seed)
+}
+
+function valueNoise2(x: number, y: number): number {
+  const cellX = Math.floor(x)
+  const cellY = Math.floor(y)
+  const localX = fract(x)
+  const localY = fract(y)
+  const sx = localX * localX * (3 - 2 * localX)
+  const sy = localY * localY * (3 - 2 * localY)
+  const n00 = hashNoise2(cellX, cellY)
+  const n10 = hashNoise2(cellX + 1, cellY)
+  const n01 = hashNoise2(cellX, cellY + 1)
+  const n11 = hashNoise2(cellX + 1, cellY + 1)
+  const nx0 = lerp(n00, n10, sx)
+  const nx1 = lerp(n01, n11, sx)
+  return lerp(nx0, nx1, sy)
+}
+
+function fbmNoise2(x: number, y: number, octaves = 4): number {
+  let amplitude = 0.5
+  let frequency = 1
+  let sum = 0
+  let totalAmplitude = 0
+  for (let octave = 0; octave < octaves; octave += 1) {
+    sum += valueNoise2(x * frequency, y * frequency) * amplitude
+    totalAmplitude += amplitude
+    amplitude *= 0.5
+    frequency *= 2
+  }
+  if (!(totalAmplitude > 0)) {
+    return 0
+  }
+  return sum / totalAmplitude
+}
+
+function createTerrainTextureCanvas(width: number, height: number): {
+  canvas: TerrainTextureCanvas
+  context: OffscreenCanvasRenderingContext2D | CanvasRenderingContext2D
+} | null {
+  const safeWidth = Math.max(1, Math.round(width))
+  const safeHeight = Math.max(1, Math.round(height))
+  if (typeof OffscreenCanvas !== 'undefined') {
+    const canvas = new OffscreenCanvas(safeWidth, safeHeight)
+    const context = canvas.getContext('2d')
+    if (context) {
+      return { canvas, context }
+    }
+  }
+  if (typeof document !== 'undefined' && typeof document.createElement === 'function') {
+    const canvas = document.createElement('canvas')
+    canvas.width = safeWidth
+    canvas.height = safeHeight
+    const context = canvas.getContext('2d')
+    if (context) {
+      return { canvas, context }
+    }
+  }
+  return null
+}
+
+async function terrainTextureCanvasToDataUrl(canvas: TerrainTextureCanvas): Promise<string | null> {
+  if ('toDataURL' in canvas && typeof canvas.toDataURL === 'function') {
+    return canvas.toDataURL('image/png')
+  }
+  if ('convertToBlob' in canvas && typeof canvas.convertToBlob === 'function') {
+    const blob = await canvas.convertToBlob({ type: 'image/png' })
+    return await blobToDataUrl(blob)
+  }
+  return null
+}
+
+function summarizePlanningDemRasterHeightRange(source: PlanningDemRasterSource): {
+  min: number
+  max: number
+} | null {
+  let min = Number.POSITIVE_INFINITY
+  let max = Number.NEGATIVE_INFINITY
+  for (let index = 0; index < source.rasterData.length; index += 1) {
+    const raw = Number(source.rasterData[index])
+    if (!Number.isFinite(raw) || raw === GROUND_HEIGHT_UNSET_VALUE) {
+      continue
+    }
+    const height = raw - source.elevationOffsetMeters
+    min = Math.min(min, height)
+    max = Math.max(max, height)
+  }
+  if (!Number.isFinite(min) || !Number.isFinite(max)) {
+    return null
+  }
+  return { min, max }
+}
+
+function computePlanningDemBaseTextureSize(definition: GroundRuntimeDynamicMesh, maxResolution = 1024): {
+  width: number
+  height: number
+} {
+  const bounds = resolveGroundWorldBounds(definition)
+  const worldWidth = Math.max(1, Math.abs(bounds.maxX - bounds.minX))
+  const worldHeight = Math.max(1, Math.abs(bounds.maxZ - bounds.minZ))
+  const maxDimension = Math.max(worldWidth, worldHeight, 1)
+  const normalizedMaxResolution = Math.max(256, Math.round(maxResolution))
+  return {
+    width: Math.max(256, Math.round((worldWidth / maxDimension) * normalizedMaxResolution)),
+    height: Math.max(256, Math.round((worldHeight / maxDimension) * normalizedMaxResolution)),
+  }
+}
+
+function stripFilenameExtension(filename: string | null | undefined): string {
+  const normalized = typeof filename === 'string' ? filename.trim() : ''
+  if (!normalized) {
+    return 'Terrain'
+  }
+  return normalized.replace(/\.[^.]+$/, '') || normalized
+}
+
+function resolvePlanningDemBaseTextureName(terrainDem: PlanningTerrainDemData): string {
+  return `${stripFilenameExtension(terrainDem.filename)} Terrain Base`
+}
+
+async function resolvePlanningDemNaturalBaseTexture(options: {
+  definition: GroundRuntimeDynamicMesh
+  terrainDem: PlanningTerrainDemData
+  source: PlanningDemRasterSource
+}): Promise<PlanningDemTextureResolution> {
+  const textureSize = computePlanningDemBaseTextureSize(options.definition)
+  const composition = createTerrainTextureCanvas(textureSize.width, textureSize.height)
+  if (!composition) {
+    return { textureDataUrl: null, textureName: null }
+  }
+
+  const { canvas, context } = composition
+  const width = canvas.width
+  const height = canvas.height
+  const bounds = resolveGroundWorldBounds(options.definition)
+  const worldWidth = Math.max(1e-6, bounds.maxX - bounds.minX)
+  const worldDepth = Math.max(1e-6, bounds.maxZ - bounds.minZ)
+  const gradientStepX = Math.max(options.source.sampleStepX, worldWidth / Math.max(1, width - 1))
+  const gradientStepZ = Math.max(options.source.sampleStepZ, worldDepth / Math.max(1, height - 1))
+  const heightRange = summarizePlanningDemRasterHeightRange(options.source) ?? { min: 0, max: 1 }
+  const heightSpan = Math.max(1e-3, heightRange.max - heightRange.min)
+  const imageData = context.createImageData(width, height)
+  const pixels = imageData.data
+
+  const palette = {
+    sand: { r: 178, g: 160, b: 122 },
+    soil: { r: 136, g: 116, b: 86 },
+    meadow: { r: 128, g: 149, b: 88 },
+    grass: { r: 92, g: 128, b: 72 },
+    rock: { r: 120, g: 118, b: 112 },
+    paleRock: { r: 165, g: 160, b: 148 },
+  } satisfies Record<string, TerrainTextureColor>
+
+  const lightDirection = { x: -0.42, y: 0.82, z: -0.38 }
+  const lightLength = Math.hypot(lightDirection.x, lightDirection.y, lightDirection.z) || 1
+  lightDirection.x /= lightLength
+  lightDirection.y /= lightLength
+  lightDirection.z /= lightLength
+
+  for (let row = 0; row < height; row += 1) {
+    const v = height <= 1 ? 0 : row / (height - 1)
+    const worldZ = bounds.minZ + v * worldDepth
+    for (let column = 0; column < width; column += 1) {
+      const u = width <= 1 ? 0 : column / (width - 1)
+      const worldX = bounds.minX + u * worldWidth
+      const heightCenter = samplePlanningDemHeightAtWorld(options.source, worldX, worldZ)
+      const heightLeft = samplePlanningDemHeightAtWorld(options.source, worldX - gradientStepX, worldZ)
+      const heightRight = samplePlanningDemHeightAtWorld(options.source, worldX + gradientStepX, worldZ)
+      const heightTop = samplePlanningDemHeightAtWorld(options.source, worldX, worldZ - gradientStepZ)
+      const heightBottom = samplePlanningDemHeightAtWorld(options.source, worldX, worldZ + gradientStepZ)
+      const slopeX = (heightRight - heightLeft) / Math.max(1e-6, gradientStepX * 2)
+      const slopeZ = (heightBottom - heightTop) / Math.max(1e-6, gradientStepZ * 2)
+      const slopeMagnitude = Math.hypot(slopeX, slopeZ)
+      const slope = clamp01(Math.atan(slopeMagnitude) / 0.95)
+      const heightNormalized = clamp01((heightCenter - heightRange.min) / heightSpan)
+      const macroNoise = fbmNoise2(worldX * 0.0035 + 19.7, worldZ * 0.0035 - 7.3, 4)
+      const detailNoise = fbmNoise2(worldX * 0.018, worldZ * 0.018, 3)
+      const valley = 1 - smoothstep(0.14, 0.4, heightNormalized)
+      const highlands = smoothstep(0.6, 0.92, heightNormalized + (macroNoise - 0.5) * 0.08)
+      const rockiness = smoothstep(0.18, 0.58, slope + (detailNoise - 0.5) * 0.18)
+      const vegetation = smoothstep(0.08, 0.72, heightNormalized + (macroNoise - 0.5) * 0.12) * (1 - rockiness)
+
+      let color = mixTerrainColor(
+        palette.sand,
+        palette.soil,
+        smoothstep(0.04, 0.24, heightNormalized + (macroNoise - 0.5) * 0.08),
+      )
+      color = mixTerrainColor(color, palette.meadow, vegetation * 0.72)
+      color = mixTerrainColor(
+        color,
+        palette.grass,
+        vegetation * clamp01(0.7 + (detailNoise - 0.5) * 0.55),
+      )
+      color = mixTerrainColor(color, palette.soil, valley * 0.3 * (1 - rockiness))
+      color = mixTerrainColor(color, palette.rock, rockiness * 0.85)
+      color = mixTerrainColor(color, palette.paleRock, highlands * (0.45 + rockiness * 0.4))
+
+      const normalX = -slopeX
+      const normalY = 1.6
+      const normalZ = -slopeZ
+      const normalLength = Math.hypot(normalX, normalY, normalZ) || 1
+      const lambert = clamp01(
+        (normalX / normalLength) * lightDirection.x
+        + (normalY / normalLength) * lightDirection.y
+        + (normalZ / normalLength) * lightDirection.z,
+      )
+      const contourTint = 0.96 + 0.04 * Math.sin((heightCenter - heightRange.min) * 0.28 + macroNoise * 5.5)
+      const lighting = (0.76 + lambert * 0.28) * contourTint
+      const warmShift = (detailNoise - 0.5) * 14 + (macroNoise - 0.5) * 10
+      const pixelIndex = (row * width + column) * 4
+      pixels[pixelIndex] = clampTerrainChannel(color.r * lighting + warmShift)
+      pixels[pixelIndex + 1] = clampTerrainChannel(color.g * lighting + warmShift * 0.35)
+      pixels[pixelIndex + 2] = clampTerrainChannel(color.b * lighting - warmShift * 0.25)
+      pixels[pixelIndex + 3] = 255
+    }
+  }
+
+  context.putImageData(imageData, 0, 0)
+  return {
+    textureDataUrl: await terrainTextureCanvasToDataUrl(canvas),
+    textureName: resolvePlanningDemBaseTextureName(options.terrainDem),
+  }
+}
+
+export async function resolvePlanningDemBaseTexture(options: {
+  definition: GroundRuntimeDynamicMesh
+  terrainDem: PlanningTerrainDemData
+  source: PlanningDemRasterSource
+  applyOrthophoto?: boolean
+}): Promise<PlanningDemTextureResolution> {
+  const naturalTexture = await resolvePlanningDemNaturalBaseTexture({
+    definition: options.definition,
+    terrainDem: options.terrainDem,
+    source: options.source,
+  })
+  if (naturalTexture.textureDataUrl) {
+    return naturalTexture
+  }
+
+  const orthophoto = options.terrainDem.orthophoto
+  if (options.applyOrthophoto === false || !orthophoto?.sourceFileHash) {
+    return { textureDataUrl: null, textureName: null }
+  }
+  const orthoBlob = await loadPlanningDemBlobByHash(orthophoto.sourceFileHash)
+  if (!orthoBlob) {
+    return { textureDataUrl: null, textureName: null }
+  }
+  return {
+    textureDataUrl: await blobToDataUrl(orthoBlob),
+    textureName: orthophoto.filename ?? options.terrainDem.filename ?? 'Orthophoto',
+  }
+}
+
 export async function resolvePlanningDemOrthophotoTexture(options: {
   terrainDem: PlanningTerrainDemData
   applyOrthophoto?: boolean
-}): Promise<{ textureDataUrl: string | null; textureName: string | null }> {
+}): Promise<PlanningDemTextureResolution> {
   const orthophoto = options.terrainDem.orthophoto
   if (options.applyOrthophoto === false || !orthophoto?.sourceFileHash) {
     return { textureDataUrl: null, textureName: null }
@@ -1274,21 +1581,23 @@ export async function buildPlanningDemGroundRegionData(options: {
     detail: '1/1',
   }, true)
   reportProgress({
-    phase: 'load-orthophoto',
+    phase: 'build-base-texture',
     loaded: 0,
     total: 1,
-    label: 'Loading orthophoto…',
+    label: 'Generating terrain base texture...',
     detail: '0/1',
   }, true)
-  const texture = await resolvePlanningDemOrthophotoTexture({
+  const texture = await resolvePlanningDemBaseTexture({
+    definition: options.definition,
     terrainDem: options.terrainDem,
+    source: prepared.rasterSource,
     applyOrthophoto: options.applyOrthophoto,
   })
   reportProgress({
-    phase: 'load-orthophoto',
+    phase: 'build-base-texture',
     loaded: 1,
     total: 1,
-    label: texture.textureDataUrl ? 'Loading orthophoto…' : 'Skipping orthophoto…',
+    label: texture.textureDataUrl ? 'Terrain base texture ready...' : 'Skipping terrain base texture...',
     detail: '1/1',
   }, true)
   const result = await buildPlanningDemRegionFromPreparedSource({
@@ -1316,8 +1625,10 @@ export async function buildPlanningDemGroundTileData(options: {
     definition: options.definition,
     terrainDem: options.terrainDem,
   })
-  const texture = await resolvePlanningDemOrthophotoTexture({
+  const texture = await resolvePlanningDemBaseTexture({
+    definition: options.definition,
     terrainDem: options.terrainDem,
+    source: prepared.rasterSource,
     applyOrthophoto: options.applyOrthophoto,
   })
   const region = buildPlanningDemTileHeightRegion({
@@ -1430,8 +1741,10 @@ export async function buildPlanningDemGroundData(options: {
     endColumn: columns,
   })
 
-  const texture = await resolvePlanningDemOrthophotoTexture({
+  const texture = await resolvePlanningDemBaseTexture({
+    definition,
     terrainDem,
+    source: prepared.rasterSource,
     applyOrthophoto: options.applyOrthophoto,
   })
 
@@ -1440,6 +1753,6 @@ export async function buildPlanningDemGroundData(options: {
     localEditTiles,
     planningMetadata: fullRegionResult.planningMetadata,
     textureDataUrl: texture.textureDataUrl,
-    textureName: texture.textureName ?? (prepared.parsed.orthophoto ? terrainDem.orthophoto?.filename ?? terrainDem.filename ?? 'Orthophoto' : null),
+    textureName: texture.textureName,
   }
 }

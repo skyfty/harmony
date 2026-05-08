@@ -4,7 +4,9 @@ import type {
   PlanningTerrainDemData,
   PlanningTerrainGeographicBounds,
   PlanningTerrainOrthophotoData,
+  PlanningTerrainProjectedBounds,
   PlanningTerrainWorldBounds,
+  PlanningTerrainDemHeightmapEncoding,
 } from '@/types/planning-scene-data'
 import { computeSha256Hex } from '@/utils/planningDemStorage'
 
@@ -26,7 +28,9 @@ export interface PlanningDemImportResult {
   minElevation: number | null
   maxElevation: number | null
   sampleStepMeters: number | null
+  projectedCrs?: string | null
   geographicBounds: PlanningTerrainGeographicBounds | null
+  projectedBounds: PlanningTerrainProjectedBounds | null
   worldBounds: PlanningTerrainWorldBounds | null
   preview: PlanningDemPreviewResult | null
   orthophoto?: PlanningTerrainOrthophotoData | null
@@ -38,12 +42,14 @@ export interface PlanningDemImportOptions {
   metersPerPixel?: number | null
   worldBoundsOverride?: PlanningTerrainWorldBounds | null
   createPreview?: boolean
+  heightmapEncoding?: PlanningTerrainDemHeightmapEncoding | null
 }
 
 export interface PlanningDemWindowedGeoTiffSource {
   width: number
   height: number
   geographicBounds: PlanningTerrainGeographicBounds | null
+  projectedBounds: PlanningTerrainProjectedBounds | null
   worldBounds: PlanningTerrainWorldBounds | null
   sampleStepMeters: number | null
   readWindow(options: {
@@ -66,8 +72,27 @@ type PlanningGeoTiffImageLike = {
   getHeight: () => number
   getResolution?: () => unknown
   getWidth: () => number
-  readRasters: (options: { interleave: true }) => Promise<ArrayLike<number> | ArrayLike<number>[]>
+  readRasters: (options: {
+    interleave: true
+    window?: [number, number, number, number]
+    width?: number
+    height?: number
+    resampleMethod?: string
+  }) => Promise<ArrayLike<number> | ArrayLike<number>[]>
   fileDirectory?: Record<string, unknown> | null | undefined
+}
+
+export function createStrictQgis16BitHeightmapEncoding(): PlanningTerrainDemHeightmapEncoding {
+  return {
+    version: 1,
+    sourceFormat: 'png',
+    mode: 'strict-qgis-16bit',
+    bitDepth: 16,
+    channels: 1,
+    signed: false,
+    zeroCode: 32,
+    metersPerUnit: 20,
+  }
 }
 
 export const PLANNING_PNG_HEIGHTMAP_CONTRACT = {
@@ -192,6 +217,18 @@ function hasProjectedGeoTiffCrs(geoKeys: Record<string, unknown> | null | undefi
     return true
   }
   return normalizeNumericValue(geoKeys?.ProjectedCSTypeGeoKey) !== null
+}
+
+function resolveProjectedGeoTiffCrs(geoKeys: Record<string, unknown> | null | undefined): string | null {
+  const projectedCsType = normalizeNumericValue(geoKeys?.ProjectedCSTypeGeoKey)
+  if (projectedCsType !== null) {
+    return `EPSG:${Math.trunc(projectedCsType)}`
+  }
+  const projectedCrs = normalizeNumericValue((geoKeys as Record<string, unknown> | null | undefined)?.ProjectedCRSGeoKey)
+  if (projectedCrs !== null) {
+    return `EPSG:${Math.trunc(projectedCrs)}`
+  }
+  return null
 }
 
 const PLANNING_DEM_SQUARE_RESOLUTION_RELATIVE_TOLERANCE = 0.005
@@ -580,10 +617,13 @@ async function parsePlanningHeightmapImageBuffer(
     height,
     rasterData,
     rawMinElevation: PLANNING_PNG_HEIGHTMAP_CONTRACT.minElevation,
+    recommendedAppliedMinElevation: PLANNING_PNG_HEIGHTMAP_CONTRACT.minElevation,
     minElevation: PLANNING_PNG_HEIGHTMAP_CONTRACT.minElevation,
     maxElevation: PLANNING_PNG_HEIGHTMAP_CONTRACT.maxElevation,
     sampleStepMeters: computeSampleStepMeters(worldBounds, width, height),
+    projectedCrs: null,
     geographicBounds: null,
+    projectedBounds: null,
     worldBounds,
     preview,
     orthophoto: null,
@@ -598,7 +638,7 @@ async function parsePlanningGeoTiffBuffer(
 ): Promise<PlanningDemImportResult> {
   const sourceFileHash = await computeSha256Hex(buffer)
   const tiff = await fromArrayBuffer(buffer)
-  const image = await tiff.getImage() as PlanningGeoTiffImageLike
+  const image = await tiff.getImage() as unknown as PlanningGeoTiffImageLike
   const width = image.getWidth()
   const height = image.getHeight()
   if (width < 2 || height < 2) {
@@ -647,6 +687,8 @@ async function parsePlanningGeoTiffBuffer(
     height,
     geographic,
   })
+  const projectedCrs = resolveProjectedGeoTiffCrs(geoKeys)
+  const sourceBounds = bbox ? { ...bbox, crs: projectedCrs ?? bbox.crs ?? null } : null
   const preview = options?.createPreview === false
     ? null
     : effectiveMinElevation !== null && effectiveMaxElevation !== null
@@ -669,7 +711,9 @@ async function parsePlanningGeoTiffBuffer(
     minElevation: effectiveMinElevation,
     maxElevation: effectiveMaxElevation,
     sampleStepMeters,
-    geographicBounds: bbox,
+    projectedCrs,
+    geographicBounds: null,
+    projectedBounds: sourceBounds,
     worldBounds,
     preview,
     orthophoto: null,
@@ -724,7 +768,9 @@ export function demImportResultToTerrainData(result: PlanningDemImportResult): P
     appliedSampleStepMeters: result.sampleStepMeters,
     targetChunkResolution,
     resolutionMode: 'auto',
+    projectedCrs: result.projectedCrs ?? null,
     geographicBounds: result.geographicBounds,
+    projectedBounds: result.projectedBounds,
     worldBounds: result.worldBounds,
     previewHash: result.preview ? result.sourceFileHash : null,
     previewSize: result.preview ? { width: result.preview.width, height: result.preview.height } : null,
@@ -742,7 +788,7 @@ export async function openPlanningDemWindowedGeoTiffSource(
   }
   const buffer = await blob.arrayBuffer()
   const tiff = await fromArrayBuffer(buffer)
-  const image = await tiff.getImage() as PlanningGeoTiffImageLike
+  const image = await tiff.getImage() as unknown as PlanningGeoTiffImageLike
   const width = image.getWidth()
   const height = image.getHeight()
   if (width < 2 || height < 2) {
@@ -774,11 +820,13 @@ export async function openPlanningDemWindowedGeoTiffSource(
     height,
     geographic,
   })
+  const projectedCrs = resolveProjectedGeoTiffCrs(geoKeys)
   const sampleStepMeters = computeSampleStepMeters(worldBounds, width, height)
   return {
     width,
     height,
-    geographicBounds: bbox,
+    geographicBounds: null,
+    projectedBounds: bbox ? { ...bbox, crs: projectedCrs ?? bbox.crs ?? null } : null,
     worldBounds,
     sampleStepMeters,
     async readWindow(options: { window: [number, number, number, number]; width?: number; height?: number }): Promise<ArrayLike<number>> {
