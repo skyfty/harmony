@@ -269,6 +269,7 @@ export function createCompiledGroundCollisionRuntime(
 ): {
   clear: () => void
   sync: (params: SyncCompiledGroundCollisionTilesParams) => void
+  getActiveTileKeys: () => string[]
   getDebugEntries: () => CompiledGroundCollisionDebugEntry[]
 } {
   const instances = new Map<string, RigidbodyInstance>()
@@ -380,6 +381,7 @@ export function createCompiledGroundCollisionRuntime(
   return {
     clear,
     sync,
+    getActiveTileKeys: () => Array.from(instances.keys()),
     getDebugEntries: () => Array.from(instances.entries()).map(([tileKey, instance]) => ({
       nodeId: instance.nodeId,
       tileKey,

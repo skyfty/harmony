@@ -67,6 +67,7 @@ export type InfiniteGroundChunkColliderSyncParams = {
 	manifestRevision?: number
 	manifestRecords?: Record<string, GroundChunkManifestRecord>
 	loadChunkData?: (record: GroundChunkManifestRecord) => Promise<ArrayBuffer | null>
+	excludedChunkKeys?: Iterable<string> | null
 }
 
 export type InfiniteGroundChunkColliderRuntime = {
@@ -615,6 +616,7 @@ export function createInfiniteGroundChunkColliderRuntime(
 
 		const manifestRecords = params.manifestRecords ?? {}
 		const targetChunkKeys = resolveDesiredCollisionChunkKeys(params.groundObject, params.groundDefinition, params.camera)
+		const excludedChunkKeys = params.excludedChunkKeys ? new Set(params.excludedChunkKeys) : null
 		const nextDesired = new Map<string, InfiniteGroundChunkColliderDescriptor>()
 		const localEditTiles = getGroundLocalEditTiles(params.groundDefinition)
 		const runtimeDetailedChunkKeys: string[] = []
@@ -623,6 +625,9 @@ export function createInfiniteGroundChunkColliderRuntime(
 		const runtimeDetailedLayouts: string[] = []
 
 		targetChunkKeys.forEach((chunkKey) => {
+			if (excludedChunkKeys?.has(chunkKey)) {
+				return
+			}
 			const intersectingLocalEditTiles = resolveIntersectingLocalEditTiles(
 				chunkKey,
 				chunkSizeMeters,

@@ -494,7 +494,6 @@ import { AssetCache, AssetLoader, configureAssetDownloadHostMirrors, type AssetC
 import { ASSET_DOWNLOAD_HOST_MIRRORS } from '@harmony/schema/assetDownloadMirrors';
 import { isGroundDynamicMesh } from '@harmony/schema/groundHeightfield';
 import {
-  clearGroundFlatChunkBatches,
   setInfiniteGroundHiddenChunkKeys,
   syncGroundChunkLoadingMode,
   sampleGroundHeight,
@@ -509,7 +508,6 @@ import {
   type CompiledGroundManifest,
 } from '@harmony/schema';
 import { collectLoadedCompiledGroundChunkKeys } from '@harmony/schema/compiledGroundRuntime';
-import { buildGroundAirWallDefinitions } from '@harmony/schema/airWall';
 
 import {
   ensurePhysicsWorld as ensureSharedPhysicsWorld,
@@ -519,8 +517,6 @@ import {
   removeRigidbodyInstanceBodies,
   ensureRoadHeightfieldRigidbodyInstance,
   isRoadDynamicMesh,
-  COLLISION_GROUP_STATIC_ENV,
-  COLLISION_MASK_STATIC_ENV,
   type GroundHeightfieldCacheEntry,
   type FloorShapeCacheEntry,
   type WallTrimeshCacheEntry,
@@ -5513,12 +5509,12 @@ function syncViewerCompiledGroundCollision(
   activeCamera: THREE.PerspectiveCamera,
 ): void {
   const compiledManifest = resolveViewerCompiledGroundManifest(groundObject);
+  const sourceId = (currentSceneId.value ?? currentDocument?.id ?? '').trim() || 'viewer-ground';
+  let excludedChunkKeys: string[] = [];
   if (compiledManifest) {
-    infiniteGroundChunkColliderRuntime.clear();
     const revision = Number.isFinite(compiledManifest.revision)
       ? Math.max(0, Math.trunc(compiledManifest.revision))
       : computeCompiledGroundManifestRevision(compiledManifest);
-    const sourceId = (currentSceneId.value ?? currentDocument?.id ?? '').trim() || 'viewer-ground';
     const nowMs = Date.now();
     if (shouldRunCompiledGroundCollisionUpdate(groundObject, compiledManifest, activeCamera, sourceId, revision, nowMs)) {
       compiledGroundCollisionRuntime.sync({
@@ -5538,11 +5534,12 @@ function syncViewerCompiledGroundCollision(
         },
       });
     }
-    return;
+    excludedChunkKeys = compiledGroundCollisionRuntime.getActiveTileKeys();
+  } else {
+    markCompiledGroundCollisionUpdateDirty();
+    compiledGroundCollisionRuntime.clear();
   }
 
-  markCompiledGroundCollisionUpdateDirty();
-  compiledGroundCollisionRuntime.clear();
   const groundDefinition = dynamicGroundCache?.dynamicMesh ?? null;
   if (!groundDefinition) {
     infiniteGroundChunkColliderRuntime.clear();
@@ -5554,9 +5551,10 @@ function syncViewerCompiledGroundCollision(
     groundObject,
     groundDefinition,
     camera: activeCamera,
-    sourceId: (currentSceneId.value ?? currentDocument?.id ?? '').trim() || 'viewer-ground',
+    sourceId,
     manifestRevision: groundChunkManifest?.revision,
     manifestRecords: groundChunkManifest?.chunks,
+    excludedChunkKeys,
     loadChunkData: async (record) => {
       const pkg = activeScenePackagePkg;
       if (!pkg) {
@@ -6712,46 +6710,6 @@ function syncAirWallsForDocument(sceneDocument: SceneJsonExportDocument | null):
   if (!sceneDocument) {
     return;
   }
-  const airWallEnabled = sceneDocument.groundSettings?.enableAirWall !== false;
-  const world = physicsWorld;
-  if (!world || !airWallEnabled) {
-    return;
-  }
-  const groundNode = findGroundNode(sceneDocument.nodes);
-  if (!groundNode || !isGroundDynamicMesh(groundNode.dynamicMesh)) {
-    return;
-  }
-  const groundObject = nodeObjectMap.get(groundNode.id) ?? null;
-  const definitions = buildGroundAirWallDefinitions({ groundNode, groundObject });
-  if (!definitions.length) {
-    return;
-  }
-  definitions.forEach((definition) => {
-    const [hx, hy, hz] = definition.halfExtents;
-    if (![hx, hy, hz].every((value) => Number.isFinite(value) && value > 0)) {
-      return;
-    }
-    const shape = new CANNON.Box(new CANNON.Vec3(hx, hy, hz));
-    const body = new CANNON.Body({ mass: 0 });
-    body.type = CANNON.Body.STATIC;
-    body.collisionFilterGroup = COLLISION_GROUP_STATIC_ENV;
-    body.collisionFilterMask = COLLISION_MASK_STATIC_ENV;
-    if (world.defaultMaterial) {
-      body.material = world.defaultMaterial;
-    }
-    body.addShape(shape);
-    body.position.copy(definition.bodyPosition);
-    body.quaternion.set(
-      definition.bodyQuaternion.x,
-      definition.bodyQuaternion.y,
-      definition.bodyQuaternion.z,
-      definition.bodyQuaternion.w,
-    );
-    body.updateMassProperties();
-    body.aabbNeedsUpdate = true;
-    world.addBody(body);
-    airWallBodies.set(definition.key, body);
-  });
 }
 
 function resetPhysicsWorld(): void {
@@ -13378,8 +13336,8 @@ function startRenderLoop(
           updatePunchBadgeOverlayEntries(camera, deltaSeconds);
           syncSceneSignboards();
 
-        // Use compiled/sculpted ground when a manifest is present; otherwise keep the
-        // flat-chunk InstancedMesh infinite terrain path active for non-compiled scenes.
+        // Match editor preview terrain ownership: compiled chunks stream on top of
+        // the flat tiling base layer, and hidden chunk keys suppress overlaps.
         const cachedGround = dynamicGroundCache;
         if (cachedGround) {
           const groundObject = nodeObjectMap.get(cachedGround.nodeId) ?? null;
@@ -13390,22 +13348,17 @@ function startRenderLoop(
               cachedGround.dynamicMesh,
             );
             syncViewerCompiledGroundRender(groundObject, streamingGroundDefinition, camera);
-            const hasCompiledGroundManifest = resolveViewerCompiledGroundManifest(groundObject) !== null;
-            if (hasCompiledGroundManifest) {
-              clearGroundFlatChunkBatches(groundObject);
-            } else {
-              syncGroundChunkLoadingMode(
-                groundObject,
-                streamingGroundDefinition,
-                camera,
-                isWeChatMiniProgram
-                  ? {
-                      radius: WECHAT_READONLY_TERRAIN_FLAT_TILING_RADIUS_CHUNKS,
-                      budget: WECHAT_READONLY_TERRAIN_CHUNK_SYNC_BUDGET,
-                    }
-                  : undefined,
-              );
-            }
+            syncGroundChunkLoadingMode(
+              groundObject,
+              streamingGroundDefinition,
+              camera,
+              isWeChatMiniProgram
+                ? {
+                    radius: WECHAT_READONLY_TERRAIN_FLAT_TILING_RADIUS_CHUNKS,
+                    budget: WECHAT_READONLY_TERRAIN_CHUNK_SYNC_BUDGET,
+                  }
+                : undefined,
+            );
           }
         }
 
