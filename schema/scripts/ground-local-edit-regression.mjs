@@ -7,8 +7,12 @@ import {
 } from '../dist/index.js'
 import {
   analyzeGroundOptimizedMeshUsage,
+  createGroundMesh,
+  releaseGroundMeshCache,
   sampleGroundHeight,
+  setManualHeightOverrideValue,
   sculptGround,
+  updateGroundChunks,
 } from '../dist/groundMesh.js'
 
 function createGroundDefinition(overrides = {}) {
@@ -183,10 +187,96 @@ function testLocalEditTilesDoNotGloballyDisableOptimizedMesh() {
   assert.equal(usage.reason, 'optimized-ready', 'optimized mesh should remain globally available when only local edit tiles are present')
 }
 
+function testHeightOverrideCountsCacheAndUpdateIncrementally() {
+  const definition = createGroundDefinition({
+    optimizedMesh: {
+      chunkCells: 4,
+      sourceChunkCells: 4,
+      chunkCount: 1,
+      sourceVertexCount: 4,
+      sourceTriangleCount: 2,
+      optimizedVertexCount: 4,
+      optimizedTriangleCount: 2,
+      chunks: [{
+        startRow: 0,
+        startColumn: 0,
+        rows: 4,
+        columns: 4,
+        positions: [0, 0, 0, 10, 0, 0, 0, 0, 10, 10, 0, 10],
+        uvs: [0, 0, 1, 0, 0, 1, 1, 1],
+        indices: [0, 2, 1, 1, 2, 3],
+      }],
+    },
+  })
+
+  const initialUsage = analyzeGroundOptimizedMeshUsage(definition)
+  assert.equal(initialUsage.canUseOptimizedMesh, true, 'optimized mesh should be usable when height overrides are empty')
+  assert.equal(definition.runtimeManualHeightOverrideCount, 0, 'initial analysis should cache an empty manual override count')
+
+  setManualHeightOverrideValue(definition, definition.manualHeightMap, 1, 1, 3)
+  assert.equal(definition.runtimeManualHeightOverrideCount, 1, 'writing a manual override should increment the cached count')
+
+  const dirtyUsage = analyzeGroundOptimizedMeshUsage(definition)
+  assert.equal(dirtyUsage.canUseOptimizedMesh, false, 'manual height overrides should disable optimized mesh usage')
+  assert.equal(dirtyUsage.reason, 'manual-height-overrides-present', 'manual override count should drive the optimized mesh disable reason')
+
+  setManualHeightOverrideValue(definition, definition.manualHeightMap, 1, 1, 0)
+  assert.equal(definition.runtimeManualHeightOverrideCount, 0, 'clearing a manual override should decrement the cached count')
+
+  const restoredUsage = analyzeGroundOptimizedMeshUsage(definition)
+  assert.equal(restoredUsage.canUseOptimizedMesh, true, 'optimized mesh should recover after the override is cleared')
+  assert.equal(restoredUsage.reason, 'optimized-ready', 'clearing the override should restore the optimized-ready state')
+}
+
+function testLocalEditCoverageIndexDoesNotClampToCentralEightByEightChunks() {
+  const localEditTiles = {}
+  for (let tileRow = -8; tileRow <= 7; tileRow += 1) {
+    for (let tileColumn = -8; tileColumn <= 7; tileColumn += 1) {
+      const tile = createFlatLocalEditTile({
+        tileRow,
+        tileColumn,
+        tileSizeMeters: 100,
+        resolution: 1,
+        value: 1,
+      })
+      localEditTiles[tile.key] = tile
+    }
+  }
+
+  const definition = createGroundDefinition({
+    terrainMode: 'infinite',
+    rows: 8,
+    columns: 8,
+    cellSize: 10,
+    chunkSizeMeters: 100,
+    editTileSizeMeters: 100,
+    editTileResolution: 1,
+    localEditTiles,
+  })
+
+  const ground = createGroundMesh(definition)
+  updateGroundChunks(ground, definition, null, { budget: null, force: true, minIntervalMs: 0 })
+  let independentChunkMeshCount = 0
+  ground.traverse((child) => {
+    if (child?.isMesh && typeof child.name === 'string' && child.name.startsWith('GroundChunk:')) {
+      independentChunkMeshCount += 1
+    }
+  })
+  releaseGroundMeshCache()
+
+  assert.equal(
+    independentChunkMeshCount,
+    16 * 16,
+    'local edit tile coverage should classify all imported DEM chunks, not only the central 8x8 chunk window',
+  )
+}
+
 testLocalEditTileSampling()
 testLocalEditTileEdgeSamplingUsesOnlyRequiredCorners()
 testSculptWritesLocalEditTiles()
 testInfiniteSculptWritesWorldSpaceLocalEditTilesOutsideBounds()
 testLocalEditTilesDoNotGloballyDisableOptimizedMesh()
+testHeightOverrideCountsCacheAndUpdateIncrementally()
+testLocalEditCoverageIndexDoesNotClampToCentralEightByEightChunks()
 
 console.log('ground-local-edit regression checks passed')

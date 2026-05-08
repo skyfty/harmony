@@ -11,13 +11,10 @@ import {
   buildQuantizedTerrainRegionPackPath,
   buildQuantizedTerrainRootManifestPath,
   encodeScenePackageSceneDocument,
-  formatGroundChunkDataPath,
   GROUND_SCATTER_SIDECAR_FILENAME,
   GROUND_PAINT_SIDECAR_FILENAME,
-  parseGroundChunkKey,
   SCENE_PACKAGE_FORMAT,
   SCENE_PACKAGE_VERSION,
-  type GroundChunkManifest,
   type QuantizedTerrainDatasetRootManifest,
   type ScenePackageManifestV1,
   type ScenePackageResourceEntry,
@@ -26,7 +23,6 @@ import { inferExtFromMimeType } from '@schema'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { useGroundPaintStore } from '@/stores/groundPaintStore'
 import { useGroundScatterStore } from '@/stores/groundScatterStore'
-import { useGroundHeightmapStore } from '@/stores/groundHeightmapStore'
 import {
   buildAssetRegistryForExport,
   calculateSceneResourceSummary,
@@ -43,11 +39,15 @@ import { fetchResourceAsset } from '@/api/resourceAssets'
 import { mapServerAssetToProjectAsset } from '@/api/serverAssetTypes'
 import { buildAssetRegistryAliasMap, normalizeAssetIdWithRegistry } from '@/utils/assetRegistryIdNormalization'
 import {
-  GROUND_HEIGHTMAP_SIDECAR_FILENAME,
-  createGroundRuntimeMeshFromSidecar,
   stripGroundHeightMapsFromSceneDocument,
 } from '@/utils/groundHeightSidecar'
-import { attachOptimizedGroundMeshToDocument } from '@/utils/groundOptimizedMeshExport'
+import {
+  computeSceneCompiledGroundBuildKey,
+  computeSceneCompiledGroundSourceSignature,
+  getSceneCompiledGroundPackageFileBytes,
+  loadSceneCompiledGroundPackageFromCache,
+  resolveSceneCompiledGroundPackagePaths,
+} from '@/utils/sceneCompiledGroundCache'
 import { collectPunchPointsFromNodes } from './sceneExport'
 import {
   buildSceneAssetReferenceSummaryMap,
@@ -63,6 +63,49 @@ import {
   collectRuntimeRequiredConfigAssetIds,
   collectTransitiveConfigDependencyAssetIds,
 } from '@/stores/sceneAssetCleanup'
+
+type SceneGroundTerrainOverrideState = {
+  runtimeDisableOptimizedChunks?: boolean
+  runtimeHydratedHeightState?: 'pristine' | 'dirty' | 'none'
+  surfaceRevision?: number
+  localEditTiles?: Record<string, unknown> | null
+  runtimeManualHeightOverrideCount?: number
+  runtimePlanningHeightOverrideCount?: number
+}
+
+function hasSceneGroundTerrainOverrides(dynamicMesh: unknown): boolean {
+  if (!dynamicMesh || typeof dynamicMesh !== 'object') {
+    return false
+  }
+
+  const ground = dynamicMesh as SceneGroundTerrainOverrideState
+  if (ground.runtimeDisableOptimizedChunks === true || ground.runtimeHydratedHeightState === 'dirty') {
+    return true
+  }
+
+  if (Number.isFinite(ground.surfaceRevision) && Math.trunc(ground.surfaceRevision as number) > 0) {
+    return true
+  }
+
+  if (ground.runtimeHydratedHeightState === 'pristine') {
+    return false
+  }
+
+  const localEditTiles = ground.localEditTiles && typeof ground.localEditTiles === 'object'
+    ? Object.values(ground.localEditTiles)
+    : []
+  if (localEditTiles.length > 0) {
+    return true
+  }
+
+  const manualOverrideCount = Number(ground.runtimeManualHeightOverrideCount)
+  if (Number.isFinite(manualOverrideCount) && manualOverrideCount > 0) {
+    return true
+  }
+
+  const planningOverrideCount = Number(ground.runtimePlanningHeightOverrideCount)
+  return Number.isFinite(planningOverrideCount) && planningOverrideCount > 0
+}
 
 function buildEffectiveAssetRegistry(
   document: SceneJsonExportDocument | null | undefined,
@@ -188,105 +231,60 @@ function inferExtFromFilename(filename: string | null | undefined): string | nul
   if (!raw) return null
   const dot = raw.lastIndexOf('.')
   if (dot <= 0 || dot >= raw.length - 1) return null
-  const ext = raw.slice(dot + 1).toLowerCase().trim()
-  return ext.length ? ext : null
+  return raw.slice(dot + 1).toLowerCase()
 }
 
 function jsonBytes(value: unknown): Uint8Array {
-  return strToU8(JSON.stringify(value, null, 2))
-}
-
-async function buildGroundChunkPackageManifest(
-  sceneId: string,
-  manifest: GroundChunkManifest | null,
-  loadChunkData: (chunkKey: string) => Promise<ArrayBuffer | null>,
-): Promise<{ manifestPath: string; manifest: GroundChunkManifest; files: Record<string, Uint8Array> } | null> {
-  if (!manifest || typeof manifest !== 'object') {
-    return null
-  }
-
-  const sceneRootPath = `scenes/${encodeURIComponent(sceneId)}`
-  const nextChunks: GroundChunkManifest['chunks'] = {}
-  const files: Record<string, Uint8Array> = {}
-
-  for (const [chunkKey, record] of Object.entries(manifest.chunks ?? {})) {
-    const coord = parseGroundChunkKey(chunkKey)
-    if (!coord || !record) {
-      continue
-    }
-    const chunkData = await loadChunkData(chunkKey)
-    if (!(chunkData instanceof ArrayBuffer)) {
-      continue
-    }
-    const dataPath = formatGroundChunkDataPath(coord, `${sceneRootPath}/ground/chunks`, 'ground.bin')
-    nextChunks[chunkKey] = {
-      ...record,
-      dataPath,
-    }
-    files[dataPath] = new Uint8Array(chunkData)
-  }
-
-  if (!Object.keys(nextChunks).length) {
-    return null
-  }
-
-  return {
-    manifestPath: `${sceneRootPath}/ground-chunk-manifest.json`,
-    manifest: {
-      ...manifest,
-      sceneId,
-      chunks: nextChunks,
-    },
-    files,
-  }
+  return strToU8(JSON.stringify(value))
 }
 
 async function buildTerrainDatasetPackageFiles(
   sceneId: string,
-  manifest: QuantizedTerrainDatasetRootManifest | null,
+  manifest: QuantizedTerrainDatasetRootManifest | null | undefined,
   loadRegionPack: (regionKey: string) => Promise<ArrayBuffer | null>,
-): Promise<{ rootManifestPath: string; regionsPath: string; manifest: QuantizedTerrainDatasetRootManifest; files: Record<string, Uint8Array> } | null> {
-  if (!manifest || !Array.isArray(manifest.regions) || !manifest.regions.length) {
+): Promise<{
+  rootManifestPath: string
+  regionsPath: string
+  manifest: QuantizedTerrainDatasetRootManifest
+  files: Record<string, Uint8Array>
+} | null> {
+  if (!manifest) {
     return null
   }
 
-  const sceneRootPath = `scenes/${encodeURIComponent(sceneId)}`
-  const terrainRoot = `${sceneRootPath}/terrain`
-  const regionsPath = `${terrainRoot}/regions`
-  const files: Record<string, Uint8Array> = {}
-  const nextRegions: QuantizedTerrainDatasetRootManifest['regions'] = []
+  const normalizedSceneId = typeof sceneId === 'string' ? sceneId.trim() : ''
+  if (!normalizedSceneId) {
+    return null
+  }
 
-  for (const region of manifest.regions) {
-    const regionKey = typeof region?.regionKey === 'string' ? region.regionKey.trim() : ''
+  const terrainRoot = `scenes/${encodeURIComponent(normalizedSceneId)}/terrain`
+  const rootManifestPath = buildQuantizedTerrainRootManifestPath(terrainRoot)
+  const regionsPath = `${terrainRoot}/regions`
+  const files: Record<string, Uint8Array> = {
+    [rootManifestPath]: jsonBytes(manifest),
+  }
+
+  for (const region of manifest.regions ?? []) {
+    const regionKey = typeof region.regionKey === 'string' ? region.regionKey.trim() : ''
     if (!regionKey) {
       continue
     }
+
     const regionPack = await loadRegionPack(regionKey)
-    if (!(regionPack instanceof ArrayBuffer)) {
-      continue
+    if (!regionPack) {
+      throw new Error(`Missing terrain dataset region pack for scene ${normalizedSceneId} (${regionKey})`)
     }
-    const packagedPath = buildQuantizedTerrainRegionPackPath(region.regionId, regionsPath)
-    nextRegions.push({
-      ...region,
-      path: packagedPath,
-      byteLength: regionPack.byteLength,
-    })
-    files[packagedPath] = new Uint8Array(regionPack)
+
+    const regionPath = typeof region.path === 'string' && region.path.trim().length > 0
+      ? region.path.trim()
+      : buildQuantizedTerrainRegionPackPath(region.regionId, regionsPath)
+    files[regionPath] = new Uint8Array(regionPack)
   }
 
-  if (!nextRegions.length) {
-    return null
-  }
-
-  const rootManifestPath = buildQuantizedTerrainRootManifestPath(terrainRoot)
   return {
     rootManifestPath,
     regionsPath: `${regionsPath}/`,
-    manifest: {
-      ...manifest,
-      scenePath: sceneRootPath,
-      regions: nextRegions,
-    },
+    manifest,
     files,
   }
 }
@@ -588,54 +586,6 @@ function findGroundNode(nodes: SceneJsonExportDocument['nodes']): SceneJsonExpor
     }
   }
   return null
-}
-
-function emitGroundOptimizationDiagnostics(
-  reportEvent: SceneExportEventReporter | undefined,
-  sceneId: string,
-  sceneName: string,
-  groundNode: SceneJsonExportDocument['nodes'][number] | null,
-): void {
-  const optimizedMesh = groundNode?.dynamicMesh?.type === 'Ground' ? groundNode.dynamicMesh.optimizedMesh : null
-  if (!optimizedMesh) {
-    return
-  }
-
-  const sourceTriangles = Math.max(0, Math.trunc(optimizedMesh.sourceTriangleCount ?? 0))
-  const optimizedTriangles = Math.max(0, Math.trunc(optimizedMesh.optimizedTriangleCount ?? 0))
-  const reduction = sourceTriangles > 0
-    ? Math.max(0, Math.min(1, 1 - optimizedTriangles / sourceTriangles))
-    : 0
-  const percentText = `${Math.round(reduction * 100)}%`
-  const detail = [
-    `sourceTriangles=${sourceTriangles}`,
-    `optimizedTriangles=${optimizedTriangles}`,
-    `chunkCells=${optimizedMesh.chunkCells}`,
-    `sourceChunkCells=${optimizedMesh.sourceChunkCells}`,
-    `chunkCount=${optimizedMesh.chunkCount}`,
-  ].join(', ')
-
-  emitSceneExportEvent(reportEvent, {
-    phase: 'diagnostics',
-    level: 'info',
-    status: 'completed',
-    sceneId,
-    sceneName,
-    detail,
-    message: `Ground optimized mesh reduced triangles by ${percentText} (${sourceTriangles} -> ${optimizedTriangles})`,
-  })
-
-  if (sourceTriangles > 0 && reduction < 0.15) {
-    emitSceneExportEvent(reportEvent, {
-      phase: 'diagnostics',
-      level: 'warning',
-      status: 'completed',
-      sceneId,
-      sceneName,
-      detail,
-      message: 'Ground optimized mesh produced limited simplification; inspect terrain flatness and render chunk sizing.',
-    })
-  }
 }
 
 function stripEditorOnlySceneFields(
@@ -1153,7 +1103,6 @@ export async function exportScenePackageZip(payload: {
   // scenes + per-scene resources (referenced local assets)
   const manifestScenes: ScenePackageManifestV1['scenes'] = []
   const assetCache = useAssetCacheStore()
-  const groundHeightmapStore = useGroundHeightmapStore()
   const scenesStore = useScenesStore()
   const sceneStore = useSceneStore()
   const resources: ScenePackageResourceEntry[] = []
@@ -1290,69 +1239,102 @@ export async function exportScenePackageZip(payload: {
     const preparedDocument = await prepareSceneDocumentForPackageExport(scene.document)
     const scenePath = `scenes/${encodeURIComponent(scene.id)}/scene.bin`
     let planningPath: string | undefined
-    let groundHeightsPath: string | undefined
-    let groundChunkManifestPath: string | undefined
     let groundScatterPath: string | undefined
     let groundPaintPath: string | undefined
-    let terrainDataset: ScenePackageManifestV1['scenes'][number]['terrainDataset'] | undefined
+    let terrain: ScenePackageManifestV1['scenes'][number]['terrain'] | undefined
+    let compiledGround: ScenePackageManifestV1['scenes'][number]['compiledGround'] | undefined
 
     // Collect local asset IDs from effective registry and explicit local source metadata.
     const sidecarSource = typeof structuredClone === 'function'
       ? structuredClone(preparedDocument)
       : JSON.parse(JSON.stringify(preparedDocument))
     const groundNode = findGroundNode(sidecarSource.nodes)
-    const useLegacyGroundHeightSidecar = groundNode?.dynamicMesh?.type === 'Ground'
-    let groundHeightSidecar = useLegacyGroundHeightSidecar
-      ? (scene.id === sceneStore.currentSceneId
-          ? groundHeightmapStore.buildSceneDocumentSidecar(groundNode)
-          : await scenesStore.loadGroundHeightSidecar(scene.id))
-      : null
+    const storedTerrainDatasetManifest = await scenesStore.loadTerrainDatasetManifest(scene.id)
     const groundScatterSidecar = scene.id === sceneStore.currentSceneId
       ? useGroundScatterStore().buildSceneDocumentSidecar(scene.id, groundNode)
       : await scenesStore.loadGroundScatterSidecar(scene.id)
     const groundPaintSidecar = scene.id === sceneStore.currentSceneId
       ? useGroundPaintStore().buildSceneDocumentSidecar(scene.id, groundNode)
       : await scenesStore.loadGroundPaintSidecar(scene.id)
-    // Legacy scenes can still contain Ground nodes before sidecar persistence runs; generate a fallback sidecar for upload consistency.
-    if (useLegacyGroundHeightSidecar && groundNode && !groundHeightSidecar) {
-      groundHeightSidecar = groundHeightmapStore.buildSceneDocumentSidecar(groundNode)
-    }
     if (groundNode?.dynamicMesh?.type === 'Ground') {
-      if (groundHeightSidecar) {
-        groundNode.dynamicMesh = createGroundRuntimeMeshFromSidecar(groundNode.dynamicMesh, groundHeightSidecar)
-      }
-      attachOptimizedGroundMeshToDocument(sidecarSource as SceneJsonExportDocument)
-      emitGroundOptimizationDiagnostics(payload.reportEvent, scene.id, sceneName, groundNode)
-
-      const storedGroundChunkManifest = await scenesStore.loadGroundChunkManifest(scene.id)
-      const packagedGroundChunkManifest = await buildGroundChunkPackageManifest(
+      const sceneGroundNode = findGroundNode(sidecarSource.nodes)
+      const compiledGroundStartedAt = typeof performance !== 'undefined' ? performance.now() : Date.now()
+      const compiledGroundBuildKey = computeSceneCompiledGroundBuildKey(
         scene.id,
-        storedGroundChunkManifest,
-        (chunkKey) => scenesStore.loadGroundChunkData(scene.id, chunkKey),
+        groundNode.dynamicMesh,
+        storedTerrainDatasetManifest?.datasetId ?? null,
       )
-      if (packagedGroundChunkManifest) {
-        groundChunkManifestPath = packagedGroundChunkManifest.manifestPath
-        files[groundChunkManifestPath] = jsonBytes(packagedGroundChunkManifest.manifest)
-        Object.assign(files, packagedGroundChunkManifest.files)
+      const compiledGroundSourceSignature = computeSceneCompiledGroundSourceSignature(
+        scene.id,
+        groundNode.dynamicMesh,
+        storedTerrainDatasetManifest?.datasetId ?? null,
+      )
+      emitSceneExportEvent(payload.reportEvent, {
+        phase: 'sidecar',
+        level: 'info',
+        status: 'running',
+        sceneId: scene.id,
+        sceneName,
+        detail: compiledGroundBuildKey,
+        message: 'Loading compiled ground cache...',
+      })
+      const cacheLoad = await loadSceneCompiledGroundPackageFromCache(compiledGroundBuildKey, {
+        sourceSignature: compiledGroundSourceSignature,
+      })
+      const compiledGroundPackage = cacheLoad.pkg
+      if (compiledGroundPackage) {
+        const compiledGroundPaths = resolveSceneCompiledGroundPackagePaths(scene.id)
+        compiledGround = {
+          manifestPath: compiledGroundPaths.manifestPath,
+          renderRootPath: compiledGroundPaths.renderRootPath,
+          collisionRootPath: compiledGroundPaths.collisionRootPath,
+        }
+        files[compiledGroundPaths.manifestPath] = jsonBytes(compiledGroundPackage.manifest)
+        Object.assign(files, getSceneCompiledGroundPackageFileBytes(compiledGroundPackage))
+        if (sceneGroundNode) {
+          sceneGroundNode.userData = {
+            ...(sceneGroundNode.userData ?? {}),
+            compiledGroundEnabled: true,
+            compiledGroundManifest: compiledGroundPackage.manifest,
+          }
+        }
         emitSceneExportEvent(payload.reportEvent, {
           phase: 'sidecar',
           level: 'info',
           status: 'completed',
           sceneId: scene.id,
           sceneName,
-          detail: groundChunkManifestPath,
-          message: `已写入无限地形 chunk manifest`,
+          detail: compiledGroundPaths.manifestPath,
+          message: `Compiled ground cache packaged (${Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - compiledGroundStartedAt)} ms)`,
+        })
+      } else {
+        const shouldRequireCompiledGround = sceneGroundNode?.dynamicMesh?.type === 'Ground'
+          && hasSceneGroundTerrainOverrides(sceneGroundNode.dynamicMesh)
+        if (shouldRequireCompiledGround) {
+          throw new Error(
+            cacheLoad.diagnostics.status === 'partial' || cacheLoad.diagnostics.status === 'corrupt'
+              ? `Compiled ground cache is invalid for scene ${scene.id}. Reopen the scene in editor to rebuild terrain cache before export.`
+              : `Compiled ground cache is missing for scene ${scene.id}. Open the scene in editor to build terrain cache before export.`,
+          )
+        }
+
+        emitSceneExportEvent(payload.reportEvent, {
+          phase: 'sidecar',
+          level: 'info',
+          status: 'skipped',
+          sceneId: scene.id,
+          sceneName,
+          message: 'Skipped compiled ground cache packaging for empty scene terrain.',
         })
       }
 
-      const storedTerrainDatasetManifest = await scenesStore.loadTerrainDatasetManifest(scene.id)
       const packagedTerrainDataset = await buildTerrainDatasetPackageFiles(
         scene.id,
         storedTerrainDatasetManifest,
         (regionKey) => scenesStore.loadTerrainDatasetRegionPack(scene.id, regionKey),
       )
       if (packagedTerrainDataset) {
-        terrainDataset = {
+        terrain = {
           datasetId: packagedTerrainDataset.manifest.datasetId,
           rootManifestPath: packagedTerrainDataset.rootManifestPath,
           regionsPath: packagedTerrainDataset.regionsPath,
@@ -1487,19 +1469,6 @@ export async function exportScenePackageZip(payload: {
       detail: scenePath,
       message: `场景二进制已写入 ${sceneName}`,
     })
-    if (groundHeightSidecar) {
-      groundHeightsPath = `scenes/${encodeURIComponent(scene.id)}/${GROUND_HEIGHTMAP_SIDECAR_FILENAME}`
-      files[groundHeightsPath] = new Uint8Array(groundHeightSidecar)
-      emitSceneExportEvent(payload.reportEvent, {
-        phase: 'sidecar',
-        level: 'info',
-        status: 'completed',
-        sceneId: scene.id,
-        sceneName,
-        detail: groundHeightsPath,
-        message: `已写入地形高度 sidecar`,
-      })
-    }
     if (groundScatterSidecar) {
       groundScatterPath = `scenes/${encodeURIComponent(scene.id)}/${GROUND_SCATTER_SIDECAR_FILENAME}`
       files[groundScatterPath] = new Uint8Array(groundScatterSidecar)
@@ -1544,11 +1513,10 @@ export async function exportScenePackageZip(payload: {
       sceneId: scene.id,
       path: scenePath,
       planningPath,
-      groundChunkManifestPath,
-      groundHeightsPath,
       groundScatterPath,
       groundPaintPath,
-      terrainDataset,
+      terrain,
+      compiledGround,
     })
   }
 

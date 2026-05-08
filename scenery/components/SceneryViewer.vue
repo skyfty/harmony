@@ -401,7 +401,6 @@
         <template v-if="debugMode === 'full'">
           <text class="viewer-debug-line">Renderer: {{ rendererDebug.width }}x{{ rendererDebug.height }} @PR {{ rendererDebug.pixelRatio }}, calls {{ rendererDebug.calls }}, tris {{ rendererDebug.triangles }}, r-tris {{ rendererDebug.renderTriangles }}</text>
           <text class="viewer-debug-line">Instancing: mesh {{ instancingDebug.instancedMeshActive }}/{{ instancingDebug.instancedMeshAssets }}, instances {{ instancingDebug.instancedInstanceCount }}, lod {{ instancingDebug.lodVisible }}/{{ instancingDebug.lodTotal }}, scatter {{ instancingDebug.scatterVisible }}/{{ instancingDebug.scatterTotal }}</text>
-          <text class="viewer-debug-line">Ground: loaded {{ groundChunkDebug.loaded }}/{{ groundChunkDebug.target }}/{{ groundChunkDebug.total }}</text>
         </template>
       </view>
     </view>
@@ -495,12 +494,21 @@ import { AssetCache, AssetLoader, configureAssetDownloadHostMirrors, type AssetC
 import { ASSET_DOWNLOAD_HOST_MIRRORS } from '@harmony/schema/assetDownloadMirrors';
 import { isGroundDynamicMesh } from '@harmony/schema/groundHeightfield';
 import {
+  clearGroundFlatChunkBatches,
   setInfiniteGroundHiddenChunkKeys,
   syncGroundChunkLoadingMode,
   sampleGroundHeight,
 } from '@harmony/schema/groundMesh';
-import { clearInfiniteGroundChunkMeshes, syncInfiniteGroundChunkMeshes } from '@harmony/schema/groundChunkManifestRuntime';
+import { clearInfiniteGroundChunkMeshes } from '@harmony/schema/groundChunkManifestRuntime';
 import { createInfiniteGroundChunkColliderRuntime } from '@harmony/schema/infiniteGroundChunkCollisions';
+import {
+  clearCompiledGroundRenderTiles,
+  computeCompiledGroundManifestRevision,
+  createCompiledGroundCollisionRuntime,
+  syncCompiledGroundRenderTiles,
+  type CompiledGroundManifest,
+} from '@harmony/schema';
+import { collectLoadedCompiledGroundChunkKeys } from '@harmony/schema/compiledGroundRuntime';
 import { buildGroundAirWallDefinitions } from '@harmony/schema/airWall';
 
 import {
@@ -593,26 +601,26 @@ import {
   readTextFileFromScenePackage,
   type ScenePackageUnzipped,
 } from '@harmony/schema/scenePackageZip';
+import {
+  createTerrainDatasetHeightSamplerFromScenePackage,
+  readTerrainDatasetManifestFromScenePackage,
+} from '../common/utils/terrainDatasetPackage';
 import type {
   AutoTourRouteSnapResult,
-  GroundChunkManifest,
-  GroundChunkManifestRecord,
-  GroundTerrainPackageManifest,
   SceneNode,
   SceneNodeComponentState,
   SceneJsonExportDocument,
   SceneAssetRegistryEntry,
   SceneMaterialTextureRef,
   GroundDynamicMesh,
+  GroundChunkManifest,
   GroundRuntimeDynamicMesh,
   LanternSlideDefinition,
   SceneResourceSummary,
   SceneResourceSummaryEntry,
+  ScenePackageCompiledGroundEntry,
+  ScenePackageTerrainEntry,
   Vector3Like,
-} from '@harmony/schema/index';
-import {
-  GROUND_TERRAIN_PACKAGE_FORMAT,
-  GROUND_TERRAIN_PACKAGE_VERSION,
 } from '@harmony/schema/index';
 import { isPointInsideRegionXZ } from '@harmony/schema/index';
 import { applyMirroredScaleToObject, syncMirroredMeshMaterials } from '@harmony/schema/mirror';
@@ -831,12 +839,7 @@ interface ScenePreviewPayload {
   createdAt?: string;
   updatedAt?: string;
   assetOverrides?: SceneGraphBuildOptions['assetOverrides'];
-  terrain?: SceneTerrainPackageBundle | null;
-}
-
-type SceneTerrainPackageBundle = {
-  manifestPath: string;
-  manifest: GroundTerrainPackageManifest;
+  terrain?: ScenePackageTerrainEntry | null;
 };
 
 type RequestedMode = 'project' | null;
@@ -921,7 +924,7 @@ type ScenePackageSceneEntry =
       createdAt: string | null;
       updatedAt: string | null;
       document: SceneJsonExportDocument;
-      terrain?: SceneTerrainPackageBundle | null;
+      terrain?: ScenePackageTerrainEntry | null;
     }
   | {
       kind: 'external';
@@ -930,7 +933,7 @@ type ScenePackageSceneEntry =
       createdAt: string | null;
       updatedAt: string | null;
       sceneJsonUrl: string;
-      terrain?: SceneTerrainPackageBundle | null;
+      terrain?: ScenePackageTerrainEntry | null;
     };
 
 type ScenePackageProjectData = {
@@ -1068,11 +1071,9 @@ const {
   debugFps,
   instancingDebug,
   rendererDebug,
-  groundChunkDebug,
   updateDebugFps,
   syncInstancingDebugCounters,
   syncRendererDebug,
-  syncGroundChunkDebugCounters,
 } = useDebugOverlay();
 
 const debugOverlayAriaLabel = computed(() => (debugMode.value === 'full' ? '调试信息，当前 full 模式，点击切换为 fps 模式' : '调试信息，当前 fps 模式，点击切换为 full 模式'));
@@ -1336,8 +1337,6 @@ function resolveSceneExposure(exposure: unknown): number {
     DEFAULT_SCENE_EXPOSURE * SCENE_VIEWER_EXPOSURE_BOOST,
   );
 }
-
-
 const purposeWatchIcon = '👁️';
 const purposeResetIcon = '↕️';
 const lanternCloseIcon = '✖️';
@@ -1707,6 +1706,12 @@ const instancedLodFrustumCuller = createInstancedBvhFrustumCuller();
 const TERRAIN_SCATTER_LOD_UPDATE_INTERVAL_MS = isWeChatMiniProgram ? 320 : 200;
 const TERRAIN_SCATTER_VISIBILITY_UPDATE_INTERVAL_MS = isWeChatMiniProgram ? 120 : 33;
 const TERRAIN_SCATTER_MAX_BINDING_CHANGES_PER_UPDATE = isWeChatMiniProgram ? 120 : 200;
+const WECHAT_READONLY_TERRAIN_FLAT_TILING_RADIUS_CHUNKS = 20;
+const WECHAT_READONLY_TERRAIN_CHUNK_SYNC_BUDGET = {
+  maxCreatePerUpdate: 4,
+  maxDestroyPerUpdate: 6,
+  maxMs: 4,
+};
 const terrainScatterRuntime = createTerrainScatterLodRuntime({
     lodUpdateIntervalMs: TERRAIN_SCATTER_LOD_UPDATE_INTERVAL_MS,
     visibilityUpdateIntervalMs: TERRAIN_SCATTER_VISIBILITY_UPDATE_INTERVAL_MS,
@@ -1726,15 +1731,57 @@ const TERRAIN_SCATTER_MOVE_THRESHOLD_M = isWeChatMiniProgram ? 0.12 : 0.06;
 const TERRAIN_SCATTER_ROT_THRESHOLD_DEG = isWeChatMiniProgram ? 0.8 : 0.3;
 const TERRAIN_SCATTER_MAX_STALE_MS = isWeChatMiniProgram ? 280 : 140;
 const TERRAIN_SCATTER_ROT_THRESHOLD_RAD = (TERRAIN_SCATTER_ROT_THRESHOLD_DEG * Math.PI) / 180;
+const COMPILED_GROUND_RENDER_MOVE_THRESHOLD_M = isWeChatMiniProgram ? 0.35 : 0;
+const COMPILED_GROUND_RENDER_ROT_THRESHOLD_DEG = isWeChatMiniProgram ? 1.2 : 0;
+const COMPILED_GROUND_RENDER_MAX_STALE_MS = isWeChatMiniProgram ? 180 : 0;
+const COMPILED_GROUND_RENDER_ROT_THRESHOLD_RAD = (COMPILED_GROUND_RENDER_ROT_THRESHOLD_DEG * Math.PI) / 180;
+const COMPILED_GROUND_COLLISION_MOVE_THRESHOLD_M = isWeChatMiniProgram ? 0.2 : 0;
+const COMPILED_GROUND_COLLISION_ROT_THRESHOLD_DEG = isWeChatMiniProgram ? 0.8 : 0;
+const COMPILED_GROUND_COLLISION_MAX_STALE_MS = isWeChatMiniProgram ? 90 : 0;
+const COMPILED_GROUND_COLLISION_ROT_THRESHOLD_RAD = (COMPILED_GROUND_COLLISION_ROT_THRESHOLD_DEG * Math.PI) / 180;
 const terrainScatterLastCameraPos = new THREE.Vector3();
 const terrainScatterLastCameraQuat = new THREE.Quaternion();
 const terrainScatterCameraPosScratch = new THREE.Vector3();
 const terrainScatterCameraQuatScratch = new THREE.Quaternion();
+const compiledGroundRenderLastCameraPos = new THREE.Vector3();
+const compiledGroundRenderLastCameraQuat = new THREE.Quaternion();
+const compiledGroundRenderCameraWorldPosScratch = new THREE.Vector3();
+const compiledGroundRenderCameraLocalPosScratch = new THREE.Vector3();
+const compiledGroundRenderCameraQuatScratch = new THREE.Quaternion();
+const compiledGroundCollisionLastCameraPos = new THREE.Vector3();
+const compiledGroundCollisionLastCameraQuat = new THREE.Quaternion();
+const compiledGroundCollisionCameraWorldPosScratch = new THREE.Vector3();
+const compiledGroundCollisionCameraLocalPosScratch = new THREE.Vector3();
+const compiledGroundCollisionCameraQuatScratch = new THREE.Quaternion();
 let terrainScatterLastUpdateAtMs = 0;
 let terrainScatterForceNextUpdate = true;
+let compiledGroundRenderLastUpdateAtMs = 0;
+let compiledGroundRenderForceNextUpdate = true;
+let compiledGroundRenderLastGroundObject: THREE.Object3D | null = null;
+let compiledGroundRenderLastManifest: CompiledGroundManifest | null = null;
+let compiledGroundRenderLastSourceId = '';
+let compiledGroundRenderLastRevision = -1;
+let compiledGroundRenderLastCenterRow = 0;
+let compiledGroundRenderLastCenterColumn = 0;
+let compiledGroundCollisionLastUpdateAtMs = 0;
+let compiledGroundCollisionForceNextUpdate = true;
+let compiledGroundCollisionLastGroundObject: THREE.Object3D | null = null;
+let compiledGroundCollisionLastManifest: CompiledGroundManifest | null = null;
+let compiledGroundCollisionLastSourceId = '';
+let compiledGroundCollisionLastRevision = -1;
+let compiledGroundCollisionLastCenterRow = 0;
+let compiledGroundCollisionLastCenterColumn = 0;
 
 function markTerrainScatterUpdateDirty(): void {
   terrainScatterForceNextUpdate = true;
+}
+
+function markCompiledGroundRenderUpdateDirty(): void {
+  compiledGroundRenderForceNextUpdate = true;
+}
+
+function markCompiledGroundCollisionUpdateDirty(): void {
+  compiledGroundCollisionForceNextUpdate = true;
 }
 
 function shouldRunTerrainScatterUpdate(camera: THREE.Camera, nowMs: number): boolean {
@@ -1775,6 +1822,190 @@ function shouldRunTerrainScatterUpdate(camera: THREE.Camera, nowMs: number): boo
       terrainScatterLastUpdateAtMs = nowMs;
       terrainScatterLastCameraPos.copy(terrainScatterCameraPosScratch);
       terrainScatterLastCameraQuat.copy(terrainScatterCameraQuatScratch);
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function commitCompiledGroundRenderUpdateState(
+  groundObject: THREE.Object3D,
+  manifest: CompiledGroundManifest,
+  sourceId: string,
+  revision: number,
+  centerRow: number,
+  centerColumn: number,
+  nowMs: number,
+): void {
+  compiledGroundRenderForceNextUpdate = false;
+  compiledGroundRenderLastUpdateAtMs = nowMs;
+  compiledGroundRenderLastGroundObject = groundObject;
+  compiledGroundRenderLastManifest = manifest;
+  compiledGroundRenderLastSourceId = sourceId;
+  compiledGroundRenderLastRevision = revision;
+  compiledGroundRenderLastCenterRow = centerRow;
+  compiledGroundRenderLastCenterColumn = centerColumn;
+  compiledGroundRenderLastCameraPos.copy(compiledGroundRenderCameraWorldPosScratch);
+  compiledGroundRenderLastCameraQuat.copy(compiledGroundRenderCameraQuatScratch);
+}
+
+function shouldRunCompiledGroundRenderUpdate(
+  groundObject: THREE.Object3D,
+  manifest: CompiledGroundManifest,
+  camera: THREE.Camera,
+  sourceId: string,
+  revision: number,
+  nowMs: number,
+): boolean {
+  if (!isWeChatMiniProgram) {
+    return true;
+  }
+
+  groundObject.updateWorldMatrix(true, false);
+  camera.updateWorldMatrix(true, false);
+  camera.getWorldPosition(compiledGroundRenderCameraWorldPosScratch);
+  compiledGroundRenderCameraLocalPosScratch.copy(compiledGroundRenderCameraWorldPosScratch);
+  groundObject.worldToLocal(compiledGroundRenderCameraLocalPosScratch);
+  camera.getWorldQuaternion(compiledGroundRenderCameraQuatScratch);
+
+  const tileSize = Math.max(1e-6, Number(manifest.renderTileSizeMeters) || 1);
+  const centerColumn = Math.floor((compiledGroundRenderCameraLocalPosScratch.x - manifest.bounds.minX) / tileSize);
+  const centerRow = Math.floor((compiledGroundRenderCameraLocalPosScratch.z - manifest.bounds.minZ) / tileSize);
+
+  if (
+    compiledGroundRenderForceNextUpdate
+    || compiledGroundRenderLastGroundObject !== groundObject
+    || compiledGroundRenderLastManifest !== manifest
+    || compiledGroundRenderLastSourceId !== sourceId
+    || compiledGroundRenderLastRevision !== revision
+  ) {
+    commitCompiledGroundRenderUpdateState(groundObject, manifest, sourceId, revision, centerRow, centerColumn, nowMs);
+    return true;
+  }
+
+  if (
+    centerRow !== compiledGroundRenderLastCenterRow
+    || centerColumn !== compiledGroundRenderLastCenterColumn
+  ) {
+    commitCompiledGroundRenderUpdateState(groundObject, manifest, sourceId, revision, centerRow, centerColumn, nowMs);
+    return true;
+  }
+
+  if (
+    COMPILED_GROUND_RENDER_MAX_STALE_MS > 0
+    && nowMs - compiledGroundRenderLastUpdateAtMs >= COMPILED_GROUND_RENDER_MAX_STALE_MS
+  ) {
+    commitCompiledGroundRenderUpdateState(groundObject, manifest, sourceId, revision, centerRow, centerColumn, nowMs);
+    return true;
+  }
+
+  const moveThresholdSq = COMPILED_GROUND_RENDER_MOVE_THRESHOLD_M * COMPILED_GROUND_RENDER_MOVE_THRESHOLD_M;
+  if (
+    moveThresholdSq > 0
+    && compiledGroundRenderCameraWorldPosScratch.distanceToSquared(compiledGroundRenderLastCameraPos) >= moveThresholdSq
+  ) {
+    commitCompiledGroundRenderUpdateState(groundObject, manifest, sourceId, revision, centerRow, centerColumn, nowMs);
+    return true;
+  }
+
+  if (COMPILED_GROUND_RENDER_ROT_THRESHOLD_RAD > 0) {
+    const dot = Math.min(1, Math.abs(compiledGroundRenderLastCameraQuat.dot(compiledGroundRenderCameraQuatScratch)));
+    const angle = 2 * Math.acos(dot);
+    if (Number.isFinite(angle) && angle >= COMPILED_GROUND_RENDER_ROT_THRESHOLD_RAD) {
+      commitCompiledGroundRenderUpdateState(groundObject, manifest, sourceId, revision, centerRow, centerColumn, nowMs);
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function commitCompiledGroundCollisionUpdateState(
+  groundObject: THREE.Object3D,
+  manifest: CompiledGroundManifest,
+  sourceId: string,
+  revision: number,
+  centerRow: number,
+  centerColumn: number,
+  nowMs: number,
+): void {
+  compiledGroundCollisionForceNextUpdate = false;
+  compiledGroundCollisionLastUpdateAtMs = nowMs;
+  compiledGroundCollisionLastGroundObject = groundObject;
+  compiledGroundCollisionLastManifest = manifest;
+  compiledGroundCollisionLastSourceId = sourceId;
+  compiledGroundCollisionLastRevision = revision;
+  compiledGroundCollisionLastCenterRow = centerRow;
+  compiledGroundCollisionLastCenterColumn = centerColumn;
+  compiledGroundCollisionLastCameraPos.copy(compiledGroundCollisionCameraWorldPosScratch);
+  compiledGroundCollisionLastCameraQuat.copy(compiledGroundCollisionCameraQuatScratch);
+}
+
+function shouldRunCompiledGroundCollisionUpdate(
+  groundObject: THREE.Object3D,
+  manifest: CompiledGroundManifest,
+  camera: THREE.Camera,
+  sourceId: string,
+  revision: number,
+  nowMs: number,
+): boolean {
+  if (!isWeChatMiniProgram) {
+    return true;
+  }
+
+  groundObject.updateWorldMatrix(true, false);
+  camera.updateWorldMatrix(true, false);
+  camera.getWorldPosition(compiledGroundCollisionCameraWorldPosScratch);
+  compiledGroundCollisionCameraLocalPosScratch.copy(compiledGroundCollisionCameraWorldPosScratch);
+  groundObject.worldToLocal(compiledGroundCollisionCameraLocalPosScratch);
+  camera.getWorldQuaternion(compiledGroundCollisionCameraQuatScratch);
+
+  const tileSize = Math.max(1e-6, Number(manifest.collisionTileSizeMeters) || 1);
+  const centerColumn = Math.floor((compiledGroundCollisionCameraLocalPosScratch.x - manifest.bounds.minX) / tileSize);
+  const centerRow = Math.floor((compiledGroundCollisionCameraLocalPosScratch.z - manifest.bounds.minZ) / tileSize);
+
+  if (
+    compiledGroundCollisionForceNextUpdate
+    || compiledGroundCollisionLastGroundObject !== groundObject
+    || compiledGroundCollisionLastManifest !== manifest
+    || compiledGroundCollisionLastSourceId !== sourceId
+    || compiledGroundCollisionLastRevision !== revision
+  ) {
+    commitCompiledGroundCollisionUpdateState(groundObject, manifest, sourceId, revision, centerRow, centerColumn, nowMs);
+    return true;
+  }
+
+  if (
+    centerRow !== compiledGroundCollisionLastCenterRow
+    || centerColumn !== compiledGroundCollisionLastCenterColumn
+  ) {
+    commitCompiledGroundCollisionUpdateState(groundObject, manifest, sourceId, revision, centerRow, centerColumn, nowMs);
+    return true;
+  }
+
+  if (
+    COMPILED_GROUND_COLLISION_MAX_STALE_MS > 0
+    && nowMs - compiledGroundCollisionLastUpdateAtMs >= COMPILED_GROUND_COLLISION_MAX_STALE_MS
+  ) {
+    commitCompiledGroundCollisionUpdateState(groundObject, manifest, sourceId, revision, centerRow, centerColumn, nowMs);
+    return true;
+  }
+
+  const moveThresholdSq = COMPILED_GROUND_COLLISION_MOVE_THRESHOLD_M * COMPILED_GROUND_COLLISION_MOVE_THRESHOLD_M;
+  if (
+    moveThresholdSq > 0
+    && compiledGroundCollisionCameraWorldPosScratch.distanceToSquared(compiledGroundCollisionLastCameraPos) >= moveThresholdSq
+  ) {
+    commitCompiledGroundCollisionUpdateState(groundObject, manifest, sourceId, revision, centerRow, centerColumn, nowMs);
+    return true;
+  }
+
+  if (COMPILED_GROUND_COLLISION_ROT_THRESHOLD_RAD > 0) {
+    const dot = Math.min(1, Math.abs(compiledGroundCollisionLastCameraQuat.dot(compiledGroundCollisionCameraQuatScratch)));
+    const angle = 2 * Math.acos(dot);
+    if (Number.isFinite(angle) && angle >= COMPILED_GROUND_COLLISION_ROT_THRESHOLD_RAD) {
+      commitCompiledGroundCollisionUpdateState(groundObject, manifest, sourceId, revision, centerRow, centerColumn, nowMs);
       return true;
     }
   }
@@ -1918,7 +2149,13 @@ const wallTrimeshCache = new Map<string, WallTrimeshCacheEntry>();
 const physicsGravity = new CANNON.Vec3(0, -DEFAULT_ENVIRONMENT_GRAVITY, 0);
 let physicsContactRestitution = DEFAULT_ENVIRONMENT_RESTITUTION;
 let physicsContactFriction = DEFAULT_ENVIRONMENT_FRICTION;
-const infiniteGroundChunkCollisionRuntime = createInfiniteGroundChunkColliderRuntime({
+const compiledGroundCollisionRuntime = createCompiledGroundCollisionRuntime({
+  getPhysicsWorld: () => physicsWorld,
+  ensurePhysicsWorld: () => ensurePhysicsWorld(),
+  createBody: (node, component, shapeDefinition, object) => createRigidbodyBody(node, component, shapeDefinition, object),
+  loggerTag: '[SceneViewer]',
+});
+const infiniteGroundChunkColliderRuntime = createInfiniteGroundChunkColliderRuntime({
   getPhysicsWorld: () => physicsWorld,
   ensurePhysicsWorld: () => ensurePhysicsWorld(),
   createBody: (node, component, shapeDefinition, object) => createRigidbodyBody(node, component, shapeDefinition, object),
@@ -1955,6 +2192,7 @@ const physicsInterpolationParentQuat = new THREE.Quaternion();
 let physicsInterpolationEnabled = false;
 let physicsInterpolationAlpha = 0;
 let physicsAccumulator = 0;
+let lastPhysicsPerformanceLogAt = 0;
 
 type CannonSleepExtensions = {
   sleep?: () => void;
@@ -2795,6 +3033,130 @@ function primeAutoTourCameraFollowTransition(object: THREE.Object3D, forwardWorl
   autoTourCameraFollowHasSample = true;
 }
 
+const VEHICLE_FOLLOW_CAMERA_TERRAIN_CLEARANCE = 0.75;
+const VEHICLE_FOLLOW_CAMERA_COLLISION_BUFFER = 0.45;
+const vehicleFollowCameraRaycaster = new THREE.Raycaster();
+const vehicleFollowCameraRayDirectionScratch = new THREE.Vector3();
+const vehicleFollowCameraWorldPointScratch = new THREE.Vector3();
+const vehicleFollowCameraGroundPointScratch = new THREE.Vector3();
+const vehicleFollowCameraGroundOriginScratch = new THREE.Vector3();
+const vehicleFollowCameraRaycastRootsScratch: THREE.Object3D[] = [];
+
+function isObjectDescendantOf(object: THREE.Object3D | null | undefined, ancestor: THREE.Object3D | null | undefined): boolean {
+  if (!object || !ancestor) {
+    return false;
+  }
+  let current: THREE.Object3D | null = object;
+  while (current) {
+    if (current === ancestor) {
+      return true;
+    }
+    current = current.parent;
+  }
+  return false;
+}
+
+function sampleViewerGroundHeightAtWorldPosition(worldX: number, worldZ: number): number | null {
+  const groundDefinition = dynamicGroundCache?.dynamicMesh ?? null;
+  if (!groundDefinition) {
+    return null;
+  }
+  const groundObject = dynamicGroundCache ? nodeObjectMap.get(dynamicGroundCache.nodeId) ?? null : null;
+  if (!groundObject) {
+    const height = sampleGroundHeight(groundDefinition, worldX, worldZ);
+    return Number.isFinite(height) ? height : null;
+  }
+  groundObject.updateMatrixWorld(true);
+  groundObject.getWorldPosition(vehicleFollowCameraGroundOriginScratch);
+  vehicleFollowCameraWorldPointScratch.set(worldX, vehicleFollowCameraGroundOriginScratch.y, worldZ);
+  groundObject.worldToLocal(vehicleFollowCameraWorldPointScratch);
+  const localHeight = sampleGroundHeight(
+    groundDefinition,
+    vehicleFollowCameraWorldPointScratch.x,
+    vehicleFollowCameraWorldPointScratch.z,
+  );
+  if (!Number.isFinite(localHeight)) {
+    return null;
+  }
+  vehicleFollowCameraGroundPointScratch.set(
+    vehicleFollowCameraWorldPointScratch.x,
+    localHeight,
+    vehicleFollowCameraWorldPointScratch.z,
+  );
+  groundObject.localToWorld(vehicleFollowCameraGroundPointScratch);
+  return Number.isFinite(vehicleFollowCameraGroundPointScratch.y)
+    ? vehicleFollowCameraGroundPointScratch.y
+    : null;
+}
+
+function collectViewerVehicleFollowCameraRaycastRoots(): THREE.Object3D[] {
+  vehicleFollowCameraRaycastRootsScratch.length = 0;
+  if (sceneGraphRoot) {
+    vehicleFollowCameraRaycastRootsScratch.push(sceneGraphRoot);
+  }
+  if (instancedMeshGroup.children.length > 0) {
+    vehicleFollowCameraRaycastRootsScratch.push(instancedMeshGroup);
+  }
+  return vehicleFollowCameraRaycastRootsScratch;
+}
+
+function constrainViewerVehicleFollowCameraPose(params: {
+  position: THREE.Vector3;
+  target: THREE.Vector3;
+  nodeId: string;
+  vehicleObject: THREE.Object3D | null;
+}): void {
+  const { position, target, nodeId, vehicleObject } = params;
+
+  const terrainHeight = sampleViewerGroundHeightAtWorldPosition(position.x, position.z);
+  if (terrainHeight !== null) {
+    position.y = Math.max(position.y, terrainHeight + VEHICLE_FOLLOW_CAMERA_TERRAIN_CLEARANCE);
+  }
+
+  const raycastRoots = collectViewerVehicleFollowCameraRaycastRoots();
+  if (!raycastRoots.length) {
+    return;
+  }
+
+  vehicleFollowCameraRayDirectionScratch.copy(position).sub(target);
+  const distance = vehicleFollowCameraRayDirectionScratch.length();
+  if (!Number.isFinite(distance) || distance <= 1e-4) {
+    return;
+  }
+  vehicleFollowCameraRayDirectionScratch.divideScalar(distance);
+  raycastRoots.forEach((root) => root.updateMatrixWorld(true));
+  vehicleFollowCameraRaycaster.set(target, vehicleFollowCameraRayDirectionScratch);
+  vehicleFollowCameraRaycaster.far = distance;
+  const intersections = vehicleFollowCameraRaycaster.intersectObjects(raycastRoots, true);
+  const hit = intersections.find((entry: THREE.Intersection) => {
+    if (!Number.isFinite(entry.distance) || entry.distance <= 1e-4 || !entry.object.visible) {
+      return false;
+    }
+    if (entry.object.userData?.hidden === true) {
+      return false;
+    }
+    if (isObjectDescendantOf(entry.object, vehicleObject)) {
+      return false;
+    }
+    const hitNodeId = normalizeNodeId(entry.object.userData?.nodeId as string | undefined);
+    if (hitNodeId && hitNodeId === nodeId) {
+      return false;
+    }
+    return true;
+  });
+  if (!hit) {
+    return;
+  }
+
+  const clampedDistance = Math.max(0, Math.min(distance, hit.distance - VEHICLE_FOLLOW_CAMERA_COLLISION_BUFFER));
+  position.copy(target).addScaledVector(vehicleFollowCameraRayDirectionScratch, clampedDistance);
+
+  const adjustedTerrainHeight = sampleViewerGroundHeightAtWorldPosition(position.x, position.z);
+  if (adjustedTerrainHeight !== null) {
+    position.y = Math.max(position.y, adjustedTerrainHeight + VEHICLE_FOLLOW_CAMERA_TERRAIN_CLEARANCE);
+  }
+}
+
 const vehicleDriveController = new VehicleDriveController(
   {
     vehicleInstances,
@@ -2814,6 +3176,9 @@ const vehicleDriveController = new VehicleDriveController(
     syncLastFirstPersonStateFromCamera,
     onToast: (message) => uni.showToast({ title: message, icon: 'none' }),
     onResolveBehaviorToken: (token, resolution) => resolveBehaviorToken(token, resolution),
+    constrainFollowCameraPose: ({ position, target, nodeId, vehicleObject }) => {
+      constrainViewerVehicleFollowCameraPose({ position, target, nodeId, vehicleObject });
+    },
 
     // Use one shared follow-camera tuning profile across platforms.
     followCameraVelocityLerpSpeed: () => 0,
@@ -3557,58 +3922,100 @@ function normalizeDisplayBoardAssetId(candidate: string): string {
   return withoutScheme.trim()
 }
 
-function readGroundTerrainManifestFromPackage(pkg: ScenePackageUnzipped, manifestPath: string | null | undefined): SceneTerrainPackageBundle | null {
-  const trimmedPath = typeof manifestPath === 'string' ? manifestPath.trim() : ''
-  if (!trimmedPath) {
-    return null
+function hydrateGroundSidecarFromPackage(
+  pkg: ScenePackageUnzipped,
+  sceneEntry: {
+    sceneId: string;
+    path: string;
+    terrain?: { datasetId: string; rootManifestPath: string; regionsPath?: string };
+    compiledGround?: ScenePackageCompiledGroundEntry | null;
+  },
+  document: SceneJsonExportDocument,
+): SceneJsonExportDocument {
+  const definition = findFirstGroundDynamicMesh(document) as GroundRuntimeDynamicMesh | null;
+  if (!definition) {
+    return document;
   }
-  const manifestText = readTextFileFromScenePackage(pkg, trimmedPath)
-  const raw = JSON.parse(manifestText) as unknown
-  if (!raw || typeof raw !== 'object') {
-    throw new Error(`场景包内 ground terrain manifest 无效：${trimmedPath}`)
+
+  const terrainDatasetManifest = readTerrainDatasetManifestFromScenePackage(pkg, sceneEntry);
+  const terrainHeightSampler = createTerrainDatasetHeightSamplerFromScenePackage(pkg, sceneEntry);
+  (definition as GroundDynamicMesh & {
+    runtimeTerrainDatasetManifest?: unknown;
+    runtimeTerrainDatasetEnabled?: boolean;
+    runtimeTerrainHeightSampler?: unknown;
+  }).runtimeTerrainDatasetManifest = terrainDatasetManifest;
+  (definition as GroundDynamicMesh & {
+    runtimeTerrainDatasetManifest?: unknown;
+    runtimeTerrainDatasetEnabled?: boolean;
+    runtimeTerrainHeightSampler?: unknown;
+  }).runtimeTerrainDatasetEnabled = Boolean(terrainHeightSampler);
+  (definition as GroundDynamicMesh & {
+    runtimeTerrainDatasetManifest?: unknown;
+    runtimeTerrainDatasetEnabled?: boolean;
+    runtimeTerrainHeightSampler?: unknown;
+  }).runtimeTerrainHeightSampler = terrainHeightSampler;
+
+  if (!shouldUseCompiledGroundForViewer(definition, sceneEntry.terrain?.datasetId ?? null)) {
+    const groundNode = findGroundNode(document.nodes);
+    if (groundNode) {
+      groundNode.userData = {
+        ...(groundNode.userData ?? {}),
+        compiledGroundEnabled: false,
+        compiledGroundManifest: null,
+      };
+    }
+    return document;
   }
-  const candidate = raw as GroundTerrainPackageManifest
-  if (candidate.format !== GROUND_TERRAIN_PACKAGE_FORMAT || candidate.version !== GROUND_TERRAIN_PACKAGE_VERSION) {
-    throw new Error(`场景包内 ground terrain manifest 版本不匹配：${trimmedPath}`)
+
+  const compiledGroundManifestPath = typeof sceneEntry.compiledGround?.manifestPath === 'string'
+    ? sceneEntry.compiledGround.manifestPath.trim()
+    : '';
+  if (!compiledGroundManifestPath) {
+    throw new Error(`Scene ${sceneEntry.sceneId} is missing compiled ground manifest`);
   }
-  return {
-    manifestPath: trimmedPath,
-    manifest: candidate,
+  try {
+    const compiledGroundManifest = JSON.parse(readTextFileFromScenePackage(pkg, compiledGroundManifestPath)) as CompiledGroundManifest;
+    const groundNode = findGroundNode(document.nodes);
+    if (groundNode) {
+      groundNode.userData = {
+        ...(groundNode.userData ?? {}),
+        compiledGroundManifest,
+      };
+    }
+  } catch (error) {
+    throw new Error(`Failed to hydrate compiled ground manifest ${compiledGroundManifestPath}: ${String(error)}`);
   }
+
+  return document;
 }
 
-function readGroundChunkManifestFromPackage(pkg: ScenePackageUnzipped, manifestPath: string | null | undefined): GroundChunkManifest | null {
-  const trimmedPath = typeof manifestPath === 'string' ? manifestPath.trim() : ''
-  if (!trimmedPath) {
-    return null
+function shouldUseCompiledGroundForViewer(
+  dynamicGround: GroundDynamicMesh,
+  terrainDatasetId: string | null = null,
+): boolean {
+  const normalizedTerrainDatasetId = typeof terrainDatasetId === 'string' ? terrainDatasetId.trim() : '';
+  if (normalizedTerrainDatasetId) {
+    return true;
   }
-  const manifestText = readTextFileFromScenePackage(pkg, trimmedPath)
-  const raw = JSON.parse(manifestText) as unknown
-  if (!raw || typeof raw !== 'object') {
-    throw new Error(`场景包内 ground chunk manifest 无效：${trimmedPath}`)
+  if (dynamicGround.planningMetadata?.demSource) {
+    return true;
   }
-  const candidate = raw as GroundChunkManifest
-  if (candidate.version !== 1 || typeof candidate.sceneId !== 'string' || !candidate.chunks || typeof candidate.chunks !== 'object') {
-    throw new Error(`场景包内 ground chunk manifest 结构不正确：${trimmedPath}`)
+  const localEditTileCount = dynamicGround.localEditTiles && typeof dynamicGround.localEditTiles === 'object'
+    ? Object.keys(dynamicGround.localEditTiles).length
+    : 0;
+  if (localEditTileCount > 0) {
+    return true;
   }
-  return candidate
-}
-
-async function loadViewerGroundChunkDataBuffer(record: GroundChunkManifestRecord): Promise<ArrayBuffer | null> {
-  const dataPath = typeof record.dataPath === 'string' ? record.dataPath.trim() : '';
-  if (!dataPath) {
-    return null;
+  const surfaceRevision = Number.isFinite(dynamicGround.surfaceRevision)
+    ? Math.max(0, Math.trunc(dynamicGround.surfaceRevision as number))
+    : 0;
+  if (surfaceRevision > 0) {
+    return true;
   }
-  const packagedBytes = activeScenePackagePkg?.files?.[dataPath] ?? null;
-  if (packagedBytes) {
-    const buffer = new ArrayBuffer(packagedBytes.byteLength);
-    new Uint8Array(buffer).set(packagedBytes);
-    return buffer;
-  }
-  if (dataPath.startsWith('/') || /^(https?:)?\/\//i.test(dataPath)) {
-    return await requestBinaryFromUrl(dataPath);
-  }
-  return null;
+  const chunkManifestRevision = Number.isFinite(dynamicGround.chunkManifestRevision)
+    ? Math.max(0, Math.trunc(dynamicGround.chunkManifestRevision as number))
+    : 0;
+  return chunkManifestRevision > 0;
 }
 
 async function resolveAssetUrlReference(candidate: string): Promise<ResolvedAssetUrl | null> {
@@ -5041,95 +5448,251 @@ function refreshDynamicGroundCache(document: SceneJsonExportDocument | null): vo
   }
 }
 
-function shouldUseInfiniteGroundChunkCollisionStreaming(node: SceneNode | null | undefined): boolean {
-  if (!node || !isGroundDynamicMesh(node.dynamicMesh)) {
-    return false;
-  }
-  const mesh = node.dynamicMesh as GroundRuntimeDynamicMesh;
-  const manifestRevision = Number.isFinite(mesh.chunkManifestRevision)
-    ? Math.max(0, Math.trunc(mesh.chunkManifestRevision as number))
-    : 0;
-  return manifestRevision > 0;
+function resolveViewerCompiledGroundManifest(
+  groundObject: THREE.Object3D,
+): CompiledGroundManifest | null {
+  const rawManifest = (groundObject.userData as Record<string, unknown> | undefined)?.compiledGroundManifest
+    ?? (dynamicGroundCache?.node.userData as Record<string, unknown> | undefined)?.compiledGroundManifest
+    ?? null;
+  return rawManifest && typeof rawManifest === 'object'
+    ? rawManifest as CompiledGroundManifest
+    : null;
 }
 
-function resolveViewerGroundChunkManifestState(
+function resolveViewerGroundChunkManifest(
   groundObject: THREE.Object3D,
-  groundDefinition: GroundRuntimeDynamicMesh,
-): {
-  sourceId: string;
-  manifestRevision: number;
-  manifestRecords: Record<string, GroundChunkManifestRecord>;
-} | null {
-  const manifestRevision = Number.isFinite(groundDefinition.chunkManifestRevision)
-    ? Math.max(0, Math.trunc(groundDefinition.chunkManifestRevision as number))
-    : 0;
-  const sourceId = (currentSceneId.value ?? currentDocument?.id ?? '').trim();
+): GroundChunkManifest | null {
   const rawManifest = (groundObject.userData as Record<string, unknown> | undefined)?.groundChunkManifest
     ?? (dynamicGroundCache?.node.userData as Record<string, unknown> | undefined)?.groundChunkManifest
     ?? null;
-  const manifest = rawManifest && typeof rawManifest === 'object'
+  return rawManifest && typeof rawManifest === 'object'
     ? rawManifest as GroundChunkManifest
     : null;
-  const manifestRecords = manifest?.revision === manifestRevision
-    ? { ...(manifest.chunks ?? {}) }
-    : {};
-
-  if (!sourceId || !manifestRevision || !Object.keys(manifestRecords).length) {
-    return null;
-  }
-
-  return {
-    sourceId,
-    manifestRevision,
-    manifestRecords,
-  };
 }
 
-function clearInfiniteGroundChunkCollisionBodies(): void {
-  infiniteGroundChunkCollisionRuntime.clear();
+function clearViewerCompiledGroundCollisionBodies(): void {
+  markCompiledGroundCollisionUpdateDirty();
+  compiledGroundCollisionRuntime.clear();
+  infiniteGroundChunkColliderRuntime.clear();
 }
 
-function syncViewerInfiniteGroundChunkCollisions(
+function syncViewerCompiledGroundCollision(
   groundObject: THREE.Object3D,
-  groundDefinition: GroundRuntimeDynamicMesh,
   activeCamera: THREE.PerspectiveCamera,
 ): void {
-  const state = resolveViewerGroundChunkManifestState(groundObject, groundDefinition);
-  infiniteGroundChunkCollisionRuntime.sync({
+  const compiledManifest = resolveViewerCompiledGroundManifest(groundObject);
+  if (compiledManifest) {
+    infiniteGroundChunkColliderRuntime.clear();
+    const revision = Number.isFinite(compiledManifest.revision)
+      ? Math.max(0, Math.trunc(compiledManifest.revision))
+      : computeCompiledGroundManifestRevision(compiledManifest);
+    const sourceId = (currentSceneId.value ?? currentDocument?.id ?? '').trim() || 'viewer-ground';
+    const nowMs = Date.now();
+    if (shouldRunCompiledGroundCollisionUpdate(groundObject, compiledManifest, activeCamera, sourceId, revision, nowMs)) {
+      compiledGroundCollisionRuntime.sync({
+        enabled: physicsEnvironmentEnabled.value,
+        groundObject,
+        camera: activeCamera,
+        sourceId,
+        revision,
+        manifest: compiledManifest,
+        loadTileData: async (record) => {
+          const pkg = activeScenePackagePkg;
+          if (!pkg) {
+            return null;
+          }
+          const bytes = pkg.files[record.path];
+          return bytes ? getArrayBufferView(bytes) : null;
+        },
+      });
+    }
+    return;
+  }
+
+  markCompiledGroundCollisionUpdateDirty();
+  compiledGroundCollisionRuntime.clear();
+  const groundDefinition = dynamicGroundCache?.dynamicMesh ?? null;
+  if (!groundDefinition) {
+    infiniteGroundChunkColliderRuntime.clear();
+    return;
+  }
+  const groundChunkManifest = resolveViewerGroundChunkManifest(groundObject);
+  infiniteGroundChunkColliderRuntime.sync({
     enabled: physicsEnvironmentEnabled.value,
     groundObject,
     groundDefinition,
     camera: activeCamera,
-    sourceId: state?.sourceId ?? (currentSceneId.value ?? currentDocument?.id ?? '').trim() || 'viewer-ground',
-    manifestRevision: state?.manifestRevision ?? 0,
-    manifestRecords: state?.manifestRecords ?? {},
-    loadChunkData: (record) => loadViewerGroundChunkDataBuffer(record),
+    sourceId: (currentSceneId.value ?? currentDocument?.id ?? '').trim() || 'viewer-ground',
+    manifestRevision: groundChunkManifest?.revision,
+    manifestRecords: groundChunkManifest?.chunks,
+    loadChunkData: async (record) => {
+      const pkg = activeScenePackagePkg;
+      if (!pkg) {
+        return null;
+      }
+      const dataPath = typeof record.dataPath === 'string' ? record.dataPath.trim() : '';
+      if (!dataPath) {
+        return null;
+      }
+      const bytes = pkg.files[dataPath];
+      return bytes ? getArrayBufferView(bytes) : null;
+    },
   });
 }
 
-function syncViewerInfiniteGroundChunkManifest(
+function syncViewerCompiledGroundRender(
   groundObject: THREE.Object3D,
   groundDefinition: GroundRuntimeDynamicMesh,
   camera: THREE.PerspectiveCamera,
 ): void {
-  const manifestState = resolveViewerGroundChunkManifestState(groundObject, groundDefinition);
-  if (!manifestState) {
-    setInfiniteGroundHiddenChunkKeys(groundObject, []);
+  const compiledManifest = resolveViewerCompiledGroundManifest(groundObject);
+  if (!compiledManifest) {
+    markCompiledGroundRenderUpdateDirty();
+    clearCompiledGroundRenderTiles(groundObject);
     clearInfiniteGroundChunkMeshes(groundObject);
+    setInfiniteGroundHiddenChunkKeys(groundObject, []);
     return;
   }
-  const { sourceId, manifestRevision, manifestRecords } = manifestState;
-  setInfiniteGroundHiddenChunkKeys(groundObject, Object.keys(manifestRecords));
-  syncInfiniteGroundChunkMeshes({
+  const revision = Number.isFinite(compiledManifest.revision)
+    ? Math.max(0, Math.trunc(compiledManifest.revision))
+    : computeCompiledGroundManifestRevision(compiledManifest);
+  const compiledGroundDefinition = {
+    castShadow: groundDefinition.castShadow === true,
+    chunkSizeMeters: Number.isFinite(groundDefinition.chunkSizeMeters)
+      ? Number(groundDefinition.chunkSizeMeters)
+      : undefined,
+    renderRadiusChunks: Number.isFinite(groundDefinition.renderRadiusChunks)
+      ? Number(groundDefinition.renderRadiusChunks)
+      : undefined,
+    collisionRadiusChunks: Number.isFinite(groundDefinition.collisionRadiusChunks)
+      ? Number(groundDefinition.collisionRadiusChunks)
+      : undefined,
+  };
+  const sourceId = (currentSceneId.value ?? currentDocument?.id ?? '').trim() || 'viewer-ground';
+  const tileFrustumCulled = shouldEnableCompiledGroundTileFrustumCulling();
+  const nowMs = Date.now();
+  clearInfiniteGroundChunkMeshes(groundObject);
+  if (shouldRunCompiledGroundRenderUpdate(groundObject, compiledManifest, camera, sourceId, revision, nowMs)) {
+    syncCompiledGroundRenderTiles({
+      groundObject,
+      groundDefinition: compiledGroundDefinition,
+      camera,
+      sourceId,
+      revision,
+      manifest: compiledManifest,
+      loadTileData: async (record) => {
+        const pkg = activeScenePackagePkg;
+        if (!pkg) {
+          return null;
+        }
+        const bytes = pkg.files[record.path];
+        return bytes ? getArrayBufferView(bytes) : null;
+      },
+      streamingMode: 'runtime-camera',
+      tileFrustumCulled,
+    });
+  }
+  setInfiniteGroundHiddenChunkKeys(
     groundObject,
-    groundDefinition,
-    camera,
-    sourceId,
-    manifestRevision,
-    manifestRecords,
-    resolveActiveRecord: (chunkKey) => manifestRecords[chunkKey] ?? null,
-    loadChunkData: loadViewerGroundChunkDataBuffer,
-  });
+    collectLoadedCompiledGroundChunkKeys(groundObject, compiledManifest),
+  );
+}
+
+function shouldEnableCompiledGroundTileFrustumCulling(): boolean {
+  return (purposeActiveMode.value === 'level' && !vehicleDriveActive.value)
+    || (vehicleDriveActive.value && vehicleDriveCameraMode.value === 'first-person');
+}
+
+const VIEWER_GROUND_STREAMING_RADIUS_MIN_METERS = 200;
+const VIEWER_GROUND_STREAMING_RADIUS_HEIGHT_MAX_METERS = 2600;
+const VIEWER_GROUND_STREAMING_RADIUS_ABSOLUTE_CAP_METERS = 5000;
+const VIEWER_GROUND_STREAMING_RADIUS_FAR_CLIP_FACTOR = 0.58;
+const VIEWER_GROUND_STREAMING_RADIUS_FOV_BASE_DEGREES = 60;
+const VIEWER_GROUND_STREAMING_HEIGHT_START_METERS = 80;
+const VIEWER_GROUND_STREAMING_HEIGHT_END_METERS = 1200;
+const viewerGroundStreamingCameraWorldHelper = new THREE.Vector3();
+const viewerGroundStreamingGroundWorldHelper = new THREE.Vector3();
+
+function resolveViewerDynamicGroundStreamingRadiusMeters(
+  camera: THREE.PerspectiveCamera | null | undefined,
+  groundObject?: THREE.Object3D | null,
+): number {
+  if (!camera) {
+    return VIEWER_GROUND_STREAMING_RADIUS_MIN_METERS;
+  }
+
+  camera.getWorldPosition(viewerGroundStreamingCameraWorldHelper);
+  let relativeHeight = viewerGroundStreamingCameraWorldHelper.y;
+  if (groundObject) {
+    groundObject.getWorldPosition(viewerGroundStreamingGroundWorldHelper);
+    relativeHeight = viewerGroundStreamingCameraWorldHelper.y - viewerGroundStreamingGroundWorldHelper.y;
+  }
+
+  const normalizedHeight = THREE.MathUtils.clamp(
+    (Math.max(0, relativeHeight) - VIEWER_GROUND_STREAMING_HEIGHT_START_METERS)
+      / Math.max(1e-6, VIEWER_GROUND_STREAMING_HEIGHT_END_METERS - VIEWER_GROUND_STREAMING_HEIGHT_START_METERS),
+    0,
+    1,
+  );
+  const cameraLike = camera as THREE.PerspectiveCamera & { aspect?: number; fov?: number; far?: number };
+  const aspect = Number.isFinite(cameraLike.aspect) ? Math.max(0.2, Number(cameraLike.aspect)) : 16 / 9;
+  const fovDeg = Number.isFinite(cameraLike.fov) ? Number(cameraLike.fov) : VIEWER_GROUND_STREAMING_RADIUS_FOV_BASE_DEGREES;
+  const halfFovRad = THREE.MathUtils.degToRad(THREE.MathUtils.clamp(fovDeg, 25, 120) * 0.5);
+  const halfViewHeight = Math.max(0, relativeHeight) * Math.tan(halfFovRad);
+  const halfViewWidth = halfViewHeight * aspect;
+  const viewFootprintRadius = Math.sqrt(halfViewHeight * halfViewHeight + halfViewWidth * halfViewWidth);
+  const fovBaseHalfRad = THREE.MathUtils.degToRad(VIEWER_GROUND_STREAMING_RADIUS_FOV_BASE_DEGREES * 0.5);
+  const fovFactor = THREE.MathUtils.clamp(
+    Math.tan(halfFovRad) / Math.max(1e-6, Math.tan(fovBaseHalfRad)),
+    0.65,
+    2.2,
+  );
+  const radiusByHeight = THREE.MathUtils.lerp(
+    VIEWER_GROUND_STREAMING_RADIUS_MIN_METERS,
+    VIEWER_GROUND_STREAMING_RADIUS_HEIGHT_MAX_METERS,
+    normalizedHeight,
+  ) * fovFactor;
+  const desiredRadius = Math.max(radiusByHeight, viewFootprintRadius + 120);
+  const farDistance = Number.isFinite(cameraLike.far)
+    ? Math.max(0, Number(cameraLike.far))
+    : VIEWER_GROUND_STREAMING_RADIUS_ABSOLUTE_CAP_METERS;
+  const farClipCap = farDistance > 0
+    ? farDistance * VIEWER_GROUND_STREAMING_RADIUS_FAR_CLIP_FACTOR
+    : VIEWER_GROUND_STREAMING_RADIUS_ABSOLUTE_CAP_METERS;
+  const effectiveCap = Math.max(
+    VIEWER_GROUND_STREAMING_RADIUS_MIN_METERS,
+    Math.min(VIEWER_GROUND_STREAMING_RADIUS_ABSOLUTE_CAP_METERS, farClipCap),
+  );
+  return THREE.MathUtils.clamp(
+    desiredRadius,
+    VIEWER_GROUND_STREAMING_RADIUS_MIN_METERS,
+    effectiveCap,
+  );
+}
+
+function resolveViewerGroundStreamingDefinition(
+  camera: THREE.PerspectiveCamera | null | undefined,
+  groundObject: THREE.Object3D,
+  groundDefinition: GroundRuntimeDynamicMesh,
+): GroundRuntimeDynamicMesh {
+  const chunkSizeCandidate = Number(groundDefinition.chunkSizeMeters);
+  const chunkSizeMeters = Number.isFinite(chunkSizeCandidate) && chunkSizeCandidate > 0
+    ? chunkSizeCandidate
+    : 100;
+  const dynamicRadiusMeters = resolveViewerDynamicGroundStreamingRadiusMeters(camera, groundObject);
+  const dynamicRadiusChunks = Math.max(1, Math.ceil(dynamicRadiusMeters / chunkSizeMeters));
+  const authoredRadiusCandidate = Number(groundDefinition.renderRadiusChunks);
+  const authoredRadiusChunks = Number.isFinite(authoredRadiusCandidate) && authoredRadiusCandidate > 0
+    ? Math.max(1, Math.trunc(authoredRadiusCandidate))
+    : 1;
+  const renderRadiusChunks = Math.max(authoredRadiusChunks, dynamicRadiusChunks);
+  if (renderRadiusChunks === authoredRadiusChunks) {
+    return groundDefinition;
+  }
+  return {
+    ...groundDefinition,
+    renderRadiusChunks,
+  };
 }
 
 function resolveGroundViewportWorldSize(): { width: number; depth: number } | null {
@@ -5468,7 +6031,7 @@ function updateInstancedCullingAndLod(): void {
   if (!context) {
     return;
   }
-  const now = typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
+  const now = Date.now();
   const camera = context.camera;
   camera.updateMatrixWorld(true);
   instancedCullingProjView.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
@@ -6178,7 +6741,8 @@ function resetPhysicsWorld(): void {
       }
     });
   }
-  clearInfiniteGroundChunkCollisionBodies();
+  clearViewerCompiledGroundCollisionBodies();
+  compiledGroundCollisionRuntime.clear();
   vehicleInstances.clear();
   vehicleRaycastInWorld.clear();
   rigidbodyInstances.clear();
@@ -6597,7 +7161,7 @@ function ensureRigidbodyBindingForObject(nodeId: string, object: THREE.Object3D)
     return;
   }
   const node = resolveNodeById(nodeId);
-  if (shouldUseInfiniteGroundChunkCollisionStreaming(node)) {
+  if (node && isGroundDynamicMesh(node.dynamicMesh)) {
     removeRigidbodyInstance(nodeId);
     return;
   }
@@ -6726,7 +7290,7 @@ function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null):
   const rigidbodyNodes = collectRigidbodyNodes(document.nodes);
   const desiredIds = new Set<string>();
   rigidbodyNodes.forEach((node) => {
-    if (shouldUseInfiniteGroundChunkCollisionStreaming(node)) {
+    if (isGroundDynamicMesh(node.dynamicMesh)) {
       removeRigidbodyInstance(node.id);
       return;
     }
@@ -6844,6 +7408,7 @@ function stepPhysicsWorld(delta: number): number {
     }
   });
   let subSteps = 0;
+  const physicsStepStartedAt = Date.now();
   // Skip world.step() entirely when no dynamic body is awake and no vehicle/tour is active.
   // This eliminates all broadphase + solver cost while the scene is at rest.
   const hasActiveController = vehicleDriveActive.value || activeAutoTourNodeIds.size > 0;
@@ -6931,6 +7496,26 @@ function stepPhysicsWorld(delta: number): number {
       if (physicsAccumulator > PHYSICS_FIXED_TIMESTEP) {
         physicsAccumulator = PHYSICS_FIXED_TIMESTEP;
       }
+    }
+  }
+  const physicsStepElapsedMs = Date.now() - physicsStepStartedAt;
+  if (physicsStepElapsedMs >= 12) {
+    const now = Date.now();
+    if (now - lastPhysicsPerformanceLogAt >= 1500) {
+      console.warn(
+        '[SceneViewer] physics-step',
+        JSON.stringify({
+          elapsedMs: Math.round(physicsStepElapsedMs * 100) / 100,
+          subSteps,
+          worldBodyCount: physicsWorld.bodies.length,
+          rigidbodyInstanceCount: rigidbodyInstances.size,
+          vehicleInstanceCount: vehicleInstances.size,
+          vehicleRaycastCount: vehicleRaycastInWorld.size,
+          airWallBodyCount: airWallBodies.size,
+          gravityY: physicsWorld.gravity.y,
+        }),
+      );
+      lastPhysicsPerformanceLogAt = now;
     }
   }
   // Ensure vehicles are truly static after exiting drive/auto-tour.
@@ -8184,7 +8769,7 @@ function startTimedAnimation(
     onComplete();
     return;
   }
-  const startTime = typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now();
+  const startTime = Date.now();
   const raf = typeof requestAnimationFrame === 'function'
     ? requestAnimationFrame
     : ((callback: FrameRequestCallback) => {
@@ -8202,7 +8787,7 @@ function startTimedAnimation(
     activeBehaviorAnimations.delete(token);
   };
   const step = (timestamp: number) => {
-    const now = Number.isFinite(timestamp) ? timestamp : (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now());
+    const now = Number.isFinite(timestamp) ? timestamp : Date.now();
     const elapsed = Math.max(0, now - startTime);
     const alpha = Math.min(1, elapsed / durationMs);
     onUpdate(alpha);
@@ -8328,6 +8913,11 @@ type ProtagonistPoseOptions = {
   object?: THREE.Object3D | null;
 };
 
+function resolveProtagonistCameraY(worldY: number): number {
+  // Keep the authored protagonist elevation, then lift the camera to eye height.
+  return worldY + HUMAN_EYE_HEIGHT;
+}
+
 function syncProtagonistCameraPose(options: ProtagonistPoseOptions = {}): boolean {
   if (!options.force && protagonistPoseSynced) {
     return false;
@@ -8345,7 +8935,7 @@ function syncProtagonistCameraPose(options: ProtagonistPoseOptions = {}): boolea
   } else {
     protagonistPoseDirection.normalize();
   }
-  protagonistPosePosition.y = HUMAN_EYE_HEIGHT;
+  protagonistPosePosition.y = resolveProtagonistCameraY(protagonistPosePosition.y);
   protagonistPoseTarget.copy(protagonistPosePosition).addScaledVector(protagonistPoseDirection, CAMERA_FORWARD_OFFSET);
   protagonistPoseSynced = true;
   if (options.applyToCamera) {
@@ -10763,7 +11353,7 @@ async function waitForSceneReady(expectedSceneId: string, timeoutMs = 30000): Pr
 
     const stop = watch(
       () => [loading.value, sceneSwitching.value, currentSceneId.value] as const,
-      ([isLoading, isSwitching, sceneId]) => {
+      ([isLoading, isSwitching, sceneId]: readonly [boolean, boolean, string | null]) => {
         if (!isLoading && !isSwitching && sceneId === expected) {
           clearTimeout(timeout);
           stop();
@@ -11556,11 +12146,6 @@ function parseSceneDocument(payload: unknown): SceneJsonExportDocument {
   throw new Error('场景数据格式不正确');
 }
 
-const GROUND_HEIGHTMAP_SIDECAR_MAGIC = 0x48474d32;
-const GROUND_HEIGHTMAP_SIDECAR_VERSION = 2;
-const GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES = 32;
-const EMPTY_GROUND_BOUND = -1;
-
 function findFirstGroundDynamicMesh(document: SceneJsonExportDocument): GroundDynamicMesh | null {
   const stack = [...document.nodes];
   while (stack.length) {
@@ -11576,241 +12161,6 @@ function findFirstGroundDynamicMesh(document: SceneJsonExportDocument): GroundDy
     }
   }
   return null;
-}
-
-function hydrateGroundSidecarFromPackage(
-  pkg: ScenePackageUnzipped,
-  sceneEntry: { sceneId: string; path: string; groundHeightsPath?: string; groundScatterPath?: string; groundPaintPath?: string },
-  document: SceneJsonExportDocument,
-): SceneJsonExportDocument {
-  const definition = findFirstGroundDynamicMesh(document) as GroundRuntimeDynamicMesh | null;
-  if (!definition) {
-    return document;
-  }
-  if (!sceneEntry.groundHeightsPath) {
-    throw new Error(`场景 ${sceneEntry.sceneId} 缺少 ground 高度 sidecar 路径`);
-  }
-  const sidecarBytes = pkg.files[sceneEntry.groundHeightsPath];
-  if (!sidecarBytes) {
-    throw new Error(`场景 ${sceneEntry.sceneId} 缺少 ground 高度 sidecar 文件`);
-  }
-
-  const sidecarBuffer = sidecarBytes.buffer.slice(sidecarBytes.byteOffset, sidecarBytes.byteOffset + sidecarBytes.byteLength);
-  const vertexCount = getGroundVertexCount(definition.rows, definition.columns);
-  const expectedByteLength = GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES + vertexCount * Float64Array.BYTES_PER_ELEMENT * 2;
-  if (sidecarBuffer.byteLength !== expectedByteLength) {
-    throw new Error(
-      `场景 ${sceneEntry.sceneId} 的 ground sidecar 大小异常：期望 ${expectedByteLength}，实际 ${sidecarBuffer.byteLength}`,
-    );
-  }
-
-  const headerView = new DataView(sidecarBuffer, 0, GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES);
-  const magic = headerView.getUint32(0, true);
-  const version = headerView.getUint32(4, true);
-  if (magic !== GROUND_HEIGHTMAP_SIDECAR_MAGIC || version !== GROUND_HEIGHTMAP_SIDECAR_VERSION) {
-    throw new Error(`场景 ${sceneEntry.sceneId} 的 ground sidecar 头无效`);
-  }
-
-  const minRow = headerView.getInt32(8, true);
-  const maxRow = headerView.getInt32(12, true);
-  const minColumn = headerView.getInt32(16, true);
-  const maxColumn = headerView.getInt32(20, true);
-  const generatedAt = headerView.getFloat64(24, true);
-  const hasBounds = minRow !== EMPTY_GROUND_BOUND && maxRow !== EMPTY_GROUND_BOUND && minColumn !== EMPTY_GROUND_BOUND && maxColumn !== EMPTY_GROUND_BOUND;
-  const hasGeneratedAt = Number.isFinite(generatedAt);
-
-  definition.manualHeightMap = new Float64Array(sidecarBuffer, GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES, vertexCount);
-  definition.planningHeightMap = new Float64Array(
-    sidecarBuffer,
-    GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES + vertexCount * Float64Array.BYTES_PER_ELEMENT,
-    vertexCount,
-  );
-  definition.planningMetadata = hasBounds || hasGeneratedAt
-    ? {
-        contourBounds: hasBounds ? { minRow, maxRow, minColumn, maxColumn } : null,
-        generatedAt: hasGeneratedAt ? generatedAt : undefined,
-      }
-    : null;
-  definition.surfaceRevision = Number.isFinite(definition.surfaceRevision)
-    ? Math.max(0, Math.trunc(definition.surfaceRevision as number))
-    : 0;
-  (definition as GroundDynamicMesh & {
-    runtimeHydratedHeightState?: 'pristine' | 'dirty';
-    runtimeDisableOptimizedChunks?: boolean;
-  }).runtimeHydratedHeightState = 'pristine';
-  definition.runtimeDisableOptimizedChunks = false;
-
-  const scatterSidecarPath = typeof sceneEntry.groundScatterPath === 'string' ? sceneEntry.groundScatterPath.trim() : '';
-  if (!scatterSidecarPath) {
-    definition.terrainScatter = null;
-  } else {
-    const scatterSidecarBytes = pkg.files[scatterSidecarPath];
-    if (!scatterSidecarBytes) {
-      throw new Error(`场景 ${sceneEntry.sceneId} 缺少 ground scatter sidecar 文件`);
-    }
-    const scatterSidecarBuffer = new ArrayBuffer(scatterSidecarBytes.byteLength);
-    new Uint8Array(scatterSidecarBuffer).set(scatterSidecarBytes);
-    const scatterPayload = deserializeGroundScatterSidecar(scatterSidecarBuffer);
-    definition.terrainScatter = scatterPayload.terrainScatter;
-  }
-
-  const paintSidecarPath = typeof sceneEntry.groundPaintPath === 'string' ? sceneEntry.groundPaintPath.trim() : '';
-  if (!paintSidecarPath) {
-    definition.terrainPaint = null;
-    definition.groundSurfaceChunks = null;
-  } else {
-    const paintSidecarBytes = pkg.files[paintSidecarPath];
-    if (!paintSidecarBytes) {
-      throw new Error(`场景 ${sceneEntry.sceneId} 缺少 ground paint sidecar 文件`);
-    }
-    const paintSidecarBuffer = new ArrayBuffer(paintSidecarBytes.byteLength);
-    new Uint8Array(paintSidecarBuffer).set(paintSidecarBytes);
-    const paintPayload = deserializeGroundPaintSidecar(paintSidecarBuffer);
-    definition.terrainPaint = null;
-    definition.groundSurfaceChunks = paintPayload.groundSurfaceChunks ?? null;
-  }
-
-  return document;
-}
-
-let projectSceneSwitchToken = 0;
-
-async function switchToProjectScene(sceneId: string): Promise<void> {
-  projectSceneSwitchToken += 1;
-  const token = projectSceneSwitchToken;
-
-  const trimmed = (sceneId ?? '').trim();
-  if (!trimmed) {
-    return;
-  }
-  const entry = projectSceneIndex.get(trimmed) ?? null;
-  if (!entry) {
-    warnings.value = [...warnings.value, `未找到场景：${trimmed}`];
-    return;
-  }
-  loading.value = true;
-  error.value = null;
-  try {
-    if (entry.kind === 'embedded') {
-      if (token !== projectSceneSwitchToken) {
-        return;
-      }
-
-      const sceneOverrides = activeScenePackageAssetOverrides ?? undefined;
-      const terrain = entry.terrain ?? null;
-
-      previewPayload.value = {
-        document: entry.document,
-        title: entry.document.name || entry.name || '场景预览',
-        origin: 'scene-package',
-        assetOverrides: sceneOverrides,
-        terrain,
-        createdAt: entry.document.createdAt,
-        updatedAt: entry.document.updatedAt,
-      };
-      currentSceneId.value = entry.id;
-      return;
-    }
-    if (entry.kind === 'external') {
-      const document = await requestSceneDocument(entry.sceneJsonUrl);
-      if (token !== projectSceneSwitchToken) {
-        return;
-      }
-
-      // External scene JSON: clear any active scene-package overrides.
-      activeScenePackageAssetOverrides = null;
-
-      previewPayload.value = {
-        document,
-        title: document.name || entry.name || '场景预览',
-        origin: entry.sceneJsonUrl,
-        assetOverrides: undefined,
-        terrain: entry.terrain ?? null,
-        createdAt: document.createdAt,
-        updatedAt: document.updatedAt,
-      };
-      currentSceneId.value = entry.id;
-      return;
-    }
-  } finally {
-    if (token === projectSceneSwitchToken) {
-      loading.value = false;
-    }
-  }
-}
-
-async function loadProjectFromBundle(bundle: ScenePackageProjectData): Promise<void> {
-  error.value = null;
-  projectBundle.value = bundle;
-  projectSceneIndex.clear();
-  bundle.scenes.forEach((scene: ScenePackageSceneEntry) => {
-    if (scene && typeof scene.id === 'string') {
-      projectSceneIndex.set(scene.id, scene);
-    }
-  });
-
-  const initialId = bundle.project.defaultSceneId || bundle.project.sceneOrder?.[0] || null;
-  if (!initialId) {
-    error.value = '工程未设置默认场景';
-    previewPayload.value = null;
-    loading.value = false;
-    return;
-  }
-
-  requestedMode.value = 'project';
-  await switchToProjectScene(initialId);
-}
-
-function requestBinary(url: string): Promise<ArrayBuffer> {
-  return new Promise((resolve, reject) => {
-    if (sceneDownloadTask) {
-      sceneDownloadTask.abort();
-      sceneDownloadTask = null;
-    }
-    const task = uni.request({
-      url,
-      method: 'GET',
-      responseType: 'arraybuffer',
-      timeout: SCENE_DOWNLOAD_TIMEOUT,
-      success: (res: { statusCode?: number; data: unknown }) => {
-        const statusCode = typeof res.statusCode === 'number' ? res.statusCode : 200;
-        if (statusCode >= 400) {
-          reject(new Error(`场景包下载失败（${statusCode}）`));
-          return;
-        }
-        const buffer = res.data as ArrayBuffer;
-        if (!buffer || typeof buffer.byteLength !== 'number') {
-          reject(new Error('场景包下载失败（响应不是二进制数据）'));
-          return;
-        }
-        resolve(buffer);
-      },
-      fail: (requestError: { errMsg?: unknown } | null) => {
-        const message =
-          requestError && typeof requestError === 'object' && 'errMsg' in requestError
-            ? String((requestError as { errMsg: unknown }).errMsg)
-            : '场景包下载失败';
-        reject(new Error(message));
-      },
-      complete: () => {
-        sceneDownloadTask = null;
-      },
-    }) as SceneRequestTask;
-    sceneDownloadTask = task;
-    task?.onProgressUpdate?.((info: SceneDownloadProgress) => {
-      sceneDownload.phase = 'download';
-      if (typeof info.progress === 'number' && Number.isFinite(info.progress)) {
-        sceneDownload.percent = info.progress;
-        sceneDownload.label = `正在下载场景包… ${Math.max(0, Math.min(100, Math.round(info.progress)))}%`;
-      }
-      if (typeof info.totalBytesWritten === 'number') {
-        sceneDownload.loaded = info.totalBytesWritten;
-      }
-      if (typeof info.totalBytesExpectedToWrite === 'number') {
-        sceneDownload.total = info.totalBytesExpectedToWrite;
-      }
-    });
-  });
 }
 
 async function loadProjectFromScenePackageUrl(url: string, cacheKey?: string): Promise<void> {
@@ -11842,7 +12192,7 @@ async function loadProjectFromScenePackageUrl(url: string, cacheKey?: string): P
 
     sceneDownload.phase = 'download';
     sceneDownload.label = '正在下载场景包…';
-    const buffer = await requestBinary(url);
+    const buffer = await requestBinaryFromUrl(url);
     sceneDownload.phase = 'parse';
     sceneDownload.label = '正在解析场景包…';
     await loadProjectFromScenePackageBytes(buffer);
@@ -11981,40 +12331,6 @@ function parseScenePackageToProjectData(pkg: ScenePackageUnzipped): ScenePackage
       throw new Error(`场景包内场景数据无效：${sceneEntry.path}`);
     }
     const document = hydrateGroundSidecarFromPackage(pkg, sceneEntry, sceneRaw as SceneJsonExportDocument);
-    const terrain = readGroundTerrainManifestFromPackage(pkg, sceneEntry.groundTerrainManifestPath);
-    const groundChunkManifest = readGroundChunkManifestFromPackage(pkg, sceneEntry.groundChunkManifestPath);
-    if (terrain) {
-      const groundNode = Array.isArray(document.nodes)
-        ? document.nodes.find((node) => node?.dynamicMesh?.type === 'Ground')
-        : null;
-      if (groundNode) {
-        const userData = groundNode.userData && typeof groundNode.userData === 'object'
-          ? (groundNode.userData as Record<string, unknown>)
-          : {};
-        groundNode.userData = {
-          ...userData,
-          groundTerrainPackageManifest: terrain.manifest,
-          groundTerrainManifestPath: terrain.manifestPath,
-          groundTerrainTilesRootPath: terrain.manifest.terrainTilesRootPath,
-          groundCollisionPath: terrain.manifest.collisionManifestPath,
-        };
-      }
-    }
-    if (groundChunkManifest) {
-      const groundNode = Array.isArray(document.nodes)
-        ? document.nodes.find((node) => node?.dynamicMesh?.type === 'Ground')
-        : null;
-      if (groundNode) {
-        const userData = groundNode.userData && typeof groundNode.userData === 'object'
-          ? (groundNode.userData as Record<string, unknown>)
-          : {};
-        groundNode.userData = {
-          ...userData,
-          groundChunkManifest,
-          groundChunkManifestPath: sceneEntry.groundChunkManifestPath ?? null,
-        };
-      }
-    }
     const assetRegistry: Record<string, SceneAssetRegistryEntry> = {
       ...(document.assetRegistry ?? {}),
     };
@@ -12047,6 +12363,20 @@ function parseScenePackageToProjectData(pkg: ScenePackageUnzipped): ScenePackage
     const documentMeta = document as SceneJsonExportDocument & { createdAt?: unknown; updatedAt?: unknown };
     document.resourceSummary = buildDocumentResourceSummary(document);
     const id = sceneEntry.sceneId;
+    const terrain = sceneEntry.terrain ?? null;
+    const groundDefinition = findFirstGroundDynamicMesh(document) as GroundDynamicMesh | null;
+    const hasGround = Boolean(groundDefinition);
+    const compiledGroundPath = typeof sceneEntry.compiledGround?.manifestPath === 'string'
+      ? sceneEntry.compiledGround.manifestPath.trim()
+      : '';
+    if (
+      hasGround
+      && groundDefinition
+      && shouldUseCompiledGroundForViewer(groundDefinition, terrain?.datasetId ?? null)
+      && !compiledGroundPath
+    ) {
+      throw new Error(`Scene ${sceneEntry.sceneId} is missing compiled ground package`);
+    }
     scenes.push({
       kind: 'embedded',
       id,
@@ -12081,7 +12411,21 @@ async function loadProjectFromScenePackageBytes(buffer: ArrayBuffer): Promise<vo
   sceneDownload.label = '正在解析场景数据…';
   const projectData = parseScenePackageToProjectData(activeScenePackagePkg);
   sceneDownload.label = '正在组装场景索引…';
-  await loadProjectFromBundle(projectData);
+  projectBundle.value = projectData;
+  projectSceneIndex.clear();
+  projectData.scenes.forEach((scene) => {
+    projectSceneIndex.set(scene.id, scene);
+  });
+
+  const initialSceneId = projectData.project.defaultSceneId || projectData.project.sceneOrder[0] || null;
+  if (!initialSceneId) {
+    error.value = '工程未设置默认场景';
+    previewPayload.value = null;
+    return;
+  }
+
+  currentProjectId.value = projectData.project.id || currentProjectId.value;
+  await switchToProjectScene(initialSceneId);
 }
 
 async function loadProjectFromScenePackagePointer(pointer: ScenePackagePointer): Promise<void> {
@@ -12162,6 +12506,45 @@ function requestSceneDocument(url: string): Promise<SceneJsonExportDocument> {
   });
 }
 
+async function switchToProjectScene(sceneId: string): Promise<void> {
+  const trimmed = (sceneId ?? '').trim();
+  if (!trimmed) {
+    return;
+  }
+
+  const entry = projectSceneIndex.get(trimmed) ?? null;
+  if (!entry) {
+    warnings.value = [...warnings.value, `未找到场景：${trimmed}`];
+    return;
+  }
+
+  loading.value = true;
+  error.value = null;
+
+  try {
+    const document = entry.kind === 'embedded'
+      ? entry.document
+      : await requestSceneDocument(entry.sceneJsonUrl);
+
+    previewPayload.value = {
+      document,
+      title: document.name || entry.name || '场景预览',
+      origin: entry.kind === 'embedded' ? 'scene-package' : entry.sceneJsonUrl,
+      assetOverrides: activeScenePackageAssetOverrides ?? undefined,
+      terrain: entry.terrain ?? null,
+      createdAt: document.createdAt,
+      updatedAt: document.updatedAt,
+    };
+    currentSceneId.value = trimmed;
+  } catch (switchError) {
+    const message = switchError instanceof Error ? switchError.message : '场景切换失败';
+    error.value = message;
+    throw switchError;
+  } finally {
+    loading.value = false;
+  }
+}
+
 function resetSceneDownloadState(): void {
   sceneDownload.active = false;
   sceneDownload.phase = 'download';
@@ -12188,7 +12571,7 @@ function formatByteSize(value: number): string {
 
 watch(
   previewPayload,
-  (payload) => {
+  (payload: ScenePreviewPayload | null) => {
     if (!bootstrapFinished.value) {
       return;
     }
@@ -12941,7 +13324,7 @@ function startRenderLoop(
           if (cachedGroundBeforePhysics) {
             const groundObject = nodeObjectMap.get(cachedGroundBeforePhysics.nodeId) ?? null;
             if (groundObject) {
-              syncViewerInfiniteGroundChunkCollisions(groundObject, cachedGroundBeforePhysics.dynamicMesh, camera);
+              syncViewerCompiledGroundCollision(groundObject, camera);
             }
           }
           stepPhysicsWorld(deltaSeconds);
@@ -12963,22 +13346,38 @@ function startRenderLoop(
           updatePunchBadgeOverlayEntries(camera, deltaSeconds);
           syncSceneSignboards();
 
-        // Keep chunked ground meshes in sync with camera position.
+        // Use compiled/sculpted ground when a manifest is present; otherwise keep the
+        // flat-chunk InstancedMesh infinite terrain path active for non-compiled scenes.
         const cachedGround = dynamicGroundCache;
         if (cachedGround) {
           const groundObject = nodeObjectMap.get(cachedGround.nodeId) ?? null;
           if (groundObject) {
-            syncGroundChunkLoadingMode(groundObject, cachedGround.dynamicMesh, camera);
-            syncViewerInfiniteGroundChunkManifest(groundObject, cachedGround.dynamicMesh, camera);
-            if (debugEnabled.value && debugMode.value === 'full') {
-              syncGroundChunkDebugCounters(groundObject, cachedGround.dynamicMesh, camera);
+            const streamingGroundDefinition = resolveViewerGroundStreamingDefinition(
+              camera,
+              groundObject,
+              cachedGround.dynamicMesh,
+            );
+            syncViewerCompiledGroundRender(groundObject, streamingGroundDefinition, camera);
+            const hasCompiledGroundManifest = resolveViewerCompiledGroundManifest(groundObject) !== null;
+            if (hasCompiledGroundManifest) {
+              clearGroundFlatChunkBatches(groundObject);
+            } else {
+              syncGroundChunkLoadingMode(
+                groundObject,
+                streamingGroundDefinition,
+                camera,
+                isWeChatMiniProgram
+                  ? {
+                      radius: WECHAT_READONLY_TERRAIN_FLAT_TILING_RADIUS_CHUNKS,
+                      budget: WECHAT_READONLY_TERRAIN_CHUNK_SYNC_BUDGET,
+                    }
+                  : undefined,
+              );
             }
           }
         }
 
-        const instancingNow = typeof performance !== 'undefined' && typeof performance.now === 'function'
-          ? performance.now()
-          : Date.now();
+        const instancingNow = Date.now();
           updateLazyPlaceholders(deltaSeconds);
         if (shouldRunTerrainScatterUpdate(camera, instancingNow)) {
           terrainScatterRuntime.update(camera, resolveGroundMeshObject);

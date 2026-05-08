@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import type { GroundChunkManifest, QuantizedTerrainDatasetRootManifest, SceneNode } from '@schema'
+import type { CompiledGroundManifest, GroundChunkManifest, QuantizedTerrainDatasetRootManifest, SceneNode } from '@schema'
 import type { SceneSummary } from '@/types/scene-summary'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import { toRaw, watch } from 'vue'
@@ -154,7 +154,7 @@ async function mapWithConcurrency<T, R>(
 }
 
 const DB_NAME = 'harmony-editor-scenes'
-const DB_VERSION = 9
+const DB_VERSION = 10
 const STORE_METADATA = 'sceneMetadata'
 const STORE_DOCUMENTS = 'sceneDocuments'
 const STORE_GROUND_HEIGHTMAPS = 'sceneGroundHeightmaps'
@@ -164,6 +164,7 @@ const STORE_GROUND_CHUNK_MANIFESTS = 'sceneGroundChunkManifests'
 const STORE_GROUND_CHUNK_DATA = 'sceneGroundChunkData'
 const STORE_TERRAIN_DATASET_MANIFESTS = 'sceneTerrainDatasetManifests'
 const STORE_TERRAIN_DATASET_REGION_PACKS = 'sceneTerrainDatasetRegionPacks'
+const STORE_COMPILED_GROUND_BUNDLES = 'sceneCompiledGroundBundles'
 
 const memoryWorkspaceDocuments = new Map<string, Map<string, StoredSceneDocument>>()
 const memoryWorkspaceGroundHeightSidecars = new Map<string, Map<string, ArrayBuffer>>()
@@ -173,6 +174,13 @@ const memoryWorkspaceGroundChunkManifests = new Map<string, Map<string, GroundCh
 const memoryWorkspaceGroundChunkData = new Map<string, Map<string, ArrayBuffer>>()
 const memoryWorkspaceTerrainDatasetManifests = new Map<string, Map<string, QuantizedTerrainDatasetRootManifest>>()
 const memoryWorkspaceTerrainDatasetRegionPacks = new Map<string, Map<string, ArrayBuffer>>()
+type StoredSceneCompiledGroundBundle = {
+  buildKey: string
+  sourceSignature: string
+  manifest: CompiledGroundManifest
+  files: Array<{ path: string; buffer: ArrayBuffer }>
+}
+const memoryWorkspaceCompiledGroundBundles = new Map<string, Map<string, StoredSceneCompiledGroundBundle>>()
 const workspaceDbPromises = new Map<string, Promise<IDBDatabase>>()
 const workspaceDbInstances = new Map<string, IDBDatabase>()
 
@@ -229,6 +237,15 @@ function getMemoryGroundChunkData(workspaceId: string): Map<string, ArrayBuffer>
   if (!bucket) {
     bucket = new Map()
     memoryWorkspaceGroundChunkData.set(workspaceId, bucket)
+  }
+  return bucket
+}
+
+function getMemoryCompiledGroundBundles(workspaceId: string): Map<string, StoredSceneCompiledGroundBundle> {
+  let bucket = memoryWorkspaceCompiledGroundBundles.get(workspaceId)
+  if (!bucket) {
+    bucket = new Map()
+    memoryWorkspaceCompiledGroundBundles.set(workspaceId, bucket)
   }
   return bucket
 }
@@ -404,6 +421,9 @@ function openDatabase(workspaceId: string): Promise<IDBDatabase> {
           if (!db.objectStoreNames.contains(STORE_TERRAIN_DATASET_REGION_PACKS)) {
             db.createObjectStore(STORE_TERRAIN_DATASET_REGION_PACKS, { keyPath: 'id' })
           }
+          if (!db.objectStoreNames.contains(STORE_COMPILED_GROUND_BUNDLES)) {
+            db.createObjectStore(STORE_COMPILED_GROUND_BUNDLES, { keyPath: 'id' })
+          }
           if (request.transaction && oldVersion < 3) {
             request.transaction.objectStore(STORE_METADATA).clear()
             request.transaction.objectStore(STORE_DOCUMENTS).clear()
@@ -434,6 +454,7 @@ async function deleteWorkspaceStorage(workspaceId: string): Promise<void> {
     memoryWorkspaceGroundChunkData.delete(workspaceId)
     memoryWorkspaceTerrainDatasetManifests.delete(workspaceId)
     memoryWorkspaceTerrainDatasetRegionPacks.delete(workspaceId)
+    memoryWorkspaceCompiledGroundBundles.delete(workspaceId)
     return
   }
   const dbName = getWorkspaceDbName(workspaceId)
@@ -459,6 +480,7 @@ async function deleteWorkspaceStorage(workspaceId: string): Promise<void> {
   memoryWorkspaceGroundChunkData.delete(workspaceId)
   memoryWorkspaceTerrainDatasetManifests.delete(workspaceId)
   memoryWorkspaceTerrainDatasetRegionPacks.delete(workspaceId)
+  memoryWorkspaceCompiledGroundBundles.delete(workspaceId)
 }
 
 async function readSceneGroundHeightSidecar(workspaceId: string, sceneId: string): Promise<ArrayBuffer | null> {
@@ -750,6 +772,67 @@ async function writeSceneTerrainDatasetRegionPack(
     tx.oncomplete = () => resolve()
     tx.onerror = () => reject(tx.error ?? new Error('Failed to write scene terrain dataset region pack'))
     tx.onabort = () => reject(tx.error ?? new Error('Scene terrain dataset region pack write aborted'))
+  })
+}
+
+function cloneStoredCompiledGroundBundle(bundle: StoredSceneCompiledGroundBundle): StoredSceneCompiledGroundBundle {
+  return {
+    buildKey: bundle.buildKey,
+    sourceSignature: bundle.sourceSignature,
+    manifest: cloneForIndexedDb(bundle.manifest),
+    files: Array.isArray(bundle.files)
+      ? bundle.files.map((entry) => ({
+          path: entry.path,
+          buffer: cloneArrayBuffer(entry.buffer),
+        }))
+      : [],
+  }
+}
+
+async function readSceneCompiledGroundBundle(
+  workspaceId: string,
+  sceneId: string,
+): Promise<StoredSceneCompiledGroundBundle | null> {
+  if (!isIndexedDbAvailable()) {
+    const bundle = getMemoryCompiledGroundBundles(workspaceId).get(sceneId)
+    return bundle ? cloneStoredCompiledGroundBundle(bundle) : null
+  }
+  const db = await openDatabase(workspaceId)
+  const tx = db.transaction(STORE_COMPILED_GROUND_BUNDLES, 'readonly')
+  const store = tx.objectStore(STORE_COMPILED_GROUND_BUNDLES)
+  const entry = await requestToPromise<{ id: string } & StoredSceneCompiledGroundBundle | undefined>(store.get(sceneId))
+  return entry ? cloneStoredCompiledGroundBundle(entry) : null
+}
+
+async function writeSceneCompiledGroundBundle(
+  workspaceId: string,
+  sceneId: string,
+  bundle: StoredSceneCompiledGroundBundle | null,
+): Promise<void> {
+  if (!isIndexedDbAvailable()) {
+    const bucket = getMemoryCompiledGroundBundles(workspaceId)
+    if (bundle) {
+      bucket.set(sceneId, cloneStoredCompiledGroundBundle(bundle))
+    } else {
+      bucket.delete(sceneId)
+    }
+    return
+  }
+  const db = await openDatabase(workspaceId)
+  const tx = db.transaction(STORE_COMPILED_GROUND_BUNDLES, 'readwrite')
+  const store = tx.objectStore(STORE_COMPILED_GROUND_BUNDLES)
+  if (bundle) {
+    store.put({
+      id: sceneId,
+      ...cloneStoredCompiledGroundBundle(bundle),
+    })
+  } else {
+    store.delete(sceneId)
+  }
+  await new Promise<void>((resolve, reject) => {
+    tx.oncomplete = () => resolve()
+    tx.onerror = () => reject(tx.error ?? new Error('Failed to write scene compiled ground bundle'))
+    tx.onabort = () => reject(tx.error ?? new Error('Scene compiled ground bundle write aborted'))
   })
 }
 
@@ -1351,6 +1434,7 @@ async function removeSceneDocument(workspaceId: string, id: string): Promise<voi
     Array.from(regionPackBucket.keys())
       .filter((key) => key.startsWith(`${id}:`))
       .forEach((key) => regionPackBucket.delete(key))
+    getMemoryCompiledGroundBundles(workspaceId).delete(id)
     return
   }
   const db = await openDatabase(workspaceId)
@@ -1364,6 +1448,7 @@ async function removeSceneDocument(workspaceId: string, id: string): Promise<voi
     STORE_GROUND_CHUNK_DATA,
     STORE_TERRAIN_DATASET_MANIFESTS,
     STORE_TERRAIN_DATASET_REGION_PACKS,
+    STORE_COMPILED_GROUND_BUNDLES,
   ], 'readwrite')
   const docs = tx.objectStore(STORE_DOCUMENTS)
   const meta = tx.objectStore(STORE_METADATA)
@@ -1374,6 +1459,7 @@ async function removeSceneDocument(workspaceId: string, id: string): Promise<voi
   const chunkData = tx.objectStore(STORE_GROUND_CHUNK_DATA)
   const terrainManifests = tx.objectStore(STORE_TERRAIN_DATASET_MANIFESTS)
   const terrainRegionPacks = tx.objectStore(STORE_TERRAIN_DATASET_REGION_PACKS)
+  const compiledGroundBundles = tx.objectStore(STORE_COMPILED_GROUND_BUNDLES)
   docs.delete(id)
   meta.delete(id)
   heightmaps.delete(id)
@@ -1381,6 +1467,7 @@ async function removeSceneDocument(workspaceId: string, id: string): Promise<voi
   paints.delete(id)
   manifests.delete(id)
   terrainManifests.delete(id)
+  compiledGroundBundles.delete(id)
   const chunkKeys = await requestToPromise<IDBValidKey[]>(chunkData.getAllKeys())
   chunkKeys
     .filter((key): key is string => typeof key === 'string' && key.startsWith(`${id}:`))
@@ -1788,6 +1875,46 @@ export const useScenesStore = defineStore('scenes', {
     async loadTerrainDatasetRegionPack(sceneId: string, regionKey: string): Promise<ArrayBuffer | null> {
       return await readSceneTerrainDatasetRegionPack(this.workspaceId, sceneId, regionKey)
     },
+    async loadCompiledGroundBundle(sceneId: string): Promise<{
+      buildKey: string
+      sourceSignature: string
+      manifest: CompiledGroundManifest
+      files: Record<string, ArrayBuffer>
+    } | null> {
+      const bundle = await readSceneCompiledGroundBundle(this.workspaceId, sceneId)
+      if (!bundle) {
+        return null
+      }
+      return {
+        buildKey: bundle.buildKey,
+        sourceSignature: bundle.sourceSignature,
+        manifest: bundle.manifest,
+        files: Object.fromEntries(bundle.files.map((entry) => [entry.path, entry.buffer])),
+      }
+    },
+    async saveCompiledGroundBundle(
+      sceneId: string,
+      bundle: {
+        buildKey: string
+        sourceSignature: string
+        manifest: CompiledGroundManifest
+        files: Record<string, ArrayBuffer>
+      } | null,
+    ): Promise<void> {
+      if (!bundle) {
+        await writeSceneCompiledGroundBundle(this.workspaceId, sceneId, null)
+        return
+      }
+      await writeSceneCompiledGroundBundle(this.workspaceId, sceneId, {
+        buildKey: bundle.buildKey,
+        sourceSignature: bundle.sourceSignature,
+        manifest: bundle.manifest,
+        files: Object.entries(bundle.files).map(([path, buffer]) => ({
+          path,
+          buffer,
+        })),
+      })
+    },
     async saveTerrainDatasetRegionPack(
       sceneId: string,
       regionKey: string,
@@ -1826,14 +1953,18 @@ export const useScenesStore = defineStore('scenes', {
       )
 
       await writeSceneTerrainDatasetManifest(this.workspaceId, sceneId, manifest)
-      for (const regionKey of existingRegionKeys) {
-        if (!nextRegionKeys.has(regionKey)) {
-          await writeSceneTerrainDatasetRegionPack(this.workspaceId, sceneId, regionKey, null)
+      const writeRegionPackBatch = async (entries: Array<[string, ArrayBuffer | null]>) => {
+        const batchSize = 8
+        for (let index = 0; index < entries.length; index += batchSize) {
+          await Promise.all(entries.slice(index, index + batchSize).map(([regionKey, buffer]) => (
+            writeSceneTerrainDatasetRegionPack(this.workspaceId, sceneId, regionKey, buffer)
+          )))
         }
       }
-      for (const [regionKey, buffer] of Object.entries(regionPacks)) {
-        await writeSceneTerrainDatasetRegionPack(this.workspaceId, sceneId, regionKey, buffer ?? null)
-      }
+      await writeRegionPackBatch(Array.from(existingRegionKeys)
+        .filter((regionKey) => !nextRegionKeys.has(regionKey))
+        .map((regionKey) => [regionKey, null]))
+      await writeRegionPackBatch(Object.entries(regionPacks).map(([regionKey, buffer]) => [regionKey, buffer ?? null]))
 
       if (options.syncServer !== false && this.workspaceType === 'user') {
         const sceneStore = useSceneStore()

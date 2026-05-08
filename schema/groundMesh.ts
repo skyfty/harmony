@@ -28,6 +28,7 @@ import {
   type GroundHeightMap,
   type GroundPlanningMetadata,
   type GroundLocalEditTileData,
+  type GroundLocalEditTileMap,
   type GroundOptimizedMeshChunkData,
   type GroundOptimizedMeshData,
   type GroundRuntimeDynamicMesh,
@@ -38,6 +39,7 @@ import { addMesh as markInstancedBoundsDirty } from './instancedBoundsTracker'
 import {
   computeGroundBaseHeightAtVertex,
   computeGroundBaseHeightRegion,
+  sampleGroundBaseHeightAtWorld,
   type GroundBaseHeightRegion,
   normalizeGroundGenerationSettings,
 } from './groundGeneration'
@@ -48,9 +50,30 @@ const DEFAULT_GROUND_CHUNK_CELLS = 100
 const DEFAULT_GROUND_CHUNK_RADIUS_METERS = 200
 const GROUND_TRIANGLE_SLICE_EPSILON = 1e-6
 const GROUND_TRIANGLE_SLICE_PLANAR_TOLERANCE = 0.004
-const GROUND_FLAT_TILING_RADIUS_MULTIPLIER = 8
 const GROUND_FLAT_TILING_MIN_RADIUS_CHUNKS = 32
+const GROUND_FLAT_TILING_BUFFER_MIN_CHUNKS = 8
+const GROUND_FLAT_TILING_BUFFER_FACTOR = 0.5
+const GROUND_FLAT_TILING_RELEASE_BUFFER_MIN_CHUNKS = 12
+const GROUND_FLAT_TILING_RELEASE_BUFFER_FACTOR = 0.35
+const GROUND_FLAT_CHUNK_ASYNC_BUILD_BATCH_SIZE = 4096
 const GROUND_LOCAL_EDIT_TILE_COVERAGE_BUCKET_CHUNKS = 4
+
+type GroundLocalEditTileCache = {
+  tiles: GroundLocalEditTileData[]
+  lookup: Map<string, GroundLocalEditTileData>
+}
+
+type GroundLocalEditTileCoverageIndexCache = {
+  cacheKey: string
+  index: Map<string, GroundLocalEditTileData[]>
+}
+
+const EMPTY_GROUND_LOCAL_EDIT_TILE_CACHE: GroundLocalEditTileCache = {
+  tiles: [],
+  lookup: new Map<string, GroundLocalEditTileData>(),
+}
+const groundLocalEditTileCacheBySource = new WeakMap<GroundLocalEditTileMap, GroundLocalEditTileCache>()
+const groundLocalEditTileCoverageIndexBySource = new WeakMap<GroundLocalEditTileMap, GroundLocalEditTileCoverageIndexCache>()
 
 type GroundChunkKey = string
 
@@ -96,23 +119,26 @@ type GroundRuntimeState = {
   chunks: Map<GroundChunkKey, GroundChunkRuntime>
   flatChunkBatches: Map<string, GroundFlatChunkBatchRuntime>
   flatTilingInitialized: boolean
+  flatTilingVersion: number
   flatTilingMinChunkRow: number
   flatTilingMaxChunkRow: number
   flatTilingMinChunkColumn: number
   flatTilingMaxChunkColumn: number
+  flatChunkKeys: Set<string>
+  lastFlatChunkSyncTilingVersion: number
+  lastFlatChunkSyncHiddenChunkKeysVersion: number
   hiddenChunkKeys: Set<string>
   hiddenChunkKeysVersion: number
   visibleChunkKeysCache: string[]
   visibleChunkKeysVersion: number
   visibleChunkKeysCacheVersion: number
+  visibleChunkSignatureCache: string
+  visibleChunkSignatureCacheVersion: number
   lastChunkUpdateAt: number
 
   desiredSignature: string
   lastCameraLocalX: number
   lastCameraLocalZ: number
-  lastDebugLogAt: number
-  lastDebugLogSignature: string
-
   pendingCreates: Array<{ key: GroundChunkKey; chunkRow: number; chunkColumn: number; priority: number; distSq: number }>
   pendingDestroys: Array<{ key: GroundChunkKey; distSq: number }>
 
@@ -125,16 +151,140 @@ type GroundFlatChunkBatchRuntime = {
   spec: GroundChunkSpec
   mesh: THREE.InstancedMesh
   chunkKeys: string[]
+  pendingChunkKeys: Set<string>
   instanceCapacity: number
+  instanceHeightCache: Map<string, number>
+  asyncBuildInFlight: boolean
 }
 
+type GroundFlatTilingExpansion = {
+  hadPreviousBounds: boolean
+  previousMinChunkRow: number
+  previousMaxChunkRow: number
+  previousMinChunkColumn: number
+  previousMaxChunkColumn: number
+  nextMinChunkRow: number
+  nextMaxChunkRow: number
+  nextMinChunkColumn: number
+  nextMaxChunkColumn: number
+}
+
+type GroundWorldBoundsCacheEntry = {
+  key: string
+  bounds: ReturnType<typeof resolveGroundWorldBounds>
+}
+
+type GroundWorkingGridSizeCacheEntry = {
+  key: string
+  gridSize: { rows: number; columns: number }
+}
+
+type GroundDefinitionStructureSignatureCacheEntry = {
+  baseKey: string
+  localEditTiles: GroundLocalEditTileMap | null
+  signature: string
+}
+
+type GroundHeightSamplingContext = {
+  bounds: ReturnType<typeof resolveGroundWorldBounds>
+  cellSize: number
+  rows: number
+  columns: number
+  terrainSampler: GroundTerrainHeightSampler | null
+}
+
+export type GroundFlatChunkInstanceMatrixBuildResult = {
+  chunkKeys: string[]
+  matrices: Float32Array
+}
+
+export type GroundFlatChunkInstanceMatrixBuilder = (params: {
+  definition: GroundRuntimeDynamicMesh
+  definitionSignature: string
+  chunkKeys: string[]
+}) => Promise<GroundFlatChunkInstanceMatrixBuildResult> | null
+
 const groundRuntimeStateMap = new WeakMap<THREE.Object3D, GroundRuntimeState>()
+const groundWorldBoundsCache = new WeakMap<object, GroundWorldBoundsCacheEntry>()
+const groundWorkingGridSizeCache = new WeakMap<object, GroundWorkingGridSizeCacheEntry>()
+const groundDefinitionStructureSignatureCache = new WeakMap<object, GroundDefinitionStructureSignatureCacheEntry>()
+const runtimeChunkIndexCache = new Map<string, { row: number; column: number }>()
+let groundFlatChunkInstanceMatrixBuilder: GroundFlatChunkInstanceMatrixBuilder | null = null
 let cachedPrototypeMesh: THREE.Mesh | null = null
 const infiniteGroundCameraQuaternion = new THREE.Quaternion()
-const groundFlatChunkInstanceMatrix = new THREE.Matrix4()
-const groundFlatChunkInstancePosition = new THREE.Vector3()
-const groundFlatChunkInstanceRotation = new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0))
-const groundFlatChunkInstanceScale = new THREE.Vector3(1, 1, 1)
+const groundFlatChunkInstanceMatrixBase = Float32Array.from(
+  new THREE.Matrix4()
+    .compose(
+      new THREE.Vector3(0, 0, 0),
+      new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0)),
+      new THREE.Vector3(1, 1, 1),
+    )
+    .elements,
+)
+
+function resolveGroundWorldBoundsCached(
+  definition: Pick<GroundDynamicMesh, 'worldBounds' | 'chunkSizeMeters' | 'renderRadiusChunks' | 'collisionRadiusChunks'>,
+): ReturnType<typeof resolveGroundWorldBounds> {
+  const rawBounds = definition.worldBounds
+  const key = rawBounds && typeof rawBounds === 'object'
+    ? [
+      Number(rawBounds.minX),
+      Number(rawBounds.maxX),
+      Number(rawBounds.minZ),
+      Number(rawBounds.maxZ),
+      Number(definition.chunkSizeMeters),
+      Number(definition.renderRadiusChunks),
+      Number(definition.collisionRadiusChunks),
+    ].join('|')
+    : [
+      'none',
+      Number(definition.chunkSizeMeters),
+      Number(definition.renderRadiusChunks),
+      Number(definition.collisionRadiusChunks),
+    ].join('|')
+  const cached = groundWorldBoundsCache.get(definition as object)
+  if (cached?.key === key) {
+    return cached.bounds
+  }
+  const bounds = resolveGroundWorldBounds(definition)
+  groundWorldBoundsCache.set(definition as object, { key, bounds })
+  return bounds
+}
+
+function resolveGroundWorkingGridSizeCached(
+  definition: Pick<GroundDynamicMesh, 'cellSize' | 'worldBounds' | 'chunkSizeMeters' | 'renderRadiusChunks' | 'collisionRadiusChunks'>,
+): { rows: number; columns: number } {
+  const bounds = resolveGroundWorldBoundsCached(definition)
+  const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
+  const key = [
+    cellSize,
+    bounds.minX,
+    bounds.maxX,
+    bounds.minZ,
+    bounds.maxZ,
+  ].join('|')
+  const cached = groundWorkingGridSizeCache.get(definition as object)
+  if (cached?.key === key) {
+    return cached.gridSize
+  }
+  const gridSize = {
+    rows: Math.max(1, Math.round((bounds.maxZ - bounds.minZ) / cellSize)),
+    columns: Math.max(1, Math.round((bounds.maxX - bounds.minX) / cellSize)),
+  }
+  groundWorkingGridSizeCache.set(definition as object, { key, gridSize })
+  return gridSize
+}
+
+function createGroundHeightSamplingContext(definition: GroundRuntimeDynamicMesh): GroundHeightSamplingContext {
+  const gridSize = resolveGroundWorkingGridSizeCached(definition)
+  return {
+    bounds: resolveGroundWorldBoundsCached(definition),
+    cellSize: Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1,
+    rows: gridSize.rows,
+    columns: gridSize.columns,
+    terrainSampler: (definition.runtimeTerrainHeightSampler as GroundTerrainHeightSampler | null | undefined) ?? null,
+  }
+}
 
 function resolveGroundGridWorldBounds(
   definition: Pick<GroundDynamicMesh, 'worldBounds' | 'chunkSizeMeters' | 'renderRadiusChunks' | 'collisionRadiusChunks'>,
@@ -243,27 +393,33 @@ function groundChunkKey(chunkRow: number, chunkColumn: number): GroundChunkKey {
 function resolveRuntimeChunkIndexFromRuntimeKey(
   key: string,
 ): { row: number; column: number } | null {
-  const parts = key.split(':')
-  if (parts.length !== 2) {
+  const cached = runtimeChunkIndexCache.get(key)
+  if (cached) {
+    return cached
+  }
+  const separatorIndex = key.indexOf(':')
+  if (separatorIndex <= 0 || separatorIndex >= key.length - 1 || key.indexOf(':', separatorIndex + 1) !== -1) {
     return null
   }
-  const row = Number(parts[0])
-  const column = Number(parts[1])
+  const row = Number(key.slice(0, separatorIndex))
+  const column = Number(key.slice(separatorIndex + 1))
   if (!Number.isFinite(row) || !Number.isFinite(column)) {
     return null
   }
-  return {
+  const resolved = {
     row: Math.trunc(row),
     column: Math.trunc(column),
   }
+  runtimeChunkIndexCache.set(key, resolved)
+  return resolved
 }
 
 function resolveSharedGroundChunkKeyFromRuntimeKey(key: string): string | null {
-  const indices = resolveRuntimeChunkIndexFromRuntimeKey(key)
-  if (!indices) {
+  const separatorIndex = key.indexOf(':')
+  if (separatorIndex <= 0 || separatorIndex >= key.length - 1) {
     return null
   }
-  return `${indices.column}:${indices.row}`
+  return `${key.slice(separatorIndex + 1)}:${key.slice(0, separatorIndex)}`
 }
 
 function resolveRuntimeGroundChunkKeyFromSharedKey(key: string): string | null {
@@ -316,12 +472,16 @@ function resolveOptimizedMesh(definition: GroundDynamicMesh | null | undefined):
   return optimizedMesh
 }
 
+function invalidateGroundDefinitionStructureSignature(definition: GroundDynamicMesh): void {
+  groundDefinitionStructureSignatureCache.delete(definition as object)
+}
+
 function definitionStructureSignature(definition: GroundDynamicMesh): string {
-  const gridSize = resolveGroundWorkingGridSize(definition)
+  const gridSize = resolveGroundWorkingGridSizeCached(definition)
   const columns = gridSize.columns
   const rows = gridSize.rows
-    const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1
-  const bounds = resolveGroundWorldBounds(definition)
+  const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1
+  const bounds = resolveGroundWorldBoundsCached(definition)
   const width = bounds.maxX - bounds.minX
   const depth = bounds.maxZ - bounds.minZ
   const runtimeDefinition = definition as GroundRuntimeDynamicMesh
@@ -336,6 +496,26 @@ function definitionStructureSignature(definition: GroundDynamicMesh): string {
     ? runtimeDefinition.runtimeLoadedTileKeys.length
     : 0
   const tileResolution = Math.trunc(resolveGroundEditTileResolution(definition))
+  const localEditTileSource = runtimeDefinition.localEditTiles && typeof runtimeDefinition.localEditTiles === 'object'
+    ? runtimeDefinition.localEditTiles
+    : null
+  const baseKey = [
+    columns,
+    rows,
+    cellSize.toFixed(6),
+    width.toFixed(6),
+    depth.toFixed(6),
+    surfaceRevision,
+    optimizedSignature,
+    optimizedChunkState,
+    hydratedHeightState,
+    tileResolution,
+    loadedTileCount,
+  ].join('|')
+  const cached = groundDefinitionStructureSignatureCache.get(definition as object)
+  if (cached?.baseKey === baseKey && cached.localEditTiles === localEditTileSource) {
+    return cached.signature
+  }
   const localEditTiles = runtimeDefinition.localEditTiles && typeof runtimeDefinition.localEditTiles === 'object'
     ? Object.values(runtimeDefinition.localEditTiles)
     : []
@@ -345,7 +525,21 @@ function definitionStructureSignature(definition: GroundDynamicMesh): string {
       return Number.isFinite(updatedAt) ? Math.max(maxUpdatedAt, Math.trunc(updatedAt)) : maxUpdatedAt
     }, 0)}`
     : 'none'
-  return `${columns}|${rows}|${cellSize.toFixed(6)}|${width.toFixed(6)}|${depth.toFixed(6)}|${surfaceRevision}|${optimizedSignature}|${optimizedChunkState}|${hydratedHeightState}|${tileResolution}|${loadedTileCount}|${localEditSignature}`
+  const signature = `${baseKey}|${localEditSignature}`
+  groundDefinitionStructureSignatureCache.set(definition as object, {
+    baseKey,
+    localEditTiles: localEditTileSource,
+    signature,
+  })
+  return signature
+}
+
+export function resolveGroundDefinitionStructureSignature(definition: GroundDynamicMesh): string {
+  return definitionStructureSignature(definition)
+}
+
+export function setGroundFlatChunkInstanceMatrixBuilder(builder: GroundFlatChunkInstanceMatrixBuilder | null): void {
+  groundFlatChunkInstanceMatrixBuilder = typeof builder === 'function' ? builder : null
 }
 
 function resolveInfiniteChunkSizeMeters(definition: GroundDynamicMesh): number {
@@ -373,14 +567,28 @@ function resolveInfiniteRenderRadiusChunks(definition: GroundDynamicMesh): numbe
 
 function resolveInfiniteFlatTilingRadiusChunks(definition: GroundDynamicMesh): number {
   const baseRadius = resolveInfiniteRenderRadiusChunks(definition)
-  return Math.max(GROUND_FLAT_TILING_MIN_RADIUS_CHUNKS, Math.trunc(baseRadius * GROUND_FLAT_TILING_RADIUS_MULTIPLIER))
+  const bufferChunks = Math.max(
+    GROUND_FLAT_TILING_BUFFER_MIN_CHUNKS,
+    Math.ceil(baseRadius * GROUND_FLAT_TILING_BUFFER_FACTOR),
+  )
+  return Math.max(GROUND_FLAT_TILING_MIN_RADIUS_CHUNKS, baseRadius + bufferChunks)
+}
+
+function resolveInfiniteFlatTilingReleaseRadiusChunks(definition: GroundDynamicMesh): number {
+  const loadRadiusChunks = resolveInfiniteFlatTilingRadiusChunks(definition)
+  const baseRadius = resolveInfiniteRenderRadiusChunks(definition)
+  const releaseBufferChunks = Math.max(
+    GROUND_FLAT_TILING_RELEASE_BUFFER_MIN_CHUNKS,
+    Math.ceil(baseRadius * GROUND_FLAT_TILING_RELEASE_BUFFER_FACTOR),
+  )
+  return loadRadiusChunks + releaseBufferChunks
 }
 
 function updateInfiniteFlatTilingBounds(
   state: GroundRuntimeState,
   cameraChunkCoord: { chunkX: number; chunkZ: number },
   loadRadiusChunks: number,
-): void {
+): GroundFlatTilingExpansion | null {
   const minChunkRow = Math.trunc(cameraChunkCoord.chunkZ - loadRadiusChunks)
   const maxChunkRow = Math.trunc(cameraChunkCoord.chunkZ + loadRadiusChunks)
   const minChunkColumn = Math.trunc(cameraChunkCoord.chunkX - loadRadiusChunks)
@@ -388,17 +596,55 @@ function updateInfiniteFlatTilingBounds(
 
   if (!state.flatTilingInitialized) {
     state.flatTilingInitialized = true
+    state.flatTilingVersion += 1
     state.flatTilingMinChunkRow = minChunkRow
     state.flatTilingMaxChunkRow = maxChunkRow
     state.flatTilingMinChunkColumn = minChunkColumn
     state.flatTilingMaxChunkColumn = maxChunkColumn
-    return
+    return {
+      hadPreviousBounds: false,
+      previousMinChunkRow: minChunkRow,
+      previousMaxChunkRow: maxChunkRow,
+      previousMinChunkColumn: minChunkColumn,
+      previousMaxChunkColumn: maxChunkColumn,
+      nextMinChunkRow: minChunkRow,
+      nextMaxChunkRow: maxChunkRow,
+      nextMinChunkColumn: minChunkColumn,
+      nextMaxChunkColumn: maxChunkColumn,
+    }
   }
 
-  state.flatTilingMinChunkRow = Math.min(state.flatTilingMinChunkRow, minChunkRow)
-  state.flatTilingMaxChunkRow = Math.max(state.flatTilingMaxChunkRow, maxChunkRow)
-  state.flatTilingMinChunkColumn = Math.min(state.flatTilingMinChunkColumn, minChunkColumn)
-  state.flatTilingMaxChunkColumn = Math.max(state.flatTilingMaxChunkColumn, maxChunkColumn)
+  const previousMinChunkRow = state.flatTilingMinChunkRow
+  const previousMaxChunkRow = state.flatTilingMaxChunkRow
+  const previousMinChunkColumn = state.flatTilingMinChunkColumn
+  const previousMaxChunkColumn = state.flatTilingMaxChunkColumn
+  const nextMinChunkRow = Math.min(state.flatTilingMinChunkRow, minChunkRow)
+  const nextMaxChunkRow = Math.max(state.flatTilingMaxChunkRow, maxChunkRow)
+  const nextMinChunkColumn = Math.min(state.flatTilingMinChunkColumn, minChunkColumn)
+  const nextMaxChunkColumn = Math.max(state.flatTilingMaxChunkColumn, maxChunkColumn)
+  const changed = nextMinChunkRow !== state.flatTilingMinChunkRow
+    || nextMaxChunkRow !== state.flatTilingMaxChunkRow
+    || nextMinChunkColumn !== state.flatTilingMinChunkColumn
+    || nextMaxChunkColumn !== state.flatTilingMaxChunkColumn
+  if (changed) {
+    state.flatTilingVersion += 1
+    state.flatTilingMinChunkRow = nextMinChunkRow
+    state.flatTilingMaxChunkRow = nextMaxChunkRow
+    state.flatTilingMinChunkColumn = nextMinChunkColumn
+    state.flatTilingMaxChunkColumn = nextMaxChunkColumn
+    return {
+      hadPreviousBounds: true,
+      previousMinChunkRow,
+      previousMaxChunkRow,
+      previousMinChunkColumn,
+      previousMaxChunkColumn,
+      nextMinChunkRow,
+      nextMaxChunkRow,
+      nextMinChunkColumn,
+      nextMaxChunkColumn,
+    }
+  }
+  return null
 }
 
 function resolveGroundRuntimeMaterial(root: THREE.Group, state: GroundRuntimeState): THREE.Material {
@@ -515,7 +761,9 @@ function resolveInfiniteGroundVisibleLocalBounds(
   // 这个函数的职责非常窄：只回答“相机当前能看见哪一块地面”。
   // 它不参与任何 chunk 上限判断，也不负责决定地形最多能延伸多远。
   // 如果这里和窗口上限逻辑混在一起，后面很容易再次把无限地形误写回有限地形。
-  root.updateMatrixWorld(true)
+  // Only the root world transform is needed for world/local conversion here.
+  // Avoid recursively updating every streamed child chunk on each camera tick.
+  root.updateWorldMatrix(true, false)
 
   const baseHeight = typeof definition.baseHeight === 'number' && Number.isFinite(definition.baseHeight)
     ? definition.baseHeight
@@ -642,11 +890,18 @@ export function resolveInfiniteGroundVisibleChunkWindow(
   const centeredMaxChunkX = localBounds.centerCoord.chunkX + renderRadiusChunks
   const centeredMinChunkZ = localBounds.centerCoord.chunkZ - renderRadiusChunks
   const centeredMaxChunkZ = localBounds.centerCoord.chunkZ + renderRadiusChunks
+  const epsilon = Math.max(1e-9, chunkSizeMeters * 1e-9)
+  const boundsMinCoord = resolveGroundChunkCoordFromWorldPosition(localBounds.minX, localBounds.minZ, chunkSizeMeters)
+  const boundsMaxCoord = resolveGroundChunkCoordFromWorldPosition(
+    localBounds.maxX - epsilon,
+    localBounds.maxZ - epsilon,
+    chunkSizeMeters,
+  )
   return {
-    minChunkX: centeredMinChunkX,
-    maxChunkX: centeredMaxChunkX,
-    minChunkZ: centeredMinChunkZ,
-    maxChunkZ: centeredMaxChunkZ,
+    minChunkX: Math.min(centeredMinChunkX, boundsMinCoord.chunkX),
+    maxChunkX: Math.max(centeredMaxChunkX, boundsMaxCoord.chunkX),
+    minChunkZ: Math.min(centeredMinChunkZ, boundsMinCoord.chunkZ),
+    maxChunkZ: Math.max(centeredMaxChunkZ, boundsMaxCoord.chunkZ),
     localBounds,
     centerCoord: localBounds.centerCoord,
   }
@@ -870,7 +1125,7 @@ function clampVertexIndex(value: number, max: number): number {
 
 function ensureGroundRuntimeDefinition(definition: GroundDynamicMesh): GroundRuntimeDynamicMesh {
   const runtimeDefinition = definition as GroundRuntimeDynamicMesh
-  const gridSize = resolveGroundWorkingGridSize(runtimeDefinition)
+  const gridSize = resolveGroundWorkingGridSizeCached(runtimeDefinition)
   runtimeDefinition.manualHeightMap = ensureGroundHeightMap(
     runtimeDefinition.manualHeightMap,
     gridSize.rows,
@@ -885,6 +1140,71 @@ function ensureGroundRuntimeDefinition(definition: GroundDynamicMesh): GroundRun
     runtimeDefinition.runtimeLoadedTileKeys = []
   }
   return runtimeDefinition
+}
+
+function countGroundHeightOverrides(map: GroundHeightMap | null | undefined): number {
+  const length = map?.length ?? 0
+  let count = 0
+  for (let index = 0; index < length; index += 1) {
+    if (Number.isFinite(map![index])) {
+      count += 1
+    }
+  }
+  return count
+}
+
+function adjustRuntimeGroundHeightOverrideCount(
+  definition: GroundRuntimeDynamicMesh,
+  map: GroundHeightMap,
+  delta: number,
+): void {
+  if (!Number.isFinite(delta) || delta === 0) {
+    return
+  }
+
+  if (definition.runtimeManualHeightOverrideSourceRef === map && Number.isFinite(definition.runtimeManualHeightOverrideCount)) {
+    definition.runtimeManualHeightOverrideCount = Math.max(
+      0,
+      Math.trunc(definition.runtimeManualHeightOverrideCount as number) + Math.trunc(delta),
+    )
+    definition.runtimeManualHeightOverrideSourceLength = map.length
+    return
+  }
+
+  if (definition.runtimePlanningHeightOverrideSourceRef === map && Number.isFinite(definition.runtimePlanningHeightOverrideCount)) {
+    definition.runtimePlanningHeightOverrideCount = Math.max(
+      0,
+      Math.trunc(definition.runtimePlanningHeightOverrideCount as number) + Math.trunc(delta),
+    )
+    definition.runtimePlanningHeightOverrideSourceLength = map.length
+  }
+}
+
+function ensureRuntimeGroundHeightOverrideCounts(definition: GroundRuntimeDynamicMesh): void {
+  const manualHeightMap = definition.manualHeightMap
+  const planningHeightMap = definition.planningHeightMap
+  const manualLength = manualHeightMap?.length ?? 0
+  const planningLength = planningHeightMap?.length ?? 0
+
+  if (
+    definition.runtimeManualHeightOverrideSourceRef !== manualHeightMap
+    || definition.runtimeManualHeightOverrideSourceLength !== manualLength
+    || !Number.isFinite(definition.runtimeManualHeightOverrideCount)
+  ) {
+    definition.runtimeManualHeightOverrideCount = countGroundHeightOverrides(manualHeightMap)
+    definition.runtimeManualHeightOverrideSourceRef = manualHeightMap
+    definition.runtimeManualHeightOverrideSourceLength = manualLength
+  }
+
+  if (
+    definition.runtimePlanningHeightOverrideSourceRef !== planningHeightMap
+    || definition.runtimePlanningHeightOverrideSourceLength !== planningLength
+    || !Number.isFinite(definition.runtimePlanningHeightOverrideCount)
+  ) {
+    definition.runtimePlanningHeightOverrideCount = countGroundHeightOverrides(planningHeightMap)
+    definition.runtimePlanningHeightOverrideSourceRef = planningHeightMap
+    definition.runtimePlanningHeightOverrideSourceLength = planningLength
+  }
 }
 
 function hasRuntimeGroundHeightOverrides(definition: GroundRuntimeDynamicMesh): boolean {
@@ -912,6 +1232,7 @@ function hasRuntimeGroundHeightOverrides(definition: GroundRuntimeDynamicMesh): 
     return true
   }
 
+  ensureRuntimeGroundHeightOverrideCounts(definition)
   const manualOverrideCount = definition.runtimeManualHeightOverrideCount
   const planningOverrideCount = definition.runtimePlanningHeightOverrideCount
   if (Number.isFinite(manualOverrideCount) || Number.isFinite(planningOverrideCount)) {
@@ -924,35 +1245,44 @@ function hasRuntimeGroundHeightOverrides(definition: GroundRuntimeDynamicMesh): 
     return false
   }
 
-  const manualHeightMap = definition.manualHeightMap
-  const planningHeightMap = definition.planningHeightMap
-  const limit = Math.max(manualHeightMap?.length ?? 0, planningHeightMap?.length ?? 0)
-  for (let index = 0; index < limit; index += 1) {
-    const manual = manualHeightMap[index]
-    if (typeof manual === 'number' && Number.isFinite(manual)) {
-      definition.runtimeHydratedHeightState = 'dirty'
-      definition.runtimeDisableOptimizedChunks = true
-      return true
-    }
-    const planning = planningHeightMap[index]
-    if (typeof planning === 'number' && Number.isFinite(planning)) {
-      definition.runtimeHydratedHeightState = 'dirty'
-      definition.runtimeDisableOptimizedChunks = true
-      return true
-    }
-  }
-
   definition.runtimeDisableOptimizedChunks = false
   return false
 }
 
 function invalidateGroundLocalEditTileCaches(definition: GroundRuntimeDynamicMesh): void {
+  invalidateGroundDefinitionStructureSignature(definition)
+  const source = definition.localEditTiles && typeof definition.localEditTiles === 'object'
+    ? definition.localEditTiles
+    : null
+  if (source) {
+    groundLocalEditTileCacheBySource.delete(source)
+    groundLocalEditTileCoverageIndexBySource.delete(source)
+  }
   definition.runtimeLocalEditTileArrayCache = undefined
   definition.runtimeLocalEditTileLookupCache = undefined
   definition.runtimeLocalEditTileCoverageIndexCache = undefined
   definition.runtimeLocalEditTileSourceRef = undefined
   definition.runtimeLocalEditTileCoverageIndexSourceRef = undefined
   definition.runtimeLocalEditTileCoverageIndexBucketChunks = undefined
+}
+
+function resolveGroundLocalEditTileCacheFromSource(source: GroundLocalEditTileMap | null): GroundLocalEditTileCache {
+  if (!source) {
+    return EMPTY_GROUND_LOCAL_EDIT_TILE_CACHE
+  }
+  const cached = groundLocalEditTileCacheBySource.get(source)
+  if (cached) {
+    return cached
+  }
+
+  const tiles = Object.values(source)
+  const lookup = new Map<string, GroundLocalEditTileData>()
+  for (const tile of tiles) {
+    lookup.set(formatGroundLocalEditTileKey(tile.tileRow, tile.tileColumn), tile)
+  }
+  const next = { tiles, lookup }
+  groundLocalEditTileCacheBySource.set(source, next)
+  return next
 }
 
 function ensureGroundLocalEditTileCaches(
@@ -967,8 +1297,8 @@ function ensureGroundLocalEditTileCaches(
     : null
 
   if (!source) {
-    runtimeDefinition.runtimeLocalEditTileArrayCache = []
-    runtimeDefinition.runtimeLocalEditTileLookupCache = new Map<string, GroundLocalEditTileData>()
+    runtimeDefinition.runtimeLocalEditTileArrayCache = EMPTY_GROUND_LOCAL_EDIT_TILE_CACHE.tiles
+    runtimeDefinition.runtimeLocalEditTileLookupCache = EMPTY_GROUND_LOCAL_EDIT_TILE_CACHE.lookup
     runtimeDefinition.runtimeLocalEditTileCoverageIndexCache = new Map<string, GroundLocalEditTileData[]>()
     runtimeDefinition.runtimeLocalEditTileSourceRef = null
     runtimeDefinition.runtimeLocalEditTileCoverageIndexSourceRef = null
@@ -984,13 +1314,9 @@ function ensureGroundLocalEditTileCaches(
     || !Array.isArray(runtimeDefinition.runtimeLocalEditTileArrayCache)
     || !(runtimeDefinition.runtimeLocalEditTileLookupCache instanceof Map)
   ) {
-    const tiles = Object.values(source)
-    const lookup = new Map<string, GroundLocalEditTileData>()
-    for (const tile of tiles) {
-      lookup.set(formatGroundLocalEditTileKey(tile.tileRow, tile.tileColumn), tile)
-    }
-    runtimeDefinition.runtimeLocalEditTileArrayCache = tiles
-    runtimeDefinition.runtimeLocalEditTileLookupCache = lookup
+    const cache = resolveGroundLocalEditTileCacheFromSource(source)
+    runtimeDefinition.runtimeLocalEditTileArrayCache = cache.tiles
+    runtimeDefinition.runtimeLocalEditTileLookupCache = cache.lookup
     runtimeDefinition.runtimeLocalEditTileSourceRef = source
   }
 
@@ -1011,8 +1337,8 @@ function ensureGroundLocalEditTileCachesFromRuntime(
     : null
 
   if (!source) {
-    definition.runtimeLocalEditTileArrayCache = []
-    definition.runtimeLocalEditTileLookupCache = new Map<string, GroundLocalEditTileData>()
+    definition.runtimeLocalEditTileArrayCache = EMPTY_GROUND_LOCAL_EDIT_TILE_CACHE.tiles
+    definition.runtimeLocalEditTileLookupCache = EMPTY_GROUND_LOCAL_EDIT_TILE_CACHE.lookup
     definition.runtimeLocalEditTileSourceRef = null
     return {
       tiles: definition.runtimeLocalEditTileArrayCache,
@@ -1025,13 +1351,9 @@ function ensureGroundLocalEditTileCachesFromRuntime(
     || !Array.isArray(definition.runtimeLocalEditTileArrayCache)
     || !(definition.runtimeLocalEditTileLookupCache instanceof Map)
   ) {
-    const tiles = Object.values(source)
-    const lookup = new Map<string, GroundLocalEditTileData>()
-    for (const tile of tiles) {
-      lookup.set(formatGroundLocalEditTileKey(tile.tileRow, tile.tileColumn), tile)
-    }
-    definition.runtimeLocalEditTileArrayCache = tiles
-    definition.runtimeLocalEditTileLookupCache = lookup
+    const cache = resolveGroundLocalEditTileCacheFromSource(source)
+    definition.runtimeLocalEditTileArrayCache = cache.tiles
+    definition.runtimeLocalEditTileLookupCache = cache.lookup
     definition.runtimeLocalEditTileSourceRef = source
   }
 
@@ -1055,18 +1377,30 @@ function ensureGroundLocalEditTileCoverageIndex(
   const sourceRef = runtimeDefinition.localEditTiles && typeof runtimeDefinition.localEditTiles === 'object'
     ? runtimeDefinition.localEditTiles
     : null
+  const chunkSizeMeters = resolveInfiniteChunkSizeMeters(runtimeDefinition)
+  const sharedCoverageCacheKey = `${bucketChunks}:${chunkSizeMeters}`
 
   if (
-    runtimeDefinition.runtimeLocalEditTileCoverageIndexCache instanceof Map
+    !sourceRef
+    && runtimeDefinition.runtimeLocalEditTileCoverageIndexCache instanceof Map
     && runtimeDefinition.runtimeLocalEditTileCoverageIndexSourceRef === sourceRef
     && runtimeDefinition.runtimeLocalEditTileCoverageIndexBucketChunks === bucketChunks
   ) {
     return runtimeDefinition.runtimeLocalEditTileCoverageIndexCache
   }
 
+  if (sourceRef) {
+    const shared = groundLocalEditTileCoverageIndexBySource.get(sourceRef)
+    if (shared?.cacheKey === sharedCoverageCacheKey) {
+      runtimeDefinition.runtimeLocalEditTileCoverageIndexCache = shared.index
+      runtimeDefinition.runtimeLocalEditTileCoverageIndexSourceRef = sourceRef
+      runtimeDefinition.runtimeLocalEditTileCoverageIndexBucketChunks = bucketChunks
+      return shared.index
+    }
+  }
+
   const index = new Map<string, GroundLocalEditTileData[]>()
   if (tiles.length) {
-    const chunkSizeMeters = resolveInfiniteChunkSizeMeters(runtimeDefinition)
     for (const tile of tiles) {
       const tileSizeMeters = Number(tile.tileSizeMeters)
       if (!Number.isFinite(tileSizeMeters) || tileSizeMeters <= 0) {
@@ -1075,8 +1409,9 @@ function ensureGroundLocalEditTileCoverageIndex(
       const { minX, minZ } = resolveGroundLocalEditTileWorldMinFromRuntime(runtimeDefinition, tile.tileRow, tile.tileColumn, tileSizeMeters)
       const maxX = minX + tileSizeMeters
       const maxZ = minZ + tileSizeMeters
+      const maxEdgeEpsilon = Math.max(1e-9, chunkSizeMeters * 1e-9)
       const minChunk = resolveGroundChunkCoordFromWorldPosition(minX, minZ, chunkSizeMeters)
-      const maxChunk = resolveGroundChunkCoordFromWorldPosition(maxX - Number.EPSILON, maxZ - Number.EPSILON, chunkSizeMeters)
+      const maxChunk = resolveGroundChunkCoordFromWorldPosition(maxX - maxEdgeEpsilon, maxZ - maxEdgeEpsilon, chunkSizeMeters)
       const minBucketRow = Math.floor(minChunk.chunkZ / bucketChunks)
       const maxBucketRow = Math.floor(maxChunk.chunkZ / bucketChunks)
       const minBucketColumn = Math.floor(minChunk.chunkX / bucketChunks)
@@ -1084,7 +1419,7 @@ function ensureGroundLocalEditTileCoverageIndex(
 
       for (let bucketRow = minBucketRow; bucketRow <= maxBucketRow; bucketRow += 1) {
         for (let bucketColumn = minBucketColumn; bucketColumn <= maxBucketColumn; bucketColumn += 1) {
-          const bucketKey = resolveGroundLocalEditTileCoverageBucketKey(bucketRow, bucketColumn, bucketChunks)
+          const bucketKey = `${bucketRow}:${bucketColumn}`
           const bucket = index.get(bucketKey)
           if (bucket) {
             bucket.push(tile)
@@ -1099,6 +1434,12 @@ function ensureGroundLocalEditTileCoverageIndex(
   runtimeDefinition.runtimeLocalEditTileCoverageIndexCache = index
   runtimeDefinition.runtimeLocalEditTileCoverageIndexSourceRef = sourceRef
   runtimeDefinition.runtimeLocalEditTileCoverageIndexBucketChunks = bucketChunks
+  if (sourceRef) {
+    groundLocalEditTileCoverageIndexBySource.set(sourceRef, {
+      cacheKey: sharedCoverageCacheKey,
+      index,
+    })
+  }
   return index
 }
 
@@ -1234,15 +1575,15 @@ function findGroundLocalEditTileAtWorldFromRuntime(
   if (directMatch) {
     return directMatch
   }
-  return ensureGroundLocalEditTileCaches(definition).lookup.get(key) ?? null
+  return ensureGroundLocalEditTileCachesFromRuntime(definition).lookup.get(key) ?? null
 }
 
-function sampleGroundLocalEditHeightAtWorld(
-  definition: GroundDynamicMesh,
+
+function sampleGroundLocalEditHeightAtWorldFromRuntime(
+  runtimeDefinition: GroundRuntimeDynamicMesh,
   x: number,
   z: number,
 ): number | null {
-  const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
   const tile = findGroundLocalEditTileAtWorldFromRuntime(runtimeDefinition, x, z)
   if (!tile) {
     return null
@@ -1384,6 +1725,14 @@ function resolveGroundChunkWorldBoundsFromSpec(
     if (!demSource) {
       return null
     }
+    const effectiveCellSize = Number(demSource.localEditCellSize)
+    if (Number.isFinite(effectiveCellSize) && effectiveCellSize > 0) {
+      return Math.max(1e-6, effectiveCellSize)
+    }
+    const appliedSampleStepMeters = Number(demSource.appliedSampleStepMeters)
+    if (Number.isFinite(appliedSampleStepMeters) && appliedSampleStepMeters > 0) {
+      return Math.max(1e-6, appliedSampleStepMeters)
+    }
     const candidates = [demSource.sampleStepMeters, demSource.sampleStepX, demSource.sampleStepY]
       .map((value) => Number(value))
       .filter((value) => Number.isFinite(value) && value > 0)
@@ -1404,6 +1753,8 @@ function resolveGroundChunkWorldBoundsFromSpec(
     const { minX: chunkMinX, maxX: chunkMaxX, minZ: chunkMinZ, maxZ: chunkMaxZ } = resolveGroundChunkWorldBoundsFromSpec(definition, spec)
 
     let hasImportedTiles = false
+    const overlappingImportedTileKeys: string[] = []
+    const overlappingNonDemTileKeys: string[] = []
     for (const tile of candidateTiles) {
       const tileSizeMeters = Number(tile.tileSizeMeters)
       if (!Number.isFinite(tileSizeMeters) || tileSizeMeters <= 0) {
@@ -1416,9 +1767,11 @@ function resolveGroundChunkWorldBoundsFromSpec(
         continue
       }
       if (tile.source !== 'dem') {
+        overlappingNonDemTileKeys.push(formatGroundLocalEditTileKey(tile.tileRow, tile.tileColumn))
         return baseCellSize
       }
       hasImportedTiles = true
+      overlappingImportedTileKeys.push(formatGroundLocalEditTileKey(tile.tileRow, tile.tileColumn))
     }
 
     if (!hasImportedTiles) {
@@ -1426,7 +1779,9 @@ function resolveGroundChunkWorldBoundsFromSpec(
     }
 
     const importedCellSize = resolveImportedLocalEditCellSize(definition)
-    return importedCellSize ? Math.max(baseCellSize, importedCellSize) : baseCellSize
+    const resolvedCellSize = importedCellSize ? Math.max(baseCellSize, importedCellSize) : baseCellSize
+
+    return resolvedCellSize
   }
 
 type GroundChunkGeometryLayout = {
@@ -1453,6 +1808,7 @@ function resolveGroundChunkGeometryLayout(definition: GroundRuntimeDynamicMesh, 
   const worldDepth = baseRows * baseCellSize
   const segmentColumns = Math.max(1, Math.ceil(worldWidth / localEditCellSize))
   const segmentRows = Math.max(1, Math.ceil(worldDepth / localEditCellSize))
+
   return {
     segmentRows,
     segmentColumns,
@@ -1492,7 +1848,7 @@ function getPlanningVertexHeight(definition: GroundRuntimeDynamicMesh, row: numb
  */
 export function resolveGroundEffectiveHeightAtVertex(definition: GroundDynamicMesh, row: number, column: number): number {
   const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
-  const localEditSample = sampleGroundLocalEditHeightAtWorld(
+  const localEditSample = sampleGroundLocalEditHeightAtWorldFromRuntime(
     runtimeDefinition,
     resolveGroundWorldXForColumn(runtimeDefinition, column),
     resolveGroundWorldZForRow(runtimeDefinition, row),
@@ -1524,7 +1880,21 @@ export function resolveGroundEffectiveHeightAtVertex(definition: GroundDynamicMe
   return planning + (manual - base)
 }
 
-function sampleGroundHeightOutsideWorkingBounds(): number {
+function sampleGroundHeightOutsideWorkingBounds(
+  definition: GroundRuntimeDynamicMesh,
+  x: number,
+  z: number,
+  terrainSampler: GroundTerrainHeightSampler | null | undefined = null,
+): number {
+  if (definition.terrainMode === 'infinite') {
+    if (terrainSampler) {
+      const sampled = terrainSampler.sampleHeightAtWorld(x, z)
+      if (Number.isFinite(sampled)) {
+        return sampled as number
+      }
+    }
+    return sampleGroundBaseHeightAtWorld(definition, x, z)
+  }
   return 0
 }
 
@@ -1547,6 +1917,17 @@ export function sampleGroundEffectiveHeightRegion(
   minColumnInput: number,
   maxColumnInput: number,
 ): GroundEffectiveHeightRegion {
+  return sampleGroundEffectiveHeightRegionInternal(definition, minRowInput, maxRowInput, minColumnInput, maxColumnInput, true)
+}
+
+function sampleGroundEffectiveHeightRegionInternal(
+  definition: GroundDynamicMesh,
+  minRowInput: number,
+  maxRowInput: number,
+  minColumnInput: number,
+  maxColumnInput: number,
+  includeLocalEdit: boolean,
+): GroundEffectiveHeightRegion {
   const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
   const baseRegion = computeGroundBaseHeightRegion(runtimeDefinition, minRowInput, maxRowInput, minColumnInput, maxColumnInput)
   const { minRow, maxRow, minColumn, maxColumn, stride, values: baseValues } = baseRegion
@@ -1559,12 +1940,55 @@ export function sampleGroundEffectiveHeightRegion(
     return { ...baseRegion, values, heightMin, heightMax }
   }
 
+  const gridSize = resolveGroundWorkingGridSize(runtimeDefinition)
+  const manualRegion = runtimeDefinition.runtimeSampleHeightRegion?.('manual', minRow, maxRow, minColumn, maxColumn)
+  const planningRegion = runtimeDefinition.runtimeSampleHeightRegion?.('planning', minRow, maxRow, minColumn, maxColumn)
+  const canUseManualRegion = manualRegion
+    && manualRegion.minRow === minRow
+    && manualRegion.maxRow === maxRow
+    && manualRegion.minColumn === minColumn
+    && manualRegion.maxColumn === maxColumn
+    && manualRegion.stride === stride
+  const canUsePlanningRegion = planningRegion
+    && planningRegion.minRow === minRow
+    && planningRegion.maxRow === maxRow
+    && planningRegion.minColumn === minColumn
+    && planningRegion.maxColumn === maxColumn
+    && planningRegion.stride === stride
+  const manualValues = canUseManualRegion ? manualRegion.values : null
+  const planningValues = canUsePlanningRegion ? planningRegion.values : null
+  const terrainSampler = runtimeDefinition.runtimeTerrainHeightSampler as GroundTerrainHeightSampler | null | undefined
+  const bounds = includeLocalEdit || terrainSampler ? resolveGroundGridWorldBounds(runtimeDefinition) : null
+  const cellSize = Number.isFinite(runtimeDefinition.cellSize) && runtimeDefinition.cellSize > 1e-6
+    ? runtimeDefinition.cellSize
+    : 1
+
   for (let row = minRow; row <= maxRow; row += 1) {
     const baseOffset = (row - minRow) * stride
+    const worldZ = bounds ? bounds.minZ + row * cellSize : 0
     for (let column = minColumn; column <= maxColumn; column += 1) {
       const offset = baseOffset + (column - minColumn)
-      void baseValues[offset]
-      const effective = resolveGroundEffectiveHeightAtVertex(runtimeDefinition, row, column)
+      const base = baseValues[offset] ?? 0
+      const worldX = bounds ? bounds.minX + column * cellSize : 0
+      const localEditSample = includeLocalEdit
+        ? sampleGroundLocalEditHeightAtWorldFromRuntime(runtimeDefinition, worldX, worldZ)
+        : null
+      let effective: number
+      if (Number.isFinite(localEditSample)) {
+        effective = localEditSample as number
+      } else {
+        const sampled = terrainSampler ? terrainSampler.sampleHeightAtWorld(worldX, worldZ) : null
+        if (Number.isFinite(sampled)) {
+          effective = sampled as number
+        } else {
+          const heightIndex = getGroundVertexIndex(gridSize.columns, row, column)
+          const manualRaw = manualValues ? manualValues[offset] : runtimeDefinition.manualHeightMap[heightIndex]
+          const planningRaw = planningValues ? planningValues[offset] : runtimeDefinition.planningHeightMap[heightIndex]
+          const manual = typeof manualRaw === 'number' && Number.isFinite(manualRaw) ? manualRaw : base
+          const planning = typeof planningRaw === 'number' && Number.isFinite(planningRaw) ? planningRaw : base
+          effective = planning + (manual - base)
+        }
+      }
       values[offset] = effective
       heightMin = Math.min(heightMin, effective)
       heightMax = Math.max(heightMax, effective)
@@ -1590,7 +2014,7 @@ function sampleGroundEffectiveHeightRegionWithoutLocalEdit(
   minColumnInput: number,
   maxColumnInput: number,
 ): GroundEffectiveHeightRegion {
-  return sampleGroundEffectiveHeightRegion(definition, minRowInput, maxRowInput, minColumnInput, maxColumnInput)
+  return sampleGroundEffectiveHeightRegionInternal(definition, minRowInput, maxRowInput, minColumnInput, maxColumnInput, false)
 }
 
 export function resolveGroundEffectiveHeightAtVertexFromSampler(
@@ -1683,6 +2107,8 @@ export function resolveGroundManualHeightForEffectiveTarget(
 function setHeightOverrideValue(definition: GroundRuntimeDynamicMesh, map: GroundHeightMap, row: number, column: number, value: number): void {
   const gridSize = resolveGroundWorkingGridSize(definition)
   const heightIndex = getGroundVertexIndex(gridSize.columns, row, column)
+  const previousValue = map[heightIndex]
+  const hadOverride = typeof previousValue === 'number' && Number.isFinite(previousValue)
   const baseHeight = computeGroundBaseHeightAtVertex(definition, row, column)
   let rounded = Math.round(value * 100) / 100
   let baseRounded = Math.round(baseHeight * 100) / 100
@@ -1690,9 +2116,15 @@ function setHeightOverrideValue(definition: GroundRuntimeDynamicMesh, map: Groun
   if (Object.is(baseRounded, -0)) baseRounded = 0
   if (rounded === baseRounded) {
     map[heightIndex] = GROUND_HEIGHT_UNSET_VALUE
+    if (hadOverride) {
+      adjustRuntimeGroundHeightOverrideCount(definition, map, -1)
+    }
     return
   }
   map[heightIndex] = rounded
+  if (!hadOverride) {
+    adjustRuntimeGroundHeightOverrideCount(definition, map, 1)
+  }
 }
 
 export function setManualHeightOverrideValue(definition: GroundRuntimeDynamicMesh, map: GroundHeightMap, row: number, column: number, value: number): void {
@@ -1866,6 +2298,7 @@ function setGroundLocalEditTileValue(
   tile.values[index] = Number.isFinite(value) ? value : GROUND_HEIGHT_UNSET_VALUE
   tile.updatedAt = Date.now()
   tile.source = tile.source === 'dem' || tile.source === 'mixed' ? 'mixed' : source
+  invalidateGroundDefinitionStructureSignature(definition)
 }
 
 function getGroundLocalEditTileStoredValue(
@@ -2832,19 +3265,24 @@ export function sliceGroundTrianglesByPolygon(
 
 export function sampleGroundHeight(definition: GroundDynamicMesh, x: number, z: number): number {
   const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
-  const localEditSample = sampleGroundLocalEditHeightAtWorld(runtimeDefinition, x, z)
+  const localEditSample = sampleGroundLocalEditHeightAtWorldFromRuntime(runtimeDefinition, x, z)
   if (Number.isFinite(localEditSample)) {
     return localEditSample as number
   }
-  const gridSize = resolveGroundWorkingGridSize(runtimeDefinition)
+  const gridSize = resolveGroundWorkingGridSizeCached(runtimeDefinition)
   const columns = gridSize.columns
   const rows = gridSize.rows
   const cellSize = Number.isFinite(runtimeDefinition.cellSize) && runtimeDefinition.cellSize > 1e-6
     ? runtimeDefinition.cellSize
     : 1
-  const bounds = resolveGroundGridWorldBounds(runtimeDefinition)
+  const bounds = resolveGroundWorldBoundsCached(runtimeDefinition)
   if (x < bounds.minX || x > bounds.maxX || z < bounds.minZ || z > bounds.maxZ) {
-    return sampleGroundHeightOutsideWorkingBounds()
+    return sampleGroundHeightOutsideWorkingBounds(
+      runtimeDefinition,
+      x,
+      z,
+      (runtimeDefinition.runtimeTerrainHeightSampler as GroundTerrainHeightSampler | null | undefined) ?? null,
+    )
   }
 
   const localColumnFloat = clampInclusive((x - bounds.minX) / cellSize, 0, columns)
@@ -2875,19 +3313,24 @@ function sampleGroundHeightWithVertexCache(
   vertexHeightCache: Map<number, number>,
 ): number {
   const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
-  const localEditSample = sampleGroundLocalEditHeightAtWorld(runtimeDefinition, x, z)
+  const localEditSample = sampleGroundLocalEditHeightAtWorldFromRuntime(runtimeDefinition, x, z)
   if (Number.isFinite(localEditSample)) {
     return localEditSample as number
   }
-  const gridSize = resolveGroundWorkingGridSize(runtimeDefinition)
+  const gridSize = resolveGroundWorkingGridSizeCached(runtimeDefinition)
   const columns = gridSize.columns
   const rows = gridSize.rows
-  const bounds = resolveGroundWorldBounds(runtimeDefinition)
+  const bounds = resolveGroundWorldBoundsCached(runtimeDefinition)
   const cellSize = Number.isFinite(runtimeDefinition.cellSize) && runtimeDefinition.cellSize > 1e-6
     ? runtimeDefinition.cellSize
     : 1
   if (x < bounds.minX || x > bounds.maxX || z < bounds.minZ || z > bounds.maxZ) {
-    return sampleGroundHeightOutsideWorkingBounds()
+    return sampleGroundHeightOutsideWorkingBounds(
+      runtimeDefinition,
+      x,
+      z,
+      (runtimeDefinition.runtimeTerrainHeightSampler as GroundTerrainHeightSampler | null | undefined) ?? null,
+    )
   }
 
   const localColumnFloat = clampInclusive((x - bounds.minX) / cellSize, 0, columns)
@@ -3184,15 +3627,17 @@ function buildGroundChunkGeometry(definition: GroundRuntimeDynamicMesh, spec: Gr
   const startZ = chunkOrigin + spec.startRow * cellSize
   const importedLocalEditCellSize = resolveGroundChunkLocalEditCellSize(definition, spec)
   const useWorldSpaceHeightSampling = importedLocalEditCellSize > cellSize
-  const heightRegion = sampleGroundEffectiveHeightRegionWithoutLocalEdit(
-    definition,
-    spec.startRow,
-    spec.startRow + spec.rows,
-    spec.startColumn,
-    spec.startColumn + spec.columns,
-  )
-  const heightValues = heightRegion.values
-  const heightStride = heightRegion.stride
+  const heightRegion = useWorldSpaceHeightSampling
+    ? null
+    : sampleGroundEffectiveHeightRegionWithoutLocalEdit(
+      definition,
+      spec.startRow,
+      spec.startRow + spec.rows,
+      spec.startColumn,
+      spec.startColumn + spec.columns,
+    )
+  const heightValues = heightRegion?.values
+  const heightStride = heightRegion?.stride ?? 0
 
   let vertexIndex = 0
   for (let localRow = 0; localRow <= chunkRows; localRow += 1) {
@@ -3201,7 +3646,7 @@ function buildGroundChunkGeometry(definition: GroundRuntimeDynamicMesh, spec: Gr
       const x = startX + localColumn * layout.stepX
       const height = useWorldSpaceHeightSampling
         ? sampleGroundHeight(definition, x, z)
-        : heightValues[localRow * heightStride + localColumn] ?? sampleGroundHeight(definition, x, z)
+        : heightValues?.[localRow * heightStride + localColumn] ?? sampleGroundHeight(definition, x, z)
       const columnRatio = columns === 0 ? 0 : clampInclusive((x - chunkOrigin) / Math.max(chunkSizeMeters, Number.EPSILON), 0, 1)
       const rowRatio = rows === 0 ? 0 : clampInclusive((z - chunkOrigin) / Math.max(chunkSizeMeters, Number.EPSILON), 0, 1)
 
@@ -3269,6 +3714,27 @@ function ensureGroundRuntimeState(root: THREE.Object3D, definition: GroundDynami
   const chunkCells = resolveRuntimeChunkCells(definition)
   const desiredCastShadow = definition.castShadow === true
   if (existing && existing.definitionSignature === signature && existing.chunkCells === chunkCells) {
+    existing.flatTilingVersion = Number.isFinite(existing.flatTilingVersion) ? existing.flatTilingVersion : 0
+    existing.flatChunkKeys = existing.flatChunkKeys instanceof Set ? existing.flatChunkKeys : new Set<string>()
+    if (existing.flatChunkKeys.size === 0 && existing.flatChunkBatches.size > 0) {
+      syncGroundFlatChunkKeyCache(existing)
+    }
+    existing.lastFlatChunkSyncTilingVersion = Number.isFinite(existing.lastFlatChunkSyncTilingVersion)
+      ? existing.lastFlatChunkSyncTilingVersion
+      : -1
+    existing.lastFlatChunkSyncHiddenChunkKeysVersion = Number.isFinite(existing.lastFlatChunkSyncHiddenChunkKeysVersion)
+      ? existing.lastFlatChunkSyncHiddenChunkKeysVersion
+      : -1
+    existing.flatChunkBatches.forEach((batch) => {
+      batch.pendingChunkKeys = batch.pendingChunkKeys instanceof Set ? batch.pendingChunkKeys : new Set<string>()
+      batch.asyncBuildInFlight = batch.asyncBuildInFlight === true
+    })
+    existing.visibleChunkSignatureCache = typeof existing.visibleChunkSignatureCache === 'string'
+      ? existing.visibleChunkSignatureCache
+      : ''
+    existing.visibleChunkSignatureCacheVersion = Number.isFinite(existing.visibleChunkSignatureCacheVersion)
+      ? existing.visibleChunkSignatureCacheVersion
+      : -1
     if (existing.castShadow !== desiredCastShadow) {
       existing.castShadow = desiredCastShadow
       for (const runtime of existing.chunks.values()) {
@@ -3316,22 +3782,26 @@ function ensureGroundRuntimeState(root: THREE.Object3D, definition: GroundDynami
     chunks: new Map(),
     flatChunkBatches: new Map(),
     flatTilingInitialized: false,
+    flatTilingVersion: 0,
     flatTilingMinChunkRow: 0,
     flatTilingMaxChunkRow: 0,
     flatTilingMinChunkColumn: 0,
     flatTilingMaxChunkColumn: 0,
+    flatChunkKeys: new Set(),
+    lastFlatChunkSyncTilingVersion: -1,
+    lastFlatChunkSyncHiddenChunkKeysVersion: -1,
     hiddenChunkKeys: new Set(),
     hiddenChunkKeysVersion: 0,
     visibleChunkKeysCache: [],
     visibleChunkKeysVersion: 0,
     visibleChunkKeysCacheVersion: -1,
+    visibleChunkSignatureCache: '',
+    visibleChunkSignatureCacheVersion: -1,
     lastChunkUpdateAt: 0,
 
     desiredSignature: '',
     lastCameraLocalX: 0,
     lastCameraLocalZ: 0,
-    lastDebugLogAt: 0,
-    lastDebugLogSignature: '',
 
     pendingCreates: [],
     pendingDestroys: [],
@@ -3347,10 +3817,142 @@ function markGroundVisibleChunkKeysDirty(state: GroundRuntimeState): void {
   state.visibleChunkKeysVersion += 1
 }
 
+function updateGroundChunkSignatureHash(hash: number, key: string): number {
+  let next = hash | 0
+  for (let index = 0; index < key.length; index += 1) {
+    next = ((next * 33) ^ key.charCodeAt(index)) | 0
+  }
+  return next
+}
+
 function chunkPoolKey(spec: GroundChunkSpec): string {
   const rows = Math.max(1, Math.trunc(spec.rows))
   const columns = Math.max(1, Math.trunc(spec.columns))
   return `${rows}x${columns}`
+}
+
+function sampleGroundFlatChunkInstanceHeight(
+  batch: GroundFlatChunkBatchRuntime,
+  definition: GroundRuntimeDynamicMesh,
+  key: string,
+  _x: number,
+  _z: number,
+  _context: GroundHeightSamplingContext,
+): number {
+  const cached = batch.instanceHeightCache.get(key)
+  if (typeof cached === 'number' && Number.isFinite(cached)) {
+    return cached
+  }
+  const baseHeight = Number(definition.baseHeight)
+  const height = Number.isFinite(baseHeight) ? baseHeight : 0
+  batch.instanceHeightCache.set(key, height)
+  return height
+}
+
+function canBuildGroundFlatChunkInstancesAsync(definition: GroundRuntimeDynamicMesh): boolean {
+  return !!groundFlatChunkInstanceMatrixBuilder
+    && !definition.runtimeTerrainHeightSampler
+}
+
+function syncGroundFlatChunkKeyCache(state: GroundRuntimeState): void {
+  const keys = new Set<string>()
+  state.flatChunkBatches.forEach((batch) => {
+    batch.chunkKeys.forEach((key) => {
+      keys.add(key)
+    })
+    batch.pendingChunkKeys.forEach((key) => {
+      keys.add(key)
+    })
+  })
+  state.flatChunkKeys = keys
+}
+
+function resolveGroundFlatChunkBatchCapacity(requiredCount: number, currentCapacity = 0): number {
+  const required = Math.max(1, Math.trunc(requiredCount))
+  const current = Math.max(0, Math.trunc(currentCapacity))
+  if (required <= current) {
+    return current
+  }
+  if (current <= 0) {
+    return Math.max(16, required)
+  }
+  return Math.max(required, Math.ceil(current * 1.5))
+}
+
+function copyGroundFlatChunkInstanceMatrices(
+  source: THREE.InstancedMesh,
+  target: THREE.InstancedMesh,
+  instanceCount: number,
+): void {
+  const copyLength = Math.max(0, Math.trunc(instanceCount)) * 16
+  if (copyLength <= 0) {
+    return
+  }
+  const sourceArray = source.instanceMatrix.array as Float32Array
+  const targetArray = target.instanceMatrix.array as Float32Array
+  targetArray.set(sourceArray.subarray(0, copyLength), 0)
+  target.instanceMatrix.needsUpdate = true
+}
+
+function writeGroundFlatChunkInstanceMatrix(
+  targetArray: Float32Array,
+  index: number,
+  x: number,
+  y: number,
+  z: number,
+): void {
+  const offset = Math.max(0, Math.trunc(index)) * 16
+  targetArray.set(groundFlatChunkInstanceMatrixBase, offset)
+  targetArray[offset + 12] = x
+  targetArray[offset + 13] = y
+  targetArray[offset + 14] = z
+}
+
+function copyGroundFlatChunkInstanceMatrixBuffer(
+  targetArray: Float32Array,
+  startIndex: number,
+  matrices: Float32Array,
+  instanceCount: number,
+): void {
+  const safeCount = Math.max(0, Math.trunc(instanceCount))
+  if (safeCount <= 0) {
+    return
+  }
+  const sourceLength = Math.min(matrices.length, safeCount * 16)
+  if (sourceLength <= 0) {
+    return
+  }
+  targetArray.set(matrices.subarray(0, sourceLength), Math.max(0, Math.trunc(startIndex)) * 16)
+}
+
+export function buildGroundFlatChunkInstanceMatrices(
+  definition: GroundRuntimeDynamicMesh,
+  chunkKeys: string[],
+): GroundFlatChunkInstanceMatrixBuildResult {
+  const matrices = new Float32Array(Math.max(0, Math.trunc(chunkKeys.length)) * 16)
+  const resolvedKeys: string[] = []
+  const chunkSizeMeters = resolveInfiniteChunkSizeMeters(definition)
+  const chunkOrigin = resolveInfiniteGroundGridOriginMeters(chunkSizeMeters)
+  const baseHeight = Number(definition.baseHeight)
+  const planeHeight = Number.isFinite(baseHeight) ? baseHeight : 0
+  let writeIndex = 0
+
+  chunkKeys.forEach((key) => {
+    const indices = resolveRuntimeChunkIndexFromRuntimeKey(key)
+    if (!indices) {
+      return
+    }
+    const centerX = chunkOrigin + (indices.column * chunkSizeMeters) + (chunkSizeMeters * 0.5)
+    const centerZ = chunkOrigin + (indices.row * chunkSizeMeters) + (chunkSizeMeters * 0.5)
+    writeGroundFlatChunkInstanceMatrix(matrices, writeIndex, centerX, planeHeight, centerZ)
+    resolvedKeys.push(key)
+    writeIndex += 1
+  })
+
+  return {
+    chunkKeys: resolvedKeys,
+    matrices: writeIndex === chunkKeys.length ? matrices : matrices.subarray(0, writeIndex * 16).slice(),
+  }
 }
 
 function refreshGroundFlatChunkBatchInstances(
@@ -3366,9 +3968,11 @@ function refreshGroundFlatChunkBatchInstances(
   let writtenCount = 0
   const chunkSizeMeters = resolveInfiniteChunkSizeMeters(definition)
   const chunkOrigin = resolveInfiniteGroundGridOriginMeters(chunkSizeMeters)
+  const heightSamplingContext = createGroundHeightSamplingContext(definition)
+  const matrixArray = batch.mesh.instanceMatrix.array as Float32Array
 
   if (chunkKeys.length > batch.instanceCapacity) {
-    batch.instanceCapacity = chunkKeys.length
+    batch.instanceCapacity = resolveGroundFlatChunkBatchCapacity(chunkKeys.length, batch.instanceCapacity)
   }
   chunkKeys.forEach((key, index) => {
     // 这里不要直接用 key 里的 row/column 去猜位置，而要回到 chunkSpec。
@@ -3380,10 +3984,8 @@ function refreshGroundFlatChunkBatchInstances(
     }
     const centerX = chunkOrigin + (indices.column * chunkSizeMeters) + (chunkSizeMeters * 0.5)
     const centerZ = chunkOrigin + (indices.row * chunkSizeMeters) + (chunkSizeMeters * 0.5)
-    const centerY = sampleGroundHeight(definition, centerX, centerZ)
-    groundFlatChunkInstancePosition.set(centerX, centerY, centerZ)
-    groundFlatChunkInstanceMatrix.compose(groundFlatChunkInstancePosition, groundFlatChunkInstanceRotation, groundFlatChunkInstanceScale)
-    batch.mesh.setMatrixAt(index, groundFlatChunkInstanceMatrix)
+    const centerY = sampleGroundFlatChunkInstanceHeight(batch, definition, key, centerX, centerZ, heightSamplingContext)
+    writeGroundFlatChunkInstanceMatrix(matrixArray, index, centerX, centerY, centerZ)
     writtenCount += 1
   })
   batch.mesh.count = writtenCount
@@ -3409,6 +4011,8 @@ function appendGroundFlatChunkBatchInstances(
   const nextKeys = [...batch.chunkKeys]
   const chunkSizeMeters = resolveInfiniteChunkSizeMeters(definition)
   const chunkOrigin = resolveInfiniteGroundGridOriginMeters(chunkSizeMeters)
+  const heightSamplingContext = createGroundHeightSamplingContext(definition)
+  const matrixArray = batch.mesh.instanceMatrix.array as Float32Array
   let writeIndex = batch.chunkKeys.length
 
   chunkKeys.forEach((key) => {
@@ -3419,10 +4023,8 @@ function appendGroundFlatChunkBatchInstances(
 
     const centerX = chunkOrigin + (indices.column * chunkSizeMeters) + (chunkSizeMeters * 0.5)
     const centerZ = chunkOrigin + (indices.row * chunkSizeMeters) + (chunkSizeMeters * 0.5)
-    const centerY = sampleGroundHeight(definition, centerX, centerZ)
-    groundFlatChunkInstancePosition.set(centerX, centerY, centerZ)
-    groundFlatChunkInstanceMatrix.compose(groundFlatChunkInstancePosition, groundFlatChunkInstanceRotation, groundFlatChunkInstanceScale)
-    batch.mesh.setMatrixAt(writeIndex, groundFlatChunkInstanceMatrix)
+    const centerY = sampleGroundFlatChunkInstanceHeight(batch, definition, key, centerX, centerZ, heightSamplingContext)
+    writeGroundFlatChunkInstanceMatrix(matrixArray, writeIndex, centerX, centerY, centerZ)
     nextKeys.push(key)
     writeIndex += 1
   })
@@ -3438,49 +4040,345 @@ function appendGroundFlatChunkBatchInstances(
   batch.chunkKeys = nextKeys
 }
 
+function appendGroundFlatChunkBatchInstanceMatrices(
+  batch: GroundFlatChunkBatchRuntime,
+  chunkKeys: string[],
+  matrices: Float32Array,
+): void {
+  if (chunkKeys.length === 0) {
+    return
+  }
+  const nextKeys = [...batch.chunkKeys]
+  const targetArray = batch.mesh.instanceMatrix.array as Float32Array
+  const writeIndex = batch.chunkKeys.length
+  copyGroundFlatChunkInstanceMatrixBuffer(targetArray, writeIndex, matrices, chunkKeys.length)
+  nextKeys.push(...chunkKeys)
+  batch.mesh.count = writeIndex + chunkKeys.length
+  batch.mesh.instanceMatrix.needsUpdate = true
+  markInstancedBoundsDirty(batch.mesh)
+  batch.mesh.visible = batch.mesh.count > 0
+  batch.mesh.userData.groundChunkBatch = {
+    specKey: batch.specKey,
+    chunkKeys: [...nextKeys],
+  }
+  batch.chunkKeys = nextKeys
+}
+
+function compactGroundFlatChunkBatchInstances(
+  batch: GroundFlatChunkBatchRuntime,
+  chunkKeys: string[],
+): void {
+  const targetArray = batch.mesh.instanceMatrix.array as Float32Array
+  const sourceKeys = batch.chunkKeys
+  const sourceIndexByKey = new Map<string, number>()
+  sourceKeys.forEach((key, index) => {
+    sourceIndexByKey.set(key, index)
+  })
+  const nextKeys: string[] = []
+  let writeIndex = 0
+  chunkKeys.forEach((key) => {
+    const sourceIndex = sourceIndexByKey.get(key)
+    if (sourceIndex == null) {
+      return
+    }
+    if (writeIndex !== sourceIndex) {
+      targetArray.copyWithin(writeIndex * 16, sourceIndex * 16, (sourceIndex + 1) * 16)
+    }
+    nextKeys.push(key)
+    writeIndex += 1
+  })
+  batch.mesh.count = writeIndex
+  batch.mesh.instanceMatrix.needsUpdate = true
+  markInstancedBoundsDirty(batch.mesh)
+  batch.mesh.visible = writeIndex > 0
+  batch.mesh.userData.groundChunkBatch = {
+    specKey: batch.specKey,
+    chunkKeys: [...nextKeys],
+  }
+  batch.chunkKeys = nextKeys
+}
+
+function scheduleGroundFlatChunkBatchInstanceBuild(
+  root: THREE.Group,
+  _state: GroundRuntimeState,
+  batch: GroundFlatChunkBatchRuntime,
+  definition: GroundRuntimeDynamicMesh,
+): void {
+  if (!groundFlatChunkInstanceMatrixBuilder || batch.asyncBuildInFlight || batch.pendingChunkKeys.size <= 0) {
+    return
+  }
+  const pendingChunkKeys = Array.from(batch.pendingChunkKeys).slice(0, GROUND_FLAT_CHUNK_ASYNC_BUILD_BATCH_SIZE)
+  const definitionSignature = definitionStructureSignature(definition)
+  batch.asyncBuildInFlight = true
+  const request = groundFlatChunkInstanceMatrixBuilder({
+    definition,
+    definitionSignature,
+    chunkKeys: pendingChunkKeys,
+  })
+  if (!request) {
+    batch.asyncBuildInFlight = false
+    return
+  }
+  void request
+    .then((result) => {
+      const activeState = groundRuntimeStateMap.get(root)
+      if (!activeState) {
+        return
+      }
+      const activeBatch = activeState.flatChunkBatches.get(batch.specKey)
+      if (!activeBatch || activeBatch !== batch) {
+        return
+      }
+      let pendingChanged = false
+      const acceptedKeys: string[] = []
+      const acceptedMatrices = new Float32Array(result.chunkKeys.length * 16)
+      let acceptedWriteIndex = 0
+      const resolvedKeySet = new Set<string>()
+      result.chunkKeys.forEach((key, index) => {
+        resolvedKeySet.add(key)
+        if (!activeBatch.pendingChunkKeys.has(key)) {
+          return
+        }
+        activeBatch.pendingChunkKeys.delete(key)
+        pendingChanged = true
+        if (activeState.hiddenChunkKeys.has(key) || activeState.chunks.has(key)) {
+          return
+        }
+        acceptedKeys.push(key)
+        const sourceOffset = index * 16
+        acceptedMatrices.set(result.matrices.subarray(sourceOffset, sourceOffset + 16), acceptedWriteIndex * 16)
+        acceptedWriteIndex += 1
+      })
+      pendingChunkKeys.forEach((key) => {
+        if (!resolvedKeySet.has(key) && activeBatch.pendingChunkKeys.delete(key)) {
+          pendingChanged = true
+        }
+      })
+      if (!acceptedKeys.length) {
+        if (pendingChanged) {
+          syncGroundFlatChunkKeyCache(activeState)
+          markGroundVisibleChunkKeysDirty(activeState)
+        }
+        return
+      }
+      appendGroundFlatChunkBatchInstanceMatrices(
+        activeBatch,
+        acceptedKeys,
+        acceptedWriteIndex === acceptedKeys.length && acceptedKeys.length === result.chunkKeys.length
+          ? result.matrices
+          : acceptedMatrices.subarray(0, acceptedWriteIndex * 16),
+      )
+      syncGroundFlatChunkKeyCache(activeState)
+      markGroundVisibleChunkKeysDirty(activeState)
+    })
+    .catch(() => {
+      /* noop */
+    })
+    .finally(() => {
+      const activeState = groundRuntimeStateMap.get(root)
+      if (!activeState) {
+        return
+      }
+      const activeBatch = activeState?.flatChunkBatches.get(batch.specKey)
+      if (!activeBatch || activeBatch !== batch) {
+        return
+      }
+      batch.asyncBuildInFlight = false
+      if (batch.pendingChunkKeys.size > 0) {
+        scheduleGroundFlatChunkBatchInstanceBuild(root, activeState, batch, definition)
+      }
+    })
+}
+
+function appendGroundFlatChunkGroup(
+  target: Map<string, { spec: GroundChunkSpec; keys: string[] }>,
+  spec: GroundChunkSpec,
+  key: string,
+): void {
+  const specKey = chunkPoolKey(spec)
+  const entry = target.get(specKey)
+  if (entry) {
+    entry.keys.push(key)
+    return
+  }
+  target.set(specKey, { spec, keys: [key] })
+}
+
+function collectGroundFlatChunkGroupsInRange(
+  target: Map<string, { spec: GroundChunkSpec; keys: string[] }>,
+  definition: GroundRuntimeDynamicMesh,
+  runtimeDefinition: GroundRuntimeDynamicMesh,
+  localEditTiles: GroundLocalEditTileData[],
+  state: GroundRuntimeState,
+  range: {
+    minChunkRow: number
+    maxChunkRow: number
+    minChunkColumn: number
+    maxChunkColumn: number
+  },
+  skipLoadWindow: {
+    minChunkRow: number
+    maxChunkRow: number
+    minChunkColumn: number
+    maxChunkColumn: number
+  } | null = null,
+): void {
+  if (range.minChunkRow > range.maxChunkRow || range.minChunkColumn > range.maxChunkColumn) {
+    return
+  }
+  for (let cr = range.minChunkRow; cr <= range.maxChunkRow; cr += 1) {
+    for (let cc = range.minChunkColumn; cc <= range.maxChunkColumn; cc += 1) {
+      if (
+        skipLoadWindow
+        && cr >= skipLoadWindow.minChunkRow && cr <= skipLoadWindow.maxChunkRow
+        && cc >= skipLoadWindow.minChunkColumn && cc <= skipLoadWindow.maxChunkColumn
+      ) {
+        continue
+      }
+      const key = groundChunkKey(cr, cc)
+      if (state.chunks.has(key) || state.flatChunkKeys.has(key) || state.hiddenChunkKeys.has(key)) {
+        continue
+      }
+
+      const spec = computeChunkSpec(definition, cr, cc)
+      if (chunkIntersectsGroundLocalEditTileFromRuntime(runtimeDefinition, spec, localEditTiles)) {
+        continue
+      }
+
+      appendGroundFlatChunkGroup(target, spec, key)
+    }
+  }
+}
+
+function compareGroundFlatChunkKeyDistanceToCamera(
+  left: string,
+  right: string,
+  cameraChunkCoord: { chunkX: number; chunkZ: number } | null,
+): number {
+  if (!cameraChunkCoord) {
+    return 0
+  }
+  const leftIndex = resolveRuntimeChunkIndexFromRuntimeKey(left)
+  const rightIndex = resolveRuntimeChunkIndexFromRuntimeKey(right)
+  if (!leftIndex || !rightIndex) {
+    return 0
+  }
+  const leftRowDelta = Math.abs(leftIndex.row - cameraChunkCoord.chunkZ)
+  const leftColumnDelta = Math.abs(leftIndex.column - cameraChunkCoord.chunkX)
+  const rightRowDelta = Math.abs(rightIndex.row - cameraChunkCoord.chunkZ)
+  const rightColumnDelta = Math.abs(rightIndex.column - cameraChunkCoord.chunkX)
+  const leftRingDistance = Math.max(leftRowDelta, leftColumnDelta)
+  const rightRingDistance = Math.max(rightRowDelta, rightColumnDelta)
+  if (leftRingDistance !== rightRingDistance) {
+    return leftRingDistance - rightRingDistance
+  }
+  const leftManhattanDistance = leftRowDelta + leftColumnDelta
+  const rightManhattanDistance = rightRowDelta + rightColumnDelta
+  if (leftManhattanDistance !== rightManhattanDistance) {
+    return leftManhattanDistance - rightManhattanDistance
+  }
+  if (leftIndex.row !== rightIndex.row) {
+    return leftIndex.row - rightIndex.row
+  }
+  return leftIndex.column - rightIndex.column
+}
+
+function sortGroundFlatChunkKeysByCameraPriority(
+  chunkKeys: string[],
+  cameraChunkCoord: { chunkX: number; chunkZ: number } | null,
+): string[] {
+  if (!cameraChunkCoord || chunkKeys.length <= 1) {
+    return chunkKeys
+  }
+  chunkKeys.sort((left, right) => compareGroundFlatChunkKeyDistanceToCamera(left, right, cameraChunkCoord))
+  return chunkKeys
+}
+
+function isGroundFlatChunkKeyWithinChunkWindow(
+  key: string,
+  range: {
+    minChunkRow: number
+    maxChunkRow: number
+    minChunkColumn: number
+    maxChunkColumn: number
+  },
+): boolean {
+  const indices = resolveRuntimeChunkIndexFromRuntimeKey(key)
+  if (!indices) {
+    return false
+  }
+  return indices.row >= range.minChunkRow
+    && indices.row <= range.maxChunkRow
+    && indices.column >= range.minChunkColumn
+    && indices.column <= range.maxChunkColumn
+}
+
 function syncGroundFlatChunkBatches(
   root: THREE.Group,
   state: GroundRuntimeState,
   definition: GroundRuntimeDynamicMesh,
   desiredFlatChunkGroups: Map<string, { spec: GroundChunkSpec; keys: string[] }>,
+  cameraChunkCoord: { chunkX: number; chunkZ: number } | null = null,
+  releaseWindow: {
+    minChunkRow: number
+    maxChunkRow: number
+    minChunkColumn: number
+    maxChunkColumn: number
+  } | null = null,
 ): void {
   // 这里只同步 flat chunk 批次，不碰雕刻 chunk 的独立 Mesh。
   // 这条分离非常关键：一旦 flat / sculpted 混在同一个集合里，后续释放、拾取、以及编辑后的降级/升级都会很难维护。
   // 这里的策略是“窗口只负责补充新出现的 flat chunk”，而不是把窗口外已经创建过的 flat chunk 再卸载掉。
-  if (desiredFlatChunkGroups.size === 0) {
+  if (desiredFlatChunkGroups.size === 0 && state.flatChunkBatches.size === 0) {
     return
   }
 
   const material = resolveGroundRuntimeMaterial(root, state)
   const nextBatches = new Map<string, GroundFlatChunkBatchRuntime>(state.flatChunkBatches)
+  const hiddenChunkKeysChanged = state.lastFlatChunkSyncHiddenChunkKeysVersion !== state.hiddenChunkKeysVersion
+  const batchesNeedingAsyncBuild = new Set<GroundFlatChunkBatchRuntime>()
   let changed = false
 
   desiredFlatChunkGroups.forEach((group, specKey) => {
     const existing = state.flatChunkBatches.get(specKey)
     if (existing) {
+      existing.pendingChunkKeys = existing.pendingChunkKeys instanceof Set ? existing.pendingChunkKeys : new Set<string>()
+      existing.asyncBuildInFlight = existing.asyncBuildInFlight === true
       const existingKeys = existing.chunkKeys
-      const mergedKeys = new Set(existing.chunkKeys)
+      const nextKeysToAppend: string[] = []
       group.keys.forEach((key) => {
-        if (typeof key === 'string' && key.length > 0 && !state.chunks.has(key) && !state.hiddenChunkKeys.has(key)) {
-          mergedKeys.add(key)
+        if (
+          typeof key === 'string'
+          && key.length > 0
+          && !state.chunks.has(key)
+          && !state.hiddenChunkKeys.has(key)
+          && !existing.pendingChunkKeys.has(key)
+        ) {
+          nextKeysToAppend.push(key)
         }
       })
-      const nextKeys = Array.from(mergedKeys)
-      const needsResize = nextKeys.length > existing.instanceCapacity
-      const preservesExistingOrder = existingKeys.length <= nextKeys.length
-        && existingKeys.every((key, index) => key === nextKeys[index])
+      sortGroundFlatChunkKeysByCameraPriority(nextKeysToAppend, cameraChunkCoord)
+      const pendingKeyCountAfterAppend = existing.pendingChunkKeys.size + nextKeysToAppend.length
+      const nextKeyCount = existingKeys.length + pendingKeyCountAfterAppend
+      const capacityTargetCount = canBuildGroundFlatChunkInstancesAsync(definition)
+        ? existingKeys.length + Math.min(pendingKeyCountAfterAppend, GROUND_FLAT_CHUNK_ASYNC_BUILD_BATCH_SIZE)
+        : nextKeyCount
+      const needsResize = capacityTargetCount > existing.instanceCapacity
       if (needsResize) {
+        const nextCapacity = resolveGroundFlatChunkBatchCapacity(capacityTargetCount, existing.instanceCapacity)
         const geometry = buildFlatGroundChunkGeometry(group.spec, Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1)
-        const resizedMesh = new THREE.InstancedMesh(geometry, material, nextKeys.length)
+        const resizedMesh = new THREE.InstancedMesh(geometry, material, nextCapacity)
         resizedMesh.name = existing.mesh.name
         resizedMesh.receiveShadow = existing.mesh.receiveShadow
         resizedMesh.castShadow = existing.mesh.castShadow
         resizedMesh.frustumCulled = false
+        resizedMesh.count = existing.mesh.count
         resizedMesh.userData.dynamicMeshType = 'Ground'
         resizedMesh.userData.groundChunkBatch = {
           specKey,
-          chunkKeys: [...nextKeys],
+          chunkKeys: [...existingKeys],
         }
+        copyGroundFlatChunkInstanceMatrices(existing.mesh, resizedMesh, existingKeys.length)
         existing.mesh.removeFromParent()
         try {
           ;(existing.mesh.geometry as any)?.dispose?.()
@@ -3488,18 +4386,26 @@ function syncGroundFlatChunkBatches(
           /* noop */
         }
         existing.mesh = resizedMesh
-        existing.instanceCapacity = nextKeys.length
+        existing.instanceCapacity = nextCapacity
         root.add(resizedMesh)
         changed = true
       }
+      if (!(existing.instanceHeightCache instanceof Map)) {
+        existing.instanceHeightCache = new Map<string, number>()
+      }
       existing.spec = group.spec
-      if (needsResize || !preservesExistingOrder) {
+      if (nextKeysToAppend.length > 0) {
         // 同规格批次直接复用，不重新创建 geometry。
         // 这里会把新进入视野的 flat chunk 追加进缓存，但不会把已经加载的旧 chunk 因为相机移动而删掉。
-        refreshGroundFlatChunkBatchInstances(existing, definition, nextKeys)
-        changed = true
-      } else if (nextKeys.length > existingKeys.length) {
-        appendGroundFlatChunkBatchInstances(existing, definition, nextKeys.slice(existingKeys.length))
+        if (canBuildGroundFlatChunkInstancesAsync(definition)) {
+          existing.pendingChunkKeys = new Set<string>([
+            ...nextKeysToAppend,
+            ...Array.from(existing.pendingChunkKeys),
+          ])
+          batchesNeedingAsyncBuild.add(existing)
+        } else {
+          appendGroundFlatChunkBatchInstances(existing, definition, nextKeysToAppend)
+        }
         changed = true
       }
       nextBatches.set(specKey, existing)
@@ -3508,16 +4414,23 @@ function syncGroundFlatChunkBatches(
 
     // 只有首次出现的规格才新建 geometry + InstancedMesh。
     // 这意味着绝大多数 chunk 进入缓存后，后续只是换矩阵，不再重复分配大块几何资源。
+    const prioritizedGroupKeys = sortGroundFlatChunkKeysByCameraPriority([...group.keys], cameraChunkCoord)
     const geometry = buildFlatGroundChunkGeometry(group.spec, Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1)
-    const mesh = new THREE.InstancedMesh(geometry, material, group.keys.length)
+    const initialInstanceTargetCount = canBuildGroundFlatChunkInstancesAsync(definition)
+      ? Math.min(prioritizedGroupKeys.length, GROUND_FLAT_CHUNK_ASYNC_BUILD_BATCH_SIZE)
+      : prioritizedGroupKeys.length
+    const instanceCapacity = resolveGroundFlatChunkBatchCapacity(initialInstanceTargetCount)
+    const mesh = new THREE.InstancedMesh(geometry, material, instanceCapacity)
     mesh.name = `GroundFlatChunks:${specKey}`
     mesh.receiveShadow = true
     mesh.castShadow = state.castShadow
     mesh.frustumCulled = false
+    mesh.count = 0
+    mesh.visible = false
     mesh.userData.dynamicMeshType = 'Ground'
     mesh.userData.groundChunkBatch = {
       specKey,
-      chunkKeys: [...group.keys],
+      chunkKeys: [],
     }
 
     const batch: GroundFlatChunkBatchRuntime = {
@@ -3525,24 +4438,102 @@ function syncGroundFlatChunkBatches(
       spec: group.spec,
       mesh,
       chunkKeys: [],
-      instanceCapacity: group.keys.length,
+      pendingChunkKeys: new Set<string>(),
+      instanceCapacity,
+      instanceHeightCache: new Map<string, number>(),
+      asyncBuildInFlight: false,
     }
-    refreshGroundFlatChunkBatchInstances(batch, definition, group.keys)
+    if (canBuildGroundFlatChunkInstancesAsync(definition)) {
+      batch.pendingChunkKeys = new Set<string>(prioritizedGroupKeys)
+      batchesNeedingAsyncBuild.add(batch)
+    } else {
+      refreshGroundFlatChunkBatchInstances(batch, definition, prioritizedGroupKeys)
+    }
     root.add(mesh)
     nextBatches.set(specKey, batch)
     changed = true
   })
 
-  nextBatches.forEach((batch) => {
-    const nextKeys = batch.chunkKeys.filter((key) => !state.chunks.has(key) && !state.hiddenChunkKeys.has(key))
-    if (nextKeys.length !== batch.chunkKeys.length) {
-      refreshGroundFlatChunkBatchInstances(batch, definition, nextKeys)
+  if (hiddenChunkKeysChanged) {
+    nextBatches.forEach((batch, specKey) => {
+      if (!(batch.instanceHeightCache instanceof Map)) {
+        batch.instanceHeightCache = new Map<string, number>()
+      }
+      const nextKeys = batch.chunkKeys.filter((key) => !state.chunks.has(key) && !state.hiddenChunkKeys.has(key))
+      const nextPendingKeys = Array.from(batch.pendingChunkKeys).filter((key) => !state.chunks.has(key) && !state.hiddenChunkKeys.has(key))
+      if (!nextKeys.length && nextPendingKeys.length === 0) {
+        batch.mesh.removeFromParent()
+        try {
+          ;(batch.mesh.geometry as any)?.dispose?.()
+        } catch (_error) {
+          /* noop */
+        }
+        nextBatches.delete(specKey)
+        changed = true
+        return
+      }
+      if (nextKeys.length !== batch.chunkKeys.length) {
+        refreshGroundFlatChunkBatchInstances(batch, definition, nextKeys)
+        changed = true
+      }
+      if (nextPendingKeys.length !== batch.pendingChunkKeys.size) {
+        batch.pendingChunkKeys = new Set<string>(nextPendingKeys)
+        changed = true
+      }
+    })
+  }
+  if (releaseWindow) {
+    nextBatches.forEach((batch, specKey) => {
+      const nextKeys = batch.chunkKeys.filter((key) => {
+        if (state.chunks.has(key) || state.hiddenChunkKeys.has(key)) {
+          return false
+        }
+        return isGroundFlatChunkKeyWithinChunkWindow(key, releaseWindow)
+      })
+      const nextPendingKeys = Array.from(batch.pendingChunkKeys).filter((key) => {
+        if (state.chunks.has(key) || state.hiddenChunkKeys.has(key)) {
+          return false
+        }
+        return isGroundFlatChunkKeyWithinChunkWindow(key, releaseWindow)
+      })
+      if (nextKeys.length === batch.chunkKeys.length && nextPendingKeys.length === batch.pendingChunkKeys.size) {
+        return
+      }
+      const nextLoadedKeySet = new Set<string>(nextKeys)
+      const nextPendingKeySet = new Set<string>(nextPendingKeys)
+      const removedLoadedKeys = batch.chunkKeys.filter((key) => !nextLoadedKeySet.has(key))
+      const removedPendingKeys = Array.from(batch.pendingChunkKeys).filter((key) => !nextPendingKeySet.has(key))
+      batch.pendingChunkKeys = new Set<string>(nextPendingKeys)
+      if (nextKeys.length !== batch.chunkKeys.length) {
+        compactGroundFlatChunkBatchInstances(batch, nextKeys)
+      }
+      if (!nextKeys.length && nextPendingKeys.length === 0) {
+        batch.mesh.removeFromParent()
+        try {
+          ;(batch.mesh.geometry as any)?.dispose?.()
+        } catch (_error) {
+          /* noop */
+        }
+        nextBatches.delete(specKey)
+      }
+      removedLoadedKeys.forEach((key) => {
+        batch.instanceHeightCache.delete(key)
+      })
+      removedPendingKeys.forEach((key) => {
+        batch.instanceHeightCache.delete(key)
+      })
       changed = true
-    }
-  })
+    })
+  }
   state.flatChunkBatches = nextBatches
   if (changed) {
+    syncGroundFlatChunkKeyCache(state)
     markGroundVisibleChunkKeysDirty(state)
+  }
+  if (batchesNeedingAsyncBuild.size > 0) {
+    batchesNeedingAsyncBuild.forEach((batch) => {
+      scheduleGroundFlatChunkBatchInstanceBuild(root, state, batch, definition)
+    })
   }
 }
 
@@ -3579,6 +4570,12 @@ function ensureChunkMesh(
     return existing
   }
   const spec = computeChunkSpec(definition, chunkRow, chunkColumn)
+  const poolKey = chunkPoolKey(spec)
+  const pool = state.meshPool.get(poolKey)
+  const pooledMesh = pool && pool.length ? pool.pop() : undefined
+  if (pool && pool.length === 0) {
+    state.meshPool.delete(poolKey)
+  }
   let material = resolveGroundRuntimeMaterial(root, state)
 
   // Fallback placeholder (shared material should be set/cached by SceneGraph/editor).
@@ -3588,13 +4585,6 @@ function ensureChunkMesh(
       roughness: 1.0,
       metalness: 0.1,
     })
-  }
-
-  const poolKey = chunkPoolKey(spec)
-  const pool = state.meshPool.get(poolKey)
-  const pooledMesh = pool && pool.length ? pool.pop() : undefined
-  if (pool && pool.length === 0) {
-    state.meshPool.delete(poolKey)
   }
 
   const mesh = pooledMesh ?? new THREE.Mesh(buildGroundChunkGeometry(definition, spec), material)
@@ -3619,7 +4609,7 @@ function ensureChunkMesh(
   mesh.name = `GroundChunk:${chunkRow},${chunkColumn}`
   mesh.receiveShadow = true
   mesh.castShadow = state.castShadow
-  mesh.frustumCulled = false
+  mesh.frustumCulled = true
   mesh.userData.dynamicMeshType = 'Ground'
   mesh.userData.groundChunk = { ...spec, chunkRow, chunkColumn }
   mesh.visible = true
@@ -4447,15 +5437,17 @@ function updateChunkGeometry(geometry: THREE.BufferGeometry, definition: GroundR
   const startZ = chunkOrigin + spec.startRow * cellSize
   const importedLocalEditCellSize = resolveGroundChunkLocalEditCellSize(definition, spec)
   const useWorldSpaceHeightSampling = importedLocalEditCellSize > (Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1)
-  const heightRegion = sampleGroundEffectiveHeightRegionWithoutLocalEdit(
-    definition,
-    spec.startRow,
-    spec.startRow + spec.rows,
-    spec.startColumn,
-    spec.startColumn + spec.columns,
-  )
-  const heightValues = heightRegion.values
-  const heightStride = heightRegion.stride
+  const heightRegion = useWorldSpaceHeightSampling
+    ? null
+    : sampleGroundEffectiveHeightRegionWithoutLocalEdit(
+      definition,
+      spec.startRow,
+      spec.startRow + spec.rows,
+      spec.startColumn,
+      spec.startColumn + spec.columns,
+    )
+  const heightValues = heightRegion?.values
+  const heightStride = heightRegion?.stride ?? 0
 
   let vertexIndex = 0
   for (let localRow = 0; localRow <= chunkRows; localRow += 1) {
@@ -4464,7 +5456,7 @@ function updateChunkGeometry(geometry: THREE.BufferGeometry, definition: GroundR
       const x = startX + localColumn * layout.stepX
       const height = useWorldSpaceHeightSampling
         ? sampleGroundHeight(definition, x, z)
-        : heightValues[localRow * heightStride + localColumn] ?? sampleGroundHeight(definition, x, z)
+        : heightValues?.[localRow * heightStride + localColumn] ?? sampleGroundHeight(definition, x, z)
       const columnRatio = columns === 0 ? 0 : clampInclusive((x - chunkOrigin) / Math.max(chunkSizeMeters, Number.EPSILON), 0, 1)
       const rowRatio = rows === 0 ? 0 : clampInclusive((z - chunkOrigin) / Math.max(chunkSizeMeters, Number.EPSILON), 0, 1)
       positionAttr.setXYZ(vertexIndex, x, height, z)
@@ -4647,13 +5639,21 @@ export function updateGroundChunks(
   // 后面所有 loadRadius / unloadRadius / chunk 中心点位置，都要乘这个值才能从“格子数”换成“米”。
   const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
   const chunkSizeMeters = resolveInfiniteChunkSizeMeters(definition)
-  const localEditTiles = ensureGroundLocalEditTileCachesFromRuntime(runtimeDefinition).tiles
+  let localEditTilesCache: GroundLocalEditTileData[] | null = null
+  const getLocalEditTiles = (): GroundLocalEditTileData[] => {
+    if (!localEditTilesCache) {
+      localEditTilesCache = ensureGroundLocalEditTileCachesFromRuntime(runtimeDefinition).tiles
+    }
+    return localEditTilesCache
+  }
 
   let localX = 0
   let localZ = 0
 
   if (camera) {
-    root.updateMatrixWorld(true)
+    // We only need the runtime group's world transform to convert camera space.
+    // Updating children recursively turns chunk streaming checks into a full-scene walk.
+    root.updateWorldMatrix(true, false)
   }
 
   if (camera) {
@@ -4665,8 +5665,11 @@ export function updateGroundChunks(
   }
 
   const cameraChunkCoord = resolveGroundChunkCoordFromWorldPosition(localX, localZ, chunkSizeMeters)
+
   const loadRadiusChunks = resolveInfiniteFlatTilingRadiusChunks(definition)
-  updateInfiniteFlatTilingBounds(state, cameraChunkCoord, loadRadiusChunks)
+  const flatReleaseRadiusChunks = resolveInfiniteFlatTilingReleaseRadiusChunks(definition)
+  const flatTilingExpansion = updateInfiniteFlatTilingBounds(state, cameraChunkCoord, loadRadiusChunks)
+  const flatTilingChanged = flatTilingExpansion !== null
   const unloadRadiusChunks = loadRadiusChunks + Math.max(4, Math.ceil(loadRadiusChunks * 0.5))
 
   const dxMoved = localX - (state.lastCameraLocalX ?? 0)
@@ -4692,6 +5695,10 @@ export function updateGroundChunks(
   const flatMaxLoadChunkColumn = normalizeChunkColumn(state.flatTilingMaxChunkColumn)
   const flatMinLoadChunkRow = normalizeChunkRow(state.flatTilingMinChunkRow)
   const flatMaxLoadChunkRow = normalizeChunkRow(state.flatTilingMaxChunkRow)
+  const flatMinReleaseChunkColumn = normalizeChunkColumn(cameraChunkCoord.chunkX - flatReleaseRadiusChunks)
+  const flatMaxReleaseChunkColumn = normalizeChunkColumn(cameraChunkCoord.chunkX + flatReleaseRadiusChunks)
+  const flatMinReleaseChunkRow = normalizeChunkRow(cameraChunkCoord.chunkZ - flatReleaseRadiusChunks)
+  const flatMaxReleaseChunkRow = normalizeChunkRow(cameraChunkCoord.chunkZ + flatReleaseRadiusChunks)
 
   const minUnloadChunkColumn = normalizeChunkColumn(cameraChunkCoord.chunkX - unloadRadiusChunks)
   const maxUnloadChunkColumn = normalizeChunkColumn(cameraChunkCoord.chunkX + unloadRadiusChunks)
@@ -4739,7 +5746,7 @@ export function updateGroundChunks(
     return
   }
 
-  if (!force && definition.terrainMode !== 'infinite') {
+  if (!force) {
     // Only update when the camera moved enough (or when we have pending work).
     if (!hasPendingWork && !desiredWindowChanged && movedSq < moveThresholdSq) {
       // 相机没明显移动、窗口也没变化、队列里也没有待处理工作时，什么都不做。
@@ -4756,6 +5763,7 @@ export function updateGroundChunks(
     // 只有当目标窗口真的变化时，才重建创建/销毁队列。
     // 这样可以把“持续加载”与“窗口变化”分离开，避免每一帧都重新排序整个 chunk 集合。
     state.desiredSignature = nextDesiredSignature
+    const localEditTiles = getLocalEditTiles()
 
     // Create queue (nearest-first).
     // 创建队列按距离从近到远排序，保证相机附近优先出现内容，远处 chunk 可以稍后再补。
@@ -4787,7 +5795,7 @@ export function updateGroundChunks(
       for (let cc = minLoadChunkColumn; cc <= maxLoadChunkColumn; cc += 1) {
         const key = groundChunkKey(cr, cc)
         // 已经存在的 chunk 或被隐藏的 chunk，不应该再次进入创建队列。
-        if (state.chunks.has(key) || state.hiddenChunkKeys.has(key)) {
+        if (state.chunks.has(key) || state.flatChunkKeys.has(key) || state.hiddenChunkKeys.has(key)) {
           continue
         }
 
@@ -4821,7 +5829,7 @@ export function updateGroundChunks(
           }
         }
       }
-    }
+    }  
 
     creates.sort((a, b) => (a.priority - b.priority) || (a.distSq - b.distSq))
     state.pendingCreates = creates
@@ -4878,46 +5886,140 @@ export function updateGroundChunks(
   }
 
   // flat 分组不直接创建 Mesh，而是先收集起来，后面统一交给 syncGroundFlatChunkBatches(...) 同步。
-  for (let cr = flatMinLoadChunkRow; cr <= flatMaxLoadChunkRow; cr += 1) {
-    for (let cc = flatMinLoadChunkColumn; cc <= flatMaxLoadChunkColumn; cc += 1) {
-      if (
-        cr >= minLoadChunkRow && cr <= maxLoadChunkRow &&
-        cc >= minLoadChunkColumn && cc <= maxLoadChunkColumn
-      ) {
-        continue
-      }
-      const key = groundChunkKey(cr, cc)
-      if (state.chunks.has(key) || state.hiddenChunkKeys.has(key)) {
-        continue
-      }
+  const shouldSyncFlatChunks = force
+    || desiredWindowChanged
+    || flatTilingChanged
+    || state.lastFlatChunkSyncTilingVersion < 0
+    || state.lastFlatChunkSyncHiddenChunkKeysVersion !== state.hiddenChunkKeysVersion
 
-      const spec = computeChunkSpec(definition, cr, cc)
-      if (chunkIntersectsGroundLocalEditTileFromRuntime(runtimeDefinition, spec, localEditTiles)) {
-        continue
-      }
+  if (shouldSyncFlatChunks) {
+    const localEditTiles = getLocalEditTiles()
+    const skipLoadWindow = {
+      minChunkRow: minLoadChunkRow,
+      maxChunkRow: maxLoadChunkRow,
+      minChunkColumn: minLoadChunkColumn,
+      maxChunkColumn: maxLoadChunkColumn,
+    }
+    const needsFullFlatChunkScan = force
+      || desiredWindowChanged
+      || state.lastFlatChunkSyncTilingVersion < 0
+      || state.lastFlatChunkSyncHiddenChunkKeysVersion !== state.hiddenChunkKeysVersion
+      || !flatTilingExpansion
+      || !flatTilingExpansion.hadPreviousBounds
+    // When the desired load window moves, overlap zones can transition from sculpted chunks
+    // back to flat instancing without any flat-tiling expansion. Re-scan the full flat window
+    // so those keys are re-collected instead of silently dropping out of the batched mesh.
 
-      const specKey = chunkPoolKey(spec)
-      const entry = flatChunkGroups.get(specKey)
-      if (entry) {
-        entry.keys.push(key)
-      } else {
-        flatChunkGroups.set(specKey, {
-          spec,
-          keys: [key],
-        })
+    if (needsFullFlatChunkScan) {
+      collectGroundFlatChunkGroupsInRange(
+        flatChunkGroups,
+        definition,
+        runtimeDefinition,
+        localEditTiles,
+        state,
+        {
+          minChunkRow: flatMinLoadChunkRow,
+          maxChunkRow: flatMaxLoadChunkRow,
+          minChunkColumn: flatMinLoadChunkColumn,
+          maxChunkColumn: flatMaxLoadChunkColumn,
+        },
+        skipLoadWindow,
+      )
+    } else {
+      const overlapMinChunkRow = Math.max(flatTilingExpansion.nextMinChunkRow, flatTilingExpansion.previousMinChunkRow)
+      const overlapMaxChunkRow = Math.min(flatTilingExpansion.nextMaxChunkRow, flatTilingExpansion.previousMaxChunkRow)
+      if (flatTilingExpansion.nextMinChunkRow < flatTilingExpansion.previousMinChunkRow) {
+        collectGroundFlatChunkGroupsInRange(
+          flatChunkGroups,
+          definition,
+          runtimeDefinition,
+          localEditTiles,
+          state,
+          {
+            minChunkRow: flatTilingExpansion.nextMinChunkRow,
+            maxChunkRow: flatTilingExpansion.previousMinChunkRow - 1,
+            minChunkColumn: flatTilingExpansion.nextMinChunkColumn,
+            maxChunkColumn: flatTilingExpansion.nextMaxChunkColumn,
+          },
+          skipLoadWindow,
+        )
+      }
+      if (flatTilingExpansion.nextMaxChunkRow > flatTilingExpansion.previousMaxChunkRow) {
+        collectGroundFlatChunkGroupsInRange(
+          flatChunkGroups,
+          definition,
+          runtimeDefinition,
+          localEditTiles,
+          state,
+          {
+            minChunkRow: flatTilingExpansion.previousMaxChunkRow + 1,
+            maxChunkRow: flatTilingExpansion.nextMaxChunkRow,
+            minChunkColumn: flatTilingExpansion.nextMinChunkColumn,
+            maxChunkColumn: flatTilingExpansion.nextMaxChunkColumn,
+          },
+          skipLoadWindow,
+        )
+      }
+      if (overlapMinChunkRow <= overlapMaxChunkRow) {
+        if (flatTilingExpansion.nextMinChunkColumn < flatTilingExpansion.previousMinChunkColumn) {
+          collectGroundFlatChunkGroupsInRange(
+            flatChunkGroups,
+            definition,
+            runtimeDefinition,
+            localEditTiles,
+            state,
+            {
+              minChunkRow: overlapMinChunkRow,
+              maxChunkRow: overlapMaxChunkRow,
+              minChunkColumn: flatTilingExpansion.nextMinChunkColumn,
+              maxChunkColumn: flatTilingExpansion.previousMinChunkColumn - 1,
+            },
+            skipLoadWindow,
+          )
+        }
+        if (flatTilingExpansion.nextMaxChunkColumn > flatTilingExpansion.previousMaxChunkColumn) {
+          collectGroundFlatChunkGroupsInRange(
+            flatChunkGroups,
+            definition,
+            runtimeDefinition,
+            localEditTiles,
+            state,
+            {
+              minChunkRow: overlapMinChunkRow,
+              maxChunkRow: overlapMaxChunkRow,
+              minChunkColumn: flatTilingExpansion.previousMaxChunkColumn + 1,
+              maxChunkColumn: flatTilingExpansion.nextMaxChunkColumn,
+            },
+            skipLoadWindow,
+          )
+        }
       }
     }
-  }
 
-  desiredFlatChunkGroups = flatChunkGroups
+    desiredFlatChunkGroups = flatChunkGroups
 
   // 同步 flat 批次。这里不会按视锥销毁，只会把新进入大平铺范围的 chunk 追加进实例批次。
   // 已经存在的 flat chunk 会一直保留，直到它被雕刻 chunk 替代。
-  syncGroundFlatChunkBatches(root, state, definition, desiredFlatChunkGroups)
+    syncGroundFlatChunkBatches(
+      root,
+      state,
+      definition,
+      desiredFlatChunkGroups,
+      cameraChunkCoord,
+      {
+        minChunkRow: flatMinReleaseChunkRow,
+        maxChunkRow: flatMaxReleaseChunkRow,
+        minChunkColumn: flatMinReleaseChunkColumn,
+        maxChunkColumn: flatMaxReleaseChunkColumn,
+      },
+    )
+    state.lastFlatChunkSyncTilingVersion = state.flatTilingVersion
+    state.lastFlatChunkSyncHiddenChunkKeysVersion = state.hiddenChunkKeysVersion
+  }
 
-  const defaultBudget: GroundChunkBudget | null = camera
+  const defaultBudget: GroundChunkBudget = camera
     ? ({ maxCreatePerUpdate: 6, maxDestroyPerUpdate: 8 } satisfies GroundChunkBudget)
-    : null
+    : ({ maxCreatePerUpdate: 12, maxDestroyPerUpdate: 16, maxMs: 8 } satisfies GroundChunkBudget)
   // 没有显式预算时，给摄像机驱动的更新一个保守默认值：
   // 创建数量不要太大，否则会卡；销毁数量也不要太大，否则会导致边缘内容瞬间消失。
   const effectiveBudget: GroundChunkBudget | null = options.budget === undefined ? defaultBudget : (options.budget as GroundChunkBudget | null)
@@ -5025,6 +6127,54 @@ export function syncGroundChunkLoadingMode(
     return
   }
   updateGroundChunks(root, runtimeDefinition, camera, options)
+}
+
+export function clearGroundFlatChunkBatches(target: THREE.Object3D): boolean {
+  const root = resolveGroundRuntimeGroup(target)
+  if (!root) {
+    return false
+  }
+  const state = groundRuntimeStateMap.get(root)
+  if (!state || state.flatChunkBatches.size <= 0) {
+    return false
+  }
+
+  state.flatChunkBatches.forEach((batch) => {
+    batch.mesh.removeFromParent()
+    try {
+      ;(batch.mesh.geometry as any)?.dispose?.()
+    } catch (_error) {
+      /* noop */
+    }
+  })
+  state.flatChunkBatches.clear()
+  state.flatChunkKeys.clear()
+  state.lastFlatChunkSyncTilingVersion = -1
+  state.lastFlatChunkSyncHiddenChunkKeysVersion = state.hiddenChunkKeysVersion
+  state.desiredSignature = ''
+  syncGroundFlatChunkKeyCache(state)
+  markGroundVisibleChunkKeysDirty(state)
+  return true
+}
+
+export function hasPendingGroundChunkWork(target: THREE.Object3D): boolean {
+  const root = resolveGroundRuntimeGroup(target)
+  if (!root) {
+    return false
+  }
+  const state = groundRuntimeStateMap.get(root)
+  if (!state) {
+    return false
+  }
+  if (state.pendingCreates.length > 0 || state.pendingDestroys.length > 0) {
+    return true
+  }
+  for (const batch of state.flatChunkBatches.values()) {
+    if (batch.pendingChunkKeys.size > 0 || batch.asyncBuildInFlight) {
+      return true
+    }
+  }
+  return false
 }
 
 export function updateGroundMesh(target: THREE.Object3D, definition: GroundDynamicMesh) {
@@ -5275,6 +6425,54 @@ export function getVisibleInfiniteGroundChunkKeys(target: THREE.Object3D): strin
   return state.visibleChunkKeysCache
 }
 
+export function getVisibleInfiniteGroundChunkVersion(target: THREE.Object3D): number | null {
+  const group = resolveGroundRuntimeGroup(target)
+  if (!group) {
+    return null
+  }
+  const state = groundRuntimeStateMap.get(group)
+  if (!state) {
+    return null
+  }
+  return state.visibleChunkKeysVersion
+}
+
+export function getVisibleInfiniteGroundChunkSignature(target: THREE.Object3D): string {
+  const group = resolveGroundRuntimeGroup(target)
+  if (!group) {
+    return '0:0'
+  }
+  const state = groundRuntimeStateMap.get(group)
+  if (!state) {
+    return '0:0'
+  }
+  if (state.visibleChunkSignatureCacheVersion === state.visibleChunkKeysVersion) {
+    return state.visibleChunkSignatureCache
+  }
+
+  let count = 0
+  let hash = 0
+  state.chunks.forEach((_runtime, key) => {
+    if (state.hiddenChunkKeys.has(key)) {
+      return
+    }
+    count += 1
+    hash = updateGroundChunkSignatureHash(hash, key)
+  })
+  state.flatChunkKeys.forEach((key) => {
+    if (state.chunks.has(key) || state.hiddenChunkKeys.has(key)) {
+      return
+    }
+    count += 1
+    hash = updateGroundChunkSignatureHash(hash, key)
+  })
+
+  const signature = `${count}:${hash}`
+  state.visibleChunkSignatureCache = signature
+  state.visibleChunkSignatureCacheVersion = state.visibleChunkKeysVersion
+  return signature
+}
+
 export function setInfiniteGroundHiddenChunkKeys(
   target: THREE.Object3D,
   chunkKeys: Iterable<string>,
@@ -5329,14 +6527,19 @@ export function setInfiniteGroundHiddenChunkKeys(
   })
   state.flatChunkBatches.forEach((batch, specKey) => {
     const nextKeys = batch.chunkKeys.filter((key) => !nextHiddenChunkKeys.has(key))
-    if (nextKeys.length === batch.chunkKeys.length) {
+    const nextPendingKeys = Array.from(batch.pendingChunkKeys).filter((key) => !nextHiddenChunkKeys.has(key))
+    if (nextKeys.length === batch.chunkKeys.length && nextPendingKeys.length === batch.pendingChunkKeys.size) {
       return
     }
-    batch.chunkKeys = nextKeys
-    batch.mesh.count = nextKeys.length
-    batch.mesh.instanceMatrix.needsUpdate = true
-    batch.mesh.visible = nextKeys.length > 0
-    if (!nextKeys.length) {
+    const nextKeySet = new Set<string>(nextKeys)
+    const nextPendingKeySet = new Set<string>(nextPendingKeys)
+    const removedLoadedKeys = batch.chunkKeys.filter((key) => !nextKeySet.has(key))
+    const removedPendingKeys = Array.from(batch.pendingChunkKeys).filter((key) => !nextPendingKeySet.has(key))
+    batch.pendingChunkKeys = new Set<string>(nextPendingKeys)
+    if (nextKeys.length !== batch.chunkKeys.length) {
+      compactGroundFlatChunkBatchInstances(batch, nextKeys)
+    }
+    if (!nextKeys.length && nextPendingKeys.length === 0) {
       batch.mesh.removeFromParent()
       try {
         ;(batch.mesh.geometry as any)?.dispose?.()
@@ -5344,16 +6547,18 @@ export function setInfiniteGroundHiddenChunkKeys(
         /* noop */
       }
       state.flatChunkBatches.delete(specKey)
-    } else {
-      batch.mesh.userData.groundChunkBatch = {
-        specKey,
-        chunkKeys: [...nextKeys],
-      }
     }
+    removedLoadedKeys.forEach((key) => {
+      batch.instanceHeightCache.delete(key)
+    })
+    removedPendingKeys.forEach((key) => {
+      batch.instanceHeightCache.delete(key)
+    })
     markGroundVisibleChunkKeysDirty(state)
   })
-    return true
-  }
+  syncGroundFlatChunkKeyCache(state)
+  return true
+}
 
   function averageNormalsOnEdge(params: {
     geometryA: THREE.BufferGeometry

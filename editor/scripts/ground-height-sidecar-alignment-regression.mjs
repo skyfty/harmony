@@ -12,7 +12,7 @@ assert.match(
 )
 assert.match(
   source,
-  /function resolveGroundHeightSidecarLayoutFromHeader\(headerByteLength: number, metadataByteLength: number, vertexCount: number\): GroundHeightSidecarLayout \{[\s\S]*const manualOffset = alignToFloat64Boundary\(headerByteLength \+ metadataByteLength\)/,
+  /function resolveGroundHeightSidecarLayoutFromHeader\([\s\S]*headerByteLength: number,[\s\S]*metadataByteLength: number,[\s\S]*vertexCount: number,[\s\S]*\): GroundHeightSidecarLayout \{[\s\S]*const manualOffset = alignToFloat64Boundary\(headerByteLength \+ metadataByteLength\)/,
   'groundHeightSidecar should derive aligned offsets from the actual header size',
 )
 assert.match(
@@ -22,7 +22,7 @@ assert.match(
 )
 assert.match(
   source,
-  /if \(headerByteLength \+ metadataByteLength > buffer\.byteLength\) \{[\s\S]*throw new Error\(`Invalid \$\{GROUND_HEIGHTMAP_SIDECAR_FILENAME\} header`\)[\s\S]*const layout = resolveGroundHeightSidecarLayoutFromHeader\(headerByteLength, metadataByteLength, vertexCount\)[\s\S]*const expectedByteLength = layout\.totalByteLength/,
+  /if \(headerByteLength \+ metadataByteLength > buffer\.byteLength\) \{[\s\S]*throw new Error\(`Invalid \$\{GROUND_HEIGHTMAP_SIDECAR_FILENAME\} header`\)[\s\S]*const layout = resolveGroundHeightSidecarLayoutFromHeader\([\s\S]*headerByteLength,[\s\S]*metadataByteLength,[\s\S]*vertexCount,[\s\S]*\)[\s\S]*const expectedByteLength = layout\.totalByteLength/,
   'groundHeightSidecar should validate metadata bounds and expected size using the aligned layout total byte length',
 )
 

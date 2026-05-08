@@ -196,6 +196,7 @@ export interface PlanningTerrainDemHeightmapEncoding {
   zeroCode: number | null
   metersPerUnit: number | null
 }
+export type PlanningTerrainDemResolutionMode = 'auto' | 'manual'
 
 export interface PlanningTerrainDemData {
   version: 1
@@ -204,9 +205,15 @@ export interface PlanningTerrainDemData {
   mimeType?: string | null
   width?: number
   height?: number
+  rawMinElevation?: number | null
+  recommendedAppliedMinElevation?: number | null
   minElevation?: number | null
   maxElevation?: number | null
   sampleStepMeters?: number | null
+  sourceSampleStepMeters?: number | null
+  appliedSampleStepMeters?: number | null
+  targetChunkResolution?: number | null
+  resolutionMode?: PlanningTerrainDemResolutionMode | null
   geographicBounds?: PlanningTerrainGeographicBounds | null
   worldBounds?: PlanningTerrainWorldBounds | null
   heightmapEncoding?: PlanningTerrainDemHeightmapEncoding | null

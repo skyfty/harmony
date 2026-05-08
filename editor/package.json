@@ -10,8 +10,10 @@
     "generate:planning-dem-test-heightmap": "node ./scripts/generate-strict-qgis-test-heightmap.mjs",
     "check:planning-dem-local-tiles": "node ./scripts/planning-dem-local-tiles-regression.mjs",
     "check:planning-dem-metric-space": "node ./scripts/planning-dem-metric-space-regression.mjs",
+    "check:planning-dem-png-contract": "node ./scripts/planning-dem-png-contract-regression.mjs",
     "check:terrain-dataset-runtime-lazy": "node ./scripts/terrain-dataset-runtime-lazy-regression.mjs",
     "check:ground-height-sidecar-alignment": "node ./scripts/ground-height-sidecar-alignment-regression.mjs",
+    "check:ground-height-sidecar-local-edits": "node ./scripts/ground-height-sidecar-local-edits-regression.mjs",
     "check:infinite-sculpt-chunk-keys": "node ./scripts/infinite-sculpt-chunk-keys-regression.mjs"
   },
   "enginewwws": {

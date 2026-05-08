@@ -42,7 +42,7 @@ import {
   savePlanningDemToIndexedDB as savePlanningDemToStorage,
   storePlanningDemBlobByHash,
 } from '@/utils/planningDemStorage'
-import { resolveGroundWorldBounds } from '@schema'
+import { GROUND_TERRAIN_CHUNK_SIZE_METERS, resolveGroundWorldBounds } from '@schema'
 import {
   createCustomRangeHeightmapEncoding,
   createStrictQgis16BitHeightmapEncoding,
@@ -53,6 +53,9 @@ import {
   isSupportedPlanningDemSource,
   parsePlanningDemFile,
   parsePlanningDemBlob,
+  PLANNING_PNG_HEIGHTMAP_CONTRACT,
+  resolvePlanningDemAppliedSampleStepMeters,
+  resolvePlanningDemTargetChunkResolution,
   type PlanningDemImportOptions,
 } from '@/utils/planningDemImport'
 
@@ -380,9 +383,15 @@ function clonePlanningTerrainDemData(data: PlanningTerrainDemData | null | undef
     mimeType: data.mimeType ?? null,
     width: data.width,
     height: data.height,
+    rawMinElevation: data.rawMinElevation ?? null,
+    recommendedAppliedMinElevation: data.recommendedAppliedMinElevation ?? null,
     minElevation: data.minElevation ?? null,
     maxElevation: data.maxElevation ?? null,
     sampleStepMeters: data.sampleStepMeters ?? null,
+    sourceSampleStepMeters: data.sourceSampleStepMeters ?? null,
+    appliedSampleStepMeters: data.appliedSampleStepMeters ?? null,
+    targetChunkResolution: data.targetChunkResolution ?? null,
+    resolutionMode: data.resolutionMode ?? null,
     geographicBounds: clonePlanningTerrainGeographicBounds(data.geographicBounds ?? null),
     worldBounds: clonePlanningTerrainWorldBounds(data.worldBounds ?? null),
     heightmapEncoding: clonePlanningTerrainDemHeightmapEncoding(data.heightmapEncoding ?? null),
@@ -523,6 +532,19 @@ function resolvePlanningHeightmapMetersPerPixel(data: PlanningTerrainDemData | n
   return Math.abs(stepX - stepY) <= 1e-6 ? stepX : (stepX + stepY) * 0.5
 }
 
+function resolvePlanningDemAppliedSampleStep(data: PlanningTerrainDemData | null | undefined): number | null {
+  const applied = Number(data?.appliedSampleStepMeters)
+  if (Number.isFinite(applied) && applied > 0) {
+    return applied
+  }
+  const source = Number(data?.sourceSampleStepMeters)
+  if (Number.isFinite(source) && source > 0) {
+    return source
+  }
+  const fallback = Number(data?.sampleStepMeters)
+  return Number.isFinite(fallback) && fallback > 0 ? fallback : null
+}
+
 function resolveRecommendedTerrainCellSize(data: PlanningTerrainDemData | null | undefined): number | null {
   if (!data) {
     return null
@@ -547,16 +569,17 @@ function buildPlanningDemParseOptions(
   overrides: Partial<PlanningDemImportOptions> = {},
 ): PlanningDemImportOptions {
   const isHeightmapImage = Boolean(terrainDem && isPlanningDemHeightmapImageSource(terrainDem.filename ?? '', terrainDem.mimeType ?? null))
+  const minElevation = Number(terrainDem?.minElevation)
   return {
-    heightmapEncoding: clonePlanningTerrainDemHeightmapEncoding(terrainDem?.heightmapEncoding ?? null),
-    minElevation: terrainDem?.minElevation ?? null,
-    maxElevation: terrainDem?.maxElevation ?? null,
+    minElevation: Number.isFinite(minElevation) ? minElevation : null,
     worldBoundsOverride: isHeightmapImage ? (terrainDem?.worldBounds ?? null) : null,
     ...overrides,
   }
 }
 
-function validatePlanningDemImport(file: File): Partial<PlanningDemImportOptions> {
+const planningPngHeightmapProtocolHint = `Harmony PNG DEM protocol: gray ${PLANNING_PNG_HEIGHTMAP_CONTRACT.seaLevelGray} = 0m, ${PLANNING_PNG_HEIGHTMAP_CONTRACT.metersPerGray}m per gray, valid range ${PLANNING_PNG_HEIGHTMAP_CONTRACT.minElevation}m to ${PLANNING_PNG_HEIGHTMAP_CONTRACT.maxElevation}m.`
+
+function validatePlanningDemImport(file: File): { metersPerPixel?: number } {
   const mimeType = file.type || null
   if (!isSupportedPlanningDemSource(file.name, mimeType)) {
     throw new Error('Only GeoTIFF (.tif, .tiff) and PNG heightmaps are supported for DEM import.')
@@ -568,7 +591,7 @@ function validatePlanningDemImport(file: File): Partial<PlanningDemImportOptions
   const normalizedName = file.name.trim().toLowerCase()
   const isPng = normalizedName.endsWith('.png') || mimeType === 'image/png'
   if (!isPng) {
-    throw new Error('Image DEM import only accepts grayscale PNG heightmaps. Convert the file in QGIS or Photoshop to a fully opaque grayscale PNG, then re-import it.')
+    throw new Error(`Image DEM import only accepts grayscale PNG heightmaps. Re-export the file from QGIS using the Harmony PNG DEM protocol. ${planningPngHeightmapProtocolHint}`)
   }
   const metersPerPixel = DEFAULT_PNG_HEIGHTMAP_METERS_PER_PIXEL
   if (!Number.isFinite(metersPerPixel) || metersPerPixel <= 0) {
@@ -668,7 +691,6 @@ function computeRectResizeFromConstraint(constraint: RectResizeConstraint, desir
     heightAbs = eps
   }
 
-  // Keep a minimum size so the rectangle doesn't collapse.
   const minSide = 0.2
   widthAbs = Math.max(widthAbs, minSide)
   heightAbs = Math.max(heightAbs, minSide)
@@ -700,7 +722,6 @@ function computeRectResizeFromConstraint(constraint: RectResizeConstraint, desir
     nextByIndex: (index: number) => pointForKey(constraint.cornerKeyByIndex[index]!),
   }
 }
-
 
 function polylineLength(points: PlanningPoint[]) {
   if (points.length < 2) return 0
@@ -1196,6 +1217,34 @@ async function handleConvertTo3DScene() {
   convertingTo3DScene.value = true
 
   const abortController = new AbortController()
+  const progressDetails: Array<{ label: string; description: string }> = []
+  const updateConversionProgress = (payload: { step: string; progress?: number; detail?: string }) => {
+    const step = payload.step.trim()
+    const description = typeof payload.detail === 'string' && payload.detail.trim()
+      ? payload.detail.trim()
+      : `Progress ${Math.max(0, Math.min(100, Math.round(payload.progress ?? 0)))}%`
+    const existingIndex = progressDetails.findIndex((item) => item.label === step)
+    if (existingIndex >= 0) {
+      progressDetails.splice(existingIndex, 1)
+    }
+    progressDetails.unshift({ label: step, description })
+    if (progressDetails.length > 6) {
+      progressDetails.length = 6
+    }
+    const message = typeof payload.detail === 'string' && payload.detail.trim()
+      ? `${step} (${payload.detail.trim()})`
+      : step
+    uiStore.updateLoadingOverlay({
+      mode: 'determinate',
+      progress: payload.progress ?? 0,
+      message,
+      detailsTitle: '转换详情',
+      details: progressDetails,
+      detailsExpanded: true,
+      closable: false,
+      autoClose: false,
+    })
+  }
 
   try {
     uiStore.showLoadingOverlay({
@@ -1207,6 +1256,9 @@ async function handleConvertTo3DScene() {
       cancelable: true,
       cancelText: '取消',
       autoClose: false,
+      detailsTitle: '转换详情',
+      details: [],
+      detailsExpanded: true,
     })
     uiStore.setLoadingOverlayCancelHandler(() => abortController.abort())
 
@@ -1215,6 +1267,11 @@ async function handleConvertTo3DScene() {
     await nextTick()
 
     if (!planningData) {
+      updateConversionProgress({
+        step: 'Removing converted content',
+        progress: 50,
+        detail: 'Clearing previously generated planning nodes.',
+      })
       uiStore.updateLoadingOverlay({
         mode: 'determinate',
         progress: 50,
@@ -1231,6 +1288,7 @@ async function handleConvertTo3DScene() {
         signal: abortController.signal,
         onProgress: ({ step, progress, detail }) => {
           if (abortController.signal.aborted) return
+          updateConversionProgress({ step, progress, detail })
           const message = typeof detail === 'string' && detail.trim()
             ? `${step} (${detail.trim()})`
             : step
@@ -1250,10 +1308,20 @@ async function handleConvertTo3DScene() {
       }
     }
 
+    updateConversionProgress({
+      step: 'Saving converted scene',
+      progress: 100,
+      detail: 'Persisting converted terrain, scene graph, and cache references.',
+    })
+    await sceneStore.saveActiveScene({ force: true })
+
     uiStore.updateLoadingOverlay({
       mode: 'determinate',
       progress: 100,
       message: 'Conversion complete.',
+      detailsTitle: '转换详情',
+      details: progressDetails,
+      detailsExpanded: true,
       closable: true,
       cancelable: false,
       autoClose: true,
@@ -1280,6 +1348,9 @@ async function handleConvertTo3DScene() {
       mode: 'determinate',
       progress: 100,
       message,
+      detailsTitle: '转换详情',
+      details: progressDetails,
+      detailsExpanded: true,
       closable: true,
       cancelable: false,
       autoClose: false,
@@ -1434,28 +1505,83 @@ function normalizePlanningTerrain(raw: unknown): PlanningTerrainData {
 
   const dem = payload.dem && typeof payload.dem === 'object' ? payload.dem as Record<string, unknown> : null
   if (dem) {
+    const requireFinitePositive = (value: unknown, label: string): number => {
+      const numeric = Number(value)
+      if (!Number.isFinite(numeric) || numeric <= 0) {
+        throw new Error(`DEM config validation failed: ${label} is missing or invalid.`)
+      }
+      return numeric
+    }
+    const requireFiniteInteger = (value: unknown, label: string, minimum = 1): number => {
+      const numeric = Number(value)
+      if (!Number.isFinite(numeric) || numeric < minimum) {
+        throw new Error(`DEM config validation failed: ${label} is missing or invalid.`)
+      }
+      return Math.trunc(numeric)
+    }
+    const sourceFileHash = typeof dem.sourceFileHash === 'string' ? dem.sourceFileHash.trim() : ''
+    if (!sourceFileHash) {
+      throw new Error('DEM config validation failed: sourceFileHash is missing.')
+    }
+    const filename = typeof dem.filename === 'string' ? dem.filename.trim() : ''
+    if (!filename) {
+      throw new Error('DEM config validation failed: filename is missing.')
+    }
+    const mimeType = typeof dem.mimeType === 'string' ? dem.mimeType : null
+    const width = requireFiniteInteger(dem.width, 'width', 2)
+    const height = requireFiniteInteger(dem.height, 'height', 2)
+    const sampleStepMeters = requireFinitePositive(dem.sampleStepMeters, 'sampleStepMeters')
+    const sourceSampleStepMeters = requireFinitePositive(dem.sourceSampleStepMeters, 'sourceSampleStepMeters')
+    const appliedSampleStepMeters = requireFinitePositive(dem.appliedSampleStepMeters, 'appliedSampleStepMeters')
+    const targetChunkResolution = requireFiniteInteger(dem.targetChunkResolution, 'targetChunkResolution')
+    const resolutionMode = dem.resolutionMode === 'auto' || dem.resolutionMode === 'manual'
+      ? dem.resolutionMode
+      : null
+    if (!resolutionMode) {
+      throw new Error('DEM config validation failed: resolutionMode is missing or invalid.')
+    }
     const geographicBounds = dem.geographicBounds && typeof dem.geographicBounds === 'object'
       ? dem.geographicBounds as Record<string, unknown>
       : null
     const worldBounds = dem.worldBounds && typeof dem.worldBounds === 'object'
       ? dem.worldBounds as Record<string, unknown>
       : null
-    const heightmapEncoding = dem.heightmapEncoding && typeof dem.heightmapEncoding === 'object'
-      ? dem.heightmapEncoding as Record<string, unknown>
-      : null
+    if (!worldBounds) {
+      throw new Error('DEM config validation failed: worldBounds are missing.')
+    }
+    const minX = Number(worldBounds.minX)
+    const minY = Number(worldBounds.minY)
+    const maxX = Number(worldBounds.maxX)
+    const maxY = Number(worldBounds.maxY)
+    if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY) || !(maxX > minX) || !(maxY > minY)) {
+      throw new Error('DEM config validation failed: worldBounds are invalid.')
+    }
+    const centerX = (minX + maxX) * 0.5
+    const centerY = (minY + maxY) * 0.5
+    if (Math.abs(centerX) > 1e-6 || Math.abs(centerY) > 1e-6) {
+      throw new Error('DEM config validation failed: worldBounds must stay centered on the world origin.')
+    }
     const orthophoto = dem.orthophoto && typeof dem.orthophoto === 'object'
       ? dem.orthophoto as Record<string, unknown>
       : null
+    const rawMinElevation = Number.isFinite(Number(dem.rawMinElevation)) ? Number(dem.rawMinElevation) : undefined
+    const recommendedAppliedMinElevation = Number.isFinite(Number(dem.recommendedAppliedMinElevation)) ? Number(dem.recommendedAppliedMinElevation) : undefined
     next.dem = {
       version: 1,
-      sourceFileHash: typeof dem.sourceFileHash === 'string' ? dem.sourceFileHash : undefined,
-      filename: typeof dem.filename === 'string' ? dem.filename : null,
-      mimeType: typeof dem.mimeType === 'string' ? dem.mimeType : null,
-      width: Number.isFinite(Number(dem.width)) ? Math.max(0, Math.trunc(Number(dem.width))) : undefined,
-      height: Number.isFinite(Number(dem.height)) ? Math.max(0, Math.trunc(Number(dem.height))) : undefined,
+      sourceFileHash,
+      filename,
+      mimeType,
+      width,
+      height,
+      rawMinElevation,
+      recommendedAppliedMinElevation,
       minElevation: Number.isFinite(Number(dem.minElevation)) ? Number(dem.minElevation) : undefined,
       maxElevation: Number.isFinite(Number(dem.maxElevation)) ? Number(dem.maxElevation) : undefined,
-      sampleStepMeters: Number.isFinite(Number(dem.sampleStepMeters)) ? Number(dem.sampleStepMeters) : undefined,
+      sampleStepMeters,
+      sourceSampleStepMeters,
+      appliedSampleStepMeters,
+      targetChunkResolution,
+      resolutionMode,
       geographicBounds: geographicBounds && Number.isFinite(Number(geographicBounds.west)) && Number.isFinite(Number(geographicBounds.south)) && Number.isFinite(Number(geographicBounds.east)) && Number.isFinite(Number(geographicBounds.north))
         ? {
             west: Number(geographicBounds.west),
@@ -1465,26 +1591,12 @@ function normalizePlanningTerrain(raw: unknown): PlanningTerrainData {
             crs: typeof geographicBounds.crs === 'string' ? geographicBounds.crs : null,
           }
         : undefined,
-      worldBounds: worldBounds && Number.isFinite(Number(worldBounds.minX)) && Number.isFinite(Number(worldBounds.minY)) && Number.isFinite(Number(worldBounds.maxX)) && Number.isFinite(Number(worldBounds.maxY))
-        ? {
-            minX: Number(worldBounds.minX),
-            minY: Number(worldBounds.minY),
-            maxX: Number(worldBounds.maxX),
-            maxY: Number(worldBounds.maxY),
-          }
-        : undefined,
-      heightmapEncoding: heightmapEncoding && (heightmapEncoding.mode === 'custom-range' || heightmapEncoding.mode === 'strict-qgis-16bit')
-        ? {
-            version: 1,
-            sourceFormat: 'png',
-            mode: heightmapEncoding.mode,
-            bitDepth: Number(heightmapEncoding.bitDepth) === 8 ? 8 : 16,
-            channels: Number.isFinite(Number(heightmapEncoding.channels)) ? Math.max(1, Math.trunc(Number(heightmapEncoding.channels))) : 1,
-            signed: Boolean(heightmapEncoding.signed),
-            zeroCode: Number.isFinite(Number(heightmapEncoding.zeroCode)) ? Number(heightmapEncoding.zeroCode) : null,
-            metersPerUnit: Number.isFinite(Number(heightmapEncoding.metersPerUnit)) ? Number(heightmapEncoding.metersPerUnit) : null,
-          }
-        : undefined,
+      worldBounds: {
+        minX,
+        minY,
+        maxX,
+        maxY,
+      },
       previewHash: typeof dem.previewHash === 'string' ? dem.previewHash : null,
       previewSize: Number.isFinite(Number((dem.previewSize as Record<string, unknown> | null | undefined)?.width)) && Number.isFinite(Number((dem.previewSize as Record<string, unknown> | null | undefined)?.height))
         ? {
@@ -1542,7 +1654,12 @@ function loadPlanningFromScene() {
     planningGuides.value = data.guides.map((guide: PlanningGuideData) => normalizeGuide(guide)).filter((g): g is PlanningGuide => !!g)
   }
 
-  planningTerrain.value = normalizePlanningTerrain(data.terrain)
+  try {
+    planningTerrain.value = normalizePlanningTerrain(data.terrain)
+  } catch (error) {
+    demImportError.value = error instanceof Error ? error.message : 'Failed to load DEM configuration.'
+    throw error
+  }
 
   if (data.activeLayerId) {
     activeLayerId.value = data.activeLayerId
@@ -1942,103 +2059,35 @@ const selectedDemUsesHeightmapImage = computed<boolean>(() => {
   return isPlanningDemHeightmapImageSource(dem.filename ?? '', dem.mimeType ?? null)
 })
 
-function resolvePlanningTerrainDemHeightmapMode(
-  dem: PlanningTerrainDemData | null | undefined,
-): PlanningTerrainDemHeightmapEncodingMode | null {
-  if (!dem || !isPlanningDemHeightmapImageSource(dem.filename ?? '', dem.mimeType ?? null)) {
+const selectedDemRawMinElevation = computed<number | null>(() => {
+  const dem = selectedDem.value
+  if (!dem) {
     return null
   }
-  if (dem.heightmapEncoding?.mode === 'custom-range' || dem.heightmapEncoding?.mode === 'strict-qgis-16bit') {
-    return dem.heightmapEncoding.mode
+  const raw = Number(dem.rawMinElevation)
+  if (Number.isFinite(raw)) {
+    return raw
   }
-  return 'strict-qgis-16bit'
-}
-
-function createPlanningTerrainDemEncodingForMode(
-  mode: PlanningTerrainDemHeightmapEncodingMode,
-  current: PlanningTerrainDemHeightmapEncoding | null | undefined,
-): PlanningTerrainDemHeightmapEncoding {
-  if (mode === 'strict-qgis-16bit') {
-    return createStrictQgis16BitHeightmapEncoding()
-  }
-  const bitDepth = current?.bitDepth === 16 ? 16 : 8
-  const channels = Number.isFinite(Number(current?.channels)) ? Math.max(1, Math.trunc(Number(current?.channels))) : 1
-  return createCustomRangeHeightmapEncoding(bitDepth, channels)
-}
-
-const planningDemHeightmapModeOptions = [
-  { label: 'Strict QGIS 16-bit', value: 'strict-qgis-16bit' },
-  { label: 'Custom Range Mapping', value: 'custom-range' },
-] as const
-
-const selectedDemHeightmapMode = computed<PlanningTerrainDemHeightmapEncodingMode | null>(() => {
-  return resolvePlanningTerrainDemHeightmapMode(selectedDem.value)
+  const fallback = Number(dem.minElevation)
+  return Number.isFinite(fallback) ? fallback : null
 })
 
-const selectedDemUsesStrictHeightmapEncoding = computed<boolean>(() => {
-  return selectedDemHeightmapMode.value === 'strict-qgis-16bit'
-})
-
-const selectedDemUsesCustomHeightmapRange = computed<boolean>(() => {
-  return selectedDemHeightmapMode.value === 'custom-range'
-})
-
-const selectedDemHeightmapModeDescription = computed<string | null>(() => {
-  if (!selectedDemUsesHeightmapImage.value) {
+const selectedDemAppliedMinElevation = computed<number | null>(() => {
+  const dem = selectedDem.value
+  if (!dem) {
     return null
   }
-  if (selectedDemUsesStrictHeightmapEncoding.value) {
-    return 'Strict rule: QGIS must export a 16-bit grayscale PNG where code 32768 maps to 0 m and each code step equals 1 m.'
-  }
-  return 'Custom range mode remaps grayscale values into the editable min/max elevation range. Use this only for non-standard heightmaps.'
+  const applied = Number(dem.minElevation)
+  return Number.isFinite(applied) ? applied : null
 })
 
-async function reloadPlanningDemFromSource(): Promise<void> {
-  const terrainDem = planningTerrain.value.dem
-  if (!terrainDem?.sourceFileHash) {
-    return
+const selectedDemRecommendedAppliedMinElevation = computed<number | null>(() => {
+  const dem = selectedDem.value
+  if (!dem) {
+    return null
   }
-  const blob = await loadPlanningDemBlobByHash(terrainDem.sourceFileHash)
-  if (!blob) {
-    throw new Error('DEM blob is missing from storage')
-  }
-  const parsed = await parsePlanningDemBlob(
-    blob,
-    terrainDem.filename ?? 'DEM',
-    (terrainDem.mimeType ?? blob.type) || null,
-    buildPlanningDemParseOptions(terrainDem),
-  )
-  const nextDem = demImportResultToTerrainData(parsed)
-  nextDem.orthophoto = clonePlanningTerrainOrthophotoData(terrainDem.orthophoto ?? null)
-  planningTerrain.value = {
-    ...planningTerrain.value,
-    dem: nextDem,
-  }
-  planningDemPreviewUrl.value = parsed.preview?.dataUrl ?? null
-  markPlanningDirty()
-}
-
-const selectedDemHeightmapModeModel = computed<PlanningTerrainDemHeightmapEncodingMode | null>({
-  get: () => selectedDemHeightmapMode.value,
-  set: (value) => {
-    const dem = selectedDem.value
-    if (!dem || !selectedDemUsesHeightmapImage.value || !value) {
-      return
-    }
-    const currentMode = resolvePlanningTerrainDemHeightmapMode(dem)
-    if (currentMode === value) {
-      return
-    }
-    dem.heightmapEncoding = createPlanningTerrainDemEncodingForMode(value, dem.heightmapEncoding ?? null)
-    if (value === 'custom-range') {
-      dem.minElevation = Number.isFinite(Number(dem.minElevation)) ? Number(dem.minElevation) : DEFAULT_IMAGE_HEIGHTMAP_MIN_ELEVATION
-      dem.maxElevation = Number.isFinite(Number(dem.maxElevation)) ? Number(dem.maxElevation) : DEFAULT_IMAGE_HEIGHTMAP_MAX_ELEVATION
-    }
-    markPlanningDirty()
-    void reloadPlanningDemFromSource().catch((error) => {
-      console.warn('Failed to reload planning DEM after mode change', error)
-    })
-  },
+  const recommended = Number(dem.recommendedAppliedMinElevation)
+  return Number.isFinite(recommended) ? recommended : null
 })
 
 const selectedDemMetersPerPixel = computed<number | null>({
@@ -2068,9 +2117,86 @@ const selectedDemMetersPerPixel = computed<number | null>({
       maxY: centerY + halfHeight,
     }
     dem.sampleStepMeters = metersPerPixel
+    dem.sourceSampleStepMeters = metersPerPixel
+    dem.appliedSampleStepMeters = metersPerPixel
+    dem.targetChunkResolution = resolvePlanningDemTargetChunkResolution(metersPerPixel)
+    dem.resolutionMode = 'manual'
     markPlanningDirty()
   },
 })
+const selectedDemAppliedSampleStep = computed<number | null>({
+  get: () => resolvePlanningDemAppliedSampleStep(selectedDem.value),
+  set: (value: number | null) => {
+    const dem = selectedDem.value
+    if (!dem || selectedDemUsesHeightmapImage.value) {
+      return
+    }
+    const appliedSampleStepMeters = Number(value)
+    if (!Number.isFinite(appliedSampleStepMeters) || appliedSampleStepMeters <= 0) {
+      return
+    }
+    dem.appliedSampleStepMeters = Number(appliedSampleStepMeters.toFixed(6))
+    dem.targetChunkResolution = resolvePlanningDemTargetChunkResolution(dem.appliedSampleStepMeters)
+    dem.resolutionMode = 'manual'
+    markPlanningDirty()
+  },
+})
+const selectedDemMinElevation = computed<number | null>({
+  get: () => {
+    const minElevation = Number(selectedDem.value?.minElevation)
+    return Number.isFinite(minElevation) ? minElevation : null
+  },
+  set: (value: number | null) => {
+    const dem = selectedDem.value
+    if (!dem || selectedDemUsesHeightmapImage.value) {
+      return
+    }
+    const minElevation = Number(value)
+    if (!Number.isFinite(minElevation)) {
+      return
+    }
+    dem.minElevation = Number(minElevation.toFixed(3))
+    markPlanningDirty()
+  },
+})
+const selectedDemTargetChunkResolution = computed<number | null>({
+  get: () => {
+    const resolution = Number(selectedDem.value?.targetChunkResolution)
+    return Number.isFinite(resolution) && resolution > 0 ? Math.round(resolution) : null
+  },
+  set: (value: number | null) => {
+    const dem = selectedDem.value
+    if (!dem) {
+      return
+    }
+    const resolution = Number(value)
+    if (!Number.isFinite(resolution) || resolution <= 0) {
+      return
+    }
+    dem.targetChunkResolution = Math.max(1, Math.round(resolution))
+    const appliedSampleStepMeters = resolvePlanningDemAppliedSampleStepMeters(dem.targetChunkResolution)
+    if (!appliedSampleStepMeters) {
+      return
+    }
+    dem.appliedSampleStepMeters = Number(appliedSampleStepMeters.toFixed(6))
+    dem.resolutionMode = 'manual'
+    if (selectedDemUsesHeightmapImage.value) {
+      selectedDemMetersPerPixel.value = dem.appliedSampleStepMeters
+      return
+    }
+    markPlanningDirty()
+  },
+})
+
+function applyRecommendedDemMinElevation() {
+  const dem = selectedDem.value
+  const recommended = selectedDemRecommendedAppliedMinElevation.value
+  if (!dem || recommended === null) {
+    return
+  }
+  dem.minElevation = Number(recommended.toFixed(3))
+  markPlanningDirty()
+}
 const selectedDemWorldSpan = computed<{ width: number; height: number } | null>(() => resolvePlanningWorldSpan(selectedDem.value?.worldBounds))
 const recommendedTerrainCellSize = computed<number | null>(() => resolveRecommendedTerrainCellSize(planningTerrain.value.dem))
 const terrainCellSizeRecommendationReason = computed<string | null>(() => {
@@ -2084,7 +2210,7 @@ const terrainCellSizeRecommendationReason = computed<string | null>(() => {
     return null
   }
   const current = terrainCellSizeModel.value
-  const sampleStep = Number(dem.sampleStepMeters)
+  const sampleStep = Number(dem.sourceSampleStepMeters ?? dem.sampleStepMeters)
   const sourceStepLabel = Number.isFinite(sampleStep) && sampleStep > 0 ? `${sampleStep.toFixed(2)} m source step` : 'available terrain coverage'
   const sizeLabel = `${Math.round(span.width)} x ${Math.round(span.height)} m extent`
   if (current + 1e-6 < recommended) {
@@ -2100,68 +2226,6 @@ function applyRecommendedTerrainCellSize() {
   }
   terrainCellSizeModel.value = recommended
 }
-
-async function refreshPlanningDemPreview(): Promise<void> {
-  const terrainDem = planningTerrain.value.dem
-  if (!terrainDem?.sourceFileHash) {
-    planningDemPreviewUrl.value = null
-    return
-  }
-  const blob = await loadPlanningDemBlobByHash(terrainDem.sourceFileHash)
-  if (!blob) {
-    planningDemPreviewUrl.value = null
-    return
-  }
-  const parsed = await parsePlanningDemBlob(
-    blob,
-    terrainDem.filename ?? 'DEM',
-    (terrainDem.mimeType ?? blob.type) || null,
-    buildPlanningDemParseOptions(terrainDem),
-  )
-  planningDemPreviewUrl.value = parsed.preview?.dataUrl ?? null
-}
-
-const selectedDemMinElevationModel = computed<number | null>({
-  get: () => {
-    const value = selectedDem.value?.minElevation
-    return Number.isFinite(Number(value)) ? Number(value) : null
-  },
-  set: (value: number | null) => {
-    const dem = selectedDem.value
-    if (!dem || !selectedDemUsesHeightmapImage.value || !selectedDemUsesCustomHeightmapRange.value) {
-      return
-    }
-    dem.minElevation = Number.isFinite(Number(value)) ? Number(value) : DEFAULT_IMAGE_HEIGHTMAP_MIN_ELEVATION
-    if (Number.isFinite(Number(dem.maxElevation)) && Number(dem.maxElevation) < Number(dem.minElevation)) {
-      dem.maxElevation = Number(dem.minElevation)
-    }
-    markPlanningDirty()
-    void refreshPlanningDemPreview().catch((error) => {
-      console.warn('Failed to refresh planning DEM preview', error)
-    })
-  },
-})
-
-const selectedDemMaxElevationModel = computed<number | null>({
-  get: () => {
-    const value = selectedDem.value?.maxElevation
-    return Number.isFinite(Number(value)) ? Number(value) : null
-  },
-  set: (value: number | null) => {
-    const dem = selectedDem.value
-    if (!dem || !selectedDemUsesHeightmapImage.value || !selectedDemUsesCustomHeightmapRange.value) {
-      return
-    }
-    dem.maxElevation = Number.isFinite(Number(value)) ? Number(value) : DEFAULT_IMAGE_HEIGHTMAP_MAX_ELEVATION
-    if (Number.isFinite(Number(dem.minElevation)) && Number(dem.maxElevation) < Number(dem.minElevation)) {
-      dem.minElevation = Number(dem.maxElevation)
-    }
-    markPlanningDirty()
-    void refreshPlanningDemPreview().catch((error) => {
-      console.warn('Failed to refresh planning DEM preview', error)
-    })
-  },
-})
 
 function formatOptionalNumber(value: number | null | undefined, fractionDigits = 2): string {
   return Number.isFinite(Number(value)) ? Number(value).toFixed(fractionDigits) : '—'
@@ -5004,6 +5068,10 @@ async function loadPlanningOrthophotoFile(file: File) {
       minElevation: null,
       maxElevation: null,
       sampleStepMeters: null,
+      sourceSampleStepMeters: null,
+      appliedSampleStepMeters: null,
+      targetChunkResolution: null,
+      resolutionMode: null,
       geographicBounds: null,
       worldBounds: null,
       heightmapEncoding: null,
@@ -5632,6 +5700,7 @@ async function hydratePlanningDemResources() {
       }
     }
   } catch (error) {
+    demImportError.value = error instanceof Error ? error.message : 'Failed to hydrate planning DEM resources.'
     console.warn('Failed to hydrate planning DEM resources', error)
   }
 }
@@ -5727,9 +5796,7 @@ onBeforeUnmount(() => {
                 </div>
               </div>
               <div v-if="demImportError" class="upload-error">{{ demImportError }}</div>
-              <div class="dem-import-panel__hint">
-                PNG heightmap defaults to 30 m/px on import and can be edited in the DEM properties panel after import. Use QGIS or Photoshop to fix scale and raster quality before importing.
-              </div>
+
               <input
                 ref="demFileInputRef"
                 type="file"
@@ -6478,7 +6545,10 @@ onBeforeUnmount(() => {
               <div class="property-panel__meta-row"><span>MIME</span><strong>{{ selectedDem.mimeType || '—' }}</strong></div>
               <div class="property-panel__meta-row"><span>Source type</span><strong>{{ selectedDemUsesHeightmapImage ? 'Image heightmap' : 'GeoTIFF DEM' }}</strong></div>
               <div class="property-panel__meta-row"><span>Size</span><strong>{{ selectedDem.width ?? '—' }} × {{ selectedDem.height ?? '—' }}</strong></div>
-              <div class="property-panel__meta-row"><span>Elevation</span><strong>{{ selectedDem.minElevation ?? '—' }} → {{ selectedDem.maxElevation ?? '—' }}</strong></div>
+              <div class="property-panel__meta-row"><span>Raw min elevation</span><strong>{{ selectedDemRawMinElevation ?? '—' }} m</strong></div>
+              <div class="property-panel__meta-row"><span>Applied min elevation</span><strong>{{ selectedDemAppliedMinElevation ?? '—' }} m</strong></div>
+              <div class="property-panel__meta-row"><span>Recommended baseline</span><strong>{{ selectedDemRecommendedAppliedMinElevation ?? '—' }} m</strong></div>
+              <div class="property-panel__meta-row"><span>Max elevation</span><strong>{{ selectedDem.maxElevation ?? '—' }} m</strong></div>
               <div v-if="selectedDemWorldSpan" class="property-panel__meta-row"><span>World span</span><strong>{{ formatOptionalNumber(selectedDemWorldSpan.width) }} × {{ formatOptionalNumber(selectedDemWorldSpan.height) }} m</strong></div>
               <div v-if="selectedDemUsesHeightmapImage" class="property-panel__sub-block">
                 <div class="property-panel__section-title property-panel__section-title--muted">Heightmap Scale</div>
@@ -6493,15 +6563,53 @@ onBeforeUnmount(() => {
                   hide-details
                 />
                 <div class="property-panel__hint">
-                  Change this when the PNG was preprocessed in QGIS or Photoshop and you need a different real-world scale.
+                  Change this only when the imported PNG uses a different real-world spacing. The grayscale-to-elevation contract itself is fixed.
                 </div>
-                <div class="property-panel__section-title property-panel__section-title--muted">Heightmap Mapping</div>
-                <v-select
-                  v-model="selectedDemHeightmapModeModel"
-                  :items="planningDemHeightmapModeOptions"
-                  item-title="label"
-                  item-value="value"
+                <div class="property-panel__section-title property-panel__section-title--muted">Heightmap Protocol</div>
+                <div class="property-panel__hint">
+                  {{ planningPngHeightmapProtocolHint }}
+                </div>
+              </div>
+              <div v-else class="property-panel__sub-block">
+                <div class="property-panel__section-title property-panel__section-title--muted">Elevation Baseline</div>
+                <v-text-field
+                  v-model.number="selectedDemMinElevation"
+                  type="number"
                   density="compact"
+                  label="Min elevation"
+                  suffix="m"
+                  step="1"
+                  hide-details
+                />
+                <v-btn
+                  v-if="selectedDemRecommendedAppliedMinElevation !== null"
+                  block
+                  variant="tonal"
+                  color="primary"
+                  class="mt-2"
+                  @click="applyRecommendedDemMinElevation"
+                >
+                  Apply Recommended Elevation
+                </v-btn>
+                <div class="property-panel__section-title property-panel__section-title--muted">Sculpt Resolution</div>
+                <v-text-field
+                  v-model.number="selectedDemAppliedSampleStep"
+                  type="number"
+                  density="compact"
+                  label="Applied sample step"
+                  suffix="m/sample"
+                  min="0.000001"
+                  step="0.1"
+                  hide-details
+                />
+                <v-text-field
+                  v-model.number="selectedDemTargetChunkResolution"
+                  type="number"
+                  density="compact"
+                  :label="`Chunk subdivisions (${GROUND_TERRAIN_CHUNK_SIZE_METERS}m)`"
+                  suffix="seg"
+                  min="1"
+                  step="1"
                   hide-details
                   label="Heightmap mode"
                 />
@@ -6539,16 +6647,18 @@ onBeforeUnmount(() => {
                 <div v-if="terrainCellSizeRecommendationReason" class="property-panel__hint">{{ terrainCellSizeRecommendationReason }}</div>
                 <v-btn
                   v-if="recommendedTerrainCellSize"
-                  size="small"
-                  variant="text"
+                  block
+                  variant="tonal"
                   color="primary"
-                  class="property-panel__inline-action"
+                  class="mt-2"
                   @click="applyRecommendedTerrainCellSize"
                 >
-                  Apply recommended {{ formatOptionalNumber(recommendedTerrainCellSize) }} m cell size
+                  Apply {{ formatOptionalNumber(recommendedTerrainCellSize) }} m cell size
                 </v-btn>
               </div>
-              <div class="property-panel__meta-row"><span>Sample step</span><strong>{{ formatOptionalNumber(selectedDem.sampleStepMeters) }} m</strong></div>
+              <div class="property-panel__meta-row"><span>Source sample step</span><strong>{{ formatOptionalNumber(selectedDem.sourceSampleStepMeters ?? selectedDem.sampleStepMeters) }} m</strong></div>
+              <div class="property-panel__meta-row"><span>Applied sample step</span><strong>{{ formatOptionalNumber(selectedDem.appliedSampleStepMeters) }} m</strong></div>
+              <div class="property-panel__meta-row"><span>Chunk subdivisions</span><strong>{{ selectedDem.targetChunkResolution ?? '—' }}</strong></div>
               <div class="property-panel__meta-row"><span>Geographic bounds</span><strong>{{ formatBoundsLine(selectedDem.geographicBounds) }}</strong></div>
               <div class="property-panel__meta-row"><span>World bounds</span><strong>{{ formatBoundsLine(selectedDem.worldBounds) }}</strong></div>
               <div class="property-panel__meta-row"><span>Preview size</span><strong>{{ formatOptionalSize(selectedDem.previewSize) }}</strong></div>

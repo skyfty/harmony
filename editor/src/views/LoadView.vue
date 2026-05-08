@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, defineComponent, h, nextTick, onMounted, ref, shallowRef, watch } from 'vue'
+import { computed, defineComponent, h, nextTick, onMounted, ref, shallowRef, watch, type PropType } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import EditorView from '@/views/EditorView.vue'
 import { useScenesStore } from '@/stores/scenesStore'
@@ -16,15 +16,22 @@ type BootstrapErrorCode =
   | 'scene-open-failed'
   | 'unknown'
 
+type StatusHistoryItem = {
+  label: string
+  description: string
+}
+
 
 const LoadingScreen = defineComponent({
   name: 'EditorLoadingScreen',
   props: {
     progress: { type: Number, default: 0 },
-    status: { type: String, default: 'Initializing…' },
+    detail: { type: String, default: '' },
+    status: { type: String, default: 'Initializing...' },
     error: { type: String, default: null },
     retrying: { type: Boolean, default: false },
     canRetry: { type: Boolean, default: false },
+    statusHistory: { type: Array as PropType<StatusHistoryItem[]>, default: () => [] },
   },
   emits: ['retry', 'backToProjects'],
   setup(props, { emit }) {
@@ -48,10 +55,11 @@ const LoadingScreen = defineComponent({
     return () =>
       h('div', { class: 'load-root' }, [
         h('div', { class: 'load-card' }, [
-          h('header', { class: 'load-header' }, [
-            h('h1', { class: 'load-title' }, 'Harmony Scene Editor'),
-            h('p', { class: 'load-subtitle' }, props.status),
-          ]),
+	          h('header', { class: 'load-header' }, [
+	            h('h1', { class: 'load-title' }, 'Harmony Scene Editor'),
+	            h('p', { class: 'load-subtitle' }, props.status),
+	            props.detail ? h('p', { class: 'load-detail' }, props.detail) : null,
+	          ]),
           h('section', { class: 'load-body' }, [
             h(
               'div',
@@ -63,9 +71,21 @@ const LoadingScreen = defineComponent({
                 'aria-valuenow': percent.value,
               },
               [h('div', { class: 'progress-fill', style: { width: `${percent.value}%` } })],
-            ),
-            h('div', { class: 'progress-label' }, `${percent.value}%`),
-            hasError.value
+	            ),
+	            h('div', { class: 'progress-label' }, `${percent.value}%`),
+	            props.statusHistory.length
+	              ? h(
+	                  'div',
+	                  { class: 'load-status-history' },
+	                  props.statusHistory.map((item) =>
+	                    h('div', { class: 'load-status-history__item', key: `${item.label}:${item.description}` }, [
+	                      h('div', { class: 'load-status-history__label' }, item.label),
+	                      h('div', { class: 'load-status-history__description' }, item.description),
+	                    ]),
+	                  ),
+	                )
+	              : null,
+	            hasError.value
               ? h('div', { class: 'load-error' }, [
                   h('span', { class: 'load-error__text' }, props.error),
                   // Action buttons (Retry + optional Return)
@@ -83,7 +103,7 @@ const LoadingScreen = defineComponent({
                                   onClick: handleRetry,
                                   'aria-label': 'Retry loading project',
                                 },
-                                props.retrying ? '🔁 Retrying…' : '🔁 Retry',
+                                props.retrying ? 'Retrying...' : 'Retry',
                               )
                             : null,
                       h(
@@ -94,7 +114,7 @@ const LoadingScreen = defineComponent({
                           onClick: handleBackToProjects,
                           'aria-label': 'Return to Projects',
                         },
-                        '↩ Return to Projects',
+                        'Return to Projects',
                       ),
                     ],
                   ),
@@ -113,7 +133,9 @@ const router = useRouter()
 
 const currentComponent = shallowRef<typeof LoadingScreen | typeof EditorView>(LoadingScreen)
 const progress = ref(5)
-const statusMessage = ref('Initializing scene editor…')
+const statusDetail = ref('')
+const statusHistory = ref<StatusHistoryItem[]>([])
+const statusMessage = ref('Initializing editor...')
 const errorMessage = ref<string | null>(null)
 const errorCode = ref<BootstrapErrorCode | null>(null)
 const isBooting = ref(false)
@@ -174,19 +196,45 @@ function classifyBootstrapError(error: unknown): { code: BootstrapErrorCode; mes
   }
 }
 
+function setBootstrapStatus(next: { status: string; progress: number; detail?: string }) {
+  statusMessage.value = next.status
+  progress.value = Math.max(0, Math.min(100, Math.round(next.progress)))
+  statusDetail.value = typeof next.detail === 'string' ? next.detail : ''
+  const description = statusDetail.value || `${progress.value}%`
+  const existingIndex = statusHistory.value.findIndex((item) => item.label === next.status)
+  if (existingIndex >= 0) {
+    statusHistory.value.splice(existingIndex, 1)
+  }
+  statusHistory.value = [
+    { label: next.status, description },
+    ...statusHistory.value,
+  ].slice(0, 6)
+}
+
 async function bootstrap() {
   if (isBooting.value) {
     return
   }
   // Ensure the loading UI is visible when (re)bootstrapping
   currentComponent.value = LoadingScreen
+  statusHistory.value = []
   progress.value = 5
-  statusMessage.value = 'Initializing scene editor…'
+  setBootstrapStatus({
+    status: 'Initializing editor',
+    progress: 5,
+    detail: 'Bootstrapping editor shell.',
+  })
+  statusMessage.value = 'Initializing editor...'
   isBooting.value = true
   errorMessage.value = null
   errorCode.value = null
-  statusMessage.value = 'Initializing scene directory…'
+  statusMessage.value = 'Initializing workspace...'
   progress.value = 12
+  setBootstrapStatus({
+    status: 'Initializing workspace',
+    progress: 12,
+    detail: 'Preparing local workspace stores.',
+  })
 
   try {
     const projectIdRaw = route.query.projectId
@@ -208,23 +256,46 @@ async function bootstrap() {
     const routeSceneIdRaw = route.query.sceneId
     const routeSceneId = typeof routeSceneIdRaw === 'string' ? routeSceneIdRaw.trim() : ''
 
-    statusMessage.value = 'Syncing local save…'
+    statusMessage.value = 'Syncing local save...'
     progress.value = 28
+    setBootstrapStatus({
+      status: 'Syncing local save',
+      progress: 28,
+      detail: 'Waiting for persisted editor state.',
+    })
     const sceneStore = useSceneStore()
     await waitForPiniaHydration()
     // sceneStore.initialize()
 
-    statusMessage.value = 'Checking scene data…'
+    statusMessage.value = 'Checking scene data...'
     progress.value = 46
+    setBootstrapStatus({
+      status: 'Checking scene data',
+      progress: 46,
+      detail: 'Resolving which scene should open.',
+    })
 
     const latestProject = (await projectsStore.loadProjectDocument(projectId)) ?? project
     const preferred = resolveTargetSceneId(latestProject, routeSceneId)
 
-    statusMessage.value = '打开工程…'
+    statusMessage.value = 'Opening project...'
     progress.value = 78
+    setBootstrapStatus({
+      status: 'Opening project',
+      progress: 78,
+      detail: 'Preparing scene graph, assets, and terrain cache.',
+    })
     const opened = await sceneStore.selectScene(preferred, {
       setLastEdited: false,
       forceReload: true,
+      showLoadingOverlay: false,
+      onProgress: ({ step, progress: nextProgress, detail }) => {
+        setBootstrapStatus({
+          status: step,
+          progress: 78 + nextProgress * 0.22,
+          detail,
+        })
+      },
     })
     if (!opened) {
       throw new Error('Failed to open scene')
@@ -234,6 +305,11 @@ async function bootstrap() {
 
     statusMessage.value = 'Loading complete'
     progress.value = 100
+    setBootstrapStatus({
+      status: 'Loading complete',
+      progress: 100,
+      detail: 'Editor is ready.',
+    })
     currentComponent.value = EditorView
   } catch (error) {
     const classified = classifyBootstrapError(error)
@@ -242,6 +318,11 @@ async function bootstrap() {
     errorMessage.value = classified.message
     statusMessage.value = 'Load failed'
     progress.value = 100
+    setBootstrapStatus({
+      status: 'Load failed',
+      progress: 100,
+      detail: classified.message,
+    })
   } finally {
     isBooting.value = false
     isRetrying.value = false
@@ -254,7 +335,12 @@ function handleRetry() {
   }
   isRetrying.value = true
   progress.value = 12
-  statusMessage.value = 'Retrying load…'
+  statusMessage.value = 'Retrying load...'
+  setBootstrapStatus({
+    status: 'Retrying load...',
+    progress: 12,
+    detail: 'Restarting the project boot flow.',
+  })
   bootstrap()
 }
 
@@ -263,9 +349,11 @@ const componentProps = computed(() =>
     ? {
         progress: progress.value,
         status: statusMessage.value,
+        detail: statusDetail.value,
         error: errorMessage.value,
         retrying: isRetrying.value,
         canRetry: errorCode.value === 'scene-open-failed' || errorCode.value === 'unknown',
+        statusHistory: statusHistory.value,
         onRetry: handleRetry,
         onBackToProjects: errorCode.value !== null
           ? () => router.replace({ path: '/' })
@@ -288,8 +376,10 @@ watch(
       errorMessage.value = null
       errorCode.value = null
       currentComponent.value = LoadingScreen
+      statusHistory.value = []
+      statusDetail.value = 'Bootstrapping editor shell.'
       progress.value = 5
-      statusMessage.value = 'Initializing scene editor…'
+      statusMessage.value = 'Initializing editor...'
       bootstrap()
     }
   },
@@ -340,6 +430,13 @@ watch(
   opacity: 0.78;
 }
 
+.load-detail {
+  margin: 0;
+  font-size: 0.92rem;
+  line-height: 1.5;
+  color: rgba(220, 235, 244, 0.78);
+}
+
 .load-body {
   display: flex;
   flex-direction: column;
@@ -368,6 +465,34 @@ watch(
   font-weight: 500;
   letter-spacing: 0.08em;
   color: rgba(255, 255, 255, 0.82);
+}
+
+.load-status-history {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.load-status-history__item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.load-status-history__label {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.load-status-history__description {
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: rgba(214, 228, 236, 0.72);
 }
 
 .load-error {

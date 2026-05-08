@@ -724,6 +724,8 @@ function replaceRuntimeGroundHeightmapsFromSidecar(
   }
   const runtimeDefinition = createGroundRuntimeMeshFromSidecar(definition, sidecar)
   runtimeGroundHeightmaps.clear()
+  runtimeGroundDefinition.planningMetadata = runtimeDefinition.planningMetadata
+  runtimeGroundDefinition.localEditTiles = runtimeDefinition.localEditTiles ?? null
   runtimeGroundDefinition.runtimeHydratedHeightState = runtimeDefinition.runtimeHydratedHeightState
   runtimeGroundDefinition.runtimeDisableOptimizedChunks = runtimeDefinition.runtimeDisableOptimizedChunks
   runtimeGroundDefinition.surfaceRevision = runtimeDefinition.surfaceRevision
@@ -762,6 +764,7 @@ function buildSceneGroundSidecar(groundNode: SceneNode | null): ArrayBuffer | nu
     rows: state.rows,
     columns: state.columns,
     planningMetadata: state.planningMetadata ?? definition.planningMetadata ?? null,
+    localEditTiles: serializeRuntimeLocalEditTiles(state.localEditTiles) ?? definition.localEditTiles ?? null,
     getManualHeight: (row, column) => getTileHeightMapValue(state, 'manual', row, column),
     getPlanningHeight: (row, column) => getTileHeightMapValue(state, 'planning', row, column),
     sampleHeightRegion: (kind, minRowInput, maxRowInput, minColumnInput, maxColumnInput) => sampleRuntimeHeightRegion(

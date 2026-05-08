@@ -132,11 +132,47 @@ export {
 export type {
   ScenePackageManifest,
   ScenePackageManifestV1,
+  ScenePackageCompiledGroundEntry,
   ScenePackageProjectEntry,
   ScenePackageResourceEntry,
   ScenePackageResourceType,
+  ScenePackageTerrainEntry,
   ScenePackageSceneEntry,
 } from './scenePackage'
+
+export {
+  COMPILED_GROUND_MANIFEST_VERSION,
+  COMPILED_GROUND_RENDER_TILE_MAGIC,
+  COMPILED_GROUND_COLLISION_TILE_MAGIC,
+  computeCompiledGroundManifestRevision,
+  formatCompiledGroundTileKey,
+  serializeCompiledGroundRenderTile,
+  deserializeCompiledGroundRenderTile,
+  serializeCompiledGroundCollisionTile,
+  deserializeCompiledGroundCollisionTile,
+  collectCompiledGroundCoveredChunkKeys,
+  computeCompiledGroundBoundsFromPositions,
+} from './compiledGround'
+export type {
+  CompiledGroundBounds,
+  CompiledGroundChunkBounds,
+  CompiledGroundManifest,
+  CompiledGroundRenderTileRecord,
+  CompiledGroundCollisionTileRecord,
+  CompiledGroundRenderTileHeader,
+  CompiledGroundRenderTileData,
+  CompiledGroundCollisionTileHeader,
+  CompiledGroundCollisionTileData,
+} from './compiledGround'
+
+export {
+  clearCompiledGroundRenderTiles,
+  syncCompiledGroundRenderTiles,
+} from './compiledGroundRuntime'
+
+export {
+  createCompiledGroundCollisionRuntime,
+} from './compiledGroundCollisionRuntime'
 
 export {
   QUANTIZED_TERRAIN_MESH_FORMAT,
@@ -1589,7 +1625,9 @@ export interface GroundPlanningDemSourceMetadata {
   height: number
   minElevation?: number | null
   maxElevation?: number | null
+  elevationOffsetMeters?: number | null
   sampleStepMeters?: number | null
+  appliedSampleStepMeters?: number | null
   sampleStepX?: number | null
   sampleStepY?: number | null
   worldBounds?: GroundPlanningWorldBounds | null
@@ -2163,6 +2201,10 @@ export type GroundRuntimeDynamicMesh = GroundDynamicMesh & {
   runtimeLoadedTileKeys?: string[]
   runtimeManualHeightOverrideCount?: number
   runtimePlanningHeightOverrideCount?: number
+  runtimeManualHeightOverrideSourceRef?: GroundHeightMap
+  runtimePlanningHeightOverrideSourceRef?: GroundHeightMap
+  runtimeManualHeightOverrideSourceLength?: number
+  runtimePlanningHeightOverrideSourceLength?: number
 }
 
 function clampPositiveGroundMetric(value: number | null | undefined, fallback: number): number {
@@ -2236,8 +2278,9 @@ export function resolveGroundChunkBounds(
 ): GroundChunkBounds {
   const chunkSizeMeters = clampPositiveGroundMetric(definition.chunkSizeMeters, GROUND_TERRAIN_CHUNK_SIZE_METERS)
   const bounds = resolveGroundWorldBounds(definition)
+  const maxEdgeEpsilon = Math.max(1e-9, chunkSizeMeters * 1e-9)
   const minCoord = resolveGroundChunkCoordFromWorldPosition(bounds.minX, bounds.minZ, chunkSizeMeters)
-  const maxCoord = resolveGroundChunkCoordFromWorldPosition(bounds.maxX - Number.EPSILON, bounds.maxZ - Number.EPSILON, chunkSizeMeters)
+  const maxCoord = resolveGroundChunkCoordFromWorldPosition(bounds.maxX - maxEdgeEpsilon, bounds.maxZ - maxEdgeEpsilon, chunkSizeMeters)
   return {
     minChunkX: Math.min(minCoord.chunkX, maxCoord.chunkX),
     maxChunkX: Math.max(minCoord.chunkX, maxCoord.chunkX),

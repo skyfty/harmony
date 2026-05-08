@@ -36,6 +36,16 @@ export type CameraFollowContext = {
   mapControls?: { target: THREE.Vector3; update: () => void; enabled?: boolean; enablePan?: boolean; minDistance?: number; maxDistance?: number }
 }
 
+export type CameraFollowPoseConstraint = (params: {
+  camera: THREE.PerspectiveCamera
+  position: THREE.Vector3
+  target: THREE.Vector3
+  desiredPosition: THREE.Vector3
+  desiredTarget: THREE.Vector3
+  anchor: THREE.Vector3
+  heading: THREE.Vector3
+}) => void
+
 type Vector3Like = { x: number; y: number; z: number }
 
 type VelocityLike = Vector3Like & {
@@ -260,6 +270,7 @@ export class FollowCameraController {
     worldUp?: THREE.Vector3
     distanceScale?: number
     tuning?: Partial<CameraFollowTuning>
+    constrainPose?: CameraFollowPoseConstraint
     onUpdateOrbitLookTween?: (deltaSeconds: number) => void
     followControlsDirty?: boolean
     immediate?: boolean
@@ -487,6 +498,18 @@ export class FollowCameraController {
         const targetAlpha = computeFollowLerpAlpha(deltaSeconds, tuning.targetLerpSpeed)
         follow.currentTarget.lerp(follow.desiredTarget, targetAlpha)
       }
+    }
+
+    if (options.constrainPose) {
+      options.constrainPose({
+        camera,
+        position: follow.currentPosition,
+        target: follow.currentTarget,
+        desiredPosition: follow.desiredPosition,
+        desiredTarget: follow.desiredTarget,
+        anchor: anchorForCamera,
+        heading: headingForward,
+      })
     }
 
     camera.position.copy(follow.currentPosition)

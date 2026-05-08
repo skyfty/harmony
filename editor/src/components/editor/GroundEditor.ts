@@ -3632,6 +3632,11 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				}
 				: runtimeDefinition
 			if (sculptSessionState && sculptSessionState.nodeId === node.id) {
+				if (!sculptSessionState.dirty) {
+					sculptSessionState.definition = mergedRuntimeDefinition
+					sculptSessionState.heightMap = mergedRuntimeDefinition.manualHeightMap
+					return mergedRuntimeDefinition
+				}
 				return sculptSessionState.definition
 			}
 			return options.prepareGroundRuntimeDefinition

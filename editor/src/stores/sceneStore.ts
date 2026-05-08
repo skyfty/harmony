@@ -42,11 +42,21 @@ import { resolveGroundRuntimeChunkCells } from '@schema/groundMesh'
 import { DEFAULT_COLOR, DEFAULT_INTENSITY } from '@schema/lightDefaults'
 import { migrateLegacyGroundTerrainDocument } from '@/utils/legacyGroundTerrainMigration'
 import { createScenesStoreTerrainDatasetHeightSampler } from '@/utils/terrainDatasetRuntime'
+import {
+  clearSceneCompiledGroundPackageMemoryCache,
+  computeSceneCompiledGroundBuildKey,
+  computeSceneCompiledGroundSourceSignature,
+  ensureSceneCompiledGroundPackage,
+  rebuildSceneCompiledGroundPackageChunks,
+  type SceneCompiledGroundEnsureStatus,
+  type SceneCompiledGroundPackage,
+} from '@/utils/sceneCompiledGroundCache'
 import type {
   AssetSourceMetadata,
   BehaviorComponentProps,
   BehaviorEventType,
   CameraNodeProperties,
+  CompiledGroundManifest,
   GroundChunkManifest,
   GroundDynamicMesh,
   GroundHeightMap,
@@ -58,6 +68,7 @@ import type {
   NodeComponentType,
   SceneBehavior,
   SceneDynamicMesh,
+  SceneJsonExportDocument,
   SceneNode,
   SceneNodeComponentMap,
   SceneNodeComponentState,
@@ -86,7 +97,7 @@ import type { ClipboardEnvelope, ClipboardMeta, QuaternionJson } from '@/types/p
 import type { DetachResult } from '@/types/detach-result'
 import type { DuplicateContext } from '@/types/duplicate-context'
 import type { EditorTool } from '@/types/editor-tool'
-import type { EnsureSceneAssetsOptions } from '@/types/ensure-scene-assets-options'
+import type { EnsureSceneAssetsOptions, EnsureSceneAssetsProgress } from '@/types/ensure-scene-assets-options'
 import type { PanelVisibilityState } from '@/types/panel-visibility-state'
 import type { PanelPlacementState, PanelPlacement } from '@/types/panel-placement-state'
 import type { HierarchyTreeItem } from '@/types/hierarchy-tree-item'
@@ -1106,6 +1117,9 @@ declare module '@/types/scene-state' {
     sceneGraphStructureVersion: number
     sceneNodePropertyVersion: number
     pendingScenePatches: ScenePatch[]
+    compiledGroundBuildKey: string | null
+    compiledGroundManifest: CompiledGroundManifest | null
+    compiledGroundFiles: Map<string, ArrayBuffer>
 
     prefabAssetDownloadProgress: Record<
       string,
@@ -1899,6 +1913,104 @@ function refreshGroundOptimizedMeshRuntime(
   finalizeDynamicMeshRuntimePatch(store, nodeId, 'Ground')
   persistGroundHeightSidecarForNode(target)
   return true
+}
+
+function applyCompiledGroundPackageToStore(
+  store: Pick<SceneState, 'compiledGroundBuildKey' | 'compiledGroundManifest' | 'compiledGroundFiles' | 'groundNode'>,
+  buildKey: string,
+  pkg: SceneCompiledGroundPackage | null,
+): void {
+  const normalizedBuildKey = typeof buildKey === 'string' ? buildKey.trim() : ''
+  store.compiledGroundBuildKey = normalizedBuildKey || null
+  store.compiledGroundManifest = pkg?.manifest ?? null
+  store.compiledGroundFiles = pkg?.files ? new Map<string, ArrayBuffer>(pkg.files) : new Map<string, ArrayBuffer>()
+  if (store.groundNode?.dynamicMesh?.type !== 'Ground') {
+    return
+  }
+  store.groundNode.userData = {
+    ...(store.groundNode.userData ?? {}),
+    compiledGroundEnabled: Boolean(pkg?.manifest),
+    compiledGroundManifest: pkg?.manifest ?? null,
+  }
+}
+
+function shouldUseCompiledGroundForDefinition(
+  dynamicGround: GroundDynamicMesh,
+  terrainDatasetId: string | null = null,
+): boolean {
+  const normalizedTerrainDatasetId = typeof terrainDatasetId === 'string' ? terrainDatasetId.trim() : ''
+  if (normalizedTerrainDatasetId) {
+    return true
+  }
+  if (dynamicGround.planningMetadata?.demSource) {
+    return true
+  }
+  const localEditTileCount = dynamicGround.localEditTiles && typeof dynamicGround.localEditTiles === 'object'
+    ? Object.keys(dynamicGround.localEditTiles).length
+    : 0
+  if (localEditTileCount > 0) {
+    return true
+  }
+  const surfaceRevision = Number.isFinite(dynamicGround.surfaceRevision)
+    ? Math.max(0, Math.trunc(dynamicGround.surfaceRevision as number))
+    : 0
+  if (surfaceRevision > 0) {
+    return true
+  }
+  const chunkManifestRevision = Number.isFinite(dynamicGround.chunkManifestRevision)
+    ? Math.max(0, Math.trunc(dynamicGround.chunkManifestRevision as number))
+    : 0
+  return chunkManifestRevision > 0
+}
+
+function createCompiledGroundSourceDocument(store: Pick<SceneState, 'currentSceneId' | 'nodes'>): SceneJsonExportDocument | null {
+  const sceneId = typeof store.currentSceneId === 'string' ? store.currentSceneId.trim() : ''
+  if (!sceneId) {
+    return null
+  }
+  return {
+    id: sceneId,
+    nodes: store.nodes as unknown as SceneJsonExportDocument['nodes'],
+  } as SceneJsonExportDocument
+}
+
+type SceneLoadProgress = {
+  step: string
+  progress: number
+  detail?: string
+}
+
+type SelectSceneOptions = {
+  setLastEdited?: boolean
+  forceReload?: boolean
+  showLoadingOverlay?: boolean
+  onProgress?: (progress: SceneLoadProgress) => void
+}
+
+function emitSceneLoadProgress(
+  callback: SelectSceneOptions['onProgress'],
+  payload: SceneLoadProgress,
+): void {
+  callback?.({
+    ...payload,
+    progress: Math.max(0, Math.min(100, Math.round(payload.progress))),
+  })
+}
+
+function mapAssetLoadProgressToSceneLoad(progress: EnsureSceneAssetsProgress): SceneLoadProgress {
+  return {
+    step: progress.step,
+    detail: progress.detail,
+    progress: 36 + progress.progress * 0.28,
+  }
+}
+
+function mapCompiledGroundStatusToSceneLoad(status: SceneCompiledGroundEnsureStatus): SceneLoadProgress {
+  return {
+    step: status.step,
+    detail: status.detail,
+    progress: 82 + status.progress * 0.16,
+  }
 }
 
 function commitGroundScatterRuntimeEdit(
@@ -7681,6 +7793,9 @@ function createInitialSceneState(): SceneState {
     sceneGraphStructureVersion: 0,
     sceneNodePropertyVersion: 0,
     pendingScenePatches: [],
+    compiledGroundBuildKey: null,
+    compiledGroundManifest: null,
+    compiledGroundFiles: new Map<string, ArrayBuffer>(),
     workspaceId: '',
     workspaceType: 'local',
     workspaceLabel: 'Local User',
@@ -7736,6 +7851,9 @@ function resetSceneStateToNoSelection(store: SceneState) {
   store.sceneGraphStructureVersion = 0
   store.sceneNodePropertyVersion = 0
   store.pendingScenePatches = []
+  store.compiledGroundBuildKey = null
+  store.compiledGroundManifest = null
+  store.compiledGroundFiles = new Map<string, ArrayBuffer>()
   store.workspaceId = ''
   store.workspaceType = 'local'
   store.workspaceLabel = 'Local User'
@@ -8686,6 +8804,136 @@ export const useSceneStore = defineStore('scene', {
       normalizeCurrentSceneMeta(this)
       const snapshot = buildSceneDocumentFromState(this)
       return snapshot
+    },
+    clearCurrentCompiledGroundPackage() {
+      clearSceneCompiledGroundPackageMemoryCache(this.compiledGroundBuildKey)
+      applyCompiledGroundPackageToStore(this, '', null)
+    },
+    getCurrentCompiledGroundTileData(path: string): ArrayBuffer | null {
+      const normalizedPath = typeof path === 'string' ? path.trim() : ''
+      if (!normalizedPath) {
+        return null
+      }
+      return this.compiledGroundFiles.get(normalizedPath) ?? null
+    },
+    async ensureCurrentSceneCompiledGroundReady(
+      options: {
+        forceRebuild?: boolean
+        onStatus?: (status: SceneCompiledGroundEnsureStatus) => void
+      } = {},
+    ): Promise<boolean> {
+      const document = createCompiledGroundSourceDocument(this)
+      const groundNode = this.groundNode
+      if (!document || !groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
+        applyCompiledGroundPackageToStore(this, '', null)
+        return false
+      }
+      const scenesStore = useScenesStore()
+      const terrainDatasetManifest = await scenesStore.loadTerrainDatasetManifest(document.id)
+      if (!shouldUseCompiledGroundForDefinition(groundNode.dynamicMesh, terrainDatasetManifest?.datasetId ?? null)) {
+        applyCompiledGroundPackageToStore(this, '', null)
+        await scenesStore.saveCompiledGroundBundle(document.id, null)
+        return true
+      }
+      const buildKey = computeSceneCompiledGroundBuildKey(
+        document.id,
+        groundNode.dynamicMesh,
+        terrainDatasetManifest?.datasetId ?? null,
+      )
+      const sourceSignature = computeSceneCompiledGroundSourceSignature(
+        document.id,
+        groundNode.dynamicMesh,
+        terrainDatasetManifest?.datasetId ?? null,
+      )
+      const pkg = await ensureSceneCompiledGroundPackage(document, buildKey, {
+        forceRebuild: options.forceRebuild === true,
+        sourceSignature,
+        onStatus: options.onStatus,
+        loadFallbackPackage: options.forceRebuild === true
+          ? undefined
+          : async () => {
+              const fallback = await scenesStore.loadCompiledGroundBundle(document.id)
+              if (!fallback) {
+                return null
+              }
+              if (fallback.buildKey !== buildKey || fallback.sourceSignature !== sourceSignature) {
+                return null
+              }
+              return {
+                manifest: fallback.manifest,
+                files: new Map<string, ArrayBuffer>(Object.entries(fallback.files)),
+              }
+            },
+      })
+      if (document.id !== this.currentSceneId) {
+        return false
+      }
+      applyCompiledGroundPackageToStore(this, buildKey, pkg)
+      await scenesStore.saveCompiledGroundBundle(document.id, {
+        buildKey,
+        sourceSignature,
+        manifest: pkg.manifest,
+        files: Object.fromEntries(pkg.files),
+      })
+      return true
+    },
+    async rebuildCurrentSceneCompiledGroundChunks(
+      nodeId: string,
+      chunkKeys: string[],
+    ): Promise<boolean> {
+      const document = createCompiledGroundSourceDocument(this)
+      const groundNode = this.groundNode
+      if (!document || !groundNode || groundNode.id !== nodeId || groundNode.dynamicMesh?.type !== 'Ground') {
+        return false
+      }
+      const scenesStore = useScenesStore()
+      const terrainDatasetManifest = await scenesStore.loadTerrainDatasetManifest(document.id)
+      if (!shouldUseCompiledGroundForDefinition(groundNode.dynamicMesh, terrainDatasetManifest?.datasetId ?? null)) {
+        applyCompiledGroundPackageToStore(this, '', null)
+        await scenesStore.saveCompiledGroundBundle(document.id, null)
+        return false
+      }
+      const buildKey = computeSceneCompiledGroundBuildKey(
+        document.id,
+        groundNode.dynamicMesh,
+        terrainDatasetManifest?.datasetId ?? null,
+      )
+      const sourceSignature = computeSceneCompiledGroundSourceSignature(
+        document.id,
+        groundNode.dynamicMesh,
+        terrainDatasetManifest?.datasetId ?? null,
+      )
+      if (this.compiledGroundBuildKey && this.compiledGroundBuildKey !== buildKey) {
+        const rebuilt = await ensureSceneCompiledGroundPackage(document, buildKey, {
+          forceRebuild: true,
+          sourceSignature,
+        })
+        if (document.id !== this.currentSceneId) {
+          return false
+        }
+        applyCompiledGroundPackageToStore(this, buildKey, rebuilt)
+        await scenesStore.saveCompiledGroundBundle(document.id, {
+          buildKey,
+          sourceSignature,
+          manifest: rebuilt.manifest,
+          files: Object.fromEntries(rebuilt.files),
+        })
+        return true
+      }
+      const rebuilt = await rebuildSceneCompiledGroundPackageChunks(document, buildKey, chunkKeys, {
+        sourceSignature,
+      })
+      if (document.id !== this.currentSceneId) {
+        return false
+      }
+      applyCompiledGroundPackageToStore(this, buildKey, rebuilt)
+      await scenesStore.saveCompiledGroundBundle(document.id, {
+        buildKey,
+        sourceSignature,
+        manifest: rebuilt.manifest,
+        files: Object.fromEntries(rebuilt.files),
+      })
+      return true
     },
     appendUndoEntry(entry: SceneHistoryEntry, options: { resetRedo?: boolean } = {}) {
       const nextUndoStack = [...this.undoStack, entry]
@@ -9651,9 +9899,15 @@ export const useSceneStore = defineStore('scene', {
         this.updateNodeDynamicMesh(nodeId, dynamicMesh)
         return
       }
+      const existingLocalEditTileCount = target.dynamicMesh && typeof target.dynamicMesh === 'object' && target.dynamicMesh?.localEditTiles
+        ? Object.keys(target.dynamicMesh.localEditTiles as Record<string, unknown>).length
+        : 0
       const incoming = dynamicMesh && typeof dynamicMesh === 'object'
         ? { ...(dynamicMesh as Record<string, unknown>) }
         : dynamicMesh
+      const incomingLocalEditTileCount = incoming && typeof incoming === 'object' && Object.prototype.hasOwnProperty.call(incoming, 'localEditTiles') && (incoming as Record<string, unknown>).localEditTiles
+        ? Object.keys((incoming as Record<string, unknown>).localEditTiles as Record<string, unknown>).length
+        : 0
       let shouldPersistScatterSidecar = false
       let shouldPersistPaintSidecar = false
       if (incoming && typeof incoming === 'object' && this.currentSceneId) {
@@ -9690,6 +9944,10 @@ export const useSceneStore = defineStore('scene', {
         })
       }
       finalizeDynamicMeshRuntimePatch(this, nodeId, resolveDynamicMeshType(target.dynamicMesh))
+      const mergedLocalEditTileCount = target.dynamicMesh && typeof target.dynamicMesh === 'object' && target.dynamicMesh?.localEditTiles
+        ? Object.keys(target.dynamicMesh.localEditTiles as Record<string, unknown>).length
+        : 0
+
       persistGroundHeightSidecarForNode(target)
       if (shouldPersistScatterSidecar) {
         persistGroundScatterSidecarForNode(target)
@@ -9704,7 +9962,16 @@ export const useSceneStore = defineStore('scene', {
       definition: GroundDynamicMesh,
       manualHeightMap: GroundHeightMap,
     ) {
-      return commitGroundHeightMapRuntimeEdit(this, nodeId, definition, manualHeightMap)
+      const committed = commitGroundHeightMapRuntimeEdit(this, nodeId, definition, manualHeightMap)
+      if (committed) {
+        const dirtyChunkKeys = resolveGroundDirtyChunkKeysFromRegion(definition, null)
+        if (dirtyChunkKeys?.length) {
+          void this.rebuildCurrentSceneCompiledGroundChunks(nodeId, dirtyChunkKeys).catch((error) => {
+            console.warn('[SceneStore] Failed to rebuild compiled ground after heightmap edit', error)
+          })
+        }
+      }
+      return committed
     },
     commitGroundLocalEditTilesEdit(
       nodeId: string,
@@ -9712,7 +9979,16 @@ export const useSceneStore = defineStore('scene', {
       localEditTiles: GroundLocalEditTileMap | null,
       affectedRegion: { minRow: number; maxRow: number; minColumn: number; maxColumn: number } | null = null,
     ) {
-      return commitGroundLocalEditTilesRuntimeEdit(this, nodeId, definition, localEditTiles, affectedRegion)
+      const committed = commitGroundLocalEditTilesRuntimeEdit(this, nodeId, definition, localEditTiles, affectedRegion)
+      if (committed) {
+        const dirtyChunkKeys = resolveGroundDirtyChunkKeysFromRegion(definition, affectedRegion)
+        if (dirtyChunkKeys?.length) {
+          void this.rebuildCurrentSceneCompiledGroundChunks(nodeId, dirtyChunkKeys).catch((error) => {
+            console.warn('[SceneStore] Failed to rebuild compiled ground after local edit tile update', error)
+          })
+        }
+      }
+      return committed
     },
     refreshGroundOptimizedMesh(nodeId: string) {
       return refreshGroundOptimizedMeshRuntime(this, nodeId)
@@ -18009,12 +18285,18 @@ export const useSceneStore = defineStore('scene', {
       return sceneDocument.id
     },
     
-    async selectScene(sceneId: string, options: { setLastEdited?: boolean; forceReload?: boolean } = {}) {
+    async selectScene(sceneId: string, options: SelectSceneOptions = {}) {
       // Invalidate any in-flight scene-bound async work as early as possible.
       this.sceneSwitchToken += 1
       const sceneSwitchToken = this.sceneSwitchToken
+      this.clearCurrentCompiledGroundPackage()
       const forceReload = options.forceReload === true
+      const showLoadingOverlay = options.showLoadingOverlay ?? !options.onProgress
+      const reportProgress = (step: string, progress: number, detail?: string) => {
+        emitSceneLoadProgress(options.onProgress, { step, progress, detail })
+      }
       const scenesStore = useScenesStore()
+      reportProgress('Checking scene bundle', 8, 'Verifying local scene data and remote bundle state...')
       const sceneReady = await scenesStore.ensureSceneBundleAvailable(sceneId)
       if (!sceneReady) {
         return false
@@ -18022,19 +18304,28 @@ export const useSceneStore = defineStore('scene', {
       if (!forceReload && sceneId === this.currentSceneId) {
         this.isSceneReady = false
         try {
-          await this.ensureSceneAssetsReady({ showOverlay: true })
+          reportProgress('Refreshing scene assets', 36, 'Reloading runtime assets for the current scene...')
+          await this.ensureSceneAssetsReady({
+            showOverlay: showLoadingOverlay,
+            onProgress: (progress) => {
+              const mapped = mapAssetLoadProgressToSceneLoad(progress)
+              reportProgress(mapped.step, mapped.progress, mapped.detail)
+            },
+          })
         } finally {
           this.isSceneReady = true
         }
+        reportProgress('Scene ready', 100, 'Current scene assets refreshed.')
         return true
       }
+      reportProgress('Reading scene document', 16, 'Loading scene document and ground sidecars...')
       const scene = await scenesStore.loadSceneDocument(sceneId, { hydrateGroundRuntime: true })
       if (!scene) {
         return false
       }
 
+      reportProgress('Migrating embedded assets', 24, 'Hydrating embedded assets and runtime sidecars...')
       const embeddedMigration = await hydrateSceneDocumentWithEmbeddedAssets(scene)
-
       this.nodes.forEach((node) => releaseRuntimeTree(node))
 
       this.isSceneReady = false
@@ -18042,14 +18333,22 @@ export const useSceneStore = defineStore('scene', {
         const sceneNodes = cloneSceneNodes(scene.nodes)
         await this.ensureSceneAssetsReady({
           nodes: sceneNodes,
-          showOverlay: true,
+          showOverlay: showLoadingOverlay,
           refreshViewport: false,
+          onProgress: (progress) => {
+            const mapped = mapAssetLoadProgressToSceneLoad(progress)
+            reportProgress(mapped.step, mapped.progress, mapped.detail)
+          },
         })
 
         scene.nodes = sceneNodes
+        reportProgress('Applying scene data', 66, 'Syncing scene graph into editor state...')
         attachRuntimeGroundSidecarsToDocument(scene)
         this.applySceneDocumentToState(scene)
+        reportProgress('Loading terrain dataset', 72, 'Reading terrain dataset manifest...')
         const terrainDatasetManifest = await scenesStore.loadTerrainDatasetManifest(scene.id)
+
+        reportProgress('Preparing terrain sampler', 76, 'Creating terrain height sampler...')
         const terrainSampler = await createScenesStoreTerrainDatasetHeightSampler(scene.id)
         if (sceneSwitchToken !== this.sceneSwitchToken) {
           return false
@@ -18064,6 +18363,14 @@ export const useSceneStore = defineStore('scene', {
           runtimeGround.runtimeTerrainDatasetEnabled = Boolean(terrainSampler)
           runtimeGround.runtimeTerrainHeightSampler = terrainSampler
         }
+        reportProgress('Compiling terrain cache', 82, 'Checking compiled terrain cache...')
+        await this.ensureCurrentSceneCompiledGroundReady({
+          onStatus: (status) => {
+            const mapped = mapCompiledGroundStatusToSceneLoad(status)
+            reportProgress(mapped.step, mapped.progress, mapped.detail)
+          },
+        })
+        reportProgress('Scene ready', 100, 'Scene graph, assets, and terrain cache are ready.')
       } finally {
         this.isSceneReady = true
       }
@@ -18401,6 +18708,7 @@ export const useSceneStore = defineStore('scene', {
           const groundNode = findGroundNode(this.nodes)
           attachGroundScatterRuntimeToNode(this.currentSceneId, groundNode)
           attachGroundPaintRuntimeToNode(this.currentSceneId, groundNode)
+          await this.ensureCurrentSceneCompiledGroundReady()
         }
         await this.refreshRuntimeState({ showOverlay: true, refreshViewport: false })
       } finally {

@@ -6,7 +6,7 @@ import type {
   QuantizedTerrainDatasetRootManifest,
   SceneNode,
 } from '@schema'
-import { GROUND_HEIGHT_UNSET_VALUE, createGroundHeightMap, getGroundVertexIndex } from '@schema'
+import { GROUND_HEIGHT_UNSET_VALUE, GROUND_TERRAIN_CHUNK_SIZE_METERS, createGroundHeightMap, getGroundVertexIndex } from '@schema'
 import {
   ensureTerrainScatterStore,
   getTerrainScatterStore,
@@ -30,6 +30,7 @@ import type {
   PlanningPolygonData,
   PlanningPolylineData,
   PlanningSceneData,
+  PlanningTerrainDemData,
   PlanningTerrainWorldBounds,
 } from '@/types/planning-scene-data'
 import { useGroundHeightmapStore } from '@/stores/groundHeightmapStore'
@@ -47,8 +48,8 @@ import {
 } from '@schema/components'
 import { generateUuid } from '@/utils/uuid'
 import { releaseScatterInstance } from '@/utils/terrainScatterRuntime'
-import { buildPlanningDemGroundRegionData, type PlanningDemBuildProgress, type PlanningDemHeightRegion } from '@/utils/planningDemToGround'
-import { buildPlanningDemTerrainDataset } from '@/utils/planningDemTerrainDataset'
+import { buildPlanningDemGroundRegionData, type PlanningDemBuildProgress, type PlanningDemHeightRegion, type PlanningDemRegionConversionResult } from '@/utils/planningDemToGround'
+import { buildPlanningDemTerrainConversionInWorker } from '@/utils/planningDemTerrainDataset'
 import { createScenesStoreTerrainDatasetHeightSampler } from '@/utils/terrainDatasetRuntime'
 
 
@@ -103,12 +104,29 @@ function normalizePlanningDemBoundsForGround(bounds: PlanningTerrainWorldBounds 
   if (!Number.isFinite(minX) || !Number.isFinite(maxX) || !Number.isFinite(minZ) || !Number.isFinite(maxZ)) {
     return null
   }
-  return {
-    minX: Math.min(minX, maxX),
-    maxX: Math.max(minX, maxX),
-    minZ: Math.min(minZ, maxZ),
-    maxZ: Math.max(minZ, maxZ),
+  const normalizedMinX = Math.min(minX, maxX)
+  const normalizedMaxX = Math.max(minX, maxX)
+  const normalizedMinZ = Math.min(minZ, maxZ)
+  const normalizedMaxZ = Math.max(minZ, maxZ)
+  const centerX = (normalizedMinX + normalizedMaxX) * 0.5
+  const centerZ = (normalizedMinZ + normalizedMaxZ) * 0.5
+  if (Math.abs(centerX) > 1e-6 || Math.abs(centerZ) > 1e-6) {
+    return null
   }
+  return {
+    minX: normalizedMinX,
+    maxX: normalizedMaxX,
+    minZ: normalizedMinZ,
+    maxZ: normalizedMaxZ,
+  }
+}
+
+function resolvePlanningDemGroundResolution(dem: PlanningTerrainDemData | null | undefined): number {
+  const targetChunkResolution = Number((dem as PlanningTerrainDemData | null | undefined)?.targetChunkResolution)
+  if (!Number.isFinite(targetChunkResolution) || targetChunkResolution <= 0) {
+    throw new Error('Planning DEM chunk subdivision resolution is missing or invalid')
+  }
+  return Math.max(1, Math.round(targetChunkResolution))
 }
 
 function mergeGroundBounds(
@@ -950,6 +968,19 @@ function applyPlanningDemRegionToGround(
         }
       : definition.localEditTiles ?? null,
   } satisfies GroundRuntimeDynamicMesh
+  const mergedLocalEditTiles = nextGroundSeed.localEditTiles ?? null
+  const groundRuntimeDefinition = groundNode.dynamicMesh?.type === 'Ground'
+    ? groundNode.dynamicMesh as GroundRuntimeDynamicMesh
+    : null
+
+  // Keep any live references aligned with the DEM-imported runtime state before
+  // downstream systems read from the store or cached editor sessions.
+  definition.planningMetadata = planningMetadata
+  definition.localEditTiles = mergedLocalEditTiles
+  if (groundRuntimeDefinition) {
+    groundRuntimeDefinition.planningMetadata = planningMetadata
+    groundRuntimeDefinition.localEditTiles = mergedLocalEditTiles
+  }
   
   // 确定需要标记为脏的区块键
   // 如果有本地编辑图块，则使用其键；否则根据区域计算脏区块键
@@ -959,7 +990,7 @@ function applyPlanningDemRegionToGround(
   
   // 如果存在本地编辑图块，将其替换到高度图存储中
   if (localEditTiles) {
-    useGroundHeightmapStore().replaceLocalEditTiles(groundNode.id, nextGroundSeed, nextGroundSeed.localEditTiles ?? null)
+    useGroundHeightmapStore().replaceLocalEditTiles(groundNode.id, nextGroundSeed, mergedLocalEditTiles)
   } else {
     useGroundHeightmapStore().replacePlanningHeightRegion(
       groundNode.id,
@@ -1924,18 +1955,28 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
     await yieldController.maybeYield(true)
   }
 
-  const demGroundBounds = normalizePlanningDemBoundsForGround(planningData.terrain?.dem?.worldBounds ?? null)
+  const planningDem = planningData.terrain?.dem ?? null
+  const demGroundBounds = normalizePlanningDemBoundsForGround(planningDem?.worldBounds ?? null)
+  if (planningDem && !demGroundBounds) {
+    throw new Error('Planning DEM world bounds are missing, invalid, or not centered on the world origin')
+  }
   if (sceneStore.groundNode?.dynamicMesh?.type === 'Ground' && demGroundBounds) {
     const currentGroundDefinition = sceneStore.groundNode.dynamicMesh as GroundDynamicMesh
     const currentGroundBounds = resolveGroundWorldBounds(currentGroundDefinition)
+    const nextEditTileResolution = resolvePlanningDemGroundResolution(planningDem)
     const nextGroundBounds = hadGroundNodeBeforeConversion
       ? mergeGroundBounds(currentGroundBounds, demGroundBounds)
       : demGroundBounds
 
-    if (groundBoundsChanged(currentGroundBounds, nextGroundBounds)) {
+    const needsResolutionUpdate = Number(currentGroundDefinition.editTileResolution) !== nextEditTileResolution
+      || Number(currentGroundDefinition.editTileSizeMeters) !== GROUND_TERRAIN_CHUNK_SIZE_METERS
+
+    if (groundBoundsChanged(currentGroundBounds, nextGroundBounds) || needsResolutionUpdate) {
       sceneStore.updateGroundNodeDynamicMesh(sceneStore.groundNode.id, {
         ...currentGroundDefinition,
         worldBounds: nextGroundBounds,
+        editTileSizeMeters: GROUND_TERRAIN_CHUNK_SIZE_METERS,
+        editTileResolution: nextEditTileResolution,
       })
       await yieldController.maybeYield(true)
     }
@@ -2096,17 +2137,41 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
       //                  示例: 5 (表示从第5列开始)
       //   - endColumn: 数字 - DEM导入结束列索引，默认为网格总列数
       //              示例: 1000 (表示到第1000列结束)，若未指定则为 Math.max(1, gridColumns)
-      const demResult = await buildPlanningDemGroundRegionData({
-        definition: groundDefinition as GroundRuntimeDynamicMesh,
-        terrainDem,
-        startRow: demImportBounds?.minRow ?? 0,
-        endRow: demImportBounds?.maxRow ?? Math.max(1, resolveGroundWorkingGridSize(groundDefinition).rows),
-        startColumn: demImportBounds?.minColumn ?? 0,
-        endColumn: demImportBounds?.maxColumn ?? Math.max(1, resolveGroundWorkingGridSize(groundDefinition).columns),
-        onProgress: (payload: PlanningDemBuildProgress) => {
-          emitDemProgress(payload)
-        },
-      })
+      const demStartRow = demImportBounds?.minRow ?? 0
+      const demEndRow = demImportBounds?.maxRow ?? Math.max(1, resolveGroundWorkingGridSize(groundDefinition).rows)
+      const demStartColumn = demImportBounds?.minColumn ?? 0
+      const demEndColumn = demImportBounds?.maxColumn ?? Math.max(1, resolveGroundWorkingGridSize(groundDefinition).columns)
+      const activeSceneId = sceneStore.currentSceneId
+      let terrainDataset: Awaited<ReturnType<typeof buildPlanningDemTerrainConversionInWorker>>['dataset'] | null = null
+      let demResult: PlanningDemRegionConversionResult
+      if (activeSceneId) {
+        const conversion = await buildPlanningDemTerrainConversionInWorker({
+          definition: groundDefinition as GroundRuntimeDynamicMesh,
+          terrainDem,
+          datasetId: `${activeSceneId}-terrain-dem`,
+          startRow: demStartRow,
+          endRow: demEndRow,
+          startColumn: demStartColumn,
+          endColumn: demEndColumn,
+          onProgress: (payload: PlanningDemBuildProgress) => {
+            emitDemProgress(payload)
+          },
+        })
+        demResult = conversion.demResult
+        terrainDataset = conversion.dataset
+      } else {
+        demResult = await buildPlanningDemGroundRegionData({
+          definition: groundDefinition as GroundRuntimeDynamicMesh,
+          terrainDem,
+          startRow: demStartRow,
+          endRow: demEndRow,
+          startColumn: demStartColumn,
+          endColumn: demEndColumn,
+          onProgress: (payload: PlanningDemBuildProgress) => {
+            emitDemProgress(payload)
+          },
+        })
+      }
       // 将处理后的DEM区域数据应用到地面定义中,更新高度信息和编辑瓦片
       emitDetailedProgress(options, 'Applying DEM to terrain…', 24, {
         phase: 'apply-dem',
@@ -2127,25 +2192,16 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
         name: demResult.textureName,
       })
 
-      const activeSceneId = sceneStore.currentSceneId
-      if (activeSceneId) {
-        emitDetailedProgress(options, 'Building terrain dataset…', 26, {
-          phase: 'build-terrain-dataset',
-        })
-        const dataset = await buildPlanningDemTerrainDataset({
-          definition: groundDefinition as GroundRuntimeDynamicMesh,
-          terrainDem,
-          datasetId: `${activeSceneId}-terrain-dem`,
-        })
+      if (activeSceneId && terrainDataset) {
         emitDetailedProgress(options, 'Syncing terrain dataset…', 28, {
           phase: 'sync-terrain-dataset',
         })
-        await scenesStore.replaceTerrainDatasetBundle(activeSceneId, dataset.manifest, dataset.regionPacks, { syncServer: false })
+        await scenesStore.replaceTerrainDatasetBundle(activeSceneId, terrainDataset.manifest, terrainDataset.regionPacks, { syncServer: false })
         groundDefinition = await syncGroundTerrainDatasetRuntime({
           sceneStore,
           groundNode,
           definition: groundDefinition as GroundRuntimeDynamicMesh,
-          manifest: dataset.manifest,
+          manifest: terrainDataset.manifest,
         })
         emitDetailedProgress(options, 'Terrain dataset ready…', 29, {
           phase: 'terrain-dataset-ready',
@@ -2383,6 +2439,22 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
   emitProgress(options, 'Refreshing scene…', 98)
   await yieldController.maybeYield(true)
 
+  if (sceneStore.groundNode?.dynamicMesh?.type === 'Ground') {
+    emitProgress(options, 'Compiling terrain cache…', 99)
+    emitDetailedProgress(options, 'Compiling terrain cache…', 99, {
+      phase: 'compiled-ground',
+      detail: 'Checking compiled terrain cache...',
+    })
+    await sceneStore.ensureCurrentSceneCompiledGroundReady({
+      onStatus: (status) => {
+        emitDetailedProgress(options, status.step, 99 + status.progress * 0.01, {
+          phase: `compiled-ground:${status.phase}`,
+          detail: status.detail,
+        })
+      },
+    })
+    await yieldController.maybeYield(true)
+  }
   emitProgress(options, 'Done', 100)
   return { rootNodeId: root.id }
   })

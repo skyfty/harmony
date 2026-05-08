@@ -1,8 +1,10 @@
 import * as THREE from 'three'
 
 import {
+  GROUND_TERRAIN_CHUNK_SIZE_METERS,
   deserializeGroundChunkData,
   parseGroundChunkKey,
+  resolveGroundChunkCoordFromWorldPosition,
   resolveGroundChunkBounds,
   type GroundChunkManifestRecord,
   type GroundRuntimeDynamicMesh,
@@ -13,6 +15,7 @@ type InfiniteGroundChunkMeshRuntime = {
   group: THREE.Group
   meshes: Map<string, THREE.Mesh>
   pendingLoads: Map<string, Promise<void>>
+  lastDesiredAt: Map<string, number>
   sourceId: string | null
   revision: number
 }
@@ -26,9 +29,207 @@ type SyncInfiniteGroundChunkMeshesParams = {
   manifestRecords: Record<string, GroundChunkManifestRecord>
   loadChunkData: (record: GroundChunkManifestRecord) => Promise<ArrayBuffer | null>
   resolveActiveRecord?: (chunkKey: string) => GroundChunkManifestRecord | null | undefined
+  unloadGraceMs?: number
+  disableVisibleChunkCulling?: boolean
 }
 
 const infiniteGroundChunkMeshRuntimeMap = new WeakMap<THREE.Object3D, InfiniteGroundChunkMeshRuntime>()
+const DEFAULT_INFINITE_GROUND_CHUNK_UNLOAD_GRACE_MS = 1200
+const DEFAULT_INFINITE_GROUND_CHUNK_UNLOAD_PADDING_CHUNKS = 1
+const DEFAULT_INFINITE_GROUND_CHUNK_FADE_IN_MS = 180
+const infiniteGroundChunkCameraLocal = new THREE.Vector3()
+
+type InfiniteGroundChunkWindow = {
+  minChunkX: number
+  maxChunkX: number
+  minChunkZ: number
+  maxChunkZ: number
+}
+
+function resolveInfiniteGroundChunkSizeMeters(groundDefinition: GroundRuntimeDynamicMesh): number {
+  const chunkSizeMeters = groundDefinition.chunkSizeMeters
+  return typeof chunkSizeMeters === 'number' && Number.isFinite(chunkSizeMeters) && chunkSizeMeters > 0
+    ? chunkSizeMeters
+    : GROUND_TERRAIN_CHUNK_SIZE_METERS
+}
+
+function resolveInfiniteGroundRenderRadiusChunks(groundDefinition: GroundRuntimeDynamicMesh): number {
+  const collisionRadiusChunks = groundDefinition.collisionRadiusChunks
+  const renderRadiusChunks = groundDefinition.renderRadiusChunks
+  const fallbackRadius = typeof collisionRadiusChunks === 'number' && Number.isFinite(collisionRadiusChunks) && collisionRadiusChunks > 0
+    ? collisionRadiusChunks
+    : 1
+  return Math.max(
+    1,
+    Math.trunc(
+      typeof renderRadiusChunks === 'number' && Number.isFinite(renderRadiusChunks) && renderRadiusChunks > 0
+        ? renderRadiusChunks
+        : fallbackRadius,
+    ),
+  )
+}
+
+function resolveInfiniteGroundChunkCameraLocalPosition(
+  groundObject: THREE.Object3D,
+  camera: THREE.Camera,
+): THREE.Vector3 {
+  camera.getWorldPosition(infiniteGroundChunkCameraLocal)
+  groundObject.worldToLocal(infiniteGroundChunkCameraLocal)
+  return infiniteGroundChunkCameraLocal
+}
+
+function resolvePositionAnchoredInfiniteGroundChunkWindow(
+  groundObject: THREE.Object3D,
+  groundDefinition: GroundRuntimeDynamicMesh,
+  camera: THREE.Camera,
+  paddingChunks = 0,
+): InfiniteGroundChunkWindow {
+  const chunkSizeMeters = resolveInfiniteGroundChunkSizeMeters(groundDefinition)
+  const renderRadiusChunks = resolveInfiniteGroundRenderRadiusChunks(groundDefinition)
+  const cameraLocal = resolveInfiniteGroundChunkCameraLocalPosition(groundObject, camera)
+  const centerCoord = resolveGroundChunkCoordFromWorldPosition(cameraLocal.x, cameraLocal.z, chunkSizeMeters)
+  const radius = renderRadiusChunks + Math.max(0, Math.trunc(paddingChunks))
+  return {
+    minChunkX: centerCoord.chunkX - radius,
+    maxChunkX: centerCoord.chunkX + radius,
+    minChunkZ: centerCoord.chunkZ - radius,
+    maxChunkZ: centerCoord.chunkZ + radius,
+  }
+}
+
+function collectManifestRecordsForChunkWindow(
+  groundDefinition: GroundRuntimeDynamicMesh,
+  manifestRecords: Record<string, GroundChunkManifestRecord>,
+  chunkWindow: InfiniteGroundChunkWindow,
+): GroundChunkManifestRecord[] {
+  const authoredChunkBounds = resolveGroundChunkBounds(groundDefinition)
+  const records: GroundChunkManifestRecord[] = []
+  const minChunkZ = Math.max(chunkWindow.minChunkZ, authoredChunkBounds.minChunkZ)
+  const maxChunkZ = Math.min(chunkWindow.maxChunkZ, authoredChunkBounds.maxChunkZ)
+  const minChunkX = Math.max(chunkWindow.minChunkX, authoredChunkBounds.minChunkX)
+  const maxChunkX = Math.min(chunkWindow.maxChunkX, authoredChunkBounds.maxChunkX)
+  for (let chunkZ = minChunkZ; chunkZ <= maxChunkZ; chunkZ += 1) {
+    for (let chunkX = minChunkX; chunkX <= maxChunkX; chunkX += 1) {
+      const record = manifestRecords[`${chunkX}:${chunkZ}`]
+      if (record) {
+        records.push(record)
+      }
+    }
+  }
+  return records
+}
+
+function sortManifestRecordsByCameraDistance(
+  groundObject: THREE.Object3D,
+  camera: THREE.Camera,
+  records: GroundChunkManifestRecord[],
+): GroundChunkManifestRecord[] {
+  if (records.length <= 1) {
+    return records
+  }
+  const cameraLocal = resolveInfiniteGroundChunkCameraLocalPosition(groundObject, camera)
+  records.sort((left, right) => {
+    const leftCenterX = left.originX + left.chunkSizeMeters * 0.5
+    const leftCenterZ = left.originZ + left.chunkSizeMeters * 0.5
+    const rightCenterX = right.originX + right.chunkSizeMeters * 0.5
+    const rightCenterZ = right.originZ + right.chunkSizeMeters * 0.5
+    const leftDx = leftCenterX - cameraLocal.x
+    const leftDz = leftCenterZ - cameraLocal.z
+    const rightDx = rightCenterX - cameraLocal.x
+    const rightDz = rightCenterZ - cameraLocal.z
+    return (leftDx * leftDx + leftDz * leftDz) - (rightDx * rightDx + rightDz * rightDz)
+  })
+  return records
+}
+
+function setChunkMeshMaterialOpacity(mesh: THREE.Mesh, opacity: number): void {
+  const material = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material
+  if (!material) {
+    return
+  }
+  material.transparent = opacity < 0.999
+  material.opacity = opacity
+  material.needsUpdate = true
+}
+
+function updateInfiniteGroundChunkFadeState(mesh: THREE.Mesh, now = Date.now()): number {
+  const fadeStartedAt = Number((mesh.userData as Record<string, unknown> | undefined)?.groundChunkFadeStartedAt)
+  const fadeDurationMs = Number((mesh.userData as Record<string, unknown> | undefined)?.groundChunkFadeDurationMs)
+  if (!Number.isFinite(fadeStartedAt) || !Number.isFinite(fadeDurationMs) || fadeDurationMs <= 0) {
+    setChunkMeshMaterialOpacity(mesh, 1)
+    return 1
+  }
+  const progress = THREE.MathUtils.clamp((now - fadeStartedAt) / fadeDurationMs, 0, 1)
+  setChunkMeshMaterialOpacity(mesh, progress)
+  if (progress >= 1) {
+    delete (mesh.userData as Record<string, unknown>).groundChunkFadeStartedAt
+    delete (mesh.userData as Record<string, unknown>).groundChunkFadeDurationMs
+  }
+  return progress
+}
+
+function isInfiniteGroundChunkReadyToReplaceFallback(mesh: THREE.Mesh): boolean {
+  return updateInfiniteGroundChunkFadeState(mesh) >= 0.999
+}
+
+function createInfiniteGroundChunkRuntimeMaterial(groundObject: THREE.Object3D): THREE.Material {
+  const material = resolveInfiniteGroundChunkMaterial(groundObject).clone()
+  material.transparent = true
+  material.opacity = 0
+  return material
+}
+
+function resolveInfiniteGroundChunkRetainKeys(
+  groundObject: THREE.Object3D,
+  groundDefinition: GroundRuntimeDynamicMesh,
+  camera: THREE.Camera,
+): Set<string> {
+  const anchoredWindow = resolvePositionAnchoredInfiniteGroundChunkWindow(
+    groundObject,
+    groundDefinition,
+    camera,
+    DEFAULT_INFINITE_GROUND_CHUNK_UNLOAD_PADDING_CHUNKS,
+  )
+  const authoredChunkBounds = resolveGroundChunkBounds(groundDefinition)
+  const minChunkZ = Math.max(authoredChunkBounds.minChunkZ, anchoredWindow.minChunkZ)
+  const maxChunkZ = Math.min(authoredChunkBounds.maxChunkZ, anchoredWindow.maxChunkZ)
+  const minChunkX = Math.max(authoredChunkBounds.minChunkX, anchoredWindow.minChunkX)
+  const maxChunkX = Math.min(authoredChunkBounds.maxChunkX, anchoredWindow.maxChunkX)
+  const retainedKeys = new Set<string>()
+  for (let chunkZ = minChunkZ; chunkZ <= maxChunkZ; chunkZ += 1) {
+    for (let chunkX = minChunkX; chunkX <= maxChunkX; chunkX += 1) {
+      retainedKeys.add(`${chunkX}:${chunkZ}`)
+    }
+  }
+  return retainedKeys
+}
+
+function resolveDesiredInfiniteGroundChunkManifestRecords(
+  groundObject: THREE.Object3D,
+  groundDefinition: GroundRuntimeDynamicMesh,
+  camera: THREE.Camera,
+  manifestRecords: Record<string, GroundChunkManifestRecord>,
+): GroundChunkManifestRecord[] {
+  const anchoredRecords = collectManifestRecordsForChunkWindow(
+    groundDefinition,
+    manifestRecords,
+    resolvePositionAnchoredInfiniteGroundChunkWindow(groundObject, groundDefinition, camera),
+  )
+  const visibleRecords = resolveVisibleInfiniteGroundChunkManifestRecords(
+    groundObject,
+    groundDefinition,
+    camera,
+    manifestRecords,
+  )
+  const desiredRecordMap = new Map<string, GroundChunkManifestRecord>()
+  anchoredRecords.forEach((record) => {
+    desiredRecordMap.set(record.key, record)
+  })
+  visibleRecords.forEach((record) => {
+    desiredRecordMap.set(record.key, record)
+  })
+  return sortManifestRecordsByCameraDistance(groundObject, camera, Array.from(desiredRecordMap.values()))
+}
 
 function ensureInfiniteGroundChunkMeshRuntime(groundObject: THREE.Object3D): InfiniteGroundChunkMeshRuntime {
   const existing = infiniteGroundChunkMeshRuntimeMap.get(groundObject)
@@ -49,6 +250,7 @@ function ensureInfiniteGroundChunkMeshRuntime(groundObject: THREE.Object3D): Inf
     group,
     meshes: new Map(),
     pendingLoads: new Map(),
+    lastDesiredAt: new Map(),
     sourceId: null,
     revision: -1,
   }
@@ -63,6 +265,12 @@ function disposeInfiniteGroundChunkMesh(mesh: THREE.Mesh): void {
   } catch (_error) {
     /* noop */
   }
+  try {
+    const material = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material
+    material?.dispose?.()
+  } catch (_error) {
+    /* noop */
+  }
 }
 
 export function clearInfiniteGroundChunkMeshes(groundObject: THREE.Object3D): void {
@@ -73,6 +281,7 @@ export function clearInfiniteGroundChunkMeshes(groundObject: THREE.Object3D): vo
   runtime.meshes.forEach((mesh) => disposeInfiniteGroundChunkMesh(mesh))
   runtime.meshes.clear()
   runtime.pendingLoads.clear()
+  runtime.lastDesiredAt.clear()
   runtime.sourceId = null
   runtime.revision = -1
 }
@@ -82,7 +291,14 @@ export function getLoadedInfiniteGroundChunkKeys(groundObject: THREE.Object3D): 
   if (!runtime || runtime.meshes.size === 0) {
     return []
   }
-  return Array.from(runtime.meshes.keys())
+  const loadedKeys: string[] = []
+  runtime.meshes.forEach((mesh, key) => {
+    if (!isInfiniteGroundChunkReadyToReplaceFallback(mesh)) {
+      return
+    }
+    loadedKeys.push(key)
+  })
+  return loadedKeys
 }
 
 function resolveInfiniteGroundChunkMaterial(groundObject: THREE.Object3D): THREE.Material {
@@ -199,22 +415,8 @@ export function resolveVisibleInfiniteGroundChunkManifestRecords(
   manifestRecords: Record<string, GroundChunkManifestRecord>,
 ): GroundChunkManifestRecord[] {
   const visibleWindow = resolveInfiniteGroundVisibleChunkWindow(groundObject, groundDefinition, camera)
-  const authoredChunkBounds = resolveGroundChunkBounds(groundDefinition)
-  const visibleRecords: GroundChunkManifestRecord[] = []
-  const minChunkZ = Math.max(visibleWindow.minChunkZ, authoredChunkBounds.minChunkZ)
-  const maxChunkZ = Math.min(visibleWindow.maxChunkZ, authoredChunkBounds.maxChunkZ)
-  const minChunkX = Math.max(visibleWindow.minChunkX, authoredChunkBounds.minChunkX)
-  const maxChunkX = Math.min(visibleWindow.maxChunkX, authoredChunkBounds.maxChunkX)
-  for (let chunkZ = minChunkZ; chunkZ <= maxChunkZ; chunkZ += 1) {
-    for (let chunkX = minChunkX; chunkX <= maxChunkX; chunkX += 1) {
-      const key = `${chunkX}:${chunkZ}`
-      const record = manifestRecords[key]
-      if (record) {
-        visibleRecords.push(record)
-      }
-    }
-  }
-  return visibleRecords
+  const visibleRecords = collectManifestRecordsForChunkWindow(groundDefinition, manifestRecords, visibleWindow)
+  return sortManifestRecordsByCameraDistance(groundObject, camera, visibleRecords)
 }
 
 export function syncInfiniteGroundChunkMeshes(params: SyncInfiniteGroundChunkMeshesParams): boolean {
@@ -222,31 +424,55 @@ export function syncInfiniteGroundChunkMeshes(params: SyncInfiniteGroundChunkMes
     return false
   }
 
+  const disableVisibleChunkCulling = params.disableVisibleChunkCulling === true
+
   const runtime = ensureInfiniteGroundChunkMeshRuntime(params.groundObject)
   if (runtime.sourceId !== params.sourceId || runtime.revision !== params.manifestRevision) {
     runtime.meshes.forEach((mesh) => disposeInfiniteGroundChunkMesh(mesh))
     runtime.meshes.clear()
     runtime.pendingLoads.clear()
+    runtime.lastDesiredAt.clear()
     runtime.sourceId = params.sourceId
     runtime.revision = params.manifestRevision
   }
 
-  const visibleRecords = resolveVisibleInfiniteGroundChunkManifestRecords(
+  const desiredRecords = disableVisibleChunkCulling
+    ? Object.values(params.manifestRecords)
+    : resolveDesiredInfiniteGroundChunkManifestRecords(
+      params.groundObject,
+      params.groundDefinition,
+      params.camera,
+      params.manifestRecords,
+    )
+  const desiredKeys = new Set(desiredRecords.map((record) => record.key))
+  const retainedKeys = resolveInfiniteGroundChunkRetainKeys(
     params.groundObject,
     params.groundDefinition,
     params.camera,
-    params.manifestRecords,
   )
-  const desiredKeys = new Set(visibleRecords.map((record) => record.key))
+  const now = Date.now()
+  const unloadGraceMs = Number.isFinite(params.unloadGraceMs)
+    ? Math.max(0, Number(params.unloadGraceMs))
+    : DEFAULT_INFINITE_GROUND_CHUNK_UNLOAD_GRACE_MS
+  desiredKeys.forEach((key) => runtime.lastDesiredAt.set(key, now))
   let changed = false
 
   runtime.meshes.forEach((mesh, key) => {
+    updateInfiniteGroundChunkFadeState(mesh, now)
     if (desiredKeys.has(key)) {
+      return
+    }
+    if (retainedKeys.has(key)) {
+      return
+    }
+    const lastDesiredAt = runtime.lastDesiredAt.get(key) ?? 0
+    if (unloadGraceMs > 0 && now - lastDesiredAt <= unloadGraceMs) {
       return
     }
     disposeInfiniteGroundChunkMesh(mesh)
     runtime.meshes.delete(key)
     runtime.pendingLoads.delete(key)
+    runtime.lastDesiredAt.delete(key)
     changed = true
   })
 
@@ -254,7 +480,7 @@ export function syncInfiniteGroundChunkMeshes(params: SyncInfiniteGroundChunkMes
     ? params.groundDefinition.baseHeight
     : 0
 
-  for (const record of visibleRecords) {
+  for (const record of desiredRecords) {
     if (runtime.meshes.has(record.key) || runtime.pendingLoads.has(record.key)) {
       continue
     }
@@ -271,7 +497,7 @@ export function syncInfiniteGroundChunkMeshes(params: SyncInfiniteGroundChunkMes
         const parsedCoord = parseGroundChunkKey(record.key)
         const heights = decodeInfiniteGroundChunkHeights(buffer, record.resolution)
         const geometry = buildInfiniteGroundChunkGeometry(record, heights, fallbackHeight)
-        const mesh = new THREE.Mesh(geometry, resolveInfiniteGroundChunkMaterial(params.groundObject))
+        const mesh = new THREE.Mesh(geometry, createInfiniteGroundChunkRuntimeMaterial(params.groundObject))
         mesh.name = `GroundRuntimeChunk:${record.key}`
         mesh.receiveShadow = true
         mesh.castShadow = params.groundDefinition.castShadow === true
@@ -285,6 +511,9 @@ export function syncInfiniteGroundChunkMeshes(params: SyncInfiniteGroundChunkMes
             chunkColumn: parsedCoord.chunkX,
           }
         }
+        mesh.userData.groundChunkFadeStartedAt = Date.now()
+        mesh.userData.groundChunkFadeDurationMs = DEFAULT_INFINITE_GROUND_CHUNK_FADE_IN_MS
+        updateInfiniteGroundChunkFadeState(mesh)
         activeRuntime.group.add(mesh)
         activeRuntime.meshes.set(record.key, mesh)
       })

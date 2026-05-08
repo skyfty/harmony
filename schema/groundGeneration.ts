@@ -305,7 +305,7 @@ function getOrCreateGroundBaseHeightGrid(
   return entry
 }
 
-function sampleGroundBaseHeightAtWorld(
+export function sampleGroundBaseHeightAtWorld(
   mesh: Pick<GroundDynamicMesh, 'cellSize' | 'chunkSizeMeters' | 'renderRadiusChunks' | 'collisionRadiusChunks' | 'generation' | 'terrainMode'>,
   x: number,
   z: number,
