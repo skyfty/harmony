@@ -193,6 +193,13 @@ type GroundHeightSamplingContext = {
   terrainSampler: GroundTerrainHeightSampler | null
 }
 
+function resolveRuntimeTerrainHeightSampler(
+  definition: Pick<GroundRuntimeDynamicMesh, 'runtimeTerrainHeightSampler'>,
+): GroundTerrainHeightSampler | null {
+  const candidate = (definition.runtimeTerrainHeightSampler as GroundTerrainHeightSampler | null | undefined) ?? null
+  return candidate && typeof candidate.sampleHeightAtWorld === 'function' ? candidate : null
+}
+
 export type GroundFlatChunkInstanceMatrixBuildResult = {
   chunkKeys: string[]
   matrices: Float32Array
@@ -282,7 +289,7 @@ function createGroundHeightSamplingContext(definition: GroundRuntimeDynamicMesh)
     cellSize: Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1,
     rows: gridSize.rows,
     columns: gridSize.columns,
-    terrainSampler: (definition.runtimeTerrainHeightSampler as GroundTerrainHeightSampler | null | undefined) ?? null,
+    terrainSampler: resolveRuntimeTerrainHeightSampler(definition),
   }
 }
 
@@ -1917,7 +1924,7 @@ export function resolveGroundEffectiveHeightAtVertex(definition: GroundDynamicMe
   if (Number.isFinite(localEditSample)) {
     return localEditSample as number
   }
-  const terrainSampler = runtimeDefinition.runtimeTerrainHeightSampler as GroundTerrainHeightSampler | null | undefined
+  const terrainSampler = resolveRuntimeTerrainHeightSampler(runtimeDefinition)
   if (terrainSampler) {
     const sampled = terrainSampler.sampleHeightAtWorld(
       resolveGroundWorldXForColumn(runtimeDefinition, column),
@@ -1947,9 +1954,12 @@ function sampleGroundHeightOutsideWorkingBounds(
   z: number,
   terrainSampler: GroundTerrainHeightSampler | null | undefined = null,
 ): number {
+  const safeTerrainSampler = terrainSampler && typeof terrainSampler.sampleHeightAtWorld === 'function'
+    ? terrainSampler
+    : null
   if (definition.terrainMode === 'infinite') {
-    if (terrainSampler) {
-      const sampled = terrainSampler.sampleHeightAtWorld(x, z)
+    if (safeTerrainSampler) {
+      const sampled = safeTerrainSampler.sampleHeightAtWorld(x, z)
       if (Number.isFinite(sampled)) {
         return sampled as number
       }
@@ -2018,7 +2028,7 @@ function sampleGroundEffectiveHeightRegionInternal(
     && planningRegion.stride === stride
   const manualValues = canUseManualRegion ? manualRegion.values : null
   const planningValues = canUsePlanningRegion ? planningRegion.values : null
-  const terrainSampler = runtimeDefinition.runtimeTerrainHeightSampler as GroundTerrainHeightSampler | null | undefined
+  const terrainSampler = resolveRuntimeTerrainHeightSampler(runtimeDefinition)
   const bounds = includeLocalEdit || terrainSampler ? resolveGroundGridWorldBounds(runtimeDefinition) : null
   const cellSize = Number.isFinite(runtimeDefinition.cellSize) && runtimeDefinition.cellSize > 1e-6
     ? runtimeDefinition.cellSize
@@ -3342,7 +3352,7 @@ export function sampleGroundHeight(definition: GroundDynamicMesh, x: number, z: 
       runtimeDefinition,
       x,
       z,
-      (runtimeDefinition.runtimeTerrainHeightSampler as GroundTerrainHeightSampler | null | undefined) ?? null,
+      resolveRuntimeTerrainHeightSampler(runtimeDefinition),
     )
   }
 
@@ -3390,7 +3400,7 @@ function sampleGroundHeightWithVertexCache(
       runtimeDefinition,
       x,
       z,
-      (runtimeDefinition.runtimeTerrainHeightSampler as GroundTerrainHeightSampler | null | undefined) ?? null,
+      resolveRuntimeTerrainHeightSampler(runtimeDefinition),
     )
   }
 

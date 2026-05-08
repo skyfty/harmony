@@ -1,6 +1,11 @@
 import * as THREE from 'three'
 import type { RoadDynamicMesh } from '@schema'
 import { createRoadGroup, updateRoadGroup } from '@schema/roadMesh'
+import {
+  ROAD_TERRAIN_DEFAULT_MIN_CLEARANCE,
+  ROAD_TERRAIN_DEFAULT_SAMPLING_DENSITY_FACTOR,
+  ROAD_TERRAIN_DEFAULT_SMOOTHING_STRENGTH_FACTOR,
+} from '@schema/components'
 
 export type RoadPreviewSession = {
   points: THREE.Vector3[]
@@ -20,8 +25,9 @@ export type RoadPreviewRenderer = {
 
 const ROAD_PREVIEW_SIGNATURE_PRECISION = 1000
 const ROAD_PREVIEW_Y_OFFSET = 0.01
-const ROAD_PREVIEW_SAMPLING_DENSITY_FACTOR = 0.3
-const ROAD_PREVIEW_SMOOTHING_STRENGTH_FACTOR = 0.45
+const ROAD_PREVIEW_SAMPLING_DENSITY_FACTOR = ROAD_TERRAIN_DEFAULT_SAMPLING_DENSITY_FACTOR
+const ROAD_PREVIEW_SMOOTHING_STRENGTH_FACTOR = ROAD_TERRAIN_DEFAULT_SMOOTHING_STRENGTH_FACTOR
+const ROAD_PREVIEW_MIN_CLEARANCE = ROAD_TERRAIN_DEFAULT_MIN_CLEARANCE
 
 function encodeRoadPreviewNumber(value: number): string {
   return `${Math.round(value * ROAD_PREVIEW_SIGNATURE_PRECISION)}`
@@ -245,6 +251,7 @@ export function createRoadPreviewRenderer(options: {
         heightSampler: localHeightSampler,
         samplingDensityFactor: ROAD_PREVIEW_SAMPLING_DENSITY_FACTOR,
         smoothingStrengthFactor: ROAD_PREVIEW_SMOOTHING_STRENGTH_FACTOR,
+        minClearance: ROAD_PREVIEW_MIN_CLEARANCE,
       })
       applyRoadPreviewStyling(preview)
       preview.userData.isRoadPreview = true
@@ -255,6 +262,7 @@ export function createRoadPreviewRenderer(options: {
         heightSampler: localHeightSampler,
         samplingDensityFactor: ROAD_PREVIEW_SAMPLING_DENSITY_FACTOR,
         smoothingStrengthFactor: ROAD_PREVIEW_SMOOTHING_STRENGTH_FACTOR,
+        minClearance: ROAD_PREVIEW_MIN_CLEARANCE,
       })
       applyRoadPreviewStyling(session.previewGroup)
       if (!options.rootGroup.children.includes(session.previewGroup)) {

@@ -1657,17 +1657,12 @@ function resolveRoadRenderOptionsForNodeId(nodeId: string): {
   const groundDefinition = groundNode?.dynamicMesh?.type === 'Ground'
     ? groundNode.dynamicMesh
     : null
+  const roadObject = objectMap.get(nodeId) ?? getRuntimeObject(nodeId)
+  const groundObject = groundNode
+    ? (objectMap.get(groundNode.id) ?? getRuntimeObject(groundNode.id))
+    : null
 
-  const originX = Number(node.position?.x ?? 0)
-  const originY = Number(node.position?.y ?? 0)
-  const originZ = Number(node.position?.z ?? 0)
-  const yaw = Number(node.rotation?.y ?? 0)
-  const cosYaw = Math.cos(yaw)
-  const sinYaw = Math.sin(yaw)
-
-  const groundOriginX = Number(groundNode?.position?.x ?? 0)
-  const groundOriginY = Number(groundNode?.position?.y ?? 0)
-  const groundOriginZ = Number(groundNode?.position?.z ?? 0)
+  const fallbackRoadLocalY = Number(node.position?.y ?? 0)
 
   const samplingDensityFactorRaw = component?.props?.samplingDensityFactor
   const samplingDensityFactorValue = typeof samplingDensityFactorRaw === 'number'
@@ -1703,19 +1698,19 @@ function resolveRoadRenderOptionsForNodeId(nodeId: string): {
     minClearance,
     laneLineWidth,
     shoulderWidth,
-    // Road vertices are stored in the node's local XZ plane.
-    // When sampling terrain height we must convert local -> world (include yaw), then sample ground in its local XZ,
-    // then convert sampled world height -> road local Y.
-    heightSampler: snapToTerrain && groundDefinition
+    // Reuse the same world-space heightfield projection path used by wall/floor build interactions,
+    // then convert the sampled world point back into the road's local Y.
+    heightSampler: snapToTerrain && groundDefinition && roadObject && groundObject
       ? ((x: number, z: number) => {
-          const rotatedX = x * cosYaw - z * sinYaw
-          const rotatedZ = x * sinYaw + z * cosYaw
-          const worldX = originX + rotatedX
-          const worldZ = originZ + rotatedZ
-          const groundLocalX = worldX - groundOriginX
-          const groundLocalZ = worldZ - groundOriginZ
-          const groundWorldY = groundOriginY + sampleGroundHeight(groundDefinition, groundLocalX, groundLocalZ)
-          return groundWorldY - originY
+          const roadWorldPoint = roadObject.localToWorld(new THREE.Vector3(x, 0, z))
+          const sampledWorldY = sampleHeightfieldWorldYAt(roadWorldPoint)
+          if (typeof sampledWorldY !== 'number' || !Number.isFinite(sampledWorldY)) {
+            return fallbackRoadLocalY
+          }
+          const safeSampledWorldY = sampledWorldY
+          roadWorldPoint.y = safeSampledWorldY
+          const roadLocalHeightPoint = roadObject.worldToLocal(roadWorldPoint.clone())
+          return Number.isFinite(roadLocalHeightPoint.y) ? roadLocalHeightPoint.y : fallbackRoadLocalY
         })
       : null,
   }
@@ -7890,6 +7885,7 @@ const wallBuildTool = createWallBuildTool({
   rootGroup,
   raycastGroundPoint,
   resolveBuildPlacementPoint,
+  projectPointToTerrain: (point) => projectPointToBuildTerrain(point),
   snapPoint: (point) => snapVectorToMajorGrid(point),
   resolveVertexSnapPoint: resolveBuildToolVertexSnapPoint,
   clearVertexSnap: clearBuildToolVertexSnap,
@@ -8189,6 +8185,7 @@ const roadBuildTool = createRoadBuildTool({
     const ground = resolveGroundDynamicMeshDefinition()
     return ground ? sampleGroundHeight(ground, x, z) : 0
   },
+  projectPointToTerrain: (point) => projectPointToBuildTerrain(point),
   getScene: () => scene,
   defaultWidth: ROAD_DEFAULT_WIDTH,
   isAltOverrideActive: () => isAltOverrideActive,
@@ -12832,11 +12829,6 @@ function snapVectorToGridForNode(vec: THREE.Vector3, nodeId: string | null | und
     return snapVectorToMajorGrid(vec)
   }
   return snapVectorToGrid(vec)
-}
-
-export type SceneViewportHandle = {
-  captureScreenshot(mimeType?: string): Promise<Blob | null>
-  flushTerrainPaintChanges(): Promise<boolean>
 }
 
 function applyCameraState(state: SceneCameraState | null | undefined) {
@@ -19030,8 +19022,10 @@ function collectRoadSnapVertices(): RoadSnapVertex[] {
     nodes.forEach((node) => {
       if (node.dynamicMesh?.type === 'Road') {
         const originX = node.position?.x ?? 0
+        const originY = node.position?.y ?? 0
         const originZ = node.position?.z ?? 0
         const runtime = objectMap.get(node.id) ?? null
+        const snapToTerrain = resolveRoadSnapToTerrainEnabled(node)
         const points = Array.isArray(node.dynamicMesh.vertices) ? node.dynamicMesh.vertices : []
         points.forEach((p, vertexIndex) => {
           if (!Array.isArray(p) || p.length < 2) {
@@ -19044,10 +19038,10 @@ function collectRoadSnapVertices(): RoadSnapVertex[] {
           }
           const pos = runtime
             ? runtime.localToWorld(new THREE.Vector3(x, 0, z))
-            : new THREE.Vector3(originX + x, 0, originZ + z)
-          pos.y = 0
+            : new THREE.Vector3(originX + x, originY, originZ + z)
+          const resolvedPosition = snapToTerrain ? projectPointToBuildTerrain(pos) : pos
           vertices.push({
-            position: pos,
+            position: resolvedPosition,
             nodeId: node.id,
             vertexIndex,
           })
@@ -19472,6 +19466,15 @@ function sampleHeightfieldWorldYAt(worldPosition: THREE.Vector3): number | null 
   localPoint.y = height
   groundObject.localToWorld(localPoint)
   return localPoint.y
+}
+
+function projectPointToBuildTerrain(worldPosition: THREE.Vector3): THREE.Vector3 {
+  const projected = worldPosition.clone()
+  const height = sampleHeightfieldWorldYAt(projected)
+  if (typeof height === 'number' && Number.isFinite(height)) {
+    projected.y = height
+  }
+  return projected
 }
 
 function computePreviewPointForPlacement(placement: PlacementHitResult | null): THREE.Vector3 | null {
@@ -23706,7 +23709,7 @@ watch(
   }
 )
 
-defineExpose<SceneViewportHandle>({
+defineExpose({
   captureScreenshot,
   flushTerrainPaintChanges,
 })

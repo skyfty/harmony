@@ -60,6 +60,7 @@ export function createRoadBuildTool(options: {
   pointerInteraction: PointerInteractionApi
   rootGroup: THREE.Group
   heightSampler: (x: number, z: number) => number
+  projectPointToTerrain?: (point: THREE.Vector3) => THREE.Vector3
   getScene: () => THREE.Scene | null
 
   defaultWidth: number
@@ -203,6 +204,11 @@ export function createRoadBuildTool(options: {
     return session
   }
 
+  const projectPointToTerrain = (point: THREE.Vector3): THREE.Vector3 => {
+    const projected = options.projectPointToTerrain?.(point.clone())
+    return projected ?? point.clone()
+  }
+
   const resolveWorldPoint = (event: PointerEvent, rawPoint: THREE.Vector3): THREE.Vector3 => {
     const snapped = options.resolveVertexSnapPoint?.(event, rawPoint, {
       excludeNodeIds: session?.targetNodeId ? [session.targetNodeId] : undefined,
@@ -217,7 +223,7 @@ export function createRoadBuildTool(options: {
       session?.snapVertices ?? options.collectRoadSnapVertices(),
       options.vertexSnapDistance,
     )
-    return roadSnap.position.clone()
+    return projectPointToTerrain(roadSnap.position)
   }
 
   const updateCursorPreview = (event: PointerEvent) => {
@@ -271,11 +277,13 @@ export function createRoadBuildTool(options: {
     const snapped = options.resolveVertexSnapPoint?.(event, rawPointer, {
       keepSourceY: true,
     })
-    const point = snapped?.clone() ?? options.snapRoadPointToVertices(
-      rawPointer,
-      session?.snapVertices ?? options.collectRoadSnapVertices(),
-      options.vertexSnapDistance,
-    ).position.clone()
+    const point = snapped
+      ? projectPointToTerrain(snapped)
+      : projectPointToTerrain(options.snapRoadPointToVertices(
+          rawPointer,
+          session?.snapVertices ?? options.collectRoadSnapVertices(),
+          options.vertexSnapDistance,
+        ).position)
 
     options.showStartIndicator?.(point, { height: 2 })
     return true
@@ -431,8 +439,7 @@ export function createRoadBuildTool(options: {
                 // Persist the split immediately so subsequent clicks/commit can extend from this vertex.
                 options.updateNodeDynamicMesh(hit.nodeId, next)
 
-                const worldProjected = runtime.localToWorld(new THREE.Vector3(bestProjX, 0, bestProjZ))
-                worldProjected.y = 0
+                const worldProjected = projectPointToTerrain(runtime.localToWorld(new THREE.Vector3(bestProjX, 0, bestProjZ)))
 
                 current.targetNodeId = hit.nodeId
                 current.startVertexIndex = startIndex
@@ -463,7 +470,9 @@ export function createRoadBuildTool(options: {
       excludeNodeIds: current.targetNodeId ? [current.targetNodeId] : undefined,
       keepSourceY: true,
     })
-    let point = vertexSnapPoint?.clone() ?? snappedResult.position.clone()
+    let point = vertexSnapPoint
+      ? projectPointToTerrain(vertexSnapPoint)
+      : projectPointToTerrain(snappedResult.position)
 
     // If starting on an existing road vertex, branch into that road node.
     if (

@@ -7,6 +7,9 @@ export const ROAD_COMPONENT_TYPE = 'road'
 export const ROAD_DEFAULT_WIDTH = 2
 export const ROAD_MIN_WIDTH = 0.2
 export const ROAD_DEFAULT_JUNCTION_SMOOTHING = 0
+export const ROAD_TERRAIN_DEFAULT_SAMPLING_DENSITY_FACTOR = 2.5
+export const ROAD_TERRAIN_DEFAULT_SMOOTHING_STRENGTH_FACTOR = 0.35
+export const ROAD_TERRAIN_DEFAULT_MIN_CLEARANCE = 0.05
 
 export type RoadPoint2D = [number, number]
 
@@ -15,16 +18,16 @@ export interface RoadComponentProps {
   segments: RoadSegment[]
   width: number
   junctionSmoothing: number
-  /** Whether road surface adapts to ground undulation. Default false (temporarily disabled). */
+  /** Whether road surface adapts to ground undulation. Default true. */
   snapToTerrain: boolean
   laneLines: boolean
   shoulders: boolean
   bodyAssetId?: string | null
-  /** Sampling density factor for terrain-conforming road (higher = more sample points). Default 1.0 */
+  /** Sampling density factor for terrain-conforming road (higher = more sample points). */
   samplingDensityFactor?: number
-  /** Smoothing strength factor for terrain-adaptive height smoothing (higher = smoother). Default 1.0 */
+  /** Smoothing strength factor for terrain-adaptive height smoothing (higher = smoother). */
   smoothingStrengthFactor?: number
-  /** Minimum clearance/offset above terrain surface (meters). Default 0.01 */
+  /** Minimum clearance/offset above terrain surface (meters). */
   minClearance?: number
   /** Lane line strip width (meters). Default from ROAD_LANE_LINE_WIDTH constant */
   laneLineWidth?: number
@@ -75,7 +78,7 @@ export function clampRoadProps(props: Partial<RoadComponentProps> | null | undef
 
   const laneLines = Boolean(props?.laneLines)
   const shoulders = Boolean(props?.shoulders)
-  const snapToTerrain = Boolean((props as RoadComponentProps | undefined)?.snapToTerrain)
+  const snapToTerrain = (props as RoadComponentProps | undefined)?.snapToTerrain ?? true
 
   const normalizeAssetId = (value: unknown): string | null => {
     return typeof value === 'string' && value.trim().length ? value : null
@@ -84,17 +87,17 @@ export function clampRoadProps(props: Partial<RoadComponentProps> | null | undef
   const samplingDensityFactorRaw = (props as RoadComponentProps | undefined)?.samplingDensityFactor
   const samplingDensityFactor = Number.isFinite(samplingDensityFactorRaw)
     ? Math.max(0.1, Math.min(10, samplingDensityFactorRaw as number))
-    : 1.0
+    : ROAD_TERRAIN_DEFAULT_SAMPLING_DENSITY_FACTOR
 
   const smoothingStrengthFactorRaw = (props as RoadComponentProps | undefined)?.smoothingStrengthFactor
   const smoothingStrengthFactor = Number.isFinite(smoothingStrengthFactorRaw)
     ? Math.max(0.1, Math.min(5, smoothingStrengthFactorRaw as number))
-    : 1.0
+    : ROAD_TERRAIN_DEFAULT_SMOOTHING_STRENGTH_FACTOR
 
   const minClearanceRaw = (props as RoadComponentProps | undefined)?.minClearance
   const minClearance = Number.isFinite(minClearanceRaw)
     ? Math.max(0, Math.min(2, minClearanceRaw as number))
-    : 0.01
+    : ROAD_TERRAIN_DEFAULT_MIN_CLEARANCE
 
   const laneLineWidthRaw = (props as RoadComponentProps | undefined)?.laneLineWidth
   const laneLineWidth = Number.isFinite(laneLineWidthRaw)
@@ -126,7 +129,7 @@ export function clampRoadProps(props: Partial<RoadComponentProps> | null | undef
 export function resolveRoadComponentPropsFromMesh(mesh: RoadDynamicMesh | undefined | null): RoadComponentProps {
   if (!mesh) {
     return {
-      snapToTerrain: false,
+      snapToTerrain: true,
       laneLines: false,
       shoulders: false,
       vertices: [],
@@ -134,9 +137,9 @@ export function resolveRoadComponentPropsFromMesh(mesh: RoadDynamicMesh | undefi
       width: ROAD_DEFAULT_WIDTH,
       junctionSmoothing: ROAD_DEFAULT_JUNCTION_SMOOTHING,
       bodyAssetId: null,
-      samplingDensityFactor: 1.0,
-      smoothingStrengthFactor: 1.0,
-      minClearance: 0.01,
+      samplingDensityFactor: ROAD_TERRAIN_DEFAULT_SAMPLING_DENSITY_FACTOR,
+      smoothingStrengthFactor: ROAD_TERRAIN_DEFAULT_SMOOTHING_STRENGTH_FACTOR,
+      minClearance: ROAD_TERRAIN_DEFAULT_MIN_CLEARANCE,
     }
   }
 
@@ -151,7 +154,7 @@ export function resolveRoadComponentPropsFromMesh(mesh: RoadDynamicMesh | undefi
     segments: segments as any,
     width: mesh.width,
     junctionSmoothing: ROAD_DEFAULT_JUNCTION_SMOOTHING,
-    snapToTerrain: false,
+    snapToTerrain: true,
     laneLines: false,
     shoulders: false,
     samplingDensityFactor: 1.0,

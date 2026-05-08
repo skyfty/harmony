@@ -94,6 +94,7 @@ export function createWallBuildTool(options: {
   rootGroup: THREE.Group
   raycastGroundPoint: (event: PointerEvent, result: THREE.Vector3) => boolean
   resolveBuildPlacementPoint?: (event: PointerEvent, result: THREE.Vector3) => boolean
+  projectPointToTerrain?: (point: THREE.Vector3) => THREE.Vector3
   snapPoint: (point: THREE.Vector3) => THREE.Vector3
   resolveVertexSnapPoint?: (event: PointerEvent, point: THREE.Vector3, options?: VertexSnapResolverOptions) => THREE.Vector3 | null
   clearVertexSnap?: () => void
@@ -504,6 +505,11 @@ export function createWallBuildTool(options: {
 
   const isFiniteNumber = (value: unknown): value is number => typeof value === 'number' && isFinite(value)
 
+  const projectPointToTerrain = (point: THREE.Vector3): THREE.Vector3 => {
+    const projected = options.projectPointToTerrain?.(point.clone())
+    return projected ?? point.clone()
+  }
+
   const resetPolygonDraft = (target: WallBuildToolSession) => {
     target.polygonPoints = []
     target.polygonPreviewEnd = null
@@ -511,10 +517,9 @@ export function createWallBuildTool(options: {
   }
 
   const alignPointYToPolygonDraft = (point: THREE.Vector3, target: WallBuildToolSession): THREE.Vector3 => {
-    const baseY = target.polygonPoints[0]?.y
-    if (isFiniteNumber(baseY)) {
-      point.y = baseY
-    }
+    void target
+    const projected = projectPointToTerrain(point)
+    point.copy(projected)
     return point
   }
 
@@ -550,29 +555,10 @@ export function createWallBuildTool(options: {
     previewRenderer.markDirty()
   }
 
-  const resolveLockedSegmentY = (target: WallBuildToolSession, fallbackY: number): number => {
-    if (isFiniteNumber(target.lockedSegmentY)) {
-      return target.lockedSegmentY
-    }
-
-    const dragY = target.dragStart?.y
-    if (isFiniteNumber(dragY)) {
-      target.lockedSegmentY = dragY
-      return dragY
-    }
-
-    const segmentY = target.segments[0]?.start?.y
-    if (isFiniteNumber(segmentY)) {
-      target.lockedSegmentY = segmentY
-      return segmentY
-    }
-
-    target.lockedSegmentY = isFiniteNumber(fallbackY) ? fallbackY : 0
-    return target.lockedSegmentY
-  }
-
   const alignPointYToLineDraft = (point: THREE.Vector3, target: WallBuildToolSession): THREE.Vector3 => {
-    point.y = resolveLockedSegmentY(target, point.y)
+    void target
+    const projected = projectPointToTerrain(point)
+    point.copy(projected)
     return point
   }
 
@@ -826,7 +812,8 @@ export function createWallBuildTool(options: {
     const start = snapPlacementPoint(event, rawPointer.clone(), {
       excludeNodeIds: excludeNodeId ? [excludeNodeId] : undefined,
     })
-    const end = kind === 'circle' ? rawPointer.clone() : start.clone()
+    start.copy(projectPointToTerrain(start))
+    const end = kind === 'circle' ? projectPointToTerrain(rawPointer.clone()) : start.clone()
 
     const current = ensureSession()
     hydrateFromSelection(current)
@@ -893,6 +880,8 @@ export function createWallBuildTool(options: {
           excludeNodeIds: excludeNodeId ? [excludeNodeId] : undefined,
         })
 
+    snappedPoint.copy(projectPointToTerrain(snappedPoint))
+
     options.showStartIndicator?.(snappedPoint, { height: getStartIndicatorHeight() })
     return true
   }
@@ -916,7 +905,11 @@ export function createWallBuildTool(options: {
     if (!rectangle) {
       return []
     }
-    const [p1, p2, p3, p4] = rectangle.corners
+    const [corner1, corner2, corner3, corner4] = rectangle.corners
+    const p1 = projectPointToTerrain(corner1)
+    const p2 = projectPointToTerrain(corner2)
+    const p3 = projectPointToTerrain(corner3)
+    const p4 = projectPointToTerrain(corner4)
     return [
       { start: p1, end: p2 },
       { start: p2, end: p3 },
@@ -945,7 +938,7 @@ export function createWallBuildTool(options: {
     const points: THREE.Vector3[] = []
     for (let i = 0; i < segments; i += 1) {
       const t = (i / segments) * Math.PI * 2
-      points.push(new THREE.Vector3(center.x + Math.cos(t) * radius, center.y, center.z + Math.sin(t) * radius))
+      points.push(projectPointToTerrain(new THREE.Vector3(center.x + Math.cos(t) * radius, center.y, center.z + Math.sin(t) * radius)))
     }
 
     const result: WallPreviewSegment[] = []
@@ -976,10 +969,14 @@ export function createWallBuildTool(options: {
     const start = session.shapeDraft.start.clone()
     const excludeNodeId = getActiveSnapExcludeNodeId()
     const end = kind === 'circle'
-      ? snapPlacementPoint(event, rawPointer.clone(), { fallback: 'raw' })
+      ? alignPointYToLineDraft(snapPlacementPoint(event, rawPointer.clone(), { fallback: 'raw' }), session)
       : snapPlacementPoint(event, rawPointer.clone(), {
           excludeNodeIds: excludeNodeId ? [excludeNodeId] : undefined,
         })
+
+    if (kind !== 'circle') {
+      alignPointYToLineDraft(end, session)
+    }
 
     const previousEnd = session.shapeDraft.end
     if (previousEnd.equals(end)) {
@@ -1216,7 +1213,7 @@ export function createWallBuildTool(options: {
       Boolean(event.shiftKey && WALL_ANGLE_STEP_CONSTRAINTS_ENABLED && !options.isRelativeAngleSnapActive?.()),
       Boolean(options.isRelativeAngleSnapActive?.()),
     )
-    constrained.y = resolveLockedSegmentY(current, current.dragStart.y)
+    alignPointYToLineDraft(constrained, current)
     const previous = current.dragEnd
     if (!previous || !previous.equals(constrained)) {
       current.dragEnd = constrained
@@ -1363,7 +1360,7 @@ export function createWallBuildTool(options: {
       Boolean(event.shiftKey && WALL_ANGLE_STEP_CONSTRAINTS_ENABLED && !options.isRelativeAngleSnapActive?.()),
       Boolean(options.isRelativeAngleSnapActive?.()),
     )
-    constrained.y = resolveLockedSegmentY(session, session.dragStart.y)
+    alignPointYToLineDraft(constrained, session)
     const previous = session.dragEnd
     if (previous && previous.equals(constrained)) {
       return

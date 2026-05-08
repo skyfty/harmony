@@ -335,6 +335,9 @@ import {
   cloneWallComponentProps,
   ROAD_DEFAULT_WIDTH,
   ROAD_MIN_WIDTH,
+  ROAD_TERRAIN_DEFAULT_MIN_CLEARANCE,
+  ROAD_TERRAIN_DEFAULT_SAMPLING_DENSITY_FACTOR,
+  ROAD_TERRAIN_DEFAULT_SMOOTHING_STRENGTH_FACTOR,
   resolveRoadComponentPropsFromMesh,
   clampRoadProps,
   cloneRoadComponentProps,
@@ -15329,9 +15332,16 @@ export const useSceneStore = defineStore('scene', {
       const roadOriginX = build.center.x
       const roadOriginY = build.center.y
       const roadOriginZ = build.center.z
-
-      const roadGroup = createRoadGroup(build.definition, {
-        heightSampler: groundDefinition
+      const initialRoadRenderProps = payload.roadPresetData?.roadProps
+        ? buildRoadComponentPatchFromPreset(payload.roadPresetData.roadProps)
+        : {
+            snapToTerrain: true,
+            samplingDensityFactor: ROAD_TERRAIN_DEFAULT_SAMPLING_DENSITY_FACTOR,
+            smoothingStrengthFactor: ROAD_TERRAIN_DEFAULT_SMOOTHING_STRENGTH_FACTOR,
+            minClearance: ROAD_TERRAIN_DEFAULT_MIN_CLEARANCE,
+          }
+      const initialRoadRenderOptions = {
+        heightSampler: groundDefinition && initialRoadRenderProps.snapToTerrain !== false
           ? ((x: number, z: number) => {
               const worldX = roadOriginX + x
               const worldZ = roadOriginZ + z
@@ -15341,7 +15351,12 @@ export const useSceneStore = defineStore('scene', {
               return groundWorldY - roadOriginY
             })
           : null,
-      })
+        samplingDensityFactor: initialRoadRenderProps.samplingDensityFactor,
+        smoothingStrengthFactor: initialRoadRenderProps.smoothingStrengthFactor,
+        minClearance: initialRoadRenderProps.minClearance,
+      }
+
+      const roadGroup = createRoadGroup(build.definition, initialRoadRenderOptions)
       const nodeName = payload.name ?? this.generateRoadNodeName()
 
       this.captureHistorySnapshot()
@@ -15373,7 +15388,19 @@ export const useSceneStore = defineStore('scene', {
           if (refreshedRoadComponent?.id) {
             const componentPatch = payload.roadPresetData
               ? buildRoadComponentPatchFromPreset(payload.roadPresetData.roadProps)
-              : { bodyAssetId: typeof payload.bodyAssetId === 'string' && payload.bodyAssetId.trim().length ? payload.bodyAssetId : null }
+              : {
+                  bodyAssetId: typeof payload.bodyAssetId === 'string' && payload.bodyAssetId.trim().length ? payload.bodyAssetId : null,
+                  snapToTerrain: true,
+                  samplingDensityFactor: ROAD_TERRAIN_DEFAULT_SAMPLING_DENSITY_FACTOR,
+                  smoothingStrengthFactor: ROAD_TERRAIN_DEFAULT_SMOOTHING_STRENGTH_FACTOR,
+                  minClearance: ROAD_TERRAIN_DEFAULT_MIN_CLEARANCE,
+                }
+            console.info(`[RoadTerrainDebug:createRoadNode-existing-patch]\n${JSON.stringify({
+              nodeId: desiredId,
+              componentId: refreshedRoadComponent.id,
+              componentPatch,
+              resolvedFromMesh: resolveRoadComponentPropsFromMesh(build.definition),
+            }, null, 2)}`)
             this.updateNodeComponentProps(desiredId, refreshedRoadComponent.id, componentPatch)
           }
 
@@ -15406,12 +15433,24 @@ export const useSceneStore = defineStore('scene', {
           if (component?.id) {
             const componentPatch = payload.roadPresetData
               ? buildRoadComponentPatchFromPreset(payload.roadPresetData.roadProps)
-              : null
-            this.updateNodeComponentProps(node.id, component.id, {
+              : {
+                  snapToTerrain: true,
+                  samplingDensityFactor: ROAD_TERRAIN_DEFAULT_SAMPLING_DENSITY_FACTOR,
+                  smoothingStrengthFactor: ROAD_TERRAIN_DEFAULT_SMOOTHING_STRENGTH_FACTOR,
+                  minClearance: ROAD_TERRAIN_DEFAULT_MIN_CLEARANCE,
+                }
+            const nextRoadComponentProps = {
               ...resolveRoadComponentPropsFromMesh(build.definition),
               ...(componentPatch ?? {}),
               bodyAssetId,
-            })
+            }
+            console.info(`[RoadTerrainDebug:createRoadNode-new-patch]\n${JSON.stringify({
+              nodeId: node.id,
+              componentId: component.id,
+              componentPatch,
+              nextRoadComponentProps,
+            }, null, 2)}`)
+            this.updateNodeComponentProps(node.id, component.id, nextRoadComponentProps)
           }
 
           if (presetMaterials.length) {
