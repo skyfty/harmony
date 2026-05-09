@@ -35,6 +35,7 @@ import {
 	sculptGround,
 	sampleGroundEffectiveHeightRegion,
 	sampleGroundHeight,
+	sampleGroundTriangleHeight,
 	sampleGroundHeightWithContext,
 	prepareGroundHeightSamplingContext,
 	type GroundHeightSamplingContext,
@@ -4792,7 +4793,14 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!Number.isFinite(localPoint.x) || !Number.isFinite(localPoint.z)) {
 			return null
 		}
-		const height = sampleGroundHeight(definition, localPoint.x, localPoint.z)
+		const bounds = resolveGroundWorldBounds(definition)
+		const insideWorkingBounds = localPoint.x >= bounds.minX
+			&& localPoint.x <= bounds.maxX
+			&& localPoint.z >= bounds.minZ
+			&& localPoint.z <= bounds.maxZ
+		const height = insideWorkingBounds
+			? sampleGroundTriangleHeight(definition, localPoint.x, localPoint.z)
+			: sampleGroundHeight(definition, localPoint.x, localPoint.z)
 		localPoint.y = height
 		groundMesh.localToWorld(localPoint)
 		return localPoint
@@ -4809,7 +4817,13 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!Number.isFinite(localPoint.x) || !Number.isFinite(localPoint.z)) {
 			return null
 		}
-		localPoint.y = sampleGroundHeightWithContext(runtimeDefinition, context, localPoint.x, localPoint.z)
+		const insideWorkingBounds = localPoint.x >= context.bounds.minX
+			&& localPoint.x <= context.bounds.maxX
+			&& localPoint.z >= context.bounds.minZ
+			&& localPoint.z <= context.bounds.maxZ
+		localPoint.y = insideWorkingBounds
+			? sampleGroundTriangleHeight(runtimeDefinition, localPoint.x, localPoint.z)
+			: sampleGroundHeightWithContext(runtimeDefinition, context, localPoint.x, localPoint.z)
 		groundMesh.localToWorld(localPoint)
 		return localPoint
 	}
