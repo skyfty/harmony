@@ -19,6 +19,12 @@ export type RoadBuildToolSession = RoadPreviewSession & {
   targetNodeId: string | null
   /** Vertex index in the target node to branch from. */
   startVertexIndex: number | null
+  /** Active road node being incrementally built in this session. */
+  liveNodeId: string | null
+  /** First anchor point of the current build session. */
+  buildStartPoint: THREE.Vector3 | null
+  /** Number of committed segments in this session. */
+  committedSegmentCount: number
 }
 
 type LeftClickState = {
@@ -200,6 +206,9 @@ export function createRoadBuildTool(options: {
       snapVertices: options.collectRoadSnapVertices(),
       targetNodeId: null,
       startVertexIndex: null,
+      liveNodeId: null,
+      buildStartPoint: null,
+      committedSegmentCount: 0,
     }
     return session
   }
@@ -211,7 +220,9 @@ export function createRoadBuildTool(options: {
 
   const resolveWorldPoint = (event: PointerEvent, rawPoint: THREE.Vector3): THREE.Vector3 => {
     const snapped = options.resolveVertexSnapPoint?.(event, rawPoint, {
-      excludeNodeIds: session?.targetNodeId ? [session.targetNodeId] : undefined,
+      excludeNodeIds: (session?.liveNodeId ?? session?.targetNodeId)
+        ? [session?.liveNodeId ?? session?.targetNodeId!]
+        : undefined,
       keepSourceY: true,
     })
     if (snapped) {
@@ -467,7 +478,9 @@ export function createRoadBuildTool(options: {
     current.snapVertices = options.collectRoadSnapVertices()
     const snappedResult = options.snapRoadPointToVertices(snapped, current.snapVertices, options.vertexSnapDistance)
     const vertexSnapPoint = options.resolveVertexSnapPoint?.(event, snapped, {
-      excludeNodeIds: current.targetNodeId ? [current.targetNodeId] : undefined,
+      excludeNodeIds: (current.liveNodeId ?? current.targetNodeId)
+        ? [current.liveNodeId ?? current.targetNodeId!]
+        : undefined,
       keepSourceY: true,
     })
     let point = vertexSnapPoint
@@ -489,14 +502,15 @@ export function createRoadBuildTool(options: {
     if (current.points.length === 0) {
       current.points.push(point.clone())
       current.previewEnd = point.clone()
+      current.buildStartPoint = point.clone()
       hideStartIndicator()
       updatePreview()
       return true
     }
 
-    // Close loop: if user clicks near the starting point, reuse it.
-    if (current.points.length >= 2) {
-      const first = current.points[0]!
+    // Close loop: if user clicks near the first anchor, reuse it.
+    if (current.committedSegmentCount >= 2 && current.buildStartPoint) {
+      const first = current.buildStartPoint
       const dx = first.x - point.x
       const dz = first.z - point.z
       if (dx * dx + dz * dz <= options.vertexSnapDistance * options.vertexSnapDistance) {
@@ -511,125 +525,97 @@ export function createRoadBuildTool(options: {
       return true
     }
 
-    current.points.push(point.clone())
-    current.previewEnd = point.clone()
-    updatePreview()
-    return true
-  }
-
-  const finalize = () => {
-    if (!session) {
-      return
-    }
-
-    const committed = session.points.map((p) => p.clone())
-    if (committed.length < 2) {
-      clearSession()
-      return
-    }
-
-    // If last click is near the first point, reuse it to form a closed loop.
-    if (committed.length >= 3) {
-      const first = committed[0]!
-      const last = committed[committed.length - 1]!
-      const dx = first.x - last.x
-      const dz = first.z - last.z
-      if (dx * dx + dz * dz <= options.vertexSnapDistance * options.vertexSnapDistance) {
-        committed[committed.length - 1] = first.clone()
+    const commitSegment = (segmentStart: THREE.Vector3, segmentEnd: THREE.Vector3): string | null => {
+      if (!session) {
+        return null
       }
-    }
+      const worldPoints = [segmentStart.clone(), segmentEnd.clone()]
 
-    const targetNodeId = session.targetNodeId
-    const startVertexIndex = session.startVertexIndex
-    if (targetNodeId && typeof startVertexIndex === 'number' && Number.isFinite(startVertexIndex) && startVertexIndex >= 0) {
-      const node = options.findSceneNode(options.sceneNodes(), targetNodeId)
-      if (node?.dynamicMesh?.type === 'Road') {
-        const width = Number.isFinite(node.dynamicMesh.width) ? node.dynamicMesh.width : session.width
-        const runtime = options.getRuntimeObject(targetNodeId)
-        if (runtime) {
-          const next = integrateWorldPolylineIntoRoadMesh({
-            baseMesh: node.dynamicMesh,
-            runtime,
-            worldPoints: committed,
-            width,
-            defaultWidth: options.defaultWidth,
-          })
-          if (next) {
-            options.updateNodeDynamicMesh(targetNodeId, next)
-          }
+      const updateExistingNode = (nodeId: string): string | null => {
+        const node = options.findSceneNode(options.sceneNodes(), nodeId)
+        if (node?.dynamicMesh?.type !== 'Road') {
+          return null
         }
-        options.ensureRoadVertexHandlesForSelectedNode({ force: true })
-        const startPoint = committed[0]?.clone() ?? session.points[0]?.clone() ?? null
-        clearSession()
-        holdStartIndicatorUntilNodeVisible(targetNodeId, startPoint)
-        return
-      }
-    }
-
-    const connectNodeId = findConnectableRoadNodeId({
-      worldPoints: committed,
-      nodes: options.sceneNodes(),
-      getRuntimeObject: options.getRuntimeObject,
-      collectRoadSnapVertices: options.collectRoadSnapVertices,
-      snapRoadPointToVertices: options.snapRoadPointToVertices,
-      vertexSnapDistance: options.vertexSnapDistance,
-    })
-    if (connectNodeId) {
-      const node = options.findSceneNode(options.sceneNodes(), connectNodeId)
-      const width = node?.dynamicMesh?.type === 'Road' && Number.isFinite(node.dynamicMesh.width)
-        ? node.dynamicMesh.width
-        : session.width
-      const runtime = options.getRuntimeObject(connectNodeId)
-      if (node?.dynamicMesh?.type === 'Road' && runtime) {
+        const runtime = options.getRuntimeObject(nodeId)
+        if (!runtime) {
+          return null
+        }
+        const width = Number.isFinite(node.dynamicMesh.width) ? node.dynamicMesh.width : session.width
         const next = integrateWorldPolylineIntoRoadMesh({
           baseMesh: node.dynamicMesh,
           runtime,
-          worldPoints: committed,
+          worldPoints,
           width,
           defaultWidth: options.defaultWidth,
         })
-        if (next) {
-          options.updateNodeDynamicMesh(connectNodeId, next)
+        if (!next) {
+          return null
+        }
+        options.updateNodeDynamicMesh(nodeId, next)
+        return nodeId
+      }
+
+      const activeNodeId = session.liveNodeId ?? session.targetNodeId
+      if (activeNodeId) {
+        return updateExistingNode(activeNodeId)
+      }
+
+      const connectNodeId = findConnectableRoadNodeId({
+        worldPoints,
+        nodes: options.sceneNodes(),
+        getRuntimeObject: options.getRuntimeObject,
+        collectRoadSnapVertices: options.collectRoadSnapVertices,
+        snapRoadPointToVertices: options.snapRoadPointToVertices,
+        vertexSnapDistance: options.vertexSnapDistance,
+      })
+      if (connectNodeId) {
+        return updateExistingNode(connectNodeId)
+      }
+
+      const created = options.createRoadNode({
+        points: worldPoints.map((p) => ({ x: p.x, y: 0, z: p.z })),
+        width: session.width,
+        roadPresetData: options.getRoadBrush?.()?.presetData ?? null,
+      })
+
+      if (created && !options.getRoadBrush?.()?.presetData) {
+        const roadMaterials = options.createRoadNodeMaterials()
+        if (roadMaterials.length) {
+          options.setNodeMaterials(created.id, roadMaterials)
         }
       }
-      options.selectNode(connectNodeId)
-      options.ensureRoadVertexHandlesForSelectedNode({ force: true })
-      const startPoint = committed[0]?.clone() ?? session.points[0]?.clone() ?? null
-      clearSession()
-      holdStartIndicatorUntilNodeVisible(connectNodeId, startPoint)
-      return
-    }
 
-    const created = options.createRoadNode({
-      points: committed.map((p) => ({ x: p.x, y: 0, z: p.z })),
-      width: session.width,
-      roadPresetData: options.getRoadBrush?.()?.presetData ?? null,
-    })
-
-    if (created && !options.getRoadBrush?.()?.presetData) {
-      const roadMaterials = options.createRoadNodeMaterials()
-      if (roadMaterials.length) {
-        options.setNodeMaterials(created.id, roadMaterials)
+      if (created?.dynamicMesh?.type === 'Road') {
+        const split = splitRoadSelfIntersectionsMesh(created.dynamicMesh, options.defaultWidth)
+        if (split) {
+          options.updateNodeDynamicMesh(created.id, split)
+        }
+        return created.id
       }
+
+      return null
     }
 
-    if (created?.dynamicMesh?.type === 'Road') {
-      const split = splitRoadSelfIntersectionsMesh(created.dynamicMesh, options.defaultWidth)
-      if (split) {
-        options.updateNodeDynamicMesh(created.id, split)
-      }
+    const committedNodeId = commitSegment(last, point)
+    if (!committedNodeId) {
+      current.previewEnd = point.clone()
+      updatePreview()
+      return true
     }
 
-    if (created?.dynamicMesh?.type === 'Road') {
-      options.selectNode(created.id)
-      options.ensureRoadVertexHandlesForSelectedNode({ force: true })
-    }
+    current.liveNodeId = committedNodeId
+    current.targetNodeId = committedNodeId
+    current.startVertexIndex = null
+    current.committedSegmentCount += 1
+    current.points = [point.clone()]
+    current.previewEnd = point.clone()
+    showLockedStartIndicator(point)
 
-    const startPoint = committed[0]?.clone() ?? session.points[0]?.clone() ?? null
-    clearSession()
-    if (created?.dynamicMesh?.type === 'Road') {
-      holdStartIndicatorUntilNodeVisible(created.id, startPoint)
-    }
+    options.selectNode(committedNodeId)
+    options.ensureRoadVertexHandlesForSelectedNode({ force: true })
+    holdStartIndicatorUntilNodeVisible(committedNodeId, current.buildStartPoint ?? point)
+    updatePreview()
+    return true
   }
 
   return {
@@ -672,8 +658,8 @@ export function createRoadBuildTool(options: {
         }
         const handled = handlePlacementClick(event)
         if (handled) {
-          if (isLeftDoubleClick(event) && (session?.points.length ?? 0) >= 2) {
-            finalize()
+          if (isLeftDoubleClick(event)) {
+            clearSession()
           }
           event.preventDefault()
           event.stopPropagation()
@@ -731,6 +717,9 @@ export function createRoadBuildTool(options: {
       current.snapVertices = options.collectRoadSnapVertices()
       current.targetNodeId = nodeId
       current.startVertexIndex = vertexIndex
+      current.liveNodeId = null
+      current.buildStartPoint = worldPoint.clone()
+      current.committedSegmentCount = 0
       showLockedStartIndicator(worldPoint)
       updatePreview({ immediate: true })
       return true
