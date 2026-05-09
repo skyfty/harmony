@@ -4428,6 +4428,13 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function raycastGroundPoint(event: PointerEvent, result: THREE.Vector3): boolean {
+		if (!setRayFromPointerEvent(event)) {
+			return false
+		}
+		return !!options.raycaster.ray.intersectPlane(options.groundPlane, result)
+	}
+
+	function setRayFromPointerEvent(event: PointerEvent): boolean {
 		const camera = options.getCamera()
 		if (!camera || !options.canvasRef.value) {
 			return false
@@ -4439,7 +4446,28 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		options.pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
 		options.pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
 		options.raycaster.setFromCamera(options.pointer, camera)
-		return !!options.raycaster.ray.intersectPlane(options.groundPlane, result)
+		return true
+	}
+
+	function raycastGroundMeshSurfacePoint(
+		event: PointerEvent,
+		groundMesh: THREE.Object3D,
+		result: THREE.Vector3,
+	): boolean {
+		if (!setRayFromPointerEvent(event)) {
+			return false
+		}
+		groundMesh.updateMatrixWorld(true)
+		const intersections = options.raycaster.intersectObject(groundMesh, true)
+		for (const intersection of intersections) {
+			const point = intersection.point
+			if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y) || !Number.isFinite(point.z)) {
+				continue
+			}
+			result.copy(point)
+			return true
+		}
+		return false
 	}
 
 	function resolveGroundSurfacePointFromEvent(
@@ -4768,16 +4796,21 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		definition: GroundDynamicMesh,
 		groundMesh: THREE.Object3D,
 	): THREE.Vector3 | null {
-		if (!raycastGroundPoint(event, scatterPointerHelper)) {
-			options.clearVertexSnap?.()
-			return null
+		let projected: THREE.Vector3 | null = null
+		if (raycastGroundMeshSurfacePoint(event, groundMesh, scatterPointerHelper)) {
+			projected = scatterPointerHelper.clone()
+		} else {
+			if (!raycastGroundPoint(event, scatterPointerHelper)) {
+				options.clearVertexSnap?.()
+				return null
+			}
+			if (!isPointerOverGround(groundMesh, scatterPointerHelper)) {
+				options.clearVertexSnap?.()
+				return null
+			}
+			projected = projectScatterPointToGround(definition, groundMesh, scatterPointerHelper)
 		}
-		if (!isPointerOverGround(groundMesh, scatterPointerHelper)) {
-			options.clearVertexSnap?.()
-			return null
-		}
-		const projected = projectScatterPointToGround(definition, groundMesh, scatterPointerHelper)
-		if (!projected) {
+		if (!projected || !isPointerOverGround(groundMesh, projected)) {
 			options.clearVertexSnap?.()
 			return null
 		}
@@ -4793,6 +4826,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		definition: GroundDynamicMesh,
 		groundMesh: THREE.Object3D,
 	): THREE.Vector3 | null {
+		if (raycastGroundMeshSurfacePoint(event, groundMesh, scatterPointerHelper)) {
+			return isPointerOverGround(groundMesh, scatterPointerHelper) ? scatterPointerHelper.clone() : null
+		}
 		if (!raycastGroundPoint(event, scatterPointerHelper)) {
 			return null
 		}
@@ -6082,7 +6118,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			}
 			const alignedPoint = startPoint.clone()
 			if (currentSession.polygonPoints.length > 0) {
-				alignedPoint.y = currentSession.polygonPoints[0]?.y ?? alignedPoint.y
 				const lastPoint = currentSession.polygonPoints[currentSession.polygonPoints.length - 1]
 				if (lastPoint && lastPoint.distanceToSquared(alignedPoint) <= 1e-6) {
 					currentSession.pointerId = event.pointerId
@@ -6348,7 +6383,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			if (!nextPoint) {
 				return false
 			}
-			nextPoint.y = scatterSession.polygonPoints[0]?.y ?? nextPoint.y
 			scatterSession.currentPoint = nextPoint.clone()
 			scatterSession.polygonPreviewEnd = nextPoint.clone()
 			refreshScatterSessionPreview(scatterSession)
