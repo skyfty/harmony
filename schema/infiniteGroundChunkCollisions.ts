@@ -87,6 +87,7 @@ export type InfiniteGroundChunkColliderDebugEntry = {
 const collisionRuntimeCameraLocal = new THREE.Vector3()
 const DIAGNOSTIC_LOG_INTERVAL_MS = 2000
 const DIAGNOSTIC_COLLIDER_WARN_THRESHOLD = 64
+const COLLISION_SYNC_IDLE_REFRESH_MS = 1000
 
 function makeRuntimeKey(source: InfiniteGroundChunkColliderSource, chunkKey: string): string {
 	return `${source}:${chunkKey}`
@@ -488,6 +489,10 @@ export function createInfiniteGroundChunkColliderRuntime(
 	const desiredSignatures = new Map<string, string>()
 	let activeSourceId: string | null = null
 	let activeManifestRevision = -1
+	let lastCenterChunkKey: string | null = null
+	let lastCollisionRadiusChunks = -1
+	let lastExcludedChunkSignature = ''
+	let lastSyncAt = 0
 	let lastDiagnosticLogAt = 0
 	let lastDiagnosticSignature = ''
 
@@ -500,6 +505,10 @@ export function createInfiniteGroundChunkColliderRuntime(
 		desiredSignatures.clear()
 		activeSourceId = null
 		activeManifestRevision = -1
+		lastCenterChunkKey = null
+		lastCollisionRadiusChunks = -1
+		lastExcludedChunkSignature = ''
+		lastSyncAt = 0
 		lastDiagnosticSignature = ''
 	}
 
@@ -612,6 +621,27 @@ export function createInfiniteGroundChunkColliderRuntime(
 			collisionRuntimeCameraLocal.z,
 			chunkSizeMeters,
 		)
+		const collisionRadiusChunks = resolveCollisionRadiusChunks(params.groundDefinition)
+		const centerChunkKey = `${centerCoord.chunkX}:${centerCoord.chunkZ}`
+		const excludedChunkSignature = params.excludedChunkKeys
+			? Array.from(params.excludedChunkKeys).sort().join(',')
+			: ''
+		const now = Date.now()
+		const needsSync = (
+			activeSourceId !== sourceId
+			|| activeManifestRevision !== manifestRevision
+			|| centerChunkKey !== lastCenterChunkKey
+			|| collisionRadiusChunks !== lastCollisionRadiusChunks
+			|| excludedChunkSignature !== lastExcludedChunkSignature
+			|| now - lastSyncAt >= COLLISION_SYNC_IDLE_REFRESH_MS
+		)
+		if (!needsSync) {
+			return
+		}
+		lastCenterChunkKey = centerChunkKey
+		lastCollisionRadiusChunks = collisionRadiusChunks
+		lastExcludedChunkSignature = excludedChunkSignature
+		lastSyncAt = now
 
 		const manifestRecords = params.manifestRecords ?? {}
 		const targetChunkKeys = resolveDesiredCollisionChunkKeys(params.groundObject, params.groundDefinition, params.camera)
@@ -729,7 +759,6 @@ export function createInfiniteGroundChunkColliderRuntime(
 			}
 		})
 
-		const now = Date.now()
 		const manifestColliderCount = Array.from(nextDesired.values()).filter((descriptor) => descriptor.source === 'manifest').length
 		const runtimeDetailedColliderCount = Array.from(nextDesired.values()).filter((descriptor) => descriptor.source === 'runtime-detailed').length
 		const flatColliderCount = nextDesired.size - manifestColliderCount - runtimeDetailedColliderCount
@@ -737,8 +766,8 @@ export function createInfiniteGroundChunkColliderRuntime(
 			sourceId,
 			manifestRevision,
 			chunkSizeMeters,
-			collisionRadiusChunks: resolveCollisionRadiusChunks(params.groundDefinition),
-			centerChunkKey: `${centerCoord.chunkX}:${centerCoord.chunkZ}`,
+			collisionRadiusChunks,
+			centerChunkKey,
 			targetChunkKeyCount: targetChunkKeys.length,
 			desiredColliderCount: nextDesired.size,
 			manifestColliderCount,

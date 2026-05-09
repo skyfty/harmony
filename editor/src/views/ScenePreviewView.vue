@@ -1704,6 +1704,10 @@ let cachedGroundNodeId: string | null = null
 let cachedGroundDynamicMesh: GroundDynamicMesh | null = null
 let cachedGroundNode: SceneNode | null = null
 let cachedGroundChunkManifest: GroundChunkManifest | null = null
+let previewGroundChunkDataSceneId: string | null = null
+let previewGroundChunkDataManifestRevision = -1
+let previewGroundChunkDataCache = new Map<string, ArrayBuffer | null>()
+let previewGroundChunkDataPending = new Map<string, Promise<ArrayBuffer | null>>()
 let cachedCompiledGroundManifest: CompiledGroundManifest | null = null
 let cachedCompiledGroundSceneId: string | null = null
 let cachedCompiledGroundFiles = new Map<string, ArrayBuffer>()
@@ -1725,6 +1729,10 @@ function resetPreviewCompiledGroundCache(): void {
 
 function resetPreviewGroundChunkManifestCache(): void {
 	cachedGroundChunkManifest = null
+	previewGroundChunkDataSceneId = null
+	previewGroundChunkDataManifestRevision = -1
+	previewGroundChunkDataCache.clear()
+	previewGroundChunkDataPending.clear()
 }
 
 function shouldUseCompiledGroundForPreview(
@@ -2230,7 +2238,33 @@ function syncPreviewInfiniteGroundChunkCollisionBodies(
 			if (!sceneId) {
 				return null
 			}
-			return await useScenesStore().loadGroundChunkData(sceneId, record.key)
+			const normalizedManifestRevision = Number.isFinite(cachedGroundChunkManifest?.revision)
+				? Math.max(0, Math.trunc(cachedGroundChunkManifest?.revision as number))
+				: 0
+			if (previewGroundChunkDataSceneId !== sceneId || previewGroundChunkDataManifestRevision !== normalizedManifestRevision) {
+				previewGroundChunkDataSceneId = sceneId
+				previewGroundChunkDataManifestRevision = normalizedManifestRevision
+				previewGroundChunkDataCache.clear()
+				previewGroundChunkDataPending.clear()
+			}
+			const cacheKey = `${record.key}|${record.revision}`
+			if (previewGroundChunkDataCache.has(cacheKey)) {
+				return previewGroundChunkDataCache.get(cacheKey) ?? null
+			}
+			const pending = previewGroundChunkDataPending.get(cacheKey)
+			if (pending) {
+				return await pending
+			}
+			const loadPromise = useScenesStore().loadGroundChunkData(sceneId, record.key)
+				.then((buffer) => {
+					previewGroundChunkDataCache.set(cacheKey, buffer ?? null)
+					return buffer ?? null
+				})
+				.finally(() => {
+					previewGroundChunkDataPending.delete(cacheKey)
+				})
+			previewGroundChunkDataPending.set(cacheKey, loadPromise)
+			return await loadPromise
 		},
 	})
 	// syncPreviewGroundCollisionDebugSources(groundObject)
