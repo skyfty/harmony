@@ -1361,7 +1361,6 @@ const appliedRuntimePrefabSpawnKeys = new Set<string>();
 const spawnedRuntimePrefabRoots = new Map<string, { root: THREE.Object3D; mode: RuntimePrefabInitializationMode }>();
 let runtimePrefabBehaviorCounter = 0;
 let runtimePrefabFlushInFlight = false;
-let groundSurfacePreviewLoadToken = 0;
 let dynamicGroundCache: { nodeId: string; node: SceneNode; dynamicMesh: GroundRuntimeDynamicMesh } | null = null;
 let sceneGraphRoot: THREE.Object3D | null = null;
 type WindowResizeCallback = Parameters<typeof uni.onWindowResize>[0];
@@ -7550,25 +7549,7 @@ function stepPhysicsWorld(delta: number): number {
     }
   }
   const physicsStepElapsedMs = Date.now() - physicsStepStartedAt;
-  if (physicsStepElapsedMs >= 12) {
-    const now = Date.now();
-    if (now - lastPhysicsPerformanceLogAt >= 1500) {
-      console.warn(
-        '[SceneViewer] physics-step',
-        JSON.stringify({
-          elapsedMs: Math.round(physicsStepElapsedMs * 100) / 100,
-          subSteps,
-          worldBodyCount: physicsWorld.bodies.length,
-          rigidbodyInstanceCount: rigidbodyInstances.size,
-          vehicleInstanceCount: vehicleInstances.size,
-          vehicleRaycastCount: vehicleRaycastInWorld.size,
-          airWallBodyCount: airWallBodies.size,
-          gravityY: physicsWorld.gravity.y,
-        }),
-      );
-      lastPhysicsPerformanceLogAt = now;
-    }
-  }
+
   // Ensure vehicles are truly static after exiting drive/auto-tour.
   // If a vehicle wakes up or drifts when no controller is active, hard-stop it and log for debugging.
   const nowMs = Date.now();

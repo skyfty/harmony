@@ -13087,26 +13087,6 @@ function stepPhysicsWorld(delta: number): void {
 	if (physicsAccumulator > PHYSICS_FIXED_TIMESTEP) {
 		physicsAccumulator = PHYSICS_FIXED_TIMESTEP
 	}
-	const physicsStepElapsedMs = performance.now() - physicsStepStartedAt
-	if (physicsStepElapsedMs >= 12) {
-		const now = Date.now()
-		if (now - lastPhysicsPerformanceLogAt >= 1500) {
-			console.warn(
-				'[ScenePreview] physics-step',
-				JSON.stringify({
-					elapsedMs: Math.round(physicsStepElapsedMs * 100) / 100,
-					subSteps,
-					worldBodyCount: physicsWorld.bodies.length,
-					rigidbodyInstanceCount: rigidbodyInstances.size,
-					vehicleInstanceCount: vehicleInstances.size,
-					vehicleRaycastCount: vehicleRaycastInWorld.size,
-					airWallBodyCount: airWallBodies.size,
-					gravityY: physicsWorld.gravity.y,
-				}),
-			)
-			lastPhysicsPerformanceLogAt = now
-		}
-	}
 
 	// Ensure vehicles are truly static after exiting drive/auto-tour.
 	// If a vehicle wakes up or drifts when no controller is active, hard-stop it and log for debugging.

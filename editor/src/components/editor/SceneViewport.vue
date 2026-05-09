@@ -19508,6 +19508,7 @@ function sampleHeightfieldWorldYAt(worldPosition: THREE.Vector3): number | null 
   }
   const localPoint = groundObject.worldToLocal(worldPosition.clone())
   const height = sampleGroundHeight(groundDefinition, localPoint.x, localPoint.z)
+
   localPoint.y = height
   groundObject.localToWorld(localPoint)
   return localPoint.y
@@ -19572,7 +19573,8 @@ function sampleRoadBuildWorldYAt(worldPosition: THREE.Vector3): number | null {
   if (typeof surfaceY === 'number' && Number.isFinite(surfaceY)) {
     return surfaceY
   }
-  return sampleHeightfieldWorldYAt(worldPosition)
+  const hf = sampleHeightfieldWorldYAt(worldPosition)
+  return hf
 }
 
 function sampleRoadBuildWorldYAtXZ(x: number, z: number): number | null {
