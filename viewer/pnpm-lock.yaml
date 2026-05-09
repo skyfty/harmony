@@ -25,7 +25,7 @@ importers:
         version: 3.0.0-alpha-4050320250224001(debug@4.4.3)(postcss@8.5.6)(rollup@4.57.1)(vue@3.5.28(typescript@5.6.3))
       '@harmony/scenery':
         specifier: file:../scenery
-        version: file:../scenery(three@0.172.0)
+        version: file:../scenery(three@0.162.0)
       '@harmony/schema':
         specifier: file:../schema
         version: file:../schema
@@ -51,11 +51,11 @@ importers:
         specifier: ^0.15.7
         version: 0.15.7
       three:
-        specifier: ^0.172.0
-        version: 0.172.0
+        specifier: 0.162.0
+        version: 0.162.0
       three-mesh-bvh:
         specifier: ^0.9.1
-        version: 0.9.8(three@0.172.0)
+        version: 0.9.8(three@0.162.0)
       vue:
         specifier: ^3.5.13
         version: 3.5.28(typescript@5.6.3)
@@ -86,7 +86,7 @@ importers:
         version: file:../tools
       '@minisheep/three-platform-adapter':
         specifier: ^2.0.1
-        version: 2.0.4(@minisheep/mini-program-polyfill-core@1.1.5)(miniprogram-api-typings@4.1.3)(three@0.172.0)
+        version: 2.0.4(@minisheep/mini-program-polyfill-core@1.1.5)(miniprogram-api-typings@4.1.3)(three@0.162.0)
       '@minisheep/vite-plugin-mp-chunk-splitter':
         specifier: ^1.0.2
         version: 1.0.4(@rollup/pluginutils@5.3.0(rollup@4.57.1))(debug@4.4.3)(rollup@4.57.1)(vite@5.4.21(@types/node@25.3.0)(sass@1.97.3)(terser@5.46.0))
@@ -4046,6 +4046,9 @@ packages:
     peerDependencies:
       three: '>= 0.159.0'
 
+  three@0.162.0:
+    resolution: {integrity: sha512-xfCYj4RnlozReCmUd+XQzj6/5OjDNHBy5nT6rVwrOKGENAvpXe2z1jL+DZYaMu4/9pNsjH/4Os/VvS9IrH7IOQ==}
+
   three@0.172.0:
     resolution: {integrity: sha512-6HMgMlzU97MsV7D/tY8Va38b83kz8YJX+BefKjspMNAv0Vx6dxMogHOrnRl/sbMIs3BPUKijPqDqJ/+UwJbIow==}
 
@@ -5778,12 +5781,12 @@ snapshots:
 
   '@eslint/js@8.57.1': {}
 
-  '@harmony/scenery@file:../scenery(three@0.172.0)':
+  '@harmony/scenery@file:../scenery(three@0.162.0)':
     dependencies:
       '@harmony/schema': file:../schema
       '@harmony/utils': file:../utils
       '@minisheep/mini-program-polyfill-core': 1.1.5
-      three-mesh-bvh: 0.9.8(three@0.172.0)
+      three-mesh-bvh: 0.9.8(three@0.162.0)
     transitivePeerDependencies:
       - three
 
@@ -6335,10 +6338,10 @@ snapshots:
       type-fest: 4.41.0
       web-streams-polyfill: 4.2.0
 
-  '@minisheep/three-platform-adapter@2.0.4(@minisheep/mini-program-polyfill-core@1.1.5)(miniprogram-api-typings@4.1.3)(three@0.172.0)':
+  '@minisheep/three-platform-adapter@2.0.4(@minisheep/mini-program-polyfill-core@1.1.5)(miniprogram-api-typings@4.1.3)(three@0.162.0)':
     dependencies:
       '@minisheep/mini-program-polyfill-core': 1.1.5
-      three: 0.172.0
+      three: 0.162.0
     optionalDependencies:
       miniprogram-api-typings: 4.1.3
 
@@ -9195,9 +9198,15 @@ snapshots:
 
   three-csm@4.2.1: {}
 
+  three-mesh-bvh@0.9.8(three@0.162.0):
+    dependencies:
+      three: 0.162.0
+
   three-mesh-bvh@0.9.8(three@0.172.0):
     dependencies:
       three: 0.172.0
+
+  three@0.162.0: {}
 
   three@0.172.0: {}
 

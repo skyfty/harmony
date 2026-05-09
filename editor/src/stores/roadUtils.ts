@@ -121,12 +121,13 @@ export function applyRoadComponentPropsToNode(
     segments: Array.isArray(existing.segments) ? existing.segments : normalized.segments,
     width: Number.isFinite(existingWidth) ? existingWidth : normalized.width,
   }
+  console.log(node.dynamicMesh)
 
   const runtime = deps.getRuntimeObject(node.id)
   if (runtime) {
     const heightSampler = normalized.snapToTerrain ? resolveRoadLocalHeightSampler(node, groundNode) : null
-
     runtime.traverse((child: Object3D & { type?: string }) => {
+
       if (child.type === 'Group' && node.dynamicMesh && node.dynamicMesh.type === 'Road') {
         updateRoadGroup(child, node.dynamicMesh, {
           junctionSmoothing: normalized.junctionSmoothing,

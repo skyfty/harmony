@@ -532,15 +532,23 @@ export function createRoadBuildTool(options: {
       const worldPoints = [segmentStart.clone(), segmentEnd.clone()]
 
       const updateExistingNode = (nodeId: string): string | null => {
+        const currentSession = session
+        if (!currentSession) {
+          return null
+        }
+        // 先确认目标节点仍是 Road，避免对非道路节点写入动态网格。
         const node = options.findSceneNode(options.sceneNodes(), nodeId)
         if (node?.dynamicMesh?.type !== 'Road') {
           return null
         }
+        // 需要拿到运行时对象，才能把世界坐标路径并入节点局部坐标网格。
         const runtime = options.getRuntimeObject(nodeId)
         if (!runtime) {
           return null
         }
-        const width = Number.isFinite(node.dynamicMesh.width) ? node.dynamicMesh.width : session.width
+        // 宽度优先沿用现有道路宽度，确保增量铺设时视觉连续。
+        const width = Number.isFinite(node.dynamicMesh.width) ? node.dynamicMesh.width : currentSession.width
+        // 将当前新段与已有 RoadDynamicMesh 做几何并网，得到更新后的网格定义。
         const next = integrateWorldPolylineIntoRoadMesh({
           baseMesh: node.dynamicMesh,
           runtime,
@@ -551,6 +559,7 @@ export function createRoadBuildTool(options: {
         if (!next) {
           return null
         }
+        // 将并网结果写回场景节点，完成本次增量提交。
         options.updateNodeDynamicMesh(nodeId, next)
         return nodeId
       }
@@ -559,6 +568,7 @@ export function createRoadBuildTool(options: {
       if (activeNodeId) {
         return updateExistingNode(activeNodeId)
       }
+
 
       const connectNodeId = findConnectableRoadNodeId({
         worldPoints,
@@ -573,7 +583,7 @@ export function createRoadBuildTool(options: {
       }
 
       const created = options.createRoadNode({
-        points: worldPoints.map((p) => ({ x: p.x, y: 0, z: p.z })),
+        points: worldPoints.map((p) => ({ x: p.x, y: p.y, z: p.z })),
         width: session.width,
         roadPresetData: options.getRoadBrush?.()?.presetData ?? null,
       })

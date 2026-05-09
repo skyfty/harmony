@@ -15410,6 +15410,64 @@ export const useSceneStore = defineStore('scene', {
       const roadOriginX = build.center.x
       const roadOriginY = build.center.y
       const roadOriginZ = build.center.z
+
+      const buildPathHeightSampler = (() => {
+        const rawPoints = Array.isArray(payload.points) ? payload.points : []
+        const profile: Array<{ x: number; y: number; z: number }> = []
+        for (const entry of rawPoints) {
+          const x = Number((entry as any)?.x)
+          const y = Number((entry as any)?.y)
+          const z = Number((entry as any)?.z)
+          if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
+            continue
+          }
+          const prev = profile[profile.length - 1]
+          if (prev) {
+            const dx = prev.x - x
+            const dz = prev.z - z
+            if (dx * dx + dz * dz <= 1e-10) {
+              continue
+            }
+          }
+          profile.push({ x, y, z })
+        }
+        if (profile.length < 2) {
+          return null
+        }
+
+        return (x: number, z: number): number => {
+          const worldX = roadOriginX + x
+          const worldZ = roadOriginZ + z
+
+          let bestY = profile[0]!.y
+          let bestDist2 = Number.POSITIVE_INFINITY
+          for (let i = 0; i < profile.length - 1; i += 1) {
+            const a = profile[i]!
+            const b = profile[i + 1]!
+            const abX = b.x - a.x
+            const abZ = b.z - a.z
+            const len2 = abX * abX + abZ * abZ
+            if (len2 <= 1e-10) {
+              continue
+            }
+
+            const tRaw = ((worldX - a.x) * abX + (worldZ - a.z) * abZ) / len2
+            const t = Math.max(0, Math.min(1, tRaw))
+            const projX = a.x + abX * t
+            const projZ = a.z + abZ * t
+            const dx = worldX - projX
+            const dz = worldZ - projZ
+            const dist2 = dx * dx + dz * dz
+            if (dist2 < bestDist2) {
+              bestDist2 = dist2
+              bestY = a.y + (b.y - a.y) * t
+            }
+          }
+
+          return bestY - roadOriginY
+        }
+      })()
+
       const initialRoadRenderProps = payload.roadPresetData?.roadProps
         ? buildRoadComponentPatchFromPreset(payload.roadPresetData.roadProps)
         : {
@@ -15419,15 +15477,18 @@ export const useSceneStore = defineStore('scene', {
             minClearance: ROAD_TERRAIN_DEFAULT_MIN_CLEARANCE,
           }
       const initialRoadRenderOptions = {
-        heightSampler: groundDefinition && initialRoadRenderProps.snapToTerrain !== false
-          ? ((x: number, z: number) => {
-              const worldX = roadOriginX + x
-              const worldZ = roadOriginZ + z
-              const groundLocalX = worldX - groundOriginX
-              const groundLocalZ = worldZ - groundOriginZ
-              const groundWorldY = groundOriginY + sampleGroundHeight(groundDefinition, groundLocalX, groundLocalZ)
-              return groundWorldY - roadOriginY
-            })
+        heightSampler: initialRoadRenderProps.snapToTerrain !== false
+          ? (buildPathHeightSampler
+            ?? (groundDefinition
+              ? ((x: number, z: number) => {
+                  const worldX = roadOriginX + x
+                  const worldZ = roadOriginZ + z
+                  const groundLocalX = worldX - groundOriginX
+                  const groundLocalZ = worldZ - groundOriginZ
+                  const groundWorldY = groundOriginY + sampleGroundHeight(groundDefinition, groundLocalX, groundLocalZ)
+                  return groundWorldY - roadOriginY
+                })
+              : null))
           : null,
         samplingDensityFactor: initialRoadRenderProps.samplingDensityFactor,
         smoothingStrengthFactor: initialRoadRenderProps.smoothingStrengthFactor,
@@ -15472,13 +15533,7 @@ export const useSceneStore = defineStore('scene', {
                   samplingDensityFactor: ROAD_TERRAIN_DEFAULT_SAMPLING_DENSITY_FACTOR,
                   smoothingStrengthFactor: ROAD_TERRAIN_DEFAULT_SMOOTHING_STRENGTH_FACTOR,
                   minClearance: ROAD_TERRAIN_DEFAULT_MIN_CLEARANCE,
-                }
-            console.info(`[RoadTerrainDebug:createRoadNode-existing-patch]\n${JSON.stringify({
-              nodeId: desiredId,
-              componentId: refreshedRoadComponent.id,
-              componentPatch,
-              resolvedFromMesh: resolveRoadComponentPropsFromMesh(build.definition),
-            }, null, 2)}`)
+            }
             this.updateNodeComponentProps(desiredId, refreshedRoadComponent.id, componentPatch)
           }
 
@@ -15516,18 +15571,12 @@ export const useSceneStore = defineStore('scene', {
                   samplingDensityFactor: ROAD_TERRAIN_DEFAULT_SAMPLING_DENSITY_FACTOR,
                   smoothingStrengthFactor: ROAD_TERRAIN_DEFAULT_SMOOTHING_STRENGTH_FACTOR,
                   minClearance: ROAD_TERRAIN_DEFAULT_MIN_CLEARANCE,
-                }
+            }
             const nextRoadComponentProps = {
               ...resolveRoadComponentPropsFromMesh(build.definition),
               ...(componentPatch ?? {}),
               bodyAssetId,
             }
-            console.info(`[RoadTerrainDebug:createRoadNode-new-patch]\n${JSON.stringify({
-              nodeId: node.id,
-              componentId: component.id,
-              componentPatch,
-              nextRoadComponentProps,
-            }, null, 2)}`)
             this.updateNodeComponentProps(node.id, component.id, nextRoadComponentProps)
           }
 

@@ -15,26 +15,37 @@ export function sanitizeRoadDefinition(definition: RoadDynamicMesh): {
   vertices: Array<[number, number]>
   segments: RoadSegment[]
 } {
+  /**
+   * 规范化顶点数组：确保每个顶点为 [x, z] 的数值对，非数值项替换为 0
+   * 同时去除重复（非常接近）的顶点由后续逻辑处理（此处仅转换和裁剪）
+   */
   const vertices = (Array.isArray(definition.vertices) ? definition.vertices : []).map((v) => {
+    // 如果元素为数组则取前两个值，否则视为 [0,0]
     const x = Number(Array.isArray(v) ? v[0] : 0)
     const z = Number(Array.isArray(v) ? v[1] : 0)
+    // 仅保留有限数值，否则归零
     return [Number.isFinite(x) ? x : 0, Number.isFinite(z) ? z : 0] as [number, number]
   })
 
+  // 规范化线段定义：确保索引为整数、非负且不指向自身，且索引在顶点范围内
   const segmentsRaw = Array.isArray(definition.segments) ? definition.segments : []
   const segments: RoadSegment[] = []
   for (const s of segmentsRaw as any[]) {
+    // 强制转换为整数索引（向零截断）
     const a = Math.trunc(Number((s as any)?.a))
     const b = Math.trunc(Number((s as any)?.b))
+    // 校验索引合法性：必须为整数、非负且不能指向同一顶点
     if (!Number.isInteger(a) || !Number.isInteger(b) || a < 0 || b < 0 || a === b) {
       continue
     }
+    // 校验索引范围：必须在顶点数组内
     if (a >= vertices.length || b >= vertices.length) {
       continue
     }
     segments.push({ a, b })
   }
 
+  // 返回已清洗的顶点与线段列表
   return { vertices, segments }
 }
 
@@ -331,30 +342,46 @@ export function integrateWorldPolylineIntoRoadMesh(options: {
   width: number
   defaultWidth: number
 }): RoadDynamicMesh | null {
+  // 解构传入参数：基础路网、运行时对象和世界坐标点序列
   const { baseMesh, runtime, worldPoints } = options
+  // 仅支持类型为 'Road' 的网格
   if (baseMesh.type !== 'Road') {
     return null
   }
 
+  // 规范化基础路网定义，得到顶点与线段
   const { vertices: baseVertices, segments: baseSegments } = sanitizeRoadDefinition(baseMesh)
   if (baseVertices.length < 1) {
     return null
   }
 
+  // 将基础顶点转换为二维向量（x,z）用于相交计算
   const baseVertices2 = baseVertices.map(([x, z]) => new THREE.Vector2(x, z))
+  // 将世界坐标的折线转换到运行时对象的本地坐标系
   const polyLocal = buildLocalPolyline(runtime, worldPoints)
   if (polyLocal.length < 2) {
     return null
   }
 
+  worldPoints.forEach((p) => {
+    console.log(`World point: (${p.x.toFixed(2)}, ${p.y.toFixed(2)}, ${p.z.toFixed(2)})`)
+  })
+
+  polyLocal.forEach((v) => {
+    console.log(v)
+  })
+
+  // 计算基础路网自相交点并准备拆分
   const baseSelfSplits = computeSelfIntersectionSplits(baseVertices2, baseSegments)
 
+  // 计算折线与路网的交点（包括路网上的拆分与折线自身的拆分）
   const { roadSplits, polySplits } = computePolylineRoadIntersectionSplits(polyLocal, baseVertices2, baseSegments)
   const polySelfSplits = computeSelfIntersectionSplits(
     polyLocal,
     polyLocal.length >= 2 ? polyLocal.slice(0, -1).map((_, i) => ({ a: i, b: i + 1 })) : [],
   )
 
+  // 合并路网上的所有拆分点（包括基础自相交与折线产生的拆分）
   const mergedRoadSplits = new Map<number, SplitPoint[]>()
   const mergeMap = (into: Map<number, SplitPoint[]>, from: Map<number, SplitPoint[]>) => {
     for (const [k, list] of from.entries()) {
@@ -366,18 +393,22 @@ export function integrateWorldPolylineIntoRoadMesh(options: {
   mergeMap(mergedRoadSplits, baseSelfSplits)
   mergeMap(mergedRoadSplits, roadSplits)
 
+  // 根据合并后的拆分点重建基础路网（如果没有拆分则保持原样）
   const rebuiltBase = mergedRoadSplits.size
     ? applySegmentSplits(baseVertices, baseSegments, mergedRoadSplits)
     : { vertices: baseVertices, segments: baseSegments }
 
+  // 合并并展开折线的拆分点（包含折线自相交与与路网相交）
   const mergedPolySplits = new Map<number, SplitPoint[]>()
   mergeMap(mergedPolySplits, polySplits)
   mergeMap(mergedPolySplits, polySelfSplits)
   const expandedPoly = expandPolyline(polyLocal, mergedPolySplits)
 
+  // 将展开后的折线段添加到重建后的路网中，得到最终合并结果
   const combined = addPolylineSegmentsToRoad(rebuiltBase, expandedPoly)
   return {
     type: 'Road',
+    // 使用给定宽度，若无效则回退到默认宽度（最小值为0.2）
     width: Number.isFinite(options.width) ? Math.max(0.2, options.width) : options.defaultWidth,
     vertices: combined.vertices,
     segments: combined.segments,
