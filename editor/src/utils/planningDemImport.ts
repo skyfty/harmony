@@ -750,8 +750,61 @@ export async function parsePlanningDemBlob(
   return parsePlanningDemBuffer(buffer, filename, mimeType, options)
 }
 
+/**
+ * Analyze DEM characteristics and recommend an optimal texture preset.
+ * Considers elevation range and terrain scale to auto-select between:
+ * - 'lush-foothills': mountainous terrain with varied slopes
+ * - 'basin-expanse': large flat areas with natural basins
+ * - 'balanced': default for moderate terrain
+ */
+export function recommendDemTexturePreset(result: PlanningDemImportResult): 'balanced' | 'lush-foothills' | 'basin-expanse' {
+  const elevationRange = (result.maxElevation ?? 0) - (result.minElevation ?? 0)
+  const terrainArea = (result.width * result.height * (result.sampleStepMeters ?? 1)) / 1_000_000 // km²
+
+  // Mountain terrain: high elevation range (> 1500m) suggests Alps, Rockies, etc.
+  // Benefits from Lush Foothills to emphasize slope transitions
+  if (elevationRange > 1500) {
+    return 'lush-foothills'
+  }
+
+  // Large flat regions with moderate relief: common in plains/plateau DEMs
+  // Basin Expanse adds soil/sand variation to break monotony
+  if (terrainArea > 100 && elevationRange < 500) {
+    return 'basin-expanse'
+  }
+
+  // Moderate hills/mixed terrain: Balanced works well
+  return 'balanced'
+}
+
 export function demImportResultToTerrainData(result: PlanningDemImportResult): PlanningTerrainDemData {
   const targetChunkResolution = resolvePlanningDemTargetChunkResolution(result.sampleStepMeters)
+  const recommendedPreset = recommendDemTexturePreset(result)
+
+  // Map preset recommendation to texture parameters
+  const presetParams = {
+    'balanced': {
+      baseTextureMaxResolution: 3072,
+      baseTexturePixelsPerMeter: 2.5,
+      baseTextureVegetationBoost: 1,
+      baseTextureBasinVariationBoost: 1,
+    },
+    'lush-foothills': {
+      baseTextureMaxResolution: 4096,
+      baseTexturePixelsPerMeter: 3,
+      baseTextureVegetationBoost: 1.4,
+      baseTextureBasinVariationBoost: 0.9,
+    },
+    'basin-expanse': {
+      baseTextureMaxResolution: 4096,
+      baseTexturePixelsPerMeter: 2.8,
+      baseTextureVegetationBoost: 0.9,
+      baseTextureBasinVariationBoost: 1.45,
+    },
+  }
+
+  const params = presetParams[recommendedPreset]
+
   return {
     version: 1,
     sourceFileHash: result.sourceFileHash,
@@ -769,6 +822,10 @@ export function demImportResultToTerrainData(result: PlanningDemImportResult): P
     targetChunkResolution,
     resolutionMode: 'auto',
     autoGenerateBaseTexture: true,
+    baseTextureMaxResolution: params.baseTextureMaxResolution,
+    baseTexturePixelsPerMeter: params.baseTexturePixelsPerMeter,
+    baseTextureVegetationBoost: params.baseTextureVegetationBoost,
+    baseTextureBasinVariationBoost: params.baseTextureBasinVariationBoost,
     projectedCrs: result.projectedCrs ?? null,
     geographicBounds: result.geographicBounds,
     projectedBounds: result.projectedBounds,

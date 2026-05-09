@@ -371,6 +371,8 @@ function extractPaintImageDataFromSource(source: CanvasImageSource, width?: numb
 	if (!canvas || !context) {
 		return null
 	}
+	context.imageSmoothingEnabled = true
+	context.imageSmoothingQuality = 'high'
 	context.clearRect(0, 0, size.width, size.height)
 	context.drawImage(source, 0, 0, size.width, size.height)
 	const imageData = context.getImageData(0, 0, size.width, size.height)

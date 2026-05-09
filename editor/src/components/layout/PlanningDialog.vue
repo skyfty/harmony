@@ -75,6 +75,7 @@ const uiStore = useUiStore()
 
 type PlanningTool = 'select' | 'pan' | 'rectangle' | 'lasso' | 'line' | 'align-marker'
 type LayerKind = 'terrain' | 'guide-route'
+type DemBaseTexturePresetId = 'balanced' | 'lush-foothills' | 'basin-expanse'
 
 const layerKindLabels: Record<LayerKind, string> = {
   terrain: 'Terrain',
@@ -418,6 +419,10 @@ function clonePlanningTerrainDemData(data: PlanningTerrainDemData | null | undef
     targetChunkResolution: data.targetChunkResolution ?? null,
     resolutionMode: data.resolutionMode ?? null,
     autoGenerateBaseTexture: data.autoGenerateBaseTexture !== false,
+    baseTextureMaxResolution: Number.isFinite(Number(data.baseTextureMaxResolution)) ? Number(data.baseTextureMaxResolution) : 3072,
+    baseTexturePixelsPerMeter: Number.isFinite(Number(data.baseTexturePixelsPerMeter)) ? Number(data.baseTexturePixelsPerMeter) : 2.5,
+    baseTextureVegetationBoost: Number.isFinite(Number(data.baseTextureVegetationBoost)) ? Number(data.baseTextureVegetationBoost) : 1,
+    baseTextureBasinVariationBoost: Number.isFinite(Number(data.baseTextureBasinVariationBoost)) ? Number(data.baseTextureBasinVariationBoost) : 1,
     projectedCrs: data.projectedCrs ?? null,
     geographicBounds: clonePlanningTerrainGeographicBounds(data.geographicBounds ?? null),
     projectedBounds: clonePlanningTerrainProjectedBounds(data.projectedBounds ?? null),
@@ -1645,6 +1650,18 @@ function normalizePlanningTerrain(raw: unknown): PlanningTerrainData {
       targetChunkResolution,
       resolutionMode,
       autoGenerateBaseTexture: typeof dem.autoGenerateBaseTexture === 'boolean' ? dem.autoGenerateBaseTexture : true,
+      baseTextureMaxResolution: Number.isFinite(Number(dem.baseTextureMaxResolution))
+        ? Math.max(512, Math.min(8192, Math.round(Number(dem.baseTextureMaxResolution))))
+        : 3072,
+      baseTexturePixelsPerMeter: Number.isFinite(Number(dem.baseTexturePixelsPerMeter))
+        ? Math.max(0.5, Math.min(8, Number(dem.baseTexturePixelsPerMeter)))
+        : 2.5,
+      baseTextureVegetationBoost: Number.isFinite(Number(dem.baseTextureVegetationBoost))
+        ? Math.max(0, Math.min(2, Number(dem.baseTextureVegetationBoost)))
+        : 1,
+      baseTextureBasinVariationBoost: Number.isFinite(Number(dem.baseTextureBasinVariationBoost))
+        ? Math.max(0, Math.min(2, Number(dem.baseTextureBasinVariationBoost)))
+        : 1,
       projectedCrs: typeof dem.projectedCrs === 'string' ? dem.projectedCrs : null,
       geographicBounds: migratedLegacyProjectedBounds ? undefined : (normalizedGeographicBounds ?? undefined),
       projectedBounds: normalizedProjectedBounds ?? migratedLegacyProjectedBounds ?? undefined,
@@ -2320,6 +2337,151 @@ const selectedDemAutoGenerateBaseTextureModel = computed<boolean>({
   },
 })
 
+const selectedDemBaseTextureMaxResolutionModel = computed<number | null>({
+  get: () => {
+    const value = Number(selectedDem.value?.baseTextureMaxResolution)
+    return Number.isFinite(value) && value >= 512 ? Math.round(value) : 3072
+  },
+  set: (value: number | null) => {
+    const dem = selectedDem.value
+    if (!dem) {
+      return
+    }
+    const next = Number(value)
+    if (!Number.isFinite(next) || next < 512) {
+      return
+    }
+    dem.baseTextureMaxResolution = Math.max(512, Math.min(8192, Math.round(next)))
+    markPlanningDirty()
+  },
+})
+
+const selectedDemBaseTexturePixelsPerMeterModel = computed<number | null>({
+  get: () => {
+    const value = Number(selectedDem.value?.baseTexturePixelsPerMeter)
+    return Number.isFinite(value) && value > 0 ? Number(value.toFixed(2)) : 2.5
+  },
+  set: (value: number | null) => {
+    const dem = selectedDem.value
+    if (!dem) {
+      return
+    }
+    const next = Number(value)
+    if (!Number.isFinite(next) || next <= 0) {
+      return
+    }
+    dem.baseTexturePixelsPerMeter = Number(Math.max(0.5, Math.min(8, next)).toFixed(2))
+    markPlanningDirty()
+  },
+})
+
+const selectedDemBaseTextureVegetationBoostModel = computed<number | null>({
+  get: () => {
+    const value = Number(selectedDem.value?.baseTextureVegetationBoost)
+    return Number.isFinite(value) ? Number(value.toFixed(2)) : 1
+  },
+  set: (value: number | null) => {
+    const dem = selectedDem.value
+    if (!dem) {
+      return
+    }
+    const next = Number(value)
+    if (!Number.isFinite(next)) {
+      return
+    }
+    dem.baseTextureVegetationBoost = Number(Math.max(0, Math.min(2, next)).toFixed(2))
+    markPlanningDirty()
+  },
+})
+
+const selectedDemBaseTextureBasinVariationBoostModel = computed<number | null>({
+  get: () => {
+    const value = Number(selectedDem.value?.baseTextureBasinVariationBoost)
+    return Number.isFinite(value) ? Number(value.toFixed(2)) : 1
+  },
+  set: (value: number | null) => {
+    const dem = selectedDem.value
+    if (!dem) {
+      return
+    }
+    const next = Number(value)
+    if (!Number.isFinite(next)) {
+      return
+    }
+    dem.baseTextureBasinVariationBoost = Number(Math.max(0, Math.min(2, next)).toFixed(2))
+    markPlanningDirty()
+  },
+})
+
+const DEM_BASE_TEXTURE_PRESETS: Array<{
+  id: DemBaseTexturePresetId
+  label: string
+  maxResolution: number
+  pixelsPerMeter: number
+  vegetationBoost: number
+  basinVariationBoost: number
+}> = [
+  {
+    id: 'balanced',
+    label: 'Balanced',
+    maxResolution: 3072,
+    pixelsPerMeter: 2.5,
+    vegetationBoost: 1,
+    basinVariationBoost: 1,
+  },
+  {
+    id: 'lush-foothills',
+    label: 'Lush Foothills',
+    maxResolution: 4096,
+    pixelsPerMeter: 3,
+    vegetationBoost: 1.4,
+    basinVariationBoost: 0.9,
+  },
+  {
+    id: 'basin-expanse',
+    label: 'Basin Expanse',
+    maxResolution: 4096,
+    pixelsPerMeter: 2.8,
+    vegetationBoost: 0.9,
+    basinVariationBoost: 1.45,
+  },
+]
+
+function isDemBaseTexturePresetActive(presetId: DemBaseTexturePresetId): boolean {
+  const dem = selectedDem.value
+  if (!dem) {
+    return false
+  }
+  const preset = DEM_BASE_TEXTURE_PRESETS.find((entry) => entry.id === presetId)
+  if (!preset) {
+    return false
+  }
+  const maxResolution = Number(dem.baseTextureMaxResolution ?? 3072)
+  const pixelsPerMeter = Number(dem.baseTexturePixelsPerMeter ?? 2.5)
+  const vegetationBoost = Number(dem.baseTextureVegetationBoost ?? 1)
+  const basinVariationBoost = Number(dem.baseTextureBasinVariationBoost ?? 1)
+  return Math.abs(maxResolution - preset.maxResolution) <= 1
+    && Math.abs(pixelsPerMeter - preset.pixelsPerMeter) <= 0.01
+    && Math.abs(vegetationBoost - preset.vegetationBoost) <= 0.01
+    && Math.abs(basinVariationBoost - preset.basinVariationBoost) <= 0.01
+}
+
+function applyDemBaseTexturePreset(presetId: DemBaseTexturePresetId) {
+  const dem = selectedDem.value
+  if (!dem) {
+    return
+  }
+  const preset = DEM_BASE_TEXTURE_PRESETS.find((entry) => entry.id === presetId)
+  if (!preset) {
+    return
+  }
+  dem.baseTextureMaxResolution = preset.maxResolution
+  dem.baseTexturePixelsPerMeter = preset.pixelsPerMeter
+  dem.baseTextureVegetationBoost = preset.vegetationBoost
+  dem.baseTextureBasinVariationBoost = preset.basinVariationBoost
+  markPlanningDirty()
+}
+
 function applyRecommendedDemMinElevation() {
   const dem = selectedDem.value
   const recommended = selectedDemRecommendedAppliedMinElevation.value
@@ -2329,6 +2491,16 @@ function applyRecommendedDemMinElevation() {
   dem.minElevation = Number(recommended.toFixed(3))
   markPlanningDirty()
 }
+
+const activeDemBaseTexturePresetLabel = computed<string | null>(() => {
+  for (const preset of DEM_BASE_TEXTURE_PRESETS) {
+    if (isDemBaseTexturePresetActive(preset.id)) {
+      return preset.label
+    }
+  }
+  return null
+})
+
 const selectedDemWorldSpan = computed<{ width: number; height: number } | null>(() => resolvePlanningWorldSpan(selectedDem.value?.worldBounds))
 const recommendedTerrainCellSize = computed<number | null>(() => resolveRecommendedTerrainCellSize(planningTerrain.value.dem))
 const terrainCellSizeRecommendationReason = computed<string | null>(() => {
@@ -5216,6 +5388,10 @@ async function loadPlanningOrthophotoFile(file: File) {
       targetChunkResolution: null,
       resolutionMode: null,
       autoGenerateBaseTexture: true,
+      baseTextureMaxResolution: 3072,
+      baseTexturePixelsPerMeter: 2.5,
+      baseTextureVegetationBoost: 1,
+      baseTextureBasinVariationBoost: 1,
       projectedCrs: null,
       geographicBounds: null,
       worldBounds: null,
@@ -6855,6 +7031,70 @@ onBeforeUnmount(() => {
                   hide-details
                   label="Auto generate terrain base texture"
                 />
+                <v-text-field
+                  v-if="selectedDemAutoGenerateBaseTextureModel"
+                  v-model.number="selectedDemBaseTextureMaxResolutionModel"
+                  type="number"
+                  density="compact"
+                  label="Max texture resolution"
+                  suffix="px"
+                  min="512"
+                  max="8192"
+                  step="256"
+                  hide-details
+                />
+                <v-text-field
+                  v-if="selectedDemAutoGenerateBaseTextureModel"
+                  v-model.number="selectedDemBaseTexturePixelsPerMeterModel"
+                  type="number"
+                  density="compact"
+                  label="Texture density"
+                  suffix="px/m"
+                  min="0.5"
+                  max="8"
+                  step="0.1"
+                  hide-details
+                />
+                <v-text-field
+                  v-if="selectedDemAutoGenerateBaseTextureModel"
+                  v-model.number="selectedDemBaseTextureVegetationBoostModel"
+                  type="number"
+                  density="compact"
+                  label="Foothill/midslope greening"
+                  min="0"
+                  max="2"
+                  step="0.05"
+                  hide-details
+                />
+                <v-text-field
+                  v-if="selectedDemAutoGenerateBaseTextureModel"
+                  v-model.number="selectedDemBaseTextureBasinVariationBoostModel"
+                  type="number"
+                  density="compact"
+                  label="Basin variation"
+                  min="0"
+                  max="2"
+                  step="0.05"
+                  hide-details
+                />
+                <div v-if="selectedDemAutoGenerateBaseTextureModel" class="property-panel__preset-grid">
+                  <div v-if="activeDemBaseTexturePresetLabel" class="property-panel__hint">
+                    Active preset: <strong>{{ activeDemBaseTexturePresetLabel }}</strong>
+                  </div>
+                  <v-btn
+                    v-for="preset in DEM_BASE_TEXTURE_PRESETS"
+                    :key="preset.id"
+                    size="x-small"
+                    :variant="isDemBaseTexturePresetActive(preset.id) ? 'tonal' : 'text'"
+                    color="primary"
+                    @click="applyDemBaseTexturePreset(preset.id)"
+                  >
+                    {{ preset.label }}
+                  </v-btn>
+                </div>
+                <div v-if="selectedDemAutoGenerateBaseTextureModel" class="property-panel__hint">
+                  Increase greening to emphasize foothills/mid-slopes; increase basin variation to avoid flat single-color plains.
+                </div>
               </div>
               <div class="property-panel__sub-block">
                 <div class="property-panel__section-title property-panel__section-title--muted">Conversion Grid</div>
@@ -7238,6 +7478,13 @@ onBeforeUnmount(() => {
   font-size: 0.76rem;
   line-height: 1.45;
   color: rgba(244, 246, 251, 0.68);
+}
+
+.property-panel__preset-grid {
+  margin-top: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 .property-panel__inline-action {

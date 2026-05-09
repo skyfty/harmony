@@ -931,6 +931,8 @@ export async function buildPlanningDemTerrainConversion(
     endColumn: options.endColumn,
     textureDataUrl: texture.textureDataUrl,
     textureName: texture.textureName,
+    normalMapDataUrl: texture.normalMapDataUrl ?? null,
+    normalMapName: texture.normalMapName ?? null,
     onProgress: reportProgress,
     preferWorker: false,
   })

@@ -2120,7 +2120,11 @@ export interface GroundDynamicMesh {
   terrainScatterInstancesUpdatedAt: number
   textureDataUrl?: string | null
   textureName?: string | null
+  normalMapDataUrl?: string | null
+  normalMapName?: string | null
   textureAssetId?: string | null
+  /** Asset ID of the normal map registered in the scene asset library. */
+  normalMapAssetId?: string | null
   generation?: GroundGenerationSettings | null
   /** Runtime-only sampler backed by a terrain dataset / scene-package payload. */
   runtimeTerrainHeightSampler?: GroundTerrainHeightSampler | null

@@ -21,6 +21,8 @@ export interface PlanningDemGroundConversionResult {
   planningMetadata: GroundPlanningMetadata
   textureDataUrl: string | null
   textureName: string | null
+  normalMapDataUrl?: string | null
+  normalMapName?: string | null
 }
 
 export interface PlanningDemRegionConversionResult {
@@ -29,6 +31,8 @@ export interface PlanningDemRegionConversionResult {
   planningMetadata: GroundPlanningMetadata
   textureDataUrl: string | null
   textureName: string | null
+  normalMapDataUrl?: string | null
+  normalMapName?: string | null
 }
 
 export interface PlanningDemTileConversionResult {
@@ -37,6 +41,8 @@ export interface PlanningDemTileConversionResult {
   planningMetadata: GroundPlanningMetadata
   textureDataUrl: string | null
   textureName: string | null
+  normalMapDataUrl?: string | null
+  normalMapName?: string | null
 }
 
 export interface PlanningDemBuildProgress {
@@ -924,6 +930,8 @@ export async function buildPlanningDemRegionFromPreparedSource(options: {
   endColumn: number
   textureDataUrl?: string | null
   textureName?: string | null
+  normalMapDataUrl?: string | null
+  normalMapName?: string | null
   onProgress?: (payload: PlanningDemBuildProgress) => void
   preferWorker?: boolean
 }): Promise<PlanningDemRegionConversionResult> {
@@ -954,6 +962,8 @@ export async function buildPlanningDemRegionFromPreparedSource(options: {
     planningMetadata: options.prepared.planningMetadata,
     textureDataUrl: options.textureDataUrl ?? null,
     textureName: options.textureName ?? null,
+    normalMapDataUrl: options.normalMapDataUrl ?? null,
+    normalMapName: options.normalMapName ?? null,
   }
 }
 
@@ -1031,6 +1041,8 @@ function blobToDataUrl(blob: Blob): Promise<string> {
 type PlanningDemTextureResolution = {
   textureDataUrl: string | null
   textureName: string | null
+  normalMapDataUrl?: string | null
+  normalMapName?: string | null
 }
 
 type TerrainTextureCanvas = OffscreenCanvas | HTMLCanvasElement
@@ -1174,7 +1186,44 @@ function summarizePlanningDemRasterHeightRange(source: PlanningDemRasterSource):
   return { min, max }
 }
 
-function computePlanningDemBaseTextureSize(definition: GroundRuntimeDynamicMesh, maxResolution = 1024): {
+const PLANNING_DEM_BASE_TEXTURE_MIN_RESOLUTION = 512
+const PLANNING_DEM_BASE_TEXTURE_MAX_RESOLUTION = 8192
+const PLANNING_DEM_BASE_TEXTURE_TARGET_PIXELS_PER_METER = 2.5
+
+function clampDemTextureTuning(value: unknown, fallback: number, min: number, max: number): number {
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) {
+    return fallback
+  }
+  return Math.min(max, Math.max(min, numeric))
+}
+
+function resolvePlanningDemTextureTuning(terrainDem: PlanningTerrainDemData): {
+  maxResolution: number
+  pixelsPerMeter: number
+  vegetationBoost: number
+  basinVariationBoost: number
+} {
+  return {
+    maxResolution: Math.round(clampDemTextureTuning(
+      terrainDem.baseTextureMaxResolution,
+      3072,
+      PLANNING_DEM_BASE_TEXTURE_MIN_RESOLUTION,
+      PLANNING_DEM_BASE_TEXTURE_MAX_RESOLUTION,
+    )),
+    pixelsPerMeter: clampDemTextureTuning(terrainDem.baseTexturePixelsPerMeter, PLANNING_DEM_BASE_TEXTURE_TARGET_PIXELS_PER_METER, 0.5, 8),
+    vegetationBoost: clampDemTextureTuning(terrainDem.baseTextureVegetationBoost, 1, 0, 2),
+    basinVariationBoost: clampDemTextureTuning(terrainDem.baseTextureBasinVariationBoost, 1, 0, 2),
+  }
+}
+
+function computePlanningDemBaseTextureSize(
+  definition: GroundRuntimeDynamicMesh,
+  options: {
+    maxResolution?: number
+    pixelsPerMeter?: number
+  } = {},
+): {
   width: number
   height: number
 } {
@@ -1182,10 +1231,19 @@ function computePlanningDemBaseTextureSize(definition: GroundRuntimeDynamicMesh,
   const worldWidth = Math.max(1, Math.abs(bounds.maxX - bounds.minX))
   const worldHeight = Math.max(1, Math.abs(bounds.maxZ - bounds.minZ))
   const maxDimension = Math.max(worldWidth, worldHeight, 1)
-  const normalizedMaxResolution = Math.max(256, Math.round(maxResolution))
+  const maxResolution = clampDemTextureTuning(options.maxResolution, 3072, PLANNING_DEM_BASE_TEXTURE_MIN_RESOLUTION, PLANNING_DEM_BASE_TEXTURE_MAX_RESOLUTION)
+  const pixelsPerMeter = clampDemTextureTuning(options.pixelsPerMeter, PLANNING_DEM_BASE_TEXTURE_TARGET_PIXELS_PER_METER, 0.5, 8)
+  const adaptiveResolution = Math.round(maxDimension * pixelsPerMeter)
+  const normalizedMaxResolution = Math.max(
+    PLANNING_DEM_BASE_TEXTURE_MIN_RESOLUTION,
+    Math.min(
+      PLANNING_DEM_BASE_TEXTURE_MAX_RESOLUTION,
+      Math.max(Math.round(maxResolution), adaptiveResolution),
+    ),
+  )
   return {
-    width: Math.max(256, Math.round((worldWidth / maxDimension) * normalizedMaxResolution)),
-    height: Math.max(256, Math.round((worldHeight / maxDimension) * normalizedMaxResolution)),
+    width: Math.max(PLANNING_DEM_BASE_TEXTURE_MIN_RESOLUTION, Math.round((worldWidth / maxDimension) * normalizedMaxResolution)),
+    height: Math.max(PLANNING_DEM_BASE_TEXTURE_MIN_RESOLUTION, Math.round((worldHeight / maxDimension) * normalizedMaxResolution)),
   }
 }
 
@@ -1201,12 +1259,101 @@ function resolvePlanningDemBaseTextureName(terrainDem: PlanningTerrainDemData): 
   return `${stripFilenameExtension(terrainDem.filename)} Terrain Base`
 }
 
+function resolvePlanningDemNormalMapName(terrainDem: PlanningTerrainDemData): string {
+  return `${stripFilenameExtension(terrainDem.filename)} Terrain Normal`
+}
+
+/**
+ * Generate a normal map from DEM height data.
+ * Encodes surface normals as RGB tangent-space normals (Sobel filter).
+ * Used for adding detail and depth perception to vegetation areas.
+ */
+async function resolvePlanningDemNormalMap(options: {
+  definition: GroundRuntimeDynamicMesh
+  terrainDem: PlanningTerrainDemData
+  source: PlanningDemRasterSource
+}): Promise<PlanningDemTextureResolution> {
+  const textureTuning = resolvePlanningDemTextureTuning(options.terrainDem)
+  const textureSize = computePlanningDemBaseTextureSize(options.definition, {
+    maxResolution: textureTuning.maxResolution,
+    pixelsPerMeter: textureTuning.pixelsPerMeter,
+  })
+  const composition = createTerrainTextureCanvas(textureSize.width, textureSize.height)
+  if (!composition) {
+    return { textureDataUrl: null, textureName: null }
+  }
+
+  const { canvas, context } = composition
+  const width = canvas.width
+  const height = canvas.height
+  const bounds = resolveGroundWorldBounds(options.definition)
+  const worldWidth = Math.max(1e-6, bounds.maxX - bounds.minX)
+  const worldDepth = Math.max(1e-6, bounds.maxZ - bounds.minZ)
+  const gradientStepX = Math.max(options.source.sampleStepX, worldWidth / Math.max(1, width - 1))
+  const gradientStepZ = Math.max(options.source.sampleStepZ, worldDepth / Math.max(1, height - 1))
+  const imageData = context.createImageData(width, height)
+  const pixels = imageData.data
+
+  for (let row = 0; row < height; row += 1) {
+    const v = height <= 1 ? 0 : row / (height - 1)
+    const worldZ = bounds.minZ + v * worldDepth
+    for (let column = 0; column < width; column += 1) {
+      const u = width <= 1 ? 0 : column / (width - 1)
+      const worldX = bounds.minX + u * worldWidth
+      
+      // Sobel filter for normal calculation
+      const h00 = samplePlanningDemHeightAtWorld(options.source, worldX - gradientStepX, worldZ - gradientStepZ)
+      const h01 = samplePlanningDemHeightAtWorld(options.source, worldX, worldZ - gradientStepZ)
+      const h02 = samplePlanningDemHeightAtWorld(options.source, worldX + gradientStepX, worldZ - gradientStepZ)
+      const h10 = samplePlanningDemHeightAtWorld(options.source, worldX - gradientStepX, worldZ)
+      const h12 = samplePlanningDemHeightAtWorld(options.source, worldX + gradientStepX, worldZ)
+      const h20 = samplePlanningDemHeightAtWorld(options.source, worldX - gradientStepX, worldZ + gradientStepZ)
+      const h21 = samplePlanningDemHeightAtWorld(options.source, worldX, worldZ + gradientStepZ)
+      const h22 = samplePlanningDemHeightAtWorld(options.source, worldX + gradientStepX, worldZ + gradientStepZ)
+
+      // Sobel operator for edge detection
+      const sobelX = (-h00 + h02 - 2 * h10 + 2 * h12 - h20 + h22) / (8 * gradientStepX)
+      const sobelZ = (h00 + 2 * h01 + h02 - h20 - 2 * h21 - h22) / (8 * gradientStepZ)
+      
+      // Convert height gradient to normal (height to normal conversion)
+      const normalX = -sobelX * 0.8 // Scale factor for better appearance
+      const normalY = 1.0
+      const normalZ = -sobelZ * 0.8
+      const normalLen = Math.hypot(normalX, normalY, normalZ) || 1
+      
+      // Normalize
+      const nx = normalX / normalLen
+      const ny = normalY / normalLen
+      const nz = normalZ / normalLen
+      
+      // Encode normal map: (nx, nz, ny) in RGB
+      // Standard tangent-space normal encoding: (x+1)/2, (z+1)/2, y
+      const pixelIndex = (row * width + column) * 4
+      pixels[pixelIndex] = Math.round(((nx + 1) * 0.5) * 255) // R = X
+      pixels[pixelIndex + 1] = Math.round(((nz + 1) * 0.5) * 255) // G = Z
+      pixels[pixelIndex + 2] = Math.round(ny * 255) // B = Y
+      pixels[pixelIndex + 3] = 255 // A = full opacity
+    }
+  }
+
+  context.putImageData(imageData, 0, 0)
+  const textureDataUrl = await terrainTextureCanvasToDataUrl(canvas)
+  return {
+    textureDataUrl,
+    textureName: resolvePlanningDemNormalMapName(options.terrainDem),
+  }
+}
+
 async function resolvePlanningDemNaturalBaseTexture(options: {
   definition: GroundRuntimeDynamicMesh
   terrainDem: PlanningTerrainDemData
   source: PlanningDemRasterSource
 }): Promise<PlanningDemTextureResolution> {
-  const textureSize = computePlanningDemBaseTextureSize(options.definition)
+  const textureTuning = resolvePlanningDemTextureTuning(options.terrainDem)
+  const textureSize = computePlanningDemBaseTextureSize(options.definition, {
+    maxResolution: textureTuning.maxResolution,
+    pixelsPerMeter: textureTuning.pixelsPerMeter,
+  })
   const composition = createTerrainTextureCanvas(textureSize.width, textureSize.height)
   if (!composition) {
     return { textureDataUrl: null, textureName: null }
@@ -1261,20 +1408,34 @@ async function resolvePlanningDemNaturalBaseTexture(options: {
       const valley = 1 - smoothstep(0.14, 0.4, heightNormalized)
       const highlands = smoothstep(0.6, 0.92, heightNormalized + (macroNoise - 0.5) * 0.08)
       const rockiness = smoothstep(0.18, 0.58, slope + (detailNoise - 0.5) * 0.18)
-      const vegetation = smoothstep(0.08, 0.72, heightNormalized + (macroNoise - 0.5) * 0.12) * (1 - rockiness)
+      const basinVariation = smoothstep(0.06, 0.54, macroNoise * 0.9 + detailNoise * 0.1)
+      const foothillBand = smoothstep(0.08, 0.32, heightNormalized) * (1 - smoothstep(0.46, 0.68, heightNormalized))
+      const midSlopeBand = smoothstep(0.28, 0.58, heightNormalized) * (1 - smoothstep(0.72, 0.92, heightNormalized))
+      const slopeVegetationWindow = 1 - smoothstep(0.36, 0.72, slope)
+      const vegetation = clamp01(
+        (
+          smoothstep(0.08, 0.72, heightNormalized + (macroNoise - 0.5) * 0.12)
+          + foothillBand * 0.58
+          + midSlopeBand * 0.38
+        )
+        * slopeVegetationWindow,
+      ) * (1 - rockiness) * textureTuning.vegetationBoost
+      const basinBlend = clamp01(basinVariation * textureTuning.basinVariationBoost)
 
       let color = mixTerrainColor(
         palette.sand,
         palette.soil,
-        smoothstep(0.04, 0.24, heightNormalized + (macroNoise - 0.5) * 0.08),
+        smoothstep(0.04, 0.24, heightNormalized + (macroNoise - 0.5) * 0.12),
       )
+      color = mixTerrainColor(color, palette.sand, valley * (0.28 + basinBlend * 0.32))
+      color = mixTerrainColor(color, palette.soil, valley * (0.25 + (1 - basinBlend) * 0.45))
       color = mixTerrainColor(color, palette.meadow, vegetation * 0.72)
       color = mixTerrainColor(
         color,
         palette.grass,
-        vegetation * clamp01(0.7 + (detailNoise - 0.5) * 0.55),
+        vegetation * clamp01(0.76 + (detailNoise - 0.5) * 0.55),
       )
-      color = mixTerrainColor(color, palette.soil, valley * 0.3 * (1 - rockiness))
+      color = mixTerrainColor(color, palette.soil, valley * 0.34 * (1 - rockiness))
       color = mixTerrainColor(color, palette.rock, rockiness * 0.85)
       color = mixTerrainColor(color, palette.paleRock, highlands * (0.45 + rockiness * 0.4))
 
@@ -1300,9 +1461,19 @@ async function resolvePlanningDemNaturalBaseTexture(options: {
 
   context.putImageData(imageData, 0, 0)
   const textureDataUrl = await terrainTextureCanvasToDataUrl(canvas)
+  
+  // Also generate normal map for depth perception in vegetation areas
+  const normalMap = await resolvePlanningDemNormalMap({
+    definition: options.definition,
+    terrainDem: options.terrainDem,
+    source: options.source,
+  })
+  
   return {
     textureDataUrl,
     textureName: resolvePlanningDemBaseTextureName(options.terrainDem),
+    normalMapDataUrl: normalMap.textureDataUrl,
+    normalMapName: normalMap.textureName,
   }
 }
 
@@ -1692,6 +1863,8 @@ export async function buildPlanningDemGroundRegionData(options: {
     endColumn: options.endColumn,
     textureDataUrl: texture.textureDataUrl,
     textureName: texture.textureName,
+    normalMapDataUrl: texture.normalMapDataUrl ?? null,
+    normalMapName: texture.normalMapName ?? null,
     onProgress: (payload) => reportProgress(payload),
   })
   return result
@@ -1734,6 +1907,8 @@ export async function buildPlanningDemGroundTileData(options: {
     planningMetadata: prepared.planningMetadata,
     textureDataUrl: texture.textureDataUrl,
     textureName: texture.textureName,
+    normalMapDataUrl: texture.normalMapDataUrl ?? null,
+    normalMapName: texture.normalMapName ?? null,
   }
 }
 
@@ -1837,5 +2012,7 @@ export async function buildPlanningDemGroundData(options: {
     planningMetadata: fullRegionResult.planningMetadata,
     textureDataUrl: texture.textureDataUrl,
     textureName: texture.textureName,
+    normalMapDataUrl: texture.normalMapDataUrl ?? null,
+    normalMapName: texture.normalMapName ?? null,
   }
 }

@@ -9463,6 +9463,84 @@ export const useSceneStore = defineStore('scene', {
         textureUrl: cachedEntry.blobUrl ?? cachedEntry.downloadUrl ?? null,
       }
     },
+    setGroundNormalMap(payload: { dataUrl: string | null; name?: string | null; assetId?: string | null }) {
+      const groundNode = this.groundNode
+      if (!groundNode) {
+        return false
+      }
+      if (groundNode.dynamicMesh?.type !== 'Ground') {
+        return false
+      }
+      const definition = groundNode.dynamicMesh as GroundDynamicMesh
+      const nextDataUrl = payload.dataUrl ?? null
+      const nextName = payload.name ?? null
+      const nextAssetId = payload.assetId ?? null
+      if (
+        (definition.normalMapDataUrl ?? null) === nextDataUrl
+        && (definition.normalMapName ?? null) === nextName
+        && (definition.normalMapAssetId ?? null) === nextAssetId
+      ) {
+        return false
+      }
+
+      groundNode.dynamicMesh = {
+        ...definition,
+        normalMapDataUrl: nextDataUrl,
+        normalMapName: nextName,
+        normalMapAssetId: nextAssetId,
+      }
+      this.nodes = [...this.nodes]
+      finalizeDynamicMeshRuntimePatch(this, groundNode.id, 'Ground')
+      commitSceneSnapshot(this)
+      return true
+    },
+    async setGroundNormalMapFromDataUrl(payload: { dataUrl: string | null; name?: string | null }) {
+      const nextDataUrl = payload.dataUrl ?? null
+      const nextName = payload.name ?? null
+      if (!nextDataUrl) {
+        const changed = this.setGroundNormalMap({ dataUrl: null, name: nextName, assetId: null })
+        return { changed, assetId: null as string | null, textureUrl: null as string | null }
+      }
+
+      const blob = dataUrlToBlob(nextDataUrl)
+      const assetId = await computeBlobHash(blob)
+      const trimmedName = typeof nextName === 'string' ? nextName.trim() : ''
+      const inferredExtension = getExtensionFromMimeType(blob.type) ?? 'png'
+      const filenameBase = trimmedName.length ? trimmedName : 'terrain-normal-map'
+      const filename = extractExtension(filenameBase) ? filenameBase : `${filenameBase}.${inferredExtension}`
+      const assetCache = useAssetCacheStore()
+      const cachedEntry = await assetCache.storeAssetBlob(assetId, {
+        blob,
+        mimeType: blob.type || 'image/png',
+        filename,
+      })
+
+      this.registerAsset({
+        id: assetId,
+        name: filename,
+        extension: extractExtension(filename) ?? inferredExtension,
+        type: 'image',
+        downloadUrl: assetId,
+        previewColor: '#8080ff',
+        thumbnail: null,
+        description: 'Ground normal map',
+        gleaned: true,
+      }, {
+        source: { type: 'local' },
+        autoSave: false,
+      })
+
+      const changed = this.setGroundNormalMap({
+        dataUrl: cachedEntry.blobUrl ?? cachedEntry.downloadUrl ?? null,
+        name: nextName ?? filename,
+        assetId,
+      })
+      return {
+        changed,
+        assetId,
+        textureUrl: cachedEntry.blobUrl ?? cachedEntry.downloadUrl ?? null,
+      }
+    },
     setEnvironmentSettings(settings: EnvironmentSettings) {
       const normalized = cloneEnvironmentSettings(settings)
       if (environmentSettingsEqual(this.environment, normalized)) {

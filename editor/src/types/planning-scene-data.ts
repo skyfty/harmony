@@ -226,6 +226,10 @@ export interface PlanningTerrainDemData {
   targetChunkResolution?: number | null
   resolutionMode?: PlanningTerrainDemResolutionMode | null
   autoGenerateBaseTexture?: boolean
+  baseTextureMaxResolution?: number | null
+  baseTexturePixelsPerMeter?: number | null
+  baseTextureVegetationBoost?: number | null
+  baseTextureBasinVariationBoost?: number | null
   projectedCrs?: string | null
   geographicBounds?: PlanningTerrainGeographicBounds | null
   projectedBounds?: PlanningTerrainProjectedBounds | null

@@ -56,6 +56,7 @@ import {
   stripPlanningOrthophotoGeneratedGroundSurfaceChunks,
 } from '@/utils/terrainImageryChunkPatches'
 import { createScenesStoreTerrainDatasetHeightSampler } from '@/utils/terrainDatasetRuntime'
+import { createTextureSettings } from '@/types/material'
 
 
 export type PlanningConversionProgress = {
@@ -158,13 +159,21 @@ function groundBoundsChanged(
 
 function preserveGroundTextureFields(
   definition: GroundRuntimeDynamicMesh,
-  texture: { textureDataUrl: string | null; textureName: string | null; textureAssetId?: string | null },
+  texture: {
+    textureDataUrl: string | null
+    textureName: string | null
+    textureAssetId?: string | null
+    normalMapDataUrl?: string | null
+    normalMapName?: string | null
+  },
 ): GroundRuntimeDynamicMesh {
   return {
     ...definition,
     textureDataUrl: texture.textureDataUrl,
     textureName: texture.textureName,
     textureAssetId: texture.textureAssetId ?? null,
+    normalMapDataUrl: texture.normalMapDataUrl ?? null,
+    normalMapName: texture.normalMapName ?? null,
   }
 }
 
@@ -2209,6 +2218,8 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
         textureDataUrl: demResult.textureDataUrl,
         textureName: demResult.textureName,
         textureAssetId: null as string | null,
+        normalMapDataUrl: demResult.normalMapDataUrl ?? null,
+        normalMapName: demResult.normalMapName ?? null,
       }
       const groundTextureResult = await sceneStore.setGroundTextureFromDataUrl({
         dataUrl: demGroundTexture.textureDataUrl,
@@ -2217,6 +2228,53 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
       demGroundTexture.textureAssetId = groundTextureResult.assetId
       demGroundTexture.textureDataUrl = groundTextureResult.textureUrl
       groundDefinition = preserveGroundTextureFields(groundDefinition as GroundRuntimeDynamicMesh, demGroundTexture)
+
+      // Save normalmap as a scene asset and assign both texture + normalmap to the sculpted chunk
+      // material slot (materials[1]) so users can fine-tune them manually in the inspector.
+      const normalMapResult = await sceneStore.setGroundNormalMapFromDataUrl({
+        dataUrl: demGroundTexture.normalMapDataUrl,
+        name: demGroundTexture.normalMapName,
+      })
+
+      // Ensure the ground node has at least 2 material slots; use the second (index 1) for sculpted chunks.
+      const groundNodeRef = sceneStore.groundNode
+      if (groundNodeRef) {
+        while ((groundNodeRef.materials?.length ?? 0) < 2) {
+          sceneStore.addNodeMaterial(groundNodeRef.id)
+        }
+        const sculptedSlot = groundNodeRef.materials?.[1] ?? null
+        if (sculptedSlot) {
+          sceneStore.updateNodeMaterialProps(groundNodeRef.id, sculptedSlot.id, {
+            name: '\u96d5\u523b\u5730\u5757\u6750\u8d28',
+            textures: {
+              ...(sculptedSlot.textures ?? {}),
+              ...(groundTextureResult.assetId
+                ? {
+                    albedo: {
+                      assetId: groundTextureResult.assetId,
+                      name: demGroundTexture.textureName ?? 'terrain-base-texture',
+                      settings: createTextureSettings(),
+                    },
+                  }
+                : {}),
+              ...(normalMapResult.assetId
+                ? {
+                    normal: {
+                      assetId: normalMapResult.assetId,
+                      name: demGroundTexture.normalMapName ?? 'terrain-normal-map',
+                      settings: createTextureSettings(),
+                    },
+                  }
+                : {}),
+            },
+          })
+        }
+        // Ensure flat chunk slot has a name too.
+        const flatSlot = groundNodeRef.materials?.[0] ?? null
+        if (flatSlot && !flatSlot.name) {
+          sceneStore.updateNodeMaterialProps(groundNodeRef.id, flatSlot.id, { name: '\u5e73\u5766\u5730\u5757\u6750\u8d28' })
+        }
+      }
 
       if (activeSceneId && terrainDataset) {
         emitDetailedProgress(options, 'Syncing terrain dataset…', 28, {
@@ -2280,6 +2338,12 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
             : null),
           textureName: (sceneStore.groundNode?.dynamicMesh?.type === 'Ground'
             ? sceneStore.groundNode.dynamicMesh.textureName ?? null
+            : null),
+          normalMapDataUrl: (sceneStore.groundNode?.dynamicMesh?.type === 'Ground'
+            ? sceneStore.groundNode.dynamicMesh.normalMapDataUrl ?? null
+            : null),
+          normalMapName: (sceneStore.groundNode?.dynamicMesh?.type === 'Ground'
+            ? sceneStore.groundNode.dynamicMesh.normalMapName ?? null
             : null),
         })
         groundDefinition = preservedNext

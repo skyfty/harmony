@@ -106,6 +106,7 @@ import {
 	resolveGroundRuntimeChunkCells,
 	setInfiniteGroundHiddenChunkKeys,
 	setGroundMaterial,
+	setGroundSculptedMaterial,
 	syncGroundChunkLoadingMode,
 	sampleGroundHeight,
 } from '@schema/groundMesh'
@@ -10873,16 +10874,36 @@ function refreshPreviewGroundRuntimeMaterials(targetObject: THREE.Object3D, node
 	if (!material) {
 		return
 	}
-	const config = Array.isArray(node.materials) && node.materials.length > 0
+	// materials[0] = flat chunk material
+	const flatConfig = Array.isArray(node.materials) && node.materials.length > 0
 		? node.materials[0] ?? null
 		: null
-	if (config) {
-		applyMaterialConfigToMaterial(material, config, materialOverrideOptions)
+	if (flatConfig) {
+		applyMaterialConfigToMaterial(material, flatConfig, materialOverrideOptions)
 	} else {
 		restoreMaterialFromBaseline(material)
 	}
 	setGroundMaterial(groundObject, material)
-	applyGroundTextureToGroundObject(groundObject, groundDefinition)
+
+	// materials[1] = sculpted chunk material
+	const sculptedConfig = Array.isArray(node.materials) && node.materials.length > 1
+		? node.materials[1] ?? null
+		: null
+	if (sculptedConfig) {
+		let sculptedMaterial = (groundObject.userData as Record<string, unknown>).groundSculptedMaterial as THREE.Material | undefined
+		if (!sculptedMaterial || sculptedMaterial === material) {
+			sculptedMaterial = material.clone()
+		}
+		applyMaterialConfigToMaterial(sculptedMaterial, sculptedConfig, materialOverrideOptions)
+		setGroundSculptedMaterial(groundObject, sculptedMaterial)
+		const hasUserTexture = !!(sculptedConfig.textures?.albedo?.assetId)
+		if (!hasUserTexture) {
+			applyGroundTextureToGroundObject(groundObject, groundDefinition)
+		}
+	} else {
+		setGroundSculptedMaterial(groundObject, null)
+		applyGroundTextureToGroundObject(groundObject, groundDefinition)
+	}
 }
 
 function disposeMaterialTextureCache() {

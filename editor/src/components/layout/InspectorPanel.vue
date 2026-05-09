@@ -129,6 +129,7 @@ const isNominateNode = computed(() =>
   Boolean(selectedNode.value?.components?.[NOMINATE_COMPONENT_TYPE]),
 )
 const isRegionNode = computed(() => selectedNode.value?.dynamicMesh?.type === 'Region')
+const isGroundNode = computed(() => selectedNode.value?.dynamicMesh?.type === 'Ground')
 const showMaterialPanel = computed(
   () =>
     !isLightNode.value &&
@@ -136,7 +137,7 @@ const showMaterialPanel = computed(
     !isMultiuserNode.value &&
     !isNominateNode.value &&
     !isRegionNode.value &&
-    (selectedNode.value?.materials?.length ?? 0) > 0,
+    (isGroundNode.value || (selectedNode.value?.materials?.length ?? 0) > 0),
 )
 const showTransformPanel = computed(() => {
   return selectedNode.value?.id !== GROUND_NODE_ID && 

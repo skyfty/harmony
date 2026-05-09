@@ -235,6 +235,7 @@ import {
   resolveGroundRuntimeChunkCells,
   setInfiniteGroundHiddenChunkKeys,
   setGroundMaterial,
+  setGroundSculptedMaterial,
   setGroundFlatChunkInstanceMatrixBuilder,
   setGroundRuntimeOptimizedChunksEnabled,
   syncGroundChunkLoadingMode,
@@ -1459,17 +1460,39 @@ function refreshGroundRuntimeMaterials(node: SceneNode, targetObject: THREE.Obje
   if (!material) {
     return
   }
-  const config = Array.isArray(node.materials) && node.materials.length > 0
+  // materials[0] = flat chunk material
+  const flatConfig = Array.isArray(node.materials) && node.materials.length > 0
     ? node.materials[0] ?? null
     : null
-  if (config) {
-    applyMaterialConfigToMaterial(material, config, materialOverrideOptions)
+  if (flatConfig) {
+    applyMaterialConfigToMaterial(material, flatConfig, materialOverrideOptions)
   } else {
     restoreMaterialFromBaseline(material)
   }
   setGroundMaterial(groundObject, material)
-  // Ground base textures are runtime-authored and should win over node albedo overrides.
-  applyGroundTextureToGroundObject(groundObject, groundDefinition)
+
+  // materials[1] = sculpted chunk material
+  const sculptedConfig = Array.isArray(node.materials) && node.materials.length > 1
+    ? node.materials[1] ?? null
+    : null
+  if (sculptedConfig) {
+    // Clone the shared material to get a separate THREE material for sculpted chunks.
+    let sculptedMaterial = (groundObject.userData as Record<string, unknown>).groundSculptedMaterial as THREE.Material | undefined
+    if (!sculptedMaterial || sculptedMaterial === material) {
+      sculptedMaterial = material.clone()
+    }
+    applyMaterialConfigToMaterial(sculptedMaterial, sculptedConfig, materialOverrideOptions)
+    setGroundSculptedMaterial(groundObject, sculptedMaterial)
+    // When user has assigned an albedo texture to sculpted material, skip runtime-authored texture.
+    const hasUserTexture = !!(sculptedConfig.textures?.albedo?.assetId)
+    if (!hasUserTexture) {
+      applyGroundTextureToGroundObject(groundObject, groundDefinition)
+    }
+  } else {
+    setGroundSculptedMaterial(groundObject, null)
+    // Ground base textures are runtime-authored and should win over node albedo overrides.
+    applyGroundTextureToGroundObject(groundObject, groundDefinition)
+  }
 }
 
 function applyNodeMaterialOverrides(targetObject: THREE.Object3D, node: SceneNode): void {

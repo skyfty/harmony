@@ -3,8 +3,10 @@ import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import { computeBlobHash } from '@/utils/blob'
 
-const DEFAULT_BAKED_GROUND_MAX_RESOLUTION = 2048
+const DEFAULT_BAKED_GROUND_MAX_RESOLUTION = 4096
+const MAX_BAKED_GROUND_RESOLUTION_CAP = 12288
 const MIN_BAKED_GROUND_RESOLUTION = 256
+const TARGET_BAKED_PIXELS_PER_METER = 4
 
 type Canvas2DContext = OffscreenCanvasRenderingContext2D | CanvasRenderingContext2D
 type CanvasLike = OffscreenCanvas | HTMLCanvasElement
@@ -35,6 +37,16 @@ function normalizeFinite(value: number, fallback = 0): number {
 
 function normalizeDimension(value: number): number {
   return Math.max(1, normalizeFinite(value, 1))
+}
+
+function resolveAdaptiveBakedMaxResolution(definition: GroundDynamicMesh, maxResolution: number): number {
+  const bounds = resolveGroundWorldBounds(definition)
+  const groundWidth = normalizeDimension(bounds.maxX - bounds.minX)
+  const groundDepth = normalizeDimension(bounds.maxZ - bounds.minZ)
+  const maxDimensionMeters = Math.max(groundWidth, groundDepth, 1)
+  const qualityTarget = Math.round(maxDimensionMeters * TARGET_BAKED_PIXELS_PER_METER)
+  const requestedMax = Math.max(MIN_BAKED_GROUND_RESOLUTION, Math.round(maxResolution))
+  return Math.min(MAX_BAKED_GROUND_RESOLUTION_CAP, Math.max(requestedMax, qualityTarget))
 }
 
 
@@ -219,6 +231,8 @@ async function renderBaseTexture(
   width: number,
   height: number,
 ): Promise<void> {
+  context.imageSmoothingEnabled = true
+  context.imageSmoothingQuality = 'high'
   context.clearRect(0, 0, width, height)
   context.save()
   context.globalCompositeOperation = 'source-over'
@@ -252,6 +266,8 @@ async function renderGroundSurfaceChunks(
   width: number,
   height: number,
 ): Promise<boolean> {
+  context.imageSmoothingEnabled = true
+  context.imageSmoothingQuality = 'high'
   const chunkEntries = Object.entries(definition.groundSurfaceChunks ?? {})
     .filter(([, chunkRef]) => typeof chunkRef?.textureAssetId === 'string' && chunkRef.textureAssetId.trim().length)
   if (!chunkEntries.length) {
@@ -261,6 +277,7 @@ async function renderGroundSurfaceChunks(
   const groundWidth = Math.max(1e-6, normalizeDimension(groundBounds.maxX - groundBounds.minX))
   const groundDepth = Math.max(1e-6, normalizeDimension(groundBounds.maxZ - groundBounds.minZ))
   let drewAny = false
+  const seamGutterPixels = Math.max(1, Math.round(Math.max(width, height) / 2048))
 
   for (const [chunkKey, chunkRef] of chunkEntries) {
     const parts = parseTerrainPaintChunkKey(chunkKey)
@@ -287,7 +304,13 @@ async function renderGroundSurfaceChunks(
     const drawY = Math.floor(((bounds.minZ - groundBounds.minZ) / groundDepth) * height)
     const drawWidth = Math.max(1, Math.ceil((bounds.width / groundWidth) * width))
     const drawHeight = Math.max(1, Math.ceil((bounds.depth / groundDepth) * height))
-    context.drawImage(loaded.source, drawX, drawY, drawWidth, drawHeight)
+    context.drawImage(
+      loaded.source,
+      drawX - seamGutterPixels,
+      drawY - seamGutterPixels,
+      drawWidth + seamGutterPixels * 2,
+      drawHeight + seamGutterPixels * 2,
+    )
     drewAny = true
   }
 
@@ -325,8 +348,9 @@ export async function bakeGroundSurfaceTexture(
   if (!hasBakeContent) {
     return null
   }
-  const maxResolution = options.maxResolution ?? DEFAULT_BAKED_GROUND_MAX_RESOLUTION
-  const size = computeBakedTextureSize(definition, maxResolution)
+  const requestedMaxResolution = options.maxResolution ?? DEFAULT_BAKED_GROUND_MAX_RESOLUTION
+  const adaptiveMaxResolution = resolveAdaptiveBakedMaxResolution(definition, requestedMaxResolution)
+  const size = computeBakedTextureSize(definition, adaptiveMaxResolution)
   const composition = createCompositionCanvas(size.width, size.height)
   if (!composition) {
     return null
