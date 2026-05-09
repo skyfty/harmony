@@ -9,6 +9,7 @@ type SplitPoint = { t: number; point: THREE.Vector2 }
 
 const ROAD_INTERSECTION_EPS = 1e-6
 const ROAD_VERTEX_MERGE_EPS2 = 1e-10
+const ROAD_CONNECT_LAYER_MAX_DELTA_Y = 0.75
 
 export function sanitizeRoadDefinition(definition: RoadDynamicMesh): {
   vertices: Array<[number, number]>
@@ -188,10 +189,24 @@ function computePolylineRoadIntersectionSplits(
   roadVertices2: THREE.Vector2[],
   roadSegments: RoadSegment[],
 ): { roadSplits: Map<number, SplitPoint[]>; polySplits: Map<number, SplitPoint[]> } {
+  const hits = computePolylineRoadIntersectionHits(poly, roadVertices2, roadSegments)
   const roadSplits = new Map<number, SplitPoint[]>()
   const polySplits = new Map<number, SplitPoint[]>()
+  for (const hit of hits) {
+    pushSplitPoint(polySplits, hit.polySegmentIndex, { t: hit.t, point: hit.point })
+    pushSplitPoint(roadSplits, hit.roadSegmentIndex, { t: hit.u, point: hit.point })
+  }
+  return { roadSplits, polySplits }
+}
+
+function computePolylineRoadIntersectionHits(
+  poly: THREE.Vector2[],
+  roadVertices2: THREE.Vector2[],
+  roadSegments: RoadSegment[],
+): Array<{ polySegmentIndex: number; roadSegmentIndex: number; t: number; u: number; point: THREE.Vector2 }> {
+  const hits: Array<{ polySegmentIndex: number; roadSegmentIndex: number; t: number; u: number; point: THREE.Vector2 }> = []
   if (poly.length < 2) {
-    return { roadSplits, polySplits }
+    return hits
   }
   for (let i = 0; i < poly.length - 1; i += 1) {
     const a = poly[i]!
@@ -204,11 +219,40 @@ function computePolylineRoadIntersectionSplits(
       if (!hit) {
         continue
       }
-      pushSplitPoint(polySplits, i, { t: hit.t, point: hit.point })
-      pushSplitPoint(roadSplits, j, { t: hit.u, point: hit.point })
+      hits.push({
+        polySegmentIndex: i,
+        roadSegmentIndex: j,
+        t: hit.t,
+        u: hit.u,
+        point: hit.point,
+      })
     }
   }
-  return { roadSplits, polySplits }
+  return hits
+}
+
+function dedupeWorldPolylineXZ(worldPoints: THREE.Vector3[]): THREE.Vector3[] {
+  const out: THREE.Vector3[] = []
+  for (const p of worldPoints) {
+    const next = new THREE.Vector3(p.x, p.y, p.z)
+    const prev = out[out.length - 1]
+    if (!prev) {
+      out.push(next)
+      continue
+    }
+    const dx = prev.x - next.x
+    const dz = prev.z - next.z
+    if (dx * dx + dz * dz <= ROAD_VERTEX_MERGE_EPS2) {
+      continue
+    }
+    out.push(next)
+  }
+  return out
+}
+
+function sampleSegmentY(a: THREE.Vector3, b: THREE.Vector3, t: number): number {
+  const tt = Math.max(0, Math.min(1, Number.isFinite(t) ? t : 0))
+  return a.y + (b.y - a.y) * tt
 }
 
 function addPolylineSegmentsToRoad(
@@ -356,18 +400,36 @@ export function findConnectableRoadNodeId(options: {
     return null
   }
 
+  const worldPolyline = dedupeWorldPolylineXZ(options.worldPoints)
+  if (worldPolyline.length < 2) {
+    return null
+  }
+
   const snapVertices = options.collectRoadSnapVertices()
-  const firstSnap = options.snapRoadPointToVertices(options.worldPoints[0]!, snapVertices, options.vertexSnapDistance)
+  const firstSnap = options.snapRoadPointToVertices(worldPolyline[0]!, snapVertices, options.vertexSnapDistance)
   if (firstSnap.nodeId) {
     return firstSnap.nodeId
   }
   const lastSnap = options.snapRoadPointToVertices(
-    options.worldPoints[options.worldPoints.length - 1]!,
+    worldPolyline[worldPolyline.length - 1]!,
     snapVertices,
     options.vertexSnapDistance,
   )
   if (lastSnap.nodeId) {
     return lastSnap.nodeId
+  }
+
+  const roadVertexYByNode = new Map<string, Map<number, number>>()
+  for (const snap of snapVertices) {
+    if (!Number.isFinite(snap.position.y)) {
+      continue
+    }
+    let perNode = roadVertexYByNode.get(snap.nodeId)
+    if (!perNode) {
+      perNode = new Map<number, number>()
+      roadVertexYByNode.set(snap.nodeId, perNode)
+    }
+    perNode.set(snap.vertexIndex, snap.position.y)
   }
 
   const candidates: Array<{ nodeId: string; runtime: THREE.Object3D; vertices: THREE.Vector2[]; segments: RoadSegment[] }> = []
@@ -389,12 +451,39 @@ export function findConnectableRoadNodeId(options: {
   visit(options.nodes)
 
   for (const candidate of candidates) {
-    const polyLocal = buildLocalPolyline(candidate.runtime, options.worldPoints)
+    const polyLocal = buildLocalPolyline(candidate.runtime, worldPolyline)
     if (polyLocal.length < 2) {
       continue
     }
-    const { roadSplits } = computePolylineRoadIntersectionSplits(polyLocal, candidate.vertices, candidate.segments)
-    if (roadSplits.size) {
+    const hits = computePolylineRoadIntersectionHits(polyLocal, candidate.vertices, candidate.segments)
+    const candidateVertexY = roadVertexYByNode.get(candidate.nodeId)
+    if (!candidateVertexY) {
+      continue
+    }
+
+    let hasSameLayerIntersection = false
+    for (const hit of hits) {
+      const polyA = worldPolyline[hit.polySegmentIndex]
+      const polyB = worldPolyline[hit.polySegmentIndex + 1]
+      const roadSegment = candidate.segments[hit.roadSegmentIndex]
+      if (!polyA || !polyB || !roadSegment) {
+        continue
+      }
+      const roadYA = candidateVertexY.get(roadSegment.a)
+      const roadYB = candidateVertexY.get(roadSegment.b)
+      if (!Number.isFinite(roadYA) || !Number.isFinite(roadYB)) {
+        continue
+      }
+
+      const polyY = sampleSegmentY(polyA, polyB, hit.t)
+      const roadY = (roadYA as number) + ((roadYB as number) - (roadYA as number)) * hit.u
+      if (Math.abs(polyY - roadY) <= ROAD_CONNECT_LAYER_MAX_DELTA_Y) {
+        hasSameLayerIntersection = true
+        break
+      }
+    }
+
+    if (hasSameLayerIntersection) {
       return candidate.nodeId
     }
   }

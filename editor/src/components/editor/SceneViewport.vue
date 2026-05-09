@@ -8182,10 +8182,10 @@ const roadBuildTool = createRoadBuildTool({
   pointerInteraction,
   rootGroup,
   heightSampler: (x: number, z: number) => {
-    const ground = resolveGroundDynamicMeshDefinition()
-    return ground ? sampleGroundHeight(ground, x, z) : 0
+    const sampledY = sampleRoadBuildWorldYAtXZ(x, z)
+    return typeof sampledY === 'number' && Number.isFinite(sampledY) ? sampledY : 0
   },
-  projectPointToTerrain: (point) => projectPointToBuildTerrain(point),
+  projectPointToTerrain: (point) => projectPointToRoadBuildSurface(point),
   getScene: () => scene,
   defaultWidth: ROAD_DEFAULT_WIDTH,
   isAltOverrideActive: () => isAltOverrideActive,
@@ -19039,7 +19039,7 @@ function collectRoadSnapVertices(): RoadSnapVertex[] {
           const pos = runtime
             ? runtime.localToWorld(new THREE.Vector3(x, 0, z))
             : new THREE.Vector3(originX + x, originY, originZ + z)
-          const resolvedPosition = snapToTerrain ? projectPointToBuildTerrain(pos) : pos
+          const resolvedPosition = snapToTerrain ? projectPointToRoadBuildSurface(pos) : pos
           vertices.push({
             position: resolvedPosition,
             nodeId: node.id,
@@ -19061,21 +19061,39 @@ function snapRoadPointToVertices(
   vertices: RoadSnapVertex[],
   vertexSnapDistance = ROAD_VERTEX_SNAP_DISTANCE,
 ): { position: THREE.Vector3; nodeId: string | null; vertexIndex: number | null } {
+  // 寻找离给定点最近的路网顶点（只在 XZ 平面上比较）
+  // 参数说明：
+  // - point: 要捕捉/对齐的三维点（使用 x/z 分量进行距离计算）
+  // - vertices: 候选的路网顶点数组，每个顶点包含 position（THREE.Vector3）、nodeId、vertexIndex
+  // - vertexSnapDistance: 捕捉阈值，默认值为常量 ROAD_VERTEX_SNAP_DISTANCE
+  // 返回值：如果找到一个在阈值内的顶点，返回该顶点的位置（克隆），以及对应的 nodeId 和 vertexIndex；
+  // 否则返回原始点以及 null 的 id/index
+
+  // 使用平方距离比较以避免不必要的开方运算，提高性能
   let best: RoadSnapVertex | null = null
   let bestDist2 = Number.POSITIVE_INFINITY
+
+  // 遍历所有候选顶点，寻找最小的二维（XZ）平方距离
   for (let i = 0; i < vertices.length; i += 1) {
     const candidate = vertices[i]!
+    // 仅比较 X 和 Z 分量，忽略 Y（高度）差异，因为路面捕捉一般基于平面投影
     const dx = candidate.position.x - point.x
     const dz = candidate.position.z - point.z
     const dist2 = dx * dx + dz * dz
+    // 如果当前候选者更接近，则更新最佳候选
     if (dist2 < bestDist2) {
       bestDist2 = dist2
       best = candidate
     }
   }
+
+  // 如果找到的最近点在允许的捕捉距离内，则返回该点的克隆位置以及关联信息
+  // 注意：比较使用平方距离以避免开根号
   if (best && bestDist2 <= vertexSnapDistance * vertexSnapDistance) {
     return { position: best.position.clone(), nodeId: best.nodeId, vertexIndex: best.vertexIndex }
   }
+
+  // 否则不进行捕捉，返回原始点以及空的 id/index
   return { position: point, nodeId: null, vertexIndex: null }
 }
 
@@ -19320,6 +19338,10 @@ function resolveGroundNodeIdForPlacement(): string | null {
 const heightfieldRayMatrixHelper = new THREE.Matrix4()
 const heightfieldRayHelper = new THREE.Ray()
 const heightfieldRayPointHelper = new THREE.Vector3()
+const roadSurfaceProbeRaycaster = new THREE.Raycaster()
+const roadSurfaceProbeOriginY = 10000
+const roadSurfaceProbeMaxDistance = 20000
+const roadSurfaceProbeWorldPointHelper = new THREE.Vector3()
 
 function intersectRayWithGroundHeightfieldWorld(ray: THREE.Ray): THREE.Vector3 | null {
   const groundDefinition = resolveGroundDynamicMeshDefinition()
@@ -19466,6 +19488,82 @@ function sampleHeightfieldWorldYAt(worldPosition: THREE.Vector3): number | null 
   localPoint.y = height
   groundObject.localToWorld(localPoint)
   return localPoint.y
+}
+
+function sampleVisibleSurfaceWorldYAt(worldPosition: THREE.Vector3): number | null {
+  if (!scene) {
+    return null
+  }
+
+  roadSurfaceProbeRaycaster.near = 0
+  roadSurfaceProbeRaycaster.far = roadSurfaceProbeMaxDistance
+  roadSurfaceProbeRaycaster.ray.origin.set(worldPosition.x, roadSurfaceProbeOriginY, worldPosition.z)
+  roadSurfaceProbeRaycaster.ray.direction.set(0, -1, 0)
+
+  const intersections = collectSceneIntersections({
+    raycaster: roadSurfaceProbeRaycaster,
+    recursive: true,
+    maxDistance: roadSurfaceProbeMaxDistance,
+  })
+
+  for (const intersection of intersections) {
+    if (!intersection?.point) {
+      continue
+    }
+    if (isEditorOnlyIntersectionObject(intersection.object as THREE.Object3D)) {
+      continue
+    }
+
+    const objectUserData = (intersection.object as THREE.Object3D | null)?.userData as Record<string, unknown> | undefined
+    if (objectUserData?.isRoadPreview === true) {
+      continue
+    }
+
+    const nodeId = resolveNodeIdFromIntersection(intersection)
+    if (!nodeId) {
+      continue
+    }
+    if (!sceneStore.isNodeVisible(nodeId)) {
+      continue
+    }
+
+    const node = findSceneNode(sceneStore.nodes, nodeId)
+    if (node?.dynamicMesh?.type === 'Road') {
+      continue
+    }
+
+    // Include selection-locked nodes in sampling so roads can follow bridge decks.
+    const object = objectMap.get(nodeId) ?? null
+    if (!object || !isObjectWorldVisible(object)) {
+      continue
+    }
+
+    return intersection.point.y
+  }
+
+  return null
+}
+
+function sampleRoadBuildWorldYAt(worldPosition: THREE.Vector3): number | null {
+  const surfaceY = sampleVisibleSurfaceWorldYAt(worldPosition)
+  if (typeof surfaceY === 'number' && Number.isFinite(surfaceY)) {
+    return surfaceY
+  }
+  return sampleHeightfieldWorldYAt(worldPosition)
+}
+
+function sampleRoadBuildWorldYAtXZ(x: number, z: number): number | null {
+  roadSurfaceProbeWorldPointHelper.set(x, 0, z)
+  return sampleRoadBuildWorldYAt(roadSurfaceProbeWorldPointHelper)
+}
+
+function projectPointToRoadBuildSurface(worldPosition: THREE.Vector3): THREE.Vector3 {
+  const projected = worldPosition.clone()
+  const height = sampleRoadBuildWorldYAt(projected)
+  if (typeof height === 'number' && Number.isFinite(height)) {
+    projected.y = height
+  }
+  return projected
 }
 
 function projectPointToBuildTerrain(worldPosition: THREE.Vector3): THREE.Vector3 {
