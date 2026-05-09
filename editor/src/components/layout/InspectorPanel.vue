@@ -119,7 +119,7 @@ const placementIcon = computed(() => (floating.value ? 'mdi-dock-right' : 'mdi-a
 const placementTitle = computed(() => (floating.value ? 'Dock to right' : 'Float panel'))
 
 const isLightNode = computed(() => selectedNode.value?.nodeType === 'Light')
-const isGroundNode = computed(() => selectedNode.value?.id === GROUND_NODE_ID)
+const isGroundRoot = computed(() => selectedNode.value?.id === GROUND_NODE_ID)
 const isEnvironmentNode = computed(() => selectedNode.value?.id === ENVIRONMENT_NODE_ID)
 const isMultiuserNode = computed(() => selectedNode.value?.id === MULTIUSER_NODE_ID)
 const isProtagonistNode = computed(() =>
@@ -589,7 +589,7 @@ watch(
             @close-details="handleMaterialPanelRequestCloseDetails"
           />
           <RoadPanel v-if="showRoadPanel" />
-          <GroundPanel v-if="isGroundNode" />
+          <GroundPanel v-if="isGroundRoot" />
           <EnvironmentPanel v-if="isEnvironmentNode" />
 
           <div v-if="nodeComponents.length" class="component-list">
