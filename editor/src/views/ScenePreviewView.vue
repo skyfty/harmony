@@ -2213,7 +2213,7 @@ function syncPreviewInfiniteGroundChunkCollisionBodies(
 		: null
 	if (!groundDefinition) {
 		previewInfiniteGroundChunkColliderRuntime.clear()
-		syncPreviewGroundCollisionDebugSources(groundObject)
+		// syncPreviewGroundCollisionDebugSources(groundObject)
 		return
 	}
 	previewInfiniteGroundChunkColliderRuntime.sync({
@@ -2233,7 +2233,7 @@ function syncPreviewInfiniteGroundChunkCollisionBodies(
 			return await useScenesStore().loadGroundChunkData(sceneId, record.key)
 		},
 	})
-	syncPreviewGroundCollisionDebugSources(groundObject)
+	// syncPreviewGroundCollisionDebugSources(groundObject)
 }
 
 function resolveGroundViewportWorldSize(): { width: number; depth: number } | null {

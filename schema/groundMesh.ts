@@ -185,7 +185,7 @@ type GroundDefinitionStructureSignatureCacheEntry = {
   signature: string
 }
 
-type GroundHeightSamplingContext = {
+export type GroundHeightSamplingContext = {
   bounds: ReturnType<typeof resolveGroundWorldBounds>
   cellSize: number
   rows: number
@@ -291,6 +291,19 @@ function createGroundHeightSamplingContext(definition: GroundRuntimeDynamicMesh)
     columns: gridSize.columns,
     terrainSampler: resolveRuntimeTerrainHeightSampler(definition),
   }
+}
+
+/**
+ * Pre-builds a GroundHeightSamplingContext for the given definition, suitable for
+ * reuse across many sampleGroundHeightWithContext calls in a tight loop (e.g. scatter
+ * preview placement). Avoids re-reading Vue reactive properties on every sample.
+ */
+export function prepareGroundHeightSamplingContext(definition: GroundDynamicMesh): {
+  runtimeDefinition: GroundRuntimeDynamicMesh
+  context: GroundHeightSamplingContext
+} {
+  const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
+  return { runtimeDefinition, context: createGroundHeightSamplingContext(runtimeDefinition) }
 }
 
 function resolveGroundGridWorldBounds(
@@ -1948,6 +1961,42 @@ export function resolveGroundEffectiveHeightAtVertex(definition: GroundDynamicMe
   return planning + (manual - base)
 }
 
+/**
+ * Fast-path vertex height lookup using a pre-computed sampling context.
+ * Avoids redundant calls to ensureGroundRuntimeDefinition, resolveGroundWorkingGridSize,
+ * resolveGroundWorldXForColumn/ZForRow on every vertex — critical in scatter preview hot loops.
+ */
+function resolveGroundEffectiveHeightAtVertexWithContext(
+  runtimeDefinition: GroundRuntimeDynamicMesh,
+  row: number,
+  column: number,
+  columns: number,
+  boundsMinX: number,
+  boundsMinZ: number,
+  cellSize: number,
+  terrainSampler: GroundTerrainHeightSampler | null,
+): number {
+  const worldX = boundsMinX + column * cellSize
+  const worldZ = boundsMinZ + row * cellSize
+  const localEditSample = sampleGroundLocalEditHeightAtWorldFromRuntime(runtimeDefinition, worldX, worldZ)
+  if (Number.isFinite(localEditSample)) {
+    return localEditSample as number
+  }
+  if (terrainSampler) {
+    const sampled = terrainSampler.sampleHeightAtWorld(worldX, worldZ)
+    if (Number.isFinite(sampled)) {
+      return sampled as number
+    }
+  }
+  const base = computeGroundBaseHeightAtVertex(runtimeDefinition, row, column)
+  const heightIndex = getGroundVertexIndex(columns, row, column)
+  const manualRaw = runtimeDefinition.manualHeightMap[heightIndex]
+  const manual = typeof manualRaw === 'number' && Number.isFinite(manualRaw) ? manualRaw : base
+  const planningRaw = runtimeDefinition.planningHeightMap[heightIndex]
+  const planning = typeof planningRaw === 'number' && Number.isFinite(planningRaw) ? planningRaw : base
+  return planning + (manual - base)
+}
+
 function sampleGroundHeightOutsideWorkingBounds(
   definition: GroundRuntimeDynamicMesh,
   x: number,
@@ -3347,17 +3396,20 @@ export function sampleGroundHeight(definition: GroundDynamicMesh, x: number, z: 
     ? runtimeDefinition.cellSize
     : 1
   const bounds = resolveGroundWorldBoundsCached(runtimeDefinition)
+  const terrainSampler = resolveRuntimeTerrainHeightSampler(runtimeDefinition)
   if (x < bounds.minX || x > bounds.maxX || z < bounds.minZ || z > bounds.maxZ) {
     return sampleGroundHeightOutsideWorkingBounds(
       runtimeDefinition,
       x,
       z,
-      resolveRuntimeTerrainHeightSampler(runtimeDefinition),
+      terrainSampler,
     )
   }
 
-  const localColumnFloat = clampInclusive((x - bounds.minX) / cellSize, 0, columns)
-  const localRowFloat = clampInclusive((z - bounds.minZ) / cellSize, 0, rows)
+  const boundsMinX = bounds.minX
+  const boundsMinZ = bounds.minZ
+  const localColumnFloat = clampInclusive((x - boundsMinX) / cellSize, 0, columns)
+  const localRowFloat = clampInclusive((z - boundsMinZ) / cellSize, 0, rows)
 
   const column0 = clampVertexIndex(Math.floor(localColumnFloat), columns)
   const row0 = clampVertexIndex(Math.floor(localRowFloat), rows)
@@ -3367,11 +3419,49 @@ export function sampleGroundHeight(definition: GroundDynamicMesh, x: number, z: 
   const tx = clampInclusive(localColumnFloat - column0, 0, 1)
   const tz = clampInclusive(localRowFloat - row0, 0, 1)
 
-  const h00 = resolveGroundEffectiveHeightAtVertex(runtimeDefinition, row0, column0)
-  const h10 = resolveGroundEffectiveHeightAtVertex(runtimeDefinition, row0, column1)
-  const h01 = resolveGroundEffectiveHeightAtVertex(runtimeDefinition, row1, column0)
-  const h11 = resolveGroundEffectiveHeightAtVertex(runtimeDefinition, row1, column1)
+  const h00 = resolveGroundEffectiveHeightAtVertexWithContext(runtimeDefinition, row0, column0, columns, boundsMinX, boundsMinZ, cellSize, terrainSampler)
+  const h10 = resolveGroundEffectiveHeightAtVertexWithContext(runtimeDefinition, row0, column1, columns, boundsMinX, boundsMinZ, cellSize, terrainSampler)
+  const h01 = resolveGroundEffectiveHeightAtVertexWithContext(runtimeDefinition, row1, column0, columns, boundsMinX, boundsMinZ, cellSize, terrainSampler)
+  const h11 = resolveGroundEffectiveHeightAtVertexWithContext(runtimeDefinition, row1, column1, columns, boundsMinX, boundsMinZ, cellSize, terrainSampler)
 
+  const hx0 = h00 + (h10 - h00) * tx
+  const hx1 = h01 + (h11 - h01) * tx
+  return hx0 + (hx1 - hx0) * tz
+}
+
+/**
+ * Samples the ground height at (x, z) using a pre-built GroundHeightSamplingContext.
+ * Use prepareGroundHeightSamplingContext once before a scatter/sampling loop to avoid
+ * re-reading Vue reactive properties on every call.
+ */
+export function sampleGroundHeightWithContext(
+  runtimeDefinition: GroundRuntimeDynamicMesh,
+  context: GroundHeightSamplingContext,
+  x: number,
+  z: number,
+): number {
+  const localEditSample = sampleGroundLocalEditHeightAtWorldFromRuntime(runtimeDefinition, x, z)
+  if (Number.isFinite(localEditSample)) {
+    return localEditSample as number
+  }
+  const { bounds, columns, rows, cellSize, terrainSampler } = context
+  if (x < bounds.minX || x > bounds.maxX || z < bounds.minZ || z > bounds.maxZ) {
+    return sampleGroundHeightOutsideWorkingBounds(runtimeDefinition, x, z, terrainSampler)
+  }
+  const boundsMinX = bounds.minX
+  const boundsMinZ = bounds.minZ
+  const localColumnFloat = clampInclusive((x - boundsMinX) / cellSize, 0, columns)
+  const localRowFloat = clampInclusive((z - boundsMinZ) / cellSize, 0, rows)
+  const column0 = clampVertexIndex(Math.floor(localColumnFloat), columns)
+  const row0 = clampVertexIndex(Math.floor(localRowFloat), rows)
+  const column1 = clampVertexIndex(column0 + 1, columns)
+  const row1 = clampVertexIndex(row0 + 1, rows)
+  const tx = clampInclusive(localColumnFloat - column0, 0, 1)
+  const tz = clampInclusive(localRowFloat - row0, 0, 1)
+  const h00 = resolveGroundEffectiveHeightAtVertexWithContext(runtimeDefinition, row0, column0, columns, boundsMinX, boundsMinZ, cellSize, terrainSampler)
+  const h10 = resolveGroundEffectiveHeightAtVertexWithContext(runtimeDefinition, row0, column1, columns, boundsMinX, boundsMinZ, cellSize, terrainSampler)
+  const h01 = resolveGroundEffectiveHeightAtVertexWithContext(runtimeDefinition, row1, column0, columns, boundsMinX, boundsMinZ, cellSize, terrainSampler)
+  const h11 = resolveGroundEffectiveHeightAtVertexWithContext(runtimeDefinition, row1, column1, columns, boundsMinX, boundsMinZ, cellSize, terrainSampler)
   const hx0 = h00 + (h10 - h00) * tx
   const hx1 = h01 + (h11 - h01) * tx
   return hx0 + (hx1 - hx0) * tz
@@ -3395,17 +3485,20 @@ function sampleGroundHeightWithVertexCache(
   const cellSize = Number.isFinite(runtimeDefinition.cellSize) && runtimeDefinition.cellSize > 1e-6
     ? runtimeDefinition.cellSize
     : 1
+  const terrainSampler = resolveRuntimeTerrainHeightSampler(runtimeDefinition)
   if (x < bounds.minX || x > bounds.maxX || z < bounds.minZ || z > bounds.maxZ) {
     return sampleGroundHeightOutsideWorkingBounds(
       runtimeDefinition,
       x,
       z,
-      resolveRuntimeTerrainHeightSampler(runtimeDefinition),
+      terrainSampler,
     )
   }
 
-  const localColumnFloat = clampInclusive((x - bounds.minX) / cellSize, 0, columns)
-  const localRowFloat = clampInclusive((z - bounds.minZ) / cellSize, 0, rows)
+  const boundsMinX = bounds.minX
+  const boundsMinZ = bounds.minZ
+  const localColumnFloat = clampInclusive((x - boundsMinX) / cellSize, 0, columns)
+  const localRowFloat = clampInclusive((z - boundsMinZ) / cellSize, 0, rows)
 
   const column0 = clampVertexIndex(Math.floor(localColumnFloat), columns)
   const row0 = clampVertexIndex(Math.floor(localRowFloat), rows)
@@ -3421,7 +3514,7 @@ function sampleGroundHeightWithVertexCache(
     if (typeof cachedHeight === 'number' && Number.isFinite(cachedHeight)) {
       return cachedHeight
     }
-    const height = resolveGroundEffectiveHeightAtVertex(runtimeDefinition, row, column)
+    const height = resolveGroundEffectiveHeightAtVertexWithContext(runtimeDefinition, row, column, columns, boundsMinX, boundsMinZ, cellSize, terrainSampler)
     vertexHeightCache.set(heightIndex, height)
     return height
   }

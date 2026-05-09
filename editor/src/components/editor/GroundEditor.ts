@@ -35,6 +35,9 @@ import {
 	sculptGround,
 	sampleGroundEffectiveHeightRegion,
 	sampleGroundHeight,
+	sampleGroundHeightWithContext,
+	prepareGroundHeightSamplingContext,
+	type GroundHeightSamplingContext,
 	resolveGroundEffectiveHeightAtVertex,
 	stitchGroundChunkNormals,
 	resolveGroundChunkCells,
@@ -726,6 +729,8 @@ type ScatterSessionState = {
 	polygonPreviewEnd: THREE.Vector3 | null
 	previewLayerId: string
 	previewInstances: TerrainScatterInstance[]
+	lastPreviewRefreshAt: number
+	lastPreviewRefreshPoint: THREE.Vector3 | null
 }
 
 type ScatterPreviewSample = {
@@ -874,6 +879,8 @@ const SCATTER_DOUBLE_CLICK_INTERVAL_MS = 320
 const SCATTER_DOUBLE_CLICK_DISTANCE_PX = 8
 const SCATTER_ERASE_COMMIT_INTERVAL_MS = 16
 const SCATTER_PERF_REPORT_INTERVAL_MS = 1000
+const SCATTER_PREVIEW_REFRESH_INTERVAL_MS = 33
+const SCATTER_PREVIEW_MIN_MOVE_METERS = 0.1
 const SCULPT_POLYGON_DOUBLE_CLICK_INTERVAL_MS = 320
 const SCULPT_POLYGON_DOUBLE_CLICK_DISTANCE_PX = 8
 
@@ -4791,6 +4798,22 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		return localPoint
 	}
 
+	function projectScatterPointToGroundWithContext(
+		runtimeDefinition: GroundRuntimeDynamicMesh,
+		context: GroundHeightSamplingContext,
+		groundMesh: THREE.Object3D,
+		worldPoint: THREE.Vector3,
+	): THREE.Vector3 | null {
+		const localPoint = worldPoint.clone()
+		groundMesh.worldToLocal(localPoint)
+		if (!Number.isFinite(localPoint.x) || !Number.isFinite(localPoint.z)) {
+			return null
+		}
+		localPoint.y = sampleGroundHeightWithContext(runtimeDefinition, context, localPoint.x, localPoint.z)
+		groundMesh.localToWorld(localPoint)
+		return localPoint
+	}
+
 	function resolveScatterPointFromEvent(
 		event: PointerEvent,
 		definition: GroundDynamicMesh,
@@ -5257,6 +5280,27 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		syncScatterSessionPreviewInstances(session, createScatterPreviewSamples(points), resolveScatterStampYaw(session))
 	}
 
+	function shouldRefreshScatterSessionPreview(session: ScatterSessionState, nextPoint: THREE.Vector3): boolean {
+		const now = nowMs()
+		const minDistance = Math.max(
+			SCATTER_PREVIEW_MIN_MOVE_METERS,
+			Math.min(Math.max(session.spacing * 0.2, SCATTER_PREVIEW_MIN_MOVE_METERS), 0.5),
+		)
+		const minDistanceSq = minDistance * minDistance
+		const lastPoint = session.lastPreviewRefreshPoint
+		const movedEnough = !lastPoint || lastPoint.distanceToSquared(nextPoint) >= minDistanceSq
+		if (!movedEnough && now - session.lastPreviewRefreshAt < SCATTER_PREVIEW_REFRESH_INTERVAL_MS) {
+			return false
+		}
+		session.lastPreviewRefreshAt = now
+		if (session.lastPreviewRefreshPoint) {
+			session.lastPreviewRefreshPoint.copy(nextPoint)
+		} else {
+			session.lastPreviewRefreshPoint = nextPoint.clone()
+		}
+		return true
+	}
+
 	function commitScatterSessionPreview(session: ScatterSessionState): number {
 		if (!session.layer || !session.previewInstances.length) {
 			return 0
@@ -5542,6 +5586,10 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		const stampNeighborhood = createScatterStampNeighborhood(spacing)
 		const existingBudget = { totalChecks: 0 }
 
+		// Pre-build sampling context once to avoid repeated Vue reactive property reads per point.
+		const { runtimeDefinition: scatterRuntimeDef, context: scatterHeightContext } = prepareGroundHeightSamplingContext(scatterSession.definition)
+		const scatterGroundMesh = scatterSession.groundMesh
+
 		// Polygon placement should be stochastic, not grid-aligned.
 		// Estimate target count from area/spacing and sample randomly inside bbox.
 		const estimatedCount = Math.max(1, Math.floor(polygonArea / Math.max(1e-6, spacing * spacing)))
@@ -5557,7 +5605,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			if (!isPointInsidePolygonXZ(scatterPlacementCandidateWorldHelper, normalizedPolygonPoints)) {
 				continue
 			}
-			const projected = projectScatterPoint(scatterPlacementCandidateWorldHelper)
+			const projected = projectScatterPointToGroundWithContext(scatterRuntimeDef, scatterHeightContext, scatterGroundMesh, scatterPlacementCandidateWorldHelper)
 			if (!projected) {
 				continue
 			}
@@ -5607,13 +5655,16 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		const accepted: THREE.Vector3[] = []
 		const stampNeighborhood = createScatterStampNeighborhood(spacing)
 		const existingBudget = { totalChecks: 0 }
+		// Pre-build sampling context once to avoid repeated Vue reactive property reads per point.
+		const { runtimeDefinition: rectRuntimeDef, context: rectHeightContext } = prepareGroundHeightSamplingContext(scatterSession.definition)
+		const rectGroundMesh = scatterSession.groundMesh
 		for (let row = 0; row < rowCount; row += 1) {
 			for (let column = 0; column < columnCount; column += 1) {
 				scatterPlacementCandidateWorldHelper
 					.copy(cornerA)
 					.addScaledVector(scatterDirectionHelper, column * spacing)
 					.addScaledVector(scatterMidpointHelper, row * spacing)
-				const projected = projectScatterPoint(scatterPlacementCandidateWorldHelper)
+				const projected = projectScatterPointToGroundWithContext(rectRuntimeDef, rectHeightContext, rectGroundMesh, scatterPlacementCandidateWorldHelper)
 				if (!projected || !canAcceptScatterPoint(projected, scatterSession, existingBudget, stampNeighborhood)) {
 					continue
 				}
@@ -5740,6 +5791,11 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		scatterSession.groundMesh.updateMatrixWorld(true)
 
 		// Always place one instance at the click center.
+		// Pre-build sampling context once to avoid repeated Vue reactive property reads per point.
+		const { runtimeDefinition: brushRuntimeDef, context: brushHeightContext } = prepareGroundHeightSamplingContext(scatterSession.definition)
+		const brushGroundMesh = scatterSession.groundMesh
+
+		// Always place one instance at the click center.
 		// Center placement is not restricted by overlap checks.
 		{
 			const p = centerProjected.clone()
@@ -5779,7 +5835,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 					centerProjected.z + Math.sin(theta) * r,
 				)
 			}
-			const projected = projectScatterPoint(scatterPlacementCandidateWorldHelper)
+			const projected = projectScatterPointToGroundWithContext(brushRuntimeDef, brushHeightContext, brushGroundMesh, scatterPlacementCandidateWorldHelper)
 			if (!projected) {
 				continue
 			}
@@ -5943,6 +5999,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			polygonPreviewEnd: null,
 			previewLayerId: `scatter-preview:${layer.id}:${optionsOverride?.pointerId ?? 'dialog'}:autooverlay`,
 			previewInstances: [],
+			lastPreviewRefreshAt: 0,
+			lastPreviewRefreshPoint: null,
 		}
 
 		const previousSession = scatterSession
@@ -6110,6 +6168,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 					polygonPreviewEnd: null,
 					previewLayerId: `scatter-preview:${layer.id}:polygon`,
 					previewInstances: [],
+					lastPreviewRefreshAt: 0,
+					lastPreviewRefreshPoint: null,
 				}
 			}
 			const currentSession = scatterSession
@@ -6169,6 +6229,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			polygonPreviewEnd: null,
 			previewLayerId: `scatter-preview:${layer.id}:${event.pointerId}`,
 			previewInstances: [],
+			lastPreviewRefreshAt: 0,
+			lastPreviewRefreshPoint: null,
 		}
 			options.onScatterPlacementStart?.()
 		if (brushShape === 'circle') {
@@ -6385,7 +6447,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			}
 			scatterSession.currentPoint = nextPoint.clone()
 			scatterSession.polygonPreviewEnd = nextPoint.clone()
-			refreshScatterSessionPreview(scatterSession)
+			if (shouldRefreshScatterSessionPreview(scatterSession, nextPoint)) {
+				refreshScatterSessionPreview(scatterSession)
+			}
 			event.preventDefault()
 			event.stopPropagation()
 			event.stopImmediatePropagation()
@@ -6412,8 +6476,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (scatterSession.brushShape === 'circle') {
 			traceScatterPath(nextPoint)
 		} else {
-			refreshScatterSessionPreview(scatterSession)
-			updateBrush(event)
+			if (shouldRefreshScatterSessionPreview(scatterSession, nextPoint)) {
+				refreshScatterSessionPreview(scatterSession)
+			}
 		}
 		event.preventDefault()
 		event.stopPropagation()
