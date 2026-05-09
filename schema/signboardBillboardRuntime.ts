@@ -23,6 +23,7 @@ interface SignboardRuntimeEntry {
   opacity: number
   worldWidth: number
   worldHeight: number
+  lastDistanceLabelUpdateMs: number
 }
 
 const signboardEntries = new Map<string, SignboardRuntimeEntry>()
@@ -66,6 +67,7 @@ const DIVIDER_WIDTH = 1.5
 const PUNCH_BADGE_DIAMETER = 24
 const PUNCH_BADGE_GAP = 10
 const PUNCH_BADGE_TEXT = '✓'
+const DISTANCE_LABEL_REFRESH_INTERVAL_MS = 150
 
 const DEFAULT_SIGNBOARD_BILLBOARD_STYLE: SignboardBillboardStyle = {
   backgroundTopColor: 'rgba(255, 255, 255, 0.28)',
@@ -191,6 +193,22 @@ function computeOpacity(distanceMeters: number): number {
     : 1
 
   return farFade * closeFade
+}
+
+function quantizeSignboardDistance(distanceMeters: number): number {
+  if (!Number.isFinite(distanceMeters) || distanceMeters < 0) {
+    return distanceMeters
+  }
+  const step = distanceMeters < 10
+    ? 0.2
+    : distanceMeters < 50
+      ? 0.5
+      : distanceMeters < 200
+        ? 1
+        : distanceMeters < 1000
+          ? 5
+          : 10
+  return Math.round(distanceMeters / step) * step
 }
 
 function drawPunchBadge(context: SignboardCanvasContext, centerX: number, centerY: number, style: SignboardBillboardStyle, fontSize: number, diameter: number): void {
@@ -342,6 +360,7 @@ function createSignboardEntry(scene: THREE.Scene, nodeId: string, labelText: str
     opacity: 1,
     worldWidth: 1,
     worldHeight: WORLD_HEIGHT,
+    lastDistanceLabelUpdateMs: Date.now(),
   }
   drawSignboardTexture(entry, style)
   sprite.scale.set(entry.worldWidth, entry.worldHeight, 1)
@@ -375,18 +394,28 @@ function updateSignboardEntry(
   const distanceReference = distanceReferenceWorld ?? signboardCameraScratch
   const distanceMeters = signboardAnchorScratch.distanceTo(distanceReference)
   const opacity = computeOpacity(distanceMeters)
-  const distanceText = formatSignboardDistance(distanceMeters)
+  const quantizedDistanceMeters = quantizeSignboardDistance(distanceMeters)
+  const distanceText = formatSignboardDistance(quantizedDistanceMeters)
 
   if (!entry) {
     entry = createSignboardEntry(scene, nodeId, labelText, distanceText, punchBadgeVisible, style)
     signboardEntries.set(nodeId, entry)
   }
 
-  const textChanged = entry.labelText !== labelText || entry.distanceText !== distanceText
+  const nowMs = Date.now()
+  const labelChanged = entry.labelText !== labelText
+  const distanceChanged = entry.distanceText !== distanceText
+  const allowDistanceLabelRefresh =
+    distanceChanged && (nowMs - entry.lastDistanceLabelUpdateMs >= DISTANCE_LABEL_REFRESH_INTERVAL_MS)
+  const textChanged = labelChanged || allowDistanceLabelRefresh
   const punchChanged = entry.punchBadgeVisible !== punchBadgeVisible
+  const shouldRefreshDistanceText = distanceChanged && (textChanged || punchChanged)
   if (textChanged || punchChanged) {
     entry.labelText = labelText
-    entry.distanceText = distanceText
+    if (shouldRefreshDistanceText) {
+      entry.distanceText = distanceText
+      entry.lastDistanceLabelUpdateMs = nowMs
+    }
     entry.punchBadgeVisible = punchBadgeVisible
     drawSignboardTexture(entry, style)
     entry.sprite.scale.set(entry.worldWidth, entry.worldHeight, 1)

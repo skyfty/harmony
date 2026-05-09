@@ -5530,6 +5530,10 @@ type GroundRuntimeBaseTextureCache = {
   source: string | null
   texture: THREE.Texture | null
 }
+
+type GroundTextureTraversalCache = {
+  signature: string
+}
 function isDynamicGroundTexture(texture: THREE.Texture | null | undefined): boolean {
   if (!texture) {
     return false
@@ -5675,21 +5679,23 @@ function resolveGroundTextureWindowSignature(window: {
   ].join('|')
 }
 
-function resolveGroundChunkTextureSignature(
-  baseMaterial: THREE.Material,
-  source: string,
-  window: {
-    offsetX: number
-    offsetY: number
-    repeatX: number
-    repeatY: number
-  },
-): string {
+function resolveGroundDefinitionTextureWindowSignature(definition: GroundDynamicMesh): string {
+  const bounds = resolveGroundWorldBounds(definition)
   return [
-    source,
-    resolveGroundBaseMaterialSignature(baseMaterial),
-    resolveGroundTextureWindowSignature(window),
+    Number(definition.cellSize),
+    Number(bounds.minX.toFixed(4)),
+    Number(bounds.maxX.toFixed(4)),
+    Number(bounds.minZ.toFixed(4)),
+    Number(bounds.maxZ.toFixed(4)),
   ].join('|')
+}
+
+function resolveGroundTextureSizeSignature(texture: THREE.Texture | null | undefined): string {
+  const size = resolveGroundTextureSourceSize(texture)
+  if (!size) {
+    return '0x0'
+  }
+  return `${size.width}x${size.height}`
 }
 
 function hasGroundTextureSignature(material: THREE.Material | null | undefined, signature: string): boolean {
@@ -5985,11 +5991,12 @@ function createGroundChunkTexturedMaterial(baseMaterial: THREE.Material): THREE.
 }
 
 function applyGroundTextureToChunkMesh(
-  root: THREE.Object3D,
   mesh: THREE.Mesh,
   definition: GroundDynamicMesh,
   spec: Pick<GroundChunkSpec, 'startRow' | 'startColumn' | 'rows' | 'columns'> | null,
   baseMaterial: THREE.Material,
+  baseTexture: THREE.Texture | null,
+  baseMaterialSignature: string,
 ): void {
   const currentMaterial = Array.isArray(mesh.material) ? (mesh.material[0] ?? null) : (mesh.material ?? null)
   const source = typeof definition.textureDataUrl === 'string' ? definition.textureDataUrl : null
@@ -6002,7 +6009,6 @@ function applyGroundTextureToChunkMesh(
     }
     return
   }
-  const baseTexture = resolveGroundRuntimeBaseTexture(root, definition)
   if (!baseTexture) {
     if (currentMaterial && currentMaterial !== baseMaterial) {
       disposeGroundChunkTexturedMaterial(currentMaterial)
@@ -6033,7 +6039,11 @@ function applyGroundTextureToChunkMesh(
       repeatY: 1,
     }
   const safeWindow = applyGroundTextureWindowGutter(window, baseTexture)
-  const signature = resolveGroundChunkTextureSignature(baseMaterial, source, safeWindow)
+  const signature = [
+    source,
+    baseMaterialSignature,
+    resolveGroundTextureWindowSignature(safeWindow),
+  ].join('|')
   if (currentMaterial && isGroundChunkTexturedMaterial(currentMaterial) && hasGroundTextureSignature(currentMaterial, signature)) {
     if (mesh.material !== currentMaterial) {
       mesh.material = currentMaterial
@@ -6061,10 +6071,30 @@ function applyGroundTextureToChunkMesh(
 
 function applyGroundTextureToObject(object: THREE.Object3D, definition: GroundDynamicMesh): void {
   const root = object as THREE.Object3D & { userData?: Record<string, unknown> }
+  const runtimeState = groundRuntimeStateMap.get(root)
+  const source = typeof definition.textureDataUrl === 'string' ? definition.textureDataUrl : null
+  const normalSource = typeof definition.normalMapDataUrl === 'string' ? definition.normalMapDataUrl : null
   const cachedBaseMaterial = (root.userData as Record<string, unknown> | undefined)?.groundMaterial
   const baseMaterial = cachedBaseMaterial && !Array.isArray(cachedBaseMaterial)
     ? cachedBaseMaterial as THREE.Material
     : null
+  const sharedBaseTexture = source ? resolveGroundRuntimeBaseTexture(root, definition) : null
+  const sharedBaseMaterialSignature = baseMaterial
+    ? resolveGroundBaseMaterialSignature(baseMaterial)
+    : 'none'
+  const traversalSignature = [
+    source ?? 'none',
+    normalSource ?? 'none',
+    sharedBaseMaterialSignature,
+    resolveGroundDefinitionTextureWindowSignature(definition),
+    resolveGroundTextureSizeSignature(sharedBaseTexture),
+    runtimeState ? runtimeState.visibleChunkKeysVersion : -1,
+  ].join('|')
+  const rootUserData = (root.userData ??= {}) as Record<string, unknown>
+  const traversalCache = (rootUserData.groundTextureTraversalCache ?? null) as GroundTextureTraversalCache | null
+  if (runtimeState && traversalCache?.signature === traversalSignature) {
+    return
+  }
   if (baseMaterial) {
     clearGroundTextureFromMaterial(baseMaterial)
   }
@@ -6083,18 +6113,40 @@ function applyGroundTextureToObject(object: THREE.Object3D, definition: GroundDy
     const isCompiledGroundTile = mesh.userData?.compiledGroundTile === true
     const currentMaterial = Array.isArray(mesh.material) ? (mesh.material[0] ?? null) : (mesh.material ?? null)
     const chunkBaseMaterial = baseMaterial ?? currentMaterial
+    const chunkBaseMaterialSignature = chunkBaseMaterial
+      ? (chunkBaseMaterial === baseMaterial
+        ? sharedBaseMaterialSignature
+        : resolveGroundBaseMaterialSignature(chunkBaseMaterial))
+      : 'none'
     if (chunkSpec && chunkBaseMaterial) {
-      applyGroundTextureToChunkMesh(object, mesh, definition, chunkSpec, chunkBaseMaterial)
+      applyGroundTextureToChunkMesh(
+        mesh,
+        definition,
+        chunkSpec,
+        chunkBaseMaterial,
+        sharedBaseTexture,
+        chunkBaseMaterialSignature,
+      )
       return
     }
     if (isCompiledGroundTile && chunkBaseMaterial) {
-      applyGroundTextureToChunkMesh(object, mesh, definition, null, chunkBaseMaterial)
+      applyGroundTextureToChunkMesh(
+        mesh,
+        definition,
+        null,
+        chunkBaseMaterial,
+        sharedBaseTexture,
+        chunkBaseMaterialSignature,
+      )
       return
     }
     if (currentMaterial) {
       applyGroundTextureToMaterial(currentMaterial, definition)
     }
   })
+  rootUserData.groundTextureTraversalCache = {
+    signature: traversalSignature,
+  } satisfies GroundTextureTraversalCache
 }
 
 export function applyGroundTextureToGroundObject(object: THREE.Object3D, definition: GroundDynamicMesh): void {
