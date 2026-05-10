@@ -28,6 +28,13 @@ const ROAD_PREVIEW_Y_OFFSET = 0.01
 const ROAD_PREVIEW_SAMPLING_DENSITY_FACTOR = ROAD_TERRAIN_DEFAULT_SAMPLING_DENSITY_FACTOR
 const ROAD_PREVIEW_SMOOTHING_STRENGTH_FACTOR = ROAD_TERRAIN_DEFAULT_SMOOTHING_STRENGTH_FACTOR
 const ROAD_PREVIEW_MIN_CLEARANCE = ROAD_TERRAIN_DEFAULT_MIN_CLEARANCE
+const ROAD_SEGMENT_HEIGHT_SAMPLES_PER_METER = 4
+
+export type RoadPreviewBuild = {
+  center: THREE.Vector3
+  worldPoints: THREE.Vector3[]
+  definition: RoadDynamicMesh
+}
 
 function encodeRoadPreviewNumber(value: number): string {
   return `${Math.round(value * ROAD_PREVIEW_SIGNATURE_PRECISION)}`
@@ -154,23 +161,74 @@ function applyRoadPreviewStyling(group: THREE.Group) {
   })
 }
 
-function buildRoadPreviewDefinition(points: THREE.Vector3[], previewEnd: THREE.Vector3 | null, width: number): {
-  center: THREE.Vector3
-  definition: RoadDynamicMesh
-} | null {
+function buildPreviewWorldPoints(points: THREE.Vector3[], previewEnd: THREE.Vector3 | null): THREE.Vector3[] {
   const combined = [...points]
   if (previewEnd && points.length) {
     combined.push(previewEnd)
   }
 
-  if (combined.length < 2) {
+  const worldPoints: THREE.Vector3[] = []
+  combined.forEach((point) => {
+    const next = point.clone()
+    const previous = worldPoints[worldPoints.length - 1]
+    if (previous && previous.distanceToSquared(next) <= 1e-10) {
+      return
+    }
+    worldPoints.push(next)
+  })
+
+  return worldPoints
+}
+
+function buildSegmentHeights(
+  worldPoints: THREE.Vector3[],
+  heightSampler?: ((x: number, z: number) => number) | null,
+): number[][] {
+  if (worldPoints.length < 2) {
+    return []
+  }
+
+  const segmentHeights: number[][] = []
+  for (let index = 0; index < worldPoints.length - 1; index += 1) {
+    const start = worldPoints[index]!
+    const end = worldPoints[index + 1]!
+    const length = start.distanceTo(end)
+    const sampleCount = Math.max(2, Math.ceil(length * ROAD_SEGMENT_HEIGHT_SAMPLES_PER_METER) + 1)
+    const heights: number[] = []
+
+    for (let sampleIndex = 0; sampleIndex < sampleCount; sampleIndex += 1) {
+      const t = sampleCount <= 1 ? 0 : sampleIndex / (sampleCount - 1)
+      const x = THREE.MathUtils.lerp(start.x, end.x, t)
+      const z = THREE.MathUtils.lerp(start.z, end.z, t)
+      const fallbackY = THREE.MathUtils.lerp(start.y, end.y, t)
+      const sampledY = heightSampler ? heightSampler(x, z) : fallbackY
+      heights.push(Number.isFinite(sampledY) ? sampledY : fallbackY)
+    }
+
+    segmentHeights.push(heights)
+  }
+
+  return segmentHeights
+}
+
+export function buildRoadPreviewBuild(
+  points: THREE.Vector3[],
+  previewEnd: THREE.Vector3 | null,
+  width: number,
+  options: {
+    heightSampler?: ((x: number, z: number) => number) | null
+  } = {},
+): RoadPreviewBuild | null {
+  const worldPoints = buildPreviewWorldPoints(points, previewEnd)
+
+  if (worldPoints.length < 2) {
     return null
   }
 
   const min = new THREE.Vector3(Number.POSITIVE_INFINITY, 0, Number.POSITIVE_INFINITY)
   const max = new THREE.Vector3(Number.NEGATIVE_INFINITY, 0, Number.NEGATIVE_INFINITY)
 
-  combined.forEach((p) => {
+  worldPoints.forEach((p) => {
     min.x = Math.min(min.x, p.x)
     min.z = Math.min(min.z, p.z)
     max.x = Math.max(max.x, p.x)
@@ -184,7 +242,7 @@ function buildRoadPreviewDefinition(points: THREE.Vector3[], previewEnd: THREE.V
   const center = new THREE.Vector3((min.x + max.x) * 0.5, 0, (min.z + max.z) * 0.5)
 
   const normalizedWidth = Number.isFinite(width) ? Math.max(0.2, width) : 2
-  const vertices = combined.map((p) => [p.x - center.x, p.z - center.z] as [number, number])
+  const vertices = worldPoints.map((p) => [p.x - center.x, p.z - center.z] as [number, number])
   const segments = vertices.length >= 2
     ? Array.from({ length: vertices.length - 1 }, (_value, index) => ({ a: index, b: index + 1 }))
     : []
@@ -193,9 +251,10 @@ function buildRoadPreviewDefinition(points: THREE.Vector3[], previewEnd: THREE.V
     width: normalizedWidth,
     vertices,
     segments,
+    segmentHeights: buildSegmentHeights(worldPoints, options.heightSampler ?? null),
   }
 
-  return { center, definition }
+  return { center, worldPoints, definition }
 }
 
 export function createRoadPreviewRenderer(options: {
@@ -227,7 +286,9 @@ export function createRoadPreviewRenderer(options: {
       return
     }
 
-    const build = buildRoadPreviewDefinition(session.points, session.previewEnd, session.width)
+    const build = buildRoadPreviewBuild(session.points, session.previewEnd, session.width, {
+      heightSampler: options.heightSampler ?? null,
+    })
     if (!build) {
       if (session.previewGroup) {
         clear(session)
@@ -242,20 +303,11 @@ export function createRoadPreviewRenderer(options: {
     }
     signature = nextSignature
 
-    const localHeightSampler = options.heightSampler
-      ? ((x: number, z: number) => options.heightSampler!(x + build.center.x, z + build.center.z))
-      : null
-
     if (!session.previewGroup) {
       const createOpts: any = {
         samplingDensityFactor: ROAD_PREVIEW_SAMPLING_DENSITY_FACTOR,
         smoothingStrengthFactor: ROAD_PREVIEW_SMOOTHING_STRENGTH_FACTOR,
         minClearance: ROAD_PREVIEW_MIN_CLEARANCE,
-      }
-      // Prefer persisted segmentHeights when present; only provide a runtime sampler
-      // when segmentHeights are not available (e.g., during ad-hoc drawing).
-      if (!Array.isArray((build.definition as any).segmentHeights) && localHeightSampler) {
-        createOpts.heightSampler = localHeightSampler
       }
       const preview = createRoadGroup(build.definition, createOpts)
       applyRoadPreviewStyling(preview)
@@ -267,9 +319,6 @@ export function createRoadPreviewRenderer(options: {
         samplingDensityFactor: ROAD_PREVIEW_SAMPLING_DENSITY_FACTOR,
         smoothingStrengthFactor: ROAD_PREVIEW_SMOOTHING_STRENGTH_FACTOR,
         minClearance: ROAD_PREVIEW_MIN_CLEARANCE,
-      }
-      if (!Array.isArray((build.definition as any).segmentHeights) && localHeightSampler) {
-        updateOpts.heightSampler = localHeightSampler
       }
       updateRoadGroup(session.previewGroup, build.definition, updateOpts)
       applyRoadPreviewStyling(session.previewGroup)

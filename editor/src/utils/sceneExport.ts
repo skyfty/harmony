@@ -30,7 +30,7 @@ import {
 } from '@/utils/rigidbodyCollider'
 import { createGroundMesh } from '@schema/groundMesh'
 import { createWallGroup } from '@schema/wallMesh'
-import { createRoadGroup } from '@schema/roadMesh'
+import { extractCompiledStaticMeshMetadataFromUserData, createCompiledStaticMeshRuntimeMesh } from '@schema/compiledStaticMesh'
 import {
   RIGIDBODY_COMPONENT_TYPE,
   type RigidbodyComponentProps,
@@ -843,8 +843,15 @@ function buildDynamicMeshObject(node: SceneNode, _groundNode: SceneNode | null):
     }
     case 'Road':
       {
-        // Do not provide a runtime height sampler here; prefer persisted `segmentHeights`.
-        return createRoadGroup(mesh, {}).clone(true)
+        const compiled = extractCompiledStaticMeshMetadataFromUserData(node.userData)
+        if (!compiled) {
+          return null
+        }
+        const roadMesh = createCompiledStaticMeshRuntimeMesh(compiled, {
+          name: node.name ?? compiled.name ?? 'Road',
+        })
+        roadMesh.updateMatrixWorld(true)
+        return roadMesh
       }
     default:
       return null

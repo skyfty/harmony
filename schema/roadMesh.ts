@@ -12,6 +12,7 @@ import { sampleGroundHeight } from './groundMesh'
 import { buildRoadCornerBezierCurvePath } from './roadCurvePath'
 import { buildRoadGraph, getJunctionIncidentDirectionsXZ } from './roadGraph'
 import { buildJunctionLoopXZ, triangulateJunctionPatchXZ } from './roadJunctionPatch'
+import { createCompiledStaticMeshMetadataFromGeometry, type CompiledStaticMeshMetadata } from './compiledStaticMesh'
 
 export function resolveRoadLocalHeightSampler(
   roadNode: SceneNode,
@@ -1722,4 +1723,53 @@ export function updateRoadGroup(
   const content = ensureRoadContentGroup(group)
   rebuildRoadGroup(content, definition, options)
   return true
+}
+
+export function compileRoadStaticMeshMetadata(
+  definition: RoadDynamicMesh,
+  options: RoadJunctionSmoothingOptions = {},
+): CompiledStaticMeshMetadata | null {
+  const group = createRoadGroup(definition, options)
+  const geometries: THREE.BufferGeometry[] = []
+
+  try {
+    group.updateMatrixWorld(true)
+    group.traverse((child) => {
+      const mesh = child as THREE.Mesh
+      if (!mesh?.isMesh || !mesh.geometry) {
+        return
+      }
+      const geometry = mesh.geometry.clone()
+      geometry.applyMatrix4(mesh.matrixWorld)
+      geometries.push(geometry)
+    })
+
+    if (!geometries.length) {
+      return null
+    }
+
+    const merged = geometries.length === 1
+      ? geometries[0]!
+      : mergeGeometries(geometries, false)
+    if (!merged) {
+      return null
+    }
+
+    return createCompiledStaticMeshMetadataFromGeometry(merged, 'Road')
+  } finally {
+    geometries.forEach((geometry) => geometry.dispose())
+    group.traverse((child) => {
+      const mesh = child as THREE.Mesh
+      if (!mesh?.isMesh) {
+        return
+      }
+      mesh.geometry?.dispose?.()
+      const material = mesh.material
+      if (Array.isArray(material)) {
+        material.forEach((entry) => entry?.dispose?.())
+      } else {
+        material?.dispose?.()
+      }
+    })
+  }
 }

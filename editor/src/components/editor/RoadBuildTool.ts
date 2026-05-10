@@ -4,16 +4,12 @@ import type { BuildTool } from '@/types/build-tool'
 import type { PointerInteractionSession } from '@/types/pointer-interaction'
 import type { RoadDynamicMesh, SceneNode } from '@schema'
 import type { RoadPresetData } from '@/utils/roadPreset'
-import { createRoadPreviewRenderer, type RoadPreviewSession } from './RoadPreviewRenderer'
+import { buildRoadPreviewBuild, createRoadPreviewRenderer, type RoadPreviewSession } from './RoadPreviewRenderer'
 import {
   findConnectableRoadNodeId,
   integrateWorldPolylineIntoRoadMesh,
   splitRoadSelfIntersectionsMesh,
 } from './RoadBuildGeometry'
-import {
-  ROAD_TERRAIN_DEFAULT_MIN_CLEARANCE,
-  ROAD_TERRAIN_DEFAULT_SAMPLING_DENSITY_FACTOR,
-} from '@schema/components'
 
 export type RoadSnapVertex = { position: THREE.Vector3; nodeId: string; vertexIndex: number }
 
@@ -543,9 +539,70 @@ export function createRoadBuildTool(options: {
       if (!session) {
         return null
       }
-      
 
-      return null
+      const build = buildRoadPreviewBuild([segmentStart], segmentEnd, session.width, {
+        heightSampler: options.heightSampler,
+      })
+      if (!build) {
+        return null
+      }
+
+      const roadPresetData = options.getRoadBrush?.()?.presetData ?? null
+      const segmentPoints = build.worldPoints.map((entry) => ({ x: entry.x, y: entry.y, z: entry.z }))
+      const segmentHeights = Array.isArray((build.definition as any).segmentHeights)
+        ? ([...(build.definition as any).segmentHeights] as number[][])
+        : undefined
+
+      let activeNodeId = session.liveNodeId ?? session.targetNodeId
+      if (!activeNodeId) {
+        activeNodeId = findConnectableRoadNodeId({
+          worldPoints: build.worldPoints,
+          nodes: options.sceneNodes(),
+          getRuntimeObject: options.getRuntimeObject,
+          collectRoadSnapVertices: options.collectRoadSnapVertices,
+          snapRoadPointToVertices: options.snapRoadPointToVertices,
+          vertexSnapDistance: options.vertexSnapDistance,
+        })
+      }
+      if (activeNodeId) {
+        const targetNode = options.findSceneNode(options.sceneNodes(), activeNodeId)
+        const runtime = options.getRuntimeObject(activeNodeId)
+        if (targetNode?.dynamicMesh?.type === 'Road' && runtime) {
+          let merged = integrateWorldPolylineIntoRoadMesh({
+            baseMesh: targetNode.dynamicMesh,
+            runtime,
+            worldPoints: build.worldPoints,
+            width: build.definition.width,
+            defaultWidth: session.width,
+          })
+
+          if (merged) {
+            const normalized = splitRoadSelfIntersectionsMesh(merged, build.definition.width)
+            if (normalized) {
+              merged = normalized
+            }
+            options.updateNodeDynamicMesh(activeNodeId, merged)
+            return activeNodeId
+          }
+        }
+      }
+
+      const created = options.createRoadNode({
+        points: segmentPoints,
+        width: build.definition.width,
+        roadPresetData,
+        segmentHeights,
+      })
+      if (!created) {
+        return null
+      }
+
+      if (!roadPresetData) {
+        options.setNodeMaterials(created.id, options.createRoadNodeMaterials())
+      }
+
+      return created.id
+
     }
 
     const committedNodeId = commitSegment(last, point)

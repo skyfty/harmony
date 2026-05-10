@@ -190,7 +190,7 @@ import { useScenesStore, type SceneWorkspaceType } from './scenesStore'
 import { updateSceneAssets } from './ensureSceneAssetsReady'
 import { useClipboardStore } from './clipboardStore'
 import { loadObjectFromFile } from '@schema/assetImport'
-import { markGroundOptimizedMeshReady, sampleGroundHeight } from '@schema/groundMesh'
+import { markGroundOptimizedMeshReady } from '@schema/groundMesh'
 import { generateUuid } from '@/utils/uuid'
 import {
   computeInstanceLayoutGridCenterOffsetLocal,
@@ -206,10 +206,11 @@ import {
   type ModelInstanceGroup,
 } from '@schema/modelObjectCache'
 import { createWallGroup, updateWallGroup } from '@schema/wallMesh'
-import { createRoadGroup, resolveRoadLocalHeightSampler } from '@schema/roadMesh'
+import { compileRoadStaticMeshMetadata, createRoadGroup, resolveRoadLocalHeightSampler } from '@schema/roadMesh'
 import { createFloorGroup, updateFloorGroup } from '@schema/floorMesh'
 import { createLandformGroup, updateLandformGroup } from '@schema/landformMesh'
 import { createGuideRouteGroup } from '@schema/guideRouteMesh'
+import { COMPILED_STATIC_MESH_USERDATA_KEY } from '@schema/compiledStaticMesh'
 import { buildRegionDynamicMeshFromLocalVertices, buildRegionDynamicMeshFromWorldPoints } from '@schema/regionUtils'
 import { computeBlobHash, blobToDataUrl, dataUrlToBlob, extractExtension } from '@/utils/blob'
 import { ASSET_THUMBNAIL_HEIGHT, ASSET_THUMBNAIL_WIDTH } from '@/utils/assetThumbnail'
@@ -3878,7 +3879,10 @@ function rebuildRoadSegmentHeights(node: SceneNode, definition: RoadDynamicMesh,
   const roadState = node.components?.[ROAD_COMPONENT_TYPE] as SceneNodeComponentState<RoadComponentProps> | undefined
   const roadProps = clampRoadProps(roadState?.props as Partial<RoadComponentProps> | null | undefined)
   const clearance = Number.isFinite(roadProps.minClearance) ? Math.max(0, Number(roadProps.minClearance)) : 0
-  const samplingDensityFactor = Number.isFinite(roadProps.samplingDensityFactor) ? Math.max(0.1, roadProps.samplingDensityFactor) : 1
+  const rawSamplingDensityFactor = Number(roadProps.samplingDensityFactor)
+  const samplingDensityFactor = Number.isFinite(rawSamplingDensityFactor)
+    ? Math.max(0.1, rawSamplingDensityFactor)
+    : 1
 
   const segmentHeights: number[][] = []
   const rawSegments = Array.isArray(definition.segments) ? definition.segments : []
@@ -5974,9 +5978,10 @@ export async function cloneSceneDocumentForExport(
 ): Promise<StoredSceneDocument> {
   const assetRegistry = await buildAssetRegistryForExport(scene)
   const runtimeAwareScene = cloneSceneDocumentWithRuntimeGroundSidecars(scene)
+  const runtimeNodes = attachCompiledStaticRoadMeshes(runtimeAwareScene.nodes)
   return createSceneDocument(scene.name, {
     id: scene.id,
-    nodes: runtimeAwareScene.nodes,
+    nodes: runtimeNodes,
     camera: scene.camera,
     resourceProviderId: scene.resourceProviderId,
     createdAt: scene.createdAt,
@@ -5993,6 +5998,49 @@ export async function cloneSceneDocumentForExport(
     panelPlacement: scene.panelPlacement,
     groundSettings: scene.groundSettings,
     environment: resolveSceneDocumentEnvironment(scene),
+  })
+}
+
+function attachCompiledStaticRoadMeshes(nodes: SceneNode[]): SceneNode[] {
+  return nodes.map((node) => {
+    const children = Array.isArray(node.children) && node.children.length
+      ? attachCompiledStaticRoadMeshes(node.children)
+      : node.children
+
+    if (node.dynamicMesh?.type !== 'Road') {
+      return children === node.children ? node : { ...node, children }
+    }
+
+    const roadState = node.components?.[ROAD_COMPONENT_TYPE] as SceneNodeComponentState<RoadComponentProps> | undefined
+    const roadProps = roadState
+      ? clampRoadProps(roadState.props as Partial<RoadComponentProps> | null | undefined)
+      : null
+    const compiled = compileRoadStaticMeshMetadata(node.dynamicMesh as RoadDynamicMesh, {
+      junctionSmoothing: roadProps?.junctionSmoothing,
+      laneLines: roadProps?.laneLines,
+      shoulders: roadProps?.shoulders,
+      samplingDensityFactor: roadProps?.samplingDensityFactor,
+      smoothingStrengthFactor: roadProps?.smoothingStrengthFactor,
+      minClearance: roadProps?.minClearance,
+      laneLineWidth: roadProps?.laneLineWidth,
+      shoulderWidth: roadProps?.shoulderWidth,
+    })
+
+    const userData = {
+      ...((node.userData as Record<string, unknown> | undefined) ?? {}),
+    }
+
+    if (compiled) {
+      userData[COMPILED_STATIC_MESH_USERDATA_KEY] = compiled
+    } else {
+      delete userData[COMPILED_STATIC_MESH_USERDATA_KEY]
+    }
+
+    return {
+      ...node,
+      userData,
+      children,
+    }
   })
 }
 
