@@ -1750,7 +1750,7 @@ export function compileRoadStaticMeshMetadata(
 
     const merged = geometries.length === 1
       ? geometries[0]!
-      : mergeGeometries(geometries, false)
+      : mergeGeometries(geometries, true)
     if (!merged) {
       return null
     }

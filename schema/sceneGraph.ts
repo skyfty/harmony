@@ -16,6 +16,7 @@ import type {
   SceneOutlineMeshMap,
   GroundDynamicMesh,
   WallDynamicMesh,
+  RoadDynamicMesh,
   FloorDynamicMesh,
   LandformDynamicMesh,
   GuideRouteDynamicMesh,
@@ -64,6 +65,7 @@ import {
   createCompiledStaticMeshRuntimeMesh,
   extractCompiledStaticMeshMetadataFromUserData,
 } from './compiledStaticMesh';
+import { compileRoadStaticMeshMetadata } from './roadMesh'
 
 export interface SceneGraphBuildResult {
   root: THREE.Group;
@@ -1165,64 +1167,19 @@ class SceneGraphBuilder {
   }
 
   private async buildMeshNode(node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
-    const compiledStaticMesh = extractCompiledStaticMeshMetadataFromUserData(node.userData)
-    if (compiledStaticMesh) {
-      const [material] = await this.resolveNodeMaterials(node)
-      const mesh = createCompiledStaticMeshRuntimeMesh(compiledStaticMesh, {
-        material,
-        name: node.name ?? compiledStaticMesh.name ?? 'Compiled Static Mesh',
-      })
-      this.applyTransform(mesh, node)
-      this.applyVisibility(mesh, node)
-
-      if (Array.isArray(node.children) && node.children.length) {
-        await this.buildNodes(node.children as SceneNodeWithExtras[], mesh)
-      }
-
-      this.recordMeshStatistics(mesh)
-      return mesh
+    const compiledMeshNode = await this.buildCompiledStaticMeshNode(node);
+    if (compiledMeshNode) {
+      return compiledMeshNode;
     }
 
-    const meshInfo = node.dynamicMesh;
-    if (meshInfo?.type === 'Ground') {
-      return this.buildGroundMesh(meshInfo, node);
-    }
-    if (meshInfo?.type === 'Wall') {
-      return this.buildWallMesh(meshInfo, node);
-    }
-    if (meshInfo?.type === 'Road') {
-      this.warnings.push(`Road node "${node.name ?? node.id}" is missing compiled static mesh metadata.`)
-      return null
-    }
-    if (meshInfo?.type === 'Floor') {
-      return this.buildFloorMesh(meshInfo as FloorDynamicMesh, node);
-    }
-    if (meshInfo?.type === 'Landform') {
-      return this.buildLandformMesh(meshInfo as LandformDynamicMesh, node);
-    }
-    if (meshInfo?.type === 'GuideRoute') {
-      return this.buildGuideRouteMesh(meshInfo as GuideRouteDynamicMesh, node);
-    }
-    if (meshInfo?.type === 'Region') {
-      return this.buildRegionMeshNode(node);
+    const dynamicMeshNode = await this.buildDynamicMeshNode(node);
+    if (dynamicMeshNode) {
+      return dynamicMeshNode;
     }
 
-    const waterSurfaceMesh = extractWaterSurfaceMeshMetadataFromUserData(node.userData);
-    if (waterSurfaceMesh) {
-      const [material] = await this.resolveNodeMaterials(node);
-      const mesh = createWaterSurfaceRuntimeMesh(waterSurfaceMesh, {
-        material,
-        name: node.name ?? 'Water Surface',
-      });
-      this.applyTransform(mesh, node);
-      this.applyVisibility(mesh, node);
-
-      if (Array.isArray(node.children) && node.children.length) {
-        await this.buildNodes(node.children as SceneNodeWithExtras[], mesh);
-      }
-
-      this.recordMeshStatistics(mesh);
-      return mesh;
+    const waterSurfaceMeshNode = await this.buildWaterSurfaceMeshNode(node);
+    if (waterSurfaceMeshNode) {
+      return waterSurfaceMeshNode;
     }
 
     const outlineMesh = this.resolveOutlineMeshForNode(node);
@@ -1276,6 +1233,97 @@ class SceneGraphBuilder {
     }
 
     return this.buildPrimitiveNode({ ...node, nodeType: node.nodeType || 'Box' });
+  }
+
+  private async buildCompiledStaticMeshNode(node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
+    let compiledStaticMesh = extractCompiledStaticMeshMetadataFromUserData(node.userData);
+    if (node.dynamicMesh?.type === 'Road' && compiledStaticMesh) {
+      const expectedUvCount = (compiledStaticMesh.vertices.length / 3) * 2;
+      if (!Array.isArray(compiledStaticMesh.uvs) || compiledStaticMesh.uvs.length < expectedUvCount) {
+        const roadPropsState = node.components?.[ROAD_COMPONENT_TYPE] as SceneNodeComponentState<RoadComponentProps> | undefined;
+        const roadProps = clampRoadProps(roadPropsState?.props as Partial<RoadComponentProps> | null | undefined);
+        const rebuilt = compileRoadStaticMeshMetadata(node.dynamicMesh as RoadDynamicMesh, {
+          junctionSmoothing: roadProps.junctionSmoothing,
+          laneLines: roadProps.laneLines,
+          shoulders: roadProps.shoulders,
+          samplingDensityFactor: roadProps.samplingDensityFactor,
+          smoothingStrengthFactor: roadProps.smoothingStrengthFactor,
+          minClearance: roadProps.minClearance,
+          laneLineWidth: roadProps.laneLineWidth,
+          shoulderWidth: roadProps.shoulderWidth,
+        });
+        if (rebuilt) {
+          compiledStaticMesh = rebuilt;
+        }
+      }
+    }
+
+    if (!compiledStaticMesh) {
+      return null;
+    }
+
+    const resolvedMaterials = await this.resolveNodeMaterials(node);
+    const material = Array.isArray(compiledStaticMesh.groups) && compiledStaticMesh.groups.length
+      ? resolvedMaterials
+      : (resolvedMaterials[0] ?? null);
+    const mesh = createCompiledStaticMeshRuntimeMesh(compiledStaticMesh, {
+      material,
+      name: node.name ?? compiledStaticMesh.name ?? 'Compiled Static Mesh',
+    });
+    this.applyTransform(mesh, node);
+    this.applyVisibility(mesh, node);
+
+    if (Array.isArray(node.children) && node.children.length) {
+      await this.buildNodes(node.children as SceneNodeWithExtras[], mesh);
+    }
+
+    this.recordMeshStatistics(mesh);
+    return mesh;
+  }
+
+  private async buildDynamicMeshNode(node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
+    const meshInfo = node.dynamicMesh;
+    switch (meshInfo?.type) {
+      case 'Ground':
+        return this.buildGroundMesh(meshInfo, node);
+      case 'Wall':
+        return this.buildWallMesh(meshInfo, node);
+      case 'Floor':
+        return this.buildFloorMesh(meshInfo as FloorDynamicMesh, node);
+      case 'Landform':
+        return this.buildLandformMesh(meshInfo as LandformDynamicMesh, node);
+      case 'GuideRoute':
+        return this.buildGuideRouteMesh(meshInfo as GuideRouteDynamicMesh, node);
+      case 'Region':
+        return this.buildRegionMeshNode(node);
+      case 'Road':
+        this.warnings.push(`Road node "${node.name ?? node.id}" is missing compiled static mesh metadata.`);
+        return null;
+      default:
+        return null;
+    }
+  }
+
+  private async buildWaterSurfaceMeshNode(node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
+    const waterSurfaceMesh = extractWaterSurfaceMeshMetadataFromUserData(node.userData);
+    if (!waterSurfaceMesh) {
+      return null;
+    }
+
+    const [material] = await this.resolveNodeMaterials(node);
+    const mesh = createWaterSurfaceRuntimeMesh(waterSurfaceMesh, {
+      material,
+      name: node.name ?? 'Water Surface',
+    });
+    this.applyTransform(mesh, node);
+    this.applyVisibility(mesh, node);
+
+    if (Array.isArray(node.children) && node.children.length) {
+      await this.buildNodes(node.children as SceneNodeWithExtras[], mesh);
+    }
+
+    this.recordMeshStatistics(mesh);
+    return mesh;
   }
 
   private async applyMaterialOverridesToImportedObject(object: THREE.Object3D, node: SceneNodeWithExtras): Promise<void> {

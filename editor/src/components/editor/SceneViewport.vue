@@ -1746,8 +1746,14 @@ function applyRoadOverlayMaterials(node: SceneNode, roadGroup: THREE.Group) {
 }
 
 function resolveRoadStaticMeshMetadata(node: SceneNode, roadDefinition: RoadDynamicMesh, roadOptions: Record<string, unknown>): ReturnType<typeof extractCompiledStaticMeshMetadataFromUserData> {
-  return extractCompiledStaticMeshMetadataFromUserData(node.userData)
-    ?? compileRoadStaticMeshMetadata(roadDefinition, roadOptions as any)
+  const cached = extractCompiledStaticMeshMetadataFromUserData(node.userData)
+  const hasUvData = Array.isArray(cached?.uvs) && cached.uvs.length >= ((cached.vertices.length / 3) * 2)
+  const hasGroupData = Array.isArray(cached?.groups) && (cached?.groups?.length ?? 0) > 0
+  if (cached && hasUvData && hasGroupData) {
+    return cached
+  }
+  return compileRoadStaticMeshMetadata(roadDefinition, roadOptions as any)
+    ?? cached
 }
 
 function resolveRoadRenderMode(
@@ -1761,10 +1767,44 @@ function resolveRoadRenderMode(
   return resolveRoadStaticMeshMetadata(node, roadDefinition, roadOptions) ? 'static' : 'dynamic'
 }
 
-function createStaticRoadContainer(node: SceneNode, compiledStaticMesh: NonNullable<ReturnType<typeof extractCompiledStaticMeshMetadataFromUserData>>, roadSignature: string): THREE.Group {
+function createStaticMeshMaterialInstance(config: SceneNodeMaterial): THREE.Material {
+  switch (config.type) {
+    case 'MeshBasicMaterial':
+      return new THREE.MeshBasicMaterial()
+    case 'MeshLambertMaterial':
+      return new THREE.MeshLambertMaterial()
+    case 'MeshPhongMaterial':
+      return new THREE.MeshPhongMaterial()
+    case 'MeshToonMaterial':
+      return new THREE.MeshToonMaterial()
+    case 'MeshNormalMaterial':
+      return new THREE.MeshNormalMaterial()
+    case 'MeshPhysicalMaterial':
+      return new THREE.MeshPhysicalMaterial()
+    case 'MeshMatcapMaterial':
+      return new THREE.MeshMatcapMaterial()
+    case 'MeshStandardMaterial':
+    default:
+      return new THREE.MeshStandardMaterial()
+  }
+}
+
+function createStaticRoadContainer(
+  node: SceneNode,
+  compiledStaticMesh: NonNullable<ReturnType<typeof extractCompiledStaticMeshMetadataFromUserData>>,
+  roadSignature: string,
+): THREE.Group {
   const container = new THREE.Group()
   container.name = node.name
+  const roadMaterials = Array.isArray(node.materials) && node.materials.length
+    ? node.materials.map((config) => {
+        const material = createStaticMeshMaterialInstance(config)
+        applyMaterialConfigToMaterial(material, config, materialOverrideOptions)
+        return material
+      })
+    : null
   const mesh = createCompiledStaticMeshRuntimeMesh(compiledStaticMesh, {
+    material: Array.isArray(compiledStaticMesh.groups) && compiledStaticMesh.groups.length ? roadMaterials ?? undefined : undefined,
     name: node.name ?? compiledStaticMesh.name ?? 'Road',
   })
   container.add(mesh)
