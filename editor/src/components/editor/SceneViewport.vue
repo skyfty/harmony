@@ -8224,6 +8224,7 @@ const roadBuildTool = createRoadBuildTool({
   hideStartIndicator: hideBuildStartIndicator,
   holdStartIndicatorUntilNodeVisible: holdBuildStartIndicatorUntilNodeVisible,
   raycastGroundPoint,
+  resolveBuildPlacementPoint,
   resolveVertexSnapPoint: resolveBuildToolVertexSnapPoint,
   clearVertexSnap: clearBuildToolVertexSnap,
   collectRoadSnapVertices,

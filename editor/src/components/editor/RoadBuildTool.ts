@@ -81,6 +81,7 @@ export function createRoadBuildTool(options: {
     height?: number | null
   }) => void
   raycastGroundPoint: (event: PointerEvent, result: THREE.Vector3) => boolean
+  resolveBuildPlacementPoint?: (event: PointerEvent, result: THREE.Vector3) => boolean
   resolveVertexSnapPoint?: (event: PointerEvent, point: THREE.Vector3, options?: VertexSnapResolverOptions) => THREE.Vector3 | null
   clearVertexSnap?: () => void
   collectRoadSnapVertices: () => RoadSnapVertex[]
@@ -219,6 +220,13 @@ export function createRoadBuildTool(options: {
     return projected ?? point.clone()
   }
 
+  const raycastPlacementPoint = (event: PointerEvent, result: THREE.Vector3): boolean => {
+    if (options.resolveBuildPlacementPoint) {
+      return options.resolveBuildPlacementPoint(event, result)
+    }
+    return options.raycastGroundPoint(event, result)
+  }
+
   const resolveWorldPoint = (event: PointerEvent, rawPoint: THREE.Vector3): THREE.Vector3 => {
     const snapped = options.resolveVertexSnapPoint?.(event, rawPoint, {
       excludeNodeIds: (session?.liveNodeId ?? session?.targetNodeId)
@@ -245,14 +253,13 @@ export function createRoadBuildTool(options: {
     if (!session || session.points.length === 0) {
       return
     }
-    if (!options.raycastGroundPoint(event, groundPointerHelper)) {
+    if (!raycastPlacementPoint(event, groundPointerHelper)) {
       return
     }
 
     session.snapVertices = options.collectRoadSnapVertices()
 
     const rawPointer = groundPointerHelper.clone()
-    rawPointer.y = 0
     const next = resolveWorldPoint(event, rawPointer)
 
     const previous = session.previewEnd
@@ -278,13 +285,12 @@ export function createRoadBuildTool(options: {
       showLockedStartIndicator(session.points[0] ?? null)
       return true
     }
-    if (!options.raycastGroundPoint(event, groundPointerHelper)) {
+    if (!raycastPlacementPoint(event, groundPointerHelper)) {
       hideStartIndicator()
       return false
     }
 
     const rawPointer = groundPointerHelper.clone()
-    rawPointer.y = 0
 
     const snapped = options.resolveVertexSnapPoint?.(event, rawPointer, {
       keepSourceY: true,
@@ -455,7 +461,7 @@ export function createRoadBuildTool(options: {
                 // Persist the split immediately so subsequent clicks/commit can extend from this vertex.
                 options.updateNodeDynamicMesh(hit.nodeId, next)
 
-                const worldProjected = projectPointToTerrain(runtime.localToWorld(new THREE.Vector3(bestProjX, 0, bestProjZ)))
+                const worldProjected = projectPointToTerrain(runtime.localToWorld(new THREE.Vector3(bestProjX, localHit.y, bestProjZ)))
 
                 current.targetNodeId = hit.nodeId
                 current.startVertexIndex = startIndex
@@ -473,12 +479,11 @@ export function createRoadBuildTool(options: {
     }
 
     // Fall back to ground-plane placement + vertex snapping.
-    if (!options.raycastGroundPoint(event, groundPointerHelper)) {
+    if (!raycastPlacementPoint(event, groundPointerHelper)) {
       return false
     }
 
     const snapped = groundPointerHelper.clone()
-    snapped.y = 0
 
     current.snapVertices = options.collectRoadSnapVertices()
     const snappedResult = options.snapRoadPointToVertices(snapped, current.snapVertices, options.vertexSnapDistance)
