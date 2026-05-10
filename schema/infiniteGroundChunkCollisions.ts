@@ -93,14 +93,6 @@ function makeRuntimeKey(source: InfiniteGroundChunkColliderSource, chunkKey: str
 	return `${source}:${chunkKey}`
 }
 
-function stringifyDiagnosticPayload(payload: Record<string, unknown>): string {
-	try {
-		return JSON.stringify(payload)
-	} catch (error) {
-		return `{"error":"failed-to-stringify","message":${JSON.stringify(String(error))}}`
-	}
-}
-
 function normalizeManifestRevision(value: number | undefined): number {
 	return Number.isFinite(value) ? Math.max(0, Math.trunc(value as number)) : 0
 }

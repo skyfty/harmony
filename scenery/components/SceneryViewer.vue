@@ -7258,6 +7258,7 @@ function ensureRigidbodyBindingForObject(nodeId: string, object: THREE.Object3D)
     return;
   }
   if (isRoadDynamicMesh(node.dynamicMesh) && !resolveRoadVehicleCollisionEnabled(node)) {
+    removeRigidbodyInstance(nodeId);
     return;
   }
   const bindingObject = resolveRigidbodyBindingObject(effectiveComponent, object);

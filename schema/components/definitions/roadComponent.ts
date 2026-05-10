@@ -21,7 +21,7 @@ export interface RoadComponentProps {
   junctionSmoothing: number
   /** Whether road surface adapts to ground undulation. Default true. */
   snapToTerrain: boolean
-  /** Whether the road should participate in vehicle collision / driveable surface physics. Default true. */
+  /** Whether the road should generate heightmap-based driveable collision. Default true. */
   enableVehicleCollision?: boolean
   laneLines: boolean
   shoulders: boolean
@@ -225,7 +225,7 @@ const roadComponentDefinition: ComponentDefinition<RoadComponentProps> = {
       label: 'Details',
       fields: [
         { kind: 'boolean', key: 'snapToTerrain', label: 'Adapt To Ground Terrain' },
-        { kind: 'boolean', key: 'enableVehicleCollision', label: 'Enable Vehicle Collision' },
+        { kind: 'boolean', key: 'enableVehicleCollision', label: 'Enable Driveable Collision' },
         { kind: 'boolean', key: 'laneLines', label: 'Show Lane Lines' },
         { kind: 'boolean', key: 'shoulders', label: 'Show Shoulders' },
       ],

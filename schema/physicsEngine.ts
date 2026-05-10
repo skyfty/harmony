@@ -63,7 +63,7 @@ export const COLLISION_MASK_DYNAMIC_OBJ = COLLISION_GROUP_STATIC_ENV | COLLISION
 export const COLLISION_MASK_KINEMATIC_OBJ = COLLISION_GROUP_DYNAMIC_OBJ
 
 export type RoadHeightfieldDebugSegment = {
-	shape: Extract<RigidbodyPhysicsShape, { kind: 'heightfield' | 'box' }>
+	shape: Extract<RigidbodyPhysicsShape, { kind: 'heightfield' }>
 }
 
 export type RoadHeightfieldDebugEntry = {
@@ -130,24 +130,6 @@ export function resolveRoadHeightfieldDebugSegments(params: {
 			})
 			return
 		}
-		const boxShape = body.shapes.find((candidate) => candidate instanceof CANNON.Box) as CANNON.Box | undefined
-		if (!boxShape) {
-			return
-		}
-		const hx = (boxShape as any).halfExtents?.x as unknown
-		const hy = (boxShape as any).halfExtents?.y as unknown
-		const hz = (boxShape as any).halfExtents?.z as unknown
-		if (![hx, hy, hz].every((value) => typeof value === 'number' && Number.isFinite(value) && value > 0)) {
-			return
-		}
-		segments.push({
-			shape: {
-				kind: 'box',
-				halfExtents: [hx as number, hy as number, hz as number],
-				offset: [0, 0, 0],
-				applyScale: false,
-			},
-		})
 	})
 	const entry: RoadHeightfieldDebugEntry = { signature, segments }
 	cache.set(nodeId, entry)
@@ -160,6 +142,7 @@ export function ensureRoadHeightfieldRigidbodyInstance(params: {
 	roadObject: THREE.Object3D
 	groundNode: SceneNode
 	world: CANNON.World
+	collisionMode?: 'normal' | 'flat-test'
 	existingInstance: RigidbodyInstance | null
 	createBody: (
 		node: SceneNode,
@@ -176,6 +159,7 @@ export function ensureRoadHeightfieldRigidbodyInstance(params: {
 		roadObject,
 		groundNode,
 		world,
+		collisionMode,
 		existingInstance,
 		createBody,
 		loggerTag,
@@ -199,6 +183,7 @@ export function ensureRoadHeightfieldRigidbodyInstance(params: {
 		roadObject,
 		groundNode,
 		world,
+		collisionMode,
 		createBody,
 		maxSegments,
 	})
@@ -257,6 +242,13 @@ export type RigidbodyInstance = {
 	signature?: string
 	/** If false, we should not copy the physics body transform back onto the render object. */
 	syncObjectFromBody?: boolean
+}
+
+export type CreateRigidbodyBodyInput = {
+	node: SceneNode
+	component: SceneNodeComponentState<RigidbodyComponentProps>
+	shapeDefinition: RigidbodyPhysicsShape | null
+	object: THREE.Object3D
 }
 
 /**
@@ -1388,13 +1380,6 @@ export function resolveGroundHeightfieldShape(
 	return entry
 }
 
-type CreateRigidbodyBodyInput = {
-	node: SceneNode
-	component: SceneNodeComponentState<RigidbodyComponentProps>
-	shapeDefinition: RigidbodyPhysicsShape | null
-	object: THREE.Object3D
-}
-
 export type CreateRigidbodyBodyOptions = {
 	world: CANNON.World
 	groundHeightfieldCache: Map<string, GroundHeightfieldCacheEntry>
@@ -1495,6 +1480,7 @@ export function createRigidbodyBody(
 	const isDynamic = props.bodyType === 'DYNAMIC'
 	const mass = isDynamic ? Math.max(0, props.mass ?? 0) : 0
 	const body = new CANNON.Body({ mass })
+	;(body as CANNON.Body & { name?: string }).name = `node:${node.id}`
 	body.type = mapBodyType(props.bodyType)
 	// Assign collision filter groups so that static-vs-static pairs are skipped in broadphase.
 	if (body.type === CANNON.Body.STATIC) {
