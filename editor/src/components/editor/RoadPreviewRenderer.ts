@@ -247,23 +247,31 @@ export function createRoadPreviewRenderer(options: {
       : null
 
     if (!session.previewGroup) {
-      const preview = createRoadGroup(build.definition, {
-        heightSampler: localHeightSampler,
+      const createOpts: any = {
         samplingDensityFactor: ROAD_PREVIEW_SAMPLING_DENSITY_FACTOR,
         smoothingStrengthFactor: ROAD_PREVIEW_SMOOTHING_STRENGTH_FACTOR,
         minClearance: ROAD_PREVIEW_MIN_CLEARANCE,
-      })
+      }
+      // Prefer persisted vertexHeights when present; only provide a runtime sampler
+      // when vertexHeights are not available (e.g., during ad-hoc drawing).
+      if (!Array.isArray(build.definition.vertexHeights) && localHeightSampler) {
+        createOpts.heightSampler = localHeightSampler
+      }
+      const preview = createRoadGroup(build.definition, createOpts)
       applyRoadPreviewStyling(preview)
       preview.userData.isRoadPreview = true
       session.previewGroup = preview
       options.rootGroup.add(preview)
     } else {
-      updateRoadGroup(session.previewGroup, build.definition, {
-        heightSampler: localHeightSampler,
+      const updateOpts: any = {
         samplingDensityFactor: ROAD_PREVIEW_SAMPLING_DENSITY_FACTOR,
         smoothingStrengthFactor: ROAD_PREVIEW_SMOOTHING_STRENGTH_FACTOR,
         minClearance: ROAD_PREVIEW_MIN_CLEARANCE,
-      })
+      }
+      if (!Array.isArray(build.definition.vertexHeights) && localHeightSampler) {
+        updateOpts.heightSampler = localHeightSampler
+      }
+      updateRoadGroup(session.previewGroup, build.definition, updateOpts)
       applyRoadPreviewStyling(session.previewGroup)
       if (!options.rootGroup.children.includes(session.previewGroup)) {
         options.rootGroup.add(session.previewGroup)

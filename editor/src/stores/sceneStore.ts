@@ -3871,6 +3871,29 @@ function resolveGroundNodeForHeightSampling(nodes: SceneNode[]): SceneNode | nul
   return null
 }
 
+function rebuildRoadVertexHeights(node: SceneNode, definition: RoadDynamicMesh, groundNode: SceneNode | null): RoadDynamicMesh {
+  const sampler = resolveRoadLocalHeightSampler(node, groundNode)
+  const roadState = node.components?.[ROAD_COMPONENT_TYPE] as SceneNodeComponentState<RoadComponentProps> | undefined
+  const roadProps = clampRoadProps(roadState?.props as Partial<RoadComponentProps> | null | undefined)
+  const clearance = Number.isFinite(roadProps.minClearance) ? Math.max(0, Number(roadProps.minClearance)) : 0
+  const vertexHeights = Array.isArray(definition.vertices)
+    ? definition.vertices.map((vertex) => {
+        const x = Number(vertex?.[0])
+        const z = Number(vertex?.[1])
+        if (!sampler) {
+          return 0
+        }
+        const sampled = sampler(Number.isFinite(x) ? x : 0, Number.isFinite(z) ? z : 0)
+        return Number.isFinite(sampled) ? sampled + clearance : clearance
+      })
+    : []
+
+  return {
+    ...definition,
+    vertexHeights,
+  }
+}
+
 function ensureDynamicMeshRuntime(node: SceneNode, groundNode: SceneNode | null): boolean {
   const meshDefinition = node.dynamicMesh
   if (!meshDefinition) {
@@ -10101,15 +10124,9 @@ export const useSceneStore = defineStore('scene', {
         this.updateNodeDynamicMesh(nodeId, dynamicMesh)
         return
       }
-      const existingLocalEditTileCount = target.dynamicMesh && typeof target.dynamicMesh === 'object' && target.dynamicMesh?.localEditTiles
-        ? Object.keys(target.dynamicMesh.localEditTiles as Record<string, unknown>).length
-        : 0
       const incoming = dynamicMesh && typeof dynamicMesh === 'object'
         ? { ...(dynamicMesh as Record<string, unknown>) }
         : dynamicMesh
-      const incomingLocalEditTileCount = incoming && typeof incoming === 'object' && Object.prototype.hasOwnProperty.call(incoming, 'localEditTiles') && (incoming as Record<string, unknown>).localEditTiles
-        ? Object.keys((incoming as Record<string, unknown>).localEditTiles as Record<string, unknown>).length
-        : 0
       let shouldPersistScatterSidecar = false
       let shouldPersistPaintSidecar = false
       if (incoming && typeof incoming === 'object' && this.currentSceneId) {
@@ -10146,9 +10163,6 @@ export const useSceneStore = defineStore('scene', {
         })
       }
       finalizeDynamicMeshRuntimePatch(this, nodeId, resolveDynamicMeshType(target.dynamicMesh))
-      const mergedLocalEditTileCount = target.dynamicMesh && typeof target.dynamicMesh === 'object' && target.dynamicMesh?.localEditTiles
-        ? Object.keys(target.dynamicMesh.localEditTiles as Record<string, unknown>).length
-        : 0
 
       persistGroundHeightSidecarForNode(target)
       if (shouldPersistScatterSidecar) {
@@ -10230,6 +10244,11 @@ export const useSceneStore = defineStore('scene', {
       }
 
       this.captureNodeDynamicMeshHistory(nodeId)
+
+      if (dynamicMesh && typeof dynamicMesh === 'object' && dynamicMesh.type === 'Road') {
+        const groundNode = resolveGroundNodeForHeightSampling(this.nodes)
+        Object.assign(dynamicMesh, rebuildRoadVertexHeights(target, dynamicMesh as RoadDynamicMesh, groundNode))
+      }
 
       applySceneNodeDynamicMeshUpdate(this, nodeId, dynamicMesh)
       finalizeDynamicMeshRuntimePatch(this, nodeId, resolveDynamicMeshType(target.dynamicMesh))
@@ -15476,6 +15495,21 @@ export const useSceneStore = defineStore('scene', {
             smoothingStrengthFactor: ROAD_TERRAIN_DEFAULT_SMOOTHING_STRENGTH_FACTOR,
             minClearance: ROAD_TERRAIN_DEFAULT_MIN_CLEARANCE,
           }
+
+      build.definition.vertexHeights = Array.isArray(build.definition.vertices)
+        ? build.definition.vertices.map((vertex) => {
+            const x = Number(vertex?.[0])
+            const z = Number(vertex?.[1])
+            const sampled = buildPathHeightSampler
+              ? buildPathHeightSampler(Number.isFinite(x) ? x : 0, Number.isFinite(z) ? z : 0)
+              : 0
+            const clearance = Number.isFinite(initialRoadRenderProps.minClearance)
+              ? Math.max(0, Number(initialRoadRenderProps.minClearance))
+              : 0
+            return Number.isFinite(sampled) ? sampled + clearance : clearance
+          })
+        : []
+
       const initialRoadRenderOptions = {
         heightSampler: initialRoadRenderProps.snapToTerrain !== false
           ? (buildPathHeightSampler

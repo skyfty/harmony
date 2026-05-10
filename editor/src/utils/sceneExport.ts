@@ -30,7 +30,7 @@ import {
 } from '@/utils/rigidbodyCollider'
 import { createGroundMesh } from '@schema/groundMesh'
 import { createWallGroup } from '@schema/wallMesh'
-import { createRoadGroup, resolveRoadLocalHeightSampler } from '@schema/roadMesh'
+import { createRoadGroup } from '@schema/roadMesh'
 import {
   RIGIDBODY_COMPONENT_TYPE,
   type RigidbodyComponentProps,
@@ -43,10 +43,7 @@ import {
   PRELOADABLE_COMPONENT_TYPE,
   type PreloadableComponentProps,
   WALL_COMPONENT_TYPE,
-  ROAD_COMPONENT_TYPE,
-  type RoadComponentProps,
   type WallComponentProps,
-  clampRoadProps,
   clampWallProps,
   clampRigidbodyComponentProps,
   RIGIDBODY_METADATA_KEY,
@@ -822,7 +819,7 @@ async function loadAssetObjectForNode(
   return clone
 }
 
-function buildDynamicMeshObject(node: SceneNode, groundNode: SceneNode | null): THREE.Object3D | null {
+function buildDynamicMeshObject(node: SceneNode, _groundNode: SceneNode | null): THREE.Object3D | null {
   const mesh = node.dynamicMesh
   if (!mesh) {
     return null
@@ -846,11 +843,8 @@ function buildDynamicMeshObject(node: SceneNode, groundNode: SceneNode | null): 
     }
     case 'Road':
       {
-        const roadState = node.components?.[ROAD_COMPONENT_TYPE] as SceneNodeComponentState<RoadComponentProps> | undefined
-        const roadProps = clampRoadProps(roadState?.props as Partial<RoadComponentProps> | null | undefined)
-        return createRoadGroup(mesh, {
-          heightSampler: roadProps.snapToTerrain ? resolveRoadLocalHeightSampler(node, groundNode) : null,
-        }).clone(true)
+        // Do not provide a runtime height sampler here; prefer persisted `vertexHeights`.
+        return createRoadGroup(mesh, {}).clone(true)
       }
     default:
       return null

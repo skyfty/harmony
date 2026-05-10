@@ -73,6 +73,18 @@ export function buildRoadHeightfieldBodies(params: RoadHeightfieldBuildParams): 
 	if (!graph) {
 		return null
 	}
+
+	if (Array.isArray(definition.vertexHeights)) {
+		for (let index = 0; index < graph.vertices.length; index += 1) {
+			const vertex = graph.vertices[index]
+			if (!vertex) {
+				continue
+			}
+			const sampledHeight = Number(definition.vertexHeights[index])
+			vertex.y = Number.isFinite(sampledHeight) ? sampledHeight : 0
+		}
+	}
+
 	const boundaryWallComponent = roadNode.components?.[BOUNDARY_WALL_COMPONENT_TYPE] as
 		| SceneNodeComponentState<BoundaryWallComponentProps>
 		| undefined
@@ -92,6 +104,8 @@ export function buildRoadHeightfieldBodies(params: RoadHeightfieldBuildParams): 
 	if (!curves.length) {
 		return null
 	}
+
+	const hasVertexHeights = Array.isArray(definition.vertexHeights) && definition.vertexHeights.length >= graph.vertices.length
 
 	roadObject.updateMatrixWorld(true)
 
@@ -119,14 +133,20 @@ export function buildRoadHeightfieldBodies(params: RoadHeightfieldBuildParams): 
 		if (divisions < 2) {
 			continue
 		}
-		const { heights: smoothedHeights, minimums } = buildSmoothedHeightSeries({
-			curve,
-			divisions,
-			width: roadWidth,
-			heightSampler,
-			minClearance,
-			smoothingStrengthFactor,
-		})
+		const smoothedSeries = hasVertexHeights
+			? (() => {
+				const heights = Array.from({ length: divisions + 1 }, (_value, sampleIndex) => curve.getPoint(sampleIndex / divisions).y)
+				return { heights, minimums: heights.slice() }
+			})()
+			: buildSmoothedHeightSeries({
+				curve,
+				divisions,
+				width: roadWidth,
+				heightSampler,
+				minClearance,
+				smoothingStrengthFactor,
+			})
+		const { heights: smoothedHeights, minimums } = smoothedSeries
 		// Feed the signature with the final smoothed heights so edits invalidate correctly.
 		smoothedHeights.forEach((value) => {
 			const normalized = Math.round((Number.isFinite(value) ? value : 0) * 1000)

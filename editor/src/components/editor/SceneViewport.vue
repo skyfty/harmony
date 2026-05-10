@@ -1601,8 +1601,6 @@ function computeRoadDynamicMeshSignature(
   minClearance: number | null,
   laneLineWidth: number | null,
   shoulderWidth: number | null,
-  groundSignature: string | null,
-  heightSamplerSignature: unknown,
 ): string {
   const serialized = stableSerialize([
     Array.isArray(definition.vertices) ? definition.vertices : [],
@@ -1617,8 +1615,7 @@ function computeRoadDynamicMeshSignature(
     Number.isFinite(minClearance) ? minClearance : null,
     Number.isFinite(laneLineWidth) ? laneLineWidth : null,
     Number.isFinite(shoulderWidth) ? shoulderWidth : null,
-    typeof groundSignature === 'string' ? groundSignature : null,
-    heightSamplerSignature ?? null,
+    Array.isArray(definition.vertexHeights) ? definition.vertexHeights : null,
   ])
   return hashString(serialized)
 }
@@ -1659,7 +1656,6 @@ function resolveRoadRenderOptionsForNodeId(nodeId: string): {
   laneLines: boolean
   shoulders: boolean
   materialConfigId: string | null
-  heightSampler: ((x: number, z: number) => number) | null
   samplingDensityFactor?: number
   smoothingStrengthFactor?: number
   minClearance?: number
@@ -1674,18 +1670,7 @@ function resolveRoadRenderOptionsForNodeId(nodeId: string): {
   const junctionSmoothing = resolveRoadJunctionSmoothing(node)
   const laneLines = resolveRoadLaneLinesEnabled(node)
   const shoulders = resolveRoadShouldersEnabled(node)
-  const snapToTerrain = resolveRoadSnapToTerrainEnabled(node)
   const materialConfigId = resolveRoadMaterialConfigId(node)
-  const groundNode = getGroundNodeFromStore()
-  const groundDefinition = groundNode?.dynamicMesh?.type === 'Ground'
-    ? groundNode.dynamicMesh
-    : null
-  const roadObject = objectMap.get(nodeId) ?? getRuntimeObject(nodeId)
-  const groundObject = groundNode
-    ? (objectMap.get(groundNode.id) ?? getRuntimeObject(groundNode.id))
-    : null
-
-  const fallbackRoadLocalY = Number(node.position?.y ?? 0)
 
   const samplingDensityFactorRaw = component?.props?.samplingDensityFactor
   const samplingDensityFactorValue = typeof samplingDensityFactorRaw === 'number'
@@ -1721,21 +1706,7 @@ function resolveRoadRenderOptionsForNodeId(nodeId: string): {
     minClearance,
     laneLineWidth,
     shoulderWidth,
-    // Reuse the same world-space heightfield projection path used by wall/floor build interactions,
-    // then convert the sampled world point back into the road's local Y.
-    heightSampler: snapToTerrain && groundDefinition && roadObject && groundObject
-      ? ((x: number, z: number) => {
-          const roadWorldPoint = roadObject.localToWorld(new THREE.Vector3(x, 0, z))
-          const sampledWorldY = sampleHeightfieldWorldYAt(roadWorldPoint)
-          if (typeof sampledWorldY !== 'number' || !Number.isFinite(sampledWorldY)) {
-            return fallbackRoadLocalY
-          }
-          const safeSampledWorldY = sampledWorldY
-          roadWorldPoint.y = safeSampledWorldY
-          const roadLocalHeightPoint = roadObject.worldToLocal(roadWorldPoint.clone())
-          return Number.isFinite(roadLocalHeightPoint.y) ? roadLocalHeightPoint.y : fallbackRoadLocalY
-        })
-      : null,
+    // Note: runtime height sampling removed; persisted `vertexHeights` drives previews.
   }
 }
 
@@ -21306,24 +21277,12 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
     const junctionSmoothing = resolveRoadJunctionSmoothing(node)
     const laneLines = resolveRoadLaneLinesEnabled(node)
     const shoulders = resolveRoadShouldersEnabled(node)
-    const snapToTerrain = resolveRoadSnapToTerrainEnabled(node)
     const materialConfigId = resolveRoadMaterialConfigId(node)
-    const groundDefinition = resolveGroundDynamicMeshDefinition()
-    const groundSignature = groundDefinition ? computeGroundDynamicMeshSignature(groundDefinition) : null
     const roadOptions = resolveRoadRenderOptionsForNodeId(node.id) ?? {
       junctionSmoothing,
       laneLines,
       shoulders,
       materialConfigId,
-      heightSampler: null,
-    }
-
-    const groundNode = getGroundNodeFromStore()
-    const heightSamplerSignature = {
-      snapToTerrain,
-      roadPosition: node.position ?? null,
-      roadRotation: node.rotation ?? null,
-      groundPosition: groundNode?.position ?? null,
     }
     let roadGroup = userData.roadGroup as THREE.Group | undefined
     if (!roadGroup) {
@@ -21340,8 +21299,6 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
         typeof roadOptions.minClearance === 'number' ? roadOptions.minClearance : Number(roadOptions.minClearance),
         typeof roadOptions.laneLineWidth === 'number' ? roadOptions.laneLineWidth : Number(roadOptions.laneLineWidth),
         typeof roadOptions.shoulderWidth === 'number' ? roadOptions.shoulderWidth : Number(roadOptions.shoulderWidth),
-        groundSignature,
-        heightSamplerSignature,
       )
       object.add(roadGroup)
       userData.roadGroup = roadGroup
@@ -21359,8 +21316,6 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
         typeof roadOptions.minClearance === 'number' ? roadOptions.minClearance : Number(roadOptions.minClearance),
         typeof roadOptions.laneLineWidth === 'number' ? roadOptions.laneLineWidth : Number(roadOptions.laneLineWidth),
         typeof roadOptions.shoulderWidth === 'number' ? roadOptions.shoulderWidth : Number(roadOptions.shoulderWidth),
-        groundSignature,
-        heightSamplerSignature,
       )
       if (groupData[DYNAMIC_MESH_SIGNATURE_KEY] !== nextSignature) {
         updateRoadGroup(roadGroup, roadDefinition, roadOptions)
@@ -22842,24 +22797,12 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
       const junctionSmoothing = resolveRoadJunctionSmoothing(node)
       const laneLines = resolveRoadLaneLinesEnabled(node)
       const shoulders = resolveRoadShouldersEnabled(node)
-      const snapToTerrain = resolveRoadSnapToTerrainEnabled(node)
       const materialConfigId = resolveRoadMaterialConfigId(node)
-      const groundDefinition = resolveGroundDynamicMeshDefinition()
-      const groundSignature = groundDefinition ? computeGroundDynamicMeshSignature(groundDefinition) : null
       const roadOptions = resolveRoadRenderOptionsForNodeId(node.id) ?? {
         junctionSmoothing,
         laneLines,
         shoulders,
         materialConfigId,
-        heightSampler: null,
-      }
-
-      const groundNode = getGroundNodeFromStore()
-      const heightSamplerSignature = {
-        snapToTerrain,
-        roadPosition: node.position ?? null,
-        roadRotation: node.rotation ?? null,
-        groundPosition: groundNode?.position ?? null,
       }
       const roadGroup = createRoadGroup(roadDefinition, roadOptions)
       roadGroup.removeFromParent()
@@ -22875,8 +22818,6 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
         typeof roadOptions.minClearance === 'number' ? roadOptions.minClearance : Number(roadOptions.minClearance),
         typeof roadOptions.laneLineWidth === 'number' ? roadOptions.laneLineWidth : Number(roadOptions.laneLineWidth),
         typeof roadOptions.shoulderWidth === 'number' ? roadOptions.shoulderWidth : Number(roadOptions.shoulderWidth),
-        groundSignature,
-        heightSamplerSignature,
       )
       container.add(roadGroup)
       containerData.roadGroup = roadGroup
