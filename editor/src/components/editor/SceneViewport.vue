@@ -19426,6 +19426,22 @@ const roadSurfaceProbeRaycaster = new THREE.Raycaster()
 const roadSurfaceProbeOriginY = 10000
 const roadSurfaceProbeMaxDistance = 20000
 const roadSurfaceProbeWorldPointHelper = new THREE.Vector3()
+const ROAD_SURFACE_PROBE_CACHE_PRECISION = 1000
+const ROAD_SURFACE_PROBE_CACHE_LIMIT = 4096
+const roadSurfaceProbeCache = new Map<string, number | null>()
+let roadSurfaceProbeCacheSceneSignature = ''
+
+function encodeRoadSurfaceProbeCacheValue(value: number): string {
+  return `${Math.round(value * ROAD_SURFACE_PROBE_CACHE_PRECISION)}`
+}
+
+function getRoadSurfaceProbeSceneSignature(): string {
+  return `${sceneStore.sceneGraphStructureVersion}|${sceneStore.sceneNodePropertyVersion}`
+}
+
+function getRoadSurfaceProbeCacheKey(worldPosition: THREE.Vector3): string {
+  return `${encodeRoadSurfaceProbeCacheValue(worldPosition.x)},${encodeRoadSurfaceProbeCacheValue(worldPosition.z)}`
+}
 
 function intersectRayWithGroundHeightfieldWorld(ray: THREE.Ray): THREE.Vector3 | null {
   const groundDefinition = resolveGroundDynamicMeshDefinition()
@@ -19564,6 +19580,17 @@ function sampleVisibleSurfaceWorldYAt(worldPosition: THREE.Vector3): number | nu
     return null
   }
 
+  const sceneSignature = getRoadSurfaceProbeSceneSignature()
+  if (sceneSignature !== roadSurfaceProbeCacheSceneSignature) {
+    roadSurfaceProbeCacheSceneSignature = sceneSignature
+    roadSurfaceProbeCache.clear()
+  }
+
+  const cacheKey = getRoadSurfaceProbeCacheKey(worldPosition)
+  if (roadSurfaceProbeCache.has(cacheKey)) {
+    return roadSurfaceProbeCache.get(cacheKey) ?? null
+  }
+
   roadSurfaceProbeRaycaster.near = 0
   roadSurfaceProbeRaycaster.far = roadSurfaceProbeMaxDistance
   roadSurfaceProbeRaycaster.ray.origin.set(worldPosition.x, roadSurfaceProbeOriginY, worldPosition.z)
@@ -19607,9 +19634,18 @@ function sampleVisibleSurfaceWorldYAt(worldPosition: THREE.Vector3): number | nu
       continue
     }
 
-    return intersection.point.y
+    const result = intersection.point.y
+    if (roadSurfaceProbeCache.size >= ROAD_SURFACE_PROBE_CACHE_LIMIT) {
+      roadSurfaceProbeCache.clear()
+    }
+    roadSurfaceProbeCache.set(cacheKey, result)
+    return result
   }
 
+  if (roadSurfaceProbeCache.size >= ROAD_SURFACE_PROBE_CACHE_LIMIT) {
+    roadSurfaceProbeCache.clear()
+  }
+  roadSurfaceProbeCache.set(cacheKey, null)
   return null
 }
 
