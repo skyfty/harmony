@@ -16,7 +16,7 @@ export type RoadPoint2D = [number, number]
 export interface RoadComponentProps {
   vertices: RoadPoint2D[]
   segments: RoadSegment[]
-  vertexHeights: number[]
+  segmentHeights?: number[][]
   width: number
   junctionSmoothing: number
   /** Whether road surface adapts to ground undulation. Default true. */
@@ -59,10 +59,6 @@ export function clampRoadProps(props: Partial<RoadComponentProps> | null | undef
     ? (props as RoadComponentProps).vertices
     : []
   const vertices = verticesRaw.map(normalizePoint).filter((p): p is RoadPoint2D => !!p)
-  const vertexHeights = Array.isArray((props as RoadComponentProps | undefined)?.vertexHeights)
-    ? (props as RoadComponentProps).vertexHeights!.slice(0, vertices.length)
-    : []
-
   const segmentsRaw = Array.isArray((props as RoadComponentProps | undefined)?.segments)
     ? (props as RoadComponentProps).segments
     : []
@@ -79,6 +75,10 @@ export function clampRoadProps(props: Partial<RoadComponentProps> | null | undef
       return { a, b } as RoadSegment
     })
     .filter((segment): segment is RoadSegment => segment !== null)
+
+  const segmentHeights = Array.isArray((props as RoadComponentProps | undefined)?.segmentHeights)
+    ? (props as RoadComponentProps).segmentHeights!.slice(0, Math.max(0, segments.length))
+    : []
 
   const laneLines = Boolean(props?.laneLines)
   const shoulders = Boolean(props?.shoulders)
@@ -121,7 +121,7 @@ export function clampRoadProps(props: Partial<RoadComponentProps> | null | undef
     snapToTerrain,
     laneLines,
     shoulders,
-    vertexHeights,
+    segmentHeights,
     bodyAssetId: normalizeAssetId((props as RoadComponentProps | undefined)?.bodyAssetId),
     samplingDensityFactor,
     smoothingStrengthFactor,
@@ -138,8 +138,8 @@ export function resolveRoadComponentPropsFromMesh(mesh: RoadDynamicMesh | undefi
       laneLines: false,
       shoulders: false,
       vertices: [],
-      segments: [],
-      vertexHeights: [],
+        segments: [],
+        segmentHeights: [],
       width: ROAD_DEFAULT_WIDTH,
       junctionSmoothing: ROAD_DEFAULT_JUNCTION_SMOOTHING,
       bodyAssetId: null,
@@ -158,7 +158,7 @@ export function resolveRoadComponentPropsFromMesh(mesh: RoadDynamicMesh | undefi
   return clampRoadProps({
     vertices: vertices as any,
     segments: segments as any,
-    vertexHeights: Array.isArray(mesh.vertexHeights) ? mesh.vertexHeights.slice(0, vertices.length) : [],
+    segmentHeights: Array.isArray((mesh as any).segmentHeights) ? (mesh as any).segmentHeights.slice(0, segments.length) : [],
     width: mesh.width,
     junctionSmoothing: ROAD_DEFAULT_JUNCTION_SMOOTHING,
     snapToTerrain: true,
@@ -185,7 +185,7 @@ export function cloneRoadComponentProps(props: RoadComponentProps): RoadComponen
     minClearance: props.minClearance ?? 0.01,
     laneLineWidth: props.laneLineWidth,
     shoulderWidth: props.shoulderWidth,
-    vertexHeights: props.vertexHeights,
+    segmentHeights: props.segmentHeights,
   }
 }
 
@@ -245,7 +245,7 @@ export function createRoadComponentState(
   const defaults = roadComponentDefinition.createDefaultProps(node)
   const merged = clampRoadProps({
     vertices: overrides?.vertices ?? defaults.vertices,
-    vertexHeights: overrides?.vertexHeights ?? defaults.vertexHeights,
+    segmentHeights: overrides?.segmentHeights ?? defaults.segmentHeights,
     segments: overrides?.segments ?? defaults.segments,
     width: overrides?.width ?? defaults.width,
     junctionSmoothing: overrides?.junctionSmoothing ?? defaults.junctionSmoothing,

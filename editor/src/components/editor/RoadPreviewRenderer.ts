@@ -252,9 +252,9 @@ export function createRoadPreviewRenderer(options: {
         smoothingStrengthFactor: ROAD_PREVIEW_SMOOTHING_STRENGTH_FACTOR,
         minClearance: ROAD_PREVIEW_MIN_CLEARANCE,
       }
-      // Prefer persisted vertexHeights when present; only provide a runtime sampler
-      // when vertexHeights are not available (e.g., during ad-hoc drawing).
-      if (!Array.isArray(build.definition.vertexHeights) && localHeightSampler) {
+      // Prefer persisted segmentHeights when present; only provide a runtime sampler
+      // when segmentHeights are not available (e.g., during ad-hoc drawing).
+      if (!Array.isArray((build.definition as any).segmentHeights) && localHeightSampler) {
         createOpts.heightSampler = localHeightSampler
       }
       const preview = createRoadGroup(build.definition, createOpts)
@@ -268,7 +268,7 @@ export function createRoadPreviewRenderer(options: {
         smoothingStrengthFactor: ROAD_PREVIEW_SMOOTHING_STRENGTH_FACTOR,
         minClearance: ROAD_PREVIEW_MIN_CLEARANCE,
       }
-      if (!Array.isArray(build.definition.vertexHeights) && localHeightSampler) {
+      if (!Array.isArray((build.definition as any).segmentHeights) && localHeightSampler) {
         updateOpts.heightSampler = localHeightSampler
       }
       updateRoadGroup(session.previewGroup, build.definition, updateOpts)

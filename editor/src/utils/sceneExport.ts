@@ -843,7 +843,7 @@ function buildDynamicMeshObject(node: SceneNode, _groundNode: SceneNode | null):
     }
     case 'Road':
       {
-        // Do not provide a runtime height sampler here; prefer persisted `vertexHeights`.
+        // Do not provide a runtime height sampler here; prefer persisted `segmentHeights`.
         return createRoadGroup(mesh, {}).clone(true)
       }
     default:

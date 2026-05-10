@@ -5,7 +5,7 @@ import type { SceneNode, SceneNodeComponentState, RoadDynamicMesh } from './inde
 import type { RigidbodyComponentProps, RigidbodyPhysicsShape } from './components'
 import { BOUNDARY_WALL_COMPONENT_TYPE, clampBoundaryWallComponentProps, type BoundaryWallComponentProps } from './components'
 import { ROAD_COMPONENT_TYPE, clampRoadProps, type RoadComponentProps } from './components/definitions/roadComponent'
-import { resolveRoadLocalHeightSampler } from './roadMesh'
+import { resolveRoadLocalHeightSampler, createSegmentHeightSampler } from './roadMesh'
 import { buildGroundHeightfieldData } from './groundHeightfield'
 import { buildRoadCornerBezierCurvePath } from './roadCurvePath'
 import { buildRoadGraph, type RoadGraph } from './roadGraph'
@@ -74,15 +74,22 @@ export function buildRoadHeightfieldBodies(params: RoadHeightfieldBuildParams): 
 		return null
 	}
 
-	if (Array.isArray(definition.vertexHeights)) {
-		for (let index = 0; index < graph.vertices.length; index += 1) {
-			const vertex = graph.vertices[index]
-			if (!vertex) {
-				continue
-			}
-			const sampledHeight = Number(definition.vertexHeights[index])
-			vertex.y = Number.isFinite(sampledHeight) ? sampledHeight : 0
+	// If per-segment heights are present, build a segment-based sampler and
+	// let subsequent curve sampling use it. Otherwise fall back to runtime sampler.
+	let serializedSampler: ((x: number, z: number) => number) | null = null
+	if (Array.isArray((definition as any).segmentHeights) && Array.isArray(definition.segments)) {
+		const rawSegments = Array.isArray(definition.segments) ? definition.segments : []
+		const sanitizedSegments: Array<{ a: number; b: number; segmentIndex: number }> = []
+		for (let i = 0; i < rawSegments.length; i += 1) {
+			const seg = rawSegments[i]
+			const a = Number((seg as any)?.a)
+			const b = Number((seg as any)?.b)
+			if (!Number.isInteger(a) || !Number.isInteger(b)) continue
+			if (a < 0 || b < 0 || a >= graph.vertices.length || b >= graph.vertices.length) continue
+			sanitizedSegments.push({ a, b, segmentIndex: i })
 		}
+		const tmpBuild: any = { vertexVectors: graph.vertices, paths: [], sanitizedSegments }
+		serializedSampler = createSegmentHeightSampler(tmpBuild, (definition as any).segmentHeights)
 	}
 
 	const boundaryWallComponent = roadNode.components?.[BOUNDARY_WALL_COMPONENT_TYPE] as
@@ -105,7 +112,7 @@ export function buildRoadHeightfieldBodies(params: RoadHeightfieldBuildParams): 
 		return null
 	}
 
-	const hasVertexHeights = Array.isArray(definition.vertexHeights) && definition.vertexHeights.length >= graph.vertices.length
+	const hasSegmentHeights = Boolean(serializedSampler)
 
 	roadObject.updateMatrixWorld(true)
 
@@ -133,9 +140,12 @@ export function buildRoadHeightfieldBodies(params: RoadHeightfieldBuildParams): 
 		if (divisions < 2) {
 			continue
 		}
-		const smoothedSeries = hasVertexHeights
+		const smoothedSeries = hasSegmentHeights
 			? (() => {
-				const heights = Array.from({ length: divisions + 1 }, (_value, sampleIndex) => curve.getPoint(sampleIndex / divisions).y)
+				const heights = Array.from({ length: divisions + 1 }, (_value, sampleIndex) => {
+					const p = curve.getPoint(sampleIndex / divisions)
+					return serializedSampler ? serializedSampler(p.x, p.z) : p.y
+				})
 				return { heights, minimums: heights.slice() }
 			})()
 			: buildSmoothedHeightSeries({

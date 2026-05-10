@@ -1615,7 +1615,6 @@ function computeRoadDynamicMeshSignature(
     Number.isFinite(minClearance) ? minClearance : null,
     Number.isFinite(laneLineWidth) ? laneLineWidth : null,
     Number.isFinite(shoulderWidth) ? shoulderWidth : null,
-    Array.isArray(definition.vertexHeights) ? definition.vertexHeights : null,
   ])
   return hashString(serialized)
 }
@@ -1706,7 +1705,7 @@ function resolveRoadRenderOptionsForNodeId(nodeId: string): {
     minClearance,
     laneLineWidth,
     shoulderWidth,
-    // Note: runtime height sampling removed; persisted `vertexHeights` drives previews.
+    // Note: runtime height sampling removed; persisted `segmentHeights` drives previews.
   }
 }
 

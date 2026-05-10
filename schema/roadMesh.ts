@@ -580,6 +580,7 @@ type RoadPath = {
 type RoadBuildData = {
   vertexVectors: Array<THREE.Vector3 | null>
   paths: RoadPath[]
+  sanitizedSegments: SanitizedRoadSegment[]
 }
 
 type RoadCurveDescriptor = {
@@ -699,15 +700,7 @@ function collectRoadBuildData(definition: RoadDynamicMesh): RoadBuildData | null
     return null
   }
 
-  const rawVertexHeights = Array.isArray(definition.vertexHeights) ? definition.vertexHeights : null
-  for (let index = 0; index < vertexVectors.length; index += 1) {
-    const vertex = vertexVectors[index]
-    if (!vertex) {
-      continue
-    }
-    const sampledHeight = rawVertexHeights ? Number(rawVertexHeights[index]) : 0
-    vertex.y = Number.isFinite(sampledHeight) ? sampledHeight : 0
-  }
+  // Do not stamp vertex Y here; per-segment heights are sampled when needed.
 
   const rawSegments = Array.isArray(definition.segments) ? definition.segments : []
   const sanitizedSegments: SanitizedRoadSegment[] = []
@@ -737,42 +730,39 @@ function collectRoadBuildData(definition: RoadDynamicMesh): RoadBuildData | null
     return null
   }
 
-  return { vertexVectors, paths }
+  return { vertexVectors, paths, sanitizedSegments }
 }
-
 /**
  * Create a sampler that returns a height Y for an XZ query point using
- * the serialized `vertexHeights` present in `buildData.vertexVectors`.
+ * serialized `segmentHeights` (array per original segment index).
  *
- * Strategy: iterate all path segments, find the closest point on each
- * segment in XZ, and return the interpolated Y at that closest point.
- * Falls back to the nearest vertex Y if no segment found.
+ * Strategy: build a list of available segments (with endpoints from
+ * `buildData.vertexVectors` and the matching heights array from
+ * `rawSegmentHeights`). For a query, find the nearest point on any
+ * segment in XZ and interpolate along that segment's height array.
+ * Fall back to nearest vertex Y if no segment heights present.
  */
-function createSerializedHeightSampler(buildData: RoadBuildData) {
-  const vertexCount = buildData.vertexVectors.length
+export function createSegmentHeightSampler(buildData: RoadBuildData, rawSegmentHeights: unknown): ((x: number, z: number) => number) | null {
+  if (!Array.isArray(rawSegmentHeights)) {
+    return null
+  }
+
   const safeVertices = buildData.vertexVectors.map((v) => v ? new THREE.Vector3(v.x, v.y, v.z) : null)
 
-  const segments: Array<{ a: THREE.Vector3; b: THREE.Vector3 }> = []
-  for (const path of buildData.paths) {
-    const idx = path.indices
-    if (!Array.isArray(idx) || idx.length < 2) continue
-    for (let i = 0; i < idx.length - 1; i += 1) {
-      const a = safeVertices[idx[i]]
-      const b = safeVertices[idx[i + 1]]
-      if (a && b) segments.push({ a, b })
-    }
-    if (path.closed && idx.length >= 2) {
-      const a = safeVertices[idx[idx.length - 1]]
-      const b = safeVertices[idx[0]]
-      if (a && b) segments.push({ a, b })
-    }
+  const segments: Array<{ a: THREE.Vector3; b: THREE.Vector3; heights: number[] | null }> = []
+  for (const seg of buildData.sanitizedSegments) {
+    const a = safeVertices[seg.a]
+    const b = safeVertices[seg.b]
+    if (!a || !b) continue
+    const raw = rawSegmentHeights[seg.segmentIndex]
+    const heights = Array.isArray(raw) && raw.length >= 2 ? raw.map((n) => Number(n)) : null
+    segments.push({ a, b, heights })
   }
 
   return (qx: number, qz: number) => {
     let bestDistSq = Number.POSITIVE_INFINITY
-    let bestY: number | null = null
+    let bestHeight: number | undefined = undefined
 
-    // Check segments first (interpolated heights)
     for (const seg of segments) {
       const ax = seg.a.x
       const az = seg.a.z
@@ -782,17 +772,17 @@ function createSerializedHeightSampler(buildData: RoadBuildData) {
       const dz = bz - az
       const lenSq = dx * dx + dz * dz
       if (lenSq <= ROAD_EPSILON) {
-        // degenerate segment -> treat as point
         const vx = ax - qx
         const vz = az - qz
         const d2 = vx * vx + vz * vz
         if (d2 < bestDistSq) {
           bestDistSq = d2
-          bestY = seg.a.y
+              // endpoint height fallback
+              bestHeight = seg.heights && Number.isFinite(Number(seg.heights[0])) ? Number(seg.heights[0]) : seg.a.y
         }
         continue
       }
-      // project query onto segment in XZ
+
       const t = ((qx - ax) * dx + (qz - az) * dz) / lenSq
       const clampedT = Math.max(0, Math.min(1, t))
       const px = ax + clampedT * dx
@@ -802,26 +792,37 @@ function createSerializedHeightSampler(buildData: RoadBuildData) {
       const d2 = vx * vx + vz * vz
       if (d2 < bestDistSq) {
         bestDistSq = d2
-        bestY = seg.a.y + clampedT * (seg.b.y - seg.a.y)
-      }
-    }
-
-    // If no segment yielded a result, fall back to nearest vertex
-    if (bestY === null) {
-      for (let i = 0; i < vertexCount; i += 1) {
-        const v = safeVertices[i]
-        if (!v) continue
-        const dx = v.x - qx
-        const dz = v.z - qz
-        const d2 = dx * dx + dz * dz
-        if (d2 < bestDistSq) {
-          bestDistSq = d2
-          bestY = v.y
+        if (seg.heights && seg.heights.length >= 2) {
+          const f = clampedT * (seg.heights.length - 1)
+          const i0 = Math.floor(f)
+          const i1 = Math.min(seg.heights.length - 1, i0 + 1)
+          const frac = f - i0
+          const h0 = Number(seg.heights[i0] ?? 0)
+          const h1 = Number(seg.heights[i1] ?? h0)
+          bestHeight = h0 + (h1 - h0) * frac
+        } else {
+          // fallback to linear interp between endpoint Y if heights not provided
+          bestHeight = seg.a.y + clampedT * (seg.b.y - seg.a.y)
         }
       }
     }
 
-    return Number.isFinite(bestY as number) ? (bestY as number) : 0
+    if (bestHeight === undefined) {
+      // fallback to nearest vertex
+      let bestVDist = Number.POSITIVE_INFINITY
+      for (const v of safeVertices) {
+        if (!v) continue
+        const dx = v.x - qx
+        const dz = v.z - qz
+        const d2 = dx * dx + dz * dz
+        if (d2 < bestVDist) {
+          bestVDist = d2
+          bestHeight = v.y
+        }
+      }
+    }
+
+    return Number.isFinite(bestHeight ?? NaN) ? (bestHeight as number) : 0
   }
 }
 
@@ -1213,10 +1214,9 @@ function rebuildRoadGroup(group: THREE.Group, definition: RoadDynamicMesh, optio
   let usedRoadMaterial = false
   let usedShoulderMaterial = false
   let usedLaneLineMaterial = false
-  console.log('Using height sampler:',definition.vertexHeights)
 
-  const hasVertexHeights = Array.isArray(definition.vertexHeights) && definition.vertexHeights.length >= buildData.vertexVectors.length
-  const serializedSampler = hasVertexHeights ? createSerializedHeightSampler(buildData) : null
+  const hasSegmentHeights = Array.isArray((definition as any).segmentHeights) && Array.isArray(definition.segments) && (definition as any).segmentHeights.length >= buildData.sanitizedSegments.length
+  const serializedSampler = hasSegmentHeights ? createSegmentHeightSampler(buildData, (definition as any).segmentHeights) : null
   const heightSampler = serializedSampler ?? (typeof options.heightSampler === 'function' ? options.heightSampler : null)
   const samplingDensityFactor = options.samplingDensityFactor ?? 1.0
   const smoothingStrengthFactor = options.smoothingStrengthFactor ?? 1.0
@@ -1276,7 +1276,7 @@ function rebuildRoadGroup(group: THREE.Group, definition: RoadDynamicMesh, optio
         const surface = triangulateJunctionPatchXZ({
           contour: cleanedSurfaceLoop,
           heightSampler,
-          vertexHeights: contourHeights.length ? { contour: contourHeights } : null,
+          loopHeights: contourHeights.length ? { contour: contourHeights } : null,
           yOffset: ROAD_SURFACE_Y_OFFSET,
           minClearance,
         })
@@ -1303,7 +1303,7 @@ function rebuildRoadGroup(group: THREE.Group, definition: RoadDynamicMesh, optio
     }
   }
 
-  const sharedHeightSeriesList: Array<number[] | null> | null = hasVertexHeights
+  const sharedHeightSeriesList: Array<number[] | null> | null = hasSegmentHeights
     ? (() => {
         return curves.map((descriptor) => {
           const curve = descriptor.curve
@@ -1312,11 +1312,12 @@ function rebuildRoadGroup(group: THREE.Group, definition: RoadDynamicMesh, optio
             return null
           }
           const divisions = computeRoadDivisionsForCurve(curve, length, samplingDensityFactor, smoothing)
-
           const values: number[] = []
+          const pt = new THREE.Vector3()
           for (let i = 0; i <= divisions; i += 1) {
             const t = i / divisions
-            values.push(curve.getPoint(t).y)
+            curve.getPoint(t, pt)
+            values.push(heightSampler ? heightSampler(pt.x, pt.z) : pt.y)
           }
           return values
         })
@@ -1559,7 +1560,7 @@ function rebuildRoadGroup(group: THREE.Group, definition: RoadDynamicMesh, optio
             contour,
             holes,
             heightSampler: null,
-            vertexHeights: contourHeights.length
+            loopHeights: contourHeights.length
               ? { contour: contourHeights, holes: holeHeights }
               : null,
             yOffset: 0,

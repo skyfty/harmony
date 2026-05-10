@@ -152,8 +152,8 @@ export function triangulateJunctionPatchXZ(params: {
   contour: THREE.Vector2[]
   holes?: THREE.Vector2[][]
   heightSampler?: ((x: number, z: number) => number) | null
-  /** Optional precomputed vertex heights (world Y) aligned to contour/holes order. */
-  vertexHeights?: { contour: number[]; holes?: number[][] } | null
+  /** Optional precomputed loop vertex heights (world Y) aligned to contour/holes order. */
+  loopHeights?: { contour: number[]; holes?: number[][] } | null
   yOffset: number
   minClearance?: number
 }): THREE.BufferGeometry | null {
@@ -164,7 +164,7 @@ export function triangulateJunctionPatchXZ(params: {
 
   const holes = Array.isArray(params.holes) ? params.holes.filter((h) => Array.isArray(h) && h.length >= 3) : []
 
-  const inputHeights = params.vertexHeights ?? null
+  const inputHeights = params.loopHeights ?? null
   const contourHeights = Array.isArray(inputHeights?.contour) ? inputHeights!.contour : null
   const holeHeightsList = Array.isArray(inputHeights?.holes) ? inputHeights!.holes! : null
 

@@ -139,6 +139,7 @@ function parseRoadPresetRoadProps(value: unknown): StrictRoadPresetRoadProps {
   const widthSafe = clampRoadProps({
     vertices: [],
     segments: [],
+    segmentHeights: [],
     width: ROAD_DEFAULT_WIDTH,
     junctionSmoothing: raw.junctionSmoothing as any,
     snapToTerrain: Boolean(raw.snapToTerrain),
