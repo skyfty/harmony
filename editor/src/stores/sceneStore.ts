@@ -2153,7 +2153,7 @@ function refreshDisplayBoardGeometry(node: SceneNode | null | undefined): void {
 // Floor component application moved to ./sceneStoreFloor.ts
  
 
-import { applyRoadComponentPropsToNode as applyRoadComponentPropsToNodeImported } from './roadUtils'
+import { applyRoadComponentPropsToNode as applyRoadComponentPropsToNodeImported, syncRoadDynamicMeshStaticMetadata as syncRoadDynamicMeshStaticMetadataImported } from './roadUtils'
 
 function applyRoadComponentPropsToNode(node: SceneNode, props: RoadComponentProps, groundNode: SceneNode | null): boolean {
   return applyRoadComponentPropsToNodeImported(node, props, groundNode, { getRuntimeObject })
@@ -5918,11 +5918,9 @@ export async function cloneSceneDocumentForExport(
   scene: StoredSceneDocument,
 ): Promise<StoredSceneDocument> {
   const assetRegistry = await buildAssetRegistryForExport(scene)
-  const runtimeAwareScene = cloneSceneDocumentWithRuntimeGroundSidecars(scene)
-  const runtimeNodes = attachCompiledStaticRoadMeshes(runtimeAwareScene.nodes)
   return createSceneDocument(scene.name, {
     id: scene.id,
-    nodes: runtimeNodes,
+    nodes: scene.nodes,
     camera: scene.camera,
     resourceProviderId: scene.resourceProviderId,
     createdAt: scene.createdAt,
@@ -5939,49 +5937,6 @@ export async function cloneSceneDocumentForExport(
     panelPlacement: scene.panelPlacement,
     groundSettings: scene.groundSettings,
     environment: resolveSceneDocumentEnvironment(scene),
-  })
-}
-
-function attachCompiledStaticRoadMeshes(nodes: SceneNode[]): SceneNode[] {
-  return nodes.map((node) => {
-    const children = Array.isArray(node.children) && node.children.length
-      ? attachCompiledStaticRoadMeshes(node.children)
-      : node.children
-
-    if (node.dynamicMesh?.type !== 'Road') {
-      return children === node.children ? node : { ...node, children }
-    }
-
-    const roadState = node.components?.[ROAD_COMPONENT_TYPE] as SceneNodeComponentState<RoadComponentProps> | undefined
-    const roadProps = roadState
-      ? clampRoadProps(roadState.props as Partial<RoadComponentProps> | null | undefined)
-      : null
-    const compiled = compileRoadStaticMeshMetadata(node.dynamicMesh as RoadDynamicMesh, {
-      junctionSmoothing: roadProps?.junctionSmoothing,
-      laneLines: roadProps?.laneLines,
-      shoulders: roadProps?.shoulders,
-      samplingDensityFactor: roadProps?.samplingDensityFactor,
-      smoothingStrengthFactor: roadProps?.smoothingStrengthFactor,
-      minClearance: roadProps?.minClearance,
-      laneLineWidth: roadProps?.laneLineWidth,
-      shoulderWidth: roadProps?.shoulderWidth,
-    })
-
-    const userData = {
-      ...((node.userData as Record<string, unknown> | undefined) ?? {}),
-    }
-
-    if (compiled) {
-      userData[COMPILED_STATIC_MESH_USERDATA_KEY] = compiled
-    } else {
-      delete userData[COMPILED_STATIC_MESH_USERDATA_KEY]
-    }
-
-    return {
-      ...node,
-      userData,
-      children,
-    }
   })
 }
 
@@ -10268,6 +10223,11 @@ export const useSceneStore = defineStore('scene', {
       }
 
       this.captureNodeDynamicMeshHistory(nodeId)
+
+      if (dynamicMesh && typeof dynamicMesh === 'object' && dynamicMesh.type === 'Road') {
+        syncRoadDynamicMeshStaticMetadataImported(target, dynamicMesh as RoadDynamicMesh)
+        this.queueSceneNodePatch(nodeId, ['userData'])
+      }
 
       applySceneNodeDynamicMeshUpdate(this, nodeId, dynamicMesh)
       finalizeDynamicMeshRuntimePatch(this, nodeId, resolveDynamicMeshType(target.dynamicMesh))
@@ -15452,6 +15412,17 @@ export const useSceneStore = defineStore('scene', {
         minClearance: initialRoadRenderProps.minClearance,
       }
 
+      const compiledStaticMesh = compileRoadStaticMeshMetadata(build.definition, {
+        junctionSmoothing: initialRoadRenderProps.junctionSmoothing,
+        laneLines: initialRoadRenderProps.laneLines,
+        shoulders: initialRoadRenderProps.shoulders,
+        samplingDensityFactor: initialRoadRenderProps.samplingDensityFactor,
+        smoothingStrengthFactor: initialRoadRenderProps.smoothingStrengthFactor,
+        minClearance: initialRoadRenderProps.minClearance,
+        laneLineWidth: initialRoadRenderProps.laneLineWidth,
+        shoulderWidth: initialRoadRenderProps.shoulderWidth,
+      })
+
       const roadGroup =   createRoadGroup(build.definition, initialRoadRenderOptions)
       const nodeName = payload.name ?? this.generateRoadNodeName()
 
@@ -15506,6 +15477,11 @@ export const useSceneStore = defineStore('scene', {
         rotation: createVector(0, 0, 0),
         scale: createVector(1, 1, 1),
         dynamicMesh: build.definition,
+        userData: compiledStaticMesh
+          ? {
+              [COMPILED_STATIC_MESH_USERDATA_KEY]: compiledStaticMesh,
+            }
+          : undefined,
         editorFlags: payload.editorFlags,
       })
 

@@ -1,8 +1,9 @@
 import * as THREE from 'three'
 import type { RoadDynamicMesh, Vector3Like } from '@schema'
 import type { RoadComponentProps } from '@schema/components'
-import { ROAD_DEFAULT_WIDTH, ROAD_MIN_WIDTH, clampRoadProps } from '@schema/components'
-import { updateRoadGroup, resolveRoadLocalHeightSampler } from '@schema/roadMesh'
+import { ROAD_COMPONENT_TYPE, ROAD_DEFAULT_WIDTH, ROAD_MIN_WIDTH, clampRoadProps } from '@schema/components'
+import { compileRoadStaticMeshMetadata, updateRoadGroup, resolveRoadLocalHeightSampler } from '@schema/roadMesh'
+import { COMPILED_STATIC_MESH_USERDATA_KEY } from '@schema/compiledStaticMesh'
 import type { Object3D } from 'three'
 
 type RoadStoreDeps = {
@@ -143,5 +144,38 @@ export function applyRoadComponentPropsToNode(
       }
     })
   }
+  return true
+}
+
+export function syncRoadDynamicMeshStaticMetadata(node: any, dynamicMesh: RoadDynamicMesh): boolean {
+  if (!node || node.dynamicMesh?.type !== 'Road') {
+    return false
+  }
+
+  const roadState = node.components?.[ROAD_COMPONENT_TYPE] as
+    | { props?: Partial<RoadComponentProps> | null }
+    | undefined
+  const roadProps = roadState
+    ? clampRoadProps(roadState.props as Partial<RoadComponentProps> | null | undefined)
+    : null
+
+  const compiled = compileRoadStaticMeshMetadata(dynamicMesh, {
+    junctionSmoothing: roadProps?.junctionSmoothing,
+    laneLines: roadProps?.laneLines,
+    shoulders: roadProps?.shoulders,
+    samplingDensityFactor: roadProps?.samplingDensityFactor,
+    smoothingStrengthFactor: roadProps?.smoothingStrengthFactor,
+    minClearance: roadProps?.minClearance,
+    laneLineWidth: roadProps?.laneLineWidth,
+    shoulderWidth: roadProps?.shoulderWidth,
+  })
+
+  const nextUserData = { ...(node.userData ?? {}) }
+  if (compiled) {
+    nextUserData[COMPILED_STATIC_MESH_USERDATA_KEY] = compiled
+  } else {
+    delete nextUserData[COMPILED_STATIC_MESH_USERDATA_KEY]
+  }
+  node.userData = nextUserData
   return true
 }

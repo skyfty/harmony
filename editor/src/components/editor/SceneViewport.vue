@@ -53,6 +53,7 @@ import type {
   WallCircleCenterDragState,
   WallCircleRadiusDragState,
 } from './pointer/types'
+import { extractCompiledStaticMeshMetadataFromUserData, createCompiledStaticMeshRuntimeMesh } from '@schema/compiledStaticMesh'
 
 // @ts-ignore - local plugin has no .d.ts declaration file
 import { TransformControls } from '@/utils/transformControls.js'
@@ -259,7 +260,7 @@ import {
   type GroundSurfaceLiveChunkPreview,
 } from '@schema/groundSurfacePreview'
 // resolveEnabledComponentState removed from here; import not used
-import { createRoadGroup, updateRoadGroup } from '@schema/roadMesh'
+import { compileRoadStaticMeshMetadata, createRoadGroup, updateRoadGroup } from '@schema/roadMesh'
 import { createFloorGroup, updateFloorGroup } from '@schema/floorMesh'
 import { createGuideRouteGroup, updateGuideRouteGroup } from '@schema/guideRouteMesh'
 import { useTerrainStore, type GroundPanelTab, type TerrainPaintBrushSettings } from '@/stores/terrainStore'
@@ -1742,6 +1743,35 @@ function applyRoadOverlayMaterials(node: SceneNode, roadGroup: THREE.Group) {
       applyConfigToMesh(lane, laneConfig)
     }
   }
+}
+
+function resolveRoadStaticMeshMetadata(node: SceneNode, roadDefinition: RoadDynamicMesh, roadOptions: Record<string, unknown>): ReturnType<typeof extractCompiledStaticMeshMetadataFromUserData> {
+  return extractCompiledStaticMeshMetadataFromUserData(node.userData)
+    ?? compileRoadStaticMeshMetadata(roadDefinition, roadOptions as any)
+}
+
+function resolveRoadRenderMode(
+  node: SceneNode,
+  roadDefinition: RoadDynamicMesh,
+  roadOptions: Record<string, unknown>,
+): 'static' | 'dynamic' {
+  if (isSelectedRoadEditMode()) {
+    return 'dynamic'
+  }
+  return resolveRoadStaticMeshMetadata(node, roadDefinition, roadOptions) ? 'static' : 'dynamic'
+}
+
+function createStaticRoadContainer(node: SceneNode, compiledStaticMesh: NonNullable<ReturnType<typeof extractCompiledStaticMeshMetadataFromUserData>>, roadSignature: string): THREE.Group {
+  const container = new THREE.Group()
+  container.name = node.name
+  const mesh = createCompiledStaticMeshRuntimeMesh(compiledStaticMesh, {
+    name: node.name ?? compiledStaticMesh.name ?? 'Road',
+  })
+  container.add(mesh)
+  tagInternalRuntimeGroup(container, node.id, 'Road')
+  container.userData[DYNAMIC_MESH_SIGNATURE_KEY] = roadSignature
+  container.userData.roadRenderMode = 'static'
+  return container
 }
 
 function computeFloorDynamicMeshSignature(definition: FloorDynamicMesh): string {
@@ -8026,6 +8056,13 @@ watch(activeBuildTool, (tool) => {
   if (desiredContext) {
     uiStore.setActiveSelectionContext(desiredContext)
   }
+})
+
+watch(isSelectedRoadEditMode, () => {
+  if (!scene) {
+    return
+  }
+  syncSceneGraph()
 })
 
 watch(floorBrushPresetAssetId, (assetId) => {
@@ -21283,43 +21320,41 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
       shoulders,
       materialConfigId,
     }
-    let roadGroup = userData.roadGroup as THREE.Group | undefined
-    if (!roadGroup) {
-      roadGroup = createRoadGroup(roadDefinition, roadOptions)
-      tagInternalRuntimeGroup(roadGroup, node.id, 'Road')
-      roadGroup.userData[DYNAMIC_MESH_SIGNATURE_KEY] = computeRoadDynamicMeshSignature(
-        roadDefinition,
-        junctionSmoothing,
-        materialConfigId,
-        laneLines,
-        shoulders,
-        typeof roadOptions.samplingDensityFactor === 'number' ? roadOptions.samplingDensityFactor : Number(roadOptions.samplingDensityFactor),
-        typeof roadOptions.smoothingStrengthFactor === 'number' ? roadOptions.smoothingStrengthFactor : Number(roadOptions.smoothingStrengthFactor),
-        typeof roadOptions.minClearance === 'number' ? roadOptions.minClearance : Number(roadOptions.minClearance),
-        typeof roadOptions.laneLineWidth === 'number' ? roadOptions.laneLineWidth : Number(roadOptions.laneLineWidth),
-        typeof roadOptions.shoulderWidth === 'number' ? roadOptions.shoulderWidth : Number(roadOptions.shoulderWidth),
-      )
-      object.add(roadGroup)
-      userData.roadGroup = roadGroup
-    } else {
-      tagInternalRuntimeGroup(roadGroup, node.id, 'Road')
-      const groupData = roadGroup.userData ?? (roadGroup.userData = {})
-      const nextSignature = computeRoadDynamicMeshSignature(
-        roadDefinition,
-        junctionSmoothing,
-        materialConfigId,
-        laneLines,
-        shoulders,
-        typeof roadOptions.samplingDensityFactor === 'number' ? roadOptions.samplingDensityFactor : Number(roadOptions.samplingDensityFactor),
-        typeof roadOptions.smoothingStrengthFactor === 'number' ? roadOptions.smoothingStrengthFactor : Number(roadOptions.smoothingStrengthFactor),
-        typeof roadOptions.minClearance === 'number' ? roadOptions.minClearance : Number(roadOptions.minClearance),
-        typeof roadOptions.laneLineWidth === 'number' ? roadOptions.laneLineWidth : Number(roadOptions.laneLineWidth),
-        typeof roadOptions.shoulderWidth === 'number' ? roadOptions.shoulderWidth : Number(roadOptions.shoulderWidth),
-      )
-      if (groupData[DYNAMIC_MESH_SIGNATURE_KEY] !== nextSignature) {
-        updateRoadGroup(roadGroup, roadDefinition, roadOptions)
-        groupData[DYNAMIC_MESH_SIGNATURE_KEY] = nextSignature
+    const nextSignature = computeRoadDynamicMeshSignature(
+      roadDefinition,
+      junctionSmoothing,
+      materialConfigId,
+      laneLines,
+      shoulders,
+      typeof roadOptions.samplingDensityFactor === 'number' ? roadOptions.samplingDensityFactor : Number(roadOptions.samplingDensityFactor),
+      typeof roadOptions.smoothingStrengthFactor === 'number' ? roadOptions.smoothingStrengthFactor : Number(roadOptions.smoothingStrengthFactor),
+      typeof roadOptions.minClearance === 'number' ? roadOptions.minClearance : Number(roadOptions.minClearance),
+      typeof roadOptions.laneLineWidth === 'number' ? roadOptions.laneLineWidth : Number(roadOptions.laneLineWidth),
+      typeof roadOptions.shoulderWidth === 'number' ? roadOptions.shoulderWidth : Number(roadOptions.shoulderWidth),
+    )
+    const roadMode = resolveRoadRenderMode(node, roadDefinition, roadOptions)
+    if (roadMode === 'static') {
+      return
+    }
+    {
+      let roadGroup = userData.roadGroup as THREE.Group | undefined
+      if (!roadGroup) {
+        roadGroup = createRoadGroup(roadDefinition, roadOptions)
+        tagInternalRuntimeGroup(roadGroup, node.id, 'Road')
+        roadGroup.userData[DYNAMIC_MESH_SIGNATURE_KEY] = nextSignature
+        roadGroup.userData.roadRenderMode = 'dynamic'
+        object.add(roadGroup)
+        userData.roadGroup = roadGroup
+      } else {
+        tagInternalRuntimeGroup(roadGroup, node.id, 'Road')
+        const groupData = roadGroup.userData ?? (roadGroup.userData = {})
+        if (groupData[DYNAMIC_MESH_SIGNATURE_KEY] !== nextSignature) {
+          updateRoadGroup(roadGroup, roadDefinition, roadOptions)
+          groupData[DYNAMIC_MESH_SIGNATURE_KEY] = nextSignature
+        }
+        groupData.roadRenderMode = 'dynamic'
       }
+      userData.roadRenderMode = 'dynamic'
     }
 
     // Keep road vertex handles stable through dynamic mesh updates.
@@ -21329,7 +21364,8 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
         ensureRoadVertexHandlesForSelectedNode()
       }
     }
-    if (roadGroup) {
+    if (userData.roadRenderMode === 'dynamic' && userData.roadGroup) {
+      const roadGroup = userData.roadGroup as THREE.Group
       applyRoadOverlayMaterials(node, roadGroup)
     }
   }
@@ -22151,6 +22187,40 @@ function shouldRecreateNode(object: THREE.Object3D, node: SceneNode): boolean {
   if ((userData.sourceAssetId ?? null) !== nextSourceAssetId) {
     return true
   }
+  if (node.dynamicMesh?.type === 'Road') {
+    const roadDefinition = node.dynamicMesh as RoadDynamicMesh
+    const junctionSmoothing = resolveRoadJunctionSmoothing(node)
+    const laneLines = resolveRoadLaneLinesEnabled(node)
+    const shoulders = resolveRoadShouldersEnabled(node)
+    const materialConfigId = resolveRoadMaterialConfigId(node)
+    const roadOptions = resolveRoadRenderOptionsForNodeId(node.id) ?? {
+      junctionSmoothing,
+      laneLines,
+      shoulders,
+      materialConfigId,
+    }
+    const nextRoadRenderMode = resolveRoadRenderMode(node, roadDefinition, roadOptions)
+    if ((userData.roadRenderMode ?? null) !== nextRoadRenderMode) {
+      return true
+    }
+    if (nextRoadRenderMode === 'static') {
+      const nextSignature = computeRoadDynamicMeshSignature(
+        roadDefinition,
+        junctionSmoothing,
+        materialConfigId,
+        laneLines,
+        shoulders,
+        typeof roadOptions.samplingDensityFactor === 'number' ? roadOptions.samplingDensityFactor : Number(roadOptions.samplingDensityFactor),
+        typeof roadOptions.smoothingStrengthFactor === 'number' ? roadOptions.smoothingStrengthFactor : Number(roadOptions.smoothingStrengthFactor),
+        typeof roadOptions.minClearance === 'number' ? roadOptions.minClearance : Number(roadOptions.minClearance),
+        typeof roadOptions.laneLineWidth === 'number' ? roadOptions.laneLineWidth : Number(roadOptions.laneLineWidth),
+        typeof roadOptions.shoulderWidth === 'number' ? roadOptions.shoulderWidth : Number(roadOptions.shoulderWidth),
+      )
+      if ((userData[DYNAMIC_MESH_SIGNATURE_KEY] ?? null) !== nextSignature) {
+        return true
+      }
+    }
+  }
   const expectsRuntime = usesRuntimeObjectTypes.has(nodeType) ? sceneStore.hasRuntimeObject(node.id)  : false
   if (Boolean(userData.usesRuntimeObject) !== expectsRuntime) {
     return true
@@ -22803,10 +22873,7 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
         shoulders,
         materialConfigId,
       }
-      const roadGroup = createRoadGroup(roadDefinition, roadOptions)
-      roadGroup.removeFromParent()
-      tagInternalRuntimeGroup(roadGroup, node.id, 'Road')
-      roadGroup.userData[DYNAMIC_MESH_SIGNATURE_KEY] = computeRoadDynamicMeshSignature(
+      const roadSignature = computeRoadDynamicMeshSignature(
         roadDefinition,
         junctionSmoothing,
         materialConfigId,
@@ -22818,8 +22885,26 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
         typeof roadOptions.laneLineWidth === 'number' ? roadOptions.laneLineWidth : Number(roadOptions.laneLineWidth),
         typeof roadOptions.shoulderWidth === 'number' ? roadOptions.shoulderWidth : Number(roadOptions.shoulderWidth),
       )
-      container.add(roadGroup)
-      containerData.roadGroup = roadGroup
+      const roadMode = resolveRoadRenderMode(node, roadDefinition, roadOptions)
+      if (roadMode === 'static') {
+        const compiledStaticMesh = resolveRoadStaticMeshMetadata(node, roadDefinition, roadOptions)
+        if (compiledStaticMesh) {
+          const staticRoadGroup = createStaticRoadContainer(node, compiledStaticMesh, roadSignature)
+          staticRoadGroup.removeFromParent()
+          container.add(staticRoadGroup)
+          containerData.roadStaticGroup = staticRoadGroup
+        }
+        containerData.roadRenderMode = 'static'
+      } else {
+        const roadGroup = createRoadGroup(roadDefinition, roadOptions)
+        roadGroup.removeFromParent()
+        tagInternalRuntimeGroup(roadGroup, node.id, 'Road')
+        roadGroup.userData[DYNAMIC_MESH_SIGNATURE_KEY] = roadSignature
+        roadGroup.userData.roadRenderMode = 'dynamic'
+        container.add(roadGroup)
+        containerData.roadGroup = roadGroup
+        containerData.roadRenderMode = 'dynamic'
+      }
     } else if (node.dynamicMesh?.type === 'Floor') {
       containerData.dynamicMeshType = 'Floor'
       const floorDefinition = node.dynamicMesh as FloorDynamicMesh
