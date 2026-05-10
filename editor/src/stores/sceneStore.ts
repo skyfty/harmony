@@ -15438,6 +15438,7 @@ export const useSceneStore = defineStore('scene', {
       name?: string
       bodyAssetId?: string | null,
       roadPresetData?: RoadPresetData | null
+      segmentHeights?: number[][]
       editorFlags?: SceneNodeEditorFlags
     }): SceneNode | null {
       const presetWidth = Number.isFinite(payload.roadPresetData?.width)
@@ -15448,80 +15449,10 @@ export const useSceneStore = defineStore('scene', {
       if (!build) {
         return null
       }
-
+      build.definition.segmentHeights = payload.segmentHeights ?? build.definition.segmentHeights
+      
       const presetMaterials = buildRoadNodeMaterialsFromPreset(payload.roadPresetData)
-
-      const groundNode = resolveGroundNodeForHeightSampling(this.nodes)
-      const groundDefinition = groundNode?.dynamicMesh?.type === 'Ground'
-        ? resolveGroundRuntimeDefinition(this, groundNode.id)
-        : null
-
-      const groundPosition = (groundNode?.position as { x?: unknown; y?: unknown; z?: unknown } | undefined) ?? undefined
-      const groundOriginX = typeof groundPosition?.x === 'number' && Number.isFinite(groundPosition.x) ? groundPosition.x : 0
-      const groundOriginY = typeof groundPosition?.y === 'number' && Number.isFinite(groundPosition.y) ? groundPosition.y : 0
-      const groundOriginZ = typeof groundPosition?.z === 'number' && Number.isFinite(groundPosition.z) ? groundPosition.z : 0
-
-      const roadOriginX = build.center.x
-      const roadOriginY = build.center.y
-      const roadOriginZ = build.center.z
-
-      const buildPathHeightSampler = (() => {
-        const rawPoints = Array.isArray(payload.points) ? payload.points : []
-        const profile: Array<{ x: number; y: number; z: number }> = []
-        for (const entry of rawPoints) {
-          const x = Number((entry as any)?.x)
-          const y = Number((entry as any)?.y)
-          const z = Number((entry as any)?.z)
-          if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
-            continue
-          }
-          const prev = profile[profile.length - 1]
-          if (prev) {
-            const dx = prev.x - x
-            const dz = prev.z - z
-            if (dx * dx + dz * dz <= 1e-10) {
-              continue
-            }
-          }
-          profile.push({ x, y, z })
-        }
-        if (profile.length < 2) {
-          return null
-        }
-
-        return (x: number, z: number): number => {
-          const worldX = roadOriginX + x
-          const worldZ = roadOriginZ + z
-
-          let bestY = profile[0]!.y
-          let bestDist2 = Number.POSITIVE_INFINITY
-          for (let i = 0; i < profile.length - 1; i += 1) {
-            const a = profile[i]!
-            const b = profile[i + 1]!
-            const abX = b.x - a.x
-            const abZ = b.z - a.z
-            const len2 = abX * abX + abZ * abZ
-            if (len2 <= 1e-10) {
-              continue
-            }
-
-            const tRaw = ((worldX - a.x) * abX + (worldZ - a.z) * abZ) / len2
-            const t = Math.max(0, Math.min(1, tRaw))
-            const projX = a.x + abX * t
-            const projZ = a.z + abZ * t
-            const dx = worldX - projX
-            const dz = worldZ - projZ
-            const dist2 = dx * dx + dz * dz
-            if (dist2 < bestDist2) {
-              bestDist2 = dist2
-              bestY = a.y + (b.y - a.y) * t
-            }
-          }
-
-          return bestY - roadOriginY
-        }
-      })()
-
+  
       const initialRoadRenderProps = payload.roadPresetData?.roadProps
         ? buildRoadComponentPatchFromPreset(payload.roadPresetData.roadProps)
         : {
@@ -15531,52 +15462,7 @@ export const useSceneStore = defineStore('scene', {
             minClearance: ROAD_TERRAIN_DEFAULT_MIN_CLEARANCE,
           }
 
-      // Build per-segment sampled heights for each segment in the incoming geometry.
-      build.definition.segmentHeights = Array.isArray(build.definition.segments) && Array.isArray(build.definition.vertices)
-        ? (build.definition.segments as any[]).map((seg) => {
-            const aIdx = Number(seg?.a)
-            const bIdx = Number(seg?.b)
-            if (!Number.isInteger(aIdx) || !Number.isInteger(bIdx)) return []
-            const a = build.definition.vertices[aIdx]
-            const b = build.definition.vertices[bIdx]
-            const ax = Number(a?.[0])
-            const az = Number(a?.[1])
-            const bx = Number(b?.[0])
-            const bz = Number(b?.[1])
-            if (!Number.isFinite(ax) || !Number.isFinite(az) || !Number.isFinite(bx) || !Number.isFinite(bz)) return []
-            const dx = bx - ax
-            const dz = bz - az
-            const length = Math.sqrt(dx * dx + dz * dz)
-            const divisions = Math.max(2, Math.ceil(length * 8 * (initialRoadRenderProps.samplingDensityFactor ?? 1)))
-            const clearance = Number.isFinite(initialRoadRenderProps.minClearance)
-              ? Math.max(0, Number(initialRoadRenderProps.minClearance))
-              : 0
-            const heights: number[] = []
-            for (let i = 0; i <= divisions; i += 1) {
-              const t = i / divisions
-              const x = ax + t * dx
-              const z = az + t * dz
-              const sampled = buildPathHeightSampler ? buildPathHeightSampler(Number.isFinite(x) ? x : 0, Number.isFinite(z) ? z : 0) : 0
-              heights.push(Number.isFinite(sampled) ? sampled + clearance : clearance)
-            }
-            return heights
-          })
-        : []
-
       const initialRoadRenderOptions = {
-        heightSampler: initialRoadRenderProps.snapToTerrain !== false
-          ? (buildPathHeightSampler
-            ?? (groundDefinition
-              ? ((x: number, z: number) => {
-                  const worldX = roadOriginX + x
-                  const worldZ = roadOriginZ + z
-                  const groundLocalX = worldX - groundOriginX
-                  const groundLocalZ = worldZ - groundOriginZ
-                  const groundWorldY = groundOriginY + sampleGroundHeight(groundDefinition, groundLocalX, groundLocalZ)
-                  return groundWorldY - roadOriginY
-                })
-              : null))
-          : null,
         samplingDensityFactor: initialRoadRenderProps.samplingDensityFactor,
         smoothingStrengthFactor: initialRoadRenderProps.smoothingStrengthFactor,
         minClearance: initialRoadRenderProps.minClearance,
@@ -15585,97 +15471,91 @@ export const useSceneStore = defineStore('scene', {
       const roadGroup =   createRoadGroup(build.definition, initialRoadRenderOptions)
       const nodeName = payload.name ?? this.generateRoadNodeName()
 
-      this.captureHistorySnapshot()
-      this.beginHistoryCaptureSuppression()
-      try {
-        const desiredId = typeof payload.nodeId === 'string' && payload.nodeId.trim().length ? payload.nodeId.trim() : null
-        const existing = desiredId ? findNodeById(this.nodes, desiredId) : null
+      const desiredId = typeof payload.nodeId === 'string' && payload.nodeId.trim().length ? payload.nodeId.trim() : null
+      const existing = desiredId ? findNodeById(this.nodes, desiredId) : null
 
-        if (existing && desiredId) {
-          if (payload.name && payload.name.trim() && existing.name !== payload.name.trim()) {
-            this.renameNode(desiredId, payload.name.trim())
-          }
-          this.updateNodeTransform({
-            id: desiredId,
-            position: createVector(build.center.x, build.center.y, build.center.z),
-            rotation: createVector(0, 0, 0),
-            scale: createVector(1, 1, 1),
-          })
-          this.updateNodeDynamicMesh(desiredId, build.definition)
-
-          // Ensure road component exists so the node remains identifiable.
-          const roadComponent = (findNodeById(this.nodes, desiredId)?.components?.[ROAD_COMPONENT_TYPE] as { id?: string } | undefined)
-          if (!roadComponent?.id) {
-            this.addNodeComponent(desiredId, ROAD_COMPONENT_TYPE)
-          }
-
-          const refreshedExisting = findNodeById(this.nodes, desiredId)
-          const refreshedRoadComponent = refreshedExisting?.components?.[ROAD_COMPONENT_TYPE] as { id?: string } | undefined
-          if (refreshedRoadComponent?.id) {
-            const componentPatch = payload.roadPresetData
-              ? buildRoadComponentPatchFromPreset(payload.roadPresetData.roadProps)
-              : {
-                  bodyAssetId: typeof payload.bodyAssetId === 'string' && payload.bodyAssetId.trim().length ? payload.bodyAssetId : null,
-                  snapToTerrain: true,
-                  samplingDensityFactor: ROAD_TERRAIN_DEFAULT_SAMPLING_DENSITY_FACTOR,
-                  smoothingStrengthFactor: ROAD_TERRAIN_DEFAULT_SMOOTHING_STRENGTH_FACTOR,
-                  minClearance: ROAD_TERRAIN_DEFAULT_MIN_CLEARANCE,
-            }
-            this.updateNodeComponentProps(desiredId, refreshedRoadComponent.id, componentPatch)
-          }
-
-          if (presetMaterials.length) {
-            this.setNodeMaterials(desiredId, presetMaterials)
-          }
-          return findNodeById(this.nodes, desiredId)
+      if (existing && desiredId) {
+        if (payload.name && payload.name.trim() && existing.name !== payload.name.trim()) {
+          this.renameNode(desiredId, payload.name.trim())
         }
-
-        const node = this.addSceneNode({
-          nodeId: desiredId ?? undefined,
-          nodeType: 'Mesh',
-          object: roadGroup,
-          name: nodeName,
+        this.updateNodeTransform({
+          id: desiredId,
           position: createVector(build.center.x, build.center.y, build.center.z),
           rotation: createVector(0, 0, 0),
           scale: createVector(1, 1, 1),
-          dynamicMesh: build.definition,
-          editorFlags: payload.editorFlags,
         })
+        this.updateNodeDynamicMesh(desiredId, build.definition)
 
-        if (node) {
-          const bodyAssetId = typeof payload.bodyAssetId === 'string' && payload.bodyAssetId.trim().length
-            ? payload.bodyAssetId
-            : (payload.roadPresetData?.roadProps.bodyAssetId ?? null)
-
-          const result = this.addNodeComponent(node.id, ROAD_COMPONENT_TYPE)
-          const component = result?.component
-
-          if (component?.id) {
-            const componentPatch = payload.roadPresetData
-              ? buildRoadComponentPatchFromPreset(payload.roadPresetData.roadProps)
-              : {
-                  snapToTerrain: true,
-                  samplingDensityFactor: ROAD_TERRAIN_DEFAULT_SAMPLING_DENSITY_FACTOR,
-                  smoothingStrengthFactor: ROAD_TERRAIN_DEFAULT_SMOOTHING_STRENGTH_FACTOR,
-                  minClearance: ROAD_TERRAIN_DEFAULT_MIN_CLEARANCE,
-            }
-            const nextRoadComponentProps = {
-              ...resolveRoadComponentPropsFromMesh(build.definition),
-              ...(componentPatch ?? {}),
-              bodyAssetId,
-            }
-            this.updateNodeComponentProps(node.id, component.id, nextRoadComponentProps)
-          }
-
-          if (presetMaterials.length) {
-            this.setNodeMaterials(node.id, presetMaterials)
-          }
+        // Ensure road component exists so the node remains identifiable.
+        const roadComponent = (findNodeById(this.nodes, desiredId)?.components?.[ROAD_COMPONENT_TYPE] as { id?: string } | undefined)
+        if (!roadComponent?.id) {
+          this.addNodeComponent(desiredId, ROAD_COMPONENT_TYPE)
         }
 
-        return node
-      } finally {
-        this.endHistoryCaptureSuppression()
+        const refreshedExisting = findNodeById(this.nodes, desiredId)
+        const refreshedRoadComponent = refreshedExisting?.components?.[ROAD_COMPONENT_TYPE] as { id?: string } | undefined
+        if (refreshedRoadComponent?.id) {
+          const componentPatch = payload.roadPresetData
+            ? buildRoadComponentPatchFromPreset(payload.roadPresetData.roadProps)
+            : {
+                bodyAssetId: typeof payload.bodyAssetId === 'string' && payload.bodyAssetId.trim().length ? payload.bodyAssetId : null,
+                snapToTerrain: true,
+                samplingDensityFactor: ROAD_TERRAIN_DEFAULT_SAMPLING_DENSITY_FACTOR,
+                smoothingStrengthFactor: ROAD_TERRAIN_DEFAULT_SMOOTHING_STRENGTH_FACTOR,
+                minClearance: ROAD_TERRAIN_DEFAULT_MIN_CLEARANCE,
+          }
+          this.updateNodeComponentProps(desiredId, refreshedRoadComponent.id, componentPatch)
+        }
+
+        if (presetMaterials.length) {
+          this.setNodeMaterials(desiredId, presetMaterials)
+        }
+        return findNodeById(this.nodes, desiredId)
       }
+
+      const node = this.addSceneNode({
+        nodeId: desiredId ?? undefined,
+        nodeType: 'Mesh',
+        object: roadGroup,
+        name: nodeName,
+        position: createVector(build.center.x, build.center.y, build.center.z),
+        rotation: createVector(0, 0, 0),
+        scale: createVector(1, 1, 1),
+        dynamicMesh: build.definition,
+        editorFlags: payload.editorFlags,
+      })
+
+      if (node) {
+        const bodyAssetId = typeof payload.bodyAssetId === 'string' && payload.bodyAssetId.trim().length
+          ? payload.bodyAssetId
+          : (payload.roadPresetData?.roadProps.bodyAssetId ?? null)
+
+        const result = this.addNodeComponent(node.id, ROAD_COMPONENT_TYPE)
+        const component = result?.component
+
+        if (component?.id) {
+          const componentPatch = payload.roadPresetData
+            ? buildRoadComponentPatchFromPreset(payload.roadPresetData.roadProps)
+            : {
+                snapToTerrain: true,
+                samplingDensityFactor: ROAD_TERRAIN_DEFAULT_SAMPLING_DENSITY_FACTOR,
+                smoothingStrengthFactor: ROAD_TERRAIN_DEFAULT_SMOOTHING_STRENGTH_FACTOR,
+                minClearance: ROAD_TERRAIN_DEFAULT_MIN_CLEARANCE,
+          }
+          const nextRoadComponentProps = {
+            ...resolveRoadComponentPropsFromMesh(build.definition),
+            ...(componentPatch ?? {}),
+            bodyAssetId,
+          }
+          this.updateNodeComponentProps(node.id, component.id, nextRoadComponentProps)
+        }
+
+        if (presetMaterials.length) {
+          this.setNodeMaterials(node.id, presetMaterials)
+        }
+      }
+
+      return node
     },
 
     createFloorNode(payload: {

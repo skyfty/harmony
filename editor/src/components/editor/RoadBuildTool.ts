@@ -10,6 +10,10 @@ import {
   integrateWorldPolylineIntoRoadMesh,
   splitRoadSelfIntersectionsMesh,
 } from './RoadBuildGeometry'
+import {
+  ROAD_TERRAIN_DEFAULT_MIN_CLEARANCE,
+  ROAD_TERRAIN_DEFAULT_SAMPLING_DENSITY_FACTOR,
+} from '@schema/components'
 
 export type RoadSnapVertex = { position: THREE.Vector3; nodeId: string; vertexIndex: number }
 
@@ -101,6 +105,7 @@ export function createRoadBuildTool(options: {
     points: Array<{ x: number; y: number; z: number }>
     width: number
     roadPresetData?: RoadPresetData | null
+    segmentHeights?: number[][]
   }) => SceneNode | null
   setNodeMaterials: (nodeId: string, materials: any[]) => void
   selectNode: (nodeId: string) => void
@@ -300,19 +305,23 @@ export function createRoadBuildTool(options: {
     return true
   }
 
+  // 处理道路放置点击事件
   const handlePlacementClick = (event: PointerEvent): boolean => {
+    // 检查当前激活的工具是否为道路工具
     if (options.activeBuildTool.value !== 'road') {
       return false
     }
+    // 检查是否有Alt键覆盖（用于其他操作）
     if (options.isAltOverrideActive()) {
       return false
     }
 
+    // 确保存在会话对象
     const current = ensureSession()
 
-    // If this is the first point, prefer raycast-based interaction:
-    // - If clicking on an existing road surface, start a branch by splitting the nearest segment.
-    // - Otherwise, fall back to the ground-plane placement + vertex snapping.
+    // 如果这是第一个点，优先使用射线投射交互：
+    // - 如果点击了现有道路表面，通过分割最近的线段来开始分支
+    // - 否则，回退到地面平面放置 + 顶点吸附
     if (current.points.length === 0) {
       const hit = options.pickNodeAtPointer(event)
       if (hit?.nodeId) {
@@ -508,18 +517,23 @@ export function createRoadBuildTool(options: {
       return true
     }
 
-    // Close loop: if user clicks near the first anchor, reuse it.
+    // 闭合路径：如果用户点击靠近起始锚点的位置，则复用该点来闭合循环
     if (current.committedSegmentCount >= 2 && current.buildStartPoint) {
       const first = current.buildStartPoint
+      // 计算当前点与起始点的水平距离平方（忽略Y轴）
       const dx = first.x - point.x
       const dz = first.z - point.z
+      // 如果距离在吸附范围内，将当前点替换为起始点
       if (dx * dx + dz * dz <= options.vertexSnapDistance * options.vertexSnapDistance) {
         point = first.clone()
       }
     }
 
+    // 获取路径中的最后一个点
     const last = current.points[current.points.length - 1]!
+    // 检查当前点是否与最后一个点重合（距离很小）
     if (last.distanceToSquared(point) <= 1e-6) {
+      // 更新预览终点并重新渲染预览
       current.previewEnd = point.clone()
       updatePreview()
       return true
@@ -529,79 +543,7 @@ export function createRoadBuildTool(options: {
       if (!session) {
         return null
       }
-      const worldPoints = [segmentStart.clone(), segmentEnd.clone()]
-
-      const updateExistingNode = (nodeId: string): string | null => {
-        const currentSession = session
-        if (!currentSession) {
-          return null
-        }
-        // 先确认目标节点仍是 Road，避免对非道路节点写入动态网格。
-        const node = options.findSceneNode(options.sceneNodes(), nodeId)
-        if (node?.dynamicMesh?.type !== 'Road') {
-          return null
-        }
-        // 需要拿到运行时对象，才能把世界坐标路径并入节点局部坐标网格。
-        const runtime = options.getRuntimeObject(nodeId)
-        if (!runtime) {
-          return null
-        }
-        // 宽度优先沿用现有道路宽度，确保增量铺设时视觉连续。
-        const width = Number.isFinite(node.dynamicMesh.width) ? node.dynamicMesh.width : currentSession.width
-        // 将当前新段与已有 RoadDynamicMesh 做几何并网，得到更新后的网格定义。
-        const next = integrateWorldPolylineIntoRoadMesh({
-          baseMesh: node.dynamicMesh,
-          runtime,
-          worldPoints,
-          width,
-          defaultWidth: options.defaultWidth,
-        })
-        if (!next) {
-          return null
-        }
-        // 将并网结果写回场景节点，完成本次增量提交。
-        options.updateNodeDynamicMesh(nodeId, next)
-        return nodeId
-      }
-
-      const activeNodeId = session.liveNodeId ?? session.targetNodeId
-      if (activeNodeId) {
-        return updateExistingNode(activeNodeId)
-      }
-
-
-      const connectNodeId = findConnectableRoadNodeId({
-        worldPoints,
-        nodes: options.sceneNodes(),
-        getRuntimeObject: options.getRuntimeObject,
-        collectRoadSnapVertices: options.collectRoadSnapVertices,
-        snapRoadPointToVertices: options.snapRoadPointToVertices,
-        vertexSnapDistance: options.vertexSnapDistance,
-      })
-      if (connectNodeId) {
-        return updateExistingNode(connectNodeId)
-      }
-
-      const created = options.createRoadNode({
-        points: worldPoints.map((p) => ({ x: p.x, y: p.y, z: p.z })),
-        width: session.width,
-        roadPresetData: options.getRoadBrush?.()?.presetData ?? null,
-      })
-
-      if (created && !options.getRoadBrush?.()?.presetData) {
-        const roadMaterials = options.createRoadNodeMaterials()
-        if (roadMaterials.length) {
-          options.setNodeMaterials(created.id, roadMaterials)
-        }
-      }
-
-      if (created?.dynamicMesh?.type === 'Road') {
-        const split = splitRoadSelfIntersectionsMesh(created.dynamicMesh, options.defaultWidth)
-        if (split) {
-          options.updateNodeDynamicMesh(created.id, split)
-        }
-        return created.id
-      }
+      
 
       return null
     }
