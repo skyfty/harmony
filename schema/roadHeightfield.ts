@@ -12,6 +12,32 @@ import { buildRoadGraph, type RoadGraph } from './roadGraph'
 
 export type RoadHeightfieldBodiesEntry = { signature: string; bodies: CANNON.Body[] }
 
+export type RoadHeightfieldTileDescriptor = {
+	curveIndex: number
+	tileIndex: number
+	startIndex: number
+	endIndex: number
+	position: [number, number, number]
+	yaw: number
+	shapeDefinition: RigidbodyPhysicsShape
+}
+
+export type RoadHeightfieldBuildSnapshot = {
+	surfaceNode: SceneNode
+	tiles: RoadHeightfieldTileDescriptor[]
+	groundSignature: string
+	heightHash: number
+	roadWidth: number
+	samplingDensityFactor: number
+	smoothingStrengthFactor: number
+	minClearance: number
+	junctionSmoothing: number
+	desiredTileLength: number
+	elementSize: number
+	boundaryWallEnabled: boolean
+	boundaryWallProps: BoundaryWallComponentProps | null
+}
+
 export type RoadHeightfieldBuildParams = {
 	roadNode: SceneNode
 	rigidbodyComponent: SceneNodeComponentState<RigidbodyComponentProps>
@@ -31,13 +57,11 @@ export function isRoadDynamicMesh(value: SceneNode['dynamicMesh'] | null | undef
 	return Boolean(value && (value as any).type === 'Road')
 }
 
-export function buildRoadHeightfieldBodies(params: RoadHeightfieldBuildParams): RoadHeightfieldBodiesEntry | null {
+export function collectRoadHeightfieldTileDescriptors(params: RoadHeightfieldBuildParams): RoadHeightfieldBuildSnapshot | null {
 	const {
 		roadNode,
 		rigidbodyComponent,
-		roadObject,
 		groundNode,
-		createBody,
 		maxSegments,
 	} = params
 
@@ -114,8 +138,6 @@ export function buildRoadHeightfieldBodies(params: RoadHeightfieldBuildParams): 
 
 	const hasSegmentHeights = Boolean(serializedSampler)
 
-	roadObject.updateMatrixWorld(true)
-
 	const desiredTileLength = clampNumber(roadWidth * 8, 2, 16, 8)
 	const targetRows = 192
 	const elementSize = Math.max(1e-4, desiredTileLength / targetRows)
@@ -124,9 +146,10 @@ export function buildRoadHeightfieldBodies(params: RoadHeightfieldBuildParams): 
 		: 128
 
 	let totalBodies = 0
-	const bodies: CANNON.Body[] = []
+	const tiles: RoadHeightfieldTileDescriptor[] = []
 	let signatureHash = 0
 
+	let curveIndex = 0
 	for (const descriptor of curves) {
 		if (totalBodies >= maxBodies) {
 			break
@@ -170,6 +193,7 @@ export function buildRoadHeightfieldBodies(params: RoadHeightfieldBuildParams): 
 		const p1 = new THREE.Vector3()
 		const forward = new THREE.Vector3()
 		const centerPoint = new THREE.Vector3()
+		let tileIndex = 0
 		while (startIndex < divisions && totalBodies < maxBodies) {
 			let endIndex = Math.min(divisions, startIndex + divisionsPerTile)
 			const startU = startIndex / divisions
@@ -199,20 +223,26 @@ export function buildRoadHeightfieldBodies(params: RoadHeightfieldBuildParams): 
 			const isStraightEnough = headingDelta <= ROAD_STRAIGHT_MAX_HEADING_DELTA_RAD
 			const isFlatEnough = heightDelta <= ROAD_FLAT_MAX_HEIGHT_DELTA
 			const tileObject = new THREE.Object3D()
-			tileObject.rotation.set(0, yaw, 0)
 			let shape: RigidbodyPhysicsShape | null = null
 			if (isStraightEnough && isFlatEnough) {
 				const avgHeight = computeHeightAverage(smoothedHeights, startIndex, endIndex)
 				const thickness = ROAD_BOX_THICKNESS
-				tileObject.position.set(centerPoint.x, avgHeight - thickness * 0.5, centerPoint.z)
 				shape = {
 					kind: 'box',
 					halfExtents: [roadWidth * 0.5, thickness * 0.5, tileLength * 0.5],
 					offset: [0, 0, 0],
 					applyScale: false,
 				}
+				tiles.push({
+					curveIndex,
+					tileIndex,
+					startIndex,
+					endIndex,
+					position: [centerPoint.x, avgHeight - thickness * 0.5, centerPoint.z],
+					yaw,
+					shapeDefinition: shape,
+				})
 			} else {
-				tileObject.position.set(centerPoint.x, 0, centerPoint.z)
 				const rows = Math.max(2, Math.ceil(tileLength / elementSize))
 				const columns = Math.max(2, Math.ceil(roadWidth / elementSize))
 				shape = buildHeightfieldShapeFromSeries({
@@ -228,20 +258,83 @@ export function buildRoadHeightfieldBodies(params: RoadHeightfieldBuildParams): 
 					startIndex = endIndex
 					continue
 				}
+				tiles.push({
+					curveIndex,
+					tileIndex,
+					startIndex,
+					endIndex,
+					position: [centerPoint.x, 0, centerPoint.z],
+					yaw,
+					shapeDefinition: shape,
+				})
 			}
-			roadObject.add(tileObject)
-			tileObject.updateMatrixWorld(true)
-			const bodyResult = createBody(surfaceNode, rigidbodyComponent, shape, tileObject)
-			roadObject.remove(tileObject)
-			if (bodyResult?.body) {
-				bodies.push(bodyResult.body)
-				totalBodies += 1
-			}
+			totalBodies += 1
+			tileIndex += 1
 			startIndex = endIndex
+		}
+		curveIndex += 1
+	}
+
+	if (!tiles.length) {
+		return null
+	}
+
+	const groundData = groundNode && (groundNode.dynamicMesh as any)?.type === 'Ground'
+		? buildGroundHeightfieldData(groundNode, groundNode.dynamicMesh as any)
+		: null
+	const groundSignature = groundData?.signature ?? 'none'
+	return {
+		surfaceNode,
+		tiles,
+		groundSignature,
+		heightHash: signatureHash,
+		roadWidth,
+		samplingDensityFactor,
+		smoothingStrengthFactor,
+		minClearance,
+		junctionSmoothing,
+		desiredTileLength,
+		elementSize,
+		boundaryWallEnabled,
+		boundaryWallProps,
+	}
+}
+
+export function buildRoadHeightfieldBodies(params: RoadHeightfieldBuildParams): RoadHeightfieldBodiesEntry | null {
+	const snapshot = collectRoadHeightfieldTileDescriptors(params)
+	if (!snapshot) {
+		return null
+	}
+	const {
+		roadNode,
+		rigidbodyComponent,
+		roadObject,
+		groundNode,
+		createBody,
+	} = params
+
+	roadObject.updateMatrixWorld(true)
+
+	let totalBodies = 0
+	const bodies: CANNON.Body[] = []
+	for (const tile of snapshot.tiles) {
+		if (!tile.shapeDefinition) {
+			continue
+		}
+		const tileObject = new THREE.Object3D()
+		tileObject.rotation.set(0, tile.yaw, 0)
+		tileObject.position.set(tile.position[0], tile.position[1], tile.position[2])
+		roadObject.add(tileObject)
+		tileObject.updateMatrixWorld(true)
+		const bodyResult = createBody(snapshot.surfaceNode, rigidbodyComponent, tile.shapeDefinition, tileObject)
+		roadObject.remove(tileObject)
+		if (bodyResult?.body) {
+			bodies.push(bodyResult.body)
+			totalBodies += 1
 		}
 	}
 
-	if (boundaryWallEnabled) {
+	if (snapshot.boundaryWallEnabled) {
 		const boundaryBodyResult = createBody(roadNode, rigidbodyComponent, null, roadObject)
 		if (boundaryBodyResult?.body) {
 			bodies.push(boundaryBodyResult.body)
@@ -252,26 +345,22 @@ export function buildRoadHeightfieldBodies(params: RoadHeightfieldBuildParams): 
 		return null
 	}
 
-	const groundData = groundNode && (groundNode.dynamicMesh as any)?.type === 'Ground'
-		? buildGroundHeightfieldData(groundNode, groundNode.dynamicMesh as any)
-		: null
-	const groundSignature = groundData?.signature ?? 'none'
 	const signature = buildRoadHeightfieldSignature({
-		definition,
+		definition: roadNode.dynamicMesh as RoadDynamicMesh,
 		roadNode,
 		groundNode,
-		groundSignature,
-		roadWidth,
-		samplingDensityFactor,
-		smoothingStrengthFactor,
-		minClearance,
-		junctionSmoothing,
-		elementSize,
-		desiredTileLength,
+		groundSignature: snapshot.groundSignature,
+		roadWidth: snapshot.roadWidth,
+		samplingDensityFactor: snapshot.samplingDensityFactor,
+		smoothingStrengthFactor: snapshot.smoothingStrengthFactor,
+		minClearance: snapshot.minClearance,
+		junctionSmoothing: snapshot.junctionSmoothing,
+		elementSize: snapshot.elementSize,
+		desiredTileLength: snapshot.desiredTileLength,
 		bodyCount: bodies.length,
-		heightHash: signatureHash,
-		boundaryWallEnabled,
-		boundaryWallProps,
+		heightHash: snapshot.heightHash,
+		boundaryWallEnabled: snapshot.boundaryWallEnabled,
+		boundaryWallProps: snapshot.boundaryWallProps,
 	})
 
 	return { signature, bodies }

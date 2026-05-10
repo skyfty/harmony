@@ -794,10 +794,6 @@ export function createInfiniteGroundChunkColliderRuntime(
 			nextDesired.size >= DIAGNOSTIC_COLLIDER_WARN_THRESHOLD
 			|| (diagnosticSignature !== lastDiagnosticSignature && now - lastDiagnosticLogAt >= DIAGNOSTIC_LOG_INTERVAL_MS)
 		) {
-			console.warn(
-				deps.loggerTag ?? '[InfiniteGroundChunkCollider]',
-				`collision-runtime ${stringifyDiagnosticPayload(diagnosticPayload)}`,
-			)
 			lastDiagnosticLogAt = now
 			lastDiagnosticSignature = diagnosticSignature
 		}

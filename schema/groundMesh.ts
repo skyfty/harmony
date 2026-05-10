@@ -6408,9 +6408,18 @@ export function setGroundSculptedMaterial(target: THREE.Object3D, material: THRE
 
   target.traverse((child) => {
     const mesh = child as THREE.Mesh
-    if (mesh?.isMesh && mesh.userData?.groundChunk) {
-      mesh.material = fallbackMaterial
+    if (!mesh?.isMesh) {
+      return
     }
+    if (!mesh.userData?.groundChunk && !mesh.userData?.compiledGroundTile) {
+      return
+    }
+    const currentMaterial = Array.isArray(mesh.material) ? (mesh.material[0] ?? null) : (mesh.material ?? null)
+    if (currentMaterial && currentMaterial !== fallbackMaterial) {
+      disposeGroundChunkTexturedMaterial(currentMaterial)
+    }
+    fallbackMaterial.needsUpdate = true
+    mesh.material = fallbackMaterial
   })
 }
 

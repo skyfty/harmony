@@ -21,6 +21,8 @@ export interface RoadComponentProps {
   junctionSmoothing: number
   /** Whether road surface adapts to ground undulation. Default true. */
   snapToTerrain: boolean
+  /** Whether the road should participate in vehicle collision / driveable surface physics. Default true. */
+  enableVehicleCollision?: boolean
   laneLines: boolean
   shoulders: boolean
   bodyAssetId?: string | null
@@ -83,6 +85,7 @@ export function clampRoadProps(props: Partial<RoadComponentProps> | null | undef
   const laneLines = Boolean(props?.laneLines)
   const shoulders = Boolean(props?.shoulders)
   const snapToTerrain = (props as RoadComponentProps | undefined)?.snapToTerrain ?? true
+  const enableVehicleCollision = (props as RoadComponentProps | undefined)?.enableVehicleCollision ?? true
 
   const normalizeAssetId = (value: unknown): string | null => {
     return typeof value === 'string' && value.trim().length ? value : null
@@ -119,6 +122,7 @@ export function clampRoadProps(props: Partial<RoadComponentProps> | null | undef
     width,
     junctionSmoothing,
     snapToTerrain,
+    enableVehicleCollision,
     laneLines,
     shoulders,
     segmentHeights,
@@ -135,6 +139,7 @@ export function resolveRoadComponentPropsFromMesh(mesh: RoadDynamicMesh | undefi
   if (!mesh) {
     return {
       snapToTerrain: true,
+      enableVehicleCollision: true,
       laneLines: false,
       shoulders: false,
       vertices: [],
@@ -177,6 +182,7 @@ export function cloneRoadComponentProps(props: RoadComponentProps): RoadComponen
     width: props.width,
     junctionSmoothing: props.junctionSmoothing,
     snapToTerrain: props.snapToTerrain,
+    enableVehicleCollision: props.enableVehicleCollision ?? true,
     laneLines: props.laneLines,
     shoulders: props.shoulders,
     bodyAssetId: props.bodyAssetId ?? null,
@@ -219,6 +225,7 @@ const roadComponentDefinition: ComponentDefinition<RoadComponentProps> = {
       label: 'Details',
       fields: [
         { kind: 'boolean', key: 'snapToTerrain', label: 'Adapt To Ground Terrain' },
+        { kind: 'boolean', key: 'enableVehicleCollision', label: 'Enable Vehicle Collision' },
         { kind: 'boolean', key: 'laneLines', label: 'Show Lane Lines' },
         { kind: 'boolean', key: 'shoulders', label: 'Show Shoulders' },
       ],
@@ -250,6 +257,7 @@ export function createRoadComponentState(
     width: overrides?.width ?? defaults.width,
     junctionSmoothing: overrides?.junctionSmoothing ?? defaults.junctionSmoothing,
     snapToTerrain: overrides?.snapToTerrain ?? defaults.snapToTerrain,
+    enableVehicleCollision: overrides?.enableVehicleCollision ?? defaults.enableVehicleCollision,
     laneLines: overrides?.laneLines ?? defaults.laneLines,
     shoulders: overrides?.shoulders ?? defaults.shoulders,
     bodyAssetId: overrides?.bodyAssetId ?? defaults.bodyAssetId,
@@ -265,6 +273,18 @@ export function createRoadComponentState(
     enabled: options.enabled ?? true,
     props: merged,
   }
+}
+
+export function resolveRoadVehicleCollisionEnabled(node: SceneNode | null | undefined): boolean {
+  if (!node || node.dynamicMesh?.type !== 'Road') {
+    return false
+  }
+  const state = node.components?.[ROAD_COMPONENT_TYPE] as SceneNodeComponentState<RoadComponentProps> | undefined
+  if (state?.enabled === false) {
+    return false
+  }
+  const props = clampRoadProps(state?.props as Partial<RoadComponentProps> | null | undefined)
+  return props.enableVehicleCollision !== false
 }
 
 export { roadComponentDefinition }

@@ -8,8 +8,6 @@ import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 import { cloneTextureSettings, createTextureSettings, type SceneNodeMaterial } from '@/types/material'
 import type { ProjectAsset } from '@/types/project-asset'
 
-const GROUND_MATERIAL_SLOT_NAMES = ['平坦地块材质', '雕刻地块材质'] as const
-
 type MaterialAsset = ProjectAsset & { type: 'material' }
 type TextureAsset = ProjectAsset & { type: 'image' | 'texture' }
 
@@ -29,7 +27,6 @@ const assetCacheStore = useAssetCacheStore()
 const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)
 
 const nodeMaterials = computed(() => selectedNode.value?.materials ?? [])
-const isGroundNode = computed(() => selectedNode.value?.dynamicMesh?.type === 'Ground')
 const internalActiveId = ref<string | null>(props.activeNodeMaterialId ?? null)
 const deleteDialogVisible = ref(false)
 const dragOverSlotId = ref<string | null>(null)
@@ -48,6 +45,9 @@ watch(
     internalActiveId.value = value ?? null
   },
 )
+
+const canAddMaterialSlot = computed(() => !!selectedNodeId.value && !props.disabled)
+const canDeleteMaterialSlot = computed(() => !!selectedNodeId.value && !!internalActiveId.value && !props.disabled)
 
 watch(
   nodeMaterials,
@@ -77,27 +77,13 @@ watch(
   { immediate: true },
 )
 
-const canAddMaterialSlot = computed(() => !!selectedNodeId.value && !props.disabled && !isGroundNode.value)
-const canDeleteMaterialSlot = computed(
-  () => !!selectedNodeId.value && !!internalActiveId.value && !props.disabled && !isGroundNode.value,
-)
-
-// Auto-initialize exactly 2 fixed material slots for ground nodes.
 watch(
-  [selectedNode, isGroundNode],
-  ([node, isGround]) => {
-    if (!isGround || !node?.id) {
-      return
-    }
-    const materials = node.materials ?? []
-    for (let i = materials.length; i < GROUND_MATERIAL_SLOT_NAMES.length; i += 1) {
-      const created = sceneStore.addNodeMaterial(node.id) as SceneNodeMaterial | null
-      if (created) {
-        sceneStore.updateNodeMaterialProps(node.id, created.id, { name: GROUND_MATERIAL_SLOT_NAMES[i] })
-      }
+  () => props.disabled,
+  (disabled: boolean | undefined) => {
+    if (disabled) {
+      handleMaterialAssetPickerCancel()
     }
   },
-  { immediate: true },
 )
 
 const deleteDialogMessage = computed(() => {
@@ -107,19 +93,17 @@ const deleteDialogMessage = computed(() => {
   if (!nodeMaterials.value.some((item: SceneNodeMaterial) => item.id === internalActiveId.value)) {
     return '确认删除当前选中的材质项？此操作无法撤销。'
   }
-  return '删除后该材质槽及其独立材质将被移除，操作不可撤销。确认继续删除？'
+  return '删除后该材质项及其独立材质将被移除，操作不可撤销。确认继续删除？'
 })
 
 const materialListEntries = computed(() =>
   nodeMaterials.value.map((entry: SceneNodeMaterial, index: number) => {
     const thumbnail = getMaterialPreviewThumbnail(entry)
     const color = normalizeHexColor(entry.color, DEFAULT_MATERIAL_COLOR)
-    // For ground nodes use fixed slot names regardless of what is stored.
-    const groundName = isGroundNode.value ? (GROUND_MATERIAL_SLOT_NAMES[index] ?? entry.name ?? `材质 ${index + 1}`) : null
     return {
       id: entry.id,
-      title: groundName ?? entry.name ?? `材质 ${index + 1}`,
-      subtitle: isGroundNode.value ? (index === 0 ? 'Flat Chunk' : 'Sculpted Chunk') : '材质副本',
+      title: entry.name ?? `材质 ${index + 1}`,
+      subtitle: '材质副本',
       shared: false,
       color,
       thumbnail,
@@ -133,15 +117,6 @@ watch(nodeMaterials, (list: SceneNodeMaterial[]) => {
     handleMaterialAssetPickerCancel()
   }
 })
-
-watch(
-  () => props.disabled,
-  (disabled: boolean | undefined) => {
-    if (disabled) {
-      handleMaterialAssetPickerCancel()
-    }
-  },
-)
 
 function handleSelect(id: string) {
   internalActiveId.value = id
@@ -518,23 +493,20 @@ function handleConfirmDeleteSlot() {
     <v-expansion-panel-title>
       <span class="material-panel-title__label">Material</span>
       <v-spacer />
-
-        <template v-if="!isGroundNode">
-          <v-btn
-            icon="mdi-plus"
-            size="small"
-            variant="text"
-            :disabled="!canAddMaterialSlot"
-            @click.stop="handleAddMaterialSlot"
-          />
-          <v-btn
-            icon="mdi-minus"
-            size="small"
-            variant="text"
-            :disabled="!canDeleteMaterialSlot"
-            @click.stop="handleRequestDeleteSlot"
-          />
-        </template>
+      <v-btn
+        icon="mdi-plus"
+        size="small"
+        variant="text"
+        :disabled="!canAddMaterialSlot"
+        @click.stop="handleAddMaterialSlot"
+      />
+      <v-btn
+        icon="mdi-minus"
+        size="small"
+        variant="text"
+        :disabled="!canDeleteMaterialSlot"
+        @click.stop="handleRequestDeleteSlot"
+      />
     </v-expansion-panel-title>
     <v-expansion-panel-text>
       <div class="material-panel">
