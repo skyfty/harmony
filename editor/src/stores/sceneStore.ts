@@ -17454,6 +17454,8 @@ export const useSceneStore = defineStore('scene', {
           }
         } else if (currentType === ROAD_COMPONENT_TYPE) {
           applyRoadComponentPropsToNode(node, nextProps as RoadComponentProps, resolveGroundNodeForHeightSampling(this.nodes))
+          syncRoadDynamicMeshStaticMetadataImported(node, node.dynamicMesh as RoadDynamicMesh)  
+          this.queueSceneNodePatch(nodeId, ['userData'])
         } else if (currentType === BILLBOARD_COMPONENT_TYPE) {
           // Billboard runtime is texture-driven; no geometry sync is required here.
         } else if (currentType === DISPLAY_BOARD_COMPONENT_TYPE) {

@@ -115,13 +115,12 @@ export function applyRoadComponentPropsToNode(
   const normalized = clampRoadProps((props && typeof props === 'object' ? props : null) as Partial<RoadComponentProps> | null)
   // Road geometry (vertices/segments) is edited directly via dynamicMesh.
   const existing = node.dynamicMesh
-  const existingWidth = existing && typeof (existing as any).width === 'number' ? Number((existing as any).width) : NaN
   node.dynamicMesh = {
     type: 'Road',
     vertices: Array.isArray(existing.vertices) ? existing.vertices : normalized.vertices,
     segmentHeights: Array.isArray((existing as any).segmentHeights) ? (existing as any).segmentHeights : (normalized as any).segmentHeights,
     segments: Array.isArray(existing.segments) ? existing.segments : normalized.segments,
-    width: Number.isFinite(existingWidth) ? existingWidth : normalized.width,
+    width: normalized.width,
   }
 
   const runtime = deps.getRuntimeObject(node.id)
