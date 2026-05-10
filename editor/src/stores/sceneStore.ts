@@ -3874,65 +3874,6 @@ function resolveGroundNodeForHeightSampling(nodes: SceneNode[]): SceneNode | nul
   return null
 }
 
-function rebuildRoadSegmentHeights(node: SceneNode, definition: RoadDynamicMesh, groundNode: SceneNode | null): RoadDynamicMesh {
-  const sampler = resolveRoadLocalHeightSampler(node, groundNode)
-  const roadState = node.components?.[ROAD_COMPONENT_TYPE] as SceneNodeComponentState<RoadComponentProps> | undefined
-  const roadProps = clampRoadProps(roadState?.props as Partial<RoadComponentProps> | null | undefined)
-  const clearance = Number.isFinite(roadProps.minClearance) ? Math.max(0, Number(roadProps.minClearance)) : 0
-  const rawSamplingDensityFactor = Number(roadProps.samplingDensityFactor)
-  const samplingDensityFactor = Number.isFinite(rawSamplingDensityFactor)
-    ? Math.max(0.1, rawSamplingDensityFactor)
-    : 1
-
-  const segmentHeights: number[][] = []
-  const rawSegments = Array.isArray(definition.segments) ? definition.segments : []
-  const vertices = Array.isArray(definition.vertices) ? definition.vertices : []
-
-  for (let s = 0; s < rawSegments.length; s += 1) {
-    const seg = rawSegments[s]
-    const aIdx = Number(seg?.a)
-    const bIdx = Number(seg?.b)
-    if (!Number.isInteger(aIdx) || !Number.isInteger(bIdx)) {
-      segmentHeights.push([])
-      continue
-    }
-    const a = vertices[aIdx]
-    const b = vertices[bIdx]
-    if (!Array.isArray(a) || !Array.isArray(b)) {
-      segmentHeights.push([])
-      continue
-    }
-    const ax = Number(a[0])
-    const az = Number(a[1])
-    const bx = Number(b[0])
-    const bz = Number(b[1])
-    if (!Number.isFinite(ax) || !Number.isFinite(az) || !Number.isFinite(bx) || !Number.isFinite(bz)) {
-      segmentHeights.push([])
-      continue
-    }
-
-    const dx = bx - ax
-    const dz = bz - az
-    const length = Math.sqrt(dx * dx + dz * dz)
-    const divisions = Math.max(2, Math.ceil(length * 8 * samplingDensityFactor))
-    const heights: number[] = []
-    for (let i = 0; i <= divisions; i += 1) {
-      const t = i / divisions
-      const x = ax + t * dx
-      const z = az + t * dz
-      const sampled = sampler ? sampler(Number.isFinite(x) ? x : 0, Number.isFinite(z) ? z : 0) : 0
-      const value = Number.isFinite(sampled) ? sampled + clearance : clearance
-      heights.push(value)
-    }
-    segmentHeights.push(heights)
-  }
-
-  return {
-    ...definition,
-    segmentHeights,
-  }
-}
-
 function ensureDynamicMeshRuntime(node: SceneNode, groundNode: SceneNode | null): boolean {
   const meshDefinition = node.dynamicMesh
   if (!meshDefinition) {
@@ -10327,11 +10268,6 @@ export const useSceneStore = defineStore('scene', {
       }
 
       this.captureNodeDynamicMeshHistory(nodeId)
-
-      if (dynamicMesh && typeof dynamicMesh === 'object' && dynamicMesh.type === 'Road') {
-        const groundNode = resolveGroundNodeForHeightSampling(this.nodes)
-        Object.assign(dynamicMesh, rebuildRoadSegmentHeights(target, dynamicMesh as RoadDynamicMesh, groundNode))
-      }
 
       applySceneNodeDynamicMeshUpdate(this, nodeId, dynamicMesh)
       finalizeDynamicMeshRuntimePatch(this, nodeId, resolveDynamicMeshType(target.dynamicMesh))

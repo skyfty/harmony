@@ -2160,39 +2160,6 @@ function clearPreviewInfiniteGroundChunkCollisionBodies(): void {
 	externalRigidbodyDebugSources.clear()
 }
 
-function syncPreviewGroundCollisionDebugSources(groundObject: THREE.Object3D): void {
-	const nextSources = new Map<string, ExternalRigidbodyDebugSource>()
-	previewCompiledGroundCollisionRuntime.getDebugEntries().forEach((entry) => {
-		nextSources.set(entry.nodeId, {
-			instance: entry.instance,
-			category: 'ground',
-			visibilityObject: groundObject,
-			groundShapes: entry.shapes,
-		})
-	})
-	previewInfiniteGroundChunkColliderRuntime.getDebugEntries().forEach((entry) => {
-		nextSources.set(entry.nodeId, {
-			instance: entry.instance,
-			category: 'ground',
-			visibilityObject: groundObject,
-			groundShapes: entry.shapes,
-		})
-	})
-	const staleNodeIds = Array.from(externalRigidbodyDebugSources.keys()).filter((nodeId) => !nextSources.has(nodeId))
-	staleNodeIds.forEach((nodeId) => {
-		externalRigidbodyDebugSources.delete(nodeId)
-		removeRigidbodyDebugHelper(nodeId)
-	})
-	nextSources.forEach((source, nodeId) => {
-		externalRigidbodyDebugSources.set(nodeId, source)
-	})
-	if (isRigidbodyDebugVisible.value) {
-		lastGroundDebugExternalSyncSignature = ''
-		lastGroundDebugExternalSyncAt = 0
-		syncRigidbodyDebugHelpers()
-	}
-}
-
 function syncPreviewInfiniteGroundChunkCollisionBodies(
 	groundObject: THREE.Object3D,
 	activeCamera: THREE.PerspectiveCamera,
@@ -2830,7 +2797,6 @@ const lastOrbitState = {
 let animationMixers: THREE.AnimationMixer[] = []
 let effectRuntimeTickers: Array<(delta: number) => void> = []
 let physicsAccumulator = 0
-let lastPhysicsPerformanceLogAt = 0
 const GROUND_DEBUG_MAX_EXTERNAL_HELPERS = 8
 const GROUND_DEBUG_EXTERNAL_SYNC_INTERVAL_MS = 180
 const GROUND_DEBUG_EXTERNAL_BUILD_BUDGET = 2
@@ -13074,7 +13040,6 @@ function stepPhysicsWorld(delta: number): void {
 	const clampedDelta = Math.min(Math.max(0, delta), PHYSICS_MAX_ACCUMULATOR)
 	physicsAccumulator = Math.min(PHYSICS_MAX_ACCUMULATOR, physicsAccumulator + clampedDelta)
 	let subSteps = 0
-	const physicsStepStartedAt = performance.now()
 	try {
 		while (physicsAccumulator >= PHYSICS_FIXED_TIMESTEP && subSteps < PHYSICS_MAX_SUB_STEPS) {
 			physicsWorld.step(PHYSICS_FIXED_TIMESTEP)

@@ -96,81 +96,6 @@ function pushSplitPoint(map: Map<number, SplitPoint[]>, segmentIndex: number, en
   }
 }
 
-function expandPolyline(points: THREE.Vector2[], splitMap: Map<number, SplitPoint[]>): THREE.Vector2[] {
-  if (points.length < 2) {
-    return points
-  }
-  const out: THREE.Vector2[] = [points[0]!.clone()]
-  for (let i = 0; i < points.length - 1; i += 1) {
-    const splits = (splitMap.get(i) ?? []).slice()
-    splits.sort((a, b) => a.t - b.t)
-    for (const s of splits) {
-      if (s.t <= ROAD_INTERSECTION_EPS || s.t >= 1 - ROAD_INTERSECTION_EPS) {
-        continue
-      }
-      const prev = out[out.length - 1]
-      if (!prev || prev.distanceToSquared(s.point) > ROAD_VERTEX_MERGE_EPS2) {
-        out.push(s.point.clone())
-      }
-    }
-    const end = points[i + 1]!
-    const prev = out[out.length - 1]
-    if (!prev || prev.distanceToSquared(end) > ROAD_VERTEX_MERGE_EPS2) {
-      out.push(end.clone())
-    }
-  }
-  return out
-}
-
-function applySegmentSplits(
-  baseVertices: Array<[number, number]>,
-  baseSegments: RoadSegment[],
-  splitMap: Map<number, SplitPoint[]>,
-): { vertices: Array<[number, number]>; segments: RoadSegment[] } {
-  const vertices: Array<[number, number]> = baseVertices.map(([x, z]) => [x, z])
-
-  const findOrAddVertex = (p: THREE.Vector2): number => {
-    for (let i = 0; i < vertices.length; i += 1) {
-      const v = vertices[i]!
-      const dx = v[0] - p.x
-      const dz = v[1] - p.y
-      if (dx * dx + dz * dz <= ROAD_VERTEX_MERGE_EPS2) {
-        return i
-      }
-    }
-    const idx = vertices.length
-    vertices.push([p.x, p.y])
-    return idx
-  }
-
-  const segments: RoadSegment[] = []
-  for (let segIndex = 0; segIndex < baseSegments.length; segIndex += 1) {
-    const seg = baseSegments[segIndex]!
-    const splits = (splitMap.get(segIndex) ?? []).slice()
-    if (!splits.length) {
-      segments.push({ a: seg.a, b: seg.b })
-      continue
-    }
-    splits.sort((a, b) => a.t - b.t)
-    const chain: number[] = [seg.a]
-    for (const s of splits) {
-      if (s.t <= ROAD_INTERSECTION_EPS || s.t >= 1 - ROAD_INTERSECTION_EPS) {
-        continue
-      }
-      chain.push(findOrAddVertex(s.point))
-    }
-    chain.push(seg.b)
-    for (let i = 0; i < chain.length - 1; i += 1) {
-      const a = chain[i]!
-      const b = chain[i + 1]!
-      if (a !== b) {
-        segments.push({ a, b })
-      }
-    }
-  }
-  return { vertices, segments }
-}
-
 function computeSelfIntersectionSplits(vertices2: THREE.Vector2[], segments: RoadSegment[]): Map<number, SplitPoint[]> {
   const splitMap = new Map<number, SplitPoint[]>()
   for (let i = 0; i < segments.length; i += 1) {
@@ -266,12 +191,110 @@ function sampleSegmentY(a: THREE.Vector3, b: THREE.Vector3, t: number): number {
   return a.y + (b.y - a.y) * tt
 }
 
-function addPolylineSegmentsToRoad(
-  current: { vertices: Array<[number, number]>; segments: RoadSegment[] },
+function sampleHeightSeries(values: number[] | null | undefined, t: number): number {
+  if (!Array.isArray(values) || values.length === 0) {
+    return 0
+  }
+  if (values.length === 1) {
+    const single = Number(values[0])
+    return Number.isFinite(single) ? single : 0
+  }
+  const clampedT = Math.max(0, Math.min(1, Number.isFinite(t) ? t : 0))
+  const scaled = clampedT * (values.length - 1)
+  const i0 = Math.floor(scaled)
+  const i1 = Math.min(values.length - 1, i0 + 1)
+  const frac = scaled - i0
+  const h0 = Number(values[i0] ?? 0)
+  const h1 = Number(values[i1] ?? h0)
+  const safeH0 = Number.isFinite(h0) ? h0 : 0
+  const safeH1 = Number.isFinite(h1) ? h1 : safeH0
+  return safeH0 + (safeH1 - safeH0) * frac
+}
+
+function resampleHeightSeries(
+  values: number[] | null | undefined,
+  startT: number,
+  endT: number,
+  sampleCount?: number,
+): number[] {
+  const count = Math.max(2, Math.trunc(sampleCount ?? (Array.isArray(values) ? values.length : 0)) || 2)
+  const out: number[] = []
+  for (let i = 0; i < count; i += 1) {
+    const localT = count <= 1 ? 0 : i / (count - 1)
+    const t = startT + (endT - startT) * localT
+    out.push(sampleHeightSeries(values, t))
+  }
+  return out
+}
+
+function normalizeSegmentHeightList(
+  segmentHeights: number[][] | undefined,
+  segmentCount: number,
+): number[][] {
+  const out: number[][] = []
+  for (let i = 0; i < segmentCount; i += 1) {
+    const raw = Array.isArray(segmentHeights?.[i]) ? segmentHeights![i] : null
+    const values = Array.isArray(raw)
+      ? raw.map((value) => {
+          const numeric = Number(value)
+          return Number.isFinite(numeric) ? numeric : 0
+        })
+      : []
+    out.push(values.length >= 2 ? values : [0, 0])
+  }
+  return out
+}
+
+function expandPolylineWithHeights(
+  points: THREE.Vector2[],
+  splitMap: Map<number, SplitPoint[]>,
+  sourceHeights?: number[][],
+): { points: THREE.Vector2[]; segmentHeights: number[][] } {
+  if (points.length < 2) {
+    return { points, segmentHeights: [] }
+  }
+
+  const outPoints: THREE.Vector2[] = [points[0]!.clone()]
+  const outHeights: number[][] = []
+  for (let i = 0; i < points.length - 1; i += 1) {
+    const splits = (splitMap.get(i) ?? []).slice()
+    splits.sort((a, b) => a.t - b.t)
+    const segmentHeights = Array.isArray(sourceHeights?.[i]) && sourceHeights![i]!.length >= 2
+      ? sourceHeights![i]!
+      : [0, 0]
+    let previousT = 0
+
+    for (const s of splits) {
+      if (s.t <= ROAD_INTERSECTION_EPS || s.t >= 1 - ROAD_INTERSECTION_EPS) {
+        continue
+      }
+      outHeights.push(resampleHeightSeries(segmentHeights, previousT, s.t, segmentHeights.length))
+      const prev = outPoints[outPoints.length - 1]
+      if (!prev || prev.distanceToSquared(s.point) > ROAD_VERTEX_MERGE_EPS2) {
+        outPoints.push(s.point.clone())
+      }
+      previousT = s.t
+    }
+
+    outHeights.push(resampleHeightSeries(segmentHeights, previousT, 1, segmentHeights.length))
+    const end = points[i + 1]!
+    const prev = outPoints[outPoints.length - 1]
+    if (!prev || prev.distanceToSquared(end) > ROAD_VERTEX_MERGE_EPS2) {
+      outPoints.push(end.clone())
+    }
+  }
+
+  return { points: outPoints, segmentHeights: outHeights }
+}
+
+function addPolylineSegmentsToRoadWithHeights(
+  current: { vertices: Array<[number, number]>; segments: RoadSegment[]; segmentHeights: number[][] },
   polyPoints: THREE.Vector2[],
-): { vertices: Array<[number, number]>; segments: RoadSegment[] } {
+  polyHeights: number[][],
+): { vertices: Array<[number, number]>; segments: RoadSegment[]; segmentHeights: number[][] } {
   const vertices: Array<[number, number]> = current.vertices.map(([x, z]) => [x, z])
   const segments: RoadSegment[] = current.segments.map((s) => ({ a: s.a, b: s.b }))
+  const segmentHeights: number[][] = current.segmentHeights.map((entry) => entry.map((value) => Number(value)))
 
   const segmentKey = (a: number, b: number) => (a < b ? `${a}:${b}` : `${b}:${a}`)
   const existing = new Set<string>()
@@ -294,7 +317,7 @@ function addPolylineSegmentsToRoad(
   }
 
   if (polyPoints.length < 2) {
-    return { vertices, segments }
+    return { vertices, segments, segmentHeights }
   }
 
   let prevIndex = findOrAddVertex(polyPoints[0]!)
@@ -304,13 +327,18 @@ function addPolylineSegmentsToRoad(
       const key = segmentKey(prevIndex, idx)
       if (!existing.has(key)) {
         segments.push({ a: prevIndex, b: idx })
+        segmentHeights.push(
+          Array.isArray(polyHeights[i - 1]) && polyHeights[i - 1]!.length >= 2
+            ? polyHeights[i - 1]!.map((value) => (Number.isFinite(Number(value)) ? Number(value) : 0))
+            : [0, 0],
+        )
         existing.add(key)
       }
       prevIndex = idx
     }
   }
 
-  return { vertices, segments }
+  return { vertices, segments, segmentHeights }
 }
 
 export function splitRoadSelfIntersectionsMesh(mesh: RoadDynamicMesh, defaultWidth: number): RoadDynamicMesh | null {
@@ -326,13 +354,83 @@ export function splitRoadSelfIntersectionsMesh(mesh: RoadDynamicMesh, defaultWid
   if (!splits.size) {
     return null
   }
-  const rebuilt = applySegmentSplits(vertices, segments, splits)
+  const rebuilt = applySegmentSplitsWithHeights(
+    vertices,
+    segments,
+    normalizeSegmentHeightList(mesh.segmentHeights, segments.length),
+    splits,
+  )
   return {
     type: 'Road',
     width: Number.isFinite(mesh.width) ? Math.max(0.2, mesh.width) : defaultWidth,
     vertices: rebuilt.vertices,
     segments: rebuilt.segments,
+    segmentHeights: rebuilt.segmentHeights,
   }
+}
+
+function applySegmentSplitsWithHeights(
+  baseVertices: Array<[number, number]>,
+  baseSegments: RoadSegment[],
+  baseSegmentHeights: number[][],
+  splitMap: Map<number, SplitPoint[]>,
+): { vertices: Array<[number, number]>; segments: RoadSegment[]; segmentHeights: number[][] } {
+  const vertices: Array<[number, number]> = baseVertices.map(([x, z]) => [x, z])
+
+  const findOrAddVertex = (p: THREE.Vector2): number => {
+    for (let i = 0; i < vertices.length; i += 1) {
+      const v = vertices[i]!
+      const dx = v[0] - p.x
+      const dz = v[1] - p.y
+      if (dx * dx + dz * dz <= ROAD_VERTEX_MERGE_EPS2) {
+        return i
+      }
+    }
+    const idx = vertices.length
+    vertices.push([p.x, p.y])
+    return idx
+  }
+
+  const segments: RoadSegment[] = []
+  const segmentHeights: number[][] = []
+  for (let segIndex = 0; segIndex < baseSegments.length; segIndex += 1) {
+    const seg = baseSegments[segIndex]!
+    const originalHeights = Array.isArray(baseSegmentHeights[segIndex]) && baseSegmentHeights[segIndex]!.length >= 2
+      ? baseSegmentHeights[segIndex]!
+      : [0, 0]
+    const splits = (splitMap.get(segIndex) ?? []).slice()
+    if (!splits.length) {
+      segments.push({ a: seg.a, b: seg.b })
+      segmentHeights.push(originalHeights.map((value) => Number.isFinite(Number(value)) ? Number(value) : 0))
+      continue
+    }
+
+    splits.sort((a, b) => a.t - b.t)
+    const chain: number[] = [seg.a]
+    const chainT: number[] = [0]
+    for (const s of splits) {
+      if (s.t <= ROAD_INTERSECTION_EPS || s.t >= 1 - ROAD_INTERSECTION_EPS) {
+        continue
+      }
+      chain.push(findOrAddVertex(s.point))
+      chainT.push(s.t)
+    }
+    chain.push(seg.b)
+    chainT.push(1)
+    for (let i = 0; i < chain.length - 1; i += 1) {
+      const a = chain[i]!
+      const b = chain[i + 1]!
+      if (a === b) {
+        continue
+      }
+      segments.push({ a, b })
+      const startT = chainT[i]!
+      const endT = chainT[i + 1]!
+      segmentHeights.push(resampleHeightSeries(originalHeights, startT, endT, originalHeights.length))
+    }
+  }
+
+  return { vertices, segments, segmentHeights }
 }
 
 export function integrateWorldPolylineIntoRoadMesh(options: {
@@ -341,47 +439,31 @@ export function integrateWorldPolylineIntoRoadMesh(options: {
   worldPoints: THREE.Vector3[]
   width: number
   defaultWidth: number
+  segmentHeights?: number[][]
 }): RoadDynamicMesh | null {
-  // 解构传入参数：基础路网、运行时对象和世界坐标点序列
   const { baseMesh, runtime, worldPoints } = options
-  // 仅支持类型为 'Road' 的网格
   if (baseMesh.type !== 'Road') {
     return null
   }
 
-  // 规范化基础路网定义，得到顶点与线段
   const { vertices: baseVertices, segments: baseSegments } = sanitizeRoadDefinition(baseMesh)
   if (baseVertices.length < 1) {
     return null
   }
 
-  // 将基础顶点转换为二维向量（x,z）用于相交计算
   const baseVertices2 = baseVertices.map(([x, z]) => new THREE.Vector2(x, z))
-  // 将世界坐标的折线转换到运行时对象的本地坐标系
   const polyLocal = buildLocalPolyline(runtime, worldPoints)
   if (polyLocal.length < 2) {
     return null
   }
 
-  worldPoints.forEach((p) => {
-    console.log(`World point: (${p.x.toFixed(2)}, ${p.y.toFixed(2)}, ${p.z.toFixed(2)})`)
-  })
-
-  polyLocal.forEach((v) => {
-    console.log(v)
-  })
-
-  // 计算基础路网自相交点并准备拆分
   const baseSelfSplits = computeSelfIntersectionSplits(baseVertices2, baseSegments)
-
-  // 计算折线与路网的交点（包括路网上的拆分与折线自身的拆分）
   const { roadSplits, polySplits } = computePolylineRoadIntersectionSplits(polyLocal, baseVertices2, baseSegments)
   const polySelfSplits = computeSelfIntersectionSplits(
     polyLocal,
     polyLocal.length >= 2 ? polyLocal.slice(0, -1).map((_, i) => ({ a: i, b: i + 1 })) : [],
   )
 
-  // 合并路网上的所有拆分点（包括基础自相交与折线产生的拆分）
   const mergedRoadSplits = new Map<number, SplitPoint[]>()
   const mergeMap = (into: Map<number, SplitPoint[]>, from: Map<number, SplitPoint[]>) => {
     for (const [k, list] of from.entries()) {
@@ -393,25 +475,23 @@ export function integrateWorldPolylineIntoRoadMesh(options: {
   mergeMap(mergedRoadSplits, baseSelfSplits)
   mergeMap(mergedRoadSplits, roadSplits)
 
-  // 根据合并后的拆分点重建基础路网（如果没有拆分则保持原样）
+  const baseHeights = normalizeSegmentHeightList(baseMesh.segmentHeights, baseSegments.length)
   const rebuiltBase = mergedRoadSplits.size
-    ? applySegmentSplits(baseVertices, baseSegments, mergedRoadSplits)
-    : { vertices: baseVertices, segments: baseSegments }
+    ? applySegmentSplitsWithHeights(baseVertices, baseSegments, baseHeights, mergedRoadSplits)
+    : { vertices: baseVertices, segments: baseSegments, segmentHeights: baseHeights }
 
-  // 合并并展开折线的拆分点（包含折线自相交与与路网相交）
   const mergedPolySplits = new Map<number, SplitPoint[]>()
   mergeMap(mergedPolySplits, polySplits)
   mergeMap(mergedPolySplits, polySelfSplits)
-  const expandedPoly = expandPolyline(polyLocal, mergedPolySplits)
+  const expandedPoly = expandPolylineWithHeights(polyLocal, mergedPolySplits, options.segmentHeights)
 
-  // 将展开后的折线段添加到重建后的路网中，得到最终合并结果
-  const combined = addPolylineSegmentsToRoad(rebuiltBase, expandedPoly)
+  const combined = addPolylineSegmentsToRoadWithHeights(rebuiltBase, expandedPoly.points, expandedPoly.segmentHeights)
   return {
     type: 'Road',
-    // 使用给定宽度，若无效则回退到默认宽度（最小值为0.2）
     width: Number.isFinite(options.width) ? Math.max(0.2, options.width) : options.defaultWidth,
     vertices: combined.vertices,
     segments: combined.segments,
+    segmentHeights: combined.segmentHeights,
   }
 }
 

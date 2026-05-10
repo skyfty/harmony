@@ -574,6 +574,7 @@ export function createRoadBuildTool(options: {
             worldPoints: build.worldPoints,
             width: build.definition.width,
             defaultWidth: session.width,
+            segmentHeights: build.definition.segmentHeights,
           })
 
           if (merged) {

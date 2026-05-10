@@ -16,7 +16,6 @@ import {
   resolvePlanningDemBaseTexture,
   resolvePlanningDemTargetWorldBounds,
   resolvePlanningDemPreparedSource,
-  resolvePlanningDemOrthophotoTexture,
   type PlanningDemBuildProgress,
   type PlanningDemPreparedSource,
   type PlanningDemRegionConversionResult,
