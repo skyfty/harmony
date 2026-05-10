@@ -15484,6 +15484,18 @@ function raycastGroundPoint(event: PointerEvent, result: THREE.Vector3): boolean
   return !!raycaster.ray.intersectPlane(groundPlane, result)
 }
 
+function raycastGroundHeightfieldPoint(event: PointerEvent, result: THREE.Vector3): boolean {
+  if (!normalizedPointerGuard.setRayFromEvent(event)) {
+    return false
+  }
+  const hit = intersectRayWithGroundHeightfieldWorld(raycaster.ray)
+  if (!hit) {
+    return false
+  }
+  result.copy(hit)
+  return true
+}
+
 function resolveBuildPlacementPoint(event: PointerEvent, result: THREE.Vector3): boolean {
   if (!isTemporaryNavigationOverrideActive()) {
     const hit = pickNodeAtPointer(event)
@@ -15491,6 +15503,9 @@ function resolveBuildPlacementPoint(event: PointerEvent, result: THREE.Vector3):
       result.copy(hit.point)
       return true
     }
+  }
+  if (raycastGroundHeightfieldPoint(event, result)) {
+    return true
   }
   return raycastGroundPoint(event, result)
 }
@@ -19365,8 +19380,6 @@ function resolveGroundNodeIdForPlacement(): string | null {
   return groundNode?.id ?? null
 }
 
-const heightfieldRayMatrixHelper = new THREE.Matrix4()
-const heightfieldRayHelper = new THREE.Ray()
 const heightfieldRayPointHelper = new THREE.Vector3()
 const roadSurfaceProbeRaycaster = new THREE.Raycaster()
 const roadSurfaceProbeOriginY = 10000
@@ -19385,11 +19398,6 @@ function intersectRayWithGroundHeightfieldWorld(ray: THREE.Ray): THREE.Vector3 |
     return null
   }
 
-  // Convert ray into ground-local space.
-  groundObject.updateMatrixWorld(true)
-  heightfieldRayMatrixHelper.copy(groundObject.matrixWorld).invert()
-  heightfieldRayHelper.copy(ray).applyMatrix4(heightfieldRayMatrixHelper)
-
   const bounds = resolveGroundWorldBounds(groundDefinition)
   const width = bounds.maxX - bounds.minX
   const depth = bounds.maxZ - bounds.minZ
@@ -19397,8 +19405,8 @@ function intersectRayWithGroundHeightfieldWorld(ray: THREE.Ray): THREE.Vector3 |
     return null
   }
 
-  const origin = heightfieldRayHelper.origin
-  const dir = heightfieldRayHelper.direction
+  const origin = ray.origin
+  const dir = ray.direction
 
   // Intersect the ray with the ground's XZ bounds first (2D slab in X/Z).
   const EPS = 1e-8
@@ -19460,7 +19468,6 @@ function intersectRayWithGroundHeightfieldWorld(ray: THREE.Ray): THREE.Vector3 |
     const z = origin.z + dir.z * prevT
     const h = sampleGroundHeight(groundDefinition, x, z)
     heightfieldRayPointHelper.set(x, h, z)
-    groundObject.localToWorld(heightfieldRayPointHelper)
     return heightfieldRayPointHelper.clone()
   }
 
@@ -19490,7 +19497,6 @@ function intersectRayWithGroundHeightfieldWorld(ray: THREE.Ray): THREE.Vector3 |
       const z = origin.z + dir.z * b
       const h = sampleGroundHeight(groundDefinition, x, z)
       heightfieldRayPointHelper.set(x, h, z)
-      groundObject.localToWorld(heightfieldRayPointHelper)
       return heightfieldRayPointHelper.clone()
     }
     prevT = nextT
@@ -19505,20 +19511,11 @@ function intersectRayWithGroundHeightfieldWorld(ray: THREE.Ray): THREE.Vector3 |
 
 function sampleHeightfieldWorldYAt(worldPosition: THREE.Vector3): number | null {
   const groundDefinition = resolveGroundDynamicMeshDefinition()
-  const groundNodeId = resolveGroundNodeIdForPlacement()
-  if (!groundDefinition || !groundNodeId) {
+  if (!groundDefinition) {
     return null
   }
-  const groundObject = objectMap.get(groundNodeId) ?? getRuntimeObject(groundNodeId)
-  if (!groundObject) {
-    return null
-  }
-  const localPoint = groundObject.worldToLocal(worldPosition.clone())
-  const height = sampleGroundHeight(groundDefinition, localPoint.x, localPoint.z)
-
-  localPoint.y = height
-  groundObject.localToWorld(localPoint)
-  return localPoint.y
+  const height = sampleGroundHeight(groundDefinition, worldPosition.x, worldPosition.z)
+  return Number.isFinite(height) ? height : null
 }
 
 function sampleVisibleSurfaceWorldYAt(worldPosition: THREE.Vector3): number | null {
