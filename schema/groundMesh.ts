@@ -6075,17 +6075,25 @@ function applyGroundTextureToObject(object: THREE.Object3D, definition: GroundDy
   const source = typeof definition.textureDataUrl === 'string' ? definition.textureDataUrl : null
   const normalSource = typeof definition.normalMapDataUrl === 'string' ? definition.normalMapDataUrl : null
   const cachedBaseMaterial = (root.userData as Record<string, unknown> | undefined)?.groundMaterial
+  const cachedSculptedMaterial = (root.userData as Record<string, unknown> | undefined)?.groundSculptedMaterial
   const baseMaterial = cachedBaseMaterial && !Array.isArray(cachedBaseMaterial)
     ? cachedBaseMaterial as THREE.Material
+    : null
+  const sculptedMaterial = cachedSculptedMaterial && !Array.isArray(cachedSculptedMaterial)
+    ? cachedSculptedMaterial as THREE.Material
     : null
   const sharedBaseTexture = source ? resolveGroundRuntimeBaseTexture(root, definition) : null
   const sharedBaseMaterialSignature = baseMaterial
     ? resolveGroundBaseMaterialSignature(baseMaterial)
     : 'none'
+  const sculptedMaterialSignature = sculptedMaterial
+    ? resolveGroundBaseMaterialSignature(sculptedMaterial)
+    : 'none'
   const traversalSignature = [
     source ?? 'none',
     normalSource ?? 'none',
     sharedBaseMaterialSignature,
+    sculptedMaterialSignature,
     resolveGroundDefinitionTextureWindowSignature(definition),
     resolveGroundTextureSizeSignature(sharedBaseTexture),
     runtimeState ? runtimeState.visibleChunkKeysVersion : -1,
@@ -6112,7 +6120,9 @@ function applyGroundTextureToObject(object: THREE.Object3D, definition: GroundDy
     const chunkSpec = mesh.userData?.groundChunk as GroundChunkSpec | undefined
     const isCompiledGroundTile = mesh.userData?.compiledGroundTile === true
     const currentMaterial = Array.isArray(mesh.material) ? (mesh.material[0] ?? null) : (mesh.material ?? null)
-    const chunkBaseMaterial = baseMaterial ?? currentMaterial
+    const chunkBaseMaterial = chunkSpec && sculptedMaterial
+      ? sculptedMaterial
+      : (baseMaterial ?? currentMaterial)
     const chunkBaseMaterialSignature = chunkBaseMaterial
       ? (chunkBaseMaterial === baseMaterial
         ? sharedBaseMaterialSignature
@@ -6385,6 +6395,7 @@ export function setGroundSculptedMaterial(target: THREE.Object3D, material: THRE
   } else {
     delete userData.groundSculptedMaterial
   }
+  delete userData.groundTextureTraversalCache
 
   const fallbackMaterial = material ?? (() => {
     const cached = userData.groundMaterial

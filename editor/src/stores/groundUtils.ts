@@ -112,6 +112,13 @@ function buildPrimaryGroundMaterialProps(
   return createMaterialProps(materialProps)
 }
 
+function buildGroundMaterialFromSource(
+  createMaterialProps: GroundDeps['createMaterialProps'],
+  sourceMaterial: SceneNodeMaterial | null,
+): SceneMaterialProps {
+  return buildPrimaryGroundMaterialProps(createMaterialProps, sourceMaterial)
+}
+
 export function cloneGroundGenerationSettings(settings?: GroundGenerationSettings | null): GroundGenerationSettings | undefined {
   if (!settings) {
     return undefined
@@ -505,7 +512,8 @@ export function createGroundSceneNodeWithDeps(deps: GroundDeps, overrides: { dyn
     canPrefab: false,
     allowChildNodes: false,
     materials: [
-      createNodeMaterial(buildPrimaryGroundMaterialProps(createMaterialProps, null), { name: 'Ground Material' })
+      createNodeMaterial(buildGroundMaterialFromSource(createMaterialProps, null), { name: 'Ground Material' }),
+      createNodeMaterial(buildGroundMaterialFromSource(createMaterialProps, null), { name: 'Ground Sculpted Material' }),
     ],
     position: createVector(0, 0, 0),
     rotation: createVector(0, 0, 0),
@@ -538,7 +546,9 @@ export function normalizeGroundSceneNodeWithDeps(deps: GroundDeps, node: SceneNo
     const clampRigidbodyComponentProps = deps.clampRigidbodyComponentProps
     const GROUND_NODE_ID = deps.GROUND_NODE_ID ?? 'ground'
 
-    const primaryMaterial = getPrimaryNodeMaterial ? getPrimaryNodeMaterial(node) : null
+    const sourceMaterials = Array.isArray(node.materials) ? node.materials : []
+    const primaryMaterial = getPrimaryNodeMaterial ? getPrimaryNodeMaterial(node) : (sourceMaterials[0] ?? null)
+    const sculptedMaterial = sourceMaterials[1] ?? null
     const children = node.children?.length ? node.children.map(cloneNode ?? ((n) => n)) : undefined
     const nextComponents = (() => {
       const base = { ...(node.components ?? {}) }
@@ -555,6 +565,18 @@ export function normalizeGroundSceneNodeWithDeps(deps: GroundDeps, node: SceneNo
 
     const normalizedDynamicMesh = createGroundDynamicMeshDefinition((node.dynamicMesh as GroundDynamicMesh) ?? {}, settings)
     const primaryMaterialProps = buildPrimaryGroundMaterialProps(createMaterialProps, primaryMaterial)
+    const sculptedMaterialProps = buildGroundMaterialFromSource(createMaterialProps, sculptedMaterial ?? primaryMaterial)
+    const nextMaterials = [
+      createNodeMaterial(
+        primaryMaterialProps,
+        { id: primaryMaterial?.id, name: primaryMaterial?.name ?? 'Ground Material', type: primaryMaterial?.type },
+      ),
+      createNodeMaterial(
+        sculptedMaterialProps,
+        { id: sculptedMaterial?.id, name: sculptedMaterial?.name ?? 'Ground Sculpted Material', type: sculptedMaterial?.type },
+      ),
+      ...(sourceMaterials.slice(2) as SceneNodeMaterial[]),
+    ]
 
     return {
       ...node,
@@ -563,12 +585,7 @@ export function normalizeGroundSceneNodeWithDeps(deps: GroundDeps, node: SceneNo
       nodeType: 'Mesh',
       allowChildNodes: false,
       // preserve primary material identity when possible
-      materials: [
-        createNodeMaterial(
-          primaryMaterialProps,
-          { id: primaryMaterial?.id, name: primaryMaterial?.name ?? 'Ground Material', type: primaryMaterial?.type },
-        )
-      ],
+      materials: nextMaterials,
       position: createVector(0, 0, 0),
       rotation: createVector(0, 0, 0),
       scale: createVector(1, 1, 1),

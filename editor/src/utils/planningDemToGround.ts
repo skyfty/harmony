@@ -1483,29 +1483,9 @@ export async function resolvePlanningDemBaseTexture(options: {
   source: PlanningDemRasterSource
   applyOrthophoto?: boolean
 }): Promise<PlanningDemTextureResolution> {
-  if (options.terrainDem.autoGenerateBaseTexture !== false) {
-    const naturalTexture = await resolvePlanningDemNaturalBaseTexture({
-      definition: options.definition,
-      terrainDem: options.terrainDem,
-      source: options.source,
-    })
-    if (naturalTexture.textureDataUrl) {
-      return naturalTexture
-    }
-  }
-
-  const orthophoto = options.terrainDem.orthophoto
-  if (options.applyOrthophoto === false || !orthophoto?.sourceFileHash) {
-    return { textureDataUrl: null, textureName: null }
-  }
-  const orthoBlob = await loadPlanningDemBlobByHash(orthophoto.sourceFileHash)
-  if (!orthoBlob) {
-    return { textureDataUrl: null, textureName: null }
-  }
-  const textureDataUrl = await blobToDataUrl(orthoBlob)
   return {
-    textureDataUrl,
-    textureName: orthophoto.filename ?? options.terrainDem.filename ?? 'Orthophoto',
+    textureDataUrl: null,
+    textureName: null,
   }
 }
 
@@ -1834,13 +1814,6 @@ export async function buildPlanningDemGroundRegionData(options: {
     label: 'Loading DEM source…',
     detail: '1/1',
   }, true)
-  reportProgress({
-    phase: 'build-base-texture',
-    loaded: 0,
-    total: 1,
-    label: 'Generating terrain base texture...',
-    detail: '0/1',
-  }, true)
   const texture = await resolvePlanningDemBaseTexture({
     definition: options.definition,
     terrainDem: options.terrainDem,
@@ -1851,7 +1824,7 @@ export async function buildPlanningDemGroundRegionData(options: {
     phase: 'build-base-texture',
     loaded: 1,
     total: 1,
-    label: texture.textureDataUrl ? 'Terrain base texture ready...' : 'Skipping terrain base texture...',
+    label: 'Skipping terrain base texture...',
     detail: '1/1',
   }, true)
   const result = await buildPlanningDemRegionFromPreparedSource({

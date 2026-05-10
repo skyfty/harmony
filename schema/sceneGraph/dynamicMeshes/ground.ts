@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { GroundDynamicMesh } from '../../index';
 import type { SceneNodeWithExtras } from '../types';
-import { applyGroundTextureToGroundObject, createGroundMesh, setGroundMaterial, updateGroundMesh } from '../../groundMesh';
+import { applyGroundTextureToGroundObject, createGroundMesh, setGroundMaterial, setGroundSculptedMaterial, updateGroundMesh } from '../../groundMesh';
 
 export async function buildGroundMesh(
   deps: {
@@ -46,10 +46,21 @@ export async function buildGroundMesh(
 
   const materials = await deps.resolveNodeMaterials(node);
   const resolvedAssignment = deps.pickMaterialAssignment(materials);
-  const resolvedMaterial = Array.isArray(resolvedAssignment) ? resolvedAssignment[0] : resolvedAssignment;
-  if (resolvedMaterial) {
-    const groundMaterial = resolvedMaterial.clone();
+  if (Array.isArray(resolvedAssignment)) {
+    const flatMaterial = resolvedAssignment[0] ? resolvedAssignment[0].clone() : null;
+    const sculptedMaterial = resolvedAssignment[1] ? resolvedAssignment[1].clone() : null;
+    if (flatMaterial) {
+      setGroundMaterial(groundObject, flatMaterial);
+    }
+    if (sculptedMaterial) {
+      setGroundSculptedMaterial(groundObject, sculptedMaterial);
+    } else {
+      setGroundSculptedMaterial(groundObject, null);
+    }
+  } else if (resolvedAssignment) {
+    const groundMaterial = resolvedAssignment.clone();
     setGroundMaterial(groundObject, groundMaterial);
+    setGroundSculptedMaterial(groundObject, null);
   }
   applyGroundTextureToGroundObject(groundObject, meshInfo);
 

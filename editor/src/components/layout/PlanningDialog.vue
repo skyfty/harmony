@@ -55,11 +55,6 @@ import {
   resolvePlanningDemTargetChunkResolution,
   type PlanningDemImportOptions,
 } from '@/utils/planningDemImport'
-import {
-  composeAutomaticTerrainImagery,
-  getAutomaticTerrainImageryUnsupportedReason,
-  supportsAutomaticTerrainImagery,
-} from '@/utils/terrainImagery'
 
 
 const props = defineProps<{ modelValue: boolean }>()
@@ -75,7 +70,6 @@ const uiStore = useUiStore()
 
 type PlanningTool = 'select' | 'pan' | 'rectangle' | 'lasso' | 'line' | 'align-marker'
 type LayerKind = 'terrain' | 'guide-route'
-type DemBaseTexturePresetId = 'balanced' | 'lush-foothills' | 'basin-expanse'
 
 const layerKindLabels: Record<LayerKind, string> = {
   terrain: 'Terrain',
@@ -2122,19 +2116,6 @@ const selectedDem = computed<PlanningTerrainDemData | null>(() => {
   return activeDemId.value ? (planningTerrain.value.dem ?? null) : null
 })
 
-const autoFetchImageryUnsupportedReason = computed<string | null>(() => {
-  return getAutomaticTerrainImageryUnsupportedReason(planningTerrain.value.dem ?? null)
-})
-
-const canAutoFetchImagery = computed<boolean>(() => supportsAutomaticTerrainImagery(planningTerrain.value.dem ?? null))
-
-const autoFetchImageryButtonTitle = computed<string>(() => {
-  if (autoImageryBusy.value) {
-    return 'Fetching terrain imagery'
-  }
-  return autoFetchImageryUnsupportedReason.value ?? 'Auto fetch terrain imagery'
-})
-
 const currentDemUsesHeightmapImage = computed<boolean>(() => {
   const dem = planningTerrain.value.dem
   if (!dem) {
@@ -2325,163 +2306,6 @@ const selectedDemTargetChunkResolution = computed<number | null>({
   },
 })
 
-const selectedDemAutoGenerateBaseTextureModel = computed<boolean>({
-  get: () => selectedDem.value?.autoGenerateBaseTexture !== false,
-  set: (value: boolean) => {
-    const dem = selectedDem.value
-    if (!dem) {
-      return
-    }
-    dem.autoGenerateBaseTexture = value !== false
-    markPlanningDirty()
-  },
-})
-
-const selectedDemBaseTextureMaxResolutionModel = computed<number | null>({
-  get: () => {
-    const value = Number(selectedDem.value?.baseTextureMaxResolution)
-    return Number.isFinite(value) && value >= 512 ? Math.round(value) : 3072
-  },
-  set: (value: number | null) => {
-    const dem = selectedDem.value
-    if (!dem) {
-      return
-    }
-    const next = Number(value)
-    if (!Number.isFinite(next) || next < 512) {
-      return
-    }
-    dem.baseTextureMaxResolution = Math.max(512, Math.min(8192, Math.round(next)))
-    markPlanningDirty()
-  },
-})
-
-const selectedDemBaseTexturePixelsPerMeterModel = computed<number | null>({
-  get: () => {
-    const value = Number(selectedDem.value?.baseTexturePixelsPerMeter)
-    return Number.isFinite(value) && value > 0 ? Number(value.toFixed(2)) : 2.5
-  },
-  set: (value: number | null) => {
-    const dem = selectedDem.value
-    if (!dem) {
-      return
-    }
-    const next = Number(value)
-    if (!Number.isFinite(next) || next <= 0) {
-      return
-    }
-    dem.baseTexturePixelsPerMeter = Number(Math.max(0.5, Math.min(8, next)).toFixed(2))
-    markPlanningDirty()
-  },
-})
-
-const selectedDemBaseTextureVegetationBoostModel = computed<number | null>({
-  get: () => {
-    const value = Number(selectedDem.value?.baseTextureVegetationBoost)
-    return Number.isFinite(value) ? Number(value.toFixed(2)) : 1
-  },
-  set: (value: number | null) => {
-    const dem = selectedDem.value
-    if (!dem) {
-      return
-    }
-    const next = Number(value)
-    if (!Number.isFinite(next)) {
-      return
-    }
-    dem.baseTextureVegetationBoost = Number(Math.max(0, Math.min(2, next)).toFixed(2))
-    markPlanningDirty()
-  },
-})
-
-const selectedDemBaseTextureBasinVariationBoostModel = computed<number | null>({
-  get: () => {
-    const value = Number(selectedDem.value?.baseTextureBasinVariationBoost)
-    return Number.isFinite(value) ? Number(value.toFixed(2)) : 1
-  },
-  set: (value: number | null) => {
-    const dem = selectedDem.value
-    if (!dem) {
-      return
-    }
-    const next = Number(value)
-    if (!Number.isFinite(next)) {
-      return
-    }
-    dem.baseTextureBasinVariationBoost = Number(Math.max(0, Math.min(2, next)).toFixed(2))
-    markPlanningDirty()
-  },
-})
-
-const DEM_BASE_TEXTURE_PRESETS: Array<{
-  id: DemBaseTexturePresetId
-  label: string
-  maxResolution: number
-  pixelsPerMeter: number
-  vegetationBoost: number
-  basinVariationBoost: number
-}> = [
-  {
-    id: 'balanced',
-    label: 'Balanced',
-    maxResolution: 3072,
-    pixelsPerMeter: 2.5,
-    vegetationBoost: 1,
-    basinVariationBoost: 1,
-  },
-  {
-    id: 'lush-foothills',
-    label: 'Lush Foothills',
-    maxResolution: 4096,
-    pixelsPerMeter: 3,
-    vegetationBoost: 1.4,
-    basinVariationBoost: 0.9,
-  },
-  {
-    id: 'basin-expanse',
-    label: 'Basin Expanse',
-    maxResolution: 4096,
-    pixelsPerMeter: 2.8,
-    vegetationBoost: 0.9,
-    basinVariationBoost: 1.45,
-  },
-]
-
-function isDemBaseTexturePresetActive(presetId: DemBaseTexturePresetId): boolean {
-  const dem = selectedDem.value
-  if (!dem) {
-    return false
-  }
-  const preset = DEM_BASE_TEXTURE_PRESETS.find((entry) => entry.id === presetId)
-  if (!preset) {
-    return false
-  }
-  const maxResolution = Number(dem.baseTextureMaxResolution ?? 3072)
-  const pixelsPerMeter = Number(dem.baseTexturePixelsPerMeter ?? 2.5)
-  const vegetationBoost = Number(dem.baseTextureVegetationBoost ?? 1)
-  const basinVariationBoost = Number(dem.baseTextureBasinVariationBoost ?? 1)
-  return Math.abs(maxResolution - preset.maxResolution) <= 1
-    && Math.abs(pixelsPerMeter - preset.pixelsPerMeter) <= 0.01
-    && Math.abs(vegetationBoost - preset.vegetationBoost) <= 0.01
-    && Math.abs(basinVariationBoost - preset.basinVariationBoost) <= 0.01
-}
-
-function applyDemBaseTexturePreset(presetId: DemBaseTexturePresetId) {
-  const dem = selectedDem.value
-  if (!dem) {
-    return
-  }
-  const preset = DEM_BASE_TEXTURE_PRESETS.find((entry) => entry.id === presetId)
-  if (!preset) {
-    return
-  }
-  dem.baseTextureMaxResolution = preset.maxResolution
-  dem.baseTexturePixelsPerMeter = preset.pixelsPerMeter
-  dem.baseTextureVegetationBoost = preset.vegetationBoost
-  dem.baseTextureBasinVariationBoost = preset.basinVariationBoost
-  markPlanningDirty()
-}
-
 function applyRecommendedDemMinElevation() {
   const dem = selectedDem.value
   const recommended = selectedDemRecommendedAppliedMinElevation.value
@@ -2491,15 +2315,6 @@ function applyRecommendedDemMinElevation() {
   dem.minElevation = Number(recommended.toFixed(3))
   markPlanningDirty()
 }
-
-const activeDemBaseTexturePresetLabel = computed<string | null>(() => {
-  for (const preset of DEM_BASE_TEXTURE_PRESETS) {
-    if (isDemBaseTexturePresetActive(preset.id)) {
-      return preset.label
-    }
-  }
-  return null
-})
 
 const selectedDemWorldSpan = computed<{ width: number; height: number } | null>(() => resolvePlanningWorldSpan(selectedDem.value?.worldBounds))
 const recommendedTerrainCellSize = computed<number | null>(() => resolveRecommendedTerrainCellSize(planningTerrain.value.dem))
@@ -3538,22 +3353,6 @@ function getImageLayerListItemStyle(imageId: string): CSSProperties {
     borderColor: hexToRgba(accent, isActive ? 0.85 : 0.12),
     boxShadow: isActive
       ? `0 0 0 2px ${hexToRgba(accent, 0.35)}, 0 0 18px ${hexToRgba(accent, 0.22)}`
-      : 'none',
-  }
-}
-
-function getDemLayerListItemStyle(): CSSProperties {
-  const accent = '#5E8CFF'
-  const isActive = activeDemId.value === 'terrain-dem'
-  const bgAlpha = isActive ? 0.28 : 0.06
-  const borderAlpha = isActive ? 1 : 0.9
-  const accentWidth = isActive ? 8 : 4
-  return {
-    backgroundColor: hexToRgba(accent, bgAlpha),
-    borderLeft: `${accentWidth}px solid ${hexToRgba(accent, borderAlpha)}`,
-    borderColor: hexToRgba(accent, isActive ? 0.85 : 0.12),
-    boxShadow: isActive
-      ? `0 0 0 2px ${hexToRgba(accent, 0.32)}, 0 0 18px ${hexToRgba(accent, 0.18)}`
       : 'none',
   }
 }
@@ -5417,60 +5216,6 @@ async function loadPlanningOrthophotoFile(file: File) {
   }
 }
 
-async function fetchAutomaticPlanningOrthophoto() {
-  demImportError.value = null
-  autoImageryError.value = null
-  const dem = planningTerrain.value.dem
-  if (!dem) {
-    autoImageryError.value = 'Import a DEM before fetching terrain imagery.'
-    return
-  }
-  if (!supportsAutomaticTerrainImagery(dem)) {
-    autoImageryError.value = 'Automatic terrain imagery currently supports Web Mercator GeoTIFF DEMs only.'
-    return
-  }
-  autoImageryBusy.value = true
-  try {
-    const composed = await composeAutomaticTerrainImagery(dem, {
-      maxOutputSize: 4096,
-    })
-    const buffer = await composed.blob.arrayBuffer()
-    const hash = await computeSha256Hex(buffer)
-    await storePlanningDemBlobByHash(hash, composed.blob)
-    const nextOrthophoto: PlanningTerrainOrthophotoData = {
-      version: 1,
-      sourceFileHash: hash,
-      filename: `${(dem.filename ?? 'terrain').replace(/\.[^.]+$/, '') || 'terrain'}-${composed.provider.id}.png`,
-      mimeType: composed.blob.type || 'image/png',
-      source: 'auto-imagery',
-      providerId: composed.provider.id,
-      providerLabel: composed.provider.label,
-      width: composed.width,
-      height: composed.height,
-      previewHash: hash,
-      previewSize: { width: composed.width, height: composed.height },
-      opacity: 1,
-      visible: true,
-    }
-    planningTerrain.value = {
-      ...planningTerrain.value,
-      dem: {
-        ...dem,
-        orthophoto: nextOrthophoto,
-      },
-    }
-    if (planningOrthophotoPreviewUrl.value) {
-      try { URL.revokeObjectURL(planningOrthophotoPreviewUrl.value) } catch {}
-    }
-    planningOrthophotoPreviewUrl.value = URL.createObjectURL(composed.blob)
-    markPlanningDirty()
-  } catch (error) {
-    autoImageryError.value = error instanceof Error ? error.message : 'Failed to fetch automatic terrain imagery.'
-  } finally {
-    autoImageryBusy.value = false
-  }
-}
-
 function loadImageFromFile(file: File): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file)
@@ -6135,58 +5880,45 @@ onBeforeUnmount(() => {
           <section class="dem-import-panel">
             <header>
               <div class="panel-header">
-                <h3>DEM Import</h3>
-                <div class="panel-actions">
-                  <v-btn
-                    icon
-                    size="small"
-                    variant="text"
-                    color="primary"
-                    title="Import DEM"
-                    @click.stop="handleDemUploadClick"
-                  >
-                    <v-icon>mdi-tray-arrow-up</v-icon>
-                  </v-btn>
-                  <v-btn
-                    icon
-                    size="small"
-                    variant="text"
-                    color="primary"
-                    :disabled="autoImageryBusy || !canAutoFetchImagery"
-                    :title="autoFetchImageryButtonTitle"
-                    @click.stop="fetchAutomaticPlanningOrthophoto"
-                  >
-                    <v-icon>{{ autoImageryBusy ? 'mdi-loading mdi-spin' : 'mdi-satellite-variant' }}</v-icon>
-                  </v-btn>
-                  <v-btn
-                    icon
-                    size="small"
-                    variant="text"
-                    color="primary"
-                    title="Import orthophoto"
-                    @click.stop="handleOrthophotoUploadClick"
-                  >
-                    <v-icon>mdi-image-outline</v-icon>
-                  </v-btn>
-                  <v-btn
-                    icon
-                    size="small"
-                    variant="text"
-                    color="error"
-                    title="Clear DEM import"
-                    :disabled="!planningTerrain.dem"
-                    @click.stop="clearPlanningDemImport"
-                  >
-                    <v-icon>mdi-delete-outline</v-icon>
-                  </v-btn>
-                </div>
+                <h3>DEM / Heightmap</h3>
+                <v-btn
+                  icon
+                  size="small"
+                  variant="text"
+                  color="primary"
+                  title="Clear DEM import"
+                  @click="clearPlanningDemImport"
+                >
+                  <v-icon>mdi-close-circle-outline</v-icon>
+                </v-btn>
               </div>
+            </header>
+            <div class="dem-import-panel__body">
               <div v-if="demImportError" class="upload-error">{{ demImportError }}</div>
-              <div v-else-if="autoImageryError" class="upload-error">{{ autoImageryError }}</div>
-              <div v-else-if="planningTerrain.dem && autoFetchImageryUnsupportedReason" class="dem-import-panel__hint">
-                {{ autoFetchImageryUnsupportedReason }}
+              <div v-if="selectedDem" class="dem-import-panel__hint">
+                Current source: {{ currentDemUsesHeightmapImage ? 'Image heightmap' : 'GeoTIFF DEM' }}
               </div>
-
+              <div class="dem-import-panel__hint">
+                Import a GeoTIFF DEM or grayscale PNG heightmap, then choose it here for terrain conversion.
+              </div>
+              <div class="dem-import-panel__actions">
+                <v-btn
+                  block
+                  variant="tonal"
+                  color="primary"
+                  @click="handleDemUploadClick"
+                >
+                  Import DEM
+                </v-btn>
+                <v-btn
+                  block
+                  variant="tonal"
+                  color="secondary"
+                  @click="handleOrthophotoUploadClick"
+                >
+                  Import Orthophoto
+                </v-btn>
+              </div>
               <input
                 ref="demFileInputRef"
                 type="file"
@@ -6197,26 +5929,26 @@ onBeforeUnmount(() => {
               <input
                 ref="orthophotoFileInputRef"
                 type="file"
-                accept="image/*"
+                accept=".jpg,.jpeg,.png,.webp,.tif,.tiff"
                 class="sr-only"
                 @change="handleOrthophotoFileChange"
               >
-            </header>
-            <div v-if="planningTerrain.dem" class="dem-import-panel__body">
               <v-list density="compact" class="dem-layer-list">
-                <v-list-item
-                  :class="['layer-item', { active: activeDemId === 'terrain-dem' }]"
-                  :style="getDemLayerListItemStyle()"
-                  @click="handleDemLayerSelect"
-                >
+                <v-list-item v-if="selectedDem" class="layer-item" @click="handleDemLayerSelect">
                   <div class="layer-content">
                     <div class="layer-name">DEM / Heightmap Layer</div>
                     <div class="layer-meta">{{ currentDemUsesHeightmapImage ? 'Image heightmap source' : 'GeoTIFF elevation source' }}</div>
                   </div>
                 </v-list-item>
+                <v-list-item v-else class="dem-import-panel__empty">
+                  <div class="dem-import-panel__empty">No DEM imported yet.</div>
+                </v-list-item>
               </v-list>
+              <div v-if="planningDemPreviewUrl || planningOrthophotoPreviewUrl" class="dem-import-panel__preview">
+                <img v-if="planningDemPreviewUrl" :src="planningDemPreviewUrl" alt="DEM preview">
+                <img v-if="planningOrthophotoPreviewUrl" :src="planningOrthophotoPreviewUrl" alt="Orthophoto preview">
+              </div>
             </div>
-            <div v-else class="dem-import-panel__empty">Import a GeoTIFF DEM or image heightmap to generate terrain heightmap data.</div>
           </section>
           <section class="image-layer-panel">
             <header>
@@ -7020,81 +6752,6 @@ onBeforeUnmount(() => {
                     hide-details
                   />
                 </template>
-              </div>
-              <div class="property-panel__sub-block">
-                <div class="property-panel__section-title property-panel__section-title--muted">Terrain Base Texture</div>
-                <v-switch
-                  v-model="selectedDemAutoGenerateBaseTextureModel"
-                  color="primary"
-                  density="compact"
-                  inset
-                  hide-details
-                  label="Auto generate terrain base texture"
-                />
-                <v-text-field
-                  v-if="selectedDemAutoGenerateBaseTextureModel"
-                  v-model.number="selectedDemBaseTextureMaxResolutionModel"
-                  type="number"
-                  density="compact"
-                  label="Max texture resolution"
-                  suffix="px"
-                  min="512"
-                  max="8192"
-                  step="256"
-                  hide-details
-                />
-                <v-text-field
-                  v-if="selectedDemAutoGenerateBaseTextureModel"
-                  v-model.number="selectedDemBaseTexturePixelsPerMeterModel"
-                  type="number"
-                  density="compact"
-                  label="Texture density"
-                  suffix="px/m"
-                  min="0.5"
-                  max="8"
-                  step="0.1"
-                  hide-details
-                />
-                <v-text-field
-                  v-if="selectedDemAutoGenerateBaseTextureModel"
-                  v-model.number="selectedDemBaseTextureVegetationBoostModel"
-                  type="number"
-                  density="compact"
-                  label="Foothill/midslope greening"
-                  min="0"
-                  max="2"
-                  step="0.05"
-                  hide-details
-                />
-                <v-text-field
-                  v-if="selectedDemAutoGenerateBaseTextureModel"
-                  v-model.number="selectedDemBaseTextureBasinVariationBoostModel"
-                  type="number"
-                  density="compact"
-                  label="Basin variation"
-                  min="0"
-                  max="2"
-                  step="0.05"
-                  hide-details
-                />
-                <div v-if="selectedDemAutoGenerateBaseTextureModel" class="property-panel__preset-grid">
-                  <div v-if="activeDemBaseTexturePresetLabel" class="property-panel__hint">
-                    Active preset: <strong>{{ activeDemBaseTexturePresetLabel }}</strong>
-                  </div>
-                  <v-btn
-                    v-for="preset in DEM_BASE_TEXTURE_PRESETS"
-                    :key="preset.id"
-                    size="x-small"
-                    :variant="isDemBaseTexturePresetActive(preset.id) ? 'tonal' : 'text'"
-                    color="primary"
-                    @click="applyDemBaseTexturePreset(preset.id)"
-                  >
-                    {{ preset.label }}
-                  </v-btn>
-                </div>
-                <div v-if="selectedDemAutoGenerateBaseTextureModel" class="property-panel__hint">
-                  Increase greening to emphasize foothills/mid-slopes; increase basin variation to avoid flat single-color plains.
-                </div>
               </div>
               <div class="property-panel__sub-block">
                 <div class="property-panel__section-title property-panel__section-title--muted">Conversion Grid</div>
