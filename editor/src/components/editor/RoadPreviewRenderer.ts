@@ -26,6 +26,7 @@ export type RoadPreviewRenderer = {
 const ROAD_PREVIEW_SIGNATURE_PRECISION = 1000
 const ROAD_PREVIEW_Y_OFFSET = 0.01
 const ROAD_PREVIEW_SAMPLING_DENSITY_FACTOR = ROAD_TERRAIN_DEFAULT_SAMPLING_DENSITY_FACTOR
+const ROAD_PREVIEW_HEIGHT_SAMPLING_DENSITY_FACTOR = Math.max(1, ROAD_PREVIEW_SAMPLING_DENSITY_FACTOR * 0.5)
 const ROAD_PREVIEW_SMOOTHING_STRENGTH_FACTOR = ROAD_TERRAIN_DEFAULT_SMOOTHING_STRENGTH_FACTOR
 const ROAD_PREVIEW_MIN_CLEARANCE = ROAD_TERRAIN_DEFAULT_MIN_CLEARANCE
 const ROAD_SEGMENT_HEIGHT_SAMPLES_PER_METER = ROAD_PREVIEW_SAMPLING_DENSITY_FACTOR
@@ -183,6 +184,7 @@ function buildPreviewWorldPoints(points: THREE.Vector3[], previewEnd: THREE.Vect
 function buildSegmentHeights(
   worldPoints: THREE.Vector3[],
   heightSampler?: ((x: number, z: number) => number) | null,
+  samplesPerMeter = ROAD_SEGMENT_HEIGHT_SAMPLES_PER_METER,
 ): number[][] {
   if (worldPoints.length < 2) {
     return []
@@ -193,7 +195,8 @@ function buildSegmentHeights(
     const start = worldPoints[index]!
     const end = worldPoints[index + 1]!
     const length = start.distanceTo(end)
-    const sampleCount = Math.max(2, Math.ceil(length * ROAD_SEGMENT_HEIGHT_SAMPLES_PER_METER) + 1)
+    const density = Number.isFinite(samplesPerMeter) ? Math.max(0.1, samplesPerMeter) : ROAD_SEGMENT_HEIGHT_SAMPLES_PER_METER
+    const sampleCount = Math.max(2, Math.ceil(length * density) + 1)
     const heights: number[] = []
 
     for (let sampleIndex = 0; sampleIndex < sampleCount; sampleIndex += 1) {
@@ -217,6 +220,7 @@ export function buildRoadPreviewBuild(
   width: number,
   options: {
     heightSampler?: ((x: number, z: number) => number) | null
+    samplingDensityFactor?: number
   } = {},
 ): RoadPreviewBuild | null {
   const worldPoints = buildPreviewWorldPoints(points, previewEnd)
@@ -246,12 +250,15 @@ export function buildRoadPreviewBuild(
   const segments = vertices.length >= 2
     ? Array.from({ length: vertices.length - 1 }, (_value, index) => ({ a: index, b: index + 1 }))
     : []
+  const samplingDensityFactor = Number.isFinite(options.samplingDensityFactor)
+    ? Math.max(0.1, options.samplingDensityFactor as number)
+    : ROAD_SEGMENT_HEIGHT_SAMPLES_PER_METER
   const definition: RoadDynamicMesh = {
     type: 'Road',
     width: normalizedWidth,
     vertices,
     segments,
-    segmentHeights: buildSegmentHeights(worldPoints, options.heightSampler ?? null),
+    segmentHeights: buildSegmentHeights(worldPoints, options.heightSampler ?? null, samplingDensityFactor),
   }
 
   return { center, worldPoints, definition }
@@ -288,6 +295,7 @@ export function createRoadPreviewRenderer(options: {
 
     const build = buildRoadPreviewBuild(session.points, session.previewEnd, session.width, {
       heightSampler: options.heightSampler ?? null,
+      samplingDensityFactor: ROAD_PREVIEW_HEIGHT_SAMPLING_DENSITY_FACTOR,
     })
     if (!build) {
       if (session.previewGroup) {
