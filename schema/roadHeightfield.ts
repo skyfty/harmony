@@ -213,14 +213,14 @@ export function collectRoadHeightfieldTileDescriptors(params: RoadHeightfieldBui
 			smooth: !hasSegmentHeights,
 		})
 		const heightDetail = computeRoadHeightDetailScore(smoothedHeights, length)
-		const samplingDetail = Math.max(0, Math.min(1, geometryDetail * 0.25 + heightDetail * 0.75))
-		const densityScale = Math.max(0.5, Math.min(2, Math.sqrt(clampNumber(samplingDensityFactor, 0.1, 10, 1.0) / 2.5)))
+		const samplingDetail = Math.max(0, Math.min(1, geometryDetail * 0.15 + heightDetail * 0.85))
+		const densityScale = Math.max(0.35, Math.min(1.5, Math.sqrt(clampNumber(samplingDensityFactor, 0.1, 10, 1.0) / 3.5)))
 		const targetRows = Math.max(
 			ROAD_HEIGHTFIELD_MIN_ROWS,
 			Math.min(ROAD_HEIGHTFIELD_MAX_ROWS, Math.round((ROAD_HEIGHTFIELD_MIN_ROWS + samplingDetail * (ROAD_HEIGHTFIELD_MAX_ROWS - ROAD_HEIGHTFIELD_MIN_ROWS)) * densityScale)),
 		)
 		const desiredTileLengthForCurve = clampNumber(
-			roadWidth * lerpNumber(12, 6, geometryDetail),
+			roadWidth * lerpNumber(16, 8, geometryDetail),
 			ROAD_HEIGHTFIELD_MIN_TILE_LENGTH,
 			ROAD_HEIGHTFIELD_MAX_TILE_LENGTH,
 			desiredTileLength,
@@ -424,11 +424,11 @@ const ROAD_HEIGHT_SMOOTHING_MAX_PASSES = 12
 const ROAD_HEIGHT_SLOPE_MAX_GRADE = 0.8
 const ROAD_HEIGHT_SLOPE_MIN_DELTA_Y = 0.03
 const ROAD_COLLISION_TILE_OVERLAP_METERS = 0.5
-const ROAD_HEIGHTFIELD_MIN_ROWS = 48
-const ROAD_HEIGHTFIELD_MAX_ROWS = 192
-const ROAD_HEIGHTFIELD_MIN_TILE_LENGTH = 2
-const ROAD_HEIGHTFIELD_MAX_TILE_LENGTH = 24
-const ROAD_HEIGHTFIELD_DEFAULT_TILE_LENGTH = 8
+const ROAD_HEIGHTFIELD_MIN_ROWS = 24
+const ROAD_HEIGHTFIELD_MAX_ROWS = 128
+const ROAD_HEIGHTFIELD_MIN_TILE_LENGTH = 4
+const ROAD_HEIGHTFIELD_MAX_TILE_LENGTH = 32
+const ROAD_HEIGHTFIELD_DEFAULT_TILE_LENGTH = 12
 
 // Road collision uses tiled heightfields exclusively.
 // Tile length is adaptively reduced on bends to keep chord approximation tight.
@@ -549,7 +549,7 @@ function computeRoadDivisionsForCurve(
 	if (!(divisions > 0)) {
 		return 0
 	}
-	const geometryScale = lerpNumber(0.45, 1.0, Math.max(0, Math.min(1, geometryDetail)))
+	const geometryScale = lerpNumber(0.3, 0.85, Math.max(0, Math.min(1, geometryDetail)))
 	divisions = Math.max(ROAD_MIN_DIVISIONS, Math.min(ROAD_MAX_DIVISIONS, Math.round(divisions * geometryScale)))
 	const curves = (curve as any)?.curves
 	if (!Array.isArray(curves) || !curves.length) {
