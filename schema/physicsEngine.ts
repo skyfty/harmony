@@ -142,7 +142,6 @@ export function ensureRoadHeightfieldRigidbodyInstance(params: {
 	roadObject: THREE.Object3D
 	groundNode: SceneNode
 	world: CANNON.World
-	collisionMode?: 'normal' | 'flat-test'
 	existingInstance: RigidbodyInstance | null
 	createBody: (
 		node: SceneNode,
@@ -159,7 +158,6 @@ export function ensureRoadHeightfieldRigidbodyInstance(params: {
 		roadObject,
 		groundNode,
 		world,
-		collisionMode,
 		existingInstance,
 		createBody,
 		loggerTag,
@@ -183,7 +181,6 @@ export function ensureRoadHeightfieldRigidbodyInstance(params: {
 		roadObject,
 		groundNode,
 		world,
-		collisionMode,
 		createBody,
 		maxSegments,
 	})

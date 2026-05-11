@@ -29,7 +29,6 @@ export type RoadHeightfieldBuildSnapshot = {
 	heightHash: number
 	roadWidth: number
 	collisionWidth: number
-	collisionMode: 'normal' | 'flat-test'
 	samplingDensityFactor: number
 	smoothingStrengthFactor: number
 	minClearance: number
@@ -46,7 +45,6 @@ export type RoadHeightfieldBuildParams = {
 	roadObject: THREE.Object3D
 	groundNode: SceneNode
 	world: CANNON.World
-	collisionMode?: 'normal' | 'flat-test'
 	createBody: (
 		node: SceneNode,
 		component: SceneNodeComponentState<RigidbodyComponentProps>,
@@ -55,19 +53,6 @@ export type RoadHeightfieldBuildParams = {
 	) => { body: CANNON.Body } | null
 	maxSegments?: number
 }
-
-function stringifyRoadHeightfieldDebugPayload(payload: Record<string, unknown>): string {
-	try {
-		return JSON.stringify(payload)
-	} catch (error) {
-		return JSON.stringify({
-			kind: 'road-heightfield-build-log',
-			status: 'stringify-failed',
-			message: String(error),
-		})
-	}
-}
-
 export function isRoadDynamicMesh(value: SceneNode['dynamicMesh'] | null | undefined): value is RoadDynamicMesh {
 	return Boolean(value && (value as any).type === 'Road')
 }
@@ -79,7 +64,6 @@ export function collectRoadHeightfieldTileDescriptors(params: RoadHeightfieldBui
 		groundNode,
 		maxSegments,
 	} = params
-	const collisionMode = params.collisionMode === 'flat-test' ? 'flat-test' : 'normal'
 
 	if (!isRoadDynamicMesh(roadNode.dynamicMesh)) {
 		return null
@@ -251,28 +235,8 @@ export function collectRoadHeightfieldTileDescriptors(params: RoadHeightfieldBui
 				roadWidth: collisionWidth,
 				coreRoadWidth: roadWidth,
 				curve,
-				heights: collisionMode === 'flat-test'
-					? Array.from({ length: smoothedHeights.length }, () => {
-						let sum = 0
-						let count = 0
-						for (let index = startIndex; index <= endIndex; index += 1) {
-							sum += smoothedHeights[index] ?? 0
-							count += 1
-						}
-						return count > 0 ? sum / count : (smoothedHeights[startIndex] ?? 0)
-					})
-					: smoothedHeights,
-				apronHeights: collisionMode === 'flat-test'
-					? Array.from({ length: apronHeights.length }, () => {
-						let sum = 0
-						let count = 0
-						for (let index = startIndex; index <= endIndex; index += 1) {
-							sum += apronHeights[index] ?? 0
-							count += 1
-						}
-						return count > 0 ? sum / count : (apronHeights[startIndex] ?? 0)
-					})
-					: apronHeights,
+				heights: smoothedHeights,
+				apronHeights,
 			})
 			if (!shape) {
 				startIndex = endIndex
@@ -309,7 +273,6 @@ export function collectRoadHeightfieldTileDescriptors(params: RoadHeightfieldBui
 		heightHash: signatureHash,
 		roadWidth,
 		collisionWidth,
-		collisionMode,
 		samplingDensityFactor,
 		smoothingStrengthFactor,
 		minClearance,
@@ -367,138 +330,6 @@ export function buildRoadHeightfieldBodies(params: RoadHeightfieldBuildParams): 
 		return null
 	}
 
-	const tileProfileSummaries = snapshot.tiles.map((tile) => {
-		const shape = tile.shapeDefinition
-		const matrix = Array.isArray((shape as any).matrix) ? (shape as any).matrix as unknown[] : []
-		const columnCount = matrix.length
-		let rowCount = 0
-		matrix.forEach((column) => {
-			if (Array.isArray(column) && column.length > rowCount) {
-				rowCount = column.length
-			}
-		})
-		const readHeight = (columnIndex: number, rowIndex: number): number => {
-			const column = matrix[columnIndex]
-			if (!Array.isArray(column)) {
-				return 0
-			}
-			const value = column[rowIndex]
-			return typeof value === 'number' && Number.isFinite(value) ? value : 0
-		}
-		const leftColumn = 0
-		const midColumn = columnCount > 0 ? Math.floor(columnCount / 2) : 0
-		const rightColumn = columnCount > 0 ? columnCount - 1 : 0
-		const startRow = 0
-		const midRow = rowCount > 0 ? Math.floor(rowCount / 2) : 0
-		const endRow = rowCount > 0 ? rowCount - 1 : 0
-		let minHeight = Number.POSITIVE_INFINITY
-		let maxHeight = Number.NEGATIVE_INFINITY
-		for (let columnIndex = 0; columnIndex < columnCount; columnIndex += 1) {
-			const column = matrix[columnIndex]
-			if (!Array.isArray(column)) {
-				continue
-			}
-			for (const value of column) {
-				const height = typeof value === 'number' && Number.isFinite(value) ? value : 0
-				if (height < minHeight) {
-					minHeight = height
-				}
-				if (height > maxHeight) {
-					maxHeight = height
-				}
-			}
-		}
-		if (!Number.isFinite(minHeight) || !Number.isFinite(maxHeight)) {
-			minHeight = 0
-			maxHeight = 0
-		}
-		return {
-			tileIndex: tile.tileIndex,
-			curveIndex: tile.curveIndex,
-			columnCount,
-			rowCount,
-			heightRangeMeters: Math.round((maxHeight - minHeight) * 1000) / 1000,
-			minHeightMeters: Math.round(minHeight * 1000) / 1000,
-			maxHeightMeters: Math.round(maxHeight * 1000) / 1000,
-			centerStartHeightMeters: Math.round(readHeight(midColumn, startRow) * 1000) / 1000,
-			centerMidHeightMeters: Math.round(readHeight(midColumn, midRow) * 1000) / 1000,
-			centerEndHeightMeters: Math.round(readHeight(midColumn, endRow) * 1000) / 1000,
-			leftStartHeightMeters: Math.round(readHeight(leftColumn, startRow) * 1000) / 1000,
-			leftMidHeightMeters: Math.round(readHeight(leftColumn, midRow) * 1000) / 1000,
-			leftEndHeightMeters: Math.round(readHeight(leftColumn, endRow) * 1000) / 1000,
-			rightStartHeightMeters: Math.round(readHeight(rightColumn, startRow) * 1000) / 1000,
-			rightMidHeightMeters: Math.round(readHeight(rightColumn, midRow) * 1000) / 1000,
-			rightEndHeightMeters: Math.round(readHeight(rightColumn, endRow) * 1000) / 1000,
-		}
-	})
-
-	const tileAdjacencySummaries = snapshot.tiles.slice(1).map((tile, index) => {
-		const prev = snapshot.tiles[index]!
-		const dx = tile.position[0] - prev.position[0]
-		const dz = tile.position[2] - prev.position[2]
-		const centerDistance = Math.hypot(dx, dz)
-		const prevShape = prev.shapeDefinition
-		const currShape = tile.shapeDefinition
-		const estimatedDepthOverlap = ((prevShape.depth + currShape.depth) * 0.5) - centerDistance
-		return {
-			fromTileIndex: prev.tileIndex,
-			toTileIndex: tile.tileIndex,
-			fromCurveIndex: prev.curveIndex,
-			toCurveIndex: tile.curveIndex,
-			centerDistanceMeters: Math.round(centerDistance * 1000) / 1000,
-			estimatedDepthOverlapMeters: Math.round(estimatedDepthOverlap * 1000) / 1000,
-			deltaXMeters: Math.round(dx * 1000) / 1000,
-			deltaZMeters: Math.round(dz * 1000) / 1000,
-			deltaDepthMeters: Math.round((currShape.depth - prevShape.depth) * 1000) / 1000,
-		}
-	})
-
-	const tileSummaries = snapshot.tiles.map((tile) => {
-		const shape = tile.shapeDefinition
-		return {
-			curveIndex: tile.curveIndex,
-			tileIndex: tile.tileIndex,
-			startIndex: tile.startIndex,
-			endIndex: tile.endIndex,
-			kind: shape.kind,
-			position: tile.position,
-			yaw: Math.round(tile.yaw * 1000) / 1000,
-			shape: {
-				kind: 'heightfield',
-				width: shape.width,
-				depth: shape.depth,
-				elementSize: shape.elementSize,
-				offset: shape.offset,
-				overlapMeters: ROAD_COLLISION_TILE_OVERLAP_METERS,
-				widthMetersPerColumn: Math.round((shape.width / Math.max(1, Math.round(shape.width / shape.elementSize))) * 1000) / 1000,
-			},
-		}
-	})
-
-	console.warn(
-		'[ScenePreview] road-collision-build',
-		stringifyRoadHeightfieldDebugPayload({
-			roadNodeId: roadNode.id,
-			surfaceNodeId: snapshot.surfaceNode.id,
-			groundNodeId: groundNode.id,
-			roadWidth: snapshot.roadWidth,
-			collisionWidth: snapshot.collisionWidth,
-			collisionMode: snapshot.collisionMode,
-			samplingDensityFactor: snapshot.samplingDensityFactor,
-			smoothingStrengthFactor: snapshot.smoothingStrengthFactor,
-			minClearance: snapshot.minClearance,
-			junctionSmoothing: snapshot.junctionSmoothing,
-			desiredTileLength: snapshot.desiredTileLength,
-			elementSize: snapshot.elementSize,
-			tileCount: snapshot.tiles.length,
-			bodyCount: bodies.length,
-			boundaryWallEnabled: snapshot.boundaryWallEnabled,
-			adjacency: tileAdjacencySummaries,
-			profiles: tileProfileSummaries,
-			tiles: tileSummaries,
-		}),
-	)
-
 	const signature = buildRoadHeightfieldSignature({
 		definition: roadNode.dynamicMesh as RoadDynamicMesh,
 		roadNode,
@@ -506,7 +337,6 @@ export function buildRoadHeightfieldBodies(params: RoadHeightfieldBuildParams): 
 		groundSignature: snapshot.groundSignature,
 		roadWidth: snapshot.roadWidth,
 		collisionWidth: snapshot.collisionWidth,
-		collisionMode: snapshot.collisionMode,
 		samplingDensityFactor: snapshot.samplingDensityFactor,
 		smoothingStrengthFactor: snapshot.smoothingStrengthFactor,
 		minClearance: snapshot.minClearance,
@@ -844,7 +674,6 @@ function buildRoadHeightfieldSignature(params: {
 	groundSignature: string
 	roadWidth: number
 	collisionWidth: number
-	collisionMode: 'normal' | 'flat-test'
 	samplingDensityFactor: number
 	smoothingStrengthFactor: number
 	minClearance: number
@@ -875,7 +704,6 @@ function buildRoadHeightfieldSignature(params: {
 		`s:${segmentsCount}`,
 		`w:${Math.round(params.roadWidth * 1000)}`,
 		`cw:${Math.round(params.collisionWidth * 1000)}`,
-		`cm:${params.collisionMode}`,
 		`jd:${Math.round(params.junctionSmoothing * 1000)}`,
 		`sd:${Math.round(params.samplingDensityFactor * 1000)}`,
 		`ss:${Math.round(params.smoothingStrengthFactor * 1000)}`,

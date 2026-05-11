@@ -500,7 +500,6 @@ const previousSceneById = new Map<string, string>()
 const isGroundWireframeVisible = ref(false)
 const isOtherRigidbodyWireframeVisible = ref(false)
 const isRoadCollisionGridVisible = ref(false)
-const isRoadFlatCollisionTestVisible = ref(false)
 const isGroundChunkStreamingDebugVisible = ref(false)
 const isInstancedCullingVisualizationVisible = ref(false)
 const instancedLodFrustumCuller = createInstancedBvhFrustumCuller()
@@ -2345,16 +2344,6 @@ const airWallDebugEntries = new Map<string, AirWallDebugEntry>()
 const airWallDebugMeshes = new Map<string, THREE.Mesh>()
 type RigidbodyDebugHelperCategory = 'ground' | 'rigidbody' | 'road'
 type RigidbodyDebugHelper = { group: THREE.Group; signature: string; category: RigidbodyDebugHelperCategory; scale: THREE.Vector3 }
-type RoadFlatCollisionTestState = {
-	sourceRoadId: string
-	node: SceneNode
-	rigidbodyComponent: SceneNodeComponentState<RigidbodyComponentProps>
-	object: THREE.Group
-	mesh: THREE.Mesh
-	length: number
-	width: number
-	signature: string
-}
 type ExternalRigidbodyDebugSource = {
 	instance: RigidbodyInstance
 	category: RigidbodyDebugHelperCategory
@@ -2364,7 +2353,6 @@ type ExternalRigidbodyDebugSource = {
 const rigidbodyDebugHelpers = new Map<string, RigidbodyDebugHelper>()
 const externalRigidbodyDebugSources = new Map<string, ExternalRigidbodyDebugSource>()
 const roadHeightfieldDebugCache: RoadHeightfieldDebugCache = new Map()
-let roadFlatCollisionTestState: RoadFlatCollisionTestState | null = null
 let rigidbodyDebugGroup: THREE.Group | null = null
 let airWallDebugGroup: THREE.Group | null = null
 const rigidbodyDebugMaterial = new THREE.LineBasicMaterial({
@@ -2375,7 +2363,6 @@ const rigidbodyDebugMaterial = new THREE.LineBasicMaterial({
 rigidbodyDebugMaterial.depthTest = false
 rigidbodyDebugMaterial.depthWrite = false
 const roadCollisionDebugNormalColor = new THREE.Color(0xffc107)
-const roadCollisionDebugFlatTestColor = new THREE.Color(0xff7a18)
 const vehicleContactDebugLastLogMs = new Map<string, number>()
 
 function resolvePhysicsDebugBodyName(body: CANNON.Body | null | undefined): string {
@@ -5421,7 +5408,6 @@ watch(volumePercent, (value) => {
 watch([isGroundWireframeVisible, isOtherRigidbodyWireframeVisible, isRoadCollisionGridVisible], ([groundEnabled, otherEnabled, roadEnabled]) => {
 	if (!physicsEnvironmentEnabled.value) {
 		disposeRigidbodyDebugHelpers()
-		disposeRoadFlatCollisionTestPlane()
 		roadHeightfieldDebugCache.clear()
 		setAirWallDebugVisibility(false)
 		return
@@ -5457,28 +5443,14 @@ watch([isGroundWireframeVisible, isOtherRigidbodyWireframeVisible, isRoadCollisi
 		return
 	}
 	disposeRigidbodyDebugHelpers()
-	disposeRoadFlatCollisionTestPlane()
 	roadHeightfieldDebugCache.clear()
 	setAirWallDebugVisibility(false)
 	pendingExternalGroundDebugHelperIds.clear()
 })
 
-watch(isRoadFlatCollisionTestVisible, () => {
-	if (!physicsEnvironmentEnabled.value) {
-		disposeRoadFlatCollisionTestPlane()
-		return
-	}
-	syncPhysicsBodiesForDocument(currentDocument)
-	if (isRigidbodyDebugVisible.value) {
-		syncRigidbodyDebugHelpers()
-		updateRigidbodyDebugTransforms()
-	}
-})
-
 watch(physicsEnvironmentEnabled, (enabled) => {
 	if (!enabled) {
 		disposeRigidbodyDebugHelpers()
-		disposeRoadFlatCollisionTestPlane()
 		roadHeightfieldDebugCache.clear()
 		setAirWallDebugVisibility(false)
 		return
@@ -10405,7 +10377,6 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	resetBehaviorProximity()
 	resetAnimationControllers()
 	disposeRigidbodyDebugHelpers()
-	disposeRoadFlatCollisionTestPlane()
 	disposeGroundChunkDebugHelpers()
 	hidePurposeControls()
 	activeCameraLookTween = null
@@ -11625,188 +11596,6 @@ function ensureRoadRigidbodyInstance(
 	// Ensure the instance map is up-to-date for both reuse and replacement cases.
 	rigidbodyInstances.set(node.id, result.instance)
 }
-
-const ROAD_FLAT_COLLISION_TEST_GAP_METERS = 8
-const ROAD_FLAT_COLLISION_TEST_MIN_LENGTH_METERS = 32
-
-function disposeRoadFlatCollisionTestPlane(): void {
-	const state = roadFlatCollisionTestState
-	if (!state) {
-		return
-	}
-	removeRigidbodyInstance(state.node.id)
-	state.object.parent?.remove(state.object)
-	const disposables: THREE.Object3D[] = []
-	state.object.traverse((object) => {
-		disposables.push(object)
-	})
-	disposables.forEach((object) => disposeObjectResources(object))
-	roadFlatCollisionTestState = null
-}
-
-function syncRoadFlatCollisionTestPlane(desiredIds: Set<string>): void {
-	if (!physicsEnvironmentEnabled.value || !currentDocument || !isRoadFlatCollisionTestVisible.value) {
-		disposeRoadFlatCollisionTestPlane()
-		return
-	}
-	if (!physicsWorld || !rootGroup) {
-		disposeRoadFlatCollisionTestPlane()
-		return
-	}
-	const groundNode = findGroundNode(currentDocument.nodes)
-	if (!groundNode || !isGroundDynamicMesh(groundNode.dynamicMesh)) {
-		disposeRoadFlatCollisionTestPlane()
-		return
-	}
-	const roadNodes = collectRoadNodes(currentDocument.nodes)
-	const sourceRoad = roadNodes[0] ?? null
-	if (!sourceRoad) {
-		disposeRoadFlatCollisionTestPlane()
-		return
-	}
-	const sourceObject = nodeObjectMap.get(sourceRoad.id) ?? null
-	if (!sourceObject) {
-		disposeRoadFlatCollisionTestPlane()
-		return
-	}
-	if (!isRoadDynamicMesh(sourceRoad.dynamicMesh)) {
-		disposeRoadFlatCollisionTestPlane()
-		return
-	}
-	const roadWidth = Number.isFinite(sourceRoad.dynamicMesh.width) ? Math.max(0.2, sourceRoad.dynamicMesh.width) : 2
-	const roadLength = Math.max(ROAD_FLAT_COLLISION_TEST_MIN_LENGTH_METERS, roadWidth * 12)
-	const signature = `${sourceRoad.id}:${Math.round(roadWidth * 1000)}:${Math.round(roadLength * 1000)}`
-	if (!roadFlatCollisionTestState || roadFlatCollisionTestState.sourceRoadId !== sourceRoad.id || roadFlatCollisionTestState.signature !== signature) {
-		disposeRoadFlatCollisionTestPlane()
-		const object = new THREE.Group()
-		object.name = `RoadFlatCollisionTest:${sourceRoad.id}`
-		const mesh = new THREE.Mesh(
-			new THREE.PlaneGeometry(roadLength, roadWidth, 1, 1),
-			new THREE.MeshStandardMaterial({
-				color: roadCollisionDebugFlatTestColor.getHex(),
-				roughness: 1,
-				metalness: 0,
-				side: THREE.DoubleSide,
-			}),
-		)
-		mesh.rotation.x = -Math.PI / 2
-		object.add(mesh)
-		rootGroup.add(object)
-		const halfLength = roadLength * 0.5
-		const flatVertices: Array<[number, number]> = [[-halfLength, 0], [halfLength, 0]]
-		const flatSegments = [{ a: 0, b: 1 }]
-		const flatSegmentHeights = [[0, 0]]
-		const rigidbodyComponent = createSyntheticRoadRigidbodyComponent(`__roadFlatCollisionTest:${sourceRoad.id}`)
-		const roadComponent: SceneNodeComponentState<Record<string, unknown>> = {
-			id: `__roadFlatCollisionTestRoad:${sourceRoad.id}`,
-			type: 'road',
-			enabled: true,
-			props: {
-				vertices: flatVertices,
-				segments: flatSegments,
-				segmentHeights: flatSegmentHeights,
-				width: roadWidth,
-				junctionSmoothing: 0,
-				snapToTerrain: false,
-				enableVehicleCollision: true,
-				laneLines: false,
-				shoulders: false,
-				bodyAssetId: null,
-				samplingDensityFactor: 1,
-				smoothingStrengthFactor: 1,
-				minClearance: 0.01,
-			},
-		}
-		const node: SceneNode = {
-			...(sourceRoad as SceneNode),
-			id: `__roadFlatCollisionTest:${sourceRoad.id}`,
-			name: `${sourceRoad.name || 'Road'} Flat Collision Test`,
-			dynamicMesh: {
-				type: 'Road',
-				width: roadWidth,
-				vertices: flatVertices,
-				segments: flatSegments,
-				segmentHeights: flatSegmentHeights,
-			},
-			components: {
-				...(sourceRoad.components ?? {}),
-				[roadComponentDefinition.type]: roadComponent,
-				[RIGIDBODY_COMPONENT_TYPE]: rigidbodyComponent,
-			},
-			children: [],
-			position: { x: 0, y: 0, z: 0 },
-			rotation: { x: 0, y: 0, z: 0 },
-			scale: { x: 1, y: 1, z: 1 },
-		}
-		roadFlatCollisionTestState = {
-			sourceRoadId: sourceRoad.id,
-			node,
-			rigidbodyComponent,
-			object,
-			mesh,
-			length: roadLength,
-			width: roadWidth,
-			signature,
-		}
-	}
-	const state = roadFlatCollisionTestState
-	if (!state) {
-		return
-	}
-	const sourcePosition = new THREE.Vector3()
-	const sourceQuaternion = new THREE.Quaternion()
-	const sourceScale = new THREE.Vector3()
-	sourceObject.updateWorldMatrix(true, false)
-	sourceObject.getWorldPosition(sourcePosition)
-	sourceObject.getWorldQuaternion(sourceQuaternion)
-	sourceObject.getWorldScale(sourceScale)
-	const sideOffset = new THREE.Vector3(0, 0, 1).applyQuaternion(sourceQuaternion).normalize().multiplyScalar(Math.max(ROAD_FLAT_COLLISION_TEST_GAP_METERS, roadWidth + 6))
-	state.object.position.copy(sourcePosition).add(sideOffset)
-	state.object.quaternion.copy(sourceQuaternion)
-	state.object.scale.copy(sourceScale)
-	const rotation = new THREE.Euler().setFromQuaternion(state.object.quaternion, 'XYZ')
-	state.node.position = { x: state.object.position.x, y: state.object.position.y, z: state.object.position.z }
-	state.node.rotation = { x: rotation.x, y: rotation.y, z: rotation.z }
-	state.node.scale = { x: state.object.scale.x, y: state.object.scale.y, z: state.object.scale.z }
-	state.node.dynamicMesh = {
-		type: 'Road',
-		width: state.width,
-		vertices: [[-(state.length * 0.5), 0], [(state.length * 0.5), 0]],
-		segments: [{ a: 0, b: 1 }],
-		segmentHeights: [[0, 0]],
-	}
-	const existing = rigidbodyInstances.get(state.node.id) ?? null
-	const world = ensurePhysicsWorld()
-	const result = ensureRoadHeightfieldRigidbodyInstance({
-		roadNode: state.node,
-		rigidbodyComponent: state.rigidbodyComponent,
-		roadObject: state.object,
-		groundNode,
-		world,
-		existingInstance: existing,
-		createBody: (n, c, s, o) => createRigidbodyBody(n, c, s, o),
-		loggerTag: '[ScenePreview]',
-	})
-	if (!result.instance) {
-		if (result.shouldRemoveExisting) {
-			disposeRoadFlatCollisionTestPlane()
-		}
-		return
-	}
-	rigidbodyInstances.set(state.node.id, result.instance)
-	desiredIds.add(state.node.id)
-	refreshRigidbodyDebugHelper(state.node.id)
-}
-
-function createSyntheticRoadRigidbodyComponent(nodeId: string): SceneNodeComponentState<RigidbodyComponentProps> {
-	return {
-		id: `__roadRigidbody:${nodeId}`,
-		type: RIGIDBODY_COMPONENT_TYPE,
-		enabled: true,
-		props: clampRigidbodyComponentProps({ bodyType: 'STATIC', mass: 0 }),
-	}
-}
-
 function removeRigidbodyInstance(nodeId: string): void {
 	const entry = rigidbodyInstances.get(nodeId)
 	if (!entry) {
@@ -13229,26 +13018,22 @@ function ensureRigidbodyBindingForObject(nodeId: string, object: THREE.Object3D)
 		return
 	}
 	const component = resolvePhysicsRigidbodyComponent(node)
-	const roadComponent = node && isRoadDynamicMesh(node.dynamicMesh) && !component
-		? createSyntheticRoadRigidbodyComponent(node.id)
-		: null
-	const effectiveComponent = component ?? roadComponent
-	const shapeDefinition = extractRigidbodyShape(effectiveComponent)
+	const shapeDefinition = extractRigidbodyShape(component)
 	const requiresMetadata = !hasAutoGeneratedDynamicShape(node?.dynamicMesh, node)
 	const hasBoundaryWall = Boolean(resolveBoundaryWallComponent(node))
-	if (!node || !effectiveComponent || !object) {
+	if (!node || !component || !object) {
 		return
 	}
 	if (isRoadDynamicMesh(node.dynamicMesh) && !resolveRoadVehicleCollisionEnabled(node)) {
 		removeRigidbodyInstance(nodeId)
 		return
 	}
-	const bindingObject = resolveRigidbodyBindingObject(effectiveComponent, object)
+	const bindingObject = resolveRigidbodyBindingObject(component, object)
 	if (!bindingObject) {
 		return
 	}
-	if (isRoadDynamicMesh(node.dynamicMesh) && (effectiveComponent.props as RigidbodyComponentProps | undefined)?.bodyType === 'STATIC') {
-		ensureRoadRigidbodyInstance(node, effectiveComponent, bindingObject)
+	if (isRoadDynamicMesh(node.dynamicMesh) && (component.props as RigidbodyComponentProps | undefined)?.bodyType === 'STATIC') {
+		ensureRoadRigidbodyInstance(node, component, bindingObject)
 		refreshRigidbodyDebugHelper(nodeId)
 		return
 	}
@@ -13269,7 +13054,7 @@ function ensureRigidbodyBindingForObject(nodeId: string, object: THREE.Object3D)
 		refreshRigidbodyDebugHelper(nodeId)
 		return
 	}
-	const bodyEntry = createRigidbodyBody(node, effectiveComponent, shapeDefinition, bindingObject)
+	const bodyEntry = createRigidbodyBody(node, component, shapeDefinition, bindingObject)
 	if (!bodyEntry) {
 		return
 	}
@@ -13386,7 +13171,6 @@ function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null):
 	}
 	const world = ensurePhysicsWorld()
 	const rigidbodyNodes = collectRigidbodyNodes(document.nodes)
-	const roadNodes = collectRoadNodes(document.nodes)
 	const desiredIds = new Set<string>()
 	rigidbodyNodes.forEach((node) => {
 		if (isGroundDynamicMesh(node.dynamicMesh)) {
@@ -13441,20 +13225,6 @@ function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null):
 		})
 		refreshRigidbodyDebugHelper(node.id)
 	})
-	roadNodes.forEach((node) => {
-		desiredIds.add(node.id)
-		const object = nodeObjectMap.get(node.id) ?? null
-		if (!object) {
-			return
-		}
-		if (!resolveRoadVehicleCollisionEnabled(node)) {
-			return
-		}
-		const component = resolvePhysicsRigidbodyComponent(node) ?? createSyntheticRoadRigidbodyComponent(node.id)
-		ensureRoadRigidbodyInstance(node, component, object)
-		refreshRigidbodyDebugHelper(node.id)
-	})
-	syncRoadFlatCollisionTestPlane(desiredIds)
 	rigidbodyInstances.forEach((entry, nodeId) => {
 		if (!desiredIds.has(nodeId)) {
 			removeRigidbodyInstanceBodies(world, entry)
@@ -14461,10 +14231,6 @@ function toggleRoadCollisionGridDebug(): void {
 	isRoadCollisionGridVisible.value = !isRoadCollisionGridVisible.value
 }
 
-function toggleRoadFlatCollisionTestDebug(): void {
-	isRoadFlatCollisionTestVisible.value = !isRoadFlatCollisionTestVisible.value
-}
-
 function toggleGroundChunkStreamingDebug(): void {
 	isGroundChunkStreamingDebugVisible.value = !isGroundChunkStreamingDebugVisible.value
 	if (!isGroundChunkStreamingDebugVisible.value) {
@@ -14825,18 +14591,6 @@ watch(
 								density="compact"
 								color="warning"
 								@update:model-value="toggleRoadCollisionGridDebug"
-							/>
-						</v-list-item>
-						<v-list-item>
-							<v-checkbox
-								v-if="physicsEnvironmentEnabled"
-								class="scene-preview__debug-checkbox"
-								label="Road flat collision test"
-								:model-value="isRoadFlatCollisionTestVisible"
-								hide-details
-								density="compact"
-								color="warning"
-								@update:model-value="toggleRoadFlatCollisionTestDebug"
 							/>
 						</v-list-item>
 						<v-list-item>
