@@ -25,6 +25,13 @@ type BodyLike = VehicleDriveVehicle['chassisBody'] & {
   applyTorque?: (torque: { x: number; y: number; z: number }) => void
 }
 
+type StepHybridVehicleInstanceParams = {
+  instance: VehicleInstance
+  deltaSeconds: number
+  resolveSurfaceSample: (x: number, z: number, preferredHeight?: number | null, edgeMargin?: number | null) => VehicleSurfaceSample | null
+  active?: boolean
+}
+
 const worldQuaternionHelper = new THREE.Quaternion()
 const worldPositionHelper = new THREE.Vector3()
 const contactPointHelper = new THREE.Vector3()
@@ -104,13 +111,8 @@ function setWheelInfoContact(info: HybridVehicleWheelInfo, sample: VehicleSurfac
   info.surfaceKind = sample?.kind ?? null
 }
 
-export function stepHybridVehicleInstance(params: {
-  instance: VehicleInstance
-  deltaSeconds: number
-  resolveSurfaceSample: (x: number, z: number, preferredHeight?: number | null) => VehicleSurfaceSample | null
-  active?: boolean
-}): void {
-  const { instance, deltaSeconds, resolveSurfaceSample, active = false } = params
+export function stepHybridVehicleInstance(params: StepHybridVehicleInstanceParams): void {
+  const { instance, deltaSeconds, resolveSurfaceSample: surfaceSampleResolver, active = false } = params
   const vehicle = instance.vehicle as HybridVehicleRuntime
   const chassisBody = vehicle?.chassisBody as BodyLike | null
   const wheelSupportPoints = instance.wheelSupportPoints ?? []
@@ -145,7 +147,7 @@ export function stepHybridVehicleInstance(params: {
 
     contactPointHelper.copy(wheel.point).applyQuaternion(worldQuaternionHelper).add(worldPositionHelper)
     const preferredHeight = contactPointHelper.y - wheel.radius
-    const surface = resolveSurfaceSample(contactPointHelper.x, contactPointHelper.z, preferredHeight)
+    const surface = surfaceSampleResolver(contactPointHelper.x, contactPointHelper.z, preferredHeight, wheel.radius)
     if (!surface) {
       setWheelInfoContact(info, null, 0)
       return

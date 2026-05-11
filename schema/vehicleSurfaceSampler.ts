@@ -15,7 +15,7 @@ export type VehicleSurfaceSample = {
 }
 
 export type VehicleSurfaceSampler = {
-  sampleSurfaceAtWorld: (x: number, z: number, preferredHeight?: number | null) => VehicleSurfaceSample | null
+  sampleSurfaceAtWorld: (x: number, z: number, preferredHeight?: number | null, edgeMargin?: number | null) => VehicleSurfaceSample | null
 }
 
 type FloorSurfaceEntry = {
@@ -60,40 +60,6 @@ const composeScaleHelper = new THREE.Vector3()
 const invertMatrixHelper = new THREE.Matrix4()
 const pointOnSegmentHelper = new THREE.Vector2()
 const roadSampleWorldHelper = new THREE.Vector3()
-
-function formatDebugObject(value: unknown): string {
-  const seen = new WeakSet<object>()
-  try {
-    return JSON.stringify(value, (_key, currentValue) => {
-      if (currentValue instanceof THREE.Vector3) {
-        return { x: currentValue.x, y: currentValue.y, z: currentValue.z }
-      }
-      if (currentValue instanceof THREE.Euler) {
-        return { x: currentValue.x, y: currentValue.y, z: currentValue.z, order: currentValue.order }
-      }
-      if (currentValue instanceof THREE.Quaternion) {
-        return { x: currentValue.x, y: currentValue.y, z: currentValue.z, w: currentValue.w }
-      }
-      if (currentValue instanceof THREE.Matrix4) {
-        return { elements: currentValue.elements.slice() }
-      }
-      if (currentValue && typeof currentValue === 'object') {
-        if (seen.has(currentValue)) {
-          return '[Circular]'
-        }
-        seen.add(currentValue)
-      }
-      return currentValue
-    }, 2)
-  } catch {
-    try {
-      return String(value)
-    } catch {
-      return '[Unserializable]'
-    }
-  }
-}
-
 
 function readFiniteNumber(value: unknown, fallback = 0): number {
   const numeric = typeof value === 'number' ? value : Number(value)
@@ -219,7 +185,7 @@ function createRoadSurfaceEntry(node: SceneNode, groundNode: SceneNode | null): 
   }
 }
 
-function sampleRoadSurface(entry: RoadSurfaceEntry, worldX: number, worldZ: number, preferredHeight?: number | null): VehicleSurfaceSample | null {
+function sampleRoadSurface(entry: RoadSurfaceEntry, worldX: number, worldZ: number, preferredHeight?: number | null, edgeMargin?: number | null): VehicleSurfaceSample | null {
   const roadLocalPoint = new THREE.Vector3(
     worldX - entry.roadOriginX,
     0,
@@ -235,7 +201,9 @@ function sampleRoadSurface(entry: RoadSurfaceEntry, worldX: number, worldZ: numb
       bestDistanceSq = distanceSq
     }
   }
-  if (bestDistanceSq > entry.halfWidth * entry.halfWidth) {
+  const clampedEdgeMargin = Math.max(0, Number.isFinite(edgeMargin ?? NaN) ? Number(edgeMargin) : 0)
+  const effectiveHalfWidth = Math.max(0, entry.halfWidth - clampedEdgeMargin)
+  if (bestDistanceSq > effectiveHalfWidth * effectiveHalfWidth) {
     return null
   }
 
@@ -355,11 +323,11 @@ export function createVehicleSurfaceSampler(nodes: SceneNode[]): VehicleSurfaceS
     .filter((entry): entry is FloorSurfaceEntry => Boolean(entry))
 
   return {
-    sampleSurfaceAtWorld(x: number, z: number, preferredHeight?: number | null): VehicleSurfaceSample | null {
+    sampleSurfaceAtWorld(x: number, z: number, preferredHeight?: number | null, edgeMargin?: number | null): VehicleSurfaceSample | null {
       let best: VehicleSurfaceSample | null = null
 
       for (const roadEntry of roadEntries) {
-        const sample = sampleRoadSurface(roadEntry, x, z, preferredHeight)
+        const sample = sampleRoadSurface(roadEntry, x, z, preferredHeight, edgeMargin)
         if (sample && (!best || sample.distance < best.distance)) {
           best = sample
         }

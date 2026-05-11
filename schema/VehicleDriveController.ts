@@ -178,7 +178,7 @@ export type VehicleDriveControllerDeps = {
   // Allow host to provide interpolated chassis data (e.g., fixed-step physics interpolation on WeChat).
   resolveChassisWorldPosition?: (nodeId: string, chassisBody: VehicleDriveChassisBody, target: THREE.Vector3) => boolean
   resolveChassisWorldVelocity?: (nodeId: string, chassisBody: VehicleDriveChassisBody, target: THREE.Vector3) => boolean
-  resolveSurfaceSample?: (x: number, z: number, preferredHeight?: number | null) => VehicleSurfaceSample | null
+  resolveSurfaceSample?: (x: number, z: number, preferredHeight?: number | null, edgeMargin?: number | null) => VehicleSurfaceSample | null
   onVehicleObjectTransformUpdated?: (nodeId: string, object: THREE.Object3D) => void
 }
 
