@@ -2,6 +2,8 @@ import * as THREE from 'three'
 import type { RoadDynamicMesh } from '@schema'
 import type { FloorBuildShape } from '@/types/floor-build-shape'
 import { ROAD_VERTEX_HANDLE_GROUP_NAME, ROAD_VERTEX_HANDLE_Y } from '../RoadVertexRenderer'
+import { sampleRoadEndpointLocalHeight } from '../RoadVertexRenderer'
+import { smoothRoadVerticesAroundIndex } from '../RoadBuildGeometry'
 import { FLOOR_VERTEX_HANDLE_GROUP_NAME, FLOOR_VERTEX_HANDLE_Y } from '../FloorVertexRenderer'
 import { FLOOR_CIRCLE_HANDLE_GROUP_NAME, FLOOR_CIRCLE_HANDLE_Y } from '../FloorCircleHandleRenderer'
 import { WALL_ENDPOINT_HANDLE_GROUP_NAME, WALL_ENDPOINT_HANDLE_Y_OFFSET } from '../WallEndpointRenderer'
@@ -1558,19 +1560,22 @@ export function handlePointerMoveDrag(
         return { handled: true }
       }
       const axis = state.axisWorld.clone().normalize()
-      const delta = tmpIntersection.clone().sub(state.startPointWorld)
+      const dragStart = state.startHitWorld ?? state.startPointWorld
+      const delta = tmpIntersection.clone().sub(dragStart)
       const t = axis.dot(delta)
       // Quantize to 0.1m steps (like wall height drag) and keep one decimal to reduce float noise.
       const tQuantized = Number((Math.round(t * 10) / 10).toFixed(1))
       const world = state.startPointWorld.clone().add(axis.multiplyScalar(tQuantized))
-      local = state.containerObject.worldToLocal(new THREE.Vector3(world.x, 0, world.z))
+      local = state.containerObject.worldToLocal(world)
     } else {
       if (!ctx.raycastGroundPoint(event, ctx.groundPointerHelper)) {
         return { handled: true }
       }
-      const snapped = ctx.groundPointerHelper.clone()
-      snapped.y = 0
-      local = state.containerObject.worldToLocal(new THREE.Vector3(snapped.x, 0, snapped.z))
+      const dragStart = state.startHitWorld ?? state.startPointWorld
+      const delta = ctx.groundPointerHelper.clone().sub(dragStart)
+      delta.y = 0
+      const world = state.startPointWorld.clone().add(delta)
+      local = state.containerObject.worldToLocal(world)
     }
 
     if (!local) {
@@ -1582,7 +1587,10 @@ export function handlePointerMoveDrag(
       return { handled: true }
     }
     vertices[state.vertexIndex] = [local.x, local.z]
-    working.vertices = vertices
+    working.vertices = smoothRoadVerticesAroundIndex(vertices, state.vertexIndex, {
+      windowSize: 5,
+      strength: 0.7,
+    })
 
     // Treat any actual geometry change as a drag (prevents tiny mouse movement from being interpreted as a click -> branch).
     const [startVX, startVZ] = state.startVertex
@@ -1612,8 +1620,11 @@ export function handlePointerMoveDrag(
         if (!Number.isFinite(x) || !Number.isFinite(z)) {
           continue
         }
-        const y = Number(child?.userData?.yOffset)
-        child.position.set(x, Number.isFinite(y) ? y : ROAD_VERTEX_HANDLE_Y, z)
+        const endpointLocalY = Number(child?.userData?.endpointLocalY)
+        const yOffset = Number(child?.userData?.yOffset)
+        const nextY = (Number.isFinite(endpointLocalY) ? endpointLocalY : sampleRoadEndpointLocalHeight(state.workingDefinition, index))
+          + (Number.isFinite(yOffset) ? yOffset : ROAD_VERTEX_HANDLE_Y)
+        child.position.set(x, nextY, z)
       }
     }
 

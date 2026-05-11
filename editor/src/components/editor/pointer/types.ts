@@ -41,6 +41,7 @@ export type RoadVertexDragState = {
   axisWorld: THREE.Vector3 | null
   dragPlane: THREE.Plane
   startPointWorld: THREE.Vector3
+  startHitWorld: THREE.Vector3 | null
 
   startVertex: [number, number]
   containerObject: THREE.Object3D

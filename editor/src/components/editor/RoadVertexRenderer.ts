@@ -99,9 +99,46 @@ function disposeRoadVertexHandleGroup(group: THREE.Group) {
 function computeRoadVertexHandleSignature(definition: RoadDynamicMesh): string {
   const serialized = stableSerialize([
     Array.isArray(definition.vertices) ? definition.vertices : [],
+    Array.isArray((definition as any).segmentHeights) ? (definition as any).segmentHeights : null,
     Number.isFinite(definition.width) ? definition.width : null,
   ])
   return hashString(serialized)
+}
+
+export function sampleRoadEndpointLocalHeight(definition: RoadDynamicMesh, vertexIndex: number): number {
+  const segmentHeights = Array.isArray((definition as any).segmentHeights) ? (definition as any).segmentHeights as number[][] : []
+  if (!segmentHeights.length) {
+    return 0
+  }
+
+  const lastVertexIndex = Array.isArray(definition.vertices) ? Math.max(0, definition.vertices.length - 1) : 0
+  if (vertexIndex <= 0) {
+    const first = segmentHeights[0]
+    if (Array.isArray(first) && first.length) {
+      const value = Number(first[0])
+      return Number.isFinite(value) ? value : 0
+    }
+    return 0
+  }
+
+  if (vertexIndex >= lastVertexIndex) {
+    const last = segmentHeights[segmentHeights.length - 1]
+    if (Array.isArray(last) && last.length) {
+      const value = Number(last[last.length - 1])
+      return Number.isFinite(value) ? value : 0
+    }
+    return 0
+  }
+
+  const previous = segmentHeights[vertexIndex - 1]
+  const next = segmentHeights[vertexIndex]
+  const previousValue = Array.isArray(previous) && previous.length ? Number(previous[previous.length - 1]) : NaN
+  const nextValue = Array.isArray(next) && next.length ? Number(next[0]) : NaN
+  const values = [previousValue, nextValue].filter((value) => Number.isFinite(value)) as number[]
+  if (!values.length) {
+    return 0
+  }
+  return values.reduce((sum, value) => sum + value, 0) / values.length
 }
 
 export function createRoadVertexRenderer(): RoadVertexRenderer {
@@ -223,7 +260,7 @@ export function createRoadVertexRenderer(): RoadVertexRenderer {
       }
 
       const gizmo = createEndpointGizmoObject({
-        axes: { x: true, y: false, z: true },
+        axes: { x: true, y: true, z: true },
         showNegativeAxes: true,
         renderOrder: ROAD_VERTEX_HANDLE_RENDER_ORDER,
         depthTest: false,
@@ -233,7 +270,8 @@ export function createRoadVertexRenderer(): RoadVertexRenderer {
 
       const handle = gizmo.root
       handle.name = `RoadVertexHandle_${index + 1}`
-      handle.position.set(x, yOffset, z)
+      const endpointLocalY = sampleRoadEndpointLocalHeight(definition, index)
+      handle.position.set(x, endpointLocalY + yOffset, z)
       handle.layers.enableAll()
       handle.userData.isRoadVertexHandle = true
       handle.userData.nodeId = selectedNodeId
@@ -241,6 +279,7 @@ export function createRoadVertexRenderer(): RoadVertexRenderer {
       handle.userData.baseDiameter = gizmo.baseDiameter
       handle.userData.endpointGizmo = gizmo
       handle.userData.handleKey = `${selectedNodeId}:${index}`
+      handle.userData.endpointLocalY = endpointLocalY
       handle.userData.yOffset = yOffset
 
       handle.traverse((child) => {

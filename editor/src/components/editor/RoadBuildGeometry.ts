@@ -63,6 +63,45 @@ export function buildLocalPolyline(runtime: THREE.Object3D, worldPoints: THREE.V
   return out
 }
 
+export function smoothRoadVerticesAroundIndex(
+  vertices: Array<[number, number]>,
+  focusIndex: number,
+  options: {
+    windowSize?: number
+    strength?: number
+  } = {},
+): Array<[number, number]> {
+  const count = Array.isArray(vertices) ? vertices.length : 0
+  if (count < 3) {
+    return (Array.isArray(vertices) ? vertices : []).map(([x, z]) => [Number(x) || 0, Number(z) || 0] as [number, number])
+  }
+
+  const safeIndex = Math.max(0, Math.min(count - 1, Math.trunc(Number(focusIndex) || 0)))
+  const windowSize = Math.max(3, Math.trunc(Number(options.windowSize) || 5))
+  const windowRadius = Math.max(1, Math.floor(windowSize / 2))
+  const start = Math.max(0, safeIndex - windowRadius)
+  const end = Math.min(count - 1, safeIndex + windowRadius)
+  const localCount = end - start + 1
+  if (localCount < 3) {
+    return vertices.map(([x, z]) => [Number(x) || 0, Number(z) || 0] as [number, number])
+  }
+
+  const localPoints = vertices.slice(start, end + 1).map(([x, z]) => new THREE.Vector3(Number(x) || 0, 0, Number(z) || 0))
+  const curve = new THREE.CatmullRomCurve3(localPoints, false, 'centripetal', 0.5)
+  const sampled = curve.getPoints(localCount - 1)
+  const strength = Math.max(0, Math.min(1, Number(options.strength) || 0.7))
+
+  const out = vertices.map(([x, z]) => [Number(x) || 0, Number(z) || 0] as [number, number])
+  for (let i = 0; i < localCount; i += 1) {
+    const original = localPoints[i]!
+    const smooth = sampled[i]!
+    const blend = strength >= 1 ? smooth : original.clone().lerp(smooth, strength)
+    out[start + i] = [blend.x, blend.z]
+  }
+
+  return out
+}
+
 function segmentIntersection2D(
   a: THREE.Vector2,
   b: THREE.Vector2,

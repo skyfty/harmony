@@ -4,6 +4,7 @@ import { compileWallSegmentsFromDefinition } from '@schema/wallLayout'
 import { FLOOR_VERTEX_HANDLE_Y } from '../FloorVertexRenderer'
 import { FLOOR_CIRCLE_HANDLE_GROUP_NAME, type FloorCircleHandlePickResult } from '../FloorCircleHandleRenderer'
 import { WALL_ENDPOINT_HANDLE_GROUP_NAME } from '../WallEndpointRenderer'
+import { sampleRoadEndpointLocalHeight } from '../RoadVertexRenderer'
 import { computeApproxCircleFromPlanarPoints, sanitizePlanarPoints } from '../planarEditMath'
 import type { FloorBuildShape } from '@/types/floor-build-shape'
 import type { WallBuildShape } from '@/types/wall-build-shape'
@@ -1366,11 +1367,12 @@ export function handlePointerDownTools(
               ? [Number(baseVertex[0]) || 0, Number(baseVertex[1]) || 0]
               : [0, 0]
 
-          const startPointWorld = runtime.localToWorld(new THREE.Vector3(startVertex[0], 0, startVertex[1]))
+          const startLocalY = sampleRoadEndpointLocalHeight(node.dynamicMesh, handleHit.vertexIndex)
+          const startPointWorld = runtime.localToWorld(new THREE.Vector3(startVertex[0], startLocalY, startVertex[1]))
           const dragMode = handleHit.gizmoKind === 'axis' ? 'axis' : 'free'
           const axisWorld =
             dragMode === 'axis' && handleHit.gizmoAxis && (handleHit.gizmoAxis as any).isVector3
-              ? new THREE.Vector3(handleHit.gizmoAxis.x, 0, handleHit.gizmoAxis.z).normalize()
+              ? new THREE.Vector3(handleHit.gizmoAxis.x, handleHit.gizmoAxis.y, handleHit.gizmoAxis.z).normalize()
               : null
           const effectiveDragMode = axisWorld && axisWorld.lengthSq() > 1e-10 ? dragMode : 'free'
           const effectiveAxisWorld = effectiveDragMode === 'axis' ? axisWorld : null
@@ -1392,6 +1394,7 @@ export function handlePointerDownTools(
               freePlaneNormal: new THREE.Vector3(0, 1, 0),
             }),
             startPointWorld: startPointWorld.clone(),
+            startHitWorld: handleHit.point.clone(),
 
             startVertex,
             containerObject: runtime,

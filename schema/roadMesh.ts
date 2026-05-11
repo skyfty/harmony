@@ -1427,7 +1427,7 @@ function rebuildRoadGroup(group: THREE.Group, definition: RoadDynamicMesh, optio
 
   const roadMesh = new THREE.Mesh(roadGeometry, reusableMaterials.road ?? createRoadMaterial())
   roadMesh.name = 'RoadMesh'
-  roadMesh.castShadow = false
+  roadMesh.castShadow = true
   roadMesh.receiveShadow = true
   group.add(roadMesh)
   usedRoadMaterial = true
@@ -1590,7 +1590,7 @@ function rebuildRoadGroup(group: THREE.Group, definition: RoadDynamicMesh, optio
       if (merged) {
         const shoulderMesh = new THREE.Mesh(merged, reusableMaterials.shoulders ?? createShoulderMaterial())
         shoulderMesh.castShadow = false
-        shoulderMesh.receiveShadow = true
+        shoulderMesh.receiveShadow = false
         shoulderMesh.name = 'RoadShoulders'
         shoulderMesh.userData.overrideMaterial = true
         group.add(shoulderMesh)
