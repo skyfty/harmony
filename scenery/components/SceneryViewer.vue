@@ -440,6 +440,7 @@ import {
   saveScenePackageZipByCacheKey,
   type ScenePackagePointer,
 } from '@harmony/utils/scene-package-storage';
+import { collectCompiledGroundCoveredChunkKeys } from '@schema/compiledGround'
 
 type SceneryProps = {
   projectId?: string;
@@ -5750,7 +5751,7 @@ function syncViewerCompiledGroundCollision(
         },
       });
     }
-    excludedChunkKeys = compiledGroundCollisionRuntime.getActiveTileKeys();
+		excludedChunkKeys = collectCompiledGroundCoveredChunkKeys(compiledManifest)
   } else {
     markCompiledGroundCollisionUpdateDirty();
     compiledGroundCollisionRuntime.clear();
