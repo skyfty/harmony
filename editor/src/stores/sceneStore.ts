@@ -2379,9 +2379,6 @@ function createGroundSceneNode(
     createVector,
     createNodeMaterial,
     createMaterialProps,
-    generateUuid,
-    clampRigidbodyComponentProps,
-    RIGIDBODY_COMPONENT_TYPE,
     GROUND_NODE_ID,
   }, overrides, settings) as SceneNode
 }
@@ -2407,9 +2404,6 @@ function normalizeGroundSceneNode(node: SceneNode | null | undefined, settings?:
     createVector,
     createNodeMaterial,
     createMaterialProps,
-    generateUuid,
-    clampRigidbodyComponentProps,
-    RIGIDBODY_COMPONENT_TYPE,
     GROUND_NODE_ID,
     getPrimaryNodeMaterial,
     cloneNode,

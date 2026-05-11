@@ -214,9 +214,6 @@ function computeDefaultExpandedPanels() {
 
   Object.values(node?.components ?? {}).forEach((component) => {
     if (component?.type) {
-      if (component.type === RIGIDBODY_COMPONENT_TYPE && node?.id === GROUND_NODE_ID) {
-        return
-      }
       panels.push(component.type)
     }
   })

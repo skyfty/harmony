@@ -64,10 +64,6 @@ export type GroundDeps = {
   createVector: (x: number, y: number, z: number) => Vector3
   createNodeMaterial: (props: SceneMaterialProps, options?: { id?: string; name?: string; type?: SceneMaterialType }) => SceneNodeMaterial
   createMaterialProps: (overrides?: Partial<SceneMaterialProps> | null) => SceneMaterialProps
-  generateUuid: () => string
-  clampRigidbodyComponentProps: (p: any) => any
-  RIGIDBODY_COMPONENT_TYPE: string
-  
   GROUND_NODE_ID?: string
   getPrimaryNodeMaterial?: (node: SceneNode) => SceneNodeMaterial | null
   cloneNode?: (node: SceneNode) => SceneNode
@@ -499,9 +495,6 @@ export function createGroundSceneNodeWithDeps(deps: GroundDeps, overrides: { dyn
   const createVector = deps.createVector
   const createNodeMaterial = deps.createNodeMaterial
   const createMaterialProps = deps.createMaterialProps
-  const generateUuid = deps.generateUuid
-  const clampRigidbodyComponentProps = deps.clampRigidbodyComponentProps
-  const RIGIDBODY_COMPONENT_TYPE = deps.RIGIDBODY_COMPONENT_TYPE
   const GROUND_NODE_ID = deps.GROUND_NODE_ID ?? 'ground'
 
   return {
@@ -521,14 +514,7 @@ export function createGroundSceneNodeWithDeps(deps: GroundDeps, overrides: { dyn
     visible: true,
     locked: true,
     dynamicMesh,
-    components: {
-      [RIGIDBODY_COMPONENT_TYPE]: {
-        id: generateUuid(),
-        type: RIGIDBODY_COMPONENT_TYPE,
-        enabled: true,
-        props: clampRigidbodyComponentProps({ bodyType: 'STATIC', mass: 0 }),
-      }
-    },
+    components: {},
   }
 }
 
@@ -542,26 +528,13 @@ export function normalizeGroundSceneNodeWithDeps(deps: GroundDeps, node: SceneNo
     const cloneNode = deps.cloneNode
     const createNodeMaterial = deps.createNodeMaterial
     const createMaterialProps = deps.createMaterialProps
-    const generateUuid = deps.generateUuid
-    const clampRigidbodyComponentProps = deps.clampRigidbodyComponentProps
     const GROUND_NODE_ID = deps.GROUND_NODE_ID ?? 'ground'
 
     const sourceMaterials = Array.isArray(node.materials) ? node.materials : []
     const primaryMaterial = getPrimaryNodeMaterial ? getPrimaryNodeMaterial(node) : (sourceMaterials[0] ?? null)
     const sculptedMaterial = sourceMaterials[1] ?? null
     const children = node.children?.length ? node.children.map(cloneNode ?? ((n) => n)) : undefined
-    const nextComponents = (() => {
-      const base = { ...(node.components ?? {}) }
-      if (!base[deps.RIGIDBODY_COMPONENT_TYPE]) {
-        base[deps.RIGIDBODY_COMPONENT_TYPE] = {
-          id: generateUuid(),
-          type: deps.RIGIDBODY_COMPONENT_TYPE,
-          enabled: true,
-          props: clampRigidbodyComponentProps({ bodyType: 'STATIC', mass: 0 }),
-        }
-      }
-      return Object.keys(base).length ? base : undefined
-    })()
+    const nextComponents = Object.keys(node.components ?? {}).length ? { ...(node.components ?? {}) } : undefined
 
     const normalizedDynamicMesh = createGroundDynamicMeshDefinition((node.dynamicMesh as GroundDynamicMesh) ?? {}, settings)
     const primaryMaterialProps = buildPrimaryGroundMaterialProps(createMaterialProps, primaryMaterial)
