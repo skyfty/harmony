@@ -53,9 +53,19 @@ export type RoadHeightfieldBuildParams = {
 	) => { body: CANNON.Body } | null
 	maxSegments?: number
 }
+	// RoadHeightfieldBuildParams: 构建道路高度场所需参数的类型定义。
+	// - roadNode: 场景中的道路节点，包含动态网格等信息
+	// - rigidbodyComponent: 道路节点对应的刚体组件状态（用于读取 bodyType 等）
+	// - roadObject: THREE.Object3D，作为道路的父对象用于挂载生成的 tile 对象
+	// - groundNode: 可选的地形节点，用于从地形采样高度
+	// - world: CANNON.World 物理世界实例（用于创建刚体时使用）
+	// - createBody: 工厂函数，用于基于节点、组件和形状定义创建物理 body
+	// - maxSegments: 可选的最大分段数限制，用于控制生成多少个 collider
 export function isRoadDynamicMesh(value: SceneNode['dynamicMesh'] | null | undefined): value is RoadDynamicMesh {
 	return Boolean(value && (value as any).type === 'Road')
 }
+// isRoadDynamicMesh: 简单的类型守卫，用于判断给定的 dynamicMesh 是否为 Road 类型
+// 返回 true 表示该节点的 dynamicMesh 可以作为道路定义进行后续处理
 
 export function collectRoadHeightfieldTileDescriptors(params: RoadHeightfieldBuildParams): RoadHeightfieldBuildSnapshot | null {
 	const {
@@ -65,6 +75,10 @@ export function collectRoadHeightfieldTileDescriptors(params: RoadHeightfieldBui
 		maxSegments,
 	} = params
 
+    // collectRoadHeightfieldTileDescriptors: 根据道路定义与可选地形信息，
+    // 计算并收集用于构建高度场刚体的 tile 描述符列表。
+    // 返回值为 RoadHeightfieldBuildSnapshot 或 null（当无法构建时）。
+
 	if (!isRoadDynamicMesh(roadNode.dynamicMesh)) {
 		return null
 	}
@@ -72,6 +86,8 @@ export function collectRoadHeightfieldTileDescriptors(params: RoadHeightfieldBui
 	if ((rigidbodyComponent.props as RigidbodyComponentProps | undefined)?.bodyType !== 'STATIC') {
 		return null
 	}
+
+    // 只对静态刚体（STATIC）生成高度场碰撞体；动态或运动学刚体不处理
 
 	const roadState = roadNode.components?.[ROAD_COMPONENT_TYPE] as
 		| SceneNodeComponentState<RoadComponentProps>
@@ -86,10 +102,15 @@ export function collectRoadHeightfieldTileDescriptors(params: RoadHeightfieldBui
 	const snapToTerrain = roadProps.snapToTerrain
 	const heightSampler = groundNode ? resolveRoadLocalHeightSampler(roadNode, groundNode) : null
 
+    // 预处理道路属性：宽度、采样密度、平滑强度、最小净空、交叉口平滑等
+    // heightSampler: 当提供 groundNode 时，用来从地形采样高度的函数
+
 	const graph = buildRoadGraph(definition)
 	if (!graph) {
 		return null
 	}
+
+    // 将道路的动态网格转为图结构（顶点 + 路径），以便按曲线分段进行采样
 
 	// If per-segment heights are present, build a segment-based sampler and
 	// let subsequent curve sampling use it. Otherwise fall back to runtime sampler.
@@ -108,6 +129,10 @@ export function collectRoadHeightfieldTileDescriptors(params: RoadHeightfieldBui
 		const tmpBuild: any = { vertexVectors: graph.vertices, paths: [], sanitizedSegments }
 		serializedSampler = createSegmentHeightSampler(tmpBuild, (definition as any).segmentHeights)
 	}
+
+    // 如果提供了按段的高度（segmentHeights），则构建一个基于段的采样器。
+    // 该采样器会基于已序列化的段高度数据直接返回道路表面高度，
+    // 从而避免运行时再去采样地形或其他动态来源。
 	const roadSurfaceHeightSampler = serializedSampler
 		? serializedSampler
 		: snapToTerrain
@@ -116,6 +141,11 @@ export function collectRoadHeightfieldTileDescriptors(params: RoadHeightfieldBui
 	if (!roadSurfaceHeightSampler) {
 		return null
 	}
+
+    // roadSurfaceHeightSampler 最终会是如下三者之一：
+    //  - serializedSampler: 已序列化的按段高度采样器（优先）
+    //  - heightSampler: 从地形采样的函数（当 snapToTerrain 为 true）
+    //  - 恒为 0 的采样器（若不对齐地形且无段高度数据）
 
 	const boundaryWallComponent = roadNode.components?.[BOUNDARY_WALL_COMPONENT_TYPE] as
 		| SceneNodeComponentState<BoundaryWallComponentProps>
@@ -137,6 +167,10 @@ export function collectRoadHeightfieldTileDescriptors(params: RoadHeightfieldBui
 		return null
 	}
 
+    // boundaryWallEnabled: 判断是否启用了边界墙组件，如果启用则读取其属性并在 surfaceNode 中
+    // 移除 boundary wall 组件（用于后续生成 collider 时只考虑道路表面本身）
+    // buildRoadCurvesFromGraph: 将图结构转换为一组平滑曲线（用于按曲线分段采样）
+
 	const hasSegmentHeights = Boolean(serializedSampler)
 
 	const desiredTileLength = clampNumber(roadWidth * 8, 2, 16, 8)
@@ -145,6 +179,9 @@ export function collectRoadHeightfieldTileDescriptors(params: RoadHeightfieldBui
 	const maxBodies = typeof maxSegments === 'number' && Number.isFinite(maxSegments)
 		? Math.max(1, Math.trunc(maxSegments))
 		: 128
+
+    // 计算瓦片（tile）相关参数：期望瓦片长度、每瓦片的网格行数（目标），以及元素尺寸
+    // elementSize 用于构建高度场网格时在前向方向上的采样间距
 
 	let totalBodies = 0
 	const tiles: RoadHeightfieldTileDescriptor[] = []
@@ -177,6 +214,9 @@ export function collectRoadHeightfieldTileDescriptors(params: RoadHeightfieldBui
 			const normalized = Math.round((Number.isFinite(value) ? value : 0) * 1000)
 			signatureHash = (signatureHash * 31 + normalized) >>> 0
 		})
+
+        // 对曲线进行离散化（divisions），并基于中心线构建高度序列（smoothedHeights）
+        // signatureHash 用于跟踪高度变化，用作后续缓存或对比的签名
 
 		const stepDistance = length / divisions
 		const divisionsPerTile = Math.max(1, Math.round(desiredTileLength / stepDistance))
@@ -240,6 +280,10 @@ export function collectRoadHeightfieldTileDescriptors(params: RoadHeightfieldBui
 		curveIndex += 1
 	}
 
+    // 对每条曲线分段，按照期望瓦片长度将曲线切分为多个 tile；
+    // 在弯道处会根据 headingDelta 递减 tile 长度以更贴合曲面；
+    // 每个 tile 会生成一个高度场形状（shapeDefinition），并记录其位置与朝向（yaw）。
+
 	if (!tiles.length) {
 		return null
 	}
@@ -265,6 +309,9 @@ export function collectRoadHeightfieldTileDescriptors(params: RoadHeightfieldBui
 		boundaryWallProps,
 	}
 }
+
+// 返回值说明：RoadHeightfieldBuildSnapshot 包含了构建高度场所需的所有瓦片描述符、
+// 道路与地形相关的签名信息以及用于再现此构建的参数（便于缓存和校验）。
 
 export function buildRoadHeightfieldBodies(params: RoadHeightfieldBuildParams): RoadHeightfieldBodiesEntry | null {
 	const snapshot = collectRoadHeightfieldTileDescriptors(params)
