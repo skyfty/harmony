@@ -99,6 +99,7 @@ function disposeRoadVertexHandleGroup(group: THREE.Group) {
 function computeRoadVertexHandleSignature(definition: RoadDynamicMesh): string {
   const serialized = stableSerialize([
     Array.isArray(definition.vertices) ? definition.vertices : [],
+    Array.isArray((definition as any).vertexHeights) ? (definition as any).vertexHeights : null,
     Array.isArray((definition as any).segmentHeights) ? (definition as any).segmentHeights : null,
     Number.isFinite(definition.width) ? definition.width : null,
   ])
@@ -106,6 +107,14 @@ function computeRoadVertexHandleSignature(definition: RoadDynamicMesh): string {
 }
 
 export function sampleRoadEndpointLocalHeight(definition: RoadDynamicMesh, vertexIndex: number): number {
+  const vertexHeights = Array.isArray((definition as any).vertexHeights) ? (definition as any).vertexHeights as number[] : []
+  if (vertexHeights.length > vertexIndex) {
+    const value = Number(vertexHeights[vertexIndex])
+    if (Number.isFinite(value)) {
+      return value
+    }
+  }
+
   const segmentHeights = Array.isArray((definition as any).segmentHeights) ? (definition as any).segmentHeights as number[][] : []
   if (!segmentHeights.length) {
     return 0

@@ -4,7 +4,7 @@ import { compileWallSegmentsFromDefinition } from '@schema/wallLayout'
 import { FLOOR_VERTEX_HANDLE_Y } from '../FloorVertexRenderer'
 import { FLOOR_CIRCLE_HANDLE_GROUP_NAME, type FloorCircleHandlePickResult } from '../FloorCircleHandleRenderer'
 import { WALL_ENDPOINT_HANDLE_GROUP_NAME } from '../WallEndpointRenderer'
-import { sampleRoadEndpointLocalHeight } from '../RoadVertexRenderer'
+import { sampleRoadEndpointLocalHeight, type RoadVertexHandlePickResult } from '../RoadVertexRenderer'
 import { computeApproxCircleFromPlanarPoints, sanitizePlanarPoints } from '../planarEditMath'
 import type { FloorBuildShape } from '@/types/floor-build-shape'
 import type { WallBuildShape } from '@/types/wall-build-shape'
@@ -324,7 +324,7 @@ export function handlePointerDownTools(
 
     // Road vertex drag
     ensureRoadVertexHandlesForSelectedNode: () => void
-    pickRoadVertexHandleAtPointer: (event: PointerEvent) => { nodeId: string; vertexIndex: number; gizmoKind: 'center' | 'axis'; gizmoAxis?: THREE.Vector3; gizmoPart: any } | null
+    pickRoadVertexHandleAtPointer: (event: PointerEvent) => RoadVertexHandlePickResult | null
     setActiveRoadVertexHandle: (active: { nodeId: string; vertexIndex: number; gizmoPart: any } | null) => void
 
     // Wall endpoint drag
@@ -1405,10 +1405,18 @@ export function handlePointerDownTools(
               vertices: (Array.isArray(node.dynamicMesh.vertices) ? node.dynamicMesh.vertices : []).map(
                 ([x, z]) => [Number(x) || 0, Number(z) || 0] as [number, number],
               ),
+              vertexHeights: Array.isArray((node.dynamicMesh as any).vertexHeights)
+                ? (node.dynamicMesh as any).vertexHeights.map((value: unknown) => (Number.isFinite(Number(value)) ? Number(value) : 0))
+                : undefined,
               segments: (Array.isArray(node.dynamicMesh.segments) ? node.dynamicMesh.segments : []).map((seg) => ({
                 a: Number((seg as any).a) || 0,
                 b: Number((seg as any).b) || 0,
               })),
+              segmentHeights: Array.isArray((node.dynamicMesh as any).segmentHeights)
+                ? (node.dynamicMesh as any).segmentHeights.map((entry: unknown) => Array.isArray(entry)
+                  ? entry.map((value: unknown) => (Number.isFinite(Number(value)) ? Number(value) : 0))
+                  : [0, 0])
+                : undefined,
             },
           }
 

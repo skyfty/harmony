@@ -612,8 +612,11 @@ export function handlePointerUpDrag(
         ) as THREE.Object3D | undefined
         if (mesh) {
           const [vx, vz] = state.startVertex
-          const y = Number(mesh.userData?.yOffset)
-          mesh.position.set(vx, Number.isFinite(y) ? y : ROAD_VERTEX_HANDLE_Y, vz)
+          const endpointLocalY = Number(mesh.userData?.endpointLocalY)
+          const yOffset = Number(mesh.userData?.yOffset)
+          const nextY = (Number.isFinite(endpointLocalY) ? endpointLocalY : 0)
+            + (Number.isFinite(yOffset) ? yOffset : ROAD_VERTEX_HANDLE_Y)
+          mesh.position.set(vx, nextY, vz)
         }
       }
     } catch {

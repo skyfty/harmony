@@ -1555,11 +1555,13 @@ export function handlePointerMoveDrag(
       return { handled: true }
     }
     let local: THREE.Vector3 | null = null
+    let isVerticalAxisDrag = false
     if (state.dragMode === 'axis' && state.axisWorld) {
       if (!ctx.raycastPlanePoint(event, state.dragPlane, tmpIntersection)) {
         return { handled: true }
       }
       const axis = state.axisWorld.clone().normalize()
+      isVerticalAxisDrag = Math.abs(axis.y) >= 0.5 && Math.abs(axis.x) + Math.abs(axis.z) < 0.5
       const dragStart = state.startHitWorld ?? state.startPointWorld
       const delta = tmpIntersection.clone().sub(dragStart)
       const t = axis.dot(delta)
@@ -1587,10 +1589,22 @@ export function handlePointerMoveDrag(
       return { handled: true }
     }
     vertices[state.vertexIndex] = [local.x, local.z]
-    working.vertices = smoothRoadVerticesAroundIndex(vertices, state.vertexIndex, {
-      windowSize: 5,
-      strength: 0.7,
-    })
+    if (isVerticalAxisDrag) {
+      const vertexHeights = Array.isArray((working as any).vertexHeights)
+        ? [...(working as any).vertexHeights]
+        : []
+      while (vertexHeights.length < vertices.length) {
+        vertexHeights.push(0)
+      }
+      vertexHeights[state.vertexIndex] = Number.isFinite(local.y) ? local.y : 0
+      ;(working as any).vertexHeights = vertexHeights
+      working.vertices = vertices
+    } else {
+      working.vertices = smoothRoadVerticesAroundIndex(vertices, state.vertexIndex, {
+        windowSize: 5,
+        strength: 0.7,
+      })
+    }
 
     // Treat any actual geometry change as a drag (prevents tiny mouse movement from being interpreted as a click -> branch).
     const [startVX, startVZ] = state.startVertex
@@ -1625,6 +1639,9 @@ export function handlePointerMoveDrag(
         const nextY = (Number.isFinite(endpointLocalY) ? endpointLocalY : sampleRoadEndpointLocalHeight(state.workingDefinition, index))
           + (Number.isFinite(yOffset) ? yOffset : ROAD_VERTEX_HANDLE_Y)
         child.position.set(x, nextY, z)
+        child.userData.endpointLocalY = Number.isFinite(endpointLocalY)
+          ? endpointLocalY
+          : sampleRoadEndpointLocalHeight(state.workingDefinition, index)
       }
     }
 

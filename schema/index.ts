@@ -2467,6 +2467,9 @@ export interface RoadDynamicMesh {
   /** Connections between vertices. Supports branching roads. */
   segments: RoadSegment[]
 
+  /** Optional per-vertex local Y heights, aligned with `vertices`. */
+  vertexHeights?: number[]
+
   /** Per-segment sampled heights. Each entry corresponds to an index in `segments` and is
    * an array of heights sampled along that segment (length >= 2, endpoints included).
    */

@@ -118,6 +118,7 @@ export function applyRoadComponentPropsToNode(
   node.dynamicMesh = {
     type: 'Road',
     vertices: Array.isArray(existing.vertices) ? existing.vertices : normalized.vertices,
+    vertexHeights: Array.isArray((existing as any).vertexHeights) ? (existing as any).vertexHeights : (normalized as any).vertexHeights,
     segmentHeights: Array.isArray((existing as any).segmentHeights) ? (existing as any).segmentHeights : (normalized as any).segmentHeights,
     segments: Array.isArray(existing.segments) ? existing.segments : normalized.segments,
     width: normalized.width,

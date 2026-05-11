@@ -567,6 +567,16 @@ function sanitizeRoadVertices(vertices: unknown): Array<THREE.Vector3 | null> {
   })
 }
 
+function sanitizeRoadVertexHeights(vertexHeights: unknown, vertexCount: number): number[] {
+  const out: number[] = []
+  const raw = Array.isArray(vertexHeights) ? vertexHeights : []
+  for (let index = 0; index < vertexCount; index += 1) {
+    const value = Number(raw[index])
+    out.push(Number.isFinite(value) ? value : 0)
+  }
+  return out
+}
+
 type SanitizedRoadSegment = {
   a: number
   b: number
@@ -696,10 +706,18 @@ function collectRoadPaths(
 }
 
 function collectRoadBuildData(definition: RoadDynamicMesh): RoadBuildData | null {
-  const vertexVectors = sanitizeRoadVertices(definition.vertices)
-  if (!vertexVectors.length) {
+  const vertexPositions = sanitizeRoadVertices(definition.vertices)
+  if (!vertexPositions.length) {
     return null
   }
+
+  const vertexHeights = sanitizeRoadVertexHeights((definition as any).vertexHeights, vertexPositions.length)
+  const vertexVectors = vertexPositions.map((point, index) => {
+    if (!point) {
+      return null
+    }
+    return new THREE.Vector3(point.x, vertexHeights[index] ?? 0, point.z)
+  })
 
   // Do not stamp vertex Y here; per-segment heights are sampled when needed.
 
