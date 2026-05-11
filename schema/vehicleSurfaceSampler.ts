@@ -30,7 +30,9 @@ type FloorSurfaceEntry = {
 type RoadSurfaceEntry = {
   nodeId: string
   definition: RoadDynamicMesh
+  roadOriginX: number
   roadOriginY: number
+  roadOriginZ: number
   localHeightSampler: ((x: number, z: number) => number) | null
   serializedHeightSampler: ((x: number, z: number) => number) | null
   inverseYawQuaternion: THREE.Quaternion
@@ -58,6 +60,43 @@ const composeScaleHelper = new THREE.Vector3()
 const invertMatrixHelper = new THREE.Matrix4()
 const pointOnSegmentHelper = new THREE.Vector2()
 const roadSampleWorldHelper = new THREE.Vector3()
+
+function formatDebugObject(value: unknown): string {
+  const seen = new WeakSet<object>()
+  try {
+    return JSON.stringify(value, (_key, currentValue) => {
+      if (currentValue instanceof THREE.Vector3) {
+        return { x: currentValue.x, y: currentValue.y, z: currentValue.z }
+      }
+      if (currentValue instanceof THREE.Euler) {
+        return { x: currentValue.x, y: currentValue.y, z: currentValue.z, order: currentValue.order }
+      }
+      if (currentValue instanceof THREE.Quaternion) {
+        return { x: currentValue.x, y: currentValue.y, z: currentValue.z, w: currentValue.w }
+      }
+      if (currentValue instanceof THREE.Matrix4) {
+        return { elements: currentValue.elements.slice() }
+      }
+      if (currentValue && typeof currentValue === 'object') {
+        if (seen.has(currentValue)) {
+          return '[Circular]'
+        }
+        seen.add(currentValue)
+      }
+      return currentValue
+    }, 2)
+  } catch {
+    try {
+      return String(value)
+    } catch {
+      return '[Unserializable]'
+    }
+  }
+}
+
+function logSurfaceDebug(label: string, payload: unknown): void {
+  console.log(`[VehicleSurfaceSampler] ${label}\n${formatDebugObject(payload)}`)
+}
 
 function readFiniteNumber(value: unknown, fallback = 0): number {
   const numeric = typeof value === 'number' ? value : Number(value)
@@ -166,8 +205,10 @@ function createRoadSurfaceEntry(node: SceneNode, groundNode: SceneNode | null): 
   return {
     nodeId: node.id,
     definition,
+    roadOriginX: roadPosition.x,
     roadOriginY: roadPosition.y,
-    localHeightSampler: resolveRoadLocalHeightSampler(node, groundNode),
+    roadOriginZ: roadPosition.z,
+    localHeightSampler: resolveRoadLocalHeightSampler(node, groundNode) ?? (() => 0),
     serializedHeightSampler: Array.isArray((definition as any).segmentHeights)
       ? createSegmentHeightSampler({
         vertexVectors: definition.vertices.map((vertex) => new THREE.Vector3(readFiniteNumber(vertex?.[0], 0), 0, readFiniteNumber(vertex?.[1], 0))),
@@ -182,14 +223,11 @@ function createRoadSurfaceEntry(node: SceneNode, groundNode: SceneNode | null): 
 }
 
 function sampleRoadSurface(entry: RoadSurfaceEntry, worldX: number, worldZ: number, preferredHeight?: number | null): VehicleSurfaceSample | null {
-  localPointHelper.set(worldX, 0, worldZ)
-  localPointHelper.y = 0
-  localPointHelper.x -= 0
-  localPointHelper.z -= 0
-  const originY = entry.roadOriginY
-  const localX = worldX
-  const localZ = worldZ
-  const roadLocalPoint = new THREE.Vector3(localX, 0, localZ)
+  const roadLocalPoint = new THREE.Vector3(
+    worldX - entry.roadOriginX,
+    0,
+    worldZ - entry.roadOriginZ,
+  )
   roadLocalPoint.applyQuaternion(entry.inverseYawQuaternion)
   const q = new THREE.Vector2(roadLocalPoint.x, roadLocalPoint.z)
 
@@ -201,15 +239,34 @@ function sampleRoadSurface(entry: RoadSurfaceEntry, worldX: number, worldZ: numb
     }
   }
   if (bestDistanceSq > entry.halfWidth * entry.halfWidth) {
+    logSurfaceDebug('road-rejected-width', {
+      nodeId: entry.nodeId,
+      queryWorld: { x: worldX, z: worldZ },
+      queryLocal: { x: q.x, z: q.y },
+      roadOrigin: { x: entry.roadOriginX, y: entry.roadOriginY, z: entry.roadOriginZ },
+      halfWidth: entry.halfWidth,
+      minDistance: Math.sqrt(bestDistanceSq),
+    })
     return null
   }
 
   const heightSampler = entry.serializedHeightSampler ?? entry.localHeightSampler
   if (!heightSampler) {
+    logSurfaceDebug('road-rejected-no-height-sampler', {
+      nodeId: entry.nodeId,
+      queryWorld: { x: worldX, z: worldZ },
+      roadOrigin: { x: entry.roadOriginX, y: entry.roadOriginY, z: entry.roadOriginZ },
+    })
     return null
   }
   const localHeight = heightSampler(q.x, q.y)
   if (!Number.isFinite(localHeight)) {
+    logSurfaceDebug('road-rejected-nonfinite-height', {
+      nodeId: entry.nodeId,
+      queryWorld: { x: worldX, z: worldZ },
+      queryLocal: { x: q.x, z: q.y },
+      roadOrigin: { x: entry.roadOriginX, y: entry.roadOriginY, z: entry.roadOriginZ },
+    })
     return null
   }
 
@@ -227,18 +284,30 @@ function sampleRoadSurface(entry: RoadSurfaceEntry, worldX: number, worldZ: numb
   worldNormalHelper.copy(localNormalHelper).applyQuaternion(entry.yawQuaternion).normalize()
 
   roadSampleWorldHelper.set(q.x, localHeight, q.y).applyQuaternion(entry.yawQuaternion)
-  roadSampleWorldHelper.y += originY
+  roadSampleWorldHelper.add(new THREE.Vector3(entry.roadOriginX, entry.roadOriginY, entry.roadOriginZ))
   const preferredDelta = typeof preferredHeight === 'number' && Number.isFinite(preferredHeight)
     ? Math.abs(preferredHeight - roadSampleWorldHelper.y)
     : 0
 
-  return {
+  const result: VehicleSurfaceSample = {
     kind: 'road',
     nodeId: entry.nodeId,
     point: roadSampleWorldHelper.clone(),
     normal: worldNormalHelper.clone(),
     distance: Math.sqrt(bestDistanceSq) + preferredDelta,
   }
+  logSurfaceDebug('road-sample', {
+    nodeId: entry.nodeId,
+    queryWorld: { x: worldX, z: worldZ },
+    queryLocal: { x: q.x, z: q.y },
+    roadOrigin: { x: entry.roadOriginX, y: entry.roadOriginY, z: entry.roadOriginZ },
+    result,
+    preferredHeight,
+    localHeight,
+    segmentDistance: Math.sqrt(bestDistanceSq),
+    hasSerializedHeightSampler: Boolean(entry.serializedHeightSampler),
+  })
+  return result
 }
 
 function createFloorSurfaceEntry(node: SceneNode): FloorSurfaceEntry | null {
@@ -340,13 +409,40 @@ export function createVehicleSurfaceSampler(nodes: SceneNode[]): VehicleSurfaceS
       }
 
       const groundSample = groundEntry ? sampleGroundSurface(groundEntry, x, z, preferredHeight) : null
-      if (!best) {
-        return groundSample
+      const result = !best
+        ? groundSample
+        : !groundSample
+          ? best
+          : best.point.y >= groundSample.point.y
+            ? best
+            : groundSample
+      if (roadEntries.length > 0) {
+        logSurfaceDebug('surface-choice', {
+          queryWorld: { x, z },
+          preferredHeight,
+          result: result
+            ? {
+              kind: result.kind,
+              nodeId: result.nodeId,
+              point: result.point,
+              normal: result.normal,
+              distance: result.distance,
+            }
+            : null,
+          roadCandidates: roadEntries.length,
+          floorCandidates: floorEntries.length,
+          groundCandidate: groundSample
+            ? {
+              kind: groundSample.kind,
+              nodeId: groundSample.nodeId,
+              point: groundSample.point,
+              normal: groundSample.normal,
+              distance: groundSample.distance,
+            }
+            : null,
+        })
       }
-      if (!groundSample) {
-        return best
-      }
-      return best.point.y >= groundSample.point.y ? best : groundSample
+      return result
     },
   }
 }

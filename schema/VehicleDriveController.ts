@@ -207,7 +207,7 @@ const isWeChatMiniProgram = Boolean((globalThis as typeof globalThis & { wx?: { 
 // WeChat mini-program: lower acceleration to reduce high-speed hitching/jerk.
 const VEHICLE_ENGINE_FORCE = 320
 // 车辆最大刹车力
-const VEHICLE_BRAKE_FORCE = 42
+const VEHICLE_BRAKE_FORCE = 36
 // Default soft/hard speed caps used when no component-level max is present.
 const DEFAULT_VEHICLE_SPEED_SOFT_CAP = 8.5
 const DEFAULT_VEHICLE_SPEED_HARD_CAP = 12.5
@@ -215,7 +215,7 @@ const VEHICLE_SPEED_GOVERNOR_BRAKE_ENTER_OFFSET = 0.45
 const VEHICLE_SPEED_GOVERNOR_BRAKE_EXIT_OFFSET = 0.2
 const VEHICLE_SPEED_GOVERNOR_BRAKE_DEADBAND = 0.35
 const VEHICLE_SPEED_GOVERNOR_BRAKE_BAND = 1.8
-const VEHICLE_SPEED_GOVERNOR_BRAKE_MAX_RATIO = 0.18
+const VEHICLE_SPEED_GOVERNOR_BRAKE_MAX_RATIO = 0.14
 // 松开油门时的惯性阻尼
 const VEHICLE_COASTING_DAMPING = 0.04
 // 平滑停车默认阻尼
@@ -231,7 +231,7 @@ const VEHICLE_SMOOTH_STOP_FINAL_SPEED_SQ = VEHICLE_SMOOTH_STOP_FINAL_SPEED * VEH
 // 平滑停车最小混合比
 const VEHICLE_SMOOTH_STOP_MIN_BLEND = 0.25
 // 最大转向角（弧度）
-const VEHICLE_STEER_ANGLE = THREE.MathUtils.degToRad(26)
+const VEHICLE_STEER_ANGLE = THREE.MathUtils.degToRad(32)
 // 转向开始衰减的速度（m/s）
 const VEHICLE_STEER_SOFT_CAP = 4.2
 // 转向强烈限制的速度（m/s）
@@ -1045,7 +1045,7 @@ export class VehicleDriveController {
       const range = Math.max(0.1, VEHICLE_STEER_HARD_CAP - VEHICLE_STEER_SOFT_CAP)
       const excess = Math.min(Math.max(0, speed - VEHICLE_STEER_SOFT_CAP), range)
       const slowRatio = Math.min(1, excess / range)
-      steeringValue *= 1 - 0.65 * slowRatio
+      steeringValue *= 1 - 0.45 * slowRatio
     }
     const baseBrakeForce = brakeInput * VEHICLE_BRAKE_FORCE
     const brakeForce = Math.min(VEHICLE_BRAKE_FORCE, Math.max(0, baseBrakeForce + this.speedGovernorBrakeAssist))

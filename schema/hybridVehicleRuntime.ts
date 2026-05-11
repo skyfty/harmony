@@ -22,6 +22,7 @@ type BodyLike = VehicleDriveVehicle['chassisBody'] & {
   wakeUp?: () => void
   sleepState?: number
   applyForce?: (force: { x: number; y: number; z: number }, relativePoint: { x: number; y: number; z: number }) => void
+  applyTorque?: (torque: { x: number; y: number; z: number }) => void
 }
 
 const worldQuaternionHelper = new THREE.Quaternion()
@@ -38,15 +39,23 @@ const suspensionForceHelper = new THREE.Vector3()
 const driveForceHelper = new THREE.Vector3()
 const lateralForceHelper = new THREE.Vector3()
 const totalForceHelper = new THREE.Vector3()
+const chassisUpWorldHelper = new THREE.Vector3()
+const chassisForwardWorldHelper = new THREE.Vector3()
 const steeringQuaternionHelper = new THREE.Quaternion()
 
-const DEFAULT_SUSPENSION_STIFFNESS = 3200
-const DEFAULT_SUSPENSION_DAMPING = 420
+const DEFAULT_SUSPENSION_STIFFNESS = 2900
+const DEFAULT_SUSPENSION_DAMPING = 260
 const DEFAULT_MAX_SUSPENSION_FORCE = 24000
-const DEFAULT_LATERAL_GRIP = 2800
-const DEFAULT_BRAKE_GRIP = 4200
+const DEFAULT_LATERAL_GRIP = 1700
+const DEFAULT_BRAKE_GRIP = 3200
 const DEFAULT_AIR_DRAG = 0.12
 const DEFAULT_ROLLING_DRAG = 0.9
+const DEFAULT_STEER_YAW_GAIN = 0.95
+const DEFAULT_STEER_YAW_RESPONSE = 7.5
+const DEFAULT_STEER_YAW_MAX_RATE = 2.8
+const DEFAULT_UPRIGHT_TORQUE_GAIN = 2200
+const DEFAULT_UPRIGHT_TORQUE_DAMPING = 260
+const DEFAULT_UPRIGHT_TORQUE_MAX = 8500
 
 export function createHybridVehicleRuntimeVehicle(chassisBody: VehicleDriveVehicle['chassisBody'], wheelCount: number): HybridVehicleRuntime {
   const wheelInfos: HybridVehicleWheelInfo[] = Array.from({ length: Math.max(0, wheelCount) }, () => ({
@@ -116,6 +125,12 @@ export function stepHybridVehicleInstance(params: {
     chassisBody.quaternion.z,
     chassisBody.quaternion.w,
   ).normalize()
+  chassisUpWorldHelper.set(0, 1, 0).applyQuaternion(worldQuaternionHelper).normalize()
+  chassisForwardWorldHelper.copy(instance.axisForward).applyQuaternion(worldQuaternionHelper)
+  if (chassisForwardWorldHelper.lengthSq() <= 1e-8) {
+    chassisForwardWorldHelper.set(0, 0, 1)
+  }
+  chassisForwardWorldHelper.normalize()
   wheelVelocityHelper.set(chassisBody.velocity.x, chassisBody.velocity.y, chassisBody.velocity.z)
   angularVelocityHelper.set(chassisBody.angularVelocity.x, chassisBody.angularVelocity.y, chassisBody.angularVelocity.z)
 
@@ -204,6 +219,49 @@ export function stepHybridVehicleInstance(params: {
     chassisBody.applyForce?.(totalForceHelper as any, surface.point as any)
   })
 
+  let steeringSum = 0
+  let steeringWheelCount = 0
+  let minForwardProjection = Number.POSITIVE_INFINITY
+  let maxForwardProjection = Number.NEGATIVE_INFINITY
+  wheelSupportPoints.forEach((wheel, index) => {
+    const info = vehicle.wheelInfos[index]
+    if (!info) {
+      return
+    }
+    const forwardProjection = wheel.point.dot(instance.axisForward)
+    if (forwardProjection < minForwardProjection) {
+      minForwardProjection = forwardProjection
+    }
+    if (forwardProjection > maxForwardProjection) {
+      maxForwardProjection = forwardProjection
+    }
+    if (wheel.isFrontWheel) {
+      steeringSum += Number.isFinite(info.steering) ? info.steering : 0
+      steeringWheelCount += 1
+    }
+  })
+
+  const wheelBase = Number.isFinite(minForwardProjection) && Number.isFinite(maxForwardProjection)
+    ? Math.max(0.35, maxForwardProjection - minForwardProjection)
+    : 0.35
+  const averageSteering = steeringWheelCount > 0 ? steeringSum / steeringWheelCount : 0
+  const forwardSpeed = wheelVelocityHelper.dot(chassisForwardWorldHelper)
+  const desiredYawRate = THREE.MathUtils.clamp(
+    Math.tan(averageSteering) * forwardSpeed * DEFAULT_STEER_YAW_GAIN / wheelBase,
+    -DEFAULT_STEER_YAW_MAX_RATE,
+    DEFAULT_STEER_YAW_MAX_RATE,
+  )
+  const currentYawRate = angularVelocityHelper.dot(chassisUpWorldHelper)
+  const yawRateError = desiredYawRate - currentYawRate
+  const yawRateDelta = THREE.MathUtils.clamp(
+    yawRateError * DEFAULT_STEER_YAW_RESPONSE * deltaSeconds,
+    -DEFAULT_STEER_YAW_MAX_RATE * deltaSeconds,
+    DEFAULT_STEER_YAW_MAX_RATE * deltaSeconds,
+  )
+  chassisBody.angularVelocity.x += chassisUpWorldHelper.x * yawRateDelta
+  chassisBody.angularVelocity.y += chassisUpWorldHelper.y * yawRateDelta
+  chassisBody.angularVelocity.z += chassisUpWorldHelper.z * yawRateDelta
+
   if (groundedWheelCount > 0 || active) {
     chassisBody.wakeUp?.()
   }
@@ -217,6 +275,30 @@ export function stepHybridVehicleInstance(params: {
       wheelVelocityHelper.y * (groundedWheelCount > 0 ? Math.max(0.98, damping) : damping),
       wheelVelocityHelper.z * damping,
     )
+  }
+
+  if (active || groundedWheelCount > 0) {
+    const tiltAxisX = chassisUpWorldHelper.y * 0 - chassisUpWorldHelper.z * 1
+    const tiltAxisY = chassisUpWorldHelper.z * 0 - chassisUpWorldHelper.x * 0
+    const tiltAxisZ = chassisUpWorldHelper.x * 1 - chassisUpWorldHelper.y * 0
+    const tiltMagnitude = Math.sqrt(tiltAxisX * tiltAxisX + tiltAxisY * tiltAxisY + tiltAxisZ * tiltAxisZ)
+    if (tiltMagnitude > 1e-4) {
+      const invTiltMagnitude = 1 / tiltMagnitude
+      const axisX = tiltAxisX * invTiltMagnitude
+      const axisY = tiltAxisY * invTiltMagnitude
+      const axisZ = tiltAxisZ * invTiltMagnitude
+      const angularAlongAxis = angularVelocityHelper.x * axisX + angularVelocityHelper.y * axisY + angularVelocityHelper.z * axisZ
+      const torqueMagnitude = THREE.MathUtils.clamp(
+        (tiltMagnitude * DEFAULT_UPRIGHT_TORQUE_GAIN) - (angularAlongAxis * DEFAULT_UPRIGHT_TORQUE_DAMPING),
+        -DEFAULT_UPRIGHT_TORQUE_MAX,
+        DEFAULT_UPRIGHT_TORQUE_MAX,
+      )
+      chassisBody.applyTorque?.({
+        x: axisX * torqueMagnitude,
+        y: axisY * torqueMagnitude,
+        z: axisZ * torqueMagnitude,
+      })
+    }
   }
 
   if (!active && groundedWheelCount === 0) {
