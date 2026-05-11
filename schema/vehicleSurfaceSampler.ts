@@ -94,9 +94,6 @@ function formatDebugObject(value: unknown): string {
   }
 }
 
-function logSurfaceDebug(label: string, payload: unknown): void {
-  console.log(`[VehicleSurfaceSampler] ${label}\n${formatDebugObject(payload)}`)
-}
 
 function readFiniteNumber(value: unknown, fallback = 0): number {
   const numeric = typeof value === 'number' ? value : Number(value)
@@ -239,34 +236,15 @@ function sampleRoadSurface(entry: RoadSurfaceEntry, worldX: number, worldZ: numb
     }
   }
   if (bestDistanceSq > entry.halfWidth * entry.halfWidth) {
-    logSurfaceDebug('road-rejected-width', {
-      nodeId: entry.nodeId,
-      queryWorld: { x: worldX, z: worldZ },
-      queryLocal: { x: q.x, z: q.y },
-      roadOrigin: { x: entry.roadOriginX, y: entry.roadOriginY, z: entry.roadOriginZ },
-      halfWidth: entry.halfWidth,
-      minDistance: Math.sqrt(bestDistanceSq),
-    })
     return null
   }
 
   const heightSampler = entry.serializedHeightSampler ?? entry.localHeightSampler
   if (!heightSampler) {
-    logSurfaceDebug('road-rejected-no-height-sampler', {
-      nodeId: entry.nodeId,
-      queryWorld: { x: worldX, z: worldZ },
-      roadOrigin: { x: entry.roadOriginX, y: entry.roadOriginY, z: entry.roadOriginZ },
-    })
     return null
   }
   const localHeight = heightSampler(q.x, q.y)
   if (!Number.isFinite(localHeight)) {
-    logSurfaceDebug('road-rejected-nonfinite-height', {
-      nodeId: entry.nodeId,
-      queryWorld: { x: worldX, z: worldZ },
-      queryLocal: { x: q.x, z: q.y },
-      roadOrigin: { x: entry.roadOriginX, y: entry.roadOriginY, z: entry.roadOriginZ },
-    })
     return null
   }
 
@@ -296,17 +274,6 @@ function sampleRoadSurface(entry: RoadSurfaceEntry, worldX: number, worldZ: numb
     normal: worldNormalHelper.clone(),
     distance: Math.sqrt(bestDistanceSq) + preferredDelta,
   }
-  logSurfaceDebug('road-sample', {
-    nodeId: entry.nodeId,
-    queryWorld: { x: worldX, z: worldZ },
-    queryLocal: { x: q.x, z: q.y },
-    roadOrigin: { x: entry.roadOriginX, y: entry.roadOriginY, z: entry.roadOriginZ },
-    result,
-    preferredHeight,
-    localHeight,
-    segmentDistance: Math.sqrt(bestDistanceSq),
-    hasSerializedHeightSampler: Boolean(entry.serializedHeightSampler),
-  })
   return result
 }
 
@@ -416,32 +383,6 @@ export function createVehicleSurfaceSampler(nodes: SceneNode[]): VehicleSurfaceS
           : best.point.y >= groundSample.point.y
             ? best
             : groundSample
-      if (roadEntries.length > 0) {
-        logSurfaceDebug('surface-choice', {
-          queryWorld: { x, z },
-          preferredHeight,
-          result: result
-            ? {
-              kind: result.kind,
-              nodeId: result.nodeId,
-              point: result.point,
-              normal: result.normal,
-              distance: result.distance,
-            }
-            : null,
-          roadCandidates: roadEntries.length,
-          floorCandidates: floorEntries.length,
-          groundCandidate: groundSample
-            ? {
-              kind: groundSample.kind,
-              nodeId: groundSample.nodeId,
-              point: groundSample.point,
-              normal: groundSample.normal,
-              distance: groundSample.distance,
-            }
-            : null,
-        })
-      }
       return result
     },
   }

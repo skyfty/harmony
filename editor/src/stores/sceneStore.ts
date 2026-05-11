@@ -10223,14 +10223,15 @@ export const useSceneStore = defineStore('scene', {
       }
 
       this.captureNodeDynamicMeshHistory(nodeId)
+      applySceneNodeDynamicMeshUpdate(this, nodeId, dynamicMesh)
 
-      if (dynamicMesh && typeof dynamicMesh === 'object' && dynamicMesh.type === 'Road') {
-        syncRoadDynamicMeshStaticMetadataImported(target, dynamicMesh as RoadDynamicMesh)
+      const updatedTarget = findNodeById(this.nodes, nodeId)
+      if (updatedTarget?.dynamicMesh?.type === 'Road') {
+        syncRoadDynamicMeshStaticMetadataImported(updatedTarget, updatedTarget.dynamicMesh as RoadDynamicMesh)
         this.queueSceneNodePatch(nodeId, ['userData'])
       }
 
-      applySceneNodeDynamicMeshUpdate(this, nodeId, dynamicMesh)
-      finalizeDynamicMeshRuntimePatch(this, nodeId, resolveDynamicMeshType(target.dynamicMesh))
+      finalizeDynamicMeshRuntimePatch(this, nodeId, resolveDynamicMeshType(updatedTarget?.dynamicMesh ?? target.dynamicMesh))
       commitSceneSnapshot(this)
     },
     setNodeLocked(nodeId: string, locked: boolean) {

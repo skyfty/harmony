@@ -420,8 +420,8 @@ function applyWidthUpdate(rawValue: unknown) {
     return
   }
   const nodeId = selectedNodeId.value
-  const mesh = roadDynamicMesh.value
-  if (!nodeId || !mesh) {
+  const component = roadComponent.value
+  if (!nodeId || !component) {
     return
   }
 
@@ -431,12 +431,12 @@ function applyWidthUpdate(rawValue: unknown) {
   }
 
   const clamped = Math.max(0.2, nextWidth)
-  const currentWidth = Number(mesh.width)
+  const currentWidth = Number(component.props?.width)
   if (Number.isFinite(currentWidth) && Math.abs(currentWidth - clamped) < 1e-6) {
     return
   }
 
-  sceneStore.updateNodeDynamicMesh(nodeId, { width: clamped })
+  sceneStore.updateNodeComponentProps(nodeId, component.id, { width: clamped })
 }
 
 function applySamplingDensityUpdate(rawValue: unknown) {
