@@ -20,6 +20,7 @@ import {
 	createAutoTourRuntime,
 	createWaterRuntime,
 	createScenePreviewPerfController,
+	createVehicleSurfaceSampler,
 	forEachInstanceWorldMatrix,
 	getInstanceLayoutBindingId,
 	getInstanceLayoutCount,
@@ -54,6 +55,7 @@ import {
 	type SceneNode,
 	type SceneNodeComponentState,
 	type SceneMaterialTextureRef,
+	type VehicleSurfaceSampler,
 	type RuntimePrefabInitializationMode,
 	type RuntimePrefabPlacementOptions,
 	type Vector3Like,
@@ -61,6 +63,8 @@ import {
 	loadSkyCubeTexture,
 	extractSkycubeZipFaces,
 } from '@schema/index'
+import { createHybridVehicleRuntimeVehicle, stepHybridVehicleInstance } from '@schema/hybridVehicleRuntime'
+import type { VehicleDriveVehicle } from '@schema/VehicleDriveController'
  
 import {
 	applyMaterialOverrides,
@@ -1681,9 +1685,28 @@ const MAP_CONTROL_DEFAULTS = {
 }
 let animationFrameHandle = 0
 let currentDocument: SceneJsonExportDocument | null = null
+let vehicleSurfaceSamplerCache: { nodes: SceneNode[]; sampler: VehicleSurfaceSampler } | null = null
 const runtimePrefabPreviewRoots = new Set<THREE.Object3D>()
 type PreviewWindowWithNominateState = Window & {
 	__HARMONY_PREVIEW_NOMINATE_STATE__?: NominateExternalStateMap | null
+}
+
+function invalidateVehicleSurfaceSamplerCache(): void {
+	vehicleSurfaceSamplerCache = null
+}
+
+function samplePreviewVehicleSurfaceAtWorldPosition(x: number, z: number, preferredHeight?: number | null) {
+	const nodes = currentDocument?.nodes ?? null
+	if (!nodes) {
+		return null
+	}
+	if (!vehicleSurfaceSamplerCache || vehicleSurfaceSamplerCache.nodes !== nodes) {
+		vehicleSurfaceSamplerCache = {
+			nodes,
+			sampler: createVehicleSurfaceSampler(nodes),
+		}
+	}
+	return vehicleSurfaceSamplerCache.sampler.sampleSurfaceAtWorld(x, z, preferredHeight)
 }
 
 function readPreviewNominateStateMap(): NominateExternalStateMap | null {
@@ -2874,13 +2897,22 @@ type VehicleWheelSetupEntry = {
 	direction: CANNON.Vec3
 	axle: CANNON.Vec3
 }
+type VehicleWheelSupportPoint = {
+	point: THREE.Vector3
+	direction: THREE.Vector3
+	axle: THREE.Vector3
+	radius: number
+	suspensionRestLength: number
+	isFrontWheel: boolean
+}
 type VehicleInstance = {
 	nodeId: string
-	vehicle: CANNON.RaycastVehicle
+	vehicle: VehicleDriveVehicle
 	contactDebugHandler: ((event: unknown) => void) | null
 	wheelCount: number
 	steerableWheelIndices: number[]
 	wheelBindings: VehicleWheelBinding[]
+	wheelSupportPoints: VehicleWheelSupportPoint[]
 	forwardAxis: THREE.Vector3
 	axisRight: THREE.Vector3
 	axisUp: THREE.Vector3
@@ -2893,7 +2925,6 @@ type VehicleInstance = {
 	initialChassisQuaternion: THREE.Quaternion
 }
 const vehicleInstances = new Map<string, VehicleInstance>()
-const vehicleRaycastInWorld = new Set<string>()
 const groundHeightfieldCache = new Map<string, GroundHeightfieldCacheEntry>()
 const floorShapeCache = new Map<string, FloorShapeCacheEntry>()
 const wallTrimeshCache = new Map<string, WallTrimeshCacheEntry>()
@@ -3496,6 +3527,7 @@ const vehicleDriveController = new VehicleDriveController(
 		isPhysicsEnabled: () => physicsEnvironmentEnabled.value,
 		ensureVehicleBindingForNode,
 		normalizeNodeId,
+		resolveSurfaceSample: (x, z, preferredHeight) => samplePreviewVehicleSurfaceAtWorldPosition(x, z, preferredHeight),
 		setCameraViewState: (mode, targetId) => {
 			const nextMode: CameraViewMode = mode === 'watching' ? 'watching' : 'level'
 			setCameraViewState(nextMode, targetId ?? null)
@@ -8487,6 +8519,17 @@ function applyVehicleDriveForces(deltaSeconds: number): void {
 	vehicleDriveController.applyForces(deltaSeconds)
 }
 
+function stepVehicleSupportForces(deltaSeconds: number): void {
+	vehicleInstances.forEach((instance) => {
+		stepHybridVehicleInstance({
+			instance,
+			deltaSeconds,
+			resolveSurfaceSample: samplePreviewVehicleSurfaceAtWorldPosition,
+			active: (vehicleDriveState.active && vehicleDriveState.nodeId === instance.nodeId) || activeAutoTourNodeIds.has(instance.nodeId),
+		})
+	})
+}
+
 function updateVehicleSpeedFromVehicle(): void {
 	const vehicle = vehicleDriveState.vehicle
 	const velocity = vehicle?.chassisBody?.velocity ?? null
@@ -11399,13 +11442,7 @@ function resetPhysicsWorld(): void {
 	}
 	const world = physicsWorld
 	if (world) {
-		vehicleInstances.forEach(({ vehicle }) => {
-			try {
-				vehicle.removeFromWorld(world)
-			} catch (error) {
-				console.warn('[ScenePreview] Failed to remove vehicle', error)
-			}
-		})
+		void world;
 		rigidbodyInstances.forEach((instance) => removeRigidbodyInstanceBodies(world, instance))
 		airWallBodies.forEach((body) => {
 			try {
@@ -11416,7 +11453,6 @@ function resetPhysicsWorld(): void {
 		})
 	}
 	vehicleInstances.clear()
-	vehicleRaycastInWorld.clear()
 	rigidbodyInstances.clear()
 	clearPreviewInfiniteGroundChunkCollisionBodies()
 	airWallBodies.clear()
@@ -13058,31 +13094,10 @@ function createVehicleInstance(
 			? [0, 1].filter((index) => index < wheelCount)
 			: Array.from({ length: wheelCount }, (_unused, index) => index)
 	}
-	const vehicle = new CANNON.RaycastVehicle({
-		chassisBody: rigidbody.body,
-		indexRightAxis: rightAxis,
-		indexUpAxis: upAxis,
-		indexForwardAxis: forwardAxis,
-	})
+	const vehicle = createHybridVehicleRuntimeVehicle(rigidbody.body, wheelCount)
 	const wheelBindings: VehicleWheelBinding[] = []
+	const wheelSupportPoints: VehicleWheelSupportPoint[] = []
 	wheelEntries.forEach(({ config, point, direction, axle }, index) => {
-		vehicle.addWheel({
-			chassisConnectionPointLocal: point,
-			directionLocal: direction,
-			axleLocal: axle,
-			suspensionRestLength: config.suspensionRestLength,
-			suspensionStiffness: config.suspensionStiffness,
-			dampingRelaxation: config.dampingRelaxation,
-			dampingCompression: config.dampingCompression,
-			frictionSlip: config.frictionSlip,
-			maxSuspensionTravel: config.maxSuspensionTravel,
-			maxSuspensionForce: config.maxSuspensionForce,
-			useCustomSlidingRotationalSpeed: config.useCustomSlidingRotationalSpeed,
-			customSlidingRotationalSpeed: config.customSlidingRotationalSpeed,
-			isFrontWheel: config.isFrontWheel,
-			rollInfluence: config.rollInfluence,
-			radius: config.radius,
-		})
 		const axis = new THREE.Vector3(axle.x, axle.y, axle.z)
 		if (axis.lengthSq() < 1e-6) {
 			axis.copy(defaultWheelAxisVector)
@@ -13104,12 +13119,18 @@ function createVehicleInstance(
 			basePosition,
 			baseScale,
 		})
+		wheelSupportPoints.push({
+			point: new THREE.Vector3(point.x, point.y, point.z),
+			direction: new THREE.Vector3(direction.x, direction.y, direction.z).normalize(),
+			axle: new THREE.Vector3(axle.x, axle.y, axle.z).normalize(),
+			radius: Math.max(config.radius, VEHICLE_WHEEL_MIN_RADIUS),
+			suspensionRestLength: Math.max(0, config.suspensionRestLength),
+			isFrontWheel: config.isFrontWheel === true,
+		})
 	})
 	const chassisBody = vehicle.chassisBody as CANNON.Body
 	const contactDebugHandler = createVehicleContactDebugHandler(node.id)
 	chassisBody.addEventListener('collide', contactDebugHandler as EventListener)
-	vehicle.addToWorld(physicsWorld)
-	vehicleRaycastInWorld.add(node.id)
 	const initialChassisPosition = new THREE.Vector3(
 		rigidbody.body.position.x,
 		rigidbody.body.position.y,
@@ -13128,6 +13149,7 @@ function createVehicleInstance(
 		wheelCount,
 		steerableWheelIndices,
 		wheelBindings,
+		wheelSupportPoints,
 		forwardAxis: axisForwardVector.clone(),
 		axisRight: axisRightVector,
 		axisUp: axisUpVector,
@@ -13151,21 +13173,13 @@ function removeVehicleInstance(nodeId: string): void {
 	}
 	if (entry.contactDebugHandler) {
 		try {
-			entry.vehicle.chassisBody.removeEventListener('collide', entry.contactDebugHandler as EventListener)
+			entry.vehicle.chassisBody.removeEventListener?.('collide', entry.contactDebugHandler as EventListener)
 		} catch (error) {
 			console.warn('[ScenePreview] Failed to remove vehicle contact debug listener', error)
 		}
 	}
-	if (physicsWorld) {
-		try {
-			entry.vehicle.removeFromWorld(physicsWorld)
-		} catch (error) {
-			console.warn('[ScenePreview] Failed to remove vehicle instance', error)
-		}
-	}
 	vehicleContactDebugLastLogMs.delete(`node:${nodeId}`)
 	vehicleInstances.delete(nodeId)
-	vehicleRaycastInWorld.delete(nodeId)
 	scenePreviewPerf.notifyRemovedNode(nodeId)
 }
 
@@ -13465,54 +13479,15 @@ function stepPhysicsWorld(delta: number): void {
 		return
 	}
 
-	// RaycastVehicle registers postStep callbacks that can introduce micro-jitter even when idle.
-	// When not in manual drive nor auto-tour, remove the vehicle from the world to fully freeze it.
-	const world = physicsWorld
-	vehicleInstances.forEach((instance) => {
-		const nodeId = instance.nodeId
-		if (!nodeId) {
-			return
-		}
-		const manualActive = vehicleDriveState.active && vehicleDriveState.nodeId === nodeId
-		const tourActive = activeAutoTourNodeIds.has(nodeId)
-		const shouldBeInWorld = manualActive || tourActive
-		const isInWorld = vehicleRaycastInWorld.has(nodeId)
-		if (shouldBeInWorld && !isInWorld) {
-			try {
-				instance.vehicle.addToWorld(world)
-				vehicleRaycastInWorld.add(nodeId)
-			} catch (error) {
-				console.warn('[ScenePreview] Failed to add vehicle to world', error)
-			}
-			return
-		}
-		if (!shouldBeInWorld && isInWorld) {
-			try {
-				instance.vehicle.removeFromWorld(world)
-				vehicleRaycastInWorld.delete(nodeId)
-			} catch (error) {
-				console.warn('[ScenePreview] Failed to remove vehicle from world', error)
-			}
-			const chassisBody = instance.vehicle?.chassisBody
-			if (chassisBody) {
-				try {
-					chassisBody.allowSleep = true
-					chassisBody.sleepSpeedLimit = Math.max(0.05, chassisBody.sleepSpeedLimit ?? 0)
-					chassisBody.sleepTimeLimit = Math.max(0.05, chassisBody.sleepTimeLimit ?? 0)
-					chassisBody.velocity.set(0, 0, 0)
-					chassisBody.angularVelocity.set(0, 0, 0)
-					;(chassisBody as CANNON.Body & { sleep?: () => void }).sleep?.()
-				} catch {
-					// best-effort
-				}
-			}
-		}
-	})
 	const clampedDelta = Math.min(Math.max(0, delta), PHYSICS_MAX_ACCUMULATOR)
 	physicsAccumulator = Math.min(PHYSICS_MAX_ACCUMULATOR, physicsAccumulator + clampedDelta)
 	let subSteps = 0
 	try {
 		while (physicsAccumulator >= PHYSICS_FIXED_TIMESTEP && subSteps < PHYSICS_MAX_SUB_STEPS) {
+			if (vehicleDriveState.active) {
+				applyVehicleDriveForces(PHYSICS_FIXED_TIMESTEP)
+			}
+			stepVehicleSupportForces(PHYSICS_FIXED_TIMESTEP)
 			physicsWorld.step(PHYSICS_FIXED_TIMESTEP)
 			physicsAccumulator -= PHYSICS_FIXED_TIMESTEP
 			subSteps += 1
@@ -13619,7 +13594,7 @@ function updateVehicleWheelVisuals(delta: number): void {
 		if (!chassisBody) {
 			return
 		}
-		if (!scenePreviewPerf.shouldUpdateWheelVisuals({ nodeId, body: chassisBody, manualActive, tourActive, nowMs })) {
+		if (!scenePreviewPerf.shouldUpdateWheelVisuals({ nodeId, body: chassisBody as CANNON.Body, manualActive, tourActive, nowMs })) {
 			return
 		}
 
@@ -14261,6 +14236,7 @@ async function applyInitialDocumentGraph(
 ): Promise<void> {
 	disposeScene({ preservePreviewNodeMap: true })
 	currentDocument = document
+	invalidateVehicleSurfaceSamplerCache()
 	attachBuiltRootToPreview(previewRoot, builtRoot, pendingObjects)
 	await syncGroundCache(document)
 	// (instancing trace removed)
@@ -14308,6 +14284,7 @@ async function applyIncrementalDocumentGraph(
 	}
 
 	currentDocument = document
+	invalidateVehicleSurfaceSamplerCache()
 	refreshAnimations()
 	initializeLazyPlaceholders(document)
 	void applyEnvironmentSettingsToScene(environmentSettings)

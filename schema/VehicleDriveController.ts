@@ -19,6 +19,7 @@ import {
   clampAutoTourComponentProps,
 } from './components'
 import type { BehaviorEventResolution } from './behaviors/runtime'
+import type { VehicleSurfaceSample } from './vehicleSurfaceSampler'
 
 export type RefLike<T> = { value: T }
 
@@ -71,17 +72,27 @@ export type VehicleDriveChassisBody = {
   allowSleep?: boolean
   sleepSpeedLimit?: number
   sleepTimeLimit?: number
+  sleep?: () => void
+  wakeUp?: () => void
+  addEventListener?: (type: string, listener: EventListener) => void
+  removeEventListener?: (type: string, listener: EventListener) => void
 }
 
 export type VehicleDriveVec3 = {
   x: number
   y: number
   z: number
-  set: (x: number, y: number, z: number) => unknown
+  set: (x: number, y: number, z: number) => VehicleDriveVec3
   lengthSquared: () => number
 }
 
-export type VehicleDriveQuaternion = { x: number; y: number; z: number; w: number }
+export type VehicleDriveQuaternion = {
+  x: number
+  y: number
+  z: number
+  w: number
+  set: (x: number, y: number, z: number, w: number) => VehicleDriveQuaternion
+}
 
 export type VehicleDriveCameraRestoreState = {
   hasSnapshot: boolean
@@ -102,12 +113,22 @@ export type VehicleFollowPlacement = CameraFollowPlacement
 
 export type VehicleAxisBasis = { right: THREE.Vector3; up: THREE.Vector3; forward: THREE.Vector3 }
 
+export type VehicleWheelSupportPoint = {
+  point: THREE.Vector3
+  direction: THREE.Vector3
+  axle: THREE.Vector3
+  radius: number
+  suspensionRestLength: number
+  isFrontWheel: boolean
+}
+
 export type VehicleInstance = {
   nodeId: string
   vehicle: VehicleDriveVehicle
   wheelCount: number
   steerableWheelIndices: number[]
   wheelBindings?: unknown[]
+  wheelSupportPoints?: VehicleWheelSupportPoint[]
   forwardAxis?: THREE.Vector3
   axisRight: THREE.Vector3
   axisUp: THREE.Vector3
@@ -157,6 +178,7 @@ export type VehicleDriveControllerDeps = {
   // Allow host to provide interpolated chassis data (e.g., fixed-step physics interpolation on WeChat).
   resolveChassisWorldPosition?: (nodeId: string, chassisBody: VehicleDriveChassisBody, target: THREE.Vector3) => boolean
   resolveChassisWorldVelocity?: (nodeId: string, chassisBody: VehicleDriveChassisBody, target: THREE.Vector3) => boolean
+  resolveSurfaceSample?: (x: number, z: number, preferredHeight?: number | null) => VehicleSurfaceSample | null
   onVehicleObjectTransformUpdated?: (nodeId: string, object: THREE.Object3D) => void
 }
 
@@ -763,7 +785,7 @@ export class VehicleDriveController {
     // stopDrive: begin (debug logs removed)
 
     // --- HARD STOP ---
-    // RaycastVehicle keeps last engine/brake/steer values if we stop calling it.
+    // The runtime vehicle keeps the last engine/brake/steer command values until we overwrite them.
     // Clear all control state and forcibly stop the chassis body to guarantee that exiting drive leaves the vehicle static.
     this.resetInputs()
     this.resetSpeedGovernor()

@@ -1589,8 +1589,30 @@ export function createRigidbodyBody(
 	return { body, orientationAdjustment }
 }
 
+type BodyTransformSyncVec3 = {
+	x: number
+	y: number
+	z: number
+	set: (x: number, y: number, z: number) => unknown
+}
+
+type BodyTransformSyncQuaternion = {
+	x: number
+	y: number
+	z: number
+	w: number
+	set: (x: number, y: number, z: number, w: number) => unknown
+}
+
+export type BodyTransformSyncTarget = {
+	position: BodyTransformSyncVec3
+	quaternion: BodyTransformSyncQuaternion
+	velocity: BodyTransformSyncVec3
+	angularVelocity: BodyTransformSyncVec3
+}
+
 export function syncBodyFromObject(
-	body: CANNON.Body,
+	body: BodyTransformSyncTarget,
 	object: THREE.Object3D,
 	orientationAdjustment: RigidbodyOrientationAdjustment | null = null,
 ): void {

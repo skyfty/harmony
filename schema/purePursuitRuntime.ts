@@ -1,6 +1,6 @@
 import * as THREE from 'three'
-import * as CANNON from 'cannon-es'
 import type { PurePursuitComponentProps, VehicleComponentProps } from './components'
+import type { VehicleDriveVehicle } from './VehicleDriveController'
 import { buildPolylineMetricData, projectPointToPolyline, samplePolylineAtS } from './polylineProgress'
 
 const VEHICLE_CONTROL_DEBUG_KEY = 'harmony:debug:vehicle-control'
@@ -186,7 +186,7 @@ export function clearVehicleControlDebugLog(nodeId?: string): void {
 }
 
 export type PurePursuitVehicleInstanceLike = {
-  vehicle: CANNON.RaycastVehicle
+  vehicle: VehicleDriveVehicle
   wheelCount: number
   steerableWheelIndices: number[]
   axisForward: THREE.Vector3

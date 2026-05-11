@@ -328,6 +328,9 @@ export {
   isPointInsideRegionXZ,
 } from './regionUtils'
 
+export { createVehicleSurfaceSampler } from './vehicleSurfaceSampler'
+export type { VehicleSurfaceKind, VehicleSurfaceSample, VehicleSurfaceSampler } from './vehicleSurfaceSampler'
+
 export {
   DEFAULT_CAMERA_FOLLOW_TUNING,
   DEFAULT_OBJECT_SIZE_FALLBACK,

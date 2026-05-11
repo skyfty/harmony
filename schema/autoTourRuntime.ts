@@ -1,9 +1,9 @@
 import * as THREE from 'three'
-import * as CANNON from 'cannon-es'
 import type { SceneNode } from './index'
 import { resolveEnabledComponentState } from './componentRuntimeUtils'
 import { applyPurePursuitVehicleControlSafe, holdVehicleBrakeSafe, isAutoTourDebugEnabled, pushVehicleControlDebugEvent } from './purePursuitRuntime'
 import { syncBodyFromObject } from './physicsEngine'
+import type { VehicleDriveVehicle } from './VehicleDriveController'
 import type { PolylineMetricData } from './polylineProgress'
 import { buildPolylineMetricData, buildPolylineVertexArcLengths, projectPointToPolyline, samplePolylineAtS } from './polylineProgress'
 import {
@@ -22,7 +22,7 @@ import {
 } from './components'
 
 export type AutoTourVehicleInstanceLike = {
-  vehicle: CANNON.RaycastVehicle
+  vehicle: VehicleDriveVehicle
   wheelCount: number
   steerableWheelIndices: number[]
   axisForward: THREE.Vector3
