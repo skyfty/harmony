@@ -43,7 +43,7 @@ export type RoadHeightfieldBuildParams = {
 	roadNode: SceneNode
 	rigidbodyComponent: SceneNodeComponentState<RigidbodyComponentProps>
 	roadObject: THREE.Object3D
-	groundNode: SceneNode
+	groundNode?: SceneNode | null
 	world: CANNON.World
 	createBody: (
 		node: SceneNode,
@@ -78,13 +78,13 @@ export function collectRoadHeightfieldTileDescriptors(params: RoadHeightfieldBui
 		| undefined
 	const roadProps = clampRoadProps(roadState?.props as Partial<RoadComponentProps> | null | undefined)
 	const roadWidth = Math.max(0.01, Number.isFinite(roadProps.width) ? roadProps.width : 2)
-	const collisionWidth = Math.max(roadWidth, roadWidth + ROAD_COLLISION_SHOULDER_METERS * 2)
+	const collisionWidth = roadWidth
 	const samplingDensityFactor = roadProps.samplingDensityFactor ?? 1.0
 	const smoothingStrengthFactor = roadProps.smoothingStrengthFactor ?? 1.0
 	const minClearance = roadProps.minClearance ?? 0.01
 	const junctionSmoothing = roadProps.junctionSmoothing ?? 0
 	const snapToTerrain = roadProps.snapToTerrain
-	const heightSampler = resolveRoadLocalHeightSampler(roadNode, groundNode)
+	const heightSampler = groundNode ? resolveRoadLocalHeightSampler(roadNode, groundNode) : null
 
 	const graph = buildRoadGraph(definition)
 	if (!graph) {
@@ -164,29 +164,14 @@ export function collectRoadHeightfieldTileDescriptors(params: RoadHeightfieldBui
 		if (divisions < 2) {
 			continue
 		}
-		let smoothedSeries: { heights: number[]; minimums: number[]; apronHeights: number[] }
-		if (hasSegmentHeights) {
-			const heights = Array.from({ length: divisions + 1 }, (_value, sampleIndex) => {
-				const p = curve.getPoint(sampleIndex / divisions)
-				return roadSurfaceHeightSampler(p.x, p.z)
-			})
-			const apronDrop = Math.max(ROAD_COLLISION_APRON_MIN_DROP_METERS, minClearance + ROAD_SURFACE_Y_OFFSET)
-			smoothedSeries = {
-				heights,
-				minimums: heights.slice(),
-				apronHeights: heights.map((height) => height - apronDrop),
-			}
-		} else {
-			smoothedSeries = buildSmoothedHeightSeries({
-				curve,
-				divisions,
-				width: collisionWidth,
-				heightSampler: roadSurfaceHeightSampler,
-				minClearance,
-				smoothingStrengthFactor,
-			})
-		}
-		const { heights: smoothedHeights, apronHeights } = smoothedSeries
+		const smoothedHeights = buildRoadCenterlineHeightSeries({
+			curve,
+			divisions,
+			heightSampler: roadSurfaceHeightSampler,
+			minClearance,
+			smoothingStrengthFactor,
+			smooth: !hasSegmentHeights,
+		})
 		// Feed the signature with the final smoothed heights so edits invalidate correctly.
 		smoothedHeights.forEach((value) => {
 			const normalized = Math.round((Number.isFinite(value) ? value : 0) * 1000)
@@ -233,10 +218,7 @@ export function collectRoadHeightfieldTileDescriptors(params: RoadHeightfieldBui
 				rows,
 				elementSize,
 				roadWidth: collisionWidth,
-				coreRoadWidth: roadWidth,
-				curve,
 				heights: smoothedHeights,
-				apronHeights,
 			})
 			if (!shape) {
 				startIndex = endIndex
@@ -293,13 +275,12 @@ export function buildRoadHeightfieldBodies(params: RoadHeightfieldBuildParams): 
 		roadNode,
 		rigidbodyComponent,
 		roadObject,
-		groundNode,
+		groundNode = null,
 		createBody,
 	} = params
 
 	roadObject.updateMatrixWorld(true)
 
-	let totalBodies = 0
 	const bodies: CANNON.Body[] = []
 	for (const tile of snapshot.tiles) {
 		if (!tile.shapeDefinition) {
@@ -315,7 +296,6 @@ export function buildRoadHeightfieldBodies(params: RoadHeightfieldBuildParams): 
 		if (bodyResult?.body) {
 			;(bodyResult.body as CANNON.Body & { name?: string }).name = `road-tile:${roadNode.id}:curve:${tile.curveIndex}:tile:${tile.tileIndex}`
 			bodies.push(bodyResult.body)
-			totalBodies += 1
 		}
 	}
 
@@ -363,8 +343,6 @@ const ROAD_HEIGHT_SMOOTHING_MAX_PASSES = 12
 
 const ROAD_HEIGHT_SLOPE_MAX_GRADE = 0.8
 const ROAD_HEIGHT_SLOPE_MIN_DELTA_Y = 0.03
-const ROAD_COLLISION_SHOULDER_METERS = 0.75
-const ROAD_COLLISION_APRON_MIN_DROP_METERS = 0.08
 const ROAD_COLLISION_TILE_OVERLAP_METERS = 0.5
 
 // Road collision uses tiled heightfields exclusively.
@@ -525,60 +503,45 @@ function buildRoadCurvesFromGraph(smoothing: number, graph: RoadGraph): RoadCurv
 
 // Removed unused `buildRoadCurves` wrapper.
 
-type SmoothedHeightSeriesParams = {
+type RoadCenterlineHeightSeriesParams = {
 	curve: THREE.Curve<THREE.Vector3>
 	divisions: number
-	width: number
 	heightSampler: (x: number, z: number) => number
 	minClearance: number
 	smoothingStrengthFactor: number
+	smooth: boolean
 }
 
-function buildSmoothedHeightSeries({
+function buildRoadCenterlineHeightSeries({
 	curve,
 	divisions,
-	width,
 	heightSampler,
 	minClearance,
 	smoothingStrengthFactor,
-}: SmoothedHeightSeriesParams): { heights: number[]; minimums: number[]; apronHeights: number[] } {
-	const halfWidth = Math.max(0.001, width * 0.5)
+	smooth,
+}: RoadCenterlineHeightSeriesParams): number[] {
 	const values: number[] = []
 	const minimums: number[] = []
-	const apronHeights: number[] = []
 	const center = new THREE.Vector3()
-	const tangent = new THREE.Vector3()
-	const normal = new THREE.Vector3()
-	const left = new THREE.Vector3()
-	const right = new THREE.Vector3()
 	for (let i = 0; i <= divisions; i += 1) {
 		const u = i / divisions
 		curve.getPoint(u, center)
-		curve.getTangent(u, tangent)
-		normal.set(tangent.z, 0, -tangent.x)
-		if (normal.lengthSq() <= ROAD_EPSILON) {
-			normal.set(1, 0, 0)
-		} else {
-			normal.normalize()
-		}
-		left.copy(center).addScaledVector(normal, halfWidth)
-		right.copy(center).addScaledVector(normal, -halfWidth)
 		const hCenter = heightSampler(center.x, center.z)
-		const hLeft = heightSampler(left.x, left.z)
-		const hRight = heightSampler(right.x, right.z)
-		const baseHeight = Math.max(hCenter, hLeft, hRight)
+		const baseHeight = Number.isFinite(hCenter) ? hCenter : 0
 		const minHeight = baseHeight + Math.max(0, minClearance)
 		const surface = minHeight + ROAD_SURFACE_Y_OFFSET
 		values.push(surface)
 		minimums.push(surface)
-		apronHeights.push(baseHeight)
+	}
+	if (!smooth) {
+		return values
 	}
 	const passes = computeHeightSmoothingPasses(divisions, smoothingStrengthFactor)
 	let smoothed = smoothHeightSeries(values, passes, minimums)
 	const stepDistance = curve.getLength() / divisions
 	const maxDeltaY = Math.max(ROAD_HEIGHT_SLOPE_MIN_DELTA_Y, stepDistance * ROAD_HEIGHT_SLOPE_MAX_GRADE)
 	smoothed = clampHeightSeriesSlope(smoothed, minimums, maxDeltaY)
-	return { heights: smoothed, minimums, apronHeights }
+	return smoothed
 }
 
 type HeightfieldFromSeriesParams = {
@@ -587,10 +550,7 @@ type HeightfieldFromSeriesParams = {
 	rows: number
 	elementSize: number
 	roadWidth: number
-	coreRoadWidth: number
-	curve: THREE.Curve<THREE.Vector3>
 	heights: number[]
-	apronHeights: number[]
 }
 
 function buildHeightfieldShapeFromSeries({
@@ -599,60 +559,38 @@ function buildHeightfieldShapeFromSeries({
 	rows,
 	elementSize,
 	roadWidth,
-	coreRoadWidth,
-	curve,
 	heights,
-	apronHeights,
 }: HeightfieldFromSeriesParams): Extract<RigidbodyPhysicsShape, { kind: 'heightfield' }> | null {
 	const span = endIndex - startIndex
 	if (span <= 0) {
 		return null
 	}
 	const overlapRows = Math.max(1, Math.ceil(ROAD_COLLISION_TILE_OVERLAP_METERS / elementSize))
-	const totalWidth = Math.max(roadWidth, elementSize * 2)
-	const pointsX = Math.max(2, Math.ceil(totalWidth / elementSize) + 1)
+	const pointsX = Math.max(2, Math.ceil(Math.max(roadWidth, elementSize) / elementSize) + 1)
 	const pointsZ = rows + 1 + overlapRows * 2
 	if (pointsX < 2 || pointsZ < 2) {
 		return null
 	}
-	const totalDivisions = Math.max(1, heights.length - 1)
 	const width = Math.max(1e-4, (pointsX - 1) * elementSize)
 	const depth = Math.max(1e-4, (pointsZ - 1) * elementSize)
 	const halfWidth = width * 0.5
 	const halfDepth = depth * 0.5
-	const shoulderWidth = Math.max(0, (width - coreRoadWidth) * 0.5)
-	const centerPoint = new THREE.Vector3()
 	const matrix: number[][] = []
-	const clamp01 = (value: number): number => Math.max(0, Math.min(1, value))
 	for (let col = 0; col < pointsX; col += 1) {
 		const columnValues: number[] = []
-		const x = -halfWidth + col * elementSize
-		const lateralDistanceFromCenter = Math.abs(x)
-		const lateralWeight = shoulderWidth > ROAD_EPSILON
-			? clamp01((halfWidth - lateralDistanceFromCenter) / shoulderWidth)
-			: 1
 		for (let row = pointsZ - 1; row >= 0; row -= 1) {
 			const innerRows = Math.max(1, pointsZ - 1 - overlapRows * 2)
 			const uAlong = pointsZ > 1
 				? Math.max(0, Math.min(1, (row - overlapRows) / innerRows))
 				: 0
 			const indexFloat = startIndex + uAlong * span
-			const curveT = Math.max(0, Math.min(1, indexFloat / totalDivisions))
-			curve.getPoint(curveT, centerPoint)
 			const i0 = Math.max(0, Math.min(heights.length - 1, Math.floor(indexFloat)))
 			const i1 = Math.max(0, Math.min(heights.length - 1, i0 + 1))
 			const frac = indexFloat - i0
 			const h0 = heights[i0] ?? 0
 			const h1 = heights[i1] ?? h0
-			const apron0 = apronHeights[i0] ?? h0
-			const apron1 = apronHeights[i1] ?? apron0
-			const roadHeight = h0 + (h1 - h0) * frac
-			const apronHeight = apron0 + (apron1 - apron0) * frac
-			const edgeDistanceRows = Math.min(row, pointsZ - 1 - row)
-			const longitudinalWeight = overlapRows > 0 ? clamp01(edgeDistanceRows / overlapRows) : 1
-			const edgeWeight = Math.min(lateralWeight, longitudinalWeight)
-			const blendedHeight = apronHeight + (roadHeight - apronHeight) * edgeWeight
-			columnValues.push(Number.isFinite(blendedHeight) ? blendedHeight : 0)
+			const height = h0 + (h1 - h0) * frac
+			columnValues.push(Number.isFinite(height) ? height : 0)
 		}
 		matrix.push(columnValues)
 	}
@@ -670,7 +608,7 @@ function buildHeightfieldShapeFromSeries({
 function buildRoadHeightfieldSignature(params: {
 	definition: RoadDynamicMesh
 	roadNode: SceneNode
-	groundNode: SceneNode
+	groundNode?: SceneNode | null
 	groundSignature: string
 	roadWidth: number
 	collisionWidth: number
@@ -687,7 +625,7 @@ function buildRoadHeightfieldSignature(params: {
 }): string {
 	const roadPosition = (params.roadNode.position as any) ?? {}
 	const roadRotation = (params.roadNode.rotation as any) ?? {}
-	const groundPosition = (params.groundNode.position as any) ?? {}
+	const groundPosition = (params.groundNode?.position as any) ?? {}
 	const rx = typeof roadPosition.x === 'number' && Number.isFinite(roadPosition.x) ? roadPosition.x : 0
 	const ry = typeof roadPosition.y === 'number' && Number.isFinite(roadPosition.y) ? roadPosition.y : 0
 	const rz = typeof roadPosition.z === 'number' && Number.isFinite(roadPosition.z) ? roadPosition.z : 0

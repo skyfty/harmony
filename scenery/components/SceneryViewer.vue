@@ -7036,19 +7036,14 @@ function ensureRoadRigidbodyInstance(node: SceneNode, component: SceneNodeCompon
     return;
   }
   const groundNode = findGroundNode(currentDocument.nodes);
-  if (!groundNode || !isGroundDynamicMesh(groundNode.dynamicMesh)) {
-    removeRigidbodyInstance(node.id);
-    return;
-  }
   const world = ensurePhysicsWorld();
   const existing = rigidbodyInstances.get(node.id) ?? null;
   const result = ensureRoadHeightfieldRigidbodyInstance({
     roadNode: node,
     rigidbodyComponent: component,
     roadObject: object,
-    groundNode,
+    groundNode: groundNode && isGroundDynamicMesh(groundNode.dynamicMesh) ? groundNode : null,
     world,
-    collisionMode: 'normal',
     existingInstance: existing,
     createBody: (n, c, s, o) => createRigidbodyBody(n, c, s, o),
     loggerTag: '[SceneViewer]',

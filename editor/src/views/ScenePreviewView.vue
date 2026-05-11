@@ -64,7 +64,6 @@ import {
 	loadSkyCubeTexture,
 	extractSkycubeZipFaces,
 } from '@schema/index'
-import { createHybridVehicleRuntimeVehicle, stepHybridVehicleInstance } from '@schema/hybridVehicleRuntime'
 import type { VehicleDriveVehicle } from '@schema/VehicleDriveController'
  
 import {
@@ -2026,21 +2025,13 @@ function copyMatrixElements(target: Float32Array, source: ArrayLike<number>): vo
 const rigidbodyDebugPositionHelper = new THREE.Vector3()
 const rigidbodyDebugQuaternionHelper = new THREE.Quaternion()
 const rigidbodyDebugScaleHelper = new THREE.Vector3()
-const wheelForwardHelper = new THREE.Vector3()
-const wheelAxisHelper = new THREE.Vector3()
-const wheelChassisQuaternionHelper = new THREE.Quaternion()
-const wheelVisualQuaternionHelper = new THREE.Quaternion()
+const wheelWorldPositionHelper = new THREE.Vector3()
+const wheelLocalPositionHelper = new THREE.Vector3()
+const wheelWorldQuaternionHelper = new THREE.Quaternion()
+const wheelLocalQuaternionHelper = new THREE.Quaternion()
 const wheelParentWorldQuaternionHelper = new THREE.Quaternion()
 const wheelParentWorldQuaternionInverseHelper = new THREE.Quaternion()
-const wheelBaseQuaternionInverseHelper = new THREE.Quaternion()
-const wheelSteeringQuaternionHelper = new THREE.Quaternion()
-const wheelSpinQuaternionHelper = new THREE.Quaternion()
-const wheelChassisPositionHelper = new THREE.Vector3()
-const wheelChassisDisplacementHelper = new THREE.Vector3()
-const defaultWheelAxisVector = new THREE.Vector3(DEFAULT_AXLE.x, DEFAULT_AXLE.y, DEFAULT_AXLE.z).normalize()
 const VEHICLE_WHEEL_MIN_RADIUS = 0.01
-const VEHICLE_WHEEL_SPIN_EPSILON = 1e-4
-const VEHICLE_TRAVEL_EPSILON = 1e-5
 const STEERING_WHEEL_MAX_DEGREES = 135
 const STEERING_WHEEL_MAX_RADIANS = THREE.MathUtils.degToRad(STEERING_WHEEL_MAX_DEGREES)
 const nodeObjectMap = new Map<string, THREE.Object3D>()
@@ -2958,15 +2949,9 @@ const rigidbodyContactMaterialKeys = new Set<string>()
 type VehicleWheelBinding = {
 	nodeId: string | null
 	object: THREE.Object3D | null
-	radius: number
-	axleAxis: THREE.Vector3
-	isFrontWheel: boolean
 	wheelIndex: number
-	spinAngle: number
-	lastSteeringAngle: number
-	baseQuaternion: THREE.Quaternion
-	basePosition: THREE.Vector3
 	baseScale: THREE.Vector3
+	worldQuaternionOffset: THREE.Quaternion
 }
 type VehicleWheelSetupEntry = {
 	config: VehicleWheelProps
@@ -2974,22 +2959,14 @@ type VehicleWheelSetupEntry = {
 	direction: CANNON.Vec3
 	axle: CANNON.Vec3
 }
-type VehicleWheelSupportPoint = {
-	point: THREE.Vector3
-	direction: THREE.Vector3
-	axle: THREE.Vector3
-	radius: number
-	suspensionRestLength: number
-	isFrontWheel: boolean
-}
+type RuntimeRaycastVehicle = CANNON.RaycastVehicle & VehicleDriveVehicle
 type VehicleInstance = {
 	nodeId: string
-	vehicle: VehicleDriveVehicle
+	vehicle: RuntimeRaycastVehicle
 	contactDebugHandler: ((event: unknown) => void) | null
 	wheelCount: number
 	steerableWheelIndices: number[]
 	wheelBindings: VehicleWheelBinding[]
-	wheelSupportPoints: VehicleWheelSupportPoint[]
 	forwardAxis: THREE.Vector3
 	axisRight: THREE.Vector3
 	axisUp: THREE.Vector3
@@ -2997,8 +2974,6 @@ type VehicleInstance = {
 	axisRightIndex: 0 | 1 | 2
 	axisUpIndex: 0 | 1 | 2
 	axisForwardIndex: 0 | 1 | 2
-	lastChassisPosition: THREE.Vector3
-	hasChassisPositionSample: boolean
 	initialChassisQuaternion: THREE.Quaternion
 }
 const vehicleInstances = new Map<string, VehicleInstance>()
@@ -8581,17 +8556,6 @@ function applyVehicleDriveForces(deltaSeconds: number): void {
 	vehicleDriveController.applyForces(deltaSeconds)
 }
 
-function stepVehicleSupportForces(deltaSeconds: number): void {
-	vehicleInstances.forEach((instance) => {
-		stepHybridVehicleInstance({
-			instance,
-			deltaSeconds,
-			resolveSurfaceSample: samplePreviewVehicleSurfaceAtWorldPosition,
-			active: (vehicleDriveState.active && vehicleDriveState.nodeId === instance.nodeId) || activeAutoTourNodeIds.has(instance.nodeId),
-		})
-	})
-}
-
 function updateVehicleSpeedFromVehicle(): void {
 	const vehicle = vehicleDriveState.vehicle
 	const velocity = vehicle?.chassisBody?.velocity ?? null
@@ -11660,19 +11624,14 @@ function ensureRoadRigidbodyInstance(
 		return
 	}
 	const groundNode = findGroundNode(currentDocument.nodes)
-	if (!groundNode || !isGroundDynamicMesh(groundNode.dynamicMesh)) {
-		removeRigidbodyInstance(node.id)
-		return
-	}
 	const world = ensurePhysicsWorld()
 	const existing = rigidbodyInstances.get(node.id) ?? null
 	const result = ensureRoadHeightfieldRigidbodyInstance({
 		roadNode: node,
 		rigidbodyComponent,
 		roadObject: object,
-		groundNode,
+		groundNode: groundNode && isGroundDynamicMesh(groundNode.dynamicMesh) ? groundNode : null,
 		world,
-		collisionMode: 'normal',
 		existingInstance: existing,
 		createBody: (n, c, s, o) => createRigidbodyBody(n, c, s, o),
 		loggerTag: '[ScenePreview]',
@@ -12973,48 +12932,67 @@ function createVehicleInstance(
 			? [0, 1].filter((index) => index < wheelCount)
 			: Array.from({ length: wheelCount }, (_unused, index) => index)
 	}
-	const vehicle = createHybridVehicleRuntimeVehicle(rigidbody.body, wheelCount)
+	const vehicle = new CANNON.RaycastVehicle({
+		chassisBody: rigidbody.body,
+		indexRightAxis: rightAxis,
+		indexUpAxis: upAxis,
+		indexForwardAxis: forwardAxis,
+	}) as RuntimeRaycastVehicle
 	const wheelBindings: VehicleWheelBinding[] = []
-	const wheelSupportPoints: VehicleWheelSupportPoint[] = []
 	wheelEntries.forEach(({ config, point, direction, axle }, index) => {
-		const axis = new THREE.Vector3(axle.x, axle.y, axle.z)
-		if (axis.lengthSq() < 1e-6) {
-			axis.copy(defaultWheelAxisVector)
-		}
-		axis.normalize()
+		vehicle.addWheel({
+			chassisConnectionPointLocal: point.clone(),
+			directionLocal: direction.clone(),
+			axleLocal: axle.clone(),
+			suspensionRestLength: Number.isFinite(config.suspensionRestLength) ? Math.max(0, config.suspensionRestLength) : undefined,
+			suspensionStiffness: Number.isFinite(config.suspensionStiffness) ? Math.max(0, config.suspensionStiffness) : undefined,
+			dampingRelaxation: Number.isFinite(config.dampingRelaxation) ? Math.max(0, config.dampingRelaxation) : undefined,
+			dampingCompression: Number.isFinite(config.dampingCompression) ? Math.max(0, config.dampingCompression) : undefined,
+			frictionSlip: Number.isFinite(config.frictionSlip) ? Math.max(0, config.frictionSlip) : undefined,
+			maxSuspensionTravel: Number.isFinite(config.maxSuspensionTravel) ? Math.max(0, config.maxSuspensionTravel) : undefined,
+			maxSuspensionForce: Number.isFinite(config.maxSuspensionForce) ? Math.max(0, config.maxSuspensionForce) : undefined,
+			rollInfluence: Number.isFinite(config.rollInfluence) ? config.rollInfluence : 0.01,
+			radius: Number.isFinite(config.radius) ? Math.max(config.radius, VEHICLE_WHEEL_MIN_RADIUS) : VEHICLE_WHEEL_MIN_RADIUS,
+			customSlidingRotationalSpeed: config.customSlidingRotationalSpeed,
+			useCustomSlidingRotationalSpeed: config.useCustomSlidingRotationalSpeed,
+			isFrontWheel: config.isFrontWheel === true,
+		})
 		const wheelObject = config.nodeId ? nodeObjectMap.get(config.nodeId) ?? null : null
-		const basePosition = wheelObject ? wheelObject.position.clone() : new THREE.Vector3()
 		const baseScale = wheelObject ? wheelObject.scale.clone() : new THREE.Vector3(1, 1, 1)
 		wheelBindings.push({
 			nodeId: config.nodeId ?? null,
 			object: wheelObject,
-			radius: Math.max(config.radius, VEHICLE_WHEEL_MIN_RADIUS),
-			axleAxis: axis,
-			isFrontWheel: config.isFrontWheel === true,
 			wheelIndex: index,
-			spinAngle: 0,
-			lastSteeringAngle: 0,
-			baseQuaternion: wheelObject ? wheelObject.quaternion.clone() : new THREE.Quaternion(),
-			basePosition,
 			baseScale,
+			worldQuaternionOffset: new THREE.Quaternion(),
 		})
-		wheelSupportPoints.push({
-			point: new THREE.Vector3(point.x, point.y, point.z),
-			direction: new THREE.Vector3(direction.x, direction.y, direction.z).normalize(),
-			axle: new THREE.Vector3(axle.x, axle.y, axle.z).normalize(),
-			radius: Math.max(config.radius, VEHICLE_WHEEL_MIN_RADIUS),
-			suspensionRestLength: Math.max(0, config.suspensionRestLength),
-			isFrontWheel: config.isFrontWheel === true,
-		})
+	})
+	vehicle.addToWorld(physicsWorld)
+	const wheelTransformQuaternion = new THREE.Quaternion()
+	const wheelObjectWorldQuaternion = new THREE.Quaternion()
+	wheelBindings.forEach((binding) => {
+		const wheelObject = binding.object
+		if (!wheelObject) {
+			return
+		}
+		vehicle.updateWheelTransform(binding.wheelIndex)
+		const worldTransform = vehicle.wheelInfos[binding.wheelIndex]?.worldTransform
+		if (!worldTransform) {
+			return
+		}
+		wheelTransformQuaternion.set(
+			worldTransform.quaternion.x,
+			worldTransform.quaternion.y,
+			worldTransform.quaternion.z,
+			worldTransform.quaternion.w,
+		).normalize()
+		wheelObject.updateMatrixWorld(true)
+		wheelObject.getWorldQuaternion(wheelObjectWorldQuaternion)
+		binding.worldQuaternionOffset.copy(wheelTransformQuaternion).invert().multiply(wheelObjectWorldQuaternion)
 	})
 	const chassisBody = vehicle.chassisBody as CANNON.Body
 	const contactDebugHandler = createVehicleContactDebugHandler(node.id)
 	chassisBody.addEventListener('collide', contactDebugHandler as EventListener)
-	const initialChassisPosition = new THREE.Vector3(
-		rigidbody.body.position.x,
-		rigidbody.body.position.y,
-		rigidbody.body.position.z,
-	)
 	const initialChassisQuaternion = new THREE.Quaternion(
 		rigidbody.body.quaternion.x,
 		rigidbody.body.quaternion.y,
@@ -13028,7 +13006,6 @@ function createVehicleInstance(
 		wheelCount,
 		steerableWheelIndices,
 		wheelBindings,
-		wheelSupportPoints,
 		forwardAxis: axisForwardVector.clone(),
 		axisRight: axisRightVector,
 		axisUp: axisUpVector,
@@ -13036,8 +13013,6 @@ function createVehicleInstance(
 		axisRightIndex: rightAxis,
 		axisUpIndex: upAxis,
 		axisForwardIndex: forwardAxis,
-		lastChassisPosition: initialChassisPosition,
-		hasChassisPositionSample: false,
 		initialChassisQuaternion,
 	}
 }
@@ -13055,6 +13030,13 @@ function removeVehicleInstance(nodeId: string): void {
 			entry.vehicle.chassisBody.removeEventListener?.('collide', entry.contactDebugHandler as EventListener)
 		} catch (error) {
 			console.warn('[ScenePreview] Failed to remove vehicle contact debug listener', error)
+		}
+	}
+	if (physicsWorld) {
+		try {
+			entry.vehicle.removeFromWorld(physicsWorld)
+		} catch (error) {
+			console.warn('[ScenePreview] Failed to remove raycast vehicle from world', error)
 		}
 	}
 	vehicleContactDebugLastLogMs.delete(`node:${nodeId}`)
@@ -13347,7 +13329,6 @@ function stepPhysicsWorld(delta: number): void {
 			if (vehicleDriveState.active) {
 				applyVehicleDriveForces(PHYSICS_FIXED_TIMESTEP)
 			}
-			stepVehicleSupportForces(PHYSICS_FIXED_TIMESTEP)
 			physicsWorld.step(PHYSICS_FIXED_TIMESTEP)
 			physicsAccumulator -= PHYSICS_FIXED_TIMESTEP
 			subSteps += 1
@@ -13458,35 +13439,6 @@ function updateVehicleWheelVisuals(delta: number): void {
 			return
 		}
 
-		wheelChassisPositionHelper.set(chassisBody.position.x, chassisBody.position.y, chassisBody.position.z)
-		wheelChassisQuaternionHelper
-			.set(chassisBody.quaternion.x, chassisBody.quaternion.y, chassisBody.quaternion.z, chassisBody.quaternion.w)
-			.normalize()
-
-		// Signed travel along the vehicle forward axis (supports reverse).
-		let signedTravel = 0
-		if (instance.hasChassisPositionSample) {
-			wheelChassisDisplacementHelper.copy(wheelChassisPositionHelper).sub(instance.lastChassisPosition)
-			wheelForwardHelper.copy(instance.axisForward).applyQuaternion(wheelChassisQuaternionHelper)
-			if (wheelForwardHelper.lengthSq() < 1e-10) {
-				wheelForwardHelper.set(0, 0, 1)
-			} else {
-				wheelForwardHelper.normalize()
-			}
-			signedTravel = wheelChassisDisplacementHelper.dot(wheelForwardHelper)
-			if (!Number.isFinite(signedTravel) || Math.abs(signedTravel) < VEHICLE_TRAVEL_EPSILON) {
-				signedTravel = 0
-			}
-			// Avoid huge jumps on teleports/resets.
-			if (Math.abs(signedTravel) > 50) {
-				signedTravel = 0
-			}
-		}
-		instance.lastChassisPosition.copy(wheelChassisPositionHelper)
-		instance.hasChassisPositionSample = true
-
-		const wheelInfos = vehicle.wheelInfos as Array<{ steering?: number }>
-
 		wheelBindings.forEach((binding) => {
 			if (!binding.nodeId) {
 				return
@@ -13497,102 +13449,56 @@ function updateVehicleWheelVisuals(delta: number): void {
 				return
 			}
 
-			// Capture base transform if the wheel object becomes available after the vehicle instance was created
-			// or if the object reference changed (e.g. asset reloaded).
+			vehicle.updateWheelTransform(binding.wheelIndex)
+			const wheelInfo = vehicle.wheelInfos[binding.wheelIndex] as
+				| { worldTransform?: { position: CANNON.Vec3; quaternion: CANNON.Quaternion } }
+				| undefined
+			const worldTransform = wheelInfo?.worldTransform
+			if (!worldTransform) {
+				return
+			}
+
 			if (binding.object !== wheelObject) {
 				binding.object = wheelObject
-				binding.basePosition.copy(wheelObject.position)
 				binding.baseScale.copy(wheelObject.scale)
-				binding.baseQuaternion.copy(wheelObject.quaternion)
-				binding.spinAngle = 0
-				binding.lastSteeringAngle = 0
+				wheelWorldQuaternionHelper.set(
+					worldTransform.quaternion.x,
+					worldTransform.quaternion.y,
+					worldTransform.quaternion.z,
+					worldTransform.quaternion.w,
+				).normalize()
+				wheelObject.updateMatrixWorld(true)
+				wheelObject.getWorldQuaternion(wheelParentWorldQuaternionHelper)
+				binding.worldQuaternionOffset.copy(wheelWorldQuaternionHelper).invert().multiply(wheelParentWorldQuaternionHelper)
 			}
 
-			// Keep wheel translation/scale stable; only rotate for steer + spin.
-			wheelObject.position.copy(binding.basePosition)
-			wheelObject.scale.copy(binding.baseScale)
+			wheelWorldPositionHelper.set(
+				worldTransform.position.x,
+				worldTransform.position.y,
+				worldTransform.position.z,
+			)
+			wheelWorldQuaternionHelper.set(
+				worldTransform.quaternion.x,
+				worldTransform.quaternion.y,
+				worldTransform.quaternion.z,
+				worldTransform.quaternion.w,
+			).normalize()
+			wheelWorldQuaternionHelper.multiply(binding.worldQuaternionOffset)
 
-			// Wheel roll based on chassis travel.
-			if (signedTravel !== 0) {
-				const radius = Math.max(binding.radius, VEHICLE_WHEEL_MIN_RADIUS)
-				// Sign convention: for our wheel assets, forward travel should spin the wheel forward.
-				// If visuals appear reversed, flip the travel-derived roll sign here.
-				const rollDelta = -signedTravel / radius
-				if (Number.isFinite(rollDelta) && Math.abs(rollDelta) > VEHICLE_WHEEL_SPIN_EPSILON) {
-					binding.spinAngle += rollDelta
-					// Keep angles bounded to avoid float growth.
-					binding.spinAngle =
-						THREE.MathUtils.euclideanModulo(binding.spinAngle + Math.PI, Math.PI * 2) - Math.PI
-				}
-			}
-
-			// Steering (front/steerable wheels).
-			let steeringAngle = 0
-			if (binding.isFrontWheel) {
-				const info = wheelInfos?.[binding.wheelIndex]
-				const raw = info?.steering
-				if (typeof raw === 'number' && Number.isFinite(raw)) {
-					steeringAngle = raw
-				} else if (vehicleDriveState.active && vehicleDriveState.vehicle === vehicle) {
-					// Fallback: approximate from current input (matches controller's typical max steer).
-					steeringAngle = THREE.MathUtils.clamp(vehicleDriveInput.steering, -1, 1) * THREE.MathUtils.degToRad(26)
-				}
-			}
-			binding.lastSteeringAngle = steeringAngle
-
-			// Build parent-space steering quaternion (around vehicle up axis).
-			wheelParentWorldQuaternionHelper.identity()
-			wheelParentWorldQuaternionInverseHelper.identity()
 			if (wheelObject.parent) {
+				wheelObject.parent.updateMatrixWorld(true)
+				wheelObject.parent.worldToLocal(wheelLocalPositionHelper.copy(wheelWorldPositionHelper))
 				wheelObject.parent.getWorldQuaternion(wheelParentWorldQuaternionHelper)
 				wheelParentWorldQuaternionInverseHelper.copy(wheelParentWorldQuaternionHelper).invert()
-			}
-			wheelAxisHelper.copy(instance.axisUp).applyQuaternion(wheelChassisQuaternionHelper)
-			if (wheelObject.parent) {
-				wheelAxisHelper.applyQuaternion(wheelParentWorldQuaternionInverseHelper)
-			}
-			if (wheelAxisHelper.lengthSq() < 1e-10) {
-				wheelAxisHelper.set(0, 1, 0)
+				wheelLocalQuaternionHelper.copy(wheelParentWorldQuaternionInverseHelper).multiply(wheelWorldQuaternionHelper)
+				wheelObject.position.copy(wheelLocalPositionHelper)
 			} else {
-				wheelAxisHelper.normalize()
+				wheelObject.position.copy(wheelWorldPositionHelper)
+				wheelLocalQuaternionHelper.copy(wheelWorldQuaternionHelper)
 			}
-			wheelSteeringQuaternionHelper.setFromAxisAngle(wheelAxisHelper, steeringAngle)
 
-			// Build local-space spin quaternion (around wheel axle).
-			wheelAxisHelper.copy(binding.axleAxis).applyQuaternion(wheelChassisQuaternionHelper)
-			if (wheelObject.parent) {
-				wheelAxisHelper.applyQuaternion(wheelParentWorldQuaternionInverseHelper)
-			}
-			if (wheelAxisHelper.lengthSq() < 1e-10) {
-				wheelAxisHelper.copy(defaultWheelAxisVector)
-				wheelAxisHelper.applyQuaternion(wheelChassisQuaternionHelper)
-				if (wheelObject.parent) {
-					wheelAxisHelper.applyQuaternion(wheelParentWorldQuaternionInverseHelper)
-				}
-			}
-			if (wheelAxisHelper.lengthSq() < 1e-10) {
-				wheelAxisHelper.set(1, 0, 0)
-			} else {
-				wheelAxisHelper.normalize()
-			}
-			wheelBaseQuaternionInverseHelper.copy(binding.baseQuaternion).invert()
-			wheelAxisHelper.applyQuaternion(wheelBaseQuaternionInverseHelper)
-			if (wheelAxisHelper.lengthSq() < 1e-10) {
-				wheelAxisHelper.set(1, 0, 0)
-			} else {
-				wheelAxisHelper.normalize()
-			}
-			wheelSpinQuaternionHelper.setFromAxisAngle(wheelAxisHelper, binding.spinAngle)
-
-			// Compose: base -> (parent-space steer) -> (local-space spin).
-			wheelVisualQuaternionHelper.copy(binding.baseQuaternion)
-			if (steeringAngle !== 0) {
-				wheelVisualQuaternionHelper.premultiply(wheelSteeringQuaternionHelper)
-			}
-			if (binding.spinAngle !== 0) {
-				wheelVisualQuaternionHelper.multiply(wheelSpinQuaternionHelper)
-			}
-			wheelObject.quaternion.copy(wheelVisualQuaternionHelper)
+			wheelObject.scale.copy(binding.baseScale)
+			wheelObject.quaternion.copy(wheelLocalQuaternionHelper)
 
 			syncInstancedTransform(wheelObject)
 		})
