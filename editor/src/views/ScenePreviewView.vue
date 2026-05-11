@@ -47,7 +47,6 @@ import {
 	type GroundChunkManifest,
 	type GroundSurfaceChunkTextureMap,
 	type GroundRuntimeDynamicMesh,
-		resolveGroundWorkingGridSize,
 		resolveGroundWorldBounds,
 	type LanternSlideDefinition,
 	type SceneAssetRegistryEntry,
@@ -101,13 +100,10 @@ import { inferMimeTypeFromAssetId } from '@schema/assetTypeConversion'
 import type { AssetCacheEntry } from '@schema/assetCache'
 import { createEditorRuntimeAssetCache } from '@/utils/editorPersistentAssetStorage'
 import {
-	buildGroundCollisionDebugShapesFromNode,
 	isGroundDynamicMesh,
 } from '@schema/groundHeightfield'
 import {
 	applyGroundTextureToGroundObject,
-	resolveGroundChunkRadiusMeters,
-	resolveGroundRuntimeChunkCells,
 	setInfiniteGroundHiddenChunkKeys,
 	setGroundMaterial,
 	setGroundSculptedMaterial,
@@ -141,7 +137,6 @@ import {
 	syncObjectFromBody as syncSharedObjectFromBody,
 	removeRigidbodyInstanceBodies,
 	ensureRoadHeightfieldRigidbodyInstance,
-	resolveRoadHeightfieldDebugSegments,
 	isRoadDynamicMesh,
 	type GroundHeightfieldCacheEntry,
 	type FloorShapeCacheEntry,
@@ -150,7 +145,6 @@ import {
 	type RigidbodyInstance,
 	type RigidbodyMaterialEntry,
 	type RigidbodyOrientationAdjustment,
-	type RoadHeightfieldDebugCache,
 } from '@schema/physicsEngine'
 import { loadNodeObject } from '@schema/modelAssetLoader'
 import {
@@ -240,7 +234,6 @@ import {
 	clampCharacterControllerComponentProps,
 	clampLodComponentProps,
 	clampSteerComponentProps,
-	forEachWaterRuntimeHandle,
 	resolveLodRenderTarget,
 	resolveModelCollisionComponentPropsFromNode,
 	DEFAULT_DIRECTION,
@@ -497,10 +490,6 @@ type SceneViewControlSnapshot = {
 const sceneStateById = new Map<string, SceneViewControlSnapshot>()
 const previousSceneById = new Map<string, string>()
 
-const isGroundWireframeVisible = ref(false)
-const isOtherRigidbodyWireframeVisible = ref(false)
-const isRoadCollisionGridVisible = ref(false)
-const isGroundChunkStreamingDebugVisible = ref(false)
 const isInstancedCullingVisualizationVisible = ref(false)
 const isCannonDebuggerVisible = ref(false)
 const instancedLodFrustumCuller = createInstancedBvhFrustumCuller()
@@ -530,23 +519,6 @@ const rendererDebug = reactive({
 	textures: 0,
 })
 
-function shouldIgnoreDebugTriangleObject(object: THREE.Object3D): boolean {
-	let current: THREE.Object3D | null = object
-	while (current) {
-		const currentName = typeof current.name === 'string' ? current.name : ''
-		if (
-			currentName === 'GroundChunkDebugHelpers'
-			|| currentName === 'RigidbodyDebugHelpers'
-			|| currentName === 'AirWallDebug'
-			|| currentName.startsWith('GroundChunkDebug')
-			|| currentName.startsWith('AirWallDebug')
-		) {
-			return true
-		}
-		current = current.parent
-	}
-	return false
-}
 
 function resolveGeometryTriangleCount(geometry: THREE.BufferGeometry): number {
 	const positionAttribute = geometry.getAttribute('position')
@@ -570,7 +542,7 @@ function resolveGeometryTriangleCount(geometry: THREE.BufferGeometry): number {
 function estimateSceneTriangleCount(root: THREE.Object3D): number {
 	let total = 0
 	root.traverseVisible((object) => {
-		if (!(object instanceof THREE.Mesh) || shouldIgnoreDebugTriangleObject(object)) {
+		if (!(object instanceof THREE.Mesh)) {
 			return
 		}
 		const triangleCount = resolveGeometryTriangleCount(object.geometry)
@@ -646,9 +618,6 @@ const groundChunkDebug = reactive({
 
 const rendererSizeHelper = new THREE.Vector2()
 const instancedMatrixUploadMeshes = new Set<THREE.InstancedMesh>()
-const isRigidbodyDebugVisible = computed(
-	() => physicsEnvironmentEnabled.value && (isGroundWireframeVisible.value || isOtherRigidbodyWireframeVisible.value || isRoadCollisionGridVisible.value),
-)
 
 function appendWarningMessage(message: string): void {
 	const trimmed = typeof message === 'string' ? message.trim() : ''
@@ -2023,9 +1992,6 @@ function copyMatrixElements(target: Float32Array, source: ArrayLike<number>): vo
 		target[i] = source[i] ?? 0
 	}
 }
-const rigidbodyDebugPositionHelper = new THREE.Vector3()
-const rigidbodyDebugQuaternionHelper = new THREE.Quaternion()
-const rigidbodyDebugScaleHelper = new THREE.Vector3()
 const wheelForwardHelper = new THREE.Vector3()
 const wheelAxisHelper = new THREE.Vector3()
 const wheelChassisQuaternionHelper = new THREE.Quaternion()
@@ -2266,13 +2232,6 @@ async function syncGroundCache(document: SceneJsonExportDocument | null): Promis
 function clearPreviewInfiniteGroundChunkCollisionBodies(): void {
 	previewCompiledGroundCollisionRuntime.clear()
 	previewInfiniteGroundChunkColliderRuntime.clear()
-	lastGroundDebugExternalSyncSignature = ''
-	lastGroundDebugExternalSyncAt = 0
-	pendingExternalGroundDebugHelperIds.clear()
-	for (const nodeId of externalRigidbodyDebugSources.keys()) {
-		removeRigidbodyDebugHelper(nodeId)
-	}
-	externalRigidbodyDebugSources.clear()
 }
 
 function syncPreviewInfiniteGroundChunkCollisionBodies(
@@ -2424,36 +2383,6 @@ let physicsWorld: CANNON.World | null = null
 const physicsEnvironmentEnabled = ref(true)
 const rigidbodyInstances = new Map<string, RigidbodyInstance>()
 const airWallBodies = new Map<string, CANNON.Body>()
-type AirWallDebugEntry = {
-	key: string
-	halfExtents: [number, number, number]
-	position: THREE.Vector3
-	quaternion: THREE.Quaternion
-}
-const airWallDebugEntries = new Map<string, AirWallDebugEntry>()
-const airWallDebugMeshes = new Map<string, THREE.Mesh>()
-type RigidbodyDebugHelperCategory = 'ground' | 'rigidbody' | 'road'
-type RigidbodyDebugHelper = { group: THREE.Group; signature: string; category: RigidbodyDebugHelperCategory; scale: THREE.Vector3 }
-type ExternalRigidbodyDebugSource = {
-	instance: RigidbodyInstance
-	category: RigidbodyDebugHelperCategory
-	visibilityObject: THREE.Object3D | null
-	groundShapes?: Array<Extract<RigidbodyPhysicsShape, { kind: 'heightfield' }>>
-}
-const rigidbodyDebugHelpers = new Map<string, RigidbodyDebugHelper>()
-const externalRigidbodyDebugSources = new Map<string, ExternalRigidbodyDebugSource>()
-const roadHeightfieldDebugCache: RoadHeightfieldDebugCache = new Map()
-let rigidbodyDebugGroup: THREE.Group | null = null
-let airWallDebugGroup: THREE.Group | null = null
-const rigidbodyDebugMaterial = new THREE.LineBasicMaterial({
-	color: 0xffc107,
-	transparent: true,
-	opacity: 0.9,
-})
-rigidbodyDebugMaterial.depthTest = false
-rigidbodyDebugMaterial.depthWrite = false
-const roadCollisionDebugNormalColor = new THREE.Color(0xffc107)
-const vehicleContactDebugLastLogMs = new Map<string, number>()
 
 // cannon-es-debugger integration
 let cannonDebugger: any | null = null
@@ -2504,133 +2433,6 @@ function disposeCannonDebugger(): void {
 	cannonDebuggerGroup = null
 }
 
-function resolvePhysicsDebugBodyName(body: CANNON.Body | null | undefined): string {
-	if (!body) {
-		return ''
-	}
-	const namedBody = body as unknown as { name?: unknown }
-	return typeof namedBody.name === 'string' ? namedBody.name : ''
-}
-
-function createVehicleContactDebugHandler(nodeId: string): (event: unknown) => void {
-	const activeBodyName = `node:${nodeId}`
-	return (event: unknown): void => {
-		if (!isRoadCollisionGridVisible.value || !vehicleDriveState.active || vehicleDriveState.nodeId !== nodeId) {
-			return
-		}
-		const collideEvent = event as {
-			body?: CANNON.Body
-			contact?: {
-				ni?: { x?: number; y?: number; z?: number }
-				ri?: { x?: number; y?: number; z?: number }
-				rj?: { x?: number; y?: number; z?: number }
-				getImpactVelocityAlongNormal?: () => number
-			}
-		} | null
-		const contact = collideEvent?.contact ?? null
-		const otherBody = collideEvent?.body ?? null
-		if (!contact || !otherBody) {
-			return
-		}
-		const otherBodyName = resolvePhysicsDebugBodyName(otherBody)
-		const otherBodyType = typeof otherBody.type === 'number' ? otherBody.type : null
-		if (otherBodyType !== CANNON.Body.STATIC && otherBodyType !== CANNON.Body.KINEMATIC) {
-			return
-		}
-		const logKey = `${activeBodyName}:${otherBodyName || 'unknown'}`
-		const nowMs = Date.now()
-		const lastLog = vehicleContactDebugLastLogMs.get(logKey) ?? 0
-		if (nowMs - lastLog < 250) {
-			return
-		}
-		vehicleContactDebugLastLogMs.set(logKey, nowMs)
-		const rj = contact.rj ?? null
-		const contactWorld = rj
-			? otherBody.pointToWorldFrame(
-				new CANNON.Vec3(rj.x ?? 0, rj.y ?? 0, rj.z ?? 0),
-				new CANNON.Vec3(),
-			)
-			: null
-		const otherLocalFromWorld = contactWorld
-			? otherBody.pointToLocalFrame(contactWorld, new CANNON.Vec3())
-			: null
-		console.warn(
-			'[ScenePreview] vehicle-contact',
-			JSON.stringify({
-				vehicleNodeId: nodeId,
-				vehicleBodyName: activeBodyName,
-				otherBodyName: otherBodyName || null,
-				otherBodyType,
-				impactVelocityAlongNormal: typeof contact.getImpactVelocityAlongNormal === 'function'
-					? Math.round(contact.getImpactVelocityAlongNormal() * 1000) / 1000
-					: null,
-				ri: contact.ri
-					? [
-						Math.round((contact.ri.x ?? 0) * 1000) / 1000,
-						Math.round((contact.ri.y ?? 0) * 1000) / 1000,
-						Math.round((contact.ri.z ?? 0) * 1000) / 1000,
-					]
-					: null,
-				rj: contact.rj
-					? [
-						Math.round((contact.rj.x ?? 0) * 1000) / 1000,
-						Math.round((contact.rj.y ?? 0) * 1000) / 1000,
-						Math.round((contact.rj.z ?? 0) * 1000) / 1000,
-					]
-					: null,
-				normal: contact.ni
-					? [
-						Math.round((contact.ni.x ?? 0) * 1000) / 1000,
-						Math.round((contact.ni.y ?? 0) * 1000) / 1000,
-						Math.round((contact.ni.z ?? 0) * 1000) / 1000,
-					]
-					: null,
-				contactWorld: contactWorld
-					? [
-						Math.round(contactWorld.x * 1000) / 1000,
-						Math.round(contactWorld.y * 1000) / 1000,
-						Math.round(contactWorld.z * 1000) / 1000,
-					]
-					: null,
-				otherLocalFromWorld: otherLocalFromWorld
-					? [
-						Math.round(otherLocalFromWorld.x * 1000) / 1000,
-						Math.round(otherLocalFromWorld.y * 1000) / 1000,
-						Math.round(otherLocalFromWorld.z * 1000) / 1000,
-					]
-					: null,
-			}),
-		)
-	}
-}
-
-function applyRoadCollisionDebugColor(group: THREE.Group): void {
-	const targetColor = roadCollisionDebugNormalColor
-	group.traverse((child) => {
-		if (!(child instanceof THREE.LineSegments)) {
-			return
-		}
-		const material = Array.isArray(child.material) ? child.material[0] : child.material
-		if (!(material instanceof THREE.LineBasicMaterial)) {
-			return
-		}
-		material.color.copy(targetColor)
-		material.needsUpdate = true
-	})
-}
-const heightfieldDebugOrientationInverse = new THREE.Quaternion().setFromAxisAngle(
-	new THREE.Vector3(1, 0, 0),
-	Math.PI / 2,
-)
-const airWallDebugMaterial = new THREE.MeshBasicMaterial({
-	color: 0x80c7ff,
-	transparent: true,
-	opacity: 0.28,
-	side: THREE.DoubleSide,
-	depthWrite: false,
-	depthTest: false,
-})
-
 type GroundChunkUserData = {
 	startRow: number
 	startColumn: number
@@ -2640,275 +2442,8 @@ type GroundChunkUserData = {
 	chunkColumn: number
 }
 
-const groundChunkDebugMeshes = new Map<string, THREE.Group>()
-let groundChunkDebugGroup: THREE.Group | null = null
-let groundChunkDebugBoxGeometry: THREE.BoxGeometry | null = null
-let groundChunkDebugEdgesGeometry: THREE.EdgesGeometry | null = null
-let groundChunkDebugLastSyncAt = 0
-let groundChunkCellsEstimate: number | null = null
-const groundChunkDebugBoxHelper = new THREE.Box3()
-const groundChunkDebugCenterHelper = new THREE.Vector3()
-const groundChunkDebugSizeHelper = new THREE.Vector3()
-const groundChunkDebugRootInverseHelper = new THREE.Matrix4()
-const groundChunkDebugCameraWorldHelper = new THREE.Vector3()
-const groundChunkDebugCameraLocalHelper = new THREE.Vector3()
 
-function hashStringFNV1a(input: string): number {
-	let hash = 0x811c9dc5
-	for (let i = 0; i < input.length; i += 1) {
-		hash ^= input.charCodeAt(i)
-		hash = Math.imul(hash, 0x01000193)
-	}
-	return hash >>> 0
-}
 
-function colorFromGroundChunkKey(key: string): THREE.Color {
-	const hash = hashStringFNV1a(key)
-	const hue = (hash % 360) / 360
-	return new THREE.Color().setHSL(hue, 0.65, 0.55)
-}
-
-function ensureGroundChunkDebugGeometries(): void {
-	if (!groundChunkDebugBoxGeometry) {
-		groundChunkDebugBoxGeometry = new THREE.BoxGeometry(1, 1, 1)
-	}
-	if (!groundChunkDebugEdgesGeometry && groundChunkDebugBoxGeometry) {
-		groundChunkDebugEdgesGeometry = new THREE.EdgesGeometry(groundChunkDebugBoxGeometry)
-	}
-}
-
-function disposeGroundChunkDebugHelpers(): void {
-	groundChunkDebugMeshes.forEach((group) => {
-		group.traverse((object) => {
-			if ((object as THREE.Mesh).isMesh) {
-				const mesh = object as THREE.Mesh
-				const material = mesh.material
-				if (Array.isArray(material)) {
-					material.forEach((entry) => entry?.dispose?.())
-				} else {
-					material?.dispose?.()
-				}
-			}
-			if ((object as THREE.LineSegments).isLineSegments) {
-				const line = object as THREE.LineSegments
-				const material = line.material as THREE.Material | THREE.Material[]
-				if (Array.isArray(material)) {
-					material.forEach((entry) => entry?.dispose?.())
-				} else {
-					material?.dispose?.()
-				}
-			}
-		})
-		group.removeFromParent()
-	})
-	groundChunkDebugMeshes.clear()
-	groundChunkDebugGroup?.removeFromParent()
-	groundChunkDebugGroup = null
-	groundChunkCellsEstimate = null
-	groundChunkDebugLastSyncAt = 0
-	groundChunkDebug.loaded = 0
-	groundChunkDebug.target = 0
-	groundChunkDebug.total = 0
-	groundChunkDebug.pending = 0
-	groundChunkDebug.unloaded = 0
-	if (groundChunkDebugEdgesGeometry) {
-		groundChunkDebugEdgesGeometry.dispose()
-		groundChunkDebugEdgesGeometry = null
-	}
-	if (groundChunkDebugBoxGeometry) {
-		groundChunkDebugBoxGeometry.dispose()
-		groundChunkDebugBoxGeometry = null
-	}
-}
-
-function ensureGroundChunkDebugGroup(groundObject: THREE.Object3D): THREE.Group {
-	if (!groundChunkDebugGroup) {
-		groundChunkDebugGroup = new THREE.Group()
-		groundChunkDebugGroup.name = 'GroundChunkDebugHelpers'
-	}
-	if (groundChunkDebugGroup.parent !== groundObject) {
-		groundObject.add(groundChunkDebugGroup)
-	}
-	return groundChunkDebugGroup
-}
-
-function computeTotalGroundChunkCount(definition: GroundDynamicMesh, chunkCells: number): number {
-	const gridSize = resolveGroundWorkingGridSize(definition)
-	const rows = Math.max(1, Math.trunc(gridSize.rows))
-	const columns = Math.max(1, Math.trunc(gridSize.columns))
-	const safeCells = Math.max(1, Math.trunc(chunkCells))
-	const rowChunks = Math.ceil(rows / safeCells)
-	const columnChunks = Math.ceil(columns / safeCells)
-	return Math.max(1, rowChunks * columnChunks)
-}
-
-function createGroundChunkDebugEntry(key: string): THREE.Group {
-	ensureGroundChunkDebugGeometries()
-	const group = new THREE.Group()
-	group.name = `GroundChunkDebug:${key}`
-	group.userData.groundChunkDebugKey = key
-	const color = colorFromGroundChunkKey(key)
-
-	const fillMaterial = new THREE.MeshBasicMaterial({
-		color,
-		transparent: true,
-		opacity: 0.18,
-		depthTest: false,
-		depthWrite: false,
-	})
-	const edgeMaterial = new THREE.LineBasicMaterial({
-		color,
-		transparent: true,
-		opacity: 0.9,
-		depthTest: false,
-		depthWrite: false,
-	})
-
-	const fillMesh = new THREE.Mesh(groundChunkDebugBoxGeometry!, fillMaterial)
-	fillMesh.name = `GroundChunkDebugFill:${key}`
-	fillMesh.renderOrder = 9999
-	const edgeLines = new THREE.LineSegments(groundChunkDebugEdgesGeometry!, edgeMaterial)
-	edgeLines.name = `GroundChunkDebugEdges:${key}`
-	edgeLines.renderOrder = 10000
-	group.add(fillMesh)
-	group.add(edgeLines)
-	return group
-}
-
-function computeTargetGroundChunkCount(
-	definition: GroundDynamicMesh,
-	chunkCells: number,
-	groundObject: THREE.Object3D,
-	activeCamera: THREE.PerspectiveCamera,
-): number {
-	const gridSize = resolveGroundWorkingGridSize(definition)
-	const columns = Math.max(1, Math.trunc(gridSize.columns))
-	const rows = Math.max(1, Math.trunc(gridSize.rows))
-	const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
-	const bounds = resolveGroundWorldBounds(definition)
-	const safeCells = Math.max(1, Math.trunc(chunkCells))
-	const rowChunks = Math.max(1, Math.ceil(rows / safeCells))
-	const columnChunks = Math.max(1, Math.ceil(columns / safeCells))
-
-	const chunkSizeMeters = Math.max(1e-6, safeCells * cellSize)
-	const radiusMeters = resolveGroundChunkRadiusMeters(definition)
-	const radiusChunks = Math.max(0, Math.ceil(radiusMeters / chunkSizeMeters))
-
-	groundObject.updateWorldMatrix(true, false)
-	groundChunkDebugRootInverseHelper.copy(groundObject.matrixWorld).invert()
-	activeCamera.getWorldPosition(groundChunkDebugCameraWorldHelper)
-	groundChunkDebugCameraLocalHelper.copy(groundChunkDebugCameraWorldHelper).applyMatrix4(groundChunkDebugRootInverseHelper)
-
-	const chunkColumn = Math.max(
-		0,
-		Math.min(columnChunks - 1, Math.floor((groundChunkDebugCameraLocalHelper.x - bounds.minX) / chunkSizeMeters)),
-	)
-	const chunkRow = Math.max(
-		0,
-		Math.min(rowChunks - 1, Math.floor((groundChunkDebugCameraLocalHelper.z - bounds.minZ) / chunkSizeMeters)),
-	)
-
-	const minRow = Math.max(0, chunkRow - radiusChunks)
-	const maxRow = Math.min(rowChunks - 1, chunkRow + radiusChunks)
-	const minCol = Math.max(0, chunkColumn - radiusChunks)
-	const maxCol = Math.min(columnChunks - 1, chunkColumn + radiusChunks)
-
-	const target = (maxRow - minRow + 1) * (maxCol - minCol + 1)
-	return Math.max(1, Math.min(target, rowChunks * columnChunks))
-}
-
-function syncGroundChunkStreamingDebug(
-	groundObject: THREE.Object3D,
-	definition: GroundDynamicMesh,
-	activeCamera: THREE.PerspectiveCamera,
-	options: { renderHelpers: boolean },
-): void {
-	const now = performance.now()
-	if (now - groundChunkDebugLastSyncAt < 120) {
-		return
-	}
-	groundChunkDebugLastSyncAt = now
-
-	const debugRoot = options.renderHelpers ? ensureGroundChunkDebugGroup(groundObject) : null
-	const keep = options.renderHelpers ? new Set<string>() : null
-	let loadedChunks = 0
-	const chunkCells = groundChunkCellsEstimate ?? resolveGroundRuntimeChunkCells(definition)
-	const total = computeTotalGroundChunkCount(definition, chunkCells)
-	const target = computeTargetGroundChunkCount(definition, chunkCells, groundObject, activeCamera)
-	groundChunkDebugRootInverseHelper.copy(groundObject.matrixWorld).invert()
-	groundObject.updateWorldMatrix(true, false)
-
-	groundObject.traverseVisible((object) => {
-		if (!(object instanceof THREE.Mesh)) {
-			return
-		}
-		const chunk = (object.userData?.groundChunk ?? null) as GroundChunkUserData | null
-		if (!chunk) {
-			return
-		}
-		loadedChunks += 1
-		const key = `${chunk.chunkRow}:${chunk.chunkColumn}`
-		keep?.add(key)
-		if (!debugRoot) {
-			return
-		}
-		let entry = groundChunkDebugMeshes.get(key)
-		if (!entry) {
-			entry = createGroundChunkDebugEntry(key)
-			groundChunkDebugMeshes.set(key, entry)
-			debugRoot.add(entry)
-		}
-		groundChunkDebugBoxHelper.setFromObject(object)
-		groundChunkDebugBoxHelper.applyMatrix4(groundChunkDebugRootInverseHelper)
-		groundChunkDebugBoxHelper.getCenter(groundChunkDebugCenterHelper)
-		groundChunkDebugBoxHelper.getSize(groundChunkDebugSizeHelper)
-		entry.position.copy(groundChunkDebugCenterHelper)
-		entry.scale.set(
-			Math.max(1e-6, groundChunkDebugSizeHelper.x),
-			Math.max(1e-6, groundChunkDebugSizeHelper.y),
-			Math.max(1e-6, groundChunkDebugSizeHelper.z),
-		)
-	})
-
-	if (options.renderHelpers && keep) {
-		groundChunkDebugMeshes.forEach((entry, key) => {
-			if (keep.has(key)) {
-				return
-			}
-			entry.traverse((object) => {
-				if ((object as THREE.Mesh).isMesh) {
-					const mesh = object as THREE.Mesh
-					const material = mesh.material
-					if (Array.isArray(material)) {
-						material.forEach((entryMaterial) => entryMaterial?.dispose?.())
-					} else {
-						material?.dispose?.()
-					}
-				}
-				if ((object as THREE.LineSegments).isLineSegments) {
-					const line = object as THREE.LineSegments
-					const material = line.material as THREE.Material | THREE.Material[]
-					if (Array.isArray(material)) {
-						material.forEach((entryMaterial) => entryMaterial?.dispose?.())
-					} else {
-						material?.dispose?.()
-					}
-				}
-			})
-			entry.removeFromParent()
-			groundChunkDebugMeshes.delete(key)
-		})
-		}
-
-	const renderSnapshot = collectGroundChunkRenderSnapshot(groundObject)
-	groundChunkDebug.loaded = loadedChunks
-	groundChunkDebug.total = total
-	groundChunkDebug.target = target
-	groundChunkDebug.pending = Math.max(0, target - loadedChunks)
-	groundChunkDebug.unloaded = Math.max(0, total - loadedChunks)
-	groundChunkDebug.visible = renderSnapshot.visibleChunkCount
-	groundChunkDebug.triangleEstimate = renderSnapshot.estimatedTriangles
-}
 
 const PREVIEW_GROUND_STREAMING_RADIUS_MIN_METERS = 200
 const PREVIEW_GROUND_STREAMING_RADIUS_HEIGHT_MAX_METERS = 2600
@@ -3027,7 +2562,6 @@ type RuntimeRaycastVehicle = CANNON.RaycastVehicle & VehicleDriveVehicle
 type VehicleInstance = {
 	nodeId: string
 	vehicle: RuntimeRaycastVehicle
-	contactDebugHandler: ((event: unknown) => void) | null
 	wheelCount: number
 	steerableWheelIndices: number[]
 	wheelBindings: VehicleWheelBinding[]
@@ -3079,14 +2613,6 @@ const lastOrbitState = {
 let animationMixers: THREE.AnimationMixer[] = []
 let effectRuntimeTickers: Array<(delta: number) => void> = []
 let physicsAccumulator = 0
-const GROUND_DEBUG_MAX_EXTERNAL_HELPERS = 8
-const GROUND_DEBUG_EXTERNAL_SYNC_INTERVAL_MS = 180
-const GROUND_DEBUG_EXTERNAL_BUILD_BUDGET = 2
-const groundDebugCameraWorldHelper = new THREE.Vector3()
-let lastGroundDebugExternalSyncAt = 0
-let lastGroundDebugExternalSyncSignature = ''
-let lastGroundDebugHelperLogAt = 0
-const pendingExternalGroundDebugHelperIds = new Set<string>()
 
 type WarpGateRuntimeRegistryEntry = {
 	tick?: (delta: number) => void
@@ -5536,62 +5062,10 @@ watch(volumePercent, (value) => {
 	listener.setMasterVolume(Math.max(0, Math.min(1, value / 100)))
 })
 
-watch([isGroundWireframeVisible, isOtherRigidbodyWireframeVisible, isRoadCollisionGridVisible], ([groundEnabled, otherEnabled, roadEnabled]) => {
-	if (!physicsEnvironmentEnabled.value) {
-		disposeRigidbodyDebugHelpers()
-		roadHeightfieldDebugCache.clear()
-		setAirWallDebugVisibility(false)
-		return
-	}
-	const enabled = groundEnabled || otherEnabled || roadEnabled
-	if (enabled) {
-		console.warn(
-			'[ScenePreview] toggle-rigidbody-debug',
-			JSON.stringify({
-				groundEnabled,
-				otherEnabled,
-				roadEnabled,
-				externalSourceCount: externalRigidbodyDebugSources.size,
-			}),
-		)
-		ensureRigidbodyDebugGroup()
-		if (groundEnabled && !otherEnabled && externalRigidbodyDebugSources.size > 0) {
-			lastGroundDebugExternalSyncSignature = ''
-			lastGroundDebugExternalSyncAt = 0
-			syncNearbyExternalGroundDebugHelpersIfNeeded()
-		} else {
-			syncRigidbodyDebugHelpers()
-		}
-		console.warn(
-			'[ScenePreview] debug-toggle-post-sync',
-			JSON.stringify({
-				helperCount: rigidbodyDebugHelpers.size,
-				pendingGroundHelperCount: pendingExternalGroundDebugHelperIds.size,
-				roadEnabled,
-			}),
-		)
-		setAirWallDebugVisibility(groundEnabled)
-		return
-	}
-	disposeRigidbodyDebugHelpers()
-	roadHeightfieldDebugCache.clear()
-	setAirWallDebugVisibility(false)
-	pendingExternalGroundDebugHelperIds.clear()
-})
-
 watch(physicsEnvironmentEnabled, (enabled) => {
 	if (!enabled) {
-		disposeRigidbodyDebugHelpers()
 		disposeCannonDebugger()
-		roadHeightfieldDebugCache.clear()
-		setAirWallDebugVisibility(false)
 		return
-	}
-	if (isRigidbodyDebugVisible.value) {
-		ensureRigidbodyDebugGroup()
-		syncRigidbodyDebugHelpers()
-		updateRigidbodyDebugTransforms()
-		setAirWallDebugVisibility(isGroundWireframeVisible.value)
 	}
 })
 
@@ -6492,9 +5966,6 @@ async function spawnBehaviorRuntimePrefab(event: Extract<BehaviorRuntimeEvent, {
 		refreshBehaviorProximityCandidates()
 	}
 	warningMessages.value = [...warningMessages.value, ...graph.warnings]
-	if (isRigidbodyDebugVisible.value) {
-		syncRigidbodyDebugHelpers()
-	}
 }
 
 async function ensureLanternText(assetId: string): Promise<void> {
@@ -10342,9 +9813,6 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
 				activeCamera,
 			)
 			syncGroundSurfacePreviewForGroundNode(groundObject, cachedGroundNode, cachedGroundDynamicMesh)
-			syncGroundChunkStreamingDebug(groundObject, streamingGroundDefinition, activeCamera, {
-				renderHelpers: isGroundChunkStreamingDebugVisible.value,
-			})
 		}
 	}
 }
@@ -10354,11 +9822,6 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
  */
 function updatePerFrameDiagnostics(delta: number): void {
 	updateLazyPlaceholders(delta)
-	if (isRigidbodyDebugVisible.value) {
-		syncNearbyExternalGroundDebugHelpersIfNeeded()
-		processPendingExternalGroundDebugHelpers()
-		updateRigidbodyDebugTransforms()
-	}
 }
 
 function syncRendererDebugForFrame(currentRenderer: THREE.WebGLRenderer, currentScene: THREE.Scene): void {
@@ -10516,10 +9979,8 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	resetBehaviorRuntime()
 	resetBehaviorProximity()
 	resetAnimationControllers()
-	disposeRigidbodyDebugHelpers()
 	// dispose cannon-es-debugger visualizer as well
 	disposeCannonDebugger()
-	disposeGroundChunkDebugHelpers()
 	hidePurposeControls()
 	activeCameraLookTween = null
 	setCameraCaging(false)
@@ -11569,9 +11030,6 @@ function resetPhysicsWorld(): void {
 	rigidbodyInstances.clear()
 	clearPreviewInfiniteGroundChunkCollisionBodies()
 	airWallBodies.clear()
-	clearAirWallDebugMeshes()
-	clearRigidbodyDebugHelpers()
-	disposeAirWallDebugGroup()
 	physicsWorld = null
 	// dispose cannon debugger if present
 	disposeCannonDebugger()
@@ -11613,28 +11071,7 @@ if (isCannonDebuggerVisible.value) {
     void ensureCannonDebugger()
 }
 
-function removeAirWalls(): void {
-	const world = physicsWorld
-	if (!world) {
-		airWallBodies.clear()
-		airWallDebugEntries.clear()
-		clearAirWallDebugMeshes()
-		return
-	}
-	airWallBodies.forEach((body) => {
-		try {
-			world.removeBody(body)
-		} catch (error) {
-			console.warn('[ScenePreview] Failed to remove air wall body', error)
-		}
-	})
-	airWallBodies.clear()
-	airWallDebugEntries.clear()
-	clearAirWallDebugMeshes()
-}
-
 function syncAirWallsForDocument(sceneDocument: SceneJsonExportDocument | null): void {
-	removeAirWalls()
 	if (!sceneDocument) {
 		return
 	}
@@ -11675,16 +11112,6 @@ function syncAirWallsForDocument(sceneDocument: SceneJsonExportDocument | null):
 		body.aabbNeedsUpdate = true
 		world.addBody(body)
 		airWallBodies.set(definition.key, body)
-		const debugEntry: AirWallDebugEntry = {
-			key: definition.key,
-			halfExtents: definition.halfExtents,
-			position: definition.debugPosition,
-			quaternion: definition.debugQuaternion,
-		}
-		airWallDebugEntries.set(definition.key, debugEntry)
-		if (isGroundWireframeVisible.value) {
-			createAirWallDebugMesh(debugEntry)
-		}
 	})
 }
 
@@ -11751,7 +11178,6 @@ function removeRigidbodyInstance(nodeId: string): void {
 	groundHeightfieldCache.delete(nodeId)
 	floorShapeCache.delete(nodeId)
 	wallTrimeshCache.delete(nodeId)
-	roadHeightfieldDebugCache.delete(nodeId)
 	removeVehicleInstance(nodeId)
 }
 
@@ -11847,1144 +11273,6 @@ function tupleToVec3(tuple: VehicleVectorValue, fallback?: Vector3Like): CANNON.
 	return new CANNON.Vec3(x, y, z)
 }
 
-function isRigidbodyDebugCategoryVisible(category: RigidbodyDebugHelperCategory): boolean {
-	if (category === 'road') {
-		return isRoadCollisionGridVisible.value
-	}
-	return category === 'ground' ? isGroundWireframeVisible.value : isOtherRigidbodyWireframeVisible.value
-}
-
-function ensureRigidbodyDebugGroup(): THREE.Group | null {
-	if (!scene) {
-		return null
-	}
-	if (!rigidbodyDebugGroup) {
-		rigidbodyDebugGroup = new THREE.Group()
-		rigidbodyDebugGroup.name = 'RigidbodyDebugHelpers'
-	}
-	if (rigidbodyDebugGroup.parent !== scene) {
-		scene.add(rigidbodyDebugGroup)
-	}
-	return rigidbodyDebugGroup
-}
-
-function ensureAirWallDebugGroup(): THREE.Group | null {
-	if (!scene) {
-		return null
-	}
-	if (!airWallDebugGroup) {
-		airWallDebugGroup = new THREE.Group()
-		airWallDebugGroup.name = 'AirWallDebug'
-	}
-	if (airWallDebugGroup.parent !== scene) {
-		scene.add(airWallDebugGroup)
-	}
-	airWallDebugGroup.visible = isGroundWireframeVisible.value
-	return airWallDebugGroup
-}
-
-function clearAirWallDebugMeshes(): void {
-	airWallDebugMeshes.forEach((mesh) => {
-		mesh.parent?.remove(mesh)
-		mesh.geometry?.dispose?.()
-	})
-	airWallDebugMeshes.clear()
-	if (airWallDebugGroup) {
-		airWallDebugGroup.clear()
-	}
-}
-
-function disposeAirWallDebugGroup(): void {
-	clearAirWallDebugMeshes()
-	if (airWallDebugGroup) {
-		airWallDebugGroup.parent?.remove(airWallDebugGroup)
-		airWallDebugGroup.clear()
-		airWallDebugGroup = null
-	}
-}
-
-function setAirWallDebugVisibility(visible: boolean): void {
-	if (!visible) {
-		// Fully remove debug rendering resources to avoid overhead.
-		disposeAirWallDebugGroup()
-		return
-	}
-	const ensured = ensureAirWallDebugGroup()
-	if (ensured) {
-		ensured.visible = true
-	}
-	// Lazily create debug meshes only when the option is enabled.
-	airWallDebugEntries.forEach((entry) => createAirWallDebugMesh(entry))
-	airWallDebugMeshes.forEach((mesh) => {
-		mesh.visible = true
-	})
-}
-
-function createAirWallDebugMesh(entry: AirWallDebugEntry): void {
-	if (!isGroundWireframeVisible.value) {
-		return
-	}
-	const group = ensureAirWallDebugGroup()
-	if (!group) {
-		return
-	}
-	const existing = airWallDebugMeshes.get(entry.key)
-	if (existing) {
-		existing.parent?.remove(existing)
-		existing.geometry?.dispose?.()
-	}
-	const [hx, hy, hz] = entry.halfExtents
-	const height = hy * 2
-	const width = entry.key.endsWith('x') ? hz * 2 : hx * 2
-	if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
-		return
-	}
-	const geometry = new THREE.PlaneGeometry(width, height)
-	const mesh = new THREE.Mesh(geometry, airWallDebugMaterial)
-	mesh.name = `AirWallDebug:${entry.key}`
-	mesh.renderOrder = 9999
-	mesh.position.copy(entry.position)
-	mesh.quaternion.copy(entry.quaternion)
-	mesh.visible = isGroundWireframeVisible.value
-	group.add(mesh)
-	airWallDebugMeshes.set(entry.key, mesh)
-}
-
-function buildBoxDebugLines(shape: Extract<RigidbodyPhysicsShape, { kind: 'box' }>): THREE.LineSegments | null {
-	const [hx, hy, hz] = shape.halfExtents
-	if (![hx, hy, hz].every((value) => typeof value === 'number' && Number.isFinite(value) && value > 0)) {
-		return null
-	}
-	const boxGeometry = new THREE.BoxGeometry(hx * 2, hy * 2, hz * 2)
-	const edges = new THREE.EdgesGeometry(boxGeometry)
-	boxGeometry.dispose()
-	const lines = new THREE.LineSegments(edges, rigidbodyDebugMaterial)
-	lines.frustumCulled = false
-	return lines
-}
-
-function buildSphereDebugLines(shape: Extract<RigidbodyPhysicsShape, { kind: 'sphere' }>): THREE.LineSegments | null {
-	const radius = Number(shape.radius)
-	if (!Number.isFinite(radius) || radius <= 0) {
-		return null
-	}
-	const sphereGeometry = new THREE.SphereGeometry(radius, 16, 12)
-	const edges = new THREE.EdgesGeometry(sphereGeometry)
-	sphereGeometry.dispose()
-	const lines = new THREE.LineSegments(edges, rigidbodyDebugMaterial)
-	lines.frustumCulled = false
-	return lines
-}
-
-function buildCylinderDebugLines(shape: Extract<RigidbodyPhysicsShape, { kind: 'cylinder' }>): THREE.LineSegments | null {
-	const radiusTop = Number(shape.radiusTop)
-	const radiusBottom = Number(shape.radiusBottom)
-	const height = Number(shape.height)
-	if (![radiusTop, radiusBottom, height].every((value) => Number.isFinite(value) && value > 0)) {
-		return null
-	}
-	const segments = Number.isFinite(shape.segments) ? Math.max(4, Math.min(48, Math.trunc(shape.segments ?? 16))) : 16
-	const cylinderGeometry = new THREE.CylinderGeometry(radiusTop, radiusBottom, height, segments, 1, true)
-	const edges = new THREE.EdgesGeometry(cylinderGeometry)
-	cylinderGeometry.dispose()
-	const lines = new THREE.LineSegments(edges, rigidbodyDebugMaterial)
-	lines.frustumCulled = false
-	return lines
-}
-
-function sanitizeConvexFaces(
-	source: unknown,
-	vertexCount: number,
-): { faces: number[][]; invalidCount: number } {
-	const result: { faces: number[][]; invalidCount: number } = { faces: [], invalidCount: 0 }
-	if (!Array.isArray(source) || vertexCount < 4) {
-		return result
-	}
-	source.forEach((face) => {
-		if (!Array.isArray(face) || face.length < 3) {
-			result.invalidCount += 1
-			return
-		}
-		const normalized: number[] = []
-		let invalid = false
-		for (let i = 0; i < face.length; i += 1) {
-			const raw = face[i]
-			const numeric = typeof raw === 'number' ? raw : Number(raw)
-			if (!Number.isFinite(numeric)) {
-				invalid = true
-				break
-			}
-			const index = Math.trunc(numeric)
-			if (index < 0 || index >= vertexCount) {
-				invalid = true
-				break
-			}
-			if (!normalized.length || normalized[normalized.length - 1] !== index) {
-				normalized.push(index)
-			}
-		}
-		if (invalid) {
-			result.invalidCount += 1
-			return
-		}
-		const deduped = normalized.filter((value, index, array) => array.indexOf(value) === index)
-		if (deduped.length < 3) {
-			result.invalidCount += 1
-			return
-		}
-		result.faces.push(deduped)
-	})
-	return result
-}
-
-function buildConvexDebugLines(shape: Extract<RigidbodyPhysicsShape, { kind: 'convex' }>): THREE.LineSegments | null {
-	const vertices = Array.isArray(shape.vertices) ? shape.vertices : []
-	if (!vertices.length) {
-		return null
-	}
-	const positions = new Float32Array(vertices.length * 3)
-	for (let index = 0; index < vertices.length; index += 1) {
-		const tuple = vertices[index]
-		const [vx = 0, vy = 0, vz = 0] = tuple ?? []
-		if (![vx, vy, vz].every((value) => typeof value === 'number' && Number.isFinite(value))) {
-			return null
-		}
-		const offset = index * 3
-		positions[offset] = vx
-		positions[offset + 1] = vy
-		positions[offset + 2] = vz
-	}
-	const { faces } = sanitizeConvexFaces(shape.faces, vertices.length)
-	if (!faces.length) {
-		return null
-	}
-	const indices: number[] = []
-	faces.forEach((face) => {
-		if (face.length < 3) {
-			return
-		}
-		for (let i = 1; i < face.length - 1; i += 1) {
-			const a = Number(face[0])
-			const b = Number(face[i])
-			const c = Number(face[i + 1])
-			if ([a, b, c].every((value) => Number.isFinite(value))) {
-				indices.push(a, b, c)
-			}
-		}
-	})
-	if (!indices.length) {
-		return null
-	}
-	const baseGeometry = new THREE.BufferGeometry()
-	baseGeometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
-	baseGeometry.setIndex(indices)
-	const edges = new THREE.EdgesGeometry(baseGeometry)
-	baseGeometry.dispose()
-	const lines = new THREE.LineSegments(edges, rigidbodyDebugMaterial)
-	lines.frustumCulled = false
-	return lines
-}
-
-function buildHeightfieldDebugLines(
-	shape: Extract<RigidbodyPhysicsShape, { kind: 'heightfield' }>,
-): THREE.LineSegments | null {
-	if (!Array.isArray(shape.matrix) || shape.matrix.length < 2) {
-		return null
-	}
-	const columnCount = shape.matrix.length
-	let rowCount = 0
-	shape.matrix.forEach((column) => {
-		if (Array.isArray(column) && column.length > rowCount) {
-			rowCount = column.length
-		}
-	})
-	if (rowCount < 2) {
-		return null
-	}
-	const width = typeof shape.width === 'number' && Number.isFinite(shape.width) ? shape.width : 0
-	const depth = typeof shape.depth === 'number' && Number.isFinite(shape.depth) ? shape.depth : 0
-	if (!(width > 0 && depth > 0)) {
-		return null
-	}
-	const stepX = columnCount > 1 ? width / (columnCount - 1) : width
-	// The physics heightfield is rotated -90° around X, which flips the Z direction.
-	// Mirror that here so the debug lines line up with the rendered ground.
-	const stepZ = rowCount > 1 ? -depth / (rowCount - 1) : -depth
-	const originX = -width * 0.5
-	const originZ = depth * 0.5
-	const positions: number[] = []
-	const sampleHeight = (columnIndex: number, rowIndex: number): number => {
-		const column = shape.matrix[columnIndex]
-		if (!Array.isArray(column)) {
-			return 0
-		}
-		const value = column[rowIndex]
-		if (typeof value === 'number' && Number.isFinite(value)) {
-			return value
-		}
-		return 0
-	}
-	const pushSegment = (ax: number, ay: number, az: number, bx: number, by: number, bz: number) => {
-		positions.push(ax, ay, az, bx, by, bz)
-	}
-	for (let rowIndex = 0; rowIndex < rowCount; rowIndex += 1) {
-		for (let columnIndex = 0; columnIndex < columnCount - 1; columnIndex += 1) {
-			const ax = originX + columnIndex * stepX
-			const az = originZ + rowIndex * stepZ
-			const bx = ax + stepX
-			const bz = az
-			pushSegment(ax, sampleHeight(columnIndex, rowIndex), az, bx, sampleHeight(columnIndex + 1, rowIndex), bz)
-		}
-	}
-	for (let columnIndex = 0; columnIndex < columnCount; columnIndex += 1) {
-		for (let rowIndex = 0; rowIndex < rowCount - 1; rowIndex += 1) {
-			const ax = originX + columnIndex * stepX
-			const az = originZ + rowIndex * stepZ
-			const bz = az + stepZ
-			pushSegment(ax, sampleHeight(columnIndex, rowIndex), az, ax, sampleHeight(columnIndex, rowIndex + 1), bz)
-		}
-	}
-	if (!positions.length) {
-		return null
-	}
-	const geometry = new THREE.BufferGeometry()
-	geometry.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(positions), 3))
-	const lines = new THREE.LineSegments(geometry, rigidbodyDebugMaterial)
-	lines.frustumCulled = false
-	return lines
-}
-
-function buildTrimeshDebugLines(trimesh: CANNON.Trimesh): THREE.LineSegments | null {
-	type TrimeshRaw = { vertices?: ArrayLike<number>; indices?: ArrayLike<number> }
-	const raw = trimesh as unknown as TrimeshRaw
-	const vertices = raw.vertices
-	const indices = raw.indices
-	if (!vertices || !indices) {
-		return null
-	}
-	const vertexCount = Math.floor(vertices.length / 3)
-	if (vertexCount < 3 || indices.length < 3) {
-		return null
-	}
-	const baseGeometry = new THREE.BufferGeometry()
-	const positions = new Float32Array(vertexCount * 3)
-	for (let i = 0; i < positions.length; i += 1) {
-		positions[i] = Number(vertices[i] ?? 0)
-	}
-	// Use 32-bit indices; avoids overflow for large meshes.
-	const indexArray = new Uint32Array(indices.length)
-	for (let i = 0; i < indexArray.length; i += 1) {
-		indexArray[i] = (Number(indices[i] ?? 0) | 0) >>> 0
-	}
-	baseGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
-	baseGeometry.setIndex(new THREE.BufferAttribute(indexArray, 1))
-	const edges = new THREE.EdgesGeometry(baseGeometry)
-	baseGeometry.dispose()
-	const lines = new THREE.LineSegments(edges, rigidbodyDebugMaterial)
-	lines.frustumCulled = false
-	return lines
-}
-
-function buildRigidbodyDebugLineSegments(shape: RigidbodyPhysicsShape): THREE.LineSegments | null {
-	if (shape.kind === 'box') {
-		return buildBoxDebugLines(shape)
-	}
-	if (shape.kind === 'convex') {
-		return buildConvexDebugLines(shape)
-	}
-	if (shape.kind === 'sphere') {
-		return buildSphereDebugLines(shape)
-	}
-	if (shape.kind === 'cylinder') {
-		return buildCylinderDebugLines(shape)
-	}
-	if (shape.kind === 'heightfield') {
-		return buildHeightfieldDebugLines(shape)
-	}
-	return null
-}
-
-function computeRigidbodyShapeSignature(shape: RigidbodyPhysicsShape): string {
-	if (shape.kind === 'heightfield') {
-		const columnCount = Array.isArray(shape.matrix) ? shape.matrix.length : 0
-		let rowCount = 0
-		let hash = 0
-		shape.matrix?.forEach((column) => {
-			if (!Array.isArray(column)) {
-				return
-			}
-			if (column.length > rowCount) {
-				rowCount = column.length
-			}
-			column.forEach((value) => {
-				const normalized = Math.round((typeof value === 'number' && Number.isFinite(value) ? value : 0) * 1000)
-				hash = (hash * 31 + normalized) >>> 0
-			})
-		})
-		const width = typeof shape.width === 'number' && Number.isFinite(shape.width) ? shape.width : 0
-		const depth = typeof shape.depth === 'number' && Number.isFinite(shape.depth) ? shape.depth : 0
-		const elementSize = typeof shape.elementSize === 'number' && Number.isFinite(shape.elementSize)
-			? shape.elementSize
-			: 0
-		return `heightfield:${columnCount}x${rowCount}:${Math.round(width * 1000)}:${Math.round(depth * 1000)}:${Math.round(elementSize * 1000)}:${hash.toString(16)}`
-	}
-	return JSON.stringify(shape)
-}
-
-function removeRigidbodyDebugHelper(nodeId: string): void {
-	const helper = rigidbodyDebugHelpers.get(nodeId)
-	if (!helper) {
-		return
-	}
-	helper.group.parent?.remove(helper.group)
-	helper.group.traverse((child) => {
-		if (child instanceof THREE.LineSegments) {
-			child.geometry?.dispose?.()
-		}
-	})
-	helper.group.clear()
-	rigidbodyDebugHelpers.delete(nodeId)
-}
-
-function buildBodyShapeDebugLines(shape: CANNON.Shape): THREE.LineSegments | null {
-	if (shape instanceof CANNON.Box) {
-		const halfExtents = (shape as any).halfExtents as { x?: unknown; y?: unknown; z?: unknown } | undefined
-		const hx = Number(halfExtents?.x)
-		const hy = Number(halfExtents?.y)
-		const hz = Number(halfExtents?.z)
-		if (![hx, hy, hz].every((value) => Number.isFinite(value) && value > 0)) {
-			return null
-		}
-		return buildBoxDebugLines({ kind: 'box', halfExtents: [hx, hy, hz], offset: [0, 0, 0], applyScale: false })
-	}
-	if (shape instanceof CANNON.Sphere) {
-		const radius = Number((shape as any).radius)
-		if (!Number.isFinite(radius) || radius <= 0) {
-			return null
-		}
-		return buildSphereDebugLines({ kind: 'sphere', radius, offset: [0, 0, 0], applyScale: false })
-	}
-	if (shape instanceof CANNON.ConvexPolyhedron) {
-		const rawShape = shape as unknown as {
-			vertices?: Array<{ x?: unknown; y?: unknown; z?: unknown }>
-			faces?: number[][]
-		}
-		const vertices = Array.isArray(rawShape.vertices)
-			? rawShape.vertices
-				.map((vertex) => {
-					const x = Number(vertex?.x)
-					const y = Number(vertex?.y)
-					const z = Number(vertex?.z)
-					return Number.isFinite(x + y + z) ? ([x, y, z] as [number, number, number]) : null
-				})
-				.filter((vertex): vertex is [number, number, number] => Boolean(vertex))
-			: []
-		const faces = Array.isArray(rawShape.faces)
-			? rawShape.faces.map((face) => (Array.isArray(face) ? face.map((value) => Math.trunc(Number(value))) : []))
-			: []
-		if (!vertices.length || !faces.length) {
-			return null
-		}
-		return buildConvexDebugLines({
-			kind: 'convex',
-			vertices,
-			faces,
-			offset: [0, 0, 0],
-			applyScale: false,
-		})
-	}
-	if (shape instanceof CANNON.Trimesh) {
-		return buildTrimeshDebugLines(shape)
-	}
-	return null
-}
-
-function computeBodyShapeDebugSignature(shape: CANNON.Shape, offset: CANNON.Vec3 | undefined, orientation: CANNON.Quaternion | undefined): string {
-	let base = shape.type.toString()
-	if (shape instanceof CANNON.Box) {
-		const halfExtents = (shape as any).halfExtents as { x?: unknown; y?: unknown; z?: unknown } | undefined
-		base = `box:${Number(halfExtents?.x) ?? 0}:${Number(halfExtents?.y) ?? 0}:${Number(halfExtents?.z) ?? 0}`
-	} else if (shape instanceof CANNON.Sphere) {
-		base = `sphere:${Number((shape as any).radius) ?? 0}`
-	} else if (shape instanceof CANNON.ConvexPolyhedron) {
-		const rawShape = shape as unknown as { vertices?: ArrayLike<{ x?: unknown; y?: unknown; z?: unknown }>; faces?: ArrayLike<ArrayLike<number>> }
-		const vertexCount = rawShape.vertices?.length ?? 0
-		const faceCount = rawShape.faces?.length ?? 0
-		let hash = 2166136261
-		const fnv = (value: number) => {
-			hash ^= value
-			hash = Math.imul(hash, 16777619) >>> 0
-		}
-		for (let index = 0; index < vertexCount; index += 1) {
-			const vertex = rawShape.vertices?.[index]
-			fnv(Math.round((Number(vertex?.x) || 0) * 1000) | 0)
-			fnv(Math.round((Number(vertex?.y) || 0) * 1000) | 0)
-			fnv(Math.round((Number(vertex?.z) || 0) * 1000) | 0)
-		}
-		base = `convex:${vertexCount}:${faceCount}:${hash.toString(16)}`
-	}
-	const ox = Number(offset?.x) || 0
-	const oy = Number(offset?.y) || 0
-	const oz = Number(offset?.z) || 0
-	const qx = Number(orientation?.x) || 0
-	const qy = Number(orientation?.y) || 0
-	const qz = Number(orientation?.z) || 0
-	const qw = Number(orientation?.w)
-	return `${base}@${Math.round(ox * 1000)},${Math.round(oy * 1000)},${Math.round(oz * 1000)}:${Math.round(qx * 1000)},${Math.round(qy * 1000)},${Math.round(qz * 1000)},${Math.round((Number.isFinite(qw) ? qw : 1) * 1000)}`
-}
-
-function findWaterRuntimeRenderObject(nodeId: string): THREE.Object3D | null {
-	let found: THREE.Object3D | null = null
-	forEachWaterRuntimeHandle((handle) => {
-		if (found || handle.nodeId !== nodeId) {
-			return
-		}
-		found = handle.getRenderObject()
-	})
-	return found
-}
-
-function resolveRigidbodyDebugVisibilityObject(nodeId: string, fallback: THREE.Object3D | null | undefined): THREE.Object3D | null {
-	const waterObject = findWaterRuntimeRenderObject(nodeId)
-	if (waterObject) {
-		return waterObject
-	}
-	return fallback ?? null
-}
-
-function ensureRigidbodyDebugHelperForBodyShapes(
-	nodeId: string,
-	body: CANNON.Body,
-	category: RigidbodyDebugHelperCategory,
-): boolean {
-	const shapes = Array.isArray(body.shapes) ? body.shapes : []
-	if (!shapes.length) {
-		removeRigidbodyDebugHelper(nodeId)
-		return false
-	}
-	const signature = `body-shapes:${shapes.map((shape, index) => computeBodyShapeDebugSignature(shape, body.shapeOffsets[index], body.shapeOrientations[index])).join('|')}`
-	const existing = rigidbodyDebugHelpers.get(nodeId)
-	if (existing?.signature === signature) {
-		return true
-	}
-	removeRigidbodyDebugHelper(nodeId)
-	const container = ensureRigidbodyDebugGroup()
-	if (!container) {
-		return false
-	}
-	const helperGroup = new THREE.Group()
-	helperGroup.name = `RigidbodyDebugHelper:${nodeId}`
-	helperGroup.visible = false
-	helperGroup.scale.set(1, 1, 1)
-	let addedLineCount = 0
-	shapes.forEach((shape, index) => {
-		const lines = buildBodyShapeDebugLines(shape)
-		if (!lines) {
-			return
-		}
-		lines.name = `RigidbodyBodyShapeDebugLines:${nodeId}:${index}`
-		lines.renderOrder = 9999
-		const segmentGroup = new THREE.Group()
-		segmentGroup.name = `RigidbodyBodyShapeDebugSegment:${nodeId}:${index}`
-		const offset = body.shapeOffsets[index]
-		const orientation = body.shapeOrientations[index]
-		segmentGroup.position.set(Number(offset?.x) || 0, Number(offset?.y) || 0, Number(offset?.z) || 0)
-		segmentGroup.quaternion.set(
-			Number(orientation?.x) || 0,
-			Number(orientation?.y) || 0,
-			Number(orientation?.z) || 0,
-			Number.isFinite(Number(orientation?.w)) ? Number(orientation?.w) : 1,
-		)
-		segmentGroup.add(lines)
-		helperGroup.add(segmentGroup)
-		addedLineCount += 1
-	})
-	if (!addedLineCount) {
-		helperGroup.clear()
-		return false
-	}
-	container.add(helperGroup)
-	rigidbodyDebugHelpers.set(nodeId, {
-		group: helperGroup,
-		signature,
-		category,
-		scale: new THREE.Vector3(1, 1, 1),
-	})
-	return true
-}
-
-function clearRigidbodyDebugHelpers(): void {
-	rigidbodyDebugHelpers.forEach((_helper, nodeId) => removeRigidbodyDebugHelper(nodeId))
-}
-
-function disposeRigidbodyDebugHelpers(): void {
-	clearRigidbodyDebugHelpers()
-	if (rigidbodyDebugGroup) {
-		rigidbodyDebugGroup.parent?.remove(rigidbodyDebugGroup)
-		rigidbodyDebugGroup.clear()
-		rigidbodyDebugGroup = null
-	}
-}
-
-function ensureRigidbodyDebugHelperForShape(
-  nodeId: string,
-  shape: RigidbodyPhysicsShape,
-  category: RigidbodyDebugHelperCategory,
-  worldScale: THREE.Vector3,
-): void {
-	const signature = computeRigidbodyShapeSignature(shape)
-	const existing = rigidbodyDebugHelpers.get(nodeId)
-	if (existing?.signature === signature) {
-		return
-	}
-	removeRigidbodyDebugHelper(nodeId)
-	const container = ensureRigidbodyDebugGroup()
-	if (!container) {
-		return
-	}
-	const lineSegments = buildRigidbodyDebugLineSegments(shape)
-	if (!lineSegments) {
-		return
-	}
-	const helperGroup = new THREE.Group()
-	helperGroup.name = `RigidbodyDebugHelper:${nodeId}`
-	lineSegments.name = `RigidbodyDebugLines:${nodeId}`
-	lineSegments.renderOrder = 9999
-	const offsetTuple = shape.kind === 'heightfield' ? [0, 0, 0] : shape.offset ?? [0, 0, 0]
-	const [ox = 0, oy = 0, oz = 0] = offsetTuple
-	// Offset is expressed in the same local-space units as the shape definition.
-	// When applyScale is enabled we scale the whole helper group, which also scales this translation.
-	lineSegments.position.set(ox, oy, oz)
-	helperGroup.add(lineSegments)
-	helperGroup.visible = false
-	helperGroup.scale.copy(shape.applyScale ? worldScale : new THREE.Vector3(1, 1, 1))
-	container.add(helperGroup)
-	rigidbodyDebugHelpers.set(nodeId, { group: helperGroup, signature, category, scale: helperGroup.scale.clone() })
-}
-
-function ensureRoadHeightfieldDebugHelper(
-	nodeId: string,
-	entry: {
-		signature: string
-		bodies: CANNON.Body[]
-		orientationAdjustment: RigidbodyOrientationAdjustment | null
-	},
-): void {
-	const roadDebugLogPrefix = '[ScenePreview] heightfield-debug'
-	const category: RigidbodyDebugHelperCategory = 'road'
-	const debugEntry = resolveRoadHeightfieldDebugSegments({
-		nodeId,
-		signature: entry.signature,
-		bodies: entry.bodies,
-		cache: roadHeightfieldDebugCache,
-		debugEnabled: isRigidbodyDebugCategoryVisible(category),
-	})
-	if (!debugEntry) {
-		console.warn(
-			roadDebugLogPrefix,
-			JSON.stringify({
-				nodeId,
-				signature: entry.signature,
-				bodyCount: entry.bodies.length,
-				status: 'skipped',
-				reason: isRigidbodyDebugVisible.value ? 'no-debug-entry' : 'debug-category-hidden',
-			}),
-		)
-		removeRigidbodyDebugHelper(nodeId)
-		return
-	}
-	const signature = `heightfield-debug-segments:${debugEntry.signature}`
-	const existing = rigidbodyDebugHelpers.get(nodeId)
-	if (existing?.signature === signature) {
-		console.warn(
-			roadDebugLogPrefix,
-			JSON.stringify({
-				nodeId,
-				signature,
-				bodyCount: entry.bodies.length,
-				segmentCount: debugEntry.segments.length,
-				status: 'reused',
-				segmentKinds: debugEntry.segments.map((segment) => segment.shape.kind),
-			}),
-		)
-		return
-	}
-	removeRigidbodyDebugHelper(nodeId)
-	const container = ensureRigidbodyDebugGroup()
-	if (!container) {
-		console.warn(
-			roadDebugLogPrefix,
-			JSON.stringify({
-				nodeId,
-				signature,
-				bodyCount: entry.bodies.length,
-				segmentCount: debugEntry.segments.length,
-				status: 'skipped',
-				reason: 'debug-container-missing',
-			}),
-		)
-		return
-	}
-	const helperGroup = new THREE.Group()
-	helperGroup.name = `HeightfieldDebugHelper:${nodeId}`
-	helperGroup.visible = false
-	// Heightfield debug segments are generated in world units.
-	helperGroup.scale.set(1, 1, 1)
-	debugEntry.segments.forEach((segment, index) => {
-		const lines = buildRigidbodyDebugLineSegments(segment.shape)
-		if (!lines) {
-			return
-		}
-		const lineMaterial = Array.isArray(lines.material) ? lines.material[0] : lines.material
-		if (lineMaterial instanceof THREE.LineBasicMaterial) {
-			const clonedMaterial = lineMaterial.clone()
-			clonedMaterial.color.copy(roadCollisionDebugNormalColor)
-			clonedMaterial.needsUpdate = true
-			lines.material = clonedMaterial
-		}
-		lines.name = `HeightfieldDebugLines:${nodeId}:${index}`
-		lines.renderOrder = 9999
-		const segmentGroup = new THREE.Group()
-		segmentGroup.name = `HeightfieldDebugSegment:${nodeId}:${index}`
-		segmentGroup.userData = {
-			...(segmentGroup.userData ?? {}),
-			__harmonyRoadSegmentKind: segment.shape.kind,
-		}
-		segmentGroup.add(lines)
-		const body = entry.bodies[index]
-		if (body) {
-			segmentGroup.position.set(body.position.x, body.position.y, body.position.z)
-			rigidbodyDebugQuaternionHelper.set(
-				body.quaternion.x,
-				body.quaternion.y,
-				body.quaternion.z,
-				body.quaternion.w,
-			)
-			if (segment.shape.kind === 'heightfield') {
-				rigidbodyDebugQuaternionHelper.multiply(heightfieldDebugOrientationInverse)
-			}
-			segmentGroup.quaternion.copy(rigidbodyDebugQuaternionHelper)
-			segmentGroup.updateMatrixWorld(true)
-		}
-		helperGroup.add(segmentGroup)
-	})
-	applyRoadCollisionDebugColor(helperGroup)
-	container.add(helperGroup)
-	console.warn(
-		roadDebugLogPrefix,
-		JSON.stringify({
-			nodeId,
-			signature,
-			bodyCount: entry.bodies.length,
-			segmentCount: debugEntry.segments.length,
-			status: 'created',
-			segmentKinds: debugEntry.segments.map((segment) => segment.shape.kind),
-		}),
-	)
-	rigidbodyDebugHelpers.set(nodeId, {
-		group: helperGroup,
-		signature,
-		category,
-		scale: new THREE.Vector3(1, 1, 1),
-	})
-}
-
-function ensureGroundHeightfieldDebugHelper(
-	nodeId: string,
-	shapes: Array<Extract<RigidbodyPhysicsShape, { kind: 'heightfield' }>>,
-	category: RigidbodyDebugHelperCategory,
-): void {
-	if (!shapes.length) {
-		removeRigidbodyDebugHelper(nodeId)
-		return
-	}
-	const signature = `ground-heightfield-segments:${shapes.map((shape) => computeRigidbodyShapeSignature(shape)).join('|')}`
-	const existing = rigidbodyDebugHelpers.get(nodeId)
-	if (existing?.signature === signature) {
-		return
-	}
-	removeRigidbodyDebugHelper(nodeId)
-	const container = ensureRigidbodyDebugGroup()
-	if (!container) {
-		return
-	}
-	const helperGroup = new THREE.Group()
-	helperGroup.name = `RigidbodyDebugHelper:${nodeId}`
-	helperGroup.visible = false
-	helperGroup.scale.set(1, 1, 1)
-	shapes.forEach((shape, index) => {
-		const lines = buildRigidbodyDebugLineSegments(shape)
-		if (!lines) {
-			return
-		}
-		lines.name = `GroundHeightfieldDebugLines:${nodeId}:${index}`
-		lines.renderOrder = 9999
-		const [ox = 0, oy = 0, oz = 0] = shape.offset ?? [0, 0, 0]
-		const centerX = ox + shape.width * 0.5
-		const centerZ = -oy - shape.depth * 0.5
-		lines.position.set(centerX, oz, centerZ)
-		helperGroup.add(lines)
-	})
-	container.add(helperGroup)
-	rigidbodyDebugHelpers.set(nodeId, {
-		group: helperGroup,
-		signature,
-		category,
-		scale: new THREE.Vector3(1, 1, 1),
-	})
-}
-
-function refreshRigidbodyDebugHelper(nodeId: string): void {
-	if (!isRigidbodyDebugVisible.value) {
-		return
-	}
-	const externalSource = externalRigidbodyDebugSources.get(nodeId) ?? null
-	if (externalSource) {
-		if (!isRigidbodyDebugCategoryVisible(externalSource.category)) {
-			removeRigidbodyDebugHelper(nodeId)
-			return
-		}
-		if (externalSource.groundShapes?.length) {
-			ensureGroundHeightfieldDebugHelper(nodeId, externalSource.groundShapes, externalSource.category)
-			updateRigidbodyDebugHelperTransform(nodeId)
-			return
-		}
-		if (ensureRigidbodyDebugHelperForBodyShapes(nodeId, externalSource.instance.body, externalSource.category)) {
-			updateRigidbodyDebugHelperTransform(nodeId)
-			return
-		}
-		removeRigidbodyDebugHelper(nodeId)
-		return
-	}
-	const node = resolveNodeById(nodeId)
-	const component = resolveRigidbodyComponent(node)
-	const instance = rigidbodyInstances.get(nodeId) ?? null
-	const roadEntry =
-		instance && instance.signature && Array.isArray(instance.bodies) && instance.bodies.length > 0
-			? {
-				signature: instance.signature,
-				bodies: instance.bodies,
-				orientationAdjustment: instance.orientationAdjustment,
-			}
-			: null
-	const isGroundNode = Boolean(node && isGroundDynamicMesh(node.dynamicMesh))
-	const hasExternalGroundDebugSource = isGroundNode && externalRigidbodyDebugSources.size > 0
-	if (roadEntry) {
-		ensureRoadHeightfieldDebugHelper(nodeId, roadEntry)
-		updateRigidbodyDebugHelperTransform(nodeId)
-		return
-	}
-	if (isGroundNode && node) {
-		if (hasExternalGroundDebugSource) {
-			removeRigidbodyDebugHelper(nodeId)
-			return
-		}
-		const category: RigidbodyDebugHelperCategory = 'ground'
-		if (!isRigidbodyDebugCategoryVisible(category)) {
-			removeRigidbodyDebugHelper(nodeId)
-			return
-		}
-		const groundDebugStartedAt = performance.now()
-		const shapes = buildGroundCollisionDebugShapesFromNode(node)
-		const groundDebugElapsedMs = performance.now() - groundDebugStartedAt
-		if (groundDebugElapsedMs >= 12) {
-			const now = Date.now()
-			if (now - lastGroundDebugHelperLogAt >= 1000) {
-				console.warn(
-					'[ScenePreview] ground-node-debug-helper',
-					JSON.stringify({
-						nodeId,
-						elapsedMs: Math.round(groundDebugElapsedMs * 100) / 100,
-						shapeCount: shapes.length,
-					}),
-				)
-				lastGroundDebugHelperLogAt = now
-			}
-		}
-		if (!shapes.length) {
-			removeRigidbodyDebugHelper(nodeId)
-			return
-		}
-		ensureGroundHeightfieldDebugHelper(nodeId, shapes, category)
-		updateRigidbodyDebugHelperTransform(nodeId)
-		return
-	}
-	if (instance && Array.isArray(instance.body.shapes) && instance.body.shapes.length > 0) {
-		const category: RigidbodyDebugHelperCategory = 'rigidbody'
-		if (!isRigidbodyDebugCategoryVisible(category)) {
-			removeRigidbodyDebugHelper(nodeId)
-			return
-		}
-		if (ensureRigidbodyDebugHelperForBodyShapes(nodeId, instance.body, category)) {
-			updateRigidbodyDebugHelperTransform(nodeId)
-			return
-		}
-	}
-	let shapeDefinition = extractRigidbodyShape(component)
-	if (!shapeDefinition) {
-		removeRigidbodyDebugHelper(nodeId)
-		return
-	}
-	const category: RigidbodyDebugHelperCategory = isGroundNode ? 'ground' : 'rigidbody'
-	if (!isRigidbodyDebugCategoryVisible(category)) {
-		removeRigidbodyDebugHelper(nodeId)
-		return
-	}
-	const scale = new THREE.Vector3(1, 1, 1)
-	if (shapeDefinition.applyScale) {
-		const object = node ? nodeObjectMap.get(node.id) ?? null : null
-		if (object) {
-			object.updateMatrixWorld(true)
-			object.getWorldScale(scale)
-		}
-	}
-	ensureRigidbodyDebugHelperForShape(nodeId, shapeDefinition, category, scale)
-	updateRigidbodyDebugHelperTransform(nodeId)
-}
-
-function updateRigidbodyDebugHelperTransform(nodeId: string): void {
-	if (!isRigidbodyDebugVisible.value) {
-		return
-	}
-	const helper = rigidbodyDebugHelpers.get(nodeId)
-	if (!helper) {
-		return
-	}
-	const externalSource = externalRigidbodyDebugSources.get(nodeId) ?? null
-	const instance = rigidbodyInstances.get(nodeId) ?? externalSource?.instance ?? null
-	const multiBodyEntry =
-		instance && instance.signature && Array.isArray(instance.bodies) && instance.bodies.length > 1
-			? {
-				signature: instance.signature,
-				bodies: instance.bodies,
-				orientationAdjustment: instance.orientationAdjustment,
-			}
-			: null
-	if (multiBodyEntry) {
-		const categoryEnabled = isRigidbodyDebugCategoryVisible(helper.category)
-		const object = resolveRigidbodyDebugVisibilityObject(nodeId, nodeObjectMap.get(nodeId) ?? null)
-		const visible = object ? isRuntimeObjectEffectivelyVisible(object) : true
-		helper.group.visible = visible && categoryEnabled
-		if (!helper.group.visible) {
-			return
-		}
-		if (helper.category === 'road') {
-			applyRoadCollisionDebugColor(helper.group)
-		}
-		const children = helper.group.children
-		for (let i = 0; i < Math.min(children.length, multiBodyEntry.bodies.length); i += 1) {
-			const child = children[i]
-			const body = multiBodyEntry.bodies[i]
-			if (!child || !body) {
-				continue
-			}
-			child.position.set(body.position.x, body.position.y, body.position.z)
-			rigidbodyDebugQuaternionHelper.set(
-				body.quaternion.x,
-				body.quaternion.y,
-				body.quaternion.z,
-				body.quaternion.w,
-			)
-			const segmentKind = (child.userData as { __harmonyRoadSegmentKind?: string } | undefined)?.__harmonyRoadSegmentKind
-			if (segmentKind === 'heightfield') {
-				// Heightfields are rotated -90° around X in physics; undo that here so the debug
-				// geometry (built in render-space convention) lies on the surface.
-				rigidbodyDebugQuaternionHelper.multiply(heightfieldDebugOrientationInverse)
-			}
-			child.quaternion.copy(rigidbodyDebugQuaternionHelper)
-			child.scale.copy(helper.scale)
-			child.updateMatrixWorld(true)
-		}
-		return
-	}
-	const categoryEnabled = isRigidbodyDebugCategoryVisible(helper.category)
-	const rigidbody = rigidbodyInstances.get(nodeId) ?? externalSource?.instance ?? null
-	let visible = true
-	if (rigidbody) {
-		helper.group.position.set(rigidbody.body.position.x, rigidbody.body.position.y, rigidbody.body.position.z)
-		rigidbodyDebugQuaternionHelper.set(
-			rigidbody.body.quaternion.x,
-			rigidbody.body.quaternion.y,
-			rigidbody.body.quaternion.z,
-			rigidbody.body.quaternion.w,
-		)
-		if (rigidbody.orientationAdjustment) {
-			rigidbodyDebugQuaternionHelper.multiply(rigidbody.orientationAdjustment.threeInverse)
-		}
-		helper.group.quaternion.copy(rigidbodyDebugQuaternionHelper)
-		visible = isRuntimeObjectEffectivelyVisible(
-			resolveRigidbodyDebugVisibilityObject(nodeId, rigidbody.object ?? externalSource?.visibilityObject ?? null),
-		)
-	} else {
-		const object = resolveRigidbodyDebugVisibilityObject(nodeId, nodeObjectMap.get(nodeId) ?? null)
-		if (!object) {
-			helper.group.visible = false
-			return
-		}
-		object.updateMatrixWorld(true)
-		object.matrixWorld.decompose(rigidbodyDebugPositionHelper, rigidbodyDebugQuaternionHelper, rigidbodyDebugScaleHelper)
-		helper.group.position.copy(rigidbodyDebugPositionHelper)
-		helper.group.quaternion.copy(rigidbodyDebugQuaternionHelper)
-		visible = isRuntimeObjectEffectivelyVisible(object)
-	}
-	helper.group.scale.copy(helper.scale)
-	helper.group.visible = visible && categoryEnabled
-	helper.group.updateMatrixWorld(true)
-}
-
-function updateRigidbodyDebugTransforms(): void {
-	if (!isRigidbodyDebugVisible.value || !rigidbodyDebugHelpers.size) {
-		return
-	}
-	rigidbodyDebugHelpers.forEach((_entry, nodeId) => updateRigidbodyDebugHelperTransform(nodeId))
-}
-
-function resolveGroundDebugExternalRadiusMeters(): number {
-	const dynamicGround = cachedGroundDynamicMesh && isGroundDynamicMesh(cachedGroundDynamicMesh)
-		? cachedGroundDynamicMesh
-		: null
-	const chunkSizeCandidate = Number(dynamicGround?.chunkSizeMeters)
-	const chunkSizeMeters = Number.isFinite(chunkSizeCandidate) && chunkSizeCandidate > 0
-		? chunkSizeCandidate
-		: 100
-	const collisionRadiusCandidate = Number(dynamicGround?.collisionRadiusChunks)
-	const renderRadiusCandidate = Number(dynamicGround?.renderRadiusChunks)
-	const radiusChunks = Number.isFinite(collisionRadiusCandidate) && collisionRadiusCandidate > 0
-		? Math.max(1, Math.trunc(collisionRadiusCandidate))
-		: Number.isFinite(renderRadiusCandidate) && renderRadiusCandidate > 0
-			? Math.max(1, Math.trunc(renderRadiusCandidate))
-			: 2
-	return Math.max(120, chunkSizeMeters * (radiusChunks + 1.5))
-}
-
-function collectNearbyExternalGroundDebugSourceIds(): string[] {
-	const entries = Array.from(externalRigidbodyDebugSources.entries())
-	if (!entries.length) {
-		return []
-	}
-	const activeCamera = camera
-	if (!activeCamera) {
-		return entries.slice(0, GROUND_DEBUG_MAX_EXTERNAL_HELPERS).map(([nodeId]) => nodeId)
-	}
-	activeCamera.getWorldPosition(groundDebugCameraWorldHelper)
-	const maxDistanceMeters = resolveGroundDebugExternalRadiusMeters()
-	const maxDistanceSq = maxDistanceMeters * maxDistanceMeters
-	const nearby: Array<{ nodeId: string; distSq: number }> = []
-	for (const [nodeId, source] of entries) {
-		if (source.category !== 'ground') {
-			nearby.push({ nodeId, distSq: -1 })
-			continue
-		}
-		const body = source.instance.body
-		const dx = body.position.x - groundDebugCameraWorldHelper.x
-		const dy = body.position.y - groundDebugCameraWorldHelper.y
-		const dz = body.position.z - groundDebugCameraWorldHelper.z
-		const distSq = dx * dx + dy * dy + dz * dz
-		if (distSq <= maxDistanceSq) {
-			nearby.push({ nodeId, distSq })
-		}
-	}
-	nearby.sort((left, right) => left.distSq - right.distSq)
-	return nearby.slice(0, GROUND_DEBUG_MAX_EXTERNAL_HELPERS).map((entry) => entry.nodeId)
-}
-
-function syncNearbyExternalGroundDebugHelpersIfNeeded(): void {
-	if (!isGroundWireframeVisible.value || !externalRigidbodyDebugSources.size) {
-		return
-	}
-	const nearbyNodeIds = collectNearbyExternalGroundDebugSourceIds()
-	const signature = nearbyNodeIds.join('|')
-	const now = performance.now()
-	if (
-		signature === lastGroundDebugExternalSyncSignature
-		&& now - lastGroundDebugExternalSyncAt < GROUND_DEBUG_EXTERNAL_SYNC_INTERVAL_MS
-	) {
-		return
-	}
-	lastGroundDebugExternalSyncSignature = signature
-	lastGroundDebugExternalSyncAt = now
-	nearbyNodeIds.forEach((nodeId) => pendingExternalGroundDebugHelperIds.add(nodeId))
-	console.warn(
-		'[ScenePreview] queue-nearby-ground-debug-helpers',
-		JSON.stringify({
-			nearbyNodeCount: nearbyNodeIds.length,
-			pendingCount: pendingExternalGroundDebugHelperIds.size,
-			maxHelpers: GROUND_DEBUG_MAX_EXTERNAL_HELPERS,
-			buildBudget: GROUND_DEBUG_EXTERNAL_BUILD_BUDGET,
-		}),
-	)
-}
-
-function processPendingExternalGroundDebugHelpers(): void {
-	if (!isGroundWireframeVisible.value || !pendingExternalGroundDebugHelperIds.size) {
-		return
-	}
-	const startedAt = performance.now()
-	let processed = 0
-	for (const nodeId of Array.from(pendingExternalGroundDebugHelperIds)) {
-		if (processed >= GROUND_DEBUG_EXTERNAL_BUILD_BUDGET) {
-			break
-		}
-		pendingExternalGroundDebugHelperIds.delete(nodeId)
-		refreshRigidbodyDebugHelper(nodeId)
-		processed += 1
-	}
-	if (processed > 0) {
-		console.warn(
-			'[ScenePreview] process-ground-debug-helper-batch',
-			JSON.stringify({
-				processed,
-				pendingCount: pendingExternalGroundDebugHelperIds.size,
-				elapsedMs: Math.round((performance.now() - startedAt) * 100) / 100,
-			}),
-		)
-	}
-}
-
-function syncRigidbodyDebugHelpers(): void {
-	if (!isRigidbodyDebugVisible.value) {
-		return
-	}
-	const syncStartedAt = performance.now()
-	const nodes = currentDocument?.nodes ?? []
-	const rigidbodyNodes = collectRigidbodyNodes(nodes)
-	const desiredIds = new Set<string>()
-	rigidbodyNodes.forEach((node) => {
-		desiredIds.add(node.id)
-		refreshRigidbodyDebugHelper(node.id)
-	})
-	const nearbyExternalSourceIds = new Set<string>(collectNearbyExternalGroundDebugSourceIds())
-	externalRigidbodyDebugSources.forEach((_source, nodeId) => {
-		if (!nearbyExternalSourceIds.has(nodeId)) {
-			return
-		}
-		desiredIds.add(nodeId)
-		if (rigidbodyDebugHelpers.has(nodeId)) {
-			refreshRigidbodyDebugHelper(nodeId)
-			return
-		}
-		pendingExternalGroundDebugHelperIds.add(nodeId)
-	})
-	rigidbodyDebugHelpers.forEach((_helper, nodeId) => {
-		if (!desiredIds.has(nodeId)) {
-			removeRigidbodyDebugHelper(nodeId)
-		}
-	})
-	const syncElapsedMs = performance.now() - syncStartedAt
-	if (syncElapsedMs >= 12) {
-		console.warn(
-			'[ScenePreview] sync-rigidbody-debug-helpers',
-			JSON.stringify({
-				elapsedMs: Math.round(syncElapsedMs * 100) / 100,
-				rigidbodyNodeCount: rigidbodyNodes.length,
-				externalSourceCount: externalRigidbodyDebugSources.size,
-				nearbyExternalSourceCount: nearbyExternalSourceIds.size,
-				helperCount: rigidbodyDebugHelpers.size,
-				groundWireframeEnabled: isGroundWireframeVisible.value,
-			}),
-		)
-	}
-}
 
 function createVehicleInstance(
 	node: SceneNode,
@@ -13075,9 +11363,6 @@ function createVehicleInstance(
 		})
 	})
 	vehicle.addToWorld(physicsWorld)
-	const chassisBody = vehicle.chassisBody as CANNON.Body
-	const contactDebugHandler = createVehicleContactDebugHandler(node.id)
-	chassisBody.addEventListener('collide', contactDebugHandler as EventListener)
 	const initialChassisQuaternion = new THREE.Quaternion(
 		rigidbody.body.quaternion.x,
 		rigidbody.body.quaternion.y,
@@ -13087,7 +11372,6 @@ function createVehicleInstance(
 	return {
 		nodeId: node.id,
 		vehicle,
-		contactDebugHandler,
 		wheelCount,
 		steerableWheelIndices,
 		wheelBindings,
@@ -13112,13 +11396,6 @@ function removeVehicleInstance(nodeId: string): void {
 	if (vehicleDriveState.active && vehicleDriveState.nodeId === nodeId) {
 		stopVehicleDriveMode({ resolution: { type: 'abort', message: 'Vehicle instance was removed.' } })
 	}
-	if (entry.contactDebugHandler) {
-		try {
-			entry.vehicle.chassisBody.removeEventListener?.('collide', entry.contactDebugHandler as EventListener)
-		} catch (error) {
-			console.warn('[ScenePreview] Failed to remove vehicle contact debug listener', error)
-		}
-	}
 	if (physicsWorld) {
 		try {
 			entry.vehicle.removeFromWorld(physicsWorld)
@@ -13126,7 +11403,6 @@ function removeVehicleInstance(nodeId: string): void {
 			console.warn('[ScenePreview] Failed to remove raycast vehicle from world', error)
 		}
 	}
-	vehicleContactDebugLastLogMs.delete(`node:${nodeId}`)
 	vehicleInstances.delete(nodeId)
 	scenePreviewPerf.notifyRemovedNode(nodeId)
 }
@@ -13193,7 +11469,6 @@ function ensureRigidbodyBindingForObject(nodeId: string, object: THREE.Object3D)
 	}
 	if (isRoadDynamicMesh(node.dynamicMesh) && (component.props as RigidbodyComponentProps | undefined)?.bodyType === 'STATIC') {
 		ensureRoadRigidbodyInstance(node, component, bindingObject)
-		refreshRigidbodyDebugHelper(nodeId)
 		return
 	}
 	if (!shapeDefinition && requiresMetadata && !hasBoundaryWall) {
@@ -13210,7 +11485,6 @@ function ensureRigidbodyBindingForObject(nodeId: string, object: THREE.Object3D)
 			isProtagonist: Boolean(bindingObject.userData?.protagonist),
 		})
 		ensureVehicleBindingForNode(nodeId)
-		refreshRigidbodyDebugHelper(nodeId)
 		return
 	}
 	const bodyEntry = createRigidbodyBody(node, component, shapeDefinition, bindingObject)
@@ -13231,7 +11505,6 @@ function ensureRigidbodyBindingForObject(nodeId: string, object: THREE.Object3D)
 		object: bindingObject,
 		orientationAdjustment: bodyEntry.orientationAdjustment,
 	})
-	refreshRigidbodyDebugHelper(nodeId)
 	ensureVehicleBindingForNode(nodeId)
 }
 
@@ -13256,26 +11529,6 @@ function collectRigidbodyNodes(nodes: SceneNode[] | undefined | null): SceneNode
 	return collected
 }
 
-function collectRoadNodes(nodes: SceneNode[] | undefined | null): SceneNode[] {
-	const collected: SceneNode[] = []
-	if (!Array.isArray(nodes)) {
-		return collected
-	}
-	const stack: SceneNode[] = [...nodes]
-	while (stack.length) {
-		const node = stack.pop()
-		if (!node) {
-			continue
-		}
-		if (isRoadDynamicMesh(node.dynamicMesh) && resolveRoadVehicleCollisionEnabled(node)) {
-			collected.push(node)
-		}
-		if (Array.isArray(node.children) && node.children.length) {
-			stack.push(...node.children)
-		}
-	}
-	return collected
-}
 
 function collectVehicleNodes(nodes: SceneNode[] | undefined | null): SceneNode[] {
 	const collected: SceneNode[] = []
@@ -13352,7 +11605,6 @@ function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null):
 		}
 		if (isRoadDynamicMesh(node.dynamicMesh) && (component.props as RigidbodyComponentProps | undefined)?.bodyType === 'STATIC') {
 			ensureRoadRigidbodyInstance(node, component, object)
-			refreshRigidbodyDebugHelper(node.id)
 			return
 		}
 		if (!shapeDefinition && requiresMetadata && !hasBoundaryWall) {
@@ -13382,14 +11634,12 @@ function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null):
 			object,
 			orientationAdjustment: bodyEntry.orientationAdjustment,
 		})
-		refreshRigidbodyDebugHelper(node.id)
 	})
 	rigidbodyInstances.forEach((entry, nodeId) => {
 		if (!desiredIds.has(nodeId)) {
 			removeRigidbodyInstanceBodies(world, entry)
 			rigidbodyInstances.delete(nodeId)
 			scenePreviewPerf.notifyRemovedNode(nodeId)
-			removeRigidbodyDebugHelper(nodeId)
 		}
 	})
 	groundHeightfieldCache.forEach((_entry, nodeId) => {
@@ -14148,9 +12398,6 @@ async function applyInitialDocumentGraph(
 	syncPhysicsBodiesForDocument(document)
 	const protagonistCameraActive = !vehicleDriveState.active && controlMode.value === 'first-person'
 	syncProtagonistCameraPose({ force: true, applyToCamera: protagonistCameraActive })
-	if (isRigidbodyDebugVisible.value) {
-		syncRigidbodyDebugHelpers()
-	}
 	void applyEnvironmentSettingsToScene(environmentSettings)
 	applyRendererShadowSetting()
 	environmentAssetRefreshTick.value += 1
@@ -14181,9 +12428,6 @@ async function applyIncrementalDocumentGraph(
 	await syncTerrainScatterInstances(document, resourceCache)
 	const protagonistCameraActive = !vehicleDriveState.active && controlMode.value === 'first-person'
 	syncProtagonistCameraPose({ force: true, applyToCamera: protagonistCameraActive })
-	if (isRigidbodyDebugVisible.value) {
-		syncRigidbodyDebugHelpers()
-	}
 
 	currentDocument = document
 	invalidateVehicleSurfaceSamplerCache()
@@ -14351,24 +12595,6 @@ function togglePlayback() {
 	isPlaying.value = !isPlaying.value
 }
 
-function toggleGroundWireframeDebug(): void {
-	isGroundWireframeVisible.value = !isGroundWireframeVisible.value
-}
-
-function toggleOtherRigidbodyWireframeDebug(): void {
-	isOtherRigidbodyWireframeVisible.value = !isOtherRigidbodyWireframeVisible.value
-}
-
-function toggleRoadCollisionGridDebug(): void {
-	isRoadCollisionGridVisible.value = !isRoadCollisionGridVisible.value
-}
-
-function toggleGroundChunkStreamingDebug(): void {
-	isGroundChunkStreamingDebugVisible.value = !isGroundChunkStreamingDebugVisible.value
-	if (!isGroundChunkStreamingDebugVisible.value) {
-		disposeGroundChunkDebugHelpers()
-	}
-}
 
 function toggleInstancedCullingVisualization(): void {
 	isInstancedCullingVisualizationVisible.value = !isInstancedCullingVisualizationVisible.value
@@ -14690,53 +12916,7 @@ watch(
 								@update:model-value="toggleInstancedCullingVisualization"
 							/>
 						</v-list-item>
-						<v-list-item>
-							<v-checkbox
-								v-if="physicsEnvironmentEnabled"
-								class="scene-preview__debug-checkbox"
-								label="Ground rigidbody wireframe"
-								:model-value="isGroundWireframeVisible"
-								hide-details
-								density="compact"
-								color="warning"
-								@update:model-value="toggleGroundWireframeDebug"
-							/>
-						</v-list-item>
-						<v-list-item>
-							<v-checkbox
-								class="scene-preview__debug-checkbox"
-								label="Ground chunk debug"
-								:model-value="isGroundChunkStreamingDebugVisible"
-								hide-details
-								density="compact"
-								color="warning"
-								@update:model-value="toggleGroundChunkStreamingDebug"
-							/>
-						</v-list-item>
-						<v-list-item>
-							<v-checkbox
-								v-if="physicsEnvironmentEnabled"
-								class="scene-preview__debug-checkbox"
-								label="Road collision grid"
-								:model-value="isRoadCollisionGridVisible"
-								hide-details
-								density="compact"
-								color="warning"
-								@update:model-value="toggleRoadCollisionGridDebug"
-							/>
-						</v-list-item>
-						<v-list-item>
-							<v-checkbox
-								v-if="physicsEnvironmentEnabled"
-								class="scene-preview__debug-checkbox"
-								label="Other rigidbody wireframe"
-								:model-value="isOtherRigidbodyWireframeVisible"
-								hide-details
-								density="compact"
-								color="warning"
-								@update:model-value="toggleOtherRigidbodyWireframeDebug"
-							/>
-						</v-list-item>
+
 						<v-list-item>
 							<v-checkbox
 								v-if="physicsEnvironmentEnabled"

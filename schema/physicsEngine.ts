@@ -1447,7 +1447,7 @@ export function createRigidbodyBody(
 		| SceneNodeComponentState<BoundaryWallComponentProps>
 		| undefined
 	let boundaryWallProps: BoundaryWallComponentProps | null = null
-	if (boundaryWallComponent?.enabled !== false) {
+	if (boundaryWallComponent && boundaryWallComponent.enabled === true) {
 		boundaryWallProps = clampBoundaryWallComponentProps(
 			boundaryWallComponent?.props as Partial<BoundaryWallComponentProps> | null | undefined,
 		)

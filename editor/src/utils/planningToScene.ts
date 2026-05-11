@@ -56,7 +56,6 @@ import {
   stripPlanningOrthophotoGeneratedGroundSurfaceChunks,
 } from '@/utils/terrainImageryChunkPatches'
 import { createScenesStoreTerrainDatasetHeightSampler } from '@/utils/terrainDatasetRuntime'
-import { createTextureSettings } from '@/types/material'
 
 
 export type PlanningConversionProgress = {
