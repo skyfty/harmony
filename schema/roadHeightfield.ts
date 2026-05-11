@@ -662,7 +662,56 @@ function collectRoadCollisionSpans(
 		}
 		startIndex = endIndex
 	}
-	return spans
+	const promotedSpans: RoadCollisionSpan[] = []
+	for (let index = 0; index < spans.length; index += 1) {
+		const span = spans[index]!
+		if (span.kind === 'heightfield') {
+			const intervalCount = span.endIndex - span.startIndex
+			const hasBoxNeighbor =
+				promotedSpans[promotedSpans.length - 1]?.kind === 'box' ||
+				spans[index + 1]?.kind === 'box'
+			if (intervalCount <= 2 && hasBoxNeighbor) {
+				promotedSpans.push({
+					...span,
+					kind: 'box',
+					boxOverlapMeters: computeRoadBoxJoinOverlapMeters(
+						span.startIndex,
+						span.endIndex,
+						intervalGeometryDetails,
+						intervalHeightDetails,
+					),
+				})
+				continue
+			}
+		}
+		promotedSpans.push(span)
+	}
+	const mergedSpans: RoadCollisionSpan[] = []
+	for (const span of promotedSpans) {
+		const previous = mergedSpans[mergedSpans.length - 1]
+		if (previous && previous.kind === span.kind) {
+			previous.endIndex = span.endIndex
+			if (previous.kind === 'box') {
+				previous.boxOverlapMeters = Math.max(previous.boxOverlapMeters ?? 0, span.boxOverlapMeters ?? 0)
+			}
+			continue
+		}
+		mergedSpans.push({ ...span })
+	}
+	return mergedSpans.map((span) => {
+		if (span.kind !== 'box') {
+			return span
+		}
+		return {
+			...span,
+			boxOverlapMeters: computeRoadBoxJoinOverlapMeters(
+				span.startIndex,
+				span.endIndex,
+				intervalGeometryDetails,
+				intervalHeightDetails,
+			),
+		}
+	})
 }
 
 function computeRoadBoxJoinOverlapMeters(
