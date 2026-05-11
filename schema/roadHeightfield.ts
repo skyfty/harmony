@@ -27,6 +27,7 @@ export type RoadHeightfieldBuildSnapshot = {
 	tiles: RoadHeightfieldTileDescriptor[]
 	groundSignature: string
 	heightHash: number
+	layoutHash: number
 	roadWidth: number
 	collisionWidth: number
 	samplingDensityFactor: number
@@ -173,9 +174,7 @@ export function collectRoadHeightfieldTileDescriptors(params: RoadHeightfieldBui
 
 	const hasSegmentHeights = Boolean(serializedSampler)
 
-	const desiredTileLength = clampNumber(roadWidth * 8, 2, 16, 8)
-	const targetRows = 192
-	const elementSize = Math.max(1e-4, desiredTileLength / targetRows)
+	const desiredTileLength = clampNumber(roadWidth * 8, ROAD_HEIGHTFIELD_MIN_TILE_LENGTH, ROAD_HEIGHTFIELD_MAX_TILE_LENGTH, ROAD_HEIGHTFIELD_DEFAULT_TILE_LENGTH)
 	const maxBodies = typeof maxSegments === 'number' && Number.isFinite(maxSegments)
 		? Math.max(1, Math.trunc(maxSegments))
 		: 128
@@ -186,6 +185,9 @@ export function collectRoadHeightfieldTileDescriptors(params: RoadHeightfieldBui
 	let totalBodies = 0
 	const tiles: RoadHeightfieldTileDescriptor[] = []
 	let signatureHash = 0
+	let layoutHash = 0
+	let representativeDesiredTileLength = desiredTileLength
+	let representativeElementSize = Math.max(1e-4, desiredTileLength / ROAD_HEIGHTFIELD_MAX_ROWS)
 
 	let curveIndex = 0
 	for (const descriptor of curves) {
@@ -197,7 +199,8 @@ export function collectRoadHeightfieldTileDescriptors(params: RoadHeightfieldBui
 		if (!(length > 1e-6)) {
 			continue
 		}
-		const divisions = computeRoadDivisionsForCurve(curve, length, samplingDensityFactor, junctionSmoothing)
+		const geometryDetail = computeCurveGeometryDetailScore(curve, length)
+		const divisions = computeRoadDivisionsForCurve(curve, length, samplingDensityFactor, junctionSmoothing, geometryDetail)
 		if (divisions < 2) {
 			continue
 		}
@@ -209,6 +212,29 @@ export function collectRoadHeightfieldTileDescriptors(params: RoadHeightfieldBui
 			smoothingStrengthFactor,
 			smooth: !hasSegmentHeights,
 		})
+		const heightDetail = computeRoadHeightDetailScore(smoothedHeights, length)
+		const samplingDetail = Math.max(0, Math.min(1, geometryDetail * 0.25 + heightDetail * 0.75))
+		const densityScale = Math.max(0.5, Math.min(2, Math.sqrt(clampNumber(samplingDensityFactor, 0.1, 10, 1.0) / 2.5)))
+		const targetRows = Math.max(
+			ROAD_HEIGHTFIELD_MIN_ROWS,
+			Math.min(ROAD_HEIGHTFIELD_MAX_ROWS, Math.round((ROAD_HEIGHTFIELD_MIN_ROWS + samplingDetail * (ROAD_HEIGHTFIELD_MAX_ROWS - ROAD_HEIGHTFIELD_MIN_ROWS)) * densityScale)),
+		)
+		const desiredTileLengthForCurve = clampNumber(
+			roadWidth * lerpNumber(12, 6, geometryDetail),
+			ROAD_HEIGHTFIELD_MIN_TILE_LENGTH,
+			ROAD_HEIGHTFIELD_MAX_TILE_LENGTH,
+			desiredTileLength,
+		)
+		const elementSize = Math.max(1e-4, desiredTileLengthForCurve / targetRows)
+		if (curveIndex === 0) {
+			representativeDesiredTileLength = desiredTileLengthForCurve
+			representativeElementSize = elementSize
+		}
+		layoutHash = (layoutHash * 31 + Math.round(geometryDetail * 1000)) >>> 0
+		layoutHash = (layoutHash * 31 + Math.round(heightDetail * 1000)) >>> 0
+		layoutHash = (layoutHash * 31 + targetRows) >>> 0
+		layoutHash = (layoutHash * 31 + Math.round(desiredTileLengthForCurve * 1000)) >>> 0
+		layoutHash = (layoutHash * 31 + Math.round(elementSize * 1000)) >>> 0
 		// Feed the signature with the final smoothed heights so edits invalidate correctly.
 		smoothedHeights.forEach((value) => {
 			const normalized = Math.round((Number.isFinite(value) ? value : 0) * 1000)
@@ -219,7 +245,7 @@ export function collectRoadHeightfieldTileDescriptors(params: RoadHeightfieldBui
         // signatureHash 用于跟踪高度变化，用作后续缓存或对比的签名
 
 		const stepDistance = length / divisions
-		const divisionsPerTile = Math.max(1, Math.round(desiredTileLength / stepDistance))
+		const divisionsPerTile = Math.max(1, Math.round(desiredTileLengthForCurve / stepDistance))
 		let startIndex = 0
 		const p0 = new THREE.Vector3()
 		const p1 = new THREE.Vector3()
@@ -252,6 +278,11 @@ export function collectRoadHeightfieldTileDescriptors(params: RoadHeightfieldBui
 			centerPoint.copy(p0).add(p1).multiplyScalar(0.5)
 			const tileLength = Math.max((endIndex - startIndex) * stepDistance, forwardLen)
 			const rows = Math.max(2, Math.ceil(tileLength / elementSize))
+			layoutHash = (layoutHash * 31 + curveIndex) >>> 0
+			layoutHash = (layoutHash * 31 + tileIndex) >>> 0
+			layoutHash = (layoutHash * 31 + startIndex) >>> 0
+			layoutHash = (layoutHash * 31 + endIndex) >>> 0
+			layoutHash = (layoutHash * 31 + rows) >>> 0
 			const shape = buildHeightfieldShapeFromSeries({
 				startIndex,
 				endIndex,
@@ -297,14 +328,15 @@ export function collectRoadHeightfieldTileDescriptors(params: RoadHeightfieldBui
 		tiles,
 		groundSignature,
 		heightHash: signatureHash,
+		layoutHash,
 		roadWidth,
 		collisionWidth,
 		samplingDensityFactor,
 		smoothingStrengthFactor,
 		minClearance,
 		junctionSmoothing,
-		desiredTileLength,
-		elementSize,
+		desiredTileLength: representativeDesiredTileLength,
+		elementSize: representativeElementSize,
 		boundaryWallEnabled,
 		boundaryWallProps,
 	}
@@ -372,6 +404,7 @@ export function buildRoadHeightfieldBodies(params: RoadHeightfieldBuildParams): 
 		desiredTileLength: snapshot.desiredTileLength,
 		bodyCount: bodies.length,
 		heightHash: snapshot.heightHash,
+		layoutHash: snapshot.layoutHash,
 		boundaryWallEnabled: snapshot.boundaryWallEnabled,
 		boundaryWallProps: snapshot.boundaryWallProps,
 	})
@@ -391,6 +424,11 @@ const ROAD_HEIGHT_SMOOTHING_MAX_PASSES = 12
 const ROAD_HEIGHT_SLOPE_MAX_GRADE = 0.8
 const ROAD_HEIGHT_SLOPE_MIN_DELTA_Y = 0.03
 const ROAD_COLLISION_TILE_OVERLAP_METERS = 0.5
+const ROAD_HEIGHTFIELD_MIN_ROWS = 48
+const ROAD_HEIGHTFIELD_MAX_ROWS = 192
+const ROAD_HEIGHTFIELD_MIN_TILE_LENGTH = 2
+const ROAD_HEIGHTFIELD_MAX_TILE_LENGTH = 24
+const ROAD_HEIGHTFIELD_DEFAULT_TILE_LENGTH = 8
 
 // Road collision uses tiled heightfields exclusively.
 // Tile length is adaptively reduced on bends to keep chord approximation tight.
@@ -425,6 +463,64 @@ function clampNumber(value: unknown, min: number, max: number, fallback: number)
 	return Math.max(min, Math.min(max, numeric))
 }
 
+function lerpNumber(start: number, end: number, t: number): number {
+	return start + (end - start) * t
+}
+
+function computeCurveGeometryDetailScore(curve: THREE.Curve<THREE.Vector3>, length: number): number {
+	if (!Number.isFinite(length) || length <= ROAD_EPSILON) {
+		return 0
+	}
+	const sampleCount = Math.max(4, Math.min(16, Math.ceil(length / 2)))
+	const tangent = new THREE.Vector3()
+	let previousHeading = 0
+	let hasPreviousHeading = false
+	let totalHeadingDelta = 0
+	let maxHeadingDelta = 0
+	for (let i = 0; i <= sampleCount; i += 1) {
+		const u = i / sampleCount
+		curve.getTangent(u, tangent)
+		tangent.y = 0
+		const heading = Math.atan2(tangent.x, tangent.z)
+		if (hasPreviousHeading) {
+			const delta = Math.abs(normalizeAngleRad(heading - previousHeading))
+			totalHeadingDelta += delta
+			maxHeadingDelta = Math.max(maxHeadingDelta, delta)
+		}
+		previousHeading = heading
+		hasPreviousHeading = true
+	}
+	const totalTurnScore = Math.max(0, Math.min(1, totalHeadingDelta / Math.PI))
+	const sharpTurnScore = Math.max(0, Math.min(1, maxHeadingDelta / ((10 * Math.PI) / 180)))
+	return Math.max(0, Math.min(1, totalTurnScore * 0.65 + sharpTurnScore * 0.35))
+}
+
+function computeRoadHeightDetailScore(values: number[], length: number): number {
+	if (!Number.isFinite(length) || length <= ROAD_EPSILON || values.length < 3) {
+		return 0
+	}
+	const step = length / Math.max(1, values.length - 1)
+	if (!Number.isFinite(step) || step <= ROAD_EPSILON) {
+		return 0
+	}
+	let maxSlope = 0
+	let maxDeltaSlope = 0
+	for (let i = 1; i < values.length; i += 1) {
+		const current = Number.isFinite(values[i]!) ? values[i]! : 0
+		const previous = Number.isFinite(values[i - 1]!) ? values[i - 1]! : 0
+		const slope = Math.abs(current - previous) / step
+		maxSlope = Math.max(maxSlope, slope)
+		if (i >= 2) {
+			const beforePrevious = Number.isFinite(values[i - 2]!) ? values[i - 2]! : 0
+			const previousSlope = Math.abs(previous - beforePrevious) / step
+			maxDeltaSlope = Math.max(maxDeltaSlope, Math.abs(slope - previousSlope))
+		}
+	}
+	const slopeScore = Math.max(0, Math.min(1, maxSlope / ROAD_HEIGHT_SLOPE_MAX_GRADE))
+	const roughnessScore = Math.max(0, Math.min(1, maxDeltaSlope / Math.max(ROAD_HEIGHT_SLOPE_MIN_DELTA_Y, 0.15)))
+	return Math.max(0, Math.min(1, slopeScore * 0.8 + roughnessScore * 0.2))
+}
+
 function computeRoadDivisions(length: number, samplingDensityFactor = 1.0): number {
 	if (!Number.isFinite(length) || length <= ROAD_EPSILON) {
 		return 0
@@ -447,11 +543,14 @@ function computeRoadDivisionsForCurve(
 	length: number,
 	samplingDensityFactor = 1.0,
 	junctionSmoothing = 0,
+	geometryDetail = 0,
 ): number {
 	let divisions = computeRoadDivisions(length, samplingDensityFactor)
 	if (!(divisions > 0)) {
 		return 0
 	}
+	const geometryScale = lerpNumber(0.45, 1.0, Math.max(0, Math.min(1, geometryDetail)))
+	divisions = Math.max(ROAD_MIN_DIVISIONS, Math.min(ROAD_MAX_DIVISIONS, Math.round(divisions * geometryScale)))
 	const curves = (curve as any)?.curves
 	if (!Array.isArray(curves) || !curves.length) {
 		return divisions
@@ -667,6 +766,7 @@ function buildRoadHeightfieldSignature(params: {
 	desiredTileLength: number
 	bodyCount: number
 	heightHash: number
+	layoutHash: number
 	boundaryWallEnabled: boolean
 	boundaryWallProps: BoundaryWallComponentProps | null
 }): string {
@@ -697,6 +797,7 @@ function buildRoadHeightfieldSignature(params: {
 		`es:${Math.round(params.elementSize * 1000)}`,
 		`b:${params.bodyCount}`,
 		`rh:${params.heightHash.toString(16)}`,
+		`lh:${params.layoutHash.toString(16)}`,
 		`bw:${params.boundaryWallEnabled ? 1 : 0}`,
 		`bwh:${Math.round((params.boundaryWallProps?.height ?? 0) * 1000)}`,
 		`bwt:${Math.round((params.boundaryWallProps?.thickness ?? 0) * 1000)}`,
