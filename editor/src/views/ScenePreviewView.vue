@@ -55,6 +55,7 @@ import {
 	type SceneNode,
 	type SceneNodeComponentState,
 	type SceneMaterialTextureRef,
+	type VehicleSurfaceSample,
 	type VehicleSurfaceSampler,
 	type RuntimePrefabInitializationMode,
 	type RuntimePrefabPlacementOptions,
@@ -1685,6 +1686,11 @@ const MAP_CONTROL_DEFAULTS = {
 let animationFrameHandle = 0
 let currentDocument: SceneJsonExportDocument | null = null
 let vehicleSurfaceSamplerCache: { nodes: SceneNode[]; sampler: VehicleSurfaceSampler } | null = null
+const vehicleSurfaceRaycaster = new THREE.Raycaster()
+const vehicleSurfaceRayOrigin = new THREE.Vector3()
+const vehicleSurfaceRayDirection = new THREE.Vector3(0, -1, 0)
+const vehicleSurfaceNormalMatrix = new THREE.Matrix3()
+const vehicleSurfaceNormal = new THREE.Vector3()
 const runtimePrefabPreviewRoots = new Set<THREE.Object3D>()
 type PreviewWindowWithNominateState = Window & {
 	__HARMONY_PREVIEW_NOMINATE_STATE__?: NominateExternalStateMap | null
@@ -1694,7 +1700,91 @@ function invalidateVehicleSurfaceSamplerCache(): void {
 	vehicleSurfaceSamplerCache = null
 }
 
-function samplePreviewVehicleSurfaceAtWorldPosition(x: number, z: number, preferredHeight?: number | null) {
+function isPreviewVehicleSurfaceNode(node: SceneNode | null | undefined): boolean {
+	const type = node?.dynamicMesh?.type
+	return type === 'Ground' || type === 'Road' || type === 'Floor'
+}
+
+function resolvePreviewVehicleSurfaceKind(node: SceneNode | null | undefined): VehicleSurfaceSample['kind'] | null {
+	const type = node?.dynamicMesh?.type
+	if (type === 'Ground' || type === 'Road' || type === 'Floor') {
+		return type.toLowerCase() as VehicleSurfaceSample['kind']
+	}
+	return null
+}
+
+function samplePreviewVehicleVisualSurfaceAtWorldPosition(
+	x: number,
+	z: number,
+	preferredHeight?: number | null,
+): VehicleSurfaceSample | null {
+	const nodes = currentDocument?.nodes ?? null
+	if (!nodes?.length || !Number.isFinite(x) || !Number.isFinite(z)) {
+		return null
+	}
+	const roots: THREE.Object3D[] = []
+	for (const node of nodes) {
+		if (!isPreviewVehicleSurfaceNode(node)) {
+			continue
+		}
+		const object = nodeObjectMap.get(node.id) ?? null
+		if (object?.visible) {
+			roots.push(object)
+		}
+	}
+	if (!roots.length) {
+		return null
+	}
+
+	roots.forEach((root) => root.updateMatrixWorld(true))
+	vehicleSurfaceRayOrigin.set(x, 100000, z)
+	vehicleSurfaceRaycaster.set(vehicleSurfaceRayOrigin, vehicleSurfaceRayDirection)
+	vehicleSurfaceRaycaster.near = 0
+	vehicleSurfaceRaycaster.far = 200000
+	const intersections = vehicleSurfaceRaycaster.intersectObjects(roots, true)
+	for (const intersection of intersections) {
+		if (!intersection.object.visible || !Number.isFinite(intersection.point.y)) {
+			continue
+		}
+		const nodeId = resolveNodeIdFromObject(intersection.object)
+		const node = nodeId ? resolveNodeById(nodeId) : null
+		const kind = resolvePreviewVehicleSurfaceKind(node)
+		if (!nodeId || !kind) {
+			continue
+		}
+		if (intersection.face?.normal) {
+			vehicleSurfaceNormalMatrix.getNormalMatrix(intersection.object.matrixWorld)
+			vehicleSurfaceNormal.copy(intersection.face.normal).applyMatrix3(vehicleSurfaceNormalMatrix).normalize()
+		} else {
+			vehicleSurfaceNormal.set(0, 1, 0)
+		}
+		if (vehicleSurfaceNormal.lengthSq() <= 1e-8) {
+			vehicleSurfaceNormal.set(0, 1, 0)
+		}
+		const preferredDelta = typeof preferredHeight === 'number' && Number.isFinite(preferredHeight)
+			? Math.abs(preferredHeight - intersection.point.y)
+			: 0
+		return {
+			kind,
+			nodeId,
+			point: intersection.point.clone(),
+			normal: vehicleSurfaceNormal.clone(),
+			distance: preferredDelta,
+		}
+	}
+	return null
+}
+
+function samplePreviewVehicleSurfaceAtWorldPosition(
+	x: number,
+	z: number,
+	preferredHeight?: number | null,
+	edgeMargin?: number | null,
+): VehicleSurfaceSample | null {
+	const visualSurface = samplePreviewVehicleVisualSurfaceAtWorldPosition(x, z, preferredHeight)
+	if (visualSurface) {
+		return visualSurface
+	}
 	const nodes = currentDocument?.nodes ?? null
 	if (!nodes) {
 		return null
@@ -1705,7 +1795,7 @@ function samplePreviewVehicleSurfaceAtWorldPosition(x: number, z: number, prefer
 			sampler: createVehicleSurfaceSampler(nodes),
 		}
 	}
-	return vehicleSurfaceSamplerCache.sampler.sampleSurfaceAtWorld(x, z, preferredHeight)
+	return vehicleSurfaceSamplerCache.sampler.sampleSurfaceAtWorld(x, z, preferredHeight, edgeMargin)
 }
 
 function readPreviewNominateStateMap(): NominateExternalStateMap | null {
@@ -3514,7 +3604,7 @@ const vehicleDriveController = new VehicleDriveController(
 		isPhysicsEnabled: () => physicsEnvironmentEnabled.value,
 		ensureVehicleBindingForNode,
 		normalizeNodeId,
-		resolveSurfaceSample: (x, z, preferredHeight) => samplePreviewVehicleSurfaceAtWorldPosition(x, z, preferredHeight),
+		resolveSurfaceSample: (x, z, preferredHeight, edgeMargin) => samplePreviewVehicleSurfaceAtWorldPosition(x, z, preferredHeight, edgeMargin),
 		setCameraViewState: (mode, targetId) => {
 			const nextMode: CameraViewMode = mode === 'watching' ? 'watching' : 'level'
 			setCameraViewState(nextMode, targetId ?? null)

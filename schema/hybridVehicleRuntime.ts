@@ -48,6 +48,8 @@ const lateralForceHelper = new THREE.Vector3()
 const totalForceHelper = new THREE.Vector3()
 const chassisUpWorldHelper = new THREE.Vector3()
 const chassisForwardWorldHelper = new THREE.Vector3()
+const averageSupportNormalHelper = new THREE.Vector3()
+const uprightTargetUpHelper = new THREE.Vector3()
 const steeringQuaternionHelper = new THREE.Quaternion()
 
 const DEFAULT_SUSPENSION_STIFFNESS = 2900
@@ -138,6 +140,7 @@ export function stepHybridVehicleInstance(params: StepHybridVehicleInstanceParam
 
   const bodyMass = Number.isFinite(chassisBody.mass) && (chassisBody.mass as number) > 0 ? (chassisBody.mass as number) : 900
   let groundedWheelCount = 0
+  averageSupportNormalHelper.set(0, 0, 0)
 
   wheelSupportPoints.forEach((wheel, index) => {
     const info = vehicle.wheelInfos[index]
@@ -169,6 +172,7 @@ export function stepHybridVehicleInstance(params: StepHybridVehicleInstanceParam
     }
 
     groundedWheelCount += 1
+    averageSupportNormalHelper.add(supportNormalHelper)
     setWheelInfoContact(info, surface, compression)
 
     wheelAxisWorldHelper.copy(wheel.axle).applyQuaternion(worldQuaternionHelper)
@@ -280,9 +284,14 @@ export function stepHybridVehicleInstance(params: StepHybridVehicleInstanceParam
   }
 
   if (active || groundedWheelCount > 0) {
-    const tiltAxisX = chassisUpWorldHelper.y * 0 - chassisUpWorldHelper.z * 1
-    const tiltAxisY = chassisUpWorldHelper.z * 0 - chassisUpWorldHelper.x * 0
-    const tiltAxisZ = chassisUpWorldHelper.x * 1 - chassisUpWorldHelper.y * 0
+    if (groundedWheelCount > 0 && averageSupportNormalHelper.lengthSq() > 1e-8) {
+      uprightTargetUpHelper.copy(averageSupportNormalHelper).normalize()
+    } else {
+      uprightTargetUpHelper.set(0, 1, 0)
+    }
+    const tiltAxisX = chassisUpWorldHelper.y * uprightTargetUpHelper.z - chassisUpWorldHelper.z * uprightTargetUpHelper.y
+    const tiltAxisY = chassisUpWorldHelper.z * uprightTargetUpHelper.x - chassisUpWorldHelper.x * uprightTargetUpHelper.z
+    const tiltAxisZ = chassisUpWorldHelper.x * uprightTargetUpHelper.y - chassisUpWorldHelper.y * uprightTargetUpHelper.x
     const tiltMagnitude = Math.sqrt(tiltAxisX * tiltAxisX + tiltAxisY * tiltAxisY + tiltAxisZ * tiltAxisZ)
     if (tiltMagnitude > 1e-4) {
       const invTiltMagnitude = 1 / tiltMagnitude

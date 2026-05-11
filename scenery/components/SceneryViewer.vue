@@ -488,6 +488,7 @@ import {
   type RuntimePrefabPlacementOptions,
   type RuntimePrefabSpawnRequest,
   type VehicleSurfaceSampler,
+  type VehicleSurfaceSample,
 } from '@harmony/schema';
 import { createHybridVehicleRuntimeVehicle, stepHybridVehicleInstance } from '@harmony/schema/hybridVehicleRuntime';
 import { createInstancedBvhFrustumCuller } from '@harmony/schema/instancedBvhFrustumCuller';
@@ -1364,6 +1365,11 @@ let activeEnvironmentSettings = cloneEnvironmentSettings(DEFAULT_ENVIRONMENT_SET
 let renderContext: RenderContext | null = null;
 let currentDocument: SceneJsonExportDocument | null = null;
 let vehicleSurfaceSamplerCache: { nodes: SceneNode[]; sampler: VehicleSurfaceSampler } | null = null;
+const vehicleSurfaceRaycaster = new THREE.Raycaster()
+const vehicleSurfaceRayOrigin = new THREE.Vector3()
+const vehicleSurfaceRayDirection = new THREE.Vector3(0, -1, 0)
+const vehicleSurfaceNormalMatrix = new THREE.Matrix3()
+const vehicleSurfaceNormal = new THREE.Vector3()
 const pendingRuntimePrefabSpawnRequests: RuntimePrefabSpawnRequest[] = [];
 const appliedRuntimePrefabSpawnKeys = new Set<string>();
 const spawnedRuntimePrefabRoots = new Map<string, { root: THREE.Object3D; mode: RuntimePrefabInitializationMode }>();
@@ -1382,7 +1388,91 @@ function invalidateVehicleSurfaceSamplerCache(): void {
   vehicleSurfaceSamplerCache = null;
 }
 
-function sampleViewerVehicleSurfaceAtWorldPosition(x: number, z: number, preferredHeight?: number | null) {
+function isViewerVehicleSurfaceNode(node: SceneNode | null | undefined): boolean {
+  const type = node?.dynamicMesh?.type
+  return type === 'Ground' || type === 'Road' || type === 'Floor'
+}
+
+function resolveViewerVehicleSurfaceKind(node: SceneNode | null | undefined): VehicleSurfaceSample['kind'] | null {
+  const type = node?.dynamicMesh?.type
+  if (type === 'Ground' || type === 'Road' || type === 'Floor') {
+    return type.toLowerCase() as VehicleSurfaceSample['kind']
+  }
+  return null
+}
+
+function sampleViewerVehicleVisualSurfaceAtWorldPosition(
+  x: number,
+  z: number,
+  preferredHeight?: number | null,
+): VehicleSurfaceSample | null {
+  const nodes = currentDocument?.nodes ?? null;
+  if (!nodes?.length || !Number.isFinite(x) || !Number.isFinite(z)) {
+    return null;
+  }
+  const roots: THREE.Object3D[] = [];
+  for (const node of nodes) {
+    if (!isViewerVehicleSurfaceNode(node)) {
+      continue;
+    }
+    const object = nodeObjectMap.get(node.id) ?? null;
+    if (object?.visible) {
+      roots.push(object);
+    }
+  }
+  if (!roots.length) {
+    return null;
+  }
+
+  roots.forEach((root) => root.updateMatrixWorld(true));
+  vehicleSurfaceRayOrigin.set(x, 100000, z);
+  vehicleSurfaceRaycaster.set(vehicleSurfaceRayOrigin, vehicleSurfaceRayDirection);
+  vehicleSurfaceRaycaster.near = 0;
+  vehicleSurfaceRaycaster.far = 200000;
+  const intersections = vehicleSurfaceRaycaster.intersectObjects(roots, true);
+  for (const intersection of intersections) {
+    if (!intersection.object.visible || !Number.isFinite(intersection.point.y)) {
+      continue;
+    }
+    const nodeId = resolveNodeIdFromObject(intersection.object);
+    const node = nodeId ? resolveNodeById(nodeId) : null;
+    const kind = resolveViewerVehicleSurfaceKind(node);
+    if (!nodeId || !kind) {
+      continue;
+    }
+    if (intersection.face?.normal) {
+      vehicleSurfaceNormalMatrix.getNormalMatrix(intersection.object.matrixWorld);
+      vehicleSurfaceNormal.copy(intersection.face.normal).applyMatrix3(vehicleSurfaceNormalMatrix).normalize();
+    } else {
+      vehicleSurfaceNormal.set(0, 1, 0);
+    }
+    if (vehicleSurfaceNormal.lengthSq() <= 1e-8) {
+      vehicleSurfaceNormal.set(0, 1, 0);
+    }
+    const preferredDelta = typeof preferredHeight === 'number' && Number.isFinite(preferredHeight)
+      ? Math.abs(preferredHeight - intersection.point.y)
+      : 0;
+    return {
+      kind,
+      nodeId,
+      point: intersection.point.clone(),
+      normal: vehicleSurfaceNormal.clone(),
+      distance: preferredDelta,
+    };
+  }
+  return null;
+}
+
+function sampleViewerVehicleSurfaceAtWorldPosition(
+  x: number,
+  z: number,
+  preferredHeight?: number | null,
+  edgeMargin?: number | null,
+): VehicleSurfaceSample | null {
+  const visualSurface = sampleViewerVehicleVisualSurfaceAtWorldPosition(x, z, preferredHeight);
+  if (visualSurface) {
+    return visualSurface;
+  }
   const nodes = currentDocument?.nodes ?? null;
   if (!nodes) {
     return null;
@@ -1393,7 +1483,7 @@ function sampleViewerVehicleSurfaceAtWorldPosition(x: number, z: number, preferr
       sampler: createVehicleSurfaceSampler(nodes),
     };
   }
-  return vehicleSurfaceSamplerCache.sampler.sampleSurfaceAtWorld(x, z, preferredHeight);
+  return vehicleSurfaceSamplerCache.sampler.sampleSurfaceAtWorld(x, z, preferredHeight, edgeMargin);
 }
 
 const SCENERY_SCENE_CSM_CONFIG = DEFAULT_SCENE_CSM_CONFIG;
@@ -3287,7 +3377,7 @@ const vehicleDriveController = new VehicleDriveController(
     isPhysicsEnabled: () => physicsEnvironmentEnabled.value,
     ensureVehicleBindingForNode,
     normalizeNodeId,
-    resolveSurfaceSample: (x, z, preferredHeight) => sampleViewerVehicleSurfaceAtWorldPosition(x, z, preferredHeight),
+    resolveSurfaceSample: (x, z, preferredHeight, edgeMargin) => sampleViewerVehicleSurfaceAtWorldPosition(x, z, preferredHeight, edgeMargin),
     setCameraViewState: (mode, targetId) => setCameraViewState(mode as CameraViewMode, targetId ?? null),
     setCameraCaging,
     withControlsVerticalFreedom,
@@ -10240,7 +10330,7 @@ function stepVehicleSupportForces(deltaSeconds: number): void {
     stepHybridVehicleInstance({
       instance,
       deltaSeconds,
-      resolveSurfaceSample: sampleViewerVehicleSurfaceAtWorldPosition,
+      resolveSurfaceSample: (x, z, preferredHeight, edgeMargin) => sampleViewerVehicleSurfaceAtWorldPosition(x, z, preferredHeight, edgeMargin),
       active: (vehicleDriveActive.value && vehicleDriveNodeId.value === instance.nodeId) || activeAutoTourNodeIds.has(instance.nodeId),
     });
   });
