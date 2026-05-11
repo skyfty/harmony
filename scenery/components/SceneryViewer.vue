@@ -7048,6 +7048,7 @@ function ensureRoadRigidbodyInstance(node: SceneNode, component: SceneNodeCompon
     roadObject: object,
     groundNode,
     world,
+    collisionMode: 'normal',
     existingInstance: existing,
     createBody: (n, c, s, o) => createRigidbodyBody(n, c, s, o),
     loggerTag: '[SceneViewer]',
@@ -7523,39 +7524,19 @@ function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null):
 }
 
 function stepPhysicsWorld(delta: number): number {
-  if (!physicsEnvironmentEnabled.value) {
+  if (!physicsEnvironmentEnabled.value || !physicsWorld || !rigidbodyInstances.size) {
     physicsAccumulator = 0;
     physicsInterpolationAlpha = 0;
     return 0;
   }
-  if (!physicsWorld || !rigidbodyInstances.size) {
-    return 0;
-  }
 
+  const clampedDelta = Math.min(Math.max(0, delta), PHYSICS_MAX_ACCUMULATOR);
+  physicsAccumulator = Math.min(PHYSICS_MAX_ACCUMULATOR, physicsAccumulator + clampedDelta);
   let subSteps = 0;
-  const physicsStepStartedAt = Date.now();
-  // Skip world.step() entirely when no dynamic body is awake and no vehicle/tour is active.
-  // This eliminates all broadphase + solver cost while the scene is at rest.
-  const hasActiveController = vehicleDriveActive.value || activeAutoTourNodeIds.size > 0;
-  let anyDynamicAwake = hasActiveController;
-  if (!anyDynamicAwake) {
-    const bodies = physicsWorld.bodies;
-    for (let bi = 0, bLen = bodies.length; bi < bLen; bi += 1) {
-      const b = bodies[bi];
-      if (b.type === CANNON.Body.DYNAMIC && (b as any).sleepState === 0) {
-        anyDynamicAwake = true;
-        break;
-      }
-    }
-  }
-  if (physicsInterpolationEnabled) {
-    const clampedDelta = Math.min(Math.max(0, delta), PHYSICS_MAX_ACCUMULATOR);
-    physicsAccumulator = Math.min(PHYSICS_MAX_ACCUMULATOR, physicsAccumulator + clampedDelta);
-    const world = physicsWorld;
-    if (!anyDynamicAwake) {
-      // All dynamics sleeping – drain accumulator without stepping.
-      physicsAccumulator = 0;
-    } else {
+  const world = physicsWorld as CANNON.World;
+
+  try {
+    if (physicsInterpolationEnabled) {
       // Prepare previous state before stepping.
       rigidbodyInstances.forEach((entry) => {
         const body = entry.body;
@@ -7571,55 +7552,39 @@ function stepPhysicsWorld(delta: number): number {
           state.prevQuat.copy(state.currQuat);
         }
       });
-      try {
-        while (physicsAccumulator >= PHYSICS_FIXED_TIMESTEP && subSteps < PHYSICS_MAX_SUB_STEPS) {
-          if (vehicleDriveActive.value) {
-            // Keep vehicle control smoothing stable by advancing it at the same fixed timestep as physics.
-            applyVehicleDriveForces(PHYSICS_FIXED_TIMESTEP);
-          }
-          stepVehicleSupportForces(PHYSICS_FIXED_TIMESTEP);
-          world.step(PHYSICS_FIXED_TIMESTEP);
-          physicsAccumulator -= PHYSICS_FIXED_TIMESTEP;
-          subSteps += 1;
-        }
-      } catch (error) {
-        console.warn('[SceneViewer] Physics step failed', error);
+    }
+
+    while (physicsAccumulator >= PHYSICS_FIXED_TIMESTEP && subSteps < PHYSICS_MAX_SUB_STEPS) {
+      if (vehicleDriveActive.value) {
+        applyVehicleDriveForces(PHYSICS_FIXED_TIMESTEP);
       }
-      if (physicsAccumulator > PHYSICS_FIXED_TIMESTEP) {
-        physicsAccumulator = PHYSICS_FIXED_TIMESTEP;
+      stepVehicleSupportForces(PHYSICS_FIXED_TIMESTEP);
+      world.step(PHYSICS_FIXED_TIMESTEP);
+      physicsAccumulator -= PHYSICS_FIXED_TIMESTEP;
+      subSteps += 1;
+
+      if (physicsInterpolationEnabled) {
+        rigidbodyInstances.forEach((entry) => {
+          const body = entry.body;
+          const state = getPhysicsInterpolationState(body);
+          state.currPos.set(body.position.x, body.position.y, body.position.z);
+          state.currQuat.set(body.quaternion.x, body.quaternion.y, body.quaternion.z, body.quaternion.w);
+        });
       }
     }
-    physicsInterpolationAlpha = PHYSICS_FIXED_TIMESTEP > 0
-      ? Math.min(1, Math.max(0, physicsAccumulator / PHYSICS_FIXED_TIMESTEP))
-      : 0;
-    if (subSteps > 0) {
-      rigidbodyInstances.forEach((entry) => {
-    if (!anyDynamicAwake) {
-      // All dynamics sleeping – drain accumulator without stepping.
-      physicsAccumulator = 0;
-    } else {
-      try {
-        while (physicsAccumulator >= PHYSICS_FIXED_TIMESTEP && subSteps < PHYSICS_MAX_SUB_STEPS) {
-          if (vehicleDriveActive.value) {
-            applyVehicleDriveForces(PHYSICS_FIXED_TIMESTEP);
-          }
-          stepVehicleSupportForces(PHYSICS_FIXED_TIMESTEP);
-          physicsWorld.step(PHYSICS_FIXED_TIMESTEP);
-          physicsAccumulator -= PHYSICS_FIXED_TIMESTEP;
-          subSteps += 1;
-        }
-      } catch (error) {
-        console.warn('[SceneViewer] Physics step failed', error);
-      }
-      if (physicsAccumulator > PHYSICS_FIXED_TIMESTEP) {
-        physicsAccumulator = PHYSICS_FIXED_TIMESTEP;
-      }
-    }
+  } catch (error) {
+    console.warn('[SceneViewer] Physics step failed', error);
   }
-  const physicsStepElapsedMs = Date.now() - physicsStepStartedAt;
+
+  if (physicsAccumulator > PHYSICS_FIXED_TIMESTEP) {
+    physicsAccumulator = PHYSICS_FIXED_TIMESTEP;
+  }
+
+  physicsInterpolationAlpha = physicsInterpolationEnabled && PHYSICS_FIXED_TIMESTEP > 0
+    ? Math.min(1, Math.max(0, physicsAccumulator / PHYSICS_FIXED_TIMESTEP))
+    : 0;
 
   // Ensure vehicles are truly static after exiting drive/auto-tour.
-  // If a vehicle wakes up or drifts when no controller is active, hard-stop it and log for debugging.
   const nowMs = Date.now();
   vehicleInstances.forEach((instance) => {
     const nodeId = instance.nodeId;
@@ -7659,7 +7624,7 @@ function stepPhysicsWorld(delta: number): number {
       chassisBody.allowSleep = true;
       chassisBody.sleepSpeedLimit = Math.max(0.05, chassisBody.sleepSpeedLimit ?? 0);
       chassisBody.sleepTimeLimit = Math.max(0.05, chassisBody.sleepTimeLimit ?? 0);
-      const wheelCount = Math.max(0, instance.wheelCount || instance.vehicle.wheelInfos.length || 0);
+      const wheelCount = Math.max(0, instance.wheelCount || (instance.vehicle && instance.vehicle.wheelInfos && instance.vehicle.wheelInfos.length) || 0);
       for (let index = 0; index < wheelCount; index += 1) {
         instance.vehicle.applyEngineForce(0, index);
         instance.vehicle.setSteeringValue(0, index);
@@ -7672,20 +7637,20 @@ function stepPhysicsWorld(delta: number): number {
       // best-effort
     }
   });
+
   rigidbodyInstances.forEach((entry) => {
     if (entry.syncObjectFromBody === false) {
+      return;
     }
-
     if (!scenePreviewPerf.shouldSyncNonInteractiveSleepingBody({ nodeId: entry.nodeId, body: entry.body, nowMs })) {
       return;
     }
-
-    // AutoTour non-vehicle branch moves the render object directly; do not overwrite it from physics
-    // unless the tour is actually active for this node.
     const isAutoTourActive = activeAutoTourNodeIds.has(entry.nodeId);
     if (isAutoTourActive) {
       const nodeState = resolveNodeById(entry.nodeId);
-      const vehicle = resolveEnabledComponentState<VehicleComponentProps>(nodeState, VEHICLE_COMPONENT_TYPE);
+      const vehicle = resolveEnabledComponentState(nodeState, VEHICLE_COMPONENT_TYPE);
+      if (!vehicle) {
+        return;
       }
     }
     syncSharedObjectFromBody(entry, syncInstancedTransform);
@@ -10306,12 +10271,26 @@ type VehicleDriveStartResult =
 function startVehicleDriveMode(
   event: Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }>,
 ): VehicleDriveStartResult {
+  const targetNodeId = event.targetNodeId ?? event.nodeId ?? null;
+  if (!targetNodeId) {
+    return { success: false, message: '缺少驾驶目标' };
+  }
+  if (vehicleDriveActive.value) {
+    vehicleDriveController.stopDrive(
+      { resolution: { type: 'abort', message: '驾驶状态被新的脚本替换。' } },
+      renderContext ? { camera: renderContext.camera, mapControls: renderContext.controls } : { camera: null },
+    );
+  }
   const ctx = renderContext
     ? { camera: renderContext.camera, mapControls: renderContext.controls }
     : { camera: null as THREE.PerspectiveCamera | null };
   const result = vehicleDriveController.startDrive(event, ctx);
   if (result.success) {
-    vehicleDriveCameraFollowState.initialized = false;
+    resetCameraFollowState(vehicleDriveCameraFollowState);
+    vehicleDriveExitBusy.value = false;
+    resetVehicleDriveInputs();
+    setCameraViewState('watching', targetNodeId);
+    setVehicleDriveUiOverride('show');
     purposeActiveMode.value = 'watch';
     updateVehicleDriveCamera(0, { immediate: true });
   }
@@ -10426,7 +10405,11 @@ function handleVehicleDriveResetTap(): void {
 }
 
 function resetActiveVehiclePose(): boolean {
-  return vehicleDriveController.resetPose();
+  const success = vehicleDriveController.resetPose();
+  if (success) {
+    resetCameraFollowState(vehicleDriveCameraFollowState);
+  }
+  return success;
 }
 
 function handleCharacterControlJumpTap(): void {

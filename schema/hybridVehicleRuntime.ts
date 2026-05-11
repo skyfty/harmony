@@ -129,7 +129,12 @@ export function stepHybridVehicleInstance(params: StepHybridVehicleInstanceParam
     chassisBody.quaternion.z,
     chassisBody.quaternion.w,
   ).normalize()
-  chassisUpWorldHelper.set(0, 1, 0).applyQuaternion(worldQuaternionHelper).normalize()
+  chassisUpWorldHelper.copy(instance.axisUp).applyQuaternion(worldQuaternionHelper)
+  if (chassisUpWorldHelper.lengthSq() <= 1e-8) {
+    chassisUpWorldHelper.set(0, 1, 0)
+  } else {
+    chassisUpWorldHelper.normalize()
+  }
   chassisForwardWorldHelper.copy(instance.axisForward).applyQuaternion(worldQuaternionHelper)
   if (chassisForwardWorldHelper.lengthSq() <= 1e-8) {
     chassisForwardWorldHelper.set(0, 0, 1)

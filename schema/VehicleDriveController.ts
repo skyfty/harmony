@@ -1195,13 +1195,19 @@ export class VehicleDriveController {
     } else {
       worldForward.normalize()
     }
-    const worldUp = temp.seatUp.set(0, 1, 0)
+    const worldUp = temp.seatUp.copy(instance.axisUp).applyQuaternion(sourceQuaternion)
+    if (worldUp.lengthSq() < 1e-6) {
+      worldUp.set(0, 1, 0)
+    } else {
+      worldUp.normalize()
+    }
     const worldRight = temp.seatRight.copy(worldUp).cross(worldForward)
     if (worldRight.lengthSq() < 1e-6) {
       worldRight.set(1, 0, 0)
     } else {
       worldRight.normalize()
     }
+    worldUp.copy(VEHICLE_CAMERA_WORLD_UP)
     const correctedForward = temp.cameraForward.copy(worldRight).cross(worldUp)
     if (correctedForward.lengthSq() < 1e-6) {
       correctedForward.set(0, 0, 1)
