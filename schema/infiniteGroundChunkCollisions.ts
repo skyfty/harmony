@@ -435,10 +435,8 @@ function resolveCollisionRadiusChunks(groundDefinition: GroundRuntimeDynamicMesh
 	if (Number.isFinite(explicitCollisionRadius) && explicitCollisionRadius > 0) {
 		return Math.max(1, Math.trunc(explicitCollisionRadius))
 	}
-	const explicitRenderRadius = Number(groundDefinition.renderRadiusChunks)
-	if (Number.isFinite(explicitRenderRadius) && explicitRenderRadius > 0) {
-		return Math.max(1, Math.trunc(explicitRenderRadius))
-	}
+	// Keep infinite collision coverage tighter than render coverage unless the scene
+	// explicitly asks for a larger collision radius.
 	return 1
 }
 

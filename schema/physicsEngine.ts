@@ -140,7 +140,7 @@ export function ensureRoadHeightfieldRigidbodyInstance(params: {
 	roadNode: SceneNode
 	rigidbodyComponent: SceneNodeComponentState<RigidbodyComponentProps>
 	roadObject: THREE.Object3D
-	groundNode: SceneNode
+	groundNode?: SceneNode | null
 	world: CANNON.World
 	existingInstance: RigidbodyInstance | null
 	createBody: (
@@ -156,7 +156,7 @@ export function ensureRoadHeightfieldRigidbodyInstance(params: {
 		roadNode,
 		rigidbodyComponent,
 		roadObject,
-		groundNode,
+		groundNode = null,
 		world,
 		existingInstance,
 		createBody,
@@ -165,9 +165,6 @@ export function ensureRoadHeightfieldRigidbodyInstance(params: {
 	} = params
 
 	if (!isRoadDynamicMeshInternal(roadNode.dynamicMesh)) {
-		return { instance: null, shouldRemoveExisting: true }
-	}
-	if (!isGroundDynamicMesh(groundNode.dynamicMesh)) {
 		return { instance: null, shouldRemoveExisting: true }
 	}
 	const props = rigidbodyComponent.props as RigidbodyComponentProps | undefined
@@ -1450,7 +1447,7 @@ export function createRigidbodyBody(
 		| SceneNodeComponentState<BoundaryWallComponentProps>
 		| undefined
 	let boundaryWallProps: BoundaryWallComponentProps | null = null
-	if (boundaryWallComponent?.enabled !== false) {
+	if (boundaryWallComponent && boundaryWallComponent.enabled === true) {
 		boundaryWallProps = clampBoundaryWallComponentProps(
 			boundaryWallComponent?.props as Partial<BoundaryWallComponentProps> | null | undefined,
 		)
