@@ -502,6 +502,7 @@ const isOtherRigidbodyWireframeVisible = ref(false)
 const isRoadCollisionGridVisible = ref(false)
 const isGroundChunkStreamingDebugVisible = ref(false)
 const isInstancedCullingVisualizationVisible = ref(false)
+const isCannonDebuggerVisible = ref(false)
 const instancedLodFrustumCuller = createInstancedBvhFrustumCuller()
 const isRendererDebugVisible = ref(false)
 const isInstancingDebugVisible = ref(false)
@@ -2453,6 +2454,55 @@ rigidbodyDebugMaterial.depthTest = false
 rigidbodyDebugMaterial.depthWrite = false
 const roadCollisionDebugNormalColor = new THREE.Color(0xffc107)
 const vehicleContactDebugLastLogMs = new Map<string, number>()
+
+// cannon-es-debugger integration
+let cannonDebugger: any | null = null
+let cannonDebuggerGroup: THREE.Group | null = null
+
+async function ensureCannonDebugger(): Promise<void> {
+	if (!physicsWorld || !scene || !isCannonDebuggerVisible.value) return
+	if (cannonDebugger) return
+	try {
+		// create a wrapper group so we can remove all debugger meshes later
+		cannonDebuggerGroup = new THREE.Group()
+		cannonDebuggerGroup.name = '__harmony_cannon_debugger__'
+		scene.add(cannonDebuggerGroup)
+		const mod = await import('cannon-es-debugger')
+		const DebuggerCtor = (mod && (mod.default || mod)) as any
+		// pass the wrapper group as the scene so debugger attaches under it
+		cannonDebugger = new DebuggerCtor(cannonDebuggerGroup, physicsWorld, {
+			color: 0xff00ff,
+			scale: 1,
+		})
+	} catch (error) {
+		console.warn('[ScenePreview] Failed to load cannon-es-debugger', error)
+		if (cannonDebuggerGroup && scene) {
+			try { scene.remove(cannonDebuggerGroup) } catch (e) {}
+			cannonDebuggerGroup = null
+		}
+		cannonDebugger = null
+	}
+}
+
+function disposeCannonDebugger(): void {
+	if (!cannonDebugger && !cannonDebuggerGroup) return
+	try {
+		if (cannonDebugger && typeof cannonDebugger.clear === 'function') {
+			try { cannonDebugger.clear() } catch (_) {}
+		}
+	} catch (_err) {
+		// ignore
+	}
+	try {
+		if (cannonDebuggerGroup && scene) {
+			scene.remove(cannonDebuggerGroup)
+		}
+	} catch (_err) {
+		// ignore
+	}
+	cannonDebugger = null
+	cannonDebuggerGroup = null
+}
 
 function resolvePhysicsDebugBodyName(body: CANNON.Body | null | undefined): string {
 	if (!body) {
@@ -5532,6 +5582,7 @@ watch([isGroundWireframeVisible, isOtherRigidbodyWireframeVisible, isRoadCollisi
 watch(physicsEnvironmentEnabled, (enabled) => {
 	if (!enabled) {
 		disposeRigidbodyDebugHelpers()
+		disposeCannonDebugger()
 		roadHeightfieldDebugCache.clear()
 		setAirWallDebugVisibility(false)
 		return
@@ -5542,6 +5593,17 @@ watch(physicsEnvironmentEnabled, (enabled) => {
 		updateRigidbodyDebugTransforms()
 		setAirWallDebugVisibility(isGroundWireframeVisible.value)
 	}
+})
+
+watch(isCannonDebuggerVisible, (visible) => {
+    if (!visible) {
+        disposeCannonDebugger()
+        return
+    }
+    // create debugger if physics is enabled and world exists
+    if (physicsEnvironmentEnabled.value) {
+        void ensureCannonDebugger()
+    }
 })
 
 watch(isRendererDebugVisible, (visible) => {
@@ -10394,6 +10456,14 @@ function startAnimationLoop() {
 
 		// 4) Render + stats
 		sceneCsmShadowRuntime?.update()
+		// update cannon-es-debugger visuals (if enabled)
+		if (cannonDebugger && typeof cannonDebugger.update === 'function') {
+			try {
+				cannonDebugger.update()
+			} catch (error) {
+				// best-effort, do not break render loop
+			}
+		}
 		currentRenderer.render(currentScene, activeCamera)
 		syncRendererDebugForFrame(currentRenderer, currentScene)
 		syncInstancedMatrixUploadEstimateForFrame()
@@ -10447,6 +10517,8 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	resetBehaviorProximity()
 	resetAnimationControllers()
 	disposeRigidbodyDebugHelpers()
+	// dispose cannon-es-debugger visualizer as well
+	disposeCannonDebugger()
 	disposeGroundChunkDebugHelpers()
 	hidePurposeControls()
 	activeCameraLookTween = null
@@ -11501,6 +11573,8 @@ function resetPhysicsWorld(): void {
 	clearRigidbodyDebugHelpers()
 	disposeAirWallDebugGroup()
 	physicsWorld = null
+	// dispose cannon debugger if present
+	disposeCannonDebugger()
 	groundHeightfieldCache.clear()
 	floorShapeCache.clear()
 	wallTrimeshCache.clear()
@@ -11532,6 +11606,11 @@ function ensurePhysicsWorld(): CANNON.World {
 		rigidbodyContactMaterialKeys,
 	})
 	return world
+}
+
+// If debugger is requested, ensure it's created when the physics world is (re)ensured
+if (isCannonDebuggerVisible.value) {
+    void ensureCannonDebugger()
 }
 
 function removeAirWalls(): void {
@@ -14656,6 +14735,17 @@ watch(
 								density="compact"
 								color="warning"
 								@update:model-value="toggleOtherRigidbodyWireframeDebug"
+							/>
+						</v-list-item>
+						<v-list-item>
+							<v-checkbox
+								v-if="physicsEnvironmentEnabled"
+								class="scene-preview__debug-checkbox"
+								label="Cannon debugger"
+								v-model="isCannonDebuggerVisible"
+								hide-details
+								density="compact"
+								color="warning"
 							/>
 						</v-list-item>
 					</v-list>
