@@ -116,6 +116,7 @@ import {
 	createCompiledGroundCollisionRuntime,
 	syncCompiledGroundRenderTiles,
 } from '@schema'
+import { collectCompiledGroundCoveredChunkKeys } from '@schema/compiledGround'
 import { collectLoadedCompiledGroundChunkKeys } from '@schema/compiledGroundRuntime'
 import { createInfiniteGroundChunkColliderRuntime } from '@schema/infiniteGroundChunkCollisions'
 
@@ -2253,7 +2254,7 @@ function syncPreviewInfiniteGroundChunkCollisionBodies(
 			manifest: compiledManifest,
 			loadTileData: async (record) => cachedCompiledGroundFiles.get(record.path) ?? null,
 		})
-		excludedChunkKeys = previewCompiledGroundCollisionRuntime.getActiveTileKeys()
+		excludedChunkKeys = collectCompiledGroundCoveredChunkKeys(compiledManifest)
 	} else {
 		previewCompiledGroundCollisionRuntime.clear()
 	}
