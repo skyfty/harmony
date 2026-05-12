@@ -1914,10 +1914,15 @@ const CAMERA_DEPENDENT_UPDATE_INTERVAL_SECONDS = 0.12
 
 const cameraDependentUpdatePosition = new THREE.Vector3()
 const cameraDependentUpdateQuaternion = new THREE.Quaternion()
+const groundCollisionReferencePosition = new THREE.Vector3()
 const lastCameraDependentUpdatePosition = new THREE.Vector3()
 const lastCameraDependentUpdateQuaternion = new THREE.Quaternion()
+const lastGroundCollisionReferencePosition = new THREE.Vector3()
+const previewGroundCollisionAnchor = new THREE.Object3D()
 let cameraDependentUpdateInitialized = false
 let cameraDependentUpdateElapsed = 0
+let groundCollisionReferenceInitialized = false
+let groundCollisionReferenceElapsed = 0
 
 const clock = new THREE.Clock()
 const instancedMeshGroup = new THREE.Group()
@@ -2165,6 +2170,9 @@ async function syncGroundCache(document: SceneJsonExportDocument | null): Promis
 	cachedGroundDynamicMesh = null
 	cachedGroundNode = null
 	cameraDependentUpdateInitialized = false
+	cameraDependentUpdateElapsed = 0
+	groundCollisionReferenceInitialized = false
+	groundCollisionReferenceElapsed = 0
 	groundSurfacePreviewLoadToken += 1
 	const loadToken = groundSurfacePreviewLoadToken
 	if (!document) {
@@ -2235,9 +2243,29 @@ function clearPreviewInfiniteGroundChunkCollisionBodies(): void {
 	previewInfiniteGroundChunkColliderRuntime.clear()
 }
 
+function resolveGroundCollisionReferenceWorld(targetPosition: THREE.Vector3): boolean {
+	const referenceNodeId = vehicleDriveState.active ? vehicleDriveState.nodeId : null
+	if (referenceNodeId && resolveVehicleOrObjectWorldPosition({
+		nodeId: referenceNodeId,
+		vehicleInstances,
+		nodeObjectMap,
+		isPhysicsEnabled: () => physicsEnvironmentEnabled.value,
+		target: targetPosition,
+	})) {
+		return true
+	}
+	return false
+}
+
+function resolveGroundCollisionAnchor(referenceWorldPosition: THREE.Vector3): THREE.Camera {
+	previewGroundCollisionAnchor.position.copy(referenceWorldPosition)
+	previewGroundCollisionAnchor.updateMatrixWorld(true)
+	return previewGroundCollisionAnchor as unknown as THREE.Camera
+}
+
 function syncPreviewInfiniteGroundChunkCollisionBodies(
 	groundObject: THREE.Object3D,
-	activeCamera: THREE.PerspectiveCamera,
+	streamingCamera: THREE.Camera,
 ): void {
 	const compiledManifest = ((groundObject.userData as Record<string, unknown> | undefined)?.compiledGroundManifest ?? null) as CompiledGroundManifest | null
 	let excludedChunkKeys: string[] = []
@@ -2248,7 +2276,7 @@ function syncPreviewInfiniteGroundChunkCollisionBodies(
 		previewCompiledGroundCollisionRuntime.sync({
 			enabled: physicsEnvironmentEnabled.value,
 			groundObject,
-			camera: activeCamera,
+			camera: streamingCamera,
 			sourceId: currentDocument?.id?.trim() || 'preview-ground',
 			revision,
 			manifest: compiledManifest,
@@ -2271,7 +2299,7 @@ function syncPreviewInfiniteGroundChunkCollisionBodies(
 		groundObject,
 		sourceId: currentDocument?.id?.trim() || 'preview-ground',
 		groundDefinition,
-		camera: activeCamera,
+		camera: streamingCamera,
 		manifestRevision: cachedGroundChunkManifest?.revision,
 		manifestRecords: cachedGroundChunkManifest?.chunks,
 		excludedChunkKeys,
@@ -2357,6 +2385,27 @@ function shouldUpdateCameraDependentSystems(activeCamera: THREE.PerspectiveCamer
 	cameraDependentUpdateElapsed = 0
 	lastCameraDependentUpdatePosition.copy(cameraDependentUpdatePosition)
 	lastCameraDependentUpdateQuaternion.copy(cameraDependentUpdateQuaternion)
+	return true
+}
+
+function shouldUpdateGroundCollisionForFrame(delta: number, referenceWorldPosition: THREE.Vector3): boolean {
+	groundCollisionReferenceElapsed += Math.max(0, delta)
+	if (!groundCollisionReferenceInitialized) {
+		groundCollisionReferenceInitialized = true
+		groundCollisionReferenceElapsed = 0
+		lastGroundCollisionReferencePosition.copy(referenceWorldPosition)
+		return true
+	}
+
+	const movedSq = referenceWorldPosition.distanceToSquared(lastGroundCollisionReferencePosition)
+	const moved = movedSq > CAMERA_DEPENDENT_POSITION_EPSILON_SQ
+	const due = isPlaying.value && groundCollisionReferenceElapsed >= CAMERA_DEPENDENT_UPDATE_INTERVAL_SECONDS
+	if (!moved && !due) {
+		return false
+	}
+
+	groundCollisionReferenceElapsed = 0
+	lastGroundCollisionReferencePosition.copy(referenceWorldPosition)
 	return true
 }
 
@@ -10095,54 +10144,72 @@ function updateVehicleCameraForFrame(
  */
 function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCamera, delta: number): void {
 	const shouldUpdateCameraSystems = shouldUpdateCameraDependentSystems(activeCamera, delta)
-	if (!shouldUpdateCameraSystems) {
+	const hasGroundCollisionReference = resolveGroundCollisionReferenceWorld(groundCollisionReferencePosition)
+	if (!hasGroundCollisionReference) {
+		groundCollisionReferenceInitialized = false
+		groundCollisionReferenceElapsed = 0
+		clearPreviewInfiniteGroundChunkCollisionBodies()
+	}
+	const shouldUpdateGroundCollisionSystems = hasGroundCollisionReference
+		? shouldUpdateGroundCollisionForFrame(delta, groundCollisionReferencePosition)
+		: false
+	if (!shouldUpdateCameraSystems && !shouldUpdateGroundCollisionSystems) {
 		return
 	}
-	terrainScatterRuntime.update(activeCamera, resolveGroundMeshObject)
-	if (scenePreviewPerf.shouldRunInstancedCulling(activeCamera, Date.now())) {
-		updateInstancedCullingAndLod()
+	const groundCollisionAnchor = shouldUpdateGroundCollisionSystems
+		? resolveGroundCollisionAnchor(groundCollisionReferencePosition)
+		: null
+	if (shouldUpdateCameraSystems) {
+		terrainScatterRuntime.update(activeCamera, resolveGroundMeshObject)
+		if (scenePreviewPerf.shouldRunInstancedCulling(activeCamera, Date.now())) {
+			updateInstancedCullingAndLod()
+		}
+		updateBehaviorProximity()
 	}
-	updateBehaviorProximity()
-	// Keep ground chunk meshes in sync with camera position.
+	// Keep render chunk streaming camera-based, but stream collision around the driven vehicle.
 	if (cachedGroundNodeId && cachedGroundDynamicMesh && cachedGroundNode) {
 		const groundObject = nodeObjectMap.get(cachedGroundNodeId) ?? null
 		if (groundObject) {
-			const streamingGroundDefinition = resolvePreviewGroundStreamingDefinition(
-				activeCamera,
-				groundObject,
-				cachedGroundDynamicMesh as GroundRuntimeDynamicMesh,
-			)
-			const compiledManifest = ((groundObject.userData as Record<string, unknown> | undefined)?.compiledGroundManifest ?? null) as CompiledGroundManifest | null
-			if (compiledManifest && cachedCompiledGroundSceneId && cachedCompiledGroundSceneId === currentDocument?.id) {
-				const revision = Number.isFinite(compiledManifest.revision)
-					? Math.max(0, Math.trunc(compiledManifest.revision))
-					: computeCompiledGroundManifestRevision(compiledManifest)
-				syncCompiledGroundRenderTiles({
+			if (shouldUpdateCameraSystems) {
+				const streamingGroundDefinition = resolvePreviewGroundStreamingDefinition(
+					activeCamera,
 					groundObject,
-					groundDefinition: streamingGroundDefinition,
-					camera: activeCamera,
-					sourceId: cachedCompiledGroundSceneId,
-					revision,
-					manifest: compiledManifest,
-					loadTileData: async (record) => cachedCompiledGroundFiles.get(record.path) ?? null,
-					streamingMode: 'runtime-camera',
-					tileFrustumCulled: shouldEnableCompiledGroundTileFrustumCulling(),
-				})
-				setInfiniteGroundHiddenChunkKeys(
-					groundObject,
-					collectLoadedCompiledGroundChunkKeys(groundObject, compiledManifest),
+					cachedGroundDynamicMesh as GroundRuntimeDynamicMesh,
 				)
-			} else {
-				setInfiniteGroundHiddenChunkKeys(groundObject, [])
-				clearCompiledGroundRenderTiles(groundObject)
+				const compiledManifest = ((groundObject.userData as Record<string, unknown> | undefined)?.compiledGroundManifest ?? null) as CompiledGroundManifest | null
+				if (compiledManifest && cachedCompiledGroundSceneId && cachedCompiledGroundSceneId === currentDocument?.id) {
+					const revision = Number.isFinite(compiledManifest.revision)
+						? Math.max(0, Math.trunc(compiledManifest.revision))
+						: computeCompiledGroundManifestRevision(compiledManifest)
+					syncCompiledGroundRenderTiles({
+						groundObject,
+						groundDefinition: streamingGroundDefinition,
+						camera: activeCamera,
+						sourceId: cachedCompiledGroundSceneId,
+						revision,
+						manifest: compiledManifest,
+						loadTileData: async (record) => cachedCompiledGroundFiles.get(record.path) ?? null,
+						streamingMode: 'runtime-camera',
+						tileFrustumCulled: shouldEnableCompiledGroundTileFrustumCulling(),
+					})
+					setInfiniteGroundHiddenChunkKeys(
+						groundObject,
+						collectLoadedCompiledGroundChunkKeys(groundObject, compiledManifest),
+					)
+				} else {
+					setInfiniteGroundHiddenChunkKeys(groundObject, [])
+					clearCompiledGroundRenderTiles(groundObject)
+				}
+				syncGroundChunkLoadingMode(groundObject, streamingGroundDefinition, activeCamera)
+				applyGroundTextureToGroundObject(groundObject, streamingGroundDefinition)
+				syncGroundSurfacePreviewForGroundNode(groundObject, cachedGroundNode, cachedGroundDynamicMesh)
 			}
-			syncGroundChunkLoadingMode(groundObject, streamingGroundDefinition, activeCamera)
-			applyGroundTextureToGroundObject(groundObject, streamingGroundDefinition)
-			syncPreviewInfiniteGroundChunkCollisionBodies(
-				groundObject,
-				activeCamera,
-			)
-			syncGroundSurfacePreviewForGroundNode(groundObject, cachedGroundNode, cachedGroundDynamicMesh)
+			if (shouldUpdateGroundCollisionSystems && groundCollisionAnchor) {
+				syncPreviewInfiniteGroundChunkCollisionBodies(
+					groundObject,
+					groundCollisionAnchor,
+				)
+			}
 		}
 	}
 }
@@ -10282,6 +10349,9 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	cameraDependentUpdateElapsed = 0
 	lastCameraDependentUpdatePosition.set(0, 0, 0)
 	lastCameraDependentUpdateQuaternion.identity()
+	groundCollisionReferenceInitialized = false
+	groundCollisionReferenceElapsed = 0
+	lastGroundCollisionReferencePosition.set(0, 0, 0)
 	releaseTerrainScatterInstances()
 	resetProtagonistPoseState()
 	sceneCsmShadowRuntime?.setActive(false)

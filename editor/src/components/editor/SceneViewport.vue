@@ -8272,6 +8272,9 @@ const roadBuildTool = createRoadBuildTool({
   vertexSnapDistance: ROAD_VERTEX_SNAP_DISTANCE,
   pickNodeAtPointer,
   findSceneNode,
+  getActiveNodeId: () => {
+    return sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
+  },
   getRuntimeObject: (nodeId) => objectMap.get(nodeId) ?? null,
   sceneNodes: () => sceneStore.nodes,
   updateNodeDynamicMesh: (nodeId, mesh) => sceneStore.updateNodeDynamicMesh(nodeId, mesh),

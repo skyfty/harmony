@@ -2218,7 +2218,6 @@ function handleBuildToolToggle(tool: BuildTool) {
 
   const shouldKeepSelectionForEdit = Boolean(
     tool !== 'wall'
-    && tool !== 'road'
     && tool !== 'floor'
     && tool !== 'water'
     && next

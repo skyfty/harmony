@@ -38,6 +38,7 @@
     "event-target-shim": "^6.0.2",
     "web-streams-polyfill": "^3.2.1",
     "cannon-es": "^0.20.0",
+    "cannon-es-debugger": "^1.0.0",
     "fflate": "^0.8.2",
     "polygon-clipping": "^0.15.7",
     "three": "^0.172.0",

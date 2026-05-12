@@ -1082,6 +1082,8 @@ const {
 
 const debugOverlayAriaLabel = computed(() => (debugMode.value === 'full' ? '调试信息，当前 full 模式，点击切换为 fps 模式' : '调试信息，当前 fps 模式，点击切换为 full 模式'));
 
+const cannonDebuggerEnabled = computed(() => debugEnabled.value && debugMode.value === 'full');
+
 type InstancedTransformCacheEntry = {
   assetId: string | null;
   visible: boolean;
@@ -1931,9 +1933,7 @@ const COMPILED_GROUND_RENDER_ROT_THRESHOLD_DEG = isWeChatMiniProgram ? 1.2 : 0;
 const COMPILED_GROUND_RENDER_MAX_STALE_MS = isWeChatMiniProgram ? 180 : 0;
 const COMPILED_GROUND_RENDER_ROT_THRESHOLD_RAD = (COMPILED_GROUND_RENDER_ROT_THRESHOLD_DEG * Math.PI) / 180;
 const COMPILED_GROUND_COLLISION_MOVE_THRESHOLD_M = isWeChatMiniProgram ? 0.2 : 0;
-const COMPILED_GROUND_COLLISION_ROT_THRESHOLD_DEG = isWeChatMiniProgram ? 0.8 : 0;
 const COMPILED_GROUND_COLLISION_MAX_STALE_MS = isWeChatMiniProgram ? 90 : 0;
-const COMPILED_GROUND_COLLISION_ROT_THRESHOLD_RAD = (COMPILED_GROUND_COLLISION_ROT_THRESHOLD_DEG * Math.PI) / 180;
 const terrainScatterLastCameraPos = new THREE.Vector3();
 const terrainScatterLastCameraQuat = new THREE.Quaternion();
 const terrainScatterCameraPosScratch = new THREE.Vector3();
@@ -1944,10 +1944,9 @@ const compiledGroundRenderCameraWorldPosScratch = new THREE.Vector3();
 const compiledGroundRenderCameraLocalPosScratch = new THREE.Vector3();
 const compiledGroundRenderCameraQuatScratch = new THREE.Quaternion();
 const compiledGroundCollisionLastCameraPos = new THREE.Vector3();
-const compiledGroundCollisionLastCameraQuat = new THREE.Quaternion();
 const compiledGroundCollisionCameraWorldPosScratch = new THREE.Vector3();
 const compiledGroundCollisionCameraLocalPosScratch = new THREE.Vector3();
-const compiledGroundCollisionCameraQuatScratch = new THREE.Quaternion();
+const compiledGroundCollisionAnchor = new THREE.Object3D();
 let terrainScatterLastUpdateAtMs = 0;
 let terrainScatterForceNextUpdate = true;
 let compiledGroundRenderLastUpdateAtMs = 0;
@@ -2134,13 +2133,12 @@ function commitCompiledGroundCollisionUpdateState(
   compiledGroundCollisionLastCenterRow = centerRow;
   compiledGroundCollisionLastCenterColumn = centerColumn;
   compiledGroundCollisionLastCameraPos.copy(compiledGroundCollisionCameraWorldPosScratch);
-  compiledGroundCollisionLastCameraQuat.copy(compiledGroundCollisionCameraQuatScratch);
 }
 
 function shouldRunCompiledGroundCollisionUpdate(
   groundObject: THREE.Object3D,
   manifest: CompiledGroundManifest,
-  camera: THREE.Camera,
+  referenceWorldPosition: THREE.Vector3,
   sourceId: string,
   revision: number,
   nowMs: number,
@@ -2150,11 +2148,9 @@ function shouldRunCompiledGroundCollisionUpdate(
   }
 
   groundObject.updateWorldMatrix(true, false);
-  camera.updateWorldMatrix(true, false);
-  camera.getWorldPosition(compiledGroundCollisionCameraWorldPosScratch);
+  compiledGroundCollisionCameraWorldPosScratch.copy(referenceWorldPosition);
   compiledGroundCollisionCameraLocalPosScratch.copy(compiledGroundCollisionCameraWorldPosScratch);
   groundObject.worldToLocal(compiledGroundCollisionCameraLocalPosScratch);
-  camera.getWorldQuaternion(compiledGroundCollisionCameraQuatScratch);
 
   const tileSize = Math.max(1e-6, Number(manifest.collisionTileSizeMeters) || 1);
   const centerColumn = Math.floor((compiledGroundCollisionCameraLocalPosScratch.x - manifest.bounds.minX) / tileSize);
@@ -2194,15 +2190,6 @@ function shouldRunCompiledGroundCollisionUpdate(
   ) {
     commitCompiledGroundCollisionUpdateState(groundObject, manifest, sourceId, revision, centerRow, centerColumn, nowMs);
     return true;
-  }
-
-  if (COMPILED_GROUND_COLLISION_ROT_THRESHOLD_RAD > 0) {
-    const dot = Math.min(1, Math.abs(compiledGroundCollisionLastCameraQuat.dot(compiledGroundCollisionCameraQuatScratch)));
-    const angle = 2 * Math.acos(dot);
-    if (Number.isFinite(angle) && angle >= COMPILED_GROUND_COLLISION_ROT_THRESHOLD_RAD) {
-      commitCompiledGroundCollisionUpdateState(groundObject, manifest, sourceId, revision, centerRow, centerColumn, nowMs);
-      return true;
-    }
   }
 
   return false;
@@ -2383,6 +2370,13 @@ const physicsInterpolationStates = new WeakMap<CANNON.Body, PhysicsInterpolation
 let physicsInterpolationEnabled = false;
 let physicsInterpolationAlpha = 0;
 let physicsAccumulator = 0;
+type CannonDebuggerInstance = {
+  update: () => void;
+};
+
+let cannonDebugger: CannonDebuggerInstance | null = null;
+let cannonDebuggerGroup: THREE.Group | null = null;
+let cannonDebuggerLoadPromise: Promise<void> | null = null;
 
 type CannonSleepExtensions = {
   sleep?: () => void;
@@ -2444,6 +2438,98 @@ function getBodySleepState(body: CANNON.Body | null | undefined): number | undef
   }
   return (body as CANNON.Body & CannonSleepExtensions).sleepState;
 }
+
+function disposeCannonDebuggerResources(root: THREE.Object3D | null): void {
+  if (!root) {
+    return;
+  }
+
+  const geometries = new Set<THREE.BufferGeometry>();
+  const materials = new Set<THREE.Material>();
+
+  root.traverse((object) => {
+    const mesh = object as THREE.Mesh;
+    if (mesh.geometry) {
+      geometries.add(mesh.geometry as THREE.BufferGeometry);
+    }
+    const material = mesh.material;
+    if (Array.isArray(material)) {
+      material.forEach((entry) => materials.add(entry));
+    } else if (material) {
+      materials.add(material);
+    }
+  });
+
+  root.parent?.remove(root);
+  root.clear();
+
+  geometries.forEach((geometry) => geometry.dispose());
+  materials.forEach((material) => material.dispose());
+}
+
+function disposeCannonDebugger(): void {
+  cannonDebugger = null;
+  cannonDebuggerLoadPromise = null;
+  disposeCannonDebuggerResources(cannonDebuggerGroup);
+  cannonDebuggerGroup = null;
+}
+
+async function syncCannonDebugger(): Promise<void> {
+  if (!cannonDebuggerEnabled.value || !renderContext || !physicsWorld) {
+    disposeCannonDebugger();
+    return;
+  }
+
+  if (cannonDebugger) {
+    return;
+  }
+  if (cannonDebuggerLoadPromise) {
+    return cannonDebuggerLoadPromise;
+  }
+
+  cannonDebuggerLoadPromise = (async () => {
+    try {
+      const module = await import('cannon-es-debugger');
+      if (!cannonDebuggerEnabled.value || !renderContext || !physicsWorld) {
+        return;
+      }
+
+      const debuggerGroup = new THREE.Group();
+      debuggerGroup.name = '__harmony_cannon_debugger__';
+      renderContext.scene.add(debuggerGroup);
+      cannonDebuggerGroup = debuggerGroup;
+
+      const CannonDebugger = module.default as unknown as (
+        scene: THREE.Scene | THREE.Group,
+        world: CANNON.World,
+        options?: { color?: string | number | THREE.Color; scale?: number },
+      ) => CannonDebuggerInstance;
+      cannonDebugger = CannonDebugger(debuggerGroup as unknown as THREE.Scene, physicsWorld, {
+        color: 0x00d1ff,
+        scale: 1,
+      });
+
+      if (!cannonDebuggerEnabled.value) {
+        disposeCannonDebugger();
+      }
+    } catch (error) {
+      console.warn('[SceneViewer] Failed to load cannon-es-debugger', error);
+      disposeCannonDebugger();
+    } finally {
+      cannonDebuggerLoadPromise = null;
+    }
+  })();
+
+  return cannonDebuggerLoadPromise ?? Promise.resolve();
+}
+
+watch(cannonDebuggerEnabled, (enabled) => {
+  if (!enabled) {
+    disposeCannonDebugger();
+    return;
+  }
+  void syncCannonDebugger();
+});
 
 const wheelForwardHelper = new THREE.Vector3();
 const wheelAxisHelper = new THREE.Vector3();
@@ -5460,6 +5546,26 @@ function resolvePunchBadgeReference(activeCamera: THREE.Camera): { position: THR
   return { position: signboardReferenceScratch, kind: 'camera', nodeId: resolveCameraDistanceReferenceNodeId() };
 }
 
+function resolveGroundCollisionReferenceWorld(targetPosition: THREE.Vector3): boolean {
+  const manualDriveNode = vehicleDriveActive.value ? vehicleDriveNodeId.value : null;
+  if (manualDriveNode && resolveVehicleOrObjectWorldPosition({
+    nodeId: manualDriveNode,
+    vehicleInstances,
+    nodeObjectMap,
+    isPhysicsEnabled: () => physicsEnvironmentEnabled.value,
+    target: targetPosition,
+  })) {
+    return true;
+  }
+  return false;
+}
+
+function resolveGroundCollisionAnchor(referenceWorldPosition: THREE.Vector3): THREE.Camera {
+  compiledGroundCollisionAnchor.position.copy(referenceWorldPosition);
+  compiledGroundCollisionAnchor.updateMatrixWorld(true);
+  return compiledGroundCollisionAnchor as unknown as THREE.Camera;
+}
+
 function updatePunchBadgeOverlayEntries(activeCamera: THREE.Camera, deltaSeconds: number): void {
   if (!punchNodeIds.size) {
     if (punchBadgeOverlayEntries.value.length) {
@@ -5711,21 +5817,25 @@ function clearViewerCompiledGroundCollisionBodies(): void {
 
 function syncViewerCompiledGroundCollision(
   groundObject: THREE.Object3D,
-  activeCamera: THREE.PerspectiveCamera,
 ): void {
+  if (!resolveGroundCollisionReferenceWorld(compiledGroundCollisionCameraWorldPosScratch)) {
+    clearViewerCompiledGroundCollisionBodies();
+    return;
+  }
   const compiledManifest = resolveViewerCompiledGroundManifest(groundObject);
   const sourceId = (currentSceneId.value ?? currentDocument?.id ?? '').trim() || 'viewer-ground';
+  const groundCollisionAnchorCamera = resolveGroundCollisionAnchor(compiledGroundCollisionCameraWorldPosScratch);
   let excludedChunkKeys: string[] = [];
   if (compiledManifest) {
     const revision = Number.isFinite(compiledManifest.revision)
       ? Math.max(0, Math.trunc(compiledManifest.revision))
       : computeCompiledGroundManifestRevision(compiledManifest);
     const nowMs = Date.now();
-    if (shouldRunCompiledGroundCollisionUpdate(groundObject, compiledManifest, activeCamera, sourceId, revision, nowMs)) {
+    if (shouldRunCompiledGroundCollisionUpdate(groundObject, compiledManifest, compiledGroundCollisionCameraWorldPosScratch, sourceId, revision, nowMs)) {
       compiledGroundCollisionRuntime.sync({
         enabled: physicsEnvironmentEnabled.value,
         groundObject,
-        camera: activeCamera,
+        camera: groundCollisionAnchorCamera,
         sourceId,
         revision,
         manifest: compiledManifest,
@@ -5755,7 +5865,7 @@ function syncViewerCompiledGroundCollision(
     enabled: physicsEnvironmentEnabled.value,
     groundObject,
     groundDefinition,
-    camera: activeCamera,
+    camera: groundCollisionAnchorCamera,
     sourceId,
     manifestRevision: groundChunkManifest?.revision,
     manifestRecords: groundChunkManifest?.chunks,
@@ -6827,7 +6937,7 @@ const physicsContactSettings: PhysicsContactSettings = {
 };
 
 function ensurePhysicsWorld(): CANNON.World {
-  return ensureSharedPhysicsWorld({
+  const world = ensureSharedPhysicsWorld({
     world: physicsWorld,
     setWorld: (world) => {
       physicsWorld = world;
@@ -6844,6 +6954,8 @@ function ensurePhysicsWorld(): CANNON.World {
     quatNormalizeFast: isWeChatMiniProgram,
     quatNormalizeSkip: isWeChatMiniProgram ? 4 : 0,
   });
+  void syncCannonDebugger();
+  return world;
 }
 
 function removeAirWalls(): void {
@@ -6909,6 +7021,7 @@ function resetPhysicsWorld(): void {
   deactivateJoystick(true);
   setVehicleDriveUiOverride('hide');
   hiddenVehicleDriveNodeIds.clear();
+  disposeCannonDebugger();
 }
 
 function createRigidbodyBody(
@@ -13087,6 +13200,7 @@ async function ensureRendererContext(result: UseCanvasResult) {
     camera,
     controls,
   };
+  void syncCannonDebugger();
 
   ensureSceneCsmShadowRuntime();
   applyRendererShadowSetting();
@@ -13424,7 +13538,7 @@ function startRenderLoop(
           if (cachedGroundBeforePhysics) {
             const groundObject = nodeObjectMap.get(cachedGroundBeforePhysics.nodeId) ?? null;
             if (groundObject) {
-              syncViewerCompiledGroundCollision(groundObject, camera);
+              syncViewerCompiledGroundCollision(groundObject);
             }
           }
           stepPhysicsWorld(deltaSeconds);
@@ -13487,6 +13601,13 @@ function startRenderLoop(
           gradientBackgroundDome.mesh.position.copy(camera.position);
         }
           sceneCsmShadowRuntime?.update();
+        if (cannonDebugger && typeof cannonDebugger.update === 'function') {
+          try {
+            cannonDebugger.update();
+          } catch (error) {
+            console.warn('[SceneViewer] Failed to update cannon debugger', error);
+          }
+        }
         renderer.render(scene, camera);
         // Pull renderer.info after rendering so calls/triangles reflect the current frame.
         if (debugEnabled.value && debugMode.value === 'full') {

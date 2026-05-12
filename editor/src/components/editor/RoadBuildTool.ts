@@ -96,6 +96,7 @@ export function createRoadBuildTool(options: {
   findSceneNode: (nodes: SceneNode[], id: string) => SceneNode | null
   getRuntimeObject: (nodeId: string) => THREE.Object3D | null
   sceneNodes: () => SceneNode[]
+  getActiveNodeId: () => string | null
 
   updateNodeDynamicMesh: (nodeId: string, mesh: RoadDynamicMesh) => void
   createRoadNode: (options: {
@@ -560,14 +561,7 @@ export function createRoadBuildTool(options: {
 
       let activeNodeId = session.liveNodeId ?? session.targetNodeId
       if (!activeNodeId) {
-        activeNodeId = findConnectableRoadNodeId({
-          worldPoints: build.worldPoints,
-          nodes: options.sceneNodes(),
-          getRuntimeObject: options.getRuntimeObject,
-          collectRoadSnapVertices: options.collectRoadSnapVertices,
-          snapRoadPointToVertices: options.snapRoadPointToVertices,
-          vertexSnapDistance: options.vertexSnapDistance,
-        })
+        activeNodeId = options.getActiveNodeId?.();
       }
       if (activeNodeId) {
         const targetNode = options.findSceneNode(options.sceneNodes(), activeNodeId)
