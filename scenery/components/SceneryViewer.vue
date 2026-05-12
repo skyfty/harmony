@@ -491,7 +491,6 @@ import {
   type VehicleSurfaceSampler,
   type VehicleSurfaceSample,
 } from '@harmony/schema';
-import { createHybridVehicleRuntimeVehicle, stepHybridVehicleInstance } from '@harmony/schema/hybridVehicleRuntime';
 import { createInstancedBvhFrustumCuller } from '@harmony/schema/instancedBvhFrustumCuller';
 import ResourceCache from '@harmony/schema/ResourceCache';
 import { AssetCache, AssetLoader, configureAssetDownloadHostMirrors, type AssetCacheEntry } from '@harmony/schema/assetCache';
@@ -2646,19 +2645,11 @@ type VehicleWheelBinding = {
   baseScale: THREE.Vector3;
 };
 
-type VehicleWheelSupportPoint = {
-  point: THREE.Vector3;
-  direction: THREE.Vector3;
-  axle: THREE.Vector3;
-  radius: number;
-  suspensionRestLength: number;
-  isFrontWheel: boolean;
-};
+type RuntimeRaycastVehicle = CANNON.RaycastVehicle & VehicleDriveVehicle;
 
 type VehicleInstanceWithWheels = VehicleInstance & {
-  vehicle: VehicleDriveVehicle;
+  vehicle: RuntimeRaycastVehicle;
   wheelBindings: VehicleWheelBinding[];
-  wheelSupportPoints: VehicleWheelSupportPoint[];
   forwardAxis: THREE.Vector3;
   lastChassisPosition: THREE.Vector3;
   hasChassisPositionSample: boolean;
@@ -7224,15 +7215,36 @@ function createVehicleInstance(
       ? [0, 1].filter((index) => index < wheelCount)
       : Array.from({ length: wheelCount }, (_unused, index) => index);
   }
-  const vehicle = createHybridVehicleRuntimeVehicle(rigidbody.body, wheelCount);
+  const vehicle = new CANNON.RaycastVehicle({
+    chassisBody: rigidbody.body,
+    indexRightAxis: rightAxis,
+    indexUpAxis: upAxis,
+    indexForwardAxis: forwardAxis,
+  }) as RuntimeRaycastVehicle;
   const wheelBindings: VehicleWheelBinding[] = [];
-  const wheelSupportPoints: VehicleWheelSupportPoint[] = [];
   wheelEntries.forEach(({ config, point, direction, axle }, index) => {
     const axis = new THREE.Vector3(axle.x, axle.y, axle.z);
     if (axis.lengthSq() < 1e-6) {
       axis.copy(defaultWheelAxisVector);
     }
     axis.normalize();
+    vehicle.addWheel({
+      chassisConnectionPointLocal: point.clone(),
+      directionLocal: direction.clone(),
+      axleLocal: axle.clone(),
+      suspensionRestLength: Number.isFinite(config.suspensionRestLength) ? Math.max(0, config.suspensionRestLength) : undefined,
+      suspensionStiffness: Number.isFinite(config.suspensionStiffness) ? Math.max(0, config.suspensionStiffness) : undefined,
+      dampingRelaxation: Number.isFinite(config.dampingRelaxation) ? Math.max(0, config.dampingRelaxation) : undefined,
+      dampingCompression: Number.isFinite(config.dampingCompression) ? Math.max(0, config.dampingCompression) : undefined,
+      frictionSlip: Number.isFinite(config.frictionSlip) ? Math.max(0, config.frictionSlip) : undefined,
+      maxSuspensionTravel: Number.isFinite(config.maxSuspensionTravel) ? Math.max(0, config.maxSuspensionTravel) : undefined,
+      maxSuspensionForce: Number.isFinite(config.maxSuspensionForce) ? Math.max(0, config.maxSuspensionForce) : undefined,
+      rollInfluence: Number.isFinite(config.rollInfluence) ? config.rollInfluence : 0.01,
+      radius: Number.isFinite(config.radius) ? Math.max(config.radius, VEHICLE_WHEEL_MIN_RADIUS) : VEHICLE_WHEEL_MIN_RADIUS,
+      customSlidingRotationalSpeed: config.customSlidingRotationalSpeed,
+      useCustomSlidingRotationalSpeed: config.useCustomSlidingRotationalSpeed,
+      isFrontWheel: config.isFrontWheel === true,
+    });
     const wheelObject = config.nodeId ? nodeObjectMap.get(config.nodeId) ?? null : null;
     const basePosition = wheelObject ? wheelObject.position.clone() : new THREE.Vector3();
     const baseScale = wheelObject ? wheelObject.scale.clone() : new THREE.Vector3(1, 1, 1);
@@ -7249,15 +7261,8 @@ function createVehicleInstance(
       basePosition,
       baseScale,
     });
-    wheelSupportPoints.push({
-      point: new THREE.Vector3(point.x, point.y, point.z),
-      direction: new THREE.Vector3(direction.x, direction.y, direction.z).normalize(),
-      axle: new THREE.Vector3(axle.x, axle.y, axle.z).normalize(),
-      radius: Math.max(config.radius, VEHICLE_WHEEL_MIN_RADIUS),
-      suspensionRestLength: Math.max(0, config.suspensionRestLength),
-      isFrontWheel: config.isFrontWheel === true,
-    });
   });
+  vehicle.addToWorld(physicsWorld);
   const initialChassisPosition = new THREE.Vector3(
     rigidbody.body.position.x,
     rigidbody.body.position.y,
@@ -7275,7 +7280,6 @@ function createVehicleInstance(
     wheelCount,
     steerableWheelIndices,
     wheelBindings,
-    wheelSupportPoints,
     forwardAxis: axisForwardVector.clone(),
     axisRightIndex: rightAxis,
     axisUpIndex: upAxis,
@@ -7293,6 +7297,13 @@ function removeVehicleInstance(nodeId: string): void {
   const entry = vehicleInstances.get(nodeId);
   if (!entry) {
     return;
+  }
+  if (physicsWorld) {
+    try {
+      entry.vehicle.removeFromWorld(physicsWorld);
+    } catch (error) {
+      console.warn('[SceneViewer] Failed to remove raycast vehicle from world', error);
+    }
   }
   vehicleInstances.delete(nodeId);
   scenePreviewPerf.notifyRemovedNode(nodeId);
@@ -7592,7 +7603,6 @@ function stepPhysicsWorld(delta: number): number {
       if (vehicleDriveActive.value) {
         applyVehicleDriveForces(PHYSICS_FIXED_TIMESTEP);
       }
-      stepVehicleSupportForces(PHYSICS_FIXED_TIMESTEP);
       world.step(PHYSICS_FIXED_TIMESTEP);
       physicsAccumulator -= PHYSICS_FIXED_TIMESTEP;
       subSteps += 1;
@@ -10336,17 +10346,6 @@ function applyVehicleDriveForces(deltaSeconds: number): void {
     return;
   }
   vehicleDriveController.applyForces(deltaSeconds);
-}
-
-function stepVehicleSupportForces(deltaSeconds: number): void {
-  vehicleInstances.forEach((instance) => {
-    stepHybridVehicleInstance({
-      instance,
-      deltaSeconds,
-      resolveSurfaceSample: (x, z, preferredHeight, edgeMargin) => sampleViewerVehicleSurfaceAtWorldPosition(x, z, preferredHeight, edgeMargin),
-      active: (vehicleDriveActive.value && vehicleDriveNodeId.value === instance.nodeId) || activeAutoTourNodeIds.has(instance.nodeId),
-    });
-  });
 }
 
 function resolveNorthDirectionAngleDegrees(direction: EnvironmentNorthDirection | null | undefined): number {
