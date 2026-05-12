@@ -504,7 +504,6 @@ import {
   syncGroundChunkLoadingMode,
   sampleGroundHeight,
 } from '@harmony/schema/groundMesh';
-import { clearInfiniteGroundChunkMeshes } from '@harmony/schema/groundChunkManifestRuntime';
 import { createInfiniteGroundChunkColliderRuntime } from '@harmony/schema/infiniteGroundChunkCollisions';
 import {
   clearCompiledGroundRenderTiles,
@@ -5885,7 +5884,6 @@ function syncViewerCompiledGroundRender(
   if (!compiledManifest) {
     markCompiledGroundRenderUpdateDirty();
     clearCompiledGroundRenderTiles(groundObject);
-    clearInfiniteGroundChunkMeshes(groundObject);
     setInfiniteGroundHiddenChunkKeys(groundObject, []);
     return;
   }
@@ -5895,7 +5893,6 @@ function syncViewerCompiledGroundRender(
   const sourceId = (currentSceneId.value ?? currentDocument?.id ?? '').trim() || 'viewer-ground';
   const tileFrustumCulled = shouldEnableCompiledGroundTileFrustumCulling();
   const nowMs = Date.now();
-  clearInfiniteGroundChunkMeshes(groundObject);
   if (shouldRunCompiledGroundRenderUpdate(groundObject, compiledManifest, camera, sourceId, revision, nowMs)) {
     syncCompiledGroundRenderTiles({
       groundObject,
