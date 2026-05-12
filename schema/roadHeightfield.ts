@@ -452,16 +452,16 @@ const ROAD_HEIGHT_SLOPE_MAX_GRADE = 0.8
 const ROAD_HEIGHT_SLOPE_MIN_DELTA_Y = 0.03
 // 路面碰撞瓦片重叠长度（米），用于碰撞检测连续性
 const ROAD_COLLISION_TILE_OVERLAP_METERS = 0.5
-// 高程场最小行数，保证分辨率
-const ROAD_HEIGHTFIELD_MIN_ROWS = 24
-// 高程场最大行数，防止内存溢出
-const ROAD_HEIGHTFIELD_MAX_ROWS = 128
+// 高程场最小行数，保证分辨率（降低密度）
+const ROAD_HEIGHTFIELD_MIN_ROWS = 12
+// 高程场最大行数，防止内存溢出（降低密度）
+const ROAD_HEIGHTFIELD_MAX_ROWS = 64
 // 高程场最小瓦片长度（米）
 const ROAD_HEIGHTFIELD_MIN_TILE_LENGTH = 4
-// 高程场最大瓦片长度（米）
-const ROAD_HEIGHTFIELD_MAX_TILE_LENGTH = 32
-// 高程场默认瓦片长度（米）
-const ROAD_HEIGHTFIELD_DEFAULT_TILE_LENGTH = 12
+// 高程场最大瓦片长度（米）（降低密度）
+const ROAD_HEIGHTFIELD_MAX_TILE_LENGTH = 48
+// 高程场默认瓦片长度（米）（降低密度）
+const ROAD_HEIGHTFIELD_DEFAULT_TILE_LENGTH = 20
 // 矩形路面最大几何细节（米），用于LOD控制
 const ROAD_RECTANGULAR_MAX_GEOMETRY_DETAIL = 0.18
 // 矩形路面最大高度细节（米），用于LOD控制

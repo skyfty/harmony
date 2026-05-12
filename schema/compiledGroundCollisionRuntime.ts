@@ -288,95 +288,118 @@ export function createCompiledGroundCollisionRuntime(
     activeRevision = -1
   }
 
+  // 同步地面碰撞瓦片的主逻辑
   function sync(params: SyncCompiledGroundCollisionTilesParams): void {
-    if (!params.enabled || !params.camera) {
-      clear()
-      return
-    }
-    if (activeSourceId !== params.sourceId || activeRevision !== params.revision) {
-      clear()
-      activeSourceId = params.sourceId
-      activeRevision = params.revision
-    }
-    const activeRadiusTiles = Math.max(1, Math.trunc(params.activeRadiusTiles ?? 2))
-    const retainRadiusTiles = Math.max(activeRadiusTiles, Math.trunc(params.retainRadiusTiles ?? (activeRadiusTiles + 1)))
-    const { desired, retainedKeys } = resolveDesiredCollisionTiles(
-      params.groundObject,
-      params.manifest,
-      params.camera,
-      activeRadiusTiles,
-      retainRadiusTiles,
-    )
-    const desiredKeys = new Set(desired.map((record) => record.key))
-    const world = deps.getPhysicsWorld()
-    instances.forEach((instance, key) => {
-      if (desiredKeys.has(key) || retainedKeys.has(key)) {
+      // 如果未启用或没有相机，清空所有实例
+      if (!params.enabled || !params.camera) {
+        clear()
         return
       }
-      removeRigidbodyInstanceBodies(world, instance)
-      instances.delete(key)
-    })
+      // 如果数据源或版本发生变化，清空并更新活动源ID和版本号
+      if (activeSourceId !== params.sourceId || activeRevision !== params.revision) {
+        clear()
+        activeSourceId = params.sourceId
+        activeRevision = params.revision
+      }
+      // 计算激活和保留的瓦片半径
+      const activeRadiusTiles = Math.max(1, Math.trunc(params.activeRadiusTiles ?? 1)) // 激活区域半径
+      const retainRadiusTiles = Math.max(activeRadiusTiles, Math.trunc(params.retainRadiusTiles ?? (activeRadiusTiles + 1))) // 保留区域半径
+      // 解析需要加载和保留的瓦片
+      const { desired, retainedKeys } = resolveDesiredCollisionTiles(
+        params.groundObject,
+        params.manifest,
+        params.camera,
+        activeRadiusTiles,
+        retainRadiusTiles,
+      )
+      // 需要加载的瓦片key集合
+      const desiredKeys = new Set(desired.map((record) => record.key))
+      const world = deps.getPhysicsWorld()
+      // 移除不再需要的瓦片实例
+      instances.forEach((instance, key) => {
+        if (desiredKeys.has(key) || retainedKeys.has(key)) {
+          return
+        }
+        removeRigidbodyInstanceBodies(world, instance)
+        instances.delete(key)
+      })
 
-    for (const record of desired) {
-      if (instances.has(record.key) || pending.has(record.key)) {
-        continue
-      }
-      const signature = `${record.key}|${record.bounds.minX}|${record.bounds.minZ}|${record.widthMeters}|${record.depthMeters}`
-      const pendingEntry: PendingEntry = {
-        signature,
-        promise: params.loadTileData(record)
-          .then((buffer) => {
-            if (activeSourceId !== params.sourceId || activeRevision !== params.revision) {
-              return
-            }
-            const built = buildHeightfieldShapeFromTileBuffer(record, buffer)
-            if (!built) {
-              return
-            }
-            const existing = instances.get(record.key)
-            if (existing?.signature === built.signature) {
-              return
-            }
-            if (existing) {
-              removeRigidbodyInstanceBodies(deps.getPhysicsWorld(), existing)
-              instances.delete(record.key)
-            }
-            const proxy = createCollisionProxy(params.groundObject, record.centerX, record.centerZ)
-            const bodyEntry = deps.createBody(
-              buildColliderNode(record.key),
-              buildStaticRigidbodyComponent(record.key),
-              built.shapeDefinition,
-              proxy,
-            )
-            if (!bodyEntry) {
-              return
-            }
-            const targetWorld = deps.getPhysicsWorld() ?? deps.ensurePhysicsWorld()
-            targetWorld.addBody(bodyEntry.body)
-            instances.set(record.key, {
-              nodeId: `__compiledGroundCollider:${record.key}`,
-              body: bodyEntry.body,
-              bodies: [bodyEntry.body],
-              object: null,
-              orientationAdjustment: bodyEntry.orientationAdjustment,
-              signature: built.signature,
-              syncObjectFromBody: false,
+      // 加载需要的瓦片
+      for (const record of desired) {
+        // 如果已存在或正在加载则跳过
+        if (instances.has(record.key) || pending.has(record.key)) {
+          continue
+        }
+        // 生成唯一签名
+        const signature = `${record.key}|${record.bounds.minX}|${record.bounds.minZ}|${record.widthMeters}|${record.depthMeters}`
+        const pendingEntry: PendingEntry = {
+          signature,
+          // 异步加载瓦片数据
+          promise: params.loadTileData(record)
+            .then((buffer) => {
+              // 检查数据源和版本是否仍然有效
+              if (activeSourceId !== params.sourceId || activeRevision !== params.revision) {
+                return
+              }
+              // 构建高度场形状
+              const built = buildHeightfieldShapeFromTileBuffer(record, buffer)
+              if (!built) {
+                return
+              }
+              // 检查是否已存在相同签名的实例
+              const existing = instances.get(record.key)
+              if (existing?.signature === built.signature) {
+                return
+              }
+              // 移除旧实例
+              if (existing) {
+                removeRigidbodyInstanceBodies(deps.getPhysicsWorld(), existing)
+                instances.delete(record.key)
+              }
+              // 创建碰撞代理
+              const proxy = createCollisionProxy(params.groundObject, record.centerX, record.centerZ)
+              // 创建刚体
+              const bodyEntry = deps.createBody(
+                buildColliderNode(record.key),
+                buildStaticRigidbodyComponent(record.key),
+                built.shapeDefinition,
+                proxy,
+              )
+              if (!bodyEntry) {
+                return
+              }
+              // 添加刚体到物理世界
+              const targetWorld = deps.getPhysicsWorld() ?? deps.ensurePhysicsWorld()
+              targetWorld.addBody(bodyEntry.body)
+              // 保存实例信息
+              instances.set(record.key, {
+                nodeId: `__compiledGroundCollider:${record.key}`,
+                body: bodyEntry.body,
+                bodies: [bodyEntry.body],
+                object: null,
+                orientationAdjustment: bodyEntry.orientationAdjustment,
+                signature: built.signature,
+                syncObjectFromBody: false,
+              })
+              // 保存调试形状
+              debugShapes.set(record.key, [built.shapeDefinition])
             })
-            debugShapes.set(record.key, [built.shapeDefinition])
-          })
-          .catch((error) => {
-            console.warn(deps.loggerTag ?? '[CompiledGroundCollision]', 'Failed to load compiled ground collision tile', record.key, error)
-          })
-          .finally(() => {
-            const activePending = pending.get(record.key)
-            if (activePending?.signature === signature) {
-              pending.delete(record.key)
-            }
-          }),
+            .catch((error) => {
+              // 加载失败时输出警告
+              console.warn(deps.loggerTag ?? '[CompiledGroundCollision]', 'Failed to load compiled ground collision tile', record.key, error)
+            })
+            .finally(() => {
+              // 移除已完成的pending
+              const activePending = pending.get(record.key)
+              if (activePending?.signature === signature) {
+                pending.delete(record.key)
+              }
+            }),
+        }
+        // 标记为正在加载
+        pending.set(record.key, pendingEntry)
       }
-      pending.set(record.key, pendingEntry)
     }
-  }
 
   return {
     clear,
