@@ -79,7 +79,7 @@ export type RoadJunctionSmoothingOptions = {
 }
 
 const DEFAULT_COLOR = 0x4b4f55
-const ROAD_SURFACE_Y_OFFSET = 0.01
+const ROAD_SURFACE_Y_OFFSET = 0.05
 const ROAD_EPSILON = 1e-6
 const ROAD_MIN_WIDTH = 0.2
 const ROAD_DEFAULT_WIDTH = 2

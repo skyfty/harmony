@@ -792,6 +792,9 @@ packages:
     peerDependencies:
       three: '>= 0.159.0'
 
+  three@0.162.0:
+    resolution: {integrity: sha512-xfCYj4RnlozReCmUd+XQzj6/5OjDNHBy5nT6rVwrOKGENAvpXe2z1jL+DZYaMu4/9pNsjH/4Os/VvS9IrH7IOQ==}
+
   three@0.172.0:
     resolution: {integrity: sha512-6HMgMlzU97MsV7D/tY8Va38b83kz8YJX+BefKjspMNAv0Vx6dxMogHOrnRl/sbMIs3BPUKijPqDqJ/+UwJbIow==}
 
@@ -923,9 +926,9 @@ snapshots:
       polygon-clipping: 0.15.7
       robust-predicates: 1.1.0
       splaytree: 3.2.3
-      three: 0.172.0
+      three: 0.162.0
       three-csm: 4.2.1
-      three-mesh-bvh: 0.9.8(three@0.172.0)
+      three-mesh-bvh: 0.9.8(three@0.162.0)
 
   '@harmony/utils@file:../utils': {}
 
@@ -1624,9 +1627,15 @@ snapshots:
 
   three-csm@4.2.1: {}
 
+  three-mesh-bvh@0.9.8(three@0.162.0):
+    dependencies:
+      three: 0.162.0
+
   three-mesh-bvh@0.9.8(three@0.172.0):
     dependencies:
       three: 0.172.0
+
+  three@0.162.0: {}
 
   three@0.172.0: {}
 

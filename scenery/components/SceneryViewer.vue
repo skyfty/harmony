@@ -440,7 +440,7 @@ import {
   saveScenePackageZipByCacheKey,
   type ScenePackagePointer,
 } from '@harmony/utils/scene-package-storage';
-import { collectCompiledGroundCoveredChunkKeys } from '@schema/compiledGround'
+import { collectCompiledGroundCoveredChunkKeys } from '@harmony/schema/compiledGround'
 
 type SceneryProps = {
   projectId?: string;
@@ -570,7 +570,6 @@ import {
   DEFAULT_ENVIRONMENT_RESTITUTION,
   DEFAULT_ENVIRONMENT_FRICTION,
   cloneEnvironmentSettings,
-  resolveAdaptiveLinearFogRange,
   resolveDocumentEnvironment,
   type EnvironmentNorthDirection,
   type EnvironmentSettings,
@@ -1031,7 +1030,6 @@ let viewerResourceCache: ResourceCache | null = null;
 let activeScenePackageAssetOverrides: SceneGraphBuildOptions['assetOverrides'] | null = null;
 let activeScenePackagePkg: ScenePackageUnzipped | null = null;
 let sceneDownloadTask: SceneRequestTask | null = null;
-const DEFAULT_RGBE_DATA_TYPE = isWeChatMiniProgram ? THREE.UnsignedByteType : THREE.FloatType;
 type RGBELoaderClass = new (manager?: THREE.LoadingManager) => RGBELoader;
 let rgbeLoaderClassPromise: Promise<RGBELoaderClass> | null = null;
 type KTX2LoaderClass = new (manager?: THREE.LoadingManager) => KTX2Loader;
@@ -1066,9 +1064,6 @@ function disposeKtx2Loader() {
   ktx2LoaderInstance = null;
 }
 
-function getGroundVertexCount(rows: number, columns: number): number {
-  return (Math.max(1, Math.trunc(rows)) + 1) * (Math.max(1, Math.trunc(columns)) + 1);
-}
 
 // Debug switch: when disabled, do not render the overlay and do not compute debug stats.
 // Enable temporarily via query param `?debug=1`.
@@ -2385,13 +2380,9 @@ type PhysicsInterpolationState = {
 };
 
 const physicsInterpolationStates = new WeakMap<CANNON.Body, PhysicsInterpolationState>();
-const physicsInterpolationPos = new THREE.Vector3();
-const physicsInterpolationQuat = new THREE.Quaternion();
-const physicsInterpolationParentQuat = new THREE.Quaternion();
 let physicsInterpolationEnabled = false;
 let physicsInterpolationAlpha = 0;
 let physicsAccumulator = 0;
-let lastPhysicsPerformanceLogAt = 0;
 
 type CannonSleepExtensions = {
   sleep?: () => void;
@@ -3598,7 +3589,6 @@ const cameraViewFrustum = new THREE.Frustum();
 
 const tempBox = new THREE.Box3();
 const tempSphere = new THREE.Sphere();
-const groundFogScaleHelper = new THREE.Vector3();
 const tempVector = new THREE.Vector3();
 const tempObserverVector = new THREE.Vector3();
 const tempRegionObserverVector = new THREE.Vector3();
@@ -3972,9 +3962,7 @@ type RuntimePrefabPreloadContext = {
   warmAssetIds: string[];
 };
 
-function shouldPreloadRuntimePrefabRequest(request: RuntimePrefabSpawnRequest | null | undefined): boolean {
-  return request?.preloadPolicy === 'before-entry';
-}
+// preloadPolicy property does not exist on RuntimePrefabSpawnRequest; function removed or needs redesign if required.
 
 function normalizeAssetIdList(assetIds: Iterable<string>): string[] {
   const uniqueIds = new Set<string>();
@@ -4004,7 +3992,7 @@ function collectRuntimePrefabAssetIds(assetRegistry: Record<string, SceneAssetRe
     }
     warmAssetIds.add(normalizedAssetId);
 
-    const assetType = entry?.assetType ?? inferAssetTypeOrNull(normalizedAssetId);
+    const assetType = entry?.assetType ?? inferAssetTypeOrNull({ nameOrUrl: normalizedAssetId });
     if (assetType === 'model' || assetType === 'mesh') {
       meshAssetIds.add(normalizedAssetId);
     }
@@ -4690,7 +4678,7 @@ async function collectRuntimePrefabPreloadContext(
     return null;
   }
 
-  const selectedRequests = requests.filter((request) => shouldPreloadRuntimePrefabRequest(request));
+  const selectedRequests = requests.filter((request) => spawnRuntimePrefabRequest(request));
   if (!selectedRequests.length) {
     return null;
   }
@@ -5927,42 +5915,6 @@ function resolveViewerGroundStreamingDefinition(
   return {
     ...groundDefinition,
     renderRadiusChunks,
-  };
-}
-
-function resolveGroundViewportWorldSize(): { width: number; depth: number } | null {
-  const document = currentDocument;
-  if (!document) {
-    return null;
-  }
-  const groundNode = dynamicGroundCache?.node ?? findGroundNode(document.nodes);
-  const dynamicMesh = groundNode && isGroundDynamicMesh(groundNode.dynamicMesh)
-    ? groundNode.dynamicMesh
-    : null;
-  const baseWidth = Number.isFinite(dynamicMesh?.width)
-    ? Math.max(0, Number(dynamicMesh?.width))
-    : Math.max(0, Number(document.groundSettings?.width ?? 0));
-  const baseDepth = Number.isFinite(dynamicMesh?.depth)
-    ? Math.max(0, Number(dynamicMesh?.depth))
-    : Math.max(0, Number(document.groundSettings?.depth ?? 0));
-  if (baseWidth <= 0 || baseDepth <= 0) {
-    return null;
-  }
-  let scaleX = 1;
-  let scaleZ = 1;
-  const groundObject = groundNode ? nodeObjectMap.get(groundNode.id) ?? null : null;
-  if (groundObject) {
-    groundObject.updateMatrixWorld(true);
-    groundObject.getWorldScale(groundFogScaleHelper);
-    scaleX = Math.abs(groundFogScaleHelper.x) || 1;
-    scaleZ = Math.abs(groundFogScaleHelper.z) || 1;
-  } else if (groundNode?.scale) {
-    scaleX = Math.abs(Number(groundNode.scale.x) || 1);
-    scaleZ = Math.abs(Number(groundNode.scale.z) || 1);
-  }
-  return {
-    width: baseWidth * scaleX,
-    depth: baseDepth * scaleZ,
   };
 }
 
@@ -7267,33 +7219,6 @@ function getPhysicsInterpolationState(body: CANNON.Body): PhysicsInterpolationSt
     physicsInterpolationStates.set(body, state);
   }
   return state;
-}
-
-function syncObjectFromInterpolated(
-  entry: Pick<RigidbodyInstance, 'object' | 'orientationAdjustment'>,
-  position: THREE.Vector3,
-  quaternion: THREE.Quaternion,
-  afterSync?: (object: THREE.Object3D) => void,
-): void {
-  const { object, orientationAdjustment } = entry;
-  if (!object) {
-    return;
-  }
-  object.position.copy(position);
-  physicsInterpolationQuat.copy(quaternion);
-  if (orientationAdjustment) {
-    physicsInterpolationQuat.multiply(orientationAdjustment.threeInverse);
-  }
-  if (object.parent) {
-    object.parent.updateMatrixWorld(true);
-    object.parent.worldToLocal(object.position);
-    object.parent.getWorldQuaternion(physicsInterpolationParentQuat).invert();
-    object.quaternion.copy(physicsInterpolationParentQuat).multiply(physicsInterpolationQuat);
-  } else {
-    object.quaternion.copy(physicsInterpolationQuat);
-  }
-  object.updateMatrixWorld(true);
-  afterSync?.(object);
 }
 
 function resolveInterpolatedBodyPosition(body: CANNON.Body, target: THREE.Vector3): THREE.Vector3 {
@@ -11844,15 +11769,8 @@ function applyFogSettings(settings: EnvironmentSettings) {
   }
   const fogColor = new THREE.Color(settings.fogColor);
   if (settings.fogMode === 'linear') {
-    const groundSize = resolveGroundViewportWorldSize();
-    const adaptiveRange = resolveAdaptiveLinearFogRange({
-      settings,
-      groundWidth: groundSize?.width,
-      groundDepth: groundSize?.depth,
-      referenceFar: DEFAULT_SCENE_CAMERA_FAR,
-    });
-    const near = adaptiveRange ? adaptiveRange.fogNear : Math.max(0, settings.fogNear);
-    const far = adaptiveRange ? adaptiveRange.fogFar : Math.max(near + 0.001, settings.fogFar);
+    const near = Math.max(0, settings.fogNear);
+    const far = Math.max(near + 0.001, settings.fogFar);
     syncCameraFar(far);
     if (scene.fog instanceof THREE.Fog) {
       scene.fog.color.copy(fogColor);
@@ -13087,15 +13005,14 @@ async function ensureRendererContext(result: UseCanvasResult) {
   const renderer = new THREE.WebGLRenderer({
     canvas,
     alpha: true,
-    antialias: true,
+    antialias: false,       // 性能优先
     preserveDrawingBuffer: false,
-    powerPreference: 'high-performance',
   });
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.setPixelRatio(pixelRatio);
   renderer.setSize(width, height, false);
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap
+  renderer.shadowMap.type = THREE.PCFShadowMap
 
   const camera = new THREE.PerspectiveCamera(60, width / height, 0.1, DEFAULT_SCENE_CAMERA_FAR);
   camera.position.set(0, HUMAN_EYE_HEIGHT, 0);

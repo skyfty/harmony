@@ -6,7 +6,6 @@ import type { RigidbodyComponentProps, RigidbodyPhysicsShape } from './component
 import { BOUNDARY_WALL_COMPONENT_TYPE, clampBoundaryWallComponentProps, type BoundaryWallComponentProps } from './components'
 import { ROAD_COMPONENT_TYPE, clampRoadProps, type RoadComponentProps } from './components/definitions/roadComponent'
 import { resolveRoadLocalHeightSampler, createSegmentHeightSampler } from './roadMesh'
-import { buildGroundHeightfieldData } from './groundHeightfield'
 import { buildRoadCornerBezierCurvePath } from './roadCurvePath'
 import { buildRoadGraph, type RoadGraph } from './roadGraph'
 
@@ -25,7 +24,6 @@ export type RoadHeightfieldTileDescriptor = {
 export type RoadHeightfieldBuildSnapshot = {
 	surfaceNode: SceneNode
 	tiles: RoadHeightfieldTileDescriptor[]
-	groundSignature: string
 	heightHash: number
 	layoutHash: number
 	roadWidth: number
@@ -344,14 +342,9 @@ export function collectRoadHeightfieldTileDescriptors(params: RoadHeightfieldBui
 		return null
 	}
 
-	const groundData = groundNode && (groundNode.dynamicMesh as any)?.type === 'Ground'
-		? buildGroundHeightfieldData(groundNode, groundNode.dynamicMesh as any)
-		: null
-	const groundSignature = groundData?.signature ?? 'none'
 	return {
 		surfaceNode,
 		tiles,
-		groundSignature,
 		heightHash: signatureHash,
 		layoutHash,
 		roadWidth,
@@ -418,7 +411,6 @@ export function buildRoadHeightfieldBodies(params: RoadHeightfieldBuildParams): 
 		definition: roadNode.dynamicMesh as RoadDynamicMesh,
 		roadNode,
 		groundNode,
-		groundSignature: snapshot.groundSignature,
 		roadWidth: snapshot.roadWidth,
 		collisionWidth: snapshot.collisionWidth,
 		samplingDensityFactor: snapshot.samplingDensityFactor,
@@ -1013,7 +1005,6 @@ function buildRoadHeightfieldSignature(params: {
 	definition: RoadDynamicMesh
 	roadNode: SceneNode
 	groundNode?: SceneNode | null
-	groundSignature: string
 	roadWidth: number
 	collisionWidth: number
 	samplingDensityFactor: number
@@ -1063,7 +1054,6 @@ function buildRoadHeightfieldSignature(params: {
 		`rp:${Math.round(rx * 1000)},${Math.round(ry * 1000)},${Math.round(rz * 1000)}`,
 		`ry:${Math.round(yaw * 1000)}`,
 		`gp:${Math.round(gx * 1000)},${Math.round(gy * 1000)},${Math.round(gz * 1000)}`,
-		`gs:${params.groundSignature}`,
 	].join('|')
 }
 

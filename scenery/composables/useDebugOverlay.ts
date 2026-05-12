@@ -1,7 +1,5 @@
 import { ref, reactive, computed } from 'vue';
 import * as THREE from 'three';
-import { resolveGroundRuntimeChunkCells, resolveGroundChunkRadiusMeters } from '@harmony/schema/groundMesh';
-import type { GroundDynamicMesh } from '@harmony/schema/index';
 
 export interface InstancedMeshLike {
   count: number;
@@ -46,21 +44,11 @@ export function useDebugOverlay() {
     pixelRatio: 1,
   });
 
-  const groundChunkDebug = reactive({
-    loaded: 0,
-    target: 0,
-    total: 0,
-    pending: 0,
-    unloaded: 0,
-  });
 
   let debugFpsFrames = 0;
   let debugFpsAccumSeconds = 0;
   let debugFpsLastSyncAt = 0;
   let debugInstancingLastSyncAt = 0;
-  let debugGroundChunksLastSyncAt = 0;
-  let debugGroundUnloadedTotal = 0;
-  let debugLastGroundChunkKeys: Set<string> | null = null;
 
   function updateDebugFps(deltaSeconds: number): void {
     if (!debugEnabled.value) {
@@ -189,108 +177,6 @@ export function useDebugOverlay() {
     rendererDebug.height = (canvas?.height || canvas?.clientHeight || 0) as number;
   }
 
-  function clampInclusive(value: number, min: number, max: number): number {
-    if (!Number.isFinite(value)) {
-      return min;
-    }
-    if (value < min) {
-      return min;
-    }
-    if (value > max) {
-      return max;
-    }
-    return value;
-  }
-
-  function computeTotalGroundChunkCount(definition: GroundDynamicMesh, chunkCells: number): number {
-    const rows = Math.max(1, Math.trunc(definition.rows));
-    const columns = Math.max(1, Math.trunc(definition.columns));
-    const safeCells = Math.max(1, Math.trunc(chunkCells));
-    const rowChunks = Math.ceil(rows / safeCells);
-    const columnChunks = Math.ceil(columns / safeCells);
-    return Math.max(1, rowChunks * columnChunks);
-  }
-
-  function computeTargetLoadChunkCount(groundObject: THREE.Object3D, definition: GroundDynamicMesh, camera: THREE.Camera | null): number {
-    const chunkCells = resolveGroundRuntimeChunkCells(definition);
-    const rows = Math.max(1, Math.trunc(definition.rows));
-    const columns = Math.max(1, Math.trunc(definition.columns));
-    const maxChunkRowIndex = Math.max(0, Math.floor((rows - 1) / chunkCells));
-    const maxChunkColumnIndex = Math.max(0, Math.floor((columns - 1) / chunkCells));
-
-    let localX = 0;
-    let localZ = 0;
-    if (camera) {
-      groundObject.updateMatrixWorld(true);
-      const cameraWorld = new THREE.Vector3();
-      camera.getWorldPosition(cameraWorld);
-      const cameraLocal = (groundObject as THREE.Group).worldToLocal(cameraWorld);
-      localX = cameraLocal.x;
-      localZ = cameraLocal.z;
-    }
-
-    const loadRadius = resolveGroundChunkRadiusMeters(definition);
-    const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1;
-    const halfWidth = definition.width * 0.5;
-    const halfDepth = definition.depth * 0.5;
-
-    const minLoadColumn = clampInclusive(Math.floor((localX - loadRadius + halfWidth) / cellSize), 0, columns);
-    const maxLoadColumn = clampInclusive(Math.ceil((localX + loadRadius + halfWidth) / cellSize), 0, columns);
-    const minLoadRow = clampInclusive(Math.floor((localZ - loadRadius + halfDepth) / cellSize), 0, rows);
-    const maxLoadRow = clampInclusive(Math.ceil((localZ + loadRadius + halfDepth) / cellSize), 0, rows);
-
-    const minLoadChunkColumn = clampInclusive(Math.floor(minLoadColumn / chunkCells), 0, maxChunkColumnIndex);
-    const maxLoadChunkColumn = clampInclusive(Math.floor(maxLoadColumn / chunkCells), 0, maxChunkColumnIndex);
-    const minLoadChunkRow = clampInclusive(Math.floor(minLoadRow / chunkCells), 0, maxChunkRowIndex);
-    const maxLoadChunkRow = clampInclusive(Math.floor(maxLoadRow / chunkCells), 0, maxChunkRowIndex);
-
-    const count = (maxLoadChunkRow - minLoadChunkRow + 1) * (maxLoadChunkColumn - minLoadChunkColumn + 1);
-    return Math.max(1, count);
-  }
-
-  function syncGroundChunkDebugCounters(groundObject: THREE.Object3D, definition: GroundDynamicMesh, camera: THREE.Camera | null): void {
-    if (!debugEnabled.value) {
-      return;
-    }
-    const now = Date.now();
-    if (now - debugGroundChunksLastSyncAt < 250) {
-      return;
-    }
-    debugGroundChunksLastSyncAt = now;
-
-    const loadedKeys = new Set<string>();
-    groundObject.traverse((object: THREE.Object3D) => {
-      if (!(object instanceof THREE.Mesh)) {
-        return;
-      }
-      const mesh = object;
-      const chunk = (mesh.userData?.groundChunk ?? null) as { chunkRow?: number; chunkColumn?: number } | null;
-      if (!chunk || typeof chunk.chunkRow !== 'number' || typeof chunk.chunkColumn !== 'number') {
-        return;
-      }
-      loadedKeys.add(`${chunk.chunkRow}:${chunk.chunkColumn}`);
-    });
-
-    if (debugLastGroundChunkKeys) {
-      let removed = 0;
-      debugLastGroundChunkKeys.forEach((key) => {
-        if (!loadedKeys.has(key)) {
-          removed += 1;
-        }
-      });
-      if (removed > 0) {
-        debugGroundUnloadedTotal += removed;
-      }
-    }
-    debugLastGroundChunkKeys = loadedKeys;
-
-    const chunkCells = resolveGroundRuntimeChunkCells(definition);
-    groundChunkDebug.loaded = loadedKeys.size;
-    groundChunkDebug.total = computeTotalGroundChunkCount(definition, chunkCells);
-    groundChunkDebug.target = computeTargetLoadChunkCount(groundObject, definition, camera);
-    groundChunkDebug.pending = Math.max(0, groundChunkDebug.target - groundChunkDebug.loaded);
-    groundChunkDebug.unloaded = debugGroundUnloadedTotal;
-  }
 
   return {
     debugEnabled,
@@ -299,11 +185,9 @@ export function useDebugOverlay() {
     debugFps,
     instancingDebug,
     rendererDebug,
-    groundChunkDebug,
     updateDebugFps,
     syncInstancingDebugCounters,
     syncRendererDebug,
-    syncGroundChunkDebugCounters,
     estimateSceneTriangleCount,
   };
 }

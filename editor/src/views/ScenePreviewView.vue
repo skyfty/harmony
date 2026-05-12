@@ -2263,7 +2263,7 @@ function syncPreviewInfiniteGroundChunkCollisionBodies(
 		: null
 	if (!groundDefinition) {
 		previewInfiniteGroundChunkColliderRuntime.clear()
-		// syncPreviewGroundCollisionDebugSources(groundObject)
+		clearGroundCollisionDebugVisualization()
 		return
 	}
 	previewInfiniteGroundChunkColliderRuntime.sync({
@@ -2309,46 +2309,26 @@ function syncPreviewInfiniteGroundChunkCollisionBodies(
 			return await loadPromise
 		},
 	})
-	// syncPreviewGroundCollisionDebugSources(groundObject)
+	const compiledDebugEntries = previewCompiledGroundCollisionRuntime.getDebugEntries().map((entry) => ({
+		family: 'compiled' as const,
+		source: 'manifest',
+		key: entry.tileKey,
+		instance: entry.instance.body,
+		shapeDefinitions: (entry.shapes ?? []).map((shape) => shape as GroundCollisionDebugShapeDefinition),
+	}))
+	const infiniteDebugEntries = previewInfiniteGroundChunkColliderRuntime.getDebugEntries().map((entry) => ({
+		family: 'infinite' as const,
+		source: entry.source,
+		key: entry.runtimeKey,
+		instance: entry.instance.body,
+		shapeDefinitions: (entry.shapes ?? []).map((shape) => shape as GroundCollisionDebugShapeDefinition),
+	}))
+	syncGroundCollisionDebugVisualization([
+		...compiledDebugEntries,
+		...infiniteDebugEntries,
+	])
 }
 
-function resolveGroundViewportWorldSize(): { width: number; depth: number } | null {
-	const document = currentDocument
-	if (!document) {
-		return null
-	}
-	const groundNode = cachedGroundNode ?? findGroundNode(document.nodes)
-	const dynamicMesh = groundNode && isGroundDynamicMesh(groundNode.dynamicMesh)
-		? groundNode.dynamicMesh
-		: null
-	const baseBounds = resolveGroundWorldBounds(dynamicMesh ?? {
-		worldBounds: document.groundSettings?.worldBounds ?? null,
-		chunkSizeMeters: document.groundSettings?.chunkSizeMeters ?? 100,
-		renderRadiusChunks: document.groundSettings?.renderRadiusChunks ?? 1,
-		collisionRadiusChunks: document.groundSettings?.collisionRadiusChunks ?? 1,
-	})
-	const baseWidth = baseBounds.maxX - baseBounds.minX
-	const baseDepth = baseBounds.maxZ - baseBounds.minZ
-	if (baseWidth <= 0 || baseDepth <= 0) {
-		return null
-	}
-	let scaleX = 1
-	let scaleZ = 1
-	const groundObject = groundNode ? nodeObjectMap.get(groundNode.id) ?? null : null
-	if (groundObject) {
-		groundObject.updateMatrixWorld(true)
-		groundObject.getWorldScale(groundFogScaleHelper)
-		scaleX = Math.abs(groundFogScaleHelper.x) || 1
-		scaleZ = Math.abs(groundFogScaleHelper.z) || 1
-	} else if (groundNode?.scale) {
-		scaleX = Math.abs(Number(groundNode.scale.x) || 1)
-		scaleZ = Math.abs(Number(groundNode.scale.z) || 1)
-	}
-	return {
-		width: baseWidth * scaleX,
-		depth: baseDepth * scaleZ,
-	}
-}
 
 function shouldUpdateCameraDependentSystems(activeCamera: THREE.PerspectiveCamera, delta: number): boolean {
 	cameraDependentUpdateElapsed += Math.max(0, delta)
@@ -2388,6 +2368,91 @@ const airWallBodies = new Map<string, CANNON.Body>()
 // cannon-es-debugger integration
 let cannonDebugger: any | null = null
 let cannonDebuggerGroup: THREE.Group | null = null
+let groundCollisionDebugGroup: THREE.Group | null = null
+let wheelRayDebugGroup: THREE.Group | null = null
+const groundCollisionDebugBoxEdgesGeometry = new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1))
+const groundCollisionDebugCenterGeometry = new THREE.SphereGeometry(0.22, 10, 8)
+const wheelRayDebugHitGeometry = new THREE.SphereGeometry(0.14, 12, 10)
+const wheelRayDebugLineGeometry = new THREE.BufferGeometry().setFromPoints([
+	new THREE.Vector3(0, 0, 0),
+	new THREE.Vector3(0, 1, 0),
+])
+const groundCollisionDebugMaterialPalette = {
+	compiled: new THREE.LineBasicMaterial({
+		color: 0x4dd7ff,
+		transparent: true,
+		opacity: 0.34,
+		depthTest: false,
+		toneMapped: false,
+	}),
+	infiniteManifest: new THREE.LineBasicMaterial({
+		color: 0x7dff6b,
+		transparent: true,
+		opacity: 0.34,
+		depthTest: false,
+		toneMapped: false,
+	}),
+	infiniteDetailed: new THREE.LineBasicMaterial({
+		color: 0xffb44d,
+		transparent: true,
+		opacity: 0.36,
+		depthTest: false,
+		toneMapped: false,
+	}),
+	infiniteFlat: new THREE.LineBasicMaterial({
+		color: 0xe6e6e6,
+		transparent: true,
+		opacity: 0.28,
+		depthTest: false,
+		toneMapped: false,
+	}),
+	center: new THREE.MeshBasicMaterial({
+		color: 0xffffff,
+		transparent: true,
+		opacity: 0.72,
+		depthTest: false,
+		toneMapped: false,
+	}),
+}
+const wheelRayDebugMaterialPalette = {
+	hit: new THREE.MeshBasicMaterial({
+		color: 0xffd84d,
+		transparent: true,
+		opacity: 0.92,
+		depthTest: false,
+		toneMapped: false,
+	}),
+	normal: new THREE.LineBasicMaterial({
+		color: 0x4dd7ff,
+		transparent: true,
+		opacity: 0.95,
+		depthTest: false,
+		toneMapped: false,
+	}),
+	suspension: new THREE.LineBasicMaterial({
+		color: 0x7dff6b,
+		transparent: true,
+		opacity: 0.9,
+		depthTest: false,
+		toneMapped: false,
+	}),
+	compression: new THREE.LineBasicMaterial({
+		color: 0xf0a84d,
+		transparent: true,
+		opacity: 0.95,
+		depthTest: false,
+		toneMapped: false,
+	}),
+	miss: new THREE.LineBasicMaterial({
+		color: 0xff6b6b,
+		transparent: true,
+		opacity: 0.85,
+		depthTest: false,
+		toneMapped: false,
+	}),
+}
+let groundCollisionDebugLastLogKey = ''
+let wheelRayDebugLastLogKey = ''
 
 async function ensureCannonDebugger(): Promise<void> {
 	if (!physicsWorld || !scene || !isCannonDebuggerVisible.value) return
@@ -2432,6 +2497,268 @@ function disposeCannonDebugger(): void {
 	}
 	cannonDebugger = null
 	cannonDebuggerGroup = null
+}
+
+function clearGroundCollisionDebugVisualization(): void {
+	if (!groundCollisionDebugGroup) {
+		return
+	}
+	groundCollisionDebugGroup.clear()
+}
+
+function disposeGroundCollisionDebugVisualization(): void {
+	if (scene && groundCollisionDebugGroup) {
+		scene.remove(groundCollisionDebugGroup)
+	}
+	clearGroundCollisionDebugVisualization()
+	groundCollisionDebugGroup = null
+	groundCollisionDebugLastLogKey = ''
+}
+
+function stringifyDebugValue(value: unknown): string {
+	try {
+		return JSON.stringify(value, null, 2)
+	} catch (error) {
+		return `"[Unserializable debug value: ${error instanceof Error ? error.message : String(error)}]"`
+	}
+}
+
+type GroundCollisionDebugShapeDefinition = {
+	matrix: number[][]
+	elementSize: number
+	width: number
+	depth: number
+	offset?: [number, number, number] | null
+}
+
+type GroundCollisionDebugEntry = {
+	family: 'compiled' | 'infinite'
+	source: string
+	key: string
+	instance: CANNON.Body
+	shapeDefinitions: GroundCollisionDebugShapeDefinition[]
+}
+
+function getGroundCollisionDebugMaterial(family: GroundCollisionDebugEntry['family'], source: string): THREE.LineBasicMaterial {
+	if (family === 'compiled') {
+		return groundCollisionDebugMaterialPalette.compiled
+	}
+	if (source === 'runtime-detailed') {
+		return groundCollisionDebugMaterialPalette.infiniteDetailed
+	}
+	if (source === 'base-flat') {
+		return groundCollisionDebugMaterialPalette.infiniteFlat
+	}
+	return groundCollisionDebugMaterialPalette.infiniteManifest
+}
+
+function summarizeHeightfieldMatrix(matrix: number[][]): { min: number; max: number } {
+	let min = Number.POSITIVE_INFINITY
+	let max = Number.NEGATIVE_INFINITY
+	matrix.forEach((column) => {
+		column.forEach((value) => {
+			if (!Number.isFinite(value)) {
+				return
+			}
+			min = Math.min(min, value)
+			max = Math.max(max, value)
+		})
+	})
+	if (!Number.isFinite(min) || !Number.isFinite(max)) {
+		return { min: 0, max: 0 }
+	}
+	return { min, max }
+}
+
+function syncGroundCollisionDebugVisualization(entries: GroundCollisionDebugEntry[]): void {
+	const debugGroup = groundCollisionDebugGroup
+	if (!scene || !debugGroup) {
+		return
+	}
+	debugGroup.clear()
+	const summary = entries.map((entry) => ({
+		family: entry.family,
+		key: entry.key,
+		source: entry.source,
+		shapeCount: entry.shapeDefinitions.length,
+		shapes: entry.shapeDefinitions.map((shape) => {
+			const rows = shape.matrix.length
+			const columns = shape.matrix[0]?.length ?? 0
+			const range = summarizeHeightfieldMatrix(shape.matrix)
+			return {
+				rows,
+				columns,
+				elementSize: shape.elementSize,
+				width: shape.width,
+				depth: shape.depth,
+				minHeight: range.min,
+				maxHeight: range.max,
+				offset: shape.offset ?? [0, 0, 0],
+			}
+		}),
+	}))
+	const logKey = stringifyDebugValue(summary)
+	if (logKey !== groundCollisionDebugLastLogKey) {
+		groundCollisionDebugLastLogKey = logKey
+		console.info('[ScenePreview][GroundCollisionDebug]', logKey)
+	}
+
+	entries.forEach((entry, entryIndex) => {
+		const material = getGroundCollisionDebugMaterial(entry.family, entry.source)
+		const bodyPosition = new THREE.Vector3(entry.instance.position.x, entry.instance.position.y, entry.instance.position.z)
+		const bodyQuaternion = new THREE.Quaternion(
+			entry.instance.quaternion.x,
+			entry.instance.quaternion.y,
+			entry.instance.quaternion.z,
+			entry.instance.quaternion.w,
+		)
+		entry.shapeDefinitions.forEach((shape, shapeIndex) => {
+			const width = Math.max(1e-3, Number(shape.width) || 0)
+			const depth = Math.max(1e-3, Number(shape.depth) || 0)
+			const range = summarizeHeightfieldMatrix(shape.matrix)
+			const height = Math.max(0.08, range.max - range.min)
+			const offset = shape.offset ?? [0, 0, 0]
+			const localCenter = new THREE.Vector3(
+				(offset[0] ?? 0) + width * 0.5,
+				(offset[1] ?? 0) + depth * 0.5,
+				range.min + height * 0.5,
+			)
+			const worldCenter = localCenter.clone().applyQuaternion(bodyQuaternion).add(bodyPosition)
+			const box = new THREE.LineSegments(groundCollisionDebugBoxEdgesGeometry, material)
+			box.name = `ground-collision-debug:${entry.family}:${entry.key}:${entryIndex}:${shapeIndex}`
+			box.position.copy(worldCenter)
+			box.quaternion.copy(bodyQuaternion)
+			box.scale.set(width, depth, height)
+			debugGroup.add(box)
+
+			const center = new THREE.Mesh(groundCollisionDebugCenterGeometry, groundCollisionDebugMaterialPalette.center)
+			center.name = `${box.name}:center`
+			center.position.copy(worldCenter)
+			center.quaternion.copy(bodyQuaternion)
+			const centerScale = Math.max(0.14, Math.min(width, depth, height) * 0.08)
+			center.scale.setScalar(centerScale)
+			debugGroup.add(center)
+		})
+	})
+}
+
+function clearWheelRayDebugVisualization(): void {
+	if (!wheelRayDebugGroup) {
+		return
+	}
+	wheelRayDebugGroup.clear()
+}
+
+function disposeWheelRayDebugVisualization(): void {
+	if (scene && wheelRayDebugGroup) {
+		scene.remove(wheelRayDebugGroup)
+	}
+	clearWheelRayDebugVisualization()
+	wheelRayDebugGroup = null
+	wheelRayDebugLastLogKey = ''
+}
+
+type WheelRayDebugVector = [number, number, number]
+
+type VehicleWheelRayDebugEntry = {
+	vehicleNodeId: string
+	wheelIndex: number
+	wheelNodeId: string | null
+	isFrontWheel: boolean
+	isInContact: boolean
+	radius: number
+	rayFromWorld: WheelRayDebugVector | null
+	rayToWorld: WheelRayDebugVector | null
+	hitPointWorld: WheelRayDebugVector | null
+	hitNormalWorld: WheelRayDebugVector | null
+	suspensionLength: number | null
+	suspensionRestLength: number | null
+	compression: number | null
+}
+
+function vec3ToTuple(vec: CANNON.Vec3 | null | undefined): WheelRayDebugVector | null {
+	if (!vec) {
+		return null
+	}
+	const x = Number(vec.x)
+	const y = Number(vec.y)
+	const z = Number(vec.z)
+	if (![x, y, z].every((value) => Number.isFinite(value))) {
+		return null
+	}
+	return [x, y, z]
+}
+
+function tupleToThreeVector(tuple: WheelRayDebugVector | null | undefined, fallback = new THREE.Vector3()): THREE.Vector3 {
+	if (!tuple) {
+		return fallback.clone()
+	}
+	const [x, y, z] = tuple
+	if (![x, y, z].every((value) => Number.isFinite(value))) {
+		return fallback.clone()
+	}
+	return new THREE.Vector3(x, y, z)
+}
+
+function syncWheelRayDebugVisualization(entries: VehicleWheelRayDebugEntry[]): void {
+	const debugGroup = wheelRayDebugGroup
+	if (!scene || !debugGroup) {
+		return
+	}
+	debugGroup.clear()
+	const logKey = stringifyDebugValue(entries)
+	if (logKey !== wheelRayDebugLastLogKey) {
+		wheelRayDebugLastLogKey = logKey
+		console.info('[ScenePreview][WheelRayDebug]', logKey)
+	}
+
+	entries.forEach((entry) => {
+		const hitPoint = tupleToThreeVector(entry.hitPointWorld)
+		const normal = tupleToThreeVector(entry.hitNormalWorld, new THREE.Vector3(0, 1, 0))
+		const rayFrom = tupleToThreeVector(entry.rayFromWorld, hitPoint)
+		const rayTo = tupleToThreeVector(entry.rayToWorld, hitPoint)
+		const hitSphere = new THREE.Mesh(wheelRayDebugHitGeometry, wheelRayDebugMaterialPalette.hit)
+		hitSphere.position.copy(hitPoint)
+		const hitScale = entry.isInContact ? 1 : 0.7
+		hitSphere.scale.setScalar(Math.max(0.06, entry.radius * 0.28 * hitScale))
+		hitSphere.name = `wheel-ray-hit:${entry.vehicleNodeId}:${entry.wheelIndex}`
+		debugGroup.add(hitSphere)
+
+		const suspensionLine = new THREE.Line(wheelRayDebugLineGeometry, entry.isInContact ? wheelRayDebugMaterialPalette.suspension : wheelRayDebugMaterialPalette.miss)
+		const suspensionLength = Number.isFinite(entry.suspensionLength ?? NaN) ? Math.max(0, entry.suspensionLength ?? 0) : 0
+		const suspensionVector = rayTo.clone().sub(rayFrom)
+		const suspensionVectorLength = suspensionVector.length()
+		if (suspensionVectorLength > 1e-8) {
+			suspensionLine.position.copy(rayFrom)
+			suspensionLine.scale.set(1, suspensionVectorLength, 1)
+			suspensionLine.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), suspensionVector.normalize())
+			suspensionLine.name = `wheel-ray-suspension:${entry.vehicleNodeId}:${entry.wheelIndex}`
+			debugGroup.add(suspensionLine)
+		}
+
+		if (entry.isInContact && entry.compression !== null && entry.compression > 0 && suspensionVectorLength > 1e-8) {
+			const compressionLine = new THREE.Line(wheelRayDebugLineGeometry, wheelRayDebugMaterialPalette.compression)
+			const compressionLength = Math.min(Math.max(0, entry.compression), suspensionLength > 0 ? suspensionLength : suspensionVectorLength)
+			if (compressionLength > 1e-8) {
+				compressionLine.position.copy(rayFrom)
+				compressionLine.scale.set(1, compressionLength, 1)
+				compressionLine.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), suspensionVector.clone().normalize())
+				compressionLine.name = `wheel-ray-compression:${entry.vehicleNodeId}:${entry.wheelIndex}`
+				debugGroup.add(compressionLine)
+			}
+		}
+
+		const normalVector = normal.clone()
+		if (normalVector.lengthSq() > 1e-8 && entry.isInContact) {
+			const normalLength = Math.max(0.25, Math.min(3, entry.radius * 2.5 + suspensionLength * 0.5))
+			const normalLine = new THREE.Line(wheelRayDebugLineGeometry, wheelRayDebugMaterialPalette.normal)
+			normalLine.position.copy(hitPoint)
+			normalLine.scale.set(1, normalLength, 1)
+			normalLine.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), normalVector.normalize())
+			normalLine.name = `wheel-ray-normal:${entry.vehicleNodeId}:${entry.wheelIndex}`
+			debugGroup.add(normalLine)
+		}
+	})
 }
 
 type GroundChunkUserData = {
@@ -5225,10 +5552,6 @@ function updateCanvasCursor() {
 }
 
 function resolvePreviewMapRadiusHint(distance: number): number {
-	const groundSize = resolveGroundViewportWorldSize()
-	if (groundSize) {
-		return Math.max(1, Math.hypot(groundSize.width, groundSize.depth) * 0.25)
-	}
 	return Math.max(1, distance)
 }
 
@@ -9383,6 +9706,12 @@ function initRenderer() {
 	rootGroup.name = 'ScenePreviewRoot'
 	scene.add(rootGroup)
 	scene.add(instancedMeshGroup)
+	groundCollisionDebugGroup = new THREE.Group()
+	groundCollisionDebugGroup.name = '__harmony_ground_collision_debug__'
+	scene.add(groundCollisionDebugGroup)
+	wheelRayDebugGroup = new THREE.Group()
+	wheelRayDebugGroup.name = '__harmony_wheel_ray_debug__'
+	scene.add(wheelRayDebugGroup)
 	ensureSceneCsmShadowRuntime()
 	applyRendererShadowSetting()
 	clearInstancedMeshes()
@@ -9982,6 +10311,8 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	resetAnimationControllers()
 	// dispose cannon-es-debugger visualizer as well
 	disposeCannonDebugger()
+	disposeGroundCollisionDebugVisualization()
+	disposeWheelRayDebugVisualization()
 	hidePurposeControls()
 	activeCameraLookTween = null
 	setCameraCaging(false)
@@ -10105,15 +10436,8 @@ function applyFogSettings(settings: EnvironmentSettings) {
 	}
 	const fogColor = new THREE.Color(settings.fogColor)
 	if (settings.fogMode === 'linear') {
-		const groundSize = resolveGroundViewportWorldSize()
-		const adaptiveRange = resolveAdaptiveLinearFogRange({
-			settings,
-			groundWidth: groundSize?.width,
-			groundDepth: groundSize?.depth,
-			referenceFar: DEFAULT_SCENE_CAMERA_FAR,
-		})
-		const near = adaptiveRange ? adaptiveRange.fogNear : Math.max(0, settings.fogNear)
-		const far = adaptiveRange ? adaptiveRange.fogFar : Math.max(near + 0.001, settings.fogFar)
+		const near = Math.max(0, settings.fogNear)
+		const far = Math.max(near + 0.001, settings.fogFar)
 		syncCameraFar(far)
 		if (scene.fog instanceof THREE.Fog) {
 			scene.fog.color.copy(fogColor)
@@ -11030,6 +11354,8 @@ function resetPhysicsWorld(): void {
 	vehicleInstances.clear()
 	rigidbodyInstances.clear()
 	clearPreviewInfiniteGroundChunkCollisionBodies()
+	clearGroundCollisionDebugVisualization()
+	clearWheelRayDebugVisualization()
 	airWallBodies.clear()
 	physicsWorld = null
 	// dispose cannon debugger if present
@@ -11406,6 +11732,9 @@ function removeVehicleInstance(nodeId: string): void {
 	}
 	vehicleInstances.delete(nodeId)
 	scenePreviewPerf.notifyRemovedNode(nodeId)
+	if (!vehicleInstances.size) {
+		clearWheelRayDebugVisualization()
+	}
 }
 
 function ensureVehicleBindingForNode(nodeId: string): void {
@@ -11656,6 +11985,7 @@ function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null):
 function stepPhysicsWorld(delta: number): void {
 	if (!physicsEnvironmentEnabled.value || !physicsWorld || !rigidbodyInstances.size) {
 		physicsAccumulator = 0
+		clearWheelRayDebugVisualization()
 		return
 	}
 
@@ -11760,6 +12090,7 @@ function updateVehicleWheelVisuals(delta: number): void {
 	}
 
 	const nowMs = Date.now()
+	const wheelRayDebugEntries: VehicleWheelRayDebugEntry[] = []
 	vehicleInstances.forEach((instance) => {
 		const nodeId = instance.nodeId ?? null
 		const manualActive = vehicleDriveState.active && vehicleDriveState.nodeId === nodeId
@@ -11799,7 +12130,7 @@ function updateVehicleWheelVisuals(delta: number): void {
 		instance.lastChassisPosition.copy(wheelChassisPositionHelper)
 		instance.hasChassisPositionSample = true
 
-		const wheelInfos = vehicle.wheelInfos as Array<{ steering?: number }>
+		const wheelInfos = vehicle.wheelInfos as Array<Record<string, any>>
 
 		wheelBindings.forEach((binding) => {
 			if (!binding.nodeId) {
@@ -11888,8 +12219,54 @@ function updateVehicleWheelVisuals(delta: number): void {
 			wheelObject.quaternion.copy(wheelVisualQuaternionHelper)
 
 			syncInstancedTransform(wheelObject)
+
+			const wheelInfo = wheelInfos[binding.wheelIndex] ?? null
+			const raycastResult = (wheelInfo?.raycastResult ?? null) as Record<string, any> | null
+			const rayFromWorld = vec3ToTuple(
+				(raycastResult?.rayFromWorld as CANNON.Vec3 | null | undefined)
+					?? (wheelInfo?.chassisConnectionPointWorld as CANNON.Vec3 | null | undefined)
+					?? null,
+			)
+			const directionWorld = vec3ToTuple((wheelInfo?.directionWorld as CANNON.Vec3 | null | undefined) ?? null)
+			const rayToWorld = vec3ToTuple(
+				(raycastResult?.rayToWorld as CANNON.Vec3 | null | undefined)
+					?? (rayFromWorld && directionWorld
+						? new CANNON.Vec3(
+							rayFromWorld[0] + directionWorld[0] * ((Number(wheelInfo?.suspensionRestLength) || 0) + binding.radius),
+							rayFromWorld[1] + directionWorld[1] * ((Number(wheelInfo?.suspensionRestLength) || 0) + binding.radius),
+							rayFromWorld[2] + directionWorld[2] * ((Number(wheelInfo?.suspensionRestLength) || 0) + binding.radius),
+						)
+						: null),
+			)
+			const hitPointWorld = vec3ToTuple((raycastResult?.hitPointWorld as CANNON.Vec3 | null | undefined) ?? null)
+			const hitNormalWorld = vec3ToTuple((raycastResult?.hitNormalWorld as CANNON.Vec3 | null | undefined) ?? null)
+			const suspensionLength = Number.isFinite(Number(wheelInfo?.suspensionLength)) ? Number(wheelInfo?.suspensionLength) : null
+			const suspensionRestLength = Number.isFinite(Number(wheelInfo?.suspensionRestLength))
+				? Number(wheelInfo?.suspensionRestLength)
+				: Number.isFinite(binding.radius)
+					? binding.radius + (Number(wheelInfo?.maxSuspensionTravel) || 0)
+					: null
+			const compression = suspensionLength !== null && suspensionRestLength !== null
+				? Math.max(0, suspensionRestLength - suspensionLength)
+				: null
+			wheelRayDebugEntries.push({
+				vehicleNodeId: nodeId ?? '',
+				wheelIndex: binding.wheelIndex,
+				wheelNodeId: binding.nodeId,
+				isFrontWheel: binding.isFrontWheel,
+				isInContact: Boolean(wheelInfo?.isInContact ?? raycastResult?.hasHit),
+				radius: binding.radius,
+				rayFromWorld,
+				rayToWorld,
+				hitPointWorld: hitPointWorld ?? rayToWorld,
+				hitNormalWorld,
+				suspensionLength,
+				suspensionRestLength,
+				compression,
+			})
 		})
 	})
+	syncWheelRayDebugVisualization(wheelRayDebugEntries)
 }
 
 function updateNodeTransfrom(object: THREE.Object3D, node: SceneNode) {
