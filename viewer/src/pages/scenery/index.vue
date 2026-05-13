@@ -17,6 +17,7 @@
 import { computed, ref } from 'vue';
 import { onLoad, onUnload } from '@dcloudio/uni-app';
 import SceneryViewer from './uni_modules/scenery/components/SceneryViewer.vue';
+import type { SceneryPhysicsBackendLoaders } from './uni_modules/scenery/common/physics/createSceneryPhysicsBridge';
 import { createPunchRecord, getDownloadCdnBaseUrl, getPunchProgress } from '@harmony/utils';
 
 const projectId = ref<string>('');
@@ -25,17 +26,22 @@ const packageUrl = ref<string>('');
 const sceneSpotId = ref<string>('');
 const sceneId = ref<string>('');
 const selectedVehicleIdentifier = ref<string>('');
-const enterAt = ref<number>(0);
 const initialPunchedNodeIds = ref<string[]>([]);
 const serverAssetBaseUrl = getDownloadCdnBaseUrl();
-const physicsBackendLoaders = {
-  loadAmmoRuntime: () => {},
-  loadCannonRuntime: () => {},
+
+const physicsBackendLoaders: SceneryPhysicsBackendLoaders = {
+  loadAmmoRuntime: async () => {
+    return await import('@/runtime/physics-ammo');
+  },
+  loadCannonRuntime: async () => {
+    return await import('@/runtime/physics-cannon');
+  },
 };
+
 const nominateStateMap = computed(() => {
   const vehicleIdentifier = selectedVehicleIdentifier.value.trim();
   if (!vehicleIdentifier) {
-    return null;
+    return undefined;
   }
   return {
     [vehicleIdentifier]: {
@@ -118,7 +124,6 @@ onLoad((query: Record<string, unknown> | undefined) => {
   sceneSpotId.value = typeof record.sceneSpotId === 'string' ? record.sceneSpotId : '';
   sceneId.value = typeof record.sceneId === 'string' ? record.sceneId : '';
   selectedVehicleIdentifier.value =  typeof record.vehicleIdentifier === 'string' ? record.vehicleIdentifier : 'car1';
-  enterAt.value = Date.now();
 
   void loadPunchProgress();
 });

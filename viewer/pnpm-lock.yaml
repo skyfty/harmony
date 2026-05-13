@@ -26,6 +26,18 @@ importers:
       '@harmony/scenery':
         specifier: file:../scenery
         version: file:../scenery(three@0.172.0)
+      '@harmony/physics-bridge':
+        specifier: file:../physics-bridge
+        version: file:../physics-bridge
+      '@harmony/physics-ammo':
+        specifier: file:../physics-ammo
+        version: file:../physics-ammo
+      '@harmony/physics-cannon':
+        specifier: file:../physics-cannon
+        version: file:../physics-cannon
+      '@harmony/physics-core':
+        specifier: file:../physics-core
+        version: file:../physics-core
       '@harmony/schema':
         specifier: file:../schema
         version: file:../schema
@@ -35,12 +47,18 @@ importers:
       '@minisheep/mini-program-polyfill-core':
         specifier: ^1.1.5
         version: 1.1.5
+      ammojs3:
+        specifier: ^0.0.11
+        version: 0.0.11
       '@vue/shared':
         specifier: ^3.5.13
         version: 3.5.28
       event-target-shim:
         specifier: ^6.0.2
         version: 6.0.2
+      cannon-es:
+        specifier: ^0.20.0
+        version: 0.20.0
       fflate:
         specifier: ^0.8.2
         version: 0.8.2
@@ -1118,6 +1136,14 @@ packages:
 
   '@harmony/physics-bridge@file:../physics-bridge':
     resolution: {directory: ../physics-bridge, type: directory}
+    engines: {pnpm: '>=10.0.0'}
+
+  '@harmony/physics-ammo@file:../physics-ammo':
+    resolution: {directory: ../physics-ammo, type: directory}
+    engines: {pnpm: '>=10.0.0'}
+
+  '@harmony/physics-cannon@file:../physics-cannon':
+    resolution: {directory: ../physics-cannon, type: directory}
     engines: {pnpm: '>=10.0.0'}
 
   '@harmony/physics-core@file:../physics-core':
@@ -5787,6 +5813,18 @@ snapshots:
     dependencies:
       '@harmony/physics-core': file:../physics-core
 
+  '@harmony/physics-ammo@file:../physics-ammo':
+    dependencies:
+      '@harmony/physics-bridge': file:../physics-bridge
+      '@harmony/physics-core': file:../physics-core
+      ammojs3: 0.0.11
+
+  '@harmony/physics-cannon@file:../physics-cannon':
+    dependencies:
+      '@harmony/physics-bridge': file:../physics-bridge
+      '@harmony/physics-core': file:../physics-core
+      cannon-es: 0.20.0
+
   '@harmony/physics-core@file:../physics-core': {}
 
   '@harmony/scenery@file:../scenery(three@0.172.0)':
@@ -5808,6 +5846,10 @@ snapshots:
       robust-predicates: 1.1.0
       splaytree: 3.2.3
       three: 0.162.0
+
+  ammojs3@0.0.11: {}
+
+  cannon-es@0.20.0: {}
       three-csm: 4.2.1
       three-mesh-bvh: 0.9.8(three@0.162.0)
 

@@ -4,8 +4,8 @@ import uni from '@dcloudio/vite-plugin-uni';
 import threePlatformAdapter from '@minisheep/three-platform-adapter/plugin';
 import glsl from 'vite-plugin-glsl';
 import { visualizer } from 'rollup-plugin-visualizer';
-import { createMpChunkSplitterPlugin } from "@minisheep/vite-plugin-mp-chunk-splitter";
-import { toCustomChunkPlugin } from "@harmony/tools/vite";
+import { createMpChunkSplitterPlugin } from '@minisheep/vite-plugin-mp-chunk-splitter';
+import { toCustomChunkPlugin } from '@harmony/tools/vite';
 
 // https://vitejs.dev/config/
 const uniPlatform = process.env.UNI_PLATFORM;
@@ -21,7 +21,7 @@ const _require = createRequire(import.meta.url);
 let vueRuntimeAlias: string;
 try {
   vueRuntimeAlias = _require.resolve(rawVueRuntimeAlias);
-} catch (e) {
+} catch {
   vueRuntimeAlias = 'vue';
 }
 
@@ -50,140 +50,131 @@ function resolveAssetFileName(assetInfo: { name?: string }): string | undefined 
 }
 
 export default {
-    optimizeDeps: {
-      exclude: ['@minisheep/three-platform-adapter'],
-      esbuildOptions: {
-        target: buildTarget,
-      },
-    },
-    esbuild: {
+  optimizeDeps: {
+    exclude: ['@minisheep/three-platform-adapter'],
+    esbuildOptions: {
       target: buildTarget,
     },
-    build: {
-      target: buildTarget,
-      rollupOptions: {
-        output: {
-          chunkFileNames: isMp
-            ? 'pages/shared/chunks/[hash].js'
-            : 'assets/chunks/[hash].js',
-          entryFileNames: isMp
-            ? 'pages/shared/entries/[hash].js'
-            : 'assets/entries/[hash].js',
-          assetFileNames(assetInfo) {
-            return resolveAssetFileName(assetInfo) ?? 'assets/[name].[hash][extname]';
-          },
+  },
+  esbuild: {
+    target: buildTarget,
+  },
+  build: {
+    target: buildTarget,
+    rollupOptions: {
+      output: {
+        chunkFileNames: isMp ? 'pages/shared/chunks/[hash].js' : 'assets/chunks/[hash].js',
+        entryFileNames: isMp ? 'pages/shared/entries/[hash].js' : 'assets/entries/[hash].js',
+        assetFileNames(assetInfo) {
+          return resolveAssetFileName(assetInfo) ?? 'assets/[name].[hash][extname]';
         },
       },
     },
-    resolve: {
-      alias: {
-        '@schema': useBuiltHarmonyPackages
-          ? fileURLToPath(new URL('../schema/dist', import.meta.url))
-          : fileURLToPath(new URL('../schema', import.meta.url)),
-        '@harmony/schema': useBuiltHarmonyPackages
-          ? fileURLToPath(new URL('../schema/dist', import.meta.url))
-          : fileURLToPath(new URL('../schema', import.meta.url)),
-        '@harmony/physics-core': fileURLToPath(new URL('../physics-core/src', import.meta.url)),
-        '@harmony/physics-bridge': fileURLToPath(new URL('../physics-bridge/src', import.meta.url)),
-
-        'vue': vueRuntimeAlias,
-        'three': fileURLToPath(new URL('./node_modules/three', import.meta.url)),
-        'three/examples': fileURLToPath(new URL('./node_modules/three/examples', import.meta.url)),
-        '@three-examples': fileURLToPath(new URL('./node_modules/three/examples/jsm', import.meta.url)),
-      },
+  },
+  resolve: {
+    alias: {
+      '@schema': useBuiltHarmonyPackages
+        ? fileURLToPath(new URL('../schema/dist', import.meta.url))
+        : fileURLToPath(new URL('../schema', import.meta.url)),
+      '@harmony/schema': useBuiltHarmonyPackages
+        ? fileURLToPath(new URL('../schema/dist', import.meta.url))
+        : fileURLToPath(new URL('../schema', import.meta.url)),
+      '@harmony/physics-core': fileURLToPath(new URL('../physics-core/src', import.meta.url)),
+      '@harmony/physics-bridge': fileURLToPath(new URL('../physics-bridge/src', import.meta.url)),
+      '@harmony/physics-ammo': fileURLToPath(new URL('../physics-ammo/src', import.meta.url)),
+      '@harmony/physics-cannon': fileURLToPath(new URL('../physics-cannon/src', import.meta.url)),
+      'ammojs3': fileURLToPath(new URL('./node_modules/ammojs3', import.meta.url)),
+      'cannon-es': fileURLToPath(new URL('./node_modules/cannon-es', import.meta.url)),
+      'vue': vueRuntimeAlias,
+      'three': fileURLToPath(new URL('./node_modules/three', import.meta.url)),
+      'three/examples': fileURLToPath(new URL('./node_modules/three/examples', import.meta.url)),
+      '@three-examples': fileURLToPath(new URL('./node_modules/three/examples/jsm', import.meta.url)),
     },
-
-    server: {
-      port: 8092,
-      open: true, //启动后是否自动打开浏览器
-      watch: {
-        usePolling: shouldUsePolling,
-        interval: pollingInterval,
-      },
-      hmr: true,
+  },
+  server: {
+    port: 8092,
+    open: true,
+    watch: {
+      usePolling: shouldUsePolling,
+      interval: pollingInterval,
     },
-    plugins: [
-      // esm-only 的包
-      glsl(),
-      getUniPlugin(),
-      visualizer({
-        emitFile: true,
-      }),
-      // Ensure adapter-emitted workers/wasms are placed under the scenery subpackage.
-      // Safe for H5: the plugin only emits these assets for non-web platforms.
-      threePlatformAdapter({
-        assetsOutput: {
-          worker: 'pages/scenery/workers',
-          wasm: 'pages/scenery/wasms',
-        },
-      }),
-      createMpChunkSplitterPlugin({
-        subpackages: ['pages/scenery', 'pages/physics-ammo', 'pages/physics-cannon'],
-        singleChunkMode: true,
-        packageSizeLimit: 1.8 * 1024 * 1024
-      }),
-
-      // 默认情况 uni-app 会将 node_modules 下的模块打包在 common/vendor.js
-      // 这里强制 three 相关依赖进入 scenery 子包，避免主包膨胀
-      toCustomChunkPlugin({
-        manualChunks: {
-          'pages/physics-ammo/chunks/vendor': [
-            '@harmony/physics-core',
-            '@harmony/physics-ammo',
-            '@harmony/physics-bridge',
-            'ammojs3',
-            'ammojs3/**',
-            '**/harmony/physics-core/**',
-            '**/harmony/physics-ammo/**',
-            '**/harmony/physics-bridge/**',
-            '**/node_modules/ammojs3/**',
-          ],
-          'pages/physics-cannon/chunks/vendor': [
-            '@harmony/physics-core',
-            '@harmony/physics-cannon',
-            '@harmony/physics-bridge',
-            'cannon-es',
-            'cannon-es/**',
-            '**/harmony/physics-core/**',
-            '**/harmony/physics-cannon/**',
-            '**/harmony/physics-bridge/**',
-            '**/node_modules/cannon-es/**',
-          ],
-          'pages/scenery/chunks/vendor': [
-            '@minisheep/three-platform-adapter',
-            '@minisheep/three-platform-adapter/wechat',
-            '@minisheep/three-platform-adapter/dist/three-override/jsm/**',
-            'three',
-            // three@0.150+ exposes examples via `three/addons/*` (maps to examples/jsm)
-            'three/addons/**',
-            // Catch any other examples entrypoints (legacy or non-jsm)
-            'three/examples/**',
-            'three/examples/jsm/**',
-            // @harmony/schema 通过 alias 解析到项目根目录之外 (../schema)，
-            // createMpChunkSplitterPlugin 无法识别其归属分包，
-            // 必须显式路由到 scenery 子包，否则会落入 common/vendor.js 并产生跨包 require
-            '**/harmony/schema/**',
-          ]
-        }
-      }),
-
-      {
-        name:'find-dep',
-        config(config){
-          // uni 插件覆盖了这个导致不能正确识别 pnpm 安装模块的依赖
-          const resolve = (config as { resolve?: { preserveSymlinks?: boolean } }).resolve;
-          if (resolve) {
-            resolve.preserveSymlinks = true;
-          } else {
-            (config as { resolve: { preserveSymlinks: boolean } }).resolve = { preserveSymlinks: true };
-          }
+    hmr: true,
+  },
+  plugins: [
+    glsl(),
+    getUniPlugin(),
+    visualizer({
+      emitFile: true,
+    }),
+    // Keep adapter-emitted workers/wasms inside the scenery package boundary.
+    threePlatformAdapter({
+      assetsOutput: {
+        worker: 'pages/scenery/workers',
+        wasm: 'pages/scenery/wasms',
+      },
+    }),
+    createMpChunkSplitterPlugin({
+      subpackages: ['pages/scenery', 'pages/physics-ammo', 'pages/physics-cannon'],
+      singleChunkMode: true,
+      packageSizeLimit: 1.8 * 1024 * 1024,
+    }),
+    toCustomChunkPlugin({
+      manualChunks: {
+        'pages/physics-ammo/chunks/vendor': [
+          '@harmony/physics-core',
+          '@harmony/physics-bridge',
+          '@harmony/physics-ammo',
+          'ammojs3',
+          'ammojs3/**',
+          '**/physics-core/src/**',
+          '**/physics-bridge/src/**',
+          '**/physics-ammo/src/**',
+          '**/harmony/physics-core/**',
+          '**/harmony/physics-bridge/**',
+          '**/harmony/physics-ammo/**',
+          '**/node_modules/ammojs3/**',
+        ],
+        'pages/physics-cannon/chunks/vendor': [
+          '@harmony/physics-core',
+          '@harmony/physics-bridge',
+          '@harmony/physics-cannon',
+          'cannon-es',
+          'cannon-es/**',
+          '**/physics-core/src/**',
+          '**/physics-bridge/src/**',
+          '**/physics-cannon/src/**',
+          '**/harmony/physics-core/**',
+          '**/harmony/physics-bridge/**',
+          '**/harmony/physics-cannon/**',
+          '**/node_modules/cannon-es/**',
+        ],
+        'pages/scenery/chunks/vendor': [
+          '@minisheep/three-platform-adapter',
+          '@minisheep/three-platform-adapter/wechat',
+          '@minisheep/three-platform-adapter/dist/three-override/jsm/**',
+          'three',
+          'three/addons/**',
+          'three/examples/**',
+          'three/examples/jsm/**',
+          '**/harmony/schema/**',
+        ],
+      },
+    }),
+    {
+      name: 'find-dep',
+      config(config) {
+        const resolve = (config as { resolve?: { preserveSymlinks?: boolean } }).resolve;
+        if (resolve) {
+          resolve.preserveSymlinks = true;
+        } else {
+          (config as { resolve: { preserveSymlinks: boolean } }).resolve = { preserveSymlinks: true };
         }
       },
-    ],
-  };
+    },
+  ],
+};
 
 function getUniPlugin() {
-  // vite-plugin-uni 当前版本在以 ESM 形式导出格式异常（默认导出被挂在 default 上）
   const maybeModule = uni as unknown as { default?: () => unknown };
   return typeof maybeModule.default === 'function' ? maybeModule.default() : uni;
 }

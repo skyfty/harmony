@@ -10,20 +10,23 @@ import type {
   PhysicsStepFrame,
   PhysicsVehicleInputCommand,
 } from '@harmony/physics-core'
+import type { AmmoApi } from '@harmony/physics-ammo'
+import type { PhysicsBackendBridge } from '@harmony/physics-bridge'
+import type { PhysicsWorkerController } from '@harmony/physics-bridge/runtime'
 import { initializePhysicsBackendBridge } from '@harmony/physics-bridge/physicsBackendBridge'
 import { createWechatPhysicsBridge, createInMemoryWechatPhysicsWorker } from '@harmony/physics-bridge/wechat'
 
 type AmmoRuntimeModule = {
   createAmmoPhysicsController: (options: {
     moduleFactory: () => Promise<unknown>
-  }) => unknown
+  }) => PhysicsWorkerController
   createDefaultAmmoModuleFactory: <T>() => () => Promise<T>
-  createAmmoSchemaPhysicsBackendBridge: (module: unknown) => unknown
+  createAmmoSchemaPhysicsBackendBridge: (module: AmmoApi) => PhysicsBackendBridge
 }
 
 type CannonRuntimeModule = {
-  createCannonPhysicsController: () => unknown
-  createCannonSchemaPhysicsBackendBridge: () => unknown
+  createCannonPhysicsController: () => PhysicsWorkerController
+  createCannonSchemaPhysicsBackendBridge: () => PhysicsBackendBridge
 }
 
 export type SceneryPhysicsBackendLoaders = {
@@ -165,7 +168,7 @@ class LazySceneryPhysicsBridge implements PhysicsBridge {
       createDefaultAmmoModuleFactory,
       createAmmoSchemaPhysicsBackendBridge,
     } = ammoRuntime
-    const ammoModuleFactory = createDefaultAmmoModuleFactory<unknown>()
+    const ammoModuleFactory = createDefaultAmmoModuleFactory<AmmoApi>()
     const ammoModule = await ammoModuleFactory()
     initializePhysicsBackendBridge(createAmmoSchemaPhysicsBackendBridge(ammoModule))
 
