@@ -9,6 +9,7 @@
       @mousedown.capture="handleDrivePadMouseDown"
     >
       <PlatformCanvas
+        v-if="!error"
         :canvas-id="canvasId"
         type="webgl"
         class="viewer-canvas"
@@ -328,42 +329,6 @@
             />
           </view>
         </view>
-        <view v-if="activeCharacterControlNodeId" class="viewer-drive-action-row">
-          <button
-            class="viewer-drive-action-button"
-            :class="{ 'is-active': characterControlActionState.sprinting }"
-            type="button"
-            hover-class="none"
-            @tap="handleCharacterControlSprintTap"
-          >
-            <text class="viewer-drive-action-button__label">跑</text>
-          </button>
-          <button
-            class="viewer-drive-action-button"
-            type="button"
-            hover-class="none"
-            @tap="handleCharacterControlJumpTap"
-          >
-            <text class="viewer-drive-action-button__label">跳</text>
-          </button>
-          <button
-            class="viewer-drive-action-button"
-            :class="{ 'is-active': characterControlActionState.crouching }"
-            type="button"
-            hover-class="none"
-            @tap="handleCharacterControlCrouchTap"
-          >
-            <text class="viewer-drive-action-button__label">蹲</text>
-          </button>
-          <button
-            class="viewer-drive-action-button"
-            type="button"
-            hover-class="none"
-            @tap="handleCharacterControlInteractTap"
-          >
-            <text class="viewer-drive-action-button__label">交互</text>
-          </button>
-        </view>
       </view>
       <view v-if="vehicleDriveUi.visible" class="viewer-drive-speed-left-floating">
         <SpeedReadout :speed="vehicleSpeedKmh" :aria-hidden="true" />
@@ -418,7 +383,6 @@ import { effectScope, watchEffect, ref, computed, onMounted, onUnmounted, watch,
 import '@minisheep/three-platform-adapter/wechat';
 // #endif
 import * as THREE from 'three';
-import * as CANNON from 'cannon-es';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
 import type { KTX2Loader } from 'three/examples/jsm/loaders/KTX2Loader.js';
@@ -428,11 +392,14 @@ import LanternImageFrame from './LanternImageFrame.vue';
 import DriveJoystick from './DriveJoystick.vue';
 import DriveCompass from './DriveCompass.vue';
 import SpeedReadout from './SpeedReadout.vue';
+import { buildPhysicsSceneAsset } from '@harmony/schema/physicsSceneAsset';
+import { PHYSICS_BODY_TRANSFORM_STRIDE, type PhysicsBackendPreference, type PhysicsBridge, type PhysicsSceneAsset, type PhysicsStepFrame, type PhysicsTransform } from '@harmony/physics-core';
 import { useProjectStore } from '../common/stores/projectStore';
 import { useDebugOverlay } from '../composables/useDebugOverlay';
 import { useBehaviorAlert } from '../composables/useBehaviorAlert';
 import { useBehaviorBubble } from '../composables/useBehaviorBubble';
 import { useLanternAssets } from '../composables/useLanternAssets';
+import { createSceneryPhysicsBridge } from '../common/physics/createSceneryPhysicsBridge';
 import {
   loadScenePackageZip,
   removeScenePackageZip,
@@ -440,12 +407,12 @@ import {
   saveScenePackageZipByCacheKey,
   type ScenePackagePointer,
 } from '@harmony/utils/scene-package-storage';
-import { collectCompiledGroundCoveredChunkKeys } from '@harmony/schema/compiledGround'
 
 type SceneryProps = {
   projectId?: string;
   packageUrl?: string;
   packageCacheKey?: string;
+  physicsEngine?: PhysicsBackendPreference;
   defaultSteerIdentifier?: string;
   nominateStateMap?: NominateExternalStateMap;
   physicsInterpolation?: boolean;
@@ -482,14 +449,11 @@ import {
 } from '@harmony/schema/sceneGraph';
 import {
   cloneRuntimePrefabNode,
-  createVehicleSurfaceSampler,
   createRuntimePrefabDocument,
   parseRuntimePrefabData,
   type RuntimePrefabInitializationMode,
   type RuntimePrefabPlacementOptions,
   type RuntimePrefabSpawnRequest,
-  type VehicleSurfaceSampler,
-  type VehicleSurfaceSample,
 } from '@harmony/schema';
 import { createInstancedBvhFrustumCuller } from '@harmony/schema/instancedBvhFrustumCuller';
 import ResourceCache from '@harmony/schema/ResourceCache';
@@ -497,39 +461,22 @@ import { AssetCache, AssetLoader, configureAssetDownloadHostMirrors, type AssetC
 import { ASSET_DOWNLOAD_HOST_MIRRORS } from '@harmony/schema/assetDownloadMirrors';
 import { isGroundDynamicMesh } from '@harmony/schema/groundHeightfield';
 import {
-  applyGroundTextureToGroundObject,
-  setInfiniteGroundHiddenChunkKeys,
-  setGroundMaterial,
-  setGroundSculptedMaterial,
-  syncGroundChunkLoadingMode,
-  sampleGroundHeight,
+  resolveCompiledGroundCollisionRuntimeState,
+} from '@harmony/schema/compiledGroundCollisionRuntime';
+import {
+  resolveInfiniteGroundChunkCollisionRuntimeState,
+} from '@harmony/schema/infiniteGroundChunkCollisions';
+import {
+  areAllGroundChunksLoaded,
+  ensureAllGroundChunks,
+  isGroundChunkStreamingEnabled,
+  updateGroundChunks,
 } from '@harmony/schema/groundMesh';
-import { createInfiniteGroundChunkColliderRuntime } from '@harmony/schema/infiniteGroundChunkCollisions';
 import {
-  clearCompiledGroundRenderTiles,
-  computeCompiledGroundManifestRevision,
-  createCompiledGroundCollisionRuntime,
-  syncCompiledGroundRenderTiles,
-  type CompiledGroundManifest,
-} from '@harmony/schema';
-import { collectLoadedCompiledGroundChunkKeys } from '@harmony/schema/compiledGroundRuntime';
-
-import {
-  ensurePhysicsWorld as ensureSharedPhysicsWorld,
-  createRigidbodyBody as createSharedRigidbodyBody,
+  type PhysicsBodyBindingEntry as RigidbodyInstance,
+  type PhysicsOrientationAdjustment as RigidbodyOrientationAdjustment,
   syncBodyFromObject as syncSharedBodyFromObject,
-  syncObjectFromBody as syncSharedObjectFromBody,
-  removeRigidbodyInstanceBodies,
-  ensureRoadHeightfieldRigidbodyInstance,
-  isRoadDynamicMesh,
-  type GroundHeightfieldCacheEntry,
-  type FloorShapeCacheEntry,
-  type WallTrimeshCacheEntry,
-  type PhysicsContactSettings,
-  type RigidbodyInstance,
-  type RigidbodyMaterialEntry,
-  type RigidbodyOrientationAdjustment,
-} from '@harmony/schema/physicsEngine';
+} from '@harmony/schema/physicsBodySync';
 import { loadNodeObject } from '@harmony/schema/modelAssetLoader';
 
 import { inferAssetTypeOrNull, inferMimeTypeFromAssetId } from '@harmony/schema/assetTypeConversion'
@@ -601,10 +548,6 @@ import {
   readTextFileFromScenePackage,
   type ScenePackageUnzipped,
 } from '@harmony/schema/scenePackageZip';
-import {
-  createTerrainDatasetHeightSamplerFromScenePackage,
-  readTerrainDatasetManifestFromScenePackage,
-} from '../common/utils/terrainDatasetPackage';
 import type {
   AutoTourRouteSnapResult,
   SceneNode,
@@ -613,13 +556,10 @@ import type {
   SceneAssetRegistryEntry,
   SceneMaterialTextureRef,
   GroundDynamicMesh,
-  GroundChunkManifest,
   GroundRuntimeDynamicMesh,
   LanternSlideDefinition,
   SceneResourceSummary,
   SceneResourceSummaryEntry,
-  ScenePackageCompiledGroundEntry,
-  ScenePackageTerrainEntry,
   Vector3Like,
 } from '@harmony/schema/index';
 import { isPointInsideRegionXZ } from '@harmony/schema/index';
@@ -695,16 +635,12 @@ import {
   RIGIDBODY_METADATA_KEY,
 } from '@harmony/schema/components/definitions/rigidbodyComponent';
 import {
-  resolveRoadVehicleCollisionEnabled,
-} from '@harmony/schema/components/definitions/roadComponent';
-import {
   resolveModelCollisionComponentPropsFromNode,
 } from '@harmony/schema/components/definitions/modelCollisionComponent';
 import {
   vehicleComponentDefinition,
   VEHICLE_COMPONENT_TYPE,
   clampVehicleComponentProps,
-  DEFAULT_DIRECTION,
   DEFAULT_AXLE,
   type VehicleComponentProps,
   type VehicleWheelProps,
@@ -721,13 +657,6 @@ import {
 import {
   protagonistComponentDefinition,
 } from '@harmony/schema/components/definitions/protagonistComponent';
-import {
-  characterControllerComponentDefinition,
-  CHARACTER_CONTROLLER_COMPONENT_TYPE,
-  clampCharacterControllerComponentProps,
-  type CharacterControllerComponentProps,
-} from '@harmony/schema/components/definitions/characterControllerComponent';
-import type { CharacterControlRuntimeState } from '@harmony/schema/characterControlRuntime';
 import {
   signboardComponentDefinition,
   SIGNBOARD_COMPONENT_TYPE,
@@ -777,6 +706,7 @@ import {
   type VehicleInstance,
   type VehicleDriveVehicle,
 } from '@harmony/schema/VehicleDriveController';
+import { createBridgeVehicleProxy } from '@harmony/schema/bridgeVehicleProxy';
 import {
   FollowCameraController,
   type CameraFollowState,
@@ -830,9 +760,7 @@ import {
 } from '@harmony/schema/browserPunchProgress';
 import {
   applyMaterialOverrides,
-  applyMaterialConfigToMaterial,
   disposeMaterialTextures,
-  restoreMaterialFromBaseline,
   type MaterialTextureAssignmentOptions,
 } from '@harmony/schema/material';
 
@@ -845,8 +773,7 @@ interface ScenePreviewPayload {
   createdAt?: string;
   updatedAt?: string;
   assetOverrides?: SceneGraphBuildOptions['assetOverrides'];
-  terrain?: ScenePackageTerrainEntry | null;
-};
+}
 
 type RequestedMode = 'project' | null;
 
@@ -930,7 +857,6 @@ type ScenePackageSceneEntry =
       createdAt: string | null;
       updatedAt: string | null;
       document: SceneJsonExportDocument;
-      terrain?: ScenePackageTerrainEntry | null;
     }
   | {
       kind: 'external';
@@ -939,7 +865,6 @@ type ScenePackageSceneEntry =
       createdAt: string | null;
       updatedAt: string | null;
       sceneJsonUrl: string;
-      terrain?: ScenePackageTerrainEntry | null;
     };
 
 type ScenePackageProjectData = {
@@ -999,11 +924,11 @@ const resourcePreloadBytesLabel = computed(() => {
   return '';
 });
 import {
+  createPhysicsBridgeVehicleInputSyncState,
   computePlaySoundDistanceGain,
   resolvePlaySoundSourcePoint,
-  chooseCharacterControlClipName,
-  resolveCharacterControlMoveVector,
-  resolveCharacterControlSpeed,
+  resetPhysicsBridgeVehicleInputSyncState,
+  syncPhysicsBridgeVehicleInput,
   createIndexedDbPersistentAssetStorage,
   createNoopPersistentAssetStorage,
   createWeChatFileSystemPersistentAssetStorage,
@@ -1044,6 +969,21 @@ async function createRgbELoader(manager?: THREE.LoadingManager): Promise<RGBELoa
   return new LoaderClass(manager);
 }
 
+async function loadRgbETextureFromUrl(url: string, manager?: THREE.LoadingManager): Promise<THREE.DataTexture> {
+  const hdrLoader = await createRgbELoader(manager);
+  const buffer = await requestBinaryFromUrl(url);
+  const texData = hdrLoader.parse(buffer);
+  const texture = new THREE.DataTexture(texData.data as any, texData.width, texData.height);
+  texture.type = texData.type;
+  texture.colorSpace = THREE.LinearSRGBColorSpace;
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  texture.generateMipmaps = false;
+  texture.flipY = true;
+  texture.needsUpdate = true;
+  return texture;
+}
+
 async function createKtx2Loader(renderer: THREE.WebGLRenderer): Promise<KTX2Loader> {
   if (!ktx2LoaderClassPromise) {
     ktx2LoaderClassPromise = import('@minisheep/three-platform-adapter/override/jsm/loaders/KTX2Loader.js').then(
@@ -1057,11 +997,24 @@ async function createKtx2Loader(renderer: THREE.WebGLRenderer): Promise<KTX2Load
   return ktx2LoaderInstance;
 }
 
+async function loadKtx2TextureFromUrl(url: string, renderer: THREE.WebGLRenderer): Promise<THREE.Texture> {
+  const ktx2Loader = await createKtx2Loader(renderer);
+  const buffer = await requestBinaryFromUrl(url);
+  return new Promise<THREE.Texture>((resolve, reject) => {
+    (ktx2Loader as unknown as {
+      parse: (data: ArrayBuffer, onLoad: (texture: THREE.Texture) => void, onError?: (error: unknown) => void) => void;
+    }).parse(buffer, resolve, reject);
+  });
+}
+
 function disposeKtx2Loader() {
   ktx2LoaderInstance?.dispose?.();
   ktx2LoaderInstance = null;
 }
 
+function getGroundVertexCount(rows: number, columns: number): number {
+  return (Math.max(1, Math.trunc(rows)) + 1) * (Math.max(1, Math.trunc(columns)) + 1);
+}
 
 // Debug switch: when disabled, do not render the overlay and do not compute debug stats.
 // Enable temporarily via query param `?debug=1`.
@@ -1079,8 +1032,6 @@ const {
 } = useDebugOverlay();
 
 const debugOverlayAriaLabel = computed(() => (debugMode.value === 'full' ? '调试信息，当前 full 模式，点击切换为 fps 模式' : '调试信息，当前 fps 模式，点击切换为 full 模式'));
-
-const cannonDebuggerEnabled = computed(() => debugEnabled.value && debugMode.value === 'full');
 
 type InstancedTransformCacheEntry = {
   assetId: string | null;
@@ -1325,9 +1276,6 @@ const DEFAULT_SCENE_CAMERA_FAR = 1000;
 const CAMERA_WATCH_DURATION = 0.35;
 const CAMERA_LEVEL_DURATION = 0.35;
 const DEFAULT_SCENE_EXPOSURE = 0.7;
-const characterControlMoveScratch = new THREE.Vector3();
-const characterControlRightScratch = new THREE.Vector3();
-const characterControlFacingScratch = new THREE.Vector3();
 
 
 const SCENE_VIEWER_EXPOSURE_BOOST = 1.65;
@@ -1341,6 +1289,8 @@ function resolveSceneExposure(exposure: unknown): number {
     DEFAULT_SCENE_EXPOSURE * SCENE_VIEWER_EXPOSURE_BOOST,
   );
 }
+
+
 const purposeWatchIcon = '👁️';
 const purposeResetIcon = '↕️';
 const lanternCloseIcon = '✖️';
@@ -1360,12 +1310,6 @@ let pendingEnvironmentSettings: EnvironmentSettings | null = null;
 let activeEnvironmentSettings = cloneEnvironmentSettings(DEFAULT_ENVIRONMENT_SETTINGS);
 let renderContext: RenderContext | null = null;
 let currentDocument: SceneJsonExportDocument | null = null;
-let vehicleSurfaceSamplerCache: { nodes: SceneNode[]; sampler: VehicleSurfaceSampler } | null = null;
-const vehicleSurfaceRaycaster = new THREE.Raycaster()
-const vehicleSurfaceRayOrigin = new THREE.Vector3()
-const vehicleSurfaceRayDirection = new THREE.Vector3(0, -1, 0)
-const vehicleSurfaceNormalMatrix = new THREE.Matrix3()
-const vehicleSurfaceNormal = new THREE.Vector3()
 const pendingRuntimePrefabSpawnRequests: RuntimePrefabSpawnRequest[] = [];
 const appliedRuntimePrefabSpawnKeys = new Set<string>();
 const spawnedRuntimePrefabRoots = new Map<string, { root: THREE.Object3D; mode: RuntimePrefabInitializationMode }>();
@@ -1379,108 +1323,6 @@ let canvasResult: UseCanvasResult | null = null;
 let initializing = false;
 let renderScope: EffectScope | null = null;
 const bootstrapFinished = ref(false);
-
-function invalidateVehicleSurfaceSamplerCache(): void {
-  vehicleSurfaceSamplerCache = null;
-}
-
-function isViewerVehicleSurfaceNode(node: SceneNode | null | undefined): boolean {
-  const type = node?.dynamicMesh?.type
-  return type === 'Ground' || type === 'Road' || type === 'Floor'
-}
-
-function resolveViewerVehicleSurfaceKind(node: SceneNode | null | undefined): VehicleSurfaceSample['kind'] | null {
-  const type = node?.dynamicMesh?.type
-  if (type === 'Ground' || type === 'Road' || type === 'Floor') {
-    return type.toLowerCase() as VehicleSurfaceSample['kind']
-  }
-  return null
-}
-
-function sampleViewerVehicleVisualSurfaceAtWorldPosition(
-  x: number,
-  z: number,
-  preferredHeight?: number | null,
-): VehicleSurfaceSample | null {
-  const nodes = currentDocument?.nodes ?? null;
-  if (!nodes?.length || !Number.isFinite(x) || !Number.isFinite(z)) {
-    return null;
-  }
-  const roots: THREE.Object3D[] = [];
-  for (const node of nodes) {
-    if (!isViewerVehicleSurfaceNode(node)) {
-      continue;
-    }
-    const object = nodeObjectMap.get(node.id) ?? null;
-    if (object?.visible) {
-      roots.push(object);
-    }
-  }
-  if (!roots.length) {
-    return null;
-  }
-
-  roots.forEach((root) => root.updateMatrixWorld(true));
-  vehicleSurfaceRayOrigin.set(x, 100000, z);
-  vehicleSurfaceRaycaster.set(vehicleSurfaceRayOrigin, vehicleSurfaceRayDirection);
-  vehicleSurfaceRaycaster.near = 0;
-  vehicleSurfaceRaycaster.far = 200000;
-  const intersections = vehicleSurfaceRaycaster.intersectObjects(roots, true);
-  for (const intersection of intersections) {
-    if (!intersection.object.visible || !Number.isFinite(intersection.point.y)) {
-      continue;
-    }
-    const nodeId = resolveNodeIdFromObject(intersection.object);
-    const node = nodeId ? resolveNodeById(nodeId) : null;
-    const kind = resolveViewerVehicleSurfaceKind(node);
-    if (!nodeId || !kind) {
-      continue;
-    }
-    if (intersection.face?.normal) {
-      vehicleSurfaceNormalMatrix.getNormalMatrix(intersection.object.matrixWorld);
-      vehicleSurfaceNormal.copy(intersection.face.normal).applyMatrix3(vehicleSurfaceNormalMatrix).normalize();
-    } else {
-      vehicleSurfaceNormal.set(0, 1, 0);
-    }
-    if (vehicleSurfaceNormal.lengthSq() <= 1e-8) {
-      vehicleSurfaceNormal.set(0, 1, 0);
-    }
-    const preferredDelta = typeof preferredHeight === 'number' && Number.isFinite(preferredHeight)
-      ? Math.abs(preferredHeight - intersection.point.y)
-      : 0;
-    return {
-      kind,
-      nodeId,
-      point: intersection.point.clone(),
-      normal: vehicleSurfaceNormal.clone(),
-      distance: preferredDelta,
-    };
-  }
-  return null;
-}
-
-function sampleViewerVehicleSurfaceAtWorldPosition(
-  x: number,
-  z: number,
-  preferredHeight?: number | null,
-  edgeMargin?: number | null,
-): VehicleSurfaceSample | null {
-  const visualSurface = sampleViewerVehicleVisualSurfaceAtWorldPosition(x, z, preferredHeight);
-  if (visualSurface) {
-    return visualSurface;
-  }
-  const nodes = currentDocument?.nodes ?? null;
-  if (!nodes) {
-    return null;
-  }
-  if (!vehicleSurfaceSamplerCache || vehicleSurfaceSamplerCache.nodes !== nodes) {
-    vehicleSurfaceSamplerCache = {
-      nodes,
-      sampler: createVehicleSurfaceSampler(nodes),
-    };
-  }
-  return vehicleSurfaceSamplerCache.sampler.sampleSurfaceAtWorld(x, z, preferredHeight, edgeMargin);
-}
 
 const SCENERY_SCENE_CSM_CONFIG = DEFAULT_SCENE_CSM_CONFIG;
 let sceneCsmShadowRuntime: SceneCsmShadowRuntime | null = null;
@@ -1716,8 +1558,7 @@ async function resolveMaterialTexture(ref: SceneMaterialTextureRef): Promise<THR
       try {
       let texture: THREE.Texture;
       if (extension === 'hdr' || extension === 'hdri' || extension === 'rgbe') {
-        const hdrLoader = await createRgbELoader();
-        texture = await hdrLoader.loadAsync(source);
+        texture = await loadRgbETextureFromUrl(source);
       } else {
         // EXR is not available in all module environments; fall back to image loader.
         texture = await textureLoader.loadAsync(source);
@@ -1755,90 +1596,6 @@ const materialOverrideOptions: MaterialTextureAssignmentOptions = {
   },
 };
 
-function resolveViewerGroundMaterial(targetObject: THREE.Object3D): THREE.Material | null {
-  const cached = (targetObject.userData as Record<string, unknown> | undefined)?.groundMaterial;
-  if (cached && !Array.isArray(cached)) {
-    return cached as THREE.Material;
-  }
-  let resolved: THREE.Material | null = null;
-  targetObject.traverse((child) => {
-    if (resolved || !(child as THREE.Mesh).isMesh) {
-      return;
-    }
-    const mesh = child as THREE.Mesh;
-    if (mesh.userData?.groundChunk || mesh.userData?.compiledGroundTile) {
-      return;
-    }
-    const material = mesh.material;
-    resolved = Array.isArray(material) ? (material[0] ?? null) : (material ?? null);
-  });
-  return resolved;
-}
-
-function resolveViewerGroundRuntimeObject(targetObject: THREE.Object3D): THREE.Object3D {
-  const runtimeGroundObject = (targetObject.userData as Record<string, unknown> | undefined)?.groundMesh;
-  return runtimeGroundObject && (runtimeGroundObject as THREE.Object3D).isObject3D
-    ? runtimeGroundObject as THREE.Object3D
-    : targetObject;
-}
-
-function resolveViewerGroundRuntimeDefinition(node: SceneNode): GroundRuntimeDynamicMesh | null {
-  if (dynamicGroundCache?.nodeId === node.id && isGroundDynamicMesh(dynamicGroundCache.dynamicMesh)) {
-    return dynamicGroundCache.dynamicMesh;
-  }
-  return isGroundDynamicMesh(node.dynamicMesh)
-    ? node.dynamicMesh as GroundRuntimeDynamicMesh
-    : null;
-}
-
-function refreshViewerGroundRuntimeMaterials(targetObject: THREE.Object3D, node: SceneNode): void {
-  const groundDefinition = resolveViewerGroundRuntimeDefinition(node);
-  if (!groundDefinition) {
-    return;
-  }
-  const groundObject = resolveViewerGroundRuntimeObject(targetObject);
-  const material = resolveViewerGroundMaterial(groundObject);
-  if (!material) {
-    return;
-  }
-  const config = Array.isArray(node.materials) && node.materials.length > 0
-    ? node.materials[0] ?? null
-    : null;
-  if (config) {
-    applyMaterialConfigToMaterial(material, config, materialOverrideOptions);
-  } else {
-    restoreMaterialFromBaseline(material);
-  }
-  setGroundMaterial(groundObject, material);
-
-  const sculptedConfig = Array.isArray(node.materials) && node.materials.length > 1
-    ? node.materials[1] ?? null
-    : null;
-  if (sculptedConfig) {
-    let sculptedMaterial = (groundObject.userData as Record<string, unknown>).groundSculptedMaterial as THREE.Material | undefined;
-    if (!sculptedMaterial || sculptedMaterial === material) {
-      sculptedMaterial = material.clone();
-    }
-    applyMaterialConfigToMaterial(sculptedMaterial, sculptedConfig, materialOverrideOptions);
-    setGroundSculptedMaterial(groundObject, sculptedMaterial);
-    const hasUserTexture = !!(sculptedConfig.textures?.albedo?.assetId);
-    if (!hasUserTexture) {
-      applyGroundTextureToGroundObject(groundObject, groundDefinition);
-    }
-  } else {
-    setGroundSculptedMaterial(groundObject, null);
-    applyGroundTextureToGroundObject(groundObject, groundDefinition);
-  }
-}
-
-function applyViewerNodeMaterialOverrides(targetObject: THREE.Object3D, node: SceneNode): void {
-  if (isGroundDynamicMesh(node.dynamicMesh)) {
-    refreshViewerGroundRuntimeMaterials(targetObject, node);
-    return;
-  }
-  applyMaterialOverrides(targetObject, node.materials, materialOverrideOptions);
-}
-
 function disposeMaterialTextureCache(): void {
   materialTextureCache.forEach((texture) => texture.dispose?.());
   materialTextureCache.clear();
@@ -1861,7 +1618,6 @@ previewComponentManager.registerDefinition(effectComponentDefinition);
 previewComponentManager.registerDefinition(behaviorComponentDefinition);
 previewComponentManager.registerDefinition(rigidbodyComponentDefinition);
 previewComponentManager.registerDefinition(vehicleComponentDefinition);
-previewComponentManager.registerDefinition(characterControllerComponentDefinition);
 previewComponentManager.registerDefinition(steerComponentDefinition);
 previewComponentManager.registerDefinition(waterComponentDefinition);
 previewComponentManager.registerDefinition(protagonistComponentDefinition);
@@ -1901,12 +1657,6 @@ const instancedLodFrustumCuller = createInstancedBvhFrustumCuller();
 const TERRAIN_SCATTER_LOD_UPDATE_INTERVAL_MS = isWeChatMiniProgram ? 320 : 200;
 const TERRAIN_SCATTER_VISIBILITY_UPDATE_INTERVAL_MS = isWeChatMiniProgram ? 120 : 33;
 const TERRAIN_SCATTER_MAX_BINDING_CHANGES_PER_UPDATE = isWeChatMiniProgram ? 120 : 200;
-const WECHAT_READONLY_TERRAIN_FLAT_TILING_RADIUS_CHUNKS = 20;
-const WECHAT_READONLY_TERRAIN_CHUNK_SYNC_BUDGET = {
-  maxCreatePerUpdate: 4,
-  maxDestroyPerUpdate: 6,
-  maxMs: 4,
-};
 const terrainScatterRuntime = createTerrainScatterLodRuntime({
     lodUpdateIntervalMs: TERRAIN_SCATTER_LOD_UPDATE_INTERVAL_MS,
     visibilityUpdateIntervalMs: TERRAIN_SCATTER_VISIBILITY_UPDATE_INTERVAL_MS,
@@ -1926,54 +1676,15 @@ const TERRAIN_SCATTER_MOVE_THRESHOLD_M = isWeChatMiniProgram ? 0.12 : 0.06;
 const TERRAIN_SCATTER_ROT_THRESHOLD_DEG = isWeChatMiniProgram ? 0.8 : 0.3;
 const TERRAIN_SCATTER_MAX_STALE_MS = isWeChatMiniProgram ? 280 : 140;
 const TERRAIN_SCATTER_ROT_THRESHOLD_RAD = (TERRAIN_SCATTER_ROT_THRESHOLD_DEG * Math.PI) / 180;
-const COMPILED_GROUND_RENDER_MOVE_THRESHOLD_M = isWeChatMiniProgram ? 0.35 : 0;
-const COMPILED_GROUND_RENDER_ROT_THRESHOLD_DEG = isWeChatMiniProgram ? 1.2 : 0;
-const COMPILED_GROUND_RENDER_MAX_STALE_MS = isWeChatMiniProgram ? 180 : 0;
-const COMPILED_GROUND_RENDER_ROT_THRESHOLD_RAD = (COMPILED_GROUND_RENDER_ROT_THRESHOLD_DEG * Math.PI) / 180;
-const COMPILED_GROUND_COLLISION_MOVE_THRESHOLD_M = isWeChatMiniProgram ? 0.2 : 0;
-const COMPILED_GROUND_COLLISION_MAX_STALE_MS = isWeChatMiniProgram ? 90 : 0;
 const terrainScatterLastCameraPos = new THREE.Vector3();
 const terrainScatterLastCameraQuat = new THREE.Quaternion();
 const terrainScatterCameraPosScratch = new THREE.Vector3();
 const terrainScatterCameraQuatScratch = new THREE.Quaternion();
-const compiledGroundRenderLastCameraPos = new THREE.Vector3();
-const compiledGroundRenderLastCameraQuat = new THREE.Quaternion();
-const compiledGroundRenderCameraWorldPosScratch = new THREE.Vector3();
-const compiledGroundRenderCameraLocalPosScratch = new THREE.Vector3();
-const compiledGroundRenderCameraQuatScratch = new THREE.Quaternion();
-const compiledGroundCollisionLastCameraPos = new THREE.Vector3();
-const compiledGroundCollisionCameraWorldPosScratch = new THREE.Vector3();
-const compiledGroundCollisionCameraLocalPosScratch = new THREE.Vector3();
-const compiledGroundCollisionAnchor = new THREE.Object3D();
 let terrainScatterLastUpdateAtMs = 0;
 let terrainScatterForceNextUpdate = true;
-let compiledGroundRenderLastUpdateAtMs = 0;
-let compiledGroundRenderForceNextUpdate = true;
-let compiledGroundRenderLastGroundObject: THREE.Object3D | null = null;
-let compiledGroundRenderLastManifest: CompiledGroundManifest | null = null;
-let compiledGroundRenderLastSourceId = '';
-let compiledGroundRenderLastRevision = -1;
-let compiledGroundRenderLastCenterRow = 0;
-let compiledGroundRenderLastCenterColumn = 0;
-let compiledGroundCollisionLastUpdateAtMs = 0;
-let compiledGroundCollisionForceNextUpdate = true;
-let compiledGroundCollisionLastGroundObject: THREE.Object3D | null = null;
-let compiledGroundCollisionLastManifest: CompiledGroundManifest | null = null;
-let compiledGroundCollisionLastSourceId = '';
-let compiledGroundCollisionLastRevision = -1;
-let compiledGroundCollisionLastCenterRow = 0;
-let compiledGroundCollisionLastCenterColumn = 0;
 
 function markTerrainScatterUpdateDirty(): void {
   terrainScatterForceNextUpdate = true;
-}
-
-function markCompiledGroundRenderUpdateDirty(): void {
-  compiledGroundRenderForceNextUpdate = true;
-}
-
-function markCompiledGroundCollisionUpdateDirty(): void {
-  compiledGroundCollisionForceNextUpdate = true;
 }
 
 function shouldRunTerrainScatterUpdate(camera: THREE.Camera, nowMs: number): boolean {
@@ -2016,178 +1727,6 @@ function shouldRunTerrainScatterUpdate(camera: THREE.Camera, nowMs: number): boo
       terrainScatterLastCameraQuat.copy(terrainScatterCameraQuatScratch);
       return true;
     }
-  }
-
-  return false;
-}
-
-function commitCompiledGroundRenderUpdateState(
-  groundObject: THREE.Object3D,
-  manifest: CompiledGroundManifest,
-  sourceId: string,
-  revision: number,
-  centerRow: number,
-  centerColumn: number,
-  nowMs: number,
-): void {
-  compiledGroundRenderForceNextUpdate = false;
-  compiledGroundRenderLastUpdateAtMs = nowMs;
-  compiledGroundRenderLastGroundObject = groundObject;
-  compiledGroundRenderLastManifest = manifest;
-  compiledGroundRenderLastSourceId = sourceId;
-  compiledGroundRenderLastRevision = revision;
-  compiledGroundRenderLastCenterRow = centerRow;
-  compiledGroundRenderLastCenterColumn = centerColumn;
-  compiledGroundRenderLastCameraPos.copy(compiledGroundRenderCameraWorldPosScratch);
-  compiledGroundRenderLastCameraQuat.copy(compiledGroundRenderCameraQuatScratch);
-}
-
-function shouldRunCompiledGroundRenderUpdate(
-  groundObject: THREE.Object3D,
-  manifest: CompiledGroundManifest,
-  camera: THREE.Camera,
-  sourceId: string,
-  revision: number,
-  nowMs: number,
-): boolean {
-  if (!isWeChatMiniProgram) {
-    return true;
-  }
-
-  groundObject.updateWorldMatrix(true, false);
-  camera.updateWorldMatrix(true, false);
-  camera.getWorldPosition(compiledGroundRenderCameraWorldPosScratch);
-  compiledGroundRenderCameraLocalPosScratch.copy(compiledGroundRenderCameraWorldPosScratch);
-  groundObject.worldToLocal(compiledGroundRenderCameraLocalPosScratch);
-  camera.getWorldQuaternion(compiledGroundRenderCameraQuatScratch);
-
-  const tileSize = Math.max(1e-6, Number(manifest.renderTileSizeMeters) || 1);
-  const centerColumn = Math.floor((compiledGroundRenderCameraLocalPosScratch.x - manifest.bounds.minX) / tileSize);
-  const centerRow = Math.floor((compiledGroundRenderCameraLocalPosScratch.z - manifest.bounds.minZ) / tileSize);
-
-  if (
-    compiledGroundRenderForceNextUpdate
-    || compiledGroundRenderLastGroundObject !== groundObject
-    || compiledGroundRenderLastManifest !== manifest
-    || compiledGroundRenderLastSourceId !== sourceId
-    || compiledGroundRenderLastRevision !== revision
-  ) {
-    commitCompiledGroundRenderUpdateState(groundObject, manifest, sourceId, revision, centerRow, centerColumn, nowMs);
-    return true;
-  }
-
-  if (
-    centerRow !== compiledGroundRenderLastCenterRow
-    || centerColumn !== compiledGroundRenderLastCenterColumn
-  ) {
-    commitCompiledGroundRenderUpdateState(groundObject, manifest, sourceId, revision, centerRow, centerColumn, nowMs);
-    return true;
-  }
-
-  if (
-    COMPILED_GROUND_RENDER_MAX_STALE_MS > 0
-    && nowMs - compiledGroundRenderLastUpdateAtMs >= COMPILED_GROUND_RENDER_MAX_STALE_MS
-  ) {
-    commitCompiledGroundRenderUpdateState(groundObject, manifest, sourceId, revision, centerRow, centerColumn, nowMs);
-    return true;
-  }
-
-  const moveThresholdSq = COMPILED_GROUND_RENDER_MOVE_THRESHOLD_M * COMPILED_GROUND_RENDER_MOVE_THRESHOLD_M;
-  if (
-    moveThresholdSq > 0
-    && compiledGroundRenderCameraWorldPosScratch.distanceToSquared(compiledGroundRenderLastCameraPos) >= moveThresholdSq
-  ) {
-    commitCompiledGroundRenderUpdateState(groundObject, manifest, sourceId, revision, centerRow, centerColumn, nowMs);
-    return true;
-  }
-
-  if (COMPILED_GROUND_RENDER_ROT_THRESHOLD_RAD > 0) {
-    const dot = Math.min(1, Math.abs(compiledGroundRenderLastCameraQuat.dot(compiledGroundRenderCameraQuatScratch)));
-    const angle = 2 * Math.acos(dot);
-    if (Number.isFinite(angle) && angle >= COMPILED_GROUND_RENDER_ROT_THRESHOLD_RAD) {
-      commitCompiledGroundRenderUpdateState(groundObject, manifest, sourceId, revision, centerRow, centerColumn, nowMs);
-      return true;
-    }
-  }
-
-  return false;
-}
-
-function commitCompiledGroundCollisionUpdateState(
-  groundObject: THREE.Object3D,
-  manifest: CompiledGroundManifest,
-  sourceId: string,
-  revision: number,
-  centerRow: number,
-  centerColumn: number,
-  nowMs: number,
-): void {
-  compiledGroundCollisionForceNextUpdate = false;
-  compiledGroundCollisionLastUpdateAtMs = nowMs;
-  compiledGroundCollisionLastGroundObject = groundObject;
-  compiledGroundCollisionLastManifest = manifest;
-  compiledGroundCollisionLastSourceId = sourceId;
-  compiledGroundCollisionLastRevision = revision;
-  compiledGroundCollisionLastCenterRow = centerRow;
-  compiledGroundCollisionLastCenterColumn = centerColumn;
-  compiledGroundCollisionLastCameraPos.copy(compiledGroundCollisionCameraWorldPosScratch);
-}
-
-function shouldRunCompiledGroundCollisionUpdate(
-  groundObject: THREE.Object3D,
-  manifest: CompiledGroundManifest,
-  referenceWorldPosition: THREE.Vector3,
-  sourceId: string,
-  revision: number,
-  nowMs: number,
-): boolean {
-  if (!isWeChatMiniProgram) {
-    return true;
-  }
-
-  groundObject.updateWorldMatrix(true, false);
-  compiledGroundCollisionCameraWorldPosScratch.copy(referenceWorldPosition);
-  compiledGroundCollisionCameraLocalPosScratch.copy(compiledGroundCollisionCameraWorldPosScratch);
-  groundObject.worldToLocal(compiledGroundCollisionCameraLocalPosScratch);
-
-  const tileSize = Math.max(1e-6, Number(manifest.collisionTileSizeMeters) || 1);
-  const centerColumn = Math.floor((compiledGroundCollisionCameraLocalPosScratch.x - manifest.bounds.minX) / tileSize);
-  const centerRow = Math.floor((compiledGroundCollisionCameraLocalPosScratch.z - manifest.bounds.minZ) / tileSize);
-
-  if (
-    compiledGroundCollisionForceNextUpdate
-    || compiledGroundCollisionLastGroundObject !== groundObject
-    || compiledGroundCollisionLastManifest !== manifest
-    || compiledGroundCollisionLastSourceId !== sourceId
-    || compiledGroundCollisionLastRevision !== revision
-  ) {
-    commitCompiledGroundCollisionUpdateState(groundObject, manifest, sourceId, revision, centerRow, centerColumn, nowMs);
-    return true;
-  }
-
-  if (
-    centerRow !== compiledGroundCollisionLastCenterRow
-    || centerColumn !== compiledGroundCollisionLastCenterColumn
-  ) {
-    commitCompiledGroundCollisionUpdateState(groundObject, manifest, sourceId, revision, centerRow, centerColumn, nowMs);
-    return true;
-  }
-
-  if (
-    COMPILED_GROUND_COLLISION_MAX_STALE_MS > 0
-    && nowMs - compiledGroundCollisionLastUpdateAtMs >= COMPILED_GROUND_COLLISION_MAX_STALE_MS
-  ) {
-    commitCompiledGroundCollisionUpdateState(groundObject, manifest, sourceId, revision, centerRow, centerColumn, nowMs);
-    return true;
-  }
-
-  const moveThresholdSq = COMPILED_GROUND_COLLISION_MOVE_THRESHOLD_M * COMPILED_GROUND_COLLISION_MOVE_THRESHOLD_M;
-  if (
-    moveThresholdSq > 0
-    && compiledGroundCollisionCameraWorldPosScratch.distanceToSquared(compiledGroundCollisionLastCameraPos) >= moveThresholdSq
-  ) {
-    commitCompiledGroundCollisionUpdateState(groundObject, manifest, sourceId, revision, centerRow, centerColumn, nowMs);
-    return true;
   }
 
   return false;
@@ -2313,49 +1852,39 @@ function resetPunchOverlaySmoothing(): void {
   punchBadgeOverlayEntries.value = [];
 }
 
-let physicsWorld: CANNON.World | null = null;
+let physicsBridge: PhysicsBridge | null = null;
+let physicsBridgeInitPromise: Promise<PhysicsBridge> | null = null;
+let physicsBridgeStepPromise: Promise<void> | null = null;
+let physicsBridgeBodySyncPromise: Promise<void> | null = null;
+const physicsBridgeVehicleInputSyncState = createPhysicsBridgeVehicleInputSyncState();
+let physicsBridgeSceneLoaded = false;
+let physicsBridgeSceneRequestId = 0;
+let currentPhysicsBridgePreference: PhysicsBackendPreference | undefined;
+let currentPhysicsBridgeGroundCollisionSignature = '';
+const physicsBridgeBodyIdByNodeId = new Map<string, number>();
+const physicsBridgeNodeIdByBodyId = new Map<number, string>();
+const physicsBridgeVehicleIdByNodeId = new Map<string, number>();
+type PhysicsBridgeBodyFrameState = {
+  position: THREE.Vector3;
+  quaternion: THREE.Quaternion;
+  motionState: number;
+};
+const physicsBridgeFrameBodiesByNodeId = new Map<string, PhysicsBridgeBodyFrameState>();
+const physicsBridgeSyncPositionHelper = new THREE.Vector3();
+const physicsBridgeSyncQuaternionHelper = new THREE.Quaternion();
+const physicsBridgeSyncParentQuaternionHelper = new THREE.Quaternion();
+const physicsBridgeBodySyncPositionHelper = new THREE.Vector3();
+const physicsBridgeBodySyncQuaternionHelper = new THREE.Quaternion();
 const physicsEnvironmentEnabled = ref(true);
 const rigidbodyInstances = new Map<string, RigidbodyInstance>();
 let protagonistNodeId: string | null = null;
 
-const airWallBodies = new Map<string, CANNON.Body>();
-const rigidbodyMaterialCache = new Map<string, RigidbodyMaterialEntry>();
-const rigidbodyContactMaterialKeys = new Set<string>();
 const vehicleInstances = new Map<string, VehicleInstanceWithWheels>();
-const groundHeightfieldCache = new Map<string, GroundHeightfieldCacheEntry>();
-const floorShapeCache = new Map<string, FloorShapeCacheEntry>();
-const wallTrimeshCache = new Map<string, WallTrimeshCacheEntry>();
-const physicsGravity = new CANNON.Vec3(0, -DEFAULT_ENVIRONMENT_GRAVITY, 0);
-let physicsContactRestitution = DEFAULT_ENVIRONMENT_RESTITUTION;
-let physicsContactFriction = DEFAULT_ENVIRONMENT_FRICTION;
-const compiledGroundCollisionRuntime = createCompiledGroundCollisionRuntime({
-  getPhysicsWorld: () => physicsWorld,
-  ensurePhysicsWorld: () => ensurePhysicsWorld(),
-  createBody: (node, component, shapeDefinition, object) => createRigidbodyBody(node, component, shapeDefinition, object),
-  loggerTag: '[SceneViewer]',
-});
-const infiniteGroundChunkColliderRuntime = createInfiniteGroundChunkColliderRuntime({
-  getPhysicsWorld: () => physicsWorld,
-  ensurePhysicsWorld: () => ensurePhysicsWorld(),
-  createBody: (node, component, shapeDefinition, object) => createRigidbodyBody(node, component, shapeDefinition, object),
-  loggerTag: '[SceneViewer]',
-});
+const physicsGravity = createHostPhysicsVec3(0, -DEFAULT_ENVIRONMENT_GRAVITY, 0);
 // On WeChat iOS, 30 Hz physics is sufficient for 1–2 dynamic bodies and halves step cost.
 const PHYSICS_FIXED_TIMESTEP = isWeChatMiniProgram ? 1 / 30 : 1 / 60;
 // Fewer substeps needed at 30 Hz; each covers more sim time.
 const PHYSICS_MAX_SUB_STEPS = isWeChatMiniProgram ? 4 : 5;
-// 8 solver iterations is enough for simple ground-contact on mobile; 18 for desktop accuracy.
-const PHYSICS_SOLVER_ITERATIONS = isWeChatMiniProgram ? 8 : 18;
-const PHYSICS_SOLVER_TOLERANCE = 5e-4
-const vehicleIdleFreezeLastLogMs = new Map<string, number>();
-// Lower stiffness on WeChat converges faster in GSSolver with fewer iterations.
-const PHYSICS_CONTACT_STIFFNESS = isWeChatMiniProgram ? 1e7 : 1e9;
-const PHYSICS_CONTACT_RELAXATION = 4
-const PHYSICS_FRICTION_STIFFNESS = isWeChatMiniProgram ? 1e7 : 1e9;
-const PHYSICS_FRICTION_RELAXATION = 4
-const PHYSICS_MAX_ACCUMULATOR = PHYSICS_FIXED_TIMESTEP * PHYSICS_MAX_SUB_STEPS;
-
-
 type PhysicsInterpolationState = {
   prevPos: THREE.Vector3;
   prevQuat: THREE.Quaternion;
@@ -2364,31 +1893,44 @@ type PhysicsInterpolationState = {
   hasSample: boolean;
 };
 
-const physicsInterpolationStates = new WeakMap<CANNON.Body, PhysicsInterpolationState>();
-let physicsInterpolationEnabled = false;
-let physicsInterpolationAlpha = 0;
-let physicsAccumulator = 0;
-type CannonDebuggerInstance = {
-  update: () => void;
+type PhysicsBodyVectorLike = {
+  x: number;
+  y: number;
+  z: number;
+  set: (x: number, y: number, z: number) => unknown;
 };
 
-let cannonDebugger: CannonDebuggerInstance | null = null;
-let cannonDebuggerGroup: THREE.Group | null = null;
-let cannonDebuggerLoadPromise: Promise<void> | null = null;
+type PhysicsBodyQuaternionLike = {
+  x: number;
+  y: number;
+  z: number;
+  w: number;
+};
 
-type CannonSleepExtensions = {
+type PhysicsBodyLike = {
+  position: PhysicsBodyVectorLike;
+  velocity: PhysicsBodyVectorLike;
+  angularVelocity: PhysicsBodyVectorLike;
+  quaternion: PhysicsBodyQuaternionLike;
+  allowSleep?: boolean;
+  sleepSpeedLimit?: number;
+  sleepTimeLimit?: number;
   sleep?: () => void;
   sleepState?: number;
 };
 
-function trySleepBody(body: CANNON.Body | null | undefined): void {
+const physicsInterpolationStates = new WeakMap<PhysicsBodyLike, PhysicsInterpolationState>();
+let physicsInterpolationEnabled = false;
+let physicsInterpolationAlpha = 0;
+
+function trySleepBody(body: PhysicsBodyLike | null | undefined): void {
   if (!body) {
     return;
   }
-  (body as CANNON.Body & CannonSleepExtensions).sleep?.();
+  body.sleep?.();
 }
 
-function resetPhysicsInterpolationState(body: CANNON.Body | null | undefined): void {
+function resetPhysicsInterpolationState(body: PhysicsBodyLike | null | undefined): void {
   if (!body) {
     return;
   }
@@ -2430,105 +1972,6 @@ function applyObjectWorldPose(object: THREE.Object3D, worldPosition: THREE.Vecto
   object.updateMatrixWorld(true);
 }
 
-function getBodySleepState(body: CANNON.Body | null | undefined): number | undefined {
-  if (!body) {
-    return undefined;
-  }
-  return (body as CANNON.Body & CannonSleepExtensions).sleepState;
-}
-
-function disposeCannonDebuggerResources(root: THREE.Object3D | null): void {
-  if (!root) {
-    return;
-  }
-
-  const geometries = new Set<THREE.BufferGeometry>();
-  const materials = new Set<THREE.Material>();
-
-  root.traverse((object) => {
-    const mesh = object as THREE.Mesh;
-    if (mesh.geometry) {
-      geometries.add(mesh.geometry as THREE.BufferGeometry);
-    }
-    const material = mesh.material;
-    if (Array.isArray(material)) {
-      material.forEach((entry) => materials.add(entry));
-    } else if (material) {
-      materials.add(material);
-    }
-  });
-
-  root.parent?.remove(root);
-  root.clear();
-
-  geometries.forEach((geometry) => geometry.dispose());
-  materials.forEach((material) => material.dispose());
-}
-
-function disposeCannonDebugger(): void {
-  cannonDebugger = null;
-  cannonDebuggerLoadPromise = null;
-  disposeCannonDebuggerResources(cannonDebuggerGroup);
-  cannonDebuggerGroup = null;
-}
-
-async function syncCannonDebugger(): Promise<void> {
-  if (!cannonDebuggerEnabled.value || !renderContext || !physicsWorld) {
-    disposeCannonDebugger();
-    return;
-  }
-
-  if (cannonDebugger) {
-    return;
-  }
-  if (cannonDebuggerLoadPromise) {
-    return cannonDebuggerLoadPromise;
-  }
-
-  cannonDebuggerLoadPromise = (async () => {
-    try {
-      const module = await import('cannon-es-debugger');
-      if (!cannonDebuggerEnabled.value || !renderContext || !physicsWorld) {
-        return;
-      }
-
-      const debuggerGroup = new THREE.Group();
-      debuggerGroup.name = '__harmony_cannon_debugger__';
-      renderContext.scene.add(debuggerGroup);
-      cannonDebuggerGroup = debuggerGroup;
-
-      const CannonDebugger = module.default as unknown as (
-        scene: THREE.Scene | THREE.Group,
-        world: CANNON.World,
-        options?: { color?: string | number | THREE.Color; scale?: number },
-      ) => CannonDebuggerInstance;
-      cannonDebugger = CannonDebugger(debuggerGroup as unknown as THREE.Scene, physicsWorld, {
-        color: 0x00d1ff,
-        scale: 1,
-      });
-
-      if (!cannonDebuggerEnabled.value) {
-        disposeCannonDebugger();
-      }
-    } catch (error) {
-      console.warn('[SceneViewer] Failed to load cannon-es-debugger', error);
-      disposeCannonDebugger();
-    } finally {
-      cannonDebuggerLoadPromise = null;
-    }
-  })();
-
-  return cannonDebuggerLoadPromise ?? Promise.resolve();
-}
-
-watch(cannonDebuggerEnabled, (enabled) => {
-  if (!enabled) {
-    disposeCannonDebugger();
-    return;
-  }
-  void syncCannonDebugger();
-});
-
 const wheelForwardHelper = new THREE.Vector3();
 const wheelAxisHelper = new THREE.Vector3();
 const wheelQuaternionHelper = new THREE.Quaternion();
@@ -2544,7 +1987,6 @@ const defaultWheelAxisVector = new THREE.Vector3(DEFAULT_AXLE.x, DEFAULT_AXLE.y,
 const VEHICLE_WHEEL_MIN_RADIUS = 0.01;
 const VEHICLE_WHEEL_SPIN_EPSILON = 1e-4;
 const VEHICLE_TRAVEL_EPSILON = 1e-5;
-const VEHICLE_BRAKE_FORCE = 1e6;
 const autoTourSnapLocalPosition = new THREE.Vector3();
 const autoTourSnapWorldPosition = new THREE.Vector3();
 const autoTourSnapWorldQuaternion = new THREE.Quaternion();
@@ -2627,8 +2069,6 @@ let protagonistPoseSynced = false;
 const JOYSTICK_INPUT_RADIUS = 64;
 const JOYSTICK_VISUAL_RANGE = 44;
 const JOYSTICK_DEADZONE = 0.25;
-const VEHICLE_SMOOTH_STOP_TRIGGER_SPEED = 0.6;
-const VEHICLE_SMOOTH_STOP_MIN_THROTTLE = 0.05;
 
 type VehicleWheelBinding = {
   nodeId: string | null;
@@ -2644,15 +2084,39 @@ type VehicleWheelBinding = {
   baseScale: THREE.Vector3;
 };
 
-type RuntimeRaycastVehicle = CANNON.RaycastVehicle & VehicleDriveVehicle;
-
 type VehicleInstanceWithWheels = VehicleInstance & {
-  vehicle: RuntimeRaycastVehicle;
+  source: 'bridge';
+  vehicle: VehicleDriveVehicle;
   wheelBindings: VehicleWheelBinding[];
   forwardAxis: THREE.Vector3;
   lastChassisPosition: THREE.Vector3;
   hasChassisPositionSample: boolean;
+  bridgeBodyId?: number | null;
+  vehicleId?: number | null;
+  lastBridgeFramePosition?: THREE.Vector3;
+  hasBridgeFrameSample?: boolean;
 };
+
+type HostPhysicsVec3 = VehicleDriveVehicle['chassisBody']['position'];
+
+function createHostPhysicsVec3(x = 0, y = 0, z = 0): HostPhysicsVec3 {
+  return {
+    x,
+    y,
+    z,
+    set(nextX: number, nextY: number, nextZ: number) {
+      this.x = nextX;
+      this.y = nextY;
+      this.z = nextZ;
+      return this;
+    },
+    lengthSquared() {
+      return this.x * this.x + this.y * this.y + this.z * this.z;
+    },
+  };
+}
+
+const LEGACY_STATIC_BODY_TYPE = 2;
 
 type Viewer = {
   isShown?: boolean;
@@ -2911,22 +2375,9 @@ const vehicleDriveActive = ref(false);
 const vehicleDriveNodeId = ref<string | null>(null);
 const vehicleDriveToken = ref<string | null>(null);
 const activeVehicleDriveEvent = ref<Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }> | null>(null);
-const pendingCharacterControlEvent = ref<Extract<BehaviorRuntimeEvent, { type: 'character-control' }> | null>(null);
-const activeCharacterControlNodeId = ref<string | null>(null);
 const vehicleDriveSeatNodeId = ref<string | null>(null);
 const vehicleDriveUiOverride = ref<'auto' | 'show' | 'hide'>('auto');
 const vehicleDriveExitBusy = ref(false);
-const characterControlActionState = reactive<{
-  sprinting: boolean;
-  crouching: boolean;
-  jumpStartedAtMs: number;
-  interactUntilMs: number;
-}>({
-  sprinting: false,
-  crouching: false,
-  jumpStartedAtMs: 0,
-  interactUntilMs: 0,
-});
 let vehicleDriveSteerable: number[] = [];
 let vehicleDriveWheelCount = 0;
 let vehicleDriveVehicle: VehicleDriveVehicle | null = null;
@@ -3098,8 +2549,7 @@ const vehicleDriveStateBridge: import('@harmony/schema/VehicleDriveController').
 const vehicleDriveUi = computed(() => {
   const override = vehicleDriveUiOverride.value;
   const active = vehicleDriveActive.value;
-  const characterActive = Boolean(activeCharacterControlNodeId.value);
-  const visible = override === 'show' ? true : override === 'hide' ? false : active || characterActive;
+  const visible = override === 'show' ? true : override === 'hide' ? false : active;
   if (!visible) {
     return {
       visible: false,
@@ -3111,16 +2561,15 @@ const vehicleDriveUi = computed(() => {
     } as const;
   }
   const nodeId = vehicleDriveNodeId.value ?? '';
-  const characterNodeId = activeCharacterControlNodeId.value ?? '';
-  const node = characterActive && characterNodeId ? resolveNodeById(characterNodeId) : nodeId ? resolveNodeById(nodeId) : null;
-  const label = node?.name?.trim() || (characterActive ? characterNodeId : nodeId) || 'Vehicle';
+  const node = nodeId ? resolveNodeById(nodeId) : null;
+  const label = node?.name?.trim() || nodeId || 'Vehicle';
   return {
     visible: true,
     label,
-    cameraLocked: active || characterActive,
-    joystickActive: (active || characterActive) && joystickState.active,
-    accelerating: (active || characterActive) && (vehicleDriveInputFlags.forward || vehicleDriveInput.throttle > 0.1),
-    braking: (active || characterActive) && vehicleDriveInputFlags.brake,
+    cameraLocked: active,
+    joystickActive: active && joystickState.active,
+    accelerating: active && (vehicleDriveInputFlags.forward || vehicleDriveInput.throttle > 0.1),
+    braking: active && vehicleDriveInputFlags.brake,
   } as const;
 });
 
@@ -3309,130 +2758,6 @@ function primeAutoTourCameraFollowTransition(object: THREE.Object3D, forwardWorl
   autoTourCameraFollowHasSample = true;
 }
 
-const VEHICLE_FOLLOW_CAMERA_TERRAIN_CLEARANCE = 0.75;
-const VEHICLE_FOLLOW_CAMERA_COLLISION_BUFFER = 0.45;
-const vehicleFollowCameraRaycaster = new THREE.Raycaster();
-const vehicleFollowCameraRayDirectionScratch = new THREE.Vector3();
-const vehicleFollowCameraWorldPointScratch = new THREE.Vector3();
-const vehicleFollowCameraGroundPointScratch = new THREE.Vector3();
-const vehicleFollowCameraGroundOriginScratch = new THREE.Vector3();
-const vehicleFollowCameraRaycastRootsScratch: THREE.Object3D[] = [];
-
-function isObjectDescendantOf(object: THREE.Object3D | null | undefined, ancestor: THREE.Object3D | null | undefined): boolean {
-  if (!object || !ancestor) {
-    return false;
-  }
-  let current: THREE.Object3D | null = object;
-  while (current) {
-    if (current === ancestor) {
-      return true;
-    }
-    current = current.parent;
-  }
-  return false;
-}
-
-function sampleViewerGroundHeightAtWorldPosition(worldX: number, worldZ: number): number | null {
-  const groundDefinition = dynamicGroundCache?.dynamicMesh ?? null;
-  if (!groundDefinition) {
-    return null;
-  }
-  const groundObject = dynamicGroundCache ? nodeObjectMap.get(dynamicGroundCache.nodeId) ?? null : null;
-  if (!groundObject) {
-    const height = sampleGroundHeight(groundDefinition, worldX, worldZ);
-    return Number.isFinite(height) ? height : null;
-  }
-  groundObject.updateMatrixWorld(true);
-  groundObject.getWorldPosition(vehicleFollowCameraGroundOriginScratch);
-  vehicleFollowCameraWorldPointScratch.set(worldX, vehicleFollowCameraGroundOriginScratch.y, worldZ);
-  groundObject.worldToLocal(vehicleFollowCameraWorldPointScratch);
-  const localHeight = sampleGroundHeight(
-    groundDefinition,
-    vehicleFollowCameraWorldPointScratch.x,
-    vehicleFollowCameraWorldPointScratch.z,
-  );
-  if (!Number.isFinite(localHeight)) {
-    return null;
-  }
-  vehicleFollowCameraGroundPointScratch.set(
-    vehicleFollowCameraWorldPointScratch.x,
-    localHeight,
-    vehicleFollowCameraWorldPointScratch.z,
-  );
-  groundObject.localToWorld(vehicleFollowCameraGroundPointScratch);
-  return Number.isFinite(vehicleFollowCameraGroundPointScratch.y)
-    ? vehicleFollowCameraGroundPointScratch.y
-    : null;
-}
-
-function collectViewerVehicleFollowCameraRaycastRoots(): THREE.Object3D[] {
-  vehicleFollowCameraRaycastRootsScratch.length = 0;
-  if (sceneGraphRoot) {
-    vehicleFollowCameraRaycastRootsScratch.push(sceneGraphRoot);
-  }
-  if (instancedMeshGroup.children.length > 0) {
-    vehicleFollowCameraRaycastRootsScratch.push(instancedMeshGroup);
-  }
-  return vehicleFollowCameraRaycastRootsScratch;
-}
-
-function constrainViewerVehicleFollowCameraPose(params: {
-  position: THREE.Vector3;
-  target: THREE.Vector3;
-  nodeId: string;
-  vehicleObject: THREE.Object3D | null;
-}): void {
-  const { position, target, nodeId, vehicleObject } = params;
-
-  const terrainHeight = sampleViewerGroundHeightAtWorldPosition(position.x, position.z);
-  if (terrainHeight !== null) {
-    position.y = Math.max(position.y, terrainHeight + VEHICLE_FOLLOW_CAMERA_TERRAIN_CLEARANCE);
-  }
-
-  const raycastRoots = collectViewerVehicleFollowCameraRaycastRoots();
-  if (!raycastRoots.length) {
-    return;
-  }
-
-  vehicleFollowCameraRayDirectionScratch.copy(position).sub(target);
-  const distance = vehicleFollowCameraRayDirectionScratch.length();
-  if (!Number.isFinite(distance) || distance <= 1e-4) {
-    return;
-  }
-  vehicleFollowCameraRayDirectionScratch.divideScalar(distance);
-  raycastRoots.forEach((root) => root.updateMatrixWorld(true));
-  vehicleFollowCameraRaycaster.set(target, vehicleFollowCameraRayDirectionScratch);
-  vehicleFollowCameraRaycaster.far = distance;
-  const intersections = vehicleFollowCameraRaycaster.intersectObjects(raycastRoots, true);
-  const hit = intersections.find((entry: THREE.Intersection) => {
-    if (!Number.isFinite(entry.distance) || entry.distance <= 1e-4 || !entry.object.visible) {
-      return false;
-    }
-    if (entry.object.userData?.hidden === true) {
-      return false;
-    }
-    if (isObjectDescendantOf(entry.object, vehicleObject)) {
-      return false;
-    }
-    const hitNodeId = normalizeNodeId(entry.object.userData?.nodeId as string | undefined);
-    if (hitNodeId && hitNodeId === nodeId) {
-      return false;
-    }
-    return true;
-  });
-  if (!hit) {
-    return;
-  }
-
-  const clampedDistance = Math.max(0, Math.min(distance, hit.distance - VEHICLE_FOLLOW_CAMERA_COLLISION_BUFFER));
-  position.copy(target).addScaledVector(vehicleFollowCameraRayDirectionScratch, clampedDistance);
-
-  const adjustedTerrainHeight = sampleViewerGroundHeightAtWorldPosition(position.x, position.z);
-  if (adjustedTerrainHeight !== null) {
-    position.y = Math.max(position.y, adjustedTerrainHeight + VEHICLE_FOLLOW_CAMERA_TERRAIN_CLEARANCE);
-  }
-}
-
 const vehicleDriveController = new VehicleDriveController(
   {
     vehicleInstances,
@@ -3441,11 +2766,9 @@ const vehicleDriveController = new VehicleDriveController(
     resolveNodeById,
     resolveRigidbodyComponent,
     resolveVehicleComponent,
-    ensurePhysicsWorld,
     isPhysicsEnabled: () => physicsEnvironmentEnabled.value,
     ensureVehicleBindingForNode,
     normalizeNodeId,
-    resolveSurfaceSample: (x, z, preferredHeight, edgeMargin) => sampleViewerVehicleSurfaceAtWorldPosition(x, z, preferredHeight, edgeMargin),
     setCameraViewState: (mode, targetId) => setCameraViewState(mode as CameraViewMode, targetId ?? null),
     setCameraCaging,
     withControlsVerticalFreedom,
@@ -3453,13 +2776,12 @@ const vehicleDriveController = new VehicleDriveController(
     syncLastFirstPersonStateFromCamera,
     onToast: (message) => uni.showToast({ title: message, icon: 'none' }),
     onResolveBehaviorToken: (token, resolution) => resolveBehaviorToken(token, resolution),
-    constrainFollowCameraPose: ({ position, target, nodeId, vehicleObject }) => {
-      constrainViewerVehicleFollowCameraPose({ position, target, nodeId, vehicleObject });
-    },
 
     // Use one shared follow-camera tuning profile across platforms.
+    followCameraDistanceScale: () => 1.5,
     followCameraVelocityLerpSpeed: () => 0,
     followCameraTuning: () => ({
+      distanceMax: 16,
       positionLerpSpeed: 0,
       targetLerpSpeed: 0,
       headingLerpSpeed: 0,
@@ -3488,7 +2810,7 @@ const vehicleDriveController = new VehicleDriveController(
       if (!vehicleDriveActive.value || vehicleDriveNodeId.value !== nodeId) {
         return false;
       }
-      resolveInterpolatedBodyPosition(chassisBody as unknown as CANNON.Body, target);
+      resolveInterpolatedBodyPosition(chassisBody as PhysicsBodyLike, target);
       return true;
     },
 
@@ -3593,7 +2915,6 @@ const nodeAnimationControllers = new Map<string, {
   clips: THREE.AnimationClip[];
   defaultClip: THREE.AnimationClip | null;
 }>();
-const characterControlAnimationClipState = new Map<string, string | null>();
 let animationMixers: THREE.AnimationMixer[] = [];
 let effectRuntimeTickers: Array<(delta: number) => void> = [];
 
@@ -4038,7 +3359,9 @@ type RuntimePrefabPreloadContext = {
   warmAssetIds: string[];
 };
 
-// preloadPolicy property does not exist on RuntimePrefabSpawnRequest; function removed or needs redesign if required.
+function shouldPreloadRuntimePrefabRequest(request: RuntimePrefabSpawnRequest | null | undefined): boolean {
+  return request?.preloadPolicy === 'before-entry';
+}
 
 function normalizeAssetIdList(assetIds: Iterable<string>): string[] {
   const uniqueIds = new Set<string>();
@@ -4068,7 +3391,7 @@ function collectRuntimePrefabAssetIds(assetRegistry: Record<string, SceneAssetRe
     }
     warmAssetIds.add(normalizedAssetId);
 
-    const assetType = entry?.assetType ?? inferAssetTypeOrNull({ nameOrUrl: normalizedAssetId });
+    const assetType = entry?.assetType ?? inferAssetTypeOrNull(normalizedAssetId);
     if (assetType === 'model' || assetType === 'mesh') {
       meshAssetIds.add(normalizedAssetId);
     }
@@ -4124,12 +3447,9 @@ function createSceneGraphBuildOptions(payload: ScenePreviewPayload, onProgress?:
   return buildOptions;
 }
 
-function getArrayBufferView(bytes: ArrayBuffer | ArrayBufferView): ArrayBuffer {
-  if (bytes instanceof ArrayBuffer) {
-    return bytes.slice(0);
-  }
+function getArrayBufferView(bytes: Uint8Array): ArrayBuffer {
   const safe = new ArrayBuffer(bytes.byteLength);
-  new Uint8Array(safe).set(new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength));
+  new Uint8Array(safe).set(bytes);
   return safe;
 }
 
@@ -4167,11 +3487,11 @@ function buildResolvedAssetUrl(assetId: string, entry: AssetCacheEntry | null): 
 		return null
 	}
 	const mimeType = entry.mimeType ?? inferMimeTypeFromAssetId(assetId)
-	if (entry.blobUrl) {
-		return { url: entry.blobUrl, mimeType }
-	}
 	if (entry.downloadUrl) {
 		return { url: entry.downloadUrl, mimeType }
+	}
+	if (entry.blobUrl) {
+		return { url: entry.blobUrl, mimeType }
 	}
   if (entry.blob) {
     const url = getOrCreateObjectUrl(assetId, entry.blob, mimeType ?? undefined)
@@ -4197,134 +3517,6 @@ function normalizeDisplayBoardAssetId(candidate: string): string {
   }
   const withoutScheme = trimmed.startsWith('asset://') ? trimmed.slice('asset://'.length) : trimmed
   return withoutScheme.trim()
-}
-
-function hydrateGroundSidecarFromPackage(
-  pkg: ScenePackageUnzipped,
-  sceneEntry: {
-    sceneId: string;
-    path: string;
-    groundScatterPath?: string;
-    groundPaintPath?: string;
-    terrain?: { datasetId: string; rootManifestPath: string; regionsPath?: string };
-    compiledGround?: ScenePackageCompiledGroundEntry | null;
-  },
-  document: SceneJsonExportDocument,
-): SceneJsonExportDocument {
-  const groundNode = findGroundNode(document.nodes);
-  const definition = groundNode?.dynamicMesh?.type === 'Ground'
-    ? (groundNode.dynamicMesh as GroundRuntimeDynamicMesh & {
-      terrainScatter?: unknown;
-      groundSurfaceChunks?: unknown;
-    })
-    : (findFirstGroundDynamicMesh(document) as (GroundRuntimeDynamicMesh & {
-      terrainScatter?: unknown;
-      groundSurfaceChunks?: unknown;
-    }) | null);
-  if (!definition) {
-    return document;
-  }
-
-  const groundNodeId = typeof groundNode?.id === 'string' ? groundNode.id.trim() : '';
-
-  if (sceneEntry.groundScatterPath) {
-    const scatterBytes = readBinaryFileFromScenePackage(pkg, sceneEntry.groundScatterPath);
-    const scatterPayload = deserializeGroundScatterSidecar(
-      Uint8Array.from(scatterBytes).buffer,
-    );
-    if (!groundNodeId || !scatterPayload.groundNodeId || scatterPayload.groundNodeId === groundNodeId) {
-      definition.terrainScatter = scatterPayload.terrainScatter ?? null;
-    }
-  }
-
-  if (sceneEntry.groundPaintPath) {
-    const paintBytes = readBinaryFileFromScenePackage(pkg, sceneEntry.groundPaintPath);
-    const paintPayload = deserializeGroundPaintSidecar(
-      Uint8Array.from(paintBytes).buffer,
-    );
-    if (!groundNodeId || !paintPayload.groundNodeId || paintPayload.groundNodeId === groundNodeId) {
-      definition.groundSurfaceChunks = paintPayload.groundSurfaceChunks ?? null;
-    }
-  }
-
-  const terrainDatasetManifest = readTerrainDatasetManifestFromScenePackage(pkg, sceneEntry);
-  const terrainHeightSampler = createTerrainDatasetHeightSamplerFromScenePackage(pkg, sceneEntry);
-  (definition as GroundDynamicMesh & {
-    runtimeTerrainDatasetManifest?: unknown;
-    runtimeTerrainDatasetEnabled?: boolean;
-    runtimeTerrainHeightSampler?: unknown;
-  }).runtimeTerrainDatasetManifest = terrainDatasetManifest;
-  (definition as GroundDynamicMesh & {
-    runtimeTerrainDatasetManifest?: unknown;
-    runtimeTerrainDatasetEnabled?: boolean;
-    runtimeTerrainHeightSampler?: unknown;
-  }).runtimeTerrainDatasetEnabled = Boolean(terrainHeightSampler);
-  (definition as GroundDynamicMesh & {
-    runtimeTerrainDatasetManifest?: unknown;
-    runtimeTerrainDatasetEnabled?: boolean;
-    runtimeTerrainHeightSampler?: unknown;
-  }).runtimeTerrainHeightSampler = terrainHeightSampler;
-
-  if (!shouldUseCompiledGroundForViewer(definition, sceneEntry.terrain?.datasetId ?? null)) {
-    if (groundNode) {
-      groundNode.userData = {
-        ...(groundNode.userData ?? {}),
-        compiledGroundEnabled: false,
-        compiledGroundManifest: null,
-      };
-    }
-    return document;
-  }
-
-  const compiledGroundManifestPath = typeof sceneEntry.compiledGround?.manifestPath === 'string'
-    ? sceneEntry.compiledGround.manifestPath.trim()
-    : '';
-  if (!compiledGroundManifestPath) {
-    throw new Error(`Scene ${sceneEntry.sceneId} is missing compiled ground manifest`);
-  }
-  try {
-    const compiledGroundManifest = JSON.parse(readTextFileFromScenePackage(pkg, compiledGroundManifestPath)) as CompiledGroundManifest;
-    const groundNode = findGroundNode(document.nodes);
-    if (groundNode) {
-      groundNode.userData = {
-        ...(groundNode.userData ?? {}),
-        compiledGroundManifest,
-      };
-    }
-  } catch (error) {
-    throw new Error(`Failed to hydrate compiled ground manifest ${compiledGroundManifestPath}: ${String(error)}`);
-  }
-
-  return document;
-}
-
-function shouldUseCompiledGroundForViewer(
-  dynamicGround: GroundDynamicMesh,
-  terrainDatasetId: string | null = null,
-): boolean {
-  const normalizedTerrainDatasetId = typeof terrainDatasetId === 'string' ? terrainDatasetId.trim() : '';
-  if (normalizedTerrainDatasetId) {
-    return true;
-  }
-  if (dynamicGround.planningMetadata?.demSource) {
-    return true;
-  }
-  const localEditTileCount = dynamicGround.localEditTiles && typeof dynamicGround.localEditTiles === 'object'
-    ? Object.keys(dynamicGround.localEditTiles).length
-    : 0;
-  if (localEditTileCount > 0) {
-    return true;
-  }
-  const surfaceRevision = Number.isFinite(dynamicGround.surfaceRevision)
-    ? Math.max(0, Math.trunc(dynamicGround.surfaceRevision as number))
-    : 0;
-  if (surfaceRevision > 0) {
-    return true;
-  }
-  const chunkManifestRevision = Number.isFinite(dynamicGround.chunkManifestRevision)
-    ? Math.max(0, Math.trunc(dynamicGround.chunkManifestRevision as number))
-    : 0;
-  return chunkManifestRevision > 0;
 }
 
 async function resolveAssetUrlReference(candidate: string): Promise<ResolvedAssetUrl | null> {
@@ -4754,7 +3946,7 @@ async function collectRuntimePrefabPreloadContext(
     return null;
   }
 
-  const selectedRequests = requests.filter((request) => spawnRuntimePrefabRequest(request));
+  const selectedRequests = requests.filter((request) => shouldPreloadRuntimePrefabRequest(request));
   if (!selectedRequests.length) {
     return null;
   }
@@ -5536,26 +4728,6 @@ function resolvePunchBadgeReference(activeCamera: THREE.Camera): { position: THR
   return { position: signboardReferenceScratch, kind: 'camera', nodeId: resolveCameraDistanceReferenceNodeId() };
 }
 
-function resolveGroundCollisionReferenceWorld(targetPosition: THREE.Vector3): boolean {
-  const manualDriveNode = vehicleDriveActive.value ? vehicleDriveNodeId.value : null;
-  if (manualDriveNode && resolveVehicleOrObjectWorldPosition({
-    nodeId: manualDriveNode,
-    vehicleInstances,
-    nodeObjectMap,
-    isPhysicsEnabled: () => physicsEnvironmentEnabled.value,
-    target: targetPosition,
-  })) {
-    return true;
-  }
-  return false;
-}
-
-function resolveGroundCollisionAnchor(referenceWorldPosition: THREE.Vector3): THREE.Camera {
-  compiledGroundCollisionAnchor.position.copy(referenceWorldPosition);
-  compiledGroundCollisionAnchor.updateMatrixWorld(true);
-  return compiledGroundCollisionAnchor as unknown as THREE.Camera;
-}
-
 function updatePunchBadgeOverlayEntries(activeCamera: THREE.Camera, deltaSeconds: number): void {
   if (!punchNodeIds.size) {
     if (punchBadgeOverlayEntries.value.length) {
@@ -5775,245 +4947,6 @@ function refreshDynamicGroundCache(document: SceneJsonExportDocument | null): vo
   if (currentDocument?.id === document?.id) {
     void applyEnvironmentSettingsToScene(resolveDocumentEnvironment(document));
   }
-}
-
-function resolveViewerCompiledGroundManifest(
-  groundObject: THREE.Object3D,
-): CompiledGroundManifest | null {
-  const rawManifest = (groundObject.userData as Record<string, unknown> | undefined)?.compiledGroundManifest
-    ?? (dynamicGroundCache?.node.userData as Record<string, unknown> | undefined)?.compiledGroundManifest
-    ?? null;
-  return rawManifest && typeof rawManifest === 'object'
-    ? rawManifest as CompiledGroundManifest
-    : null;
-}
-
-function resolveViewerGroundChunkManifest(
-  groundObject: THREE.Object3D,
-): GroundChunkManifest | null {
-  const rawManifest = (groundObject.userData as Record<string, unknown> | undefined)?.groundChunkManifest
-    ?? (dynamicGroundCache?.node.userData as Record<string, unknown> | undefined)?.groundChunkManifest
-    ?? null;
-  return rawManifest && typeof rawManifest === 'object'
-    ? rawManifest as GroundChunkManifest
-    : null;
-}
-
-function clearViewerCompiledGroundCollisionBodies(): void {
-  markCompiledGroundCollisionUpdateDirty();
-  compiledGroundCollisionRuntime.clear();
-  infiniteGroundChunkColliderRuntime.clear();
-}
-
-function syncViewerCompiledGroundCollision(
-  groundObject: THREE.Object3D,
-): void {
-  if (!resolveGroundCollisionReferenceWorld(compiledGroundCollisionCameraWorldPosScratch)) {
-    clearViewerCompiledGroundCollisionBodies();
-    return;
-  }
-  const compiledManifest = resolveViewerCompiledGroundManifest(groundObject);
-  const sourceId = (currentSceneId.value ?? currentDocument?.id ?? '').trim() || 'viewer-ground';
-  const groundCollisionAnchorCamera = resolveGroundCollisionAnchor(compiledGroundCollisionCameraWorldPosScratch);
-  let excludedChunkKeys: string[] = [];
-  if (compiledManifest) {
-    const revision = Number.isFinite(compiledManifest.revision)
-      ? Math.max(0, Math.trunc(compiledManifest.revision))
-      : computeCompiledGroundManifestRevision(compiledManifest);
-    const nowMs = Date.now();
-    if (shouldRunCompiledGroundCollisionUpdate(groundObject, compiledManifest, compiledGroundCollisionCameraWorldPosScratch, sourceId, revision, nowMs)) {
-      compiledGroundCollisionRuntime.sync({
-        enabled: physicsEnvironmentEnabled.value,
-        groundObject,
-        camera: groundCollisionAnchorCamera,
-        sourceId,
-        revision,
-        manifest: compiledManifest,
-        loadTileData: async (record) => {
-          const pkg = activeScenePackagePkg;
-          if (!pkg) {
-            return null;
-          }
-          const bytes = pkg.files[record.path];
-          return bytes ? getArrayBufferView(bytes) : null;
-        },
-      });
-    }
-		excludedChunkKeys = collectCompiledGroundCoveredChunkKeys(compiledManifest)
-  } else {
-    markCompiledGroundCollisionUpdateDirty();
-    compiledGroundCollisionRuntime.clear();
-  }
-
-  const groundDefinition = dynamicGroundCache?.dynamicMesh ?? null;
-  if (!groundDefinition) {
-    infiniteGroundChunkColliderRuntime.clear();
-    return;
-  }
-  const groundChunkManifest = resolveViewerGroundChunkManifest(groundObject);
-  infiniteGroundChunkColliderRuntime.sync({
-    enabled: physicsEnvironmentEnabled.value,
-    groundObject,
-    groundDefinition,
-    camera: groundCollisionAnchorCamera,
-    sourceId,
-    manifestRevision: groundChunkManifest?.revision,
-    manifestRecords: groundChunkManifest?.chunks,
-    excludedChunkKeys,
-    loadChunkData: async (record) => {
-      const pkg = activeScenePackagePkg;
-      if (!pkg) {
-        return null;
-      }
-      const dataPath = typeof record.dataPath === 'string' ? record.dataPath.trim() : '';
-      if (!dataPath) {
-        return null;
-      }
-      const bytes = pkg.files[dataPath];
-      return bytes ? getArrayBufferView(bytes) : null;
-    },
-  });
-}
-
-function syncViewerCompiledGroundRender(
-  groundObject: THREE.Object3D,
-  groundDefinition: GroundRuntimeDynamicMesh,
-  camera: THREE.PerspectiveCamera,
-): void {
-  const compiledManifest = resolveViewerCompiledGroundManifest(groundObject);
-  if (!compiledManifest) {
-    markCompiledGroundRenderUpdateDirty();
-    clearCompiledGroundRenderTiles(groundObject);
-    setInfiniteGroundHiddenChunkKeys(groundObject, []);
-    return;
-  }
-  const revision = Number.isFinite(compiledManifest.revision)
-    ? Math.max(0, Math.trunc(compiledManifest.revision))
-    : computeCompiledGroundManifestRevision(compiledManifest);
-  const sourceId = (currentSceneId.value ?? currentDocument?.id ?? '').trim() || 'viewer-ground';
-  const tileFrustumCulled = shouldEnableCompiledGroundTileFrustumCulling();
-  const nowMs = Date.now();
-  if (shouldRunCompiledGroundRenderUpdate(groundObject, compiledManifest, camera, sourceId, revision, nowMs)) {
-    syncCompiledGroundRenderTiles({
-      groundObject,
-      groundDefinition,
-      camera,
-      sourceId,
-      revision,
-      manifest: compiledManifest,
-      loadTileData: async (record) => {
-        const pkg = activeScenePackagePkg;
-        if (!pkg) {
-          return null;
-        }
-        const bytes = pkg.files[record.path];
-        return bytes ? getArrayBufferView(bytes) : null;
-      },
-      streamingMode: 'runtime-camera',
-      tileFrustumCulled,
-    });
-  }
-  setInfiniteGroundHiddenChunkKeys(
-    groundObject,
-    collectLoadedCompiledGroundChunkKeys(groundObject, compiledManifest),
-  );
-}
-
-function shouldEnableCompiledGroundTileFrustumCulling(): boolean {
-  return (purposeActiveMode.value === 'level' && !vehicleDriveActive.value)
-    || (vehicleDriveActive.value && vehicleDriveCameraMode.value === 'first-person');
-}
-
-const VIEWER_GROUND_STREAMING_RADIUS_MIN_METERS = 200;
-const VIEWER_GROUND_STREAMING_RADIUS_HEIGHT_MAX_METERS = 2600;
-const VIEWER_GROUND_STREAMING_RADIUS_ABSOLUTE_CAP_METERS = 5000;
-const VIEWER_GROUND_STREAMING_RADIUS_FAR_CLIP_FACTOR = 0.58;
-const VIEWER_GROUND_STREAMING_RADIUS_FOV_BASE_DEGREES = 60;
-const VIEWER_GROUND_STREAMING_HEIGHT_START_METERS = 80;
-const VIEWER_GROUND_STREAMING_HEIGHT_END_METERS = 1200;
-const viewerGroundStreamingCameraWorldHelper = new THREE.Vector3();
-const viewerGroundStreamingGroundWorldHelper = new THREE.Vector3();
-
-function resolveViewerDynamicGroundStreamingRadiusMeters(
-  camera: THREE.PerspectiveCamera | null | undefined,
-  groundObject?: THREE.Object3D | null,
-): number {
-  if (!camera) {
-    return VIEWER_GROUND_STREAMING_RADIUS_MIN_METERS;
-  }
-
-  camera.getWorldPosition(viewerGroundStreamingCameraWorldHelper);
-  let relativeHeight = viewerGroundStreamingCameraWorldHelper.y;
-  if (groundObject) {
-    groundObject.getWorldPosition(viewerGroundStreamingGroundWorldHelper);
-    relativeHeight = viewerGroundStreamingCameraWorldHelper.y - viewerGroundStreamingGroundWorldHelper.y;
-  }
-
-  const normalizedHeight = THREE.MathUtils.clamp(
-    (Math.max(0, relativeHeight) - VIEWER_GROUND_STREAMING_HEIGHT_START_METERS)
-      / Math.max(1e-6, VIEWER_GROUND_STREAMING_HEIGHT_END_METERS - VIEWER_GROUND_STREAMING_HEIGHT_START_METERS),
-    0,
-    1,
-  );
-  const cameraLike = camera as THREE.PerspectiveCamera & { aspect?: number; fov?: number; far?: number };
-  const aspect = Number.isFinite(cameraLike.aspect) ? Math.max(0.2, Number(cameraLike.aspect)) : 16 / 9;
-  const fovDeg = Number.isFinite(cameraLike.fov) ? Number(cameraLike.fov) : VIEWER_GROUND_STREAMING_RADIUS_FOV_BASE_DEGREES;
-  const halfFovRad = THREE.MathUtils.degToRad(THREE.MathUtils.clamp(fovDeg, 25, 120) * 0.5);
-  const halfViewHeight = Math.max(0, relativeHeight) * Math.tan(halfFovRad);
-  const halfViewWidth = halfViewHeight * aspect;
-  const viewFootprintRadius = Math.sqrt(halfViewHeight * halfViewHeight + halfViewWidth * halfViewWidth);
-  const fovBaseHalfRad = THREE.MathUtils.degToRad(VIEWER_GROUND_STREAMING_RADIUS_FOV_BASE_DEGREES * 0.5);
-  const fovFactor = THREE.MathUtils.clamp(
-    Math.tan(halfFovRad) / Math.max(1e-6, Math.tan(fovBaseHalfRad)),
-    0.65,
-    2.2,
-  );
-  const radiusByHeight = THREE.MathUtils.lerp(
-    VIEWER_GROUND_STREAMING_RADIUS_MIN_METERS,
-    VIEWER_GROUND_STREAMING_RADIUS_HEIGHT_MAX_METERS,
-    normalizedHeight,
-  ) * fovFactor;
-  const desiredRadius = Math.max(radiusByHeight, viewFootprintRadius + 120);
-  const farDistance = Number.isFinite(cameraLike.far)
-    ? Math.max(0, Number(cameraLike.far))
-    : VIEWER_GROUND_STREAMING_RADIUS_ABSOLUTE_CAP_METERS;
-  const farClipCap = farDistance > 0
-    ? farDistance * VIEWER_GROUND_STREAMING_RADIUS_FAR_CLIP_FACTOR
-    : VIEWER_GROUND_STREAMING_RADIUS_ABSOLUTE_CAP_METERS;
-  const effectiveCap = Math.max(
-    VIEWER_GROUND_STREAMING_RADIUS_MIN_METERS,
-    Math.min(VIEWER_GROUND_STREAMING_RADIUS_ABSOLUTE_CAP_METERS, farClipCap),
-  );
-  return THREE.MathUtils.clamp(
-    desiredRadius,
-    VIEWER_GROUND_STREAMING_RADIUS_MIN_METERS,
-    effectiveCap,
-  );
-}
-
-function resolveViewerGroundStreamingDefinition(
-  camera: THREE.PerspectiveCamera | null | undefined,
-  groundObject: THREE.Object3D,
-  groundDefinition: GroundRuntimeDynamicMesh,
-): GroundRuntimeDynamicMesh {
-  const chunkSizeCandidate = Number(groundDefinition.chunkSizeMeters);
-  const chunkSizeMeters = Number.isFinite(chunkSizeCandidate) && chunkSizeCandidate > 0
-    ? chunkSizeCandidate
-    : 100;
-  const dynamicRadiusMeters = resolveViewerDynamicGroundStreamingRadiusMeters(camera, groundObject);
-  const dynamicRadiusChunks = Math.max(1, Math.ceil(dynamicRadiusMeters / chunkSizeMeters));
-  const authoredRadiusCandidate = Number(groundDefinition.renderRadiusChunks);
-  const authoredRadiusChunks = Number.isFinite(authoredRadiusCandidate) && authoredRadiusCandidate > 0
-    ? Math.max(1, Math.trunc(authoredRadiusCandidate))
-    : 1;
-  const renderRadiusChunks = Math.max(authoredRadiusChunks, dynamicRadiusChunks);
-  if (renderRadiusChunks === authoredRadiusChunks) {
-    return groundDefinition;
-  }
-  return {
-    ...groundDefinition,
-    renderRadiusChunks,
-  };
 }
 
 
@@ -6316,7 +5249,7 @@ function updateInstancedCullingAndLod(): void {
   if (!context) {
     return;
   }
-  const now = Date.now();
+  const now = typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
   const camera = context.camera;
   camera.updateMatrixWorld(true);
   instancedCullingProjView.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
@@ -6818,16 +5751,6 @@ const autoTourRuntime = createAutoTourRuntime({
 
 const waterRuntime = createWaterRuntime();
 
-function extractRigidbodyShape(
-  component: SceneNodeComponentState<RigidbodyComponentProps> | null,
-): RigidbodyPhysicsShape | null {
-  if (!component) {
-    return null;
-  }
-  const payload = component.metadata?.[RIGIDBODY_METADATA_KEY] as RigidbodyComponentMetadata | undefined;
-  return payload?.shape ?? null;
-}
-
 function attachRuntimeForNode(nodeId: string, object: THREE.Object3D) {
   const nodeState = resolveNodeById(nodeId);
   if (!nodeState) {
@@ -6879,7 +5802,6 @@ function registerSceneSubtree(root: THREE.Object3D): void {
     }
 
     nodeObjectMap.set(nodeId, object);
-    ensureRigidbodyBindingForObject(nodeId, object);
     attachRuntimeForNode(nodeId, object);
 
     syncInteractionLayersForNode(nodeId, object);
@@ -6903,7 +5825,7 @@ function registerSceneSubtree(root: THREE.Object3D): void {
       updateBehaviorVisibility(nodeId, false);
     }
     if (nodeState) {
-      applyViewerNodeMaterialOverrides(object, nodeState);
+      applyMaterialOverrides(object, nodeState.materials, materialOverrideOptions);
     }
     syncInstancedTransform(object);
     if (object.userData?.protagonist) {
@@ -6917,84 +5839,21 @@ function registerSceneSubtree(root: THREE.Object3D): void {
   sceneCsmShadowRuntime?.registerObject(root);
 }
 
-const physicsContactSettings: PhysicsContactSettings = {
-  contactEquationStiffness: PHYSICS_CONTACT_STIFFNESS,
-  contactEquationRelaxation: PHYSICS_CONTACT_RELAXATION,
-  frictionEquationStiffness: PHYSICS_FRICTION_STIFFNESS,
-  frictionEquationRelaxation: PHYSICS_FRICTION_RELAXATION,
-};
-
-function ensurePhysicsWorld(): CANNON.World {
-  const world = ensureSharedPhysicsWorld({
-    world: physicsWorld,
-    setWorld: (world) => {
-      physicsWorld = world;
-    },
-    gravity: physicsGravity,
-    solverIterations: PHYSICS_SOLVER_ITERATIONS,
-    solverTolerance: PHYSICS_SOLVER_TOLERANCE,
-    contactFriction: physicsContactFriction,
-    contactRestitution: physicsContactRestitution,
-    contactSettings: physicsContactSettings,
-    rigidbodyMaterialCache,
-    rigidbodyContactMaterialKeys,
-    // Fast approximate quaternion normalization on WeChat to save per-body CPU cost.
-    quatNormalizeFast: isWeChatMiniProgram,
-    quatNormalizeSkip: isWeChatMiniProgram ? 4 : 0,
-  });
-  void syncCannonDebugger();
-  return world;
-}
-
 function removeAirWalls(): void {
-  const world = physicsWorld;
-  if (!world) {
-    airWallBodies.clear();
-    return;
-  }
-  airWallBodies.forEach((body) => {
-    try {
-      world.removeBody(body);
-    } catch (error) {
-      console.warn('[SceneViewer] Failed to remove air wall body', error);
-    }
-  });
-  airWallBodies.clear();
+  // Air walls are authored into the bridge scene asset and no longer need a
+  // duplicated legacy world sync path here.
 }
 
 function syncAirWallsForDocument(sceneDocument: SceneJsonExportDocument | null): void {
   removeAirWalls();
-  if (!sceneDocument) {
-    return;
-  }
+  void sceneDocument;
 }
 
-function resetPhysicsWorld(): void {
-  const world = physicsWorld;
-  if (world) {
-    void world;
-    rigidbodyInstances.forEach((instance) => removeRigidbodyInstanceBodies(world, instance));
-    airWallBodies.forEach((body) => {
-      try {
-        world.removeBody(body);
-      } catch (error) {
-        console.warn('[SceneViewer] Failed to remove air wall body', error);
-      }
-    });
-  }
-  clearViewerCompiledGroundCollisionBodies();
-  compiledGroundCollisionRuntime.clear();
+function clearLegacyPhysicsWorld(): void {
   vehicleInstances.clear();
   rigidbodyInstances.clear();
   protagonistNodeId = null;
   scenePreviewPerf.reset();
-  airWallBodies.clear();
-  physicsWorld = null;
-  groundHeightfieldCache.clear();
-  floorShapeCache.clear();
-  wallTrimeshCache.clear();
-  rigidbodyMaterialCache.clear();
-  rigidbodyContactMaterialKeys.clear();
   vehicleDriveActive.value = false;
   vehicleDriveNodeId.value = null;
   vehicleDriveToken.value = null;
@@ -7009,45 +5868,542 @@ function resetPhysicsWorld(): void {
   deactivateJoystick(true);
   setVehicleDriveUiOverride('hide');
   hiddenVehicleDriveNodeIds.clear();
-  disposeCannonDebugger();
 }
 
-function createRigidbodyBody(
-  node: SceneNode,
-  component: SceneNodeComponentState<RigidbodyComponentProps>,
-  shapeDefinition: RigidbodyPhysicsShape | null,
-  object: THREE.Object3D,
-): { body: CANNON.Body; orientationAdjustment: RigidbodyOrientationAdjustment | null } | null {
-  const world = ensurePhysicsWorld();
-  return createSharedRigidbodyBody(
-    { node, component, shapeDefinition, object },
-    {
-      world,
-      groundHeightfieldCache,
-      floorShapeCache,
-      wallTrimeshCache,
-      rigidbodyMaterialCache,
-      rigidbodyContactMaterialKeys,
-      contactSettings: physicsContactSettings,
-      loggerTag: '[SceneViewer]',
+function resetPhysicsWorld(): void {
+  void disposeSceneryPhysicsBridgeScene();
+  clearLegacyPhysicsWorld();
+}
+
+function resolveSceneryPhysicsBridgePreference(
+  settings: Pick<EnvironmentSettings, 'physicsEngine'> | null | undefined,
+): PhysicsBackendPreference | undefined {
+  const propPreference = props.physicsEngine;
+  if (propPreference === 'ammo' || propPreference === 'cannon' || propPreference === 'auto') {
+    return propPreference;
+  }
+  const environmentPreference = settings?.physicsEngine;
+  return environmentPreference === 'ammo' || environmentPreference === 'cannon' || environmentPreference === 'auto'
+    ? environmentPreference
+    : undefined;
+}
+
+async function reloadSceneryPhysicsBridgeForPreference(
+  settings: Pick<EnvironmentSettings, 'physicsEngine'> | null | undefined,
+): Promise<void> {
+  const nextPreference = resolveSceneryPhysicsBridgePreference(settings);
+  if (nextPreference === currentPhysicsBridgePreference) {
+    return;
+  }
+  currentPhysicsBridgePreference = nextPreference;
+  await destroySceneryPhysicsBridge();
+  if (currentDocument) {
+    void loadSceneryPhysicsBridgeScene(currentDocument);
+  }
+}
+
+function resolveSceneryGroundCollisionSignature(document: SceneJsonExportDocument | null): string {
+  if (!document) {
+    return '';
+  }
+  const groundNode = findGroundNode(document.nodes);
+  const groundMesh = groundNode?.dynamicMesh as GroundRuntimeDynamicMesh | null | undefined;
+  if (!groundNode || !isGroundDynamicMesh(groundMesh)) {
+    return '';
+  }
+  const groundUserData = groundNode.userData && typeof groundNode.userData === 'object'
+    ? (groundNode.userData as Record<string, unknown>)
+    : {};
+  const compiledManifest = groundUserData.compiledGroundManifest as { revision?: unknown } | null | undefined;
+  const compiledState = resolveCompiledGroundCollisionRuntimeState({
+    enabled: Boolean(groundUserData.compiledGroundEnabled || groundUserData.compiledGroundManifest),
+    manifest: compiledManifest as any,
+    runtimeLoadedTileKeys: groundMesh.runtimeLoadedTileKeys,
+    sourceId: groundNode.id,
+    revision: Number.isFinite(Number(compiledManifest?.revision))
+      ? Math.max(0, Math.trunc(Number(compiledManifest?.revision)))
+      : Math.max(0, Math.trunc(Number(groundMesh.chunkManifestRevision) || 0)),
+  });
+  const infiniteState = resolveInfiniteGroundChunkCollisionRuntimeState({
+    enabled: groundMesh.terrainMode === 'infinite',
+    definition: groundMesh,
+    sourceId: groundNode.id,
+  });
+  return `${compiledState.signature}::${infiniteState.signature}`;
+}
+
+async function ensureSceneryPhysicsBridgeReady(): Promise<PhysicsBridge> {
+  if (physicsBridgeInitPromise) {
+    return physicsBridgeInitPromise;
+  }
+  if (!physicsBridge) {
+    physicsBridge = createSceneryPhysicsBridge({ engine: currentPhysicsBridgePreference });
+  }
+  physicsBridgeInitPromise = physicsBridge.init({
+    world: {
+      gravity: [physicsGravity.x, physicsGravity.y, physicsGravity.z],
+      fixedTimeStepMs: PHYSICS_FIXED_TIMESTEP * 1000,
+      maxSubSteps: PHYSICS_MAX_SUB_STEPS,
     },
-  );
+  }).then(() => physicsBridge!)
+    .catch((error) => {
+      physicsBridgeInitPromise = null;
+      console.warn('[SceneViewer] Failed to initialize physics bridge', error);
+      throw error;
+    });
+  return physicsBridgeInitPromise;
+}
+
+function updateSceneryPhysicsBridgeIndex(asset: PhysicsSceneAsset): void {
+  physicsBridgeBodyIdByNodeId.clear();
+  physicsBridgeNodeIdByBodyId.clear();
+  physicsBridgeVehicleIdByNodeId.clear();
+  physicsBridgeFrameBodiesByNodeId.clear();
+  asset.bodies.forEach((body) => {
+    if (!body.userDataKey) {
+      return;
+    }
+    physicsBridgeBodyIdByNodeId.set(body.userDataKey, body.id);
+    physicsBridgeNodeIdByBodyId.set(body.id, body.userDataKey);
+  });
+  asset.vehicles.forEach((vehicle) => {
+    const nodeId = physicsBridgeNodeIdByBodyId.get(vehicle.bodyId);
+    if (!nodeId) {
+      return;
+    }
+    physicsBridgeVehicleIdByNodeId.set(nodeId, vehicle.id);
+  });
+  vehicleInstances.forEach((instance, nodeId) => {
+    if (instance.source !== 'bridge') {
+      return;
+    }
+    instance.bridgeBodyId = physicsBridgeBodyIdByNodeId.get(nodeId) ?? null;
+    instance.vehicleId = physicsBridgeVehicleIdByNodeId.get(nodeId) ?? null;
+  });
+}
+
+async function loadSceneryPhysicsBridgeScene(document: SceneJsonExportDocument | null): Promise<void> {
+  if (!document) {
+    currentPhysicsBridgeGroundCollisionSignature = '';
+    await disposeSceneryPhysicsBridgeScene();
+    return;
+  }
+  await reloadSceneryPhysicsBridgeForPreference(resolveDocumentEnvironment(document));
+  currentPhysicsBridgeGroundCollisionSignature = resolveSceneryGroundCollisionSignature(document);
+  const requestId = ++physicsBridgeSceneRequestId;
+  const asset = buildPhysicsSceneAsset(document);
+  if (asset.shapes.length === 0 && asset.bodies.length === 0 && asset.vehicles.length === 0) {
+    await disposeSceneryPhysicsBridgeScene();
+    return;
+  }
+  try {
+    const bridge = await ensureSceneryPhysicsBridgeReady();
+    await bridge.loadScene(asset);
+    if (requestId !== physicsBridgeSceneRequestId) {
+      return;
+    }
+    updateSceneryPhysicsBridgeIndex(asset);
+    physicsBridgeSceneLoaded = true;
+  } catch (error) {
+    console.warn('[SceneViewer] Failed to load physics bridge scene', error);
+  }
+}
+
+function syncSceneryBridgeVehicleFromFrame(nodeId: string, state: PhysicsBridgeBodyFrameState): void {
+  const instance = vehicleInstances.get(nodeId);
+  if (!instance || instance.source !== 'bridge') {
+    return;
+  }
+  const chassisBody = instance.vehicle.chassisBody;
+  const lastPosition = instance.lastBridgeFramePosition ?? new THREE.Vector3();
+  if (instance.hasBridgeFrameSample) {
+    const invStep = PHYSICS_FIXED_TIMESTEP > 1e-6 ? 1 / PHYSICS_FIXED_TIMESTEP : 0;
+    chassisBody.velocity.set(
+      (state.position.x - lastPosition.x) * invStep,
+      (state.position.y - lastPosition.y) * invStep,
+      (state.position.z - lastPosition.z) * invStep,
+    );
+  } else {
+    chassisBody.velocity.set(0, 0, 0);
+  }
+  chassisBody.angularVelocity.set(0, 0, 0);
+  chassisBody.position.set(state.position.x, state.position.y, state.position.z);
+  chassisBody.quaternion.x = state.quaternion.x;
+  chassisBody.quaternion.y = state.quaternion.y;
+  chassisBody.quaternion.z = state.quaternion.z;
+  chassisBody.quaternion.w = state.quaternion.w;
+  lastPosition.copy(state.position);
+  instance.lastBridgeFramePosition = lastPosition;
+  instance.hasBridgeFrameSample = true;
+}
+
+function consumeSceneryPhysicsBridgeStepFrame(frame: PhysicsStepFrame): void {
+  if (
+    frame.bodyCount <= 0
+    || frame.bodyTransforms.length === 0
+    || frame.bodyTransforms.length < frame.bodyCount * PHYSICS_BODY_TRANSFORM_STRIDE
+  ) {
+    return;
+  }
+  for (let index = 0; index < frame.bodyCount; index += 1) {
+    const bodyId = frame.bodyMeta?.[index];
+    if (typeof bodyId !== 'number') {
+      continue;
+    }
+    const nodeId = physicsBridgeNodeIdByBodyId.get(bodyId);
+    if (!nodeId) {
+      continue;
+    }
+    const base = index * PHYSICS_BODY_TRANSFORM_STRIDE;
+    const existing = physicsBridgeFrameBodiesByNodeId.get(nodeId);
+    if (existing) {
+      existing.position.set(
+        frame.bodyTransforms[base] ?? 0,
+        frame.bodyTransforms[base + 1] ?? 0,
+        frame.bodyTransforms[base + 2] ?? 0,
+      );
+      existing.quaternion.set(
+        frame.bodyTransforms[base + 3] ?? 0,
+        frame.bodyTransforms[base + 4] ?? 0,
+        frame.bodyTransforms[base + 5] ?? 0,
+        frame.bodyTransforms[base + 6] ?? 1,
+      ).normalize();
+      existing.motionState = frame.bodyTransforms[base + 7] ?? 0;
+      syncSceneryBridgeVehicleFromFrame(nodeId, existing);
+      continue;
+    }
+    const createdState: PhysicsBridgeBodyFrameState = {
+      position: new THREE.Vector3(
+        frame.bodyTransforms[base] ?? 0,
+        frame.bodyTransforms[base + 1] ?? 0,
+        frame.bodyTransforms[base + 2] ?? 0,
+      ),
+      quaternion: new THREE.Quaternion(
+        frame.bodyTransforms[base + 3] ?? 0,
+        frame.bodyTransforms[base + 4] ?? 0,
+        frame.bodyTransforms[base + 5] ?? 0,
+        frame.bodyTransforms[base + 6] ?? 1,
+      ).normalize(),
+      motionState: frame.bodyTransforms[base + 7] ?? 0,
+    };
+    physicsBridgeFrameBodiesByNodeId.set(nodeId, createdState);
+    syncSceneryBridgeVehicleFromFrame(nodeId, createdState);
+  }
+  applySceneryPhysicsBridgeFrameToObjects();
+}
+
+function applySceneryPhysicsBridgeFrameToObjects(): void {
+  if (!physicsBridgeFrameBodiesByNodeId.size) {
+    return;
+  }
+  physicsBridgeFrameBodiesByNodeId.forEach((state, nodeId) => {
+    const rigidbodyEntry = rigidbodyInstances.get(nodeId);
+    if (rigidbodyEntry) {
+      if (rigidbodyEntry.syncObjectFromBody === false || !rigidbodyEntry.object) {
+        return;
+      }
+      applySceneryPhysicsBridgeTransformToObject(
+        rigidbodyEntry.object,
+        state.position,
+        state.quaternion,
+        rigidbodyEntry.orientationAdjustment,
+      );
+      return;
+    }
+    const node = resolveNodeById(nodeId);
+    const bindingObject = node
+      ? resolveRigidbodyBindingObject(
+        resolvePhysicsRigidbodyComponent(node),
+        nodeObjectMap.get(nodeId) ?? null,
+      )
+      : null;
+    if (!bindingObject) {
+      return;
+    }
+    applySceneryPhysicsBridgeTransformToObject(bindingObject, state.position, state.quaternion, null);
+  });
+}
+
+
+function applySceneryPhysicsBridgeTransformToObject(
+  object: THREE.Object3D,
+  worldPosition: THREE.Vector3,
+  worldQuaternion: THREE.Quaternion,
+  orientationAdjustment: RigidbodyOrientationAdjustment | null,
+): void {
+  physicsBridgeSyncPositionHelper.copy(worldPosition);
+  physicsBridgeSyncQuaternionHelper.copy(worldQuaternion);
+  if (orientationAdjustment) {
+    physicsBridgeSyncQuaternionHelper.multiply(orientationAdjustment.threeInverse);
+  }
+  if (object.parent) {
+    object.parent.updateMatrixWorld(true);
+    object.position.copy(physicsBridgeSyncPositionHelper);
+    object.parent.worldToLocal(object.position);
+    object.parent.getWorldQuaternion(physicsBridgeSyncParentQuaternionHelper).invert();
+    object.quaternion.copy(physicsBridgeSyncParentQuaternionHelper).multiply(physicsBridgeSyncQuaternionHelper);
+  } else {
+    object.position.copy(physicsBridgeSyncPositionHelper);
+    object.quaternion.copy(physicsBridgeSyncQuaternionHelper);
+  }
+  object.updateMatrixWorld(true);
+  syncInstancedTransform(object);
+}
+
+function stepSceneryPhysicsBridge(delta: number): void {
+  if (
+    delta <= 0
+    || !physicsEnvironmentEnabled.value
+    || !physicsBridge
+    || !physicsBridgeSceneLoaded
+    || physicsBridgeStepPromise
+  ) {
+    return;
+  }
+  const bridge = physicsBridge;
+  physicsBridgeStepPromise = bridge.step(delta * 1000)
+    .then((frame) => {
+      if (bridge !== physicsBridge) {
+        return;
+      }
+      consumeSceneryPhysicsBridgeStepFrame(frame);
+    })
+    .catch((error) => {
+      console.warn('[SceneViewer] Failed to step physics bridge', error);
+    })
+    .finally(() => {
+      physicsBridgeStepPromise = null;
+    });
+}
+
+function syncSceneryPhysicsBridgeBodyTransforms(): void {
+  if (
+    !physicsBridge
+    || !physicsBridgeSceneLoaded
+    || physicsBridgeBodySyncPromise
+    || !physicsBridgeBodyIdByNodeId.size
+  ) {
+    return;
+  }
+  const bridge = physicsBridge;
+  const commands: Array<Promise<void>> = [];
+  const syncedNodeIds = new Set<string>();
+  rigidbodyInstances.forEach((entry, nodeId) => {
+    if (entry.body.type === LEGACY_STATIC_BODY_TYPE) {
+      return;
+    }
+    const bodyId = physicsBridgeBodyIdByNodeId.get(nodeId);
+    if (typeof bodyId !== 'number') {
+      return;
+    }
+    syncedNodeIds.add(nodeId);
+    commands.push(
+      bridge.setBodyTransform({
+        bodyId,
+        transform: {
+          position: [entry.body.position.x, entry.body.position.y, entry.body.position.z],
+          rotation: [entry.body.quaternion.x, entry.body.quaternion.y, entry.body.quaternion.z, entry.body.quaternion.w],
+        },
+      }),
+    );
+  });
+  physicsBridgeBodyIdByNodeId.forEach((bodyId, nodeId) => {
+    if (syncedNodeIds.has(nodeId)) {
+      return;
+    }
+    const node = resolveNodeById(nodeId);
+    const component = resolvePhysicsRigidbodyComponent(node);
+    if (!node || !component || component.props.bodyType === 'STATIC') {
+      return;
+    }
+    const object = resolveRigidbodyBindingObject(component, nodeObjectMap.get(nodeId) ?? null);
+    if (!object) {
+      return;
+    }
+    object.updateMatrixWorld(true);
+    object.getWorldPosition(physicsBridgeBodySyncPositionHelper);
+    object.getWorldQuaternion(physicsBridgeBodySyncQuaternionHelper).normalize();
+    const frameState = physicsBridgeFrameBodiesByNodeId.get(nodeId);
+    if (
+      frameState
+      && frameState.position.distanceToSquared(physicsBridgeBodySyncPositionHelper) <= 1e-8
+      && Math.abs(frameState.quaternion.dot(physicsBridgeBodySyncQuaternionHelper)) >= 1 - 1e-6
+    ) {
+      return;
+    }
+    commands.push(
+      bridge.setBodyTransform({
+        bodyId,
+        transform: {
+          position: [
+            physicsBridgeBodySyncPositionHelper.x,
+            physicsBridgeBodySyncPositionHelper.y,
+            physicsBridgeBodySyncPositionHelper.z,
+          ],
+          rotation: [
+            physicsBridgeBodySyncQuaternionHelper.x,
+            physicsBridgeBodySyncQuaternionHelper.y,
+            physicsBridgeBodySyncQuaternionHelper.z,
+            physicsBridgeBodySyncQuaternionHelper.w,
+          ],
+        },
+      }),
+    );
+  });
+  if (!commands.length) {
+    return;
+  }
+  physicsBridgeBodySyncPromise = Promise.allSettled(commands)
+    .catch(() => {
+      // Promise.allSettled should not reject, keep a guard anyway.
+    })
+    .then(() => undefined)
+    .finally(() => {
+      physicsBridgeBodySyncPromise = null;
+    });
+}
+
+function resolveSceneryPhysicsBridgeVehicleStopTransform(
+  nodeId: string,
+): PhysicsTransform | null {
+  const frameState = physicsBridgeFrameBodiesByNodeId.get(nodeId);
+  if (frameState) {
+    return {
+      position: [frameState.position.x, frameState.position.y, frameState.position.z],
+      rotation: [frameState.quaternion.x, frameState.quaternion.y, frameState.quaternion.z, frameState.quaternion.w],
+    };
+  }
+  const instance = vehicleInstances.get(nodeId);
+  const chassisBody = instance?.vehicle.chassisBody ?? null;
+  if (chassisBody) {
+    return {
+      position: [chassisBody.position.x, chassisBody.position.y, chassisBody.position.z],
+      rotation: [
+        chassisBody.quaternion.x,
+        chassisBody.quaternion.y,
+        chassisBody.quaternion.z,
+        chassisBody.quaternion.w,
+      ],
+    };
+  }
+  const node = resolveNodeById(nodeId);
+  const component = resolvePhysicsRigidbodyComponent(node);
+  const object = node
+    ? component
+      ? resolveRigidbodyBindingObject(component, nodeObjectMap.get(nodeId) ?? null)
+      : nodeObjectMap.get(nodeId) ?? null
+    : null;
+  if (!object) {
+    return null;
+  }
+  object.updateMatrixWorld(true);
+  object.getWorldPosition(physicsBridgeBodySyncPositionHelper);
+  object.getWorldQuaternion(physicsBridgeBodySyncQuaternionHelper).normalize();
+  return {
+    position: [
+      physicsBridgeBodySyncPositionHelper.x,
+      physicsBridgeBodySyncPositionHelper.y,
+      physicsBridgeBodySyncPositionHelper.z,
+    ],
+    rotation: [
+      physicsBridgeBodySyncQuaternionHelper.x,
+      physicsBridgeBodySyncQuaternionHelper.y,
+      physicsBridgeBodySyncQuaternionHelper.z,
+      physicsBridgeBodySyncQuaternionHelper.w,
+    ],
+  };
+}
+
+function resetSceneryPhysicsBridgeVehicleLocalState(nodeId: string, transform: PhysicsTransform): void {
+  const instance = vehicleInstances.get(nodeId);
+  const chassisBody = instance?.vehicle.chassisBody ?? null;
+  if (!chassisBody) {
+    return;
+  }
+  chassisBody.velocity.set(0, 0, 0);
+  chassisBody.angularVelocity.set(0, 0, 0);
+  instance.lastBridgeFramePosition = new THREE.Vector3(...transform.position);
+  instance.hasBridgeFrameSample = false;
+  instance.lastChassisPosition.set(...transform.position);
+  instance.hasChassisPositionSample = false;
+}
+
+function syncSceneryPhysicsBridgeVehicleInput(): void {
+  syncPhysicsBridgeVehicleInput({
+    state: physicsBridgeVehicleInputSyncState,
+    bridge: physicsBridge,
+    sceneLoaded: physicsBridgeSceneLoaded,
+    activeNodeId: vehicleDriveActive.value ? vehicleDriveNodeId.value : null,
+    vehicleIdByNodeId: physicsBridgeVehicleIdByNodeId,
+    input: {
+      steering: vehicleDriveInput.steering,
+      throttle: vehicleDriveInput.throttle,
+      brake: vehicleDriveInput.brake,
+    },
+    resolveBodyId: (nodeId) => physicsBridgeBodyIdByNodeId.get(nodeId),
+    resolveStopTransform: resolveSceneryPhysicsBridgeVehicleStopTransform,
+    resetLocalVehicleState: resetSceneryPhysicsBridgeVehicleLocalState,
+    warningPrefix: '[SceneViewer]',
+  });
+}
+
+async function disposeSceneryPhysicsBridgeScene(): Promise<void> {
+  physicsBridgeSceneRequestId += 1;
+  physicsBridgeBodyIdByNodeId.clear();
+  physicsBridgeNodeIdByBodyId.clear();
+  physicsBridgeVehicleIdByNodeId.clear();
+  physicsBridgeFrameBodiesByNodeId.clear();
+  resetPhysicsBridgeVehicleInputSyncState(physicsBridgeVehicleInputSyncState);
+  if (!physicsBridge || !physicsBridgeSceneLoaded) {
+    physicsBridgeStepPromise = null;
+    physicsBridgeBodySyncPromise = null;
+    resetPhysicsBridgeVehicleInputSyncState(physicsBridgeVehicleInputSyncState);
+    return;
+  }
+  try {
+    await physicsBridge.disposeScene();
+  } catch (error) {
+    console.warn('[SceneViewer] Failed to dispose physics bridge scene', error);
+  } finally {
+    physicsBridgeSceneLoaded = false;
+    physicsBridgeStepPromise = null;
+    physicsBridgeBodySyncPromise = null;
+    resetPhysicsBridgeVehicleInputSyncState(physicsBridgeVehicleInputSyncState);
+    physicsBridgeFrameBodiesByNodeId.clear();
+  }
+}
+
+async function destroySceneryPhysicsBridge(): Promise<void> {
+  if (!physicsBridge) {
+    return;
+  }
+  const bridge = physicsBridge;
+  physicsBridge = null;
+  physicsBridgeInitPromise = null;
+  physicsBridgeStepPromise = null;
+  physicsBridgeBodySyncPromise = null;
+  try {
+    await bridge.destroy();
+  } catch (error) {
+    console.warn('[SceneViewer] Failed to destroy physics bridge', error);
+  } finally {
+    physicsBridgeSceneRequestId += 1;
+    currentPhysicsBridgeGroundCollisionSignature = '';
+    physicsBridgeBodyIdByNodeId.clear();
+    physicsBridgeNodeIdByBodyId.clear();
+    physicsBridgeVehicleIdByNodeId.clear();
+    physicsBridgeFrameBodiesByNodeId.clear();
+    resetPhysicsBridgeVehicleInputSyncState(physicsBridgeVehicleInputSyncState);
+    physicsBridgeSceneLoaded = false;
+  }
 }
 
 function removeRigidbodyInstance(nodeId: string): void {
-  const entry = rigidbodyInstances.get(nodeId);
-  if (!entry) {
-    return;
-  }
-  removeRigidbodyInstanceBodies(physicsWorld, entry);
   rigidbodyInstances.delete(nodeId);
   scenePreviewPerf.notifyRemovedNode(nodeId);
   if (protagonistNodeId === nodeId) {
     protagonistNodeId = null;
   }
-  groundHeightfieldCache.delete(nodeId);
-  floorShapeCache.delete(nodeId);
-  wallTrimeshCache.delete(nodeId);
   removeVehicleInstance(nodeId);
 }
 
@@ -7058,7 +6414,7 @@ function isFloorDynamicMeshForPhysics(mesh: unknown): mesh is { type: 'Floor'; t
 
 function hasAutoGeneratedDynamicShape(mesh: unknown): boolean {
   if (isGroundDynamicMesh(mesh as GroundDynamicMesh | null | undefined)) {
-    return false;
+    return true;
   }
   if (!isFloorDynamicMeshForPhysics(mesh)) {
     return false;
@@ -7070,62 +6426,6 @@ function hasAutoGeneratedDynamicShape(mesh: unknown): boolean {
   return rawThickness > 0;
 }
 
-function hasAutoGeneratedDynamicShapeForNode(mesh: unknown, node: SceneNode | null | undefined): boolean {
-  if (hasAutoGeneratedDynamicShape(mesh)) {
-    return true;
-  }
-  return Boolean(resolveModelCollisionComponentPropsFromNode(node)?.faces?.length);
-}
-
-function ensureRoadRigidbodyInstance(node: SceneNode, component: SceneNodeComponentState<RigidbodyComponentProps>, object: THREE.Object3D) {
-  if (!physicsWorld || !currentDocument) {
-    return;
-  }
-  if (!isRoadDynamicMesh(node.dynamicMesh)) {
-    removeRigidbodyInstance(node.id);
-    return;
-  }
-  if ((component.props as RigidbodyComponentProps | undefined)?.bodyType !== 'STATIC') {
-    removeRigidbodyInstance(node.id);
-    return;
-  }
-  const groundNode = findGroundNode(currentDocument.nodes);
-  const world = ensurePhysicsWorld();
-  const existing = rigidbodyInstances.get(node.id) ?? null;
-  const result = ensureRoadHeightfieldRigidbodyInstance({
-    roadNode: node,
-    rigidbodyComponent: component,
-    roadObject: object,
-    groundNode: groundNode && isGroundDynamicMesh(groundNode.dynamicMesh) ? groundNode : null,
-    world,
-    existingInstance: existing,
-    createBody: (n, c, s, o) => createRigidbodyBody(n, c, s, o),
-    loggerTag: '[SceneViewer]',
-  });
-  if (!result.instance) {
-    if (result.shouldRemoveExisting) {
-      removeRigidbodyInstance(node.id);
-    }
-    return;
-  }
-  const roadBodies = Array.isArray(result.instance.bodies) && result.instance.bodies.length
-    ? result.instance.bodies
-    : [result.instance.body];
-  for (const roadBody of roadBodies) {
-    if (!roadBody || roadBody.world === world) {
-      continue;
-    }
-    if (roadBody.world && roadBody.world !== world) {
-      try {
-        roadBody.world.removeBody(roadBody);
-      } catch (error) {
-        console.warn('[SceneViewer] Failed to detach road body from previous world', error);
-      }
-    }
-    world.addBody(roadBody);
-  }
-  rigidbodyInstances.set(node.id, result.instance);
-}
 
 function clampVehicleAxisIndex(value: number): 0 | 1 | 2 {
   if (value === 1) {
@@ -7178,23 +6478,20 @@ function normalizeVehicleVector(value: VehicleVectorValue): [number, number, num
   return null;
 }
 
-function tupleToVec3(tuple: VehicleVectorValue, fallback?: Vector3Like): CANNON.Vec3 | null {
+function tupleToVec3(tuple: VehicleVectorValue, fallback?: Vector3Like): HostPhysicsVec3 | null {
   const normalized = normalizeVehicleVector(tuple) ?? (fallback ? normalizeVehicleVector(fallback) : null);
   if (!normalized) {
     return null;
   }
   const [x, y, z] = normalized;
-  return new CANNON.Vec3(x, y, z);
+  return createHostPhysicsVec3(x, y, z);
 }
 
-function createVehicleInstance(
+function createBridgeVehicleInstance(
   node: SceneNode,
   component: SceneNodeComponentState<VehicleComponentProps>,
-  rigidbody: RigidbodyInstance,
+  object: THREE.Object3D,
 ): VehicleInstanceWithWheels | null {
-  if (!physicsWorld || !rigidbody.object) {
-    return null;
-  }
   const props = clampVehicleComponentProps(component.props);
   const rightAxis = clampVehicleAxisIndex(props.indexRightAxis);
   const upAxis = clampVehicleAxisIndex(props.indexUpAxis);
@@ -7204,19 +6501,16 @@ function createVehicleInstance(
   const axisForwardVector = resolveVehicleAxisVector(forwardAxis).clone();
   const wheelEntries = (props.wheels ?? [])
     .map((wheel) => {
-      const point = tupleToVec3(wheel.chassisConnectionPointLocal);
-      const direction = tupleToVec3(wheel.directionLocal, DEFAULT_DIRECTION);
       const axle = tupleToVec3(wheel.axleLocal, DEFAULT_AXLE);
-      if (!point || !direction || !axle) {
+      if (!axle) {
         return null;
       }
-      return { config: wheel, point, direction, axle };
+      return { config: wheel, axle };
     })
-    .filter((entry): entry is { config: VehicleWheelProps; point: CANNON.Vec3; direction: CANNON.Vec3; axle: CANNON.Vec3 } => Boolean(entry));
+    .filter((entry): entry is { config: VehicleWheelProps; axle: HostPhysicsVec3 } => Boolean(entry));
   if (!wheelEntries.length) {
     return null;
   }
-  const wheelCount = wheelEntries.length;
   let steerableWheelIndices = wheelEntries.reduce<number[]>((indices, entry, index) => {
     if (entry.config.isFrontWheel) {
       indices.push(index);
@@ -7224,44 +6518,26 @@ function createVehicleInstance(
     return indices;
   }, []);
   if (!steerableWheelIndices.length) {
-    steerableWheelIndices = wheelCount >= 2
-      ? [0, 1].filter((index) => index < wheelCount)
-      : Array.from({ length: wheelCount }, (_unused, index) => index);
+    steerableWheelIndices = wheelEntries.length >= 2
+      ? [0, 1].filter((index) => index < wheelEntries.length)
+      : Array.from({ length: wheelEntries.length }, (_unused, index) => index);
   }
-  const vehicle = new CANNON.RaycastVehicle({
-    chassisBody: rigidbody.body,
-    indexRightAxis: rightAxis,
-    indexUpAxis: upAxis,
-    indexForwardAxis: forwardAxis,
-  }) as RuntimeRaycastVehicle;
-  const wheelBindings: VehicleWheelBinding[] = [];
-  wheelEntries.forEach(({ config, point, direction, axle }, index) => {
+  object.updateMatrixWorld(true);
+  object.getWorldPosition(physicsBridgeSyncPositionHelper);
+  object.getWorldQuaternion(physicsBridgeSyncQuaternionHelper).normalize();
+  const vehicle = createBridgeVehicleProxy(
+    physicsBridgeSyncPositionHelper,
+    physicsBridgeSyncQuaternionHelper,
+    wheelEntries.length,
+  );
+  const wheelBindings: VehicleWheelBinding[] = wheelEntries.map(({ config, axle }, index) => {
     const axis = new THREE.Vector3(axle.x, axle.y, axle.z);
     if (axis.lengthSq() < 1e-6) {
       axis.copy(defaultWheelAxisVector);
     }
     axis.normalize();
-    vehicle.addWheel({
-      chassisConnectionPointLocal: point.clone(),
-      directionLocal: direction.clone(),
-      axleLocal: axle.clone(),
-      suspensionRestLength: Number.isFinite(config.suspensionRestLength) ? Math.max(0, config.suspensionRestLength) : undefined,
-      suspensionStiffness: Number.isFinite(config.suspensionStiffness) ? Math.max(0, config.suspensionStiffness) : undefined,
-      dampingRelaxation: Number.isFinite(config.dampingRelaxation) ? Math.max(0, config.dampingRelaxation) : undefined,
-      dampingCompression: Number.isFinite(config.dampingCompression) ? Math.max(0, config.dampingCompression) : undefined,
-      frictionSlip: Number.isFinite(config.frictionSlip) ? Math.max(0, config.frictionSlip) : undefined,
-      maxSuspensionTravel: Number.isFinite(config.maxSuspensionTravel) ? Math.max(0, config.maxSuspensionTravel) : undefined,
-      maxSuspensionForce: Number.isFinite(config.maxSuspensionForce) ? Math.max(0, config.maxSuspensionForce) : undefined,
-      rollInfluence: Number.isFinite(config.rollInfluence) ? config.rollInfluence : 0.01,
-      radius: Number.isFinite(config.radius) ? Math.max(config.radius, VEHICLE_WHEEL_MIN_RADIUS) : VEHICLE_WHEEL_MIN_RADIUS,
-      customSlidingRotationalSpeed: config.customSlidingRotationalSpeed,
-      useCustomSlidingRotationalSpeed: config.useCustomSlidingRotationalSpeed,
-      isFrontWheel: config.isFrontWheel === true,
-    });
     const wheelObject = config.nodeId ? nodeObjectMap.get(config.nodeId) ?? null : null;
-    const basePosition = wheelObject ? wheelObject.position.clone() : new THREE.Vector3();
-    const baseScale = wheelObject ? wheelObject.scale.clone() : new THREE.Vector3(1, 1, 1);
-    wheelBindings.push({
+    return {
       nodeId: config.nodeId ?? null,
       object: wheelObject,
       radius: Math.max(config.radius, VEHICLE_WHEEL_MIN_RADIUS),
@@ -7271,26 +6547,15 @@ function createVehicleInstance(
       spinAngle: 0,
       lastSteeringAngle: 0,
       baseQuaternion: wheelObject ? wheelObject.quaternion.clone() : new THREE.Quaternion(),
-      basePosition,
-      baseScale,
-    });
+      basePosition: wheelObject ? wheelObject.position.clone() : new THREE.Vector3(),
+      baseScale: wheelObject ? wheelObject.scale.clone() : new THREE.Vector3(1, 1, 1),
+    };
   });
-  vehicle.addToWorld(physicsWorld);
-  const initialChassisPosition = new THREE.Vector3(
-    rigidbody.body.position.x,
-    rigidbody.body.position.y,
-    rigidbody.body.position.z,
-  );
-  const initialChassisQuaternion = new THREE.Quaternion(
-    rigidbody.body.quaternion.x,
-    rigidbody.body.quaternion.y,
-    rigidbody.body.quaternion.z,
-    rigidbody.body.quaternion.w,
-  ).normalize();
   return {
+    source: 'bridge',
     nodeId: node.id,
     vehicle,
-    wheelCount,
+    wheelCount: wheelEntries.length,
     steerableWheelIndices,
     wheelBindings,
     forwardAxis: axisForwardVector.clone(),
@@ -7300,9 +6565,13 @@ function createVehicleInstance(
     axisRight: axisRightVector,
     axisUp: axisUpVector,
     axisForward: axisForwardVector,
-    lastChassisPosition: initialChassisPosition,
+    lastChassisPosition: physicsBridgeSyncPositionHelper.clone(),
     hasChassisPositionSample: false,
-    initialChassisQuaternion,
+    initialChassisQuaternion: physicsBridgeSyncQuaternionHelper.clone(),
+    bridgeBodyId: physicsBridgeBodyIdByNodeId.get(node.id) ?? null,
+    vehicleId: physicsBridgeVehicleIdByNodeId.get(node.id) ?? null,
+    lastBridgeFramePosition: physicsBridgeSyncPositionHelper.clone(),
+    hasBridgeFrameSample: false,
   };
 }
 
@@ -7311,39 +6580,29 @@ function removeVehicleInstance(nodeId: string): void {
   if (!entry) {
     return;
   }
-  if (physicsWorld) {
-    try {
-      entry.vehicle.removeFromWorld(physicsWorld);
-    } catch (error) {
-      console.warn('[SceneViewer] Failed to remove raycast vehicle from world', error);
-    }
-  }
   vehicleInstances.delete(nodeId);
   scenePreviewPerf.notifyRemovedNode(nodeId);
 }
 
 function ensureVehicleBindingForNode(nodeId: string): void {
-  if (!physicsWorld) {
-    return;
-  }
   const node = resolveNodeById(nodeId);
   const component = resolveVehicleComponent(node);
   if (!node || !component) {
     removeVehicleInstance(nodeId);
     return;
   }
-  const rigidbody = rigidbodyInstances.get(nodeId);
-  if (!rigidbody || !rigidbody.object) {
+  const object = nodeObjectMap.get(nodeId) ?? null;
+  if (!object) {
     return;
   }
   removeVehicleInstance(nodeId);
-  const instance = createVehicleInstance(node, component, rigidbody);
+  const instance = createBridgeVehicleInstance(node, component, object);
   if (instance) {
     vehicleInstances.set(nodeId, instance);
   }
 }
 
-function getPhysicsInterpolationState(body: CANNON.Body): PhysicsInterpolationState {
+function getPhysicsInterpolationState(body: PhysicsBodyLike): PhysicsInterpolationState {
   let state = physicsInterpolationStates.get(body);
   if (!state) {
     state = {
@@ -7358,7 +6617,7 @@ function getPhysicsInterpolationState(body: CANNON.Body): PhysicsInterpolationSt
   return state;
 }
 
-function resolveInterpolatedBodyPosition(body: CANNON.Body, target: THREE.Vector3): THREE.Vector3 {
+function resolveInterpolatedBodyPosition(body: PhysicsBodyLike, target: THREE.Vector3): THREE.Vector3 {
   if (!physicsInterpolationEnabled) {
     return target.set(body.position.x, body.position.y, body.position.z);
   }
@@ -7378,96 +6637,6 @@ function resolveRigidbodyBindingObject(
     return nodeObjectMap.get(targetNodeId) ?? null;
   }
   return fallbackObject;
-}
-
-function ensureRigidbodyBindingForObject(nodeId: string, object: THREE.Object3D): void {
-  if (!physicsWorld || !currentDocument) {
-    return;
-  }
-  const node = resolveNodeById(nodeId);
-  if (node && isGroundDynamicMesh(node.dynamicMesh)) {
-    removeRigidbodyInstance(nodeId);
-    return;
-  }
-  const component = resolvePhysicsRigidbodyComponent(node);
-  const shapeDefinition = extractRigidbodyShape(component);
-  const requiresMetadata = !hasAutoGeneratedDynamicShapeForNode(node?.dynamicMesh, node);
-  const hasBoundaryWall = Boolean(resolveBoundaryWallComponent(node));
-  if (!node || !component || !object) {
-    return;
-  }
-  if (isRoadDynamicMesh(node.dynamicMesh) && !resolveRoadVehicleCollisionEnabled(node)) {
-    removeRigidbodyInstance(nodeId);
-    return;
-  }
-  const bindingObject = resolveRigidbodyBindingObject(component, object);
-  if (!bindingObject) {
-    return;
-  }
-  if (isRoadDynamicMesh(node.dynamicMesh) && (component.props as RigidbodyComponentProps | undefined)?.bodyType === 'STATIC') {
-    ensureRoadRigidbodyInstance(node, component, bindingObject);
-    return;
-  }
-  if (!shapeDefinition && requiresMetadata && !hasBoundaryWall) {
-    return;
-  }
-  const existing = rigidbodyInstances.get(nodeId);
-  if (existing) {
-    existing.object = bindingObject;
-    syncSharedBodyFromObject(existing.body, bindingObject, existing.orientationAdjustment);
-
-    scenePreviewPerf.applyAggressiveSleepForNonInteractiveDynamic({
-      nodeId,
-      body: existing.body,
-      isVehicle: Boolean(resolveVehicleComponent(node)),
-      isProtagonist: Boolean(bindingObject.userData?.protagonist),
-    });
-
-    ensureVehicleBindingForNode(nodeId);
-    return;
-  }
-  const bodyEntry = createRigidbodyBody(node, component, shapeDefinition, bindingObject);
-  if (!bodyEntry) {
-    return;
-  }
-
-  scenePreviewPerf.applyAggressiveSleepForNonInteractiveDynamic({
-    nodeId,
-    body: bodyEntry.body,
-    isVehicle: Boolean(resolveVehicleComponent(node)),
-    isProtagonist: Boolean(bindingObject.userData?.protagonist),
-  });
-
-  physicsWorld.addBody(bodyEntry.body);
-  rigidbodyInstances.set(nodeId, {
-    nodeId,
-    body: bodyEntry.body,
-    bodies: [bodyEntry.body],
-    object: bindingObject,
-    orientationAdjustment: bodyEntry.orientationAdjustment,
-  });
-  ensureVehicleBindingForNode(nodeId);
-}
-
-function collectRigidbodyNodes(nodes: SceneNode[] | undefined | null): SceneNode[] {
-  const collected: SceneNode[] = [];
-  if (!Array.isArray(nodes)) {
-    return collected;
-  }
-  const stack: SceneNode[] = [...nodes];
-  while (stack.length) {
-    const node = stack.pop();
-    if (!node) {
-      continue;
-    }
-    if (resolvePhysicsRigidbodyComponent(node) && !isRoadDynamicMesh(node.dynamicMesh)) {
-      collected.push(node);
-    }
-    if (Array.isArray(node.children) && node.children.length) {
-      stack.push(...node.children);
-    }
-  }
-  return collected;
 }
 
 function collectVehicleNodes(nodes: SceneNode[] | undefined | null): SceneNode[] {
@@ -7514,206 +6683,17 @@ function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null):
     syncAirWallsForDocument(null);
     return;
   }
-  const world = ensurePhysicsWorld();
-  const rigidbodyNodes = collectRigidbodyNodes(document.nodes);
-  const desiredIds = new Set<string>();
-  rigidbodyNodes.forEach((node) => {
-    if (isGroundDynamicMesh(node.dynamicMesh)) {
-      removeRigidbodyInstance(node.id);
-      return;
-    }
-    desiredIds.add(node.id);
-    const component = resolvePhysicsRigidbodyComponent(node);
-    const shapeDefinition = extractRigidbodyShape(component);
-    const object = component ? resolveRigidbodyBindingObject(component, nodeObjectMap.get(node.id) ?? null) : null;
-    const requiresMetadata = !hasAutoGeneratedDynamicShapeForNode(node.dynamicMesh, node);
-    const hasBoundaryWall = Boolean(resolveBoundaryWallComponent(node));
-    if (!component || !object) {
-      return;
-    }
-    if (isRoadDynamicMesh(node.dynamicMesh) && (component.props as RigidbodyComponentProps | undefined)?.bodyType === 'STATIC') {
-      ensureRoadRigidbodyInstance(node, component, object);
-      return;
-    }
-    if (!shapeDefinition && requiresMetadata && !hasBoundaryWall) {
-      return;
-    }
-    const existing = rigidbodyInstances.get(node.id);
-    if (existing) {
-      removeRigidbodyInstanceBodies(world, existing);
-      rigidbodyInstances.delete(node.id);
-      scenePreviewPerf.notifyRemovedNode(node.id);
-    }
-    const bodyEntry = createRigidbodyBody(node, component, shapeDefinition, object);
-    if (!bodyEntry) {
-      return;
-    }
-
-    scenePreviewPerf.applyAggressiveSleepForNonInteractiveDynamic({
-      nodeId: node.id,
-      body: bodyEntry.body,
-      isVehicle: Boolean(resolveVehicleComponent(node)),
-      isProtagonist: Boolean(object.userData?.protagonist),
-    });
-
-    world.addBody(bodyEntry.body);
-    rigidbodyInstances.set(node.id, {
-      nodeId: node.id,
-      body: bodyEntry.body,
-      bodies: [bodyEntry.body],
-      object,
-      orientationAdjustment: bodyEntry.orientationAdjustment,
-    });
-  });
-  rigidbodyInstances.forEach((entry, nodeId) => {
-    if (!desiredIds.has(nodeId)) {
-      removeRigidbodyInstanceBodies(world, entry);
-      rigidbodyInstances.delete(nodeId);
-      scenePreviewPerf.notifyRemovedNode(nodeId);
-    }
-  });
-  groundHeightfieldCache.forEach((_entry, nodeId) => {
-    if (!desiredIds.has(nodeId)) {
-      groundHeightfieldCache.delete(nodeId);
-    }
-  });
+  void loadSceneryPhysicsBridgeScene(document);
+  clearLegacyPhysicsWorld();
   syncVehicleInstancesForDocument(document);
   syncAirWallsForDocument(document);
 }
 
 function stepPhysicsWorld(delta: number): number {
-  if (!physicsEnvironmentEnabled.value || !physicsWorld || !rigidbodyInstances.size) {
-    physicsAccumulator = 0;
-    physicsInterpolationAlpha = 0;
-    return 0;
-  }
-
-  const clampedDelta = Math.min(Math.max(0, delta), PHYSICS_MAX_ACCUMULATOR);
-  physicsAccumulator = Math.min(PHYSICS_MAX_ACCUMULATOR, physicsAccumulator + clampedDelta);
-  let subSteps = 0;
-  const world = physicsWorld as CANNON.World;
-
-  try {
-    if (physicsInterpolationEnabled) {
-      // Prepare previous state before stepping.
-      rigidbodyInstances.forEach((entry) => {
-        const body = entry.body;
-        const state = getPhysicsInterpolationState(body);
-        if (!state.hasSample) {
-          state.prevPos.set(body.position.x, body.position.y, body.position.z);
-          state.currPos.copy(state.prevPos);
-          state.prevQuat.set(body.quaternion.x, body.quaternion.y, body.quaternion.z, body.quaternion.w);
-          state.currQuat.copy(state.prevQuat);
-          state.hasSample = true;
-        } else {
-          state.prevPos.copy(state.currPos);
-          state.prevQuat.copy(state.currQuat);
-        }
-      });
-    }
-
-    while (physicsAccumulator >= PHYSICS_FIXED_TIMESTEP && subSteps < PHYSICS_MAX_SUB_STEPS) {
-      if (vehicleDriveActive.value) {
-        applyVehicleDriveForces(PHYSICS_FIXED_TIMESTEP);
-      }
-      world.step(PHYSICS_FIXED_TIMESTEP);
-      physicsAccumulator -= PHYSICS_FIXED_TIMESTEP;
-      subSteps += 1;
-
-      if (physicsInterpolationEnabled) {
-        rigidbodyInstances.forEach((entry) => {
-          const body = entry.body;
-          const state = getPhysicsInterpolationState(body);
-          state.currPos.set(body.position.x, body.position.y, body.position.z);
-          state.currQuat.set(body.quaternion.x, body.quaternion.y, body.quaternion.z, body.quaternion.w);
-        });
-      }
-    }
-  } catch (error) {
-    console.warn('[SceneViewer] Physics step failed', error);
-  }
-
-  if (physicsAccumulator > PHYSICS_FIXED_TIMESTEP) {
-    physicsAccumulator = PHYSICS_FIXED_TIMESTEP;
-  }
-
-  physicsInterpolationAlpha = physicsInterpolationEnabled && PHYSICS_FIXED_TIMESTEP > 0
-    ? Math.min(1, Math.max(0, physicsAccumulator / PHYSICS_FIXED_TIMESTEP))
-    : 0;
-
-  // Ensure vehicles are truly static after exiting drive/auto-tour.
-  const nowMs = Date.now();
-  vehicleInstances.forEach((instance) => {
-    const nodeId = instance.nodeId;
-    if (!nodeId) {
-      return;
-    }
-    const manualActive = vehicleDriveActive.value && vehicleDriveNodeId.value === nodeId;
-    const tourActive = activeAutoTourNodeIds.has(nodeId);
-    if (manualActive || tourActive) {
-      return;
-    }
-    const chassisBody = instance.vehicle?.chassisBody;
-    if (!chassisBody) {
-      return;
-    }
-    const vx = chassisBody.velocity?.x ?? 0;
-    const vy = chassisBody.velocity?.y ?? 0;
-    const vz = chassisBody.velocity?.z ?? 0;
-    const wx = chassisBody.angularVelocity?.x ?? 0;
-    const wy = chassisBody.angularVelocity?.y ?? 0;
-    const wz = chassisBody.angularVelocity?.z ?? 0;
-    const speedSq = vx * vx + vy * vy + vz * vz;
-    const angSq = wx * wx + wy * wy + wz * wz;
-    const sleepState = getBodySleepState(chassisBody as CANNON.Body);
-    const drifting = speedSq > 1e-10 || angSq > 1e-10;
-    const awake = sleepState === 0;
-    if (!drifting && !awake) {
-      return;
-    }
-
-    const lastLog = vehicleIdleFreezeLastLogMs.get(nodeId) ?? 0;
-    if (nowMs - lastLog > 750) {
-      vehicleIdleFreezeLastLogMs.set(nodeId, nowMs);
-      // idle drift detected; forcing stop (no debug log)
-    }
-    try {
-      chassisBody.allowSleep = true;
-      chassisBody.sleepSpeedLimit = Math.max(0.05, chassisBody.sleepSpeedLimit ?? 0);
-      chassisBody.sleepTimeLimit = Math.max(0.05, chassisBody.sleepTimeLimit ?? 0);
-      const wheelCount = Math.max(0, instance.wheelCount || (instance.vehicle && instance.vehicle.wheelInfos && instance.vehicle.wheelInfos.length) || 0);
-      for (let index = 0; index < wheelCount; index += 1) {
-        instance.vehicle.applyEngineForce(0, index);
-        instance.vehicle.setSteeringValue(0, index);
-        instance.vehicle.setBrake(VEHICLE_BRAKE_FORCE, index);
-      }
-      chassisBody.velocity.set(0, 0, 0);
-      chassisBody.angularVelocity.set(0, 0, 0);
-      trySleepBody(chassisBody as CANNON.Body);
-    } catch {
-      // best-effort
-    }
-  });
-
-  rigidbodyInstances.forEach((entry) => {
-    if (entry.syncObjectFromBody === false) {
-      return;
-    }
-    if (!scenePreviewPerf.shouldSyncNonInteractiveSleepingBody({ nodeId: entry.nodeId, body: entry.body, nowMs })) {
-      return;
-    }
-    const isAutoTourActive = activeAutoTourNodeIds.has(entry.nodeId);
-    if (isAutoTourActive) {
-      const nodeState = resolveNodeById(entry.nodeId);
-      const vehicle = resolveEnabledComponentState(nodeState, VEHICLE_COMPONENT_TYPE);
-      if (!vehicle) {
-        return;
-      }
-    }
-    syncSharedObjectFromBody(entry, syncInstancedTransform);
-  });
-
-  return subSteps;
+  void delta;
+  physicsAccumulator = 0;
+  physicsInterpolationAlpha = 0;
+  return 0;
 }
 
 function updateVehicleWheelVisuals(delta: number): void {
@@ -7738,11 +6718,11 @@ function updateVehicleWheelVisuals(delta: number): void {
     const nodeId = instance.nodeId ?? null;
     const manualActive = vehicleDriveActive.value && vehicleDriveVehicle === instance.vehicle;
     const tourActive = Boolean(nodeId) && activeAutoTourNodeIds.has(nodeId);
-    if (!scenePreviewPerf.shouldUpdateWheelVisuals({ nodeId, body: chassisBody as CANNON.Body, manualActive, tourActive, nowMs })) {
+    if (!scenePreviewPerf.shouldUpdateWheelVisuals({ nodeId, body: chassisBody, manualActive, tourActive, nowMs })) {
       return;
     }
 
-    resolveInterpolatedBodyPosition(chassisBody as CANNON.Body, wheelChassisPositionHelper);
+    resolveInterpolatedBodyPosition(chassisBody as PhysicsBodyLike, wheelChassisPositionHelper);
     wheelQuaternionHelper
       .set(chassisBody.quaternion.x, chassisBody.quaternion.y, chassisBody.quaternion.z, chassisBody.quaternion.w)
       .normalize();
@@ -8485,7 +7465,7 @@ function syncInstancedTransform(object: THREE.Object3D | null, force = false): v
 
 function updateNodeTransfrom(object: THREE.Object3D, node: SceneNode) {
   const autoTour = resolveEnabledComponentState<AutoTourComponentProps>(node, AUTO_TOUR_COMPONENT_TYPE);
-  const skipTransformSync = (Boolean(autoTour) && vehicleInstances.has(node.id)) || activeCharacterControlNodeId.value === node.id;
+  const skipTransformSync = Boolean(autoTour) && vehicleInstances.has(node.id);
   if (node.position) {
     if (!skipTransformSync) {
       object.position.set(node.position.x, node.position.y, node.position.z);
@@ -8526,7 +7506,7 @@ function updateNodeProperties(object: THREE.Object3D, node: SceneNode): void {
   } else {
     object.visible = true;
   }
-  applyViewerNodeMaterialOverrides(object, node);
+  applyMaterialOverrides(object, node.materials, materialOverrideOptions);
   // Material overrides may replace materials; re-apply mirror fix after overrides.
   syncMirroredMeshMaterials(object, node.mirror === 'horizontal' || node.mirror === 'vertical', node.mirror);
   updateBehaviorVisibility(node.id, object.visible);
@@ -8878,7 +7858,7 @@ function startTimedAnimation(
     onComplete();
     return;
   }
-  const startTime = Date.now();
+  const startTime = typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now();
   const raf = typeof requestAnimationFrame === 'function'
     ? requestAnimationFrame
     : ((callback: FrameRequestCallback) => {
@@ -8896,7 +7876,7 @@ function startTimedAnimation(
     activeBehaviorAnimations.delete(token);
   };
   const step = (timestamp: number) => {
-    const now = Number.isFinite(timestamp) ? timestamp : Date.now();
+    const now = Number.isFinite(timestamp) ? timestamp : (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now());
     const elapsed = Math.max(0, now - startTime);
     const alpha = Math.min(1, elapsed / durationMs);
     onUpdate(alpha);
@@ -9022,11 +8002,6 @@ type ProtagonistPoseOptions = {
   object?: THREE.Object3D | null;
 };
 
-function resolveProtagonistCameraY(worldY: number): number {
-  // Keep the authored protagonist elevation, then lift the camera to eye height.
-  return worldY + HUMAN_EYE_HEIGHT;
-}
-
 function syncProtagonistCameraPose(options: ProtagonistPoseOptions = {}): boolean {
   if (!options.force && protagonistPoseSynced) {
     return false;
@@ -9044,7 +8019,7 @@ function syncProtagonistCameraPose(options: ProtagonistPoseOptions = {}): boolea
   } else {
     protagonistPoseDirection.normalize();
   }
-  protagonistPosePosition.y = resolveProtagonistCameraY(protagonistPosePosition.y);
+  protagonistPosePosition.y = HUMAN_EYE_HEIGHT;
   protagonistPoseTarget.copy(protagonistPosePosition).addScaledVector(protagonistPoseDirection, CAMERA_FORWARD_OFFSET);
   protagonistPoseSynced = true;
   if (options.applyToCamera) {
@@ -10138,19 +9113,6 @@ function cancelVehicleSmoothStop(): void {
   vehicleDriveController.clearSmoothStop();
 }
 
-function requestVehicleSmoothStop(): void {
-  if (!vehicleDriveActive.value) {
-    return;
-  }
-  if (Math.abs(vehicleDriveInput.throttle) > VEHICLE_SMOOTH_STOP_MIN_THROTTLE) {
-    return;
-  }
-  if (vehicleSpeed.value <= VEHICLE_SMOOTH_STOP_TRIGGER_SPEED) {
-    return;
-  }
-  vehicleDriveController.requestSmoothStop({ initialSpeed: vehicleSpeed.value });
-}
-
 function handleDrivePadTouchStart(event: TouchEvent): void {
   if (!vehicleDriveUi.value.visible) {
     return;
@@ -10248,7 +9210,6 @@ function handleDrivePadMouseMove(event: MouseEvent): void {
 function handleDrivePadMouseUp(): void {
   if (joystickState.pointerId === DRIVE_PAD_MOUSE_POINTER_ID) {
     deactivateJoystick(true);
-    requestVehicleSmoothStop();
     scheduleDrivePadFade();
   }
   detachDrivePadMouseListeners();
@@ -10300,7 +9261,6 @@ function handleJoystickTouchEnd(event: TouchEvent): void {
     return;
   }
   deactivateJoystick(true);
-  requestVehicleSmoothStop();
 }
 
 function recomputeVehicleDriveInputs(): void {
@@ -10308,6 +9268,9 @@ function recomputeVehicleDriveInputs(): void {
   const throttleFromJoystick = clampAxisScalar(joystickInput.throttle);
   const steeringFromJoystick = clampAxisScalar(joystickInput.steering);
   // Keep joystick contribution, then let controller clamp and merge with flags/keyboard.
+  vehicleDriveInput.analogThrottle = throttleFromJoystick;
+  vehicleDriveInput.analogSteering = -steeringFromJoystick;
+  vehicleDriveInput.analogBrake = 0;
   vehicleDriveInput.throttle = throttleFromJoystick;
   vehicleDriveInput.steering = -steeringFromJoystick;
   vehicleDriveInput.brake = vehicleDriveInputFlags.brake ? 1 : 0;
@@ -10328,26 +9291,12 @@ type VehicleDriveStartResult =
 function startVehicleDriveMode(
   event: Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }>,
 ): VehicleDriveStartResult {
-  const targetNodeId = event.targetNodeId ?? event.nodeId ?? null;
-  if (!targetNodeId) {
-    return { success: false, message: '缺少驾驶目标' };
-  }
-  if (vehicleDriveActive.value) {
-    vehicleDriveController.stopDrive(
-      { resolution: { type: 'abort', message: '驾驶状态被新的脚本替换。' } },
-      renderContext ? { camera: renderContext.camera, mapControls: renderContext.controls } : { camera: null },
-    );
-  }
   const ctx = renderContext
     ? { camera: renderContext.camera, mapControls: renderContext.controls }
     : { camera: null as THREE.PerspectiveCamera | null };
   const result = vehicleDriveController.startDrive(event, ctx);
   if (result.success) {
-    resetCameraFollowState(vehicleDriveCameraFollowState);
-    vehicleDriveExitBusy.value = false;
-    resetVehicleDriveInputs();
-    setCameraViewState('watching', targetNodeId);
-    setVehicleDriveUiOverride('show');
+    vehicleDriveCameraFollowState.initialized = false;
     purposeActiveMode.value = 'watch';
     updateVehicleDriveCamera(0, { immediate: true });
   }
@@ -10355,9 +9304,6 @@ function startVehicleDriveMode(
 }
 
 function applyVehicleDriveForces(deltaSeconds: number): void {
-  if (!vehicleDriveActive.value) {
-    return;
-  }
   vehicleDriveController.applyForces(deltaSeconds);
 }
 
@@ -10451,39 +9397,7 @@ function handleVehicleDriveResetTap(): void {
 }
 
 function resetActiveVehiclePose(): boolean {
-  const success = vehicleDriveController.resetPose();
-  if (success) {
-    resetCameraFollowState(vehicleDriveCameraFollowState);
-  }
-  return success;
-}
-
-function handleCharacterControlJumpTap(): void {
-  if (!activeCharacterControlNodeId.value) {
-    return;
-  }
-  triggerCharacterControlJump(Date.now());
-}
-
-function handleCharacterControlInteractTap(): void {
-  if (!activeCharacterControlNodeId.value) {
-    return;
-  }
-  triggerCharacterControlInteract(Date.now());
-}
-
-function handleCharacterControlSprintTap(): void {
-  if (!activeCharacterControlNodeId.value) {
-    return;
-  }
-  characterControlActionState.sprinting = !characterControlActionState.sprinting;
-}
-
-function handleCharacterControlCrouchTap(): void {
-  if (!activeCharacterControlNodeId.value) {
-    return;
-  }
-  characterControlActionState.crouching = !characterControlActionState.crouching;
+  return vehicleDriveController.resetPose();
 }
 
 
@@ -10713,7 +9627,7 @@ function applyAutoTourVehicleHoldBrake(nodeId: string): void {
     const chassisBody = vehicleInstance.vehicle.chassisBody;
     chassisBody.velocity.set(0, 0, 0);
     chassisBody.angularVelocity.set(0, 0, 0);
-    trySleepBody(chassisBody as CANNON.Body);
+    trySleepBody(chassisBody as PhysicsBodyLike);
   } catch {
     // best-effort
   }
@@ -10787,9 +9701,9 @@ function applyAutoTourSnapToVehicle(nodeId: string, snap: AutoTourRouteSnapResul
     }
     chassisBody.velocity.set(0, 0, 0);
     chassisBody.angularVelocity.set(0, 0, 0);
-    resetPhysicsInterpolationState(chassisBody as CANNON.Body);
+    resetPhysicsInterpolationState(chassisBody as PhysicsBodyLike);
     holdVehicleBrakeSafe({ vehicleInstance, brakeForce });
-    trySleepBody(chassisBody as CANNON.Body);
+    trySleepBody(chassisBody as PhysicsBodyLike);
   }
 
   return object;
@@ -11120,209 +10034,6 @@ function handleVehicleDriveEvent(event: Extract<BehaviorRuntimeEvent, { type: 'v
   }
 }
 
-function handleCharacterControlEvent(event: Extract<BehaviorRuntimeEvent, { type: 'character-control' }>): void {
-  const targetNodeId = event.targetNodeId || event.nodeId || null;
-  if (!targetNodeId) {
-    uni.showToast({ title: '缺少角色目标', icon: 'none' });
-    resolveBehaviorToken(event.token, { type: 'fail', message: '缺少角色目标' });
-    return;
-  }
-  const targetNode = resolveNodeById(targetNodeId);
-  const canControl = Boolean(targetNode?.components?.[CHARACTER_CONTROLLER_COMPONENT_TYPE]);
-  if (!canControl) {
-    uni.showToast({ title: '目标节点未挂载角色控制组件', icon: 'none' });
-    resolveBehaviorToken(event.token, {
-      type: 'fail',
-      message: '目标节点未挂载角色控制组件',
-    });
-    return;
-  }
-  if (pendingVehicleDriveEvent.value) {
-    resolveBehaviorToken(pendingVehicleDriveEvent.value.token, {
-      type: 'abort',
-      message: '驾驶请求被角色控制替换。',
-    });
-    pendingVehicleDriveEvent.value = null;
-  }
-  if (pendingCharacterControlEvent.value) {
-    resolveBehaviorToken(pendingCharacterControlEvent.value.token, {
-      type: 'abort',
-      message: '角色控制请求被驾驶模式替换。',
-    });
-    pendingCharacterControlEvent.value = null;
-  }
-  activeCharacterControlNodeId.value = null;
-  characterControlActionState.sprinting = false;
-  characterControlActionState.crouching = false;
-  characterControlActionState.jumpStartedAtMs = 0;
-  characterControlActionState.interactUntilMs = 0;
-  characterControlAnimationClipState.clear();
-  pendingCharacterControlEvent.value = event;
-  activeCharacterControlNodeId.value = targetNodeId;
-}
-
-function handleCharacterReleaseEvent(): void {
-  if (pendingCharacterControlEvent.value) {
-    resolveBehaviorToken(pendingCharacterControlEvent.value.token, {
-      type: 'continue',
-    });
-    pendingCharacterControlEvent.value = null;
-  }
-  activeCharacterControlNodeId.value = null;
-  characterControlActionState.sprinting = false;
-  characterControlActionState.crouching = false;
-  characterControlActionState.jumpStartedAtMs = 0;
-  characterControlActionState.interactUntilMs = 0;
-  characterControlAnimationClipState.clear();
-  resetVehicleDriveInputs();
-  setVehicleDriveUiOverride('hide');
-}
-
-function resolveCharacterControllerComponent(
-  node: SceneNode | null | undefined,
-): SceneNodeComponentState<CharacterControllerComponentProps> | null {
-  return resolveEnabledComponentState<CharacterControllerComponentProps>(node, CHARACTER_CONTROLLER_COMPONENT_TYPE);
-}
-
-const CHARACTER_CONTROL_JUMP_START_MS = 120;
-const CHARACTER_CONTROL_JUMP_LOOP_MS = 220;
-const CHARACTER_CONTROL_JUMP_LAND_MS = 160;
-const CHARACTER_CONTROL_INTERACT_MS = 220;
-
-function resolveCharacterControlRuntimeState(nowMs: number): CharacterControlRuntimeState {
-  const jumpElapsedMs = characterControlActionState.jumpStartedAtMs > 0
-    ? nowMs - characterControlActionState.jumpStartedAtMs
-    : Number.POSITIVE_INFINITY;
-  let jumpPhase: CharacterControlRuntimeState['jumpPhase'] = null;
-  if (jumpElapsedMs >= 0 && Number.isFinite(jumpElapsedMs)) {
-    if (jumpElapsedMs < CHARACTER_CONTROL_JUMP_START_MS) {
-      jumpPhase = 'start';
-    } else if (jumpElapsedMs < CHARACTER_CONTROL_JUMP_START_MS + CHARACTER_CONTROL_JUMP_LOOP_MS) {
-      jumpPhase = 'loop';
-    } else if (jumpElapsedMs < CHARACTER_CONTROL_JUMP_START_MS + CHARACTER_CONTROL_JUMP_LOOP_MS + CHARACTER_CONTROL_JUMP_LAND_MS) {
-      jumpPhase = 'land';
-    } else {
-      characterControlActionState.jumpStartedAtMs = 0;
-    }
-  }
-  const interacting = characterControlActionState.interactUntilMs > nowMs;
-  if (!interacting && characterControlActionState.interactUntilMs > 0) {
-    characterControlActionState.interactUntilMs = 0;
-  }
-  return {
-    sprinting: characterControlActionState.sprinting,
-    crouching: characterControlActionState.crouching,
-    jumpPhase,
-    interacting,
-  };
-}
-
-function triggerCharacterControlJump(nowMs: number): void {
-  if (characterControlActionState.jumpStartedAtMs > 0) {
-    return;
-  }
-  characterControlActionState.jumpStartedAtMs = nowMs;
-}
-
-function triggerCharacterControlInteract(nowMs: number): void {
-  characterControlActionState.interactUntilMs = nowMs + CHARACTER_CONTROL_INTERACT_MS;
-}
-
-function playCharacterControlAnimation(
-  nodeId: string,
-  props: CharacterControllerComponentProps,
-  movementMagnitude: number,
-  actionState: CharacterControlRuntimeState,
-): void {
-  const controller = nodeAnimationControllers.get(nodeId);
-  if (!controller) {
-    return;
-  }
-  const desiredClipName = chooseCharacterControlClipName(props, movementMagnitude, actionState);
-  const currentClipName = characterControlAnimationClipState.get(nodeId) ?? null;
-  const effectiveClipName = desiredClipName && desiredClipName.trim().length ? desiredClipName.trim() : null;
-  if (currentClipName === effectiveClipName) {
-    return;
-  }
-  const clip = effectiveClipName
-    ? controller.clips.find((entry) => entry.name === effectiveClipName)
-    : controller.defaultClip ?? pickDefaultAnimationClip(controller.clips);
-  if (!clip) {
-    return;
-  }
-  controller.mixer.stopAllAction();
-  const shouldLoop = actionState.jumpPhase === 'loop' || (actionState.jumpPhase === null && !actionState.interacting);
-  playAnimationClip(controller.mixer, clip, { loop: shouldLoop });
-  characterControlAnimationClipState.set(nodeId, effectiveClipName);
-}
-
-function updateCharacterControlForFrame(deltaSeconds: number): boolean {
-  const nodeId = activeCharacterControlNodeId.value;
-  if (!nodeId || !renderContext?.camera) {
-    return false;
-  }
-  const node = resolveSceneNodeById(previewNodeMap, nodeId);
-  const component = resolveCharacterControllerComponent(node);
-  const object = nodeObjectMap.get(nodeId) ?? null;
-  if (!node || !component || !object) {
-    return false;
-  }
-  const props = clampCharacterControllerComponentProps(component.props);
-  const moveX = Number(vehicleDriveInputFlags.right) - Number(vehicleDriveInputFlags.left);
-  const moveZ = Number(vehicleDriveInputFlags.forward) - Number(vehicleDriveInputFlags.backward);
-  const nowMs = Date.now();
-  const actionState = {
-    ...resolveCharacterControlRuntimeState(nowMs),
-    moveX,
-    moveZ,
-  };
-  const movementMagnitude = resolveCharacterControlMoveVector({
-    camera: renderContext.camera,
-    moveX,
-    moveZ,
-    scratch: {
-      facingScratch: characterControlFacingScratch,
-      rightScratch: characterControlRightScratch,
-      moveScratch: characterControlMoveScratch,
-    },
-  });
-  if (movementMagnitude > 0.001) {
-    if (characterControlMoveScratch.lengthSq() > 1e-8) {
-      const speed = resolveCharacterControlSpeed(props, movementMagnitude, actionState);
-      object.position.addScaledVector(characterControlMoveScratch, Math.max(0, speed) * deltaSeconds);
-      object.lookAt(object.position.clone().add(characterControlMoveScratch));
-    }
-  }
-  const groundMesh = dynamicGroundCache?.dynamicMesh ?? null;
-  if (groundMesh) {
-    const groundHeight = sampleGroundHeight(groundMesh, object.position.x, object.position.z);
-    if (Number.isFinite(groundHeight)) {
-      const baseHeight = groundHeight + Math.max(0.1, props.colliderHeight * 0.5);
-      if (actionState.jumpPhase) {
-        const elapsed = nowMs - characterControlActionState.jumpStartedAtMs;
-        const phaseElapsed = actionState.jumpPhase === 'start'
-          ? elapsed
-          : actionState.jumpPhase === 'loop'
-            ? elapsed - CHARACTER_CONTROL_JUMP_START_MS
-            : elapsed - CHARACTER_CONTROL_JUMP_START_MS - CHARACTER_CONTROL_JUMP_LOOP_MS;
-        const phaseDuration = actionState.jumpPhase === 'start'
-          ? CHARACTER_CONTROL_JUMP_START_MS
-          : actionState.jumpPhase === 'loop'
-            ? CHARACTER_CONTROL_JUMP_LOOP_MS
-            : CHARACTER_CONTROL_JUMP_LAND_MS;
-        const jumpProgress = Math.min(1, Math.max(0, phaseElapsed / phaseDuration));
-        const jumpHeight = Math.sin(jumpProgress * Math.PI) * Math.max(0.35, props.jumpImpulse * 0.18);
-        object.position.y = baseHeight + jumpHeight;
-      } else {
-        object.position.y = baseHeight;
-      }
-    }
-  }
-  playCharacterControlAnimation(nodeId, props, movementMagnitude, actionState);
-  syncProtagonistCameraPose({ force: true, object, applyToCamera: true });
-  return true;
-}
-
 function handleVehicleDebusEvent(): void {
   if (pendingVehicleDriveEvent.value) {
     resolveBehaviorToken(pendingVehicleDriveEvent.value.token, {
@@ -11483,7 +10194,7 @@ async function waitForSceneReady(expectedSceneId: string, timeoutMs = 30000): Pr
 
     const stop = watch(
       () => [loading.value, sceneSwitching.value, currentSceneId.value] as const,
-      ([isLoading, isSwitching, sceneId]: readonly [boolean, boolean, string | null]) => {
+      ([isLoading, isSwitching, sceneId]) => {
         if (!isLoading && !isSwitching && sceneId === expected) {
           clearTimeout(timeout);
           stop();
@@ -11640,12 +10351,6 @@ function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
       break;
     case 'vehicle-drive':
       handleVehicleDriveEvent(event);
-      break;
-    case 'character-control':
-      handleCharacterControlEvent(event);
-      break;
-    case 'character-release':
-      handleCharacterReleaseEvent();
       break;
     case 'vehicle-debus':
       handleVehicleDebusEvent();
@@ -11814,6 +10519,18 @@ function inferEnvironmentAssetExtension(assetId: string, resolve: ResolvedAssetU
   return sanitized.slice(index + 1).toLowerCase();
 }
 
+function isKtx2EnvironmentTexture(extension: string, mimeType: string): boolean {
+  return extension === 'ktx2' || mimeType.includes('ktx2') || mimeType.includes('basis');
+}
+
+function isExrEnvironmentTexture(extension: string, mimeType: string): boolean {
+  return extension === 'exr' || mimeType.includes('exr');
+}
+
+function isRgbEEnvironmentTexture(extension: string, mimeType: string): boolean {
+  return extension === 'hdr' || extension === 'hdri' || extension === 'rgbe' || mimeType === 'image/vnd.radiance';
+}
+
 async function loadEnvironmentTextureFromAsset(
   assetId: string,
 ): Promise<{ texture: THREE.Texture; dispose?: () => void } | null> {
@@ -11825,17 +10542,17 @@ async function loadEnvironmentTextureFromAsset(
   const mimeType = resolve.mimeType?.toLowerCase() ?? '';
   const dispose = resolve.dispose;
   try {
-    if (extension === 'ktx2' || mimeType.includes('ktx2') || mimeType.includes('basis')) {
+    if (isKtx2EnvironmentTexture(extension, mimeType)) {
       const renderer = renderContext?.renderer ?? null;
       if (!renderer) {
         return null;
       }
-      const ktx2Loader = await createKtx2Loader(renderer);
-      const texture = await ktx2Loader.loadAsync(resolve.url);
+      const texture = await loadKtx2TextureFromUrl(resolve.url, renderer);
       texture.mapping = THREE.CubeUVReflectionMapping;
+      texture.needsUpdate = true;
       return { texture, dispose };
     }
-    if (extension === 'exr' || (mimeType && mimeType.toLowerCase().includes('exr'))) {
+    if (isExrEnvironmentTexture(extension, mimeType)) {
       // EXR not supported in this environment; use texture loader fallback.
       const texture = await textureLoader.loadAsync(resolve.url);
       texture.mapping = THREE.EquirectangularReflectionMapping;
@@ -11846,11 +10563,9 @@ async function loadEnvironmentTextureFromAsset(
       ensureFloatTextureFilterCompatibility(texture);
       return { texture, dispose };
     }
-    if (extension === 'hdr' || extension === 'hdri' || resolve.mimeType === 'image/vnd.radiance') {
-      const hdrLoader = await createRgbELoader();
-      const texture = await hdrLoader.loadAsync(resolve.url);
+    if (isRgbEEnvironmentTexture(extension, mimeType)) {
+      const texture = await loadRgbETextureFromUrl(resolve.url);
       texture.mapping = THREE.EquirectangularReflectionMapping;
-      texture.flipY = false;
       texture.magFilter = THREE.NearestFilter;
       texture.minFilter = THREE.NearestFilter;
       texture.needsUpdate = true;
@@ -11932,11 +10647,6 @@ function applyPhysicsEnvironmentSettings(settings: EnvironmentSettings) {
     1,
     DEFAULT_ENVIRONMENT_FRICTION,
   );
-  if (physicsWorld) {
-    physicsWorld.gravity.set(physicsGravity.x, physicsGravity.y, physicsGravity.z);
-    physicsWorld.defaultContactMaterial.friction = physicsContactFriction;
-    physicsWorld.defaultContactMaterial.restitution = physicsContactRestitution;
-  }
 }
 
 async function applyBackgroundSettings(
@@ -12188,11 +10898,32 @@ function applyEnvironmentReflectionFromBackground(background: EnvironmentSetting
   return true;
 }
 
+function degreesToRadians(value: number): number {
+  return (value * Math.PI) / 180;
+}
+
+function applyEnvironmentTextureRotation(settings: EnvironmentSettings): void {
+  const scene = renderContext?.scene ?? null;
+  if (!scene) {
+    return;
+  }
+  const rot = settings.environmentRotationDegrees ?? { x: 0, y: 0, z: 0 };
+  const euler = new THREE.Euler(
+    degreesToRadians(rot.x ?? 0),
+    degreesToRadians(rot.y ?? 0),
+    degreesToRadians(rot.z ?? 0),
+    'XYZ',
+  );
+  scene.backgroundRotation.copy(euler);
+  scene.environmentRotation.copy(euler);
+}
+
 async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
   const scene = renderContext?.scene ?? null;
   const snapshot = cloneEnvironmentSettings(settings);
   activeEnvironmentSettings = snapshot;
   applyPhysicsEnvironmentSettings(snapshot);
+  void reloadSceneryPhysicsBridgeForPreference(snapshot);
   if (!scene) {
     pendingEnvironmentSettings = snapshot;
     return;
@@ -12201,15 +10932,7 @@ async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
   const backgroundApplied = await applyBackgroundSettings(snapshot.background);
   const environmentApplied = applyEnvironmentReflectionFromBackground(snapshot.background);
 
-  const rot = snapshot.environmentRotationDegrees ?? { x: 0, y: 0, z: 0 };
-  const euler = new THREE.Euler(
-    (rot.x * Math.PI) / 180,
-    (rot.y * Math.PI) / 180,
-    (rot.z * Math.PI) / 180,
-    'XYZ',
-  );
-  scene.backgroundRotation.copy(euler);
-  scene.environmentRotation.copy(euler);
+  applyEnvironmentTextureRotation(snapshot);
   applyRendererShadowSetting();
   syncSceneCsmSunFromEnvironment();
   if (backgroundApplied && environmentApplied) {
@@ -12269,6 +10992,11 @@ function parseSceneDocument(payload: unknown): SceneJsonExportDocument {
   throw new Error('场景数据格式不正确');
 }
 
+const GROUND_HEIGHTMAP_SIDECAR_MAGIC = 0x48474d32;
+const GROUND_HEIGHTMAP_SIDECAR_VERSION = 2;
+const GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES = 32;
+const EMPTY_GROUND_BOUND = -1;
+
 function findFirstGroundDynamicMesh(document: SceneJsonExportDocument): GroundDynamicMesh | null {
   const stack = [...document.nodes];
   while (stack.length) {
@@ -12286,97 +11014,236 @@ function findFirstGroundDynamicMesh(document: SceneJsonExportDocument): GroundDy
   return null;
 }
 
-function hydrateGroundTextureFromPackagedAsset(
+function hydrateGroundSidecarFromPackage(
+  pkg: ScenePackageUnzipped,
+  sceneEntry: { sceneId: string; path: string; groundHeightsPath?: string; groundScatterPath?: string; groundPaintPath?: string },
   document: SceneJsonExportDocument,
-  pkg: ScenePackageUnzipped | null = null,
-): void {
-  const groundDynamicMesh = findFirstGroundDynamicMesh(document) as (GroundDynamicMesh & {
-    textureAssetId?: string | null;
-    textureDataUrl?: string | null;
-    textureName?: string | null;
-  }) | null;
-  if (!groundDynamicMesh) {
-    return;
+): SceneJsonExportDocument {
+  const definition = findFirstGroundDynamicMesh(document) as GroundRuntimeDynamicMesh | null;
+  if (!definition) {
+    return document;
   }
-  const textureAssetId = typeof groundDynamicMesh.textureAssetId === 'string' ? groundDynamicMesh.textureAssetId.trim() : '';
-  if (!textureAssetId) {
-    return;
+  if (!sceneEntry.groundHeightsPath) {
+    throw new Error(`场景 ${sceneEntry.sceneId} 缺少 ground 高度 sidecar 路径`);
   }
-  const entry = document.assetRegistry?.[textureAssetId];
-  if (!entry || entry.sourceType !== 'package') {
-    return;
+  const sidecarBytes = pkg.files[sceneEntry.groundHeightsPath];
+  if (!sidecarBytes) {
+    throw new Error(`场景 ${sceneEntry.sceneId} 缺少 ground 高度 sidecar 文件`);
   }
-  const zipPath = typeof entry.zipPath === 'string' ? entry.zipPath.trim() : '';
-  if (!zipPath || !pkg?.files[zipPath]) {
-    return;
+
+  const sidecarBuffer = sidecarBytes.buffer.slice(sidecarBytes.byteOffset, sidecarBytes.byteOffset + sidecarBytes.byteLength);
+  const vertexCount = getGroundVertexCount(definition.rows, definition.columns);
+  const expectedByteLength = GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES + vertexCount * Float64Array.BYTES_PER_ELEMENT * 2;
+  if (sidecarBuffer.byteLength !== expectedByteLength) {
+    throw new Error(
+      `场景 ${sceneEntry.sceneId} 的 ground sidecar 大小异常：期望 ${expectedByteLength}，实际 ${sidecarBuffer.byteLength}`,
+    );
   }
-  const resolvedUrl = getOrCreateObjectUrl(
-    textureAssetId,
-    getArrayBufferView(pkg.files[zipPath]!),
-    inferMimeTypeFromAssetId(entry.name ?? zipPath) ?? undefined,
+
+  const headerView = new DataView(sidecarBuffer, 0, GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES);
+  const magic = headerView.getUint32(0, true);
+  const version = headerView.getUint32(4, true);
+  if (magic !== GROUND_HEIGHTMAP_SIDECAR_MAGIC || version !== GROUND_HEIGHTMAP_SIDECAR_VERSION) {
+    throw new Error(`场景 ${sceneEntry.sceneId} 的 ground sidecar 头无效`);
+  }
+
+  const minRow = headerView.getInt32(8, true);
+  const maxRow = headerView.getInt32(12, true);
+  const minColumn = headerView.getInt32(16, true);
+  const maxColumn = headerView.getInt32(20, true);
+  const generatedAt = headerView.getFloat64(24, true);
+  const hasBounds = minRow !== EMPTY_GROUND_BOUND && maxRow !== EMPTY_GROUND_BOUND && minColumn !== EMPTY_GROUND_BOUND && maxColumn !== EMPTY_GROUND_BOUND;
+  const hasGeneratedAt = Number.isFinite(generatedAt);
+
+  definition.manualHeightMap = new Float64Array(sidecarBuffer, GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES, vertexCount);
+  definition.planningHeightMap = new Float64Array(
+    sidecarBuffer,
+    GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES + vertexCount * Float64Array.BYTES_PER_ELEMENT,
+    vertexCount,
   );
-  groundDynamicMesh.textureDataUrl = resolvedUrl;
-  if ((!groundDynamicMesh.textureName || !groundDynamicMesh.textureName.trim()) && entry.name) {
-    groundDynamicMesh.textureName = entry.name;
+  definition.planningMetadata = hasBounds || hasGeneratedAt
+    ? {
+        contourBounds: hasBounds ? { minRow, maxRow, minColumn, maxColumn } : null,
+        generatedAt: hasGeneratedAt ? generatedAt : undefined,
+      }
+    : null;
+  definition.surfaceRevision = Number.isFinite(definition.surfaceRevision)
+    ? Math.max(0, Math.trunc(definition.surfaceRevision as number))
+    : 0;
+  (definition as GroundDynamicMesh & {
+    runtimeHydratedHeightState?: 'pristine' | 'dirty';
+    runtimeDisableOptimizedChunks?: boolean;
+  }).runtimeHydratedHeightState = 'pristine';
+  definition.runtimeDisableOptimizedChunks = false;
+
+  const scatterSidecarPath = typeof sceneEntry.groundScatterPath === 'string' ? sceneEntry.groundScatterPath.trim() : '';
+  if (!scatterSidecarPath) {
+    definition.terrainScatter = null;
+  } else {
+    const scatterSidecarBytes = pkg.files[scatterSidecarPath];
+    if (!scatterSidecarBytes) {
+      throw new Error(`场景 ${sceneEntry.sceneId} 缺少 ground scatter sidecar 文件`);
+    }
+    const scatterSidecarBuffer = new ArrayBuffer(scatterSidecarBytes.byteLength);
+    new Uint8Array(scatterSidecarBuffer).set(scatterSidecarBytes);
+    const scatterPayload = deserializeGroundScatterSidecar(scatterSidecarBuffer);
+    definition.terrainScatter = scatterPayload.terrainScatter;
+  }
+
+  const paintSidecarPath = typeof sceneEntry.groundPaintPath === 'string' ? sceneEntry.groundPaintPath.trim() : '';
+  if (!paintSidecarPath) {
+    definition.terrainPaint = null;
+    definition.groundSurfaceChunks = null;
+  } else {
+    const paintSidecarBytes = pkg.files[paintSidecarPath];
+    if (!paintSidecarBytes) {
+      throw new Error(`场景 ${sceneEntry.sceneId} 缺少 ground paint sidecar 文件`);
+    }
+    const paintSidecarBuffer = new ArrayBuffer(paintSidecarBytes.byteLength);
+    new Uint8Array(paintSidecarBuffer).set(paintSidecarBytes);
+    const paintPayload = deserializeGroundPaintSidecar(paintSidecarBuffer);
+    definition.terrainPaint = null;
+    definition.groundSurfaceChunks = paintPayload.groundSurfaceChunks ?? null;
+  }
+
+  return document;
+}
+
+let projectSceneSwitchToken = 0;
+
+async function switchToProjectScene(sceneId: string): Promise<void> {
+  projectSceneSwitchToken += 1;
+  const token = projectSceneSwitchToken;
+
+  const trimmed = (sceneId ?? '').trim();
+  if (!trimmed) {
+    return;
+  }
+  const entry = projectSceneIndex.get(trimmed) ?? null;
+  if (!entry) {
+    warnings.value = [...warnings.value, `未找到场景：${trimmed}`];
+    return;
+  }
+  loading.value = true;
+  error.value = null;
+  try {
+    if (entry.kind === 'embedded') {
+      if (token !== projectSceneSwitchToken) {
+        return;
+      }
+
+      const sceneOverrides = activeScenePackageAssetOverrides ?? undefined;
+
+      previewPayload.value = {
+        document: entry.document,
+        title: entry.document.name || entry.name || '场景预览',
+        origin: 'scene-package',
+        assetOverrides: sceneOverrides,
+        createdAt: entry.document.createdAt,
+        updatedAt: entry.document.updatedAt,
+      };
+      currentSceneId.value = entry.id;
+      return;
+    }
+    if (entry.kind === 'external') {
+      const document = await requestSceneDocument(entry.sceneJsonUrl);
+      if (token !== projectSceneSwitchToken) {
+        return;
+      }
+
+      // External scene JSON: clear any active scene-package overrides.
+      activeScenePackageAssetOverrides = null;
+
+      previewPayload.value = {
+        document,
+        title: document.name || entry.name || '场景预览',
+        origin: entry.sceneJsonUrl,
+        assetOverrides: undefined,
+        createdAt: document.createdAt,
+        updatedAt: document.updatedAt,
+      };
+      currentSceneId.value = entry.id;
+      return;
+    }
+  } finally {
+    if (token === projectSceneSwitchToken) {
+      loading.value = false;
+    }
   }
 }
 
-async function hydrateGroundTextureFromViewerAssetCache(
-  document: SceneJsonExportDocument,
-  assetOverrides: SceneGraphBuildOptions['assetOverrides'] | undefined = undefined,
-): Promise<void> {
-  const groundDynamicMesh = findFirstGroundDynamicMesh(document) as (GroundDynamicMesh & {
-    textureAssetId?: string | null;
-    textureDataUrl?: string | null;
-    textureName?: string | null;
-  }) | null;
-  if (!groundDynamicMesh) {
-    return;
-  }
-  const textureAssetId = typeof groundDynamicMesh.textureAssetId === 'string' ? groundDynamicMesh.textureAssetId.trim() : '';
-  if (!textureAssetId) {
-    return;
-  }
-  const override = assetOverrides?.[textureAssetId];
-  if (typeof override === 'string' && override.trim().length) {
-    groundDynamicMesh.textureDataUrl = override.trim();
-    const entry = document.assetRegistry?.[textureAssetId];
-    if ((!groundDynamicMesh.textureName || !groundDynamicMesh.textureName.trim()) && entry?.name) {
-      groundDynamicMesh.textureName = entry.name;
+async function loadProjectFromBundle(bundle: ScenePackageProjectData): Promise<void> {
+  error.value = null;
+  projectBundle.value = bundle;
+  projectSceneIndex.clear();
+  bundle.scenes.forEach((scene: ScenePackageSceneEntry) => {
+    if (scene && typeof scene.id === 'string') {
+      projectSceneIndex.set(scene.id, scene);
     }
+  });
+
+  const initialId = bundle.project.defaultSceneId || bundle.project.sceneOrder?.[0] || null;
+  if (!initialId) {
+    error.value = '工程未设置默认场景';
+    previewPayload.value = null;
+    loading.value = false;
     return;
   }
-  if (override instanceof ArrayBuffer) {
-    groundDynamicMesh.textureDataUrl = getOrCreateObjectUrl(textureAssetId, override);
-    const entry = document.assetRegistry?.[textureAssetId];
-    if ((!groundDynamicMesh.textureName || !groundDynamicMesh.textureName.trim()) && entry?.name) {
-      groundDynamicMesh.textureName = entry.name;
+
+  requestedMode.value = 'project';
+  await switchToProjectScene(initialId);
+}
+
+function requestBinary(url: string): Promise<ArrayBuffer> {
+  return new Promise((resolve, reject) => {
+    if (sceneDownloadTask) {
+      sceneDownloadTask.abort();
+      sceneDownloadTask = null;
     }
-    return;
-  }
-  if (override && typeof override === 'object' && 'bytes' in override) {
-    const bytes = (override as { bytes: ArrayBuffer | ArrayBufferView }).bytes;
-    const mimeType = (override as { mimeType?: string | null }).mimeType ?? undefined;
-    groundDynamicMesh.textureDataUrl = getOrCreateObjectUrl(
-      textureAssetId,
-      getArrayBufferView(bytes),
-      mimeType,
-    );
-    const entry = document.assetRegistry?.[textureAssetId];
-    if ((!groundDynamicMesh.textureName || !groundDynamicMesh.textureName.trim()) && entry?.name) {
-      groundDynamicMesh.textureName = entry.name;
-    }
-    return;
-  }
-  const resolved = await resolveAssetUrlFromCache(textureAssetId);
-  if (!resolved?.url) {
-    return;
-  }
-  groundDynamicMesh.textureDataUrl = resolved.url;
-  const entry = document.assetRegistry?.[textureAssetId];
-  if ((!groundDynamicMesh.textureName || !groundDynamicMesh.textureName.trim()) && entry?.name) {
-    groundDynamicMesh.textureName = entry.name;
-  }
+    const task = uni.request({
+      url,
+      method: 'GET',
+      responseType: 'arraybuffer',
+      timeout: SCENE_DOWNLOAD_TIMEOUT,
+      success: (res: { statusCode?: number; data: unknown }) => {
+        const statusCode = typeof res.statusCode === 'number' ? res.statusCode : 200;
+        if (statusCode >= 400) {
+          reject(new Error(`场景包下载失败（${statusCode}）`));
+          return;
+        }
+        const buffer = res.data as ArrayBuffer;
+        if (!buffer || typeof buffer.byteLength !== 'number') {
+          reject(new Error('场景包下载失败（响应不是二进制数据）'));
+          return;
+        }
+        resolve(buffer);
+      },
+      fail: (requestError: { errMsg?: unknown } | null) => {
+        const message =
+          requestError && typeof requestError === 'object' && 'errMsg' in requestError
+            ? String((requestError as { errMsg: unknown }).errMsg)
+            : '场景包下载失败';
+        reject(new Error(message));
+      },
+      complete: () => {
+        sceneDownloadTask = null;
+      },
+    }) as SceneRequestTask;
+    sceneDownloadTask = task;
+    task?.onProgressUpdate?.((info: SceneDownloadProgress) => {
+      sceneDownload.phase = 'download';
+      if (typeof info.progress === 'number' && Number.isFinite(info.progress)) {
+        sceneDownload.percent = info.progress;
+        sceneDownload.label = `正在下载场景包… ${Math.max(0, Math.min(100, Math.round(info.progress)))}%`;
+      }
+      if (typeof info.totalBytesWritten === 'number') {
+        sceneDownload.loaded = info.totalBytesWritten;
+      }
+      if (typeof info.totalBytesExpectedToWrite === 'number') {
+        sceneDownload.total = info.totalBytesExpectedToWrite;
+      }
+    });
+  });
 }
 
 async function loadProjectFromScenePackageUrl(url: string, cacheKey?: string): Promise<void> {
@@ -12408,7 +11275,7 @@ async function loadProjectFromScenePackageUrl(url: string, cacheKey?: string): P
 
     sceneDownload.phase = 'download';
     sceneDownload.label = '正在下载场景包…';
-    const buffer = await requestBinaryFromUrl(url);
+    const buffer = await requestBinary(url);
     sceneDownload.phase = 'parse';
     sceneDownload.label = '正在解析场景包…';
     await loadProjectFromScenePackageBytes(buffer);
@@ -12576,24 +11443,9 @@ function parseScenePackageToProjectData(pkg: ScenePackageUnzipped): ScenePackage
       };
     });
     document.assetRegistry = assetRegistry;
-    hydrateGroundTextureFromPackagedAsset(document, pkg);
     const documentMeta = document as SceneJsonExportDocument & { createdAt?: unknown; updatedAt?: unknown };
     document.resourceSummary = buildDocumentResourceSummary(document);
     const id = sceneEntry.sceneId;
-    const terrain = sceneEntry.terrain ?? null;
-    const groundDefinition = findFirstGroundDynamicMesh(document) as GroundDynamicMesh | null;
-    const hasGround = Boolean(groundDefinition);
-    const compiledGroundPath = typeof sceneEntry.compiledGround?.manifestPath === 'string'
-      ? sceneEntry.compiledGround.manifestPath.trim()
-      : '';
-    if (
-      hasGround
-      && groundDefinition
-      && shouldUseCompiledGroundForViewer(groundDefinition, terrain?.datasetId ?? null)
-      && !compiledGroundPath
-    ) {
-      throw new Error(`Scene ${sceneEntry.sceneId} is missing compiled ground package`);
-    }
     scenes.push({
       kind: 'embedded',
       id,
@@ -12601,7 +11453,6 @@ function parseScenePackageToProjectData(pkg: ScenePackageUnzipped): ScenePackage
       createdAt: typeof documentMeta.createdAt === 'string' ? documentMeta.createdAt : null,
       updatedAt: typeof documentMeta.updatedAt === 'string' ? documentMeta.updatedAt : null,
       document,
-      terrain,
     });
   });
 
@@ -12628,21 +11479,7 @@ async function loadProjectFromScenePackageBytes(buffer: ArrayBuffer): Promise<vo
   sceneDownload.label = '正在解析场景数据…';
   const projectData = parseScenePackageToProjectData(activeScenePackagePkg);
   sceneDownload.label = '正在组装场景索引…';
-  projectBundle.value = projectData;
-  projectSceneIndex.clear();
-  projectData.scenes.forEach((scene) => {
-    projectSceneIndex.set(scene.id, scene);
-  });
-
-  const initialSceneId = projectData.project.defaultSceneId || projectData.project.sceneOrder[0] || null;
-  if (!initialSceneId) {
-    error.value = '工程未设置默认场景';
-    previewPayload.value = null;
-    return;
-  }
-
-  currentProjectId.value = projectData.project.id || currentProjectId.value;
-  await switchToProjectScene(initialSceneId);
+  await loadProjectFromBundle(projectData);
 }
 
 async function loadProjectFromScenePackagePointer(pointer: ScenePackagePointer): Promise<void> {
@@ -12723,45 +11560,6 @@ function requestSceneDocument(url: string): Promise<SceneJsonExportDocument> {
   });
 }
 
-async function switchToProjectScene(sceneId: string): Promise<void> {
-  const trimmed = (sceneId ?? '').trim();
-  if (!trimmed) {
-    return;
-  }
-
-  const entry = projectSceneIndex.get(trimmed) ?? null;
-  if (!entry) {
-    warnings.value = [...warnings.value, `未找到场景：${trimmed}`];
-    return;
-  }
-
-  loading.value = true;
-  error.value = null;
-
-  try {
-    const document = entry.kind === 'embedded'
-      ? entry.document
-      : await requestSceneDocument(entry.sceneJsonUrl);
-
-    previewPayload.value = {
-      document,
-      title: document.name || entry.name || '场景预览',
-      origin: entry.kind === 'embedded' ? 'scene-package' : entry.sceneJsonUrl,
-      assetOverrides: activeScenePackageAssetOverrides ?? undefined,
-      terrain: entry.terrain ?? null,
-      createdAt: document.createdAt,
-      updatedAt: document.updatedAt,
-    };
-    currentSceneId.value = trimmed;
-  } catch (switchError) {
-    const message = switchError instanceof Error ? switchError.message : '场景切换失败';
-    error.value = message;
-    throw switchError;
-  } finally {
-    loading.value = false;
-  }
-}
-
 function resetSceneDownloadState(): void {
   sceneDownload.active = false;
   sceneDownload.phase = 'download';
@@ -12788,7 +11586,7 @@ function formatByteSize(value: number): string {
 
 watch(
   previewPayload,
-  (payload: ScenePreviewPayload | null) => {
+  (payload) => {
     if (!bootstrapFinished.value) {
       return;
     }
@@ -12869,14 +11667,6 @@ async function startRenderIfReady() {
         }
       : previewPayload.value;
     const preparedPayload = await prepareRenderPayloadForDefaultSteer(renderPayload);
-    if (token !== initializeToken) {
-      return;
-    }
-    const mergedAssetOverrides = mergeSceneAssetOverrides(
-      preparedPayload.assetOverrides,
-      activeScenePackageAssetOverrides ?? undefined,
-    );
-    await hydrateGroundTextureFromViewerAssetCache(preparedPayload.document, mergedAssetOverrides);
     if (token !== initializeToken) {
       return;
     }
@@ -13099,7 +11889,6 @@ function teardownRenderer() {
   canvasResult = null;
   setActiveMultiuserSceneId(null);
   currentDocument = null;
-  invalidateVehicleSurfaceSamplerCache();
   dynamicGroundCache = null;
   sceneGraphRoot = null;
   viewerResourceCache = null;
@@ -13130,14 +11919,15 @@ async function ensureRendererContext(result: UseCanvasResult) {
   const renderer = new THREE.WebGLRenderer({
     canvas,
     alpha: true,
-    antialias: false,       // 性能优先
+    antialias: true,
     preserveDrawingBuffer: false,
+    powerPreference: 'high-performance',
   });
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.setPixelRatio(pixelRatio);
   renderer.setSize(width, height, false);
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFShadowMap
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap
 
   const camera = new THREE.PerspectiveCamera(60, width / height, 0.1, DEFAULT_SCENE_CAMERA_FAR);
   camera.position.set(0, HUMAN_EYE_HEIGHT, 0);
@@ -13212,7 +12002,6 @@ async function ensureRendererContext(result: UseCanvasResult) {
     camera,
     controls,
   };
-  void syncCannonDebugger();
 
   ensureSceneCsmShadowRuntime();
   applyRendererShadowSetting();
@@ -13516,7 +12305,6 @@ function startRenderLoop(
             },
           });
           previewComponentManager.update(deltaSeconds);
-          updateCharacterControlForFrame(deltaSeconds);
           waterRuntime.update(deltaSeconds, { renderer, scene, camera });
           animationMixers.forEach((mixer) => mixer.update(deltaSeconds));
           activeBehaviorSounds.forEach((instance) => {
@@ -13546,14 +12334,10 @@ function startRenderLoop(
               updateVehicleDriveCamera(deltaSeconds);
             }
           }
-          const cachedGroundBeforePhysics = dynamicGroundCache;
-          if (cachedGroundBeforePhysics) {
-            const groundObject = nodeObjectMap.get(cachedGroundBeforePhysics.nodeId) ?? null;
-            if (groundObject) {
-              syncViewerCompiledGroundCollision(groundObject);
-            }
-          }
           stepPhysicsWorld(deltaSeconds);
+          syncSceneryPhysicsBridgeVehicleInput();
+          syncSceneryPhysicsBridgeBodyTransforms();
+          stepSceneryPhysicsBridge(deltaSeconds);
           updateVehicleSpeedFromVehicle();
           updateVehicleWheelVisuals(deltaSeconds);
         }
@@ -13572,34 +12356,29 @@ function startRenderLoop(
           updatePunchBadgeOverlayEntries(camera, deltaSeconds);
           syncSceneSignboards();
 
-        // Match editor preview terrain ownership: compiled chunks stream on top of
-        // the flat tiling base layer, and hidden chunk keys suppress overlaps.
+        // Keep chunked ground meshes in sync with camera position.
         const cachedGround = dynamicGroundCache;
         if (cachedGround) {
           const groundObject = nodeObjectMap.get(cachedGround.nodeId) ?? null;
           if (groundObject) {
-            const streamingGroundDefinition = resolveViewerGroundStreamingDefinition(
-              camera,
-              groundObject,
-              cachedGround.dynamicMesh,
-            );
-            syncViewerCompiledGroundRender(groundObject, streamingGroundDefinition, camera);
-            syncGroundChunkLoadingMode(
-              groundObject,
-              streamingGroundDefinition,
-              camera,
-              isWeChatMiniProgram
-                ? {
-                    radius: WECHAT_READONLY_TERRAIN_FLAT_TILING_RADIUS_CHUNKS,
-                    budget: WECHAT_READONLY_TERRAIN_CHUNK_SYNC_BUDGET,
-                  }
-                : undefined,
-            );
-            applyGroundTextureToGroundObject(groundObject, streamingGroundDefinition);
+            if (isGroundChunkStreamingEnabled(cachedGround.dynamicMesh)) {
+              updateGroundChunks(groundObject, cachedGround.dynamicMesh, camera);
+            } else if (!areAllGroundChunksLoaded(groundObject, cachedGround.dynamicMesh)) {
+              ensureAllGroundChunks(groundObject, cachedGround.dynamicMesh);
+            }
+            if (currentDocument) {
+              const nextGroundCollisionSignature = resolveSceneryGroundCollisionSignature(currentDocument);
+              if (nextGroundCollisionSignature !== currentPhysicsBridgeGroundCollisionSignature) {
+                currentPhysicsBridgeGroundCollisionSignature = nextGroundCollisionSignature;
+                void loadSceneryPhysicsBridgeScene(currentDocument);
+              }
+            }
           }
         }
 
-        const instancingNow = Date.now();
+        const instancingNow = typeof performance !== 'undefined' && typeof performance.now === 'function'
+          ? performance.now()
+          : Date.now();
           updateLazyPlaceholders(deltaSeconds);
         if (shouldRunTerrainScatterUpdate(camera, instancingNow)) {
           terrainScatterRuntime.update(camera, resolveGroundMeshObject);
@@ -13613,13 +12392,6 @@ function startRenderLoop(
           gradientBackgroundDome.mesh.position.copy(camera.position);
         }
           sceneCsmShadowRuntime?.update();
-        if (cannonDebugger && typeof cannonDebugger.update === 'function') {
-          try {
-            cannonDebugger.update();
-          } catch (error) {
-            console.warn('[SceneViewer] Failed to update cannon debugger', error);
-          }
-        }
         renderer.render(scene, camera);
         // Pull renderer.info after rendering so calls/triangles reflect the current frame.
         if (debugEnabled.value && debugMode.value === 'full') {
@@ -13738,7 +12510,6 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
 
   // Phase 1: bind state for the new payload.
   currentDocument = payload.document;
-  invalidateVehicleSurfaceSamplerCache();
   refreshDynamicGroundCache(currentDocument);
   setActiveMultiuserSceneId(payload.document.id ?? null);
   resetProtagonistPoseState();
@@ -13881,11 +12652,19 @@ function applyInput(params: {
   }
   const physinterpParam = typeof params.physinterp === 'string' ? params.physinterp.trim() : '';
 
-  const inputKey = `${projectIdParam}::${packageUrlParam}::${packageCacheKeyParam}::${String(props.physicsInterpolation ?? '')}::${physinterpParam}`;
+  const inputKey = `${projectIdParam}::${packageUrlParam}::${packageCacheKeyParam}::${String(props.physicsInterpolation ?? '')}::${String(props.physicsEngine ?? '')}::${physinterpParam}`;
   if (inputKey === lastAppliedInputKey) {
     return;
   }
   lastAppliedInputKey = inputKey;
+
+  const requestedPhysicsPreference = resolveSceneryPhysicsBridgePreference(
+    currentDocument ? resolveDocumentEnvironment(currentDocument) : activeEnvironmentSettings,
+  );
+  if (currentPhysicsBridgePreference !== requestedPhysicsPreference) {
+    currentPhysicsBridgePreference = requestedPhysicsPreference;
+    void destroySceneryPhysicsBridge();
+  }
 
   configurePhysicsInterpolation(physinterpParam);
   error.value = null;
@@ -13948,7 +12727,7 @@ onMounted(() => {
 });
 
 watch(
-  () => [props.projectId, props.packageUrl, props.packageCacheKey, props.physicsInterpolation],
+  () => [props.projectId, props.packageUrl, props.packageCacheKey, props.physicsInterpolation, props.physicsEngine],
   () => {
     if (!hasAnyPropInput()) {
       return;
@@ -14021,6 +12800,7 @@ function cleanupRuntime(): void {
 }
 
 onUnmounted(() => {
+  void destroySceneryPhysicsBridge();
   cleanupRuntime();
 });
 
@@ -15772,46 +14552,6 @@ onUnmounted(() => {
 
 .viewer-drive-cluster--floating.is-fading {
   opacity: 0;
-}
-
-.viewer-drive-action-row {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  justify-content: center;
-  max-width: 180px;
-}
-
-.viewer-drive-action-button {
-  min-width: 56px;
-  min-height: 40px;
-  padding: 0 12px;
-  border-radius: 999px;
-  border: 1px solid rgba(153, 193, 255, 0.2);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(240, 246, 255, 0.82));
-  color: #274c69;
-  box-shadow: 0 8px 18px rgba(52, 87, 128, 0.12);
-  backdrop-filter: blur(12px) saturate(1.05);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: transform 0.18s cubic-bezier(.2,.9,.2,1), background-color 0.18s ease, opacity 0.18s ease;
-}
-
-.viewer-drive-action-button.is-active {
-  background: linear-gradient(180deg, rgba(172, 230, 255, 0.96), rgba(117, 195, 255, 0.84));
-  color: #06314a;
-}
-
-.viewer-drive-action-button:active {
-  transform: translateY(1px) scale(0.98);
-}
-
-.viewer-drive-action-button__label {
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  line-height: 1;
 }
 
 .viewer-drive-joystick {

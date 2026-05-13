@@ -21,6 +21,9 @@ export type PhysicsBodyLike = {
   quaternion: PhysicsBodyQuaternionLike
   velocity: PhysicsBodyVec3Like
   angularVelocity: PhysicsBodyVec3Like
+  updateMassProperties?: () => unknown
+  linearDamping?: number
+  angularDamping?: number
   sleep?: () => unknown
 }
 

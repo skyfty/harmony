@@ -4,14 +4,11 @@ import {
   createEmptyStepFrame,
   type PhysicsBodyDesc,
   type PhysicsBodyTransformCommand,
-  type PhysicsCompoundShapeDesc,
-  type PhysicsHeightfieldDesc,
   type PhysicsQuaternion,
   type PhysicsRaycastCommand,
   type PhysicsRaycastHit,
   type PhysicsSceneAsset,
   type PhysicsShapeDesc,
-  type PhysicsStaticMeshDesc,
   type PhysicsStepFrame,
   type PhysicsTransform,
   type PhysicsVector3,
@@ -19,52 +16,9 @@ import {
   type PhysicsVehicleInputCommand,
   type PhysicsWorldSettings,
 } from '@harmony/physics-core'
-
-type AmmoApi = {
-  destroy: (object: unknown) => void
-  _malloc: (size: number) => number
-  _free: (ptr: number) => void
-  HEAPF32: Float32Array
-  btVector3: new (x?: number, y?: number, z?: number) => any
-  btQuaternion: new (x?: number, y?: number, z?: number, w?: number) => any
-  btTransform: new () => any
-  btDefaultMotionState: new (transform?: unknown) => any
-  btRigidBodyConstructionInfo: new (mass: number, motionState: unknown, shape: unknown, localInertia?: unknown) => any
-  btRigidBody: new (info: unknown) => any
-  btBoxShape: new (halfExtents: unknown) => any
-  btSphereShape: new (radius: number) => any
-  btCylinderShape: new (halfExtents: unknown) => any
-  btConvexHullShape: new () => any
-  btCompoundShape: new (enableDynamicAabbTree?: boolean) => any
-  btHeightfieldTerrainShape: new (
-    heightStickWidth: number,
-    heightStickLength: number,
-    heightfieldData: unknown,
-    heightScale: number,
-    minHeight: number,
-    maxHeight: number,
-    upAxis: number,
-    hdt: 'PHY_FLOAT',
-    flipQuadEdges: boolean,
-  ) => any
-  btTriangleMesh: new (use32bitIndices?: boolean, use4componentVertices?: boolean) => any
-  btBvhTriangleMeshShape: new (meshInterface: unknown, useQuantizedAabbCompression: boolean, buildBvh?: boolean) => any
-  btConvexTriangleMeshShape?: new (meshInterface: unknown, calcAabb?: boolean) => any
-  btVehicleTuning: new () => any
-  btDefaultVehicleRaycaster: new (world: unknown) => any
-  btRaycastVehicle: new (tuning: unknown, chassisBody: unknown, raycaster: unknown) => any
-  btDefaultCollisionConfiguration: new () => any
-  btCollisionDispatcher: new (configuration: unknown) => any
-  btDbvtBroadphase: new () => any
-  btSequentialImpulseConstraintSolver: new () => any
-  btDiscreteDynamicsWorld: new (
-    dispatcher: unknown,
-    broadphase: unknown,
-    solver: unknown,
-    configuration: unknown,
-  ) => any
-  ClosestRayResultCallback: new (from: unknown, to: unknown) => any
-}
+import { createAmmoRigidBody } from './bodyFactory'
+import type { AmmoApi } from './ammoHelpers'
+import { createAmmoSceneShapeBindings } from './sceneShapeBindings'
 
 type BodyState = {
   desc: PhysicsBodyDesc
@@ -80,13 +34,6 @@ type VehicleState = {
   steerableWheelIndices: number[]
   cleanup: Array<() => void>
 }
-
-type BuiltAmmoShape = {
-  shape: any
-  cleanup: Array<() => void>
-}
-
-const BT_COLLISION_FLAG_KINEMATIC_OBJECT = 2
 const BT_DISABLE_DEACTIVATION = 4
 
 const DEFAULT_WORLD_SETTINGS: PhysicsWorldSettings = {
@@ -368,60 +315,18 @@ export class AmmoPhysicsWorld {
     if (!ammo || !world || !scene) {
       throw new Error('Ammo world is not initialized')
     }
-
-    const shape = this.buildShape(desc.shapeId, desc.type === 'dynamic')
-    const startTransform = createAmmoTransform(ammo, desc.transform)
-    const motionState = new ammo.btDefaultMotionState(startTransform)
-
-    const localInertia = createAmmoVector3(ammo, [0, 0, 0])
-    const dynamicMass = desc.type === 'dynamic' ? Math.max(0, desc.mass) : 0
-    if (dynamicMass > 0) {
-      shape.shape.calculateLocalInertia(dynamicMass, localInertia)
-    }
-
-    const constructionInfo = new ammo.btRigidBodyConstructionInfo(
-      dynamicMass,
-      motionState,
-      shape.shape,
-      localInertia,
-    )
-    const material = desc.materialId == null ? null : scene.materials.find((entry) => entry.id === desc.materialId) ?? null
-    if (material) {
-      constructionInfo.set_m_friction?.(material.friction)
-      constructionInfo.set_m_restitution?.(material.restitution)
-    }
-    constructionInfo.set_m_linearDamping?.(Math.max(0, desc.linearDamping ?? 0))
-    constructionInfo.set_m_angularDamping?.(Math.max(0, desc.angularDamping ?? 0))
-
-    const body = new ammo.btRigidBody(constructionInfo)
-    body.setUserIndex?.(desc.id)
-    body.setDamping?.(
-      Math.max(0, desc.linearDamping ?? 0),
-      Math.max(0, desc.angularDamping ?? 0),
-    )
-    if (material) {
-      body.setFriction?.(material.friction)
-      body.setRestitution?.(material.restitution)
-    }
-    if (desc.type === 'kinematic') {
-      body.setCollisionFlags((body.getCollisionFlags?.() ?? 0) | BT_COLLISION_FLAG_KINEMATIC_OBJECT)
-      body.setActivationState?.(BT_DISABLE_DEACTIVATION)
-    }
-
-    world.addRigidBody(body)
+    const assembly = createAmmoRigidBody({
+      ammo,
+      world,
+      materials: scene.materials,
+      shapes: createAmmoSceneShapeBindings(ammo, this.shapes, desc.shapeId, desc.type === 'dynamic'),
+      desc,
+    })
 
     return {
       desc,
-      body,
-      cleanup: [
-        ...shape.cleanup,
-        () => ammo.destroy(startTransform),
-        () => ammo.destroy(motionState),
-        () => ammo.destroy(localInertia),
-        () => ammo.destroy(constructionInfo),
-        () => ammo.destroy(body),
-        () => world.removeRigidBody(body),
-      ],
+      body: assembly.body,
+      cleanup: assembly.cleanup,
     }
   }
 
@@ -511,301 +416,6 @@ export class AmmoPhysicsWorld {
       }
     })
   }
-
-  private buildShape(shapeId: number, dynamic: boolean): BuiltAmmoShape {
-    const ammo = this.ammo
-    const shapeDesc = this.shapes.get(shapeId)
-    if (!ammo || !shapeDesc) {
-      throw new Error(`Unknown physics shape: ${shapeId}`)
-    }
-
-    if (shapeDesc.kind === 'box') {
-      const halfExtents = createAmmoVector3(ammo, shapeDesc.halfExtents)
-      const shape = new ammo.btBoxShape(halfExtents)
-      return {
-        shape,
-        cleanup: [
-          () => ammo.destroy(shape),
-          () => ammo.destroy(halfExtents),
-        ],
-      }
-    }
-
-    if (shapeDesc.kind === 'sphere') {
-      const shape = new ammo.btSphereShape(shapeDesc.radius)
-      return {
-        shape,
-        cleanup: [() => ammo.destroy(shape)],
-      }
-    }
-
-    if (shapeDesc.kind === 'cylinder') {
-      const halfExtents = createAmmoVector3(ammo, [
-        Math.max(shapeDesc.radiusTop, shapeDesc.radiusBottom),
-        Math.max(1e-4, shapeDesc.height * 0.5),
-        Math.max(shapeDesc.radiusTop, shapeDesc.radiusBottom),
-      ])
-      const shape = new ammo.btCylinderShape(halfExtents)
-      return {
-        shape,
-        cleanup: [
-          () => ammo.destroy(shape),
-          () => ammo.destroy(halfExtents),
-        ],
-      }
-    }
-
-    if (shapeDesc.kind === 'convex-hull') {
-      const shape = new ammo.btConvexHullShape()
-      const point = createAmmoVector3(ammo, [0, 0, 0])
-      for (let index = 0; index < shapeDesc.vertices.length; index += 3) {
-        point.setValue(
-          shapeDesc.vertices[index] ?? 0,
-          shapeDesc.vertices[index + 1] ?? 0,
-          shapeDesc.vertices[index + 2] ?? 0,
-        )
-        shape.addPoint(point, false)
-      }
-      shape.recalcLocalAabb?.()
-      return {
-        shape,
-        cleanup: [
-          () => ammo.destroy(shape),
-          () => ammo.destroy(point),
-        ],
-      }
-    }
-
-    if (shapeDesc.kind === 'heightfield') {
-      return this.buildHeightfieldTerrainShape(shapeDesc, dynamic)
-    }
-
-    if (shapeDesc.kind === 'static-mesh') {
-      return this.buildTriangleMeshShape(shapeDesc, dynamic)
-    }
-
-    if (shapeDesc.kind === 'compound') {
-      return this.buildCompoundShape(shapeDesc, dynamic)
-    }
-
-    throw new Error(`Unsupported Ammo physics shape: ${(shapeDesc as PhysicsShapeDesc).kind}`)
-  }
-
-  private buildCompoundShape(shapeDesc: PhysicsCompoundShapeDesc, dynamic: boolean): BuiltAmmoShape {
-    const ammo = this.ammo
-    if (!ammo) {
-      throw new Error('Ammo module is not loaded')
-    }
-    const shape = new ammo.btCompoundShape(true)
-    const cleanup: Array<() => void> = [() => ammo.destroy(shape)]
-    shapeDesc.children.forEach((child) => {
-      const childShape = this.buildShape(child.shapeId, dynamic)
-      const childTransform = createAmmoTransform(ammo, child.transform)
-      shape.addChildShape(childTransform, childShape.shape)
-      cleanup.push(...childShape.cleanup)
-      cleanup.push(() => ammo.destroy(childTransform))
-    })
-    return {
-      shape,
-      cleanup,
-    }
-  }
-
-  private buildHeightfieldTerrainShape(shapeDesc: PhysicsHeightfieldDesc, dynamic: boolean): BuiltAmmoShape {
-    const ammo = this.ammo
-    if (!ammo) {
-      throw new Error('Ammo module is not loaded')
-    }
-    if (dynamic) {
-      throw new Error(`Ammo heightfield shapes do not support dynamic rigid bodies: ${shapeDesc.id}`)
-    }
-
-    const rows = Math.max(2, shapeDesc.rows | 0)
-    const columns = Math.max(2, shapeDesc.columns | 0)
-    const heights = buildAmmoHeightfieldHeights(shapeDesc)
-    const { minHeight, maxHeight } = resolveHeightfieldRange(shapeDesc, heights)
-    const dataPtr = ammo._malloc(heights.byteLength)
-    ammo.HEAPF32.set(heights, dataPtr >>> 2)
-
-    const heightfieldShape = new ammo.btHeightfieldTerrainShape(
-      columns,
-      rows,
-      dataPtr,
-      1,
-      minHeight,
-      maxHeight,
-      1,
-      'PHY_FLOAT',
-      false,
-    )
-    const localScaling = createAmmoVector3(ammo, [Math.max(1e-4, shapeDesc.elementSize), 1, Math.max(1e-4, shapeDesc.elementSize)])
-    heightfieldShape.setLocalScaling(localScaling)
-
-    const cleanup: Array<() => void> = [
-      () => ammo._free(dataPtr),
-      () => ammo.destroy(heightfieldShape),
-      () => ammo.destroy(localScaling),
-    ]
-
-    const centeredOffset = resolveAmmoHeightfieldOffset(shapeDesc, minHeight, maxHeight)
-    if (isZeroVector(centeredOffset)) {
-      return {
-        shape: heightfieldShape,
-        cleanup,
-      }
-    }
-
-    const compoundShape = new ammo.btCompoundShape(true)
-    const childTransform = createAmmoTransform(ammo, {
-      position: centeredOffset,
-      rotation: [0, 0, 0, 1],
-    })
-    compoundShape.addChildShape(childTransform, heightfieldShape)
-
-    return {
-      shape: compoundShape,
-      cleanup: [
-        ...cleanup,
-        () => ammo.destroy(compoundShape),
-        () => ammo.destroy(childTransform),
-      ],
-    }
-  }
-
-  private buildTriangleMeshShape(meshDesc: PhysicsStaticMeshDesc, dynamic: boolean): BuiltAmmoShape {
-    const ammo = this.ammo
-    if (!ammo) {
-      throw new Error('Ammo module is not loaded')
-    }
-    const triangleMesh = new ammo.btTriangleMesh(true, false)
-    const vertexA = createAmmoVector3(ammo, [0, 0, 0])
-    const vertexB = createAmmoVector3(ammo, [0, 0, 0])
-    const vertexC = createAmmoVector3(ammo, [0, 0, 0])
-
-    if (meshDesc.indices.length >= 3) {
-      for (let index = 0; index < meshDesc.indices.length; index += 3) {
-        const ia = (meshDesc.indices[index] ?? 0) * 3
-        const ib = (meshDesc.indices[index + 1] ?? 0) * 3
-        const ic = (meshDesc.indices[index + 2] ?? 0) * 3
-        vertexA.setValue(meshDesc.vertices[ia] ?? 0, meshDesc.vertices[ia + 1] ?? 0, meshDesc.vertices[ia + 2] ?? 0)
-        vertexB.setValue(meshDesc.vertices[ib] ?? 0, meshDesc.vertices[ib + 1] ?? 0, meshDesc.vertices[ib + 2] ?? 0)
-        vertexC.setValue(meshDesc.vertices[ic] ?? 0, meshDesc.vertices[ic + 1] ?? 0, meshDesc.vertices[ic + 2] ?? 0)
-        triangleMesh.addTriangle(vertexA, vertexB, vertexC, false)
-      }
-    } else {
-      for (let index = 0; index + 8 < meshDesc.vertices.length; index += 9) {
-        vertexA.setValue(meshDesc.vertices[index] ?? 0, meshDesc.vertices[index + 1] ?? 0, meshDesc.vertices[index + 2] ?? 0)
-        vertexB.setValue(meshDesc.vertices[index + 3] ?? 0, meshDesc.vertices[index + 4] ?? 0, meshDesc.vertices[index + 5] ?? 0)
-        vertexC.setValue(meshDesc.vertices[index + 6] ?? 0, meshDesc.vertices[index + 7] ?? 0, meshDesc.vertices[index + 8] ?? 0)
-        triangleMesh.addTriangle(vertexA, vertexB, vertexC, false)
-      }
-    }
-
-    const shape = dynamic
-      ? this.buildDynamicTriangleShape(meshDesc, triangleMesh)
-      : new ammo.btBvhTriangleMeshShape(triangleMesh, true, true)
-
-    return {
-      shape,
-      cleanup: [
-        () => ammo.destroy(shape),
-        () => ammo.destroy(triangleMesh),
-        () => ammo.destroy(vertexC),
-        () => ammo.destroy(vertexB),
-        () => ammo.destroy(vertexA),
-      ],
-    }
-  }
-
-  private buildDynamicTriangleShape(meshDesc: PhysicsStaticMeshDesc, triangleMesh: any): any {
-    const ammo = this.ammo
-    if (!ammo) {
-      throw new Error('Ammo module is not loaded')
-    }
-    if (ammo.btConvexTriangleMeshShape) {
-      return new ammo.btConvexTriangleMeshShape(triangleMesh, true)
-    }
-    const hull = new ammo.btConvexHullShape()
-    const point = createAmmoVector3(ammo, [0, 0, 0])
-    for (let index = 0; index < meshDesc.vertices.length; index += 3) {
-      point.setValue(
-        meshDesc.vertices[index] ?? 0,
-        meshDesc.vertices[index + 1] ?? 0,
-        meshDesc.vertices[index + 2] ?? 0,
-      )
-      hull.addPoint(point, false)
-    }
-    hull.recalcLocalAabb?.()
-    ammo.destroy(point)
-    return hull
-  }
-}
-
-function buildAmmoHeightfieldHeights(shape: PhysicsHeightfieldDesc): Float32Array {
-  const heights = new Float32Array(shape.rows * shape.columns)
-  let offset = 0
-  for (let row = 0; row < shape.rows; row += 1) {
-    for (let column = 0; column < shape.columns; column += 1) {
-      heights[offset] = getHeightfieldHeight(shape, row, column)
-      offset += 1
-    }
-  }
-  return heights
-}
-
-function resolveHeightfieldMinHeight(shape: PhysicsHeightfieldDesc, heights: Float32Array): number {
-  if (typeof shape.minHeight === 'number' && Number.isFinite(shape.minHeight)) {
-    return shape.minHeight
-  }
-  let minHeight = Number.POSITIVE_INFINITY
-  for (let index = 0; index < heights.length; index += 1) {
-    minHeight = Math.min(minHeight, heights[index] ?? 0)
-  }
-  return Number.isFinite(minHeight) ? minHeight : 0
-}
-
-function resolveHeightfieldMaxHeight(shape: PhysicsHeightfieldDesc, heights: Float32Array): number {
-  if (typeof shape.maxHeight === 'number' && Number.isFinite(shape.maxHeight)) {
-    return shape.maxHeight
-  }
-  let maxHeight = Number.NEGATIVE_INFINITY
-  for (let index = 0; index < heights.length; index += 1) {
-    maxHeight = Math.max(maxHeight, heights[index] ?? 0)
-  }
-  return Number.isFinite(maxHeight) ? maxHeight : 0
-}
-
-function resolveHeightfieldRange(
-  shape: PhysicsHeightfieldDesc,
-  heights: Float32Array,
-): { minHeight: number; maxHeight: number } {
-  const minHeight = resolveHeightfieldMinHeight(shape, heights)
-  const maxHeight = resolveHeightfieldMaxHeight(shape, heights)
-  if (maxHeight - minHeight > 1e-4) {
-    return { minHeight, maxHeight }
-  }
-  const midpoint = (minHeight + maxHeight) * 0.5
-  return {
-    minHeight: midpoint - 5e-5,
-    maxHeight: midpoint + 5e-5,
-  }
-}
-
-function resolveAmmoHeightfieldOffset(
-  shape: PhysicsHeightfieldDesc,
-  minHeight: number,
-  maxHeight: number,
-): PhysicsVector3 {
-  const baseOffset = shape.localOffset ?? [0, 0, 0]
-  return [
-    baseOffset[0] + Math.max(0, (shape.columns - 1) * shape.elementSize * 0.5),
-    baseOffset[1] + (minHeight + maxHeight) * 0.5,
-    baseOffset[2] + Math.max(0, (shape.rows - 1) * shape.elementSize * 0.5),
-  ]
-}
-
-function isZeroVector(vector: PhysicsVector3): boolean {
-  return Math.abs(vector[0]) <= 1e-6 && Math.abs(vector[1]) <= 1e-6 && Math.abs(vector[2]) <= 1e-6
 }
 
 function resolveSteerableWheelIndices(vehicle: PhysicsVehicleDesc): number[] {
@@ -853,10 +463,6 @@ function readAmmoBodyTransform(body: any): PhysicsTransform {
     position: [origin.x(), origin.y(), origin.z()],
     rotation: normalizeQuaternion([rotation.x(), rotation.y(), rotation.z(), rotation.w()]),
   }
-}
-
-function getHeightfieldHeight(shape: PhysicsHeightfieldDesc, row: number, column: number): number {
-  return shape.heights[column * shape.rows + row] ?? 0
 }
 
 function distanceBetween(a: PhysicsVector3, b: PhysicsVector3): number {

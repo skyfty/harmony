@@ -1,5 +1,4 @@
 import * as THREE from 'three'
-import * as CANNON from 'cannon-es'
 import {
   FollowCameraController,
   computeFollowLerpAlpha,
@@ -20,6 +19,7 @@ import {
 } from './components'
 import type { BehaviorEventResolution } from './behaviors/runtime'
 import type { VehicleSurfaceSample } from './vehicleSurfaceSampler'
+import { sleepPhysicsBody, stopPhysicsBodyMotion } from './physicsRuntimeBridge'
 
 export type RefLike<T> = { value: T }
 
@@ -804,13 +804,9 @@ export class VehicleDriveController {
     }
     if (chassisBody) {
       try {
-        chassisBody.allowSleep = true
+        stopPhysicsBodyMotion(chassisBody)
         // Treat tiny residual jitter as sleep-eligible.
-        chassisBody.sleepSpeedLimit = Math.max(0.05, chassisBody.sleepSpeedLimit ?? 0)
-        chassisBody.sleepTimeLimit = Math.max(0.05, chassisBody.sleepTimeLimit ?? 0)
-        chassisBody.velocity.set(0, 0, 0)
-        chassisBody.angularVelocity.set(0, 0, 0)
-        ;(chassisBody as CANNON.Body & { sleep?: () => void }).sleep?.()
+        sleepPhysicsBody(chassisBody, { minSpeedLimit: 0.05, minTimeLimit: 0.05 })
       } catch {
         // best-effort
       }
@@ -820,12 +816,8 @@ export class VehicleDriveController {
     const body = rigidbodyEntry?.body ?? null
     if (body) {
       try {
-        body.allowSleep = true
-        body.sleepSpeedLimit = Math.max(0.05, body.sleepSpeedLimit ?? 0)
-        body.sleepTimeLimit = Math.max(0.05, body.sleepTimeLimit ?? 0)
-        body.velocity.set(0, 0, 0)
-        body.angularVelocity.set(0, 0, 0)
-        ;(body as CANNON.Body & { sleep?: () => void }).sleep?.()
+        stopPhysicsBodyMotion(body)
+        sleepPhysicsBody(body, { minSpeedLimit: 0.05, minTimeLimit: 0.05 })
       } catch {
         // best-effort
       }
@@ -1217,8 +1209,7 @@ export class VehicleDriveController {
     temp.cameraMatrix.makeBasis(worldRight, worldUp, correctedForward)
     temp.resetQuaternion.setFromRotationMatrix(temp.cameraMatrix)
     rigidbody.body.position.set(chassisPosition.x, chassisPosition.y, chassisPosition.z)
-    rigidbody.body.velocity.set(0, 0, 0)
-    rigidbody.body.angularVelocity.set(0, 0, 0)
+    stopPhysicsBodyMotion(rigidbody.body)
     rigidbody.body.quaternion.set(
       temp.resetQuaternion.x,
       temp.resetQuaternion.y,

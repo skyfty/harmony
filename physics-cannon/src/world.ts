@@ -5,14 +5,10 @@ import {
   createEmptyStepFrame,
   type PhysicsBodyDesc,
   type PhysicsBodyTransformCommand,
-  type PhysicsCompoundShapeDesc,
-  type PhysicsConvexHullShapeDesc,
-  type PhysicsQuaternion,
   type PhysicsRaycastCommand,
   type PhysicsRaycastHit,
   type PhysicsSceneAsset,
   type PhysicsShapeDesc,
-  type PhysicsStaticMeshDesc,
   type PhysicsStepFrame,
   type PhysicsTransform,
   type PhysicsVector3,
@@ -20,6 +16,8 @@ import {
   type PhysicsVehicleInputCommand,
   type PhysicsWorldSettings,
 } from '@harmony/physics-core'
+import type { PhysicsContactSettings } from '@harmony/physics-bridge'
+import { createCannonSceneRigidBody } from './sceneRigidBodyFactory'
 
 type BodyState = {
   desc: PhysicsBodyDesc
@@ -34,12 +32,6 @@ type VehicleState = {
   steerableWheelIndices: number[]
 }
 
-type ShapeBinding = {
-  shape: CANNON.Shape
-  position: CANNON.Vec3
-  quaternion: CANNON.Quaternion
-}
-
 const DEFAULT_WORLD_SETTINGS: PhysicsWorldSettings = {
   gravity: [0, -9.8, 0],
   fixedTimeStepMs: 1000 / 60,
@@ -49,11 +41,6 @@ const DEFAULT_WORLD_SETTINGS: PhysicsWorldSettings = {
 const VEHICLE_ENGINE_FORCE = 320
 const VEHICLE_BRAKE_FORCE = 42
 const VEHICLE_STEER_ANGLE = (26 * Math.PI) / 180
-
-const heightfieldQuaternion = new CANNON.Quaternion()
-heightfieldQuaternion.setFromEuler(-Math.PI / 2, 0, 0, 'XYZ')
-const cylinderShapeRotation = new CANNON.Quaternion()
-cylinderShapeRotation.setFromEuler(Math.PI / 2, 0, 0, 'XYZ')
 
 export class CannonPhysicsWorld {
   private scene: PhysicsSceneAsset | null = null
@@ -261,21 +248,11 @@ export class CannonPhysicsWorld {
 
   private createBodyState(desc: PhysicsBodyDesc): BodyState {
     const world = this.ensureWorld()
-    const body = new CANNON.Body({
-      mass: desc.type === 'dynamic' ? Math.max(0, desc.mass) : 0,
-      type: mapBodyType(desc.type),
+    const body = createCannonSceneRigidBody({
+      world,
+      shapeMap: this.shapes,
+      desc,
     })
-    ;(body as CANNON.Body & { physicsBodyId?: number }).physicsBodyId = desc.id
-    body.position.set(...desc.transform.position)
-    body.quaternion.set(...desc.transform.rotation)
-    body.linearDamping = desc.linearDamping ?? 0.01
-    body.angularDamping = desc.angularDamping ?? 0.01
-    const bindings = this.buildShapeBindings(desc.shapeId)
-    bindings.forEach((binding) => {
-      body.addShape(binding.shape, binding.position, binding.quaternion)
-    })
-    body.updateMassProperties()
-    world.addBody(body)
     return { desc, body }
   }
 
@@ -343,124 +320,52 @@ export class CannonPhysicsWorld {
       state.body.wakeUp()
     })
   }
-
-  private buildShapeBindings(shapeId: number): ShapeBinding[] {
-    const shapeDesc = this.shapes.get(shapeId)
-    if (!shapeDesc) {
-      throw new Error(`Unknown physics shape: ${shapeId}`)
-    }
-
-    if (shapeDesc.kind === 'compound') {
-      return shapeDesc.children.flatMap((child) => {
-        const childBindings = this.buildShapeBindings(child.shapeId)
-        return childBindings.map((binding) => composeShapeBinding(binding, child.transform))
-      })
-    }
-
-    if (shapeDesc.kind === 'heightfield') {
-      return [{
-        shape: createHeightfieldShape(shapeDesc),
-        position: vec3FromTuple(shapeDesc.localOffset ?? [0, 0, 0]),
-        quaternion: quatClone(heightfieldQuaternion),
-      }]
-    }
-
-    return [{
-      shape: this.createShape(shapeDesc),
-      position: new CANNON.Vec3(0, 0, 0),
-      quaternion: new CANNON.Quaternion(0, 0, 0, 1),
-    }]
-  }
-
-  private createShape(shapeDesc: Exclude<PhysicsShapeDesc, PhysicsCompoundShapeDesc>): CANNON.Shape {
-    switch (shapeDesc.kind) {
-      case 'box':
-        return new CANNON.Box(vec3FromTuple(shapeDesc.halfExtents))
-      case 'sphere':
-        return new CANNON.Sphere(shapeDesc.radius)
-      case 'cylinder': {
-        const cylinder = new CANNON.Cylinder(
-          shapeDesc.radiusTop,
-          shapeDesc.radiusBottom,
-          shapeDesc.height,
-          Math.max(3, Math.trunc(shapeDesc.segments ?? 16)),
-        )
-        cylinder.transformAllPoints(new CANNON.Vec3(0, 0, 0), cylinderShapeRotation)
-        return cylinder
-      }
-      case 'convex-hull':
-        return createConvexHullShape(shapeDesc)
-      case 'static-mesh':
-        return createStaticMeshShape(shapeDesc)
-      case 'heightfield':
-        return createHeightfieldShape(shapeDesc)
-      default: {
-        const exhaustive: never = shapeDesc
-        throw new Error(`Unsupported cannon shape: ${String(exhaustive)}`)
-      }
-    }
-  }
 }
 
-function createHeightfieldShape(shapeDesc: Extract<PhysicsShapeDesc, { kind: 'heightfield' }>): CANNON.Heightfield {
-  const matrix: number[][] = []
-  let offset = 0
-  for (let column = 0; column < shapeDesc.columns; column += 1) {
-    const values: number[] = []
-    for (let row = 0; row < shapeDesc.rows; row += 1) {
-      values.push(shapeDesc.heights[offset] ?? 0)
-      offset += 1
-    }
-    matrix.push(values)
-  }
-  return new CANNON.Heightfield(matrix, { elementSize: shapeDesc.elementSize })
+export function createCannonWorld(settings: PhysicsWorldSettings): CANNON.World {
+  const world = new CANNON.World()
+  world.gravity.set(...settings.gravity)
+  world.broadphase = new CANNON.SAPBroadphase(world)
+  world.allowSleep = true
+  return world
 }
 
-function createConvexHullShape(shapeDesc: PhysicsConvexHullShapeDesc): CANNON.ConvexPolyhedron {
-  const vertices: CANNON.Vec3[] = []
-  for (let index = 0; index < shapeDesc.vertices.length; index += 3) {
-    vertices.push(new CANNON.Vec3(
-      shapeDesc.vertices[index] ?? 0,
-      shapeDesc.vertices[index + 1] ?? 0,
-      shapeDesc.vertices[index + 2] ?? 0,
-    ))
-  }
-  const faces = Array.isArray(shapeDesc.faces) && shapeDesc.faces.length
-    ? shapeDesc.faces.map((face) => face.map((value) => Math.trunc(value)))
-    : inferConvexHullFaces(vertices.length)
-  return new CANNON.ConvexPolyhedron({ vertices, faces })
+export type EnsureCannonWorldParams = {
+  world: CANNON.World | null
+  setWorld: (world: CANNON.World) => void
+  gravity: CANNON.Vec3
+  solverIterations: number
+  solverTolerance: number
+  contactFriction: number
+  contactRestitution: number
+  contactSettings: PhysicsContactSettings
+  quatNormalizeFast?: boolean
+  quatNormalizeSkip?: number
 }
 
-function createStaticMeshShape(shapeDesc: PhysicsStaticMeshDesc): CANNON.Trimesh {
-  return new CANNON.Trimesh(Array.from(shapeDesc.vertices), Array.from(shapeDesc.indices))
-}
-
-function inferConvexHullFaces(vertexCount: number): number[][] {
-  if (vertexCount === 8) {
-    return [
-      [0, 1, 2, 3],
-      [4, 7, 6, 5],
-      [0, 4, 5, 1],
-      [1, 5, 6, 2],
-      [2, 6, 7, 3],
-      [3, 7, 4, 0],
-    ]
+export function ensureCannonWorld(params: EnsureCannonWorldParams): CANNON.World {
+  if (params.world) {
+    return params.world
   }
-  throw new Error('Convex hull faces are required for non-box cannon shapes')
-}
-
-function composeShapeBinding(binding: ShapeBinding, transform: PhysicsTransform): ShapeBinding {
-  const parentPosition = vec3FromTuple(transform.position)
-  const parentQuaternion = quatFromTuple(transform.rotation)
-  const composedPosition = parentQuaternion.vmult(binding.position)
-  composedPosition.vadd(parentPosition, composedPosition)
-  const composedQuaternion = new CANNON.Quaternion()
-  parentQuaternion.mult(binding.quaternion, composedQuaternion)
-  return {
-    shape: binding.shape,
-    position: composedPosition,
-    quaternion: composedQuaternion,
-  }
+  const world = createCannonWorld({
+    gravity: [params.gravity.x, params.gravity.y, params.gravity.z],
+    fixedTimeStepMs: 1000 / 60,
+    maxSubSteps: 4,
+  })
+  const solver = new CANNON.GSSolver()
+  solver.iterations = params.solverIterations
+  solver.tolerance = params.solverTolerance
+  world.solver = solver
+  world.quatNormalizeFast = params.quatNormalizeFast ?? false
+  world.quatNormalizeSkip = params.quatNormalizeSkip ?? 0
+  world.defaultContactMaterial.friction = params.contactFriction
+  world.defaultContactMaterial.restitution = params.contactRestitution
+  world.defaultContactMaterial.contactEquationStiffness = params.contactSettings.contactEquationStiffness
+  world.defaultContactMaterial.contactEquationRelaxation = params.contactSettings.contactEquationRelaxation
+  world.defaultContactMaterial.frictionEquationStiffness = params.contactSettings.frictionEquationStiffness
+  world.defaultContactMaterial.frictionEquationRelaxation = params.contactSettings.frictionEquationRelaxation
+  params.setWorld(world)
+  return world
 }
 
 function resolveBodyId(body: CANNON.Body): number | null {
@@ -479,29 +384,11 @@ function vec3FromTuple(tuple: PhysicsVector3): CANNON.Vec3 {
   return new CANNON.Vec3(tuple[0] ?? 0, tuple[1] ?? 0, tuple[2] ?? 0)
 }
 
-function quatFromTuple(tuple: PhysicsQuaternion): CANNON.Quaternion {
-  return new CANNON.Quaternion(tuple[0] ?? 0, tuple[1] ?? 0, tuple[2] ?? 0, tuple[3] ?? 1)
-}
-
-function quatClone(source: CANNON.Quaternion): CANNON.Quaternion {
-  return new CANNON.Quaternion(source.x, source.y, source.z, source.w)
-}
-
 function distanceSquared(a: CANNON.Vec3, b: CANNON.Vec3): number {
   const dx = a.x - b.x
   const dy = a.y - b.y
   const dz = a.z - b.z
   return dx * dx + dy * dy + dz * dz
-}
-
-function mapBodyType(type: PhysicsBodyDesc['type']): CANNON.BodyType {
-  if (type === 'static') {
-    return CANNON.Body.STATIC
-  }
-  if (type === 'kinematic') {
-    return CANNON.Body.KINEMATIC
-  }
-  return CANNON.Body.DYNAMIC
 }
 
 function clamp(value: number, min: number, max: number): number {

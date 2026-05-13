@@ -30,17 +30,36 @@ export default defineConfig({
         replacement: resolveDir('./src'),
       },
       {
-        find: /^@schema$/,
-        replacement: resolveDir('../schema/index.ts'),
+        find: '@schema',
+        replacement: resolveDir('../schema'),
       },
       {
-        find: /^@schema\//,
-        replacement: withTrailingSlash(resolveDir('../schema/')),
+        find: '@harmony/physics-core',
+        replacement: resolveDir('../physics-core/src'),
       },
-      // keep using the short @schema alias; no runtime alias needed for @harmony/schema
       {
-        find: 'cannon-es',
-        replacement: resolveDir('./node_modules/cannon-es'),
+        find: '@harmony/physics-ammo',
+        replacement: resolveDir('../physics-ammo/src'),
+      },
+      {
+        find: '@harmony/physics-cannon',
+        replacement: resolveDir('../physics-cannon/src'),
+      },
+      {
+        find: '@harmony/physics-bridge',
+        replacement: resolveDir('../physics-bridge/src'),
+      },
+      {
+        find: '@harmony/physics-bridge/physicsBackendBridge',
+        replacement: resolveDir('../physics-bridge/src/physicsBackendBridge.ts'),
+      },
+      {
+        find: '@harmony/physics-bridge/web',
+        replacement: resolveDir('../physics-bridge/src/web.ts'),
+      },
+      {
+        find: '@harmony/physics-bridge/wechat',
+        replacement: resolveDir('../physics-bridge/src/wechat.ts'),
       },
       {
         find: '@three-examples',
@@ -71,7 +90,8 @@ export default defineConfig({
             if (id.includes('/schema/') || id.includes('/home/sky/harmony/schema')) return 'vendor_schema'
             if (id.includes('/node_modules/vuetify') || id.includes('/node_modules/@vuetify')) return 'vendor_vuetify'
             if (id.includes('/node_modules/@harmony') || id.includes('/node_modules/../schema')) return 'vendor_schema'
-            if (id.includes('/node_modules/cannon-es')) return 'vendor_physics'
+            if (id.includes('/node_modules/ammojs3')) return 'vendor_physics_ammo'
+            if (id.includes('/node_modules/cannon-es')) return 'vendor_physics_cannon'
             return 'vendor'
           }
         },

@@ -10,8 +10,9 @@ import type {
   PhysicsStepFrame,
   PhysicsVehicleInputCommand,
 } from '@harmony/physics-core'
+import { initializePhysicsBackendBridge } from '@harmony/physics-bridge/physicsBackendBridge'
+import { createWebPhysicsBridge, createInMemoryWebPhysicsWorker } from '@harmony/physics-bridge/web'
 
-type BridgeRuntimeModule = typeof import('@harmony/physics-bridge')
 type AmmoRuntimeModule = typeof import('@harmony/physics-ammo')
 type CannonRuntimeModule = typeof import('@harmony/physics-cannon')
 
@@ -20,24 +21,7 @@ export type CreateScenePreviewPhysicsBridgeOptions = {
 }
 
 function resolveEditorPhysicsBackendPreference(preference: PhysicsBackendPreference | undefined): 'ammo' | 'cannon' {
-  if (preference === 'ammo' || preference === 'cannon') {
-    return preference
-  }
-  if (typeof window !== 'undefined') {
-    try {
-      const params = new URLSearchParams(window.location.search)
-      const queryValue = params.get('physicsEngine')
-      if (queryValue === 'ammo' || queryValue === 'cannon') {
-        return queryValue
-      }
-      const storedValue = window.localStorage.getItem('harmony:editor:physics-engine')
-      if (storedValue === 'ammo' || storedValue === 'cannon') {
-        return storedValue
-      }
-    } catch {
-    }
-  }
-  return 'ammo'
+  return preference === 'cannon' ? 'cannon' : 'ammo'
 }
 
 class LazyScenePreviewPhysicsBridge implements PhysicsBridge {
@@ -109,25 +93,27 @@ class LazyScenePreviewPhysicsBridge implements PhysicsBridge {
   private async createBridge(): Promise<PhysicsBridge> {
     const backend = resolveEditorPhysicsBackendPreference(this.enginePreference)
     if (backend === 'cannon') {
-      const [{ createWebPhysicsBridge, createInMemoryWebPhysicsWorker }, { createCannonPhysicsController }] =
-        await Promise.all([
-          import('@harmony/physics-bridge') as Promise<BridgeRuntimeModule>,
-          import('@harmony/physics-cannon') as Promise<CannonRuntimeModule>,
-        ])
+      const cannonRuntime = await import('@harmony/physics-cannon') as CannonRuntimeModule
+      const { createCannonPhysicsController, createCannonSchemaPhysicsBackendBridge } = cannonRuntime
+      initializePhysicsBackendBridge(createCannonSchemaPhysicsBackendBridge())
       return createWebPhysicsBridge({
         workerFactory: () => createInMemoryWebPhysicsWorker(createCannonPhysicsController()),
       })
     }
 
-    const [{ createWebPhysicsBridge, createInMemoryWebPhysicsWorker }, { createAmmoPhysicsController, createDefaultAmmoModuleFactory }] =
-      await Promise.all([
-        import('@harmony/physics-bridge') as Promise<BridgeRuntimeModule>,
-        import('@harmony/physics-ammo') as Promise<AmmoRuntimeModule>,
-      ])
+    const ammoRuntime = await import('@harmony/physics-ammo') as AmmoRuntimeModule
+    const {
+      createAmmoPhysicsController,
+      createDefaultAmmoModuleFactory,
+      createAmmoSchemaPhysicsBackendBridge,
+    } = ammoRuntime
+    const ammoModuleFactory = createDefaultAmmoModuleFactory()
+    const ammoModule = await ammoModuleFactory()
+    initializePhysicsBackendBridge(createAmmoSchemaPhysicsBackendBridge(ammoModule))
 
     return createWebPhysicsBridge({
       workerFactory: () => createInMemoryWebPhysicsWorker(createAmmoPhysicsController({
-        moduleFactory: createDefaultAmmoModuleFactory(),
+        moduleFactory: () => Promise.resolve(ammoModule),
       })),
     })
   }

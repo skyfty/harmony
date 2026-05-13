@@ -1,3 +1,2 @@
-export * from './runtime'
-export * from './web'
-export * from './wechat'
+export * from './physicsBackendTypes'
+export * from './physicsBackendBridge'

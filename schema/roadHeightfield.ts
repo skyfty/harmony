@@ -1,5 +1,4 @@
 ﻿import * as THREE from 'three'
-import * as CANNON from 'cannon-es'
 import type { SceneNode, SceneNodeComponentState, RoadDynamicMesh } from './index'
 
 import type { RigidbodyComponentProps, RigidbodyPhysicsShape } from './components'
@@ -8,8 +7,14 @@ import { ROAD_COMPONENT_TYPE, clampRoadProps, type RoadComponentProps } from './
 import { createSegmentHeightSampler } from './roadMesh'
 import { buildRoadCornerBezierCurvePath } from './roadCurvePath'
 import { buildRoadGraph, type RoadGraph } from './roadGraph'
+import type { PhysicsBodyLike, PhysicsOrientationAdjustment } from './physicsBodySync'
 
-export type RoadHeightfieldBodiesEntry = { signature: string; bodies: CANNON.Body[] }
+type PhysicsWorldLike = {
+	addBody: (body: PhysicsBodyLike) => unknown
+	removeBody?: (body: PhysicsBodyLike) => unknown
+}
+
+export type RoadHeightfieldBodiesEntry = { signature: string; bodies: PhysicsBodyLike[] }
 
 export type RoadHeightfieldTileDescriptor = {
 	curveIndex: number
@@ -41,13 +46,13 @@ export type RoadHeightfieldBuildParams = {
 	roadNode: SceneNode
 	rigidbodyComponent: SceneNodeComponentState<RigidbodyComponentProps>
 	roadObject: THREE.Object3D
-	world: CANNON.World
+	world: PhysicsWorldLike
 	createBody: (
 		node: SceneNode,
 		component: SceneNodeComponentState<RigidbodyComponentProps>,
 		shapeDefinition: RigidbodyPhysicsShape | null,
 		object: THREE.Object3D,
-	) => { body: CANNON.Body } | null
+	) => { body: PhysicsBodyLike; orientationAdjustment: PhysicsOrientationAdjustment | null } | null
 	maxSegments?: number
 }
 export function isRoadDynamicMesh(value: SceneNode['dynamicMesh'] | null | undefined): value is RoadDynamicMesh {
@@ -325,7 +330,7 @@ export function buildRoadHeightfieldBodies(params: RoadHeightfieldBuildParams): 
 
 	roadObject.updateMatrixWorld(true)
 
-	const bodies: CANNON.Body[] = []
+	const bodies: PhysicsBodyLike[] = []
 
 	for (const tile of snapshot.tiles) {
 		if (!tile.shapeDefinition) {
@@ -343,7 +348,7 @@ export function buildRoadHeightfieldBodies(params: RoadHeightfieldBuildParams): 
 		roadObject.remove(tileObject)
 
 		if (bodyResult?.body) {
-			;(bodyResult.body as CANNON.Body & { name?: string }).name = `road-tile:${roadNode.id}:curve:${tile.curveIndex}:tile:${tile.tileIndex}:span:${tile.startIndex}-${tile.endIndex}:kind:${tile.shapeDefinition.kind}`
+			;(bodyResult.body as PhysicsBodyLike & { name?: string }).name = `road-tile:${roadNode.id}:curve:${tile.curveIndex}:tile:${tile.tileIndex}:span:${tile.startIndex}-${tile.endIndex}:kind:${tile.shapeDefinition.kind}`
 			bodies.push(bodyResult.body)
 		}
 	}

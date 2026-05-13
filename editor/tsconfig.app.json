@@ -9,6 +9,11 @@
       "@/*": ["./src/*"],
       "@schema": ["../schema/index.ts"],
       "@schema/*": ["../schema/*"],
+      "@harmony/physics-bridge": ["../physics-bridge/src/index.ts"],
+      "@harmony/physics-bridge/*": ["../physics-bridge/src/*"],
+      "@harmony/physics-bridge/physicsBackendBridge": ["../physics-bridge/src/physicsBackendBridge.ts"],
+      "@harmony/physics-bridge/web": ["../physics-bridge/src/web.ts"],
+      "@harmony/physics-bridge/wechat": ["../physics-bridge/src/wechat.ts"],
       "@three-examples/*": [
         "./node_modules/@types/three/examples/jsm/*",
         "./node_modules/three/examples/jsm/*"

@@ -122,7 +122,7 @@ export function environmentSettingsEqual(a: EnvironmentSettings, b: EnvironmentS
     Math.abs(a.fogFar - b.fogFar) <= epsilon &&
     Boolean(a.fogAutoFitToGround) === Boolean(b.fogAutoFitToGround) &&
     Boolean(a.physicsEnabled ?? true) === Boolean(b.physicsEnabled ?? true) &&
-    (a.physicsEngine ?? 'cannon') === (b.physicsEngine ?? 'cannon') &&
+    (a.physicsEngine ?? 'auto') === (b.physicsEngine ?? 'auto') &&
     Math.abs(a.gravityStrength - b.gravityStrength) <= epsilon &&
     Math.abs(a.collisionRestitution - b.collisionRestitution) <= epsilon &&
     Math.abs(a.collisionFriction - b.collisionFriction) <= epsilon &&

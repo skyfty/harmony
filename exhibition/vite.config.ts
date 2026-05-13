@@ -17,6 +17,22 @@ export default defineConfig({
         find: '@harmony/schema',
         replacement: fileURLToPath(new URL('../schema', import.meta.url)),
       },
+      {
+        find: '@harmony/physics-core',
+        replacement: fileURLToPath(new URL('../physics-core/src', import.meta.url)),
+      },
+      {
+        find: '@harmony/physics-ammo',
+        replacement: fileURLToPath(new URL('../physics-ammo/src', import.meta.url)),
+      },
+      {
+        find: '@harmony/physics-cannon',
+        replacement: fileURLToPath(new URL('../physics-cannon/src', import.meta.url)),
+      },
+      {
+        find: '@harmony/physics-bridge',
+        replacement: fileURLToPath(new URL('../physics-bridge/src', import.meta.url)),
+      },
       // Keep this app decoupled from monorepo-relative imports.
       // scene-viewer and @harmony/schema are resolved from node_modules.
 
@@ -50,7 +66,7 @@ export default defineConfig({
       },
     }),
     createMpChunkSplitterPlugin({
-      subpackages: ['pages/scenery'],
+      subpackages: ['pages/scenery', 'pages/physics-ammo', 'pages/physics-cannon'],
       singleChunkMode: true,
       packageSizeLimit: 1.8 * 1024 * 1024
     }),
@@ -59,6 +75,28 @@ export default defineConfig({
     // 这里强制 three 相关依赖进入 scenery 子包，避免主包膨胀
     toCustomChunkPlugin({
       manualChunks: {
+        'pages/physics-ammo/chunks/vendor': [
+          '@harmony/physics-core',
+          '@harmony/physics-ammo',
+          '@harmony/physics-bridge',
+          'ammojs3',
+          'ammojs3/**',
+          '**/harmony/physics-core/**',
+          '**/harmony/physics-ammo/**',
+          '**/harmony/physics-bridge/**',
+          '**/node_modules/ammojs3/**',
+        ],
+        'pages/physics-cannon/chunks/vendor': [
+          '@harmony/physics-core',
+          '@harmony/physics-cannon',
+          '@harmony/physics-bridge',
+          'cannon-es',
+          'cannon-es/**',
+          '**/harmony/physics-core/**',
+          '**/harmony/physics-cannon/**',
+          '**/harmony/physics-bridge/**',
+          '**/node_modules/cannon-es/**',
+        ],
         'pages/scenery/chunks/vendor': [
           '@minisheep/three-platform-adapter',
           '@minisheep/three-platform-adapter/wechat',
@@ -66,8 +104,7 @@ export default defineConfig({
           'three',
           'three/addons/**',
           'three/examples/**',
-          'three/examples/jsm/**',
-          'cannon'
+          'three/examples/jsm/**'
         ]
       }
     }),

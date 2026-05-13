@@ -1,5 +1,4 @@
 import * as THREE from 'three'
-import * as CANNON from 'cannon-es'
 
 import {
 	clampRigidbodyComponentProps,
@@ -19,10 +18,14 @@ import {
 } from './index'
 import { resolveGroundEffectiveHeightAtVertex, sampleGroundHeight } from './groundMesh'
 import {
-	removeRigidbodyInstanceBodies,
-	type RigidbodyInstance,
-	type RigidbodyOrientationAdjustment,
-} from './physicsEngine'
+	type PhysicsBodyBindingEntry as RigidbodyInstance,
+	type PhysicsOrientationAdjustment,
+} from './physicsBodySync'
+import {
+	type PhysicsWorldLike,
+	addPhysicsBodyToWorld,
+	removePhysicsBodyBindingBodies,
+} from './physicsRuntimeBridge'
 
 type HeightfieldShapeDefinition = Extract<RigidbodyPhysicsShape, { kind: 'heightfield' }>
 
@@ -47,14 +50,14 @@ type PendingEntry = {
 }
 
 export type InfiniteGroundChunkColliderRuntimeDeps = {
-	getPhysicsWorld: () => CANNON.World | null
-	ensurePhysicsWorld: () => CANNON.World
+	getPhysicsWorld: () => PhysicsWorldLike | null
+	ensurePhysicsWorld: () => PhysicsWorldLike
 	createBody: (
 		node: SceneNode,
 		component: SceneNodeComponentState<RigidbodyComponentProps>,
 		shapeDefinition: HeightfieldShapeDefinition | null,
 		object: THREE.Object3D,
-	) => { body: CANNON.Body; orientationAdjustment: RigidbodyOrientationAdjustment | null } | null
+	) => { body: PhysicsBodyLike; orientationAdjustment: PhysicsOrientationAdjustment | null } | null
 	loggerTag?: string
 }
 
@@ -423,11 +426,11 @@ function buildFlatBaseHeightfieldShape(
 	}
 }
 
-function removeInstance(world: CANNON.World | null, instance: RigidbodyInstance | null | undefined): void {
+function removeInstance(world: PhysicsWorldLike | null, instance: RigidbodyInstance | null | undefined): void {
 	if (!instance) {
 		return
 	}
-	removeRigidbodyInstanceBodies(world, instance)
+	removePhysicsBodyBindingBodies(world, instance)
 }
 
 function resolveCollisionRadiusChunks(groundDefinition: GroundRuntimeDynamicMesh): number {
@@ -530,7 +533,7 @@ export function createInfiniteGroundChunkColliderRuntime(
 		if (!bodyEntry) {
 			return
 		}
-		world.addBody(bodyEntry.body)
+		addPhysicsBodyToWorld(world, bodyEntry.body)
 		const instance: RigidbodyInstance = {
 			nodeId: `__groundChunkCollider:${descriptor.runtimeKey}`,
 			body: bodyEntry.body,

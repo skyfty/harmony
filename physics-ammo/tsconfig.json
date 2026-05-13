@@ -5,6 +5,7 @@
     "moduleResolution": "Bundler",
     "composite": true,
     "declaration": true,
+    "baseUrl": ".",
     "outDir": "dist",
     "rootDir": "src",
     "tsBuildInfoFile": "dist/.tsbuildinfo",

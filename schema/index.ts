@@ -53,6 +53,7 @@ export {
   DEFAULT_ENVIRONMENT_FOG_FAR,
   DEFAULT_ENVIRONMENT_FOG_AUTO_FIT_TO_GROUND,
   DEFAULT_ENVIRONMENT_PHYSICS_ENABLED,
+  DEFAULT_ENVIRONMENT_PHYSICS_ENGINE,
   DEFAULT_ENVIRONMENT_GRAVITY,
   DEFAULT_ENVIRONMENT_RESTITUTION,
   DEFAULT_ENVIRONMENT_FRICTION,
@@ -67,6 +68,8 @@ export {
   resolveDocumentEnvironment,
 } from './environmentSettingsUtils'
 export type { AdaptiveLinearFogRange } from './environmentSettingsUtils'
+export type { CompiledGroundCollisionRuntimeState } from './compiledGroundCollisionRuntime'
+export type { InfiniteGroundChunkCollisionRuntimeState } from './infiniteGroundChunkCollisions'
 export type {
   SkyCubeFaceKey,
   SkyCubeTextureLoadOptions,
@@ -350,6 +353,17 @@ export type {
 
 export { createScenePreviewPerfController } from './scenePreviewPerf'
 export type { ScenePreviewPerfController, ScenePreviewPerfOptions } from './scenePreviewPerf'
+
+export {
+  PHYSICS_BRIDGE_VEHICLE_STOP_INPUT_DEADZONE,
+  createPhysicsBridgeVehicleInputSyncState,
+  resetPhysicsBridgeVehicleInputSyncState,
+  syncPhysicsBridgeVehicleInput,
+} from './physicsBridgeVehicleInputSync'
+export type {
+  PhysicsBridgeVehicleInputSyncOptions,
+  PhysicsBridgeVehicleInputSyncState,
+} from './physicsBridgeVehicleInputSync'
 
 export * from './instancedBillboardCache'
 

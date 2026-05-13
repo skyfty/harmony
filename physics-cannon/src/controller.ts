@@ -1,5 +1,5 @@
 import type { PhysicsBridgeInitResult, PhysicsInitOptions, PhysicsRaycastHit, PhysicsSceneAsset } from '@harmony/physics-core'
-import type { PhysicsWorkerController } from '@harmony/physics-bridge'
+import type { PhysicsWorkerController } from '@harmony/physics-bridge/runtime'
 import { CannonPhysicsWorld } from './world'
 
 export function createCannonPhysicsController(): PhysicsWorkerController {

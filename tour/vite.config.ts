@@ -37,6 +37,19 @@ const pollingInterval =
     ? parsedPollingInterval
     : 300;
 
+function resolveAssetFileName(assetInfo: { name?: string }): string | undefined {
+  if (!isMp) {
+    return undefined;
+  }
+
+  const assetName = assetInfo.name ?? '';
+  if (/ammo\.wasm(?:\.[a-z0-9]+)?\.wasm$/i.test(assetName)) {
+    return 'pages/physics-ammo/wasms/[name]-[hash][extname]';
+  }
+
+  return undefined;
+}
+
 function rewriteWorkerWasmPaths() {
   const rewriteSource = (fileName: string, source: string) => {
     if (!fileName.startsWith('workers/') || !source.includes('setWASMInstantiateInputMapper')) {
@@ -113,11 +126,22 @@ export default {
     },
     build: {
       target: buildTarget,
+      rollupOptions: {
+        output: {
+          assetFileNames(assetInfo) {
+            return resolveAssetFileName(assetInfo) ?? 'assets/[name].[hash][extname]';
+          },
+        },
+      },
     },
     resolve: {
       alias: {
         '@schema': fileURLToPath(new URL('../schema', import.meta.url)),
         '@harmony/schema': fileURLToPath(new URL('../schema', import.meta.url)),
+        '@harmony/physics-core': fileURLToPath(new URL('../physics-core/src', import.meta.url)),
+        '@harmony/physics-ammo': fileURLToPath(new URL('../physics-ammo/src', import.meta.url)),
+        '@harmony/physics-cannon': fileURLToPath(new URL('../physics-cannon/src', import.meta.url)),
+        '@harmony/physics-bridge': fileURLToPath(new URL('../physics-bridge/src', import.meta.url)),
         'vue': vueRuntimeAlias,
         // Ensure modules imported from files outside project root (e.g. ../schema)
         // resolve "three" to this package's installed dependency
@@ -154,7 +178,7 @@ export default {
       }),
       rewriteWorkerWasmPaths(),
       createMpChunkSplitterPlugin({
-        subpackages: ['pages/scenery'],
+        subpackages: ['pages/scenery', 'pages/physics-ammo', 'pages/physics-cannon'],
         singleChunkMode: true,
         packageSizeLimit: 1.8 * 1024 * 1024
       }),
@@ -163,6 +187,28 @@ export default {
       // 这里强制 three 相关依赖进入 scenery 子包，避免主包膨胀
       toCustomChunkPlugin({
         manualChunks: {
+          'pages/physics-ammo/chunks/vendor': [
+            '@harmony/physics-core',
+            '@harmony/physics-ammo',
+            '@harmony/physics-bridge',
+            'ammojs3',
+            'ammojs3/**',
+            '**/harmony/physics-core/**',
+            '**/harmony/physics-ammo/**',
+            '**/harmony/physics-bridge/**',
+            '**/node_modules/ammojs3/**',
+          ],
+          'pages/physics-cannon/chunks/vendor': [
+            '@harmony/physics-core',
+            '@harmony/physics-cannon',
+            '@harmony/physics-bridge',
+            'cannon-es',
+            'cannon-es/**',
+            '**/harmony/physics-core/**',
+            '**/harmony/physics-cannon/**',
+            '**/harmony/physics-bridge/**',
+            '**/node_modules/cannon-es/**',
+          ],
           'pages/scenery/chunks/vendor': [
             '@minisheep/three-platform-adapter',
             '@minisheep/three-platform-adapter/wechat',
@@ -173,7 +219,6 @@ export default {
             // Catch any other examples entrypoints (legacy or non-jsm)
             'three/examples/**',
             'three/examples/jsm/**',
-            'cannon-es',
             // @harmony/schema 通过 alias 解析到项目根目录之外 (../schema)，
             // createMpChunkSplitterPlugin 无法识别其归属分包，
             // 必须显式路由到 scenery 子包，否则会落入 common/vendor.js 并产生跨包 require

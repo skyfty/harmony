@@ -1,5 +1,4 @@
 import * as THREE from 'three'
-import * as CANNON from 'cannon-es'
 
 import {
   deserializeCompiledGroundCollisionTile,
@@ -14,20 +13,28 @@ import {
   type SceneNode,
   type SceneNodeComponentState,
 } from './index'
-import type { RigidbodyInstance, RigidbodyOrientationAdjustment } from './physicsEngine'
-import { removeRigidbodyInstanceBodies } from './physicsEngine'
+import type {
+  PhysicsBodyBindingEntry as RigidbodyInstance,
+  PhysicsBodyLike,
+  PhysicsOrientationAdjustment,
+} from './physicsBodySync'
+import {
+  type PhysicsWorldLike,
+  addPhysicsBodyToWorld,
+  removePhysicsBodyBindingBodies,
+} from './physicsRuntimeBridge'
 
 type HeightfieldShapeDefinition = Extract<RigidbodyPhysicsShape, { kind: 'heightfield' }>
 
 type CompiledGroundCollisionRuntimeDeps = {
-  getPhysicsWorld: () => CANNON.World | null
-  ensurePhysicsWorld: () => CANNON.World
+  getPhysicsWorld: () => PhysicsWorldLike | null
+  ensurePhysicsWorld: () => PhysicsWorldLike
   createBody: (
     node: SceneNode,
     component: SceneNodeComponentState<RigidbodyComponentProps>,
     shapeDefinition: HeightfieldShapeDefinition | null,
     object: THREE.Object3D,
-  ) => { body: CANNON.Body; orientationAdjustment: RigidbodyOrientationAdjustment | null } | null
+  ) => { body: PhysicsBodyLike; orientationAdjustment: PhysicsOrientationAdjustment | null } | null
   loggerTag?: string
 }
 
@@ -280,7 +287,7 @@ export function createCompiledGroundCollisionRuntime(
 
   function clear(): void {
     const world = deps.getPhysicsWorld()
-    instances.forEach((instance) => removeRigidbodyInstanceBodies(world, instance))
+    instances.forEach((instance) => removePhysicsBodyBindingBodies(world, instance))
     instances.clear()
     debugShapes.clear()
     pending.clear()
@@ -320,7 +327,7 @@ export function createCompiledGroundCollisionRuntime(
         if (desiredKeys.has(key) || retainedKeys.has(key)) {
           return
         }
-        removeRigidbodyInstanceBodies(world, instance)
+        removePhysicsBodyBindingBodies(world, instance)
         instances.delete(key)
       })
 
@@ -353,7 +360,7 @@ export function createCompiledGroundCollisionRuntime(
               }
               // 移除旧实例
               if (existing) {
-                removeRigidbodyInstanceBodies(deps.getPhysicsWorld(), existing)
+                removePhysicsBodyBindingBodies(deps.getPhysicsWorld(), existing)
                 instances.delete(record.key)
               }
               // 创建碰撞代理
@@ -370,7 +377,7 @@ export function createCompiledGroundCollisionRuntime(
               }
               // 添加刚体到物理世界
               const targetWorld = deps.getPhysicsWorld() ?? deps.ensurePhysicsWorld()
-              targetWorld.addBody(bodyEntry.body)
+              addPhysicsBodyToWorld(targetWorld, bodyEntry.body)
               // 保存实例信息
               instances.set(record.key, {
                 nodeId: `__compiledGroundCollider:${record.key}`,

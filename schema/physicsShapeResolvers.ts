@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import type {
   SceneNode,
   SceneNodeComponentState,
+  GroundDynamicMesh,
   FloorDynamicMesh,
   WallDynamicMesh,
   ModelCollisionDynamicMesh,
@@ -12,9 +13,10 @@ import type {
   RigidbodyVector3Tuple,
 } from './components'
 import {
-  WALL_COMPONENT_TYPE,
-  clampWallProps,
+	WALL_COMPONENT_TYPE,
+	clampWallProps,
 } from './components'
+import { buildAdaptiveGroundCollisionData, type GroundCollisionData } from './groundHeightfield'
 
 const WALL_FORBIDDEN_COLLIDER_HEIGHT = 100
 const FLOOR_EPSILON = 1e-6
@@ -47,6 +49,16 @@ export type WallTrimeshCacheEntry = {
 
 export type WallTrimeshCache = Map<string, WallTrimeshCacheEntry>
 
+export type GroundHeightfieldCacheEntry = {
+  signature: string
+  segments: Array<{
+    shape: Extract<RigidbodyPhysicsShape, { kind: 'heightfield' }>
+    offset: [number, number, number]
+  }>
+}
+
+export type GroundHeightfieldCache = Map<string, GroundHeightfieldCacheEntry>
+
 export type FloorShapeCacheEntry = {
   signature: string
   segments: Array<{
@@ -59,8 +71,42 @@ export type FloorShapeCache = Map<string, FloorShapeCacheEntry>
 type LoggerTag = string | undefined
 
 function warn(loggerTag: LoggerTag, message: string, ...args: unknown[]): void {
-  const prefix = loggerTag ?? '[PhysicsEngine]'
-  console.warn(`${prefix} ${message}`, ...args)
+	const prefix = loggerTag ?? '[PhysicsEngine]'
+	console.warn(`${prefix} ${message}`, ...args)
+}
+export function resolveGroundHeightfieldShape(
+  node: SceneNode,
+  definition: GroundDynamicMesh,
+  cache: GroundHeightfieldCache,
+): GroundHeightfieldCacheEntry | null {
+  const nodeId = node.id
+  const data: GroundCollisionData | null = buildAdaptiveGroundCollisionData(node, definition)
+  if (!data) {
+    cache.delete(nodeId)
+    return null
+  }
+  const cached = cache.get(nodeId)
+  if (cached && cached.signature === data.signature) {
+    return cached
+  }
+  const segments = data.segments.map((segment) => ({
+    shape: {
+      kind: 'heightfield',
+      matrix: segment.matrix,
+      elementSize: segment.elementSize,
+      width: (segment.matrix.length - 1) * segment.elementSize,
+      depth: (segment.matrix[0]?.length ? segment.matrix[0].length - 1 : 0) * segment.elementSize,
+      offset: segment.offset,
+      applyScale: false,
+    } satisfies Extract<RigidbodyPhysicsShape, { kind: 'heightfield' }>,
+    offset: segment.offset,
+  }))
+  const entry: GroundHeightfieldCacheEntry = {
+    signature: data.signature,
+    segments,
+  }
+  cache.set(nodeId, entry)
+  return entry
 }
 
 function clampFloorSmooth(value: unknown): number {

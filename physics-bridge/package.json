@@ -9,6 +9,22 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./runtime": {
+      "types": "./dist/runtime.d.ts",
+      "default": "./dist/runtime.js"
+    },
+    "./physicsBackendBridge": {
+      "types": "./dist/physicsBackendBridge.d.ts",
+      "default": "./dist/physicsBackendBridge.js"
+    },
+    "./web": {
+      "types": "./dist/web.d.ts",
+      "default": "./dist/web.js"
+    },
+    "./wechat": {
+      "types": "./dist/wechat.d.ts",
+      "default": "./dist/wechat.js"
     }
   },
   "files": [

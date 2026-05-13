@@ -1,4 +1,4 @@
-import { attachPhysicsWorkerRuntime, type PhysicsWorkerController } from '@harmony/physics-bridge'
+import { attachPhysicsWorkerRuntime, type PhysicsWorkerController } from '@harmony/physics-bridge/runtime'
 import { createAmmoPhysicsController, type CreateAmmoPhysicsControllerOptions } from './controller'
 
 type WorkerScopeLike = {
