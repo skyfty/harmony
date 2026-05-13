@@ -6,6 +6,7 @@ import type {
   EnvironmentFogMode,
   EnvironmentNorthDirection,
   EnvironmentOrientationPreset,
+  EnvironmentPhysicsEngine,
   EnvironmentRotationDegrees,
   SkyCubeBackgroundFormat,
 } from '@/types/environment'
@@ -93,6 +94,7 @@ const isExponentialFog = computed(() => environmentSettings.value.fogMode === 'e
 const isLinearFog = computed(() => environmentSettings.value.fogMode === 'linear')
 const isLinearFogAutoFitToGround = computed(() => Boolean(environmentSettings.value.fogAutoFitToGround))
 const isPhysicsEnabled = computed(() => environmentSettings.value.physicsEnabled !== false)
+const physicsEngine = computed<EnvironmentPhysicsEngine>(() => environmentSettings.value.physicsEngine ?? 'auto')
 
 const orientationPreset = computed<EnvironmentOrientationPreset>(() => environmentSettings.value.environmentOrientationPreset ?? 'yUp')
 const rotationDegrees = computed<EnvironmentRotationDegrees>(() => environmentSettings.value.environmentRotationDegrees ?? { x: 0, y: 0, z: 0 })
@@ -105,6 +107,12 @@ const fogModeOptions: Array<{ title: string; value: EnvironmentFogMode }> = [
   { title: 'No Fog', value: 'none' },
   { title: 'Linear Fog', value: 'linear' },
   { title: 'Exponential Fog', value: 'exp' },
+]
+
+const physicsEngineOptions: Array<{ title: string; value: EnvironmentPhysicsEngine }> = [
+  { title: 'Auto', value: 'auto' },
+  { title: 'Ammo', value: 'ammo' },
+  { title: 'Cannon', value: 'cannon' },
 ]
 
 type LinearFogPreset = 'light' | 'medium' | 'heavy' | 'custom'
@@ -587,6 +595,22 @@ function handlePhysicsEnabledToggle(enabled: boolean | null) {
     return
   }
   sceneStore.patchEnvironmentSettings({ physicsEnabled: enabled })
+}
+
+function handlePhysicsEngineChange(nextEngine: EnvironmentPhysicsEngine | { value?: unknown } | null) {
+  const normalizedEngine = typeof nextEngine === 'string'
+    ? nextEngine
+    : nextEngine && typeof nextEngine === 'object' && 'value' in nextEngine
+      ? (nextEngine as { value?: unknown }).value
+      : null
+
+  if (normalizedEngine !== 'auto' && normalizedEngine !== 'ammo' && normalizedEngine !== 'cannon') {
+    return
+  }
+  if (normalizedEngine === (environmentSettings.value.physicsEngine ?? 'auto')) {
+    return
+  }
+  sceneStore.patchEnvironmentSettings({ physicsEngine: normalizedEngine })
 }
 
 function applyExpFogPreset(preset: unknown) {
@@ -1778,6 +1802,21 @@ function handleBackgroundDrop(event: DragEvent) {
               size="small"
               @update:model-value="handlePhysicsEnabledToggle"
             />
+          </div>
+          <div class="slider-row">
+          <v-select
+            class="slider-input"
+            label="Physics Engine"
+            density="compact"
+            variant="underlined"
+            hide-details
+            :items="physicsEngineOptions"
+            item-title="title"
+            item-value="value"
+            :return-object="false"
+            :model-value="physicsEngine"
+            @update:model-value="handlePhysicsEngineChange"
+          />
           </div>
           <div class="slider-row">
             <v-text-field

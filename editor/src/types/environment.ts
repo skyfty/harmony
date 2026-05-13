@@ -1,6 +1,7 @@
 export type EnvironmentBackgroundMode = 'solidColor' | 'hdri' | 'fastHdri' | 'skycube'
 export type EnvironmentFogMode = 'none' | 'linear' | 'exp'
 export type EnvironmentNorthDirection = '+X' | '-X' | '+Z' | '-Z'
+export type EnvironmentPhysicsEngine = 'auto' | 'ammo' | 'cannon'
 
 export type EnvironmentOrientationPreset = 'yUp' | 'zUp' | 'xUp' | 'custom'
 
@@ -47,6 +48,7 @@ export interface EnvironmentSettings {
   fogFar: number
   fogAutoFitToGround?: boolean
   physicsEnabled?: boolean
+  physicsEngine?: EnvironmentPhysicsEngine
   gravityStrength: number
   collisionRestitution: number
   collisionFriction: number
