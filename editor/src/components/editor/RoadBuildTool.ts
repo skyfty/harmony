@@ -6,7 +6,6 @@ import type { RoadDynamicMesh, SceneNode } from '@schema'
 import type { RoadPresetData } from '@/utils/roadPreset'
 import { buildRoadPreviewBuild, createRoadPreviewRenderer, type RoadPreviewSession } from './RoadPreviewRenderer'
 import {
-  findConnectableRoadNodeId,
   integrateWorldPolylineIntoRoadMesh,
   splitRoadSelfIntersectionsMesh,
 } from './RoadBuildGeometry'

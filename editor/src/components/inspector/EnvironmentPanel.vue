@@ -290,16 +290,14 @@ function updateBackgroundMode(mode: EnvironmentBackgroundMode | null) {
     return
   }
   // Preserve previously chosen HDRI when toggling modes; don't clear hdriAssetId here
-  sceneStore.patchEnvironmentSettings({
-    background: {
-      mode,
-      solidColor: environmentSettings.value.background.solidColor,
-      gradientTopColor: environmentSettings.value.background.gradientTopColor ?? null,
-      gradientOffset: environmentSettings.value.background.gradientOffset ?? DEFAULT_GRADIENT_OFFSET,
-      gradientExponent: environmentSettings.value.background.gradientExponent ?? DEFAULT_GRADIENT_EXPONENT,
-      hdriAssetId: environmentSettings.value.background.hdriAssetId,
-      skycubeFormat: mode === 'skycube' ? 'zip' : environmentSettings.value.background.skycubeFormat,
-    },
+  patchEnvironmentBackground({
+    mode,
+    solidColor: environmentSettings.value.background.solidColor,
+    gradientTopColor: environmentSettings.value.background.gradientTopColor ?? null,
+    gradientOffset: environmentSettings.value.background.gradientOffset ?? DEFAULT_GRADIENT_OFFSET,
+    gradientExponent: environmentSettings.value.background.gradientExponent ?? DEFAULT_GRADIENT_EXPONENT,
+    hdriAssetId: environmentSettings.value.background.hdriAssetId,
+    skycubeFormat: mode === 'skycube' ? 'zip' : environmentSettings.value.background.skycubeFormat,
   })
 }
 
@@ -364,15 +362,13 @@ function handleHexColorChange(target: 'background' | 'fog', value: string | null
     if (normalized === current) {
       return
     }
-    sceneStore.patchEnvironmentSettings({
-      background: {
-        mode: environmentSettings.value.background.mode,
-        solidColor: normalized,
-        gradientTopColor: environmentSettings.value.background.gradientTopColor ?? null,
-        gradientOffset: environmentSettings.value.background.gradientOffset ?? DEFAULT_GRADIENT_OFFSET,
-        gradientExponent: environmentSettings.value.background.gradientExponent ?? DEFAULT_GRADIENT_EXPONENT,
-        hdriAssetId: environmentSettings.value.background.hdriAssetId,
-      },
+    patchEnvironmentBackground({
+      mode: environmentSettings.value.background.mode,
+      solidColor: normalized,
+      gradientTopColor: environmentSettings.value.background.gradientTopColor ?? null,
+      gradientOffset: environmentSettings.value.background.gradientOffset ?? DEFAULT_GRADIENT_OFFSET,
+      gradientExponent: environmentSettings.value.background.gradientExponent ?? DEFAULT_GRADIENT_EXPONENT,
+      hdriAssetId: environmentSettings.value.background.hdriAssetId,
     })
     return
   }
@@ -400,15 +396,13 @@ function handleGradientTopColorChange(value: string | null) {
     if (!current.length) {
       return
     }
-    sceneStore.patchEnvironmentSettings({
-      background: {
-        mode: environmentSettings.value.background.mode,
-        solidColor: environmentSettings.value.background.solidColor,
-        gradientTopColor: null,
-        gradientOffset: environmentSettings.value.background.gradientOffset ?? DEFAULT_GRADIENT_OFFSET,
-        gradientExponent: environmentSettings.value.background.gradientExponent ?? DEFAULT_GRADIENT_EXPONENT,
-        hdriAssetId: environmentSettings.value.background.hdriAssetId,
-      },
+    patchEnvironmentBackground({
+      mode: environmentSettings.value.background.mode,
+      solidColor: environmentSettings.value.background.solidColor,
+      gradientTopColor: null,
+      gradientOffset: environmentSettings.value.background.gradientOffset ?? DEFAULT_GRADIENT_OFFSET,
+      gradientExponent: environmentSettings.value.background.gradientExponent ?? DEFAULT_GRADIENT_EXPONENT,
+      hdriAssetId: environmentSettings.value.background.hdriAssetId,
     })
     return
   }
@@ -416,15 +410,13 @@ function handleGradientTopColorChange(value: string | null) {
   if (normalized === (environmentSettings.value.background.gradientTopColor ?? null)) {
     return
   }
-  sceneStore.patchEnvironmentSettings({
-    background: {
-      mode: environmentSettings.value.background.mode,
-      solidColor: environmentSettings.value.background.solidColor,
-      gradientTopColor: normalized,
-      gradientOffset: environmentSettings.value.background.gradientOffset ?? DEFAULT_GRADIENT_OFFSET,
-      gradientExponent: environmentSettings.value.background.gradientExponent ?? DEFAULT_GRADIENT_EXPONENT,
-      hdriAssetId: environmentSettings.value.background.hdriAssetId,
-    },
+  patchEnvironmentBackground({
+    mode: environmentSettings.value.background.mode,
+    solidColor: environmentSettings.value.background.solidColor,
+    gradientTopColor: normalized,
+    gradientOffset: environmentSettings.value.background.gradientOffset ?? DEFAULT_GRADIENT_OFFSET,
+    gradientExponent: environmentSettings.value.background.gradientExponent ?? DEFAULT_GRADIENT_EXPONENT,
+    hdriAssetId: environmentSettings.value.background.hdriAssetId,
   })
 }
 
@@ -444,15 +436,13 @@ function handleGradientOffsetInput(value: unknown) {
   if (Math.abs((environmentSettings.value.background.gradientOffset ?? DEFAULT_GRADIENT_OFFSET) - clamped) < 1e-6) {
     return
   }
-  sceneStore.patchEnvironmentSettings({
-    background: {
-      mode: environmentSettings.value.background.mode,
-      solidColor: environmentSettings.value.background.solidColor,
-      gradientTopColor: environmentSettings.value.background.gradientTopColor ?? null,
-      gradientOffset: clamped,
-      gradientExponent: environmentSettings.value.background.gradientExponent ?? DEFAULT_GRADIENT_EXPONENT,
-      hdriAssetId: environmentSettings.value.background.hdriAssetId,
-    },
+  patchEnvironmentBackground({
+    mode: environmentSettings.value.background.mode,
+    solidColor: environmentSettings.value.background.solidColor,
+    gradientTopColor: environmentSettings.value.background.gradientTopColor ?? null,
+    gradientOffset: clamped,
+    gradientExponent: environmentSettings.value.background.gradientExponent ?? DEFAULT_GRADIENT_EXPONENT,
+    hdriAssetId: environmentSettings.value.background.hdriAssetId,
   })
 }
 
@@ -468,15 +458,13 @@ function handleGradientExponentInput(value: unknown) {
   if (Math.abs((environmentSettings.value.background.gradientExponent ?? DEFAULT_GRADIENT_EXPONENT) - clamped) < 1e-6) {
     return
   }
-  sceneStore.patchEnvironmentSettings({
-    background: {
-      mode: environmentSettings.value.background.mode,
-      solidColor: environmentSettings.value.background.solidColor,
-      gradientTopColor: environmentSettings.value.background.gradientTopColor ?? null,
-      gradientOffset: environmentSettings.value.background.gradientOffset ?? DEFAULT_GRADIENT_OFFSET,
-      gradientExponent: clamped,
-      hdriAssetId: environmentSettings.value.background.hdriAssetId,
-    },
+  patchEnvironmentBackground({
+    mode: environmentSettings.value.background.mode,
+    solidColor: environmentSettings.value.background.solidColor,
+    gradientTopColor: environmentSettings.value.background.gradientTopColor ?? null,
+    gradientOffset: environmentSettings.value.background.gradientOffset ?? DEFAULT_GRADIENT_OFFSET,
+    gradientExponent: clamped,
+    hdriAssetId: environmentSettings.value.background.hdriAssetId,
   })
 }
 
@@ -484,15 +472,13 @@ function clearBackgroundAsset() {
   if (environmentSettings.value.background.mode !== 'hdri' && environmentSettings.value.background.mode !== 'fastHdri') {
     return
   }
-  sceneStore.patchEnvironmentSettings({
-    background: {
-      mode: 'solidColor',
-      solidColor: environmentSettings.value.background.solidColor,
-      gradientTopColor: environmentSettings.value.background.gradientTopColor ?? null,
-      gradientOffset: environmentSettings.value.background.gradientOffset ?? DEFAULT_GRADIENT_OFFSET,
-      gradientExponent: environmentSettings.value.background.gradientExponent ?? DEFAULT_GRADIENT_EXPONENT,
-      hdriAssetId: null,
-    },
+  patchEnvironmentBackground({
+    mode: 'solidColor',
+    solidColor: environmentSettings.value.background.solidColor,
+    gradientTopColor: environmentSettings.value.background.gradientTopColor ?? null,
+    gradientOffset: environmentSettings.value.background.gradientOffset ?? DEFAULT_GRADIENT_OFFSET,
+    gradientExponent: environmentSettings.value.background.gradientExponent ?? DEFAULT_GRADIENT_EXPONENT,
+    hdriAssetId: null,
   })
 }
 
@@ -874,6 +860,10 @@ function isSkyCubeZipAsset(asset: ProjectAsset | null): asset is ProjectAsset {
   return (asset.extension ?? '').toLowerCase() === 'skycube'
 }
 
+function patchEnvironmentBackground(background: Record<string, unknown>): void {
+  sceneStore.patchEnvironmentSettings({ background: background as any })
+}
+
 const skyCubeFormat = computed<SkyCubeBackgroundFormat>(() => environmentSettings.value.background.skycubeFormat ?? 'zip')
 
 const skyCubeZipAsset = computed(() => {
@@ -910,12 +900,10 @@ function updateSkyCubeFormat(format: SkyCubeBackgroundFormat | null) {
   if (format === environmentSettings.value.background.skycubeFormat) {
     return
   }
-  sceneStore.patchEnvironmentSettings({
-    background: {
-      mode: 'skycube',
-      skycubeFormat: format,
-      // Keep other fields intact; clearing is handled by user actions.
-    },
+  patchEnvironmentBackground({
+    mode: 'skycube',
+    skycubeFormat: format,
+    // Keep other fields intact; clearing is handled by user actions.
   })
 }
 
@@ -937,10 +925,8 @@ function clearSkyCubeZipAsset() {
   if (!environmentSettings.value.background.skycubeZipAssetId) {
     return
   }
-  sceneStore.patchEnvironmentSettings({
-    background: {
-      skycubeZipAssetId: null,
-    },
+  patchEnvironmentBackground({
+    skycubeZipAssetId: null,
   })
 }
 
@@ -991,12 +977,10 @@ function handleSkyCubeZipDrop(event: DragEvent) {
   }
   event.preventDefault()
   event.stopPropagation()
-  sceneStore.patchEnvironmentSettings({
-    background: {
-      mode: 'skycube',
-      skycubeFormat: 'zip',
-      skycubeZipAssetId: asset.id,
-    },
+  patchEnvironmentBackground({
+    mode: 'skycube',
+    skycubeFormat: 'zip',
+    skycubeZipAssetId: asset.id,
   })
 }
 
@@ -1060,15 +1044,13 @@ function applyEnvironmentAsset(target: 'background' | 'environment', asset: Proj
   }
   const extension = inferAssetExtension(asset)
   const mode: EnvironmentBackgroundMode = extension === 'ktx2' ? 'fastHdri' : 'hdri'
-  sceneStore.patchEnvironmentSettings({
-    background: {
-      mode,
-      solidColor: environmentSettings.value.background.solidColor,
-      gradientTopColor: environmentSettings.value.background.gradientTopColor ?? null,
-      gradientOffset: environmentSettings.value.background.gradientOffset ?? DEFAULT_GRADIENT_OFFSET,
-      gradientExponent: environmentSettings.value.background.gradientExponent ?? DEFAULT_GRADIENT_EXPONENT,
-      hdriAssetId: asset.id,
-    },
+  patchEnvironmentBackground({
+    mode,
+    solidColor: environmentSettings.value.background.solidColor,
+    gradientTopColor: environmentSettings.value.background.gradientTopColor ?? null,
+    gradientOffset: environmentSettings.value.background.gradientOffset ?? DEFAULT_GRADIENT_OFFSET,
+    gradientExponent: environmentSettings.value.background.gradientExponent ?? DEFAULT_GRADIENT_EXPONENT,
+    hdriAssetId: asset.id,
   })
 }
 
@@ -1101,10 +1083,8 @@ function clearSkyCubeFace(face: SkyCubeFaceKey) {
   if (!environmentSettings.value.background[face]) {
     return
   }
-  sceneStore.patchEnvironmentSettings({
-    background: {
-      [face]: null,
-    },
+  patchEnvironmentBackground({
+    [face]: null,
   })
 }
 
@@ -1114,7 +1094,7 @@ function handleAssetDialogUpdate(asset: ProjectAsset | null) {
   }
   if (assetDialogTarget.value === 'skycubeZip') {
     if (!asset) {
-      sceneStore.patchEnvironmentSettings({ background: { skycubeZipAssetId: null } })
+      patchEnvironmentBackground({ skycubeZipAssetId: null })
       assetDialogVisible.value = false
       return
     }
@@ -1122,12 +1102,10 @@ function handleAssetDialogUpdate(asset: ProjectAsset | null) {
       console.warn('Selected asset is not a supported .skycube zip')
       return
     }
-    sceneStore.patchEnvironmentSettings({
-      background: {
-        mode: 'skycube',
-        skycubeFormat: 'zip',
-        skycubeZipAssetId: asset.id,
-      },
+    patchEnvironmentBackground({
+      mode: 'skycube',
+      skycubeFormat: 'zip',
+      skycubeZipAssetId: asset.id,
     })
     assetDialogVisible.value = false
     return
@@ -1135,7 +1113,7 @@ function handleAssetDialogUpdate(asset: ProjectAsset | null) {
   if (assetDialogTarget.value !== 'background') {
     const faceKey = assetDialogTarget.value
     if (!asset) {
-      sceneStore.patchEnvironmentSettings({ background: { [faceKey]: null } })
+      patchEnvironmentBackground({ [faceKey]: null })
       assetDialogVisible.value = false
       return
     }
@@ -1143,22 +1121,18 @@ function handleAssetDialogUpdate(asset: ProjectAsset | null) {
       console.warn('Selected asset is not a supported SkyCube face texture')
       return
     }
-    sceneStore.patchEnvironmentSettings({
-      background: {
-        mode: 'skycube',
-        [faceKey]: asset.id,
-      },
+    patchEnvironmentBackground({
+      mode: 'skycube',
+      [faceKey]: asset.id,
     })
     assetDialogVisible.value = false
     return
   }
   if (!asset) {
-    sceneStore.patchEnvironmentSettings({
-      background: {
-        mode: environmentSettings.value.background.mode,
-        solidColor: environmentSettings.value.background.solidColor,
-        hdriAssetId: '',
-      },
+    patchEnvironmentBackground({
+      mode: environmentSettings.value.background.mode,
+      solidColor: environmentSettings.value.background.solidColor,
+      hdriAssetId: '',
     })
     assetDialogVisible.value = false
     return
@@ -1220,11 +1194,9 @@ function handleSkyCubeFaceDrop(face: SkyCubeFaceKey, event: DragEvent) {
   }
   event.preventDefault()
   event.stopPropagation()
-  sceneStore.patchEnvironmentSettings({
-    background: {
-      mode: 'skycube',
-      [face]: asset.id,
-    },
+  patchEnvironmentBackground({
+    mode: 'skycube',
+    [face]: asset.id,
   })
 }
 

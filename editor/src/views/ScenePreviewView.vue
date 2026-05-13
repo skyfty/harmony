@@ -10,7 +10,6 @@ import {
 	DEFAULT_ENVIRONMENT_GRAVITY,
 	cloneEnvironmentSettings,
 	isPointInsideRegionXZ,
-	resolveAdaptiveLinearFogRange,
 	resolveDocumentEnvironment,
 	clampSceneNodeInstanceLayout,
 	computeInstanceLayoutLocalBoundingBox,
@@ -100,14 +99,6 @@ import {
 	isRoadDynamicMesh,
 	type RoadHeightfieldShapesEntry,
 } from '@schema/roadHeightfieldShapes'
-import {
-	areAllGroundChunksLoaded,
-	ensureAllGroundChunks,
-	isGroundChunkStreamingEnabled,
-	resolveGroundChunkRadiusMeters,
-	resolveGroundRuntimeChunkCells,
-	updateGroundChunks,
-} from '@schema/groundMesh'
 import {
 	createSceneCsmShadowRuntime,
 	DEFAULT_SCENE_CSM_CONFIG,
@@ -427,7 +418,6 @@ const previousSceneById = new Map<string, string>()
 
 const isGroundWireframeVisible = ref(true)
 const isOtherRigidbodyWireframeVisible = ref(true)
-const isGroundChunkStreamingDebugVisible = ref(false)
 const isInstancedCullingVisualizationVisible = ref(false)
 const instancedLodFrustumCuller = createInstancedBvhFrustumCuller()
 const isRendererDebugVisible = ref(false)
@@ -574,18 +564,7 @@ const instancingDebug = reactive({
 	scatterTotal: 0,
 })
 
-const groundChunkDebug = reactive({
-	loaded: 0,
-	target: 0,
-	total: 0,
-	pending: 0,
-	unloaded: 0,
-	visible: 0,
-	triangleEstimate: 0,
-})
 
-let lastGroundChunkDebugLogAt = 0
-let lastGroundChunkDebugSignature = ''
 let lastRendererDebugLogAt = 0
 let lastRendererDebugSignature = ''
 
@@ -1433,7 +1412,6 @@ const protagonistPoseDirection = new THREE.Vector3()
 const protagonistPoseTarget = new THREE.Vector3()
 const tempBox = new THREE.Box3()
 const tempSphere = new THREE.Sphere()
-const groundFogScaleHelper = new THREE.Vector3()
 const tempPosition = new THREE.Vector3()
 const tempObserverPosition = new THREE.Vector3()
 const tempRegionObserverPosition = new THREE.Vector3()
@@ -1998,41 +1976,6 @@ async function syncGroundCache(document: SceneJsonExportDocument | null): Promis
 	}
 }
 
-function resolveGroundViewportWorldSize(): { width: number; depth: number } | null {
-	const document = currentDocument
-	if (!document) {
-		return null
-	}
-	const groundNode = cachedGroundNode ?? findGroundNode(document.nodes)
-	const dynamicMesh = groundNode && isGroundDynamicMesh(groundNode.dynamicMesh)
-		? groundNode.dynamicMesh
-		: null
-	const baseWidth = Number.isFinite(dynamicMesh?.width)
-		? Math.max(0, Number(dynamicMesh?.width))
-		: Math.max(0, Number(document.groundSettings?.width ?? 0))
-	const baseDepth = Number.isFinite(dynamicMesh?.depth)
-		? Math.max(0, Number(dynamicMesh?.depth))
-		: Math.max(0, Number(document.groundSettings?.depth ?? 0))
-	if (baseWidth <= 0 || baseDepth <= 0) {
-		return null
-	}
-	let scaleX = 1
-	let scaleZ = 1
-	const groundObject = groundNode ? nodeObjectMap.get(groundNode.id) ?? null : null
-	if (groundObject) {
-		groundObject.updateMatrixWorld(true)
-		groundObject.getWorldScale(groundFogScaleHelper)
-		scaleX = Math.abs(groundFogScaleHelper.x) || 1
-		scaleZ = Math.abs(groundFogScaleHelper.z) || 1
-	} else if (groundNode?.scale) {
-		scaleX = Math.abs(Number(groundNode.scale.x) || 1)
-		scaleZ = Math.abs(Number(groundNode.scale.z) || 1)
-	}
-	return {
-		width: baseWidth * scaleX,
-		depth: baseDepth * scaleZ,
-	}
-}
 
 function shouldUpdateCameraDependentSystems(activeCamera: THREE.PerspectiveCamera, delta: number): boolean {
 	cameraDependentUpdateElapsed += Math.max(0, delta)
@@ -2133,301 +2076,6 @@ type GroundChunkUserData = {
 	columns: number
 	chunkRow: number
 	chunkColumn: number
-}
-
-const groundChunkDebugMeshes = new Map<string, THREE.Group>()
-let groundChunkDebugGroup: THREE.Group | null = null
-let groundChunkDebugBoxGeometry: THREE.BoxGeometry | null = null
-let groundChunkDebugEdgesGeometry: THREE.EdgesGeometry | null = null
-let groundChunkDebugLastSyncAt = 0
-let groundChunkCellsEstimate: number | null = null
-const groundChunkDebugBoxHelper = new THREE.Box3()
-const groundChunkDebugCenterHelper = new THREE.Vector3()
-const groundChunkDebugSizeHelper = new THREE.Vector3()
-const groundChunkDebugRootInverseHelper = new THREE.Matrix4()
-const groundChunkDebugCameraWorldHelper = new THREE.Vector3()
-const groundChunkDebugCameraLocalHelper = new THREE.Vector3()
-
-function hashStringFNV1a(input: string): number {
-	let hash = 0x811c9dc5
-	for (let i = 0; i < input.length; i += 1) {
-		hash ^= input.charCodeAt(i)
-		hash = Math.imul(hash, 0x01000193)
-	}
-	return hash >>> 0
-}
-
-function colorFromGroundChunkKey(key: string): THREE.Color {
-	const hash = hashStringFNV1a(key)
-	const hue = (hash % 360) / 360
-	return new THREE.Color().setHSL(hue, 0.65, 0.55)
-}
-
-function ensureGroundChunkDebugGeometries(): void {
-	if (!groundChunkDebugBoxGeometry) {
-		groundChunkDebugBoxGeometry = new THREE.BoxGeometry(1, 1, 1)
-	}
-	if (!groundChunkDebugEdgesGeometry && groundChunkDebugBoxGeometry) {
-		groundChunkDebugEdgesGeometry = new THREE.EdgesGeometry(groundChunkDebugBoxGeometry)
-	}
-}
-
-function disposeGroundChunkDebugHelpers(): void {
-	groundChunkDebugMeshes.forEach((group) => {
-		group.traverse((object) => {
-			if ((object as THREE.Mesh).isMesh) {
-				const mesh = object as THREE.Mesh
-				const material = mesh.material
-				if (Array.isArray(material)) {
-					material.forEach((entry) => entry?.dispose?.())
-				} else {
-					material?.dispose?.()
-				}
-			}
-			if ((object as THREE.LineSegments).isLineSegments) {
-				const line = object as THREE.LineSegments
-				const material = line.material as THREE.Material | THREE.Material[]
-				if (Array.isArray(material)) {
-					material.forEach((entry) => entry?.dispose?.())
-				} else {
-					material?.dispose?.()
-				}
-			}
-		})
-		group.removeFromParent()
-	})
-	groundChunkDebugMeshes.clear()
-	groundChunkDebugGroup?.removeFromParent()
-	groundChunkDebugGroup = null
-	groundChunkCellsEstimate = null
-	groundChunkDebugLastSyncAt = 0
-	groundChunkDebug.loaded = 0
-	groundChunkDebug.target = 0
-	groundChunkDebug.total = 0
-	groundChunkDebug.pending = 0
-	groundChunkDebug.unloaded = 0
-	if (groundChunkDebugEdgesGeometry) {
-		groundChunkDebugEdgesGeometry.dispose()
-		groundChunkDebugEdgesGeometry = null
-	}
-	if (groundChunkDebugBoxGeometry) {
-		groundChunkDebugBoxGeometry.dispose()
-		groundChunkDebugBoxGeometry = null
-	}
-}
-
-function ensureGroundChunkDebugGroup(groundObject: THREE.Object3D): THREE.Group {
-	if (!groundChunkDebugGroup) {
-		groundChunkDebugGroup = new THREE.Group()
-		groundChunkDebugGroup.name = 'GroundChunkDebugHelpers'
-	}
-	if (groundChunkDebugGroup.parent !== groundObject) {
-		groundObject.add(groundChunkDebugGroup)
-	}
-	return groundChunkDebugGroup
-}
-
-function computeTotalGroundChunkCount(definition: GroundDynamicMesh, chunkCells: number): number {
-	const rows = Math.max(1, Math.trunc(definition.rows))
-	const columns = Math.max(1, Math.trunc(definition.columns))
-	const safeCells = Math.max(1, Math.trunc(chunkCells))
-	const rowChunks = Math.ceil(rows / safeCells)
-	const columnChunks = Math.ceil(columns / safeCells)
-	return Math.max(1, rowChunks * columnChunks)
-}
-
-function createGroundChunkDebugEntry(key: string): THREE.Group {
-	ensureGroundChunkDebugGeometries()
-	const group = new THREE.Group()
-	group.name = `GroundChunkDebug:${key}`
-	group.userData.groundChunkDebugKey = key
-	const color = colorFromGroundChunkKey(key)
-
-	const fillMaterial = new THREE.MeshBasicMaterial({
-		color,
-		transparent: true,
-		opacity: 0.18,
-		depthTest: false,
-		depthWrite: false,
-	})
-	const edgeMaterial = new THREE.LineBasicMaterial({
-		color,
-		transparent: true,
-		opacity: 0.9,
-		depthTest: false,
-		depthWrite: false,
-	})
-
-	const fillMesh = new THREE.Mesh(groundChunkDebugBoxGeometry!, fillMaterial)
-	fillMesh.name = `GroundChunkDebugFill:${key}`
-	fillMesh.renderOrder = 9999
-	const edgeLines = new THREE.LineSegments(groundChunkDebugEdgesGeometry!, edgeMaterial)
-	edgeLines.name = `GroundChunkDebugEdges:${key}`
-	edgeLines.renderOrder = 10000
-	group.add(fillMesh)
-	group.add(edgeLines)
-	return group
-}
-
-function computeTargetGroundChunkCount(
-	definition: GroundDynamicMesh,
-	chunkCells: number,
-	groundObject: THREE.Object3D,
-	activeCamera: THREE.PerspectiveCamera,
-): number {
-	const columns = Math.max(1, Math.trunc(definition.columns))
-	const rows = Math.max(1, Math.trunc(definition.rows))
-	const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
-	const width = Number.isFinite(definition.width) && definition.width > 0 ? definition.width : columns * cellSize
-	const depth = Number.isFinite(definition.depth) && definition.depth > 0 ? definition.depth : rows * cellSize
-	const safeCells = Math.max(1, Math.trunc(chunkCells))
-	const rowChunks = Math.max(1, Math.ceil(rows / safeCells))
-	const columnChunks = Math.max(1, Math.ceil(columns / safeCells))
-
-	const chunkSizeMeters = Math.max(1e-6, safeCells * cellSize)
-	const radiusMeters = resolveGroundChunkRadiusMeters(definition)
-	const radiusChunks = Math.max(0, Math.ceil(radiusMeters / chunkSizeMeters))
-
-	groundObject.updateWorldMatrix(true, false)
-	groundChunkDebugRootInverseHelper.copy(groundObject.matrixWorld).invert()
-	activeCamera.getWorldPosition(groundChunkDebugCameraWorldHelper)
-	groundChunkDebugCameraLocalHelper.copy(groundChunkDebugCameraWorldHelper).applyMatrix4(groundChunkDebugRootInverseHelper)
-
-	const halfWidth = width * 0.5
-	const halfDepth = depth * 0.5
-	const chunkColumn = Math.max(
-		0,
-		Math.min(columnChunks - 1, Math.floor((groundChunkDebugCameraLocalHelper.x + halfWidth) / chunkSizeMeters)),
-	)
-	const chunkRow = Math.max(
-		0,
-		Math.min(rowChunks - 1, Math.floor((groundChunkDebugCameraLocalHelper.z + halfDepth) / chunkSizeMeters)),
-	)
-
-	const minRow = Math.max(0, chunkRow - radiusChunks)
-	const maxRow = Math.min(rowChunks - 1, chunkRow + radiusChunks)
-	const minCol = Math.max(0, chunkColumn - radiusChunks)
-	const maxCol = Math.min(columnChunks - 1, chunkColumn + radiusChunks)
-
-	const target = (maxRow - minRow + 1) * (maxCol - minCol + 1)
-	return Math.max(1, Math.min(target, rowChunks * columnChunks))
-}
-
-function syncGroundChunkStreamingDebug(
-	groundObject: THREE.Object3D,
-	definition: GroundDynamicMesh,
-	activeCamera: THREE.PerspectiveCamera,
-	options: { renderHelpers: boolean },
-): void {
-	const now = performance.now()
-	if (now - groundChunkDebugLastSyncAt < 120) {
-		return
-	}
-	groundChunkDebugLastSyncAt = now
-
-	const debugRoot = options.renderHelpers ? ensureGroundChunkDebugGroup(groundObject) : null
-	const keep = options.renderHelpers ? new Set<string>() : null
-	let loadedChunks = 0
-	let maxChunkCells = 0
-
-	groundObject.updateWorldMatrix(true, false)
-	groundChunkDebugRootInverseHelper.copy(groundObject.matrixWorld).invert()
-
-	groundObject.traverse((object: THREE.Object3D) => {
-		const mesh = object as THREE.Mesh
-		if (!mesh.isMesh) {
-			return
-		}
-		const chunk = (mesh.userData?.groundChunk ?? null) as GroundChunkUserData | null
-		if (!chunk) {
-			return
-		}
-		loadedChunks += 1
-		maxChunkCells = Math.max(maxChunkCells, Math.max(chunk.rows, chunk.columns))
-
-		if (options.renderHelpers && debugRoot && keep) {
-			const key = `${chunk.chunkRow}:${chunk.chunkColumn}`
-			keep.add(key)
-
-			let entry = groundChunkDebugMeshes.get(key)
-			if (!entry) {
-				entry = createGroundChunkDebugEntry(key)
-				groundChunkDebugMeshes.set(key, entry)
-				debugRoot.add(entry)
-			}
-
-			mesh.updateWorldMatrix(true, false)
-			groundChunkDebugBoxHelper.setFromObject(mesh)
-			groundChunkDebugBoxHelper.applyMatrix4(groundChunkDebugRootInverseHelper)
-			groundChunkDebugBoxHelper.getCenter(groundChunkDebugCenterHelper)
-			groundChunkDebugBoxHelper.getSize(groundChunkDebugSizeHelper)
-			entry.position.copy(groundChunkDebugCenterHelper)
-			entry.scale.set(
-				Math.max(1e-6, groundChunkDebugSizeHelper.x),
-				Math.max(1e-6, groundChunkDebugSizeHelper.y),
-				Math.max(1e-6, groundChunkDebugSizeHelper.z),
-			)
-		}
-	})
-
-	if (options.renderHelpers && keep) {
-		groundChunkDebugMeshes.forEach((entry, key) => {
-			if (keep.has(key)) {
-				return
-			}
-			entry.traverse((object) => {
-				if ((object as THREE.Mesh).isMesh) {
-					const mesh = object as THREE.Mesh
-					const material = mesh.material
-					if (Array.isArray(material)) {
-						material.forEach((entryMaterial) => entryMaterial?.dispose?.())
-					} else {
-						material?.dispose?.()
-					}
-				}
-				if ((object as THREE.LineSegments).isLineSegments) {
-					const line = object as THREE.LineSegments
-					const material = line.material as THREE.Material | THREE.Material[]
-					if (Array.isArray(material)) {
-						material.forEach((entryMaterial) => entryMaterial?.dispose?.())
-					} else {
-						material?.dispose?.()
-					}
-				}
-			})
-			entry.removeFromParent()
-			groundChunkDebugMeshes.delete(key)
-		})
-	}
-
-	if (maxChunkCells > 0) {
-		groundChunkCellsEstimate = Math.max(groundChunkCellsEstimate ?? 0, maxChunkCells)
-	}
-	const effectiveChunkCells = groundChunkCellsEstimate ?? resolveGroundRuntimeChunkCells(definition)
-	const total = computeTotalGroundChunkCount(definition, effectiveChunkCells)
-	const target = computeTargetGroundChunkCount(definition, effectiveChunkCells, groundObject, activeCamera)
-	const renderSnapshot = collectGroundChunkRenderSnapshot(groundObject)
-	groundChunkDebug.loaded = loadedChunks
-	groundChunkDebug.total = total
-	groundChunkDebug.target = target
-	groundChunkDebug.pending = Math.max(0, target - loadedChunks)
-	groundChunkDebug.unloaded = Math.max(0, total - loadedChunks)
-	groundChunkDebug.visible = renderSnapshot.visibleChunkCount
-	groundChunkDebug.triangleEstimate = renderSnapshot.estimatedTriangles
-
-	const signature = [
-		loadedChunks,
-		target,
-		total,
-		groundChunkDebug.pending,
-		renderSnapshot.visibleChunkCount,
-		renderSnapshot.estimatedTriangles,
-		renderSnapshot.chunkKeys.join(','),
-	].join('|')
-	if (signature !== lastGroundChunkDebugSignature && now - lastGroundChunkDebugLogAt >= 250) {
-		lastGroundChunkDebugLogAt = now
-		lastGroundChunkDebugSignature = signature
-	}
 }
 
 type VehicleWheelBinding = {
@@ -2921,11 +2569,14 @@ const vehicleDriveController = new VehicleDriveController(
 		rigidbodyInstances,
 		nodeObjectMap,
 		resolveNodeById,
-		resolveRigidbodyComponent,
-		resolveVehicleComponent,
-		isPhysicsEnabled: () => physicsEnvironmentEnabled.value,
-		ensureVehicleBindingForNode,
-		normalizeNodeId,
+	resolveRigidbodyComponent,
+	resolveVehicleComponent,
+	isPhysicsEnabled: () => physicsEnvironmentEnabled.value,
+	ensurePhysicsWorld: () => {
+		void ensureScenePreviewPhysicsBridgeReady()
+	},
+	ensureVehicleBindingForNode,
+	normalizeNodeId,
 		setCameraViewState: (mode, targetId) => {
 			const nextMode: CameraViewMode = mode === 'watching' ? 'watching' : 'level'
 			setCameraViewState(nextMode, targetId ?? null)
@@ -4885,17 +4536,6 @@ watch(isInstancingDebugVisible, (visible) => {
 	instancingDebug.lodTotal = 0
 	instancingDebug.scatterVisible = 0
 	instancingDebug.scatterTotal = 0
-})
-
-watch(isGroundChunkStatsVisible, (visible) => {
-	if (visible) {
-		return
-	}
-	groundChunkDebug.loaded = 0
-	groundChunkDebug.target = 0
-	groundChunkDebug.total = 0
-	groundChunkDebug.pending = 0
-	groundChunkDebug.unloaded = 0
 })
 
 watch(controlMode, (mode) => {
@@ -9078,11 +8718,6 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
 	if (cachedGroundNodeId && cachedGroundDynamicMesh && cachedGroundNode) {
 		const groundObject = nodeObjectMap.get(cachedGroundNodeId) ?? null
 		if (groundObject) {
-			if (isGroundChunkStreamingEnabled(cachedGroundDynamicMesh)) {
-				updateGroundChunks(groundObject, cachedGroundDynamicMesh as GroundRuntimeDynamicMesh, activeCamera)
-			} else if (!areAllGroundChunksLoaded(groundObject, cachedGroundDynamicMesh)) {
-				ensureAllGroundChunks(groundObject, cachedGroundDynamicMesh as GroundRuntimeDynamicMesh)
-			}
 			syncGroundSurfacePreviewForGroundNode(groundObject, cachedGroundNode, cachedGroundDynamicMesh)
 			if (currentDocument) {
 				const nextGroundCollisionSignature = resolveScenePreviewGroundCollisionSignature(currentDocument)
@@ -9090,11 +8725,6 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
 					currentPhysicsBridgeGroundCollisionSignature = nextGroundCollisionSignature
 					void loadScenePreviewPhysicsBridgeScene(currentDocument)
 				}
-			}
-			if (isGroundChunkStreamingDebugVisible.value || isGroundChunkStatsVisible.value) {
-				syncGroundChunkStreamingDebug(groundObject, cachedGroundDynamicMesh, activeCamera, {
-					renderHelpers: isGroundChunkStreamingDebugVisible.value,
-				})
 			}
 		}
 	}
@@ -9279,7 +8909,6 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	resetBehaviorProximity()
 	resetAnimationControllers()
 	disposeRigidbodyDebugHelpers()
-	disposeGroundChunkDebugHelpers()
 	hidePurposeControls()
 	activeCameraLookTween = null
 	setCameraCaging(false)
@@ -12904,20 +12533,11 @@ function togglePlayback() {
 	isPlaying.value = !isPlaying.value
 }
 
-function toggleGroundWireframeDebug(): void {
-	isGroundWireframeVisible.value = !isGroundWireframeVisible.value
-}
 
 function toggleOtherRigidbodyWireframeDebug(): void {
 	isOtherRigidbodyWireframeVisible.value = !isOtherRigidbodyWireframeVisible.value
 }
 
-function toggleGroundChunkStreamingDebug(): void {
-	isGroundChunkStreamingDebugVisible.value = !isGroundChunkStreamingDebugVisible.value
-	if (!isGroundChunkStreamingDebugVisible.value) {
-		disposeGroundChunkDebugHelpers()
-	}
-}
 
 function toggleInstancedCullingVisualization(): void {
 	isInstancedCullingVisualizationVisible.value = !isInstancedCullingVisualizationVisible.value
@@ -13159,18 +12779,6 @@ watch(
 						Terrain scatter (visible/total): {{ instancingDebug.scatterVisible }} / {{ instancingDebug.scatterTotal }}
 					</div>
 				</template>
-				<template v-if="isGroundChunkStatsVisible">
-					<div class="scene-preview__stats-fallback">[Ground]</div>
-					<div class="scene-preview__stats-fallback">
-						Ground chunks (loaded/target/total): {{ groundChunkDebug.loaded }} / {{ groundChunkDebug.target }} / {{ groundChunkDebug.total }}
-					</div>
-					<div class="scene-preview__stats-fallback">
-						Ground chunks (pending/unloaded): {{ groundChunkDebug.pending }} / {{ groundChunkDebug.unloaded }}
-					</div>
-					<div class="scene-preview__stats-fallback">
-						Ground visible chunk meshes/tris(est): {{ groundChunkDebug.visible }} / {{ groundChunkDebug.triangleEstimate }}
-					</div>
-				</template>
 			</div>
 			<div
 				v-if="memoryFallbackLabel"
@@ -13240,29 +12848,6 @@ watch(
 								density="compact"
 								color="warning"
 								@update:model-value="toggleInstancedCullingVisualization"
-							/>
-						</v-list-item>
-						<v-list-item>
-							<v-checkbox
-								v-if="physicsEnvironmentEnabled"
-								class="scene-preview__debug-checkbox"
-								label="Ground rigidbody wireframe"
-								:model-value="isGroundWireframeVisible"
-								hide-details
-								density="compact"
-								color="warning"
-								@update:model-value="toggleGroundWireframeDebug"
-							/>
-						</v-list-item>
-						<v-list-item>
-							<v-checkbox
-								class="scene-preview__debug-checkbox"
-								label="Ground chunk debug"
-								:model-value="isGroundChunkStreamingDebugVisible"
-								hide-details
-								density="compact"
-								color="warning"
-								@update:model-value="toggleGroundChunkStreamingDebug"
 							/>
 						</v-list-item>
 						<v-list-item>

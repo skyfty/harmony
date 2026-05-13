@@ -19,8 +19,6 @@ export interface PlanningDemGroundConversionResult {
   planningHeightMap: GroundHeightMap
   localEditTiles: GroundLocalEditTileMap | null
   planningMetadata: GroundPlanningMetadata
-  textureDataUrl: string | null
-  textureName: string | null
   normalMapDataUrl?: string | null
   normalMapName?: string | null
 }
@@ -29,8 +27,6 @@ export interface PlanningDemRegionConversionResult {
   region: PlanningDemHeightRegion
   localEditTiles: GroundLocalEditTileMap | null
   planningMetadata: GroundPlanningMetadata
-  textureDataUrl: string | null
-  textureName: string | null
   normalMapDataUrl?: string | null
   normalMapName?: string | null
 }
@@ -39,8 +35,6 @@ export interface PlanningDemTileConversionResult {
   region: PlanningDemTileHeightRegion
   localEditTiles: GroundLocalEditTileMap | null
   planningMetadata: GroundPlanningMetadata
-  textureDataUrl: string | null
-  textureName: string | null
   normalMapDataUrl?: string | null
   normalMapName?: string | null
 }
@@ -960,10 +954,6 @@ export async function buildPlanningDemRegionFromPreparedSource(options: {
     region,
     localEditTiles,
     planningMetadata: options.prepared.planningMetadata,
-    textureDataUrl: options.textureDataUrl ?? null,
-    textureName: options.textureName ?? null,
-    normalMapDataUrl: options.normalMapDataUrl ?? null,
-    normalMapName: options.normalMapName ?? null,
   }
 }
 
@@ -1029,27 +1019,6 @@ function sampleArrayLikeBilinearFinite(values: ArrayLike<number>, width: number,
   return 0
 }
 
-
-type PlanningDemTextureResolution = {
-  textureDataUrl: string | null
-  textureName: string | null
-  normalMapDataUrl?: string | null
-  normalMapName?: string | null
-}
-
-
-
-export async function resolvePlanningDemBaseTexture(options: {
-  definition: GroundRuntimeDynamicMesh
-  terrainDem: PlanningTerrainDemData
-  source: PlanningDemRasterSource
-  applyOrthophoto?: boolean
-}): Promise<PlanningDemTextureResolution> {
-  return {
-    textureDataUrl: null,
-    textureName: null,
-  }
-}
 
 function computeDemSampleStepAxis(parsedWidth: number, parsedHeight: number, worldBounds: { minX: number; minY: number; maxX: number; maxY: number } | null, axis: 'x' | 'y'): number | null {
   if (!worldBounds) {
@@ -1358,12 +1327,6 @@ export async function buildPlanningDemGroundRegionData(options: {
     label: 'Loading DEM source…',
     detail: '1/1',
   }, true)
-  const texture = await resolvePlanningDemBaseTexture({
-    definition: options.definition,
-    terrainDem: options.terrainDem,
-    source: prepared.rasterSource,
-    applyOrthophoto: options.applyOrthophoto,
-  })
   reportProgress({
     phase: 'build-base-texture',
     loaded: 1,
@@ -1378,10 +1341,6 @@ export async function buildPlanningDemGroundRegionData(options: {
     endRow: options.endRow,
     startColumn: options.startColumn,
     endColumn: options.endColumn,
-    textureDataUrl: texture.textureDataUrl,
-    textureName: texture.textureName,
-    normalMapDataUrl: texture.normalMapDataUrl ?? null,
-    normalMapName: texture.normalMapName ?? null,
     onProgress: (payload) => reportProgress(payload),
   })
   return result
@@ -1397,12 +1356,6 @@ export async function buildPlanningDemGroundTileData(options: {
   const prepared = await resolvePlanningDemPreparedSource({
     definition: options.definition,
     terrainDem: options.terrainDem,
-  })
-  const texture = await resolvePlanningDemBaseTexture({
-    definition: options.definition,
-    terrainDem: options.terrainDem,
-    source: prepared.rasterSource,
-    applyOrthophoto: options.applyOrthophoto,
   })
   const region = buildPlanningDemTileHeightRegion({
     definition: options.definition,
@@ -1422,10 +1375,6 @@ export async function buildPlanningDemGroundTileData(options: {
       endColumn: region.endColumn,
     }),
     planningMetadata: prepared.planningMetadata,
-    textureDataUrl: texture.textureDataUrl,
-    textureName: texture.textureName,
-    normalMapDataUrl: texture.normalMapDataUrl ?? null,
-    normalMapName: texture.normalMapName ?? null,
   }
 }
 
@@ -1516,20 +1465,9 @@ export async function buildPlanningDemGroundData(options: {
     endColumn: columns,
   })
 
-  const texture = await resolvePlanningDemBaseTexture({
-    definition,
-    terrainDem,
-    source: prepared.rasterSource,
-    applyOrthophoto: options.applyOrthophoto,
-  })
-
   return {
     planningHeightMap: heightMap,
     localEditTiles,
     planningMetadata: fullRegionResult.planningMetadata,
-    textureDataUrl: texture.textureDataUrl,
-    textureName: texture.textureName,
-    normalMapDataUrl: texture.normalMapDataUrl ?? null,
-    normalMapName: texture.normalMapName ?? null,
   }
 }

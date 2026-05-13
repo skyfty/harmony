@@ -3,7 +3,6 @@ import {
   AmbientLight,
   Box3,
   BoxGeometry,
-  Clock,
   Color,
   DirectionalLight,
   HemisphereLight,
@@ -610,7 +609,7 @@ function rebuildPhysics() {
   }
 }
 
-function updateVisualsFromPhysics(deltaTime: number) {
+function updateVisualsFromPhysics() {
   if (!chassisGroup) return
   if (chassisBodyMesh && chassisShapeOffset) {
     chassisBodyMesh.position.copy(chassisShapeOffset)
@@ -674,7 +673,6 @@ function resolveChassisColliderShape(): ChassisColliderInfo {
     const radiusTop = shape.applyScale ? shape.radiusTop * horizontalScale : shape.radiusTop
     const radiusBottom = shape.applyScale ? shape.radiusBottom * horizontalScale : shape.radiusBottom
     const height = shape.applyScale ? shape.height * scale.y : shape.height
-    const segments = Math.max(4, shape.segments ?? 16)
     const safeTop = Math.max(1e-4, radiusTop)
     const safeBottom = Math.max(1e-4, radiusBottom)
     const safeHeight = Math.max(1e-4, height)
@@ -711,7 +709,6 @@ function resolveChassisColliderShape(): ChassisColliderInfo {
       { min: new Vector3(Infinity, Infinity, Infinity), max: new Vector3(-Infinity, -Infinity, -Infinity) },
     )
     const center = bounds.min.clone().add(bounds.max).multiplyScalar(0.5)
-    const adjustedVertices = vertices.map((v) => v.clone().sub(center))
     const halfHeight = Math.max(1e-4, (bounds.max.y - bounds.min.y) * 0.5)
     const visualSize = new Vector3(bounds.max.x - bounds.min.x, bounds.max.y - bounds.min.y, bounds.max.z - bounds.min.z)
 
@@ -779,11 +776,9 @@ function buildChassisVisualMesh(collider: ChassisColliderInfo, material: MeshSta
 
 function startRenderLoop() {
   if (!renderer || !previewScene || !camera) return
-  const clock = new Clock()
   const renderLoop = () => {
     animationFrame = requestAnimationFrame(renderLoop)
-    const dt = clock.getDelta()
-    updateVisualsFromPhysics(dt)
+    updateVisualsFromPhysics()
     orbitControls?.update()
     renderer?.render(previewScene as Scene, camera as PerspectiveCamera)
   }

@@ -544,7 +544,6 @@ function collectRoadCollisionSpans(
 	divisions: number,
 	heights: number[],
 ): RoadCollisionSpan[] {
-	return [{startIndex: 0, endIndex: divisions, kind: 'heightfield'}]
 	if (!(divisions > 0)) {
 		return []
 	}

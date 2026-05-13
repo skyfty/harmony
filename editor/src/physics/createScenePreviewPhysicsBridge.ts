@@ -10,6 +10,7 @@ import type {
   PhysicsStepFrame,
   PhysicsVehicleInputCommand,
 } from '@harmony/physics-core'
+import type { AmmoApi } from '@harmony/physics-ammo'
 import { initializePhysicsBackendBridge } from '@harmony/physics-bridge/physicsBackendBridge'
 import { createWebPhysicsBridge, createInMemoryWebPhysicsWorker } from '@harmony/physics-bridge/web'
 
@@ -107,8 +108,11 @@ class LazyScenePreviewPhysicsBridge implements PhysicsBridge {
       createDefaultAmmoModuleFactory,
       createAmmoSchemaPhysicsBackendBridge,
     } = ammoRuntime
-    const ammoModuleFactory = createDefaultAmmoModuleFactory()
+    const ammoModuleFactory = createDefaultAmmoModuleFactory<AmmoApi>()
     const ammoModule = await ammoModuleFactory()
+    if (!ammoModule) {
+      throw new Error('Failed to load Ammo physics module')
+    }
     initializePhysicsBackendBridge(createAmmoSchemaPhysicsBackendBridge(ammoModule))
 
     return createWebPhysicsBridge({

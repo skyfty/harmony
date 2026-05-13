@@ -20,7 +20,7 @@ import {
   type Material,
   type Light,
 } from 'three'
-import type { EnvironmentSettings, EnvironmentSettingsPatch } from '@/types/environment'
+import type { EnvironmentSettings, EnvironmentSettingsPatch } from '@schema'
 import {
   GROUND_NODE_ID,
   ENVIRONMENT_NODE_ID,

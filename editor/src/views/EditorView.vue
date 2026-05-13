@@ -10,7 +10,7 @@ import VehicleSuspensionEditorDialog from '@/components/inspector/VehicleSuspens
 import RigidbodyColliderEditorDialog from '@/components/inspector/RigidbodyColliderEditorDialog.vue'
 import BehaviorDetailsPanel from '@/components/inspector/BehaviorDetailsPanel.vue'
 import ProjectPanel from '@/components/layout/ProjectPanel.vue'
-import SceneViewport, { type SceneViewportHandle } from '@/components/editor/SceneViewport.vue'
+import SceneViewport from '@/components/editor/SceneViewport.vue'
 import MenuBar from './MenuBar.vue'
 import ProjectManagerView from './ProjectManagerView.vue'
 import SceneManagerDialog from '@/components/layout/SceneManagerDialog.vue'
@@ -29,6 +29,8 @@ import type {
   SceneExportProgressSummary,
   SceneExportOptions,
 } from '@/types/scene-export'
+
+type SceneViewportHandle = InstanceType<typeof SceneViewport>
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { PresetSceneDocument } from '@/types/preset-scene'
 
