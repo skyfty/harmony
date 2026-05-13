@@ -7108,6 +7108,22 @@ function ensureRoadRigidbodyInstance(node: SceneNode, component: SceneNodeCompon
     }
     return;
   }
+  const roadBodies = Array.isArray(result.instance.bodies) && result.instance.bodies.length
+    ? result.instance.bodies
+    : [result.instance.body];
+  for (const roadBody of roadBodies) {
+    if (!roadBody || roadBody.world === world) {
+      continue;
+    }
+    if (roadBody.world && roadBody.world !== world) {
+      try {
+        roadBody.world.removeBody(roadBody);
+      } catch (error) {
+        console.warn('[SceneViewer] Failed to detach road body from previous world', error);
+      }
+    }
+    world.addBody(roadBody);
+  }
   rigidbodyInstances.set(node.id, result.instance);
 }
 

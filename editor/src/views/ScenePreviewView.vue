@@ -2426,6 +2426,31 @@ const wheelRayDebugLineGeometry = new THREE.BufferGeometry().setFromPoints([
 	new THREE.Vector3(0, 0, 0),
 	new THREE.Vector3(0, 1, 0),
 ])
+const wheelRayRoadBoundaryMaterial = new THREE.LineBasicMaterial({
+	color: 0xff9f43,
+	transparent: true,
+	opacity: 0.95,
+	depthTest: false,
+	toneMapped: false,
+})
+const wheelRayRoadCellMaterial = new THREE.MeshBasicMaterial({
+	color: 0x4dd7ff,
+	transparent: true,
+	opacity: 0.82,
+	depthTest: false,
+	toneMapped: false,
+})
+const wheelRayRoadActiveCellMaterial = new THREE.LineBasicMaterial({
+	color: 0xff2d55,
+	transparent: true,
+	opacity: 0.98,
+	depthTest: false,
+	toneMapped: false,
+})
+const wheelRayDebugMarkerScale = 1.45
+const wheelRayDebugLineScale = 1.25
+const wheelRayRoadBoundaryScale = 1.1
+const wheelRayRoadActiveCellScale = 1.14
 const groundCollisionDebugMaterialPalette = {
 	compiled: new THREE.LineBasicMaterial({
 		color: 0x4dd7ff,
@@ -2502,6 +2527,19 @@ const wheelRayDebugMaterialPalette = {
 }
 let groundCollisionDebugLastLogKey = ''
 let wheelRayDebugLastLogKey = ''
+let wheelRayHeightfieldDebugLastLogKey = ''
+let wheelRayDebugLogCount = 0
+let wheelRayHeightfieldDebugLogCount = 0
+const WHEEL_RAY_DEBUG_LOG_LIMIT = 3
+const WHEEL_RAY_HEIGHTFIELD_DEBUG_LOG_LIMIT = 5
+const WHEEL_RAY_RAYCAST_RESULT_LOG_LIMIT = 5
+const WHEEL_RAY_MISS_SUMMARY_LOG_LIMIT = 5
+const WHEEL_RAY_TEST_SUSPENSION_LENGTH_BOOST = 0.08
+const WHEEL_RAY_TEST_CONNECTION_POINT_DROP = 0.06
+let wheelRayRaycastResultDebugLogCount = 0
+let wheelRayRaycastResultDebugLastLogKey = ''
+let wheelRayMissSummaryDebugLogCount = 0
+let wheelRayMissSummaryDebugLastLogKey = ''
 
 async function ensureCannonDebugger(): Promise<void> {
 	if (!physicsWorld || !scene || !isCannonDebuggerVisible.value) return
@@ -2696,6 +2734,14 @@ function clearWheelRayDebugVisualization(): void {
 		return
 	}
 	wheelRayDebugGroup.clear()
+	wheelRayDebugLastLogKey = ''
+	wheelRayHeightfieldDebugLastLogKey = ''
+	wheelRayDebugLogCount = 0
+	wheelRayHeightfieldDebugLogCount = 0
+	wheelRayRaycastResultDebugLogCount = 0
+	wheelRayRaycastResultDebugLastLogKey = ''
+	wheelRayMissSummaryDebugLogCount = 0
+	wheelRayMissSummaryDebugLastLogKey = ''
 }
 
 function disposeWheelRayDebugVisualization(): void {
@@ -2704,7 +2750,6 @@ function disposeWheelRayDebugVisualization(): void {
 	}
 	clearWheelRayDebugVisualization()
 	wheelRayDebugGroup = null
-	wheelRayDebugLastLogKey = ''
 }
 
 type WheelRayDebugVector = [number, number, number]
@@ -2716,6 +2761,19 @@ type VehicleWheelRayDebugEntry = {
 	isFrontWheel: boolean
 	isInContact: boolean
 	radius: number
+	chassisAabbMinY: number | null
+	chassisAabbMaxY: number | null
+	chassisBodyPosition: WheelRayDebugVector | null
+	chassisBodyQuaternion: QuatTuple | null
+	wheelConnectionPointAboveChassisMinY: number | null
+	rayToWorldAboveChassisMinY: number | null
+	chassisConnectionPointLocal: WheelRayDebugVector | null
+	chassisConnectionPointWorld: WheelRayDebugVector | null
+	wheelVisualWorldPosition: WheelRayDebugVector | null
+	wheelVisualWorldQuaternion: QuatTuple | null
+	directionLocal: WheelRayDebugVector | null
+	directionWorld: WheelRayDebugVector | null
+	maxSuspensionTravel: number | null
 	rayFromWorld: WheelRayDebugVector | null
 	rayToWorld: WheelRayDebugVector | null
 	hitPointWorld: WheelRayDebugVector | null
@@ -2724,6 +2782,119 @@ type VehicleWheelRayDebugEntry = {
 	suspensionRestLength: number | null
 	compression: number | null
 }
+
+type WheelRaycastResultDebugLog = {
+	vehicleNodeId: string
+	wheelIndex: number
+	wheelNodeId: string | null
+	isFrontWheel: boolean
+	isInContact: boolean
+	hasHit: boolean | null
+	distance: number | null
+	bodyId: number | null
+	bodyType: number | null
+	rayFromWorld: WheelRayDebugVector | null
+	rayToWorld: WheelRayDebugVector | null
+	hitPointWorld: WheelRayDebugVector | null
+	hitNormalWorld: WheelRayDebugVector | null
+}
+
+type WheelRayMissSummaryDebugLog = {
+	vehicleNodeId: string
+	wheelIndex: number
+	wheelNodeId: string | null
+	isFrontWheel: boolean
+	rayLength: number | null
+	rayOriginY: number | null
+	rayEndY: number | null
+	directionWorld: WheelRayDebugVector | null
+	chassisAabbMinY: number | null
+	chassisBodyPosition: WheelRayDebugVector | null
+	chassisBodyQuaternion: QuatTuple | null
+	wheelConnectionPointAboveChassisMinY: number | null
+	chassisConnectionPointWorld: WheelRayDebugVector | null
+	wheelVisualWorldPosition: WheelRayDebugVector | null
+	wheelVisualWorldQuaternion: QuatTuple | null
+	rayToWorldAboveChassisMinY: number | null
+	suspensionLength: number | null
+	suspensionRestLength: number | null
+	compression: number | null
+	maxSuspensionTravel: number | null
+}
+
+type RoadHeightfieldDebugWindow = {
+	roadNodeId: string
+	roadBodyId: number | null
+	roadBodyName: string | null
+	roadBodyCollisionFilterGroup: number | null
+	roadBodyCollisionFilterMask: number | null
+	roadBodyCollisionResponse: boolean | null
+	roadBodyShapeCount: number | null
+	shapeIndex: number
+	elementSize: number
+	matrixRows: number
+	matrixColumns: number
+	localPoint: [number, number, number]
+	cell: { column: number; row: number } | null
+	centerHeight: number | null
+	heightWindow: Array<Array<number | null>>
+	bodyPosition: [number, number, number]
+	bodyQuaternion: [number, number, number, number]
+	shapeQuaternion: [number, number, number, number] | null
+	shapeOffset: [number, number, number]
+	minHeight: number
+	maxHeight: number
+}
+
+type RoadHeightfieldDebugWindowSummary = {
+	roadNodeId: string
+	roadBodyId: number | null
+	roadBodyName: string | null
+	roadBodyCollisionFilterGroup: number | null
+	roadBodyCollisionFilterMask: number | null
+	roadBodyCollisionResponse: boolean | null
+	roadBodyShapeCount: number | null
+	shapeIndex: number
+	elementSize: number
+	matrixRows: number
+	matrixColumns: number
+	localPoint: [number, number, number]
+	cell: { column: number; row: number } | null
+	centerHeight: number | null
+	heightWindow: Array<Array<number | null>>
+	bodyPosition: [number, number, number]
+	bodyQuaternion: [number, number, number, number]
+	shapeQuaternion: [number, number, number, number] | null
+	shapeOffset: [number, number, number]
+	minHeight: number
+	maxHeight: number
+}
+
+type RoadHeightfieldCoverageSummary = RoadHeightfieldDebugWindowSummary & {
+	insideBounds: boolean
+	axisChecks: RoadHeightfieldAxisProjectionSummary[]
+}
+
+type RoadHeightfieldCoverageWindow = RoadHeightfieldDebugWindow & {
+	insideBounds: boolean
+	axisChecks: RoadHeightfieldAxisProjection[]
+}
+
+type GroundCollisionRuntimeDebugSummary = {
+	key: string
+	bodyId: number | null
+	position: [number, number, number] | null
+}
+
+type RoadHeightfieldAxisProjection = {
+	axisPair: 'xy' | 'xz'
+	column: number
+	row: number
+	insideBounds: boolean
+	centerHeight: number | null
+}
+
+type RoadHeightfieldAxisProjectionSummary = RoadHeightfieldAxisProjection
 
 function vec3ToTuple(vec: CANNON.Vec3 | null | undefined): WheelRayDebugVector | null {
 	if (!vec) {
@@ -2738,6 +2909,306 @@ function vec3ToTuple(vec: CANNON.Vec3 | null | undefined): WheelRayDebugVector |
 	return [x, y, z]
 }
 
+function isWheelRayDebugVectorNearZero(
+	tuple: WheelRayDebugVector | null | undefined,
+	epsilon = 1e-6,
+): boolean {
+	if (!tuple) {
+		return true
+	}
+	return Math.abs(tuple[0]) <= epsilon
+		&& Math.abs(tuple[1]) <= epsilon
+		&& Math.abs(tuple[2]) <= epsilon
+}
+
+function addScaledWheelRayDebugVector(
+	origin: WheelRayDebugVector | null | undefined,
+	direction: WheelRayDebugVector | null | undefined,
+	distance: number,
+): WheelRayDebugVector | null {
+	if (!origin || !direction || !Number.isFinite(distance)) {
+		return null
+	}
+	return [
+		origin[0] + direction[0] * distance,
+		origin[1] + direction[1] * distance,
+		origin[2] + direction[2] * distance,
+	]
+}
+
+function readBodyWorldAabbY(body: CANNON.Body | null | undefined): { minY: number; maxY: number } | null {
+	if (!body) {
+		return null
+	}
+	try {
+		body.updateAABB()
+		const minY = Number(body.aabb?.lowerBound?.y)
+		const maxY = Number(body.aabb?.upperBound?.y)
+		if (![minY, maxY].every((value) => Number.isFinite(value))) {
+			return null
+		}
+		return { minY, maxY }
+	} catch {
+		return null
+	}
+}
+
+function summarizeRoadHeightfieldDebugWindow(window: RoadHeightfieldDebugWindow): RoadHeightfieldDebugWindowSummary {
+	return {
+		roadNodeId: window.roadNodeId,
+		roadBodyId: window.roadBodyId,
+		roadBodyName: window.roadBodyName,
+		roadBodyCollisionFilterGroup: window.roadBodyCollisionFilterGroup,
+		roadBodyCollisionFilterMask: window.roadBodyCollisionFilterMask,
+		roadBodyCollisionResponse: window.roadBodyCollisionResponse,
+		roadBodyShapeCount: window.roadBodyShapeCount,
+		shapeIndex: window.shapeIndex,
+		elementSize: window.elementSize,
+		matrixRows: window.matrixRows,
+		matrixColumns: window.matrixColumns,
+		localPoint: window.localPoint,
+		cell: window.cell,
+		centerHeight: window.centerHeight,
+		heightWindow: window.heightWindow,
+		bodyPosition: window.bodyPosition,
+		bodyQuaternion: window.bodyQuaternion,
+		shapeQuaternion: window.shapeQuaternion,
+		shapeOffset: window.shapeOffset,
+		minHeight: window.minHeight,
+		maxHeight: window.maxHeight,
+	}
+}
+
+function summarizeRoadHeightfieldCoverageSummary(window: RoadHeightfieldCoverageWindow): RoadHeightfieldCoverageSummary {
+	return {
+		...summarizeRoadHeightfieldDebugWindow(window),
+		insideBounds: window.insideBounds,
+		axisChecks: window.axisChecks,
+	}
+}
+
+function isRoadHeightfieldCellInsideBounds(
+	column: number,
+	row: number,
+	matrixColumns: number,
+	matrixRows: number,
+): boolean {
+	return (
+		Number.isInteger(column)
+		&& Number.isInteger(row)
+		&& column >= 0
+		&& row >= 0
+		&& column < matrixColumns
+		&& row < matrixRows
+	)
+}
+
+function buildRoadHeightfieldAxisProjection(
+	localPoint: THREE.Vector3,
+	matrix: number[][],
+	elementSize: number,
+	axisPair: 'xy' | 'xz',
+): RoadHeightfieldAxisProjection {
+	const matrixColumns = matrix.length
+	const matrixRows = matrix[0]?.length ?? 0
+	const column = Math.floor(localPoint.x / elementSize)
+	const rowSource = axisPair === 'xy' ? localPoint.y : localPoint.z
+	const row = Math.floor(rowSource / elementSize)
+	const insideBounds = isRoadHeightfieldCellInsideBounds(column, row, matrixColumns, matrixRows)
+	const centerValue = insideBounds ? matrix[column]?.[row] : null
+	return {
+		axisPair,
+		column,
+		row,
+		insideBounds,
+		centerHeight: Number.isFinite(Number(centerValue)) ? roundDebugNumber(Number(centerValue)) : null,
+	}
+}
+
+function getPrimaryRoadHeightfieldProjection(
+	localPoint: THREE.Vector3,
+	matrix: number[][],
+	elementSize: number,
+): RoadHeightfieldAxisProjection {
+	return buildRoadHeightfieldAxisProjection(localPoint, matrix, elementSize, 'xz')
+}
+
+function buildRoadHeightfieldHeightWindow(
+	matrix: number[][],
+	column: number,
+	row: number,
+	windowRadius = 2,
+): Array<Array<number | null>> {
+	const heightWindow: Array<Array<number | null>> = []
+	for (let rowOffset = -windowRadius; rowOffset <= windowRadius; rowOffset += 1) {
+		const rowValues: Array<number | null> = []
+		for (let columnOffset = -windowRadius; columnOffset <= windowRadius; columnOffset += 1) {
+			const sampleColumn = column + columnOffset
+			const sampleRow = row + rowOffset
+			const sampleValue = matrix[sampleColumn]?.[sampleRow]
+			rowValues.push(Number.isFinite(Number(sampleValue)) ? roundDebugNumber(Number(sampleValue)) : null)
+		}
+		heightWindow.push(rowValues)
+	}
+	return heightWindow
+}
+
+function buildRoadHeightfieldCoverageCandidates(worldPoint: THREE.Vector3): RoadHeightfieldCoverageWindow[] {
+	const candidates: RoadHeightfieldCoverageWindow[] = []
+	for (const [roadNodeId, instance] of rigidbodyInstances.entries()) {
+		const roadNode = resolveNodeById(roadNodeId)
+		if (!roadNode || !isRoadDynamicMesh(roadNode.dynamicMesh)) {
+			continue
+		}
+		const roadBodies = Array.isArray(instance.bodies) && instance.bodies.length ? instance.bodies : [instance.body]
+		for (const roadBody of roadBodies) {
+			const body = roadBody as CANNON.Body
+			const bodyCollisionFilterGroup = Number.isFinite(Number(body.collisionFilterGroup))
+				? Number(body.collisionFilterGroup)
+				: null
+			const bodyCollisionFilterMask = Number.isFinite(Number(body.collisionFilterMask))
+				? Number(body.collisionFilterMask)
+				: null
+			const bodyCollisionResponse = typeof body.collisionResponse === 'boolean' ? body.collisionResponse : null
+			const bodyPosition = new THREE.Vector3(body.position.x, body.position.y, body.position.z)
+			const bodyQuaternion = new THREE.Quaternion(
+				body.quaternion.x,
+				body.quaternion.y,
+				body.quaternion.z,
+				body.quaternion.w,
+			).normalize()
+			const bodyQuaternionInverse = bodyQuaternion.clone().invert()
+			const shapes = Array.isArray((body as CANNON.Body & { shapes?: unknown[] }).shapes)
+				? (body as CANNON.Body & { shapes: unknown[] }).shapes
+				: []
+			const shapeOffsets = Array.isArray((body as CANNON.Body & { shapeOffsets?: unknown[] }).shapeOffsets)
+				? (body as CANNON.Body & { shapeOffsets: unknown[] }).shapeOffsets
+				: []
+			const shapeOrientations = Array.isArray((body as CANNON.Body & { shapeOrientations?: unknown[] }).shapeOrientations)
+				? (body as CANNON.Body & { shapeOrientations: unknown[] }).shapeOrientations
+				: []
+			for (let shapeIndex = 0; shapeIndex < shapes.length; shapeIndex += 1) {
+				const shape = shapes[shapeIndex]
+				const matrix = extractHeightfieldMatrix(shape)
+				if (!matrix) {
+					continue
+				}
+				const range = summarizeHeightfieldMatrix(matrix)
+				const elementSize = Number((shape as { elementSize?: unknown }).elementSize)
+				if (!Number.isFinite(elementSize) || elementSize <= 0) {
+					continue
+				}
+				const localPoint = worldPoint.clone().sub(bodyPosition).applyQuaternion(bodyQuaternionInverse.clone())
+				const shapeOffset = shapeOffsets[shapeIndex] as CANNON.Vec3 | undefined
+				if (shapeOffset) {
+					localPoint.sub(vec3LikeToThreeVector(shapeOffset, new THREE.Vector3()))
+				}
+				const shapeOrientation = shapeOrientations[shapeIndex] as CANNON.Quaternion | undefined
+				if (shapeOrientation) {
+					localPoint.applyQuaternion(new THREE.Quaternion(
+						shapeOrientation.x,
+						shapeOrientation.y,
+						shapeOrientation.z,
+						shapeOrientation.w,
+					).invert())
+				}
+				const matrixColumns = matrix.length
+				const matrixRows = matrix[0]?.length ?? 0
+				if (!matrixColumns || !matrixRows) {
+					continue
+				}
+				const column = Math.floor(localPoint.x / elementSize)
+				const primaryProjection = getPrimaryRoadHeightfieldProjection(localPoint, matrix, elementSize)
+				const row = primaryProjection.row
+				const insideBounds = primaryProjection.insideBounds
+				const centerHeight = primaryProjection.centerHeight
+				const heightWindow = insideBounds && Number.isInteger(column) && Number.isInteger(row)
+					? buildRoadHeightfieldHeightWindow(matrix, column, row)
+					: []
+				const axisChecks = [
+					buildRoadHeightfieldAxisProjection(localPoint, matrix, elementSize, 'xy'),
+					primaryProjection,
+				]
+				candidates.push({
+					roadNodeId,
+					roadBodyId: Number.isFinite(Number((body as { id?: unknown }).id)) ? Number((body as { id?: unknown }).id) : null,
+					roadBodyCollisionFilterGroup: bodyCollisionFilterGroup,
+					roadBodyCollisionFilterMask: bodyCollisionFilterMask,
+					roadBodyCollisionResponse: bodyCollisionResponse,
+					roadBodyShapeCount: Array.isArray(shapes) ? shapes.length : null,
+					shapeIndex,
+					elementSize,
+					matrixRows,
+					matrixColumns,
+					localPoint: [
+						roundDebugNumber(localPoint.x),
+						roundDebugNumber(localPoint.y),
+						roundDebugNumber(localPoint.z),
+					],
+					cell: Number.isFinite(column) && Number.isFinite(row) ? { column, row } : null,
+					centerHeight,
+					heightWindow,
+					bodyPosition: [
+						roundDebugNumber(bodyPosition.x),
+						roundDebugNumber(bodyPosition.y),
+						roundDebugNumber(bodyPosition.z),
+					],
+					bodyQuaternion: [
+						roundDebugNumber(bodyQuaternion.x),
+						roundDebugNumber(bodyQuaternion.y),
+						roundDebugNumber(bodyQuaternion.z),
+						roundDebugNumber(bodyQuaternion.w),
+					],
+					shapeQuaternion: shapeOrientation
+						? [
+							roundDebugNumber(shapeOrientation.x),
+							roundDebugNumber(shapeOrientation.y),
+							roundDebugNumber(shapeOrientation.z),
+							roundDebugNumber(shapeOrientation.w),
+						]
+						: null,
+					shapeOffset: shapeOffset
+						? [
+							roundDebugNumber(shapeOffset.x),
+							roundDebugNumber(shapeOffset.y),
+							roundDebugNumber(shapeOffset.z),
+						]
+						: [0, 0, 0],
+					minHeight: roundDebugNumber(range.min),
+					maxHeight: roundDebugNumber(range.max),
+					insideBounds,
+					axisChecks,
+				})
+			}
+		}
+	}
+	candidates.sort((left, right) => {
+		const leftDistance = new THREE.Vector3(left.bodyPosition[0], left.bodyPosition[1], left.bodyPosition[2]).distanceToSquared(worldPoint)
+		const rightDistance = new THREE.Vector3(right.bodyPosition[0], right.bodyPosition[1], right.bodyPosition[2]).distanceToSquared(worldPoint)
+		return leftDistance - rightDistance
+	})
+	return candidates
+}
+
+function collectActiveGroundCollisionRuntimeDebugSummary(): GroundCollisionRuntimeDebugSummary[] {
+	return previewInfiniteGroundChunkColliderRuntime.getDebugEntries().map((entry) => {
+		const body = (entry?.instance?.body ?? null) as CANNON.Body | null
+		return {
+			key: typeof entry?.runtimeKey === 'string' ? entry.runtimeKey : '',
+			bodyId: body && Number.isFinite(Number((body as { id?: unknown }).id))
+				? Number((body as { id?: unknown }).id)
+				: null,
+			position: body
+				? [
+					roundDebugNumber(body.position.x),
+					roundDebugNumber(body.position.y),
+					roundDebugNumber(body.position.z),
+				]
+				: null,
+		}
+	})
+}
+
 function tupleToThreeVector(tuple: WheelRayDebugVector | null | undefined, fallback = new THREE.Vector3()): THREE.Vector3 {
 	if (!tuple) {
 		return fallback.clone()
@@ -2749,6 +3220,507 @@ function tupleToThreeVector(tuple: WheelRayDebugVector | null | undefined, fallb
 	return new THREE.Vector3(x, y, z)
 }
 
+function roundDebugNumber(value: number, digits = 4): number {
+	if (!Number.isFinite(value)) {
+		return value
+	}
+	const factor = 10 ** digits
+	return Math.round(value * factor) / factor
+}
+
+function extractHeightfieldMatrix(shape: unknown): number[][] | null {
+	if (!shape || typeof shape !== 'object') {
+		return null
+	}
+	const candidate = shape as { data?: unknown; matrix?: unknown }
+	const matrix = Array.isArray(candidate.matrix)
+		? candidate.matrix
+		: Array.isArray(candidate.data)
+			? candidate.data
+			: null
+	if (!matrix || !matrix.length || !Array.isArray(matrix[0])) {
+		return null
+	}
+	if (!matrix.every((column) => Array.isArray(column))) {
+		return null
+	}
+	return matrix as number[][]
+}
+
+function vec3LikeToThreeVector(value: CANNON.Vec3 | THREE.Vector3 | null | undefined, fallback = new THREE.Vector3()): THREE.Vector3 {
+	if (!value) {
+		return fallback.clone()
+	}
+	const x = Number((value as CANNON.Vec3).x)
+	const y = Number((value as CANNON.Vec3).y)
+	const z = Number((value as CANNON.Vec3).z)
+	if (![x, y, z].every((entry) => Number.isFinite(entry))) {
+		return fallback.clone()
+	}
+	return new THREE.Vector3(x, y, z)
+}
+
+function resolveWheelRayWorldFallback(
+	chassisBody: CANNON.Body,
+	wheelInfo: Record<string, any>,
+): { rayFromWorld: THREE.Vector3; rayToWorld: THREE.Vector3 } {
+	const chassisPosition = new THREE.Vector3(chassisBody.position.x, chassisBody.position.y, chassisBody.position.z)
+	const chassisQuaternion = new THREE.Quaternion(
+		chassisBody.quaternion.x,
+		chassisBody.quaternion.y,
+		chassisBody.quaternion.z,
+		chassisBody.quaternion.w,
+	).normalize()
+	const localConnectionPoint = vec3LikeToThreeVector(wheelInfo?.chassisConnectionPointLocal ?? wheelInfo?.chassisConnectionPointWorld ?? null)
+	const localDirection = vec3LikeToThreeVector(wheelInfo?.directionLocal ?? null, new THREE.Vector3(0, -1, 0))
+	const rayFromWorld = localConnectionPoint.clone().applyQuaternion(chassisQuaternion).add(chassisPosition)
+	const rayDirectionWorld = localDirection.clone().applyQuaternion(chassisQuaternion)
+	if (rayDirectionWorld.lengthSq() < 1e-10) {
+		rayDirectionWorld.set(0, -1, 0)
+	} else {
+		rayDirectionWorld.normalize()
+	}
+	const suspensionRestLength = Number.isFinite(Number(wheelInfo?.suspensionRestLength))
+		? Math.max(0, Number(wheelInfo?.suspensionRestLength))
+		: 0.3
+	const radius = Number.isFinite(Number(wheelInfo?.radius)) ? Math.max(0, Number(wheelInfo?.radius)) : 0.25
+	const rayToWorld = rayFromWorld.clone().addScaledVector(rayDirectionWorld, suspensionRestLength + radius)
+	return { rayFromWorld, rayToWorld }
+}
+
+function collectRoadHeightfieldDebugWindows(worldPoint: THREE.Vector3): RoadHeightfieldDebugWindow[] {
+	return buildRoadHeightfieldCoverageCandidates(worldPoint)
+		.filter((candidate) => candidate.insideBounds)
+		.map((candidate) => ({
+			roadNodeId: candidate.roadNodeId,
+			roadBodyId: candidate.roadBodyId,
+			roadBodyCollisionFilterGroup: candidate.roadBodyCollisionFilterGroup,
+			roadBodyCollisionFilterMask: candidate.roadBodyCollisionFilterMask,
+			roadBodyCollisionResponse: candidate.roadBodyCollisionResponse,
+			roadBodyShapeCount: candidate.roadBodyShapeCount,
+			shapeIndex: candidate.shapeIndex,
+			elementSize: candidate.elementSize,
+			matrixRows: candidate.matrixRows,
+			matrixColumns: candidate.matrixColumns,
+			localPoint: candidate.localPoint,
+			cell: candidate.cell,
+			centerHeight: candidate.centerHeight,
+			heightWindow: candidate.heightWindow,
+			bodyPosition: candidate.bodyPosition,
+			bodyQuaternion: candidate.bodyQuaternion,
+			shapeQuaternion: candidate.shapeQuaternion,
+			shapeOffset: candidate.shapeOffset,
+			minHeight: candidate.minHeight,
+			maxHeight: candidate.maxHeight,
+		}))
+}
+
+function buildRoadHeightfieldDebugWindow(worldPoint: THREE.Vector3): RoadHeightfieldDebugWindow | null {
+	const coveredWindows = collectRoadHeightfieldDebugWindows(worldPoint)
+	if (coveredWindows.length > 0) {
+		return coveredWindows[0] ?? null
+	}
+	let best: RoadHeightfieldDebugWindow | null = null
+	let bestDistanceSq = Number.POSITIVE_INFINITY
+	for (const [roadNodeId, instance] of rigidbodyInstances.entries()) {
+		const roadNode = resolveNodeById(roadNodeId)
+		if (!roadNode || !isRoadDynamicMesh(roadNode.dynamicMesh)) {
+			continue
+		}
+		const roadBodies = Array.isArray(instance.bodies) && instance.bodies.length ? instance.bodies : [instance.body]
+		for (const roadBody of roadBodies) {
+			const body = roadBody as CANNON.Body
+			const bodyCollisionFilterGroup = Number.isFinite(Number(body.collisionFilterGroup))
+				? Number(body.collisionFilterGroup)
+				: null
+			const bodyCollisionFilterMask = Number.isFinite(Number(body.collisionFilterMask))
+				? Number(body.collisionFilterMask)
+				: null
+			const bodyCollisionResponse = typeof body.collisionResponse === 'boolean' ? body.collisionResponse : null
+			const bodyPosition = new THREE.Vector3(body.position.x, body.position.y, body.position.z)
+			const distanceSq = bodyPosition.distanceToSquared(worldPoint)
+			const bodyQuaternion = new THREE.Quaternion(
+				body.quaternion.x,
+				body.quaternion.y,
+				body.quaternion.z,
+				body.quaternion.w,
+			).normalize()
+			const bodyQuaternionInverse = bodyQuaternion.clone().invert()
+			const shapes = Array.isArray((body as CANNON.Body & { shapes?: unknown[] }).shapes)
+				? (body as CANNON.Body & { shapes: unknown[] }).shapes
+				: []
+			const shapeOffsets = Array.isArray((body as CANNON.Body & { shapeOffsets?: unknown[] }).shapeOffsets)
+				? (body as CANNON.Body & { shapeOffsets: unknown[] }).shapeOffsets
+				: []
+			const shapeOrientations = Array.isArray((body as CANNON.Body & { shapeOrientations?: unknown[] }).shapeOrientations)
+				? (body as CANNON.Body & { shapeOrientations: unknown[] }).shapeOrientations
+				: []
+			for (let shapeIndex = 0; shapeIndex < shapes.length; shapeIndex += 1) {
+				const shape = shapes[shapeIndex]
+				const matrix = extractHeightfieldMatrix(shape)
+				if (!matrix) {
+					continue
+				}
+				const range = summarizeHeightfieldMatrix(matrix)
+				const elementSize = Number((shape as { elementSize?: unknown }).elementSize)
+				if (!Number.isFinite(elementSize) || elementSize <= 0) {
+					continue
+				}
+				const localPoint = worldPoint.clone().sub(bodyPosition).applyQuaternion(bodyQuaternionInverse.clone())
+				const shapeOffset = shapeOffsets[shapeIndex] as CANNON.Vec3 | undefined
+				if (shapeOffset) {
+					localPoint.sub(vec3LikeToThreeVector(shapeOffset, new THREE.Vector3()))
+				}
+				const shapeOrientation = shapeOrientations[shapeIndex] as CANNON.Quaternion | undefined
+				if (shapeOrientation) {
+					localPoint.applyQuaternion(new THREE.Quaternion(
+						shapeOrientation.x,
+						shapeOrientation.y,
+						shapeOrientation.z,
+						shapeOrientation.w,
+					).invert())
+				}
+				const matrixColumns = matrix.length
+				const matrixRows = matrix[0]?.length ?? 0
+				if (!matrixColumns || !matrixRows) {
+					continue
+				}
+				const column = Math.floor(localPoint.x / elementSize)
+				const primaryProjection = getPrimaryRoadHeightfieldProjection(localPoint, matrix, elementSize)
+				const row = primaryProjection.row
+				const heightWindow = buildRoadHeightfieldHeightWindow(matrix, column, row)
+				const centerHeight = primaryProjection.centerHeight
+				const next: RoadHeightfieldDebugWindow = {
+					roadNodeId,
+					roadBodyId: Number.isFinite(Number((body as { id?: unknown }).id)) ? Number((body as { id?: unknown }).id) : null,
+					roadBodyName: typeof (body as { name?: unknown }).name === 'string' ? String((body as { name?: unknown }).name) : null,
+					roadBodyCollisionFilterGroup: bodyCollisionFilterGroup,
+					roadBodyCollisionFilterMask: bodyCollisionFilterMask,
+					roadBodyCollisionResponse: bodyCollisionResponse,
+					roadBodyShapeCount: Array.isArray(shapes) ? shapes.length : null,
+					shapeIndex,
+					elementSize,
+					matrixRows,
+					matrixColumns,
+					localPoint: [
+						roundDebugNumber(localPoint.x),
+						roundDebugNumber(localPoint.y),
+						roundDebugNumber(localPoint.z),
+					],
+					cell: Number.isFinite(column) && Number.isFinite(row) ? { column, row } : null,
+					centerHeight,
+					heightWindow,
+					bodyPosition: [
+						roundDebugNumber(bodyPosition.x),
+						roundDebugNumber(bodyPosition.y),
+						roundDebugNumber(bodyPosition.z),
+					],
+					bodyQuaternion: [
+						roundDebugNumber(bodyQuaternion.x),
+						roundDebugNumber(bodyQuaternion.y),
+						roundDebugNumber(bodyQuaternion.z),
+						roundDebugNumber(bodyQuaternion.w),
+					],
+					shapeQuaternion: shapeOrientation
+						? [
+							roundDebugNumber(shapeOrientation.x),
+							roundDebugNumber(shapeOrientation.y),
+							roundDebugNumber(shapeOrientation.z),
+							roundDebugNumber(shapeOrientation.w),
+						]
+						: null,
+					shapeOffset: shapeOffset
+						? [
+							roundDebugNumber(shapeOffset.x),
+							roundDebugNumber(shapeOffset.y),
+							roundDebugNumber(shapeOffset.z),
+						]
+						: [0, 0, 0],
+					minHeight: roundDebugNumber(range.min),
+					maxHeight: roundDebugNumber(range.max),
+				}
+				if (distanceSq < bestDistanceSq) {
+					bestDistanceSq = distanceSq
+					best = next
+				}
+			}
+		}
+	}
+	return best
+}
+
+function buildWheelMissRoadWindowLogPayload(
+	entry: VehicleWheelRayDebugEntry,
+	fallbackRay: { rayFromWorld: THREE.Vector3; rayToWorld: THREE.Vector3 },
+	roadWindow: RoadHeightfieldDebugWindow | null,
+	coveredRoadWindows: RoadHeightfieldDebugWindow[],
+	coverageCandidates: RoadHeightfieldCoverageWindow[],
+): Record<string, unknown> {
+	const activeGroundCollisionDebugEntries = collectActiveGroundCollisionRuntimeDebugSummary()
+	const summarizeCoverageCandidate = (candidate: RoadHeightfieldCoverageWindow) => ({
+		roadBodyId: candidate.roadBodyId,
+		roadBodyName: candidate.roadBodyName,
+		cell: candidate.cell,
+		insideBounds: candidate.insideBounds,
+		centerHeight: candidate.centerHeight,
+		axisChecks: candidate.axisChecks.map((axisCheck) => ({
+			axisPair: axisCheck.axisPair,
+			column: axisCheck.column,
+			row: axisCheck.row,
+			insideBounds: axisCheck.insideBounds,
+		})),
+	})
+	return {
+		vehicleNodeId: entry.vehicleNodeId,
+		wheelIndex: entry.wheelIndex,
+		wheelNodeId: entry.wheelNodeId,
+		isFrontWheel: entry.isFrontWheel,
+		isInContact: entry.isInContact,
+		radius: roundDebugNumber(entry.radius),
+		rayOriginY: roundDebugNumber(entry.rayFromWorld[1]),
+		rayEndY: roundDebugNumber(entry.rayToWorld[1]),
+		rayFromWorld: entry.rayFromWorld,
+		rayToWorld: entry.rayToWorld,
+		fallbackRayFromWorld: [
+			roundDebugNumber(fallbackRay.rayFromWorld.x),
+			roundDebugNumber(fallbackRay.rayFromWorld.y),
+			roundDebugNumber(fallbackRay.rayFromWorld.z),
+		],
+		fallbackRayToWorld: [
+			roundDebugNumber(fallbackRay.rayToWorld.x),
+			roundDebugNumber(fallbackRay.rayToWorld.y),
+			roundDebugNumber(fallbackRay.rayToWorld.z),
+		],
+		roadWindow: roadWindow ? summarizeRoadHeightfieldDebugWindow(roadWindow) : null,
+		coveredRoadWindowCount: coveredRoadWindows.length,
+		coveredRoadRoadBodyIds: coveredRoadWindows.map((window) => window.roadBodyId),
+		roadCoverageCandidates: coverageCandidates.map(summarizeCoverageCandidate),
+		roadCoverageCandidateCount: coverageCandidates.length,
+		activeGroundCollisionDebugEntryCount: activeGroundCollisionDebugEntries.length,
+	}
+}
+
+function drawWheelMissRoadWindow(
+	debugGroup: THREE.Group,
+	fallbackRay: { rayFromWorld: THREE.Vector3; rayToWorld: THREE.Vector3 },
+	roadWindow: RoadHeightfieldDebugWindow | null,
+): void {
+	const wheelMarker = new THREE.Mesh(wheelRayDebugHitGeometry, wheelRayDebugMaterialPalette.hit)
+	wheelMarker.position.copy(fallbackRay.rayFromWorld)
+	wheelMarker.scale.setScalar(0.18 * wheelRayDebugMarkerScale)
+	wheelMarker.name = 'wheel-ray-fallback-origin'
+	debugGroup.add(wheelMarker)
+
+	const rayLine = new THREE.Line(wheelRayDebugLineGeometry, wheelRayDebugMaterialPalette.miss)
+	const rayVector = fallbackRay.rayToWorld.clone().sub(fallbackRay.rayFromWorld)
+	const rayLength = rayVector.length()
+	if (rayLength > 1e-8) {
+		rayLine.position.copy(fallbackRay.rayFromWorld)
+		rayLine.scale.set(1, rayLength * wheelRayDebugLineScale, 1)
+		rayLine.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), rayVector.normalize())
+		rayLine.name = 'wheel-ray-fallback-ray'
+		debugGroup.add(rayLine)
+	}
+
+	if (!roadWindow) {
+		return
+	}
+
+	const width = Math.max(1e-3, roadWindow.matrixColumns * roadWindow.elementSize)
+	const depth = Math.max(1e-3, roadWindow.matrixRows * roadWindow.elementSize)
+	const bodyPosition = new THREE.Vector3(
+		roadWindow.bodyPosition[0],
+		roadWindow.bodyPosition[1],
+		roadWindow.bodyPosition[2],
+	)
+	const bodyQuaternion = new THREE.Quaternion(
+		roadWindow.bodyQuaternion[0],
+		roadWindow.bodyQuaternion[1],
+		roadWindow.bodyQuaternion[2],
+		roadWindow.bodyQuaternion[3],
+	).normalize()
+	const shapeOffset = new THREE.Vector3(
+		roadWindow.shapeOffset[0],
+		roadWindow.shapeOffset[1],
+		roadWindow.shapeOffset[2],
+	)
+	const heightCenter = (roadWindow.minHeight + roadWindow.maxHeight) * 0.5
+	const boundaryCenter = new THREE.Vector3(
+		shapeOffset.x + width * 0.5,
+		shapeOffset.y + depth * 0.5,
+		heightCenter,
+	)
+	const boundaryWorldCenter = boundaryCenter.clone().applyQuaternion(bodyQuaternion).add(bodyPosition)
+	const boundaryBox = new THREE.LineSegments(groundCollisionDebugBoxEdgesGeometry, wheelRayRoadBoundaryMaterial)
+	boundaryBox.position.copy(boundaryWorldCenter)
+	boundaryBox.quaternion.copy(bodyQuaternion)
+	boundaryBox.scale.set(
+		width * wheelRayRoadBoundaryScale,
+		depth * wheelRayRoadBoundaryScale,
+		Math.max(0.18, roadWindow.maxHeight - roadWindow.minHeight || 0.18),
+	)
+	boundaryBox.name = `wheel-ray-road-boundary:${roadWindow.roadNodeId}:${roadWindow.shapeIndex}`
+	debugGroup.add(boundaryBox)
+
+	const cellMarker = new THREE.Mesh(wheelRayDebugHitGeometry, wheelRayRoadCellMaterial)
+	if (roadWindow.cell) {
+		const cellCenterLocal = new THREE.Vector3(
+			shapeOffset.x + (roadWindow.cell.column + 0.5) * roadWindow.elementSize,
+			shapeOffset.y + (roadWindow.cell.row + 0.5) * roadWindow.elementSize,
+			roadWindow.centerHeight ?? heightCenter,
+		)
+		cellMarker.position.copy(cellCenterLocal.applyQuaternion(bodyQuaternion).add(bodyPosition))
+	} else {
+		cellMarker.position.copy(boundaryWorldCenter)
+	}
+	cellMarker.scale.setScalar(0.22 * wheelRayDebugMarkerScale)
+	cellMarker.name = `wheel-ray-road-cell:${roadWindow.roadNodeId}:${roadWindow.shapeIndex}`
+	debugGroup.add(cellMarker)
+
+	if (roadWindow.cell) {
+		const cellBox = new THREE.LineSegments(groundCollisionDebugBoxEdgesGeometry, wheelRayRoadActiveCellMaterial)
+		const cellCenterLocal = new THREE.Vector3(
+			shapeOffset.x + (roadWindow.cell.column + 0.5) * roadWindow.elementSize,
+			shapeOffset.y + (roadWindow.cell.row + 0.5) * roadWindow.elementSize,
+			roadWindow.centerHeight ?? heightCenter,
+		)
+		cellBox.position.copy(cellCenterLocal.applyQuaternion(bodyQuaternion).add(bodyPosition))
+		cellBox.quaternion.copy(bodyQuaternion)
+		cellBox.scale.set(
+			roadWindow.elementSize * wheelRayRoadActiveCellScale,
+			roadWindow.elementSize * wheelRayRoadActiveCellScale,
+			0.14,
+		)
+		cellBox.name = `wheel-ray-road-active-cell:${roadWindow.roadNodeId}:${roadWindow.shapeIndex}`
+		debugGroup.add(cellBox)
+	}
+
+	if (roadWindow.centerHeight !== null && roadWindow.cell) {
+		const cellHeightMarker = new THREE.Mesh(wheelRayDebugHitGeometry, wheelRayRoadCellMaterial)
+		const localPoint = new THREE.Vector3(
+			shapeOffset.x + (roadWindow.cell.column + 0.5) * roadWindow.elementSize,
+			shapeOffset.y + (roadWindow.cell.row + 0.5) * roadWindow.elementSize,
+			roadWindow.centerHeight,
+		)
+		cellHeightMarker.position.copy(localPoint.applyQuaternion(bodyQuaternion).add(bodyPosition))
+		cellHeightMarker.scale.setScalar(0.16 * wheelRayDebugMarkerScale)
+		cellHeightMarker.name = `wheel-ray-road-cell-height:${roadWindow.roadNodeId}:${roadWindow.shapeIndex}`
+		debugGroup.add(cellHeightMarker)
+	}
+}
+
+function logWheelMissRoadWindow(
+	entry: VehicleWheelRayDebugEntry,
+	fallbackRay: { rayFromWorld: THREE.Vector3; rayToWorld: THREE.Vector3 },
+	roadWindow: RoadHeightfieldDebugWindow | null,
+	coveredRoadWindows: RoadHeightfieldDebugWindow[],
+	coverageCandidates: RoadHeightfieldCoverageWindow[],
+): void {
+	if (wheelRayHeightfieldDebugLogCount >= WHEEL_RAY_HEIGHTFIELD_DEBUG_LOG_LIMIT) {
+		return
+	}
+	const logPayload = buildWheelMissRoadWindowLogPayload(entry, fallbackRay, roadWindow, coveredRoadWindows, coverageCandidates)
+	const logKey = stringifyDebugValue(logPayload)
+	if (logKey === wheelRayHeightfieldDebugLastLogKey) {
+		return
+	}
+	wheelRayHeightfieldDebugLastLogKey = logKey
+	wheelRayHeightfieldDebugLogCount += 1
+	console.info('[ScenePreview][WheelRayRoadWindow]', logKey)
+}
+
+function buildWheelRaycastResultDebugLog(
+	entry: VehicleWheelRayDebugEntry,
+	raycastResult: Record<string, any> | null,
+): WheelRaycastResultDebugLog {
+	const result = raycastResult ?? {}
+	const body = (result.body ?? null) as Record<string, any> | null
+	const hasHit = typeof result.hasHit === 'boolean' ? result.hasHit : null
+	const distance = Number.isFinite(Number(result.distance)) ? roundDebugNumber(Number(result.distance)) : null
+	const bodyId = body && Number.isFinite(Number(body.id)) ? Number(body.id) : null
+	const bodyType = body && Number.isFinite(Number(body.type)) ? Number(body.type) : null
+	return {
+		vehicleNodeId: entry.vehicleNodeId,
+		wheelIndex: entry.wheelIndex,
+		wheelNodeId: entry.wheelNodeId,
+		isFrontWheel: entry.isFrontWheel,
+		isInContact: entry.isInContact,
+		hasHit,
+		distance,
+		bodyId,
+		bodyType,
+		rayFromWorld: entry.rayFromWorld,
+		rayToWorld: entry.rayToWorld,
+		hitPointWorld: entry.hitPointWorld,
+		hitNormalWorld: entry.hitNormalWorld,
+	}
+}
+
+function logWheelRaycastResultDebug(
+	entry: VehicleWheelRayDebugEntry,
+	raycastResult: Record<string, any> | null,
+): void {
+	if (wheelRayRaycastResultDebugLogCount >= WHEEL_RAY_RAYCAST_RESULT_LOG_LIMIT) {
+		return
+	}
+	const logPayload = buildWheelRaycastResultDebugLog(entry, raycastResult)
+	const logKey = stringifyDebugValue(logPayload)
+	if (logKey === wheelRayRaycastResultDebugLastLogKey) {
+		return
+	}
+	wheelRayRaycastResultDebugLastLogKey = logKey
+	wheelRayRaycastResultDebugLogCount += 1
+	console.info('[ScenePreview][WheelRaycastResult]', logKey)
+}
+
+function buildWheelMissSummaryDebugLog(entry: VehicleWheelRayDebugEntry): WheelRayMissSummaryDebugLog {
+	const rayOriginY = entry.rayFromWorld?.[1] ?? null
+	const rayEndY = entry.rayToWorld?.[1] ?? null
+	const rayLength = entry.rayFromWorld && entry.rayToWorld
+		? roundDebugNumber(new THREE.Vector3(
+			entry.rayToWorld[0] - entry.rayFromWorld[0],
+			entry.rayToWorld[1] - entry.rayFromWorld[1],
+			entry.rayToWorld[2] - entry.rayFromWorld[2],
+		).length())
+		: null
+	return {
+		vehicleNodeId: entry.vehicleNodeId,
+		wheelIndex: entry.wheelIndex,
+		wheelNodeId: entry.wheelNodeId,
+		isFrontWheel: entry.isFrontWheel,
+		rayLength,
+		rayOriginY,
+		rayEndY,
+		directionWorld: entry.directionWorld,
+		chassisAabbMinY: entry.chassisAabbMinY,
+		chassisBodyPosition: entry.chassisBodyPosition,
+		chassisBodyQuaternion: entry.chassisBodyQuaternion,
+		wheelConnectionPointAboveChassisMinY: entry.wheelConnectionPointAboveChassisMinY,
+		chassisConnectionPointWorld: entry.chassisConnectionPointWorld,
+		wheelVisualWorldPosition: entry.wheelVisualWorldPosition,
+		wheelVisualWorldQuaternion: entry.wheelVisualWorldQuaternion,
+		rayToWorldAboveChassisMinY: entry.rayToWorldAboveChassisMinY,
+		suspensionLength: entry.suspensionLength,
+		suspensionRestLength: entry.suspensionRestLength,
+		compression: entry.compression,
+		maxSuspensionTravel: entry.maxSuspensionTravel,
+	}
+}
+
+function logWheelMissSummaryDebug(entry: VehicleWheelRayDebugEntry): void {
+	if (wheelRayMissSummaryDebugLogCount >= WHEEL_RAY_MISS_SUMMARY_LOG_LIMIT) {
+		return
+	}
+	const logPayload = buildWheelMissSummaryDebugLog(entry)
+	const logKey = stringifyDebugValue(logPayload)
+	if (logKey === wheelRayMissSummaryDebugLastLogKey) {
+		return
+	}
+	wheelRayMissSummaryDebugLastLogKey = logKey
+	wheelRayMissSummaryDebugLogCount += 1
+	console.info('[ScenePreview][WheelRayMiss]', logKey)
+}
+
 function syncWheelRayDebugVisualization(entries: VehicleWheelRayDebugEntry[]): void {
 	const debugGroup = wheelRayDebugGroup
 	if (!scene || !debugGroup) {
@@ -2756,16 +3728,27 @@ function syncWheelRayDebugVisualization(entries: VehicleWheelRayDebugEntry[]): v
 	}
 	debugGroup.clear()
 	const logKey = stringifyDebugValue(entries)
-	if (logKey !== wheelRayDebugLastLogKey) {
+	if (logKey !== wheelRayDebugLastLogKey && wheelRayDebugLogCount < WHEEL_RAY_DEBUG_LOG_LIMIT) {
 		wheelRayDebugLastLogKey = logKey
+		wheelRayDebugLogCount += 1
 		console.info('[ScenePreview][WheelRayDebug]', logKey)
 	}
 
 	entries.forEach((entry) => {
-		const hitPoint = tupleToThreeVector(entry.hitPointWorld)
+		const wheelInstance = vehicleInstances.get(entry.vehicleNodeId) ?? null
+		const wheelInfo = wheelInstance?.vehicle?.wheelInfos?.[entry.wheelIndex] ?? null
+		const fallbackRay = wheelInstance?.vehicle?.chassisBody && wheelInfo
+			? resolveWheelRayWorldFallback(wheelInstance.vehicle.chassisBody, wheelInfo)
+			: null
+		const roadCoverageCandidates = fallbackRay ? buildRoadHeightfieldCoverageCandidates(fallbackRay.rayFromWorld) : []
+		const coveredRoadWindows = roadCoverageCandidates
+			.filter((candidate) => candidate.insideBounds)
+			.map((candidate) => candidate as RoadHeightfieldDebugWindow)
+		const roadWindow = coveredRoadWindows[0] ?? (fallbackRay ? buildRoadHeightfieldDebugWindow(fallbackRay.rayFromWorld) : null)
+		const hitPoint = tupleToThreeVector(entry.hitPointWorld, fallbackRay?.rayToWorld ?? new THREE.Vector3())
 		const normal = tupleToThreeVector(entry.hitNormalWorld, new THREE.Vector3(0, 1, 0))
-		const rayFrom = tupleToThreeVector(entry.rayFromWorld, hitPoint)
-		const rayTo = tupleToThreeVector(entry.rayToWorld, hitPoint)
+		const rayFrom = tupleToThreeVector(entry.rayFromWorld, fallbackRay?.rayFromWorld ?? hitPoint)
+		const rayTo = tupleToThreeVector(entry.rayToWorld, fallbackRay?.rayToWorld ?? hitPoint)
 		const hitSphere = new THREE.Mesh(wheelRayDebugHitGeometry, wheelRayDebugMaterialPalette.hit)
 		hitSphere.position.copy(hitPoint)
 		const hitScale = entry.isInContact ? 1 : 0.7
@@ -2806,6 +3789,12 @@ function syncWheelRayDebugVisualization(entries: VehicleWheelRayDebugEntry[]): v
 			normalLine.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), normalVector.normalize())
 			normalLine.name = `wheel-ray-normal:${entry.vehicleNodeId}:${entry.wheelIndex}`
 			debugGroup.add(normalLine)
+		}
+		if (!entry.isInContact) {
+			if (fallbackRay) {
+				drawWheelMissRoadWindow(debugGroup, fallbackRay, roadWindow)
+				logWheelMissRoadWindow(entry, fallbackRay, roadWindow, coveredRoadWindows, roadCoverageCandidates)
+			}
 		}
 	})
 }
@@ -10382,7 +11371,6 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	// dispose cannon-es-debugger visualizer as well
 	disposeCannonDebugger()
 	disposeGroundCollisionDebugVisualization()
-	disposeWheelRayDebugVisualization()
 	hidePurposeControls()
 	activeCameraLookTween = null
 	setCameraCaging(false)
@@ -11561,6 +12549,22 @@ function ensureRoadRigidbodyInstance(
 		}
 		return
 	}
+	const roadBodies = Array.isArray(result.instance.bodies) && result.instance.bodies.length
+		? result.instance.bodies
+		: [result.instance.body]
+	for (const roadBody of roadBodies) {
+		if (!roadBody || roadBody.world === world) {
+			continue
+		}
+		if (roadBody.world && roadBody.world !== world) {
+			try {
+				roadBody.world.removeBody(roadBody)
+			} catch (error) {
+				console.warn('[ScenePreview] Failed to detach road body from previous world', error)
+			}
+		}
+		world.addBody(roadBody)
+	}
 	// Ensure the instance map is up-to-date for both reuse and replacement cases.
 	rigidbodyInstances.set(node.id, result.instance)
 }
@@ -11725,16 +12729,24 @@ function createVehicleInstance(
 			axis.copy(defaultWheelAxisVector)
 		}
 		axis.normalize()
+		const testPoint = point.clone()
+		testPoint.y -= WHEEL_RAY_TEST_CONNECTION_POINT_DROP
+		const suspensionRestLength = Number.isFinite(config.suspensionRestLength)
+			? Math.max(0, config.suspensionRestLength + WHEEL_RAY_TEST_SUSPENSION_LENGTH_BOOST)
+			: undefined
+		const maxSuspensionTravel = Number.isFinite(config.maxSuspensionTravel)
+			? Math.max(0, config.maxSuspensionTravel + WHEEL_RAY_TEST_SUSPENSION_LENGTH_BOOST)
+			: undefined
 		vehicle.addWheel({
-			chassisConnectionPointLocal: point.clone(),
+			chassisConnectionPointLocal: testPoint,
 			directionLocal: direction.clone(),
 			axleLocal: axle.clone(),
-			suspensionRestLength: Number.isFinite(config.suspensionRestLength) ? Math.max(0, config.suspensionRestLength) : undefined,
+			suspensionRestLength,
 			suspensionStiffness: Number.isFinite(config.suspensionStiffness) ? Math.max(0, config.suspensionStiffness) : undefined,
 			dampingRelaxation: Number.isFinite(config.dampingRelaxation) ? Math.max(0, config.dampingRelaxation) : undefined,
 			dampingCompression: Number.isFinite(config.dampingCompression) ? Math.max(0, config.dampingCompression) : undefined,
 			frictionSlip: Number.isFinite(config.frictionSlip) ? Math.max(0, config.frictionSlip) : undefined,
-			maxSuspensionTravel: Number.isFinite(config.maxSuspensionTravel) ? Math.max(0, config.maxSuspensionTravel) : undefined,
+			maxSuspensionTravel,
 			maxSuspensionForce: Number.isFinite(config.maxSuspensionForce) ? Math.max(0, config.maxSuspensionForce) : undefined,
 			rollInfluence: Number.isFinite(config.rollInfluence) ? config.rollInfluence : 0.01,
 			radius: Number.isFinite(config.radius) ? Math.max(config.radius, VEHICLE_WHEEL_MIN_RADIUS) : VEHICLE_WHEEL_MIN_RADIUS,
@@ -12174,6 +13186,7 @@ function updateVehicleWheelVisuals(delta: number): void {
 		if (!chassisBody) {
 			return
 		}
+		const chassisAabbY = readBodyWorldAabbY(chassisBody)
 		if (!scenePreviewPerf.shouldUpdateWheelVisuals({ nodeId, body: chassisBody as CANNON.Body, manualActive, tourActive, nowMs })) {
 			return
 		}
@@ -12292,24 +13305,36 @@ function updateVehicleWheelVisuals(delta: number): void {
 
 			const wheelInfo = wheelInfos[binding.wheelIndex] ?? null
 			const raycastResult = (wheelInfo?.raycastResult ?? null) as Record<string, any> | null
-			const rayFromWorld = vec3ToTuple(
-				(raycastResult?.rayFromWorld as CANNON.Vec3 | null | undefined)
-					?? (wheelInfo?.chassisConnectionPointWorld as CANNON.Vec3 | null | undefined)
-					?? null,
-			)
+			const wheelInContact = Boolean(wheelInfo?.isInContact ?? raycastResult?.hasHit)
+			const chassisBodyPosition = vec3ToTuple(chassisBody.position)
+			const chassisBodyQuaternion: QuatTuple = [
+				roundDebugNumber(chassisBody.quaternion.x),
+				roundDebugNumber(chassisBody.quaternion.y),
+				roundDebugNumber(chassisBody.quaternion.z),
+				roundDebugNumber(chassisBody.quaternion.w),
+			]
+			const chassisConnectionPointLocal = vec3ToTuple((wheelInfo?.chassisConnectionPointLocal as CANNON.Vec3 | null | undefined) ?? null)
 			const directionWorld = vec3ToTuple((wheelInfo?.directionWorld as CANNON.Vec3 | null | undefined) ?? null)
-			const rayToWorld = vec3ToTuple(
-				(raycastResult?.rayToWorld as CANNON.Vec3 | null | undefined)
-					?? (rayFromWorld && directionWorld
-						? new CANNON.Vec3(
-							rayFromWorld[0] + directionWorld[0] * ((Number(wheelInfo?.suspensionRestLength) || 0) + binding.radius),
-							rayFromWorld[1] + directionWorld[1] * ((Number(wheelInfo?.suspensionRestLength) || 0) + binding.radius),
-							rayFromWorld[2] + directionWorld[2] * ((Number(wheelInfo?.suspensionRestLength) || 0) + binding.radius),
-						)
-						: null),
-			)
-			const hitPointWorld = vec3ToTuple((raycastResult?.hitPointWorld as CANNON.Vec3 | null | undefined) ?? null)
-			const hitNormalWorld = vec3ToTuple((raycastResult?.hitNormalWorld as CANNON.Vec3 | null | undefined) ?? null)
+			const directionLocal = vec3ToTuple((wheelInfo?.directionLocal as CANNON.Vec3 | null | undefined) ?? null)
+			const wheelConnectionPointWorld = vec3ToTuple((wheelInfo?.chassisConnectionPointWorld as CANNON.Vec3 | null | undefined) ?? null)
+			const wheelVisualWorldPosition = sceneStackVec3ToTuple(wheelObject.getWorldPosition(new THREE.Vector3()))
+			const wheelVisualWorldQuaternion = sceneStackQuatToTuple(wheelObject.getWorldQuaternion(new THREE.Quaternion()))
+			const rawRayFromWorld = vec3ToTuple((raycastResult?.rayFromWorld as CANNON.Vec3 | null | undefined) ?? null)
+			const rawRayToWorld = vec3ToTuple((raycastResult?.rayToWorld as CANNON.Vec3 | null | undefined) ?? null)
+			const rawHitPointWorld = vec3ToTuple((raycastResult?.hitPointWorld as CANNON.Vec3 | null | undefined) ?? null)
+			const rawHitNormalWorld = vec3ToTuple((raycastResult?.hitNormalWorld as CANNON.Vec3 | null | undefined) ?? null)
+			const rayLength = (Number(wheelInfo?.suspensionRestLength) || 0) + binding.radius
+			const computedRayToWorld = addScaledWheelRayDebugVector(wheelConnectionPointWorld, directionWorld, rayLength)
+			const rayFromWorld = wheelConnectionPointWorld
+				?? (!isWheelRayDebugVectorNearZero(rawRayFromWorld) ? rawRayFromWorld : null)
+			const rayToWorld = computedRayToWorld
+				?? (!isWheelRayDebugVectorNearZero(rawRayToWorld) ? rawRayToWorld : null)
+			const hitPointWorld = wheelInContact && !isWheelRayDebugVectorNearZero(rawHitPointWorld)
+				? rawHitPointWorld
+				: rayToWorld
+			const hitNormalWorld = wheelInContact && !isWheelRayDebugVectorNearZero(rawHitNormalWorld)
+				? rawHitNormalWorld
+				: (directionWorld ? [-directionWorld[0], -directionWorld[1], -directionWorld[2]] as WheelRayDebugVector : null)
 			const suspensionLength = Number.isFinite(Number(wheelInfo?.suspensionLength)) ? Number(wheelInfo?.suspensionLength) : null
 			const suspensionRestLength = Number.isFinite(Number(wheelInfo?.suspensionRestLength))
 				? Number(wheelInfo?.suspensionRestLength)
@@ -12319,21 +13344,47 @@ function updateVehicleWheelVisuals(delta: number): void {
 			const compression = suspensionLength !== null && suspensionRestLength !== null
 				? Math.max(0, suspensionRestLength - suspensionLength)
 				: null
-			wheelRayDebugEntries.push({
+			const wheelConnectionPointAboveChassisMinY = chassisAabbY && wheelConnectionPointWorld
+				? roundDebugNumber(wheelConnectionPointWorld[1] - chassisAabbY.minY)
+				: null
+			const rayToWorldAboveChassisMinY = chassisAabbY && rayToWorld
+				? roundDebugNumber(rayToWorld[1] - chassisAabbY.minY)
+				: null
+			const entry: VehicleWheelRayDebugEntry = {
 				vehicleNodeId: nodeId ?? '',
 				wheelIndex: binding.wheelIndex,
 				wheelNodeId: binding.nodeId,
 				isFrontWheel: binding.isFrontWheel,
-				isInContact: Boolean(wheelInfo?.isInContact ?? raycastResult?.hasHit),
+				isInContact: wheelInContact,
 				radius: binding.radius,
+				chassisAabbMinY: chassisAabbY ? roundDebugNumber(chassisAabbY.minY) : null,
+				chassisAabbMaxY: chassisAabbY ? roundDebugNumber(chassisAabbY.maxY) : null,
+				chassisBodyPosition,
+				chassisBodyQuaternion,
+				wheelConnectionPointAboveChassisMinY,
+				rayToWorldAboveChassisMinY,
+				chassisConnectionPointLocal,
+				chassisConnectionPointWorld: wheelConnectionPointWorld,
+				wheelVisualWorldPosition,
+				wheelVisualWorldQuaternion,
+				directionLocal,
+				directionWorld,
+				maxSuspensionTravel: Number.isFinite(Number(wheelInfo?.maxSuspensionTravel))
+					? Number(wheelInfo?.maxSuspensionTravel)
+					: null,
 				rayFromWorld,
 				rayToWorld,
-				hitPointWorld: hitPointWorld ?? rayToWorld,
+				hitPointWorld,
 				hitNormalWorld,
 				suspensionLength,
 				suspensionRestLength,
 				compression,
-			})
+			}
+			wheelRayDebugEntries.push(entry)
+			if (!wheelInContact) {
+				logWheelRaycastResultDebug(entry, raycastResult)
+				logWheelMissSummaryDebug(entry)
+			}
 		})
 	})
 	syncWheelRayDebugVisualization(wheelRayDebugEntries)
