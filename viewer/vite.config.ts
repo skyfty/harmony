@@ -50,6 +50,10 @@ function resolveAssetFileName(assetInfo: { name?: string }): string | undefined 
 }
 
 export default {
+  define: {
+    'import.meta.env.VITE_SCENERY_ENABLE_GLTF_DRACO': JSON.stringify('false'),
+    'import.meta.env.VITE_SCENERY_ENABLE_GLTF_KTX2': JSON.stringify('false'),
+  },
   optimizeDeps: {
     exclude: ['@minisheep/three-platform-adapter'],
     esbuildOptions: {
