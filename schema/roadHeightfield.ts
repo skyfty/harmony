@@ -24,7 +24,6 @@ export type RoadHeightfieldTileDescriptor = {
 export type RoadHeightfieldBuildSnapshot = {
 	surfaceNode: SceneNode
 	tiles: RoadHeightfieldTileDescriptor[]
-	heightHash: number
 	layoutHash: number
 	roadWidth: number
 	collisionWidth: number
@@ -83,14 +82,11 @@ export function collectRoadHeightfieldTileDescriptors(params: RoadHeightfieldBui
 	const minClearance = roadProps.minClearance ?? 0.01
 	const junctionSmoothing = roadProps.junctionSmoothing ?? 0
 
-	// 浠庨亾璺畾涔夋瀯寤烘嫇鎵戝浘锛堥《鐐广€佽矾寰勭瓑锛夛紝鐢ㄤ簬鍚庣画鐢熸垚鏇茬嚎涓庡瓙娈?
 	const graph = buildRoadGraph(definition)
 	if (!graph) {
 		return null
 	}
 
-	// 濡傛灉瀛樺湪鎸夋搴忓垪鍖栫殑楂樺害锛坰egmentHeights锛夛紝鍒欐瀯寤哄熀浜庢鐨勯珮搴﹂噰鏍峰櫒锛?
-	// 鍚庣画鏇茬嚎閲囨牱灏嗕娇鐢ㄨ閲囨牱鍣紱鍚﹀垯鍦ㄩ渶瑕佹椂鍥為€€鍒板湴褰㈤噰鏍锋垨闆堕珮搴︺€?
 	let serializedSampler: ((x: number, z: number) => number) | null = null
 	if (Array.isArray((definition as any).segmentHeights) && Array.isArray(definition.segments)) {
 		const rawSegments = Array.isArray(definition.segments) ? definition.segments : []
@@ -107,15 +103,11 @@ export function collectRoadHeightfieldTileDescriptors(params: RoadHeightfieldBui
 		serializedSampler = createSegmentHeightSampler(tmpBuild, (definition as any).segmentHeights)
 	}
 
-	// 鍐冲畾閬撹矾琛ㄩ潰楂樺害閲囨牱鍣細浼樺厛浣跨敤搴忓垪鍖栫殑 segment sampler锛?
-	// 鍏舵鏍规嵁灞炴€ч€夋嫨鏄惁璐村悎鍦板舰锛坰napToTerrain锛夛紝鏈€鍚庡洖閫€鍒板父閲?0銆?
 	const roadSurfaceHeightSampler = serializedSampler
 	if (!roadSurfaceHeightSampler) {
-		// 鑻ユ病鏈夊彲鐢ㄧ殑楂樺害閲囨牱鍣紝鍒欐棤娉曠户缁?
 		return null
 	}
 
-	// 澶勭悊杈圭晫澧欑粍浠讹紙濡傛灉瀛樺湪涓斿惎鐢級锛屽苟鍦?surfaceNode 涓Щ闄よ竟鐣屽缁勪欢浠ヤ究鐢熸垚鍔熻兘鎬х鎾炰綋鏃朵笉鍙楀叾褰卞搷
 	const boundaryWallComponent = roadNode.components?.[BOUNDARY_WALL_COMPONENT_TYPE] as
 		| SceneNodeComponentState<BoundaryWallComponentProps>
 		| undefined
@@ -126,13 +118,11 @@ export function collectRoadHeightfieldTileDescriptors(params: RoadHeightfieldBui
 	const surfaceNode = boundaryWallEnabled
 		? {
 			...roadNode,
-			// 浠?surfaceNode 涓Щ闄よ竟鐣屽缁勪欢锛屼繚鎸佸悗缁洸绾?楂樺害閲囨牱浠呬互閬撹矾涓讳綋涓哄噯
 			components: Object.fromEntries(
 				Object.entries(roadNode.components ?? {}).filter(([type]) => type !== BOUNDARY_WALL_COMPONENT_TYPE),
 			),
 		}
 		: roadNode
-	// 鍩轰簬鎷撴墤鍥炬瀯寤洪亾璺洸绾匡紙甯︿氦鍙夊彛骞虫粦澶勭悊锛夛紝杩欎簺鏇茬嚎灏嗙敤浜庣粏鍒嗕笌纰版挒鐢熸垚
 	const curves = buildRoadCurvesFromGraph(junctionSmoothing, graph)
 	if (!curves.length) {
 		return null
@@ -148,13 +138,11 @@ export function collectRoadHeightfieldTileDescriptors(params: RoadHeightfieldBui
 
 	let totalBodies = 0
 	const tiles: RoadHeightfieldTileDescriptor[] = []
-	let signatureHash = 0
 	let layoutHash = 0
 	let representativeDesiredTileLength = desiredTileLength
 	let representativeElementSize = Math.max(1e-4, desiredTileLength / ROAD_HEIGHTFIELD_MAX_ROWS)
 
 	let curveIndex = 0
-	// 閬嶅巻姣忔潯鏇茬嚎锛岀粏鍒嗕负瀛愭骞朵负姣忎釜瀛愭鐢熸垚纰版挒鍒囩墖
 	for (const descriptor of curves) {
 		if (totalBodies >= maxBodies) {
 			break
@@ -171,14 +159,12 @@ export function collectRoadHeightfieldTileDescriptors(params: RoadHeightfieldBui
 				segmentIndex += 1
 				continue
 			}
-			// 璇勪及璇ュ瓙娈电殑鍑犱綍缁嗚妭绋嬪害锛岀敤浜庣‘瀹氬悗缁垎杈ㄧ巼涓庣摝鐗囧昂瀵?
 			const geometryDetail = computeCurveGeometryDetailScore(segment, length)
 			const divisions = computeRoadDivisionsForCurve(segment, length, samplingDensityFactor, junctionSmoothing, geometryDetail)
 			if (divisions < 2) {
 				segmentIndex += 1
 				continue
 			}
-			// 鏋勫缓涓績绾块珮搴﹀簭鍒楋細瀵归噰鏍烽珮搴﹁繘琛屾渶灏忓噣绌恒€佸钩婊戝鐞嗙瓑锛屼緵纰版挒鐢熸垚浣跨敤
 			const smoothedHeights = buildRoadCenterlineHeightSeries({
 				curve: segment,
 				divisions,
@@ -212,19 +198,13 @@ export function collectRoadHeightfieldTileDescriptors(params: RoadHeightfieldBui
 			layoutHash = (layoutHash * 31 + targetRows) >>> 0
 			layoutHash = (layoutHash * 31 + Math.round(desiredTileLengthForCurve * 1000)) >>> 0
 			layoutHash = (layoutHash * 31 + Math.round(elementSize * 1000)) >>> 0
-			smoothedHeights.forEach((value) => {
-				const normalized = Math.round((Number.isFinite(value) ? value : 0) * 1000)
-				signatureHash = (signatureHash * 31 + normalized) >>> 0
-			})
 
-			// 灏嗗瓙娈靛垎瑙ｄ负鑻ュ共纰版挒鍖洪棿锛坰pan锛夛紝姣忎釜 span 鍙兘浣跨敤 box 鎴?heightfield
 			const spans = collectRoadCollisionSpans(segment, divisions, smoothedHeights)
 			const spanP0 = new THREE.Vector3()
 			const spanP1 = new THREE.Vector3()
 			const spanForward = new THREE.Vector3()
 			const spanCenter = new THREE.Vector3()
 			let tileIndex = 0
-			// 閬嶅巻姣忎釜纰版挒鍖洪棿骞剁敓鎴愬搴旂殑鍒囩墖鎻忚堪锛坆ox 鎴?heightfield锛?
 			for (const span of spans) {
 				if (totalBodies >= maxBodies) {
 					break
@@ -251,7 +231,7 @@ export function collectRoadHeightfieldTileDescriptors(params: RoadHeightfieldBui
 				layoutHash = (layoutHash * 31 + span.startIndex) >>> 0
 				layoutHash = (layoutHash * 31 + span.endIndex) >>> 0
 				layoutHash = (layoutHash * 31 + (span.kind === 'box' ? 1 : 2)) >>> 0
-				// 瀵逛簬 box 绫诲瀷鐨?span锛屼娇鐢ㄧ煩褰㈡澘鍧楄繎浼煎苟璁＄畻鍏朵腑蹇冮珮搴︿笌鍗婇珮閲?
+
 				if (span.kind === 'box') {
 					const spanHeights = smoothedHeights.slice(span.startIndex, span.endIndex + 1)
 					const boxOverlapMeters = Math.min(
@@ -279,7 +259,6 @@ export function collectRoadHeightfieldTileDescriptors(params: RoadHeightfieldBui
 						yaw,
 						shapeDefinition: boxShape,
 					})
-				// 瀵逛簬 heightfield 绫诲瀷鐨?span锛屽熀浜庣粰瀹氱殑楂樺害搴忓垪鏋勫缓楂樺害鍦哄舰鐘?
 				} else {
 					const rows = Math.max(2, Math.ceil(spanLength / elementSize))
 					const fieldShape = buildHeightfieldShapeFromSeries({
@@ -287,7 +266,6 @@ export function collectRoadHeightfieldTileDescriptors(params: RoadHeightfieldBui
 						endIndex: span.endIndex,
 						spanLength,
 						rows,
-						elementSize,
 						roadWidth: collisionWidth,
 						heights: smoothedHeights,
 					})
@@ -319,7 +297,6 @@ export function collectRoadHeightfieldTileDescriptors(params: RoadHeightfieldBui
 	return {
 		surfaceNode,
 		tiles,
-		heightHash: signatureHash,
 		layoutHash,
 		roadWidth,
 		collisionWidth,
@@ -394,7 +371,6 @@ export function buildRoadHeightfieldBodies(params: RoadHeightfieldBuildParams): 
 		elementSize: snapshot.elementSize,
 		desiredTileLength: snapshot.desiredTileLength,
 		bodyCount: bodies.length,
-		heightHash: snapshot.heightHash,
 		layoutHash: snapshot.layoutHash,
 		boundaryWallEnabled: snapshot.boundaryWallEnabled,
 		boundaryWallProps: snapshot.boundaryWallProps,
@@ -405,56 +381,29 @@ export function buildRoadHeightfieldBodies(params: RoadHeightfieldBuildParams): 
 
 
 const ROAD_SURFACE_Y_OFFSET = 0.01
-// 璺潰鐩稿叧璁＄畻鐨勬瀬灏忚宸€?
 const ROAD_EPSILON = 1e-6
-// 璺鏈€灏忓垎娈垫暟锛屼繚璇佸嚑浣曠簿搴?
 const ROAD_MIN_DIVISIONS = 4
-// 璺鏈€澶у垎娈垫暟锛岄槻姝㈣繃搴︾粏鍒?
 const ROAD_MAX_DIVISIONS = 256
-// 璺鍒嗘瀵嗗害锛屽崟浣嶉暱搴﹀唴鐨勫垎娈垫暟
 const ROAD_DIVISION_DENSITY = 8
 
-// 璺潰楂樺害骞虫粦鐨勬渶灏忚凯浠ｆ鏁?
 const ROAD_HEIGHT_SMOOTHING_MIN_PASSES = 3
-// 璺潰楂樺害骞虫粦鐨勬渶澶ц凯浠ｆ鏁?
 const ROAD_HEIGHT_SMOOTHING_MAX_PASSES = 12
 
-// 璺潰鏈€澶у潯搴︼紙鏂滅巼锛夛紝闃叉杩囬櫋
 const ROAD_HEIGHT_SLOPE_MAX_GRADE = 0.8
-// 璺潰楂樺害鍙樺寲鐨勬渶灏忛槇鍊硷紙绫筹級锛岀敤浜庡潯搴﹀垽鏂?
 const ROAD_HEIGHT_SLOPE_MIN_DELTA_Y = 0.03
-// 璺潰纰版挒鐡︾墖閲嶅彔闀垮害锛堢背锛夛紝鐢ㄤ簬纰版挒妫€娴嬭繛缁€?
-// 楂樼▼鍦烘渶灏忚鏁帮紝淇濊瘉鍒嗚鲸鐜囷紙闄嶄綆瀵嗗害锛?
 const ROAD_HEIGHTFIELD_MIN_ROWS = 2
-// 楂樼▼鍦烘渶澶ц鏁帮紝闃叉鍐呭瓨婧㈠嚭锛堥檷浣庡瘑搴︼級
 const ROAD_HEIGHTFIELD_MAX_ROWS = 10
 // Debug/test-only sizing for a large centered heightmap.
-const ROAD_HEIGHTFIELD_TEST_MODE: 'large-centered' | 'tile-flat' | 'tile-sampled' = 'tile-sampled'
-const ROAD_HEIGHTFIELD_TEST_FLIP_SAMPLE_DIRECTION = false
-const ROAD_HEIGHTFIELD_TEST_TRANSPOSE_MATRIX = true
-const ROAD_HEIGHTFIELD_TEST_MAP_POINTS = 13
-const ROAD_HEIGHTFIELD_TEST_EXTENT_MULTIPLIER = 1
-const ROAD_HEIGHTFIELD_TEST_CENTER_BUMP_HEIGHT = 1.25
-const ROAD_HEIGHTFIELD_TEST_CENTER_BUMP_FALLOFF = 3.5
-// 楂樼▼鍦烘渶灏忕摝鐗囬暱搴︼紙绫筹級
+const ROAD_HEIGHTFIELD_TEST_MAP_POINTS = 11
 const ROAD_HEIGHTFIELD_MIN_TILE_LENGTH = 1
-// 楂樼▼鍦烘渶澶х摝鐗囬暱搴︼紙绫筹級锛堥檷浣庡瘑搴︼級
 const ROAD_HEIGHTFIELD_MAX_TILE_LENGTH = 2
-// 楂樼▼鍦洪粯璁ょ摝鐗囬暱搴︼紙绫筹級锛堥檷浣庡瘑搴︼級
 const ROAD_HEIGHTFIELD_DEFAULT_TILE_LENGTH = 20
-// 鐭╁舰璺潰鏈€澶у嚑浣曠粏鑺傦紙绫筹級锛岀敤浜嶭OD鎺у埗
 const ROAD_RECTANGULAR_MAX_GEOMETRY_DETAIL = 0.18
-// 鐭╁舰璺潰鏈€澶ч珮搴︾粏鑺傦紙绫筹級锛岀敤浜嶭OD鎺у埗
 const ROAD_RECTANGULAR_MAX_HEIGHT_DETAIL = 0.18
-// 鐭╁舰璺潰鏈€澶ч珮搴﹁寖鍥达紙绫筹級锛岀敤浜庨珮搴﹀彉鍖栭檺鍒?
 const ROAD_RECTANGULAR_MAX_HEIGHT_RANGE = 0.12
-// 鐭╁舰璺潰鏈€灏忓帤搴︼紙绫筹級锛岄槻姝㈣繃钖?
 const ROAD_RECTANGULAR_MIN_THICKNESS = 0.08
-// 鐭╁舰璺潰鏈€澶у帤搴︼紙绫筹級锛岄槻姝㈣繃鍘?
 const ROAD_RECTANGULAR_MAX_THICKNESS = 0.28
-// 璺潰杩炴帴鐩掗噸鍙犻暱搴︼紙绫筹級锛岀敤浜庤繛鎺ュ钩婊?
 const ROAD_BOX_JOIN_MIN_OVERLAP_METERS = 0.14
-// 鐠侯垶娼伴惄鎺楀櫢閸欑娀鏆辨惔锔炬畱閺堚偓婢堆冣偓锟介敍鍫㈣儗閿?
 const ROAD_BOX_JOIN_MAX_OVERLAP_METERS = 0.55
 
 // Road collision uses tiled heightfields exclusively.
@@ -893,7 +842,6 @@ type HeightfieldFromSeriesParams = {
 	endIndex: number
 	spanLength: number
 	rows: number
-	elementSize: number
 	roadWidth: number
 	heights: number[]
 }
@@ -936,7 +884,6 @@ function buildHeightfieldShapeFromSeries({
 	endIndex,
 	spanLength,
 	rows,
-	elementSize,
 	roadWidth,
 	heights,
 }: HeightfieldFromSeriesParams): Extract<RigidbodyPhysicsShape, { kind: 'heightfield' }> | null {
@@ -952,23 +899,7 @@ function buildHeightfieldShapeFromSeries({
 	if (pointsX < 2 || pointsZ < 2) {
 		return null
 	}
-	if (ROAD_HEIGHTFIELD_TEST_MODE === 'tile-flat') {
-		const width = tileWidth
-		const depth = tileLength
-		const halfWidth = width * 0.5
-		const halfDepth = depth * 0.5
-		const effectiveElementSize = targetElementSize
-		const matrix = Array.from({ length: pointsX }, () => Array.from({ length: pointsZ }, () => 0))
-		return {
-			kind: 'heightfield',
-			matrix,
-			elementSize: effectiveElementSize,
-			width,
-			depth,
-			offset: [-halfWidth, -halfDepth, 0],
-			applyScale: false,
-		}
-	}
+
 	if (!Array.isArray(heights) || heights.length < 2) {
 		return null
 	}
@@ -977,59 +908,17 @@ function buildHeightfieldShapeFromSeries({
 	const halfWidth = width * 0.5
 	const halfDepth = depth * 0.5
 	const effectiveElementSize = targetElementSize
-	const centerHeight = 0
-	const sampleHeightAt = (t: number): number => {
-		const clampedT = Math.max(0, Math.min(1, t))
-		const scaled = clampedT * Math.max(0, heights.length - 1)
-		const index0 = Math.floor(scaled)
-		const index1 = Math.min(heights.length - 1, index0 + 1)
-		const alpha = scaled - index0
-		const h0 = Number.isFinite(heights[index0]) ? Number(heights[index0]) : centerHeight
-		const h1 = Number.isFinite(heights[index1]) ? Number(heights[index1]) : h0
-		return h0 + (h1 - h0) * alpha
-	}
-	const radialBump = (x: number, z: number): number => {
-		const dx = x / Math.max(1e-4, halfWidth)
-		const dz = z / Math.max(1e-4, halfDepth)
-		const radial = dx * dx + dz * dz
-		return radial < 1 ? Math.pow(1 - radial, ROAD_HEIGHTFIELD_TEST_CENTER_BUMP_FALLOFF) : 0
-	}
+
 	const matrix: number[][] = []
-	if (ROAD_HEIGHTFIELD_TEST_TRANSPOSE_MATRIX) {
-		for (let row = pointsZ - 1; row >= 0; row -= 1) {
-			const rowValues: number[] = []
-			for (let col = 0; col < pointsX; col += 1) {
-				const x = (col / Math.max(1, pointsX - 1) - 0.5) * width
-				const z = (row / Math.max(1, pointsZ - 1) - 0.5) * depth
-				const sampleT = row / Math.max(1, pointsZ - 1)
-				const sampledHeight = sampleHeightAt(
-					ROAD_HEIGHTFIELD_TEST_FLIP_SAMPLE_DIRECTION ? 1 - sampleT : sampleT,
-				)
-				const height = ROAD_HEIGHTFIELD_TEST_MODE === 'tile-sampled'
-					? sampledHeight
-					: centerHeight + ROAD_HEIGHTFIELD_TEST_CENTER_BUMP_HEIGHT * radialBump(x, z)
-				rowValues.push(height)
-			}
-			matrix.push(rowValues)
+		
+	for (let row = 0; row <pointsX; row += 1) {
+		const rowValues: number[] = []
+		for (let col = 0; col <  pointsZ; col += 1) {
+			rowValues.push(0)
 		}
-	} else {
-		for (let col = 0; col < pointsX; col += 1) {
-			const columnValues: number[] = []
-			for (let row = pointsZ - 1; row >= 0; row -= 1) {
-				const x = (col / Math.max(1, pointsX - 1) - 0.5) * width
-				const z = (row / Math.max(1, pointsZ - 1) - 0.5) * depth
-				const sampleT = row / Math.max(1, pointsZ - 1)
-				const sampledHeight = sampleHeightAt(
-					ROAD_HEIGHTFIELD_TEST_FLIP_SAMPLE_DIRECTION ? 1 - sampleT : sampleT,
-				)
-				const height = ROAD_HEIGHTFIELD_TEST_MODE === 'tile-sampled'
-					? sampledHeight
-					: centerHeight + ROAD_HEIGHTFIELD_TEST_CENTER_BUMP_HEIGHT * radialBump(x, z)
-				columnValues.push(height)
-			}
-			matrix.push(columnValues)
-		}
+		matrix.push(rowValues)
 	}
+
 	return {
 		kind: 'heightfield',
 		matrix,
@@ -1053,7 +942,6 @@ function buildRoadHeightfieldSignature(params: {
 	elementSize: number
 	desiredTileLength: number
 	bodyCount: number
-	heightHash: number
 	layoutHash: number
 	boundaryWallEnabled: boolean
 	boundaryWallProps: BoundaryWallComponentProps | null
@@ -1080,7 +968,6 @@ function buildRoadHeightfieldSignature(params: {
 		`tile:${Math.round(params.desiredTileLength * 1000)}`,
 		`es:${Math.round(params.elementSize * 1000)}`,
 		`b:${params.bodyCount}`,
-		`rh:${params.heightHash.toString(16)}`,
 		`lh:${params.layoutHash.toString(16)}`,
 		`bw:${params.boundaryWallEnabled ? 1 : 0}`,
 		`bwh:${Math.round((params.boundaryWallProps?.height ?? 0) * 1000)}`,

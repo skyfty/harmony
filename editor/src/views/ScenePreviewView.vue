@@ -2414,7 +2414,7 @@ const physicsEnvironmentEnabled = ref(true)
 const rigidbodyInstances = new Map<string, RigidbodyInstance>()
 const airWallBodies = new Map<string, CANNON.Body>()
 
-// cannon-es-debugger integration
+// cannon-es debugger integration
 let cannonDebugger: any | null = null
 let cannonDebuggerGroup: THREE.Group | null = null
 let groundCollisionDebugGroup: THREE.Group | null = null
@@ -2549,15 +2549,12 @@ async function ensureCannonDebugger(): Promise<void> {
 		cannonDebuggerGroup = new THREE.Group()
 		cannonDebuggerGroup.name = '__harmony_cannon_debugger__'
 		scene.add(cannonDebuggerGroup)
-		const mod = await import('cannon-es-debugger')
-		const DebuggerCtor = (mod && (mod.default || mod)) as any
+		const mod = await import('@vladkrutenyuk/cannon-es-debugger-pro')
+		const DebuggerCtor = (mod && (mod.CannonEsDebuggerPro || mod.default || mod)) as any
 		// pass the wrapper group as the scene so debugger attaches under it
-		cannonDebugger = new DebuggerCtor(cannonDebuggerGroup, physicsWorld, {
-			color: 0xff00ff,
-			scale: 1,
-		})
+		cannonDebugger = new DebuggerCtor(cannonDebuggerGroup, physicsWorld, 0xff00ff, 0.005)
 	} catch (error) {
-		console.warn('[ScenePreview] Failed to load cannon-es-debugger', error)
+		console.warn('[ScenePreview] Failed to load @vladkrutenyuk/cannon-es-debugger-pro', error)
 		if (cannonDebuggerGroup && scene) {
 			try { scene.remove(cannonDebuggerGroup) } catch (e) {}
 			cannonDebuggerGroup = null
@@ -2569,8 +2566,14 @@ async function ensureCannonDebugger(): Promise<void> {
 function disposeCannonDebugger(): void {
 	if (!cannonDebugger && !cannonDebuggerGroup) return
 	try {
-		if (cannonDebugger && typeof cannonDebugger.clear === 'function') {
-			try { cannonDebugger.clear() } catch (_) {}
+		if (cannonDebugger) {
+			if (typeof cannonDebugger.destroy === 'function') {
+				try { cannonDebugger.destroy() } catch (_) {}
+			} else if (typeof cannonDebugger.clean === 'function') {
+				try { cannonDebugger.clean() } catch (_) {}
+			} else if (typeof cannonDebugger.clear === 'function') {
+				try { cannonDebugger.clear() } catch (_) {}
+			}
 		}
 	} catch (_err) {
 		// ignore
@@ -11305,7 +11308,7 @@ function startAnimationLoop() {
 
 		// 4) Render + stats
 		sceneCsmShadowRuntime?.update()
-		// update cannon-es-debugger visuals (if enabled)
+		// update cannon-es debugger visuals (if enabled)
 		if (cannonDebugger && typeof cannonDebugger.update === 'function') {
 			try {
 				cannonDebugger.update()
@@ -11368,7 +11371,7 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	resetBehaviorRuntime()
 	resetBehaviorProximity()
 	resetAnimationControllers()
-	// dispose cannon-es-debugger visualizer as well
+	// dispose cannon-es debugger visualizer as well
 	disposeCannonDebugger()
 	disposeGroundCollisionDebugVisualization()
 	hidePurposeControls()

@@ -334,21 +334,21 @@ export function removeRigidbodyInstanceBodies(world: CANNON.World | null | undef
 	})
 }
 
-const groundHeightfieldOrientation = new CANNON.Quaternion()
-groundHeightfieldOrientation.setFromEuler(-Math.PI / 2, 0, 0)
-const groundHeightfieldOrientationInverse = new CANNON.Quaternion(
-	-groundHeightfieldOrientation.x,
-	-groundHeightfieldOrientation.y,
-	-groundHeightfieldOrientation.z,
-	groundHeightfieldOrientation.w,
+const heightfieldOrientation = new CANNON.Quaternion()
+heightfieldOrientation.setFromEuler(-Math.PI / 2, 0, 0)
+const heightfieldOrientationInverse = new CANNON.Quaternion(
+	-heightfieldOrientation.x,
+	-heightfieldOrientation.y,
+	-heightfieldOrientation.z,
+	heightfieldOrientation.w,
 )
-const groundHeightfieldOrientationThree = new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0))
-const groundHeightfieldOrientationThreeInverse = groundHeightfieldOrientationThree.clone().invert()
-const groundHeightfieldOrientationAdjustment: RigidbodyOrientationAdjustment = {
-	cannon: groundHeightfieldOrientation,
-	cannonInverse: groundHeightfieldOrientationInverse,
-	three: groundHeightfieldOrientationThree,
-	threeInverse: groundHeightfieldOrientationThreeInverse,
+const heightfieldOrientationThree = new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0))
+const heightfieldOrientationThreeInverse = heightfieldOrientationThree.clone().invert()
+const heightfieldOrientationAdjustment: RigidbodyOrientationAdjustment = {
+	cannon: heightfieldOrientation,
+	cannonInverse: heightfieldOrientationInverse,
+	three: heightfieldOrientationThree,
+	threeInverse: heightfieldOrientationThreeInverse,
 }
 
 const heightfieldShapeOffsetHelper = new CANNON.Vec3()
@@ -1311,7 +1311,7 @@ function createCannonShape(
 		if (!matrix || !elementSize || elementSize <= 0) {
 			return null
 		}
-		return new CANNON.Heightfield(matrix, { elementSize })
+		return new CANNON.Heightfield(matrix, {elementSize:  elementSize })
 	}
 	if (definition.kind === 'sphere') {
 		const radius = Number(definition.radius)
@@ -1502,7 +1502,7 @@ export function createRigidbodyBody(
 			(oz ?? 0) * shapeScale.z,
 		)
 	}
-	const orientationAdjustment = needsHeightfieldOrientation ? groundHeightfieldOrientationAdjustment : null
+	const orientationAdjustment = needsHeightfieldOrientation ? heightfieldOrientationAdjustment : null
 	let addedShapeCount = 0
 	if (groundSegments && groundSegments.length) {
 		for (const segment of groundSegments) {
