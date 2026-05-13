@@ -38,6 +38,9 @@ export type VehicleDriveInputState = {
   throttle: number
   steering: number
   brake: number
+  analogThrottle?: number
+  analogSteering?: number
+  analogBrake?: number
 }
 
 export type VehicleDriveRuntimeState = {

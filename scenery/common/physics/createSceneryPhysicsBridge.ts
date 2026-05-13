@@ -12,6 +12,7 @@ import type {
 } from '@harmony/physics-core'
 import { initializePhysicsBackendBridge } from '@harmony/physics-bridge/physicsBackendBridge'
 import { createWechatPhysicsBridge, createInMemoryWechatPhysicsWorker } from '@harmony/physics-bridge/wechat'
+import type { AmmoApi } from '@harmony/physics-ammo'
 
 type AmmoRuntimeModule = typeof import('@harmony/physics-ammo')
 type CannonRuntimeModule = typeof import('@harmony/physics-cannon')
@@ -137,7 +138,7 @@ class LazySceneryPhysicsBridge implements PhysicsBridge {
       createDefaultAmmoModuleFactory,
       createAmmoSchemaPhysicsBackendBridge,
     } = ammoRuntime
-    const ammoModuleFactory = createDefaultAmmoModuleFactory()
+    const ammoModuleFactory = createDefaultAmmoModuleFactory<AmmoApi>()
     const ammoModule = await ammoModuleFactory()
     initializePhysicsBackendBridge(createAmmoSchemaPhysicsBackendBridge(ammoModule))
 

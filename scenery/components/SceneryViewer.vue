@@ -507,8 +507,6 @@ import {
   DEFAULT_ENVIRONMENT_SETTINGS,
   DEFAULT_ENVIRONMENT_NORTH_DIRECTION,
   DEFAULT_ENVIRONMENT_GRAVITY,
-  DEFAULT_ENVIRONMENT_RESTITUTION,
-  DEFAULT_ENVIRONMENT_FRICTION,
   cloneEnvironmentSettings,
   resolveDocumentEnvironment,
   type EnvironmentNorthDirection,
@@ -557,6 +555,7 @@ import type {
   SceneResourceSummaryEntry,
   Vector3Like,
 } from '@harmony/schema/index';
+import { resolveGroundWorkingGridSize } from '@harmony/schema/index';
 import { isPointInsideRegionXZ } from '@harmony/schema/index';
 import { applyMirroredScaleToObject, syncMirroredMeshMaterials } from '@harmony/schema/mirror';
 import {
@@ -2759,6 +2758,11 @@ const vehicleDriveController = new VehicleDriveController(
     resolveRigidbodyComponent,
     resolveVehicleComponent,
     isPhysicsEnabled: () => physicsEnvironmentEnabled.value,
+    ensurePhysicsWorld: () => {
+      if (physicsEnvironmentEnabled.value && currentDocument && !physicsBridgeSceneLoaded) {
+        void loadSceneryPhysicsBridgeScene(currentDocument);
+      }
+    },
     ensureVehicleBindingForNode,
     normalizeNodeId,
     setCameraViewState: (mode, targetId) => setCameraViewState(mode as CameraViewMode, targetId ?? null),
@@ -3383,7 +3387,7 @@ function collectRuntimePrefabAssetIds(assetRegistry: Record<string, SceneAssetRe
     }
     warmAssetIds.add(normalizedAssetId);
 
-    const assetType = entry?.assetType ?? inferAssetTypeOrNull(normalizedAssetId);
+    const assetType = entry?.assetType ?? inferAssetTypeOrNull({ nameOrUrl: normalizedAssetId });
     if (assetType === 'model' || assetType === 'mesh') {
       meshAssetIds.add(normalizedAssetId);
     }
@@ -6103,9 +6107,10 @@ function applySceneryPhysicsBridgeFrameToObjects(): void {
       return;
     }
     const node = resolveNodeById(nodeId);
-    const bindingObject = node
+    const rigidbodyComponent = resolvePhysicsRigidbodyComponent(node);
+    const bindingObject = node && rigidbodyComponent
       ? resolveRigidbodyBindingObject(
-        resolvePhysicsRigidbodyComponent(node),
+        rigidbodyComponent,
         nodeObjectMap.get(nodeId) ?? null,
       )
       : null;
@@ -6280,11 +6285,9 @@ function resolveSceneryPhysicsBridgeVehicleStopTransform(
   }
   const node = resolveNodeById(nodeId);
   const component = resolvePhysicsRigidbodyComponent(node);
-  const object = node
-    ? component
-      ? resolveRigidbodyBindingObject(component, nodeObjectMap.get(nodeId) ?? null)
-      : nodeObjectMap.get(nodeId) ?? null
-    : null;
+  const object = node && component
+    ? resolveRigidbodyBindingObject(component, nodeObjectMap.get(nodeId) ?? null)
+    : nodeObjectMap.get(nodeId) ?? null;
   if (!object) {
     return null;
   }
@@ -6308,7 +6311,10 @@ function resolveSceneryPhysicsBridgeVehicleStopTransform(
 
 function resetSceneryPhysicsBridgeVehicleLocalState(nodeId: string, transform: PhysicsTransform): void {
   const instance = vehicleInstances.get(nodeId);
-  const chassisBody = instance?.vehicle.chassisBody ?? null;
+  if (!instance) {
+    return;
+  }
+  const chassisBody = instance.vehicle.chassisBody ?? null;
   if (!chassisBody) {
     return;
   }
@@ -6664,7 +6670,6 @@ function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null):
 
 function stepPhysicsWorld(delta: number): number {
   void delta;
-  physicsAccumulator = 0;
   physicsInterpolationAlpha = 0;
   return 0;
 }
@@ -10608,18 +10613,6 @@ function applyPhysicsEnvironmentSettings(settings: EnvironmentSettings) {
   const gravity = clampNumber(settings.gravityStrength, 0, 100, DEFAULT_ENVIRONMENT_GRAVITY);
   physicsEnvironmentEnabled.value = settings.physicsEnabled !== false;
   physicsGravity.set(0, -gravity, 0);
-  physicsContactRestitution = clampNumber(
-    settings.collisionRestitution,
-    0,
-    1,
-    DEFAULT_ENVIRONMENT_RESTITUTION,
-  );
-  physicsContactFriction = clampNumber(
-    settings.collisionFriction,
-    0,
-    1,
-    DEFAULT_ENVIRONMENT_FRICTION,
-  );
 }
 
 async function applyBackgroundSettings(
@@ -11005,7 +10998,8 @@ function hydrateGroundSidecarFromPackage(
   }
 
   const sidecarBuffer = sidecarBytes.buffer.slice(sidecarBytes.byteOffset, sidecarBytes.byteOffset + sidecarBytes.byteLength);
-  const vertexCount = getGroundVertexCount(definition.rows, definition.columns);
+  const { rows, columns } = resolveGroundWorkingGridSize(definition);
+  const vertexCount = getGroundVertexCount(rows, columns);
   const expectedByteLength = GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES + vertexCount * Float64Array.BYTES_PER_ELEMENT * 2;
   if (sidecarBuffer.byteLength !== expectedByteLength) {
     throw new Error(
@@ -12596,7 +12590,6 @@ function configurePhysicsInterpolation(physinterpParam: string): void {
     physicsInterpolationEnabled = isWeChatMiniProgram
       && (physinterpParam === '' || (physinterpParam !== '0' && physinterpParam.toLowerCase() !== 'false'));
   }
-  physicsAccumulator = 0;
   physicsInterpolationAlpha = 0;
 }
 

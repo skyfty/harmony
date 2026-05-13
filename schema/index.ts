@@ -797,6 +797,8 @@ export interface RuntimePrefabPlacementOptions {
 export interface RuntimePrefabSpawnRequest {
   /** Optional stable caller-generated id for de-duplication/tracking. */
   requestId?: string | null
+  /** Optional preload hint used by viewers that can warm assets before the spawn point becomes active. */
+  preloadPolicy?: 'before-entry' | 'after-entry' | null
   /** Optional external/default steer identifier used to match runtime controllable targets. */
   vehicleIdentifier?: string | null
   /** Existing registered scene/project asset id for a prefab asset. */
