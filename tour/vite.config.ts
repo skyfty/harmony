@@ -13,6 +13,7 @@ import { toCustomChunkPlugin } from "@harmony/tools/vite";
 const uniPlatform = process.env.UNI_PLATFORM;
 const isMp = uniPlatform?.startsWith('mp-');
 const buildTarget = isMp ? 'es2018' : 'es2020';
+const useBuiltHarmonyPackages = isMp && process.env.NODE_ENV === 'production';
 
 const rawVueRuntimeAlias = isMp
   ? '@dcloudio/uni-mp-vue/dist-x/vue.runtime.esm.js'
@@ -36,6 +37,13 @@ const pollingInterval =
   Number.isFinite(parsedPollingInterval) && parsedPollingInterval > 0
     ? parsedPollingInterval
     : 300;
+
+function resolveHarmonyPackagePath(packageName: string): string {
+  // mp-weixin production builds should resolve workspace packages from dist so
+  // Rollup does not pull their source graph into the scenery/main package.
+  const packageFolder = useBuiltHarmonyPackages ? 'dist' : 'src';
+  return fileURLToPath(new URL(`../${packageName}/${packageFolder}`, import.meta.url));
+}
 
 function resolveAssetFileName(assetInfo: { name?: string }): string | undefined {
   if (!isMp) {
@@ -136,12 +144,14 @@ export default {
     },
     resolve: {
       alias: {
-        '@schema': fileURLToPath(new URL('../schema', import.meta.url)),
-        '@harmony/schema': fileURLToPath(new URL('../schema', import.meta.url)),
-        '@harmony/physics-core': fileURLToPath(new URL('../physics-core/src', import.meta.url)),
-        '@harmony/physics-ammo': fileURLToPath(new URL('../physics-ammo/src', import.meta.url)),
-        '@harmony/physics-cannon': fileURLToPath(new URL('../physics-cannon/src', import.meta.url)),
-        '@harmony/physics-bridge': fileURLToPath(new URL('../physics-bridge/src', import.meta.url)),
+        '@schema': useBuiltHarmonyPackages
+          ? fileURLToPath(new URL('../schema/dist', import.meta.url))
+          : fileURLToPath(new URL('../schema', import.meta.url)),
+        '@harmony/schema': useBuiltHarmonyPackages
+          ? fileURLToPath(new URL('../schema/dist', import.meta.url))
+          : fileURLToPath(new URL('../schema', import.meta.url)),
+        '@harmony/physics-core': resolveHarmonyPackagePath('physics-core'),
+        '@harmony/physics-bridge': resolveHarmonyPackagePath('physics-bridge'),
         'vue': vueRuntimeAlias,
         // Ensure modules imported from files outside project root (e.g. ../schema)
         // resolve "three" to this package's installed dependency

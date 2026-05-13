@@ -8,21 +8,6 @@
     {
       "root": "pages/scenery",
       "name": "scenery",
-      "independent": true,
-      "pages": [
-        { "path": "index" }
-      ]
-    },
-    {
-      "root": "pages/physics-ammo",
-      "name": "physicsAmmo",
-      "pages": [
-        { "path": "index" }
-      ]
-    },
-    {
-      "root": "pages/physics-cannon",
-      "name": "physicsCannon",
       "pages": [
         { "path": "index" }
       ]

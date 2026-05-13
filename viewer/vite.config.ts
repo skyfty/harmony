@@ -11,6 +11,7 @@ import { toCustomChunkPlugin } from "@harmony/tools/vite";
 const uniPlatform = process.env.UNI_PLATFORM;
 const isMp = uniPlatform?.startsWith('mp-');
 const buildTarget = isMp ? 'es2018' : 'es2020';
+const useBuiltHarmonyPackages = isMp && process.env.NODE_ENV === 'production';
 
 const rawVueRuntimeAlias = isMp
   ? '@dcloudio/uni-mp-vue/dist-x/vue.runtime.esm.js'
@@ -62,6 +63,12 @@ export default {
       target: buildTarget,
       rollupOptions: {
         output: {
+          chunkFileNames: isMp
+            ? 'pages/shared/chunks/[hash].js'
+            : 'assets/chunks/[hash].js',
+          entryFileNames: isMp
+            ? 'pages/shared/entries/[hash].js'
+            : 'assets/entries/[hash].js',
           assetFileNames(assetInfo) {
             return resolveAssetFileName(assetInfo) ?? 'assets/[name].[hash][extname]';
           },
@@ -70,17 +77,17 @@ export default {
     },
     resolve: {
       alias: {
-        '@schema': fileURLToPath(new URL('../schema', import.meta.url)),
-        '@harmony/schema': fileURLToPath(new URL('../schema', import.meta.url)),
+        '@schema': useBuiltHarmonyPackages
+          ? fileURLToPath(new URL('../schema/dist', import.meta.url))
+          : fileURLToPath(new URL('../schema', import.meta.url)),
+        '@harmony/schema': useBuiltHarmonyPackages
+          ? fileURLToPath(new URL('../schema/dist', import.meta.url))
+          : fileURLToPath(new URL('../schema', import.meta.url)),
         '@harmony/physics-core': fileURLToPath(new URL('../physics-core/src', import.meta.url)),
-        '@harmony/physics-ammo': fileURLToPath(new URL('../physics-ammo/src', import.meta.url)),
-        '@harmony/physics-cannon': fileURLToPath(new URL('../physics-cannon/src', import.meta.url)),
         '@harmony/physics-bridge': fileURLToPath(new URL('../physics-bridge/src', import.meta.url)),
+
         'vue': vueRuntimeAlias,
-        // Ensure modules imported from files outside project root (e.g. ../schema)
-        // resolve "three" to this package's installed dependency
         'three': fileURLToPath(new URL('./node_modules/three', import.meta.url)),
-        'cannon-es': fileURLToPath(new URL('./node_modules/cannon-es', import.meta.url)),
         'three/examples': fileURLToPath(new URL('./node_modules/three/examples', import.meta.url)),
         '@three-examples': fileURLToPath(new URL('./node_modules/three/examples/jsm', import.meta.url)),
       },

@@ -7,6 +7,7 @@
       :default-steer-identifier="selectedVehicleIdentifier"
       :server-asset-base-url="serverAssetBaseUrl"
       :initial-punched-node-ids="initialPunchedNodeIds"
+      :physics-backend-loaders="physicsBackendLoaders"
       @punch="handlePunch"
     />
   </view>
@@ -27,6 +28,10 @@ const selectedVehicleIdentifier = ref<string>('');
 const enterAt = ref<number>(0);
 const initialPunchedNodeIds = ref<string[]>([]);
 const serverAssetBaseUrl = getDownloadCdnBaseUrl();
+const physicsBackendLoaders = {
+  loadAmmoRuntime: () => {},
+  loadCannonRuntime: () => {},
+};
 const nominateStateMap = computed(() => {
   const vehicleIdentifier = selectedVehicleIdentifier.value.trim();
   if (!vehicleIdentifier) {

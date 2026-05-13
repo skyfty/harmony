@@ -12,13 +12,28 @@ import type {
 } from '@harmony/physics-core'
 import { initializePhysicsBackendBridge } from '@harmony/physics-bridge/physicsBackendBridge'
 import { createWechatPhysicsBridge, createInMemoryWechatPhysicsWorker } from '@harmony/physics-bridge/wechat'
-import type { AmmoApi } from '@harmony/physics-ammo'
 
-type AmmoRuntimeModule = typeof import('@harmony/physics-ammo')
-type CannonRuntimeModule = typeof import('@harmony/physics-cannon')
+type AmmoRuntimeModule = {
+  createAmmoPhysicsController: (options: {
+    moduleFactory: () => Promise<unknown>
+  }) => unknown
+  createDefaultAmmoModuleFactory: <T>() => () => Promise<T>
+  createAmmoSchemaPhysicsBackendBridge: (module: unknown) => unknown
+}
+
+type CannonRuntimeModule = {
+  createCannonPhysicsController: () => unknown
+  createCannonSchemaPhysicsBackendBridge: () => unknown
+}
+
+export type SceneryPhysicsBackendLoaders = {
+  loadAmmoRuntime: () => Promise<AmmoRuntimeModule>
+  loadCannonRuntime: () => Promise<CannonRuntimeModule>
+}
 
 export type CreateSceneryPhysicsBridgeOptions = {
   engine?: PhysicsBackendPreference
+  backendLoaders?: SceneryPhysicsBackendLoaders
 }
 
 const PHYSICS_AMMO_SUBPACKAGE_NAME = 'physicsAmmo'
@@ -26,6 +41,15 @@ const PHYSICS_CANNON_SUBPACKAGE_NAME = 'physicsCannon'
 
 function resolveSceneryPhysicsBackendPreference(preference: PhysicsBackendPreference | undefined): 'ammo' | 'cannon' {
   return preference === 'cannon' ? 'cannon' : 'ammo'
+}
+
+function ensureSceneryPhysicsBackendLoaders(
+  loaders: SceneryPhysicsBackendLoaders | undefined,
+): SceneryPhysicsBackendLoaders {
+  if (!loaders) {
+    throw new Error('Scenery physics backend loaders are required.')
+  }
+  return loaders
 }
 
 async function loadWechatPhysicsSubpackage(name: string): Promise<void> {
@@ -53,11 +77,13 @@ async function loadWechatPhysicsSubpackage(name: string): Promise<void> {
 
 class LazySceneryPhysicsBridge implements PhysicsBridge {
   private readonly enginePreference: PhysicsBackendPreference | undefined
+  private readonly backendLoaders: SceneryPhysicsBackendLoaders | undefined
   private bridge: PhysicsBridge | null = null
   private bridgePromise: Promise<PhysicsBridge> | null = null
 
   constructor(options: CreateSceneryPhysicsBridgeOptions = {}) {
     this.enginePreference = options.engine
+    this.backendLoaders = options.backendLoaders
   }
 
   async init(options: PhysicsInitOptions): Promise<PhysicsBridgeInitResult> {
@@ -118,10 +144,11 @@ class LazySceneryPhysicsBridge implements PhysicsBridge {
   }
 
   private async createBridge(): Promise<PhysicsBridge> {
+    const backendLoaders = ensureSceneryPhysicsBackendLoaders(this.backendLoaders)
     const backend = resolveSceneryPhysicsBackendPreference(this.enginePreference)
     if (backend === 'cannon') {
       await loadWechatPhysicsSubpackage(PHYSICS_CANNON_SUBPACKAGE_NAME)
-      const cannonRuntime = await import('@harmony/physics-cannon') as CannonRuntimeModule
+      const cannonRuntime = await backendLoaders.loadCannonRuntime()
       const { createCannonPhysicsController, createCannonSchemaPhysicsBackendBridge } = cannonRuntime
       initializePhysicsBackendBridge(createCannonSchemaPhysicsBackendBridge())
       return createWechatPhysicsBridge({
@@ -132,13 +159,13 @@ class LazySceneryPhysicsBridge implements PhysicsBridge {
     }
 
     await loadWechatPhysicsSubpackage(PHYSICS_AMMO_SUBPACKAGE_NAME)
-    const ammoRuntime = await import('@harmony/physics-ammo') as AmmoRuntimeModule
+    const ammoRuntime = await backendLoaders.loadAmmoRuntime()
     const {
       createAmmoPhysicsController,
       createDefaultAmmoModuleFactory,
       createAmmoSchemaPhysicsBackendBridge,
     } = ammoRuntime
-    const ammoModuleFactory = createDefaultAmmoModuleFactory<AmmoApi>()
+    const ammoModuleFactory = createDefaultAmmoModuleFactory<unknown>()
     const ammoModule = await ammoModuleFactory()
     initializePhysicsBackendBridge(createAmmoSchemaPhysicsBackendBridge(ammoModule))
 

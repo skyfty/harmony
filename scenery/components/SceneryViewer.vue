@@ -399,7 +399,10 @@ import { useDebugOverlay } from '../composables/useDebugOverlay';
 import { useBehaviorAlert } from '../composables/useBehaviorAlert';
 import { useBehaviorBubble } from '../composables/useBehaviorBubble';
 import { useLanternAssets } from '../composables/useLanternAssets';
-import { createSceneryPhysicsBridge } from '../common/physics/createSceneryPhysicsBridge';
+import {
+  createSceneryPhysicsBridge,
+  type SceneryPhysicsBackendLoaders,
+} from '../common/physics/createSceneryPhysicsBridge';
 import {
   loadScenePackageZip,
   removeScenePackageZip,
@@ -419,6 +422,7 @@ type SceneryProps = {
   serverAssetBaseUrl?: string;
   initialPunchedNodeIds?: string[];
   runtimePrefabSpawns?: RuntimePrefabSpawnRequest[];
+  physicsBackendLoaders?: SceneryPhysicsBackendLoaders;
 };
 
 const props = defineProps<SceneryProps>();
@@ -5933,7 +5937,10 @@ async function ensureSceneryPhysicsBridgeReady(): Promise<PhysicsBridge> {
     return physicsBridgeInitPromise;
   }
   if (!physicsBridge) {
-    physicsBridge = createSceneryPhysicsBridge({ engine: currentPhysicsBridgePreference });
+    physicsBridge = createSceneryPhysicsBridge({
+      engine: currentPhysicsBridgePreference,
+      backendLoaders: props.physicsBackendLoaders,
+    });
   }
   physicsBridgeInitPromise = physicsBridge.init({
     world: {
