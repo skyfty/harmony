@@ -38,6 +38,13 @@ export function createBridgeVehicleProxy(
         y: quaternion.y,
         z: quaternion.z,
         w: quaternion.w,
+        set(nextX: number, nextY: number, nextZ: number, nextW: number) {
+          this.x = nextX
+          this.y = nextY
+          this.z = nextZ
+          this.w = nextW
+          return this
+        },
       },
       allowSleep: true,
       sleepSpeedLimit: 0.05,

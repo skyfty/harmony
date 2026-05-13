@@ -68,6 +68,27 @@ export type FloorShapeCacheEntry = {
 
 export type FloorShapeCache = Map<string, FloorShapeCacheEntry>
 
+export function resolveModelCollisionDynamicMesh(
+  node: SceneNode | null | undefined,
+): ModelCollisionDynamicMesh | null {
+  if (!node) {
+    return null
+  }
+
+  const userDataMesh = node.userData && typeof node.userData === 'object'
+    ? (node.userData as Record<string, unknown>).modelCollision
+    : null
+  if (userDataMesh && typeof userDataMesh === 'object' && (userDataMesh as { type?: unknown }).type === 'ModelCollision') {
+    return userDataMesh as ModelCollisionDynamicMesh
+  }
+
+  if (node.dynamicMesh?.type === 'ModelCollision') {
+    return node.dynamicMesh as ModelCollisionDynamicMesh
+  }
+
+  return null
+}
+
 type LoggerTag = string | undefined
 
 function warn(loggerTag: LoggerTag, message: string, ...args: unknown[]): void {

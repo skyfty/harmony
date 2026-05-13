@@ -49,6 +49,7 @@ import {
 	resolveModelCollisionFaceSegments as resolveSharedModelCollisionFaceSegments,
 	resolveWallShape,
 	type FloorShapeCache,
+	type FloorShapeCacheEntry,
 	type GroundHeightfieldCacheEntry,
 	type WallTrimeshCache,
 	type WallTrimeshCacheEntry,
@@ -118,12 +119,12 @@ export function ensureRoadHeightfieldRigidbodyInstance(params: {
 	groundNode?: SceneNode | null
 	world: PhysicsWorldLike
 	existingInstance: RigidbodyInstance | null
-	createBody: (
+  createBody: (
 		node: SceneNode,
 		component: SceneNodeComponentState<RigidbodyComponentProps>,
 		shapeDefinition: RigidbodyPhysicsShape | null,
 		object: THREE.Object3D,
-	) => { body: PhysicsBodyLike } | null
+	) => { body: PhysicsBodyLike; orientationAdjustment: RigidbodyOrientationAdjustment | null } | null
 	loggerTag?: string
 	maxSegments?: number
 }): { instance: RigidbodyInstance | null; shouldRemoveExisting: boolean } {
@@ -351,7 +352,16 @@ export function createRigidbodyBody(
 	if (wallSegments && wallSegments.length) {
 		for (const segment of wallSegments) {
 			shapeBindings.push({
-				definition: segment.shape,
+				definition: {
+					kind: 'box',
+					halfExtents: [
+						segment.halfExtents[0],
+						segment.halfExtents[1],
+						segment.halfExtents[2],
+					],
+					offset: [0, 0, 0],
+					applyScale: false,
+				},
 				position: [
 					segment.offset[0],
 					segment.offset[1],
@@ -417,7 +427,7 @@ export function createRigidbodyBody(
 	if (!shapeBindings.length) {
 		return null
 	}
-	const body = createBackendRigidbodyBody({
+	const bodyResult = createBackendRigidbodyBody({
 		world,
 		mass,
 		bodyType: props.bodyType,
@@ -431,8 +441,12 @@ export function createRigidbodyBody(
 		name: `node:${node.id}`,
 	})
 	const orientationAdjustment = needsHeightfieldOrientation ? heightfieldOrientationAdjustment : null
+	if (!bodyResult) {
+		return null
+	}
+	const { body } = bodyResult
 	syncSharedBodyFromObject(body, object, orientationAdjustment)
-	body.updateMassProperties()
+	body.updateMassProperties?.()
 	body.linearDamping = props.linearDamping ?? DEFAULT_LINEAR_DAMPING
 	body.angularDamping = props.angularDamping ?? DEFAULT_ANGULAR_DAMPING
 	return { body, orientationAdjustment }
@@ -452,10 +466,9 @@ export function ensurePhysicsWorld(params: EnsurePhysicsWorldParams): PhysicsWor
 		contactFriction: params.contactFriction,
 		contactRestitution: params.contactRestitution,
 		contactSettings: params.contactSettings,
+		rigidbodyMaterialCache: params.rigidbodyMaterialCache,
+		rigidbodyContactMaterialKeys: params.rigidbodyContactMaterialKeys,
 		quatNormalizeFast: params.quatNormalizeFast,
 		quatNormalizeSkip: params.quatNormalizeSkip,
 	})
 }
-
-
-

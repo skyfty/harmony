@@ -19,6 +19,7 @@ import {
 import { resolveGroundEffectiveHeightAtVertex, sampleGroundHeight } from './groundMesh'
 import {
 	type PhysicsBodyBindingEntry as RigidbodyInstance,
+	type PhysicsBodyLike,
 	type PhysicsOrientationAdjustment,
 } from './physicsBodySync'
 import {
@@ -85,6 +86,47 @@ export type InfiniteGroundChunkColliderDebugEntry = {
 	source: InfiniteGroundChunkColliderSource
 	instance: RigidbodyInstance
 	shapes: HeightfieldShapeDefinition[]
+}
+
+export type InfiniteGroundChunkCollisionRuntimeState = {
+  enabled: boolean
+  sourceId: string
+  signature: string
+  activeChunkKeys: string[]
+}
+
+function uniqueSortedKeys(keys: Iterable<string> | null | undefined): string[] {
+  return Array.from(new Set(Array.from(keys ?? []).map((key) => key.trim()).filter((key) => key.length > 0))).sort()
+}
+
+export function collectInfiniteGroundChunkCollisionKeys(
+  definition: GroundRuntimeDynamicMesh | null | undefined,
+): string[] {
+  if (!definition || !Array.isArray(definition.runtimeLoadedTileKeys)) {
+    return []
+  }
+  return uniqueSortedKeys(definition.runtimeLoadedTileKeys)
+}
+
+export function resolveInfiniteGroundChunkCollisionRuntimeState(params: {
+  enabled: boolean
+  definition: GroundRuntimeDynamicMesh | null | undefined
+  sourceId: string
+}): InfiniteGroundChunkCollisionRuntimeState {
+  const activeChunkKeys = params.enabled ? collectInfiniteGroundChunkCollisionKeys(params.definition) : []
+  return {
+    enabled: params.enabled,
+    sourceId: params.sourceId,
+    signature: [
+      params.enabled ? 1 : 0,
+      params.sourceId.trim(),
+      params.definition?.terrainMode ?? 'unknown',
+      params.definition?.chunkSizeMeters ?? 0,
+      params.definition?.chunkManifestRevision ?? 0,
+      activeChunkKeys.join(','),
+    ].join('|'),
+    activeChunkKeys,
+  }
 }
 
 const collisionRuntimeCameraLocal = new THREE.Vector3()

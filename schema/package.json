@@ -6,10 +6,10 @@
   "private": false,
   "sideEffects": false,
   "scripts": {
-    "build": "npm run build:asset-types && tsc -p tsconfig.build.json",
-    "build:asset-types": "tsc -p tsconfig.asset-types.json",
-    "type-check": "tsc -p tsconfig.build.json --noEmit",
-    "type-check:asset-types": "tsc -p tsconfig.asset-types.json --noEmit",
+    "build": "npm run build:asset-types && node ./node_modules/typescript/bin/tsc -p tsconfig.build.json",
+    "build:asset-types": "node ./node_modules/typescript/bin/tsc -p tsconfig.asset-types.json",
+    "type-check": "node ./node_modules/typescript/bin/tsc -p tsconfig.build.json --noEmit",
+    "type-check:asset-types": "node ./node_modules/typescript/bin/tsc -p tsconfig.asset-types.json --noEmit",
     "check": "npm run type-check && npm run type-check:asset-types",
     "check:ground-local-edit": "npm run build && node ./scripts/fix-esm-extensions.mjs ./dist && node ./scripts/ground-local-edit-regression.mjs",
     "check:infinite-ground-visibility": "npm run build && node ./scripts/fix-esm-extensions.mjs ./dist && node ./scripts/infinite-ground-visibility-regression.mjs",
@@ -44,6 +44,7 @@
     }
   },
   "dependencies": {
+    "@harmony/physics-core": "file:../physics-core",
     "@harmony/physics-bridge": "file:../physics-bridge",
     "@msgpack/msgpack": "^3.1.3",
     "fflate": "^0.8.2",

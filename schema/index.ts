@@ -68,7 +68,15 @@ export {
   resolveDocumentEnvironment,
 } from './environmentSettingsUtils'
 export type { AdaptiveLinearFogRange } from './environmentSettingsUtils'
+export {
+  collectCompiledGroundCollisionTileKeys,
+  resolveCompiledGroundCollisionRuntimeState,
+} from './compiledGroundCollisionRuntime'
 export type { CompiledGroundCollisionRuntimeState } from './compiledGroundCollisionRuntime'
+export {
+  collectInfiniteGroundChunkCollisionKeys,
+  resolveInfiniteGroundChunkCollisionRuntimeState,
+} from './infiniteGroundChunkCollisions'
 export type { InfiniteGroundChunkCollisionRuntimeState } from './infiniteGroundChunkCollisions'
 export type {
   SkyCubeFaceKey,
@@ -1472,6 +1480,7 @@ export interface SceneResourceSummary {
 export type EnvironmentBackgroundMode = 'solidColor' | 'hdri' | 'fastHdri' | 'skycube'
 export type EnvironmentFogMode = 'none' | 'linear' | 'exp'
 export type EnvironmentNorthDirection = '+X' | '-X' | '+Z' | '-Z'
+export type EnvironmentPhysicsEngine = 'auto' | 'ammo' | 'cannon'
 
 export type EnvironmentOrientationPreset = 'yUp' | 'zUp' | 'xUp' | 'custom'
 
@@ -1538,6 +1547,7 @@ export interface EnvironmentSettings {
   fogAutoFitToGround?: boolean
   /** When false, runtime physics remains loaded but does not advance simulation steps. */
   physicsEnabled?: boolean
+  physicsEngine: EnvironmentPhysicsEngine
   gravityStrength: number
   collisionRestitution: number
   collisionFriction: number

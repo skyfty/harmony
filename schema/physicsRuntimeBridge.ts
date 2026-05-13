@@ -5,6 +5,8 @@ import type {
   PhysicsBodyBindingEntry,
 } from './physicsBodySync'
 
+export type { PhysicsBodyLike } from './physicsBodySync'
+
 export type PhysicsWorldLike = {
   addBody: (body: PhysicsBodyLike) => unknown
   removeBody?: (body: PhysicsBodyLike) => unknown

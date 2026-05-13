@@ -1,4 +1,3 @@
-import * as THREE from 'three'
 import type {
   RigidbodyComponentProps,
   RigidbodyPhysicsShape,
@@ -16,6 +15,8 @@ export type PhysicsContactSettings = {
   frictionEquationStiffness: number
   frictionEquationRelaxation: number
 }
+
+export type PhysicsVector3Tuple = [number, number, number]
 
 export type PhysicsRigidbodyMaterialEntry = {
   material: unknown
@@ -46,7 +47,7 @@ export type BackendRigidbodyCreateParams = {
 export type EnsurePhysicsWorldParams = {
   world: PhysicsWorldLike | null
   setWorld: (world: PhysicsWorldLike) => void
-  gravity: THREE.Vector3
+  gravity: PhysicsVector3Tuple
   solverIterations: number
   solverTolerance: number
   contactFriction: number
