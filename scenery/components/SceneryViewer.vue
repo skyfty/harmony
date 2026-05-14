@@ -393,7 +393,14 @@ import DriveJoystick from './DriveJoystick.vue';
 import DriveCompass from './DriveCompass.vue';
 import SpeedReadout from './SpeedReadout.vue';
 import { buildPhysicsSceneAsset } from '@harmony/schema/physicsSceneAsset';
-import { PHYSICS_BODY_TRANSFORM_STRIDE, type PhysicsBackendPreference, type PhysicsBridge, type PhysicsSceneAsset, type PhysicsStepFrame, type PhysicsTransform } from '@harmony/physics-core';
+import {
+  PHYSICS_BODY_TRANSFORM_STRIDE,
+  type PhysicsBackendPreference,
+  type PhysicsBridge,
+  type PhysicsSceneAsset,
+  type PhysicsStepFrame,
+  type PhysicsTransform,
+} from '@harmony/physics-core';
 import { useProjectStore } from '../common/stores/projectStore';
 import { useDebugOverlay } from '../composables/useDebugOverlay';
 import { useBehaviorAlert } from '../composables/useBehaviorAlert';
@@ -468,14 +475,11 @@ import {
   resolveCompiledGroundCollisionRuntimeState,
 } from '@harmony/schema/compiledGroundCollisionRuntime';
 import {
-  collectLoadedCompiledGroundChunkKeys,
-} from '@harmony/schema/compiledGroundRuntime';
-import {
   resolveInfiniteGroundChunkCollisionRuntimeState,
 } from '@harmony/schema/infiniteGroundChunkCollisions';
 import { syncGroundCollisionRuntimeLoadedTileKeys } from '@harmony/schema/groundCollisionRuntimeState';
-import { getVisibleInfiniteGroundChunkKeys } from '@harmony/schema/groundMesh';
 import { clearGroundCollisionRuntimeHost, syncGroundCollisionRuntimeHost } from '@harmony/schema/groundCollisionRuntimeHost';
+import { createGroundCollisionRuntimeBridgeDeps } from '@harmony/schema/groundCollisionRuntimeBridge';
 
 import {
   type PhysicsBodyBindingEntry as RigidbodyInstance,
@@ -550,8 +554,14 @@ import {
   readTextFileFromScenePackage,
   type ScenePackageUnzipped,
 } from '@harmony/schema/scenePackageZip';
+import type { ScenePackageSceneEntry as ScenePackageManifestSceneEntry } from '@harmony/schema/scenePackage';
+import {
+  createTerrainDatasetHeightSamplerFromScenePackage,
+  readTerrainDatasetManifestFromScenePackage,
+} from '../common/utils/terrainDatasetPackage';
 import type {
   AutoTourRouteSnapResult,
+  GroundChunkManifest,
   SceneNode,
   SceneNodeComponentState,
   SceneJsonExportDocument,
@@ -560,6 +570,7 @@ import type {
   GroundDynamicMesh,
   GroundRuntimeDynamicMesh,
   LanternSlideDefinition,
+  RigidbodyPhysicsShape,
   SceneResourceSummary,
   SceneResourceSummaryEntry,
   Vector3Like,
@@ -1861,6 +1872,15 @@ let physicsBridgeSceneLoaded = false;
 let physicsBridgeSceneRequestId = 0;
 let currentPhysicsBridgePreference: PhysicsBackendPreference | undefined;
 let currentPhysicsBridgeGroundCollisionSignature = '';
+let sceneryGroundCollisionNextRuntimeId = 0x71000000;
+let sceneryGroundCollisionBridgeMutationChain: Promise<void> = Promise.resolve();
+const sceneryGroundCollisionRuntimeBodyIds = new Set<number>();
+const sceneryGroundCollisionReferencePosition = new THREE.Vector3();
+const lastSceneryGroundCollisionReferencePosition = new THREE.Vector3();
+const sceneryGroundCollisionAnchor = new THREE.Object3D();
+let sceneryGroundCollisionReferenceInitialized = false;
+let sceneryGroundCollisionReferenceElapsed = 0;
+let currentGroundChunkManifest: GroundChunkManifest | null = null;
 const physicsBridgeBodyIdByNodeId = new Map<string, number>();
 const physicsBridgeNodeIdByBodyId = new Map<number, string>();
 const physicsBridgeVehicleIdByNodeId = new Map<string, number>();
@@ -1887,6 +1907,9 @@ const physicsGravity = createHostPhysicsVec3(0, -DEFAULT_ENVIRONMENT_GRAVITY, 0)
 const PHYSICS_FIXED_TIMESTEP = isWeChatMiniProgram ? 1 / 30 : 1 / 60;
 // Fewer substeps needed at 30 Hz; each covers more sim time.
 const PHYSICS_MAX_SUB_STEPS = isWeChatMiniProgram ? 4 : 5;
+const CAMERA_DEPENDENT_POSITION_EPSILON = 0.02;
+const CAMERA_DEPENDENT_POSITION_EPSILON_SQ = CAMERA_DEPENDENT_POSITION_EPSILON * CAMERA_DEPENDENT_POSITION_EPSILON;
+const CAMERA_DEPENDENT_UPDATE_INTERVAL_SECONDS = 0.12;
 type PhysicsInterpolationState = {
   prevPos: THREE.Vector3;
   prevQuat: THREE.Quaternion;
@@ -4937,6 +4960,27 @@ function findGroundNode(nodes: SceneNode[] | undefined | null): SceneNode | null
   return null;
 }
 
+function attachScenePackageTerrainRuntime(
+  pkg: ScenePackageUnzipped,
+  sceneEntry: ScenePackageManifestSceneEntry,
+  document: SceneJsonExportDocument,
+): void {
+  const groundNode = findGroundNode(document.nodes);
+  if (!groundNode || !isGroundDynamicMesh(groundNode.dynamicMesh)) {
+    return;
+  }
+  const terrainManifest = readTerrainDatasetManifestFromScenePackage(pkg, sceneEntry);
+  const terrainSampler = createTerrainDatasetHeightSamplerFromScenePackage(pkg, sceneEntry);
+  const runtimeGround = groundNode.dynamicMesh as GroundRuntimeDynamicMesh & {
+    runtimeTerrainDatasetManifest?: unknown;
+    runtimeTerrainDatasetEnabled?: boolean;
+    runtimeTerrainHeightSampler?: unknown;
+  };
+  runtimeGround.runtimeTerrainDatasetManifest = terrainManifest;
+  runtimeGround.runtimeTerrainDatasetEnabled = Boolean(terrainSampler);
+  runtimeGround.runtimeTerrainHeightSampler = terrainSampler;
+}
+
 function refreshDynamicGroundCache(document: SceneJsonExportDocument | null): void {
   if (!document) {
     dynamicGroundCache = null;
@@ -5881,6 +5925,9 @@ function clearLegacyPhysicsWorld(): void {
 function resetPhysicsWorld(): void {
   void disposeSceneryPhysicsBridgeScene();
   clearLegacyPhysicsWorld();
+  sceneryGroundCollisionReferenceInitialized = false;
+  sceneryGroundCollisionReferenceElapsed = 0;
+  currentGroundChunkManifest = null;
 }
 
 function resolveSceneryPhysicsBridgePreference(
@@ -5910,11 +5957,105 @@ async function reloadSceneryPhysicsBridgeForPreference(
   }
 }
 
+function resolveSceneryCompiledGroundTileLoader(): ((record: { path: string }) => Promise<ArrayBuffer | null>) | undefined {
+  return async (record) => {
+    const path = typeof record.path === 'string' ? record.path.trim() : '';
+    if (!path) {
+      return null;
+    }
+    const bundled = activeScenePackagePkg?.files?.[path];
+    if (bundled) {
+      return bundled.buffer.slice(bundled.byteOffset, bundled.byteOffset + bundled.byteLength);
+    }
+    if (path.startsWith('http://') || path.startsWith('https://') || path.startsWith('/')) {
+      return await requestBinaryFromUrl(path).catch(() => null);
+    }
+    return null;
+  };
+}
+
+function resolveSceneryGroundCollisionReferenceWorld(
+  camera: THREE.Camera | null | undefined,
+  targetPosition: THREE.Vector3,
+): boolean {
+  const manualDriveNode = vehicleDriveActive.value ? vehicleDriveNodeId.value : null;
+  if (manualDriveNode && resolveVehicleOrObjectWorldPosition({
+    nodeId: manualDriveNode,
+    vehicleInstances,
+    nodeObjectMap,
+    isPhysicsEnabled: () => physicsEnvironmentEnabled.value,
+    target: targetPosition,
+  })) {
+    return true;
+  }
+  const followNodeId = autoTourFollowNodeId.value;
+  if (followNodeId && resolveVehicleOrObjectWorldPosition({
+    nodeId: followNodeId,
+    vehicleInstances,
+    nodeObjectMap,
+    isPhysicsEnabled: () => physicsEnvironmentEnabled.value,
+    target: targetPosition,
+  })) {
+    return true;
+  }
+  if (!camera) {
+    return false;
+  }
+  camera.getWorldPosition(targetPosition);
+  return true;
+}
+
+function resolveSceneryGroundCollisionAnchor(referenceWorldPosition: THREE.Vector3): THREE.Camera {
+  sceneryGroundCollisionAnchor.position.copy(referenceWorldPosition);
+  sceneryGroundCollisionAnchor.updateMatrixWorld(true);
+  return sceneryGroundCollisionAnchor as unknown as THREE.Camera;
+}
+
+function shouldUpdateSceneryGroundCollisionForFrame(delta: number, referenceWorldPosition: THREE.Vector3): boolean {
+  sceneryGroundCollisionReferenceElapsed += Math.max(0, delta);
+  if (!sceneryGroundCollisionReferenceInitialized) {
+    sceneryGroundCollisionReferenceInitialized = true;
+    sceneryGroundCollisionReferenceElapsed = 0;
+    lastSceneryGroundCollisionReferencePosition.copy(referenceWorldPosition);
+    return true;
+  }
+  const movedSq = referenceWorldPosition.distanceToSquared(lastSceneryGroundCollisionReferencePosition);
+  const moved = movedSq > CAMERA_DEPENDENT_POSITION_EPSILON_SQ;
+  const due = sceneryGroundCollisionReferenceElapsed >= CAMERA_DEPENDENT_UPDATE_INTERVAL_SECONDS;
+  if (!moved && !due) {
+    return false;
+  }
+  sceneryGroundCollisionReferenceElapsed = 0;
+  lastSceneryGroundCollisionReferencePosition.copy(referenceWorldPosition);
+  return true;
+}
+
+function enqueueSceneryGroundCollisionBridgeMutation(task: () => Promise<void>): void {
+  sceneryGroundCollisionBridgeMutationChain = sceneryGroundCollisionBridgeMutationChain
+    .then(task)
+    .catch((error) => {
+      console.warn('[SceneViewer] Ground collision bridge mutation failed', error);
+    });
+}
+
+function resolveSceneryGroundCollisionRuntimeDeps(): NonNullable<
+  Parameters<typeof syncGroundCollisionRuntimeHost>[0]['runtimeDeps']
+> | null {
+  return createGroundCollisionRuntimeBridgeDeps({
+    enabled: physicsEnvironmentEnabled.value,
+    sceneLoaded: physicsBridgeSceneLoaded,
+    getPhysicsBridge: () => physicsBridge,
+    runtimeBodyIds: sceneryGroundCollisionRuntimeBodyIds,
+    nextRuntimeId: nextSceneryGroundCollisionRuntimeId,
+    enqueueMutation: enqueueSceneryGroundCollisionBridgeMutation,
+    loggerTag: 'SceneryGroundCollision',
+  });
+}
+
 function resolveSceneryGroundCollisionSignature(document: SceneJsonExportDocument | null): string {
   if (!document) {
     return '';
   }
-  syncSceneryGroundCollisionRuntimeLoadedTileKeys(document, null);
   const groundNode = findGroundNode(document.nodes);
   const groundMesh = groundNode?.dynamicMesh as GroundRuntimeDynamicMesh | null | undefined;
   if (!groundNode || !isGroundDynamicMesh(groundMesh)) {
@@ -5954,30 +6095,33 @@ function syncSceneryGroundCollisionRuntimeLoadedTileKeys(document: SceneJsonExpo
   if (!groundObject) {
     return false;
   }
+  if (!camera || !physicsEnvironmentEnabled.value) {
+    clearGroundCollisionRuntimeHost(groundObject);
+    return false;
+  }
 
   const groundUserData = groundNode.userData && typeof groundNode.userData === 'object'
     ? (groundNode.userData as Record<string, unknown>)
     : {};
-  const compiledManifest = groundUserData.compiledGroundManifest as { revision?: unknown } | null | undefined;
-  const compiledKeys = compiledManifest
-    ? collectLoadedCompiledGroundChunkKeys(groundObject, compiledManifest as any)
-    : [];
-  const infiniteKeys = groundMesh.terrainMode === 'infinite'
-    ? getVisibleInfiniteGroundChunkKeys(groundObject)
-    : [];
-  if (camera) {
-    syncGroundCollisionRuntimeHost({
-      enabled: true,
-      sourceId: groundNode.id,
-      groundObject,
-      groundMesh,
-      camera,
-      compiledManifest: compiledManifest as any,
-    });
+  const compiledManifest = groundUserData.compiledGroundManifest as Parameters<typeof syncGroundCollisionRuntimeHost>[0]['compiledManifest'];
+  if (!resolveSceneryGroundCollisionReferenceWorld(camera, sceneryGroundCollisionReferencePosition)) {
+    clearGroundCollisionRuntimeHost(groundObject);
+    return false;
   }
+  const snapshot = syncGroundCollisionRuntimeHost({
+    enabled: true,
+    sourceId: groundNode.id,
+    groundObject,
+    groundMesh,
+    camera: resolveSceneryGroundCollisionAnchor(sceneryGroundCollisionReferencePosition),
+    compiledManifest,
+    loadCompiledTileData: resolveSceneryCompiledGroundTileLoader(),
+    groundChunkManifest: currentGroundChunkManifest,
+    runtimeDeps: resolveSceneryGroundCollisionRuntimeDeps(),
+  });
   return syncGroundCollisionRuntimeLoadedTileKeys(groundObject, groundMesh, {
-    compiledKeys,
-    infiniteKeys,
+    compiledKeys: snapshot.compiledTileKeys,
+    infiniteKeys: snapshot.infiniteChunkKeys,
   });
 }
 
@@ -6037,11 +6181,15 @@ function updateSceneryPhysicsBridgeIndex(asset: PhysicsSceneAsset): void {
 async function loadSceneryPhysicsBridgeScene(document: SceneJsonExportDocument | null): Promise<void> {
   if (!document) {
     currentPhysicsBridgeGroundCollisionSignature = '';
+    sceneryGroundCollisionReferenceInitialized = false;
+    sceneryGroundCollisionReferenceElapsed = 0;
+    currentGroundChunkManifest = null;
+    sceneryGroundCollisionRuntimeBodyIds.clear();
     await disposeSceneryPhysicsBridgeScene();
     return;
   }
   await reloadSceneryPhysicsBridgeForPreference(resolveDocumentEnvironment(document));
-  syncSceneryGroundCollisionRuntimeLoadedTileKeys(document, null);
+  syncSceneryGroundCollisionRuntimeLoadedTileKeys(document, renderContext?.camera ?? null);
   currentPhysicsBridgeGroundCollisionSignature = resolveSceneryGroundCollisionSignature(document);
   const requestId = ++physicsBridgeSceneRequestId;
   const asset = buildPhysicsSceneAsset(document);
@@ -6051,6 +6199,7 @@ async function loadSceneryPhysicsBridgeScene(document: SceneJsonExportDocument |
   }
   try {
     const bridge = await ensureSceneryPhysicsBridgeReady();
+    sceneryGroundCollisionRuntimeBodyIds.clear();
     await bridge.loadScene(asset);
     if (requestId !== physicsBridgeSceneRequestId) {
       return;
@@ -6410,6 +6559,9 @@ function syncSceneryPhysicsBridgeVehicleInput(): void {
 
 async function disposeSceneryPhysicsBridgeScene(): Promise<void> {
   physicsBridgeSceneRequestId += 1;
+  sceneryGroundCollisionRuntimeBodyIds.clear();
+  const groundNode = currentDocument ? findGroundNode(currentDocument.nodes) : null;
+  clearGroundCollisionRuntimeHost(groundNode ? (nodeObjectMap.get(groundNode.id) ?? null) : null);
   physicsBridgeBodyIdByNodeId.clear();
   physicsBridgeNodeIdByBodyId.clear();
   physicsBridgeVehicleIdByNodeId.clear();
@@ -6429,6 +6581,9 @@ async function disposeSceneryPhysicsBridgeScene(): Promise<void> {
     physicsBridgeSceneLoaded = false;
     physicsBridgeStepPromise = null;
     physicsBridgeBodySyncPromise = null;
+    sceneryGroundCollisionRuntimeBodyIds.clear();
+    sceneryGroundCollisionReferenceInitialized = false;
+    sceneryGroundCollisionReferenceElapsed = 0;
     resetPhysicsBridgeVehicleInputSyncState(physicsBridgeVehicleInputSyncState);
     physicsBridgeFrameBodiesByNodeId.clear();
   }
@@ -6450,6 +6605,11 @@ async function destroySceneryPhysicsBridge(): Promise<void> {
   } finally {
     physicsBridgeSceneRequestId += 1;
     currentPhysicsBridgeGroundCollisionSignature = '';
+    sceneryGroundCollisionRuntimeBodyIds.clear();
+    const groundNode = currentDocument ? findGroundNode(currentDocument.nodes) : null;
+    clearGroundCollisionRuntimeHost(groundNode ? (nodeObjectMap.get(groundNode.id) ?? null) : null);
+    sceneryGroundCollisionReferenceInitialized = false;
+    sceneryGroundCollisionReferenceElapsed = 0;
     physicsBridgeBodyIdByNodeId.clear();
     physicsBridgeNodeIdByBodyId.clear();
     physicsBridgeVehicleIdByNodeId.clear();
@@ -11478,6 +11638,7 @@ function parseScenePackageToProjectData(pkg: ScenePackageUnzipped): ScenePackage
       throw new Error(`场景包内场景数据无效：${sceneEntry.path}`);
     }
     const document = hydrateGroundSidecarFromPackage(pkg, sceneEntry, sceneRaw as SceneJsonExportDocument);
+    attachScenePackageTerrainRuntime(pkg, sceneEntry, document);
     const assetRegistry: Record<string, SceneAssetRegistryEntry> = {
       ...(document.assetRegistry ?? {}),
     };
@@ -12427,12 +12588,27 @@ function startRenderLoop(
         if (cachedGround) {
           const groundObject = nodeObjectMap.get(cachedGround.nodeId) ?? null;
           if (groundObject) {
-            syncSceneryGroundCollisionRuntimeLoadedTileKeys(currentDocument, camera);
-            if (currentDocument) {
+            const hasGroundCollisionReference = resolveSceneryGroundCollisionReferenceWorld(camera, sceneryGroundCollisionReferencePosition);
+            if (!hasGroundCollisionReference) {
+              clearGroundCollisionRuntimeHost(groundObject);
+            }
+            const shouldUpdateGroundCollisionSystems = hasGroundCollisionReference
+              ? shouldUpdateSceneryGroundCollisionForFrame(deltaSeconds, sceneryGroundCollisionReferencePosition)
+              : false;
+            if (shouldUpdateGroundCollisionSystems) {
+              const groundCollisionChanged = syncSceneryGroundCollisionRuntimeLoadedTileKeys(currentDocument, camera);
+              const hasDynamicGroundCollisionBridgeRuntime = resolveSceneryGroundCollisionRuntimeDeps() !== null;
+              if (groundCollisionChanged && currentDocument && physicsEnvironmentEnabled.value && physicsBridgeSceneLoaded && !hasDynamicGroundCollisionBridgeRuntime) {
+                const nextGroundCollisionSignature = resolveSceneryGroundCollisionSignature(currentDocument);
+                if (nextGroundCollisionSignature !== currentPhysicsBridgeGroundCollisionSignature) {
+                  currentPhysicsBridgeGroundCollisionSignature = nextGroundCollisionSignature;
+                  void loadSceneryPhysicsBridgeScene(currentDocument);
+                }
+              }
+            } else if (currentDocument) {
               const nextGroundCollisionSignature = resolveSceneryGroundCollisionSignature(currentDocument);
               if (nextGroundCollisionSignature !== currentPhysicsBridgeGroundCollisionSignature) {
                 currentPhysicsBridgeGroundCollisionSignature = nextGroundCollisionSignature;
-                void loadSceneryPhysicsBridgeScene(currentDocument);
               }
             }
           }
@@ -12540,6 +12716,9 @@ function cleanupForUnrelatedSceneSwitch(): void {
   clearInstancedMeshes();
   const groundNode = currentDocument ? findGroundNode(currentDocument.nodes) : null;
   clearGroundCollisionRuntimeHost(groundNode ? (nodeObjectMap.get(groundNode.id) ?? null) : null);
+  sceneryGroundCollisionReferenceInitialized = false;
+  sceneryGroundCollisionReferenceElapsed = 0;
+  currentGroundChunkManifest = null;
 
   if (sceneGraphRoot) {
     renderContext.scene.remove(sceneGraphRoot);
