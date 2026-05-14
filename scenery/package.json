@@ -15,7 +15,7 @@
   "scripts": {
     "preinstall": "npx only-allow pnpm",
     "build": "pnpm run type-check",
-    "type-check": "vue-tsc -p tsconfig.app.json --noEmit",
+    "type-check": "node ./node_modules/vue-tsc/bin/vue-tsc.js -p tsconfig.app.json --noEmit",
     "lint": "eslint --ext .ts,.vue common components",
     "lint:fix": "eslint --ext .ts,.vue common components --fix",
     "check": "pnpm run type-check && pnpm run lint",
@@ -54,6 +54,6 @@
     "typescript": "~5.6.3",
     "vue": "^3.5.13",
     "vue-eslint-parser": "^9.0.0",
-    "vue-tsc": "^2.1.10"
+    "vue-tsc": "2.1.10"
   }
 }

@@ -1873,7 +1873,6 @@ let physicsBridgeStepPromise: Promise<void> | null = null;
 let physicsBridgeBodySyncPromise: Promise<void> | null = null;
 const physicsBridgeVehicleInputSyncState = createPhysicsBridgeVehicleInputSyncState();
 let physicsBridgeSceneLoaded = false;
-let physicsBridgeSceneLoadInProgress = false;
 let physicsBridgeSceneRequestId = 0;
 let currentPhysicsBridgePreference: PhysicsBackendPreference | undefined;
 let currentPhysicsBridgeGroundCollisionSignature = '';
@@ -6272,7 +6271,6 @@ async function loadSceneryPhysicsBridgeScene(document: SceneJsonExportDocument |
     await disposeSceneryPhysicsBridgeScene();
     return;
   }
-  physicsBridgeSceneLoadInProgress = true;
   try {
     await reloadSceneryPhysicsBridgeForPreference(resolveDocumentEnvironment(document));
     currentPhysicsBridgeGroundCollisionSignature = resolveSceneryGroundCollisionSignature(document);
@@ -6293,8 +6291,6 @@ async function loadSceneryPhysicsBridgeScene(document: SceneJsonExportDocument |
     syncSceneryGroundCollisionRuntimeLoadedTileKeys(document, renderContext?.camera ?? null);
   } catch (error) {
     console.warn('[SceneViewer] Failed to load physics bridge scene', error);
-  } finally {
-    physicsBridgeSceneLoadInProgress = false;
   }
 }
 
@@ -9702,7 +9698,7 @@ function updateVehicleSpeedFromVehicle(): void {
         brake: vehicleDriveInput.brake,
         parkedSpeedEpsilon: VEHICLE_PARKED_SPEED_EPSILON,
         parkingHoldSpeedEpsilon: VEHICLE_PARKING_HOLD_SPEED_EPSILON,
-        resolveBrakeForce: (vehicleInstance) => resolveAutoTourVehicleBrakeForce(vehicleInstance.nodeId),
+        resolveBrakeForce: () => resolveAutoTourVehicleBrakeForce(vehicleDriveNodeId.value ?? ''),
       });
     } else {
       const speed = Math.sqrt(velocity.x * velocity.x + velocity.y * velocity.y + velocity.z * velocity.z);
