@@ -36,27 +36,23 @@ type GroundCollisionRuntimeDeps = {
   loggerTag?: string
 }
 
-const noopPhysicsWorld: PhysicsWorldLike = {
-  addBody: () => undefined,
-}
-
-function createNoopBody(): null {
-  return null
-}
-
 function ensureHostState(
   groundObject: THREE.Object3D,
-  runtimeDeps: GroundCollisionRuntimeDeps,
-): GroundCollisionRuntimeHostState {
+  runtimeDeps: GroundCollisionRuntimeDeps | null | undefined,
+): GroundCollisionRuntimeHostState | null {
+  const deps = runtimeDeps
+  if (!deps || !deps.getPhysicsWorld || !deps.ensurePhysicsWorld || !deps.createBody) {
+    return null
+  }
   const existing = groundCollisionRuntimeHostStateMap.get(groundObject)
   if (existing) {
     return existing
   }
   const sharedDeps: InfiniteGroundChunkColliderRuntimeDeps = {
-    getPhysicsWorld: runtimeDeps.getPhysicsWorld ?? (() => null),
-    ensurePhysicsWorld: runtimeDeps.ensurePhysicsWorld ?? (() => noopPhysicsWorld),
-    createBody: runtimeDeps.createBody ?? createNoopBody,
-    loggerTag: runtimeDeps.loggerTag,
+    getPhysicsWorld: deps.getPhysicsWorld,
+    ensurePhysicsWorld: deps.ensurePhysicsWorld,
+    createBody: deps.createBody,
+    loggerTag: deps.loggerTag,
   }
   const state: GroundCollisionRuntimeHostState = {
     compiledRuntime: createCompiledGroundCollisionRuntime(sharedDeps),
@@ -109,7 +105,14 @@ export function syncGroundCollisionRuntimeHost(
     }
   }
 
-  const state = ensureHostState(groundObject, runtimeDeps ?? {})
+  const state = ensureHostState(groundObject, runtimeDeps)
+  if (!state) {
+    clearGroundCollisionRuntimeHost(groundObject)
+    return {
+      compiledTileKeys: [],
+      infiniteChunkKeys: [],
+    }
+  }
   camera.getWorldPosition(groundCollisionReferencePositionHelper)
   state.lastReferenceWorldPosition.copy(groundCollisionReferencePositionHelper)
 

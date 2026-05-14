@@ -1873,6 +1873,7 @@ let physicsBridgeStepPromise: Promise<void> | null = null;
 let physicsBridgeBodySyncPromise: Promise<void> | null = null;
 const physicsBridgeVehicleInputSyncState = createPhysicsBridgeVehicleInputSyncState();
 let physicsBridgeSceneLoaded = false;
+let physicsBridgeSceneLoadInProgress = false;
 let physicsBridgeSceneRequestId = 0;
 let currentPhysicsBridgePreference: PhysicsBackendPreference | undefined;
 let currentPhysicsBridgeGroundCollisionSignature = '';
@@ -2800,11 +2801,7 @@ const vehicleDriveController = new VehicleDriveController(
     resolveRigidbodyComponent,
     resolveVehicleComponent,
     isPhysicsEnabled: () => physicsEnvironmentEnabled.value,
-    ensurePhysicsWorld: () => {
-      if (physicsEnvironmentEnabled.value && currentDocument && !physicsBridgeSceneLoaded) {
-        void loadSceneryPhysicsBridgeScene(currentDocument);
-      }
-    },
+    ensurePhysicsWorld: () => undefined,
     ensureVehicleBindingForNode,
     normalizeNodeId,
     setCameraViewState: (mode, targetId) => setCameraViewState(mode as CameraViewMode, targetId ?? null),
@@ -4253,7 +4250,7 @@ async function spawnRuntimePrefabRequest(request: RuntimePrefabSpawnRequest): Pr
     registerSceneSubtree(graph.root);
     refreshMultiuserNodeReferences(document);
     refreshBehaviorProximityCandidates();
-    syncPhysicsBodiesForDocument(document);
+    await syncPhysicsBodiesForDocument(document);
   }
 
   return true;
@@ -6007,16 +6004,20 @@ function resolveSceneryPhysicsBridgePreference(
 
 async function reloadSceneryPhysicsBridgeForPreference(
   settings: Pick<EnvironmentSettings, 'physicsEngine'> | null | undefined,
-): Promise<void> {
+): Promise<boolean> {
   const nextPreference = resolveSceneryPhysicsBridgePreference(settings);
   if (nextPreference === currentPhysicsBridgePreference) {
-    return;
+    return false;
   }
   currentPhysicsBridgePreference = nextPreference;
   await destroySceneryPhysicsBridge();
-  if (currentDocument) {
-    void loadSceneryPhysicsBridgeScene(currentDocument);
-  }
+  return true;
+}
+
+async function prepareSceneryPhysicsBridgeForDocument(document: SceneJsonExportDocument): Promise<void> {
+  const environmentSettings = resolveDocumentEnvironment(document);
+  applyPhysicsEnvironmentSettings(environmentSettings);
+  await reloadSceneryPhysicsBridgeForPreference(environmentSettings);
 }
 
 function resolveSceneryCompiledGroundTileLoader(): ((record: { path: string }) => Promise<ArrayBuffer | null>) | undefined {
@@ -6251,16 +6252,16 @@ async function loadSceneryPhysicsBridgeScene(document: SceneJsonExportDocument |
     await disposeSceneryPhysicsBridgeScene();
     return;
   }
-  await reloadSceneryPhysicsBridgeForPreference(resolveDocumentEnvironment(document));
-  syncSceneryGroundCollisionRuntimeLoadedTileKeys(document, renderContext?.camera ?? null);
-  currentPhysicsBridgeGroundCollisionSignature = resolveSceneryGroundCollisionSignature(document);
-  const requestId = ++physicsBridgeSceneRequestId;
-  const asset = buildPhysicsSceneAsset(document);
-  if (asset.shapes.length === 0 && asset.bodies.length === 0 && asset.vehicles.length === 0) {
-    await disposeSceneryPhysicsBridgeScene();
-    return;
-  }
+  physicsBridgeSceneLoadInProgress = true;
   try {
+    await reloadSceneryPhysicsBridgeForPreference(resolveDocumentEnvironment(document));
+    currentPhysicsBridgeGroundCollisionSignature = resolveSceneryGroundCollisionSignature(document);
+    const requestId = ++physicsBridgeSceneRequestId;
+    const asset = buildPhysicsSceneAsset(document);
+    if (asset.shapes.length === 0 && asset.bodies.length === 0 && asset.vehicles.length === 0) {
+      await disposeSceneryPhysicsBridgeScene();
+      return;
+    }
     const bridge = await ensureSceneryPhysicsBridgeReady();
     sceneryGroundCollisionRuntimeBodyIds.clear();
     await bridge.loadScene(asset);
@@ -6269,8 +6270,11 @@ async function loadSceneryPhysicsBridgeScene(document: SceneJsonExportDocument |
     }
     updateSceneryPhysicsBridgeIndex(asset);
     physicsBridgeSceneLoaded = true;
+    syncSceneryGroundCollisionRuntimeLoadedTileKeys(document, renderContext?.camera ?? null);
   } catch (error) {
     console.warn('[SceneViewer] Failed to load physics bridge scene', error);
+  } finally {
+    physicsBridgeSceneLoadInProgress = false;
   }
 }
 
@@ -6964,14 +6968,14 @@ function syncVehicleInstancesForDocument(document: SceneJsonExportDocument | nul
   });
 }
 
-function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null): void {
+async function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null): Promise<void> {
   if (!document) {
     resetPhysicsWorld();
     syncVehicleInstancesForDocument(null);
     syncAirWallsForDocument(null);
     return;
   }
-  void loadSceneryPhysicsBridgeScene(document);
+  await loadSceneryPhysicsBridgeScene(document);
   clearLegacyPhysicsWorld();
   syncVehicleInstancesForDocument(document);
   syncAirWallsForDocument(document);
@@ -11260,7 +11264,10 @@ async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
   const snapshot = cloneEnvironmentSettings(settings);
   activeEnvironmentSettings = snapshot;
   applyPhysicsEnvironmentSettings(snapshot);
-  void reloadSceneryPhysicsBridgeForPreference(snapshot);
+  const physicsBridgePreferenceChanged = await reloadSceneryPhysicsBridgeForPreference(snapshot);
+  if (physicsBridgePreferenceChanged && sceneGraphRoot && currentDocument) {
+    await syncPhysicsBodiesForDocument(currentDocument);
+  }
   if (!scene) {
     pendingEnvironmentSettings = snapshot;
     return;
@@ -12543,8 +12550,10 @@ async function mountGraphAndSyncSubsystems(
   refreshBehaviorProximityCandidates();
   refreshAnimationControllers(root);
   ensureBehaviorTapHandler(canvas, camera);
+  await prepareSceneryPhysicsBridgeForDocument(payload.document);
   initializeLazyPlaceholders(payload.document);
-  syncPhysicsBodiesForDocument(payload.document);
+  // Bootstrap physics before the render loop so vehicle drive and ground collision never race initialization.
+  await syncPhysicsBodiesForDocument(payload.document);
   await syncTerrainScatterInstances(payload.document, resourceCache);
   registerSceneSubtree(root);
   refreshAnimationControllers(root);
@@ -12696,16 +12705,8 @@ function startRenderLoop(
             const shouldUpdateGroundCollisionSystems = hasGroundCollisionReference
               ? shouldUpdateSceneryGroundCollisionForFrame(deltaSeconds, sceneryGroundCollisionReferencePosition)
               : false;
-            if (shouldUpdateGroundCollisionSystems) {
-              const groundCollisionChanged = syncSceneryGroundCollisionRuntimeLoadedTileKeys(currentDocument, camera);
-              const hasDynamicGroundCollisionBridgeRuntime = resolveSceneryGroundCollisionRuntimeDeps() !== null;
-              if (groundCollisionChanged && currentDocument && physicsEnvironmentEnabled.value && physicsBridgeSceneLoaded && !hasDynamicGroundCollisionBridgeRuntime) {
-                const nextGroundCollisionSignature = resolveSceneryGroundCollisionSignature(currentDocument);
-                if (nextGroundCollisionSignature !== currentPhysicsBridgeGroundCollisionSignature) {
-                  currentPhysicsBridgeGroundCollisionSignature = nextGroundCollisionSignature;
-                  void loadSceneryPhysicsBridgeScene(currentDocument);
-                }
-              }
+            if (shouldUpdateGroundCollisionSystems && physicsBridgeSceneLoaded) {
+              syncSceneryGroundCollisionRuntimeLoadedTileKeys(currentDocument, camera);
             } else if (currentDocument) {
               const nextGroundCollisionSignature = resolveSceneryGroundCollisionSignature(currentDocument);
               if (nextGroundCollisionSignature !== currentPhysicsBridgeGroundCollisionSignature) {
