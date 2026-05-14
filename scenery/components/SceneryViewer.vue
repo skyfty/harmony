@@ -570,7 +570,6 @@ import type {
   GroundDynamicMesh,
   GroundRuntimeDynamicMesh,
   LanternSlideDefinition,
-  RigidbodyPhysicsShape,
   SceneResourceSummary,
   SceneResourceSummaryEntry,
   Vector3Like,
@@ -1872,8 +1871,8 @@ let physicsBridgeSceneLoaded = false;
 let physicsBridgeSceneRequestId = 0;
 let currentPhysicsBridgePreference: PhysicsBackendPreference | undefined;
 let currentPhysicsBridgeGroundCollisionSignature = '';
-let sceneryGroundCollisionNextRuntimeId = 0x71000000;
 let sceneryGroundCollisionBridgeMutationChain: Promise<void> = Promise.resolve();
+let sceneryGroundCollisionNextRuntimeId = 0x71000000;
 const sceneryGroundCollisionRuntimeBodyIds = new Set<number>();
 const sceneryGroundCollisionReferencePosition = new THREE.Vector3();
 const lastSceneryGroundCollisionReferencePosition = new THREE.Vector3();
@@ -1884,6 +1883,10 @@ let currentGroundChunkManifest: GroundChunkManifest | null = null;
 const physicsBridgeBodyIdByNodeId = new Map<string, number>();
 const physicsBridgeNodeIdByBodyId = new Map<number, string>();
 const physicsBridgeVehicleIdByNodeId = new Map<string, number>();
+function nextSceneryGroundCollisionRuntimeId(): number {
+  sceneryGroundCollisionNextRuntimeId += 1;
+  return sceneryGroundCollisionNextRuntimeId;
+}
 type PhysicsBridgeBodyFrameState = {
   position: THREE.Vector3;
   quaternion: THREE.Quaternion;
@@ -11262,12 +11265,14 @@ function hydrateGroundSidecarFromPackage(
   if (!definition) {
     return document;
   }
-  if (!sceneEntry.groundHeightsPath) {
-    throw new Error(`场景 ${sceneEntry.sceneId} 缺少 ground 高度 sidecar 路径`);
+  const sidecarPath = typeof sceneEntry.groundHeightsPath === 'string' ? sceneEntry.groundHeightsPath.trim() : '';
+  if (!sidecarPath) {
+    return document;
   }
-  const sidecarBytes = pkg.files[sceneEntry.groundHeightsPath];
+  const sidecarBytes = pkg.files[sidecarPath];
   if (!sidecarBytes) {
-    throw new Error(`场景 ${sceneEntry.sceneId} 缺少 ground 高度 sidecar 文件`);
+    console.warn(`场景 ${sceneEntry.sceneId} 缺少 ground 高度 sidecar 文件，已回退为场景内置地形数据`);
+    return document;
   }
 
   const sidecarBuffer = sidecarBytes.buffer.slice(sidecarBytes.byteOffset, sidecarBytes.byteOffset + sidecarBytes.byteLength);
