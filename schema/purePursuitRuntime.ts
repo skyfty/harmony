@@ -6,6 +6,8 @@ import { buildPolylineMetricData, projectPointToPolyline, samplePolylineAtS } fr
 const VEHICLE_CONTROL_DEBUG_KEY = 'harmony:debug:vehicle-control'
 const PURE_PURSUIT_DEBUG_KEY = 'harmony:debug:pure-pursuit'
 const AUTO_TOUR_DEBUG_KEY = 'harmony:debug:auto-tour'
+export const VEHICLE_PARKED_SPEED_EPSILON = 0.08
+export const VEHICLE_PARKING_HOLD_SPEED_EPSILON = 0.2
 
 type VehicleControlDebugKind = 'pure-pursuit' | 'auto-tour'
 
@@ -223,6 +225,8 @@ const planarEnd = new THREE.Vector3()
 const yawTargetQuat = new THREE.Quaternion()
 const objectWorldQuat = new THREE.Quaternion()
 const currentPositionThree = new THREE.Vector3()
+const parkedSpeedQuaternion = new THREE.Quaternion()
+const parkedSpeedForward = new THREE.Vector3()
 
 // Longitudinal control tuning (runtime-local, intentionally conservative defaults).
 // These values are designed to remove "engine/brake" chattering near zero error without affecting normal driving.
@@ -246,6 +250,63 @@ function setCannonQuaternionFromThree(target: any, q: THREE.Quaternion): void {
   target.y = q.y
   target.z = q.z
   target.w = q.w
+}
+
+export function updateVehicleSpeedAndApplyParkingHoldSafe(params: {
+  vehicleInstance: PurePursuitVehicleInstanceLike
+  chassisBody: VehicleDriveVehicle['chassisBody']
+  throttle: number
+  brake: number
+  parkedSpeedEpsilon?: number
+  parkingHoldSpeedEpsilon?: number
+  resolveBrakeForce: (vehicleInstance: PurePursuitVehicleInstanceLike) => number
+}): number {
+  const parkedSpeedEpsilon = params.parkedSpeedEpsilon ?? VEHICLE_PARKED_SPEED_EPSILON
+  const parkingHoldSpeedEpsilon = params.parkingHoldSpeedEpsilon ?? VEHICLE_PARKING_HOLD_SPEED_EPSILON
+
+  try {
+    parkedSpeedQuaternion.set(
+      params.chassisBody.quaternion.x,
+      params.chassisBody.quaternion.y,
+      params.chassisBody.quaternion.z,
+      params.chassisBody.quaternion.w,
+    )
+    parkedSpeedForward.copy(params.vehicleInstance.axisForward).applyQuaternion(parkedSpeedQuaternion)
+    const forwardLengthSq =
+      parkedSpeedForward.x * parkedSpeedForward.x
+      + parkedSpeedForward.y * parkedSpeedForward.y
+      + parkedSpeedForward.z * parkedSpeedForward.z
+    if (forwardLengthSq > 1e-8) {
+      parkedSpeedForward.multiplyScalar(1 / Math.sqrt(forwardLengthSq))
+      const forwardSpeed = Math.abs(
+        params.chassisBody.velocity.x * parkedSpeedForward.x
+          + params.chassisBody.velocity.y * parkedSpeedForward.y
+          + params.chassisBody.velocity.z * parkedSpeedForward.z,
+      )
+      if (
+        Math.abs(params.throttle) <= 0.05
+        && params.brake <= 0.05
+        && forwardSpeed <= parkingHoldSpeedEpsilon
+      ) {
+        const brakeForce = params.resolveBrakeForce(params.vehicleInstance)
+        holdVehicleBrakeSafe({ vehicleInstance: params.vehicleInstance, brakeForce })
+        params.chassisBody.velocity.set(0, 0, 0)
+        params.chassisBody.angularVelocity.set(0, 0, 0)
+        params.chassisBody.sleep?.()
+      }
+      return forwardSpeed >= parkedSpeedEpsilon ? forwardSpeed : 0
+    }
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.warn('[PurePursuitRuntime] vehicle parked-speed update failed', error)
+  }
+
+  const speed = Math.sqrt(
+    params.chassisBody.velocity.x * params.chassisBody.velocity.x
+      + params.chassisBody.velocity.y * params.chassisBody.velocity.y
+      + params.chassisBody.velocity.z * params.chassisBody.velocity.z,
+  )
+  return Number.isFinite(speed) && speed >= parkedSpeedEpsilon ? speed : 0
 }
 
 export function applyPurePursuitVehicleControl(params: {

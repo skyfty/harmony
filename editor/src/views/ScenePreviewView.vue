@@ -240,7 +240,12 @@ import {
 	stopTourAndUnfollow,
 } from '@schema/autoTourHelpers'
 import { syncAutoTourActiveNodesFromRuntime, resolveAutoTourFollowNodeId } from '@schema/autoTourSync'
-import { holdVehicleBrakeSafe } from '@schema/purePursuitRuntime'
+import {
+	holdVehicleBrakeSafe,
+	updateVehicleSpeedAndApplyParkingHoldSafe,
+	VEHICLE_PARKED_SPEED_EPSILON,
+	VEHICLE_PARKING_HOLD_SPEED_EPSILON,
+} from '@schema/purePursuitRuntime'
 import {
 	SIGNBOARD_CLOSE_FADE_DISTANCE,
 	SIGNBOARD_MIN_SCREEN_Y_PERCENT,
@@ -7338,13 +7343,29 @@ function applyVehicleDriveForces(deltaSeconds: number): void {
 
 function updateVehicleSpeedFromVehicle(): void {
 	const vehicle = vehicleDriveState.vehicle
-	const velocity = vehicle?.chassisBody?.velocity ?? null
-	if (!velocity) {
+	const chassisBody = vehicle?.chassisBody ?? null
+	const velocity = chassisBody?.velocity ?? null
+	const vehicleNodeId = normalizeNodeId(vehicleDriveState.nodeId)
+	const vehicleInstance = vehicleNodeId ? vehicleInstances.get(vehicleNodeId) ?? null : null
+	if (!chassisBody || !velocity) {
 		vehicleSpeed.value = vehicleDriveController.getCurrentSpeed()
 		return
 	}
-	const speed = Math.sqrt(velocity.x * velocity.x + velocity.y * velocity.y + velocity.z * velocity.z)
-	vehicleSpeed.value = Number.isFinite(speed) ? speed : 0
+	if (vehicleInstance) {
+		const speed = updateVehicleSpeedAndApplyParkingHoldSafe({
+			vehicleInstance,
+			chassisBody,
+			throttle: vehicleDriveInput.throttle,
+			brake: vehicleDriveInput.brake,
+			parkedSpeedEpsilon: VEHICLE_PARKED_SPEED_EPSILON,
+			parkingHoldSpeedEpsilon: VEHICLE_PARKING_HOLD_SPEED_EPSILON,
+			resolveBrakeForce: (vehicleInstance) => resolveAutoTourVehicleBrakeForce(vehicleInstance.nodeId),
+		})
+		vehicleSpeed.value = speed
+	} else {
+		const speed = Math.sqrt(velocity.x * velocity.x + velocity.y * velocity.y + velocity.z * velocity.z)
+		vehicleSpeed.value = Number.isFinite(speed) && speed >= VEHICLE_PARKED_SPEED_EPSILON ? speed : 0
+	}
 }
 
 function resetActiveVehiclePose(): boolean {

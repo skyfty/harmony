@@ -731,7 +731,12 @@ import {
   stopTourAndUnfollow,
 } from '@harmony/schema/autoTourHelpers';
 import { syncAutoTourActiveNodesFromRuntime, resolveAutoTourFollowNodeId } from '@harmony/schema/autoTourSync';
-import { holdVehicleBrakeSafe } from '@harmony/schema/purePursuitRuntime';
+import {
+  holdVehicleBrakeSafe,
+  updateVehicleSpeedAndApplyParkingHoldSafe,
+  VEHICLE_PARKED_SPEED_EPSILON,
+  VEHICLE_PARKING_HOLD_SPEED_EPSILON,
+} from '@harmony/schema/purePursuitRuntime';
 import {
   SIGNBOARD_CLOSE_FADE_DISTANCE,
   SIGNBOARD_MIN_SCREEN_Y_PERCENT,
@@ -6772,12 +6777,34 @@ function createBridgeVehicleInstance(
   };
 }
 
+function syncVehicleRigidbodyInstance(
+  nodeId: string,
+  instance: VehicleInstanceWithWheels,
+  object: THREE.Object3D,
+): void {
+  const chassisBody = instance.vehicle.chassisBody;
+  if (!chassisBody) {
+    rigidbodyInstances.delete(nodeId);
+    return;
+  }
+  // Keep the vehicle chassis body available through the shared rigidbody map.
+  // VehicleDriveController reads rigidbodyInstances by vehicle node id.
+  rigidbodyInstances.set(nodeId, {
+    nodeId,
+    body: chassisBody,
+    bodies: [chassisBody],
+    object,
+    orientationAdjustment: null,
+  });
+}
+
 function removeVehicleInstance(nodeId: string): void {
   const entry = vehicleInstances.get(nodeId);
   if (!entry) {
     return;
   }
   vehicleInstances.delete(nodeId);
+  rigidbodyInstances.delete(nodeId);
   scenePreviewPerf.notifyRemovedNode(nodeId);
 }
 
@@ -6796,6 +6823,7 @@ function ensureVehicleBindingForNode(nodeId: string): void {
   const instance = createBridgeVehicleInstance(node, component, object);
   if (instance) {
     vehicleInstances.set(nodeId, instance);
+    syncVehicleRigidbodyInstance(nodeId, instance, object);
   }
 }
 
@@ -9525,7 +9553,23 @@ function updateVehicleSpeedFromVehicle(): void {
   const vehicle = vehicleDriveVehicle;
   const chassisBody = vehicle?.chassisBody ?? null;
   const velocity = chassisBody?.velocity ?? null;
+  const vehicleInstance = vehicleDriveNodeId.value ? vehicleInstances.get(vehicleDriveNodeId.value) ?? null : null;
   if (chassisBody && velocity) {
+    if (vehicleInstance) {
+      vehicleSpeed.value = updateVehicleSpeedAndApplyParkingHoldSafe({
+        vehicleInstance,
+        chassisBody,
+        throttle: vehicleDriveInput.throttle,
+        brake: vehicleDriveInput.brake,
+        parkedSpeedEpsilon: VEHICLE_PARKED_SPEED_EPSILON,
+        parkingHoldSpeedEpsilon: VEHICLE_PARKING_HOLD_SPEED_EPSILON,
+        resolveBrakeForce: (vehicleInstance) => resolveAutoTourVehicleBrakeForce(vehicleInstance.nodeId),
+      });
+    } else {
+      const speed = Math.sqrt(velocity.x * velocity.x + velocity.y * velocity.y + velocity.z * velocity.z);
+      vehicleSpeed.value = Number.isFinite(speed) && speed >= VEHICLE_PARKED_SPEED_EPSILON ? speed : 0;
+    }
+
     vehicleCompassQuaternion.set(
       chassisBody.quaternion.x,
       chassisBody.quaternion.y,
@@ -9534,7 +9578,6 @@ function updateVehicleSpeedFromVehicle(): void {
     );
     vehicleCompassForward.set(1, 0, 0).applyQuaternion(vehicleCompassQuaternion);
     vehicleCompassForward.y = 0;
-
     const horizontalLengthSq =
       vehicleCompassForward.x * vehicleCompassForward.x
       + vehicleCompassForward.z * vehicleCompassForward.z;
@@ -9546,9 +9589,6 @@ function updateVehicleSpeedFromVehicle(): void {
       const northDirectionAngleDegrees = resolveNorthDirectionAngleDegrees(activeEnvironmentSettings.northDirection);
       vehicleHeadingDegrees.value = (worldHeadingDegrees - northDirectionAngleDegrees + 360) % 360;
     }
-
-    const speed = Math.sqrt(velocity.x * velocity.x + velocity.y * velocity.y + velocity.z * velocity.z);
-    vehicleSpeed.value = Number.isFinite(speed) ? speed : 0;
     return;
   }
 
