@@ -717,11 +717,6 @@ export function buildGroundHeightfieldChunkData(
   if (rows <= 0 || columns <= 0) {
     return null
   }
-  const maxChunkRowIndex = Math.max(0, Math.floor((rows - 1) / plan.chunkCells))
-  const maxChunkColumnIndex = Math.max(0, Math.floor((columns - 1) / plan.chunkCells))
-  if (chunkRow < 0 || chunkRow > maxChunkRowIndex || chunkColumn < 0 || chunkColumn > maxChunkColumnIndex) {
-    return null
-  }
 
   const spec = computeChunkSpec(rows, columns, chunkRow, chunkColumn, plan.chunkCells)
   const pointsX = spec.columns + 1

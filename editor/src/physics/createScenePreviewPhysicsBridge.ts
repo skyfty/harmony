@@ -13,12 +13,14 @@ import type {
 import type { AmmoApi } from '@harmony/physics-ammo'
 import { initializePhysicsBackendBridge } from '@harmony/physics-bridge/physicsBackendBridge'
 import { createWebPhysicsBridge, createInMemoryWebPhysicsWorker } from '@harmony/physics-bridge/web'
+import type * as CANNON from 'cannon-es'
 
 type AmmoRuntimeModule = typeof import('@harmony/physics-ammo')
 type CannonRuntimeModule = typeof import('@harmony/physics-cannon')
 
 export type CreateScenePreviewPhysicsBridgeOptions = {
   engine?: PhysicsBackendPreference
+  onCannonWorldReady?: (world: CANNON.World | null) => void
 }
 
 function resolveEditorPhysicsBackendPreference(preference: PhysicsBackendPreference | undefined): 'ammo' | 'cannon' {
@@ -27,11 +29,13 @@ function resolveEditorPhysicsBackendPreference(preference: PhysicsBackendPrefere
 
 class LazyScenePreviewPhysicsBridge implements PhysicsBridge {
   private readonly enginePreference: PhysicsBackendPreference | undefined
+  private readonly onCannonWorldReady: ((world: CANNON.World | null) => void) | undefined
   private bridge: PhysicsBridge | null = null
   private bridgePromise: Promise<PhysicsBridge> | null = null
 
   constructor(options: CreateScenePreviewPhysicsBridgeOptions = {}) {
     this.enginePreference = options.engine
+    this.onCannonWorldReady = options.onCannonWorldReady
   }
 
   async init(options: PhysicsInitOptions): Promise<PhysicsBridgeInitResult> {
@@ -98,7 +102,9 @@ class LazyScenePreviewPhysicsBridge implements PhysicsBridge {
       const { createCannonPhysicsController, createCannonSchemaPhysicsBackendBridge } = cannonRuntime
       initializePhysicsBackendBridge(createCannonSchemaPhysicsBackendBridge())
       return createWebPhysicsBridge({
-        workerFactory: () => createInMemoryWebPhysicsWorker(createCannonPhysicsController()),
+        workerFactory: () => createInMemoryWebPhysicsWorker(createCannonPhysicsController({
+          onWorldReady: this.onCannonWorldReady,
+        })),
       })
     }
 

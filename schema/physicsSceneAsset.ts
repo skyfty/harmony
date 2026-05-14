@@ -892,9 +892,9 @@ export function buildPhysicsSceneAsset(document: SceneJsonExportDocument): Physi
             ],
           },
           userDataKey: null,
-    })
-  })
-}
+        })
+      })
+    }
   }
 
   return asset

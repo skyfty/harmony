@@ -6,6 +6,8 @@ import { MapControls } from 'three/examples/jsm/controls/MapControls.js'
 import type { KTX2Loader } from 'three/examples/jsm/loaders/KTX2Loader.js'
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js'
 import Stats from 'three/examples/jsm/libs/stats.module.js'
+import { CannonEsDebuggerPro } from '@vladkrutenyuk/cannon-es-debugger-pro'
+import type * as CANNON from 'cannon-es'
 import {
 	DEFAULT_ENVIRONMENT_GRAVITY,
 	cloneEnvironmentSettings,
@@ -37,6 +39,7 @@ import {
 	disposeGradientBackgroundDome,
 	createRuntimePrefabDocument,
 	type GradientBackgroundDome,
+	type GroundChunkManifest,
 	type GroundDynamicMesh,
 	type GroundSurfaceChunkTextureMap,
 	type GroundRuntimeDynamicMesh,
@@ -73,6 +76,7 @@ import { createGroundRuntimeMeshFromSidecar } from '@/utils/groundHeightSidecar'
 import { attachOptimizedGroundMeshToDocument } from '@/utils/groundOptimizedMeshExport'
 import { useGroundHeightmapStore } from '@/stores/groundHeightmapStore'
 import { useScenesStore } from '@/stores/scenesStore'
+import { useSceneStore } from '@/stores/sceneStore'
 import { attachGroundScatterRuntimeToNode, useGroundScatterStore } from '@/stores/groundScatterStore'
 import { buildSceneGraph, createTerrainScatterLodRuntime, type SceneGraphBuildOptions } from '@schema/sceneGraph'
 import { createInstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCuller'
@@ -90,8 +94,12 @@ import {
 	resolveCompiledGroundCollisionRuntimeState,
 } from '@schema/compiledGroundCollisionRuntime'
 import {
+	collectLoadedCompiledGroundChunkKeys,
+} from '@schema/compiledGroundRuntime'
+import {
 	resolveInfiniteGroundChunkCollisionRuntimeState,
 } from '@schema/infiniteGroundChunkCollisions'
+import { syncGroundCollisionRuntimeLoadedTileKeys } from '@schema/groundCollisionRuntimeState'
 import { resolveModelCollisionFaceSegments } from '@schema/physicsShapeResolvers'
 import {
 	buildRoadHeightfieldShapes,
@@ -109,6 +117,7 @@ import {
 } from '@schema/sceneCsm'
 import { buildGroundAirWallDefinitions } from '@schema/airWall'
 import { createDefaultGroundSurfacePreviewLoaders, syncGroundSurfacePreviewForGround } from '@schema/groundSurfacePreview'
+import { getVisibleInfiniteGroundChunkKeys } from '@schema/groundMesh'
 import {
 	type PhysicsBodyBindingEntry as RigidbodyInstance,
 	type PhysicsOrientationAdjustment as RigidbodyOrientationAdjustment,
@@ -569,7 +578,9 @@ let lastRendererDebugSignature = ''
 const rendererSizeHelper = new THREE.Vector2()
 const instancedMatrixUploadMeshes = new Set<THREE.InstancedMesh>()
 const isRigidbodyDebugVisible = computed(
-	() => physicsEnvironmentEnabled.value && (isGroundWireframeVisible.value || isOtherRigidbodyWireframeVisible.value),
+	() => physicsEnvironmentEnabled.value
+		&& currentPhysicsBridgePreference.value !== 'cannon'
+		&& (isGroundWireframeVisible.value || isOtherRigidbodyWireframeVisible.value),
 )
 
 function appendWarningMessage(message: string): void {
@@ -1604,6 +1615,10 @@ const MAP_CONTROL_DEFAULTS = {
 }
 let animationFrameHandle = 0
 let currentDocument: SceneJsonExportDocument | null = null
+let currentGroundChunkManifestSceneId: string | null = null
+let currentGroundChunkManifestRevision = -1
+let currentGroundChunkManifest: GroundChunkManifest | null = null
+const isCannonPhysicsDebuggerVisible = ref(false)
 const runtimePrefabPreviewRoots = new Set<THREE.Object3D>()
 type PreviewWindowWithNominateState = Window & {
 	__HARMONY_PREVIEW_NOMINATE_STATE__?: NominateExternalStateMap | null
@@ -2012,7 +2027,7 @@ let physicsBridgeBodySyncPromise: Promise<void> | null = null
 const physicsBridgeVehicleInputSyncState = createPhysicsBridgeVehicleInputSyncState()
 let physicsBridgeSceneLoaded = false
 let physicsBridgeSceneRequestId = 0
-let currentPhysicsBridgePreference: PhysicsBackendPreference | undefined
+const currentPhysicsBridgePreference = ref<PhysicsBackendPreference | undefined>()
 let currentPhysicsBridgeGroundCollisionSignature = ''
 const physicsBridgeBodyIdByNodeId = new Map<string, number>()
 const physicsBridgeNodeIdByBodyId = new Map<number, string>()
@@ -2026,6 +2041,8 @@ const physicsBridgeFrameBodiesByNodeId = new Map<string, PhysicsBridgeBodyFrameS
 const physicsBridgeSyncPositionHelper = new THREE.Vector3()
 const physicsBridgeSyncQuaternionHelper = new THREE.Quaternion()
 const physicsBridgeSyncParentQuaternionHelper = new THREE.Quaternion()
+const physicsBridgeHeightfieldAdjustment = new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0))
+const physicsBridgeHeightfieldAdjustmentInverse = physicsBridgeHeightfieldAdjustment.clone().invert()
 const physicsBridgeBodySyncPositionHelper = new THREE.Vector3()
 const physicsBridgeBodySyncQuaternionHelper = new THREE.Quaternion()
 const physicsEnvironmentEnabled = ref(true)
@@ -2050,6 +2067,9 @@ type RigidbodyDebugHelper = {
 }
 const rigidbodyDebugHelpers = new Map<string, RigidbodyDebugHelper>()
 let rigidbodyDebugGroup: THREE.Group | null = null
+let cannonPhysicsDebuggerRoot: THREE.Group | null = null
+let cannonPhysicsDebugger: CannonEsDebuggerPro | null = null
+let cannonPhysicsWorld: CANNON.World | null = null
 let airWallDebugGroup: THREE.Group | null = null
 const rigidbodyDebugMaterial = new THREE.LineBasicMaterial({
 	color: 0xffc107,
@@ -4476,7 +4496,13 @@ watch(volumePercent, (value) => {
 watch([isGroundWireframeVisible, isOtherRigidbodyWireframeVisible], ([groundEnabled, otherEnabled]) => {
 	if (!physicsEnvironmentEnabled.value) {
 		disposeRigidbodyDebugHelpers()
+		disposeCannonPhysicsDebugger()
 		setAirWallDebugVisibility(false)
+		return
+	}
+	if (currentPhysicsBridgePreference.value === 'cannon') {
+		syncScenePreviewCannonPhysicsDebugger()
+		setAirWallDebugVisibility(groundEnabled)
 		return
 	}
 	const enabled = groundEnabled || otherEnabled
@@ -4491,10 +4517,19 @@ watch([isGroundWireframeVisible, isOtherRigidbodyWireframeVisible], ([groundEnab
 	setAirWallDebugVisibility(false)
 })
 
+watch([physicsEnvironmentEnabled, isCannonPhysicsDebuggerVisible, currentPhysicsBridgePreference], () => {
+	syncScenePreviewCannonPhysicsDebugger()
+})
+
 watch(physicsEnvironmentEnabled, (enabled) => {
 	if (!enabled) {
 		disposeRigidbodyDebugHelpers()
+		disposeCannonPhysicsDebugger()
 		setAirWallDebugVisibility(false)
+		return
+	}
+	if (currentPhysicsBridgePreference.value === 'cannon') {
+		syncScenePreviewCannonPhysicsDebugger()
 		return
 	}
 	if (isRigidbodyDebugVisible.value) {
@@ -8738,6 +8773,7 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
 		const groundObject = nodeObjectMap.get(cachedGroundNodeId) ?? null
 		if (groundObject) {
 			syncGroundSurfacePreviewForGroundNode(groundObject, cachedGroundNode, cachedGroundDynamicMesh)
+			syncScenePreviewGroundCollisionRuntimeLoadedTileKeys(currentDocument)
 			if (currentDocument) {
 				const nextGroundCollisionSignature = resolveScenePreviewGroundCollisionSignature(currentDocument)
 				if (nextGroundCollisionSignature !== currentPhysicsBridgeGroundCollisionSignature) {
@@ -9929,10 +9965,10 @@ async function reloadScenePreviewPhysicsBridgeForPreference(
 	settings: Pick<EnvironmentSettings, 'physicsEngine'> | null | undefined,
 ): Promise<void> {
 	const nextPreference = resolveScenePreviewPhysicsBridgePreference(settings)
-	if (nextPreference === currentPhysicsBridgePreference) {
+	if (nextPreference === currentPhysicsBridgePreference.value) {
 		return
 	}
-	currentPhysicsBridgePreference = nextPreference
+	currentPhysicsBridgePreference.value = nextPreference
 	await destroyScenePreviewPhysicsBridge()
 	if (currentDocument) {
 		void loadScenePreviewPhysicsBridgeScene(currentDocument)
@@ -9943,6 +9979,7 @@ function resolveScenePreviewGroundCollisionSignature(document: SceneJsonExportDo
 	if (!document) {
 		return ''
 	}
+	syncScenePreviewGroundCollisionRuntimeLoadedTileKeys(document)
 	const groundNode = findGroundNode(document.nodes)
 	const groundMesh = groundNode?.dynamicMesh as GroundRuntimeDynamicMesh | null | undefined
 	if (!groundNode || !isGroundDynamicMesh(groundMesh)) {
@@ -9969,12 +10006,96 @@ function resolveScenePreviewGroundCollisionSignature(document: SceneJsonExportDo
 	return `${compiledState.signature}::${infiniteState.signature}`
 }
 
+function handleScenePreviewCannonWorldReady(world: CANNON.World | null): void {
+	cannonPhysicsWorld = world
+	syncScenePreviewCannonPhysicsDebugger()
+}
+
+function resolveScenePreviewCompiledGroundTileLoader(): ((record: { path: string }) => Promise<ArrayBuffer | null>) | undefined {
+	const sceneStore = useSceneStore()
+	const compiledFiles = sceneStore.compiledGroundFiles
+	if (!compiledFiles || compiledFiles.size === 0) {
+		return undefined
+	}
+	return async (record) => compiledFiles.get(record.path) ?? null
+}
+
+function resolveScenePreviewGroundChunkDataLoader(sceneId: string): ((chunkKey: string) => Promise<ArrayBuffer | null>) | undefined {
+	const trimmedSceneId = sceneId.trim()
+	if (!trimmedSceneId) {
+		return undefined
+	}
+	const scenesStore = useScenesStore()
+	return async (chunkKey) => scenesStore.loadGroundChunkData(trimmedSceneId, chunkKey)
+}
+
+async function syncScenePreviewGroundChunkManifest(document: SceneJsonExportDocument | null): Promise<void> {
+	if (!document) {
+		currentGroundChunkManifestSceneId = null
+		currentGroundChunkManifestRevision = -1
+		currentGroundChunkManifest = null
+		return
+	}
+	const sceneId = document.id?.trim() ?? ''
+	if (!sceneId) {
+		currentGroundChunkManifestSceneId = null
+		currentGroundChunkManifestRevision = -1
+		currentGroundChunkManifest = null
+		return
+	}
+	const groundNode = findGroundNode(document.nodes)
+	const groundMesh = groundNode?.dynamicMesh as GroundRuntimeDynamicMesh | null | undefined
+	const manifestRevision = Math.max(0, Math.trunc(Number(groundMesh?.chunkManifestRevision) || 0))
+	if (currentGroundChunkManifestSceneId === sceneId && currentGroundChunkManifestRevision === manifestRevision) {
+		return
+	}
+	currentGroundChunkManifestSceneId = sceneId
+	currentGroundChunkManifestRevision = manifestRevision
+	currentGroundChunkManifest = await useScenesStore().loadGroundChunkManifest(sceneId).catch((error: unknown) => {
+		console.warn('[ScenePreview] Failed to load ground chunk manifest', error)
+		return null
+	})
+}
+
+function syncScenePreviewGroundCollisionRuntimeLoadedTileKeys(document: SceneJsonExportDocument | null): boolean {
+	if (!document) {
+		return false
+	}
+	const groundNode = findGroundNode(document.nodes)
+	const groundMesh = groundNode?.dynamicMesh as GroundRuntimeDynamicMesh | null | undefined
+	if (!groundNode || !isGroundDynamicMesh(groundMesh)) {
+		return false
+	}
+	const groundObject = nodeObjectMap.get(groundNode.id) ?? null
+	if (!groundObject) {
+		return false
+	}
+
+	const groundUserData = groundNode.userData && typeof groundNode.userData === 'object'
+		? (groundNode.userData as Record<string, unknown>)
+		: {}
+	const compiledManifest = groundUserData.compiledGroundManifest as { revision?: unknown } | null | undefined
+	const compiledKeys = compiledManifest
+		? collectLoadedCompiledGroundChunkKeys(groundObject, compiledManifest as any)
+		: []
+	const infiniteKeys = groundMesh.terrainMode === 'infinite'
+		? getVisibleInfiniteGroundChunkKeys(groundObject)
+		: []
+	return syncGroundCollisionRuntimeLoadedTileKeys(groundObject, groundMesh, {
+		compiledKeys,
+		infiniteKeys,
+	})
+}
+
 async function ensureScenePreviewPhysicsBridgeReady(): Promise<PhysicsBridge> {
 	if (physicsBridgeInitPromise) {
 		return physicsBridgeInitPromise
 	}
 	if (!physicsBridge) {
-		physicsBridge = createScenePreviewPhysicsBridge({ engine: currentPhysicsBridgePreference })
+		physicsBridge = createScenePreviewPhysicsBridge({
+			engine: currentPhysicsBridgePreference.value,
+			onCannonWorldReady: handleScenePreviewCannonWorldReady,
+		})
 	}
 	physicsBridgeInitPromise = physicsBridge.init({
 		world: {
@@ -10022,10 +10143,16 @@ function updateScenePreviewPhysicsBridgeIndex(asset: PhysicsSceneAsset): void {
 async function loadScenePreviewPhysicsBridgeScene(document: SceneJsonExportDocument | null): Promise<void> {
 	if (!document) {
 		currentPhysicsBridgeGroundCollisionSignature = ''
+		currentGroundChunkManifestSceneId = null
+		currentGroundChunkManifestRevision = -1
+		currentGroundChunkManifest = null
 		await disposeScenePreviewPhysicsBridgeScene()
 		return
 	}
 	await reloadScenePreviewPhysicsBridgeForPreference(resolveDocumentEnvironment(document))
+	await ensureScenePreviewPhysicsBridgeReady()
+	await syncScenePreviewGroundChunkManifest(document)
+	syncScenePreviewGroundCollisionRuntimeLoadedTileKeys(document)
 	currentPhysicsBridgeGroundCollisionSignature = resolveScenePreviewGroundCollisionSignature(document)
 	const requestId = ++physicsBridgeSceneRequestId
 	const asset = buildPhysicsSceneAsset(document)
@@ -10151,7 +10278,13 @@ function applyScenePreviewPhysicsBridgeFrameToObjects(): void {
 		if (!bindingObject) {
 			return
 		}
-		applyScenePreviewPhysicsBridgeTransformToObject(bindingObject, state.position, state.quaternion, null)
+		const orientationAdjustment = node && isGroundDynamicMesh(node.dynamicMesh)
+			? {
+				three: physicsBridgeHeightfieldAdjustment,
+				threeInverse: physicsBridgeHeightfieldAdjustmentInverse,
+			}
+			: null
+		applyScenePreviewPhysicsBridgeTransformToObject(bindingObject, state.position, state.quaternion, orientationAdjustment)
 	})
 }
 
@@ -10402,6 +10535,9 @@ async function disposeScenePreviewPhysicsBridgeScene(): Promise<void> {
 	} catch (error) {
 		console.warn('[ScenePreview] Failed to dispose physics bridge scene', error)
 	} finally {
+		if (currentPhysicsBridgePreference.value === 'cannon' && cannonPhysicsDebugger) {
+			cannonPhysicsDebugger.clear()
+		}
 		physicsBridgeSceneLoaded = false
 		physicsBridgeStepPromise = null
 		physicsBridgeBodySyncPromise = null
@@ -10424,6 +10560,9 @@ async function destroyScenePreviewPhysicsBridge(): Promise<void> {
 	} catch (error) {
 		console.warn('[ScenePreview] Failed to destroy physics bridge', error)
 	} finally {
+		disposeRigidbodyDebugHelpers()
+		disposeCannonPhysicsDebugger()
+		cannonPhysicsWorld = null
 		physicsBridgeSceneRequestId += 1
 		currentPhysicsBridgeGroundCollisionSignature = ''
 		physicsBridgeBodyIdByNodeId.clear()
@@ -10484,6 +10623,7 @@ function clearLegacyPhysicsWorld(): void {
 	rigidbodyInstances.clear()
 	clearAirWallDebugMeshes()
 	clearRigidbodyDebugHelpers()
+	disposeCannonPhysicsDebugger()
 	disposeAirWallDebugGroup()
 	scenePreviewPerf.reset()
 }
@@ -10571,6 +10711,73 @@ function ensureRigidbodyDebugGroup(): THREE.Group | null {
 		scene.add(rigidbodyDebugGroup)
 	}
 	return rigidbodyDebugGroup
+}
+
+function ensureCannonPhysicsDebuggerRoot(): THREE.Group | null {
+	if (!scene) {
+		return null
+	}
+	if (!cannonPhysicsDebuggerRoot) {
+		cannonPhysicsDebuggerRoot = new THREE.Group()
+		cannonPhysicsDebuggerRoot.name = 'CannonPhysicsDebugHelpers'
+	}
+	if (cannonPhysicsDebuggerRoot.parent !== scene) {
+		scene.add(cannonPhysicsDebuggerRoot)
+	}
+	return cannonPhysicsDebuggerRoot
+}
+
+function disposeCannonPhysicsDebugger(): void {
+	if (cannonPhysicsDebugger) {
+		try {
+			cannonPhysicsDebugger.destroy()
+		} catch (error) {
+			console.warn('[ScenePreview] Failed to destroy cannon physics debugger', error)
+		}
+		cannonPhysicsDebugger = null
+	}
+	if (cannonPhysicsDebuggerRoot) {
+		cannonPhysicsDebuggerRoot.parent?.remove(cannonPhysicsDebuggerRoot)
+		cannonPhysicsDebuggerRoot.clear()
+		cannonPhysicsDebuggerRoot = null
+	}
+}
+
+function syncScenePreviewCannonPhysicsDebugger(): void {
+	if (
+		!physicsEnvironmentEnabled.value
+		|| currentPhysicsBridgePreference.value !== 'cannon'
+		|| !isCannonPhysicsDebuggerVisible.value
+		|| !cannonPhysicsWorld
+	) {
+		disposeCannonPhysicsDebugger()
+		return
+	}
+	const root = ensureCannonPhysicsDebuggerRoot()
+	if (!root) {
+		return
+	}
+	if (!cannonPhysicsDebugger) {
+		cannonPhysicsDebugger = new CannonEsDebuggerPro(root, cannonPhysicsWorld, 0xffc107, 0.005)
+	}
+	cannonPhysicsDebugger.setVisible(true)
+}
+
+function updateScenePreviewCannonPhysicsDebugger(): void {
+	if (
+		!physicsEnvironmentEnabled.value
+		|| currentPhysicsBridgePreference.value !== 'cannon'
+		|| !isCannonPhysicsDebuggerVisible.value
+	) {
+		return
+	}
+	if (!cannonPhysicsDebugger) {
+		syncScenePreviewCannonPhysicsDebugger()
+	}
+	if (!cannonPhysicsDebugger) {
+		return
+	}
+	cannonPhysicsDebugger.update()
 }
 
 function ensureAirWallDebugGroup(): THREE.Group | null {
@@ -11419,6 +11626,9 @@ function updateRigidbodyDebugHelperTransform(nodeId: string): void {
 		}
 		object.updateMatrixWorld(true)
 		object.matrixWorld.decompose(rigidbodyDebugPositionHelper, rigidbodyDebugQuaternionHelper, rigidbodyDebugScaleHelper)
+		if (bridgeFrameState && node && isGroundDynamicMesh(node.dynamicMesh)) {
+			rigidbodyDebugQuaternionHelper.multiply(physicsBridgeHeightfieldAdjustmentInverse)
+		}
 		helper.group.position.copy(rigidbodyDebugPositionHelper)
 		helper.group.quaternion.copy(rigidbodyDebugQuaternionHelper)
 		visible = isRuntimeObjectEffectivelyVisible(object)
@@ -12406,6 +12616,7 @@ async function updateScene(document: SceneJsonExportDocument) {
 	releaseTerrainScatterInstances()
 	resetProtagonistPoseState()
 	clearRuntimePrefabPreviewRoots()
+	await syncScenePreviewGroundChunkManifest(document)
 
 	refreshResourceAssetInfo(document)
 	disposeSkyResources()
@@ -12655,6 +12866,9 @@ onBeforeUnmount(() => {
 	stopBillboardMeshSubscription?.()
 	stopBillboardMeshSubscription = null
 	disposeSignboardBillboards(scene)
+	currentGroundChunkManifestSceneId = null
+	currentGroundChunkManifestRevision = -1
+	currentGroundChunkManifest = null
 	window.removeEventListener('resize', handleResize)
 	document.removeEventListener('fullscreenchange', handleFullscreenChange)
 	window.removeEventListener('blur', handleWindowBlur)
@@ -12873,7 +13087,7 @@ watch(
 						</v-list-item>
 						<v-list-item>
 							<v-checkbox
-								v-if="physicsEnvironmentEnabled"
+								v-if="physicsEnvironmentEnabled && currentPhysicsBridgePreference !== 'cannon'"
 								class="scene-preview__debug-checkbox"
 								label="Other rigidbody wireframe"
 								:model-value="isOtherRigidbodyWireframeVisible"
@@ -12881,6 +13095,17 @@ watch(
 								density="compact"
 								color="warning"
 								@update:model-value="toggleOtherRigidbodyWireframeDebug"
+							/>
+						</v-list-item>
+						<v-list-item>
+							<v-checkbox
+								v-if="physicsEnvironmentEnabled"
+								class="scene-preview__debug-checkbox"
+								label="Cannon physics debugger"
+								v-model="isCannonPhysicsDebuggerVisible"
+								hide-details
+								density="compact"
+								color="warning"
 							/>
 						</v-list-item>
 					</v-list>

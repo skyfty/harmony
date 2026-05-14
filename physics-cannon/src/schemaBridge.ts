@@ -15,11 +15,18 @@ import type {
 } from '@harmony/physics-bridge'
 
 export function createCannonSchemaPhysicsBackendBridge(): PhysicsBackendBridge {
+	const heightfieldOrientationAdjustment = {
+		three: { x: -0.7071067811865475, y: 0, z: 0, w: 0.7071067811865476 },
+		threeInverse: { x: 0.7071067811865475, y: 0, z: 0, w: 0.7071067811865476 },
+	}
+
 	function createRigidbodyBody(params: BackendRigidbodyCreateParams): BackendRigidbodyResult {
 		const cannonBody = createCannonRigidbodyBody(params as unknown as Parameters<typeof createCannonRigidbodyBody>[0])
+		const hasHeightfield = params.shapes.some((binding) => binding.definition.kind === 'heightfield')
 		return {
 			body: cannonBody as unknown as PhysicsBodyLike,
-		}
+			orientationAdjustment: hasHeightfield ? (heightfieldOrientationAdjustment as any) : null,
+		} as BackendRigidbodyResult
 	}
 
 	function ensurePhysicsWorld(params: EnsurePhysicsWorldParams): PhysicsWorldLike {

@@ -139,8 +139,14 @@ export type RoadHeightfieldDebugSurface = {
   offset: [number, number, number]
 }
 
+export type PhysicsOrientationAdjustment = {
+  three: { x: number; y: number; z: number; w: number }
+  threeInverse: { x: number; y: number; z: number; w: number }
+}
+
 export type BackendRigidbodyResult = {
   body: PhysicsBodyLike
+  orientationAdjustment: PhysicsOrientationAdjustment | null
 } | null
 
 export type PhysicsBackendBridge = {

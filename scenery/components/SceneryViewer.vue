@@ -468,8 +468,14 @@ import {
   resolveCompiledGroundCollisionRuntimeState,
 } from '@harmony/schema/compiledGroundCollisionRuntime';
 import {
+  collectLoadedCompiledGroundChunkKeys,
+} from '@harmony/schema/compiledGroundRuntime';
+import {
   resolveInfiniteGroundChunkCollisionRuntimeState,
 } from '@harmony/schema/infiniteGroundChunkCollisions';
+import { syncGroundCollisionRuntimeLoadedTileKeys } from '@harmony/schema/groundCollisionRuntimeState';
+import { getVisibleInfiniteGroundChunkKeys } from '@harmony/schema/groundMesh';
+import { clearGroundCollisionRuntimeHost, syncGroundCollisionRuntimeHost } from '@harmony/schema/groundCollisionRuntimeHost';
 
 import {
   type PhysicsBodyBindingEntry as RigidbodyInstance,
@@ -5906,6 +5912,7 @@ function resolveSceneryGroundCollisionSignature(document: SceneJsonExportDocumen
   if (!document) {
     return '';
   }
+  syncSceneryGroundCollisionRuntimeLoadedTileKeys(document, null);
   const groundNode = findGroundNode(document.nodes);
   const groundMesh = groundNode?.dynamicMesh as GroundRuntimeDynamicMesh | null | undefined;
   if (!groundNode || !isGroundDynamicMesh(groundMesh)) {
@@ -5930,6 +5937,46 @@ function resolveSceneryGroundCollisionSignature(document: SceneJsonExportDocumen
     sourceId: groundNode.id,
   });
   return `${compiledState.signature}::${infiniteState.signature}`;
+}
+
+function syncSceneryGroundCollisionRuntimeLoadedTileKeys(document: SceneJsonExportDocument | null, camera: THREE.Camera | null | undefined): boolean {
+  if (!document) {
+    return false;
+  }
+  const groundNode = findGroundNode(document.nodes);
+  const groundMesh = groundNode?.dynamicMesh as GroundRuntimeDynamicMesh | null | undefined;
+  if (!groundNode || !isGroundDynamicMesh(groundMesh)) {
+    return false;
+  }
+  const groundObject = nodeObjectMap.get(groundNode.id) ?? null;
+  if (!groundObject) {
+    return false;
+  }
+
+  const groundUserData = groundNode.userData && typeof groundNode.userData === 'object'
+    ? (groundNode.userData as Record<string, unknown>)
+    : {};
+  const compiledManifest = groundUserData.compiledGroundManifest as { revision?: unknown } | null | undefined;
+  const compiledKeys = compiledManifest
+    ? collectLoadedCompiledGroundChunkKeys(groundObject, compiledManifest as any)
+    : [];
+  const infiniteKeys = groundMesh.terrainMode === 'infinite'
+    ? getVisibleInfiniteGroundChunkKeys(groundObject)
+    : [];
+  if (camera) {
+    syncGroundCollisionRuntimeHost({
+      enabled: true,
+      sourceId: groundNode.id,
+      groundObject,
+      groundMesh,
+      camera,
+      compiledManifest: compiledManifest as any,
+    });
+  }
+  return syncGroundCollisionRuntimeLoadedTileKeys(groundObject, groundMesh, {
+    compiledKeys,
+    infiniteKeys,
+  });
 }
 
 async function ensureSceneryPhysicsBridgeReady(): Promise<PhysicsBridge> {
@@ -5992,6 +6039,7 @@ async function loadSceneryPhysicsBridgeScene(document: SceneJsonExportDocument |
     return;
   }
   await reloadSceneryPhysicsBridgeForPreference(resolveDocumentEnvironment(document));
+  syncSceneryGroundCollisionRuntimeLoadedTileKeys(document, null);
   currentPhysicsBridgeGroundCollisionSignature = resolveSceneryGroundCollisionSignature(document);
   const requestId = ++physicsBridgeSceneRequestId;
   const asset = buildPhysicsSceneAsset(document);
@@ -12371,6 +12419,7 @@ function startRenderLoop(
         if (cachedGround) {
           const groundObject = nodeObjectMap.get(cachedGround.nodeId) ?? null;
           if (groundObject) {
+            syncSceneryGroundCollisionRuntimeLoadedTileKeys(currentDocument, camera);
             if (currentDocument) {
               const nextGroundCollisionSignature = resolveSceneryGroundCollisionSignature(currentDocument);
               if (nextGroundCollisionSignature !== currentPhysicsBridgeGroundCollisionSignature) {
@@ -12481,6 +12530,8 @@ function cleanupForUnrelatedSceneSwitch(): void {
   stopBillboardMeshSubscription?.();
   stopBillboardMeshSubscription = null;
   clearInstancedMeshes();
+  const groundNode = currentDocument ? findGroundNode(currentDocument.nodes) : null;
+  clearGroundCollisionRuntimeHost(groundNode ? (nodeObjectMap.get(groundNode.id) ?? null) : null);
 
   if (sceneGraphRoot) {
     renderContext.scene.remove(sceneGraphRoot);

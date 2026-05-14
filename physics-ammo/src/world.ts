@@ -45,6 +45,8 @@ const DEFAULT_WORLD_SETTINGS: PhysicsWorldSettings = {
 const VEHICLE_ENGINE_FORCE = 320
 const VEHICLE_BRAKE_FORCE = 42
 const VEHICLE_STEER_ANGLE = (26 * Math.PI) / 180
+let lastAmmoWorldLoadSceneLogSignature = ''
+let lastAmmoWorldLoadSceneLogAt = 0
 
 export class AmmoPhysicsWorld {
   private ammo: AmmoApi | null = null
@@ -88,6 +90,20 @@ export class AmmoPhysicsWorld {
     scene.vehicles.forEach((vehicle) => {
       this.vehicles.set(vehicle.id, this.createVehicleState(vehicle))
     })
+    const logPayload = {
+      bodyCount: scene.bodies.length,
+      vehicleCount: scene.vehicles.length,
+      shapeCount: scene.shapes.length,
+      staticBodies: scene.bodies.filter((body) => body.type === 'static').length,
+      dynamicBodies: scene.bodies.filter((body) => body.type === 'dynamic').length,
+    }
+    const logSignature = JSON.stringify(logPayload)
+    const now = Date.now()
+    if (logSignature !== lastAmmoWorldLoadSceneLogSignature || now - lastAmmoWorldLoadSceneLogAt >= 2000) {
+      lastAmmoWorldLoadSceneLogSignature = logSignature
+      lastAmmoWorldLoadSceneLogAt = now
+      console.log(`[AmmoPhysicsWorld] loadScene ${JSON.stringify(logPayload)}`)
+    }
     return {
       bodyCount: scene.bodies.length,
       vehicleCount: scene.vehicles.length,

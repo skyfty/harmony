@@ -30,6 +30,10 @@ export function getPhysicsBackendBridge(): PhysicsBackendBridge {
   return activeBridge
 }
 
+export function hasPhysicsBackendBridge(): boolean {
+  return activeBridge != null
+}
+
 export function normalizeShapeScale(scaleLike: PhysicsBackendShapeScaleLike): { x: number; y: number; z: number } {
   return getPhysicsBackendBridge().normalizeShapeScale(scaleLike)
 }

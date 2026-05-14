@@ -14,8 +14,7 @@ export type CannonSceneShapeBinding = {
   quaternion: CANNON.Quaternion
 }
 
-const heightfieldQuaternion = new CANNON.Quaternion()
-heightfieldQuaternion.setFromEuler(-Math.PI / 2, 0, 0, 'XYZ')
+const identityQuaternion = new CANNON.Quaternion(0, 0, 0, 1)
 const cylinderShapeRotation = new CANNON.Quaternion()
 cylinderShapeRotation.setFromEuler(Math.PI / 2, 0, 0, 'XYZ')
 
@@ -37,7 +36,7 @@ export function createCannonSceneShapeBindings(
     return [{
       shape: createHeightfieldShape(shapeDesc),
       position: vec3FromTuple(shapeDesc.localOffset ?? [0, 0, 0]),
-      quaternion: quatClone(heightfieldQuaternion),
+      quaternion: quatClone(identityQuaternion),
     }]
   }
   return [{

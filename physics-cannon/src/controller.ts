@@ -1,8 +1,13 @@
 import type { PhysicsBridgeInitResult, PhysicsInitOptions, PhysicsRaycastHit, PhysicsSceneAsset } from '@harmony/physics-core'
 import type { PhysicsWorkerController } from '@harmony/physics-bridge/runtime'
+import type * as CANNON from 'cannon-es'
 import { CannonPhysicsWorld } from './world'
 
-export function createCannonPhysicsController(): PhysicsWorkerController {
+export type CreateCannonPhysicsControllerOptions = {
+  onWorldReady?: (world: CANNON.World | null) => void
+}
+
+export function createCannonPhysicsController(options: CreateCannonPhysicsControllerOptions = {}): PhysicsWorkerController {
   const world = new CannonPhysicsWorld()
   let initialized = false
 
@@ -19,7 +24,9 @@ export function createCannonPhysicsController(): PhysicsWorkerController {
       if (!initialized) {
         throw new Error('Cannon physics controller is not initialized')
       }
-      return world.loadScene(asset)
+      const payload = world.loadScene(asset)
+      options.onWorldReady?.(world.getWorld())
+      return payload
     },
     async step(deltaMs) {
       if (!initialized) {
@@ -47,9 +54,11 @@ export function createCannonPhysicsController(): PhysicsWorkerController {
     },
     async disposeScene() {
       world.disposeScene()
+      options.onWorldReady?.(world.getWorld())
     },
     async destroy() {
       world.disposeWorld()
+      options.onWorldReady?.(null)
     },
   }
 }

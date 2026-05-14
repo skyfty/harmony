@@ -234,6 +234,10 @@ export class CannonPhysicsWorld {
     this.world = null
   }
 
+  getWorld(): CANNON.World | null {
+    return this.world
+  }
+
   private ensureWorld(): CANNON.World {
     if (this.world) {
       return this.world

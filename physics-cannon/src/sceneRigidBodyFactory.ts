@@ -2,6 +2,9 @@ import * as CANNON from 'cannon-es'
 import type { PhysicsBodyDesc, PhysicsShapeDesc } from '@harmony/physics-core'
 import { createCannonSceneShapeBindings } from './sceneShapeBindings'
 
+const heightfieldBodyRotation = new CANNON.Quaternion()
+heightfieldBodyRotation.setFromEuler(-Math.PI / 2, 0, 0, 'XYZ')
+
 export type CannonSceneRigidBodyCreateParams = {
   world: CANNON.World
   shapeMap: Map<number, PhysicsShapeDesc>
@@ -19,6 +22,14 @@ export function createCannonSceneRigidBody(params: CannonSceneRigidBodyCreatePar
   body.linearDamping = params.desc.linearDamping ?? 0.01
   body.angularDamping = params.desc.angularDamping ?? 0.01
   const bindings = createCannonSceneShapeBindings(params.shapeMap, params.desc.shapeId)
+  const shouldRotateBodyForHeightfield = bindings.length > 0
+    && bindings.every((binding) => {
+      const shapeInfo = binding.shape as unknown as { constructor?: { name?: string } }
+      return shapeInfo.constructor?.name === 'Heightfield'
+    })
+  if (shouldRotateBodyForHeightfield) {
+    body.quaternion.mult(heightfieldBodyRotation, body.quaternion)
+  }
   bindings.forEach((binding) => {
     body.addShape(binding.shape, binding.position, binding.quaternion)
   })
