@@ -27,7 +27,7 @@ import {
 
 type HeightfieldShapeDefinition = Extract<RigidbodyPhysicsShape, { kind: 'heightfield' }>
 
-const GROUND_COLLISION_RADIUS_METERS = 150
+const GROUND_COLLISION_RADIUS_METERS = 50
 
 export type CompiledGroundCollisionRuntimeState = {
   enabled: boolean
