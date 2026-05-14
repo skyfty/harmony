@@ -99,6 +99,10 @@ import {
 import {
 	resolveInfiniteGroundChunkCollisionRuntimeState,
 } from '@schema/infiniteGroundChunkCollisions'
+import {
+	clearGroundCollisionRuntimeHost,
+	syncGroundCollisionRuntimeHost,
+} from '@schema/groundCollisionRuntimeHost'
 import { syncGroundCollisionRuntimeLoadedTileKeys } from '@schema/groundCollisionRuntimeState'
 import { resolveModelCollisionFaceSegments } from '@schema/physicsShapeResolvers'
 import {
@@ -1703,10 +1707,15 @@ const CAMERA_DEPENDENT_UPDATE_INTERVAL_SECONDS = 0.12
 
 const cameraDependentUpdatePosition = new THREE.Vector3()
 const cameraDependentUpdateQuaternion = new THREE.Quaternion()
+const groundCollisionReferencePosition = new THREE.Vector3()
 const lastCameraDependentUpdatePosition = new THREE.Vector3()
 const lastCameraDependentUpdateQuaternion = new THREE.Quaternion()
+const lastGroundCollisionReferencePosition = new THREE.Vector3()
+const previewGroundCollisionAnchor = new THREE.Object3D()
 let cameraDependentUpdateInitialized = false
 let cameraDependentUpdateElapsed = 0
+let groundCollisionReferenceInitialized = false
+let groundCollisionReferenceElapsed = 0
 
 const clock = new THREE.Clock()
 const instancedMeshGroup = new THREE.Group()
@@ -6719,10 +6728,11 @@ function logPreviewDiagnosticsSummary(summary: SceneAssetDiagnosticsSummary | un
 			assetId: item.assetId ?? null,
 			locations: item.locations,
 		}
+		const payloadText = formatDebugJson(payload)
 		if (item.severity === 'error') {
-			console.error(item.message, payload)
+			console.error(item.message, payloadText)
 		} else {
-			console.warn(item.message, payload)
+			console.warn(item.message, payloadText)
 		}
 	})
 	console.groupEnd()
@@ -8760,28 +8770,39 @@ function updateVehicleCameraForFrame(
  */
 function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCamera, delta: number): void {
 	const shouldUpdateCameraSystems = shouldUpdateCameraDependentSystems(activeCamera, delta)
-	if (!shouldUpdateCameraSystems) {
+	const hasGroundCollisionReference = resolveGroundCollisionReferenceWorld(groundCollisionReferencePosition)
+	if (!hasGroundCollisionReference) {
+		groundCollisionReferenceInitialized = false
+		groundCollisionReferenceElapsed = 0
+		if (cachedGroundNodeId) {
+			const groundObject = nodeObjectMap.get(cachedGroundNodeId) ?? null
+			if (groundObject) {
+				clearGroundCollisionRuntimeHost(groundObject)
+			}
+		}
+	}
+	const shouldUpdateGroundCollisionSystems = hasGroundCollisionReference
+		? shouldUpdateGroundCollisionForFrame(delta, groundCollisionReferencePosition)
+		: false
+	if (!shouldUpdateCameraSystems && !shouldUpdateGroundCollisionSystems) {
 		return
 	}
-	terrainScatterRuntime.update(activeCamera, resolveGroundMeshObject)
-	if (scenePreviewPerf.shouldRunInstancedCulling(activeCamera, Date.now())) {
-		updateInstancedCullingAndLod()
+	if (shouldUpdateCameraSystems) {
+		terrainScatterRuntime.update(activeCamera, resolveGroundMeshObject)
+		if (scenePreviewPerf.shouldRunInstancedCulling(activeCamera, Date.now())) {
+			updateInstancedCullingAndLod()
+		}
+		updateBehaviorProximity()
 	}
-	updateBehaviorProximity()
 	// Keep ground chunk meshes in sync with camera position.
-	if (cachedGroundNodeId && cachedGroundDynamicMesh && cachedGroundNode) {
+	if (shouldUpdateCameraSystems && cachedGroundNodeId && cachedGroundDynamicMesh && cachedGroundNode) {
 		const groundObject = nodeObjectMap.get(cachedGroundNodeId) ?? null
 		if (groundObject) {
 			syncGroundSurfacePreviewForGroundNode(groundObject, cachedGroundNode, cachedGroundDynamicMesh)
-			syncScenePreviewGroundCollisionRuntimeLoadedTileKeys(currentDocument)
-			if (currentDocument) {
-				const nextGroundCollisionSignature = resolveScenePreviewGroundCollisionSignature(currentDocument)
-				if (nextGroundCollisionSignature !== currentPhysicsBridgeGroundCollisionSignature) {
-					currentPhysicsBridgeGroundCollisionSignature = nextGroundCollisionSignature
-					void loadScenePreviewPhysicsBridgeScene(currentDocument)
-				}
-			}
 		}
+	}
+	if (shouldUpdateGroundCollisionSystems && currentDocument) {
+		syncScenePreviewGroundCollisionRuntimeHost(currentDocument, groundCollisionReferencePosition)
 	}
 }
 
@@ -8933,6 +8954,7 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	clearBehaviorDelayTimers()
 	clearBehaviorSounds()
 	void syncGroundCache(null)
+	const groundCollisionHostObject = cachedGroundNodeId ? (nodeObjectMap.get(cachedGroundNodeId) ?? null) : null
 	instancedMatrixCache.clear()
 	cameraDependentUpdateInitialized = false
 	cameraDependentUpdateElapsed = 0
@@ -8958,6 +8980,7 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	followCameraControlActive = false
 	followCameraControlDirty = false
 	resetPhysicsWorld()
+	clearGroundCollisionRuntimeHost(groundCollisionHostObject)
 	if (!options.preservePreviewNodeMap) {
 		previewNodeMap.clear()
 	}
@@ -9979,7 +10002,6 @@ function resolveScenePreviewGroundCollisionSignature(document: SceneJsonExportDo
 	if (!document) {
 		return ''
 	}
-	syncScenePreviewGroundCollisionRuntimeLoadedTileKeys(document)
 	const groundNode = findGroundNode(document.nodes)
 	const groundMesh = groundNode?.dynamicMesh as GroundRuntimeDynamicMesh | null | undefined
 	if (!groundNode || !isGroundDynamicMesh(groundMesh)) {
@@ -10057,6 +10079,61 @@ async function syncScenePreviewGroundChunkManifest(document: SceneJsonExportDocu
 	})
 }
 
+function resolveGroundCollisionReferenceWorld(targetPosition: THREE.Vector3): boolean {
+	const referenceNodeId = vehicleDriveState.active ? vehicleDriveState.nodeId : null
+	const referenceObject = referenceNodeId ? (nodeObjectMap.get(referenceNodeId) ?? null) : null
+	if (referenceNodeId && resolveVehicleOrObjectWorldPosition({
+		nodeId: referenceNodeId,
+		vehicleInstances,
+		nodeObjectMap,
+		isPhysicsEnabled: () => physicsEnvironmentEnabled.value,
+		target: targetPosition,
+	})) {
+		console.info(
+			'[ScenePreview][GroundCollision] vehicle reference resolved',
+			`nodeId=${JSON.stringify(referenceNodeId)}`,
+			`object=${formatDebugObject(referenceObject)}`,
+			`position=${formatDebugVector(targetPosition)}`,
+		)
+		return true
+	}
+	if (referenceNodeId) {
+		console.info(
+			'[ScenePreview][GroundCollision] vehicle reference missing',
+			`active=${vehicleDriveState.active ? '1' : '0'}`,
+			`nodeId=${JSON.stringify(referenceNodeId)}`,
+		)
+	}
+	return false
+}
+
+function resolveGroundCollisionAnchor(referenceWorldPosition: THREE.Vector3): THREE.Camera {
+	previewGroundCollisionAnchor.position.copy(referenceWorldPosition)
+	previewGroundCollisionAnchor.updateMatrixWorld(true)
+	return previewGroundCollisionAnchor as unknown as THREE.Camera
+}
+
+function shouldUpdateGroundCollisionForFrame(delta: number, referenceWorldPosition: THREE.Vector3): boolean {
+	groundCollisionReferenceElapsed += Math.max(0, delta)
+	if (!groundCollisionReferenceInitialized) {
+		groundCollisionReferenceInitialized = true
+		groundCollisionReferenceElapsed = 0
+		lastGroundCollisionReferencePosition.copy(referenceWorldPosition)
+		return true
+	}
+
+	const movedSq = referenceWorldPosition.distanceToSquared(lastGroundCollisionReferencePosition)
+	const moved = movedSq > CAMERA_DEPENDENT_POSITION_EPSILON_SQ
+	const due = isPlaying.value && groundCollisionReferenceElapsed >= CAMERA_DEPENDENT_UPDATE_INTERVAL_SECONDS
+	if (!moved && !due) {
+		return false
+	}
+
+	groundCollisionReferenceElapsed = 0
+	lastGroundCollisionReferencePosition.copy(referenceWorldPosition)
+	return true
+}
+
 function syncScenePreviewGroundCollisionRuntimeLoadedTileKeys(document: SceneJsonExportDocument | null): boolean {
 	if (!document) {
 		return false
@@ -10084,6 +10161,67 @@ function syncScenePreviewGroundCollisionRuntimeLoadedTileKeys(document: SceneJso
 	return syncGroundCollisionRuntimeLoadedTileKeys(groundObject, groundMesh, {
 		compiledKeys,
 		infiniteKeys,
+	})
+}
+
+function syncScenePreviewGroundCollisionRuntimeHost(
+	document: SceneJsonExportDocument | null,
+	referenceWorldPosition: THREE.Vector3 | null,
+): boolean {
+	if (!document) {
+		return false
+	}
+	const groundNode = findGroundNode(document.nodes)
+	const groundMesh = groundNode?.dynamicMesh as GroundRuntimeDynamicMesh | null | undefined
+	if (!groundNode || !isGroundDynamicMesh(groundMesh)) {
+		return false
+	}
+	const groundObject = nodeObjectMap.get(groundNode.id) ?? null
+	if (!groundObject) {
+		return false
+	}
+	const referenceNodeId = vehicleDriveState.active ? vehicleDriveState.nodeId : null
+	const referenceObject = referenceNodeId ? (nodeObjectMap.get(referenceNodeId) ?? null) : null
+	if (!referenceWorldPosition || !physicsEnvironmentEnabled.value) {
+		console.info(
+			'[ScenePreview][GroundCollision] host cleared',
+			`source=${JSON.stringify(document.id ?? '')}`,
+			`ground=${formatDebugObject(groundObject)}`,
+			`vehicle=${formatDebugObject(referenceObject)}`,
+		)
+		clearGroundCollisionRuntimeHost(groundObject)
+		return false
+	}
+
+	const groundUserData = groundNode.userData && typeof groundNode.userData === 'object'
+		? (groundNode.userData as Record<string, unknown>)
+		: {}
+	const compiledManifest = groundUserData.compiledGroundManifest as { revision?: unknown } | null | undefined
+	const snapshot = syncGroundCollisionRuntimeHost({
+		enabled: true,
+		sourceId: groundNode.id,
+		groundObject,
+		groundMesh,
+		camera: resolveGroundCollisionAnchor(referenceWorldPosition),
+		compiledManifest: compiledManifest as any,
+		loadCompiledTileData: resolveScenePreviewCompiledGroundTileLoader(),
+		groundChunkManifest: currentGroundChunkManifest,
+		loadGroundChunkData: currentGroundChunkManifest
+			? resolveScenePreviewGroundChunkDataLoader(document.id ?? '')
+			: undefined,
+	})
+	console.info(
+		'[ScenePreview][GroundCollision] host synced',
+		`source=${JSON.stringify(document.id ?? '')}`,
+		`ground=${formatDebugObject(groundObject)}`,
+		`vehicle=${formatDebugObject(referenceObject)}`,
+		`position=${formatDebugVector(referenceWorldPosition)}`,
+		`compiledKeys=${JSON.stringify(snapshot.compiledTileKeys)}`,
+		`infiniteKeys=${JSON.stringify(snapshot.infiniteChunkKeys)}`,
+	)
+	return syncGroundCollisionRuntimeLoadedTileKeys(groundObject, groundMesh, {
+		compiledKeys: snapshot.compiledTileKeys,
+		infiniteKeys: snapshot.infiniteChunkKeys,
 	})
 }
 
@@ -10152,7 +10290,14 @@ async function loadScenePreviewPhysicsBridgeScene(document: SceneJsonExportDocum
 	await reloadScenePreviewPhysicsBridgeForPreference(resolveDocumentEnvironment(document))
 	await ensureScenePreviewPhysicsBridgeReady()
 	await syncScenePreviewGroundChunkManifest(document)
-	syncScenePreviewGroundCollisionRuntimeLoadedTileKeys(document)
+	const groundNode = findGroundNode(document.nodes)
+	const groundMesh = groundNode?.dynamicMesh as GroundRuntimeDynamicMesh | null | undefined
+	const groundObject = groundNode ? (nodeObjectMap.get(groundNode.id) ?? null) : null
+	if (resolveGroundCollisionReferenceWorld(groundCollisionReferencePosition)) {
+		syncScenePreviewGroundCollisionRuntimeHost(document, groundCollisionReferencePosition)
+	} else if (groundObject && isGroundDynamicMesh(groundMesh)) {
+		clearGroundCollisionRuntimeHost(groundObject)
+	}
 	currentPhysicsBridgeGroundCollisionSignature = resolveScenePreviewGroundCollisionSignature(document)
 	const requestId = ++physicsBridgeSceneRequestId
 	const asset = buildPhysicsSceneAsset(document)
@@ -11136,6 +11281,15 @@ function formatDebugObject(object: THREE.Object3D | null | undefined): string {
 	})
 }
 
+function formatDebugJson(value: unknown): string {
+	try {
+		const json = JSON.stringify(value)
+		return json ?? 'null'
+	} catch (_error) {
+		return '[unserializable]'
+	}
+}
+
 function computeConvexSegmentsBounds(segments: Array<{ shape: Extract<RigidbodyPhysicsShape, { kind: 'convex' }> }>): THREE.Box3 {
 	const bounds = new THREE.Box3()
 	segments.forEach((segment) => {
@@ -11258,7 +11412,9 @@ function ensureRigidbodyDebugHelperForShape(
 	lineSegments.name = `RigidbodyDebugLines:${nodeId}`
 	lineSegments.renderOrder = 9999
 	const localOffsetResult = resolveRigidbodyDebugLocalOffset(shape, runtimeObject)
-	console.log(`[RigidbodyDebugShape] nodeId=${JSON.stringify(nodeId)} parentNodeId=${JSON.stringify(parentNodeId)} category=${JSON.stringify(category)} shapeKind=${JSON.stringify(shape.kind)} applyScale=${String(shape.applyScale === true)} offset=${formatDebugVector(localOffsetResult.offset)} localScale=${formatDebugVector(localScale)} normalizedLegacyWorldOffset=${String(localOffsetResult.normalizedLegacyWorldOffset)}`)
+	if (isRigidbodyDebugVisible.value) {
+		console.log(`[RigidbodyDebugShape] nodeId=${JSON.stringify(nodeId)} parentNodeId=${JSON.stringify(parentNodeId)} category=${JSON.stringify(category)} shapeKind=${JSON.stringify(shape.kind)} applyScale=${String(shape.applyScale === true)} offset=${formatDebugVector(localOffsetResult.offset)} localScale=${formatDebugVector(localScale)} normalizedLegacyWorldOffset=${String(localOffsetResult.normalizedLegacyWorldOffset)}`)
+	}
 	// Offset is expressed in the same local-space units as the shape definition.
 	// The helper is parented to the bound runtime object, so this translation stays in object-local space.
 	lineSegments.position.copy(localOffsetResult.offset)
@@ -11293,7 +11449,9 @@ function ensureModelCollisionDebugHelper(
 		return
 	}
 	const collisionBounds = computeConvexSegmentsBounds(segments)
-	console.log(`[ModelCollisionDebug] nodeId=${JSON.stringify(nodeId)} parentNodeId=${JSON.stringify(parentNodeId)} runtimeObject=${formatDebugObject(runtimeObject)} faceCount=${definition.faces.length} segments=${segments.length} bounds=${formatDebugBox(collisionBounds)}`)
+	if (isRigidbodyDebugVisible.value) {
+		console.log(`[ModelCollisionDebug] nodeId=${JSON.stringify(nodeId)} parentNodeId=${JSON.stringify(parentNodeId)} runtimeObject=${formatDebugObject(runtimeObject)} faceCount=${definition.faces.length} segments=${segments.length} bounds=${formatDebugBox(collisionBounds)}`)
+	}
 	const signature = `model-collision-segments:${definition.defaultThickness}:${definition.faces
 		.map((face) => {
 			const vertices = Array.isArray(face?.vertices)
