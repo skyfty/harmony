@@ -1,7 +1,7 @@
 import type { SceneNode, GroundDynamicMesh } from './index'
 import type { RigidbodyPhysicsShape } from './components'
 import { resolveGroundEditTileResolution, resolveGroundEditTileSizeMeters, resolveGroundWorldBounds, resolveGroundWorkingGridSize } from './index'
-import { resolveGroundEffectiveHeightAtVertex, sampleGroundEffectiveHeightRegion } from './groundMesh'
+import { resolveGroundEffectiveHeightAtVertex, sampleGroundEffectiveHeightRegion, type GroundEffectiveHeightRegion } from './groundMesh'
 
 export type GroundHeightfieldData = {
   matrix: number[][]
@@ -597,6 +597,73 @@ function computeChunkSpec(rows: number, columns: number, chunkRow: number, chunk
   return { startRow, startColumn, rows: chunkRows, columns: chunkColumns }
 }
 
+function getGroundHeightRegionValue(
+  region: GroundEffectiveHeightRegion,
+  row: number,
+  column: number,
+): number {
+  const localRow = row - region.minRow
+  const localColumn = column - region.minColumn
+  if (localRow < 0 || localColumn < 0 || row > region.maxRow || column > region.maxColumn) {
+    return 0
+  }
+  return region.values[localRow * region.stride + localColumn] ?? 0
+}
+
+export function buildGroundHeightfieldChunkDataFromSample(
+  node: SceneNode,
+  plan: GroundHeightfieldChunkPlan,
+  chunkRow: number,
+  chunkColumn: number,
+  heightRegion: GroundEffectiveHeightRegion,
+): GroundHeightfieldChunkData | null {
+  const rows = plan.rows
+  const columns = plan.columns
+  if (rows <= 0 || columns <= 0) {
+    return null
+  }
+
+  const spec = computeChunkSpec(rows, columns, chunkRow, chunkColumn, plan.chunkCells)
+  const pointsX = spec.columns + 1
+  const pointsZ = spec.rows + 1
+  const { scaleY } = resolveNodeScaleVector(node.scale)
+
+  const matrix: number[][] = []
+  for (let localColumnVertex = 0; localColumnVertex < pointsX; localColumnVertex += 1) {
+    const physicsColumnVertex = spec.startColumn + localColumnVertex
+    const sourceColumnVertex = mapPhysicsVertexToSourceVertex(physicsColumnVertex, plan.stride, plan.columns)
+
+    const columnValues: number[] = []
+    for (let localRowVertex = pointsZ - 1; localRowVertex >= 0; localRowVertex -= 1) {
+      const physicsRowVertex = spec.startRow + localRowVertex
+      const flippedPhysicsRowVertex = (plan.pointsZ - 1) - physicsRowVertex
+      const sourceRowVertex = mapPhysicsVertexToSourceVertex(flippedPhysicsRowVertex, plan.stride, plan.rows)
+      const baseHeight = getGroundHeightRegionValue(heightRegion, sourceRowVertex, sourceColumnVertex)
+      columnValues.push(baseHeight * scaleY)
+    }
+    matrix.push(columnValues)
+  }
+
+  const offset: [number, number, number] = [
+    plan.minX + spec.startColumn * plan.elementSize,
+    plan.minZ + spec.startRow * plan.elementSize,
+    0,
+  ]
+
+  return {
+    key: groundChunkKey(chunkRow, chunkColumn),
+    chunkRow,
+    chunkColumn,
+    startRow: spec.startRow,
+    startColumn: spec.startColumn,
+    rows: spec.rows,
+    columns: spec.columns,
+    matrix,
+    elementSize: plan.elementSize,
+    offset,
+  }
+}
+
 export function buildGroundCollisionDebugShapesFromNode(
   node: SceneNode,
 ): Array<Extract<RigidbodyPhysicsShape, { kind: 'heightfield' }>> {
@@ -712,51 +779,9 @@ export function buildGroundHeightfieldChunkData(
   chunkRow: number,
   chunkColumn: number,
 ): GroundHeightfieldChunkData | null {
-  const rows = plan.rows
-  const columns = plan.columns
-  if (rows <= 0 || columns <= 0) {
-    return null
-  }
-
-  const spec = computeChunkSpec(rows, columns, chunkRow, chunkColumn, plan.chunkCells)
-  const pointsX = spec.columns + 1
-  const pointsZ = spec.rows + 1
-  const { scaleY } = resolveNodeScaleVector(node.scale)
-
-  const matrix: number[][] = []
-  for (let localColumnVertex = 0; localColumnVertex < pointsX; localColumnVertex += 1) {
-    const physicsColumnVertex = spec.startColumn + localColumnVertex
-    const sourceColumnVertex = mapPhysicsVertexToSourceVertex(physicsColumnVertex, plan.stride, plan.columns)
-
-    const columnValues: number[] = []
-    for (let localRowVertex = pointsZ - 1; localRowVertex >= 0; localRowVertex -= 1) {
-      const physicsRowVertex = spec.startRow + localRowVertex
-      const flippedPhysicsRowVertex = (plan.pointsZ - 1) - physicsRowVertex
-      const sourceRowVertex = mapPhysicsVertexToSourceVertex(flippedPhysicsRowVertex, plan.stride, plan.rows)
-      const baseHeight = resolveGroundEffectiveHeightAtVertex(mesh, sourceRowVertex, sourceColumnVertex)
-      columnValues.push(baseHeight * scaleY)
-    }
-    matrix.push(columnValues)
-  }
-
-  const offset: [number, number, number] = [
-    plan.minX + spec.startColumn * plan.elementSize,
-    plan.minZ + spec.startRow * plan.elementSize,
-    0,
-  ]
-
-  return {
-    key: groundChunkKey(chunkRow, chunkColumn),
-    chunkRow,
-    chunkColumn,
-    startRow: spec.startRow,
-    startColumn: spec.startColumn,
-    rows: spec.rows,
-    columns: spec.columns,
-    matrix,
-    elementSize: plan.elementSize,
-    offset,
-  }
+  const gridSize = resolveGroundWorkingGridSize(mesh)
+  const heightRegion = sampleGroundEffectiveHeightRegion(mesh, 0, gridSize.rows, 0, gridSize.columns)
+  return buildGroundHeightfieldChunkDataFromSample(node, plan, chunkRow, chunkColumn, heightRegion)
 }
 
 export function buildGroundHeightfieldData(

@@ -1386,6 +1386,34 @@ function ensureGroundLocalEditTileCachesFromRuntime(
   }
 }
 
+function resolveGroundLocalEditTileLookupFromRuntime(
+  definition: GroundRuntimeDynamicMesh,
+): Map<string, GroundLocalEditTileData> | null {
+  const source = definition.localEditTiles && typeof definition.localEditTiles === 'object'
+    ? definition.localEditTiles
+    : null
+
+  if (!source) {
+    if (definition.runtimeLocalEditTileSourceRef === null && definition.runtimeLocalEditTileLookupCache instanceof Map) {
+      return definition.runtimeLocalEditTileLookupCache
+    }
+    return null
+  }
+
+  if (
+    definition.runtimeLocalEditTileSourceRef === source
+    && definition.runtimeLocalEditTileLookupCache instanceof Map
+  ) {
+    return definition.runtimeLocalEditTileLookupCache
+  }
+
+  const cache = resolveGroundLocalEditTileCacheFromSource(source)
+  definition.runtimeLocalEditTileArrayCache = cache.tiles
+  definition.runtimeLocalEditTileLookupCache = cache.lookup
+  definition.runtimeLocalEditTileSourceRef = source
+  return cache.lookup
+}
+
 function resolveGroundLocalEditTileCoverageBucketKey(chunkRow: number, chunkColumn: number, bucketChunks = GROUND_LOCAL_EDIT_TILE_COVERAGE_BUCKET_CHUNKS): string {
   const safeBucketChunks = Math.max(1, Math.trunc(bucketChunks))
   return `${Math.floor(chunkRow / safeBucketChunks)}:${Math.floor(chunkColumn / safeBucketChunks)}`
@@ -1587,7 +1615,7 @@ function getGroundLocalEditHeightAtGlobalVertex(
   resolution = resolveGroundEditTileResolution(definition),
 ): number | null {
   const safeResolution = Math.max(1, Math.trunc(resolution))
-  const { lookup } = ensureGroundLocalEditTileCachesFromRuntime(definition)
+  const lookup = resolveGroundLocalEditTileLookupFromRuntime(definition)
   if (!(lookup instanceof Map) || lookup.size === 0) {
     return null
   }
@@ -1647,7 +1675,7 @@ function sampleGroundLocalEditHeightAtWorldFromRuntime(
   if (!(tileSizeMeters > 0) || !(resolution > 0)) {
     return null
   }
-  const { lookup } = ensureGroundLocalEditTileCachesFromRuntime(runtimeDefinition)
+  const lookup = resolveGroundLocalEditTileLookupFromRuntime(runtimeDefinition)
   if (!(lookup instanceof Map) || lookup.size === 0) {
     return null
   }

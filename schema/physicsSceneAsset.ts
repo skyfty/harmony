@@ -5,7 +5,7 @@ import { buildGroundAirWallDefinitions } from './airWall'
 import { buildBoundaryWallSegments } from './boundaryWall'
 import {
   buildAdaptiveGroundCollisionData,
-  buildGroundHeightfieldChunkData,
+  buildGroundHeightfieldChunkDataFromSample,
   buildGroundHeightfieldChunkPlan,
   isGroundDynamicMesh,
 } from './groundHeightfield'
@@ -13,6 +13,7 @@ import { resolveFloorShape, resolveModelCollisionFaceSegments, resolveWallShape,
 import { collectRoadHeightfieldTileDescriptors, isRoadDynamicMesh } from './roadHeightfield'
 import { collectCompiledGroundCollisionTileKeys } from './compiledGroundCollisionRuntime'
 import { collectInfiniteGroundChunkCollisionKeys } from './infiniteGroundChunkCollisions'
+import { sampleGroundEffectiveHeightRegion } from './groundMesh'
 import {
   BOUNDARY_WALL_COMPONENT_TYPE,
   RIGIDBODY_COMPONENT_TYPE,
@@ -28,6 +29,7 @@ import {
   type RigidbodyPhysicsShape,
   type VehicleComponentProps,
 } from './components'
+import { resolveGroundWorkingGridSize } from './index'
 
 type BuildShapeInstance = {
   shapeId: number
@@ -642,13 +644,22 @@ function buildGroundChunkCollisionShapeInstances(
     return []
   }
 
+  const gridSize = resolveGroundWorkingGridSize(groundMesh)
+  const heightRegion = sampleGroundEffectiveHeightRegion(groundMesh, 0, gridSize.rows, 0, gridSize.columns)
+
   const chunkInstances: BuildShapeInstance[] = []
   for (const key of runtimeLoadedTileKeys) {
     const coord = parseGroundChunkKey(key)
     if (!coord) {
       continue
     }
-    const chunkData = buildGroundHeightfieldChunkData(node, groundMesh, plan, coord.chunkZ, coord.chunkX)
+    const chunkData = buildGroundHeightfieldChunkDataFromSample(
+      node,
+      plan,
+      coord.chunkZ,
+      coord.chunkX,
+      heightRegion,
+    )
     if (!chunkData) {
       continue
     }

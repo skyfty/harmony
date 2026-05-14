@@ -106,6 +106,11 @@ type CachedRigidbodyShapeEntry = {
   shape: RigidbodyPhysicsShape
 }
 
+type CachedRuntimeDetailedShapeEntry = {
+  signature: string
+  result: { shape: HeightfieldShapeDefinition; isFlat: boolean } | null
+}
+
 const infiniteGroundCameraLocalHelper = new THREE.Vector3()
 
 function uniqueSortedKeys(keys: Iterable<string> | null | undefined): string[] {
@@ -391,6 +396,7 @@ export function createInfiniteGroundChunkColliderRuntime(
   const debugShapes = new Map<string, HeightfieldShapeDefinition[]>()
   const manifestShapeCache = new Map<string, CachedHeightfieldShapeEntry>()
   const baseFlatShapeCache = new Map<string, CachedRigidbodyShapeEntry>()
+  const runtimeDetailedShapeCache = new Map<string, CachedRuntimeDetailedShapeEntry>()
   const residentChunkKeys = new Set<string>()
   const pendingLoads = new Map<string, PendingEntry>()
   let generation = 0
@@ -413,6 +419,7 @@ export function createInfiniteGroundChunkColliderRuntime(
     pendingLoads.clear()
     manifestShapeCache.clear()
     baseFlatShapeCache.clear()
+    runtimeDetailedShapeCache.clear()
     Array.from(instances.keys()).forEach(removeRuntimeKey)
     currentSourceId = ''
     currentManifestRevision = -1
@@ -586,12 +593,27 @@ export function createInfiniteGroundChunkColliderRuntime(
         continue
       }
 
-      const runtimeDetailed = buildRuntimeDetailedShape(
-        params.groundDefinition,
-        heightSamplingContext.context,
-        chunkKey,
+      const runtimeDetailedCacheSignature = [
+        params.sourceId.trim(),
+        currentDefinitionSignature,
+        runtimeDetailedRuntimeKey,
         chunkSizeMeters,
-      )
+      ].join('|')
+      const cachedRuntimeDetailed = runtimeDetailedShapeCache.get(runtimeDetailedRuntimeKey)
+      const runtimeDetailed = cachedRuntimeDetailed?.signature === runtimeDetailedCacheSignature
+        ? cachedRuntimeDetailed.result
+        : buildRuntimeDetailedShape(
+            params.groundDefinition,
+            heightSamplingContext.context,
+            chunkKey,
+            chunkSizeMeters,
+          )
+      if (cachedRuntimeDetailed?.signature !== runtimeDetailedCacheSignature) {
+        runtimeDetailedShapeCache.set(runtimeDetailedRuntimeKey, {
+          signature: runtimeDetailedCacheSignature,
+          result: runtimeDetailed,
+        })
+      }
       if (runtimeDetailed && !runtimeDetailed.isFlat) {
         removeRuntimeKey(baseFlatRuntimeKey)
         attachShape(params, runtimeDetailedRuntimeKey, chunkKey, 'runtime-detailed', runtimeDetailed.shape)
