@@ -10164,6 +10164,7 @@ async function loadScenePreviewPhysicsBridgeScene(document: SceneJsonExportDocum
 		}
 		updateScenePreviewPhysicsBridgeIndex(asset)
 		physicsBridgeSceneLoaded = true
+		updateScenePreviewCannonPhysicsDebugger()
 	} catch (error) {
 		console.warn('[ScenePreview] Failed to load physics bridge scene', error)
 	}
@@ -10334,6 +10335,7 @@ function stepScenePreviewPhysicsBridge(delta: number): void {
 				return
 			}
 			consumeScenePreviewPhysicsBridgeStepFrame(frame)
+			updateScenePreviewCannonPhysicsDebugger()
 		})
 		.catch((error) => {
 			console.warn('[ScenePreview] Failed to step physics bridge', error)
@@ -10761,6 +10763,7 @@ function syncScenePreviewCannonPhysicsDebugger(): void {
 		cannonPhysicsDebugger = new CannonEsDebuggerPro(root, cannonPhysicsWorld, 0xffc107, 0.005)
 	}
 	cannonPhysicsDebugger.setVisible(true)
+	cannonPhysicsDebugger.update()
 }
 
 function updateScenePreviewCannonPhysicsDebugger(): void {
@@ -11753,6 +11756,23 @@ function createBridgeVehicleInstance(
 	}
 }
 
+function syncVehicleRigidbodyInstance(nodeId: string, instance: VehicleInstance, object: THREE.Object3D): void {
+	const chassisBody = instance.vehicle.chassisBody
+	if (!chassisBody) {
+		rigidbodyInstances.delete(nodeId)
+		return
+	}
+	// Reuse the vehicle chassis body as the authoritative rigidbody binding.
+	// Vehicle-drive code expects rigidbodyInstances to be keyed by the vehicle node id.
+	rigidbodyInstances.set(nodeId, {
+		nodeId,
+		body: chassisBody,
+		bodies: [chassisBody],
+		object,
+		orientationAdjustment: null,
+	})
+}
+
 function removeVehicleInstance(nodeId: string): void {
 	const entry = vehicleInstances.get(nodeId)
 	if (!entry) {
@@ -11762,6 +11782,7 @@ function removeVehicleInstance(nodeId: string): void {
 		stopVehicleDriveMode({ resolution: { type: 'abort', message: 'Vehicle instance was removed.' } })
 	}
 	vehicleInstances.delete(nodeId)
+	rigidbodyInstances.delete(nodeId)
 	scenePreviewPerf.notifyRemovedNode(nodeId)
 }
 
@@ -11780,6 +11801,7 @@ function ensureVehicleBindingForNode(nodeId: string): void {
 	const instance = createBridgeVehicleInstance(node, component, object)
 	if (instance) {
 		vehicleInstances.set(nodeId, instance)
+		syncVehicleRigidbodyInstance(nodeId, instance, object)
 	}
 }
 

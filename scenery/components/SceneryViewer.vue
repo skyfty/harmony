@@ -1873,6 +1873,8 @@ const physicsBridgeFrameBodiesByNodeId = new Map<string, PhysicsBridgeBodyFrameS
 const physicsBridgeSyncPositionHelper = new THREE.Vector3();
 const physicsBridgeSyncQuaternionHelper = new THREE.Quaternion();
 const physicsBridgeSyncParentQuaternionHelper = new THREE.Quaternion();
+const physicsBridgeHeightfieldAdjustment = new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0));
+const physicsBridgeHeightfieldAdjustmentInverse = physicsBridgeHeightfieldAdjustment.clone().invert();
 const physicsBridgeBodySyncPositionHelper = new THREE.Vector3();
 const physicsBridgeBodySyncQuaternionHelper = new THREE.Quaternion();
 const physicsEnvironmentEnabled = ref(true);
@@ -6172,7 +6174,13 @@ function applySceneryPhysicsBridgeFrameToObjects(): void {
     if (!bindingObject) {
       return;
     }
-    applySceneryPhysicsBridgeTransformToObject(bindingObject, state.position, state.quaternion, null);
+    const orientationAdjustment = node && isGroundDynamicMesh(node.dynamicMesh)
+      ? {
+        three: physicsBridgeHeightfieldAdjustment,
+        threeInverse: physicsBridgeHeightfieldAdjustmentInverse,
+      }
+      : null;
+    applySceneryPhysicsBridgeTransformToObject(bindingObject, state.position, state.quaternion, orientationAdjustment);
   });
 }
 
