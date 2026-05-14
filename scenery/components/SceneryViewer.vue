@@ -561,7 +561,6 @@ import {
 } from '../common/utils/terrainDatasetPackage';
 import type {
   AutoTourRouteSnapResult,
-  GroundChunkManifest,
   SceneNode,
   SceneNodeComponentState,
   SceneJsonExportDocument,
@@ -1879,7 +1878,6 @@ const lastSceneryGroundCollisionReferencePosition = new THREE.Vector3();
 const sceneryGroundCollisionAnchor = new THREE.Object3D();
 let sceneryGroundCollisionReferenceInitialized = false;
 let sceneryGroundCollisionReferenceElapsed = 0;
-let currentGroundChunkManifest: GroundChunkManifest | null = null;
 const physicsBridgeBodyIdByNodeId = new Map<string, number>();
 const physicsBridgeNodeIdByBodyId = new Map<number, string>();
 const physicsBridgeVehicleIdByNodeId = new Map<string, number>();
@@ -5930,7 +5928,6 @@ function resetPhysicsWorld(): void {
   clearLegacyPhysicsWorld();
   sceneryGroundCollisionReferenceInitialized = false;
   sceneryGroundCollisionReferenceElapsed = 0;
-  currentGroundChunkManifest = null;
 }
 
 function resolveSceneryPhysicsBridgePreference(
@@ -5981,6 +5978,7 @@ function resolveSceneryGroundCollisionReferenceWorld(
   camera: THREE.Camera | null | undefined,
   targetPosition: THREE.Vector3,
 ): boolean {
+  void camera;
   const manualDriveNode = vehicleDriveActive.value ? vehicleDriveNodeId.value : null;
   if (manualDriveNode && resolveVehicleOrObjectWorldPosition({
     nodeId: manualDriveNode,
@@ -6001,11 +5999,7 @@ function resolveSceneryGroundCollisionReferenceWorld(
   })) {
     return true;
   }
-  if (!camera) {
-    return false;
-  }
-  camera.getWorldPosition(targetPosition);
-  return true;
+  return false;
 }
 
 function resolveSceneryGroundCollisionAnchor(referenceWorldPosition: THREE.Vector3): THREE.Camera {
@@ -6119,7 +6113,6 @@ function syncSceneryGroundCollisionRuntimeLoadedTileKeys(document: SceneJsonExpo
     camera: resolveSceneryGroundCollisionAnchor(sceneryGroundCollisionReferencePosition),
     compiledManifest,
     loadCompiledTileData: resolveSceneryCompiledGroundTileLoader(),
-    groundChunkManifest: currentGroundChunkManifest,
     runtimeDeps: resolveSceneryGroundCollisionRuntimeDeps(),
   });
   return syncGroundCollisionRuntimeLoadedTileKeys(groundObject, groundMesh, {
@@ -6186,7 +6179,6 @@ async function loadSceneryPhysicsBridgeScene(document: SceneJsonExportDocument |
     currentPhysicsBridgeGroundCollisionSignature = '';
     sceneryGroundCollisionReferenceInitialized = false;
     sceneryGroundCollisionReferenceElapsed = 0;
-    currentGroundChunkManifest = null;
     sceneryGroundCollisionRuntimeBodyIds.clear();
     await disposeSceneryPhysicsBridgeScene();
     return;
@@ -12723,7 +12715,6 @@ function cleanupForUnrelatedSceneSwitch(): void {
   clearGroundCollisionRuntimeHost(groundNode ? (nodeObjectMap.get(groundNode.id) ?? null) : null);
   sceneryGroundCollisionReferenceInitialized = false;
   sceneryGroundCollisionReferenceElapsed = 0;
-  currentGroundChunkManifest = null;
 
   if (sceneGraphRoot) {
     renderContext.scene.remove(sceneGraphRoot);
