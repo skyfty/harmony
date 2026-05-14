@@ -15,7 +15,12 @@ import {
   type SceneNode,
   type SceneNodeComponentState,
 } from './index'
-import { sampleGroundHeight } from './groundMesh'
+import {
+  prepareGroundHeightSamplingContext,
+  sampleGroundHeight,
+  sampleGroundHeightWithContext,
+  type GroundHeightSamplingContext,
+} from './groundMesh'
 import type {
   PhysicsBodyBindingEntry as RigidbodyInstance,
   PhysicsBodyLike,
@@ -89,6 +94,16 @@ type PendingEntry = {
 type ChunkWindow = {
   activeChunkKeys: string[]
   retainedChunkKeys: string[]
+}
+
+type CachedHeightfieldShapeEntry = {
+  signature: string
+  shape: HeightfieldShapeDefinition
+}
+
+type CachedRigidbodyShapeEntry = {
+  signature: string
+  shape: RigidbodyPhysicsShape
 }
 
 const infiniteGroundCameraLocalHelper = new THREE.Vector3()
@@ -265,6 +280,7 @@ function buildManifestHeightfieldShape(record: GroundChunkManifestRecord, chunkD
 
 function buildRuntimeDetailedShape(
   definition: GroundRuntimeDynamicMesh,
+  context: GroundHeightSamplingContext,
   chunkKey: string,
   chunkSizeMeters: number,
 ): { shape: HeightfieldShapeDefinition; isFlat: boolean } | null {
@@ -285,7 +301,7 @@ function buildRuntimeDetailedShape(
     for (let row = resolution; row >= 0; row -= 1) {
       const x = origin.x + column * elementSize
       const z = origin.z + row * elementSize
-      const height = sampleGroundHeight(definition, x, z)
+      const height = sampleGroundHeightWithContext(definition, context, x, z)
       const safeHeight = Number.isFinite(height) ? height : 0
       columnValues.push(safeHeight)
       minHeight = Math.min(minHeight, safeHeight)
@@ -373,6 +389,8 @@ export function createInfiniteGroundChunkColliderRuntime(
 ): InfiniteGroundChunkColliderRuntime {
   const instances = new Map<string, RigidbodyInstance>()
   const debugShapes = new Map<string, HeightfieldShapeDefinition[]>()
+  const manifestShapeCache = new Map<string, CachedHeightfieldShapeEntry>()
+  const baseFlatShapeCache = new Map<string, CachedRigidbodyShapeEntry>()
   const residentChunkKeys = new Set<string>()
   const pendingLoads = new Map<string, PendingEntry>()
   let generation = 0
@@ -393,6 +411,8 @@ export function createInfiniteGroundChunkColliderRuntime(
     generation += 1
     residentChunkKeys.clear()
     pendingLoads.clear()
+    manifestShapeCache.clear()
+    baseFlatShapeCache.clear()
     Array.from(instances.keys()).forEach(removeRuntimeKey)
     currentSourceId = ''
     currentManifestRevision = -1
@@ -453,6 +473,7 @@ export function createInfiniteGroundChunkColliderRuntime(
     }
 
     const chunkSizeMeters = resolveChunkSizeMeters(params.groundDefinition)
+    const heightSamplingContext = prepareGroundHeightSamplingContext(params.groundDefinition)
     const { activeChunkKeys, retainedChunkKeys } = resolveChunkWindow(
       params.groundObject,
       params.camera,
@@ -512,14 +533,30 @@ export function createInfiniteGroundChunkColliderRuntime(
               if (!Number.isFinite(cellSize) || cellSize <= 1e-6 || parsed.heights.length !== expectedLength) {
                 return
               }
-              const shape = buildManifestHeightfieldShape(manifestRecord, {
+              const shapeSignature = [
+                params.sourceId.trim(),
+                Math.max(0, Math.trunc(Number(params.manifestRevision) || 0)),
+                manifestRuntimeKey,
+                Math.max(0, Math.trunc(Number(manifestRecord.revision) || 0)),
                 resolution,
                 cellSize,
-                heights: parsed.heights instanceof Float32Array ? parsed.heights : new Float32Array(parsed.heights),
-              })
+                parsed.heights.length,
+              ].join('|')
+              const cachedShape = manifestShapeCache.get(manifestRuntimeKey)
+              const shape = cachedShape?.signature === shapeSignature
+                ? cachedShape.shape
+                : buildManifestHeightfieldShape(manifestRecord, {
+                    resolution,
+                    cellSize,
+                    heights: parsed.heights instanceof Float32Array ? parsed.heights : new Float32Array(parsed.heights),
+                  })
               if (!shape) {
                 return
               }
+              manifestShapeCache.set(manifestRuntimeKey, {
+                signature: shapeSignature,
+                shape,
+              })
               attachShape(params, manifestRuntimeKey, chunkKey, 'manifest', shape)
             })
             .catch(() => {
@@ -549,20 +586,44 @@ export function createInfiniteGroundChunkColliderRuntime(
         continue
       }
 
-      const runtimeDetailed = buildRuntimeDetailedShape(params.groundDefinition, chunkKey, chunkSizeMeters)
+      const runtimeDetailed = buildRuntimeDetailedShape(
+        params.groundDefinition,
+        heightSamplingContext.context,
+        chunkKey,
+        chunkSizeMeters,
+      )
       if (runtimeDetailed && !runtimeDetailed.isFlat) {
         removeRuntimeKey(baseFlatRuntimeKey)
         attachShape(params, runtimeDetailedRuntimeKey, chunkKey, 'runtime-detailed', runtimeDetailed.shape)
         continue
       }
 
-      attachShape(
-        params,
+      const baseFlatShapeSignature = [
+        params.sourceId.trim(),
+        Math.max(0, Math.trunc(Number(params.manifestRevision) || 0)),
+        currentDefinitionSignature,
         baseFlatRuntimeKey,
-        chunkKey,
-        'base-flat',
-        buildFlatChunkShape(params.groundDefinition, chunkKey, chunkSizeMeters, manifestRecord),
-      )
+        manifestRecord ? Math.max(0, Math.trunc(Number(manifestRecord.revision) || 0)) : -1,
+        manifestRecord ? Number(manifestRecord.heightMin) || 0 : 0,
+        manifestRecord ? Number(manifestRecord.heightMax) || 0 : 0,
+      ].join('|')
+      const cachedBaseFlatShape = baseFlatShapeCache.get(baseFlatRuntimeKey)
+      const baseFlatShape = cachedBaseFlatShape?.signature === baseFlatShapeSignature
+        ? cachedBaseFlatShape.shape
+        : buildFlatChunkShape(
+            params.groundDefinition,
+            chunkKey,
+            chunkSizeMeters,
+            manifestRecord,
+          )
+      if (!baseFlatShape) {
+        continue
+      }
+      baseFlatShapeCache.set(baseFlatRuntimeKey, {
+        signature: baseFlatShapeSignature,
+        shape: baseFlatShape,
+      })
+      attachShape(params, baseFlatRuntimeKey, chunkKey, 'base-flat', baseFlatShape)
     }
   }
 
