@@ -10,7 +10,7 @@ import {
   isGroundDynamicMesh,
 } from './groundHeightfield'
 import { resolveFloorShape, resolveModelCollisionFaceSegments, resolveWallShape, type FloorShapeCache, type WallTrimeshCache } from './physicsShapeResolvers'
-import { buildRoadHeightfieldShapes, isRoadDynamicMesh } from './roadHeightfieldShapes'
+import { collectRoadHeightfieldTileDescriptors, isRoadDynamicMesh } from './roadHeightfield'
 import { collectCompiledGroundCollisionTileKeys } from './compiledGroundCollisionRuntime'
 import { collectInfiniteGroundChunkCollisionKeys } from './infiniteGroundChunkCollisions'
 import {
@@ -503,30 +503,38 @@ function buildModelCollisionShapeInstances(
 
 function buildRoadShapeInstances(
   node: SceneNode,
-  groundNode: SceneNode | null,
+  rigidbodyComponent: SceneNodeComponentState<RigidbodyComponentProps> | null,
   nextShapeId: () => number,
   shapes: PhysicsShapeDesc[],
 ): BuildShapeInstance[] {
-  if (!isRoadDynamicMesh(node.dynamicMesh) || !groundNode || !isGroundDynamicMesh(groundNode.dynamicMesh)) {
+  if (!isRoadDynamicMesh(node.dynamicMesh) || !rigidbodyComponent) {
     return []
   }
-  const built = buildRoadHeightfieldShapes({
+  const built = collectRoadHeightfieldTileDescriptors({
     roadNode: node,
-    groundNode,
+    rigidbodyComponent,
   })
   if (!built) {
     return []
   }
-  return built.segments.flatMap((segment) => {
+  return built.tiles.flatMap((tile) => {
     const instances = buildShapeInstancesFromDefinition(
-      segment.shape,
+      tile.shapeDefinition,
       unitScaleHelper,
       nextShapeId,
       shapes,
     )
     return instances.map((entry) => ({
       shapeId: entry.shapeId,
-      transform: composePhysicsTransform(segment.transform, entry.transform),
+      transform: composePhysicsTransform({
+        position: tile.position,
+        rotation: [
+          0,
+          Math.sin(tile.yaw * 0.5),
+          0,
+          Math.cos(tile.yaw * 0.5),
+        ],
+      }, entry.transform),
     }))
   })
 }
@@ -739,7 +747,7 @@ export function buildPhysicsSceneAsset(document: SceneJsonExportDocument): Physi
       const floorShapeInstances = buildFloorShapeInstances(node, worldScaleHelper, nextShapeId, asset.shapes, floorShapeCache)
       const wallShapeInstances = buildWallShapeInstances(node, nextShapeId, asset.shapes, wallShapeCache)
       const modelCollisionShapeInstances = buildModelCollisionShapeInstances(node, worldScaleHelper, nextShapeId, asset.shapes)
-      const roadShapeInstances = buildRoadShapeInstances(node, groundNode, nextShapeId, asset.shapes)
+      const roadShapeInstances = buildRoadShapeInstances(node, rigidbodyState, nextShapeId, asset.shapes)
       const boundaryWallInstances = buildBoundaryWallShapeInstances(node, nextShapeId, asset.shapes)
       const primaryShapeInstances = wallShapeInstances.length > 0
         ? []

@@ -45,9 +45,9 @@ export type RoadHeightfieldBuildSnapshot = {
 export type RoadHeightfieldBuildParams = {
 	roadNode: SceneNode
 	rigidbodyComponent: SceneNodeComponentState<RigidbodyComponentProps>
-	roadObject: THREE.Object3D
-	world: PhysicsWorldLike
-	createBody: (
+	roadObject?: THREE.Object3D
+	world?: PhysicsWorldLike
+	createBody?: (
 		node: SceneNode,
 		component: SceneNodeComponentState<RigidbodyComponentProps>,
 		shapeDefinition: RigidbodyPhysicsShape | null,
@@ -327,6 +327,10 @@ export function buildRoadHeightfieldBodies(params: RoadHeightfieldBuildParams): 
 		roadObject,
 		createBody,
 	} = params
+
+	if (!roadObject || !createBody) {
+		return null
+	}
 
 	roadObject.updateMatrixWorld(true)
 
