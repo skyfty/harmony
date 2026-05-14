@@ -3,7 +3,6 @@ import {
   ensureBackendPhysicsWorld,
   extractRoadHeightfieldDebugSurfaces,
   getPhysicsBackendBridge,
-  initializePhysicsBackendBridge,
   normalizeShapeScale,
 } from '@harmony/physics-bridge'
 
@@ -12,7 +11,6 @@ export {
   ensureBackendPhysicsWorld,
   extractRoadHeightfieldDebugSurfaces,
   getPhysicsBackendBridge,
-  initializePhysicsBackendBridge,
   normalizeShapeScale,
 }
 

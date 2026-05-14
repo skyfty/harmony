@@ -1,6 +1,5 @@
 import {
   collectStepFrameTransferables,
-  createEmptyStepFrame,
   type PhysicsBridgeInitResult,
   type PhysicsInitOptions,
   type PhysicsRaycastHit,
@@ -40,7 +39,13 @@ export function createNoopPhysicsWorkerController(): PhysicsWorkerController {
     },
     async step() {
       frame += 1
-      return createEmptyStepFrame(frame)
+      return {
+        frame: frame,
+        bodyCount: 0,
+        wheelCount: 0,
+        bodyTransforms: new Float32Array(0),
+        wheelTransforms: new Float32Array(0),
+      };
     },
     async setBodyTransform() {},
     async setVehicleInput() {},

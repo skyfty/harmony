@@ -1,4 +1,3 @@
-export const PHYSICS_SCENE_ASSET_VERSION = 1
 
 export type PhysicsBackendId = 'ammo' | 'cannon' | 'noop'
 export type PhysicsBackendPreference = PhysicsBackendId | 'auto'
@@ -132,7 +131,6 @@ export type PhysicsVehicleDesc = {
 
 export type PhysicsSceneAsset = {
   format: 'harmony-physics'
-  version: typeof PHYSICS_SCENE_ASSET_VERSION
   materials: PhysicsMaterialDesc[]
   shapes: PhysicsShapeDesc[]
   bodies: PhysicsBodyDesc[]

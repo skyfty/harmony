@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { PHYSICS_SCENE_ASSET_VERSION, type PhysicsBodyDesc, type PhysicsBodyType, type PhysicsCompoundChildDesc, type PhysicsMaterialDesc, type PhysicsSceneAsset, type PhysicsShapeDesc, type PhysicsTransform, type PhysicsVector3, type PhysicsVehicleDesc, type PhysicsVehicleWheelDesc } from '@harmony/physics-core'
+import { type PhysicsBodyDesc, type PhysicsBodyType, type PhysicsCompoundChildDesc, type PhysicsMaterialDesc, type PhysicsSceneAsset, type PhysicsShapeDesc, type PhysicsTransform, type PhysicsVector3, type PhysicsVehicleDesc, type PhysicsVehicleWheelDesc } from '@harmony/physics-core'
 import type { GroundRuntimeDynamicMesh, SceneJsonExportDocument, SceneNode, SceneNodeComponentState, Vector3Like } from './index'
 import { buildGroundAirWallDefinitions } from './airWall'
 import { buildBoundaryWallSegments } from './boundaryWall'
@@ -84,7 +84,6 @@ const identityPhysicsRotation: PhysicsTransform['rotation'] = [0, 0, 0, 1]
 function createEmptyPhysicsSceneAsset(): PhysicsSceneAsset {
   return {
     format: 'harmony-physics',
-    version: PHYSICS_SCENE_ASSET_VERSION,
     materials: [],
     shapes: [],
     bodies: [],

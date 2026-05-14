@@ -394,13 +394,14 @@ import DriveCompass from './DriveCompass.vue';
 import SpeedReadout from './SpeedReadout.vue';
 import { buildPhysicsSceneAsset } from '@harmony/schema/physicsSceneAsset';
 import {
-  PHYSICS_BODY_TRANSFORM_STRIDE,
   type PhysicsBackendPreference,
   type PhysicsBridge,
   type PhysicsSceneAsset,
   type PhysicsStepFrame,
   type PhysicsTransform,
 } from '@harmony/physics-core';
+
+
 import { useProjectStore } from '../common/stores/projectStore';
 import { useDebugOverlay } from '../composables/useDebugOverlay';
 import { useBehaviorAlert } from '../composables/useBehaviorAlert';
@@ -6206,6 +6207,9 @@ async function ensureSceneryPhysicsBridgeReady(): Promise<PhysicsBridge> {
       backendLoaders: props.physicsBackendLoaders,
     });
   }
+  if (physicsBridge === null) {
+    throw new Error('No compatible physics engine available for scenery physics bridge');
+  }
   physicsBridgeInitPromise = physicsBridge.init({
     world: {
       gravity: [physicsGravity.x, physicsGravity.y, physicsGravity.z],
@@ -6336,7 +6340,7 @@ function consumeSceneryPhysicsBridgeStepFrame(frame: PhysicsStepFrame): void {
   if (
     frame.bodyCount <= 0
     || frame.bodyTransforms.length === 0
-    || frame.bodyTransforms.length < frame.bodyCount * PHYSICS_BODY_TRANSFORM_STRIDE
+    || frame.bodyTransforms.length < frame.bodyCount * 8
   ) {
     return;
   }
@@ -6349,7 +6353,7 @@ function consumeSceneryPhysicsBridgeStepFrame(frame: PhysicsStepFrame): void {
     if (!nodeId) {
       continue;
     }
-    const base = index * PHYSICS_BODY_TRANSFORM_STRIDE;
+    const base = index * 8;
     const existing = physicsBridgeFrameBodiesByNodeId.get(nodeId);
     if (existing) {
       existing.position.set(

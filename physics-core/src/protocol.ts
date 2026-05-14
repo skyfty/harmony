@@ -10,9 +10,6 @@ import type {
   PhysicsVehicleInputCommand,
 } from './types'
 
-export const PHYSICS_BODY_TRANSFORM_STRIDE = 8
-export const PHYSICS_WHEEL_TRANSFORM_STRIDE = 9
-
 export type PhysicsStepFrame = {
   frame: number
   bodyCount: number
@@ -57,15 +54,6 @@ export type PhysicsWorkerErrorResponse = {
 
 export type PhysicsWorkerResponse = PhysicsWorkerSuccessResponse | PhysicsWorkerErrorResponse
 
-export function createEmptyStepFrame(frame = 0): PhysicsStepFrame {
-  return {
-    frame,
-    bodyCount: 0,
-    wheelCount: 0,
-    bodyTransforms: new Float32Array(0),
-    wheelTransforms: new Float32Array(0),
-  }
-}
 
 export function collectStepFrameTransferables(frame: PhysicsStepFrame): Transferable[] {
   const transferables: Transferable[] = [frame.bodyTransforms.buffer, frame.wheelTransforms.buffer]

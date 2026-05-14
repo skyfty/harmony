@@ -25,13 +25,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, defineAsyncComponent, ref } from 'vue';
+import { computed, ref } from 'vue';
 import { onLoad, onUnload } from '@dcloudio/uni-app';
 import type { PhysicsBackendPreference } from '@harmony/physics-core';
 import { createPunchRecord, getDownloadCdnBaseUrl, getPunchProgress, loadScenePackageZip } from '@harmony/utils';
 import { decodeScenePackageSceneDocument, resolveDocumentEnvironment } from '@schema';
 import { readBinaryFileFromScenePackage, readTextFileFromScenePackage, unzipScenePackage } from '@schema/scenePackageZip';
 import { useProjectStore } from '@/stores/projectStore';
+import SceneryViewer from './uni_modules/scenery/components/SceneryViewer.vue';
 import type { SceneryPhysicsBackendLoaders } from './uni_modules/scenery/common/physics/createSceneryPhysicsBridge';
 
 const projectStore = useProjectStore();
@@ -67,7 +68,7 @@ const nominateStateMap = computed(() => {
       visible: true,
     },
   };
-});
+})();
 
 type PunchEventPayload = {
   eventName: 'punch';
@@ -179,18 +180,16 @@ async function preloadPhysicsSubpackages(engine: PhysicsBackendPreference): Prom
   }
 }
 
-const SceneryViewer = defineAsyncComponent(async () => {
+void (async () => {
   try {
     const engine = await resolveScenePhysicsEngine();
     resolvedPhysicsEngine.value = engine;
     await preloadPhysicsSubpackages(engine);
-    return (await import('./uni_modules/scenery/components/SceneryViewer.vue')).default;
   } catch (error) {
     loadError.value = error instanceof Error ? error.message : '场景加载失败';
     console.error('[scenery] initialize viewer failed', error);
-    throw error;
   }
-});
+})();
 
 async function resolveScenePhysicsEngine(): Promise<PhysicsBackendPreference> {
   projectStore.bootstrap();

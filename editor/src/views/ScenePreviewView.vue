@@ -57,7 +57,6 @@ import {
 } from '@schema/index'
 import { buildPhysicsSceneAsset } from '@schema/physicsSceneAsset'
 import {
-	PHYSICS_BODY_TRANSFORM_STRIDE,
 	type PhysicsBackendPreference,
 	type PhysicsBridge,
 	type PhysicsSceneAsset,
@@ -10364,7 +10363,7 @@ function consumeScenePreviewPhysicsBridgeStepFrame(frame: PhysicsStepFrame): voi
 	if (
 		frame.bodyCount <= 0
 		|| frame.bodyTransforms.length === 0
-		|| frame.bodyTransforms.length < frame.bodyCount * PHYSICS_BODY_TRANSFORM_STRIDE
+		|| frame.bodyTransforms.length < frame.bodyCount * 8
 	) {
 		return
 	}
@@ -10377,7 +10376,7 @@ function consumeScenePreviewPhysicsBridgeStepFrame(frame: PhysicsStepFrame): voi
 		if (!nodeId) {
 			continue
 		}
-		const base = index * PHYSICS_BODY_TRANSFORM_STRIDE
+		const base = index * 8
 		const existing = physicsBridgeFrameBodiesByNodeId.get(nodeId)
 		if (existing) {
 			existing.position.set(

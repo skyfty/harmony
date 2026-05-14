@@ -1,8 +1,5 @@
 import {
   type PhysicsAddRuntimeBodiesCommand,
-  PHYSICS_BODY_TRANSFORM_STRIDE,
-  PHYSICS_WHEEL_TRANSFORM_STRIDE,
-  createEmptyStepFrame,
   type PhysicsBodyDesc,
   type PhysicsBodyTransformCommand,
   type PhysicsMaterialDesc,
@@ -118,7 +115,13 @@ export class AmmoPhysicsWorld {
 
   async step(deltaMs: number): Promise<PhysicsStepFrame> {
     if (!this.scene || !this.world) {
-      return createEmptyStepFrame(this.frame)
+      return {
+        frame: this.frame,
+        bodyCount: 0,
+        wheelCount: 0,
+        bodyTransforms: new Float32Array(0),
+        wheelTransforms: new Float32Array(0),
+      };
     }
     this.frame += 1
     this.applyVehicleInputs()
@@ -133,12 +136,12 @@ export class AmmoPhysicsWorld {
     }
 
     const bodyCount = this.scene.bodies.length
-    const bodyTransforms = new Float32Array(bodyCount * PHYSICS_BODY_TRANSFORM_STRIDE)
+    const bodyTransforms = new Float32Array(bodyCount * 8)
     const bodyMeta = new Uint32Array(bodyCount)
     this.scene.bodies.forEach((body, index) => {
       const state = this.bodies.get(body.id)
       const transform = state ? readAmmoBodyTransform(state.body) : body.transform
-      const base = index * PHYSICS_BODY_TRANSFORM_STRIDE
+      const base = index * 8
       bodyTransforms[base] = transform.position[0]
       bodyTransforms[base + 1] = transform.position[1]
       bodyTransforms[base + 2] = transform.position[2]
@@ -151,7 +154,7 @@ export class AmmoPhysicsWorld {
     })
 
     const totalWheelCount = this.scene.vehicles.reduce((count, vehicle) => count + vehicle.wheels.length, 0)
-    const wheelTransforms = new Float32Array(totalWheelCount * PHYSICS_WHEEL_TRANSFORM_STRIDE)
+    const wheelTransforms = new Float32Array(totalWheelCount * 9)
     let wheelOffset = 0
     this.scene.vehicles.forEach((vehicleDesc) => {
       const vehicleState = this.vehicles.get(vehicleDesc.id)
@@ -164,7 +167,7 @@ export class AmmoPhysicsWorld {
         const wheelTransform = vehicleState.vehicle.getWheelTransformWS?.(wheelIndex)
         const origin = wheelTransform?.getOrigin?.()
         const rotation = wheelTransform?.getRotation?.()
-        const base = wheelOffset * PHYSICS_WHEEL_TRANSFORM_STRIDE
+        const base = wheelOffset * 9
         wheelTransforms[base] = vehicleDesc.id
         wheelTransforms[base + 1] = wheelIndex
         wheelTransforms[base + 2] = origin?.x?.() ?? 0
