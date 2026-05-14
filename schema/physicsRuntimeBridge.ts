@@ -10,6 +10,8 @@ export type { PhysicsBodyLike } from './physicsBodySync'
 export type PhysicsWorldLike = {
   addBody: (body: PhysicsBodyLike) => unknown
   removeBody?: (body: PhysicsBodyLike) => unknown
+  addContactMaterial?: (contactMaterial: unknown) => unknown
+  defaultMaterial?: unknown
 }
 
 export type PhysicsBodyFactoryResult = {

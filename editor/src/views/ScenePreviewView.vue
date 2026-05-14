@@ -1716,6 +1716,20 @@ let cameraDependentUpdateInitialized = false
 let cameraDependentUpdateElapsed = 0
 let groundCollisionReferenceInitialized = false
 let groundCollisionReferenceElapsed = 0
+let lastGroundCollisionDiagnosticLogAt = 0
+let lastGroundCollisionDiagnosticSignature = ''
+const GROUND_COLLISION_DIAGNOSTIC_LOG_INTERVAL_MS = 2000
+
+function formatGroundCollisionDiagnosticPayload(payload: Record<string, unknown>): string {
+	try {
+		return JSON.stringify(payload)
+	} catch (error) {
+		return JSON.stringify({
+			error: 'failed-to-stringify',
+			message: error instanceof Error ? error.message : String(error),
+		})
+	}
+}
 
 const clock = new THREE.Clock()
 const instancedMeshGroup = new THREE.Group()
@@ -8802,7 +8816,14 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
 		}
 	}
 	if (shouldUpdateGroundCollisionSystems && currentDocument) {
-		syncScenePreviewGroundCollisionRuntimeHost(currentDocument, groundCollisionReferencePosition)
+		const groundCollisionChanged = syncScenePreviewGroundCollisionRuntimeHost(currentDocument, groundCollisionReferencePosition)
+		if (groundCollisionChanged && physicsEnvironmentEnabled.value && physicsBridgeSceneLoaded) {
+			const nextGroundCollisionSignature = resolveScenePreviewGroundCollisionSignature(currentDocument)
+			if (nextGroundCollisionSignature && nextGroundCollisionSignature !== currentPhysicsBridgeGroundCollisionSignature) {
+				currentPhysicsBridgeGroundCollisionSignature = nextGroundCollisionSignature
+				void loadScenePreviewPhysicsBridgeScene(currentDocument)
+			}
+		}
 	}
 }
 
@@ -10089,20 +10110,7 @@ function resolveGroundCollisionReferenceWorld(targetPosition: THREE.Vector3): bo
 		isPhysicsEnabled: () => physicsEnvironmentEnabled.value,
 		target: targetPosition,
 	})) {
-		console.info(
-			'[ScenePreview][GroundCollision] vehicle reference resolved',
-			`nodeId=${JSON.stringify(referenceNodeId)}`,
-			`object=${formatDebugObject(referenceObject)}`,
-			`position=${formatDebugVector(targetPosition)}`,
-		)
 		return true
-	}
-	if (referenceNodeId) {
-		console.info(
-			'[ScenePreview][GroundCollision] vehicle reference missing',
-			`active=${vehicleDriveState.active ? '1' : '0'}`,
-			`nodeId=${JSON.stringify(referenceNodeId)}`,
-		)
 	}
 	return false
 }
@@ -10183,12 +10191,6 @@ function syncScenePreviewGroundCollisionRuntimeHost(
 	const referenceNodeId = vehicleDriveState.active ? vehicleDriveState.nodeId : null
 	const referenceObject = referenceNodeId ? (nodeObjectMap.get(referenceNodeId) ?? null) : null
 	if (!referenceWorldPosition || !physicsEnvironmentEnabled.value) {
-		console.info(
-			'[ScenePreview][GroundCollision] host cleared',
-			`source=${JSON.stringify(document.id ?? '')}`,
-			`ground=${formatDebugObject(groundObject)}`,
-			`vehicle=${formatDebugObject(referenceObject)}`,
-		)
 		clearGroundCollisionRuntimeHost(groundObject)
 		return false
 	}
@@ -10210,15 +10212,36 @@ function syncScenePreviewGroundCollisionRuntimeHost(
 			? resolveScenePreviewGroundChunkDataLoader(document.id ?? '')
 			: undefined,
 	})
-	console.info(
-		'[ScenePreview][GroundCollision] host synced',
-		`source=${JSON.stringify(document.id ?? '')}`,
-		`ground=${formatDebugObject(groundObject)}`,
-		`vehicle=${formatDebugObject(referenceObject)}`,
-		`position=${formatDebugVector(referenceWorldPosition)}`,
-		`compiledKeys=${JSON.stringify(snapshot.compiledTileKeys)}`,
-		`infiniteKeys=${JSON.stringify(snapshot.infiniteChunkKeys)}`,
-	)
+	const now = performance.now()
+	const diagnosticSignature = [
+		groundNode.id,
+		groundMesh.terrainMode,
+		groundMesh.chunkManifestRevision ?? 0,
+		referenceWorldPosition.x,
+		referenceWorldPosition.y,
+		referenceWorldPosition.z,
+		snapshot.compiledTileKeys.join(','),
+		snapshot.infiniteChunkKeys.join(','),
+	].join('|')
+	if (
+		diagnosticSignature !== lastGroundCollisionDiagnosticSignature
+		&& now - lastGroundCollisionDiagnosticLogAt >= GROUND_COLLISION_DIAGNOSTIC_LOG_INTERVAL_MS
+	) {
+		lastGroundCollisionDiagnosticLogAt = now
+		lastGroundCollisionDiagnosticSignature = diagnosticSignature
+		console.info(`[ScenePreview][GroundCollision] diagnostics=${formatGroundCollisionDiagnosticPayload({
+			sourceId: groundNode.id,
+			terrainMode: groundMesh.terrainMode,
+			chunkManifestRevision: groundMesh.chunkManifestRevision ?? 0,
+			referenceWorldPosition: {
+				x: referenceWorldPosition.x,
+				y: referenceWorldPosition.y,
+				z: referenceWorldPosition.z,
+			},
+			compiledTileKeys: snapshot.compiledTileKeys,
+			infiniteChunkKeys: snapshot.infiniteChunkKeys,
+		})}`)
+	}
 	return syncGroundCollisionRuntimeLoadedTileKeys(groundObject, groundMesh, {
 		compiledKeys: snapshot.compiledTileKeys,
 		infiniteKeys: snapshot.infiniteChunkKeys,

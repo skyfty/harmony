@@ -33,6 +33,8 @@ export type PhysicsBodyLike = {
 export type PhysicsWorldLike = {
   addBody: (body: PhysicsBodyLike) => unknown
   removeBody?: (body: PhysicsBodyLike) => unknown
+  addContactMaterial?: (contactMaterial: unknown) => unknown
+  defaultMaterial?: unknown
 }
 
 export type PhysicsBackendShapeScaleLike = { x?: number; y?: number; z?: number } | null | undefined

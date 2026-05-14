@@ -13,6 +13,12 @@ export type CannonRigidbodyMaterialEntry = {
   restitution: number
 }
 
+type CannonContactMaterialWorldLike = CANNON.World & {
+  addContactMaterial?: (contactMaterial: CANNON.ContactMaterial) => unknown
+  contactmaterials?: CANNON.ContactMaterial[]
+  defaultMaterial?: CANNON.Material | null
+}
+
 export type CannonLegacyBodyType = 'STATIC' | 'KINEMATIC' | 'DYNAMIC'
 
 export function formatCannonRigidbodyMaterialKey(friction: number, restitution: number): string {
@@ -26,7 +32,7 @@ export function formatCannonRigidbodyContactKey(materialA: CANNON.Material, mate
 }
 
 export function ensureCannonContactMaterial(
-  world: CANNON.World,
+  world: CannonContactMaterialWorldLike,
   materialA: CANNON.Material,
   materialB: CANNON.Material,
   friction: number,
@@ -46,12 +52,17 @@ export function ensureCannonContactMaterial(
     frictionEquationStiffness: settings.frictionEquationStiffness,
     frictionEquationRelaxation: settings.frictionEquationRelaxation,
   }
-  world.addContactMaterial(new CANNON.ContactMaterial(materialA, materialB, contactOptions))
+  const contactMaterial = new CANNON.ContactMaterial(materialA, materialB, contactOptions)
+  if (typeof world.addContactMaterial === 'function') {
+    world.addContactMaterial(contactMaterial)
+  } else if (Array.isArray(world.contactmaterials)) {
+    world.contactmaterials.push(contactMaterial)
+  }
   contactKeys.add(key)
 }
 
 export function registerCannonRigidbodyMaterialContacts(
-  world: CANNON.World,
+  world: CannonContactMaterialWorldLike,
   entry: CannonRigidbodyMaterialEntry,
   rigidbodyMaterialCache: Map<string, CannonRigidbodyMaterialEntry>,
   settings: CannonContactSettings,
@@ -88,7 +99,7 @@ export function ensureCannonRigidbodyMaterial({
   restitution,
   contactSettings,
 }: {
-  world: CANNON.World
+  world: CannonContactMaterialWorldLike
   rigidbodyMaterialCache: Map<string, CannonRigidbodyMaterialEntry>
   rigidbodyContactMaterialKeys: Set<string>
   friction: number

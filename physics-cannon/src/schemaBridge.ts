@@ -38,6 +38,12 @@ export function createCannonSchemaPhysicsBackendBridge(): PhysicsBackendBridge {
 			removeBody(body) {
 				cannonWorld.removeBody?.(body as unknown as Parameters<typeof cannonWorld.removeBody>[0])
 			},
+			addContactMaterial(contactMaterial) {
+				cannonWorld.addContactMaterial?.(
+					contactMaterial as unknown as Parameters<typeof cannonWorld.addContactMaterial>[0],
+				)
+			},
+			defaultMaterial: cannonWorld.defaultMaterial,
 		}
 	}
 
