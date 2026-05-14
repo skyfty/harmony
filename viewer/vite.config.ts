@@ -124,31 +124,31 @@ export default {
     }),
     toCustomChunkPlugin({
       manualChunks: {
-        'pages/physics-ammo/chunks/vendor': [
+        'pages/shared/chunks/physics-core': [
           '@harmony/physics-core',
+          '@harmony/physics-core/**',
+          '**/physics-core/src/**',
+          '**/harmony/physics-core/**',
+        ],
+        'pages/shared/chunks/physics-bridge': [
           '@harmony/physics-bridge',
+          '@harmony/physics-bridge/**',
+          '**/physics-bridge/src/**',
+          '**/harmony/physics-bridge/**',
+        ],
+        'pages/physics-ammo/chunks/vendor': [
           '@harmony/physics-ammo',
           'ammojs3',
           'ammojs3/**',
-          '**/physics-core/src/**',
-          '**/physics-bridge/src/**',
           '**/physics-ammo/src/**',
-          '**/harmony/physics-core/**',
-          '**/harmony/physics-bridge/**',
           '**/harmony/physics-ammo/**',
           '**/node_modules/ammojs3/**',
         ],
         'pages/physics-cannon/chunks/vendor': [
-          '@harmony/physics-core',
-          '@harmony/physics-bridge',
           '@harmony/physics-cannon',
           'cannon-es',
           'cannon-es/**',
-          '**/physics-core/src/**',
-          '**/physics-bridge/src/**',
           '**/physics-cannon/src/**',
-          '**/harmony/physics-core/**',
-          '**/harmony/physics-bridge/**',
           '**/harmony/physics-cannon/**',
           '**/node_modules/cannon-es/**',
         ],

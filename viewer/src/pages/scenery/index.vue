@@ -68,7 +68,7 @@ const nominateStateMap = computed(() => {
       visible: true,
     },
   };
-})();
+});
 
 type PunchEventPayload = {
   eventName: 'punch';

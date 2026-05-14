@@ -12,9 +12,9 @@ import type {
   PhysicsStepFrame,
   PhysicsVehicleInputCommand,
 } from '@harmony/physics-core'
-import type { PhysicsBackendBridge } from '@harmony/physics-bridge'
+import type { PhysicsBackendBridge } from '@harmony/schema/physicsBackendBridge'
 import type { PhysicsWorkerController } from '@harmony/physics-bridge/runtime'
-import { initializePhysicsBackendBridge } from '@harmony/physics-bridge/physicsBackendBridge'
+import { initializePhysicsBackendBridge } from '@harmony/schema/physicsBackendBridge'
 import { createWechatPhysicsBridge, createInMemoryWechatPhysicsWorker } from '@harmony/physics-bridge/wechat'
 
 type AmmoRuntimeModule = {
@@ -40,12 +40,12 @@ export type CreateSceneryPhysicsBridgeOptions = {
   backendLoaders?: SceneryPhysicsBackendLoaders
 }
 
-// const PHYSICS_AMMO_SUBPACKAGE_NAME = 'physicsAmmo'
+const PHYSICS_AMMO_SUBPACKAGE_NAME = 'physicsAmmo'
 const PHYSICS_CANNON_SUBPACKAGE_NAME = 'physicsCannon'
 
-// function resolveSceneryPhysicsBackendPreference(preference: PhysicsBackendPreference | undefined): 'ammo' | 'cannon' {
-//   return preference === 'cannon' ? 'cannon' : 'ammo'
-// }
+function resolveSceneryPhysicsBackendPreference(preference: PhysicsBackendPreference | undefined): 'ammo' | 'cannon' {
+  return preference === 'cannon' ? 'cannon' : 'ammo'
+}
 
 function ensureSceneryPhysicsBackendLoaders(
   loaders: SceneryPhysicsBackendLoaders | undefined,
@@ -101,13 +101,13 @@ async function loadWechatPhysicsSubpackage(name: string): Promise<void> {
 }
 
 class LazySceneryPhysicsBridge implements PhysicsBridge {
-  // private readonly enginePreference: PhysicsBackendPreference | undefined
+  private readonly enginePreference: PhysicsBackendPreference | undefined
   private readonly backendLoaders: SceneryPhysicsBackendLoaders | undefined
   private bridge: PhysicsBridge | null = null
   private bridgePromise: Promise<PhysicsBridge> | null = null
 
   constructor(options: CreateSceneryPhysicsBridgeOptions = {}) {
-    // this.enginePreference = options.engine
+    this.enginePreference = options.engine
     this.backendLoaders = options.backendLoaders
   }
 
@@ -180,8 +180,8 @@ class LazySceneryPhysicsBridge implements PhysicsBridge {
 
   private async createBridge(): Promise<PhysicsBridge> {
     const backendLoaders = ensureSceneryPhysicsBackendLoaders(this.backendLoaders)
-    // const backend = resolveSceneryPhysicsBackendPreference(this.enginePreference)
-    // if (backend === 'cannon') {
+    const backend = resolveSceneryPhysicsBackendPreference(this.enginePreference)
+    if (backend === 'cannon') {
       await loadWechatPhysicsSubpackage(PHYSICS_CANNON_SUBPACKAGE_NAME)
       const cannonRuntime = await backendLoaders.loadCannonRuntime()
       const { createCannonPhysicsController, createCannonSchemaPhysicsBackendBridge } = cannonRuntime
@@ -191,26 +191,26 @@ class LazySceneryPhysicsBridge implements PhysicsBridge {
         loadSubpackage: loadWechatPhysicsSubpackage,
         createWorker: () => createInMemoryWechatPhysicsWorker(createCannonPhysicsController()),
       })
-    // }
+    }
 
-    // await loadWechatPhysicsSubpackage(PHYSICS_AMMO_SUBPACKAGE_NAME)
-    // const ammoRuntime = await backendLoaders.loadAmmoRuntime()
-    // const {
-    //   createAmmoPhysicsController,
-    //   createDefaultAmmoModuleFactory,
-    //   createAmmoSchemaPhysicsBackendBridge,
-    // } = ammoRuntime
-    // const ammoModuleFactory = createDefaultAmmoModuleFactory<unknown>()
-    // const ammoModule = await ammoModuleFactory()
-    // initializePhysicsBackendBridge(createAmmoSchemaPhysicsBackendBridge(ammoModule))
+    await loadWechatPhysicsSubpackage(PHYSICS_AMMO_SUBPACKAGE_NAME)
+    const ammoRuntime = await backendLoaders.loadAmmoRuntime()
+    const {
+      createAmmoPhysicsController,
+      createDefaultAmmoModuleFactory,
+      createAmmoSchemaPhysicsBackendBridge,
+    } = ammoRuntime
+    const ammoModuleFactory = createDefaultAmmoModuleFactory<unknown>()
+    const ammoModule = await ammoModuleFactory()
+    initializePhysicsBackendBridge(createAmmoSchemaPhysicsBackendBridge(ammoModule))
 
-    // return createWechatPhysicsBridge({
-    //   subpackageName: PHYSICS_AMMO_SUBPACKAGE_NAME,
-    //   loadSubpackage: loadWechatPhysicsSubpackage,
-    //   createWorker: () => createInMemoryWechatPhysicsWorker(createAmmoPhysicsController({
-    //     moduleFactory: () => Promise.resolve(ammoModule),
-    //   })),
-    // })
+    return createWechatPhysicsBridge({
+      subpackageName: PHYSICS_AMMO_SUBPACKAGE_NAME,
+      loadSubpackage: loadWechatPhysicsSubpackage,
+      createWorker: () => createInMemoryWechatPhysicsWorker(createAmmoPhysicsController({
+        moduleFactory: () => Promise.resolve(ammoModule),
+      })),
+    })
   }
 }
 
