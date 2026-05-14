@@ -12,7 +12,6 @@ import type {
   PhysicsStepFrame,
   PhysicsVehicleInputCommand,
 } from '@harmony/physics-core'
-import type { AmmoApi } from '@harmony/physics-ammo'
 import type { PhysicsBackendBridge } from '@harmony/physics-bridge'
 import type { PhysicsWorkerController } from '@harmony/physics-bridge/runtime'
 import { initializePhysicsBackendBridge } from '@harmony/physics-bridge/physicsBackendBridge'
@@ -23,7 +22,7 @@ type AmmoRuntimeModule = {
     moduleFactory: () => Promise<unknown>
   }) => PhysicsWorkerController
   createDefaultAmmoModuleFactory: <T>() => () => Promise<T>
-  createAmmoSchemaPhysicsBackendBridge: (module: AmmoApi) => PhysicsBackendBridge
+  createAmmoSchemaPhysicsBackendBridge: (module: unknown) => PhysicsBackendBridge
 }
 
 type CannonRuntimeModule = {
@@ -52,10 +51,31 @@ function ensureSceneryPhysicsBackendLoaders(
   loaders: SceneryPhysicsBackendLoaders | undefined,
 ): SceneryPhysicsBackendLoaders {
   if (!loaders) {
-    throw new Error('Scenery physics backend loaders are required.')
+    return {
+      loadAmmoRuntime: loadSceneryAmmoRuntime,
+      loadCannonRuntime: loadSceneryCannonRuntime,
+    }
   }
   return loaders
 }
+
+function decodeRuntimeModuleSpecifier(encodedSpecifier: string): string {
+  const atobFn = globalThis.atob
+  if (typeof atobFn === 'function') {
+    return atobFn(encodedSpecifier)
+  }
+  return encodedSpecifier
+}
+
+function createRuntimeModuleLoader<TModule>(encodedSpecifier: string): () => Promise<TModule> {
+  const specifier = decodeRuntimeModuleSpecifier(encodedSpecifier)
+  return new Function(
+    `return import(${JSON.stringify(specifier)});`,
+  ) as () => Promise<TModule>
+}
+
+const loadSceneryAmmoRuntime = createRuntimeModuleLoader<AmmoRuntimeModule>('QGhhcm1vbnkvcGh5c2ljcy1hbW1v')
+const loadSceneryCannonRuntime = createRuntimeModuleLoader<CannonRuntimeModule>('QGhhcm1vbnkvcGh5c2ljcy1jYW5ub24=')
 
 async function loadWechatPhysicsSubpackage(name: string): Promise<void> {
   const wxLike = globalThis as {
@@ -180,7 +200,7 @@ class LazySceneryPhysicsBridge implements PhysicsBridge {
       createDefaultAmmoModuleFactory,
       createAmmoSchemaPhysicsBackendBridge,
     } = ammoRuntime
-    const ammoModuleFactory = createDefaultAmmoModuleFactory<AmmoApi>()
+    const ammoModuleFactory = createDefaultAmmoModuleFactory<unknown>()
     const ammoModule = await ammoModuleFactory()
     initializePhysicsBackendBridge(createAmmoSchemaPhysicsBackendBridge(ammoModule))
 

@@ -407,16 +407,17 @@ import { useBehaviorAlert } from '../composables/useBehaviorAlert';
 import { useBehaviorBubble } from '../composables/useBehaviorBubble';
 import { useLanternAssets } from '../composables/useLanternAssets';
 import {
-  createSceneryPhysicsBridge,
-  type SceneryPhysicsBackendLoaders,
-} from '../common/physics/createSceneryPhysicsBridge';
-import {
   loadScenePackageZip,
   removeScenePackageZip,
   resolveScenePackageZipPointerByCacheKey,
   saveScenePackageZipByCacheKey,
   type ScenePackagePointer,
 } from '@harmony/utils/scene-package-storage';
+
+type SceneryPhysicsBackendLoaders = {
+  loadAmmoRuntime: () => Promise<any>;
+  loadCannonRuntime: () => Promise<any>;
+};
 
 type SceneryProps = {
   projectId?: string;
@@ -1887,6 +1888,7 @@ let sceneryGroundCollisionReferenceInitialized = false;
 let sceneryGroundCollisionReferenceElapsed = 0;
 const physicsBridgeBodyIdByNodeId = new Map<string, number>();
 const physicsBridgeNodeIdByBodyId = new Map<number, string>();
+let sceneryPhysicsBridgeModulePromise: Promise<any> | null = null;
 const physicsBridgeVehicleIdByNodeId = new Map<string, number>();
 function nextSceneryGroundCollisionRuntimeId(): number {
   sceneryGroundCollisionNextRuntimeId += 1;
@@ -6198,6 +6200,7 @@ async function ensureSceneryPhysicsBridgeReady(): Promise<PhysicsBridge> {
     return physicsBridgeInitPromise;
   }
   if (!physicsBridge) {
+    const { createSceneryPhysicsBridge } = await loadSceneryPhysicsBridgeModule();
     physicsBridge = createSceneryPhysicsBridge({
       engine: currentPhysicsBridgePreference,
       backendLoaders: props.physicsBackendLoaders,
@@ -6213,9 +6216,16 @@ async function ensureSceneryPhysicsBridgeReady(): Promise<PhysicsBridge> {
     .catch((error) => {
       physicsBridgeInitPromise = null;
       console.warn('[SceneViewer] Failed to initialize physics bridge', error);
-      throw error;
-    });
+    throw error;
+  });
   return physicsBridgeInitPromise;
+}
+
+async function loadSceneryPhysicsBridgeModule(): Promise<any> {
+  if (!sceneryPhysicsBridgeModulePromise) {
+    sceneryPhysicsBridgeModulePromise = import('../common/physics/createSceneryPhysicsBridge');
+  }
+  return await sceneryPhysicsBridgeModulePromise;
 }
 
 function updateSceneryPhysicsBridgeIndex(asset: PhysicsSceneAsset): void {
