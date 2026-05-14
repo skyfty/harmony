@@ -11,13 +11,23 @@ import {
   buildQuantizedTerrainRegionPackPath,
   buildQuantizedTerrainRootManifestPath,
   encodeScenePackageSceneDocument,
+  resolveGroundChunkBounds,
+  resolveGroundChunkOrigin,
+  resolveGroundWorldBounds,
+  formatGroundChunkDataPath,
   GROUND_SCATTER_SIDECAR_FILENAME,
   SCENE_PACKAGE_FORMAT,
   SCENE_PACKAGE_VERSION,
+  serializeGroundChunkData,
+  type GroundChunkManifest,
+  type GroundChunkManifestRecord,
+  type GroundRuntimeDynamicMesh,
   type QuantizedTerrainDatasetRootManifest,
   type ScenePackageManifestV1,
   type ScenePackageResourceEntry,
 } from '@schema'
+import { resolveGroundRuntimeChunkCells } from '@schema/groundMesh'
+
 import { inferExtFromMimeType } from '@schema'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { useGroundScatterStore } from '@/stores/groundScatterStore'
@@ -28,6 +38,7 @@ import {
   useSceneStore,
 } from '@/stores/sceneStore'
 import { useScenesStore } from '@/stores/scenesStore'
+import { buildGroundChunkDataFromManifestRecord } from '@schema/groundMesh'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { PlanningSceneData } from '@/types/planning-scene-data'
 import type { PlanningScenePackageImageEntry, PlanningScenePackageSidecar } from '@/types/planning-package'
@@ -235,6 +246,137 @@ function inferExtFromFilename(filename: string | null | undefined): string | nul
 
 function jsonBytes(value: unknown): Uint8Array {
   return strToU8(JSON.stringify(value))
+}
+
+function parseGroundChunkKey(chunkKey: string): { chunkX: number; chunkZ: number } | null {
+  const normalized = typeof chunkKey === 'string' ? chunkKey.trim() : ''
+  if (!normalized) {
+    return null
+  }
+  const [xText, zText] = normalized.split(':')
+  const chunkX = Number.parseInt(xText ?? '', 10)
+  const chunkZ = Number.parseInt(zText ?? '', 10)
+  if (!Number.isFinite(chunkX) || !Number.isFinite(chunkZ)) {
+    return null
+  }
+  return { chunkX, chunkZ }
+}
+
+async function buildGroundChunkPackageFiles(
+  sceneId: string,
+  definition: GroundRuntimeDynamicMesh | null | undefined,
+  manifest: GroundChunkManifest | null | undefined,
+  loadChunkData: (chunkKey: string) => Promise<ArrayBuffer | null>,
+): Promise<{
+  manifestPath: string
+  manifest: GroundChunkManifest
+  files: Record<string, Uint8Array>
+} | null> {
+  if (!manifest && (!definition || definition.terrainMode !== 'infinite')) {
+    return null
+  }
+
+  const normalizedSceneId = typeof sceneId === 'string' ? sceneId.trim() : ''
+  if (!normalizedSceneId) {
+    return null
+  }
+
+  const groundChunksRoot = `scenes/${encodeURIComponent(normalizedSceneId)}/ground-chunks`
+  const manifestPath = `${groundChunksRoot}/manifest.json`
+  const chunkRoot = `${groundChunksRoot}/chunks`
+  const files: Record<string, Uint8Array> = {}
+
+  if (manifest) {
+    const nextManifest: GroundChunkManifest = {
+      ...manifest,
+      sceneId: normalizedSceneId,
+      chunks: {},
+    }
+
+    for (const [chunkKey, rawRecord] of Object.entries(manifest.chunks ?? {})) {
+      if (!rawRecord) {
+        continue
+      }
+      const packagedDataPath = formatGroundChunkDataPath(rawRecord, chunkRoot)
+      const buffer = await loadChunkData(chunkKey)
+      if (!buffer) {
+        throw new Error(`Missing ground chunk data for scene ${normalizedSceneId} (${chunkKey})`)
+      }
+      nextManifest.chunks[chunkKey] = {
+        ...rawRecord,
+        dataPath: packagedDataPath,
+      }
+      files[packagedDataPath] = new Uint8Array(buffer)
+    }
+
+    files[manifestPath] = jsonBytes(nextManifest)
+    return {
+      manifestPath,
+      manifest: nextManifest,
+      files,
+    }
+  }
+
+  const runtimeDefinition = definition as GroundRuntimeDynamicMesh
+  const chunkSizeMeters = Number.isFinite(runtimeDefinition.chunkSizeMeters) && Number(runtimeDefinition.chunkSizeMeters) > 0
+    ? Number(runtimeDefinition.chunkSizeMeters)
+    : 100
+  const estimatedResolution = Math.max(1, Math.trunc(resolveGroundRuntimeChunkCells(runtimeDefinition)))
+  const updatedAt = Date.now()
+  const nextManifest: GroundChunkManifest = {
+    version: 1,
+    sceneId: normalizedSceneId,
+    chunkSizeMeters,
+    baseHeight: Number.isFinite(runtimeDefinition.baseHeight) ? Number(runtimeDefinition.baseHeight) : 0,
+    worldBounds: resolveGroundWorldBounds(runtimeDefinition),
+    chunkBounds: resolveGroundChunkBounds(runtimeDefinition),
+    revision: Math.max(0, Math.trunc(Number(runtimeDefinition.chunkManifestRevision) || 0)),
+    updatedAt,
+    chunks: {},
+  }
+  const runtimeLoadedTileKeys = Array.isArray(runtimeDefinition.runtimeLoadedTileKeys)
+    ? runtimeDefinition.runtimeLoadedTileKeys.map((value) => (typeof value === 'string' ? value.trim() : '')).filter((value) => value.length > 0)
+    : []
+  if (!runtimeLoadedTileKeys.length) {
+    return null
+  }
+
+  for (const chunkKey of runtimeLoadedTileKeys) {
+    const coord = parseGroundChunkKey(chunkKey)
+    if (!coord) {
+      continue
+    }
+    const origin = resolveGroundChunkOrigin(coord, chunkSizeMeters)
+    const record: GroundChunkManifestRecord = {
+      key: chunkKey,
+      chunkX: coord.chunkX,
+      chunkZ: coord.chunkZ,
+      originX: origin.x,
+      originZ: origin.z,
+      chunkSizeMeters,
+      resolution: estimatedResolution,
+      revision: nextManifest.revision,
+      heightMin: 0,
+      heightMax: 0,
+      dataPath: '',
+      updatedAt,
+      source: 'manual',
+      paintAssetId: null,
+      scatterAssetId: null,
+    }
+    const chunkData = buildGroundChunkDataFromManifestRecord(runtimeDefinition, record)
+    const packagedDataPath = formatGroundChunkDataPath(record, chunkRoot)
+    record.dataPath = packagedDataPath
+    nextManifest.chunks[chunkKey] = record
+    files[packagedDataPath] = new Uint8Array(serializeGroundChunkData(chunkData))
+  }
+
+  files[manifestPath] = jsonBytes(nextManifest)
+  return {
+    manifestPath,
+    manifest: nextManifest,
+    files,
+  }
 }
 
 async function buildTerrainDatasetPackageFiles(
@@ -1276,6 +1418,7 @@ export async function exportScenePackageZip(payload: {
     let groundScatterPath: string | undefined
     let terrain: ScenePackageManifestV1['scenes'][number]['terrain'] | undefined
     let compiledGround: ScenePackageManifestV1['scenes'][number]['compiledGround'] | undefined
+    let groundChunks: ScenePackageManifestV1['scenes'][number]['groundChunks'] | undefined
 
     // Collect local asset IDs from effective registry and explicit local source metadata.
     const sidecarSource = typeof structuredClone === 'function'
@@ -1283,6 +1426,7 @@ export async function exportScenePackageZip(payload: {
       : JSON.parse(JSON.stringify(preparedDocument))
     const groundNode = findGroundNode(sidecarSource.nodes)
     const storedTerrainDatasetManifest = await scenesStore.loadTerrainDatasetManifest(scene.id)
+    const storedGroundChunkManifest = await scenesStore.loadGroundChunkManifest(scene.id)
     const groundScatterSidecar = scene.id === sceneStore.currentSceneId
       ? useGroundScatterStore().buildSceneDocumentSidecar(scene.id, groundNode)
       : await scenesStore.loadGroundScatterSidecar(scene.id)
@@ -1379,6 +1523,27 @@ export async function exportScenePackageZip(payload: {
           sceneName,
           detail: packagedTerrainDataset.rootManifestPath,
           message: `已写入 quantized terrain dataset`,
+        })
+      }
+      const packagedGroundChunks = await buildGroundChunkPackageFiles(
+        scene.id,
+        groundNode?.dynamicMesh as GroundRuntimeDynamicMesh | null | undefined,
+        storedGroundChunkManifest,
+        (chunkKey) => scenesStore.loadGroundChunkData(scene.id, chunkKey),
+      )
+      if (packagedGroundChunks) {
+        groundChunks = {
+          manifestPath: packagedGroundChunks.manifestPath,
+        }
+        Object.assign(files, packagedGroundChunks.files)
+        emitSceneExportEvent(payload.reportEvent, {
+          phase: 'sidecar',
+          level: 'info',
+          status: 'completed',
+          sceneId: scene.id,
+          sceneName,
+          detail: packagedGroundChunks.manifestPath,
+          message: 'Ground chunk collision package written',
         })
       }
     }
@@ -1555,6 +1720,7 @@ export async function exportScenePackageZip(payload: {
       groundScatterPath,
       terrain,
       compiledGround,
+      groundChunks,
     })
   }
 

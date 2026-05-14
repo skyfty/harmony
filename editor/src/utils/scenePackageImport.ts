@@ -197,9 +197,13 @@ function extractGroundChunkManifestFromPackage(
   zip: ReturnType<typeof unzipScenePackage>,
   sceneEntry: ScenePackageSceneEntry,
 ): GroundChunkManifest | null {
-  void zip
-  void sceneEntry
-  return null
+  const manifestPath = typeof sceneEntry.groundChunks?.manifestPath === 'string'
+    ? sceneEntry.groundChunks.manifestPath.trim()
+    : ''
+  if (!manifestPath) {
+    return null
+  }
+  return JSON.parse(readTextFileFromScenePackage(zip, manifestPath)) as GroundChunkManifest
 }
 
 function extractGroundChunkDataFromPackage(

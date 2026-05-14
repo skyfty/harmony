@@ -561,6 +561,7 @@ import {
 } from '../common/utils/terrainDatasetPackage';
 import type {
   AutoTourRouteSnapResult,
+  GroundChunkManifest,
   SceneNode,
   SceneNodeComponentState,
   SceneJsonExportDocument,
@@ -4987,6 +4988,62 @@ function attachScenePackageTerrainRuntime(
   runtimeGround.runtimeTerrainHeightSampler = terrainSampler;
 }
 
+function readGroundChunkManifestFromScenePackage(
+  pkg: ScenePackageUnzipped,
+  sceneEntry: Pick<ScenePackageManifestSceneEntry, 'groundChunks'>,
+): GroundChunkManifest | null {
+  const manifestPath = typeof sceneEntry.groundChunks?.manifestPath === 'string'
+    ? sceneEntry.groundChunks.manifestPath.trim()
+    : '';
+  if (!manifestPath) {
+    return null;
+  }
+  return JSON.parse(readTextFileFromScenePackage(pkg, manifestPath)) as GroundChunkManifest;
+}
+
+function createGroundChunkDataLoaderFromScenePackage(
+  pkg: ScenePackageUnzipped,
+  manifest: GroundChunkManifest | null,
+): ((chunkKey: string) => Promise<ArrayBuffer | null>) | undefined {
+  if (!manifest || !manifest.chunks || typeof manifest.chunks !== 'object') {
+    return undefined;
+  }
+  return async (chunkKey: string) => {
+    const normalizedChunkKey = typeof chunkKey === 'string' ? chunkKey.trim() : '';
+    if (!normalizedChunkKey) {
+      return null;
+    }
+    const record = manifest.chunks[normalizedChunkKey];
+    const dataPath = typeof record?.dataPath === 'string' ? record.dataPath.trim() : '';
+    if (!dataPath) {
+      return null;
+    }
+    const bytes = pkg.files[dataPath];
+    if (!bytes) {
+      throw new Error(`Scene package missing ground chunk data: ${dataPath}`);
+    }
+    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+  };
+}
+
+function attachScenePackageGroundChunkRuntime(
+  pkg: ScenePackageUnzipped,
+  sceneEntry: ScenePackageManifestSceneEntry,
+  document: SceneJsonExportDocument,
+): void {
+  const groundNode = findGroundNode(document.nodes);
+  if (!groundNode || !isGroundDynamicMesh(groundNode.dynamicMesh)) {
+    return;
+  }
+  const runtimeGround = groundNode.dynamicMesh as GroundRuntimeDynamicMesh & {
+    runtimeGroundChunkManifest?: GroundChunkManifest | null;
+    runtimeLoadGroundChunkData?: ((chunkKey: string) => Promise<ArrayBuffer | null>) | null;
+  };
+  const manifest = readGroundChunkManifestFromScenePackage(pkg, sceneEntry);
+  runtimeGround.runtimeGroundChunkManifest = manifest;
+  runtimeGround.runtimeLoadGroundChunkData = createGroundChunkDataLoaderFromScenePackage(pkg, manifest) ?? null;
+}
+
 function refreshDynamicGroundCache(document: SceneJsonExportDocument | null): void {
   if (!document) {
     dynamicGroundCache = null;
@@ -6093,6 +6150,10 @@ function syncSceneryGroundCollisionRuntimeLoadedTileKeys(document: SceneJsonExpo
   if (!groundNode || !isGroundDynamicMesh(groundMesh)) {
     return false;
   }
+  const runtimeGround = groundMesh as GroundRuntimeDynamicMesh & {
+    runtimeGroundChunkManifest?: GroundChunkManifest | null;
+    runtimeLoadGroundChunkData?: ((chunkKey: string) => Promise<ArrayBuffer | null>) | null;
+  };
   const groundObject = nodeObjectMap.get(groundNode.id) ?? null;
   if (!groundObject) {
     return false;
@@ -6118,6 +6179,8 @@ function syncSceneryGroundCollisionRuntimeLoadedTileKeys(document: SceneJsonExpo
     camera: resolveSceneryGroundCollisionAnchor(sceneryGroundCollisionReferencePosition),
     compiledManifest,
     loadCompiledTileData: resolveSceneryCompiledGroundTileLoader(),
+    groundChunkManifest: runtimeGround.runtimeGroundChunkManifest,
+    loadGroundChunkData: runtimeGround.runtimeLoadGroundChunkData ?? undefined,
     runtimeDeps: resolveSceneryGroundCollisionRuntimeDeps(),
   });
   return syncGroundCollisionRuntimeLoadedTileKeys(groundObject, groundMesh, {
@@ -11676,6 +11739,7 @@ function parseScenePackageToProjectData(pkg: ScenePackageUnzipped): ScenePackage
     }
     const document = hydrateGroundSidecarFromPackage(pkg, sceneEntry, sceneRaw as SceneJsonExportDocument);
     attachScenePackageTerrainRuntime(pkg, sceneEntry, document);
+    attachScenePackageGroundChunkRuntime(pkg, sceneEntry, document);
     const assetRegistry: Record<string, SceneAssetRegistryEntry> = {
       ...(document.assetRegistry ?? {}),
     };

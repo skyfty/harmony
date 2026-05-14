@@ -16,6 +16,11 @@ export interface ScenePackageCompiledGroundEntry {
   collisionRootPath?: string;
 }
 
+export interface ScenePackageGroundChunksEntry {
+  /** Path within ZIP, e.g. `scenes/<sceneId>/ground-chunks/manifest.json` */
+  manifestPath: string;
+}
+
 export type ScenePackageResourceType =
   | 'localAsset'
   | 'planningImage'
@@ -37,6 +42,8 @@ export interface ScenePackageSceneEntry {
   terrain?: ScenePackageTerrainEntry;
   /** Precompiled near-field ground package entry used by preview/mobile viewers. */
   compiledGround?: ScenePackageCompiledGroundEntry;
+  /** Infinite-ground chunk collision package entry used by preview/mobile viewers. */
+  groundChunks?: ScenePackageGroundChunksEntry;
 }
 
 export interface ScenePackageProjectEntry {
