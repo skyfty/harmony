@@ -34,7 +34,6 @@ import type {
   PlanningTerrainWorldBounds,
 } from '@/types/planning-scene-data'
 import { useGroundHeightmapStore } from '@/stores/groundHeightmapStore'
-import { useGroundPaintStore } from '@/stores/groundPaintStore'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useScenesStore } from '@/stores/scenesStore'
 import { resolveGroundWorkingGridSize, resolveGroundWorldBounds } from '@schema'
@@ -2424,7 +2423,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
 
   const currentGroundSurfaceChunks = (sceneStore.groundNode?.dynamicMesh?.type === 'Ground'
     ? sceneStore.groundNode.dynamicMesh.groundSurfaceChunks
-    : null) ?? (sceneStore.currentSceneId ? useGroundPaintStore().getSceneGroundPaint(sceneStore.currentSceneId)?.groundSurfaceChunks : null)
+    : null)
 
   if (
     groundNode
@@ -2443,7 +2442,6 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
       registerAssets: sceneStore.registerAssets.bind(sceneStore),
       revision: Date.now(),
     })
-    sceneStore.commitGroundPaintEdit(groundNode.id, imageryChunks.groundSurfaceChunks)
     if (imageryChunks.staleAssetIds.length > 0) {
       await sceneStore.cleanUnusedAssetsByIds(imageryChunks.staleAssetIds)
     }
@@ -2462,7 +2460,6 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
         phase: 'ground-imagery-chunks',
         detail: String(cleanup.removedChunkCount),
       })
-      sceneStore.commitGroundPaintEdit(groundNode.id, cleanup.groundSurfaceChunks)
       if (cleanup.removedAssetIds.length > 0) {
         await sceneStore.cleanUnusedAssetsByIds(cleanup.removedAssetIds)
       }

@@ -63,58 +63,6 @@
           </v-list>
         </v-menu>
         <v-menu
-          v-else-if="tool.id === 'paint'"
-          :activator="menuActivators.paint"
-          :model-value="groundPaintMenuOpen"
-          location="bottom"
-          :offset="6"
-          :open-on-click="false"
-          :close-on-content-click="false"
-          @update:modelValue="handleGroundPaintMenuModelUpdate"
-        >
-          <template #activator="{ props: menuProps }">
-            <v-btn
-              v-bind="menuProps"
-              :ref="(el: unknown) => setMenuActivator('paint', el)"
-              :icon="tool.icon"
-              density="compact"
-              size="small"
-              class="toolbar-button"
-              :color="groundPaintButtonActive ? 'primary' : undefined"
-              :variant="groundPaintButtonActive ? 'flat' : 'text'"
-              :title="tool.label"
-              :disabled="buildToolsDisabled || !hasGroundNode"
-              @click="handleGroundButtonClick('paint')"
-              @contextmenu.prevent.stop="handleGroundButtonCancel('paint')"
-            />
-          </template>
-          <v-list density="compact" class="ground-paint-menu">
-            <div
-              class="ground-tool-menu__card"
-              @pointerdown.stop
-              @pointerup.stop
-              @mousedown.stop
-              @mouseup.stop
-            >
-              <v-toolbar density="compact" class="menu-toolbar" height="36px">
-                <div class="toolbar-text">
-                  <div class="menu-title">Terrain Paint</div>
-                </div>
-                <v-spacer />
-                <v-btn class="menu-close-btn" icon="mdi-close" size="small" variant="text" @click="emit('update:ground-paint-menu-open', false)" />
-              </v-toolbar>
-              <div class="ground-tool-menu__content">
-                <TerrainPaintPanel
-                  v-model:brush-radius="groundBrushRadiusModel"
-                  v-model:asset="groundPaintAssetModel"
-                  v-model:settings="groundPaintSettingsModel"
-                  :has-ground="hasGroundNode"
-                />
-              </div>
-            </div>
-          </v-list>
-        </v-menu>
-        <v-menu
           v-else-if="tool.id === 'scatter'"
           :activator="menuActivators.scatter"
           :model-value="groundScatterMenuOpen"
@@ -1285,7 +1233,6 @@ const props = withDefaults(
   wallDoorSelectModeActive?: boolean
   waterShapeMenuOpen: boolean
   groundTerrainMenuOpen: boolean
-  groundPaintMenuOpen: boolean
   groundScatterMenuOpen: boolean
   floorBuildShape: FloorBuildShape
   floorRegularPolygonSides: number
@@ -1307,8 +1254,6 @@ const props = withDefaults(
   groundBrushOperation: GroundSculptOperation | null
   groundNoiseStrength: number
   groundNoiseMode: GroundGenerationMode
-  groundPaintAsset: ProjectAsset | null
-  groundPaintSettings: TerrainPaintBrushSettings
   groundScatterCategory: TerrainScatterCategory
   groundScatterBrushRadius: number
   groundScatterBrushShape: TerrainScatterBrushShape
@@ -1348,7 +1293,6 @@ const emit = defineEmits<{
   (event: 'update:road-shape-menu-open', value: boolean): void
   (event: 'update:water-shape-menu-open', value: boolean): void
   (event: 'update:ground-terrain-menu-open', value: boolean): void
-  (event: 'update:ground-paint-menu-open', value: boolean): void
   (event: 'update:ground-scatter-menu-open', value: boolean): void
   (event: 'select-floor-build-shape', shape: FloorBuildShape): void
   (event: 'update:floor-regular-polygon-sides', value: number): void
@@ -1405,7 +1349,6 @@ const {
   roadShapeMenuOpen,
   waterShapeMenuOpen,
   groundTerrainMenuOpen,
-  groundPaintMenuOpen,
   groundScatterMenuOpen,
   floorBuildShape,
   floorRegularPolygonSides,
@@ -1427,8 +1370,6 @@ const {
   groundBrushOperation,
   groundNoiseStrength,
   groundNoiseMode,
-  groundPaintAsset,
-  groundPaintSettings,
   groundScatterCategory,
   groundScatterBrushRadius,
   groundScatterBrushShape,
@@ -1714,7 +1655,6 @@ const scatterEraseButtonIcon = computed(() => (scatterEraseRepairActive.value ? 
 const scatterEraseButtonTitle = computed(() => (scatterEraseRepairActive.value ? 'Repair / Restore (Hold Ctrl)' : 'Scatter Erase'))
 
 const groundTerrainButtonActive = computed(() => isGroundButtonActive('terrain'))
-const groundPaintButtonActive = computed(() => isGroundButtonActive('paint'))
 const groundScatterButtonActive = computed(() => isGroundButtonActive('scatter'))
 
 const groundScatterTabs = computed(() =>
@@ -1763,16 +1703,6 @@ const groundNoiseStrengthModel = computed({
 const groundNoiseModeModel = computed({
   get: () => groundNoiseMode.value,
   set: (value: GroundGenerationMode) => emit('update:ground-noise-mode', value),
-})
-
-const groundPaintAssetModel = computed<ProjectAsset | null>({
-  get: () => groundPaintAsset.value,
-  set: (value) => emit('update:ground-paint-asset', value),
-})
-
-const groundPaintSettingsModel = computed<TerrainPaintBrushSettings>({
-  get: () => groundPaintSettings.value,
-  set: (value) => emit('update:ground-paint-settings', value),
 })
 
 const groundScatterCategoryModel = computed<TerrainScatterCategory>({
@@ -1889,9 +1819,6 @@ watch(buildToolsDisabled, (disabled) => {
   }
   if (disabled && groundTerrainMenuOpen.value) {
     emit('update:ground-terrain-menu-open', false)
-  }
-  if (disabled && groundPaintMenuOpen.value) {
-    emit('update:ground-paint-menu-open', false)
   }
   if (disabled && groundScatterMenuOpen.value) {
     emit('update:ground-scatter-menu-open', false)
@@ -2391,10 +2318,6 @@ function handleGroundMenuModelUpdate(kind: GroundMenuKind, value: boolean) {
 
 function handleGroundTerrainMenuModelUpdate(value: boolean) {
   handleGroundMenuModelUpdate('terrain', value)
-}
-
-function handleGroundPaintMenuModelUpdate(value: boolean) {
-  handleGroundMenuModelUpdate('paint', value)
 }
 
 function handleGroundScatterMenuModelUpdate(value: boolean) {

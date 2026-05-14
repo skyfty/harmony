@@ -128,7 +128,6 @@ import {
   registerRuntimeObject,
   ENVIRONMENT_NODE_ID,
 } from '@/stores/sceneStore'
-import { useGroundPaintStore } from '@/stores/groundPaintStore'
 import { useGroundScatterStore } from '@/stores/groundScatterStore'
 import { useGroundHeightmapStore, type GroundRuntimeDynamicMesh } from '@/stores/groundHeightmapStore'
 import { useNodePickerStore } from '@/stores/nodePickerStore'
@@ -658,22 +657,6 @@ const groundScatterRuntimeReason = computed(() => {
     return 'none'
   }
   return useGroundScatterStore().getSceneRuntimeReason(sceneId)
-})
-
-const groundPaintRuntimeVersion = computed(() => {
-  const sceneId = typeof sceneStore.currentSceneId === 'string' ? sceneStore.currentSceneId.trim() : ''
-  if (!sceneId) {
-    return 0
-  }
-  return useGroundPaintStore().getSceneRuntimeVersion(sceneId)
-})
-
-const groundPaintRuntimeReason = computed(() => {
-  const sceneId = typeof sceneStore.currentSceneId === 'string' ? sceneStore.currentSceneId.trim() : ''
-  if (!sceneId) {
-    return 'none'
-  }
-  return useGroundPaintStore().getSceneRuntimeReason(sceneId)
 })
 
 const viewportEl = ref<HTMLDivElement | null>(null)
@@ -2054,7 +2037,6 @@ const autoOverlayHoverIndicator = reactive({
   label: '自动铺设',
 })
 const groundTerrainMenuOpen = ref(false)
-const groundPaintMenuOpen = ref(false)
 const groundScatterMenuOpen = ref(false)
 const csmMenuOpen = ref(false)
 const viewportPlacementMenuOpen = ref(false)
@@ -2900,9 +2882,6 @@ watch(
     }
     if (!isGroundSculptContext(ctx) && activeBuildTool.value !== 'terrain' && (terrainStore.brushOperation ?? null)) {
       terrainStore.setBrushOperation(null)
-    }
-    if (!isGroundPaintContext(ctx) && activeBuildTool.value !== 'paint' && (terrainStore.paintSelectedAsset ?? null)) {
-      terrainStore.setPaintSelection(null)
     }
     if (ctx !== 'viewport-add-node' && pendingViewportPlacement.value) {
       pendingViewportPlacement.value = null
@@ -3789,7 +3768,6 @@ const {
   groundSelection,
   groundTextureInputRef,
   restoreGroupdScatter,
-  restoreGroundPaint,
   onGroundChunkSetChanged,
   updateScatterLod,
   updateGroundSelectionToolbarPosition,
@@ -7588,10 +7566,6 @@ function isGroundSculptContext(context: string | null): boolean {
   return context === 'terrain-sculpt' || context === 'build-tool:terrain'
 }
 
-function isGroundPaintContext(context: string | null): boolean {
-  return context === 'terrain-paint' || context === 'build-tool:paint'
-}
-
 function isGroundScatterContext(context: string | null): boolean {
   return context === 'scatter' || context === 'scatter-erase' || context === 'build-tool:scatter'
 }
@@ -7602,7 +7576,6 @@ function isManagedBuildToolContext(context: string | null): boolean {
     && (
       context.startsWith('build-tool')
       || isGroundSculptContext(context)
-      || isGroundPaintContext(context)
       || isGroundScatterContext(context)
     ),
   )
@@ -8561,10 +8534,6 @@ function handleGroundTerrainMenuOpen(value: boolean) {
   groundTerrainMenuOpen.value = Boolean(value)
 }
 
-function handleGroundPaintMenuOpen(value: boolean) {
-  groundPaintMenuOpen.value = Boolean(value)
-}
-
 function handleGroundScatterMenuOpen(value: boolean) {
   groundScatterMenuOpen.value = Boolean(value)
 }
@@ -8923,17 +8892,6 @@ function handleGroundNoiseStrengthUpdate(value: number) {
 
 function handleGroundNoiseModeUpdate(value: GroundGenerationMode) {
   groundNoiseMode.value = value
-}
-
-function handleGroundPaintAssetUpdate(value: ProjectAsset | null) {
-  if (value) {
-    activateGroundBuildToolFromPanel('paint')
-  }
-  terrainStore.setPaintSelection(value)
-}
-
-function handleGroundPaintSettingsUpdate(value: TerrainPaintBrushSettings) {
-  terrainStore.setPaintBrushSettings(value)
 }
 
 function handleGroundScatterCategoryUpdate(value: TerrainScatterCategory) {
@@ -11294,15 +11252,6 @@ function resolveGroundDynamicMeshDefinition(): GroundRuntimeDynamicMesh | null {
       node.id,
       node.dynamicMesh,
     )
-    const paintRuntime = useGroundPaintStore().getSceneGroundPaint(sceneStore.currentSceneId)
-    if (paintRuntime && paintRuntime.nodeId === node.id) {
-      const nextRuntime = applyViewportGroundRuntimeMode({
-        ...runtimeDefinition,
-        terrainPaint: null,
-        groundSurfaceChunks: cloneGroundSurfaceChunkMap(paintRuntime.groundSurfaceChunks),
-      })
-      return nextRuntime
-    }
     return applyViewportGroundRuntimeMode(runtimeDefinition)
   }
   return null
@@ -12616,20 +12565,11 @@ async function captureScreenshot(mimeType: string = 'image/png'): Promise<Blob |
 
 async function restoreGroundAllGuarded(): Promise<void> {
   restoreGroupdScatter()
-  restoreGroundPaint()
 }
 
 async function restoreGroundScatterGuarded(): Promise<void> {
   const tokenSnapshot = sceneStore.sceneSwitchToken
   await restoreGroupdScatter()
-  if (tokenSnapshot !== sceneStore.sceneSwitchToken) {
-    return
-  }
-}
-
-async function restoreGroundPaintGuarded(): Promise<void> {
-  const tokenSnapshot = sceneStore.sceneSwitchToken
-  await restoreGroundPaint()
   if (tokenSnapshot !== sceneStore.sceneSwitchToken) {
     return
   }
@@ -12670,25 +12610,6 @@ watch(
       return
     }
     void restoreGroundScatterGuarded()
-  },
-)
-
-watch(
-  [isSceneReady, groundPaintRuntimeVersion, groundPaintRuntimeReason],
-  ([ready, version, reason], [prevReady, prevVersion, prevReason]) => {
-    if (!ready) {
-      return
-    }
-    if (version <= 0) {
-      return
-    }
-    if (prevReady && prevVersion === version && prevReason === reason) {
-      return
-    }
-    if (typeof reason === 'string' && reason.startsWith('editor-local')) {
-      return
-    }
-    void restoreGroundPaintGuarded()
   },
 )
 
@@ -23973,7 +23894,6 @@ defineExpose({
         :wall-door-select-mode-active="wallDoorSelectModeActive"
         :water-shape-menu-open="waterShapeMenuOpen"
         :ground-terrain-menu-open="groundTerrainMenuOpen"
-        :ground-paint-menu-open="groundPaintMenuOpen"
         :ground-scatter-menu-open="groundScatterMenuOpen"
         :floor-build-shape="floorBuildShape"
         :floor-regular-polygon-sides="floorRegularPolygonSides"
@@ -24025,7 +23945,6 @@ defineExpose({
           @update:viewport-placement-menu-open="handleViewportPlacementMenuOpen"
           @update:scatter-erase-menu-open="handleScatterEraseMenuOpen"
           @update:ground-terrain-menu-open="handleGroundTerrainMenuOpen"
-          @update:ground-paint-menu-open="handleGroundPaintMenuOpen"
           @update:ground-scatter-menu-open="handleGroundScatterMenuOpen"
           @update:floor-shape-menu-open="handleFloorShapeMenuOpen"
           @update:landform-shape-menu-open="handleLandformShapeMenuOpen"
@@ -24041,8 +23960,6 @@ defineExpose({
           @update:ground-brush-operation="handleGroundBrushOperationUpdate"
           @update:ground-noise-strength="handleGroundNoiseStrengthUpdate"
           @update:ground-noise-mode="handleGroundNoiseModeUpdate"
-          @update:ground-paint-asset="handleGroundPaintAssetUpdate"
-          @update:ground-paint-settings="handleGroundPaintSettingsUpdate"
           @update:ground-scatter-category="handleGroundScatterCategoryUpdate"
           @update:ground-scatter-brush-radius="handleGroundScatterBrushRadiusUpdate"
           @update:ground-scatter-brush-shape="handleGroundScatterBrushShapeUpdate"

@@ -19,7 +19,6 @@ import {
   visitExplicitTerrainScatterAssetReferences,
 } from '../utils/sceneExplicitAssetReferences'
 import { useGroundScatterStore } from './groundScatterStore'
-import { useGroundPaintStore } from './groundPaintStore'
 import { collectPrefabAssetReferences } from './prefabActions'
 
 const PREFAB_SOURCE_METADATA_KEY = '__prefabAssetId'
@@ -41,11 +40,6 @@ const ASSET_REFERENCE_EXACT_KEYS = new Set<string>([
   'positivezassetid',
   'negativezassetid',
 ])
-
-type GroundPaintRuntimeState = {
-  nodeId: string
-  groundSurfaceChunks: GroundDynamicMesh['groundSurfaceChunks'] | null | undefined
-}
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -422,27 +416,6 @@ function collectGroundScatterAssetDependencies(scene: StoredSceneDocument, bucke
   collectTerrainScatterAssetDependencies(definition.terrainScatter, bucket)
 }
 
-function collectGroundPaintAssetDependencies(scene: StoredSceneDocument, bucket: Set<string>) {
-  const groundNode = findGroundNode(scene.nodes ?? [])
-  if (!groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
-    return
-  }
-  const runtimeState = useGroundPaintStore().getSceneGroundPaint(scene.id) as GroundPaintRuntimeState | null
-  if (runtimeState?.nodeId === groundNode.id) {
-    collectTerrainPaintAssetDependencies(
-      runtimeState.groundSurfaceChunks,
-      (groundNode.dynamicMesh as any)?.terrainPaintBakedTextureAssetId,
-      bucket,
-    )
-    return
-  }
-  collectTerrainPaintAssetDependencies(
-    (groundNode.dynamicMesh as any)?.groundSurfaceChunks,
-    (groundNode.dynamicMesh as any)?.terrainPaintBakedTextureAssetId,
-    bucket,
-  )
-}
-
 function collectNodeAssetDependencies(node: SceneNode | null | undefined, bucket: Set<string>) {
   if (!node) {
     return
@@ -519,7 +492,6 @@ export function collectDirectSceneAssetReferenceIds(scene: StoredSceneDocument):
 
   traverseNodes(scene.nodes ?? [])
   collectGroundScatterAssetDependencies(scene, bucket)
-  collectGroundPaintAssetDependencies(scene, bucket)
 
   collectAssetIdsFromUnknown(sanitizeEnvironmentAssetReferences(scene.environment), bucket)
   collectAssetIdsFromUnknown(scene.groundSettings, bucket)

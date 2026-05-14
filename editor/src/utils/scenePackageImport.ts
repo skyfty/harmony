@@ -22,7 +22,6 @@ export type LoadedStoredScenePackage = {
   scenes: StoredSceneDocument[]
   groundHeightSidecars: Record<string, ArrayBuffer | null>
   groundScatterSidecars: Record<string, ArrayBuffer | null>
-  groundPaintSidecars: Record<string, ArrayBuffer | null>
   groundChunkManifests: Record<string, GroundChunkManifest | null>
   groundChunkData: Record<string, Record<string, ArrayBuffer | null>>
   terrainDatasetManifests: Record<string, QuantizedTerrainDatasetRootManifest | null>
@@ -194,27 +193,6 @@ function extractGroundScatterSidecarFromPackage(
   return new Uint8Array(bytes).buffer
 }
 
-function extractGroundPaintSidecarFromPackage(
-  zip: ReturnType<typeof unzipScenePackage>,
-  sceneEntry: ScenePackageSceneEntry,
-  rawScene: StoredSceneDocument,
-): ArrayBuffer | null {
-  const hasGroundNode = Array.isArray(rawScene.nodes)
-    && rawScene.nodes.some((node) => node?.dynamicMesh?.type === 'Ground')
-  if (!hasGroundNode) {
-    return null
-  }
-  const sidecarPath = sceneEntry.groundPaintPath
-  if (!sidecarPath) {
-    return null
-  }
-  const bytes = zip.files[sidecarPath]
-  if (!bytes) {
-    throw new Error(`Missing ground paint sidecar in scene bundle: ${sidecarPath}`)
-  }
-  return new Uint8Array(bytes).buffer
-}
-
 function extractGroundChunkManifestFromPackage(
   zip: ReturnType<typeof unzipScenePackage>,
   sceneEntry: ScenePackageSceneEntry,
@@ -297,7 +275,6 @@ export async function loadStoredScenesFromScenePackage(zipBytes: ArrayBuffer): P
   const scenes: StoredSceneDocument[] = []
   const groundHeightSidecars: Record<string, ArrayBuffer | null> = {}
   const groundScatterSidecars: Record<string, ArrayBuffer | null> = {}
-  const groundPaintSidecars: Record<string, ArrayBuffer | null> = {}
   const groundChunkManifests: Record<string, GroundChunkManifest | null> = {}
   const groundChunkData: Record<string, Record<string, ArrayBuffer | null>> = {}
   const terrainDatasetManifests: Record<string, QuantizedTerrainDatasetRootManifest | null> = {}
@@ -310,7 +287,6 @@ export async function loadStoredScenesFromScenePackage(zipBytes: ArrayBuffer): P
     const sceneDocument = stripGroundHeightMapsFromSceneDocument(rawScene as unknown as StoredSceneDocument)
     groundHeightSidecars[sceneEntry.sceneId] = extractGroundHeightSidecarFromPackage(zip, sceneEntry, sceneDocument)
     groundScatterSidecars[sceneEntry.sceneId] = extractGroundScatterSidecarFromPackage(zip, sceneEntry, sceneDocument)
-    groundPaintSidecars[sceneEntry.sceneId] = extractGroundPaintSidecarFromPackage(zip, sceneEntry, sceneDocument)
     groundChunkManifests[sceneEntry.sceneId] = extractGroundChunkManifestFromPackage(zip, sceneEntry)
     groundChunkData[sceneEntry.sceneId] = extractGroundChunkDataFromPackage(zip, groundChunkManifests[sceneEntry.sceneId] ?? null)
     terrainDatasetManifests[sceneEntry.sceneId] = extractTerrainDatasetManifestFromPackage(zip, sceneEntry)
@@ -324,7 +300,6 @@ export async function loadStoredScenesFromScenePackage(zipBytes: ArrayBuffer): P
     scenes,
     groundHeightSidecars,
     groundScatterSidecars,
-    groundPaintSidecars,
     groundChunkManifests,
     groundChunkData,
     terrainDatasetManifests,

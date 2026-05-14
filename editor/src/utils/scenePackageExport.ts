@@ -12,7 +12,6 @@ import {
   buildQuantizedTerrainRootManifestPath,
   encodeScenePackageSceneDocument,
   GROUND_SCATTER_SIDECAR_FILENAME,
-  GROUND_PAINT_SIDECAR_FILENAME,
   SCENE_PACKAGE_FORMAT,
   SCENE_PACKAGE_VERSION,
   type QuantizedTerrainDatasetRootManifest,
@@ -21,7 +20,6 @@ import {
 } from '@schema'
 import { inferExtFromMimeType } from '@schema'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
-import { useGroundPaintStore } from '@/stores/groundPaintStore'
 import { useGroundScatterStore } from '@/stores/groundScatterStore'
 import {
   buildAssetRegistryForExport,
@@ -1276,7 +1274,6 @@ export async function exportScenePackageZip(payload: {
     const scenePath = `scenes/${encodeURIComponent(scene.id)}/scene.bin`
     let planningPath: string | undefined
     let groundScatterPath: string | undefined
-    let groundPaintPath: string | undefined
     let terrain: ScenePackageManifestV1['scenes'][number]['terrain'] | undefined
     let compiledGround: ScenePackageManifestV1['scenes'][number]['compiledGround'] | undefined
 
@@ -1289,9 +1286,6 @@ export async function exportScenePackageZip(payload: {
     const groundScatterSidecar = scene.id === sceneStore.currentSceneId
       ? useGroundScatterStore().buildSceneDocumentSidecar(scene.id, groundNode)
       : await scenesStore.loadGroundScatterSidecar(scene.id)
-    const groundPaintSidecar = scene.id === sceneStore.currentSceneId
-      ? useGroundPaintStore().buildSceneDocumentSidecar(scene.id, groundNode)
-      : await scenesStore.loadGroundPaintSidecar(scene.id)
     if (groundNode?.dynamicMesh?.type === 'Ground') {
       const sceneGroundNode = findGroundNode(sidecarSource.nodes)
       const compiledGroundStartedAt = typeof performance !== 'undefined' ? performance.now() : Date.now()
@@ -1540,19 +1534,6 @@ export async function exportScenePackageZip(payload: {
         message: `已写入地表散布 sidecar`,
       })
     }
-    if (groundPaintSidecar) {
-      groundPaintPath = `scenes/${encodeURIComponent(scene.id)}/${GROUND_PAINT_SIDECAR_FILENAME}`
-      files[groundPaintPath] = new Uint8Array(groundPaintSidecar)
-      emitSceneExportEvent(payload.reportEvent, {
-        phase: 'sidecar',
-        level: 'info',
-        status: 'completed',
-        sceneId: scene.id,
-        sceneName,
-        detail: groundPaintPath,
-        message: `已写入地表绘制 sidecar`,
-      })
-    }
     if (payload.includePlanningData && scene.planningData) {
       const planningSidecar = await buildPlanningSidecar(scene.id, scene.planningData, files, resources)
       planningPath = planningSidecar.planningPath
@@ -1572,7 +1553,6 @@ export async function exportScenePackageZip(payload: {
       path: scenePath,
       planningPath,
       groundScatterPath,
-      groundPaintPath,
       terrain,
       compiledGround,
     })

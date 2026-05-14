@@ -119,16 +119,12 @@ function parseSceneDocumentFromBundle(zipBytes: Uint8Array | ArrayBuffer, expect
   }
   const sceneEntry = pkg.manifest.scenes[0]!
   const groundScatterPath = sanitizeString(sceneEntry.groundScatterPath)
-  const groundPaintPath = sanitizeString(sceneEntry.groundPaintPath)
   if (sanitizeString(sceneEntry.sceneId) !== expectedSceneId) {
     throw new Error('Scene id mismatch between path and bundle manifest')
   }
   const sceneRaw = decodeScenePackageSceneDocument(readBinaryFileFromScenePackage(pkg, sceneEntry.path)) as any
   if (groundScatterPath && !pkg.files[groundScatterPath]) {
     throw new Error('Scene bundle missing ground scatter sidecar file')
-  }
-  if (groundPaintPath && !pkg.files[groundPaintPath]) {
-    throw new Error('Scene bundle missing ground paint sidecar file')
   }
   const id = sanitizeString(sceneRaw?.id) || expectedSceneId
   if (id !== expectedSceneId) {

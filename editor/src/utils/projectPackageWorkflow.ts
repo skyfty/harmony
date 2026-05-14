@@ -177,7 +177,6 @@ export async function runProjectImportWorkflow(options: {
     const preparedScenes: StoredSceneDocument[] = []
     const preparedHeightSidecars: Record<string, ArrayBuffer | null> = {}
     const preparedScatterSidecars: Record<string, ArrayBuffer | null> = {}
-    const preparedPaintSidecars: Record<string, ArrayBuffer | null> = {}
     const preparedChunkManifests: Record<string, GroundChunkManifest | null> = {}
     const preparedChunkData: Record<string, Record<string, ArrayBuffer | null>> = {}
     const preparedTerrainDatasetManifests: Record<string, import('@schema').QuantizedTerrainDatasetRootManifest | null> = {}
@@ -205,7 +204,6 @@ export async function runProjectImportWorkflow(options: {
       preparedScenes.push(prepared)
       preparedHeightSidecars[nextId] = loaded.groundHeightSidecars[oldId] ?? null
       preparedScatterSidecars[nextId] = loaded.groundScatterSidecars[oldId] ?? null
-      preparedPaintSidecars[nextId] = loaded.groundPaintSidecars[oldId] ?? null
       preparedChunkManifests[nextId] = loaded.groundChunkManifests[oldId] ?? null
       preparedChunkData[nextId] = loaded.groundChunkData[oldId] ?? {}
       preparedTerrainDatasetManifests[nextId] = loaded.terrainDatasetManifests[oldId] ?? null
@@ -215,7 +213,6 @@ export async function runProjectImportWorkflow(options: {
     await scenesStore.saveSceneDocuments(preparedScenes, {
       groundHeightSidecars: preparedHeightSidecars,
       groundScatterSidecars: preparedScatterSidecars,
-      groundPaintSidecars: preparedPaintSidecars,
       groundChunkManifests: preparedChunkManifests,
       groundChunkData: preparedChunkData,
       terrainDatasetManifests: preparedTerrainDatasetManifests,

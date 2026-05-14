@@ -80,7 +80,6 @@ import type { ProjectAsset } from '@/types/project-asset'
 import type { GroundPanelTab } from '@/stores/terrainStore'
 import type { NodeHitResult } from '@/types/scene-viewport-node-hit-result'
 import { SCATTER_BRUSH_RADIUS_MAX, type TerrainPaintBrushSettings } from '@/stores/terrainStore'
-import { useGroundPaintStore } from '@/stores/groundPaintStore'
 import { useGroundHeightmapStore } from '@/stores/groundHeightmapStore'
 import { useGroundScatterStore } from '@/stores/groundScatterStore'
 
@@ -263,11 +262,7 @@ function computeSoftBrushFalloff(normalizedDistanceSquared: number, feather: num
 }
 
 function cloneGroundSurfaceChunks(definition: GroundDynamicMesh, nodeId?: string | null): GroundSurfaceChunkTextureMap | null {
-	const sceneId = useSceneStore().currentSceneId
-	const runtimeState = sceneId && nodeId
-		? useGroundPaintStore().getSceneGroundPaint(sceneId)
-		: null
-	const source = runtimeState && runtimeState.nodeId === nodeId ? runtimeState.groundSurfaceChunks : definition.groundSurfaceChunks
+	const source = definition.groundSurfaceChunks
 	if (!source) {
 		return null
 	}
@@ -282,19 +277,6 @@ function cloneGroundSurfaceChunks(definition: GroundDynamicMesh, nodeId?: string
 }
 
 function resolveGroundSurfaceChunksSnapshot(definition: GroundDynamicMesh, nodeId: string): GroundSurfaceChunkTextureMap | null {
-	const sceneId = useSceneStore().currentSceneId
-	if (!sceneId) {
-		return definition.groundSurfaceChunks ?? null
-	}
-	const paintStore = useGroundPaintStore()
-	const runtimeState = paintStore.getSceneGroundPaint(sceneId)
-	if (!runtimeState || runtimeState.nodeId !== nodeId) {
-		return definition.groundSurfaceChunks ?? null
-	}
-	const runtimeVersion = paintStore.getSceneRuntimeVersion(sceneId)
-	if (paintSessionState && paintSessionState.nodeId === nodeId && paintSessionState.previewGroundSurfaceChunksSceneRuntimeVersion === runtimeVersion) {
-		return paintSessionState.previewGroundSurfaceChunks
-	}
 	const snapshot = cloneGroundSurfaceChunks(definition, nodeId)
 	if (paintSessionState && paintSessionState.nodeId === nodeId) {
 		paintSessionState.previewGroundSurfaceChunks = snapshot
@@ -2438,7 +2420,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		}
 	}
 
-	async function restoreGroundPaint(): Promise<void> {
+	async function restoreTerrainSurfaceChunks(): Promise<void> {
 		const tokenSnapshot = options.sceneStore.sceneSwitchToken
 		const groundNode = getGroundNodeFromScene()
 		const groundMesh = getGroundObject()
@@ -2450,8 +2432,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		session.definition = definition
 		session.chunkCells = resolveGroundChunkCells(definition)
 		session.previewGroundSurfaceChunks = resolveGroundSurfaceChunksSnapshot(definition, session.nodeId)
-		const sceneId = typeof options.sceneStore.currentSceneId === 'string' ? options.sceneStore.currentSceneId.trim() : ''
-		session.previewGroundSurfaceChunksSceneRuntimeVersion = sceneId ? useGroundPaintStore().getSceneRuntimeVersion(sceneId) : 0
+		session.previewGroundSurfaceChunksSceneRuntimeVersion = 0
 		session.chunkStates = new Map()
 		session.hasPendingChanges = false
 		session.liveSurfacePreviewPendingChunkKeys.clear()
@@ -2491,7 +2472,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		const tokenSnapshot = options.sceneStore.sceneSwitchToken
 		// If we haven't successfully restored for this scene yet, do a full initial restore.
 		if (lastTerrainPaintSceneSwitchToken !== tokenSnapshot) {
-			await restoreGroundPaint()
+			await restoreTerrainSurfaceChunks()
 			return
 		}
 		const groundNode = getGroundNodeFromScene()
@@ -3641,16 +3622,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			const sceneId = typeof options.sceneStore.currentSceneId === 'string'
 				? options.sceneStore.currentSceneId.trim()
 				: ''
-			const paintRuntime = sceneId
-				? useGroundPaintStore().getSceneGroundPaint(sceneId)
-				: null
-			const mergedRuntimeDefinition = paintRuntime && paintRuntime.nodeId === node.id
-				? {
-					...runtimeDefinition,
-					terrainPaint: null,
-					groundSurfaceChunks: resolveGroundSurfaceChunksSnapshot(runtimeDefinition, node.id),
-				}
-				: runtimeDefinition
+			const mergedRuntimeDefinition = runtimeDefinition
 			if (sculptSessionState && sculptSessionState.nodeId === node.id) {
 				if (!sculptSessionState.dirty) {
 					sculptSessionState.definition = mergedRuntimeDefinition
@@ -3832,7 +3804,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			liveSurfacePreviewFlushRafId: null,
 			terrainPaintSurfacePreviewDebounceTimerId: null,
 			previewGroundSurfaceChunks: resolveGroundSurfaceChunksSnapshot(definition, nodeId),
-			previewGroundSurfaceChunksSceneRuntimeVersion: sceneId ? useGroundPaintStore().getSceneRuntimeVersion(sceneId) : 0,
+			previewGroundSurfaceChunksSceneRuntimeVersion: 0,
 			previewEmitToken: 0,
 		}
 		return paintSessionState
@@ -4399,12 +4371,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			if (!sceneId) {
 				return false
 			}
-			useGroundPaintStore().replaceGroundSurfaceChunks(sceneId, session.nodeId, nextGroundSurfaceChunks, {
-				bumpRuntimeVersion: true,
-				reason: 'editor-local-paint',
-			})
 			session.previewGroundSurfaceChunks = nextGroundSurfaceChunks
-			session.previewGroundSurfaceChunksSceneRuntimeVersion = useGroundPaintStore().getSceneRuntimeVersion(sceneId)
 			session.liveSurfacePreviewPendingChunkKeys.clear()
 			if (session.terrainPaintSurfacePreviewDebounceTimerId !== null) {
 				window.clearTimeout(session.terrainPaintSurfacePreviewDebounceTimerId)
@@ -4413,8 +4380,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			if (targetNode.dynamicMesh?.type === 'Ground') {
 				targetNode.dynamicMesh.terrainPaint = null
 			}
-			const sidecar = useGroundPaintStore().buildSceneDocumentSidecar(sceneId, targetNode)
-			await useScenesStore().saveSceneGroundPaintSidecar(sceneId, sidecar, { syncServer: false })
 			const groundObject = getGroundObject()
 			const runtimeDefinition = getGroundDynamicMeshDefinition()
 			if (groundObject && runtimeDefinition) {
@@ -7974,7 +7939,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		groundTextureInputRef,
 		isSculpting,
 		restoreGroupdScatter,
-		restoreGroundPaint,
+		restoreTerrainSurfaceChunks,
 		onGroundChunkSetChanged,
 		updateScatterLod,
 		updateGroundSelectionToolbarPosition,

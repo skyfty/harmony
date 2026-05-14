@@ -44,7 +44,6 @@ import { broadcastScenePreviewUpdate } from '@/utils/previewChannel'
 import { generateUuid } from '@/utils/uuid'
 import { findGroundNode } from '@/stores/groundUtils'
 import { attachGroundScatterRuntimeToNode } from '@/stores/groundScatterStore'
-import { attachGroundPaintRuntimeToNode } from '@/stores/groundPaintStore'
 import {
   useSceneStore,
   type EditorPanel,
@@ -1611,7 +1610,6 @@ async function broadcastScenePreview(document: StoredSceneDocument, isStale?: ()
     if (groundNode) {
       attachGroundScatterRuntimeToNode(exportDocument.id, groundNode)
       pruneEmptyGroundScatterLayers(groundNode)
-      attachGroundPaintRuntimeToNode(exportDocument.id, groundNode)
     }
 
     let revision = Date.now()

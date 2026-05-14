@@ -517,7 +517,6 @@ import {
   type EnvironmentSettings,
   type EnvironmentCsmSettings,
 } from '@harmony/schema/environmentSettingsUtils';
-import { deserializeGroundPaintSidecar } from '@harmony/schema/groundPaintSidecar';
 import { deserializeGroundScatterSidecar } from '@harmony/schema/groundScatterSidecar';
 import {
   clampSceneNodeInstanceLayout,
@@ -10989,7 +10988,7 @@ function findFirstGroundDynamicMesh(document: SceneJsonExportDocument): GroundDy
 
 function hydrateGroundSidecarFromPackage(
   pkg: ScenePackageUnzipped,
-  sceneEntry: { sceneId: string; path: string; groundHeightsPath?: string; groundScatterPath?: string; groundPaintPath?: string },
+  sceneEntry: { sceneId: string; path: string; groundHeightsPath?: string; groundScatterPath?: string },
   document: SceneJsonExportDocument,
 ): SceneJsonExportDocument {
   const definition = findFirstGroundDynamicMesh(document) as GroundRuntimeDynamicMesh | null;
@@ -11062,22 +11061,6 @@ function hydrateGroundSidecarFromPackage(
     new Uint8Array(scatterSidecarBuffer).set(scatterSidecarBytes);
     const scatterPayload = deserializeGroundScatterSidecar(scatterSidecarBuffer);
     definition.terrainScatter = scatterPayload.terrainScatter;
-  }
-
-  const paintSidecarPath = typeof sceneEntry.groundPaintPath === 'string' ? sceneEntry.groundPaintPath.trim() : '';
-  if (!paintSidecarPath) {
-    definition.terrainPaint = null;
-    definition.groundSurfaceChunks = null;
-  } else {
-    const paintSidecarBytes = pkg.files[paintSidecarPath];
-    if (!paintSidecarBytes) {
-      throw new Error(`场景 ${sceneEntry.sceneId} 缺少 ground paint sidecar 文件`);
-    }
-    const paintSidecarBuffer = new ArrayBuffer(paintSidecarBytes.byteLength);
-    new Uint8Array(paintSidecarBuffer).set(paintSidecarBytes);
-    const paintPayload = deserializeGroundPaintSidecar(paintSidecarBuffer);
-    definition.terrainPaint = null;
-    definition.groundSurfaceChunks = paintPayload.groundSurfaceChunks ?? null;
   }
 
   return document;

@@ -184,7 +184,6 @@ import { findObjectByPath } from '@schema/modelAssetLoader'
 import { useAssetCacheStore } from './assetCacheStore'
 import { useGroundHeightmapStore, type GroundPlanningHeightRegion, type GroundRuntimeDynamicMesh } from './groundHeightmapStore'
 import { attachGroundScatterRuntimeToNode, useGroundScatterStore } from './groundScatterStore'
-import { attachGroundPaintRuntimeToNode, useGroundPaintStore } from './groundPaintStore'
 import { useUiStore } from './uiStore'
 import { useScenesStore, type SceneWorkspaceType } from './scenesStore'
 import { updateSceneAssets } from './ensureSceneAssetsReady'
@@ -2042,55 +2041,12 @@ function commitGroundScatterRuntimeEdit(
   return true
 }
 
-function commitGroundPaintRuntimeEdit(
-  store: {
-    nodes: SceneNode[]
-    currentSceneId?: string | null
-    queueSceneNodePatch: (nodeId: string, fields: ScenePatchField[], options?: { bumpVersion?: boolean }) => boolean
-    bumpSceneNodePropertyVersion: () => void
-  },
-  nodeId: string,
-  groundSurfaceChunks: GroundDynamicMesh['groundSurfaceChunks'],
-): boolean {
-  const target = findNodeById(store.nodes, nodeId)
-  if (!target || target.dynamicMesh?.type !== 'Ground' || !store.currentSceneId) {
-    return false
-  }
-  const nextGroundSurfaceChunks = manualDeepClone(groundSurfaceChunks ?? null) as Parameters<
-    ReturnType<typeof useGroundPaintStore>['replaceGroundSurfaceChunks']
-  >[2]
-  useGroundPaintStore().replaceGroundSurfaceChunks(store.currentSceneId, nodeId, nextGroundSurfaceChunks, {
-    reason: 'scene-runtime-patch',
-  })
-  finalizeDynamicMeshRuntimePatch(store, nodeId, 'Ground')
-  persistGroundPaintSidecarForNode(target)
-  return true
-}
-
 function persistGroundScatterSidecarForNode(groundNode: SceneNode | null): boolean {
   if (!groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
     return false
   }
   void useScenesStore().saveGroundScatterSidecar(buildSceneDocumentFromState(useSceneStore())).catch((error: unknown) => {
     console.warn('[SceneStore] Failed to persist ground scatter sidecar', error)
-  })
-  return true
-}
-
-function persistGroundPaintSidecarForNode(groundNode: SceneNode | null): boolean {
-  if (!groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
-    return false
-  }
-  const currentSceneId = useSceneStore().currentSceneId
-  const sceneId = typeof currentSceneId === 'string'
-    ? currentSceneId.trim()
-    : ''
-  if (!sceneId) {
-    return false
-  }
-  const sidecar = useGroundPaintStore().buildSceneDocumentSidecar(sceneId, groundNode)
-  void useScenesStore().saveSceneGroundPaintSidecar(sceneId, sidecar, { syncServer: false }).catch((error: unknown) => {
-    console.warn('[SceneStore] Failed to persist ground paint sidecar', error)
   })
   return true
 }
@@ -2447,7 +2403,6 @@ function attachRuntimeGroundSidecarsToDocument(document: StoredSceneDocument): S
     return document
   }
   attachGroundScatterRuntimeToNode(document.id, groundNode)
-  attachGroundPaintRuntimeToNode(document.id, groundNode)
   return document
 }
 
@@ -8842,10 +8797,7 @@ export const useSceneStore = defineStore('scene', {
       )
       const normalizedGroundNode = findGroundNode(normalizedNodes)
       if (normalizedGroundNode) {
-        // Re-attach runtime sidecars after clone/normalize so hydrated terrain paint
-        // remains visible on first scene load after browser refresh.
         attachGroundScatterRuntimeToNode(scene.id, normalizedGroundNode)
-        attachGroundPaintRuntimeToNode(scene.id, normalizedGroundNode)
       }
       replaceSceneNodes(this, normalizedNodes)
       this.rebuildGeneratedMeshRuntimes()
@@ -10101,7 +10053,6 @@ export const useSceneStore = defineStore('scene', {
         ? { ...(dynamicMesh as Record<string, unknown>) }
         : dynamicMesh
       let shouldPersistScatterSidecar = false
-      let shouldPersistPaintSidecar = false
       if (incoming && typeof incoming === 'object' && this.currentSceneId) {
         if (Object.prototype.hasOwnProperty.call(incoming, 'terrainScatter')) {
           useGroundScatterStore().replaceTerrainScatter(
@@ -10112,19 +10063,6 @@ export const useSceneStore = defineStore('scene', {
           )
           delete (incoming as Record<string, unknown>).terrainScatter
           shouldPersistScatterSidecar = true
-        }
-        if (Object.prototype.hasOwnProperty.call(incoming, 'groundSurfaceChunks')) {
-          const nextGroundSurfaceChunks = manualDeepClone((incoming as Record<string, unknown>).groundSurfaceChunks ?? null) as Parameters<
-            ReturnType<typeof useGroundPaintStore>['replaceGroundSurfaceChunks']
-          >[2]
-          useGroundPaintStore().replaceGroundSurfaceChunks(
-            this.currentSceneId,
-            nodeId,
-            nextGroundSurfaceChunks,
-            { reason: 'scene-dynamic-mesh-update' },
-          )
-          delete (incoming as Record<string, unknown>).groundSurfaceChunks
-          shouldPersistPaintSidecar = true
         }
       }
       this.captureNodeDynamicMeshHistory(nodeId)
@@ -10140,9 +10078,6 @@ export const useSceneStore = defineStore('scene', {
       persistGroundHeightSidecarForNode(target)
       if (shouldPersistScatterSidecar) {
         persistGroundScatterSidecarForNode(target)
-      }
-      if (shouldPersistPaintSidecar) {
-        persistGroundPaintSidecarForNode(target)
       }
       commitSceneSnapshot(this)
     },
@@ -10201,12 +10136,6 @@ export const useSceneStore = defineStore('scene', {
       terrainScatter: TerrainScatterStoreSnapshot | null,
     ) {
       return commitGroundScatterRuntimeEdit(this, nodeId, terrainScatter)
-    },
-    commitGroundPaintEdit(
-      nodeId: string,
-      groundSurfaceChunks: GroundDynamicMesh['groundSurfaceChunks'],
-    ) {
-      return commitGroundPaintRuntimeEdit(this, nodeId, groundSurfaceChunks)
     },
     updateNodeDynamicMesh(nodeId: string, dynamicMesh: any) {
       const target = findNodeById(this.nodes, nodeId)
@@ -18697,7 +18626,6 @@ export const useSceneStore = defineStore('scene', {
         scenes,
         groundHeightSidecars,
         groundScatterSidecars,
-        groundPaintSidecars,
         groundChunkManifests,
         groundChunkData,
         terrainDatasetManifests,
@@ -18718,7 +18646,6 @@ export const useSceneStore = defineStore('scene', {
       const imported: StoredSceneDocument[] = []
       const importedGroundHeightSidecars = new Map<string, ArrayBuffer | null>()
       const importedGroundScatterSidecars = new Map<string, ArrayBuffer | null>()
-      const importedGroundPaintSidecars = new Map<string, ArrayBuffer | null>()
       const importedGroundChunkManifests = new Map<string, GroundChunkManifest | null>()
       const importedGroundChunkData = new Map<string, Record<string, ArrayBuffer | null>>()
       const importedTerrainDatasetManifests = new Map<string, import('@schema').QuantizedTerrainDatasetRootManifest | null>()
@@ -18769,7 +18696,6 @@ export const useSceneStore = defineStore('scene', {
         imported.push(sceneDocument)
         importedGroundHeightSidecars.set(sceneDocument.id, groundHeightSidecars[entry.id] ?? null)
         importedGroundScatterSidecars.set(sceneDocument.id, groundScatterSidecars[entry.id] ?? null)
-        importedGroundPaintSidecars.set(sceneDocument.id, groundPaintSidecars[entry.id] ?? null)
         importedGroundChunkManifests.set(sceneDocument.id, groundChunkManifests[entry.id] ?? null)
         importedGroundChunkData.set(sceneDocument.id, groundChunkData[entry.id] ?? {})
         importedTerrainDatasetManifests.set(sceneDocument.id, terrainDatasetManifests[entry.id] ?? null)
@@ -18784,9 +18710,6 @@ export const useSceneStore = defineStore('scene', {
           ),
           groundScatterSidecars: Object.fromEntries(
             imported.map((sceneDocument) => [sceneDocument.id, importedGroundScatterSidecars.get(sceneDocument.id) ?? null]),
-          ),
-          groundPaintSidecars: Object.fromEntries(
-            imported.map((sceneDocument) => [sceneDocument.id, importedGroundPaintSidecars.get(sceneDocument.id) ?? null]),
           ),
           groundChunkManifests: Object.fromEntries(
             imported.map((sceneDocument) => [sceneDocument.id, importedGroundChunkManifests.get(sceneDocument.id) ?? null]),
@@ -18910,11 +18833,8 @@ export const useSceneStore = defineStore('scene', {
           await useGroundHeightmapStore().hydrateSceneDocument(findGroundNode(this.nodes), sidecar)
           const scatterSidecar = await useScenesStore().loadGroundScatterSidecar(this.currentSceneId)
           await useGroundScatterStore().hydrateSceneDocument(this.currentSceneId, findGroundNode(this.nodes), scatterSidecar)
-          const paintSidecar = await useScenesStore().loadGroundPaintSidecar(this.currentSceneId)
-          await useGroundPaintStore().hydrateSceneDocument(this.currentSceneId, findGroundNode(this.nodes), paintSidecar)
           const groundNode = findGroundNode(this.nodes)
           attachGroundScatterRuntimeToNode(this.currentSceneId, groundNode)
-          attachGroundPaintRuntimeToNode(this.currentSceneId, groundNode)
           await this.ensureCurrentSceneCompiledGroundReady()
         }
         await this.refreshRuntimeState({ showOverlay: true, refreshViewport: false })

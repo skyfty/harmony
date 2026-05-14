@@ -1,5 +1,5 @@
 export const SCENE_PACKAGE_FORMAT = 'harmony-scene-package' as const;
-export const SCENE_PACKAGE_VERSION = 9 as const;
+export const SCENE_PACKAGE_VERSION = 10 as const;
 
 export interface ScenePackageTerrainEntry {
   datasetId: string;
@@ -33,8 +33,6 @@ export interface ScenePackageSceneEntry {
   planningPath?: string;
   /** Optional ground scatter sidecar path, e.g. `scenes/<sceneId>/ground-scatter.bin` */
   groundScatterPath?: string;
-  /** Optional ground paint sidecar path, e.g. `scenes/<sceneId>/ground-paint.bin` */
-  groundPaintPath?: string;
   /** Readonly runtime terrain package entry used by preview/mobile viewers. */
   terrain?: ScenePackageTerrainEntry;
   /** Precompiled near-field ground package entry used by preview/mobile viewers. */
