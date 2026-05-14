@@ -43,8 +43,8 @@ export type CreateSceneryPhysicsBridgeOptions = {
 const PHYSICS_AMMO_SUBPACKAGE_NAME = 'physicsAmmo'
 const PHYSICS_CANNON_SUBPACKAGE_NAME = 'physicsCannon'
 
-function resolveSceneryPhysicsBackendPreference(preference: PhysicsBackendPreference | undefined): 'ammo' | 'cannon' {
-  return preference === 'cannon' ? 'cannon' : 'ammo'
+function resolveSceneryPhysicsBackendPreference(_preference: PhysicsBackendPreference | undefined): 'ammo' | 'cannon' {
+  return 'cannon';// preference === 'cannon' ? 'cannon' : 'ammo'
 }
 
 function ensureSceneryPhysicsBackendLoaders(
@@ -107,6 +107,7 @@ class LazySceneryPhysicsBridge implements PhysicsBridge {
   private bridgePromise: Promise<PhysicsBridge> | null = null
 
   constructor(options: CreateSceneryPhysicsBridgeOptions = {}) {
+    console.log('Creating Scenery Physics Bridge with options:', options)
     this.enginePreference = options.engine
     this.backendLoaders = options.backendLoaders
   }

@@ -407,6 +407,7 @@ import { useDebugOverlay } from '../composables/useDebugOverlay';
 import { useBehaviorAlert } from '../composables/useBehaviorAlert';
 import { useBehaviorBubble } from '../composables/useBehaviorBubble';
 import { useLanternAssets } from '../composables/useLanternAssets';
+import { createSceneryPhysicsBridge } from '../common/physics/createSceneryPhysicsBridge';
 import {
   loadScenePackageZip,
   removeScenePackageZip,
@@ -1889,7 +1890,6 @@ let sceneryGroundCollisionReferenceInitialized = false;
 let sceneryGroundCollisionReferenceElapsed = 0;
 const physicsBridgeBodyIdByNodeId = new Map<string, number>();
 const physicsBridgeNodeIdByBodyId = new Map<number, string>();
-let sceneryPhysicsBridgeModulePromise: Promise<any> | null = null;
 const physicsBridgeVehicleIdByNodeId = new Map<string, number>();
 function nextSceneryGroundCollisionRuntimeId(): number {
   sceneryGroundCollisionNextRuntimeId += 1;
@@ -6201,7 +6201,6 @@ async function ensureSceneryPhysicsBridgeReady(): Promise<PhysicsBridge> {
     return physicsBridgeInitPromise;
   }
   if (!physicsBridge) {
-    const { createSceneryPhysicsBridge } = await loadSceneryPhysicsBridgeModule();
     physicsBridge = createSceneryPhysicsBridge({
       engine: currentPhysicsBridgePreference,
       backendLoaders: props.physicsBackendLoaders,
@@ -6223,13 +6222,6 @@ async function ensureSceneryPhysicsBridgeReady(): Promise<PhysicsBridge> {
     throw error;
   });
   return physicsBridgeInitPromise;
-}
-
-async function loadSceneryPhysicsBridgeModule(): Promise<any> {
-  if (!sceneryPhysicsBridgeModulePromise) {
-    sceneryPhysicsBridgeModulePromise = import('../common/physics/createSceneryPhysicsBridge');
-  }
-  return await sceneryPhysicsBridgeModulePromise;
 }
 
 function updateSceneryPhysicsBridgeIndex(asset: PhysicsSceneAsset): void {
