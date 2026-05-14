@@ -1877,6 +1877,7 @@ let physicsBridgeSceneLoadInProgress = false;
 let physicsBridgeSceneRequestId = 0;
 let currentPhysicsBridgePreference: PhysicsBackendPreference | undefined;
 let currentPhysicsBridgeGroundCollisionSignature = '';
+let currentDocumentPhysicsRelevantSceneNodesCache: boolean | null = null;
 let sceneryGroundCollisionBridgeMutationChain: Promise<void> = Promise.resolve();
 let sceneryGroundCollisionNextRuntimeId = 0x71000000;
 const sceneryGroundCollisionRuntimeBodyIds = new Set<number>();
@@ -4245,12 +4246,15 @@ async function spawnRuntimePrefabRequest(request: RuntimePrefabSpawnRequest): Pr
     mergeRuntimePrefabAssetRegistry(document, runtimeDocument);
     document.nodes = [...(document.nodes ?? []), cloned.root];
     document.updatedAt = new Date().toISOString();
+    invalidateCurrentDocumentPhysicsRelevanceCache();
     rebuildPreviewNodeMap(document);
     viewerResourceCache = ensureResourceCache(document, buildOptions);
     registerSceneSubtree(graph.root);
     refreshMultiuserNodeReferences(document);
     refreshBehaviorProximityCandidates();
-    await syncPhysicsBodiesForDocument(document);
+    if (source.prefab.physicsRelevant) {
+      await syncPhysicsBodiesForDocument(document);
+    }
   }
 
   return true;
@@ -6252,6 +6256,22 @@ async function loadSceneryPhysicsBridgeScene(document: SceneJsonExportDocument |
     await disposeSceneryPhysicsBridgeScene();
     return;
   }
+  if (!physicsEnvironmentEnabled.value) {
+    currentPhysicsBridgeGroundCollisionSignature = '';
+    sceneryGroundCollisionReferenceInitialized = false;
+    sceneryGroundCollisionReferenceElapsed = 0;
+    sceneryGroundCollisionRuntimeBodyIds.clear();
+    await disposeSceneryPhysicsBridgeScene();
+    return;
+  }
+  if (!resolveDocumentPhysicsRelevance(document)) {
+    currentPhysicsBridgeGroundCollisionSignature = '';
+    sceneryGroundCollisionReferenceInitialized = false;
+    sceneryGroundCollisionReferenceElapsed = 0;
+    sceneryGroundCollisionRuntimeBodyIds.clear();
+    await disposeSceneryPhysicsBridgeScene();
+    return;
+  }
   physicsBridgeSceneLoadInProgress = true;
   try {
     await reloadSceneryPhysicsBridgeForPreference(resolveDocumentEnvironment(document));
@@ -6952,6 +6972,44 @@ function collectVehicleNodes(nodes: SceneNode[] | undefined | null): SceneNode[]
   return collected;
 }
 
+function hasPhysicsRelevantSceneNodes(nodes: SceneNode[] | undefined | null): boolean {
+  if (!Array.isArray(nodes)) {
+    return false;
+  }
+  const stack: SceneNode[] = [...nodes];
+  while (stack.length) {
+    const node = stack.pop();
+    if (!node) {
+      continue;
+    }
+    if (resolvePhysicsRigidbodyComponent(node) || resolveVehicleComponent(node)) {
+      return true;
+    }
+    if (Array.isArray(node.children) && node.children.length) {
+      stack.push(...node.children);
+    }
+  }
+  return false;
+}
+
+function invalidateCurrentDocumentPhysicsRelevanceCache(): void {
+  currentDocumentPhysicsRelevantSceneNodesCache = null;
+}
+
+function resolveDocumentPhysicsRelevance(document: SceneJsonExportDocument | null | undefined): boolean {
+  if (!document) {
+    return false;
+  }
+  if (document === currentDocument && currentDocumentPhysicsRelevantSceneNodesCache !== null) {
+    return currentDocumentPhysicsRelevantSceneNodesCache;
+  }
+  const hasPhysicsRelevantNodes = hasPhysicsRelevantSceneNodes(document.nodes);
+  if (document === currentDocument) {
+    currentDocumentPhysicsRelevantSceneNodesCache = hasPhysicsRelevantNodes;
+  }
+  return hasPhysicsRelevantNodes;
+}
+
 function syncVehicleInstancesForDocument(document: SceneJsonExportDocument | null): void {
   if (!document) {
     vehicleInstances.forEach((_entry, nodeId) => removeVehicleInstance(nodeId));
@@ -6973,6 +7031,20 @@ async function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | 
     resetPhysicsWorld();
     syncVehicleInstancesForDocument(null);
     syncAirWallsForDocument(null);
+    return;
+  }
+  if (!physicsEnvironmentEnabled.value) {
+    await disposeSceneryPhysicsBridgeScene();
+    clearLegacyPhysicsWorld();
+    syncVehicleInstancesForDocument(document);
+    syncAirWallsForDocument(document);
+    return;
+  }
+  if (!resolveDocumentPhysicsRelevance(document)) {
+    await disposeSceneryPhysicsBridgeScene();
+    clearLegacyPhysicsWorld();
+    syncVehicleInstancesForDocument(document);
+    syncAirWallsForDocument(document);
     return;
   }
   await loadSceneryPhysicsBridgeScene(document);
@@ -12221,6 +12293,7 @@ function teardownRenderer() {
   renderContext = null;
   canvasResult = null;
   setActiveMultiuserSceneId(null);
+  invalidateCurrentDocumentPhysicsRelevanceCache();
   currentDocument = null;
   dynamicGroundCache = null;
   sceneGraphRoot = null;
@@ -12551,6 +12624,7 @@ async function mountGraphAndSyncSubsystems(
   refreshAnimationControllers(root);
   ensureBehaviorTapHandler(canvas, camera);
   await prepareSceneryPhysicsBridgeForDocument(payload.document);
+  currentDocumentPhysicsRelevantSceneNodesCache = resolveDocumentPhysicsRelevance(payload.document);
   initializeLazyPlaceholders(payload.document);
   // Bootstrap physics before the render loop so vehicle drive and ground collision never race initialization.
   await syncPhysicsBodiesForDocument(payload.document);
@@ -12827,6 +12901,7 @@ function cleanupForUnrelatedSceneSwitch(): void {
   }
   sceneGraphRoot = null;
   dynamicGroundCache = null;
+  invalidateCurrentDocumentPhysicsRelevanceCache();
   setActiveMultiuserSceneId(null);
   viewerResourceCache = null;
 }
@@ -12854,6 +12929,7 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
 
   // Phase 1: bind state for the new payload.
   currentDocument = payload.document;
+  invalidateCurrentDocumentPhysicsRelevanceCache();
   refreshDynamicGroundCache(currentDocument);
   setActiveMultiuserSceneId(payload.document.id ?? null);
   resetProtagonistPoseState();

@@ -1,10 +1,17 @@
 import type { SceneAssetRegistryEntry, SceneJsonExportDocument, SceneNode } from './index'
+import {
+  BOUNDARY_WALL_COMPONENT_TYPE,
+  MODEL_COLLISION_COMPONENT_TYPE,
+  RIGIDBODY_COMPONENT_TYPE,
+  VEHICLE_COMPONENT_TYPE,
+} from './components'
 
 export interface NodePrefabData {
   formatVersion: number
   name: string
   root: SceneNode
   assetRegistry?: Record<string, SceneAssetRegistryEntry>
+  physicsRelevant?: boolean
 }
 
 export interface RuntimePrefabCloneResult {
@@ -33,6 +40,39 @@ function normalizePrefabName(value: string | null | undefined): string {
   }
   const trimmed = value.trim()
   return trimmed.length ? trimmed : 'Runtime Prefab'
+}
+
+function hasPhysicsRelevantPrefabNode(node: SceneNode | null | undefined): boolean {
+  if (!node) {
+    return false
+  }
+  const components = node.components && typeof node.components === 'object'
+    ? (node.components as Record<string, unknown>)
+    : null
+  if (components) {
+    if (BOUNDARY_WALL_COMPONENT_TYPE in components) {
+      return true
+    }
+    if (RIGIDBODY_COMPONENT_TYPE in components) {
+      return true
+    }
+    if (VEHICLE_COMPONENT_TYPE in components) {
+      return true
+    }
+    if (MODEL_COLLISION_COMPONENT_TYPE in components) {
+      return true
+    }
+  }
+  if (node.dynamicMesh && typeof node.dynamicMesh === 'object') {
+    const meshType = (node.dynamicMesh as { type?: unknown }).type
+    if (meshType === 'ModelCollision') {
+      return true
+    }
+  }
+  if (Array.isArray(node.children)) {
+    return node.children.some((child) => hasPhysicsRelevantPrefabNode(child))
+  }
+  return false
 }
 
 function remapNodeReferenceValue(key: string, value: unknown, idMap: Map<string, string>): unknown {
@@ -141,6 +181,7 @@ export function parseRuntimePrefabData(raw: string): NodePrefabData {
     assetRegistry: isRecord(candidate.assetRegistry)
       ? (deepCloneNode(candidate.assetRegistry) as Record<string, SceneAssetRegistryEntry>)
       : undefined,
+    physicsRelevant: hasPhysicsRelevantPrefabNode(candidate.root),
   }
 }
 
