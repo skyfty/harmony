@@ -2568,6 +2568,7 @@ const vehicleDriveUi = computed(() => {
 });
 
 const pendingVehicleDriveEvent = ref<Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }> | null>(null);
+const pendingVehicleDriveRetryRequested = ref(false);
 const pendingDefaultSteerDriveEvent = ref<Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }> | null>(null);
 const vehicleDrivePromptBusy = ref(false);
 const activeAutoTourNodeIds = reactive(new Set<string>());
@@ -9287,6 +9288,10 @@ function startVehicleDriveMode(
   return result;
 }
 
+function isVehicleDrivePendingReadinessMessage(message?: string): boolean {
+  return typeof message === 'string' && message.includes('车辆尚未准备就绪')
+}
+
 function applyVehicleDriveForces(deltaSeconds: number): void {
   vehicleDriveController.applyForces(deltaSeconds);
 }
@@ -9753,11 +9758,46 @@ function stopFloatingAutoTourAndResumeManualDrive(
 
 function activatePendingDefaultSteerDriveIfNeeded(): void {
   const event = pendingDefaultSteerDriveEvent.value;
-  if (!event) {
+  if (!event || vehicleDriveActive.value || vehicleDrivePromptBusy.value) {
+    return;
+  }
+  const result = startVehicleDriveMode(event);
+  if (!result.success) {
+    if (isVehicleDrivePendingReadinessMessage(result.message)) {
+      return;
+    }
+    pendingDefaultSteerDriveEvent.value = null;
+    uni.showToast({ title: result.message ?? '无法进入驾驶模式', icon: 'none' });
     return;
   }
   pendingDefaultSteerDriveEvent.value = null;
   handleVehicleDriveEvent(event);
+}
+
+function retryPendingVehicleDriveIfNeeded(): void {
+  if (!pendingVehicleDriveRetryRequested.value || vehicleDriveActive.value || vehicleDrivePromptBusy.value) {
+    return;
+  }
+  const event = pendingVehicleDriveEvent.value;
+  if (!event) {
+    pendingVehicleDriveRetryRequested.value = false;
+    return;
+  }
+  const result = startVehicleDriveMode(event);
+  if (!result.success) {
+    if (isVehicleDrivePendingReadinessMessage(result.message)) {
+      return;
+    }
+    const message = result.message ?? '无法进入驾驶模式';
+    uni.showToast({ title: message, icon: 'none' });
+    resolveBehaviorToken(event.token, { type: 'fail', message });
+    pendingVehicleDriveEvent.value = null;
+    pendingVehicleDriveRetryRequested.value = false;
+    return;
+  }
+  handleShowVehicleCockpitEvent();
+  pendingVehicleDriveEvent.value = null;
+  pendingVehicleDriveRetryRequested.value = false;
 }
 
 function handleFloatingAutoTourTap(): void {
@@ -9991,6 +10031,8 @@ function handleVehicleDriveEvent(event: Extract<BehaviorRuntimeEvent, { type: 'v
     return;
   }
   pendingVehicleDriveEvent.value = null;
+  pendingVehicleDriveEvent.value = event;
+  pendingVehicleDriveRetryRequested.value = false;
   vehicleDrivePromptBusy.value = true;
   setVehicleDriveUiOverride('hide');
   resetVehicleDriveInputs();
@@ -10007,12 +10049,20 @@ function handleVehicleDriveEvent(event: Extract<BehaviorRuntimeEvent, { type: 'v
     }
     const result = startVehicleDriveMode(event);
     if (!result.success) {
-      const message = result.message ?? '无法进入驾驶模式';
+      if (isVehicleDrivePendingReadinessMessage(result.message)) {
+        pendingVehicleDriveRetryRequested.value = true;
+        return;
+      }
+      const message = result.message ?? '鏃犳硶杩涘叆椹鹃┒妯″紡';
       uni.showToast({ title: message, icon: 'none' });
       resolveBehaviorToken(event.token, { type: 'fail', message });
+      pendingVehicleDriveEvent.value = null;
+      pendingVehicleDriveRetryRequested.value = false;
       return;
     }
     handleShowVehicleCockpitEvent();
+    pendingVehicleDriveEvent.value = null;
+    pendingVehicleDriveRetryRequested.value = false;
   } finally {
     vehicleDrivePromptBusy.value = false;
   }
@@ -10025,6 +10075,7 @@ function handleVehicleDebusEvent(): void {
       message: '驾驶请求已被终止。',
     });
     pendingVehicleDriveEvent.value = null;
+    pendingVehicleDriveRetryRequested.value = false;
     vehicleDrivePromptBusy.value = false;
     setVehicleDriveUiOverride('hide');
   }
@@ -12297,6 +12348,8 @@ function startRenderLoop(
           stepSceneryPhysicsBridge(deltaSeconds);
           updateVehicleSpeedFromVehicle();
           updateVehicleWheelVisuals(deltaSeconds);
+          retryPendingVehicleDriveIfNeeded();
+          activatePendingDefaultSteerDriveIfNeeded();
         }
 
         if (deltaSeconds >= 0) {

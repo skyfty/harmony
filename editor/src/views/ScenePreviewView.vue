@@ -1189,6 +1189,7 @@ const vehicleDriveState = reactive<VehicleDriveRuntimeState>({
 
 const vehicleDriveUiOverride = ref<'auto' | 'show' | 'hide'>('auto')
 const pendingVehicleDriveEvent = ref<Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }> | null>(null)
+const pendingVehicleDriveRetryRequested = ref(false)
 const pendingDefaultSteerDriveEvent = ref<Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }> | null>(null)
 const vehicleDrivePromptBusy = ref(false)
 const vehicleDriveExitBusy = ref(false)
@@ -7474,6 +7475,7 @@ function handleVehicleDriveEvent(event: Extract<BehaviorRuntimeEvent, { type: 'v
 		})
 	}
 	pendingVehicleDriveEvent.value = event
+	pendingVehicleDriveRetryRequested.value = false
 	vehicleDrivePromptBusy.value = false
 	setVehicleDriveUiOverride('hide')
 	resetVehicleDriveInputs()
@@ -7486,6 +7488,7 @@ function handleVehicleDebusEvent(): void {
 			message: 'Drive request was terminated.',
 		})
 		pendingVehicleDriveEvent.value = null
+		pendingVehicleDriveRetryRequested.value = false
 		vehicleDrivePromptBusy.value = false
 		setVehicleDriveUiOverride('hide')
 	}
@@ -7497,10 +7500,9 @@ function handleVehicleDebusEvent(): void {
 
 function activatePendingDefaultSteerDriveIfNeeded(): void {
 	const event = pendingDefaultSteerDriveEvent.value
-	if (!event || vehicleDriveState.active) {
+	if (!event || vehicleDriveState.active || vehicleDrivePromptBusy.value) {
 		return
 	}
-	pendingDefaultSteerDriveEvent.value = null
 	if (event.sequenceId === '__manual_vehicle_drive__' && controlMode.value !== 'third-person') {
 		controlMode.value = 'third-person'
 	}
@@ -7508,13 +7510,22 @@ function activatePendingDefaultSteerDriveIfNeeded(): void {
 	try {
 		const result = startVehicleDriveMode(event)
 		if (!result.success) {
+			if (isVehicleDrivePendingReadinessMessage(result.message)) {
+				return
+			}
+			pendingDefaultSteerDriveEvent.value = null
 			appendWarningMessage(result.message ?? 'Failed to start default steer drive.')
 			return
 		}
+		pendingDefaultSteerDriveEvent.value = null
 		handleShowVehicleCockpitEvent()
 	} finally {
 		vehicleDrivePromptBusy.value = false
 	}
+}
+
+function isVehicleDrivePendingReadinessMessage(message?: string): boolean {
+	return typeof message === 'string' && message.includes('车辆尚未准备就绪')
 }
 
 function handleShowVehicleCockpitEvent(): void {
@@ -7733,16 +7744,22 @@ async function handleVehicleDrivePromptConfirm(): Promise<void> {
 	try {
 		const result = startVehicleDriveMode(event)
 		if (!result.success) {
+			if (isVehicleDrivePendingReadinessMessage(result.message)) {
+				pendingVehicleDriveRetryRequested.value = true
+				return
+			}
 			appendWarningMessage(result.message ?? 'Failed to start drive script.')
 			resolveBehaviorToken(event.token, {
 				type: 'fail',
 				message: result.message ?? 'Failed to start drive script.',
 			})
 			pendingVehicleDriveEvent.value = null
+			pendingVehicleDriveRetryRequested.value = false
 			return
 		}
 		handleShowVehicleCockpitEvent()
 		pendingVehicleDriveEvent.value = null
+		pendingVehicleDriveRetryRequested.value = false
 	} finally {
 		vehicleDrivePromptBusy.value = false
 	}
@@ -7760,6 +7777,7 @@ function handleVehicleDrivePromptClose(): void {
 		// ignore
 	}
 	pendingVehicleDriveEvent.value = null
+	pendingVehicleDriveRetryRequested.value = false
 	vehicleDrivePromptBusy.value = false
 	setVehicleDriveUiOverride('hide')
 }
@@ -7780,6 +7798,34 @@ function handleVehicleDriveExitClick(): void {
 	} finally {
 		vehicleDriveExitBusy.value = false
 	}
+}
+
+function retryPendingVehicleDriveIfNeeded(): void {
+	if (!pendingVehicleDriveRetryRequested.value || vehicleDriveState.active || vehicleDrivePromptBusy.value) {
+		return
+	}
+	const event = pendingVehicleDriveEvent.value
+	if (!event) {
+		pendingVehicleDriveRetryRequested.value = false
+		return
+	}
+	const result = startVehicleDriveMode(event)
+	if (!result.success) {
+		if (isVehicleDrivePendingReadinessMessage(result.message)) {
+			return
+		}
+		appendWarningMessage(result.message ?? 'Failed to start drive script.')
+		resolveBehaviorToken(event.token, {
+			type: 'fail',
+			message: result.message ?? 'Failed to start drive script.',
+		})
+		pendingVehicleDriveEvent.value = null
+		pendingVehicleDriveRetryRequested.value = false
+		return
+	}
+	handleShowVehicleCockpitEvent()
+	pendingVehicleDriveEvent.value = null
+	pendingVehicleDriveRetryRequested.value = false
 }
 
 function handleVehicleDriveCameraToggle(): void {
@@ -8804,6 +8850,8 @@ function startAnimationLoop() {
 		if (isPlaying.value) {
 			vehicleTransformDriveUpdated = updatePlaybackSystemsForFrame(delta)
 		}
+		retryPendingVehicleDriveIfNeeded()
+		activatePendingDefaultSteerDriveIfNeeded()
 		if (!isPlaying.value && vehicleDriveState.active && !physicsEnvironmentEnabled.value) {
 			applyVehicleDriveForces(delta)
 			vehicleTransformDriveUpdated = true

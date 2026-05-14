@@ -21,9 +21,6 @@ export function initializePhysicsBackendBridge(bridge: PhysicsBackendBridge | nu
     activeBridge = bridge
     return
   }
-  if (activeBridge.id !== bridge.id) {
-    throw new Error(`Physics backend bridge already initialized with "${activeBridge.id}"`)
-  }
 }
 
 export function getPhysicsBackendBridge(): PhysicsBackendBridge {

@@ -276,11 +276,15 @@ function cloneGroundSurfaceChunks(definition: GroundDynamicMesh, nodeId?: string
 	return nextChunks
 }
 
-function resolveGroundSurfaceChunksSnapshot(definition: GroundDynamicMesh, nodeId: string): GroundSurfaceChunkTextureMap | null {
+function resolveGroundSurfaceChunksSnapshot(
+	definition: GroundDynamicMesh,
+	nodeId: string,
+	sceneRuntimeVersion = 0,
+): GroundSurfaceChunkTextureMap | null {
 	const snapshot = cloneGroundSurfaceChunks(definition, nodeId)
 	if (paintSessionState && paintSessionState.nodeId === nodeId) {
 		paintSessionState.previewGroundSurfaceChunks = snapshot
-		paintSessionState.previewGroundSurfaceChunksSceneRuntimeVersion = runtimeVersion
+		paintSessionState.previewGroundSurfaceChunksSceneRuntimeVersion = sceneRuntimeVersion
 	}
 	return snapshot
 }
@@ -2429,10 +2433,12 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return
 		}
 		const session = ensurePaintSession(definition, groundNode.id)
+		const sceneId = typeof options.sceneStore.currentSceneId === 'string' ? options.sceneStore.currentSceneId.trim() : ''
+		const sceneRuntimeVersion = sceneId ? useGroundScatterStore().getSceneRuntimeVersion(sceneId) : 0
 		session.definition = definition
 		session.chunkCells = resolveGroundChunkCells(definition)
-		session.previewGroundSurfaceChunks = resolveGroundSurfaceChunksSnapshot(definition, session.nodeId)
-		session.previewGroundSurfaceChunksSceneRuntimeVersion = 0
+		session.previewGroundSurfaceChunks = resolveGroundSurfaceChunksSnapshot(definition, session.nodeId, sceneRuntimeVersion)
+		session.previewGroundSurfaceChunksSceneRuntimeVersion = sceneRuntimeVersion
 		session.chunkStates = new Map()
 		session.hasPendingChanges = false
 		session.liveSurfacePreviewPendingChunkKeys.clear()
@@ -3793,6 +3799,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		revokePaintPreviewUrls(paintSessionState)
 		const chunkCells = resolveGroundChunkCells(definition)
 		const sceneId = typeof options.sceneStore.currentSceneId === 'string' ? options.sceneStore.currentSceneId.trim() : ''
+		const sceneRuntimeVersion = sceneId ? useGroundScatterStore().getSceneRuntimeVersion(sceneId) : 0
 		paintSessionState = {
 			nodeId,
 			definition,
@@ -3803,8 +3810,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			liveSurfacePreviewPendingChunkKeys: new Map(),
 			liveSurfacePreviewFlushRafId: null,
 			terrainPaintSurfacePreviewDebounceTimerId: null,
-			previewGroundSurfaceChunks: resolveGroundSurfaceChunksSnapshot(definition, nodeId),
-			previewGroundSurfaceChunksSceneRuntimeVersion: 0,
+			previewGroundSurfaceChunks: resolveGroundSurfaceChunksSnapshot(definition, nodeId, sceneRuntimeVersion),
+			previewGroundSurfaceChunksSceneRuntimeVersion: sceneRuntimeVersion,
 			previewEmitToken: 0,
 		}
 		return paintSessionState
