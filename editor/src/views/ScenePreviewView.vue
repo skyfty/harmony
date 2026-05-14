@@ -10235,36 +10235,6 @@ function syncScenePreviewGroundCollisionRuntimeHost(
 			: undefined,
 		runtimeDeps: resolveScenePreviewGroundCollisionRuntimeDeps(),
 	})
-	const now = performance.now()
-	const diagnosticSignature = [
-		groundNode.id,
-		groundMesh.terrainMode,
-		groundMesh.chunkManifestRevision ?? 0,
-		referenceWorldPosition.x,
-		referenceWorldPosition.y,
-		referenceWorldPosition.z,
-		snapshot.compiledTileKeys.join(','),
-		snapshot.infiniteChunkKeys.join(','),
-	].join('|')
-	if (
-		diagnosticSignature !== lastGroundCollisionDiagnosticSignature
-		&& now - lastGroundCollisionDiagnosticLogAt >= GROUND_COLLISION_DIAGNOSTIC_LOG_INTERVAL_MS
-	) {
-		lastGroundCollisionDiagnosticLogAt = now
-		lastGroundCollisionDiagnosticSignature = diagnosticSignature
-		console.info(`[ScenePreview][GroundCollision] diagnostics=${formatGroundCollisionDiagnosticPayload({
-			sourceId: groundNode.id,
-			terrainMode: groundMesh.terrainMode,
-			chunkManifestRevision: groundMesh.chunkManifestRevision ?? 0,
-			referenceWorldPosition: {
-				x: referenceWorldPosition.x,
-				y: referenceWorldPosition.y,
-				z: referenceWorldPosition.z,
-			},
-			compiledTileKeys: snapshot.compiledTileKeys,
-			infiniteChunkKeys: snapshot.infiniteChunkKeys,
-		})}`)
-	}
 	return syncGroundCollisionRuntimeLoadedTileKeys(groundObject, groundMesh, {
 		compiledKeys: snapshot.compiledTileKeys,
 		infiniteKeys: snapshot.infiniteChunkKeys,
