@@ -1,12 +1,15 @@
 import {
+  type PhysicsAddRuntimeBodiesCommand,
   PHYSICS_BODY_TRANSFORM_STRIDE,
   PHYSICS_WHEEL_TRANSFORM_STRIDE,
   createEmptyStepFrame,
   type PhysicsBodyDesc,
   type PhysicsBodyTransformCommand,
+  type PhysicsMaterialDesc,
   type PhysicsQuaternion,
   type PhysicsRaycastCommand,
   type PhysicsRaycastHit,
+  type PhysicsRemoveRuntimeBodiesCommand,
   type PhysicsSceneAsset,
   type PhysicsShapeDesc,
   type PhysicsStepFrame,
@@ -60,6 +63,9 @@ export class AmmoPhysicsWorld {
   private solver: any | null = null
   private readonly bodies = new Map<number, BodyState>()
   private readonly shapes = new Map<number, PhysicsShapeDesc>()
+  private readonly runtimeBodies = new Map<number, BodyState>()
+  private readonly runtimeShapes = new Map<number, PhysicsShapeDesc>()
+  private readonly runtimeMaterials = new Map<number, PhysicsMaterialDesc>()
   private readonly vehicles = new Map<number, VehicleState>()
   private readonly vehicleInputs = new Map<number, PhysicsVehicleInputCommand>()
 
@@ -209,6 +215,26 @@ export class AmmoPhysicsWorld {
     this.vehicleInputs.set(command.vehicleId, command)
   }
 
+  addRuntimeBodies(command: PhysicsAddRuntimeBodiesCommand): void {
+    this.ensureWorld()
+    for (const entry of command.bodies) {
+      for (const material of entry.materials ?? []) {
+        this.runtimeMaterials.set(material.id, material)
+      }
+      for (const shape of entry.shapes) {
+        this.runtimeShapes.set(shape.id, shape)
+      }
+      this.removeRuntimeBodyById(entry.body.id)
+      this.runtimeBodies.set(entry.body.id, this.createBodyState(entry.body, this.runtimeShapes, this.runtimeMaterials))
+    }
+  }
+
+  removeRuntimeBodies(command: PhysicsRemoveRuntimeBodiesCommand): void {
+    for (const bodyId of command.bodyIds) {
+      this.removeRuntimeBodyById(bodyId)
+    }
+  }
+
   raycast(command: PhysicsRaycastCommand): PhysicsRaycastHit | null {
     const ammo = this.ammo
     if (!ammo || !this.world) {
@@ -253,6 +279,8 @@ export class AmmoPhysicsWorld {
     this.scene = null
     this.frame = 0
     this.shapes.clear()
+    this.runtimeShapes.clear()
+    this.runtimeMaterials.clear()
     this.vehicleInputs.clear()
 
     Array.from(this.vehicles.values()).forEach((state) => {
@@ -264,6 +292,10 @@ export class AmmoPhysicsWorld {
       state.cleanup.slice().reverse().forEach((cleanup) => cleanup())
     })
     this.bodies.clear()
+    Array.from(this.runtimeBodies.values()).forEach((state) => {
+      state.cleanup.slice().reverse().forEach((cleanup) => cleanup())
+    })
+    this.runtimeBodies.clear()
   }
 
   disposeWorld(): void {
@@ -324,18 +356,25 @@ export class AmmoPhysicsWorld {
     ammo.destroy(gravity)
   }
 
-  private createBodyState(desc: PhysicsBodyDesc): BodyState {
+  private createBodyState(
+    desc: PhysicsBodyDesc,
+    shapeMap: Map<number, PhysicsShapeDesc> = this.shapes,
+    materialMap: Map<number, PhysicsMaterialDesc> | null = null,
+  ): BodyState {
     const ammo = this.ammo
     const world = this.world
     const scene = this.scene
-    if (!ammo || !world || !scene) {
+    if (!ammo || !world) {
       throw new Error('Ammo world is not initialized')
     }
+    const materials = materialMap
+      ? Array.from(materialMap.values())
+      : scene?.materials ?? []
     const assembly = createAmmoRigidBody({
       ammo,
       world,
-      materials: scene.materials,
-      shapes: createAmmoSceneShapeBindings(ammo, this.shapes, desc.shapeId, desc.type === 'dynamic'),
+      materials,
+      shapes: createAmmoSceneShapeBindings(ammo, shapeMap, desc.shapeId, desc.type === 'dynamic'),
       desc,
     })
 
@@ -343,6 +382,19 @@ export class AmmoPhysicsWorld {
       desc,
       body: assembly.body,
       cleanup: assembly.cleanup,
+    }
+  }
+
+  private removeRuntimeBodyById(bodyId: number): void {
+    const state = this.runtimeBodies.get(bodyId)
+    if (!state) {
+      return
+    }
+    state.cleanup.slice().reverse().forEach((cleanup) => cleanup())
+    this.runtimeBodies.delete(bodyId)
+    this.runtimeShapes.delete(state.desc.shapeId)
+    if (state.desc.materialId != null) {
+      this.runtimeMaterials.delete(state.desc.materialId)
     }
   }
 

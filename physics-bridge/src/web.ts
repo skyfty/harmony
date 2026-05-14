@@ -1,10 +1,12 @@
 import type {
+  PhysicsAddRuntimeBodiesCommand,
   PhysicsBodyTransformCommand,
   PhysicsBridge,
   PhysicsBridgeInitResult,
   PhysicsInitOptions,
   PhysicsRaycastCommand,
   PhysicsRaycastHit,
+  PhysicsRemoveRuntimeBodiesCommand,
   PhysicsSceneAsset,
   PhysicsStepFrame,
   PhysicsVehicleInputCommand,
@@ -65,6 +67,14 @@ class WebPhysicsBridge implements PhysicsBridge {
 
   async setVehicleInput(command: PhysicsVehicleInputCommand): Promise<void> {
     await this.request('set-vehicle-input', command)
+  }
+
+  async addRuntimeBodies(command: PhysicsAddRuntimeBodiesCommand): Promise<void> {
+    await this.request('add-runtime-bodies', command)
+  }
+
+  async removeRuntimeBodies(command: PhysicsRemoveRuntimeBodiesCommand): Promise<void> {
+    await this.request('remove-runtime-bodies', command)
   }
 
   async raycast(command: PhysicsRaycastCommand): Promise<PhysicsRaycastHit | null> {

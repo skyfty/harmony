@@ -16,6 +16,8 @@ export interface PhysicsWorkerController {
   step(deltaMs: number): Promise<PhysicsStepFrame>
   setBodyTransform(command: Extract<PhysicsWorkerRequest, { type: 'set-body-transform' }>['payload']): Promise<void>
   setVehicleInput(command: Extract<PhysicsWorkerRequest, { type: 'set-vehicle-input' }>['payload']): Promise<void>
+  addRuntimeBodies(command: Extract<PhysicsWorkerRequest, { type: 'add-runtime-bodies' }>['payload']): Promise<void>
+  removeRuntimeBodies(command: Extract<PhysicsWorkerRequest, { type: 'remove-runtime-bodies' }>['payload']): Promise<void>
   raycast(command: Extract<PhysicsWorkerRequest, { type: 'raycast' }>['payload']): Promise<PhysicsRaycastHit | null>
   disposeScene(): Promise<void>
   destroy(): Promise<void>
@@ -42,6 +44,8 @@ export function createNoopPhysicsWorkerController(): PhysicsWorkerController {
     },
     async setBodyTransform() {},
     async setVehicleInput() {},
+    async addRuntimeBodies() {},
+    async removeRuntimeBodies() {},
     async raycast() {
       return null
     },
@@ -113,6 +117,16 @@ export function attachPhysicsWorkerRuntime(
             }
             case 'set-vehicle-input': {
               await controller.setVehicleInput(request.payload)
+              scope.postMessage({ id: request.id, ok: true, type: request.type, payload: null } satisfies PhysicsWorkerResponse)
+              break
+            }
+            case 'add-runtime-bodies': {
+              await controller.addRuntimeBodies(request.payload)
+              scope.postMessage({ id: request.id, ok: true, type: request.type, payload: null } satisfies PhysicsWorkerResponse)
+              break
+            }
+            case 'remove-runtime-bodies': {
+              await controller.removeRuntimeBodies(request.payload)
               scope.postMessage({ id: request.id, ok: true, type: request.type, payload: null } satisfies PhysicsWorkerResponse)
               break
             }

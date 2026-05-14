@@ -1169,7 +1169,6 @@
 import { computed, reactive, ref, toRefs, watch } from 'vue'
 import AssetPickerList from '@/components/common/AssetPickerList.vue'
 import TerrainSculptPanel from '@/components/inspector/TerrainSculptPanel.vue'
-import TerrainPaintPanel from '@/components/inspector/TerrainPaintPanel.vue'
 import GroundAssetPainter from '@/components/inspector/GroundAssetPainter.vue'
 import type { TerrainPaintBrushSettings } from '@/stores/terrainStore'
 import { PROTAGONIST_NODE_ID } from '@schema'

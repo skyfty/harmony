@@ -1,10 +1,13 @@
 import * as CANNON from 'cannon-es'
 import {
+  type PhysicsAddRuntimeBodiesCommand,
   PHYSICS_BODY_TRANSFORM_STRIDE,
   PHYSICS_WHEEL_TRANSFORM_STRIDE,
   createEmptyStepFrame,
   type PhysicsBodyDesc,
   type PhysicsBodyTransformCommand,
+  type PhysicsMaterialDesc,
+  type PhysicsRemoveRuntimeBodiesCommand,
   type PhysicsRaycastCommand,
   type PhysicsRaycastHit,
   type PhysicsSceneAsset,
@@ -49,6 +52,9 @@ export class CannonPhysicsWorld {
   private world: CANNON.World | null = null
   private readonly bodies = new Map<number, BodyState>()
   private readonly shapes = new Map<number, PhysicsShapeDesc>()
+  private readonly runtimeBodies = new Map<number, BodyState>()
+  private readonly runtimeShapes = new Map<number, PhysicsShapeDesc>()
+  private readonly runtimeMaterials = new Map<number, PhysicsMaterialDesc>()
   private readonly vehicles = new Map<number, VehicleState>()
   private readonly vehicleInputs = new Map<number, PhysicsVehicleInputCommand>()
 
@@ -174,6 +180,26 @@ export class CannonPhysicsWorld {
     this.vehicleInputs.set(command.vehicleId, command)
   }
 
+  addRuntimeBodies(command: PhysicsAddRuntimeBodiesCommand): void {
+    this.ensureWorld()
+    for (const entry of command.bodies) {
+      for (const material of entry.materials ?? []) {
+        this.runtimeMaterials.set(material.id, material)
+      }
+      for (const shape of entry.shapes) {
+        this.runtimeShapes.set(shape.id, shape)
+      }
+      this.removeRuntimeBodyById(entry.body.id)
+      this.runtimeBodies.set(entry.body.id, this.createBodyState(entry.body, this.runtimeShapes))
+    }
+  }
+
+  removeRuntimeBodies(command: PhysicsRemoveRuntimeBodiesCommand): void {
+    for (const bodyId of command.bodyIds) {
+      this.removeRuntimeBodyById(bodyId)
+    }
+  }
+
   raycast(command: PhysicsRaycastCommand): PhysicsRaycastHit | null {
     if (!this.world) {
       return null
@@ -220,11 +246,19 @@ export class CannonPhysicsWorld {
           this.world!.removeBody(state.body)
         } catch {}
       })
+      this.runtimeBodies.forEach((state) => {
+        try {
+          this.world!.removeBody(state.body)
+        } catch {}
+      })
     }
     this.vehicles.clear()
     this.vehicleInputs.clear()
     this.bodies.clear()
     this.shapes.clear()
+    this.runtimeBodies.clear()
+    this.runtimeShapes.clear()
+    this.runtimeMaterials.clear()
     this.scene = null
     this.frame = 0
   }
@@ -250,14 +284,32 @@ export class CannonPhysicsWorld {
     return world
   }
 
-  private createBodyState(desc: PhysicsBodyDesc): BodyState {
+  private createBodyState(
+    desc: PhysicsBodyDesc,
+    shapeMap: Map<number, PhysicsShapeDesc> = this.shapes,
+  ): BodyState {
     const world = this.ensureWorld()
     const body = createCannonSceneRigidBody({
       world,
-      shapeMap: this.shapes,
+      shapeMap,
       desc,
     })
     return { desc, body }
+  }
+
+  private removeRuntimeBodyById(bodyId: number): void {
+    const state = this.runtimeBodies.get(bodyId)
+    if (!state) {
+      return
+    }
+    try {
+      this.world?.removeBody?.(state.body)
+    } catch {}
+    this.runtimeBodies.delete(bodyId)
+    this.runtimeShapes.delete(state.desc.shapeId)
+    if (state.desc.materialId != null) {
+      this.runtimeMaterials.delete(state.desc.materialId)
+    }
   }
 
   private createVehicleState(desc: PhysicsVehicleDesc): VehicleState {

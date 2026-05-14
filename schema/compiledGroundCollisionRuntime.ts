@@ -2,6 +2,7 @@ import * as THREE from 'three'
 
 import {
   deserializeCompiledGroundCollisionTile,
+  type CompiledGroundCollisionTileData,
   type CompiledGroundCollisionTileRecord,
   type CompiledGroundManifest,
 } from './compiledGround'
@@ -26,6 +27,8 @@ import {
 
 type HeightfieldShapeDefinition = Extract<RigidbodyPhysicsShape, { kind: 'heightfield' }>
 
+const GROUND_COLLISION_RADIUS_METERS = 150
+
 export type CompiledGroundCollisionRuntimeState = {
   enabled: boolean
   sourceId: string
@@ -40,7 +43,7 @@ type CompiledGroundCollisionRuntimeDeps = {
   createBody: (
     node: SceneNode,
     component: SceneNodeComponentState<RigidbodyComponentProps>,
-    shapeDefinition: HeightfieldShapeDefinition | null,
+    shapeDefinition: RigidbodyPhysicsShape | null,
     object: THREE.Object3D,
   ) => { body: PhysicsBodyLike; orientationAdjustment: PhysicsOrientationAdjustment | null } | null
   loggerTag?: string
@@ -63,8 +66,147 @@ type PendingEntry = {
   promise: Promise<void>
 }
 
+type CollisionTileWindow = {
+  activeKeys: string[]
+  retainedKeys: string[]
+  desiredRecords: CompiledGroundCollisionTileRecord[]
+}
+
+const compiledGroundCameraLocalHelper = new THREE.Vector3()
+
 function uniqueSortedKeys(keys: Iterable<string> | null | undefined): string[] {
   return Array.from(new Set(Array.from(keys ?? []).map((key) => key.trim()).filter((key) => key.length > 0))).sort()
+}
+
+function distanceSquaredPointToRect(
+  x: number,
+  z: number,
+  minX: number,
+  maxX: number,
+  minZ: number,
+  maxZ: number,
+): number {
+  const dx = x < minX ? minX - x : x > maxX ? x - maxX : 0
+  const dz = z < minZ ? minZ - z : z > maxZ ? z - maxZ : 0
+  return dx * dx + dz * dz
+}
+
+function convertHeightsToMatrix(
+  heights: Float32Array,
+  rows: number,
+  columns: number,
+): number[][] {
+  const pointsPerRow = columns + 1
+  const matrix: number[][] = []
+  for (let column = 0; column <= columns; column += 1) {
+    const values: number[] = []
+    for (let row = rows; row >= 0; row -= 1) {
+      values.push(heights[row * pointsPerRow + column] ?? 0)
+    }
+    matrix.push(values)
+  }
+  return matrix
+}
+
+function buildHeightfieldShapeFromCompiledTile(
+  record: CompiledGroundCollisionTileRecord,
+  data: CompiledGroundCollisionTileData,
+): HeightfieldShapeDefinition | null {
+  const rows = Math.max(1, Math.trunc(Number(data.header.rows) || 0))
+  const columns = Math.max(1, Math.trunc(Number(data.header.columns) || 0))
+  const elementSize = Number(data.header.elementSize)
+  if (!Number.isFinite(elementSize) || elementSize <= 1e-6) {
+    return null
+  }
+  return {
+    kind: 'heightfield',
+    matrix: convertHeightsToMatrix(data.heights, rows, columns),
+    elementSize,
+    width: columns * elementSize,
+    depth: rows * elementSize,
+    offset: [record.bounds.minX, record.bounds.minZ, 0],
+    applyScale: false,
+  }
+}
+
+function createStaticCollisionNode(nodeId: string): {
+  node: SceneNode
+  component: SceneNodeComponentState<RigidbodyComponentProps>
+} {
+  const component: SceneNodeComponentState<RigidbodyComponentProps> = {
+    id: `${nodeId}:rigidbody`,
+    type: RIGIDBODY_COMPONENT_TYPE,
+    enabled: true,
+    props: clampRigidbodyComponentProps({
+      bodyType: 'STATIC',
+      mass: 0,
+      targetNodeId: nodeId,
+    }),
+  }
+  return {
+    node: {
+      id: nodeId,
+      name: nodeId,
+      nodeType: 'object',
+      position: { x: 0, y: 0, z: 0 },
+      rotation: { x: 0, y: 0, z: 0 },
+      scale: { x: 1, y: 1, z: 1 },
+      components: {
+        [RIGIDBODY_COMPONENT_TYPE]: component,
+      },
+    } as unknown as SceneNode,
+    component,
+  }
+}
+
+function resolveCollisionTileWindow(
+  groundObject: THREE.Object3D,
+  manifest: CompiledGroundManifest,
+  camera: THREE.Camera,
+  activeRadiusTiles?: number,
+  retainRadiusTiles?: number,
+): CollisionTileWindow {
+  groundObject.updateWorldMatrix(true, false)
+  camera.updateWorldMatrix(true, false)
+  camera.getWorldPosition(compiledGroundCameraLocalHelper)
+  groundObject.worldToLocal(compiledGroundCameraLocalHelper)
+
+  const tileSizeMeters = Math.max(1e-6, Number(manifest.collisionTileSizeMeters) || 1)
+  const resolvedActiveRadiusTiles = Math.max(
+    1,
+    Math.trunc(activeRadiusTiles ?? Math.ceil(GROUND_COLLISION_RADIUS_METERS / tileSizeMeters)),
+  )
+  const resolvedRetainRadiusTiles = Math.max(
+    resolvedActiveRadiusTiles,
+    Math.trunc(retainRadiusTiles ?? (resolvedActiveRadiusTiles + 1)),
+  )
+  const activeRadiusMeters = resolvedActiveRadiusTiles * tileSizeMeters
+  const retainRadiusMeters = resolvedRetainRadiusTiles * tileSizeMeters
+
+  const desired: Array<{ record: CompiledGroundCollisionTileRecord; distSq: number }> = []
+  const retained: string[] = []
+  for (const record of manifest.collisionTiles ?? []) {
+    const distSq = distanceSquaredPointToRect(
+      compiledGroundCameraLocalHelper.x,
+      compiledGroundCameraLocalHelper.z,
+      Number(record.bounds?.minX) || 0,
+      Number(record.bounds?.maxX) || 0,
+      Number(record.bounds?.minZ) || 0,
+      Number(record.bounds?.maxZ) || 0,
+    )
+    if (distSq <= retainRadiusMeters * retainRadiusMeters) {
+      retained.push(record.key)
+      if (distSq <= activeRadiusMeters * activeRadiusMeters) {
+        desired.push({ record, distSq })
+      }
+    }
+  }
+  desired.sort((left, right) => left.distSq - right.distSq)
+  return {
+    activeKeys: desired.map((entry) => entry.record.key),
+    retainedKeys: uniqueSortedKeys(retained),
+    desiredRecords: desired.map((entry) => entry.record),
+  }
 }
 
 export function collectCompiledGroundCollisionTileKeys(
@@ -105,7 +247,6 @@ export function resolveCompiledGroundCollisionRuntimeState(params: {
   }
 }
 
-
 export type CompiledGroundCollisionDebugEntry = {
   nodeId: string
   tileKey: string
@@ -123,21 +264,126 @@ export function createCompiledGroundCollisionRuntime(
 } {
   const instances = new Map<string, RigidbodyInstance>()
   const debugShapes = new Map<string, HeightfieldShapeDefinition[]>()
+  const pendingLoads = new Map<string, PendingEntry>()
+  let residentTileKeys: string[] = []
+  let generation = 0
+  let currentSourceId = ''
+  let currentRevision = -1
 
-
-  function clear(): void {
-
+  function removeInstance(tileKey: string): void {
+    const instance = instances.get(tileKey)
+    if (!instance) {
+      return
+    }
+    removePhysicsBodyBindingBodies(deps.getPhysicsWorld(), instance)
+    instances.delete(tileKey)
+    debugShapes.delete(tileKey)
   }
 
-  // 同步地面碰撞瓦片的主逻辑
+  function clear(): void {
+    generation += 1
+    residentTileKeys = []
+    pendingLoads.clear()
+    Array.from(instances.keys()).forEach(removeInstance)
+    currentSourceId = ''
+    currentRevision = -1
+  }
+
   function sync(params: SyncCompiledGroundCollisionTilesParams): void {
-     
+    if (!params.enabled || !params.camera || !params.manifest?.collisionTiles?.length) {
+      clear()
+      return
     }
+    if (currentSourceId !== params.sourceId || currentRevision !== params.revision) {
+      clear()
+      currentSourceId = params.sourceId
+      currentRevision = params.revision
+    }
+
+    const window = resolveCollisionTileWindow(
+      params.groundObject,
+      params.manifest,
+      params.camera,
+      params.activeRadiusTiles,
+      params.retainRadiusTiles,
+    )
+    const retainedKeySet = new Set(window.retainedKeys)
+    residentTileKeys = window.retainedKeys
+
+    Array.from(instances.keys()).forEach((tileKey) => {
+      if (!retainedKeySet.has(tileKey)) {
+        removeInstance(tileKey)
+      }
+    })
+    Array.from(pendingLoads.keys()).forEach((tileKey) => {
+      if (!retainedKeySet.has(tileKey)) {
+        pendingLoads.delete(tileKey)
+      }
+    })
+
+    for (const record of window.desiredRecords) {
+      if (instances.has(record.key) || pendingLoads.has(record.key)) {
+        continue
+      }
+      const pendingSignature = `${params.sourceId}|${params.revision}|${record.key}|${record.path}`
+      const pendingGeneration = generation
+      const promise = params.loadTileData(record)
+        .then((buffer) => {
+          const pending = pendingLoads.get(record.key)
+          if (!pending || pending.signature !== pendingSignature) {
+            return
+          }
+          if (pendingGeneration !== generation || !retainedKeySet.has(record.key)) {
+            return
+          }
+          const tileData = deserializeCompiledGroundCollisionTile(buffer)
+          if (!tileData) {
+            return
+          }
+          const shape = buildHeightfieldShapeFromCompiledTile(record, tileData)
+          if (!shape) {
+            return
+          }
+          const { node, component } = createStaticCollisionNode(`ground-collision:${params.sourceId}:compiled:${record.key}`)
+          const bodyResult = deps.createBody(node, component, shape, params.groundObject)
+          if (!bodyResult?.body) {
+            debugShapes.set(record.key, [shape])
+            return
+          }
+          const world = deps.ensurePhysicsWorld()
+          addPhysicsBodyToWorld(world, bodyResult.body)
+          ;(bodyResult.body as PhysicsBodyLike & { name?: string }).name = `compiled-ground:${params.sourceId}:${record.key}`
+          instances.set(record.key, {
+            nodeId: node.id,
+            body: bodyResult.body,
+            bodies: [bodyResult.body],
+            object: params.groundObject,
+            orientationAdjustment: bodyResult.orientationAdjustment,
+            syncObjectFromBody: false,
+            signature: pendingSignature,
+          })
+          debugShapes.set(record.key, [shape])
+        })
+        .catch(() => {
+          // Ignore transient tile load failures; the next sync will retry if needed.
+        })
+        .finally(() => {
+          const currentPending = pendingLoads.get(record.key)
+          if (currentPending?.signature === pendingSignature) {
+            pendingLoads.delete(record.key)
+          }
+        })
+      pendingLoads.set(record.key, {
+        signature: pendingSignature,
+        promise,
+      })
+    }
+  }
 
   return {
     clear,
     sync,
-    getActiveTileKeys: () => Array.from(instances.keys()),
+    getActiveTileKeys: () => [...residentTileKeys],
     getDebugEntries: () => Array.from(instances.entries()).map(([tileKey, instance]) => ({
       nodeId: instance.nodeId,
       tileKey,

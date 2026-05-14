@@ -386,20 +386,6 @@ function collectTerrainScatterRuntimeRequiredConfigAssetIds(
   })
 }
 
-function collectTerrainPaintAssetDependencies(
-  groundSurfaceChunks: GroundDynamicMesh['groundSurfaceChunks'] | null | undefined,
-  bakedTextureAssetId: string | null | undefined,
-  bucket: Set<string>,
-) {
-  collectAssetIdCandidate(bucket, bakedTextureAssetId)
-  Object.values(groundSurfaceChunks ?? {}).forEach((chunkRef) => {
-    const textureAssetId = typeof chunkRef?.textureAssetId === 'string' ? chunkRef.textureAssetId.trim() : ''
-    if (textureAssetId) {
-      bucket.add(textureAssetId)
-    }
-  })
-}
-
 function collectGroundScatterAssetDependencies(scene: StoredSceneDocument, bucket: Set<string>) {
   const groundNode = findGroundNode(scene.nodes ?? [])
   if (!groundNode || groundNode.dynamicMesh?.type !== 'Ground') {

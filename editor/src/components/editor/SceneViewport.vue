@@ -11203,29 +11203,6 @@ function getGroundNodeFromStore(): SceneNode | null {
   return sceneStore.groundNode
 }
 
-function cloneGroundSurfaceChunkMap(
-  source: GroundDynamicMesh['groundSurfaceChunks'] | null | undefined,
-): GroundDynamicMesh['groundSurfaceChunks'] {
-  if (!source) {
-    return null
-  }
-  const result: NonNullable<GroundDynamicMesh['groundSurfaceChunks']> = {}
-  Object.entries(source).forEach(([chunkKey, chunkRef]) => {
-    const normalizedKey = chunkKey.trim()
-    const textureAssetId = typeof chunkRef?.textureAssetId === 'string' ? chunkRef.textureAssetId.trim() : ''
-    if (!normalizedKey || !textureAssetId) {
-      return
-    }
-    const revision = Number.isFinite(chunkRef?.revision)
-      ? Math.max(0, Math.trunc(chunkRef!.revision))
-      : 0
-    result[normalizedKey] = {
-      textureAssetId,
-      revision,
-    }
-  })
-  return Object.keys(result).length ? result : null
-}
 
 function shouldForceDenseGroundMeshForViewport(
   tool = activeBuildTool.value,

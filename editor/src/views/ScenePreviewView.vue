@@ -41,7 +41,6 @@ import {
 	type GradientBackgroundDome,
 	type GroundChunkManifest,
 	type GroundDynamicMesh,
-	type GroundSurfaceChunkTextureMap,
 	type GroundRuntimeDynamicMesh,
 	type LanternSlideDefinition,
 	type SceneAssetRegistryEntry,
@@ -57,7 +56,18 @@ import {
 	extractSkycubeZipFaces,
 } from '@schema/index'
 import { buildPhysicsSceneAsset } from '@schema/physicsSceneAsset'
-import { PHYSICS_BODY_TRANSFORM_STRIDE, type PhysicsBackendPreference, type PhysicsBridge, type PhysicsSceneAsset, type PhysicsStepFrame, type PhysicsTransform } from '@harmony/physics-core'
+import {
+	PHYSICS_BODY_TRANSFORM_STRIDE,
+	type PhysicsAddRuntimeBodiesCommand,
+	type PhysicsBackendPreference,
+	type PhysicsBodyDesc,
+	type PhysicsBridge,
+	type PhysicsRuntimeBodyEntry,
+	type PhysicsSceneAsset,
+	type PhysicsShapeDesc,
+	type PhysicsStepFrame,
+	type PhysicsTransform,
+} from '@harmony/physics-core'
 import { createScenePreviewPhysicsBridge } from '@/physics/createScenePreviewPhysicsBridge'
  
 import {
@@ -94,9 +104,6 @@ import {
 	resolveCompiledGroundCollisionRuntimeState,
 } from '@schema/compiledGroundCollisionRuntime'
 import {
-	collectLoadedCompiledGroundChunkKeys,
-} from '@schema/compiledGroundRuntime'
-import {
 	resolveInfiniteGroundChunkCollisionRuntimeState,
 } from '@schema/infiniteGroundChunkCollisions'
 import {
@@ -121,12 +128,12 @@ import {
 } from '@schema/sceneCsm'
 import { buildGroundAirWallDefinitions } from '@schema/airWall'
 import { createDefaultGroundSurfacePreviewLoaders, syncGroundSurfacePreviewForGround } from '@schema/groundSurfacePreview'
-import { getVisibleInfiniteGroundChunkKeys } from '@schema/groundMesh'
 import {
 	type PhysicsBodyBindingEntry as RigidbodyInstance,
 	type PhysicsOrientationAdjustment as RigidbodyOrientationAdjustment,
 	syncBodyFromObject as syncSharedBodyFromObject,
 } from '@schema/physicsBodySync'
+import type { PhysicsWorldLike } from '@schema/physicsRuntimeBridge'
 import { loadNodeObject } from '@schema/modelAssetLoader'
 import {
 	getCachedModelObject,
@@ -2094,6 +2101,9 @@ let cannonPhysicsDebuggerRoot: THREE.Group | null = null
 let cannonPhysicsDebugger: CannonEsDebuggerPro | null = null
 let cannonPhysicsWorld: CANNON.World | null = null
 let airWallDebugGroup: THREE.Group | null = null
+let previewGroundCollisionNextRuntimeId = 0x70000000
+let previewGroundCollisionBridgeMutationChain: Promise<void> = Promise.resolve()
+const previewGroundCollisionRuntimeBodyIds = new Set<number>()
 const rigidbodyDebugMaterial = new THREE.LineBasicMaterial({
 	color: 0xffc107,
 	transparent: true,
@@ -8817,7 +8827,8 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
 	}
 	if (shouldUpdateGroundCollisionSystems && currentDocument) {
 		const groundCollisionChanged = syncScenePreviewGroundCollisionRuntimeHost(currentDocument, groundCollisionReferencePosition)
-		if (groundCollisionChanged && physicsEnvironmentEnabled.value && physicsBridgeSceneLoaded) {
+		const hasDynamicGroundCollisionBridgeRuntime = resolveScenePreviewGroundCollisionRuntimeDeps() !== null
+		if (groundCollisionChanged && physicsEnvironmentEnabled.value && physicsBridgeSceneLoaded && !hasDynamicGroundCollisionBridgeRuntime) {
 			const nextGroundCollisionSignature = resolveScenePreviewGroundCollisionSignature(currentDocument)
 			if (nextGroundCollisionSignature && nextGroundCollisionSignature !== currentPhysicsBridgeGroundCollisionSignature) {
 				currentPhysicsBridgeGroundCollisionSignature = nextGroundCollisionSignature
@@ -10072,6 +10083,244 @@ function resolveScenePreviewGroundChunkDataLoader(sceneId: string): ((chunkKey: 
 	return async (chunkKey) => scenesStore.loadGroundChunkData(trimmedSceneId, chunkKey)
 }
 
+type BridgeRuntimePhysicsBody = {
+	__runtimeBodyEntry: PhysicsRuntimeBodyEntry
+	position: { x: number; y: number; z: number; set: (x: number, y: number, z: number) => unknown }
+	quaternion: { x: number; y: number; z: number; w: number; set: (x: number, y: number, z: number, w: number) => unknown }
+	velocity: { x: number; y: number; z: number; set: (x: number, y: number, z: number) => unknown }
+	angularVelocity: { x: number; y: number; z: number; set: (x: number, y: number, z: number) => unknown }
+	updateMassProperties?: () => unknown
+	linearDamping?: number
+	angularDamping?: number
+	sleep?: () => unknown
+}
+
+function createGroundCollisionRuntimeVec3(x = 0, y = 0, z = 0) {
+	return {
+		x,
+		y,
+		z,
+		set(nextX: number, nextY: number, nextZ: number) {
+			this.x = nextX
+			this.y = nextY
+			this.z = nextZ
+			return this
+		},
+	}
+}
+
+function nextPreviewGroundCollisionRuntimeId(): number {
+	previewGroundCollisionNextRuntimeId += 1
+	return previewGroundCollisionNextRuntimeId
+}
+
+function flattenHeightfieldShapeHeights(shape: Extract<RigidbodyPhysicsShape, { kind: 'heightfield' }>): Float32Array {
+	const columnCount = shape.matrix.length
+	const rowCount = shape.matrix[0]?.length ?? 0
+	const values = new Float32Array(columnCount * rowCount)
+	let offset = 0
+	for (let column = 0; column < columnCount; column += 1) {
+		const columnValues = shape.matrix[column] ?? []
+		for (let row = 0; row < rowCount; row += 1) {
+			values[offset] = columnValues[row] ?? 0
+			offset += 1
+		}
+	}
+	return values
+}
+
+function createBridgeRuntimePhysicsBodyEntry(
+	shapeDefinition: RigidbodyPhysicsShape,
+	object: THREE.Object3D,
+): PhysicsRuntimeBodyEntry | null {
+	object.updateMatrixWorld(true)
+	const worldPosition = new THREE.Vector3()
+	const worldQuaternion = new THREE.Quaternion()
+	const worldScale = new THREE.Vector3()
+	object.matrixWorld.decompose(worldPosition, worldQuaternion, worldScale)
+	const bodyId = nextPreviewGroundCollisionRuntimeId()
+	const materialId = null
+	let shapeDesc: PhysicsShapeDesc
+	let shapeId = nextPreviewGroundCollisionRuntimeId()
+
+	if (shapeDefinition.kind === 'heightfield') {
+		const rows = shapeDefinition.matrix[0]?.length ?? 0
+		const columns = shapeDefinition.matrix.length
+		if (rows <= 1 || columns <= 1) {
+			return null
+		}
+		shapeDesc = {
+			id: shapeId,
+			kind: 'heightfield',
+			rows,
+			columns,
+			elementSize: shapeDefinition.elementSize,
+			heights: flattenHeightfieldShapeHeights(shapeDefinition),
+			localOffset: [
+				shapeDefinition.offset?.[0] ?? 0,
+				shapeDefinition.offset?.[1] ?? 0,
+				shapeDefinition.offset?.[2] ?? 0,
+			],
+		}
+	} else if (shapeDefinition.kind === 'box') {
+		const childShapeId = shapeId
+		const compoundShapeId = nextPreviewGroundCollisionRuntimeId()
+		const boxShape: Extract<PhysicsShapeDesc, { kind: 'box' }> = {
+			id: childShapeId,
+			kind: 'box',
+			halfExtents: [
+				shapeDefinition.halfExtents[0],
+				shapeDefinition.halfExtents[1],
+				shapeDefinition.halfExtents[2],
+			],
+		}
+		const compoundShape: Extract<PhysicsShapeDesc, { kind: 'compound' }> = {
+			id: compoundShapeId,
+			kind: 'compound',
+			children: [
+				{
+					shapeId: childShapeId,
+					transform: {
+						position: [
+							shapeDefinition.offset?.[0] ?? 0,
+							shapeDefinition.offset?.[1] ?? 0,
+							shapeDefinition.offset?.[2] ?? 0,
+						],
+						rotation: [0, 0, 0, 1],
+					},
+				},
+			],
+		}
+		shapeId = compoundShapeId
+		return {
+			shapes: [boxShape, compoundShape],
+			body: {
+				id: bodyId,
+				type: 'static',
+				mass: 0,
+				materialId,
+				shapeId,
+				transform: {
+					position: [worldPosition.x, worldPosition.y, worldPosition.z],
+					rotation: [worldQuaternion.x, worldQuaternion.y, worldQuaternion.z, worldQuaternion.w],
+				},
+			},
+		}
+	} else {
+		return null
+	}
+
+	const body: PhysicsBodyDesc = {
+		id: bodyId,
+		type: 'static',
+		mass: 0,
+		materialId,
+		shapeId,
+		transform: {
+			position: [worldPosition.x, worldPosition.y, worldPosition.z],
+			rotation: [worldQuaternion.x, worldQuaternion.y, worldQuaternion.z, worldQuaternion.w],
+		},
+	}
+	return {
+		shapes: [shapeDesc],
+		body,
+	}
+}
+
+function createBridgeRuntimePhysicsBody(entry: PhysicsRuntimeBodyEntry): BridgeRuntimePhysicsBody {
+	return {
+		__runtimeBodyEntry: entry,
+		position: createGroundCollisionRuntimeVec3(),
+		quaternion: {
+			x: 0,
+			y: 0,
+			z: 0,
+			w: 1,
+			set(nextX: number, nextY: number, nextZ: number, nextW: number) {
+				this.x = nextX
+				this.y = nextY
+				this.z = nextZ
+				this.w = nextW
+				return this
+			},
+		},
+		velocity: createGroundCollisionRuntimeVec3(),
+		angularVelocity: createGroundCollisionRuntimeVec3(),
+	}
+}
+
+function enqueuePreviewGroundCollisionBridgeMutation(task: () => Promise<void>): void {
+	previewGroundCollisionBridgeMutationChain = previewGroundCollisionBridgeMutationChain
+		.then(task)
+		.catch((error) => {
+			console.warn('[ScenePreview] Ground collision bridge mutation failed', error)
+		})
+}
+
+function resolveScenePreviewGroundCollisionRuntimeDeps(): NonNullable<
+	Parameters<typeof syncGroundCollisionRuntimeHost>[0]['runtimeDeps']
+> | null {
+	if (!physicsEnvironmentEnabled.value) {
+		return null
+	}
+	if (!physicsBridge || !physicsBridgeSceneLoaded) {
+		return null
+	}
+	const bridgeWorld: PhysicsWorldLike = {
+		addBody(body) {
+			const runtimeBody = body as BridgeRuntimePhysicsBody | null
+			const entry = runtimeBody?.__runtimeBodyEntry
+			if (!entry) {
+				return
+			}
+			previewGroundCollisionRuntimeBodyIds.add(entry.body.id)
+			enqueuePreviewGroundCollisionBridgeMutation(async () => {
+				await physicsBridge?.addRuntimeBodies({
+					bodies: [entry],
+				} satisfies PhysicsAddRuntimeBodiesCommand)
+			})
+		},
+		removeBody(body) {
+			const runtimeBody = body as BridgeRuntimePhysicsBody | null
+			const bodyId = runtimeBody?.__runtimeBodyEntry?.body.id
+			if (!bodyId || !previewGroundCollisionRuntimeBodyIds.has(bodyId)) {
+				return
+			}
+			previewGroundCollisionRuntimeBodyIds.delete(bodyId)
+			enqueuePreviewGroundCollisionBridgeMutation(async () => {
+				await physicsBridge?.removeRuntimeBodies({
+					bodyIds: [bodyId],
+				})
+			})
+		},
+	}
+	return {
+		getPhysicsWorld: () => bridgeWorld,
+		ensurePhysicsWorld: () => bridgeWorld,
+		createBody: (
+			node: SceneNode,
+			component: SceneNodeComponentState<RigidbodyComponentProps>,
+			shapeDefinition: RigidbodyPhysicsShape | null,
+			object: THREE.Object3D,
+		) => {
+			void node
+			void component
+			if (!shapeDefinition) {
+				return null
+			}
+			const entry = createBridgeRuntimePhysicsBodyEntry(shapeDefinition, object)
+			if (!entry) {
+				return null
+			}
+			return {
+				body: createBridgeRuntimePhysicsBody(entry),
+				orientationAdjustment: null,
+			}
+		},
+		loggerTag: 'ScenePreviewGroundCollision',
+	}
+}
+
 async function syncScenePreviewGroundChunkManifest(document: SceneJsonExportDocument | null): Promise<void> {
 	if (!document) {
 		currentGroundChunkManifestSceneId = null
@@ -10102,7 +10351,6 @@ async function syncScenePreviewGroundChunkManifest(document: SceneJsonExportDocu
 
 function resolveGroundCollisionReferenceWorld(targetPosition: THREE.Vector3): boolean {
 	const referenceNodeId = vehicleDriveState.active ? vehicleDriveState.nodeId : null
-	const referenceObject = referenceNodeId ? (nodeObjectMap.get(referenceNodeId) ?? null) : null
 	if (referenceNodeId && resolveVehicleOrObjectWorldPosition({
 		nodeId: referenceNodeId,
 		vehicleInstances,
@@ -10142,36 +10390,6 @@ function shouldUpdateGroundCollisionForFrame(delta: number, referenceWorldPositi
 	return true
 }
 
-function syncScenePreviewGroundCollisionRuntimeLoadedTileKeys(document: SceneJsonExportDocument | null): boolean {
-	if (!document) {
-		return false
-	}
-	const groundNode = findGroundNode(document.nodes)
-	const groundMesh = groundNode?.dynamicMesh as GroundRuntimeDynamicMesh | null | undefined
-	if (!groundNode || !isGroundDynamicMesh(groundMesh)) {
-		return false
-	}
-	const groundObject = nodeObjectMap.get(groundNode.id) ?? null
-	if (!groundObject) {
-		return false
-	}
-
-	const groundUserData = groundNode.userData && typeof groundNode.userData === 'object'
-		? (groundNode.userData as Record<string, unknown>)
-		: {}
-	const compiledManifest = groundUserData.compiledGroundManifest as { revision?: unknown } | null | undefined
-	const compiledKeys = compiledManifest
-		? collectLoadedCompiledGroundChunkKeys(groundObject, compiledManifest as any)
-		: []
-	const infiniteKeys = groundMesh.terrainMode === 'infinite'
-		? getVisibleInfiniteGroundChunkKeys(groundObject)
-		: []
-	return syncGroundCollisionRuntimeLoadedTileKeys(groundObject, groundMesh, {
-		compiledKeys,
-		infiniteKeys,
-	})
-}
-
 function syncScenePreviewGroundCollisionRuntimeHost(
 	document: SceneJsonExportDocument | null,
 	referenceWorldPosition: THREE.Vector3 | null,
@@ -10188,8 +10406,6 @@ function syncScenePreviewGroundCollisionRuntimeHost(
 	if (!groundObject) {
 		return false
 	}
-	const referenceNodeId = vehicleDriveState.active ? vehicleDriveState.nodeId : null
-	const referenceObject = referenceNodeId ? (nodeObjectMap.get(referenceNodeId) ?? null) : null
 	if (!referenceWorldPosition || !physicsEnvironmentEnabled.value) {
 		clearGroundCollisionRuntimeHost(groundObject)
 		return false
@@ -10211,6 +10427,7 @@ function syncScenePreviewGroundCollisionRuntimeHost(
 		loadGroundChunkData: currentGroundChunkManifest
 			? resolveScenePreviewGroundChunkDataLoader(document.id ?? '')
 			: undefined,
+		runtimeDeps: resolveScenePreviewGroundCollisionRuntimeDeps(),
 	})
 	const now = performance.now()
 	const diagnosticSignature = [
@@ -10326,6 +10543,7 @@ async function loadScenePreviewPhysicsBridgeScene(document: SceneJsonExportDocum
 	const asset = buildPhysicsSceneAsset(document)
 	try {
 		const bridge = await ensureScenePreviewPhysicsBridgeReady()
+		previewGroundCollisionRuntimeBodyIds.clear()
 		await bridge.loadScene(asset)
 		if (requestId !== physicsBridgeSceneRequestId) {
 			return
@@ -10701,6 +10919,7 @@ async function disposeScenePreviewPhysicsBridgeScene(): Promise<void> {
 		return
 	}
 	try {
+		previewGroundCollisionRuntimeBodyIds.clear()
 		await physicsBridge.disposeScene()
 	} catch (error) {
 		console.warn('[ScenePreview] Failed to dispose physics bridge scene', error)
@@ -10726,6 +10945,7 @@ async function destroyScenePreviewPhysicsBridge(): Promise<void> {
 	physicsBridgeStepPromise = null
 	physicsBridgeBodySyncPromise = null
 	try {
+		previewGroundCollisionRuntimeBodyIds.clear()
 		await bridge.destroy()
 	} catch (error) {
 		console.warn('[ScenePreview] Failed to destroy physics bridge', error)

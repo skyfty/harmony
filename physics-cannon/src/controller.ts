@@ -46,6 +46,18 @@ export function createCannonPhysicsController(options: CreateCannonPhysicsContro
       }
       world.setVehicleInput(command)
     },
+    async addRuntimeBodies(command) {
+      if (!initialized) {
+        throw new Error('Cannon physics controller is not initialized')
+      }
+      world.addRuntimeBodies(command)
+    },
+    async removeRuntimeBodies(command) {
+      if (!initialized) {
+        throw new Error('Cannon physics controller is not initialized')
+      }
+      world.removeRuntimeBodies(command)
+    },
     async raycast(command): Promise<PhysicsRaycastHit | null> {
       if (!initialized) {
         throw new Error('Cannon physics controller is not initialized')

@@ -139,6 +139,12 @@ export type PhysicsSceneAsset = {
   vehicles: PhysicsVehicleDesc[]
 }
 
+export type PhysicsRuntimeBodyEntry = {
+  materials?: PhysicsMaterialDesc[]
+  shapes: PhysicsShapeDesc[]
+  body: PhysicsBodyDesc
+}
+
 export type PhysicsBodyTransformCommand = {
   bodyId: number
   transform: PhysicsTransform
@@ -164,6 +170,14 @@ export type PhysicsRaycastHit = {
   point: PhysicsVector3
   normal: PhysicsVector3
   distance: number
+}
+
+export type PhysicsAddRuntimeBodiesCommand = {
+  bodies: PhysicsRuntimeBodyEntry[]
+}
+
+export type PhysicsRemoveRuntimeBodiesCommand = {
+  bodyIds: number[]
 }
 
 export type PhysicsWorldSettings = {

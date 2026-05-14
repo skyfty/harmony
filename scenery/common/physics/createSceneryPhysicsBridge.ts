@@ -1,4 +1,5 @@
 import type {
+  PhysicsAddRuntimeBodiesCommand,
   PhysicsBackendPreference,
   PhysicsBodyTransformCommand,
   PhysicsBridge,
@@ -6,6 +7,7 @@ import type {
   PhysicsInitOptions,
   PhysicsRaycastCommand,
   PhysicsRaycastHit,
+  PhysicsRemoveRuntimeBodiesCommand,
   PhysicsSceneAsset,
   PhysicsStepFrame,
   PhysicsVehicleInputCommand,
@@ -112,6 +114,16 @@ class LazySceneryPhysicsBridge implements PhysicsBridge {
   async setVehicleInput(command: PhysicsVehicleInputCommand): Promise<void> {
     const bridge = await this.ensureBridge()
     await bridge.setVehicleInput(command)
+  }
+
+  async addRuntimeBodies(command: PhysicsAddRuntimeBodiesCommand): Promise<void> {
+    const bridge = await this.ensureBridge()
+    await bridge.addRuntimeBodies(command)
+  }
+
+  async removeRuntimeBodies(command: PhysicsRemoveRuntimeBodiesCommand): Promise<void> {
+    const bridge = await this.ensureBridge()
+    await bridge.removeRuntimeBodies(command)
   }
 
   async raycast(command: PhysicsRaycastCommand): Promise<PhysicsRaycastHit | null> {

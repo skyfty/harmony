@@ -1,9 +1,11 @@
 import type {
+  PhysicsAddRuntimeBodiesCommand,
   PhysicsBodyTransformCommand,
   PhysicsBridgeInitResult,
   PhysicsInitOptions,
   PhysicsRaycastCommand,
   PhysicsRaycastHit,
+  PhysicsRemoveRuntimeBodiesCommand,
   PhysicsSceneAsset,
   PhysicsVehicleInputCommand,
 } from './types'
@@ -26,6 +28,8 @@ export type PhysicsWorkerRequest =
   | { id: number; type: 'step'; payload: { deltaMs: number } }
   | { id: number; type: 'set-body-transform'; payload: PhysicsBodyTransformCommand }
   | { id: number; type: 'set-vehicle-input'; payload: PhysicsVehicleInputCommand }
+  | { id: number; type: 'add-runtime-bodies'; payload: PhysicsAddRuntimeBodiesCommand }
+  | { id: number; type: 'remove-runtime-bodies'; payload: PhysicsRemoveRuntimeBodiesCommand }
   | { id: number; type: 'raycast'; payload: PhysicsRaycastCommand }
   | { id: number; type: 'dispose-scene'; payload: null }
   | { id: number; type: 'destroy'; payload: null }
@@ -36,6 +40,8 @@ export type PhysicsWorkerSuccessResponse =
   | { id: number; ok: true; type: 'step'; payload: PhysicsStepFrame }
   | { id: number; ok: true; type: 'set-body-transform'; payload: null }
   | { id: number; ok: true; type: 'set-vehicle-input'; payload: null }
+  | { id: number; ok: true; type: 'add-runtime-bodies'; payload: null }
+  | { id: number; ok: true; type: 'remove-runtime-bodies'; payload: null }
   | { id: number; ok: true; type: 'raycast'; payload: PhysicsRaycastHit | null }
   | { id: number; ok: true; type: 'dispose-scene'; payload: null }
   | { id: number; ok: true; type: 'destroy'; payload: null }
