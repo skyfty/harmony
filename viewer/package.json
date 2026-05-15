@@ -10,7 +10,7 @@
     "verify:mp-weixin-main-package": "node ./scripts/verify-mp-weixin-main-package.mjs",
     "verify:mp-weixin-main-package-source": "node ./scripts/verify-mp-weixin-main-package-source.mjs",
     "predev:mp-weixin": "pnpm run verify:mp-weixin-main-package-source && pnpm run prepare:shared && pnpm run sync:scenery",
-    "dev:mp-weixin": "pnpm exec cross-env DEBUG=none uni -p mp-weixin --mode mp-weixin.development",
+    "dev:mp-weixin": "pnpm run predev:mp-weixin && pnpm exec cross-env DEBUG=none uni -p mp-weixin --mode mp-weixin.development",
     "prebuild:mp-weixin": "pnpm run prepare:shared && pnpm run prepare:physics && pnpm run sync:scenery",
     "postbuild:mp-weixin": "pnpm run verify:mp-weixin-main-package",
     "build:mp-weixin": "uni build -p mp-weixin",
