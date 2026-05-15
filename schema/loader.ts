@@ -44,9 +44,15 @@ async function safeImport<T>(importer: () => Promise<T>): Promise<T> {
 }
 
 const GLTF_DRACO_ENABLED = (() => {
-  const raw = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env?.VITE_SCENERY_ENABLE_GLTF_DRACO;
-  const normalized = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
-  return normalized !== 'false' && normalized !== '0' && normalized !== 'no';
+  const runtime = globalThis as typeof globalThis & {
+    __HARMONY_RUNTIME__?: {
+      scenery?: {
+        enableGltfDraco?: boolean;
+      };
+    };
+  };
+  const configured = runtime.__HARMONY_RUNTIME__?.scenery?.enableGltfDraco;
+  return configured ?? true;
 })();
 
 function toError(error: unknown, fallbackMessage: string): Error {

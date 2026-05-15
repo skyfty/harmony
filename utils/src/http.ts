@@ -1,3 +1,5 @@
+import { getHarmonyRuntime } from './runtimeConfig';
+
 const TOKEN_STORAGE_KEY = 'miniapp:authToken';
 const DEFAULT_DEV_API_BASE_URL = 'http://localhost:4000/api/mini';
 const DEFAULT_PROD_API_BASE_URL = 'https://v.touchmagic.cn/api/mini';
@@ -33,7 +35,8 @@ type MiniRequestResponse = {
 };
 
 function resolveModeDefault(devValue: string, prodValue: string): string {
-  return import.meta.env?.DEV ? devValue : prodValue;
+  const isDev = getHarmonyRuntime().http?.isDev;
+  return isDev ? devValue : prodValue;
 }
 
 function buildQueryString(query: HttpRequestOptions['query']): string {
@@ -105,7 +108,7 @@ function buildHeaders(options: HttpRequestOptions): Record<string, string> {
 }
 
 export function getBaseUrl(): string {
-  const envBase = (import.meta as any)?.env?.VITE_MINI_TEST_API_BASE || (import.meta as any)?.env?.VITE_MINI_API_BASE;
+  const envBase = getHarmonyRuntime().http?.apiBaseUrl;
   const raw = typeof envBase === 'string' && envBase.length
     ? envBase
     : resolveModeDefault(DEFAULT_DEV_API_BASE_URL, DEFAULT_PROD_API_BASE_URL);
@@ -113,7 +116,7 @@ export function getBaseUrl(): string {
 }
 
 export function getDownloadCdnBaseUrl(): string {
-  const envBase = (import.meta as any)?.env?.VITE_MINI_DOWNLOAD_CDN_BASE;
+  const envBase = getHarmonyRuntime().http?.downloadCdnBaseUrl;
   const raw = typeof envBase === 'string' && envBase.length
     ? envBase
     : resolveModeDefault(DEFAULT_DEV_DOWNLOAD_CDN_BASE, DEFAULT_PROD_DOWNLOAD_CDN_BASE);

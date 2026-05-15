@@ -1,11 +1,27 @@
 // #ifndef H5
 import '@minisheep/mini-program-polyfill-core/wechat-polyfill';
-// import '@minisheep/mini-program-polyfill-core/xml-addon'; // �����Ŀ��ʹ������Ҫ DOMParser ֧�ֵĲ��֣�Ҳ���Ժ������赼�룬����Ӱ��������С
+// import '@minisheep/mini-program-polyfill-core/xml-addon'; // if the project needs DOMParser support later, import it here
 // #endif
-import { createSSRApp } from "vue";
+import { createSSRApp } from 'vue';
 import { createPinia } from 'pinia';
-import App from "./App.vue";
+import App from './App.vue';
 import { installShareSupport } from '@/services/share';
+import { configureHarmonyRuntime } from '@harmony/utils';
+
+configureHarmonyRuntime({
+  http: {
+    isDev: import.meta.env.DEV,
+    apiBaseUrl: import.meta.env.VITE_MINI_TEST_API_BASE || import.meta.env.VITE_MINI_API_BASE,
+    downloadCdnBaseUrl: import.meta.env.VITE_MINI_DOWNLOAD_CDN_BASE,
+    testAccount: {
+      username: import.meta.env.VITE_MINI_TEST_USERNAME,
+      password: import.meta.env.VITE_MINI_TEST_PASSWORD,
+    },
+  },
+  scenery: {
+    enableGltfDraco: String(import.meta.env.VITE_SCENERY_ENABLE_GLTF_DRACO ?? '').trim().toLowerCase() !== 'false',
+  },
+});
 
 export function createApp() {
   const app = createSSRApp(App);

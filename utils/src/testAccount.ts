@@ -1,13 +1,15 @@
 import { post, setAuthToken, getAuthToken } from './http';
+import { getHarmonyRuntime } from './runtimeConfig';
 
 const DEFAULT_USERNAME = 'test';
 const DEFAULT_PASSWORD = 'test1234';
 const DEFAULT_DISPLAY_NAME = 'Test Account';
 
 function resolveCredentials() {
-  const username = import.meta.env?.VITE_MINI_TEST_USER || DEFAULT_USERNAME;
-  const password = import.meta.env?.VITE_MINI_TEST_PASSWORD || DEFAULT_PASSWORD;
-  const displayName = import.meta.env?.VITE_MINI_TEST_DISPLAY_NAME || DEFAULT_DISPLAY_NAME;
+  const configured = getHarmonyRuntime().http?.testAccount;
+  const username = configured?.username || DEFAULT_USERNAME;
+  const password = configured?.password || DEFAULT_PASSWORD;
+  const displayName = configured?.displayName || DEFAULT_DISPLAY_NAME;
   return { username, password, displayName };
 }
 
