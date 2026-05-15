@@ -23,6 +23,11 @@ execSync('pnpm --dir ../tools run build', {
   stdio: 'inherit',
 })
 
+execSync('node ../tools/dist/cli-bin.js sync-schema --repoRoot .. --viewerRoot .', {
+  cwd: projectRoot,
+  stdio: 'inherit',
+})
+
 execSync('node ../tools/dist/cli-bin.js sync-physics --repoRoot .. --viewerRoot .', {
   cwd: projectRoot,
   stdio: 'inherit',

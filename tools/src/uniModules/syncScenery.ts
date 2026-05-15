@@ -21,6 +21,10 @@ export type SyncSceneryToViewerSubpackageOptions = SyncSceneryCommonOptions & {
   viewerRoot: string;
 };
 
+export type SyncSchemaToViewerSubpackageOptions = SyncSceneryCommonOptions & {
+  viewerRoot: string;
+};
+
 export type SyncSceneryToConsumerUniModulesOptions = SyncSceneryCommonOptions & {
   consumerRoot?: string;
 };
@@ -77,6 +81,12 @@ function resolveDestFromProjectRoot(projectRoot: string, dest: string): string {
   return path.isAbsolute(dest) ? dest : path.resolve(projectRoot, dest);
 }
 
+function replaceDirectoryLink(sourceDir: string, targetDir: string): void {
+  rmrf(targetDir);
+  const linkType = process.platform === "win32" ? "junction" : "dir";
+  fs.symlinkSync(sourceDir, targetDir, linkType);
+}
+
 export function syncSceneryToSubpackageUniModules(options: SyncSceneryToSubpackageUniModulesOptions): void {
   const sceneryRoot = sceneryRootFromRepo(options.repoRoot);
 
@@ -111,6 +121,18 @@ export function syncSceneryToViewerSubpackage(options: SyncSceneryToViewerSubpac
     subpackageRoot: "pages/scenery",
     moduleName: "scenery",
   });
+}
+
+export function syncSchemaToViewerSubpackage(options: SyncSchemaToViewerSubpackageOptions): void {
+  const schemaRoot = path.resolve(options.repoRoot, "schema");
+  const schemaMirrorDir = path.resolve(options.viewerRoot, "src/pages/scenery/schema");
+
+  if (!fs.existsSync(schemaRoot)) {
+    throw new Error(`schema root not found: ${schemaRoot}`);
+  }
+
+  replaceDirectoryLink(schemaRoot, schemaMirrorDir);
+  console.log(`[harmony-tools] synced schema mirror -> ${schemaMirrorDir}`);
 }
 
 export function syncSceneryToConsumerUniModules(options: SyncSceneryToConsumerUniModulesOptions): void {

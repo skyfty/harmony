@@ -41,6 +41,9 @@ viewer/src/pages/physics-ammo/engine/
 viewer/src/pages/physics-cannon/engine/
 viewer/src/pages/physics-ammo/vendor/
 
+# Generated schema mirror used by viewer scenery subpackage builds
+viewer/src/pages/scenery/schema/
+
 # WebAssembly / Rust build artifacts and caches
 # Rust build output (moved crate into editor/src/wasm)
 editor/src/wasm/rust-crate/target/

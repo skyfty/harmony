@@ -1,6 +1,6 @@
 {
   "extends": "@vue/tsconfig/tsconfig.json",
-  "include": ["src/env.d.ts", "src/**/*", "src/**/*.vue", "../schema/**/*.ts"],
+  "include": ["src/env.d.ts", "src/**/*", "src/**/*.vue"],
   "exclude": ["src/**/__tests__/*"],
   "compilerOptions": {
     "lib": [
@@ -31,6 +31,8 @@
     "paths": {
       "@/*": ["./src/*"],
       "@schema/*": ["../schema/*"],
+      "@harmony/schema": ["./src/pages/scenery/schema/index.ts"],
+      "@harmony/schema/*": ["./src/pages/scenery/schema/*"],
       "@harmony/physics-ammo": ["./src/pages/physics-ammo/runtime.ts"],
       "@harmony/physics-ammo-source": ["./src/pages/physics-ammo/engine/index.ts"],
       "@harmony/physics-cannon": ["./src/pages/physics-cannon/runtime.ts"],

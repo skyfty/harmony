@@ -32,6 +32,12 @@ export async function main(argv: string[]): Promise<void> {
         await cmdSyncPhysics(rest);
         return;
       }
+    case "sync-schema":
+      {
+        const { cmdSyncSchema } = await import("./commands/syncSchema.js");
+        await cmdSyncSchema(rest);
+        return;
+      }
     case "--help":
     case "-h":
     case undefined:
@@ -53,5 +59,6 @@ Commands:
   fix-esm-extensions [--root <path>] [--skipNodeModules=false]
   process-svg-icons [--project <path>] [--in <relPath>] [--out <relPath>] [--size <px>] [--clean] [--verbose]
   sync-physics [--repoRoot <path>] [--viewerRoot <path>]
+  sync-schema [--repoRoot <path>] [--viewerRoot <path>]
 `);
 }

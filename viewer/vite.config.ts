@@ -14,6 +14,7 @@ const buildTarget = isMp ? 'es2018' : 'es2020';
 const rawVueRuntimeAlias = isMp
   ? '@dcloudio/uni-mp-vue/dist-x/vue.runtime.esm.js'
   : '@dcloudio/uni-h5-vue/dist-x/vue.runtime.esm.js';
+const schemaMirrorPath = fileURLToPath(new URL('./src/pages/scenery/schema', import.meta.url)).replaceAll('\\', '/');
 
 const _require = createRequire(import.meta.url);
 let vueRuntimeAlias: string;
@@ -64,6 +65,7 @@ function resolveManualChunk(id: string): string | undefined {
 
   if (
     normalizedId.includes('/src/pages/scenery/')
+    || normalizedId.includes('/src/pages/scenery/schema/')
     || (
       normalizedId.includes('/schema/')
       && !normalizedId.includes('/schema/dist/physicsBackendBridge.js')
@@ -135,20 +137,22 @@ export default {
     },
   },
   resolve: {
-    alias: {
-      '@harmony/physics-ammo': fileURLToPath(new URL('./src/pages/physics-ammo/runtime.ts', import.meta.url)),
-      '@harmony/physics-ammo-source': fileURLToPath(new URL('./src/pages/physics-ammo/engine', import.meta.url)),
-      '@harmony/physics-core': fileURLToPath(new URL('../physics-core/src', import.meta.url)),
-      '@harmony/physics-bridge': fileURLToPath(new URL('../physics-bridge/src', import.meta.url)),
-      '@harmony/physics-cannon': fileURLToPath(new URL('./src/pages/physics-cannon/runtime.ts', import.meta.url)),
-      '@harmony/physics-cannon-source': fileURLToPath(new URL('./src/pages/physics-cannon/engine', import.meta.url)),
-      'ammojs3': fileURLToPath(new URL('./node_modules/ammojs3', import.meta.url)),
-      'cannon-es': fileURLToPath(new URL('./node_modules/cannon-es', import.meta.url)),
-      'vue': vueRuntimeAlias,
-      'three': fileURLToPath(new URL('./node_modules/three', import.meta.url)),
-      'three/examples': fileURLToPath(new URL('./node_modules/three/examples', import.meta.url)),
-      '@three-examples': fileURLToPath(new URL('./node_modules/three/examples/jsm', import.meta.url)),
-    },
+    alias: [
+      { find: /^@harmony\/schema$/, replacement: `${schemaMirrorPath}/index.ts` },
+      { find: /^@harmony\/schema\/(.*)$/, replacement: `${schemaMirrorPath}/$1` },
+      { find: '@harmony/physics-ammo', replacement: fileURLToPath(new URL('./src/pages/physics-ammo/runtime.ts', import.meta.url)) },
+      { find: '@harmony/physics-ammo-source', replacement: fileURLToPath(new URL('./src/pages/physics-ammo/engine', import.meta.url)) },
+      { find: '@harmony/physics-core', replacement: fileURLToPath(new URL('../physics-core/src', import.meta.url)) },
+      { find: '@harmony/physics-bridge', replacement: fileURLToPath(new URL('../physics-bridge/src', import.meta.url)) },
+      { find: '@harmony/physics-cannon', replacement: fileURLToPath(new URL('./src/pages/physics-cannon/runtime.ts', import.meta.url)) },
+      { find: '@harmony/physics-cannon-source', replacement: fileURLToPath(new URL('./src/pages/physics-cannon/engine', import.meta.url)) },
+      { find: 'ammojs3', replacement: fileURLToPath(new URL('./node_modules/ammojs3', import.meta.url)) },
+      { find: 'cannon-es', replacement: fileURLToPath(new URL('./node_modules/cannon-es', import.meta.url)) },
+      { find: 'vue', replacement: vueRuntimeAlias },
+      { find: 'three', replacement: fileURLToPath(new URL('./node_modules/three', import.meta.url)) },
+      { find: 'three/examples', replacement: fileURLToPath(new URL('./node_modules/three/examples', import.meta.url)) },
+      { find: '@three-examples', replacement: fileURLToPath(new URL('./node_modules/three/examples/jsm', import.meta.url)) },
+    ],
   },
   server: {
     port: 8092,
