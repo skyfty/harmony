@@ -15,10 +15,13 @@ export type SyncSceneryToSubpackageUniModulesOptions = SyncSceneryCommonOptions 
   moduleName?: string;
   /** Optional explicit destination path. If relative, resolved from projectRoot. */
   dest?: string;
+  /** When true, create a directory link to the source instead of copying files. */
+  linkInsteadOfCopy?: boolean;
 };
 
 export type SyncSceneryToViewerSubpackageOptions = SyncSceneryCommonOptions & {
   viewerRoot: string;
+  linkInsteadOfCopy?: boolean;
 };
 
 export type SyncSchemaToViewerSubpackageOptions = SyncSceneryCommonOptions & {
@@ -106,6 +109,12 @@ export function syncSceneryToSubpackageUniModules(options: SyncSceneryToSubpacka
     throw new Error(`scenery root not found: ${sceneryRoot}`);
   }
 
+  if (options.linkInsteadOfCopy) {
+    replaceDirectoryLink(sceneryRoot, dest);
+    console.log(`[harmony-tools] linked scenery -> ${dest}`);
+    return;
+  }
+
   rmrf(dest);
   ensureDir(dest);
 
@@ -125,6 +134,7 @@ export function syncSceneryToViewerSubpackage(options: SyncSceneryToViewerSubpac
     projectRoot: options.viewerRoot,
     subpackageRoot: "pages/scenery",
     moduleName: "scenery",
+    linkInsteadOfCopy: options.linkInsteadOfCopy,
   });
 }
 

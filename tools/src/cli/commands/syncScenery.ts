@@ -27,12 +27,20 @@ export async function cmdSyncScenery(argv: string[]): Promise<void> {
     const dest = args.get("dest");
     const subpackageRoot = args.get("subpackageRoot");
     const moduleName = args.get("moduleName");
+    const linkInsteadOfCopy = args.get("link") === "true";
 
     // Prefer the generic implementation; keep the old function for compatibility.
     if (dest || subpackageRoot || moduleName) {
-      syncSceneryToSubpackageUniModules({ repoRoot, projectRoot, dest, subpackageRoot, moduleName });
+      syncSceneryToSubpackageUniModules({
+        repoRoot,
+        projectRoot,
+        dest,
+        subpackageRoot,
+        moduleName,
+        linkInsteadOfCopy,
+      });
     } else {
-      syncSceneryToViewerSubpackage({ repoRoot, viewerRoot: projectRoot });
+      syncSceneryToViewerSubpackage({ repoRoot, viewerRoot: projectRoot, linkInsteadOfCopy });
     }
     return;
   }
