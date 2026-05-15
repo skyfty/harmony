@@ -27,13 +27,7 @@
 import { computed, ref } from 'vue';
 import { onLoad, onUnload } from '@dcloudio/uni-app';
 import { createPunchRecord, getDownloadCdnBaseUrl, getPunchProgress } from '@harmony/utils';
-import SceneryViewer from './uni_modules/scenery/components/SceneryViewer.vue';
-
-defineOptions({
-  componentPlaceholder: {
-    SceneryViewer: 'view',
-  },
-});
+import SceneryViewer from './uni_modules/scenery/components/SceneryViewer.vue?async';
 
 const projectId = ref<string>('');
 const packageUrl = ref<string>('');

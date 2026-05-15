@@ -10,7 +10,6 @@ import { visualizer } from 'rollup-plugin-visualizer';
 const uniPlatform = process.env.UNI_PLATFORM;
 const isMp = uniPlatform?.startsWith('mp-');
 const buildTarget = isMp ? 'es2018' : 'es2020';
-const useBuiltHarmonyPackages = isMp && process.env.NODE_ENV === 'production';
 
 const rawVueRuntimeAlias = isMp
   ? '@dcloudio/uni-mp-vue/dist-x/vue.runtime.esm.js'
@@ -39,6 +38,10 @@ function resolveAssetFileName(assetInfo: { name?: string }): string | undefined 
   if (!isMp) {
     return undefined;
   }
+  const normalizedName = assetInfo.name?.replaceAll('\\', '/') ?? '';
+  if (normalizedName.includes('ammo.wasm')) {
+    return 'pages/physics-ammo/vendor/[name].[hash][extname]';
+  }
   return undefined;
 }
 
@@ -48,6 +51,43 @@ function resolveManualChunk(id: string): string | undefined {
   }
 
   const normalizedId = id.replaceAll('\\', '/');
+  if (
+    normalizedId.includes('/node_modules/vue/')
+    || normalizedId.includes('/node_modules/@vue/')
+    || normalizedId.includes('/node_modules/@dcloudio/')
+    || normalizedId.includes('/node_modules/@minisheep/mini-program-polyfill-core/')
+    || normalizedId.includes('/node_modules/@minisheep/mini-program-polyfill/')
+    || normalizedId.includes('/node_modules/event-target-shim/')
+  ) {
+    return 'common/vendor';
+  }
+
+  if (
+    normalizedId.includes('/src/pages/scenery/')
+    || (
+      normalizedId.includes('/schema/')
+      && !normalizedId.includes('/schema/dist/physicsBackendBridge.js')
+      && !normalizedId.includes('/schema/dist/physicsBackendTypes.js')
+      && !normalizedId.includes('/schema/dist/physicsBodySync.js')
+      && !normalizedId.includes('/schema/dist/physicsBridgeVehicleInputSync.js')
+      && !normalizedId.includes('/schema/dist/physicsRuntimeBridge.js')
+      && !normalizedId.includes('/schema/dist/physicsEngine.js')
+      && !normalizedId.includes('/schema/dist/physicsShapeResolvers.js')
+    )
+    || normalizedId.includes('/node_modules/three/')
+    || normalizedId.includes('/node_modules/three-mesh-bvh/')
+    || normalizedId.includes('/node_modules/polygon-clipping/')
+    || normalizedId.includes('/node_modules/@msgpack/msgpack/')
+    || normalizedId.includes('/node_modules/robust-predicates/')
+    || normalizedId.includes('/node_modules/splaytree/')
+    || normalizedId.includes('/node_modules/three-csm/')
+    || normalizedId.includes('/node_modules/fflate/')
+    || normalizedId.includes('/node_modules/web-streams-polyfill/')
+    || normalizedId.includes('/node_modules/@minisheep/three-platform-adapter/')
+  ) {
+    return 'pages/scenery/common/vendor';
+  }
+
   if (
     normalizedId.includes('/physics-ammo/src/')
     || normalizedId.includes('/src/pages/physics-ammo/engine/')
@@ -96,12 +136,6 @@ export default {
   },
   resolve: {
     alias: {
-      '@schema': useBuiltHarmonyPackages
-        ? fileURLToPath(new URL('../schema/dist', import.meta.url))
-        : fileURLToPath(new URL('../schema', import.meta.url)),
-      '@harmony/schema': useBuiltHarmonyPackages
-        ? fileURLToPath(new URL('../schema/dist', import.meta.url))
-        : fileURLToPath(new URL('../schema', import.meta.url)),
       '@harmony/physics-ammo': fileURLToPath(new URL('./src/pages/physics-ammo/runtime.ts', import.meta.url)),
       '@harmony/physics-ammo-source': fileURLToPath(new URL('./src/pages/physics-ammo/engine', import.meta.url)),
       '@harmony/physics-core': fileURLToPath(new URL('../physics-core/src', import.meta.url)),
@@ -131,8 +165,6 @@ export default {
     bundleOptimizer({
       enable: isMp
         ? {
-            // Keep async cross-package loading, but avoid vendor normalization that
-            // creates cross-subpackage circular requires in mp-weixin.
             optimization: false,
             'async-import': true,
             'async-component': true,
@@ -143,9 +175,9 @@ export default {
             'async-component': false,
           },
       optimization: {
-        // Disabling this avoids cross-subpackage circular vendor chunks in mp-weixin.
         normalizeVueEntityModule: false,
       },
+      logger: ['optimization'],
     }),
     visualizer({
       emitFile: true,
