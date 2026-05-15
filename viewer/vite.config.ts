@@ -9,6 +9,7 @@ import { visualizer } from 'rollup-plugin-visualizer';
 // https://vitejs.dev/config/
 const uniPlatform = process.env.UNI_PLATFORM;
 const isMp = uniPlatform?.startsWith('mp-');
+const useWorkspaceSourceForH5 = !isMp;
 const buildTarget = isMp ? 'es2018' : 'es2020';
 const sceneOptimizerExcludes = [
   '@harmony/schema',
@@ -30,10 +31,19 @@ const sceneOptimizerExcludes = [
 const rawVueRuntimeAlias = isMp
   ? '@dcloudio/uni-mp-vue/dist-x/vue.runtime.esm.js'
   : '@dcloudio/uni-h5-vue/dist-x/vue.runtime.esm.js';
+const repoRootPath = fileURLToPath(new URL('..', import.meta.url)).replaceAll('\\', '/');
+const scenerySourcePath = fileURLToPath(new URL('../scenery', import.meta.url)).replaceAll('\\', '/');
+const schemaSourcePath = fileURLToPath(new URL('../schema', import.meta.url)).replaceAll('\\', '/');
+const physicsCoreSourcePath = fileURLToPath(new URL('../physics-core/src', import.meta.url)).replaceAll('\\', '/');
+const physicsCannonSourcePath = fileURLToPath(new URL('../physics-cannon/src', import.meta.url)).replaceAll('\\', '/');
+const sceneryPhysicsBridgeSourcePath = fileURLToPath(new URL('../physics-bridge/src', import.meta.url)).replaceAll('\\', '/');
+const utilsSrcPath = fileURLToPath(new URL('../utils/src', import.meta.url)).replaceAll('\\', '/');
+const eventTargetShimPath = fileURLToPath(new URL('./node_modules/event-target-shim/index.mjs', import.meta.url)).replaceAll('\\', '/');
+const webStreamsPolyfillPath = fileURLToPath(new URL('./node_modules/web-streams-polyfill/dist/polyfill.mjs', import.meta.url)).replaceAll('\\', '/');
 const schemaMirrorPath = fileURLToPath(new URL('./src/pages/scenery/schema', import.meta.url)).replaceAll('\\', '/');
 const physicsCoreMirrorPath = fileURLToPath(new URL('./src/pages/scenery/physics-core', import.meta.url)).replaceAll('\\', '/');
+const physicsCannonMirrorPath = fileURLToPath(new URL('./src/pages/scenery/physics-cannon', import.meta.url)).replaceAll('\\', '/');
 const sceneryPhysicsBridgeMirrorPath = fileURLToPath(new URL('./src/pages/scenery/physics-bridge', import.meta.url)).replaceAll('\\', '/');
-const utilsSrcPath = fileURLToPath(new URL('../utils/src', import.meta.url)).replaceAll('\\', '/');
 
 const _require = createRequire(import.meta.url);
 let vueRuntimeAlias: string;
@@ -191,11 +201,45 @@ export default {
   },
   resolve: {
     alias: [
-      { find: /^@harmony\/schema$/, replacement: `${schemaMirrorPath}/index.ts` },
-      { find: /^@harmony\/schema\/(.*)$/, replacement: `${schemaMirrorPath}/$1` },
-      { find: /^@harmony\/physics-core$/, replacement: `${physicsCoreMirrorPath}/index.ts` },
-      { find: /^@harmony\/physics-core\/(.*)$/, replacement: `${physicsCoreMirrorPath}/$1` },
-      { find: /^@harmony\/utils$/, replacement: `${utilsSrcPath}/index.ts` },
+      ...(useWorkspaceSourceForH5
+        ? [
+            { find: /^@harmony\/scenery$/, replacement: scenerySourcePath },
+            { find: /^@harmony\/scenery\/(.*)$/, replacement: `${scenerySourcePath}/$1` },
+            { find: /^@harmony\/schema$/, replacement: `${schemaSourcePath}/index.ts` },
+            { find: /^@harmony\/schema\/(.*)$/, replacement: `${schemaSourcePath}/$1` },
+            { find: /^@harmony\/physics-core$/, replacement: `${physicsCoreSourcePath}/index.ts` },
+            { find: /^@harmony\/physics-core\/(.*)$/, replacement: `${physicsCoreSourcePath}/$1` },
+            { find: /^@harmony\/physics-cannon$/, replacement: `${physicsCannonSourcePath}/index.ts` },
+            { find: /^@harmony\/physics-cannon\/(.*)$/, replacement: `${physicsCannonSourcePath}/$1` },
+            { find: /^@harmony\/physics-bridge$/, replacement: `${sceneryPhysicsBridgeSourcePath}/index.ts` },
+            { find: /^@harmony\/physics-bridge\/(.*)$/, replacement: `${sceneryPhysicsBridgeSourcePath}/$1` },
+            { find: '@harmony/physics-bridge/wechat', replacement: `${sceneryPhysicsBridgeSourcePath}/wechat.ts` },
+            { find: '@harmony/utils/http', replacement: `${utilsSrcPath}/http.ts` },
+            { find: '@harmony/utils/mini-client', replacement: `${utilsSrcPath}/miniClient.ts` },
+            { find: '@harmony/utils/scene-package-storage', replacement: `${utilsSrcPath}/scenePackageStorage.ts` },
+            { find: '@harmony/utils/scene-package-fs', replacement: `${utilsSrcPath}/scenePackageFs.ts` },
+            { find: '@harmony/utils/query', replacement: `${utilsSrcPath}/query.ts` },
+            { find: /^@harmony\/utils$/, replacement: `${utilsSrcPath}/index.ts` },
+            { find: /^@harmony\/utils\/(.*)$/, replacement: `${utilsSrcPath}/$1` },
+          ]
+        : [
+            { find: /^@harmony\/schema$/, replacement: `${schemaMirrorPath}/index.ts` },
+            { find: /^@harmony\/schema\/(.*)$/, replacement: `${schemaMirrorPath}/$1` },
+            { find: /^@harmony\/physics-core$/, replacement: `${physicsCoreMirrorPath}/index.ts` },
+            { find: /^@harmony\/physics-core\/(.*)$/, replacement: `${physicsCoreMirrorPath}/$1` },
+            { find: /^@harmony\/physics-cannon$/, replacement: `${physicsCannonMirrorPath}/index.ts` },
+            { find: /^@harmony\/physics-cannon\/(.*)$/, replacement: `${physicsCannonMirrorPath}/$1` },
+            { find: /^@harmony\/physics-bridge$/, replacement: `${sceneryPhysicsBridgeMirrorPath}/index.ts` },
+            { find: /^@harmony\/physics-bridge\/(.*)$/, replacement: `${sceneryPhysicsBridgeMirrorPath}/$1` },
+            { find: '@harmony/physics-bridge/wechat', replacement: `${sceneryPhysicsBridgeMirrorPath}/wechat.ts` },
+            { find: '@harmony/utils/http', replacement: `${utilsSrcPath}/http.ts` },
+            { find: '@harmony/utils/mini-client', replacement: `${utilsSrcPath}/miniClient.ts` },
+            { find: '@harmony/utils/scene-package-storage', replacement: `${utilsSrcPath}/scenePackageStorage.ts` },
+            { find: '@harmony/utils/scene-package-fs', replacement: `${utilsSrcPath}/scenePackageFs.ts` },
+            { find: '@harmony/utils/query', replacement: `${utilsSrcPath}/query.ts` },
+            { find: /^@harmony\/utils$/, replacement: `${utilsSrcPath}/index.ts` },
+            { find: /^@harmony\/utils\/(.*)$/, replacement: `${utilsSrcPath}/$1` },
+          ]),
       { find: '@harmony/scenery-storage', replacement: fileURLToPath(new URL('./src/pages/scenery/runtime/sceneStorageProxy.ts', import.meta.url)) },
       { find: /^@harmony\/physics-bridge$/, replacement: `${sceneryPhysicsBridgeMirrorPath}/index.ts` },
       { find: /^@harmony\/physics-bridge\/(.*)$/, replacement: `${sceneryPhysicsBridgeMirrorPath}/$1` },
@@ -212,12 +256,17 @@ export default {
       { find: '@harmony/physics-ammo-source', replacement: fileURLToPath(new URL('./src/pages/physics-ammo/engine', import.meta.url)) },
       { find: '@harmony/physics-cannon', replacement: fileURLToPath(new URL('./src/pages/physics-cannon/runtime.ts', import.meta.url)) },
       { find: '@harmony/physics-cannon-source', replacement: fileURLToPath(new URL('./src/pages/physics-cannon/engine', import.meta.url)) },
+      { find: 'event-target-shim', replacement: eventTargetShimPath },
+      { find: 'web-streams-polyfill', replacement: webStreamsPolyfillPath },
       { find: 'vue', replacement: vueRuntimeAlias },
     ],
   },
   server: {
     port: 8092,
     open: true,
+    fs: {
+      allow: [repoRootPath],
+    },
     watch: {
       usePolling: shouldUsePolling,
       interval: pollingInterval,
