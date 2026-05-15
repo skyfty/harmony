@@ -33,9 +33,6 @@ const rawVueRuntimeAlias = isMp
 const schemaMirrorPath = fileURLToPath(new URL('./src/pages/scenery/schema', import.meta.url)).replaceAll('\\', '/');
 const physicsCoreMirrorPath = fileURLToPath(new URL('./src/pages/scenery/physics-core', import.meta.url)).replaceAll('\\', '/');
 const sceneryPhysicsBridgeMirrorPath = fileURLToPath(new URL('./src/pages/scenery/physics-bridge', import.meta.url)).replaceAll('\\', '/');
-const sceneryThreeMirrorPath = fileURLToPath(new URL('./src/pages/scenery/three', import.meta.url)).replaceAll('\\', '/');
-const sceneryThreeMeshBvhMirrorPath = fileURLToPath(new URL('./src/pages/scenery/three-mesh-bvh', import.meta.url)).replaceAll('\\', '/');
-const sceneryThreeAdapterOverrideMirrorPath = fileURLToPath(new URL('./src/pages/scenery/three-platform-adapter/override/jsm', import.meta.url)).replaceAll('\\', '/');
 const utilsSrcPath = fileURLToPath(new URL('../utils/src', import.meta.url)).replaceAll('\\', '/');
 
 const _require = createRequire(import.meta.url);
@@ -89,7 +86,7 @@ function resolveManualChunk(id: string): string | undefined {
       || normalizedId.includes('ammojs3')
       || normalizedId.includes('cannon-es')
     ) {
-      return 'pages/scenery/common/vendor';
+      return 'common/vendor';
     }
   }
 
@@ -105,14 +102,23 @@ function resolveManualChunk(id: string): string | undefined {
   }
 
   if (
+    normalizedId.includes('/src/pages/scenery/three/')
+    || normalizedId.includes('/src/pages/scenery/three-mesh-bvh/')
+    || normalizedId.includes('/src/pages/scenery/three-platform-adapter/')
+    || normalizedId.includes('/node_modules/three/')
+    || normalizedId.includes('/node_modules/three-mesh-bvh/')
+    || normalizedId.includes('/node_modules/three-csm/')
+    || normalizedId.includes('/node_modules/@minisheep/three-platform-adapter/')
+  ) {
+    return 'common/vendor';
+  }
+
+  if (
     normalizedId.includes('/src/pages/scenery/')
     || normalizedId.includes('/src/pages/scenery/schema/')
     || normalizedId.includes('/src/pages/scenery/physics-core/')
     || normalizedId.includes('/src/pages/scenery/utils/')
     || normalizedId.includes('/src/pages/scenery/physics-bridge/')
-    || normalizedId.includes('/src/pages/scenery/three/')
-    || normalizedId.includes('/src/pages/scenery/three-mesh-bvh/')
-    || normalizedId.includes('/src/pages/scenery/three-platform-adapter/')
     || (
       normalizedId.includes('/schema/')
       && !normalizedId.includes('/schema/dist/physicsBackendBridge.js')
@@ -129,10 +135,8 @@ function resolveManualChunk(id: string): string | undefined {
     || normalizedId.includes('/node_modules/@msgpack/msgpack/')
     || normalizedId.includes('/node_modules/robust-predicates/')
     || normalizedId.includes('/node_modules/splaytree/')
-    || normalizedId.includes('/node_modules/three-csm/')
     || normalizedId.includes('/node_modules/fflate/')
     || normalizedId.includes('/node_modules/web-streams-polyfill/')
-    || normalizedId.includes('/node_modules/@minisheep/three-platform-adapter/')
   ) {
     return 'pages/scenery/common/vendor';
   }
@@ -204,17 +208,11 @@ export default {
       { find: /^@harmony\/utils\/(.*)$/, replacement: `${utilsSrcPath}/$1` },
       { find: 'cannon-es', replacement: fileURLToPath(new URL('./src/pages/physics-cannon/cannon-es', import.meta.url)) },
       { find: 'ammojs3', replacement: fileURLToPath(new URL('./src/pages/physics-ammo/ammojs3', import.meta.url)) },
-      { find: 'three-mesh-bvh', replacement: sceneryThreeMeshBvhMirrorPath },
-      { find: /^@minisheep\/three-platform-adapter\/override\/jsm\/(.*)$/, replacement: `${sceneryThreeAdapterOverrideMirrorPath}/$1` },
-      { find: '@minisheep/three-platform-adapter/override/jsm', replacement: sceneryThreeAdapterOverrideMirrorPath },
       { find: '@harmony/physics-ammo', replacement: fileURLToPath(new URL('./src/pages/physics-ammo/runtime.ts', import.meta.url)) },
       { find: '@harmony/physics-ammo-source', replacement: fileURLToPath(new URL('./src/pages/physics-ammo/engine', import.meta.url)) },
       { find: '@harmony/physics-cannon', replacement: fileURLToPath(new URL('./src/pages/physics-cannon/runtime.ts', import.meta.url)) },
       { find: '@harmony/physics-cannon-source', replacement: fileURLToPath(new URL('./src/pages/physics-cannon/engine', import.meta.url)) },
       { find: 'vue', replacement: vueRuntimeAlias },
-      { find: 'three', replacement: sceneryThreeMirrorPath },
-      { find: 'three/examples', replacement: `${sceneryThreeMirrorPath}/examples` },
-      { find: '@three-examples', replacement: `${sceneryThreeMirrorPath}/examples/jsm` },
     ],
   },
   server: {
@@ -232,7 +230,7 @@ export default {
     bundleOptimizer({
       enable: isMp
         ? {
-            optimization: true,
+            optimization: false,
             'async-import': true,
             'async-component': true,
           }
