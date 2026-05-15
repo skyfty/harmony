@@ -44,13 +44,14 @@ const PHYSICS_AMMO_SUBPACKAGE_NAME = 'physicsAmmo'
 const PHYSICS_CANNON_SUBPACKAGE_NAME = 'physicsCannon'
 
 function resolveSceneryPhysicsBackendPreference(_preference: PhysicsBackendPreference | undefined): 'ammo' | 'cannon' {
-  return 'cannon';// preference === 'cannon' ? 'cannon' : 'ammo'
+  return  'cannon' //preference === 'ammo' ? 'ammo' : 'cannon' 不要修改这行
 }
 
 function ensureSceneryPhysicsBackendLoaders(
   loaders: SceneryPhysicsBackendLoaders | undefined,
 ): SceneryPhysicsBackendLoaders {
-  if (!loaders) {
+  console.log('Ensuring physics backend loaders, provided loaders:', loaders)
+  if (!loaders || typeof loaders.loadAmmoRuntime !== 'function' || typeof loaders.loadCannonRuntime !== 'function') {
     return {
       loadAmmoRuntime: loadSceneryAmmoRuntime,
       loadCannonRuntime: loadSceneryCannonRuntime,
@@ -59,18 +60,78 @@ function ensureSceneryPhysicsBackendLoaders(
   return loaders
 }
 
+function decodeBase64Utf8(bytes: Uint8Array): string {
+  if (typeof TextDecoder !== 'undefined') {
+    return new TextDecoder('utf-8').decode(bytes)
+  }
+
+  let output = ''
+  for (let index = 0; index < bytes.length; index += 1) {
+    output += String.fromCharCode(bytes[index])
+  }
+  return output
+}
+
+function decodeBase64WithWx(encodedSpecifier: string): string | null {
+  const wxLike = globalThis as {
+    wx?: {
+      base64ToArrayBuffer?: (base64: string) => ArrayBuffer
+    }
+  }
+  const base64ToArrayBuffer = wxLike.wx?.base64ToArrayBuffer
+  if (typeof base64ToArrayBuffer !== 'function') {
+    return null
+  }
+
+  const arrayBuffer = base64ToArrayBuffer(encodedSpecifier)
+  return decodeBase64Utf8(new Uint8Array(arrayBuffer))
+}
+
 function decodeRuntimeModuleSpecifier(encodedSpecifier: string): string {
   const atobFn = globalThis.atob
   if (typeof atobFn === 'function') {
     return atobFn(encodedSpecifier)
   }
-  return encodedSpecifier
+  const wxDecoded = decodeBase64WithWx(encodedSpecifier)
+  if (wxDecoded !== null) {
+    return wxDecoded
+  }
+  const bufferLike = globalThis as {
+    Buffer?: {
+      from: (value: string, encoding: 'base64') => {
+        toString: (encoding: 'utf8') => string
+      }
+    }
+  }
+  if (typeof bufferLike.Buffer !== 'undefined') {
+    return bufferLike.Buffer.from(encodedSpecifier, 'base64').toString('utf8')
+  }
+  const base64Alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+  let output = ''
+  let buffer = 0
+  let bitsCollected = 0
+
+  for (const char of encodedSpecifier.replace(/=+$/u, '')) {
+    const value = base64Alphabet.indexOf(char)
+    if (value < 0) {
+      continue
+    }
+    buffer = (buffer << 6) | value
+    bitsCollected += 6
+
+    if (bitsCollected >= 8) {
+      bitsCollected -= 8
+      output += String.fromCharCode((buffer >> bitsCollected) & 0xff)
+    }
+  }
+
+  return output
 }
 
 function createRuntimeModuleLoader<TModule>(encodedSpecifier: string): () => Promise<TModule> {
   const specifier = decodeRuntimeModuleSpecifier(encodedSpecifier)
   return new Function(
-    `return import(${JSON.stringify(specifier)});`,
+    `return require(${JSON.stringify(specifier)});`,
   ) as () => Promise<TModule>
 }
 
@@ -107,7 +168,6 @@ class LazySceneryPhysicsBridge implements PhysicsBridge {
   private bridgePromise: Promise<PhysicsBridge> | null = null
 
   constructor(options: CreateSceneryPhysicsBridgeOptions = {}) {
-    console.log('Creating Scenery Physics Bridge with options:', options)
     this.enginePreference = options.engine
     this.backendLoaders = options.backendLoaders
   }
@@ -185,6 +245,7 @@ class LazySceneryPhysicsBridge implements PhysicsBridge {
     if (backend === 'cannon') {
       await loadWechatPhysicsSubpackage(PHYSICS_CANNON_SUBPACKAGE_NAME)
       const cannonRuntime = await backendLoaders.loadCannonRuntime()
+      console.log('Cannon runtime loaded:', backendLoaders, cannonRuntime)
       const { createCannonPhysicsController, createCannonSchemaPhysicsBackendBridge } = cannonRuntime
       initializePhysicsBackendBridge(createCannonSchemaPhysicsBackendBridge())
       return createWechatPhysicsBridge({

@@ -10259,7 +10259,7 @@ async function ensureScenePreviewPhysicsBridgeReady(): Promise<PhysicsBridge> {
 	}).then(() => physicsBridge!)
 		.catch((error) => {
 			physicsBridgeInitPromise = null
-			console.warn('[ScenePreview] Failed to initialize physics bridge', error)
+			console.warn(`[ScenePreview] Failed to initialize physics bridge ${currentPhysicsBridgePreference.value}`, error)
 			throw error
 		})
 	return physicsBridgeInitPromise

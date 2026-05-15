@@ -2,6 +2,10 @@
   <view class="page" />
 </template>
 
+<script setup lang="ts">
+import './runtime/physics-ammo';
+</script>
+
 <style scoped>
 .page {
   width: 100%;

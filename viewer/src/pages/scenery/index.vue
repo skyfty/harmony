@@ -8,8 +8,8 @@
       :default-steer-identifier="selectedVehicleIdentifier"
       :server-asset-base-url="serverAssetBaseUrl"
       :initial-punched-node-ids="initialPunchedNodeIds"
-      :physics-backend-loaders="physicsBackendLoaders"
       :physics-engine="resolvedPhysicsEngine"
+      :physics-backend-loaders="physicsBackendLoaders"
       @punch="handlePunch"
     />
 
@@ -33,7 +33,11 @@ import { decodeScenePackageSceneDocument, resolveDocumentEnvironment } from '@sc
 import { readBinaryFileFromScenePackage, readTextFileFromScenePackage, unzipScenePackage } from '@schema/scenePackageZip';
 import { useProjectStore } from '@/stores/projectStore';
 import SceneryViewer from './uni_modules/scenery/components/SceneryViewer.vue';
-import type { SceneryPhysicsBackendLoaders } from './uni_modules/scenery/common/physics/createSceneryPhysicsBridge';
+
+type SceneryPhysicsBackendLoaders = {
+  loadAmmoRuntime: () => Promise<unknown>;
+  loadCannonRuntime: () => Promise<unknown>;
+};
 
 const projectStore = useProjectStore();
 
@@ -45,17 +49,12 @@ const sceneId = ref<string>('');
 const selectedVehicleIdentifier = ref<string>('');
 const initialPunchedNodeIds = ref<string[]>([]);
 const serverAssetBaseUrl = getDownloadCdnBaseUrl();
-const resolvedPhysicsEngine = ref<PhysicsBackendPreference>('ammo');
+const resolvedPhysicsEngine = ref<PhysicsBackendPreference>('cannon');
 const loadError = ref<string>('');
 const pageReady = ref(false);
-
 const physicsBackendLoaders: SceneryPhysicsBackendLoaders = {
-  loadAmmoRuntime: async () => {
-    return await import('@/runtime/physics-ammo');
-  },
-  loadCannonRuntime: async () => {
-    return await import('@/runtime/physics-cannon');
-  },
+  loadAmmoRuntime: () => import('../physics-ammo/runtime/physics-ammo'),
+  loadCannonRuntime: () => import('../physics-cannon/runtime/physics-cannon'),
 };
 
 const nominateStateMap = computed(() => {
