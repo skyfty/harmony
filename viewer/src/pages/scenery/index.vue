@@ -26,8 +26,8 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { onLoad, onUnload } from '@dcloudio/uni-app';
-import { createPunchRecord, getPunchProgress } from '@harmony/utils/mini-client';
-import { getDownloadCdnBaseUrl } from '@harmony/utils/http';
+import { createPunchRecord, getPunchProgress } from './utils/miniClient';
+import { getDownloadCdnBaseUrl } from './utils/http';
 import SceneryViewer from './uni_modules/scenery/components/SceneryViewer.vue?async';
 
 const projectId = ref<string>('');
