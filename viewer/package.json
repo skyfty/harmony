@@ -9,7 +9,7 @@
     "sync:scenery": "node ../tools/dist/cli-bin.js sync-scenery --mode subpackage-uni-modules",
     "verify:mp-weixin-main-package": "node ./scripts/verify-mp-weixin-main-package.mjs",
     "verify:mp-weixin-main-package-source": "node ./scripts/verify-mp-weixin-main-package-source.mjs",
-    "predev:mp-weixin": "pnpm run verify:mp-weixin-main-package-source && pnpm run prepare:shared && pnpm run sync:scenery",
+    "predev:mp-weixin": "node ./scripts/clean-dev-artifacts.mjs && pnpm run verify:mp-weixin-main-package-source && pnpm run prepare:shared && pnpm run prepare:physics && pnpm run sync:scenery",
     "dev:mp-weixin": "pnpm run predev:mp-weixin && pnpm exec cross-env DEBUG=none uni -p mp-weixin --mode mp-weixin.development",
     "prebuild:mp-weixin": "pnpm run prepare:shared && pnpm run prepare:physics && pnpm run sync:scenery",
     "postbuild:mp-weixin": "pnpm run verify:mp-weixin-main-package",
@@ -52,8 +52,6 @@
     "robust-predicates": "^1.1.0",
     "splaytree": "^3.2.3",
     "three": "^0.172.0",
-    "three-csm": "^4.2.1",
-    "three-mesh-bvh": "^0.9.1",
     "vue": "^3.5.13",
     "vue-i18n": "^9.14.3",
     "web-streams-polyfill": "^3.2.1"

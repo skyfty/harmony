@@ -575,13 +575,13 @@ import { resolveGroundWorkingGridSize } from '@harmony/schema/index';
 import { isPointInsideRegionXZ } from '@harmony/schema/index';
 import { applyMirroredScaleToObject, syncMirroredMeshMaterials } from '@harmony/schema/mirror';
 import {
-  createSceneCsmShadowRuntime,
   DEFAULT_SCENE_CSM_CONFIG,
   DEFAULT_SCENE_CSM_SUN_AZIMUTH_DEG,
   DEFAULT_SCENE_CSM_SUN_ELEVATION_DEG,
-  resolveSceneCsmSunPositionFromAngles,
   type SceneCsmConfig,
-  type SceneCsmShadowRuntime,
+} from '@harmony/schema/sceneCsmDefaults';
+import type {
+  SceneCsmShadowRuntime,
 } from '@harmony/schema/sceneCsm';
 import { ComponentManager } from '@harmony/schema/components/componentManager';
 import { setActiveMultiuserSceneId } from '@harmony/schema/multiuserContext';
@@ -1339,6 +1339,14 @@ const bootstrapFinished = ref(false);
 const SCENERY_SCENE_CSM_CONFIG = DEFAULT_SCENE_CSM_CONFIG;
 let sceneCsmShadowRuntime: SceneCsmShadowRuntime | null = null;
 let sceneCsmRuntimeConfigKey = '';
+let sceneCsmModulePromise: Promise<typeof import('@harmony/schema/sceneCsm')> | null = null;
+
+async function loadSceneCsmModule(): Promise<typeof import('@harmony/schema/sceneCsm')> {
+  if (!sceneCsmModulePromise) {
+    sceneCsmModulePromise = import('@harmony/schema/sceneCsm');
+  }
+  return sceneCsmModulePromise;
+}
 
 function isRuntimeObjectEffectivelyVisible(object: THREE.Object3D | null | undefined): boolean {
   let current = object;
@@ -1427,7 +1435,7 @@ function shouldUseSceneCsmShadows(): boolean {
   return Boolean(renderContext?.scene && renderContext?.camera && config.enabled);
 }
 
-function ensureSceneCsmShadowRuntime(): SceneCsmShadowRuntime | null {
+async function ensureSceneCsmShadowRuntime(): Promise<SceneCsmShadowRuntime | null> {
   const context = renderContext;
   if (!context || !shouldUseSceneCsmShadows()) {
     if (sceneCsmShadowRuntime) {
@@ -1441,11 +1449,12 @@ function ensureSceneCsmShadowRuntime(): SceneCsmShadowRuntime | null {
     disposeSceneCsmShadowRuntime();
   }
   if (!sceneCsmShadowRuntime) {
+    const { createSceneCsmShadowRuntime } = await loadSceneCsmModule();
     sceneCsmShadowRuntime = createSceneCsmShadowRuntime(context.scene, context.camera, config);
     sceneCsmRuntimeConfigKey = configKey;
     sceneCsmShadowRuntime.registerObject(context.scene);
   }
-  syncSceneCsmSunFromEnvironment();
+  await syncSceneCsmSunFromEnvironment();
   return sceneCsmShadowRuntime;
 }
 
@@ -1455,24 +1464,25 @@ function disposeSceneCsmShadowRuntime(): void {
   sceneCsmRuntimeConfigKey = '';
 }
 
-function syncSceneCsmSunFromEnvironment(): void {
+async function syncSceneCsmSunFromEnvironment(): Promise<void> {
   if (!sceneCsmShadowRuntime || !currentDocument) {
     return;
   }
+  const { resolveSceneCsmSunPositionFromAngles } = await loadSceneCsmModule();
   const settings = resolveDocumentEnvironment(currentDocument);
   const csm = resolveEnvironmentCsmSettings(settings);
   const sunPosition = resolveSceneCsmSunPositionFromAngles(csm.sunAzimuthDeg, csm.sunElevationDeg, 1000);
   sceneCsmShadowRuntime.syncSun(sunPosition, csm.lightIntensity, csm.lightColor);
 }
 
-function applyRendererShadowSetting(): void {
+async function applyRendererShadowSetting(): Promise<void> {
   const context = renderContext;
   if (!context) {
     return;
   }
   const castShadows = Boolean(context.renderer.shadowMap.enabled);
   if (castShadows) {
-    const runtime = ensureSceneCsmShadowRuntime();
+    const runtime = await ensureSceneCsmShadowRuntime();
     runtime?.setActive(true);
     return;
   }
@@ -11351,8 +11361,8 @@ async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
   const environmentApplied = applyEnvironmentReflectionFromBackground(snapshot.background);
 
   applyEnvironmentTextureRotation(snapshot);
-  applyRendererShadowSetting();
-  syncSceneCsmSunFromEnvironment();
+  void applyRendererShadowSetting();
+  void syncSceneCsmSunFromEnvironment();
   if (backgroundApplied && environmentApplied) {
     pendingEnvironmentSettings = null;
   } else {
@@ -12411,8 +12421,8 @@ async function ensureRendererContext(result: UseCanvasResult) {
     controls,
   };
 
-  ensureSceneCsmShadowRuntime();
-  applyRendererShadowSetting();
+  void ensureSceneCsmShadowRuntime();
+  void applyRendererShadowSetting();
 
   if (pendingEnvironmentSettings) {
     void applyEnvironmentSettingsToScene(pendingEnvironmentSettings);

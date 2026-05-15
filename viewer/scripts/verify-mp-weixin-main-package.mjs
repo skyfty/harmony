@@ -14,9 +14,7 @@ const checkedFiles = [
   'pages/index/index.js',
 ];
 
-const checkedAssets = [
-  'assets',
-];
+const checkedAssets = ['assets'];
 
 const forbiddenPatterns = [
   'pages/scenery/common/vendor.js',
@@ -26,17 +24,27 @@ const forbiddenPatterns = [
   'guideboardComponentDefinition',
   'clearGroundCollisionRuntimeHost',
   'syncGroundCollisionRuntimeHost',
+  'ShaderMaterial',
+  'Float32BufferAttribute',
   'physicsBackendBridge',
   'physicsBodySync',
   'physicsEngine',
   'physicsShapeResolvers',
+  'WechatPhysicsBridge',
+  'createWechatPhysicsBridge',
+  'createInMemoryWechatPhysicsWorker',
+  'BVHNode',
+  'MeshBVH',
+  'three-mesh-bvh',
   'ammojs3',
   'cannon-es',
-  'three-mesh-bvh',
   'polygon-clipping',
   '@msgpack/msgpack',
   'robust-predicates',
   'splaytree',
+  'three-csm',
+  'DRACOLoader',
+  'KTX2Loader',
 ];
 
 const hits = [];

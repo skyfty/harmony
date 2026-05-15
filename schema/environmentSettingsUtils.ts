@@ -3,7 +3,7 @@ import {
   DEFAULT_SCENE_CSM_CONFIG,
   DEFAULT_SCENE_CSM_SUN_AZIMUTH_DEG,
   DEFAULT_SCENE_CSM_SUN_ELEVATION_DEG,
-} from './sceneCsm'
+} from './sceneCsmDefaults'
 import type {
   EnvironmentCsmSettings,
   EnvironmentNorthDirection,

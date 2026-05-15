@@ -28,6 +28,7 @@ const forbiddenPatterns = [
   '@harmony/schema',
   '@harmony/physics-ammo',
   '@harmony/physics-cannon',
+  '@harmony/physics-bridge/wechat',
   'uni_modules/scenery',
 ];
 

@@ -10,11 +10,33 @@ import { visualizer } from 'rollup-plugin-visualizer';
 const uniPlatform = process.env.UNI_PLATFORM;
 const isMp = uniPlatform?.startsWith('mp-');
 const buildTarget = isMp ? 'es2018' : 'es2020';
+const sceneOptimizerExcludes = [
+  '@harmony/schema',
+  '@harmony/schema/',
+  'three',
+  'three/examples',
+  'three-mesh-bvh',
+  'three-csm',
+  'polygon-clipping',
+  '@msgpack/msgpack',
+  'robust-predicates',
+  'splaytree',
+  'fflate',
+  'ammojs3',
+  'cannon-es',
+  '@minisheep/three-platform-adapter',
+];
 
 const rawVueRuntimeAlias = isMp
   ? '@dcloudio/uni-mp-vue/dist-x/vue.runtime.esm.js'
   : '@dcloudio/uni-h5-vue/dist-x/vue.runtime.esm.js';
 const schemaMirrorPath = fileURLToPath(new URL('./src/pages/scenery/schema', import.meta.url)).replaceAll('\\', '/');
+const physicsCoreMirrorPath = fileURLToPath(new URL('./src/pages/scenery/physics-core', import.meta.url)).replaceAll('\\', '/');
+const sceneryPhysicsBridgeMirrorPath = fileURLToPath(new URL('./src/pages/scenery/physics-bridge', import.meta.url)).replaceAll('\\', '/');
+const sceneryThreeMirrorPath = fileURLToPath(new URL('./src/pages/scenery/three', import.meta.url)).replaceAll('\\', '/');
+const sceneryThreeMeshBvhMirrorPath = fileURLToPath(new URL('./src/pages/scenery/three-mesh-bvh', import.meta.url)).replaceAll('\\', '/');
+const sceneryThreeAdapterOverrideMirrorPath = fileURLToPath(new URL('./src/pages/scenery/three-platform-adapter/override/jsm', import.meta.url)).replaceAll('\\', '/');
+const utilsSrcPath = fileURLToPath(new URL('../utils/src', import.meta.url)).replaceAll('\\', '/');
 
 const _require = createRequire(import.meta.url);
 let vueRuntimeAlias: string;
@@ -52,6 +74,25 @@ function resolveManualChunk(id: string): string | undefined {
   }
 
   const normalizedId = id.replaceAll('\\', '/');
+  if (normalizedId.includes('/.vite/deps/')) {
+    if (
+      normalizedId.includes('three')
+      || normalizedId.includes('schema')
+      || normalizedId.includes('physics-bridge')
+      || normalizedId.includes('three-mesh-bvh')
+      || normalizedId.includes('polygon-clipping')
+      || normalizedId.includes('@msgpack/msgpack')
+      || normalizedId.includes('robust-predicates')
+      || normalizedId.includes('splaytree')
+      || normalizedId.includes('three-csm')
+      || normalizedId.includes('fflate')
+      || normalizedId.includes('ammojs3')
+      || normalizedId.includes('cannon-es')
+    ) {
+      return 'pages/scenery/common/vendor';
+    }
+  }
+
   if (
     normalizedId.includes('/node_modules/vue/')
     || normalizedId.includes('/node_modules/@vue/')
@@ -66,6 +107,12 @@ function resolveManualChunk(id: string): string | undefined {
   if (
     normalizedId.includes('/src/pages/scenery/')
     || normalizedId.includes('/src/pages/scenery/schema/')
+    || normalizedId.includes('/src/pages/scenery/physics-core/')
+    || normalizedId.includes('/src/pages/scenery/utils/')
+    || normalizedId.includes('/src/pages/scenery/physics-bridge/')
+    || normalizedId.includes('/src/pages/scenery/three/')
+    || normalizedId.includes('/src/pages/scenery/three-mesh-bvh/')
+    || normalizedId.includes('/src/pages/scenery/three-platform-adapter/')
     || (
       normalizedId.includes('/schema/')
       && !normalizedId.includes('/schema/dist/physicsBackendBridge.js')
@@ -93,6 +140,7 @@ function resolveManualChunk(id: string): string | undefined {
   if (
     normalizedId.includes('/physics-ammo/src/')
     || normalizedId.includes('/src/pages/physics-ammo/engine/')
+    || normalizedId.includes('/src/pages/physics-ammo/ammojs3/')
     || normalizedId.includes('/node_modules/ammojs3/')
   ) {
     return 'pages/physics-ammo/common/vendor';
@@ -101,6 +149,7 @@ function resolveManualChunk(id: string): string | undefined {
   if (
     normalizedId.includes('/physics-cannon/src/')
     || normalizedId.includes('/src/pages/physics-cannon/engine/')
+    || normalizedId.includes('/src/pages/physics-cannon/cannon-es/')
     || normalizedId.includes('/node_modules/cannon-es/')
   ) {
     return 'pages/physics-cannon/common/vendor';
@@ -115,7 +164,7 @@ export default {
     'import.meta.env.VITE_SCENERY_ENABLE_GLTF_KTX2': JSON.stringify('false'),
   },
   optimizeDeps: {
-    exclude: ['@minisheep/three-platform-adapter'],
+    exclude: sceneOptimizerExcludes,
     esbuildOptions: {
       target: buildTarget,
     },
@@ -140,18 +189,32 @@ export default {
     alias: [
       { find: /^@harmony\/schema$/, replacement: `${schemaMirrorPath}/index.ts` },
       { find: /^@harmony\/schema\/(.*)$/, replacement: `${schemaMirrorPath}/$1` },
+      { find: /^@harmony\/physics-core$/, replacement: `${physicsCoreMirrorPath}/index.ts` },
+      { find: /^@harmony\/physics-core\/(.*)$/, replacement: `${physicsCoreMirrorPath}/$1` },
+      { find: /^@harmony\/utils$/, replacement: `${utilsSrcPath}/index.ts` },
+      { find: '@harmony/scenery-storage', replacement: fileURLToPath(new URL('./src/pages/scenery/runtime/sceneStorageProxy.ts', import.meta.url)) },
+      { find: /^@harmony\/physics-bridge$/, replacement: `${sceneryPhysicsBridgeMirrorPath}/index.ts` },
+      { find: /^@harmony\/physics-bridge\/(.*)$/, replacement: `${sceneryPhysicsBridgeMirrorPath}/$1` },
+      { find: '@harmony/physics-bridge/wechat', replacement: `${sceneryPhysicsBridgeMirrorPath}/wechat.ts` },
+      { find: '@harmony/utils/http', replacement: `${utilsSrcPath}/http.ts` },
+      { find: '@harmony/utils/mini-client', replacement: `${utilsSrcPath}/miniClient.ts` },
+      { find: '@harmony/utils/scene-package-storage', replacement: `${utilsSrcPath}/scenePackageStorage.ts` },
+      { find: '@harmony/utils/scene-package-fs', replacement: `${utilsSrcPath}/scenePackageFs.ts` },
+      { find: '@harmony/utils/query', replacement: `${utilsSrcPath}/query.ts` },
+      { find: /^@harmony\/utils\/(.*)$/, replacement: `${utilsSrcPath}/$1` },
+      { find: 'cannon-es', replacement: fileURLToPath(new URL('./src/pages/physics-cannon/cannon-es', import.meta.url)) },
+      { find: 'ammojs3', replacement: fileURLToPath(new URL('./src/pages/physics-ammo/ammojs3', import.meta.url)) },
+      { find: 'three-mesh-bvh', replacement: sceneryThreeMeshBvhMirrorPath },
+      { find: /^@minisheep\/three-platform-adapter\/override\/jsm\/(.*)$/, replacement: `${sceneryThreeAdapterOverrideMirrorPath}/$1` },
+      { find: '@minisheep/three-platform-adapter/override/jsm', replacement: sceneryThreeAdapterOverrideMirrorPath },
       { find: '@harmony/physics-ammo', replacement: fileURLToPath(new URL('./src/pages/physics-ammo/runtime.ts', import.meta.url)) },
       { find: '@harmony/physics-ammo-source', replacement: fileURLToPath(new URL('./src/pages/physics-ammo/engine', import.meta.url)) },
-      { find: '@harmony/physics-core', replacement: fileURLToPath(new URL('../physics-core/src', import.meta.url)) },
-      { find: '@harmony/physics-bridge', replacement: fileURLToPath(new URL('../physics-bridge/src', import.meta.url)) },
       { find: '@harmony/physics-cannon', replacement: fileURLToPath(new URL('./src/pages/physics-cannon/runtime.ts', import.meta.url)) },
       { find: '@harmony/physics-cannon-source', replacement: fileURLToPath(new URL('./src/pages/physics-cannon/engine', import.meta.url)) },
-      { find: 'ammojs3', replacement: fileURLToPath(new URL('./node_modules/ammojs3', import.meta.url)) },
-      { find: 'cannon-es', replacement: fileURLToPath(new URL('./node_modules/cannon-es', import.meta.url)) },
       { find: 'vue', replacement: vueRuntimeAlias },
-      { find: 'three', replacement: fileURLToPath(new URL('./node_modules/three', import.meta.url)) },
-      { find: 'three/examples', replacement: fileURLToPath(new URL('./node_modules/three/examples', import.meta.url)) },
-      { find: '@three-examples', replacement: fileURLToPath(new URL('./node_modules/three/examples/jsm', import.meta.url)) },
+      { find: 'three', replacement: sceneryThreeMirrorPath },
+      { find: 'three/examples', replacement: `${sceneryThreeMirrorPath}/examples` },
+      { find: '@three-examples', replacement: `${sceneryThreeMirrorPath}/examples/jsm` },
     ],
   },
   server: {
@@ -169,17 +232,17 @@ export default {
     bundleOptimizer({
       enable: isMp
         ? {
-            optimization: false,
+            optimization: true,
             'async-import': true,
             'async-component': true,
           }
         : {
-            optimization: false,
+          optimization: false,
             'async-import': false,
             'async-component': false,
           },
       optimization: {
-        normalizeVueEntityModule: false,
+        normalizeVueEntityModule: true,
       },
       logger: ['optimization'],
     }),

@@ -38,6 +38,12 @@ export async function main(argv: string[]): Promise<void> {
         await cmdSyncSchema(rest);
         return;
       }
+    case "sync-scenery-mirrors":
+      {
+        const { cmdSyncSceneryMirrors } = await import("./commands/syncSceneryMirrors.js");
+        await cmdSyncSceneryMirrors(rest);
+        return;
+      }
     case "--help":
     case "-h":
     case undefined:
@@ -60,5 +66,6 @@ Commands:
   process-svg-icons [--project <path>] [--in <relPath>] [--out <relPath>] [--size <px>] [--clean] [--verbose]
   sync-physics [--repoRoot <path>] [--viewerRoot <path>]
   sync-schema [--repoRoot <path>] [--viewerRoot <path>]
+  sync-scenery-mirrors [--repoRoot <path>] [--viewerRoot <path>]
 `);
 }

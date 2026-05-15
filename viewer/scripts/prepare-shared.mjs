@@ -28,6 +28,11 @@ execSync('node ../tools/dist/cli-bin.js sync-schema --repoRoot .. --viewerRoot .
   stdio: 'inherit',
 })
 
+execSync('node ../tools/dist/cli-bin.js sync-scenery-mirrors --repoRoot .. --viewerRoot .', {
+  cwd: projectRoot,
+  stdio: 'inherit',
+})
+
 execSync('node ../tools/dist/cli-bin.js sync-physics --repoRoot .. --viewerRoot .', {
   cwd: projectRoot,
   stdio: 'inherit',

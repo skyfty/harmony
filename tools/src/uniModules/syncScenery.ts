@@ -25,6 +25,10 @@ export type SyncSchemaToViewerSubpackageOptions = SyncSceneryCommonOptions & {
   viewerRoot: string;
 };
 
+export type SyncSceneryDependencyMirrorsOptions = SyncSceneryCommonOptions & {
+  viewerRoot: string;
+};
+
 export type SyncSceneryToConsumerUniModulesOptions = SyncSceneryCommonOptions & {
   consumerRoot?: string;
 };
@@ -83,6 +87,7 @@ function resolveDestFromProjectRoot(projectRoot: string, dest: string): string {
 
 function replaceDirectoryLink(sourceDir: string, targetDir: string): void {
   rmrf(targetDir);
+  ensureDir(path.dirname(targetDir));
   const linkType = process.platform === "win32" ? "junction" : "dir";
   fs.symlinkSync(sourceDir, targetDir, linkType);
 }
@@ -133,6 +138,78 @@ export function syncSchemaToViewerSubpackage(options: SyncSchemaToViewerSubpacka
 
   replaceDirectoryLink(schemaRoot, schemaMirrorDir);
   console.log(`[harmony-tools] synced schema mirror -> ${schemaMirrorDir}`);
+}
+
+export function syncSceneryDependencyMirrors(options: SyncSceneryDependencyMirrorsOptions): void {
+  const physicsCoreRoot = path.resolve(options.repoRoot, "physics-core", "src");
+  const utilsRoot = path.resolve(options.repoRoot, "utils", "src");
+  const physicsBridgeRoot = path.resolve(options.repoRoot, "physics-bridge", "src");
+  const threeRoot = path.resolve(options.viewerRoot, "node_modules", "three");
+  const meshBvhRoot = path.resolve(options.viewerRoot, "node_modules", "three-mesh-bvh");
+  const threeAdapterOverrideRoot = path.resolve(
+    options.viewerRoot,
+    "node_modules",
+    "@minisheep",
+    "three-platform-adapter",
+    "dist",
+    "three-override",
+    "jsm",
+  );
+  const cannonRoot = path.resolve(options.viewerRoot, "node_modules", "cannon-es");
+  const ammoRoot = path.resolve(options.viewerRoot, "node_modules", "ammojs3");
+  const physicsCoreMirrorDir = path.resolve(options.viewerRoot, "src/pages/scenery/physics-core");
+  const utilsMirrorDir = path.resolve(options.viewerRoot, "src/pages/scenery/utils");
+  const physicsBridgeMirrorDir = path.resolve(options.viewerRoot, "src/pages/scenery/physics-bridge");
+  const threeMirrorDir = path.resolve(options.viewerRoot, "src/pages/scenery/three");
+  const meshBvhMirrorDir = path.resolve(options.viewerRoot, "src/pages/scenery/three-mesh-bvh");
+  const threeAdapterOverrideMirrorDir = path.resolve(options.viewerRoot, "src/pages/scenery/three-platform-adapter/override/jsm");
+  const cannonMirrorDir = path.resolve(options.viewerRoot, "src/pages/physics-cannon/cannon-es");
+  const ammoMirrorDir = path.resolve(options.viewerRoot, "src/pages/physics-ammo/ammojs3");
+
+  if (!fs.existsSync(physicsCoreRoot)) {
+    throw new Error(`physics-core root not found: ${physicsCoreRoot}`);
+  }
+
+  if (!fs.existsSync(utilsRoot)) {
+    throw new Error(`utils root not found: ${utilsRoot}`);
+  }
+
+  if (!fs.existsSync(threeRoot)) {
+    throw new Error(`three root not found: ${threeRoot}`);
+  }
+
+  if (!fs.existsSync(meshBvhRoot)) {
+    throw new Error(`three-mesh-bvh root not found: ${meshBvhRoot}`);
+  }
+
+  if (!fs.existsSync(threeAdapterOverrideRoot)) {
+    throw new Error(`three-platform-adapter override root not found: ${threeAdapterOverrideRoot}`);
+  }
+
+  if (!fs.existsSync(physicsBridgeRoot)) {
+    throw new Error(`physics-bridge root not found: ${physicsBridgeRoot}`);
+  }
+
+  if (!fs.existsSync(cannonRoot)) {
+    throw new Error(`cannon-es root not found: ${cannonRoot}`);
+  }
+
+  if (!fs.existsSync(ammoRoot)) {
+    throw new Error(`ammojs3 root not found: ${ammoRoot}`);
+  }
+
+  replaceDirectoryLink(physicsCoreRoot, physicsCoreMirrorDir);
+  replaceDirectoryLink(utilsRoot, utilsMirrorDir);
+  replaceDirectoryLink(physicsBridgeRoot, physicsBridgeMirrorDir);
+  replaceDirectoryLink(threeRoot, threeMirrorDir);
+  replaceDirectoryLink(meshBvhRoot, meshBvhMirrorDir);
+  replaceDirectoryLink(threeAdapterOverrideRoot, threeAdapterOverrideMirrorDir);
+  replaceDirectoryLink(cannonRoot, cannonMirrorDir);
+  replaceDirectoryLink(ammoRoot, ammoMirrorDir);
+
+  console.log(
+    `[harmony-tools] synced scenery dependency mirrors -> ${physicsCoreMirrorDir}, ${utilsMirrorDir}, ${physicsBridgeMirrorDir}, ${threeMirrorDir}, ${meshBvhMirrorDir}, ${threeAdapterOverrideMirrorDir}, ${cannonMirrorDir}, ${ammoMirrorDir}`,
+  );
 }
 
 export function syncSceneryToConsumerUniModules(options: SyncSceneryToConsumerUniModulesOptions): void {

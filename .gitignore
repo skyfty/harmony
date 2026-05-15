@@ -43,6 +43,16 @@ viewer/src/pages/physics-ammo/vendor/
 
 # Generated schema mirror used by viewer scenery subpackage builds
 viewer/src/pages/scenery/schema/
+viewer/src/pages/scenery/physics-core/
+
+# Generated scenery dependency mirrors used by viewer subpackage builds
+viewer/src/pages/scenery/utils/
+viewer/src/pages/scenery/physics-bridge/
+viewer/src/pages/scenery/three/
+viewer/src/pages/scenery/three-mesh-bvh/
+viewer/src/pages/scenery/three-platform-adapter/
+viewer/src/pages/physics-cannon/cannon-es/
+viewer/src/pages/physics-ammo/ammojs3/
 
 # WebAssembly / Rust build artifacts and caches
 # Rust build output (moved crate into editor/src/wasm)

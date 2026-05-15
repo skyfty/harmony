@@ -12,7 +12,7 @@ import {
 } from 'three'
 import { addMesh as markInstancedBoundsDirty } from './instancedBoundsTracker'
 import { createWallRepeatScaleMaterialVariant, ensureWallMaterialRepeatWrapU } from './material'
-import { shouldUseReceiverOnlyForDenseInstancedMesh } from './sceneCsm'
+import { shouldUseReceiverOnlyForDenseInstancedMesh } from './sceneCsmReceiverPolicy'
 
 const DEFAULT_INSTANCE_CAPACITY = 2048
 

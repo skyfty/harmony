@@ -1,5 +1,6 @@
 import { ref, type Ref } from 'vue';
-import { removeScenePackageZip, type ScenePackagePointer } from '@harmony/utils';
+import type { ScenePackagePointer } from '@/lib/mainScenePackageStorage';
+import { discardScenePackageZip } from '@/lib/mainScenePackageStorage';
 
 export interface ProjectConfig {
   id: string;
@@ -173,7 +174,7 @@ function clearProject(): void {
   const entry = currentProject.value;
   currentProject.value = null;
   persistProject(null);
-  void removeScenePackageZip(entry?.scenePackage);
+  void discardScenePackageZip(entry?.scenePackage);
 }
 
 function getProject(): StoredProjectEntry | undefined {
