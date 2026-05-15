@@ -42,7 +42,6 @@ const eventTargetShimPath = fileURLToPath(new URL('./node_modules/event-target-s
 const webStreamsPolyfillPath = fileURLToPath(new URL('./node_modules/web-streams-polyfill/dist/polyfill.mjs', import.meta.url)).replaceAll('\\', '/');
 const schemaMirrorPath = fileURLToPath(new URL('./src/pages/scenery/schema', import.meta.url)).replaceAll('\\', '/');
 const physicsCoreMirrorPath = fileURLToPath(new URL('./src/pages/scenery/physics-core', import.meta.url)).replaceAll('\\', '/');
-const physicsCannonMirrorPath = fileURLToPath(new URL('./src/pages/scenery/physics-cannon', import.meta.url)).replaceAll('\\', '/');
 const sceneryPhysicsBridgeMirrorPath = fileURLToPath(new URL('./src/pages/scenery/physics-bridge', import.meta.url)).replaceAll('\\', '/');
 
 const _require = createRequire(import.meta.url);
@@ -227,8 +226,6 @@ export default {
             { find: /^@harmony\/schema\/(.*)$/, replacement: `${schemaMirrorPath}/$1` },
             { find: /^@harmony\/physics-core$/, replacement: `${physicsCoreMirrorPath}/index.ts` },
             { find: /^@harmony\/physics-core\/(.*)$/, replacement: `${physicsCoreMirrorPath}/$1` },
-            { find: /^@harmony\/physics-cannon$/, replacement: `${physicsCannonMirrorPath}/index.ts` },
-            { find: /^@harmony\/physics-cannon\/(.*)$/, replacement: `${physicsCannonMirrorPath}/$1` },
             { find: /^@harmony\/physics-bridge$/, replacement: `${sceneryPhysicsBridgeMirrorPath}/index.ts` },
             { find: /^@harmony\/physics-bridge\/(.*)$/, replacement: `${sceneryPhysicsBridgeMirrorPath}/$1` },
             { find: '@harmony/physics-bridge/wechat', replacement: `${sceneryPhysicsBridgeMirrorPath}/wechat.ts` },
