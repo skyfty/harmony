@@ -23,9 +23,6 @@ importers:
       '@dcloudio/uni-mp-weixin':
         specifier: 3.0.0-alpha-4050320250224001
         version: 3.0.0-alpha-4050320250224001(debug@4.4.3)(postcss@8.5.6)(rollup@4.57.1)(vue@3.5.28(typescript@5.6.3))
-      '@harmony/physics-ammo':
-        specifier: file:../physics-ammo
-        version: file:../physics-ammo
       '@harmony/physics-bridge':
         specifier: file:../physics-bridge
         version: file:../physics-bridge
@@ -50,9 +47,6 @@ importers:
       '@vue/shared':
         specifier: ^3.5.13
         version: 3.5.28
-      ammojs3:
-        specifier: ^0.0.11
-        version: 0.0.11
       cannon-es:
         specifier: ^0.20.0
         version: 0.20.0
@@ -1134,10 +1128,6 @@ packages:
     resolution: {integrity: sha512-d9zaMRSTIKDLhctzH12MtXvJKSSUhaHcjV+2Z+GK+EEY7XKpP5yR4x+N3TAcHTcu963nIr+TMcCb4DBCYX1z6Q==}
     engines: {node: ^12.22.0 || ^14.17.0 || >=16.0.0}
 
-  '@harmony/physics-ammo@file:../physics-ammo':
-    resolution: {directory: ../physics-ammo, type: directory}
-    engines: {pnpm: '>=10.0.0'}
-
   '@harmony/physics-bridge@file:../physics-bridge':
     resolution: {directory: ../physics-bridge, type: directory}
     engines: {pnpm: '>=10.0.0'}
@@ -2124,9 +2114,6 @@ packages:
 
   alien-signals@1.0.13:
     resolution: {integrity: sha512-OGj9yyTnJEttvzhTUWuscOvtqxq5vrhF7vL9oS0xJ2mK0ItPYP1/y+vCFebfxoEyAz0++1AIwJ5CMr+Fk3nDmg==}
-
-  ammojs3@0.0.11:
-    resolution: {integrity: sha512-pfnMm0XvTLjzCt+ytdpV3aIgooxQzexjkC2DbTyiGsAk8ECEBPxJ8gOQ/m0CE+d9pf9ToPMK8PZJR7jP1h6lOA==}
 
   ansi-escapes@4.3.2:
     resolution: {integrity: sha512-gKXj5ALrKWQLsYG9jlTRmR/xKluxHV+Z9QEwNIgCfM1/uwPMCuzVVnh5mwTd+OuBZcwSIMbqssNWRm1lE51QaQ==}
@@ -5812,12 +5799,6 @@ snapshots:
 
   '@eslint/js@8.57.1': {}
 
-  '@harmony/physics-ammo@file:../physics-ammo':
-    dependencies:
-      '@harmony/physics-bridge': file:../physics-bridge
-      '@harmony/physics-core': file:../physics-core
-      ammojs3: 0.0.11
-
   '@harmony/physics-bridge@file:../physics-bridge':
     dependencies:
       '@harmony/physics-core': file:../physics-core
@@ -6999,8 +6980,6 @@ snapshots:
       uri-js: 4.4.1
 
   alien-signals@1.0.13: {}
-
-  ammojs3@0.0.11: {}
 
   ansi-escapes@4.3.2:
     dependencies:

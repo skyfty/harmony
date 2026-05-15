@@ -416,11 +416,6 @@ import {
   type ScenePackagePointer,
 } from '@harmony/utils/scene-package-storage';
 
-type SceneryPhysicsBackendLoaders = {
-  loadAmmoRuntime: () => Promise<any>;
-  loadCannonRuntime: () => Promise<any>;
-};
-
 type SceneryProps = {
   projectId?: string;
   packageUrl?: string;
@@ -432,7 +427,6 @@ type SceneryProps = {
   serverAssetBaseUrl?: string;
   initialPunchedNodeIds?: string[];
   runtimePrefabSpawns?: RuntimePrefabSpawnRequest[];
-  physicsBackendLoaders?: SceneryPhysicsBackendLoaders;
 };
 
 const props = defineProps<SceneryProps>();
@@ -6203,7 +6197,6 @@ async function ensureSceneryPhysicsBridgeReady(): Promise<PhysicsBridge> {
   if (!physicsBridge) {
     physicsBridge = createSceneryPhysicsBridge({
       engine: currentPhysicsBridgePreference,
-      backendLoaders: props.physicsBackendLoaders,
     });
   }
   if (physicsBridge === null) {

@@ -40,12 +40,6 @@ function resolveAssetFileName(assetInfo: { name?: string }): string | undefined 
   if (!isMp) {
     return undefined;
   }
-
-  const assetName = assetInfo.name ?? '';
-  if (/ammo\.wasm(?:\.[a-z0-9]+)?\.wasm$/i.test(assetName)) {
-    return 'pages/physics-ammo/wasms/[name]-[hash][extname]';
-  }
-
   return undefined;
 }
 
@@ -85,9 +79,7 @@ export default {
         : fileURLToPath(new URL('../schema', import.meta.url)),
       '@harmony/physics-core': fileURLToPath(new URL('../physics-core/src', import.meta.url)),
       '@harmony/physics-bridge': fileURLToPath(new URL('../physics-bridge/src', import.meta.url)),
-      '@harmony/physics-ammo': fileURLToPath(new URL('../physics-ammo/src', import.meta.url)),
       '@harmony/physics-cannon': fileURLToPath(new URL('../physics-cannon/src', import.meta.url)),
-      'ammojs3': fileURLToPath(new URL('./node_modules/ammojs3', import.meta.url)),
       'cannon-es': fileURLToPath(new URL('./node_modules/cannon-es', import.meta.url)),
       'vue': vueRuntimeAlias,
       'three': fileURLToPath(new URL('./node_modules/three', import.meta.url)),
@@ -118,7 +110,7 @@ export default {
       },
     }),
     createMpChunkSplitterPlugin({
-      subpackages: ['pages/scenery', 'pages/physics-ammo', 'pages/physics-cannon'],
+      subpackages: ['pages/scenery'],
       singleChunkMode: true,
       packageSizeLimit: 1.8 * 1024 * 1024,
     }),
@@ -136,22 +128,6 @@ export default {
           '**/physics-bridge/src/**',
           '**/harmony/physics-bridge/**',
         ],
-        'pages/physics-ammo/chunks/vendor': [
-          '@harmony/physics-ammo',
-          'ammojs3',
-          'ammojs3/**',
-          '**/physics-ammo/src/**',
-          '**/harmony/physics-ammo/**',
-          '**/node_modules/ammojs3/**',
-        ],
-        'pages/physics-cannon/chunks/vendor': [
-          '@harmony/physics-cannon',
-          'cannon-es',
-          'cannon-es/**',
-          '**/physics-cannon/src/**',
-          '**/harmony/physics-cannon/**',
-          '**/node_modules/cannon-es/**',
-        ],
         'pages/scenery/chunks/vendor': [
           '@minisheep/three-platform-adapter',
           '@minisheep/three-platform-adapter/wechat',
@@ -160,6 +136,12 @@ export default {
           'three/addons/**',
           'three/examples/**',
           'three/examples/jsm/**',
+          '@harmony/physics-cannon',
+          'cannon-es',
+          'cannon-es/**',
+          '**/physics-cannon/src/**',
+          '**/harmony/physics-cannon/**',
+          '**/node_modules/cannon-es/**',
           '**/harmony/schema/**',
         ],
       },
