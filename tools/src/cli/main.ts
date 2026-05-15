@@ -26,6 +26,12 @@ export async function main(argv: string[]): Promise<void> {
         await cmdProcessSvgIcons(rest);
         return;
       }
+    case "sync-physics":
+      {
+        const { cmdSyncPhysics } = await import("./commands/syncPhysics.js");
+        await cmdSyncPhysics(rest);
+        return;
+      }
     case "--help":
     case "-h":
     case undefined:
@@ -46,5 +52,6 @@ Commands:
   generate-pages-json [--projectRoot <path>] [--pagesDir <path>] [--out <path>] [--home <path>]
   fix-esm-extensions [--root <path>] [--skipNodeModules=false]
   process-svg-icons [--project <path>] [--in <relPath>] [--out <relPath>] [--size <px>] [--clean] [--verbose]
+  sync-physics [--repoRoot <path>] [--viewerRoot <path>]
 `);
 }

@@ -5992,14 +5992,21 @@ function resetPhysicsWorld(): void {
 function resolveSceneryPhysicsBridgePreference(
   settings: Pick<EnvironmentSettings, 'physicsEngine'> | null | undefined,
 ): PhysicsBackendPreference | undefined {
+  const environmentPreference = settings?.physicsEngine;
+  if (environmentPreference === 'ammo' || environmentPreference === 'cannon') {
+    return environmentPreference;
+  }
+
   const propPreference = props.physicsEngine;
-  if (propPreference === 'ammo' || propPreference === 'cannon' || propPreference === 'auto') {
+  if (propPreference === 'ammo' || propPreference === 'cannon') {
     return propPreference;
   }
-  const environmentPreference = settings?.physicsEngine;
-  return environmentPreference === 'ammo' || environmentPreference === 'cannon' || environmentPreference === 'auto'
-    ? environmentPreference
-    : undefined;
+
+  if (environmentPreference === 'auto') {
+    return 'auto';
+  }
+
+  return propPreference === 'auto' ? 'auto' : undefined;
 }
 
 async function reloadSceneryPhysicsBridgeForPreference(

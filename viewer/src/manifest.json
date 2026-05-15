@@ -42,6 +42,9 @@
     },
     "mp-weixin" : {
         "appid" : "",
+        "optimization" : {
+            "subPackages" : true
+        },
         "setting" : {
             "urlCheck" : false,
             "es6": false

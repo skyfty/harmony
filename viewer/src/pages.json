@@ -11,6 +11,16 @@
       "pages": [
         { "path": "index" }
       ]
+    },
+    {
+      "root": "pages/physics-ammo",
+      "name": "physics-ammo",
+      "pages": []
+    },
+    {
+      "root": "pages/physics-cannon",
+      "name": "physics-cannon",
+      "pages": []
     }
   ],
   "globalStyle": {

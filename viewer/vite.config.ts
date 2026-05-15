@@ -1,11 +1,10 @@
 import { fileURLToPath, URL } from 'node:url';
 import { createRequire } from 'node:module';
 import uni from '@dcloudio/vite-plugin-uni';
+import bundleOptimizer from '@uni-ku/bundle-optimizer';
 import threePlatformAdapter from '@minisheep/three-platform-adapter/plugin';
 import glsl from 'vite-plugin-glsl';
 import { visualizer } from 'rollup-plugin-visualizer';
-import { createMpChunkSplitterPlugin } from '@minisheep/vite-plugin-mp-chunk-splitter';
-import { toCustomChunkPlugin } from '@harmony/tools/vite';
 
 // https://vitejs.dev/config/
 const uniPlatform = process.env.UNI_PLATFORM;
@@ -43,6 +42,31 @@ function resolveAssetFileName(assetInfo: { name?: string }): string | undefined 
   return undefined;
 }
 
+function resolveManualChunk(id: string): string | undefined {
+  if (!isMp) {
+    return undefined;
+  }
+
+  const normalizedId = id.replaceAll('\\', '/');
+  if (
+    normalizedId.includes('/physics-ammo/src/')
+    || normalizedId.includes('/src/pages/physics-ammo/engine/')
+    || normalizedId.includes('/node_modules/ammojs3/')
+  ) {
+    return 'pages/physics-ammo/common/vendor';
+  }
+
+  if (
+    normalizedId.includes('/physics-cannon/src/')
+    || normalizedId.includes('/src/pages/physics-cannon/engine/')
+    || normalizedId.includes('/node_modules/cannon-es/')
+  ) {
+    return 'pages/physics-cannon/common/vendor';
+  }
+
+  return undefined;
+}
+
 export default {
   define: {
     'import.meta.env.VITE_SCENERY_ENABLE_GLTF_DRACO': JSON.stringify('false'),
@@ -61,8 +85,9 @@ export default {
     target: buildTarget,
     rollupOptions: {
       output: {
-        chunkFileNames: isMp ? 'pages/shared/chunks/[hash].js' : 'assets/chunks/[hash].js',
-        entryFileNames: isMp ? 'pages/shared/entries/[hash].js' : 'assets/entries/[hash].js',
+        manualChunks(id) {
+          return resolveManualChunk(id);
+        },
         assetFileNames(assetInfo) {
           return resolveAssetFileName(assetInfo) ?? 'assets/[name].[hash][extname]';
         },
@@ -77,9 +102,13 @@ export default {
       '@harmony/schema': useBuiltHarmonyPackages
         ? fileURLToPath(new URL('../schema/dist', import.meta.url))
         : fileURLToPath(new URL('../schema', import.meta.url)),
+      '@harmony/physics-ammo': fileURLToPath(new URL('./src/pages/physics-ammo/runtime.ts', import.meta.url)),
+      '@harmony/physics-ammo-source': fileURLToPath(new URL('./src/pages/physics-ammo/engine', import.meta.url)),
       '@harmony/physics-core': fileURLToPath(new URL('../physics-core/src', import.meta.url)),
       '@harmony/physics-bridge': fileURLToPath(new URL('../physics-bridge/src', import.meta.url)),
-      '@harmony/physics-cannon': fileURLToPath(new URL('../physics-cannon/src', import.meta.url)),
+      '@harmony/physics-cannon': fileURLToPath(new URL('./src/pages/physics-cannon/runtime.ts', import.meta.url)),
+      '@harmony/physics-cannon-source': fileURLToPath(new URL('./src/pages/physics-cannon/engine', import.meta.url)),
+      'ammojs3': fileURLToPath(new URL('./node_modules/ammojs3', import.meta.url)),
       'cannon-es': fileURLToPath(new URL('./node_modules/cannon-es', import.meta.url)),
       'vue': vueRuntimeAlias,
       'three': fileURLToPath(new URL('./node_modules/three', import.meta.url)),
@@ -99,6 +128,25 @@ export default {
   plugins: [
     glsl(),
     getUniPlugin(),
+    bundleOptimizer({
+      enable: isMp
+        ? {
+            // Keep async cross-package loading, but avoid vendor normalization that
+            // creates cross-subpackage circular requires in mp-weixin.
+            optimization: false,
+            'async-import': true,
+            'async-component': true,
+          }
+        : {
+            optimization: false,
+            'async-import': false,
+            'async-component': false,
+          },
+      optimization: {
+        // Disabling this avoids cross-subpackage circular vendor chunks in mp-weixin.
+        normalizeVueEntityModule: false,
+      },
+    }),
     visualizer({
       emitFile: true,
     }),
@@ -107,43 +155,6 @@ export default {
       assetsOutput: {
         worker: 'pages/scenery/workers',
         wasm: 'pages/scenery/wasms',
-      },
-    }),
-    createMpChunkSplitterPlugin({
-      subpackages: ['pages/scenery'],
-      singleChunkMode: true,
-      packageSizeLimit: 1.8 * 1024 * 1024,
-    }),
-    toCustomChunkPlugin({
-      manualChunks: {
-        'pages/shared/chunks/physics-core': [
-          '@harmony/physics-core',
-          '@harmony/physics-core/**',
-          '**/physics-core/src/**',
-          '**/harmony/physics-core/**',
-        ],
-        'pages/shared/chunks/physics-bridge': [
-          '@harmony/physics-bridge',
-          '@harmony/physics-bridge/**',
-          '**/physics-bridge/src/**',
-          '**/harmony/physics-bridge/**',
-        ],
-        'pages/scenery/chunks/vendor': [
-          '@minisheep/three-platform-adapter',
-          '@minisheep/three-platform-adapter/wechat',
-          '@minisheep/three-platform-adapter/dist/three-override/jsm/**',
-          'three',
-          'three/addons/**',
-          'three/examples/**',
-          'three/examples/jsm/**',
-          '@harmony/physics-cannon',
-          'cannon-es',
-          'cannon-es/**',
-          '**/physics-cannon/src/**',
-          '**/harmony/physics-cannon/**',
-          '**/node_modules/cannon-es/**',
-          '**/harmony/schema/**',
-        ],
       },
     }),
     {

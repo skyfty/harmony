@@ -29,6 +29,12 @@ import { onLoad, onUnload } from '@dcloudio/uni-app';
 import { createPunchRecord, getDownloadCdnBaseUrl, getPunchProgress } from '@harmony/utils';
 import SceneryViewer from './uni_modules/scenery/components/SceneryViewer.vue';
 
+defineOptions({
+  componentPlaceholder: {
+    SceneryViewer: 'view',
+  },
+});
+
 const projectId = ref<string>('');
 const packageUrl = ref<string>('');
 // sceneUrl removed: use packageUrl instead
@@ -37,7 +43,7 @@ const sceneId = ref<string>('');
 const selectedVehicleIdentifier = ref<string>('');
 const initialPunchedNodeIds = ref<string[]>([]);
 const serverAssetBaseUrl = getDownloadCdnBaseUrl();
-const resolvedPhysicsEngine = ref<'cannon'>('cannon');
+const resolvedPhysicsEngine = ref<'ammo' | 'cannon' | 'auto' | undefined>(undefined);
 const loadError = ref<string>('');
 const pageReady = ref(false);
 
@@ -78,6 +84,20 @@ function decodeQueryValue(value: unknown): string {
   } catch {
     return trimmed;
   }
+}
+
+function resolvePhysicsEngineFromQuery(value: unknown): 'ammo' | 'cannon' | 'auto' | undefined {
+  if (value === 'ammo' || value === 'cannon' || value === 'auto') {
+    return value;
+  }
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'ammo' || normalized === 'cannon' || normalized === 'auto') {
+    return normalized;
+  }
+  return undefined;
 }
 
 function handlePunch(payload: PunchEventPayload): void {
@@ -129,6 +149,7 @@ onLoad((query: Record<string, unknown> | undefined) => {
   sceneSpotId.value = typeof record.sceneSpotId === 'string' ? record.sceneSpotId : '';
   sceneId.value = typeof record.sceneId === 'string' ? record.sceneId : '';
   selectedVehicleIdentifier.value = typeof record.vehicleIdentifier === 'string' ? record.vehicleIdentifier : 'car1';
+  resolvedPhysicsEngine.value = resolvePhysicsEngineFromQuery(record.physicsEngine);
 
   void loadPunchProgress();
   pageReady.value = true;

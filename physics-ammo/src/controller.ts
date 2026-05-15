@@ -1,10 +1,27 @@
 import type { PhysicsBridgeInitResult, PhysicsInitOptions, PhysicsRaycastHit, PhysicsSceneAsset } from '@harmony/physics-core'
 import type { PhysicsWorkerController } from '@harmony/physics-bridge/runtime'
-import { AmmoModuleLoader, type AmmoModuleFactory } from './ammoLoader'
 import { AmmoPhysicsWorld } from './world'
 
 export type CreateAmmoPhysicsControllerOptions<TAmmoModule> = {
   moduleFactory: AmmoModuleFactory<TAmmoModule>
+}
+
+type AmmoModuleFactory<TModule> = () => Promise<TModule>
+
+class AmmoModuleLoader<TModule> {
+  private readonly factory: AmmoModuleFactory<TModule>
+  private loadingPromise: Promise<TModule> | null = null
+
+  constructor(factory: AmmoModuleFactory<TModule>) {
+    this.factory = factory
+  }
+
+  async load(): Promise<TModule> {
+    if (!this.loadingPromise) {
+      this.loadingPromise = this.factory()
+    }
+    return this.loadingPromise
+  }
 }
 
 export function createAmmoPhysicsController<TAmmoModule>(

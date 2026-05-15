@@ -1,5 +1,6 @@
 import type {
   PhysicsAddRuntimeBodiesCommand,
+  PhysicsBackendId,
   PhysicsBackendPreference,
   PhysicsBodyTransformCommand,
   PhysicsBridge,
@@ -12,7 +13,8 @@ import type {
   PhysicsStepFrame,
   PhysicsVehicleInputCommand,
 } from '@harmony/physics-core'
-import { createCannonPhysicsController, createCannonSchemaPhysicsBackendBridge } from '@harmony/physics-cannon'
+import type { PhysicsBackendBridge } from '@harmony/physics-bridge'
+import type { PhysicsWorkerController } from '@harmony/physics-bridge/runtime'
 import { initializePhysicsBackendBridge } from '@harmony/schema/physicsBackendBridge'
 import { createInMemoryWechatPhysicsWorker, createWechatPhysicsBridge } from '@harmony/physics-bridge/wechat'
 
@@ -21,10 +23,13 @@ export type CreateSceneryPhysicsBridgeOptions = {
 }
 
 class LazySceneryPhysicsBridge implements PhysicsBridge {
+  private readonly options: CreateSceneryPhysicsBridgeOptions
   private bridge: PhysicsBridge | null = null
   private bridgePromise: Promise<PhysicsBridge> | null = null
 
-  constructor(_options: CreateSceneryPhysicsBridgeOptions = {}) {}
+  constructor(options: CreateSceneryPhysicsBridgeOptions = {}) {
+    this.options = options
+  }
 
   async init(options: PhysicsInitOptions): Promise<PhysicsBridgeInitResult> {
     const bridge = await this.ensureBridge()
@@ -94,15 +99,65 @@ class LazySceneryPhysicsBridge implements PhysicsBridge {
   }
 
   private async createBridge(): Promise<PhysicsBridge> {
-    initializePhysicsBackendBridge(createCannonSchemaPhysicsBackendBridge())
+    const resolvedEngine = resolvePhysicsBackendId(this.options.engine)
+    const backend = await loadPhysicsBackend(resolvedEngine)
+    initializePhysicsBackendBridge(backend.schemaBridge)
+
     return createWechatPhysicsBridge({
-      subpackageName: 'scenery',
-      loadSubpackage: async () => {},
-      createWorker: () => createInMemoryWechatPhysicsWorker(createCannonPhysicsController()),
+      subpackageName: backend.subpackageName,
+      loadSubpackage: loadWechatSubpackage,
+      createWorker: () => createInMemoryWechatPhysicsWorker(backend.createController()),
     })
   }
 }
 
 export function createSceneryPhysicsBridge(options: CreateSceneryPhysicsBridgeOptions = {}): PhysicsBridge {
   return new LazySceneryPhysicsBridge(options)
+}
+
+function resolvePhysicsBackendId(engine: PhysicsBackendPreference | undefined): Extract<PhysicsBackendId, 'ammo' | 'cannon'> {
+  return engine === 'ammo' ? 'ammo' : 'cannon'
+}
+
+function loadWechatSubpackage(name: string): Promise<void> {
+  const wxAny = typeof wx !== 'undefined' ? (wx as typeof wx & { loadSubpackage?: (...args: any[]) => any }) : null
+  if (!wxAny || typeof wxAny.loadSubpackage !== 'function') {
+    return Promise.resolve()
+  }
+  return new Promise<void>((resolve, reject) => {
+    const task = wxAny.loadSubpackage({
+      name,
+      success: () => resolve(),
+      fail: (error: unknown) => reject(error),
+    })
+    task?.onError?.((error: unknown) => reject(error))
+  })
+}
+
+type LoadedPhysicsBackend = {
+  subpackageName: 'physics-ammo' | 'physics-cannon'
+  schemaBridge: PhysicsBackendBridge
+  createController: () => PhysicsWorkerController
+}
+
+async function loadPhysicsBackend(
+  engine: Extract<PhysicsBackendId, 'ammo' | 'cannon'>,
+): Promise<LoadedPhysicsBackend> {
+  if (engine === 'ammo') {
+    const ammoRuntime = await import('@harmony/physics-ammo')
+    const ammoBackend = await ammoRuntime.createAmmoPhysicsBackend()
+    return {
+      subpackageName: 'physics-ammo',
+      schemaBridge: ammoBackend.schemaBridge,
+      createController: ammoBackend.createController,
+    }
+  }
+
+  const cannonRuntime = await import('@harmony/physics-cannon')
+  const cannonBackend = await cannonRuntime.createCannonPhysicsBackend()
+  return {
+    subpackageName: 'physics-cannon',
+    schemaBridge: cannonBackend.schemaBridge,
+    createController: cannonBackend.createController,
+  }
 }

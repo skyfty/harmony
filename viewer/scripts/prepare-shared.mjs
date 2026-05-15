@@ -13,4 +13,19 @@ execSync('pnpm --dir ../utils run build', {
   stdio: 'inherit',
 })
 
+execSync('pnpm --dir ../schema run build', {
+  cwd: projectRoot,
+  stdio: 'inherit',
+})
+
+execSync('pnpm --dir ../tools run build', {
+  cwd: projectRoot,
+  stdio: 'inherit',
+})
+
+execSync('node ../tools/dist/cli-bin.js sync-physics --repoRoot .. --viewerRoot .', {
+  cwd: projectRoot,
+  stdio: 'inherit',
+})
+
 rmSync(viteDepsDir, { recursive: true, force: true })
