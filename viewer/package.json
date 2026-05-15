@@ -52,6 +52,9 @@
     "robust-predicates": "^1.1.0",
     "splaytree": "^3.2.3",
     "three": "^0.172.0",
+    
+    "three-csm": "^4.2.1",
+    "three-mesh-bvh": "^0.9.1",
     "vue": "^3.5.13",
     "vue-i18n": "^9.14.3",
     "web-streams-polyfill": "^3.2.1"
