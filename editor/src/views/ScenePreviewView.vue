@@ -10414,6 +10414,50 @@ function consumeScenePreviewPhysicsBridgeStepFrame(frame: PhysicsStepFrame): voi
 	applyScenePreviewPhysicsBridgeFrameToObjects()
 }
 
+const VEHICLE_BRIDGE_SYNC_POSITION_EPSILON_SQ = 1e-8
+const VEHICLE_BRIDGE_SYNC_QUATERNION_DOT_THRESHOLD = 1 - 1e-6
+
+function isPhysicsTransformClose(
+	currentPosition: { x: number; y: number; z: number },
+	currentQuaternion: { x: number; y: number; z: number; w: number },
+	frameState: PhysicsBridgeBodyFrameState | null | undefined,
+): boolean {
+	if (!frameState) {
+		return false
+	}
+	const dx = currentPosition.x - frameState.position.x
+	const dy = currentPosition.y - frameState.position.y
+	const dz = currentPosition.z - frameState.position.z
+	if ((dx * dx) + (dy * dy) + (dz * dz) > VEHICLE_BRIDGE_SYNC_POSITION_EPSILON_SQ) {
+		return false
+	}
+
+	const currentQuaternionLengthSq =
+		(currentQuaternion.x * currentQuaternion.x)
+		+ (currentQuaternion.y * currentQuaternion.y)
+		+ (currentQuaternion.z * currentQuaternion.z)
+		+ (currentQuaternion.w * currentQuaternion.w)
+	const frameQuaternionLengthSq =
+		(frameState.quaternion.x * frameState.quaternion.x)
+		+ (frameState.quaternion.y * frameState.quaternion.y)
+		+ (frameState.quaternion.z * frameState.quaternion.z)
+		+ (frameState.quaternion.w * frameState.quaternion.w)
+	if (currentQuaternionLengthSq <= 0 || frameQuaternionLengthSq <= 0) {
+		return false
+	}
+
+	const normalizedDot =
+		Math.abs(
+			(
+				(currentQuaternion.x * frameState.quaternion.x)
+				+ (currentQuaternion.y * frameState.quaternion.y)
+				+ (currentQuaternion.z * frameState.quaternion.z)
+				+ (currentQuaternion.w * frameState.quaternion.w)
+			) / Math.sqrt(currentQuaternionLengthSq * frameQuaternionLengthSq),
+		)
+	return normalizedDot >= VEHICLE_BRIDGE_SYNC_QUATERNION_DOT_THRESHOLD
+}
+
 function applyScenePreviewPhysicsBridgeFrameToObjects(): void {
 	if (!physicsBridgeFrameBodiesByNodeId.size) {
 		return
@@ -10526,6 +10570,10 @@ function syncScenePreviewPhysicsBridgeBodyTransforms(): void {
 		if (typeof bodyId !== 'number') {
 			return
 		}
+		const frameState = physicsBridgeFrameBodiesByNodeId.get(nodeId)
+		if (isPhysicsTransformClose(entry.body.position, entry.body.quaternion, frameState)) {
+			return
+		}
 		syncedNodeIds.add(nodeId)
 		commands.push(
 			bridge.setBodyTransform({
@@ -10554,11 +10602,7 @@ function syncScenePreviewPhysicsBridgeBodyTransforms(): void {
 		object.getWorldPosition(physicsBridgeBodySyncPositionHelper)
 		object.getWorldQuaternion(physicsBridgeBodySyncQuaternionHelper).normalize()
 		const frameState = physicsBridgeFrameBodiesByNodeId.get(nodeId)
-		if (
-			frameState
-			&& frameState.position.distanceToSquared(physicsBridgeBodySyncPositionHelper) <= 1e-8
-			&& Math.abs(frameState.quaternion.dot(physicsBridgeBodySyncQuaternionHelper)) >= 1 - 1e-6
-		) {
+		if (isPhysicsTransformClose(physicsBridgeBodySyncPositionHelper, physicsBridgeBodySyncQuaternionHelper, frameState)) {
 			return
 		}
 		commands.push(
