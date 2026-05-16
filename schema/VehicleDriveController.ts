@@ -764,7 +764,7 @@ export class VehicleDriveController {
     this.resetFollowCameraOffset()
     this.resetInputs()
     this.resetSpeedGovernor()
-    if (this.deps.setCameraViewState) {
+        if (this.deps.setCameraViewState) {
       this.deps.setCameraViewState('watching', targetNodeId)
     }
     if (this.deps.setCameraCaging) {

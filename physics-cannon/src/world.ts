@@ -39,7 +39,7 @@ const DEFAULT_WORLD_SETTINGS: PhysicsWorldSettings = {
 }
 
 const VEHICLE_ENGINE_FORCE = 320
-const VEHICLE_BRAKE_FORCE = 42
+const VEHICLE_BRAKE_FORCE = 16
 const VEHICLE_STEER_ANGLE = (26 * Math.PI) / 180
 
 export class CannonPhysicsWorld {
@@ -359,23 +359,45 @@ export class CannonPhysicsWorld {
     }
   }
 
+  /**
+   * 应用所有车辆的输入（转向、油门、刹车、手刹），并将其作用到物理车辆对象上。
+   * 遍历所有注册的车辆，根据输入值计算实际的物理参数，
+   * 并分别设置每个轮子的刹车、转向和发动机动力。
+   * 最后唤醒车辆刚体，确保物理引擎能正确模拟。
+   */
   private applyVehicleInputs(): void {
     this.vehicles.forEach((state, vehicleId) => {
+      // 获取当前车辆的输入（如未设置则使用默认值0）
       const input = this.vehicleInputs.get(vehicleId)
+      // 转向输入，范围[-1, 1]
       const steeringInput = clamp(input?.steering ?? 0, -1, 1)
+      // 油门输入，范围[-1, 1]
       const throttleInput = clamp(input?.throttle ?? 0, -1, 1)
+      // 刹车输入，范围[0, 1]
       const brakeInput = clamp(input?.brake ?? 0, 0, 1)
+      // 手刹输入，范围[0, 1]
       const handbrakeInput = clamp(input?.handbrake ?? 0, 0, 1)
+      // 实际转向角度
       const steeringValue = steeringInput * VEHICLE_STEER_ANGLE
+      // 实际发动机动力
       const engineForce = throttleInput * VEHICLE_ENGINE_FORCE
+      // 实际刹车力度，取刹车和手刹的最大值
       const brakeForce = Math.max(brakeInput, handbrakeInput) * VEHICLE_BRAKE_FORCE
 
+      // 遍历每个轮子，分别设置刹车、转向和动力
       for (let wheelIndex = 0; wheelIndex < state.desc.wheels.length; wheelIndex += 1) {
-        state.vehicle.setBrake(brakeForce, wheelIndex)
+        // 判断该轮子是否可转向
         const steerable = state.steerableWheelIndices.includes(wheelIndex)
+        // 设置转向角度（仅对可转向轮有效）
         state.vehicle.setSteeringValue(steerable ? steeringValue : 0, wheelIndex)
+        // 设置发动机动力（仅对可转向轮有效）
         state.vehicle.applyEngineForce(steerable ? engineForce : 0, wheelIndex)
+
+        // 设置当前轮子的刹车力度
+        // state.vehicle.setBrake(brakeForce, wheelIndex)
+
       }
+      // 唤醒车辆刚体，防止休眠导致物理效果不生效
       state.body.wakeUp()
     })
   }

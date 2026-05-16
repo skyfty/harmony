@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import type { PurePursuitComponentProps, VehicleComponentProps } from './components'
 import type { VehicleDriveVehicle } from './VehicleDriveController'
 import { buildPolylineMetricData, projectPointToPolyline, samplePolylineAtS } from './polylineProgress'
+import { sleepPhysicsBody, stopPhysicsBodyMotion } from './physicsRuntimeBridge'
 
 const VEHICLE_CONTROL_DEBUG_KEY = 'harmony:debug:vehicle-control'
 const PURE_PURSUIT_DEBUG_KEY = 'harmony:debug:pure-pursuit'
@@ -290,9 +291,8 @@ export function updateVehicleSpeedAndApplyParkingHoldSafe(params: {
       ) {
         const brakeForce = params.resolveBrakeForce(params.vehicleInstance)
         holdVehicleBrakeSafe({ vehicleInstance: params.vehicleInstance, brakeForce })
-        params.chassisBody.velocity.set(0, 0, 0)
-        params.chassisBody.angularVelocity.set(0, 0, 0)
-        params.chassisBody.sleep?.()
+        stopPhysicsBodyMotion(params.chassisBody)
+        sleepPhysicsBody(params.chassisBody, { minSpeedLimit: 0.05, minTimeLimit: 0.05 })
       }
       return forwardSpeed >= parkedSpeedEpsilon ? forwardSpeed : 0
     }
