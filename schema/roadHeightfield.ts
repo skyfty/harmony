@@ -918,13 +918,20 @@ function buildHeightfieldShapeFromSeries({
 	const effectiveElementSize = targetElementSize
 
 	const matrix: number[][] = []
-		
-	for (let row = 0; row <pointsX; row += 1) {
-		const rowValues: number[] = []
-		for (let col = 0; col <  pointsZ; col += 1) {
-			rowValues.push(0)
+	for (let col = 0; col < pointsX; col += 1) {
+		const columnValues: number[] = []
+		for (let row = pointsZ - 1; row >= 0; row -= 1) {
+			const uAlong = pointsZ > 1 ? row / (pointsZ - 1) : 0
+			const indexFloat = startIndex + uAlong * span
+			const i0 = Math.max(0, Math.min(heights.length - 1, Math.floor(indexFloat)))
+			const i1 = Math.max(0, Math.min(heights.length - 1, i0 + 1))
+			const frac = indexFloat - i0
+			const h0 = heights[i0] ?? 0
+			const h1 = heights[i1] ?? h0
+			const height = h0 + (h1 - h0) * frac
+			columnValues.push(Number.isFinite(height) ? height : 0)
 		}
-		matrix.push(rowValues)
+		matrix.push(columnValues)
 	}
 
 	return {
@@ -933,7 +940,7 @@ function buildHeightfieldShapeFromSeries({
 		elementSize: effectiveElementSize,
 		width,
 		depth,
-		offset: [-halfWidth, -halfDepth, 0],
+		offset: [-halfWidth, 0, -halfDepth],
 		applyScale: false,
 	}
 }

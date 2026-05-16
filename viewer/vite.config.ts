@@ -40,6 +40,8 @@ const sceneryPhysicsBridgeSourcePath = fileURLToPath(new URL('../physics-bridge/
 const utilsSrcPath = fileURLToPath(new URL('../utils/src', import.meta.url)).replaceAll('\\', '/');
 const eventTargetShimPath = fileURLToPath(new URL('./node_modules/event-target-shim/index.mjs', import.meta.url)).replaceAll('\\', '/');
 const webStreamsPolyfillPath = fileURLToPath(new URL('./node_modules/web-streams-polyfill/dist/polyfill.mjs', import.meta.url)).replaceAll('\\', '/');
+const cannonEsEntryPath = fileURLToPath(new URL('./src/pages/physics-cannon/cannon-es/dist/cannon-es.js', import.meta.url)).replaceAll('\\', '/');
+const ammoJsEntryPath = fileURLToPath(new URL('./src/pages/physics-ammo/ammojs3/dist/ammo.js', import.meta.url)).replaceAll('\\', '/');
 const schemaMirrorPath = fileURLToPath(new URL('./src/pages/scenery/schema', import.meta.url)).replaceAll('\\', '/');
 const physicsCoreMirrorPath = fileURLToPath(new URL('./src/pages/scenery/physics-core', import.meta.url)).replaceAll('\\', '/');
 const sceneryPhysicsBridgeMirrorPath = fileURLToPath(new URL('./src/pages/scenery/physics-bridge', import.meta.url)).replaceAll('\\', '/');
@@ -247,8 +249,8 @@ export default {
       { find: '@harmony/utils/scene-package-fs', replacement: `${utilsSrcPath}/scenePackageFs.ts` },
       { find: '@harmony/utils/query', replacement: `${utilsSrcPath}/query.ts` },
       { find: /^@harmony\/utils\/(.*)$/, replacement: `${utilsSrcPath}/$1` },
-      { find: 'cannon-es', replacement: fileURLToPath(new URL('./src/pages/physics-cannon/cannon-es', import.meta.url)) },
-      { find: 'ammojs3', replacement: fileURLToPath(new URL('./src/pages/physics-ammo/ammojs3', import.meta.url)) },
+      { find: 'cannon-es', replacement: cannonEsEntryPath },
+      { find: 'ammojs3', replacement: ammoJsEntryPath },
       { find: '@harmony/physics-ammo', replacement: fileURLToPath(new URL('./src/pages/physics-ammo/runtime.ts', import.meta.url)) },
       { find: '@harmony/physics-ammo-source', replacement: fileURLToPath(new URL('./src/pages/physics-ammo/engine', import.meta.url)) },
       { find: '@harmony/physics-cannon', replacement: fileURLToPath(new URL('./src/pages/physics-cannon/runtime.ts', import.meta.url)) },
