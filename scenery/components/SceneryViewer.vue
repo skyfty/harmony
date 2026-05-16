@@ -5431,7 +5431,7 @@ function updateInstancedCullingAndLod(): void {
   if (!context) {
     return;
   }
-  const now = typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
+  const now = Date.now();
   const camera = context.camera;
   camera.updateMatrixWorld(true);
   instancedCullingProjView.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
