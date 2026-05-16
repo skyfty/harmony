@@ -8,6 +8,7 @@ import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js'
 import Stats from 'three/examples/jsm/libs/stats.module.js'
 import { CannonEsDebuggerPro } from '@vladkrutenyuk/cannon-es-debugger-pro'
 import type * as CANNON from 'cannon-es'
+import { ScenePreviewPhysicsCollisionDebugRuntime } from '@/physics/collisionDebugRuntime'
 import {
 	DEFAULT_ENVIRONMENT_GRAVITY,
 	cloneEnvironmentSettings,
@@ -130,7 +131,6 @@ import {
 	type SceneCsmConfig,
 	type SceneCsmShadowRuntime,
 } from '@schema/sceneCsm'
-import { buildGroundAirWallDefinitions } from '@schema/airWall'
 import { createDefaultGroundSurfacePreviewLoaders, syncGroundSurfacePreviewForGround } from '@schema/groundSurfacePreview'
 import {
 	type PhysicsBodyBindingEntry as RigidbodyInstance,
@@ -444,6 +444,7 @@ const previousSceneById = new Map<string, string>()
 
 const isGroundWireframeVisible = ref(true)
 const isOtherRigidbodyWireframeVisible = ref(true)
+const isPhysicsCollisionDebugVisible = ref(true)
 const isInstancedCullingVisualizationVisible = ref(false)
 const instancedLodFrustumCuller = createInstancedBvhFrustumCuller()
 const isRendererDebugVisible = ref(false)
@@ -596,12 +597,9 @@ let lastRendererDebugSignature = ''
 
 const rendererSizeHelper = new THREE.Vector2()
 const instancedMatrixUploadMeshes = new Set<THREE.InstancedMesh>()
-const isRigidbodyDebugVisible = computed(
-	() => physicsEnvironmentEnabled.value
-		&& currentPhysicsBridgePreference.value !== 'cannon'
-		&& (isGroundWireframeVisible.value || isOtherRigidbodyWireframeVisible.value),
-)
-
+const isRigidbodyDebugVisible = computed(() => false)
+const legacyPhysicsDebugNoops = [updateScenePreviewCannonPhysicsDebugger, setAirWallDebugVisibility, updateRigidbodyDebugTransforms]
+void legacyPhysicsDebugNoops
 function appendWarningMessage(message: string): void {
 	const trimmed = typeof message === 'string' ? message.trim() : ''
 	if (!trimmed) {
@@ -1736,6 +1734,13 @@ let groundCollisionReferenceElapsed = 0
 let lastGroundCollisionDiagnosticLogAt = 0
 let lastGroundCollisionDiagnosticSignature = ''
 const GROUND_COLLISION_DIAGNOSTIC_LOG_INTERVAL_MS = 2000
+const legacyGroundCollisionDiagnostics = [
+	formatGroundCollisionDiagnosticPayload,
+	lastGroundCollisionDiagnosticLogAt,
+	lastGroundCollisionDiagnosticSignature,
+	GROUND_COLLISION_DIAGNOSTIC_LOG_INTERVAL_MS,
+]
+void legacyGroundCollisionDiagnostics
 
 function formatGroundCollisionDiagnosticPayload(payload: Record<string, unknown>): string {
 	try {
@@ -2097,6 +2102,7 @@ const physicsBridgeHeightfieldAdjustmentInverse = physicsBridgeHeightfieldAdjust
 const physicsBridgeBodySyncPositionHelper = new THREE.Vector3()
 const physicsBridgeBodySyncQuaternionHelper = new THREE.Quaternion()
 const physicsEnvironmentEnabled = ref(true)
+const physicsCollisionDebugRuntime = new ScenePreviewPhysicsCollisionDebugRuntime()
 const rigidbodyInstances = new Map<string, RigidbodyInstance>()
 type AirWallDebugEntry = {
 	key: string
@@ -2122,9 +2128,6 @@ let cannonPhysicsDebuggerRoot: THREE.Group | null = null
 let cannonPhysicsDebugger: CannonEsDebuggerPro | null = null
 let cannonPhysicsWorld: CANNON.World | null = null
 let airWallDebugGroup: THREE.Group | null = null
-let previewGroundCollisionNextRuntimeId = 0x70000000
-let previewGroundCollisionBridgeMutationChain: Promise<void> = Promise.resolve()
-const previewGroundCollisionRuntimeBodyIds = new Set<number>()
 const rigidbodyDebugMaterial = new THREE.LineBasicMaterial({
 	color: 0xffc107,
 	transparent: true,
@@ -2140,6 +2143,9 @@ const airWallDebugMaterial = new THREE.MeshBasicMaterial({
 	depthWrite: false,
 	depthTest: false,
 })
+let previewGroundCollisionNextRuntimeId = 0x70000000
+let previewGroundCollisionBridgeMutationChain: Promise<void> = Promise.resolve()
+const previewGroundCollisionRuntimeBodyIds = new Set<number>()
 
 type GroundChunkUserData = {
 	startRow: number
@@ -4604,52 +4610,16 @@ watch(volumePercent, (value) => {
 	listener.setMasterVolume(Math.max(0, Math.min(1, value / 100)))
 })
 
-watch([isGroundWireframeVisible, isOtherRigidbodyWireframeVisible], ([groundEnabled, otherEnabled]) => {
-	if (!physicsEnvironmentEnabled.value) {
-		disposeRigidbodyDebugHelpers()
-		disposeCannonPhysicsDebugger()
-		setAirWallDebugVisibility(false)
-		return
-	}
-	if (currentPhysicsBridgePreference.value === 'cannon') {
-		syncScenePreviewCannonPhysicsDebugger()
-		setAirWallDebugVisibility(groundEnabled)
-		return
-	}
-	const enabled = groundEnabled || otherEnabled
-	if (enabled) {
-		ensureRigidbodyDebugGroup()
-		syncRigidbodyDebugHelpers()
-		updateRigidbodyDebugTransforms()
-		setAirWallDebugVisibility(groundEnabled)
-		return
-	}
-	disposeRigidbodyDebugHelpers()
-	setAirWallDebugVisibility(false)
-})
-
-watch([physicsEnvironmentEnabled, isCannonPhysicsDebuggerVisible, currentPhysicsBridgePreference], () => {
-	syncScenePreviewCannonPhysicsDebugger()
-})
-
-watch(physicsEnvironmentEnabled, (enabled) => {
-	if (!enabled) {
-		disposeRigidbodyDebugHelpers()
-		disposeCannonPhysicsDebugger()
-		setAirWallDebugVisibility(false)
-		return
-	}
-	if (currentPhysicsBridgePreference.value === 'cannon') {
-		syncScenePreviewCannonPhysicsDebugger()
-		return
-	}
-	if (isRigidbodyDebugVisible.value) {
-		ensureRigidbodyDebugGroup()
-		syncRigidbodyDebugHelpers()
-		updateRigidbodyDebugTransforms()
-		setAirWallDebugVisibility(isGroundWireframeVisible.value)
-	}
-})
+watch([physicsEnvironmentEnabled, currentPhysicsBridgePreference, isPhysicsCollisionDebugVisible], () => {
+	physicsCollisionDebugRuntime.setEngine(
+		physicsEnvironmentEnabled.value
+			? (currentPhysicsBridgePreference.value === 'ammo' || currentPhysicsBridgePreference.value === 'cannon'
+				? currentPhysicsBridgePreference.value
+				: null)
+			: null,
+	)
+	physicsCollisionDebugRuntime.setVisible(physicsEnvironmentEnabled.value && isPhysicsCollisionDebugVisible.value)
+}, { immediate: true })
 
 watch(isRendererDebugVisible, (visible) => {
 	if (visible) {
@@ -5472,9 +5442,6 @@ async function spawnBehaviorRuntimePrefab(event: Extract<BehaviorRuntimeEvent, {
 		refreshBehaviorProximityCandidates()
 	}
 	warningMessages.value = [...warningMessages.value, ...graph.warnings]
-	if (isRigidbodyDebugVisible.value) {
-		syncRigidbodyDebugHelpers()
-	}
 }
 
 async function ensureLanternText(assetId: string): Promise<void> {
@@ -8521,6 +8488,7 @@ function initRenderer() {
 	scene = new THREE.Scene()
 	scene.background = new THREE.Color(DEFAULT_BACKGROUND_COLOR)
 	scene.environmentIntensity = SKY_ENVIRONMENT_INTENSITY
+	physicsCollisionDebugRuntime.attachScene(scene)
 
 	camera = new THREE.PerspectiveCamera(60, 1, 0.1, DEFAULT_SCENE_CAMERA_FAR)
   	camera.position.set(0, CAMERA_HEIGHT, 0)
@@ -8954,9 +8922,8 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
  */
 function updatePerFrameDiagnostics(delta: number): void {
 	updateLazyPlaceholders(delta)
-	if (isRigidbodyDebugVisible.value) {
-		updateRigidbodyDebugTransforms()
-	}
+	void delta
+	physicsCollisionDebugRuntime.update()
 }
 
 function syncRendererDebugForFrame(currentRenderer: THREE.WebGLRenderer, currentScene: THREE.Scene): void {
@@ -10177,9 +10144,8 @@ function resolveScenePreviewGroundCollisionSignature(document: SceneJsonExportDo
 	return `${compiledState.signature}::${infiniteState.signature}`
 }
 
-function handleScenePreviewCannonWorldReady(world: CANNON.World | null): void {
-	cannonPhysicsWorld = world
-	syncScenePreviewCannonPhysicsDebugger()
+function handleScenePreviewCannonWorldReady(world: unknown | null): void {
+	physicsCollisionDebugRuntime.setCannonWorld(world)
 }
 
 function resolveScenePreviewCompiledGroundTileLoader(): ((record: { path: string }) => Promise<ArrayBuffer | null>) | undefined {
@@ -10469,6 +10435,7 @@ async function loadScenePreviewPhysicsBridgeScene(document: SceneJsonExportDocum
 		currentGroundChunkManifestSceneId = null
 		currentGroundChunkManifestRevision = -1
 		currentGroundChunkManifest = null
+		physicsCollisionDebugRuntime.setSceneAsset(null)
 		await disposeScenePreviewPhysicsBridgeScene()
 		return
 	}
@@ -10486,6 +10453,7 @@ async function loadScenePreviewPhysicsBridgeScene(document: SceneJsonExportDocum
 	currentPhysicsBridgeGroundCollisionSignature = resolveScenePreviewGroundCollisionSignature(document)
 	const requestId = ++physicsBridgeSceneRequestId
 	const asset = buildPhysicsSceneAsset(document)
+	physicsCollisionDebugRuntime.setSceneAsset(asset)
 	try {
 		const bridge = await ensureScenePreviewPhysicsBridgeReady()
 		previewGroundCollisionRuntimeBodyIds.clear()
@@ -10495,7 +10463,6 @@ async function loadScenePreviewPhysicsBridgeScene(document: SceneJsonExportDocum
 		}
 		updateScenePreviewPhysicsBridgeIndex(asset)
 		physicsBridgeSceneLoaded = true
-		updateScenePreviewCannonPhysicsDebugger()
 	} catch (error) {
 		console.warn('[ScenePreview] Failed to load physics bridge scene', error)
 	}
@@ -10581,6 +10548,7 @@ function consumeScenePreviewPhysicsBridgeStepFrame(frame: PhysicsStepFrame): voi
 		physicsBridgeFrameBodiesByNodeId.set(nodeId, createdState)
 		syncScenePreviewBridgeVehicleFromFrame(nodeId, createdState)
 	}
+	physicsCollisionDebugRuntime.applyStepFrame(frame)
 	applyScenePreviewPhysicsBridgeFrameToObjects()
 }
 
@@ -10710,7 +10678,6 @@ function stepScenePreviewPhysicsBridge(delta: number): void {
 				return
 			}
 			consumeScenePreviewPhysicsBridgeStepFrame(frame)
-			updateScenePreviewCannonPhysicsDebugger()
 		})
 		.catch((error) => {
 			console.warn('[ScenePreview] Failed to step physics bridge', error)
@@ -10913,14 +10880,12 @@ async function disposeScenePreviewPhysicsBridgeScene(): Promise<void> {
 	} catch (error) {
 		console.warn('[ScenePreview] Failed to dispose physics bridge scene', error)
 	} finally {
-		if (currentPhysicsBridgePreference.value === 'cannon' && cannonPhysicsDebugger) {
-			cannonPhysicsDebugger.clear()
-		}
 		physicsBridgeSceneLoaded = false
 		physicsBridgeStepPromise = null
 		physicsBridgeBodySyncPromise = null
 		resetPhysicsBridgeVehicleInputSyncState(physicsBridgeVehicleInputSyncState)
 		physicsBridgeFrameBodiesByNodeId.clear()
+		physicsCollisionDebugRuntime.resetBackend()
 	}
 }
 
@@ -10939,9 +10904,6 @@ async function destroyScenePreviewPhysicsBridge(): Promise<void> {
 	} catch (error) {
 		console.warn('[ScenePreview] Failed to destroy physics bridge', error)
 	} finally {
-		disposeRigidbodyDebugHelpers()
-		disposeCannonPhysicsDebugger()
-		cannonPhysicsWorld = null
 		physicsBridgeSceneRequestId += 1
 		currentPhysicsBridgeGroundCollisionSignature = ''
 		physicsBridgeBodyIdByNodeId.clear()
@@ -10950,48 +10912,8 @@ async function destroyScenePreviewPhysicsBridge(): Promise<void> {
 		physicsBridgeFrameBodiesByNodeId.clear()
 		resetPhysicsBridgeVehicleInputSyncState(physicsBridgeVehicleInputSyncState)
 		physicsBridgeSceneLoaded = false
+		physicsCollisionDebugRuntime.resetBackend()
 	}
-}
-
-function removeAirWalls(): void {
-	airWallDebugEntries.clear()
-	clearAirWallDebugMeshes()
-}
-
-function syncAirWallsForDocument(sceneDocument: SceneJsonExportDocument | null): void {
-	removeAirWalls()
-	if (!sceneDocument) {
-		return
-	}
-	const airWallEnabled = sceneDocument.groundSettings?.enableAirWall !== false
-	if (!airWallEnabled) {
-		return
-	}
-	const groundNode = findGroundNode(sceneDocument.nodes)
-	if (!groundNode || !isGroundDynamicMesh(groundNode.dynamicMesh)) {
-		return
-	}
-	const groundObject = nodeObjectMap.get(groundNode.id) ?? null
-	const definitions = buildGroundAirWallDefinitions({ groundNode, groundObject })
-	if (!definitions.length) {
-		return
-	}
-	definitions.forEach((definition) => {
-		const [hx, hy, hz] = definition.halfExtents
-		if (![hx, hy, hz].every((value) => Number.isFinite(value) && value > 0)) {
-			return
-		}
-		const debugEntry: AirWallDebugEntry = {
-			key: definition.key,
-			halfExtents: definition.halfExtents,
-			position: definition.debugPosition,
-			quaternion: definition.debugQuaternion,
-		}
-		airWallDebugEntries.set(definition.key, debugEntry)
-		if (isGroundWireframeVisible.value) {
-			createAirWallDebugMesh(debugEntry)
-		}
-	})
 }
 
 function clearLegacyPhysicsWorld(): void {
@@ -11000,10 +10922,7 @@ function clearLegacyPhysicsWorld(): void {
 	}
 	vehicleInstances.clear()
 	rigidbodyInstances.clear()
-	clearAirWallDebugMeshes()
-	clearRigidbodyDebugHelpers()
-	disposeCannonPhysicsDebugger()
-	disposeAirWallDebugGroup()
+	physicsCollisionDebugRuntime.resetBackend()
 	scenePreviewPerf.reset()
 }
 
@@ -12275,13 +12194,13 @@ function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null):
 	if (!document) {
 		resetPhysicsWorld()
 		syncVehicleBindingsForDocument(null)
-		syncAirWallsForDocument(null)
+		physicsCollisionDebugRuntime.setSceneAsset(null)
 		return
 	}
 	void loadScenePreviewPhysicsBridgeScene(document)
 	clearLegacyPhysicsWorld()
 	syncVehicleBindingsForDocument(document)
-	syncAirWallsForDocument(document)
+	physicsCollisionDebugRuntime.setSceneAsset(buildPhysicsSceneAsset(document))
 }
 
 function stepPhysicsWorld(delta: number): void {
@@ -13010,9 +12929,6 @@ async function applyIncrementalDocumentGraph(
 	await syncTerrainScatterInstances(document, resourceCache)
 	const protagonistCameraActive = !vehicleDriveState.active && (controlMode.value === 'first-person' || controlMode.value === 'third-person')
 	syncProtagonistCameraPose({ force: true, applyToCamera: protagonistCameraActive })
-	if (isRigidbodyDebugVisible.value) {
-		syncRigidbodyDebugHelpers()
-	}
 
 	currentDocument = document
 	refreshAnimations()
@@ -13181,8 +13097,8 @@ function togglePlayback() {
 }
 
 
-function toggleOtherRigidbodyWireframeDebug(): void {
-	isOtherRigidbodyWireframeVisible.value = !isOtherRigidbodyWireframeVisible.value
+function togglePhysicsCollisionDebug(): void {
+	isPhysicsCollisionDebugVisible.value = !isPhysicsCollisionDebugVisible.value
 }
 
 
@@ -13290,6 +13206,7 @@ onBeforeUnmount(() => {
 	window.removeEventListener('keydown', handleKeyDown)
 	window.removeEventListener('keyup', handleKeyUp)
 	window.removeEventListener('resize', handleLanternViewportResize)
+	physicsCollisionDebugRuntime.destroy()
 	void destroyScenePreviewPhysicsBridge()
 	disposeScene()
 	disposeEnvironmentResources()
@@ -13502,25 +13419,13 @@ watch(
 						</v-list-item>
 						<v-list-item>
 							<v-checkbox
-								v-if="physicsEnvironmentEnabled && currentPhysicsBridgePreference !== 'cannon'"
 								class="scene-preview__debug-checkbox"
-								label="Other rigidbody wireframe"
-								:model-value="isOtherRigidbodyWireframeVisible"
+								label="Physics collision debug"
+								:model-value="isPhysicsCollisionDebugVisible"
 								hide-details
 								density="compact"
 								color="warning"
-								@update:model-value="toggleOtherRigidbodyWireframeDebug"
-							/>
-						</v-list-item>
-						<v-list-item>
-							<v-checkbox
-								v-if="physicsEnvironmentEnabled"
-								class="scene-preview__debug-checkbox"
-								label="Cannon physics debugger"
-								v-model="isCannonPhysicsDebuggerVisible"
-								hide-details
-								density="compact"
-								color="warning"
+								@update:model-value="togglePhysicsCollisionDebug"
 							/>
 						</v-list-item>
 					</v-list>

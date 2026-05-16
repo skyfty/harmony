@@ -37,7 +37,7 @@ importers:
         version: file:../physics-core
       '@harmony/scenery':
         specifier: file:../scenery
-        version: file:../scenery(three@0.172.0)
+        version: file:../scenery(ammo.js@0.0.10)(cannon-es@0.20.0)(three@0.172.0)(typescript@5.6.3)
       '@harmony/schema':
         specifier: file:../schema
         version: file:../schema
@@ -1977,6 +1977,16 @@ packages:
       vite: ^5.0.0
       vue: ^3.2.25
 
+  '@vladkrutenyuk/cannon-es-debugger-pro@0.2.4':
+    resolution: {integrity: sha512-7YleJQXZtHLUu4XwSixwkvtwpp2sJ/LwEKm0+yuYxVU1Nhy2o+cm0Q9UY/J5NGtUMo9v79CkiXLxDOmjRApMOA==}
+    peerDependencies:
+      cannon-es: '>=0.20.0'
+      three: '>=0.160.0'
+      typescript: '>=5.0'
+    peerDependenciesMeta:
+      typescript:
+        optional: true
+
   '@volar/language-core@2.4.15':
     resolution: {integrity: sha512-3VHw+QZU0ZG9IuQmzT68IyN4hZNd9GchGPhbD9+pa8CVv7rnoOZwo7T8weIbrRmihqy3ATpdfXFnqRrfPVK6CA==}
 
@@ -2129,6 +2139,14 @@ packages:
 
   alien-signals@1.0.13:
     resolution: {integrity: sha512-OGj9yyTnJEttvzhTUWuscOvtqxq5vrhF7vL9oS0xJ2mK0ItPYP1/y+vCFebfxoEyAz0++1AIwJ5CMr+Fk3nDmg==}
+
+  ammo-debug-drawer@1.0.1:
+    resolution: {integrity: sha512-oPvQh5CQKgFQpIuBMMKxT019aYoONOEnBLn91dAg3CrMWdSP/Om8rLWRX0VkAk45SEK/B0ybXB7nsjXsz8QEBw==}
+    peerDependencies:
+      ammo.js: '*'
+
+  ammo.js@0.0.10:
+    resolution: {integrity: sha512-jOv977u71jrDUzHfmQ99YaW90/y8YLn/3HFTmtLLzf5wJynAfG+/a1Ie5gbn0fE0uSAHxXVsFk4Bzq8qRPWqAA==}
 
   ammojs3@0.0.11:
     resolution: {integrity: sha512-pfnMm0XvTLjzCt+ytdpV3aIgooxQzexjkC2DbTyiGsAk8ECEBPxJ8gOQ/m0CE+d9pf9ToPMK8PZJR7jP1h6lOA==}
@@ -5856,14 +5874,19 @@ snapshots:
 
   '@harmony/physics-core@file:../physics-core': {}
 
-  '@harmony/scenery@file:../scenery(three@0.172.0)':
+  '@harmony/scenery@file:../scenery(ammo.js@0.0.10)(cannon-es@0.20.0)(three@0.172.0)(typescript@5.6.3)':
     dependencies:
       '@harmony/schema': file:../schema
       '@harmony/utils': file:../utils
       '@minisheep/mini-program-polyfill-core': 1.1.5
+      '@vladkrutenyuk/cannon-es-debugger-pro': 0.2.4(cannon-es@0.20.0)(three@0.172.0)(typescript@5.6.3)
+      ammo-debug-drawer: 1.0.1(ammo.js@0.0.10)
       three-mesh-bvh: 0.9.8(three@0.172.0)
     transitivePeerDependencies:
+      - ammo.js
+      - cannon-es
       - three
+      - typescript
 
   '@harmony/schema@file:../schema':
     dependencies:
@@ -6826,6 +6849,13 @@ snapshots:
       vite: 5.4.21(@types/node@25.3.0)(sass@1.97.3)(terser@5.46.0)
       vue: 3.4.21(typescript@5.6.3)
 
+  '@vladkrutenyuk/cannon-es-debugger-pro@0.2.4(cannon-es@0.20.0)(three@0.172.0)(typescript@5.6.3)':
+    dependencies:
+      cannon-es: 0.20.0
+      three: 0.172.0
+    optionalDependencies:
+      typescript: 5.6.3
+
   '@volar/language-core@2.4.15':
     dependencies:
       '@volar/source-map': 2.4.15
@@ -7023,6 +7053,12 @@ snapshots:
       uri-js: 4.4.1
 
   alien-signals@1.0.13: {}
+
+  ammo-debug-drawer@1.0.1(ammo.js@0.0.10):
+    dependencies:
+      ammo.js: 0.0.10
+
+  ammo.js@0.0.10: {}
 
   ammojs3@0.0.11: {}
 

@@ -1086,14 +1086,6 @@ function handleDebugOverlayTap(): void {
   debugMode.value = debugMode.value === 'full' ? 'fps' : 'full';
 }
 
-watch(
-  () => [debugEnabled.value, debugMode.value],
-  () => {
-    physicsCollisionDebugRuntime.setVisible(debugEnabled.value && debugMode.value !== 'off');
-  },
-  { immediate: true },
-);
-
 const textureLoader = new THREE.TextureLoader();
 const materialTextureCache = new Map<string, THREE.Texture>();
 const pendingMaterialTextureRequests = new Map<string, Promise<THREE.Texture | null>>();
@@ -1919,6 +1911,13 @@ const physicsBridgeBodySyncPositionHelper = new THREE.Vector3();
 const physicsBridgeBodySyncQuaternionHelper = new THREE.Quaternion();
 const physicsEnvironmentEnabled = ref(true);
 const physicsCollisionDebugRuntime = new SceneryPhysicsCollisionDebugRuntime();
+watch(
+  () => [debugEnabled.value, debugMode.value],
+  () => {
+    physicsCollisionDebugRuntime.setVisible(debugEnabled.value && debugMode.value !== 'off');
+  },
+  { immediate: true },
+);
 const rigidbodyInstances = new Map<string, RigidbodyInstance>();
 let protagonistNodeId: string | null = null;
 
