@@ -119,6 +119,8 @@ import {
 import { syncGroundCollisionRuntimeLoadedTileKeys } from '@harmony/schema/groundCollisionRuntimeState';
 import { clearGroundCollisionRuntimeHost, syncGroundCollisionRuntimeHost } from '@harmony/schema/groundCollisionRuntimeHost';
 import { createGroundCollisionRuntimeBridgeDeps } from '@harmony/schema/groundCollisionRuntimeBridge';
+import { clearCompiledGroundRenderTiles, collectLoadedCompiledGroundChunkKeys, getCompiledGroundRenderWorkState, syncCompiledGroundRenderTiles } from '@harmony/schema/compiledGroundRuntime';
+import { setInfiniteGroundHiddenChunkKeys } from '@harmony/schema/groundMesh';
 
 import {
   type PhysicsBodyBindingEntry as RigidbodyInstance,
@@ -428,6 +430,7 @@ interface ScenePreviewPayload {
   origin?: string;
   createdAt?: string;
   updatedAt?: string;
+  compiledGroundBuildKey?: string | null;
   assetOverrides?: SceneGraphBuildOptions['assetOverrides'];
 }
 
@@ -525,6 +528,7 @@ type ScenePackageSceneEntry =
 
 type ScenePackageProjectData = {
   project: ScenePackageProject;
+  compiledGroundBuildKey: string;
   scenes: ScenePackageSceneEntry[];
 };
 
@@ -973,6 +977,8 @@ let runtimePrefabBehaviorCounter = 0;
 let runtimePrefabFlushInFlight = false;
 let dynamicGroundCache: { nodeId: string; node: SceneNode; dynamicMesh: GroundRuntimeDynamicMesh } | null = null;
 let sceneGraphRoot: THREE.Object3D | null = null;
+let activeScenePackageBuildKey: string | null = null;
+let lastCompiledGroundLoadedChunkVersion = -1;
 type WindowResizeCallback = Parameters<typeof uni.onWindowResize>[0];
 let resizeListener: WindowResizeCallback | null = null;
 let canvasResult: UseCanvasResult | null = null;
@@ -3119,6 +3125,20 @@ function createSceneGraphBuildOptions(payload: ScenePreviewPayload, onProgress?:
   return buildOptions;
 }
 
+function normalizeScenePackageBuildKey(source: string | ScenePackagePointer | null | undefined): string {
+  if (!source) {
+    return '';
+  }
+  if (typeof source === 'string') {
+    return source.trim();
+  }
+  const ref = typeof source.ref === 'string' ? source.ref.trim() : '';
+  if (!ref) {
+    return '';
+  }
+  return `${source.kind}:${ref}`;
+}
+
 function getArrayBufferView(bytes: Uint8Array): ArrayBuffer {
   const safe = new ArrayBuffer(bytes.byteLength);
   new Uint8Array(safe).set(bytes);
@@ -3175,6 +3195,22 @@ function buildResolvedAssetUrl(assetId: string, entry: AssetCacheEntry | null): 
 async function resolveAssetUrlFromCache(assetId: string): Promise<ResolvedAssetUrl | null> {
   const entry = await acquireViewerAssetEntry(assetId);
   return buildResolvedAssetUrl(assetId, entry);
+}
+
+function readCompiledGroundManifestFromDocument(document: SceneJsonExportDocument | null | undefined): Parameters<
+  typeof syncCompiledGroundRenderTiles
+>[0]['manifest'] | null {
+  const groundNode = document ? findGroundNode(document.nodes) : null;
+  if (!groundNode || !isGroundDynamicMesh(groundNode.dynamicMesh)) {
+    return null;
+  }
+  const groundUserData = groundNode.userData && typeof groundNode.userData === 'object'
+    ? (groundNode.userData as Record<string, unknown>)
+    : {};
+  const compiledManifest = groundUserData.compiledGroundManifest as Parameters<
+    typeof syncCompiledGroundRenderTiles
+  >[0]['manifest'] | null | undefined;
+  return compiledManifest ?? null;
 }
 
 function inferMimeTypeFromUrl(url: string): string | null {
@@ -5835,6 +5871,93 @@ function syncSceneryGroundCollisionRuntimeLoadedTileKeys(document: SceneJsonExpo
     compiledKeys: snapshot.compiledTileKeys,
     infiniteKeys: snapshot.infiniteChunkKeys,
   });
+}
+
+function resolveSceneObjectByNodeId(nodeId: string): THREE.Object3D | null {
+  const normalized = typeof nodeId === 'string' ? nodeId.trim() : '';
+  if (!normalized) {
+    return null;
+  }
+  const direct = nodeObjectMap.get(normalized) ?? null;
+  if (direct) {
+    return direct;
+  }
+  if (!sceneGraphRoot) {
+    return null;
+  }
+  let found: THREE.Object3D | null = null;
+  sceneGraphRoot.traverse((object) => {
+    if (found) {
+      return;
+    }
+    const objectNodeId = object.userData?.nodeId as string | undefined;
+    if (objectNodeId === normalized) {
+      found = object;
+    }
+  });
+  return found;
+}
+
+function clearSceneryCompiledGroundRenderRuntime(): void {
+  lastCompiledGroundLoadedChunkVersion = -1;
+  const groundNode = currentDocument ? findGroundNode(currentDocument.nodes) : null;
+  const groundObject = groundNode ? resolveSceneObjectByNodeId(groundNode.id) : null;
+  if (!groundObject) {
+    return;
+  }
+  clearCompiledGroundRenderTiles(groundObject);
+  setInfiniteGroundHiddenChunkKeys(groundObject, []);
+}
+
+function syncSceneryCompiledGroundRenderTiles(camera: THREE.Camera | null | undefined): boolean {
+  if (!currentDocument || !camera) {
+    clearSceneryCompiledGroundRenderRuntime();
+    return false;
+  }
+  const groundNode = findGroundNode(currentDocument.nodes);
+  const groundMesh = groundNode?.dynamicMesh as GroundRuntimeDynamicMesh | null | undefined;
+  if (!groundNode || !isGroundDynamicMesh(groundMesh)) {
+    clearSceneryCompiledGroundRenderRuntime();
+    return false;
+  }
+  const groundObject = resolveSceneObjectByNodeId(groundNode.id);
+  if (!groundObject) {
+    clearSceneryCompiledGroundRenderRuntime();
+    return false;
+  }
+  const compiledManifest = readCompiledGroundManifestFromDocument(currentDocument);
+  const buildKey = activeScenePackageBuildKey?.trim() || '';
+  if (!compiledManifest || !buildKey || !activeScenePackagePkg) {
+    clearCompiledGroundRenderTiles(groundObject);
+    setInfiniteGroundHiddenChunkKeys(groundObject, []);
+    return false;
+  }
+  const revision = Number.isFinite(Number(compiledManifest.revision))
+    ? Math.max(0, Math.trunc(Number(compiledManifest.revision)))
+    : 0;
+  syncCompiledGroundRenderTiles({
+    groundObject,
+    groundDefinition: groundMesh,
+    camera,
+    sourceId: buildKey,
+    revision,
+    manifest: compiledManifest,
+    loadTileData: async (record) => {
+      const bytes = activeScenePackagePkg?.files?.[record.path];
+      if (!bytes) {
+        return null;
+      }
+      return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+    },
+    streamingMode: 'runtime-camera',
+  });
+  const workState = getCompiledGroundRenderWorkState(groundObject);
+  const loadedChunkVersion = workState?.loadedChunkKeysVersion ?? -1;
+  if (loadedChunkVersion !== lastCompiledGroundLoadedChunkVersion) {
+    setInfiniteGroundHiddenChunkKeys(groundObject, collectLoadedCompiledGroundChunkKeys(groundObject, compiledManifest));
+    lastCompiledGroundLoadedChunkVersion = loadedChunkVersion;
+  }
+  return true;
 }
 
 async function ensureSceneryPhysicsBridgeReady(): Promise<PhysicsBridge> {
@@ -11228,6 +11351,7 @@ async function switchToProjectScene(sceneId: string): Promise<void> {
         document: entry.document,
         title: entry.document.name || entry.name || '场景预览',
         origin: 'scene-package',
+        compiledGroundBuildKey: projectBundle.value?.compiledGroundBuildKey ?? activeScenePackageBuildKey ?? null,
         assetOverrides: sceneOverrides,
         createdAt: entry.document.createdAt,
         updatedAt: entry.document.updatedAt,
@@ -11248,6 +11372,7 @@ async function switchToProjectScene(sceneId: string): Promise<void> {
         document,
         title: document.name || entry.name || '场景预览',
         origin: entry.sceneJsonUrl,
+        compiledGroundBuildKey: null,
         assetOverrides: undefined,
         createdAt: document.createdAt,
         updatedAt: document.updatedAt,
@@ -11340,6 +11465,8 @@ async function loadProjectFromScenePackageUrl(url: string, cacheKey?: string): P
   error.value = null;
   activeScenePackageAssetOverrides = null;
   activeScenePackagePkg = null;
+  activeScenePackageBuildKey = null;
+  lastCompiledGroundLoadedChunkVersion = -1;
   loading.value = true;
   try {
     resetSceneDownloadState();
@@ -11352,7 +11479,7 @@ async function loadProjectFromScenePackageUrl(url: string, cacheKey?: string): P
         sceneDownload.label = '正在读取本地缓存场景包…';
         const cachedBuffer = await loadScenePackageZip(cachePointer);
         try {
-          await loadProjectFromScenePackageBytes(cachedBuffer);
+          await loadProjectFromScenePackageBytes(cachedBuffer, cacheKeyParam || url);
           return;
         } catch (parseError) {
           console.warn('Cached scene package failed to parse, removing cache entry', parseError);
@@ -11368,7 +11495,7 @@ async function loadProjectFromScenePackageUrl(url: string, cacheKey?: string): P
     const buffer = await requestBinary(url);
     sceneDownload.phase = 'parse';
     sceneDownload.label = '正在解析场景包…';
-    await loadProjectFromScenePackageBytes(buffer);
+    await loadProjectFromScenePackageBytes(buffer, cacheKeyParam || url);
     if (cacheKeyParam) {
       void saveScenePackageZipByCacheKey(buffer, cacheKeyParam).catch((saveError) => {
         console.warn('Failed to persist scene package cache', saveError);
@@ -11383,7 +11510,7 @@ async function loadProjectFromScenePackageUrl(url: string, cacheKey?: string): P
   }
 }
 
-function parseScenePackageToProjectData(pkg: ScenePackageUnzipped): ScenePackageProjectData {
+function parseScenePackageToProjectData(pkg: ScenePackageUnzipped, compiledGroundBuildKey: string): ScenePackageProjectData {
   const projectText = readTextFileFromScenePackage(pkg, pkg.manifest.project.path);
   type ScenePackageProjectConfig = {
     id?: unknown;
@@ -11548,19 +11675,20 @@ function parseScenePackageToProjectData(pkg: ScenePackageUnzipped): ScenePackage
     });
   });
 
-  return {
-    project: {
-      id: String(projectConfig?.id ?? ''),
-      name: String(projectConfig?.name ?? ''),
-      defaultSceneId: (projectConfig?.defaultSceneId as string | null) ?? null,
-      lastEditedSceneId: (projectConfig?.lastEditedSceneId as string | null) ?? null,
-      sceneOrder: Array.isArray(projectConfig?.sceneOrder) ? projectConfig.sceneOrder : scenes.map((s) => s.id),
-    },
-    scenes,
-  };
-}
+    return {
+      project: {
+        id: String(projectConfig?.id ?? ''),
+        name: String(projectConfig?.name ?? ''),
+        defaultSceneId: (projectConfig?.defaultSceneId as string | null) ?? null,
+        lastEditedSceneId: (projectConfig?.lastEditedSceneId as string | null) ?? null,
+        sceneOrder: Array.isArray(projectConfig?.sceneOrder) ? projectConfig.sceneOrder : scenes.map((s) => s.id),
+      },
+      compiledGroundBuildKey,
+      scenes,
+    };
+  }
 
-async function loadProjectFromScenePackageBytes(buffer: ArrayBuffer): Promise<void> {
+async function loadProjectFromScenePackageBytes(buffer: ArrayBuffer, compiledGroundBuildKey: string): Promise<void> {
   sceneDownload.active = true;
   sceneDownload.phase = 'parse';
   sceneDownload.label = '正在解压场景包资源…';
@@ -11569,7 +11697,9 @@ async function loadProjectFromScenePackageBytes(buffer: ArrayBuffer): Promise<vo
   activeScenePackagePkg = pkg;
   activeScenePackageAssetOverrides = buildAssetOverridesFromScenePackage(pkg);
   sceneDownload.label = '正在解析场景数据…';
-  const projectData = parseScenePackageToProjectData(activeScenePackagePkg);
+  const normalizedBuildKey = compiledGroundBuildKey.trim();
+  activeScenePackageBuildKey = normalizedBuildKey || null;
+  const projectData = parseScenePackageToProjectData(activeScenePackagePkg, normalizedBuildKey);
   sceneDownload.label = '正在组装场景索引…';
   await loadProjectFromBundle(projectData);
 }
@@ -11578,6 +11708,8 @@ async function loadProjectFromScenePackagePointer(pointer: ScenePackagePointer):
   error.value = null;
   activeScenePackageAssetOverrides = null;
   activeScenePackagePkg = null;
+  activeScenePackageBuildKey = null;
+  lastCompiledGroundLoadedChunkVersion = -1;
   loading.value = true;
   try {
     resetSceneDownloadState();
@@ -11588,7 +11720,7 @@ async function loadProjectFromScenePackagePointer(pointer: ScenePackagePointer):
     if (!buffer || buffer.byteLength <= 0) {
       throw new Error('项目数据为空，请重新导入');
     }
-    await loadProjectFromScenePackageBytes(buffer);
+    await loadProjectFromScenePackageBytes(buffer, normalizeScenePackageBuildKey(pointer));
   } catch (e) {
     console.error(e);
     error.value = '项目加载失败，请返回首页重新导入';
@@ -11974,6 +12106,7 @@ function teardownRenderer() {
   stopBillboardMeshSubscription = null;
   disposeSignboardBillboards(renderContext?.scene ?? null);
   clearInstancedMeshes();
+  clearSceneryCompiledGroundRenderRuntime();
   disposeObject(scene);
   disposeMaterialTextureCache();
   renderer.dispose();
@@ -11985,6 +12118,8 @@ function teardownRenderer() {
   dynamicGroundCache = null;
   sceneGraphRoot = null;
   viewerResourceCache = null;
+  activeScenePackageBuildKey = null;
+  lastCompiledGroundLoadedChunkVersion = -1;
 }
 
 function handleUseCanvas(result: UseCanvasResult) {
@@ -12472,6 +12607,7 @@ function startRenderLoop(
             }
           }
         }
+        syncSceneryCompiledGroundRenderTiles(camera);
 
         const instancingNow = typeof performance !== 'undefined' && typeof performance.now === 'function'
           ? performance.now()
@@ -12556,6 +12692,7 @@ function cleanupForUnrelatedSceneSwitch(): void {
   nodeObjectMap.clear();
   multiuserNodeIds.clear();
   multiuserNodeObjects.clear();
+  clearSceneryCompiledGroundRenderRuntime();
 
   resetPhysicsWorld();
   lazyPlaceholderStates.clear();
