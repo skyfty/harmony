@@ -1,7 +1,6 @@
 import {
   createBackendRigidbodyBody,
   ensureBackendPhysicsWorld,
-  extractRoadHeightfieldDebugSurfaces,
   getPhysicsBackendBridge,
   initializePhysicsBackendBridge,
   normalizeShapeScale,
@@ -10,7 +9,6 @@ import {
 export {
   createBackendRigidbodyBody,
   ensureBackendPhysicsWorld,
-  extractRoadHeightfieldDebugSurfaces,
   getPhysicsBackendBridge,
   initializePhysicsBackendBridge,
   normalizeShapeScale,

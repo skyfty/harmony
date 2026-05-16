@@ -1,5 +1,4 @@
 import { createCannonRigidbodyBody } from './bodyFactory'
-import { extractCannonRoadHeightfieldDebugSurfaces } from './roadDebug'
 import { ensureCannonWorld } from './world'
 import { normalizeCannonShapeScale } from './shapeFactory'
 import type {
@@ -9,7 +8,6 @@ import type {
   PhysicsBackendBridge,
   PhysicsBodyLike,
   PhysicsWorldLike,
-  RoadHeightfieldDebugSurface,
 } from '@harmony/physics-bridge'
 
 export function createCannonSchemaPhysicsBackendBridge(): PhysicsBackendBridge {
@@ -45,17 +43,10 @@ export function createCannonSchemaPhysicsBackendBridge(): PhysicsBackendBridge {
     }
   }
 
-  function extractRoadHeightfieldDebugSurfaces(bodies: PhysicsBodyLike[]): RoadHeightfieldDebugSurface[] {
-    return extractCannonRoadHeightfieldDebugSurfaces(
-      bodies as unknown as Parameters<typeof extractCannonRoadHeightfieldDebugSurfaces>[0],
-    ) as RoadHeightfieldDebugSurface[]
-  }
-
   return {
     id: 'cannon' as const,
     normalizeShapeScale: normalizeCannonShapeScale,
     createRigidbodyBody,
     ensurePhysicsWorld,
-    extractRoadHeightfieldDebugSurfaces,
   }
 }

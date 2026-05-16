@@ -5079,6 +5079,39 @@ function attachScenePackageTerrainRuntime(
   runtimeGround.runtimeTerrainHeightSampler = terrainSampler;
 }
 
+function readCompiledGroundManifestFromScenePackage(
+  pkg: ScenePackageUnzipped,
+  sceneEntry: Pick<ScenePackageManifestSceneEntry, 'compiledGround'>,
+): Parameters<typeof syncCompiledGroundRenderTiles>[0]['manifest'] | null {
+  const manifestPath = typeof sceneEntry.compiledGround?.manifestPath === 'string'
+    ? sceneEntry.compiledGround.manifestPath.trim()
+    : '';
+  if (!manifestPath) {
+    return null;
+  }
+  return JSON.parse(readTextFileFromScenePackage(pkg, manifestPath)) as Parameters<
+    typeof syncCompiledGroundRenderTiles
+  >[0]['manifest'];
+}
+
+function attachScenePackageCompiledGroundRuntime(
+  pkg: ScenePackageUnzipped,
+  sceneEntry: ScenePackageManifestSceneEntry,
+  document: SceneJsonExportDocument,
+): void {
+  const groundNode = findGroundNode(document.nodes);
+  if (!groundNode || !isGroundDynamicMesh(groundNode.dynamicMesh)) {
+    return;
+  }
+  const compiledManifest = readCompiledGroundManifestFromScenePackage(pkg, sceneEntry);
+  const groundUserData = groundNode.userData && typeof groundNode.userData === 'object'
+    ? (groundNode.userData as Record<string, unknown>)
+    : {};
+  groundUserData.compiledGroundEnabled = Boolean(compiledManifest);
+  groundUserData.compiledGroundManifest = compiledManifest;
+  groundNode.userData = groundUserData;
+}
+
 function readGroundChunkManifestFromScenePackage(
   pkg: ScenePackageUnzipped,
   sceneEntry: Pick<ScenePackageManifestSceneEntry, 'groundChunks'>,
@@ -6125,6 +6158,7 @@ function resolveSceneryCompiledGroundTileLoader(): ((record: { path: string }) =
   return async (record) => {
     const path = typeof record.path === 'string' ? record.path.trim() : '';
     if (!path) {
+      console.warn('[SceneryCompiledGround] Missing compiled tile path', JSON.stringify({ record: String(record ?? '') }));
       return null;
     }
     const bundled = activeScenePackagePkg?.files?.[path];
@@ -6132,8 +6166,13 @@ function resolveSceneryCompiledGroundTileLoader(): ((record: { path: string }) =
       return bundled.buffer.slice(bundled.byteOffset, bundled.byteOffset + bundled.byteLength);
     }
     if (path.startsWith('http://') || path.startsWith('https://') || path.startsWith('/')) {
-      return await requestBinaryFromUrl(path).catch(() => null);
+      const loaded = await requestBinaryFromUrl(path).catch(() => null);
+      if (!loaded) {
+        console.warn('[SceneryCompiledGround] Failed loading compiled tile from URL', JSON.stringify({ path }));
+      }
+      return loaded;
     }
+    console.warn('[SceneryCompiledGround] Missing compiled tile bytes in scene package', JSON.stringify({ path }));
     return null;
   };
 }
@@ -12076,6 +12115,7 @@ function parseScenePackageToProjectData(pkg: ScenePackageUnzipped, compiledGroun
     }
     const document = hydrateGroundSidecarFromPackage(pkg, sceneEntry, sceneRaw as SceneJsonExportDocument);
     attachScenePackageTerrainRuntime(pkg, sceneEntry, document);
+    attachScenePackageCompiledGroundRuntime(pkg, sceneEntry, document);
     attachScenePackageGroundChunkRuntime(pkg, sceneEntry, document);
     const assetRegistry: Record<string, SceneAssetRegistryEntry> = {
       ...(document.assetRegistry ?? {}),

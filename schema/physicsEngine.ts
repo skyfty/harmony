@@ -33,7 +33,6 @@ import {
 import {
 	createBackendRigidbodyBody,
 	ensureBackendPhysicsWorld,
-	extractRoadHeightfieldDebugSurfaces,
 	normalizeShapeScale,
 } from './physicsBackendBridge'
 import type {
@@ -68,49 +67,6 @@ export {
 	type RoadHeightfieldBodiesEntry,
 	type RoadHeightfieldBuildParams,
 } from './roadHeightfield'
-
-export type RoadHeightfieldDebugSegment = {
-	shape: Extract<RigidbodyPhysicsShape, { kind: 'heightfield' }>
-}
-
-export type RoadHeightfieldDebugEntry = {
-	signature: string
-	segments: RoadHeightfieldDebugSegment[]
-}
-
-export type RoadHeightfieldDebugCache = Map<string, RoadHeightfieldDebugEntry>
-
-export function resolveRoadHeightfieldDebugSegments(params: {
-	nodeId: string
-	signature: string
-	bodies: Parameters<typeof extractRoadHeightfieldDebugSurfaces>[0]
-	cache: RoadHeightfieldDebugCache
-	debugEnabled: boolean
-}): RoadHeightfieldDebugEntry | null {
-	const { nodeId, signature, bodies, cache, debugEnabled } = params
-	if (!debugEnabled) {
-		cache.delete(nodeId)
-		return null
-	}
-	const cached = cache.get(nodeId)
-	if (cached && cached.signature === signature) {
-		return cached
-	}
-	const segments: RoadHeightfieldDebugSegment[] = extractRoadHeightfieldDebugSurfaces(bodies).map((segment) => ({
-		shape: {
-			kind: 'heightfield',
-			matrix: segment.matrix,
-			elementSize: segment.elementSize,
-			width: (segment.matrix.length - 1) * segment.elementSize,
-			depth: (segment.matrix[0]?.length ? segment.matrix[0].length - 1 : 0) * segment.elementSize,
-			offset: segment.offset,
-			applyScale: false,
-		},
-	}))
-	const entry: RoadHeightfieldDebugEntry = { signature, segments }
-	cache.set(nodeId, entry)
-	return entry
-}
 
 export function ensureRoadHeightfieldRigidbodyInstance(params: {
 	roadNode: SceneNode

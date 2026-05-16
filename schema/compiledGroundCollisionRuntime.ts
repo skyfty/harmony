@@ -27,7 +27,7 @@ import {
 
 type HeightfieldShapeDefinition = Extract<RigidbodyPhysicsShape, { kind: 'heightfield' }>
 
-const GROUND_COLLISION_RADIUS_METERS = 50
+const GROUND_COLLISION_RADIUS_METERS = 150
 
 export type CompiledGroundCollisionRuntimeState = {
   enabled: boolean
@@ -73,6 +73,22 @@ type CollisionTileWindow = {
 }
 
 const compiledGroundCameraLocalHelper = new THREE.Vector3()
+
+function stringifyCollisionDebugPayload(payload: unknown): string {
+  try {
+    return JSON.stringify(payload)
+  } catch (_error) {
+    return '"[unserializable]"'
+  }
+}
+
+function logCompiledGroundCollisionDebug(loggerTag: string | undefined, message: string, payload?: unknown): void {
+  if (!loggerTag) {
+    return
+  }
+  const suffix = typeof payload === 'undefined' ? '' : ` ${stringifyCollisionDebugPayload(payload)}`
+  console.warn(`[${loggerTag}] ${message}${suffix}`)
+}
 
 function uniqueSortedKeys(keys: Iterable<string> | null | undefined): string[] {
   return Array.from(new Set(Array.from(keys ?? []).map((key) => key.trim()).filter((key) => key.length > 0))).sort()
@@ -269,6 +285,7 @@ export function createCompiledGroundCollisionRuntime(
   let generation = 0
   let currentSourceId = ''
   let currentRevision = -1
+  let lastWindowSignature = ''
 
   function removeInstance(tileKey: string): void {
     const instance = instances.get(tileKey)
@@ -287,6 +304,7 @@ export function createCompiledGroundCollisionRuntime(
     Array.from(instances.keys()).forEach(removeInstance)
     currentSourceId = ''
     currentRevision = -1
+    lastWindowSignature = ''
   }
 
   function sync(params: SyncCompiledGroundCollisionTilesParams): void {
@@ -307,6 +325,23 @@ export function createCompiledGroundCollisionRuntime(
       params.activeRadiusTiles,
       params.retainRadiusTiles,
     )
+    const windowSignature = [
+      params.sourceId.trim(),
+      Math.max(0, Math.trunc(Number(params.revision) || 0)),
+      window.activeKeys.join(','),
+      window.retainedKeys.join(','),
+    ].join('|')
+    if (windowSignature !== lastWindowSignature) {
+      lastWindowSignature = windowSignature
+      logCompiledGroundCollisionDebug(deps.loggerTag, 'Compiled collision window', {
+        sourceId: params.sourceId,
+        revision: params.revision,
+        activeKeys: window.activeKeys,
+        retainedKeys: window.retainedKeys,
+        desiredRecordCount: window.desiredRecords.length,
+        manifestTileCount: params.manifest.collisionTiles?.length ?? 0,
+      })
+    }
     const retainedKeySet = new Set(window.retainedKeys)
     residentTileKeys = window.retainedKeys
 
@@ -338,15 +373,36 @@ export function createCompiledGroundCollisionRuntime(
           }
           const tileData = deserializeCompiledGroundCollisionTile(buffer)
           if (!tileData) {
+            logCompiledGroundCollisionDebug(deps.loggerTag, 'Compiled collision tile decode failed', {
+              sourceId: params.sourceId,
+              tileKey: record.key,
+              path: record.path,
+              hasBuffer: buffer instanceof ArrayBuffer,
+              byteLength: buffer instanceof ArrayBuffer ? buffer.byteLength : null,
+            })
             return
           }
           const shape = buildHeightfieldShapeFromCompiledTile(record, tileData)
           if (!shape) {
+            logCompiledGroundCollisionDebug(deps.loggerTag, 'Compiled collision tile shape build failed', {
+              sourceId: params.sourceId,
+              tileKey: record.key,
+              path: record.path,
+              rows: tileData.header.rows,
+              columns: tileData.header.columns,
+              elementSize: tileData.header.elementSize,
+            })
             return
           }
           const { node, component } = createStaticCollisionNode(`ground-collision:${params.sourceId}:compiled:${record.key}`)
           const bodyResult = deps.createBody(node, component, shape, params.groundObject)
           if (!bodyResult?.body) {
+            logCompiledGroundCollisionDebug(deps.loggerTag, 'Compiled collision body creation failed', {
+              sourceId: params.sourceId,
+              tileKey: record.key,
+              path: record.path,
+              shape,
+            })
             debugShapes.set(record.key, [shape])
             return
           }
@@ -363,9 +419,23 @@ export function createCompiledGroundCollisionRuntime(
             signature: pendingSignature,
           })
           debugShapes.set(record.key, [shape])
+          logCompiledGroundCollisionDebug(deps.loggerTag, 'Compiled collision body created', {
+            sourceId: params.sourceId,
+            tileKey: record.key,
+            path: record.path,
+            shapeKind: shape.kind,
+            rows: shape.kind === 'heightfield' ? shape.matrix[0]?.length ?? 0 : null,
+            columns: shape.kind === 'heightfield' ? shape.matrix.length : null,
+            elementSize: shape.kind === 'heightfield' ? shape.elementSize : null,
+            offset: shape.offset,
+          })
         })
         .catch(() => {
-          // Ignore transient tile load failures; the next sync will retry if needed.
+          logCompiledGroundCollisionDebug(deps.loggerTag, 'Compiled collision tile load failed', {
+            sourceId: params.sourceId,
+            tileKey: record.key,
+            path: record.path,
+          })
         })
         .finally(() => {
           const currentPending = pendingLoads.get(record.key)

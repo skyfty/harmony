@@ -61,12 +61,6 @@ export type EnsurePhysicsWorldParams = {
   quatNormalizeSkip?: number
 }
 
-export type RoadHeightfieldDebugSurface = {
-  matrix: number[][]
-  elementSize: number
-  offset: [number, number, number]
-}
-
 export type BackendRigidbodyResult = {
   body: PhysicsBodyLike
   orientationAdjustment: PhysicsOrientationAdjustment | null
@@ -79,5 +73,4 @@ export type PhysicsBackendBridge = {
   normalizeShapeScale: (scaleLike: PhysicsBackendShapeScaleLike) => { x: number; y: number; z: number }
   createRigidbodyBody: (params: BackendRigidbodyCreateParams) => BackendRigidbodyResult
   ensurePhysicsWorld: (params: EnsurePhysicsWorldParams) => PhysicsWorldLike
-  extractRoadHeightfieldDebugSurfaces?: (bodies: PhysicsBodyLike[]) => RoadHeightfieldDebugSurface[]
 }

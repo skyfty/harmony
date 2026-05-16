@@ -118,11 +118,6 @@ import { syncGroundCollisionRuntimeLoadedTileKeys } from '@schema/groundCollisio
 import { setInfiniteGroundHiddenChunkKeys } from '@schema/groundMesh'
 import { resolveModelCollisionFaceSegments } from '@schema/physicsShapeResolvers'
 import {
-	buildRoadHeightfieldShapes,
-	isRoadDynamicMesh,
-	type RoadHeightfieldShapesEntry,
-} from '@schema/roadHeightfieldShapes'
-import {
 	createSceneCsmShadowRuntime,
 	DEFAULT_SCENE_CSM_CONFIG,
 	DEFAULT_SCENE_CSM_SUN_AZIMUTH_DEG,
@@ -11648,68 +11643,6 @@ function ensureModelCollisionDebugHelper(
 	})
 }
 
-function ensureRoadHeightfieldDebugHelper(
-	nodeId: string,
-	entry: RoadHeightfieldShapesEntry,
-): void {
-	const signature = `heightfield-segments:${entry.signature}`
-	const existing = rigidbodyDebugHelpers.get(nodeId)
-	if (existing?.signature === signature) {
-		return
-	}
-	removeRigidbodyDebugHelper(nodeId)
-	const container = ensureRigidbodyDebugGroup()
-	if (!container) {
-		return
-	}
-	const helperGroup = new THREE.Group()
-	helperGroup.name = `RigidbodyDebugHelper:${nodeId}`
-	helperGroup.visible = false
-	// Heightfield debug segments are generated in world units.
-	helperGroup.scale.set(1, 1, 1)
-	entry.segments.forEach((segment, index) => {
-		const lines = buildRigidbodyDebugLineSegments(segment.shape)
-		if (!lines) {
-			return
-		}
-		lines.name = `HeightfieldDebugLines:${nodeId}:${index}`
-		lines.renderOrder = 9999
-		const segmentGroup = new THREE.Group()
-		segmentGroup.name = `HeightfieldDebugSegment:${nodeId}:${index}`
-		segmentGroup.userData = {
-			...(segmentGroup.userData ?? {}),
-			__harmonyRoadSegmentKind: segment.shape.kind,
-		}
-		segmentGroup.position.set(
-			segment.transform.position[0],
-			segment.transform.position[1],
-			segment.transform.position[2],
-		)
-		rigidbodyDebugQuaternionHelper.set(
-			segment.transform.rotation[0],
-			segment.transform.rotation[1],
-			segment.transform.rotation[2],
-			segment.transform.rotation[3],
-		)
-		segmentGroup.quaternion.copy(rigidbodyDebugQuaternionHelper)
-		if (segment.shape.kind === 'heightfield') {
-			const [ox = 0, oy = 0, oz = 0] = segment.shape.offset ?? [0, 0, 0]
-			lines.position.set(ox + segment.shape.width * 0.5, oy, oz + segment.shape.depth * 0.5)
-		}
-		segmentGroup.add(lines)
-		helperGroup.add(segmentGroup)
-	})
-	container.add(helperGroup)
-	rigidbodyDebugHelpers.set(nodeId, {
-		group: helperGroup,
-		signature,
-		category: 'rigidbody',
-		scale: new THREE.Vector3(1, 1, 1),
-		parentSpace: 'scene',
-		parentNodeId: nodeId,
-	})
-}
-
 function ensureGroundHeightfieldDebugHelper(
 	nodeId: string,
 	shapes: Array<Extract<RigidbodyPhysicsShape, { kind: 'heightfield' }>>,
@@ -11764,27 +11697,6 @@ function refreshRigidbodyDebugHelper(nodeId: string): void {
 	const node = resolveNodeById(nodeId)
 	const component = resolvePhysicsRigidbodyComponent(node)
 	const isGroundNode = Boolean(node && isGroundDynamicMesh(node.dynamicMesh))
-	const groundNode = currentDocument ? findGroundNode(currentDocument.nodes) : null
-	const roadEntry =
-		node
-		&& groundNode
-		&& isRoadDynamicMesh(node.dynamicMesh)
-		&& component?.props?.bodyType === 'STATIC'
-			? buildRoadHeightfieldShapes({
-				roadNode: node,
-				groundNode,
-			})
-			: null
-	if (roadEntry) {
-		const category: RigidbodyDebugHelperCategory = 'rigidbody'
-		if (!isRigidbodyDebugCategoryVisible(category)) {
-			removeRigidbodyDebugHelper(nodeId)
-			return
-		}
-		ensureRoadHeightfieldDebugHelper(nodeId, roadEntry)
-		updateRigidbodyDebugHelperTransform(nodeId)
-		return
-	}
 	if (isGroundNode && node) {
 		const category: RigidbodyDebugHelperCategory = 'ground'
 		if (!isRigidbodyDebugCategoryVisible(category)) {
@@ -11885,24 +11797,6 @@ function updateRigidbodyDebugHelperTransform(nodeId: string): void {
 	}
 	const node = resolveNodeById(nodeId)
 	const component = resolvePhysicsRigidbodyComponent(node)
-	const groundNode = currentDocument ? findGroundNode(currentDocument.nodes) : null
-	const roadDebugEntry =
-		node
-		&& groundNode
-		&& isRoadDynamicMesh(node.dynamicMesh)
-			? buildRoadHeightfieldShapes({
-				roadNode: node,
-				groundNode,
-			})
-			: null
-	if (roadDebugEntry) {
-		const categoryEnabled = isRigidbodyDebugCategoryVisible(helper.category)
-		const object = resolveRigidbodyDebugVisibilityObject(nodeId, nodeObjectMap.get(nodeId) ?? null)
-		const visible = object ? isRuntimeObjectEffectivelyVisible(object) : true
-		helper.group.visible = visible && categoryEnabled
-		helper.group.updateMatrixWorld(true)
-		return
-	}
 	const categoryEnabled = isRigidbodyDebugCategoryVisible(helper.category)
 	const rigidbody = rigidbodyInstances.get(nodeId)
 	let visible = true

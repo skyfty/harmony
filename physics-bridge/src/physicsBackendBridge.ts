@@ -1,11 +1,9 @@
 import type {
-  PhysicsBodyLike,
   PhysicsWorldLike,
   PhysicsBackendBridge,
   PhysicsBackendShapeScaleLike,
   BackendRigidbodyCreateParams,
   EnsurePhysicsWorldParams,
-  RoadHeightfieldDebugSurface,
   BackendRigidbodyResult,
 } from './physicsBackendTypes'
 
@@ -46,11 +44,4 @@ export function createBackendRigidbodyBody(
 
 export function ensureBackendPhysicsWorld(params: EnsurePhysicsWorldParams): PhysicsWorldLike {
   return getPhysicsBackendBridge().ensurePhysicsWorld(params)
-}
-
-export function extractRoadHeightfieldDebugSurfaces(
-  bodies: PhysicsBodyLike[],
-): RoadHeightfieldDebugSurface[] {
-  const extractor = getPhysicsBackendBridge().extractRoadHeightfieldDebugSurfaces
-  return extractor ? extractor(bodies) : []
 }

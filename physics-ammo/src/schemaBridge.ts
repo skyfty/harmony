@@ -1,6 +1,5 @@
 import { createAmmoVector3, type AmmoApi } from './ammoHelpers'
 import { createAmmoSchemaRigidBody } from './schemaRigidBodyFactory'
-import { extractAmmoRoadHeightfieldDebugSurfaces } from './roadDebug'
 import type {
   BackendRigidbodyCreateParams,
   EnsurePhysicsWorldParams,
@@ -90,7 +89,6 @@ export function createAmmoSchemaPhysicsBackendBridge(ammo: AmmoApi): AmmoSchemaB
 		normalizeShapeScale,
 		createRigidbodyBody,
 		ensurePhysicsWorld,
-		extractRoadHeightfieldDebugSurfaces: extractAmmoRoadHeightfieldDebugSurfaces,
 	}
 }
 
