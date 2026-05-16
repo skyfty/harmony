@@ -20,6 +20,7 @@ import { createInMemoryWechatPhysicsWorker, createWechatPhysicsBridge } from '@h
 
 export type CreateSceneryPhysicsBridgeOptions = {
   engine?: PhysicsBackendPreference
+  onCannonWorldReady?: (world: unknown | null) => void
 }
 
 class LazySceneryPhysicsBridge implements PhysicsBridge {
@@ -100,7 +101,7 @@ class LazySceneryPhysicsBridge implements PhysicsBridge {
 
   private async createBridge(): Promise<PhysicsBridge> {
     const resolvedEngine = resolvePhysicsBackendId(this.options.engine)
-    const backend = await loadPhysicsBackend(resolvedEngine)
+    const backend = await loadPhysicsBackend(resolvedEngine, this.options)
     initializePhysicsBackendBridge(backend.schemaBridge)
 
     return createWechatPhysicsBridge({
@@ -142,6 +143,7 @@ type LoadedPhysicsBackend = {
 
 async function loadPhysicsBackend(
   engine: Extract<PhysicsBackendId, 'ammo' | 'cannon'>,
+  options: CreateSceneryPhysicsBridgeOptions,
 ): Promise<LoadedPhysicsBackend> {
   if (engine === 'ammo') {
     const ammoSource = await import('@harmony/physics-ammo-source')
@@ -163,6 +165,8 @@ async function loadPhysicsBackend(
   return {
     subpackageName: 'physics-cannon',
     schemaBridge: cannonSource.createCannonSchemaPhysicsBackendBridge(),
-    createController: () => cannonSource.createCannonPhysicsController(),
+    createController: () => cannonSource.createCannonPhysicsController({
+      onWorldReady: options.onCannonWorldReady,
+    }),
   }
 }

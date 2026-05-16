@@ -408,6 +408,7 @@ import { useDebugOverlay } from '../composables/useDebugOverlay';
 import { useBehaviorAlert } from '../composables/useBehaviorAlert';
 import { useBehaviorBubble } from '../composables/useBehaviorBubble';
 import { useLanternAssets } from '../composables/useLanternAssets';
+import { SceneryPhysicsCollisionDebugRuntime } from '../common/physics/collisionDebugRuntime';
 import { createSceneryPhysicsBridge } from '../common/physics/createSceneryPhysicsBridge';
 import {
   loadScenePackageZip,
@@ -1084,6 +1085,14 @@ function matricesAlmostEqual(a: ArrayLike<number>, b: ArrayLike<number>, epsilon
 function handleDebugOverlayTap(): void {
   debugMode.value = debugMode.value === 'full' ? 'fps' : 'full';
 }
+
+watch(
+  () => [debugEnabled.value, debugMode.value],
+  () => {
+    physicsCollisionDebugRuntime.setVisible(debugEnabled.value && debugMode.value !== 'off');
+  },
+  { immediate: true },
+);
 
 const textureLoader = new THREE.TextureLoader();
 const materialTextureCache = new Map<string, THREE.Texture>();
@@ -1873,6 +1882,7 @@ let physicsBridge: PhysicsBridge | null = null;
 let physicsBridgeInitPromise: Promise<PhysicsBridge> | null = null;
 let physicsBridgeStepPromise: Promise<void> | null = null;
 let physicsBridgeBodySyncPromise: Promise<void> | null = null;
+let physicsCollisionDebugBridgeGeneration = 0;
 const physicsBridgeVehicleInputSyncState = createPhysicsBridgeVehicleInputSyncState();
 let physicsBridgeSceneLoaded = false;
 let physicsBridgeSceneRequestId = 0;
@@ -1908,6 +1918,7 @@ const physicsBridgeHeightfieldAdjustmentInverse = physicsBridgeHeightfieldAdjust
 const physicsBridgeBodySyncPositionHelper = new THREE.Vector3();
 const physicsBridgeBodySyncQuaternionHelper = new THREE.Quaternion();
 const physicsEnvironmentEnabled = ref(true);
+const physicsCollisionDebugRuntime = new SceneryPhysicsCollisionDebugRuntime();
 const rigidbodyInstances = new Map<string, RigidbodyInstance>();
 let protagonistNodeId: string | null = null;
 
@@ -6372,14 +6383,27 @@ async function ensureSceneryPhysicsBridgeReady(): Promise<PhysicsBridge> {
   if (physicsBridgeInitPromise) {
     return physicsBridgeInitPromise;
   }
+  let bridgeGeneration = physicsCollisionDebugBridgeGeneration;
   if (!physicsBridge) {
+    bridgeGeneration = ++physicsCollisionDebugBridgeGeneration;
     physicsBridge = createSceneryPhysicsBridge({
       engine: currentPhysicsBridgePreference,
+      onCannonWorldReady: (world) => {
+        if (bridgeGeneration !== physicsCollisionDebugBridgeGeneration) {
+          return;
+        }
+        physicsCollisionDebugRuntime.setCannonWorld(world);
+      },
     });
   }
   if (physicsBridge === null) {
     throw new Error('No compatible physics engine available for scenery physics bridge');
   }
+  physicsCollisionDebugRuntime.setEngine(
+    physicsEnvironmentEnabled.value
+      ? (currentPhysicsBridgePreference === 'ammo' ? 'ammo' : 'cannon')
+      : null,
+  );
   physicsBridgeInitPromise = physicsBridge.init({
     world: {
       gravity: [physicsGravity.x, physicsGravity.y, physicsGravity.z],
@@ -6464,6 +6488,7 @@ async function loadSceneryPhysicsBridgeScene(document: SceneJsonExportDocument |
       return;
     }
     updateSceneryPhysicsBridgeIndex(asset);
+    physicsCollisionDebugRuntime.setSceneAsset(asset);
     physicsBridgeSceneLoaded = true;
     syncSceneryGroundCollisionRuntimeLoadedTileKeys(document, renderContext?.camera ?? null);
   } catch (error) {
@@ -6551,6 +6576,7 @@ function consumeSceneryPhysicsBridgeStepFrame(frame: PhysicsStepFrame): void {
     physicsBridgeFrameBodiesByNodeId.set(nodeId, createdState);
     syncSceneryBridgeVehicleFromFrame(nodeId, createdState);
   }
+  physicsCollisionDebugRuntime.applyStepFrame(frame);
   applySceneryPhysicsBridgeFrameToObjects();
 }
 
@@ -6864,6 +6890,7 @@ function syncSceneryPhysicsBridgeVehicleInput(): void {
 async function disposeSceneryPhysicsBridgeScene(): Promise<void> {
   physicsBridgeSceneRequestId += 1;
   sceneryGroundCollisionRuntimeBodyIds.clear();
+  physicsCollisionDebugRuntime.setSceneAsset(null);
   const groundNode = currentDocument ? findGroundNode(currentDocument.nodes) : null;
   clearGroundCollisionRuntimeHost(groundNode ? (nodeObjectMap.get(groundNode.id) ?? null) : null);
   physicsBridgeBodyIdByNodeId.clear();
@@ -6902,6 +6929,7 @@ async function destroySceneryPhysicsBridge(): Promise<void> {
   physicsBridgeInitPromise = null;
   physicsBridgeStepPromise = null;
   physicsBridgeBodySyncPromise = null;
+  physicsCollisionDebugBridgeGeneration += 1;
   try {
     await bridge.destroy();
   } catch (error) {
@@ -6910,6 +6938,7 @@ async function destroySceneryPhysicsBridge(): Promise<void> {
     physicsBridgeSceneRequestId += 1;
     currentPhysicsBridgeGroundCollisionSignature = '';
     sceneryGroundCollisionRuntimeBodyIds.clear();
+    physicsCollisionDebugRuntime.resetBackend();
     const groundNode = currentDocument ? findGroundNode(currentDocument.nodes) : null;
     clearGroundCollisionRuntimeHost(groundNode ? (nodeObjectMap.get(groundNode.id) ?? null) : null);
     sceneryGroundCollisionReferenceInitialized = false;
@@ -12523,6 +12552,7 @@ function teardownRenderer() {
   disposeSignboardBillboards(renderContext?.scene ?? null);
   clearInstancedMeshes();
   clearSceneryCompiledGroundRenderRuntime();
+  physicsCollisionDebugRuntime.destroy();
   disposeObject(scene);
   disposeMaterialTextureCache();
   renderer.dispose();
@@ -12631,6 +12661,7 @@ async function ensureRendererContext(result: UseCanvasResult) {
   scene.environmentIntensity = SKY_ENVIRONMENT_INTENSITY;
 
   scene.add(instancedMeshGroup);
+  physicsCollisionDebugRuntime.attachScene(scene);
   stopInstancedMeshSubscription?.();
   stopBillboardMeshSubscription?.();
   stopInstancedMeshSubscription = subscribeInstancedMeshes((mesh) => {
@@ -13037,10 +13068,11 @@ function startRenderLoop(
         }
         // Throttled update of instanced mesh bounding spheres when instance matrices changed.
           tickInstancedBounds(deltaSeconds);
-        if (gradientBackgroundDome) {
-          gradientBackgroundDome.mesh.position.copy(camera.position);
-        }
+          if (gradientBackgroundDome) {
+            gradientBackgroundDome.mesh.position.copy(camera.position);
+          }
           sceneCsmShadowRuntime?.update();
+          physicsCollisionDebugRuntime.update();
         renderer.render(scene, camera);
         // Pull renderer.info after rendering so calls/triangles reflect the current frame.
         if (debugEnabled.value && debugMode.value === 'full') {
@@ -13111,6 +13143,7 @@ function cleanupForUnrelatedSceneSwitch(): void {
   clearSceneryCompiledGroundRenderRuntime();
 
   resetPhysicsWorld();
+  physicsCollisionDebugRuntime.resetBackend();
   lazyPlaceholderStates.clear();
   deferredInstancingNodeIds.clear();
   activeLazyLoadCount = 0;
