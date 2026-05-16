@@ -53,12 +53,12 @@ function createCompiledGroundManifest() {
   const tileSizeMeters = 100
   const tileKey = '0:0'
   const bounds = {
-    minX: -50,
-    maxX: 50,
+    minX: 0,
+    maxX: 100,
     minY: 0,
     maxY: 10,
-    minZ: -50,
-    maxZ: 50,
+    minZ: 0,
+    maxZ: 100,
   }
   return {
     version: 1,
@@ -71,9 +71,9 @@ function createCompiledGroundManifest() {
     collisionTileSizeMeters: tileSizeMeters,
     coveredChunkBounds: {
       minChunkX: 0,
-      maxChunkX: 0,
+      maxChunkX: 1,
       minChunkZ: 0,
-      maxChunkZ: 0,
+      maxChunkZ: 1,
     },
     bounds,
     renderTiles: [],
@@ -81,8 +81,8 @@ function createCompiledGroundManifest() {
       key: tileKey,
       row: 0,
       column: 0,
-      centerX: 0,
-      centerZ: 0,
+      centerX: 50,
+      centerZ: 50,
       sizeMeters: tileSizeMeters,
       widthMeters: tileSizeMeters,
       depthMeters: tileSizeMeters,
@@ -90,7 +90,7 @@ function createCompiledGroundManifest() {
       bounds,
       rows: 1,
       columns: 1,
-      elementSize: 50,
+      elementSize: 100,
     }],
   }
 }
@@ -99,20 +99,20 @@ function createCompiledTileBytes() {
   return serializeCompiledGroundCollisionTile({
     header: {
       version: 1,
-      key: '0:0',
-      row: 0,
-      column: 0,
-      bounds: {
-        minX: -50,
-        maxX: 50,
-        minY: 0,
-        maxY: 10,
-        minZ: -50,
-        maxZ: 50,
-      },
+    key: '0:0',
+    row: 0,
+    column: 0,
+    bounds: {
+      minX: 0,
+      maxX: 100,
+      minY: 0,
+      maxY: 10,
+      minZ: 0,
+      maxZ: 100,
+    },
       rows: 1,
       columns: 1,
-      elementSize: 50,
+      elementSize: 100,
       minHeight: 0,
       maxHeight: 10,
     },
@@ -159,10 +159,11 @@ async function flushAsyncWork() {
 
 async function main() {
   const groundObject = new THREE.Group()
+  groundObject.position.set(50, 10, 50)
   groundObject.updateMatrixWorld(true)
   const camera = new THREE.PerspectiveCamera(60, 16 / 9, 0.1, 2000)
-  camera.position.set(0, 20, 0)
-  camera.lookAt(0, 0, -1)
+  camera.position.set(100, 30, 100)
+  camera.lookAt(50, 10, 50)
   camera.updateMatrixWorld(true)
 
   const chunkSizeMeters = 100
@@ -214,9 +215,16 @@ async function main() {
         removedBodies.push(body)
       },
     }),
-    createBody: (_node, _component, shapeDefinition) => {
+    createBody: (_node, _component, shapeDefinition, object) => {
       const body = createPhysicsBody()
-      createdBodies.push({ body, shapeDefinition })
+      object.updateMatrixWorld(true)
+      const worldPosition = new THREE.Vector3()
+      object.getWorldPosition(worldPosition)
+      createdBodies.push({
+        body,
+        shapeDefinition,
+        worldPosition: worldPosition.toArray(),
+      })
       return {
         body,
         orientationAdjustment: null,
@@ -270,7 +278,7 @@ async function main() {
 
   assert.deepEqual(snapshot.compiledTileKeys, ['0:0'], 'compiled collision should activate the covered tile near the vehicle reference')
   assert.ok(
-    !snapshot.infiniteChunkKeys.includes('0:0'),
+    !snapshot.infiniteChunkKeys.some((chunkKey) => ['0:0', '0:1', '1:0', '1:1'].includes(chunkKey)),
     'infinite collision should exclude chunk keys already covered by compiled ground',
   )
   assert.ok(
@@ -283,21 +291,30 @@ async function main() {
   assert.equal(compiledBodies.length, 1, 'expected exactly one compiled collision body for the compiled tile')
   assert.ok(infiniteBodies.length > 0, 'expected infinite collision bodies to still be generated around the vehicle')
   assert.ok(
-    infiniteBodies.every((body) => !String(body.name ?? '').includes(':0:0')),
-    'infinite collision should not generate a body for the compiled-covered chunk key 0:0',
+    infiniteBodies.every((body) => ![':0:0', ':0:1', ':1:0', ':1:1'].some((chunkKey) => String(body.name ?? '').includes(chunkKey))),
+    'infinite collision should not generate bodies for chunk keys already covered by compiled ground',
   )
+  const compiledEntry = createdBodies.find((entry) => String(entry.body?.name ?? '').startsWith('compiled-ground:'))
   assert.equal(
-    createdBodies.filter((entry) => entry.shapeDefinition?.kind === 'heightfield').length,
-    addedBodies.length,
-    'all generated ground collision bodies should be heightfields in this scenario',
+    compiledEntry?.shapeDefinition?.kind,
+    'heightfield',
+    'compiled collision should generate a heightfield collider',
+  )
+  assert.deepEqual(
+    compiledEntry?.shapeDefinition?.offset,
+    [-50, -50, 0],
+    'compiled collision heightfield should be centered in tile-local space',
+  )
+  assert.deepEqual(
+    compiledEntry?.worldPosition.map((value) => Math.round(value)),
+    [100, 10, 100],
+    'compiled collision body should be created at the translated tile center in world space',
   )
 
   clearGroundCollisionRuntimeHost(groundObject)
   await flushAsyncWork()
 
   assert.ok(removedBodies.length >= addedBodies.length, 'clearing the runtime should release the generated bodies')
-
-  console.log('compiled-ground collision parity regression checks passed')
 }
 
 main().catch((error) => {
