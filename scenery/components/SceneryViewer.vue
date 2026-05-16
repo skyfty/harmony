@@ -329,42 +329,7 @@
             />
           </view>
         </view>
-        <view v-if="activeCharacterControlNodeId" class="viewer-drive-action-row">
-          <button
-            class="viewer-drive-action-button"
-            :class="{ 'is-active': characterControlActionState.sprinting }"
-            type="button"
-            hover-class="none"
-            @tap="handleCharacterControlSprintTap"
-          >
-            <text class="viewer-drive-action-button__label">跑</text>
-          </button>
-          <button
-            class="viewer-drive-action-button"
-            type="button"
-            hover-class="none"
-            @tap="handleCharacterControlJumpTap"
-          >
-            <text class="viewer-drive-action-button__label">跳</text>
-          </button>
-          <button
-            class="viewer-drive-action-button"
-            :class="{ 'is-active': characterControlActionState.crouching }"
-            type="button"
-            hover-class="none"
-            @tap="handleCharacterControlCrouchTap"
-          >
-            <text class="viewer-drive-action-button__label">蹲</text>
-          </button>
-          <button
-            class="viewer-drive-action-button"
-            type="button"
-            hover-class="none"
-            @tap="handleCharacterControlInteractTap"
-          >
-            <text class="viewer-drive-action-button__label">交互</text>
-          </button>
-        </view>
+        
       </view>
       <view v-if="vehicleDriveUi.visible" class="viewer-drive-speed-left-floating">
         <SpeedReadout :speed="vehicleSpeedKmh" :aria-hidden="true" />
