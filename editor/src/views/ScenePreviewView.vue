@@ -2602,8 +2602,54 @@ const vehicleDriveInput = reactive<VehicleDriveInputState>({
 	brake: 0,
 })
 
-const vehicleSpeed = ref(0)
-const vehicleSpeedKmh = computed(() => Math.round(vehicleSpeed.value * 3.6))
+const VEHICLE_SPEED_DISPLAY_UPDATE_INTERVAL_MS = 150
+const VEHICLE_SPEED_DISPLAY_ZERO_DELAY_MS = 250
+
+const vehicleSpeedDisplayMps = ref(0)
+const vehicleSpeedKmh = computed(() => Math.round(vehicleSpeedDisplayMps.value * 3.6))
+let vehicleSpeedDisplayLastCommitAtMs = 0
+let vehicleSpeedDisplayLowSpeedSinceAtMs: number | null = null
+
+function getVehicleSpeedDisplayNowMs(): number {
+	if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
+		return performance.now()
+	}
+	return Date.now()
+}
+
+function commitVehicleSpeedDisplay(speedMps: number, nowMs: number): void {
+	const clampedSpeedMps = Number.isFinite(speedMps) && speedMps > 0 ? speedMps : 0
+	const hasCommittedOnce = vehicleSpeedDisplayLastCommitAtMs > 0
+	const isLeavingZero = clampedSpeedMps >= VEHICLE_PARKED_SPEED_EPSILON && vehicleSpeedDisplayMps.value === 0
+	const canCommit =
+		!hasCommittedOnce ||
+		isLeavingZero ||
+		nowMs - vehicleSpeedDisplayLastCommitAtMs >= VEHICLE_SPEED_DISPLAY_UPDATE_INTERVAL_MS
+
+	if (clampedSpeedMps >= VEHICLE_PARKED_SPEED_EPSILON) {
+		vehicleSpeedDisplayLowSpeedSinceAtMs = null
+		if (canCommit) {
+			vehicleSpeedDisplayMps.value = clampedSpeedMps
+			vehicleSpeedDisplayLastCommitAtMs = nowMs
+		}
+		return
+	}
+
+	if (vehicleSpeedDisplayMps.value === 0) {
+		vehicleSpeedDisplayLowSpeedSinceAtMs = null
+		return
+	}
+
+	if (vehicleSpeedDisplayLowSpeedSinceAtMs === null) {
+		vehicleSpeedDisplayLowSpeedSinceAtMs = nowMs
+	}
+
+	if (canCommit && nowMs - vehicleSpeedDisplayLowSpeedSinceAtMs >= VEHICLE_SPEED_DISPLAY_ZERO_DELAY_MS) {
+		vehicleSpeedDisplayMps.value = 0
+		vehicleSpeedDisplayLastCommitAtMs = nowMs
+		vehicleSpeedDisplayLowSpeedSinceAtMs = null
+	}
+}
 
 const vehicleDriveCameraRestoreState = {
 	hasSnapshot: false,
@@ -2672,6 +2718,17 @@ const vehicleDriveController = new VehicleDriveController(
 		cameraRestoreState: vehicleDriveCameraRestoreState,
 		cameraFollowState: vehicleDriveCameraFollowState,
 		steeringKeyboardValue,
+	},
+)
+
+watch(
+	() => vehicleDriveState.active,
+	(active) => {
+		if (!active) {
+			vehicleSpeedDisplayMps.value = 0
+			vehicleSpeedDisplayLastCommitAtMs = 0
+			vehicleSpeedDisplayLowSpeedSinceAtMs = null
+		}
 	},
 )
 
@@ -7367,12 +7424,15 @@ function updateVehicleSpeedFromVehicle(): void {
 	const velocity = chassisBody?.velocity ?? null
 	const vehicleNodeId = normalizeNodeId(vehicleDriveState.nodeId)
 	const vehicleInstance = vehicleNodeId ? vehicleInstances.get(vehicleNodeId) ?? null : null
+	const nowMs = getVehicleSpeedDisplayNowMs()
 	if (!chassisBody || !velocity) {
-		vehicleSpeed.value = vehicleDriveController.getCurrentSpeed()
+		vehicleSpeedDisplayMps.value = vehicleDriveController.getCurrentSpeed()
+		vehicleSpeedDisplayLastCommitAtMs = nowMs
+		vehicleSpeedDisplayLowSpeedSinceAtMs = null
 		return
 	}
 	if (vehicleInstance) {
-		const speed = updateVehicleSpeedAndApplyParkingHoldSafe({
+		updateVehicleSpeedAndApplyParkingHoldSafe({
 			vehicleInstance,
 			chassisBody,
 			throttle: vehicleDriveInput.throttle,
@@ -7381,11 +7441,15 @@ function updateVehicleSpeedFromVehicle(): void {
 			parkingHoldSpeedEpsilon: VEHICLE_PARKING_HOLD_SPEED_EPSILON,
 			resolveBrakeForce: (vehicleInstance) => resolveAutoTourVehicleBrakeForce(vehicleInstance.nodeId),
 		})
-		vehicleSpeed.value = speed
-	} else {
-		const speed = Math.sqrt(velocity.x * velocity.x + velocity.y * velocity.y + velocity.z * velocity.z)
-		vehicleSpeed.value = Number.isFinite(speed) && speed >= VEHICLE_PARKED_SPEED_EPSILON ? speed : 0
 	}
+
+	const speed = Math.sqrt(velocity.x * velocity.x + velocity.y * velocity.y + velocity.z * velocity.z)
+	if (!vehicleInstance) {
+		vehicleSpeedDisplayMps.value = Number.isFinite(speed) && speed >= VEHICLE_PARKED_SPEED_EPSILON ? speed : 0
+		vehicleSpeedDisplayLastCommitAtMs = nowMs
+		vehicleSpeedDisplayLowSpeedSinceAtMs = null
+	}
+	commitVehicleSpeedDisplay(speed, nowMs)
 }
 
 function resetActiveVehiclePose(): boolean {

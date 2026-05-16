@@ -2498,8 +2498,55 @@ const vehicleDriveCameraRestoreState: VehicleDriveCameraRestoreState = {
   purposeMode: purposeActiveMode.value,
 };
 
-const vehicleSpeed = ref(0);
-const vehicleSpeedKmh = computed(() => Math.round(vehicleSpeed.value * 3.6));
+const VEHICLE_SPEED_DISPLAY_UPDATE_INTERVAL_MS = 150;
+const VEHICLE_SPEED_DISPLAY_ZERO_DELAY_MS = 250;
+
+const vehicleSpeedDisplayMps = ref(0);
+const vehicleSpeedKmh = computed(() => Math.round(vehicleSpeedDisplayMps.value * 3.6));
+let vehicleSpeedDisplayLastCommitAtMs = 0;
+let vehicleSpeedDisplayLowSpeedSinceAtMs: number | null = null;
+
+function getVehicleSpeedDisplayNowMs(): number {
+  if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
+    return performance.now();
+  }
+  return Date.now();
+}
+
+function commitVehicleSpeedDisplay(speedMps: number, nowMs: number): void {
+  const clampedSpeedMps = Number.isFinite(speedMps) && speedMps > 0 ? speedMps : 0;
+  const hasCommittedOnce = vehicleSpeedDisplayLastCommitAtMs > 0;
+  const isLeavingZero = clampedSpeedMps >= VEHICLE_PARKED_SPEED_EPSILON && vehicleSpeedDisplayMps.value === 0;
+  const canCommit =
+    !hasCommittedOnce ||
+    isLeavingZero ||
+    nowMs - vehicleSpeedDisplayLastCommitAtMs >= VEHICLE_SPEED_DISPLAY_UPDATE_INTERVAL_MS;
+
+  if (clampedSpeedMps >= VEHICLE_PARKED_SPEED_EPSILON) {
+    vehicleSpeedDisplayLowSpeedSinceAtMs = null;
+    if (canCommit) {
+      vehicleSpeedDisplayMps.value = clampedSpeedMps;
+      vehicleSpeedDisplayLastCommitAtMs = nowMs;
+    }
+    return;
+  }
+
+  if (vehicleSpeedDisplayMps.value === 0) {
+    vehicleSpeedDisplayLowSpeedSinceAtMs = null;
+    return;
+  }
+
+  if (vehicleSpeedDisplayLowSpeedSinceAtMs === null) {
+    vehicleSpeedDisplayLowSpeedSinceAtMs = nowMs;
+  }
+
+  if (canCommit && nowMs - vehicleSpeedDisplayLowSpeedSinceAtMs >= VEHICLE_SPEED_DISPLAY_ZERO_DELAY_MS) {
+    vehicleSpeedDisplayMps.value = 0;
+    vehicleSpeedDisplayLastCommitAtMs = nowMs;
+    vehicleSpeedDisplayLowSpeedSinceAtMs = null;
+  }
+}
+
 const vehicleHeadingDegrees = ref(0);
 const vehicleCompassStyle = computed(() => ({
   '--vehicle-heading': `${vehicleHeadingDegrees.value}deg`,
@@ -2922,7 +2969,9 @@ watch(vehicleDriveActive, (active) => {
   if (!active) {
     vehicleDriveCameraMode.value = 'follow';
     vehicleDriveCameraFollowState.initialized = false;
-    vehicleSpeed.value = 0;
+    vehicleSpeedDisplayMps.value = 0;
+    vehicleSpeedDisplayLastCommitAtMs = 0;
+    vehicleSpeedDisplayLowSpeedSinceAtMs = null;
   }
 });
 const isCameraCaged = ref(false);
@@ -9861,9 +9910,10 @@ function updateVehicleSpeedFromVehicle(): void {
   const chassisBody = vehicle?.chassisBody ?? null;
   const velocity = chassisBody?.velocity ?? null;
   const vehicleInstance = vehicleDriveNodeId.value ? vehicleInstances.get(vehicleDriveNodeId.value) ?? null : null;
+  const nowMs = getVehicleSpeedDisplayNowMs();
   if (chassisBody && velocity) {
     if (vehicleInstance) {
-      vehicleSpeed.value = updateVehicleSpeedAndApplyParkingHoldSafe({
+      updateVehicleSpeedAndApplyParkingHoldSafe({
         vehicleInstance,
         chassisBody,
         throttle: vehicleDriveInput.throttle,
@@ -9872,10 +9922,15 @@ function updateVehicleSpeedFromVehicle(): void {
         parkingHoldSpeedEpsilon: VEHICLE_PARKING_HOLD_SPEED_EPSILON,
         resolveBrakeForce: () => resolveAutoTourVehicleBrakeForce(vehicleDriveNodeId.value ?? ''),
       });
-    } else {
-      const speed = Math.sqrt(velocity.x * velocity.x + velocity.y * velocity.y + velocity.z * velocity.z);
-      vehicleSpeed.value = Number.isFinite(speed) && speed >= VEHICLE_PARKED_SPEED_EPSILON ? speed : 0;
     }
+
+    const sampledSpeed = Math.sqrt(velocity.x * velocity.x + velocity.y * velocity.y + velocity.z * velocity.z);
+    if (!vehicleInstance) {
+      vehicleSpeedDisplayMps.value = Number.isFinite(sampledSpeed) && sampledSpeed >= VEHICLE_PARKED_SPEED_EPSILON ? sampledSpeed : 0;
+      vehicleSpeedDisplayLastCommitAtMs = nowMs;
+      vehicleSpeedDisplayLowSpeedSinceAtMs = null;
+    }
+    commitVehicleSpeedDisplay(sampledSpeed, nowMs);
 
     vehicleCompassQuaternion.set(
       chassisBody.quaternion.x,
@@ -9900,7 +9955,9 @@ function updateVehicleSpeedFromVehicle(): void {
   }
 
   const transformSpeed = vehicleDriveController.getCurrentSpeed();
-  vehicleSpeed.value = Number.isFinite(transformSpeed) ? transformSpeed : 0;
+  vehicleSpeedDisplayMps.value = Number.isFinite(transformSpeed) ? transformSpeed : 0;
+  vehicleSpeedDisplayLastCommitAtMs = nowMs;
+  vehicleSpeedDisplayLowSpeedSinceAtMs = null;
 
   const driveNodeId = vehicleDriveNodeId.value;
   const driveObject = driveNodeId ? nodeObjectMap.get(driveNodeId) ?? null : null;
