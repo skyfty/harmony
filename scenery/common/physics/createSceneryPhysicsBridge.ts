@@ -144,20 +144,25 @@ async function loadPhysicsBackend(
   engine: Extract<PhysicsBackendId, 'ammo' | 'cannon'>,
 ): Promise<LoadedPhysicsBackend> {
   if (engine === 'ammo') {
-    const ammoRuntime = await import('@harmony/physics-ammo')
-    const ammoBackend = await ammoRuntime.createAmmoPhysicsBackend()
+    const ammoSource = await import('@harmony/physics-ammo-source')
+    const moduleFactory = ammoSource.createDefaultAmmoModuleFactory()
+    let ammoPromise: Promise<unknown> | null = null
+    const loadAmmoModule = async () => {
+      ammoPromise ??= moduleFactory()
+      return ammoPromise
+    }
+    const ammo = await loadAmmoModule()
     return {
       subpackageName: 'physics-ammo',
-      schemaBridge: ammoBackend.schemaBridge,
-      createController: ammoBackend.createController,
+      schemaBridge: ammoSource.createAmmoSchemaPhysicsBackendBridge(ammo as never),
+      createController: () => ammoSource.createAmmoPhysicsController({ moduleFactory: loadAmmoModule }),
     }
   }
 
-  const cannonRuntime = await import('@harmony/physics-cannon')
-  const cannonBackend = await cannonRuntime.createCannonPhysicsBackend()
+  const cannonSource = await import('@harmony/physics-cannon-source')
   return {
     subpackageName: 'physics-cannon',
-    schemaBridge: cannonBackend.schemaBridge,
-    createController: cannonBackend.createController,
+    schemaBridge: cannonSource.createCannonSchemaPhysicsBackendBridge(),
+    createController: () => cannonSource.createCannonPhysicsController(),
   }
 }
