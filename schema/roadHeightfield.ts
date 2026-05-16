@@ -9,6 +9,9 @@ import { buildRoadCornerBezierCurvePath } from './roadCurvePath'
 import { buildRoadGraph, type RoadGraph } from './roadGraph'
 import type { PhysicsBodyLike, PhysicsOrientationAdjustment } from './physicsBodySync'
 
+export type RoadCollisionMode = 'pure-box' | 'mixed'
+export const ROAD_COLLISION_MODE: RoadCollisionMode = 'pure-box'
+
 type PhysicsWorldLike = {
 	addBody: (body: PhysicsBodyLike) => unknown
 	removeBody?: (body: PhysicsBodyLike) => unknown
@@ -23,6 +26,7 @@ export type RoadHeightfieldTileDescriptor = {
 	endIndex: number
 	position: [number, number, number]
 	yaw: number
+	pitch: number
 	shapeDefinition: RigidbodyPhysicsShape
 }
 
@@ -33,6 +37,7 @@ export type RoadHeightfieldBuildSnapshot = {
 	roadWidth: number
 	collisionWidth: number
 	samplingDensityFactor: number
+	collisionSubdivisionFactor: number
 	smoothingStrengthFactor: number
 	minClearance: number
 	junctionSmoothing: number
@@ -80,9 +85,13 @@ export function collectRoadHeightfieldTileDescriptors(params: RoadHeightfieldBui
 		| SceneNodeComponentState<RoadComponentProps>
 		| undefined
 	const roadProps = clampRoadProps(roadState?.props as Partial<RoadComponentProps> | null | undefined)
+	if (roadProps.enableVehicleCollision === false) {
+		return null
+	}
 	const roadWidth = Math.max(0.01, Number.isFinite(roadProps.width) ? roadProps.width : 2)
 	const collisionWidth = roadWidth
 	const samplingDensityFactor = roadProps.samplingDensityFactor ?? 1.0
+	const collisionSubdivisionFactor = roadProps.collisionSubdivisionFactor ?? 1.0
 	const smoothingStrengthFactor = roadProps.smoothingStrengthFactor ?? 1.0
 	const minClearance = roadProps.minClearance ?? 0.01
 	const junctionSmoothing = roadProps.junctionSmoothing ?? 0
@@ -187,7 +196,7 @@ export function collectRoadHeightfieldTileDescriptors(params: RoadHeightfieldBui
 				Math.min(ROAD_HEIGHTFIELD_MAX_ROWS, Math.round((ROAD_HEIGHTFIELD_MIN_ROWS + samplingDetail * (ROAD_HEIGHTFIELD_MAX_ROWS - ROAD_HEIGHTFIELD_MIN_ROWS)) * densityScale)),
 			)
 			const desiredTileLengthForCurve = clampNumber(
-				roadWidth * lerpNumber(16, 8, geometryDetail),
+				(roadWidth * lerpNumber(16, 8, geometryDetail)) / Math.max(0.5, Math.sqrt(collisionSubdivisionFactor)),
 				ROAD_HEIGHTFIELD_MIN_TILE_LENGTH,
 				ROAD_HEIGHTFIELD_MAX_TILE_LENGTH,
 				desiredTileLength,
@@ -203,12 +212,24 @@ export function collectRoadHeightfieldTileDescriptors(params: RoadHeightfieldBui
 			layoutHash = (layoutHash * 31 + targetRows) >>> 0
 			layoutHash = (layoutHash * 31 + Math.round(desiredTileLengthForCurve * 1000)) >>> 0
 			layoutHash = (layoutHash * 31 + Math.round(elementSize * 1000)) >>> 0
+			layoutHash = (layoutHash * 31 + Math.round(collisionSubdivisionFactor * 1000)) >>> 0
 
-			const spans = collectRoadCollisionSpans(segment, divisions, smoothedHeights)
+			const spans = collectRoadCollisionSpans(
+				segment,
+				divisions,
+				smoothedHeights,
+				roadWidth,
+				collisionSubdivisionFactor,
+				Math.max(1, maxBodies - totalBodies),
+			)
 			const spanP0 = new THREE.Vector3()
 			const spanP1 = new THREE.Vector3()
+			const spanMid = new THREE.Vector3()
 			const spanForward = new THREE.Vector3()
 			const spanCenter = new THREE.Vector3()
+			const spanQuaternion = new THREE.Quaternion()
+			const spanEuler = new THREE.Euler(0, 0, 0, 'YXZ')
+			const spanUp = new THREE.Vector3(0, 1, 0)
 			let tileIndex = 0
 			for (const span of spans) {
 				if (totalBodies >= maxBodies) {
@@ -220,6 +241,7 @@ export function collectRoadHeightfieldTileDescriptors(params: RoadHeightfieldBui
 				segment.getPoint(endU, spanP1)
 				spanForward.copy(spanP1).sub(spanP0)
 				const forwardLen = Math.hypot(spanForward.x, spanForward.z)
+				const chordLength = spanForward.length()
 				let yaw = 0
 				if (forwardLen > ROAD_EPSILON) {
 					yaw = Math.atan2(spanForward.x, spanForward.z)
@@ -228,65 +250,47 @@ export function collectRoadHeightfieldTileDescriptors(params: RoadHeightfieldBui
 					const tangent = segment.getTangent(midU)
 					yaw = Math.atan2(tangent.x, tangent.z)
 				}
-				spanCenter.copy(spanP0).add(spanP1).multiplyScalar(0.5)
-				const spanLength = Math.max((span.endIndex - span.startIndex) * (length / divisions), forwardLen)
+				const spanHeights = smoothedHeights.slice(span.startIndex, span.endIndex + 1)
+				const spanLength = Math.max((span.endIndex - span.startIndex) * (length / divisions), chordLength, forwardLen)
+				const spanFit = computeRoadSpanSurfaceFit(spanHeights, spanLength)
+				const boxOverlapMeters = Math.min(
+					span.boxOverlapMeters ?? ROAD_BOX_JOIN_MIN_OVERLAP_METERS,
+					Math.max(0, spanLength * 0.45),
+				)
+				layoutHash = (layoutHash * 31 + Math.round(boxOverlapMeters * 1000)) >>> 0
+				const boxLength = spanLength + boxOverlapMeters * 2
+				const boxShape = buildRoadRectangularTileShapeFromSeries({
+					roadWidth: collisionWidth,
+					length: boxLength,
+					heights: spanHeights,
+				})
+				if (!boxShape) {
+					continue
+				}
+				const pitch = spanFit.pitch
+				spanEuler.set(pitch, yaw, 0, 'YXZ')
+				spanQuaternion.setFromEuler(spanEuler)
+				spanUp.set(0, 1, 0).applyQuaternion(spanQuaternion)
+				segment.getPoint((startU + endU) * 0.5, spanMid)
+				spanCenter.copy(spanMid)
+				spanCenter.y = spanFit.centerHeight
+				spanCenter.addScaledVector(spanUp, -boxShape.halfExtents[1])
 				layoutHash = (layoutHash * 31 + curveIndex) >>> 0
 				layoutHash = (layoutHash * 31 + segmentIndex) >>> 0
 				layoutHash = (layoutHash * 31 + tileIndex) >>> 0
 				layoutHash = (layoutHash * 31 + span.startIndex) >>> 0
 				layoutHash = (layoutHash * 31 + span.endIndex) >>> 0
-				layoutHash = (layoutHash * 31 + (span.kind === 'box' ? 1 : 2)) >>> 0
-
-				if (span.kind === 'box') {
-					const spanHeights = smoothedHeights.slice(span.startIndex, span.endIndex + 1)
-					const boxOverlapMeters = Math.min(
-						span.boxOverlapMeters ?? ROAD_BOX_JOIN_MIN_OVERLAP_METERS,
-						Math.max(0, spanLength * 0.45),
-					)
-					layoutHash = (layoutHash * 31 + Math.round(boxOverlapMeters * 1000)) >>> 0
-					const boxLength = spanLength + boxOverlapMeters * 2
-					const boxShape = buildRoadRectangularTileShapeFromSeries({
-						roadWidth: collisionWidth,
-						length: boxLength,
-						heights: spanHeights,
-					})
-					if (!boxShape) {
-						continue
-					}
-					const surfaceHeight = spanHeights.reduce((sum, value) => sum + (Number.isFinite(value) ? value : 0), 0) / spanHeights.length
-					const boxHalfY = boxShape.kind === 'box' ? boxShape.halfExtents[1] : 0
-					tiles.push({
-						curveIndex,
-						tileIndex,
-						startIndex: span.startIndex,
-						endIndex: span.endIndex,
-						position: [spanCenter.x, surfaceHeight - boxHalfY, spanCenter.z],
-						yaw,
-						shapeDefinition: boxShape,
-					})
-				} else {
-					const rows = Math.max(2, Math.ceil(spanLength / elementSize))
-					const fieldShape = buildHeightfieldShapeFromSeries({
-						startIndex: span.startIndex,
-						endIndex: span.endIndex,
-						spanLength,
-						rows,
-						roadWidth: collisionWidth,
-						heights: smoothedHeights,
-					})
-					if (!fieldShape) {
-						continue
-					}
-					tiles.push({
-						curveIndex,
-						tileIndex,
-						startIndex: span.startIndex,
-						endIndex: span.endIndex,
-						position: [spanCenter.x, 0, spanCenter.z],
-						yaw,
-						shapeDefinition: fieldShape,
-					})
-				}
+				layoutHash = (layoutHash * 31 + Math.round(pitch * 1000)) >>> 0
+				tiles.push({
+					curveIndex,
+					tileIndex,
+					startIndex: span.startIndex,
+					endIndex: span.endIndex,
+					position: [spanCenter.x, spanCenter.y, spanCenter.z],
+					yaw,
+					pitch,
+					shapeDefinition: boxShape,
+				})
 				totalBodies += 1
 				tileIndex += 1
 			}
@@ -306,6 +310,7 @@ export function collectRoadHeightfieldTileDescriptors(params: RoadHeightfieldBui
 		roadWidth,
 		collisionWidth,
 		samplingDensityFactor,
+		collisionSubdivisionFactor,
 		smoothingStrengthFactor,
 		minClearance,
 		junctionSmoothing,
@@ -342,7 +347,7 @@ export function buildRoadHeightfieldBodies(params: RoadHeightfieldBuildParams): 
 		}
 
 		const tileObject = new THREE.Object3D()
-		tileObject.rotation.set(0, tile.yaw, 0)
+		tileObject.rotation.set(tile.pitch, tile.yaw, 0, 'YXZ')
 		tileObject.position.set(tile.position[0], tile.position[1], tile.position[2])
 		roadObject.add(tileObject)
 		tileObject.updateMatrixWorld(true)
@@ -374,6 +379,7 @@ export function buildRoadHeightfieldBodies(params: RoadHeightfieldBuildParams): 
 		roadWidth: snapshot.roadWidth,
 		collisionWidth: snapshot.collisionWidth,
 		samplingDensityFactor: snapshot.samplingDensityFactor,
+		collisionSubdivisionFactor: snapshot.collisionSubdivisionFactor,
 		smoothingStrengthFactor: snapshot.smoothingStrengthFactor,
 		minClearance: snapshot.minClearance,
 		junctionSmoothing: snapshot.junctionSmoothing,
@@ -402,8 +408,6 @@ const ROAD_HEIGHT_SLOPE_MAX_GRADE = 0.8
 const ROAD_HEIGHT_SLOPE_MIN_DELTA_Y = 0.03
 const ROAD_HEIGHTFIELD_MIN_ROWS = 2
 const ROAD_HEIGHTFIELD_MAX_ROWS = 10
-// Debug/test-only sizing for a large centered heightmap.
-const ROAD_HEIGHTFIELD_TEST_MAP_POINTS = 11
 const ROAD_HEIGHTFIELD_MIN_TILE_LENGTH = 1
 const ROAD_HEIGHTFIELD_MAX_TILE_LENGTH = 2
 const ROAD_HEIGHTFIELD_DEFAULT_TILE_LENGTH = 20
@@ -415,9 +419,10 @@ const ROAD_RECTANGULAR_MAX_THICKNESS = 0.28
 const ROAD_BOX_JOIN_MIN_OVERLAP_METERS = 0.14
 const ROAD_BOX_JOIN_MAX_OVERLAP_METERS = 0.55
 
-// Road collision uses tiled heightfields exclusively.
-// Tile length is adaptively reduced on bends to keep chord approximation tight.
+// Road collision now always uses box segments; the segment length is adaptively reduced on bends
+// and steep or uneven sections to keep the collision hull close to the rendered surface.
 const ROAD_TILE_MAX_HEADING_DELTA_RAD = (8 * Math.PI) / 180
+const ROAD_TILE_MAX_PITCH_DELTA_RAD = (4 * Math.PI) / 180
 
 function normalizeAngleRad(angle: number): number {
 	if (!Number.isFinite(angle)) {
@@ -539,19 +544,73 @@ function computeRoadHeightRangeForSpan(values: number[], startIndex: number, end
 type RoadCollisionSpan = {
 	startIndex: number
 	endIndex: number
-	kind: 'box' | 'heightfield'
-	boxOverlapMeters?: number
+	boxOverlapMeters: number
+}
+
+type RoadCollisionSpanMetrics = {
+	spanLength: number
+	headingDelta: number
+	heightRange: number
+	heightDelta: number
+	slope: number
+	pitchDelta: number
+}
+
+function summarizeRoadCollisionSpan(
+	curve: THREE.Curve<THREE.Vector3>,
+	divisions: number,
+	heights: number[],
+	startIndex: number,
+	endIndex: number,
+	curveLength: number,
+): RoadCollisionSpanMetrics {
+	const start = Math.max(0, Math.min(divisions, Math.trunc(startIndex)))
+	const end = Math.max(start + 1, Math.min(divisions, Math.trunc(endIndex)))
+	const startU = start / divisions
+	const endU = end / divisions
+	const startPoint = curve.getPoint(startU)
+	const endPoint = curve.getPoint(endU)
+	const forward = endPoint.clone().sub(startPoint)
+	const spanLength = Math.max((end - start) * (curveLength / divisions), forward.length())
+	const headingDelta = computeHeadingDeltaRad(curve, startU, endU)
+	const heightRange = computeRoadHeightRangeForSpan(heights, start, Math.min(heights.length, end + 1))
+	const startHeight = Number.isFinite(heights[start]!) ? heights[start]! : 0
+	const endHeight = Number.isFinite(heights[end]!) ? heights[end]! : startHeight
+	const heightDelta = Math.abs(endHeight - startHeight)
+	const slope = spanLength > ROAD_EPSILON ? heightDelta / spanLength : 0
+	const mid = Math.max(start + 1, Math.min(end - 1, Math.floor((start + end) * 0.5)))
+	let pitchDelta = 0
+	if (mid > start && mid < end) {
+		const leftFit = computeRoadSpanSurfaceFit(heights.slice(start, mid + 1), Math.max(ROAD_EPSILON, spanLength * ((mid - start) / Math.max(1, end - start))))
+		const rightFit = computeRoadSpanSurfaceFit(heights.slice(mid, end + 1), Math.max(ROAD_EPSILON, spanLength * ((end - mid) / Math.max(1, end - start))))
+		pitchDelta = Math.abs(normalizeAngleRad(rightFit.pitch - leftFit.pitch))
+	}
+	return {
+		spanLength,
+		headingDelta,
+		heightRange,
+		heightDelta,
+		slope,
+		pitchDelta,
+	}
 }
 
 function collectRoadCollisionSpans(
 	curve: THREE.Curve<THREE.Vector3>,
 	divisions: number,
 	heights: number[],
+	roadWidth: number,
+	collisionSubdivisionFactor: number,
+	maxSpans: number,
 ): RoadCollisionSpan[] {
 	if (!(divisions > 0)) {
 		return []
 	}
-	const intervalKinds: Array<'box' | 'heightfield'> = []
+	const factor = clampNumber(collisionSubdivisionFactor, 0.25, 8, 1.0)
+	const curveLength = curve.getLength()
+	if (!(curveLength > ROAD_EPSILON)) {
+		return []
+	}
 	const intervalGeometryDetails: number[] = []
 	const intervalHeightDetails: number[] = []
 	for (let i = 0; i < divisions; i += 1) {
@@ -559,89 +618,89 @@ function collectRoadCollisionSpans(
 		const endU = (i + 1) / divisions
 		const geometryDetail = computeHeadingDeltaRad(curve, startU, endU)
 		const heightRange = computeRoadHeightRangeForSpan(heights, Math.max(0, i - 1), Math.min(heights.length, i + 2))
-	const heightDetail = Math.max(0, Math.min(1, heightRange / Math.max(ROAD_RECTANGULAR_MAX_HEIGHT_RANGE, 1e-6)))
+		const heightDetail = Math.max(0, Math.min(1, heightRange / Math.max(ROAD_RECTANGULAR_MAX_HEIGHT_RANGE, 1e-6)))
 		intervalGeometryDetails.push(geometryDetail)
 		intervalHeightDetails.push(heightDetail)
-		const isBoxCandidate =
-			geometryDetail <= ROAD_RECTANGULAR_MAX_GEOMETRY_DETAIL &&
-			geometryDetail <= ROAD_TILE_MAX_HEADING_DELTA_RAD * 0.75 &&
-			heightDetail <= ROAD_RECTANGULAR_MAX_HEIGHT_DETAIL &&
-			heightRange <= ROAD_RECTANGULAR_MAX_HEIGHT_RANGE * 0.5
-		intervalKinds.push(isBoxCandidate ? 'box' : 'heightfield')
 	}
-	const spans: RoadCollisionSpan[] = []
-	let startIndex = 0
-	while (startIndex < divisions) {
-		const kind = intervalKinds[startIndex]!
-		let endIndex = startIndex + 1
-		while (endIndex < divisions && intervalKinds[endIndex] === kind) {
-			endIndex += 1
+	const baseTargetLength = clampNumber(
+		(roadWidth * lerpNumber(12, 6, Math.min(1, Math.max(0, (factor - 0.25) / 7.75)))) / Math.max(0.75, Math.sqrt(factor)),
+		0.85,
+		14,
+		roadWidth * 8,
+	)
+	const headingThreshold = ROAD_TILE_MAX_HEADING_DELTA_RAD / Math.max(0.85, Math.sqrt(factor))
+	const heightRangeThreshold = ROAD_RECTANGULAR_MAX_HEIGHT_RANGE / Math.max(0.75, Math.sqrt(factor))
+	const slopeThreshold = ROAD_HEIGHT_SLOPE_MAX_GRADE / Math.max(0.85, Math.sqrt(factor))
+	const pitchThreshold = ROAD_TILE_MAX_PITCH_DELTA_RAD / Math.max(0.85, Math.sqrt(factor))
+
+	type PendingSpan = { startIndex: number; endIndex: number }
+	const pending: PendingSpan[] = [{ startIndex: 0, endIndex: divisions }]
+	const leafSpans: PendingSpan[] = []
+	while (pending.length) {
+		const span = pending.pop()!
+		const metrics = summarizeRoadCollisionSpan(curve, divisions, heights, span.startIndex, span.endIndex, curveLength)
+		const canSplit = span.endIndex - span.startIndex > 1
+		const shouldSplit =
+			canSplit &&
+			(
+				metrics.spanLength > baseTargetLength ||
+				metrics.headingDelta > headingThreshold ||
+				metrics.heightRange > heightRangeThreshold ||
+				metrics.slope > slopeThreshold ||
+				metrics.pitchDelta > pitchThreshold
+			)
+		const remainingBudget = Math.max(0, maxSpans - leafSpans.length - pending.length)
+		if (!shouldSplit || remainingBudget <= 1) {
+			leafSpans.push(span)
+			continue
 		}
-		if (kind === 'box' && endIndex - startIndex < 2) {
-			spans.push({ startIndex, endIndex, kind: 'heightfield' })
-		} else {
-			spans.push({
-				startIndex,
-				endIndex,
-				kind,
-				boxOverlapMeters:
-					kind === 'box'
-						? computeRoadBoxJoinOverlapMeters(startIndex, endIndex, intervalGeometryDetails, intervalHeightDetails)
-			: undefined,
-			})
+		const mid = Math.floor((span.startIndex + span.endIndex) * 0.5)
+		if (mid <= span.startIndex || mid >= span.endIndex) {
+			leafSpans.push(span)
+			continue
 		}
-		startIndex = endIndex
+		pending.push({ startIndex: mid, endIndex: span.endIndex })
+		pending.push({ startIndex: span.startIndex, endIndex: mid })
 	}
-	const promotedSpans: RoadCollisionSpan[] = []
-	for (let index = 0; index < spans.length; index += 1) {
-		const span = spans[index]!
-		if (span.kind === 'heightfield') {
-			const intervalCount = span.endIndex - span.startIndex
-			const hasBoxNeighbor =
-				promotedSpans[promotedSpans.length - 1]?.kind === 'box' ||
-				spans[index + 1]?.kind === 'box'
-			if (intervalCount <= 2 && hasBoxNeighbor) {
-				promotedSpans.push({
-					...span,
-					kind: 'box',
-					boxOverlapMeters: computeRoadBoxJoinOverlapMeters(
-						span.startIndex,
-						span.endIndex,
-						intervalGeometryDetails,
-						intervalHeightDetails,
-					),
-				})
-				continue
-			}
+
+	leafSpans.sort((a, b) => {
+		if (a.startIndex !== b.startIndex) {
+			return a.startIndex - b.startIndex
 		}
-		promotedSpans.push(span)
-	}
-	const mergedSpans: RoadCollisionSpan[] = []
-	for (const span of promotedSpans) {
+		return a.endIndex - b.endIndex
+	})
+
+	const mergedSpans: PendingSpan[] = []
+	for (const span of leafSpans) {
 		const previous = mergedSpans[mergedSpans.length - 1]
-		if (previous && previous.kind === span.kind) {
+		if (!previous) {
+			mergedSpans.push({ ...span })
+			continue
+		}
+		const mergedMetrics = summarizeRoadCollisionSpan(curve, divisions, heights, previous.startIndex, span.endIndex, curveLength)
+		if (
+			previous.endIndex === span.startIndex &&
+			mergedMetrics.spanLength <= baseTargetLength * 1.35 &&
+			mergedMetrics.headingDelta <= headingThreshold * 0.9 &&
+			mergedMetrics.heightRange <= heightRangeThreshold * 0.9 &&
+			mergedMetrics.slope <= slopeThreshold * 0.9 &&
+			mergedMetrics.pitchDelta <= pitchThreshold * 0.9
+		) {
 			previous.endIndex = span.endIndex
-			if (previous.kind === 'box') {
-				previous.boxOverlapMeters = Math.max(previous.boxOverlapMeters ?? 0, span.boxOverlapMeters ?? 0)
-			}
 			continue
 		}
 		mergedSpans.push({ ...span })
 	}
-	return mergedSpans.map((span) => {
-		if (span.kind !== 'box') {
-			return span
-		}
-		return {
-			...span,
-			boxOverlapMeters: computeRoadBoxJoinOverlapMeters(
-				span.startIndex,
-				span.endIndex,
-				intervalGeometryDetails,
-				intervalHeightDetails,
-			),
-		}
-	})
+
+	return mergedSpans.map((span) => ({
+		...span,
+		boxOverlapMeters: computeRoadBoxJoinOverlapMeters(
+			span.startIndex,
+			span.endIndex,
+			intervalGeometryDetails,
+			intervalHeightDetails,
+		),
+	}))
 }
 
 function computeRoadBoxJoinOverlapMeters(
@@ -845,104 +904,80 @@ function buildRoadCenterlineHeightSeries({
 	return smoothed
 }
 
-type HeightfieldFromSeriesParams = {
-	startIndex: number
-	endIndex: number
-	spanLength: number
-	rows: number
-	roadWidth: number
-	heights: number[]
-}
-
 type RoadRectangularTileShapeParams = {
 	roadWidth: number
 	length: number
 	heights: number[]
 }
 
+type RoadSpanSurfaceFit = {
+	startHeight: number
+	endHeight: number
+	centerHeight: number
+	pitch: number
+}
+
+function computeRoadSpanSurfaceFit(
+	heights: number[],
+	spanLength: number,
+): RoadSpanSurfaceFit {
+	if (!Array.isArray(heights) || heights.length < 2) {
+		return {
+			startHeight: 0,
+			endHeight: 0,
+			centerHeight: 0,
+			pitch: 0,
+		}
+	}
+	const sampleCount = heights.length
+	const horizontalLength = Math.max(ROAD_EPSILON, Number.isFinite(spanLength) ? spanLength : 0)
+	let sumX = 0
+	let sumY = 0
+	let sumXX = 0
+	let sumXY = 0
+	for (let i = 0; i < sampleCount; i += 1) {
+		const value = Number.isFinite(heights[i]!) ? heights[i]! : 0
+		const x = sampleCount > 1 ? (i / (sampleCount - 1)) * horizontalLength : 0
+		sumX += x
+		sumY += value
+		sumXX += x * x
+		sumXY += x * value
+	}
+	const denominator = sampleCount * sumXX - sumX * sumX
+	const slope = Math.abs(denominator) > ROAD_EPSILON ? (sampleCount * sumXY - sumX * sumY) / denominator : 0
+	const startHeight = Number.isFinite(heights[0]!) ? heights[0]! : 0
+	const endHeight = Number.isFinite(heights[heights.length - 1]!) ? heights[heights.length - 1]! : startHeight
+	const centerHeight = (startHeight + endHeight) * 0.5
+	return {
+		startHeight,
+		endHeight,
+		centerHeight,
+		pitch: Math.atan(slope),
+	}
+}
+
 function buildRoadRectangularTileShapeFromSeries({
 	roadWidth,
 	length,
 	heights,
-}: RoadRectangularTileShapeParams): RigidbodyPhysicsShape | null {
+}: RoadRectangularTileShapeParams): Extract<RigidbodyPhysicsShape, { kind: 'box' }> | null {
 	if (!(roadWidth > ROAD_EPSILON) || !(length > ROAD_EPSILON) || heights.length < 2) {
 		return null
 	}
 	const heightRange = computeRoadHeightRange(heights)
-	if (!Number.isFinite(heightRange) || heightRange > ROAD_RECTANGULAR_MAX_HEIGHT_RANGE) {
-		return null
-	}
 	const thickness = Math.max(
 		ROAD_RECTANGULAR_MIN_THICKNESS,
 		Math.min(
 			ROAD_RECTANGULAR_MAX_THICKNESS,
-			Math.max(ROAD_SURFACE_Y_OFFSET * 4, heightRange * 2 + 0.04),
+			Math.max(ROAD_SURFACE_Y_OFFSET * 4, (Number.isFinite(heightRange) ? heightRange : 0) + 0.08),
 		),
 	)
 	return {
 		kind: 'box',
 		halfExtents: [Math.max(1e-4, roadWidth * 0.5), Math.max(1e-4, thickness * 0.5), Math.max(1e-4, length * 0.5)],
 		offset: [0, 0, 0],
-		applyScale: false,
-	}
-}
-
-function buildHeightfieldShapeFromSeries({
-	startIndex,
-	endIndex,
-	spanLength,
-	rows,
-	roadWidth,
-	heights,
-}: HeightfieldFromSeriesParams): Extract<RigidbodyPhysicsShape, { kind: 'heightfield' }> | null {
-	const span = endIndex - startIndex
-	if (span <= 0 || !Number.isFinite(spanLength) || spanLength <= ROAD_EPSILON) {
-		return null
-	}
-	const tileWidth = Math.max(1e-4, roadWidth)
-	const tileLength = Math.max(1e-4, spanLength)
-	const targetElementSize = Math.max(1e-4, tileLength / Math.max(1, rows))
-	const pointsX = Math.max(2, Math.max(ROAD_HEIGHTFIELD_TEST_MAP_POINTS, Math.round(tileWidth / targetElementSize) + 1))
-	const pointsZ = Math.max(2, Math.max(ROAD_HEIGHTFIELD_TEST_MAP_POINTS, Math.round(tileLength / targetElementSize) + 1))
-	if (pointsX < 2 || pointsZ < 2) {
-		return null
-	}
-
-	if (!Array.isArray(heights) || heights.length < 2) {
-		return null
-	}
-	const width = tileWidth
-	const depth = tileLength
-	const halfWidth = width * 0.5
-	const halfDepth = depth * 0.5
-	const effectiveElementSize = targetElementSize
-
-	const matrix: number[][] = []
-	for (let col = 0; col < pointsX; col += 1) {
-		const columnValues: number[] = []
-		for (let row = pointsZ - 1; row >= 0; row -= 1) {
-			const uAlong = pointsZ > 1 ? row / (pointsZ - 1) : 0
-			const indexFloat = startIndex + uAlong * span
-			const i0 = Math.max(0, Math.min(heights.length - 1, Math.floor(indexFloat)))
-			const i1 = Math.max(0, Math.min(heights.length - 1, i0 + 1))
-			const frac = indexFloat - i0
-			const h0 = heights[i0] ?? 0
-			const h1 = heights[i1] ?? h0
-			const height = h0 + (h1 - h0) * frac
-			columnValues.push(Number.isFinite(height) ? height : 0)
-		}
-		matrix.push(columnValues)
-	}
-
-	return {
-		kind: 'heightfield',
-		matrix,
-		elementSize: effectiveElementSize,
-		width,
-		depth,
-		offset: [-halfWidth, 0, -halfDepth],
-		applyScale: false,
-	}
+	applyScale: false,
+	} satisfies Extract<RigidbodyPhysicsShape, { kind: 'box' }>
 }
 
 function buildRoadHeightfieldSignature(params: {
@@ -951,6 +986,7 @@ function buildRoadHeightfieldSignature(params: {
 	roadWidth: number
 	collisionWidth: number
 	samplingDensityFactor: number
+	collisionSubdivisionFactor: number
 	smoothingStrengthFactor: number
 	minClearance: number
 	junctionSmoothing: number
@@ -978,6 +1014,7 @@ function buildRoadHeightfieldSignature(params: {
 		`cw:${Math.round(params.collisionWidth * 1000)}`,
 		`jd:${Math.round(params.junctionSmoothing * 1000)}`,
 		`sd:${Math.round(params.samplingDensityFactor * 1000)}`,
+		`cd:${Math.round(params.collisionSubdivisionFactor * 1000)}`,
 		`ss:${Math.round(params.smoothingStrengthFactor * 1000)}`,
 		`mc:${Math.round(params.minClearance * 1000)}`,
 		`tile:${Math.round(params.desiredTileLength * 1000)}`,

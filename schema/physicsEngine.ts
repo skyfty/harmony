@@ -54,6 +54,7 @@ import {
 	type WallTrimeshCacheEntry,
 } from './physicsShapeResolvers'
 import { isGroundDynamicMesh } from './groundHeightfield'
+import { resolveRoadVehicleCollisionEnabled } from './components/definitions/roadComponent'
 
 import {
 	buildRoadHeightfieldBodies as buildRoadHeightfieldBodiesInternal,
@@ -95,6 +96,9 @@ export function ensureRoadHeightfieldRigidbodyInstance(params: {
 	} = params
 
 	if (!isRoadDynamicMeshInternal(roadNode.dynamicMesh)) {
+		return { instance: null, shouldRemoveExisting: true }
+	}
+	if (!resolveRoadVehicleCollisionEnabled(roadNode)) {
 		return { instance: null, shouldRemoveExisting: true }
 	}
 	const props = rigidbodyComponent.props as RigidbodyComponentProps | undefined

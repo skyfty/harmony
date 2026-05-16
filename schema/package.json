@@ -13,6 +13,7 @@
     "check": "npm run type-check && npm run type-check:asset-types",
     "check:compiled-ground-collision": "npm run build && node ./scripts/fix-esm-extensions.mjs ./dist && node ./scripts/compiled-ground-collision-parity-regression.mjs",
     "check:ground-local-edit": "npm run build && node ./scripts/fix-esm-extensions.mjs ./dist && node ./scripts/ground-local-edit-regression.mjs",
+    "check:road-collision-box": "npm run build && node ./scripts/fix-esm-extensions.mjs ./dist && node ./scripts/road-collision-box-regression.mjs",
     "check:infinite-ground-visibility": "npm run build && node ./scripts/fix-esm-extensions.mjs ./dist && node ./scripts/infinite-ground-visibility-regression.mjs",
     "check:quantized-terrain-mesh": "npm run build && node ./scripts/fix-esm-extensions.mjs ./dist && node ./scripts/quantized-terrain-mesh-regression.mjs",
     "check:quantized-terrain-dataset": "npm run build && node ./scripts/fix-esm-extensions.mjs ./dist && node ./scripts/quantized-terrain-dataset-regression.mjs",

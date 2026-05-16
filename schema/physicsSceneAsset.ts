@@ -519,6 +519,8 @@ function buildRoadShapeInstances(
     return []
   }
   return built.tiles.flatMap((tile) => {
+    nodeEulerHelper.set(tile.pitch, tile.yaw, 0, 'YXZ')
+    nodeQuaternionHelper.setFromEuler(nodeEulerHelper)
     const instances = buildShapeInstancesFromDefinition(
       tile.shapeDefinition,
       unitScaleHelper,
@@ -530,10 +532,10 @@ function buildRoadShapeInstances(
       transform: composePhysicsTransform({
         position: tile.position,
         rotation: [
-          0,
-          Math.sin(tile.yaw * 0.5),
-          0,
-          Math.cos(tile.yaw * 0.5),
+          nodeQuaternionHelper.x,
+          nodeQuaternionHelper.y,
+          nodeQuaternionHelper.z,
+          nodeQuaternionHelper.w,
         ],
       }, entry.transform),
     }))

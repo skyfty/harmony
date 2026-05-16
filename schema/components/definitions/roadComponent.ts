@@ -10,6 +10,7 @@ export const ROAD_DEFAULT_JUNCTION_SMOOTHING = 0
 export const ROAD_TERRAIN_DEFAULT_SAMPLING_DENSITY_FACTOR = 2.5
 export const ROAD_TERRAIN_DEFAULT_SMOOTHING_STRENGTH_FACTOR = 0.35
 export const ROAD_TERRAIN_DEFAULT_MIN_CLEARANCE = 0.05
+export const ROAD_TERRAIN_DEFAULT_COLLISION_SUBDIVISION_FACTOR = 1
 
 export type RoadPoint2D = [number, number]
 
@@ -21,13 +22,15 @@ export interface RoadComponentProps {
   junctionSmoothing: number
   /** Whether road surface adapts to ground undulation. Default true. */
   snapToTerrain: boolean
-  /** Whether the road should generate heightmap-based driveable collision. Default true. */
+  /** Whether the road should generate driveable collision. Default true. */
   enableVehicleCollision?: boolean
   laneLines: boolean
   shoulders: boolean
   bodyAssetId?: string | null
   /** Sampling density factor for terrain-conforming road (higher = more sample points). */
   samplingDensityFactor?: number
+  /** Collision subdivision factor for driveable road boxes (higher = more, smaller boxes). */
+  collisionSubdivisionFactor?: number
   /** Smoothing strength factor for terrain-adaptive height smoothing (higher = smoother). */
   smoothingStrengthFactor?: number
   /** Minimum clearance/offset above terrain surface (meters). */
@@ -96,6 +99,11 @@ export function clampRoadProps(props: Partial<RoadComponentProps> | null | undef
     ? Math.max(0.1, Math.min(10, samplingDensityFactorRaw as number))
     : ROAD_TERRAIN_DEFAULT_SAMPLING_DENSITY_FACTOR
 
+  const collisionSubdivisionFactorRaw = (props as RoadComponentProps | undefined)?.collisionSubdivisionFactor
+  const collisionSubdivisionFactor = Number.isFinite(collisionSubdivisionFactorRaw)
+    ? Math.max(0.25, Math.min(8, collisionSubdivisionFactorRaw as number))
+    : ROAD_TERRAIN_DEFAULT_COLLISION_SUBDIVISION_FACTOR
+
   const smoothingStrengthFactorRaw = (props as RoadComponentProps | undefined)?.smoothingStrengthFactor
   const smoothingStrengthFactor = Number.isFinite(smoothingStrengthFactorRaw)
     ? Math.max(0.1, Math.min(5, smoothingStrengthFactorRaw as number))
@@ -128,6 +136,7 @@ export function clampRoadProps(props: Partial<RoadComponentProps> | null | undef
     segmentHeights,
     bodyAssetId: normalizeAssetId((props as RoadComponentProps | undefined)?.bodyAssetId),
     samplingDensityFactor,
+    collisionSubdivisionFactor,
     smoothingStrengthFactor,
     minClearance,
     laneLineWidth,
@@ -149,6 +158,7 @@ export function resolveRoadComponentPropsFromMesh(mesh: RoadDynamicMesh | undefi
       junctionSmoothing: ROAD_DEFAULT_JUNCTION_SMOOTHING,
       bodyAssetId: null,
       samplingDensityFactor: ROAD_TERRAIN_DEFAULT_SAMPLING_DENSITY_FACTOR,
+      collisionSubdivisionFactor: ROAD_TERRAIN_DEFAULT_COLLISION_SUBDIVISION_FACTOR,
       smoothingStrengthFactor: ROAD_TERRAIN_DEFAULT_SMOOTHING_STRENGTH_FACTOR,
       minClearance: ROAD_TERRAIN_DEFAULT_MIN_CLEARANCE,
     }
@@ -170,6 +180,7 @@ export function resolveRoadComponentPropsFromMesh(mesh: RoadDynamicMesh | undefi
     laneLines: false,
     shoulders: false,
     samplingDensityFactor: 1.0,
+    collisionSubdivisionFactor: ROAD_TERRAIN_DEFAULT_COLLISION_SUBDIVISION_FACTOR,
     smoothingStrengthFactor: 1.0,
     minClearance: 0.01,
   })
@@ -187,6 +198,7 @@ export function cloneRoadComponentProps(props: RoadComponentProps): RoadComponen
     shoulders: props.shoulders,
     bodyAssetId: props.bodyAssetId ?? null,
     samplingDensityFactor: props.samplingDensityFactor ?? 1.0,
+    collisionSubdivisionFactor: props.collisionSubdivisionFactor ?? ROAD_TERRAIN_DEFAULT_COLLISION_SUBDIVISION_FACTOR,
     smoothingStrengthFactor: props.smoothingStrengthFactor ?? 1.0,
     minClearance: props.minClearance ?? 0.01,
     laneLineWidth: props.laneLineWidth,
@@ -226,6 +238,7 @@ const roadComponentDefinition: ComponentDefinition<RoadComponentProps> = {
       fields: [
         { kind: 'boolean', key: 'snapToTerrain', label: 'Adapt To Ground Terrain' },
         { kind: 'boolean', key: 'enableVehicleCollision', label: 'Enable Driveable Collision' },
+        { kind: 'number', key: 'collisionSubdivisionFactor', label: 'Collision Detail', min: 0.25, max: 8, step: 0.1 },
         { kind: 'boolean', key: 'laneLines', label: 'Show Lane Lines' },
         { kind: 'boolean', key: 'shoulders', label: 'Show Shoulders' },
       ],
@@ -262,6 +275,7 @@ export function createRoadComponentState(
     shoulders: overrides?.shoulders ?? defaults.shoulders,
     bodyAssetId: overrides?.bodyAssetId ?? defaults.bodyAssetId,
     samplingDensityFactor: overrides?.samplingDensityFactor ?? defaults.samplingDensityFactor,
+    collisionSubdivisionFactor: overrides?.collisionSubdivisionFactor ?? defaults.collisionSubdivisionFactor,
     smoothingStrengthFactor: overrides?.smoothingStrengthFactor ?? defaults.smoothingStrengthFactor,
     minClearance: overrides?.minClearance ?? defaults.minClearance,
     laneLineWidth: overrides?.laneLineWidth ?? defaults.laneLineWidth,

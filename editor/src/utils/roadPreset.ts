@@ -16,6 +16,7 @@ export type StrictRoadPresetRoadProps = {
   shoulders: boolean
   bodyAssetId: string | null
   samplingDensityFactor: number
+  collisionSubdivisionFactor: number
   smoothingStrengthFactor: number
   minClearance: number
   laneLineWidth?: number
@@ -64,6 +65,7 @@ export function buildRoadComponentPatchFromPreset(roadProps: StrictRoadPresetRoa
     shoulders: roadProps.shoulders,
     bodyAssetId: roadProps.bodyAssetId,
     samplingDensityFactor: roadProps.samplingDensityFactor,
+    collisionSubdivisionFactor: roadProps.collisionSubdivisionFactor,
     smoothingStrengthFactor: roadProps.smoothingStrengthFactor,
     minClearance: roadProps.minClearance,
     laneLineWidth: roadProps.laneLineWidth,
