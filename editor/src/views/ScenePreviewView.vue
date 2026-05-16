@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch, type ComponentPublicInstance } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, toRaw, watch, type ComponentPublicInstance } from 'vue'
 import * as THREE from 'three'
 import { FirstPersonControls } from 'three/examples/jsm/controls/FirstPersonControls.js'
 import { MapControls } from 'three/examples/jsm/controls/MapControls.js'
@@ -98,6 +98,13 @@ import {
 import {
 	resolveCompiledGroundCollisionRuntimeState,
 } from '@schema/compiledGroundCollisionRuntime'
+import { computeCompiledGroundManifestRevision } from '@schema/compiledGround'
+import {
+	clearCompiledGroundRenderTiles,
+	collectLoadedCompiledGroundChunkKeys,
+	getCompiledGroundRenderWorkState,
+	syncCompiledGroundRenderTiles,
+} from '@schema/compiledGroundRuntime'
 import {
 	resolveInfiniteGroundChunkCollisionRuntimeState,
 } from '@schema/infiniteGroundChunkCollisions'
@@ -107,6 +114,7 @@ import {
 } from '@schema/groundCollisionRuntimeHost'
 import { createGroundCollisionRuntimeBridgeDeps } from '@schema/groundCollisionRuntimeBridge'
 import { syncGroundCollisionRuntimeLoadedTileKeys } from '@schema/groundCollisionRuntimeState'
+import { setInfiniteGroundHiddenChunkKeys } from '@schema/groundMesh'
 import { resolveModelCollisionFaceSegments } from '@schema/physicsShapeResolvers'
 import {
 	buildRoadHeightfieldShapes,
@@ -1656,6 +1664,7 @@ function syncPreviewNominateStateMap(): void {
 let cachedGroundNodeId: string | null = null
 let cachedGroundDynamicMesh: GroundDynamicMesh | null = null
 let cachedGroundNode: SceneNode | null = null
+let lastScenePreviewCompiledGroundRenderLoadedChunkKeysVersion = -1
 let groundSurfacePreviewLoadToken = 0
 let unsubscribe: (() => void) | null = null
 let livePreviewEnabled = true
@@ -1985,6 +1994,7 @@ async function resolvePreviewGroundHeightSidecar(
 }
 
 async function syncGroundCache(document: SceneJsonExportDocument | null): Promise<void> {
+	const previousGroundObject = cachedGroundNodeId ? (nodeObjectMap.get(cachedGroundNodeId) ?? null) : null
 	cachedGroundNodeId = null
 	cachedGroundDynamicMesh = null
 	cachedGroundNode = null
@@ -1992,10 +2002,20 @@ async function syncGroundCache(document: SceneJsonExportDocument | null): Promis
 	groundSurfacePreviewLoadToken += 1
 	const loadToken = groundSurfacePreviewLoadToken
 	if (!document) {
+		if (previousGroundObject) {
+			setInfiniteGroundHiddenChunkKeys(previousGroundObject, [])
+			clearCompiledGroundRenderTiles(previousGroundObject)
+		}
+		lastScenePreviewCompiledGroundRenderLoadedChunkKeysVersion = -1
 		return
 	}
 	const groundNode = findGroundNode(document.nodes)
 	if (!groundNode || !isGroundDynamicMesh(groundNode.dynamicMesh)) {
+		if (previousGroundObject) {
+			setInfiniteGroundHiddenChunkKeys(previousGroundObject, [])
+			clearCompiledGroundRenderTiles(previousGroundObject)
+		}
+		lastScenePreviewCompiledGroundRenderLoadedChunkKeysVersion = -1
 		return
 	}
 	if (hasEmbeddedGroundRuntimeHeightmaps(groundNode.dynamicMesh)) {
@@ -8849,6 +8869,7 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
 		const groundObject = nodeObjectMap.get(cachedGroundNodeId) ?? null
 		if (groundObject) {
 			syncGroundSurfacePreviewForGroundNode(groundObject, cachedGroundNode, cachedGroundDynamicMesh)
+			syncScenePreviewCompiledGroundRenderTiles(activeCamera)
 		}
 	}
 	if (shouldUpdateGroundCollisionSystems && currentDocument) {
@@ -9011,9 +9032,9 @@ function stopAnimationLoop() {
 function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	clearBehaviorDelayTimers()
 	clearBehaviorSounds()
+	const groundCollisionHostObject = cachedGroundNodeId ? (nodeObjectMap.get(cachedGroundNodeId) ?? null) : null
 	void syncGroundCache(null)
 	scenePreviewDriveBindingsReady.value = false
-	const groundCollisionHostObject = cachedGroundNodeId ? (nodeObjectMap.get(cachedGroundNodeId) ?? null) : null
 	instancedMatrixCache.clear()
 	cameraDependentUpdateInitialized = false
 	cameraDependentUpdateElapsed = 0
@@ -9040,6 +9061,11 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	followCameraControlDirty = false
 	resetPhysicsWorld()
 	clearGroundCollisionRuntimeHost(groundCollisionHostObject)
+	if (groundCollisionHostObject) {
+		setInfiniteGroundHiddenChunkKeys(groundCollisionHostObject, [])
+		clearCompiledGroundRenderTiles(groundCollisionHostObject)
+	}
+	lastScenePreviewCompiledGroundRenderLoadedChunkKeysVersion = -1
 	if (!options.preservePreviewNodeMap) {
 		previewNodeMap.clear()
 	}
@@ -10099,6 +10125,75 @@ function resolveScenePreviewCompiledGroundTileLoader(): ((record: { path: string
 		return undefined
 	}
 	return async (record) => compiledFiles.get(record.path) ?? null
+}
+
+function resolveScenePreviewCompiledGroundRuntime(): {
+	groundObject: THREE.Object3D
+	groundDefinition: GroundRuntimeDynamicMesh
+} | null {
+	if (!currentDocument) {
+		return null
+	}
+	const groundNode = cachedGroundNode ?? findGroundNode(currentDocument.nodes)
+	const groundDefinition = cachedGroundDynamicMesh ?? groundNode?.dynamicMesh
+	if (!groundNode || !isGroundDynamicMesh(groundDefinition)) {
+		return null
+	}
+	const groundObject = cachedGroundNodeId ? (nodeObjectMap.get(cachedGroundNodeId) ?? null) : null
+	if (!groundObject) {
+		return null
+	}
+	return {
+		groundObject,
+		groundDefinition,
+	}
+}
+
+function syncScenePreviewCompiledGroundRenderTiles(activeCamera: THREE.PerspectiveCamera): void {
+	const runtime = resolveScenePreviewCompiledGroundRuntime()
+	if (!runtime) {
+		return
+	}
+	const sceneStore = useSceneStore()
+	const manifestSource = sceneStore.compiledGroundManifest
+	const manifest = manifestSource ? toRaw(manifestSource) : null
+	const buildKey = typeof sceneStore.compiledGroundBuildKey === 'string'
+		? sceneStore.compiledGroundBuildKey.trim()
+		: ''
+	if (!manifest || !buildKey) {
+		setInfiniteGroundHiddenChunkKeys(runtime.groundObject, [])
+		clearCompiledGroundRenderTiles(runtime.groundObject)
+		lastScenePreviewCompiledGroundRenderLoadedChunkKeysVersion = -1
+		return
+	}
+
+	const revision = Number.isFinite(manifest.revision)
+		? Math.max(0, Math.trunc(manifest.revision))
+		: computeCompiledGroundManifestRevision(manifest)
+	const workState = getCompiledGroundRenderWorkState(runtime.groundObject)
+	syncCompiledGroundRenderTiles({
+		groundObject: runtime.groundObject,
+		groundDefinition: runtime.groundDefinition,
+		camera: activeCamera,
+		sourceId: buildKey,
+		revision,
+		manifest,
+		loadTileData: async (record) => sceneStore.getCurrentCompiledGroundTileData(record.path),
+		streamingMode: 'runtime-camera',
+	})
+	const nextWorkState = getCompiledGroundRenderWorkState(runtime.groundObject)
+	if (!nextWorkState || nextWorkState.loadedChunkKeysVersion !== lastScenePreviewCompiledGroundRenderLoadedChunkKeysVersion) {
+		setInfiniteGroundHiddenChunkKeys(
+			runtime.groundObject,
+			collectLoadedCompiledGroundChunkKeys(runtime.groundObject, manifest),
+		)
+		lastScenePreviewCompiledGroundRenderLoadedChunkKeysVersion = nextWorkState?.loadedChunkKeysVersion ?? -1
+	} else if (workState?.pendingLoads !== nextWorkState.pendingLoads) {
+		setInfiniteGroundHiddenChunkKeys(
+			runtime.groundObject,
+			collectLoadedCompiledGroundChunkKeys(runtime.groundObject, manifest),
+		)
+	}
 }
 
 function resolveScenePreviewGroundChunkDataLoader(sceneId: string): ((chunkKey: string) => Promise<ArrayBuffer | null>) | undefined {
