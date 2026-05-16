@@ -39,7 +39,7 @@ const DEFAULT_WORLD_SETTINGS: PhysicsWorldSettings = {
 }
 
 const VEHICLE_ENGINE_FORCE = 320
-const VEHICLE_BRAKE_FORCE = 16
+const VEHICLE_BRAKE_FORCE = 0
 const VEHICLE_STEER_ANGLE = (26 * Math.PI) / 180
 
 export class CannonPhysicsWorld {
@@ -394,7 +394,7 @@ export class CannonPhysicsWorld {
         state.vehicle.applyEngineForce(steerable ? engineForce : 0, wheelIndex)
 
         // 设置当前轮子的刹车力度
-        // state.vehicle.setBrake(brakeForce, wheelIndex)
+        state.vehicle.setBrake(brakeForce, wheelIndex)
 
       }
       // 唤醒车辆刚体，防止休眠导致物理效果不生效

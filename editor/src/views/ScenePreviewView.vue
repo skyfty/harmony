@@ -1215,6 +1215,7 @@ const pendingVehicleDriveRetryRequested = ref(false)
 const pendingDefaultSteerDriveEvent = ref<Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }> | null>(null)
 const vehicleDrivePromptBusy = ref(false)
 const vehicleDriveExitBusy = ref(false)
+const scenePreviewDriveBindingsReady = ref(false)
 const activeAutoTourNodeIds = reactive(new Set<string>())
 
 // Auto-tour pause only affects tour (not global playback), and does not change manual-drive behavior.
@@ -7585,7 +7586,7 @@ function handleVehicleDebusEvent(): void {
 
 function activatePendingDefaultSteerDriveIfNeeded(): void {
 	const event = pendingDefaultSteerDriveEvent.value
-	if (!event || vehicleDriveState.active || vehicleDrivePromptBusy.value) {
+	if (!scenePreviewDriveBindingsReady.value || !event || vehicleDriveState.active || vehicleDrivePromptBusy.value) {
 		return
 	}
 	if (event.sequenceId === '__manual_vehicle_drive__' && controlMode.value !== 'third-person') {
@@ -7810,6 +7811,10 @@ async function handleVehicleDrivePromptConfirm(): Promise<void> {
 	if (!event || vehicleDrivePromptBusy.value) {
 		return
 	}
+	if (!scenePreviewDriveBindingsReady.value) {
+		pendingVehicleDriveRetryRequested.value = true
+		return
+	}
 	const targetNodeId = event.targetNodeId ?? event.nodeId ?? null
 	if (targetNodeId && activeAutoTourNodeIds.has(targetNodeId)) {
 		stopTourAndUnfollow(autoTourRuntime, targetNodeId, (n) => {
@@ -7886,7 +7891,12 @@ function handleVehicleDriveExitClick(): void {
 }
 
 function retryPendingVehicleDriveIfNeeded(): void {
-	if (!pendingVehicleDriveRetryRequested.value || vehicleDriveState.active || vehicleDrivePromptBusy.value) {
+	if (
+		!scenePreviewDriveBindingsReady.value
+		|| !pendingVehicleDriveRetryRequested.value
+		|| vehicleDriveState.active
+		|| vehicleDrivePromptBusy.value
+	) {
 		return
 	}
 	const event = pendingVehicleDriveEvent.value
@@ -9002,6 +9012,7 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	clearBehaviorDelayTimers()
 	clearBehaviorSounds()
 	void syncGroundCache(null)
+	scenePreviewDriveBindingsReady.value = false
 	const groundCollisionHostObject = cachedGroundNodeId ? (nodeObjectMap.get(cachedGroundNodeId) ?? null) : null
 	instancedMatrixCache.clear()
 	cameraDependentUpdateInitialized = false
@@ -12799,12 +12810,12 @@ async function applyInitialDocumentGraph(
 	disposeScene({ preservePreviewNodeMap: true })
 	currentDocument = document
 	attachBuiltRootToPreview(previewRoot, builtRoot, pendingObjects)
+	syncPhysicsBodiesForDocument(document)
 	await syncGroundCache(document)
 	// (instancing trace removed)
 	await syncTerrainScatterInstances(document, resourceCache)
 	refreshAnimations()
 	initializeLazyPlaceholders(document)
-	syncPhysicsBodiesForDocument(document)
 	const protagonistCameraActive = !vehicleDriveState.active && (controlMode.value === 'first-person' || controlMode.value === 'third-person')
 	syncProtagonistCameraPose({ force: true, applyToCamera: protagonistCameraActive })
 	if (isRigidbodyDebugVisible.value) {
@@ -12854,6 +12865,7 @@ async function applyIncrementalDocumentGraph(
 }
 
 async function updateScene(document: SceneJsonExportDocument) {
+	scenePreviewDriveBindingsReady.value = false
 	resetAssetResolutionCaches()
 	releaseTerrainScatterInstances()
 	resetProtagonistPoseState()
@@ -12967,6 +12979,7 @@ async function updateScene(document: SceneJsonExportDocument) {
 			environmentSettings,
 		)
 	}
+	scenePreviewDriveBindingsReady.value = true
 	applyPreviewNominateOverrides()
 	activatePendingDefaultSteerDriveIfNeeded()
 }
@@ -12982,6 +12995,7 @@ function applySnapshot(snapshot: ScenePreviewSnapshot) {
 		return
 	}
 	isApplyingSnapshot = true
+	scenePreviewDriveBindingsReady.value = false
 	statusMessage.value = 'Syncing scene data...'
 	void buildPreviewRuntimeDocument(snapshot.document)
 		.then((runtimeDocument) => updateScene(runtimeDocument))
