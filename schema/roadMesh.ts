@@ -1128,7 +1128,7 @@ function buildOffsetStripGeometry(
   return geometry
 }
 
-function buildRoadStripGeometry(
+export function buildRoadStripGeometry(
   curve: THREE.Curve<THREE.Vector3>,
   width: number,
   heightSampler?: ((x: number, z: number) => number) | null,

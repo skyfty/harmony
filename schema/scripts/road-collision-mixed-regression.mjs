@@ -97,6 +97,19 @@ async function main() {
   const flatSnapshot = collectRoadCollisionDescriptors(flatRoad)
   assertShapeKinds(flatSnapshot, 'box', 'flat road')
 
+  const flatRoadWithoutHeights = createRoadNode({
+    id: 'road:flat-no-heights',
+    vertices: [
+      [0, 0],
+      [10, 0],
+      [20, 0],
+      [30, 0],
+    ],
+    segmentHeights: undefined,
+  })
+  const flatNoHeightsSnapshot = collectRoadCollisionDescriptors(flatRoadWithoutHeights)
+  assertShapeKinds(flatNoHeightsSnapshot, 'box', 'flat road without explicit heights')
+
   const lowDetailRoad = createRoadNode({
     id: 'road:low-detail',
     vertices: [
