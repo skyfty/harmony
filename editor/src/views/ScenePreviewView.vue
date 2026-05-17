@@ -941,11 +941,9 @@ function resolveSceneInitPercent(stage: SceneInitStage, stagePercent = 0): numbe
 function setSceneInitState(next: {
 	stage: SceneInitStage
 	label?: string
-	detail?: string
 	stagePercent?: number
 	currentIndex?: number
 	currentTotal?: number
-	currentLabel?: string
 	indeterminate?: boolean
 	active?: boolean
 }): void {
@@ -12964,22 +12962,18 @@ async function applyInitialDocumentGraph(
 	setSceneInitState({
 		stage: 'syncingPhysics',
 		label: 'Syncing physics...',
-		detail: 'Syncing physics bodies...',
 		stagePercent: 0,
 		currentIndex: 0,
 		currentTotal: 3,
-		currentLabel: 'syncPhysicsBodiesForDocument',
 		active: true,
 	})
 	await syncPhysicsBodiesForDocument(document, (progress) => {
 		setSceneInitState({
 			stage: 'syncingPhysics',
 			label: 'Syncing physics...',
-			detail: progress.detail,
 			stagePercent: progress.percent,
 			currentIndex: progress.currentIndex ?? 0,
 			currentTotal: progress.currentTotal ?? 0,
-			currentLabel: progress.currentLabel ?? 'syncPhysicsBodiesForDocument',
 			active: true,
 		})
 	})
@@ -12988,22 +12982,18 @@ async function applyInitialDocumentGraph(
 	setSceneInitState({
 		stage: 'syncingScatter',
 		label: 'Syncing terrain scatter...',
-		detail: 'Syncing terrain scatter instances...',
 		stagePercent: 0,
 		currentIndex: 0,
 		currentTotal: 3,
-		currentLabel: 'syncTerrainScatterInstances',
 		active: true,
 	})
 	await syncTerrainScatterInstances(document, resourceCache, (progress) => {
 		setSceneInitState({
 			stage: 'syncingScatter',
 			label: 'Syncing terrain scatter...',
-			detail: progress.detail,
 			stagePercent: progress.percent,
 			currentIndex: progress.currentIndex ?? 0,
 			currentTotal: progress.currentTotal ?? 0,
-			currentLabel: progress.currentLabel ?? 'syncTerrainScatterInstances',
 			active: true,
 		})
 	})
@@ -13043,44 +13033,36 @@ async function applyIncrementalDocumentGraph(
 	setSceneInitState({
 		stage: 'syncingPhysics',
 		label: 'Syncing physics...',
-		detail: 'Syncing physics bodies...',
 		stagePercent: 0,
 		currentIndex: 0,
 		currentTotal: 3,
-		currentLabel: 'syncPhysicsBodiesForDocument',
 		active: true,
 	})
 	await syncPhysicsBodiesForDocument(document, (progress) => {
 		setSceneInitState({
 			stage: 'syncingPhysics',
 			label: 'Syncing physics...',
-			detail: progress.detail,
 			stagePercent: progress.percent,
 			currentIndex: progress.currentIndex ?? 0,
 			currentTotal: progress.currentTotal ?? 0,
-			currentLabel: progress.currentLabel ?? 'syncPhysicsBodiesForDocument',
 			active: true,
 		})
 	})
 	setSceneInitState({
 		stage: 'syncingScatter',
 		label: 'Syncing terrain scatter...',
-		detail: 'Syncing terrain scatter instances...',
 		stagePercent: 0,
 		currentIndex: 0,
 		currentTotal: 3,
-		currentLabel: 'syncTerrainScatterInstances',
 		active: true,
 	})
 	await syncTerrainScatterInstances(document, resourceCache, (progress) => {
 		setSceneInitState({
 			stage: 'syncingScatter',
 			label: 'Syncing terrain scatter...',
-			detail: progress.detail,
 			stagePercent: progress.percent,
 			currentIndex: progress.currentIndex ?? 0,
 			currentTotal: progress.currentTotal ?? 0,
-			currentLabel: progress.currentLabel ?? 'syncTerrainScatterInstances',
 			active: true,
 		})
 	})
@@ -13128,11 +13110,9 @@ async function updateScene(document: SceneJsonExportDocument) {
 	setSceneInitState({
 		stage: 'preparing',
 		label: 'Preparing runtime resources...',
-		detail: 'Preparing local overrides and scene resources...',
 		stagePercent: 0,
 		currentIndex: 0,
 		currentTotal: 1,
-		currentLabel: 'buildPreviewLocalAssetOverrides',
 		active: true,
 	})
 
@@ -13155,7 +13135,6 @@ async function updateScene(document: SceneJsonExportDocument) {
 				setSceneInitState({
 					stage: 'building',
 					label: 'Building scene graph...',
-					detail: resourceProgress.label,
 					stagePercent: info.total > 0
 						? (info.loaded / info.total) * 100
 						: resourceProgress.totalBytes > 0
@@ -13163,7 +13142,6 @@ async function updateScene(document: SceneJsonExportDocument) {
 							: 0,
 					currentIndex: info.loaded,
 					currentTotal: info.total,
-					currentLabel: resourceProgress.label,
 					active: true,
 				})
 				updateResourceProgressDetails(info)
@@ -13205,11 +13183,9 @@ async function updateScene(document: SceneJsonExportDocument) {
 		setSceneInitState({
 			stage: 'mounting',
 			label: 'Mounting preview scene...',
-			detail: 'Rebuilding the preview node map...',
 			stagePercent: 0,
 			currentIndex: 0,
 			currentTotal: 5,
-			currentLabel: 'rebuildPreviewNodeMap',
 			active: true,
 		})
 		rebuildPreviewNodeMap(document)
@@ -13218,11 +13194,9 @@ async function updateScene(document: SceneJsonExportDocument) {
 		setSceneInitState({
 			stage: 'mounting',
 			label: 'Mounting preview scene...',
-			detail: 'Syncing preview components...',
 			stagePercent: 22,
 			currentIndex: 1,
 			currentTotal: 5,
-			currentLabel: 'previewComponentManager.syncScene',
 			active: true,
 		})
 		await yieldToMainThread()
@@ -13240,11 +13214,9 @@ async function updateScene(document: SceneJsonExportDocument) {
 		setSceneInitState({
 			stage: 'syncingPhysics',
 			label: 'Syncing physics...',
-			detail: 'Preparing the physics bridge...',
 			stagePercent: 0,
 			currentIndex: 0,
 			currentTotal: 3,
-			currentLabel: 'syncPhysicsBodiesForDocument',
 			active: true,
 		})
 		await yieldToMainThread()
@@ -13276,22 +13248,18 @@ async function updateScene(document: SceneJsonExportDocument) {
 		setSceneInitState({
 			stage: 'ready',
 			label: 'Scene ready',
-			detail: 'Initialization complete.',
 			stagePercent: 100,
 			currentIndex: 1,
 			currentTotal: 1,
-			currentLabel: 'ready',
 			active: false,
 		})
 	} catch (error) {
 		setSceneInitState({
 			stage: 'error',
 			label: 'Scene initialization failed',
-			detail: error instanceof Error ? error.message : 'An unexpected error occurred while initializing the scene.',
 			stagePercent: 0,
 			currentIndex: 0,
 			currentTotal: 1,
-			currentLabel: 'updateScene',
 			active: false,
 		})
 		throw error
