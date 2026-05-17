@@ -200,61 +200,19 @@
               </view>
             </view>
             <view class="viewer-progress__stats">
-              <text class="viewer-progress__percent">{{ overlayPercent }}%</text>
-              <text v-if="overlayBytesLabel" class="viewer-progress__bytes">{{ overlayBytesLabel }}</text>
+              <text class="viewer-progress__percent">{{ sceneLoadPercentText }}</text>
+              <text v-if="sceneLoadBytesLabel" class="viewer-progress__bytes">{{ sceneLoadBytesLabel }}</text>
             </view>
           </view>
         </view>
       </view>
-      <view v-if="overlayActive" class="viewer-overlay">
-        <view
-          v-if="sceneSwitchOverlayVisible"
-          class="viewer-overlay__flash"
-          :class="{ 'is-active': sceneSwitchFlashActive }"
-        ></view>
-        <view v-if="overlayCardActive" class="viewer-overlay__backdrop" aria-hidden="true">
-          <view class="viewer-overlay__aurora viewer-overlay__aurora--cyan"></view>
-          <view class="viewer-overlay__aurora viewer-overlay__aurora--amber"></view>
-          <view class="viewer-overlay__grid"></view>
-          <view class="viewer-overlay__scanline"></view>
-        </view>
-        <view v-if="overlayCardActive" class="viewer-overlay__content viewer-overlay__card">
-          <view class="viewer-loader" aria-hidden="true">
-            <view class="viewer-loader__halo viewer-loader__halo--outer"></view>
-            <view class="viewer-loader__halo viewer-loader__halo--mid"></view>
-            <view class="viewer-loader__ring viewer-loader__ring--a"></view>
-            <view class="viewer-loader__ring viewer-loader__ring--b"></view>
-            <view class="viewer-loader__ring viewer-loader__ring--c"></view>
-            <view class="viewer-loader__core">
-              <view class="viewer-loader__core-pulse"></view>
-              <view class="viewer-loader__core-dot"></view>
-            </view>
-            <view class="viewer-loader__particle viewer-loader__particle--1"></view>
-            <view class="viewer-loader__particle viewer-loader__particle--2"></view>
-            <view class="viewer-loader__particle viewer-loader__particle--3"></view>
-            <view class="viewer-loader__particle viewer-loader__particle--4"></view>
-          </view>
-          <text v-if="overlayTitle" class="viewer-overlay__title">{{ overlayTitle }}</text>
-          <view class="viewer-progress">
-            <view
-              class="viewer-progress__bar"
-              :class="{ 'is-indeterminate': overlayIndeterminate }"
-            >
-              <view
-                class="viewer-progress__bar-fill"
-                :class="{ 'is-indeterminate': overlayIndeterminate }"
-                :style="overlayProgressStyle"
-              />
-              <view v-if="overlayIndeterminate" class="viewer-progress__bar-glow" />
-            </view>
-            <view class="viewer-progress__stats">
-              <text class="viewer-progress__percent">{{ overlayPercentText }}</text>
-              <text v-if="overlayBytesLabel" class="viewer-progress__bytes">{{ overlayBytesLabel }}</text>
-            </view>
-          </view>
-          <text v-if="overlayCaption" class="viewer-overlay__caption">{{ overlayCaption }}</text>
-        </view>
-      </view>
+      <SceneLoadOverlay
+        :loading="loading"
+        :scene-switch-overlay-visible="sceneSwitchOverlayVisible"
+        :scene-switch-flash-active="sceneSwitchFlashActive"
+        :scene-download="sceneDownload"
+        :resource-preload="resourcePreload"
+      />
       <view v-if="error" class="viewer-overlay error">
         <text>{{ error }}</text>
       </view>
@@ -394,6 +352,7 @@ import LanternImageFrame from './LanternImageFrame.vue';
 import DriveJoystick from './DriveJoystick.vue';
 import DriveCompass from './DriveCompass.vue';
 import SpeedReadout from './SpeedReadout.vue';
+import SceneLoadOverlay from './SceneLoadOverlay.vue';
 import { buildPhysicsSceneAsset } from '@harmony/schema/physicsSceneAsset';
 import {
   type PhysicsBackendPreference,
@@ -911,11 +870,16 @@ const resourcePreload = reactive({
 
 const sceneDownload = reactive({
   active: false,
-  phase: 'download' as 'download' | 'parse',
+  phase: 'download' as 'download' | 'parse' | 'read-cache' | 'unzip' | 'manifest' | 'resource-map' | 'project-meta' | 'scene-documents' | 'scene-runtime' | 'bundle' | 'render',
   loaded: 0,
   total: 0,
   percent: 0,
   label: '正在下载场景数据…',
+  detail: '',
+  currentIndex: 0,
+  currentTotal: 0,
+  currentLabel: '',
+  indeterminate: false,
 });
 
 const resourcePreloadPercent = computed(() => {
@@ -943,6 +907,95 @@ const resourcePreloadBytesLabel = computed(() => {
   }
   return '';
 });
+
+function clampPercent(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+function formatSceneLoadCount(index: number, total: number): string {
+  if (!Number.isFinite(total) || total <= 0) {
+    return '';
+  }
+  const current = Math.max(0, Math.min(total, Math.floor(index) + 1));
+  return `${current} / ${Math.max(0, Math.floor(total))}`;
+}
+
+function formatSceneLoadDetail(detail: string, currentLabel?: string): string {
+  const normalizedDetail = typeof detail === 'string' ? detail.trim() : '';
+  const normalizedLabel = typeof currentLabel === 'string' ? currentLabel.trim() : '';
+  if (normalizedDetail && normalizedLabel) {
+    return `${normalizedDetail} | ${normalizedLabel}`;
+  }
+  return normalizedDetail || normalizedLabel;
+}
+
+async function yieldToMainThread(): Promise<void> {
+  await new Promise<void>((resolve) => {
+    const schedule =
+      typeof requestAnimationFrame === 'function'
+        ? requestAnimationFrame
+        : (callback: () => void) => setTimeout(callback, 16);
+    schedule(() => resolve());
+  });
+}
+
+function setSceneDownloadState(next: {
+  phase: typeof sceneDownload.phase;
+  label: string;
+  percent?: number;
+  detail?: string;
+  loaded?: number;
+  total?: number;
+  currentIndex?: number;
+  currentTotal?: number;
+  currentLabel?: string;
+  indeterminate?: boolean;
+}): void {
+  sceneDownload.active = true;
+  sceneDownload.phase = next.phase;
+  sceneDownload.label = next.label;
+  if (typeof next.detail === 'string') {
+    sceneDownload.detail = next.detail.trim();
+  }
+  if (typeof next.percent === 'number') {
+    sceneDownload.percent = clampPercent(next.percent);
+  }
+  if (typeof next.loaded === 'number' && Number.isFinite(next.loaded)) {
+    sceneDownload.loaded = Math.max(0, Math.floor(next.loaded));
+  }
+  if (typeof next.total === 'number' && Number.isFinite(next.total)) {
+    sceneDownload.total = Math.max(0, Math.floor(next.total));
+  }
+  if (typeof next.currentIndex === 'number' && Number.isFinite(next.currentIndex)) {
+    sceneDownload.currentIndex = Math.max(0, Math.floor(next.currentIndex));
+  }
+  if (typeof next.currentTotal === 'number' && Number.isFinite(next.currentTotal)) {
+    sceneDownload.currentTotal = Math.max(0, Math.floor(next.currentTotal));
+  }
+  if (typeof next.currentLabel === 'string') {
+    sceneDownload.currentLabel = next.currentLabel.trim();
+  }
+  if (typeof next.indeterminate === 'boolean') {
+    sceneDownload.indeterminate = next.indeterminate;
+  }
+}
+
+function clearSceneDownloadState(): void {
+  sceneDownload.active = false;
+  sceneDownload.phase = 'download';
+  sceneDownload.loaded = 0;
+  sceneDownload.total = 0;
+  sceneDownload.percent = 0;
+  sceneDownload.label = '正在准备场景包';
+  sceneDownload.detail = '';
+  sceneDownload.currentIndex = 0;
+  sceneDownload.currentTotal = 0;
+  sceneDownload.currentLabel = '';
+  sceneDownload.indeterminate = false;
+}
 import {
   createPhysicsBridgeVehicleInputSyncState,
   computePlaySoundDistanceGain,
@@ -1103,10 +1156,6 @@ function ensureResourceCache(
   return sharedResourceCache;
 }
 
-const overlayCardActive = computed(() => loading.value || sceneDownload.active || resourcePreload.active);
-
-const overlayActive = computed(() => overlayCardActive.value || sceneSwitchOverlayVisible.value);
-
 // ---------------------------------
 // Scene switch transition (flash UI)
 // ---------------------------------
@@ -1217,27 +1266,17 @@ function endSceneSwitchTransition(token: number): void {
   }, delay);
 }
 
-const overlayTitle = computed(() => {
+const sceneLoadPercent = computed(() => {
   if (sceneDownload.active) {
-    return sceneDownload.phase === 'parse' ? '正在解析场景包' : '正在下载场景包';
-  }
-  if (resourcePreload.active) {
-    return '资源加载中';
-  }
-  if (loading.value) {
-    return '正在初始化场景';
-  }
-  return '';
-});
-
-const overlayPercent = computed(() => {
-  if (overlayIndeterminate.value) {
-    return 0;
-  }
-  if (sceneDownload.active) {
-    if (sceneDownload.total > 0) {
+    if (sceneDownload.phase === 'download' && sceneDownload.total > 0) {
       const ratio = Math.min(1, Math.max(0, sceneDownload.loaded / sceneDownload.total));
       return Math.round(ratio * 100);
+    }
+    if (sceneDownload.phase === 'render' && resourcePreload.active) {
+      const base = Math.max(0, Math.min(100, Math.round(sceneDownload.percent)));
+      const preloadPercent = Math.max(0, Math.min(100, resourcePreloadPercent.value));
+      const blended = base + Math.round((100 - base) * (preloadPercent / 100));
+      return Math.max(base, Math.min(100, blended));
     }
     const normalized = Math.max(0, Math.min(100, Math.round(sceneDownload.percent)));
     return Number.isFinite(normalized) ? normalized : 0;
@@ -1252,12 +1291,12 @@ const overlayPercent = computed(() => {
   return resourcePreloadPercent.value;
 });
 
-const overlayBytesLabel = computed(() => {
-  if (overlayIndeterminate.value) {
-    return '';
-  }
-  if (sceneDownload.active && sceneDownload.total > 0) {
+const sceneLoadBytesLabel = computed(() => {
+  if (sceneDownload.active && sceneDownload.phase === 'download' && sceneDownload.total > 0) {
     return `${formatByteSize(sceneDownload.loaded)} / ${formatByteSize(sceneDownload.total)}`;
+  }
+  if (sceneDownload.active && sceneDownload.phase === 'render' && resourcePreload.active && resourcePreloadBytesLabel.value) {
+    return resourcePreloadBytesLabel.value;
   }
   if (resourcePreload.active && resourcePreloadBytesLabel.value) {
     return resourcePreloadBytesLabel.value;
@@ -1265,29 +1304,7 @@ const overlayBytesLabel = computed(() => {
   return '';
 });
 
-const overlayIndeterminate = computed(() => sceneDownload.active && sceneDownload.phase === 'parse');
-
-const overlayPercentText = computed(() => (overlayIndeterminate.value ? '解析中…' : `${overlayPercent.value}%`));
-
-const overlayProgressStyle = computed(() => {
-  if (overlayIndeterminate.value) {
-    return {};
-  }
-  return { width: `${overlayPercent.value}%` };
-});
-
-const overlayCaption = computed(() => {
-  if (sceneDownload.active) {
-    return sceneDownload.label;
-  }
-  if (resourcePreload.active) {
-    return resourcePreload.label;
-  }
-  if (loading.value) {
-    return '正在准备渲染上下文…';
-  }
-  return '';
-});
+const sceneLoadPercentText = computed(() => `${sceneLoadPercent.value}%`);
 
 const SKY_ENVIRONMENT_INTENSITY = 0.6;
 const HUMAN_EYE_HEIGHT = 1.7;
@@ -11979,13 +11996,21 @@ async function loadProjectFromScenePackageUrl(url: string, cacheKey?: string): P
   loading.value = true;
   try {
     resetSceneDownloadState();
-    sceneDownload.active = true;
     const cacheKeyParam = typeof cacheKey === 'string' && cacheKey.trim() ? cacheKey.trim() : '';
     if (cacheKeyParam) {
       const cachePointer = resolveScenePackageZipPointerByCacheKey(cacheKeyParam);
       try {
-        sceneDownload.phase = 'parse';
-        sceneDownload.label = '正在读取本地缓存场景包…';
+        setSceneDownloadState({
+          phase: 'read-cache',
+          label: '正在读取本地缓存场景包',
+          detail: '优先读取本地缓存，减少网络等待。',
+          percent: 8,
+          currentIndex: 0,
+          currentTotal: 0,
+          currentLabel: '',
+          indeterminate: true,
+        });
+        await yieldToMainThread();
         const cachedBuffer = await loadScenePackageZip(cachePointer);
         try {
           await loadProjectFromScenePackageBytes(cachedBuffer, cacheKeyParam || url);
@@ -11999,11 +12024,18 @@ async function loadProjectFromScenePackageUrl(url: string, cacheKey?: string): P
       }
     }
 
-    sceneDownload.phase = 'download';
-    sceneDownload.label = '正在下载场景包…';
+    setSceneDownloadState({
+      phase: 'download',
+      label: '正在下载场景包',
+      detail: '正在从远端获取场景包二进制数据。',
+      percent: 0,
+      loaded: 0,
+      total: 0,
+      currentIndex: 0,
+      currentTotal: 0,
+      currentLabel: '',
+    });
     const buffer = await requestBinary(url);
-    sceneDownload.phase = 'parse';
-    sceneDownload.label = '正在解析场景包…';
     await loadProjectFromScenePackageBytes(buffer, cacheKeyParam || url);
     if (cacheKeyParam) {
       void saveScenePackageZipByCacheKey(buffer, cacheKeyParam).catch((saveError) => {
@@ -12014,11 +12046,10 @@ async function loadProjectFromScenePackageUrl(url: string, cacheKey?: string): P
     console.error('Failed loading scene package from url', loadError);
     throw loadError;
   } finally {
-    sceneDownload.active = false;
+    clearSceneDownloadState();
     loading.value = false;
   }
 }
-
 function parseScenePackageToProjectData(pkg: ScenePackageUnzipped, compiledGroundBuildKey: string): ScenePackageProjectData {
   const projectText = readTextFileFromScenePackage(pkg, pkg.manifest.project.path);
   type ScenePackageProjectConfig = {
@@ -12199,20 +12230,70 @@ function parseScenePackageToProjectData(pkg: ScenePackageUnzipped, compiledGroun
 
 async function loadProjectFromScenePackageBytes(buffer: ArrayBuffer, compiledGroundBuildKey: string): Promise<void> {
   sceneDownload.active = true;
-  sceneDownload.phase = 'parse';
-  sceneDownload.label = '正在解压场景包资源…';
+  setSceneDownloadState({
+    phase: 'unzip',
+    label: '正在解压场景包',
+    detail: '正在读取 ZIP 目录与资源清单。',
+    percent: 12,
+    currentIndex: 0,
+    currentTotal: 0,
+    currentLabel: '',
+    indeterminate: true,
+  });
+  await yieldToMainThread();
+
   const pkg = unzipScenePackage(buffer);
-  sceneDownload.label = '正在解析资源映射…';
+  setSceneDownloadState({
+    phase: 'manifest',
+    label: '正在解析 manifest',
+    detail: `${pkg.manifest.scenes.length} 个场景 / ${pkg.manifest.resources.length} 个资源`,
+    percent: 18,
+    currentIndex: 0,
+    currentTotal: 0,
+    currentLabel: '',
+    indeterminate: true,
+  });
+  await yieldToMainThread();
+
   activeScenePackagePkg = pkg;
+  setSceneDownloadState({
+    phase: 'resource-map',
+    label: '正在构建资源覆盖表',
+    detail: '正在生成包内资源到运行时资源的映射。',
+    percent: 36,
+    currentIndex: 0,
+    currentTotal: pkg.manifest.resources.length,
+    currentLabel: '',
+  });
+  await yieldToMainThread();
   activeScenePackageAssetOverrides = buildAssetOverridesFromScenePackage(pkg);
-  sceneDownload.label = '正在解析场景数据…';
+
+  setSceneDownloadState({
+    phase: 'project-meta',
+    label: '正在解析项目配置',
+    detail: pkg.manifest.project.path,
+    percent: 48,
+    currentIndex: 0,
+    currentTotal: pkg.manifest.scenes.length,
+    currentLabel: '',
+  });
+  await yieldToMainThread();
+
   const normalizedBuildKey = compiledGroundBuildKey.trim();
   activeScenePackageBuildKey = normalizedBuildKey || null;
   const projectData = parseScenePackageToProjectData(activeScenePackagePkg, normalizedBuildKey);
-  sceneDownload.label = '正在组装场景索引…';
+  setSceneDownloadState({
+    phase: 'bundle',
+    label: '正在组装场景索引',
+    detail: `${projectData.scenes.length} 个场景`,
+    percent: 72,
+    currentIndex: projectData.scenes.length,
+    currentTotal: projectData.scenes.length,
+    currentLabel: '',
+  });
+  await yieldToMainThread();
   await loadProjectFromBundle(projectData);
 }
-
 async function loadProjectFromScenePackagePointer(pointer: ScenePackagePointer): Promise<void> {
   error.value = null;
   activeScenePackageAssetOverrides = null;
@@ -12222,24 +12303,31 @@ async function loadProjectFromScenePackagePointer(pointer: ScenePackagePointer):
   loading.value = true;
   try {
     resetSceneDownloadState();
-    sceneDownload.active = true;
-    sceneDownload.phase = 'parse';
-    sceneDownload.label = '正在读取本地场景包…';
+    setSceneDownloadState({
+      phase: 'read-cache',
+      label: '正在读取本地缓存场景包',
+      detail: '正在优先从本地缓存中恢复场景包数据。',
+      percent: 8,
+      currentIndex: 0,
+      currentTotal: 0,
+      currentLabel: '',
+      indeterminate: true,
+    });
+    await yieldToMainThread();
     const buffer = await loadScenePackageZip(pointer);
     if (!buffer || buffer.byteLength <= 0) {
-      throw new Error('项目数据为空，请重新导入');
+      throw new Error('场景包数据为空，请重新导入');
     }
     await loadProjectFromScenePackageBytes(buffer, normalizeScenePackageBuildKey(pointer));
   } catch (e) {
     console.error(e);
-    error.value = '项目加载失败，请返回首页重新导入';
+    error.value = '场景包加载失败，请返回首页重新导入';
     previewPayload.value = null;
   } finally {
     sceneDownload.active = false;
     loading.value = false;
   }
 }
-
 function requestSceneDocument(url: string): Promise<SceneJsonExportDocument> {
   return new Promise((resolve, reject) => {
     if (sceneDownloadTask) {
@@ -12294,12 +12382,7 @@ function requestSceneDocument(url: string): Promise<SceneJsonExportDocument> {
 }
 
 function resetSceneDownloadState(): void {
-  sceneDownload.active = false;
-  sceneDownload.phase = 'download';
-  sceneDownload.loaded = 0;
-  sceneDownload.total = 0;
-  sceneDownload.percent = 0;
-  sceneDownload.label = '正在下载场景数据…';
+  clearSceneDownloadState();
 }
 
 function formatByteSize(value: number): string {
@@ -13348,13 +13431,21 @@ watch(error, (value) => {
 });
 
 watch(
-  [overlayTitle, overlayPercent, overlayBytesLabel],
-  ([title, _percent, bytesLabel]) => {
-    if (!title) {
+  [sceneLoadPercent, sceneLoadBytesLabel],
+  ([_, bytesLabel]) => {
+    if (!loading.value && !sceneDownload.active && !resourcePreload.active) {
       return;
     }
-    const loaded = sceneDownload.active ? sceneDownload.loaded : resourcePreload.loadedBytes;
-    const total = sceneDownload.active ? sceneDownload.total : resourcePreload.totalBytes;
+    const loaded = sceneDownload.active
+      ? sceneDownload.phase === 'render' && resourcePreload.active
+        ? resourcePreload.loadedBytes
+        : sceneDownload.loaded
+      : resourcePreload.loadedBytes;
+    const total = sceneDownload.active
+      ? sceneDownload.phase === 'render' && resourcePreload.active
+        ? resourcePreload.totalBytes
+        : sceneDownload.total
+      : resourcePreload.totalBytes;
     emit('progress', {
       bytesLabel,
       loaded,
