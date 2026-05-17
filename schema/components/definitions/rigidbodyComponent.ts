@@ -73,6 +73,11 @@ export type RigidbodyPhysicsShape =
       depth: number
     } & RigidbodyPhysicsShapeBase)
   | ({
+      kind: 'static-mesh'
+      vertices: RigidbodyVector3Tuple[]
+      indices: number[]
+    } & RigidbodyPhysicsShapeBase)
+  | ({
       kind: 'sphere'
       radius: number
     } & RigidbodyPhysicsShapeBase)

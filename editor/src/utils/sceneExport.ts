@@ -31,7 +31,7 @@ import {
 import { createGroundMesh } from '@schema/groundMesh'
 import { createWallGroup } from '@schema/wallMesh'
 import { extractCompiledStaticMeshMetadataFromUserData, createCompiledStaticMeshRuntimeMesh } from '@schema/compiledStaticMesh'
-import { isRoadDynamicMesh } from '@schema/roadHeightfield'
+import { isRoadDynamicMesh } from '@schema/roadCollision'
 import {
   RIGIDBODY_COMPONENT_TYPE,
   type RigidbodyComponentProps,

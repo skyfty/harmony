@@ -4,22 +4,22 @@ import type { SceneNode, SceneNodeComponentState, RoadDynamicMesh } from './inde
 import type { RigidbodyComponentProps, RigidbodyPhysicsShape } from './components'
 import { BOUNDARY_WALL_COMPONENT_TYPE, clampBoundaryWallComponentProps, type BoundaryWallComponentProps } from './components'
 import { ROAD_COMPONENT_TYPE, clampRoadProps, type RoadComponentProps } from './components/definitions/roadComponent'
-import { createSegmentHeightSampler } from './roadMesh'
+import { compileRoadStaticMeshMetadata, createSegmentHeightSampler } from './roadMesh'
 import { buildRoadCornerBezierCurvePath } from './roadCurvePath'
 import { buildRoadGraph, type RoadGraph } from './roadGraph'
 import type { PhysicsBodyLike, PhysicsOrientationAdjustment } from './physicsBodySync'
 
 export type RoadCollisionMode = 'pure-box' | 'mixed'
-export const ROAD_COLLISION_MODE: RoadCollisionMode = 'pure-box'
+export const ROAD_COLLISION_MODE: RoadCollisionMode = 'mixed'
 
 type PhysicsWorldLike = {
 	addBody: (body: PhysicsBodyLike) => unknown
 	removeBody?: (body: PhysicsBodyLike) => unknown
 }
 
-export type RoadHeightfieldBodiesEntry = { signature: string; bodies: PhysicsBodyLike[] }
+export type RoadCollisionBodiesEntry = { signature: string; bodies: PhysicsBodyLike[] }
 
-export type RoadHeightfieldTileDescriptor = {
+export type RoadCollisionDescriptor = {
 	curveIndex: number
 	tileIndex: number
 	startIndex: number
@@ -30,9 +30,9 @@ export type RoadHeightfieldTileDescriptor = {
 	shapeDefinition: RigidbodyPhysicsShape
 }
 
-export type RoadHeightfieldBuildSnapshot = {
+export type RoadCollisionBuildSnapshot = {
 	surfaceNode: SceneNode
-	tiles: RoadHeightfieldTileDescriptor[]
+	descriptors: RoadCollisionDescriptor[]
 	layoutHash: number
 	roadWidth: number
 	collisionWidth: number
@@ -47,7 +47,7 @@ export type RoadHeightfieldBuildSnapshot = {
 	boundaryWallProps: BoundaryWallComponentProps | null
 }
 
-export type RoadHeightfieldBuildParams = {
+export type RoadCollisionBuildParams = {
 	roadNode: SceneNode
 	rigidbodyComponent: SceneNodeComponentState<RigidbodyComponentProps>
 	roadObject?: THREE.Object3D
@@ -65,7 +65,7 @@ export function isRoadDynamicMesh(value: SceneNode['dynamicMesh'] | null | undef
 }
 
 
-export function collectRoadHeightfieldTileDescriptors(params: RoadHeightfieldBuildParams): RoadHeightfieldBuildSnapshot | null {
+export function collectRoadCollisionDescriptors(params: RoadCollisionBuildParams): RoadCollisionBuildSnapshot | null {
 	const {
 		roadNode,
 		rigidbodyComponent,
@@ -149,9 +149,58 @@ export function collectRoadHeightfieldTileDescriptors(params: RoadHeightfieldBui
 		? Math.max(1, Math.trunc(maxSegments))
 		: 128
 
+	const complexity = summarizeRoadCollisionComplexity({
+		curves,
+		samplingDensityFactor,
+		junctionSmoothing,
+		heightSampler: roadSurfaceHeightSampler,
+		minClearance,
+		smoothingStrengthFactor,
+		smooth: !hasSegmentHeights,
+		graph,
+	})
+	if (shouldUseRoadStaticMesh(complexity)) {
+		const staticMesh = buildRoadStaticMeshShape({
+			definition,
+			junctionSmoothing,
+			samplingDensityFactor,
+			smoothingStrengthFactor,
+			minClearance,
+		})
+		if (staticMesh) {
+			const descriptors: RoadCollisionDescriptor[] = [{
+				curveIndex: -1,
+				tileIndex: 0,
+				startIndex: 0,
+				endIndex: 0,
+				position: [0, 0, 0],
+				yaw: 0,
+				pitch: 0,
+				shapeDefinition: staticMesh,
+			}]
+			const layoutHash = hashStaticMeshShape(staticMesh)
+			return {
+				surfaceNode,
+				descriptors,
+				layoutHash,
+				roadWidth,
+				collisionWidth,
+				samplingDensityFactor,
+				collisionSubdivisionFactor,
+				smoothingStrengthFactor,
+				minClearance,
+				junctionSmoothing,
+				desiredTileLength,
+				elementSize: 0,
+				boundaryWallEnabled,
+				boundaryWallProps,
+			}
+		}
+	}
+
 
 	let totalBodies = 0
-	const tiles: RoadHeightfieldTileDescriptor[] = []
+	const descriptors: RoadCollisionDescriptor[] = []
 	let layoutHash = 0
 	let representativeDesiredTileLength = desiredTileLength
 	let representativeElementSize = Math.max(1e-4, desiredTileLength / ROAD_HEIGHTFIELD_MAX_ROWS)
@@ -222,6 +271,9 @@ export function collectRoadHeightfieldTileDescriptors(params: RoadHeightfieldBui
 				collisionSubdivisionFactor,
 				Math.max(1, maxBodies - totalBodies),
 			)
+			const collisionSpans = shouldSubdivideSimpleRoadSpans(geometryDetail, heightDetail, heightRange)
+				? subdivideRoadCollisionSpans(spans, collisionSubdivisionFactor, divisions)
+				: spans
 			const spanP0 = new THREE.Vector3()
 			const spanP1 = new THREE.Vector3()
 			const spanMid = new THREE.Vector3()
@@ -231,7 +283,7 @@ export function collectRoadHeightfieldTileDescriptors(params: RoadHeightfieldBui
 			const spanEuler = new THREE.Euler(0, 0, 0, 'YXZ')
 			const spanUp = new THREE.Vector3(0, 1, 0)
 			let tileIndex = 0
-			for (const span of spans) {
+			for (const span of collisionSpans) {
 				if (totalBodies >= maxBodies) {
 					break
 				}
@@ -281,7 +333,7 @@ export function collectRoadHeightfieldTileDescriptors(params: RoadHeightfieldBui
 				layoutHash = (layoutHash * 31 + span.startIndex) >>> 0
 				layoutHash = (layoutHash * 31 + span.endIndex) >>> 0
 				layoutHash = (layoutHash * 31 + Math.round(pitch * 1000)) >>> 0
-				tiles.push({
+				descriptors.push({
 					curveIndex,
 					tileIndex,
 					startIndex: span.startIndex,
@@ -299,13 +351,13 @@ export function collectRoadHeightfieldTileDescriptors(params: RoadHeightfieldBui
 		curveIndex += 1
 	}
 
-	if (!tiles.length) {
+	if (!descriptors.length) {
 		return null
 	}
 
 	return {
 		surfaceNode,
-		tiles,
+		descriptors,
 		layoutHash,
 		roadWidth,
 		collisionWidth,
@@ -321,8 +373,8 @@ export function collectRoadHeightfieldTileDescriptors(params: RoadHeightfieldBui
 	}
 }
 
-export function buildRoadHeightfieldBodies(params: RoadHeightfieldBuildParams): RoadHeightfieldBodiesEntry | null {
-	const snapshot = collectRoadHeightfieldTileDescriptors(params)
+export function buildRoadCollisionBodies(params: RoadCollisionBuildParams): RoadCollisionBodiesEntry | null {
+	const snapshot = collectRoadCollisionDescriptors(params)
 	if (!snapshot) {
 		return null
 	}
@@ -341,23 +393,23 @@ export function buildRoadHeightfieldBodies(params: RoadHeightfieldBuildParams): 
 
 	const bodies: PhysicsBodyLike[] = []
 
-	for (const tile of snapshot.tiles) {
-		if (!tile.shapeDefinition) {
+	for (const descriptor of snapshot.descriptors) {
+		if (!descriptor.shapeDefinition) {
 			continue
 		}
 
-		const tileObject = new THREE.Object3D()
-		tileObject.rotation.set(tile.pitch, tile.yaw, 0, 'YXZ')
-		tileObject.position.set(tile.position[0], tile.position[1], tile.position[2])
-		roadObject.add(tileObject)
-		tileObject.updateMatrixWorld(true)
+		const descriptorObject = new THREE.Object3D()
+		descriptorObject.rotation.set(descriptor.pitch, descriptor.yaw, 0, 'YXZ')
+		descriptorObject.position.set(descriptor.position[0], descriptor.position[1], descriptor.position[2])
+		roadObject.add(descriptorObject)
+		descriptorObject.updateMatrixWorld(true)
 
-		const bodyResult = createBody(snapshot.surfaceNode, rigidbodyComponent, tile.shapeDefinition, tileObject)
+		const bodyResult = createBody(snapshot.surfaceNode, rigidbodyComponent, descriptor.shapeDefinition, descriptorObject)
 
-		roadObject.remove(tileObject)
+		roadObject.remove(descriptorObject)
 
 		if (bodyResult?.body) {
-			;(bodyResult.body as PhysicsBodyLike & { name?: string }).name = `road-tile:${roadNode.id}:curve:${tile.curveIndex}:tile:${tile.tileIndex}:span:${tile.startIndex}-${tile.endIndex}:kind:${tile.shapeDefinition.kind}`
+			;(bodyResult.body as PhysicsBodyLike & { name?: string }).name = `road-collision:${roadNode.id}:curve:${descriptor.curveIndex}:tile:${descriptor.tileIndex}:span:${descriptor.startIndex}-${descriptor.endIndex}:kind:${descriptor.shapeDefinition.kind}`
 			bodies.push(bodyResult.body)
 		}
 	}
@@ -373,7 +425,7 @@ export function buildRoadHeightfieldBodies(params: RoadHeightfieldBuildParams): 
 		return null
 	}
 
-	const signature = buildRoadHeightfieldSignature({
+	const signature = buildRoadCollisionSignature({
 		definition: roadNode.dynamicMesh as RoadDynamicMesh,
 		roadNode,
 		roadWidth: snapshot.roadWidth,
@@ -395,7 +447,7 @@ export function buildRoadHeightfieldBodies(params: RoadHeightfieldBuildParams): 
 }
 
 
-const ROAD_SURFACE_Y_OFFSET = 0.01
+const ROAD_SURFACE_Y_OFFSET = 0.05
 const ROAD_EPSILON = 1e-6
 const ROAD_MIN_DIVISIONS = 4
 const ROAD_MAX_DIVISIONS = 256
@@ -556,6 +608,14 @@ type RoadCollisionSpanMetrics = {
 	pitchDelta: number
 }
 
+type RoadCollisionComplexitySummary = {
+	hasJunctions: boolean
+	hasCurvedSubsegments: boolean
+	maxGeometryDetail: number
+	maxHeightDetail: number
+	maxHeightRange: number
+}
+
 function summarizeRoadCollisionSpan(
 	curve: THREE.Curve<THREE.Vector3>,
 	divisions: number,
@@ -671,6 +731,9 @@ function collectRoadCollisionSpans(
 	})
 
 	const mergedSpans: PendingSpan[] = []
+	const mergeScale = Math.max(0, Math.min(1, (factor - 0.25) / 7.75))
+	const mergeLengthMultiplier = lerpNumber(1.35, 0.85, mergeScale)
+	const mergeMetricMultiplier = lerpNumber(0.95, 0.7, mergeScale)
 	for (const span of leafSpans) {
 		const previous = mergedSpans[mergedSpans.length - 1]
 		if (!previous) {
@@ -680,11 +743,11 @@ function collectRoadCollisionSpans(
 		const mergedMetrics = summarizeRoadCollisionSpan(curve, divisions, heights, previous.startIndex, span.endIndex, curveLength)
 		if (
 			previous.endIndex === span.startIndex &&
-			mergedMetrics.spanLength <= baseTargetLength * 1.35 &&
-			mergedMetrics.headingDelta <= headingThreshold * 0.9 &&
-			mergedMetrics.heightRange <= heightRangeThreshold * 0.9 &&
-			mergedMetrics.slope <= slopeThreshold * 0.9 &&
-			mergedMetrics.pitchDelta <= pitchThreshold * 0.9
+			mergedMetrics.spanLength <= baseTargetLength * mergeLengthMultiplier &&
+			mergedMetrics.headingDelta <= headingThreshold * mergeMetricMultiplier &&
+			mergedMetrics.heightRange <= heightRangeThreshold * mergeMetricMultiplier &&
+			mergedMetrics.slope <= slopeThreshold * mergeMetricMultiplier &&
+			mergedMetrics.pitchDelta <= pitchThreshold * mergeMetricMultiplier
 		) {
 			previous.endIndex = span.endIndex
 			continue
@@ -701,6 +764,165 @@ function collectRoadCollisionSpans(
 			intervalHeightDetails,
 		),
 	}))
+}
+
+function summarizeRoadCollisionComplexity(params: {
+	curves: RoadCurveDescriptor[]
+	samplingDensityFactor: number
+	junctionSmoothing: number
+	heightSampler: (x: number, z: number) => number
+	minClearance: number
+	smoothingStrengthFactor: number
+	smooth: boolean
+	graph: RoadGraph
+}): RoadCollisionComplexitySummary {
+	const summary: RoadCollisionComplexitySummary = {
+		hasJunctions: params.graph.junctionVertices.length > 0,
+		hasCurvedSubsegments: false,
+		maxGeometryDetail: 0,
+		maxHeightDetail: 0,
+		maxHeightRange: 0,
+	}
+	for (const descriptor of params.curves) {
+		const subsegments = collectRoadCurveSubsegments(descriptor.curve)
+		if (subsegments.some((segment) => Boolean((segment as any)?.isQuadraticBezierCurve3))) {
+			summary.hasCurvedSubsegments = true
+		}
+		for (const segment of subsegments) {
+			const length = segment.getLength()
+			if (!(length > ROAD_EPSILON)) {
+				continue
+			}
+			const geometryDetail = computeCurveGeometryDetailScore(segment, length)
+			const divisions = computeRoadDivisionsForCurve(
+				segment,
+				length,
+				params.samplingDensityFactor,
+				params.junctionSmoothing,
+				geometryDetail,
+			)
+			if (divisions < 2) {
+				continue
+			}
+			const heights = buildRoadCenterlineHeightSeries({
+				curve: segment,
+				divisions,
+				heightSampler: params.heightSampler,
+				minClearance: params.minClearance,
+				smoothingStrengthFactor: params.smoothingStrengthFactor,
+				smooth: params.smooth,
+			})
+			summary.maxGeometryDetail = Math.max(summary.maxGeometryDetail, geometryDetail)
+			summary.maxHeightDetail = Math.max(summary.maxHeightDetail, computeRoadHeightDetailScore(heights, length))
+			summary.maxHeightRange = Math.max(summary.maxHeightRange, computeRoadHeightRange(heights))
+		}
+	}
+	return summary
+}
+
+function shouldUseRoadStaticMesh(summary: RoadCollisionComplexitySummary): boolean {
+	return summary.hasJunctions
+		|| summary.hasCurvedSubsegments
+		|| summary.maxGeometryDetail > 0.08
+		|| summary.maxHeightDetail > 0.16
+		|| summary.maxHeightRange > 0.12
+}
+
+function shouldSubdivideSimpleRoadSpans(geometryDetail: number, heightDetail: number, heightRange: number): boolean {
+	return geometryDetail <= 0.02
+		&& heightDetail <= 0.04
+		&& heightRange <= 0.04
+}
+
+function subdivideRoadCollisionSpans(
+	spans: RoadCollisionSpan[],
+	collisionSubdivisionFactor: number,
+	divisions: number,
+): RoadCollisionSpan[] {
+	const factor = clampNumber(collisionSubdivisionFactor, 0.25, 8, 1.0)
+	const segmentsPerSpan = Math.max(1, Math.round(Math.sqrt(factor)))
+	if (segmentsPerSpan <= 1) {
+		return spans
+	}
+	const refined: RoadCollisionSpan[] = []
+	for (const span of spans) {
+		const width = Math.max(1, span.endIndex - span.startIndex)
+		const pieces = Math.max(1, Math.min(segmentsPerSpan, width))
+		if (pieces <= 1) {
+			refined.push(span)
+			continue
+		}
+		for (let piece = 0; piece < pieces; piece += 1) {
+			const startIndex = Math.round(span.startIndex + (width * piece) / pieces)
+			const endIndex = piece === pieces - 1
+				? span.endIndex
+				: Math.round(span.startIndex + (width * (piece + 1)) / pieces)
+			if (endIndex <= startIndex || startIndex < 0 || endIndex > divisions) {
+				continue
+			}
+			refined.push({
+				startIndex,
+				endIndex,
+				boxOverlapMeters: span.boxOverlapMeters,
+			})
+		}
+	}
+	return refined.length ? refined : spans
+}
+
+function buildRoadStaticMeshShape(params: {
+	definition: RoadDynamicMesh
+	junctionSmoothing: number
+	samplingDensityFactor: number
+	smoothingStrengthFactor: number
+	minClearance: number
+}): Extract<RigidbodyPhysicsShape, { kind: 'static-mesh' }> | null {
+	const compiled = compileRoadStaticMeshMetadata(params.definition, {
+		junctionSmoothing: params.junctionSmoothing,
+		laneLines: false,
+		shoulders: false,
+		samplingDensityFactor: params.samplingDensityFactor,
+		smoothingStrengthFactor: params.smoothingStrengthFactor,
+		minClearance: params.minClearance,
+	})
+	if (!compiled || compiled.vertices.length < 9 || compiled.indices.length < 3) {
+		return null
+	}
+	const vertices: Array<[number, number, number]> = []
+	for (let index = 0; index + 2 < compiled.vertices.length; index += 3) {
+		vertices.push([
+			Number(compiled.vertices[index] ?? 0),
+			Number(compiled.vertices[index + 1] ?? 0),
+			Number(compiled.vertices[index + 2] ?? 0),
+		])
+	}
+	const indices = compiled.indices.map((value) => Math.max(0, Math.trunc(Number(value) || 0)))
+	return {
+		kind: 'static-mesh',
+		vertices,
+		indices,
+		offset: [0, 0, 0],
+		applyScale: false,
+	}
+}
+
+function hashStaticMeshShape(shape: Extract<RigidbodyPhysicsShape, { kind: 'static-mesh' }>): number {
+	let hash = 2166136261
+	const push = (value: number) => {
+		hash ^= value | 0
+		hash = Math.imul(hash, 16777619) >>> 0
+	}
+	push(shape.vertices.length)
+	push(shape.indices.length)
+	for (const vertex of shape.vertices) {
+		push(Math.round((vertex[0] ?? 0) * 1000))
+		push(Math.round((vertex[1] ?? 0) * 1000))
+		push(Math.round((vertex[2] ?? 0) * 1000))
+	}
+	for (const index of shape.indices) {
+		push(Math.trunc(index))
+	}
+	return hash >>> 0
 }
 
 function computeRoadBoxJoinOverlapMeters(
@@ -980,7 +1202,7 @@ function buildRoadRectangularTileShapeFromSeries({
 	} satisfies Extract<RigidbodyPhysicsShape, { kind: 'box' }>
 }
 
-function buildRoadHeightfieldSignature(params: {
+function buildRoadCollisionSignature(params: {
 	definition: RoadDynamicMesh
 	roadNode: SceneNode
 	roadWidth: number

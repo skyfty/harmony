@@ -57,19 +57,19 @@ import { isGroundDynamicMesh } from './groundHeightfield'
 import { resolveRoadVehicleCollisionEnabled } from './components/definitions/roadComponent'
 
 import {
-	buildRoadHeightfieldBodies as buildRoadHeightfieldBodiesInternal,
+	buildRoadCollisionBodies as buildRoadCollisionBodiesInternal,
 	isRoadDynamicMesh as isRoadDynamicMeshInternal,
-	type RoadHeightfieldBodiesEntry,
-} from './roadHeightfield'
+	type RoadCollisionBodiesEntry,
+} from './roadCollision'
 
 export {
-	buildRoadHeightfieldBodies,
+	buildRoadCollisionBodies,
 	isRoadDynamicMesh,
-	type RoadHeightfieldBodiesEntry,
-	type RoadHeightfieldBuildParams,
-} from './roadHeightfield'
+	type RoadCollisionBodiesEntry,
+	type RoadCollisionBuildParams,
+} from './roadCollision'
 
-export function ensureRoadHeightfieldRigidbodyInstance(params: {
+export function ensureRoadCollisionRigidbodyInstance(params: {
 	roadNode: SceneNode
 	rigidbodyComponent: SceneNodeComponentState<RigidbodyComponentProps>
 	roadObject: THREE.Object3D
@@ -106,7 +106,7 @@ export function ensureRoadHeightfieldRigidbodyInstance(params: {
 		return { instance: null, shouldRemoveExisting: true }
 	}
 
-	const built: RoadHeightfieldBodiesEntry | null = buildRoadHeightfieldBodiesInternal({
+	const built: RoadCollisionBodiesEntry | null = buildRoadCollisionBodiesInternal({
 		roadNode,
 		rigidbodyComponent,
 		roadObject,

@@ -187,10 +187,10 @@ export {
 } from './compiledGroundCollisionRuntime'
 
 export {
-  collectRoadHeightfieldTileDescriptors,
-  type RoadHeightfieldBuildSnapshot,
-  type RoadHeightfieldTileDescriptor,
-} from './roadHeightfield'
+  collectRoadCollisionDescriptors,
+  type RoadCollisionBuildSnapshot,
+  type RoadCollisionDescriptor,
+} from './roadCollision'
 
 export {
   QUANTIZED_TERRAIN_MESH_FORMAT,

@@ -10,7 +10,7 @@ import {
   isGroundDynamicMesh,
 } from './groundHeightfield'
 import { resolveFloorShape, resolveModelCollisionFaceSegments, resolveWallShape, type FloorShapeCache, type WallTrimeshCache } from './physicsShapeResolvers'
-import { collectRoadHeightfieldTileDescriptors, isRoadDynamicMesh } from './roadHeightfield'
+import { collectRoadCollisionDescriptors, isRoadDynamicMesh } from './roadCollision'
 import { collectCompiledGroundCollisionTileKeys } from './compiledGroundCollisionRuntime'
 import { collectInfiniteGroundChunkCollisionKeys } from './infiniteGroundChunkCollisions'
 import { sampleGroundEffectiveHeightRegion } from './groundMesh'
@@ -391,6 +391,26 @@ function buildShapeInstancesFromDefinition(
     return [{ shapeId, transform: { position: [0, 0, 0], rotation: identityPhysicsRotation } }]
   }
 
+  if (shape.kind === 'static-mesh') {
+    const vertices = new Float32Array(shape.vertices.length * 3)
+    shape.vertices.forEach((vertex, index) => {
+      vertices[index * 3] = vertex[0] * scale[0]
+      vertices[index * 3 + 1] = vertex[1] * scale[1]
+      vertices[index * 3 + 2] = vertex[2] * scale[2]
+    })
+    const indices = new Uint32Array(
+      (Array.isArray(shape.indices) ? shape.indices : [])
+        .map((value) => Math.max(0, Math.trunc(Number(value) || 0))),
+    )
+    const shapeId = pushShapeDescriptor(shapes, {
+      id: nextShapeId(),
+      kind: 'static-mesh',
+      vertices,
+      indices,
+    })
+    return [{ shapeId, transform: { position: scaledOffset, rotation: identityPhysicsRotation } }]
+  }
+
   return []
 }
 
@@ -511,14 +531,14 @@ function buildRoadShapeInstances(
   if (!isRoadDynamicMesh(node.dynamicMesh) || !rigidbodyComponent) {
     return []
   }
-  const built = collectRoadHeightfieldTileDescriptors({
+  const built = collectRoadCollisionDescriptors({
     roadNode: node,
     rigidbodyComponent,
   })
   if (!built) {
     return []
   }
-  return built.tiles.flatMap((tile) => {
+  return built.descriptors.flatMap((tile) => {
     nodeEulerHelper.set(tile.pitch, tile.yaw, 0, 'YXZ')
     nodeQuaternionHelper.setFromEuler(nodeEulerHelper)
     const instances = buildShapeInstancesFromDefinition(

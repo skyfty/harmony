@@ -80,11 +80,18 @@ export type PhysicsHeightfieldShapeDefinition = {
   depth?: number
 } & PhysicsShapeDefinitionBase
 
+export type PhysicsStaticMeshShapeDefinition = {
+  kind: 'static-mesh'
+  vertices: Array<[number, number, number]>
+  indices: number[]
+} & PhysicsShapeDefinitionBase
+
 export type PhysicsShapeDefinition =
   | PhysicsBoxShapeDefinition
   | PhysicsSphereShapeDefinition
   | PhysicsCylinderShapeDefinition
   | PhysicsConvexShapeDefinition
+  | PhysicsStaticMeshShapeDefinition
   | PhysicsHeightfieldShapeDefinition
 
 export type PhysicsBodyShapeDefinitionBinding = {
