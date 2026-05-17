@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <view class="viewer-page">
     <view
       class="viewer-canvas-wrapper"
@@ -1013,23 +1013,6 @@ function clampPercent(value: number): number {
     return 0;
   }
   return Math.max(0, Math.min(100, Math.round(value)));
-}
-
-function formatSceneLoadCount(index: number, total: number): string {
-  if (!Number.isFinite(total) || total <= 0) {
-    return '';
-  }
-  const current = Math.max(0, Math.min(total, Math.floor(index) + 1));
-  return `${current} / ${Math.max(0, Math.floor(total))}`;
-}
-
-function formatSceneLoadDetail(detail: string, currentLabel?: string): string {
-  const normalizedDetail = typeof detail === 'string' ? detail.trim() : '';
-  const normalizedLabel = typeof currentLabel === 'string' ? currentLabel.trim() : '';
-  if (normalizedDetail && normalizedLabel) {
-    return `${normalizedDetail} | ${normalizedLabel}`;
-  }
-  return normalizedDetail || normalizedLabel;
 }
 
 async function yieldToMainThread(): Promise<void> {

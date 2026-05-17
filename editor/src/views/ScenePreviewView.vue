@@ -5592,7 +5592,7 @@ async function spawnBehaviorRuntimePrefab(event: Extract<BehaviorRuntimeEvent, {
 		currentDocument.updatedAt = new Date().toISOString()
 		rebuildPreviewNodeMap(currentDocument)
 		registerSubtree(graph.root)
-		syncPhysicsBodiesForDocument(currentDocument)
+		await syncPhysicsBodiesForDocument(currentDocument)
 		await syncTerrainScatterInstances(currentDocument, editorResourceCache)
 		refreshBehaviorProximityCandidates()
 	}
@@ -7563,7 +7563,7 @@ function updateVehicleSpeedFromVehicle(): void {
 			brake: vehicleDriveInput.brake,
 			parkedSpeedEpsilon: VEHICLE_PARKED_SPEED_EPSILON,
 			parkingHoldSpeedEpsilon: VEHICLE_PARKING_HOLD_SPEED_EPSILON,
-			resolveBrakeForce: (vehicleInstance) => resolveAutoTourVehicleBrakeForce(vehicleInstance.nodeId),
+			resolveBrakeForce: () => resolveAutoTourVehicleBrakeForce(vehicleNodeId!),
 		})
 	}
 
@@ -10316,7 +10316,7 @@ function resolveScenePreviewCompiledGroundTileLoader(): ((record: { path: string
 
 function resolveScenePreviewCompiledGroundRuntime(): {
 	groundObject: THREE.Object3D
-	groundDefinition: GroundRuntimeDynamicMesh
+	groundDefinition: GroundDynamicMesh
 } | null {
 	if (!currentDocument) {
 		return null
@@ -12261,7 +12261,20 @@ async function syncPhysicsBodiesForDocument(
 	})
 	clearLegacyPhysicsWorld()
 	syncVehicleBindingsForDocument(document)
-	physicsCollisionDebugRuntime.setSceneAsset(await buildPhysicsSceneAsset(document))
+	physicsCollisionDebugRuntime.setSceneAsset(
+		await buildPhysicsSceneAsset(document, {
+			onProgress: (progress) => {
+				onProgress?.({
+					phase: 'syncingPhysics',
+					percent: progress.total > 0 ? (progress.loaded / progress.total) * 100 : 0,
+					detail: progress.detail || progress.label,
+					currentIndex: progress.loaded,
+					currentTotal: progress.total,
+					currentLabel: progress.label,
+				})
+			},
+		}),
+	)
 	onProgress?.({
 		phase: 'syncingPhysics',
 		percent: 100,
@@ -13197,76 +13210,101 @@ async function updateScene(document: SceneJsonExportDocument) {
 	dismissBehaviorAlert()
 	resetBehaviorRuntime()
 	previewComponentManager.reset()
-	setSceneInitState({
-		stage: 'mounting',
-		label: 'Mounting preview scene...',
-		detail: 'Rebuilding preview node map...',
-		stagePercent: 0,
-		currentIndex: 0,
-		currentTotal: 5,
-		currentLabel: 'rebuildPreviewNodeMap',
-		active: true,
-	})
-	rebuildPreviewNodeMap(document)
-	await yieldToMainThread()
-	refreshBehaviorProximityCandidates()
-	setSceneInitState({
-		stage: 'mounting',
-		label: 'Mounting preview scene...',
-		detail: 'Syncing preview components...',
-		stagePercent: 22,
-		currentIndex: 1,
-		currentTotal: 5,
-		currentLabel: 'previewComponentManager.syncScene',
-		active: true,
-	})
-	await yieldToMainThread()
-
-	const pendingObjects = collectPendingObjects(root)
-	const instancingSkipNodeIds = resolveInstancingSkipNodeIds(pendingObjects)
-	instancingSkipNodeIds?.forEach((nodeId) => {
-		deferredInstancingNodeIds.add(nodeId)
-	})
-	if (resourceCache) {
-		await prepareInstancedNodesForDocument(document, pendingObjects, resourceCache, {
-			skipNodeIds: instancingSkipNodeIds ?? undefined,
+	try {
+		setSceneInitState({
+			stage: 'mounting',
+			label: 'Mounting preview scene...',
+			detail: 'Rebuilding the preview node map...',
+			stagePercent: 0,
+			currentIndex: 0,
+			currentTotal: 5,
+			currentLabel: 'rebuildPreviewNodeMap',
+			active: true,
 		})
-	}
-	setSceneInitState({
-		stage: 'syncingPhysics',
-		label: 'Syncing physics...',
-		detail: 'Preparing physics bridge...',
-		stagePercent: 0,
-		currentIndex: 0,
-		currentTotal: 3,
-		currentLabel: 'syncPhysicsBodiesForDocument',
-		active: true,
-	})
-	await yieldToMainThread()
+		rebuildPreviewNodeMap(document)
+		await yieldToMainThread()
+		refreshBehaviorProximityCandidates()
+		setSceneInitState({
+			stage: 'mounting',
+			label: 'Mounting preview scene...',
+			detail: 'Syncing preview components...',
+			stagePercent: 22,
+			currentIndex: 1,
+			currentTotal: 5,
+			currentLabel: 'previewComponentManager.syncScene',
+			active: true,
+		})
+		await yieldToMainThread()
 
-	const applyIncremental = Boolean(currentDocument) && !forceInitialDocumentGraphOnNextSnapshot
-	forceInitialDocumentGraphOnNextSnapshot = false
+		const pendingObjects = collectPendingObjects(root)
+		const instancingSkipNodeIds = resolveInstancingSkipNodeIds(pendingObjects)
+		instancingSkipNodeIds?.forEach((nodeId) => {
+			deferredInstancingNodeIds.add(nodeId)
+		})
+		if (resourceCache) {
+			await prepareInstancedNodesForDocument(document, pendingObjects, resourceCache, {
+				skipNodeIds: instancingSkipNodeIds ?? undefined,
+			})
+		}
+		setSceneInitState({
+			stage: 'syncingPhysics',
+			label: 'Syncing physics...',
+			detail: 'Preparing the physics bridge...',
+			stagePercent: 0,
+			currentIndex: 0,
+			currentTotal: 3,
+			currentLabel: 'syncPhysicsBodiesForDocument',
+			active: true,
+		})
+		await yieldToMainThread()
 
-	if (applyIncremental) {
-		await applyIncrementalDocumentGraph(
-			document, 
-			previewRoot,
-			pendingObjects, 
-			resourceCache, 
-			environmentSettings)
-	} else {
-		await applyInitialDocumentGraph(
-			document,
-			previewRoot,
-			root,
-			pendingObjects,
-			resourceCache,
-			environmentSettings,
-		)
+		const applyIncremental = Boolean(currentDocument) && !forceInitialDocumentGraphOnNextSnapshot
+		forceInitialDocumentGraphOnNextSnapshot = false
+
+		if (applyIncremental) {
+			await applyIncrementalDocumentGraph(
+				document,
+				previewRoot,
+				pendingObjects,
+				resourceCache,
+				environmentSettings,
+			)
+		} else {
+			await applyInitialDocumentGraph(
+				document,
+				previewRoot,
+				root,
+				pendingObjects,
+				resourceCache,
+				environmentSettings,
+			)
+		}
+		scenePreviewDriveBindingsReady.value = true
+		applyPreviewNominateOverrides()
+		activatePendingDefaultSteerDriveIfNeeded()
+		setSceneInitState({
+			stage: 'ready',
+			label: 'Scene ready',
+			detail: 'Initialization complete.',
+			stagePercent: 100,
+			currentIndex: 1,
+			currentTotal: 1,
+			currentLabel: 'ready',
+			active: false,
+		})
+	} catch (error) {
+		setSceneInitState({
+			stage: 'error',
+			label: 'Scene initialization failed',
+			detail: error instanceof Error ? error.message : 'An unexpected error occurred while initializing the scene.',
+			stagePercent: 0,
+			currentIndex: 0,
+			currentTotal: 1,
+			currentLabel: 'updateScene',
+			active: false,
+		})
+		throw error
 	}
-	scenePreviewDriveBindingsReady.value = true
-	applyPreviewNominateOverrides()
-	activatePendingDefaultSteerDriveIfNeeded()
 }
 
 function applySnapshot(snapshot: ScenePreviewSnapshot) {
@@ -13377,6 +13415,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+	clearSceneInitState()
 	if (typeof window !== 'undefined') {
 		window.removeEventListener('harmony-preview-nominate-change', syncPreviewNominateStateMap)
 	}

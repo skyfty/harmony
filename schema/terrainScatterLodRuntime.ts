@@ -62,6 +62,9 @@ export type TerrainScatterLodRuntimeSyncProgress = {
   phase: TerrainScatterLodRuntimeSyncPhase
   percent: number
   detail: string
+  loaded: number
+  total: number
+  label: string
   currentIndex?: number
   currentTotal?: number
   currentLabel?: string
@@ -818,6 +821,7 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
     document: SceneJsonExportDocument,
     nextResourceCache: ResourceCache,
     resolveGroundMeshObject: (nodeId: string) => THREE.Mesh | null,
+    options?: TerrainScatterLodRuntimeSyncOptions,
   ): Promise<void> {
     dispose()
     resourceCache = nextResourceCache
@@ -827,33 +831,85 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
       return
     }
 
+    const workload = countTerrainScatterSyncWorkload(entries)
+    let completedWork = 0
+    const reportProgress = (
+      phase: TerrainScatterLodRuntimeSyncPhase,
+      detail: string,
+      currentLabel: string,
+    ): void => {
+      options?.onProgress?.({
+        phase,
+        percent: resolveTerrainScatterSyncPercent(phase, completedWork, workload.totalWork),
+        detail,
+        loaded: completedWork,
+        total: workload.totalWork,
+        label: currentLabel,
+        currentIndex: completedWork,
+        currentTotal: workload.totalWork,
+        currentLabel,
+      })
+    }
+
+    reportProgress('collecting', 'Scanning terrain scatter entries...', 'collectGroundScatterEntries')
+
     let lastYieldAt = nowMs()
-    for (const entry of entries) {
+    for (const [entryIndex, entry] of entries.entries()) {
       groundDefinitionByNodeId.set(entry.nodeId, entry.definition)
       const chunkCells = resolveGroundChunkCells(entry.definition)
       chunkCellsByGroundNodeId.set(entry.nodeId, chunkCells)
+      const layers = Array.isArray(entry.snapshot.layers) ? entry.snapshot.layers : []
+      let entryInstanceCount = 0
+      for (const layer of layers) {
+        entryInstanceCount += Array.isArray(layer?.instances) ? layer.instances.length : 0
+      }
 
       const groundMesh = resolveGroundMeshObject(entry.nodeId)
       if (!groundMesh) {
+        completedWork += 1 + layers.length + entryInstanceCount
+        reportProgress(
+          'building',
+          `Skipped terrain scatter ground ${entryIndex + 1} of ${workload.entryCount}: mesh missing`,
+          'resolveGroundMeshObject',
+        )
         continue
       }
       groundMesh.updateMatrixWorld(true)
 
-      for (const layer of entry.snapshot.layers ?? []) {
+      for (const [layerIndex, layer] of layers.entries()) {
+        const layerInstances = Array.isArray(layer?.instances) ? (layer.instances as TerrainScatterInstance[]) : []
         const layerAssetId = normalizeText(layer?.assetId)
         const profileAssetId = normalizeText(layer?.profileId)
         const selectionId = layerAssetId || profileAssetId
         if (!selectionId) {
+          completedWork += 1 + layerInstances.length
+          reportProgress(
+            'building',
+            `Skipped empty scatter layer ${layerIndex + 1} of ${layers.length} on ${entry.nodeId}`,
+            'skipEmptyScatterLayer',
+          )
           continue
         }
 
         const presetAssetId = getScatterLayerLodPresetId(layer)
         if (presetAssetId) {
           if (isLodPresetInvalid(presetAssetId)) {
+            completedWork += 1 + layerInstances.length
+            reportProgress(
+              'building',
+              `Skipped invalid preset for layer ${layerIndex + 1} on ${entry.nodeId}`,
+              'ensureLodPresetCached',
+            )
             continue
           }
           await ensureLodPresetCached(presetAssetId)
           if (isLodPresetInvalid(presetAssetId)) {
+            completedWork += 1 + layerInstances.length
+            reportProgress(
+              'building',
+              `Skipped invalid preset for layer ${layerIndex + 1} on ${entry.nodeId}`,
+              'ensureLodPresetCached',
+            )
             continue
           }
           lastYieldAt = await maybeYieldSync(lastYieldAt)
@@ -863,14 +919,27 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
         const sourceModelAssetId = resolveFirstLodModelAssetId(preset) || selectionId
         const bindingTarget = resolveBaseScatterRenderTarget(preset, selectionId)
         if (!bindingTarget || isScatterRenderTargetInvalid(bindingTarget)) {
+          completedWork += 1 + layerInstances.length
+          reportProgress(
+            'building',
+            `Skipped unsupported render target for layer ${layerIndex + 1} on ${entry.nodeId}`,
+            'resolveBaseScatterRenderTarget',
+          )
           continue
         }
 
         const ready = await ensureScatterRenderTargetReady(bindingTarget, nextResourceCache)
         if (!ready) {
+          completedWork += 1 + layerInstances.length
+          reportProgress(
+            'building',
+            `Waiting for scatter target for layer ${layerIndex + 1} on ${entry.nodeId}`,
+            'ensureScatterRenderTargetReady',
+          )
           continue
         }
         lastYieldAt = await maybeYieldSync(lastYieldAt)
+
         const presetRenderTargets = collectPresetScatterRenderTargets(preset)
         for (const target of presetRenderTargets) {
           if (target.kind === bindingTarget.kind && target.assetId === bindingTarget.assetId) {
@@ -882,6 +951,7 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
           await ensureScatterRenderTargetReady(target, nextResourceCache)
           lastYieldAt = await maybeYieldSync(lastYieldAt)
         }
+
         if (sourceModelAssetId) {
           const sourceModelTarget = createModelScatterRenderTarget(sourceModelAssetId)
           if (!isScatterRenderTargetInvalid(sourceModelTarget)) {
@@ -891,32 +961,30 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
         }
         const sourceModelHeight = getSourceModelHeight(sourceModelAssetId)
 
-        const instances = Array.isArray(layer.instances) ? (layer.instances as TerrainScatterInstance[]) : []
-        for (let instanceIndex = 0; instanceIndex < instances.length; instanceIndex += 1) {
-          const instance = instances[instanceIndex]!
+        for (let instanceIndex = 0; instanceIndex < layerInstances.length; instanceIndex += 1) {
+          const instance = layerInstances[instanceIndex]!
           const nodeId = buildScatterNodeId(layer?.id ?? null, instance.id)
 
           if (!chunkStreamingEnabled) {
             const binding = allocateScatterRenderTargetBinding(bindingTarget, nodeId)
-            if (!binding) {
-              continue
+            if (binding) {
+              const runtimeTarget = { ...bindingTarget }
+              const runtimeState: ScatterRuntimeInstance = {
+                nodeId,
+                groundNodeId: entry.nodeId,
+                layerId: layer?.id ?? null,
+                instance,
+                presetAssetId: preset ? presetAssetId : null,
+                sourceModelAssetId,
+                sourceModelHeight,
+                boundTarget: runtimeTarget,
+              }
+              const matrix = computeScatterRuntimeMatrix(runtimeState, groundMesh)
+              updateScatterRenderTargetMatrix(runtimeTarget, nodeId, matrix)
+              allocatedNodeIds.add(nodeId)
+              visibleNodeIds.add(nodeId)
+              runtimeInstances.set(nodeId, runtimeState)
             }
-            const runtimeTarget = { ...bindingTarget }
-            const runtimeState: ScatterRuntimeInstance = {
-              nodeId,
-              groundNodeId: entry.nodeId,
-              layerId: layer?.id ?? null,
-              instance,
-              presetAssetId: preset ? presetAssetId : null,
-              sourceModelAssetId,
-              sourceModelHeight,
-              boundTarget: runtimeTarget,
-            }
-            const matrix = computeScatterRuntimeMatrix(runtimeState, groundMesh)
-            updateScatterRenderTargetMatrix(runtimeTarget, nodeId, matrix)
-            allocatedNodeIds.add(nodeId)
-            visibleNodeIds.add(nodeId)
-            runtimeInstances.set(nodeId, runtimeState)
           } else {
             const local = instance.localPosition
             const chunkKey = computeGroundChunkKeyFromLocal(entry.definition, chunkCells, local?.x ?? 0, local?.z ?? 0)
@@ -940,16 +1008,39 @@ export function createTerrainScatterLodRuntime(options: TerrainScatterLodRuntime
             })
           }
 
+          completedWork += 1
+          if ((instanceIndex + 1) % 64 === 0 || instanceIndex + 1 === layerInstances.length) {
+            reportProgress(
+              'building',
+              `Binding scatter instance ${instanceIndex + 1} of ${layerInstances.length} on ${entry.nodeId}`,
+              'syncTerrainScatterInstances',
+            )
+          }
+
           if ((instanceIndex + 1) % 64 === 0) {
             lastYieldAt = await maybeYieldSync(lastYieldAt)
           }
         }
 
+        completedWork += 1
+        reportProgress(
+          'building',
+          `Finished scatter layer ${layerIndex + 1} of ${layers.length} on ${entry.nodeId}`,
+          'syncTerrainScatterInstances',
+        )
         lastYieldAt = await maybeYieldSync(lastYieldAt)
       }
 
+      completedWork += 1
+      reportProgress(
+        'building',
+        `Finished scatter ground ${entryIndex + 1} of ${workload.entryCount}`,
+        'syncTerrainScatterInstances',
+      )
       lastYieldAt = await maybeYieldSync(lastYieldAt)
     }
+
+    reportProgress('finalizing', 'Finalizing terrain scatter runtime...', 'finalizeTerrainScatterRuntime')
   }
 
   function updateChunkStreamingActiveWindow(camera: THREE.Camera, resolveGroundMeshObject: (nodeId: string) => THREE.Mesh | null): void {

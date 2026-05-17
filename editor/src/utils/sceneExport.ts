@@ -53,25 +53,6 @@ import {
 } from '@schema/components'
 import { isGroundDynamicMesh } from '@schema/groundHeightfield'
 
-function countSceneNodes(nodes: SceneNode[] | null | undefined): number {
-  if (!Array.isArray(nodes) || !nodes.length) {
-    return 0
-  }
-  let count = 0
-  const stack: SceneNode[] = [...nodes]
-  while (stack.length) {
-    const current = stack.pop()
-    if (!current) {
-      continue
-    }
-    count += 1
-    if (Array.isArray(current.children) && current.children.length > 0) {
-      stack.push(...current.children)
-    }
-  }
-  return count
-}
-
 function countSceneNodeCategory(
   nodes: SceneNode[] | null | undefined,
   predicate: (node: SceneNode) => boolean,
@@ -257,7 +238,7 @@ type NodeExportProgressTracker = {
   total: number
 }
 
-function countSceneNodes(nodes: SceneNode[]): number {
+function countSceneNodes(nodes: SceneNode[] | null | undefined): number {
   if (!Array.isArray(nodes) || !nodes.length) {
     return 0
   }
