@@ -9,6 +9,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./debuggerPro": {
+      "types": "./dist/debuggerPro.d.ts",
+      "default": "./dist/debuggerPro.js"
     }
   },
   "files": [

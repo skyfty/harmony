@@ -26,6 +26,7 @@ const sceneOptimizerExcludes = [
   'fflate',
   'ammojs3',
   'cannon-es',
+  '@vladkrutenyuk/cannon-es-debugger-pro',
   '@minisheep/three-platform-adapter',
 ];
 
@@ -41,7 +42,6 @@ const sceneryPhysicsBridgeSourcePath = fileURLToPath(new URL('../physics-bridge/
 const utilsSrcPath = fileURLToPath(new URL('../utils/src', import.meta.url)).replaceAll('\\', '/');
 const eventTargetShimPath = fileURLToPath(new URL('./node_modules/event-target-shim/index.mjs', import.meta.url)).replaceAll('\\', '/');
 const webStreamsPolyfillPath = fileURLToPath(new URL('./node_modules/web-streams-polyfill/dist/polyfill.mjs', import.meta.url)).replaceAll('\\', '/');
-const cannonEsEntryPath = fileURLToPath(new URL('./src/pages/physics-cannon/cannon-es/dist/cannon-es.js', import.meta.url)).replaceAll('\\', '/');
 const ammoJsEntryPath = fileURLToPath(new URL('./src/pages/physics-ammo/ammojs3/dist/ammo.js', import.meta.url)).replaceAll('\\', '/');
 const ammoJsWasmEntryPath = fileURLToPath(new URL('./src/pages/physics-ammo/vendor/ammo.wasm.js', import.meta.url)).replaceAll('\\', '/');
 const ammoJsWasmBinaryPath = fileURLToPath(new URL('./src/pages/physics-ammo/vendor/ammo.wasm.wasm', import.meta.url)).replaceAll('\\', '/');
@@ -99,6 +99,7 @@ function resolveManualChunk(id: string): string | undefined {
       || normalizedId.includes('@minisheep/three-platform-adapter')
       || normalizedId.includes('ammojs3')
       || normalizedId.includes('cannon-es')
+      || normalizedId.includes('@vladkrutenyuk/cannon-es-debugger-pro')
     ) {
       if (
         normalizedId.includes('ammojs3')
@@ -106,7 +107,16 @@ function resolveManualChunk(id: string): string | undefined {
         return 'pages/physics-ammo/common/vendor';
       }
       if (normalizedId.includes('cannon-es')) {
-        return 'pages/physics-cannon/common/vendor';
+        return 'common/vendor';
+      }
+      if (
+        normalizedId.includes('three')
+        || normalizedId.includes('three-mesh-bvh')
+        || normalizedId.includes('three-csm')
+        || normalizedId.includes('@minisheep/three-platform-adapter')
+        || normalizedId.includes('@vladkrutenyuk/cannon-es-debugger-pro')
+      ) {
+        return 'common/vendor';
       }
       return 'pages/scenery/common/vendor';
     }
@@ -132,7 +142,7 @@ function resolveManualChunk(id: string): string | undefined {
     || normalizedId.includes('/node_modules/three-csm/')
     || normalizedId.includes('/node_modules/@minisheep/three-platform-adapter/')
   ) {
-    return 'pages/scenery/common/vendor';
+    return 'common/vendor';
   }
 
   if (
@@ -174,9 +184,11 @@ function resolveManualChunk(id: string): string | undefined {
 
   if (
     normalizedId.includes('/physics-cannon/src/')
+    || normalizedId.includes('/src/pages/physics-cannon/')
+    || normalizedId.includes('/src/pages/physics-cannon/runtime.ts')
     || normalizedId.includes('/src/pages/physics-cannon/engine/')
     || normalizedId.includes('/src/pages/physics-cannon/cannon-es/')
-    || normalizedId.includes('/node_modules/cannon-es/')
+    || normalizedId.includes('/node_modules/@vladkrutenyuk/cannon-es-debugger-pro/')
   ) {
     return 'pages/physics-cannon/common/vendor';
   }
@@ -260,7 +272,6 @@ export default {
       { find: '@harmony/utils/scene-package-fs', replacement: `${utilsSrcPath}/scenePackageFs.ts` },
       { find: '@harmony/utils/query', replacement: `${utilsSrcPath}/query.ts` },
       { find: /^@harmony\/utils\/(.*)$/, replacement: `${utilsSrcPath}/$1` },
-      { find: 'cannon-es', replacement: cannonEsEntryPath },
       ...(isMp
         ? [
             { find: /^ammojs3\/dist\/ammo\.wasm\.js$/, replacement: ammoJsWasmEntryPath },
@@ -270,6 +281,7 @@ export default {
       { find: /^ammojs3$/, replacement: ammoJsEntryPath },
       { find: '@harmony/physics-ammo', replacement: fileURLToPath(new URL('./src/pages/physics-ammo/runtime.ts', import.meta.url)) },
       { find: '@harmony/physics-ammo-source', replacement: fileURLToPath(new URL('./src/pages/physics-ammo/engine', import.meta.url)) },
+      { find: /^@harmony\/physics-cannon\/(.*)$/, replacement: fileURLToPath(new URL('./src/pages/physics-cannon/$1', import.meta.url)) },
       { find: '@harmony/physics-cannon', replacement: fileURLToPath(new URL('./src/pages/physics-cannon/runtime.ts', import.meta.url)) },
       { find: '@harmony/physics-cannon-source', replacement: fileURLToPath(new URL('./src/pages/physics-cannon/engine', import.meta.url)) },
       { find: 'event-target-shim', replacement: eventTargetShimPath },
@@ -312,15 +324,6 @@ export default {
     toCustomChunkPlugin({
       manualChunks: {
         'pages/scenery/chunks/vendor': [
-          '@minisheep/three-platform-adapter',
-          '@minisheep/three-platform-adapter/wechat',
-          '@minisheep/three-platform-adapter/override/jsm/**',
-          'three',
-          'three/addons/**',
-          'three/examples/**',
-          'three/examples/jsm/**',
-          'three-mesh-bvh',
-          'three-csm',
           '**/pages/scenery/three/**',
           '**/pages/scenery/three-mesh-bvh/**',
           '**/pages/scenery/three-platform-adapter/**',

@@ -1,15 +1,8 @@
 import * as THREE from 'three'
+import type * as CANNON from 'cannon-es'
 import type { PhysicsBackendPreference, PhysicsBodyDesc, PhysicsSceneAsset, PhysicsShapeDesc, PhysicsStepFrame } from '@harmony/physics-core'
-import { loadCannonDebuggerPro } from './cannonDebuggerPro'
 
 export type PhysicsCollisionDebugEngine = Extract<PhysicsBackendPreference, 'ammo' | 'cannon'>
-
-type CannonDebuggerLike = {
-  update?: () => void
-  clear?: () => void
-  destroy?: () => void
-  setVisible?: (visible: boolean) => void
-}
 
 type ShapeMap = Map<number, PhysicsShapeDesc>
 
@@ -249,8 +242,7 @@ export class SceneryPhysicsCollisionDebugRuntime {
   private currentEngine: PhysicsCollisionDebugEngine | null = null
   private currentAsset: PhysicsSceneAsset | null = null
   private ammoBodies = new Map<number, AmmoBodyEntry>()
-  private cannonWorld: unknown | null = null
-  private cannonDebugger: CannonDebuggerLike | null = null
+  private cannonWorld: CANNON.World | null = null
   private visible = true
 
   constructor() {
@@ -274,22 +266,16 @@ export class SceneryPhysicsCollisionDebugRuntime {
   setVisible(visible: boolean): void {
     this.visible = visible
     this.root.visible = visible
-    this.cannonDebugger?.setVisible?.(visible)
   }
 
   setEngine(engine: PhysicsCollisionDebugEngine | null): void {
     if (this.currentEngine === engine) {
       return
     }
-    this.destroyCannonDebugger()
     this.clearAmmoBodies()
     this.currentEngine = engine
     if (engine === 'ammo') {
       this.rebuildAmmoScene()
-      return
-    }
-    if (engine === 'cannon') {
-      void this.ensureCannonDebugger()
     }
   }
 
@@ -329,25 +315,17 @@ export class SceneryPhysicsCollisionDebugRuntime {
     }
   }
 
-  setCannonWorld(world: unknown | null): void {
+  setCannonWorld(world: CANNON.World | null): void {
     if (this.cannonWorld === world) {
       return
     }
     this.cannonWorld = world
-    if (this.currentEngine === 'cannon') {
-      this.destroyCannonDebugger()
-      void this.ensureCannonDebugger()
-    }
   }
 
   update(): void {
-    if (this.currentEngine === 'cannon' && this.visible) {
-      this.cannonDebugger?.update?.()
-    }
   }
 
   resetBackend(): void {
-    this.destroyCannonDebugger()
     this.clearAmmoBodies()
     this.currentAsset = null
     this.cannonWorld = null
@@ -415,44 +393,5 @@ export class SceneryPhysicsCollisionDebugRuntime {
   private disposeAmmoLineMaterial(): void {
     this.ammoLineMaterial?.dispose()
     this.ammoLineMaterial = null
-  }
-
-  private destroyCannonDebugger(): void {
-    if (!this.cannonDebugger) {
-      return
-    }
-    try {
-      this.cannonDebugger.clear?.()
-      this.cannonDebugger.destroy?.()
-    } catch (error) {
-      console.warn('[SceneryPhysicsCollisionDebugRuntime] Failed to destroy cannon debugger', error)
-    } finally {
-      this.cannonDebugger = null
-    }
-  }
-
-  private async ensureCannonDebugger(): Promise<void> {
-    if (this.currentEngine !== 'cannon' || !this.cannonWorld) {
-      this.destroyCannonDebugger()
-      return
-    }
-    if (this.cannonDebugger) {
-      this.cannonDebugger.setVisible?.(this.visible)
-      return
-    }
-    try {
-      const CannonEsDebuggerPro = await loadCannonDebuggerPro()
-
-      if (!CannonEsDebuggerPro) {
-        throw new Error('Cannon debugger module did not expose CannonEsDebuggerPro')
-      }
-
-      this.destroyCannonDebugger()
-      this.cannonDebugger = new CannonEsDebuggerPro(this.root, this.cannonWorld, 0x66d9ff, 0.005)
-      this.cannonDebugger.setVisible?.(this.visible)
-    } catch (error) {
-      console.warn('[SceneryPhysicsCollisionDebugRuntime] Failed to create cannon debugger', error)
-      this.destroyCannonDebugger()
-    }
   }
 }
