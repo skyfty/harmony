@@ -42,9 +42,12 @@ const eventTargetShimPath = fileURLToPath(new URL('./node_modules/event-target-s
 const webStreamsPolyfillPath = fileURLToPath(new URL('./node_modules/web-streams-polyfill/dist/polyfill.mjs', import.meta.url)).replaceAll('\\', '/');
 const cannonEsEntryPath = fileURLToPath(new URL('./src/pages/physics-cannon/cannon-es/dist/cannon-es.js', import.meta.url)).replaceAll('\\', '/');
 const ammoJsEntryPath = fileURLToPath(new URL('./src/pages/physics-ammo/ammojs3/dist/ammo.js', import.meta.url)).replaceAll('\\', '/');
+const ammoJsWasmEntryPath = fileURLToPath(new URL('./src/pages/physics-ammo/vendor/ammo.wasm.js', import.meta.url)).replaceAll('\\', '/');
+const ammoJsWasmBinaryPath = fileURLToPath(new URL('./src/pages/physics-ammo/vendor/ammo.wasm.wasm', import.meta.url)).replaceAll('\\', '/');
 const schemaMirrorPath = fileURLToPath(new URL('./src/pages/scenery/schema', import.meta.url)).replaceAll('\\', '/');
 const physicsCoreMirrorPath = fileURLToPath(new URL('./src/pages/scenery/physics-core', import.meta.url)).replaceAll('\\', '/');
 const sceneryPhysicsBridgeMirrorPath = fileURLToPath(new URL('./src/pages/scenery/physics-bridge', import.meta.url)).replaceAll('\\', '/');
+const cannonDebuggerStubPath = fileURLToPath(new URL('../scenery/common/physics/cannonDebuggerPro.stub.ts', import.meta.url)).replaceAll('\\', '/');
 
 const _require = createRequire(import.meta.url);
 let vueRuntimeAlias: string;
@@ -250,7 +253,18 @@ export default {
       { find: '@harmony/utils/query', replacement: `${utilsSrcPath}/query.ts` },
       { find: /^@harmony\/utils\/(.*)$/, replacement: `${utilsSrcPath}/$1` },
       { find: 'cannon-es', replacement: cannonEsEntryPath },
-      { find: 'ammojs3', replacement: ammoJsEntryPath },
+      ...(isMp
+        ? [
+            { find: /^ammojs3\/dist\/ammo\.wasm\.js$/, replacement: ammoJsWasmEntryPath },
+            { find: /^ammojs3\/dist\/ammo\.wasm\.wasm\?url$/, replacement: `${ammoJsWasmBinaryPath}?url` },
+          ]
+        : []),
+      { find: /^ammojs3$/, replacement: ammoJsEntryPath },
+      ...(isMp
+        ? [
+            { find: '@vladkrutenyuk/cannon-es-debugger-pro', replacement: cannonDebuggerStubPath },
+          ]
+        : []),
       { find: '@harmony/physics-ammo', replacement: fileURLToPath(new URL('./src/pages/physics-ammo/runtime.ts', import.meta.url)) },
       { find: '@harmony/physics-ammo-source', replacement: fileURLToPath(new URL('./src/pages/physics-ammo/engine', import.meta.url)) },
       { find: '@harmony/physics-cannon', replacement: fileURLToPath(new URL('./src/pages/physics-cannon/runtime.ts', import.meta.url)) },
