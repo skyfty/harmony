@@ -126,6 +126,7 @@ export type PhysicsVehicleDesc = {
   indexRightAxis: 0 | 1 | 2
   indexUpAxis: 0 | 1 | 2
   indexForwardAxis: 0 | 1 | 2
+  maxSpeedKmh?: number
   wheels: PhysicsVehicleWheelDesc[]
 }
 

@@ -16,6 +16,7 @@ import {
   clampPurePursuitComponentProps,
   AUTO_TOUR_COMPONENT_TYPE,
   clampAutoTourComponentProps,
+  clampVehicleComponentProps,
 } from './components'
 import type { BehaviorEventResolution } from './behaviors/runtime'
 import type { VehicleSurfaceSample } from './vehicleSurfaceSampler'
@@ -214,6 +215,7 @@ const VEHICLE_BRAKE_FORCE = 36
 // Default soft/hard speed caps used when no component-level max is present.
 const DEFAULT_VEHICLE_SPEED_SOFT_CAP = 8.5
 const DEFAULT_VEHICLE_SPEED_HARD_CAP = 12.5
+const VEHICLE_SPEED_GOVERNOR_SOFT_RATIO = 0.92
 const VEHICLE_SPEED_GOVERNOR_BRAKE_ENTER_OFFSET = 0.45
 const VEHICLE_SPEED_GOVERNOR_BRAKE_EXIT_OFFSET = 0.2
 const VEHICLE_SPEED_GOVERNOR_BRAKE_DEADBAND = 0.35
@@ -651,6 +653,51 @@ export class VehicleDriveController {
     return { forward, reverse }
   }
 
+  private resolveManualDriveSpeedCaps(nodeId: string): { softCap: number; hardCap: number } {
+    let hardCap = Number.POSITIVE_INFINITY
+    try {
+      const node = this.deps.resolveNodeById(nodeId) ?? null
+      if (node) {
+        const vehicleComponent = this.deps.resolveVehicleComponent(node)
+        if (vehicleComponent) {
+          const vehicleProps = clampVehicleComponentProps(vehicleComponent.props ?? null)
+          const vehicleCap = vehicleProps.maxSpeedKmh > 0 ? vehicleProps.maxSpeedKmh / 3.6 : Number.POSITIVE_INFINITY
+          if (Number.isFinite(vehicleCap) && vehicleCap > 0) {
+            hardCap = Math.min(hardCap, vehicleCap)
+          }
+        }
+        const pureComp = node.components?.[PURE_PURSUIT_COMPONENT_TYPE] as any
+        if (pureComp && pureComp.enabled) {
+          const pp = clampPurePursuitComponentProps(pureComp.props ?? null)
+          if (Number.isFinite(pp.maxSpeedMps) && pp.maxSpeedMps > 0) {
+            hardCap = Math.min(hardCap, pp.maxSpeedMps)
+          }
+        }
+        const autoComp = node.components?.[AUTO_TOUR_COMPONENT_TYPE] as any
+        if (autoComp && autoComp.enabled) {
+          const at = clampAutoTourComponentProps(autoComp.props ?? null)
+          if (Number.isFinite(at.maxSpeedMps) && at.maxSpeedMps > 0) {
+            hardCap = Math.min(hardCap, at.maxSpeedMps)
+          }
+        }
+      }
+    } catch {
+      hardCap = Number.POSITIVE_INFINITY
+    }
+
+    if (Number.isFinite(hardCap) && hardCap > 0) {
+      const normalizedHardCap = Math.max(0.1, hardCap)
+      return {
+        hardCap: normalizedHardCap,
+        softCap: Math.max(0.1, normalizedHardCap * VEHICLE_SPEED_GOVERNOR_SOFT_RATIO),
+      }
+    }
+    return {
+      softCap: DEFAULT_VEHICLE_SPEED_SOFT_CAP,
+      hardCap: DEFAULT_VEHICLE_SPEED_HARD_CAP,
+    }
+  }
+
   prepareTarget(nodeId: string | null | undefined): VehicleDriveTargetReadiness {
     const normalized = this.deps.normalizeNodeId(nodeId)
     if (!normalized) {
@@ -937,36 +984,9 @@ export class VehicleDriveController {
       // This avoids a physics "fight" that can cause oscillation under constant throttle.
       sameDirection = throttleSign !== 0 ? Math.sign(forwardVelocity) === throttleSign : null
       const acceleratingForward = !!(sameDirection && throttleSign !== 0)
-        
-      // Determine per-node soft/hard speed caps. If a PurePursuit or AutoTour component
-      // defines `maxSpeedMps`, use it to cap soft/hard limits for the currently-driven node.
-      let softCap = DEFAULT_VEHICLE_SPEED_SOFT_CAP
-      let hardCap = DEFAULT_VEHICLE_SPEED_HARD_CAP
-      try {
-        const node = state.nodeId ? this.deps.resolveNodeById(state.nodeId) ?? null : null
-        if (node) {
-          const pureComp = node.components?.[PURE_PURSUIT_COMPONENT_TYPE] as any
-          if (pureComp && pureComp.enabled) {
-            const pp = clampPurePursuitComponentProps(pureComp.props ?? null)
-            if (Number.isFinite(pp.maxSpeedMps)) {
-              softCap = Math.max(softCap, pp.maxSpeedMps)
-              hardCap = Math.max(hardCap, pp.maxSpeedMps)
-            }
-          }
-          const autoComp = node.components?.[AUTO_TOUR_COMPONENT_TYPE] as any
-          if (autoComp && autoComp.enabled) {
-            const at = clampAutoTourComponentProps(autoComp.props ?? null)
-            if (Number.isFinite(at.maxSpeedMps)) {
-              softCap = Math.max(softCap, at.maxSpeedMps)
-              hardCap = Math.max(hardCap, at.maxSpeedMps)
-            }
-          }
-        }
-      } catch {
-        // best-effort: fallback to defaults on any lookup/clamp error
-        softCap = DEFAULT_VEHICLE_SPEED_SOFT_CAP
-        hardCap = DEFAULT_VEHICLE_SPEED_HARD_CAP
-      }
+      const { softCap, hardCap } = state.nodeId
+        ? this.resolveManualDriveSpeedCaps(state.nodeId)
+        : { softCap: DEFAULT_VEHICLE_SPEED_SOFT_CAP, hardCap: DEFAULT_VEHICLE_SPEED_HARD_CAP }
       if (acceleratingForward) {
         const range = Math.max(0.1, hardCap - softCap)
         const excess = Math.max(0, speedForGovernor - softCap)

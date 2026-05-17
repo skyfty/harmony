@@ -30,6 +30,10 @@ type VehicleState = {
   body: CANNON.Body
   vehicle: CANNON.RaycastVehicle
   steerableWheelIndices: number[]
+  speedGovernorScale: number
+  speedGovernorBrakeAssist: number
+  speedGovernorOverHardCap: boolean
+  speedGovernorSmoothedForwardSpeedAbs: number
 }
 
 const DEFAULT_WORLD_SETTINGS: PhysicsWorldSettings = {
@@ -39,8 +43,16 @@ const DEFAULT_WORLD_SETTINGS: PhysicsWorldSettings = {
 }
 
 const VEHICLE_ENGINE_FORCE = 320
-const VEHICLE_BRAKE_FORCE = 0
+const VEHICLE_BRAKE_FORCE = 36
 const VEHICLE_STEER_ANGLE = (26 * Math.PI) / 180
+const VEHICLE_SPEED_GOVERNOR_SOFT_RATIO = 0.92
+const VEHICLE_SPEED_GOVERNOR_BRAKE_ENTER_OFFSET = 0.45
+const VEHICLE_SPEED_GOVERNOR_BRAKE_EXIT_OFFSET = 0.2
+const VEHICLE_SPEED_GOVERNOR_BRAKE_DEADBAND = 0.35
+const VEHICLE_SPEED_GOVERNOR_BRAKE_BAND = 1.8
+const VEHICLE_SPEED_GOVERNOR_BRAKE_MAX_RATIO = 0.14
+const VEHICLE_BRAKE_RELEASE_SPEED = 0.45
+const VEHICLE_WAKE_SPEED_THRESHOLD = 0.2
 
 export class CannonPhysicsWorld {
   private scene: PhysicsSceneAsset | null = null
@@ -345,18 +357,22 @@ export class CannonPhysicsWorld {
       })
     })
     vehicle.addToWorld(world)
-    return {
-      desc,
-      bodyId: desc.bodyId,
-      body: bodyState.body,
-      vehicle,
-      steerableWheelIndices: desc.wheels.reduce<number[]>((indices, wheel, index) => {
-        if (wheel.isFrontWheel) {
-          indices.push(index)
-        }
-        return indices
-      }, []),
-    }
+      return {
+        desc,
+        bodyId: desc.bodyId,
+        body: bodyState.body,
+        vehicle,
+        steerableWheelIndices: desc.wheels.reduce<number[]>((indices, wheel, index) => {
+          if (wheel.isFrontWheel) {
+            indices.push(index)
+          }
+          return indices
+        }, []),
+        speedGovernorScale: 1,
+        speedGovernorBrakeAssist: 0,
+        speedGovernorOverHardCap: false,
+        speedGovernorSmoothedForwardSpeedAbs: 0,
+      }
   }
 
   /**
@@ -379,10 +395,71 @@ export class CannonPhysicsWorld {
       const handbrakeInput = clamp(input?.handbrake ?? 0, 0, 1)
       // 实际转向角度
       const steeringValue = steeringInput * VEHICLE_STEER_ANGLE
+      const dt = Math.max(1 / 240, Math.min(0.25, this.worldSettings.fixedTimeStepMs / 1000))
+      const forwardWorld = getForwardVector(state.body, state.desc.indexForwardAxis)
+      const forwardSpeed = state.body.velocity.dot(forwardWorld)
+      const forwardSpeedAbs = Math.abs(forwardSpeed)
+      const speedSmoothAlpha = 1 - Math.exp(-6 * dt)
+      state.speedGovernorSmoothedForwardSpeedAbs += (forwardSpeedAbs - state.speedGovernorSmoothedForwardSpeedAbs) * speedSmoothAlpha
+      const speedForGovernor = Math.max(forwardSpeedAbs, state.speedGovernorSmoothedForwardSpeedAbs)
+      const throttleSign = Math.sign(throttleInput)
+      const brakeBlend = smoothstep(0.08, VEHICLE_BRAKE_RELEASE_SPEED, speedForGovernor)
+
+      let engineForce = throttleInput * VEHICLE_ENGINE_FORCE
+      let brakeAssist = state.speedGovernorBrakeAssist
+      const maxSpeedMps = resolveVehicleMaxSpeedMps(state.desc.maxSpeedKmh)
+      if (Math.abs(throttleInput) > 0.05 && Number.isFinite(maxSpeedMps)) {
+        const hardCap = Math.max(0.1, maxSpeedMps)
+        const softCap = Math.max(0.1, hardCap * VEHICLE_SPEED_GOVERNOR_SOFT_RATIO)
+        const acceleratingSameDirection = throttleSign !== 0 && Math.sign(forwardSpeed) === throttleSign
+        if (acceleratingSameDirection) {
+          const range = Math.max(0.1, hardCap - softCap)
+          const excess = Math.max(0, speedForGovernor - softCap)
+          const t = Math.min(1, excess / range)
+          const smooth = t * t * (3 - 2 * t)
+          const scaleTarget = Math.max(0, 1 - smooth)
+          const scaleAlpha = 1 - Math.exp(-14 * dt)
+          state.speedGovernorScale += (scaleTarget - state.speedGovernorScale) * scaleAlpha
+          engineForce *= state.speedGovernorScale
+
+          const hardCapEnter = hardCap + VEHICLE_SPEED_GOVERNOR_BRAKE_ENTER_OFFSET
+          const hardCapExit = hardCap + VEHICLE_SPEED_GOVERNOR_BRAKE_EXIT_OFFSET
+          if (!state.speedGovernorOverHardCap) {
+            if (speedForGovernor > hardCapEnter) {
+              state.speedGovernorOverHardCap = true
+            }
+          } else if (speedForGovernor < hardCapExit) {
+            state.speedGovernorOverHardCap = false
+          }
+
+          const over = state.speedGovernorOverHardCap
+            ? Math.max(0, speedForGovernor - (hardCap + VEHICLE_SPEED_GOVERNOR_BRAKE_DEADBAND))
+            : 0
+          const brakeRatio = Math.min(1, over / VEHICLE_SPEED_GOVERNOR_BRAKE_BAND)
+          const brakeTarget = brakeRatio * VEHICLE_BRAKE_FORCE * VEHICLE_SPEED_GOVERNOR_BRAKE_MAX_RATIO
+          const brakeAlpha = 1 - Math.exp(-4 * dt)
+          state.speedGovernorBrakeAssist += (brakeTarget - state.speedGovernorBrakeAssist) * brakeAlpha
+          brakeAssist = state.speedGovernorBrakeAssist
+        } else {
+          const relaxAlpha = 1 - Math.exp(-6 * dt)
+          state.speedGovernorScale += (1 - state.speedGovernorScale) * relaxAlpha
+          state.speedGovernorBrakeAssist += (0 - state.speedGovernorBrakeAssist) * relaxAlpha
+          state.speedGovernorOverHardCap = false
+          brakeAssist = state.speedGovernorBrakeAssist
+        }
+      } else {
+        const relaxAlpha = 1 - Math.exp(-6 * dt)
+        state.speedGovernorScale += (1 - state.speedGovernorScale) * relaxAlpha
+        state.speedGovernorBrakeAssist += (0 - state.speedGovernorBrakeAssist) * relaxAlpha
+        state.speedGovernorOverHardCap = false
+        brakeAssist = state.speedGovernorBrakeAssist
+      }
       // 实际发动机动力
-      const engineForce = throttleInput * VEHICLE_ENGINE_FORCE
       // 实际刹车力度，取刹车和手刹的最大值
-      const brakeForce = Math.max(brakeInput, handbrakeInput) * VEHICLE_BRAKE_FORCE
+      const brakeForce = Math.min(
+        VEHICLE_BRAKE_FORCE,
+        Math.max(0, Math.max(brakeInput, handbrakeInput) * VEHICLE_BRAKE_FORCE * brakeBlend + brakeAssist),
+      )
 
       // 遍历每个轮子，分别设置刹车、转向和动力
       for (let wheelIndex = 0; wheelIndex < state.desc.wheels.length; wheelIndex += 1) {
@@ -398,9 +475,37 @@ export class CannonPhysicsWorld {
 
       }
       // 唤醒车辆刚体，防止休眠导致物理效果不生效
-      state.body.wakeUp()
+      if (speedForGovernor > VEHICLE_WAKE_SPEED_THRESHOLD || Math.abs(throttleInput) > 0.001 || Math.abs(steeringInput) > 0.001) {
+        state.body.wakeUp()
+      }
     })
   }
+}
+
+function getForwardVector(body: CANNON.Body, axisIndex: 0 | 1 | 2): CANNON.Vec3 {
+  const axis = axisIndex === 1
+    ? new CANNON.Vec3(0, 1, 0)
+    : axisIndex === 2
+      ? new CANNON.Vec3(0, 0, 1)
+      : new CANNON.Vec3(1, 0, 0)
+  const worldForward = new CANNON.Vec3()
+  body.quaternion.vmult(axis, worldForward)
+  return worldForward
+}
+
+function resolveVehicleMaxSpeedMps(maxSpeedKmh: number | null | undefined): number {
+  if (typeof maxSpeedKmh !== 'number' || !Number.isFinite(maxSpeedKmh) || maxSpeedKmh <= 0) {
+    return 45 / 3.6
+  }
+  return maxSpeedKmh / 3.6
+}
+
+function smoothstep(edge0: number, edge1: number, x: number): number {
+  if (edge0 === edge1) {
+    return x < edge0 ? 0 : 1
+  }
+  const t = Math.min(1, Math.max(0, (x - edge0) / (edge1 - edge0)))
+  return t * t * (3 - 2 * t)
 }
 
 export function createCannonWorld(settings: PhysicsWorldSettings): CANNON.World {

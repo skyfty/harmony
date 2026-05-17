@@ -32,6 +32,7 @@ export interface VehicleComponentProps {
   maxSteerRateDegPerSec: number
   engineForceMax: number
   brakeForceMax: number
+  maxSpeedKmh: number
   // Derived value (auto-computed) representing the vehicle wheelbase in meters.
   wheelbaseMeters: number
   wheels: VehicleWheelProps[]
@@ -147,6 +148,10 @@ export const MAX_VEHICLE_ENGINE_FORCE_MAX = 2000
 export const DEFAULT_VEHICLE_BRAKE_FORCE_MAX = 16
 export const MIN_VEHICLE_BRAKE_FORCE_MAX = 0
 export const MAX_VEHICLE_BRAKE_FORCE_MAX = 1000
+
+export const DEFAULT_VEHICLE_MAX_SPEED_KMH = 45
+export const MIN_VEHICLE_MAX_SPEED_KMH = 0
+export const MAX_VEHICLE_MAX_SPEED_KMH = 300
 export const DEFAULT_RADIUS = 0.5
 export const DEFAULT_DIRECTION: Vector3Like = createVector(0, -1, 0)
 export const DEFAULT_AXLE: Vector3Like = createVector(0, 0, 1)
@@ -407,6 +412,12 @@ export function clampVehicleComponentProps(
       MIN_VEHICLE_BRAKE_FORCE_MAX,
       MAX_VEHICLE_BRAKE_FORCE_MAX,
     ),
+    maxSpeedKmh: clampNumberRange(
+      props?.maxSpeedKmh,
+      DEFAULT_VEHICLE_MAX_SPEED_KMH,
+      MIN_VEHICLE_MAX_SPEED_KMH,
+      MAX_VEHICLE_MAX_SPEED_KMH,
+    ),
     wheelbaseMeters: 0,
     wheels: clampWheelList(props?.wheels, wheelTemplate),
   }
@@ -424,6 +435,7 @@ export function cloneVehicleComponentProps(props: VehicleComponentProps): Vehicl
     maxSteerRateDegPerSec: props.maxSteerRateDegPerSec,
     engineForceMax: props.engineForceMax,
     brakeForceMax: props.brakeForceMax,
+    maxSpeedKmh: props.maxSpeedKmh,
     wheelbaseMeters: props.wheelbaseMeters,
     wheels: props.wheels.map((wheel) => ({
       id: wheel.id,
@@ -466,6 +478,21 @@ const vehicleComponentDefinition: ComponentDefinition<VehicleComponentProps> = {
         { kind: 'number', key: 'indexRightAxis', label: 'Right Axis', min: 0, max: 2, step: 1, precision: 0 },
         { kind: 'number', key: 'indexUpAxis', label: 'Up Axis', min: 0, max: 2, step: 1, precision: 0 },
         { kind: 'number', key: 'indexForwardAxis', label: 'Forward Axis', min: 0, max: 2, step: 1, precision: 0 },
+      ],
+    },
+    {
+      id: 'speed',
+      label: 'Speed',
+      fields: [
+        {
+          kind: 'number',
+          key: 'maxSpeedKmh',
+          label: 'Max Speed (km/h)',
+          min: MIN_VEHICLE_MAX_SPEED_KMH,
+          max: MAX_VEHICLE_MAX_SPEED_KMH,
+          step: 1,
+          precision: 0,
+        },
       ],
     },
   ],

@@ -969,6 +969,7 @@ export function buildPhysicsSceneAsset(document: SceneJsonExportDocument): Physi
         indexRightAxis: vehicleProps.indexRightAxis as 0 | 1 | 2,
         indexUpAxis: vehicleProps.indexUpAxis as 0 | 1 | 2,
         indexForwardAxis: vehicleProps.indexForwardAxis as 0 | 1 | 2,
+        maxSpeedKmh: vehicleProps.maxSpeedKmh,
         wheels,
       }
       asset.vehicles.push(vehicle)

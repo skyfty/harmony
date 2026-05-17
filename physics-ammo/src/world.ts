@@ -32,6 +32,10 @@ type VehicleState = {
   body: any
   vehicle: any
   steerableWheelIndices: number[]
+  speedGovernorScale: number
+  speedGovernorBrakeAssist: number
+  speedGovernorOverHardCap: boolean
+  speedGovernorSmoothedForwardSpeedAbs: number
   cleanup: Array<() => void>
 }
 const BT_DISABLE_DEACTIVATION = 4
@@ -45,6 +49,14 @@ const DEFAULT_WORLD_SETTINGS: PhysicsWorldSettings = {
 const VEHICLE_ENGINE_FORCE = 320
 const VEHICLE_BRAKE_FORCE = 42
 const VEHICLE_STEER_ANGLE = (26 * Math.PI) / 180
+const VEHICLE_SPEED_GOVERNOR_SOFT_RATIO = 0.92
+const VEHICLE_SPEED_GOVERNOR_BRAKE_ENTER_OFFSET = 0.45
+const VEHICLE_SPEED_GOVERNOR_BRAKE_EXIT_OFFSET = 0.2
+const VEHICLE_SPEED_GOVERNOR_BRAKE_DEADBAND = 0.35
+const VEHICLE_SPEED_GOVERNOR_BRAKE_BAND = 1.8
+const VEHICLE_SPEED_GOVERNOR_BRAKE_MAX_RATIO = 0.14
+const VEHICLE_BRAKE_RELEASE_SPEED = 0.45
+const VEHICLE_WAKE_SPEED_THRESHOLD = 0.2
 let lastAmmoWorldLoadSceneLogSignature = ''
 let lastAmmoWorldLoadSceneLogAt = 0
 
@@ -452,6 +464,10 @@ export class AmmoPhysicsWorld {
       body,
       vehicle,
       steerableWheelIndices,
+      speedGovernorScale: 1,
+      speedGovernorBrakeAssist: 0,
+      speedGovernorOverHardCap: false,
+      speedGovernorSmoothedForwardSpeedAbs: 0,
       cleanup: [
         () => ammo.destroy(tuning),
         () => ammo.destroy(raycaster),
@@ -472,8 +488,75 @@ export class AmmoPhysicsWorld {
       const brakeInput = clamp(input?.brake ?? 0, 0, 1)
       const handbrakeInput = clamp(input?.handbrake ?? 0, 0, 1)
       const steeringValue = steeringInput * VEHICLE_STEER_ANGLE
-      const engineForce = throttleInput * VEHICLE_ENGINE_FORCE
-      const brakeForce = Math.max(brakeInput, handbrakeInput) * VEHICLE_BRAKE_FORCE
+      const dt = Math.max(1 / 240, Math.min(0.25, this.worldSettings.fixedTimeStepMs / 1000))
+      const linearVelocity = state.body.getLinearVelocity?.()
+      const forwardVector = rotateVectorByQuaternion(axisVectorForIndex(state.desc.indexForwardAxis), state.body.quaternion)
+      const forwardSpeed = linearVelocity
+        ? linearVelocity.x() * forwardVector[0]
+          + linearVelocity.y() * forwardVector[1]
+          + linearVelocity.z() * forwardVector[2]
+        : 0
+      const forwardSpeedAbs = Math.abs(forwardSpeed)
+      const speedSmoothAlpha = 1 - Math.exp(-6 * dt)
+      state.speedGovernorSmoothedForwardSpeedAbs += (forwardSpeedAbs - state.speedGovernorSmoothedForwardSpeedAbs) * speedSmoothAlpha
+      const speedForGovernor = Math.max(forwardSpeedAbs, state.speedGovernorSmoothedForwardSpeedAbs)
+      const throttleSign = Math.sign(throttleInput)
+      const brakeBlend = smoothstep(0.08, VEHICLE_BRAKE_RELEASE_SPEED, speedForGovernor)
+
+      let engineForce = throttleInput * VEHICLE_ENGINE_FORCE
+      let brakeAssist = state.speedGovernorBrakeAssist
+      const maxSpeedMps = resolveVehicleMaxSpeedMps(state.desc.maxSpeedKmh)
+      if (Math.abs(throttleInput) > 0.05 && Number.isFinite(maxSpeedMps)) {
+        const hardCap = Math.max(0.1, maxSpeedMps)
+        const softCap = Math.max(0.1, hardCap * VEHICLE_SPEED_GOVERNOR_SOFT_RATIO)
+        const acceleratingSameDirection = throttleSign !== 0 && Math.sign(forwardSpeed) === throttleSign
+        if (acceleratingSameDirection) {
+          const range = Math.max(0.1, hardCap - softCap)
+          const excess = Math.max(0, speedForGovernor - softCap)
+          const t = Math.min(1, excess / range)
+          const smooth = t * t * (3 - 2 * t)
+          const scaleTarget = Math.max(0, 1 - smooth)
+          const scaleAlpha = 1 - Math.exp(-14 * dt)
+          state.speedGovernorScale += (scaleTarget - state.speedGovernorScale) * scaleAlpha
+          engineForce *= state.speedGovernorScale
+
+          const hardCapEnter = hardCap + VEHICLE_SPEED_GOVERNOR_BRAKE_ENTER_OFFSET
+          const hardCapExit = hardCap + VEHICLE_SPEED_GOVERNOR_BRAKE_EXIT_OFFSET
+          if (!state.speedGovernorOverHardCap) {
+            if (speedForGovernor > hardCapEnter) {
+              state.speedGovernorOverHardCap = true
+            }
+          } else if (speedForGovernor < hardCapExit) {
+            state.speedGovernorOverHardCap = false
+          }
+
+          const over = state.speedGovernorOverHardCap
+            ? Math.max(0, speedForGovernor - (hardCap + VEHICLE_SPEED_GOVERNOR_BRAKE_DEADBAND))
+            : 0
+          const brakeRatio = Math.min(1, over / VEHICLE_SPEED_GOVERNOR_BRAKE_BAND)
+          const brakeTarget = brakeRatio * VEHICLE_BRAKE_FORCE * VEHICLE_SPEED_GOVERNOR_BRAKE_MAX_RATIO
+          const brakeAlpha = 1 - Math.exp(-4 * dt)
+          state.speedGovernorBrakeAssist += (brakeTarget - state.speedGovernorBrakeAssist) * brakeAlpha
+          brakeAssist = state.speedGovernorBrakeAssist
+        } else {
+          const relaxAlpha = 1 - Math.exp(-6 * dt)
+          state.speedGovernorScale += (1 - state.speedGovernorScale) * relaxAlpha
+          state.speedGovernorBrakeAssist += (0 - state.speedGovernorBrakeAssist) * relaxAlpha
+          state.speedGovernorOverHardCap = false
+          brakeAssist = state.speedGovernorBrakeAssist
+        }
+      } else {
+        const relaxAlpha = 1 - Math.exp(-6 * dt)
+        state.speedGovernorScale += (1 - state.speedGovernorScale) * relaxAlpha
+        state.speedGovernorBrakeAssist += (0 - state.speedGovernorBrakeAssist) * relaxAlpha
+        state.speedGovernorOverHardCap = false
+        brakeAssist = state.speedGovernorBrakeAssist
+      }
+
+      const brakeForce = Math.min(
+        VEHICLE_BRAKE_FORCE,
+        Math.max(0, Math.max(brakeInput, handbrakeInput) * VEHICLE_BRAKE_FORCE * brakeBlend + brakeAssist),
+      )
 
       const wheelCount = state.desc.wheels.length
       for (let wheelIndex = 0; wheelIndex < wheelCount; wheelIndex += 1) {
@@ -482,7 +565,7 @@ export class AmmoPhysicsWorld {
         state.vehicle.setSteeringValue?.(steerable ? steeringValue : 0, wheelIndex)
         state.vehicle.applyEngineForce?.(steerable ? engineForce : 0, wheelIndex)
       }
-      if (state.body) {
+      if (state.body && (speedForGovernor > VEHICLE_WAKE_SPEED_THRESHOLD || Math.abs(throttleInput) > 0.001 || Math.abs(steeringInput) > 0.001)) {
         state.body.activate?.(true)
       }
     })
@@ -563,4 +646,53 @@ function normalizeQuaternion(quaternion: PhysicsQuaternion): PhysicsQuaternion {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))
+}
+
+function resolveVehicleMaxSpeedMps(maxSpeedKmh: number | null | undefined): number {
+  if (typeof maxSpeedKmh !== 'number' || !Number.isFinite(maxSpeedKmh) || maxSpeedKmh <= 0) {
+    return 45 / 3.6
+  }
+  return maxSpeedKmh / 3.6
+}
+
+function smoothstep(edge0: number, edge1: number, x: number): number {
+  if (edge0 === edge1) {
+    return x < edge0 ? 0 : 1
+  }
+  const t = Math.min(1, Math.max(0, (x - edge0) / (edge1 - edge0)))
+  return t * t * (3 - 2 * t)
+}
+
+function axisVectorForIndex(axisIndex: 0 | 1 | 2): PhysicsVector3 {
+  if (axisIndex === 1) {
+    return [0, 1, 0]
+  }
+  if (axisIndex === 2) {
+    return [0, 0, 1]
+  }
+  return [1, 0, 0]
+}
+
+function rotateVectorByQuaternion(
+  vector: PhysicsVector3,
+  quaternion: PhysicsQuaternion | { x?: number; y?: number; z?: number; w?: number } | null | undefined,
+): PhysicsVector3 {
+  const qx = Array.isArray(quaternion) ? quaternion[0] : quaternion?.x ?? 0
+  const qy = Array.isArray(quaternion) ? quaternion[1] : quaternion?.y ?? 0
+  const qz = Array.isArray(quaternion) ? quaternion[2] : quaternion?.z ?? 0
+  const qw = Array.isArray(quaternion) ? quaternion[3] : quaternion?.w ?? 1
+  const vx = vector[0]
+  const vy = vector[1]
+  const vz = vector[2]
+
+  const ix = qw * vx + qy * vz - qz * vy
+  const iy = qw * vy + qz * vx - qx * vz
+  const iz = qw * vz + qx * vy - qy * vx
+  const iw = -qx * vx - qy * vy - qz * vz
+
+  return [
+    ix * qw + iw * -qx + iy * -qz - iz * -qy,
+    iy * qw + iw * -qy + iz * -qx - ix * -qz,
+    iz * qw + iw * -qz + ix * -qy - iy * -qx,
+  ]
 }
