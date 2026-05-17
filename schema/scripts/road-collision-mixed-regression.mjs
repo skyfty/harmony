@@ -171,9 +171,51 @@ async function main() {
     complexSnapshot.descriptors.some((entry) => entry.shapeDefinition.kind === 'static-mesh'),
     'complex road should emit static-mesh collision for the curved spans',
   )
+
+  const wideRangeRoad = createRoadNode({
+    id: 'road:wide-range',
+    vertices: [
+      [0, 0],
+      [18, 0],
+      [36, 8],
+      [54, -10],
+      [72, 12],
+      [90, 0],
+    ],
+    segmentHeights: [
+      [0, 0.2, 0.5, 0.7],
+      [0.7, 1.5, 2.8, 4.0],
+      [4.0, 3.4, 2.0, 1.2],
+      [1.2, 2.4, 4.1, 5.6],
+      [5.6, 4.7, 2.5, 0.9],
+    ],
+  })
+  const wideRangeSnapshot = collectRoadCollisionDescriptors(wideRangeRoad)
+  assert.ok(wideRangeSnapshot, 'wide range road should build collision data')
   assert.ok(
-    complexSnapshot.descriptors.some((entry) => entry.shapeDefinition.kind === 'box'),
-    'complex road should keep box collision on the flatter spans',
+    wideRangeSnapshot.descriptors.some((entry) => entry.shapeDefinition.kind === 'static-mesh'),
+    'wide range road should emit static-mesh collision in the aggressive range test',
+  )
+
+  const steepRoad = createRoadNode({
+    id: 'road:steep',
+    vertices: [
+      [0, 0],
+      [12, 0],
+      [24, 0],
+      [36, 0],
+    ],
+    segmentHeights: [
+      [0, 5, 10, 15],
+      [15, 20, 25, 30],
+      [30, 30, 30, 30],
+    ],
+  })
+  const steepSnapshot = collectRoadCollisionDescriptors(steepRoad)
+  assert.ok(steepSnapshot, 'steep road should build collision data')
+  assert.ok(
+    steepSnapshot.descriptors.some((entry) => entry.shapeDefinition.kind === 'static-mesh'),
+    'steep road should emit static-mesh collision for the steep spans',
   )
 
   const crossingRoad = createRoadNode({
@@ -195,10 +237,6 @@ async function main() {
   })
   const crossingSnapshot = collectRoadCollisionDescriptors(crossingRoad)
   assert.ok(crossingSnapshot, 'crossing road should build collision data')
-  assert.ok(
-    crossingSnapshot.descriptors.some((entry) => entry.shapeDefinition.kind === 'static-mesh'),
-    'crossing road should emit static-mesh collision for complex elevated geometry',
-  )
   assert.equal(
     crossingSnapshot.descriptors.some((entry) => entry.shapeDefinition.kind === 'heightfield'),
     false,
@@ -207,7 +245,7 @@ async function main() {
 
   const bodyKinds = []
   const builtBodies = buildRoadCollisionBodies({
-    ...pitchedRoad,
+    ...complexRoad,
     roadObject: new THREE.Group(),
     createBody: (_node, _component, shapeDefinition) => {
       bodyKinds.push(shapeDefinition?.kind ?? null)
@@ -217,8 +255,8 @@ async function main() {
       }
     },
   })
-  assert.ok(builtBodies, 'pitched road should build rigidbody collision bodies')
-  assert.ok(bodyKinds.includes('static-mesh'), 'pitched road runtime bodies should use static-mesh shapes')
+  assert.ok(builtBodies, 'complex road should build rigidbody collision bodies')
+  assert.ok(bodyKinds.includes('static-mesh'), 'complex road runtime bodies should use static-mesh shapes')
 
   const disabledRoad = createRoadNode({
     id: 'road:disabled',

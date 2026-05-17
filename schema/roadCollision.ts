@@ -330,10 +330,11 @@ export function collectRoadCollisionDescriptors(params: RoadCollisionBuildParams
 				layoutHash = (layoutHash * 31 + span.endIndex) >>> 0
 				const useStaticMesh = shouldUseRoadStaticMeshForSpan({
 					geometryDetail: spanGeometryDetail,
-					heightDetail: computeRoadHeightDetailScore(spanHeights, spanLength),
-					heightRange: computeRoadHeightRange(spanHeights),
 					surfaceFitError: spanSurfaceFitError,
+					pitch: spanFit.pitch,
+					slope: spanMetrics.slope,
 					pitchDelta: spanMetrics.pitchDelta,
+					spanLength,
 					collisionSubdivisionFactor,
 				})
 				if (useStaticMesh) {
@@ -898,24 +899,32 @@ function subdivideRoadCollisionSpans(
 
 function shouldUseRoadStaticMeshForSpan(params: {
 	geometryDetail: number
-	heightDetail: number
-	heightRange: number
 	surfaceFitError: number
+	pitch: number
+	slope: number
 	pitchDelta: number
+	spanLength: number
 	collisionSubdivisionFactor: number
 }): boolean {
 	const factor = clampNumber(params.collisionSubdivisionFactor, 0.25, 8, 1.0)
 	const scale = Math.max(0, Math.min(1, (factor - 0.25) / 7.75))
-	const geometryThreshold = lerpNumber(0.16, 0.08, scale)
-	const heightThreshold = lerpNumber(0.08, 0.03, scale)
-	const rangeThreshold = lerpNumber(0.10, 0.05, scale)
+	const geometryThreshold = lerpNumber(0.2, 0.1, scale)
 	const fitErrorThreshold = lerpNumber(0.03, 0.015, scale)
-	const pitchThreshold = lerpNumber(0.07, 0.035, scale)
+	const pitchDeltaThreshold = lerpNumber(0.08, 0.04, scale)
+	const steepPitchThreshold = lerpNumber(0.08, 0.05, scale)
+	const minCurvedSpanLength = lerpNumber(2, 1, scale)
+	if (params.surfaceFitError > fitErrorThreshold) {
+		return true
+	}
+	if (Math.abs(params.pitch) > steepPitchThreshold) {
+		return true
+	}
+	if (params.slope > steepPitchThreshold) {
+		return true
+	}
 	return params.geometryDetail > geometryThreshold
-		|| params.heightDetail > heightThreshold
-		|| params.heightRange > rangeThreshold
-		|| params.surfaceFitError > fitErrorThreshold
-		|| params.pitchDelta > pitchThreshold
+		&& params.pitchDelta > pitchDeltaThreshold
+		&& params.spanLength >= minCurvedSpanLength
 }
 
 function buildStaticMeshShapeFromGeometry(geometry: THREE.BufferGeometry | null | undefined): Extract<RigidbodyPhysicsShape, { kind: 'static-mesh' }> | null {
