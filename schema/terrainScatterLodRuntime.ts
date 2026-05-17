@@ -49,10 +49,26 @@ export type TerrainScatterLodRuntime = {
     document: SceneJsonExportDocument,
     resourceCache: ResourceCache,
     resolveGroundMeshObject: (nodeId: string) => THREE.Mesh | null,
+    options?: TerrainScatterLodRuntimeSyncOptions,
   ) => Promise<void>
   update: (camera: THREE.Camera, resolveGroundMeshObject: (nodeId: string) => THREE.Mesh | null) => void
   dispose: () => void
   getInstanceStats: () => { total: number; visible: number }
+}
+
+export type TerrainScatterLodRuntimeSyncPhase = 'collecting' | 'building' | 'finalizing'
+
+export type TerrainScatterLodRuntimeSyncProgress = {
+  phase: TerrainScatterLodRuntimeSyncPhase
+  percent: number
+  detail: string
+  currentIndex?: number
+  currentTotal?: number
+  currentLabel?: string
+}
+
+export type TerrainScatterLodRuntimeSyncOptions = {
+  onProgress?: (progress: TerrainScatterLodRuntimeSyncProgress) => void
 }
 
 export type TerrainScatterLodRuntimeOptions = {
@@ -79,6 +95,13 @@ type GroundScatterEntry = {
   nodeId: string
   definition: GroundDynamicMesh
   snapshot: TerrainScatterStoreSnapshot
+}
+
+type TerrainScatterSyncWorkload = {
+  entryCount: number
+  layerCount: number
+  instanceCount: number
+  totalWork: number
 }
 
 type ScatterRuntimeInstance = {
@@ -125,6 +148,32 @@ function resolveScatterFaceCameraAxis(axis: LodFaceCameraForwardAxis): THREE.Vec
     return scatterFaceCameraAxisYHelper
   }
   return scatterFaceCameraAxisZHelper
+}
+
+function countTerrainScatterSyncWorkload(entries: GroundScatterEntry[]): TerrainScatterSyncWorkload {
+  let layerCount = 0
+  let instanceCount = 0
+  for (const entry of entries) {
+    const layers = Array.isArray(entry.snapshot.layers) ? entry.snapshot.layers : []
+    layerCount += layers.length
+    for (const layer of layers) {
+      instanceCount += Array.isArray(layer.instances) ? layer.instances.length : 0
+    }
+  }
+  const entryCount = entries.length
+  const totalWork = Math.max(1, entryCount + layerCount + instanceCount)
+  return { entryCount, layerCount, instanceCount, totalWork }
+}
+
+function resolveTerrainScatterSyncPercent(phase: TerrainScatterLodRuntimeSyncPhase, completedWork: number, totalWork: number): number {
+  const normalized = Math.max(0, Math.min(totalWork, completedWork)) / Math.max(1, totalWork)
+  if (phase === 'collecting') {
+    return normalized * 20
+  }
+  if (phase === 'building') {
+    return 20 + normalized * 65
+  }
+  return 85 + normalized * 15
 }
 
 function buildScatterNodeId(layerId: string | null | undefined, instanceId: string): string {

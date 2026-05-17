@@ -210,6 +210,7 @@
         :loading="loading"
         :scene-switch-overlay-visible="sceneSwitchOverlayVisible"
         :scene-switch-flash-active="sceneSwitchFlashActive"
+        :scene-init="sceneInit"
         :scene-download="sceneDownload"
         :resource-preload="resourcePreload"
       />
@@ -399,6 +400,10 @@ const emit = defineEmits<{
     bytesLabel: string;
     loaded: number;
     total: number;
+    percent: number;
+    phase: string;
+    stageLabel: string;
+    detail: string;
   }];
   punch: [payload: {
     eventName: 'punch';
@@ -882,6 +887,101 @@ const sceneDownload = reactive({
   indeterminate: false,
 });
 
+type SceneInitStage =
+  | 'idle'
+  | 'preparing'
+  | 'building'
+  | 'mounting'
+  | 'syncingPreviewIndex'
+  | 'syncingPhysics'
+  | 'syncingScatter'
+  | 'finalizing'
+  | 'ready'
+  | 'cancelled'
+  | 'error';
+
+const sceneInitStageWeights: Record<Exclude<SceneInitStage, 'idle' | 'ready' | 'cancelled' | 'error'>, { start: number; span: number }> = {
+  preparing: { start: 0, span: 6 },
+  building: { start: 6, span: 42 },
+  mounting: { start: 48, span: 10 },
+  syncingPreviewIndex: { start: 58, span: 12 },
+  syncingPhysics: { start: 70, span: 13 },
+  syncingScatter: { start: 83, span: 12 },
+  finalizing: { start: 95, span: 5 },
+};
+
+const sceneInit = reactive({
+  active: false,
+  stage: 'idle' as SceneInitStage,
+  label: '',
+  detail: '',
+  percent: 0,
+  stagePercent: 0,
+  currentIndex: 0,
+  currentTotal: 0,
+  currentLabel: '',
+  indeterminate: false,
+});
+
+function resolveSceneInitPercent(stage: SceneInitStage, stagePercent = 0): number {
+  if (stage === 'ready') {
+    return 100;
+  }
+  if (stage === 'cancelled' || stage === 'error' || stage === 'idle') {
+    return clampPercent(sceneInit.percent);
+  }
+  const weight = sceneInitStageWeights[stage];
+  if (!weight) {
+    return clampPercent(stagePercent);
+  }
+  const normalizedStage = Math.max(0, Math.min(100, stagePercent));
+  return clampPercent(weight.start + ((weight.span * normalizedStage) / 100));
+}
+
+function setSceneInitState(next: {
+  stage: SceneInitStage;
+  label?: string;
+  detail?: string;
+  stagePercent?: number;
+  currentIndex?: number;
+  currentTotal?: number;
+  currentLabel?: string;
+  indeterminate?: boolean;
+  active?: boolean;
+}): void {
+  sceneInit.stage = next.stage;
+  sceneInit.active = next.active ?? (next.stage !== 'ready' && next.stage !== 'cancelled' && next.stage !== 'error');
+  sceneInit.label = typeof next.label === 'string' ? next.label : sceneInit.label;
+  sceneInit.detail = typeof next.detail === 'string' ? next.detail.trim() : sceneInit.detail;
+  sceneInit.stagePercent = typeof next.stagePercent === 'number' && Number.isFinite(next.stagePercent) ? Math.max(0, Math.min(100, next.stagePercent)) : sceneInit.stagePercent;
+  sceneInit.percent = resolveSceneInitPercent(next.stage, sceneInit.stagePercent);
+  if (typeof next.currentIndex === 'number' && Number.isFinite(next.currentIndex)) {
+    sceneInit.currentIndex = Math.max(0, Math.floor(next.currentIndex));
+  }
+  if (typeof next.currentTotal === 'number' && Number.isFinite(next.currentTotal)) {
+    sceneInit.currentTotal = Math.max(0, Math.floor(next.currentTotal));
+  }
+  if (typeof next.currentLabel === 'string') {
+    sceneInit.currentLabel = next.currentLabel.trim();
+  }
+  if (typeof next.indeterminate === 'boolean') {
+    sceneInit.indeterminate = next.indeterminate;
+  }
+}
+
+function clearSceneInitState(): void {
+  sceneInit.active = false;
+  sceneInit.stage = 'idle';
+  sceneInit.label = '';
+  sceneInit.detail = '';
+  sceneInit.percent = 0;
+  sceneInit.stagePercent = 0;
+  sceneInit.currentIndex = 0;
+  sceneInit.currentTotal = 0;
+  sceneInit.currentLabel = '';
+  sceneInit.indeterminate = false;
+}
+
 const resourcePreloadPercent = computed(() => {
   if (resourcePreload.totalBytes > 0) {
     const ratio = resourcePreload.totalBytes > 0
@@ -1267,6 +1367,9 @@ function endSceneSwitchTransition(token: number): void {
 }
 
 const sceneLoadPercent = computed(() => {
+  if (sceneInit.active) {
+    return sceneInit.percent;
+  }
   if (sceneDownload.active) {
     if (sceneDownload.phase === 'download' && sceneDownload.total > 0) {
       const ratio = Math.min(1, Math.max(0, sceneDownload.loaded / sceneDownload.total));
@@ -1292,6 +1395,14 @@ const sceneLoadPercent = computed(() => {
 });
 
 const sceneLoadBytesLabel = computed(() => {
+  if (sceneInit.active) {
+    const countLabel = sceneInit.currentTotal > 0 ? `${Math.max(0, sceneInit.currentIndex + 1)} / ${sceneInit.currentTotal}` : '';
+    const detail = sceneInit.detail || sceneInit.currentLabel;
+    if (countLabel && detail) {
+      return `${countLabel} | ${detail}`;
+    }
+    return countLabel || detail;
+  }
   if (sceneDownload.active && sceneDownload.phase === 'download' && sceneDownload.total > 0) {
     return `${formatByteSize(sceneDownload.loaded)} / ${formatByteSize(sceneDownload.total)}`;
   }
@@ -5803,13 +5914,25 @@ function releaseTerrainScatterInstances(): void {
 async function syncTerrainScatterInstances(
   document: SceneJsonExportDocument,
   resourceCache: ResourceCache | null,
+  onProgress?: SceneSubsystemProgressReporter,
 ): Promise<void> {
   terrainScatterRuntime.dispose();
   markTerrainScatterUpdateDirty();
   if (!resourceCache) {
     return;
   }
-  await terrainScatterRuntime.sync(document, resourceCache, resolveGroundMeshObject);
+  await terrainScatterRuntime.sync(document, resourceCache, resolveGroundMeshObject, {
+    onProgress: (progress) => {
+      onProgress?.({
+        phase: 'syncingScatter',
+        percent: progress.total > 0 ? (progress.loaded / progress.total) * 100 : 0,
+        detail: progress.detail || progress.label,
+        currentIndex: progress.loaded,
+        currentTotal: progress.total,
+        currentLabel: progress.label,
+      });
+    },
+  });
   markTerrainScatterUpdateDirty();
 }
 
@@ -6526,7 +6649,10 @@ function updateSceneryPhysicsBridgeIndex(asset: PhysicsSceneAsset): void {
   });
 }
 
-async function loadSceneryPhysicsBridgeScene(document: SceneJsonExportDocument | null): Promise<void> {
+async function loadSceneryPhysicsBridgeScene(
+  document: SceneJsonExportDocument | null,
+  onProgress?: SceneSubsystemProgressReporter,
+): Promise<void> {
   if (!document) {
     currentPhysicsBridgeGroundCollisionSignature = '';
     sceneryGroundCollisionReferenceInitialized = false;
@@ -6555,7 +6681,18 @@ async function loadSceneryPhysicsBridgeScene(document: SceneJsonExportDocument |
     await reloadSceneryPhysicsBridgeForPreference(resolveDocumentEnvironment(document));
     currentPhysicsBridgeGroundCollisionSignature = resolveSceneryGroundCollisionSignature(document);
     const requestId = ++physicsBridgeSceneRequestId;
-    const asset = buildPhysicsSceneAsset(document);
+    const asset = await buildPhysicsSceneAsset(document, {
+      onProgress: (progress) => {
+        onProgress?.({
+          phase: 'syncingPhysics',
+          percent: progress.total > 0 ? (progress.loaded / progress.total) * 100 : 0,
+          detail: progress.detail || progress.label,
+          currentIndex: progress.loaded,
+          currentTotal: progress.total,
+          currentLabel: progress.label,
+        });
+      },
+    });
     if (asset.shapes.length === 0 && asset.bodies.length === 0 && asset.vehicles.length === 0) {
       await disposeSceneryPhysicsBridgeScene();
       return;
@@ -7353,7 +7490,19 @@ function syncVehicleInstancesForDocument(document: SceneJsonExportDocument | nul
   });
 }
 
-async function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null): Promise<void> {
+type SceneSubsystemProgressReporter = (progress: {
+  phase: SceneInitStage;
+  percent: number;
+  detail: string;
+  currentIndex?: number;
+  currentTotal?: number;
+  currentLabel?: string;
+}) => void;
+
+async function syncPhysicsBodiesForDocument(
+  document: SceneJsonExportDocument | null,
+  onProgress?: SceneSubsystemProgressReporter,
+): Promise<void> {
   if (!document) {
     resetPhysicsWorld();
     syncVehicleInstancesForDocument(null);
@@ -7361,6 +7510,14 @@ async function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | 
     return;
   }
   if (!physicsEnvironmentEnabled.value) {
+    onProgress?.({
+      phase: 'syncingPhysics',
+      percent: 100,
+      detail: '物理系统已禁用，跳过同步',
+      currentIndex: 1,
+      currentTotal: 1,
+      currentLabel: 'disabled',
+    });
     await disposeSceneryPhysicsBridgeScene();
     clearLegacyPhysicsWorld();
     syncVehicleInstancesForDocument(document);
@@ -7368,16 +7525,48 @@ async function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | 
     return;
   }
   if (!resolveDocumentPhysicsRelevance(document)) {
+    onProgress?.({
+      phase: 'syncingPhysics',
+      percent: 100,
+      detail: '当前场景没有需要同步的物理对象',
+      currentIndex: 1,
+      currentTotal: 1,
+      currentLabel: 'skipped',
+    });
     await disposeSceneryPhysicsBridgeScene();
     clearLegacyPhysicsWorld();
     syncVehicleInstancesForDocument(document);
     syncAirWallsForDocument(document);
     return;
   }
-  await loadSceneryPhysicsBridgeScene(document);
+  onProgress?.({
+    phase: 'syncingPhysics',
+    percent: 10,
+    detail: '正在准备物理桥接...',
+    currentIndex: 0,
+    currentTotal: 3,
+    currentLabel: 'prepareSceneryPhysicsBridgeForDocument',
+  });
+  await loadSceneryPhysicsBridgeScene(document, onProgress);
+  onProgress?.({
+    phase: 'syncingPhysics',
+    percent: 80,
+    detail: '正在同步车辆与空气墙...',
+    currentIndex: 2,
+    currentTotal: 3,
+    currentLabel: 'vehicleAndAirWallSync',
+  });
   clearLegacyPhysicsWorld();
   syncVehicleInstancesForDocument(document);
   syncAirWallsForDocument(document);
+  onProgress?.({
+    phase: 'syncingPhysics',
+    percent: 100,
+    detail: '物理系统同步完成',
+    currentIndex: 3,
+    currentTotal: 3,
+    currentLabel: 'completed',
+  });
 }
 
 function stepPhysicsWorld(delta: number): number {
@@ -11886,6 +12075,7 @@ async function switchToProjectScene(sceneId: string): Promise<void> {
       return;
     }
     if (entry.kind === 'external') {
+      console.log("dddddddddddddddddddd")
       const document = await requestSceneDocument(entry.sceneJsonUrl);
       if (token !== projectSceneSwitchToken) {
         return;
@@ -12229,6 +12419,7 @@ function parseScenePackageToProjectData(pkg: ScenePackageUnzipped, compiledGroun
   }
 
 async function loadProjectFromScenePackageBytes(buffer: ArrayBuffer, compiledGroundBuildKey: string): Promise<void> {
+console.log("lskjfl")
   sceneDownload.active = true;
   setSceneDownloadState({
     phase: 'unzip',
@@ -12421,6 +12612,7 @@ function handlePreviewPayload(payload: ScenePreviewPayload | null) {
   if (!payload) {
     teardownRenderer();
     resetRemovedSkyState();
+    clearSceneInitState();
     warnings.value = [];
     return;
   }
@@ -12452,7 +12644,6 @@ async function startRenderIfReady() {
   loading.value = true;
   error.value = null;
   warnings.value = [];
-
   initializeToken += 1;
   const token = initializeToken;
   beginSceneSwitchTransition(token);
@@ -12505,10 +12696,21 @@ async function startRenderIfReady() {
     console.error(initializationError);
     if (token === initializeToken) {
       error.value = '初始化渲染器失败';
+      setSceneInitState({
+        stage: 'error',
+        label: '初始化失败',
+        detail: '渲染器初始化过程中发生错误',
+        stagePercent: sceneInit.percent,
+        currentIndex: sceneInit.currentIndex,
+        currentTotal: sceneInit.currentTotal,
+        currentLabel: sceneInit.currentLabel,
+        active: false,
+      });
     }
   } finally {
     if (token === initializeToken) {
       loading.value = false;
+      clearSceneInitState();
     }
     initializing = false;
     endSceneSwitchTransition(token);
@@ -12634,6 +12836,7 @@ function teardownRenderer() {
   renderScope?.stop();
   renderScope = null;
   teardownWheelControls();
+  clearSceneInitState();
   if (!renderContext) {
     return;
   }
@@ -12865,6 +13068,16 @@ async function buildSceneGraphWithProgress(
   let resourceCache: ResourceCache | null = null;
   try {
     lazyLoadMeshesEnabled = payload.document.lazyLoadMeshes !== false;
+    setSceneInitState({
+      stage: 'building',
+      label: '姝ｅ湪鏋勫缓鍦烘櫙鍥炬牳',
+      detail: '姝ｅ湪鍑嗗璧勬簮鍜屽浘褰㈡爧...',
+      stagePercent: 0,
+      currentIndex: 0,
+      currentTotal: 0,
+      currentLabel: '',
+      active: true,
+    });
     const buildOptions = createSceneGraphBuildOptions(payload, (info) => {
       resourcePreload.total = info.total;
       resourcePreload.loaded = info.loaded;
@@ -12878,6 +13091,20 @@ async function buildSceneGraphWithProgress(
 
       const fallbackLabel = info.assetId ? `加载 ${info.assetId}` : '正在加载资源';
       resourcePreload.label = info.message || fallbackLabel;
+      setSceneInitState({
+        stage: 'building',
+        label: '正在构建场景图',
+        detail: resourcePreload.label,
+        stagePercent: info.total > 0
+          ? (info.loaded / info.total) * 100
+          : resourcePreload.totalBytes > 0
+            ? (resourcePreload.loadedBytes / Math.max(resourcePreload.totalBytes, 1)) * 100
+            : 0,
+        currentIndex: info.loaded,
+        currentTotal: info.total,
+        currentLabel: resourcePreload.label,
+        active: true,
+      });
 
       const stillLoadingByCount = info.total > 0 && info.loaded < info.total;
       const stillLoadingByBytes =
@@ -12969,6 +13196,16 @@ async function warmRuntimePrefabAssetsBeforeSceneEntry(
   resourcePreload.totalBytes = 0;
   resourcePreload.loadedBytes = 0;
   resourcePreload.label = '正在准备运行时 prefab 资源...';
+  setSceneInitState({
+    stage: 'preparing',
+    label: '正在预热运行时 prefab 资源',
+    detail: resourcePreload.label,
+    stagePercent: 0,
+    currentIndex: 0,
+    currentTotal: assetIds.length,
+    currentLabel: resourcePreload.label,
+    active: true,
+  });
 
   for (let index = 0; index < assetIds.length; index += 1) {
     const assetId = assetIds[index];
@@ -12978,6 +13215,16 @@ async function warmRuntimePrefabAssetsBeforeSceneEntry(
       console.warn('[SceneViewer] Failed to prewarm runtime prefab asset', assetId, error);
     } finally {
       resourcePreload.loaded = index + 1;
+      setSceneInitState({
+        stage: 'preparing',
+        label: '正在预热运行时 prefab 资源',
+        detail: resourcePreload.label,
+        stagePercent: ((index + 1) / Math.max(assetIds.length, 1)) * 100,
+        currentIndex: index + 1,
+        currentTotal: assetIds.length,
+        currentLabel: assetId,
+        active: true,
+      });
     }
   }
 }
@@ -13029,23 +13276,175 @@ async function mountGraphAndSyncSubsystems(
   sceneGraphRoot = root;
   renderContext?.scene?.add(root);
 
+  setSceneInitState({
+    stage: 'mounting',
+    label: '正在挂载场景',
+    detail: '正在重建预览索引...',
+    stagePercent: 0,
+    currentIndex: 0,
+    currentTotal: 6,
+    currentLabel: 'rebuildPreviewNodeMap',
+    active: true,
+  });
   rebuildPreviewNodeMap(payload.document);
+  await yieldToMainThread();
+
+  setSceneInitState({
+    stage: 'mounting',
+    label: '正在挂载场景',
+    detail: '正在同步预览组件...',
+    stagePercent: 18,
+    currentIndex: 1,
+    currentTotal: 6,
+    currentLabel: 'previewComponentManager.syncScene',
+    active: true,
+  });
   previewComponentManager.syncScene(payload.document.nodes ?? []);
+  await yieldToMainThread();
+
+  setSceneInitState({
+    stage: 'mounting',
+    label: '正在挂载场景',
+    detail: '正在索引场景对象...',
+    stagePercent: 34,
+    currentIndex: 2,
+    currentTotal: 6,
+    currentLabel: 'indexSceneObjects',
+    active: true,
+  });
   indexSceneObjects(root);
   applyWeChatShadowPolicy(root);
   refreshMultiuserNodeReferences(payload.document);
   refreshBehaviorProximityCandidates();
+  await yieldToMainThread();
+
+  setSceneInitState({
+    stage: 'mounting',
+    label: '正在挂载场景',
+    detail: '正在刷新动画与交互...',
+    stagePercent: 52,
+    currentIndex: 3,
+    currentTotal: 6,
+    currentLabel: 'refreshAnimationControllers',
+    active: true,
+  });
   refreshAnimationControllers(root);
   ensureBehaviorTapHandler(canvas, camera);
+  await yieldToMainThread();
+
+  setSceneInitState({
+    stage: 'syncingPhysics',
+    label: '正在同步物理系统',
+    detail: '正在准备物理桥接...',
+    stagePercent: 0,
+    currentIndex: 0,
+    currentTotal: 3,
+    currentLabel: 'prepareSceneryPhysicsBridgeForDocument',
+    active: true,
+  });
   await prepareSceneryPhysicsBridgeForDocument(payload.document);
   currentDocumentPhysicsRelevantSceneNodesCache = resolveDocumentPhysicsRelevance(payload.document);
   initializeLazyPlaceholders(payload.document);
+  await yieldToMainThread();
+
+  setSceneInitState({
+    stage: 'syncingPhysics',
+    label: '正在同步物理系统',
+    detail: '正在构建物理体...',
+    stagePercent: 34,
+    currentIndex: 1,
+    currentTotal: 3,
+    currentLabel: 'syncPhysicsBodiesForDocument',
+    active: true,
+  });
   // Bootstrap physics before the render loop so vehicle drive and ground collision never race initialization.
-  await syncPhysicsBodiesForDocument(payload.document);
-  await syncTerrainScatterInstances(payload.document, resourceCache);
+  await syncPhysicsBodiesForDocument(payload.document, (progress) => {
+    setSceneInitState({
+      stage: 'syncingPhysics',
+      label: '正在同步物理系统',
+      detail: progress.detail || '正在构建物理体...',
+      stagePercent: progress.percent,
+      currentIndex: progress.currentIndex ?? 0,
+      currentTotal: progress.currentTotal ?? 0,
+      currentLabel: progress.currentLabel ?? 'syncPhysicsBodiesForDocument',
+      active: true,
+    });
+  });
+  await yieldToMainThread();
+
+  setSceneInitState({
+    stage: 'syncingScatter',
+    label: '正在同步地形散点',
+    detail: '正在初始化散点实例...',
+    stagePercent: 0,
+    currentIndex: 0,
+    currentTotal: 3,
+    currentLabel: 'syncTerrainScatterInstances',
+    active: true,
+  });
+  await syncTerrainScatterInstances(payload.document, resourceCache, (progress) => {
+    setSceneInitState({
+      stage: 'syncingScatter',
+      label: '正在同步地形散点',
+      detail: progress.detail || '正在初始化散点实例...',
+      stagePercent: progress.percent,
+      currentIndex: progress.currentIndex ?? 0,
+      currentTotal: progress.currentTotal ?? 0,
+      currentLabel: progress.currentLabel ?? 'syncTerrainScatterInstances',
+      active: true,
+    });
+  });
+  await yieldToMainThread();
+
+  setSceneInitState({
+    stage: 'finalizing',
+    label: '正在完成初始化',
+    detail: '正在注册场景子树...',
+    stagePercent: 0,
+    currentIndex: 0,
+    currentTotal: 4,
+    currentLabel: 'registerSceneSubtree',
+    active: true,
+  });
   registerSceneSubtree(root);
+  await yieldToMainThread();
+
+  setSceneInitState({
+    stage: 'finalizing',
+    label: '正在完成初始化',
+    detail: '正在刷新动画控制器...',
+    stagePercent: 34,
+    currentIndex: 1,
+    currentTotal: 4,
+    currentLabel: 'refreshAnimationControllers',
+    active: true,
+  });
   refreshAnimationControllers(root);
+  await yieldToMainThread();
+
+  setSceneInitState({
+    stage: 'finalizing',
+    label: '正在完成初始化',
+    detail: '正在整理实例剔除状态...',
+    stagePercent: 68,
+    currentIndex: 2,
+    currentTotal: 4,
+    currentLabel: 'markInstancedCullingDirty',
+    active: true,
+  });
   markInstancedCullingDirty();
+  await yieldToMainThread();
+
+  setSceneInitState({
+    stage: 'ready',
+    label: '场景已就绪',
+    detail: '',
+    stagePercent: 100,
+    currentIndex: 4,
+    currentTotal: 4,
+    currentLabel: '',
+    active: false,
+  });
 }
 
 /** Apply camera alignment and environment settings for the current document. */
@@ -13433,23 +13832,49 @@ watch(error, (value) => {
 watch(
   [sceneLoadPercent, sceneLoadBytesLabel],
   ([_, bytesLabel]) => {
-    if (!loading.value && !sceneDownload.active && !resourcePreload.active) {
+    if (!loading.value && !sceneDownload.active && !resourcePreload.active && !sceneInit.active) {
       return;
     }
-    const loaded = sceneDownload.active
-      ? sceneDownload.phase === 'render' && resourcePreload.active
-        ? resourcePreload.loadedBytes
-        : sceneDownload.loaded
-      : resourcePreload.loadedBytes;
-    const total = sceneDownload.active
-      ? sceneDownload.phase === 'render' && resourcePreload.active
-        ? resourcePreload.totalBytes
-        : sceneDownload.total
-      : resourcePreload.totalBytes;
+    const loaded = sceneInit.active
+      ? sceneInit.currentTotal > 0
+        ? sceneInit.currentIndex + 1
+        : Math.round(sceneInit.percent)
+      : sceneDownload.active
+        ? sceneDownload.phase === 'render' && resourcePreload.active
+          ? resourcePreload.loadedBytes
+          : sceneDownload.loaded
+        : resourcePreload.loadedBytes;
+    const total = sceneInit.active
+      ? sceneInit.currentTotal > 0
+        ? sceneInit.currentTotal
+        : 100
+      : sceneDownload.active
+        ? sceneDownload.phase === 'render' && resourcePreload.active
+          ? resourcePreload.totalBytes
+          : sceneDownload.total
+        : resourcePreload.totalBytes;
     emit('progress', {
       bytesLabel,
       loaded,
       total,
+      percent: sceneLoadPercent.value,
+      phase: sceneInit.active
+        ? sceneInit.stage
+        : sceneDownload.active
+          ? sceneDownload.phase
+          : resourcePreload.active
+            ? 'resource-preload'
+            : 'idle',
+      stageLabel: sceneInit.active
+        ? sceneInit.label
+        : sceneDownload.active
+          ? sceneDownload.label
+          : resourcePreload.label,
+      detail: sceneInit.active
+        ? sceneInit.detail || sceneInit.currentLabel
+        : sceneDownload.active
+          ? sceneDownload.detail || sceneDownload.currentLabel
+          : '',
     });
   },
   { flush: 'post' },

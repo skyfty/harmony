@@ -639,7 +639,7 @@ let sceneSwitchShowHandle = 0
 let sceneSwitchHideHandle = 0
 let sceneSwitchShownAt = 0
 
-const isPreloadOverlayVisible = computed(() => resourceProgress.active || sceneSwitchOverlayVisible.value)
+const isPreloadOverlayVisible = computed(() => resourceProgress.active || sceneInit.active || sceneSwitchOverlayVisible.value)
 const isPreloadFlashVisible = computed(() => sceneSwitchOverlayVisible.value)
 
 let forceInitialDocumentGraphOnNextSnapshot = false
@@ -889,7 +889,114 @@ let editorResourceCache: ResourceCache | null = null
 
 let activeScenePackageAssetOverrides: SceneGraphBuildOptions['assetOverrides'] | null = null
 
+type SceneInitStage =
+	| 'idle'
+	| 'preparing'
+	| 'building'
+	| 'mounting'
+	| 'syncingPreviewIndex'
+	| 'syncingPhysics'
+	| 'syncingScatter'
+	| 'finalizing'
+	| 'ready'
+	| 'cancelled'
+	| 'error'
+
+const sceneInitStageWeights: Record<Exclude<SceneInitStage, 'idle' | 'ready' | 'cancelled' | 'error'>, { start: number; span: number }> = {
+	preparing: { start: 0, span: 6 },
+	building: { start: 6, span: 42 },
+	mounting: { start: 48, span: 10 },
+	syncingPreviewIndex: { start: 58, span: 12 },
+	syncingPhysics: { start: 70, span: 13 },
+	syncingScatter: { start: 83, span: 12 },
+	finalizing: { start: 95, span: 5 },
+}
+
+const sceneInit = reactive({
+	active: false,
+	stage: 'idle' as SceneInitStage,
+	label: '',
+	detail: '',
+	percent: 0,
+	stagePercent: 0,
+	currentIndex: 0,
+	currentTotal: 0,
+	currentLabel: '',
+	indeterminate: false,
+})
+
+function resolveSceneInitPercent(stage: SceneInitStage, stagePercent = 0): number {
+	if (stage === 'ready') {
+		return 100
+	}
+	if (stage === 'cancelled' || stage === 'error' || stage === 'idle') {
+		return Math.max(0, Math.min(100, Math.round(sceneInit.percent)))
+	}
+	const weight = sceneInitStageWeights[stage]
+	if (!weight) {
+		return Math.max(0, Math.min(100, Math.round(stagePercent)))
+	}
+	const normalizedStage = Math.max(0, Math.min(100, stagePercent))
+	return Math.max(0, Math.min(100, Math.round(weight.start + ((weight.span * normalizedStage) / 100))))
+}
+
+function setSceneInitState(next: {
+	stage: SceneInitStage
+	label?: string
+	detail?: string
+	stagePercent?: number
+	currentIndex?: number
+	currentTotal?: number
+	currentLabel?: string
+	indeterminate?: boolean
+	active?: boolean
+}): void {
+	sceneInit.stage = next.stage
+	sceneInit.active = next.active ?? (next.stage !== 'ready' && next.stage !== 'cancelled' && next.stage !== 'error')
+	sceneInit.label = typeof next.label === 'string' ? next.label : sceneInit.label
+	sceneInit.detail = typeof next.detail === 'string' ? next.detail.trim() : sceneInit.detail
+	sceneInit.stagePercent = typeof next.stagePercent === 'number' && Number.isFinite(next.stagePercent) ? Math.max(0, Math.min(100, next.stagePercent)) : sceneInit.stagePercent
+	sceneInit.percent = resolveSceneInitPercent(next.stage, sceneInit.stagePercent)
+	if (typeof next.currentIndex === 'number' && Number.isFinite(next.currentIndex)) {
+		sceneInit.currentIndex = Math.max(0, Math.floor(next.currentIndex))
+	}
+	if (typeof next.currentTotal === 'number' && Number.isFinite(next.currentTotal)) {
+		sceneInit.currentTotal = Math.max(0, Math.floor(next.currentTotal))
+	}
+	if (typeof next.currentLabel === 'string') {
+		sceneInit.currentLabel = next.currentLabel.trim()
+	}
+	if (typeof next.indeterminate === 'boolean') {
+		sceneInit.indeterminate = next.indeterminate
+	}
+}
+
+function clearSceneInitState(): void {
+	sceneInit.active = false
+	sceneInit.stage = 'idle'
+	sceneInit.label = ''
+	sceneInit.detail = ''
+	sceneInit.percent = 0
+	sceneInit.stagePercent = 0
+	sceneInit.currentIndex = 0
+	sceneInit.currentTotal = 0
+	sceneInit.currentLabel = ''
+	sceneInit.indeterminate = false
+}
+
+async function yieldToMainThread(): Promise<void> {
+	await new Promise<void>((resolve) => {
+		const schedule = typeof requestAnimationFrame === 'function'
+			? requestAnimationFrame
+			: (callback: () => void) => setTimeout(callback, 16)
+		schedule(() => resolve())
+	})
+}
+
 const resourceProgressPercent = computed(() => {
+	if (sceneInit.active) {
+		return Math.max(0, Math.min(100, Math.round(sceneInit.percent)))
+	}
 	if (resourceProgress.totalBytes > 0) {
 		if (!resourceProgress.totalBytes) {
 			return resourceProgress.active ? 0 : 100
@@ -904,11 +1011,55 @@ const resourceProgressPercent = computed(() => {
 })
 
 const resourceProgressBytesLabel = computed(() => {
+	if (sceneInit.active) {
+		const countLabel = sceneInit.currentTotal > 0
+			? `${Math.max(0, Math.min(sceneInit.currentTotal, Math.floor(sceneInit.currentIndex) + 1))} / ${Math.max(0, Math.floor(sceneInit.currentTotal))}`
+			: ''
+		const detail = sceneInit.detail || sceneInit.currentLabel
+		return countLabel && detail ? `${countLabel} | ${detail}` : countLabel || detail
+	}
 	if (resourceProgress.totalBytes > 0) {
 		return `${formatByteSize(resourceProgress.loadedBytes)} / ${formatByteSize(resourceProgress.totalBytes)}`
 	}
 	if (resourceProgress.total > 0) {
 		return `Loaded ${resourceProgress.loaded} / ${resourceProgress.total}`
+	}
+	return ''
+})
+
+const resourceProgressTitle = computed(() => {
+	if (sceneInit.active) {
+		switch (sceneInit.stage) {
+			case 'preparing':
+				return 'Preparing runtime resources...'
+			case 'building':
+				return 'Building scene graph...'
+			case 'mounting':
+				return 'Mounting scene...'
+			case 'syncingPreviewIndex':
+				return 'Rebuilding preview index...'
+			case 'syncingPhysics':
+				return 'Syncing physics...'
+			case 'syncingScatter':
+				return 'Syncing terrain scatter...'
+			case 'finalizing':
+				return 'Finalizing scene...'
+			case 'ready':
+				return 'Scene ready'
+			case 'cancelled':
+				return 'Initialization cancelled'
+			case 'error':
+				return 'Initialization failed'
+			default:
+				return 'Initializing scene...'
+		}
+	}
+	return 'Loading resources...'
+})
+
+const resourceProgressDetail = computed(() => {
+	if (sceneInit.active) {
+		return sceneInit.label || sceneInit.detail || sceneInit.currentLabel
 	}
 	return ''
 })
@@ -3992,12 +4143,24 @@ function releaseTerrainScatterInstances(): void {
 async function syncTerrainScatterInstances(
 	document: SceneJsonExportDocument,
 	resourceCache: ResourceCache | null,
+	onProgress?: SceneSubsystemProgressReporter,
 ): Promise<void> {
 	releaseTerrainScatterInstances()
 	if (!resourceCache) {
 		return
 	}
-	await terrainScatterRuntime.sync(document, resourceCache, resolveGroundMeshObject)
+	await terrainScatterRuntime.sync(document, resourceCache, resolveGroundMeshObject, {
+		onProgress: (progress) => {
+			onProgress?.({
+				phase: 'syncingScatter',
+				percent: progress.total > 0 ? (progress.loaded / progress.total) * 100 : 0,
+				detail: progress.detail || progress.label,
+				currentIndex: progress.loaded,
+				currentTotal: progress.total,
+				currentLabel: progress.label,
+			})
+		},
+	})
 }
 
 function attachInstancedMesh(mesh: THREE.InstancedMesh) {
@@ -10386,7 +10549,10 @@ function updateScenePreviewPhysicsBridgeIndex(asset: PhysicsSceneAsset): void {
 	})
 }
 
-async function loadScenePreviewPhysicsBridgeScene(document: SceneJsonExportDocument | null): Promise<void> {
+async function loadScenePreviewPhysicsBridgeScene(
+	document: SceneJsonExportDocument | null,
+	onProgress?: SceneSubsystemProgressReporter,
+): Promise<void> {
 	if (!document) {
 		currentPhysicsBridgeGroundCollisionSignature = ''
 		physicsCollisionDebugRuntime.setSceneAsset(null)
@@ -10406,7 +10572,18 @@ async function loadScenePreviewPhysicsBridgeScene(document: SceneJsonExportDocum
 	}
 	currentPhysicsBridgeGroundCollisionSignature = resolveScenePreviewGroundCollisionSignature(document)
 	const requestId = ++physicsBridgeSceneRequestId
-	const asset = buildPhysicsSceneAsset(document)
+	const asset = await buildPhysicsSceneAsset(document, {
+		onProgress: (progress) => {
+			onProgress?.({
+				phase: 'syncingPhysics',
+				percent: progress.total > 0 ? (progress.loaded / progress.total) * 100 : 0,
+				detail: progress.detail || progress.label,
+				currentIndex: progress.loaded,
+				currentTotal: progress.total,
+				currentLabel: progress.label,
+			})
+		},
+	})
 	physicsCollisionDebugRuntime.setSceneAsset(asset)
 	try {
 		const bridge = await ensureScenePreviewPhysicsBridgeReady()
@@ -12046,17 +12223,53 @@ function syncVehicleBindingsForDocument(document: SceneJsonExportDocument | null
 	})
 }
 
-function syncPhysicsBodiesForDocument(document: SceneJsonExportDocument | null): void {
+type SceneSubsystemProgressReporter = (progress: {
+	phase: SceneInitStage
+	percent: number
+	detail: string
+	currentIndex?: number
+	currentTotal?: number
+	currentLabel?: string
+}) => void
+
+async function syncPhysicsBodiesForDocument(
+	document: SceneJsonExportDocument | null,
+	onProgress?: SceneSubsystemProgressReporter,
+): Promise<void> {
 	if (!document) {
 		resetPhysicsWorld()
 		syncVehicleBindingsForDocument(null)
 		physicsCollisionDebugRuntime.setSceneAsset(null)
 		return
 	}
-	void loadScenePreviewPhysicsBridgeScene(document)
+	onProgress?.({
+		phase: 'syncingPhysics',
+		percent: 10,
+		detail: 'Preparing physics bridge...',
+		currentIndex: 0,
+		currentTotal: 3,
+		currentLabel: 'loadScenePreviewPhysicsBridgeScene',
+	})
+	await loadScenePreviewPhysicsBridgeScene(document, onProgress)
+	onProgress?.({
+		phase: 'syncingPhysics',
+		percent: 85,
+		detail: 'Syncing vehicle bindings...',
+		currentIndex: 2,
+		currentTotal: 3,
+		currentLabel: 'syncVehicleBindingsForDocument',
+	})
 	clearLegacyPhysicsWorld()
 	syncVehicleBindingsForDocument(document)
-	physicsCollisionDebugRuntime.setSceneAsset(buildPhysicsSceneAsset(document))
+	physicsCollisionDebugRuntime.setSceneAsset(await buildPhysicsSceneAsset(document))
+	onProgress?.({
+		phase: 'syncingPhysics',
+		percent: 100,
+		detail: 'Physics sync complete',
+		currentIndex: 3,
+		currentTotal: 3,
+		currentLabel: 'completed',
+	})
 }
 
 function stepPhysicsWorld(delta: number): void {
@@ -12744,10 +12957,52 @@ async function applyInitialDocumentGraph(
 	disposeScene({ preservePreviewNodeMap: true })
 	currentDocument = document
 	attachBuiltRootToPreview(previewRoot, builtRoot, pendingObjects)
-	syncPhysicsBodiesForDocument(document)
+	setSceneInitState({
+		stage: 'syncingPhysics',
+		label: 'Syncing physics...',
+		detail: 'Syncing physics bodies...',
+		stagePercent: 0,
+		currentIndex: 0,
+		currentTotal: 3,
+		currentLabel: 'syncPhysicsBodiesForDocument',
+		active: true,
+	})
+	await syncPhysicsBodiesForDocument(document, (progress) => {
+		setSceneInitState({
+			stage: 'syncingPhysics',
+			label: 'Syncing physics...',
+			detail: progress.detail,
+			stagePercent: progress.percent,
+			currentIndex: progress.currentIndex ?? 0,
+			currentTotal: progress.currentTotal ?? 0,
+			currentLabel: progress.currentLabel ?? 'syncPhysicsBodiesForDocument',
+			active: true,
+		})
+	})
 	await syncGroundCache(document)
 	// (instancing trace removed)
-	await syncTerrainScatterInstances(document, resourceCache)
+	setSceneInitState({
+		stage: 'syncingScatter',
+		label: 'Syncing terrain scatter...',
+		detail: 'Syncing terrain scatter instances...',
+		stagePercent: 0,
+		currentIndex: 0,
+		currentTotal: 3,
+		currentLabel: 'syncTerrainScatterInstances',
+		active: true,
+	})
+	await syncTerrainScatterInstances(document, resourceCache, (progress) => {
+		setSceneInitState({
+			stage: 'syncingScatter',
+			label: 'Syncing terrain scatter...',
+			detail: progress.detail,
+			stagePercent: progress.percent,
+			currentIndex: progress.currentIndex ?? 0,
+			currentTotal: progress.currentTotal ?? 0,
+			currentLabel: progress.currentLabel ?? 'syncTerrainScatterInstances',
+			active: true,
+		})
+	})
 	refreshAnimations()
 	initializeLazyPlaceholders(document)
 	const protagonistCameraActive = !vehicleDriveState.active && (controlMode.value === 'first-person' || controlMode.value === 'third-person')
@@ -12781,8 +13036,50 @@ async function applyIncrementalDocumentGraph(
 	nodeObjectMap.forEach((object, nodeId) => {
 		attachRuntimeForNode(nodeId, object)
 	})
-	syncPhysicsBodiesForDocument(document)
-	await syncTerrainScatterInstances(document, resourceCache)
+	setSceneInitState({
+		stage: 'syncingPhysics',
+		label: 'Syncing physics...',
+		detail: 'Syncing physics bodies...',
+		stagePercent: 0,
+		currentIndex: 0,
+		currentTotal: 3,
+		currentLabel: 'syncPhysicsBodiesForDocument',
+		active: true,
+	})
+	await syncPhysicsBodiesForDocument(document, (progress) => {
+		setSceneInitState({
+			stage: 'syncingPhysics',
+			label: 'Syncing physics...',
+			detail: progress.detail,
+			stagePercent: progress.percent,
+			currentIndex: progress.currentIndex ?? 0,
+			currentTotal: progress.currentTotal ?? 0,
+			currentLabel: progress.currentLabel ?? 'syncPhysicsBodiesForDocument',
+			active: true,
+		})
+	})
+	setSceneInitState({
+		stage: 'syncingScatter',
+		label: 'Syncing terrain scatter...',
+		detail: 'Syncing terrain scatter instances...',
+		stagePercent: 0,
+		currentIndex: 0,
+		currentTotal: 3,
+		currentLabel: 'syncTerrainScatterInstances',
+		active: true,
+	})
+	await syncTerrainScatterInstances(document, resourceCache, (progress) => {
+		setSceneInitState({
+			stage: 'syncingScatter',
+			label: 'Syncing terrain scatter...',
+			detail: progress.detail,
+			stagePercent: progress.percent,
+			currentIndex: progress.currentIndex ?? 0,
+			currentTotal: progress.currentTotal ?? 0,
+			currentLabel: progress.currentLabel ?? 'syncTerrainScatterInstances',
+			active: true,
+		})
+	})
 	const protagonistCameraActive = !vehicleDriveState.active && (controlMode.value === 'first-person' || controlMode.value === 'third-person')
 	syncProtagonistCameraPose({ force: true, applyToCamera: protagonistCameraActive })
 
@@ -12824,6 +13121,16 @@ async function updateScene(document: SceneJsonExportDocument) {
 	resourceProgress.totalBytes = 0
 	resourceProgress.label = 'Preparing resources...'
 	resourceProgressItems.value = []
+	setSceneInitState({
+		stage: 'preparing',
+		label: 'Preparing runtime resources...',
+		detail: 'Preparing local overrides and scene resources...',
+		stagePercent: 0,
+		currentIndex: 0,
+		currentTotal: 1,
+		currentLabel: 'buildPreviewLocalAssetOverrides',
+		active: true,
+	})
 
 	let graphResult: Awaited<ReturnType<typeof buildSceneGraph>> | null = null
 	let resourceCache: ResourceCache | null = null
@@ -12841,6 +13148,20 @@ async function updateScene(document: SceneJsonExportDocument) {
 					resourceProgress.loadedBytes = info.bytesLoaded
 				}
 				resourceProgress.label = info.message || (info.assetId ? `Loading ${info.assetId}` : '')
+				setSceneInitState({
+					stage: 'building',
+					label: 'Building scene graph...',
+					detail: resourceProgress.label,
+					stagePercent: info.total > 0
+						? (info.loaded / info.total) * 100
+						: resourceProgress.totalBytes > 0
+							? (resourceProgress.loadedBytes / Math.max(resourceProgress.totalBytes, 1)) * 100
+							: 0,
+					currentIndex: info.loaded,
+					currentTotal: info.total,
+					currentLabel: resourceProgress.label,
+					active: true,
+				})
 				updateResourceProgressDetails(info)
 				const stillLoadingByCount = info.total > 0 && info.loaded < info.total
 				const stillLoadingByBytes = resourceProgress.totalBytes > 0 && resourceProgress.loadedBytes < resourceProgress.totalBytes
@@ -12876,8 +13197,30 @@ async function updateScene(document: SceneJsonExportDocument) {
 	dismissBehaviorAlert()
 	resetBehaviorRuntime()
 	previewComponentManager.reset()
+	setSceneInitState({
+		stage: 'mounting',
+		label: 'Mounting preview scene...',
+		detail: 'Rebuilding preview node map...',
+		stagePercent: 0,
+		currentIndex: 0,
+		currentTotal: 5,
+		currentLabel: 'rebuildPreviewNodeMap',
+		active: true,
+	})
 	rebuildPreviewNodeMap(document)
+	await yieldToMainThread()
 	refreshBehaviorProximityCandidates()
+	setSceneInitState({
+		stage: 'mounting',
+		label: 'Mounting preview scene...',
+		detail: 'Syncing preview components...',
+		stagePercent: 22,
+		currentIndex: 1,
+		currentTotal: 5,
+		currentLabel: 'previewComponentManager.syncScene',
+		active: true,
+	})
+	await yieldToMainThread()
 
 	const pendingObjects = collectPendingObjects(root)
 	const instancingSkipNodeIds = resolveInstancingSkipNodeIds(pendingObjects)
@@ -12889,6 +13232,17 @@ async function updateScene(document: SceneJsonExportDocument) {
 			skipNodeIds: instancingSkipNodeIds ?? undefined,
 		})
 	}
+	setSceneInitState({
+		stage: 'syncingPhysics',
+		label: 'Syncing physics...',
+		detail: 'Preparing physics bridge...',
+		stagePercent: 0,
+		currentIndex: 0,
+		currentTotal: 3,
+		currentLabel: 'syncPhysicsBodiesForDocument',
+		active: true,
+	})
+	await yieldToMainThread()
 
 	const applyIncremental = Boolean(currentDocument) && !forceInitialDocumentGraphOnNextSnapshot
 	forceInitialDocumentGraphOnNextSnapshot = false
@@ -13299,7 +13653,8 @@ watch(
 				class="scene-preview__preload-card-wrap"
 			>
 				<v-card class="scene-preview__preload-card" elevation="12">
-					<div class="scene-preview__preload-title">Loading resources...</div>
+					<div class="scene-preview__preload-title">{{ resourceProgressTitle }}</div>
+					<div v-if="resourceProgressDetail" class="scene-preview__preload-detail">{{ resourceProgressDetail }}</div>
 					<div class="scene-preview__progress">
 						<div class="scene-preview__progress-bar">
 							<div
@@ -14231,6 +14586,15 @@ watch(
 	font-weight: 600;
 	text-align: center;
 	color: #f5f7ff;
+}
+
+.scene-preview__preload-detail {
+	font-size: 0.8rem;
+	line-height: 1.45;
+	text-align: center;
+	color: rgba(245, 247, 255, 0.78);
+	margin-top: 6px;
+	margin-bottom: 4px;
 }
 
 .scene-preview__progress {

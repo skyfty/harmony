@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { SceneNodeMaterial } from '@/types/material'
-import { createPrimitiveGeometry, type EnvironmentSettings, type GroundDynamicMesh, type NodeComponentType, type SceneAssetPreloadInfo, type SceneAssetRegistryEntry, type SceneJsonExportDocument, type SceneNode, type SceneNodeComponentMap, type SceneNodeComponentState, type SceneOutlineMesh, type SceneOutlineMeshMap, type ScenePunchPoint } from '@schema'
+import { createPrimitiveGeometry, type EnvironmentSettings, type GroundDynamicMesh, type NodeComponentType, type SceneAssetPreloadInfo, type SceneAssetRegistryEntry, type SceneJsonExportDocument, type SceneLoadProgressHints, type SceneNode, type SceneNodeComponentMap, type SceneNodeComponentState, type SceneOutlineMesh, type SceneOutlineMeshMap, type ScenePunchPoint } from '@schema'
 import type { TerrainScatterStoreSnapshot } from '@schema/terrain-scatter'
 import type { SceneExportEventReporter, SceneExportOptions } from '@/types/scene-export'
 import type { SceneAssetValidationReport } from '@/utils/sceneAssetDiagnostics'
@@ -48,8 +48,105 @@ import {
   clampWallProps,
   clampRigidbodyComponentProps,
   RIGIDBODY_METADATA_KEY,
+  VEHICLE_COMPONENT_TYPE,
+  resolveModelCollisionComponentPropsFromNode,
 } from '@schema/components'
 import { isGroundDynamicMesh } from '@schema/groundHeightfield'
+
+function countSceneNodes(nodes: SceneNode[] | null | undefined): number {
+  if (!Array.isArray(nodes) || !nodes.length) {
+    return 0
+  }
+  let count = 0
+  const stack: SceneNode[] = [...nodes]
+  while (stack.length) {
+    const current = stack.pop()
+    if (!current) {
+      continue
+    }
+    count += 1
+    if (Array.isArray(current.children) && current.children.length > 0) {
+      stack.push(...current.children)
+    }
+  }
+  return count
+}
+
+function countSceneNodeCategory(
+  nodes: SceneNode[] | null | undefined,
+  predicate: (node: SceneNode) => boolean,
+): number {
+  if (!Array.isArray(nodes) || !nodes.length) {
+    return 0
+  }
+  let count = 0
+  const stack: SceneNode[] = [...nodes]
+  while (stack.length) {
+    const current = stack.pop()
+    if (!current) {
+      continue
+    }
+    if (predicate(current)) {
+      count += 1
+    }
+    if (Array.isArray(current.children) && current.children.length > 0) {
+      stack.push(...current.children)
+    }
+  }
+  return count
+}
+
+function countSceneLoadProgressHints(nodes: SceneNode[] | null | undefined): SceneLoadProgressHints {
+  const nodeCount = countSceneNodes(nodes)
+  const previewIndexNodeCount = nodeCount
+  const physicsRelevantNodeCount = countSceneNodeCategory(nodes, (node) => Boolean(
+    node.components?.[RIGIDBODY_COMPONENT_TYPE]?.enabled !== false
+    || node.dynamicMesh?.type === 'Ground'
+    || node.dynamicMesh?.type === 'Road'
+    || node.dynamicMesh?.type === 'Wall'
+    || node.dynamicMesh?.type === 'Floor'
+    || node.dynamicMesh?.type === 'Landform'
+    || node.dynamicMesh?.type === 'GuideRoute'
+    || Boolean(resolveModelCollisionComponentPropsFromNode(node)?.faces?.length),
+  ))
+  const vehicleNodeCount = countSceneNodeCategory(nodes, (node) => Boolean(node.components?.[VEHICLE_COMPONENT_TYPE]?.enabled !== false))
+  let terrainScatterGroundCount = 0
+  let terrainScatterLayerCount = 0
+  let terrainScatterInstanceCount = 0
+  if (Array.isArray(nodes) && nodes.length) {
+    const stack: SceneNode[] = [...nodes]
+    while (stack.length) {
+      const current = stack.pop()
+      if (!current) {
+        continue
+      }
+      if (current.dynamicMesh?.type === 'Ground') {
+        const snapshot = (current.dynamicMesh as GroundDynamicMesh & { terrainScatter?: TerrainScatterStoreSnapshot | null }).terrainScatter
+        if (snapshot && Array.isArray(snapshot.layers) && snapshot.layers.length) {
+          terrainScatterGroundCount += 1
+          terrainScatterLayerCount += snapshot.layers.length
+          snapshot.layers.forEach((layer) => {
+            if (Array.isArray(layer.instances)) {
+              terrainScatterInstanceCount += layer.instances.length
+            }
+          })
+        }
+      }
+      if (Array.isArray(current.children) && current.children.length) {
+        stack.push(...current.children)
+      }
+    }
+  }
+  return {
+    nodeCount,
+    previewIndexNodeCount,
+    physicsRelevantNodeCount,
+    vehicleNodeCount,
+    terrainScatterGroundCount,
+    terrainScatterLayerCount,
+    terrainScatterInstanceCount,
+  }
+}
 
 function findGroundNode(nodes: SceneNode[]): SceneNode | null {
   const stack: SceneNode[] = [...nodes]
@@ -378,6 +475,7 @@ async function sanitizeSceneDocumentForJsonExport(
     ...document,
     nodes: sanitizedNodes,
   }
+  sanitizedDocument.loadProgressHints = countSceneLoadProgressHints(sanitizedNodes)
   const assetPreload = buildSceneAssetPreloadInfo(sanitizedNodes, options)
   if (assetPreload) {
     sanitizedDocument.assetPreload = assetPreload

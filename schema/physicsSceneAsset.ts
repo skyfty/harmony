@@ -93,6 +93,36 @@ function createEmptyPhysicsSceneAsset(): PhysicsSceneAsset {
   }
 }
 
+export type PhysicsSceneAssetBuildProgressPhase = 'collecting' | 'building' | 'finalizing'
+
+export interface PhysicsSceneAssetBuildProgress {
+  phase: PhysicsSceneAssetBuildProgressPhase
+  loaded: number
+  total: number
+  label: string
+  detail: string
+}
+
+export interface PhysicsSceneAssetBuildOptions {
+  onProgress?: (progress: PhysicsSceneAssetBuildProgress) => void
+}
+
+async function yieldToMainThread(): Promise<void> {
+  await new Promise<void>((resolve) => {
+    const schedule = typeof requestAnimationFrame === 'function'
+      ? requestAnimationFrame
+      : (callback: () => void) => setTimeout(callback, 0)
+    schedule(() => resolve())
+  })
+}
+
+function reportPhysicsSceneAssetProgress(
+  options: PhysicsSceneAssetBuildOptions | undefined,
+  progress: PhysicsSceneAssetBuildProgress,
+): void {
+  options?.onProgress?.(progress)
+}
+
 function toPhysicsVector3(vector: Vector3Like | null | undefined, fallback: PhysicsVector3 = [0, 0, 0]): PhysicsVector3 {
   if (!vector || typeof vector !== 'object') {
     return fallback
@@ -804,7 +834,29 @@ function buildGroundChunkCollisionShapeInstances(
   return chunkInstances
 }
 
-export function buildPhysicsSceneAsset(document: SceneJsonExportDocument): PhysicsSceneAsset {
+function countSceneNodes(nodes: SceneNode[] | null | undefined): number {
+  if (!Array.isArray(nodes) || !nodes.length) {
+    return 0
+  }
+  let count = 0
+  const stack: SceneNode[] = [...nodes]
+  while (stack.length) {
+    const current = stack.pop()
+    if (!current) {
+      continue
+    }
+    count += 1
+    if (Array.isArray(current.children) && current.children.length) {
+      stack.push(...current.children)
+    }
+  }
+  return count
+}
+
+export async function buildPhysicsSceneAsset(
+  document: SceneJsonExportDocument,
+  options: PhysicsSceneAssetBuildOptions = {},
+): Promise<PhysicsSceneAsset> {
   const asset = createEmptyPhysicsSceneAsset()
   const materialIds = new Map<string, number>()
   const bodyIdsByNodeId = new Map<string, number>()
@@ -818,6 +870,17 @@ export function buildPhysicsSceneAsset(document: SceneJsonExportDocument): Physi
   let nextBodyId = 1
   let nextVehicleId = 1
   let nextWheelId = 1
+  const totalNodes = countSceneNodes(document.nodes)
+  let processedNodes = 0
+  let nextYieldAt = 64
+
+  reportPhysicsSceneAssetProgress(options, {
+    phase: 'collecting',
+    loaded: 0,
+    total: totalNodes,
+    label: '正在分析物理节点',
+    detail: '正在收集刚体、车辆和地形碰撞体...',
+  })
 
   const nextShapeId = (): number => {
     const id = nextShapeIdValue
@@ -843,7 +906,7 @@ export function buildPhysicsSceneAsset(document: SceneJsonExportDocument): Physi
     return materialId
   }
 
-  const visitNode = (node: SceneNode, parentWorldMatrix?: THREE.Matrix4): void => {
+  const visitNode = async (node: SceneNode, parentWorldMatrix?: THREE.Matrix4): Promise<void> => {
     const rigidbodyState = resolvePhysicsSceneRigidbodyComponent(node)
     const localMatrix = getNodeLocalMatrix(node)
     const worldMatrix = parentWorldMatrix
@@ -975,11 +1038,28 @@ export function buildPhysicsSceneAsset(document: SceneJsonExportDocument): Physi
       asset.vehicles.push(vehicle)
     }
 
+    processedNodes += 1
+    if (processedNodes >= nextYieldAt || processedNodes === totalNodes) {
+      reportPhysicsSceneAssetProgress(options, {
+        phase: 'building',
+        loaded: processedNodes,
+        total: Math.max(totalNodes, 1),
+        label: '正在构建物理场景',
+        detail: `正在处理节点 ${processedNodes}/${Math.max(totalNodes, 1)}`,
+      })
+      nextYieldAt = processedNodes + 64
+      await yieldToMainThread()
+    }
+
     const children = Array.isArray(node.children) ? node.children : []
-    children.forEach((child) => visitNode(child, worldMatrix))
+    for (const child of children) {
+      await visitNode(child, worldMatrix)
+    }
   }
 
-  document.nodes.forEach((node) => visitNode(node, parentWorldMatrixHelper.identity()))
+  for (const node of document.nodes) {
+    await visitNode(node, parentWorldMatrixHelper.identity())
+  }
 
   if (groundNode && isGroundDynamicMesh(groundNode.dynamicMesh) && document.groundSettings?.enableAirWall !== false) {
     const staticMaterialId = ensureMaterialId(clampRigidbodyComponentProps({ bodyType: 'STATIC' }))
@@ -1045,6 +1125,14 @@ export function buildPhysicsSceneAsset(document: SceneJsonExportDocument): Physi
       })
     }
   }
+
+  reportPhysicsSceneAssetProgress(options, {
+    phase: 'finalizing',
+    loaded: totalNodes,
+    total: Math.max(totalNodes, 1),
+    label: '物理场景构建完成',
+    detail: `已处理 ${processedNodes}/${Math.max(totalNodes, 1)} 个节点`,
+  })
 
   return asset
 }

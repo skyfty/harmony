@@ -78,6 +78,31 @@ type SceneDownloadState = {
   indeterminate: boolean;
 };
 
+type SceneInitStage =
+  | 'idle'
+  | 'preparing'
+  | 'building'
+  | 'mounting'
+  | 'syncingPreviewIndex'
+  | 'syncingPhysics'
+  | 'syncingScatter'
+  | 'finalizing'
+  | 'ready'
+  | 'cancelled'
+  | 'error';
+
+type SceneInitState = {
+  active: boolean;
+  stage: SceneInitStage;
+  label: string;
+  detail: string;
+  percent: number;
+  currentIndex: number;
+  currentTotal: number;
+  currentLabel: string;
+  indeterminate: boolean;
+};
+
 type ResourcePreloadState = {
   active: boolean;
   loaded: number;
@@ -91,6 +116,7 @@ const props = defineProps<{
   loading: boolean;
   sceneSwitchOverlayVisible: boolean;
   sceneSwitchFlashActive: boolean;
+  sceneInit: SceneInitState;
   sceneDownload: SceneDownloadState;
   resourcePreload: ResourcePreloadState;
 }>();
@@ -135,8 +161,43 @@ function formatSceneLoadDetail(detail: string, currentLabel?: string): string {
   return normalizedDetail || normalizedLabel;
 }
 
-const overlayCardActive = computed(() => props.loading || props.sceneDownload.active || props.resourcePreload.active);
+function resolveSceneInitTitle(stage: SceneInitStage): string {
+  switch (stage) {
+    case 'preparing':
+      return '正在预热运行时资源';
+    case 'building':
+      return '正在构建场景';
+    case 'mounting':
+      return '正在挂载场景';
+    case 'syncingPreviewIndex':
+      return '正在重建预览索引';
+    case 'syncingPhysics':
+      return '正在同步物理系统';
+    case 'syncingScatter':
+      return '正在同步地形散点';
+    case 'finalizing':
+      return '正在完成初始化';
+    case 'ready':
+      return '场景已就绪';
+    case 'cancelled':
+      return '初始化已取消';
+    case 'error':
+      return '初始化失败';
+    default:
+      return '正在初始化场景';
+  }
+}
+
+const overlayCardActive = computed(() => props.loading || props.sceneInit.active || props.sceneDownload.active || props.resourcePreload.active);
 const overlayActive = computed(() => overlayCardActive.value || props.sceneSwitchOverlayVisible);
+
+const sceneInitPercent = computed(() => {
+  const init = props.sceneInit;
+  if (!init.active) {
+    return Number.isFinite(init.percent) ? Math.max(0, Math.min(100, Math.round(init.percent))) : 0;
+  }
+  return Number.isFinite(init.percent) ? Math.max(0, Math.min(100, Math.round(init.percent))) : 0;
+});
 
 const resourcePreloadPercent = computed(() => {
   const preload = props.resourcePreload;
@@ -163,6 +224,9 @@ const resourcePreloadBytesLabel = computed(() => {
 });
 
 const overlayTitle = computed(() => {
+  if (props.sceneInit.active) {
+    return resolveSceneInitTitle(props.sceneInit.stage);
+  }
   const load = props.sceneDownload;
   if (load.active) {
     switch (load.phase) {
@@ -200,6 +264,9 @@ const overlayTitle = computed(() => {
 });
 
 const overlayPercent = computed(() => {
+  if (props.sceneInit.active) {
+    return sceneInitPercent.value;
+  }
   const load = props.sceneDownload;
   if (load.active) {
     if (load.phase === 'download' && load.total > 0) {
@@ -225,6 +292,12 @@ const overlayPercent = computed(() => {
 });
 
 const overlayBytesLabel = computed(() => {
+  if (props.sceneInit.active) {
+    const init = props.sceneInit;
+    const countLabel = init.currentTotal > 0 ? `${Math.max(0, Math.min(init.currentTotal, Math.floor(init.currentIndex) + 1))} / ${Math.max(0, Math.floor(init.currentTotal))}` : '';
+    const detail = formatSceneLoadDetail(init.detail, init.currentLabel);
+    return countLabel && detail ? `${countLabel} | ${detail}` : countLabel || detail;
+  }
   const load = props.sceneDownload;
   if (load.active && load.phase === 'download' && load.total > 0) {
     return `${formatByteSize(load.loaded)} / ${formatByteSize(load.total)}`;
@@ -238,11 +311,14 @@ const overlayBytesLabel = computed(() => {
   return '';
 });
 
-const overlayIndeterminate = computed(() => props.sceneDownload.active && props.sceneDownload.indeterminate);
+const overlayIndeterminate = computed(() => props.sceneInit.active ? props.sceneInit.indeterminate : props.sceneDownload.active && props.sceneDownload.indeterminate);
 const overlayPercentText = computed(() => (overlayIndeterminate.value ? '解析中…' : `${overlayPercent.value}%`));
 const overlayProgressStyle = computed(() => (overlayIndeterminate.value ? {} : { width: `${overlayPercent.value}%` }));
 
 const overlayCaption = computed(() => {
+  if (props.sceneInit.active) {
+    return props.sceneInit.label || resolveSceneInitTitle(props.sceneInit.stage);
+  }
   if (props.sceneDownload.active) {
     return props.sceneDownload.label;
   }
@@ -256,6 +332,15 @@ const overlayCaption = computed(() => {
 });
 
 const overlayDetail = computed(() => {
+  if (props.sceneInit.active) {
+    const init = props.sceneInit;
+    const count = formatSceneLoadCount(init.currentIndex, init.currentTotal);
+    const detail = formatSceneLoadDetail(init.detail, init.currentLabel);
+    if (count && detail) {
+      return `${count} | ${detail}`;
+    }
+    return count || detail;
+  }
   const load = props.sceneDownload;
   if (load.active) {
     const count = formatSceneLoadCount(load.currentIndex, load.currentTotal);

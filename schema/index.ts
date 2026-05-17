@@ -1446,6 +1446,7 @@ export interface SceneJsonExportDocument {
   lazyLoadMeshes?: boolean;
   assetPreload?: SceneAssetPreloadInfo;
   punchPoints?: ScenePunchPoint[];
+  loadProgressHints?: SceneLoadProgressHints;
 }
 
 export interface ScenePunchPoint {
@@ -1460,6 +1461,16 @@ export interface SceneAssetPreloadMeshInfo {
 
 export interface SceneAssetPreloadInfo {
   mesh: SceneAssetPreloadMeshInfo;
+}
+
+export interface SceneLoadProgressHints {
+  nodeCount: number;
+  previewIndexNodeCount: number;
+  physicsRelevantNodeCount: number;
+  vehicleNodeCount: number;
+  terrainScatterGroundCount: number;
+  terrainScatterLayerCount: number;
+  terrainScatterInstanceCount: number;
 }
 
 export interface SceneResourceSummaryEntry {
