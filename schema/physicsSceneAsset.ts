@@ -10,7 +10,11 @@ import {
   isGroundDynamicMesh,
 } from './groundHeightfield'
 import { resolveFloorShape, resolveModelCollisionFaceSegments, resolveWallShape, type FloorShapeCache, type WallTrimeshCache } from './physicsShapeResolvers'
-import { collectRoadCollisionDescriptors, isRoadDynamicMesh } from './roadCollision'
+import { isRoadDynamicMesh } from './roadCollision'
+import {
+  extractRoadCollisionCompiledPackageFromUserData,
+  type RoadCollisionCompiledPackage,
+} from './roadCollisionCompiled'
 import { collectCompiledGroundCollisionTileKeys } from './compiledGroundCollisionRuntime'
 import { collectInfiniteGroundChunkCollisionKeys } from './infiniteGroundChunkCollisions'
 import { sampleGroundEffectiveHeightRegion } from './groundMesh'
@@ -18,14 +22,17 @@ import {
   BOUNDARY_WALL_COMPONENT_TYPE,
   RIGIDBODY_COMPONENT_TYPE,
   RIGIDBODY_METADATA_KEY,
+  ROAD_COMPONENT_TYPE,
   VEHICLE_COMPONENT_TYPE,
   clampBoundaryWallComponentProps,
   clampRigidbodyComponentProps,
+  clampRoadProps,
   resolveModelCollisionComponentPropsFromNode,
   clampVehicleComponentProps,
   type BoundaryWallComponentProps,
   type RigidbodyComponentMetadata,
   type RigidbodyComponentProps,
+  type RoadComponentProps,
   type RigidbodyPhysicsShape,
   type VehicleComponentProps,
 } from './components'
@@ -71,11 +78,6 @@ function parseGroundChunkKey(value: string | null | undefined): { chunkX: number
   }
 }
 const legacyConvexOffsetInverseQuaternionHelper = new THREE.Quaternion()
-const unitScaleHelper = new THREE.Vector3(1, 1, 1)
-const transformComposePositionHelper = new THREE.Vector3()
-const transformComposeChildPositionHelper = new THREE.Vector3()
-const transformComposeQuaternionHelper = new THREE.Quaternion()
-const transformComposeChildQuaternionHelper = new THREE.Quaternion()
 const groundAirWallPositionHelper = new THREE.Vector3()
 const groundAirWallQuaternionHelper = new THREE.Quaternion()
 const groundAirWallScaleHelper = new THREE.Vector3()
@@ -271,29 +273,6 @@ function pushShapeDescriptor(
 ): number {
   shapes.push(shape)
   return shape.id
-}
-
-function composePhysicsTransform(base: PhysicsTransform, local: PhysicsTransform): PhysicsTransform {
-  transformComposePositionHelper.set(base.position[0], base.position[1], base.position[2])
-  transformComposeChildPositionHelper.set(local.position[0], local.position[1], local.position[2])
-  transformComposeQuaternionHelper.set(base.rotation[0], base.rotation[1], base.rotation[2], base.rotation[3])
-  transformComposeChildQuaternionHelper.set(local.rotation[0], local.rotation[1], local.rotation[2], local.rotation[3])
-  transformComposeChildPositionHelper.applyQuaternion(transformComposeQuaternionHelper)
-  transformComposePositionHelper.add(transformComposeChildPositionHelper)
-  transformComposeQuaternionHelper.multiply(transformComposeChildQuaternionHelper)
-  return {
-    position: [
-      transformComposePositionHelper.x,
-      transformComposePositionHelper.y,
-      transformComposePositionHelper.z,
-    ],
-    rotation: [
-      transformComposeQuaternionHelper.x,
-      transformComposeQuaternionHelper.y,
-      transformComposeQuaternionHelper.z,
-      transformComposeQuaternionHelper.w,
-    ],
-  }
 }
 
 function buildShapeInstancesFromDefinition(
@@ -522,43 +501,148 @@ function buildModelCollisionShapeInstances(
   }).flatMap((segment) => buildShapeInstancesFromDefinition(segment.shape, worldScale, nextShapeId, shapes))
 }
 
-function buildRoadShapeInstances(
-  node: SceneNode,
-  rigidbodyComponent: SceneNodeComponentState<RigidbodyComponentProps> | null,
+function resolveRoadCollisionCompiledPackage(node: SceneNode): RoadCollisionCompiledPackage | null {
+  return extractRoadCollisionCompiledPackageFromUserData(node.userData)
+}
+
+function shouldExpectRoadCollisionCompiledPackage(node: SceneNode): boolean {
+  if (!isRoadDynamicMesh(node.dynamicMesh)) {
+    return false
+  }
+  const roadState = node.components?.[ROAD_COMPONENT_TYPE] as SceneNodeComponentState<RoadComponentProps> | undefined
+  const roadProps = clampRoadProps(roadState?.props as Partial<RoadComponentProps> | null | undefined)
+  return roadProps.enableVehicleCollision !== false
+}
+
+function cloneRoadCollisionShapeDesc(
+  shape: any,
+  shapeIdMap: Map<number, number>,
+): any {
+  switch (shape.kind) {
+    case 'box':
+      return {
+        id: shapeIdMap.get(shape.id) ?? shape.id,
+        kind: 'box',
+        halfExtents: [...shape.halfExtents] as [number, number, number],
+      }
+    case 'sphere':
+      return {
+        id: shapeIdMap.get(shape.id) ?? shape.id,
+        kind: 'sphere',
+        radius: shape.radius,
+      }
+    case 'cylinder':
+      return {
+        id: shapeIdMap.get(shape.id) ?? shape.id,
+        kind: 'cylinder',
+        radiusTop: shape.radiusTop,
+        radiusBottom: shape.radiusBottom,
+        height: shape.height,
+        segments: shape.segments,
+      }
+    case 'convex-hull':
+      return {
+        id: shapeIdMap.get(shape.id) ?? shape.id,
+        kind: 'convex-hull',
+        vertices: Array.isArray(shape.vertices) ? [...shape.vertices] : Array.from(shape.vertices ?? []),
+        faces: Array.isArray(shape.faces)
+          ? shape.faces.map((face: any) => face.map((entry: any) => Math.trunc(entry)))
+          : undefined,
+      }
+    case 'heightfield':
+      return {
+        id: shapeIdMap.get(shape.id) ?? shape.id,
+        kind: 'heightfield',
+        rows: shape.rows,
+        columns: shape.columns,
+        elementSize: shape.elementSize,
+        heights: Array.isArray(shape.heights) ? [...shape.heights] : Array.from(shape.heights ?? []),
+        minHeight: shape.minHeight,
+        maxHeight: shape.maxHeight,
+        localOffset: shape.localOffset ? [...shape.localOffset] as [number, number, number] : undefined,
+      }
+    case 'static-mesh':
+      return {
+        id: shapeIdMap.get(shape.id) ?? shape.id,
+        kind: 'static-mesh',
+        vertices: Array.isArray(shape.vertices) ? [...shape.vertices] : Array.from(shape.vertices ?? []),
+        indices: Array.isArray(shape.indices) ? [...shape.indices] : Array.from(shape.indices ?? []),
+      }
+    case 'compound':
+      return {
+        id: shapeIdMap.get(shape.id) ?? shape.id,
+        kind: 'compound',
+        children: shape.children.map((child: any) => ({
+          shapeId: shapeIdMap.get(child.shapeId) ?? child.shapeId,
+          transform: {
+            position: [...child.transform.position] as [number, number, number],
+            rotation: [...child.transform.rotation] as [number, number, number, number],
+          },
+        })),
+      }
+    default: {
+      return shape
+    }
+  }
+}
+
+function mergeCompiledRoadCollisionPackage(
+  asset: PhysicsSceneAsset,
+  compiledPackage: RoadCollisionCompiledPackage,
+  materialIds: Map<string, number>,
+  nextMaterialId: () => number,
   nextShapeId: () => number,
-  shapes: PhysicsShapeDesc[],
-): BuildShapeInstance[] {
-  if (!isRoadDynamicMesh(node.dynamicMesh) || !rigidbodyComponent) {
-    return []
-  }
-  const built = collectRoadCollisionDescriptors({
-    roadNode: node,
-    rigidbodyComponent,
+  nextBodyId: () => number,
+): void {
+  const shapeIdMap = new Map<number, number>()
+  const materialIdMap = new Map<number, number>()
+
+  compiledPackage.asset.materials.forEach((material: any) => {
+    if (!material || typeof material.id !== 'number') {
+      return
+    }
+    const key = `${material.friction}|${material.restitution}`
+    const existing = materialIds.get(key)
+    const resolvedId = typeof existing === 'number' ? existing : nextMaterialId()
+    if (typeof existing !== 'number') {
+      materialIds.set(key, resolvedId)
+      asset.materials.push({
+        id: resolvedId,
+        friction: material.friction,
+        restitution: material.restitution,
+      })
+    }
+    materialIdMap.set(material.id, resolvedId)
   })
-  if (!built) {
-    return []
-  }
-  return built.descriptors.flatMap((tile) => {
-    nodeEulerHelper.set(tile.pitch, tile.yaw, 0, 'YXZ')
-    nodeQuaternionHelper.setFromEuler(nodeEulerHelper)
-    const instances = buildShapeInstancesFromDefinition(
-      tile.shapeDefinition,
-      unitScaleHelper,
-      nextShapeId,
-      shapes,
-    )
-    return instances.map((entry) => ({
-      shapeId: entry.shapeId,
-      transform: composePhysicsTransform({
-        position: tile.position,
-        rotation: [
-          nodeQuaternionHelper.x,
-          nodeQuaternionHelper.y,
-          nodeQuaternionHelper.z,
-          nodeQuaternionHelper.w,
-        ],
-      }, entry.transform),
-    }))
+
+  compiledPackage.asset.shapes.forEach((shape: any) => {
+    if (!shape || typeof shape.id !== 'number') {
+      return
+    }
+    const nextId = nextShapeId()
+    shapeIdMap.set(shape.id, nextId)
+    asset.shapes.push(cloneRoadCollisionShapeDesc({
+      ...shape,
+      id: nextId,
+    } as PhysicsShapeDesc, shapeIdMap))
+  })
+
+  compiledPackage.asset.bodies.forEach((body: any) => {
+    if (!body || typeof body.id !== 'number') {
+      return
+    }
+    const nextId = nextBodyId()
+    asset.bodies.push({
+      ...body,
+      id: nextId,
+      materialId: body.materialId == null ? null : (materialIdMap.get(body.materialId) ?? body.materialId),
+      shapeId: shapeIdMap.get(body.shapeId) ?? body.shapeId,
+      transform: {
+        position: [...body.transform.position] as [number, number, number],
+        rotation: [...body.transform.rotation] as [number, number, number, number],
+      },
+      userDataKey: body.userDataKey ?? null,
+    })
   })
 }
 
@@ -776,62 +860,86 @@ export function buildPhysicsSceneAsset(document: SceneJsonExportDocument): Physi
         rigidbodyState.props as Partial<RigidbodyComponentProps> | null | undefined,
       )
       const materialId = ensureMaterialId(rigidbodyProps)
-      const floorShapeInstances = buildFloorShapeInstances(node, worldScaleHelper, nextShapeId, asset.shapes, floorShapeCache)
-      const wallShapeInstances = buildWallShapeInstances(node, nextShapeId, asset.shapes, wallShapeCache)
-      const modelCollisionShapeInstances = buildModelCollisionShapeInstances(node, worldScaleHelper, nextShapeId, asset.shapes)
-      const roadShapeInstances = buildRoadShapeInstances(node, rigidbodyState, nextShapeId, asset.shapes)
-      const boundaryWallInstances = buildBoundaryWallShapeInstances(node, nextShapeId, asset.shapes)
-      const primaryShapeInstances = wallShapeInstances.length > 0
-        ? []
-        : buildRigidbodyShapeInstances(
-          node,
-          worldScaleHelper,
-          worldPositionHelper,
-          worldQuaternionHelper,
-          nextShapeId,
-          asset.shapes,
-        )
-      const shapeInstances = [
-        ...primaryShapeInstances,
-        ...floorShapeInstances,
-        ...wallShapeInstances,
-        ...modelCollisionShapeInstances,
-        ...roadShapeInstances,
-        ...boundaryWallInstances,
-      ]
-      if (shapeInstances.length > 0) {
-        let shapeId = shapeInstances[0]!.shapeId
-        if (
-          shapeInstances.length > 1
-          || shapeInstances[0]!.transform.position.some((value: number) => Math.abs(value) > 1e-6)
-          || shapeInstances[0]!.transform.rotation.some((value: number, index: number) => Math.abs(value - (index === 3 ? 1 : 0)) > 1e-6)
-        ) {
-          const children: PhysicsCompoundChildDesc[] = shapeInstances.map((entry) => ({
-            shapeId: entry.shapeId,
-            transform: entry.transform,
-          }))
-          shapeId = pushShapeDescriptor(asset.shapes, {
-            id: nextShapeId(),
-            kind: 'compound',
-            children,
-          })
+      if (isRoadDynamicMesh(node.dynamicMesh)) {
+        const shouldExpectCompiledRoadCollision = shouldExpectRoadCollisionCompiledPackage(node)
+        const compiledRoadPackage = resolveRoadCollisionCompiledPackage(node)
+        if (shouldExpectCompiledRoadCollision && !compiledRoadPackage) {
+          throw new Error(`Missing compiled road collision package for road node: ${node.id}`)
         }
+        if (compiledRoadPackage) {
+          mergeCompiledRoadCollisionPackage(
+            asset,
+            compiledRoadPackage,
+            materialIds,
+            () => {
+              const id = nextMaterialId
+              nextMaterialId += 1
+              return id
+            },
+            nextShapeId,
+            () => {
+              const id = nextBodyId
+              nextBodyId += 1
+              return id
+            },
+          )
+        }
+      } else {
+        const floorShapeInstances = buildFloorShapeInstances(node, worldScaleHelper, nextShapeId, asset.shapes, floorShapeCache)
+        const wallShapeInstances = buildWallShapeInstances(node, nextShapeId, asset.shapes, wallShapeCache)
+        const modelCollisionShapeInstances = buildModelCollisionShapeInstances(node, worldScaleHelper, nextShapeId, asset.shapes)
+        const primaryShapeInstances = wallShapeInstances.length > 0
+          ? []
+          : buildRigidbodyShapeInstances(
+            node,
+            worldScaleHelper,
+            worldPositionHelper,
+            worldQuaternionHelper,
+            nextShapeId,
+            asset.shapes,
+          )
+        const boundaryWallInstances = buildBoundaryWallShapeInstances(node, nextShapeId, asset.shapes)
+        const shapeInstances = [
+          ...primaryShapeInstances,
+          ...floorShapeInstances,
+          ...wallShapeInstances,
+          ...modelCollisionShapeInstances,
+          ...boundaryWallInstances,
+        ]
+        if (shapeInstances.length > 0) {
+          let shapeId = shapeInstances[0]!.shapeId
+          if (
+            shapeInstances.length > 1
+            || shapeInstances[0]!.transform.position.some((value: number) => Math.abs(value) > 1e-6)
+            || shapeInstances[0]!.transform.rotation.some((value: number, index: number) => Math.abs(value - (index === 3 ? 1 : 0)) > 1e-6)
+          ) {
+            const children: PhysicsCompoundChildDesc[] = shapeInstances.map((entry) => ({
+              shapeId: entry.shapeId,
+              transform: entry.transform,
+            }))
+            shapeId = pushShapeDescriptor(asset.shapes, {
+              id: nextShapeId(),
+              kind: 'compound',
+              children,
+            })
+          }
 
-        const bodyId = nextBodyId
-        nextBodyId += 1
-        const body: PhysicsBodyDesc = {
-          id: bodyId,
-          type: mapBodyType(rigidbodyProps.bodyType),
-          mass: rigidbodyProps.bodyType === 'DYNAMIC' ? Math.max(0, rigidbodyProps.mass) : 0,
-          materialId,
-          shapeId,
-          transform: toPhysicsTransform(worldPositionHelper, worldQuaternionHelper),
-          linearDamping: rigidbodyProps.linearDamping,
-          angularDamping: rigidbodyProps.angularDamping,
-          userDataKey: node.id,
+          const bodyId = nextBodyId
+          nextBodyId += 1
+          const body: PhysicsBodyDesc = {
+            id: bodyId,
+            type: mapBodyType(rigidbodyProps.bodyType),
+            mass: rigidbodyProps.bodyType === 'DYNAMIC' ? Math.max(0, rigidbodyProps.mass) : 0,
+            materialId,
+            shapeId,
+            transform: toPhysicsTransform(worldPositionHelper, worldQuaternionHelper),
+            linearDamping: rigidbodyProps.linearDamping,
+            angularDamping: rigidbodyProps.angularDamping,
+            userDataKey: node.id,
+          }
+          asset.bodies.push(body)
+          bodyIdsByNodeId.set(node.id, bodyId)
         }
-        asset.bodies.push(body)
-        bodyIdsByNodeId.set(node.id, bodyId)
       }
     }
 

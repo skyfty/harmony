@@ -58,6 +58,7 @@ import {
   loadSceneCompiledGroundPackageFromCache,
   resolveSceneCompiledGroundPackagePaths,
 } from '@/utils/sceneCompiledGroundCache'
+import { buildRoadCollisionCompiledExport } from '@/utils/roadCollisionCompiledExport'
 import { collectPunchPointsFromNodes } from './sceneExport'
 import {
   buildSceneAssetReferenceSummaryMap,
@@ -262,6 +263,28 @@ function parseGroundChunkKey(chunkKey: string): { chunkX: number; chunkZ: number
   return { chunkX, chunkZ }
 }
 
+function isFlatGroundChunkManifest(manifest: GroundChunkManifest | null | undefined): boolean {
+  if (!manifest || !manifest.chunks || typeof manifest.chunks !== 'object') {
+    return false
+  }
+
+  const records = Object.values(manifest.chunks)
+  if (!records.length) {
+    return true
+  }
+
+  return records.every((record) => {
+    if (!record || typeof record !== 'object') {
+      return false
+    }
+    const heightMin = Number(record.heightMin)
+    const heightMax = Number(record.heightMax)
+    return Number.isFinite(heightMin)
+      && Number.isFinite(heightMax)
+      && Math.abs(heightMax - heightMin) <= 1e-4
+  })
+}
+
 async function buildGroundChunkPackageFiles(
   sceneId: string,
   definition: GroundRuntimeDynamicMesh | null | undefined,
@@ -278,6 +301,15 @@ async function buildGroundChunkPackageFiles(
 
   const normalizedSceneId = typeof sceneId === 'string' ? sceneId.trim() : ''
   if (!normalizedSceneId) {
+    return null
+  }
+
+  if (!manifest) {
+    const baseHeight = Number(definition?.baseHeight) || 0
+    if (!hasSceneGroundTerrainOverrides(definition) && Math.abs(baseHeight) <= 1e-4) {
+      return null
+    }
+  } else if (isFlatGroundChunkManifest(manifest)) {
     return null
   }
 
@@ -1419,6 +1451,7 @@ export async function exportScenePackageZip(payload: {
     let terrain: ScenePackageManifestV1['scenes'][number]['terrain'] | undefined
     let compiledGround: ScenePackageManifestV1['scenes'][number]['compiledGround'] | undefined
     let groundChunks: ScenePackageManifestV1['scenes'][number]['groundChunks'] | undefined
+    let roadCollision: ScenePackageManifestV1['scenes'][number]['roadCollision'] | undefined
 
     // Collect local asset IDs from effective registry and explicit local source metadata.
     const sidecarSource = typeof structuredClone === 'function'
@@ -1546,6 +1579,22 @@ export async function exportScenePackageZip(payload: {
           message: 'Ground chunk collision package written',
         })
       }
+    }
+    const roadCollisionExport = buildRoadCollisionCompiledExport(sidecarSource as SceneJsonExportDocument)
+    if (roadCollisionExport.manifest.roads.length > 0) {
+      roadCollision = {
+        manifestPath: roadCollisionExport.manifestPath,
+      }
+      Object.assign(files, roadCollisionExport.files)
+      emitSceneExportEvent(payload.reportEvent, {
+        phase: 'sidecar',
+        level: 'info',
+        status: 'completed',
+        sceneId: scene.id,
+        sceneName,
+        detail: roadCollisionExport.manifestPath,
+        message: `Road collision cache packaged (${roadCollisionExport.manifest.roads.length})`,
+      })
     }
     stripGroundHeightMapsFromSceneDocument(sidecarSource as StoredSceneDocument)
     const docClone = sidecarSource as SceneExportDocumentWithEditorFields
@@ -1721,6 +1770,7 @@ export async function exportScenePackageZip(payload: {
       terrain,
       compiledGround,
       groundChunks,
+      roadCollision,
     })
   }
 

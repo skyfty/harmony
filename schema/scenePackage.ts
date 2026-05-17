@@ -1,5 +1,5 @@
 export const SCENE_PACKAGE_FORMAT = 'harmony-scene-package' as const;
-export const SCENE_PACKAGE_VERSION = 10 as const;
+export const SCENE_PACKAGE_VERSION = 11 as const;
 
 export interface ScenePackageTerrainEntry {
   datasetId: string;
@@ -18,6 +18,11 @@ export interface ScenePackageCompiledGroundEntry {
 
 export interface ScenePackageGroundChunksEntry {
   /** Path within ZIP, e.g. `scenes/<sceneId>/ground-chunks/manifest.json` */
+  manifestPath: string;
+}
+
+export interface ScenePackageRoadCollisionEntry {
+  /** Path within ZIP, e.g. `scenes/<sceneId>/road-collision/manifest.bin` */
   manifestPath: string;
 }
 
@@ -44,6 +49,8 @@ export interface ScenePackageSceneEntry {
   compiledGround?: ScenePackageCompiledGroundEntry;
   /** Infinite-ground chunk collision package entry used by preview/mobile viewers. */
   groundChunks?: ScenePackageGroundChunksEntry;
+  /** Precompiled road collision package entry used by preview/viewer. */
+  roadCollision?: ScenePackageRoadCollisionEntry;
 }
 
 export interface ScenePackageProjectEntry {
@@ -82,7 +89,8 @@ export function isScenePackageManifest(raw: unknown): raw is ScenePackageManifes
   if (!raw || typeof raw !== 'object') return false;
   const candidate = raw as Partial<ScenePackageManifestV1>;
   if (candidate.format !== SCENE_PACKAGE_FORMAT) return false;
-  if (candidate.version !== SCENE_PACKAGE_VERSION) return false;
+  const version = Number((candidate as Record<string, unknown>).version);
+  if (version !== 10 && version !== SCENE_PACKAGE_VERSION) return false;
   if (!candidate.project || typeof candidate.project !== 'object') return false;
   if (typeof (candidate.project as any).path !== 'string') return false;
   if (!Array.isArray(candidate.scenes)) return false;

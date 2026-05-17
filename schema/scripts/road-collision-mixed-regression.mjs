@@ -5,6 +5,16 @@ import * as THREE from 'three'
 import { buildRoadCollisionBodies, collectRoadCollisionDescriptors } from '../dist/roadCollision.js'
 import { createRoadComponentState, ROAD_COMPONENT_TYPE } from '../dist/components/definitions/roadComponent.js'
 import { clampRigidbodyComponentProps, RIGIDBODY_COMPONENT_TYPE } from '../dist/components/definitions/rigidbodyComponent.js'
+import {
+  buildRoadCollisionCompiledManifestPath,
+  buildRoadCollisionCompiledPackagePath,
+  deserializeRoadCollisionCompiledManifest,
+  deserializeRoadCollisionCompiledPackage,
+  ROAD_COLLISION_COMPILED_MANIFEST_VERSION,
+  ROAD_COLLISION_COMPILED_PACKAGE_VERSION,
+  serializeRoadCollisionCompiledManifest,
+  serializeRoadCollisionCompiledPackage,
+} from '../dist/index.js'
 
 function createRoadNode({
   id,
@@ -287,6 +297,40 @@ async function main() {
     null,
     'disabled road collision should not build rigidbody bodies',
   )
+
+  const sampleManifest = {
+    version: ROAD_COLLISION_COMPILED_MANIFEST_VERSION,
+    sceneId: 'scene:road-binary',
+    revision: 42,
+    roads: [{
+      nodeId: 'road:binary',
+      path: buildRoadCollisionCompiledPackagePath('scene:road-binary', 'road:binary'),
+      signature: 'sig:binary',
+      bodyCount: 1,
+      shapeCount: 2,
+    }],
+  }
+  const samplePackage = {
+    version: ROAD_COLLISION_COMPILED_PACKAGE_VERSION,
+    sceneId: 'scene:road-binary',
+    roadNodeId: 'road:binary',
+    signature: 'sig:binary',
+    asset: {
+      format: 'harmony-physics',
+      materials: [],
+      shapes: [],
+      bodies: [],
+      vehicles: [],
+    },
+  }
+  assert.equal(buildRoadCollisionCompiledManifestPath('scene:road-binary').endsWith('.bin'), true, 'road collision manifest path should use .bin')
+  assert.equal(buildRoadCollisionCompiledPackagePath('scene:road-binary', 'road:binary').endsWith('.bin'), true, 'road collision package path should use .bin')
+  const encodedManifest = serializeRoadCollisionCompiledManifest(sampleManifest)
+  const decodedManifest = deserializeRoadCollisionCompiledManifest(encodedManifest)
+  assert.deepEqual(decodedManifest, sampleManifest, 'road collision manifest should round-trip through binary encoding')
+  const encodedPackage = serializeRoadCollisionCompiledPackage(samplePackage)
+  const decodedPackage = deserializeRoadCollisionCompiledPackage(encodedPackage)
+  assert.deepEqual(decodedPackage, samplePackage, 'road collision package should round-trip through binary encoding')
 
   console.log('road-collision-mixed-regression: ok')
 }

@@ -79,6 +79,7 @@ import { prepareStoredSceneJsonExportBundle } from '@/utils/sceneExport'
 import { type SceneAssetDiagnosticsSummary } from '@/utils/sceneAssetDiagnostics'
 import { collectRuntimeModelNodesByAssetId } from '@/utils/sceneAssetCollectors'
 import { createGroundRuntimeMeshFromSidecar } from '@/utils/groundHeightSidecar'
+import { attachRoadCollisionCompiledExportToDocument } from '@/utils/roadCollisionCompiledExport'
 import { attachOptimizedGroundMeshToDocument } from '@/utils/groundOptimizedMeshExport'
 import { useGroundHeightmapStore } from '@/stores/groundHeightmapStore'
 import { useScenesStore } from '@/stores/scenesStore'
@@ -6851,6 +6852,7 @@ async function buildPreviewRuntimeDocument(
 
 		attachGroundScatterRuntimeToNode(document.id, groundNode)
 	}
+	attachRoadCollisionCompiledExportToDocument(document)
 	attachOptimizedGroundMeshToDocument(document)
 	return document
 }
@@ -6897,9 +6899,10 @@ async function switchToProjectScene(sceneId: string): Promise<void> {
 			}
 			cleanupForUnrelatedSceneSwitch()
 			const waitApplied = waitForSnapshotApplied(timestamp, token)
+			const runtimeDocument = await buildPreviewRuntimeDocument(parsed)
 			applySnapshot({
 				revision: nextSnapshotRevision(),
-				document: parsed,
+				document: runtimeDocument,
 				timestamp,
 			})
 			await waitApplied
@@ -10459,6 +10462,9 @@ async function loadScenePreviewPhysicsBridgeScene(document: SceneJsonExportDocum
 		updateScenePreviewPhysicsBridgeIndex(asset)
 		physicsBridgeSceneLoaded = true
 	} catch (error) {
+		const message = error instanceof Error ? error.message : 'Scene preview physics load failed'
+		statusMessage.value = message
+		warningMessages.value = [message]
 		console.warn('[ScenePreview] Failed to load physics bridge scene', error)
 	}
 }

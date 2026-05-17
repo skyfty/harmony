@@ -141,6 +141,9 @@ export {
   isScenePackageManifest,
 } from './scenePackage'
 export type {
+  ScenePackageRoadCollisionEntry,
+} from './scenePackage'
+export type {
   ScenePackageManifest,
   ScenePackageManifestV1,
   ScenePackageCompiledGroundEntry,
@@ -191,6 +194,25 @@ export {
   type RoadCollisionBuildSnapshot,
   type RoadCollisionDescriptor,
 } from './roadCollision'
+export {
+  ROAD_COLLISION_COMPILED_MANIFEST_VERSION,
+  buildRoadCollisionCompiledManifestPath,
+  buildRoadCollisionCompiledPackagePath,
+  buildRoadCollisionCompiledRootPath,
+  ROAD_COLLISION_COMPILED_PACKAGE_USERDATA_KEY,
+  ROAD_COLLISION_COMPILED_PACKAGE_VERSION,
+  attachRoadCollisionCompiledPackagesToDocument,
+  deserializeRoadCollisionCompiledManifest,
+  deserializeRoadCollisionCompiledPackage,
+  extractRoadCollisionCompiledPackageFromUserData,
+  normalizeRoadCollisionCompiledPackage,
+  normalizeRoadCollisionCompiledManifest,
+  serializeRoadCollisionCompiledManifest,
+  serializeRoadCollisionCompiledPackage,
+  type RoadCollisionCompiledManifest,
+  type RoadCollisionCompiledPackage,
+  type RoadCollisionCompiledRoadEntry,
+} from './roadCollisionCompiled'
 
 export {
   QUANTIZED_TERRAIN_MESH_FORMAT,
