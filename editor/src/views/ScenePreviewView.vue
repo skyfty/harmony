@@ -40,7 +40,6 @@ import {
 	disposeGradientBackgroundDome,
 	createRuntimePrefabDocument,
 	type GradientBackgroundDome,
-	type GroundChunkManifest,
 	type GroundDynamicMesh,
 	type GroundRuntimeDynamicMesh,
 	type LanternSlideDefinition,
@@ -1629,9 +1628,6 @@ const MAP_CONTROL_DEFAULTS = {
 }
 let animationFrameHandle = 0
 let currentDocument: SceneJsonExportDocument | null = null
-let currentGroundChunkManifestSceneId: string | null = null
-let currentGroundChunkManifestRevision = -1
-let currentGroundChunkManifest: GroundChunkManifest | null = null
 const isCannonPhysicsDebuggerVisible = ref(false)
 const runtimePrefabPreviewRoots = new Set<THREE.Object3D>()
 type PreviewWindowWithNominateState = Window & {
@@ -10224,15 +10220,6 @@ function syncScenePreviewCompiledGroundRenderTiles(activeCamera: THREE.Perspecti
 	}
 }
 
-function resolveScenePreviewGroundChunkDataLoader(sceneId: string): ((chunkKey: string) => Promise<ArrayBuffer | null>) | undefined {
-	const trimmedSceneId = sceneId.trim()
-	if (!trimmedSceneId) {
-		return undefined
-	}
-	const scenesStore = useScenesStore()
-	return async (chunkKey) => scenesStore.loadGroundChunkData(trimmedSceneId, chunkKey)
-}
-
 function nextPreviewGroundCollisionRuntimeId(): number {
 	previewGroundCollisionNextRuntimeId += 1
 	return previewGroundCollisionNextRuntimeId
@@ -10261,31 +10248,7 @@ function resolveScenePreviewGroundCollisionRuntimeDeps(): NonNullable<
 }
 
 async function syncScenePreviewGroundChunkManifest(document: SceneJsonExportDocument | null): Promise<void> {
-	if (!document) {
-		currentGroundChunkManifestSceneId = null
-		currentGroundChunkManifestRevision = -1
-		currentGroundChunkManifest = null
-		return
-	}
-	const sceneId = document.id?.trim() ?? ''
-	if (!sceneId) {
-		currentGroundChunkManifestSceneId = null
-		currentGroundChunkManifestRevision = -1
-		currentGroundChunkManifest = null
-		return
-	}
-	const groundNode = findGroundNode(document.nodes)
-	const groundMesh = groundNode?.dynamicMesh as GroundRuntimeDynamicMesh | null | undefined
-	const manifestRevision = Math.max(0, Math.trunc(Number(groundMesh?.chunkManifestRevision) || 0))
-	if (currentGroundChunkManifestSceneId === sceneId && currentGroundChunkManifestRevision === manifestRevision) {
-		return
-	}
-	currentGroundChunkManifestSceneId = sceneId
-	currentGroundChunkManifestRevision = manifestRevision
-	currentGroundChunkManifest = await useScenesStore().loadGroundChunkManifest(sceneId).catch((error: unknown) => {
-		console.warn('[ScenePreview] Failed to load ground chunk manifest', error)
-		return null
-	})
+	void document
 }
 
 function resolveGroundCollisionReferenceWorld(targetPosition: THREE.Vector3): boolean {
@@ -10362,10 +10325,6 @@ function syncScenePreviewGroundCollisionRuntimeHost(
 		camera: resolveGroundCollisionAnchor(referenceWorldPosition),
 		compiledManifest: compiledManifest as any,
 		loadCompiledTileData: resolveScenePreviewCompiledGroundTileLoader(),
-		groundChunkManifest: currentGroundChunkManifest,
-		loadGroundChunkData: currentGroundChunkManifest
-			? resolveScenePreviewGroundChunkDataLoader(document.id ?? '')
-			: undefined,
 		runtimeDeps: resolveScenePreviewGroundCollisionRuntimeDeps(),
 	})
 	return syncGroundCollisionRuntimeLoadedTileKeys(groundObject, groundMesh, {
@@ -10430,9 +10389,6 @@ function updateScenePreviewPhysicsBridgeIndex(asset: PhysicsSceneAsset): void {
 async function loadScenePreviewPhysicsBridgeScene(document: SceneJsonExportDocument | null): Promise<void> {
 	if (!document) {
 		currentPhysicsBridgeGroundCollisionSignature = ''
-		currentGroundChunkManifestSceneId = null
-		currentGroundChunkManifestRevision = -1
-		currentGroundChunkManifest = null
 		physicsCollisionDebugRuntime.setSceneAsset(null)
 		await disposeScenePreviewPhysicsBridgeScene()
 		return
@@ -13097,9 +13053,6 @@ onBeforeUnmount(() => {
 	stopBillboardMeshSubscription?.()
 	stopBillboardMeshSubscription = null
 	disposeSignboardBillboards(scene)
-	currentGroundChunkManifestSceneId = null
-	currentGroundChunkManifestRevision = -1
-	currentGroundChunkManifest = null
 	window.removeEventListener('resize', handleResize)
 	document.removeEventListener('fullscreenchange', handleFullscreenChange)
 	window.removeEventListener('blur', handleWindowBlur)

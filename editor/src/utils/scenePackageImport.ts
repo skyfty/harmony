@@ -1,6 +1,5 @@
 import {
   decodeScenePackageSceneDocument,
-  type GroundChunkManifest,
   type QuantizedTerrainDatasetRootManifest,
   readBinaryFileFromScenePackage,
   readTextFileFromScenePackage,
@@ -22,8 +21,6 @@ export type LoadedStoredScenePackage = {
   scenes: StoredSceneDocument[]
   groundHeightSidecars: Record<string, ArrayBuffer | null>
   groundScatterSidecars: Record<string, ArrayBuffer | null>
-  groundChunkManifests: Record<string, GroundChunkManifest | null>
-  groundChunkData: Record<string, Record<string, ArrayBuffer | null>>
   terrainDatasetManifests: Record<string, QuantizedTerrainDatasetRootManifest | null>
   terrainDatasetRegionPacks: Record<string, Record<string, ArrayBuffer | null>>
 }
@@ -193,43 +190,6 @@ function extractGroundScatterSidecarFromPackage(
   return new Uint8Array(bytes).buffer
 }
 
-function extractGroundChunkManifestFromPackage(
-  zip: ReturnType<typeof unzipScenePackage>,
-  sceneEntry: ScenePackageSceneEntry,
-): GroundChunkManifest | null {
-  const manifestPath = typeof sceneEntry.groundChunks?.manifestPath === 'string'
-    ? sceneEntry.groundChunks.manifestPath.trim()
-    : ''
-  if (!manifestPath) {
-    return null
-  }
-  return JSON.parse(readTextFileFromScenePackage(zip, manifestPath)) as GroundChunkManifest
-}
-
-function extractGroundChunkDataFromPackage(
-  zip: ReturnType<typeof unzipScenePackage>,
-  manifest: GroundChunkManifest | null,
-): Record<string, ArrayBuffer | null> {
-  if (!manifest || !manifest.chunks || typeof manifest.chunks !== 'object') {
-    return {}
-  }
-
-  const out: Record<string, ArrayBuffer | null> = {}
-  for (const [chunkKey, record] of Object.entries(manifest.chunks)) {
-    const dataPath = typeof record?.dataPath === 'string' ? record.dataPath.trim() : ''
-    if (!dataPath) {
-      out[chunkKey] = null
-      continue
-    }
-    const bytes = zip.files[dataPath]
-    if (!bytes) {
-      throw new Error(`Missing ground chunk data in scene bundle: ${dataPath}`)
-    }
-    out[chunkKey] = new Uint8Array(bytes).buffer
-  }
-  return out
-}
-
 function extractTerrainDatasetManifestFromPackage(
   zip: ReturnType<typeof unzipScenePackage>,
   sceneEntry: ScenePackageSceneEntry,
@@ -279,8 +239,6 @@ export async function loadStoredScenesFromScenePackage(zipBytes: ArrayBuffer): P
   const scenes: StoredSceneDocument[] = []
   const groundHeightSidecars: Record<string, ArrayBuffer | null> = {}
   const groundScatterSidecars: Record<string, ArrayBuffer | null> = {}
-  const groundChunkManifests: Record<string, GroundChunkManifest | null> = {}
-  const groundChunkData: Record<string, Record<string, ArrayBuffer | null>> = {}
   const terrainDatasetManifests: Record<string, QuantizedTerrainDatasetRootManifest | null> = {}
   const terrainDatasetRegionPacks: Record<string, Record<string, ArrayBuffer | null>> = {}
   for (const sceneEntry of zip.manifest.scenes ?? []) {
@@ -291,8 +249,6 @@ export async function loadStoredScenesFromScenePackage(zipBytes: ArrayBuffer): P
     const sceneDocument = stripGroundHeightMapsFromSceneDocument(rawScene as unknown as StoredSceneDocument)
     groundHeightSidecars[sceneEntry.sceneId] = extractGroundHeightSidecarFromPackage(zip, sceneEntry, sceneDocument)
     groundScatterSidecars[sceneEntry.sceneId] = extractGroundScatterSidecarFromPackage(zip, sceneEntry, sceneDocument)
-    groundChunkManifests[sceneEntry.sceneId] = extractGroundChunkManifestFromPackage(zip, sceneEntry)
-    groundChunkData[sceneEntry.sceneId] = extractGroundChunkDataFromPackage(zip, groundChunkManifests[sceneEntry.sceneId] ?? null)
     terrainDatasetManifests[sceneEntry.sceneId] = extractTerrainDatasetManifestFromPackage(zip, sceneEntry)
     terrainDatasetRegionPacks[sceneEntry.sceneId] = extractTerrainDatasetRegionPacksFromPackage(zip, terrainDatasetManifests[sceneEntry.sceneId] ?? null)
     const withPlanning = await applyPlanningSidecarToScene(zip, sceneEntry, sceneDocument)
@@ -304,8 +260,6 @@ export async function loadStoredScenesFromScenePackage(zipBytes: ArrayBuffer): P
     scenes,
     groundHeightSidecars,
     groundScatterSidecars,
-    groundChunkManifests,
-    groundChunkData,
     terrainDatasetManifests,
     terrainDatasetRegionPacks,
   }

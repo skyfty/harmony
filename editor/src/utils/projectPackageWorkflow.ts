@@ -1,4 +1,3 @@
-import type { GroundChunkManifest } from '@schema'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import { useProjectsStore } from '@/stores/projectsStore'
 import { useScenesStore } from '@/stores/scenesStore'
@@ -177,8 +176,6 @@ export async function runProjectImportWorkflow(options: {
     const preparedScenes: StoredSceneDocument[] = []
     const preparedHeightSidecars: Record<string, ArrayBuffer | null> = {}
     const preparedScatterSidecars: Record<string, ArrayBuffer | null> = {}
-    const preparedChunkManifests: Record<string, GroundChunkManifest | null> = {}
-    const preparedChunkData: Record<string, Record<string, ArrayBuffer | null>> = {}
     const preparedTerrainDatasetManifests: Record<string, import('@schema').QuantizedTerrainDatasetRootManifest | null> = {}
     const preparedTerrainDatasetRegionPacks: Record<string, Record<string, ArrayBuffer | null>> = {}
 
@@ -204,8 +201,6 @@ export async function runProjectImportWorkflow(options: {
       preparedScenes.push(prepared)
       preparedHeightSidecars[nextId] = loaded.groundHeightSidecars[oldId] ?? null
       preparedScatterSidecars[nextId] = loaded.groundScatterSidecars[oldId] ?? null
-      preparedChunkManifests[nextId] = loaded.groundChunkManifests[oldId] ?? null
-      preparedChunkData[nextId] = loaded.groundChunkData[oldId] ?? {}
       preparedTerrainDatasetManifests[nextId] = loaded.terrainDatasetManifests[oldId] ?? null
       preparedTerrainDatasetRegionPacks[nextId] = loaded.terrainDatasetRegionPacks[oldId] ?? {}
     })
@@ -213,8 +208,6 @@ export async function runProjectImportWorkflow(options: {
     await scenesStore.saveSceneDocuments(preparedScenes, {
       groundHeightSidecars: preparedHeightSidecars,
       groundScatterSidecars: preparedScatterSidecars,
-      groundChunkManifests: preparedChunkManifests,
-      groundChunkData: preparedChunkData,
       terrainDatasetManifests: preparedTerrainDatasetManifests,
       terrainDatasetRegionPacks: preparedTerrainDatasetRegionPacks,
     })

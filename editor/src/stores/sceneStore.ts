@@ -56,7 +56,6 @@ import type {
   BehaviorEventType,
   CameraNodeProperties,
   CompiledGroundManifest,
-  GroundChunkManifest,
   GroundDynamicMesh,
   GroundHeightMap,
   GroundLocalEditTileMap,
@@ -18626,8 +18625,6 @@ export const useSceneStore = defineStore('scene', {
         scenes,
         groundHeightSidecars,
         groundScatterSidecars,
-        groundChunkManifests,
-        groundChunkData,
         terrainDatasetManifests,
         terrainDatasetRegionPacks,
       } = await loadStoredScenesFromScenePackage(zipBytes)
@@ -18646,8 +18643,6 @@ export const useSceneStore = defineStore('scene', {
       const imported: StoredSceneDocument[] = []
       const importedGroundHeightSidecars = new Map<string, ArrayBuffer | null>()
       const importedGroundScatterSidecars = new Map<string, ArrayBuffer | null>()
-      const importedGroundChunkManifests = new Map<string, GroundChunkManifest | null>()
-      const importedGroundChunkData = new Map<string, Record<string, ArrayBuffer | null>>()
       const importedTerrainDatasetManifests = new Map<string, import('@schema').QuantizedTerrainDatasetRootManifest | null>()
       const importedTerrainDatasetRegionPacks = new Map<string, Record<string, ArrayBuffer | null>>()
       const renamedScenes: Array<{ originalName: string; renamedName: string }> = []
@@ -18696,8 +18691,6 @@ export const useSceneStore = defineStore('scene', {
         imported.push(sceneDocument)
         importedGroundHeightSidecars.set(sceneDocument.id, groundHeightSidecars[entry.id] ?? null)
         importedGroundScatterSidecars.set(sceneDocument.id, groundScatterSidecars[entry.id] ?? null)
-        importedGroundChunkManifests.set(sceneDocument.id, groundChunkManifests[entry.id] ?? null)
-        importedGroundChunkData.set(sceneDocument.id, groundChunkData[entry.id] ?? {})
         importedTerrainDatasetManifests.set(sceneDocument.id, terrainDatasetManifests[entry.id] ?? null)
         importedTerrainDatasetRegionPacks.set(sceneDocument.id, terrainDatasetRegionPacks[entry.id] ?? {})
       }
@@ -18710,12 +18703,6 @@ export const useSceneStore = defineStore('scene', {
           ),
           groundScatterSidecars: Object.fromEntries(
             imported.map((sceneDocument) => [sceneDocument.id, importedGroundScatterSidecars.get(sceneDocument.id) ?? null]),
-          ),
-          groundChunkManifests: Object.fromEntries(
-            imported.map((sceneDocument) => [sceneDocument.id, importedGroundChunkManifests.get(sceneDocument.id) ?? null]),
-          ),
-          groundChunkData: Object.fromEntries(
-            imported.map((sceneDocument) => [sceneDocument.id, importedGroundChunkData.get(sceneDocument.id) ?? {}]),
           ),
           terrainDatasetManifests: Object.fromEntries(
             imported.map((sceneDocument) => [sceneDocument.id, importedTerrainDatasetManifests.get(sceneDocument.id) ?? null]),

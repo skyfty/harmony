@@ -16,11 +16,6 @@ export interface ScenePackageCompiledGroundEntry {
   collisionRootPath?: string;
 }
 
-export interface ScenePackageGroundChunksEntry {
-  /** Path within ZIP, e.g. `scenes/<sceneId>/ground-chunks/manifest.json` */
-  manifestPath: string;
-}
-
 export interface ScenePackageRoadCollisionEntry {
   /** Path within ZIP, e.g. `scenes/<sceneId>/road-collision/manifest.bin` */
   manifestPath: string;
@@ -47,8 +42,6 @@ export interface ScenePackageSceneEntry {
   terrain?: ScenePackageTerrainEntry;
   /** Precompiled near-field ground package entry used by preview/mobile viewers. */
   compiledGround?: ScenePackageCompiledGroundEntry;
-  /** Infinite-ground chunk collision package entry used by preview/mobile viewers. */
-  groundChunks?: ScenePackageGroundChunksEntry;
   /** Precompiled road collision package entry used by preview/viewer. */
   roadCollision?: ScenePackageRoadCollisionEntry;
 }

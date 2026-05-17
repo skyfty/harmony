@@ -79,7 +79,6 @@ import type {
   GuideRouteDynamicMesh,
   RegionDynamicMesh,
   ModelCollisionDynamicMesh,
-  GroundChunkManifestRecord,
   Vector3Like,
   WallDynamicMesh,
 } from '@schema/index'
@@ -87,7 +86,6 @@ import { resolveGroundWorkingGridSize } from '@schema/index'
 import {
   buildRegionDynamicMeshFromLocalVertices,
   createGradientBackgroundDome,
-  deserializeGroundChunkData,
   disposeGradientBackgroundDome,
   disposeSkyCubeTexture,
   extractSkycubeZipFaces,
@@ -95,16 +93,11 @@ import {
   isHdriLikeExtension,
   isKtx2LikeExtension,
   isVideoLikeExtension,
-  formatGroundChunkDataPath,
   loadSkyCubeTexture,
-  parseGroundChunkKey,
   resolveGroundChunkCoordFromWorldPosition,
   resolveGroundChunkBounds,
-  resolveGroundChunkOrigin,
   resolveGroundWorldBounds,
-  serializeGroundChunkData,
 } from '@schema/index'
-import { buildGroundChunkDataFromManifestRecord } from '@schema/groundMesh'
 import {
   createSceneCsmShadowRuntime,
   DEFAULT_SCENE_CSM_CONFIG,
@@ -263,7 +256,6 @@ import { compileRoadStaticMeshMetadata, createRoadGroup, updateRoadGroup } from 
 import { createFloorGroup, updateFloorGroup } from '@schema/floorMesh'
 import { createGuideRouteGroup, updateGuideRouteGroup } from '@schema/guideRouteMesh'
 import { useTerrainStore, type GroundPanelTab, type TerrainPaintBrushSettings } from '@/stores/terrainStore'
-import { useScenesStore } from '@/stores/scenesStore'
 import type { TerrainScatterBrushShape, TerrainScatterCategory } from '@schema/terrain-scatter'
 import { hashString, stableSerialize } from '@schema/stableSerialize'
 import { ViewportGizmo } from '@/utils/gizmo/ViewportGizmo'
@@ -488,11 +480,8 @@ const emit = defineEmits<{
 }>()
 
 const sceneStore = useSceneStore()
-const scenesStore = useScenesStore()
 
-let viewportGroundChunkPersistQueue: Promise<void> = Promise.resolve()
 const viewportGroundChunkAutoPersistSignatureMap = new WeakMap<THREE.Object3D, string>()
-type ViewportInfiniteGroundChunkData = ReturnType<typeof buildGroundChunkDataFromManifestRecord>
 
 function canCompleteNodePick(nodeId: string): boolean {
   const node = findSceneNode(sceneStore.nodes, nodeId)
@@ -21406,90 +21395,6 @@ function computeGroundChunkSetSignatureForPlacement(groundObject: THREE.Object3D
   return `${count}:${hash}`
 }
 
-function collectViewportGroundChunkKeysFromRegion(
-  definition: GroundRuntimeDynamicMesh,
-  affectedRegion: { minRow: number; maxRow: number; minColumn: number; maxColumn: number } | null,
-  chunkCells: number,
-): string[] {
-  if (!affectedRegion || !Number.isFinite(chunkCells) || Math.max(1, Math.trunc(chunkCells)) <= 0) {
-    return []
-  }
-
-  const chunkSizeCandidate = definition.chunkSizeMeters
-  const chunkSizeMeters = typeof chunkSizeCandidate === 'number' && Number.isFinite(chunkSizeCandidate) && chunkSizeCandidate > 0
-    ? chunkSizeCandidate
-    : 100
-  const cellSizeCandidate = definition.cellSize
-  const cellSize = typeof cellSizeCandidate === 'number' && Number.isFinite(cellSizeCandidate) && cellSizeCandidate > 1e-6
-    ? cellSizeCandidate
-    : 1
-  const bounds = resolveGroundWorldBounds(definition)
-
-  const minX = bounds.minX + affectedRegion.minColumn * cellSize
-  const maxX = bounds.minX + affectedRegion.maxColumn * cellSize
-  const minZ = bounds.minZ + affectedRegion.minRow * cellSize
-  const maxZ = bounds.minZ + affectedRegion.maxRow * cellSize
-
-  const minCoord = resolveGroundChunkCoordFromWorldPosition(minX, minZ, chunkSizeMeters)
-  const maxCoord = resolveGroundChunkCoordFromWorldPosition(maxX, maxZ, chunkSizeMeters)
-  const chunkKeys: string[] = []
-  const minChunkX = Math.min(minCoord.chunkX, maxCoord.chunkX)
-  const maxChunkX = Math.max(minCoord.chunkX, maxCoord.chunkX)
-  const minChunkZ = Math.min(minCoord.chunkZ, maxCoord.chunkZ)
-  const maxChunkZ = Math.max(minCoord.chunkZ, maxCoord.chunkZ)
-
-  for (let chunkZ = minChunkZ; chunkZ <= maxChunkZ; chunkZ += 1) {
-    for (let chunkX = minChunkX; chunkX <= maxChunkX; chunkX += 1) {
-      const key = `${chunkX}:${chunkZ}`
-      if (!chunkKeys.includes(key)) {
-        chunkKeys.push(key)
-      }
-    }
-  }
-
-  return chunkKeys
-}
-
-function createViewportGroundChunkManifestRecord(
-  definition: GroundRuntimeDynamicMesh,
-  chunkKey: string,
-  revision: number,
-  updatedAt: number,
-  existingRecord?: GroundChunkManifestRecord | null,
-): GroundChunkManifestRecord | null {
-  const coord = parseGroundChunkKey(chunkKey)
-  if (!coord) {
-    return null
-  }
-  const chunkSizeCandidate = definition.chunkSizeMeters
-  const chunkSizeMeters = typeof chunkSizeCandidate === 'number' && Number.isFinite(chunkSizeCandidate) && chunkSizeCandidate > 0
-    ? chunkSizeCandidate
-    : 100
-  const cellSizeCandidate = definition.cellSize
-  const cellSize = typeof cellSizeCandidate === 'number' && Number.isFinite(cellSizeCandidate) && cellSizeCandidate > 1e-6
-    ? cellSizeCandidate
-    : 1
-  const resolution = Math.max(1, Math.round(chunkSizeMeters / cellSize))
-  const { x: originX, z: originZ } = resolveGroundChunkOrigin(coord, chunkSizeMeters)
-  return {
-    key: chunkKey,
-    chunkX: coord.chunkX,
-    chunkZ: coord.chunkZ,
-    originX,
-    originZ,
-    chunkSizeMeters,
-    resolution: existingRecord?.resolution && existingRecord.resolution > 0 ? Math.trunc(existingRecord.resolution) : resolution,
-    revision,
-    heightMin: existingRecord?.heightMin ?? 0,
-    heightMax: existingRecord?.heightMax ?? 0,
-    dataPath: existingRecord?.dataPath ?? formatGroundChunkDataPath(coord),
-    updatedAt,
-    source: existingRecord?.source ?? 'manual',
-    paintAssetId: existingRecord?.paintAssetId ?? null,
-    scatterAssetId: existingRecord?.scatterAssetId ?? null,
-  }
-}
-
 async function persistViewportInfiniteGroundChunks(params: {
   groundObject: THREE.Object3D
   definition: GroundRuntimeDynamicMesh
@@ -21498,240 +21403,7 @@ async function persistViewportInfiniteGroundChunks(params: {
   chunkCells: number
   persistSceneState?: boolean
 }): Promise<void> {
-  const shouldPersistSceneState = params.persistSceneState !== false
-  const sceneId = typeof sceneStore.currentSceneId === 'string' ? sceneStore.currentSceneId.trim() : ''
-  if (!sceneId) {
-    return
-  }
-
-  const chunkKeySet = new Set<string>()
-  if (Array.isArray(params.chunkKeys)) {
-    for (const value of params.chunkKeys) {
-      const normalized = typeof value === 'string' ? value.trim() : ''
-      if (normalized) {
-        chunkKeySet.add(normalized)
-      }
-    }
-  }
-  if (!chunkKeySet.size) {
-    for (const key of collectViewportGroundChunkKeysFromRegion(params.definition, params.affectedRegion, params.chunkCells)) {
-      if (key) {
-        chunkKeySet.add(key)
-      }
-    }
-  }
-  const chunkKeys = Array.from(chunkKeySet)
-  if (!chunkKeys.length) {
-    return
-  }
-
-  if (shouldPersistSceneState && params.affectedRegion) {
-    await sceneStore.saveActiveScene({ force: true })
-  }
-
-  const persistTask = viewportGroundChunkPersistQueue
-    .catch(() => undefined)
-    .then(async () => {
-      const baseRevision = Math.max(0, Math.trunc(params.definition.chunkManifestRevision ?? 0))
-      const updatedAt = Date.now()
-      const nextRevisionCandidate = Math.max(1, baseRevision + 1)
-      const chunkDataByKey = new Map<string, ViewportInfiniteGroundChunkData>()
-
-      for (const chunkKey of chunkKeys) {
-        const previewRecord = createViewportGroundChunkManifestRecord(
-          params.definition,
-          chunkKey,
-          nextRevisionCandidate,
-          updatedAt,
-          null,
-        )
-        if (!previewRecord) {
-          continue
-        }
-        chunkDataByKey.set(chunkKey, buildGroundChunkDataFromManifestRecord(params.definition, previewRecord))
-      }
-
-      const manifest = await scenesStore.loadGroundChunkManifest(sceneId)
-      const nextManifestRecords: Record<string, GroundChunkManifestRecord> = { ...(manifest?.chunks ?? {}) }
-      const nextRevision = Math.max(
-        1,
-        Math.trunc(manifest?.revision ?? 0) + 1,
-        nextRevisionCandidate,
-      )
-      const dirtyRecords: GroundChunkManifestRecord[] = []
-      const affectedRegionWorldBounds = resolveAffectedGroundRegionWorldBounds(params.definition, params.affectedRegion)
-
-      for (const chunkKey of chunkKeys) {
-        const existingRecord = nextManifestRecords[chunkKey] ?? null
-        const nextRecord = createViewportGroundChunkManifestRecord(
-          params.definition,
-          chunkKey,
-          nextRevision,
-          updatedAt,
-          existingRecord,
-        )
-        const chunkData = chunkDataByKey.get(chunkKey)
-        if (!nextRecord || !chunkData) {
-          continue
-        }
-        let existingChunkData: ViewportInfiniteGroundChunkData | null = null
-        if (existingRecord) {
-          const existingBuffer = await scenesStore.loadGroundChunkData(sceneId, chunkKey)
-          const decodedExistingChunkData = deserializeGroundChunkData(existingBuffer)
-          existingChunkData = decodedExistingChunkData && Math.max(1, Math.trunc(decodedExistingChunkData.header.resolution)) === Math.max(1, Math.trunc(nextRecord.resolution))
-            ? decodedExistingChunkData
-            : createViewportInfiniteGroundChunkDataFromHeights(
-              nextRecord,
-              decodeViewportGroundChunkHeights(existingBuffer, nextRecord.resolution),
-            )
-        }
-        const mergedChunkData = mergeViewportGroundChunkPersistData({
-          record: nextRecord,
-          nextChunkData: chunkData,
-          existingChunkData,
-          affectedRegionWorldBounds,
-        })
-        const encoded = serializeGroundChunkData({
-          header: {
-            ...mergedChunkData.header,
-            revision: nextRevision,
-            updatedAt,
-            source: nextRecord.source ?? mergedChunkData.header.source ?? null,
-            key: nextRecord.key,
-            chunkX: nextRecord.chunkX,
-            chunkZ: nextRecord.chunkZ,
-            originX: nextRecord.originX,
-            originZ: nextRecord.originZ,
-            chunkSizeMeters: nextRecord.chunkSizeMeters,
-            resolution: nextRecord.resolution,
-            cellSize: nextRecord.chunkSizeMeters / Math.max(1, nextRecord.resolution),
-            heightMin: mergedChunkData.header.heightMin,
-            heightMax: mergedChunkData.header.heightMax,
-          },
-          heights: mergedChunkData.heights,
-        })
-        nextRecord.heightMin = mergedChunkData.header.heightMin
-        nextRecord.heightMax = mergedChunkData.header.heightMax
-        await scenesStore.saveGroundChunkData(sceneId, chunkKey, encoded, { syncServer: false })
-        nextManifestRecords[chunkKey] = nextRecord
-        dirtyRecords.push(nextRecord)
-        chunkDataByKey.set(chunkKey, mergedChunkData)
-      }
-
-      if (!dirtyRecords.length) {
-        return
-      }
-
-      const nextManifest = {
-        version: 1 as const,
-        sceneId,
-        chunkSizeMeters: Math.max(1, Math.trunc(params.definition.chunkSizeMeters ?? 100)),
-        baseHeight: typeof params.definition.baseHeight === 'number' && Number.isFinite(params.definition.baseHeight)
-          ? params.definition.baseHeight
-          : 0,
-        worldBounds: resolveGroundWorldBounds(params.definition),
-        chunkBounds: resolveGroundChunkBounds(params.definition),
-        revision: nextRevision,
-        updatedAt,
-        chunks: nextManifestRecords,
-      }
-      await scenesStore.saveGroundChunkManifest(sceneId, nextManifest, { syncServer: false })
-
-      params.definition.chunkManifestRevision = nextRevision
-
-      if (shouldPersistSceneState) {
-        const groundNode = getGroundNodeFromStore()
-        if (groundNode?.dynamicMesh?.type === 'Ground') {
-          await sceneStore.withHistorySuppressed(async () => {
-            sceneStore.updateGroundNodeDynamicMesh(groundNode.id, {
-              chunkManifestRevision: nextRevision,
-            })
-          })
-        }
-      }
-
-      if (shouldPersistSceneState) {
-        await sceneStore.saveActiveScene({ force: true })
-      }
-    })
-
-  viewportGroundChunkPersistQueue = persistTask.catch(() => undefined)
-  await persistTask
-
-}
-
-function createViewportInfiniteGroundChunkDataFromHeights(record: GroundChunkManifestRecord, heights: Float32Array | null): ViewportInfiniteGroundChunkData {
-  const nextHeights = heights instanceof Float32Array ? heights : new Float32Array(0)
-  let heightMin = Number.POSITIVE_INFINITY
-  let heightMax = Number.NEGATIVE_INFINITY
-  for (let index = 0; index < nextHeights.length; index += 1) {
-    const value = Number(nextHeights[index])
-    if (!Number.isFinite(value)) {
-      continue
-    }
-    heightMin = Math.min(heightMin, value)
-    heightMax = Math.max(heightMax, value)
-  }
-  return {
-    header: {
-      version: 1,
-      key: record.key,
-      chunkX: record.chunkX,
-      chunkZ: record.chunkZ,
-      originX: record.originX,
-      originZ: record.originZ,
-      chunkSizeMeters: record.chunkSizeMeters,
-      resolution: record.resolution,
-      cellSize: record.chunkSizeMeters / Math.max(1, Math.trunc(record.resolution)),
-      revision: Math.max(0, Math.trunc(record.revision)),
-      heightMin: Number.isFinite(heightMin) ? heightMin : 0,
-      heightMax: Number.isFinite(heightMax) ? heightMax : 0,
-      updatedAt: Math.max(0, Math.trunc(record.updatedAt)),
-      source: record.source ?? null,
-    },
-    heights: nextHeights,
-  }
-}
-
-function decodeViewportGroundChunkHeights(buffer: ArrayBuffer | null, resolution: number): Float32Array | null {
-  if (!(buffer instanceof ArrayBuffer)) {
-    return null
-  }
-
-  const decoded = deserializeGroundChunkData(buffer)
-  if (decoded) {
-    const decodedResolution = Math.max(1, Math.trunc(decoded.header.resolution))
-    if (decodedResolution === Math.max(1, Math.trunc(resolution))) {
-      const heights = decoded.heights instanceof Float32Array ? decoded.heights : Float32Array.from(decoded.heights)
-      return heights.length ? heights : null
-    }
-  }
-
-  const expectedVertexCount = (Math.max(1, resolution) + 1) * (Math.max(1, resolution) + 1)
-  if (buffer.byteLength !== expectedVertexCount * Float32Array.BYTES_PER_ELEMENT) {
-    return null
-  }
-  return new Float32Array(buffer)
-}
-
-function resolveAffectedGroundRegionWorldBounds(
-  definition: GroundRuntimeDynamicMesh,
-  affectedRegion: { minRow: number; maxRow: number; minColumn: number; maxColumn: number } | null,
-): { minX: number; maxX: number; minZ: number; maxZ: number } | null {
-  if (!affectedRegion) {
-    return null
-  }
-  const cellSize = Number.isFinite(definition.cellSize) ? Number(definition.cellSize) : 0
-  if (!(cellSize > 0)) {
-    return null
-  }
-  const bounds = resolveGroundWorldBounds(definition)
-  return {
-    minX: bounds.minX + affectedRegion.minColumn * cellSize,
-    maxX: bounds.minX + affectedRegion.maxColumn * cellSize,
-    minZ: bounds.minZ + affectedRegion.minRow * cellSize,
-    maxZ: bounds.minZ + affectedRegion.maxRow * cellSize,
-  }
+  void params
 }
 
 function resolveViewportGroundStreamingDefinition(
@@ -21755,69 +21427,6 @@ function resolveViewportGroundStreamingDefinition(
   return {
     ...groundDefinition,
     renderRadiusChunks,
-  }
-}
-
-function mergeViewportGroundChunkPersistData(params: {
-  record: GroundChunkManifestRecord
-  nextChunkData: ViewportInfiniteGroundChunkData
-  existingChunkData: ViewportInfiniteGroundChunkData | null
-  affectedRegionWorldBounds: { minX: number; maxX: number; minZ: number; maxZ: number } | null
-}): ViewportInfiniteGroundChunkData {
-  const { record, nextChunkData, existingChunkData, affectedRegionWorldBounds } = params
-  if (!existingChunkData || !affectedRegionWorldBounds) {
-    return nextChunkData
-  }
-
-  const resolution = Math.max(1, Math.trunc(record.resolution))
-  const expectedVertexCount = (resolution + 1) * (resolution + 1)
-  const nextHeights = nextChunkData.heights instanceof Float32Array
-    ? nextChunkData.heights
-    : Float32Array.from(nextChunkData.heights)
-  const existingHeights = existingChunkData.heights instanceof Float32Array
-    ? existingChunkData.heights
-    : Float32Array.from(existingChunkData.heights)
-  if (nextHeights.length !== expectedVertexCount || existingHeights.length !== expectedVertexCount) {
-    return nextChunkData
-  }
-
-  const mergedHeights = new Float32Array(nextHeights)
-  const cellSize = record.chunkSizeMeters / resolution
-  const epsilon = Math.max(cellSize * 0.25, 1e-4)
-  let reusedVertexCount = 0
-  let heightMin = Number.POSITIVE_INFINITY
-  let heightMax = Number.NEGATIVE_INFINITY
-
-  for (let row = 0; row <= resolution; row += 1) {
-    for (let column = 0; column <= resolution; column += 1) {
-      const index = row * (resolution + 1) + column
-      const sampleX = record.originX + column * cellSize
-      const sampleZ = record.originZ + row * cellSize
-      const withinAffectedRegion = sampleX >= affectedRegionWorldBounds.minX - epsilon
-        && sampleX <= affectedRegionWorldBounds.maxX + epsilon
-        && sampleZ >= affectedRegionWorldBounds.minZ - epsilon
-        && sampleZ <= affectedRegionWorldBounds.maxZ + epsilon
-      const value = withinAffectedRegion
-        ? (nextHeights[index] ?? existingHeights[index] ?? nextChunkData.header.heightMin)
-        : (existingHeights[index] ?? nextHeights[index] ?? existingChunkData.header.heightMin)
-      if (!withinAffectedRegion) {
-        reusedVertexCount += 1
-      }
-      mergedHeights[index] = value
-      if (Number.isFinite(value)) {
-        heightMin = Math.min(heightMin, value)
-        heightMax = Math.max(heightMax, value)
-      }
-    }
-  }
-
-  return {
-    header: {
-      ...nextChunkData.header,
-      heightMin: Number.isFinite(heightMin) ? heightMin : nextChunkData.header.heightMin,
-      heightMax: Number.isFinite(heightMax) ? heightMax : nextChunkData.header.heightMax,
-    },
-    heights: mergedHeights,
   }
 }
 

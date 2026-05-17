@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import type { CompiledGroundManifest, GroundChunkManifest, GroundDynamicMesh, QuantizedTerrainDatasetRootManifest, SceneNode } from '@schema'
+import type { CompiledGroundManifest, GroundDynamicMesh, QuantizedTerrainDatasetRootManifest, SceneNode } from '@schema'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { SceneSummary } from '@/types/scene-summary'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
@@ -159,8 +159,6 @@ const STORE_METADATA = 'sceneMetadata'
 const STORE_DOCUMENTS = 'sceneDocuments'
 const STORE_GROUND_HEIGHTMAPS = 'sceneGroundHeightmaps'
 const STORE_GROUND_SCATTERS = 'sceneGroundScatters'
-const STORE_GROUND_CHUNK_MANIFESTS = 'sceneGroundChunkManifests'
-const STORE_GROUND_CHUNK_DATA = 'sceneGroundChunkData'
 const STORE_TERRAIN_DATASET_MANIFESTS = 'sceneTerrainDatasetManifests'
 const STORE_TERRAIN_DATASET_REGION_PACKS = 'sceneTerrainDatasetRegionPacks'
 const STORE_COMPILED_GROUND_BUNDLES = 'sceneCompiledGroundBundles'
@@ -168,8 +166,6 @@ const STORE_COMPILED_GROUND_BUNDLES = 'sceneCompiledGroundBundles'
 const memoryWorkspaceDocuments = new Map<string, Map<string, StoredSceneDocument>>()
 const memoryWorkspaceGroundHeightSidecars = new Map<string, Map<string, ArrayBuffer>>()
 const memoryWorkspaceGroundScatterSidecars = new Map<string, Map<string, ArrayBuffer>>()
-const memoryWorkspaceGroundChunkManifests = new Map<string, Map<string, GroundChunkManifest>>()
-const memoryWorkspaceGroundChunkData = new Map<string, Map<string, ArrayBuffer>>()
 const memoryWorkspaceTerrainDatasetManifests = new Map<string, Map<string, QuantizedTerrainDatasetRootManifest>>()
 const memoryWorkspaceTerrainDatasetRegionPacks = new Map<string, Map<string, ArrayBuffer>>()
 type StoredSceneCompiledGroundBundle = {
@@ -208,24 +204,6 @@ function getMemoryGroundScatterSidecars(workspaceId: string): Map<string, ArrayB
   if (!bucket) {
     bucket = new Map()
     memoryWorkspaceGroundScatterSidecars.set(workspaceId, bucket)
-  }
-  return bucket
-}
-
-function getMemoryGroundChunkManifests(workspaceId: string): Map<string, GroundChunkManifest> {
-  let bucket = memoryWorkspaceGroundChunkManifests.get(workspaceId)
-  if (!bucket) {
-    bucket = new Map()
-    memoryWorkspaceGroundChunkManifests.set(workspaceId, bucket)
-  }
-  return bucket
-}
-
-function getMemoryGroundChunkData(workspaceId: string): Map<string, ArrayBuffer> {
-  let bucket = memoryWorkspaceGroundChunkData.get(workspaceId)
-  if (!bucket) {
-    bucket = new Map()
-    memoryWorkspaceGroundChunkData.set(workspaceId, bucket)
   }
   return bucket
 }
@@ -470,12 +448,6 @@ function openDatabase(workspaceId: string): Promise<IDBDatabase> {
           if (!db.objectStoreNames.contains(STORE_GROUND_SCATTERS)) {
             db.createObjectStore(STORE_GROUND_SCATTERS, { keyPath: 'id' })
           }
-          if (!db.objectStoreNames.contains(STORE_GROUND_CHUNK_MANIFESTS)) {
-            db.createObjectStore(STORE_GROUND_CHUNK_MANIFESTS, { keyPath: 'id' })
-          }
-          if (!db.objectStoreNames.contains(STORE_GROUND_CHUNK_DATA)) {
-            db.createObjectStore(STORE_GROUND_CHUNK_DATA, { keyPath: 'id' })
-          }
           if (!db.objectStoreNames.contains(STORE_TERRAIN_DATASET_MANIFESTS)) {
             db.createObjectStore(STORE_TERRAIN_DATASET_MANIFESTS, { keyPath: 'id' })
           }
@@ -509,8 +481,6 @@ async function deleteWorkspaceStorage(workspaceId: string): Promise<void> {
     memoryWorkspaceDocuments.delete(workspaceId)
     memoryWorkspaceGroundHeightSidecars.delete(workspaceId)
     memoryWorkspaceGroundScatterSidecars.delete(workspaceId)
-    memoryWorkspaceGroundChunkManifests.delete(workspaceId)
-    memoryWorkspaceGroundChunkData.delete(workspaceId)
     memoryWorkspaceTerrainDatasetManifests.delete(workspaceId)
     memoryWorkspaceTerrainDatasetRegionPacks.delete(workspaceId)
     memoryWorkspaceCompiledGroundBundles.delete(workspaceId)
@@ -534,8 +504,6 @@ async function deleteWorkspaceStorage(workspaceId: string): Promise<void> {
   memoryWorkspaceDocuments.delete(workspaceId)
   memoryWorkspaceGroundHeightSidecars.delete(workspaceId)
   memoryWorkspaceGroundScatterSidecars.delete(workspaceId)
-  memoryWorkspaceGroundChunkManifests.delete(workspaceId)
-  memoryWorkspaceGroundChunkData.delete(workspaceId)
   memoryWorkspaceTerrainDatasetManifests.delete(workspaceId)
   memoryWorkspaceTerrainDatasetRegionPacks.delete(workspaceId)
   memoryWorkspaceCompiledGroundBundles.delete(workspaceId)
@@ -612,95 +580,6 @@ async function writeSceneGroundScatterSidecar(workspaceId: string, sceneId: stri
     tx.oncomplete = () => resolve()
     tx.onerror = () => reject(tx.error ?? new Error('Failed to write scene ground scatter sidecar'))
     tx.onabort = () => reject(tx.error ?? new Error('Scene ground scatter sidecar write aborted'))
-  })
-}
-
-async function readSceneGroundChunkManifest(workspaceId: string, sceneId: string): Promise<GroundChunkManifest | null> {
-  if (!isIndexedDbAvailable()) {
-    const manifest = getMemoryGroundChunkManifests(workspaceId).get(sceneId)
-    return manifest ? cloneForIndexedDb(manifest) : null
-  }
-  const db = await openDatabase(workspaceId)
-  const tx = db.transaction(STORE_GROUND_CHUNK_MANIFESTS, 'readonly')
-  const store = tx.objectStore(STORE_GROUND_CHUNK_MANIFESTS)
-  const entry = await requestToPromise<{ id: string; manifest: GroundChunkManifest } | undefined>(store.get(sceneId))
-  return entry?.manifest ? cloneForIndexedDb(entry.manifest) : null
-}
-
-async function writeSceneGroundChunkManifest(
-  workspaceId: string,
-  sceneId: string,
-  manifest: GroundChunkManifest | null,
-): Promise<void> {
-  if (!isIndexedDbAvailable()) {
-    const bucket = getMemoryGroundChunkManifests(workspaceId)
-    if (manifest) {
-      bucket.set(sceneId, cloneForIndexedDb(manifest))
-    } else {
-      bucket.delete(sceneId)
-    }
-    return
-  }
-  const db = await openDatabase(workspaceId)
-  const tx = db.transaction(STORE_GROUND_CHUNK_MANIFESTS, 'readwrite')
-  const store = tx.objectStore(STORE_GROUND_CHUNK_MANIFESTS)
-  if (manifest) {
-    store.put({ id: sceneId, manifest: cloneForIndexedDb(manifest) })
-  } else {
-    store.delete(sceneId)
-  }
-  await new Promise<void>((resolve, reject) => {
-    tx.oncomplete = () => resolve()
-    tx.onerror = () => reject(tx.error ?? new Error('Failed to write scene ground chunk manifest'))
-    tx.onabort = () => reject(tx.error ?? new Error('Scene ground chunk manifest write aborted'))
-  })
-}
-
-async function readSceneGroundChunkData(
-  workspaceId: string,
-  sceneId: string,
-  chunkKey: string,
-): Promise<ArrayBuffer | null> {
-  const storageKey = getGroundChunkDataStorageKey(sceneId, chunkKey)
-  if (!isIndexedDbAvailable()) {
-    const buffer = getMemoryGroundChunkData(workspaceId).get(storageKey)
-    return buffer ? cloneArrayBuffer(buffer) : null
-  }
-  const db = await openDatabase(workspaceId)
-  const tx = db.transaction(STORE_GROUND_CHUNK_DATA, 'readonly')
-  const store = tx.objectStore(STORE_GROUND_CHUNK_DATA)
-  const entry = await requestToPromise<{ id: string; buffer: ArrayBuffer } | undefined>(store.get(storageKey))
-  return entry?.buffer ?? null
-}
-
-async function writeSceneGroundChunkData(
-  workspaceId: string,
-  sceneId: string,
-  chunkKey: string,
-  data: ArrayBuffer | null,
-): Promise<void> {
-  const storageKey = getGroundChunkDataStorageKey(sceneId, chunkKey)
-  if (!isIndexedDbAvailable()) {
-    const bucket = getMemoryGroundChunkData(workspaceId)
-    if (data) {
-      bucket.set(storageKey, cloneArrayBuffer(data))
-    } else {
-      bucket.delete(storageKey)
-    }
-    return
-  }
-  const db = await openDatabase(workspaceId)
-  const tx = db.transaction(STORE_GROUND_CHUNK_DATA, 'readwrite')
-  const store = tx.objectStore(STORE_GROUND_CHUNK_DATA)
-  if (data) {
-    store.put({ id: storageKey, sceneId, chunkKey, buffer: cloneArrayBuffer(data) })
-  } else {
-    store.delete(storageKey)
-  }
-  await new Promise<void>((resolve, reject) => {
-    tx.oncomplete = () => resolve()
-    tx.onerror = () => reject(tx.error ?? new Error('Failed to write scene ground chunk data'))
-    tx.onabort = () => reject(tx.error ?? new Error('Scene ground chunk data write aborted'))
   })
 }
 
@@ -862,14 +741,12 @@ async function replaceWorkspaceDocuments(
   documents: StoredSceneDocument[],
   groundHeightSidecars: Record<string, ArrayBuffer | null> = {},
   groundScatterSidecars: Record<string, ArrayBuffer | null> = {},
-        groundChunkManifests: Record<string, GroundChunkManifest | null> = {},
-        groundChunkData: Record<string, Record<string, ArrayBuffer | null>> = {},
 ): Promise<void> {
   await deleteWorkspaceStorage(workspaceId)
   if (!documents.length) {
     return
   }
-  await writeSceneDocuments(workspaceId, documents, groundHeightSidecars, groundScatterSidecars, groundChunkManifests, groundChunkData)
+  await writeSceneDocuments(workspaceId, documents, groundHeightSidecars, groundScatterSidecars)
 }
 
 async function fetchUserScenesFromServer(authStore: ReturnType<typeof useAuthStore>): Promise<UserSceneBundleSummaryDto[] | null> {
@@ -936,7 +813,7 @@ async function downloadSceneBundleZip(
   return { bytes, etag }
 }
 
-async function unpackSceneBundleIntoStores(zipBytes: ArrayBuffer): Promise<{ document: StoredSceneDocument; groundHeightSidecar: ArrayBuffer | null; groundScatterSidecar: ArrayBuffer | null; groundChunkManifest: GroundChunkManifest | null; groundChunkData: Record<string, ArrayBuffer | null>; terrainDatasetManifest: QuantizedTerrainDatasetRootManifest | null; terrainDatasetRegionPacks: Record<string, ArrayBuffer | null> }> {
+async function unpackSceneBundleIntoStores(zipBytes: ArrayBuffer): Promise<{ document: StoredSceneDocument; groundHeightSidecar: ArrayBuffer | null; groundScatterSidecar: ArrayBuffer | null; terrainDatasetManifest: QuantizedTerrainDatasetRootManifest | null; terrainDatasetRegionPacks: Record<string, ArrayBuffer | null> }> {
   const pkg = await loadStoredScenesFromScenePackage(zipBytes)
   const scene = pkg.scenes[0]
   if (!scene) {
@@ -946,8 +823,6 @@ async function unpackSceneBundleIntoStores(zipBytes: ArrayBuffer): Promise<{ doc
     document: scene,
     groundHeightSidecar: pkg.groundHeightSidecars[scene.id] ?? null,
     groundScatterSidecar: pkg.groundScatterSidecars[scene.id] ?? null,
-    groundChunkManifest: pkg.groundChunkManifests[scene.id] ?? null,
-    groundChunkData: pkg.groundChunkData[scene.id] ?? {},
     terrainDatasetManifest: pkg.terrainDatasetManifests[scene.id] ?? null,
     terrainDatasetRegionPacks: pkg.terrainDatasetRegionPacks[scene.id] ?? {},
   }
@@ -1123,21 +998,12 @@ async function readSceneBundleFromWorkspace(
   document: StoredSceneDocument
   groundHeightSidecar: ArrayBuffer | null
   groundScatterSidecar: ArrayBuffer | null
-  groundChunkManifest: GroundChunkManifest | null
-  groundChunkData: Record<string, ArrayBuffer | null>
   terrainDatasetManifest: QuantizedTerrainDatasetRootManifest | null
   terrainDatasetRegionPacks: Record<string, ArrayBuffer | null>
 } | null> {
   const document = await readSceneDocument(workspaceId, sceneId, { hydrateGroundRuntime: false })
   if (!document) {
     return null
-  }
-  const groundChunkManifest = await readSceneGroundChunkManifest(workspaceId, sceneId)
-  const groundChunkData: Record<string, ArrayBuffer | null> = {}
-  if (groundChunkManifest?.chunks && typeof groundChunkManifest.chunks === 'object') {
-    for (const chunkKey of Object.keys(groundChunkManifest.chunks)) {
-      groundChunkData[chunkKey] = await readSceneGroundChunkData(workspaceId, sceneId, chunkKey)
-    }
   }
   const terrainDatasetManifest = await readSceneTerrainDatasetManifest(workspaceId, sceneId)
   const terrainDatasetRegionPacks: Record<string, ArrayBuffer | null> = {}
@@ -1150,8 +1016,6 @@ async function readSceneBundleFromWorkspace(
     document,
     groundHeightSidecar: await readSceneGroundHeightSidecar(workspaceId, sceneId),
     groundScatterSidecar: await readSceneGroundScatterSidecar(workspaceId, sceneId),
-    groundChunkManifest,
-    groundChunkData,
     terrainDatasetManifest,
     terrainDatasetRegionPacks,
   }
@@ -1225,8 +1089,6 @@ async function writeSceneDocuments(
   documents: StoredSceneDocument[],
   groundHeightSidecars: Record<string, ArrayBuffer | null> = {},
   groundScatterSidecars: Record<string, ArrayBuffer | null> = {},
-  groundChunkManifests: Record<string, GroundChunkManifest | null> = {},
-  groundChunkData: Record<string, Record<string, ArrayBuffer | null>> = {},
   terrainDatasetManifests: Record<string, QuantizedTerrainDatasetRootManifest | null> = {},
   terrainDatasetRegionPacks: Record<string, Record<string, ArrayBuffer | null>> = {},
 ): Promise<void> {
@@ -1248,24 +1110,6 @@ async function writeSceneDocuments(
       } else {
         getMemoryGroundScatterSidecars(workspaceId).delete(prepared.id)
       }
-
-      const manifest = groundChunkManifests[prepared.id] ?? null
-      if (manifest) {
-        getMemoryGroundChunkManifests(workspaceId).set(prepared.id, structuredClone(manifest))
-      } else {
-        getMemoryGroundChunkManifests(workspaceId).delete(prepared.id)
-      }
-
-      const chunkDataBucket = getMemoryGroundChunkData(workspaceId)
-      Array.from(chunkDataBucket.keys())
-        .filter((key) => key.startsWith(`${prepared.id}:`))
-        .forEach((key) => chunkDataBucket.delete(key))
-      const chunkEntries = groundChunkData[prepared.id] ?? {}
-      Object.entries(chunkEntries).forEach(([chunkKey, chunkBuffer]) => {
-        if (chunkBuffer) {
-          chunkDataBucket.set(getGroundChunkDataStorageKey(prepared.id, chunkKey), cloneArrayBuffer(chunkBuffer))
-        }
-      })
 
       const terrainManifest = terrainDatasetManifests[prepared.id] ?? null
       if (terrainManifest) {
@@ -1316,43 +1160,6 @@ async function writeSceneDocuments(
   })
 
   for (const { document: prepared } of preparedDocs) {
-    await writeSceneGroundChunkManifest(workspaceId, prepared.id, groundChunkManifests[prepared.id] ?? null)
-    const chunkEntries = groundChunkData[prepared.id] ?? {}
-    const existingKeys = isIndexedDbAvailable()
-      ? await (async () => {
-          const db = await openDatabase(workspaceId)
-          const tx = db.transaction(STORE_GROUND_CHUNK_DATA, 'readonly')
-          const store = tx.objectStore(STORE_GROUND_CHUNK_DATA)
-          const keys: string[] = []
-          await new Promise<void>((resolve, reject) => {
-            const request = store.openCursor()
-            request.onsuccess = () => {
-              const cursor = request.result
-              if (!cursor) {
-                resolve()
-                return
-              }
-              const entry = cursor.value as { sceneId?: string; chunkKey?: string } | undefined
-              if (entry?.sceneId === prepared.id && typeof entry.chunkKey === 'string') {
-                keys.push(entry.chunkKey)
-              }
-              cursor.continue()
-            }
-            request.onerror = () => reject(request.error ?? new Error('Failed to read scene ground chunk keys'))
-            tx.onabort = () => reject(tx.error ?? new Error('Scene ground chunk key scan aborted'))
-          })
-          return keys
-        })()
-      : []
-    for (const chunkKey of existingKeys) {
-      if (!(chunkKey in chunkEntries)) {
-        await writeSceneGroundChunkData(workspaceId, prepared.id, chunkKey, null)
-      }
-    }
-    for (const [chunkKey, chunkBuffer] of Object.entries(chunkEntries)) {
-      await writeSceneGroundChunkData(workspaceId, prepared.id, chunkKey, chunkBuffer ?? null)
-    }
-
     await writeSceneTerrainDatasetManifest(workspaceId, prepared.id, terrainDatasetManifests[prepared.id] ?? null)
     const regionEntries = terrainDatasetRegionPacks[prepared.id] ?? {}
     const existingRegionKeys = await (async () => {
@@ -1395,11 +1202,6 @@ async function removeSceneDocument(workspaceId: string, id: string): Promise<voi
     getMemoryWorkspace(workspaceId).delete(id)
     getMemoryGroundHeightSidecars(workspaceId).delete(id)
     getMemoryGroundScatterSidecars(workspaceId).delete(id)
-    getMemoryGroundChunkManifests(workspaceId).delete(id)
-    const chunkDataBucket = getMemoryGroundChunkData(workspaceId)
-    Array.from(chunkDataBucket.keys())
-      .filter((key) => key.startsWith(`${id}:`))
-      .forEach((key) => chunkDataBucket.delete(key))
     getMemoryTerrainDatasetManifests(workspaceId).delete(id)
     const regionPackBucket = getMemoryTerrainDatasetRegionPacks(workspaceId)
     Array.from(regionPackBucket.keys())
@@ -1414,8 +1216,6 @@ async function removeSceneDocument(workspaceId: string, id: string): Promise<voi
     STORE_METADATA,
     STORE_GROUND_HEIGHTMAPS,
     STORE_GROUND_SCATTERS,
-    STORE_GROUND_CHUNK_MANIFESTS,
-    STORE_GROUND_CHUNK_DATA,
     STORE_TERRAIN_DATASET_MANIFESTS,
     STORE_TERRAIN_DATASET_REGION_PACKS,
     STORE_COMPILED_GROUND_BUNDLES,
@@ -1424,8 +1224,6 @@ async function removeSceneDocument(workspaceId: string, id: string): Promise<voi
   const meta = tx.objectStore(STORE_METADATA)
   const heightmaps = tx.objectStore(STORE_GROUND_HEIGHTMAPS)
   const dynamics = tx.objectStore(STORE_GROUND_SCATTERS)
-  const manifests = tx.objectStore(STORE_GROUND_CHUNK_MANIFESTS)
-  const chunkData = tx.objectStore(STORE_GROUND_CHUNK_DATA)
   const terrainManifests = tx.objectStore(STORE_TERRAIN_DATASET_MANIFESTS)
   const terrainRegionPacks = tx.objectStore(STORE_TERRAIN_DATASET_REGION_PACKS)
   const compiledGroundBundles = tx.objectStore(STORE_COMPILED_GROUND_BUNDLES)
@@ -1433,13 +1231,8 @@ async function removeSceneDocument(workspaceId: string, id: string): Promise<voi
   meta.delete(id)
   heightmaps.delete(id)
   dynamics.delete(id)
-  manifests.delete(id)
   terrainManifests.delete(id)
   compiledGroundBundles.delete(id)
-  const chunkKeys = await requestToPromise<IDBValidKey[]>(chunkData.getAllKeys())
-  chunkKeys
-    .filter((key): key is string => typeof key === 'string' && key.startsWith(`${id}:`))
-    .forEach((key) => chunkData.delete(key))
   const regionPackKeys = await requestToPromise<IDBValidKey[]>(terrainRegionPacks.getAllKeys())
   regionPackKeys
     .filter((key): key is string => typeof key === 'string' && key.startsWith(`${id}:`))
@@ -1685,8 +1478,6 @@ export const useScenesStore = defineStore('scenes', {
           [downloaded.document],
           { [downloaded.document.id]: downloaded.groundHeightSidecar ?? null },
           { [downloaded.document.id]: downloaded.groundScatterSidecar ?? null },
-          { [downloaded.document.id]: downloaded.groundChunkManifest ?? null },
-          { [downloaded.document.id]: downloaded.groundChunkData ?? {} },
           { [downloaded.document.id]: downloaded.terrainDatasetManifest ?? null },
           { [downloaded.document.id]: downloaded.terrainDatasetRegionPacks ?? {} },
         )
@@ -1713,8 +1504,6 @@ export const useScenesStore = defineStore('scenes', {
       options: {
         groundHeightSidecars?: Record<string, ArrayBuffer | null>
         groundScatterSidecars?: Record<string, ArrayBuffer | null>
-        groundChunkManifests?: Record<string, GroundChunkManifest | null>
-        groundChunkData?: Record<string, Record<string, ArrayBuffer | null>>
         terrainDatasetManifests?: Record<string, QuantizedTerrainDatasetRootManifest | null>
         terrainDatasetRegionPacks?: Record<string, Record<string, ArrayBuffer | null>>
       } = {},
@@ -1725,8 +1514,6 @@ export const useScenesStore = defineStore('scenes', {
         documents,
         options.groundHeightSidecars ?? {},
         options.groundScatterSidecars ?? {},
-        options.groundChunkManifests ?? {},
-        options.groundChunkData ?? {},
         options.terrainDatasetManifests ?? {},
         options.terrainDatasetRegionPacks ?? {},
       )
@@ -1785,27 +1572,26 @@ export const useScenesStore = defineStore('scenes', {
     async loadGroundScatterSidecar(sceneId: string): Promise<ArrayBuffer | null> {
       return await readSceneGroundScatterSidecar(this.workspaceId, sceneId)
     },
-    async loadGroundChunkManifest(sceneId: string): Promise<GroundChunkManifest | null> {
-      return await readSceneGroundChunkManifest(this.workspaceId, sceneId)
+    async loadGroundChunkManifest(_sceneId: string): Promise<null> {
+      return null
     },
     async saveGroundChunkManifest(
-      sceneId: string,
-      manifest: GroundChunkManifest | null,
-      options: { syncServer?: boolean } = {},
+      _sceneId: string,
+      _manifest: unknown,
+      _options: { syncServer?: boolean } = {},
     ): Promise<void> {
-      await writeSceneGroundChunkManifest(this.workspaceId, sceneId, manifest)
-      if (options.syncServer !== false && this.workspaceType === 'user') {
-        const sceneStore = useSceneStore()
-        const document = sceneStore.currentSceneId === sceneId
-          ? sceneStore.createSceneDocumentSnapshot()
-          : await this.loadSceneDocument(sceneId, { hydrateGroundRuntime: false })
-        if (document) {
-          await this.syncSceneToServer(document)
-        }
-      }
+      return
     },
-    async loadGroundChunkData(sceneId: string, chunkKey: string): Promise<ArrayBuffer | null> {
-      return await readSceneGroundChunkData(this.workspaceId, sceneId, chunkKey)
+    async loadGroundChunkData(_sceneId: string, _chunkKey: string): Promise<null> {
+      return null
+    },
+    async saveGroundChunkData(
+      _sceneId: string,
+      _chunkKey: string,
+      _data: ArrayBuffer | null,
+      _options: { syncServer?: boolean } = {},
+    ): Promise<void> {
+      return
     },
     async loadTerrainDatasetManifest(sceneId: string): Promise<QuantizedTerrainDatasetRootManifest | null> {
       return await readSceneTerrainDatasetManifest(this.workspaceId, sceneId)
@@ -1930,23 +1716,6 @@ export const useScenesStore = defineStore('scenes', {
         }
       }
     },
-    async saveGroundChunkData(
-      sceneId: string,
-      chunkKey: string,
-      data: ArrayBuffer | null,
-      options: { syncServer?: boolean } = {},
-    ): Promise<void> {
-      await writeSceneGroundChunkData(this.workspaceId, sceneId, chunkKey, data)
-      if (options.syncServer !== false && this.workspaceType === 'user') {
-        const sceneStore = useSceneStore()
-        const document = sceneStore.currentSceneId === sceneId
-          ? sceneStore.createSceneDocumentSnapshot()
-          : await this.loadSceneDocument(sceneId, { hydrateGroundRuntime: false })
-        if (document) {
-          await this.syncSceneToServer(document)
-        }
-      }
-    },
     async saveSceneGroundHeightSidecar(
       sceneId: string,
       sidecar: ArrayBuffer | null,
@@ -2011,8 +1780,6 @@ export const useScenesStore = defineStore('scenes', {
           document: StoredSceneDocument
           groundHeightSidecar: ArrayBuffer | null
           groundScatterSidecar: ArrayBuffer | null
-          groundChunkManifest: GroundChunkManifest | null
-          groundChunkData: Record<string, ArrayBuffer | null>
         }> = []
         const syncedBundleEtags: Record<string, string | null> = {}
         for (const result of syncResults) {
@@ -2047,8 +1814,6 @@ export const useScenesStore = defineStore('scenes', {
             downloaded.map((entry) => entry.document),
             Object.fromEntries(downloaded.map((entry) => [entry.document.id, entry.groundHeightSidecar ?? null])),
             Object.fromEntries(downloaded.map((entry) => [entry.document.id, entry.groundScatterSidecar ?? null])),
-            Object.fromEntries(downloaded.map((entry) => [entry.document.id, entry.groundChunkManifest ?? null])),
-            Object.fromEntries(downloaded.map((entry) => [entry.document.id, entry.groundChunkData ?? {}])),
           )
         } else {
           await writeSceneDocuments(

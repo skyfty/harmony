@@ -147,7 +147,6 @@ export type {
   ScenePackageManifest,
   ScenePackageManifestV1,
   ScenePackageCompiledGroundEntry,
-  ScenePackageGroundChunksEntry,
   ScenePackageProjectEntry,
   ScenePackageResourceEntry,
   ScenePackageResourceType,

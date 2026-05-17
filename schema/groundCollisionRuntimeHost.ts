@@ -4,7 +4,6 @@ import { collectCompiledGroundCoveredChunkKeys, type CompiledGroundCollisionTile
 import { createCompiledGroundCollisionRuntime } from './compiledGroundCollisionRuntime'
 import { createInfiniteGroundChunkColliderRuntime, type InfiniteGroundChunkColliderRuntime, type InfiniteGroundChunkColliderRuntimeDeps } from './infiniteGroundChunkCollisions'
 import type {
-  GroundChunkManifest,
   GroundRuntimeDynamicMesh,
   RigidbodyPhysicsShape,
   SceneNode,
@@ -72,8 +71,6 @@ export type SyncGroundCollisionRuntimeHostParams = {
   camera: THREE.Camera | null | undefined
   compiledManifest?: CompiledGroundManifest | null | undefined
   loadCompiledTileData?: (record: CompiledGroundCollisionTileRecord) => Promise<ArrayBuffer | null>
-  groundChunkManifest?: GroundChunkManifest | null | undefined
-  loadGroundChunkData?: (chunkKey: string) => Promise<ArrayBuffer | null>
   runtimeDeps?: GroundCollisionRuntimeDeps | null | undefined
 }
 
@@ -93,8 +90,6 @@ export function syncGroundCollisionRuntimeHost(
     camera,
     compiledManifest,
     loadCompiledTileData,
-    groundChunkManifest,
-    loadGroundChunkData,
     runtimeDeps,
   } = params
   if (!enabled || !groundObject || !groundMesh || !camera) {
@@ -150,11 +145,6 @@ export function syncGroundCollisionRuntimeHost(
       groundDefinition: groundMesh,
       camera,
       sourceId,
-      manifestRevision: Math.max(0, Math.trunc(Number(groundChunkManifest?.revision) || 0)),
-      manifestRecords: groundChunkManifest?.chunks,
-      loadChunkData: groundChunkManifest && typeof loadGroundChunkData === 'function'
-        ? (record) => loadGroundChunkData(record.key)
-        : undefined,
       excludedChunkKeys,
     })
   } else {
