@@ -10,6 +10,7 @@ const distRoot = resolve(viewerRoot, 'dist/build/mp-weixin');
 
 const checkedFiles = [
   'app.js',
+  'common/vendor.js',
   'pages/index/index.js',
 ];
 
@@ -17,6 +18,7 @@ const checkedAssets = ['assets'];
 
 const forbiddenPatterns = [
   'pages/scenery/common/vendor.js',
+  'pages/scenery/chunks/vendor.js',
   'pages/physics-ammo/common/vendor.js',
   'pages/physics-cannon/common/vendor.js',
   '@harmony/schema',
@@ -44,6 +46,9 @@ const forbiddenPatterns = [
   'three-csm',
   'DRACOLoader',
   'KTX2Loader',
+  'RGBELoader',
+  'OrbitControls',
+  'MeshBVH',
 ];
 
 const hits = [];

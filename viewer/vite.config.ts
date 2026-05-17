@@ -3,6 +3,7 @@ import { createRequire } from 'node:module';
 import uni from '@dcloudio/vite-plugin-uni';
 import bundleOptimizer from '@uni-ku/bundle-optimizer';
 import threePlatformAdapter from '@minisheep/three-platform-adapter/plugin';
+import { toCustomChunkPlugin } from '@harmony/tools/vite';
 import glsl from 'vite-plugin-glsl';
 import { visualizer } from 'rollup-plugin-visualizer';
 
@@ -304,9 +305,28 @@ export default {
             'async-component': false,
           },
       optimization: {
-        normalizeVueEntityModule: false,
+        normalizeVueEntityModule: true,
       },
       logger: ['optimization'],
+    }),
+    toCustomChunkPlugin({
+      manualChunks: {
+        'pages/scenery/chunks/vendor': [
+          '@minisheep/three-platform-adapter',
+          '@minisheep/three-platform-adapter/wechat',
+          '@minisheep/three-platform-adapter/override/jsm/**',
+          'three',
+          'three/addons/**',
+          'three/examples/**',
+          'three/examples/jsm/**',
+          'three-mesh-bvh',
+          'three-csm',
+          '**/pages/scenery/three/**',
+          '**/pages/scenery/three-mesh-bvh/**',
+          '**/pages/scenery/three-platform-adapter/**',
+          '**/pages/scenery/schema/**',
+        ],
+      },
     }),
     visualizer({
       emitFile: true,
