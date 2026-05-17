@@ -273,126 +273,129 @@ export function collectRoadCollisionDescriptors(params: RoadCollisionBuildParams
 			layoutHash = (layoutHash * 31 + Math.round(desiredTileLengthForCurve * 1000)) >>> 0
 			layoutHash = (layoutHash * 31 + Math.round(elementSize * 1000)) >>> 0
 			layoutHash = (layoutHash * 31 + Math.round(collisionSubdivisionFactor * 1000)) >>> 0
-			const useStaticMesh = shouldUseRoadStaticMeshForSpan({
-				geometryDetail,
-				heightDetail,
-				heightRange,
-				pitchDelta: spanMetrics.pitchDelta,
-				spanLength: spanMetrics.spanLength,
+			const spans = collectRoadCollisionSpans(
+				segment,
 				divisions,
+				smoothedHeights,
+				roadWidth,
 				collisionSubdivisionFactor,
-			})
-			if (useStaticMesh) {
-				const spanGeometry = buildRoadStripGeometry(
-					segment,
-					collisionWidth,
-					roadSurfaceHeightSampler,
-					ROAD_SURFACE_Y_OFFSET,
-					meshOptions,
-					smoothedHeights,
+				Math.max(1, maxBodies - totalBodies),
+			)
+			const collisionSpans = shouldSubdivideSimpleRoadSpans(geometryDetail, heightDetail, heightRange)
+				? subdivideRoadCollisionSpans(spans, collisionSubdivisionFactor, divisions)
+				: spans
+			const spanP0 = new THREE.Vector3()
+			const spanP1 = new THREE.Vector3()
+			const spanMid = new THREE.Vector3()
+			const spanForward = new THREE.Vector3()
+			const spanCenter = new THREE.Vector3()
+			const spanQuaternion = new THREE.Quaternion()
+			const spanEuler = new THREE.Euler(0, 0, 0, 'YXZ')
+			const spanUp = new THREE.Vector3(0, 1, 0)
+			let tileIndex = 0
+			for (const span of collisionSpans) {
+				if (totalBodies >= maxBodies) {
+					break
+				}
+				const startU = span.startIndex / divisions
+				const endU = span.endIndex / divisions
+				segment.getPoint(startU, spanP0)
+				segment.getPoint(endU, spanP1)
+				spanForward.copy(spanP1).sub(spanP0)
+				const forwardLen = Math.hypot(spanForward.x, spanForward.z)
+				const chordLength = spanForward.length()
+				let yaw = 0
+				if (forwardLen > ROAD_EPSILON) {
+					yaw = Math.atan2(spanForward.x, spanForward.z)
+				} else {
+					const midU = (startU + endU) * 0.5
+					const tangent = segment.getTangent(midU)
+					yaw = Math.atan2(tangent.x, tangent.z)
+				}
+				const spanHeights = smoothedHeights.slice(span.startIndex, span.endIndex + 1)
+				const spanLength = Math.max((span.endIndex - span.startIndex) * (length / divisions), chordLength, forwardLen)
+				const spanFit = computeRoadSpanSurfaceFit(spanHeights, spanLength)
+				const spanSurfaceFitError = computeRoadSpanSurfaceFitError(spanHeights, spanFit)
+				const spanCurve = new RoadSpanCurve(segment, startU, endU)
+				const spanGeometryDetail = computeCurveGeometryDetailScore(spanCurve, spanLength)
+				const boxOverlapMeters = Math.min(
+					span.boxOverlapMeters ?? ROAD_BOX_JOIN_MIN_OVERLAP_METERS,
+					Math.max(0, spanLength * 0.45),
 				)
-				const staticMeshShape = buildStaticMeshShapeFromGeometry(spanGeometry)
-				if (spanGeometry) {
-					layoutHash = (layoutHash * 31 + hashStaticMeshGeometry(spanGeometry)) >>> 0
-					spanGeometry.dispose()
-				}
-				if (staticMeshShape) {
-					descriptors.push({
-						curveIndex,
-						tileIndex: 0,
-						startIndex: 0,
-						endIndex: divisions,
-						position: [0, 0, 0],
-						yaw: 0,
-						pitch: 0,
-						shapeDefinition: staticMeshShape,
-					})
-					totalBodies += 1
-				}
-			} else {
-				const spans = collectRoadCollisionSpans(
-					segment,
-					divisions,
-					smoothedHeights,
-					roadWidth,
+				layoutHash = (layoutHash * 31 + Math.round(boxOverlapMeters * 1000)) >>> 0
+				layoutHash = (layoutHash * 31 + curveIndex) >>> 0
+				layoutHash = (layoutHash * 31 + segmentIndex) >>> 0
+				layoutHash = (layoutHash * 31 + tileIndex) >>> 0
+				layoutHash = (layoutHash * 31 + span.startIndex) >>> 0
+				layoutHash = (layoutHash * 31 + span.endIndex) >>> 0
+				const useStaticMesh = shouldUseRoadStaticMeshForSpan({
+					geometryDetail: spanGeometryDetail,
+					heightDetail: computeRoadHeightDetailScore(spanHeights, spanLength),
+					heightRange: computeRoadHeightRange(spanHeights),
+					surfaceFitError: spanSurfaceFitError,
+					pitchDelta: spanMetrics.pitchDelta,
 					collisionSubdivisionFactor,
-					Math.max(1, maxBodies - totalBodies),
-				)
-				const collisionSpans = shouldSubdivideSimpleRoadSpans(geometryDetail, heightDetail, heightRange)
-					? subdivideRoadCollisionSpans(spans, collisionSubdivisionFactor, divisions)
-					: spans
-				const spanP0 = new THREE.Vector3()
-				const spanP1 = new THREE.Vector3()
-				const spanMid = new THREE.Vector3()
-				const spanForward = new THREE.Vector3()
-				const spanCenter = new THREE.Vector3()
-				const spanQuaternion = new THREE.Quaternion()
-				const spanEuler = new THREE.Euler(0, 0, 0, 'YXZ')
-				const spanUp = new THREE.Vector3(0, 1, 0)
-				let tileIndex = 0
-				for (const span of collisionSpans) {
-					if (totalBodies >= maxBodies) {
-						break
-					}
-					const startU = span.startIndex / divisions
-					const endU = span.endIndex / divisions
-					segment.getPoint(startU, spanP0)
-					segment.getPoint(endU, spanP1)
-					spanForward.copy(spanP1).sub(spanP0)
-					const forwardLen = Math.hypot(spanForward.x, spanForward.z)
-					const chordLength = spanForward.length()
-					let yaw = 0
-					if (forwardLen > ROAD_EPSILON) {
-						yaw = Math.atan2(spanForward.x, spanForward.z)
-					} else {
-						const midU = (startU + endU) * 0.5
-						const tangent = segment.getTangent(midU)
-						yaw = Math.atan2(tangent.x, tangent.z)
-					}
-					const spanHeights = smoothedHeights.slice(span.startIndex, span.endIndex + 1)
-					const spanLength = Math.max((span.endIndex - span.startIndex) * (length / divisions), chordLength, forwardLen)
-					const spanFit = computeRoadSpanSurfaceFit(spanHeights, spanLength)
-					const boxOverlapMeters = Math.min(
-						span.boxOverlapMeters ?? ROAD_BOX_JOIN_MIN_OVERLAP_METERS,
-						Math.max(0, spanLength * 0.45),
+				})
+				if (useStaticMesh) {
+					const spanGeometry = buildRoadStripGeometry(
+						spanCurve,
+						collisionWidth,
+						roadSurfaceHeightSampler,
+						ROAD_SURFACE_Y_OFFSET,
+						meshOptions,
+						spanHeights,
 					)
-					layoutHash = (layoutHash * 31 + Math.round(boxOverlapMeters * 1000)) >>> 0
-					const boxLength = spanLength + boxOverlapMeters * 2
-					const boxShape = buildRoadRectangularTileShapeFromSeries({
-						roadWidth: collisionWidth,
-						length: boxLength,
-						heights: spanHeights,
-					})
-					if (!boxShape) {
-						continue
+					const staticMeshShape = buildStaticMeshShapeFromGeometry(spanGeometry)
+					if (spanGeometry) {
+						layoutHash = (layoutHash * 31 + hashStaticMeshGeometry(spanGeometry)) >>> 0
+						spanGeometry.dispose()
 					}
-					const pitch = spanFit.pitch
-					spanEuler.set(pitch, yaw, 0, 'YXZ')
-					spanQuaternion.setFromEuler(spanEuler)
-					spanUp.set(0, 1, 0).applyQuaternion(spanQuaternion)
-					segment.getPoint((startU + endU) * 0.5, spanMid)
-					spanCenter.copy(spanMid)
-					spanCenter.y = spanFit.centerHeight
-					spanCenter.addScaledVector(spanUp, -boxShape.halfExtents[1])
-					layoutHash = (layoutHash * 31 + curveIndex) >>> 0
-					layoutHash = (layoutHash * 31 + segmentIndex) >>> 0
-					layoutHash = (layoutHash * 31 + tileIndex) >>> 0
-					layoutHash = (layoutHash * 31 + span.startIndex) >>> 0
-					layoutHash = (layoutHash * 31 + span.endIndex) >>> 0
-					layoutHash = (layoutHash * 31 + Math.round(pitch * 1000)) >>> 0
-					descriptors.push({
-						curveIndex,
-						tileIndex,
-						startIndex: span.startIndex,
-						endIndex: span.endIndex,
-						position: [spanCenter.x, spanCenter.y, spanCenter.z],
-						yaw,
-						pitch,
-						shapeDefinition: boxShape,
-					})
-					totalBodies += 1
+					if (staticMeshShape) {
+						descriptors.push({
+							curveIndex,
+							tileIndex,
+							startIndex: span.startIndex,
+							endIndex: span.endIndex,
+							position: [0, 0, 0],
+							yaw: 0,
+							pitch: 0,
+							shapeDefinition: staticMeshShape,
+						})
+						totalBodies += 1
+					}
 					tileIndex += 1
+					continue
 				}
+				const boxShape = buildRoadRectangularTileShapeFromSeries({
+					roadWidth: collisionWidth,
+					length: spanLength + boxOverlapMeters * 2,
+					heights: spanHeights,
+				})
+				if (!boxShape) {
+					tileIndex += 1
+					continue
+				}
+				const pitch = spanFit.pitch
+				spanEuler.set(pitch, yaw, 0, 'YXZ')
+				spanQuaternion.setFromEuler(spanEuler)
+				spanUp.set(0, 1, 0).applyQuaternion(spanQuaternion)
+				segment.getPoint((startU + endU) * 0.5, spanMid)
+				spanCenter.copy(spanMid)
+				spanCenter.y = spanFit.centerHeight
+				spanCenter.addScaledVector(spanUp, -boxShape.halfExtents[1])
+				layoutHash = (layoutHash * 31 + Math.round(pitch * 1000)) >>> 0
+				descriptors.push({
+					curveIndex,
+					tileIndex,
+					startIndex: span.startIndex,
+					endIndex: span.endIndex,
+					position: [spanCenter.x, spanCenter.y, spanCenter.z],
+					yaw,
+					pitch,
+					shapeDefinition: boxShape,
+				})
+				totalBodies += 1
+				tileIndex += 1
 			}
 			segmentIndex += 1
 		}
@@ -521,8 +524,8 @@ const ROAD_RECTANGULAR_MAX_THICKNESS = 0.28
 const ROAD_BOX_JOIN_MIN_OVERLAP_METERS = 0.14
 const ROAD_BOX_JOIN_MAX_OVERLAP_METERS = 0.55
 
-// Road collision now always uses box segments; the segment length is adaptively reduced on bends
-// and steep or uneven sections to keep the collision hull close to the rendered surface.
+// Road collision uses mixed span-level collision: flat / near-flat spans use boxes,
+// while curved / steep / complex spans use a render-surface derived static mesh.
 const ROAD_TILE_MAX_HEADING_DELTA_RAD = (8 * Math.PI) / 180
 const ROAD_TILE_MAX_PITCH_DELTA_RAD = (4 * Math.PI) / 180
 
@@ -557,6 +560,49 @@ function clampNumber(value: unknown, min: number, max: number, fallback: number)
 
 function lerpNumber(start: number, end: number, t: number): number {
 	return start + (end - start) * t
+}
+
+class RoadSpanCurve extends THREE.Curve<THREE.Vector3> {
+	private readonly spanStartU: number
+	private readonly spanEndU: number
+
+	constructor(
+		private readonly sourceCurve: THREE.Curve<THREE.Vector3>,
+		startU: number,
+		endU: number,
+	) {
+		super()
+		this.spanStartU = Math.max(0, Math.min(1, startU))
+		this.spanEndU = Math.max(this.spanStartU, Math.min(1, endU))
+	}
+
+	override getPoint(t: number, target = new THREE.Vector3()): THREE.Vector3 {
+		const localT = Math.max(0, Math.min(1, t))
+		const sourceT = this.spanStartU + (this.spanEndU - this.spanStartU) * localT
+		return this.sourceCurve.getPoint(sourceT, target)
+	}
+
+	override getTangent(t: number, target = new THREE.Vector3()): THREE.Vector3 {
+		const localT = Math.max(0, Math.min(1, t))
+		const sourceT = this.spanStartU + (this.spanEndU - this.spanStartU) * localT
+		return this.sourceCurve.getTangent(sourceT, target)
+	}
+
+	override getLength(): number {
+		const sampleCount = Math.max(8, Math.min(48, Math.ceil((this.spanEndU - this.spanStartU) * 32)))
+		const point = new THREE.Vector3()
+		const previous = new THREE.Vector3()
+		let length = 0
+		for (let i = 0; i <= sampleCount; i += 1) {
+			const t = i / sampleCount
+			this.getPoint(t, point)
+			if (i > 0) {
+				length += previous.distanceTo(point)
+			}
+			previous.copy(point)
+		}
+		return length
+	}
 }
 
 function computeCurveGeometryDetailScore(curve: THREE.Curve<THREE.Vector3>, length: number): number {
@@ -854,21 +900,22 @@ function shouldUseRoadStaticMeshForSpan(params: {
 	geometryDetail: number
 	heightDetail: number
 	heightRange: number
+	surfaceFitError: number
 	pitchDelta: number
-	spanLength: number
-	divisions: number
 	collisionSubdivisionFactor: number
 }): boolean {
 	const factor = clampNumber(params.collisionSubdivisionFactor, 0.25, 8, 1.0)
-	const geometryThreshold = lerpNumber(0.12, 0.06, Math.max(0, Math.min(1, (factor - 0.25) / 7.75)))
-	const heightThreshold = lerpNumber(0.16, 0.08, Math.max(0, Math.min(1, (factor - 0.25) / 7.75)))
-	const rangeThreshold = lerpNumber(0.12, 0.06, Math.max(0, Math.min(1, (factor - 0.25) / 7.75)))
-	const pitchThreshold = lerpNumber(0.18, 0.08, Math.max(0, Math.min(1, (factor - 0.25) / 7.75)))
+	const scale = Math.max(0, Math.min(1, (factor - 0.25) / 7.75))
+	const geometryThreshold = lerpNumber(0.16, 0.08, scale)
+	const heightThreshold = lerpNumber(0.08, 0.03, scale)
+	const rangeThreshold = lerpNumber(0.10, 0.05, scale)
+	const fitErrorThreshold = lerpNumber(0.03, 0.015, scale)
+	const pitchThreshold = lerpNumber(0.07, 0.035, scale)
 	return params.geometryDetail > geometryThreshold
 		|| params.heightDetail > heightThreshold
 		|| params.heightRange > rangeThreshold
+		|| params.surfaceFitError > fitErrorThreshold
 		|| params.pitchDelta > pitchThreshold
-		|| params.spanLength > Math.max(8, (params.divisions / Math.max(1, factor)) * 1.5)
 }
 
 function buildStaticMeshShapeFromGeometry(geometry: THREE.BufferGeometry | null | undefined): Extract<RigidbodyPhysicsShape, { kind: 'static-mesh' }> | null {
@@ -1218,6 +1265,25 @@ function computeRoadSpanSurfaceFit(
 		centerHeight,
 		pitch: Math.atan(slope),
 	}
+}
+
+function computeRoadSpanSurfaceFitError(
+	heights: number[],
+	fit: RoadSpanSurfaceFit,
+): number {
+	if (!Array.isArray(heights) || heights.length < 2) {
+		return 0
+	}
+	const sampleCount = heights.length
+	let sumSquaredError = 0
+	for (let i = 0; i < sampleCount; i += 1) {
+		const value = Number.isFinite(heights[i]!) ? heights[i]! : 0
+		const x = sampleCount > 1 ? i / (sampleCount - 1) : 0
+		const predicted = fit.startHeight + (fit.endHeight - fit.startHeight) * x
+		const residual = value - predicted
+		sumSquaredError += residual * residual
+	}
+	return Math.sqrt(sumSquaredError / sampleCount)
 }
 
 function buildRoadRectangularTileShapeFromSeries({

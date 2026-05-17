@@ -149,22 +149,32 @@ async function main() {
     `higher collisionSubdivisionFactor should produce more boxes (${highDetailSnapshot.descriptors.length} > ${lowDetailSnapshot.descriptors.length})`,
   )
 
-  const pitchedRoad = createRoadNode({
-    id: 'road:pitch',
+  const complexRoad = createRoadNode({
+    id: 'road:complex',
     vertices: [
       [0, 0],
       [12, 0],
-      [24, 0],
-      [36, 0],
+      [20, 6],
+      [28, -4],
+      [40, 0],
     ],
     segmentHeights: [
-      [0, 0.2, 0.45, 0.72],
-      [0.72, 1.08, 1.34, 1.7],
-      [1.7, 1.52, 1.26, 1.02],
+      [0, 0, 0, 0],
+      [0, 0.7, 1.6, 2.4],
+      [2.4, 2.0, 1.1, 0.5],
+      [0.5, 0.5, 0.5, 0.5],
     ],
   })
-  const pitchedSnapshot = collectRoadCollisionDescriptors(pitchedRoad)
-  assertShapeKinds(pitchedSnapshot, 'static-mesh', 'pitched road')
+  const complexSnapshot = collectRoadCollisionDescriptors(complexRoad)
+  assert.ok(complexSnapshot, 'complex road should build collision data')
+  assert.ok(
+    complexSnapshot.descriptors.some((entry) => entry.shapeDefinition.kind === 'static-mesh'),
+    'complex road should emit static-mesh collision for the curved spans',
+  )
+  assert.ok(
+    complexSnapshot.descriptors.some((entry) => entry.shapeDefinition.kind === 'box'),
+    'complex road should keep box collision on the flatter spans',
+  )
 
   const crossingRoad = createRoadNode({
     id: 'road:crossing',
