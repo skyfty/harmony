@@ -916,12 +916,10 @@ const sceneInit = reactive({
 	active: false,
 	stage: 'idle' as SceneInitStage,
 	label: '',
-	detail: '',
 	percent: 0,
 	stagePercent: 0,
 	currentIndex: 0,
 	currentTotal: 0,
-	currentLabel: '',
 	indeterminate: false,
 })
 
@@ -954,7 +952,6 @@ function setSceneInitState(next: {
 	sceneInit.stage = next.stage
 	sceneInit.active = next.active ?? (next.stage !== 'ready' && next.stage !== 'cancelled' && next.stage !== 'error')
 	sceneInit.label = typeof next.label === 'string' ? next.label : sceneInit.label
-	sceneInit.detail = typeof next.detail === 'string' ? next.detail.trim() : sceneInit.detail
 	sceneInit.stagePercent = typeof next.stagePercent === 'number' && Number.isFinite(next.stagePercent) ? Math.max(0, Math.min(100, next.stagePercent)) : sceneInit.stagePercent
 	sceneInit.percent = resolveSceneInitPercent(next.stage, sceneInit.stagePercent)
 	if (typeof next.currentIndex === 'number' && Number.isFinite(next.currentIndex)) {
@@ -962,9 +959,6 @@ function setSceneInitState(next: {
 	}
 	if (typeof next.currentTotal === 'number' && Number.isFinite(next.currentTotal)) {
 		sceneInit.currentTotal = Math.max(0, Math.floor(next.currentTotal))
-	}
-	if (typeof next.currentLabel === 'string') {
-		sceneInit.currentLabel = next.currentLabel.trim()
 	}
 	if (typeof next.indeterminate === 'boolean') {
 		sceneInit.indeterminate = next.indeterminate
@@ -975,12 +969,10 @@ function clearSceneInitState(): void {
 	sceneInit.active = false
 	sceneInit.stage = 'idle'
 	sceneInit.label = ''
-	sceneInit.detail = ''
 	sceneInit.percent = 0
 	sceneInit.stagePercent = 0
 	sceneInit.currentIndex = 0
 	sceneInit.currentTotal = 0
-	sceneInit.currentLabel = ''
 	sceneInit.indeterminate = false
 }
 
@@ -1015,8 +1007,7 @@ const resourceProgressBytesLabel = computed(() => {
 		const countLabel = sceneInit.currentTotal > 0
 			? `${Math.max(0, Math.min(sceneInit.currentTotal, Math.floor(sceneInit.currentIndex) + 1))} / ${Math.max(0, Math.floor(sceneInit.currentTotal))}`
 			: ''
-		const detail = sceneInit.detail || sceneInit.currentLabel
-		return countLabel && detail ? `${countLabel} | ${detail}` : countLabel || detail
+		return countLabel
 	}
 	if (resourceProgress.totalBytes > 0) {
 		return `${formatByteSize(resourceProgress.loadedBytes)} / ${formatByteSize(resourceProgress.totalBytes)}`
@@ -1059,7 +1050,7 @@ const resourceProgressTitle = computed(() => {
 
 const resourceProgressDetail = computed(() => {
 	if (sceneInit.active) {
-		return sceneInit.label || sceneInit.detail || sceneInit.currentLabel
+		return sceneInit.label
 	}
 	return ''
 })

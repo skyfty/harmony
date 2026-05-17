@@ -914,12 +914,10 @@ const sceneInit = reactive({
   active: false,
   stage: 'idle' as SceneInitStage,
   label: '',
-  detail: '',
   percent: 0,
   stagePercent: 0,
   currentIndex: 0,
   currentTotal: 0,
-  currentLabel: '',
   indeterminate: false,
 });
 
@@ -952,7 +950,6 @@ function setSceneInitState(next: {
   sceneInit.stage = next.stage;
   sceneInit.active = next.active ?? (next.stage !== 'ready' && next.stage !== 'cancelled' && next.stage !== 'error');
   sceneInit.label = typeof next.label === 'string' ? next.label : sceneInit.label;
-  sceneInit.detail = typeof next.detail === 'string' ? next.detail.trim() : sceneInit.detail;
   sceneInit.stagePercent = typeof next.stagePercent === 'number' && Number.isFinite(next.stagePercent) ? Math.max(0, Math.min(100, next.stagePercent)) : sceneInit.stagePercent;
   sceneInit.percent = resolveSceneInitPercent(next.stage, sceneInit.stagePercent);
   if (typeof next.currentIndex === 'number' && Number.isFinite(next.currentIndex)) {
@@ -960,9 +957,6 @@ function setSceneInitState(next: {
   }
   if (typeof next.currentTotal === 'number' && Number.isFinite(next.currentTotal)) {
     sceneInit.currentTotal = Math.max(0, Math.floor(next.currentTotal));
-  }
-  if (typeof next.currentLabel === 'string') {
-    sceneInit.currentLabel = next.currentLabel.trim();
   }
   if (typeof next.indeterminate === 'boolean') {
     sceneInit.indeterminate = next.indeterminate;
@@ -973,12 +967,10 @@ function clearSceneInitState(): void {
   sceneInit.active = false;
   sceneInit.stage = 'idle';
   sceneInit.label = '';
-  sceneInit.detail = '';
   sceneInit.percent = 0;
   sceneInit.stagePercent = 0;
   sceneInit.currentIndex = 0;
   sceneInit.currentTotal = 0;
-  sceneInit.currentLabel = '';
   sceneInit.indeterminate = false;
 }
 
@@ -1380,11 +1372,7 @@ const sceneLoadPercent = computed(() => {
 const sceneLoadBytesLabel = computed(() => {
   if (sceneInit.active) {
     const countLabel = sceneInit.currentTotal > 0 ? `${Math.max(0, sceneInit.currentIndex + 1)} / ${sceneInit.currentTotal}` : '';
-    const detail = sceneInit.detail || sceneInit.currentLabel;
-    if (countLabel && detail) {
-      return `${countLabel} | ${detail}`;
-    }
-    return countLabel || detail;
+    return countLabel;
   }
   if (sceneDownload.active && sceneDownload.phase === 'download' && sceneDownload.total > 0) {
     return `${formatByteSize(sceneDownload.loaded)} / ${formatByteSize(sceneDownload.total)}`;
@@ -12682,11 +12670,9 @@ async function startRenderIfReady() {
       setSceneInitState({
         stage: 'error',
         label: '初始化失败',
-        detail: '渲染器初始化过程中发生错误',
         stagePercent: sceneInit.percent,
         currentIndex: sceneInit.currentIndex,
         currentTotal: sceneInit.currentTotal,
-        currentLabel: sceneInit.currentLabel,
         active: false,
       });
     }
@@ -13381,7 +13367,7 @@ async function mountGraphAndSyncSubsystems(
 
   setSceneInitState({
     stage: 'finalizing',
-    label: '正在完成初始化',
+    label: '正在注册场景子树',
     detail: '正在注册场景子树...',
     stagePercent: 0,
     currentIndex: 0,
@@ -13394,7 +13380,7 @@ async function mountGraphAndSyncSubsystems(
 
   setSceneInitState({
     stage: 'finalizing',
-    label: '正在完成初始化',
+    label: '正在刷新动画控制器',
     detail: '正在刷新动画控制器...',
     stagePercent: 34,
     currentIndex: 1,
@@ -13407,7 +13393,7 @@ async function mountGraphAndSyncSubsystems(
 
   setSceneInitState({
     stage: 'finalizing',
-    label: '正在完成初始化',
+    label: '正在整理实例剔除状态',
     detail: '正在整理实例剔除状态...',
     stagePercent: 68,
     currentIndex: 2,
@@ -13853,11 +13839,9 @@ watch(
         : sceneDownload.active
           ? sceneDownload.label
           : resourcePreload.label,
-      detail: sceneInit.active
-        ? sceneInit.detail || sceneInit.currentLabel
-        : sceneDownload.active
-          ? sceneDownload.detail || sceneDownload.currentLabel
-          : '',
+      detail: sceneDownload.active
+        ? sceneDownload.detail || sceneDownload.currentLabel
+        : '',
     });
   },
   { flush: 'post' },

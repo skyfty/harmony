@@ -42,7 +42,6 @@
           <text v-if="overlayBytesLabel" class="viewer-progress__bytes">{{ overlayBytesLabel }}</text>
         </view>
       </view>
-      <text v-if="overlayCaption" class="viewer-overlay__caption">{{ overlayCaption }}</text>
       <text v-if="overlayDetail" class="viewer-overlay__detail">{{ overlayDetail }}</text>
     </view>
   </view>
@@ -95,11 +94,9 @@ type SceneInitState = {
   active: boolean;
   stage: SceneInitStage;
   label: string;
-  detail: string;
   percent: number;
   currentIndex: number;
   currentTotal: number;
-  currentLabel: string;
   indeterminate: boolean;
 };
 
@@ -295,8 +292,7 @@ const overlayBytesLabel = computed(() => {
   if (props.sceneInit.active) {
     const init = props.sceneInit;
     const countLabel = init.currentTotal > 0 ? `${Math.max(0, Math.min(init.currentTotal, Math.floor(init.currentIndex) + 1))} / ${Math.max(0, Math.floor(init.currentTotal))}` : '';
-    const detail = formatSceneLoadDetail(init.detail, init.currentLabel);
-    return countLabel && detail ? `${countLabel} | ${detail}` : countLabel || detail;
+    return countLabel;
   }
   const load = props.sceneDownload;
   if (load.active && load.phase === 'download' && load.total > 0) {
@@ -332,15 +328,6 @@ const overlayCaption = computed(() => {
 });
 
 const overlayDetail = computed(() => {
-  if (props.sceneInit.active) {
-    const init = props.sceneInit;
-    const count = formatSceneLoadCount(init.currentIndex, init.currentTotal);
-    const detail = formatSceneLoadDetail(init.detail, init.currentLabel);
-    if (count && detail) {
-      return `${count} | ${detail}`;
-    }
-    return count || detail;
-  }
   const load = props.sceneDownload;
   if (load.active) {
     const count = formatSceneLoadCount(load.currentIndex, load.currentTotal);
