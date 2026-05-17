@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import type { PhysicsBackendPreference, PhysicsBodyDesc, PhysicsSceneAsset, PhysicsShapeDesc, PhysicsStepFrame } from '@harmony/physics-core'
+import { loadCannonDebuggerPro } from './cannonDebuggerPro'
 
 export type PhysicsCollisionDebugEngine = Extract<PhysicsBackendPreference, 'ammo' | 'cannon'>
 
@@ -440,19 +441,7 @@ export class SceneryPhysicsCollisionDebugRuntime {
       return
     }
     try {
-      const module = await import('@vladkrutenyuk/cannon-es-debugger-pro')
-      const CannonEsDebuggerPro = (module as unknown as { CannonEsDebuggerPro?: new (
-        root: THREE.Object3D,
-        world: unknown,
-        color?: THREE.ColorRepresentation,
-        offset?: number,
-      ) => CannonDebuggerLike }).CannonEsDebuggerPro
-        ?? (module as unknown as { default?: new (
-          root: THREE.Object3D,
-          world: unknown,
-          color?: THREE.ColorRepresentation,
-          offset?: number,
-        ) => CannonDebuggerLike }).default
+      const CannonEsDebuggerPro = await loadCannonDebuggerPro()
 
       if (!CannonEsDebuggerPro) {
         throw new Error('Cannon debugger module did not expose CannonEsDebuggerPro')

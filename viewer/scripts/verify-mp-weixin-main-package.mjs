@@ -10,7 +10,6 @@ const distRoot = resolve(viewerRoot, 'dist/build/mp-weixin');
 
 const checkedFiles = [
   'app.js',
-  'common/vendor.js',
   'pages/index/index.js',
 ];
 

@@ -47,8 +47,6 @@ const ammoJsWasmBinaryPath = fileURLToPath(new URL('./src/pages/physics-ammo/ven
 const schemaMirrorPath = fileURLToPath(new URL('./src/pages/scenery/schema', import.meta.url)).replaceAll('\\', '/');
 const physicsCoreMirrorPath = fileURLToPath(new URL('./src/pages/scenery/physics-core', import.meta.url)).replaceAll('\\', '/');
 const sceneryPhysicsBridgeMirrorPath = fileURLToPath(new URL('./src/pages/scenery/physics-bridge', import.meta.url)).replaceAll('\\', '/');
-const cannonDebuggerStubPath = fileURLToPath(new URL('../scenery/common/physics/cannonDebuggerPro.stub.ts', import.meta.url)).replaceAll('\\', '/');
-
 const _require = createRequire(import.meta.url);
 let vueRuntimeAlias: string;
 try {
@@ -97,10 +95,19 @@ function resolveManualChunk(id: string): string | undefined {
       || normalizedId.includes('splaytree')
       || normalizedId.includes('three-csm')
       || normalizedId.includes('fflate')
+      || normalizedId.includes('@minisheep/three-platform-adapter')
       || normalizedId.includes('ammojs3')
       || normalizedId.includes('cannon-es')
     ) {
-      return 'common/vendor';
+      if (
+        normalizedId.includes('ammojs3')
+      ) {
+        return 'pages/physics-ammo/common/vendor';
+      }
+      if (normalizedId.includes('cannon-es')) {
+        return 'pages/physics-cannon/common/vendor';
+      }
+      return 'pages/scenery/common/vendor';
     }
   }
 
@@ -124,7 +131,7 @@ function resolveManualChunk(id: string): string | undefined {
     || normalizedId.includes('/node_modules/three-csm/')
     || normalizedId.includes('/node_modules/@minisheep/three-platform-adapter/')
   ) {
-    return 'common/vendor';
+    return 'pages/scenery/common/vendor';
   }
 
   if (
@@ -260,11 +267,6 @@ export default {
           ]
         : []),
       { find: /^ammojs3$/, replacement: ammoJsEntryPath },
-      ...(isMp
-        ? [
-            { find: '@vladkrutenyuk/cannon-es-debugger-pro', replacement: cannonDebuggerStubPath },
-          ]
-        : []),
       { find: '@harmony/physics-ammo', replacement: fileURLToPath(new URL('./src/pages/physics-ammo/runtime.ts', import.meta.url)) },
       { find: '@harmony/physics-ammo-source', replacement: fileURLToPath(new URL('./src/pages/physics-ammo/engine', import.meta.url)) },
       { find: '@harmony/physics-cannon', replacement: fileURLToPath(new URL('./src/pages/physics-cannon/runtime.ts', import.meta.url)) },
@@ -302,7 +304,7 @@ export default {
             'async-component': false,
           },
       optimization: {
-        normalizeVueEntityModule: true,
+        normalizeVueEntityModule: false,
       },
       logger: ['optimization'],
     }),
