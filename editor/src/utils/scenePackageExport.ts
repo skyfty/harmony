@@ -64,6 +64,7 @@ import {
   collectRuntimeRequiredConfigAssetIds,
   collectTransitiveConfigDependencyAssetIds,
 } from '@/stores/sceneAssetCleanup'
+import { attachRoadCollisionCompiledPackagesToDocument } from '@schema'
 
 type SceneGroundTerrainOverrideState = {
   runtimeDisableOptimizedChunks?: boolean
@@ -1390,6 +1391,10 @@ export async function exportScenePackageZip(payload: {
       roadCollision = {
         manifestPath: roadCollisionExport.manifestPath,
       }
+      attachRoadCollisionCompiledPackagesToDocument(
+        sidecarSource as SceneJsonExportDocument,
+        roadCollisionExport.packagesByNodeId,
+      )
       Object.assign(files, roadCollisionExport.files)
       emitSceneExportEvent(payload.reportEvent, {
         phase: 'sidecar',

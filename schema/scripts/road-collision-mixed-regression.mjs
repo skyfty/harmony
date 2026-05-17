@@ -107,6 +107,27 @@ async function main() {
   const flatSnapshot = collectRoadCollisionDescriptors(flatRoad)
   assertShapeKinds(flatSnapshot, 'box', 'flat road')
 
+  const gentleSlopeRoad = createRoadNode({
+    id: 'road:gentle-slope',
+    vertices: [
+      [0, 0],
+      [10, 0],
+      [20, 0],
+      [30, 0],
+    ],
+    segmentHeights: [
+      [0, 0.05, 0.1, 0.15],
+      [0.15, 0.2, 0.25, 0.3],
+      [0.3, 0.35, 0.4, 0.45],
+    ],
+  })
+  const gentleSlopeSnapshot = collectRoadCollisionDescriptors(gentleSlopeRoad)
+  assertShapeKinds(gentleSlopeSnapshot, 'box', 'gentle slope road')
+  assert.ok(
+    gentleSlopeSnapshot.descriptors.some((entry) => Math.abs(entry.pitch) > 1e-4),
+    'gentle slope road box spans should carry a visible pitch',
+  )
+
   const flatRoadWithoutHeights = createRoadNode({
     id: 'road:flat-no-heights',
     vertices: [

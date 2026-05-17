@@ -376,7 +376,7 @@ export function collectRoadCollisionDescriptors(params: RoadCollisionBuildParams
 					tileIndex += 1
 					continue
 				}
-				const pitch = spanFit.pitch
+				const pitch = computeRoadSpanBoxPitch(spanHeights, spanLength)
 				spanEuler.set(pitch, yaw, 0, 'YXZ')
 				spanQuaternion.setFromEuler(spanEuler)
 				spanUp.set(0, 1, 0).applyQuaternion(spanQuaternion)
@@ -908,11 +908,11 @@ function shouldUseRoadStaticMeshForSpan(params: {
 }): boolean {
 	const factor = clampNumber(params.collisionSubdivisionFactor, 0.25, 8, 1.0)
 	const scale = Math.max(0, Math.min(1, (factor - 0.25) / 7.75))
-	const geometryThreshold = lerpNumber(0.2, 0.1, scale)
-	const fitErrorThreshold = lerpNumber(0.03, 0.015, scale)
-	const pitchDeltaThreshold = lerpNumber(0.08, 0.04, scale)
-	const steepPitchThreshold = lerpNumber(0.08, 0.05, scale)
-	const minCurvedSpanLength = lerpNumber(2, 1, scale)
+	const geometryThreshold = lerpNumber(0.08, 0.03, scale)
+	const fitErrorThreshold = lerpNumber(0.012, 0.006, scale)
+	const pitchDeltaThreshold = lerpNumber(0.03, 0.015, scale)
+	const steepPitchThreshold = lerpNumber(0.03, 0.018, scale)
+	const minCurvedSpanLength = lerpNumber(0.75, 0.45, scale)
 	if (params.surfaceFitError > fitErrorThreshold) {
 		return true
 	}
@@ -1235,6 +1235,19 @@ type RoadSpanSurfaceFit = {
 	endHeight: number
 	centerHeight: number
 	pitch: number
+}
+
+function computeRoadSpanBoxPitch(
+	heights: number[],
+	spanLength: number,
+): number {
+	if (!Array.isArray(heights) || heights.length < 2) {
+		return 0
+	}
+	const startHeight = Number.isFinite(heights[0]!) ? heights[0]! : 0
+	const endHeight = Number.isFinite(heights[heights.length - 1]!) ? heights[heights.length - 1]! : startHeight
+	const horizontalLength = Math.max(ROAD_EPSILON, Number.isFinite(spanLength) ? spanLength : 0)
+	return Math.atan2(endHeight - startHeight, horizontalLength)
 }
 
 function computeRoadSpanSurfaceFit(
