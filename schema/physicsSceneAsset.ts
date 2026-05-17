@@ -1,12 +1,9 @@
 import * as THREE from 'three'
 import { type PhysicsBodyDesc, type PhysicsBodyType, type PhysicsCompoundChildDesc, type PhysicsMaterialDesc, type PhysicsSceneAsset, type PhysicsShapeDesc, type PhysicsTransform, type PhysicsVector3, type PhysicsVehicleDesc, type PhysicsVehicleWheelDesc } from '@harmony/physics-core'
-import type { GroundRuntimeDynamicMesh, SceneJsonExportDocument, SceneNode, SceneNodeComponentState, Vector3Like } from './index'
+import type { SceneJsonExportDocument, SceneNode, SceneNodeComponentState, Vector3Like } from './index'
 import { buildGroundAirWallDefinitions } from './airWall'
 import { buildBoundaryWallSegments } from './boundaryWall'
 import {
-  buildAdaptiveGroundCollisionData,
-  buildGroundHeightfieldChunkDataFromSample,
-  buildGroundHeightfieldChunkPlan,
   isGroundDynamicMesh,
 } from './groundHeightfield'
 import { resolveFloorShape, resolveModelCollisionFaceSegments, resolveWallShape, type FloorShapeCache, type WallTrimeshCache } from './physicsShapeResolvers'
@@ -15,9 +12,6 @@ import {
   extractRoadCollisionCompiledPackageFromUserData,
   type RoadCollisionCompiledPackage,
 } from './roadCollisionCompiled'
-import { collectCompiledGroundCollisionTileKeys } from './compiledGroundCollisionRuntime'
-import { collectInfiniteGroundChunkCollisionKeys } from './infiniteGroundChunkCollisions'
-import { sampleGroundEffectiveHeightRegion } from './groundMesh'
 import {
   BOUNDARY_WALL_COMPONENT_TYPE,
   RIGIDBODY_COMPONENT_TYPE,
@@ -36,7 +30,6 @@ import {
   type RigidbodyPhysicsShape,
   type VehicleComponentProps,
 } from './components'
-import { resolveGroundWorkingGridSize } from './index'
 
 type BuildShapeInstance = {
   shapeId: number
@@ -54,29 +47,6 @@ const worldQuaternionHelper = new THREE.Quaternion()
 const worldScaleHelper = new THREE.Vector3()
 const legacyConvexOffsetWorldHelper = new THREE.Vector3()
 const legacyConvexOffsetLocalHelper = new THREE.Vector3()
-
-function parseGroundChunkKey(value: string | null | undefined): { chunkX: number; chunkZ: number } | null {
-  if (typeof value !== 'string') {
-    return null
-  }
-  const trimmed = value.trim()
-  if (!trimmed.length) {
-    return null
-  }
-  const parts = trimmed.split(':')
-  if (parts.length !== 2) {
-    return null
-  }
-  const chunkX = Number(parts[0])
-  const chunkZ = Number(parts[1])
-  if (!Number.isFinite(chunkX) || !Number.isFinite(chunkZ)) {
-    return null
-  }
-  return {
-    chunkX: Math.trunc(chunkX),
-    chunkZ: Math.trunc(chunkZ),
-  }
-}
 const legacyConvexOffsetInverseQuaternionHelper = new THREE.Quaternion()
 const groundAirWallPositionHelper = new THREE.Vector3()
 const groundAirWallQuaternionHelper = new THREE.Quaternion()
@@ -684,56 +654,6 @@ function buildRigidbodyShapeInstances(
   nextShapeId: () => number,
   shapes: PhysicsShapeDesc[],
 ): BuildShapeInstance[] {
-  if (isGroundDynamicMesh(node.dynamicMesh)) {
-    const groundNode = node
-    const chunkShapeInstances = buildGroundChunkCollisionShapeInstances(
-      node,
-      groundNode,
-      nextShapeId,
-      shapes,
-    )
-    if (chunkShapeInstances.length) {
-      return chunkShapeInstances
-    }
-    const collisionData = buildAdaptiveGroundCollisionData(node, node.dynamicMesh)
-    if (collisionData?.segments.length) {
-      return collisionData.segments.map((segment) => {
-        const values = new Float32Array((segment.rows + 1) * (segment.columns + 1))
-        let minHeight = Number.POSITIVE_INFINITY
-        let maxHeight = Number.NEGATIVE_INFINITY
-        let offset = 0
-        for (let column = 0; column < segment.matrix.length; column += 1) {
-          const columnValues = segment.matrix[column] ?? []
-          for (let row = 0; row < columnValues.length; row += 1) {
-            const value = columnValues[row] ?? 0
-            values[offset] = value
-            offset += 1
-            minHeight = Math.min(minHeight, value)
-            maxHeight = Math.max(maxHeight, value)
-          }
-        }
-        const shapeId = pushShapeDescriptor(shapes, {
-          id: nextShapeId(),
-          kind: 'heightfield',
-          rows: segment.rows + 1,
-          columns: segment.columns + 1,
-          elementSize: segment.elementSize,
-          heights: values,
-          minHeight: Number.isFinite(minHeight) ? minHeight : 0,
-          maxHeight: Number.isFinite(maxHeight) ? maxHeight : 0,
-          localOffset: [segment.offset[0], segment.offset[1], segment.offset[2]],
-        })
-        return {
-          shapeId,
-          transform: {
-            position: [0, 0, 0],
-            rotation: [0, 0, 0, 1],
-          },
-        }
-      })
-    }
-  }
-
   const rawShape = extractRigidbodyShape(resolveRigidbodyComponent(node))
   const shape = rawShape
     ? normalizeLegacyConvexWorldOffset(rawShape, worldScale, bodyWorldPosition, bodyWorldQuaternion)
@@ -742,96 +662,6 @@ function buildRigidbodyShapeInstances(
     return []
   }
   return buildShapeInstancesFromDefinition(shape, worldScale, nextShapeId, shapes)
-}
-
-function buildGroundChunkCollisionShapeInstances(
-  node: SceneNode,
-  groundNode: SceneNode,
-  nextShapeId: () => number,
-  shapes: PhysicsShapeDesc[],
-): BuildShapeInstance[] {
-  const groundMesh = groundNode.dynamicMesh as GroundRuntimeDynamicMesh | null | undefined
-  if (!isGroundDynamicMesh(groundMesh)) {
-    return []
-  }
-  const userData = groundNode.userData && typeof groundNode.userData === 'object'
-    ? (groundNode.userData as Record<string, unknown>)
-    : {}
-  const hasCompiledGroundManifest = Boolean(userData.compiledGroundManifest)
-  const hasCompiledGroundEnabled = Boolean(userData.compiledGroundEnabled)
-  const useChunkCollision = groundMesh.terrainMode === 'infinite' || hasCompiledGroundManifest || hasCompiledGroundEnabled
-  if (!useChunkCollision) {
-    return []
-  }
-
-  const runtimeLoadedTileKeys = hasCompiledGroundManifest
-    ? collectCompiledGroundCollisionTileKeys(
-      userData.compiledGroundManifest as Parameters<typeof collectCompiledGroundCollisionTileKeys>[0],
-      groundMesh.runtimeLoadedTileKeys,
-    )
-    : collectInfiniteGroundChunkCollisionKeys(groundMesh)
-  if (!runtimeLoadedTileKeys.length) {
-    return []
-  }
-
-  const plan = buildGroundHeightfieldChunkPlan(node, groundMesh)
-  if (!plan) {
-    return []
-  }
-
-  const gridSize = resolveGroundWorkingGridSize(groundMesh)
-  const heightRegion = sampleGroundEffectiveHeightRegion(groundMesh, 0, gridSize.rows, 0, gridSize.columns)
-
-  const chunkInstances: BuildShapeInstance[] = []
-  for (const key of runtimeLoadedTileKeys) {
-    const coord = parseGroundChunkKey(key)
-    if (!coord) {
-      continue
-    }
-    const chunkData = buildGroundHeightfieldChunkDataFromSample(
-      node,
-      plan,
-      coord.chunkZ,
-      coord.chunkX,
-      heightRegion,
-    )
-    if (!chunkData) {
-      continue
-    }
-    const values = new Float32Array((chunkData.rows + 1) * (chunkData.columns + 1))
-    let offset = 0
-    let minHeight = Number.POSITIVE_INFINITY
-    let maxHeight = Number.NEGATIVE_INFINITY
-    for (let column = 0; column < chunkData.matrix.length; column += 1) {
-      const columnValues = chunkData.matrix[column] ?? []
-      for (let row = 0; row < columnValues.length; row += 1) {
-        const value = columnValues[row] ?? 0
-        values[offset] = value
-        offset += 1
-        minHeight = Math.min(minHeight, value)
-        maxHeight = Math.max(maxHeight, value)
-      }
-    }
-    const shapeId = pushShapeDescriptor(shapes, {
-      id: nextShapeId(),
-      kind: 'heightfield',
-      rows: chunkData.rows + 1,
-      columns: chunkData.columns + 1,
-      elementSize: chunkData.elementSize,
-      heights: values,
-      minHeight: Number.isFinite(minHeight) ? minHeight : 0,
-      maxHeight: Number.isFinite(maxHeight) ? maxHeight : 0,
-      localOffset: [chunkData.offset[0], chunkData.offset[1], chunkData.offset[2]],
-    })
-    chunkInstances.push({
-      shapeId,
-      transform: {
-        position: [0, 0, 0],
-        rotation: [0, 0, 0, 1],
-      },
-    })
-  }
-  return chunkInstances
 }
 
 function countSceneNodes(nodes: SceneNode[] | null | undefined): number {

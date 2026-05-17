@@ -3,7 +3,6 @@ import assert from 'node:assert/strict'
 import * as THREE from 'three'
 
 import { resolveGroundChunkCoordFromWorldPosition, resolveGroundChunkOrigin } from '../dist/index.js'
-import { resolveVisibleInfiniteGroundChunkManifestRecords } from '../dist/groundChunkManifestRuntime.js'
 import { resolveInfiniteGroundVisibleChunkWindow } from '../dist/groundMesh.js'
 
 function createInfiniteGroundDefinition(overrides = {}) {
@@ -29,28 +28,6 @@ function createInfiniteGroundDefinition(overrides = {}) {
     runtimeLoadedTileKeys: [],
     surfaceRevision: 0,
   }
-}
-
-function buildManifestRecords(range) {
-  const records = {}
-  for (let chunkZ = -range; chunkZ <= range; chunkZ += 1) {
-    for (let chunkX = -range; chunkX <= range; chunkX += 1) {
-      const origin = resolveGroundChunkOrigin({ chunkX, chunkZ }, 100)
-      records[`${chunkX}:${chunkZ}`] = {
-        key: `${chunkX}:${chunkZ}`,
-        chunkX,
-        chunkZ,
-        originX: origin.x,
-        originZ: origin.z,
-        chunkSizeMeters: 100,
-        resolution: 10,
-        revision: 1,
-        updatedAt: 1,
-        byteLength: 0,
-      }
-    }
-  }
-  return records
 }
 
 function testWorldOriginFallsInsideCenteredChunk() {
@@ -85,27 +62,6 @@ function testObliqueCameraExpandsVisibleWindowForward() {
   )
 }
 
-function testManifestResolverUsesExpandedVisibleWindow() {
-  const groundObject = new THREE.Group()
-  const groundDefinition = createInfiniteGroundDefinition()
-  const camera = new THREE.PerspectiveCamera(60, 16 / 9, 0.1, 5000)
-  camera.position.set(0, 180, 260)
-  camera.lookAt(new THREE.Vector3(0, 0, -140))
-  camera.updateProjectionMatrix()
-  camera.updateMatrixWorld(true)
-  groundObject.updateMatrixWorld(true)
-
-  const manifestRecords = buildManifestRecords(6)
-  const visibleKeys = new Set(
-    resolveVisibleInfiniteGroundChunkManifestRecords(groundObject, groundDefinition, camera, manifestRecords)
-      .map((record) => record.key),
-  )
-  assert.ok(
-    visibleKeys.has('0:2'),
-    'expected manifest visibility to include the forward-most chunk in the centered visible window',
-  )
-}
-
 function testExtremeRenderRadiusIsClamped() {
   const groundObject = new THREE.Group()
   const camera = new THREE.PerspectiveCamera(60, 16 / 9, 0.1, 5000)
@@ -136,7 +92,6 @@ function testExtremeRenderRadiusIsClamped() {
 }
 
 testObliqueCameraExpandsVisibleWindowForward()
-testManifestResolverUsesExpandedVisibleWindow()
 testExtremeRenderRadiusIsClamped()
 testWorldOriginFallsInsideCenteredChunk()
 

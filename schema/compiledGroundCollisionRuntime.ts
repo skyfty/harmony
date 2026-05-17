@@ -98,12 +98,12 @@ function convertHeightsToMatrix(
 
 function buildHeightfieldShapeFromCompiledTile(
   data: CompiledGroundCollisionTileData,
-): HeightfieldShapeDefinition | null {
+): HeightfieldShapeDefinition {
   const rows = Math.max(1, Math.trunc(Number(data.header.rows) || 0))
   const columns = Math.max(1, Math.trunc(Number(data.header.columns) || 0))
   const elementSize = Number(data.header.elementSize)
   if (!Number.isFinite(elementSize) || elementSize <= 1e-6) {
-    return null
+    throw new Error(`Invalid compiled ground collision tile element size: ${String(data.header.key ?? '')}`)
   }
   const width = columns * elementSize
   const depth = rows * elementSize
@@ -214,14 +214,8 @@ export function collectCompiledGroundCollisionTileKeys(
   manifest: CompiledGroundManifest | null | undefined,
   runtimeLoadedTileKeys?: readonly string[] | null,
 ): string[] {
-  const runtimeKeys = uniqueSortedKeys(runtimeLoadedTileKeys)
-  if (runtimeKeys.length > 0) {
-    return runtimeKeys
-  }
-  if (!manifest?.collisionTiles?.length) {
-    return []
-  }
-  return uniqueSortedKeys(manifest.collisionTiles.map((tile) => tile.key))
+  void manifest
+  return uniqueSortedKeys(runtimeLoadedTileKeys)
 }
 
 export function resolveCompiledGroundCollisionRuntimeState(params: {
@@ -350,17 +344,14 @@ export function createCompiledGroundCollisionRuntime(
           }
           const tileData = deserializeCompiledGroundCollisionTile(buffer)
           if (!tileData) {
-            return
+            throw new Error(`Invalid compiled ground collision tile payload: ${record.path}`)
           }
           const shape = buildHeightfieldShapeFromCompiledTile(tileData)
-          if (!shape) {
-            return
-          }
           const proxy = createCollisionProxy(params.groundObject, Number(record.centerX) || 0, Number(record.centerZ) || 0)
           const { node, component } = createStaticCollisionNode(`ground-collision:${params.sourceId}:compiled:${record.key}`)
           const bodyResult = deps.createBody(node, component, shape, proxy)
           if (!bodyResult?.body) {
-            return
+            throw new Error(`Failed to create compiled ground collision body for tile: ${record.key}`)
           }
           const world = deps.ensurePhysicsWorld()
           addPhysicsBodyToWorld(world, bodyResult.body)
@@ -375,8 +366,6 @@ export function createCompiledGroundCollisionRuntime(
             signature: pendingSignature,
           })
 
-        })
-        .catch(() => {
         })
         .finally(() => {
           const currentPending = pendingLoads.get(record.key)
