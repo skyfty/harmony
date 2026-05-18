@@ -8,10 +8,7 @@ export type AmmoSceneShapeBinding = {
   quaternion: AmmoQuaternion
   cleanup: BuiltAmmoShape['cleanup']
 }
-
-const heightfieldQuaternion: AmmoQuaternion = [
-  Math.sin(-Math.PI / 4),
-  0,
+ 0,
   0,
   Math.cos(-Math.PI / 4),
 ]
@@ -33,7 +30,6 @@ export function createAmmoSceneShapeBindings(
     })
   }
   const built = createAmmoShape(ammo, shapeDesc, dynamic)
-  const isHeightfield = shapeDesc.kind === 'heightfield'
   return [{
     shape: built.shape,
     position: [0, 0, 0],

@@ -311,22 +311,6 @@ const overlayIndeterminate = computed(() => props.sceneInit.active ? props.scene
 const overlayPercentText = computed(() => (overlayIndeterminate.value ? '解析中…' : `${overlayPercent.value}%`));
 const overlayProgressStyle = computed(() => (overlayIndeterminate.value ? {} : { width: `${overlayPercent.value}%` }));
 
-const overlayCaption = computed(() => {
-  if (props.sceneInit.active) {
-    return props.sceneInit.label || resolveSceneInitTitle(props.sceneInit.stage);
-  }
-  if (props.sceneDownload.active) {
-    return props.sceneDownload.label;
-  }
-  if (props.resourcePreload.active) {
-    return props.resourcePreload.label;
-  }
-  if (props.loading) {
-    return '正在准备渲染上下文...';
-  }
-  return '';
-});
-
 const overlayDetail = computed(() => {
   const load = props.sceneDownload;
   if (load.active) {
