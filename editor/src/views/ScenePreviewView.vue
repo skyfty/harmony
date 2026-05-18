@@ -35,12 +35,9 @@ import {
 	type EnvironmentSettings,
 	computePlaySoundDistanceGain,
 	resolvePlaySoundSourcePoint,
-	createGradientBackgroundDome,
 	cloneRuntimePrefabNode,
 	disposeSkyCubeTexture,
-	disposeGradientBackgroundDome,
 	createRuntimePrefabDocument,
-	type GradientBackgroundDome,
 	type GroundDynamicMesh,
 	type GroundRuntimeDynamicMesh,
 	type LanternSlideDefinition,
@@ -340,6 +337,7 @@ const liveUpdatesDisabledSourceUrl = ref<string | null>(null)
 const isLiveUpdatesDisabled = computed(() => Boolean(liveUpdatesDisabledSourceUrl.value))
 
 let pendingEnvironmentSettings: EnvironmentSettings | null = null
+let currentScenePreviewEnvironmentSettings: EnvironmentSettings | null = null
 
 // LOD debug helpers removed
 
@@ -1579,6 +1577,8 @@ const instancedCullingBox = new THREE.Box3()
 const instancedCullingSphere = new THREE.Sphere()
 const SCENE_PREVIEW_FOG_HEADROOM_RATIO = 0.88
 const SCENE_PREVIEW_FOG_MIN_DISTANCE = 0.001
+const SCENE_PREVIEW_GROUND_FOG_UNLOAD_BUFFER_MIN_CHUNKS = 4
+const SCENE_PREVIEW_GROUND_FOG_UNLOAD_BUFFER_RATIO = 0.5
 const instancedCullingWorldPosition = new THREE.Vector3()
 const VEHICLE_CAMERA_DEFAULT_LOOK_DISTANCE = 6
 const VEHICLE_FOLLOW_DISTANCE_MIN = 4
@@ -9115,6 +9115,10 @@ function updateVehicleCameraForFrame(
  * Throttled internally by `shouldUpdateCameraDependentSystems`.
  */
 function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCamera, delta: number): void {
+	const environmentSettings = currentScenePreviewEnvironmentSettings
+	if (environmentSettings) {
+		applyFogSettings(environmentSettings, activeCamera)
+	}
 	const shouldUpdateCameraSystems = shouldUpdateCameraDependentSystems(activeCamera, delta)
 	const hasGroundCollisionReference = resolveGroundCollisionReferenceWorld(groundCollisionReferencePosition)
 	if (!hasGroundCollisionReference) {
@@ -9296,6 +9300,7 @@ function stopAnimationLoop() {
 function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	clearBehaviorDelayTimers()
 	clearBehaviorSounds()
+	currentScenePreviewEnvironmentSettings = null
 	const groundCollisionHostObject = cachedGroundNodeId ? (nodeObjectMap.get(cachedGroundNodeId) ?? null) : null
 	void syncGroundCache(null)
 	scenePreviewDriveBindingsReady.value = false
@@ -9448,6 +9453,30 @@ type ScenePreviewFogState =
 	  }
 	| null
 
+function resolveScenePreviewGroundFogCoverageDistance(activeCamera: THREE.PerspectiveCamera | null): number | null {
+	if (!activeCamera || !cachedGroundNodeId || !cachedGroundDynamicMesh) {
+		return null
+	}
+	const chunkSizeMeters = Number.isFinite(cachedGroundDynamicMesh.chunkSizeMeters) && Number(cachedGroundDynamicMesh.chunkSizeMeters) > 0
+		? Number(cachedGroundDynamicMesh.chunkSizeMeters)
+		: 100
+	const renderRadiusChunks = Number.isFinite(cachedGroundDynamicMesh.renderRadiusChunks) && Number(cachedGroundDynamicMesh.renderRadiusChunks) > 0
+		? Math.max(1, Math.trunc(Number(cachedGroundDynamicMesh.renderRadiusChunks)))
+		: 4
+	const unloadBufferChunks = Math.max(
+		SCENE_PREVIEW_GROUND_FOG_UNLOAD_BUFFER_MIN_CHUNKS,
+		Math.ceil(renderRadiusChunks * SCENE_PREVIEW_GROUND_FOG_UNLOAD_BUFFER_RATIO),
+	)
+	let coverageDistance = (renderRadiusChunks + unloadBufferChunks) * chunkSizeMeters
+	if (cachedGroundDynamicMesh.farHorizonEnabled) {
+		const farHorizonDistance = Number(cachedGroundDynamicMesh.farHorizonDistanceMeters)
+		if (Number.isFinite(farHorizonDistance) && farHorizonDistance > 0) {
+			coverageDistance = Math.min(coverageDistance, farHorizonDistance)
+		}
+	}
+	return Math.max(SCENE_PREVIEW_FOG_MIN_DISTANCE, coverageDistance)
+}
+
 function syncScenePreviewCameraFar(nextFar: number): void {
 	if (!camera || !scene) {
 		return
@@ -9461,13 +9490,21 @@ function syncScenePreviewCameraFar(nextFar: number): void {
 	scenePreviewPerf.markInstancedCullingDirty()
 }
 
-function resolveScenePreviewFogState(settings: EnvironmentSettings): ScenePreviewFogState {
+function resolveScenePreviewFogState(
+	settings: EnvironmentSettings,
+	activeCamera: THREE.PerspectiveCamera | null = camera,
+): ScenePreviewFogState {
 	if (settings.fogMode === 'none') {
 		return null
 	}
+	const groundCoverageDistance = resolveScenePreviewGroundFogCoverageDistance(activeCamera)
 	if (settings.fogMode === 'linear') {
 		const sourceNear = Math.max(0, settings.fogNear)
-		const cameraFar = Math.max(sourceNear + SCENE_PREVIEW_FOG_MIN_DISTANCE, settings.fogFar)
+		const sourceFar = Math.max(sourceNear + SCENE_PREVIEW_FOG_MIN_DISTANCE, settings.fogFar)
+		const cameraFar = Math.max(
+			sourceNear + SCENE_PREVIEW_FOG_MIN_DISTANCE,
+			Math.min(sourceFar, groundCoverageDistance ?? sourceFar),
+		)
 		const fogFar = Math.max(
 			sourceNear + SCENE_PREVIEW_FOG_MIN_DISTANCE,
 			cameraFar * SCENE_PREVIEW_FOG_HEADROOM_RATIO,
@@ -9484,29 +9521,25 @@ function resolveScenePreviewFogState(settings: EnvironmentSettings): ScenePrevie
 		}
 	}
 	const density = Math.max(0, settings.fogDensity)
+	const baseCameraFar = DEFAULT_SCENE_CAMERA_FAR
+	const cameraFar = Math.max(
+		SCENE_PREVIEW_FOG_MIN_DISTANCE,
+		Math.min(baseCameraFar, groundCoverageDistance ?? baseCameraFar),
+	)
+	const coverageScale = THREE.MathUtils.clamp(baseCameraFar / cameraFar, 0.5, 4)
 	return {
-		cameraFar: DEFAULT_SCENE_CAMERA_FAR,
+		cameraFar,
 		fogNear: 0,
 		fogFar: 0,
-		fogDensity: density <= 0 ? 0 : density / SCENE_PREVIEW_FOG_HEADROOM_RATIO,
+		fogDensity: density <= 0 ? 0 : (density * coverageScale) / SCENE_PREVIEW_FOG_HEADROOM_RATIO,
 	}
 }
 
-function resolveFogBackgroundMix(settings: EnvironmentSettings, fogState: ScenePreviewFogState): number {
-	if (!fogState) {
-		return 0
-	}
-	if (settings.fogMode === 'linear') {
-		return THREE.MathUtils.clamp(1 - Math.min(fogState.fogFar / 600, 1), 0.2, 0.85)
-	}
-	return THREE.MathUtils.clamp(Math.max(0, fogState.fogDensity) * 24, 0.2, 0.85)
-}
-
-function applyFogSettings(settings: EnvironmentSettings) {
+function applyFogSettings(settings: EnvironmentSettings, activeCamera: THREE.PerspectiveCamera | null = camera) {
 	if (!scene) {
 		return
 	}
-	const fogState = resolveScenePreviewFogState(settings)
+	const fogState = resolveScenePreviewFogState(settings, activeCamera)
 	const fogColor = new THREE.Color(settings.fogColor)
 	if (!fogState) {
 		scene.fog = null
@@ -9548,7 +9581,6 @@ async function applyBackgroundSettings(
 		return false
 	}
 	if (background.mode === 'solidColor') {
-		const gradientTopColor = typeof background.gradientTopColor === 'string' ? background.gradientTopColor.trim() : ''
 		disposeHdriBackgroundResources()
 		disposeSkyCubeBackgroundResources()
 		scene.background = new THREE.Color(background.solidColor)
@@ -9753,11 +9785,12 @@ function applyEnvironmentReflectionFromBackground(background: EnvironmentSetting
 
 async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
 	const snapshot = cloneEnvironmentSettings(settings)
+	currentScenePreviewEnvironmentSettings = snapshot
 	if (!scene) {
 		pendingEnvironmentSettings = snapshot
 		return
 	}
-	applyFogSettings(snapshot)
+	applyFogSettings(snapshot, camera)
 	const backgroundApplied = await applyBackgroundSettings(snapshot.background)
 	const environmentApplied = applyEnvironmentReflectionFromBackground(snapshot.background)
 
