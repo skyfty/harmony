@@ -8,10 +8,6 @@ export type AmmoSceneShapeBinding = {
   quaternion: AmmoQuaternion
   cleanup: BuiltAmmoShape['cleanup']
 }
- 0,
-  0,
-  Math.cos(-Math.PI / 4),
-]
 
 export function createAmmoSceneShapeBindings(
   ammo: AmmoApi,
