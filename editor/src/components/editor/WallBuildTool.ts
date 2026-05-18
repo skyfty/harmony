@@ -3,6 +3,7 @@ import type { Ref } from 'vue'
 import type { BuildTool } from '@/types/build-tool'
 import type { PointerInteractionSession } from '@/types/pointer-interaction'
 import type { SceneNodeComponentState, SceneNode, WallDynamicMesh } from '@schema'
+import { GROUND_NODE_ID } from '@schema'
 import { WALL_COMPONENT_TYPE, type WallComponentProps } from '@schema/components'
 import { compileWallSegmentsFromDefinition } from '@schema/wallLayout'
 import { createWallPreviewRenderer, type WallPreviewSession, type WallPreviewSegment } from './WallPreviewRenderer'
@@ -31,6 +32,11 @@ type PointerInteractionApi = {
 type VertexSnapResolverOptions = {
   excludeNodeIds?: readonly string[]
   keepSourceY?: boolean
+}
+
+type BuildSurfacePlacementPoint = {
+  point: THREE.Vector3
+  nodeId: string | null
 }
 
 type LeftClickState = {
@@ -82,6 +88,7 @@ export type WallBuildToolSession = WallPreviewSession & {
   lastCommittedSegment: WallPreviewSegment | null
   polygonPoints: THREE.Vector3[]
   polygonPreviewEnd: THREE.Vector3 | null
+  surfaceNodeId: string | null
 }
 
 export function createWallBuildTool(options: {
@@ -94,6 +101,7 @@ export function createWallBuildTool(options: {
   rootGroup: THREE.Group
   raycastGroundPoint: (event: PointerEvent, result: THREE.Vector3) => boolean
   resolveBuildPlacementPoint?: (event: PointerEvent, result: THREE.Vector3) => boolean
+  resolveBuildPlacementSurfacePoint?: (event: PointerEvent) => BuildSurfacePlacementPoint | null
   projectPointToTerrain?: (point: THREE.Vector3) => THREE.Vector3
   snapPoint: (point: THREE.Vector3) => THREE.Vector3
   resolveVertexSnapPoint?: (event: PointerEvent, point: THREE.Vector3, options?: VertexSnapResolverOptions) => THREE.Vector3 | null
@@ -148,6 +156,59 @@ export function createWallBuildTool(options: {
       return options.resolveBuildPlacementPoint(event, result)
     }
     return options.raycastGroundPoint(event, result)
+  }
+
+  const resolveSurfacePlacementPoint = (event: PointerEvent): BuildSurfacePlacementPoint | null => {
+    if (options.resolveBuildPlacementSurfacePoint) {
+      const resolved = options.resolveBuildPlacementSurfacePoint(event)
+      if (resolved) {
+        return resolved
+      }
+    }
+    const point = new THREE.Vector3()
+    if (!raycastPlacementPoint(event, point)) {
+      return null
+    }
+    return { point, nodeId: null }
+  }
+
+  const shouldProjectToTerrain = (surfaceNodeId?: string | null): boolean => {
+    const resolvedSurfaceNodeId = surfaceNodeId ?? session?.surfaceNodeId ?? null
+    return !resolvedSurfaceNodeId || resolvedSurfaceNodeId === GROUND_NODE_ID
+  }
+
+  const resolveResolvedPlacementPoint = (
+    event: PointerEvent,
+    rawPoint: THREE.Vector3,
+    optionsOverride?: {
+      fallback?: 'grid' | 'raw'
+      excludeNodeIds?: readonly string[]
+      keepSourceY?: boolean
+      allowVertexSnap?: boolean
+    },
+  ): { point: THREE.Vector3; surfaceNodeId: string | null } | null => {
+    const surfaceHit = resolveSurfacePlacementPoint(event)
+    if (surfaceHit) {
+      const snapped = snapPlacementPoint(event, surfaceHit.point.clone(), {
+        fallback: optionsOverride?.fallback,
+        excludeNodeIds: optionsOverride?.excludeNodeIds,
+        keepSourceY: optionsOverride?.keepSourceY,
+        allowVertexSnap: optionsOverride?.allowVertexSnap,
+      })
+      return {
+        point: snapped,
+        surfaceNodeId: surfaceHit.nodeId,
+      }
+    }
+
+    if (!raycastPlacementPoint(event, rawPoint)) {
+      return null
+    }
+    const snapped = snapPlacementPoint(event, rawPoint.clone(), optionsOverride)
+    return {
+      point: snapped,
+      surfaceNodeId: GROUND_NODE_ID,
+    }
   }
 
   let session: WallBuildToolSession | null = null
@@ -212,6 +273,7 @@ export function createWallBuildTool(options: {
       lastCommittedSegment: null,
       polygonPoints: [],
       polygonPreviewEnd: null,
+      surfaceNodeId: null,
       wallRenderProps: null,
     }
     return session
@@ -505,7 +567,10 @@ export function createWallBuildTool(options: {
 
   const isFiniteNumber = (value: unknown): value is number => typeof value === 'number' && isFinite(value)
 
-  const projectPointToTerrain = (point: THREE.Vector3): THREE.Vector3 => {
+  const projectPointToTerrain = (point: THREE.Vector3, surfaceNodeId?: string | null): THREE.Vector3 => {
+    if (!shouldProjectToTerrain(surfaceNodeId)) {
+      return point.clone()
+    }
     const projected = options.projectPointToTerrain?.(point.clone())
     return projected ?? point.clone()
   }
@@ -516,9 +581,13 @@ export function createWallBuildTool(options: {
     target.segments = []
   }
 
-  const alignPointYToPolygonDraft = (point: THREE.Vector3, target: WallBuildToolSession): THREE.Vector3 => {
+  const alignPointYToPolygonDraft = (
+    point: THREE.Vector3,
+    target: WallBuildToolSession,
+    surfaceNodeId?: string | null,
+  ): THREE.Vector3 => {
     void target
-    const projected = projectPointToTerrain(point)
+    const projected = projectPointToTerrain(point, surfaceNodeId)
     point.copy(projected)
     return point
   }
@@ -555,9 +624,13 @@ export function createWallBuildTool(options: {
     previewRenderer.markDirty()
   }
 
-  const alignPointYToLineDraft = (point: THREE.Vector3, target: WallBuildToolSession): THREE.Vector3 => {
+  const alignPointYToLineDraft = (
+    point: THREE.Vector3,
+    target: WallBuildToolSession,
+    surfaceNodeId?: string | null,
+  ): THREE.Vector3 => {
     void target
-    const projected = projectPointToTerrain(point)
+    const projected = projectPointToTerrain(point, surfaceNodeId)
     point.copy(projected)
     return point
   }
@@ -778,7 +851,7 @@ export function createWallBuildTool(options: {
   const beginSegmentDrag = (startPoint: THREE.Vector3) => {
     const current = ensureSession()
     hydrateFromSelection(current)
-    alignPointYToLineDraft(startPoint, current)
+    alignPointYToLineDraft(startPoint, current, current.surfaceNodeId)
     resetPolygonDraft(current)
     current.shapeDraft = null
     current.dragStart = startPoint.clone()
@@ -803,17 +876,19 @@ export function createWallBuildTool(options: {
     if (session?.shapeDraft) {
       return false
     }
-    if (!raycastPlacementPoint(event, groundPointerHelper)) {
+    const resolvedPlacement = resolveResolvedPlacementPoint(event, groundPointerHelper)
+    if (!resolvedPlacement) {
       return false
     }
 
-    const rawPointer = groundPointerHelper.clone()
+    const rawPointer = resolvedPlacement.point.clone()
     const excludeNodeId = getActiveSnapExcludeNodeId()
+    const surfaceNodeId = resolvedPlacement.surfaceNodeId
     const start = snapPlacementPoint(event, rawPointer.clone(), {
       excludeNodeIds: excludeNodeId ? [excludeNodeId] : undefined,
     })
-    start.copy(projectPointToTerrain(start))
-    const end = kind === 'circle' ? projectPointToTerrain(rawPointer.clone()) : start.clone()
+    start.copy(projectPointToTerrain(start, surfaceNodeId))
+    const end = kind === 'circle' ? projectPointToTerrain(rawPointer.clone(), surfaceNodeId) : start.clone()
 
     const current = ensureSession()
     hydrateFromSelection(current)
@@ -823,6 +898,7 @@ export function createWallBuildTool(options: {
     current.nodeId = null
     current.lockedSegmentY = null
     current.committedNewSegmentCount = 0
+    current.surfaceNodeId = surfaceNodeId
     current.shapeDraft = {
       kind,
       pointerId: event.pointerId,
@@ -858,14 +934,16 @@ export function createWallBuildTool(options: {
       return true
     }
 
-    if (!raycastPlacementPoint(event, groundPointerHelper)) {
+    const resolvedPlacement = resolveResolvedPlacementPoint(event, groundPointerHelper)
+    if (!resolvedPlacement) {
       hideStartIndicator()
       return false
     }
 
     const currentShape = getShape()
-    const rawPointer = groundPointerHelper.clone()
+    const rawPointer = resolvedPlacement.point.clone()
     const excludeNodeId = options.getWallEditNodeId()
+    const surfaceNodeId = resolvedPlacement.surfaceNodeId
     const snappedPoint = currentShape === 'line'
       ? snapPlacementPoint(event, rawPointer.clone(), {
           fallback: event.shiftKey ? 'grid' : 'raw',
@@ -880,7 +958,7 @@ export function createWallBuildTool(options: {
           excludeNodeIds: excludeNodeId ? [excludeNodeId] : undefined,
         })
 
-    snappedPoint.copy(projectPointToTerrain(snappedPoint))
+    snappedPoint.copy(projectPointToTerrain(snappedPoint, surfaceNodeId))
 
     options.showStartIndicator?.(snappedPoint, { height: getStartIndicatorHeight() })
     return true
@@ -906,10 +984,11 @@ export function createWallBuildTool(options: {
       return []
     }
     const [corner1, corner2, corner3, corner4] = rectangle.corners
-    const p1 = projectPointToTerrain(corner1)
-    const p2 = projectPointToTerrain(corner2)
-    const p3 = projectPointToTerrain(corner3)
-    const p4 = projectPointToTerrain(corner4)
+    const surfaceNodeId = session?.surfaceNodeId ?? null
+    const p1 = projectPointToTerrain(corner1, surfaceNodeId)
+    const p2 = projectPointToTerrain(corner2, surfaceNodeId)
+    const p3 = projectPointToTerrain(corner3, surfaceNodeId)
+    const p4 = projectPointToTerrain(corner4, surfaceNodeId)
     return [
       { start: p1, end: p2 },
       { start: p2, end: p3 },
@@ -938,7 +1017,7 @@ export function createWallBuildTool(options: {
     const points: THREE.Vector3[] = []
     for (let i = 0; i < segments; i += 1) {
       const t = (i / segments) * Math.PI * 2
-      points.push(projectPointToTerrain(new THREE.Vector3(center.x + Math.cos(t) * radius, center.y, center.z + Math.sin(t) * radius)))
+      points.push(projectPointToTerrain(new THREE.Vector3(center.x + Math.cos(t) * radius, center.y, center.z + Math.sin(t) * radius), session?.surfaceNodeId ?? null))
     }
 
     const result: WallPreviewSegment[] = []
@@ -960,22 +1039,25 @@ export function createWallBuildTool(options: {
     if (session.shapeDraft.pointerId !== event.pointerId) {
       return false
     }
-    if (!raycastPlacementPoint(event, groundPointerHelper)) {
+    const resolvedPlacement = resolveResolvedPlacementPoint(event, groundPointerHelper)
+    if (!resolvedPlacement) {
       return false
     }
 
-    const rawPointer = groundPointerHelper.clone()
+    const rawPointer = resolvedPlacement.point.clone()
     const kind = session.shapeDraft.kind
     const start = session.shapeDraft.start.clone()
     const excludeNodeId = getActiveSnapExcludeNodeId()
+    const surfaceNodeId = resolvedPlacement.surfaceNodeId
+    session.surfaceNodeId = surfaceNodeId
     const end = kind === 'circle'
-      ? alignPointYToLineDraft(snapPlacementPoint(event, rawPointer.clone(), { fallback: 'raw' }), session)
+      ? alignPointYToLineDraft(snapPlacementPoint(event, rawPointer.clone(), { fallback: 'raw' }), session, surfaceNodeId)
       : snapPlacementPoint(event, rawPointer.clone(), {
           excludeNodeIds: excludeNodeId ? [excludeNodeId] : undefined,
         })
 
     if (kind !== 'circle') {
-      alignPointYToLineDraft(end, session)
+      alignPointYToLineDraft(end, session, surfaceNodeId)
     }
 
     const previousEnd = session.shapeDraft.end
@@ -1188,18 +1270,20 @@ export function createWallBuildTool(options: {
     if (options.isAltOverrideActive()) {
       return false
     }
-    if (!raycastPlacementPoint(event, groundPointerHelper)) {
+    const resolvedPlacement = resolveResolvedPlacementPoint(event, groundPointerHelper)
+    if (!resolvedPlacement) {
       return false
     }
 
-    const rawPointer = groundPointerHelper.clone()
+    const rawPointer = resolvedPlacement.point.clone()
     const current = ensureSession()
+    current.surfaceNodeId = resolvedPlacement.surfaceNodeId
     const excludeNodeId = current.nodeId ?? options.getWallEditNodeId()
     const snappedPoint = alignPointYToLineDraft(snapPlacementPoint(event, rawPointer.clone(), {
       fallback: event.shiftKey ? 'grid' : 'raw',
       excludeNodeIds: excludeNodeId ? [excludeNodeId] : undefined,
       allowVertexSnap: event.shiftKey,
-    }), current)
+    }), current, resolvedPlacement.surfaceNodeId)
     if (!current.dragStart) {
       beginSegmentDrag(snappedPoint)
       return true
@@ -1213,7 +1297,7 @@ export function createWallBuildTool(options: {
       Boolean(event.shiftKey && WALL_ANGLE_STEP_CONSTRAINTS_ENABLED && !options.isRelativeAngleSnapActive?.()),
       Boolean(options.isRelativeAngleSnapActive?.()),
     )
-    alignPointYToLineDraft(constrained, current)
+    alignPointYToLineDraft(constrained, current, resolvedPlacement.surfaceNodeId)
     const previous = current.dragEnd
     if (!previous || !previous.equals(constrained)) {
       current.dragEnd = constrained
@@ -1237,7 +1321,8 @@ export function createWallBuildTool(options: {
     if (options.isAltOverrideActive()) {
       return false
     }
-    if (!raycastPlacementPoint(event, groundPointerHelper)) {
+    const resolvedPlacement = resolveResolvedPlacementPoint(event, groundPointerHelper)
+    if (!resolvedPlacement) {
       return false
     }
 
@@ -1251,11 +1336,12 @@ export function createWallBuildTool(options: {
     current.shapeDraft = null
     current.nodeId = null
     current.committedNewSegmentCount = 0
+    current.surfaceNodeId = resolvedPlacement.surfaceNodeId
 
     const excludeNodeId = current.nodeId ?? options.getWallEditNodeId()
-    const initialPoint = alignPointYToPolygonDraft(snapPlacementPoint(event, groundPointerHelper.clone(), {
+    const initialPoint = alignPointYToPolygonDraft(snapPlacementPoint(event, resolvedPlacement.point.clone(), {
       excludeNodeIds: excludeNodeId ? [excludeNodeId] : undefined,
-    }), current)
+    }), current, resolvedPlacement.surfaceNodeId)
     let point = initialPoint
     const firstPoint = current.polygonPoints[0]
     const lastPoint = current.polygonPoints[current.polygonPoints.length - 1]
@@ -1283,7 +1369,7 @@ export function createWallBuildTool(options: {
           target: point,
           angleStepRadians: Math.PI / 4,
         })
-        alignPointYToPolygonDraft(point, current)
+        alignPointYToPolygonDraft(point, current, resolvedPlacement.surfaceNodeId)
       }
     }
 
@@ -1301,14 +1387,16 @@ export function createWallBuildTool(options: {
     if (options.isAltOverrideActive()) {
       return false
     }
-    if (!raycastPlacementPoint(event, groundPointerHelper)) {
+    const resolvedPlacement = resolveResolvedPlacementPoint(event, groundPointerHelper)
+    if (!resolvedPlacement) {
       return false
     }
 
     const excludeNodeId = getActiveSnapExcludeNodeId()
-    const next = alignPointYToPolygonDraft(snapPlacementPoint(event, groundPointerHelper.clone(), {
+    session.surfaceNodeId = resolvedPlacement.surfaceNodeId
+    const next = alignPointYToPolygonDraft(snapPlacementPoint(event, resolvedPlacement.point.clone(), {
       excludeNodeIds: excludeNodeId ? [excludeNodeId] : undefined,
-    }), session)
+    }), session, resolvedPlacement.surfaceNodeId)
     if (options.isRelativeAngleSnapActive?.()) {
       const anchor = session.polygonPoints[session.polygonPoints.length - 1]
       const previous = resolveRelativeSnapPreviousPointForPolygon(session)
@@ -1320,7 +1408,7 @@ export function createWallBuildTool(options: {
           angleStepRadians: Math.PI / 4,
         })
         next.copy(relativeSnapped)
-        alignPointYToPolygonDraft(next, session)
+        alignPointYToPolygonDraft(next, session, resolvedPlacement.surfaceNodeId)
       }
     }
     const previous = session.polygonPreviewEnd
@@ -1340,18 +1428,20 @@ export function createWallBuildTool(options: {
     if (!session?.dragStart) {
       return
     }
-    if (!raycastPlacementPoint(event, groundPointerHelper)) {
+    const resolvedPlacement = resolveResolvedPlacementPoint(event, groundPointerHelper)
+    if (!resolvedPlacement) {
       return
     }
 
-    const rawPointer = groundPointerHelper.clone()
+    const rawPointer = resolvedPlacement.point.clone()
     const excludeNodeId = getActiveSnapExcludeNodeId()
+    session.surfaceNodeId = resolvedPlacement.surfaceNodeId
     const pointer = snapPlacementPoint(event, rawPointer.clone(), {
       fallback: event.shiftKey ? 'grid' : 'raw',
       excludeNodeIds: excludeNodeId ? [excludeNodeId] : undefined,
       allowVertexSnap: event.shiftKey,
     })
-    alignPointYToLineDraft(pointer, session)
+    alignPointYToLineDraft(pointer, session, resolvedPlacement.surfaceNodeId)
     const constrained = constrainWallEndPointForBuild(
       session.dragStart,
       resolveRelativeSnapPreviousPointForLine(session),
@@ -1360,7 +1450,7 @@ export function createWallBuildTool(options: {
       Boolean(event.shiftKey && WALL_ANGLE_STEP_CONSTRAINTS_ENABLED && !options.isRelativeAngleSnapActive?.()),
       Boolean(options.isRelativeAngleSnapActive?.()),
     )
-    alignPointYToLineDraft(constrained, session)
+    alignPointYToLineDraft(constrained, session, resolvedPlacement.surfaceNodeId)
     const previous = session.dragEnd
     if (previous && previous.equals(constrained)) {
       return

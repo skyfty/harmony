@@ -4455,6 +4455,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		definition: GroundRuntimeDynamicMesh,
 		groundObject: THREE.Object3D,
 	): THREE.Vector3 | null {
+		if (raycastGroundMeshSurfacePoint(event, groundObject, groundPointerHelper)) {
+			return groundPointerHelper.clone()
+		}
 		if (!raycastGroundPoint(event, groundPointerHelper)) {
 			return null
 		}

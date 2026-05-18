@@ -10,6 +10,7 @@ import { CannonEsDebuggerPro } from '@vladkrutenyuk/cannon-es-debugger-pro'
 import type * as CANNON from 'cannon-es'
 import { ScenePreviewPhysicsCollisionDebugRuntime } from '@/physics/collisionDebugRuntime'
 import {
+	DEFAULT_ENVIRONMENT_SETTINGS,
 	DEFAULT_ENVIRONMENT_GRAVITY,
 	cloneEnvironmentSettings,
 	isPointInsideRegionXZ,
@@ -1576,6 +1577,8 @@ const instancedCullingProjView = new THREE.Matrix4()
 const instancedCullingFrustum = new THREE.Frustum()
 const instancedCullingBox = new THREE.Box3()
 const instancedCullingSphere = new THREE.Sphere()
+const SCENE_PREVIEW_FOG_HEADROOM_RATIO = 0.88
+const SCENE_PREVIEW_FOG_MIN_DISTANCE = 0.001
 const instancedCullingWorldPosition = new THREE.Vector3()
 const VEHICLE_CAMERA_DEFAULT_LOOK_DISTANCE = 6
 const VEHICLE_FOLLOW_DISTANCE_MIN = 4
@@ -1742,7 +1745,6 @@ let skyCubeSourceFormat: 'faces' | 'zip' = 'faces'
 let skyCubeFaceAssetIds: Array<string | null> | null = null
 let skyCubeFaceKeys: Array<string | null> | null = null
 let skyCubeFaceTextureCleanup: Array<(() => void) | null> | null = null
-let gradientBackgroundDome: GradientBackgroundDome | null = null
 let skyCubeZipAssetId: string | null = null
 let skyCubeZipAssetKey: string | null = null
 let skyCubeZipFaceUrlCleanup: (() => void) | null = null
@@ -9272,9 +9274,6 @@ function startAnimationLoop() {
 		syncSceneSignboards(currentScene, activeCamera)
 		updateInfoBoardOverlayPlacement(activeCamera)
 		updatePerFrameDiagnostics(delta)
-		if (gradientBackgroundDome) {
-			gradientBackgroundDome.mesh.position.copy(activeCamera.position)
-		}
 
 		// 4) Render + stats
 		sceneCsmShadowRuntime?.update()
@@ -9408,8 +9407,6 @@ function disposeSkyCubeBackgroundResources() {
 function disposeBackgroundResources() {
 	disposeHdriBackgroundResources()
 	disposeSkyCubeBackgroundResources()
-	disposeGradientBackgroundDome(gradientBackgroundDome)
-	gradientBackgroundDome = null
 }
 
 async function loadEnvironmentTextureFromAsset(
@@ -9442,100 +9439,96 @@ async function loadEnvironmentTextureFromAsset(
 	}
 }
 
+type ScenePreviewFogState =
+	| {
+			cameraFar: number
+			fogNear: number
+			fogFar: number
+			fogDensity: number
+	  }
+	| null
+
+function syncScenePreviewCameraFar(nextFar: number): void {
+	if (!camera || !scene) {
+		return
+	}
+	if (Math.abs(camera.far - nextFar) <= 1e-6) {
+		return
+	}
+	camera.far = nextFar
+	camera.updateProjectionMatrix()
+	sceneCsmShadowRuntime?.updateFrustums()
+	scenePreviewPerf.markInstancedCullingDirty()
+}
+
+function resolveScenePreviewFogState(settings: EnvironmentSettings): ScenePreviewFogState {
+	if (settings.fogMode === 'none') {
+		return null
+	}
+	if (settings.fogMode === 'linear') {
+		const sourceNear = Math.max(0, settings.fogNear)
+		const cameraFar = Math.max(sourceNear + SCENE_PREVIEW_FOG_MIN_DISTANCE, settings.fogFar)
+		const fogFar = Math.max(
+			sourceNear + SCENE_PREVIEW_FOG_MIN_DISTANCE,
+			cameraFar * SCENE_PREVIEW_FOG_HEADROOM_RATIO,
+		)
+		const fogNear = Math.min(
+			fogFar - SCENE_PREVIEW_FOG_MIN_DISTANCE,
+			Math.max(0, sourceNear * (fogFar / cameraFar)),
+		)
+		return {
+			cameraFar,
+			fogNear,
+			fogFar,
+			fogDensity: 0,
+		}
+	}
+	const density = Math.max(0, settings.fogDensity)
+	return {
+		cameraFar: DEFAULT_SCENE_CAMERA_FAR,
+		fogNear: 0,
+		fogFar: 0,
+		fogDensity: density <= 0 ? 0 : density / SCENE_PREVIEW_FOG_HEADROOM_RATIO,
+	}
+}
+
+function resolveFogBackgroundMix(settings: EnvironmentSettings, fogState: ScenePreviewFogState): number {
+	if (!fogState) {
+		return 0
+	}
+	if (settings.fogMode === 'linear') {
+		return THREE.MathUtils.clamp(1 - Math.min(fogState.fogFar / 600, 1), 0.2, 0.85)
+	}
+	return THREE.MathUtils.clamp(Math.max(0, fogState.fogDensity) * 24, 0.2, 0.85)
+}
+
 function applyFogSettings(settings: EnvironmentSettings) {
 	if (!scene) {
 		return
 	}
-	const syncCameraFar = (nextFar: number) => {
-		if (!camera || Math.abs(camera.far - nextFar) <= 1e-6) {
-			return
-		}
-		camera.far = nextFar
-		camera.updateProjectionMatrix()
-		sceneCsmShadowRuntime?.updateFrustums()
-		scenePreviewPerf.markInstancedCullingDirty()
-	}
-	if (settings.fogMode === 'none') {
+	const fogState = resolveScenePreviewFogState(settings)
+	const fogColor = new THREE.Color(settings.fogColor)
+	if (!fogState) {
 		scene.fog = null
-		syncCameraFar(DEFAULT_SCENE_CAMERA_FAR)
+		syncScenePreviewCameraFar(DEFAULT_SCENE_CAMERA_FAR)
 		return
 	}
-	const fogColor = new THREE.Color(settings.fogColor)
+	syncScenePreviewCameraFar(fogState.cameraFar)
 	if (settings.fogMode === 'linear') {
-		const near =Math.max(0, settings.fogNear)
-		const far =Math.max(near + 0.001, settings.fogFar)
-		syncCameraFar(far)
 		if (scene.fog instanceof THREE.Fog) {
 			scene.fog.color.copy(fogColor)
-			scene.fog.near = near
-			scene.fog.far = far
+			scene.fog.near = fogState.fogNear
+			scene.fog.far = fogState.fogFar
 		} else {
-			scene.fog = new THREE.Fog(fogColor, near, far)
+			scene.fog = new THREE.Fog(fogColor, fogState.fogNear, fogState.fogFar)
 		}
 		return
 	}
-	syncCameraFar(DEFAULT_SCENE_CAMERA_FAR)
-	const density = Math.max(0, settings.fogDensity)
 	if (scene.fog instanceof THREE.FogExp2) {
 		scene.fog.color.copy(fogColor)
-		scene.fog.density = density
+		scene.fog.density = fogState.fogDensity
 	} else {
-		scene.fog = new THREE.FogExp2(fogColor, density)
-	}
-}
-
-function resolveFogBackgroundMix(settings: EnvironmentSettings): number {
-	if (settings.fogMode === 'linear') {
-		const far = Math.max(1, settings.fogFar)
-		return THREE.MathUtils.clamp(1 - Math.min(far / 600, 1), 0.2, 0.85)
-	}
-	if (settings.fogMode === 'exp') {
-		return THREE.MathUtils.clamp(Math.max(0, settings.fogDensity) * 24, 0.2, 0.85)
-	}
-	return 0
-}
-
-function syncFogBackgroundDome(settings: EnvironmentSettings) {
-	if (!scene) {
-		return
-	}
-	const fogMix = resolveFogBackgroundMix(settings)
-	const gradientTopColor = typeof settings.background.gradientTopColor === 'string' ? settings.background.gradientTopColor.trim() : ''
-	const topColor = gradientTopColor || settings.background.solidColor
-	const bottomColor = settings.background.solidColor
-	const offset = typeof settings.background.gradientOffset === 'number' && Number.isFinite(settings.background.gradientOffset)
-		? settings.background.gradientOffset
-		: 33
-	const exponent = typeof settings.background.gradientExponent === 'number' && Number.isFinite(settings.background.gradientExponent)
-		? settings.background.gradientExponent
-		: 0.6
-
-	if (!gradientBackgroundDome) {
-		if (!fogMix) {
-			return
-		}
-		gradientBackgroundDome = createGradientBackgroundDome({
-			topColor,
-			bottomColor,
-			offset,
-			exponent,
-			fogColor: settings.fogColor,
-			fogMix,
-		})
-		;(gradientBackgroundDome.mesh as any).raycast = () => {}
-		scene.add(gradientBackgroundDome.mesh)
-		return
-	}
-
-	gradientBackgroundDome.uniforms.topColor.value.set(topColor)
-	gradientBackgroundDome.uniforms.bottomColor.value.set(bottomColor)
-	gradientBackgroundDome.uniforms.fogColor.value.set(settings.fogColor)
-	gradientBackgroundDome.uniforms.fogMix.value = fogMix
-	if (typeof settings.background.gradientOffset === 'number' && Number.isFinite(settings.background.gradientOffset)) {
-		gradientBackgroundDome.uniforms.offset.value = settings.background.gradientOffset
-	}
-	if (typeof settings.background.gradientExponent === 'number' && Number.isFinite(settings.background.gradientExponent)) {
-		gradientBackgroundDome.uniforms.exponent.value = settings.background.gradientExponent
+		scene.fog = new THREE.FogExp2(fogColor, fogState.fogDensity)
 	}
 }
 
@@ -9558,38 +9551,10 @@ async function applyBackgroundSettings(
 		const gradientTopColor = typeof background.gradientTopColor === 'string' ? background.gradientTopColor.trim() : ''
 		disposeHdriBackgroundResources()
 		disposeSkyCubeBackgroundResources()
-		if (gradientTopColor) {
-			if (!gradientBackgroundDome) {
-				gradientBackgroundDome = createGradientBackgroundDome({
-					topColor: gradientTopColor,
-					bottomColor: background.solidColor,
-					offset: background.gradientOffset ?? 33,
-					exponent: background.gradientExponent ?? 0.6,
-				})
-				;(gradientBackgroundDome.mesh as any).raycast = () => {}
-				scene.add(gradientBackgroundDome.mesh)
-			} else {
-				gradientBackgroundDome.uniforms.topColor.value.set(gradientTopColor)
-				gradientBackgroundDome.uniforms.bottomColor.value.set(background.solidColor)
-				if (typeof background.gradientOffset === 'number' && Number.isFinite(background.gradientOffset)) {
-					gradientBackgroundDome.uniforms.offset.value = background.gradientOffset
-				}
-				if (typeof background.gradientExponent === 'number' && Number.isFinite(background.gradientExponent)) {
-					gradientBackgroundDome.uniforms.exponent.value = background.gradientExponent
-				}
-			}
-			scene.background = null
-			return true
-		}
-
-		disposeGradientBackgroundDome(gradientBackgroundDome)
-		gradientBackgroundDome = null
 		scene.background = new THREE.Color(background.solidColor)
 		return true
 	}
 	if (background.mode === 'skycube') {
-		disposeGradientBackgroundDome(gradientBackgroundDome)
-		gradientBackgroundDome = null
 		const faceAssetIds: Array<string | null> = [
 			background.positiveXAssetId ?? null,
 			background.negativeXAssetId ?? null,
@@ -9747,16 +9712,12 @@ async function applyBackgroundSettings(
 		return true
 	}
 	if ((background.mode !== 'hdri' && background.mode !== 'fastHdri') || !background.hdriAssetId) {
-		disposeGradientBackgroundDome(gradientBackgroundDome)
-		gradientBackgroundDome = null
 		disposeBackgroundResources()
 		scene.background = new THREE.Color(background.solidColor)
 		return true
 	}
 	const hdriKey = computeEnvironmentAssetReloadKey(background.hdriAssetId)
 	if (backgroundTexture && backgroundAssetId === background.hdriAssetId && backgroundAssetKey === hdriKey) {
-		disposeGradientBackgroundDome(gradientBackgroundDome)
-		gradientBackgroundDome = null
 		scene.background = backgroundTexture
 		return true
 	}
@@ -9809,7 +9770,6 @@ async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
 	)
 	scene.backgroundRotation.copy(euler)
 	scene.environmentRotation.copy(euler)
-	syncFogBackgroundDome(snapshot)
 
 	if (backgroundApplied && environmentApplied) {
 		pendingEnvironmentSettings = null
@@ -10503,7 +10463,11 @@ async function loadScenePreviewPhysicsBridgeScene(
 	physicsCollisionDebugRuntime.setSceneAsset(asset)
 	try {
 		previewGroundCollisionRuntimeBodyIds.clear()
-		await physicsBridge.loadScene(asset)
+		const activePhysicsBridge = physicsBridge
+		if (!activePhysicsBridge) {
+			return
+		}
+		await activePhysicsBridge.loadScene(asset)
 		if (requestId !== physicsBridgeSceneRequestId) {
 			return
 		}
@@ -12814,7 +12778,7 @@ async function applyInitialDocumentGraph(
 		active: true,
 	})
 
-	applyPhysicsEnvironmentSettings(document.environment)
+	applyPhysicsEnvironmentSettings(document.environment ?? DEFAULT_ENVIRONMENT_SETTINGS)
 	await syncPhysicsBodiesForDocument(document, (progress) => {
 		setSceneInitState({
 			stage: 'syncingPhysics',

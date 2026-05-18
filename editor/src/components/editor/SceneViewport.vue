@@ -7910,6 +7910,7 @@ const wallBuildTool = createWallBuildTool({
   rootGroup,
   raycastGroundPoint,
   resolveBuildPlacementPoint,
+  resolveBuildPlacementSurfacePoint: resolveBuildSurfaceAtPointer,
   projectPointToTerrain: (point) => projectPointToBuildTerrain(point),
   snapPoint: (point) => snapVectorToMajorGrid(point),
   resolveVertexSnapPoint: resolveBuildToolVertexSnapPoint,
@@ -8227,6 +8228,7 @@ const roadBuildTool = createRoadBuildTool({
   holdStartIndicatorUntilNodeVisible: holdBuildStartIndicatorUntilNodeVisible,
   raycastGroundPoint,
   resolveBuildPlacementPoint,
+  resolveBuildPlacementSurfacePoint: resolveBuildSurfaceAtPointer,
   resolveVertexSnapPoint: resolveBuildToolVertexSnapPoint,
   clearVertexSnap: clearBuildToolVertexSnap,
   collectRoadSnapVertices,
@@ -12664,7 +12666,6 @@ const environmentSignature = computed(() => {
     fogNear: settings.fogNear,
     fogFar: settings.fogFar,
     fogDensity: settings.fogDensity,
-    fogAutoFitToGround: Boolean(settings.fogAutoFitToGround),
     northDirection: settings.northDirection,
     csm: resolveEnvironmentCsmSettings(settings),
   })
@@ -15429,7 +15430,7 @@ function raycastGroundHeightfieldPoint(event: PointerEvent, result: THREE.Vector
 
 function resolveBuildPlacementPoint(event: PointerEvent, result: THREE.Vector3): boolean {
   if (!isTemporaryNavigationOverrideActive()) {
-    const hit = pickNodeAtPointer(event)
+    const hit = resolveBuildSurfaceAtPointer(event)
     if (hit?.point) {
       result.copy(hit.point)
       return true
@@ -15484,7 +15485,7 @@ function resolveBuildSurfaceAtPointer(event: PointerEvent): {
     if (!nodeId) {
       continue
     }
-    if (sceneStore.isNodeSelectionLocked(nodeId) || !sceneStore.isNodeVisible(nodeId)) {
+    if ((sceneStore.isNodeSelectionLocked(nodeId) && nodeId !== GROUND_NODE_ID) || !sceneStore.isNodeVisible(nodeId)) {
       continue
     }
     const object = objectMap.get(nodeId) ?? null
@@ -19271,7 +19272,7 @@ function computePlacementSurfaceHit(): { point: THREE.Vector3; nodeId: string } 
     return null
   }
 
-  const intersections = raycaster.intersectObjects(targets, false)
+  const intersections = raycaster.intersectObjects(targets, true)
   intersections.sort((a, b) => a.distance - b.distance)
 
   for (const intersection of intersections) {

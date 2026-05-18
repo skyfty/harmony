@@ -51,7 +51,6 @@ export {
   DEFAULT_ENVIRONMENT_FOG_DENSITY,
   DEFAULT_ENVIRONMENT_FOG_NEAR,
   DEFAULT_ENVIRONMENT_FOG_FAR,
-  DEFAULT_ENVIRONMENT_FOG_AUTO_FIT_TO_GROUND,
   DEFAULT_ENVIRONMENT_PHYSICS_ENABLED,
   DEFAULT_ENVIRONMENT_PHYSICS_ENGINE,
   DEFAULT_ENVIRONMENT_GRAVITY,
@@ -64,10 +63,8 @@ export {
   DEFAULT_ENVIRONMENT_SETTINGS,
   cloneEnvironmentSettings,
   extractEnvironmentSettingsFromNodes,
-  resolveAdaptiveLinearFogRange,
   resolveDocumentEnvironment,
 } from './environmentSettingsUtils'
-export type { AdaptiveLinearFogRange } from './environmentSettingsUtils'
 export {
   collectCompiledGroundCollisionTileKeys,
   resolveCompiledGroundCollisionRuntimeState,
@@ -1570,8 +1567,6 @@ export interface EnvironmentSettings {
   fogDensity: number
   fogNear: number
   fogFar: number
-  /** When true, linear fog and camera far can be adapted from the current ground footprint at runtime. */
-  fogAutoFitToGround?: boolean
   /** When false, runtime physics remains loaded but does not advance simulation steps. */
   physicsEnabled?: boolean
   physicsEngine: EnvironmentPhysicsEngine
