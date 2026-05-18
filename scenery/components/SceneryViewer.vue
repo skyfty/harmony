@@ -3033,7 +3033,6 @@ const vehicleDriveController = new VehicleDriveController(
     resolveRigidbodyComponent,
     resolveVehicleComponent,
     isPhysicsEnabled: () => physicsEnvironmentEnabled.value,
-    ensurePhysicsWorld: () => undefined,
     ensureVehicleBindingForNode,
     normalizeNodeId,
     setCameraViewState: (mode, targetId) => setCameraViewState(mode as CameraViewMode, targetId ?? null),
@@ -6266,6 +6265,7 @@ async function prepareSceneryPhysicsBridgeForDocument(document: SceneJsonExportD
   applyPhysicsEnvironmentSettings(environmentSettings);
   currentPhysicsBridgePreference = resolveSceneryPhysicsBridgePreference(environmentSettings);
   void syncCannonDebugger();
+  await ensureSceneryPhysicsBridgeReady();
 }
 
 function resolveSceneryCompiledGroundTileLoader(): ((record: { path: string }) => Promise<ArrayBuffer | null>) | undefined {
@@ -6598,7 +6598,10 @@ async function loadSceneryPhysicsBridgeScene(
       await disposeSceneryPhysicsBridgeScene();
       return;
     }
-    const bridge = await ensureSceneryPhysicsBridgeReady();
+    const bridge = physicsBridge;
+    if (!bridge) {
+      throw new Error('Scenery physics bridge is not ready');
+    }
     sceneryGroundCollisionRuntimeBodyIds.clear();
     await bridge.loadScene(asset);
     if (requestId !== physicsBridgeSceneRequestId) {
@@ -12304,7 +12307,6 @@ function parseScenePackageToProjectData(pkg: ScenePackageUnzipped, compiledGroun
   }
 
 async function loadProjectFromScenePackageBytes(buffer: ArrayBuffer, compiledGroundBuildKey: string): Promise<void> {
-console.log("lskjfl")
   sceneDownload.active = true;
   setSceneDownloadState({
     phase: 'unzip',

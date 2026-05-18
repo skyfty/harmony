@@ -154,7 +154,6 @@ export type VehicleDriveControllerDeps = {
   resolveNodeById: (id: string) => SceneNode | null | undefined
   resolveRigidbodyComponent: (node: SceneNode | null | undefined) => SceneNodeComponentState<RigidbodyComponentProps> | null | undefined
   resolveVehicleComponent: (node: SceneNode | null | undefined) => SceneNodeComponentState<VehicleComponentProps> | null | undefined
-  ensurePhysicsWorld: () => void
   isPhysicsEnabled?: () => boolean
   ensureVehicleBindingForNode: (nodeId: string) => void
   normalizeNodeId: (id: string | null | undefined) => string | null
@@ -720,7 +719,6 @@ export class VehicleDriveController {
     if (!rigidbodyComponent || !physicsEnabled) {
       return { success: true, mode: 'transform', vehicleObject }
     }
-    this.deps.ensurePhysicsWorld()
     this.deps.ensureVehicleBindingForNode(normalized)
     const instance = this.deps.vehicleInstances.get(normalized)
     const rigidbody = this.deps.rigidbodyInstances.get(normalized)

@@ -2930,9 +2930,6 @@ const vehicleDriveController = new VehicleDriveController(
 	resolveRigidbodyComponent,
 	resolveVehicleComponent,
 	isPhysicsEnabled: () => physicsEnvironmentEnabled.value,
-	ensurePhysicsWorld: () => {
-		void ensureScenePreviewPhysicsBridgeReady()
-	},
 	ensureVehicleBindingForNode,
 	normalizeNodeId,
 		setCameraViewState: (mode, targetId) => {
@@ -8772,11 +8769,8 @@ function initRenderer() {
 	window.addEventListener('keyup', handleKeyUp)
 
 	// Environment settings may arrive before renderer/scene initialization.
-	// Re-apply the latest deferred snapshot so Solid Color / HDRI / SkyCube backgrounds take effect.
 	if (pendingEnvironmentSettings) {
 		void applyEnvironmentSettingsToScene(pendingEnvironmentSettings)
-	} else if (currentDocument) {
-		void applyEnvironmentSettingsToScene(resolveDocumentEnvironment(currentDocument))
 	}
 
 	startAnimationLoop()
@@ -9548,6 +9542,7 @@ function syncFogBackgroundDome(settings: EnvironmentSettings) {
 function applyPhysicsEnvironmentSettings(settings: EnvironmentSettings) {
 	const gravity = clampNumber(settings.gravityStrength, 0, 100, DEFAULT_ENVIRONMENT_GRAVITY)
 	physicsEnvironmentEnabled.value = settings.physicsEnabled !== false
+	currentPhysicsBridgePreference.value =  resolveScenePreviewPhysicsBridgePreference(settings)
 	physicsGravity.set(0, -gravity, 0)
 }
 
@@ -9797,7 +9792,6 @@ function applyEnvironmentReflectionFromBackground(background: EnvironmentSetting
 
 async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
 	const snapshot = cloneEnvironmentSettings(settings)
-	applyPhysicsEnvironmentSettings(snapshot)
 	if (!scene) {
 		pendingEnvironmentSettings = snapshot
 		return
@@ -9825,74 +9819,6 @@ async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
 	applyRendererShadowSetting()
 	syncSceneCsmSunFromEnvironment()
 }
-
-const environmentAssetSignature = computed(() => {
-	// Tie to a reactive tick because currentDocument itself is a non-reactive local.
-	void environmentAssetRefreshTick.value
-	if (!currentDocument) {
-		return ''
-	}
-	const settings = resolveDocumentEnvironment(currentDocument)
-	const background = settings.background
-	const hasAnySkycubeFaceAsset =
-		background.mode === 'skycube' &&
-		[
-			background.positiveXAssetId,
-			background.negativeXAssetId,
-			background.positiveYAssetId,
-			background.negativeYAssetId,
-			background.positiveZAssetId,
-			background.negativeZAssetId,
-		].some((assetId) => typeof assetId === 'string' && assetId.trim().length > 0)
-	const skycubeFormat =
-		background.mode === 'skycube'
-			? (background as any).skycubeFormat === 'zip' || (background as any).skycubeFormat === 'faces'
-				? (background as any).skycubeFormat
-				: hasAnySkycubeFaceAsset
-					? 'faces'
-					: 'zip'
-			: null
-	return JSON.stringify({
-		background: {
-			mode: background.mode,
-			solidColor: background.solidColor,
-			gradientTopColor: background.mode === 'solidColor' ? (background.gradientTopColor ?? null) : null,
-			gradientOffset: background.mode === 'solidColor' ? (background.gradientOffset ?? null) : null,
-			gradientExponent: background.mode === 'solidColor' ? (background.gradientExponent ?? null) : null,
-			skycubeFormat,
-			hdriKey:
-				(background.mode === 'hdri' || background.mode === 'fastHdri') && background.hdriAssetId
-					? computeEnvironmentAssetReloadKey(background.hdriAssetId)
-					: null,
-			skycubeKeys:
-				background.mode === 'skycube'
-					? [
-						computeEnvironmentAssetReloadKey(background.positiveXAssetId ?? null),
-						computeEnvironmentAssetReloadKey(background.negativeXAssetId ?? null),
-						computeEnvironmentAssetReloadKey(background.positiveYAssetId ?? null),
-						computeEnvironmentAssetReloadKey(background.negativeYAssetId ?? null),
-						computeEnvironmentAssetReloadKey(background.positiveZAssetId ?? null),
-						computeEnvironmentAssetReloadKey(background.negativeZAssetId ?? null),
-					]
-					: null,
-			skycubeZipKey:
-				background.mode === 'skycube' && (background as any).skycubeZipAssetId
-					? computeEnvironmentAssetReloadKey((background as any).skycubeZipAssetId)
-					: null,
-		},
-	})
-})
-
-watch(
-	environmentAssetSignature,
-	() => {
-		if (!currentDocument) {
-			return
-		}
-		// Re-apply environment when referenced assets are updated/removed/replaced.
-		void applyEnvironmentSettingsToScene(resolveDocumentEnvironment(currentDocument))
-	},
-)
 
 function disposeEnvironmentResources() {
 	disposeBackgroundResources()
@@ -10551,7 +10477,6 @@ async function loadScenePreviewPhysicsBridgeScene(
 		await disposeScenePreviewPhysicsBridgeScene()
 		return
 	}
-	currentPhysicsBridgePreference.value = resolveScenePreviewPhysicsBridgePreference(resolveDocumentEnvironment(document))
 	await ensureScenePreviewPhysicsBridgeReady()
 	await syncScenePreviewGroundChunkManifest(document)
 	const groundNode = findGroundNode(document.nodes)
@@ -10577,9 +10502,8 @@ async function loadScenePreviewPhysicsBridgeScene(
 	})
 	physicsCollisionDebugRuntime.setSceneAsset(asset)
 	try {
-		const bridge = await ensureScenePreviewPhysicsBridgeReady()
 		previewGroundCollisionRuntimeBodyIds.clear()
-		await bridge.loadScene(asset)
+		await physicsBridge.loadScene(asset)
 		if (requestId !== physicsBridgeSceneRequestId) {
 			return
 		}
@@ -12232,23 +12156,7 @@ async function syncPhysicsBodiesForDocument(
 		physicsCollisionDebugRuntime.setSceneAsset(null)
 		return
 	}
-	onProgress?.({
-		phase: 'syncingPhysics',
-		percent: 10,
-		detail: 'Preparing physics bridge...',
-		currentIndex: 0,
-		currentTotal: 3,
-		currentLabel: 'loadScenePreviewPhysicsBridgeScene',
-	})
 	await loadScenePreviewPhysicsBridgeScene(document, onProgress)
-	onProgress?.({
-		phase: 'syncingPhysics',
-		percent: 85,
-		detail: 'Syncing vehicle bindings...',
-		currentIndex: 2,
-		currentTotal: 3,
-		currentLabel: 'syncVehicleBindingsForDocument',
-	})
 	clearLegacyPhysicsWorld()
 	syncVehicleBindingsForDocument(document)
 	physicsCollisionDebugRuntime.setSceneAsset(
@@ -12265,14 +12173,6 @@ async function syncPhysicsBodiesForDocument(
 			},
 		}),
 	)
-	onProgress?.({
-		phase: 'syncingPhysics',
-		percent: 100,
-		detail: 'Physics sync complete',
-		currentIndex: 3,
-		currentTotal: 3,
-		currentLabel: 'completed',
-	})
 }
 
 function stepPhysicsWorld(delta: number): void {
@@ -12913,6 +12813,8 @@ async function applyInitialDocumentGraph(
 		currentTotal: 3,
 		active: true,
 	})
+
+	applyPhysicsEnvironmentSettings(document.environment)
 	await syncPhysicsBodiesForDocument(document, (progress) => {
 		setSceneInitState({
 			stage: 'syncingPhysics',
@@ -13221,7 +13123,6 @@ onMounted(() => {
 	] = resolveDisplayBoardMediaSource
 	addBehaviorRuntimeListener(behaviorRuntimeListener)
 	initRenderer()
-	void ensureScenePreviewPhysicsBridgeReady()
 
 	livePreviewEnabled = true
 	unsubscribe = subscribeToScenePreview((snapshot) => {
