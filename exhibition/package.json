@@ -3,9 +3,10 @@
   "version": "0.0.1",
   "type": "module",
   "scripts": {
-    "predev:mp-weixin": "harmony-tools sync-scenery --mode subpackage-uni-modules",
+    "bootstrap": "node ../scripts/bootstrap.mjs exhibition",
+    "predev:mp-weixin": "pnpm run bootstrap",
     "dev:mp-weixin": "cross-env DEBUG=none uni -p mp-weixin",
-    "prebuild:mp-weixin": "harmony-tools sync-scenery --mode subpackage-uni-modules",
+    "prebuild:mp-weixin": "pnpm run bootstrap",
     "build:mp-weixin": "uni build -p mp-weixin",
     "dev:h5": "cross-env DEBUG=none uni -p h5",
     "build:h5": "uni build -p h5",
