@@ -2278,9 +2278,6 @@ async function syncGroundCache(document: SceneJsonExportDocument | null): Promis
 	cachedGroundNodeId = groundNode.id
 	cachedGroundDynamicMesh = groundNode.dynamicMesh
 	cachedGroundNode = groundNode
-	if (scene && currentDocument?.id === document.id) {
-		void applyEnvironmentSettingsToScene(resolveDocumentEnvironment(document))
-	}
 }
 
 
@@ -10554,11 +10551,7 @@ async function loadScenePreviewPhysicsBridgeScene(
 		await disposeScenePreviewPhysicsBridgeScene()
 		return
 	}
-	const nextPreference = resolveScenePreviewPhysicsBridgePreference(resolveDocumentEnvironment(document))
-	if (nextPreference !== currentPhysicsBridgePreference.value) {
-		currentPhysicsBridgePreference.value = nextPreference
-		await destroyScenePreviewPhysicsBridge()
-	}
+	currentPhysicsBridgePreference.value = resolveScenePreviewPhysicsBridgePreference(resolveDocumentEnvironment(document))
 	await ensureScenePreviewPhysicsBridgeReady()
 	await syncScenePreviewGroundChunkManifest(document)
 	const groundNode = findGroundNode(document.nodes)

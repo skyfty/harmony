@@ -435,12 +435,6 @@ import ResourceCache from '@harmony/schema/ResourceCache';
 import { AssetCache, AssetLoader, configureAssetDownloadHostMirrors, type AssetCacheEntry } from '@harmony/schema/assetCache';
 import { ASSET_DOWNLOAD_HOST_MIRRORS } from '@harmony/schema/assetDownloadMirrors';
 import { isGroundDynamicMesh } from '@harmony/schema/groundHeightfield';
-import {
-  resolveCompiledGroundCollisionRuntimeState,
-} from '@harmony/schema/compiledGroundCollisionRuntime';
-import {
-  resolveInfiniteGroundChunkCollisionRuntimeState,
-} from '@harmony/schema/infiniteGroundChunkCollisions';
 import { syncGroundCollisionRuntimeLoadedTileKeys } from '@harmony/schema/groundCollisionRuntimeState';
 import { clearGroundCollisionRuntimeHost, syncGroundCollisionRuntimeHost } from '@harmony/schema/groundCollisionRuntimeHost';
 import { createGroundCollisionRuntimeBridgeDeps } from '@harmony/schema/groundCollisionRuntimeBridge';
@@ -1978,8 +1972,6 @@ const physicsBridgeVehicleInputSyncState = createPhysicsBridgeVehicleInputSyncSt
 let physicsBridgeSceneLoaded = false;
 let physicsBridgeSceneRequestId = 0;
 let currentPhysicsBridgePreference: PhysicsBackendPreference | undefined;
-let currentPhysicsBridgeGroundCollisionSignature = '';
-let currentDocumentPhysicsRelevantSceneNodesCache: boolean | null = null;
 let sceneryGroundCollisionBridgeMutationChain: Promise<void> = Promise.resolve();
 let sceneryGroundCollisionNextRuntimeId = 0x71000000;
 const sceneryGroundCollisionRuntimeBodyIds = new Set<number>();
@@ -4517,7 +4509,6 @@ async function spawnRuntimePrefabRequest(request: RuntimePrefabSpawnRequest): Pr
     mergeRuntimePrefabAssetRegistry(document, runtimeDocument);
     document.nodes = [...(document.nodes ?? []), cloned.root];
     document.updatedAt = new Date().toISOString();
-    invalidateCurrentDocumentPhysicsRelevanceCache();
     rebuildPreviewNodeMap(document);
     viewerResourceCache = ensureResourceCache(document, buildOptions);
     registerSceneSubtree(graph.root);
@@ -5307,9 +5298,6 @@ function refreshDynamicGroundCache(document: SceneJsonExportDocument | null): vo
     };
   } else {
     dynamicGroundCache = null;
-  }
-  if (currentDocument?.id === document?.id) {
-    void applyEnvironmentSettingsToScene(resolveDocumentEnvironment(document));
   }
 }
 
@@ -6273,23 +6261,11 @@ function resolveSceneryPhysicsBridgePreference(
   return propPreference === 'auto' ? 'auto' : undefined;
 }
 
-async function reloadSceneryPhysicsBridgeForPreference(
-  settings: Pick<EnvironmentSettings, 'physicsEngine'> | null | undefined,
-): Promise<boolean> {
-  const nextPreference = resolveSceneryPhysicsBridgePreference(settings);
-  if (nextPreference === currentPhysicsBridgePreference) {
-    return false;
-  }
-  currentPhysicsBridgePreference = nextPreference;
-  void syncCannonDebugger();
-  await destroySceneryPhysicsBridge();
-  return true;
-}
-
 async function prepareSceneryPhysicsBridgeForDocument(document: SceneJsonExportDocument): Promise<void> {
   const environmentSettings = resolveDocumentEnvironment(document);
   applyPhysicsEnvironmentSettings(environmentSettings);
-  await reloadSceneryPhysicsBridgeForPreference(environmentSettings);
+  currentPhysicsBridgePreference = resolveSceneryPhysicsBridgePreference(environmentSettings);
+  void syncCannonDebugger();
 }
 
 function resolveSceneryCompiledGroundTileLoader(): ((record: { path: string }) => Promise<ArrayBuffer | null>) | undefined {
@@ -6388,36 +6364,6 @@ function resolveSceneryGroundCollisionRuntimeDeps(): NonNullable<
     enqueueMutation: enqueueSceneryGroundCollisionBridgeMutation,
     loggerTag: 'SceneryGroundCollision',
   });
-}
-
-function resolveSceneryGroundCollisionSignature(document: SceneJsonExportDocument | null): string {
-  if (!document) {
-    return '';
-  }
-  const groundNode = findGroundNode(document.nodes);
-  const groundMesh = groundNode?.dynamicMesh as GroundRuntimeDynamicMesh | null | undefined;
-  if (!groundNode || !isGroundDynamicMesh(groundMesh)) {
-    return '';
-  }
-  const groundUserData = groundNode.userData && typeof groundNode.userData === 'object'
-    ? (groundNode.userData as Record<string, unknown>)
-    : {};
-  const compiledManifest = groundUserData.compiledGroundManifest as { revision?: unknown } | null | undefined;
-  const compiledState = resolveCompiledGroundCollisionRuntimeState({
-    enabled: Boolean(groundUserData.compiledGroundEnabled || groundUserData.compiledGroundManifest),
-    manifest: compiledManifest as any,
-    runtimeLoadedTileKeys: groundMesh.runtimeLoadedTileKeys,
-    sourceId: groundNode.id,
-    revision: Number.isFinite(Number(compiledManifest?.revision))
-      ? Math.max(0, Math.trunc(Number(compiledManifest?.revision)))
-      : Math.max(0, Math.trunc(Number(groundMesh.chunkManifestRevision) || 0)),
-  });
-  const infiniteState = resolveInfiniteGroundChunkCollisionRuntimeState({
-    enabled: groundMesh.terrainMode === 'infinite',
-    definition: groundMesh,
-    sourceId: groundNode.id,
-  });
-  return `${compiledState.signature}::${infiniteState.signature}`;
 }
 
 function syncSceneryGroundCollisionRuntimeLoadedTileKeys(document: SceneJsonExportDocument | null, camera: THREE.Camera | null | undefined): boolean {
@@ -6625,32 +6571,16 @@ async function loadSceneryPhysicsBridgeScene(
   onProgress?: SceneSubsystemProgressReporter,
 ): Promise<void> {
   if (!document) {
-    currentPhysicsBridgeGroundCollisionSignature = '';
-    sceneryGroundCollisionReferenceInitialized = false;
-    sceneryGroundCollisionReferenceElapsed = 0;
-    sceneryGroundCollisionRuntimeBodyIds.clear();
     await disposeSceneryPhysicsBridgeScene();
     return;
   }
-  if (!physicsEnvironmentEnabled.value) {
-    currentPhysicsBridgeGroundCollisionSignature = '';
-    sceneryGroundCollisionReferenceInitialized = false;
-    sceneryGroundCollisionReferenceElapsed = 0;
-    sceneryGroundCollisionRuntimeBodyIds.clear();
-    await disposeSceneryPhysicsBridgeScene();
-    return;
-  }
-  if (!resolveDocumentPhysicsRelevance(document)) {
-    currentPhysicsBridgeGroundCollisionSignature = '';
-    sceneryGroundCollisionReferenceInitialized = false;
-    sceneryGroundCollisionReferenceElapsed = 0;
-    sceneryGroundCollisionRuntimeBodyIds.clear();
+  if (!physicsEnvironmentEnabled.value || !resolveDocumentPhysicsRelevance(document)) {
     await disposeSceneryPhysicsBridgeScene();
     return;
   }
   try {
-    await reloadSceneryPhysicsBridgeForPreference(resolveDocumentEnvironment(document));
-    currentPhysicsBridgeGroundCollisionSignature = resolveSceneryGroundCollisionSignature(document);
+    currentPhysicsBridgePreference = resolveSceneryPhysicsBridgePreference(resolveDocumentEnvironment(document));
+    void syncCannonDebugger();
     const requestId = ++physicsBridgeSceneRequestId;
     const asset = await buildPhysicsSceneAsset(document, {
       onProgress: (progress) => {
@@ -7123,7 +7053,6 @@ async function destroySceneryPhysicsBridge(): Promise<void> {
     console.warn('[SceneViewer] Failed to destroy physics bridge', error);
   } finally {
     physicsBridgeSceneRequestId += 1;
-    currentPhysicsBridgeGroundCollisionSignature = '';
     sceneryGroundCollisionRuntimeBodyIds.clear();
     destroyCannonDebugger();
     cannonDebuggerWorld = null;
@@ -7427,22 +7356,11 @@ function hasPhysicsRelevantSceneNodes(nodes: SceneNode[] | undefined | null): bo
   return false;
 }
 
-function invalidateCurrentDocumentPhysicsRelevanceCache(): void {
-  currentDocumentPhysicsRelevantSceneNodesCache = null;
-}
-
 function resolveDocumentPhysicsRelevance(document: SceneJsonExportDocument | null | undefined): boolean {
   if (!document) {
     return false;
   }
-  if (document === currentDocument && currentDocumentPhysicsRelevantSceneNodesCache !== null) {
-    return currentDocumentPhysicsRelevantSceneNodesCache;
-  }
-  const hasPhysicsRelevantNodes = hasPhysicsRelevantSceneNodes(document.nodes);
-  if (document === currentDocument) {
-    currentDocumentPhysicsRelevantSceneNodesCache = hasPhysicsRelevantNodes;
-  }
-  return hasPhysicsRelevantNodes;
+  return hasPhysicsRelevantSceneNodes(document.nodes);
 }
 
 function syncVehicleInstancesForDocument(document: SceneJsonExportDocument | null): void {
@@ -11831,10 +11749,6 @@ async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
   const snapshot = cloneEnvironmentSettings(settings);
   activeEnvironmentSettings = snapshot;
   applyPhysicsEnvironmentSettings(snapshot);
-  const physicsBridgePreferenceChanged = await reloadSceneryPhysicsBridgeForPreference(snapshot);
-  if (physicsBridgePreferenceChanged && sceneGraphRoot && currentDocument) {
-    await syncPhysicsBodiesForDocument(currentDocument);
-  }
   if (!scene) {
     pendingEnvironmentSettings = snapshot;
     return;
@@ -12880,7 +12794,6 @@ function teardownRenderer() {
   renderContext = null;
   canvasResult = null;
   setActiveMultiuserSceneId(null);
-  invalidateCurrentDocumentPhysicsRelevanceCache();
   currentDocument = null;
   dynamicGroundCache = null;
   sceneGraphRoot = null;
@@ -13312,7 +13225,6 @@ async function mountGraphAndSyncSubsystems(
     active: true,
   });
   await prepareSceneryPhysicsBridgeForDocument(payload.document);
-  currentDocumentPhysicsRelevantSceneNodesCache = resolveDocumentPhysicsRelevance(payload.document);
   initializeLazyPlaceholders(payload.document);
   await yieldToMainThread();
 
@@ -13563,11 +13475,6 @@ function startRenderLoop(
               : false;
             if (shouldUpdateGroundCollisionSystems && physicsBridgeSceneLoaded) {
               syncSceneryGroundCollisionRuntimeLoadedTileKeys(currentDocument, camera);
-            } else if (currentDocument) {
-              const nextGroundCollisionSignature = resolveSceneryGroundCollisionSignature(currentDocument);
-              if (nextGroundCollisionSignature !== currentPhysicsBridgeGroundCollisionSignature) {
-                currentPhysicsBridgeGroundCollisionSignature = nextGroundCollisionSignature;
-              }
             }
           }
         }
@@ -13690,7 +13597,6 @@ function cleanupForUnrelatedSceneSwitch(): void {
   }
   sceneGraphRoot = null;
   dynamicGroundCache = null;
-  invalidateCurrentDocumentPhysicsRelevanceCache();
   setActiveMultiuserSceneId(null);
   viewerResourceCache = null;
 }
@@ -13718,7 +13624,6 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
 
   // Phase 1: bind state for the new payload.
   currentDocument = payload.document;
-  invalidateCurrentDocumentPhysicsRelevanceCache();
   refreshDynamicGroundCache(currentDocument);
   setActiveMultiuserSceneId(payload.document.id ?? null);
   resetProtagonistPoseState();
@@ -13901,11 +13806,8 @@ function applyInput(params: {
   const requestedPhysicsPreference = resolveSceneryPhysicsBridgePreference(
     currentDocument ? resolveDocumentEnvironment(currentDocument) : activeEnvironmentSettings,
   );
-  if (currentPhysicsBridgePreference !== requestedPhysicsPreference) {
-    currentPhysicsBridgePreference = requestedPhysicsPreference;
-    void syncCannonDebugger();
-    void destroySceneryPhysicsBridge();
-  }
+  currentPhysicsBridgePreference = requestedPhysicsPreference;
+  void syncCannonDebugger();
 
   configurePhysicsInterpolation(physinterpParam);
   error.value = null;
