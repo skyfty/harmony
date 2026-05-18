@@ -57,8 +57,6 @@ const VEHICLE_SPEED_GOVERNOR_BRAKE_BAND = 1.8
 const VEHICLE_SPEED_GOVERNOR_BRAKE_MAX_RATIO = 0.14
 const VEHICLE_BRAKE_RELEASE_SPEED = 0.45
 const VEHICLE_WAKE_SPEED_THRESHOLD = 0.2
-let lastAmmoWorldLoadSceneLogSignature = ''
-let lastAmmoWorldLoadSceneLogAt = 0
 
 export class AmmoPhysicsWorld {
   private ammo: AmmoApi | null = null
@@ -93,7 +91,6 @@ export class AmmoPhysicsWorld {
 
   loadScene(scene: PhysicsSceneAsset): { bodyCount: number; vehicleCount: number } {
     this.ensureWorld()
-    this.disposeScene()
     this.scene = scene
     this.frame = 0
     scene.shapes.forEach((shape) => {
@@ -105,20 +102,6 @@ export class AmmoPhysicsWorld {
     scene.vehicles.forEach((vehicle) => {
       this.vehicles.set(vehicle.id, this.createVehicleState(vehicle))
     })
-    const logPayload = {
-      bodyCount: scene.bodies.length,
-      vehicleCount: scene.vehicles.length,
-      shapeCount: scene.shapes.length,
-      staticBodies: scene.bodies.filter((body) => body.type === 'static').length,
-      dynamicBodies: scene.bodies.filter((body) => body.type === 'dynamic').length,
-    }
-    const logSignature = JSON.stringify(logPayload)
-    const now = Date.now()
-    if (logSignature !== lastAmmoWorldLoadSceneLogSignature || now - lastAmmoWorldLoadSceneLogAt >= 2000) {
-      lastAmmoWorldLoadSceneLogSignature = logSignature
-      lastAmmoWorldLoadSceneLogAt = now
-      console.log(`[AmmoPhysicsWorld] loadScene ${JSON.stringify(logPayload)}`)
-    }
     return {
       bodyCount: scene.bodies.length,
       vehicleCount: scene.vehicles.length,

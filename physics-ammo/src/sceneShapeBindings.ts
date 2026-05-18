@@ -37,7 +37,7 @@ export function createAmmoSceneShapeBindings(
   return [{
     shape: built.shape,
     position: [0, 0, 0],
-    quaternion: isHeightfield ? [...heightfieldQuaternion] as AmmoQuaternion : [0, 0, 0, 1],
+    quaternion: [0, 0, 0, 1],
     cleanup: built.cleanup,
   }]
 }
