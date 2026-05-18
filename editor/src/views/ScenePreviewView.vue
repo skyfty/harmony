@@ -97,9 +97,6 @@ import {
 	buildGroundCollisionDebugShapesFromNode,
 	isGroundDynamicMesh,
 } from '@schema/groundHeightfield'
-import {
-	resolveCompiledGroundCollisionRuntimeState,
-} from '@schema/compiledGroundCollisionRuntime'
 import { computeCompiledGroundManifestRevision } from '@schema/compiledGround'
 import {
 	clearCompiledGroundRenderTiles,
@@ -107,9 +104,6 @@ import {
 	getCompiledGroundRenderWorkState,
 	syncCompiledGroundRenderTiles,
 } from '@schema/compiledGroundRuntime'
-import {
-	resolveInfiniteGroundChunkCollisionRuntimeState,
-} from '@schema/infiniteGroundChunkCollisions'
 import {
 	clearGroundCollisionRuntimeHost,
 	syncGroundCollisionRuntimeHost,
@@ -643,8 +637,6 @@ let sceneSwitchShownAt = 0
 const isPreloadOverlayVisible = computed(() => resourceProgress.active || sceneInit.active || sceneSwitchOverlayVisible.value)
 const isPreloadFlashVisible = computed(() => sceneSwitchOverlayVisible.value)
 
-let forceInitialDocumentGraphOnNextSnapshot = false
-
 function clearSceneSwitchTimers(): void {
 	if (sceneSwitchShowHandle) {
 		window.clearTimeout(sceneSwitchShowHandle)
@@ -808,7 +800,6 @@ function cleanupForUnrelatedSceneSwitch(): void {
 	resetAnimationControllers()
 	waterRuntime.reset()
 	clearRuntimePrefabPreviewRoots()
-	forceInitialDocumentGraphOnNextSnapshot = true
 }
 
 function nextSnapshotRevision(): number {
@@ -2331,7 +2322,6 @@ const physicsBridgeVehicleInputSyncState = createPhysicsBridgeVehicleInputSyncSt
 let physicsBridgeSceneLoaded = false
 let physicsBridgeSceneRequestId = 0
 const currentPhysicsBridgePreference = ref<PhysicsBackendPreference | undefined>()
-let currentPhysicsBridgeGroundCollisionSignature = ''
 const physicsBridgeBodyIdByNodeId = new Map<string, number>()
 const physicsBridgeNodeIdByBodyId = new Map<number, string>()
 const physicsBridgeVehicleIdByNodeId = new Map<string, number>()
@@ -9166,15 +9156,7 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
 		}
 	}
 	if (shouldUpdateGroundCollisionSystems && currentDocument) {
-		const groundCollisionChanged = syncScenePreviewGroundCollisionRuntimeHost(currentDocument, groundCollisionReferencePosition)
-		const hasDynamicGroundCollisionBridgeRuntime = resolveScenePreviewGroundCollisionRuntimeDeps() !== null
-		if (groundCollisionChanged && physicsEnvironmentEnabled.value && physicsBridgeSceneLoaded && !hasDynamicGroundCollisionBridgeRuntime) {
-			const nextGroundCollisionSignature = resolveScenePreviewGroundCollisionSignature(currentDocument)
-			if (nextGroundCollisionSignature && nextGroundCollisionSignature !== currentPhysicsBridgeGroundCollisionSignature) {
-				currentPhysicsBridgeGroundCollisionSignature = nextGroundCollisionSignature
-				void loadScenePreviewPhysicsBridgeScene(currentDocument)
-			}
-		}
+		syncScenePreviewGroundCollisionRuntimeHost(currentDocument, groundCollisionReferencePosition)
 	}
 }
 
@@ -9819,7 +9801,6 @@ function applyEnvironmentReflectionFromBackground(background: EnvironmentSetting
 async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
 	const snapshot = cloneEnvironmentSettings(settings)
 	applyPhysicsEnvironmentSettings(snapshot)
-	void reloadScenePreviewPhysicsBridgeForPreference(snapshot)
 	if (!scene) {
 		pendingEnvironmentSettings = snapshot
 		return
@@ -10133,46 +10114,6 @@ function registerSubtree(object: THREE.Object3D, pending?: Map<string, THREE.Obj
 	sceneCsmShadowRuntime?.registerObject(object)
 }
 
-function adoptNodeFromPending(nodeId: string, parent: THREE.Object3D, pending: Map<string, THREE.Object3D>): THREE.Object3D | null {
-	const candidate = pending.get(nodeId)
-	if (!candidate) {
-		return null
-	}
-	candidate.parent?.remove(candidate)
-	parent.add(candidate)
-	registerSubtree(candidate, pending)
-	return candidate
-}
-
-function ensureChildOrder(parent: THREE.Object3D, child: THREE.Object3D, orderIndex: number) {
-	if (child.parent !== parent) {
-		parent.add(child)
-	}
-	const managedChildren = parent.children.filter((entry) => !!entry.userData?.nodeId)
-	const desiredSibling = managedChildren[orderIndex]
-	const currentIndex = parent.children.indexOf(child)
-	if (!desiredSibling) {
-		const firstHelper = parent.children.findIndex((entry) => !entry.userData?.nodeId)
-		parent.children.splice(currentIndex, 1)
-		if (firstHelper === -1) {
-			parent.children.push(child)
-		} else {
-			parent.children.splice(firstHelper, 0, child)
-		}
-		return
-	}
-	if (desiredSibling === child) {
-		return
-	}
-	const desiredIndex = parent.children.indexOf(desiredSibling)
-	if (desiredIndex === -1) {
-		return
-	}
-	parent.children.splice(currentIndex, 1)
-	parent.children.splice(Math.min(desiredIndex, parent.children.length), 0, child)
-}
-
-
 function syncInstancedTransform(object: THREE.Object3D | null) {
 	if (!object) {
 		return
@@ -10359,50 +10300,6 @@ function resolveScenePreviewPhysicsBridgePreference(
 	return preference === 'ammo' || preference === 'cannon' || preference === 'auto'
 		? preference
 		: undefined
-}
-
-async function reloadScenePreviewPhysicsBridgeForPreference(
-	settings: Pick<EnvironmentSettings, 'physicsEngine'> | null | undefined,
-): Promise<void> {
-	const nextPreference = resolveScenePreviewPhysicsBridgePreference(settings)
-	if (nextPreference === currentPhysicsBridgePreference.value) {
-		return
-	}
-	currentPhysicsBridgePreference.value = nextPreference
-	await destroyScenePreviewPhysicsBridge()
-	if (currentDocument) {
-		void loadScenePreviewPhysicsBridgeScene(currentDocument)
-	}
-}
-
-function resolveScenePreviewGroundCollisionSignature(document: SceneJsonExportDocument | null): string {
-	if (!document) {
-		return ''
-	}
-	const groundNode = findGroundNode(document.nodes)
-	const groundMesh = groundNode?.dynamicMesh as GroundRuntimeDynamicMesh | null | undefined
-	if (!groundNode || !isGroundDynamicMesh(groundMesh)) {
-		return ''
-	}
-	const groundUserData = groundNode.userData && typeof groundNode.userData === 'object'
-		? (groundNode.userData as Record<string, unknown>)
-		: {}
-	const compiledManifest = groundUserData.compiledGroundManifest as { revision?: unknown } | null | undefined
-	const compiledState = resolveCompiledGroundCollisionRuntimeState({
-		enabled: Boolean(groundUserData.compiledGroundEnabled || groundUserData.compiledGroundManifest),
-		manifest: compiledManifest as any,
-		runtimeLoadedTileKeys: groundMesh.runtimeLoadedTileKeys,
-		sourceId: groundNode.id,
-		revision: Number.isFinite(Number(compiledManifest?.revision))
-			? Math.max(0, Math.trunc(Number(compiledManifest?.revision)))
-			: Math.max(0, Math.trunc(Number(groundMesh.chunkManifestRevision) || 0)),
-	})
-	const infiniteState = resolveInfiniteGroundChunkCollisionRuntimeState({
-		enabled: groundMesh.terrainMode === 'infinite',
-		definition: groundMesh,
-		sourceId: groundNode.id,
-	})
-	return `${compiledState.signature}::${infiniteState.signature}`
 }
 
 function handleScenePreviewCannonWorldReady(world: unknown | null): void {
@@ -10653,12 +10550,15 @@ async function loadScenePreviewPhysicsBridgeScene(
 	onProgress?: SceneSubsystemProgressReporter,
 ): Promise<void> {
 	if (!document) {
-		currentPhysicsBridgeGroundCollisionSignature = ''
 		physicsCollisionDebugRuntime.setSceneAsset(null)
 		await disposeScenePreviewPhysicsBridgeScene()
 		return
 	}
-	await reloadScenePreviewPhysicsBridgeForPreference(resolveDocumentEnvironment(document))
+	const nextPreference = resolveScenePreviewPhysicsBridgePreference(resolveDocumentEnvironment(document))
+	if (nextPreference !== currentPhysicsBridgePreference.value) {
+		currentPhysicsBridgePreference.value = nextPreference
+		await destroyScenePreviewPhysicsBridge()
+	}
 	await ensureScenePreviewPhysicsBridgeReady()
 	await syncScenePreviewGroundChunkManifest(document)
 	const groundNode = findGroundNode(document.nodes)
@@ -10669,7 +10569,6 @@ async function loadScenePreviewPhysicsBridgeScene(
 	} else if (groundObject && isGroundDynamicMesh(groundMesh)) {
 		clearGroundCollisionRuntimeHost(groundObject)
 	}
-	currentPhysicsBridgeGroundCollisionSignature = resolveScenePreviewGroundCollisionSignature(document)
 	const requestId = ++physicsBridgeSceneRequestId
 	const asset = await buildPhysicsSceneAsset(document, {
 		onProgress: (progress) => {
@@ -11138,7 +11037,6 @@ async function destroyScenePreviewPhysicsBridge(): Promise<void> {
 		console.warn('[ScenePreview] Failed to destroy physics bridge', error)
 	} finally {
 		physicsBridgeSceneRequestId += 1
-		currentPhysicsBridgeGroundCollisionSignature = ''
 		physicsBridgeBodyIdByNodeId.clear()
 		physicsBridgeNodeIdByBodyId.clear()
 		physicsBridgeVehicleIdByNodeId.clear()
@@ -12937,61 +12835,6 @@ function prepareImportedObjectForPreview(object: THREE.Object3D): void {
 	})
 }
 
-function structuralSignature(node: SceneNode | null | undefined): string {
-	if (!node) {
-		return ''
-	}
-	const type = node.nodeType ?? (node.light ? 'Light' : node.dynamicMesh ? 'Mesh' : 'Group')
-	const dynamicSignature = node.dynamicMesh ? JSON.stringify(node.dynamicMesh) : ''
-	const source = node.sourceAssetId ?? ''
-	const lightType = node.light?.type ?? ''
-	const materialSignature = node.materials ? JSON.stringify(node.materials) : ''
-	return [type, dynamicSignature, source, lightType, materialSignature].join('|')
-}
-
-function reconcileNodeLists(
-	parentId: string | null,
-	nextNodes: SceneNode[] = [],
-	previousNodes: SceneNode[] = [],
-	pending: Map<string, THREE.Object3D>,
-) {
-	const parentObject = parentId ? nodeObjectMap.get(parentId) : rootGroup
-	if (!parentObject) {
-		return
-	}
-
-	const nextIdSet = new Set(nextNodes.map((node) => node.id))
-	previousNodes.forEach((node) => {
-		if (!nextIdSet.has(node.id)) {
-			removeNodeSubtree(node.id)
-		}
-	})
-
-	const previousMap = new Map(previousNodes.map((node) => [node.id, node]))
-
-	nextNodes.forEach((node, index) => {
-		const existing = nodeObjectMap.get(node.id) ?? null
-		const previous = previousMap.get(node.id) ?? null
-		const shouldReplace = !existing || !previous || structuralSignature(node) !== structuralSignature(previous)
-		let object = existing
-		if (shouldReplace) {
-			if (existing) {
-				removeNodeSubtree(node.id)
-			}
-			object = adoptNodeFromPending(node.id, parentObject, pending)
-		}
-		if (!object) {
-			return
-		}
-		updateNodeProperties(object, node)
-		ensureChildOrder(parentObject, object, index)
-		const nextChildren = Array.isArray(node.children) ? node.children : []
-		const previousChildren = previous?.children ?? []
-		reconcileNodeLists(node.id, nextChildren, previousChildren, pending)
-	})
-}
-
-
 function refreshAnimations() {
 	resetAnimationControllers()
 
@@ -13117,75 +12960,6 @@ async function applyInitialDocumentGraph(
 	void applyEnvironmentSettingsToScene(environmentSettings)
 	applyRendererShadowSetting()
 	environmentAssetRefreshTick.value += 1
-}
-
-async function applyIncrementalDocumentGraph(
-	document: SceneJsonExportDocument,
-	previewRoot: THREE.Object3D,
-	pendingObjects: Map<string, THREE.Object3D>,
-	resourceCache: ResourceCache | null,
-	environmentSettings: EnvironmentSettings,
-): Promise<void> {
-	reconcileNodeLists(null, document.nodes ?? [], currentDocument?.nodes ?? [], pendingObjects)
-
-	for (const [nodeId, object] of Array.from(pendingObjects.entries())) {
-		if (!nodeObjectMap.has(nodeId)) {
-			previewRoot.add(object)
-			registerSubtree(object, pendingObjects)
-		}
-	}
-
-	await syncGroundCache(document)
-
-	nodeObjectMap.forEach((object, nodeId) => {
-		attachRuntimeForNode(nodeId, object)
-	})
-	setSceneInitState({
-		stage: 'syncingPhysics',
-		label: 'Syncing physics...',
-		stagePercent: 0,
-		currentIndex: 0,
-		currentTotal: 3,
-		active: true,
-	})
-	await syncPhysicsBodiesForDocument(document, (progress) => {
-		setSceneInitState({
-			stage: 'syncingPhysics',
-			label: 'Syncing physics...',
-			stagePercent: progress.percent,
-			currentIndex: progress.currentIndex ?? 0,
-			currentTotal: progress.currentTotal ?? 0,
-			active: true,
-		})
-	})
-	setSceneInitState({
-		stage: 'syncingScatter',
-		label: 'Syncing terrain scatter...',
-		stagePercent: 0,
-		currentIndex: 0,
-		currentTotal: 3,
-		active: true,
-	})
-	await syncTerrainScatterInstances(document, resourceCache, (progress) => {
-		setSceneInitState({
-			stage: 'syncingScatter',
-			label: 'Syncing terrain scatter...',
-			stagePercent: progress.percent,
-			currentIndex: progress.currentIndex ?? 0,
-			currentTotal: progress.currentTotal ?? 0,
-			active: true,
-		})
-	})
-	const protagonistCameraActive = !vehicleDriveState.active && (controlMode.value === 'first-person' || controlMode.value === 'third-person')
-	syncProtagonistCameraPose({ force: true, applyToCamera: protagonistCameraActive })
-
-	currentDocument = document
-	refreshAnimations()
-	initializeLazyPlaceholders(document)
-	void applyEnvironmentSettingsToScene(environmentSettings)
-	applyRendererShadowSetting()
-	environmentAssetRefreshTick.value += 1
-	// (instancing trace removed)
 }
 
 async function updateScene(document: SceneJsonExportDocument) {
@@ -13331,28 +13105,14 @@ async function updateScene(document: SceneJsonExportDocument) {
 			active: true,
 		})
 		await yieldToMainThread()
-
-		const applyIncremental = Boolean(currentDocument) && !forceInitialDocumentGraphOnNextSnapshot
-		forceInitialDocumentGraphOnNextSnapshot = false
-
-		if (applyIncremental) {
-			await applyIncrementalDocumentGraph(
-				document,
-				previewRoot,
-				pendingObjects,
-				resourceCache,
-				environmentSettings,
-			)
-		} else {
-			await applyInitialDocumentGraph(
-				document,
-				previewRoot,
-				root,
-				pendingObjects,
-				resourceCache,
-				environmentSettings,
-			)
-		}
+		await applyInitialDocumentGraph(
+			document,
+			previewRoot,
+			root,
+			pendingObjects,
+			resourceCache,
+			environmentSettings,
+		)
 		scenePreviewDriveBindingsReady.value = true
 		applyPreviewNominateOverrides()
 		activatePendingDefaultSteerDriveIfNeeded()
