@@ -6,7 +6,10 @@
   "scripts": {
     "predev": "pnpm run bootstrap",
     "dev": "vite",
-    "bootstrap": "node ../scripts/bootstrap.mjs editor",
+    "bootstrap": "node ../tools/scripts/bootstrap.mjs editor",
+    "replace:harmony-to-short": "node ../tools/scripts/editor/replace-harmony-to-short.mjs --root src",
+    "replace:schema-imports": "node ../tools/scripts/editor/replace-schema-imports.js --root src",
+    "replace:schema-strings": "node ../tools/scripts/editor/replace-schema-strings.mjs --root src",
     "build": "pnpm run bootstrap && vue-tsc -b && vite build",
     "preview": "vite preview",
     "generate:planning-dem-test-heightmap": "node ./scripts/generate-strict-qgis-test-heightmap.mjs",

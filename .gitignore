@@ -30,38 +30,31 @@ admin/.env
 miniprogram/.env
 
 # Generated uni_modules copied from npm-installed packages
-exhibition/src/uni_modules/scenery/
-viewer/src/uni_modules/scenery/
+*/src/uni_modules/scenery/
 
 # Generated uni_modules copied into the scenery subpackage (sync-scenery --mode subpackage-uni-modules)
 **/src/pages/scenery/uni_modules/scenery/
 
 # Generated physics source mirrors used by viewer subpackage builds
-viewer/src/pages/physics-ammo/engine/
-viewer/src/pages/physics-cannon/engine/
-viewer/src/pages/physics-ammo/vendor/
+*/src/pages/physics-ammo/engine/
+*/src/pages/physics-cannon/engine/
+*/src/pages/physics-ammo/vendor/
 
 # Generated schema mirror used by viewer scenery subpackage builds
-viewer/src/pages/scenery/schema/
-viewer/src/pages/scenery/physics-core/
+*/src/pages/scenery/schema/
+*/src/pages/scenery/physics-core/
 
 # Generated scenery dependency mirrors used by viewer subpackage builds
-viewer/src/pages/scenery/utils/
-viewer/src/pages/scenery/physics-bridge/
-viewer/src/pages/scenery/three/
-viewer/src/pages/scenery/three-mesh-bvh/
-viewer/src/pages/scenery/three-platform-adapter/
-viewer/src/pages/physics-cannon/cannon-es/
-viewer/src/pages/physics-ammo/ammojs3/
+*/src/pages/scenery/utils/
+*/src/pages/scenery/physics-bridge/
+*/src/pages/scenery/three/
+*/src/pages/scenery/three-mesh-bvh/
+*/src/pages/scenery/three-platform-adapter/
+*/src/pages/physics-cannon/cannon-es/
+*/src/pages/physics-ammo/ammojs3/
 
 # Generated scenery dependency mirrors used by tour subpackage builds
-tour/src/pages/scenery/physics-bridge/
-tour/src/pages/scenery/physics-core/
-tour/src/pages/scenery/schema/
-tour/src/pages/scenery/three/
-tour/src/pages/scenery/three-mesh-bvh/
-tour/src/pages/scenery/three-platform-adapter/
-tour/src/pages/scenery/utils/
+# Covered by the wildcard rules above.
 
 # WebAssembly / Rust build artifacts and caches
 # Rust build output (moved crate into editor/src/wasm)

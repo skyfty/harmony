@@ -3,12 +3,12 @@
 This repo now has a single bootstrap entry for restoring local package dependencies after branch switches:
 
 ```bash
-node scripts/bootstrap.mjs viewer shared
-node scripts/bootstrap.mjs viewer mp dev
-node scripts/bootstrap.mjs viewer h5 build
-node scripts/bootstrap.mjs editor
-node scripts/bootstrap.mjs tour
-node scripts/bootstrap.mjs exhibition
+pnpm --dir viewer run bootstrap:shared
+pnpm --dir viewer run bootstrap:mp-weixin:dev
+pnpm --dir viewer run bootstrap:h5:build
+pnpm --dir editor run bootstrap
+pnpm --dir tour run bootstrap:shared
+pnpm --dir exhibition run bootstrap
 ```
 
 ## Build-required packages
@@ -36,5 +36,7 @@ These packages produce `dist/` artifacts and should be rebuilt after branch swit
 
 ## Notes
 
+- `tools/scripts/bootstrap/application.mjs` now hosts the application-level bootstrap flow used by `editor`, `tour`, `exhibition`, and `viewer`.
+- `tools/scripts/bootstrap/shared-dependencies.mjs` now hosts the shared dependency rebuild flow used by the application bootstrap and by `viewer` / `tour` shared preparation.
 - `tools/scripts/mini-program/prepare-shared.mjs` now hosts the shared bootstrap logic used by `tour` and `viewer`.
 - `editor`, `tour`, `exhibition`, and `viewer` package scripts now reuse the same bootstrap entry instead of keeping their own ad-hoc dependency prep chains.

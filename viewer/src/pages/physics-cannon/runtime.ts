@@ -1,8 +1,8 @@
 import type { PhysicsBackendBridge } from '@harmony/physics-bridge';
 import type { PhysicsWorkerController } from '@harmony/physics-bridge/runtime';
-import type { createCannonPhysicsController as CreateCannonPhysicsController } from './engine/controller';
-import type { createCannonSchemaPhysicsBackendBridge as CreateCannonSchemaPhysicsBackendBridge } from './engine/schemaBridge';
-export { loadCannonDebuggerPro, type CannonDebuggerConstructor } from './debuggerPro';
+import type { createCannonPhysicsController as CreateCannonPhysicsController } from '../../../../physics-cannon/src/index';
+import type { createCannonSchemaPhysicsBackendBridge as CreateCannonSchemaPhysicsBackendBridge } from '../../../../physics-cannon/src/index';
+export { loadCannonDebuggerPro, type CannonDebuggerConstructor } from '../../../../physics-cannon/src/index';
 
 export type LoadedCannonPhysicsBackend = {
   schemaBridge: PhysicsBackendBridge;
@@ -21,12 +21,12 @@ let cannonControllerModulePromise: Promise<CannonControllerModule> | null = null
 let cannonSchemaBridgeModulePromise: Promise<CannonSchemaBridgeModule> | null = null;
 
 function loadCannonControllerModule(): Promise<CannonControllerModule> {
-  cannonControllerModulePromise ??= import('./engine/controller');
+  cannonControllerModulePromise ??= import('../../../../physics-cannon/src/index');
   return cannonControllerModulePromise;
 }
 
 function loadCannonSchemaBridgeModule(): Promise<CannonSchemaBridgeModule> {
-  cannonSchemaBridgeModulePromise ??= import('./engine/schemaBridge');
+  cannonSchemaBridgeModulePromise ??= import('../../../../physics-cannon/src/index');
   return cannonSchemaBridgeModulePromise;
 }
 

@@ -3,7 +3,7 @@
   "version": "0.0.1",
   "type": "module",
   "scripts": {
-    "bootstrap": "node ../scripts/bootstrap.mjs exhibition",
+    "bootstrap": "node ../tools/scripts/bootstrap.mjs exhibition",
     "predev:mp-weixin": "pnpm run bootstrap",
     "dev:mp-weixin": "cross-env DEBUG=none uni -p mp-weixin",
     "prebuild:mp-weixin": "pnpm run bootstrap",
