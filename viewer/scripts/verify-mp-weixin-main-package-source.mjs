@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -6,25 +6,23 @@ const currentFile = fileURLToPath(import.meta.url);
 const scriptDir = resolve(currentFile, '..');
 const viewerRoot = resolve(scriptDir, '..');
 
-const checkedFiles = [
-  'src/main.ts',
-  'src/App.vue',
-  'src/pages/index/index.vue',
-];
-
 const forbiddenPatterns = [
-  'from \'./pages/scenery/',
-  'from "./pages/scenery/',
-  "from '@/pages/scenery/",
-  'from \'./pages/physics-ammo/',
-  'from "./pages/physics-ammo/',
-  "from '@/pages/physics-ammo/",
-  'from \'./pages/physics-cannon/',
-  'from "./pages/physics-cannon/',
-  "from '@/pages/physics-cannon/",
-  'from \'./pages/scenery/schema',
-  'from "./pages/scenery/schema',
-  "from '@/pages/scenery/schema",
+  "from 'three'",
+  'from "three"',
+  "from 'cannon-es'",
+  'from "cannon-es"',
+  "from 'ammojs3'",
+  'from "ammojs3"',
+  "import('three')",
+  'import("three")',
+  "import('cannon-es')",
+  'import("cannon-es")',
+  "import('ammojs3')",
+  'import("ammojs3")',
+  "from 'ammojs3/dist/ammo.wasm.js'",
+  'from "ammojs3/dist/ammo.wasm.js"',
+  "from 'ammojs3/dist/ammo.wasm.wasm?url'",
+  'from "ammojs3/dist/ammo.wasm.wasm?url"',
   '@harmony/schema',
   '@harmony/physics-ammo',
   '@harmony/physics-cannon',
@@ -32,17 +30,42 @@ const forbiddenPatterns = [
   'uni_modules/scenery',
 ];
 
+const excludedDirectories = new Set([
+  resolve(viewerRoot, 'src/pages/scenery'),
+  resolve(viewerRoot, 'src/pages/physics-ammo'),
+  resolve(viewerRoot, 'src/pages/physics-cannon'),
+]);
+
 const hits = [];
 
-for (const relativePath of checkedFiles) {
-  const absolutePath = resolve(viewerRoot, relativePath);
-  let content = '';
+function collectSourceFiles(directory) {
+  const entries = readdirSync(directory, { withFileTypes: true });
+  const files = [];
 
-  try {
-    content = readFileSync(absolutePath, 'utf8');
-  } catch (error) {
-    throw new Error(`Missing expected source file: ${absolutePath}`);
+  for (const entry of entries) {
+    const absolutePath = resolve(directory, entry.name);
+    if (entry.isDirectory()) {
+      if (excludedDirectories.has(absolutePath)) {
+        continue;
+      }
+      files.push(...collectSourceFiles(absolutePath));
+      continue;
+    }
+    if (entry.isFile()) {
+      if (/\.(ts|tsx|js|jsx|vue|mjs|cjs)$/.test(entry.name)) {
+        files.push(absolutePath);
+      }
+    }
   }
+
+  return files;
+}
+
+const sourceFiles = collectSourceFiles(resolve(viewerRoot, 'src'));
+
+for (const absolutePath of sourceFiles) {
+  const content = readFileSync(absolutePath, 'utf8');
+  const relativePath = absolutePath.slice(viewerRoot.length + 1).replaceAll('\\', '/');
 
   for (const pattern of forbiddenPatterns) {
     if (content.includes(pattern)) {
@@ -54,7 +77,7 @@ for (const relativePath of checkedFiles) {
 if (hits.length > 0) {
   throw new Error(
     [
-      'Main package source references a subpackage or physics module:',
+      'Main package source references a forbidden library or subpackage:',
       ...hits.map((hit) => `- ${hit}`),
     ].join('\n'),
   );

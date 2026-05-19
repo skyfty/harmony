@@ -23,11 +23,10 @@ export function createCannonSceneRigidBody(params: CannonSceneRigidBodyCreatePar
   body.angularDamping = params.desc.angularDamping ?? 0.01
   const bindings = createCannonSceneShapeBindings(params.shapeMap, params.desc.shapeId)
   const shouldRotateBodyForHeightfield = bindings.length > 0
-    && bindings.every((binding) => {
-      const shapeInfo = binding.shape as unknown as { constructor?: { name?: string } }
-      return shapeInfo.constructor?.name === 'Heightfield'
-    })
+    && bindings.every((binding) => binding.shapeKind === 'heightfield')
+
   if (shouldRotateBodyForHeightfield) {
+
     body.quaternion.mult(heightfieldBodyRotation, body.quaternion)
   }
   bindings.forEach((binding) => {
