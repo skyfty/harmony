@@ -15,11 +15,10 @@
       "DOM",
       "DOM.Iterable"
     ],
-    "types": ["@dcloudio/types", "miniprogram-api-typings"],
+    "types": ["@dcloudio/types", "miniprogram-api-typings", "@uni-ku/bundle-optimizer/client"],
     "composite": true,
     "allowJs": true,
     "noEmit": true,
-    "ignoreDeprecations": "6.0",
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
     "baseUrl": ".",
     "strict": true,
@@ -32,8 +31,10 @@
     "paths": {
       "@/*": ["./src/*"],
       "@schema/*": ["../schema/*"],
-      "@harmony/utils": ["../utils/src/index.ts"],
-      "@harmony/utils/*": ["../utils/src/*"]
+      "@harmony/physics-ammo": ["./src/pages/physics-ammo/runtime.ts"],
+      "@harmony/physics-ammo-source": ["./src/pages/physics-ammo/engine/index.ts"],
+      "@harmony/physics-cannon": ["./src/pages/physics-cannon/runtime.ts"],
+      "@harmony/physics-cannon-source": ["./src/pages/physics-cannon/engine/index.ts"]
     }
   }
 }

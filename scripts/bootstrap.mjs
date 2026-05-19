@@ -50,8 +50,8 @@ const editorInstallOrder = [
 
 const tourInstallOrder = [
   'tour',
+  ...viewerBuildOrder,
   'scenery',
-  ...sharedBuildOrder,
 ];
 
 const exhibitionInstallOrder = [
@@ -87,8 +87,8 @@ export async function bootstrapEditor() {
 
 export async function bootstrapTour() {
   await installPackages(tourInstallOrder);
-  cleanPackageOutputs(sharedBuildOrder);
-  await buildPackages(sharedBuildOrder);
+  cleanPackageOutputs(viewerBuildOrder);
+  await buildPackages(viewerBuildOrder);
   await syncScenery('tour', false);
   cleanAppCaches('tour');
 }

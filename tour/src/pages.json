@@ -29,17 +29,13 @@
     },
     {
       "root": "pages/physics-ammo",
-      "name": "physicsAmmo",
-      "pages": [
-        { "path": "index" }
-      ]
+      "name": "physics-ammo",
+      "pages": []
     },
     {
       "root": "pages/physics-cannon",
-      "name": "physicsCannon",
-      "pages": [
-        { "path": "index" }
-      ]
+      "name": "physics-cannon",
+      "pages": []
     }
   ],
   "globalStyle": {

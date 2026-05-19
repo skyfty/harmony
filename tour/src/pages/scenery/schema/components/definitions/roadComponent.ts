@@ -1,0 +1,304 @@
+import type { Object3D } from 'three'
+import { Component, type ComponentRuntimeContext } from '../Component'
+import { componentManager, type ComponentDefinition } from '../componentManager'
+import type { RoadDynamicMesh, RoadSegment, SceneNodeComponentState, SceneNode } from '../../index'
+
+export const ROAD_COMPONENT_TYPE = 'road'
+export const ROAD_DEFAULT_WIDTH = 2
+export const ROAD_MIN_WIDTH = 0.2
+export const ROAD_DEFAULT_JUNCTION_SMOOTHING = 0
+export const ROAD_TERRAIN_DEFAULT_SAMPLING_DENSITY_FACTOR = 2.5
+export const ROAD_TERRAIN_DEFAULT_SMOOTHING_STRENGTH_FACTOR = 0.35
+export const ROAD_TERRAIN_DEFAULT_MIN_CLEARANCE = 0.05
+export const ROAD_TERRAIN_DEFAULT_COLLISION_SUBDIVISION_FACTOR = 1
+
+export type RoadPoint2D = [number, number]
+
+export interface RoadComponentProps {
+  vertices: RoadPoint2D[]
+  segments: RoadSegment[]
+  segmentHeights?: number[][]
+  width: number
+  junctionSmoothing: number
+  /** Whether road surface adapts to ground undulation. Default true. */
+  snapToTerrain: boolean
+  /** Whether the road should generate driveable collision. Default true. */
+  enableVehicleCollision?: boolean
+  laneLines: boolean
+  shoulders: boolean
+  bodyAssetId?: string | null
+  /** Sampling density factor for terrain-conforming road (higher = more sample points). */
+  samplingDensityFactor?: number
+  /** Collision subdivision factor for driveable road boxes (higher = more, smaller boxes). */
+  collisionSubdivisionFactor?: number
+  /** Smoothing strength factor for terrain-adaptive height smoothing (higher = smoother). */
+  smoothingStrengthFactor?: number
+  /** Minimum clearance/offset above terrain surface (meters). */
+  minClearance?: number
+  /** Lane line strip width (meters). Default from ROAD_LANE_LINE_WIDTH constant */
+  laneLineWidth?: number
+  /** Shoulder strip width (meters). Default from ROAD_SHOULDER_WIDTH constant */
+  shoulderWidth?: number
+}
+
+function normalizePoint(value: unknown): RoadPoint2D | null {
+  if (!Array.isArray(value) || value.length < 2) {
+    return null
+  }
+  const x = Number(value[0])
+  const y = Number(value[1])
+  if (!Number.isFinite(x) || !Number.isFinite(y)) {
+    return null
+  }
+  return [x, y]
+}
+
+export function clampRoadProps(props: Partial<RoadComponentProps> | null | undefined): RoadComponentProps {
+  const width = Number.isFinite(props?.width) ? Math.max(ROAD_MIN_WIDTH, props!.width!) : ROAD_DEFAULT_WIDTH
+
+  const smoothingRaw = (props as RoadComponentProps | undefined)?.junctionSmoothing
+  const smoothing = typeof smoothingRaw === 'number' ? smoothingRaw : Number(smoothingRaw)
+  const junctionSmoothing = Number.isFinite(smoothing) ? Math.min(1, Math.max(0, smoothing)) : ROAD_DEFAULT_JUNCTION_SMOOTHING
+
+  const verticesRaw = Array.isArray((props as RoadComponentProps | undefined)?.vertices)
+    ? (props as RoadComponentProps).vertices
+    : []
+  const vertices = verticesRaw.map(normalizePoint).filter((p): p is RoadPoint2D => !!p)
+  const segmentsRaw = Array.isArray((props as RoadComponentProps | undefined)?.segments)
+    ? (props as RoadComponentProps).segments
+    : []
+  const segments = segmentsRaw
+    .map((segment): RoadSegment | null => {
+      if (!segment || typeof segment !== 'object') {
+        return null
+      }
+      const a = Math.trunc(Number((segment as any).a))
+      const b = Math.trunc(Number((segment as any).b))
+      if (!Number.isFinite(a) || !Number.isFinite(b) || a < 0 || b < 0) {
+        return null
+      }
+      return { a, b } as RoadSegment
+    })
+    .filter((segment): segment is RoadSegment => segment !== null)
+
+  const segmentHeights = Array.isArray((props as RoadComponentProps | undefined)?.segmentHeights)
+    ? (props as RoadComponentProps).segmentHeights!.slice(0, Math.max(0, segments.length))
+    : []
+
+  const laneLines = Boolean(props?.laneLines)
+  const shoulders = Boolean(props?.shoulders)
+  const snapToTerrain = (props as RoadComponentProps | undefined)?.snapToTerrain ?? true
+  const enableVehicleCollision = (props as RoadComponentProps | undefined)?.enableVehicleCollision ?? true
+
+  const normalizeAssetId = (value: unknown): string | null => {
+    return typeof value === 'string' && value.trim().length ? value : null
+  }
+
+  const samplingDensityFactorRaw = (props as RoadComponentProps | undefined)?.samplingDensityFactor
+  const samplingDensityFactor = Number.isFinite(samplingDensityFactorRaw)
+    ? Math.max(0.1, Math.min(10, samplingDensityFactorRaw as number))
+    : ROAD_TERRAIN_DEFAULT_SAMPLING_DENSITY_FACTOR
+
+  const collisionSubdivisionFactorRaw = (props as RoadComponentProps | undefined)?.collisionSubdivisionFactor
+  const collisionSubdivisionFactor = Number.isFinite(collisionSubdivisionFactorRaw)
+    ? Math.max(0.25, Math.min(8, collisionSubdivisionFactorRaw as number))
+    : ROAD_TERRAIN_DEFAULT_COLLISION_SUBDIVISION_FACTOR
+
+  const smoothingStrengthFactorRaw = (props as RoadComponentProps | undefined)?.smoothingStrengthFactor
+  const smoothingStrengthFactor = Number.isFinite(smoothingStrengthFactorRaw)
+    ? Math.max(0.1, Math.min(5, smoothingStrengthFactorRaw as number))
+    : ROAD_TERRAIN_DEFAULT_SMOOTHING_STRENGTH_FACTOR
+
+  const minClearanceRaw = (props as RoadComponentProps | undefined)?.minClearance
+  const minClearance = Number.isFinite(minClearanceRaw)
+    ? Math.max(0, Math.min(2, minClearanceRaw as number))
+    : ROAD_TERRAIN_DEFAULT_MIN_CLEARANCE
+
+  const laneLineWidthRaw = (props as RoadComponentProps | undefined)?.laneLineWidth
+  const laneLineWidth = Number.isFinite(laneLineWidthRaw)
+    ? Math.max(0.01, Math.min(1, laneLineWidthRaw as number))
+    : undefined
+
+  const shoulderWidthRaw = (props as RoadComponentProps | undefined)?.shoulderWidth
+  const shoulderWidth = Number.isFinite(shoulderWidthRaw)
+    ? Math.max(0.01, Math.min(2, shoulderWidthRaw as number))
+    : undefined
+
+  return {
+    vertices,
+    segments,
+    width,
+    junctionSmoothing,
+    snapToTerrain,
+    enableVehicleCollision,
+    laneLines,
+    shoulders,
+    segmentHeights,
+    bodyAssetId: normalizeAssetId((props as RoadComponentProps | undefined)?.bodyAssetId),
+    samplingDensityFactor,
+    collisionSubdivisionFactor,
+    smoothingStrengthFactor,
+    minClearance,
+    laneLineWidth,
+    shoulderWidth,
+  }
+}
+
+export function resolveRoadComponentPropsFromMesh(mesh: RoadDynamicMesh | undefined | null): RoadComponentProps {
+  if (!mesh) {
+    return {
+      snapToTerrain: true,
+      enableVehicleCollision: true,
+      laneLines: false,
+      shoulders: false,
+      vertices: [],
+        segments: [],
+        segmentHeights: [],
+      width: ROAD_DEFAULT_WIDTH,
+      junctionSmoothing: ROAD_DEFAULT_JUNCTION_SMOOTHING,
+      bodyAssetId: null,
+      samplingDensityFactor: ROAD_TERRAIN_DEFAULT_SAMPLING_DENSITY_FACTOR,
+      collisionSubdivisionFactor: ROAD_TERRAIN_DEFAULT_COLLISION_SUBDIVISION_FACTOR,
+      smoothingStrengthFactor: ROAD_TERRAIN_DEFAULT_SMOOTHING_STRENGTH_FACTOR,
+      minClearance: ROAD_TERRAIN_DEFAULT_MIN_CLEARANCE,
+    }
+  }
+
+  const vertices = Array.isArray(mesh.vertices) ? mesh.vertices : []
+  const segments = Array.isArray(mesh.segments) && mesh.segments.length
+    ? mesh.segments
+    : (vertices.length >= 2
+      ? Array.from({ length: vertices.length - 1 }, (_value, index) => ({ a: index, b: index + 1 }))
+      : [])
+  return clampRoadProps({
+    vertices: vertices as any,
+    segments: segments as any,
+    segmentHeights: Array.isArray((mesh as any).segmentHeights) ? (mesh as any).segmentHeights.slice(0, segments.length) : [],
+    width: mesh.width,
+    junctionSmoothing: ROAD_DEFAULT_JUNCTION_SMOOTHING,
+    snapToTerrain: true,
+    laneLines: false,
+    shoulders: false,
+    samplingDensityFactor: 1.0,
+    collisionSubdivisionFactor: ROAD_TERRAIN_DEFAULT_COLLISION_SUBDIVISION_FACTOR,
+    smoothingStrengthFactor: 1.0,
+    minClearance: 0.01,
+  })
+}
+
+export function cloneRoadComponentProps(props: RoadComponentProps): RoadComponentProps {
+  return {
+    vertices: props.vertices.map((p) => [p[0], p[1]]),
+    segments: props.segments.map((s) => ({ a: s.a, b: s.b })),
+    width: props.width,
+    junctionSmoothing: props.junctionSmoothing,
+    snapToTerrain: props.snapToTerrain,
+    enableVehicleCollision: props.enableVehicleCollision ?? true,
+    laneLines: props.laneLines,
+    shoulders: props.shoulders,
+    bodyAssetId: props.bodyAssetId ?? null,
+    samplingDensityFactor: props.samplingDensityFactor ?? 1.0,
+    collisionSubdivisionFactor: props.collisionSubdivisionFactor ?? ROAD_TERRAIN_DEFAULT_COLLISION_SUBDIVISION_FACTOR,
+    smoothingStrengthFactor: props.smoothingStrengthFactor ?? 1.0,
+    minClearance: props.minClearance ?? 0.01,
+    laneLineWidth: props.laneLineWidth,
+    shoulderWidth: props.shoulderWidth,
+    segmentHeights: props.segmentHeights,
+  }
+}
+
+class RoadComponent extends Component<RoadComponentProps> {
+  constructor(context: ComponentRuntimeContext<RoadComponentProps>) {
+    super(context)
+  }
+
+  onRuntimeAttached(_object: Object3D | null): void {
+    this.context.markDirty()
+  }
+
+  onPropsUpdated(): void {
+    this.context.markDirty()
+  }
+}
+
+const roadComponentDefinition: ComponentDefinition<RoadComponentProps> = {
+  type: ROAD_COMPONENT_TYPE,
+  label: 'Road',
+  icon: 'mdi-road-variant',
+  order: 51,
+  inspector: [
+    {
+      id: 'dimensions',
+      label: 'Dimensions',
+      fields: [{ kind: 'number', key: 'width', label: 'Width (m)', min: ROAD_MIN_WIDTH, step: 0.1 }],
+    },
+    {
+      id: 'details',
+      label: 'Details',
+      fields: [
+        { kind: 'boolean', key: 'snapToTerrain', label: 'Adapt To Ground Terrain' },
+        { kind: 'boolean', key: 'enableVehicleCollision', label: 'Enable Driveable Collision' },
+        { kind: 'number', key: 'collisionSubdivisionFactor', label: 'Collision Detail', min: 0.25, max: 8, step: 0.1 },
+        { kind: 'boolean', key: 'laneLines', label: 'Show Lane Lines' },
+        { kind: 'boolean', key: 'shoulders', label: 'Show Shoulders' },
+      ],
+    },
+  ],
+  canAttach(node: SceneNode) {
+    return node.dynamicMesh?.type === 'Road'
+  },
+  createDefaultProps(node: SceneNode) {
+    return resolveRoadComponentPropsFromMesh(node.dynamicMesh?.type === 'Road' ? node.dynamicMesh : null)
+  },
+  createInstance(context) {
+    return new RoadComponent(context)
+  },
+}
+
+componentManager.registerDefinition(roadComponentDefinition)
+
+export function createRoadComponentState(
+  node: SceneNode,
+  overrides?: Partial<RoadComponentProps>,
+  options: { id?: string; enabled?: boolean } = {},
+): SceneNodeComponentState<RoadComponentProps> {
+  const defaults = roadComponentDefinition.createDefaultProps(node)
+  const merged = clampRoadProps({
+    vertices: overrides?.vertices ?? defaults.vertices,
+    segmentHeights: overrides?.segmentHeights ?? defaults.segmentHeights,
+    segments: overrides?.segments ?? defaults.segments,
+    width: overrides?.width ?? defaults.width,
+    junctionSmoothing: overrides?.junctionSmoothing ?? defaults.junctionSmoothing,
+    snapToTerrain: overrides?.snapToTerrain ?? defaults.snapToTerrain,
+    enableVehicleCollision: overrides?.enableVehicleCollision ?? defaults.enableVehicleCollision,
+    laneLines: overrides?.laneLines ?? defaults.laneLines,
+    shoulders: overrides?.shoulders ?? defaults.shoulders,
+    bodyAssetId: overrides?.bodyAssetId ?? defaults.bodyAssetId,
+    samplingDensityFactor: overrides?.samplingDensityFactor ?? defaults.samplingDensityFactor,
+    collisionSubdivisionFactor: overrides?.collisionSubdivisionFactor ?? defaults.collisionSubdivisionFactor,
+    smoothingStrengthFactor: overrides?.smoothingStrengthFactor ?? defaults.smoothingStrengthFactor,
+    minClearance: overrides?.minClearance ?? defaults.minClearance,
+    laneLineWidth: overrides?.laneLineWidth ?? defaults.laneLineWidth,
+    shoulderWidth: overrides?.shoulderWidth ?? defaults.shoulderWidth,
+  })
+  return {
+    id: options.id ?? '',
+    type: ROAD_COMPONENT_TYPE,
+    enabled: options.enabled ?? true,
+    props: merged,
+  }
+}
+
+export function resolveRoadVehicleCollisionEnabled(node: SceneNode | null | undefined): boolean {
+  if (!node || node.dynamicMesh?.type !== 'Road') {
+    return false
+  }
+  const state = node.components?.[ROAD_COMPONENT_TYPE] as SceneNodeComponentState<RoadComponentProps> | undefined
+  if (state?.enabled === false) {
+    return false
+  }
+  const props = clampRoadProps(state?.props as Partial<RoadComponentProps> | null | undefined)
+  return props.enableVehicleCollision !== false
+}
+
+export { roadComponentDefinition }

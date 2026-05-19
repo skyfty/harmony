@@ -1,0 +1,1670 @@
+import * as THREE from 'three';
+import type { AssetCacheEntry } from './assetCache';
+import { SceneMaterialFactory, MATERIAL_TEXTURE_SLOTS } from './material';
+import type { SceneMaterialFactoryOptions } from './material';
+import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
+import { collectAssetRegistryEntryIds, collectAssetRegistryLookupIds } from './assetRegistryLookup';
+import ResourceCache from './ResourceCache';
+import type {
+  SceneAssetRegistryEntry,
+  SceneJsonExportDocument,
+  SceneNode,
+  SceneNodeComponentState,
+  
+  SceneNodeMaterial,
+  SceneOutlineMesh,
+  SceneOutlineMeshMap,
+  GroundDynamicMesh,
+  WallDynamicMesh,
+  RoadDynamicMesh,
+  FloorDynamicMesh,
+  LandformDynamicMesh,
+  GuideRouteDynamicMesh,
+  SceneResourceSummaryEntry,
+  SceneMaterialTextureSlot,
+} from './index';
+import {
+  createPrimitiveGeometry,
+  createWaterSurfaceRuntimeMesh,
+  extractWaterSurfaceMeshMetadataFromUserData,
+} from './index';
+import { clampSceneNodeInstanceLayout, resolveInstanceLayoutTemplateAssetId } from './instanceLayout'
+import type { GuideboardComponentProps } from './components/definitions/guideboardComponent';
+import { GUIDEBOARD_COMPONENT_TYPE } from './components/definitions/guideboardComponent';
+import type { ViewPointComponentProps } from './components/definitions/viewPointComponent';
+import { VIEW_POINT_COMPONENT_TYPE } from './components/definitions/viewPointComponent';
+import type { WarpGateComponentProps } from './components/definitions/warpGateComponent';
+import {
+  WARP_GATE_COMPONENT_TYPE,
+  WARP_GATE_EFFECT_METADATA_KEY,
+  clampWarpGateComponentProps,
+  cloneWarpGateComponentProps,
+} from './components/definitions/warpGateComponent';
+// NOTE: Water rendering is handled via runtime components; SceneGraph just ensures materials are applied.
+import { createFileFromEntry } from './modelAssetLoader'
+import { loadObjectFromFile } from './assetImport'
+import type { WallComponentProps } from './components/definitions/wallComponent'
+import { WALL_COMPONENT_TYPE, clampWallProps } from './components/definitions/wallComponent'
+import type { RoadComponentProps } from './components/definitions/roadComponent'
+import { ROAD_COMPONENT_TYPE, clampRoadProps } from './components/definitions/roadComponent'
+
+import { getOrLoadModelObject } from './modelObjectCache'
+import { loadNodeObject } from './modelAssetLoader'
+
+import type { SceneNodeWithExtras } from './sceneGraph/types';
+import { applyNodeMetadata as applyNodeMetadataToObject } from './sceneGraph/nodeMetadata';
+import { applyMaterialConfigAssignment, buildMaterialConfigMap } from './sceneGraph/materialAssignment';
+import { buildGroundMesh as buildGroundDynamicMesh } from './sceneGraph/dynamicMeshes/ground';
+import { buildWallMesh as buildWallDynamicMesh } from './sceneGraph/dynamicMeshes/wall';
+import { buildFloorMesh as buildFloorDynamicMesh } from './sceneGraph/dynamicMeshes/floor';
+import { buildLandformMesh as buildLandformDynamicMesh } from './sceneGraph/dynamicMeshes/landform';
+import { buildGuideRouteMesh as buildGuideRouteDynamicMesh } from './sceneGraph/dynamicMeshes/guideRoute';
+import { createThreeLightFromLightNode } from './lightsRuntime';
+import { applyMirroredScaleToObject } from './mirror';
+import {
+  createCompiledStaticMeshRuntimeMesh,
+  extractCompiledStaticMeshMetadataFromUserData,
+} from './compiledStaticMesh';
+import { compileRoadStaticMeshMetadata } from './roadMesh'
+
+export interface SceneGraphBuildResult {
+  root: THREE.Group;
+  warnings: string[];
+}
+
+export type SceneGraphResourceKind = 'asset' | 'texture' | 'mesh';
+
+export interface SceneGraphResourceProgress {
+  total: number;
+  loaded: number;
+  kind: SceneGraphResourceKind;
+  assetId: string | null;
+  message?: string;
+  progress?: number;
+  bytesTotal?: number;
+  bytesLoaded?: number;
+}
+
+export interface SceneGraphBuildOptions {
+  serverAssetBaseUrl?: string;
+  builtinAssetPathMap?: Record<string, string>;
+  resolveBuiltinAssetPath?: (assetId: string) => string | Promise<string | null> | null | undefined;
+  assetOverrides?: Record<
+    string,
+    string | ArrayBuffer | { bytes: ArrayBuffer | Uint8Array; mimeType?: string | null; filename?: string | null }
+  >;
+  onProgress?: (progress: SceneGraphResourceProgress) => void;
+  lazyLoadMeshes?: boolean;
+  materialFactoryOptions?: Pick<SceneMaterialFactoryOptions, 'textureLoader' | 'hdrLoader'>;
+}
+
+type MeshTemplate = {
+  scene: THREE.Object3D;
+  animations: THREE.AnimationClip[];
+};
+
+class SceneGraphBuilder {
+  private readonly root: THREE.Group;
+  private readonly warnings: string[] = [];
+  private readonly resourceCache: ResourceCache;
+  private readonly loadingManager = new THREE.LoadingManager();
+  private readonly materialFactory: SceneMaterialFactory;
+  private readonly meshTemplateCache = new Map<string, MeshTemplate>();
+  private readonly pendingMeshLoads = new Map<string, Promise<MeshTemplate | null>>();
+  private readonly document: SceneJsonExportDocument;
+  private readonly outlineMeshMap: SceneOutlineMeshMap;
+  private readonly onProgress?: (progress: SceneGraphResourceProgress) => void;
+  private readonly lazyLoadMeshes: boolean;
+  private progressTotal = 0;
+  private progressLoaded = 0;
+  private readonly assetSizeMap = new Map<string, number>();
+  private readonly assetLoadedMap = new Map<string, number>();
+  private readonly expectedDownloadAssetIds = new Set<string>();
+  private readonly preloadedAssetIds = new Set<string>();
+  private progressBytesTotal = 0;
+  private progressBytesLoaded = 0;
+  constructor(
+    document: SceneJsonExportDocument,
+    options: SceneGraphBuildOptions,
+    resourceCache: ResourceCache,
+  ) {
+    this.document = document;
+    this.root = new THREE.Group();
+    this.root.name = document.name ?? 'Scene';
+    this.resourceCache = resourceCache;
+    const documentLazyLoad = document.lazyLoadMeshes;
+    if (typeof options.lazyLoadMeshes === 'boolean') {
+      this.lazyLoadMeshes = options.lazyLoadMeshes;
+    } else if (typeof documentLazyLoad === 'boolean') {
+      this.lazyLoadMeshes = documentLazyLoad;
+    } else {
+      this.lazyLoadMeshes = true;
+    }
+    this.outlineMeshMap = { ...(document.outlineMeshMap ?? {}) };
+    this.resourceCache.setContext(document, options);
+    this.resourceCache.setHandlers({
+      warn: (message) => this.warn(message),
+      reportDownloadProgress: (payload) => this.reportAssetDownloadProgress(payload.assetId, payload.progress),
+    });
+    const runtimeResources = this.buildRuntimeResourceEntries();
+    const materialFactoryOverrides = options.materialFactoryOptions ?? {};
+    this.materialFactory = new SceneMaterialFactory({
+      provider: this.resourceCache,
+      resources: runtimeResources,
+      loadingManager: this.loadingManager,
+      warn: (message) => this.warn(message),
+      textureLoader: materialFactoryOverrides.textureLoader,
+      hdrLoader: materialFactoryOverrides.hdrLoader,
+    });
+    this.onProgress = options.onProgress;
+
+    const nodes = Array.isArray(document.nodes) ? (document.nodes as SceneNodeWithExtras[]) : [];
+    this.computeExpectedDownloadAssetIds(nodes);
+
+    runtimeResources.forEach((entry) => {
+      if (!entry || typeof entry.assetId !== 'string' || !entry.assetId.length) {
+        return;
+      }
+
+      const assetId = entry.assetId.trim();
+      if (!assetId) {
+        return;
+      }
+
+      if (this.isSummaryAssetPreloaded(entry)) {
+        this.preloadedAssetIds.add(assetId);
+      }
+
+      if (!this.expectedDownloadAssetIds.has(assetId)) {
+        return;
+      }
+
+      const size = Number.isFinite(entry.bytes) && entry.bytes > 0 ? entry.bytes : 0;
+      if (size > 0) {
+        this.updateAssetSize(assetId, size);
+      }
+    });
+
+    // New source model fallback: seed preload bytes directly from effective asset registry.
+    // This keeps preload progress meaningful even when summary metadata is absent.
+    this.primeAssetSizeFromRegistry();
+  }
+
+  private buildRuntimeResourceEntries(): SceneResourceSummaryEntry[] {
+    const entriesByAssetId = new Map<string, SceneResourceSummaryEntry>();
+
+    const registry = this.document.assetRegistry ?? {};
+    Object.entries(registry).forEach(([assetId, entry]) => {
+      const registryAssetIds = collectAssetRegistryEntryIds(assetId, entry);
+      if (!registryAssetIds.length) {
+        return;
+      }
+      const descriptor = this.resolveEffectiveAssetRegistryEntry(assetId);
+      if (!descriptor) {
+        return;
+      }
+      registryAssetIds.forEach((registryAssetId) => {
+        entriesByAssetId.set(registryAssetId, this.registryEntryToResourceSummaryEntry(registryAssetId, descriptor));
+      });
+    });
+
+    const summaryAssets = this.document.resourceSummary?.assets;
+    if (Array.isArray(summaryAssets)) {
+      summaryAssets.forEach((entry) => {
+        if (!entry || typeof entry.assetId !== 'string') {
+          return;
+        }
+        const normalizedAssetId = entry.assetId.trim();
+        if (!normalizedAssetId || entriesByAssetId.has(normalizedAssetId)) {
+          return;
+        }
+        entriesByAssetId.set(normalizedAssetId, entry);
+      });
+    }
+
+    return Array.from(entriesByAssetId.values());
+  }
+
+  private registryEntryToResourceSummaryEntry(
+    assetId: string,
+    entry: SceneAssetRegistryEntry,
+  ): SceneResourceSummaryEntry {
+    const bytes = typeof entry.bytes === 'number' && Number.isFinite(entry.bytes) && entry.bytes > 0 ? entry.bytes : 0;
+    if (entry.sourceType === 'package') {
+      const zipPath = typeof entry.zipPath === 'string' ? entry.zipPath.trim() : '';
+      const looksRemote = zipPath.startsWith('http://') || zipPath.startsWith('https://') || zipPath.startsWith('/');
+      return {
+        assetId,
+        bytes,
+        type: entry.assetType,
+        name: entry.name,
+        inline: Boolean(entry.inline),
+        embedded: !looksRemote,
+        source: looksRemote ? 'remote' : entry.inline ? 'inline' : 'embedded',
+        downloadUrl: looksRemote ? zipPath : undefined,
+      };
+    }
+    if (entry.sourceType === 'url') {
+      return {
+        assetId,
+        bytes,
+        type: entry.assetType,
+        name: entry.name,
+        source: 'remote',
+        downloadUrl: entry.url,
+      };
+    }
+    return {
+      assetId,
+      bytes,
+      type: entry.assetType,
+      name: entry.name,
+      source: 'remote',
+      downloadUrl: entry.resolvedUrl ?? undefined,
+    };
+  }
+
+  private primeAssetSizeFromRegistry(): void {
+    this.expectedDownloadAssetIds.forEach((assetId) => {
+      if (!assetId) {
+        return;
+      }
+      const entry = this.resolveEffectiveAssetRegistryEntry(assetId);
+      if (!entry) {
+        return;
+      }
+      if (this.isRegistryAssetPreloaded(entry)) {
+        this.preloadedAssetIds.add(assetId);
+      }
+      const size = this.resolveRegistryAssetSize(entry);
+      if (size <= 0) {
+        return;
+      }
+      this.updateAssetSize(assetId, size);
+    });
+  }
+
+  private resolveEffectiveAssetRegistryEntry(assetId: string): SceneAssetRegistryEntry | null {
+    if (!assetId) {
+      return null;
+    }
+    const candidateIds = collectAssetRegistryLookupIds(
+      assetId,
+      this.document.sceneOverrideAssets,
+      this.document.projectOverrideAssets,
+      this.document.assetRegistry,
+    );
+    for (const candidateId of candidateIds) {
+      const sceneOverride = this.document.sceneOverrideAssets?.[candidateId];
+      if (sceneOverride && typeof sceneOverride === 'object' && typeof sceneOverride.sourceType === 'string') {
+        return sceneOverride;
+      }
+    }
+    for (const candidateId of candidateIds) {
+      const projectOverride = this.document.projectOverrideAssets?.[candidateId];
+      if (projectOverride && typeof projectOverride === 'object' && typeof projectOverride.sourceType === 'string') {
+        return projectOverride;
+      }
+    }
+    for (const candidateId of candidateIds) {
+      const registry = this.document.assetRegistry?.[candidateId];
+      if (registry && typeof registry === 'object' && typeof registry.sourceType === 'string') {
+        return registry;
+      }
+    }
+    return null;
+  }
+
+  private resolveRegistryAssetSize(entry: SceneAssetRegistryEntry): number {
+    const bytes = entry.bytes;
+    if (typeof bytes === 'number' && Number.isFinite(bytes) && bytes > 0) {
+      return bytes;
+    }
+    return 0;
+  }
+
+  private isRegistryAssetPreloaded(entry: SceneAssetRegistryEntry): boolean {
+    if (entry.sourceType !== 'package') {
+      return false;
+    }
+    const zipPath = typeof entry.zipPath === 'string' ? entry.zipPath.trim() : '';
+    if (!zipPath.length) {
+      return false;
+    }
+    if (zipPath.startsWith('/') || zipPath.startsWith('http://') || zipPath.startsWith('https://')) {
+      return false;
+    }
+    return true;
+  }
+
+  private computeExpectedDownloadAssetIds(nodes: SceneNodeWithExtras[]): void {
+    this.expectedDownloadAssetIds.clear();
+
+    const textureAssetIds = this.collectTextureAssetIds(nodes);
+    textureAssetIds.forEach((id) => this.expectedDownloadAssetIds.add(id));
+
+    // Preload meshes (depends on lazyLoadMeshes and document.assetPreload).
+    const preloadMeshAssetIds = this.getMeshPreloadIds(nodes);
+    preloadMeshAssetIds.forEach((id) => this.expectedDownloadAssetIds.add(id));
+
+    // Meshes that will be loaded during build even when lazy-load placeholders exist.
+    const buildMeshAssetIds = this.collectBuildTimeMeshAssetIds(nodes);
+    buildMeshAssetIds.forEach((id) => this.expectedDownloadAssetIds.add(id));
+  }
+
+  private collectBuildTimeMeshAssetIds(nodes: SceneNodeWithExtras[]): string[] {
+    const ids = new Set<string>();
+    const stack: SceneNodeWithExtras[] = Array.isArray(nodes) ? [...nodes] : [];
+
+    while (stack.length) {
+      const node = stack.pop();
+      if (!node) {
+        continue;
+      }
+
+      const explicitType = typeof node.nodeType === 'string' ? node.nodeType : '';
+      const normalizedType = explicitType.toLowerCase();
+
+      // Nodes that never load meshes on themselves.
+      if (normalizedType === 'light' || normalizedType === 'camera') {
+        // Still traverse children.
+      } else if (normalizedType === 'warpgate' || this.hasEnabledWarpGateComponent(node)) {
+        // Still traverse children.
+      } else if (normalizedType === 'guideboard' || this.hasEnabledGuideboardComponent(node)) {
+        // Still traverse children.
+      } else if (normalizedType === 'group') {
+        const assetId = typeof node.sourceAssetId === 'string' ? node.sourceAssetId.trim() : '';
+        if (assetId) {
+          const outline = this.resolveOutlineMeshForNode(node);
+          const shouldLazySkip = this.lazyLoadMeshes && outline && assetId;
+          if (!shouldLazySkip) {
+            ids.add(assetId);
+          }
+        }
+      } else if (normalizedType === 'mesh') {
+        const meshInfo = node.dynamicMesh;
+
+        if (meshInfo?.type === 'Wall') {
+          const wallState = node.components?.[WALL_COMPONENT_TYPE] as
+            | SceneNodeComponentState<WallComponentProps>
+            | undefined;
+          // Mirrors buildWallMesh: clamp props regardless, ids only when present.
+          const props = clampWallProps(wallState?.props as Partial<WallComponentProps> | null | undefined);
+          if (props.bodyAssetId) {
+            ids.add(props.bodyAssetId);
+          }
+          if (props.headAssetId) {
+            ids.add(props.headAssetId);
+          }
+          if (props.footAssetId) {
+            ids.add(props.footAssetId);
+          }
+          if (props.bodyEndCapAssetId) {
+            ids.add(props.bodyEndCapAssetId);
+          }
+          if (props.headEndCapAssetId) {
+            ids.add(props.headEndCapAssetId);
+          }
+          if (props.footEndCapAssetId) {
+            ids.add(props.footEndCapAssetId);
+          }
+          const cornerModels = Array.isArray(props.cornerModels) ? props.cornerModels : []
+          for (const rule of cornerModels) {
+            const bodyCornerAssetId = typeof rule?.bodyAssetId === 'string' ? rule.bodyAssetId.trim() : ''
+            if (bodyCornerAssetId) {
+              ids.add(bodyCornerAssetId)
+            }
+            const headCornerAssetId = typeof rule?.headAssetId === 'string' ? rule.headAssetId.trim() : ''
+            if (headCornerAssetId) {
+              ids.add(headCornerAssetId)
+            }
+            const footCornerAssetId = typeof rule?.footAssetId === 'string' ? rule.footAssetId.trim() : ''
+            if (footCornerAssetId) {
+              ids.add(footCornerAssetId)
+            }
+          }
+        } else if (meshInfo?.type === 'Road') {
+          const roadState = node.components?.[ROAD_COMPONENT_TYPE] as
+            | SceneNodeComponentState<RoadComponentProps>
+            | undefined;
+          const props = clampRoadProps(roadState?.props as Partial<RoadComponentProps> | null | undefined);
+          if (props.bodyAssetId) {
+            ids.add(props.bodyAssetId);
+          }
+        } else if (!meshInfo || !meshInfo.type || meshInfo.type === 'Mesh') {
+          const assetId = typeof node.sourceAssetId === 'string' ? node.sourceAssetId.trim() : '';
+          if (assetId) {
+            const outline = this.resolveOutlineMeshForNode(node);
+            const shouldLazySkip = this.lazyLoadMeshes && outline && assetId;
+            if (!shouldLazySkip) {
+              ids.add(assetId);
+            }
+          }
+        }
+      }
+
+      if (Array.isArray(node.children) && node.children.length) {
+        stack.push(...(node.children as SceneNodeWithExtras[]));
+      }
+    }
+
+    return Array.from(ids);
+  }
+
+  async build(): Promise<THREE.Group> {
+    const nodes = Array.isArray(this.document.nodes) ? (this.document.nodes as SceneNodeWithExtras[]) : [];
+    await this.preloadAssets(nodes);
+    await this.preloadInstanceLayoutModels(nodes);
+    await this.buildNodes(nodes, this.root);
+    return this.root;
+  }
+
+  getWarnings(): string[] {
+    return [...this.warnings];
+  }
+
+  dispose(): void {
+    this.resourceCache.setHandlers({ warn: null, reportDownloadProgress: null });
+    this.materialFactory.dispose();
+    this.meshTemplateCache.clear();
+    this.pendingMeshLoads.clear();
+  }
+
+  private warn(message: string): void {
+    if (!message) {
+      return;
+    }
+    this.warnings.push(message);
+  }
+
+  private isSummaryAssetPreloaded(entry: SceneResourceSummaryEntry | null | undefined): boolean {
+    if (!entry) {
+      return false;
+    }
+    if (entry.inline) {
+      return true;
+    }
+    if (entry.embedded) {
+      return true;
+    }
+    if (entry.source === 'embedded' || entry.source === 'inline') {
+      return true;
+    }
+    return false;
+  }
+
+  private beginProgress(total: number): void {
+    this.progressTotal = total;
+    this.progressLoaded = 0;
+    if (!this.onProgress) {
+      return;
+    }
+    const message = total > 0 ? '开始加载资源' : '无需加载额外资源';
+    this.onProgress({
+      total,
+      loaded: 0,
+      kind: 'asset',
+      assetId: null,
+      message,
+      bytesTotal: this.progressBytesTotal,
+      bytesLoaded: this.progressBytesLoaded,
+    });
+  }
+
+  private incrementProgress(kind: SceneGraphResourceKind, assetId: string | null, message?: string): void {
+    if (!this.onProgress) {
+      return;
+    }
+    if (this.progressTotal > 0) {
+      this.progressLoaded = Math.min(this.progressLoaded + 1, this.progressTotal);
+    }
+    this.onProgress({
+      total: this.progressTotal,
+      loaded: this.progressLoaded,
+      kind,
+      assetId,
+      message,
+      bytesTotal: this.progressBytesTotal,
+      bytesLoaded: this.progressBytesLoaded,
+    });
+  }
+
+  private finalizeProgress(message = '资源加载完成'): void {
+    if (!this.onProgress) {
+      return;
+    }
+    if (this.progressTotal > 0 && this.progressLoaded < this.progressTotal) {
+      this.progressLoaded = this.progressTotal;
+    }
+    this.onProgress({
+      total: this.progressTotal,
+      loaded: this.progressLoaded,
+      kind: 'asset',
+      assetId: null,
+      message,
+      bytesTotal: this.progressBytesTotal,
+      bytesLoaded: this.progressBytesLoaded,
+    });
+  }
+
+  private reportAssetDownloadProgress(assetId: string, progress: number): void {
+    if (!this.onProgress) {
+      return;
+    }
+    const clamped = Math.max(0, Math.min(100, Math.round(progress)));
+    if (assetId && this.assetSizeMap.has(assetId)) {
+      const size = this.assetSizeMap.get(assetId) ?? 0;
+      if (size > 0) {
+        const loadedBytes = Math.round((size * clamped) / 100);
+        this.updateAssetLoadedBytes(assetId, loadedBytes);
+      }
+    }
+    const label = assetId && assetId.trim().length ? assetId : '资源';
+    const message = clamped >= 100
+      ? `资源 ${label} 下载完成`
+      : `资源 ${label} 下载中 (${clamped}%)`;
+    this.onProgress({
+      total: this.progressTotal,
+      loaded: this.progressLoaded,
+      kind: 'asset',
+      assetId,
+      message,
+      progress: clamped,
+      bytesTotal: this.progressBytesTotal,
+      bytesLoaded: this.progressBytesLoaded,
+    });
+  }
+
+  private async preloadAssets(
+    nodes: SceneNodeWithExtras[],
+  ): Promise<void> {
+    const meshAssetIds = this.getMeshPreloadIds(nodes);
+    const textureAssetIds = this.collectTextureAssetIds(nodes);
+    const total = meshAssetIds.length + textureAssetIds.length;
+    this.beginProgress(total);
+    if (total === 0) {
+      this.finalizeProgress();
+      return;
+    }
+
+    const tasks: Promise<void>[] = [];
+
+    meshAssetIds.forEach((assetId: string) => {
+      tasks.push(
+        this.preloadMeshAsset(assetId).finally(() => {
+          this.incrementProgress('mesh', assetId, `模型 ${assetId}`);
+        }),
+      );
+    });
+
+    textureAssetIds.forEach((assetId: string) => {
+      tasks.push(
+        this.preloadTextureAsset(assetId).finally(() => {
+          this.incrementProgress('texture', assetId, `纹理 ${assetId}`);
+        }),
+      );
+    });
+
+    await Promise.all(tasks);
+    this.finalizeProgress();
+  }
+
+  private getMeshPreloadIds(nodes: SceneNodeWithExtras[]): string[] {
+    const meshInfo = this.document.assetPreload?.mesh;
+    if (this.lazyLoadMeshes) {
+      if (Array.isArray(meshInfo?.essential) && meshInfo.essential.length) {
+        const essential = this.normalizeAssetIdList(meshInfo.essential);
+        const layout = this.collectInstanceLayoutAssetIds(nodes);
+        if (!layout.length) {
+          return essential;
+        }
+        return this.normalizeAssetIdList([...essential, ...layout]);
+      }
+      return this.collectInstanceLayoutAssetIds(nodes);
+    }
+    if (Array.isArray(meshInfo?.all) && meshInfo.all.length) {
+      return this.normalizeAssetIdList(meshInfo.all);
+    }
+    return this.collectMeshAssetIds(nodes);
+  }
+
+  private normalizeAssetIdList(list: string[]): string[] {
+    const uniqueIds = new Set<string>();
+    for (const entry of list) {
+      if (typeof entry !== 'string') {
+        continue;
+      }
+      const trimmed = entry.trim();
+      if (trimmed) {
+        uniqueIds.add(trimmed);
+      }
+    }
+    return Array.from(uniqueIds);
+  }
+
+
+  private collectMeshAssetIds(nodes: SceneNodeWithExtras[]): string[] {
+    const ids = new Set<string>();
+    const stack: SceneNodeWithExtras[] = [...nodes];
+    while (stack.length) {
+      const node = stack.pop();
+      if (!node) {
+        continue;
+      }
+      if (typeof node.sourceAssetId === 'string' && node.sourceAssetId) {
+        ids.add(node.sourceAssetId);
+      }
+      if (node.components?.[WALL_COMPONENT_TYPE]) {
+        this.collectWallAssetIds(node, ids);
+      }
+      if (Array.isArray(node.children) && node.children.length) {
+        stack.push(...(node.children as SceneNodeWithExtras[]));
+      }
+    }
+    return Array.from(ids);
+  }
+
+  private collectWallAssetIds(node: SceneNodeWithExtras, ids: Set<string>): void {
+    const wallState = node.components?.[WALL_COMPONENT_TYPE] as
+      | SceneNodeComponentState<WallComponentProps>
+      | undefined;
+    if (wallState?.enabled === false) {
+      return;
+    }
+    const props = clampWallProps(wallState?.props as Partial<WallComponentProps> | null | undefined);
+    if (props.bodyAssetId) {
+      ids.add(props.bodyAssetId);
+    }
+    if (props.headAssetId) {
+      ids.add(props.headAssetId);
+    }
+    if (props.footAssetId) {
+      ids.add(props.footAssetId);
+    }
+    if (props.bodyEndCapAssetId) {
+      ids.add(props.bodyEndCapAssetId);
+    }
+    if (props.headEndCapAssetId) {
+      ids.add(props.headEndCapAssetId);
+    }
+    if (props.footEndCapAssetId) {
+      ids.add(props.footEndCapAssetId);
+    }
+    const cornerModels = Array.isArray(props.cornerModels) ? props.cornerModels : [];
+    for (const rule of cornerModels) {
+      const bodyCornerAssetId = typeof rule?.bodyAssetId === 'string' ? rule.bodyAssetId.trim() : '';
+      if (bodyCornerAssetId) {
+        ids.add(bodyCornerAssetId);
+      }
+      const headCornerAssetId = typeof rule?.headAssetId === 'string' ? rule.headAssetId.trim() : '';
+      if (headCornerAssetId) {
+        ids.add(headCornerAssetId);
+      }
+      const footCornerAssetId = typeof rule?.footAssetId === 'string' ? rule.footAssetId.trim() : '';
+      if (footCornerAssetId) {
+        ids.add(footCornerAssetId);
+      }
+    }
+  }
+
+  private collectInstanceLayoutAssetIds(nodes: SceneNodeWithExtras[]): string[] {
+    const ids = new Set<string>()
+    const stack: SceneNodeWithExtras[] = Array.isArray(nodes) ? [...nodes] : []
+    while (stack.length) {
+      const node = stack.pop()
+      if (!node) {
+        continue
+      }
+      // Only preload when we need template bounds for multi-instance layout.
+      const rawLayout = (node as unknown as { instanceLayout?: unknown }).instanceLayout
+      const layout = rawLayout ? clampSceneNodeInstanceLayout(rawLayout) : null
+      if (layout?.mode === 'grid') {
+        const assetId = resolveInstanceLayoutTemplateAssetId(layout, typeof node.sourceAssetId === 'string' ? node.sourceAssetId : null)
+        if (assetId) {
+          ids.add(assetId)
+        }
+      }
+      if (Array.isArray(node.children) && node.children.length) {
+        stack.push(...(node.children as SceneNodeWithExtras[]))
+      }
+    }
+    return Array.from(ids)
+  }
+
+  private async preloadInstanceLayoutModels(nodes: SceneNodeWithExtras[]): Promise<void> {
+    const assetIds = this.collectInstanceLayoutAssetIds(nodes)
+    if (!assetIds.length) {
+      return
+    }
+
+    await Promise.all(
+      assetIds.map(async (assetId) => {
+        try {
+          await getOrLoadModelObject(assetId, async () => {
+            const object = await loadNodeObject(this.resourceCache, assetId, null)
+            if (!object) {
+              throw new Error('Instance layout preload returned empty object')
+            }
+            return object
+          })
+        } catch (error) {
+          this.warn(`Failed to preload instance layout model ${assetId}: ${(error as Error)?.message ?? String(error)}`)
+        }
+      }),
+    )
+  }
+
+  private collectTextureAssetIds(nodes: SceneNodeWithExtras[]): string[] {
+    const ids = new Set<string>();
+
+    const stack: SceneNodeWithExtras[] = Array.isArray(nodes) ? [...nodes] : [];
+    while (stack.length) {
+      const node = stack.pop();
+      if (!node) {
+        continue;
+      }
+      if (Array.isArray(node.materials) && node.materials.length) {
+        (node.materials as SceneNodeMaterial[]).forEach((nodeMaterial: SceneNodeMaterial) => {
+          this.collectTextureRefsFromMaterial(nodeMaterial, ids);
+        });
+      }
+      if (Array.isArray(node.children) && node.children.length) {
+        stack.push(...(node.children as SceneNodeWithExtras[]));
+      }
+    }
+
+    return Array.from(ids);
+  }
+
+  private collectTextureRefsFromMaterial(
+    material: SceneNodeMaterial | null | undefined,
+    bucket: Set<string>,
+  ): void {
+    if (!material || typeof material !== 'object') {
+      return;
+    }
+    const textures = material.textures as Partial<Record<SceneMaterialTextureSlot, { assetId?: string } | null>> | undefined;
+    if (!textures) {
+      return;
+    }
+    MATERIAL_TEXTURE_SLOTS.forEach((slot) => {
+      const ref = textures[slot];
+      const assetId = typeof ref === 'object' && ref ? (ref.assetId ?? '').trim() : '';
+      if (assetId) {
+        bucket.add(assetId);
+      }
+    });
+  }
+
+  private resetImportedObjectLocalTransform(object: THREE.Object3D): void {
+    object.position.set(0, 0, 0);
+    object.rotation.set(0, 0, 0);
+    object.quaternion.identity();
+    object.scale.set(1, 1, 1);
+    object.matrix.identity();
+    object.matrixAutoUpdate = true;
+    object.updateMatrixWorld(true);
+  }
+
+  private async loadNodeAssetMesh(node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
+    const assetId = typeof node.sourceAssetId === 'string' ? node.sourceAssetId.trim() : '';
+    if (!assetId) {
+      return null;
+    }
+
+    const objectPath = node.importMetadata?.objectPath;
+    const hasObjectPath = Array.isArray(objectPath) && objectPath.length > 0;
+    if (hasObjectPath) {
+      const loaded = await loadNodeObject(this.resourceCache, assetId, node.importMetadata ?? null);
+      if (!loaded) {
+        return null;
+      }
+      this.prepareImportedObject(loaded);
+      return loaded;
+    }
+
+    return this.loadAssetMesh(assetId);
+  }
+
+  private async preloadTextureAsset(assetId: string): Promise<void> {
+    if (!assetId) {
+      return;
+    }
+    try {
+      const entry = await this.resourceCache.acquireAssetEntry(assetId);
+      if (entry) {
+        this.registerAssetEntryLoad(assetId, entry);
+      }
+    } catch (error) {
+      console.warn('纹理预加载失败', assetId, error);
+      this.warn(`纹理 ${assetId} 预加载失败`);
+    }
+  }
+
+  private resolveEntrySize(entry: AssetCacheEntry | null | undefined): number {
+    if (!entry) {
+      return 0;
+    }
+    if (typeof entry.size === 'number' && entry.size > 0) {
+      return entry.size;
+    }
+    if (entry.blob && typeof entry.blob.size === 'number' && entry.blob.size > 0) {
+      return entry.blob.size;
+    }
+    return 0;
+  }
+
+  private updateAssetSize(assetId: string, size: number): void {
+    if (!assetId || size <= 0) {
+      return;
+    }
+    if (!this.expectedDownloadAssetIds.has(assetId)) {
+      this.expectedDownloadAssetIds.add(assetId);
+    }
+    const previous = this.assetSizeMap.get(assetId) ?? 0;
+    if (size > previous) {
+      this.assetSizeMap.set(assetId, size);
+      const delta = size - previous;
+      if (!this.preloadedAssetIds.has(assetId)) {
+        this.progressBytesTotal += delta;
+        if (this.progressBytesLoaded > this.progressBytesTotal) {
+          this.progressBytesLoaded = this.progressBytesTotal;
+        }
+      }
+    } else if (!this.assetSizeMap.has(assetId)) {
+      this.assetSizeMap.set(assetId, size);
+    }
+  }
+
+  private updateAssetLoadedBytes(assetId: string, loadedBytes: number): void {
+    if (!assetId || loadedBytes < 0) {
+      return;
+    }
+    if (this.preloadedAssetIds.has(assetId)) {
+      return;
+    }
+    const size = this.assetSizeMap.get(assetId) ?? 0;
+    const normalized = size > 0 ? Math.min(loadedBytes, size) : loadedBytes;
+    const previous = this.assetLoadedMap.get(assetId) ?? 0;
+    if (normalized > previous) {
+      this.assetLoadedMap.set(assetId, normalized);
+      this.progressBytesLoaded += normalized - previous;
+      if (this.progressBytesTotal > 0 && this.progressBytesLoaded > this.progressBytesTotal) {
+        this.progressBytesLoaded = this.progressBytesTotal;
+      }
+    }
+  }
+
+  private registerAssetEntryLoad(assetId: string, entry: AssetCacheEntry | null): void {
+    if (!assetId || !entry) {
+      return;
+    }
+
+    // If something is actually requested during build, ensure it's tracked.
+    if (!this.expectedDownloadAssetIds.has(assetId)) {
+      this.expectedDownloadAssetIds.add(assetId);
+    }
+
+    const size = this.resolveEntrySize(entry);
+    if (size > 0) {
+      this.updateAssetSize(assetId, size);
+      this.updateAssetLoadedBytes(assetId, size);
+    }
+  }
+
+
+  private async preloadMeshAsset(assetId: string): Promise<void> {
+    if (!assetId) {
+      return;
+    }
+    try {
+      await this.warmMeshAsset(assetId);
+    } catch (error) {
+      console.warn('模型预加载失败', assetId, error);
+      this.warn(`模型 ${assetId} 预加载失败`);
+    }
+  }
+
+  private async warmMeshAsset(assetId: string): Promise<void> {
+    if (!assetId || this.meshTemplateCache.has(assetId)) {
+      return;
+    }
+
+    const existing = this.pendingMeshLoads.get(assetId);
+    if (existing) {
+      await existing;
+      return;
+    }
+
+    const pending = this.fetchAndParseMesh(assetId);
+    this.pendingMeshLoads.set(assetId, pending);
+
+    try {
+      const base = await pending;
+      if (base) {
+        this.meshTemplateCache.set(assetId, base);
+      }
+    } finally {
+      this.pendingMeshLoads.delete(assetId);
+    }
+  }
+
+  private async buildNodes(nodes: SceneNodeWithExtras[], parent: THREE.Object3D): Promise<void> {
+    if (!Array.isArray(nodes)) {
+      return;
+    }
+    for (const node of nodes) {
+      if (!node) {
+        continue;
+      }
+      const built = await this.buildSingleNode(node);
+      if (!built) {
+        continue;
+      }
+      this.applyNodeMetadata(built, node);
+      parent.add(built);
+    }
+  }
+
+  private hasEnabledWarpGateComponent(node: SceneNodeWithExtras): boolean {
+    const state = node.components?.[WARP_GATE_COMPONENT_TYPE] as
+      | SceneNodeComponentState<WarpGateComponentProps>
+      | undefined
+    return Boolean(state?.enabled)
+  }
+
+  private hasEnabledGuideboardComponent(node: SceneNodeWithExtras): boolean {
+    const state = node.components?.[GUIDEBOARD_COMPONENT_TYPE] as
+      | SceneNodeComponentState<GuideboardComponentProps>
+      | undefined
+    return Boolean(state?.enabled)
+  }
+
+  private async buildSingleNode(node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
+    if (node.editorFlags?.editorOnly) {
+      return this.buildEditorOnlyNode(node);
+    }
+    const explicitType = typeof node.nodeType === 'string' ? node.nodeType : ''
+    const normalizedType = explicitType.toLowerCase()
+
+    if (normalizedType === 'group') {
+      return this.buildGroupNode(node)
+    }
+    if (normalizedType === 'light') {
+      return this.buildLightNode(node)
+    }
+    if (normalizedType === 'warpgate') {
+      return this.buildWarpGateNode(node)
+    }
+    if (normalizedType === 'guideboard') {
+      return this.buildGuideboardNode(node)
+    }
+    if (normalizedType === 'camera') {
+      this.warn(`暂不支持相机节点 ${node.name ?? node.id}`)
+      return null
+    }
+
+    if (this.hasEnabledWarpGateComponent(node)) {
+      return this.buildWarpGateNode(node)
+    }
+    if (this.hasEnabledGuideboardComponent(node)) {
+      return this.buildGuideboardNode(node)
+    }
+
+    if (normalizedType === 'mesh') {
+      return this.buildMeshNode(node)
+    }
+
+    return this.buildPrimitiveNode(node)
+  }
+
+  private async buildEditorOnlyNode(node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
+    const placeholder = new THREE.Object3D();
+    placeholder.name = node.name ?? 'Editor Marker';
+    this.applyTransform(placeholder, node);
+    placeholder.visible = false;
+    const helperData: Record<string, unknown> = {
+      ...(placeholder.userData ?? {}),
+      editorOnly: true,
+    };
+    if (node.editorFlags?.ignoreGridSnapping) {
+      helperData.ignoreGridSnapping = true;
+    }
+    const viewPointState = node.components?.[VIEW_POINT_COMPONENT_TYPE] as
+      | SceneNodeComponentState<ViewPointComponentProps>
+      | undefined;
+    if (viewPointState?.enabled) {
+      helperData.viewPoint = true;
+      const props = viewPointState.props as ViewPointComponentProps | undefined;
+      helperData.viewPointInitiallyVisible = props?.initiallyVisible === true;
+    } else if (node.nodeType === 'Sphere' && node.editorFlags?.ignoreGridSnapping) {
+      helperData.viewPoint = true;
+    }
+    const warpGateState = node.components?.[WARP_GATE_COMPONENT_TYPE] as
+      | SceneNodeComponentState<WarpGateComponentProps>
+      | undefined;
+    if (warpGateState?.enabled) {
+      helperData.warpGate = true;
+      const props = clampWarpGateComponentProps(warpGateState.props as Partial<WarpGateComponentProps>);
+      (helperData as Record<string, unknown>)[WARP_GATE_EFFECT_METADATA_KEY] = cloneWarpGateComponentProps(props);
+    }
+    placeholder.userData = helperData;
+
+    if (Array.isArray(node.children) && node.children.length) {
+      await this.buildNodes(node.children as SceneNodeWithExtras[], placeholder);
+    }
+
+    return placeholder;
+  }
+
+  private async buildGroupNode(node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
+    const group = new THREE.Group();
+    group.name = node.name ?? 'Group';
+    this.applyTransform(group, node);
+    this.applyVisibility(group, node);
+
+    const outlineMesh = this.resolveOutlineMeshForNode(node);
+
+    if (this.lazyLoadMeshes && outlineMesh && node.sourceAssetId) {
+      const placeholder = this.buildOutlinePlaceholder(node, outlineMesh);
+      if (placeholder) {
+        placeholder.name = `${node.name ?? 'Group'}::LazyPlaceholder`;
+        this.resetImportedObjectLocalTransform(placeholder);
+        group.add(placeholder);
+        this.recordMeshStatistics(placeholder);
+      }
+    } else if (node.sourceAssetId) {
+      const asset = await this.loadNodeAssetMesh(node);
+      if (asset) {
+        await this.applyMaterialOverridesToImportedObject(asset, node);
+        this.resetImportedObjectLocalTransform(asset);
+        asset.userData = asset.userData ?? {};
+        asset.userData.sourceAssetId = node.sourceAssetId;
+        asset.userData.objectPath = node.importMetadata?.objectPath ?? null;
+        group.add(asset);
+      }
+    }
+
+    if (Array.isArray(node.children) && node.children.length) {
+      await this.buildNodes(node.children as SceneNodeWithExtras[], group);
+    }
+
+    return group;
+  }
+
+  private async buildWarpGateNode(node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
+    const group = new THREE.Group();
+    group.name = node.name ?? 'Warp Gate';
+    this.applyTransform(group, node);
+    this.applyVisibility(group, node);
+
+    if (Array.isArray(node.children) && node.children.length) {
+      await this.buildNodes(node.children as SceneNodeWithExtras[], group);
+    }
+
+    return group;
+  }
+
+  private async buildGuideboardNode(node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
+    const group = new THREE.Group();
+    group.name = node.name ?? 'Guideboard';
+    this.applyTransform(group, node);
+    this.applyVisibility(group, node);
+
+    if (Array.isArray(node.children) && node.children.length) {
+      await this.buildNodes(node.children as SceneNodeWithExtras[], group);
+    }
+
+    return group;
+  }
+
+  private async buildRegionMeshNode(node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
+    const group = new THREE.Group();
+    group.name = node.name ?? 'Region';
+    group.userData = { ...(group.userData ?? {}), dynamicMeshType: 'Region' };
+    this.applyTransform(group, node);
+    this.applyVisibility(group, node);
+
+    if (Array.isArray(node.children) && node.children.length) {
+      await this.buildNodes(node.children as SceneNodeWithExtras[], group);
+    }
+
+    return group;
+  }
+
+  private applyVisibility(object: THREE.Object3D, node: SceneNodeWithExtras): void {
+    if (typeof node.visible === 'boolean') {
+      object.visible = node.visible;
+    }
+  }
+
+  private async buildLightNode(node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
+    const props = node.light;
+    if (!props) {
+      this.warn(`光源节点缺少配置 ${node.name ?? node.id}`);
+      return null;
+    }
+
+    const created = createThreeLightFromLightNode(props);
+    const light = created.light;
+    light.name = node.name ?? 'Light';
+    this.applyTransform(light, node);
+    this.applyVisibility(light, node);
+
+    if (created.target && 'target' in (light as any)) {
+      const targetPos = props.target ?? { x: 0, y: 0, z: 0 };
+      created.target.position.set(
+        targetPos.x - node.position.x,
+        targetPos.y - node.position.y,
+        targetPos.z - node.position.z,
+      )
+
+      this.root.add(created.target);
+      (light as THREE.DirectionalLight | THREE.SpotLight).target = created.target;
+    }
+
+    return light;
+  }
+
+  private async buildMeshNode(node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
+    const compiledMeshNode = await this.buildCompiledStaticMeshNode(node);
+    if (compiledMeshNode) {
+      return compiledMeshNode;
+    }
+
+    const dynamicMeshNode = await this.buildDynamicMeshNode(node);
+    if (dynamicMeshNode) {
+      return dynamicMeshNode;
+    }
+
+    const waterSurfaceMeshNode = await this.buildWaterSurfaceMeshNode(node);
+    if (waterSurfaceMeshNode) {
+      return waterSurfaceMeshNode;
+    }
+
+    const outlineMesh = this.resolveOutlineMeshForNode(node);
+
+    if (this.lazyLoadMeshes && outlineMesh && node.sourceAssetId) {
+      const placeholder = this.buildOutlinePlaceholder(node, outlineMesh);
+      if (placeholder) {
+        const container = new THREE.Group();
+        container.name = node.name ?? 'Mesh';
+        this.applyTransform(container, node);
+        this.applyVisibility(container, node);
+        placeholder.name = `${node.name ?? 'Mesh'}::LazyPlaceholder`;
+        this.resetImportedObjectLocalTransform(placeholder);
+        container.add(placeholder);
+        if (Array.isArray(node.children) && node.children.length) {
+          await this.buildNodes(node.children as SceneNodeWithExtras[], container);
+        }
+        this.recordMeshStatistics(placeholder);
+        return container;
+      }
+    }
+
+    if (node.sourceAssetId) {
+      const container = new THREE.Group();
+      container.name = node.name ?? 'Mesh';
+      this.applyTransform(container, node);
+      this.applyVisibility(container, node);
+      const hasChildNodes = Array.isArray(node.children) && node.children.length > 0;
+
+      const asset = await this.loadNodeAssetMesh(node);
+      if (asset) {
+        await this.applyMaterialOverridesToImportedObject(asset, node);
+        this.resetImportedObjectLocalTransform(asset);
+        asset.userData = {
+          ...(asset.userData ?? {}),
+          sourceAssetId: node.sourceAssetId,
+          objectPath: node.importMetadata?.objectPath ?? null,
+        };
+        container.add(asset);
+        if (hasChildNodes) {
+          await this.buildNodes(node.children as SceneNodeWithExtras[], container);
+        }
+        this.recordMeshStatistics(asset);
+        return container;
+      }
+      if (hasChildNodes) {
+        await this.buildNodes(node.children as SceneNodeWithExtras[], container);
+        return container;
+      }
+      this.warn(`使用源资源失败 ${node.sourceAssetId}`);
+    }
+
+    return this.buildPrimitiveNode({ ...node, nodeType: node.nodeType || 'Box' });
+  }
+
+  private async buildCompiledStaticMeshNode(node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
+    let compiledStaticMesh = extractCompiledStaticMeshMetadataFromUserData(node.userData);
+    if (node.dynamicMesh?.type === 'Road' && compiledStaticMesh) {
+      const expectedUvCount = (compiledStaticMesh.vertices.length / 3) * 2;
+      if (!Array.isArray(compiledStaticMesh.uvs) || compiledStaticMesh.uvs.length < expectedUvCount) {
+        const roadPropsState = node.components?.[ROAD_COMPONENT_TYPE] as SceneNodeComponentState<RoadComponentProps> | undefined;
+        const roadProps = clampRoadProps(roadPropsState?.props as Partial<RoadComponentProps> | null | undefined);
+        const rebuilt = compileRoadStaticMeshMetadata(node.dynamicMesh as RoadDynamicMesh, {
+          junctionSmoothing: roadProps.junctionSmoothing,
+          laneLines: roadProps.laneLines,
+          shoulders: roadProps.shoulders,
+          samplingDensityFactor: roadProps.samplingDensityFactor,
+          smoothingStrengthFactor: roadProps.smoothingStrengthFactor,
+          minClearance: roadProps.minClearance,
+          laneLineWidth: roadProps.laneLineWidth,
+          shoulderWidth: roadProps.shoulderWidth,
+        });
+        if (rebuilt) {
+          compiledStaticMesh = rebuilt;
+        }
+      }
+    }
+
+    if (!compiledStaticMesh) {
+      return null;
+    }
+
+    const resolvedMaterials = await this.resolveNodeMaterials(node);
+    const material = Array.isArray(compiledStaticMesh.groups) && compiledStaticMesh.groups.length
+      ? resolvedMaterials
+      : (resolvedMaterials[0] ?? null);
+    const mesh = createCompiledStaticMeshRuntimeMesh(compiledStaticMesh, {
+      material,
+      name: node.name ?? compiledStaticMesh.name ?? 'Compiled Static Mesh',
+    });
+    this.applyTransform(mesh, node);
+    this.applyVisibility(mesh, node);
+
+    if (Array.isArray(node.children) && node.children.length) {
+      await this.buildNodes(node.children as SceneNodeWithExtras[], mesh);
+    }
+
+    this.recordMeshStatistics(mesh);
+    return mesh;
+  }
+
+  private async buildDynamicMeshNode(node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
+    const meshInfo = node.dynamicMesh;
+    switch (meshInfo?.type) {
+      case 'Ground':
+        return this.buildGroundMesh(meshInfo, node);
+      case 'Wall':
+        return this.buildWallMesh(meshInfo, node);
+      case 'Floor':
+        return this.buildFloorMesh(meshInfo as FloorDynamicMesh, node);
+      case 'Landform':
+        return this.buildLandformMesh(meshInfo as LandformDynamicMesh, node);
+      case 'GuideRoute':
+        return this.buildGuideRouteMesh(meshInfo as GuideRouteDynamicMesh, node);
+      case 'Region':
+        return this.buildRegionMeshNode(node);
+      case 'Road':
+        this.warnings.push(`Road node "${node.name ?? node.id}" is missing compiled static mesh metadata.`);
+        return null;
+      default:
+        return null;
+    }
+  }
+
+  private async buildWaterSurfaceMeshNode(node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
+    const waterSurfaceMesh = extractWaterSurfaceMeshMetadataFromUserData(node.userData);
+    if (!waterSurfaceMesh) {
+      return null;
+    }
+
+    const [material] = await this.resolveNodeMaterials(node);
+    const mesh = createWaterSurfaceRuntimeMesh(waterSurfaceMesh, {
+      material,
+      name: node.name ?? 'Water Surface',
+    });
+    this.applyTransform(mesh, node);
+    this.applyVisibility(mesh, node);
+
+    if (Array.isArray(node.children) && node.children.length) {
+      await this.buildNodes(node.children as SceneNodeWithExtras[], mesh);
+    }
+
+    this.recordMeshStatistics(mesh);
+    return mesh;
+  }
+
+  private async applyMaterialOverridesToImportedObject(object: THREE.Object3D, node: SceneNodeWithExtras): Promise<void> {
+    if (!object) {
+      return;
+    }
+    const nodeMaterialConfigs = Array.isArray(node.materials) ? (node.materials as SceneNodeMaterial[]) : [];
+    if (!nodeMaterialConfigs.length) {
+      return;
+    }
+
+    const resolvedMaterials = await this.resolveNodeMaterials(node);
+    const defaultMaterialAssignment = this.pickMaterialAssignment(resolvedMaterials);
+    if (!defaultMaterialAssignment) {
+      return;
+    }
+
+    const materialByConfigId = buildMaterialConfigMap(nodeMaterialConfigs, resolvedMaterials);
+    applyMaterialConfigAssignment(object, {
+      defaultMaterial: defaultMaterialAssignment,
+      materialByConfigId,
+    });
+  }
+
+  private resolveOutlineMeshForNode(node: SceneNodeWithExtras): SceneOutlineMesh | null {
+    const assetId = node.sourceAssetId;
+    if (assetId && this.outlineMeshMap[assetId]) {
+      return this.outlineMeshMap[assetId];
+    }
+    const legacyOutline = (node as unknown as { outlineMesh?: SceneOutlineMesh | null }).outlineMesh;
+    if (legacyOutline) {
+      return legacyOutline;
+    }
+    return null;
+  }
+
+  private buildOutlinePlaceholder(node: SceneNodeWithExtras, outline: SceneOutlineMesh): THREE.Object3D | null {
+    if (!outline) {
+      return null;
+    }
+    if (!Array.isArray(outline.positions) || outline.positions.length < 9) {
+      return null;
+    }
+
+    const geometry = new THREE.BufferGeometry();
+    const positionArray = new Float32Array(outline.positions);
+    geometry.setAttribute('position', new THREE.BufferAttribute(positionArray, 3));
+
+    if (Array.isArray(outline.indices) && outline.indices.length > 0) {
+      const indexArray = outline.indices.length > 65535
+        ? new Uint32Array(outline.indices)
+        : new Uint16Array(outline.indices);
+      geometry.setIndex(new THREE.BufferAttribute(indexArray, 1));
+    }
+
+    geometry.computeVertexNormals();
+    if (outline.boundingSphere && outline.boundingSphere.center) {
+      const { center, radius } = outline.boundingSphere;
+      geometry.boundingSphere = new THREE.Sphere(
+        new THREE.Vector3(center.x, center.y, center.z),
+        radius,
+      );
+    } else {
+      geometry.computeBoundingSphere();
+    }
+
+    const color = outline.color && outline.color.trim().length ? outline.color : '#808080';
+    const material = new THREE.MeshBasicMaterial({
+      color,
+      transparent: true,
+      opacity: 0.35,
+      depthWrite: false,
+    });
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.name = node.name ?? 'OutlinePlaceholder';
+    mesh.castShadow = false;
+    mesh.receiveShadow = false;
+    mesh.userData = {
+      ...mesh.userData,
+      nodeId: node.id ?? null,
+      lazyAsset: {
+        placeholder: true,
+        assetId: node.sourceAssetId ?? null,
+        objectPath: node.importMetadata?.objectPath ?? null,
+        boundingSphere: outline.boundingSphere ?? null,
+        vertexCount: outline.vertexCount ?? positionArray.length / 3,
+        triangleCount: outline.triangleCount ?? (outline.indices?.length ?? 0) / 3,
+        ownerNodeId: node.id ?? null,
+      },
+    };
+    return mesh;
+  }
+
+  private async buildPrimitiveNode(node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
+    const materials = await this.resolveNodeMaterials(node);
+    const geometry = createPrimitiveGeometry(node.nodeType);
+    if (!geometry) {
+      this.warn(`不支持的几何类型 ${node.nodeType}`);
+      return null;
+    }
+    const material = materials.length > 1 ? materials : materials[0];
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.name = node.name ?? 'Primitive';
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    this.applyTransform(mesh, node);
+    this.applyVisibility(mesh, node);
+
+    if (Array.isArray(node.children) && node.children.length) {
+      await this.buildNodes(node.children as SceneNodeWithExtras[], mesh);
+    }
+
+    this.recordMeshStatistics(mesh);
+    return mesh;
+  }
+
+  private applyNodeMetadata(object: THREE.Object3D, node: SceneNodeWithExtras): void {
+    applyNodeMetadataToObject(object, node);
+  }
+
+  private async resolveNodeMaterials(node: SceneNodeWithExtras): Promise<THREE.Material[]> {
+    return this.materialFactory.resolveNodeMaterials(node.materials as SceneNodeMaterial[] | null | undefined, {
+      nodeId: node.id,
+      nodeName: node.name,
+    });
+  }
+
+  private async loadAssetMesh(assetId: string): Promise<THREE.Object3D | null> {
+    if (!assetId) {
+      return null;
+    }
+    if (this.meshTemplateCache.has(assetId)) {
+      return this.instantiateCachedMesh(this.meshTemplateCache.get(assetId)!);
+    }
+
+    await this.warmMeshAsset(assetId);
+
+    const base = this.meshTemplateCache.get(assetId);
+    return base ? this.instantiateCachedMesh(base) : null;
+  }
+
+  private instantiateCachedMesh(base: MeshTemplate): THREE.Object3D {
+    const prepared = cloneSkinned(base.scene);
+    if (base.animations?.length) {
+      const animations = base.animations.map((clip) => clip.clone());
+      (prepared as unknown as { animations?: THREE.AnimationClip[] }).animations = animations;
+      prepared.userData = prepared.userData ?? {};
+      prepared.userData.__animations = animations.map((clip) => clip.name);
+    }
+    this.prepareImportedObject(prepared);
+    return prepared;
+  }
+
+  private async fetchAndParseMesh(assetId: string): Promise<MeshTemplate | null> {
+    const entry = await this.resourceCache.acquireAssetEntry(assetId);
+    if (!entry) {
+      return null;
+    }
+
+
+    this.registerAssetEntryLoad(assetId, entry);
+
+    const file = createFileFromEntry(assetId, entry);
+    if (!file) {
+      this.warn(`无法创建文件对象 ${assetId}`);
+      return null;
+    }
+
+    try {
+      const ext = file.name.split('.').pop()?.toLowerCase();
+      const parsed = await loadObjectFromFile(file, ext);
+      const animations = (parsed as unknown as { animations?: THREE.AnimationClip[] }).animations ?? [];
+      return { scene: parsed, animations };
+    } catch (error) {
+      console.warn('GLTF 解析异常', assetId, error);
+      this.warn(`模型 ${assetId} 解析失败`);
+      return null;
+    }
+  }
+
+  private prepareImportedObject(object: THREE.Object3D): void {
+    object.traverse((child: THREE.Object3D) => {
+      const mesh = child as unknown as THREE.Mesh;
+      if (mesh && (mesh as any).isMesh) {
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        if (Array.isArray(mesh.material)) {
+          mesh.material.forEach((mat: THREE.Material | null | undefined) => {
+            if (mat) {
+              mat.side = THREE.DoubleSide;
+              mat.needsUpdate = true;
+            }
+          });
+        } else if (mesh.material) {
+          const mat = mesh.material as THREE.Material;
+          (mat as any).side = THREE.DoubleSide;
+          mat.needsUpdate = true;
+        }
+      }
+    });
+  }
+
+  private applyTransform(object: THREE.Object3D, node: SceneNode): void {
+    if (node.position) {
+      object.position.set(node.position.x, node.position.y, node.position.z);
+    }
+    if (node.rotation) {
+      object.rotation.set(node.rotation.x, node.rotation.y, node.rotation.z);
+    }
+    applyMirroredScaleToObject(object, node.scale ?? null, node.mirror);
+  }
+
+  private async buildGroundMesh(meshInfo: GroundDynamicMesh, node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
+    return buildGroundDynamicMesh(
+      {
+        resolveNodeMaterials: (targetNode) => this.resolveNodeMaterials(targetNode),
+        pickMaterialAssignment: (materials) => this.pickMaterialAssignment(materials),
+        extractGroundTextureFromMaterial: (material) => this.extractGroundTextureFromMaterial(material),
+        assignTextureToMaterial: (material, texture) => this.assignTextureToMaterial(material, texture),
+        applyTransform: (object, targetNode) => this.applyTransform(object, targetNode),
+        applyVisibility: (object, targetNode) => this.applyVisibility(object, targetNode),
+        recordMeshStatistics: (object) => this.recordMeshStatistics(object),
+      },
+      meshInfo,
+      node,
+    );
+  }
+
+  private async buildWallMesh(meshInfo: WallDynamicMesh, node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
+    return buildWallDynamicMesh(
+      {
+        loadAssetMesh: (assetId) => this.loadAssetMesh(assetId),
+        resolveNodeMaterials: (targetNode) => this.resolveNodeMaterials(targetNode),
+        pickMaterialAssignment: (materials) => this.pickMaterialAssignment(materials),
+        applyTransform: (object, targetNode) => this.applyTransform(object, targetNode),
+        applyVisibility: (object, targetNode) => this.applyVisibility(object, targetNode),
+      },
+      meshInfo,
+      node,
+    );
+  }
+
+  private async buildFloorMesh(meshInfo: FloorDynamicMesh, node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
+    return buildFloorDynamicMesh(
+      {
+        resolveNodeMaterials: (targetNode) => this.resolveNodeMaterials(targetNode),
+        pickMaterialAssignment: (materials) => this.pickMaterialAssignment(materials),
+        applyTransform: (object, targetNode) => this.applyTransform(object, targetNode),
+        applyVisibility: (object, targetNode) => this.applyVisibility(object, targetNode),
+      },
+      meshInfo,
+      node,
+    );
+  }
+
+  private async buildLandformMesh(meshInfo: LandformDynamicMesh, node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
+    return buildLandformDynamicMesh(
+      {
+        resolveNodeMaterials: (targetNode) => this.resolveNodeMaterials(targetNode),
+        pickMaterialAssignment: (materials) => this.pickMaterialAssignment(materials),
+        applyTransform: (object, targetNode) => this.applyTransform(object, targetNode),
+        applyVisibility: (object, targetNode) => this.applyVisibility(object, targetNode),
+      },
+      meshInfo,
+      node,
+    );
+  }
+
+  private async buildGuideRouteMesh(meshInfo: GuideRouteDynamicMesh, node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
+    return buildGuideRouteDynamicMesh(
+      {
+        resolveNodeMaterials: (targetNode) => this.resolveNodeMaterials(targetNode),
+        pickMaterialAssignment: (materials) => this.pickMaterialAssignment(materials),
+        applyTransform: (object, targetNode) => this.applyTransform(object, targetNode),
+        applyVisibility: (object, targetNode) => this.applyVisibility(object, targetNode),
+      },
+      meshInfo,
+      node,
+    );
+  }
+
+  private pickMaterialAssignment(materials: THREE.Material[]): THREE.Material | THREE.Material[] | null {
+    if (!Array.isArray(materials) || materials.length === 0) {
+      return null;
+    }
+    return materials.length > 1 ? materials : materials[0]!;
+  }
+
+  private assignTextureToMaterial(
+    material: THREE.Material | THREE.Material[] | null,
+    texture: THREE.Texture | null,
+  ): void {
+    if (!material) {
+      return;
+    }
+    const targets = Array.isArray(material) ? material : [material];
+    targets.forEach((entry) => {
+      if (!entry) {
+        return;
+      }
+      const typed = entry as THREE.Material & { map?: THREE.Texture | null };
+      if ('map' in typed) {
+        typed.map = texture;
+      }
+      typed.needsUpdate = true;
+    });
+  }
+
+  private extractGroundTextureFromMaterial(
+    material: THREE.Material | THREE.Material[] | null,
+  ): THREE.Texture | null {
+    if (!material || Array.isArray(material)) {
+      return null;
+    }
+    const typed = material as THREE.MeshStandardMaterial & { map?: THREE.Texture | null };
+    const candidate = typed.map ?? null;
+    if (!candidate) {
+      return null;
+    }
+    const userData = candidate.userData as { groundDynamic?: boolean } | undefined;
+    return userData?.groundDynamic ? candidate : null;
+  }
+
+  private recordMeshStatistics(object: THREE.Object3D): void {
+    void object;
+  }
+}
+
+export async function buildSceneGraph(
+  document: SceneJsonExportDocument,
+  resourceCache: ResourceCache,
+  options: SceneGraphBuildOptions = {},
+): Promise<SceneGraphBuildResult> {
+  const builder = new SceneGraphBuilder(document, options, resourceCache);
+  try {
+    const root = await builder.build();
+    return { root, warnings: builder.getWarnings() };
+  } finally {
+    builder.dispose();
+  }
+}
+
+export { createTerrainScatterLodRuntime } from './terrainScatterLodRuntime'
+export type { TerrainScatterLodRuntime } from './terrainScatterLodRuntime'

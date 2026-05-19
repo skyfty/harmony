@@ -14,8 +14,9 @@ configureHarmonyRuntime({
     apiBaseUrl: import.meta.env.VITE_MINI_TEST_API_BASE || import.meta.env.VITE_MINI_API_BASE,
     downloadCdnBaseUrl: import.meta.env.VITE_MINI_DOWNLOAD_CDN_BASE,
     testAccount: {
-      username: import.meta.env.VITE_MINI_TEST_USERNAME,
+      username: import.meta.env.VITE_MINI_TEST_USER || import.meta.env.VITE_MINI_TEST_USERNAME,
       password: import.meta.env.VITE_MINI_TEST_PASSWORD,
+      displayName: import.meta.env.VITE_MINI_TEST_DISPLAY_NAME,
     },
   },
   scenery: {

@@ -1,0 +1,42 @@
+import type { PhysicsBackendBridge } from '@harmony/physics-bridge';
+import type { PhysicsWorkerController } from '@harmony/physics-bridge/runtime';
+import type { createCannonPhysicsController as CreateCannonPhysicsController } from './engine/controller';
+import type { createCannonSchemaPhysicsBackendBridge as CreateCannonSchemaPhysicsBackendBridge } from './engine/schemaBridge';
+export { loadCannonDebuggerPro, type CannonDebuggerConstructor } from './debuggerPro';
+
+export type LoadedCannonPhysicsBackend = {
+  schemaBridge: PhysicsBackendBridge;
+  createController: () => PhysicsWorkerController;
+};
+
+type CannonControllerModule = {
+  createCannonPhysicsController: typeof CreateCannonPhysicsController;
+};
+
+type CannonSchemaBridgeModule = {
+  createCannonSchemaPhysicsBackendBridge: typeof CreateCannonSchemaPhysicsBackendBridge;
+};
+
+let cannonControllerModulePromise: Promise<CannonControllerModule> | null = null;
+let cannonSchemaBridgeModulePromise: Promise<CannonSchemaBridgeModule> | null = null;
+
+function loadCannonControllerModule(): Promise<CannonControllerModule> {
+  cannonControllerModulePromise ??= import('./engine/controller');
+  return cannonControllerModulePromise;
+}
+
+function loadCannonSchemaBridgeModule(): Promise<CannonSchemaBridgeModule> {
+  cannonSchemaBridgeModulePromise ??= import('./engine/schemaBridge');
+  return cannonSchemaBridgeModulePromise;
+}
+
+export async function createCannonPhysicsBackend(): Promise<LoadedCannonPhysicsBackend> {
+  const [controllerModule, schemaBridgeModule] = await Promise.all([
+    loadCannonControllerModule(),
+    loadCannonSchemaBridgeModule(),
+  ]);
+  return {
+    schemaBridge: schemaBridgeModule.createCannonSchemaPhysicsBackendBridge(),
+    createController: () => controllerModule.createCannonPhysicsController(),
+  };
+}

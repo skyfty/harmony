@@ -14,9 +14,15 @@ importers:
       '@harmony/physics-core':
         specifier: file:../physics-core
         version: file:../physics-core
+      '@vladkrutenyuk/cannon-es-debugger-pro':
+        specifier: ^0.2.4
+        version: 0.2.4(cannon-es@0.20.0)(three@0.172.0)(typescript@5.6.3)
       cannon-es:
         specifier: ^0.20.0
         version: 0.20.0
+      three:
+        specifier: ^0.172.0
+        version: 0.172.0
     devDependencies:
       typescript:
         specifier: ~5.6.3
@@ -32,8 +38,21 @@ packages:
     resolution: {directory: ../physics-core, type: directory}
     engines: {pnpm: '>=10.0.0'}
 
+  '@vladkrutenyuk/cannon-es-debugger-pro@0.2.4':
+    resolution: {integrity: sha512-7YleJQXZtHLUu4XwSixwkvtwpp2sJ/LwEKm0+yuYxVU1Nhy2o+cm0Q9UY/J5NGtUMo9v79CkiXLxDOmjRApMOA==}
+    peerDependencies:
+      cannon-es: '>=0.20.0'
+      three: '>=0.160.0'
+      typescript: '>=5.0'
+    peerDependenciesMeta:
+      typescript:
+        optional: true
+
   cannon-es@0.20.0:
     resolution: {integrity: sha512-eZhWTZIkFOnMAJOgfXJa9+b3kVlvG+FX4mdkpePev/w/rP5V8NRquGyEozcjPfEoXUlb+p7d9SUcmDSn14prOA==}
+
+  three@0.172.0:
+    resolution: {integrity: sha512-6HMgMlzU97MsV7D/tY8Va38b83kz8YJX+BefKjspMNAv0Vx6dxMogHOrnRl/sbMIs3BPUKijPqDqJ/+UwJbIow==}
 
   typescript@5.6.3:
     resolution: {integrity: sha512-hjcS1mhfuyi4WW8IWtjP7brDrG2cuDZukyrYrSauoXGNgx0S7zceP07adYkJycEr56BOUTNPzbInooiN3fn1qw==}
@@ -48,6 +67,15 @@ snapshots:
 
   '@harmony/physics-core@file:../physics-core': {}
 
+  '@vladkrutenyuk/cannon-es-debugger-pro@0.2.4(cannon-es@0.20.0)(three@0.172.0)(typescript@5.6.3)':
+    dependencies:
+      cannon-es: 0.20.0
+      three: 0.172.0
+    optionalDependencies:
+      typescript: 5.6.3
+
   cannon-es@0.20.0: {}
+
+  three@0.172.0: {}
 
   typescript@5.6.3: {}
