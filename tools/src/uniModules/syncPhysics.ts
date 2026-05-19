@@ -10,15 +10,16 @@ export function syncPhysicsToViewerSubpackage(options: SyncPhysicsOptions): void
   const physicsAmmoMirrorDir = path.resolve(options.viewerRoot, "src/pages/physics-ammo");
   const physicsCannonMirrorDir = path.resolve(options.viewerRoot, "src/pages/physics-cannon");
   const physicsAmmoVendorDir = path.resolve(options.viewerRoot, "src/pages/physics-ammo/vendor");
+  const physicsCannonPackageDir = path.resolve(options.viewerRoot, "src/pages/physics-cannon/cannon-es");
   const ammoBootstrapSourceFile = path.resolve(options.viewerRoot, "node_modules/ammojs3/dist/ammo.wasm.js");
   const ammoWasmSourceFile = path.resolve(options.viewerRoot, "node_modules/ammojs3/dist/ammo.wasm.wasm");
   const ammoPackageDir = path.resolve(options.viewerRoot, "src/pages/physics-ammo/ammojs3");
-  const cannonPackageDir = path.resolve(options.viewerRoot, "src/pages/physics-cannon/cannon-es");
+  const cannonPackageSourceDir = path.resolve(options.viewerRoot, "node_modules/cannon-es");
 
   ensureDirectory(physicsAmmoMirrorDir);
   ensureDirectory(physicsCannonMirrorDir);
-  replaceDirectoryLink(path.resolve(options.viewerRoot, "node_modules", "ammojs3"), ammoPackageDir);
-  replaceDirectoryLink(path.resolve(options.viewerRoot, "node_modules", "cannon-es"), cannonPackageDir);
+  replaceDirectoryCopy(path.resolve(options.viewerRoot, "node_modules", "ammojs3"), ammoPackageDir);
+  replaceDirectoryCopy(cannonPackageSourceDir, physicsCannonPackageDir);
   replaceDirectoryWithFiles(physicsAmmoVendorDir, [
     [ammoBootstrapSourceFile, "ammo.wasm.js"],
     [ammoWasmSourceFile, "ammo.wasm.wasm"],
@@ -37,6 +38,27 @@ function replaceDirectoryWithFiles(targetDir: string, filePairs: Array<[string, 
   fs.mkdirSync(targetDir, { recursive: true });
   for (const [sourceFile, targetFileName] of filePairs) {
     fs.copyFileSync(sourceFile, path.resolve(targetDir, targetFileName));
+  }
+}
+
+function replaceDirectoryCopy(sourceDir: string, targetDir: string): void {
+  removePath(targetDir);
+  fs.mkdirSync(targetDir, { recursive: true });
+  copyDirectoryRecursive(sourceDir, targetDir);
+}
+
+function copyDirectoryRecursive(sourceDir: string, targetDir: string): void {
+  for (const entry of fs.readdirSync(sourceDir, { withFileTypes: true })) {
+    const sourcePath = path.resolve(sourceDir, entry.name);
+    const targetPath = path.resolve(targetDir, entry.name);
+    if (entry.isDirectory()) {
+      fs.mkdirSync(targetPath, { recursive: true });
+      copyDirectoryRecursive(sourcePath, targetPath);
+      continue;
+    }
+    if (entry.isFile()) {
+      fs.copyFileSync(sourcePath, targetPath);
+    }
   }
 }
 

@@ -43,6 +43,7 @@ const sceneryPhysicsBridgeSourcePath = fileURLToPath(new URL('../physics-bridge/
 const utilsSrcPath = fileURLToPath(new URL('../utils/src', import.meta.url)).replaceAll('\\', '/');
 const eventTargetShimPath = fileURLToPath(new URL('./node_modules/event-target-shim/index.mjs', import.meta.url)).replaceAll('\\', '/');
 const webStreamsPolyfillPath = fileURLToPath(new URL('./node_modules/web-streams-polyfill/dist/polyfill.mjs', import.meta.url)).replaceAll('\\', '/');
+const threePlatformAdapterPath = fileURLToPath(new URL('./node_modules/@minisheep/three-platform-adapter/dist/index.mjs', import.meta.url)).replaceAll('\\', '/');
 const ammoJsEntryPath = fileURLToPath(new URL('./src/pages/physics-ammo/ammojs3/dist/ammo.js', import.meta.url)).replaceAll('\\', '/');
 const ammoJsWasmEntryPath = fileURLToPath(new URL('./src/pages/physics-ammo/vendor/ammo.wasm.js', import.meta.url)).replaceAll('\\', '/');
 const ammoJsWasmBinaryPath = fileURLToPath(new URL('./src/pages/physics-ammo/vendor/ammo.wasm.wasm', import.meta.url)).replaceAll('\\', '/');
@@ -293,6 +294,7 @@ export default {
       { find: '@harmony/physics-cannon-source', replacement: `${physicsCannonSourcePath}/index.ts` },
       { find: 'event-target-shim', replacement: eventTargetShimPath },
       { find: 'web-streams-polyfill', replacement: webStreamsPolyfillPath },
+      { find: /^@minisheep\/three-platform-adapter$/, replacement: threePlatformAdapterPath },
       { find: 'vue', replacement: vueRuntimeAlias },
     ],
   },
