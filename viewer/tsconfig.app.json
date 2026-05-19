@@ -46,6 +46,7 @@
       "@harmony/physics-ammo": ["./src/pages/physics-ammo/runtime.ts"],
       "@harmony/physics-ammo-source": ["./src/pages/physics-ammo/engine/index.ts"],
       "@harmony/physics-cannon": ["./src/pages/physics-cannon/runtime.ts"],
+      "@harmony/physics-cannon/*": ["./src/pages/physics-cannon/engine/*"],
       "@harmony/physics-cannon-source": ["./src/pages/physics-cannon/engine/index.ts"]
     }
   }

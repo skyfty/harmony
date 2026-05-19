@@ -9,6 +9,7 @@ import type {
 } from '@harmony/physics-core'
 
 export type CannonSceneShapeBinding = {
+  shapeKind: PhysicsShapeDesc['kind']
   shape: CANNON.Shape
   position: CANNON.Vec3
   quaternion: CANNON.Quaternion
@@ -34,12 +35,14 @@ export function createCannonSceneShapeBindings(
   }
   if (shapeDesc.kind === 'heightfield') {
     return [{
+      shapeKind: shapeDesc.kind,
       shape: createHeightfieldShape(shapeDesc),
       position: vec3FromTuple(shapeDesc.localOffset ?? [0, 0, 0]),
       quaternion: quatClone(identityQuaternion),
     }]
   }
   return [{
+    shapeKind: shapeDesc.kind,
     shape: createShape(shapeDesc),
     position: new CANNON.Vec3(0, 0, 0),
     quaternion: new CANNON.Quaternion(0, 0, 0, 1),
@@ -130,6 +133,7 @@ function composeShapeBinding(binding: CannonSceneShapeBinding, transform: Physic
   const composedQuaternion = new CANNON.Quaternion()
   parentQuaternion.mult(binding.quaternion, composedQuaternion)
   return {
+    shapeKind: binding.shapeKind,
     shape: binding.shape,
     position: composedPosition,
     quaternion: composedQuaternion,
