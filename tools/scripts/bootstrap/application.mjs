@@ -36,6 +36,9 @@ export function bootstrapApplication(appName, scope, mode, repoRoot = resolve(di
 
   if (appName === 'viewer' || appName === 'tour') {
     if (scope === 'mp' || scope === 'h5') {
+      runCommand('pnpm', ['run', 'sync:physics'], appRoot);
+      runCommand('pnpm', ['run', 'sync:schema'], appRoot);
+      runCommand('pnpm', ['run', 'sync:scenery-mirrors'], appRoot);
       runCommand('pnpm', ['run', mode === 'dev' ? 'sync:scenery:dev' : 'sync:scenery'], appRoot);
     }
   }

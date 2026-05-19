@@ -37,6 +37,7 @@ const repoRootPath = fileURLToPath(new URL('..', import.meta.url)).replaceAll('\
 const scenerySourcePath = fileURLToPath(new URL('../scenery', import.meta.url)).replaceAll('\\', '/');
 const schemaSourcePath = fileURLToPath(new URL('../schema', import.meta.url)).replaceAll('\\', '/');
 const physicsCoreSourcePath = fileURLToPath(new URL('../physics-core/src', import.meta.url)).replaceAll('\\', '/');
+const physicsAmmoSourcePath = fileURLToPath(new URL('../physics-ammo/src', import.meta.url)).replaceAll('\\', '/');
 const physicsCannonSourcePath = fileURLToPath(new URL('../physics-cannon/src', import.meta.url)).replaceAll('\\', '/');
 const sceneryPhysicsBridgeSourcePath = fileURLToPath(new URL('../physics-bridge/src', import.meta.url)).replaceAll('\\', '/');
 const utilsSrcPath = fileURLToPath(new URL('../utils/src', import.meta.url)).replaceAll('\\', '/');
@@ -182,7 +183,6 @@ function resolveManualChunk(id: string): string | undefined {
 
   if (
     normalizedId.includes('/physics-ammo/src/')
-    || normalizedId.includes('/src/pages/physics-ammo/engine/')
     || normalizedId.includes('/src/pages/physics-ammo/ammojs3/')
     || normalizedId.includes('/node_modules/ammojs3/')
   ) {
@@ -193,7 +193,6 @@ function resolveManualChunk(id: string): string | undefined {
     normalizedId.includes('/physics-cannon/src/')
     || normalizedId.includes('/src/pages/physics-cannon/')
     || normalizedId.includes('/src/pages/physics-cannon/runtime.ts')
-    || normalizedId.includes('/src/pages/physics-cannon/engine/')
     || normalizedId.includes('/src/pages/physics-cannon/cannon-es/')
     || normalizedId.includes('/node_modules/@vladkrutenyuk/cannon-es-debugger-pro/')
   ) {
@@ -287,10 +286,11 @@ export default {
         : []),
       { find: /^ammojs3$/, replacement: ammoJsEntryPath },
       { find: '@harmony/physics-ammo', replacement: fileURLToPath(new URL('./src/pages/physics-ammo/runtime.ts', import.meta.url)) },
-      { find: '@harmony/physics-ammo-source', replacement: fileURLToPath(new URL('./src/pages/physics-ammo/engine', import.meta.url)) },
-      { find: /^@harmony\/physics-cannon\/(.*)$/, replacement: fileURLToPath(new URL('./src/pages/physics-cannon/$1', import.meta.url)) },
+      { find: '@harmony/physics-ammo-source', replacement: `${physicsAmmoSourcePath}/index.ts` },
+      { find: /^@harmony\/physics-ammo\/(.*)$/, replacement: `${physicsAmmoSourcePath}/$1` },
+      { find: /^@harmony\/physics-cannon\/(.*)$/, replacement: `${physicsCannonSourcePath}/$1` },
       { find: '@harmony/physics-cannon', replacement: fileURLToPath(new URL('./src/pages/physics-cannon/runtime.ts', import.meta.url)) },
-      { find: '@harmony/physics-cannon-source', replacement: fileURLToPath(new URL('./src/pages/physics-cannon/engine', import.meta.url)) },
+      { find: '@harmony/physics-cannon-source', replacement: `${physicsCannonSourcePath}/index.ts` },
       { find: 'event-target-shim', replacement: eventTargetShimPath },
       { find: 'web-streams-polyfill', replacement: webStreamsPolyfillPath },
       { find: 'vue', replacement: vueRuntimeAlias },

@@ -12,7 +12,9 @@ export async function cmdSyncPhysics(argv: string[]): Promise<void> {
     viewerRoot,
   });
 
-  console.log(`[harmony-tools] synced physics mirrors -> ${path.resolve(viewerRoot, "src/pages/physics-ammo/engine")} and ${path.resolve(viewerRoot, "src/pages/physics-cannon/engine")}`);
+  console.log(
+    `[harmony-tools] synced physics subpackages -> ${path.resolve(viewerRoot, "src/pages/physics-ammo")} and ${path.resolve(viewerRoot, "src/pages/physics-cannon")}`,
+  );
 }
 
 function resolveMaybe(value: string | undefined, fallback: string): string {
