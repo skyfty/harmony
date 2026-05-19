@@ -54,6 +54,15 @@ viewer/src/pages/scenery/three-platform-adapter/
 viewer/src/pages/physics-cannon/cannon-es/
 viewer/src/pages/physics-ammo/ammojs3/
 
+# Generated scenery dependency mirrors used by tour subpackage builds
+tour/src/pages/scenery/physics-bridge/
+tour/src/pages/scenery/physics-core/
+tour/src/pages/scenery/schema/
+tour/src/pages/scenery/three/
+tour/src/pages/scenery/three-mesh-bvh/
+tour/src/pages/scenery/three-platform-adapter/
+tour/src/pages/scenery/utils/
+
 # WebAssembly / Rust build artifacts and caches
 # Rust build output (moved crate into editor/src/wasm)
 editor/src/wasm/rust-crate/target/

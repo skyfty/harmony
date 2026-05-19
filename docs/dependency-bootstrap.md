@@ -36,5 +36,5 @@ These packages produce `dist/` artifacts and should be rebuilt after branch swit
 
 ## Notes
 
-- `viewer/scripts/prepare-shared.mjs` now delegates to the shared bootstrap logic.
+- `tools/scripts/mini-program/prepare-shared.mjs` now hosts the shared bootstrap logic used by `tour` and `viewer`.
 - `editor`, `tour`, `exhibition`, and `viewer` package scripts now reuse the same bootstrap entry instead of keeping their own ad-hoc dependency prep chains.
