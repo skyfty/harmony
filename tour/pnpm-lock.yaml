@@ -37,7 +37,7 @@ importers:
         version: file:../physics-core
       '@harmony/scenery':
         specifier: file:../scenery
-        version: file:../scenery(ammo.js@0.0.10)(three@0.172.0)(typescript@5.6.3)
+        version: file:../scenery(ammo.js@0.0.10)(three@0.172.0)
       '@harmony/schema':
         specifier: file:../schema
         version: file:../schema
@@ -5912,19 +5912,17 @@ snapshots:
 
   '@harmony/physics-core@file:../physics-core': {}
 
-  '@harmony/scenery@file:../scenery(ammo.js@0.0.10)(three@0.172.0)(typescript@5.6.3)':
+  '@harmony/scenery@file:../scenery(ammo.js@0.0.10)(three@0.172.0)':
     dependencies:
       '@harmony/schema': file:../schema
       '@harmony/utils': file:../utils
       '@minisheep/mini-program-polyfill-core': 1.1.5
-      '@vladkrutenyuk/cannon-es-debugger-pro': 0.2.4(cannon-es@0.20.0)(three@0.172.0)(typescript@5.6.3)
       ammo-debug-drawer: 1.0.1(ammo.js@0.0.10)
       cannon-es: 0.20.0
       three-mesh-bvh: 0.9.8(three@0.172.0)
     transitivePeerDependencies:
       - ammo.js
       - three
-      - typescript
 
   '@harmony/schema@file:../schema':
     dependencies:

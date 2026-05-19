@@ -12,6 +12,7 @@ const uniPlatform = process.env.UNI_PLATFORM;
 const isMp = uniPlatform?.startsWith('mp-');
 const useWorkspaceSourceForH5 = !isMp;
 const buildTarget = isMp ? 'es2018' : 'es2020';
+const enableSceneryCannonDebugger = process.env.NODE_ENV !== 'production';
 const sceneOptimizerExcludes = [
   '@harmony/schema',
   '@harmony/schema/',
@@ -99,7 +100,7 @@ function resolveManualChunk(id: string): string | undefined {
       || normalizedId.includes('@minisheep/three-platform-adapter')
       || normalizedId.includes('ammojs3')
       || normalizedId.includes('cannon-es')
-      || normalizedId.includes('@vladkrutenyuk/cannon-es-debugger-pro')
+      || (enableSceneryCannonDebugger && normalizedId.includes('@vladkrutenyuk/cannon-es-debugger-pro'))
     ) {
       if (
         normalizedId.includes('ammojs3')
@@ -115,9 +116,9 @@ function resolveManualChunk(id: string): string | undefined {
         || normalizedId.includes('three-csm')
         || normalizedId.includes('@minisheep/three-platform-adapter')
         || normalizedId.includes('three/examples/jsm')
-        || normalizedId.includes('@vladkrutenyuk/cannon-es-debugger-pro')
+        || (enableSceneryCannonDebugger && normalizedId.includes('@vladkrutenyuk/cannon-es-debugger-pro'))
       ) {
-        if (normalizedId.includes('@vladkrutenyuk/cannon-es-debugger-pro')) {
+        if (enableSceneryCannonDebugger && normalizedId.includes('@vladkrutenyuk/cannon-es-debugger-pro')) {
           return 'pages/scenery/chunks/vendor';
         }
         return 'pages/scenery/chunks/vendor';
@@ -195,7 +196,7 @@ function resolveManualChunk(id: string): string | undefined {
     || normalizedId.includes('/src/pages/physics-cannon/runtime.ts')
     || normalizedId.includes('/src/pages/physics-cannon/engine/')
     || normalizedId.includes('/src/pages/physics-cannon/cannon-es/')
-    || normalizedId.includes('/node_modules/@vladkrutenyuk/cannon-es-debugger-pro/')
+    || (enableSceneryCannonDebugger && normalizedId.includes('/node_modules/@vladkrutenyuk/cannon-es-debugger-pro/'))
   ) {
     return 'common/vendor';
   }
@@ -205,6 +206,7 @@ function resolveManualChunk(id: string): string | undefined {
 
 export default {
   define: {
+    __HARMONY_SCENERY_CANNON_DEBUGGER_ENABLED__: JSON.stringify(process.env.NODE_ENV !== 'production'),
     'import.meta.env.VITE_SCENERY_ENABLE_GLTF_DRACO': JSON.stringify('false'),
     'import.meta.env.VITE_SCENERY_ENABLE_GLTF_KTX2': JSON.stringify('false'),
   },

@@ -1,5 +1,6 @@
 import * as THREE from 'three'
-import type * as CANNON from 'cannon-es'
+
+declare const __HARMONY_SCENERY_CANNON_DEBUGGER_ENABLED__: boolean | undefined
 
 type CannonDebuggerLike = {
   update?: () => void
@@ -10,8 +11,8 @@ type CannonDebuggerLike = {
 
 export type CannonDebuggerConstructor = new (
   root: THREE.Object3D,
-  world: CANNON.World,
-  color?: THREE.ColorRepresentation,
+  world: any,
+  color?: string | number,
   offset?: number,
 ) => CannonDebuggerLike
 
@@ -36,7 +37,11 @@ function loadPhysicsCannonSubpackage(): Promise<void> {
 }
 
 export async function loadCannonDebuggerPro(): Promise<CannonDebuggerConstructor | null> {
-  await loadPhysicsCannonSubpackage()
-  const module = await import('@harmony/physics-cannon/debuggerPro')
-  return (module as unknown as { loadCannonDebuggerPro?: () => Promise<CannonDebuggerConstructor | null> }).loadCannonDebuggerPro?.() ?? null
+  return null
+  // if (typeof __HARMONY_SCENERY_CANNON_DEBUGGER_ENABLED__ === 'undefined' || !__HARMONY_SCENERY_CANNON_DEBUGGER_ENABLED__) {
+  //   return null
+  // }
+  // await loadPhysicsCannonSubpackage()
+  // const module = await import('@harmony/physics-cannon/debuggerPro')
+  // return (module as unknown as { loadCannonDebuggerPro?: () => Promise<CannonDebuggerConstructor | null> }).loadCannonDebuggerPro?.() ?? null
 }

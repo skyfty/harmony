@@ -343,7 +343,7 @@ import { effectScope, watchEffect, ref, computed, onMounted, onUnmounted, watch,
 import '@minisheep/three-platform-adapter/wechat';
 // #endif
 import * as THREE from 'three';
-import type * as CANNON from 'cannon-es';
+// import type * as CANNON from 'cannon-es';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
 import type { KTX2Loader } from 'three/examples/jsm/loaders/KTX2Loader.js';
@@ -369,6 +369,7 @@ import { useDebugOverlay } from '../composables/useDebugOverlay';
 import { useBehaviorAlert } from '../composables/useBehaviorAlert';
 import { useBehaviorBubble } from '../composables/useBehaviorBubble';
 import { useLanternAssets } from '../composables/useLanternAssets';
+import { loadCannonDebuggerPro } from '../common/physics/cannonDebuggerPro';
 import { SceneryPhysicsCollisionDebugRuntime } from '../common/physics/collisionDebugRuntime';
 import { createSceneryPhysicsBridge } from '../common/physics/createSceneryPhysicsBridge';
 import {
@@ -2006,92 +2007,84 @@ const physicsBridgeBodySyncPositionHelper = new THREE.Vector3();
 const physicsBridgeBodySyncQuaternionHelper = new THREE.Quaternion();
 const physicsEnvironmentEnabled = ref(true);
 const physicsCollisionDebugRuntime = new SceneryPhysicsCollisionDebugRuntime();
-type CannonDebuggerLike = {
-  update?: () => void;
-  clear?: () => void;
-  destroy?: () => void;
-  setVisible?: (visible: boolean) => void;
-};
-type CannonDebuggerConstructor = new (
-  root: object,
-  world: CANNON.World,
-  color?: string | number,
-  offset?: number,
-) => CannonDebuggerLike;
-let cannonDebuggerWorld: CANNON.World | null = null;
-let cannonDebuggerInstance: CannonDebuggerLike | null = null;
-let cannonDebuggerLoadToken = 0;
+// type CannonDebuggerLike = {
+//   update?: () => void;
+//   clear?: () => void;
+//   destroy?: () => void;
+//   setVisible?: (visible: boolean) => void;
+// // };
+// let cannonDebuggerWorld: CANNON.World | null = null;
+// let cannonDebuggerInstance: CannonDebuggerLike | null = null;
+// let cannonDebuggerLoadToken = 0;
 
-function shouldEnableCannonDebugger(): boolean {
-  return physicsEnvironmentEnabled.value
-    && currentPhysicsBridgePreference === 'cannon'
-    && debugEnabled.value
-    && debugMode.value === 'full'
-    && cannonDebuggerWorld !== null;
-}
+// function shouldEnableCannonDebugger(): boolean {
+//   return physicsEnvironmentEnabled.value
+//     && currentPhysicsBridgePreference === 'cannon'
+//     && debugEnabled.value
+//     && debugMode.value === 'full'
+//     && cannonDebuggerWorld !== null;
+// }
 
-function destroyCannonDebugger(): void {
-  const debuggerInstance = cannonDebuggerInstance;
-  cannonDebuggerInstance = null;
-  cannonDebuggerLoadToken += 1;
-  if (!debuggerInstance) {
-    return;
-  }
-  try {
-    debuggerInstance.clear?.();
-    debuggerInstance.destroy?.();
-  } catch (error) {
-    console.warn('[SceneViewer] Failed to destroy cannon debugger', error);
-  }
-}
+// function destroyCannonDebugger(): void {
+//   const debuggerInstance = cannonDebuggerInstance;
+//   cannonDebuggerInstance = null;
+//   cannonDebuggerLoadToken += 1;
+//   if (!debuggerInstance) {
+//     return;
+//   }
+//   try {
+//     debuggerInstance.clear?.();
+//     debuggerInstance.destroy?.();
+//   } catch (error) {
+//     console.warn('[SceneViewer] Failed to destroy cannon debugger', error);
+//   }
+// }
 
-async function ensureCannonDebugger(): Promise<void> {
-  if (!shouldEnableCannonDebugger()) {
-    destroyCannonDebugger();
-    return;
-  }
-  if (cannonDebuggerInstance) {
-    cannonDebuggerInstance.setVisible?.(true);
-    return;
-  }
-  const loadToken = ++cannonDebuggerLoadToken;
-  try {
-    const module = await import('@harmony/physics-cannon/debuggerPro');
-    const loader = (module as unknown as { loadCannonDebuggerPro?: () => Promise<CannonDebuggerConstructor | null> }).loadCannonDebuggerPro;
-    const CannonEsDebuggerPro = loader ? await loader() : null;
-    if (loadToken !== cannonDebuggerLoadToken || !shouldEnableCannonDebugger() || !CannonEsDebuggerPro) {
-      return;
-    }
-    cannonDebuggerInstance = new CannonEsDebuggerPro(
-      physicsCollisionDebugRuntime.root,
-      cannonDebuggerWorld!,
-      0x66d9ff,
-      0.005,
-    );
-    cannonDebuggerInstance.setVisible?.(true);
-  } catch (error) {
-    console.warn('[SceneViewer] Failed to create cannon debugger', error);
-    destroyCannonDebugger();
-  }
-}
+// async function ensureCannonDebugger(): Promise<void> {
+//   if (!shouldEnableCannonDebugger()) {
+//     destroyCannonDebugger();
+//     return;
+//   }
+//   if (cannonDebuggerInstance) {
+//     cannonDebuggerInstance.setVisible?.(true);
+//     return;
+//   }
+//   const loadToken = ++cannonDebuggerLoadToken;
+//   try {
+//     const CannonEsDebuggerPro = await loadCannonDebuggerPro();
+//     if (loadToken !== cannonDebuggerLoadToken || !shouldEnableCannonDebugger() || !CannonEsDebuggerPro) {
+//       return;
+//     }
+//     cannonDebuggerInstance = new CannonEsDebuggerPro(
+//       physicsCollisionDebugRuntime.root,
+//       cannonDebuggerWorld!,
+//       0x66d9ff,
+//       0.005,
+//     );
+//     cannonDebuggerInstance.setVisible?.(true);
+//   } catch (error) {
+//     console.warn('[SceneViewer] Failed to create cannon debugger', error);
+//     destroyCannonDebugger();
+//   }
+// }
 
-async function syncCannonDebugger(): Promise<void> {
-  if (!shouldEnableCannonDebugger()) {
-    destroyCannonDebugger();
-    return;
-  }
-  if (cannonDebuggerInstance) {
-    cannonDebuggerInstance.setVisible?.(true);
-    return;
-  }
-  await ensureCannonDebugger();
-}
+// async function syncCannonDebugger(): Promise<void> {
+//   if (!shouldEnableCannonDebugger()) {
+//     destroyCannonDebugger();
+//     return;
+//   }
+//   if (cannonDebuggerInstance) {
+//     cannonDebuggerInstance.setVisible?.(true);
+//     return;
+//   }
+//   await ensureCannonDebugger();
+// }
 
 watch(
   () => [debugEnabled.value, debugMode.value],
   () => {
     physicsCollisionDebugRuntime.setVisible(debugEnabled.value && debugMode.value !== 'off');
-    void syncCannonDebugger();
+    // void syncCannonDebugger();
   },
   { immediate: true },
 );
@@ -6268,7 +6261,7 @@ async function prepareSceneryPhysicsBridgeForDocument(document: SceneJsonExportD
   const environmentSettings = resolveDocumentEnvironment(document);
   applyPhysicsEnvironmentSettings(environmentSettings);
   currentPhysicsBridgePreference = resolveSceneryPhysicsBridgePreference(environmentSettings);
-  void syncCannonDebugger();
+  // void syncCannonDebugger();
   await ensureSceneryPhysicsBridgeReady();
 }
 
@@ -6513,8 +6506,8 @@ async function ensureSceneryPhysicsBridgeReady(): Promise<PhysicsBridge> {
           return;
         }
         physicsCollisionDebugRuntime.setCannonWorld(world);
-        cannonDebuggerWorld = world;
-        void syncCannonDebugger();
+        // cannonDebuggerWorld = world;
+        // void syncCannonDebugger();
       },
     });
   }
@@ -6526,7 +6519,7 @@ async function ensureSceneryPhysicsBridgeReady(): Promise<PhysicsBridge> {
       ? (currentPhysicsBridgePreference === 'ammo' ? 'ammo' : 'cannon')
       : null,
   );
-  void syncCannonDebugger();
+  // void syncCannonDebugger();
   physicsBridgeInitPromise = physicsBridge.init({
     world: {
       gravity: [physicsGravity.x, physicsGravity.y, physicsGravity.z],
@@ -6584,7 +6577,7 @@ async function loadSceneryPhysicsBridgeScene(
   }
   try {
     currentPhysicsBridgePreference = resolveSceneryPhysicsBridgePreference(resolveDocumentEnvironment(document));
-    void syncCannonDebugger();
+    // void syncCannonDebugger();
     const requestId = ++physicsBridgeSceneRequestId;
     const asset = await buildPhysicsSceneAsset(document, {
       onProgress: (progress) => {
@@ -7061,8 +7054,8 @@ async function destroySceneryPhysicsBridge(): Promise<void> {
   } finally {
     physicsBridgeSceneRequestId += 1;
     sceneryGroundCollisionRuntimeBodyIds.clear();
-    destroyCannonDebugger();
-    cannonDebuggerWorld = null;
+    // destroyCannonDebugger();
+    // cannonDebuggerWorld = null;
     physicsCollisionDebugRuntime.resetBackend();
     const groundNode = currentDocument ? findGroundNode(currentDocument.nodes) : null;
     clearGroundCollisionRuntimeHost(groundNode ? (nodeObjectMap.get(groundNode.id) ?? null) : null);
@@ -12882,8 +12875,8 @@ function teardownRenderer() {
   disposeSignboardBillboards(renderContext?.scene ?? null);
   clearInstancedMeshes();
   clearSceneryCompiledGroundRenderRuntime();
-  destroyCannonDebugger();
-  cannonDebuggerWorld = null;
+  // destroyCannonDebugger();
+  // cannonDebuggerWorld = null;
   physicsCollisionDebugRuntime.destroy();
   disposeObject(scene);
   disposeMaterialTextureCache();
@@ -13595,7 +13588,7 @@ function startRenderLoop(
           }
           sceneCsmShadowRuntime?.update();
           physicsCollisionDebugRuntime.update();
-          cannonDebuggerInstance?.update?.();
+          // cannonDebuggerInstance?.update?.();
         renderer.render(scene, camera);
         // Pull renderer.info after rendering so calls/triangles reflect the current frame.
         if (debugEnabled.value && debugMode.value === 'full') {
@@ -13666,8 +13659,8 @@ function cleanupForUnrelatedSceneSwitch(): void {
   clearSceneryCompiledGroundRenderRuntime();
 
   resetPhysicsWorld();
-  destroyCannonDebugger();
-  cannonDebuggerWorld = null;
+  // destroyCannonDebugger();
+  // cannonDebuggerWorld = null;
   physicsCollisionDebugRuntime.resetBackend();
   lazyPlaceholderStates.clear();
   deferredInstancingNodeIds.clear();
@@ -13905,7 +13898,7 @@ function applyInput(params: {
     currentDocument ? resolveDocumentEnvironment(currentDocument) : activeEnvironmentSettings,
   );
   currentPhysicsBridgePreference = requestedPhysicsPreference;
-  void syncCannonDebugger();
+  // void syncCannonDebugger();
 
   configurePhysicsInterpolation(physinterpParam);
   error.value = null;
