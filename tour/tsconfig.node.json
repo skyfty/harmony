@@ -11,7 +11,6 @@
   ],
   "compilerOptions": {
     "composite": true,
-    "lib": ["ES2021"],
     "noEmit": true,
     "skipLibCheck": true,
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.node.tsbuildinfo",

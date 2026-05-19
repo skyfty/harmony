@@ -11,7 +11,7 @@ type CannonDebuggerLike = {
 export type CannonDebuggerConstructor = new (
   root: THREE.Object3D,
   world: CANNON.World,
-  color?: string | number,
+  color?: THREE.ColorRepresentation,
   offset?: number,
 ) => CannonDebuggerLike
 
@@ -23,7 +23,7 @@ type CannonDebuggerModule = {
 let cannonDebuggerModulePromise: Promise<CannonDebuggerModule> | null = null
 
 export async function loadCannonDebuggerPro(): Promise<CannonDebuggerConstructor | null> {
-  const promise = cannonDebuggerModulePromise ??= import('@vladkrutenyuk/cannon-es-debugger-pro') as unknown as Promise<CannonDebuggerModule>
-  const module = await promise
-  return module?.CannonEsDebuggerPro ?? module?.default ?? null
+  cannonDebuggerModulePromise ??= import('@vladkrutenyuk/cannon-es-debugger-pro')
+  const module = await cannonDebuggerModulePromise
+  return module.CannonEsDebuggerPro ?? module.default ?? null
 }

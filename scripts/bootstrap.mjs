@@ -34,6 +34,8 @@ const viewerBuildOrder = [
   'physicsCannon',
 ];
 
+const tourBuildOrder = viewerBuildOrder;
+
 const viewerInstallOrder = [
   'viewer',
   ...viewerBuildOrder,
@@ -85,20 +87,23 @@ export async function bootstrapEditor() {
   cleanAppCaches('editor');
 }
 
-export async function bootstrapTour() {
+
+export async function bootstrapTour(platform, phase = 'build') {
+  if (platform === 'shared') {
+    await bootstrapTourShared();
+    return;
+  }
+  await bootstrapTourShared();
+  await syncTourScenery(platform, phase);
+  cleanAppCaches('tour', platform, phase);
+}
+
+export async function bootstrapTourShared() {
   await installPackages(tourInstallOrder);
-  cleanPackageOutputs(viewerBuildOrder);
-  await buildPackages(viewerBuildOrder);
-  await runNode([
-    '../tools/dist/cli-bin.js',
-    'sync-schema',
-    '--repoRoot',
-    '..',
-    '--viewerRoot',
-    '.',
-  ], packageRoots.tour);
-  await syncScenery('tour', false);
-  cleanAppCaches('tour');
+  cleanPackageOutputs(tourBuildOrder);
+  await buildPackages(tourBuildOrder);
+  await syncTourSharedArtifacts();
+  rmSync(resolve(packageRoots.tour, 'node_modules/.vite'), { recursive: true, force: true });
 }
 
 export async function bootstrapExhibition() {
@@ -131,8 +136,8 @@ function cleanAppCaches(appName, platform = '', phase = 'build') {
   rmSync(resolve(packageRoots[appName], 'node_modules/.vite'), { recursive: true, force: true });
   rmSync(resolve(packageRoots[appName], 'dist'), { recursive: true, force: true });
 
-  if (appName === 'viewer' && platform === 'mp' && phase === 'dev') {
-    rmSync(resolve(packageRoots.viewer, 'dist/dev/mp-weixin'), { recursive: true, force: true });
+  if ((appName === 'viewer' || appName === 'tour') && platform === 'mp' && phase === 'dev') {
+    rmSync(resolve(packageRoots[appName], 'dist/dev/mp-weixin'), { recursive: true, force: true });
   }
 }
 
@@ -163,6 +168,33 @@ async function syncViewerSharedArtifacts() {
   ], packageRoots.viewer);
 }
 
+async function syncTourSharedArtifacts() {
+  await runNode([
+    '../tools/dist/cli-bin.js',
+    'sync-schema',
+    '--repoRoot',
+    '..',
+    '--viewerRoot',
+    '.',
+  ], packageRoots.tour);
+  await runNode([
+    '../tools/dist/cli-bin.js',
+    'sync-scenery-mirrors',
+    '--repoRoot',
+    '..',
+    '--viewerRoot',
+    '.',
+  ], packageRoots.tour);
+  await runNode([
+    '../tools/dist/cli-bin.js',
+    'sync-physics',
+    '--repoRoot',
+    '..',
+    '--viewerRoot',
+    '.',
+  ], packageRoots.tour);
+}
+
 async function syncViewerScenery(platform, phase) {
   const useLink = platform === 'h5' && phase === 'dev';
   await runNode([
@@ -174,14 +206,15 @@ async function syncViewerScenery(platform, phase) {
   ], packageRoots.viewer);
 }
 
-async function syncScenery(appName, useLink) {
+async function syncTourScenery(platform, phase) {
+  const useLink = platform === 'h5' && phase === 'dev';
   await runNode([
     '../tools/dist/cli-bin.js',
     'sync-scenery',
     '--mode',
     'subpackage-uni-modules',
     ...(useLink ? ['--link'] : []),
-  ], packageRoots[appName]);
+  ], packageRoots.tour);
 }
 
 async function runPnpm(args, cwd) {
@@ -246,14 +279,17 @@ function printHelp() {
 
 Usage:
   node scripts/bootstrap.mjs viewer <shared|mp|h5> <dev|build>
+  node scripts/bootstrap.mjs tour <shared|mp|h5> <dev|build>
   node scripts/bootstrap.mjs editor
-  node scripts/bootstrap.mjs tour
   node scripts/bootstrap.mjs exhibition
 
 Examples:
   node scripts/bootstrap.mjs viewer shared
   node scripts/bootstrap.mjs viewer mp dev
   node scripts/bootstrap.mjs viewer h5 build
+  node scripts/bootstrap.mjs tour shared
+  node scripts/bootstrap.mjs tour mp dev
+  node scripts/bootstrap.mjs tour h5 build
   node scripts/bootstrap.mjs editor
 `);
 }
@@ -270,10 +306,16 @@ if (resolve(process.argv[1] ?? '') === fileURLToPath(import.meta.url)) {
         throw new Error('viewer bootstrap requires a phase: dev or build');
       }
       await bootstrapViewer(platform, phase);
+    } else if (target === 'tour') {
+      if (platform !== 'shared' && platform !== 'mp' && platform !== 'h5') {
+        throw new Error('tour bootstrap requires a platform: shared, mp, or h5');
+      }
+      if (phase !== 'dev' && phase !== 'build') {
+        throw new Error('tour bootstrap requires a phase: dev or build');
+      }
+      await bootstrapTour(platform, phase);
     } else if (target === 'editor') {
       await bootstrapEditor();
-    } else if (target === 'tour') {
-      await bootstrapTour();
     } else if (target === 'exhibition') {
       await bootstrapExhibition();
     } else {

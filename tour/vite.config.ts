@@ -114,9 +114,13 @@ function resolveManualChunk(id: string): string | undefined {
         || normalizedId.includes('three-mesh-bvh')
         || normalizedId.includes('three-csm')
         || normalizedId.includes('@minisheep/three-platform-adapter')
+        || normalizedId.includes('three/examples/jsm')
         || normalizedId.includes('@vladkrutenyuk/cannon-es-debugger-pro')
       ) {
-        return 'common/vendor';
+        if (normalizedId.includes('@vladkrutenyuk/cannon-es-debugger-pro')) {
+          return 'pages/scenery/chunks/vendor';
+        }
+        return 'pages/scenery/chunks/vendor';
       }
       return 'pages/scenery/common/vendor';
     }
@@ -138,11 +142,12 @@ function resolveManualChunk(id: string): string | undefined {
     || normalizedId.includes('/src/pages/scenery/three-mesh-bvh/')
     || normalizedId.includes('/src/pages/scenery/three-platform-adapter/')
     || normalizedId.includes('/node_modules/three/')
+    || normalizedId.includes('/node_modules/three/examples/jsm/')
     || normalizedId.includes('/node_modules/three-mesh-bvh/')
     || normalizedId.includes('/node_modules/three-csm/')
     || normalizedId.includes('/node_modules/@minisheep/three-platform-adapter/')
   ) {
-    return 'common/vendor';
+    return 'pages/scenery/chunks/vendor';
   }
 
   if (
@@ -162,7 +167,9 @@ function resolveManualChunk(id: string): string | undefined {
       && !normalizedId.includes('/schema/dist/physicsShapeResolvers.js')
     )
     || normalizedId.includes('/node_modules/three/')
+    || normalizedId.includes('/node_modules/three/examples/jsm/')
     || normalizedId.includes('/node_modules/three-mesh-bvh/')
+    || normalizedId.includes('/node_modules/three-csm/')
     || normalizedId.includes('/node_modules/polygon-clipping/')
     || normalizedId.includes('/node_modules/@msgpack/msgpack/')
     || normalizedId.includes('/node_modules/robust-predicates/')
@@ -190,7 +197,7 @@ function resolveManualChunk(id: string): string | undefined {
     || normalizedId.includes('/src/pages/physics-cannon/cannon-es/')
     || normalizedId.includes('/node_modules/@vladkrutenyuk/cannon-es-debugger-pro/')
   ) {
-    return 'pages/physics-cannon/common/vendor';
+    return 'common/vendor';
   }
 
   return undefined;
@@ -328,6 +335,19 @@ export default {
           '**/pages/scenery/three-mesh-bvh/**',
           '**/pages/scenery/three-platform-adapter/**',
           '**/pages/scenery/schema/**',
+          '**/three/**',
+          '**/three-mesh-bvh/**',
+          '**/three-csm/**',
+          '**/three/examples/jsm/**',
+          '**/@minisheep/three-platform-adapter/**',
+          '**/@vladkrutenyuk/cannon-es-debugger-pro/**',
+        ],
+        'pages/physics-ammo/common/vendor': [
+          '**/ammojs3/**',
+        ],
+        'common/vendor': [
+          '**/cannon-es/**',
+          '**/@vladkrutenyuk/cannon-es-debugger-pro/**',
         ],
       },
     }),

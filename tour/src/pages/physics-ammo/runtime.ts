@@ -18,7 +18,7 @@ type AmmoSchemaBridgeModule = {
 };
 
 type AmmoBootstrapModule = {
-  default?: (target?: Record<string, unknown>) => unknown;
+  default?: (target?: Record<string, unknown>) => Promise<unknown>;
 };
 
 let ammoControllerModulePromise: Promise<AmmoControllerModule> | null = null;
@@ -36,11 +36,11 @@ function loadAmmoSchemaBridgeModule(): Promise<AmmoSchemaBridgeModule> {
 }
 
 function loadAmmoBootstrapModule(): Promise<AmmoBootstrapModule> {
-  const promise = ammoBootstrapModulePromise ??= import('./vendor/ammo.wasm.js');
-  return promise;
+  ammoBootstrapModulePromise ??= import('./vendor/ammo.wasm.js');
+  return ammoBootstrapModulePromise;
 }
 
-function resolveAmmoBootstrapFactory(module: AmmoBootstrapModule): (target?: Record<string, unknown>) => unknown {
+function resolveAmmoBootstrapFactory(module: AmmoBootstrapModule): (target?: Record<string, unknown>) => Promise<unknown> {
   if (typeof module.default === 'function') {
     return module.default;
   }
