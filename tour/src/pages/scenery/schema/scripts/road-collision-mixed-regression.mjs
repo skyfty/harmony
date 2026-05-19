@@ -141,6 +141,91 @@ async function main() {
   const flatNoHeightsSnapshot = collectRoadCollisionDescriptors(flatRoadWithoutHeights)
   assertShapeKinds(flatNoHeightsSnapshot, 'box', 'flat road without explicit heights')
 
+  const longFlatRoad = createRoadNode({
+    id: 'road:long-flat',
+    vertices: Array.from({ length: 42 }, (_value, index) => [index * 24, 0]),
+    segmentHeights: Array.from({ length: 41 }, () => [0, 0, 0, 0]),
+    samplingDensityFactor: 1.25,
+    collisionSubdivisionFactor: 1,
+  })
+  const longFlatSnapshot = collectRoadCollisionDescriptors(longFlatRoad)
+  assertShapeKinds(longFlatSnapshot, 'box', 'long flat road')
+  assert.ok(
+    longFlatSnapshot.descriptors.length < 24,
+    `long flat road should merge into a compact set of spans (${longFlatSnapshot.descriptors.length})`,
+  )
+
+  const mixedRoad = createRoadNode({
+    id: 'road:mixed',
+    vertices: [
+      [0, 0],
+      [30, 0],
+      [60, 0],
+      [90, 0],
+      [115, 12],
+      [140, -10],
+      [170, 0],
+      [200, 0],
+      [230, 0],
+    ],
+    segmentHeights: [
+      [0, 0, 0, 0],
+      [0, 0, 0.1, 0.15],
+      [0.15, 0.2, 0.25, 0.3],
+      [0.3, 1.0, 2.2, 3.1],
+      [3.1, 2.5, 1.1, 0.4],
+      [0.4, 0.3, 0.2, 0.2],
+      [0.2, 0.1, 0, 0],
+      [0, 0, 0, 0],
+    ],
+    samplingDensityFactor: 1.5,
+    collisionSubdivisionFactor: 2.5,
+    smoothingStrengthFactor: 1.2,
+    minClearance: 0.03,
+  })
+  const mixedSnapshot = collectRoadCollisionDescriptors(mixedRoad)
+  assert.ok(mixedSnapshot, 'mixed road should build collision data')
+  assert.equal(
+    mixedSnapshot.descriptors[0]?.shapeDefinition.kind,
+    'box',
+    'mixed road should keep the leading straight section as a box span',
+  )
+  assert.equal(
+    mixedSnapshot.descriptors[mixedSnapshot.descriptors.length - 1]?.shapeDefinition.kind,
+    'box',
+    'mixed road should keep the trailing straight section as a box span',
+  )
+  assert.ok(
+    mixedSnapshot.descriptors.some((entry) => entry.shapeDefinition.kind === 'static-mesh'),
+    'mixed road should retain static-mesh spans in the turn and slope transition zone',
+  )
+
+  const windingRoad = createRoadNode({
+    id: 'road:winding',
+    vertices: Array.from({ length: 36 }, (_value, index) => {
+      const x = index * 18
+      const z = index % 4 < 2 ? (index % 8 === 0 ? 0 : 12) : (index % 8 === 4 ? -12 : 0)
+      return [x, z]
+    }),
+    segmentHeights: Array.from({ length: 35 }, (_value, index) => [
+      Math.sin(index * 0.25) * 0.4,
+      Math.sin(index * 0.25 + 0.5) * 0.9 + 0.25,
+      Math.sin(index * 0.25 + 1.0) * 1.3 + 0.5,
+      Math.sin(index * 0.25 + 1.5) * 1.7 + 0.75,
+    ]),
+    samplingDensityFactor: 2.5,
+    collisionSubdivisionFactor: 3.5,
+    smoothingStrengthFactor: 1.05,
+    minClearance: 0.02,
+  })
+  const windingSnapshot = collectRoadCollisionDescriptors(windingRoad)
+  assert.ok(windingSnapshot, 'winding road should build collision data')
+  const windingTailEndIndex = Math.max(...windingSnapshot.descriptors.map((entry) => entry.endIndex))
+  assert.ok(
+    windingTailEndIndex >= 220,
+    `winding road should keep collisions through the tail of the path (${windingTailEndIndex})`,
+  )
+
   const lowDetailRoad = createRoadNode({
     id: 'road:low-detail',
     vertices: [

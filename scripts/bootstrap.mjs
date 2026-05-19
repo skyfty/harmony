@@ -89,6 +89,14 @@ export async function bootstrapTour() {
   await installPackages(tourInstallOrder);
   cleanPackageOutputs(viewerBuildOrder);
   await buildPackages(viewerBuildOrder);
+  await runNode([
+    '../tools/dist/cli-bin.js',
+    'sync-schema',
+    '--repoRoot',
+    '..',
+    '--viewerRoot',
+    '.',
+  ], packageRoots.tour);
   await syncScenery('tour', false);
   cleanAppCaches('tour');
 }

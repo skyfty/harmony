@@ -141,15 +141,13 @@ export function collectRoadCollisionDescriptors(params: RoadCollisionBuildParams
 	}
 
 	const hasSegmentHeights = Boolean(serializedSampler)
+	const preferredMaxSpans = typeof maxSegments === 'number' && Number.isFinite(maxSegments)
+		? Math.max(1, Math.trunc(maxSegments))
+		: null
 
 	const desiredTileLength = clampNumber(roadWidth * 8, ROAD_COLLISION_MIN_TILE_LENGTH, ROAD_COLLISION_MAX_TILE_LENGTH, ROAD_COLLISION_DEFAULT_TILE_LENGTH)
-	const maxBodies = typeof maxSegments === 'number' && Number.isFinite(maxSegments)
-		? Math.max(1, Math.trunc(maxSegments))
-		: 128
-
 	const meshOptions = { samplingDensityFactor, smoothingStrengthFactor, minClearance, junctionSmoothing }
 
-	let totalBodies = 0
 	const descriptors: RoadCollisionDescriptor[] = []
 	let layoutHash = 0
 	let representativeDesiredTileLength = desiredTileLength
@@ -157,9 +155,6 @@ export function collectRoadCollisionDescriptors(params: RoadCollisionBuildParams
 
 	const junctionRoundSegments = 8 + Math.round(24 * Math.max(0, Math.min(1, junctionSmoothing)))
 	for (const junctionVertex of graph.junctionVertices) {
-		if (totalBodies >= maxBodies) {
-			break
-		}
 		const center = graph.vertices[junctionVertex]
 		if (!center) {
 			continue
@@ -212,21 +207,14 @@ export function collectRoadCollisionDescriptors(params: RoadCollisionBuildParams
 			pitch: 0,
 			shapeDefinition: staticMesh,
 		})
-		totalBodies += 1
 	}
 
 	let curveIndex = 0
 	for (const descriptor of curves) {
-		if (totalBodies >= maxBodies) {
-			break
-		}
 		const curve = descriptor.curve
 		const subsegments = collectRoadCurveSubsegments(curve)
 		let segmentIndex = 0
 		for (const segment of subsegments) {
-			if (totalBodies >= maxBodies) {
-				break
-			}
 			const length = segment.getLength()
 			if (!(length > 1e-6)) {
 				segmentIndex += 1
@@ -279,7 +267,7 @@ export function collectRoadCollisionDescriptors(params: RoadCollisionBuildParams
 				smoothedHeights,
 				roadWidth,
 				collisionSubdivisionFactor,
-				Math.max(1, maxBodies - totalBodies),
+				preferredMaxSpans,
 			)
 			const collisionSpans = shouldSubdivideSimpleRoadSpans(geometryDetail, heightDetail, heightRange)
 				? subdivideRoadCollisionSpans(spans, collisionSubdivisionFactor, divisions)
@@ -294,9 +282,6 @@ export function collectRoadCollisionDescriptors(params: RoadCollisionBuildParams
 			const spanUp = new THREE.Vector3(0, 1, 0)
 			let tileIndex = 0
 			for (const span of collisionSpans) {
-				if (totalBodies >= maxBodies) {
-					break
-				}
 				const startU = span.startIndex / divisions
 				const endU = span.endIndex / divisions
 				segment.getPoint(startU, spanP0)
@@ -362,7 +347,6 @@ export function collectRoadCollisionDescriptors(params: RoadCollisionBuildParams
 							pitch: 0,
 							shapeDefinition: staticMeshShape,
 						})
-						totalBodies += 1
 					}
 					tileIndex += 1
 					continue
@@ -395,7 +379,6 @@ export function collectRoadCollisionDescriptors(params: RoadCollisionBuildParams
 					pitch,
 					shapeDefinition: boxShape,
 				})
-				totalBodies += 1
 				tileIndex += 1
 			}
 			segmentIndex += 1
@@ -696,6 +679,23 @@ type RoadCollisionSpan = {
 	boxOverlapMeters: number
 }
 
+type RoadCollisionSpanRange = {
+	startIndex: number
+	endIndex: number
+}
+
+type RoadCollisionMergeParams = {
+	curve: THREE.Curve<THREE.Vector3>
+	divisions: number
+	heights: number[]
+	roadWidth: number
+	collisionSubdivisionFactor: number
+	curveLength: number
+	leafSpans: RoadCollisionSpanRange[]
+	roadSimpleScore: number
+	preferredMaxSpans: number | null
+}
+
 type RoadCollisionSpanMetrics = {
 	spanLength: number
 	headingDelta: number
@@ -750,7 +750,7 @@ function collectRoadCollisionSpans(
 	heights: number[],
 	roadWidth: number,
 	collisionSubdivisionFactor: number,
-	maxSpans: number,
+	maxSpans: number | null,
 ): RoadCollisionSpan[] {
 	if (!(divisions > 0)) {
 		return []
@@ -771,6 +771,7 @@ function collectRoadCollisionSpans(
 		intervalGeometryDetails.push(geometryDetail)
 		intervalHeightDetails.push(heightDetail)
 	}
+	const roadSimpleScore = computeRoadSpanSimpleScore(intervalGeometryDetails, intervalHeightDetails, heights)
 	const baseTargetLength = clampNumber(
 		(roadWidth * lerpNumber(12, 6, Math.min(1, Math.max(0, (factor - 0.25) / 7.75)))) / Math.max(0.75, Math.sqrt(factor)),
 		0.85,
@@ -782,9 +783,8 @@ function collectRoadCollisionSpans(
 	const slopeThreshold = ROAD_HEIGHT_SLOPE_MAX_GRADE / Math.max(0.85, Math.sqrt(factor))
 	const pitchThreshold = ROAD_TILE_MAX_PITCH_DELTA_RAD / Math.max(0.85, Math.sqrt(factor))
 
-	type PendingSpan = { startIndex: number; endIndex: number }
-	const pending: PendingSpan[] = [{ startIndex: 0, endIndex: divisions }]
-	const leafSpans: PendingSpan[] = []
+	const pending: RoadCollisionSpanRange[] = [{ startIndex: 0, endIndex: divisions }]
+	const leafSpans: RoadCollisionSpanRange[] = []
 	while (pending.length) {
 		const span = pending.pop()!
 		const metrics = summarizeRoadCollisionSpan(curve, divisions, heights, span.startIndex, span.endIndex, curveLength)
@@ -798,8 +798,7 @@ function collectRoadCollisionSpans(
 				metrics.slope > slopeThreshold ||
 				metrics.pitchDelta > pitchThreshold
 			)
-		const remainingBudget = Math.max(0, maxSpans - leafSpans.length - pending.length)
-		if (!shouldSplit || remainingBudget <= 1) {
+		if (!shouldSplit) {
 			leafSpans.push(span)
 			continue
 		}
@@ -819,30 +818,17 @@ function collectRoadCollisionSpans(
 		return a.endIndex - b.endIndex
 	})
 
-	const mergedSpans: PendingSpan[] = []
-	const mergeScale = Math.max(0, Math.min(1, (factor - 0.25) / 7.75))
-	const mergeLengthMultiplier = lerpNumber(1.35, 0.85, mergeScale)
-	const mergeMetricMultiplier = lerpNumber(0.95, 0.7, mergeScale)
-	for (const span of leafSpans) {
-		const previous = mergedSpans[mergedSpans.length - 1]
-		if (!previous) {
-			mergedSpans.push({ ...span })
-			continue
-		}
-		const mergedMetrics = summarizeRoadCollisionSpan(curve, divisions, heights, previous.startIndex, span.endIndex, curveLength)
-		if (
-			previous.endIndex === span.startIndex &&
-			mergedMetrics.spanLength <= baseTargetLength * mergeLengthMultiplier &&
-			mergedMetrics.headingDelta <= headingThreshold * mergeMetricMultiplier &&
-			mergedMetrics.heightRange <= heightRangeThreshold * mergeMetricMultiplier &&
-			mergedMetrics.slope <= slopeThreshold * mergeMetricMultiplier &&
-			mergedMetrics.pitchDelta <= pitchThreshold * mergeMetricMultiplier
-		) {
-			previous.endIndex = span.endIndex
-			continue
-		}
-		mergedSpans.push({ ...span })
-	}
+	const mergedSpans = mergeRoadCollisionSpans({
+		curve,
+		divisions,
+		heights,
+		roadWidth,
+		collisionSubdivisionFactor: factor,
+		curveLength,
+		leafSpans,
+		roadSimpleScore,
+		preferredMaxSpans: maxSpans != null ? Math.max(1, Math.trunc(maxSpans)) : null,
+	})
 
 	return mergedSpans.map((span) => ({
 		...span,
@@ -853,6 +839,113 @@ function collectRoadCollisionSpans(
 			intervalHeightDetails,
 		),
 	}))
+}
+
+function computeRoadSpanSimpleScore(
+	intervalGeometryDetails: number[],
+	intervalHeightDetails: number[],
+	heights: number[],
+): number {
+	const intervalCount = Math.max(1, Math.min(intervalGeometryDetails.length, intervalHeightDetails.length))
+	let geometrySum = 0
+	let heightSum = 0
+	for (let i = 0; i < intervalCount; i += 1) {
+		const geometryDetail = Number.isFinite(intervalGeometryDetails[i]!) ? intervalGeometryDetails[i]! : 0
+		const heightDetail = Number.isFinite(intervalHeightDetails[i]!) ? intervalHeightDetails[i]! : 0
+		geometrySum += Math.max(0, Math.min(1, geometryDetail))
+		heightSum += Math.max(0, Math.min(1, heightDetail))
+	}
+	const geometryMean = geometrySum / intervalCount
+	const heightMean = heightSum / intervalCount
+	const heightRange = computeRoadHeightRange(heights)
+	const normalizedHeightRange = Math.max(0, Math.min(1, heightRange / Math.max(ROAD_RECTANGULAR_MAX_HEIGHT_RANGE * 4, 1e-6)))
+	const complexity = Math.max(
+		0,
+		Math.min(1, geometryMean * 0.5 + heightMean * 0.35 + normalizedHeightRange * 0.15),
+	)
+	return Math.max(0, Math.min(1, 1 - complexity))
+}
+
+function mergeRoadCollisionSpans(params: RoadCollisionMergeParams): RoadCollisionSpanRange[] {
+	const factor = clampNumber(params.collisionSubdivisionFactor, 0.25, 8, 1.0)
+	const scale = Math.max(0, Math.min(1, (factor - 0.25) / 7.75))
+	const headingThreshold = ROAD_TILE_MAX_HEADING_DELTA_RAD / Math.max(0.85, Math.sqrt(factor))
+	const heightRangeThreshold = ROAD_RECTANGULAR_MAX_HEIGHT_RANGE / Math.max(0.75, Math.sqrt(factor))
+	const slopeThreshold = ROAD_HEIGHT_SLOPE_MAX_GRADE / Math.max(0.85, Math.sqrt(factor))
+	const pitchThreshold = ROAD_TILE_MAX_PITCH_DELTA_RAD / Math.max(0.85, Math.sqrt(factor))
+	const fitErrorThreshold = lerpNumber(0.01, 0.006, scale)
+	const baseSpanLength = clampNumber(
+		lerpNumber(params.roadWidth * 6, params.roadWidth * 12, params.roadSimpleScore),
+		Math.max(params.roadWidth * 4, ROAD_COLLISION_MIN_TILE_LENGTH * 2),
+		Math.max(params.curveLength, params.roadWidth * 12),
+		params.roadWidth * 8,
+	)
+	const preferredCount = params.preferredMaxSpans != null
+		? Math.max(1, Math.min(params.preferredMaxSpans, Math.max(1, Math.ceil(params.curveLength / baseSpanLength))))
+		: Math.max(1, Math.ceil(params.curveLength / baseSpanLength))
+	const preferredSpanLength = params.curveLength / preferredCount
+	const mergeLengthCap = Math.max(
+		baseSpanLength,
+		preferredSpanLength * lerpNumber(1.05, 1.25, params.roadSimpleScore),
+	)
+	const mergeMetricMultiplier = lerpNumber(0.85, 1.18, params.roadSimpleScore)
+	let working = params.leafSpans.slice()
+	if (working.length <= 1) {
+		return working
+	}
+
+	let changed = true
+	while (changed) {
+		changed = false
+		const next: RoadCollisionSpanRange[] = []
+		for (const span of working) {
+			const previous = next[next.length - 1]
+			if (!previous) {
+				next.push({ ...span })
+				continue
+			}
+			if (previous.endIndex !== span.startIndex) {
+				next.push({ ...span })
+				continue
+			}
+			const mergedMetrics = summarizeRoadCollisionSpan(
+				params.curve,
+				params.divisions,
+				params.heights,
+				previous.startIndex,
+				span.endIndex,
+				params.curveLength,
+			)
+			const mergedHeights = params.heights.slice(previous.startIndex, span.endIndex + 1)
+			const mergedFit = computeRoadSpanSurfaceFit(mergedHeights, mergedMetrics.spanLength)
+			const mergedFitError = computeRoadSpanSurfaceFitError(mergedHeights, mergedFit)
+			const mergedComplexity = Math.max(
+				mergedMetrics.headingDelta / headingThreshold,
+				mergedMetrics.heightRange / heightRangeThreshold,
+				mergedMetrics.slope / slopeThreshold,
+				mergedMetrics.pitchDelta / pitchThreshold,
+				mergedFitError / fitErrorThreshold,
+			)
+			const mergedSimpleScore = Math.max(0, Math.min(1, 1 - mergedComplexity))
+			const dynamicLengthCap = mergeLengthCap * lerpNumber(1.0, 1.2, mergedSimpleScore)
+			if (
+				mergedMetrics.spanLength <= dynamicLengthCap &&
+				mergedMetrics.headingDelta <= headingThreshold * mergeMetricMultiplier &&
+				mergedMetrics.heightRange <= heightRangeThreshold * mergeMetricMultiplier &&
+				mergedMetrics.slope <= slopeThreshold * mergeMetricMultiplier &&
+				mergedMetrics.pitchDelta <= pitchThreshold * mergeMetricMultiplier &&
+				mergedFitError <= fitErrorThreshold * lerpNumber(1.0, 1.1, mergedSimpleScore)
+			) {
+				previous.endIndex = span.endIndex
+				changed = true
+				continue
+			}
+			next.push({ ...span })
+		}
+		working = next
+	}
+
+	return working
 }
 
 function shouldSubdivideSimpleRoadSpans(geometryDetail: number, heightDetail: number, heightRange: number): boolean {
@@ -1174,9 +1267,12 @@ function buildRoadCurvesFromGraph(smoothing: number, graph: RoadGraph): RoadCurv
 function collectRoadCurveSubsegments(curve: THREE.Curve<THREE.Vector3>): THREE.Curve<THREE.Vector3>[] {
 	const subcurves = (curve as any)?.curves
 	if (!Array.isArray(subcurves) || !subcurves.length) {
-	return [curve]
+		return [curve]
 	}
-	return subcurves.filter((segment): segment is THREE.Curve<THREE.Vector3> => Boolean(segment))
+	// Keep the whole edge together so the adaptive span logic can merge across
+	// simple internal line segments and only split where curvature or slope
+	// actually demands it.
+	return [curve]
 }
 
 // createRoadCurve removed (unused)

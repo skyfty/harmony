@@ -1,1 +1,0 @@
-class LocalAsset{static ASSET_MAP="__local_asset_map__";static USE_BROTLI="__local_use_brotli__";static resolve(s,t){const _=this.ASSET_MAP[`${s}:${t}`];if(_)return _;throw Error(`Cannot resolve local asset ${s}:${t}`)}}export{LocalAsset};
