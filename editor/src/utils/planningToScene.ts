@@ -39,7 +39,6 @@ import { useScenesStore } from '@/stores/scenesStore'
 import { resolveGroundWorkingGridSize, resolveGroundWorldBounds } from '@schema'
 import {
   PLANNING_IMAGES_COMPONENT_TYPE,
-  RIGIDBODY_COMPONENT_TYPE,
   WATER_COMPONENT_TYPE,
   WATER_PRESETS,
   WALL_COMPONENT_TYPE,
@@ -270,7 +269,6 @@ function ensureAirWall(sceneStore: ConvertPlanningToSceneOptions['sceneStore'], 
   if (component?.id) {
     sceneStore.updateNodeComponentProps(node.id, component.id, { isAirWall: true })
   }
-  ensureStaticRigidbody(sceneStore, node)
 }
 
 async function createAirWallFromSegments(options: {
@@ -310,20 +308,6 @@ async function createAirWallFromSegments(options: {
     ownerFeatureKind,
   })
   return wall
-}
-
-function ensureStaticRigidbody(sceneStore: ConvertPlanningToSceneOptions['sceneStore'], node: SceneNode) {
-  const existing = getNodeComponent(node, RIGIDBODY_COMPONENT_TYPE)
-  if (existing?.id) {
-    sceneStore.updateNodeComponentProps(node.id, existing.id, { bodyType: 'STATIC', mass: 0 })
-    return
-  }
-
-  const result = sceneStore.addNodeComponent<typeof RIGIDBODY_COMPONENT_TYPE>(node.id, RIGIDBODY_COMPONENT_TYPE)
-  const created = result?.component as { id?: string } | undefined
-  if (created?.id) {
-    sceneStore.updateNodeComponentProps(node.id, created.id, { bodyType: 'STATIC', mass: 0 })
-  }
 }
 
 function toCssHex(color: number): string {

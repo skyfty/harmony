@@ -5,8 +5,6 @@ import * as THREE from 'three'
 import { applyGroundGeneration, createGroundMesh } from '@schema/groundMesh'
 import type { GroundDynamicMesh, GroundGenerationSettings, GroundRuntimeDynamicMesh } from '@schema'
 import {
-  DEFAULT_RIGIDBODY_FRICTION,
-  DEFAULT_RIGIDBODY_RESTITUTION,
   NOMINATE_COMPONENT_TYPE,
   ONLINE_COMPONENT_TYPE,
 } from '@schema/components'
@@ -463,8 +461,6 @@ async function handleConfirmGround() {
   const width = clampGroundDimension(groundWidth.value, preset?.width ?? 100)
   const depth = clampGroundDimension(groundDepth.value, preset?.depth ?? 100)
   const creationProfile = resolveGroundCreationProfile(width, depth)
-  const targetFriction = Math.min(1, Math.max(0, preset?.physics?.friction ?? DEFAULT_RIGIDBODY_FRICTION))
-  const targetRestitution = Math.min(1, Math.max(0, preset?.physics?.restitution ?? DEFAULT_RIGIDBODY_RESTITUTION))
   const cellSize = creationProfile.cellSize
 
   const definition: GroundDynamicMesh = {
@@ -503,16 +499,9 @@ async function handleConfirmGround() {
   })
 
   if (created) {
-    const rigidbodyComponent = sceneStore.ensureStaticRigidbodyComponent(created.id)
     sceneStore.updateGroundNodeDynamicMesh(created.id, definition)
     sceneStore.setNodeSelectionLock(created.id, true)
     sceneStore.selectNode(created.id)
-    if (rigidbodyComponent) {
-      sceneStore.updateNodeComponentProps(created.id, rigidbodyComponent.id, {
-        friction: targetFriction,
-        restitution: targetRestitution,
-      })
-    }
   }
 }
 

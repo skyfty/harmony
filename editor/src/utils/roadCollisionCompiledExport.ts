@@ -29,7 +29,6 @@ import {
   clampRoadProps,
   type RoadComponentProps,
   RIGIDBODY_COMPONENT_TYPE,
-  clampRigidbodyComponentProps,
   clampBoundaryWallComponentProps,
   type BoundaryWallComponentProps,
 } from '@schema/components'
@@ -102,18 +101,7 @@ function normalizeRigidbodyComponent(
   if (existing && existing.enabled !== false) {
     return existing
   }
-  if (!isRoadDynamicMesh(node.dynamicMesh)) {
-    return null
-  }
-  return {
-    id: `__roadCollisionCompiledRigidbody:${node.id}`,
-    type: RIGIDBODY_COMPONENT_TYPE,
-    enabled: true,
-    props: clampRigidbodyComponentProps({
-      bodyType: 'STATIC',
-      targetNodeId: node.id,
-    }),
-  }
+  return null
 }
 
 function buildShapeInstanceFromRigidbodyShape(

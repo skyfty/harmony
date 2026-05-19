@@ -190,16 +190,14 @@ function resolvePhysicsSceneRigidbodyComponent(
     return null
   }
   const hasBoundaryWall = Boolean(resolveBoundaryWallComponent(node))
-  const hasGround = isGroundDynamicMesh(node.dynamicMesh)
-  const hasRoad = isRoadDynamicMesh(node.dynamicMesh)
-  const hasWall = node.dynamicMesh?.type === 'Wall'
-  const hasFloor = node.dynamicMesh?.type === 'Floor'
   const hasModelCollision = Boolean(resolveModelCollisionComponentPropsFromNode(node)?.faces?.length)
-  if (!hasBoundaryWall && !hasGround && !hasRoad && !hasWall && !hasFloor && !hasModelCollision) {
+  if (!hasBoundaryWall && !hasModelCollision) {
     return null
   }
   return {
-    id: `__physicsSceneAssetRigidbody:${node.id}`,
+    id: hasBoundaryWall
+      ? `__boundaryWallRigidbody:${node.id}`
+      : `__modelCollisionRigidbody:${node.id}`,
     type: RIGIDBODY_COMPONENT_TYPE,
     enabled: true,
     props: clampRigidbodyComponentProps({
