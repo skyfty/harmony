@@ -439,7 +439,7 @@ import { syncGroundCollisionRuntimeLoadedTileKeys } from '@harmony/schema/ground
 import { clearGroundCollisionRuntimeHost, syncGroundCollisionRuntimeHost } from '@harmony/schema/groundCollisionRuntimeHost';
 import { createGroundCollisionRuntimeBridgeDeps } from '@harmony/schema/groundCollisionRuntimeBridge';
 import { clearCompiledGroundRenderTiles, collectLoadedCompiledGroundChunkKeys, getCompiledGroundRenderWorkState, syncCompiledGroundRenderTiles } from '@harmony/schema/compiledGroundRuntime';
-import { setInfiniteGroundHiddenChunkKeys } from '@harmony/schema/groundMesh';
+import { resolveInfiniteGroundVisibleChunkWindow, setInfiniteGroundHiddenChunkKeys } from '@harmony/schema/groundMesh';
 
 import {
   type PhysicsBodyBindingEntry as RigidbodyInstance,
@@ -1386,6 +1386,10 @@ const SKY_ENVIRONMENT_INTENSITY = 0.6;
 const HUMAN_EYE_HEIGHT = 1.7;
 const CAMERA_FORWARD_OFFSET = 1.5;
 const DEFAULT_SCENE_CAMERA_FAR = 1000;
+const SCENERY_FOG_HEADROOM_RATIO = 0.88;
+const SCENERY_FOG_MIN_DISTANCE = 0.001;
+const SCENERY_GROUND_FOG_UNLOAD_BUFFER_MIN_CHUNKS = 4;
+const SCENERY_GROUND_FOG_UNLOAD_BUFFER_RATIO = 0.5;
 const CAMERA_WATCH_DURATION = 0.35;
 const CAMERA_LEVEL_DURATION = 0.35;
 const DEFAULT_SCENE_EXPOSURE = 0.7;
@@ -11428,47 +11432,138 @@ async function loadEnvironmentTextureFromAsset(
   }
 }
 
-function applyFogSettings(settings: EnvironmentSettings) {
+type SceneryFogState =
+  | {
+      cameraFar: number;
+      fogNear: number;
+      fogFar: number;
+      fogDensity: number;
+    }
+  | null;
+
+function resolveSceneryGroundFogCoverageDistance(activeCamera: THREE.PerspectiveCamera | null): number | null {
+  if (!activeCamera || !dynamicGroundCache) {
+    return null;
+  }
+  const groundObject = resolveSceneObjectByNodeId(dynamicGroundCache.nodeId);
+  if (!groundObject) {
+    return null;
+  }
+  const groundMesh = dynamicGroundCache.dynamicMesh;
+  const chunkSizeMeters = Number.isFinite(groundMesh.chunkSizeMeters) && Number(groundMesh.chunkSizeMeters) > 0
+    ? Number(groundMesh.chunkSizeMeters)
+    : 100;
+  const renderRadiusChunks = Number.isFinite(groundMesh.renderRadiusChunks) && Number(groundMesh.renderRadiusChunks) > 0
+    ? Math.max(1, Math.trunc(Number(groundMesh.renderRadiusChunks)))
+    : 4;
+  const unloadBufferChunks = Math.max(
+    SCENERY_GROUND_FOG_UNLOAD_BUFFER_MIN_CHUNKS,
+    Math.ceil(renderRadiusChunks * SCENERY_GROUND_FOG_UNLOAD_BUFFER_RATIO),
+  );
+  const visibleWindow = resolveInfiniteGroundVisibleChunkWindow(groundObject, groundMesh, activeCamera);
+  const { minX, maxX, minZ, maxZ } = visibleWindow.localBounds;
+  activeCamera.updateMatrixWorld(true);
+  const cameraWorld = new THREE.Vector3();
+  activeCamera.getWorldPosition(cameraWorld);
+  const cameraLocal = groundObject.worldToLocal(cameraWorld);
+  const farCornerDistance = Math.max(
+    Math.hypot(cameraLocal.x - minX, cameraLocal.z - minZ),
+    Math.hypot(cameraLocal.x - minX, cameraLocal.z - maxZ),
+    Math.hypot(cameraLocal.x - maxX, cameraLocal.z - minZ),
+    Math.hypot(cameraLocal.x - maxX, cameraLocal.z - maxZ),
+  );
+  let coverageDistance = farCornerDistance + unloadBufferChunks * chunkSizeMeters;
+  if (groundMesh.farHorizonEnabled) {
+    const farHorizonDistance = Number(groundMesh.farHorizonDistanceMeters);
+    if (Number.isFinite(farHorizonDistance) && farHorizonDistance > 0) {
+      coverageDistance = Math.min(coverageDistance, farHorizonDistance);
+    }
+  }
+  return Math.max(SCENERY_FOG_MIN_DISTANCE, coverageDistance);
+}
+
+function resolveSceneryFogState(
+  settings: EnvironmentSettings,
+  activeCamera: THREE.PerspectiveCamera | null = renderContext?.camera ?? null,
+): SceneryFogState {
+  if (settings.fogMode === 'none') {
+    return null;
+  }
+  const groundCoverageDistance = resolveSceneryGroundFogCoverageDistance(activeCamera);
+  if (settings.fogMode === 'linear') {
+    const sourceNear = Math.max(0, settings.fogNear);
+    const sourceFar = Math.max(sourceNear + SCENERY_FOG_MIN_DISTANCE, settings.fogFar);
+    const cameraFar = Math.max(
+      sourceNear + SCENERY_FOG_MIN_DISTANCE,
+      Math.min(sourceFar, groundCoverageDistance ?? sourceFar),
+    );
+    const fogFar = Math.max(
+      sourceNear + SCENERY_FOG_MIN_DISTANCE,
+      cameraFar * SCENERY_FOG_HEADROOM_RATIO,
+    );
+    const fogNear = Math.min(
+      fogFar - SCENERY_FOG_MIN_DISTANCE,
+      Math.max(0, sourceNear * (fogFar / cameraFar)),
+    );
+    return {
+      cameraFar,
+      fogNear,
+      fogFar,
+      fogDensity: 0,
+    };
+  }
+  const density = Math.max(0, settings.fogDensity);
+  const baseCameraFar = DEFAULT_SCENE_CAMERA_FAR;
+  const cameraFar = Math.max(
+    SCENERY_FOG_MIN_DISTANCE,
+    Math.min(baseCameraFar, groundCoverageDistance ?? baseCameraFar),
+  );
+  const coverageScale = THREE.MathUtils.clamp(baseCameraFar / cameraFar, 0.5, 4);
+  return {
+    cameraFar,
+    fogNear: 0,
+    fogFar: 0,
+    fogDensity: density <= 0 ? 0 : (density * coverageScale) / SCENERY_FOG_HEADROOM_RATIO,
+  };
+}
+
+function applyFogSettings(settings: EnvironmentSettings, activeCamera: THREE.PerspectiveCamera | null = renderContext?.camera ?? null) {
   const scene = renderContext?.scene ?? null;
-  const camera = renderContext?.camera ?? null;
   if (!scene) {
     return;
   }
+  const fogState = resolveSceneryFogState(settings, activeCamera);
   const syncCameraFar = (nextFar: number) => {
-    if (!camera || Math.abs(camera.far - nextFar) <= 1e-6) {
+    if (!activeCamera || Math.abs(activeCamera.far - nextFar) <= 1e-6) {
       return;
     }
-    camera.far = nextFar;
-    camera.updateProjectionMatrix();
+    activeCamera.far = nextFar;
+    activeCamera.updateProjectionMatrix();
     sceneCsmShadowRuntime?.updateFrustums();
     markInstancedCullingDirty();
   };
-  if (settings.fogMode === 'none') {
+  if (!fogState) {
     scene.fog = null;
     syncCameraFar(DEFAULT_SCENE_CAMERA_FAR);
     return;
   }
   const fogColor = new THREE.Color(settings.fogColor);
+  syncCameraFar(fogState.cameraFar);
   if (settings.fogMode === 'linear') {
-    const near = Math.max(0, settings.fogNear);
-    const far = Math.max(near + 0.001, settings.fogFar);
-    syncCameraFar(far);
     if (scene.fog instanceof THREE.Fog) {
       scene.fog.color.copy(fogColor);
-      scene.fog.near = near;
-      scene.fog.far = far;
+      scene.fog.near = fogState.fogNear;
+      scene.fog.far = fogState.fogFar;
     } else {
-      scene.fog = new THREE.Fog(fogColor, near, far);
+      scene.fog = new THREE.Fog(fogColor, fogState.fogNear, fogState.fogFar);
     }
     return;
   }
-  syncCameraFar(DEFAULT_SCENE_CAMERA_FAR);
-  const density = Math.max(0, settings.fogDensity);
   if (scene.fog instanceof THREE.FogExp2) {
     scene.fog.color.copy(fogColor);
-    scene.fog.density = density;
+    scene.fog.density = fogState.fogDensity;
   } else {
-    scene.fog = new THREE.FogExp2(fogColor, density);
+    scene.fog = new THREE.FogExp2(fogColor, fogState.fogDensity);
   }
 }
 
@@ -11757,7 +11852,7 @@ async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
     return;
   }
   ensureSceneCsmShadowRuntime();
-  applyFogSettings(snapshot);
+  applyFogSettings(snapshot, renderContext?.camera ?? null);
   const backgroundApplied = await applyBackgroundSettings(snapshot.background);
   const environmentApplied = applyEnvironmentReflectionFromBackground(snapshot.background);
 
@@ -13462,6 +13557,7 @@ function startRenderLoop(
           updateBehaviorProximity();
           updatePunchBadgeOverlayEntries(camera, deltaSeconds);
           syncSceneSignboards();
+          applyFogSettings(activeEnvironmentSettings, camera);
 
         // Keep chunked ground meshes in sync with camera position.
         const cachedGround = dynamicGroundCache;
