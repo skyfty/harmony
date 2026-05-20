@@ -15,7 +15,7 @@ services:
       - MONGO_APP_USERNAME=${MONGO_APP_USERNAME:?MONGO_APP_USERNAME is required}
       - MONGO_APP_PASSWORD=${MONGO_APP_PASSWORD:?MONGO_APP_PASSWORD is required}
     volumes:
-      - /www/web/v_touchmagic_cn/harmony/server/mongo-data:/data/db
+      - /www/web/v_touchmagic_cn/data/mongo-data:/data/db
       - ./server/mongo-init/01-create-app-user.js:/docker-entrypoint-initdb.d/01-create-app-user.js:ro
     healthcheck:
       test:
@@ -47,7 +47,7 @@ services:
     ports:
       - "127.0.0.1:4000:4000"
     volumes:
-      - /www/web/v_touchmagic_cn/harmony/server/uploads:/app/uploads
+      - /www/web/v_touchmagic_cn/data/uploads:/app/uploads
       - ./server/.env.production:/app/server/.env.production:ro
     networks:
       - harmony-backend
