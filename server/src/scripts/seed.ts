@@ -5,6 +5,8 @@ import { ensureMiniProgramTestUserV2 } from '@/services/miniAuthService'
 import { ensureEditorAuthBootstrap } from '@/services/authService'
 import { ensureBuiltinCouponTypes } from '@/controllers/admin/couponTypeController'
 
+import { seedSpotCategories } from './seed-spot-categories'
+
 
 async function main(): Promise<void> {
   await connectDatabase()
@@ -32,6 +34,9 @@ async function main(): Promise<void> {
     console.warn('[seed] 初始化卡券类型失败：', error)
   })
   console.log('[seed] 卡券类型数据已初始化')
+
+  // 调用景点分类预制脚本
+  await seedSpotCategories()
 
   console.log('[seed] 小程序演示数据（成就/地址/反馈）已初始化')
 }
