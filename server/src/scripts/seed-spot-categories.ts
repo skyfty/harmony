@@ -41,10 +41,6 @@ export async function seedSpotCategories() {
         enabled: true,
         normalizedName: cat.name.trim().toLowerCase(),
       })
-      console.log(`[seed] 预制景点分类已插入: ${cat.name}`)
-    } else {
-      console.log(`[seed] 已存在景点分类: ${cat.name}`)
-    }
+    } 
   }
-  console.log('[seed] 预制景点分类数据已初始化')
 }
