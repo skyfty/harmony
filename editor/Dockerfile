@@ -17,6 +17,9 @@ RUN rm -f /usr/local/bin/pnpm || true && npm install -g pnpm@${PNPM_VERSION} --r
 # Bring in local packages that editor and schema depend on via file:../ paths.
 COPY editor/package.json editor/pnpm-lock.yaml ./
 COPY schema/package.json /app/schema/package.json
+COPY scripts /app/scripts
+COPY scenery /app/scenery
+COPY utils /app/utils
 COPY physics-core /app/physics-core
 COPY physics-bridge /app/physics-bridge
 COPY physics-ammo /app/physics-ammo
