@@ -407,7 +407,10 @@ export class AmmoPhysicsWorld {
     const tuning = new ammo.btVehicleTuning()
     const raycaster = new ammo.btDefaultVehicleRaycaster(world)
     const vehicle = new ammo.btRaycastVehicle(tuning, body, raycaster)
-    vehicle.setCoordinateSystem?.(desc.indexRightAxis, desc.indexUpAxis, desc.indexForwardAxis)
+    // Ammo's raycast-vehicle binding in this build expects the scene forward axis
+    // to be supplied in the first slot to preserve the same world-facing direction
+    // we use in the Cannon backend.
+    vehicle.setCoordinateSystem?.(desc.indexForwardAxis, desc.indexUpAxis, desc.indexRightAxis)
     body.setActivationState?.(BT_DISABLE_DEACTIVATION)
     world.addAction?.(vehicle)
 

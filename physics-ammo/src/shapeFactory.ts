@@ -291,11 +291,17 @@ function resolveHeightfieldRange(
 
 function resolveAmmoHeightfieldOffset(shape: PhysicsHeightfieldDesc, minHeight: number, maxHeight: number): AmmoVector3 {
   const localOffset = shape.localOffset
+  const centeredYOffset = -(minHeight + maxHeight) * 0.5
   if (Array.isArray(localOffset) && localOffset.length === 3) {
-    return [localOffset[0] ?? 0, localOffset[1] ?? 0, localOffset[2] ?? 0]
+    // Heightfield terrain in Ammo still needs to be centered around its sampled
+    // height range on Y, even when we already have an X/Z local offset.
+    return [
+      localOffset[0] ?? 0,
+      (localOffset[1] ?? 0) + centeredYOffset,
+      localOffset[2] ?? 0,
+    ]
   }
-  const centerY = -(minHeight + maxHeight) * 0.5
-  return [0, centerY, 0]
+  return [0, centeredYOffset, 0]
 }
 
 function getHeightfieldHeight(shape: PhysicsHeightfieldDesc, row: number, column: number): number {
