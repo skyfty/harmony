@@ -208,6 +208,7 @@ export function createRigidbodyBody(
 	input: CreateRigidbodyBodyInput,
 	options: CreateRigidbodyBodyOptions,
 ): { body: PhysicsBodyLike; orientationAdjustment: RigidbodyOrientationAdjustment | null } | null {
+	console.log("sssssssssssssssssssssssssssss")
 	const { node, component, shapeDefinition, object } = input
 	const {
 		world,

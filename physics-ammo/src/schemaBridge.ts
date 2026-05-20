@@ -53,6 +53,7 @@ export function createAmmoSchemaPhysicsBackendBridge(ammo: AmmoApi): AmmoSchemaB
 	}
 
 	function createRigidbodyBody(params: BackendRigidbodyCreateParams): any {
+		console.info('[AmmoSchemaBridge] createRigidbodyBody is using a default world. It is recommended to create a world first and pass it in the params for better performance.')
 		const world = params.world ?? ensurePhysicsWorld({
 			world: null,
 			setWorld() {},

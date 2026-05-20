@@ -15,13 +15,6 @@ export type SchemaBodyShapeBinding = {
   quaternion?: [number, number, number, number]
 }
 
-const heightfieldQuaternion: [number, number, number, number] = [
-  Math.sin(-Math.PI / 4),
-  0,
-  0,
-  Math.cos(-Math.PI / 4),
-]
-
 export type SchemaRigidBodyCreateParams = {
   world: PhysicsWorldLike
   mass: number
@@ -48,11 +41,8 @@ export function createAmmoSchemaRigidBody(ammo: AmmoApi, params: SchemaRigidBody
     }
     const childTransform = createAmmoTransform(ammo, {
       position: binding.position ?? [0, 0, 0],
-      rotation: binding.quaternion ?? (
-        binding.definition.kind === 'heightfield'
-          ? heightfieldQuaternion
-          : [0, 0, 0, 1]
-      ),
+      // Heightfield orientation is handled at the rigid body level, matching Cannon.
+      rotation: binding.quaternion ?? [0, 0, 0, 1],
     })
     compoundShape.addChildShape(childTransform, shape.shape ?? shape)
     cleanup.push(...shape.cleanup)

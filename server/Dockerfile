@@ -14,6 +14,9 @@ ENV NPM_CONFIG_REGISTRY=${NPM_REGISTRY_URL}
 RUN rm -f /usr/local/bin/pnpm || true && npm install -g pnpm@${PNPM_VERSION} --registry=${NPM_REGISTRY_URL} --force
 # Bring in the local schema package so file:../schema can be resolved during install
 COPY schema ./schema
+# Bring in the local physics packages that schema depends on via file:../ paths.
+COPY physics-core ./physics-core
+COPY physics-bridge ./physics-bridge
 # Also bring in local tools package so file:../tools can be resolved
 COPY tools ./tools
 

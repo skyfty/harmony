@@ -17,7 +17,8 @@
   "scripts": {
     "build": "tsc -b tsconfig.json",
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
-    "prepack": "pnpm run build"
+    "prepack": "pnpm run build",
+    "check:compiled-ground-offset": "pnpm run build && node ../schema/scripts/fix-esm-extensions.mjs ./dist && node ./scripts/compiled-ground-offset-regression.mjs"
   },
   "engines": {
     "pnpm": ">=10.0.0"
