@@ -39,6 +39,8 @@ services:
     container_name: harmony-server
     env_file:
       - ./server/.env.production
+    environment:
+      MONGODB_URI: mongodb://${MONGO_APP_USERNAME}:${MONGO_APP_PASSWORD}@mongo:27017/${MONGO_APP_DATABASE:-harmony}?authSource=${MONGO_APP_DATABASE:-harmony}
     depends_on:
       mongo:
         condition: service_healthy
@@ -59,6 +61,8 @@ services:
     image: harmony-server
     env_file:
       - ./server/.env.production
+    environment:
+      MONGODB_URI: mongodb://${MONGO_APP_USERNAME}:${MONGO_APP_PASSWORD}@mongo:27017/${MONGO_APP_DATABASE:-harmony}?authSource=${MONGO_APP_DATABASE:-harmony}
     depends_on:
       mongo:
         condition: service_healthy
