@@ -261,7 +261,7 @@ function computeSoftBrushFalloff(normalizedDistanceSquared: number, feather: num
 	return 1 - smoothstep
 }
 
-function cloneGroundSurfaceChunks(definition: GroundDynamicMesh, nodeId?: string | null): GroundSurfaceChunkTextureMap | null {
+function cloneGroundSurfaceChunks(definition: GroundDynamicMesh): GroundSurfaceChunkTextureMap | null {
 	const source = definition.groundSurfaceChunks
 	if (!source) {
 		return null
@@ -281,7 +281,7 @@ function resolveGroundSurfaceChunksSnapshot(
 	nodeId: string,
 	sceneRuntimeVersion = 0,
 ): GroundSurfaceChunkTextureMap | null {
-	const snapshot = cloneGroundSurfaceChunks(definition, nodeId)
+	const snapshot = cloneGroundSurfaceChunks(definition)
 	if (paintSessionState && paintSessionState.nodeId === nodeId) {
 		paintSessionState.previewGroundSurfaceChunks = snapshot
 		paintSessionState.previewGroundSurfaceChunksSceneRuntimeVersion = sceneRuntimeVersion
@@ -3625,9 +3625,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				node.id,
 				node.dynamicMesh as GroundDynamicMesh,
 			)
-			const sceneId = typeof options.sceneStore.currentSceneId === 'string'
-				? options.sceneStore.currentSceneId.trim()
-				: ''
 			const mergedRuntimeDefinition = runtimeDefinition
 			if (sculptSessionState && sculptSessionState.nodeId === node.id) {
 				if (!sculptSessionState.dirty) {
@@ -4354,7 +4351,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				return false
 			}
 
-			let nextGroundSurfaceChunks = cloneGroundSurfaceChunks(session.definition, session.nodeId)
+			let nextGroundSurfaceChunks = cloneGroundSurfaceChunks(session.definition)
 
 			for (const chunk of dirtyChunks) {
 				if (token !== paintCommitToken) {

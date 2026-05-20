@@ -95,7 +95,6 @@ import {
   isVideoLikeExtension,
   loadSkyCubeTexture,
   resolveGroundChunkCoordFromWorldPosition,
-  resolveGroundChunkBounds,
   resolveGroundWorldBounds,
 } from '@schema/index'
 import {
@@ -251,11 +250,10 @@ import {
   syncGroundSurfacePreviewForGround,
   type GroundSurfaceLiveChunkPreview,
 } from '@schema/groundSurfacePreview'
-// resolveEnabledComponentState removed from here; import not used
 import { compileRoadStaticMeshMetadata, createRoadGroup, updateRoadGroup } from '@schema/roadMesh'
 import { createFloorGroup, updateFloorGroup } from '@schema/floorMesh'
 import { createGuideRouteGroup, updateGuideRouteGroup } from '@schema/guideRouteMesh'
-import { useTerrainStore, type GroundPanelTab, type TerrainPaintBrushSettings } from '@/stores/terrainStore'
+import { useTerrainStore, type GroundPanelTab } from '@/stores/terrainStore'
 import type { TerrainScatterBrushShape, TerrainScatterCategory } from '@schema/terrain-scatter'
 import { hashString, stableSerialize } from '@schema/stableSerialize'
 import { ViewportGizmo } from '@/utils/gizmo/ViewportGizmo'

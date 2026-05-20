@@ -107,7 +107,6 @@ let resizeObserver: ResizeObserver | null = null
 let animationFrame: number | null = null
 let wheelPreviewMeshes: Mesh[] = []
 let wheelRayMeshes: Mesh[] = []
-let isHandleDragging = false
 let physicsBridge: PhysicsBridge | null = null
 let physicsBridgeLoadPromise: Promise<void> | null = null
 let physicsBridgeStepPromise: Promise<void> | null = null
@@ -424,7 +423,6 @@ function disposePreview() {
   connectionPointMeshes = []
   wheelPreviewMeshes = []
   wheelRayMeshes = []
-  isHandleDragging = false
   disposePhysics()
   isReady.value = false
   loadError.value = null
@@ -494,7 +492,6 @@ function initPreview() {
     if (orbitControls) {
       orbitControls.enabled = !event.value
     }
-    isHandleDragging = Boolean(event.value)
     if (!event.value) {
       handleHandleCommit()
     }
@@ -753,7 +750,6 @@ function handleHandleMove() {
 function handleHandleCommit() {
   // Only commit wheel positions after releasing the mouse to avoid mid-drag writes.
   handleHandleMove()
-  isHandleDragging = false
 }
 
 function applyHandleDelta(isFront: boolean) {

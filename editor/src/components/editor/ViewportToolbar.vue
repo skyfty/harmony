@@ -1292,6 +1292,7 @@ const emit = defineEmits<{
   (event: 'update:road-shape-menu-open', value: boolean): void
   (event: 'update:water-shape-menu-open', value: boolean): void
   (event: 'update:ground-terrain-menu-open', value: boolean): void
+  (event: 'update:ground-paint-menu-open', value: boolean): void
   (event: 'update:ground-scatter-menu-open', value: boolean): void
   (event: 'select-floor-build-shape', shape: FloorBuildShape): void
   (event: 'update:floor-regular-polygon-sides', value: number): void

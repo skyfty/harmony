@@ -1,3 +1,6 @@
+x-build-root: &root-build
+  context: .
+
 services:
   mongo:
     image: mongo:7
@@ -30,8 +33,9 @@ services:
 
   server:
     build:
-      context: .
+      <<: *root-build
       dockerfile: server/Dockerfile
+    image: harmony-server
     container_name: harmony-server
     env_file:
       - ./server/.env.production
@@ -39,7 +43,7 @@ services:
       mongo:
         condition: service_healthy
     ports:
-      - "127.0.0.1:4000:4000" # 仅允许宿主机本地访问；通过 Nginx/反向代理对外暴露
+      - "127.0.0.1:4000:4000"
     volumes:
       - /www/web/v_touchmagic_cn/harmony/server/uploads:/app/uploads
       - ./server/.env.production:/app/server/.env.production:ro
@@ -50,8 +54,9 @@ services:
 
   server-seed:
     build:
-      context: .
+      <<: *root-build
       dockerfile: server/Dockerfile
+    image: harmony-server
     env_file:
       - ./server/.env.production
     depends_on:
@@ -66,13 +71,14 @@ services:
 
   admin:
     build:
-      context: .
+      <<: *root-build
       dockerfile: admin/Dockerfile
+    image: harmony-admin
     container_name: harmony-admin
     depends_on:
       - server
     ports:
-      - "127.0.0.1:8087:80" # 仅允许宿主机本地访问；通过反向代理对外暴露
+      - "127.0.0.1:8087:80"
     volumes:
       - type: bind
         source: /www/web/v_touchmagic_cn/harmony/config/admin-app-config.js
@@ -84,13 +90,14 @@ services:
 
   editor:
     build:
-      context: .
+      <<: *root-build
       dockerfile: editor/Dockerfile
+    image: harmony-editor
     container_name: harmony-editor
     depends_on:
       - server
     ports:
-      - "127.0.0.1:8088:80" # 仅允许宿主机本地访问；通过反向代理对外暴露
+      - "127.0.0.1:8088:80"
     volumes:
       - type: bind
         source: /www/web/v_touchmagic_cn/harmony/config/editor-app-config.json
@@ -109,13 +116,13 @@ services:
       ME_CONFIG_MONGODB_ADMINUSERNAME: ${MONGO_ROOT_USERNAME}
       ME_CONFIG_MONGODB_ADMINPASSWORD: ${MONGO_ROOT_PASSWORD}
       ME_CONFIG_MONGODB_SERVER: mongo
-      ME_CONFIG_BASICAUTH_USERNAME: admin      # 可选，设置 Web 界面登录
-      ME_CONFIG_BASICAUTH_PASSWORD: admin123   # 可选，设置 Web 界面密码
+      ME_CONFIG_BASICAUTH_USERNAME: admin
+      ME_CONFIG_BASICAUTH_PASSWORD: admin123
     ports:
-      - "127.0.0.1:8181:8081"   # 仅本机访问
+      - "127.0.0.1:8181:8081"
     networks:
       - harmony-backend
-      - default  # 允许与宿主机及外部通信
+      - default
     restart: unless-stopped
 
 networks:

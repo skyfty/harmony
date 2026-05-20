@@ -4,6 +4,7 @@ import {
   formatGroundLocalEditTileKey,
   getGroundVertexCount,
   getGroundVertexIndex,
+  resolveGroundEditTileResolution,
   resolveGroundWorkingGridSize,
   type GroundHeightMap,
   type GroundContourBounds,
@@ -178,8 +179,7 @@ function resolveRuntimeLoadedTileKeys(definition: GroundDynamicMesh): string[] {
 }
 
 function resolveRuntimeTileResolution(definition: GroundDynamicMesh): number {
-  const gridSize = resolveGroundWorkingGridSize(definition)
-  return Math.max(1, Math.trunc(definition.tileResolution ?? gridSize.rows))
+  return Math.max(1, resolveGroundEditTileResolution(definition))
 }
 
 function createGroundHeightTileState(input: {

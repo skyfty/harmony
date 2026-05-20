@@ -42,8 +42,7 @@ const viewerInstallOrder = [
   'scenery',
 ];
 
-const editorInstallOrder = [
-  'editor',
+const editorPrebuildInstallOrder = [
   'scenery',
   ...sharedBuildOrder,
   'physicsAmmo',
@@ -81,9 +80,10 @@ export async function bootstrapViewer(platform, phase = 'build') {
 }
 
 export async function bootstrapEditor() {
-  await installPackages(editorInstallOrder);
+  await installPackages(editorPrebuildInstallOrder);
   cleanPackageOutputs(viewerBuildOrder);
   await buildPackages(viewerBuildOrder);
+  await installPackages(['editor']);
   cleanAppCaches('editor');
 }
 

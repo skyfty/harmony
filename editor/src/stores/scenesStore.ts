@@ -235,10 +235,6 @@ function getMemoryTerrainDatasetRegionPacks(workspaceId: string): Map<string, Ar
   return bucket
 }
 
-function getGroundChunkDataStorageKey(sceneId: string, chunkKey: string): string {
-  return `${sceneId}:${chunkKey}`
-}
-
 function getTerrainDatasetRegionPackStorageKey(sceneId: string, regionKey: string): string {
   return `${sceneId}:${regionKey}`
 }

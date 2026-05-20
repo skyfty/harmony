@@ -549,13 +549,15 @@ function lerpNumber(start: number, end: number, t: number): number {
 class RoadSpanCurve extends THREE.Curve<THREE.Vector3> {
 	private readonly spanStartU: number
 	private readonly spanEndU: number
+	private readonly sourceCurve: THREE.Curve<THREE.Vector3>
 
 	constructor(
-		private readonly sourceCurve: THREE.Curve<THREE.Vector3>,
+		sourceCurve: THREE.Curve<THREE.Vector3>,
 		startU: number,
 		endU: number,
 	) {
 		super()
+		this.sourceCurve = sourceCurve
 		this.spanStartU = Math.max(0, Math.min(1, startU))
 		this.spanEndU = Math.max(this.spanStartU, Math.min(1, endU))
 	}
