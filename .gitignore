@@ -52,7 +52,6 @@ exhibition/src/uni_modules/scenery/
 **/src/pages/scenery/three-mesh-bvh/
 **/src/pages/scenery/three-platform-adapter/
 **/src/pages/physics-cannon/cannon-es/
-**/src/pages/physics-ammo/ammojs3/
 
 # WebAssembly / Rust build artifacts and caches
 # Rust build output (moved crate into editor/src/wasm)

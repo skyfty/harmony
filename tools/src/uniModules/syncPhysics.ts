@@ -8,12 +8,23 @@ export type SyncPhysicsOptions = {
 
 export function syncPhysicsToViewerSubpackage(options: SyncPhysicsOptions): void {
   const physicsAmmoSourceDir = path.resolve(options.repoRoot, "physics-ammo/src");
+  const physicsAmmoVendorSourceDir = path.resolve(options.repoRoot, "physics-ammo/src/vendor");
   const physicsCannonSourceDir = path.resolve(options.repoRoot, "physics-cannon/src");
   const physicsAmmoMirrorDir = path.resolve(options.viewerRoot, "src/pages/physics-ammo/engine");
   const physicsCannonMirrorDir = path.resolve(options.viewerRoot, "src/pages/physics-cannon/engine");
   const physicsAmmoVendorDir = path.resolve(options.viewerRoot, "src/pages/physics-ammo/vendor");
-  const ammoBootstrapSourceFile = path.resolve(options.viewerRoot, "node_modules/ammojs3/dist/ammo.wasm.js");
-  const ammoWasmSourceFile = path.resolve(options.viewerRoot, "node_modules/ammojs3/dist/ammo.wasm.wasm");
+  const ammoBootstrapSourceFile = path.resolve(physicsAmmoVendorSourceDir, "ammo.wasm.js");
+  const ammoWasmSourceFile = path.resolve(
+    options.viewerRoot,
+    "node_modules",
+    "@minisheep",
+    "three-platform-adapter",
+    "dist",
+    "three-override",
+    "local",
+    "wasm",
+    "ammo.wasm.wasm",
+  );
 
   replaceDirectoryLink(physicsAmmoSourceDir, physicsAmmoMirrorDir);
   replaceDirectoryLink(physicsCannonSourceDir, physicsCannonMirrorDir);

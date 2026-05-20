@@ -56,9 +56,6 @@ importers:
       '@vue/shared':
         specifier: ^3.4.21
         version: 3.5.28
-      ammojs3:
-        specifier: ^0.0.11
-        version: 0.0.11
       cannon-es:
         specifier: ^0.20.0
         version: 0.20.0
@@ -2161,9 +2158,6 @@ packages:
 
   ammo.js@0.0.10:
     resolution: {integrity: sha512-jOv977u71jrDUzHfmQ99YaW90/y8YLn/3HFTmtLLzf5wJynAfG+/a1Ie5gbn0fE0uSAHxXVsFk4Bzq8qRPWqAA==}
-
-  ammojs3@0.0.11:
-    resolution: {integrity: sha512-pfnMm0XvTLjzCt+ytdpV3aIgooxQzexjkC2DbTyiGsAk8ECEBPxJ8gOQ/m0CE+d9pf9ToPMK8PZJR7jP1h6lOA==}
 
   ansi-escapes@4.3.2:
     resolution: {integrity: sha512-gKXj5ALrKWQLsYG9jlTRmR/xKluxHV+Z9QEwNIgCfM1/uwPMCuzVVnh5mwTd+OuBZcwSIMbqssNWRm1lE51QaQ==}
@@ -5894,7 +5888,6 @@ snapshots:
     dependencies:
       '@harmony/physics-bridge': file:../physics-bridge
       '@harmony/physics-core': file:../physics-core
-      ammojs3: 0.0.11
 
   '@harmony/physics-bridge@file:../physics-bridge':
     dependencies:
@@ -7102,8 +7095,6 @@ snapshots:
       ammo.js: 0.0.10
 
   ammo.js@0.0.10: {}
-
-  ammojs3@0.0.11: {}
 
   ansi-escapes@4.3.2:
     dependencies:

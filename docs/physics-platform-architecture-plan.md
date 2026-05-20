@@ -5,7 +5,7 @@
 Build a reusable physics platform for the Harmony scene runtime that:
 
 1. decouples scene rendering and gameplay runtime from any specific physics engine
-2. supports multiple engines such as `cannon-es`, `ammojs3`, and future engines
+2. supports multiple engines such as `cannon-es`, adapter-backed Ammo, and future engines
 3. works across multiple consumers, including:
    - WeChat mini programs
    - other mini program platforms
@@ -92,7 +92,7 @@ Responsibility:
 Rule:
 
 - no `cannon-es`
-- no `ammojs3`
+- no legacy Ammo package
 - no platform-specific packaging logic
 
 ### 3. Physics Runtime Core
@@ -136,7 +136,7 @@ Responsibility:
 
 Rule:
 
-- all `cannon-es` and `ammojs3` imports must be isolated here
+- all `cannon-es` and Ammo imports must be isolated here
 
 ### 5. Host Integration Layer
 

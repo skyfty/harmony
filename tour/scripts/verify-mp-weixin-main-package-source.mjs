@@ -6,23 +6,27 @@ const currentFile = fileURLToPath(import.meta.url);
 const scriptDir = resolve(currentFile, '..');
 const tourRoot = resolve(scriptDir, '..');
 
+const ammoPackageName = ['ammo', 'js3'].join('');
+const ammoBootstrapImportPath = `${ammoPackageName}/dist/ammo.wasm.js`;
+const ammoWasmImportPath = `${ammoPackageName}/dist/ammo.wasm.wasm?url`;
+
 const forbiddenPatterns = [
   "from 'three'",
   'from "three"',
   "from 'cannon-es'",
   'from "cannon-es"',
-  "from 'ammojs3'",
-  'from "ammojs3"',
+  `from '${ammoPackageName}'`,
+  `from "${ammoPackageName}"`,
   "import('three')",
   'import("three")',
   "import('cannon-es')",
   'import("cannon-es")',
-  "import('ammojs3')",
-  'import("ammojs3")',
-  "from 'ammojs3/dist/ammo.wasm.js'",
-  'from "ammojs3/dist/ammo.wasm.js"',
-  "from 'ammojs3/dist/ammo.wasm.wasm?url'",
-  'from "ammojs3/dist/ammo.wasm.wasm?url"',
+  `import('${ammoPackageName}')`,
+  `import("${ammoPackageName}")`,
+  `from '${ammoBootstrapImportPath}'`,
+  `from "${ammoBootstrapImportPath}"`,
+  `from '${ammoWasmImportPath}'`,
+  `from "${ammoWasmImportPath}"`,
   '@harmony/schema',
   '@harmony/physics-ammo',
   '@harmony/physics-cannon',

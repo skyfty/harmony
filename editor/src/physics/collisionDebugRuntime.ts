@@ -52,6 +52,14 @@ function createLineGeometryFromPoints(points: Array<[number, number, number]>): 
   return geometry
 }
 
+function toFloat32Array(values: readonly number[] | Float32Array): Float32Array {
+  return values instanceof Float32Array ? values : Float32Array.from(values)
+}
+
+function toUint32Array(values: readonly number[] | Uint32Array): Uint32Array {
+  return values instanceof Uint32Array ? values : Uint32Array.from(values)
+}
+
 function createWireframeFromGeometry(source: THREE.BufferGeometry): THREE.BufferGeometry {
   const wireframe = new THREE.WireframeGeometry(source)
   source.dispose()
@@ -94,7 +102,7 @@ function createConvexWireframe(shape: Extract<PhysicsShapeDesc, { kind: 'convex-
     return null
   }
   const geometry = new THREE.BufferGeometry()
-  geometry.setAttribute('position', new THREE.BufferAttribute(shape.vertices.slice(), 3))
+  geometry.setAttribute('position', new THREE.BufferAttribute(toFloat32Array(shape.vertices), 3))
   if (Array.isArray(shape.faces) && shape.faces.length) {
     const indices: number[] = []
     shape.faces.forEach((face) => {
@@ -107,7 +115,7 @@ function createConvexWireframe(shape: Extract<PhysicsShapeDesc, { kind: 'convex-
       }
     })
     if (indices.length) {
-      geometry.setIndex(indices)
+      geometry.setIndex(toUint32Array(indices))
       return createWireframeFromGeometry(geometry)
     }
   }
@@ -136,9 +144,9 @@ function createStaticMeshWireframe(shape: Extract<PhysicsShapeDesc, { kind: 'sta
     return null
   }
   const geometry = new THREE.BufferGeometry()
-  geometry.setAttribute('position', new THREE.BufferAttribute(shape.vertices.slice(), 3))
+  geometry.setAttribute('position', new THREE.BufferAttribute(toFloat32Array(shape.vertices), 3))
   if (shape.indices.length) {
-    geometry.setIndex(Array.from(shape.indices))
+    geometry.setIndex(toUint32Array(shape.indices))
   }
   return createWireframeFromGeometry(geometry)
 }

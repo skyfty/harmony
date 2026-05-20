@@ -37,7 +37,7 @@ importers:
         version: file:../physics-core
       '@harmony/scenery':
         specifier: file:../scenery
-        version: file:../scenery(ammo.js@0.0.10)(three@0.172.0)(typescript@5.6.3)
+        version: file:../scenery(ammo.js@0.0.10)(three@0.172.0)
       '@harmony/schema':
         specifier: file:../schema
         version: file:../schema
@@ -56,9 +56,6 @@ importers:
       '@vue/shared':
         specifier: ^3.4.21
         version: 3.4.21
-      ammojs3:
-        specifier: ^0.0.11
-        version: 0.0.11
       cannon-es:
         specifier: ^0.20.0
         version: 0.20.0
@@ -2150,9 +2147,6 @@ packages:
 
   ammo.js@0.0.10:
     resolution: {integrity: sha512-jOv977u71jrDUzHfmQ99YaW90/y8YLn/3HFTmtLLzf5wJynAfG+/a1Ie5gbn0fE0uSAHxXVsFk4Bzq8qRPWqAA==}
-
-  ammojs3@0.0.11:
-    resolution: {integrity: sha512-pfnMm0XvTLjzCt+ytdpV3aIgooxQzexjkC2DbTyiGsAk8ECEBPxJ8gOQ/m0CE+d9pf9ToPMK8PZJR7jP1h6lOA==}
 
   ansi-escapes@4.3.2:
     resolution: {integrity: sha512-gKXj5ALrKWQLsYG9jlTRmR/xKluxHV+Z9QEwNIgCfM1/uwPMCuzVVnh5mwTd+OuBZcwSIMbqssNWRm1lE51QaQ==}
@@ -5863,7 +5857,6 @@ snapshots:
     dependencies:
       '@harmony/physics-bridge': file:../physics-bridge
       '@harmony/physics-core': file:../physics-core
-      ammojs3: 0.0.11
 
   '@harmony/physics-bridge@file:../physics-bridge':
     dependencies:
@@ -5881,19 +5874,17 @@ snapshots:
 
   '@harmony/physics-core@file:../physics-core': {}
 
-  '@harmony/scenery@file:../scenery(ammo.js@0.0.10)(three@0.172.0)(typescript@5.6.3)':
+  '@harmony/scenery@file:../scenery(ammo.js@0.0.10)(three@0.172.0)':
     dependencies:
       '@harmony/schema': file:../schema
       '@harmony/utils': file:../utils
       '@minisheep/mini-program-polyfill-core': 1.1.5
-      '@vladkrutenyuk/cannon-es-debugger-pro': 0.2.4(cannon-es@0.20.0)(three@0.172.0)(typescript@5.6.3)
       ammo-debug-drawer: 1.0.1(ammo.js@0.0.10)
       cannon-es: 0.20.0
       three-mesh-bvh: 0.9.8(three@0.172.0)
     transitivePeerDependencies:
       - ammo.js
       - three
-      - typescript
 
   '@harmony/schema@file:../schema':
     dependencies:
@@ -7066,8 +7057,6 @@ snapshots:
       ammo.js: 0.0.10
 
   ammo.js@0.0.10: {}
-
-  ammojs3@0.0.11: {}
 
   ansi-escapes@4.3.2:
     dependencies:

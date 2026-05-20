@@ -28,7 +28,6 @@
     "@harmony/schema": "file:../schema",
     "@harmony/scenery": "file:../scenery",
     "@harmony/utils": "file:../utils",
-    "ammojs3": "^0.0.11",
     "cannon-es": "^0.20.0",
     "fflate": "^0.8.2",
     "pinia": "^2.2.6",

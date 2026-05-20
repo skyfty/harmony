@@ -25,7 +25,6 @@ const sceneOptimizerExcludes = [
   'robust-predicates',
   'splaytree',
   'fflate',
-  'ammojs3',
   'cannon-es',
   '@vladkrutenyuk/cannon-es-debugger-pro',
   '@minisheep/three-platform-adapter',
@@ -43,9 +42,6 @@ const sceneryPhysicsBridgeSourcePath = fileURLToPath(new URL('../physics-bridge/
 const utilsSrcPath = fileURLToPath(new URL('../utils/src', import.meta.url)).replaceAll('\\', '/');
 const eventTargetShimPath = fileURLToPath(new URL('./node_modules/event-target-shim/index.mjs', import.meta.url)).replaceAll('\\', '/');
 const webStreamsPolyfillPath = fileURLToPath(new URL('./node_modules/web-streams-polyfill/dist/polyfill.mjs', import.meta.url)).replaceAll('\\', '/');
-const ammoJsEntryPath = fileURLToPath(new URL('./src/pages/physics-ammo/ammojs3/dist/ammo.js', import.meta.url)).replaceAll('\\', '/');
-const ammoJsWasmEntryPath = fileURLToPath(new URL('./src/pages/physics-ammo/vendor/ammo.wasm.js', import.meta.url)).replaceAll('\\', '/');
-const ammoJsWasmBinaryPath = fileURLToPath(new URL('./src/pages/physics-ammo/vendor/ammo.wasm.wasm', import.meta.url)).replaceAll('\\', '/');
 const schemaMirrorPath = fileURLToPath(new URL('./src/pages/scenery/schema', import.meta.url)).replaceAll('\\', '/');
 const physicsCoreMirrorPath = fileURLToPath(new URL('./src/pages/scenery/physics-core', import.meta.url)).replaceAll('\\', '/');
 const sceneryPhysicsBridgeMirrorPath = fileURLToPath(new URL('./src/pages/scenery/physics-bridge', import.meta.url)).replaceAll('\\', '/');
@@ -98,13 +94,11 @@ function resolveManualChunk(id: string): string | undefined {
       || normalizedId.includes('three-csm')
       || normalizedId.includes('fflate')
       || normalizedId.includes('@minisheep/three-platform-adapter')
-      || normalizedId.includes('ammojs3')
+      || normalizedId.includes('physics-ammo/vendor')
       || normalizedId.includes('cannon-es')
       || (enableSceneryCannonDebugger && normalizedId.includes('@vladkrutenyuk/cannon-es-debugger-pro'))
     ) {
-      if (
-        normalizedId.includes('ammojs3')
-      ) {
+      if (normalizedId.includes('physics-ammo/vendor')) {
         return 'pages/physics-ammo/common/vendor';
       }
       if (normalizedId.includes('cannon-es')) {
@@ -184,8 +178,7 @@ function resolveManualChunk(id: string): string | undefined {
   if (
     normalizedId.includes('/physics-ammo/src/')
     || normalizedId.includes('/src/pages/physics-ammo/engine/')
-    || normalizedId.includes('/src/pages/physics-ammo/ammojs3/')
-    || normalizedId.includes('/node_modules/ammojs3/')
+    || normalizedId.includes('/src/pages/physics-ammo/vendor/')
   ) {
     return 'pages/physics-ammo/common/vendor';
   }
@@ -281,13 +274,6 @@ export default {
       { find: '@harmony/utils/scene-package-fs', replacement: `${utilsSrcPath}/scenePackageFs.ts` },
       { find: '@harmony/utils/query', replacement: `${utilsSrcPath}/query.ts` },
       { find: /^@harmony\/utils\/(.*)$/, replacement: `${utilsSrcPath}/$1` },
-      ...(isMp
-        ? [
-            { find: /^ammojs3\/dist\/ammo\.wasm\.js$/, replacement: ammoJsWasmEntryPath },
-            { find: /^ammojs3\/dist\/ammo\.wasm\.wasm\?url$/, replacement: `${ammoJsWasmBinaryPath}?url` },
-          ]
-        : []),
-      { find: /^ammojs3$/, replacement: ammoJsEntryPath },
       { find: '@harmony/physics-ammo', replacement: fileURLToPath(new URL('./src/pages/physics-ammo/runtime.ts', import.meta.url)) },
       { find: '@harmony/physics-ammo-source', replacement: fileURLToPath(new URL('./src/pages/physics-ammo/engine', import.meta.url)) },
       { find: /^@harmony\/physics-cannon\/(.*)$/, replacement: fileURLToPath(new URL('./src/pages/physics-cannon/$1', import.meta.url)) },
@@ -344,9 +330,10 @@ export default {
           '**/@minisheep/three-platform-adapter/**',
           '**/@vladkrutenyuk/cannon-es-debugger-pro/**',
         ],
-        'pages/physics-ammo/common/vendor': [
-          '**/ammojs3/**',
-        ],
+      'pages/physics-ammo/common/vendor': [
+          '**/pages/physics-ammo/vendor/**',
+          '**/src/pages/physics-ammo/vendor/**',
+      ],
         'common/vendor': [
           '**/cannon-es/**',
           '**/@vladkrutenyuk/cannon-es-debugger-pro/**',

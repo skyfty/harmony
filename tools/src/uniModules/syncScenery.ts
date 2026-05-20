@@ -166,7 +166,6 @@ export function syncSceneryDependencyMirrors(options: SyncSceneryDependencyMirro
     "jsm",
   );
   const cannonRoot = path.resolve(options.viewerRoot, "node_modules", "cannon-es");
-  const ammoRoot = path.resolve(options.viewerRoot, "node_modules", "ammojs3");
   const physicsCoreMirrorDir = path.resolve(options.viewerRoot, "src/pages/scenery/physics-core");
   const utilsMirrorDir = path.resolve(options.viewerRoot, "src/pages/scenery/utils");
   const physicsBridgeMirrorDir = path.resolve(options.viewerRoot, "src/pages/scenery/physics-bridge");
@@ -174,7 +173,6 @@ export function syncSceneryDependencyMirrors(options: SyncSceneryDependencyMirro
   const meshBvhMirrorDir = path.resolve(options.viewerRoot, "src/pages/scenery/three-mesh-bvh");
   const threeAdapterOverrideMirrorDir = path.resolve(options.viewerRoot, "src/pages/scenery/three-platform-adapter/override/jsm");
   const cannonMirrorDir = path.resolve(options.viewerRoot, "src/pages/physics-cannon/cannon-es");
-  const ammoMirrorDir = path.resolve(options.viewerRoot, "src/pages/physics-ammo/ammojs3");
 
   if (!fs.existsSync(physicsCoreRoot)) {
     throw new Error(`physics-core root not found: ${physicsCoreRoot}`);
@@ -204,10 +202,6 @@ export function syncSceneryDependencyMirrors(options: SyncSceneryDependencyMirro
     throw new Error(`cannon-es root not found: ${cannonRoot}`);
   }
 
-  if (!fs.existsSync(ammoRoot)) {
-    throw new Error(`ammojs3 root not found: ${ammoRoot}`);
-  }
-
   replaceDirectoryLink(physicsCoreRoot, physicsCoreMirrorDir);
   replaceDirectoryLink(utilsRoot, utilsMirrorDir);
   replaceDirectoryLink(physicsBridgeRoot, physicsBridgeMirrorDir);
@@ -215,10 +209,9 @@ export function syncSceneryDependencyMirrors(options: SyncSceneryDependencyMirro
   replaceDirectoryLink(meshBvhRoot, meshBvhMirrorDir);
   replaceDirectoryLink(threeAdapterOverrideRoot, threeAdapterOverrideMirrorDir);
   replaceDirectoryLink(cannonRoot, cannonMirrorDir);
-  replaceDirectoryLink(ammoRoot, ammoMirrorDir);
 
   console.log(
-    `[harmony-tools] synced scenery dependency mirrors -> ${physicsCoreMirrorDir}, ${utilsMirrorDir}, ${physicsBridgeMirrorDir}, ${threeMirrorDir}, ${meshBvhMirrorDir}, ${threeAdapterOverrideMirrorDir}, ${cannonMirrorDir}, ${ammoMirrorDir}`,
+    `[harmony-tools] synced scenery dependency mirrors -> ${physicsCoreMirrorDir}, ${utilsMirrorDir}, ${physicsBridgeMirrorDir}, ${threeMirrorDir}, ${meshBvhMirrorDir}, ${threeAdapterOverrideMirrorDir}, ${cannonMirrorDir}`,
   );
 }
 
