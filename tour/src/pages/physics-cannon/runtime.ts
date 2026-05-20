@@ -2,7 +2,6 @@ import type { PhysicsBackendBridge } from '@harmony/physics-bridge';
 import type { PhysicsWorkerController } from '@harmony/physics-bridge/runtime';
 import type { createCannonPhysicsController as CreateCannonPhysicsController } from './engine/controller';
 import type { createCannonSchemaPhysicsBackendBridge as CreateCannonSchemaPhysicsBackendBridge } from './engine/schemaBridge';
-export { loadCannonDebuggerPro, type CannonDebuggerConstructor } from './debuggerPro';
 
 export type LoadedCannonPhysicsBackend = {
   schemaBridge: PhysicsBackendBridge;

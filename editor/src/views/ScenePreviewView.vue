@@ -6,9 +6,6 @@ import { MapControls } from 'three/examples/jsm/controls/MapControls.js'
 import type { KTX2Loader } from 'three/examples/jsm/loaders/KTX2Loader.js'
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js'
 import Stats from 'three/examples/jsm/libs/stats.module.js'
-import { CannonEsDebuggerPro } from '@vladkrutenyuk/cannon-es-debugger-pro'
-import type * as CANNON from 'cannon-es'
-import { ScenePreviewPhysicsCollisionDebugRuntime } from '@/physics/collisionDebugRuntime'
 import {
 	DEFAULT_ENVIRONMENT_SETTINGS,
 	DEFAULT_ENVIRONMENT_GRAVITY,
@@ -2338,7 +2335,6 @@ const physicsBridgeHeightfieldAdjustmentInverse = physicsBridgeHeightfieldAdjust
 const physicsBridgeBodySyncPositionHelper = new THREE.Vector3()
 const physicsBridgeBodySyncQuaternionHelper = new THREE.Quaternion()
 const physicsEnvironmentEnabled = ref(true)
-const physicsCollisionDebugRuntime = new ScenePreviewPhysicsCollisionDebugRuntime()
 const rigidbodyInstances = new Map<string, RigidbodyInstance>()
 type AirWallDebugEntry = {
 	key: string
@@ -2360,9 +2356,6 @@ type RigidbodyDebugHelper = {
 }
 const rigidbodyDebugHelpers = new Map<string, RigidbodyDebugHelper>()
 let rigidbodyDebugGroup: THREE.Group | null = null
-let cannonPhysicsDebuggerRoot: THREE.Group | null = null
-let cannonPhysicsDebugger: CannonEsDebuggerPro | null = null
-let cannonPhysicsWorld: CANNON.World | null = null
 let airWallDebugGroup: THREE.Group | null = null
 const rigidbodyDebugMaterial = new THREE.LineBasicMaterial({
 	color: 0xffc107,
@@ -4854,17 +4847,6 @@ watch(volumePercent, (value) => {
 	}
 	listener.setMasterVolume(Math.max(0, Math.min(1, value / 100)))
 })
-
-watch([physicsEnvironmentEnabled, currentPhysicsBridgePreference, isPhysicsCollisionDebugVisible], () => {
-	physicsCollisionDebugRuntime.setEngine(
-		physicsEnvironmentEnabled.value
-			? (currentPhysicsBridgePreference.value === 'ammo' || currentPhysicsBridgePreference.value === 'cannon'
-				? currentPhysicsBridgePreference.value
-				: null)
-			: null,
-	)
-	physicsCollisionDebugRuntime.setVisible(physicsEnvironmentEnabled.value && isPhysicsCollisionDebugVisible.value)
-}, { immediate: true })
 
 watch(isRendererDebugVisible, (visible) => {
 	if (visible) {
@@ -8735,7 +8717,6 @@ function initRenderer() {
 	scene = new THREE.Scene()
 	scene.background = new THREE.Color(DEFAULT_BACKGROUND_COLOR)
 	scene.environmentIntensity = SKY_ENVIRONMENT_INTENSITY
-	physicsCollisionDebugRuntime.attachScene(scene)
 
 	camera = new THREE.PerspectiveCamera(60, 1, 0.1, DEFAULT_SCENE_CAMERA_FAR)
   	camera.position.set(0, CAMERA_HEIGHT, 0)
@@ -9163,7 +9144,6 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
 function updatePerFrameDiagnostics(delta: number): void {
 	updateLazyPlaceholders(delta)
 	void delta
-	physicsCollisionDebugRuntime.update()
 }
 
 function syncRendererDebugForFrame(currentRenderer: THREE.WebGLRenderer, currentScene: THREE.Scene): void {
@@ -9342,7 +9322,6 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	resetBehaviorRuntime()
 	resetBehaviorProximity()
 	resetAnimationControllers()
-	disposeRigidbodyDebugHelpers()
 	hidePurposeControls()
 	activeCameraLookTween = null
 	setCameraCaging(false)
@@ -10219,7 +10198,6 @@ function resolveScenePreviewPhysicsBridgePreference(
 }
 
 function handleScenePreviewCannonWorldReady(world: unknown | null): void {
-	physicsCollisionDebugRuntime.setCannonWorld(world)
 }
 
 function resolveScenePreviewCompiledGroundTileLoader(): ((record: { path: string }) => Promise<ArrayBuffer | null>) | undefined {
@@ -10466,7 +10444,6 @@ async function loadScenePreviewPhysicsBridgeScene(
 	onProgress?: SceneSubsystemProgressReporter,
 ): Promise<void> {
 	if (!document) {
-		physicsCollisionDebugRuntime.setSceneAsset(null)
 		await disposeScenePreviewPhysicsBridgeScene()
 		return
 	}
@@ -10493,7 +10470,6 @@ async function loadScenePreviewPhysicsBridgeScene(
 			})
 		},
 	})
-	physicsCollisionDebugRuntime.setSceneAsset(asset)
 	try {
 		previewGroundCollisionRuntimeBodyIds.clear()
 		const activePhysicsBridge = physicsBridge
@@ -10594,7 +10570,6 @@ function consumeScenePreviewPhysicsBridgeStepFrame(frame: PhysicsStepFrame): voi
 		physicsBridgeFrameBodiesByNodeId.set(nodeId, createdState)
 		syncScenePreviewBridgeVehicleFromFrame(nodeId, createdState)
 	}
-	physicsCollisionDebugRuntime.applyStepFrame(frame)
 	applyScenePreviewPhysicsBridgeFrameToObjects()
 }
 
@@ -10931,7 +10906,6 @@ async function disposeScenePreviewPhysicsBridgeScene(): Promise<void> {
 		physicsBridgeBodySyncPromise = null
 		resetPhysicsBridgeVehicleInputSyncState(physicsBridgeVehicleInputSyncState)
 		physicsBridgeFrameBodiesByNodeId.clear()
-		physicsCollisionDebugRuntime.resetBackend()
 	}
 }
 
@@ -10957,7 +10931,6 @@ async function destroyScenePreviewPhysicsBridge(): Promise<void> {
 		physicsBridgeFrameBodiesByNodeId.clear()
 		resetPhysicsBridgeVehicleInputSyncState(physicsBridgeVehicleInputSyncState)
 		physicsBridgeSceneLoaded = false
-		physicsCollisionDebugRuntime.resetBackend()
 	}
 }
 
@@ -10967,7 +10940,6 @@ function clearLegacyPhysicsWorld(): void {
 	}
 	vehicleInstances.clear()
 	rigidbodyInstances.clear()
-	physicsCollisionDebugRuntime.resetBackend()
 	scenePreviewPerf.reset()
 }
 
@@ -11054,89 +11026,6 @@ function ensureRigidbodyDebugGroup(): THREE.Group | null {
 		scene.add(rigidbodyDebugGroup)
 	}
 	return rigidbodyDebugGroup
-}
-
-function ensureCannonPhysicsDebuggerRoot(): THREE.Group | null {
-	if (!scene) {
-		return null
-	}
-	if (!cannonPhysicsDebuggerRoot) {
-		cannonPhysicsDebuggerRoot = new THREE.Group()
-		cannonPhysicsDebuggerRoot.name = 'CannonPhysicsDebugHelpers'
-	}
-	if (cannonPhysicsDebuggerRoot.parent !== scene) {
-		scene.add(cannonPhysicsDebuggerRoot)
-	}
-	return cannonPhysicsDebuggerRoot
-}
-
-function disposeCannonPhysicsDebugger(): void {
-	if (cannonPhysicsDebugger) {
-		try {
-			cannonPhysicsDebugger.destroy()
-		} catch (error) {
-			console.warn('[ScenePreview] Failed to destroy cannon physics debugger', error)
-		}
-		cannonPhysicsDebugger = null
-	}
-	if (cannonPhysicsDebuggerRoot) {
-		cannonPhysicsDebuggerRoot.parent?.remove(cannonPhysicsDebuggerRoot)
-		cannonPhysicsDebuggerRoot.clear()
-		cannonPhysicsDebuggerRoot = null
-	}
-}
-
-function syncScenePreviewCannonPhysicsDebugger(): void {
-	if (
-		!physicsEnvironmentEnabled.value
-		|| currentPhysicsBridgePreference.value !== 'cannon'
-		|| !isCannonPhysicsDebuggerVisible.value
-		|| !cannonPhysicsWorld
-	) {
-		disposeCannonPhysicsDebugger()
-		return
-	}
-	const root = ensureCannonPhysicsDebuggerRoot()
-	if (!root) {
-		return
-	}
-	if (!cannonPhysicsDebugger) {
-		cannonPhysicsDebugger = new CannonEsDebuggerPro(root, cannonPhysicsWorld, 0xffc107, 0.005)
-	}
-	cannonPhysicsDebugger.setVisible(true)
-	cannonPhysicsDebugger.update()
-}
-
-function updateScenePreviewCannonPhysicsDebugger(): void {
-	if (
-		!physicsEnvironmentEnabled.value
-		|| currentPhysicsBridgePreference.value !== 'cannon'
-		|| !isCannonPhysicsDebuggerVisible.value
-	) {
-		return
-	}
-	if (!cannonPhysicsDebugger) {
-		syncScenePreviewCannonPhysicsDebugger()
-	}
-	if (!cannonPhysicsDebugger) {
-		return
-	}
-	cannonPhysicsDebugger.update()
-}
-
-function ensureAirWallDebugGroup(): THREE.Group | null {
-	if (!scene) {
-		return null
-	}
-	if (!airWallDebugGroup) {
-		airWallDebugGroup = new THREE.Group()
-		airWallDebugGroup.name = 'AirWallDebug'
-	}
-	if (airWallDebugGroup.parent !== scene) {
-		scene.add(airWallDebugGroup)
-	}
-	airWallDebugGroup.visible = isGroundWireframeVisible.value
-	return airWallDebugGroup
 }
 
 function clearAirWallDebugMeshes(): void {
@@ -11566,19 +11455,6 @@ function resolveRigidbodyDebugVisibilityObject(nodeId: string, fallback: THREE.O
 		return waterObject
 	}
 	return fallback ?? null
-}
-
-function clearRigidbodyDebugHelpers(): void {
-	rigidbodyDebugHelpers.forEach((_helper, nodeId) => removeRigidbodyDebugHelper(nodeId))
-}
-
-function disposeRigidbodyDebugHelpers(): void {
-	clearRigidbodyDebugHelpers()
-	if (rigidbodyDebugGroup) {
-		rigidbodyDebugGroup.parent?.remove(rigidbodyDebugGroup)
-		rigidbodyDebugGroup.clear()
-		rigidbodyDebugGroup = null
-	}
 }
 
 function ensureRigidbodyDebugHelperForShape(
@@ -12150,13 +12026,11 @@ async function syncPhysicsBodiesForDocument(
 	if (!document) {
 		resetPhysicsWorld()
 		syncVehicleBindingsForDocument(null)
-		physicsCollisionDebugRuntime.setSceneAsset(null)
 		return
 	}
 	await loadScenePreviewPhysicsBridgeScene(document, onProgress)
 	clearLegacyPhysicsWorld()
 	syncVehicleBindingsForDocument(document)
-	physicsCollisionDebugRuntime.setSceneAsset(
 		await buildPhysicsSceneAsset(document, {
 			onProgress: (progress) => {
 				onProgress?.({
@@ -13175,7 +13049,6 @@ onBeforeUnmount(() => {
 	window.removeEventListener('keydown', handleKeyDown)
 	window.removeEventListener('keyup', handleKeyUp)
 	window.removeEventListener('resize', handleLanternViewportResize)
-	physicsCollisionDebugRuntime.destroy()
 	void destroyScenePreviewPhysicsBridge()
 	disposeScene()
 	disposeEnvironmentResources()

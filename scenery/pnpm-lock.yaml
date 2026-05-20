@@ -17,12 +17,6 @@ importers:
       '@minisheep/mini-program-polyfill-core':
         specifier: ^1.1.4
         version: 1.1.5
-      ammo-debug-drawer:
-        specifier: ^1.0.1
-        version: 1.0.1(ammo.js@0.0.10)
-      cannon-es:
-        specifier: ^0.20.0
-        version: 0.20.0
       three-mesh-bvh:
         specifier: ^0.9.1
         version: 0.9.8(three@0.172.0)
@@ -339,14 +333,6 @@ packages:
   alien-signals@0.2.2:
     resolution: {integrity: sha512-cZIRkbERILsBOXTQmMrxc9hgpxglstn69zm+F1ARf4aPAzdAFYd6sBq87ErO0Fj3DV94tglcyHG5kQz9nDC/8A==}
 
-  ammo-debug-drawer@1.0.1:
-    resolution: {integrity: sha512-oPvQh5CQKgFQpIuBMMKxT019aYoONOEnBLn91dAg3CrMWdSP/Om8rLWRX0VkAk45SEK/B0ybXB7nsjXsz8QEBw==}
-    peerDependencies:
-      ammo.js: '*'
-
-  ammo.js@0.0.10:
-    resolution: {integrity: sha512-jOv977u71jrDUzHfmQ99YaW90/y8YLn/3HFTmtLLzf5wJynAfG+/a1Ie5gbn0fE0uSAHxXVsFk4Bzq8qRPWqAA==}
-
   ansi-regex@5.0.1:
     resolution: {integrity: sha512-quJQXlTSUGL2LH9SUXo8VwsY4soanhgo6LNSm84E1LBcE8s3O0wpdiRzyR9z/ZZJMlMWv37qOOb9pdJlMUEKFQ==}
     engines: {node: '>=8'}
@@ -381,9 +367,6 @@ packages:
   callsites@3.1.0:
     resolution: {integrity: sha512-P8BjAsXvZS+VIDUI11hHCQEv74YT67YUi5JJFNWIqL235sBmjX4+qx9Muvls5ivyNENctx46xQLQ3aTuE7ssaQ==}
     engines: {node: '>=6'}
-
-  cannon-es@0.20.0:
-    resolution: {integrity: sha512-eZhWTZIkFOnMAJOgfXJa9+b3kVlvG+FX4mdkpePev/w/rP5V8NRquGyEozcjPfEoXUlb+p7d9SUcmDSn14prOA==}
 
   chalk@4.1.2:
     resolution: {integrity: sha512-oKnbhFyRIXpUuez8iBMmyEa4nbj4IOQyuhc/wy9kY7/WVPcwIO9VA668Pu8RkO7+0G76SLROeyw9CpQ061i4mA==}
@@ -1212,12 +1195,6 @@ snapshots:
 
   alien-signals@0.2.2: {}
 
-  ammo-debug-drawer@1.0.1(ammo.js@0.0.10):
-    dependencies:
-      ammo.js: 0.0.10
-
-  ammo.js@0.0.10: {}
-
   ansi-regex@5.0.1: {}
 
   ansi-styles@4.3.0:
@@ -1246,8 +1223,6 @@ snapshots:
       fill-range: 7.1.1
 
   callsites@3.1.0: {}
-
-  cannon-es@0.20.0: {}
 
   chalk@4.1.2:
     dependencies:

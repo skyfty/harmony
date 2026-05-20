@@ -37,7 +37,7 @@ importers:
         version: file:../physics-core
       '@harmony/scenery':
         specifier: file:../scenery
-        version: file:../scenery(ammo.js@0.0.10)(three@0.172.0)
+        version: file:../scenery(three@0.172.0)
       '@harmony/schema':
         specifier: file:../schema
         version: file:../schema
@@ -50,15 +50,9 @@ importers:
       '@msgpack/msgpack':
         specifier: ^3.1.3
         version: 3.1.3
-      '@vladkrutenyuk/cannon-es-debugger-pro':
-        specifier: ^0.2.4
-        version: 0.2.4(cannon-es@0.20.0)(three@0.172.0)(typescript@5.6.3)
       '@vue/shared':
         specifier: ^3.4.21
         version: 3.5.28
-      cannon-es:
-        specifier: ^0.20.0
-        version: 0.20.0
       event-target-shim:
         specifier: ^6.0.2
         version: 6.0.2
@@ -2150,14 +2144,6 @@ packages:
 
   alien-signals@1.0.13:
     resolution: {integrity: sha512-OGj9yyTnJEttvzhTUWuscOvtqxq5vrhF7vL9oS0xJ2mK0ItPYP1/y+vCFebfxoEyAz0++1AIwJ5CMr+Fk3nDmg==}
-
-  ammo-debug-drawer@1.0.1:
-    resolution: {integrity: sha512-oPvQh5CQKgFQpIuBMMKxT019aYoONOEnBLn91dAg3CrMWdSP/Om8rLWRX0VkAk45SEK/B0ybXB7nsjXsz8QEBw==}
-    peerDependencies:
-      ammo.js: '*'
-
-  ammo.js@0.0.10:
-    resolution: {integrity: sha512-jOv977u71jrDUzHfmQ99YaW90/y8YLn/3HFTmtLLzf5wJynAfG+/a1Ie5gbn0fE0uSAHxXVsFk4Bzq8qRPWqAA==}
 
   ansi-escapes@4.3.2:
     resolution: {integrity: sha512-gKXj5ALrKWQLsYG9jlTRmR/xKluxHV+Z9QEwNIgCfM1/uwPMCuzVVnh5mwTd+OuBZcwSIMbqssNWRm1lE51QaQ==}
@@ -5905,16 +5891,13 @@ snapshots:
 
   '@harmony/physics-core@file:../physics-core': {}
 
-  '@harmony/scenery@file:../scenery(ammo.js@0.0.10)(three@0.172.0)':
+  '@harmony/scenery@file:../scenery(three@0.172.0)':
     dependencies:
       '@harmony/schema': file:../schema
       '@harmony/utils': file:../utils
       '@minisheep/mini-program-polyfill-core': 1.1.5
-      ammo-debug-drawer: 1.0.1(ammo.js@0.0.10)
-      cannon-es: 0.20.0
       three-mesh-bvh: 0.9.8(three@0.172.0)
     transitivePeerDependencies:
-      - ammo.js
       - three
 
   '@harmony/schema@file:../schema':
@@ -7089,12 +7072,6 @@ snapshots:
       uri-js: 4.4.1
 
   alien-signals@1.0.13: {}
-
-  ammo-debug-drawer@1.0.1(ammo.js@0.0.10):
-    dependencies:
-      ammo.js: 0.0.10
-
-  ammo.js@0.0.10: {}
 
   ansi-escapes@4.3.2:
     dependencies:
