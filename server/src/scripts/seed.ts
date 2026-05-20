@@ -37,6 +37,7 @@ async function main(): Promise<void> {
 
   // 调用景点分类预制脚本
   await seedSpotCategories()
+  console.log('[seed] 景点分类数据已初始化')
 
   console.log('[seed] 小程序演示数据（成就/地址/反馈）已初始化')
 }
