@@ -1,4 +1,4 @@
-# Harmony 生产部署指南（2026 新逻辑）
+﻿# Harmony 生产部署指南（2026 新逻辑）
 
 # Harmony — 生产部署速查
 
@@ -26,6 +26,7 @@ docker compose -f docker-compose.prod.yml config
 docker compose -f docker-compose.prod.yml build
 docker compose -f docker-compose.prod.yml up -d
 docker compose -f docker-compose.prod.yml --profile ops run --rm server-seed
+docker compose -f docker-compose.prod.yml --profile ops run --rm mongo-fix-auth
 docker compose -f docker-compose.prod.yml ps
 
 
@@ -251,3 +252,11 @@ docker compose -f docker-compose.prod.yml ps
 ```
 
 如需自动化，可在 CI/CD 中串联以上步骤并增加失败回滚钩子。
+## Mongo 认证修复
+
+当 `server-seed` 因 Mongo 认证失败而中断时，可以先运行：
+
+```bash
+docker compose -f docker-compose.prod.yml --profile ops run --rm mongo-fix-auth
+docker compose -f docker-compose.prod.yml --profile ops run --rm server-seed
+```

@@ -42,19 +42,19 @@ async function main(): Promise<void> {
     const appDb = client.db(appDbName)
     const role = { role: 'readWrite', db: appDbName }
 
-    try {
+    const usersInfo = await appDb.command({
+      usersInfo: { user: appUsername, db: appDbName },
+    })
+    const userExists = Array.isArray(usersInfo.users) && usersInfo.users.length > 0
+
+    if (userExists) {
       await appDb.command({
         updateUser: appUsername,
         pwd: appPassword,
         roles: [role],
       })
       console.log(`[mongo-fix-auth] updated app user "${appUsername}" on database "${appDbName}"`)
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      if (!message.toLowerCase().includes('not found') && !message.toLowerCase().includes('could not find user')) {
-        throw error
-      }
-
+    } else {
       await appDb.command({
         createUser: appUsername,
         pwd: appPassword,

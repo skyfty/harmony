@@ -78,6 +78,7 @@ services:
       <<: *root-build
       dockerfile: server/Dockerfile
     image: harmony-server
+    entrypoint: ["node"]
     env_file:
       - ./server/.env.production
     environment:
@@ -91,7 +92,7 @@ services:
     depends_on:
       mongo:
         condition: service_healthy
-    command: ["node", "dist/scripts/fix-mongo-auth.js"]
+    command: ["dist/scripts/fix-mongo-auth.js"]
     profiles:
       - ops
     networks:
