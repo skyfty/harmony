@@ -368,7 +368,6 @@ import { useDebugOverlay } from '../composables/useDebugOverlay';
 import { useBehaviorAlert } from '../composables/useBehaviorAlert';
 import { useBehaviorBubble } from '../composables/useBehaviorBubble';
 import { useLanternAssets } from '../composables/useLanternAssets';
-import { createSceneryPhysicsBridge } from '../common/physics/createSceneryPhysicsBridge';
 import {
   loadScenePackageZip,
   removeScenePackageZip,
@@ -382,6 +381,7 @@ type SceneryProps = {
   packageUrl?: string;
   packageCacheKey?: string;
   physicsEngine?: PhysicsBackendPreference;
+  createPhysicsBridge?: (engine?: PhysicsBackendPreference) => Promise<PhysicsBridge> | PhysicsBridge;
   defaultSteerIdentifier?: string;
   nominateStateMap?: NominateExternalStateMap;
   physicsInterpolation?: boolean;
@@ -6412,12 +6412,10 @@ async function ensureSceneryPhysicsBridgeReady(): Promise<PhysicsBridge> {
     return physicsBridgeInitPromise;
   }
   if (!physicsBridge) {
-    physicsBridge = createSceneryPhysicsBridge({
-      engine: currentPhysicsBridgePreference
-    });
-  }
-  if (physicsBridge === null) {
-    throw new Error('No compatible physics engine available for scenery physics bridge');
+    if (!props.createPhysicsBridge) {
+      throw new Error('No physics bridge factory available for scenery viewer');
+    }
+    physicsBridge = await props.createPhysicsBridge(currentPhysicsBridgePreference);
   }
   physicsBridgeInitPromise = physicsBridge.init({
     world: {

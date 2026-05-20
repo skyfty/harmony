@@ -24,6 +24,7 @@
       :package-url="packageUrl"
       :package-cache-key="packageCacheKey"
       :nominate-state-map="nominateStateMap"
+      :create-physics-bridge="createSceneryPhysicsBridge"
       :default-steer-identifier="selectedVehicleIdentifier"
       :runtime-prefab-spawns="runtimePrefabSpawns"
       :server-asset-base-url="serverAssetBaseUrl"
@@ -40,6 +41,7 @@
 import { computed, ref } from 'vue';
 import { onLoad, onShow, onUnload } from '@dcloudio/uni-app';
 import SceneryViewer from './uni_modules/scenery/components/SceneryViewer.vue';
+import { createSceneryPhysicsBridge } from './createSceneryPhysicsBridge';
 import { getDownloadCdnBaseUrl } from '@harmony/utils/http';
 import {
   completeTravelLeaveRecord,

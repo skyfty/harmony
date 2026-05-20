@@ -51,6 +51,7 @@
     "event-target-shim": "^6.0.2",
     "pinia": "^2.2.6",
     "fflate": "^0.8.2",
+    "cannon-es": "^0.20.0",
     "polygon-clipping": "^0.15.7",
     "robust-predicates": "^1.1.0",
     "splaytree": "^3.2.3",

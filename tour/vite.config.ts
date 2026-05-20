@@ -102,7 +102,7 @@ function resolveManualChunk(id: string): string | undefined {
         return 'pages/physics-ammo/common/vendor';
       }
       if (normalizedId.includes('cannon-es')) {
-        return 'common/vendor';
+        return 'pages/physics-cannon/common/vendor';
       }
       if (
         normalizedId.includes('three')
@@ -113,9 +113,9 @@ function resolveManualChunk(id: string): string | undefined {
         || (enableSceneryCannonDebugger && normalizedId.includes('@vladkrutenyuk/cannon-es-debugger-pro'))
       ) {
         if (enableSceneryCannonDebugger && normalizedId.includes('@vladkrutenyuk/cannon-es-debugger-pro')) {
-          return 'pages/scenery/chunks/vendor';
+          return 'pages/physics-cannon/common/vendor';
         }
-        return 'pages/scenery/chunks/vendor';
+        return 'pages/physics-cannon/common/vendor';
       }
       return 'pages/scenery/common/vendor';
     }
@@ -191,7 +191,7 @@ function resolveManualChunk(id: string): string | undefined {
     || normalizedId.includes('/src/pages/physics-cannon/cannon-es/')
     || (enableSceneryCannonDebugger && normalizedId.includes('/node_modules/@vladkrutenyuk/cannon-es-debugger-pro/'))
   ) {
-    return 'common/vendor';
+    return 'pages/physics-cannon/common/vendor';
   }
 
   return undefined;
@@ -275,10 +275,9 @@ export default {
       { find: '@harmony/utils/query', replacement: `${utilsSrcPath}/query.ts` },
       { find: /^@harmony\/utils\/(.*)$/, replacement: `${utilsSrcPath}/$1` },
       { find: '@harmony/physics-ammo', replacement: fileURLToPath(new URL('./src/pages/physics-ammo/runtime.ts', import.meta.url)) },
-      { find: '@harmony/physics-ammo-source', replacement: fileURLToPath(new URL('./src/pages/physics-ammo/engine', import.meta.url)) },
       { find: /^@harmony\/physics-cannon\/(.*)$/, replacement: fileURLToPath(new URL('./src/pages/physics-cannon/$1', import.meta.url)) },
       { find: '@harmony/physics-cannon', replacement: fileURLToPath(new URL('./src/pages/physics-cannon/runtime.ts', import.meta.url)) },
-      { find: '@harmony/physics-cannon-source', replacement: fileURLToPath(new URL('./src/pages/physics-cannon/engine', import.meta.url)) },
+      { find: 'cannon-es', replacement: fileURLToPath(new URL('../physics-cannon/node_modules/cannon-es', import.meta.url)) },
       { find: 'event-target-shim', replacement: eventTargetShimPath },
       { find: 'web-streams-polyfill', replacement: webStreamsPolyfillPath },
       { find: 'vue', replacement: vueRuntimeAlias },
@@ -334,9 +333,19 @@ export default {
           '**/pages/physics-ammo/vendor/**',
           '**/src/pages/physics-ammo/vendor/**',
       ],
-        'common/vendor': [
+      'pages/physics-cannon/common/vendor': [
+          '**/pages/physics-cannon/**',
+          '**/src/pages/physics-cannon/**',
           '**/cannon-es/**',
           '**/@vladkrutenyuk/cannon-es-debugger-pro/**',
+        ],
+        'common/vendor': [
+          '**/node_modules/vue/**',
+          '**/node_modules/@vue/**',
+          '**/node_modules/@dcloudio/**',
+          '**/node_modules/@minisheep/mini-program-polyfill-core/**',
+          '**/node_modules/@minisheep/mini-program-polyfill/**',
+          '**/node_modules/event-target-shim/**',
         ],
       },
     }),
