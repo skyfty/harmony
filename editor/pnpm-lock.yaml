@@ -16,7 +16,7 @@ importers:
         version: file:../physics-bridge
       '@harmony/physics-cannon':
         specifier: file:../physics-cannon
-        version: file:../physics-cannon
+        version: file:../physics-cannon(typescript@5.9.3)
       '@harmony/physics-core':
         specifier: file:../physics-core
         version: file:../physics-core
@@ -1272,11 +1272,15 @@ snapshots:
     dependencies:
       '@harmony/physics-core': file:../physics-core
 
-  '@harmony/physics-cannon@file:../physics-cannon':
+  '@harmony/physics-cannon@file:../physics-cannon(typescript@5.9.3)':
     dependencies:
       '@harmony/physics-bridge': file:../physics-bridge
       '@harmony/physics-core': file:../physics-core
+      '@vladkrutenyuk/cannon-es-debugger-pro': 0.2.4(cannon-es@0.20.0)(three@0.172.0)(typescript@5.9.3)
       cannon-es: 0.20.0
+      three: 0.172.0
+    transitivePeerDependencies:
+      - typescript
 
   '@harmony/physics-core@file:../physics-core': {}
 
