@@ -1,23 +1,21 @@
-function normalizeFlagValue(value: unknown): boolean {
-  if (Array.isArray(value)) {
-    return value.some((entry) => normalizeFlagValue(entry))
-  }
-  if (typeof value === 'string') {
-    return value.trim().length > 0
-  }
-  return false
-}
+const LOCAL_EDIT_KEY = 'localedit'
 
-export function hasLocalEditFlag(query: unknown): boolean {
-  if (!query || typeof query !== 'object') {
+export function isLocalEditEnabled(): boolean {
+  try {
+    return window.localStorage.getItem(LOCAL_EDIT_KEY) === '1'
+  } catch (_error) {
     return false
   }
-  return normalizeFlagValue((query as Record<string, unknown>).localedit)
 }
 
-export function withLocalEditQuery<T extends Record<string, unknown>>(query: T): T & { localedit: string } {
-  return {
-    ...query,
-    localedit: '1',
+export function setLocalEditEnabled(enabled: boolean): void {
+  try {
+    if (enabled) {
+      window.localStorage.setItem(LOCAL_EDIT_KEY, '1')
+    } else {
+      window.localStorage.removeItem(LOCAL_EDIT_KEY)
+    }
+  } catch (_error) {
+    /* noop */
   }
 }

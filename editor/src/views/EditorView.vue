@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onBeforeUnmount, provide, reactive, ref, watch, nextTick } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import HierarchyPanel from '@/components/layout/HierarchyPanel.vue'
 import InspectorPanel from '@/components/layout/InspectorPanel.vue'
@@ -21,7 +21,7 @@ import { createProjectWithDefaultScene } from '@/stores/useProjectCreation'
 import SceneExportDialog from '@/components/layout/SceneExportDialog.vue'
 import { PROJECT_MANAGER_OVERLAY_CLOSE_KEY } from '@/injectionKeys'
 import { useAuthStore } from '@/stores/authStore'
-import { hasLocalEditFlag, withLocalEditQuery } from '@/utils/localEdit'
+import { isLocalEditEnabled } from '@/utils/localEdit'
 import type {
   SceneExportEntityProgress,
   SceneExportEventReporter,
@@ -86,7 +86,6 @@ const sceneStore = useSceneStore()
 const scenesStore = useScenesStore()
 const projectsStore = useProjectsStore()
 const authStore = useAuthStore()
-const route = useRoute()
 const router = useRouter()
 const uiStore = useUiStore()
 const {
@@ -324,7 +323,7 @@ watch(isProjectManagerOverlayOpen, (open) => {
 
 async function handleCreateProject(payload: ProjectCreateParams) {
   const { project, scene } = await createProjectWithDefaultScene(payload)
-  await router.push({ path: '/editor', query: withLocalEditQuery({ projectId: project.id, sceneId: scene.id }) })
+  await router.push({ path: '/editor', query: { projectId: project.id, sceneId: scene.id } })
 }
 
 type InspectorPanelPublicInstance = InstanceType<typeof InspectorPanel> & {
@@ -472,10 +471,8 @@ const reopenButtons = computed(() => ({
   showProject: !panelVisibility.value.project,
 }))
 
-const hasLocalEdit = computed(() => hasLocalEditFlag(route.query))
-
 async function ensureLocalEditAccess() {
-  if (hasLocalEdit.value || authStore.isAuthenticated) {
+  if (isLocalEditEnabled() || authStore.isAuthenticated) {
     return true
   }
   await router.replace({ path: '/' })
@@ -487,7 +484,7 @@ onMounted(() => {
 })
 
 watch(
-  () => [route.query.localedit, authStore.isAuthenticated],
+  () => authStore.isAuthenticated,
   () => {
     void ensureLocalEditAccess()
   },
@@ -1945,7 +1942,7 @@ async function handleDeleteScene(sceneId: string) {
     return
   }
   if (!result.hasRemainingScenes) {
-    const query = result.projectId ? { returnTo: '/editor?localedit=1', projectId: result.projectId } : undefined
+    const query = result.projectId ? { returnTo: '/editor', projectId: result.projectId } : undefined
     await router.replace({ path: '/', query })
   }
 }

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, inject, onMounted, ref, watch } from 'vue'
+import { computed, inject, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { useRouter } from 'vue-router'
 import { useProjectsStore } from '@/stores/projectsStore'
@@ -14,7 +14,7 @@ import {type ProjectCreateParams} from '@/types/project-summary'
 import { createProjectWithDefaultScene } from '@/stores/useProjectCreation'
 import type { DuplicateProjectResolution } from '@/utils/projectPackageWorkflow'
 import { runProjectExportWorkflow, runProjectImportWorkflow } from '@/utils/projectPackageWorkflow'
-import { hasLocalEditFlag, withLocalEditQuery } from '@/utils/localEdit'
+import { isLocalEditEnabled } from '@/utils/localEdit'
 
 import { PROJECT_MANAGER_OVERLAY_CLOSE_KEY } from '@/injectionKeys'
 
@@ -41,7 +41,7 @@ const duplicateImportProjectCount = ref(0)
 const duplicateImportResolver = ref<((value: DuplicateProjectResolution) => void) | null>(null)
 
 const isLoggedIn = computed(() => !!authStore.user)
-const canManageProjects = computed(() => hasLocalEdit.value || isLoggedIn.value)
+const canManageProjects = computed(() => isLocalEditEnabled() || isLoggedIn.value)
 const projects = computed(() => projectsStore.sortedMetadata)
 
 const overlayClose = inject(PROJECT_MANAGER_OVERLAY_CLOSE_KEY, null)
@@ -51,8 +51,6 @@ const returnTo = computed(() => {
   const q = route.query?.returnTo
   return typeof q === 'string' && q.length ? q : null
 })
-
-const hasLocalEdit = computed(() => hasLocalEditFlag(route.query))
 
 function handleClose() {
   // Prefer using history.back to avoid a full navigation/refresh.
@@ -82,15 +80,10 @@ async function refreshAll() {
 
 onMounted(() => {
   refreshAll()
+  if (!isLocalEditEnabled() && !isLoggedIn.value) {
+    openLogin()
+  }
 })
-
-watch(
-  () => [hasLocalEdit.value, isLoggedIn.value],
-  () => {
-    loginOpen.value = !hasLocalEdit.value && !isLoggedIn.value
-  },
-  { immediate: true },
-)
 
 function openLogin() {
   loginOpen.value = true
@@ -102,7 +95,7 @@ async function handleCreateProject(payload: ProjectCreateParams) {
     return
   }
   const { project, scene } = await createProjectWithDefaultScene(payload)
-  await router.push({ path: '/editor', query: withLocalEditQuery({ projectId: project.id, sceneId: scene.id }) })
+  await router.push({ path: '/editor', query: { projectId: project.id, sceneId: scene.id } })
   overlayClose?.()
 }
 
@@ -119,7 +112,7 @@ async function handleOpenProject(payload: { projectId: string; sceneId?: string 
   if (typeof payload.sceneId === 'string' && payload.sceneId.trim()) {
     query.sceneId = payload.sceneId.trim()
   }
-  await router.push({ path: '/editor', query: withLocalEditQuery(query) })
+  await router.push({ path: '/editor', query })
   overlayClose?.()
 }
 

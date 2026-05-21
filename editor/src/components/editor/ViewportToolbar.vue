@@ -1318,7 +1318,6 @@ const emit = defineEmits<{
 }>()
 
 const {
-  showGrid,
   showAxes,
   canDropSelection,
   canAlignSelection,

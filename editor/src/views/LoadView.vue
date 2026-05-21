@@ -7,7 +7,7 @@ import { waitForPiniaHydration } from '@/utils/piniaPersist'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useProjectsStore } from '@/stores/projectsStore'
 import { useAuthStore } from '@/stores/authStore'
-import { hasLocalEditFlag } from '@/utils/localEdit'
+import { isLocalEditEnabled } from '@/utils/localEdit'
 
 type BootstrapErrorCode =
   | 'project-not-found'
@@ -218,7 +218,7 @@ async function bootstrap() {
   if (isBooting.value) {
     return
   }
-  if (!hasLocalEditFlag(route.query) && !authStore.isAuthenticated) {
+  if (!isLocalEditEnabled() && !authStore.isAuthenticated) {
     currentComponent.value = LoadingScreen
     statusHistory.value = []
     progress.value = 5
