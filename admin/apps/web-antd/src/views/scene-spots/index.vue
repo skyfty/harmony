@@ -151,6 +151,8 @@ const slidesRules = [
 ];
 
 const MAX_SLIDES_COUNT = 10;
+const COVER_IMAGE_WIDTH = 256;
+const COVER_IMAGE_HEIGHT = 256;
 const SLIDE_IMAGE_RECOMMENDED_WIDTH = 750;
 const SLIDE_IMAGE_RECOMMENDED_HEIGHT = 422;
 const SLIDE_IMAGE_ASPECT_RATIO = 16 / 9;
@@ -247,9 +249,9 @@ async function handleCoverImageChange(info: UploadChangeParam<UploadFile<any>>) 
   if (list.length > 0) {
     const fileObj = list[0].originFileObj as File | undefined;
     if (fileObj) {
-      const ok = await validateImageSize(fileObj, 110, 110);
+      const ok = await validateImageSize(fileObj, COVER_IMAGE_WIDTH, COVER_IMAGE_HEIGHT);
       if (!ok) {
-        message.error(t('page.sceneSpots.index.error.coverImageSize', { width: 110, height: 110 }));
+        message.error(t('page.sceneSpots.index.error.coverImageSize', { width: COVER_IMAGE_WIDTH, height: COVER_IMAGE_HEIGHT }));
         return;
       }
     }
@@ -799,7 +801,7 @@ onMounted(async () => {
               >
                 <div v-if="coverImageFileList.length < 1">+ {{ t('page.sceneSpots.index.formFields.coverImage.upload') }}</div>
               </Upload>
-              <div class="upload-note">{{ t('page.sceneSpots.index.help.coverImageSize', { width: 110, height: 110 }) }}</div>
+              <div class="upload-note">{{ t('page.sceneSpots.index.help.coverImageSize', { width: COVER_IMAGE_WIDTH, height: COVER_IMAGE_HEIGHT }) }}</div>
             </Form.Item>
 
             <Form.Item :label="t('page.sceneSpots.index.formFields.slides.label')" name="slides">

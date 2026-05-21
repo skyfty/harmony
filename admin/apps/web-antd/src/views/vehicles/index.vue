@@ -195,6 +195,8 @@ async function saveSortOrder() {
 
 const imageFileList = ref<UploadFile[]>([]);
 const imagePreview = ref('');
+const VEHICLE_IMAGE_WIDTH = 256;
+const VEHICLE_IMAGE_HEIGHT = 256;
 
 const imageUploadProps: UploadProps = {
   beforeUpload: () => false,
@@ -210,13 +212,13 @@ function handleImageBeforeUpload(file: UploadFile) {
     const dataUrl = (e.target?.result as string) || '';
     const img = new Image();
     img.onload = () => {
-      if (img.width === 110 && img.height === 110) {
+      if (img.width === VEHICLE_IMAGE_WIDTH && img.height === VEHICLE_IMAGE_HEIGHT) {
         imageFileList.value = [file];
         imagePreview.value = dataUrl;
       } else {
         imageFileList.value = [];
         imagePreview.value = '';
-        message.error('图片尺寸必须为 110x110 像素');
+        message.error(`图片尺寸必须为 ${VEHICLE_IMAGE_WIDTH}x${VEHICLE_IMAGE_HEIGHT} 像素`);
       }
     };
     img.onerror = () => {
@@ -524,7 +526,7 @@ onMounted(() => {
             <Form.Item label="商品联动">
               <span>保存后会自动创建/更新关联商品，并归类到“交通工具”</span>
             </Form.Item>
-            <Form.Item label="图片上传" extra="图片要求：110x110 像素，超出尺寸将被拒绝">
+            <Form.Item label="图片上传" :extra="`图片要求：${VEHICLE_IMAGE_WIDTH}x${VEHICLE_IMAGE_HEIGHT} 像素，超出尺寸将被拒绝`">
               <Upload v-bind="imageUploadProps" v-model:file-list="imageFileList" list-type="picture-card" :beforeUpload="handleImageBeforeUpload">
                 <div>上传</div>
               </Upload>
