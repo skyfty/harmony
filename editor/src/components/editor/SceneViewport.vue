@@ -68,7 +68,6 @@ import type {
   SceneMaterialTextureSlot,
   SceneMaterialTextureRef,
   SceneNodeMaterial,
-  GradientBackgroundDome,
   GroundDynamicMesh,
   GroundGenerationMode,
   GroundGenerationSettings,
@@ -81,12 +80,10 @@ import type {
   ModelCollisionDynamicMesh,
   Vector3Like,
   WallDynamicMesh,
-} from '@schema/index'
-import { resolveGroundWorkingGridSize } from '@schema/index'
+} from '@schema/core'
+import { resolveGroundWorkingGridSize } from '@schema/core'
 import {
   buildRegionDynamicMeshFromLocalVertices,
-  createGradientBackgroundDome,
-  disposeGradientBackgroundDome,
   disposeSkyCubeTexture,
   extractSkycubeZipFaces,
   getLastExtensionFromFilenameOrUrl,
@@ -96,7 +93,12 @@ import {
   loadSkyCubeTexture,
   resolveGroundChunkCoordFromWorldPosition,
   resolveGroundWorldBounds,
-} from '@schema/index'
+} from '@schema/core'
+import {
+  createGradientBackgroundDome,
+  disposeGradientBackgroundDome,
+  type GradientBackgroundDome,
+} from '@schema/overlay'
 import {
   createSceneCsmShadowRuntime,
   DEFAULT_SCENE_CSM_CONFIG,
@@ -181,7 +183,8 @@ import {
   type WallInstancedBindingSpec,
 } from '@schema/wallInstancing'
 import { applyMirroredScaleToObject, syncMirroredMeshMaterials } from '@schema/mirror'
-import { createPrimitiveMesh, PROTAGONIST_NODE_ID } from '@schema/index'
+import { createPrimitiveMesh } from '@schema/import'
+import { PROTAGONIST_NODE_ID } from '@schema/core'
 
 
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'

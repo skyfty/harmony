@@ -1,5 +1,5 @@
 import { Object3D, Shape, ShapeGeometry, ShapeUtils, Vector2, Vector3 } from 'three'
-import type { GroundDynamicMesh, LandformDynamicMesh, SceneNode, Vector3Like, Vector2Like } from '@schema'
+import type { GroundDynamicMesh, LandformDynamicMesh, SceneNode, Vector3Like, Vector2Like } from '@schema/core'
 import {
   buildSmoothedSculptPolygonContour,
   sampleGroundTriangleHeight,

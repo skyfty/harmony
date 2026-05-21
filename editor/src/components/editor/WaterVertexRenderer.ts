@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { SceneNode } from '@schema'
+import type { SceneNode } from '@schema/core'
 import { createEndpointGizmoObject, getEndpointGizmoPartInfoFromObject, type EndpointGizmoPart } from './EndpointGizmo'
 import { computeWorldUnitsPerPixel } from './handleScreenScaleUtils'
 import {

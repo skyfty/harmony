@@ -1,5 +1,5 @@
 import { Matrix4, Vector3, Quaternion, type Object3D } from 'three'
-import type { SceneNode, Vector3Like } from './index'
+import type { SceneNode, Vector3Like } from './core'
 import {
   allocateModelInstance,
   allocateModelInstanceBinding,

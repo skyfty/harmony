@@ -4,7 +4,7 @@ import type {
   GroundDynamicMesh,
   QuantizedTerrainDatasetRootManifest,
   QuantizedTerrainMeshData,
-} from '@schema'
+} from '@schema/core'
 import {
   dequantizeTerrainHeight,
   deserializeQuantizedTerrainMesh,
@@ -12,7 +12,7 @@ import {
   resolveGroundWorldBounds,
   serializeCompiledGroundCollisionTile,
   serializeCompiledGroundRenderTile,
-} from '@schema'
+} from '@schema/core'
 import {
   buildCollisionTileData,
   buildRenderTileGeometry,

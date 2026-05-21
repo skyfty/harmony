@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { SceneNode, SceneNodeComponentState } from '@schema'
+import type { SceneNode, SceneNodeComponentState } from '@schema/core'
 import { PROTAGONIST_COMPONENT_TYPE, type ProtagonistComponentProps } from '@schema/components'
 import { findSceneNode, setBoundingBoxFromObject } from './sceneUtils'
 

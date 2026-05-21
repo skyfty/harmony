@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { SceneAssetRegistryEntry, SceneMaterialTextureSlot } from '@schema'
+import type { SceneAssetRegistryEntry, SceneMaterialTextureSlot } from '@schema/core'
 import { disposeMaterialTextures } from '@schema/material'
 import { applyMaterialConfigToMaterial, createTextureSettings } from '@/types/material'
 import type {

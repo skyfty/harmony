@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import { ConvexGeometry } from 'three/examples/jsm/geometries/ConvexGeometry.js'
-import type { SceneNode } from '@schema'
+import type { SceneNode } from '@schema/core'
 import { getModelInstanceBindingsForNode } from '@schema/modelObjectCache'
 
 type InstancedBoundsPayload = { min: [number, number, number]; max: [number, number, number] }

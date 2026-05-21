@@ -8,7 +8,7 @@ import {
   type GroundTerrainHeightSampler,
   type QuantizedTerrainDatasetRootManifest,
   type QuantizedTerrainMeshData,
-} from '@schema'
+} from '@schema/core'
 import { useScenesStore } from '@/stores/scenesStore'
 
 function inferTileGridShape(tileData: QuantizedTerrainMeshData): { rows: number; columns: number } | null {

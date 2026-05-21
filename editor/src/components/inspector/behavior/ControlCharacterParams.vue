@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount } from 'vue'
-import type { ControlCharacterBehaviorParams } from '@schema'
+import type { ControlCharacterBehaviorParams } from '@schema/core'
 import NodePicker from '@/components/common/NodePicker.vue'
 
 const props = defineProps<{

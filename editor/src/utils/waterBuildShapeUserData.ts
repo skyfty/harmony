@@ -1,5 +1,5 @@
-import type { SceneNode } from '@schema'
-import { extractWaterSurfaceMeshMetadataFromUserData } from '@schema'
+import type { SceneNode } from '@schema/core'
+import { extractWaterSurfaceMeshMetadataFromUserData } from '@schema/core'
 import { WATER_COMPONENT_TYPE } from '@schema/components'
 import type { WaterBuildShape } from '@/types/water-build-shape'
 

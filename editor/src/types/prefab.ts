@@ -1,4 +1,4 @@
-import type { SceneAssetRegistryEntry, SceneNode, Vector3Like } from '@schema'
+import type { SceneAssetRegistryEntry, SceneNode, Vector3Like } from '@schema/core'
 import type { NodePrefabData } from '@/types/node-prefab'
 
 export type ClipboardMode = 'copy' | 'cut'

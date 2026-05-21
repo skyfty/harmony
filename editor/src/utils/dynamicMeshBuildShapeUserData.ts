@@ -1,4 +1,4 @@
-import type { SceneNode, WallDynamicMesh } from '@schema'
+import type { SceneNode, WallDynamicMesh } from '@schema/core'
 import { compileWallSegmentsFromDefinition } from '@schema/wallLayout'
 import type { FloorBuildShape } from '@/types/floor-build-shape'
 import type { LandformBuildShape } from '@/types/landform-build-shape'

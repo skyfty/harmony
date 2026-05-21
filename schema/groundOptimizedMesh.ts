@@ -4,14 +4,14 @@ import type {
   GroundDynamicMesh,
   GroundOptimizedMeshChunkData,
   GroundOptimizedMeshData,
-} from './index'
+} from './core'
 import {
   type GroundHeightFieldSampler,
   resolveGroundChunkCells,
   sampleGroundEffectiveHeightRegion,
   sampleGroundEffectiveHeightRegionFromSampler,
 } from './groundMesh'
-import { resolveGroundWorldBounds, resolveGroundWorkingGridSize } from './index'
+import { resolveGroundWorldBounds, resolveGroundWorkingGridSize } from './core'
 
 export type GroundOptimizedMeshBuildOptions = {
   tolerance?: number

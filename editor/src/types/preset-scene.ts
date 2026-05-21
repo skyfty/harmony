@@ -5,7 +5,7 @@ import type {
   SceneMaterial,
   SceneNode,
   EnvironmentSettings,
-} from '@schema'
+} from '@schema/core'
 import type { SceneCameraState } from './scene-camera-state'
 import type { SceneViewportSettings } from './scene-viewport-settings'
 import type { PanelVisibilityState } from './panel-visibility-state'

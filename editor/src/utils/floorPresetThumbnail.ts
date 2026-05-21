@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { FloorDynamicMesh, SceneMaterialTextureRef } from '@schema'
+import type { FloorDynamicMesh, SceneMaterialTextureRef } from '@schema/core'
 import { createFloorGroup } from '@schema/floorMesh'
 import { applyMaterialOverrides, type MaterialTextureAssignmentOptions } from '@schema/material'
 import { buildFloorNodeMaterialsFromPreset } from '@/utils/floorPresetNodeMaterials'

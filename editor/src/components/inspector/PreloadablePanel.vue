@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { storeToRefs } from 'pinia'
-import type { SceneNodeComponentState } from '@schema'
+import type { SceneNodeComponentState } from '@schema/core'
 import { useSceneStore } from '@/stores/sceneStore'
 import { PRELOADABLE_COMPONENT_TYPE, type PreloadableComponentProps } from '@schema/components'
 

@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { MATERIAL_CONFIG_ID_KEY } from '../material';
-import type { SceneNodeMaterial } from '../index';
+import type { SceneNodeMaterial } from '../core';
 
 export function buildMaterialConfigMap(
   nodeMaterialConfigs: SceneNodeMaterial[],

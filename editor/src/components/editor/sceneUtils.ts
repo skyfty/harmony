@@ -1,4 +1,4 @@
-import type { SceneNode } from '@schema'
+import type { SceneNode } from '@schema/core'
 import * as THREE from 'three'
 import { GRID_MAJOR_SPACING, GRID_SNAP_SPACING } from './constants'
 

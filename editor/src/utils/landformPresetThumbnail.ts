@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { LandformDynamicMesh, SceneMaterialTextureRef } from '@schema'
+import type { LandformDynamicMesh, SceneMaterialTextureRef } from '@schema/core'
 import { applyMaterialOverrides, type MaterialTextureAssignmentOptions } from '@schema/material'
 import { createLandformGroup } from '@schema/landformMesh'
 import type { LandformPresetData } from '@/utils/landformPreset'

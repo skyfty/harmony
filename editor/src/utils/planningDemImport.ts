@@ -1,5 +1,5 @@
 import { fromArrayBuffer } from 'geotiff'
-import { GROUND_TERRAIN_CHUNK_SIZE_METERS } from '@schema'
+import { GROUND_TERRAIN_CHUNK_SIZE_METERS } from '@schema/core'
 import type {
   PlanningTerrainDemData,
   PlanningTerrainGeographicBounds,

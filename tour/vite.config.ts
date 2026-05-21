@@ -79,6 +79,78 @@ function resolveAssetFileName(assetInfo: { name?: string }): string | undefined 
   return undefined;
 }
 
+function resolveSceneryChunkGroup(normalizedId: string): string | undefined {
+  if (normalizedId.includes('/node_modules/three/build/')) {
+    return 'pages/scenery/chunks/three';
+  }
+  if (normalizedId.includes('/node_modules/three/examples/jsm/')) {
+    return 'pages/scenery/chunks/three-examples';
+  }
+  if (normalizedId.includes('/node_modules/three-csm/')) {
+    return 'pages/scenery/chunks/three-csm';
+  }
+  if (normalizedId.includes('/node_modules/@minisheep/three-platform-adapter/')) {
+    return 'pages/scenery/chunks/three-adapter';
+  }
+  if (normalizedId.includes('/src/pages/scenery/schema/node_modules/fflate/')
+    || normalizedId.includes('/src/pages/scenery/schema/node_modules/polygon-clipping/')
+    || normalizedId.includes('/src/pages/scenery/schema/node_modules/@msgpack/msgpack/')
+    || normalizedId.includes('/src/pages/scenery/schema/node_modules/robust-predicates/')
+    || normalizedId.includes('/src/pages/scenery/schema/node_modules/splaytree/')) {
+    return 'pages/scenery/chunks/schema-third-party';
+  }
+  if (normalizedId.includes('/src/pages/scenery/schema/ground')
+    || normalizedId.includes('/src/pages/scenery/schema/terrain')
+    || normalizedId.includes('/src/pages/scenery/schema/water')
+    || normalizedId.includes('/src/pages/scenery/schema/wall')
+    || normalizedId.includes('/src/pages/scenery/schema/road')
+    || normalizedId.includes('/src/pages/scenery/schema/floor')
+    || normalizedId.includes('/src/pages/scenery/schema/compiledGround')
+    || normalizedId.includes('/src/pages/scenery/schema/infiniteGround')) {
+    return 'pages/scenery/chunks/schema-ground';
+  }
+  if (normalizedId.includes('/src/pages/scenery/schema/physics')
+    || normalizedId.includes('/src/pages/scenery/schema/motion')
+    || normalizedId.includes('/src/pages/scenery/schema/VehicleDriveController')
+    || normalizedId.includes('/src/pages/scenery/schema/instancedBoundsTracker')
+    || normalizedId.includes('/src/pages/scenery/schema/instancedBillboardCache')
+    || normalizedId.includes('/src/pages/scenery/schema/continuousInstancedModel')
+    || normalizedId.includes('/src/pages/scenery/schema/wallInstancing')
+    || normalizedId.includes('/src/pages/scenery/schema/instanceLayout')
+    || normalizedId.includes('/src/pages/scenery/schema/instancedMeshTiling')) {
+    return 'pages/scenery/chunks/schema-physics';
+  }
+  if (normalizedId.includes('/src/pages/scenery/schema/components/')
+    || normalizedId.includes('/src/pages/scenery/schema/behaviors/')
+    || normalizedId.includes('/src/pages/scenery/schema/multiuserContext')
+    || normalizedId.includes('/src/pages/scenery/schema/autoTourRuntime')
+    || normalizedId.includes('/src/pages/scenery/schema/purePursuitRuntime')
+    || normalizedId.includes('/src/pages/scenery/schema/terrainScatterLodRuntime')
+    || normalizedId.includes('/src/pages/scenery/schema/environmentSettingsUtils')
+    || normalizedId.includes('/src/pages/scenery/schema/gradientBackground')
+    || normalizedId.includes('/src/pages/scenery/schema/skyCubeTexture')
+    || normalizedId.includes('/src/pages/scenery/schema/sceneCsm')
+    || normalizedId.includes('/src/pages/scenery/schema/physicsSceneAsset')) {
+    return 'pages/scenery/chunks/schema-components';
+  }
+  if (normalizedId.includes('/src/pages/scenery/schema/sceneGraph')
+    || normalizedId.includes('/src/pages/scenery/schema/model')
+    || normalizedId.includes('/src/pages/scenery/schema/asset')
+    || normalizedId.includes('/src/pages/scenery/schema/scenePackage')
+    || normalizedId.includes('/src/pages/scenery/schema/ResourceCache')
+    || normalizedId.includes('/src/pages/scenery/schema/componentRuntimeUtils')
+    || normalizedId.includes('/src/pages/scenery/schema/nodeIndexUtils')
+    || normalizedId.includes('/src/pages/scenery/schema/mirror')
+    || normalizedId.includes('/src/pages/scenery/schema/core')
+    || normalizedId.includes('/src/pages/scenery/schema/runtimePrefab')) {
+    return 'pages/scenery/chunks/schema-runtime';
+  }
+  if (normalizedId.includes('/src/pages/scenery/schema/')) {
+    return 'pages/scenery/chunks/schema-runtime';
+  }
+  return undefined;
+}
+
 function resolveManualChunk(id: string): string | undefined {
   if (!isMp) {
     return undefined;
@@ -136,6 +208,11 @@ function resolveManualChunk(id: string): string | undefined {
     return 'common/vendor';
   }
 
+  const sceneryChunkGroup = resolveSceneryChunkGroup(normalizedId);
+  if (sceneryChunkGroup) {
+    return sceneryChunkGroup;
+  }
+
   if (
     normalizedId.includes('/src/pages/scenery/three/')
     || normalizedId.includes('/src/pages/scenery/three-mesh-bvh/')
@@ -146,7 +223,7 @@ function resolveManualChunk(id: string): string | undefined {
     || normalizedId.includes('/node_modules/three-csm/')
     || normalizedId.includes('/node_modules/@minisheep/three-platform-adapter/')
   ) {
-    return 'pages/scenery/chunks/vendor';
+    return 'pages/scenery/chunks/three';
   }
 
   if (
@@ -176,7 +253,7 @@ function resolveManualChunk(id: string): string | undefined {
     || normalizedId.includes('/node_modules/fflate/')
     || normalizedId.includes('/node_modules/web-streams-polyfill/')
   ) {
-    return 'pages/scenery/common/vendor';
+    return sceneryChunkGroup ?? 'pages/scenery/common/vendor';
   }
 
   if (
@@ -340,23 +417,77 @@ export default {
     }),
     toCustomChunkPlugin({
       manualChunks: {
-        'pages/scenery/chunks/vendor': [
-          '**/pages/scenery/three/**',
-          '**/pages/scenery/three-mesh-bvh/**',
-          '**/pages/scenery/three-platform-adapter/**',
-          '**/pages/scenery/schema/**',
-          '**/three/**',
-          '**/three-mesh-bvh/**',
-          '**/three-csm/**',
-          '**/three/examples/jsm/**',
-          '**/@minisheep/three-platform-adapter/**',
-          '**/@vladkrutenyuk/cannon-es-debugger-pro/**',
+        'pages/scenery/chunks/three': [
+          '**/three/build/**',
         ],
-      'pages/physics-ammo/common/vendor': [
+        'pages/scenery/chunks/three-examples': [
+          '**/three/examples/jsm/**',
+        ],
+        'pages/scenery/chunks/three-csm': [
+          '**/three-csm/**',
+        ],
+        'pages/scenery/chunks/three-adapter': [
+          '**/@minisheep/three-platform-adapter/**',
+        ],
+        'pages/scenery/chunks/schema-third-party': [
+          '**/pages/scenery/schema/node_modules/fflate/**',
+          '**/pages/scenery/schema/node_modules/polygon-clipping/**',
+          '**/pages/scenery/schema/node_modules/@msgpack/msgpack/**',
+          '**/pages/scenery/schema/node_modules/robust-predicates/**',
+          '**/pages/scenery/schema/node_modules/splaytree/**',
+        ],
+        'pages/scenery/chunks/schema-ground': [
+          '**/pages/scenery/schema/ground**',
+          '**/pages/scenery/schema/terrain**',
+          '**/pages/scenery/schema/water**',
+          '**/pages/scenery/schema/wall**',
+          '**/pages/scenery/schema/road**',
+          '**/pages/scenery/schema/floor**',
+          '**/pages/scenery/schema/compiledGround**',
+          '**/pages/scenery/schema/infiniteGround**',
+        ],
+        'pages/scenery/chunks/schema-physics': [
+          '**/pages/scenery/schema/physics**',
+          '**/pages/scenery/schema/motion**',
+          '**/pages/scenery/schema/VehicleDriveController.ts',
+          '**/pages/scenery/schema/instancedBoundsTracker.ts',
+          '**/pages/scenery/schema/instancedBillboardCache.ts',
+          '**/pages/scenery/schema/continuousInstancedModel.ts',
+          '**/pages/scenery/schema/wallInstancing.ts',
+          '**/pages/scenery/schema/instanceLayout.ts',
+          '**/pages/scenery/schema/instancedMeshTiling.ts',
+        ],
+        'pages/scenery/chunks/schema-components': [
+          '**/pages/scenery/schema/components/**',
+          '**/pages/scenery/schema/behaviors/**',
+          '**/pages/scenery/schema/multiuserContext.ts',
+          '**/pages/scenery/schema/autoTourRuntime.ts',
+          '**/pages/scenery/schema/purePursuitRuntime.ts',
+          '**/pages/scenery/schema/terrainScatterLodRuntime.ts',
+          '**/pages/scenery/schema/environmentSettingsUtils.ts',
+          '**/pages/scenery/schema/gradientBackground.ts',
+          '**/pages/scenery/schema/skyCubeTexture.ts',
+          '**/pages/scenery/schema/sceneCsm**',
+          '**/pages/scenery/schema/physicsSceneAsset.ts',
+        ],
+        'pages/scenery/chunks/schema-runtime': [
+          '**/pages/scenery/schema/sceneGraph.ts',
+          '**/pages/scenery/schema/model**',
+          '**/pages/scenery/schema/asset**',
+          '**/pages/scenery/schema/scenePackage**',
+          '**/pages/scenery/schema/ResourceCache.ts',
+          '**/pages/scenery/schema/componentRuntimeUtils.ts',
+          '**/pages/scenery/schema/nodeIndexUtils.ts',
+          '**/pages/scenery/schema/mirror.ts',
+          '**/pages/scenery/schema/core.ts',
+          '**/pages/scenery/schema/runtimePrefab.ts',
+          '**/pages/scenery/schema/**',
+        ],
+        'pages/physics-ammo/common/vendor': [
           '**/pages/physics-ammo/vendor/**',
           '**/src/pages/physics-ammo/vendor/**',
-      ],
-      'pages/physics-cannon/common/vendor': [
+        ],
+        'pages/physics-cannon/common/vendor': [
           '**/pages/physics-cannon/**',
           '**/src/pages/physics-cannon/**',
           '**/cannon-es/**',

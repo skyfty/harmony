@@ -14,7 +14,14 @@
     "allowSyntheticDefaultImports": true,
     "importsNotUsedAsValues": "remove",
     "resolveJsonModule": true,
-    "types": []
+    "types": [],
+    "baseUrl": ".",
+    "paths": {
+      "@harmony/schema": ["./index.ts"],
+      "@harmony/schema/*": ["./*"],
+      "@harmony/physics-core": ["../physics-core/index.ts"],
+      "@harmony/physics-bridge": ["../physics-bridge/index.ts"]
+    }
   },
   "include": ["asset-types.ts"],
   "exclude": ["node_modules"]

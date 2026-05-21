@@ -1,4 +1,4 @@
-import type { SceneNode } from '@schema'
+import type { SceneNode } from '@schema/core'
 import { clampSceneNodeInstanceLayout, resolveInstanceLayoutTemplateAssetId } from '@schema/instanceLayout'
 
 const PREFAB_SOURCE_METADATA_KEY = '__prefabAssetId'

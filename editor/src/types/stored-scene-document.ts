@@ -6,7 +6,7 @@ import type {
   SceneAssetOverrideEntry,
   SceneAssetRegistryEntry,
   SceneResourceSummary,
-} from '@schema'
+} from '@schema/core'
 import type { SceneCameraState } from './scene-camera-state'
 import type { ProjectAsset } from './project-asset'
 import type { SceneViewportSettings } from './scene-viewport-settings'

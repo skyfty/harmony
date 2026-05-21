@@ -664,7 +664,7 @@ export function applyEraseIntervalToSegments(
 // ---------------------------------------------------------------------------
 // New opening-based helpers (work directly with WallDynamicMesh chains)
 // ---------------------------------------------------------------------------
-import type { WallDynamicMesh, WallOpening } from '@schema'
+import type { WallDynamicMesh, WallOpening } from '@schema/core'
 import { compileWallSegmentsFromDefinition, computeChainArcLength } from '@schema/wallLayout'
 
 type WallLocalHitOnCompiled = {

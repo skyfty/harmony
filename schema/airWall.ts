@@ -3,8 +3,8 @@ import type {
 	SceneNode,
 	Vector3Like,
 	GroundDynamicMesh,
-} from './index'
-import { resolveGroundWorldBounds } from './index'
+} from './core'
+import { resolveGroundWorldBounds } from './core'
 import { isGroundDynamicMesh } from './groundHeightfield'
 
 export const DEFAULT_AIR_WALL_HEIGHT = 8

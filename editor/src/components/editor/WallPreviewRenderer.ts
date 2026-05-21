@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { WallDynamicMesh } from '@schema'
+import type { WallDynamicMesh } from '@schema/core'
 import { createWallRenderGroup, updateWallGroup } from '@schema/wallMesh'
 import type { WallComponentProps } from '@schema/components'
 import { stableSerialize } from '@schema/stableSerialize'

@@ -3,15 +3,19 @@ import * as THREE from 'three'
 import {
   RIGIDBODY_COMPONENT_TYPE,
   clampRigidbodyComponentProps,
+  type RigidbodyComponentProps,
+  type RigidbodyPhysicsShape,
+} from './components'
+import type {
+  GroundRuntimeDynamicMesh,
+  SceneNode,
+  SceneNodeComponentState,
+} from './core'
+import {
   parseGroundChunkKey,
   resolveGroundChunkCoordFromWorldPosition,
   resolveGroundChunkOrigin,
-  type GroundRuntimeDynamicMesh,
-  type RigidbodyComponentProps,
-  type RigidbodyPhysicsShape,
-  type SceneNode,
-  type SceneNodeComponentState,
-} from './index'
+} from './core'
 import type {
   PhysicsBodyBindingEntry as RigidbodyInstance,
   PhysicsBodyLike,

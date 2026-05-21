@@ -65,6 +65,7 @@ export async function bootstrapViewerShared() {
   await installPackages(viewerInstallOrder);
   cleanPackageOutputs(viewerBuildOrder);
   await buildPackages(viewerBuildOrder);
+  await installPackages(['viewer']);
   await syncViewerSharedArtifacts();
   rmSync(resolve(packageRoots.viewer, 'node_modules/.vite'), { recursive: true, force: true });
 }
@@ -102,6 +103,7 @@ export async function bootstrapTourShared() {
   await installPackages(tourInstallOrder);
   cleanPackageOutputs(tourBuildOrder);
   await buildPackages(tourBuildOrder);
+  await installPackages(['tour']);
   await syncTourSharedArtifacts();
   rmSync(resolve(packageRoots.tour, 'node_modules/.vite'), { recursive: true, force: true });
 }

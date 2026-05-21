@@ -1,4 +1,4 @@
-import type { SceneAssetOverrideEntry, SceneAssetRegistryEntry } from './index';
+import type { SceneAssetOverrideEntry, SceneAssetRegistryEntry } from './core';
 
 type AssetRegistryLikeEntry = SceneAssetRegistryEntry | SceneAssetOverrideEntry | null | undefined;
 type AssetRegistryLikeMap = Record<string, AssetRegistryLikeEntry> | null | undefined;

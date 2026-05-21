@@ -1,5 +1,5 @@
 import { decode, encode } from '@msgpack/msgpack'
-import type { SceneJsonExportDocument } from './index'
+import type { SceneJsonExportDocument } from './core'
 
 export function encodeScenePackageSceneDocument(document: SceneJsonExportDocument): Uint8Array {
   return encode(document)

@@ -7,7 +7,7 @@ import { SceneModel } from '@/models/Scene'
 import { appConfig } from '@/config/env'
 import type { UploadedFilePayload } from '@/services/sceneService'
 import type { UserSceneBundleRecord, UserSceneSummary } from '@/types/userScene'
-import { decodeScenePackageSceneDocument, readBinaryFileFromScenePackage, unzipScenePackage } from '@harmony/schema'
+import { decodeScenePackageSceneDocument, readBinaryFileFromScenePackage, unzipScenePackage } from '@harmony/schema/core'
 
 export type { UploadedFilePayload } from '@/services/sceneService'
 

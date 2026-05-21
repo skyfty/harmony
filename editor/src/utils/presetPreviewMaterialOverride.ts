@@ -1,4 +1,4 @@
-import type { SceneMaterialProps, SceneMaterialTextureRef, SceneNodeMaterial } from '@schema'
+import type { SceneMaterialProps, SceneMaterialTextureRef, SceneNodeMaterial } from '@schema/core'
 import { DEFAULT_SCENE_MATERIAL_TYPE } from '@/types/material'
 
 function normalizeOptionalString(value: unknown): string | null {

@@ -5,7 +5,7 @@ import {
   clampTerrainPaintLayerStyle,
   type GroundSculptOperation,
   type TerrainPaintLayerStyle,
-} from '@schema'
+} from '@schema/core'
 import type { TerrainScatterBrushShape, TerrainScatterCategory } from '@schema/terrain-scatter'
 import type { ProjectAsset } from '@/types/project-asset'
 import { terrainScatterPresets } from '@/resources/projectProviders/asset'

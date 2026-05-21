@@ -1,4 +1,4 @@
-import type { AssetSourceMetadata } from '@schema'
+import type { AssetSourceMetadata } from '@schema/core'
 
 export const SERVER_ASSET_PROVIDER_ID = 'server-assets'
 

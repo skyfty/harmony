@@ -1,5 +1,5 @@
 ﻿import * as THREE from 'three'
-import type { SceneNode, SceneNodeComponentState, RoadDynamicMesh } from './index'
+import type { SceneNode, SceneNodeComponentState, RoadDynamicMesh } from './core'
 
 import type { RigidbodyComponentProps, RigidbodyPhysicsShape } from './components'
 import { BOUNDARY_WALL_COMPONENT_TYPE, clampBoundaryWallComponentProps, type BoundaryWallComponentProps } from './components'

@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { FloorDynamicMesh, GroundDynamicMesh, GroundRuntimeDynamicMesh, RoadDynamicMesh, SceneNode } from './index'
+import type { FloorDynamicMesh, GroundDynamicMesh, GroundRuntimeDynamicMesh, RoadDynamicMesh, SceneNode } from './core'
 import { sampleGroundNormal, sampleGroundTriangleHeight } from './groundMesh'
 import { isPointInsideRegionXZ } from './regionUtils'
 import { createSegmentHeightSampler, resolveRoadLocalHeightSampler } from './roadMesh'

@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import type { SceneClipboard } from '@schema'
+import type { SceneClipboard } from '@schema/core'
 
 const VIRTUAL_CLIPBOARD_STORAGE_KEY = 'harmony:virtualClipboardText'
 

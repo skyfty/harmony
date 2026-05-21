@@ -8,7 +8,7 @@ import {
   type ModelInstanceBinding,
 } from '@schema/modelObjectCache'
 import { addMesh as addInstancedBoundsMesh } from '@schema/instancedBoundsTracker'
-import type { SceneNode } from '@schema'
+import type { SceneNode } from '@schema/core'
 import { getContinuousInstancedModelUserData, syncContinuousInstancedModelCommitted } from '@schema/continuousInstancedModel'
 
 export function useInstancedMeshes(

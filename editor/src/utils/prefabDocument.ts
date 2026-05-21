@@ -1,4 +1,4 @@
-import type { SceneJsonExportDocument, SceneNode } from '@schema'
+import type { SceneJsonExportDocument, SceneNode } from '@schema/core'
 import {
   buildAssetDependencySubset,
   sanitizeSceneAssetRegistry,

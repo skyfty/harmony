@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { SceneNode, SceneNodeComponentState, WallDynamicMesh } from '@schema'
+import type { SceneNode, SceneNodeComponentState, WallDynamicMesh } from '@schema/core'
 import { hashString, stableSerialize } from '@schema/stableSerialize'
 import {
   getCachedModelObject,

@@ -2,7 +2,7 @@ import {
   CONFIG_ASSET_EXTENSION_SET,
   type AssetBundleFileEntry,
   type AssetType,
-} from '@harmony/schema'
+} from '@harmony/schema/core'
 
 export type PersistedBundleAssetReference = {
   serverAssetId: string

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from 'vue'
 import type { ProjectAsset } from '@/types/project-asset'
-import type { RuntimePrefabInitializationMode, RuntimePrefabPlacementAlignment, SpawnPrefabBehaviorParams, Vector3Like } from '@schema'
+import type { RuntimePrefabInitializationMode, RuntimePrefabPlacementAlignment, SpawnPrefabBehaviorParams, Vector3Like } from '@schema/core'
 import { useSceneStore } from '@/stores/sceneStore'
 import AssetPickerDialog from '@/components/common/AssetPickerDialog.vue'
 import NodePicker from '@/components/common/NodePicker.vue'

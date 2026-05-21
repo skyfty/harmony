@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import { type PhysicsBodyDesc, type PhysicsBodyType, type PhysicsCompoundChildDesc, type PhysicsMaterialDesc, type PhysicsSceneAsset, type PhysicsShapeDesc, type PhysicsTransform, type PhysicsVector3, type PhysicsVehicleDesc, type PhysicsVehicleWheelDesc } from '@harmony/physics-core'
-import type { SceneJsonExportDocument, SceneNode, SceneNodeComponentState, Vector3Like } from './index'
+import type { SceneJsonExportDocument, SceneNode, SceneNodeComponentState, Vector3Like } from './core'
 import { buildGroundAirWallDefinitions } from './airWall'
 import { buildBoundaryWallSegments } from './boundaryWall'
 import {

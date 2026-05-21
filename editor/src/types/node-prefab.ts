@@ -1,4 +1,4 @@
-import type { SceneAssetRegistryEntry, SceneNode } from '@schema'
+import type { SceneAssetRegistryEntry, SceneNode } from '@schema/core'
 
 export interface NodePrefabData {
   formatVersion: number

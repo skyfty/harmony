@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { RoadDynamicMesh } from '@schema'
+import type { RoadDynamicMesh } from '@schema/core'
 import { createRoadGroup, updateRoadGroup } from '@schema/roadMesh'
 import {
   ROAD_TERRAIN_DEFAULT_MIN_CLEARANCE,

@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { SceneBehavior, SceneNode, SceneNodeComponentState } from '@schema'
+import type { SceneBehavior, SceneNode, SceneNodeComponentState } from '@schema/core'
 import {
   BEHAVIOR_COMPONENT_TYPE,
   WARP_GATE_COMPONENT_TYPE,

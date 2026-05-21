@@ -2,10 +2,10 @@ import { defineStore } from 'pinia'
 import type { ProjectAsset } from '@/types/project-asset'
 import { fetchAssetBlob } from '@schema/assetCache'
 import type { AssetCacheEntry as SharedAssetCacheEntry, AssetCacheStatus as SharedAssetCacheStatus } from '@schema/assetCache'
-import { createIndexedDbPersistentAssetStorage, resolvePersistentAssetKeys } from '@schema'
+import { createIndexedDbPersistentAssetStorage, resolvePersistentAssetKeys } from '@schema/core'
 import { extractExtension, ensureExtension } from '@/utils/blob'
 import { invalidateModelObject } from '@schema/modelObjectCache'
-import { isImageLikeExtension } from '@schema'
+import { isImageLikeExtension } from '@schema/core'
 
 export type AssetCacheStatus = SharedAssetCacheStatus
 

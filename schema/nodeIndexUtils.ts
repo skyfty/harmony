@@ -1,4 +1,4 @@
-import type { SceneNode } from './index'
+import type { SceneNode } from './core'
 
 export type SceneNodeId = string
 export type SceneNodeParentMap = Map<SceneNodeId, SceneNodeId | null>

@@ -8,7 +8,7 @@ import { normalizePrefabSceneDocument } from '@/utils/prefabDocument'
 import { collectPrefabAssetReferences } from '@/stores/prefabActions'
 import { CacheOnlyAssetLoader } from '@/utils/cacheOnlyAssetLoader'
 import { createEditorRuntimeAssetCache } from '@/utils/editorPersistentAssetStorage'
-import type { SceneNode } from '@schema'
+import type { SceneNode } from '@schema/core'
 import type { AssetCacheEntry } from '@schema/assetCache'
 import {
   clampSceneNodeInstanceLayout,

@@ -5,7 +5,7 @@ import {
   readTextFileFromScenePackage,
   unzipScenePackage,
   type ScenePackageSceneEntry,
-} from '@schema'
+} from '@schema/core'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { PlanningSceneData } from '@/types/planning-scene-data'

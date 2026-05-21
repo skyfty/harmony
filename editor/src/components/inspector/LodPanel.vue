@@ -5,7 +5,7 @@ import { useSceneStore } from '@/stores/sceneStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import AssetPickerDialog from '@/components/common/AssetPickerDialog.vue'
 import type { ProjectAsset } from '@/types/project-asset'
-import type { SceneNodeComponentState } from '@schema'
+import type { SceneNodeComponentState } from '@schema/core'
 import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 import {
   LOD_FACE_CAMERA_FORWARD_AXIS_X,

@@ -1,6 +1,6 @@
 import { computed, reactive, ref } from 'vue'
 import * as THREE from 'three'
-import type { SceneNode } from '@schema'
+import type { SceneNode } from '@schema/core'
 import type { PlaceholderOverlayState } from '@/types/scene-viewport-placeholder-overlay-state'
 
 export type PlaceholderOverlayControllerDeps = {

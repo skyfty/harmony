@@ -5,7 +5,7 @@ import type {
   BubbleBehaviorAnimationPreset,
   BubbleBehaviorParams,
   BubbleBehaviorVariant,
-} from '@schema'
+} from '@schema/core'
 import NodePicker from '@/components/common/NodePicker.vue'
 import type { ProjectAsset } from '@/types/project-asset'
 import { useSceneStore } from '@/stores/sceneStore'

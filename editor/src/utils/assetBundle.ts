@@ -5,7 +5,7 @@ import {
   ASSET_BUNDLE_VERSION,
   type AssetBundleFileEntry,
   type AssetBundleManifest,
-} from '@schema'
+} from '@schema/core'
 import type { TerrainScatterCategory } from '@schema/terrain-scatter'
 import { zipSync, strToU8 } from 'fflate'
 import type { ProjectAsset } from '@/types/project-asset'

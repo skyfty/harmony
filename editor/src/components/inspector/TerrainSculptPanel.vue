@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import type { GroundGenerationMode, GroundSculptOperation } from '@schema'
+import type { GroundGenerationMode, GroundSculptOperation } from '@schema/core'
 
 const BRUSH_RADIUS_MIN = 0.1
 const BRUSH_RADIUS_MAX = 50

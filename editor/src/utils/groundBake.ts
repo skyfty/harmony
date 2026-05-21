@@ -1,4 +1,4 @@
-import { parseTerrainPaintChunkKey, resolveTerrainPaintChunkBounds, resolveGroundWorldBounds, type GroundDynamicMesh, type SceneNode } from '@schema'
+import { parseTerrainPaintChunkKey, resolveTerrainPaintChunkBounds, resolveGroundWorldBounds, type GroundDynamicMesh, type SceneNode } from '@schema/core'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import { computeBlobHash } from '@/utils/blob'

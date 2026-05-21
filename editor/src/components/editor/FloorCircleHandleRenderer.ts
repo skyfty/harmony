@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { FloorDynamicMesh } from '@schema'
+import type { FloorDynamicMesh } from '@schema/core'
 import { hashString, stableSerialize } from '@schema/stableSerialize'
 import {
   createEndpointGizmoObject,

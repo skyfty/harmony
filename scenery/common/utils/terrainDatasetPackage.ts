@@ -10,7 +10,7 @@ import {
   type QuantizedTerrainDatasetRootManifest,
   type QuantizedTerrainMeshData,
   type ScenePackageSceneEntry,
-} from '@harmony/schema'
+} from '@harmony/schema/core'
 import type { ScenePackageUnzipped } from '@harmony/schema/scenePackageZip'
 
 export function readTerrainDatasetManifestFromScenePackage(

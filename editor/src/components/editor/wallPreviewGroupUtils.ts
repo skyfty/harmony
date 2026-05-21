@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { WallDynamicMesh, WallChain } from '@schema'
+import type { WallDynamicMesh, WallChain } from '@schema/core'
 
 export type WallWorldSegment = {
   start: THREE.Vector3

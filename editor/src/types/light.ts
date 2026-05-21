@@ -1,4 +1,4 @@
-import  {type LightNodeType } from '@schema'
+import  {type LightNodeType } from '@schema/core'
 
 const LEGACY_LIGHT_TYPE_MAP: Record<string, LightNodeType> = {
   directional: 'Directional',

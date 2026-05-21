@@ -5,7 +5,7 @@ import {
   type CompiledGroundManifest,
   type CompiledGroundRenderTileRecord,
 } from './compiledGround'
-import type { GroundDynamicMesh } from './index'
+import type { GroundDynamicMesh } from './core'
 import { applyGroundTextureToGroundObject } from './groundMesh'
 
 type CompiledGroundRenderRuntime = {

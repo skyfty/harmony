@@ -1,5 +1,5 @@
 import { resolveGroundChunkCells } from './groundMesh'
-import { resolveGroundWorldBounds, resolveGroundWorkingGridSize } from './index'
+import { resolveGroundWorldBounds, resolveGroundWorkingGridSize } from './core'
 
 type TerrainPaintGroundDefinition = {
   cellSize: number

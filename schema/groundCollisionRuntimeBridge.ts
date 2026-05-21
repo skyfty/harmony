@@ -6,7 +6,7 @@ import type {
   PhysicsRuntimeBodyEntry,
   PhysicsShapeDesc,
 } from '@harmony/physics-core'
-import type { RigidbodyPhysicsShape } from './index'
+import type { RigidbodyPhysicsShape } from './components'
 import type { PhysicsBodyLike } from './physicsBodySync'
 import type { PhysicsWorldLike } from './physicsRuntimeBridge'
 

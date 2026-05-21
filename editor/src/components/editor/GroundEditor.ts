@@ -8,13 +8,13 @@ import type {
 	GroundSculptOperation,
 	SceneNode,
 	Vector3Like,
-} from '@schema'
+} from '@schema/core'
 import {
 	resolveGroundChunkCoordFromWorldPosition,
 	resolveGroundEditCellSize,
 	resolveGroundWorldBounds,
 	resolveGroundWorkingGridSize,
-} from '@schema'
+} from '@schema/core'
 import {
 	deleteTerrainScatterStore,
 	ensureTerrainScatterStore,

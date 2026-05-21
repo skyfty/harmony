@@ -1,6 +1,6 @@
 import * as THREE from 'three'
-import type { FloorDynamicMesh, LandformDynamicMesh, RegionDynamicMesh, SceneNode, Vector3Like, WallDynamicMesh } from './index'
-import { extractWaterSurfaceMeshMetadataFromUserData } from './index'
+import type { FloorDynamicMesh, LandformDynamicMesh, RegionDynamicMesh, SceneNode, Vector3Like, WallDynamicMesh } from './core'
+import { extractWaterSurfaceMeshMetadataFromUserData } from './core'
 import { WATER_COMPONENT_TYPE } from './components'
 import { extractFloorPerimeterChains } from './floorMesh'
 import { extractRoadBoundaryChains } from './roadMesh'

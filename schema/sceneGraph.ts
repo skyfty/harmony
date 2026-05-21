@@ -10,7 +10,6 @@ import type {
   SceneJsonExportDocument,
   SceneNode,
   SceneNodeComponentState,
-  
   SceneNodeMaterial,
   SceneOutlineMesh,
   SceneOutlineMeshMap,
@@ -22,12 +21,12 @@ import type {
   GuideRouteDynamicMesh,
   SceneResourceSummaryEntry,
   SceneMaterialTextureSlot,
-} from './index';
+} from './core';
+import { createPrimitiveGeometry } from './primitiveGeometry';
 import {
-  createPrimitiveGeometry,
   createWaterSurfaceRuntimeMesh,
   extractWaterSurfaceMeshMetadataFromUserData,
-} from './index';
+} from './waterSurfaceMesh';
 import { clampSceneNodeInstanceLayout, resolveInstanceLayoutTemplateAssetId } from './instanceLayout'
 import type { GuideboardComponentProps } from './components/definitions/guideboardComponent';
 import { GUIDEBOARD_COMPONENT_TYPE } from './components/definitions/guideboardComponent';
@@ -42,7 +41,6 @@ import {
 } from './components/definitions/warpGateComponent';
 // NOTE: Water rendering is handled via runtime components; SceneGraph just ensures materials are applied.
 import { createFileFromEntry } from './modelAssetLoader'
-import { loadObjectFromFile } from './assetImport'
 import type { WallComponentProps } from './components/definitions/wallComponent'
 import { WALL_COMPONENT_TYPE, clampWallProps } from './components/definitions/wallComponent'
 import type { RoadComponentProps } from './components/definitions/roadComponent'
@@ -102,6 +100,15 @@ type MeshTemplate = {
   scene: THREE.Object3D;
   animations: THREE.AnimationClip[];
 };
+
+let assetImportModulePromise: Promise<typeof import('./assetImport')> | null = null
+
+async function loadAssetImportModule(): Promise<typeof import('./assetImport')> {
+  if (!assetImportModulePromise) {
+    assetImportModulePromise = import('./assetImport')
+  }
+  return assetImportModulePromise
+}
 
 class SceneGraphBuilder {
   private readonly root: THREE.Group;
@@ -1494,6 +1501,7 @@ class SceneGraphBuilder {
 
     try {
       const ext = file.name.split('.').pop()?.toLowerCase();
+      const { loadObjectFromFile } = await loadAssetImportModule()
       const parsed = await loadObjectFromFile(file, ext);
       const animations = (parsed as unknown as { animations?: THREE.AnimationClip[] }).animations ?? [];
       return { scene: parsed, animations };
@@ -1665,6 +1673,3 @@ export async function buildSceneGraph(
     builder.dispose();
   }
 }
-
-export { createTerrainScatterLodRuntime } from './terrainScatterLodRuntime'
-export type { TerrainScatterLodRuntime } from './terrainScatterLodRuntime'

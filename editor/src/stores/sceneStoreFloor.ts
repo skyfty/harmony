@@ -1,5 +1,5 @@
 import { Vector3 } from 'three'
-import type { FloorDynamicMesh, SceneNode, Vector3Like } from '@schema'
+import type { FloorDynamicMesh, SceneNode, Vector3Like } from '@schema/core'
 import {
   clampFloorComponentProps,
   FLOOR_DEFAULT_SIDE_UV_SCALE,

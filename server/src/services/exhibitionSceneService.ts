@@ -12,7 +12,7 @@ import type {
   SceneNode,
   SceneNodeComponentState,
   SceneResourceSummaryEntry,
-} from '@harmony/schema'
+} from '@harmony/schema/core'
 import { appConfig } from '@/config/env'
 import { SceneModel } from '@/models/Scene'
 import type { SceneDocument } from '@/types/models'

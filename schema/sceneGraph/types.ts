@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { SceneNode, SceneNodeComponentMap, SceneNodeEditorFlags, LightShadowProperties } from '../index';
+import type { SceneNode, SceneNodeComponentMap, SceneNodeEditorFlags, LightShadowProperties } from '../core';
 
 export type SceneNodeWithExtras = SceneNode & {
   light?: {

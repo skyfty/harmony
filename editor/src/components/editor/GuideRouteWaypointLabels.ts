@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import { FontLoader } from 'three/examples/jsm/loaders/FontLoader.js'
 import { TextGeometry } from 'three/examples/jsm/geometries/TextGeometry.js'
-import type { SceneNode, SceneNodeComponentState } from '@schema/index'
+import type { SceneNode, SceneNodeComponentState } from '@schema/core'
 import { clampGuideRouteComponentProps, GUIDE_ROUTE_COMPONENT_TYPE } from '@schema/components'
 import type { GuideRouteComponentProps } from '@schema/components'
 

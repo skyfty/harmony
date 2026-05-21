@@ -5,7 +5,7 @@ import { Types, type FilterQuery } from 'mongoose'
 import { appConfig } from '@/config/env'
 import { SceneModel } from '@/models/Scene'
 import type { SceneDocument } from '@/types/models'
-import { readTextFileFromScenePackage, unzipScenePackage } from '@harmony/schema'
+import { readTextFileFromScenePackage, unzipScenePackage } from '@harmony/schema/core'
 
 const SCENE_STORAGE_PREFIX = 'scenes'
 

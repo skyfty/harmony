@@ -3,7 +3,7 @@ import {
   readQuantizedTerrainPackEntry,
   type QuantizedTerrainDatasetRegionPackIndex,
   type QuantizedTerrainDatasetRootManifest,
-} from '@schema'
+} from '@schema/core'
 import { useScenesStore } from '@/stores/scenesStore'
 
 export type TerrainDatasetTileSource = {

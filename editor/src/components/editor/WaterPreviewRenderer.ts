@@ -2,7 +2,7 @@ import * as THREE from 'three'
 import {
   createWaterSurfaceBufferGeometryFromMetadata,
   normalizeWaterSurfaceMeshInput,
-} from '@schema'
+} from '@schema/core'
 import type { WaterBuildShape } from '@/types/water-build-shape'
 import { buildRotatedRectangleFromCorner } from './rotatedRectangleBuild'
 

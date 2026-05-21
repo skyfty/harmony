@@ -12,7 +12,7 @@ import {
   type SceneNode,
   normalizeGroundWorldBounds,
   resolveGroundWorkingGridSize,
-} from '@schema'
+} from '@schema/core'
 import type { SceneMaterialProps, SceneNodeMaterial, SceneMaterialType } from '@/types/material'
 import type { Vector3 } from 'three'
 import { computeGroundBaseHeightAtVertex } from '@schema/groundGeneration'

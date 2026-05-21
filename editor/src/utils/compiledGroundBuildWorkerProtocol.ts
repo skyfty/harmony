@@ -1,8 +1,8 @@
 import type {
   CompiledGroundBounds,
   GroundDynamicMesh,
-} from '@schema'
-import { resolveGroundWorldBounds } from '@schema'
+} from '@schema/core'
+import { resolveGroundWorldBounds } from '@schema/core'
 
 export type CompiledGroundTileJob = {
   key: string

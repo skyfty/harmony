@@ -4,7 +4,7 @@ import type {
   SceneMaterialTextureSlotMap,
   SceneMaterialType,
   SceneNodeMaterial,
-} from '@schema'
+} from '@schema/core'
 
 const ROAD_SURFACE_DEFAULT_COLOR = '#4b4f55'
 const ROAD_SHOULDER_DEFAULT_COLOR = '#ffffff'

@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import type { SceneNodeComponentState } from '@schema'
+import type { SceneNodeComponentState } from '@schema/core'
 import type { ProjectAsset } from '@/types/project-asset'
 import { useSceneStore } from '@/stores/sceneStore'
 import {
   BILLBOARD_COMPONENT_TYPE,
   type BillboardComponentProps,
 } from '@schema/components'
-import { getLastExtensionFromFilenameOrUrl, isVideoLikeExtension } from '@schema'
+import { getLastExtensionFromFilenameOrUrl, isVideoLikeExtension } from '@schema/core'
 import AssetPickerDialog from '@/components/common/AssetPickerDialog.vue'
 import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 

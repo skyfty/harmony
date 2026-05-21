@@ -2,7 +2,7 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSceneStore } from '@/stores/sceneStore'
-import type { SceneNodeComponentState } from '@schema'
+import type { SceneNodeComponentState } from '@schema/core'
 import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 import type { ProjectAsset } from '@/types/project-asset'
 import { buildLandformPresetFilename, isLandformPresetFilename } from '@/utils/landformPreset'

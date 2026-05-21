@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { RegionDynamicMesh, RegionVertex2D, Vector3Like } from './index'
+import type { RegionDynamicMesh, RegionVertex2D, Vector3Like } from './core'
 
 function toFiniteNumber(value: unknown): number | null {
   const numeric = Number(value)

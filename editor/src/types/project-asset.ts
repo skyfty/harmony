@@ -1,4 +1,4 @@
-import type { AssetBundleHashAlgorithm, AssetBundlePersistedRole, AssetPersistedRole, AssetSourceMetadata, AssetType } from '@schema'
+import type { AssetBundleHashAlgorithm, AssetBundlePersistedRole, AssetPersistedRole, AssetSourceMetadata, AssetType } from '@schema/core'
 import type { TerrainScatterCategory } from '@schema/terrain-scatter'
 
 export type ServerAssetType = AssetType

@@ -7,7 +7,7 @@ import type {
   SceneNode,
   SceneNodeComponentState,
   TriggerBehaviorParams,
-} from '@schema'
+} from '@schema/core'
 import { BEHAVIOR_COMPONENT_TYPE } from '@schema/components'
 import { behaviorMapToList } from '@schema/behaviors/definitions'
 import { useSceneStore } from '@/stores/sceneStore'

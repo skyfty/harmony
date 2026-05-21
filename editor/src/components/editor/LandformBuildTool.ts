@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import type { Ref } from 'vue'
 import type { BuildTool } from '@/types/build-tool'
-import type { Vector3Like } from '@schema'
+import type { Vector3Like } from '@schema/core'
 import { createLandformGroup, updateLandformGroup } from '@schema/landformMesh'
 import {
   buildFloorCircleOrRegularPolygonPoints,

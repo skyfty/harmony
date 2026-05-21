@@ -4,7 +4,7 @@ import type {
   SceneMaterialTextureSlotMap,
   SceneMaterialType,
   SceneNodeMaterial,
-} from '@schema'
+} from '@schema/core'
 
 const LANDFORM_DEFAULT_COLOR = '#ffffff'
 

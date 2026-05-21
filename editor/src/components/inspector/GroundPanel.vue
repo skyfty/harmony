@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSceneStore } from '@/stores/sceneStore'
-import type { GroundDynamicMesh } from '@schema'
+import type { GroundDynamicMesh } from '@schema/core'
 
 const sceneStore = useSceneStore()
 const { selectedNode } = storeToRefs(sceneStore)

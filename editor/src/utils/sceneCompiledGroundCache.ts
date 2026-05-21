@@ -8,7 +8,7 @@ import {
   type CompiledGroundRenderTileRecord,
   type GroundDynamicMesh,
   type SceneJsonExportDocument,
-} from '@schema'
+} from '@schema/core'
 import {
   buildCompiledGroundPackageFilesAsync,
   resolvePreferredCompiledGroundWorkerCount,

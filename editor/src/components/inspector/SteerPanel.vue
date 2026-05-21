@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { storeToRefs } from 'pinia'
-import type { SceneNodeComponentState } from '@schema'
+import type { SceneNodeComponentState } from '@schema/core'
 import NodePicker from '@/components/common/NodePicker.vue'
 import { useSceneStore } from '@/stores/sceneStore'
 import {

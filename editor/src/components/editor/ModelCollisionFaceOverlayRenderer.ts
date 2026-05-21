@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { ModelCollisionDynamicMesh } from '@schema'
+import type { ModelCollisionDynamicMesh } from '@schema/core'
 import { hashString, stableSerialize } from '@schema/stableSerialize'
 
 const GROUP_NAME = '__ModelCollisionFaceOverlay'

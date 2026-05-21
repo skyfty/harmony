@@ -1,4 +1,4 @@
-import type { SceneNode, SceneMaterialProps, SceneNodeMaterial } from '@schema'
+import type { SceneNode, SceneMaterialProps, SceneNodeMaterial } from '@schema/core'
 
 export type SceneStoreWallHelpersDeps = {
   createWallNodeMaterials: (options: { bodyName: string }) => SceneNodeMaterial[]

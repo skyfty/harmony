@@ -1,5 +1,5 @@
-import { type GroundDynamicMesh, type GroundGenerationSettings } from './index'
-import { resolveGroundWorldBounds, resolveGroundWorkingGridSize } from './index'
+import { type GroundDynamicMesh, type GroundGenerationSettings } from './core'
+import { resolveGroundWorldBounds, resolveGroundWorkingGridSize } from './core'
 
 type PerlinNoise3D = (x: number, y: number, z: number) => number
 type VoronoiNoise2D = (x: number, z: number) => number

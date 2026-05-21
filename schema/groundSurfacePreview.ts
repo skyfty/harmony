@@ -2,8 +2,8 @@ import * as THREE from 'three'
 import type {
   GroundDynamicMesh,
   SceneNode,
-} from './index'
-import { resolveGroundWorldBounds } from './index'
+} from './core'
+import { resolveGroundWorldBounds } from './core'
 import { stableSerialize } from './stableSerialize'
 // resolveEnabledComponentState removed with Landforms feature
 import {

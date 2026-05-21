@@ -7,7 +7,7 @@ import type {
   WallDynamicMesh,
   FloorDynamicMesh,
   GuideRouteDynamicMesh,
-} from '@schema'
+} from '@schema/core'
 
 import {
   BOUNDARY_WALL_COMPONENT_TYPE,

@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { LandformDynamicMesh, Vector2Like, Vector3Like } from './index'
+import type { LandformDynamicMesh, Vector2Like, Vector3Like } from './core'
 import { MATERIAL_CONFIG_ID_KEY, MATERIAL_TEXTURE_REPEAT_INFO_KEY } from './material'
 import {
   LANDFORM_SURFACE_POLYGON_OFFSET_FACTOR,

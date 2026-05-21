@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { RoadDynamicMesh, SceneNode } from '@schema'
+import type { RoadDynamicMesh, SceneNode } from '@schema/core'
 
 export type RoadSnapVertex = { position: THREE.Vector3; nodeId: string; vertexIndex: number }
 

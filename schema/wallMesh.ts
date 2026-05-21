@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { WallDynamicMesh } from './index'
+import type { WallDynamicMesh } from './core'
 import {
   createAutoTiledMaterialVariant,
   MATERIAL_CONFIG_ID_KEY,

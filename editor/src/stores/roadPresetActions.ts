@@ -4,7 +4,7 @@ import type {
   SceneNode,
   SceneNodeComponentState,
   SceneNodeMaterial,
-} from '@schema'
+} from '@schema/core'
 import { ROAD_COMPONENT_TYPE, ROAD_DEFAULT_WIDTH, ROAD_MIN_WIDTH, clampRoadProps, type RoadComponentProps } from '@schema/components'
 import type { ProjectAsset } from '@/types/project-asset'
 import { useAssetCacheStore } from './assetCacheStore'

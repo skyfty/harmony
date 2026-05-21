@@ -1,8 +1,40 @@
 import * as THREE from 'three'
+import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js'
 import type ResourceCache from './ResourceCache'
 import type { AssetCacheEntry } from './assetCache'
-import type { SceneNodeImportMetadata } from './index'
-import { cloneImportedObject, loadObjectFromFile } from './assetImport'
+import type { SceneNodeImportMetadata } from './core'
+
+let assetImportModulePromise: Promise<typeof import('./assetImport')> | null = null
+
+async function loadAssetImportModule(): Promise<typeof import('./assetImport')> {
+  if (!assetImportModulePromise) {
+    assetImportModulePromise = import('./assetImport')
+  }
+  return assetImportModulePromise
+}
+
+function cloneImportedObject(source: THREE.Object3D): THREE.Object3D {
+  const cloned = cloneSkinned(source)
+  const sourceAnimations = (source as unknown as { animations?: THREE.AnimationClip[] })?.animations ?? []
+
+  if (sourceAnimations.length) {
+    const animations = sourceAnimations.map((clip) => clip.clone())
+    ;(cloned as unknown as { animations?: THREE.AnimationClip[] }).animations = animations
+    cloned.userData = cloned.userData ?? {}
+    cloned.userData.__animations = animations.map((clip) => clip.name)
+    return cloned
+  }
+
+  const userDataAnimationNames = Array.isArray((source as any)?.userData?.__animations)
+    ? ((source as any).userData.__animations as string[]).filter((name) => typeof name === 'string' && name.trim().length)
+    : []
+  if (userDataAnimationNames.length) {
+    cloned.userData = cloned.userData ?? {}
+    cloned.userData.__animations = [...userDataAnimationNames]
+  }
+
+  return cloned
+}
 
 export function createFileFromEntry(assetId: string, entry: AssetCacheEntry): File | null {
   const filename = entry.filename && entry.filename.trim().length ? entry.filename : `${assetId}.glb`
@@ -37,6 +69,7 @@ export async function loadAssetObject(resourceCache: ResourceCache, assetId: str
   }
   try {
     const ext = file.name.split('.').pop()?.toLowerCase()
+    const { loadObjectFromFile } = await loadAssetImportModule()
     const object = await loadObjectFromFile(file, ext)
     return object
   } catch (error) {

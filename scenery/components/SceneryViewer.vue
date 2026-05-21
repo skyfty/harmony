@@ -417,7 +417,6 @@ const emit = defineEmits<{
 }>();
 import {
   buildSceneGraph,
-  createTerrainScatterLodRuntime,
   type SceneGraphBuildOptions,
 } from '@harmony/schema/sceneGraph';
 import {
@@ -427,8 +426,7 @@ import {
   type RuntimePrefabInitializationMode,
   type RuntimePrefabPlacementOptions,
   type RuntimePrefabSpawnRequest,
-} from '@harmony/schema';
-import { createInstancedBvhFrustumCuller } from '@harmony/schema/instancedBvhFrustumCuller';
+} from '@harmony/schema/core';
 import ResourceCache from '@harmony/schema/ResourceCache';
 import { AssetCache, AssetLoader, configureAssetDownloadHostMirrors, type AssetCacheEntry } from '@harmony/schema/assetCache';
 import { ASSET_DOWNLOAD_HOST_MIRRORS } from '@harmony/schema/assetDownloadMirrors';
@@ -494,9 +492,7 @@ import {
   getInstanceLayoutCount,
   resolveInstanceLayoutTemplateAssetId,
 } from '@harmony/schema/instanceLayout';
-import { createAutoTourRuntime } from '@harmony/schema/autoTourRuntime';
-import { createWaterRuntime } from '@harmony/schema/waterRuntime';
-import { createScenePreviewPerfController } from '@harmony/schema/scenePreviewPerf';
+import { createWaterRuntime } from '@harmony/schema/water';
 import { rebuildSceneNodeIndex, resolveSceneNodeById, resolveSceneParentNodeId } from '@harmony/schema/nodeIndexUtils';
 import { resolveEnabledComponentState } from '@harmony/schema/componentRuntimeUtils';
 import { createGradientBackgroundDome, disposeGradientBackgroundDome, type GradientBackgroundDome } from '@harmony/schema/gradientBackground';
@@ -530,9 +526,9 @@ import type {
   SceneResourceSummary,
   SceneResourceSummaryEntry,
   Vector3Like,
-} from '@harmony/schema/index';
-import { resolveGroundWorkingGridSize } from '@harmony/schema/index';
-import { isPointInsideRegionXZ } from '@harmony/schema/index';
+} from '@harmony/schema/core';
+import { resolveGroundWorkingGridSize } from '@harmony/schema/core';
+import { isPointInsideRegionXZ } from '@harmony/schema/core';
 import { applyMirroredScaleToObject, syncMirroredMeshMaterials } from '@harmony/schema/mirror';
 import {
   DEFAULT_SCENE_CSM_CONFIG,
@@ -664,18 +660,17 @@ import {
 import {
   preloadableComponentDefinition,
 } from '@harmony/schema/components/definitions/preloadableComponent';
-import {
-  VehicleDriveController,
-  type VehicleDriveCameraFollowState,
-  type VehicleDriveCameraMode,
-  type VehicleDriveCameraRestoreState,
-  type VehicleDriveControlFlags,
-  type VehicleDriveInputState,
-  type VehicleDriveOrbitMode,
-  type VehicleInstance,
-  type VehicleDriveVehicle,
-} from '@harmony/schema/VehicleDriveController';
-import { createBridgeVehicleProxy } from '@harmony/schema/bridgeVehicleProxy';
+import type {
+  VehicleDriveCameraFollowState,
+  VehicleDriveCameraMode,
+  VehicleDriveCameraRestoreState,
+  VehicleDriveControlFlags,
+  VehicleDriveInputState,
+  VehicleDriveOrbitMode,
+  VehicleDriveRuntimeState,
+  VehicleInstance,
+  VehicleDriveVehicle,
+} from '@harmony/schema/motion';
 import {
   FollowCameraController,
   type CameraFollowState,
@@ -684,20 +679,25 @@ import {
   createCameraFollowState,
   getApproxDimensions,
   resetCameraFollowState,
-} from '@harmony/schema/followCameraController';
-import {
+} from '@harmony/schema/motion';
+const { VehicleDriveController } = await import('@harmony/schema/motion');
+const { createAutoTourRuntime } = await import('@harmony/schema/motion');
+const { createScenePreviewPerfController } = await import('@harmony/schema/overlay');
+const { createTerrainScatterLodRuntime } = await import('@harmony/schema/scatter');
+const { createBridgeVehicleProxy } = await import('@harmony/schema/motion');
+const {
   createPhysicsAwareAutoTourVehicleInstances,
   resolveVehicleOrObjectWorldPosition,
   stopTourAndUnfollow,
-} from '@harmony/schema/autoTourHelpers';
-import { syncAutoTourActiveNodesFromRuntime, resolveAutoTourFollowNodeId } from '@harmony/schema/autoTourSync';
-import {
+} = await import('@harmony/schema/motion');
+const { syncAutoTourActiveNodesFromRuntime, resolveAutoTourFollowNodeId } = await import('@harmony/schema/motion');
+const {
   holdVehicleBrakeSafe,
   updateVehicleSpeedAndApplyParkingHoldSafe,
   VEHICLE_PARKED_SPEED_EPSILON,
   VEHICLE_PARKING_HOLD_SPEED_EPSILON,
-} from '@harmony/schema/purePursuitRuntime';
-import {
+} = await import('@harmony/schema/motion');
+const {
   SIGNBOARD_CLOSE_FADE_DISTANCE,
   SIGNBOARD_MIN_SCREEN_Y_PERCENT,
   createSignboardPlacementSmoothingState,
@@ -705,10 +705,11 @@ import {
   computeSignboardPlacement,
   resolveSignboardAnchorWorldPosition,
   smoothSignboardPlacement,
-  type SignboardPlacementSmoothingState,
-} from '@harmony/schema/signboardOverlay';
-import { disposeSignboardBillboards, syncSignboardBillboards, type SignboardBillboardStyle } from '@harmony/schema/signboardBillboardRuntime';
-import { runWithProgrammaticCameraMutation, isProgrammaticCameraMutationActive } from '@harmony/schema/cameraGuard';
+} = await import('@harmony/schema/overlay');
+const { disposeSignboardBillboards, syncSignboardBillboards } = await import('@harmony/schema/overlay');
+const { runWithProgrammaticCameraMutation, isProgrammaticCameraMutationActive } = await import('@harmony/schema/overlay');
+type SignboardPlacementSmoothingState = import('@harmony/schema/overlay').SignboardPlacementSmoothingState;
+type SignboardBillboardStyle = import('@harmony/schema/overlay').SignboardBillboardStyle;
 import {
   addBehaviorRuntimeListener,
   getBehaviorNodeVisible,
@@ -1064,17 +1065,19 @@ function clearSceneDownloadState(): void {
   sceneDownload.indeterminate = false;
 }
 import {
-  createPhysicsBridgeVehicleInputSyncState,
   computePlaySoundDistanceGain,
   resolvePlaySoundSourcePoint,
-  resetPhysicsBridgeVehicleInputSyncState,
-  syncPhysicsBridgeVehicleInput,
   createIndexedDbPersistentAssetStorage,
   createNoopPersistentAssetStorage,
   createWeChatFileSystemPersistentAssetStorage,
   isIndexedDbPersistentAssetStorageSupported,
   isWeChatFileSystemPersistentAssetStorageSupported,
-} from '@harmony/schema';
+} from '@harmony/schema/core';
+import {
+  createPhysicsBridgeVehicleInputSyncState,
+  resetPhysicsBridgeVehicleInputSyncState,
+  syncPhysicsBridgeVehicleInput,
+} from '@harmony/schema/vehicleInput';
 
 // Configure multi-source mirrors for asset downloads (优先切源).
 // Note: asset identifiers / cache keys remain the original URLs/assetIds.
@@ -1766,6 +1769,7 @@ const instancedCullingFrustum = new THREE.Frustum();
 const instancedCullingBox = new THREE.Box3();
 const instancedCullingSphere = new THREE.Sphere();
 const instancedCullingWorldPosition = new THREE.Vector3();
+const { createInstancedBvhFrustumCuller } = await import('@harmony/schema/instancedBvhFrustumCuller');
 const instancedLodFrustumCuller = createInstancedBvhFrustumCuller();
 const TERRAIN_SCATTER_LOD_UPDATE_INTERVAL_MS = isWeChatMiniProgram ? 320 : 200;
 const TERRAIN_SCATTER_VISIBILITY_UPDATE_INTERVAL_MS = isWeChatMiniProgram ? 120 : 33;
@@ -2672,7 +2676,7 @@ const vehicleCompassLabels = [
 }));
 
 // Bridge object so the shared VehicleDriveController can mutate existing refs while keeping reactivity intact.
-const vehicleDriveStateBridge: import('@harmony/schema/VehicleDriveController').VehicleDriveRuntimeState = {
+const vehicleDriveStateBridge: VehicleDriveRuntimeState = {
   get active() {
     return vehicleDriveActive.value;
   },
