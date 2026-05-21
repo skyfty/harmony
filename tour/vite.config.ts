@@ -96,7 +96,7 @@ function resolveSceneryChunkGroup(normalizedId: string): string | undefined {
     return 'pages/scenery/chunks/three-adapter';
   }
   if (normalizedId.includes('/src/pages/scenery/schema/')) {
-    return 'pages/scenery-shared/chunks/schema';
+    return 'common/scenery-schema';
   }
   return undefined;
 }
@@ -131,7 +131,7 @@ function resolveManualChunk(id: string): string | undefined {
         return 'pages/physics-cannon/common/vendor';
       }
       if (normalizedId.includes('schema')) {
-        return 'pages/scenery-shared/chunks/schema';
+        return 'common/scenery-schema';
       }
       if (
         normalizedId.includes('three/examples/jsm')
@@ -383,7 +383,7 @@ export default {
           '**/pages/scenery/three-platform-adapter/**',
           '**/@minisheep/three-platform-adapter/**',
         ],
-        'pages/scenery-shared/chunks/schema': [
+        'common/scenery-schema': [
           '**/pages/scenery/schema/**',
         ],
         'pages/physics-ammo/common/vendor': [

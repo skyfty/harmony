@@ -96,7 +96,7 @@ function resolveSceneryChunkGroup(normalizedId: string): string | undefined {
     return 'pages/scenery/chunks/three-adapter';
   }
   if (normalizedId.includes('/src/pages/scenery/schema/')) {
-    return 'pages/scenery-shared/chunks/schema';
+    return 'common/scenery-schema';
   }
   return undefined;
 }
