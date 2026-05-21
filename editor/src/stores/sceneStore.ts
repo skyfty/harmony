@@ -242,6 +242,7 @@ import { createSceneStoreLandformHelpers } from './sceneStoreLandform'
 import { visitExplicitComponentAssetReferences } from '../utils/sceneExplicitAssetReferences'
 import { createSceneStoreWallHelpers } from './sceneStoreWall'
 import { mergeUserDataWithWaterBuildShape, isWaterSurfaceNode } from '@/utils/waterBuildShapeUserData'
+import { createLatestIdleScheduler } from '@/utils/latestIdleScheduler'
 import type { WaterBuildShape } from '@/types/water-build-shape'
 import {
   createNodePrefabHelpers,
@@ -1067,6 +1068,57 @@ const landformHelpers = createSceneStoreLandformHelpers({
   createNodeMaterial,
   getRuntimeObject,
   updateLandformGroup,
+})
+
+type LandformSurfacePreviewRequest = {
+  store: { nodes: SceneNode[] }
+  nodeId: string
+  localPoints: Array<[number, number]>
+}
+
+const landformSurfacePreviewScheduler = createLatestIdleScheduler<LandformSurfacePreviewRequest>((request) => {
+  const target = findNodeById(request.store.nodes, request.nodeId)
+  if (!target || target.dynamicMesh?.type !== 'Landform') {
+    return
+  }
+
+  const runtime = getRuntimeObject(request.nodeId)
+  if (!runtime) {
+    return
+  }
+
+  const groundNode = resolveGroundNodeForHeightSampling(request.store.nodes)
+  const groundDefinition = groundNode?.dynamicMesh?.type === 'Ground'
+    ? resolveGroundRuntimeDefinition(request.store as any, groundNode.id)
+    : null
+  const existingMesh = target.dynamicMesh as LandformDynamicMesh
+  const componentState = target.components?.[LANDFORM_COMPONENT_TYPE] as { props?: unknown } | undefined
+  const componentProps = clampLandformComponentProps(
+    (componentState?.props as Partial<LandformComponentProps> | undefined)
+      ?? resolveLandformComponentPropsFromMesh(existingMesh),
+  )
+
+  const previewMesh = landformHelpers.buildLandformDynamicMeshFromLocalPoints(
+    target,
+    request.localPoints,
+    groundDefinition,
+    groundNode,
+    {
+      ...componentProps,
+      buildShape: readLandformBuildShapeFromNode(target),
+    },
+    runtime,
+  )
+  if (!previewMesh) {
+    return
+  }
+
+  updateLandformGroup(runtime, {
+    ...previewMesh,
+    materialConfigId: existingMesh.materialConfigId ?? previewMesh.materialConfigId ?? null,
+  })
+}, {
+  timeoutMs: 96,
 })
 
 const wallHelpers = createSceneStoreWallHelpers({
@@ -15896,6 +15948,7 @@ export const useSceneStore = defineStore('scene', {
       nodeId: string
       localPoints: Array<[number, number]>
     }): SceneNode | null {
+      landformSurfacePreviewScheduler.cancel()
       const target = findNodeById(this.nodes, payload.nodeId)
       if (!target || target.dynamicMesh?.type !== 'Landform') {
         return null
@@ -15975,39 +16028,24 @@ export const useSceneStore = defineStore('scene', {
         return false
       }
 
-      const groundNode = resolveGroundNodeForHeightSampling(this.nodes)
-      const groundDefinition = groundNode?.dynamicMesh?.type === 'Ground'
-        ? resolveGroundRuntimeDefinition(this, groundNode.id)
-        : null
-      const existingMesh = target.dynamicMesh as LandformDynamicMesh
-      const componentState = target.components?.[LANDFORM_COMPONENT_TYPE] as { props?: unknown } | undefined
-      const componentProps = clampLandformComponentProps(
-        (componentState?.props as Partial<LandformComponentProps> | undefined)
-          ?? resolveLandformComponentPropsFromMesh(existingMesh),
-      )
-      const previewMesh = landformHelpers.buildLandformDynamicMeshFromLocalPoints(
-        target,
-        payload.localPoints,
-        groundDefinition,
-        groundNode,
-        {
-          ...componentProps,
-          buildShape: readLandformBuildShapeFromNode(target),
-        },
-        runtime,
-      )
-      if (!previewMesh) {
-        return false
-      }
-
-      updateLandformGroup(runtime, {
-        ...previewMesh,
-        materialConfigId: existingMesh.materialConfigId ?? previewMesh.materialConfigId ?? null,
+      landformSurfacePreviewScheduler.schedule({
+        store: this as { nodes: SceneNode[] },
+        nodeId: payload.nodeId,
+        localPoints: payload.localPoints.map(([x, z]) => [Number(x), Number(z)] as [number, number]),
       })
       return true
     },
 
+    flushPendingLandformSurfacePreview(): void {
+      landformSurfacePreviewScheduler.flushNow()
+    },
+
+    cancelPendingLandformSurfacePreview(): void {
+      landformSurfacePreviewScheduler.cancel()
+    },
+
     restoreLandformSurfaceMeshRuntime(nodeId: string): boolean {
+      landformSurfacePreviewScheduler.cancel()
       const target = findNodeById(this.nodes, nodeId)
       if (!target || target.dynamicMesh?.type !== 'Landform') {
         return false

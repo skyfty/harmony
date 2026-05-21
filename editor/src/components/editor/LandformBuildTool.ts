@@ -5,15 +5,20 @@ import type { Vector3Like } from '@schema/core'
 import { createLandformGroup, updateLandformGroup } from '@schema/landformMesh'
 import {
   buildFloorCircleOrRegularPolygonPoints,
-  type FloorPreviewSession as LandformPreviewSession,
+  type FloorPreviewSession,
 } from './FloorPreviewRenderer'
 import { buildRotatedRectangleFromCorner, resolveRectangleDragDirection } from './rotatedRectangleBuild'
 import type { useSceneStore } from '@/stores/sceneStore'
 import type { LandformBuildShape } from '@/types/landform-build-shape'
 import { mergeUserDataWithDynamicMeshBuildShape } from '@/utils/dynamicMeshBuildShapeUserData'
 import { snapPointToRelativeAngleStep } from './planarEditMath'
+import { createLatestIdleScheduler } from '@/utils/latestIdleScheduler'
 
 type LandformPresetData = import('@/utils/landformPreset').LandformPresetData
+
+type LandformPreviewSession = FloorPreviewSession & {
+  previewLineGroup: THREE.Group | null
+}
 
 export type LandformBuildToolHandle = {
   getSession: () => LandformPreviewSession | null
@@ -51,17 +56,7 @@ type VertexSnapResolverOptions = {
 
 const PREVIEW_SIGNATURE_PRECISION = 1000
 const LANDFORM_LINE_PREVIEW_Y_OFFSET = 0.012
-const LANDFORM_PREVIEW_MESH_MIN_FLUSH_INTERVAL_MS = 1000 / 15
-const LANDFORM_PREVIEW_MESH_COMPLEX_POINT_THRESHOLD = 24
-const LANDFORM_PREVIEW_MESH_COMPLEX_FLUSH_INTERVAL_MS = 1000 / 10
-const LANDFORM_PREVIEW_MESH_VERY_COMPLEX_POINT_THRESHOLD = 64
-const LANDFORM_PREVIEW_MESH_VERY_COMPLEX_FLUSH_INTERVAL_MS = 140
-
-function getNowMs(): number {
-  return typeof performance !== 'undefined' && typeof performance.now === 'function'
-    ? performance.now()
-    : Date.now()
-}
+const LANDFORM_PREVIEW_MESH_IDLE_TIMEOUT_MS = 96
 
 function createLinePreviewGroup(points: THREE.Vector3[]): THREE.Group {
   const group = new THREE.Group()
@@ -122,16 +117,6 @@ function computePreviewSignature(points: THREE.Vector3[], presetSignature: strin
   return `${geometrySignature}|${presetSignature}`
 }
 
-function resolveMeshPreviewFlushIntervalMs(pointCount: number): number {
-  if (pointCount >= LANDFORM_PREVIEW_MESH_VERY_COMPLEX_POINT_THRESHOLD) {
-    return LANDFORM_PREVIEW_MESH_VERY_COMPLEX_FLUSH_INTERVAL_MS
-  }
-  if (pointCount >= LANDFORM_PREVIEW_MESH_COMPLEX_POINT_THRESHOLD) {
-    return LANDFORM_PREVIEW_MESH_COMPLEX_FLUSH_INTERVAL_MS
-  }
-  return LANDFORM_PREVIEW_MESH_MIN_FLUSH_INTERVAL_MS
-}
-
 export function createLandformBuildTool(options: {
   activeBuildTool: Ref<BuildTool | null>
   landformBuildShape: Ref<LandformBuildShape>
@@ -153,6 +138,7 @@ export function createLandformBuildTool(options: {
     point: THREE.Vector3
     height?: number | null
   }) => void
+  getScene?: () => THREE.Scene | null
   getLandformBrush?: () => {
     presetAssetId: string | null | undefined
     presetData: import('@/utils/landformPreset').LandformPresetData | null | undefined
@@ -225,9 +211,18 @@ export function createLandformBuildTool(options: {
   let previewSignature: string | null = null
   let lastPresetSignature = buildPreviewSignature()
   let lastRegularPolygonSides = getRegularPolygonSides()
-  let lastMeshPreviewFlushAt = Number.NEGATIVE_INFINITY
+
+  const clearPreviewLine = (targetSession: LandformPreviewSession | null): void => {
+    if (targetSession?.previewLineGroup) {
+      const group = targetSession.previewLineGroup
+      group.removeFromParent()
+      disposePreviewGroup(group)
+      targetSession.previewLineGroup = null
+    }
+  }
 
   const clearPreview = (targetSession: LandformPreviewSession | null): void => {
+    clearPreviewLine(targetSession)
     if (targetSession?.previewGroup) {
       const group = targetSession.previewGroup
       group.removeFromParent()
@@ -235,6 +230,27 @@ export function createLandformBuildTool(options: {
       targetSession.previewGroup = null
     }
     previewSignature = null
+  }
+
+  const syncImmediatePreview = (targetSession: LandformPreviewSession | null, previewPoints: THREE.Vector3[]): void => {
+    if (!targetSession) {
+      return
+    }
+    if (previewPoints.length < 2) {
+      clearPreviewLine(targetSession)
+      return
+    }
+
+    const linePoints = previewPoints.map((point) => new THREE.Vector3(point.x, point.y + LANDFORM_LINE_PREVIEW_Y_OFFSET, point.z))
+    if (!targetSession.previewLineGroup) {
+      targetSession.previewLineGroup = createLinePreviewGroup(linePoints)
+      options.rootGroup.add(targetSession.previewLineGroup)
+      return
+    }
+    if (!options.rootGroup.children.includes(targetSession.previewLineGroup)) {
+      options.rootGroup.add(targetSession.previewLineGroup)
+    }
+    updateLinePreviewGroup(targetSession.previewLineGroup, linePoints)
   }
 
   const flushPreview = (scene: THREE.Scene | null, targetSession: LandformPreviewSession | null): void => {
@@ -249,29 +265,24 @@ export function createLandformBuildTool(options: {
 
     const previewPoints = buildPreviewVertices(targetSession)
     if (previewPoints.length < 2) {
-      clearPreview(targetSession)
+      clearPreviewLine(targetSession)
+      return
+    }
+
+    syncImmediatePreview(targetSession, previewPoints)
+
+    if (previewPoints.length < 3) {
       return
     }
 
     const nextSignature = computePreviewSignature(previewPoints, lastPresetSignature)
-    if (nextSignature === previewSignature) {
-      return
-    }
-
-    const linePoints = previewPoints.map((point) => new THREE.Vector3(point.x, point.y + LANDFORM_LINE_PREVIEW_Y_OFFSET, point.z))
-    if (previewPoints.length < 3) {
-      if (!targetSession.previewGroup || targetSession.previewGroup.userData?.isLandformLinePreview !== true) {
-        clearPreview(targetSession)
-        targetSession.previewGroup = createLinePreviewGroup(linePoints)
+    if (nextSignature === previewSignature && targetSession.previewGroup) {
+      clearPreviewLine(targetSession)
+      if (!options.rootGroup.children.includes(targetSession.previewGroup)) {
         options.rootGroup.add(targetSession.previewGroup)
-      } else {
-        updateLinePreviewGroup(targetSession.previewGroup, linePoints)
       }
-      previewSignature = nextSignature
       return
     }
-
-    lastMeshPreviewFlushAt = getNowMs()
 
     const build = options.sceneStore.buildLandformPreviewMesh({
       points: previewPoints.map((point) => ({ x: point.x, y: point.y, z: point.z }) satisfies Vector3Like),
@@ -279,12 +290,10 @@ export function createLandformBuildTool(options: {
       previewMode: 'interactive',
     })
     if (!build) {
-      clearPreview(targetSession)
       return
     }
 
-    if (!targetSession.previewGroup || targetSession.previewGroup.userData?.isLandformLinePreview === true) {
-      clearPreview(targetSession)
+    if (!targetSession.previewGroup) {
       const previewGroup = createLandformGroup(build.definition)
       previewGroup.userData.isLandformPreview = true
       targetSession.previewGroup = previewGroup
@@ -298,15 +307,24 @@ export function createLandformBuildTool(options: {
 
     options.applyPreviewMaterials?.(targetSession.previewGroup, options.getLandformBrush?.().presetData ?? null)
     targetSession.previewGroup.position.set(build.center.x, build.center.y, build.center.z)
+    clearPreviewLine(targetSession)
     previewSignature = nextSignature
   }
+
+  const previewFlushScheduler = createLatestIdleScheduler<{ scene: THREE.Scene | null; session: LandformPreviewSession | null }>(
+    ({ scene, session: targetSession }) => {
+      flushPreview(scene, targetSession)
+    },
+    {
+      timeoutMs: LANDFORM_PREVIEW_MESH_IDLE_TIMEOUT_MS,
+    },
+  )
 
   const previewRenderer = {
     markDirty: () => {
       previewNeedsSync = true
     },
     flushIfNeeded: (scene: THREE.Scene | null, targetSession: LandformPreviewSession | null) => {
-      const now = getNowMs()
       const currentPresetSignature = buildPreviewSignature()
       const currentRegularPolygonSides = getRegularPolygonSides()
       if (currentPresetSignature !== lastPresetSignature || currentRegularPolygonSides !== lastRegularPolygonSides) {
@@ -315,18 +333,23 @@ export function createLandformBuildTool(options: {
       if (!previewNeedsSync) {
         return
       }
-      const previewPointCount = targetSession ? buildPreviewVertices(targetSession).length : 0
-      const previewIsMesh = previewPointCount >= 3
-      const previewGroupMissing = !targetSession?.previewGroup || targetSession.previewGroup.userData?.isLandformLinePreview === true
-      const minFlushIntervalMs = resolveMeshPreviewFlushIntervalMs(previewPointCount)
-      if (
-        previewIsMesh
-        && !previewGroupMissing
-        && now - lastMeshPreviewFlushAt < minFlushIntervalMs
-      ) {
-        return
+      const previewPoints = targetSession ? buildPreviewVertices(targetSession) : []
+      const previewPointCount = previewPoints.length
+      syncImmediatePreview(targetSession, previewPoints)
+      if (previewPointCount >= 3) {
+        const nextSignature = computePreviewSignature(previewPoints, currentPresetSignature)
+        if (nextSignature === previewSignature && targetSession?.previewGroup) {
+          clearPreviewLine(targetSession)
+          previewNeedsSync = false
+          return
+        }
       }
-      flushPreview(scene, targetSession)
+      if (previewPointCount >= 3) {
+        previewFlushScheduler.schedule({ scene, session: targetSession })
+      } else {
+        previewFlushScheduler.cancel()
+      }
+      previewNeedsSync = false
     },
     flush: flushPreview,
     clear: clearPreview,
@@ -335,15 +358,15 @@ export function createLandformBuildTool(options: {
       previewSignature = null
       lastPresetSignature = buildPreviewSignature()
       lastRegularPolygonSides = getRegularPolygonSides()
-      lastMeshPreviewFlushAt = Number.NEGATIVE_INFINITY
+      previewFlushScheduler.cancel()
     },
     dispose: (targetSession: LandformPreviewSession | null) => {
+      previewFlushScheduler.cancel()
       clearPreview(targetSession)
       previewNeedsSync = false
       previewSignature = null
       lastPresetSignature = buildPreviewSignature()
       lastRegularPolygonSides = getRegularPolygonSides()
-      lastMeshPreviewFlushAt = Number.NEGATIVE_INFINITY
     },
   }
 
@@ -459,15 +482,22 @@ export function createLandformBuildTool(options: {
       previewEnd: null,
       rectangleDirection: null,
       previewGroup: null,
+      previewLineGroup: null,
     }
     return session
   }
 
   const clearSession = (disposePreview = true) => {
+    previewFlushScheduler.cancel()
     if (disposePreview) {
       previewRenderer.clear(session)
-    } else if (session?.previewGroup) {
-      session.previewGroup.removeFromParent()
+    } else {
+      if (session?.previewLineGroup) {
+        session.previewLineGroup.removeFromParent()
+      }
+      if (session?.previewGroup) {
+        session.previewGroup.removeFromParent()
+      }
     }
     hideStartIndicator()
     options.clearVertexSnap?.()
@@ -622,6 +652,12 @@ export function createLandformBuildTool(options: {
     if (!session) {
       return
     }
+    const scene = options.getScene?.() ?? null
+    if (scene) {
+      previewRenderer.flush(scene, session)
+    } else {
+      previewFlushScheduler.flushNow()
+    }
     const buildShape = session.shape ?? 'polygon'
     const points = session.points
     if (points.length < 3) {
@@ -652,6 +688,12 @@ export function createLandformBuildTool(options: {
     if (points.length < 3) {
       clearSession(true)
       return
+    }
+    const scene = options.getScene?.() ?? null
+    if (scene) {
+      previewRenderer.flush(scene, session)
+    } else {
+      previewFlushScheduler.flushNow()
     }
     const created = options.sceneStore.createLandformNode({
       points: points.map((point) => ({ x: point.x, y: point.y, z: point.z }) satisfies Vector3Like),

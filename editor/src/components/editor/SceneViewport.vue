@@ -8293,6 +8293,7 @@ const landformBuildTool = createLandformBuildTool({
   getDefaultCircleRadius: () => GRID_MAJOR_SPACING,
   sceneStore,
   rootGroup,
+  getScene: () => scene,
   raycastGroundPoint,
   resolveBuildPlacementPoint,
   snapPoint: (point) => snapVectorToMajorGrid(point.clone()),
@@ -17566,6 +17567,7 @@ async function handlePointerUp(event: PointerEvent) {
         setActiveLandformVertexHandle(null)
 
         if (state.moved) {
+          sceneStore.flushPendingLandformSurfacePreview()
           if (!commitLandformContourNode(state.nodeId, state.workingPoints)) {
             sceneStore.restoreLandformSurfaceMeshRuntime(state.nodeId)
           }
@@ -17703,6 +17705,7 @@ async function handlePointerUp(event: PointerEvent) {
         setActiveLandformVertexHandle(null)
 
         if (state.moved) {
+          sceneStore.flushPendingLandformSurfacePreview()
           if (!commitLandformContourNode(state.nodeId, state.workingPoints)) {
             sceneStore.restoreLandformSurfaceMeshRuntime(state.nodeId)
           }
