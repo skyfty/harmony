@@ -31,7 +31,7 @@ export function buildLandformPresetPreviewDefinition(preset: LandformPresetData)
     y: Math.max(1e-3, preset.landformProps.uvScale.y),
   }
   const enableFeather = preset.landformProps.enableFeather
-  const footprint = LANDFORM_PRESET_RING_POINTS.map((point) => [point.x, point.z] as [number, number])
+  const vertices = LANDFORM_PRESET_RING_POINTS.map((point) => [point.x, point.z] as [number, number])
   const surfaceVertices = [
     { x: 0, y: LANDFORM_PRESET_CENTER_HEIGHT, z: 0 },
     ...LANDFORM_PRESET_RING_POINTS.map((point) => ({ x: point.x, y: point.y, z: point.z })),
@@ -51,11 +51,21 @@ export function buildLandformPresetPreviewDefinition(preset: LandformPresetData)
 
   return {
     type: 'Landform',
-    footprint,
-    surfaceVertices,
-    surfaceIndices,
-    surfaceUvs,
-    surfaceFeather,
+    vertices,
+    segments: vertices.map((_point, index) => ({ a: index, b: (index + 1) % vertices.length })),
+    vertexHeights: LANDFORM_PRESET_RING_POINTS.map((point) => point.y),
+    segmentHeights: vertices.map((_point, index) => {
+      const start = LANDFORM_PRESET_RING_POINTS[index]!
+      const end = LANDFORM_PRESET_RING_POINTS[(index + 1) % LANDFORM_PRESET_RING_POINTS.length]!
+      return [start.y, (start.y + end.y) * 0.5, end.y]
+    }),
+    buildShape: 'polygon',
+    renderCache: {
+      surfaceVertices,
+      surfaceIndices,
+      surfaceUvs,
+      surfaceFeather,
+    },
     materialConfigId: preset.materialSlotId,
     enableFeather,
     feather: preset.landformProps.feather,

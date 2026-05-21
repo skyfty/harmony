@@ -253,8 +253,8 @@ function extractCustomBoundaryChains(loops: BoundaryWallCustomLoop[]): BoundaryC
 }
 
 function extractLandformChains(definition: LandformDynamicMesh): BoundaryChain[] {
-  const points = Array.isArray(definition.footprint)
-    ? definition.footprint
+  const points = Array.isArray(definition.vertices)
+    ? definition.vertices
       .map((entry) => {
         if (!Array.isArray(entry) || entry.length < 2) {
           return null

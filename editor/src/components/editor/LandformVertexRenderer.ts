@@ -201,8 +201,8 @@ export function createLandformVertexRenderer(): LandformVertexRenderer {
 
     const sourcePoints = usePreviewPoints
       ? previewPoints
-      : (Array.isArray(mesh?.footprint)
-        ? mesh.footprint
+      : (Array.isArray(mesh?.vertices)
+        ? mesh.vertices
           .map((entry) => [Number(entry?.[0]), Number(entry?.[1])] as [number, number])
           .filter(([x, z]) => Number.isFinite(x) && Number.isFinite(z))
         : [])

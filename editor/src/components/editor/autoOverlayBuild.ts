@@ -205,7 +205,7 @@ function buildLandformOverlayPlan(
   targetTool: AutoOverlayTool,
 ): AutoOverlayBuildPlan {
   const dynamicMesh = node.dynamicMesh as LandformDynamicMesh
-  const footprint = Array.isArray(dynamicMesh.footprint) ? dynamicMesh.footprint : []
+  const footprint = Array.isArray(dynamicMesh.vertices) ? dynamicMesh.vertices : []
   const contour = sanitizeWorldPoints(
     footprint
       .map((entry) => {

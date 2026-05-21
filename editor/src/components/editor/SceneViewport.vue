@@ -6553,7 +6553,7 @@ function cloneLandformFootprintPoints(node: SceneNode | null | undefined): Array
   if (!node || node.dynamicMesh?.type !== 'Landform') {
     return []
   }
-  const footprint = Array.isArray(node.dynamicMesh.footprint) ? node.dynamicMesh.footprint : []
+  const footprint = Array.isArray(node.dynamicMesh.vertices) ? node.dynamicMesh.vertices : []
   return footprint
     .map((entry) => [Number(entry?.[0]), Number(entry?.[1])] as [number, number])
     .filter(([x, z]) => Number.isFinite(x) && Number.isFinite(z))

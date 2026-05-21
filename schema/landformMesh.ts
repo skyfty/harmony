@@ -208,12 +208,55 @@ function buildFallbackUvs(vertices: THREE.Vector3[], uvScale: { x: number; y: nu
 }
 
 function buildLandformGeometryData(definition: LandformDynamicMesh): LandformGeometryData | null {
-  const vertices = Array.isArray(definition.surfaceVertices)
-    ? definition.surfaceVertices.map((entry) => toFiniteVector3(entry)).filter((entry): entry is THREE.Vector3 => Boolean(entry))
+  const renderCache = definition.renderCache ?? null
+  const cachedVertices = Array.isArray(renderCache?.surfaceVertices)
+    ? renderCache!.surfaceVertices
     : []
-  const indices = Array.isArray(definition.surfaceIndices)
-    ? definition.surfaceIndices.map((entry) => Number(entry)).filter((entry) => Number.isInteger(entry) && entry >= 0)
+  const cachedIndices = Array.isArray(renderCache?.surfaceIndices)
+    ? renderCache!.surfaceIndices
     : []
+  const cachedUvs = Array.isArray(renderCache?.surfaceUvs)
+    ? renderCache!.surfaceUvs
+    : []
+  const cachedFeather = Array.isArray(renderCache?.surfaceFeather)
+    ? renderCache!.surfaceFeather
+    : []
+
+  const fallbackVertices2d = Array.isArray(definition.vertices)
+    ? definition.vertices
+      .map((entry) => {
+        if (!Array.isArray(entry) || entry.length < 2) {
+          return null
+        }
+        const x = Number(entry[0])
+        const z = Number(entry[1])
+        if (!Number.isFinite(x) || !Number.isFinite(z)) {
+          return null
+        }
+        return { x, z }
+      })
+      .filter((entry): entry is { x: number; z: number } => Boolean(entry))
+    : []
+  const fallbackVertexHeights = Array.isArray(definition.vertexHeights) ? definition.vertexHeights : []
+  const vertices = (cachedVertices.length
+    ? cachedVertices.map((entry) => toFiniteVector3(entry)).filter((entry): entry is THREE.Vector3 => Boolean(entry))
+    : fallbackVertices2d.map((entry, index) => new THREE.Vector3(entry.x, Number(fallbackVertexHeights[index]) || 0, entry.z)))
+  const indices = (cachedIndices.length
+    ? cachedIndices.map((entry) => Number(entry)).filter((entry) => Number.isInteger(entry) && entry >= 0)
+    : (() => {
+        if (fallbackVertices2d.length < 3) {
+          return []
+        }
+        const contour = fallbackVertices2d.map((entry) => new THREE.Vector2(entry.x, entry.z))
+        const faces = THREE.ShapeUtils.triangulateShape(contour, [])
+        const triangulated: number[] = []
+        for (const face of faces) {
+          if (Array.isArray(face) && face.length === 3) {
+            triangulated.push(face[0]!, face[1]!, face[2]!)
+          }
+        }
+        return triangulated
+      })())
 
   if (vertices.length < 3 || indices.length < 3) {
     return null
@@ -231,8 +274,8 @@ function buildLandformGeometryData(definition: LandformDynamicMesh): LandformGeo
   const typedIndices = vertices.length > 65535 ? new Uint32Array(indices) : new Uint16Array(indices)
 
   const uvScale = resolveUvScale(definition.uvScale)
-  const providedUvs = Array.isArray(definition.surfaceUvs)
-    ? definition.surfaceUvs.map((entry) => toFiniteVector2(entry)).filter((entry): entry is THREE.Vector2 => Boolean(entry))
+  const providedUvs = cachedUvs.length
+    ? cachedUvs.map((entry) => toFiniteVector2(entry)).filter((entry): entry is THREE.Vector2 => Boolean(entry))
     : []
   let uvs: Float32Array
   if (providedUvs.length === vertices.length) {
@@ -246,7 +289,7 @@ function buildLandformGeometryData(definition: LandformDynamicMesh): LandformGeo
     uvs = buildFallbackUvs(vertices, uvScale)
   }
 
-  const providedFeather = Array.isArray(definition.surfaceFeather) ? definition.surfaceFeather : []
+  const providedFeather = cachedFeather
   const feather = new Float32Array(vertices.length)
   for (let index = 0; index < vertices.length; index += 1) {
     const value = Number(providedFeather[index])

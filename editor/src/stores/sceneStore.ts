@@ -2298,16 +2298,32 @@ function cloneDynamicMeshDefinition(mesh?: SceneDynamicMesh): SceneDynamicMesh |
     }
     case 'Landform': {
       const landformMesh = mesh as LandformDynamicMesh
-      const footprint = (Array.isArray(landformMesh.footprint) ? landformMesh.footprint : [])
+      const vertices = (Array.isArray(landformMesh.vertices) ? landformMesh.vertices : [])
         .map(normalizeVertex2D)
         .filter((value): value is [number, number] => !!value)
-      const surfaceVertices = (Array.isArray(landformMesh.surfaceVertices) ? landformMesh.surfaceVertices : [])
+      const segmentsRaw = Array.isArray(landformMesh.segments) ? landformMesh.segments : []
+      const segments = segmentsRaw
+        .map((segment) => {
+          const a = Math.trunc(Number((segment as any)?.a))
+          const b = Math.trunc(Number((segment as any)?.b))
+          if (!Number.isFinite(a) || !Number.isFinite(b) || a < 0 || b < 0) {
+            return null
+          }
+          return { a, b }
+        })
+        .filter((value): value is { a: number; b: number } => !!value)
+      const vertexHeights = (Array.isArray(landformMesh.vertexHeights) ? landformMesh.vertexHeights : [])
+        .map((entry) => Number(entry))
+        .filter((entry) => Number.isFinite(entry))
+      const segmentHeights = (Array.isArray(landformMesh.segmentHeights) ? landformMesh.segmentHeights : [])
+        .map((series) => (Array.isArray(series) ? series.map((entry) => Number(entry)).filter((entry) => Number.isFinite(entry)) : []))
+      const surfaceVertices = (Array.isArray(landformMesh.renderCache?.surfaceVertices) ? landformMesh.renderCache?.surfaceVertices : [])
         .map(cloneDynamicMeshVector3)
         .filter((value): value is Vector3Like => !!value)
-      const surfaceIndices = (Array.isArray(landformMesh.surfaceIndices) ? landformMesh.surfaceIndices : [])
+      const surfaceIndices = (Array.isArray(landformMesh.renderCache?.surfaceIndices) ? landformMesh.renderCache?.surfaceIndices : [])
         .map((entry) => Math.trunc(Number(entry)))
         .filter((entry) => Number.isFinite(entry) && entry >= 0)
-      const surfaceUvs = (Array.isArray(landformMesh.surfaceUvs) ? landformMesh.surfaceUvs : [])
+      const surfaceUvs = (Array.isArray(landformMesh.renderCache?.surfaceUvs) ? landformMesh.renderCache?.surfaceUvs : [])
         .map((entry) => {
           const x = Number((entry as any)?.x)
           const y = Number((entry as any)?.y)
@@ -2317,7 +2333,7 @@ function cloneDynamicMeshDefinition(mesh?: SceneDynamicMesh): SceneDynamicMesh |
           return { x, y }
         })
         .filter((value): value is Vector2Like => !!value)
-      const surfaceFeather = (Array.isArray(landformMesh.surfaceFeather) ? landformMesh.surfaceFeather : [])
+      const surfaceFeather = (Array.isArray(landformMesh.renderCache?.surfaceFeather) ? landformMesh.renderCache?.surfaceFeather : [])
         .map((entry) => Number(entry))
         .filter((entry) => Number.isFinite(entry))
       const normalizeId = (value: unknown) => (typeof value === 'string' && value.trim().length ? value.trim() : null)
@@ -2325,12 +2341,19 @@ function cloneDynamicMeshDefinition(mesh?: SceneDynamicMesh): SceneDynamicMesh |
       const uvScaleY = Number.isFinite((landformMesh.uvScale as any)?.y) ? Number((landformMesh.uvScale as any).y) : 1
       return {
         type: 'Landform',
-        footprint,
-        surfaceVertices,
-        surfaceIndices,
-        surfaceUvs,
-        surfaceFeather,
+        vertices,
+        segments,
+        vertexHeights,
+        segmentHeights,
+        buildShape: landformMesh.buildShape === 'rectangle' || landformMesh.buildShape === 'circle' ? landformMesh.buildShape : 'polygon',
+        renderCache: {
+          surfaceVertices,
+          surfaceIndices,
+          surfaceUvs,
+          surfaceFeather,
+        },
         materialConfigId: normalizeId(landformMesh.materialConfigId),
+        enableFeather: typeof landformMesh.enableFeather === 'boolean' ? landformMesh.enableFeather : undefined,
         feather: Number.isFinite(landformMesh.feather) ? Number(landformMesh.feather) : 1,
         uvScale: { x: Math.max(1e-3, uvScaleX), y: Math.max(1e-3, uvScaleY) },
       }
@@ -2498,8 +2521,8 @@ function resolveGroundRuntimeDefinition(
 }
 
 function buildLandformFootprintWorldPoints(node: SceneNode, mesh: LandformDynamicMesh): Vector3Like[] {
-  const footprint = Array.isArray(mesh.footprint) ? mesh.footprint : []
-  if (footprint.length < 3) {
+  const vertices = Array.isArray(mesh.vertices) ? mesh.vertices : []
+  if (vertices.length < 3) {
     return []
   }
 
@@ -2521,7 +2544,7 @@ function buildLandformFootprintWorldPoints(node: SceneNode, mesh: LandformDynami
   )
   temp.updateMatrixWorld(true)
 
-  return footprint
+  return vertices
     .map((entry) => {
       if (!Array.isArray(entry) || entry.length < 2) {
         return null

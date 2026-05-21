@@ -2486,16 +2486,23 @@ export interface FloorDynamicMesh {
 
 export interface LandformDynamicMesh {
   type: 'Landform'
-  /** Original closed footprint polygon in local XZ space. */
-  footprint: FloorVertex2D[]
-  /** Terrain-conforming local-space surface vertices. */
-  surfaceVertices: Vector3Like[]
-  /** Triangle indices for the terrain-conforming surface. */
-  surfaceIndices: number[]
-  /** Optional UV coordinates per surface vertex. */
-  surfaceUvs?: Vector2Like[] | null
-  /** Optional feather weight per surface vertex. 0 = transparent edge, 1 = full opacity. */
-  surfaceFeather?: number[] | null
+  /** Editable closed control loop in local XZ space. */
+  vertices: FloorVertex2D[]
+  /** Closed-loop control segments. */
+  segments: RoadSegment[]
+  /** Optional per-control-vertex local Y heights, aligned with `vertices`. */
+  vertexHeights?: number[]
+  /** Optional per-segment sampled local Y heights, aligned with `segments`. */
+  segmentHeights?: number[][]
+  /** Editor-authored build shape used to regenerate handles and previews. */
+  buildShape?: 'polygon' | 'rectangle' | 'circle'
+  /** Derived runtime mesh cache rebuilt from the control loop. */
+  renderCache?: {
+    surfaceVertices: Vector3Like[]
+    surfaceIndices: number[]
+    surfaceUvs?: Vector2Like[] | null
+    surfaceFeather?: number[] | null
+  } | null
   /** Material config id used for the landform surface mesh. */
   materialConfigId?: string | null
   /** Whether feathered edge fading is enabled for this landform surface. */

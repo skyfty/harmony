@@ -41,8 +41,8 @@ export function resolveLandformComponentPropsFromMesh(mesh: LandformDynamicMesh 
     return clampLandformComponentProps(null)
   }
   const hasExplicitEnableFeather = typeof mesh.enableFeather === 'boolean'
-  const hasFeatherData = Array.isArray(mesh.surfaceFeather)
-    && mesh.surfaceFeather.some((value) => Number.isFinite(Number(value)) && Number(value) < 0.999)
+  const surfaceFeather = Array.isArray(mesh.renderCache?.surfaceFeather) ? mesh.renderCache?.surfaceFeather : []
+  const hasFeatherData = surfaceFeather.some((value) => Number.isFinite(Number(value)) && Number(value) < 0.999)
   return clampLandformComponentProps({
     enableFeather: hasExplicitEnableFeather ? mesh.enableFeather : hasFeatherData,
     feather: mesh.feather,
