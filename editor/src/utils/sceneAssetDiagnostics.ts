@@ -11,7 +11,7 @@ import {
   type SceneResourceSummaryEntry,
   type SceneNode,
   type SceneNodeComponentState,
-} from '@schema'
+} from '@schema/core'
 import {
   BEHAVIOR_COMPONENT_TYPE,
   ROAD_COMPONENT_TYPE,

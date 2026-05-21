@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useGroundHeightmapStore } from '@/stores/groundHeightmapStore'
-import type { GroundDynamicMesh, SceneNode } from '@schema'
+import type { GroundDynamicMesh, SceneNode } from '@schema/core'
 import { sampleGroundHeight } from '@schema/groundMesh'
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import type { SelectionDragState, SelectionDragCompanion } from '@/types/scene-viewport-selection-drag'

@@ -8,8 +8,8 @@ import type {
   SceneNode,
   SceneNodeComponentState,
   Vector3Like,
-} from '@schema'
-import type { AssetSourceMetadata } from '@schema'
+} from '@schema/core'
+import type { AssetSourceMetadata } from '@schema/core'
 import type { SceneCameraState } from '@/types/scene-camera-state'
 import type { SceneHistoryNodeLocation } from '@/types/scene-history-entry'
 import type { SceneState } from '@/types/scene-state'

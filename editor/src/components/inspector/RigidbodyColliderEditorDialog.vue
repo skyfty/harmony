@@ -20,7 +20,7 @@ import {
   buildConservativeConvexGeometryFromObject,
   geometryStats,
 } from '@/utils/convexSimplify'
-import type { SceneNode, SceneNodeComponentState } from '@schema'
+import type { SceneNode, SceneNodeComponentState } from '@schema/core'
 import { resolveNodeScaleFactors } from '@/utils/rigidbodyCollider'
 
 const props = defineProps<{

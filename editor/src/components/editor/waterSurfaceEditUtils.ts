@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { SceneNode, Vector3Like, WaterSurfaceMeshMetadata } from '@schema'
+import type { SceneNode, Vector3Like, WaterSurfaceMeshMetadata } from '@schema/core'
 import {
   COMPONENT_ARTIFACT_KEY,
   COMPONENT_ARTIFACT_NODE_ID_KEY,
@@ -8,7 +8,7 @@ import {
   createWaterSurfaceBufferGeometryFromMetadata,
   extractWaterSurfaceMeshMetadataFromUserData,
   normalizeWaterSurfaceMeshInput,
-} from '@schema'
+} from '@schema/core'
 import {
   buildCirclePlanarPoints,
   computeApproxCircleFromPlanarPoints,

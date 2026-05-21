@@ -2,7 +2,7 @@
 import { Box3, Vector3 } from 'three'
 import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import type { SceneNode, SceneNodeComponentState, Vector3Like } from '@schema'
+import type { SceneNode, SceneNodeComponentState, Vector3Like } from '@schema/core'
 import { getRuntimeObject, useSceneStore } from '@/stores/sceneStore'
 import NodePicker from '@/components/common/NodePicker.vue'
 import { generateUuid } from '@/utils/uuid'

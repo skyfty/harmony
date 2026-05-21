@@ -42,7 +42,7 @@ import {
   savePlanningDemToIndexedDB as savePlanningDemToStorage,
   storePlanningDemBlobByHash,
 } from '@/utils/planningDemStorage'
-import { GROUND_TERRAIN_CHUNK_SIZE_METERS, resolveGroundWorldBounds } from '@schema'
+import { GROUND_TERRAIN_CHUNK_SIZE_METERS, resolveGroundWorldBounds } from '@schema/core'
 import {
   createStrictQgis16BitHeightmapEncoding,
   demImportResultToTerrainData,

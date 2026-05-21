@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { FloorDynamicMesh } from './index'
+import type { FloorDynamicMesh } from './core'
 import { MATERIAL_CONFIG_ID_KEY, MATERIAL_TEXTURE_REPEAT_INFO_KEY } from './material'
 
 export type FloorPerimeterChain = {

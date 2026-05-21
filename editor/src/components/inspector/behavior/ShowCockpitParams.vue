@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { watchEffect } from 'vue'
-import type { ShowCockpitBehaviorParams } from '@schema'
+import type { ShowCockpitBehaviorParams } from '@schema/core'
 
 const props = defineProps<{
   modelValue: ShowCockpitBehaviorParams | undefined

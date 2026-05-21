@@ -7,7 +7,7 @@ import {
   type GroundRuntimeDynamicMesh,
   type GroundPlanningMetadata,
   resolveGroundWorkingGridSize,
-} from '@schema'
+} from '@schema/core'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 
 export const GROUND_HEIGHTMAP_SIDECAR_FILENAME = 'ground-heightmaps.bin'

@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { SceneMaterialTextureRef, WallDynamicMesh } from '@schema'
+import type { SceneMaterialTextureRef, WallDynamicMesh } from '@schema/core'
 import { applyMaterialOverrides, type MaterialTextureAssignmentOptions } from '@schema/material'
 import {
   createWallRenderGroup,

@@ -6,7 +6,7 @@ import type {
   WallDynamicMesh,
   WallOpening,
   WallRepeatErasedSlot,
-} from '@schema/index'
+} from '@schema/core'
 import {
   getModelInstanceBindingsForNode,
   findBindingIdForInstance,

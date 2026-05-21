@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 
-import type { LightNodeProperties,LightNodeType,LightShadowProperties } from './index'
+import type { LightNodeProperties,LightNodeType,LightShadowProperties } from './core'
 import {
   DEFAULT_COLOR,
   DEFAULT_INTENSITY,

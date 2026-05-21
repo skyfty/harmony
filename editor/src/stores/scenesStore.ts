@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import type { CompiledGroundManifest, GroundDynamicMesh, QuantizedTerrainDatasetRootManifest, SceneNode } from '@schema'
+import type { CompiledGroundManifest, GroundDynamicMesh, QuantizedTerrainDatasetRootManifest, SceneNode } from '@schema/core'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { SceneSummary } from '@/types/scene-summary'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'

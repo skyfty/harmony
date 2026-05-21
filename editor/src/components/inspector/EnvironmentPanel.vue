@@ -10,7 +10,7 @@ import type {
   EnvironmentRotationDegrees,
   SkyCubeBackgroundFormat,
 } from '@/types/environment'
-import { getLastExtensionFromFilenameOrUrl, isHdriLikeExtension, isImageLikeExtension } from '@schema'
+import { getLastExtensionFromFilenameOrUrl, isHdriLikeExtension, isImageLikeExtension } from '@schema/core'
 import type { ProjectAsset } from '@/types/project-asset'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'

@@ -1,4 +1,4 @@
-import { AssetTypes } from '@schema'
+import { AssetTypes } from '@schema/core'
 
 const typeLabelMap: Record<string, string> = {
   model: '模型',

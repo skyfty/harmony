@@ -9,6 +9,7 @@
       :default-steer-identifier="selectedVehicleIdentifier"
       :server-asset-base-url="serverAssetBaseUrl"
       :initial-punched-node-ids="initialPunchedNodeIds"
+      :create-physics-bridge="createSceneryPhysicsBridge"
       :physics-engine="resolvedPhysicsEngine"
       @punch="handlePunch"
     />

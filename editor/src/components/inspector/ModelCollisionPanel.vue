@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import type { SceneNodeComponentState } from '@schema'
+import type { SceneNodeComponentState } from '@schema/core'
 import {
   MODEL_COLLISION_COMPONENT_TYPE,
   resolveModelCollisionComponentPropsFromNode,

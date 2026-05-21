@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import type { Ref } from 'vue'
-import type { SceneNode, WallDynamicMesh, WallOpening, WallRepeatErasedSlot } from '@schema/index'
+import type { SceneNode, WallDynamicMesh, WallOpening, WallRepeatErasedSlot } from '@schema/core'
 import { addWallOpeningToDefinition, compileWallSegmentsFromDefinition } from '@schema/wallLayout'
 import { findSceneNode } from './sceneUtils'
 

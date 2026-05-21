@@ -8,7 +8,7 @@ import type {
   SceneAssetOverrideEntry,
   SceneAssetRegistryEntry,
   SceneJsonExportDocument,
-} from './index';
+} from './core';
 
 const NodeBuffer: { from: (data: string, encoding: string) => any } | undefined =
   typeof globalThis !== 'undefined' && (globalThis as any).Buffer

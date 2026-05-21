@@ -1,4 +1,4 @@
-import type { SceneJsonExportDocument } from '@schema'
+import type { SceneJsonExportDocument } from '@schema/core'
 import type { SceneAssetDiagnosticsSummary } from '@/utils/sceneAssetDiagnostics'
 import { deflate, inflate } from 'pako'
 

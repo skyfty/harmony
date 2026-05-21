@@ -6,7 +6,7 @@ import type {
   ProjectExportBundleProjectConfig,
   ProjectExportBundleMetadata,
   ProjectExportBundleResourceBreakdown,
-} from '@schema'
+} from '@schema/core'
 import {
   buildQuantizedTerrainRegionPackPath,
   buildQuantizedTerrainRootManifestPath,
@@ -17,9 +17,9 @@ import {
   type QuantizedTerrainDatasetRootManifest,
   type ScenePackageManifestV1,
   type ScenePackageResourceEntry,
-} from '@schema'
+} from '@schema/core'
 
-import { inferExtFromMimeType } from '@schema'
+import { inferExtFromMimeType } from '@schema/core'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { useGroundScatterStore } from '@/stores/groundScatterStore'
 import {
@@ -64,7 +64,7 @@ import {
   collectRuntimeRequiredConfigAssetIds,
   collectTransitiveConfigDependencyAssetIds,
 } from '@/stores/sceneAssetCleanup'
-import { attachRoadCollisionCompiledPackagesToDocument } from '@schema'
+import { attachRoadCollisionCompiledPackagesToDocument } from '@schema/core'
 
 type SceneGroundTerrainOverrideState = {
   runtimeDisableOptimizedChunks?: boolean

@@ -1,5 +1,5 @@
 import { Box3, Matrix4, Quaternion, Vector3, type Object3D, type Mesh } from 'three'
-import type { Vector3Like } from './index'
+import type { Vector3Like } from './core'
 
 export type InstancedTilingMode = 'axis' | 'vector'
 

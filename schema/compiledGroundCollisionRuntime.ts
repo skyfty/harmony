@@ -11,9 +11,11 @@ import {
   clampRigidbodyComponentProps,
   type RigidbodyComponentProps,
   type RigidbodyPhysicsShape,
-  type SceneNode,
-  type SceneNodeComponentState,
-} from './index'
+} from './components'
+import type {
+  SceneNode,
+  SceneNodeComponentState,
+} from './core'
 import type {
   PhysicsBodyBindingEntry as RigidbodyInstance,
   PhysicsBodyLike,
@@ -390,7 +392,7 @@ export function createCompiledGroundCollisionRuntime(
       instance,
       shapes: debugShapes.get(tileKey)?.map((shape) => ({
         ...shape,
-        matrix: shape.matrix.map((column) => [...column]),
+        matrix: shape.matrix.map((column: readonly number[]) => [...column]),
       })) ?? [],
     })),
   }

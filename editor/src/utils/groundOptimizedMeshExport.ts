@@ -1,4 +1,4 @@
-import type { GroundContourBounds, GroundDynamicMesh, SceneJsonExportDocument, SceneNode } from '@schema'
+import type { GroundContourBounds, GroundDynamicMesh, SceneJsonExportDocument, SceneNode } from '@schema/core'
 import { buildGroundOptimizedMeshData, buildGroundOptimizedMeshDataFromSampler, rebuildGroundOptimizedMeshData, type GroundOptimizedMeshBuildOptions } from '@schema/groundOptimizedMesh'
 import type { GroundHeightFieldSampler } from '@schema/groundMesh'
 import { isGroundDynamicMesh } from '@schema/groundHeightfield'

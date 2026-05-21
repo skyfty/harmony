@@ -3,12 +3,12 @@ import { computed, ref, watch } from 'vue'
 import { useSceneStore } from '@/stores/sceneStore'
 import * as THREE from 'three'
 import { applyGroundGeneration, createGroundMesh } from '@schema/groundMesh'
-import type { GroundDynamicMesh, GroundGenerationSettings, GroundRuntimeDynamicMesh } from '@schema'
+import type { GroundDynamicMesh, GroundGenerationSettings, GroundRuntimeDynamicMesh } from '@schema/core'
 import {
   NOMINATE_COMPONENT_TYPE,
   ONLINE_COMPONENT_TYPE,
 } from '@schema/components'
-import { GROUND_NODE_ID, MULTIUSER_NODE_ID, type SceneNode, type Vector3Like } from '@schema'
+import { GROUND_NODE_ID, MULTIUSER_NODE_ID, type SceneNode, type Vector3Like } from '@schema/core'
 import { resolveGroundCreationProfile } from '@/stores/groundUtils'
 
 const sceneStore = useSceneStore()

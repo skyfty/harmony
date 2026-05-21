@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { Vector3Like, GuideRouteDynamicMesh } from '@schema'
+import type { Vector3Like, GuideRouteDynamicMesh } from '@schema/core'
 
 export function buildGuideRouteWorldPoints(points: Vector3Like[]): THREE.Vector3[] {
   const out: THREE.Vector3[] = []

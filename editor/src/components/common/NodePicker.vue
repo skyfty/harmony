@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from 'vue'
 import { storeToRefs } from 'pinia'
-import type { SceneNode } from '@schema'
+import type { SceneNode } from '@schema/core'
 import { VEHICLE_COMPONENT_TYPE } from '@schema/components'
 import type { HierarchyTreeItem } from '@/types/hierarchy-tree-item'
 import type { NodePickerOwner } from '@/stores/nodePickerStore'

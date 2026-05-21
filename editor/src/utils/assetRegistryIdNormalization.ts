@@ -1,4 +1,4 @@
-import type { SceneAssetRegistryEntry } from '@schema'
+import type { SceneAssetRegistryEntry } from '@schema/core'
 
 function normalizeOptionalAssetId(value: unknown): string | null {
   const raw = typeof value === 'string' ? value.trim() : ''

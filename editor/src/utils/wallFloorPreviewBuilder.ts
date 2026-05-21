@@ -5,8 +5,8 @@ import type {
   SceneNodeMaterial,
   SceneMaterialTextureRef,
   WallDynamicMesh,
-} from '@schema'
-import { applyMirroredScaleToObject } from '@schema'
+} from '@schema/core'
+import { applyMirroredScaleToObject } from '@schema/core'
 import { loadObjectFromFile } from '@schema/assetImport'
 import { FLOOR_COMPONENT_TYPE } from '@schema/components/definitions/floorComponent'
 import { WALL_COMPONENT_TYPE, clampWallProps } from '@schema/components/definitions/wallComponent'

@@ -2,7 +2,7 @@ import type {
   AssetBundleHashAlgorithm,
   AssetBundlePersistedRole,
   AssetType as SchemaAssetType,
-} from '@harmony/schema'
+} from '@harmony/schema/core'
 import type { TerrainScatterCategory } from '@harmony/schema/terrain-scatter'
 import type { Document, Types } from 'mongoose'
 

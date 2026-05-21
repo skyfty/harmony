@@ -7,7 +7,7 @@ export type {
   SceneMaterialType,
   SceneNodeMaterial,
   SceneTextureWrapMode,
-} from '@schema'
+} from '@schema/core'
 
 export {
   cloneTextureSettings,

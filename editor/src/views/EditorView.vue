@@ -76,8 +76,8 @@ import type {
   SceneBehavior,
   SceneNode,
   SceneNodeComponentState,
-} from '@schema'
-import type { Project } from '@schema'
+} from '@schema/core'
+import type { Project } from '@schema/core'
 
 
 const sceneStore = useSceneStore()

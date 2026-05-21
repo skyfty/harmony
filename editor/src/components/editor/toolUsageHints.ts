@@ -1,4 +1,4 @@
-import type { GroundSculptOperation } from '@schema'
+import type { GroundSculptOperation } from '@schema/core'
 import type { TerrainScatterBrushShape } from '@schema/terrain-scatter'
 import type { GroundPanelTab } from '@/stores/terrainStore'
 import type { BuildTool } from '@/types/build-tool'

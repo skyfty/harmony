@@ -1,5 +1,5 @@
 
-import type { CameraControlMode, CameraProjection } from '@schema'
+import type { CameraControlMode, CameraProjection } from '@schema/core'
 
 export type SceneViewportSnapMode = 'off' | 'vertex'
 

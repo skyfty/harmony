@@ -1,4 +1,4 @@
-import type { SceneNode, SceneNodeComponentState } from '@schema'
+import type { SceneNode, SceneNodeComponentState } from '@schema/core'
 import {
   LOD_COMPONENT_TYPE,
   clampLodComponentProps,

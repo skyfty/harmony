@@ -46,7 +46,7 @@ import type {
   PhysicsStepFrame,
 } from '@harmony/physics-core'
 import { resolveNodeScaleFactors } from '@/utils/rigidbodyCollider'
-import type { SceneNode, SceneNodeComponentState } from '@schema'
+import type { SceneNode, SceneNodeComponentState } from '@schema/core'
 
 const props = defineProps<{
   visible: boolean

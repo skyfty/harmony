@@ -1,4 +1,4 @@
-import type { SceneAssetRegistryEntry, SceneJsonExportDocument, SceneNode } from './index'
+import type { SceneAssetRegistryEntry, SceneJsonExportDocument, SceneNode } from './core'
 import {
   BOUNDARY_WALL_COMPONENT_TYPE,
   MODEL_COLLISION_COMPONENT_TYPE,

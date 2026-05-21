@@ -1,4 +1,4 @@
-export type { EnvironmentSettings, EnvironmentCsmSettings, EnvironmentNorthDirection } from './index';
+export type { EnvironmentSettings, EnvironmentCsmSettings, EnvironmentNorthDirection } from './core';
 import {
   DEFAULT_SCENE_CSM_CONFIG,
   DEFAULT_SCENE_CSM_SUN_AZIMUTH_DEG,
@@ -10,7 +10,7 @@ import type {
   EnvironmentSettings,
   SceneJsonExportDocument,
   SceneNode,
-} from './index'
+} from './core'
 
 const HEX_COLOR_PATTERN = /^#[0-9a-f]{6}$/i
 

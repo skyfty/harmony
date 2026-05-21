@@ -14,7 +14,7 @@ import {
 import TexturePanel from './TexturePanel.vue'
 import AssetPickerDialog from '@/components/common/AssetPickerDialog.vue'
 import type { ProjectAsset } from '@/types/project-asset'
-import {type SceneMaterialType, type SceneMaterialTextureSlot} from '@schema'
+import {type SceneMaterialType, type SceneMaterialTextureSlot} from '@schema/core'
 import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 import { buildMaterialAssetFilename, parseMaterialAssetDocument } from '@/utils/materialAsset'
 

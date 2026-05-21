@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { GuideRouteDynamicMesh } from './index'
+import type { GuideRouteDynamicMesh } from './core'
 
 export type GuideRouteRenderOptions = {
   segmentThickness?: number

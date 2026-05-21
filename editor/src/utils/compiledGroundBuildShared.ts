@@ -2,7 +2,7 @@ import type {
   CompiledGroundCollisionTileData,
   CompiledGroundRenderTileData,
   GroundDynamicMesh,
-} from '@schema'
+} from '@schema/core'
 import {
   computeCompiledGroundBoundsFromPositions,
   formatGroundLocalEditTileKey,
@@ -10,7 +10,7 @@ import {
   resolveGroundChunkOrigin,
   resolveGroundWorldBounds,
   resolveInfiniteGroundGridOriginMeters,
-} from '@schema'
+} from '@schema/core'
 import { sampleGroundHeight } from '@schema/groundMesh'
 
 function clamp(value: number, min: number, max: number): number {

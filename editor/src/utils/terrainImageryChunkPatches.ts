@@ -3,13 +3,13 @@ import type { PlanningTerrainDemData } from '@/types/planning-scene-data'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { computeBlobHash } from '@/utils/blob'
 import { loadPlanningDemBlobByHash } from '@/utils/planningDemStorage'
-import type { AssetSourceMetadata, GroundDynamicMesh, GroundSurfaceChunkTextureMap } from '@schema'
+import type { AssetSourceMetadata, GroundDynamicMesh, GroundSurfaceChunkTextureMap } from '@schema/core'
 import {
   formatTerrainPaintChunkKey,
   resolveGroundWorldBounds,
   resolveGroundWorkingGridSize,
   resolveTerrainPaintChunkBounds,
-} from '@schema'
+} from '@schema/core'
 import { resolveGroundChunkCells } from '@schema/groundMesh'
 
 type CanvasLike = OffscreenCanvas | HTMLCanvasElement

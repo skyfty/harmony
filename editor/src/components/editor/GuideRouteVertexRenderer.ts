@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { GuideRouteDynamicMesh, Vector3Like } from '@schema'
+import type { GuideRouteDynamicMesh, Vector3Like } from '@schema/core'
 import { hashString, stableSerialize } from '@schema/stableSerialize'
 import { createEndpointGizmoObject, getEndpointGizmoPartInfoFromObject, type EndpointGizmoPart } from './EndpointGizmo'
 import { computeWorldUnitsPerPixel } from './handleScreenScaleUtils'

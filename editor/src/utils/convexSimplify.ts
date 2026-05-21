@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { SceneOutlineMesh } from '@schema'
+import type { SceneOutlineMesh } from '@schema/core'
 import { buildOutlineMeshFromObject } from '@/utils/outlineMesh'
 
 export type ConvexSimplifyPass = {

@@ -5,7 +5,7 @@ import type {
   SoundBehaviorCommand,
   SoundDistanceResponseMode,
   SoundPlaybackMode,
-} from '@schema'
+} from '@schema/core'
 import AssetPickerDialog from '@/components/common/AssetPickerDialog.vue'
 import NodePicker from '@/components/common/NodePicker.vue'
 import type { ProjectAsset } from '@/types/project-asset'

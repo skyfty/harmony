@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { ExitSceneBehaviorParams } from '@schema'
+import type { ExitSceneBehaviorParams } from '@schema/core'
 
 defineProps<{
   modelValue: ExitSceneBehaviorParams | undefined

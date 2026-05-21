@@ -38,7 +38,7 @@ import PlanningImagesPanel from '@/components/inspector/PlanningImagesPanel.vue'
 import NominatePanel from '@/components/inspector/NominatePanel.vue'
 import { useSceneStore, GROUND_NODE_ID, ENVIRONMENT_NODE_ID,MULTIUSER_NODE_ID,PROTAGONIST_NODE_ID } from '@/stores/sceneStore'
 import { getNodeIcon } from '@/types/node-icons'
-import { isGeometryType, type BehaviorEventType, type SceneBehavior, type SceneNodeComponentState } from '@schema'
+import { isGeometryType, type BehaviorEventType, type SceneBehavior, type SceneNodeComponentState } from '@schema/core'
 import type { BehaviorActionDefinition } from '@schema/behaviors/definitions'
 
 import {

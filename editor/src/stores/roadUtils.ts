@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { RoadDynamicMesh, Vector3Like } from '@schema'
+import type { RoadDynamicMesh, Vector3Like } from '@schema/core'
 import type { RoadComponentProps } from '@schema/components'
 import { ROAD_COMPONENT_TYPE, ROAD_DEFAULT_WIDTH, ROAD_MIN_WIDTH, clampRoadProps } from '@schema/components'
 import { compileRoadStaticMeshMetadata, updateRoadGroup, resolveRoadLocalHeightSampler } from '@schema/roadMesh'

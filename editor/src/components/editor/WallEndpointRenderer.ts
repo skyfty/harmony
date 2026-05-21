@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { WallDynamicMesh } from '@schema'
+import type { WallDynamicMesh } from '@schema/core'
 import { hashString, stableSerialize } from '@schema/stableSerialize'
 import { compileWallSegmentsFromDefinition } from '@schema/wallLayout'
 import { splitWallSegmentsIntoChains } from './wallSegmentUtils'

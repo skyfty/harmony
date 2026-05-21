@@ -40,7 +40,7 @@ import type {
   PunchBehaviorParams,
   RuntimePrefabInitializationMode,
   RuntimePrefabPlacementOptions,
-} from '../index'
+} from '../core'
 
 export interface BehaviorActionDefinition {
   id: BehaviorEventType

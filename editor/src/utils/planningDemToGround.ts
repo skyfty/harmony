@@ -1,4 +1,4 @@
-import type { GroundHeightMap, GroundLocalEditTileData, GroundLocalEditTileMap, GroundRuntimeDynamicMesh } from '@schema'
+import type { GroundHeightMap, GroundLocalEditTileData, GroundLocalEditTileMap, GroundRuntimeDynamicMesh } from '@schema/core'
 import {
   GROUND_HEIGHT_UNSET_VALUE,
   GROUND_TERRAIN_CHUNK_SIZE_METERS,
@@ -10,7 +10,7 @@ import {
   resolveGroundWorldBounds,
   resolveGroundWorkingGridSize,
   type GroundPlanningMetadata,
-} from '@schema'
+} from '@schema/core'
 import type { PlanningTerrainDemData } from '@/types/planning-scene-data'
 import { loadPlanningDemBlobByHash } from '@/utils/planningDemStorage'
 import { isPlanningDemHeightmapImageSource, parsePlanningDemBlob } from '@/utils/planningDemImport'

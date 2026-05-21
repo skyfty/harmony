@@ -3,7 +3,7 @@ import {
   resolveGroundDefinitionStructureSignature,
   type GroundFlatChunkInstanceMatrixBuildResult,
 } from '@schema/groundMesh'
-import type { GroundRuntimeDynamicMesh } from '@schema/index'
+import type { GroundRuntimeDynamicMesh } from '@schema/core'
 
 export type GroundFlatChunkMatrixWorkerSyncDefinitionRequest = {
   kind: 'sync-ground-flat-chunk-definition'

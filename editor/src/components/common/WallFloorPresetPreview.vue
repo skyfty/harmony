@@ -16,7 +16,7 @@ import type {
   FloorDynamicMesh,
   SceneNode,
   SceneNodeMaterial,
-} from '@schema'
+} from '@schema/core'
 import { FLOOR_COMPONENT_TYPE } from '@schema/components/definitions/floorComponent'
 import { createLandformGroup } from '@schema/landformMesh'
 import { applyMaterialOverrides } from '@schema/material'

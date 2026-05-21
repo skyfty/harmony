@@ -3,7 +3,7 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSceneStore } from '@/stores/sceneStore'
 import InspectorVectorControls from '@/components/common/VectorControls.vue'
-import type { Vector3Like } from '@schema'
+import type { Vector3Like } from '@schema/core'
 import {
   clampSceneNodeInstanceLayout,
   INSTANCE_LAYOUT_DEFAULT_COUNT,

@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { SceneNode } from '@schema'
+import type { SceneNode } from '@schema/core'
 import { isNodeExcludedFromSelectionBoundingBoxFallback } from '@/utils/dynamicMeshBuildShapeUserData'
 import type { PointerDownResult } from './types'
 import type { PointerTrackingState } from '@/types/scene-viewport-pointer-tracking-state'

@@ -3,7 +3,7 @@
 import type { PlanningDemHeightRegionBuildPlan, PlanningDemLocalEditTileBuildPlan } from '@/utils/planningDemToGround'
 import {
   formatGroundLocalEditTileKey,
-} from '@schema'
+} from '@schema/core'
 import {
   createPlanningDemRasterSource,
   type PlanningDemRasterSource,

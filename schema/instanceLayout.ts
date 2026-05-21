@@ -1,5 +1,5 @@
 import { Box3, Matrix4, Vector3 } from 'three'
-import type { Vector3Like } from './index'
+import type { Vector3Like } from './core'
 import {
   buildInstancedTilingLocalMatrices,
   computeBoxExtentsAlongBasis,

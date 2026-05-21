@@ -1,6 +1,6 @@
 import * as THREE from 'three'
-import type { SceneNode } from '@schema/index'
-import { resolveGroundWorldBounds } from '@schema/index'
+import type { SceneNode } from '@schema/core'
+import { resolveGroundWorldBounds } from '@schema/core'
 import { findSceneNode, setBoundingBoxFromObject } from './sceneUtils'
 
 export type CameraResetDirection = 'pos-x' | 'neg-x' | 'pos-y' | 'neg-y' | 'pos-z' | 'neg-z'

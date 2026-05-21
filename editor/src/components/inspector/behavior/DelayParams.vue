@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { DelayBehaviorParams } from '@schema'
+import type { DelayBehaviorParams } from '@schema/core'
 
 const props = defineProps<{
   modelValue: DelayBehaviorParams | undefined

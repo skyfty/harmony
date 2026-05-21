@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from 'vue'
-import type { HideBehaviorParams } from '@schema'
+import type { HideBehaviorParams } from '@schema/core'
 import NodePicker from '@/components/common/NodePicker.vue'
 
 const props = defineProps<{

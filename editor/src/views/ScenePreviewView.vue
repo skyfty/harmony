@@ -14,12 +14,6 @@ import {
 	resolveDocumentEnvironment,
 	clampSceneNodeInstanceLayout,
 	computeInstanceLayoutLocalBoundingBox,
-	createAutoTourRuntime,
-	createWaterRuntime,
-	createScenePreviewPerfController,
-	createPhysicsBridgeVehicleInputSyncState,
-	resetPhysicsBridgeVehicleInputSyncState,
-	syncPhysicsBridgeVehicleInput,
 	forEachInstanceWorldMatrix,
 	getInstanceLayoutBindingId,
 	getInstanceLayoutCount,
@@ -28,29 +22,37 @@ import {
 	resolveSceneNodeById,
 	resolveSceneParentNodeId,
 	resolveEnabledComponentState,
-	type EnvironmentCsmSettings,
-	type EnvironmentSettings,
 	computePlaySoundDistanceGain,
 	resolvePlaySoundSourcePoint,
 	cloneRuntimePrefabNode,
 	disposeSkyCubeTexture,
 	createRuntimePrefabDocument,
-	type GroundDynamicMesh,
-	type GroundRuntimeDynamicMesh,
-	type LanternSlideDefinition,
-	type SceneAssetRegistryEntry,
-	type SceneJsonExportDocument,
-	type CompiledGroundManifest,
-	type SceneNode,
-	type SceneNodeComponentState,
-	type SceneMaterialTextureRef,
-	type RuntimePrefabInitializationMode,
-	type RuntimePrefabPlacementOptions,
-	type Vector3Like,
 	parseRuntimePrefabData,
 	loadSkyCubeTexture,
 	extractSkycubeZipFaces,
-} from '@schema/index'
+} from '@schema/core'
+import type {
+	EnvironmentCsmSettings,
+	EnvironmentSettings,
+	GroundDynamicMesh,
+	GroundRuntimeDynamicMesh,
+	LanternSlideDefinition,
+	SceneAssetRegistryEntry,
+	SceneJsonExportDocument,
+	CompiledGroundManifest,
+	SceneNode,
+	SceneNodeComponentState,
+	SceneMaterialTextureRef,
+	RuntimePrefabInitializationMode,
+	RuntimePrefabPlacementOptions,
+	Vector3Like,
+} from '@schema/core'
+import { createWaterRuntime } from '@schema/water'
+import {
+	createPhysicsBridgeVehicleInputSyncState,
+	resetPhysicsBridgeVehicleInputSyncState,
+	syncPhysicsBridgeVehicleInput,
+} from '@schema/vehicleInput'
 import { buildPhysicsSceneAsset } from '@schema/physicsSceneAsset'
 import {
 	type PhysicsBackendPreference,
@@ -80,8 +82,8 @@ import { useGroundHeightmapStore } from '@/stores/groundHeightmapStore'
 import { useScenesStore } from '@/stores/scenesStore'
 import { useSceneStore } from '@/stores/sceneStore'
 import { attachGroundScatterRuntimeToNode, useGroundScatterStore } from '@/stores/groundScatterStore'
-import { buildSceneGraph, createTerrainScatterLodRuntime, type SceneGraphBuildOptions } from '@schema/sceneGraph'
-import { createInstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCuller'
+import { buildSceneGraph, type SceneGraphBuildOptions } from '@schema/sceneGraph'
+import { createTerrainScatterLodRuntime } from '@schema/scatter'
 
 import ResourceCache from '@schema/ResourceCache'
 import { AssetLoader } from '@schema/assetCache'
@@ -214,44 +216,44 @@ import {
 	DEFAULT_AXLE,
 	SCENE_STATE_ANCHOR_COMPONENT_TYPE,
 	} from '@schema/components'
-import { VehicleDriveController } from '@schema/VehicleDriveController'
-import type { VehicleDriveRuntimeState, VehicleDriveVehicle } from '@schema/VehicleDriveController'
-import { createBridgeVehicleProxy } from '@schema/bridgeVehicleProxy'
+import { VehicleDriveController } from '@schema/motion'
+import type { VehicleDriveRuntimeState, VehicleDriveVehicle } from '@schema/motion'
+import { createBridgeVehicleProxy } from '@schema/motion'
 import {
-	FollowCameraController,
-	computeFollowLerpAlpha,
-	computeFollowPlacement,
-	createCameraFollowState,
-	getApproxDimensions,
-	resetCameraFollowState,
-} from '@schema/followCameraController'
+  FollowCameraController,
+  computeFollowLerpAlpha,
+  computeFollowPlacement,
+  createCameraFollowState,
+  getApproxDimensions,
+  resetCameraFollowState,
+} from '@schema/motion'
 import {
-	createPhysicsAwareAutoTourVehicleInstances,
-	resolveVehicleOrObjectWorldPosition,
-	startTourAndFollow,
-	stopTourAndUnfollow,
-} from '@schema/autoTourHelpers'
-import { syncAutoTourActiveNodesFromRuntime, resolveAutoTourFollowNodeId } from '@schema/autoTourSync'
+  createPhysicsAwareAutoTourVehicleInstances,
+  resolveVehicleOrObjectWorldPosition,
+  startTourAndFollow,
+  stopTourAndUnfollow,
+} from '@schema/motion'
+import { syncAutoTourActiveNodesFromRuntime, resolveAutoTourFollowNodeId } from '@schema/motion'
 import {
-	holdVehicleBrakeSafe,
-	updateVehicleSpeedAndApplyParkingHoldSafe,
-	VEHICLE_PARKED_SPEED_EPSILON,
-	VEHICLE_PARKING_HOLD_SPEED_EPSILON,
-} from '@schema/purePursuitRuntime'
+  holdVehicleBrakeSafe,
+  updateVehicleSpeedAndApplyParkingHoldSafe,
+  VEHICLE_PARKED_SPEED_EPSILON,
+  VEHICLE_PARKING_HOLD_SPEED_EPSILON,
+} from '@schema/motion'
 import {
-	SIGNBOARD_CLOSE_FADE_DISTANCE,
-	SIGNBOARD_MIN_SCREEN_Y_PERCENT,
-	createSignboardPlacementSmoothingState,
-	createSignboardReferenceSmoothingState,
-	DEFAULT_SIGNBOARD_PLACEMENT_SMOOTH_SPEED,
-	DEFAULT_SIGNBOARD_REFERENCE_SMOOTH_SPEED,
-	computeSignboardPlacement,
-	resolveSignboardAnchorWorldPosition,
-	smoothSignboardPlacement,
-	smoothSignboardReference,
-	type SignboardPlacementSmoothingState,
-} from '@schema/signboardOverlay'
-import { disposeSignboardBillboards, syncSignboardBillboards, type SignboardBillboardStyle } from '@schema/signboardBillboardRuntime'
+  SIGNBOARD_CLOSE_FADE_DISTANCE,
+  SIGNBOARD_MIN_SCREEN_Y_PERCENT,
+  createSignboardPlacementSmoothingState,
+  createSignboardReferenceSmoothingState,
+  DEFAULT_SIGNBOARD_PLACEMENT_SMOOTH_SPEED,
+  DEFAULT_SIGNBOARD_REFERENCE_SMOOTH_SPEED,
+  computeSignboardPlacement,
+  resolveSignboardAnchorWorldPosition,
+  smoothSignboardPlacement,
+  smoothSignboardReference,
+  type SignboardPlacementSmoothingState,
+} from '@schema/overlay'
+import { disposeSignboardBillboards, syncSignboardBillboards, type SignboardBillboardStyle } from '@schema/overlay'
 import type {
 	GuideboardComponentProps,
 	LodFaceCameraForwardAxis,
@@ -296,6 +298,8 @@ import {
 import type Viewer from 'viewerjs'
 import type { ViewerOptions } from 'viewerjs'
 import { readServerDownloadBaseUrl } from '@/api/serverApiConfig'
+import { createAutoTourRuntime } from '@schema/motion'
+import { createScenePreviewPerfController } from '@schema/overlay'
 
 
 const SCENE_PREVIEW_EXPORT_OPTIONS: SceneExportOptions = {
@@ -432,6 +436,7 @@ const isGroundWireframeVisible = ref(true)
 const isOtherRigidbodyWireframeVisible = ref(true)
 const isPhysicsCollisionDebugVisible = ref(true)
 const isInstancedCullingVisualizationVisible = ref(false)
+const { createInstancedBvhFrustumCuller } = await import('@schema/instancedBvhFrustumCuller')
 const instancedLodFrustumCuller = createInstancedBvhFrustumCuller()
 const isRendererDebugVisible = ref(false)
 const isInstancingDebugVisible = ref(false)
@@ -584,6 +589,7 @@ let lastRendererDebugSignature = ''
 const rendererSizeHelper = new THREE.Vector2()
 const instancedMatrixUploadMeshes = new Set<THREE.InstancedMesh>()
 const isRigidbodyDebugVisible = computed(() => false)
+function updateScenePreviewCannonPhysicsDebugger(): void {}
 const legacyPhysicsDebugNoops = [updateScenePreviewCannonPhysicsDebugger, setAirWallDebugVisibility, updateRigidbodyDebugTransforms]
 void legacyPhysicsDebugNoops
 function appendWarningMessage(message: string): void {
@@ -1760,6 +1766,7 @@ const MAP_CONTROL_DEFAULTS = {
 let animationFrameHandle = 0
 let currentDocument: SceneJsonExportDocument | null = null
 const isCannonPhysicsDebuggerVisible = ref(false)
+void isCannonPhysicsDebuggerVisible
 const runtimePrefabPreviewRoots = new Set<THREE.Object3D>()
 type PreviewWindowWithNominateState = Window & {
 	__HARMONY_PREVIEW_NOMINATE_STATE__?: NominateExternalStateMap | null
@@ -10198,6 +10205,7 @@ function resolveScenePreviewPhysicsBridgePreference(
 }
 
 function handleScenePreviewCannonWorldReady(world: unknown | null): void {
+	void world
 }
 
 function resolveScenePreviewCompiledGroundTileLoader(): ((record: { path: string }) => Promise<ArrayBuffer | null>) | undefined {
@@ -11026,6 +11034,20 @@ function ensureRigidbodyDebugGroup(): THREE.Group | null {
 		scene.add(rigidbodyDebugGroup)
 	}
 	return rigidbodyDebugGroup
+}
+
+function ensureAirWallDebugGroup(): THREE.Group | null {
+	if (!scene) {
+		return null
+	}
+	if (!airWallDebugGroup) {
+		airWallDebugGroup = new THREE.Group()
+		airWallDebugGroup.name = 'AirWallDebugHelpers'
+	}
+	if (airWallDebugGroup.parent !== scene) {
+		scene.add(airWallDebugGroup)
+	}
+	return airWallDebugGroup
 }
 
 function clearAirWallDebugMeshes(): void {
@@ -12031,19 +12053,18 @@ async function syncPhysicsBodiesForDocument(
 	await loadScenePreviewPhysicsBridgeScene(document, onProgress)
 	clearLegacyPhysicsWorld()
 	syncVehicleBindingsForDocument(document)
-		await buildPhysicsSceneAsset(document, {
-			onProgress: (progress) => {
-				onProgress?.({
-					phase: 'syncingPhysics',
-					percent: progress.total > 0 ? (progress.loaded / progress.total) * 100 : 0,
-					detail: progress.detail || progress.label,
-					currentIndex: progress.loaded,
-					currentTotal: progress.total,
-					currentLabel: progress.label,
-				})
-			},
-		}),
-	)
+	await buildPhysicsSceneAsset(document, {
+		onProgress: (progress) => {
+			onProgress?.({
+				phase: 'syncingPhysics',
+				percent: progress.total > 0 ? (progress.loaded / progress.total) * 100 : 0,
+				detail: progress.detail || progress.label,
+				currentIndex: progress.loaded,
+				currentTotal: progress.total,
+				currentLabel: progress.label,
+			})
+		},
+	})
 }
 
 function stepPhysicsWorld(delta: number): void {

@@ -1,5 +1,6 @@
 import { Object3D } from 'three'
-import { createPrimitiveMesh,isGeometryType, type SceneNode, type SceneNodeComponentState } from '@schema'
+import { createPrimitiveMesh, isGeometryType } from '@schema/import'
+import type { SceneNode, SceneNodeComponentState } from '@schema/core'
 import {
   DISPLAY_BOARD_COMPONENT_TYPE,
   GUIDEBOARD_COMPONENT_TYPE,

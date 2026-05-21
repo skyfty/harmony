@@ -1,4 +1,4 @@
-import type { Vector3Like, WallDynamicMesh, WallChain, WallOpening } from './index'
+import type { Vector3Like, WallDynamicMesh, WallChain, WallOpening } from './core'
 
 const WALL_LAYOUT_EPSILON = 1e-6
 

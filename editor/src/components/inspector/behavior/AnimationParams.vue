@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import type { AnimationBehaviorParams, SceneNode } from '@schema'
+import type { AnimationBehaviorParams, SceneNode } from '@schema/core'
 import { useSceneStore, getRuntimeObject } from '@/stores/sceneStore'
 import { useNodePickerStore } from '@/stores/nodePickerStore'
 import { collectRuntimeAnimationClipOptions } from '@/utils/runtimeAnimationClips'

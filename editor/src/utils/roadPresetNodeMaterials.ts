@@ -3,7 +3,7 @@ import type {
   SceneMaterialTextureRef,
   SceneMaterialType,
   SceneNodeMaterial,
-} from '@schema'
+} from '@schema/core'
 import { DEFAULT_SCENE_MATERIAL_TYPE } from '@/types/material'
 import type { RoadPresetData, RoadPresetMaterialPatch } from '@/utils/roadPreset'
 import { normalizeMaterialLikeTextureAssetIds } from '@/utils/assetRegistryIdNormalization'

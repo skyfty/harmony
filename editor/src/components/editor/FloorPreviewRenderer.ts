@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { FloorDynamicMesh } from '@schema'
+import type { FloorDynamicMesh } from '@schema/core'
 import { createFloorGroup, updateFloorGroup } from '@schema/floorMesh'
 import type { FloorBuildShape } from '@/types/floor-build-shape'
 import type { FloorPresetData } from '@/utils/floorPreset'

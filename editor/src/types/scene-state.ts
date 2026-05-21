@@ -8,7 +8,7 @@ import type {
   SceneAssetRegistryEntry,
   SceneAssetOverrideEntry,
   SceneResourceSummary,
-} from '@schema'
+} from '@schema/core'
 import type { EditorTool } from './editor-tool'
 import type { ProjectAsset } from './project-asset'
 import type { ProjectDirectory } from './project-directory'

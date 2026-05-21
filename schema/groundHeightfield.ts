@@ -1,6 +1,6 @@
-import type { SceneNode, GroundDynamicMesh } from './index'
+import type { SceneNode, GroundDynamicMesh } from './core'
 import type { RigidbodyPhysicsShape } from './components'
-import { resolveGroundEditTileResolution, resolveGroundEditTileSizeMeters, resolveGroundWorldBounds, resolveGroundWorkingGridSize } from './index'
+import { resolveGroundEditTileResolution, resolveGroundEditTileSizeMeters, resolveGroundWorldBounds, resolveGroundWorkingGridSize } from './core'
 import { resolveGroundEffectiveHeightAtVertex, sampleGroundEffectiveHeightRegion, type GroundEffectiveHeightRegion } from './groundMesh'
 
 export type GroundHeightfieldData = {

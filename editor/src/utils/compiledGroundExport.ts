@@ -5,7 +5,7 @@ import type {
   GroundDynamicMesh,
   SceneJsonExportDocument,
   SceneNode,
-} from '@schema'
+} from '@schema/core'
 import {
   COMPILED_GROUND_MANIFEST_VERSION,
   computeCompiledGroundManifestRevision,
@@ -15,7 +15,7 @@ import {
   resolveGroundWorldBounds,
   serializeCompiledGroundCollisionTile,
   serializeCompiledGroundRenderTile,
-} from '@schema'
+} from '@schema/core'
 import { isGroundDynamicMesh } from '@schema/groundHeightfield'
 import {
   buildCollisionTileData,

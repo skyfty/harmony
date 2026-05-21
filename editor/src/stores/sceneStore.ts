@@ -20,7 +20,7 @@ import {
   type Material,
   type Light,
 } from 'three'
-import type { EnvironmentSettings, EnvironmentSettingsPatch } from '@schema'
+import type { EnvironmentSettings, EnvironmentSettingsPatch } from '@schema/core'
 import {
   GROUND_NODE_ID,
   ENVIRONMENT_NODE_ID,
@@ -37,7 +37,7 @@ import {
   createWaterSurfaceRuntimeMesh,
   extractWaterSurfaceMeshMetadataFromUserData,
   normalizeWaterSurfaceMeshInput,
-} from '@schema'
+} from '@schema/core'
 import { resolveGroundRuntimeChunkCells } from '@schema/groundMesh'
 import { DEFAULT_INTENSITY } from '@schema/lightDefaults'
 import { createScenesStoreTerrainDatasetHeightSampler } from '@/utils/terrainDatasetRuntime'
@@ -83,7 +83,7 @@ import type {
   LandformDynamicMesh,
   GuideRouteDynamicMesh,
   RegionDynamicMesh,
-} from '@schema'
+} from '@schema/core'
 import type { LandformBuildShape } from '@/types/landform-build-shape'
 import { normalizeNodeComponents } from './normalizeNodeComponentsUtils'
 import { stableSerialize } from '@schema/stableSerialize'
@@ -102,7 +102,7 @@ import type { HierarchyTreeItem } from '@/types/hierarchy-tree-item'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
 import { resourceProviders } from '@/resources/projectProviders'
-import { getExtensionFromMimeType } from '@schema'
+import { getExtensionFromMimeType } from '@schema/core'
 import type { SceneCameraState } from '@/types/scene-camera-state'
 import type {
   SceneHistoryEntry,
@@ -126,7 +126,7 @@ import type {
   CameraProjection,
   SceneResourceSummary,
   SceneResourceSummaryEntry,
-} from '@schema'
+} from '@schema/core'
 import {
   deleteTerrainScatterStore,
   getTerrainScatterStore,

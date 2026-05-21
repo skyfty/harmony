@@ -20,20 +20,22 @@ import {
   resolveGroundEditTileSizeMeters,
   resolveGroundWorldBounds,
   resolveGroundWorkingGridSize,
-  type GroundTerrainHeightSampler,
-  type GroundChunkData,
-  type GroundChunkManifestRecord,
-  type GroundDynamicMesh,
-  type GroundGenerationSettings,
-  type GroundHeightMap,
-  type GroundPlanningMetadata,
-  type GroundLocalEditTileData,
-  type GroundLocalEditTileMap,
-  type GroundOptimizedMeshChunkData,
-  type GroundOptimizedMeshData,
-  type GroundRuntimeDynamicMesh,
-  type GroundSculptOperation,
-} from './index'
+} from './groundRuntimeHelpers'
+import type {
+  GroundTerrainHeightSampler,
+  GroundChunkData,
+  GroundChunkManifestRecord,
+  GroundDynamicMesh,
+  GroundGenerationSettings,
+  GroundHeightMap,
+  GroundPlanningMetadata,
+  GroundLocalEditTileData,
+  GroundLocalEditTileMap,
+  GroundOptimizedMeshChunkData,
+  GroundOptimizedMeshData,
+  GroundRuntimeDynamicMesh,
+  GroundSculptOperation,
+} from './core'
 import { addMesh as markInstancedBoundsDirty } from './instancedBoundsTracker'
 
 import {

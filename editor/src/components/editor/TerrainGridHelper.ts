@@ -1,6 +1,6 @@
 import * as THREE from 'three'
-import type { GroundDynamicMesh } from '@schema'
-import { resolveGroundWorldBounds } from '@schema'
+import type { GroundDynamicMesh } from '@schema/core'
+import { resolveGroundWorldBounds } from '@schema/core'
 import { GRID_MAJOR_SPACING } from './constants'
 
 const MAJOR_COLOR = '#ffc107'

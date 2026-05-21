@@ -1,5 +1,5 @@
 import { buildServerApiUrl } from './serverApiConfig'
-import type { AssetBundleHashAlgorithm, AssetBundleUploadResponse, AssetHashLookupResponse } from '@schema'
+import type { AssetBundleHashAlgorithm, AssetBundleUploadResponse, AssetHashLookupResponse } from '@schema/core'
 import type { TerrainScatterCategory } from '@schema/terrain-scatter'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ResourceCategory } from '@/types/resource-category'

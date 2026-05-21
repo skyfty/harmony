@@ -3,7 +3,7 @@ import { computed, reactive, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import LightDirectionSphere from '@/components/inspector/LightDirectionSphere.vue'
 import { useSceneStore } from '@/stores/sceneStore'
-import type { LightNodeProperties, LightNodeType, LightShadowProperties } from '@schema/index'
+import type { LightNodeProperties, LightNodeType, LightShadowProperties } from '@schema/core'
 import {
   DEFAULT_LIGHT_DIRECTION as SCHEMA_DEFAULT_LIGHT_DIRECTION,
   DEFAULT_LIGHT_TARGET_DISTANCE as SCHEMA_DEFAULT_LIGHT_TARGET_DISTANCE,

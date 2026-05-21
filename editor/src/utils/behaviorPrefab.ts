@@ -1,4 +1,4 @@
-import type { BehaviorEventType, SceneBehavior } from '@schema'
+import type { BehaviorEventType, SceneBehavior } from '@schema/core'
 import { cloneBehavior, cloneBehaviorList, createBehaviorSequenceId, ensureBehaviorParams } from '@schema/behaviors/definitions'
 import { generateUuid } from '@/utils/uuid'
 

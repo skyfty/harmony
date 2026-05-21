@@ -6,7 +6,7 @@ import type {
   BehaviorComponentProps,
   SceneBehavior,
   SceneNodeComponentState,
-} from '@schema'
+} from '@schema/core'
 import { useSceneStore } from '@/stores/sceneStore'
 import { BEHAVIOR_COMPONENT_TYPE } from '@schema/components'
 import { ASSET_DRAG_MIME } from '@/components/editor/constants'

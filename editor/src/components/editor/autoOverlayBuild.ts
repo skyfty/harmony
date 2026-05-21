@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { FloorDynamicMesh, LandformDynamicMesh, SceneNode, Vector3Like, WallDynamicMesh } from '@schema'
+import type { FloorDynamicMesh, LandformDynamicMesh, SceneNode, Vector3Like, WallDynamicMesh } from '@schema/core'
 import type { Object3D } from 'three'
 import type { FloorBuildShape } from '@/types/floor-build-shape'
 import type { WaterBuildShape } from '@/types/water-build-shape'

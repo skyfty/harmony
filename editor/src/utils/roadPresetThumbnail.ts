@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { RoadDynamicMesh, SceneMaterialTextureRef } from '@schema'
+import type { RoadDynamicMesh, SceneMaterialTextureRef } from '@schema/core'
 import { applyMaterialOverrides, type MaterialTextureAssignmentOptions } from '@schema/material'
 import { createRoadGroup } from '@schema/roadMesh'
 import type { RoadPresetData } from '@/utils/roadPreset'

@@ -1,7 +1,7 @@
 import { resourceProviders, type ResourceProvider } from '@/resources/projectProviders'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
-import { getKnownExtensionFromFilename, normalizeExtension, type AssetType } from '@schema'
+import { getKnownExtensionFromFilename, normalizeExtension, type AssetType } from '@schema/core'
 
 export interface AssetCategoryDefinition {
   key:

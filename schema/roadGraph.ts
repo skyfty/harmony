@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { RoadDynamicMesh } from './index'
+import type { RoadDynamicMesh } from './core'
 
 const EPSILON = 1e-6
 

@@ -4,7 +4,7 @@ import type {
 	SceneNodeComponentState,
 	FloorDynamicMesh,
 	WallDynamicMesh,
-} from './index'
+} from './core'
 import type {
 	RigidbodyComponentProps,
 	RigidbodyPhysicsShape,

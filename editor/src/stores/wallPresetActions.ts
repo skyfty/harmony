@@ -1,7 +1,7 @@
 import type { Object3D } from 'three'
 import Loader from '@schema/loader'
 import * as THREE from 'three'
-import type { SceneMaterialTextureRef, SceneNode, SceneNodeComponentState, SceneNodeMaterial } from '@schema'
+import type { SceneMaterialTextureRef, SceneNode, SceneNodeComponentState, SceneNodeMaterial } from '@schema/core'
 import {
   WALL_COMPONENT_TYPE,
   WALL_DEFAULT_HEIGHT,

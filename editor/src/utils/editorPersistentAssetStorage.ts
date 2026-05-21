@@ -4,7 +4,7 @@ import {
   createNoopPersistentAssetStorage,
   isIndexedDbPersistentAssetStorageSupported,
   type PersistentAssetStorage,
-} from '@schema'
+} from '@schema/core'
 
 let editorPersistentAssetStorage: PersistentAssetStorage | null = null
 

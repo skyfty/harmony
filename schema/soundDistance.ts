@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { PlaySoundBehaviorParams } from './index'
+import type { PlaySoundBehaviorParams } from './core'
 import { WATER_SURFACE_MESH_USERDATA_KEY } from './waterSurfaceMesh'
 
 const SOUND_SOURCE_FLATNESS_THRESHOLD = 0.35

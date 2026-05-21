@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { SceneNode } from './index'
+import type { SceneNode } from './core'
 import { resolveEnabledComponentState } from './componentRuntimeUtils'
 import { applyPurePursuitVehicleControlSafe, holdVehicleBrakeSafe, isAutoTourDebugEnabled, pushVehicleControlDebugEvent } from './purePursuitRuntime'
 import { syncBodyFromObject } from './physicsBodySync'

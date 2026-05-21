@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 
-import { createPrimitiveMesh, type GeometryType, type LightNodeType } from '@schema'
+import { createPrimitiveMesh } from '@schema/import'
+import type { GeometryType, LightNodeType } from '@schema/core'
 
 export type ViewportPlacementTab = 'geometry' | 'light' | 'other'
 

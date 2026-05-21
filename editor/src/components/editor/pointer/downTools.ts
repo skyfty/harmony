@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { SceneNode, WallDynamicMesh } from '@schema'
+import type { SceneNode, WallDynamicMesh } from '@schema/core'
 import { compileWallSegmentsFromDefinition } from '@schema/wallLayout'
 import { FLOOR_VERTEX_HANDLE_Y } from '../FloorVertexRenderer'
 import { FLOOR_CIRCLE_HANDLE_GROUP_NAME, type FloorCircleHandlePickResult } from '../FloorCircleHandleRenderer'
@@ -31,7 +31,7 @@ import {
   FLOOR_MIN_THICKNESS,
   type FloorComponentProps,
 } from '@schema/components'
-import type { SceneNodeComponentState } from '@schema'
+import type { SceneNodeComponentState } from '@schema/core'
 
 type WallWorldSegmentLike = { start: THREE.Vector3; end: THREE.Vector3 }
 

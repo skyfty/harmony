@@ -14,7 +14,7 @@ export function resolveFirstLodModelAssetId(props: LodComponentProps | { props: 
   return null
 }
 import { generateUuid } from '@/utils/uuid'
-import type { SceneAssetRegistryEntry } from '@schema'
+import type { SceneAssetRegistryEntry } from '@schema/core'
 import type { LodComponentProps } from '@schema/components'
 import { clampLodComponentProps } from '@schema/components/definitions/lodComponent'
 import { sanitizeSceneAssetRegistry } from '@/utils/assetDependencySubset'

@@ -1,4 +1,4 @@
-import { ENVIRONMENT_NODE_ID, type GroundDynamicMesh, type SceneNode } from '@schema'
+import { ENVIRONMENT_NODE_ID, type GroundDynamicMesh, type SceneNode } from '@schema/core'
 import { clampSceneNodeInstanceLayout, resolveInstanceLayoutTemplateAssetId } from '@schema/instanceLayout'
 import type { TerrainScatterStoreSnapshot } from '@schema/terrain-scatter'
 import type { NodePrefabData } from '@/types/node-prefab'

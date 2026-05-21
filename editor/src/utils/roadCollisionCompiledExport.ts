@@ -23,7 +23,7 @@ import {
   type SceneNodeComponentState,
   type RigidbodyPhysicsShape,
   type RigidbodyComponentProps,
-} from '@schema'
+} from '@schema/core'
 import {
   ROAD_COMPONENT_TYPE,
   clampRoadProps,

@@ -4,7 +4,7 @@ import type {
   BehaviorEventType,
   BehaviorScriptType,
   SceneBehavior,
-} from '@schema'
+} from '@schema/core'
 import type { BehaviorActionDefinition, BehaviorScriptDefinition } from '@schema/behaviors/definitions'
 import {
   cloneBehavior,

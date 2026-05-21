@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { SceneNodeComponentState } from '../index';
+import type { SceneNodeComponentState } from '../core';
 import type { SceneNodeWithExtras } from './types';
 
 import type { GuideboardComponentProps } from '../components/definitions/guideboardComponent';

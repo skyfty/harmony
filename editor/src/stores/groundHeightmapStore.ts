@@ -13,7 +13,7 @@ import {
   type GroundLocalEditTileSource,
   type GroundPlanningMetadata,
   type SceneNode,
-} from '@schema'
+} from '@schema/core'
 import { resolveGroundRuntimeChunkCells } from '@schema/groundMesh'
 import {
   createGroundRuntimeMeshFromSidecar,

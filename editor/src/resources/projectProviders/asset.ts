@@ -3,7 +3,7 @@ import type {
   AssetManifestAsset,
   AssetManifestDirectory,
   LegacyAssetManifest,
-} from '@schema'
+} from '@schema/core'
 import type { TerrainScatterCategory } from '@schema/terrain-scatter'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'

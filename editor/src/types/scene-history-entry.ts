@@ -1,4 +1,4 @@
-import type { SceneNode, GroundSettings, Vector3Like } from '@schema'
+import type { SceneNode, GroundSettings, Vector3Like } from '@schema/core'
 import type { SceneMaterial } from '@/types/material'
 
 export type SceneHistoryTransformSnapshot = {

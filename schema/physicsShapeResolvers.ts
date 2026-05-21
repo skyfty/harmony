@@ -6,7 +6,7 @@ import type {
   FloorDynamicMesh,
   WallDynamicMesh,
   ModelCollisionDynamicMesh,
-} from './index'
+} from './core'
 import { compileWallSegmentsFromDefinition } from './wallLayout'
 import type {
   RigidbodyPhysicsShape,

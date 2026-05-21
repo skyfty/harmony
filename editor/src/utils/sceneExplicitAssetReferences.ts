@@ -1,4 +1,4 @@
-import type { BehaviorComponentProps, SceneBehavior } from '@schema'
+import type { BehaviorComponentProps, SceneBehavior } from '@schema/core'
 import type { TerrainScatterStoreSnapshot } from '@schema/terrain-scatter'
 import {
   BEHAVIOR_COMPONENT_TYPE,

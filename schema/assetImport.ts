@@ -2,7 +2,6 @@ import * as THREE from 'three'
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js'
 import Loader, { type LoaderErrorPayload, type LoaderLoadedPayload, type LoaderProgressPayload } from './loader'
 import { createUvDebugMaterial } from './debugTextures'
-import { MeshBVH } from 'three-mesh-bvh'
 import { normalizeScatterMaterials } from './scatterMaterials'
 
 const DEFAULT_OBJECT_LOAD_TIMEOUT_MS = 45000
@@ -92,32 +91,7 @@ export function prepareImportedObject(object: THREE.Object3D) {
 }
 
 function createLoadTimeoutError(fileName: string): Error {
-  return new Error(`加载资源对象超时 (${fileName})`)
-}
-
-function buildObjectBvh(object: THREE.Object3D): void {
-  object.traverse((child: THREE.Object3D) => {
-    const mesh = child as THREE.Mesh
-    if (!mesh?.isMesh) {
-      return
-    }
-
-    const geometry = mesh.geometry as THREE.BufferGeometry | undefined
-    if (!geometry || !geometry.getAttribute('position')) {
-      return
-    }
-
-    const anyGeometry = geometry as unknown as { boundsTree?: MeshBVH }
-    if (anyGeometry.boundsTree) {
-      return
-    }
-
-    try {
-      anyGeometry.boundsTree = new MeshBVH(geometry)
-    } catch (_error) {
-      // 忽略 BVH 构建失败，避免影响模型加载
-    }
-  })
+  return new Error(`鍔犺浇璧勬簮瀵硅薄瓒呮椂 (${fileName})`)
 }
 
 export function cloneImportedObject(source: THREE.Object3D): THREE.Object3D {
@@ -178,22 +152,32 @@ export async function loadObjectFromFile(
       reject(createLoadTimeoutError(file.name))
     }, DEFAULT_OBJECT_LOAD_TIMEOUT_MS)
 
-    const handleLoaded = (payload: LoaderLoadedPayload) => {
+    const handleLoaded = async (payload: LoaderLoadedPayload) => {
       if (settled) {
         return
       }
-      settled = true
-      cleanup()
-      if (!payload) {
-        reject(new Error('未能加载资源对象'))
-        return
+      try {
+        if (!payload) {
+          throw new Error('鏈兘鍔犺浇璧勬簮瀵硅薄')
+        }
+        const object = payload as THREE.Object3D
+        prepareImportedObject(object)
+        normalizeImportedMeshMaterials(object)
+        normalizeScatterMaterials(object)
+        if (settled) {
+          return
+        }
+        settled = true
+        cleanup()
+        resolve(object)
+      } catch (error) {
+        if (settled) {
+          return
+        }
+        settled = true
+        cleanup()
+        reject(error instanceof Error ? error : new Error(String(error)))
       }
-      const object = payload as THREE.Object3D
-      prepareImportedObject(object)
-      normalizeImportedMeshMaterials(object)
-      normalizeScatterMaterials(object)
-      buildObjectBvh(object)
-      resolve(object)
     }
 
     const handleError = (payload: LoaderErrorPayload) => {

@@ -1,4 +1,4 @@
-import type { SceneNode, SceneNodeComponentState } from './index'
+import type { SceneNode, SceneNodeComponentState } from './core'
 
 /**
  * Resolve a node component by type, returning null when missing or disabled.

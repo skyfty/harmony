@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { RegionDynamicMesh } from '@schema'
+import type { RegionDynamicMesh } from '@schema/core'
 import { hashString, stableSerialize } from '@schema/stableSerialize'
 
 const FILL_Y_OFFSET = 0.2

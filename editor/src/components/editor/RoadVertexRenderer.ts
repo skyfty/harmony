@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { RoadDynamicMesh } from '@schema'
+import type { RoadDynamicMesh } from '@schema/core'
 import { hashString, stableSerialize } from '@schema/stableSerialize'
 import { createEndpointGizmoObject, getEndpointGizmoPartInfoFromObject, type EndpointGizmoPart } from './EndpointGizmo'
 

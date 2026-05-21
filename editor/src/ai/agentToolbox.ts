@@ -1,6 +1,6 @@
 import { useSceneStore } from '@/stores/sceneStore'
 import type { AiAssistantToolDefinition, AiAssistantToolInvocation } from '@/types/ai-assistant'
-import type { Vector3Like } from '@schema'
+import type { Vector3Like } from '@schema/core'
 import { normalizeAiModelMeshInput } from '@/utils/aiModelMesh'
 
 type SceneEditorStore = ReturnType<typeof useSceneStore>

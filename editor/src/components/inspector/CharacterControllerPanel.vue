@@ -7,7 +7,7 @@ import {
   type CharacterAnimationSlot,
   type CharacterControllerComponentProps,
 } from '@schema/components'
-import type { SceneNodeComponentState } from '@schema'
+import type { SceneNodeComponentState } from '@schema/core'
 import { getRuntimeObject, useSceneStore } from '@/stores/sceneStore'
 import { collectRuntimeAnimationClipOptions } from '@/utils/runtimeAnimationClips'
 

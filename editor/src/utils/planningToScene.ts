@@ -5,8 +5,8 @@ import type {
   GroundRuntimeDynamicMesh,
   QuantizedTerrainDatasetRootManifest,
   SceneNode,
-} from '@schema'
-import { GROUND_HEIGHT_UNSET_VALUE, GROUND_TERRAIN_CHUNK_SIZE_METERS, createGroundHeightMap, getGroundVertexIndex } from '@schema'
+} from '@schema/core'
+import { GROUND_HEIGHT_UNSET_VALUE, GROUND_TERRAIN_CHUNK_SIZE_METERS, createGroundHeightMap, getGroundVertexIndex } from '@schema/core'
 import {
   ensureTerrainScatterStore,
   getTerrainScatterStore,
@@ -36,7 +36,7 @@ import type {
 import { useGroundHeightmapStore } from '@/stores/groundHeightmapStore'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useScenesStore } from '@/stores/scenesStore'
-import { resolveGroundWorkingGridSize, resolveGroundWorldBounds } from '@schema'
+import { resolveGroundWorkingGridSize, resolveGroundWorldBounds } from '@schema/core'
 import {
   PLANNING_IMAGES_COMPONENT_TYPE,
   WATER_COMPONENT_TYPE,

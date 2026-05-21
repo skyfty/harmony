@@ -1,10 +1,10 @@
 import { defineStore } from 'pinia'
-import type { GroundDynamicMesh, SceneNode } from '@schema'
+import type { GroundDynamicMesh, SceneNode } from '@schema/core'
 import {
   deserializeGroundScatterSidecar,
   serializeGroundScatterSidecar,
   type GroundScatterSidecarPayload,
-} from '@schema'
+} from '@schema/core'
 import {
   deleteTerrainScatterStore,
   loadTerrainScatterSnapshot,

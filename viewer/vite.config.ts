@@ -79,6 +79,28 @@ function resolveAssetFileName(assetInfo: { name?: string }): string | undefined 
   return undefined;
 }
 
+function resolveSceneryChunkGroup(normalizedId: string): string | undefined {
+  if (normalizedId.includes('/node_modules/three/build/')) {
+    return 'pages/scenery/chunks/three';
+  }
+  if (normalizedId.includes('/node_modules/three/examples/jsm/')) {
+    return 'pages/scenery/chunks/three-examples';
+  }
+  if (normalizedId.includes('/node_modules/three-mesh-bvh/')) {
+    return 'pages/scenery/chunks/three';
+  }
+  if (normalizedId.includes('/node_modules/three-csm/')) {
+    return 'pages/scenery/chunks/three-csm';
+  }
+  if (normalizedId.includes('/node_modules/@minisheep/three-platform-adapter/')) {
+    return 'pages/scenery/chunks/three-adapter';
+  }
+  if (normalizedId.includes('/src/pages/scenery/schema/')) {
+    return 'common/scenery-schema';
+  }
+  return undefined;
+}
+
 function resolveManualChunk(id: string): string | undefined {
   if (!isMp) {
     return undefined;
@@ -87,8 +109,8 @@ function resolveManualChunk(id: string): string | undefined {
   const normalizedId = id.replaceAll('\\', '/');
   if (normalizedId.includes('/.vite/deps/')) {
     if (
-      normalizedId.includes('three')
-      || normalizedId.includes('schema')
+      normalizedId.includes('schema')
+      || normalizedId.includes('three')
       || normalizedId.includes('physics-bridge')
       || normalizedId.includes('three-mesh-bvh')
       || normalizedId.includes('polygon-clipping')
@@ -106,22 +128,22 @@ function resolveManualChunk(id: string): string | undefined {
         return 'pages/physics-ammo/common/vendor';
       }
       if (normalizedId.includes('cannon-es')) {
-        return 'common/vendor';
+        return 'pages/physics-cannon/common/vendor';
+      }
+      if (normalizedId.includes('schema')) {
+        return 'pages/scenery-shared/chunks/schema';
       }
       if (
-        normalizedId.includes('three')
+        normalizedId.includes('three/examples/jsm')
         || normalizedId.includes('three-mesh-bvh')
         || normalizedId.includes('three-csm')
         || normalizedId.includes('@minisheep/three-platform-adapter')
-        || normalizedId.includes('three/examples/jsm')
+        || normalizedId.includes('three')
         || (enableSceneryCannonDebugger && normalizedId.includes('@vladkrutenyuk/cannon-es-debugger-pro'))
       ) {
-        if (enableSceneryCannonDebugger && normalizedId.includes('@vladkrutenyuk/cannon-es-debugger-pro')) {
-          return 'pages/scenery/chunks/vendor';
-        }
-        return 'pages/scenery/chunks/vendor';
+        return resolveSceneryChunkGroup(normalizedId) ?? 'pages/scenery/chunks/three';
       }
-      return 'pages/scenery/common/vendor';
+      return resolveSceneryChunkGroup(normalizedId) ?? 'pages/scenery/common/vendor';
     }
   }
 
@@ -136,6 +158,11 @@ function resolveManualChunk(id: string): string | undefined {
     return 'common/vendor';
   }
 
+  const sceneryChunkGroup = resolveSceneryChunkGroup(normalizedId);
+  if (sceneryChunkGroup) {
+    return sceneryChunkGroup;
+  }
+
   if (
     normalizedId.includes('/src/pages/scenery/three/')
     || normalizedId.includes('/src/pages/scenery/three-mesh-bvh/')
@@ -146,7 +173,7 @@ function resolveManualChunk(id: string): string | undefined {
     || normalizedId.includes('/node_modules/three-csm/')
     || normalizedId.includes('/node_modules/@minisheep/three-platform-adapter/')
   ) {
-    return 'pages/scenery/chunks/vendor';
+    return 'pages/scenery/chunks/three';
   }
 
   if (
@@ -176,7 +203,7 @@ function resolveManualChunk(id: string): string | undefined {
     || normalizedId.includes('/node_modules/fflate/')
     || normalizedId.includes('/node_modules/web-streams-polyfill/')
   ) {
-    return 'pages/scenery/common/vendor';
+    return sceneryChunkGroup ?? 'pages/scenery/common/vendor';
   }
 
   if (
@@ -195,7 +222,7 @@ function resolveManualChunk(id: string): string | undefined {
     || normalizedId.includes('/src/pages/physics-cannon/cannon-es/')
     || (enableSceneryCannonDebugger && normalizedId.includes('/node_modules/@vladkrutenyuk/cannon-es-debugger-pro/'))
   ) {
-    return 'common/vendor';
+    return 'pages/physics-cannon/common/vendor';
   }
 
   return undefined;
@@ -298,10 +325,9 @@ export default {
       { find: '@harmony/utils/query', replacement: `${utilsSrcPath}/query.ts` },
       { find: /^@harmony\/utils\/(.*)$/, replacement: `${utilsSrcPath}/$1` },
       { find: '@harmony/physics-ammo', replacement: fileURLToPath(new URL('./src/pages/physics-ammo/runtime.ts', import.meta.url)) },
-      { find: '@harmony/physics-ammo-source', replacement: fileURLToPath(new URL('./src/pages/physics-ammo/engine', import.meta.url)) },
       { find: /^@harmony\/physics-cannon\/(.*)$/, replacement: fileURLToPath(new URL('./src/pages/physics-cannon/$1', import.meta.url)) },
       { find: '@harmony/physics-cannon', replacement: fileURLToPath(new URL('./src/pages/physics-cannon/runtime.ts', import.meta.url)) },
-      { find: '@harmony/physics-cannon-source', replacement: fileURLToPath(new URL('./src/pages/physics-cannon/engine', import.meta.url)) },
+      { find: 'cannon-es', replacement: fileURLToPath(new URL('../physics-cannon/node_modules/cannon-es', import.meta.url)) },
       { find: 'event-target-shim', replacement: eventTargetShimPath },
       { find: 'web-streams-polyfill', replacement: webStreamsPolyfillPath },
       { find: 'vue', replacement: vueRuntimeAlias },
@@ -341,25 +367,42 @@ export default {
     }),
     toCustomChunkPlugin({
       manualChunks: {
-        'pages/scenery/chunks/vendor': [
+        'pages/scenery/chunks/three': [
           '**/pages/scenery/three/**',
           '**/pages/scenery/three-mesh-bvh/**',
-          '**/pages/scenery/three-platform-adapter/**',
-          '**/pages/scenery/schema/**',
-          '**/three/**',
+          '**/three/build/**',
           '**/three-mesh-bvh/**',
-          '**/three-csm/**',
-          '**/three/examples/jsm/**',
-          '**/@minisheep/three-platform-adapter/**',
-          '**/@vladkrutenyuk/cannon-es-debugger-pro/**',
         ],
-      'pages/physics-ammo/common/vendor': [
+        'pages/scenery/chunks/three-examples': [
+          '**/three/examples/jsm/**',
+        ],
+        'pages/scenery/chunks/three-csm': [
+          '**/three-csm/**',
+        ],
+        'pages/scenery/chunks/three-adapter': [
+          '**/pages/scenery/three-platform-adapter/**',
+          '**/@minisheep/three-platform-adapter/**',
+        ],
+        'pages/scenery-shared/chunks/schema': [
+          '**/pages/scenery/schema/**',
+        ],
+        'pages/physics-ammo/common/vendor': [
           '**/pages/physics-ammo/vendor/**',
           '**/src/pages/physics-ammo/vendor/**',
-      ],
-        'common/vendor': [
+        ],
+        'pages/physics-cannon/common/vendor': [
+          '**/pages/physics-cannon/**',
+          '**/src/pages/physics-cannon/**',
           '**/cannon-es/**',
           '**/@vladkrutenyuk/cannon-es-debugger-pro/**',
+        ],
+        'common/vendor': [
+          '**/node_modules/vue/**',
+          '**/node_modules/@vue/**',
+          '**/node_modules/@dcloudio/**',
+          '**/node_modules/@minisheep/mini-program-polyfill-core/**',
+          '**/node_modules/@minisheep/mini-program-polyfill/**',
+          '**/node_modules/event-target-shim/**',
         ],
       },
     }),

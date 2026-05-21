@@ -4,7 +4,7 @@ import type {
   SceneMaterialTextureSlotMap,
   SceneMaterialType,
   SceneNodeMaterial,
-} from '@schema'
+} from '@schema/core'
 
 const WALL_DEFAULT_COLOR = '#cfd2d6'
 

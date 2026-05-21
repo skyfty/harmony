@@ -1,4 +1,4 @@
-import type { Vector3Like } from '@schema'
+import type { Vector3Like } from '@schema/core'
 export type { Vector3Like }
 export interface TransformUpdatePayload {
   id: string

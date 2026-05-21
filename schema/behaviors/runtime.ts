@@ -22,7 +22,7 @@ import type {
   AnimationBehaviorParams,
   DriveBehaviorParams,
   ControlCharacterBehaviorParams,
-} from '../index'
+} from '../core'
 import { behaviorMapToList, cloneBehaviorList, ensureBehaviorParams } from './definitions'
 
 export type BehaviorTriggerContext = {

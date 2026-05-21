@@ -5,7 +5,7 @@ import type {
   NodeComponentType,
   SceneNodeComponentState,
   SceneNodeComponentMap,
-} from '../index'
+} from '../core'
 
 import { stableSerialize } from '../stableSerialize'
 

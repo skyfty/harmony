@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import type { ProjectSceneMeta } from '@schema'
+import type { ProjectSceneMeta } from '@schema/core'
 import FloatingPopover from '@/components/common/FloatingPopover.vue'
 
 type SceneListItem = ProjectSceneMeta

@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { GroundDynamicMesh, RoadDynamicMesh, SceneNode } from './index'
+import type { GroundDynamicMesh, RoadDynamicMesh, SceneNode } from './core'
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import polygonClipping from 'polygon-clipping'
 import type {

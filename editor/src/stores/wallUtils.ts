@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { WallDynamicMesh, WallChain, Vector3Like, SceneNode } from '@schema'
+import type { WallDynamicMesh, WallChain, Vector3Like, SceneNode } from '@schema/core'
 import {
   WALL_DEFAULT_HEIGHT,
   WALL_DEFAULT_WIDTH,

@@ -70,7 +70,6 @@
     "@dcloudio/vite-plugin-uni": "3.0.0-alpha-4050320250224001",
     "@harmony/tools": "file:../tools",
     "@minisheep/three-platform-adapter": "^2.0.1",
-    "@types/node": "^25.3.0",
     "@resvg/resvg-js": "^2.6.2",
     "@typescript-eslint/eslint-plugin": "^6.9.0",
     "@typescript-eslint/parser": "^6.9.0",

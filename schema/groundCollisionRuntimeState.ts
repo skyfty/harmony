@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 
-import type { GroundRuntimeDynamicMesh } from './index'
+import type { GroundRuntimeDynamicMesh } from './core'
 
 type GroundCollisionRuntimeKeyState = {
   appliedKeys: string[]

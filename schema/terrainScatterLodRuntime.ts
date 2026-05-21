@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import type { AssetCacheEntry } from './assetCache'
 import ResourceCache from './ResourceCache'
-import type { SceneJsonExportDocument, SceneNode, GroundDynamicMesh } from './index'
+import type { SceneJsonExportDocument, SceneNode, GroundDynamicMesh } from './core'
 import type { TerrainScatterInstance, TerrainScatterLayer, TerrainScatterStoreSnapshot } from './terrain-scatter'
 import {
   clampLodComponentProps,
@@ -33,7 +33,7 @@ import {
   type ModelInstanceGroup,
 } from './modelObjectCache'
 import { resolveGroundChunkCells, resolveGroundChunkRadiusMeters } from './groundMesh'
-import { resolveGroundWorldBounds, resolveGroundWorkingGridSize } from './index'
+import { resolveGroundWorldBounds, resolveGroundWorkingGridSize } from './core'
 
 export const LOD_PRESET_FORMAT_VERSION = 1
 

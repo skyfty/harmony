@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { GroundDynamicMesh } from '@schema'
+import type { GroundDynamicMesh } from '@schema/core'
 import { TerrainGridHelper } from './TerrainGridHelper'
 
 export type TerrainGridController = {

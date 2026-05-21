@@ -1,6 +1,6 @@
 import type { WatchStopHandle } from 'vue'
 import type { Object3D } from 'three'
-import type { SceneNode } from '@schema'
+import type { SceneNode } from '@schema/core'
 import { cloneImportedObject } from '@schema/assetImport'
 import type { EnsureSceneAssetsOptions, EnsureSceneAssetsProgress } from '@/types/ensure-scene-assets-options'
 import type { ProjectAsset } from '@/types/project-asset'

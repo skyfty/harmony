@@ -3,7 +3,7 @@
 import {
   buildGroundFlatChunkInstanceMatrices,
 } from '@schema/groundMesh'
-import type { GroundRuntimeDynamicMesh } from '@schema/index'
+import type { GroundRuntimeDynamicMesh } from '@schema/core'
 import type {
   GroundFlatChunkMatrixWorkerRequest,
   GroundFlatChunkMatrixWorkerResponse,

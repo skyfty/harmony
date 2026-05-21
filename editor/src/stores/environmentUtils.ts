@@ -6,7 +6,7 @@ import {
   resolveDocumentEnvironment,
   type SceneNode,
   type EnvironmentSettings,
-} from '@schema'
+} from '@schema/core'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 
 export { cloneEnvironmentSettings, DEFAULT_ENVIRONMENT_SETTINGS }

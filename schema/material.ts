@@ -10,7 +10,7 @@ import type {
   SceneMaterialType,
   SceneNodeMaterial,
   SceneResourceSummaryEntry,
-} from './index';
+} from './core';
 import type { AssetCacheEntry } from './assetCache';
 import type ResourceCache from './ResourceCache';
 import { inferAssetTypeOrNull } from './assetTypeConversion';

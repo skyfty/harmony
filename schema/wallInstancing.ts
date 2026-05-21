@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { WallDynamicMesh } from './index'
+import type { WallDynamicMesh } from './core'
 import { compileWallSegmentsFromDefinition, type WallRenderSegment } from './wallLayout'
 import type {
   WallComponentProps,

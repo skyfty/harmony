@@ -1,4 +1,4 @@
-import type { SceneNode } from '@schema'
+import type { SceneNode } from '@schema/core'
 
 declare module '@schema' {
   interface SceneNode {

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { type TerrainPaintBlendMode } from '@schema'
+import { type TerrainPaintBlendMode } from '@schema/core'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { TerrainPaintBrushSettings } from '@/stores/terrainStore'
 import { usePackageDirectoryAssets } from '@/utils/packageDirectoryAssets'

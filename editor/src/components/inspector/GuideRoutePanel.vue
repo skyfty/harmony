@@ -2,7 +2,7 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSceneStore } from '@/stores/sceneStore'
-import type { SceneNodeComponentState } from '@schema'
+import type { SceneNodeComponentState } from '@schema/core'
 import { GUIDE_ROUTE_COMPONENT_TYPE } from '@schema/components'
 import type { GuideRouteComponentProps } from '@schema/components'
 

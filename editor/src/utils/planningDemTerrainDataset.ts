@@ -1,4 +1,4 @@
-import type { GroundRuntimeDynamicMesh, QuantizedTerrainDatasetBounds, QuantizedTerrainDatasetRootManifest, QuantizedTerrainDatasetTileRef, QuantizedTerrainMeshData, QuantizedTerrainMeshHeader, QuantizedTerrainMeshTileId } from '@schema'
+import type { GroundRuntimeDynamicMesh, QuantizedTerrainDatasetBounds, QuantizedTerrainDatasetRootManifest, QuantizedTerrainDatasetTileRef, QuantizedTerrainMeshData, QuantizedTerrainMeshHeader, QuantizedTerrainMeshTileId } from '@schema/core'
 import {
   buildQuantizedTerrainRegionPackPath,
   formatQuantizedTerrainRegionKey,
@@ -9,7 +9,7 @@ import {
   serializeQuantizedTerrainMesh,
   serializeQuantizedTerrainPack,
   type QuantizedTerrainDatasetRegionPackIndex,
-} from '@schema'
+} from '@schema/core'
 import type { PlanningTerrainDemData } from '@/types/planning-scene-data'
 import {
   buildPlanningDemRegionFromPreparedSource,

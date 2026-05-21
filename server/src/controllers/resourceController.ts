@@ -6,8 +6,8 @@ import {
   CONFIG_ASSET_EXTENSION_SET,
   DEFAULT_ASSET_TYPE,
   isAssetType,
-} from '@harmony/schema'
-import type { AssetType } from '@harmony/schema'
+} from '@harmony/schema/core'
+import type { AssetType } from '@harmony/schema/core'
 import type {
   AssetCategory as AssetCategoryDto,
   AssetBundleFileEntry,
@@ -17,7 +17,7 @@ import type {
   AssetSummary,
   AssetTag,
   AssetTagSummary,
-} from '@harmony/schema'
+} from '@harmony/schema/core'
 import { TerrainScatterCategories } from '@harmony/schema/terrain-scatter'
 import type { TerrainScatterCategory } from '@harmony/schema/terrain-scatter'
 import type { Context } from 'koa'

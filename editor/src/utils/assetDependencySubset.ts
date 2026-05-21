@@ -3,7 +3,7 @@ import {
   isEditorOnlyConfigAssetExtension,
   normalizeExtension,
   type SceneAssetRegistryEntry,
-} from '@schema'
+} from '@schema/core'
 import type { ProjectAsset } from '@/types/project-asset'
 
 export type AssetDependencySubset = {

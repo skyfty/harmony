@@ -5,11 +5,13 @@ import { createCompiledGroundCollisionRuntime } from './compiledGroundCollisionR
 import { createInfiniteGroundChunkColliderRuntime, type InfiniteGroundChunkColliderRuntime, type InfiniteGroundChunkColliderRuntimeDeps } from './infiniteGroundChunkCollisions'
 import type {
   GroundRuntimeDynamicMesh,
-  RigidbodyPhysicsShape,
   SceneNode,
   SceneNodeComponentState,
+} from './core'
+import type {
+  RigidbodyPhysicsShape,
   RigidbodyComponentProps,
-} from './index'
+} from './components'
 import type { PhysicsBodyLike, PhysicsOrientationAdjustment } from './physicsBodySync'
 import type { PhysicsWorldLike } from './physicsRuntimeBridge'
 

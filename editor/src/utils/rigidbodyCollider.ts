@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { SceneNode } from '@schema'
+import type { SceneNode } from '@schema/core'
 import type { RigidbodyPhysicsShape } from '@schema/components'
 
 export type ColliderScaleFactors = { x: number; y: number; z: number }
