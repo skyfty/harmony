@@ -28,6 +28,11 @@
       ]
     },
     {
+      "root": "pages/scenery-shared",
+      "name": "scenery-shared",
+      "pages": []
+    },
+    {
       "root": "pages/physics-ammo",
       "name": "physics-ammo",
       "pages": []

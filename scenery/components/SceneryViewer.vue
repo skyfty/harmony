@@ -514,7 +514,6 @@ import {
   readTerrainDatasetManifestFromScenePackage,
 } from '../common/utils/terrainDatasetPackage';
 import type {
-  AutoTourRouteSnapResult,
   SceneNode,
   SceneNodeComponentState,
   SceneJsonExportDocument,
@@ -661,6 +660,7 @@ import {
   preloadableComponentDefinition,
 } from '@harmony/schema/components/definitions/preloadableComponent';
 import type {
+  AutoTourRouteSnapResult,
   VehicleDriveCameraFollowState,
   VehicleDriveCameraMode,
   VehicleDriveCameraRestoreState,
@@ -673,13 +673,13 @@ import type {
 } from '@harmony/schema/motion';
 import {
   FollowCameraController,
-  type CameraFollowState,
   computeFollowLerpAlpha,
   computeFollowPlacement,
   createCameraFollowState,
   getApproxDimensions,
   resetCameraFollowState,
 } from '@harmony/schema/motion';
+import type { CameraFollowState } from '@harmony/schema/followCameraController';
 const { VehicleDriveController } = await import('@harmony/schema/motion');
 const { createAutoTourRuntime } = await import('@harmony/schema/motion');
 const { createScenePreviewPerfController } = await import('@harmony/schema/overlay');
