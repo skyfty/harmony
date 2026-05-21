@@ -34,6 +34,11 @@ type LeftClickState = {
   clientY: number
 }
 
+type BuildSurfacePlacementPoint = {
+  point: THREE.Vector3
+  nodeId: string | null
+}
+
 const DOUBLE_CLICK_MAX_INTERVAL_MS = 320
 const DOUBLE_CLICK_MAX_DISTANCE_PX = 8
 const PREVIEW_Y_OFFSET = 0.04
@@ -90,6 +95,7 @@ export function createGuideRouteBuildTool(options: {
   rootGroup: THREE.Group
   raycastGroundPoint: (event: PointerEvent, result: THREE.Vector3) => boolean
   resolveBuildPlacementPoint?: (event: PointerEvent, result: THREE.Vector3) => boolean
+  resolveBuildPlacementSurfacePoint?: (event: PointerEvent) => BuildSurfacePlacementPoint | null
   snapPoint: (point: THREE.Vector3) => THREE.Vector3
   resolveVertexSnapPoint?: (event: PointerEvent, point: THREE.Vector3, options?: { excludeNodeIds?: readonly string[]; keepSourceY?: boolean }) => THREE.Vector3 | null
   clearVertexSnap?: () => void
@@ -99,25 +105,31 @@ export function createGuideRouteBuildTool(options: {
   holdStartIndicatorUntilNodeVisible?: (options: { nodeId: string; point: THREE.Vector3; height?: number | null }) => void
   clickDragThresholdPx: number
 }): GuideRouteBuildToolHandle {
-  const groundPointerHelper = new THREE.Vector3()
   let session: GuideRouteBuildToolSession | null = null
   let previewDirty = false
   let rightClickState: RightClickState | null = null
   let leftClickState: LeftClickState | null = null
 
-  const raycastPlacementPoint = (event: PointerEvent, result: THREE.Vector3): boolean => {
-    if (options.resolveBuildPlacementPoint) {
-      return options.resolveBuildPlacementPoint(event, result)
+  const resolveSurfacePlacementPoint = (event: PointerEvent): BuildSurfacePlacementPoint | null => {
+    if (options.resolveBuildPlacementSurfacePoint) {
+      const resolved = options.resolveBuildPlacementSurfacePoint(event)
+      if (resolved) {
+        return {
+          point: resolved.point.clone(),
+          nodeId: resolved.nodeId ?? null,
+        }
+      }
     }
-    return options.raycastGroundPoint(event, result)
-  }
 
-  const alignPointYToSession = (point: THREE.Vector3, target: GuideRouteBuildToolSession | null): THREE.Vector3 => {
-    const baseY = target?.points?.[0]?.y
-    if (typeof baseY === 'number' && Number.isFinite(baseY)) {
-      point.y = baseY
+    const point = new THREE.Vector3()
+    if (options.resolveBuildPlacementPoint?.(event, point)) {
+      return { point, nodeId: null }
     }
-    return point
+
+    if (options.raycastGroundPoint(event, point)) {
+      return { point, nodeId: null }
+    }
+    return null
   }
 
   const resolvePlacementPoint = (event: PointerEvent, rawPoint: THREE.Vector3): THREE.Vector3 => {
@@ -206,10 +218,11 @@ export function createGuideRouteBuildTool(options: {
     if (!session || !session.points.length || options.isAltOverrideActive()) {
       return
     }
-    if (!raycastPlacementPoint(event, groundPointerHelper)) {
+    const surfacePlacement = resolveSurfacePlacementPoint(event)
+    if (!surfacePlacement) {
       return
     }
-    const point = alignPointYToSession(resolvePlacementPoint(event, groundPointerHelper.clone()), session)
+    const point = resolvePlacementPoint(event, surfacePlacement.point.clone())
     const previous = session.previewEnd
     if (previous && previous.equals(point)) {
       return
@@ -228,11 +241,12 @@ export function createGuideRouteBuildTool(options: {
       options.showStartIndicator?.(session.points[0]!, { height: 0.2 })
       return
     }
-    if (!raycastPlacementPoint(event, groundPointerHelper)) {
+    const surfacePlacement = resolveSurfacePlacementPoint(event)
+    if (!surfacePlacement) {
       options.hideStartIndicator?.()
       return
     }
-    options.showStartIndicator?.(resolvePlacementPoint(event, groundPointerHelper.clone()), { height: 0.2 })
+    options.showStartIndicator?.(resolvePlacementPoint(event, surfacePlacement.point.clone()), { height: 0.2 })
   }
 
   const finalize = () => {
@@ -294,11 +308,15 @@ export function createGuideRouteBuildTool(options: {
         return false
       }
       if (event.button === 0) {
-        if (options.isAltOverrideActive() || !raycastPlacementPoint(event, groundPointerHelper)) {
+        if (options.isAltOverrideActive()) {
+          return false
+        }
+        const surfacePlacement = resolveSurfacePlacementPoint(event)
+        if (!surfacePlacement) {
           return false
         }
         const current = ensureSession()
-        const point = alignPointYToSession(resolvePlacementPoint(event, groundPointerHelper.clone()), current)
+        const point = resolvePlacementPoint(event, surfacePlacement.point.clone())
         const last = current.points[current.points.length - 1] ?? null
         if (!last || last.distanceToSquared(point) > 1e-6) {
           current.points.push(point.clone())

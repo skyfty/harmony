@@ -8365,6 +8365,7 @@ const guideRouteBuildTool = createGuideRouteBuildTool({
   rootGroup,
   raycastGroundPoint,
   resolveBuildPlacementPoint,
+  resolveBuildPlacementSurfacePoint: resolveBuildSurfaceAtPointer,
   snapPoint: (point) => snapVectorToMajorGrid(point.clone()),
   resolveVertexSnapPoint: resolveBuildToolVertexSnapPoint,
   clearVertexSnap: clearBuildToolVertexSnap,
