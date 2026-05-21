@@ -195,7 +195,6 @@ const tools: SceneAgentTool[] = [
       if (value === undefined) {
         throw new Error('需要提供布尔值以设置网格可见性。')
       }
-      store.setViewportGridVisible(value)
     },
   },
   {

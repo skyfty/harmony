@@ -13397,12 +13397,6 @@ export const useSceneStore = defineStore('scene', {
       this.viewportSettings = next
       commitSceneSnapshot(this, { updateNodes: false })
     },
-    setViewportGridVisible(visible: boolean) {
-      this.setViewportSettings({ showGrid: visible })
-    },
-    toggleViewportGridVisible() {
-      this.setViewportGridVisible(!this.viewportSettings.showGrid)
-    },
     setViewportAxesVisible(visible: boolean) {
       this.setViewportSettings({ showAxes: visible })
     },

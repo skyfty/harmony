@@ -12546,18 +12546,10 @@ async function restoreGroundScatterGuarded(): Promise<void> {
   }
 }
 
-let initialGridVisibilityApplied = false
 
 watch(isSceneReady, (ready) => {
   if (!ready) {
     return
-  }
-
-  // Default: do NOT show the ground grid when entering the viewport.
-  // Users can still enable it later via the toolbar toggle.
-  if (!initialGridVisibilityApplied) {
-    initialGridVisibilityApplied = true
-    sceneStore.setViewportGridVisible(false)
   }
 
   syncSceneGraph()

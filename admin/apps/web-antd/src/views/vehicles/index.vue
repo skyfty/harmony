@@ -50,9 +50,6 @@ const modalOpen = ref(false);
 const submitting = ref(false);
 const editingId = ref<null | string>(null);
 const vehicleFormRef = ref<FormInstance>();
-const sortListLoading = ref(false);
-const sortSaving = ref(false);
-const draggingSortVehicleId = ref<null | string>(null);
 const sortVehicles = ref<VehicleItem[]>([]);
 
 const vehicleFormModel = reactive<VehicleFormModel>({
@@ -72,21 +69,6 @@ const vehicleFormModel = reactive<VehicleFormModel>({
   drag: 0.3,
 });
 
-const sortedSortVehicles = computed(() =>
-  [...sortVehicles.value].sort((a, b) => {
-    const sortA = Number.isFinite(Number(a.sortOrder)) ? Number(a.sortOrder) : 0;
-    const sortB = Number.isFinite(Number(b.sortOrder)) ? Number(b.sortOrder) : 0;
-    if (sortA !== sortB) {
-      return sortA - sortB;
-    }
-    const createdA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
-    const createdB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-    if (createdA !== createdB) {
-      return createdB - createdA;
-    }
-    return a.id.localeCompare(b.id);
-  }),
-);
 
 function normalizeSortOrder(value: unknown) {
   const numberValue = Number(value);
@@ -98,100 +80,6 @@ function getNextSortOrder() {
   return sortVehicles.value.length ? currentMax + 10 : 0;
 }
 
-async function loadAllVehiclesForSorting() {
-  const pageSize = 100;
-  let page = 1;
-  let total = Number.POSITIVE_INFINITY;
-  const rows: VehicleItem[] = [];
-
-  while (rows.length < total) {
-    const response = await listVehiclesApi({ page, pageSize });
-    const items = response.items || [];
-    rows.push(...items);
-    total = typeof response.total === 'number' ? response.total : rows.length;
-    if (!items.length) {
-      break;
-    }
-    page += 1;
-  }
-
-  return rows;
-}
-
-async function loadSortVehicles() {
-  sortListLoading.value = true;
-  try {
-    const rows = await loadAllVehiclesForSorting();
-    sortVehicles.value = rows.map((item) => ({
-      ...item,
-      sortOrder: normalizeSortOrder(item.sortOrder),
-    }));
-  } catch {
-    message.error('加载车辆排序列表失败');
-  } finally {
-    sortListLoading.value = false;
-  }
-}
-
-function startSortDrag(event: DragEvent, vehicleId: string) {
-  draggingSortVehicleId.value = vehicleId;
-  if (event.dataTransfer) {
-    event.dataTransfer.effectAllowed = 'move';
-    event.dataTransfer.setData('text/plain', vehicleId);
-  }
-}
-
-function clearSortDrag() {
-  draggingSortVehicleId.value = null;
-}
-
-function handleSortDrop(targetVehicleId: string) {
-  const sourceVehicleId = draggingSortVehicleId.value;
-  if (!sourceVehicleId || sourceVehicleId === targetVehicleId) {
-    clearSortDrag();
-    return;
-  }
-
-  const orderedRows = [...sortedSortVehicles.value];
-  const sourceIndex = orderedRows.findIndex((item) => item.id === sourceVehicleId);
-  const targetIndex = orderedRows.findIndex((item) => item.id === targetVehicleId);
-  if (sourceIndex < 0 || targetIndex < 0) {
-    clearSortDrag();
-    return;
-  }
-
-  const [movedRow] = orderedRows.splice(sourceIndex, 1);
-  const insertIndex = sourceIndex < targetIndex ? targetIndex - 1 : targetIndex;
-  orderedRows.splice(insertIndex, 0, movedRow);
-  orderedRows.forEach((item, index) => {
-    item.sortOrder = index * 10;
-  });
-  clearSortDrag();
-}
-
-async function saveSortOrder() {
-  if (!sortVehicles.value.length) {
-    return;
-  }
-  sortSaving.value = true;
-  try {
-    const orderedRows = [...sortedSortVehicles.value];
-    await Promise.all(
-      orderedRows.map((item) =>
-        updateVehicleApi(item.id, {
-          sortOrder: normalizeSortOrder(item.sortOrder),
-        }),
-      ),
-    );
-    message.success('车辆排序已保存');
-    await loadSortVehicles();
-    vehicleGridApi.reload();
-  } catch {
-    message.error('保存车辆排序失败');
-  } finally {
-    sortSaving.value = false;
-  }
-}
 
 const imageFileList = ref<UploadFile[]>([]);
 const imagePreview = ref('');
@@ -325,7 +213,6 @@ async function submitVehicle() {
       message.success('车辆创建成功');
     }
     modalOpen.value = false;
-    await loadSortVehicles();
     vehicleGridApi.reload();
   } finally {
     submitting.value = false;
@@ -340,7 +227,6 @@ function handleDelete(row: VehicleItem) {
     onOk: async () => {
       await deleteVehicleApi(row.id);
       message.success('车辆已删除');
-      await loadSortVehicles();
       vehicleGridApi.reload();
     },
   });
@@ -403,61 +289,12 @@ const [VehicleGrid, vehicleGridApi] = useVbenVxeGrid<VehicleItem>({
 });
 
 onMounted(() => {
-  void loadSortVehicles();
 });
 </script>
 
 <template>
   <div class="p-5">
-    <div class="mb-4 rounded-lg border border-slate-200 bg-white p-4">
-      <div class="mb-3 flex items-start justify-between gap-4">
-        <div>
-          <div class="text-base font-semibold text-slate-900">车辆排序管理</div>
-          <div class="mt-1 text-sm text-slate-500">拖拽左侧手柄可调整顺序，也可以直接修改排序值后保存。</div>
-        </div>
-        <Space>
-          <Button :loading="sortListLoading" @click="loadSortVehicles">刷新列表</Button>
-          <Button type="primary" :loading="sortSaving" @click="saveSortOrder">保存排序</Button>
-        </Space>
-      </div>
-
-      <div v-if="sortListLoading && !sortedSortVehicles.length" class="py-6 text-center text-slate-500">
-        正在加载车辆排序数据...
-      </div>
-
-      <div v-else class="space-y-2">
-        <div
-          v-for="row in sortedSortVehicles"
-          :key="row.id"
-          class="flex items-center justify-between gap-4 rounded-md border border-slate-200 px-3 py-2"
-          :class="draggingSortVehicleId === row.id ? 'border-blue-400 bg-blue-50' : 'bg-white'"
-          @dragover.prevent
-          @drop.prevent="handleSortDrop(row.id)"
-        >
-          <div class="flex min-w-0 items-center gap-3">
-            <button
-              class="flex h-9 w-9 cursor-grab items-center justify-center rounded-md border border-slate-200 bg-slate-50 text-slate-500 active:cursor-grabbing"
-              draggable="true"
-              type="button"
-              @dragstart="(event) => startSortDrag(event, row.id)"
-              @dragend="clearSortDrag"
-            >
-              ⋮⋮
-            </button>
-            <div class="min-w-0">
-              <div class="truncate font-medium text-slate-900">{{ row.name }}</div>
-              <div class="truncate text-xs text-slate-500">{{ row.identifier }}</div>
-            </div>
-          </div>
-
-          <div class="flex items-center gap-2">
-            <span class="text-sm text-slate-500">排序</span>
-            <InputNumber v-model:value="row.sortOrder" :min="0" style="width: 120px" />
-          </div>
-        </div>
-      </div>
-    </div>
-
+  
     <VehicleGrid>
       <template #toolbar-actions>
         <Button v-access:code="'vehicle:write'" type="primary" @click="openCreateModal">新增车辆</Button>

@@ -380,18 +380,18 @@ export const useAuthStore = defineStore('auth', () => {
     if (!token.value) {
       clearSessionState()
       clearSessionNotice()
-      await router.replace('/')
+      void router.replace('/')
       return
     }
     const currentToken = token.value
     clearSessionState()
     clearSessionNotice()
+    void router.replace('/')
     try {
       await logoutSession(currentToken)
     } catch (error) {
       console.warn('[auth] logout failed', error)
     }
-    await router.replace('/')
   }
 
   function hasPermission(permission: string): boolean {

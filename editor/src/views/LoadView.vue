@@ -6,6 +6,8 @@ import { useScenesStore } from '@/stores/scenesStore'
 import { waitForPiniaHydration } from '@/utils/piniaPersist'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useProjectsStore } from '@/stores/projectsStore'
+import { useAuthStore } from '@/stores/authStore'
+import { hasLocalEditFlag } from '@/utils/localEdit'
 
 type BootstrapErrorCode =
   | 'project-not-found'
@@ -128,6 +130,7 @@ const LoadingScreen = defineComponent({
 
 const scenesStore = useScenesStore()
 const projectsStore = useProjectsStore()
+const authStore = useAuthStore()
 const route = useRoute()
 const router = useRouter()
 
@@ -213,6 +216,17 @@ function setBootstrapStatus(next: { status: string; progress: number; detail?: s
 
 async function bootstrap() {
   if (isBooting.value) {
+    return
+  }
+  if (!hasLocalEditFlag(route.query) && !authStore.isAuthenticated) {
+    currentComponent.value = LoadingScreen
+    statusHistory.value = []
+    progress.value = 5
+    statusDetail.value = ''
+    statusMessage.value = 'Redirecting to projects...'
+    errorMessage.value = null
+    errorCode.value = null
+    await router.replace({ path: '/' })
     return
   }
   // Ensure the loading UI is visible when (re)bootstrapping

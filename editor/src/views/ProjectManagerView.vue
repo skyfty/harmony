@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, inject, onMounted, ref } from 'vue'
+import { computed, inject, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useRouter } from 'vue-router'
 import { useProjectsStore } from '@/stores/projectsStore'
@@ -14,6 +14,7 @@ import {type ProjectCreateParams} from '@/types/project-summary'
 import { createProjectWithDefaultScene } from '@/stores/useProjectCreation'
 import type { DuplicateProjectResolution } from '@/utils/projectPackageWorkflow'
 import { runProjectExportWorkflow, runProjectImportWorkflow } from '@/utils/projectPackageWorkflow'
+import { hasLocalEditFlag, withLocalEditQuery } from '@/utils/localEdit'
 
 import { PROJECT_MANAGER_OVERLAY_CLOSE_KEY } from '@/injectionKeys'
 
@@ -40,6 +41,7 @@ const duplicateImportProjectCount = ref(0)
 const duplicateImportResolver = ref<((value: DuplicateProjectResolution) => void) | null>(null)
 
 const isLoggedIn = computed(() => !!authStore.user)
+const canManageProjects = computed(() => hasLocalEdit.value || isLoggedIn.value)
 const projects = computed(() => projectsStore.sortedMetadata)
 
 const overlayClose = inject(PROJECT_MANAGER_OVERLAY_CLOSE_KEY, null)
@@ -49,6 +51,8 @@ const returnTo = computed(() => {
   const q = route.query?.returnTo
   return typeof q === 'string' && q.length ? q : null
 })
+
+const hasLocalEdit = computed(() => hasLocalEditFlag(route.query))
 
 function handleClose() {
   // Prefer using history.back to avoid a full navigation/refresh.
@@ -80,13 +84,25 @@ onMounted(() => {
   refreshAll()
 })
 
+watch(
+  () => [hasLocalEdit.value, isLoggedIn.value],
+  () => {
+    loginOpen.value = !hasLocalEdit.value && !isLoggedIn.value
+  },
+  { immediate: true },
+)
+
 function openLogin() {
   loginOpen.value = true
 }
 
 async function handleCreateProject(payload: ProjectCreateParams) {
+  if (!canManageProjects.value) {
+    openLogin()
+    return
+  }
   const { project, scene } = await createProjectWithDefaultScene(payload)
-  await router.push({ path: '/editor', query: { projectId: project.id, sceneId: scene.id } })
+  await router.push({ path: '/editor', query: withLocalEditQuery({ projectId: project.id, sceneId: scene.id }) })
   overlayClose?.()
 }
 
@@ -95,15 +111,23 @@ async function handleSignOut() {
 }
 
 async function handleOpenProject(payload: { projectId: string; sceneId?: string | null }) {
+  if (!canManageProjects.value) {
+    openLogin()
+    return
+  }
   const query: Record<string, string> = { projectId: payload.projectId }
   if (typeof payload.sceneId === 'string' && payload.sceneId.trim()) {
     query.sceneId = payload.sceneId.trim()
   }
-  await router.push({ path: '/editor', query })
+  await router.push({ path: '/editor', query: withLocalEditQuery(query) })
   overlayClose?.()
 }
 
 async function handleDeleteProject(projectId: string) {
+  if (!canManageProjects.value) {
+    openLogin()
+    return
+  }
   if (deletingId.value) return
   deletingId.value = projectId
   try {
@@ -114,6 +138,10 @@ async function handleDeleteProject(projectId: string) {
 }
 
 function requestDeleteProject(projectId: string, projectName: string) {
+  if (!canManageProjects.value) {
+    openLogin()
+    return
+  }
   if (deletingId.value) return
   pendingDeleteProjectId.value = projectId
   pendingDeleteProjectName.value = projectName
@@ -140,6 +168,10 @@ async function confirmDeleteProject() {
 }
 
 async function handleSync() {
+  if (!canManageProjects.value) {
+    openLogin()
+    return
+  }
   await Promise.all([
     projectsStore.syncUserWorkspaceFromServer({ replace: false }),
     scenesStore.refreshUserWorkspaceMetadataFromServer(),
@@ -169,6 +201,10 @@ function closeDuplicateImportDialogWith(value: DuplicateProjectResolution): void
 }
 
 function requestProjectImport(): void {
+  if (!canManageProjects.value) {
+    openLogin()
+    return
+  }
   if (importingProject.value) {
     return
   }
@@ -181,6 +217,10 @@ function requestProjectImport(): void {
 }
 
 async function handleProjectImportFileChange(event: Event): Promise<void> {
+  if (!canManageProjects.value) {
+    openLogin()
+    return
+  }
   const input = (event.target as HTMLInputElement | null) ?? projectImportInputRef.value
   const file = input?.files?.[0] ?? null
   if (!input || !file || importingProject.value) {
@@ -209,6 +249,10 @@ async function handleProjectImportFileChange(event: Event): Promise<void> {
 }
 
 async function handleExportProject(projectId: string): Promise<void> {
+  if (!canManageProjects.value) {
+    openLogin()
+    return
+  }
   if (exportingId.value || importingProject.value) {
     return
   }
@@ -249,9 +293,9 @@ async function handleExportProject(projectId: string): Promise<void> {
       <div class="pm-actions">
         <v-btn v-if="!isLoggedIn" variant="text" @click="openLogin">Sign In</v-btn>
         <v-btn v-else variant="text" @click="handleSignOut">Sign Out</v-btn>
-        <v-btn variant="text" :disabled="!isLoggedIn" @click="handleSync">Refresh</v-btn>
-        <v-btn variant="text" :disabled="importingProject || deletingId !== null || exportingId !== null" @click="requestProjectImport">Import</v-btn>
-        <v-btn color="primary" variant="flat" @click="newProjectOpen = true">New Project</v-btn>
+        <v-btn variant="text" :disabled="!canManageProjects" @click="handleSync">Refresh</v-btn>
+        <v-btn variant="text" :disabled="!canManageProjects || importingProject || deletingId !== null || exportingId !== null" @click="requestProjectImport">Import</v-btn>
+        <v-btn color="primary" variant="flat" :disabled="!canManageProjects" @click="newProjectOpen = true">New Project</v-btn>
       </div>
     </div>
 
@@ -263,7 +307,7 @@ async function handleExportProject(projectId: string): Promise<void> {
       <v-card v-if="!projects.length" class="pm-empty" variant="tonal">
         <v-card-text>
           No projects yet.
-          <v-btn class="ml-2" size="small" color="primary" variant="flat" @click="newProjectOpen = true">Create one</v-btn>
+          <v-btn class="ml-2" size="small" color="primary" variant="flat" :disabled="!canManageProjects" @click="newProjectOpen = true">Create one</v-btn>
         </v-card-text>
       </v-card>
 
@@ -273,11 +317,11 @@ async function handleExportProject(projectId: string): Promise<void> {
             <v-card-title class="pm-project__title">{{ p.name }}</v-card-title>
             <v-card-subtitle>{{ p.sceneCount }} scenes</v-card-subtitle>
             <v-card-actions>
-              <v-btn color="primary" variant="flat" @click="handleOpenProject({ projectId: p.id, sceneId: p.lastEditedSceneId })">Open</v-btn>
+              <v-btn color="primary" variant="flat" :disabled="!canManageProjects" @click="handleOpenProject({ projectId: p.id, sceneId: p.lastEditedSceneId })">Open</v-btn>
               <v-btn
                 variant="text"
                 :loading="exportingId === p.id"
-                :disabled="deletingId !== null || importingProject || (exportingId !== null && exportingId !== p.id)"
+                :disabled="!canManageProjects || deletingId !== null || importingProject || (exportingId !== null && exportingId !== p.id)"
                 @click="handleExportProject(p.id)"
               >
                 Export
@@ -287,7 +331,7 @@ async function handleExportProject(projectId: string): Promise<void> {
                 color="error"
                 variant="text"
                 :loading="deletingId === p.id"
-                :disabled="deletingId !== null || exportingId !== null || importingProject"
+                :disabled="!canManageProjects || deletingId !== null || exportingId !== null || importingProject"
                 @click="requestDeleteProject(p.id, p.name)"
               >
                 Move to Trash
