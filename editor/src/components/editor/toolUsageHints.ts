@@ -203,11 +203,8 @@ function resolveGenericRows(tool: BuildTool): ToolUsageHintRow[] {
   switch (tool) {
     case 'road':
       return createRows([
-        { label: '入口', text: '视口工具栏 -> Road Tool' },
-        { label: '鼠标', text: '左键连续放点绘制道路' },
-        { label: '完成', text: '双击左键完成当前道路' },
-        { label: '修饰', text: 'Shift 或全局顶点吸附用于对齐已有顶点' },
-        { label: '取消', text: '右键或 Escape 取消当前道路' },
+        { label: '左键', text: '拖放建路' },
+        { label: 'Shift', text: '直连' },
       ])
     case 'terrain':
       return createRows([

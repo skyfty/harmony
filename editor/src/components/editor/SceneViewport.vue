@@ -2092,6 +2092,7 @@ const waterEditNodeId = ref<string | null>(null)
 const selectedModelCollisionFaceId = ref<string | null>(null)
 const vertexSnapModeEnabled = computed(() => sceneStore.viewportSettings.snapMode === 'vertex')
 const isVertexSnapActiveEffective = computed(() => vertexSnapModeEnabled.value || vertexSnapShiftModifierActive.value)
+const roadDirectModeActive = computed(() => activeBuildTool.value === 'road' && vertexSnapShiftModifierActive.value)
 const selectedNodeIsGround = computed(() => sceneStore.selectedNode?.dynamicMesh?.type === 'Ground')
 const selectedNodeIsWall = computed(() => sceneStore.selectedNode?.dynamicMesh?.type === 'Wall')
 const selectedNodeIsFloor = computed(() => sceneStore.selectedNode?.dynamicMesh?.type === 'Floor')
@@ -23462,6 +23463,7 @@ defineExpose({
         :show-grid="gridVisible"
         :show-axes="axesVisible"
         :vertex-snap-enabled="isVertexSnapActiveEffective"
+        :road-direct-mode-active="roadDirectModeActive"
         :can-drop-selection="canDropSelection"
         :can-align-selection="canAlignSelection"
         :can-rotate-selection="canRotateSelection"

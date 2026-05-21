@@ -12,6 +12,7 @@ export type RoadPreviewSession = {
   previewEnd: THREE.Vector3 | null
   previewGroup: THREE.Group | null
   width: number
+  useTerrainHeightSampler: boolean
 }
 
 export type RoadPreviewRenderer = {
@@ -41,20 +42,26 @@ function encodeRoadPreviewNumber(value: number): string {
   return `${Math.round(value * ROAD_PREVIEW_SIGNATURE_PRECISION)}`
 }
 
-function computeRoadPreviewSignature(points: THREE.Vector3[], previewEnd: THREE.Vector3 | null, width: number): string {
+function computeRoadPreviewSignature(
+  points: THREE.Vector3[],
+  previewEnd: THREE.Vector3 | null,
+  width: number,
+  useTerrainHeightSampler: boolean,
+): string {
   if (!points.length && !previewEnd) {
     return 'empty'
   }
 
   const widthSignature = encodeRoadPreviewNumber(width)
+  const modeSignature = useTerrainHeightSampler ? 'terrain' : 'direct'
   const pSignature = points
-    .map((p) => [encodeRoadPreviewNumber(p.x), encodeRoadPreviewNumber(p.z)].join(','))
+    .map((p) => [encodeRoadPreviewNumber(p.x), encodeRoadPreviewNumber(p.y), encodeRoadPreviewNumber(p.z)].join(','))
     .join(';')
   const endSignature = previewEnd
-    ? [encodeRoadPreviewNumber(previewEnd.x), encodeRoadPreviewNumber(previewEnd.z)].join(',')
+    ? [encodeRoadPreviewNumber(previewEnd.x), encodeRoadPreviewNumber(previewEnd.y), encodeRoadPreviewNumber(previewEnd.z)].join(',')
     : 'none'
 
-  return `${widthSignature}|${pSignature}|${endSignature}`
+  return `${modeSignature}|${widthSignature}|${pSignature}|${endSignature}`
 }
 
 function disposeRoadPreviewGroup(group: THREE.Group) {
@@ -294,7 +301,7 @@ export function createRoadPreviewRenderer(options: {
     }
 
     const build = buildRoadPreviewBuild(session.points, session.previewEnd, session.width, {
-      heightSampler: options.heightSampler ?? null,
+      heightSampler: session.useTerrainHeightSampler ? (options.heightSampler ?? null) : null,
       samplingDensityFactor: ROAD_PREVIEW_HEIGHT_SAMPLING_DENSITY_FACTOR,
     })
     if (!build) {
@@ -305,7 +312,12 @@ export function createRoadPreviewRenderer(options: {
       return
     }
 
-    const nextSignature = computeRoadPreviewSignature(session.points, session.previewEnd, session.width)
+    const nextSignature = computeRoadPreviewSignature(
+      session.points,
+      session.previewEnd,
+      session.width,
+      session.useTerrainHeightSampler,
+    )
     if (nextSignature === signature) {
       return
     }

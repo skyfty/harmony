@@ -216,6 +216,7 @@ export function createRoadBuildTool(options: {
       liveNodeId: null,
       buildStartPoint: null,
       committedSegmentCount: 0,
+      useTerrainHeightSampler: true,
     }
     return session
   }
@@ -232,7 +233,23 @@ export function createRoadBuildTool(options: {
     return projected ?? point.clone()
   }
 
-  const resolveSurfacePlacementPoint = (event: PointerEvent): BuildSurfacePlacementPoint | null => {
+  const resolveSurfacePlacementPoint = (event: PointerEvent, directMode = false): BuildSurfacePlacementPoint | null => {
+    if (directMode) {
+      const point = new THREE.Vector3()
+      if (options.resolveBuildPlacementPoint?.(event, point)) {
+        return { point, nodeId: null }
+      }
+      if (options.resolveBuildPlacementSurfacePoint) {
+        const resolved = options.resolveBuildPlacementSurfacePoint(event)
+        if (resolved) {
+          return { point: resolved.point.clone(), nodeId: resolved.nodeId ?? null }
+        }
+      }
+      if (options.raycastGroundPoint(event, point)) {
+        return { point, nodeId: null }
+      }
+      return null
+    }
     if (options.resolveBuildPlacementSurfacePoint) {
       const resolved = options.resolveBuildPlacementSurfacePoint(event)
       if (resolved) {
@@ -253,7 +270,15 @@ export function createRoadBuildTool(options: {
     return options.raycastGroundPoint(event, result)
   }
 
-  const resolveWorldPoint = (event: PointerEvent, rawPoint: THREE.Vector3, surfaceNodeId?: string | null): THREE.Vector3 => {
+  const resolveWorldPoint = (
+    event: PointerEvent,
+    rawPoint: THREE.Vector3,
+    surfaceNodeId?: string | null,
+    directMode = false,
+  ): THREE.Vector3 => {
+    if (directMode) {
+      return rawPoint.clone()
+    }
     const snapped = options.resolveVertexSnapPoint?.(event, rawPoint, {
       excludeNodeIds: (session?.liveNodeId ?? session?.targetNodeId)
         ? [session?.liveNodeId ?? session?.targetNodeId!]
@@ -279,7 +304,9 @@ export function createRoadBuildTool(options: {
     if (!session || session.points.length === 0) {
       return
     }
-    const surfacePlacement = resolveSurfacePlacementPoint(event)
+    const directMode = Boolean(event.shiftKey)
+    session.useTerrainHeightSampler = !directMode
+    const surfacePlacement = resolveSurfacePlacementPoint(event, directMode)
     if (!surfacePlacement) {
       return
     }
@@ -287,7 +314,7 @@ export function createRoadBuildTool(options: {
     session.snapVertices = options.collectRoadSnapVertices()
 
     const rawPointer = surfacePlacement.point.clone()
-    const next = resolveWorldPoint(event, rawPointer, surfacePlacement.nodeId)
+    const next = resolveWorldPoint(event, rawPointer, surfacePlacement.nodeId, directMode)
 
     const previous = session.previewEnd
     if (previous && previous.equals(next)) {
@@ -312,24 +339,36 @@ export function createRoadBuildTool(options: {
       showLockedStartIndicator(session.points[0] ?? null)
       return true
     }
-    const surfacePlacement = resolveSurfacePlacementPoint(event)
+    const directMode = Boolean(event.shiftKey)
+    if (session) {
+      session.useTerrainHeightSampler = !directMode
+    }
+    const surfacePlacement = resolveSurfacePlacementPoint(event, directMode)
     if (!surfacePlacement) {
       hideStartIndicator()
       return false
     }
 
     const rawPointer = surfacePlacement.point.clone()
-
-    const snapped = options.resolveVertexSnapPoint?.(event, rawPointer, {
-      keepSourceY: true,
-    })
-    const point = snapped
-      ? projectPointToTerrain(snapped, surfacePlacement.nodeId)
-      : projectPointToTerrain(options.snapRoadPointToVertices(
-          rawPointer,
-          session?.snapVertices ?? options.collectRoadSnapVertices(),
-          options.vertexSnapDistance,
-        ).position, surfacePlacement.nodeId)
+    const vertexSnapPoint = directMode
+      ? null
+      : options.resolveVertexSnapPoint?.(event, rawPointer, {
+          keepSourceY: true,
+        })
+    const point = directMode
+      ? rawPointer
+      : (
+        vertexSnapPoint
+          ? projectPointToTerrain(vertexSnapPoint, surfacePlacement.nodeId)
+          : projectPointToTerrain(
+              options.snapRoadPointToVertices(
+                rawPointer,
+                session?.snapVertices ?? options.collectRoadSnapVertices(),
+                options.vertexSnapDistance,
+              ).position,
+              surfacePlacement.nodeId,
+            )
+      )
 
     options.showStartIndicator?.(point, { height: 2 })
     return true
@@ -348,6 +387,8 @@ export function createRoadBuildTool(options: {
 
     // 确保存在会话对象
     const current = ensureSession()
+    const directMode = Boolean(event.shiftKey)
+    current.useTerrainHeightSampler = !directMode
 
     // 如果这是第一个点，优先使用射线投射交互：
     // - 如果点击了现有道路表面，通过分割最近的线段来开始分支
@@ -507,7 +548,7 @@ export function createRoadBuildTool(options: {
     }
 
     // Fall back to ground-plane placement + vertex snapping.
-    const surfacePlacement = resolveSurfacePlacementPoint(event)
+    const surfacePlacement = resolveSurfacePlacementPoint(event, directMode)
     if (!surfacePlacement) {
       return false
     }
@@ -515,19 +556,28 @@ export function createRoadBuildTool(options: {
     const snapped = surfacePlacement.point.clone()
 
     current.snapVertices = options.collectRoadSnapVertices()
-    const snappedResult = options.snapRoadPointToVertices(snapped, current.snapVertices, options.vertexSnapDistance)
-    const vertexSnapPoint = options.resolveVertexSnapPoint?.(event, snapped, {
-      excludeNodeIds: (current.liveNodeId ?? current.targetNodeId)
-        ? [current.liveNodeId ?? current.targetNodeId!]
-        : undefined,
-      keepSourceY: true,
-    })
-    let point = vertexSnapPoint
-      ? projectPointToTerrain(vertexSnapPoint, surfacePlacement.nodeId)
-      : projectPointToTerrain(snappedResult.position, surfacePlacement.nodeId)
+    const snappedResult = directMode
+      ? { position: snapped.clone(), nodeId: null as string | null, vertexIndex: null as number | null }
+      : options.snapRoadPointToVertices(snapped, current.snapVertices, options.vertexSnapDistance)
+    const vertexSnapPoint = directMode
+      ? null
+      : options.resolveVertexSnapPoint?.(event, snapped, {
+          excludeNodeIds: (current.liveNodeId ?? current.targetNodeId)
+            ? [current.liveNodeId ?? current.targetNodeId!]
+            : undefined,
+          keepSourceY: true,
+        })
+    let point = directMode
+      ? snapped.clone()
+      : (
+        vertexSnapPoint
+          ? projectPointToTerrain(vertexSnapPoint, surfacePlacement.nodeId)
+          : projectPointToTerrain(snappedResult.position, surfacePlacement.nodeId)
+      )
 
     // If starting on an existing road vertex, branch into that road node.
     if (
+      !directMode &&
       !vertexSnapPoint &&
       current.points.length === 0 &&
       snappedResult.nodeId &&
@@ -575,7 +625,7 @@ export function createRoadBuildTool(options: {
       }
 
       const build = buildRoadPreviewBuild([segmentStart], segmentEnd, session.width, {
-        heightSampler: options.heightSampler,
+        heightSampler: session.useTerrainHeightSampler ? options.heightSampler : null,
       })
       if (!build) {
         return null
@@ -757,6 +807,7 @@ export function createRoadBuildTool(options: {
       current.liveNodeId = null
       current.buildStartPoint = worldPoint.clone()
       current.committedSegmentCount = 0
+      current.useTerrainHeightSampler = true
       showLockedStartIndicator(worldPoint)
       updatePreview({ immediate: true })
       return true

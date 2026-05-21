@@ -1130,13 +1130,13 @@
           </v-list>
         </v-menu>
       <v-btn
-        :icon="vertexSnapEnabled ? 'mdi-magnet-on' : 'mdi-magnet'"
-        :color="vertexSnapEnabled ? 'primary' : undefined"
-        :variant="vertexSnapEnabled ? 'flat' : 'text'"
+        :icon="vertexSnapButtonIcon"
+        :color="vertexSnapButtonActive ? 'primary' : undefined"
+        :variant="vertexSnapButtonActive ? 'flat' : 'text'"
         density="compact"
         size="small"
         class="toolbar-button"
-        title="Vertex Snap (Hold Shift)"
+        :title="vertexSnapButtonTitle"
         @click="toggleVertexSnap"
       />
 
@@ -1210,6 +1210,7 @@ const props = withDefaults(
   showGrid: boolean
   showAxes: boolean
   vertexSnapEnabled?: boolean
+  roadDirectModeActive?: boolean
   canDropSelection: boolean
   canAlignSelection: boolean
   canRotateSelection: boolean
@@ -1264,6 +1265,7 @@ const props = withDefaults(
   {
     buildToolsDisabled: false,
     vertexSnapEnabled: false,
+    roadDirectModeActive: false,
     scatterEraseRepairActive: false,
     wallDoorSelectModeActive: false,
   },
@@ -1327,7 +1329,6 @@ const emit = defineEmits<{
 const {
   showGrid,
   showAxes,
-  vertexSnapEnabled,
   canDropSelection,
   canAlignSelection,
   canRotateSelection,
@@ -2510,6 +2511,24 @@ function toggleAxesVisibility() {
 function toggleVertexSnap() {
   sceneStore.toggleViewportVertexSnap()
 }
+
+const vertexSnapButtonActive = computed(() => {
+  return props.activeBuildTool === 'road' || props.vertexSnapEnabled || props.roadDirectModeActive
+})
+
+const vertexSnapButtonIcon = computed(() => {
+  if (props.activeBuildTool === 'road') {
+    return props.roadDirectModeActive ? 'mdi-vector-line' : 'mdi-magnet-on'
+  }
+  return props.vertexSnapEnabled ? 'mdi-magnet-on' : 'mdi-magnet'
+})
+
+const vertexSnapButtonTitle = computed(() => {
+  if (props.activeBuildTool === 'road') {
+    return props.roadDirectModeActive ? 'Road 直连' : 'Road 贴合'
+  }
+  return '顶点吸附'
+})
 
 function handleClearScatterMenuAction() {
   if (!canClearAllScatterInstances.value) {
