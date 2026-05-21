@@ -1161,7 +1161,6 @@ import { computed, reactive, ref, toRefs, watch } from 'vue'
 import AssetPickerList from '@/components/common/AssetPickerList.vue'
 import TerrainSculptPanel from '@/components/inspector/TerrainSculptPanel.vue'
 import GroundAssetPainter from '@/components/inspector/GroundAssetPainter.vue'
-import type { TerrainPaintBrushSettings } from '@/stores/terrainStore'
 import { PROTAGONIST_NODE_ID } from '@schema/core'
 import type { GroundGenerationMode, GroundSculptOperation } from '@schema/core'
 import type { AlignCommand } from '@/types/scene-viewport-align-command'
@@ -1285,7 +1284,6 @@ const emit = defineEmits<{
   (event: 'update:road-shape-menu-open', value: boolean): void
   (event: 'update:water-shape-menu-open', value: boolean): void
   (event: 'update:ground-terrain-menu-open', value: boolean): void
-  (event: 'update:ground-paint-menu-open', value: boolean): void
   (event: 'update:ground-scatter-menu-open', value: boolean): void
   (event: 'select-floor-build-shape', shape: FloorBuildShape): void
   (event: 'update:floor-regular-polygon-sides', value: number): void
@@ -1304,8 +1302,6 @@ const emit = defineEmits<{
   (event: 'update:ground-brush-operation', value: GroundSculptOperation | null): void
   (event: 'update:ground-noise-strength', value: number): void
   (event: 'update:ground-noise-mode', value: GroundGenerationMode): void
-  (event: 'update:ground-paint-asset', value: ProjectAsset | null): void
-  (event: 'update:ground-paint-settings', value: TerrainPaintBrushSettings): void
   (event: 'update:ground-scatter-category', value: TerrainScatterCategory): void
   (event: 'update:ground-scatter-brush-radius', value: number): void
   (event: 'update:ground-scatter-brush-shape', value: TerrainScatterBrushShape): void
@@ -1392,7 +1388,6 @@ const displayBoardToolMenuOpen = ref(false)
 
 type MenuActivatorKey =
   | 'terrain'
-  | 'paint'
   | 'scatter'
   | 'displayBoard'
   | 'floor'
@@ -1405,7 +1400,6 @@ type MenuActivatorKey =
 
 const menuActivators = reactive<Record<MenuActivatorKey, HTMLElement | undefined>>({
   terrain: undefined,
-  paint: undefined,
   scatter: undefined,
   displayBoard: undefined,
   floor: undefined,
@@ -1836,7 +1830,6 @@ watch(hasGroundNode, (available) => {
     return
   }
   emit('update:ground-terrain-menu-open', false)
-  emit('update:ground-paint-menu-open', false)
   emit('update:ground-scatter-menu-open', false)
 })
 
@@ -1844,7 +1837,6 @@ watch(hasGroundNode, (available) => {
 function closeExternalMenus() {
   displayBoardToolMenuOpen.value = false
   emit('update:ground-terrain-menu-open', false)
-  emit('update:ground-paint-menu-open', false)
   emit('update:ground-scatter-menu-open', false)
   emit('update:scatter-erase-menu-open', false)
   emit('update:viewport-placement-menu-open', false)
@@ -2018,7 +2010,6 @@ function handleRecenterGroupOrigin() {
 
 const buildToolButtons = [
   { id: 'terrain', icon: 'mdi-image-edit-outline', label: 'Terrain Tools' },
-  { id: 'paint', icon: 'mdi-brush-variant', label: 'Terrain Paint' },
   { id: 'scatter', icon: 'mdi-sprout', label: 'Terrain Scatter' },
   { id: 'wall', icon: 'mdi-wall', label: 'Wall Brush' },
   { id: 'floor', icon: 'mdi-floor-plan', label: 'Floor Brush' },
@@ -2212,7 +2203,7 @@ function handleBuildToolCancel(tool: BuildTool) {
   }
 }
 
-type GroundMenuKind = 'terrain' | 'paint' | 'scatter'
+type GroundMenuKind = 'terrain' | 'scatter'
 
 function isGroundButtonActive(kind: GroundMenuKind) {
   return activeBuildTool.value === kind
@@ -2222,10 +2213,7 @@ function resolveGroundTargetTab(kind: GroundMenuKind, source: 'button' | 'menu')
   if (kind === 'terrain') {
     return 'terrain'
   }
-  if (kind === 'paint') {
-    return 'paint'
-  }
-  if (source === 'menu' && groundPanelTab.value !== 'terrain' && groundPanelTab.value !== 'paint') {
+  if (source === 'menu' && groundPanelTab.value !== 'terrain') {
     return null
   }
   return groundScatterCategoryModel.value
@@ -2282,10 +2270,6 @@ function setBuildToolMenuOpen(tool: BuildTool, open: boolean) {
 function setGroundMenuOpen(kind: GroundMenuKind, open: boolean) {
   if (kind === 'terrain') {
     emit('update:ground-terrain-menu-open', open)
-    return
-  }
-  if (kind === 'paint') {
-    emit('update:ground-paint-menu-open', open)
     return
   }
   emit('update:ground-scatter-menu-open', open)
@@ -2567,7 +2551,6 @@ function handleClearScatterMenuAction() {
 }
 
 .ground-terrain-menu,
-.ground-paint-menu,
 .ground-scatter-menu {
   width: 360px;
   max-width: min(360px, 90vw);
