@@ -300,6 +300,14 @@
         "isHot": {
           "label": "Hot"
         }
+      },
+      "error": {
+        "coverImageSize": "Cover image size must be {width}x{height}",
+        "slideImageSize": "Slide images should use a {ratio} ratio, recommended size {width}x{height}"
+      },
+      "help": {
+        "coverImageSize": "Image must be {width}x{height} to upload",
+        "slideImageSize": "Each slide image should use a {ratio} ratio, recommended size {width}x{height}, up to {max} images"
       }
     },
     "detail": {

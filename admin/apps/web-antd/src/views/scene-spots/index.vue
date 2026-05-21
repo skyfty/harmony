@@ -151,6 +151,10 @@ const slidesRules = [
 ];
 
 const MAX_SLIDES_COUNT = 10;
+const SLIDE_IMAGE_RECOMMENDED_WIDTH = 750;
+const SLIDE_IMAGE_RECOMMENDED_HEIGHT = 422;
+const SLIDE_IMAGE_ASPECT_RATIO = 16 / 9;
+const SLIDE_IMAGE_RATIO_TOLERANCE = 0.02;
 
 function resetForm() {
   sceneSpotFormModel.sceneId = '';
@@ -211,7 +215,28 @@ async function validateImageSize(file: File, width: number, height: number): Pro
         resolve(false);
       };
       img.src = url;
-    } catch (err) {
+    } catch {
+      resolve(false);
+    }
+  });
+}
+
+async function validateImageAspectRatio(file: File, aspectRatio: number, tolerance = 0.02): Promise<boolean> {
+  return await new Promise((resolve) => {
+    try {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        const ok = img.width > 0 && img.height > 0 && Math.abs(img.width / img.height - aspectRatio) <= tolerance;
+        URL.revokeObjectURL(url);
+        resolve(ok);
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(url);
+        resolve(false);
+      };
+      img.src = url;
+    } catch {
       resolve(false);
     }
   });
@@ -221,7 +246,7 @@ async function handleCoverImageChange(info: UploadChangeParam<UploadFile<any>>) 
   const list = info.fileList.slice(-1);
   if (list.length > 0) {
     const fileObj = list[0].originFileObj as File | undefined;
-      if (fileObj) {
+    if (fileObj) {
       const ok = await validateImageSize(fileObj, 110, 110);
       if (!ok) {
         message.error(t('page.sceneSpots.index.error.coverImageSize', { width: 110, height: 110 }));
@@ -237,10 +262,16 @@ async function handleSlidesChange(info: UploadChangeParam<UploadFile<any>>) {
   const validated: UploadFile[] = [];
   for (const f of list) {
     const fileObj = f.originFileObj as File | undefined;
-      if (fileObj) {
-      const ok = await validateImageSize(fileObj, 430, 340);
+    if (fileObj) {
+      const ok = await validateImageAspectRatio(fileObj, SLIDE_IMAGE_ASPECT_RATIO, SLIDE_IMAGE_RATIO_TOLERANCE);
       if (!ok) {
-        message.error(t('page.sceneSpots.index.error.slideImageSize', { width: 430, height: 340 }));
+        message.error(
+          t('page.sceneSpots.index.error.slideImageSize', {
+            width: SLIDE_IMAGE_RECOMMENDED_WIDTH,
+            height: SLIDE_IMAGE_RECOMMENDED_HEIGHT,
+            ratio: '16:9',
+          }),
+        );
         continue;
       }
     }
@@ -782,7 +813,9 @@ onMounted(async () => {
               >
                 <div v-if="slidesFileList.length < MAX_SLIDES_COUNT">+ {{ t('page.sceneSpots.index.formFields.coverImage.upload') }}</div>
               </Upload>
-              <div class="upload-note">{{ t('page.sceneSpots.index.help.slideImageSize', { width: 430, height: 340, max: MAX_SLIDES_COUNT }) }}</div>
+              <div class="upload-note">
+                {{ t('page.sceneSpots.index.help.slideImageSize', { width: SLIDE_IMAGE_RECOMMENDED_WIDTH, height: SLIDE_IMAGE_RECOMMENDED_HEIGHT, max: MAX_SLIDES_COUNT, ratio: '16:9' }) }}
+              </div>
             </Form.Item>
 
             <Form.Item :label="t('page.sceneSpots.index.formFields.isHome.label')" name="isHome">
