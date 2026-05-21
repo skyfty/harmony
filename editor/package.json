@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "predev": "pnpm run bootstrap",
-    "dev": "vite",
+    "dev": "vite --open \"/#/editor?localedit=1\"",
     "bootstrap": "node ../scripts/bootstrap.mjs editor",
     "build": "pnpm run bootstrap && vue-tsc -b && vite build",
     "preview": "vite preview",

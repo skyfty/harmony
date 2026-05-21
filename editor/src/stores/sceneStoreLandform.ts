@@ -1,8 +1,9 @@
 import { Object3D, Shape, ShapeGeometry, ShapeUtils, Vector2, Vector3 } from 'three'
-import type { GroundDynamicMesh, LandformDynamicMesh, SceneNode, Vector3Like, Vector2Like } from '@schema/core'
+import type { GroundDynamicMesh, GroundRuntimeDynamicMesh, LandformDynamicMesh, SceneNode, Vector3Like, Vector2Like } from '@schema/core'
 import {
   buildSmoothedSculptPolygonContour,
-  sampleGroundTriangleHeight,
+  prepareGroundTriangleHeightSamplingContext,
+  sampleGroundTriangleHeightWithContext,
   sliceGroundTrianglesByPolygon,
 } from '@schema/groundMesh'
 import {
@@ -67,6 +68,17 @@ type LandformMeshBuildMode = 'interactive'
 type LandformMeshBuildOptions = Partial<LandformComponentProps> & {
   buildShape?: LandformBuildShape | null
   previewMode?: LandformMeshBuildMode
+}
+
+type LandformHeightSamplingResult = {
+  runtimeDefinition: GroundRuntimeDynamicMesh
+  sampleHeight: LandformHeightSampler
+}
+
+type LandformAdaptiveGroundClearanceContext = {
+  sampleRadius: number
+  worldVerticalScale: number
+  neighborOffsets: Array<[number, number]>
 }
 
 type LandformFeatherRefinementOptions = {
@@ -591,25 +603,46 @@ type SampledLandformVertex = {
 
 type LandformHeightSampler = (x: number, z: number) => number
 
-function createLandformHeightSampler(groundDefinition: GroundDynamicMesh): LandformHeightSampler {
-  const cache = new Map<string, number>()
-  return (x: number, z: number) => {
-    const key = `${x.toFixed(6)},${z.toFixed(6)}`
-    const cached = cache.get(key)
-    if (cached !== undefined) {
-      return cached
-    }
-    const sampled = sampleGroundTriangleHeight(groundDefinition, x, z)
-    cache.set(key, sampled)
-    return sampled
+function createLandformHeightSampler(groundDefinition: GroundDynamicMesh): LandformHeightSamplingResult {
+  const { runtimeDefinition, context } = prepareGroundTriangleHeightSamplingContext(groundDefinition)
+  return {
+    runtimeDefinition,
+    sampleHeight: (x: number, z: number) => sampleGroundTriangleHeightWithContext(runtimeDefinition, context, x, z),
+  }
+}
+
+function createLandformAdaptiveGroundClearanceContext(
+  groundDefinition: GroundDynamicMesh,
+  transform: GroundTransform,
+): LandformAdaptiveGroundClearanceContext {
+  const cellSize = Number.isFinite(groundDefinition.cellSize) && groundDefinition.cellSize > 1e-6
+    ? groundDefinition.cellSize
+    : 1
+  const sampleRadius = Math.min(
+    LANDFORM_CLEARANCE_SAMPLE_RADIUS_MAX,
+    Math.max(LANDFORM_CLEARANCE_SAMPLE_RADIUS_MIN, cellSize * LANDFORM_CLEARANCE_SAMPLE_RADIUS_SCALE),
+  )
+  return {
+    sampleRadius,
+    worldVerticalScale: resolveGroundVerticalScale(transform),
+    neighborOffsets: [
+      [sampleRadius, 0],
+      [-sampleRadius, 0],
+      [0, sampleRadius],
+      [0, -sampleRadius],
+      [sampleRadius, sampleRadius],
+      [sampleRadius, -sampleRadius],
+      [-sampleRadius, sampleRadius],
+      [-sampleRadius, -sampleRadius],
+    ],
   }
 }
 
 function buildLandformGroundSliceSurface(
   sliced: { vertices: Array<{ x: number; y: number; z: number }>; indices: number[] },
-  groundDefinition: GroundDynamicMesh,
-  transform: GroundTransform,
   sampleHeight: LandformHeightSampler,
+  clearanceContext: LandformAdaptiveGroundClearanceContext,
+  transform: GroundTransform,
 ): Vector3[] {
   if (sliced.vertices.length < 3 || sliced.indices.length < 3) {
     return []
@@ -622,8 +655,7 @@ function buildLandformGroundSliceSurface(
       sampleHeight,
       position2D,
       localHeight,
-      groundDefinition,
-      transform,
+      clearanceContext,
     )
     return groundLocalToWorld(
       new Vector3(position2D.x, localHeight + localClearance, position2D.y),
@@ -634,9 +666,9 @@ function buildLandformGroundSliceSurface(
 
 function buildLandformGroundPreviewSurface(
   polygonLocalPoints: Vector3[],
-  groundDefinition: GroundDynamicMesh,
-  transform: GroundTransform,
   sampleHeight: LandformHeightSampler,
+  clearanceContext: LandformAdaptiveGroundClearanceContext,
+  transform: GroundTransform,
 ): { surfaceWorldVertices: Vector3[]; surfaceIndices: number[] } | null {
   const triangulation = buildShapeTriangulation(polygonLocalPoints)
   if (!triangulation) {
@@ -649,8 +681,7 @@ function buildLandformGroundPreviewSurface(
       sampleHeight,
       vertex,
       localHeight,
-      groundDefinition,
-      transform,
+      clearanceContext,
     )
     return groundLocalToWorld(new Vector3(vertex.x, localHeight + localClearance, vertex.y), transform)
   })
@@ -685,36 +716,19 @@ function resolveLandformAdaptiveGroundClearance(
   sampleHeight: LandformHeightSampler,
   vertex: Vector2,
   baseLocalHeight: number,
-  groundDefinition: GroundDynamicMesh,
-  transform: GroundTransform,
+  context: LandformAdaptiveGroundClearanceContext,
 ): number {
-  const sampleRadius = Math.min(
-    LANDFORM_CLEARANCE_SAMPLE_RADIUS_MAX,
-    Math.max(LANDFORM_CLEARANCE_SAMPLE_RADIUS_MIN, groundDefinition.cellSize * LANDFORM_CLEARANCE_SAMPLE_RADIUS_SCALE),
-  )
-  const worldVerticalScale = resolveGroundVerticalScale(transform)
-  const neighborOffsets: Array<[number, number]> = [
-    [sampleRadius, 0],
-    [-sampleRadius, 0],
-    [0, sampleRadius],
-    [0, -sampleRadius],
-    [sampleRadius, sampleRadius],
-    [sampleRadius, -sampleRadius],
-    [-sampleRadius, sampleRadius],
-    [-sampleRadius, -sampleRadius],
-  ]
-
   let maxWorldDelta = 0
   let totalWorldDelta = 0
 
-  neighborOffsets.forEach(([offsetX, offsetZ]) => {
+  context.neighborOffsets.forEach(([offsetX, offsetZ]) => {
     const neighborHeight = sampleHeight(vertex.x + offsetX, vertex.y + offsetZ)
-    const worldDelta = Math.abs(neighborHeight - baseLocalHeight) * worldVerticalScale
+    const worldDelta = Math.abs(neighborHeight - baseLocalHeight) * context.worldVerticalScale
     maxWorldDelta = Math.max(maxWorldDelta, worldDelta)
     totalWorldDelta += worldDelta
   })
 
-  const averageWorldDelta = totalWorldDelta / neighborOffsets.length
+  const averageWorldDelta = totalWorldDelta / context.neighborOffsets.length
   const terrainVariation = Math.max(maxWorldDelta, averageWorldDelta)
   const variationBlend = smoothstep(
     LANDFORM_CLEARANCE_FLAT_VARIATION,
@@ -726,7 +740,7 @@ function resolveLandformAdaptiveGroundClearance(
     LANDFORM_ROUGH_WORLD_CLEARANCE,
     variationBlend,
   )
-  return worldClearance / worldVerticalScale
+  return worldClearance / context.worldVerticalScale
 }
 
 function sampleLandformTriangleVertexHeight(sampleHeight: LandformHeightSampler, vertex: Vector2): SampledLandformVertex {
@@ -1604,16 +1618,17 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
       const transform = getGroundTransform(groundNode)
       const polygonLocalPoints = normalizePolygonWinding(buildPoints.map((point) => worldToGroundLocal(point, transform)))
       const polygonLocal = polygonLocalPoints.map((point) => new Vector2(point.x, point.z))
-      const sampleHeight = createLandformHeightSampler(groundDefinition)
+      const { runtimeDefinition: groundRuntimeDefinition, sampleHeight } = createLandformHeightSampler(groundDefinition)
+      const clearanceContext = createLandformAdaptiveGroundClearanceContext(groundRuntimeDefinition, transform)
       let surfaceIndices: number[] = []
       let surfaceWorldVertices: Vector3[] = []
 
       if (previewMode === 'interactive') {
         const previewSurface = buildLandformGroundPreviewSurface(
           polygonLocalPoints,
-          groundDefinition,
-          transform,
           sampleHeight,
+          clearanceContext,
+          transform,
         )
         surfaceIndices = previewSurface?.surfaceIndices ?? []
         surfaceWorldVertices = previewSurface?.surfaceWorldVertices ?? []
@@ -1624,9 +1639,9 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
         surfaceIndices = [...sliced.indices]
         surfaceWorldVertices = buildLandformGroundSliceSurface(
           sliced,
-          groundDefinition,
-          transform,
           sampleHeight,
+          clearanceContext,
+          transform,
         )
       }
 
@@ -1657,8 +1672,7 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
             sampleHeight,
             vertex,
             localHeight,
-            groundDefinition,
-            transform,
+            clearanceContext,
           )
           return groundLocalToWorld(new Vector3(vertex.x, localHeight + localClearance, vertex.y), transform)
         })
@@ -1753,16 +1767,17 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
         const transform = getGroundTransform(groundNode)
         const polygonLocalPoints = normalizePolygonWinding(buildPoints.map((point) => worldToGroundLocal(point, transform)))
         const polygonLocal = polygonLocalPoints.map((point) => new Vector2(point.x, point.z))
-        const sampleHeight = createLandformHeightSampler(groundDefinition)
+        const { runtimeDefinition: groundRuntimeDefinition, sampleHeight } = createLandformHeightSampler(groundDefinition)
+        const clearanceContext = createLandformAdaptiveGroundClearanceContext(groundRuntimeDefinition, transform)
         const sliced = sliceGroundTrianglesByPolygon(groundDefinition, polygonLocal, {
           mergePlanarRegions: !normalizedProps.enableFeather,
         })
         surfaceIndices = [...sliced.indices]
         surfaceWorldVertices = buildLandformGroundSliceSurface(
           sliced,
-          groundDefinition,
-          transform,
           sampleHeight,
+          clearanceContext,
+          transform,
         )
 
         if (surfaceWorldVertices.length < 3 || surfaceIndices.length < 3) {
@@ -1792,8 +1807,7 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
               sampleHeight,
               vertex,
               localHeight,
-              groundDefinition,
-              transform,
+              clearanceContext,
             )
             return groundLocalToWorld(new Vector3(vertex.x, localHeight + localClearance, vertex.y), transform)
           })

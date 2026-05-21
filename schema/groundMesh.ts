@@ -195,6 +195,11 @@ export type GroundHeightSamplingContext = {
   terrainSampler: GroundTerrainHeightSampler | null
 }
 
+export type GroundTriangleSamplingContext = GroundHeightSamplingContext & {
+  vertexHeightCache: Map<number, number>
+  cellTriangleCache: Map<number, [GroundCellTriangleDefinition, GroundCellTriangleDefinition]>
+}
+
 function resolveRuntimeTerrainHeightSampler(
   definition: Pick<GroundRuntimeDynamicMesh, 'runtimeTerrainHeightSampler'>,
 ): GroundTerrainHeightSampler | null {
@@ -306,6 +311,26 @@ export function prepareGroundHeightSamplingContext(definition: GroundDynamicMesh
 } {
   const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
   return { runtimeDefinition, context: createGroundHeightSamplingContext(runtimeDefinition) }
+}
+
+function createGroundTriangleSamplingContext(definition: GroundRuntimeDynamicMesh): GroundTriangleSamplingContext {
+  return {
+    ...createGroundHeightSamplingContext(definition),
+    vertexHeightCache: new Map<number, number>(),
+    cellTriangleCache: new Map<number, [GroundCellTriangleDefinition, GroundCellTriangleDefinition]>(),
+  }
+}
+
+/**
+ * Pre-builds a GroundTriangleSamplingContext for reuse across many
+ * sampleGroundTriangleHeightWithContext calls in a tight loop.
+ */
+export function prepareGroundTriangleHeightSamplingContext(definition: GroundDynamicMesh): {
+  runtimeDefinition: GroundRuntimeDynamicMesh
+  context: GroundTriangleSamplingContext
+} {
+  const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
+  return { runtimeDefinition, context: createGroundTriangleSamplingContext(runtimeDefinition) }
 }
 
 function resolveGroundGridWorldBounds(
@@ -3026,6 +3051,66 @@ function resolveGroundCellTriangleDefinitions(
   ]
 }
 
+function resolveGroundEffectiveHeightAtVertexWithTriangleContext(
+  runtimeDefinition: GroundRuntimeDynamicMesh,
+  row: number,
+  column: number,
+  context: GroundTriangleSamplingContext,
+): number {
+  const heightIndex = getGroundVertexIndex(context.columns, row, column)
+  const cachedHeight = context.vertexHeightCache.get(heightIndex)
+  if (typeof cachedHeight === 'number' && Number.isFinite(cachedHeight)) {
+    return cachedHeight
+  }
+  const height = resolveGroundEffectiveHeightAtVertexWithContext(
+    runtimeDefinition,
+    row,
+    column,
+    context.columns,
+    context.bounds.minX,
+    context.bounds.minZ,
+    context.cellSize,
+    context.terrainSampler,
+  )
+  context.vertexHeightCache.set(heightIndex, height)
+  return height
+}
+
+function resolveGroundCellTriangleDefinitionsWithContext(
+  runtimeDefinition: GroundRuntimeDynamicMesh,
+  row: number,
+  column: number,
+  context: GroundTriangleSamplingContext,
+): [GroundCellTriangleDefinition, GroundCellTriangleDefinition] {
+  const cellKey = (row * (context.columns + 1)) + column
+  const cachedTriangles = context.cellTriangleCache.get(cellKey)
+  if (cachedTriangles) {
+    return cachedTriangles
+  }
+  const cellSize = context.cellSize > 1e-6 ? context.cellSize : 1
+  const x0 = context.bounds.minX + column * cellSize
+  const x1 = x0 + cellSize
+  const z0 = context.bounds.minZ + row * cellSize
+  const z1 = z0 + cellSize
+
+  const a = new THREE.Vector2(x0, z0)
+  const b = new THREE.Vector2(x1, z0)
+  const c = new THREE.Vector2(x0, z1)
+  const d = new THREE.Vector2(x1, z1)
+
+  const hA = resolveGroundEffectiveHeightAtVertexWithTriangleContext(runtimeDefinition, row, column, context)
+  const hB = resolveGroundEffectiveHeightAtVertexWithTriangleContext(runtimeDefinition, row, column + 1, context)
+  const hC = resolveGroundEffectiveHeightAtVertexWithTriangleContext(runtimeDefinition, row + 1, column, context)
+  const hD = resolveGroundEffectiveHeightAtVertexWithTriangleContext(runtimeDefinition, row + 1, column + 1, context)
+
+  const triangles: [GroundCellTriangleDefinition, GroundCellTriangleDefinition] = [
+    { vertices: [a, c, b], heights: [hA, hC, hB] },
+    { vertices: [b, c, d], heights: [hB, hC, hD] },
+  ]
+  context.cellTriangleCache.set(cellKey, triangles)
+  return triangles
+}
+
 function interpolateGroundTrianglePlaneHeight(
   triangle: GroundCellTriangleDefinition,
   x: number,
@@ -3296,6 +3381,41 @@ export function sampleGroundTriangleHeight(definition: GroundDynamicMesh, x: num
   const tx = clampInclusive(localColumnFloat - cellColumn, 0, 1)
   const tz = clampInclusive(localRowFloat - cellRow, 0, 1)
   const triangles = resolveGroundCellTriangleDefinitions(runtimeDefinition, cellRow, cellColumn)
+  const triangle = tx + tz <= 1 + GROUND_TRIANGLE_SLICE_EPSILON ? triangles[0] : triangles[1]
+  const sampled = interpolateGroundTrianglePlaneHeight(triangle, x, z)
+  return Number.isFinite(sampled) ? (sampled as number) : sampleGroundHeight(runtimeDefinition, x, z)
+}
+
+/**
+ * Samples triangle height using a pre-built GroundTriangleSamplingContext.
+ * Reuses cached cell vertex heights across many calls in a build loop.
+ */
+export function sampleGroundTriangleHeightWithContext(
+  runtimeDefinition: GroundRuntimeDynamicMesh,
+  context: GroundTriangleSamplingContext,
+  x: number,
+  z: number,
+): number {
+  const columns = context.columns
+  const rows = context.rows
+  const cellSize = context.cellSize > 1e-6 ? context.cellSize : 1
+  const bounds = context.bounds
+
+  const localColumnFloat = clampInclusive((x - bounds.minX) / cellSize, 0, columns)
+  const localRowFloat = clampInclusive((z - bounds.minZ) / cellSize, 0, rows)
+  const cellColumn = clampInclusive(
+    Math.floor(Math.min(localColumnFloat, columns - GROUND_TRIANGLE_SLICE_EPSILON)),
+    0,
+    Math.max(0, columns - 1),
+  )
+  const cellRow = clampInclusive(
+    Math.floor(Math.min(localRowFloat, rows - GROUND_TRIANGLE_SLICE_EPSILON)),
+    0,
+    Math.max(0, rows - 1),
+  )
+  const tx = clampInclusive(localColumnFloat - cellColumn, 0, 1)
+  const tz = clampInclusive(localRowFloat - cellRow, 0, 1)
+  const triangles = resolveGroundCellTriangleDefinitionsWithContext(runtimeDefinition, cellRow, cellColumn, context)
   const triangle = tx + tz <= 1 + GROUND_TRIANGLE_SLICE_EPSILON ? triangles[0] : triangles[1]
   const sampled = interpolateGroundTrianglePlaneHeight(triangle, x, z)
   return Number.isFinite(sampled) ? (sampled as number) : sampleGroundHeight(runtimeDefinition, x, z)

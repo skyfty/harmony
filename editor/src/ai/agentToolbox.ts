@@ -180,25 +180,6 @@ const tools: SceneAgentTool[] = [
   },
   {
     definition: {
-      name: 'set_viewport_grid_visible',
-      description: '控制视口网格线的显示状态。',
-      parameters: {
-        type: 'object',
-        required: ['visible'],
-        properties: {
-          visible: { type: 'boolean' },
-        },
-      },
-    },
-    execute: (store, args) => {
-      const value = parseBoolean(args?.visible)
-      if (value === undefined) {
-        throw new Error('需要提供布尔值以设置网格可见性。')
-      }
-    },
-  },
-  {
-    definition: {
       name: 'set_viewport_shadows_enabled',
       description: '启用或禁用视口阴影。',
       parameters: {
