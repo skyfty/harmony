@@ -19,30 +19,21 @@
       </text>
     </view>
 
-    <Suspense>
-      <template #default>
-        <SceneryViewer
-          :project-id="projectId"
-          :package-url="packageUrl"
-          :package-cache-key="packageCacheKey"
-          :nominate-state-map="nominateStateMap"
-          :create-physics-bridge="createSceneryPhysicsBridge"
-          :default-steer-identifier="selectedVehicleIdentifier"
-          :runtime-prefab-spawns="runtimePrefabSpawns"
-          :server-asset-base-url="serverAssetBaseUrl"
-          :debug-console-enabled="false"
-          :debug-console-default-expanded="true"
-          :debug-console-max-entries="200"
-          :initial-punched-node-ids="initialPunchedNodeIds"
-          @punch="handlePunch"
-        />
-      </template>
-      <template #fallback>
-        <view class="scenery-viewer-fallback">
-          <text class="scenery-viewer-fallback__text">加载场景中...</text>
-        </view>
-      </template>
-    </Suspense>
+    <SceneryViewer
+      :project-id="projectId"
+      :package-url="packageUrl"
+      :package-cache-key="packageCacheKey"
+      :nominate-state-map="nominateStateMap"
+      :create-physics-bridge="createSceneryPhysicsBridge"
+      :default-steer-identifier="selectedVehicleIdentifier"
+      :runtime-prefab-spawns="runtimePrefabSpawns"
+      :server-asset-base-url="serverAssetBaseUrl"
+      :debug-console-enabled="false"
+      :debug-console-default-expanded="true"
+      :debug-console-max-entries="200"
+      :initial-punched-node-ids="initialPunchedNodeIds"
+      @punch="handlePunch"
+    />
   </view>
 </template>
 
@@ -440,21 +431,6 @@ onUnload(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
-}
-
-.scenery-viewer-fallback {
-  width: 100%;
-  height: 100vh;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: linear-gradient(180deg, #f4f7fb 0%, #e9eff8 100%);
-}
-
-.scenery-viewer-fallback__text {
-  color: #4b6380;
-  font-size: 14px;
-  letter-spacing: 0.08em;
 }
 
 </style>
