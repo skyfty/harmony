@@ -9,6 +9,7 @@ import { getTransportProductCategory } from '@/services/productCategoryService'
 type VehiclePayload = {
   identifier?: number | string
   name?: string
+  sortOrder?: number
   description?: string
   coverUrl?: string
   isActive?: boolean
@@ -47,6 +48,7 @@ function mapVehicle(row: any) {
     id: row._id.toString(),
     identifier: String(row.identifier ?? ''),
     name: row.name,
+    sortOrder: typeof row.sortOrder === 'number' ? row.sortOrder : 0,
     description: row.description ?? '',
     coverUrl: row.coverUrl ?? '',
     maxSpeed: typeof row.maxSpeed === 'number' ? row.maxSpeed : undefined,
@@ -98,10 +100,11 @@ function mapUserVehicle(row: any) {
       : null,
     vehicleId: vehicle?._id?.toString?.() ?? vehicle?.toString?.() ?? '',
     vehicle: vehicle
-      ? {
+        ? {
           id: vehicle?._id?.toString?.() ?? vehicle?.toString?.() ?? '',
           identifier: String(vehicle.identifier ?? ''),
           name: vehicle.name ?? '',
+          sortOrder: typeof vehicle.sortOrder === 'number' ? vehicle.sortOrder : 0,
           description: vehicle.description ?? '',
           coverUrl: vehicle.coverUrl ?? '',
           prefabUrl: vehicle.prefabUrl ?? '',
@@ -134,7 +137,7 @@ export async function listVehicles(ctx: Context): Promise<void> {
   }
 
   const [rows, total] = await Promise.all([
-    VehicleModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean().exec(),
+    VehicleModel.find(filter).sort({ sortOrder: 1, createdAt: -1 }).skip(skip).limit(limit).lean().exec(),
     VehicleModel.countDocuments(filter),
   ])
 
@@ -201,6 +204,7 @@ export async function createVehicle(ctx: Context): Promise<void> {
     created = await VehicleModel.create({
       identifier,
       name,
+      sortOrder: Number.isFinite(Number(body.sortOrder)) ? Number(body.sortOrder) : 0,
       description,
       coverUrl,
       prefabUrl,
@@ -256,6 +260,12 @@ export async function updateVehicle(ctx: Context): Promise<void> {
     {
       identifier: nextIdentifier,
       name: toStringValue(body.name) ?? current.name,
+      sortOrder:
+        body.sortOrder === undefined
+          ? typeof current.sortOrder === 'number'
+            ? current.sortOrder
+            : 0
+          : Number(body.sortOrder) || 0,
       description: body.description === undefined ? current.description : (toStringValue(body.description) ?? ''),
       coverUrl:
         body.coverUrl === undefined
@@ -367,7 +377,7 @@ export async function listUserVehicles(ctx: Context): Promise<void> {
       .populate('userId', 'username displayName')
       .populate(
         'vehicleId',
-        'identifier name description coverUrl prefabUrl isActive isDefault maxSpeed acceleration braking handling mass drag',
+        'identifier name description coverUrl prefabUrl isActive isDefault maxSpeed acceleration braking handling mass drag sortOrder',
       )
       .sort({ ownedAt: -1, createdAt: -1 })
       .skip(skip)
@@ -394,7 +404,7 @@ export async function getUserVehicle(ctx: Context): Promise<void> {
     .populate('userId', 'username displayName')
     .populate(
       'vehicleId',
-      'identifier name description coverUrl prefabUrl isActive isDefault maxSpeed acceleration braking handling mass drag',
+      'identifier name description coverUrl prefabUrl isActive isDefault maxSpeed acceleration braking handling mass drag sortOrder',
     )
     .lean()
     .exec()
@@ -440,7 +450,7 @@ export async function createUserVehicle(ctx: Context): Promise<void> {
 
   const row = await UserVehicleModel.findById(created._id)
     .populate('userId', 'username displayName')
-    .populate('vehicleId', 'identifier name description coverUrl isActive isDefault')
+    .populate('vehicleId', 'identifier name description coverUrl isActive isDefault sortOrder')
     .lean()
     .exec()
 
@@ -502,7 +512,7 @@ export async function updateUserVehicle(ctx: Context): Promise<void> {
     { new: true },
   )
     .populate('userId', 'username displayName')
-    .populate('vehicleId', 'identifier name description coverUrl isActive isDefault')
+    .populate('vehicleId', 'identifier name description coverUrl isActive isDefault sortOrder')
     .lean()
     .exec()
 

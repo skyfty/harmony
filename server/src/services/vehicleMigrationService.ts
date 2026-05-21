@@ -80,3 +80,17 @@ export async function ensureVehicleIdentifierField(): Promise<void> {
     { ordered: false },
   )
 }
+
+export async function ensureVehicleSortOrderField(): Promise<void> {
+  await VehicleModel.updateMany(
+    {
+      $or: [
+        { sortOrder: { $exists: false } },
+        { sortOrder: null },
+      ],
+    },
+    {
+      $set: { sortOrder: 0 },
+    },
+  ).exec()
+}

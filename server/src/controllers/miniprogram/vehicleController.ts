@@ -10,6 +10,7 @@ function mapVehicle(row: any, owned: boolean, isCurrent: boolean) {
     id: row._id.toString(),
     identifier: String(row.identifier ?? ''),
     name: row.name,
+    sortOrder: typeof row.sortOrder === 'number' ? row.sortOrder : 0,
     description: row.description ?? '',
     coverUrl: row.coverUrl ?? '',
     prefabUrl: row.prefabUrl ?? '',
@@ -37,6 +38,7 @@ function mapUserVehicle(row: any) {
           id: vehicle?._id?.toString?.() ?? '',
           identifier: String(vehicle.identifier ?? ''),
           name: vehicle.name ?? '',
+          sortOrder: typeof vehicle.sortOrder === 'number' ? vehicle.sortOrder : 0,
           description: vehicle.description ?? '',
           coverUrl: vehicle.coverUrl ?? '',
           prefabUrl: vehicle.prefabUrl ?? '',
@@ -61,7 +63,7 @@ export async function listVehicles(ctx: Context): Promise<void> {
     filter.$or = [{ identifier: pattern }, { name: pattern }, { description: pattern }]
   }
 
-  const vehicles = await VehicleModel.find(filter).sort({ createdAt: -1 }).lean().exec()
+  const vehicles = await VehicleModel.find(filter).sort({ sortOrder: 1, createdAt: -1 }).lean().exec()
 
   let ownedSet = new Set<string>()
   let currentVehicleId = ''
@@ -93,7 +95,7 @@ export async function listVehicles(ctx: Context): Promise<void> {
 export async function listUserVehicles(ctx: Context): Promise<void> {
   const userId = ensureUserId(ctx)
   const rows = await UserVehicleModel.find({ userId })
-    .populate('vehicleId', 'identifier name description coverUrl isActive')
+    .populate('vehicleId', 'identifier name description coverUrl isActive sortOrder')
     .sort({ ownedAt: -1, createdAt: -1 })
     .lean()
     .exec()

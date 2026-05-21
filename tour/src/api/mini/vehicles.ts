@@ -7,6 +7,7 @@ type VehicleApiDto = {
   id: string
   identifier?: number | string
   name: string
+  sortOrder?: number
   description?: string
   coverUrl?: string
   prefabUrl?: string
@@ -35,10 +36,17 @@ type UserVehicleApiDto = {
     id: string
     identifier?: number | string
     name: string
+    sortOrder?: number
     description?: string
     coverUrl?: string
     prefabUrl?: string
     isActive?: boolean
+    maxSpeed?: number
+    acceleration?: number
+    braking?: number
+    handling?: number
+    mass?: number
+    drag?: number
   } | null
 }
 
@@ -61,6 +69,7 @@ export async function listVehicles(): Promise<Vehicle[]> {
       id: vehicle.id,
       identifier: String(vehicle.identifier ?? ''),
       name: vehicle.name,
+      sortOrder: typeof vehicle.sortOrder === 'number' ? vehicle.sortOrder : 0,
       description: vehicle.description ?? '',
       summary: vehicle.description ?? '',
       coverUrl,
@@ -152,6 +161,7 @@ export async function listUserVehicles(): Promise<UserVehicle[]> {
           id: row.vehicle.id,
           identifier: String(row.vehicle.identifier ?? ''),
           name: row.vehicle.name,
+          sortOrder: typeof row.vehicle.sortOrder === 'number' ? row.vehicle.sortOrder : 0,
           description: row.vehicle.description ?? '',
           coverUrl: row.vehicle.coverUrl ?? '',
           prefabUrl: row.vehicle.prefabUrl ?? '',

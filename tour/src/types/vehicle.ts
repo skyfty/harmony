@@ -4,6 +4,7 @@ export interface Vehicle {
   id: string;
   identifier: string;
   name: string;
+  sortOrder: number;
   description: string;
   summary: string;
   coverUrl: string;
@@ -29,6 +30,7 @@ export interface UserVehicle {
     id: string;
     identifier: string;
     name: string;
+    sortOrder?: number;
     description: string;
     coverUrl: string;
     prefabUrl?: string;

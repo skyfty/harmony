@@ -49,10 +49,7 @@
 <script setup lang="ts">
 import { onShow } from '@dcloudio/uni-app';
 import { onMounted, ref } from 'vue';
-import { getStatusBarHeight } from '@/utils/systemInfo';
 defineOptions({ name: 'VehiclesPage' });
-
-const statusBarHeight = ref(getStatusBarHeight());
 import BottomNav from '@/components/BottomNav.vue';
 import MiniAuthRecovery from '@/components/MiniAuthRecovery.vue';
 import PageHeader from '@/components/PageHeader.vue';
@@ -83,6 +80,20 @@ const purchaseVehicle = purchaseVehicleByProduct as unknown as (productId: strin
 const selectVehicleAsCurrent =
   selectCurrentVehicle as unknown as (vehicleId: string) => Promise<{ currentVehicleId: string }>;
 
+function sortVehiclesByOrder(rows: Vehicle[]): Vehicle[] {
+  return rows
+    .map((item, index) => ({ item, index }))
+    .sort((left, right) => {
+      const sortA = Number.isFinite(Number(left.item.sortOrder)) ? Number(left.item.sortOrder) : 0;
+      const sortB = Number.isFinite(Number(right.item.sortOrder)) ? Number(right.item.sortOrder) : 0;
+      if (sortA !== sortB) {
+        return sortA - sortB;
+      }
+      return left.index - right.index;
+    })
+    .map(({ item }) => item);
+}
+
 function closePurchaseConfirmDialog() {
   showPurchaseConfirmDialog.value = false;
   purchaseConfirmVehicleId.value = '';
@@ -107,8 +118,9 @@ async function confirmPurchaseFromDialog() {
 
 async function reload() {
   const rows = (await listVehicles()) as unknown as Vehicle[];
-  vehicles.value = rows;
-  const current = rows.find((item) => item.isCurrent);
+  const orderedRows = sortVehiclesByOrder(rows);
+  vehicles.value = orderedRows;
+  const current = orderedRows.find((item) => item.isCurrent);
   if (current) {
     selectedId.value = current.id;
     setSelectedVehicleId(current.id);

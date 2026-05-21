@@ -23,6 +23,7 @@ export interface VehicleItem {
   id: string;
   identifier: string;
   name: string;
+  sortOrder: number;
   description: string;
   coverUrl: string;
   prefabUrl: string;
@@ -42,6 +43,7 @@ export interface ListVehiclesParams {
 export interface VehiclePayload {
   identifier?: number | string;
   name?: string;
+  sortOrder?: number;
   description?: string;
   coverUrl?: string;
   prefabUrl?: string;
@@ -57,12 +59,13 @@ export interface UserVehicleItem {
     displayName?: string | null;
   } | null;
   vehicleId: string;
-  vehicle: {
-    id: string;
-    identifier: string;
-    name: string;
-    description: string;
-    coverUrl: string;
+    vehicle: {
+      id: string;
+      identifier: string;
+      name: string;
+      sortOrder?: number;
+      description: string;
+      coverUrl: string;
     prefabUrl?: string;
     isActive: boolean;
   } | null;

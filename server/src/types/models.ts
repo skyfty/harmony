@@ -545,6 +545,8 @@ export interface VehicleDocument extends Document<Types.ObjectId> {
   identifier: string
   /** 中文：车辆名称 */
   name: string
+  /** 中文：排序值 */
+  sortOrder: number
   /** 中文：车辆描述 */
   description?: string
   /** 中文：车辆封面 URL */

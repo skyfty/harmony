@@ -5,6 +5,7 @@ const vehicleSchema = new Schema<VehicleDocument>(
   {
     identifier: { type: String, required: true, trim: true },
     name: { type: String, required: true, trim: true },
+    sortOrder: { type: Number, default: 0 },
     description: { type: String, default: '' },
     coverUrl: { type: String, required: true, default: '' },
     prefabUrl: { type: String, default: '' },
@@ -35,6 +36,7 @@ vehicleSchema.index(
   },
 )
 vehicleSchema.index({ name: 1 })
+vehicleSchema.index({ sortOrder: 1, createdAt: -1 })
 vehicleSchema.index({ name: 'text', description: 'text' })
 vehicleSchema.index(
   { productId: 1 },
