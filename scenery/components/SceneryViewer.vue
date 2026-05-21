@@ -680,24 +680,26 @@ import {
   resetCameraFollowState,
 } from '@harmony/schema/motion';
 import type { CameraFollowState } from '@harmony/schema/followCameraController';
-const { VehicleDriveController } = await import('@harmony/schema/motion');
-const { createAutoTourRuntime } = await import('@harmony/schema/motion');
-const { createScenePreviewPerfController } = await import('@harmony/schema/overlay');
-const { createTerrainScatterLodRuntime } = await import('@harmony/schema/scatter');
-const { createBridgeVehicleProxy } = await import('@harmony/schema/motion');
-const {
+import {
+  VehicleDriveController,
+  createAutoTourRuntime,
+  createBridgeVehicleProxy,
   createPhysicsAwareAutoTourVehicleInstances,
   resolveVehicleOrObjectWorldPosition,
   stopTourAndUnfollow,
-} = await import('@harmony/schema/motion');
-const { syncAutoTourActiveNodesFromRuntime, resolveAutoTourFollowNodeId } = await import('@harmony/schema/motion');
-const {
+  syncAutoTourActiveNodesFromRuntime,
+  resolveAutoTourFollowNodeId,
   holdVehicleBrakeSafe,
   updateVehicleSpeedAndApplyParkingHoldSafe,
   VEHICLE_PARKED_SPEED_EPSILON,
   VEHICLE_PARKING_HOLD_SPEED_EPSILON,
-} = await import('@harmony/schema/motion');
-const {
+} from '@harmony/schema/motion';
+import {
+  createScenePreviewPerfController,
+  disposeSignboardBillboards,
+  syncSignboardBillboards,
+  runWithProgrammaticCameraMutation,
+  isProgrammaticCameraMutationActive,
   SIGNBOARD_CLOSE_FADE_DISTANCE,
   SIGNBOARD_MIN_SCREEN_Y_PERCENT,
   createSignboardPlacementSmoothingState,
@@ -705,11 +707,13 @@ const {
   computeSignboardPlacement,
   resolveSignboardAnchorWorldPosition,
   smoothSignboardPlacement,
-} = await import('@harmony/schema/overlay');
-const { disposeSignboardBillboards, syncSignboardBillboards } = await import('@harmony/schema/overlay');
-const { runWithProgrammaticCameraMutation, isProgrammaticCameraMutationActive } = await import('@harmony/schema/overlay');
-type SignboardPlacementSmoothingState = import('@harmony/schema/overlay').SignboardPlacementSmoothingState;
-type SignboardBillboardStyle = import('@harmony/schema/overlay').SignboardBillboardStyle;
+} from '@harmony/schema/overlay';
+import { createTerrainScatterLodRuntime } from '@harmony/schema/scatter';
+import { createInstancedBvhFrustumCuller } from '@harmony/schema/instancedBvhFrustumCuller';
+import type {
+  SignboardPlacementSmoothingState,
+  SignboardBillboardStyle,
+} from '@harmony/schema/overlay';
 import {
   addBehaviorRuntimeListener,
   getBehaviorNodeVisible,
@@ -1769,7 +1773,6 @@ const instancedCullingFrustum = new THREE.Frustum();
 const instancedCullingBox = new THREE.Box3();
 const instancedCullingSphere = new THREE.Sphere();
 const instancedCullingWorldPosition = new THREE.Vector3();
-const { createInstancedBvhFrustumCuller } = await import('@harmony/schema/instancedBvhFrustumCuller');
 const instancedLodFrustumCuller = createInstancedBvhFrustumCuller();
 const TERRAIN_SCATTER_LOD_UPDATE_INTERVAL_MS = isWeChatMiniProgram ? 320 : 200;
 const TERRAIN_SCATTER_VISIBILITY_UPDATE_INTERVAL_MS = isWeChatMiniProgram ? 120 : 33;

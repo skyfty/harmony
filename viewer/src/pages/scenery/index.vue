@@ -8,6 +8,7 @@
       :default-steer-identifier="selectedVehicleIdentifier"
       :server-asset-base-url="serverAssetBaseUrl"
       :initial-punched-node-ids="initialPunchedNodeIds"
+      :create-physics-bridge="createSceneryPhysicsBridge"
       :physics-engine="resolvedPhysicsEngine"
       @punch="handlePunch"
     />
@@ -29,6 +30,7 @@ import { onLoad, onUnload } from '@dcloudio/uni-app';
 import { createPunchRecord, getPunchProgress } from './utils/miniClient';
 import { getDownloadCdnBaseUrl } from './utils/http';
 import SceneryViewer from './uni_modules/scenery/components/SceneryViewer.vue?async';
+import { createSceneryPhysicsBridge } from './createSceneryPhysicsBridge';
 
 const projectId = ref<string>('');
 const packageUrl = ref<string>('');
