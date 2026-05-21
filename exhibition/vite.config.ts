@@ -7,11 +7,22 @@ import { visualizer } from 'rollup-plugin-visualizer';
 import { createMpChunkSplitterPlugin } from "@minisheep/vite-plugin-mp-chunk-splitter";
 import { toCustomChunkPlugin } from "@harmony/tools/vite";
 // https://vitejs.dev/config/
+const appThreeRootPath = fileURLToPath(new URL('./node_modules/three', import.meta.url)).replaceAll('\\', '/');
+const appThreeExamplesPath = fileURLToPath(new URL('./node_modules/three/examples', import.meta.url)).replaceAll('\\', '/');
+const appThreeMeshBvhPath = fileURLToPath(new URL('./node_modules/three-mesh-bvh', import.meta.url)).replaceAll('\\', '/');
+const appThreeCsmPath = fileURLToPath(new URL('./node_modules/three-csm', import.meta.url)).replaceAll('\\', '/');
 export default defineConfig({
   optimizeDeps: {
     exclude: ['@minisheep/three-platform-adapter']
   },  
   resolve: {
+    dedupe: [
+      'three',
+      'three/examples/jsm',
+      'three-mesh-bvh',
+      'three-csm',
+      '@minisheep/three-platform-adapter',
+    ],
     alias: [
       {
         find: '@harmony/schema',
@@ -43,6 +54,30 @@ export default defineConfig({
       {
         find: /^@minisheep\/three-platform-adapter$/,
         replacement: fileURLToPath(new URL('./node_modules/@minisheep/three-platform-adapter', import.meta.url)),
+      },
+      {
+        find: /^three\/examples\/jsm(\/.*)?$/,
+        replacement: `${appThreeExamplesPath}/jsm$1`,
+      },
+      {
+        find: /^three\/examples(\/.*)?$/,
+        replacement: `${appThreeExamplesPath}$1`,
+      },
+      {
+        find: /^three\/addons(\/.*)?$/,
+        replacement: `${appThreeExamplesPath}/jsm$1`,
+      },
+      {
+        find: /^three-mesh-bvh(\/.*)?$/,
+        replacement: `${appThreeMeshBvhPath}$1`,
+      },
+      {
+        find: /^three-csm(\/.*)?$/,
+        replacement: `${appThreeCsmPath}$1`,
+      },
+      {
+        find: /^three$/,
+        replacement: appThreeRootPath,
       },
     ],
   },

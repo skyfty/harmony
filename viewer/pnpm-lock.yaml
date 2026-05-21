@@ -37,7 +37,7 @@ importers:
         version: file:../physics-core
       '@harmony/scenery':
         specifier: file:../scenery
-        version: file:../scenery(ammo.js@0.0.10)(three@0.172.0)
+        version: file:../scenery(three@0.172.0)
       '@harmony/schema':
         specifier: file:../schema
         version: file:../schema
@@ -1971,6 +1971,16 @@ packages:
       vite: ^5.0.0
       vue: ^3.2.25
 
+  '@vladkrutenyuk/cannon-es-debugger-pro@0.2.4':
+    resolution: {integrity: sha512-7YleJQXZtHLUu4XwSixwkvtwpp2sJ/LwEKm0+yuYxVU1Nhy2o+cm0Q9UY/J5NGtUMo9v79CkiXLxDOmjRApMOA==}
+    peerDependencies:
+      cannon-es: '>=0.20.0'
+      three: '>=0.160.0'
+      typescript: '>=5.0'
+    peerDependenciesMeta:
+      typescript:
+        optional: true
+
   '@volar/language-core@2.4.15':
     resolution: {integrity: sha512-3VHw+QZU0ZG9IuQmzT68IyN4hZNd9GchGPhbD9+pa8CVv7rnoOZwo7T8weIbrRmihqy3ATpdfXFnqRrfPVK6CA==}
 
@@ -2123,14 +2133,6 @@ packages:
 
   alien-signals@1.0.13:
     resolution: {integrity: sha512-OGj9yyTnJEttvzhTUWuscOvtqxq5vrhF7vL9oS0xJ2mK0ItPYP1/y+vCFebfxoEyAz0++1AIwJ5CMr+Fk3nDmg==}
-
-  ammo-debug-drawer@1.0.1:
-    resolution: {integrity: sha512-oPvQh5CQKgFQpIuBMMKxT019aYoONOEnBLn91dAg3CrMWdSP/Om8rLWRX0VkAk45SEK/B0ybXB7nsjXsz8QEBw==}
-    peerDependencies:
-      ammo.js: '*'
-
-  ammo.js@0.0.10:
-    resolution: {integrity: sha512-jOv977u71jrDUzHfmQ99YaW90/y8YLn/3HFTmtLLzf5wJynAfG+/a1Ie5gbn0fE0uSAHxXVsFk4Bzq8qRPWqAA==}
 
   ansi-escapes@4.3.2:
     resolution: {integrity: sha512-gKXj5ALrKWQLsYG9jlTRmR/xKluxHV+Z9QEwNIgCfM1/uwPMCuzVVnh5mwTd+OuBZcwSIMbqssNWRm1lE51QaQ==}
@@ -2321,6 +2323,9 @@ packages:
 
   caniuse-lite@1.0.30001770:
     resolution: {integrity: sha512-x/2CLQ1jHENRbHg5PSId2sXq1CIO1CISvwWAj027ltMVG2UNgW+w9oH2+HzgEIRFembL8bUlXtfbBHR1fCg2xw==}
+
+  cannon-es@0.20.0:
+    resolution: {integrity: sha512-eZhWTZIkFOnMAJOgfXJa9+b3kVlvG+FX4mdkpePev/w/rP5V8NRquGyEozcjPfEoXUlb+p7d9SUcmDSn14prOA==}
 
   centra@2.7.0:
     resolution: {integrity: sha512-PbFMgMSrmgx6uxCdm57RUos9Tc3fclMvhLSATYN39XsDV29B89zZ3KA89jmY0vwSGazyU+uerqwa6t+KaodPcg==}
@@ -5855,16 +5860,13 @@ snapshots:
 
   '@harmony/physics-core@file:../physics-core': {}
 
-  '@harmony/scenery@file:../scenery(ammo.js@0.0.10)(three@0.172.0)':
+  '@harmony/scenery@file:../scenery(three@0.172.0)':
     dependencies:
       '@harmony/schema': file:../schema
       '@harmony/utils': file:../utils
       '@minisheep/mini-program-polyfill-core': 1.1.5
-      ammo-debug-drawer: 1.0.1(ammo.js@0.0.10)
-      cannon-es: 0.20.0
       three-mesh-bvh: 0.9.8(three@0.172.0)
     transitivePeerDependencies:
-      - ammo.js
       - three
 
   '@harmony/schema@file:../schema':
@@ -6828,6 +6830,13 @@ snapshots:
       vite: 5.4.21(@types/node@25.3.0)(sass@1.97.3)(terser@5.46.0)
       vue: 3.4.21(typescript@5.6.3)
 
+  '@vladkrutenyuk/cannon-es-debugger-pro@0.2.4(cannon-es@0.20.0)(three@0.172.0)(typescript@5.6.3)':
+    dependencies:
+      cannon-es: 0.20.0
+      three: 0.172.0
+    optionalDependencies:
+      typescript: 5.6.3
+
   '@volar/language-core@2.4.15':
     dependencies:
       '@volar/source-map': 2.4.15
@@ -7025,12 +7034,6 @@ snapshots:
       uri-js: 4.4.1
 
   alien-signals@1.0.13: {}
-
-  ammo-debug-drawer@1.0.1(ammo.js@0.0.10):
-    dependencies:
-      ammo.js: 0.0.10
-
-  ammo.js@0.0.10: {}
 
   ansi-escapes@4.3.2:
     dependencies:
@@ -7252,6 +7255,8 @@ snapshots:
   camelcase@6.3.0: {}
 
   caniuse-lite@1.0.30001770: {}
+
+  cannon-es@0.20.0: {}
 
   centra@2.7.0:
     dependencies:

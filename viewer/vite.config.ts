@@ -40,6 +40,10 @@ const physicsCoreSourcePath = fileURLToPath(new URL('../physics-core/src', impor
 const physicsCannonSourcePath = fileURLToPath(new URL('../physics-cannon/src', import.meta.url)).replaceAll('\\', '/');
 const sceneryPhysicsBridgeSourcePath = fileURLToPath(new URL('../physics-bridge/src', import.meta.url)).replaceAll('\\', '/');
 const utilsSrcPath = fileURLToPath(new URL('../utils/src', import.meta.url)).replaceAll('\\', '/');
+const appThreeRootPath = fileURLToPath(new URL('./node_modules/three', import.meta.url)).replaceAll('\\', '/');
+const appThreeExamplesPath = fileURLToPath(new URL('./node_modules/three/examples', import.meta.url)).replaceAll('\\', '/');
+const appThreeMeshBvhPath = fileURLToPath(new URL('./node_modules/three-mesh-bvh', import.meta.url)).replaceAll('\\', '/');
+const appThreeCsmPath = fileURLToPath(new URL('./node_modules/three-csm', import.meta.url)).replaceAll('\\', '/');
 const eventTargetShimPath = fileURLToPath(new URL('./node_modules/event-target-shim/index.mjs', import.meta.url)).replaceAll('\\', '/');
 const webStreamsPolyfillPath = fileURLToPath(new URL('./node_modules/web-streams-polyfill/dist/polyfill.mjs', import.meta.url)).replaceAll('\\', '/');
 const schemaMirrorPath = fileURLToPath(new URL('./src/pages/scenery/schema', import.meta.url)).replaceAll('\\', '/');
@@ -226,6 +230,13 @@ export default {
     },
   },
   resolve: {
+    dedupe: [
+      'three',
+      'three/examples/jsm',
+      'three-mesh-bvh',
+      'three-csm',
+      '@minisheep/three-platform-adapter',
+    ],
     alias: [
       ...(useWorkspaceSourceForH5
         ? [
@@ -247,6 +258,12 @@ export default {
             { find: '@harmony/utils/query', replacement: `${utilsSrcPath}/query.ts` },
             { find: /^@harmony\/utils$/, replacement: `${utilsSrcPath}/index.ts` },
             { find: /^@harmony\/utils\/(.*)$/, replacement: `${utilsSrcPath}/$1` },
+            { find: /^three\/examples\/jsm(\/.*)?$/, replacement: `${appThreeExamplesPath}/jsm$1` },
+            { find: /^three\/examples(\/.*)?$/, replacement: `${appThreeExamplesPath}$1` },
+            { find: /^three\/addons(\/.*)?$/, replacement: `${appThreeExamplesPath}/jsm$1` },
+            { find: /^three-mesh-bvh(\/.*)?$/, replacement: `${appThreeMeshBvhPath}$1` },
+            { find: /^three-csm(\/.*)?$/, replacement: `${appThreeCsmPath}$1` },
+            { find: /^three$/, replacement: appThreeRootPath },
           ]
         : [
             { find: /^@harmony\/schema$/, replacement: `${schemaMirrorPath}/index.ts` },
@@ -263,6 +280,12 @@ export default {
             { find: '@harmony/utils/query', replacement: `${utilsSrcPath}/query.ts` },
             { find: /^@harmony\/utils$/, replacement: `${utilsSrcPath}/index.ts` },
             { find: /^@harmony\/utils\/(.*)$/, replacement: `${utilsSrcPath}/$1` },
+            { find: /^three\/examples\/jsm(\/.*)?$/, replacement: `${appThreeExamplesPath}/jsm$1` },
+            { find: /^three\/examples(\/.*)?$/, replacement: `${appThreeExamplesPath}$1` },
+            { find: /^three\/addons(\/.*)?$/, replacement: `${appThreeExamplesPath}/jsm$1` },
+            { find: /^three-mesh-bvh(\/.*)?$/, replacement: `${appThreeMeshBvhPath}$1` },
+            { find: /^three-csm(\/.*)?$/, replacement: `${appThreeCsmPath}$1` },
+            { find: /^three$/, replacement: appThreeRootPath },
           ]),
       { find: '@harmony/scenery-storage', replacement: fileURLToPath(new URL('./src/pages/scenery/runtime/sceneStorageProxy.ts', import.meta.url)) },
       { find: /^@harmony\/physics-bridge$/, replacement: `${sceneryPhysicsBridgeMirrorPath}/index.ts` },
