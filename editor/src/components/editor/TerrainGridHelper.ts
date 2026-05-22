@@ -10,7 +10,7 @@ const GRID_ACCENT_SPACING = 10
 const GRID_ACCENT_LINE_WIDTH_PX = 1.25
 const GRID_ACCENT_COLOR = '#c7d2e0'
 const GRID_ACCENT_OPACITY = 0.48
-const TERRAIN_GRID_SHADER_KEY = 'harmony-terrain-grid-overlay-v3'
+const TERRAIN_GRID_SHADER_KEY = 'harmony-terrain-grid-overlay-v4'
 const MAJOR_COLOR_VALUE = new THREE.Color(MAJOR_COLOR)
 const GRID_ACCENT_COLOR_VALUE = new THREE.Color(GRID_ACCENT_COLOR)
 
@@ -173,10 +173,10 @@ function installTerrainGridShaderHooks(
           '  float minDist = min(dist.x, dist.y);',
           '  return 1.0 - min(minDist / max(widthPx, 0.25), 1.0);',
           '}',
-          'float harmonyGridVisibilityScale(vec2 worldXZ) {',
+          'float harmonyGridVisibilityScale(vec2 worldXZ, float spacing) {',
           '  vec2 worldDeriv = max(fwidth(worldXZ), vec2(1e-4));',
-          '  float pixelsPerMeter = 1.0 / max(max(worldDeriv.x, worldDeriv.y), 1e-5);',
-          '  return smoothstep(2.5, 5.5, pixelsPerMeter);',
+          '  float pixelsPerSpacing = spacing / max(max(worldDeriv.x, worldDeriv.y), 1e-5);',
+          '  return smoothstep(0.55, 2.65, pixelsPerSpacing);',
           '}',
           'void main() {',
         ].join('\n'),
@@ -192,9 +192,10 @@ function installTerrainGridShaderHooks(
           '  if (harmonyGridInside) {',
           '    float harmonyMajorLine = harmonyGridLineFactor(vHarmonyTerrainGridWorldXZ, uHarmonyTerrainGridMajorSpacing, uHarmonyTerrainGridMajorWidthPx);',
           '    float harmonyAccentLine = harmonyGridLineFactor(vHarmonyTerrainGridWorldXZ, uHarmonyTerrainGridAccentSpacing, uHarmonyTerrainGridAccentWidthPx);',
-          '    float harmonyMinorVisibility = harmonyGridVisibilityScale(vHarmonyTerrainGridWorldXZ);',
+          '    float harmonyMinorVisibility = harmonyGridVisibilityScale(vHarmonyTerrainGridWorldXZ, uHarmonyTerrainGridMajorSpacing);',
+          '    float harmonyAccentVisibility = harmonyGridVisibilityScale(vHarmonyTerrainGridWorldXZ, uHarmonyTerrainGridAccentSpacing);',
           '    float harmonyMajorAlpha = clamp(harmonyMajorLine * uHarmonyTerrainGridMajorOpacity * harmonyMinorVisibility, 0.0, 1.0);',
-          '    float harmonyAccentAlpha = clamp(harmonyAccentLine * uHarmonyTerrainGridAccentOpacity, 0.0, 1.0);',
+          '    float harmonyAccentAlpha = clamp(harmonyAccentLine * uHarmonyTerrainGridAccentOpacity * harmonyAccentVisibility, 0.0, 1.0);',
           '    float harmonyGridAlpha = max(harmonyMajorAlpha, harmonyAccentAlpha);',
           '    if (harmonyGridAlpha > 1e-4) {',
           '      vec3 harmonyGridColor = mix(uHarmonyTerrainGridMajorColor, uHarmonyTerrainGridAccentColor, step(harmonyMajorAlpha, harmonyAccentAlpha));',
