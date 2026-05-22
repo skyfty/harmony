@@ -2232,13 +2232,8 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
         if (!Number.isFinite(width) || !Number.isFinite(height)) {
           continue
         }
-
-        const center = {
-          x: Number(image.position?.x) + width * 0.5,
-          y: Number(image.position?.y) + height * 0.5,
-        }
-        const worldCenter = toWorldPoint(center, groundMinX, groundMinZ, 0)
-        const groundY = groundHeightAt(worldCenter.x, worldCenter.z)
+        // Planning reference images are editor-only guides, so keep them centered on the scene origin.
+        const groundY = groundHeightAt(0, 0)
         imageEntries.push({
           id: image.id,
           name: image.name?.trim() || `Planning Image ${imageIndex + 1}`,
@@ -2247,9 +2242,9 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
           mimeType: image.mimeType ?? undefined,
           filename: image.filename ?? undefined,
           position: {
-            x: worldCenter.x,
+            x: 0,
             y: groundY + PLANNING_IMAGE_HEIGHT_OFFSET_M + imageIndex * PLANNING_IMAGE_STACK_OFFSET_M,
-            z: worldCenter.z,
+            z: 0,
           },
           size: {
             width,

@@ -161,6 +161,16 @@ interface PlanningImage {
   alignMarker?: { x: number; y: number }
 }
 
+interface PlanningImageImportDraft {
+  file: File
+  previewUrl: string
+  name: string
+  mimeType: string | null
+  width: number
+  height: number
+  metersPerPixel: number
+}
+
 type PlanningGuideAxis = 'x' | 'y'
 
 interface PlanningGuide {
@@ -289,6 +299,10 @@ const viewTransform = reactive({ scale: 1, offset: { x: 0, y: 0 } })
 const planningImages = ref<PlanningImage[]>([])
 const planningGuides = ref<PlanningGuide[]>([])
 const guideDraft = ref<PlanningGuide | null>(null)
+const planningImageImportQueue = ref<File[]>([])
+const planningImageImportDraft = ref<PlanningImageImportDraft | null>(null)
+const planningImageImportError = ref<string | null>(null)
+const planningImageImportBusy = ref(false)
 
 const TERRAIN_VERTEX_COUNT_LIMIT = 512 * 512
 
@@ -487,6 +501,27 @@ const demImportError = ref<string | null>(null)
 const planningDemPreviewUrl = ref<string | null>(null)
 const planningOrthophotoPreviewUrl = ref<string | null>(null)
 const demHydrationToken = ref(0)
+const planningImageImportDialogOpen = computed({
+  get: () => planningImageImportDraft.value !== null,
+  set: (value: boolean) => {
+    if (!value) {
+      closePlanningImageImportDialog()
+    }
+  },
+})
+const planningImageImportMetersPerPixel = computed<number>({
+  get: () => planningImageImportDraft.value?.metersPerPixel ?? 1,
+  set: (value: number) => {
+    if (!planningImageImportDraft.value) {
+      return
+    }
+    const metersPerPixel = Number(value)
+    if (!Number.isFinite(metersPerPixel) || metersPerPixel <= 0) {
+      return
+    }
+    planningImageImportDraft.value.metersPerPixel = metersPerPixel
+  },
+})
 const editorRef = ref<HTMLDivElement | null>(null)
 const editorRect = ref<DOMRect | null>(null)
 const currentTool = ref<PlanningTool>('select')
@@ -4104,6 +4139,22 @@ const imageOpacityModel = computed<number>({
   },
 })
 
+const imageMetersPerPixelModel = computed<number>({
+  get: () => (selectedImage.value ? selectedImage.value.scale : 1),
+  set: (value: number) => {
+    const img = selectedImage.value
+    if (!img || propertyPanelDisabled.value) return
+    const metersPerPixel = Number(value)
+    if (!Number.isFinite(metersPerPixel) || metersPerPixel <= 0) return
+    const centerX = img.position.x + img.width * img.scale * 0.5
+    const centerY = img.position.y + img.height * img.scale * 0.5
+    img.scale = metersPerPixel
+    img.position.x = centerX - img.width * metersPerPixel * 0.5
+    img.position.y = centerY - img.height * metersPerPixel * 0.5
+    markPlanningDirty()
+  },
+})
+
 
 // clearSelectedScatterAssignment removed (unused)
 
@@ -4968,6 +5019,8 @@ function startLineContinuation(lineId: string, vertexIndex: number) {
 }
 
 function handleUploadClick() {
+  uploadError.value = null
+  planningImageImportError.value = null
   fileInputRef.value?.click()
 }
 
@@ -4976,7 +5029,7 @@ function handleFileChange(event: Event) {
   if (!input?.files?.length) {
     return
   }
-  Array.from(input.files).forEach(file => loadPlanningImage(file))
+  enqueuePlanningImageImports(Array.from(input.files))
   input.value = ''
 }
 
@@ -5010,7 +5063,7 @@ function handleImageLayerPanelDrop(event: DragEvent) {
 
   const files = event.dataTransfer?.files
   if (files?.length) {
-    Array.from(files).forEach((file) => loadPlanningImage(file))
+    enqueuePlanningImageImports(Array.from(files))
     return
   }
 
@@ -5020,51 +5073,143 @@ function handleImageLayerPanelDrop(event: DragEvent) {
   }
 }
 
-function loadPlanningImage(file: File) {
-  uploadError.value = null
-  if (!file.type.includes('png') && !file.type.includes('jpeg') && !file.type.includes('jpg')) {
-    uploadError.value = 'Only PNG or JPG formats are supported for planning images.'
-    return
+function isSupportedPlanningImageFile(file: File): boolean {
+  const name = file.name.toLowerCase()
+  const mimeType = file.type.toLowerCase()
+  return mimeType === 'image/png'
+    || mimeType === 'image/jpeg'
+    || mimeType === 'image/webp'
+    || name.endsWith('.png')
+    || name.endsWith('.jpg')
+    || name.endsWith('.jpeg')
+    || name.endsWith('.webp')
+}
+
+async function createPlanningImageImportDraft(file: File): Promise<PlanningImageImportDraft> {
+  if (!isSupportedPlanningImageFile(file)) {
+    throw new Error('Only PNG, JPG, JPEG, or WEBP images are supported for planning image import.')
   }
-  const url = URL.createObjectURL(file)
-  const image = new Image()
-  image.onload = () => {
-    const stage = canvasSize.value
-    const centerX = stage.width / 2
-    const centerY = stage.height / 2
-    const newImage: PlanningImage = {
-      id: createId('img'),
+
+  const previewUrl = URL.createObjectURL(file)
+  try {
+    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const element = new Image()
+      element.onload = () => resolve(element)
+      element.onerror = () => reject(new Error('Unable to read the image; please retry or choose a different file.'))
+      element.src = previewUrl
+    })
+    if (!Number.isFinite(image.naturalWidth) || !Number.isFinite(image.naturalHeight) || image.naturalWidth <= 0 || image.naturalHeight <= 0) {
+      throw new Error('The selected image has invalid dimensions.')
+    }
+
+    return {
+      file,
+      previewUrl,
       name: file.name,
-      url,
-      filename: file.name,
       mimeType: file.type || null,
-      sizeLabel: `${image.naturalWidth} x ${image.naturalHeight}`,
       width: image.naturalWidth,
       height: image.naturalHeight,
-      visible: true,
-      locked: false,
-      opacity: 1,
-      position: {
-        x: centerX - image.naturalWidth / 2,
-        y: centerY - image.naturalHeight / 2,
-      },
-      scale: 1,
+      metersPerPixel: 1,
     }
+  } catch (error) {
+    try {
+      URL.revokeObjectURL(previewUrl)
+    } catch {}
+    throw error
+  }
+}
+
+function enqueuePlanningImageImports(files: File[]) {
+  uploadError.value = null
+  planningImageImportError.value = null
+  const acceptedFiles = files.filter((file) => isSupportedPlanningImageFile(file))
+  if (!acceptedFiles.length) {
+    uploadError.value = 'Only PNG, JPG, JPEG, or WEBP images are supported for planning images.'
+    return
+  }
+  planningImageImportQueue.value.push(...acceptedFiles)
+  void advancePlanningImageImportQueue()
+}
+
+async function advancePlanningImageImportQueue() {
+  if (planningImageImportBusy.value || planningImageImportDraft.value) {
+    return
+  }
+  planningImageImportBusy.value = true
+  try {
+    while (!planningImageImportDraft.value && planningImageImportQueue.value.length) {
+      const file = planningImageImportQueue.value.shift()
+      if (!file) {
+        continue
+      }
+      try {
+        planningImageImportDraft.value = await createPlanningImageImportDraft(file)
+        uploadError.value = null
+      } catch (error) {
+        uploadError.value = error instanceof Error ? error.message : 'Failed to prepare planning image import.'
+        planningImageImportError.value = null
+      }
+    }
+  } finally {
+    planningImageImportBusy.value = false
+  }
+}
+
+function closePlanningImageImportDialog() {
+  const draft = planningImageImportDraft.value
+  if (draft) {
+    try {
+      URL.revokeObjectURL(draft.previewUrl)
+    } catch {}
+  }
+  planningImageImportDraft.value = null
+  planningImageImportError.value = null
+  void advancePlanningImageImportQueue()
+}
+
+async function confirmPlanningImageImport() {
+  const draft = planningImageImportDraft.value
+  if (!draft) {
+    return
+  }
+  const metersPerPixel = Number(planningImageImportMetersPerPixel.value)
+  if (!Number.isFinite(metersPerPixel) || metersPerPixel <= 0) {
+    planningImageImportError.value = 'Please enter a valid meters-per-pixel value greater than 0.'
+    return
+  }
+
+  const widthMeters = draft.width * metersPerPixel
+  const heightMeters = draft.height * metersPerPixel
+  const newImage: PlanningImage = {
+    id: createId('img'),
+    name: draft.name,
+    url: draft.previewUrl,
+    filename: draft.file.name,
+    mimeType: draft.mimeType,
+    sizeLabel: `${draft.width} x ${draft.height}`,
+    width: draft.width,
+    height: draft.height,
+    visible: true,
+    locked: false,
+    opacity: 1,
+    position: {
+      x: -widthMeters / 2,
+      y: -heightMeters / 2,
+    },
+    scale: metersPerPixel,
+  }
+
+  try {
+    await savePlanningImageToIndexedDB(newImage, draft.file)
     planningImages.value.push(newImage)
     activeImageId.value = newImage.id
-
-    // persist the uploaded image to IndexedDB so it survives page reloads
-    void savePlanningImageToIndexedDB(newImage, file).catch((err) => {
-      console.warn('Failed to persist planning image to IndexedDB', err)
-    })
-
     markPlanningDirty()
+    planningImageImportError.value = null
+    planningImageImportDraft.value = null
+    void advancePlanningImageImportQueue()
+  } catch (error) {
+    planningImageImportError.value = error instanceof Error ? error.message : 'Failed to save planning image.'
   }
-  image.onerror = () => {
-    uploadError.value = 'Unable to read the image; please retry or choose a different file.'
-    URL.revokeObjectURL(url)
-  }
-  image.src = url
 }
 
 function handleDemUploadClick() {
@@ -5876,6 +6021,9 @@ onBeforeUnmount(() => {
   if (planningOrthophotoPreviewUrl.value) {
     try { URL.revokeObjectURL(planningOrthophotoPreviewUrl.value) } catch {}
   }
+  if (planningImageImportDraft.value) {
+    try { URL.revokeObjectURL(planningImageImportDraft.value.previewUrl) } catch {}
+  }
   window.removeEventListener('pointermove', handlePointerMove)
   window.removeEventListener('pointerup', handlePointerUp)
   window.removeEventListener('pointercancel', handlePointerUp)
@@ -5998,7 +6146,7 @@ onBeforeUnmount(() => {
               <input
                 ref="fileInputRef"
                 type="file"
-                accept=".png,.jpg,.jpeg"
+                accept=".png,.jpg,.jpeg,.webp"
                 multiple
                 class="sr-only"
                 @change="handleFileChange"
@@ -6450,6 +6598,24 @@ onBeforeUnmount(() => {
               </div>
 
               <div class="property-panel__density">
+                <div class="property-panel__density-title">Meters per pixel</div>
+                <div class="property-panel__density-row">
+                  <v-text-field
+                    v-model.number="imageMetersPerPixelModel"
+                    type="number"
+                    density="compact"
+                    hide-details
+                    min="0.000001"
+                    step="0.01"
+                    suffix="m/px"
+                  />
+                </div>
+                <div class="property-panel__hint">
+                  {{ formatOptionalNumber(selectedImage.width * selectedImage.scale) }} m × {{ formatOptionalNumber(selectedImage.height * selectedImage.scale) }} m
+                </div>
+              </div>
+
+              <div class="property-panel__density">
                 <div class="property-panel__density-title">Opacity</div>
                 <div class="property-panel__density-row">
                   <v-slider v-model="imageOpacityModel" min="0" max="1" step="0.01" density="compact" hide-details />
@@ -6464,6 +6630,52 @@ onBeforeUnmount(() => {
         </aside>
 
       </section>
+      <v-dialog
+        v-model="planningImageImportDialogOpen"
+        max-width="760"
+        persistent
+      >
+        <v-card class="planning-image-import-dialog">
+          <v-card-title class="planning-image-import-dialog__title">
+            Import Planning Image
+          </v-card-title>
+          <v-card-text v-if="planningImageImportDraft" class="planning-image-import-dialog__body">
+            <div class="planning-image-import-dialog__preview">
+              <img
+                :src="planningImageImportDraft.previewUrl"
+                :alt="planningImageImportDraft.name"
+                class="planning-image-import-dialog__preview-image"
+              >
+            </div>
+            <div class="planning-image-import-dialog__meta">
+              <div><span>File</span><strong>{{ planningImageImportDraft.name }}</strong></div>
+              <div><span>Dimensions</span><strong>{{ planningImageImportDraft.width }} × {{ planningImageImportDraft.height }} px</strong></div>
+            </div>
+            <v-text-field
+              v-model.number="planningImageImportMetersPerPixel"
+              type="number"
+              density="compact"
+              label="Meters per pixel"
+              suffix="m/px"
+              min="0.000001"
+              step="0.01"
+              hide-details
+              autofocus
+            />
+            <div class="planning-image-import-dialog__hint">
+              This value controls how the image maps into scene meters. The reference plane will be centered at the scene origin.
+            </div>
+            <div v-if="planningImageImportError" class="planning-image-import-dialog__error">
+              {{ planningImageImportError }}
+            </div>
+          </v-card-text>
+          <v-card-actions class="planning-image-import-dialog__actions">
+            <v-spacer />
+            <v-btn variant="text" @click="closePlanningImageImportDialog">Cancel</v-btn>
+            <v-btn color="primary" variant="tonal" @click="confirmPlanningImageImport">Import</v-btn>
+          </v-card-actions>
+        </v-card>
+      </v-dialog>
     </v-card>
   </v-dialog>
 </template>
@@ -7515,5 +7727,74 @@ onBeforeUnmount(() => {
 
 .property-panel__floor-preset :deep(.asset-picker-list__grid) {
   grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+}
+
+.planning-image-import-dialog {
+  background: #0f1624;
+  color: #f4f6fb;
+}
+
+.planning-image-import-dialog__title {
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.planning-image-import-dialog__body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.planning-image-import-dialog__preview {
+  width: 100%;
+  max-height: 360px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background:
+    radial-gradient(circle at top left, rgba(98, 179, 255, 0.16), transparent 42%),
+    rgba(255, 255, 255, 0.03);
+}
+
+.planning-image-import-dialog__preview-image {
+  display: block;
+  max-width: 100%;
+  max-height: 360px;
+  object-fit: contain;
+}
+
+.planning-image-import-dialog__meta {
+  display: grid;
+  gap: 8px;
+  color: rgba(244, 246, 251, 0.8);
+}
+
+.planning-image-import-dialog__meta > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.planning-image-import-dialog__meta span {
+  color: rgba(244, 246, 251, 0.6);
+}
+
+.planning-image-import-dialog__hint {
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: rgba(244, 246, 251, 0.68);
+}
+
+.planning-image-import-dialog__error {
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: #ff8a65;
+}
+
+.planning-image-import-dialog__actions {
+  padding: 0 20px 16px;
 }
 </style>

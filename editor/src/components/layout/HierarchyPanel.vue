@@ -406,7 +406,6 @@ const rangeOrderNodeIds = computed(() => {
   }
   return allNodeIds.value
 })
-const hasSelection = computed(() => selectedNodeIds.value.length > 0)
 const canRevealSelectedNode = computed(() => Boolean(selectedNodeId.value))
 const hasHierarchyNodes = computed(() => flattenedHierarchyItems.value.length > 0)
 
