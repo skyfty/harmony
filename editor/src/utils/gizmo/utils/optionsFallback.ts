@@ -103,14 +103,14 @@ export const optionsFallback = (
   // Negative Axes fallback options
   const negativeAxesFallback = {
     line: false,
-    scale: isSphere ? 0.45 : 0.7,
-    opacity: isSphere ? 0.88 : 0.92,
+    scale: isSphere ? 0.56 : 0.78,
+    opacity: isSphere ? 0.96 : 0.96,
     border: {
       size: isSphere ? 0.014 : 0.012,
       color: 0xe7eef7,
     },
     hover: {
-      scale: isSphere ? 0.5 : 0.7,
+      scale: isSphere ? 0.62 : 0.82,
       border: {
         size: isSphere ? 0.022 : 0.018,
         color: 0xffffff,
@@ -130,6 +130,7 @@ export const optionsFallback = (
     animated: true,
     speed: 1,
     northDirection: DEFAULT_NORTH_DIRECTION,
+    showNorthIndicator: true,
     background: {
       enabled: true,
       color: isSphere ? 0xffffff : 0xe0e6ec,

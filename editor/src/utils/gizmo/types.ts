@@ -52,6 +52,9 @@ export type GizmoOptions = {
   /** Which world axis should be treated as geographic north. */
   northDirection?: EnvironmentNorthDirection;
 
+  /** Whether the gizmo should render its north compass badge. */
+  showNorthIndicator?: boolean;
+
   /** Whether view changes should be animated. Default `true` */
   animated?: boolean;
 

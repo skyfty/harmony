@@ -202,6 +202,7 @@ import type { PanelPlacementState } from '@/types/panel-placement-state'
 import ViewportToolbar from './ViewportToolbar.vue'
 import TransformToolbar from './TransformToolbar.vue'
 import PlaceholderOverlayList from './PlaceholderOverlayList.vue'
+import ViewportNorthCompass from './ViewportNorthCompass.vue'
 import AssetPickerDialog from '@/components/common/AssetPickerDialog.vue'
 import CsmSunMenuContent from '@/components/editor/CsmSunMenuContent.vue'
 import {
@@ -1948,6 +1949,8 @@ const defaultCameraStatusDistance = new THREE.Vector3(
   DEFAULT_CAMERA_TARGET.z,
 ))
 const cameraStatusDistance = ref(defaultCameraStatusDistance)
+const cameraNorthHeadingDegrees = ref(0)
+const cameraNorthForwardHelper = new THREE.Vector3()
 
 const isDragHovering = ref(false)
 const gridVisible = computed(() => sceneStore.viewportSettings.showGrid)
@@ -12708,10 +12711,7 @@ function applyEnvironmentTextureRotation(settings: EnvironmentSettings) {
 watch(environmentSignature, () => {
   void applyEnvironmentSettingsToScene(environmentSettings.value)
   gizmoControls?.setNorthDirection(environmentSettings.value.northDirection)
-  if (gizmoContainerRef.value) {
-    const northDirectionAngle = resolveNorthDirectionAngleDegrees(environmentSettings.value.northDirection)
-    gizmoContainerRef.value.title = `North: ${environmentSettings.value.northDirection ?? '+X'} (${northDirectionAngle} deg)`
-  }
+  updateCameraNorthHeading()
   updateFogForSelection()
 }, { immediate: true })
 
@@ -12754,6 +12754,7 @@ function resetCameraView() {
   lastCameraFocusRadius = Math.max(0.25, camera.position.distanceTo(target) / 10)
   syncControlsConstraintsAndSpeeds()
   updateCameraStatusDistance()
+  updateCameraNorthHeading()
   isApplyingCameraState = false
 
 }
@@ -13289,6 +13290,7 @@ function handleControlsChange() {
   syncControlsConstraintsAndSpeeds()
   applyViewportCompositionOffset(true)
   updateCameraStatusDistance()
+  updateCameraNorthHeading()
   gizmoControls?.cameraUpdate()
   terrainGridController.markCameraDirty()
 }
@@ -13299,6 +13301,30 @@ function updateCameraStatusDistance() {
     return
   }
   cameraStatusDistance.value = camera.position.distanceTo(mapControls.target)
+}
+
+function updateCameraNorthHeading() {
+  if (!camera) {
+    cameraNorthHeadingDegrees.value = 0
+    return
+  }
+
+  camera.getWorldDirection(cameraNorthForwardHelper)
+  cameraNorthForwardHelper.y = 0
+  const horizontalLengthSq =
+    cameraNorthForwardHelper.x * cameraNorthForwardHelper.x
+    + cameraNorthForwardHelper.z * cameraNorthForwardHelper.z
+  if (horizontalLengthSq <= 1e-8) {
+    cameraNorthHeadingDegrees.value = 0
+    return
+  }
+
+  cameraNorthForwardHelper.multiplyScalar(1 / Math.sqrt(horizontalLengthSq))
+  const worldHeadingDegrees = THREE.MathUtils.radToDeg(
+    Math.atan2(cameraNorthForwardHelper.z, cameraNorthForwardHelper.x),
+  )
+  const northDirectionAngleDegrees = resolveNorthDirectionAngleDegrees(environmentSettings.value.northDirection)
+  cameraNorthHeadingDegrees.value = (worldHeadingDegrees - northDirectionAngleDegrees + 360) % 360
 }
 
 function handleResetCameraStatusZoomClick() {
@@ -13318,6 +13344,7 @@ function handleResetCameraStatusZoomClick() {
   lastCameraFocusRadius = Math.max(0.25, defaultCameraStatusDistance / 10)
   syncControlsConstraintsAndSpeeds()
   updateCameraStatusDistance()
+  updateCameraNorthHeading()
   isApplyingCameraState = false
 }
 
@@ -13720,15 +13747,13 @@ function initScene() {
     offset: { top: 0, right: 0, bottom: 0, left: 0 },
     size: 70,
     northDirection: environmentSettings.value.northDirection,
+    showNorthIndicator: false,
   })
   if (mapControls) {
     gizmoControls.attachControls(mapControls as any)
   }
-  if (gizmoContainer) {
-    const northDirectionAngle = resolveNorthDirectionAngleDegrees(environmentSettings.value.northDirection)
-    gizmoContainer.title = `North: ${environmentSettings.value.northDirection ?? '+X'} (${northDirectionAngle} deg)`
-  }
   gizmoControls.setNorthDirection(environmentSettings.value.northDirection)
+  updateCameraNorthHeading()
   gizmoControls.update()
 
   canvasRef.value.addEventListener('pointerdown', handlePointerDown, { capture: true })
@@ -14501,6 +14526,7 @@ function animate() {
   }
   const t0_render = performance.now()
   // debug bounds update removed
+  updateCameraNorthHeading()
   sceneCsmShadowRuntime?.update()
   renderViewportFrame()
   prof.render = performance.now() - t0_render
@@ -23814,60 +23840,65 @@ defineExpose({
           >?</button>
         </div>
       </div>
-      <div class="csm-hud">
-        <v-menu
-          v-model="csmMenuOpen"
-          location="top end"
-          :offset="6"
-          :close-on-content-click="false"
-        >
-          <template #activator="{ props: menuProps }">
-            <v-btn
-              v-bind="menuProps"
-              density="compact"
-              size="large"
-              class="csm-hud__btn"
-              :color="csmMenuOpen ? 'primary' : 'white'"
-              variant="text"
-              title="CSM Sun & Shadow"
-            >
-              <v-icon icon="mdi-white-balance-sunny" size="28" />
-            </v-btn>
-          </template>
-          <v-list density="compact" class="csm-sun-menu">
-            <div
-              class="popup-menu-card csm-sun-menu__card"
-              @pointerdown.stop
-              @pointerup.stop
-              @mousedown.stop
-              @mouseup.stop
-            >
-         
-              <CsmSunMenuContent
-                :csm-enabled="resolveEnvironmentCsmSettings(environmentSettings).enabled"
-                :csm-shadow-enabled="resolveEnvironmentCsmSettings(environmentSettings).shadowEnabled"
-                :csm-light-color="resolveEnvironmentCsmSettings(environmentSettings).lightColor"
-                :csm-light-intensity="resolveEnvironmentCsmSettings(environmentSettings).lightIntensity"
-                :csm-sun-azimuth-deg="resolveEnvironmentCsmSettings(environmentSettings).sunAzimuthDeg"
-                :csm-sun-elevation-deg="resolveEnvironmentCsmSettings(environmentSettings).sunElevationDeg"
-                :csm-cascades="resolveEnvironmentCsmSettings(environmentSettings).cascades"
-                :csm-max-far="resolveEnvironmentCsmSettings(environmentSettings).maxFar"
-                :csm-shadow-map-size="resolveEnvironmentCsmSettings(environmentSettings).shadowMapSize"
-                :csm-shadow-bias="resolveEnvironmentCsmSettings(environmentSettings).shadowBias"
-                @update:csm-enabled="handleCsmEnabledUpdate"
-                @update:csm-shadow-enabled="handleCsmShadowEnabledUpdate"
-                @update:csm-light-color="handleCsmLightColorUpdate"
-                @update:csm-light-intensity="handleCsmLightIntensityUpdate"
-                @update:csm-sun-azimuth-deg="handleCsmSunAzimuthDegUpdate"
-                @update:csm-sun-elevation-deg="handleCsmSunElevationDegUpdate"
-                @update:csm-cascades="handleCsmCascadesUpdate"
-                @update:csm-max-far="handleCsmMaxFarUpdate"
-                @update:csm-shadow-map-size="handleCsmShadowMapSizeUpdate"
-                @update:csm-shadow-bias="handleCsmShadowBiasUpdate"
-              />
-            </div>
-          </v-list>
-        </v-menu>
+      <div class="viewport-bottom-right-hud">
+        <div class="csm-hud">
+          <v-menu
+            v-model="csmMenuOpen"
+            location="top end"
+            :offset="6"
+            :close-on-content-click="false"
+          >
+            <template #activator="{ props: menuProps }">
+              <v-btn
+                v-bind="menuProps"
+                density="compact"
+                size="large"
+                class="csm-hud__btn"
+                :color="csmMenuOpen ? 'primary' : 'white'"
+                variant="text"
+                title="CSM Sun & Shadow"
+              >
+                <v-icon icon="mdi-white-balance-sunny" size="30" />
+              </v-btn>
+            </template>
+            <v-list density="compact" class="csm-sun-menu">
+              <div
+                class="popup-menu-card csm-sun-menu__card"
+                @pointerdown.stop
+                @pointerup.stop
+                @mousedown.stop
+                @mouseup.stop
+              >
+                <CsmSunMenuContent
+                  :csm-enabled="resolveEnvironmentCsmSettings(environmentSettings).enabled"
+                  :csm-shadow-enabled="resolveEnvironmentCsmSettings(environmentSettings).shadowEnabled"
+                  :csm-light-color="resolveEnvironmentCsmSettings(environmentSettings).lightColor"
+                  :csm-light-intensity="resolveEnvironmentCsmSettings(environmentSettings).lightIntensity"
+                  :csm-sun-azimuth-deg="resolveEnvironmentCsmSettings(environmentSettings).sunAzimuthDeg"
+                  :csm-sun-elevation-deg="resolveEnvironmentCsmSettings(environmentSettings).sunElevationDeg"
+                  :csm-cascades="resolveEnvironmentCsmSettings(environmentSettings).cascades"
+                  :csm-max-far="resolveEnvironmentCsmSettings(environmentSettings).maxFar"
+                  :csm-shadow-map-size="resolveEnvironmentCsmSettings(environmentSettings).shadowMapSize"
+                  :csm-shadow-bias="resolveEnvironmentCsmSettings(environmentSettings).shadowBias"
+                  @update:csm-enabled="handleCsmEnabledUpdate"
+                  @update:csm-shadow-enabled="handleCsmShadowEnabledUpdate"
+                  @update:csm-light-color="handleCsmLightColorUpdate"
+                  @update:csm-light-intensity="handleCsmLightIntensityUpdate"
+                  @update:csm-sun-azimuth-deg="handleCsmSunAzimuthDegUpdate"
+                  @update:csm-sun-elevation-deg="handleCsmSunElevationDegUpdate"
+                  @update:csm-cascades="handleCsmCascadesUpdate"
+                  @update:csm-max-far="handleCsmMaxFarUpdate"
+                  @update:csm-shadow-map-size="handleCsmShadowMapSizeUpdate"
+                  @update:csm-shadow-bias="handleCsmShadowBiasUpdate"
+                />
+              </div>
+            </v-list>
+          </v-menu>
+        </div>
+        <ViewportNorthCompass
+          class="viewport-bottom-right-hud__compass"
+          :heading-degrees="cameraNorthHeadingDegrees"
+        />
       </div>
         <div v-show="showProtagonistPreview" class="protagonist-preview">
           <span class="protagonist-preview__label">主角视野</span>
@@ -24201,11 +24232,23 @@ defineExpose({
   z-index: 9;
 }
 
-.csm-hud {
+.viewport-bottom-right-hud {
   position: absolute;
-  bottom: 16px;
   right: 16px;
+  bottom: 16px;
   z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  pointer-events: auto;
+}
+
+.viewport-bottom-right-hud__compass {
+  flex: 0 0 auto;
+}
+
+.csm-hud {
+  position: static;
   pointer-events: auto;
 }
 
@@ -24215,17 +24258,27 @@ defineExpose({
 }
 
 .csm-hud__btn {
-  filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.72));
-  box-shadow:
-    0 8px 20px rgba(0, 0, 0, 0.36),
-    0 0 0 1px rgba(255, 255, 255, 0.16);
-  background: rgba(10, 14, 20, 0.28) !important;
-  backdrop-filter: blur(8px) saturate(130%);
+  min-width: 0 !important;
+  width: 40px !important;
+  height: 40px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  filter: none !important;
+  backdrop-filter: none !important;
+  color: rgba(236, 241, 248, 0.95);
+  --v-btn-height: 40px;
 }
 
 .csm-hud__btn :deep(.v-btn__overlay),
 .csm-hud__btn :deep(.v-btn__underlay) {
   display: none !important;
+}
+
+.csm-hud__btn :deep(.v-btn__content) {
+  opacity: 1 !important;
 }
 
 .camera-status-hud {

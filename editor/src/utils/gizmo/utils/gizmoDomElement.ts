@@ -85,6 +85,7 @@ export const gizmoDomElement = ({
   offset,
   id,
   className,
+  showNorthIndicator,
 }: GizmoOptionsFallback) => {
   const div = document.createElement("div");
 
@@ -105,92 +106,95 @@ export const gizmoDomElement = ({
   if (id) div.id = id;
   if (className) div.className = className;
 
-  const compass = document.createElement("div");
-  const ring = document.createElement("div");
-  const needle = document.createElement("div");
-  const badge = document.createElement("div");
-  const arrow = document.createElement("span");
-  const label = document.createElement("span");
+  if (showNorthIndicator) {
+    const compass = document.createElement("div");
+    const ring = document.createElement("div");
+    const needle = document.createElement("div");
+    const badge = document.createElement("div");
+    const arrow = document.createElement("span");
+    const label = document.createElement("span");
 
-  Object.assign(compass.style, {
-    position: "absolute",
-    inset: "0",
-    pointerEvents: "none",
-    borderRadius: "999px",
-    overflow: "visible",
-  });
+    Object.assign(compass.style, {
+      position: "absolute",
+      inset: "0",
+      pointerEvents: "none",
+      borderRadius: "999px",
+      overflow: "visible",
+      zIndex: "0",
+    });
 
-  Object.assign(ring.style, {
-    position: "absolute",
-    inset: "4px",
-    borderRadius: "999px",
-    border: "1px solid rgba(255, 255, 255, 0.10)",
-    background:
-      "radial-gradient(circle at center, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0.01) 60%, rgba(255, 255, 255, 0) 72%)",
-    boxShadow:
-      "0 0 0 1px rgba(8, 12, 17, 0.20), inset 0 1px 4px rgba(255, 255, 255, 0.03)",
-    backdropFilter: "none",
-  });
+    Object.assign(ring.style, {
+      position: "absolute",
+      inset: "2px",
+      borderRadius: "999px",
+      border: "1px solid rgba(255, 255, 255, 0.12)",
+      background:
+        "radial-gradient(circle at center, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.012) 60%, rgba(255, 255, 255, 0) 72%)",
+      boxShadow:
+        "0 0 0 1px rgba(8, 12, 17, 0.22), inset 0 1px 6px rgba(255, 255, 255, 0.04)",
+      backdropFilter: "none",
+    });
 
-  Object.assign(needle.style, {
-    position: "absolute",
-    inset: "0",
-    display: "flex",
-    alignItems: "flex-start",
-    justifyContent: "center",
-    transformOrigin: "50% 50%",
-    transform: "rotate(0deg)",
-  });
+    Object.assign(needle.style, {
+      position: "absolute",
+      inset: "0",
+      display: "flex",
+      alignItems: "flex-start",
+      justifyContent: "center",
+      transformOrigin: "50% 50%",
+      transform: "rotate(0deg)",
+    });
 
-  Object.assign(badge.style, {
-    position: "absolute",
-    display: "inline-flex",
-    alignItems: "center",
-    gap: "3px",
-    padding: "2px 6px 1px",
-    borderRadius: "999px",
-    background: "rgba(10, 14, 20, 0.72)",
-    border: "1px solid rgba(255, 255, 255, 0.12)",
-    color: "rgba(245, 248, 252, 0.94)",
-    boxShadow: "0 8px 16px rgba(0, 0, 0, 0.22)",
-    letterSpacing: "0.08em",
-    lineHeight: "1",
-    fontSize: "9px",
-    fontWeight: "700",
-    textTransform: "uppercase",
-    userSelect: "none",
-    backdropFilter: "none",
-    zIndex: "1",
-  });
+    Object.assign(badge.style, {
+      position: "absolute",
+      display: "inline-flex",
+      alignItems: "center",
+      gap: "4px",
+      padding: "3px 8px 2px",
+      borderRadius: "999px",
+      background: "rgba(10, 14, 20, 0.72)",
+      border: "1px solid rgba(255, 255, 255, 0.12)",
+      color: "rgba(245, 248, 252, 0.94)",
+      boxShadow: "0 8px 16px rgba(0, 0, 0, 0.22)",
+      letterSpacing: "0.08em",
+      lineHeight: "1",
+      fontSize: "10px",
+      fontWeight: "700",
+      textTransform: "uppercase",
+      userSelect: "none",
+      backdropFilter: "none",
+      zIndex: "2",
+    });
 
-  Object.assign(arrow.style, {
-    width: "0",
-    height: "0",
-    borderLeft: "3px solid transparent",
-    borderRight: "3px solid transparent",
-    borderBottom: "5px solid currentColor",
-    opacity: "0.92",
-  });
+    Object.assign(arrow.style, {
+      width: "0",
+      height: "0",
+      borderLeft: "4px solid transparent",
+      borderRight: "4px solid transparent",
+      borderBottom: "6px solid currentColor",
+      opacity: "0.92",
+    });
 
-  Object.assign(label.style, {
-    position: "relative",
-    top: "0.5px",
-  });
+    Object.assign(label.style, {
+      position: "relative",
+      top: "0.5px",
+    });
 
-  label.textContent = "N";
+    label.textContent = "N";
 
-  badge.append(arrow, label);
-  needle.append(badge);
-  compass.append(ring, needle);
-  div.append(compass);
+    badge.append(arrow, label);
+    needle.append(badge);
+    compass.append(ring, needle);
+    div.append(compass);
 
-  (div as ViewportGizmoDomElement).__viewportGizmoRefs = {
-    compass,
-    ring,
-    needle,
-    badge,
-    label,
-  };
+    (div as ViewportGizmoDomElement).__viewportGizmoRefs = {
+      compass,
+      ring,
+      needle,
+      badge,
+      label,
+    };
+  }
 
   return div;
 };
