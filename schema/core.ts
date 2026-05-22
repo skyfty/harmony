@@ -1441,7 +1441,7 @@ export type EnvironmentPhysicsEngine = 'auto' | 'ammo' | 'cannon'
 
 export type EnvironmentOrientationPreset = 'yUp' | 'zUp' | 'xUp' | 'custom'
 
-export type SkyCubeBackgroundFormat = 'faces' | 'zip'
+export type SkyCubeBackgroundFormat = 'zip'
 
 export interface EnvironmentRotationDegrees {
   /** Degrees */
@@ -1466,9 +1466,9 @@ export interface EnvironmentBackgroundSettings {
   /** Vertical gradient exponent (matches Three.js shader example semantics). Default: 0.6. */
   gradientExponent?: number
   hdriAssetId: string | null
-  /** How SkyCube background sources its faces. */
+  /** How SkyCube background sources its archive. */
   skycubeFormat: SkyCubeBackgroundFormat
-  /** When skycubeFormat === 'zip', points to a .skycube zip asset containing 6 face images. */
+  /** Points to a .skycube zip asset. */
   skycubeZipAssetId: string | null
   /**
    * SkyCube faces in fixed Three.js CubeTextureLoader order:

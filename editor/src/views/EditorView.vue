@@ -163,7 +163,7 @@ const isNewProjectDialogOpen = ref(false)
 // OpenProjectDialog removed; use Project Manager page for opening projects
 const isProjectManagerOverlayOpen = ref(false)
 const projectManagerOverlayRef = ref<HTMLElement | null>(null)
-const showStatsPanel = ref(true)
+const showStatsPanel = ref(false)
 const sceneImportInputRef = ref<HTMLInputElement | null>(null)
 const isImportingScenes = ref(false)
 const isSceneBundleExporting = ref(false)
@@ -529,16 +529,7 @@ function reopenPanel(panel: EditorPanel) {
 }
 
 function togglePanelPlacement(panel: EditorPanel) {
-  const current = panelPlacement.value[panel]
-  const next: 'docked' | 'floating' = current === 'floating' ? 'docked' : 'floating'
-  sceneStore.$patch((draft) => {
-    const typedState = draft as unknown as PanelPlacementHolder
-    const current = normalizePanelPlacementState(typedState.panelPlacement ?? panelPlacement.value)
-    typedState.panelPlacement = {
-      ...current,
-      [panel]: next,
-    }
-  })
+  sceneStore.togglePanelPlacement(panel)
 }
 
 function getInspectorRef(source: InspectorPanelSource) {

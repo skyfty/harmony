@@ -96,13 +96,14 @@ function sanitizeEnvironmentAssetReferences<T>(value: T): T {
       delete section.hdriAssetId
     }
     if (mode !== 'skycube') {
-      delete section.positiveXAssetId
-      delete section.negativeXAssetId
-      delete section.positiveYAssetId
-      delete section.negativeYAssetId
-      delete section.positiveZAssetId
-      delete section.negativeZAssetId
+      delete section.skycubeZipAssetId
     }
+    delete section.positiveXAssetId
+    delete section.negativeXAssetId
+    delete section.positiveYAssetId
+    delete section.negativeYAssetId
+    delete section.positiveZAssetId
+    delete section.negativeZAssetId
     clone.background = section
   }
 

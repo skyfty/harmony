@@ -25,24 +25,8 @@ export function useToolbarPositioning(
   const transformToolbarHostRef = ref<HTMLDivElement | null>(null)
   const viewportToolbarHostRef = ref<HTMLDivElement | null>(null)
 
-  let hierarchyPanelObserver: ResizeObserver | null = null
   let inspectorPanelObserver: ResizeObserver | null = null
-  let observedHierarchyElement: Element | null = null
   let observedInspectorElement: Element | null = null
-
-  function getHierarchyPanelElement(): HTMLElement | null {
-    if (typeof document === 'undefined') {
-      return null
-    }
-    if (!panelVisibility.value.hierarchy) {
-      return null
-    }
-    const placement = panelPlacement.value.hierarchy
-    if (placement === 'floating') {
-      return document.querySelector('.floating-panel.hierarchy-floating .panel-card') as HTMLElement | null
-    }
-    return document.querySelector('.panel.hierarchy-panel .panel-card') as HTMLElement | null
-  }
 
   function getInspectorPanelElement(): HTMLElement | null {
     if (typeof document === 'undefined') {
@@ -68,7 +52,7 @@ export function useToolbarPositioning(
       return
     }
 
-    const panelEl = getHierarchyPanelElement()
+    const panelEl = getInspectorPanelElement()
     const toolbarEl = transformToolbarHostRef.value
     const toolbarWidth = toolbarEl?.offsetWidth ?? 0
     const toolbarHeight = toolbarEl?.offsetHeight ?? 0
@@ -143,20 +127,6 @@ export function useToolbarPositioning(
     if (typeof ResizeObserver === 'undefined') {
       return
     }
-    const hierarchyEl = getHierarchyPanelElement()
-    if (observedHierarchyElement !== hierarchyEl) {
-      if (hierarchyPanelObserver && observedHierarchyElement) {
-        hierarchyPanelObserver.unobserve(observedHierarchyElement)
-      }
-      observedHierarchyElement = hierarchyEl
-      if (hierarchyEl) {
-        if (!hierarchyPanelObserver) {
-          hierarchyPanelObserver = new ResizeObserver(() => scheduleToolbarUpdate())
-        }
-        hierarchyPanelObserver.observe(hierarchyEl)
-      }
-    }
-
     const inspectorEl = getInspectorPanelElement()
     if (observedInspectorElement !== inspectorEl) {
       if (inspectorPanelObserver && observedInspectorElement) {
@@ -173,7 +143,6 @@ export function useToolbarPositioning(
   }
 
   onBeforeUnmount(() => {
-    if (hierarchyPanelObserver) hierarchyPanelObserver.disconnect()
     if (inspectorPanelObserver) inspectorPanelObserver.disconnect()
   })
 

@@ -1,15 +1,12 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed,   } from 'vue'
 import { useSceneStore } from '@/stores/sceneStore'
 import * as THREE from 'three'
-import { applyGroundGeneration, createGroundMesh } from '@schema/groundMesh'
-import type { GroundDynamicMesh, GroundGenerationSettings, GroundRuntimeDynamicMesh } from '@schema/core'
 import {
   NOMINATE_COMPONENT_TYPE,
   ONLINE_COMPONENT_TYPE,
 } from '@schema/components'
-import { GROUND_NODE_ID, MULTIUSER_NODE_ID, type SceneNode, type Vector3Like } from '@schema/core'
-import { resolveGroundCreationProfile } from '@/stores/groundUtils'
+import { MULTIUSER_NODE_ID, type SceneNode, type Vector3Like } from '@schema/core'
 
 const sceneStore = useSceneStore()
 
@@ -229,128 +226,6 @@ function handleCreateNominateNode() {
 }
 
 
-
-
-const groundDialogOpen = ref(false)
-
-type GroundPreset = {
-  id: string
-  name: string
-  description: string
-  width: number
-  depth: number
-  generation: GroundGenerationSettings
-  physics: {
-    friction: number
-    restitution: number
-  }
-}
-
-const groundPresets: [GroundPreset, ...GroundPreset[]] = [
-  {
-    id: 'flat',
-    name: 'Empty Ground',
-    description: '平整基础场景，适合自定义雕刻',
-    width: 100,
-    depth: 100,
-    generation: {
-      mode: 'flat',
-      noiseScale: 80,
-      noiseAmplitude: 0,
-      edgeFalloff: 1,
-    },
-    physics: {
-      friction: 0.65,
-      restitution: 0.05,
-    },
-  },
-  {
-    id: 'rolling',
-    name: 'Rolling Hills',
-    description: '柔和起伏的丘陵，用于自然环境',
-    width: 160,
-    depth: 160,
-    generation: {
-      mode: 'perlin',
-      seed: 2401,
-      noiseScale: 120,
-      noiseAmplitude: 6,
-      detailScale: 28,
-      detailAmplitude: 2,
-      edgeFalloff: 1.4,
-    },
-    physics: {
-      friction: 0.55,
-      restitution: 0.08,
-    },
-  },
-  {
-    id: 'mountain',
-    name: 'Highlands',
-    description: '陡峭的山脊和峡谷，营造戏剧性景观',
-    width: 200,
-    depth: 200,
-    generation: {
-      mode: 'perlin',
-      seed: 913,
-      noiseScale: 70,
-      noiseAmplitude: 14,
-      detailScale: 18,
-      detailAmplitude: 4,
-      edgeFalloff: 2.2,
-    },
-    physics: {
-      friction: 0.45,
-      restitution: 0.12,
-    },
-  },
-]
-
-const DEFAULT_GROUND_PRESET_ID = groundPresets[0].id
-const selectedGroundPresetId = ref<string>(DEFAULT_GROUND_PRESET_ID)
-const groundWidth = ref(groundPresets[0].width)
-const groundDepth = ref(groundPresets[0].depth)
-
-const MIN_GROUND_SIZE = 10
-
-const selectedGroundPreset = computed(() => {
-  return groundPresets.find((preset) => preset.id === selectedGroundPresetId.value) ?? groundPresets[0]
-})
-
-const groundCreationProfile = computed(() => {
-  return resolveGroundCreationProfile(groundWidth.value, groundDepth.value)
-})
-
-const groundCreationWarning = computed(() => groundCreationProfile.value.warningMessage)
-const groundCreationUsesStreamingProfile = computed(() => groundCreationProfile.value.quality !== 'high')
-
-watch(selectedGroundPresetId, (presetId) => {
-  const preset = groundPresets.find((entry) => entry.id === presetId)
-  if (preset) {
-    groundWidth.value = preset.width
-    groundDepth.value = preset.depth
-  }
-})
-
-function clampGroundDimension(value: number, fallback: number): number {
-  if (!Number.isFinite(value)) {
-    return fallback
-  }
-  const rounded = Math.round(Math.abs(value))
-  return Math.max(MIN_GROUND_SIZE, rounded)
-}
-
-function resetGroundDialogState() {
-  selectedGroundPresetId.value = DEFAULT_GROUND_PRESET_ID
-  groundWidth.value = groundPresets[0].width
-  groundDepth.value = groundPresets[0].depth
-}
-
-const canAddGround = computed(() => {
-  return !sceneStore.nodes.some(n => n.dynamicMesh?.type === 'Ground')
-})
-
-
 function hasOnlineComponentNode(nodes: SceneNode[] | null | undefined): boolean {
   if (!Array.isArray(nodes) || nodes.length === 0) {
     return false
@@ -445,66 +320,6 @@ async function handleCreateMultiuserNode(): Promise<void> {
   sceneStore.selectNode(created.id)
 }
 
-function handleAddGround() {
-  if (!canAddGround.value) return
-  resetGroundDialogState()
-  groundDialogOpen.value = true
-}
-
-async function handleConfirmGround() {
-  if (!canAddGround.value) {
-    groundDialogOpen.value = false
-    return
-  }
-  groundDialogOpen.value = false
-  const preset = selectedGroundPreset.value
-  const width = clampGroundDimension(groundWidth.value, preset?.width ?? 100)
-  const depth = clampGroundDimension(groundDepth.value, preset?.depth ?? 100)
-  const creationProfile = resolveGroundCreationProfile(width, depth)
-  const cellSize = creationProfile.cellSize
-
-  const definition: GroundDynamicMesh = {
-    type: 'Ground',
-    worldBounds: {
-      minX: -width * 0.5,
-      maxX: width * 0.5,
-      minZ: -depth * 0.5,
-      maxZ: depth * 0.5,
-    },
-    cellSize,
-    editTileSizeMeters: creationProfile.editTileSizeMeters,
-    editTileResolution: creationProfile.editTileResolution,
-    heightComposition: { mode: 'planning_plus_manual' },
-    planningMetadata: null,
-    terrainScatterInstancesUpdatedAt: Date.now(),
-    generation: preset?.generation ? { ...preset.generation } : { mode: 'flat', noiseScale: 80, noiseAmplitude: 0 },
-  }
-
-  if (definition.generation) {
-    definition.generation.worldWidth = width
-    definition.generation.worldDepth = depth
-    applyGroundGeneration(definition as GroundRuntimeDynamicMesh, definition.generation)
-  }
-
-  const mesh = createGroundMesh(definition)
-  mesh.name = 'Ground'
-
-  const created = await sceneStore.addModelNode({
-    nodeId: GROUND_NODE_ID,
-    object: mesh,
-    nodeType: 'Mesh',
-    name: 'Ground',
-    position: new THREE.Vector3(0, 0, 0),
-    baseY: 0
-  })
-
-  if (created) {
-    sceneStore.updateGroundNodeDynamicMesh(created.id, definition)
-    sceneStore.setNodeSelectionLock(created.id, true)
-    sceneStore.selectNode(created.id)
-  }
-}
-
 function handleAddLight(type: string) {
   sceneStore.addLightNode(type as any)
 }
@@ -522,11 +337,7 @@ function handleAddLight(type: string) {
       <v-list-item title="Group" @click="handleAddGroup()" />
       <v-list-item title="Nominate" @click="handleCreateNominateNode()" />
       <v-list-item title="Multiuser" @click="handleCreateMultiuserNode()" :disabled="!canAddMultiuser" />
-      <v-list-item
-        title="Ground"
-        @click="handleAddGround()"
-        :disabled="!canAddGround"
-      />
+
       <v-menu  transition="none" location="end" offset="8">
         <template #activator="{ props: lightMenuProps }">
           <v-list-item title="Light" append-icon="mdi-chevron-right" v-bind="lightMenuProps" />
@@ -542,82 +353,7 @@ function handleAddLight(type: string) {
       </v-menu>
     </v-list>
   </v-menu>
-  <v-dialog v-model="groundDialogOpen" max-width="520">
-    <v-card title="Ground">
-      <v-card-text class="ground-dialog-body">
-        <div class="ground-dialog-section">
-          <div class="ground-dialog-label">选择地面预设</div>
-          <v-item-group v-model="selectedGroundPresetId" class="ground-preset-group">
-            <v-item
-              v-for="preset in groundPresets"
-              :key="preset.id"
-              :value="preset.id"
-              v-slot="{ isSelected, toggle }"
-            >
-              <v-card
-                flat
-                border
-                class="ground-preset-card"
-                :class="{ 'ground-preset-card--selected': isSelected }"
-                @click="toggle"
-              >
-                <div class="ground-preset-card__header">
-                  <span class="ground-preset-card__title">{{ preset.name }}</span>
-                  <v-icon
-                    v-if="isSelected"
-                    icon="mdi-check-circle"
-                    size="18"
-                    color="primary"
-                  />
-                </div>
-                <div class="ground-preset-card__meta">{{ preset.width }}m × {{ preset.depth }}m</div>
-                <div class="ground-preset-card__desc">{{ preset.description }}</div>
-              </v-card>
-            </v-item>
-          </v-item-group>
-        </div>
-        <v-alert
-          v-if="groundCreationWarning"
-          :type="groundCreationProfile.warningLevel === 'severe' ? 'warning' : 'info'"
-          variant="tonal"
-          density="compact"
-          class="ground-dialog-hint"
-        >
-          {{ groundCreationWarning }}
-          <span v-if="groundCreationUsesStreamingProfile">
-            推荐显示单元尺寸：{{ groundCreationProfile.cellSize }}m，局部编辑精度约 {{ groundCreationProfile.editCellSize.toFixed(2) }}m，预计瓦片数：{{ groundCreationProfile.estimatedTileCount }}。
-          </span>
-        </v-alert>
-        <v-divider class="ground-dialog-divider" />
-        <div class="ground-dialog-section">
-          <div class="ground-dialog-label">尺寸（米）</div>
-          <v-row dense>
-            <v-col cols="6">
-              <v-text-field
-                v-model.number="groundWidth"
-                label="宽度"
-                type="number"
-                min="10"
-              />
-            </v-col>
-            <v-col cols="6">
-              <v-text-field
-                v-model.number="groundDepth"
-                label="深度"
-                type="number"
-                min="10"
-              />
-            </v-col>
-          </v-row>
-        </div>
-      </v-card-text>
-      <v-card-actions>
-        <v-spacer />
-        <v-btn text="Cancel" @click="groundDialogOpen = false" />
-        <v-btn color="primary" text="Create" @click="handleConfirmGround" />
-      </v-card-actions>
-    </v-card>
-  </v-dialog>
+  
 </template>
 
 <style scoped>

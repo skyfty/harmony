@@ -1,4 +1,4 @@
-import {
+﻿import {
   type AssetType,
   LOD_COMPONENT_TYPE,
   cloneEnvironmentSettings,
@@ -735,64 +735,46 @@ function buildEnvironmentIssues(scene: AssetLookupScene): SceneAssetDiagnosticIs
   const issues: SceneAssetDiagnosticIssue[] = []
   const environment = cloneEnvironmentSettings(scene.environment as EnvironmentSettings | null | undefined)
   const background = environment.background
+
   if ((background.mode === 'hdri' || background.mode === 'fastHdri') && !background.hdriAssetId) {
     issues.push({
       severity: 'error',
       code: 'environment-misconfiguration',
-      message: '环境背景已设置为 HDRI / FastHDRI，但未配置 hdriAssetId。',
+      message: 'Environment background is HDRI/Fast HDRI but hdriAssetId is missing.',
       path: 'environment.background.hdriAssetId',
       category: 'environment',
       references: [],
     })
   }
+
   if (background.mode !== 'skycube') {
     return issues
   }
-  if (background.skycubeFormat === 'zip') {
-    if (!background.skycubeZipAssetId) {
-      issues.push({
-        severity: 'error',
-        code: 'environment-misconfiguration',
-        message: '环境背景已设置为 SkyCube(zip)，但未配置 skycubeZipAssetId。',
-        path: 'environment.background.skycubeZipAssetId',
-        category: 'environment',
-        references: [],
-      })
-    }
-    return issues
-  }
-  const faceEntries: Array<[keyof typeof background, string]> = [
-    ['positiveXAssetId', '+X'],
-    ['negativeXAssetId', '-X'],
-    ['positiveYAssetId', '+Y'],
-    ['negativeYAssetId', '-Y'],
-    ['positiveZAssetId', '+Z'],
-    ['negativeZAssetId', '-Z'],
-  ]
-  faceEntries.forEach(([key, label]) => {
-    if (background[key]) {
-      return
-    }
+
+  if (!background.skycubeZipAssetId) {
     issues.push({
       severity: 'error',
       code: 'environment-misconfiguration',
-      message: `环境背景已设置为 SkyCube(faces)，但缺少 ${label} 面资源。`,
-      path: `environment.background.${key}`,
+      message: 'Environment background is SkyCube but skycubeZipAssetId is missing.',
+      path: 'environment.background.skycubeZipAssetId',
       category: 'environment',
       references: [],
     })
-  })
+  }
+
   return issues
 }
 
 function buildStructuralIssues(scene: AssetLookupScene): SceneAssetDiagnosticIssue[] {
   const issues = buildEnvironmentIssues(scene)
   const stack: SceneNode[] = [...scene.nodes]
+
   while (stack.length) {
     const node = stack.pop()
     if (!node) {
       continue
     }
+
     const lodState = node.components?.[LOD_COMPONENT_TYPE] as SceneNodeComponentState<LodComponentProps> | undefined
     if (Array.isArray(lodState?.props?.levels)) {
       lodState.props.levels.forEach((level, index) => {
@@ -800,7 +782,7 @@ function buildStructuralIssues(scene: AssetLookupScene): SceneAssetDiagnosticIss
           issues.push({
             severity: 'error',
             code: 'lod-misconfiguration',
-            message: 'LOD billboard 层缺少 billboardAssetId。',
+            message: 'LOD billboard layer is missing billboardAssetId.',
             path: `nodes.${node.id}.components.${LOD_COMPONENT_TYPE}.props.levels[${index}].billboardAssetId`,
             category: 'component',
             references: [],
@@ -808,6 +790,7 @@ function buildStructuralIssues(scene: AssetLookupScene): SceneAssetDiagnosticIss
         }
       })
     }
+
     const scatterLayers = (node.dynamicMesh as { terrainScatter?: { layers?: Array<Record<string, unknown>> } } | null | undefined)
       ?.terrainScatter?.layers
     if (Array.isArray(scatterLayers)) {
@@ -820,17 +803,19 @@ function buildStructuralIssues(scene: AssetLookupScene): SceneAssetDiagnosticIss
         issues.push({
           severity: 'error',
           code: 'terrain-scatter-misconfiguration',
-          message: 'Terrain scatter layer 未配置 assetId 或 profileId。',
+          message: 'Terrain scatter layer is missing assetId or profileId.',
           path: `nodes.${node.id}.dynamicMesh.terrainScatter.layers[${index}]`,
           category: 'terrain-scatter',
           references: [],
         })
       })
     }
+
     if (Array.isArray(node.children)) {
       stack.push(...node.children)
     }
   }
+
   return issues
 }
 
@@ -867,30 +852,36 @@ export function validateSceneAssetReferences(
     if (shouldExcludeAssetFromRuntimeExport(catalogAsset)) {
       return
     }
+
     const entry = resolveEffectiveRegistryEntry(scene, assetRegistry, assetId)
     if (!entry) {
       const issueAssetId = canonicalAssetId ?? assetId
-      issues.push(createIssue(
-        'error',
-        catalogAsset ? 'missing-registry-entry' : 'missing-catalog-entry',
-        catalogAsset
-          ? `资产 ${issueAssetId} 被场景引用，但导出 registry 中没有对应条目。`
-          : `资产 ${issueAssetId} 被场景引用，但既不在资产目录中，也没有可用的导出 registry 条目。`,
-        issueAssetId,
-        assetReferences,
-      ))
+      issues.push(
+        createIssue(
+          'error',
+          catalogAsset ? 'missing-registry-entry' : 'missing-catalog-entry',
+          catalogAsset
+            ? `Asset ${issueAssetId} is referenced by the scene, but no matching registry entry exists.`
+            : `Asset ${issueAssetId} is referenced by the scene, but it is not in the asset catalog and no export registry entry exists.`,
+          issueAssetId,
+          assetReferences,
+        ),
+      )
       return
     }
+
     if (!isValidRegistryEntry(entry)) {
       const issueAssetId = canonicalAssetId ?? assetId
-      issues.push(createIssue(
-        'error',
-        'invalid-registry-entry',
-        `资产 ${issueAssetId} 的导出 registry 条目不完整，运行时无法解析资源地址。`,
-        issueAssetId,
-        assetReferences,
-        `sourceType=${entry.sourceType}`,
-      ))
+      issues.push(
+        createIssue(
+          'error',
+          'invalid-registry-entry',
+          `Asset ${issueAssetId} has an invalid export registry entry and cannot be resolved at runtime.`,
+          issueAssetId,
+          assetReferences,
+          `sourceType=${entry.sourceType}`,
+        ),
+      )
     }
   })
 
@@ -927,17 +918,21 @@ export function buildSceneAssetDiagnosticsSummary(
 
 export function formatSceneAssetDiagnosticsReport(report: SceneAssetValidationReport): string {
   if (!report.issues.length) {
-    return '未发现资产有效性问题。'
+    return 'No asset validation issues found.'
   }
+
   const lines = report.issues.slice(0, 8).map((issue, index) => {
-    const locations = issue.references.slice(0, 2).map((reference) => reference.path).join('；')
+    const locations = issue.references.slice(0, 2).map((reference) => reference.path).join(', ')
     const suffix = locations ? ` -> ${locations}` : ''
     const assetText = issue.assetId ? ` [${issue.assetId}]` : ''
     return `${index + 1}. ${issue.message}${assetText}${suffix}`
   })
+
   const remaining = report.issues.length - lines.length
   if (remaining > 0) {
-    lines.push(`另有 ${remaining} 条问题，请查看控制台中的 scene asset diagnostics 日志。`)
+    lines.push(`And ${remaining} more issue(s) exist in the scene asset diagnostics log.`)
   }
+
   return lines.join('\n')
 }
+

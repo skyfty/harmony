@@ -1095,7 +1095,7 @@ let backgroundTexture: THREE.Texture | null = null
 let backgroundAssetId: string | null = null
 let backgroundAssetKey: string | null = null
 let skyCubeTexture: THREE.CubeTexture | null = null
-let skyCubeSourceFormat: 'faces' | 'zip' = 'faces'
+let skyCubeSourceFormat: 'zip' = 'zip'
 let skyCubeFaceAssetIds: Array<string | null> = [null, null, null, null, null, null]
 let skyCubeFaceKeys: Array<string | null> = [null, null, null, null, null, null]
 let gradientBackgroundDome: GradientBackgroundDome | null = null
@@ -12611,45 +12611,13 @@ const environmentSignature = computed(() => {
   const settings = environmentSettings.value
   const background = settings.background
 
-  const hasAnySkycubeFaceAsset =
-    background.mode === 'skycube' &&
-    [
-      background.positiveXAssetId,
-      background.negativeXAssetId,
-      background.positiveYAssetId,
-      background.negativeYAssetId,
-      background.positiveZAssetId,
-      background.negativeZAssetId,
-    ].some((assetId) => typeof assetId === 'string' && assetId.trim().length > 0)
-
-  const skycubeFormat =
-    background.mode === 'skycube'
-      ? background.skycubeFormat === 'zip' || background.skycubeFormat === 'faces'
-        ? background.skycubeFormat
-        : hasAnySkycubeFaceAsset
-          ? 'faces'
-          : 'zip'
-      : 'zip'
-
   const hdriBackgroundKey =
     (background.mode === 'hdri' || background.mode === 'fastHdri') && background.hdriAssetId
       ? computeEnvironmentAssetReloadKey(background.hdriAssetId)
       : null
 
-  const skyCubeKeys =
-    background.mode === 'skycube' && skycubeFormat !== 'zip'
-      ? [
-          computeEnvironmentAssetReloadKey(background.positiveXAssetId ?? null),
-          computeEnvironmentAssetReloadKey(background.negativeXAssetId ?? null),
-          computeEnvironmentAssetReloadKey(background.positiveYAssetId ?? null),
-          computeEnvironmentAssetReloadKey(background.negativeYAssetId ?? null),
-          computeEnvironmentAssetReloadKey(background.positiveZAssetId ?? null),
-          computeEnvironmentAssetReloadKey(background.negativeZAssetId ?? null),
-        ]
-      : null
-
   const skycubeZipKey =
-    background.mode === 'skycube' && skycubeFormat === 'zip' && background.skycubeZipAssetId
+    background.mode === 'skycube' && background.skycubeZipAssetId
       ? computeEnvironmentAssetReloadKey(background.skycubeZipAssetId)
       : null
 
@@ -12662,16 +12630,16 @@ const environmentSignature = computed(() => {
       gradientExponent: background.mode === 'solidColor' ? (background.gradientExponent ?? null) : null,
       hdriAssetId: background.hdriAssetId ?? null,
       hdriKey: hdriBackgroundKey,
-      skycubeFormat: background.mode === 'skycube' ? skycubeFormat : null,
+      skycubeFormat: background.mode === 'skycube' ? 'zip' : null,
       skycubeZipAssetId: background.mode === 'skycube' ? (background.skycubeZipAssetId ?? null) : null,
       skycubeZipKey,
-      positiveXAssetId: background.mode === 'skycube' ? (background.positiveXAssetId ?? null) : null,
-      negativeXAssetId: background.mode === 'skycube' ? (background.negativeXAssetId ?? null) : null,
-      positiveYAssetId: background.mode === 'skycube' ? (background.positiveYAssetId ?? null) : null,
-      negativeYAssetId: background.mode === 'skycube' ? (background.negativeYAssetId ?? null) : null,
-      positiveZAssetId: background.mode === 'skycube' ? (background.positiveZAssetId ?? null) : null,
-      negativeZAssetId: background.mode === 'skycube' ? (background.negativeZAssetId ?? null) : null,
-      skycubeKeys: skyCubeKeys,
+      positiveXAssetId: null,
+      negativeXAssetId: null,
+      positiveYAssetId: null,
+      negativeYAssetId: null,
+      positiveZAssetId: null,
+      negativeZAssetId: null,
+      skycubeKeys: null,
     },
     orientation: {
       preset: settings.environmentOrientationPreset ?? 'yUp',
@@ -13987,7 +13955,7 @@ function disposeSkyCubeBackgroundResources() {
   skyCubeZipFaceUrlCleanup = null
   disposeSkyCubeTexture(skyCubeTexture)
   skyCubeTexture = null
-  skyCubeSourceFormat = 'faces'
+  skyCubeSourceFormat = 'zip'
   skyCubeFaceAssetIds = [null, null, null, null, null, null]
   skyCubeFaceKeys = [null, null, null, null, null, null]
   skyCubeZipAssetId = null
@@ -14068,13 +14036,7 @@ async function applyBackgroundSettings(background: EnvironmentSettings['backgrou
       background.positiveZAssetId ?? null,
       background.negativeZAssetId ?? null,
     ]
-    const hasAnyFace = faceAssetIds.some((id) => typeof id === 'string' && id.trim().length > 0)
-    const skycubeFormat =
-      background.skycubeFormat === 'zip' || background.skycubeFormat === 'faces'
-        ? background.skycubeFormat
-        : hasAnyFace
-          ? 'faces'
-          : 'zip'
+    const skycubeFormat = 'zip'
 
     if (skycubeFormat === 'zip') {
       const zipAssetId = background.skycubeZipAssetId ?? null
@@ -14155,15 +14117,7 @@ async function applyBackgroundSettings(background: EnvironmentSettings['backgrou
       return true
     }
 
-    const faceTags = ['px', 'nx', 'py', 'ny', 'pz', 'nz'] as const
-
     const faceKeys: Array<string | null> = faceAssetIds.map((assetId) => computeEnvironmentAssetReloadKey(assetId))
-
-    if (!hasAnyFace) {
-      disposeBackgroundResources()
-      scene.background = new THREE.Color(background.solidColor)
-      return true
-    }
 
     const sameAsPrevious =
       skyCubeTexture &&
@@ -14184,12 +14138,6 @@ async function applyBackgroundSettings(background: EnvironmentSettings['backgrou
       }),
     )
 
-    for (let i = 0; i < faceUrls.length; i += 1) {
-      if (faceAssetIds[i] && !faceUrls[i]) {
-        console.warn('[SceneViewport] SkyCube face URL unavailable', faceTags[i], faceAssetIds[i])
-      }
-    }
-
     const loaded = await loadSkyCubeTexture(faceUrls)
     if (!loaded.texture || token !== backgroundLoadToken) {
       disposeSkyCubeTexture(loaded.texture)
@@ -14205,7 +14153,7 @@ async function applyBackgroundSettings(background: EnvironmentSettings['backgrou
 
     disposeBackgroundResources()
     skyCubeTexture = loaded.texture
-    skyCubeSourceFormat = 'faces'
+    skyCubeSourceFormat = 'zip'
     skyCubeFaceAssetIds = faceAssetIds
     skyCubeFaceKeys = faceKeys
     skyCubeZipAssetId = null
@@ -23218,7 +23166,6 @@ watch(cameraStateSignature, () => {
 watch(
   () => [panelVisibility.value.hierarchy, panelPlacement.value.hierarchy],
   () => {
-    scheduleToolbarUpdate()
     scheduleViewportCompositionUpdate(true)
   }
 )

@@ -701,6 +701,14 @@ const canUpdatePrefab = computed(() => {
   return isNormalNodeType(node) && node.canPrefab !== false && resolvePrefabAssetId(node) !== null
 })
 
+const canDelete = computed(() => {
+  const node = activeSceneNode.value
+  if (!node ) {
+    return false
+  }
+  return isNormalNodeType(node)
+})
+
 
 watch(allNodeIds, (ids: string[]) => {
   if (selectionAnchorId.value && !ids.includes(selectionAnchorId.value)) {
@@ -1992,7 +2000,7 @@ function handleAssetReferenceResultClick(result: AssetReferenceSearchResult) {
           variant="text"
           density="compact"
           color="error"
-          :disabled="!hasSelection "
+          :disabled="!canDelete"
           @click="handleDeleteSelected"
         />
         <v-btn

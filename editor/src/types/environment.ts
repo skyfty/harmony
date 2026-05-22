@@ -5,7 +5,7 @@ export type EnvironmentPhysicsEngine = 'auto' | 'ammo' | 'cannon'
 
 export type EnvironmentOrientationPreset = 'yUp' | 'zUp' | 'xUp' | 'custom'
 
-export type SkyCubeBackgroundFormat = 'faces' | 'zip'
+export type SkyCubeBackgroundFormat = 'zip'
 
 export interface EnvironmentRotationDegrees {
   x: number

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import type {
   EnvironmentBackgroundMode,
@@ -8,9 +8,13 @@ import type {
   EnvironmentOrientationPreset,
   EnvironmentPhysicsEngine,
   EnvironmentRotationDegrees,
-  SkyCubeBackgroundFormat,
 } from '@/types/environment'
-import { getLastExtensionFromFilenameOrUrl, isHdriLikeExtension, isImageLikeExtension } from '@schema/core'
+import {
+  getLastExtensionFromFilenameOrUrl,
+  isHdriLikeExtension,
+  isImageLikeExtension,
+  isSkyCubeArchiveExtension,
+} from '@schema/core'
 import type { ProjectAsset } from '@/types/project-asset'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
@@ -24,11 +28,11 @@ const { environmentSettings: storeEnvironmentSettings, shadowsEnabled } = storeT
 
 const environmentSettings = computed(() => storeEnvironmentSettings.value)
 
-const backgroundModeOptions: Array<{ title: string; value: EnvironmentBackgroundMode }> = [
+type BackgroundUiMode = 'solidColor' | 'sky'
+
+const backgroundModeOptions: Array<{ title: string; value: BackgroundUiMode }> = [
   { title: 'Solid Color', value: 'solidColor' },
-  { title: 'HDRI', value: 'hdri' },
-  { title: 'Fast HDRI', value: 'fastHdri' },
-  { title: 'SkyCube', value: 'skycube' },
+  { title: 'Sky', value: 'sky' },
 ]
 
 const orientationPresetOptions: Array<{ title: string; value: EnvironmentOrientationPreset }> = [
@@ -55,40 +59,34 @@ const DEFAULT_GRADIENT_EXPONENT = 0.6
 const assetDialogVisible = ref(false)
 const assetDialogSelectedId = ref('')
 const assetDialogAnchor = ref<{ x: number; y: number } | null>(null)
-type SkyCubeFaceKey = 'positiveXAssetId' | 'negativeXAssetId' | 'positiveYAssetId' | 'negativeYAssetId' | 'positiveZAssetId' | 'negativeZAssetId'
-type AssetDialogTarget = 'background' | 'skycubeZip' | SkyCubeFaceKey
+type AssetDialogTarget = 'background'
 const assetDialogTarget = ref<AssetDialogTarget | null>(null)
 
 const HDRI_ASSET_TYPE = 'hdri' as const
 const BACKGROUND_ASSET_TYPE = 'image,texture,hdri,file' as const
-const BACKGROUND_ASSET_EXTENSIONS = ['hdr', 'hdri', 'rgbe', 'exr', 'ktx2', 'png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'tif', 'tiff', 'avif', 'heic', 'heif', 'ico', 'svg'] as const
-const SKYCUBE_ASSET_TYPE = 'image,texture,file' as const
-
-const skyCubeFormatOptions: Array<{ title: string; value: SkyCubeBackgroundFormat }> = [
-  { title: 'Sky Cube(.zip)', value: 'zip' },
-  { title: 'Six Images', value: 'faces' },
-]
-
-const skyCubeFaceDescriptors: Array<{ key: SkyCubeFaceKey; label: string; description: string }> = [
-  { key: 'positiveXAssetId', label: 'px', description: 'Right' },
-  { key: 'negativeXAssetId', label: 'nx', description: 'Left' },
-  { key: 'positiveYAssetId', label: 'py', description: 'Top' },
-  { key: 'negativeYAssetId', label: 'ny', description: 'Bottom' },
-  { key: 'positiveZAssetId', label: 'pz', description: 'Front' },
-  { key: 'negativeZAssetId', label: 'nz', description: 'Back' },
-]
-
-const skyCubeFaceDropState = reactive<Record<SkyCubeFaceKey, boolean>>({
-  positiveXAssetId: false,
-  negativeXAssetId: false,
-  positiveYAssetId: false,
-  negativeYAssetId: false,
-  positiveZAssetId: false,
-  negativeZAssetId: false,
-})
+const BACKGROUND_ASSET_EXTENSIONS = [
+  'hdr',
+  'hdri',
+  'rgbe',
+  'exr',
+  'ktx2',
+  'skycube',
+  'png',
+  'jpg',
+  'jpeg',
+  'webp',
+  'gif',
+  'bmp',
+  'tif',
+  'tiff',
+  'avif',
+  'heic',
+  'heif',
+  'ico',
+  'svg',
+] as const
 
 const isBackgroundDropActive = ref(false)
-const isSkyCubeZipDropActive = ref(false)
 
 const isExponentialFog = computed(() => environmentSettings.value.fogMode === 'exp')
 const isLinearFog = computed(() => environmentSettings.value.fogMode === 'linear')
@@ -101,6 +99,9 @@ const showOrientationControls = computed(() => {
   const bgMode = environmentSettings.value.background.mode
   return bgMode === 'hdri' || bgMode === 'fastHdri' || bgMode === 'skycube'
 })
+const backgroundUiMode = computed<BackgroundUiMode>(() => (
+  environmentSettings.value.background.mode === 'solidColor' ? 'solidColor' : 'sky'
+))
 
 const fogModeOptions: Array<{ title: string; value: EnvironmentFogMode }> = [
   { title: 'No Fog', value: 'none' },
@@ -197,7 +198,11 @@ watch(
 )
 
 const backgroundAsset = computed(() => {
-  const assetId = environmentSettings.value.background.hdriAssetId
+  const background = environmentSettings.value.background
+  const assetId =
+    background.mode === 'skycube'
+      ? background.skycubeZipAssetId
+      : background.hdriAssetId
   if (!assetId) {
     return null
   }
@@ -207,7 +212,7 @@ const backgroundAsset = computed(() => {
 const backgroundAssetLabel = computed(() => {
   const asset = backgroundAsset.value
   if (!asset) {
-    return 'Drag HDRI / Fast HDRI asset here'
+    return 'Drag Sky asset here'
   }
   return asset.name?.trim().length ? asset.name : asset.id
 })
@@ -215,47 +220,33 @@ const backgroundAssetLabel = computed(() => {
 const backgroundAssetHint = computed(() => {
   const asset = backgroundAsset.value
   if (!asset) {
-    return 'Supports HDR (.hdr, .exr), KTX2 (.ktx2), or image textures'
+    return 'Supports HDR (.hdr, .exr), KTX2 (.ktx2), image textures, or .skycube archives'
   }
-  return asset.id
+  const extension = inferAssetExtension(asset)
+  if (isSkyCubeArchiveExtension(extension)) {
+    return '.skycube archive'
+  }
+  if (extension === 'ktx2') {
+    return 'Fast HDRI (.ktx2)'
+  }
+  return `HDRI / texture (${extension ? `.${extension}` : 'selected asset'})`
 })
 
 const backgroundPreviewStyle = computed(() => resolveAssetPreviewStyle(backgroundAsset.value))
 
 const assetDialogTitle = computed(() => {
-  if (assetDialogTarget.value === 'background') {
-    return 'Select Background HDRI / Fast HDRI'
-  }
-  if (assetDialogTarget.value === 'skycubeZip') {
-    return 'Select SkyCube'
-  }
-  if (assetDialogTarget.value) {
-    const descriptor = skyCubeFaceDescriptors.find((entry) => entry.key === assetDialogTarget.value)
-    if (descriptor) {
-      return `Select SkyCube ${descriptor.label} Face (${descriptor.description})`
-    }
-  }
-  return 'Select Asset'
+  return assetDialogTarget.value === 'background' ? 'Select Sky Asset' : 'Select Asset'
 })
 
 const assetDialogAssetType = computed(() => {
   if (!assetDialogTarget.value) {
     return HDRI_ASSET_TYPE
   }
-  if (assetDialogTarget.value === 'background') {
-    return BACKGROUND_ASSET_TYPE
-  }
-  return SKYCUBE_ASSET_TYPE
+  return BACKGROUND_ASSET_TYPE
 })
 
 const assetDialogExtensions = computed(() => {
-  if (assetDialogTarget.value === 'background') {
-    return [...BACKGROUND_ASSET_EXTENSIONS]
-  }
-  if (assetDialogTarget.value === 'skycubeZip') {
-    return ['skycube']
-  }
-  return undefined
+  return assetDialogTarget.value === 'background' ? [...BACKGROUND_ASSET_EXTENSIONS] : undefined
 })
 
 watch(assetDialogVisible, (open) => {
@@ -284,19 +275,31 @@ function normalizeHexColor(value: unknown, fallback: string): string {
   return `#${hexValue.toLowerCase()}`
 }
 
-function updateBackgroundMode(mode: EnvironmentBackgroundMode | null) {
+function updateBackgroundMode(mode: BackgroundUiMode | null) {
   if (!mode || mode === environmentSettings.value.background.mode) {
     return
   }
-  // Preserve previously chosen HDRI when toggling modes; don't clear hdriAssetId here
+  if (mode === 'solidColor') {
+    patchEnvironmentBackground({
+      mode: 'solidColor',
+      solidColor: environmentSettings.value.background.solidColor,
+      gradientTopColor: environmentSettings.value.background.gradientTopColor ?? null,
+      gradientOffset: environmentSettings.value.background.gradientOffset ?? DEFAULT_GRADIENT_OFFSET,
+      gradientExponent: environmentSettings.value.background.gradientExponent ?? DEFAULT_GRADIENT_EXPONENT,
+    })
+    return
+  }
+
+  const background = environmentSettings.value.background
+  const nextMode = background.mode === 'skycube' ? 'skycube' : background.mode === 'fastHdri' ? 'fastHdri' : 'hdri'
   patchEnvironmentBackground({
-    mode,
-    solidColor: environmentSettings.value.background.solidColor,
-    gradientTopColor: environmentSettings.value.background.gradientTopColor ?? null,
-    gradientOffset: environmentSettings.value.background.gradientOffset ?? DEFAULT_GRADIENT_OFFSET,
-    gradientExponent: environmentSettings.value.background.gradientExponent ?? DEFAULT_GRADIENT_EXPONENT,
-    hdriAssetId: environmentSettings.value.background.hdriAssetId,
-    skycubeFormat: mode === 'skycube' ? 'zip' : environmentSettings.value.background.skycubeFormat,
+    mode: nextMode,
+    solidColor: background.solidColor,
+    gradientTopColor: background.gradientTopColor ?? null,
+    gradientOffset: background.gradientOffset ?? DEFAULT_GRADIENT_OFFSET,
+    gradientExponent: background.gradientExponent ?? DEFAULT_GRADIENT_EXPONENT,
+    hdriAssetId: background.hdriAssetId,
+    skycubeZipAssetId: background.skycubeZipAssetId,
   })
 }
 
@@ -468,16 +471,24 @@ function handleGradientExponentInput(value: unknown) {
 }
 
 function clearBackgroundAsset() {
-  if (environmentSettings.value.background.mode !== 'hdri' && environmentSettings.value.background.mode !== 'fastHdri') {
+  const background = environmentSettings.value.background
+  if (background.mode === 'solidColor') {
     return
   }
+  const nextBackground: Record<string, unknown> = {
+    mode: background.mode,
+    solidColor: background.solidColor,
+    gradientTopColor: background.gradientTopColor ?? null,
+    gradientOffset: background.gradientOffset ?? DEFAULT_GRADIENT_OFFSET,
+    gradientExponent: background.gradientExponent ?? DEFAULT_GRADIENT_EXPONENT,
+  }
+  if (background.mode === 'skycube') {
+    nextBackground.skycubeZipAssetId = null
+  } else {
+    nextBackground.hdriAssetId = null
+  }
   patchEnvironmentBackground({
-    mode: 'solidColor',
-    solidColor: environmentSettings.value.background.solidColor,
-    gradientTopColor: environmentSettings.value.background.gradientTopColor ?? null,
-    gradientOffset: environmentSettings.value.background.gradientOffset ?? DEFAULT_GRADIENT_OFFSET,
-    gradientExponent: environmentSettings.value.background.gradientExponent ?? DEFAULT_GRADIENT_EXPONENT,
-    hdriAssetId: null,
+    ...nextBackground,
   })
 }
 
@@ -821,172 +832,14 @@ function isEnvironmentAsset(asset: ProjectAsset | null): asset is ProjectAsset {
   }
   if (asset.type === 'file') {
     const extension = inferAssetExtension(asset)
-    return isHdrExtension(extension) || isImageExtension(extension)
+    return isHdrExtension(extension) || isImageExtension(extension) || isSkyCubeArchiveExtension(extension)
   }
   return false
-}
-
-function isSkyCubeFaceAsset(asset: ProjectAsset | null): asset is ProjectAsset {
-  if (!asset) {
-    return false
-  }
-  if (asset.type === 'image' || asset.type === 'texture') {
-    return true
-  }
-  if (asset.type === 'file') {
-    return isImageExtension(inferAssetExtension(asset))
-  }
-  return false
-}
-
-function isSkyCubeZipAsset(asset: ProjectAsset | null): asset is ProjectAsset {
-  if (!asset) {
-    return false
-  }
-  if (asset.type !== 'file') {
-    return false
-  }
-  return (asset.extension ?? '').toLowerCase() === 'skycube'
 }
 
 function patchEnvironmentBackground(background: Record<string, unknown>): void {
   sceneStore.patchEnvironmentSettings({ background: background as any })
 }
-
-const skyCubeFormat = computed<SkyCubeBackgroundFormat>(() => environmentSettings.value.background.skycubeFormat ?? 'zip')
-
-const skyCubeZipAsset = computed(() => {
-  const assetId = environmentSettings.value.background.skycubeZipAssetId
-  if (!assetId) {
-    return null
-  }
-  return sceneStore.getAsset(assetId) ?? null
-})
-
-const skyCubeZipAssetLabel = computed(() => {
-  const asset = skyCubeZipAsset.value
-  if (!asset) {
-    return 'Drag .skycube asset here'
-  }
-  return asset.name?.trim().length ? asset.name : asset.id
-})
-
-const skyCubeZipAssetHint = computed(() => {
-  const asset = skyCubeZipAsset.value
-  if (!asset) {
-    return 'Zip containing px/nx/py/ny/pz/nz face images'
-  }
-  return asset.id
-})
-
-function updateSkyCubeFormat(format: SkyCubeBackgroundFormat | null) {
-  if (!format) {
-    return
-  }
-  if (environmentSettings.value.background.mode !== 'skycube') {
-    return
-  }
-  if (format === environmentSettings.value.background.skycubeFormat) {
-    return
-  }
-  patchEnvironmentBackground({
-    mode: 'skycube',
-    skycubeFormat: format,
-    // Keep other fields intact; clearing is handled by user actions.
-  })
-}
-
-function openSkyCubeZipDialog(event?: MouseEvent) {
-  if (event) {
-    assetDialogAnchor.value = { x: event.clientX, y: event.clientY }
-  } else {
-    assetDialogAnchor.value = null
-  }
-  assetDialogTarget.value = 'skycubeZip'
-  assetDialogSelectedId.value = environmentSettings.value.background.skycubeZipAssetId ?? ''
-  assetDialogVisible.value = true
-}
-
-function clearSkyCubeZipAsset() {
-  if (environmentSettings.value.background.mode !== 'skycube') {
-    return
-  }
-  if (!environmentSettings.value.background.skycubeZipAssetId) {
-    return
-  }
-  patchEnvironmentBackground({
-    skycubeZipAssetId: null,
-  })
-}
-
-function handleSkyCubeZipDragEnter(event: DragEvent) {
-  const asset = resolveDraggedAsset(event)
-  if (!isSkyCubeZipAsset(asset)) {
-    return
-  }
-  event.preventDefault()
-  if (event.dataTransfer) {
-    event.dataTransfer.dropEffect = 'copy'
-  }
-  isSkyCubeZipDropActive.value = true
-}
-
-function handleSkyCubeZipDragOver(event: DragEvent) {
-  const asset = resolveDraggedAsset(event)
-  if (!isSkyCubeZipAsset(asset)) {
-    if (isSkyCubeZipDropActive.value) {
-      isSkyCubeZipDropActive.value = false
-    }
-    return
-  }
-  event.preventDefault()
-  if (event.dataTransfer) {
-    event.dataTransfer.dropEffect = 'copy'
-  }
-  isSkyCubeZipDropActive.value = true
-}
-
-function handleSkyCubeZipDragLeave(event: DragEvent) {
-  if (!isSkyCubeZipDropActive.value) {
-    return
-  }
-  const target = event.currentTarget as HTMLElement | null
-  const related = event.relatedTarget as Node | null
-  if (target && related && target.contains(related)) {
-    return
-  }
-  isSkyCubeZipDropActive.value = false
-}
-
-function handleSkyCubeZipDrop(event: DragEvent) {
-  const asset = resolveDraggedAsset(event)
-  isSkyCubeZipDropActive.value = false
-  if (!isSkyCubeZipAsset(asset)) {
-    return
-  }
-  event.preventDefault()
-  event.stopPropagation()
-  patchEnvironmentBackground({
-    mode: 'skycube',
-    skycubeFormat: 'zip',
-    skycubeZipAssetId: asset.id,
-  })
-}
-
-const skyCubeFaceEntries = computed(() => {
-  const background = environmentSettings.value.background
-  return skyCubeFaceDescriptors.map((descriptor) => {
-    const assetId = background[descriptor.key]
-    const asset = assetId ? sceneStore.getAsset(assetId) ?? null : null
-    return {
-      ...descriptor,
-      assetId: assetId ?? null,
-      asset,
-      previewStyle: resolveAssetPreviewStyle(asset),
-      hasValue: Boolean(assetId && String(assetId).trim().length),
-    }
-  })
-})
 
 function handleBackgroundDragEnter(event: DragEvent) {
   const asset = resolveDraggedAsset(event)
@@ -1027,11 +880,27 @@ function handleBackgroundDragLeave(event: DragEvent) {
   isBackgroundDropActive.value = false
 }
 
-function applyEnvironmentAsset(target: 'background' | 'environment', asset: ProjectAsset) {
-  if (target !== 'background') {
+function applySkyAsset(asset: ProjectAsset) {
+  const extension = inferAssetExtension(asset)
+  if (isSkyCubeArchiveExtension(extension)) {
+    patchEnvironmentBackground({
+      mode: 'skycube',
+      solidColor: environmentSettings.value.background.solidColor,
+      gradientTopColor: environmentSettings.value.background.gradientTopColor ?? null,
+      gradientOffset: environmentSettings.value.background.gradientOffset ?? DEFAULT_GRADIENT_OFFSET,
+      gradientExponent: environmentSettings.value.background.gradientExponent ?? DEFAULT_GRADIENT_EXPONENT,
+      hdriAssetId: null,
+      skycubeZipAssetId: asset.id,
+      positiveXAssetId: null,
+      negativeXAssetId: null,
+      positiveYAssetId: null,
+      negativeYAssetId: null,
+      positiveZAssetId: null,
+      negativeZAssetId: null,
+    })
     return
   }
-  const extension = inferAssetExtension(asset)
+
   const mode: EnvironmentBackgroundMode = extension === 'ktx2' ? 'fastHdri' : 'hdri'
   patchEnvironmentBackground({
     mode,
@@ -1040,7 +909,21 @@ function applyEnvironmentAsset(target: 'background' | 'environment', asset: Proj
     gradientOffset: environmentSettings.value.background.gradientOffset ?? DEFAULT_GRADIENT_OFFSET,
     gradientExponent: environmentSettings.value.background.gradientExponent ?? DEFAULT_GRADIENT_EXPONENT,
     hdriAssetId: asset.id,
+    skycubeZipAssetId: null,
+    positiveXAssetId: null,
+    negativeXAssetId: null,
+    positiveYAssetId: null,
+    negativeYAssetId: null,
+    positiveZAssetId: null,
+    negativeZAssetId: null,
   })
+}
+
+function applyEnvironmentAsset(target: 'background' | 'environment', asset: ProjectAsset) {
+  if (target !== 'background') {
+    return
+  }
+  applySkyAsset(asset)
 }
 
 function openAssetDialog(target: 'background', event?: MouseEvent) {
@@ -1050,79 +933,19 @@ function openAssetDialog(target: 'background', event?: MouseEvent) {
     assetDialogAnchor.value = null
   }
   assetDialogTarget.value = target
-  assetDialogSelectedId.value = environmentSettings.value.background.hdriAssetId ?? ''
+  assetDialogSelectedId.value =
+    environmentSettings.value.background.mode === 'skycube'
+      ? (environmentSettings.value.background.skycubeZipAssetId ?? '')
+      : (environmentSettings.value.background.hdriAssetId ?? '')
   assetDialogVisible.value = true
-}
-
-function openSkyCubeFaceDialog(face: SkyCubeFaceKey, event?: MouseEvent) {
-  if (event) {
-    assetDialogAnchor.value = { x: event.clientX, y: event.clientY }
-  } else {
-    assetDialogAnchor.value = null
-  }
-  assetDialogTarget.value = face
-  assetDialogSelectedId.value = environmentSettings.value.background[face] ?? ''
-  assetDialogVisible.value = true
-}
-
-function clearSkyCubeFace(face: SkyCubeFaceKey) {
-  if (environmentSettings.value.background.mode !== 'skycube') {
-    return
-  }
-  if (!environmentSettings.value.background[face]) {
-    return
-  }
-  patchEnvironmentBackground({
-    [face]: null,
-  })
 }
 
 function handleAssetDialogUpdate(asset: ProjectAsset | null) {
   if (!assetDialogTarget.value) {
     return
   }
-  if (assetDialogTarget.value === 'skycubeZip') {
-    if (!asset) {
-      patchEnvironmentBackground({ skycubeZipAssetId: null })
-      assetDialogVisible.value = false
-      return
-    }
-    if (!isSkyCubeZipAsset(asset)) {
-      console.warn('Selected asset is not a supported .skycube zip')
-      return
-    }
-    patchEnvironmentBackground({
-      mode: 'skycube',
-      skycubeFormat: 'zip',
-      skycubeZipAssetId: asset.id,
-    })
-    assetDialogVisible.value = false
-    return
-  }
-  if (assetDialogTarget.value !== 'background') {
-    const faceKey = assetDialogTarget.value
-    if (!asset) {
-      patchEnvironmentBackground({ [faceKey]: null })
-      assetDialogVisible.value = false
-      return
-    }
-    if (!isSkyCubeFaceAsset(asset)) {
-      console.warn('Selected asset is not a supported SkyCube face texture')
-      return
-    }
-    patchEnvironmentBackground({
-      mode: 'skycube',
-      [faceKey]: asset.id,
-    })
-    assetDialogVisible.value = false
-    return
-  }
   if (!asset) {
-    patchEnvironmentBackground({
-      mode: environmentSettings.value.background.mode,
-      solidColor: environmentSettings.value.background.solidColor,
-      hdriAssetId: '',
-    })
+    clearBackgroundAsset()
     assetDialogVisible.value = false
     return
   }
@@ -1130,63 +953,8 @@ function handleAssetDialogUpdate(asset: ProjectAsset | null) {
     console.warn('Selected asset is not a supported environment asset')
     return
   }
-  if (assetDialogTarget.value === 'background') {
-    applyEnvironmentAsset('background', asset)
-  }
+  applyEnvironmentAsset('background', asset)
   assetDialogVisible.value = false
-}
-
-function handleSkyCubeFaceDragEnter(face: SkyCubeFaceKey, event: DragEvent) {
-  const asset = resolveDraggedAsset(event)
-  if (!isSkyCubeFaceAsset(asset)) {
-    return
-  }
-  event.preventDefault()
-  if (event.dataTransfer) {
-    event.dataTransfer.dropEffect = 'copy'
-  }
-  skyCubeFaceDropState[face] = true
-}
-
-function handleSkyCubeFaceDragOver(face: SkyCubeFaceKey, event: DragEvent) {
-  const asset = resolveDraggedAsset(event)
-  if (!isSkyCubeFaceAsset(asset)) {
-    if (skyCubeFaceDropState[face]) {
-      skyCubeFaceDropState[face] = false
-    }
-    return
-  }
-  event.preventDefault()
-  if (event.dataTransfer) {
-    event.dataTransfer.dropEffect = 'copy'
-  }
-  skyCubeFaceDropState[face] = true
-}
-
-function handleSkyCubeFaceDragLeave(face: SkyCubeFaceKey, event: DragEvent) {
-  if (!skyCubeFaceDropState[face]) {
-    return
-  }
-  const target = event.currentTarget as HTMLElement | null
-  const related = event.relatedTarget as Node | null
-  if (target && related && target.contains(related)) {
-    return
-  }
-  skyCubeFaceDropState[face] = false
-}
-
-function handleSkyCubeFaceDrop(face: SkyCubeFaceKey, event: DragEvent) {
-  const asset = resolveDraggedAsset(event)
-  skyCubeFaceDropState[face] = false
-  if (!isSkyCubeFaceAsset(asset)) {
-    return
-  }
-  event.preventDefault()
-  event.stopPropagation()
-  patchEnvironmentBackground({
-    mode: 'skycube',
-    [face]: asset.id,
-  })
 }
 
 function handleAssetDialogCancel() {
@@ -1218,12 +986,12 @@ function handleBackgroundDrop(event: DragEvent) {
           <div class="section-title">Background</div>
           <v-select
             :items="backgroundModeOptions"
-            :model-value="environmentSettings.background.mode"
+            :model-value="backgroundUiMode"
             density="compact"
             hide-details
             variant="underlined"
             class="section-select"
-            @update:model-value="(mode) => updateBackgroundMode(mode as EnvironmentBackgroundMode | null)"
+            @update:model-value="(mode) => updateBackgroundMode(mode as BackgroundUiMode | null)"
           />
 
           <div v-if="showOrientationControls" class="orientation-controls">
@@ -1390,139 +1158,10 @@ function handleBackgroundDrop(event: DragEvent) {
               />
             </div>
           </div>
-          <template v-else-if="environmentSettings.background.mode === 'skycube'">
-            <v-select
-              :items="skyCubeFormatOptions"
-              :model-value="skyCubeFormat"
-              density="compact"
-              hide-details
-              variant="underlined"
-              class="section-select"
-              label="Format"
-              @update:model-value="(value) => updateSkyCubeFormat(value as SkyCubeBackgroundFormat | null)"
-            />
-
-            <div
-              v-if="skyCubeFormat === 'zip'"
-              class="asset-tile"
-              :class="{ 'is-active-drop': isSkyCubeZipDropActive }"
-              @dragenter="handleSkyCubeZipDragEnter"
-              @dragover="handleSkyCubeZipDragOver"
-              @dragleave="handleSkyCubeZipDragLeave"
-              @drop="handleSkyCubeZipDrop"
-            >
-              <div
-                class="asset-thumb"
-                :class="{ 'asset-thumb--empty': !skyCubeZipAsset }"
-                role="button"
-                tabindex="0"
-                :title="skyCubeZipAsset ? 'Change .skycube asset' : 'Select .skycube asset'"
-                @click="openSkyCubeZipDialog($event)"
-                @keydown.enter.prevent="openSkyCubeZipDialog()"
-                @keydown.space.prevent="openSkyCubeZipDialog()"
-              >
-                <v-icon size="20" color="rgba(233, 236, 241, 0.4)">mdi-zip-box</v-icon>
-              </div>
-              <div
-                class="asset-info"
-                role="button"
-                tabindex="0"
-                @click="openSkyCubeZipDialog($event)"
-                @keydown.enter.prevent="openSkyCubeZipDialog()"
-                @keydown.space.prevent="openSkyCubeZipDialog()"
-              >
-                <div class="asset-name">{{ skyCubeZipAssetLabel }}</div>
-                <div class="asset-hint">{{ skyCubeZipAssetHint }}</div>
-              </div>
-              <div class="asset-actions">
-                <v-btn
-                  class="asset-action"
-                  icon="mdi-close"
-                  size="x-small"
-                  variant="text"
-                  :disabled="!skyCubeZipAsset"
-                  title="Clear .skycube"
-                  @click.stop="clearSkyCubeZipAsset"
-                />
-              </div>
-            </div>
-
-            <div class="cube-face-grid">
-              <div
-                v-for="face in skyCubeFaceEntries"
-                :key="face.key"
-                class="asset-tile cube-face-tile"
-                :class="{
-                  'is-active-drop': skyCubeFaceDropState[face.key],
-                  'is-empty': !face.hasValue,
-                }"
-                @dragenter="(event) => handleSkyCubeFaceDragEnter(face.key, event)"
-                @dragover="(event) => handleSkyCubeFaceDragOver(face.key, event)"
-                @dragleave="(event) => handleSkyCubeFaceDragLeave(face.key, event)"
-                @drop="(event) => handleSkyCubeFaceDrop(face.key, event)"
-                v-show="skyCubeFormat !== 'zip'"
-              >
-                <div
-                  class="asset-thumb"
-                  :class="{ 'asset-thumb--empty': !face.asset }"
-                  :style="face.previewStyle"
-                  role="button"
-                  tabindex="0"
-                  :title="`Select ${face.label} face texture`"
-                  @click="(event) => openSkyCubeFaceDialog(face.key, event)"
-                  @keydown.enter.prevent="openSkyCubeFaceDialog(face.key)"
-                  @keydown.space.prevent="openSkyCubeFaceDialog(face.key)"
-                >
-                  <span v-if="!face.asset" class="cube-face-thumb-label">{{ face.label }}</span>
-                </div>
-                <div
-                  class="asset-info"
-                  role="button"
-                  tabindex="0"
-                  @click="(event) => openSkyCubeFaceDialog(face.key, event)"
-                  @keydown.enter.prevent="openSkyCubeFaceDialog(face.key)"
-                  @keydown.space.prevent="openSkyCubeFaceDialog(face.key)"
-                >
-                  <div
-                    v-if="face.asset"
-                    class="asset-name"
-                    :title="face.asset.name?.trim().length ? face.asset.name : face.asset.id"
-                  >
-                    {{ face.asset.name?.trim().length ? face.asset.name : face.asset.id }}
-                  </div>
-                  <div class="asset-face-label">
-                    <span class="asset-face-axis">{{ face.label }}</span>
-                    <span
-                      v-if="face.description"
-                      class="asset-face-description"
-                    >{{ face.description }}</span>
-                  </div>
-                  <div v-if="!face.hasValue" class="asset-hint">Select texture</div>
-                </div>
-                <div class="asset-actions">
-                  <v-btn
-                    class="asset-action"
-                    icon="mdi-close"
-                    size="x-small"
-                    variant="text"
-                    :disabled="!face.hasValue"
-                    title="Clear face texture"
-                    @click.stop="clearSkyCubeFace(face.key)"
-                  />
-                </div>
-              </div>
-            </div>
-
-    
-   
-          </template>
           <div
             v-else
             class="asset-tile"
-            :class="{
-              'is-active-drop': isBackgroundDropActive,
-              'is-inactive': environmentSettings.background.mode !== 'hdri' && environmentSettings.background.mode !== 'fastHdri',
-            }"
+            :class="{ 'is-active-drop': isBackgroundDropActive }"
             @dragenter="handleBackgroundDragEnter"
             @dragover="handleBackgroundDragOver"
             @dragleave="handleBackgroundDragLeave"
@@ -1534,7 +1173,7 @@ function handleBackgroundDrop(event: DragEvent) {
               :style="backgroundPreviewStyle"
               role="button"
               tabindex="0"
-              :title="backgroundAsset ? 'Change HDRI / Fast HDRI asset' : 'Select HDRI / Fast HDRI asset'"
+              :title="backgroundAsset ? 'Change Sky asset' : 'Select Sky asset'"
               @click="openAssetDialog('background', $event)"
               @keydown.enter.prevent="openAssetDialog('background')"
               @keydown.space.prevent="openAssetDialog('background')"
@@ -1558,8 +1197,8 @@ function handleBackgroundDrop(event: DragEvent) {
                 icon="mdi-close"
                 size="x-small"
                 variant="text"
-                :disabled="(environmentSettings.background.mode !== 'hdri' && environmentSettings.background.mode !== 'fastHdri') || !backgroundAsset"
-                title="Clear background HDRI"
+                :disabled="!backgroundAsset"
+                title="Clear Sky asset"
                 @click.stop="clearBackgroundAsset"
               />
             </div>
