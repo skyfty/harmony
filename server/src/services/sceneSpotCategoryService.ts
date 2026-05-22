@@ -5,6 +5,7 @@ import { SceneSpotModel } from '@/models/SceneSpot'
 export interface SceneSpotCategoryView {
   id: string
   name: string
+  parentId: string | null
   description: string | null
   slug: string | null
   sortOrder: number
@@ -25,10 +26,18 @@ function sanitizeDescription(v: unknown): string | null {
   return t.length ? t : null
 }
 
+function sanitizeParentId(v: unknown): Types.ObjectId | null {
+  if (typeof v !== 'string') return null
+  const trimmed = v.trim()
+  if (!trimmed.length) return null
+  return Types.ObjectId.isValid(trimmed) ? new Types.ObjectId(trimmed) : null
+}
+
 function toView(row: any): SceneSpotCategoryView {
   return {
     id: String(row._id),
     name: String(row.name),
+    parentId: row.parentId ? String(row.parentId) : null,
     description: typeof row.description === 'string' ? row.description : null,
     slug: typeof row.slug === 'string' ? row.slug : null,
     sortOrder: Number.isFinite(Number(row.sortOrder)) ? Number(row.sortOrder) : 0,
@@ -40,15 +49,17 @@ function toView(row: any): SceneSpotCategoryView {
 }
 
 export async function listSceneSpotCategories(): Promise<SceneSpotCategoryView[]> {
-  const rows = await SceneSpotCategoryModel.find({}).sort({ sortOrder: 1, createdAt: -1 }).lean().exec()
+  const rows = await SceneSpotCategoryModel.find({}).sort({ parentId: 1, sortOrder: 1, createdAt: -1 }).lean().exec()
   return (rows as any[]).map(toView)
 }
 
-export async function createSceneSpotCategory(payload: { name?: unknown; description?: unknown; slug?: unknown; sortOrder?: unknown; enabled?: unknown }): Promise<SceneSpotCategoryView> {
+export async function createSceneSpotCategory(payload: { name?: unknown; parentId?: unknown; description?: unknown; slug?: unknown; sortOrder?: unknown; enabled?: unknown }): Promise<SceneSpotCategoryView> {
   const name = sanitizeName(payload.name)
   if (!name) throw new Error('Category name is required')
+  const parentId = sanitizeParentId(payload.parentId)
   const created = await SceneSpotCategoryModel.create({
     name,
+    parentId,
     description: sanitizeDescription(payload.description),
     slug: typeof payload.slug === 'string' ? payload.slug.trim() : null,
     sortOrder: Number.isFinite(Number(payload.sortOrder)) ? Number(payload.sortOrder) : 0,
@@ -59,7 +70,7 @@ export async function createSceneSpotCategory(payload: { name?: unknown; descrip
   return toView(created.toObject())
 }
 
-export async function updateSceneSpotCategory(categoryId: string, payload: { name?: unknown; description?: unknown; slug?: unknown; sortOrder?: unknown; enabled?: unknown }): Promise<SceneSpotCategoryView | null> {
+export async function updateSceneSpotCategory(categoryId: string, payload: { name?: unknown; parentId?: unknown; description?: unknown; slug?: unknown; sortOrder?: unknown; enabled?: unknown }): Promise<SceneSpotCategoryView | null> {
   if (!Types.ObjectId.isValid(categoryId)) throw new Error('Invalid category id')
   const current = await SceneSpotCategoryModel.findById(categoryId).lean().exec()
   if (!current) return null
@@ -69,6 +80,7 @@ export async function updateSceneSpotCategory(categoryId: string, payload: { nam
     categoryId,
     {
       name: nextName,
+      parentId: payload.parentId === undefined ? current.parentId ?? null : sanitizeParentId(payload.parentId),
       normalizedName: nextName.trim().toLowerCase(),
       description: payload.description === undefined ? current.description ?? null : sanitizeDescription(payload.description),
       slug: payload.slug === undefined ? current.slug ?? null : (typeof payload.slug === 'string' ? payload.slug.trim() : null),
@@ -88,7 +100,6 @@ export async function deleteSceneSpotCategory(categoryId: string): Promise<boole
   if (!current) return false
   if (current.isBuiltin === true) throw new Error('Builtin category cannot be deleted')
   await SceneSpotCategoryModel.findByIdAndDelete(categoryId).exec()
-  // unset category from existing scene spots
   await SceneSpotModel.updateMany({ category: new Types.ObjectId(categoryId) }, { $set: { category: null } }).exec()
   return true
 }

@@ -15,7 +15,7 @@
 
     <view v-else>
       <!-- Full-bleed hero swiper -->
-      <view class="hero-wrap">
+      <view class="hero-wrap" :style="{ height: heroHeight + 'px' }">
         <swiper
           class="hero-swiper"
           circular
@@ -25,7 +25,7 @@
           @change="onSwiperChange"
         >
           <swiper-item v-for="(url, idx) in scenic.slides" :key="idx">
-            <image class="hero-img" :src="url" mode="aspectFill" />
+            <image class="hero-img" :src="url" mode="aspectFit" />
           </swiper-item>
         </swiper>
         <!-- Page indicator badge -->
@@ -128,7 +128,7 @@ import type { ScenicCheckinProgressItem } from '@/types/achievement';
 import type { ScenicDetail } from '@/types/scenic';
 import { getSelectedVehicleIdentifier, setSelectedVehicle } from '@/utils/vehicleSelection';
 import { listVehicles } from '@/api/mini/vehicles';
-import { getStatusBarHeight } from '@/utils/systemInfo';
+import { getStatusBarHeight, getViewportSize } from '@/utils/systemInfo';
 
 type ScenicDetailWithFlags = ScenicDetail & {
   isFeatured?: boolean;
@@ -140,6 +140,8 @@ const scenicId = ref('');
 const favoriteLoading = ref(false);
 const currentSlide = ref(0);
 const scenicCheckinProgress = ref<ScenicCheckinProgressItem | null>(null);
+const heroAspectRatio = 16 / 9;
+const heroHeight = ref(getHeroHeight());
 
 
 
@@ -258,6 +260,11 @@ async function enterScenery() {
 
 function onSwiperChange(e: { detail: { current: number } }) {
   currentSlide.value = e.detail.current;
+}
+
+function getHeroHeight(): number {
+  const viewport = getViewportSize({ width: 375, height: 667 });
+  return Math.round(viewport.width / heroAspectRatio);
 }
 
 /* ---- Interactions ---- */
@@ -391,16 +398,17 @@ function computeScenicCheckinRatio(): number {
 .hero-wrap {
   position: relative;
   width: 100%;
+  overflow: hidden;
 }
 
 .hero-swiper {
   width: 100%;
-  height: 340px;
+  height: 100%;
 }
 
 .hero-img {
   width: 100%;
-  height: 340px;
+  height: 100%;
   display: block;
 }
 

@@ -500,6 +500,7 @@ export interface ProductCategoryDocument extends Document<Types.ObjectId> {
   /** 中文：分类名称 */
   name: string
   /** 中文：分类描述（可选） */
+  parentId?: Types.ObjectId | null
   description?: string | null
   /** 中文：排序值 */
   sortOrder: number
@@ -954,6 +955,7 @@ export interface SceneSpotCategoryDocument extends Document<Types.ObjectId> {
   /** 中文：分类描述（可选） */
   description?: string | null
   /** 中文：用于路由或接口的短标识（可选） */
+  parentId?: Types.ObjectId | null
   slug?: string | null
   /** 中文：排序值 */
   sortOrder: number

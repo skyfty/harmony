@@ -18,7 +18,7 @@ import {
 import { apiURL } from '#/api/request';
 import { $t } from '#/locales';
 
-import { Button, Form, Input, InputNumber, message, Modal, Select, Space, Switch, Upload, Tooltip, Tabs } from 'ant-design-vue';
+import { Button, Form, Input, InputNumber, message, Modal, Select, Space, Switch, TreeSelect, Upload, Tooltip, Tabs } from 'ant-design-vue';
 import { EyeOutlined, CommentOutlined, EditOutlined, DeleteOutlined, StarOutlined, FireOutlined, QrcodeOutlined } from '@ant-design/icons-vue';
 
 interface SceneSpotFormModel {
@@ -27,9 +27,9 @@ interface SceneSpotFormModel {
   description: string;
   address: string;
   distance: string;
-  phone?: string | null;
-  locationLat?: number | null;
-  locationLng?: number | null;
+  phone: string;
+  locationLat?: number;
+  locationLng?: number;
   order: number;
   isHome: boolean;
   isFeatured: boolean;
@@ -81,8 +81,8 @@ const sceneSpotFormModel = reactive<SceneSpotFormModel>({
   distance: '',
   address: '',
   phone: '',
-  locationLat: null,
-  locationLng: null,
+  locationLat: undefined,
+  locationLng: undefined,
   order: 0,
   isHome: false,
   isFeatured: false,
@@ -90,10 +90,17 @@ const sceneSpotFormModel = reactive<SceneSpotFormModel>({
   averageRating: 0,
   ratingCount: 0,
   favoriteCount: 0,
-  categoryId: '',
+  categoryId: undefined,
 });
 
-const categoryOptions = ref<Array<{ label: string; value: string }>>([]);
+interface CategoryTreeNode {
+  title: string;
+  value: string;
+  key: string;
+  children?: CategoryTreeNode[];
+}
+
+const categoryTreeData = ref<CategoryTreeNode[]>([]);
 const categoryOptionsLoading = ref(false);
 
 const homeLoading = reactive<Record<string, boolean>>({});
@@ -165,14 +172,14 @@ function resetForm() {
   sceneSpotFormModel.distance = '';
   sceneSpotFormModel.address = '';
   sceneSpotFormModel.phone = '';
-  sceneSpotFormModel.locationLat = null;
-  sceneSpotFormModel.locationLng = null;
+  sceneSpotFormModel.locationLat = undefined;
+  sceneSpotFormModel.locationLng = undefined;
   sceneSpotFormModel.order = 0;
   sceneSpotFormModel.isHome = false;
   sceneSpotFormModel.averageRating = 0;
   sceneSpotFormModel.ratingCount = 0;
   sceneSpotFormModel.favoriteCount = 0;
-  sceneSpotFormModel.categoryId = '';
+  sceneSpotFormModel.categoryId = undefined;
   coverImageFileList.value = [];
   slidesFileList.value = [];
   originalCoverImageUrl.value = '';
@@ -184,8 +191,33 @@ async function loadCategoryOptions() {
   categoryOptionsLoading.value = true;
   try {
     const res = await listSceneSpotCategoriesApi();
-    const items = Array.isArray(res) ? res : (res.items || []);
-    categoryOptions.value = (items || []).map((it: any) => ({ label: it.name, value: it.id }));
+    const items = Array.isArray(res) ? res.filter((it: any) => it.enabled !== false) : [];
+    const byParent = new Map<string | null, any[]>();
+
+    for (const item of items) {
+      const parentId = item.parentId ?? null;
+      const bucket = byParent.get(parentId) ?? [];
+      bucket.push(item);
+      byParent.set(parentId, bucket);
+    }
+
+    const sortNodes = (nodes: any[]) =>
+      nodes
+        .slice()
+        .sort((a, b) => Number(a.sortOrder ?? 0) - Number(b.sortOrder ?? 0) || String(a.name).localeCompare(String(b.name), 'zh-Hans-CN'));
+
+    const buildTree = (parentId: string | null): CategoryTreeNode[] =>
+      sortNodes(byParent.get(parentId) ?? []).map((item) => {
+        const children = buildTree(item.id);
+        return {
+          title: item.name,
+          value: item.id,
+          key: item.id,
+          ...(children.length ? { children } : {}),
+        };
+      });
+
+    categoryTreeData.value = buildTree(null);
   } finally {
     categoryOptionsLoading.value = false;
   }
@@ -247,7 +279,7 @@ async function validateImageAspectRatio(file: File, aspectRatio: number, toleran
 async function handleCoverImageChange(info: UploadChangeParam<UploadFile<any>>) {
   const list = info.fileList.slice(-1);
   if (list.length > 0) {
-    const fileObj = list[0].originFileObj as File | undefined;
+    const fileObj = list[0]?.originFileObj as File | undefined;
     if (fileObj) {
       const ok = await validateImageSize(fileObj, COVER_IMAGE_WIDTH, COVER_IMAGE_HEIGHT);
       if (!ok) {
@@ -374,9 +406,9 @@ async function openEditModal(row: SceneSpotItem) {
   sceneSpotFormModel.ratingCount = Number(data.ratingCount ?? 0);
   sceneSpotFormModel.favoriteCount = Number(data.favoriteCount ?? 0);
   sceneSpotFormModel.phone = data.phone ?? '';
-  sceneSpotFormModel.locationLat = data.location?.lat ?? null;
-  sceneSpotFormModel.locationLng = data.location?.lng ?? null;
-  sceneSpotFormModel.categoryId = data.categoryId ?? '';
+  sceneSpotFormModel.locationLat = data.location?.lat ?? undefined;
+  sceneSpotFormModel.locationLng = data.location?.lng ?? undefined;
+  sceneSpotFormModel.categoryId = data.categoryId ?? undefined;
   originalCoverImageUrl.value = data.coverImage || '';
   originalSlides.value = [...(data.slides || [])];
 
@@ -780,18 +812,19 @@ onMounted(async () => {
             </Form.Item>
 
             <Form.Item :label="t('page.sceneSpots.index.formFields.category.label')" name="categoryId" :rules="[{ required: true, message: t('page.sceneSpots.index.formFields.category.required') }]">
-              <Select
+              <TreeSelect
                 v-model:value="sceneSpotFormModel.categoryId"
-                :options="categoryOptions"
+                :tree-data="categoryTreeData"
                 :loading="categoryOptionsLoading"
                 allow-clear
                 show-search
-                option-filter-prop="label"
+                tree-node-filter-prop="title"
+                :field-names="{ label: 'title', value: 'value', children: 'children' }"
                 :placeholder="t('page.sceneSpots.index.formFields.category.placeholder')"
               />
             </Form.Item>
 
-            <Form.Item :label="t('page.sceneSpots.index.formFields.coverImage.label')" name="coverImage" >
+            <Form.Item :label="t('page.sceneSpots.index.formFields.coverImage.label')" name="coverImage" :rules="coverImageRules">
               <Upload
                 v-bind="uploadProps"
                 :file-list="coverImageFileList"
@@ -804,7 +837,7 @@ onMounted(async () => {
               <div class="upload-note">{{ t('page.sceneSpots.index.help.coverImageSize', { width: COVER_IMAGE_WIDTH, height: COVER_IMAGE_HEIGHT }) }}</div>
             </Form.Item>
 
-            <Form.Item :label="t('page.sceneSpots.index.formFields.slides.label')" name="slides">
+            <Form.Item :label="t('page.sceneSpots.index.formFields.slides.label')" name="slides" :rules="slidesRules">
               <Upload
                 v-bind="uploadProps"
                 :file-list="slidesFileList"

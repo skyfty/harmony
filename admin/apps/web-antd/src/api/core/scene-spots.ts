@@ -18,6 +18,10 @@ export interface SceneSpotItem {
   sceneCheckpointTotal: number;
   title: string;
   coverImage?: null | string;
+  category?: { id: string; name: string } | null;
+  categoryId?: null | string;
+  location?: { lat?: null | number; lng?: null | number } | null;
+  phone?: null | string;
   slides: string[];
   description: string;
   address: string;
