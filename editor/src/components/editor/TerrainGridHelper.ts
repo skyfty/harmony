@@ -3,8 +3,8 @@ import type { GroundDynamicMesh } from '@schema/core'
 import { GRID_MAJOR_SPACING } from './constants'
 import { setBoundingBoxFromObject } from './sceneUtils'
 
-const MAJOR_COLOR = '#ffc107'
-const MAJOR_OPACITY = 1.3
+const MAJOR_COLOR = '#7f8fa6'
+const MAJOR_OPACITY = 0.9
 const GRID_MAJOR_LINE_WIDTH_PX = 0.85
 const TERRAIN_GRID_SHADER_KEY = 'harmony-terrain-grid-overlay-v3'
 const MAJOR_COLOR_VALUE = new THREE.Color(MAJOR_COLOR)
