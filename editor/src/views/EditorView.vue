@@ -2474,7 +2474,7 @@ onBeforeUnmount(() => {
         :show-stats="showStatsPanel"
         @toggle-stats="toggleStatsPanelVisibility"
       />
-      <transition name="slide-left">
+      <transition name="slide-right">
         <section v-if="showHierarchyDocked" class="panel hierarchy-panel">
           <HierarchyPanel
             :floating="false"
@@ -2503,7 +2503,7 @@ onBeforeUnmount(() => {
         />
       </section>
 
-      <transition name="slide-right">
+      <transition name="slide-left">
         <section v-if="showInspectorDocked" class="panel inspector-panel">
           <InspectorPanel
             ref="dockedInspectorRef"
@@ -2984,11 +2984,11 @@ onBeforeUnmount(() => {
   position: relative;
   height: 100%;
   display: grid;
-  grid-template-columns: minmax(0, 280px) minmax(0, 1fr) minmax(0, 320px);
+  grid-template-columns: minmax(0, 320px) minmax(0, 1fr) minmax(0, 280px);
   grid-template-rows: auto minmax(0, 1fr) minmax(0, 260px);
   grid-template-areas:
     'menu menu menu'
-    'hierarchy scene inspector'
+    'inspector scene hierarchy'
     'project project project';
   gap: 7px;
   padding: 12px;
@@ -3030,7 +3030,7 @@ onBeforeUnmount(() => {
 
 .hierarchy-floating {
   top: calc(var(--floating-menu-offset) + var(--floating-edge-gap) + var(--viewport-gizmo-clearance));
-  left: var(--floating-edge-gap);
+  right: var(--floating-edge-gap);
   bottom: calc(var(--project-floating-height) + (var(--floating-edge-gap) * 2));
   width: min(260px, 40vw);
   max-height: var(--hierarchy-floating-height);
@@ -3039,7 +3039,7 @@ onBeforeUnmount(() => {
 
 .inspector-floating {
   top: calc(var(--floating-menu-offset) + var(--floating-edge-gap) + var(--viewport-gizmo-clearance));
-  right: var(--floating-edge-gap);
+  left: var(--floating-edge-gap);
   bottom: calc(var(--project-floating-height) + (var(--floating-edge-gap) * 2));
   width: min(300px, 40vw);
   max-height: var(--inspector-floating-height);

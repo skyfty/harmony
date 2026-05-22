@@ -268,8 +268,8 @@ const isSavingPrefab = ref(false)
 const isUpdatingPrefab = ref(false)
 
 const floating = computed(() => props.floating ?? false)
-const placementIcon = computed(() => (floating.value ? 'mdi-dock-left' : 'mdi-arrow-expand'))
-const placementTitle = computed(() => (floating.value ? 'Dock to left' : 'Float panel'))
+const placementIcon = computed(() => (floating.value ? 'mdi-dock-right' : 'mdi-arrow-expand'))
+const placementTitle = computed(() => (floating.value ? 'Dock to right' : 'Float panel'))
 
 const searchQuery = ref('')
 const isSearchVisible = ref(false)
