@@ -68,7 +68,7 @@ const sceneStore = useSceneStore()
 const { currentSceneId } = storeToRefs(sceneStore)
 const uiStore = useUiStore()
 
-type PlanningTool = 'select' | 'pan' | 'rectangle' | 'lasso' | 'line' | 'align-marker'
+type PlanningTool = 'select' | 'pan' | 'rectangle' | 'lasso' | 'line' | 'align-marker' | 'calibrate'
 type LayerKind = 'terrain' | 'guide-route'
 
 const layerKindLabels: Record<LayerKind, string> = {
@@ -169,6 +169,12 @@ interface PlanningImageImportDraft {
   width: number
   height: number
   metersPerPixel: number
+}
+
+interface PlanningImageScaleCalibrationDraft {
+  imageId: string
+  start: PlanningPoint
+  current: PlanningPoint
 }
 
 type PlanningGuideAxis = 'x' | 'y'
@@ -501,6 +507,10 @@ const demImportError = ref<string | null>(null)
 const planningDemPreviewUrl = ref<string | null>(null)
 const planningOrthophotoPreviewUrl = ref<string | null>(null)
 const demHydrationToken = ref(0)
+const imageScaleCalibrationDraft = ref<PlanningImageScaleCalibrationDraft | null>(null)
+const imageScaleCalibrationDialogOpen = ref(false)
+const imageScaleCalibrationRealMeters = ref<number | null>(null)
+const imageScaleCalibrationError = ref<string | null>(null)
 const planningImageImportDialogOpen = computed({
   get: () => planningImageImportDraft.value !== null,
   set: (value: boolean) => {
@@ -527,7 +537,7 @@ const editorRect = ref<DOMRect | null>(null)
 const currentTool = ref<PlanningTool>('select')
 // Dynamic cursor style for editor canvas
 const editorCursorStyle = computed(() => {
-  if (['rectangle', 'lasso', 'line'].includes(currentTool.value)) {
+  if (['rectangle', 'lasso', 'line', 'calibrate'].includes(currentTool.value)) {
     return { cursor: 'crosshair' }
   }
   
@@ -2147,6 +2157,11 @@ const selectedImage = computed<PlanningImage | null>(() => {
   return planningImages.value.find((img) => img.id === activeImageId.value) ?? null
 })
 
+const canUseImageScaleCalibration = computed(() => {
+  const img = selectedImage.value
+  return !!img && img.visible && !img.locked
+})
+
 const selectedDem = computed<PlanningTerrainDemData | null>(() => {
   return activeDemId.value ? (planningTerrain.value.dem ?? null) : null
 })
@@ -2798,6 +2813,10 @@ watch(
       currentTool.value = 'select'
       return
     }
+    if (tool === 'calibrate' && !canUseImageScaleCalibration.value) {
+      currentTool.value = 'select'
+      return
+    }
     if (previous === 'lasso' && tool !== 'lasso' && polygonDraftPoints.value.length) {
       polygonDraftPoints.value = []
       polygonDraftHoverPoint.value = null
@@ -2806,8 +2825,39 @@ watch(
     if (previous === 'line' && tool !== 'line') {
       finalizeLineDraft()
     }
+    if (previous === 'calibrate' && tool !== 'calibrate') {
+      cancelImageScaleCalibration()
+    }
   },
 )
+
+watch(canUseImageScaleCalibration, (enabled) => {
+  if (!enabled && currentTool.value === 'calibrate') {
+    currentTool.value = 'select'
+    cancelImageScaleCalibration()
+  }
+})
+
+watch(selectedImage, (image) => {
+  if (currentTool.value !== 'calibrate') {
+    return
+  }
+  const draft = imageScaleCalibrationDraft.value
+  if (!draft) {
+    return
+  }
+  if (!image || image.id !== draft.imageId) {
+    cancelImageScaleCalibration()
+  }
+})
+
+watch(imageScaleCalibrationDialogOpen, (open, previous) => {
+  if (!open && previous) {
+    imageScaleCalibrationRealMeters.value = null
+    imageScaleCalibrationError.value = null
+    imageScaleCalibrationDraft.value = null
+  }
+})
 
 watch(
   [dialogOpen, currentSceneId],
@@ -4091,7 +4141,74 @@ function handleToolSelect(tool: PlanningTool) {
   if ((tool === 'rectangle' || tool === 'lasso') && !canUseAreaTools.value) {
     return
   }
+  if (tool === 'calibrate' && !canUseImageScaleCalibration.value) {
+    return
+  }
   currentTool.value = tool
+}
+
+function startImageScaleCalibration(point: PlanningPoint, image: PlanningImage) {
+  imageScaleCalibrationError.value = null
+  imageScaleCalibrationRealMeters.value = null
+  imageScaleCalibrationDialogOpen.value = false
+  imageScaleCalibrationDraft.value = {
+    imageId: image.id,
+    start: { x: point.x, y: point.y },
+    current: { x: point.x, y: point.y },
+  }
+}
+
+function updateImageScaleCalibration(point: PlanningPoint) {
+  const draft = imageScaleCalibrationDraft.value
+  if (!draft) {
+    return
+  }
+  imageScaleCalibrationDraft.value = {
+    ...draft,
+    current: { x: point.x, y: point.y },
+  }
+}
+
+function openImageScaleCalibrationDialog() {
+  imageScaleCalibrationError.value = null
+  imageScaleCalibrationDialogOpen.value = true
+}
+
+function closeImageScaleCalibrationDialog() {
+  imageScaleCalibrationDialogOpen.value = false
+  imageScaleCalibrationRealMeters.value = null
+  imageScaleCalibrationError.value = null
+  imageScaleCalibrationDraft.value = null
+}
+
+function cancelImageScaleCalibration() {
+  closeImageScaleCalibrationDialog()
+}
+
+async function confirmImageScaleCalibration() {
+  const preview = imageScaleCalibrationPreview.value
+  if (!preview) {
+    imageScaleCalibrationError.value = 'Please redraw the scale line.'
+    return
+  }
+  const realMeters = Number(imageScaleCalibrationRealMeters.value)
+  if (!Number.isFinite(realMeters) || realMeters <= 0) {
+    imageScaleCalibrationError.value = 'Please enter a real-world length greater than 0.'
+    return
+  }
+  if (!Number.isFinite(preview.pixelLength) || preview.pixelLength <= 0) {
+    imageScaleCalibrationError.value = 'The selected scale line is too short. Please draw a longer line.'
+    return
+  }
+
+  applyImageMetersPerPixel(preview.image, realMeters / preview.pixelLength)
+  markPlanningDirty()
+  try {
+    await persistLayersToIndexedDB()
+  } catch (error) {
+    console.warn('Failed to persist calibrated planning image layers', error)
+  }
+  closeImageScaleCalibrationDialog()
 }
 
 function handleLayerConversionToggle(layerId: string, enabled: boolean) {
@@ -4146,15 +4263,57 @@ const imageMetersPerPixelModel = computed<number>({
     if (!img || propertyPanelDisabled.value) return
     const metersPerPixel = Number(value)
     if (!Number.isFinite(metersPerPixel) || metersPerPixel <= 0) return
-    const centerX = img.position.x + img.width * img.scale * 0.5
-    const centerY = img.position.y + img.height * img.scale * 0.5
-    img.scale = metersPerPixel
-    img.position.x = centerX - img.width * metersPerPixel * 0.5
-    img.position.y = centerY - img.height * metersPerPixel * 0.5
+    applyImageMetersPerPixel(img, metersPerPixel)
     markPlanningDirty()
   },
 })
 
+function applyImageMetersPerPixel(image: PlanningImage, metersPerPixel: number) {
+  const centerX = image.position.x + image.width * image.scale * 0.5
+  const centerY = image.position.y + image.height * image.scale * 0.5
+  image.scale = metersPerPixel
+  image.position.x = centerX - image.width * metersPerPixel * 0.5
+  image.position.y = centerY - image.height * metersPerPixel * 0.5
+}
+
+function getImageLocalPoint(image: PlanningImage, world: PlanningPoint): PlanningPoint {
+  return {
+    x: (world.x - image.position.x) / Math.max(1e-6, image.scale),
+    y: (world.y - image.position.y) / Math.max(1e-6, image.scale),
+  }
+}
+
+function getCalibrationDraftImage(): PlanningImage | null {
+  const draft = imageScaleCalibrationDraft.value
+  if (!draft) {
+    return null
+  }
+  return planningImages.value.find((img) => img.id === draft.imageId) ?? null
+}
+
+const imageScaleCalibrationPreview = computed(() => {
+  const draft = imageScaleCalibrationDraft.value
+  const image = getCalibrationDraftImage()
+  if (!draft || !image) {
+    return null
+  }
+  const startWorld = draft.start
+  const currentWorld = draft.current
+  const startLocal = getImageLocalPoint(image, startWorld)
+  const currentLocal = getImageLocalPoint(image, currentWorld)
+  const pixelLength = Math.hypot(currentLocal.x - startLocal.x, currentLocal.y - startLocal.y)
+  const realMeters = Number(imageScaleCalibrationRealMeters.value)
+  const nextMetersPerPixel = Number.isFinite(realMeters) && realMeters > 0 && pixelLength > 0
+    ? realMeters / pixelLength
+    : null
+  return {
+    image,
+    start: startWorld,
+    current: currentWorld,
+    pixelLength,
+    nextMetersPerPixel,
+  }
+})
 
 // clearSelectedScatterAssignment removed (unused)
 
@@ -4169,7 +4328,8 @@ function handleEditorPointerDown(event: PointerEvent) {
     const polygonDraftActive = polygonDraftPoints.value.length > 0
     const draftLine = getDraftLine()
     const lineDraftActive = !!(draftLine && draftLine.points.length > 0)
-    if (rectangleActive || polygonDraftActive || lineDraftActive) {
+    const calibrationDraftActive = !!imageScaleCalibrationDraft.value
+    if (rectangleActive || polygonDraftActive || lineDraftActive || calibrationDraftActive) {
       event.preventDefault()
       event.stopPropagation()
 
@@ -4254,6 +4414,11 @@ function handleEditorDoubleClick(event: MouseEvent) {
   if (!dialogOpen.value) {
     return
   }
+  if (currentTool.value === 'calibrate' || imageScaleCalibrationDraft.value) {
+    event.preventDefault()
+    event.stopPropagation()
+    return
+  }
   if (currentTool.value === 'lasso') {
     event.preventDefault()
     finalizePolygonDraft()
@@ -4304,7 +4469,8 @@ function handleEditorContextMenu(event: MouseEvent) {
   const polygonDraftActive = polygonDraftPoints.value.length > 0
   const draftLine = getDraftLine()
   const lineDraftActive = !!(draftLine && draftLine.points.length > 0)
-  if (!rectangleActive && !polygonDraftActive && !lineDraftActive) {
+  const calibrationDraftActive = !!imageScaleCalibrationDraft.value
+  if (!rectangleActive && !polygonDraftActive && !lineDraftActive && !calibrationDraftActive) {
     return
   }
   event.preventDefault()
@@ -4493,6 +4659,14 @@ function handlePointerMove(event: PointerEvent) {
     image.position.x = x
     image.position.y = y
     image.scale = scale
+    return
+  }
+
+  if (currentTool.value === 'calibrate' && imageScaleCalibrationDraft.value && !imageScaleCalibrationDialogOpen.value) {
+    const image = getCalibrationDraftImage()
+    if (image) {
+      updateImageScaleCalibration(screenToWorld(event))
+    }
   }
 }
 
@@ -4608,6 +4782,10 @@ function handleWheel(event: WheelEvent) {
 function cancelActiveDrafts() {
   polygonDraftPoints.value = []
   polygonDraftHoverPoint.value = null
+  imageScaleCalibrationDraft.value = null
+  imageScaleCalibrationDialogOpen.value = false
+  imageScaleCalibrationRealMeters.value = null
+  imageScaleCalibrationError.value = null
 
   const draft = lineDraft.value
   const draftLine = getDraftLine()
@@ -4664,6 +4842,11 @@ function handleKeydown(event: KeyboardEvent) {
   }
   if (event.key === 'Escape') {
     cancelActiveDrafts()
+    return
+  }
+  if (event.key === 'Enter' && imageScaleCalibrationDialogOpen.value) {
+    event.preventDefault()
+    void confirmImageScaleCalibration()
     return
   }
   if ((event.key === 'Delete' || event.key === 'Backspace') && selectedFeature.value) {
@@ -5558,12 +5741,30 @@ function handleImageLayerPointerDown(imageId: string, event: PointerEvent) {
   // Planning layers act as 'base map' and should allow selection/annotation above them.
   // Therefore intercept events only for tools that need direct base map interaction.
   const tool = getEffectiveTool()
-  if (tool !== 'select' && tool !== 'pan' && tool !== 'align-marker') {
+  if (tool !== 'select' && tool !== 'pan' && tool !== 'align-marker' && tool !== 'calibrate') {
     return
   }
 
   const image = planningImages.value.find((img) => img.id === imageId)
   if (!image) {
+    return
+  }
+  if (tool === 'calibrate') {
+    if (!canUseImageScaleCalibration.value || activeImageId.value !== imageId) {
+      return
+    }
+    event.stopPropagation()
+    event.preventDefault()
+    const world = screenToWorld(event)
+    const draft = imageScaleCalibrationDraft.value
+    if (!draft || draft.imageId !== image.id) {
+      startImageScaleCalibration(world, image)
+      event.currentTarget instanceof Element && event.currentTarget.setPointerCapture(event.pointerId)
+      return
+    }
+    updateImageScaleCalibration(world)
+    openImageScaleCalibrationDialog()
+    event.currentTarget instanceof Element && event.currentTarget.setPointerCapture(event.pointerId)
     return
   }
   // Only intercept image-area pointer events when the image is already selected in the panel.
@@ -5811,6 +6012,7 @@ const toolbarButtons: Array<{ tool: PlanningTool; icon: string; tooltip: string 
   { tool: 'select', icon: 'mdi-cursor-default-outline', tooltip: 'Select' },
   { tool: 'pan', icon: 'mdi-hand-back-right-outline', tooltip: 'Pan' },
   { tool: 'align-marker', icon: 'mdi-crosshairs-gps', tooltip: 'Align marker' },
+  { tool: 'calibrate', icon: 'mdi-ruler', tooltip: 'Scale calibration' },
 ]
 
 const visibleToolbarButtons = computed(() => toolbarButtons)
@@ -6238,6 +6440,7 @@ onBeforeUnmount(() => {
                     variant="tonal"
                     density="comfortable"
                     class="tool-button"
+                    :disabled="button.tool === 'calibrate' && !canUseImageScaleCalibration"
                     @click="handleToolSelect(button.tool)"
                   >
                     <v-icon>{{ button.icon }}</v-icon>
@@ -6324,7 +6527,39 @@ onBeforeUnmount(() => {
                   :height="effectiveCanvasPixelSize.height"
                   :viewBox="`0 0 ${effectiveCanvasSize.width} ${effectiveCanvasSize.height}`"
                   aria-hidden="true"
-                />
+                >
+                  <g v-if="imageScaleCalibrationPreview">
+                    <line
+                      class="planning-scale-calibration"
+                      :x1="imageScaleCalibrationPreview.start.x"
+                      :y1="imageScaleCalibrationPreview.start.y"
+                      :x2="imageScaleCalibrationPreview.current.x"
+                      :y2="imageScaleCalibrationPreview.current.y"
+                      vector-effect="non-scaling-stroke"
+                    />
+                    <circle
+                      class="planning-scale-calibration__handle"
+                      :cx="imageScaleCalibrationPreview.start.x"
+                      :cy="imageScaleCalibrationPreview.start.y"
+                      :r="Math.max(0.35, vertexHandleRadiusWorld)"
+                      vector-effect="non-scaling-stroke"
+                    />
+                    <circle
+                      class="planning-scale-calibration__handle"
+                      :cx="imageScaleCalibrationPreview.current.x"
+                      :cy="imageScaleCalibrationPreview.current.y"
+                      :r="Math.max(0.35, vertexHandleRadiusWorld)"
+                      vector-effect="non-scaling-stroke"
+                    />
+                    <text
+                      class="planning-scale-calibration__label"
+                      :x="(imageScaleCalibrationPreview.start.x + imageScaleCalibrationPreview.current.x) * 0.5"
+                      :y="(imageScaleCalibrationPreview.start.y + imageScaleCalibrationPreview.current.y) * 0.5 - pxToWorld(10)"
+                    >
+                      {{ imageScaleCalibrationPreview.pixelLength.toFixed(1) }} px
+                    </text>
+                  </g>
+                </svg>
 
                 <div class="planning-guides-overlay" :style="getGuidesOverlayStyle()" aria-hidden="true">
                   <div
@@ -6673,6 +6908,48 @@ onBeforeUnmount(() => {
             <v-spacer />
             <v-btn variant="text" @click="closePlanningImageImportDialog">Cancel</v-btn>
             <v-btn color="primary" variant="tonal" @click="confirmPlanningImageImport">Import</v-btn>
+          </v-card-actions>
+        </v-card>
+      </v-dialog>
+
+      <v-dialog
+        v-model="imageScaleCalibrationDialogOpen"
+        max-width="540"
+      >
+        <v-card class="planning-image-calibration-dialog">
+          <v-card-title class="planning-image-calibration-dialog__title">
+            Scale calibration
+          </v-card-title>
+          <v-card-text v-if="imageScaleCalibrationPreview" class="planning-image-calibration-dialog__body">
+            <div class="planning-image-calibration-dialog__meta">
+              <div><span>Image</span><strong>{{ imageScaleCalibrationPreview.image.name }}</strong></div>
+              <div><span>Measured length</span><strong>{{ imageScaleCalibrationPreview.pixelLength.toFixed(2) }} px</strong></div>
+            </div>
+            <v-text-field
+              v-model.number="imageScaleCalibrationRealMeters"
+              type="number"
+              density="compact"
+              label="Real-world length"
+              suffix="m"
+              min="0.000001"
+              step="0.01"
+              hide-details
+              autofocus
+            />
+            <div class="planning-image-calibration-dialog__hint">
+              Draw the line over a known distance on the selected image, then enter the real-world meters for that segment.
+            </div>
+            <div v-if="imageScaleCalibrationPreview.nextMetersPerPixel !== null" class="planning-image-calibration-dialog__hint">
+              Preview: {{ formatOptionalNumber(imageScaleCalibrationPreview.nextMetersPerPixel) }} m/px
+            </div>
+            <div v-if="imageScaleCalibrationError" class="planning-image-calibration-dialog__error">
+              {{ imageScaleCalibrationError }}
+            </div>
+          </v-card-text>
+          <v-card-actions class="planning-image-calibration-dialog__actions">
+            <v-spacer />
+            <v-btn variant="text" @click="cancelImageScaleCalibration">Cancel</v-btn>
+            <v-btn color="primary" variant="tonal" @click="confirmImageScaleCalibration">Apply</v-btn>
           </v-card-actions>
         </v-card>
       </v-dialog>
@@ -7540,6 +7817,33 @@ onBeforeUnmount(() => {
   right: 0;
 }
 
+.planning-scale-calibration {
+  stroke: rgba(255, 214, 92, 0.98);
+  stroke-width: 2px;
+  stroke-linecap: round;
+  stroke-dasharray: 10 7;
+  filter: drop-shadow(0 0 6px rgba(255, 214, 92, 0.4));
+}
+
+.planning-scale-calibration__handle {
+  fill: rgba(12, 17, 26, 0.95);
+  stroke: rgba(255, 214, 92, 0.98);
+  stroke-width: 2px;
+}
+
+.planning-scale-calibration__label {
+  fill: rgba(255, 244, 179, 0.98);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  paint-order: stroke;
+  stroke: rgba(12, 17, 26, 0.85);
+  stroke-width: 4px;
+  stroke-linejoin: round;
+  pointer-events: none;
+  user-select: none;
+}
+
 .planning-polygon,
 .planning-line,
 .planning-line-segment,
@@ -7795,6 +8099,54 @@ onBeforeUnmount(() => {
 }
 
 .planning-image-import-dialog__actions {
+  padding: 0 20px 16px;
+}
+
+.planning-image-calibration-dialog {
+  background: #0f1624;
+  color: #f4f6fb;
+}
+
+.planning-image-calibration-dialog__title {
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.planning-image-calibration-dialog__body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.planning-image-calibration-dialog__meta {
+  display: grid;
+  gap: 8px;
+  color: rgba(244, 246, 251, 0.8);
+}
+
+.planning-image-calibration-dialog__meta > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.planning-image-calibration-dialog__meta span {
+  color: rgba(244, 246, 251, 0.6);
+}
+
+.planning-image-calibration-dialog__hint {
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: rgba(244, 246, 251, 0.68);
+}
+
+.planning-image-calibration-dialog__error {
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: #ff8a65;
+}
+
+.planning-image-calibration-dialog__actions {
   padding: 0 20px 16px;
 }
 </style>
