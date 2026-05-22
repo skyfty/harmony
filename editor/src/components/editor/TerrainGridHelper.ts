@@ -1,12 +1,12 @@
 import * as THREE from 'three'
 import type { GroundDynamicMesh } from '@schema/core'
-import { resolveGroundWorldBounds } from '@schema/core'
 import { GRID_MAJOR_SPACING } from './constants'
+import { setBoundingBoxFromObject } from './sceneUtils'
 
 const MAJOR_COLOR = '#ffc107'
 const MAJOR_OPACITY = 1.3
 const GRID_MAJOR_LINE_WIDTH_PX = 0.85
-const TERRAIN_GRID_SHADER_KEY = 'harmony-terrain-grid-overlay-v2'
+const TERRAIN_GRID_SHADER_KEY = 'harmony-terrain-grid-overlay-v3'
 const MAJOR_COLOR_VALUE = new THREE.Color(MAJOR_COLOR)
 
 export type TerrainGridVisibleRange = {
@@ -113,11 +113,22 @@ function installTerrainGridShaderHooks(
     shader.vertexShader = shader.vertexShader
       .replace(
         'void main() {',
-        'varying vec2 vHarmonyTerrainGridLocalXZ;\nvoid main() {',
+        'varying vec2 vHarmonyTerrainGridWorldXZ;\nvoid main() {',
       )
       .replace(
         '#include <begin_vertex>',
-        '#include <begin_vertex>\n\tvHarmonyTerrainGridLocalXZ = position.xz;',
+        [
+          '#include <begin_vertex>',
+          'vec4 harmonyGridWorldPosition = vec4(transformed, 1.0);',
+          '#ifdef USE_BATCHING',
+          '  harmonyGridWorldPosition = batchingMatrix * harmonyGridWorldPosition;',
+          '#endif',
+          '#ifdef USE_INSTANCING',
+          '  harmonyGridWorldPosition = instanceMatrix * harmonyGridWorldPosition;',
+          '#endif',
+          'harmonyGridWorldPosition = modelMatrix * harmonyGridWorldPosition;',
+          'vHarmonyTerrainGridWorldXZ = harmonyGridWorldPosition.xz;',
+        ].join('\n'),
       )
     shader.fragmentShader = shader.fragmentShader
       .replace(
@@ -129,9 +140,9 @@ function installTerrainGridShaderHooks(
           'uniform float uHarmonyTerrainGridMajorWidthPx;',
           'uniform vec3 uHarmonyTerrainGridMajorColor;',
           'uniform float uHarmonyTerrainGridMajorOpacity;',
-          'varying vec2 vHarmonyTerrainGridLocalXZ;',
-          'float harmonyGridLineFactor(vec2 localXZ, float spacing, float widthPx) {',
-          '  vec2 grid = localXZ / max(spacing, 1e-5);',
+          'varying vec2 vHarmonyTerrainGridWorldXZ;',
+          'float harmonyGridLineFactor(vec2 worldXZ, float spacing, float widthPx) {',
+          '  vec2 grid = worldXZ / max(spacing, 1e-5);',
           '  vec2 deriv = max(fwidth(grid), vec2(1e-4));',
           '  vec2 dist = abs(fract(grid - 0.5) - 0.5) / deriv;',
           '  float minDist = min(dist.x, dist.y);',
@@ -146,10 +157,10 @@ function installTerrainGridShaderHooks(
           '#include <map_fragment>',
           'if (uHarmonyTerrainGridEnabled > 0.5) {',
           '  vec2 harmonyGridSize = max(uHarmonyTerrainGridBounds.zw, vec2(1e-5));',
-          '  vec2 harmonyGridLocal = vHarmonyTerrainGridLocalXZ - uHarmonyTerrainGridBounds.xy;',
+          '  vec2 harmonyGridLocal = vHarmonyTerrainGridWorldXZ - uHarmonyTerrainGridBounds.xy;',
           '  bool harmonyGridInside = harmonyGridLocal.x >= 0.0 && harmonyGridLocal.x <= harmonyGridSize.x && harmonyGridLocal.y >= 0.0 && harmonyGridLocal.y <= harmonyGridSize.y;',
           '  if (harmonyGridInside) {',
-          '    float harmonyMajorLine = harmonyGridLineFactor(harmonyGridLocal, uHarmonyTerrainGridMajorSpacing, uHarmonyTerrainGridMajorWidthPx);',
+          '    float harmonyMajorLine = harmonyGridLineFactor(vHarmonyTerrainGridWorldXZ, uHarmonyTerrainGridMajorSpacing, uHarmonyTerrainGridMajorWidthPx);',
           '    float harmonyMajorAlpha = clamp(harmonyMajorLine * uHarmonyTerrainGridMajorOpacity, 0.0, 1.0);',
           '    float harmonyGridAlpha = harmonyMajorAlpha;',
           '    if (harmonyGridAlpha > 1e-4) {',
@@ -172,6 +183,7 @@ export class TerrainGridHelper extends THREE.Object3D {
   private readonly materialStates = new Map<THREE.MeshStandardMaterial, TerrainGridMaterialState>()
   private readonly currentMaterials = new Set<THREE.MeshStandardMaterial>()
   private readonly bounds = new THREE.Vector4(-0.5, -0.5, 1, 1)
+  private readonly worldBoundsHelper = new THREE.Box3()
   private overlayVisible = true
   private currentDefinition: GroundDynamicMesh | null = null
 
@@ -218,10 +230,18 @@ export class TerrainGridHelper extends THREE.Object3D {
       return
     }
 
-    const bounds = resolveGroundWorldBounds(definition)
-    const width = Math.max(Math.abs(bounds.maxX - bounds.minX), 1e-5)
-    const depth = Math.max(Math.abs(bounds.maxZ - bounds.minZ), 1e-5)
-    this.bounds.set(bounds.minX, bounds.minZ, width, depth)
+    root.updateWorldMatrix(true, true)
+    setBoundingBoxFromObject(root, this.worldBoundsHelper)
+    if (this.worldBoundsHelper.isEmpty()) {
+      this.disableAllMaterials()
+      return
+    }
+
+    const min = this.worldBoundsHelper.min
+    const max = this.worldBoundsHelper.max
+    const width = Math.max(Math.abs(max.x - min.x), 1e-5)
+    const depth = Math.max(Math.abs(max.z - min.z), 1e-5)
+    this.bounds.set(min.x, min.z, width, depth)
 
     const nextMaterials = new Set<THREE.MeshStandardMaterial>()
     forEachGroundMaterial(root, (material) => {
