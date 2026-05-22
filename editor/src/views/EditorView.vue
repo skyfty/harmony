@@ -454,9 +454,12 @@ const layoutClasses = computed(() => ({
 
 const layoutStyles = computed(() => ({
   gridTemplateColumns: [
-    showHierarchyDocked.value ? 'minmax(0, 280px)' : '0',
-    'minmax(0, 1fr)',
+    // After swapping panel positions, the inspector now docks on the left and
+    // the hierarchy docks on the right. Keep the column widths mapped to the
+    // actual grid areas so a floating panel releases the correct side.
     showInspectorDocked.value ? 'minmax(0, 320px)' : '0',
+    'minmax(0, 1fr)',
+    showHierarchyDocked.value ? 'minmax(0, 280px)' : '0',
   ].join(' '),
   gridTemplateRows: [
     'auto',
