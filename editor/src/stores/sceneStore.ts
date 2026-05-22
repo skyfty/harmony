@@ -3574,14 +3574,14 @@ const defaultCameraState: SceneCameraState = (() => {
 })()
 
 const defaultPanelVisibility: PanelVisibilityState = {
-  hierarchy: false,
-  inspector: false,
+  hierarchy: true,
+  inspector: true,
   project: true,
 }
 
 const defaultPanelPlacement: PanelPlacementState = {
-  hierarchy: 'floating',
-  inspector: 'floating',
+  hierarchy: 'docked',
+  inspector: 'docked',
   project: 'docked',
 }
 

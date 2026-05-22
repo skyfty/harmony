@@ -906,7 +906,7 @@ const effectiveCanvasPixelSize = computed(() => {
 })
 
 // Screen pixels per meter after considering zoom.
-const renderScale = computed(() => viewTransform.scale * BASE_PIXELS_PER_METER)
+const renderScale = computed(() => normalizeViewScale(viewTransform.scale) * BASE_PIXELS_PER_METER)
 
 function pxToWorld(px: number): number {
   return Number(px) / Math.max(1e-6, renderScale.value)
@@ -990,6 +990,10 @@ function formatZoomLabel(scale: number): string {
   return `${rounded}x`
 }
 
+function normalizeViewScale(scale: number) {
+  return Number.isFinite(scale) && scale > 0 ? scale : 1
+}
+
 function getZoomAnchorRect() {
   return editorRef.value?.getBoundingClientRect() ?? editorRect.value
 }
@@ -999,12 +1003,13 @@ function zoomViewTo(nextViewScale: number, anchorClientX: number, anchorClientY:
   if (!rect) {
     return false
   }
-  if (!Number.isFinite(nextViewScale) || nextViewScale <= 0) {
+  const normalizedNextViewScale = normalizeViewScale(nextViewScale)
+  if (!Number.isFinite(normalizedNextViewScale) || normalizedNextViewScale <= 0) {
     return false
   }
 
-  const previousViewScale = viewTransform.scale
-  if (!options?.force && nextViewScale === previousViewScale) {
+  const previousViewScale = normalizeViewScale(viewTransform.scale)
+  if (!options?.force && normalizedNextViewScale === previousViewScale) {
     return false
   }
 
@@ -1016,34 +1021,19 @@ function zoomViewTo(nextViewScale: number, anchorClientX: number, anchorClientY:
   const worldX = (sx - centerBefore.x) / previousRenderScale - viewTransform.offset.x
   const worldY = (sy - centerBefore.y) / previousRenderScale - viewTransform.offset.y
 
-  const nextRenderScale = nextViewScale * BASE_PIXELS_PER_METER
+  const nextRenderScale = normalizedNextViewScale * BASE_PIXELS_PER_METER
   const nextCenter = computeStageCenterOffset(rect, nextRenderScale)
-  viewTransform.scale = nextViewScale
+  viewTransform.scale = normalizedNextViewScale
   viewTransform.offset.x = (sx - nextCenter.x) / nextRenderScale - worldX
   viewTransform.offset.y = (sy - nextCenter.y) / nextRenderScale - worldY
   return true
 }
 
-function zoomViewByFactor(factor: number, anchorClientX?: number, anchorClientY?: number) {
+function zoomViewByFactor(factor: number, anchorClientX: number, anchorClientY: number, options?: { force?: boolean }) {
   if (!Number.isFinite(factor) || factor <= 0) {
     return false
   }
-  const rect = getZoomAnchorRect()
-  if (!rect) {
-    return false
-  }
-  const nextViewScale = viewTransform.scale * factor
-  const anchorX = anchorClientX ?? (rect.left + rect.width / 2)
-  const anchorY = anchorClientY ?? (rect.top + rect.height / 2)
-  return zoomViewTo(nextViewScale, anchorX, anchorY)
-}
-
-function zoomViewIn(anchorClientX?: number, anchorClientY?: number) {
-  return zoomViewByFactor(1.25, anchorClientX, anchorClientY)
-}
-
-function zoomViewOut(anchorClientX?: number, anchorClientY?: number) {
-  return zoomViewByFactor(0.8, anchorClientX, anchorClientY)
+  return zoomViewTo(viewTransform.scale * factor, anchorClientX, anchorClientY, options)
 }
 
 function computeFitViewScale(rect: Pick<DOMRect, 'width' | 'height'>, options?: { paddingPx?: number }): number {
@@ -1075,6 +1065,44 @@ function fitViewToCanvas(options?: { markDirty?: boolean }) {
   if (options?.markDirty) {
     markPlanningDirty()
   }
+}
+
+function handleZoomInView() {
+  const rect = getZoomAnchorRect()
+  if (!rect) {
+    return
+  }
+  const centerX = rect.left + rect.width / 2
+  const centerY = rect.top + rect.height / 2
+  if (zoomViewByFactor(1.2, centerX, centerY)) {
+    markPlanningDirty()
+  }
+}
+
+function handleZoomOutView() {
+  const rect = getZoomAnchorRect()
+  if (!rect) {
+    return
+  }
+  const centerX = rect.left + rect.width / 2
+  const centerY = rect.top + rect.height / 2
+  if (zoomViewByFactor(1 / 1.2, centerX, centerY)) {
+    markPlanningDirty()
+  }
+}
+
+function handleFitView() {
+  fitViewToCanvas({ markDirty: true })
+}
+
+function handleResetView() {
+  if (!editorRef.value && !editorRect.value) {
+    return
+  }
+  viewTransform.scale = 1
+  viewTransform.offset.x = 0
+  viewTransform.offset.y = 0
+  markPlanningDirty()
 }
 
 let planningDirty = false
@@ -1816,9 +1844,7 @@ function loadPlanningFromScene() {
     const s = Number(data.viewTransform.scale)
     const ox = Number(data.viewTransform.offset?.x)
     const oy = Number(data.viewTransform.offset?.y)
-    if (Number.isFinite(s) && s > 0) {
-      viewTransform.scale = s
-    }
+    viewTransform.scale = normalizeViewScale(s)
     if (Number.isFinite(ox)) {
       viewTransform.offset.x = ox
     }
@@ -2742,19 +2768,21 @@ const stageCenterOffset = computed(() => {
   return computeStageCenterOffset(rect, renderScale.value)
 })
 
-const stageStyle = computed<CSSProperties>(() => {
-  const scale = renderScale.value
+const stageStyle = computed(() => {
+  const renderScaleValue = renderScale.value
   const center = stageCenterOffset.value
-  const base = effectiveCanvasPixelSize.value
+  const viewScale = normalizeViewScale(viewTransform.scale)
+  const translateX = center.x + viewTransform.offset.x * renderScaleValue
+  const translateY = center.y + viewTransform.offset.y * renderScaleValue
   return {
-    width: `${base.width}px`,
-    height: `${base.height}px`,
-    // The stage size already includes BASE_PIXELS_PER_METER; only zoom (viewTransform.scale) is applied here.
-    transform: `translate(${center.x + viewTransform.offset.x * scale}px, ${center.y + viewTransform.offset.y * scale}px) scale(${viewTransform.scale})`,
+    width: `${effectiveCanvasPixelSize.value.width}px`,
+    height: `${effectiveCanvasPixelSize.value.height}px`,
+    transform: `translate(${translateX}px, ${translateY}px) scale(${viewScale})`,
     transformOrigin: 'top left',
     willChange: 'transform',
   }
 })
+
 
 watch(dialogOpen, (open) => {
   if (open) {
@@ -4792,17 +4820,18 @@ function handleWheel(event: WheelEvent) {
     return
   }
   event.preventDefault()
-  // Use the real-time DOMRect to avoid zoom-center drift caused by stale editorRect cache.
-  const rect = editorRef.value?.getBoundingClientRect()
+  const rect = getZoomAnchorRect()
   if (!rect) {
     return
   }
-  const normalizedDelta = event.deltaMode === WheelEvent.DOM_DELTA_LINE
-    ? event.deltaY * 16
+
+  const deltaModeScale = event.deltaMode === WheelEvent.DOM_DELTA_LINE
+    ? 16
     : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
-      ? event.deltaY * rect.height
-      : event.deltaY
-  const factor = Math.exp(-normalizedDelta * 0.0015)
+      ? rect.height
+      : 1
+  const delta = event.deltaY * deltaModeScale
+  const factor = Math.exp(-delta * 0.0015)
   if (zoomViewByFactor(factor, event.clientX, event.clientY)) {
     markPlanningDirty()
   }
@@ -4887,22 +4916,6 @@ function handleKeydown(event: KeyboardEvent) {
     }
     event.preventDefault()
     deleteSelectedFeature()
-    return
-  }
-  const isZoomShortcut = (event.ctrlKey || event.metaKey) && !event.altKey && (event.key === '=' || event.key === '+' || event.key === '-' || event.key === '_' || event.key === '0')
-  if (isZoomShortcut) {
-    event.preventDefault()
-    if (event.key === '0') {
-      handleResetView()
-      return
-    }
-    if (event.key === '-' || event.key === '_') {
-      zoomViewOut()
-      markPlanningDirty()
-      return
-    }
-    zoomViewIn()
-    markPlanningDirty()
     return
   }
   if (event.key === 'Enter') {
@@ -5612,22 +5625,6 @@ async function savePlanningImageToIndexedDB(image: PlanningImage, file: File) {
 
 async function persistLayersToIndexedDB() {
   await persistPlanningImageLayersToIndexedDB(currentSceneId.value ?? null, planningImages.value)
-}
-
-function handleResetView() {
-  fitViewToCanvas({ markDirty: true })
-}
-
-function handleZoomInClick() {
-  if (zoomViewIn()) {
-    markPlanningDirty()
-  }
-}
-
-function handleZoomOutClick() {
-  if (zoomViewOut()) {
-    markPlanningDirty()
-  }
 }
 
 function handleImageLayerToggle(imageId: string) {
@@ -6528,38 +6525,50 @@ onBeforeUnmount(() => {
 
             <div class="toolbar-right">
               <div class="zoom-control">
-                <v-tooltip text="Zoom out (Ctrl/⌘ + -)" location="bottom">
+                <v-tooltip text="Zoom Out" location="bottom">
                   <template #activator="{ props }">
                     <v-btn
                       v-bind="props"
                       variant="tonal"
                       density="comfortable"
                       class="tool-button tool-button--zoom"
-                      @click="handleZoomOutClick"
+                      @click="handleZoomOutView"
                     >
                       <v-icon>mdi-magnify-minus-outline</v-icon>
                     </v-btn>
                   </template>
                 </v-tooltip>
 
-                <div class="zoom-value" :title="`Canvas zoom ${formatZoomLabel(viewTransform.scale)}`">
-                  {{ formatZoomLabel(viewTransform.scale) }}
-                </div>
+                <div class="zoom-value">{{ formatZoomLabel(viewTransform.scale) }}</div>
 
-                <v-tooltip text="Zoom in (Ctrl/⌘ + =)" location="bottom">
+                <v-tooltip text="Zoom In" location="bottom">
                   <template #activator="{ props }">
                     <v-btn
                       v-bind="props"
                       variant="tonal"
                       density="comfortable"
                       class="tool-button tool-button--zoom"
-                      @click="handleZoomInClick"
+                      @click="handleZoomInView"
                     >
                       <v-icon>mdi-magnify-plus-outline</v-icon>
                     </v-btn>
                   </template>
                 </v-tooltip>
               </div>
+
+              <v-tooltip text="Fit View" location="bottom">
+                <template #activator="{ props }">
+                  <v-btn
+                    v-bind="props"
+                    variant="tonal"
+                    density="comfortable"
+                    class="tool-button"
+                    @click="handleFitView"
+                  >
+                    <v-icon>mdi-fit-to-screen-outline</v-icon>
+                  </v-btn>
+                </template>
+              </v-tooltip>
 
               <v-tooltip text="Reset View" location="bottom">
                 <template #activator="{ props }">
@@ -6570,7 +6579,7 @@ onBeforeUnmount(() => {
                     class="tool-button"
                     @click="handleResetView"
                   >
-                    <v-icon>mdi-fit-to-screen-outline</v-icon>
+                    <v-icon>mdi-backup-restore</v-icon>
                   </v-btn>
                 </template>
               </v-tooltip>
