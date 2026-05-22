@@ -34,6 +34,15 @@ export interface CouponItem {
   title: string;
   description: string;
   validUntil: string;
+  isVisible: boolean;
+  productId?: string | null;
+  product?: {
+    id: string;
+    name: string;
+    slug: string;
+    price: number;
+    categoryId: string | null;
+  } | null;
   useConditions?: Record<string, unknown> | null;
   usageRules?: Record<string, unknown> | null;
   metadata?: Record<string, unknown> | null;
@@ -95,6 +104,8 @@ export interface CouponPayload {
   title?: string;
   description: string;
   validUntil: string;
+  isVisible?: boolean;
+  price?: number;
   usageRules?: Record<string, unknown> | null;
   metadata?: Record<string, unknown> | null;
 }

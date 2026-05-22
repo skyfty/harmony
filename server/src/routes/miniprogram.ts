@@ -18,6 +18,7 @@ import { listHotSpotsPublic, listFeaturedSpotsPublic } from '@/controllers/minip
 import { listHotEvents } from '@/controllers/miniprogram/eventController'
 import {
   listUserCoupons,
+  listCouponCatalog,
   claimCoupon,
   getUserCouponDetail,
   useUserCoupon,
@@ -130,6 +131,7 @@ miniRouter.post('/analytics/events', optionalMiniAuth, trackAnalyticsEvent)
 miniRouter.get('/products', optionalMiniAuth, listProducts)
 miniRouter.get('/products/:id', optionalMiniAuth, getProduct)
 miniRouter.get('/vehicles', optionalMiniAuth, listVehicles)
+miniRouter.get('/coupons/catalog', optionalMiniAuth, listCouponCatalog)
 
 miniRouter.use(requireMiniAuth)
 

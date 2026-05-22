@@ -2,7 +2,9 @@ import { startSession } from 'mongoose'
 import type { ClientSession } from 'mongoose'
 import { OrderModel } from '@/models/Order'
 import { ProductModel } from '@/models/Product'
+import { CouponModel } from '@/models/Coupon'
 import { UserProductModel } from '@/models/UserProduct'
+import { UserCouponModel } from '@/models/UserCoupon'
 import { VehicleModel } from '@/models/Vehicle'
 import { UserVehicleModel } from '@/models/UserVehicle'
 import { addProductToWarehouse } from '@/services/warehouseService'
@@ -129,6 +131,51 @@ async function fulfillOrder(order: any, session?: ClientSession): Promise<void> 
 				},
 				{ upsert: true, session },
 			).exec()
+		}
+
+		const boundCouponQuery = CouponModel.findOne({ productId: product._id }).select({ _id: 1, validUntil: 1 })
+		if (session) {
+			boundCouponQuery.session(session)
+		}
+		const boundCoupon = await boundCouponQuery.lean().exec()
+		if (boundCoupon?._id) {
+			const existingCouponQuery = UserCouponModel.findOne({ userId: order.userId, couponId: boundCoupon._id })
+			if (session) {
+				existingCouponQuery.session(session)
+			}
+			const existingCoupon = await existingCouponQuery.select({ _id: 1 }).lean().exec()
+			if (existingCoupon?._id) {
+				await UserCouponModel.updateOne(
+					{ _id: existingCoupon._id },
+					{
+						$set: {
+							orderId: order._id,
+							metadata: order.metadata ?? null,
+						},
+					},
+					{ session },
+				).exec()
+			} else {
+				const couponExpiresAt = product.validityDays
+					? new Date(now.getTime() + product.validityDays * 86400000)
+					: null
+				await UserCouponModel.updateOne(
+					{ userId: order.userId, couponId: boundCoupon._id },
+					{
+						$setOnInsert: {
+							userId: order.userId,
+							couponId: boundCoupon._id,
+							orderId: order._id,
+							status: 'unused',
+							usedAt: null,
+							claimedAt: now,
+							expiresAt: couponExpiresAt ?? boundCoupon.validUntil ?? null,
+							metadata: order.metadata ?? null,
+						},
+					},
+					{ upsert: true, session },
+				).exec()
+			}
 		}
 
 		await addProductToWarehouse({

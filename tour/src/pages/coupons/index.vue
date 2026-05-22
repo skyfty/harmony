@@ -2,15 +2,16 @@
   <view class="page">
     <MiniAuthRecovery />
     <PageHeader
-      title="卡券中心"
+      title="Coupons"
       :show-back="false"
     />
+
     <view class="content">
       <view
-        v-for="coupon in filteredCoupons"
+        v-for="coupon in coupons"
         :key="coupon.id"
         class="card-item"
-        @tap="openDetail(coupon.id)"
+        @tap="handleCardTap(coupon)"
       >
         <CouponCard
           :type-code="coupon.type?.code"
@@ -19,80 +20,186 @@
           :description="coupon.description"
           :valid-until="coupon.validUntil"
           :status="coupon.status"
-          @use="openDetail(coupon.id)"
         />
+        <view class="actions">
+          <button
+            v-if="coupon.status === 'available'"
+            class="action-btn action-btn--primary"
+            :disabled="purchasingId === coupon.id"
+            @tap.stop="handlePurchase(coupon)"
+          >
+            {{ purchasingId === coupon.id ? 'Purchasing...' : 'Buy' }}
+          </button>
+          <button
+            v-else-if="coupon.status === 'unused' && coupon.userCouponId"
+            class="action-btn action-btn--primary"
+            @tap.stop="openUserCoupon(coupon.userCouponId)"
+          >
+            Use
+          </button>
+          <view
+            v-else
+            class="action-state"
+          >
+            {{ coupon.status === 'expired' ? 'Expired' : coupon.status === 'used' ? 'Used' : 'Unavailable' }}
+          </view>
+        </view>
       </view>
+
       <view
-        v-if="!filteredCoupons.length"
+        v-if="!coupons.length"
         class="empty"
       >
-        <text>
-          🎫
-        </text>
-        <text>
-          暂无卡券
-        </text>
+        <text>No visible coupons</text>
       </view>
     </view>
+
     <BottomNav
       active="coupon"
       @navigate="handleNavigate"
+    />
+    <PhoneBindSheet
+      v-model="showPhoneBindSheet"
+      @bound="handlePhoneBound"
     />
   </view>
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { onMounted, ref } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
-import { getStatusBarHeight } from '@/utils/systemInfo';
-
-const statusBarHeight = ref(getStatusBarHeight());
-import { onMounted } from 'vue';
 import BottomNav from '@/components/BottomNav.vue';
+import CouponCard from '@/components/CouponCard.vue';
+import PhoneBindSheet from '@/components/PhoneBindSheet.vue';
 import MiniAuthRecovery from '@/components/MiniAuthRecovery.vue';
 import PageHeader from '@/components/PageHeader.vue';
-import CouponCard from '@/components/CouponCard.vue';
-import { listMyCoupons } from '@/api/mini/coupons';
+import { listCouponCatalog, purchaseCouponByProduct } from '@/api/mini/coupons';
 import { redirectToNav, type NavKey } from '@/utils/navKey';
-import type { Coupon, CouponStatus } from '@/types/coupon';
+import {
+  requestMiniProgramPayment,
+  toCheckoutErrorMessage,
+  isPhoneBindingRequiredError,
+  isProfileCompletionRequiredError,
+  promptCompleteProfileBeforeCheckout,
+} from '@/utils/checkout';
+import type { CouponCatalogItem } from '@/types/coupon';
 
 defineOptions({
   name: 'CouponsIndexPage',
 });
 
-const coupons = ref<Coupon[]>([]);
-const keyword = ref('');
-const selectedStatus = ref<'all' | CouponStatus>('all');
+const coupons = ref<CouponCatalogItem[]>([]);
+const purchasingId = ref('');
+const showPhoneBindSheet = ref(false);
+const pendingPurchaseProductId = ref('');
+const purchaseCoupon = purchaseCouponByProduct as unknown as (productId: string) => Promise<{
+  order?: { id: string };
+  payParams?: {
+    appId: string;
+    timeStamp: string;
+    nonceStr: string;
+    package: string;
+    signType: 'RSA';
+    paySign: string;
+  };
+}>;
 
 async function reload() {
-  coupons.value = await listMyCoupons();
+  coupons.value = await listCouponCatalog();
 }
 
-const filteredCoupons = computed(() => {
-  let items = coupons.value;
-  if (selectedStatus.value !== 'all') {
-    items = items.filter((item) => item.status === selectedStatus.value);
+async function waitForOwnershipSync(couponId: string): Promise<boolean> {
+  const maxAttempts = 8;
+  const intervalMs = 700;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    await reload();
+    const current = coupons.value.find((item) => item.id === couponId);
+    if (current && current.status !== 'available') {
+      return true;
+    }
+    if (attempt < maxAttempts - 1) {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, intervalMs);
+      });
+    }
   }
-  const text = keyword.value.trim();
-  if (!text) {
-    return items;
+  return false;
+}
+
+function handleCardTap(coupon: CouponCatalogItem) {
+  if (coupon.status === 'unused' && coupon.userCouponId) {
+    openUserCoupon(coupon.userCouponId);
   }
-  return items.filter((item) => item.title.includes(text) || item.description.includes(text));
-});
+}
+
+async function handlePhoneBound() {
+  const productId = pendingPurchaseProductId.value;
+  pendingPurchaseProductId.value = '';
+  if (!productId) {
+    return;
+  }
+  await handlePurchaseByProductId(productId, true);
+}
+
+function openUserCoupon(userCouponId: string) {
+  if (!userCouponId) {
+    return;
+  }
+  void uni.navigateTo({ url: `/pages/coupons/detail?id=${encodeURIComponent(userCouponId)}` });
+}
+
+async function handlePurchaseByProductId(productId: string, fromRetry = false) {
+  if (!productId || purchasingId.value) {
+    return;
+  }
+
+  const coupon = coupons.value.find((item) => item.productId === productId && item.status === 'available') ?? null;
+  if (!coupon) {
+    return;
+  }
+
+  purchasingId.value = coupon.id;
+  void uni.showLoading({ title: fromRetry ? 'Retrying purchase...' : 'Purchasing...' });
+  try {
+    const result = await purchaseCoupon(productId);
+    if (result.payParams) {
+      await requestMiniProgramPayment(result.payParams);
+    }
+    const synced = await waitForOwnershipSync(coupon.id);
+    void uni.showToast({ title: synced ? 'Purchase succeeded' : 'Paid, syncing status...', icon: 'none' });
+  } catch (error: unknown) {
+    if (isPhoneBindingRequiredError(error)) {
+      pendingPurchaseProductId.value = productId;
+      showPhoneBindSheet.value = true;
+      return;
+    }
+    if (isProfileCompletionRequiredError(error)) {
+      await promptCompleteProfileBeforeCheckout();
+      return;
+    }
+    void uni.showToast({ title: toCheckoutErrorMessage(error, 'Purchase failed'), icon: 'none' });
+  } finally {
+    purchasingId.value = '';
+    void uni.hideLoading();
+  }
+}
+
+async function handlePurchase(coupon: CouponCatalogItem) {
+  if (!coupon.productId || purchasingId.value || coupon.status !== 'available') {
+    return;
+  }
+  await handlePurchaseByProductId(coupon.productId);
+}
 
 onMounted(() => {
   void reload().catch(() => {
-    void uni.showToast({ title: '加载失败', icon: 'none' });
+    void uni.showToast({ title: 'Load failed', icon: 'none' });
   });
 });
 
 onShow(() => {
   void reload();
 });
-
-function openDetail(id: string) {
-  void uni.navigateTo({ url: `/pages/coupons/detail?id=${encodeURIComponent(id)}` });
-}
 
 function handleNavigate(key: NavKey) {
   redirectToNav(key);
@@ -102,7 +209,7 @@ function handleNavigate(key: NavKey) {
 <style scoped lang="scss">
 .page {
   min-height: 100vh;
-  background: #f3f6fb;
+  background: linear-gradient(180deg, #eef4ff 0%, #f8fafc 42%, #f3f6fb 100%);
   padding-bottom: 85px;
   padding-bottom: calc(85px + constant(safe-area-inset-bottom));
   padding-bottom: calc(85px + env(safe-area-inset-bottom));
@@ -117,6 +224,38 @@ function handleNavigate(key: NavKey) {
 
 .card-item {
   overflow: visible;
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+.action-btn {
+  min-width: 118px;
+  height: 36px;
+  line-height: 36px;
+  border-radius: 999px;
+  font-size: 13px;
+  padding: 0 16px;
+}
+
+.action-btn--primary {
+  background: linear-gradient(135deg, #1f7aec, #4aa3ff);
+  color: #ffffff;
+}
+
+.action-state {
+  min-width: 118px;
+  height: 36px;
+  line-height: 36px;
+  text-align: center;
+  border-radius: 999px;
+  background: rgba(138, 148, 166, 0.12);
+  color: #8a94a6;
+  font-size: 13px;
+  padding: 0 16px;
 }
 
 .empty {

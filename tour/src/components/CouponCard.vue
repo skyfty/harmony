@@ -1,9 +1,8 @@
 <template>
   <view
     class="coupon-card"
-    :class="{ 'coupon-card--inactive': status !== 'unused' }"
+    :class="{ 'coupon-card--inactive': status === 'used' || status === 'expired' }"
   >
-    <!-- Left: colored type area -->
     <view
       class="coupon-left"
       :style="{ background: themeGradient }"
@@ -18,14 +17,12 @@
       </text>
     </view>
 
-    <!-- Perforation divider -->
     <view class="coupon-perforation">
       <view class="coupon-perforation__hole coupon-perforation__hole--top" />
       <view class="coupon-perforation__dash" />
       <view class="coupon-perforation__hole coupon-perforation__hole--bottom" />
     </view>
 
-    <!-- Right: info area -->
     <view class="coupon-right">
       <text class="coupon-right__title">
         {{ title }}
@@ -38,7 +35,7 @@
       </text>
       <view class="coupon-right__footer">
         <text class="coupon-right__date">
-          有效期至 {{ formattedDate }}
+          Valid until {{ formattedDate }}
         </text>
         <view
           class="coupon-status"
@@ -68,16 +65,15 @@ const props = defineProps<{
 
 defineEmits<{ (event: 'use'): void }>();
 
-/* ---------- status ---------- */
 const statusText = computed(() => {
-  if (props.status === 'unused') return '未使用';
-  if (props.status === 'used') return '已使用';
-  return '已过期';
+  if (props.status === 'available') return 'Available';
+  if (props.status === 'unused') return 'Unused';
+  if (props.status === 'used') return 'Used';
+  return 'Expired';
 });
 
 const statusClass = computed(() => `coupon-status--${props.status}`);
 
-/* ---------- type theme colors ---------- */
 interface ThemeColors {
   gradient: string;
 }
@@ -102,15 +98,14 @@ const themeGradient = computed(() => resolvedTheme.value.gradient);
 
 const defaultTypeName = computed(() => {
   const map: Record<string, string> = {
-    ticket: '门票',
-    souvenir: '纪念品',
-    photo: '照片',
-    discount: '折扣',
+    ticket: 'Ticket',
+    souvenir: 'Souvenir',
+    photo: 'Photo',
+    discount: 'Discount',
   };
-  return map[(props.typeCode || '').toLowerCase()] ?? '卡券';
+  return map[(props.typeCode || '').toLowerCase()] ?? 'Coupon';
 });
 
-/* ---------- icon ---------- */
 const iconMap: Record<string, string> = {
   ticket: '/static/icons/coupons/ticket.png',
   souvenir: '/static/icons/coupons/souvenir.png',
@@ -123,7 +118,6 @@ const typeIconSrc = computed(() => {
   return iconMap[code] ?? '/static/icons/coupons/default.png';
 });
 
-/* ---------- date formatting ---------- */
 const formattedDate = computed(() => {
   if (!props.validUntil) return '--';
   try {
@@ -139,7 +133,6 @@ const formattedDate = computed(() => {
 </script>
 
 <style scoped lang="scss">
-/* ===== Coupon Card — classic voucher style ===== */
 $card-radius: 16px;
 $left-width: 100px;
 $hole-size: 20px;
@@ -161,7 +154,6 @@ $page-bg: #f3f6fb;
   opacity: 0.6;
 }
 
-/* ---------- Left colored area ---------- */
 .coupon-left {
   width: $left-width;
   flex-shrink: 0;
@@ -188,7 +180,6 @@ $page-bg: #f3f6fb;
   }
 }
 
-/* ---------- Perforation divider ---------- */
 .coupon-perforation {
   position: relative;
   width: 0;
@@ -222,7 +213,6 @@ $page-bg: #f3f6fb;
   }
 }
 
-/* ---------- Right info area ---------- */
 .coupon-right {
   flex: 1;
   display: flex;
@@ -271,7 +261,6 @@ $page-bg: #f3f6fb;
   }
 }
 
-/* ---------- Status badge ---------- */
 .coupon-status {
   flex-shrink: 0;
   border-radius: 999px;
@@ -282,6 +271,14 @@ $page-bg: #f3f6fb;
     font-size: 11px;
     font-weight: 500;
     line-height: 1.5;
+  }
+}
+
+.coupon-status--available {
+  background: rgba(31, 122, 236, 0.12);
+
+  .coupon-status__text {
+    color: #1f7aec;
   }
 }
 

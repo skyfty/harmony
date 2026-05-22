@@ -20,7 +20,7 @@ import { ensureEditorAuthBootstrap } from '@/services/authService'
 import { koaBody } from '@/utils/bodyParser'
 import { MultiuserService } from '@/services/multiuserService'
 import { ensureVehicleCoverUrlField, ensureVehicleIdentifierField, ensureVehicleSortOrderField } from '@/services/vehicleMigrationService'
-import { ensureTransportProductCategory } from '@/services/productCategoryService'
+import { ensureCouponProductCategory, ensureTransportProductCategory } from '@/services/productCategoryService'
 
 type HarmonyKoa = Koa<DefaultState, DefaultContext>
 
@@ -41,6 +41,7 @@ async function bootstrap(): Promise<void> {
   await ensureVehicleIdentifierField()
   await ensureVehicleSortOrderField()
   await ensureTransportProductCategory()
+  await ensureCouponProductCategory()
 
   const app: HarmonyKoa = new Koa()
 

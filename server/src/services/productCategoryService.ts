@@ -3,6 +3,7 @@ import { ProductCategoryModel } from '@/models/ProductCategory'
 import { ProductModel } from '@/models/Product'
 
 export const TRANSPORT_PRODUCT_CATEGORY_NAME = '交通工具'
+export const COUPON_PRODUCT_CATEGORY_NAME = '卡券商品'
 
 export interface ProductCategoryView {
   id: string
@@ -143,6 +144,38 @@ export async function ensureTransportProductCategory(): Promise<void> {
 
 export async function getTransportProductCategory(): Promise<{ id: string; name: string } | null> {
   const normalizedName = normalizeName(TRANSPORT_PRODUCT_CATEGORY_NAME)
+  const row = await ProductCategoryModel.findOne({ normalizedName, enabled: true }).lean().exec()
+  if (!row) {
+    return null
+  }
+  return {
+    id: row._id.toString(),
+    name: row.name,
+  }
+}
+
+export async function ensureCouponProductCategory(): Promise<void> {
+  const normalizedName = normalizeName(COUPON_PRODUCT_CATEGORY_NAME)
+  await ProductCategoryModel.updateOne(
+    { normalizedName },
+    {
+      $setOnInsert: {
+        name: COUPON_PRODUCT_CATEGORY_NAME,
+        description: '卡券商品分类',
+        sortOrder: 20,
+        enabled: true,
+        normalizedName,
+      },
+      $set: {
+        isBuiltin: true,
+      },
+    },
+    { upsert: true },
+  ).exec()
+}
+
+export async function getCouponProductCategory(): Promise<{ id: string; name: string } | null> {
+  const normalizedName = normalizeName(COUPON_PRODUCT_CATEGORY_NAME)
   const row = await ProductCategoryModel.findOne({ normalizedName, enabled: true }).lean().exec()
   if (!row) {
     return null

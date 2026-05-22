@@ -1129,6 +1129,8 @@ export interface CouponDocument extends Document<Types.ObjectId> {
   title: string
   description: string
   validUntil: Date
+  isVisible: boolean
+  productId?: Types.ObjectId | null
   usageRules?: Record<string, unknown> | null
   metadata?: Record<string, unknown> | null
   createdAt: Date
@@ -1150,6 +1152,7 @@ export type UserCouponStatus = 'unused' | 'used' | 'expired'
 export interface UserCouponDocument extends Document<Types.ObjectId> {
   userId: Types.ObjectId
   couponId: Types.ObjectId
+  orderId?: Types.ObjectId | null
   status: UserCouponStatus
   claimedAt: Date
   usedAt?: Date | null

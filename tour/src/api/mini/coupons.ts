@@ -1,4 +1,4 @@
-import type { Coupon } from '@/types/coupon'
+import type { Coupon, CouponCatalogItem } from '@/types/coupon'
 import { MiniApiError, buildQueryString, miniRequest } from '@harmony/utils'
 import { ensureMiniAuth } from './session'
 
@@ -10,6 +10,27 @@ type CouponsResponse = {
 type CouponListParams = {
   status?: 'unused' | 'used' | 'expired'
   keyword?: string
+}
+
+type CouponCatalogResponse = {
+  total: number
+  coupons: CouponCatalogItem[]
+}
+
+type PurchaseCouponResponse = {
+  order?: {
+    id: string
+    orderNumber?: string
+    paymentStatus?: string
+  }
+  payParams?: {
+    appId: string
+    timeStamp: string
+    nonceStr: string
+    package: string
+    signType: 'RSA'
+    paySign: string
+  }
 }
 
 function buildQuery(params?: CouponListParams): string {
@@ -33,6 +54,55 @@ export async function listMyCoupons(params?: CouponListParams): Promise<Coupon[]
       return []
     }
     throw err
+  }
+}
+
+export async function listCouponCatalog(): Promise<CouponCatalogItem[]> {
+  await ensureMiniAuth()
+  try {
+    const res = await miniRequest<CouponCatalogResponse>('/coupons/catalog', { method: 'GET' })
+    return Array.isArray(res.coupons) ? res.coupons : []
+  } catch (err) {
+    if (err instanceof MiniApiError && err.kind === 'auth') {
+      return []
+    }
+    throw err
+  }
+}
+
+export async function purchaseCouponByProduct(productId: string): Promise<PurchaseCouponResponse> {
+  await ensureMiniAuth()
+  const order = await miniRequest<{ id: string; orderNumber: string }>('/orders', {
+    method: 'POST',
+    body: {
+      paymentMethod: 'wechat',
+      items: [
+        {
+          productId,
+          itemType: 'product',
+          quantity: 1,
+        },
+      ],
+      metadata: {
+        source: 'tour-coupons',
+        productId,
+      },
+    },
+  })
+  const payment = await miniRequest<{ payParams?: PurchaseCouponResponse['payParams']; paymentStatus?: string }>(
+    `/orders/${encodeURIComponent(order.id)}/pay`,
+    {
+      method: 'POST',
+      body: {},
+    },
+  )
+  return {
+    order: {
+      id: order.id,
+      orderNumber: order.orderNumber,
+      paymentStatus: payment.paymentStatus,
+    },
+    payParams: payment.payParams,
   }
 }
 

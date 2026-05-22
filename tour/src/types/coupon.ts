@@ -1,4 +1,4 @@
-export type CouponStatus = 'unused' | 'used' | 'expired';
+export type CouponStatus = 'unused' | 'used' | 'expired' | 'available';
 
 export type CouponTypeCode = 'ticket' | 'souvenir' | 'photo' | 'discount' | string;
 
@@ -19,4 +19,19 @@ export interface Coupon {
   claimedAt?: string | null;
   usedAt?: string | null;
   expiresAt?: string | null;
+}
+
+export interface CouponCatalogItem {
+  id: string;
+  title: string;
+  description: string;
+  validUntil: string;
+  type?: CouponType | null;
+  productId?: string | null;
+  price: number;
+  status: CouponStatus;
+  claimedAt?: string | null;
+  usedAt?: string | null;
+  expiresAt?: string | null;
+  userCouponId?: string | null;
 }

@@ -2,7 +2,7 @@ import type { Context } from 'koa'
 import { Types } from 'mongoose'
 import { CouponModel } from '@/models/Coupon'
 import { UserCouponModel } from '@/models/UserCoupon'
-import { ensureUserId } from '@/controllers/miniprogram/utils'
+import { ensureUserId, getOptionalUserId } from '@/controllers/miniprogram/utils'
 import { computeUserCouponStatus, objectIdString } from './miniDtoUtils'
 
 type CouponDto = {
@@ -20,6 +20,23 @@ type CouponDto = {
   claimedAt?: string | null
   usedAt?: string | null
   expiresAt?: string | null
+}
+
+type CouponCatalogStatus = 'available' | 'unused' | 'used' | 'expired'
+
+type CouponCatalogDto = {
+  id: string
+  title: string
+  description: string
+  validUntil: string
+  type: CouponDto['type']
+  productId: string | null
+  price: number
+  status: CouponCatalogStatus
+  claimedAt?: string | null
+  usedAt?: string | null
+  expiresAt?: string | null
+  userCouponId?: string | null
 }
 
 function mapUserCouponDto(entry: any): CouponDto | null {
@@ -52,6 +69,74 @@ function mapUserCouponDto(entry: any): CouponDto | null {
     claimedAt: entry.claimedAt?.toISOString?.() ?? null,
     usedAt: entry.usedAt?.toISOString?.() ?? null,
     expiresAt: expiresAt?.toISOString?.() ?? null,
+  }
+}
+
+function mapCouponCatalogDto(entry: any, userEntry?: any | null): CouponCatalogDto | null {
+  const coupon = entry
+  if (!coupon) {
+    return null
+  }
+  const product = coupon.productId
+  const userCoupon = userEntry ?? null
+  const expiresAt = userCoupon?.expiresAt ?? coupon.validUntil
+  const ownedStatus = userCoupon
+    ? computeUserCouponStatus({
+        status: userCoupon.status,
+        expiresAt,
+        usedAt: userCoupon.usedAt,
+      })
+    : null
+  const status: CouponCatalogStatus =
+    ownedStatus ?? (coupon.validUntil && new Date(coupon.validUntil).getTime() <= Date.now() ? 'expired' : 'available')
+
+  return {
+    id: objectIdString(coupon._id),
+    title: coupon.title,
+    description: coupon.description,
+    validUntil: (coupon.validUntil as Date).toISOString().slice(0, 10),
+    type:
+      coupon.typeId && typeof coupon.typeId === 'object'
+        ? {
+            id: objectIdString(coupon.typeId._id),
+            name: coupon.typeId.name ?? '',
+            code: coupon.typeId.code ?? '',
+            iconUrl: coupon.typeId.iconUrl ?? '',
+          }
+        : null,
+    productId: product?._id?.toString?.() ?? product?.toString?.() ?? null,
+    price: Number(product?.price ?? 0),
+    status,
+    claimedAt: userCoupon?.claimedAt?.toISOString?.() ?? null,
+    usedAt: userCoupon?.usedAt?.toISOString?.() ?? null,
+    expiresAt: expiresAt?.toISOString?.() ?? null,
+    userCouponId: userCoupon?._id?.toString?.() ?? null,
+  }
+}
+
+export async function listCouponCatalog(ctx: Context): Promise<void> {
+  const userId = getOptionalUserId(ctx)
+  const rows = await CouponModel.find({
+    isVisible: { $ne: false },
+    productId: { $ne: null },
+  })
+    .populate('typeId')
+    .populate('productId')
+    .sort({ createdAt: -1 })
+    .lean()
+    .exec()
+
+  const couponIds = rows.map((row: any) => row._id)
+  const ownedRows =
+    userId && couponIds.length
+      ? await UserCouponModel.find({ userId, couponId: { $in: couponIds } }).lean().exec()
+      : []
+  const ownedMap = new Map((ownedRows as any[]).map((row) => [row.couponId.toString(), row]))
+
+  const coupons = (rows as any[]).map((row) => mapCouponCatalogDto(row, ownedMap.get(row._id.toString()))).filter(Boolean)
+  ctx.body = {
+    total: coupons.length,
+    coupons,
   }
 }
 

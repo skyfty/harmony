@@ -7,6 +7,8 @@ const couponSchema = new Schema<CouponDocument>(
     title: { type: String, required: true, trim: true },
     description: { type: String, required: true, trim: true },
     validUntil: { type: Date, required: true },
+    isVisible: { type: Boolean, required: true, default: true },
+    productId: { type: Schema.Types.ObjectId, ref: 'Product', default: null },
     usageRules: { type: Schema.Types.Mixed, default: null },
     metadata: { type: Schema.Types.Mixed, default: null },
   },
@@ -17,5 +19,15 @@ const couponSchema = new Schema<CouponDocument>(
 )
 
 couponSchema.index({ validUntil: 1 })
+couponSchema.index(
+  { productId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      productId: { $type: 'objectId' },
+    },
+  },
+)
+couponSchema.index({ isVisible: 1, validUntil: -1 })
 
 export const CouponModel = model<CouponDocument>('Coupon', couponSchema)

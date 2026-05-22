@@ -45,6 +45,7 @@ export async function promptBindPhoneBeforeCheckout(): Promise<void> {
 export async function requestMiniProgramPayment(payParams: MiniPayParams): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     uni.requestPayment({
+      provider: 'wxpay',
       ...payParams,
       success: () => resolve(),
       fail: (error) => reject(error),
