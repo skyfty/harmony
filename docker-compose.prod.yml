@@ -137,6 +137,18 @@ services:
           create_host_path: false
     restart: unless-stopped
 
+  tour:
+    build:
+      <<: *root-build
+      dockerfile: tour/Dockerfile
+    image: harmony-tour
+    container_name: harmony-tour
+    depends_on:
+      - server
+    ports:
+      - "8089:80"
+    restart: unless-stopped
+
   mongo-express:
     image: mongo-express:latest
     container_name: harmony-mongo-express

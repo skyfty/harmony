@@ -19,6 +19,7 @@ Thumbs.db
 # Local env and logs
 *.log
 .env*
+!tour/.env.production
 
 # Large runtime data
 uploads/
