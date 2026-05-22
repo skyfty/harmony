@@ -113,34 +113,58 @@ export const axesMap = (options: GizmoOptionsFallback, offset: number = 2) => {
     labelColor: ColorRepresentation
   ) {
     radius = radius * (size / 2);
+    const fillColor = colorManager.set(color ?? "#ffffff").getStyle();
+    const borderColor = colorManager.set(border?.color ?? 0xffffff).getStyle();
+    const labelFillColor = colorManager.set(labelColor ?? 0x101820).getStyle();
+    const borderSize = border?.size ?? 0;
+
+    ctx.save();
+    ctx.shadowColor = fillColor;
+    ctx.shadowBlur = Math.max(0, size * 0.075);
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = 0;
 
     if (color != null && color !== "") {
       drawRoundRectPath();
-      ctx.fillStyle = colorManager.set(color!).getStyle();
+      ctx.globalAlpha = isSphere ? 0.9 : 0.82;
+      ctx.fillStyle = fillColor;
       ctx.fill();
     }
 
-    if (border && border.size) {
-      const halfBorderWidth = (border.size * size) / 2;
-      x += halfBorderWidth;
-      y += halfBorderWidth;
-      size -= border.size * size;
-      radius = Math.max(0, radius - halfBorderWidth);
+    ctx.restore();
 
+    if (borderSize > 0) {
+      const inset = (borderSize * size) / 2;
+      x += inset;
+      y += inset;
+      size -= borderSize * size;
+      radius = Math.max(0, radius - inset);
+
+      ctx.save();
+      ctx.shadowColor = "transparent";
       drawRoundRectPath();
-      ctx.strokeStyle = colorManager.set(border.color).getStyle();
-      ctx.lineWidth = border.size * size;
+      ctx.globalAlpha = 0.78;
+      ctx.strokeStyle = borderColor;
+      ctx.lineWidth = Math.max(1, borderSize * size);
+      ctx.lineJoin = "round";
       ctx.stroke();
+      ctx.restore();
     }
 
-    if (label)
+    if (label) {
+      ctx.save();
+      ctx.shadowColor = "rgba(0, 0, 0, 0.18)";
+      ctx.shadowBlur = Math.max(0, size * 0.045);
+      ctx.globalAlpha = 0.98;
       drawText(
         ctx,
         x + size / 2,
         y + (size + offset) / 2,
         label,
-        colorManager.set(labelColor!).getStyle()
+        labelFillColor
       );
+      ctx.restore();
+    }
 
     function drawRoundRectPath() {
       ctx.beginPath();

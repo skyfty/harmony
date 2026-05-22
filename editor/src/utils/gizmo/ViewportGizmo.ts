@@ -16,11 +16,12 @@ import {
   type WebGLRenderer,
 } from "three";
 
-import { gizmoDomElement, setDomPlacement } from "./utils/gizmoDomElement";
+import { gizmoDomElement, getViewportGizmoDomRefs, setDomPlacement, setNorthCompassAnchor, type ViewportGizmoDomRefs } from "./utils/gizmoDomElement";
 import { getDomElement } from "./utils/getDomElement";
 import { updateAxis } from "./utils/updateAxis";
 import { isClick } from "./utils/isClick";
 import { intersectedObjects } from "./utils/intersectedObjects";
+import { DEFAULT_NORTH_DIRECTION, resolveNorthDirectionCompassAnchor } from "./utils/northDirection";
 
 import type {
   GizmoOptions,
@@ -36,6 +37,7 @@ import { optionsFallback } from "./utils/optionsFallback";
 import { clamp } from "three/src/math/MathUtils.js";
 import { axesObjects } from "./utils/axesObjects";
 import { axisHover } from "./utils/axisHover";
+import type { EnvironmentNorthDirection } from "@/types/environment";
 import type { WebGPURenderer } from "three/webgpu";
 
 type CameraControlsEventName = "start" | "end" | "change";
@@ -109,6 +111,7 @@ export class ViewportGizmo extends Object3D<ViewportGizmoEventMap> {
   private _camera!: Camera;
   private _container!: HTMLElement;
   private _domElement!: HTMLElement;
+  private _domRefs: ViewportGizmoDomRefs | null = null;
   private _domRect!: DOMRect;
   private _dragging: boolean = false;
   private _distance: number = 0;
@@ -285,11 +288,13 @@ export class ViewportGizmo extends Object3D<ViewportGizmoEventMap> {
       : document.body;
 
     this._domElement = gizmoDomElement(this._options);
+    this._domRefs = getViewportGizmoDomRefs(this._domElement);
     this._domElement.onpointerdown = (e) => this._onPointerDown(e);
     this._domElement.onpointermove = (e) => this._onPointerMove(e);
     this._domElement.onpointerleave = () => this._onPointerLeave();
 
     this._container.appendChild(this._domElement);
+    this.setNorthDirection(this._options.northDirection);
 
     if (this._controls) this.attachControls(this._controls);
 
@@ -426,6 +431,27 @@ export class ViewportGizmo extends Object3D<ViewportGizmoEventMap> {
     return this;
   }
 
+  /**
+   * Updates the north indicator shown on the gizmo compass.
+   *
+   * @param direction - World axis mapped to geographic north
+   */
+  setNorthDirection(direction: EnvironmentNorthDirection | null | undefined) {
+    const resolvedDirection = direction ?? DEFAULT_NORTH_DIRECTION;
+    this._options.northDirection = resolvedDirection;
+    if (this.options) {
+      this.options.northDirection = resolvedDirection;
+    }
+
+    const refs = this._domRefs;
+    if (!refs) {
+      return this;
+    }
+
+    setNorthCompassAnchor(refs, resolveNorthDirectionCompassAnchor(resolvedDirection));
+    return this;
+  }
+
   /** Cleans up all resources including geometries, materials, textures, and event listeners. */
   dispose() {
     this.detachControls();
@@ -439,6 +465,7 @@ export class ViewportGizmo extends Object3D<ViewportGizmoEventMap> {
     });
 
     this._domElement?.remove();
+    this._domRefs = null;
   }
 
   /**

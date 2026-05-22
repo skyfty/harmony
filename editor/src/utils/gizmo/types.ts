@@ -2,6 +2,7 @@ import type { DeepRequired } from "utility-types";
 import { BufferGeometry, Mesh, MeshBasicMaterial, Sprite } from "three";
 import type { Object3DEventMap } from "three";
 import type { ColorRepresentation } from "three";
+import type { EnvironmentNorthDirection } from "@/types/environment";
 
 /**
  * Configuration options for the ViewportGizmo.
@@ -47,6 +48,9 @@ export type GizmoOptions = {
     /** Offset from the bottom edge in pixel. Default `10` */
     bottom?: number;
   };
+
+  /** Which world axis should be treated as geographic north. */
+  northDirection?: EnvironmentNorthDirection;
 
   /** Whether view changes should be animated. Default `true` */
   animated?: boolean;

@@ -3,6 +3,7 @@ import type {
   GizmoOptions,
   GizmoOptionsFallback,
 } from "../types";
+import { DEFAULT_NORTH_DIRECTION } from "./northDirection";
 import {
   GIZMO_MAIN_AXES,
   GIZMO_AXES,
@@ -79,22 +80,22 @@ export const optionsFallback = (
   const axesFallback: GizmoAxisOptions = {
     enabled: true,
     color: 0xffffff,
-    opacity: 1,
+    opacity: 0.94,
     scale: isSphere ? 0.7 : 0.7,
     labelColor: 0x222222,
     line: false,
     border: {
-      size: 0,
-      color: 0xdddddd,
+      size: isSphere ? 0.018 : 0.016,
+      color: 0xe7eef7,
     },
     hover: {
-      color: isSphere ? 0xffffff : 0x93d3eb,
+      color: isSphere ? 0xf9fbfd : 0x93d3eb,
       labelColor: 0x222222,
       opacity: 1,
       scale: isSphere ? 0.7 : 0.7,
       border: {
-        size: 0,
-        color: 0xdddddd,
+        size: isSphere ? 0.026 : 0.022,
+        color: 0xffffff,
       },
     },
   };
@@ -103,8 +104,17 @@ export const optionsFallback = (
   const negativeAxesFallback = {
     line: false,
     scale: isSphere ? 0.45 : 0.7,
+    opacity: isSphere ? 0.88 : 0.92,
+    border: {
+      size: isSphere ? 0.014 : 0.012,
+      color: 0xe7eef7,
+    },
     hover: {
       scale: isSphere ? 0.5 : 0.7,
+      border: {
+        size: isSphere ? 0.022 : 0.018,
+        color: 0xffffff,
+      },
     },
   };
 
@@ -119,6 +129,7 @@ export const optionsFallback = (
     smoothness: 18,
     animated: true,
     speed: 1,
+    northDirection: DEFAULT_NORTH_DIRECTION,
     background: {
       enabled: true,
       color: isSphere ? 0xffffff : 0xe0e6ec,

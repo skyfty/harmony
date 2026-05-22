@@ -260,6 +260,7 @@ import { useTerrainStore, type GroundPanelTab } from '@/stores/terrainStore'
 import type { TerrainScatterBrushShape, TerrainScatterCategory } from '@schema/terrain-scatter'
 import { hashString, stableSerialize } from '@schema/stableSerialize'
 import { ViewportGizmo } from '@/utils/gizmo/ViewportGizmo'
+import { resolveNorthDirectionAngleDegrees } from '@/utils/gizmo/utils/northDirection'
 import { TerrainGridHelper } from './TerrainGridHelper'
 import { useTerrainGridController } from './useTerrainGridController'
 import { createGuideRouteWaypointLabelsManager, getGuideRouteWaypointLabelMeshes } from './GuideRouteWaypointLabels'
@@ -12706,6 +12707,11 @@ function applyEnvironmentTextureRotation(settings: EnvironmentSettings) {
 
 watch(environmentSignature, () => {
   void applyEnvironmentSettingsToScene(environmentSettings.value)
+  gizmoControls?.setNorthDirection(environmentSettings.value.northDirection)
+  if (gizmoContainerRef.value) {
+    const northDirectionAngle = resolveNorthDirectionAngleDegrees(environmentSettings.value.northDirection)
+    gizmoContainerRef.value.title = `North: ${environmentSettings.value.northDirection ?? '+X'} (${northDirectionAngle} deg)`
+  }
   updateFogForSelection()
 }, { immediate: true })
 
@@ -13713,10 +13719,16 @@ function initScene() {
     container: gizmoContainer,
     offset: { top: 0, right: 0, bottom: 0, left: 0 },
     size: 70,
+    northDirection: environmentSettings.value.northDirection,
   })
   if (mapControls) {
     gizmoControls.attachControls(mapControls as any)
   }
+  if (gizmoContainer) {
+    const northDirectionAngle = resolveNorthDirectionAngleDegrees(environmentSettings.value.northDirection)
+    gizmoContainer.title = `North: ${environmentSettings.value.northDirection ?? '+X'} (${northDirectionAngle} deg)`
+  }
+  gizmoControls.setNorthDirection(environmentSettings.value.northDirection)
   gizmoControls.update()
 
   canvasRef.value.addEventListener('pointerdown', handlePointerDown, { capture: true })
