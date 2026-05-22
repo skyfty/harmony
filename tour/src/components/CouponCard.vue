@@ -35,7 +35,7 @@
       </text>
       <view class="coupon-right__footer">
         <text class="coupon-right__date">
-          Valid until {{ formattedDate }}
+          有效期至 {{ formattedDate }}
         </text>
         <view
           class="coupon-status"
@@ -66,10 +66,10 @@ const props = defineProps<{
 defineEmits<{ (event: 'use'): void }>();
 
 const statusText = computed(() => {
-  if (props.status === 'available') return 'Available';
-  if (props.status === 'unused') return 'Unused';
-  if (props.status === 'used') return 'Used';
-  return 'Expired';
+  if (props.status === 'available') return '可购买';
+  if (props.status === 'unused') return '未使用';
+  if (props.status === 'used') return '已使用';
+  return '已过期';
 });
 
 const statusClass = computed(() => `coupon-status--${props.status}`);
@@ -98,12 +98,12 @@ const themeGradient = computed(() => resolvedTheme.value.gradient);
 
 const defaultTypeName = computed(() => {
   const map: Record<string, string> = {
-    ticket: 'Ticket',
-    souvenir: 'Souvenir',
-    photo: 'Photo',
-    discount: 'Discount',
+    ticket: '门票',
+    souvenir: '纪念品',
+    photo: '照片',
+    discount: '折扣',
   };
-  return map[(props.typeCode || '').toLowerCase()] ?? 'Coupon';
+  return map[(props.typeCode || '').toLowerCase()] ?? '卡券';
 });
 
 const iconMap: Record<string, string> = {

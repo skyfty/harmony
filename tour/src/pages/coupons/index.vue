@@ -2,7 +2,7 @@
   <view class="page">
     <MiniAuthRecovery />
     <PageHeader
-      title="Coupons"
+      title="卡券中心"
       :show-back="false"
     />
 
@@ -28,20 +28,20 @@
             :disabled="purchasingId === coupon.id"
             @tap.stop="handlePurchase(coupon)"
           >
-            {{ purchasingId === coupon.id ? 'Purchasing...' : 'Buy' }}
+            {{ purchasingId === coupon.id ? '购买中...' : '购买' }}
           </button>
           <button
             v-else-if="coupon.status === 'unused' && coupon.userCouponId"
             class="action-btn action-btn--primary"
             @tap.stop="openUserCoupon(coupon.userCouponId)"
           >
-            Use
+            使用
           </button>
           <view
             v-else
             class="action-state"
           >
-            {{ coupon.status === 'expired' ? 'Expired' : coupon.status === 'used' ? 'Used' : 'Unavailable' }}
+            {{ coupon.status === 'expired' ? '已过期' : coupon.status === 'used' ? '已使用' : '不可用' }}
           </view>
         </view>
       </view>
@@ -50,7 +50,7 @@
         v-if="!coupons.length"
         class="empty"
       >
-        <text>No visible coupons</text>
+        <text>暂无可见卡券</text>
       </view>
     </view>
 
@@ -159,14 +159,14 @@ async function handlePurchaseByProductId(productId: string, fromRetry = false) {
   }
 
   purchasingId.value = coupon.id;
-  void uni.showLoading({ title: fromRetry ? 'Retrying purchase...' : 'Purchasing...' });
+  void uni.showLoading({ title: fromRetry ? '重新购买中...' : '购买中...' });
   try {
     const result = await purchaseCoupon(productId);
     if (result.payParams) {
       await requestMiniProgramPayment(result.payParams);
     }
     const synced = await waitForOwnershipSync(coupon.id);
-    void uni.showToast({ title: synced ? 'Purchase succeeded' : 'Paid, syncing status...', icon: 'none' });
+    void uni.showToast({ title: synced ? '购买成功' : '支付完成，状态同步中...', icon: 'none' });
   } catch (error: unknown) {
     if (isPhoneBindingRequiredError(error)) {
       pendingPurchaseProductId.value = productId;
@@ -177,7 +177,7 @@ async function handlePurchaseByProductId(productId: string, fromRetry = false) {
       await promptCompleteProfileBeforeCheckout();
       return;
     }
-    void uni.showToast({ title: toCheckoutErrorMessage(error, 'Purchase failed'), icon: 'none' });
+    void uni.showToast({ title: toCheckoutErrorMessage(error, '购买失败'), icon: 'none' });
   } finally {
     purchasingId.value = '';
     void uni.hideLoading();
@@ -193,7 +193,7 @@ async function handlePurchase(coupon: CouponCatalogItem) {
 
 onMounted(() => {
   void reload().catch(() => {
-    void uni.showToast({ title: 'Load failed', icon: 'none' });
+    void uni.showToast({ title: '加载失败', icon: 'none' });
   });
 });
 

@@ -42,7 +42,7 @@ const formModel = reactive<CouponFormModel>({
   isVisible: true,
 });
 
-const modalTitle = computed(() => (editingId.value ? 'Edit Coupon' : 'Create Coupon'));
+const modalTitle = computed(() => (editingId.value ? '编辑卡券' : '新建卡券'));
 
 function resetForm() {
   formModel.typeId = couponTypes.value[0]?.id ?? '';
@@ -58,7 +58,7 @@ function closeModal() {
 }
 
 function formatVisible(value: boolean) {
-  return value ? 'Visible' : 'Hidden';
+  return value ? '可见' : '隐藏';
 }
 
 function formatPrice(value?: number | null) {
@@ -109,10 +109,10 @@ async function submit() {
 
     if (editingId.value) {
       await updateCouponApi(editingId.value, payload);
-      message.success('Coupon updated successfully');
+      message.success('卡券更新成功');
     } else {
       await createCouponApi(payload);
-      message.success('Coupon created successfully');
+      message.success('卡券创建成功');
     }
     modalOpen.value = false;
     couponGridApi.reload();
@@ -123,12 +123,12 @@ async function submit() {
 
 function handleDelete(row: CouponItem) {
   Modal.confirm({
-    title: `Delete coupon "${row.title}"?`,
-    content: 'This will remove the coupon, linked product, and all owned user coupons.',
+    title: `确认删除卡券「${row.title}」吗？`,
+    content: '删除后将同时移除关联商品和用户持有记录，操作不可恢复。',
     okType: 'danger',
     onOk: async () => {
       await deleteCouponApi(row.id);
-      message.success('Coupon deleted successfully');
+      message.success('卡券删除成功');
       couponGridApi.reload();
     },
   });
@@ -140,46 +140,46 @@ const [CouponGrid, couponGridApi] = useVbenVxeGrid<CouponItem>({
       {
         component: 'Input',
         fieldName: 'keyword',
-        label: 'Keyword',
-        componentProps: { allowClear: true, placeholder: 'Search by title or description' },
+        label: '关键词',
+        componentProps: { allowClear: true, placeholder: '按标题或描述搜索' },
       },
     ],
   },
   gridOptions: {
     border: true,
     columns: [
-      { field: 'typeName', minWidth: 140, title: 'Type' },
-      { field: 'title', minWidth: 200, title: 'Title' },
-      { field: 'description', minWidth: 280, title: 'Description' },
+      { field: 'typeName', minWidth: 140, title: '分类' },
+      { field: 'title', minWidth: 200, title: '标题' },
+      { field: 'description', minWidth: 280, title: '描述' },
       {
         field: 'isVisible',
         minWidth: 110,
-        title: 'Visible',
+        title: '可见性',
         slots: { default: 'visible' },
       },
       {
         field: 'product',
         minWidth: 120,
-        title: 'Price',
+        title: '商品价格',
         slots: { default: 'price' },
       },
       {
         field: 'validUntil',
         minWidth: 180,
         formatter: 'formatDateTime',
-        title: 'Valid Until',
+        title: '有效期',
       },
       {
         field: 'createdAt',
         minWidth: 180,
         formatter: 'formatDateTime',
-        title: 'Created At',
+        title: '创建时间',
       },
       {
         field: 'updatedAt',
         minWidth: 180,
         formatter: 'formatDateTime',
-        title: 'Updated At',
+        title: '更新时间',
       },
       {
         align: 'left',
@@ -187,7 +187,7 @@ const [CouponGrid, couponGridApi] = useVbenVxeGrid<CouponItem>({
         fixed: 'right',
         minWidth: 160,
         slots: { default: 'actions' },
-        title: 'Actions',
+        title: '操作',
       },
     ],
     proxyConfig: {
@@ -221,7 +221,7 @@ onMounted(async () => {
     <CouponGrid>
       <template #toolbar-actions>
         <Button v-access:code="'coupon:write'" type="primary" @click="openCreate">
-          Create Coupon
+          新建卡券
         </Button>
       </template>
 
@@ -237,12 +237,12 @@ onMounted(async () => {
 
       <template #actions="{ row }">
         <Space>
-          <Tooltip title="Edit">
+          <Tooltip title="编辑">
             <Button v-access:code="'coupon:write'" size="small" type="text" @click="openEdit(row)">
               <EditOutlined />
             </Button>
           </Tooltip>
-          <Tooltip title="Delete">
+          <Tooltip title="删除">
             <Button v-access:code="'coupon:write'" danger size="small" type="text" @click="handleDelete(row)">
               <DeleteOutlined />
             </Button>
@@ -255,61 +255,61 @@ onMounted(async () => {
       :open="modalOpen"
       :title="modalTitle"
       :confirm-loading="submitting"
-      ok-text="OK"
-      cancel-text="Cancel"
+      ok-text="确定"
+      cancel-text="取消"
       destroy-on-close
       @cancel="closeModal"
       @ok="submit"
     >
       <Form ref="formRef" :model="formModel" :label-col="{ span: 6 }" :wrapper-col="{ span: 17 }">
         <Form.Item
-          label="Coupon Type"
+          label="卡券分类"
           name="typeId"
-          :rules="[{ required: true, message: 'Please select a coupon type' }]"
+          :rules="[{ required: true, message: '请选择卡券分类' }]"
         >
           <Select
             v-model:value="formModel.typeId"
             :options="couponTypes.map((item) => ({ label: item.name, value: item.id }))"
-            placeholder="Select a type"
+            placeholder="请选择分类"
           />
         </Form.Item>
 
         <Form.Item
-          label="Title"
+          label="标题"
           name="title"
-          :rules="[{ required: true, message: 'Please enter a title' }]"
+          :rules="[{ required: true, message: '请输入标题' }]"
         >
           <Input v-model:value="formModel.title" allow-clear />
         </Form.Item>
 
         <Form.Item
-          label="Description"
+          label="描述"
           name="description"
-          :rules="[{ required: true, message: 'Please enter a description' }]"
+          :rules="[{ required: true, message: '请输入描述' }]"
         >
           <Input.TextArea v-model:value="formModel.description" :rows="4" allow-clear />
         </Form.Item>
 
         <Form.Item
-          label="Product Price"
+          label="商品价格"
           name="price"
-          :rules="[{ required: true, message: 'Please enter a product price' }]"
+          :rules="[{ required: true, message: '请输入商品价格' }]"
         >
           <InputNumber v-model:value="formModel.price" :min="0" :precision="2" style="width: 100%" />
         </Form.Item>
 
-        <Form.Item label="Visible" name="isVisible">
+        <Form.Item label="是否可见" name="isVisible">
           <Switch v-model:checked="formModel.isVisible" />
         </Form.Item>
 
         <Form.Item
-          label="Valid Until"
+          label="有效期"
           name="validUntil"
-          :rules="[{ required: true, message: 'Please select a valid until date' }]"
+          :rules="[{ required: true, message: '请选择有效期' }]"
         >
           <DatePicker
             v-model:value="formModel.validUntil"
-            placeholder="Select date and time"
+            placeholder="请选择日期和时间"
             show-time
             style="width: 100%"
           />
