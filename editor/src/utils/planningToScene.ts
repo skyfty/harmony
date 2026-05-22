@@ -1983,15 +1983,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
 
   const planningUnitsToMeters = resolvePlanningUnitsToMeters(planningData, groundWidth, groundDepth)
   const terrainDem = planningData.terrain?.dem ?? null
-
-  const activeLayerIds = planningData.layers
-    .filter((layer) => layer.conversionEnabled !== false)
-    .map((layer) => layer.id)
-  const activeLayerIdSet = new Set(activeLayerIds)
-
-  // Collect features
-  const rawPolygons = planningData.polygons
-  const rawPolylines = planningData.polylines
+  void planningUnitsToMeters
 
   if (options.overwriteExisting) {
     emitProgress(options, 'Removing existing converted content…', 10)
@@ -2001,10 +1993,10 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
     emitProgress(options, 'Preparing converted content…', 10)
     await clearPlanningGeneratedContentIncremental({
       sceneStore,
-      activeLayerIds: activeLayerIdSet,
-      currentLayerIds: new Set(planningData.layers.map((layer) => layer.id)),
-      currentPolygonIds: new Set(rawPolygons.map((poly) => poly.id)),
-      currentPolylineIds: new Set(rawPolylines.map((line) => line.id)),
+      activeLayerIds: new Set<string>(),
+      currentLayerIds: new Set<string>(),
+      currentPolygonIds: new Set<string>(),
+      currentPolylineIds: new Set<string>(),
       removeImages: true,
     })
     await yieldController.maybeYield(true)
@@ -2033,37 +2025,14 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
   sceneStore.setNodeLocked(root.id, true)
   await yieldController.maybeYield(true)
 
-  const polygons = rawPolygons.map((poly) => ({
-    ...poly,
-    points: normalizePlanningPoints(poly?.points, planningUnitsToMeters),
-  }))
-
-  const polylines = rawPolylines.map((line) => ({
-    ...line,
-    points: normalizePlanningPoints(line?.points, planningUnitsToMeters),
-    waypoints: Array.isArray(line.waypoints) ? line.waypoints : undefined,
-  }))
-
   // Planning image layers in PlanningDialog already use the dialog's world-space
   // coordinates/sizes (`position`, `width * scale`, `height * scale`).
   // Convert them directly so the 3D helper planes exactly match the editor overlay.
   const images = Array.isArray(planningData.images) ? planningData.images : []
-
-  const layerOrder: string[] = resolveLayerOrderFromPlanningData(planningData)
-
+  const activeLayerIdSet = new Set<string>()
+  const layerOrder: string[] = []
   const featuresByLayer = new Map<string, { polygons: PlanningPolygonData[]; polylines: PlanningPolylineData[] }>()
-  layerOrder.forEach((id) => featuresByLayer.set(id, { polygons: [], polylines: [] }))
-
-  polygons.forEach((poly) => {
-    if (featuresByLayer.has(poly.layerId)) featuresByLayer.get(poly.layerId)!.polygons.push(poly)
-  })
-  polylines.forEach((line) => {
-    if (featuresByLayer.has(line.layerId)) featuresByLayer.get(line.layerId)!.polylines.push(line)
-  })
-
-  const totalUnits = polygons.filter((poly) => activeLayerIdSet.has(poly.layerId)).length
-    + polylines.filter((line) => activeLayerIdSet.has(line.layerId)).length
-    + images.length
+  const totalUnits = images.length
   let doneUnits = 0
 
   // Terrain scatter preparation
@@ -2076,13 +2045,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
   // Terrain contour sculpting: additive height deltas from terrain-layer polygons.
   // Apply BEFORE other conversions so walls/roads/water sample the updated ground height.
   if (groundNode && groundDefinition) {
-    const contourPolygons = polygons.filter((poly) => {
-      if (!poly?.points || poly.points.length < 3) return false
-      return resolveLayerKindFromPlanningData(planningData, poly.layerId) === 'terrain'
-    }).map((poly) => ({
-      ...poly,
-      points: offsetPlanningPointsToGroundLocal(poly.points, groundMinX, groundMinZ),
-    }))
+    const contourPolygons: PlanningPolygonData[] = []
 
     const resetContours = resetGroundPlanningContours(groundDefinition as GroundRuntimeDynamicMesh)
     if (resetContours.changed) {
@@ -2488,3 +2451,9 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
   return { rootNodeId: root.id }
   })
 }
+
+void resolveLayerOrderFromPlanningData
+void resolveLayerKindFromPlanningData
+void resolveLayerNameFromPlanningData
+void normalizePlanningPoints
+void offsetPlanningPointsToGroundLocal

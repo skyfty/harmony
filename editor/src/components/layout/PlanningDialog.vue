@@ -2370,11 +2370,6 @@ function formatShortHash(value: string | null | undefined): string {
 }
 
 const propertyPanelDisabledReason = computed(() => {
-  const target = selectedScatterTarget.value
-  // Allow editing shape properties from the property panel even when the layer is locked.
-  if (target) {
-    return null
-  }
   const img = selectedImage.value
   if (img) {
     if (img.locked) return 'Image is locked'
@@ -2383,7 +2378,7 @@ const propertyPanelDisabledReason = computed(() => {
   if (selectedDem.value) {
     return null
   }
-  return 'No shape selected'
+  return 'No image or DEM selected'
 })
 
 const propertyPanelDisabled = computed(() => propertyPanelDisabledReason.value !== null)
@@ -5669,23 +5664,11 @@ function closeDialog() {
 
 const toolbarButtons: Array<{ tool: PlanningTool; icon: string; tooltip: string }> = [
   { tool: 'select', icon: 'mdi-cursor-default-outline', tooltip: 'Select' },
-  { tool: 'rectangle', icon: 'mdi-rectangle-outline', tooltip: 'Draw rectangular area' },
-  { tool: 'lasso', icon: 'mdi-shape-polygon-plus', tooltip: 'Draw freehand area' },
-  { tool: 'line', icon: 'mdi-vector-line', tooltip: 'Draw line' },
+  { tool: 'pan', icon: 'mdi-hand-back-right-outline', tooltip: 'Pan' },
   { tool: 'align-marker', icon: 'mdi-crosshairs-gps', tooltip: 'Align marker' },
 ]
 
-const visibleToolbarButtons = computed(() => {
-  return toolbarButtons.filter((button) => {
-    if (button.tool === 'line') {
-      return canUseLineTool.value
-    }
-    if (button.tool === 'rectangle' || button.tool === 'lasso') {
-      return canUseAreaTools.value
-    }
-    return true
-  })
-})
+const visibleToolbarButtons = computed(() => toolbarButtons)
 
 const deleteButtonTooltip = ' Delete selected objects (Del)'
 
@@ -5694,6 +5677,49 @@ const resizeDirections = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'] as const
 // These symbols are for future planning-to-scene conversion extensions (area/segment drawing, geometry editing, etc.).
 // The current canvas implementation focuses on image reference layers; some functions are not yet referenced in the template. To avoid noUnusedLocals errors, reference them explicitly here.
 void getLayerColor
+void addableLayerKinds
+void visiblePolygons
+void visiblePolylines
+void selectedMeasurementTitle
+void selectedMeasurementSuffix
+void selectedMeasurementValueText
+void vertexHandleRadiusWorld
+void vertexHandleHitRadiusWorld
+void vertexHandleStrokeWidthWorld
+void vertexHighlightStrokeWidthWorld
+void canDeleteSelection
+void terrainWaterPresetOptions
+void terrainContourWaterPresetEnabled
+void terrainContourWaterPresetModel
+void airWallEnabledModel
+void commitSelectedName
+void getPolylineStroke
+void getPolylineStrokeLinejoin
+void activeVertexHighlight
+void selectedVertexHighlight
+void isSelectedVertexHandle
+void getEndpointFillColor
+void addPlanningLayer
+void handleLayerDelete
+void setRenameFieldRef
+void beginLayerRename
+void commitLayerRename
+void handleLayerItemDragStart
+void handleLayerItemDragOver
+void handleLayerItemDrop
+void handleLayerItemDragEnd
+void getLayerListItemStyle
+void getPolylinePath
+void polygonDraftPreview
+void lineDraftPreviewPath
+void lineDraftPreviewStroke
+void lineDraftPreviewDasharray
+void lineDraftPreviewStrokeWidth
+void lineDraftPreviewVectorEffect
+void lineDraftPoints
+void handleLayerConversionToggle
+void handleLayerLockToggle
+void handleLayerSelection
 void startRectangleDrag
 void addPolygonDraftPoint
 void startLineDraft
@@ -5707,6 +5733,7 @@ void getPolygonPath
 void getLineSegments
 void resizeCursor
 void resizeDirections
+void deleteButtonTooltip
 void zoomImageLayer
 void handleResetView
 void closeDialog
@@ -6045,116 +6072,6 @@ onBeforeUnmount(() => {
               </v-list-item>
             </v-list>
           </section>
-          <section class="layer-panel">
-            <header>
-              <div class="panel-header">
-                <h3>Layer Management</h3>
-                <v-menu
-                  v-model="addLayerMenuOpen"
-                  location="bottom end"
-                >
-                  <template #activator="{ props: menuProps }">
-                    <v-btn
-                      v-bind="menuProps"
-                      icon
-                      size="small"
-                      variant="text"
-                      color="primary"
-                      title="Add layer"
-                    >
-                      <v-icon>mdi-plus</v-icon>
-                    </v-btn>
-                  </template>
-                  <v-list density="compact">
-                    <v-list-item
-                      v-for="kind in addableLayerKinds"
-                      :key="kind"
-                      @click="addPlanningLayer(kind)"
-                    >
-                      <v-list-item-title>{{ layerKindLabels[kind] }}</v-list-item-title>
-                    </v-list-item>
-                  </v-list>
-                </v-menu>
-              </div>
-            </header>
-            <v-list density="compact" class="layer-list">
-              <v-list-item
-                v-for="layer in layers"
-                :key="layer.id"
-                :class="[
-                  'layer-item',
-                  {
-                    active: activeLayerId === layer.id,
-                    dragging: draggingLayerId === layer.id,
-                    'drag-over': dragOverLayerId === layer.id,
-                  },
-                ]"
-                :style="getLayerListItemStyle(layer)"
-                draggable="true"
-                @dragstart="handleLayerItemDragStart(layer.id, $event as DragEvent)"
-                @dragover="handleLayerItemDragOver(layer.id, $event as DragEvent)"
-                @drop="handleLayerItemDrop(layer.id, $event as DragEvent)"
-                @dragend="handleLayerItemDragEnd"
-                @click="handleLayerSelection(layer.id)"
-              >
-                <div class="layer-content">
-                  <div class="layer-name" @dblclick.stop="beginLayerRename(layer.id)">
-                    <v-text-field
-                      v-if="renamingLayerId === layer.id"
-                      :ref="(el) => setRenameFieldRef(layer.id, el)"
-                      v-model="renamingLayerDraft"
-                      density="compact"
-                      variant="underlined"
-                      hide-details
-                      class="layer-rename-input"
-                      @click.stop
-                      @keydown.enter.prevent="commitLayerRename(layer.id)"
-                      @keydown.esc.prevent="cancelLayerRename"
-                      @blur="commitLayerRename(layer.id)"
-                    />
-                    <template v-else>
-                      {{ layer.name }}
-                      <span v-if="layer.conversionEnabled === false" class="layer-conversion-chip">Cached</span>
-                    </template>
-                  </div>
-                </div>
-                <template #append>
-                  <v-btn
-                    icon
-                    size="small"
-                    variant="text"
-                    :color="layer.conversionEnabled ? 'primary' : 'grey'"
-                    class="layer-conversion-toggle"
-                    :title="layer.conversionEnabled ? 'Disable layer conversion' : 'Enable layer conversion'"
-                    @click.stop="handleLayerConversionToggle(layer.id, !layer.conversionEnabled)"
-                  >
-                    <v-icon>{{ layer.conversionEnabled ? 'mdi-refresh-auto' : 'mdi-check-circle-outline' }}</v-icon>
-                  </v-btn>
-                  <v-btn
-                    icon
-                    size="small"
-                    variant="text"
-                    color="error"
-                    :disabled="layers.length <= 1"
-                    @click.stop="handleLayerDelete(layer.id)"
-                  >
-                    <v-icon>mdi-delete-outline</v-icon>
-                  </v-btn>
-                  <v-btn
-                    icon
-                    size="small"
-                    variant="text"
-                    :color="layer.locked ? 'primary' : 'grey'"
-                    @click.stop="handleLayerLockToggle(layer.id)"
-                  >
-                    <v-icon>{{ layer.locked ? 'mdi-lock-outline' : 'mdi-lock-open-variant-outline' }}</v-icon>
-                  </v-btn>
-                </template>
-              </v-list-item>
-            </v-list>
-          </section>
-
-          
         </aside>
 
         <main class="editor-panel">
@@ -6176,22 +6093,6 @@ onBeforeUnmount(() => {
                     @click="handleToolSelect(button.tool)"
                   >
                     <v-icon>{{ button.icon }}</v-icon>
-                  </v-btn>
-                </template>
-              </v-tooltip>
-
-              <v-tooltip :text="deleteButtonTooltip" location="bottom">
-                <template #activator="{ props }">
-                  <v-btn
-                    v-bind="props"
-                    :color="canDeleteSelection ? 'error' : undefined"
-                    variant="tonal"
-                    density="comfortable"
-                    class="tool-button"
-                    :disabled="!canDeleteSelection"
-                    @click="handleDeleteButtonClick"
-                  >
-                    <v-icon>mdi-delete-outline</v-icon>
                   </v-btn>
                 </template>
               </v-tooltip>
@@ -6274,263 +6175,8 @@ onBeforeUnmount(() => {
                   :width="effectiveCanvasPixelSize.width"
                   :height="effectiveCanvasPixelSize.height"
                   :viewBox="`0 0 ${effectiveCanvasSize.width} ${effectiveCanvasSize.height}`"
-                >
-                  <defs>
-                    <filter id="vertex-glow" x="-60%" y="-60%" width="220%" height="220%">
-                      <feGaussianBlur in="SourceGraphic" stdDeviation="1.25" result="blur" />
-                      <feMerge>
-                        <feMergeNode in="blur" />
-                        <feMergeNode in="SourceGraphic" />
-                      </feMerge>
-                    </filter>
-                  </defs>
-
-                  <!-- Drawn polygon areas -->
-                  <g v-for="poly in visiblePolygons" :key="poly.id">
-                    <!-- white outline for active layer to improve contrast -->
-                    <path
-                      v-if="isActiveLayer(poly.layerId)"
-                      :d="getPolygonPath(poly.points, getLayerSmoothingValue(poly.layerId))"
-                      fill="none"
-                      stroke="rgba(255,255,255,0.95)"
-                      stroke-linejoin="round"
-                      stroke-width="0.9"
-                      pointer-events="none"
-                    />
-
-                    <path
-                      class="planning-polygon"
-                      :class="{
-                        selected: selectedFeature?.type === 'polygon' && selectedFeature.id === poly.id,
-                        'inactive-layer-feature': !isActiveLayer(poly.layerId),
-                      }"
-                      :d="getPolygonPath(poly.points, getLayerSmoothingValue(poly.layerId))"
-                      :fill="getLayerColor(poly.layerId, 0.22)"
-                      :stroke="getLayerColor(poly.layerId, 0.95)"
-                      stroke-width="0.1"
-                      @pointerdown="handlePolygonPointerDown(poly.id, $event as PointerEvent)"
-                    />
-
-                  </g>
-
-                  
-                  <!-- Drawn segments (represented as polyline) -->
-                  <g v-for="line in visiblePolylines" :key="line.id">
-                    <!-- white outline for active layer polylines -->
-                    <path
-                      v-if="isActiveLayer(line.layerId)"
-                      :d="getPolylinePath(line.points)"
-                      fill="none"
-                      stroke="rgba(255,255,255,0.95)"
-                      :vector-effect="getPolylineVectorEffect(line.layerId)"
-                      :stroke-linejoin="getPolylineStrokeLinejoin(line)"
-                      stroke-linecap="round"
-                      :stroke-width="getPolylineStrokeWidth(
-                        line.layerId,
-                        (selectedFeature?.type === 'polyline' && selectedFeature.id === line.id)
-                          || (selectedFeature?.type === 'segment' && selectedFeature.lineId === line.id),
-                      ) + 1.6"
-                      pointer-events="none"
-                    />
-
-                    <path
-                      class="planning-line"
-                      :class="{
-                        selected:
-                          (selectedFeature?.type === 'polyline' && selectedFeature.id === line.id)
-                          || (selectedFeature?.type === 'segment' && selectedFeature.lineId === line.id),
-                        'inactive-layer-feature': !isActiveLayer(line.layerId),
-                      }"
-                      :d="getPolylinePath(line.points)"
-                      :stroke="getPolylineStroke(line.layerId)"
-                      :stroke-dasharray="getPolylineStrokeDasharray(line.layerId)"
-                      :vector-effect="getPolylineVectorEffect(line.layerId)"
-                      :stroke-linejoin="getPolylineStrokeLinejoin(line)"
-                      stroke-linecap="round"
-                      :stroke-width="getPolylineStrokeWidth(
-                        line.layerId,
-                        (selectedFeature?.type === 'polyline' && selectedFeature.id === line.id)
-                          || (selectedFeature?.type === 'segment' && selectedFeature.lineId === line.id),
-                      )"
-                      fill="none"
-                      @pointerdown="handlePolylinePointerDown(line.id, $event as PointerEvent)"
-                    />
-
-                    <line
-                      v-for="(seg, segIndex) in getLineSegments(line)"
-                      :key="`${line.id}-seg-${segIndex}`"
-                      class="planning-line-segment"
-                      :x1="seg.start.x"
-                      :y1="seg.start.y"
-                      :x2="seg.end.x"
-                      :y2="seg.end.y"
-                      stroke="transparent"
-                      :vector-effect="getPolylineVectorEffect(line.layerId)"
-                      :stroke-width="getPolylineStrokeWidth(
-                        line.layerId,
-                        (selectedFeature?.type === 'polyline' && selectedFeature.id === line.id)
-                          || (selectedFeature?.type === 'segment' && selectedFeature.lineId === line.id),
-                      )"
-                      stroke-linecap="round"
-                      @pointerdown="handleLineSegmentPointerDown(line.id, segIndex, $event as PointerEvent)"
-                    />
-
-                    <!-- Endpoint hit area: allows clicking endpoints to continue drawing/drag endpoints -->
-                    <circle
-                      v-if="line.points.length"
-                      class="line-endpoint-hit"
-                      :cx="line.points[0]!.x"
-                      :cy="line.points[0]!.y"
-                      :r="vertexHandleHitRadiusWorld"
-                      fill="transparent"
-                      pointer-events="all"
-                      @pointerdown="handleLineVertexPointerDown(line.id, 0, $event as PointerEvent)"
-                    />
-                    <!-- Visible small endpoint marker (distinct color when selectable) -->
-                    <circle
-                      v-if="line.points.length"
-                      :cx="line.points[0]!.x"
-                      :cy="line.points[0]!.y"
-                      :r="vertexHandleRadiusWorld"
-                      :fill="getEndpointFillColor(line.layerId)"
-                      stroke="rgba(255,255,255,0.9)"
-                      :stroke-width="vertexHandleStrokeWidthWorld"
-                      pointer-events="none"
-                    />
-                    <circle
-                      v-if="line.points.length >= 2"
-                      class="line-endpoint-hit"
-                      :cx="line.points[line.points.length - 1]!.x"
-                      :cy="line.points[line.points.length - 1]!.y"
-                      :r="vertexHandleHitRadiusWorld"
-                      fill="transparent"
-                      pointer-events="all"
-                      @pointerdown="handleLineVertexPointerDown(line.id, line.points.length - 1, $event as PointerEvent)"
-                    />
-                    <circle
-                      v-if="line.points.length >= 2"
-                      :cx="line.points[line.points.length - 1]!.x"
-                      :cy="line.points[line.points.length - 1]!.y"
-                      :r="vertexHandleRadiusWorld"
-                      :fill="getEndpointFillColor(line.layerId)"
-                      stroke="rgba(255,255,255,0.9)"
-                      :stroke-width="vertexHandleStrokeWidthWorld"
-                      pointer-events="none"
-                    />
-                  </g>
-
-                  <!-- Rectangle selection drag preview -->
-                  <path
-                    v-if="dragState.type === 'rectangle'"
-                    class="planning-rectangle-preview"
-                    :d="getPolygonPath(createRectanglePoints(dragState.start, dragState.current), getLayerSmoothingValue(dragState.layerId))"
-                    fill="rgba(98, 179, 255, 0.12)"
-                    stroke="rgba(98, 179, 255, 0.45)"
-                    stroke-width="0.1"
-                  />
-
-                  <!-- Freeform selection preview (click to add points, double-click to finish) -->
-                  <path
-                    v-if="polygonDraftPoints.length >= 1"
-                    class="planning-polygon-draft"
-                    :d="polygonDraftPreview.d"
-                    :fill="polygonDraftPreview.fill"
-                    stroke="rgba(98, 179, 255, 0.45)"
-                    stroke-width="0.1"
-                  />
-
-                  <!-- Segment draw preview -->
-                  <path
-                    v-if="lineDraftPreviewPath"
-                    class="planning-line-draft"
-                    :d="lineDraftPreviewPath"
-                    :stroke="lineDraftPreviewStroke"
-                    :stroke-width="lineDraftPreviewStrokeWidth"
-                    :stroke-dasharray="lineDraftPreviewDasharray"
-                    :vector-effect="lineDraftPreviewVectorEffect"
-                    fill="none"
-                  />
-
-                  <!-- During segment drawing: show vertex positions -->
-                  <g v-if="lineDraftPoints.length">
-                    <circle
-                      v-for="(p, idx) in lineDraftPoints"
-                      :key="`line-draft-v-${idx}-${p.id ?? ''}`"
-                      class="vertex-handle"
-                      :cx="p.x"
-                      :cy="p.y"
-                      :r="vertexHandleRadiusWorld"
-                      :fill="getLayerColor(lineDraft!.layerId, 0.95)"
-                      stroke="rgba(255,255,255,0.9)"
-                      :stroke-width="vertexHandleStrokeWidthWorld"
-                      pointer-events="none"
-                    />
-                  </g>
-
-                  <!-- Vertex/current operation point highlight -->
-                  <circle
-                    v-if="activeVertexHighlight"
-                    class="vertex-highlight"
-                    :cx="activeVertexHighlight.x"
-                    :cy="activeVertexHighlight.y"
-                    :r="activeVertexHighlight.r"
-                    fill="none"
-                    :stroke="getLayerColor(activeVertexHighlight.layerId as string, 0.95)"
-                    :stroke-width="vertexHighlightStrokeWidthWorld"
-                    filter="url(#vertex-glow)"
-                    pointer-events="none"
-                  />
-
-                  <!-- Selected vertex highlight -->
-                  <circle
-                    v-if="selectedVertexHighlight"
-                    class="vertex-highlight vertex-highlight--selected"
-                    :cx="selectedVertexHighlight.x"
-                    :cy="selectedVertexHighlight.y"
-                    :r="selectedVertexHighlight.r"
-                    fill="none"
-                    :stroke="getLayerColor(selectedVertexHighlight.layerId as string, 0.85)"
-                    :stroke-width="vertexHighlightStrokeWidthWorld"
-                    filter="url(#vertex-glow)"
-                    pointer-events="none"
-                  />
-
-                  <!-- Selected polygon vertex -->
-                  <g v-if="selectedPolygon">
-                    <circle
-                      v-for="(p, idx) in selectedPolygon.points"
-                      :key="`${selectedPolygon.id}-v-${idx}`"
-                      class="vertex-handle"
-                      :cx="p.x"
-                      :cy="p.y"
-                      :r="isSelectedVertexHandle('polygon', selectedPolygon.id, idx) ? vertexHandleRadiusWorld * 1.35 : vertexHandleRadiusWorld"
-                      :fill="getLayerColor(selectedPolygon.layerId, 0.95)"
-                      stroke="rgba(255,255,255,0.9)"
-                      :stroke-width="isSelectedVertexHandle('polygon', selectedPolygon.id, idx) ? vertexHandleStrokeWidthWorld * 2 : vertexHandleStrokeWidthWorld"
-                      pointer-events="visibleFill"
-                      @pointerdown="handlePolygonVertexPointerDown(selectedPolygon.id, idx, $event as PointerEvent)"
-                    />
-                  </g>
-
-                  <!-- Selected polyline vertex -->
-                  <g v-if="selectedPolyline">
-                    <circle
-                      v-for="(p, idx) in selectedPolyline.points"
-                      :key="`${selectedPolyline.id}-v-${idx}`"
-                      class="vertex-handle"
-                      :cx="p.x"
-                      :cy="p.y"
-                      :r="isSelectedVertexHandle('polyline', selectedPolyline.id, idx) ? vertexHandleRadiusWorld * 1.35 : vertexHandleRadiusWorld"
-                      :fill="getLayerColor(selectedPolyline.layerId, 0.95)"
-                      stroke="rgba(255,255,255,0.9)"
-                      :stroke-width="isSelectedVertexHandle('polyline', selectedPolyline.id, idx) ? vertexHandleStrokeWidthWorld * 2 : vertexHandleStrokeWidthWorld"
-                      pointer-events="visibleFill"
-                      @pointerdown="handleLineVertexPointerDown(selectedPolyline.id, idx, $event as PointerEvent)"
-                    />
-                  </g>
-
-                  <!-- Terrain brush removed -->
-                </svg>
+                  aria-hidden="true"
+                />
 
                 <div class="planning-guides-overlay" :style="getGuidesOverlayStyle()" aria-hidden="true">
                   <div
@@ -6641,16 +6287,7 @@ onBeforeUnmount(() => {
         >
             <header class="property-panel__header">
             <div class="property-panel__title">
-              <div v-if="selectedScatterTarget" class="property-panel__subtitle">
-                <v-text-field
-                  v-model="selectedName"
-                  density="compact"
-                  hide-details
-                  :disabled="propertyPanelDisabled"
-                  placeholder="Set shape name"
-                  @update:modelValue="commitSelectedName"
-                />
-              </div>
+              <div class="property-panel__subtitle">Planning properties</div>
             </div>
           </header>
 
@@ -6821,65 +6458,7 @@ onBeforeUnmount(() => {
               </div>
             </div>
 
-            <div v-if="selectedMeasurementTitle" class="property-panel__density">
-              <div class="property-panel__density-title">{{ selectedMeasurementTitle }}</div>
-              <div class="property-panel__density-row">
-                <v-text-field
-                  :model-value="selectedMeasurementValueText"
-                  density="compact"
-                  variant="underlined"
-                  hide-details
-                  readonly
-                  :suffix="selectedMeasurementSuffix"
-                />
-              </div>
-            </div>
-
-            <!-- Per-shape terrain contour height -->
-            <div v-if="selectedTerrainContourPolygon" class="property-panel__block">
-              <v-text-field
-                v-model.number="terrainContourHeightModel"
-                type="number"
-                step="0.1"
-                density="compact"
-                variant="underlined"
-                hide-details
-                suffix="m"
-                label="Height"
-              />
-              <v-text-field
-                v-model.number="terrainContourBlendModel"
-                type="number"
-                step="0.1"
-                density="compact"
-                variant="underlined"
-                hide-details
-                suffix="m"
-                label="Smoothing"
-              />
-              <v-select
-                v-model="terrainContourWaterPresetModel"
-                :items="terrainWaterPresetOptions"
-                item-title="label"
-                item-value="value"
-                density="compact"
-                variant="underlined"
-                hide-details
-                label="Water Type"
-                :disabled="propertyPanelDisabled || !terrainContourWaterPresetEnabled"
-              />
-            </div>
-
-            <!-- Air Wall control block (separate) -->
-            <div v-if="selectedTerrainContourPolygon" class="property-panel__block">
-              <v-switch
-                v-model="airWallEnabledModel"
-                density="compact"
-                hide-details
-                label="Air Wall"
-              />
-            </div>
-            <!-- terrain / guide-route: no extra property controls -->
+            <!-- terrain / guide-route editing removed -->
           </template>
           </div>
         </aside>
