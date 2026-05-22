@@ -1141,7 +1141,16 @@
       />
 
       <v-divider vertical />
-
+      <v-btn
+        :icon="showGrid ? 'mdi-grid' : 'mdi-grid-off'"
+        :color="showGrid ? 'primary' : undefined"
+        :variant="showGrid ? 'flat' : 'text'"
+        density="compact"
+        size="small"
+        class="toolbar-button"
+        title="Toggle Grid"
+        @click="toggleGridVisibility"
+      />
       <v-btn
         :icon="showAxes ? 'mdi-axis-arrow-info' : 'mdi-axis-arrow'"
         :color="showAxes ? 'primary' : undefined"
@@ -1314,6 +1323,7 @@ const emit = defineEmits<{
 }>()
 
 const {
+  showGrid,
   showAxes,
   canDropSelection,
   canAlignSelection,
@@ -2472,6 +2482,10 @@ function handleScatterEraseContextMenu(event: MouseEvent) {
   }
   closeAllMenus()
   emit('update:scatter-erase-menu-open', true)
+}
+
+function toggleGridVisibility() {
+  sceneStore.toggleViewportGridVisible()
 }
 
 function toggleAxesVisibility() {

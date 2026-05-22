@@ -1,5 +1,6 @@
 import { Object3D, Shape, ShapeGeometry, ShapeUtils, Vector2, Vector3 } from 'three'
 import type { GroundDynamicMesh, GroundRuntimeDynamicMesh, LandformDynamicMesh, RoadSegment, SceneNode, Vector3Like, Vector2Like } from '@schema/core'
+import { resolveGroundWorldBounds } from '@schema/core'
 import {
   buildSmoothedSculptPolygonContour,
   prepareGroundTriangleHeightSamplingContext,
@@ -186,6 +187,7 @@ function buildLandformRenderCache(
   footprint: Array<[number, number]>,
   featherWidth: number,
   enableFeather: boolean,
+  groundDefinition: GroundDynamicMesh | null = null,
 ): NonNullable<LandformDynamicMesh['renderCache']> {
   const localSurfaceVertices = surfaceVertices
     .map((point) => toLocal(point.clone()))
@@ -194,13 +196,39 @@ function buildLandformRenderCache(
     x: point.x / uvScale.x,
     y: point.z / uvScale.y,
   }) satisfies Vector2Like)
+  const surfaceGroundUvs = buildLandformGroundBlendUvs(surfaceVertices, groundDefinition)
 
   return {
     surfaceVertices: localSurfaceVertices,
     surfaceIndices: [...surfaceIndices],
     surfaceUvs,
     surfaceFeather: buildLandformSurfaceFeather(footprint, localSurfaceVertices, featherWidth, enableFeather),
+    surfaceGroundUvs,
+    groundTextureDataUrl: typeof groundDefinition?.textureDataUrl === 'string' ? groundDefinition.textureDataUrl : null,
   }
+}
+
+function buildLandformGroundBlendUvs(
+  surfaceVertices: Vector3[],
+  groundDefinition: GroundDynamicMesh | null,
+): Vector2Like[] {
+  if (!groundDefinition) {
+    return []
+  }
+  const textureSource = typeof groundDefinition?.textureDataUrl === 'string'
+    ? groundDefinition.textureDataUrl.trim()
+    : ''
+  if (!textureSource || !surfaceVertices.length) {
+    return []
+  }
+
+  const bounds = resolveGroundWorldBounds(groundDefinition)
+  const groundWidth = Math.max(bounds.maxX - bounds.minX, Number.EPSILON)
+  const groundDepth = Math.max(bounds.maxZ - bounds.minZ, Number.EPSILON)
+  return surfaceVertices.map((point) => ({
+    x: (point.x - bounds.minX) / groundWidth,
+    y: 1 - ((point.z - bounds.minZ) / groundDepth),
+  }) satisfies Vector2Like)
 }
 
 function createNodeTransformObject(node: SceneNode): Object3D {
@@ -1620,7 +1648,9 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
               surfaceVertices: [],
               surfaceIndices: [],
               surfaceUvs: [],
+              surfaceGroundUvs: [],
               surfaceFeather: [],
+              groundTextureDataUrl: null,
             }),
             surfaceFeather: expectedFeather,
           },
@@ -1681,6 +1711,7 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
           controlVertices,
           featherWidth,
           normalizedProps.enableFeather,
+          null,
         )
         const vertexHeights = buildLandformVertexHeights(buildPoints, (point) => point.sub(center))
         const segmentHeights = buildLandformSegmentHeights(buildPoints, (point) => point.sub(center))
@@ -1789,6 +1820,7 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
         controlVertices,
         featherWidth,
         normalizedProps.enableFeather,
+        groundDefinition,
       )
 
       return {
@@ -1943,6 +1975,7 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
         controlVertices,
         featherWidth,
         normalizedProps.enableFeather,
+        groundDefinition,
       )
 
       return {
@@ -1990,7 +2023,9 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
             surfaceVertices: [],
             surfaceIndices: [],
             surfaceUvs: [],
+            surfaceGroundUvs: [],
             surfaceFeather: [],
+            groundTextureDataUrl: null,
           }),
           surfaceUvs: Array.isArray(mesh.renderCache?.surfaceVertices)
             ? mesh.renderCache!.surfaceVertices

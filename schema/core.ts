@@ -2502,6 +2502,10 @@ export interface LandformDynamicMesh {
     surfaceIndices: number[]
     surfaceUvs?: Vector2Like[] | null
     surfaceFeather?: number[] | null
+    /** Optional world-space-projected UVs for sampling the underlying ground texture. */
+    surfaceGroundUvs?: Vector2Like[] | null
+    /** Optional ground texture source used to blend landform edges into the underlying terrain. */
+    groundTextureDataUrl?: string | null
   } | null
   /** Material config id used for the landform surface mesh. */
   materialConfigId?: string | null

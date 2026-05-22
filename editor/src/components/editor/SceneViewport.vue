@@ -12557,6 +12557,24 @@ watch(isSceneReady, (ready) => {
   void restoreGroundAllGuarded()
 })
 
+let initialGridVisibilityApplied = false
+
+watch(isSceneReady, (ready) => {
+  if (!ready) {
+    return
+  }
+
+  // Default: do NOT show the ground grid when entering the viewport.
+  // Users can still enable it later via the toolbar toggle.
+  if (!initialGridVisibilityApplied) {
+    initialGridVisibilityApplied = true
+    sceneStore.setViewportGridVisible(false)
+  }
+
+  syncSceneGraph()
+  void restoreGroundAllGuarded()
+})
+
 // Rebind scatter instances when terrainScatter snapshot changes (e.g. planning->3D conversion).
 watch(
   [isSceneReady, groundScatterRuntimeVersion, groundScatterRuntimeReason],

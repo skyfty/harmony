@@ -2333,9 +2333,22 @@ function cloneDynamicMeshDefinition(mesh?: SceneDynamicMesh): SceneDynamicMesh |
           return { x, y }
         })
         .filter((value): value is Vector2Like => !!value)
+      const surfaceGroundUvs = (Array.isArray(landformMesh.renderCache?.surfaceGroundUvs) ? landformMesh.renderCache?.surfaceGroundUvs : [])
+        .map((entry) => {
+          const x = Number((entry as any)?.x)
+          const y = Number((entry as any)?.y)
+          if (!Number.isFinite(x) || !Number.isFinite(y)) {
+            return null
+          }
+          return { x, y }
+        })
+        .filter((value): value is Vector2Like => !!value)
       const surfaceFeather = (Array.isArray(landformMesh.renderCache?.surfaceFeather) ? landformMesh.renderCache?.surfaceFeather : [])
         .map((entry) => Number(entry))
         .filter((entry) => Number.isFinite(entry))
+      const groundTextureDataUrl = typeof landformMesh.renderCache?.groundTextureDataUrl === 'string'
+        ? landformMesh.renderCache.groundTextureDataUrl
+        : null
       const normalizeId = (value: unknown) => (typeof value === 'string' && value.trim().length ? value.trim() : null)
       const uvScaleX = Number.isFinite((landformMesh.uvScale as any)?.x) ? Number((landformMesh.uvScale as any).x) : 1
       const uvScaleY = Number.isFinite((landformMesh.uvScale as any)?.y) ? Number((landformMesh.uvScale as any).y) : 1
@@ -2350,7 +2363,9 @@ function cloneDynamicMeshDefinition(mesh?: SceneDynamicMesh): SceneDynamicMesh |
           surfaceVertices,
           surfaceIndices,
           surfaceUvs,
+          surfaceGroundUvs,
           surfaceFeather,
+          groundTextureDataUrl,
         },
         materialConfigId: normalizeId(landformMesh.materialConfigId),
         enableFeather: typeof landformMesh.enableFeather === 'boolean' ? landformMesh.enableFeather : undefined,
@@ -13477,6 +13492,12 @@ export const useSceneStore = defineStore('scene', {
     },
     toggleViewportAxesVisible() {
       this.setViewportAxesVisible(!this.viewportSettings.showAxes)
+    },
+    setViewportGridVisible(visible: boolean) {
+      this.setViewportSettings({ showGrid: visible })
+    },
+    toggleViewportGridVisible() {
+      this.setViewportGridVisible(!this.viewportSettings.showGrid)
     },
 
     setViewportSnapMode(mode: SceneViewportSnapMode) {
