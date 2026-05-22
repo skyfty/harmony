@@ -9,6 +9,8 @@
     "start": "node dist/index.js",
     "seed": "tsx --env-file=.env.development src/scripts/seed.ts",
     "seed:prod": "node --env-file=.env.production dist/scripts/seed.js",
+    "repair:spot-categories": "tsx --env-file=.env.development src/scripts/repair-spot-categories.ts",
+    "repair:spot-categories:prod": "node --env-file=.env.production dist/scripts/repair-spot-categories.js",
     "fix:mongo-auth": "tsx --env-file=.env.development src/scripts/fix-mongo-auth.ts",
     "fix:mongo-auth:prod": "node --env-file=.env.production dist/scripts/fix-mongo-auth.js",
     "migrate:coupon-types": "tsx --env-file=.env.development src/scripts/migrate-coupon-types.ts",
