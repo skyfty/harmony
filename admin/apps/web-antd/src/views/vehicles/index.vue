@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { FormInstance, UploadFile, UploadProps } from 'ant-design-vue';
+import type { FormInstance, UploadChangeParam, UploadFile, UploadProps } from 'ant-design-vue';
 import { InputNumber } from 'ant-design-vue';
 import type { VehicleItem } from '#/api';
 
@@ -92,32 +92,58 @@ const imageUploadProps: UploadProps = {
   accept: 'image/*',
 };
 
-function handleImageBeforeUpload(file: UploadFile) {
-  const origin = (file as any).originFileObj as File;
-  if (!origin) return false;
-  const reader = new FileReader();
-  reader.onload = (e) => {
-    const dataUrl = (e.target?.result as string) || '';
-    const img = new Image();
-    img.onload = () => {
-      if (img.width === VEHICLE_IMAGE_WIDTH && img.height === VEHICLE_IMAGE_HEIGHT) {
-        imageFileList.value = [file];
-        imagePreview.value = dataUrl;
-      } else {
-        imageFileList.value = [];
-        imagePreview.value = '';
+async function validateImageSize(file: File, width: number, height: number): Promise<boolean> {
+  return await new Promise((resolve) => {
+    try {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        const ok = img.width === width && img.height === height;
+        URL.revokeObjectURL(url);
+        resolve(ok);
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(url);
+        resolve(false);
+      };
+      img.src = url;
+    } catch {
+      resolve(false);
+    }
+  });
+}
+
+async function readFileAsDataUrl(file: File): Promise<string> {
+  return await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => resolve((e.target?.result as string) || '');
+    reader.onerror = () => reject(new Error('read-file-failed'));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function handleImageChange(info: UploadChangeParam<UploadFile<any>>) {
+  const list = info.fileList.slice(-1);
+  if (list.length > 0) {
+    const fileObj = list[0].originFileObj as File | undefined;
+    if (fileObj) {
+      const ok = await validateImageSize(fileObj, VEHICLE_IMAGE_WIDTH, VEHICLE_IMAGE_HEIGHT);
+      if (!ok) {
         message.error(`图片尺寸必须为 ${VEHICLE_IMAGE_WIDTH}x${VEHICLE_IMAGE_HEIGHT} 像素`);
+        return;
       }
-    };
-    img.onerror = () => {
-      imageFileList.value = [];
-      imagePreview.value = '';
-      message.error('无法读取图片');
-    };
-    img.src = dataUrl;
-  };
-  reader.readAsDataURL(origin);
-  return false;
+      try {
+        imagePreview.value = await readFileAsDataUrl(fileObj);
+      } catch {
+        message.error('无法读取图片');
+        return;
+      }
+    }
+  }
+  imageFileList.value = list;
+  if (!list.length) {
+    imagePreview.value = '';
+  }
 }
 
 const modalTitle = computed(() => (editingId.value ? '编辑车辆' : '新增车辆'));
@@ -364,7 +390,7 @@ onMounted(() => {
               <span>保存后会自动创建/更新关联商品，并归类到“交通工具”</span>
             </Form.Item>
             <Form.Item label="图片上传" :extra="`图片要求：${VEHICLE_IMAGE_WIDTH}x${VEHICLE_IMAGE_HEIGHT} 像素，超出尺寸将被拒绝`">
-              <Upload v-bind="imageUploadProps" v-model:file-list="imageFileList" list-type="picture-card" :beforeUpload="handleImageBeforeUpload">
+              <Upload v-bind="imageUploadProps" :file-list="imageFileList" list-type="picture-card" @change="handleImageChange">
                 <div>上传</div>
               </Upload>
             </Form.Item>
