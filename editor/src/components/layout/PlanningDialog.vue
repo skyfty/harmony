@@ -927,6 +927,7 @@ type ScaleBarSpec = { meters: number; pixels: number; label: string }
 const SCALE_BAR_TARGET_PX = 120
 const SCALE_BAR_MIN_PX = 72
 const SCALE_BAR_MAX_PX = 170
+const MIN_VIEW_SCALE = 0.05
 
 function formatScaleDistance(meters: number): string {
   if (!Number.isFinite(meters) || meters <= 0) {
@@ -991,7 +992,10 @@ function formatZoomLabel(scale: number): string {
 }
 
 function normalizeViewScale(scale: number) {
-  return Number.isFinite(scale) && scale > 0 ? scale : 1
+  if (!Number.isFinite(scale) || scale <= 0) {
+    return 1
+  }
+  return Math.max(MIN_VIEW_SCALE, scale)
 }
 
 function getZoomAnchorRect() {
@@ -1108,6 +1112,21 @@ function handleResetView() {
 let planningDirty = false
 function markPlanningDirty() {
   planningDirty = true
+}
+
+let pendingWheelZoom: { factor: number; clientX: number; clientY: number } | null = null
+let wheelZoomRaf: number | null = null
+
+function flushWheelZoom() {
+  wheelZoomRaf = null
+  const pending = pendingWheelZoom
+  pendingWheelZoom = null
+  if (!pending) {
+    return
+  }
+  if (zoomViewByFactor(pending.factor, pending.clientX, pending.clientY)) {
+    markPlanningDirty()
+  }
 }
 
 function setLayerConversionEnabled(layerId: string | null | undefined, enabled: boolean, options?: { markDirty?: boolean }) {
@@ -2777,10 +2796,11 @@ const stageStyle = computed(() => {
   return {
     width: `${effectiveCanvasPixelSize.value.width}px`,
     height: `${effectiveCanvasPixelSize.value.height}px`,
-    transform: `translate(${translateX}px, ${translateY}px) scale(${viewScale})`,
+    transform: `translate3d(${translateX}px, ${translateY}px, 0) scale(${viewScale})`,
     transformOrigin: 'top left',
     willChange: 'transform',
-  }
+    backfaceVisibility: 'hidden' as const,
+  } satisfies CSSProperties
 })
 
 
@@ -4832,8 +4852,22 @@ function handleWheel(event: WheelEvent) {
       : 1
   const delta = event.deltaY * deltaModeScale
   const factor = Math.exp(-delta * 0.0015)
-  if (zoomViewByFactor(factor, event.clientX, event.clientY)) {
-    markPlanningDirty()
+  if (!Number.isFinite(factor) || factor <= 0) {
+    return
+  }
+
+  if (pendingWheelZoom) {
+    pendingWheelZoom.factor *= factor
+    pendingWheelZoom.clientX = event.clientX
+    pendingWheelZoom.clientY = event.clientY
+  } else {
+    pendingWheelZoom = { factor, clientX: event.clientX, clientY: event.clientY }
+  }
+
+  if (wheelZoomRaf === null) {
+    wheelZoomRaf = requestAnimationFrame(() => {
+      flushWheelZoom()
+    })
   }
 }
 
@@ -6289,6 +6323,11 @@ onBeforeUnmount(() => {
     cancelAnimationFrame(imageScaleCalibrationDialogOpenRaf)
     imageScaleCalibrationDialogOpenRaf = null
   }
+  if (wheelZoomRaf !== null) {
+    cancelAnimationFrame(wheelZoomRaf)
+    wheelZoomRaf = null
+  }
+  pendingWheelZoom = null
 })
 </script>
 
