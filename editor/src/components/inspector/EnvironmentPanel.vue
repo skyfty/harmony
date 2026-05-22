@@ -12,7 +12,6 @@ import type {
 import {
   getLastExtensionFromFilenameOrUrl,
   isHdriLikeExtension,
-  isImageLikeExtension,
   isSkyCubeArchiveExtension,
 } from '@schema/core'
 import type { ProjectAsset } from '@/types/project-asset'
@@ -63,7 +62,7 @@ type AssetDialogTarget = 'background'
 const assetDialogTarget = ref<AssetDialogTarget | null>(null)
 
 const HDRI_ASSET_TYPE = 'hdri' as const
-const BACKGROUND_ASSET_TYPE = 'image,texture,hdri,file' as const
+const BACKGROUND_ASSET_TYPE = 'hdri,file' as const
 const BACKGROUND_ASSET_EXTENSIONS = [
   'hdr',
   'hdri',
@@ -71,19 +70,6 @@ const BACKGROUND_ASSET_EXTENSIONS = [
   'exr',
   'ktx2',
   'skycube',
-  'png',
-  'jpg',
-  'jpeg',
-  'webp',
-  'gif',
-  'bmp',
-  'tif',
-  'tiff',
-  'avif',
-  'heic',
-  'heif',
-  'ico',
-  'svg',
 ] as const
 
 const isBackgroundDropActive = ref(false)
@@ -220,16 +206,13 @@ const backgroundAssetLabel = computed(() => {
 const backgroundAssetHint = computed(() => {
   const asset = backgroundAsset.value
   if (!asset) {
-    return 'Supports HDR (.hdr, .exr), KTX2 (.ktx2), image textures, or .skycube archives'
+    return 'Supports HDRI, .hdr, or .skycube assets'
   }
   const extension = inferAssetExtension(asset)
   if (isSkyCubeArchiveExtension(extension)) {
     return '.skycube archive'
   }
-  if (extension === 'ktx2') {
-    return 'Fast HDRI (.ktx2)'
-  }
-  return `HDRI / texture (${extension ? `.${extension}` : 'selected asset'})`
+  return extension === 'hdr' ? '.hdr HDRI' : 'HDRI asset'
 })
 
 const backgroundPreviewStyle = computed(() => resolveAssetPreviewStyle(backgroundAsset.value))
@@ -816,23 +799,19 @@ function inferAssetExtension(asset: ProjectAsset | null): string | null {
 }
 
 function isHdrExtension(extension: string | null): boolean {
-  return isHdriLikeExtension(extension) || extension === 'ktx2'
-}
-
-function isImageExtension(extension: string | null): boolean {
-  return isImageLikeExtension(extension)
+  return isHdriLikeExtension(extension)
 }
 
 function isEnvironmentAsset(asset: ProjectAsset | null): asset is ProjectAsset {
   if (!asset) {
     return false
   }
-  if (asset.type === 'image' || asset.type === 'texture' || asset.type === 'hdri') {
+  if (asset.type === 'hdri') {
     return true
   }
   if (asset.type === 'file') {
     const extension = inferAssetExtension(asset)
-    return isHdrExtension(extension) || isImageExtension(extension) || isSkyCubeArchiveExtension(extension)
+    return isHdrExtension(extension) || isSkyCubeArchiveExtension(extension)
   }
   return false
 }
@@ -901,7 +880,7 @@ function applySkyAsset(asset: ProjectAsset) {
     return
   }
 
-  const mode: EnvironmentBackgroundMode = extension === 'ktx2' ? 'fastHdri' : 'hdri'
+  const mode: EnvironmentBackgroundMode = 'hdri'
   patchEnvironmentBackground({
     mode,
     solidColor: environmentSettings.value.background.solidColor,

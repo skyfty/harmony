@@ -1421,7 +1421,7 @@ let backgroundTexture: THREE.Texture | null = null;
 let backgroundTextureCleanup: (() => void) | null = null;
 let backgroundAssetId: string | null = null;
 let skyCubeTexture: THREE.CubeTexture | null = null;
-let skyCubeSourceFormat: 'faces' | 'zip' = 'faces';
+let skyCubeSourceFormat: 'zip' = 'zip';
 let skyCubeFaceAssetIds: Array<string | null> | null = null;
 let skyCubeFaceTextureCleanup: Array<(() => void) | null> | null = null;
 let gradientBackgroundDome: GradientBackgroundDome | null = null;
@@ -11226,7 +11226,7 @@ function disposeSkyCubeBackgroundResources() {
   skyCubeZipFaceUrlCleanup?.();
   skyCubeZipFaceUrlCleanup = null;
   skyCubeTexture = null;
-  skyCubeSourceFormat = 'faces';
+  skyCubeSourceFormat = 'zip'
   skyCubeFaceAssetIds = null;
   skyCubeZipAssetId = null;
   if (skyCubeFaceTextureCleanup) {
@@ -11521,10 +11521,7 @@ async function applyBackgroundSettings(
       background.negativeZAssetId ?? null,
     ];
     const hasAnyFace = faceAssetIds.some((assetId) => typeof assetId === 'string' && assetId.trim().length > 0);
-    const skycubeFormat =
-      background.skycubeFormat === 'zip' || background.skycubeFormat === 'faces'
-        ? background.skycubeFormat
-        : (hasAnyFace ? 'faces' : 'zip');
+    const skycubeFormat = 'zip'
     if (skycubeFormat === 'zip') {
       const zipAssetId = background.skycubeZipAssetId ?? null;
       if (!zipAssetId) {
@@ -11658,7 +11655,7 @@ async function applyBackgroundSettings(
     }
     disposeBackgroundResources();
     skyCubeTexture = loaded.texture;
-    skyCubeSourceFormat = 'faces';
+    skyCubeSourceFormat = 'zip';
     skyCubeFaceAssetIds = faceAssetIds;
     skyCubeFaceTextureCleanup = cleanup;
     skyCubeZipAssetId = null;
