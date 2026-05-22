@@ -108,6 +108,10 @@ export async function bootstrapTourShared() {
   cleanPackageOutputs(['physicsBridge']);
   await buildPackages(['physicsBridge']);
 
+  await installPackages(['physicsAmmo', 'physicsCannon']);
+  cleanPackageOutputs(['physicsAmmo', 'physicsCannon']);
+  await buildPackages(['physicsAmmo', 'physicsCannon']);
+
   await installPackages(['schema']);
   cleanPackageOutputs(['schema']);
   await buildPackages(['schema']);
