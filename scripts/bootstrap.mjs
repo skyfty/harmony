@@ -100,9 +100,23 @@ export async function bootstrapTour(platform, phase = 'build') {
 }
 
 export async function bootstrapTourShared() {
-  await installPackages(tourInstallOrder);
-  cleanPackageOutputs(tourBuildOrder);
-  await buildPackages(tourBuildOrder);
+  await installPackages(['utils', 'physicsCore']);
+  cleanPackageOutputs(['utils', 'physicsCore']);
+  await buildPackages(['utils', 'physicsCore']);
+
+  await installPackages(['physicsBridge']);
+  cleanPackageOutputs(['physicsBridge']);
+  await buildPackages(['physicsBridge']);
+
+  await installPackages(['schema']);
+  cleanPackageOutputs(['schema']);
+  await buildPackages(['schema']);
+
+  await installPackages(['tools']);
+  cleanPackageOutputs(['tools']);
+  await buildPackages(['tools']);
+
+  await installPackages(['scenery']);
   await installPackages(['tour']);
   await syncTourSharedArtifacts();
   rmSync(resolve(packageRoots.tour, 'node_modules/.vite'), { recursive: true, force: true });
