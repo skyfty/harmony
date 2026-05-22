@@ -1932,6 +1932,9 @@ type DirectionalLightPivotEditState = {
 let directionalLightPivotEditState: DirectionalLightPivotEditState | null = null
 let isApplyingCameraState = false
 let lastCameraFocusRadius: number | null = null
+const CAMERA_MAX_DISTANCE_ABS_CAP = 60000
+const CAMERA_MAX_DISTANCE_MAP_RADIUS_MULTIPLIER = 60
+const CAMERA_MAX_DISTANCE_ORBIT_RADIUS_MULTIPLIER = 40
 const VIEWPORT_COMPOSITION_EPSILON_PX = 0.5
 const viewportCompositionOffsetPx = new THREE.Vector2(Number.NaN, Number.NaN)
 const viewportCompositionOffsetTargetPx = new THREE.Vector2()
@@ -12953,7 +12956,7 @@ function syncControlsConstraintsAndSpeeds() {
 
   const target = mapControls.target
   const distance = camera.position.distanceTo(target)
-  const radiusUsed = computeRadiusUsed(lastCameraFocusRadius, distance)
+  const radiusUsed = computeRadiusUsed(lastCameraFocusRadius)
   const mode = sceneStore.viewportSettings.cameraControlMode
 
   // Prevent mode switch from clamping the current distance (no surprise jumps).
@@ -12961,14 +12964,14 @@ function syncControlsConstraintsAndSpeeds() {
     ? clampNumber(radiusUsed * 0.2, 0.2, 50)
     : clampNumber(radiusUsed * 0.02, 0.02, 10)
   const maxDistanceBase = mode === 'map'
-    ? clampNumber(Math.max(radiusUsed * 2000, 5000), 200, 200000)
-    : clampNumber(Math.max(radiusUsed * 2000, 500), 50, 200000)
+    ? clampNumber(radiusUsed * CAMERA_MAX_DISTANCE_MAP_RADIUS_MULTIPLIER, 20, CAMERA_MAX_DISTANCE_ABS_CAP)
+    : clampNumber(radiusUsed * CAMERA_MAX_DISTANCE_ORBIT_RADIUS_MULTIPLIER, 10, CAMERA_MAX_DISTANCE_ABS_CAP)
 
   // Relax the inward clamp so repeated dolly-in doesn't immediately get blocked.
   // Use a smaller fraction of the current distance (instead of 0.95) so there's
   // a meaningful inward range before hitting the minimum constraint.
   mapControls.minDistance = Math.max(0.02, Math.min(minDistanceBase, distance * 0.5))
-  mapControls.maxDistance = Math.max(maxDistanceBase, distance * 1.05)
+  mapControls.maxDistance = Math.max(maxDistanceBase, mapControls.minDistance * 2)
 
   // Keep local-detail edits precise while making far-away browsing much faster.
   const normalizedDistance = distance / Math.max(radiusUsed, 1e-6)
