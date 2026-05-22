@@ -454,12 +454,9 @@ const layoutClasses = computed(() => ({
 
 const layoutStyles = computed(() => ({
   gridTemplateColumns: [
-    // After swapping panel positions, the inspector now docks on the left and
-    // the hierarchy docks on the right. Keep the column widths mapped to the
-    // actual grid areas so a floating panel releases the correct side.
-    showInspectorDocked.value ? 'minmax(0, 320px)' : '0',
-    'minmax(0, 1fr)',
     showHierarchyDocked.value ? 'minmax(0, 280px)' : '0',
+    'minmax(0, 1fr)',
+    showInspectorDocked.value ? 'minmax(0, 320px)' : '0',
   ].join(' '),
   gridTemplateRows: [
     'auto',
@@ -2982,7 +2979,7 @@ onBeforeUnmount(() => {
   grid-template-rows: auto minmax(0, 1fr) minmax(0, 260px);
   grid-template-areas:
     'menu menu menu'
-    'inspector scene hierarchy'
+    'hierarchy scene inspector'
     'project project project';
   gap: 7px;
   padding: 12px;
@@ -3024,7 +3021,7 @@ onBeforeUnmount(() => {
 
 .hierarchy-floating {
   top: calc(var(--floating-menu-offset) + var(--floating-edge-gap) + var(--viewport-gizmo-clearance));
-  right: var(--floating-edge-gap);
+  left: var(--floating-edge-gap);
   bottom: calc(var(--project-floating-height) + (var(--floating-edge-gap) * 2));
   width: min(260px, 40vw);
   max-height: var(--hierarchy-floating-height);
@@ -3033,7 +3030,7 @@ onBeforeUnmount(() => {
 
 .inspector-floating {
   top: calc(var(--floating-menu-offset) + var(--floating-edge-gap) + var(--viewport-gizmo-clearance));
-  left: var(--floating-edge-gap);
+  right: var(--floating-edge-gap);
   bottom: calc(var(--project-floating-height) + (var(--floating-edge-gap) * 2));
   width: min(300px, 40vw);
   max-height: var(--inspector-floating-height);
