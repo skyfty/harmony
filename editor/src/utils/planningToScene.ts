@@ -1113,6 +1113,19 @@ function resolvePlanningUnitsToMeters(planningData: PlanningSceneData, groundWid
   return 1
 }
 
+function resolvePlanningImageCenterOffsetMeters(image: PlanningImageData): { x: number; z: number } {
+  const widthMeters = Math.max(1e-3, Math.abs(Number(image.width) * Number(image.scale)))
+  const heightMeters = Math.max(1e-3, Math.abs(Number(image.height) * Number(image.scale)))
+  const markerX = Number(image.alignMarker?.x)
+  const markerY = Number(image.alignMarker?.y)
+  const hasMarkerX = Number.isFinite(markerX)
+  const hasMarkerY = Number.isFinite(markerY)
+  return {
+    x: hasMarkerX ? widthMeters * 0.5 - markerX * Number(image.scale) : 0,
+    z: hasMarkerY ? heightMeters * 0.5 - markerY * Number(image.scale) : 0,
+  }
+}
+
 function normalizePlanningPoints(points: PlanningPoint[] | undefined, unitsToMeters: number): PlanningPoint[] {
   const scale = Number.isFinite(unitsToMeters) && unitsToMeters > 0 ? unitsToMeters : 1
   if (!Array.isArray(points) || points.length === 0) return []
@@ -2232,7 +2245,9 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
         if (!Number.isFinite(width) || !Number.isFinite(height)) {
           continue
         }
-        // Planning reference images are editor-only guides, so keep them centered on the scene origin.
+        // Planning reference images are editor-only guides. When an alignment marker exists,
+        // shift the plane so that marker lands on the scene/world origin.
+        const centerOffset = resolvePlanningImageCenterOffsetMeters(image)
         const groundY = groundHeightAt(0, 0)
         imageEntries.push({
           id: image.id,
@@ -2242,9 +2257,9 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
           mimeType: image.mimeType ?? undefined,
           filename: image.filename ?? undefined,
           position: {
-            x: 0,
+            x: centerOffset.x,
             y: groundY + PLANNING_IMAGE_HEIGHT_OFFSET_M + imageIndex * PLANNING_IMAGE_STACK_OFFSET_M,
-            z: 0,
+            z: centerOffset.z,
           },
           size: {
             width,

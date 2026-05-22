@@ -228,6 +228,13 @@ type DragState =
   | { type: 'move-polygon'; pointerId: number; polygonId: string; anchor: PlanningPoint; startPoints: PlanningPoint[] }
   | { type: 'move-polyline'; pointerId: number; lineId: string; anchor: PlanningPoint; startPoints: PlanningPoint[] }
   | {
+    type: 'calibrate-line'
+    pointerId: number
+    imageId: string
+    start: PlanningPoint
+    current: PlanningPoint
+  }
+  | {
     type: 'move-image-layer'
     pointerId: number
     imageId: string
@@ -511,6 +518,7 @@ const imageScaleCalibrationDraft = ref<PlanningImageScaleCalibrationDraft | null
 const imageScaleCalibrationDialogOpen = ref(false)
 const imageScaleCalibrationRealMeters = ref<number | null>(null)
 const imageScaleCalibrationError = ref<string | null>(null)
+let imageScaleCalibrationDialogOpenRaf: number | null = null
 const planningImageImportDialogOpen = computed({
   get: () => planningImageImportDraft.value !== null,
   set: (value: boolean) => {
@@ -924,11 +932,6 @@ function formatScaleDistance(meters: number): string {
   if (!Number.isFinite(meters) || meters <= 0) {
     return ''
   }
-  if (meters >= 1000) {
-    const km = meters / 1000
-    const rounded = km >= 10 ? Math.round(km) : Math.round(km * 10) / 10
-    return `${rounded} km`
-  }
   if (meters >= 10) {
     return `${Math.round(meters)} m`
   }
@@ -975,6 +978,74 @@ function computeScaleBar(ppm: number): ScaleBarSpec {
 
 const scaleBarSpec = computed(() => computeScaleBar(renderScale.value))
 
+function formatZoomLabel(scale: number): string {
+  if (!Number.isFinite(scale) || scale <= 0) {
+    return '1x'
+  }
+  const rounded = scale >= 10
+    ? Math.round(scale)
+    : scale >= 1
+      ? Math.round(scale * 10) / 10
+      : Math.round(scale * 100) / 100
+  return `${rounded}x`
+}
+
+function getZoomAnchorRect() {
+  return editorRef.value?.getBoundingClientRect() ?? editorRect.value
+}
+
+function zoomViewTo(nextViewScale: number, anchorClientX: number, anchorClientY: number, options?: { force?: boolean }) {
+  const rect = getZoomAnchorRect()
+  if (!rect) {
+    return false
+  }
+  if (!Number.isFinite(nextViewScale) || nextViewScale <= 0) {
+    return false
+  }
+
+  const previousViewScale = viewTransform.scale
+  if (!options?.force && nextViewScale === previousViewScale) {
+    return false
+  }
+
+  // Keep the world point under the anchor stable while changing the zoom level.
+  const previousRenderScale = previousViewScale * BASE_PIXELS_PER_METER
+  const centerBefore = computeStageCenterOffset(rect, previousRenderScale)
+  const sx = anchorClientX - rect.left
+  const sy = anchorClientY - rect.top
+  const worldX = (sx - centerBefore.x) / previousRenderScale - viewTransform.offset.x
+  const worldY = (sy - centerBefore.y) / previousRenderScale - viewTransform.offset.y
+
+  const nextRenderScale = nextViewScale * BASE_PIXELS_PER_METER
+  const nextCenter = computeStageCenterOffset(rect, nextRenderScale)
+  viewTransform.scale = nextViewScale
+  viewTransform.offset.x = (sx - nextCenter.x) / nextRenderScale - worldX
+  viewTransform.offset.y = (sy - nextCenter.y) / nextRenderScale - worldY
+  return true
+}
+
+function zoomViewByFactor(factor: number, anchorClientX?: number, anchorClientY?: number) {
+  if (!Number.isFinite(factor) || factor <= 0) {
+    return false
+  }
+  const rect = getZoomAnchorRect()
+  if (!rect) {
+    return false
+  }
+  const nextViewScale = viewTransform.scale * factor
+  const anchorX = anchorClientX ?? (rect.left + rect.width / 2)
+  const anchorY = anchorClientY ?? (rect.top + rect.height / 2)
+  return zoomViewTo(nextViewScale, anchorX, anchorY)
+}
+
+function zoomViewIn(anchorClientX?: number, anchorClientY?: number) {
+  return zoomViewByFactor(1.25, anchorClientX, anchorClientY)
+}
+
+function zoomViewOut(anchorClientX?: number, anchorClientY?: number) {
+  return zoomViewByFactor(0.8, anchorClientX, anchorClientY)
+}
+
 function computeFitViewScale(rect: Pick<DOMRect, 'width' | 'height'>, options?: { paddingPx?: number }): number {
   const paddingPx = options?.paddingPx ?? 24
   const availableW = Math.max(1, rect.width - paddingPx * 2)
@@ -993,78 +1064,18 @@ function computeFitViewScale(rect: Pick<DOMRect, 'width' | 'height'>, options?: 
 }
 
 function fitViewToCanvas(options?: { markDirty?: boolean }) {
-  const rect = editorRef.value?.getBoundingClientRect() ?? editorRect.value
+  const rect = getZoomAnchorRect()
   if (!rect) {
     return
   }
   const nextScale = computeFitViewScale(rect, { paddingPx: 24 })
-  viewTransform.scale = nextScale
-  viewTransform.offset.x = 0
-  viewTransform.offset.y = 0
+  const centerX = rect.left + rect.width / 2
+  const centerY = rect.top + rect.height / 2
+  zoomViewTo(nextScale, centerX, centerY, { force: true })
   if (options?.markDirty) {
     markPlanningDirty()
   }
 }
-
-function getFitScaleForViewport(rect: Pick<DOMRect, 'width' | 'height'>) {
-  const fitScale = computeFitViewScale(rect, { paddingPx: 24 })
-  return Number.isFinite(fitScale) && fitScale > 0 ? fitScale : 1
-}
-
-function applyZoomToView(options: { nextViewScale: number; rect: DOMRect; anchorClientX: number; anchorClientY: number }) {
-  const { nextViewScale, rect, anchorClientX, anchorClientY } = options
-  const previousViewScale = viewTransform.scale
-  if (!Number.isFinite(nextViewScale) || nextViewScale <= 0 || nextViewScale === previousViewScale) {
-    return
-  }
-
-  // Keep the world point under the anchor (mouse/canvas center) stable.
-  const previousRenderScale = previousViewScale * BASE_PIXELS_PER_METER
-  const centerBefore = computeStageCenterOffset(rect, previousRenderScale)
-  const sx = anchorClientX - rect.left
-  const sy = anchorClientY - rect.top
-  const worldX = (sx - centerBefore.x) / previousRenderScale - viewTransform.offset.x
-  const worldY = (sy - centerBefore.y) / previousRenderScale - viewTransform.offset.y
-
-  const nextRenderScale = nextViewScale * BASE_PIXELS_PER_METER
-  const nextCenter = computeStageCenterOffset(rect, nextRenderScale)
-  viewTransform.scale = nextViewScale
-  viewTransform.offset.x = (sx - nextCenter.x) / nextRenderScale - worldX
-  viewTransform.offset.y = (sy - nextCenter.y) / nextRenderScale - worldY
-}
-
-const zoomPercentModel = computed({
-  get: () => {
-    const rect = editorRect.value
-    const fitScale = rect ? getFitScaleForViewport(rect) : 1
-    const percent = (viewTransform.scale / Math.max(1e-6, fitScale)) * 100
-    if (!Number.isFinite(percent)) {
-      return 100
-    }
-    return Math.round(Math.min(400, Math.max(10, percent)))
-  },
-  set: (value: number) => {
-    if (!dialogOpen.value) {
-      return
-    }
-    const rect = editorRef.value?.getBoundingClientRect() ?? editorRect.value
-    if (!rect) {
-      return
-    }
-    const fitScale = getFitScaleForViewport(rect)
-    const nextPercent = Math.min(400, Math.max(10, Number(value)))
-    const nextViewScale = fitScale * (nextPercent / 100)
-
-    // Anchor zoom to viewport center when using the slider.
-    applyZoomToView({
-      nextViewScale,
-      rect,
-      anchorClientX: rect.left + rect.width / 2,
-      anchorClientY: rect.top + rect.height / 2,
-    })
-    markPlanningDirty()
-  },
-})
 
 let planningDirty = false
 function markPlanningDirty() {
@@ -2718,8 +2729,8 @@ function computeStageCenterOffset(rect: Pick<DOMRect, 'width' | 'height'>, rende
   const width = effectiveCanvasSize.value.width * renderScaleValue
   const height = effectiveCanvasSize.value.height * renderScaleValue
   return {
-    x: Math.max((rect.width - width) / 2, 0),
-    y: Math.max((rect.height - height) / 2, 0),
+    x: (rect.width - width) / 2,
+    y: (rect.height - height) / 2,
   }
 }
 
@@ -2742,20 +2753,6 @@ const stageStyle = computed<CSSProperties>(() => {
     transform: `translate(${center.x + viewTransform.offset.x * scale}px, ${center.y + viewTransform.offset.y * scale}px) scale(${viewTransform.scale})`,
     transformOrigin: 'top left',
     willChange: 'transform',
-  }
-})
-
-const canvasBoundaryStyle = computed<CSSProperties>(() => {
-  const scale = renderScale.value
-  const center = stageCenterOffset.value
-  const left = center.x + viewTransform.offset.x * scale
-  const top = center.y + viewTransform.offset.y * scale
-  return {
-    width: `${effectiveCanvasSize.value.width * scale}px`,
-    height: `${effectiveCanvasSize.value.height * scale}px`,
-    transform: `translate(${left}px, ${top}px)`,
-    transformOrigin: 'top left',
-    pointerEvents: 'none',
   }
 })
 
@@ -3663,6 +3660,19 @@ function clientToWorld(clientX: number, clientY: number): PlanningPoint {
   return { x, y }
 }
 
+function worldToClient(world: PlanningPoint): { x: number; y: number } {
+  const rect = editorRef.value?.getBoundingClientRect()
+  if (!rect) {
+    return { x: 0, y: 0 }
+  }
+  const scale = renderScale.value
+  const center = computeStageCenterOffset(rect, scale)
+  return {
+    x: (world.x + viewTransform.offset.x) * scale + center.x,
+    y: (world.y + viewTransform.offset.y) * scale + center.y,
+  }
+}
+
 function hitTestImage(point: PlanningPoint) {
   for (let i = planningImages.value.length - 1; i >= 0; i -= 1) {
     const image = planningImages.value[i]
@@ -3680,11 +3690,6 @@ function hitTestImage(point: PlanningPoint) {
     }
   }
   return null
-}
-
-function isPointInsideCanvas(point: PlanningPoint) {
-  const size = effectiveCanvasSize.value
-  return point.x >= 0 && point.x <= size.width && point.y >= 0 && point.y <= size.height
 }
 
 function alignImageLayersByMarkers() {
@@ -4171,10 +4176,28 @@ function updateImageScaleCalibration(point: PlanningPoint) {
 
 function openImageScaleCalibrationDialog() {
   imageScaleCalibrationError.value = null
-  imageScaleCalibrationDialogOpen.value = true
+  if (imageScaleCalibrationDialogOpenRaf !== null) {
+    cancelAnimationFrame(imageScaleCalibrationDialogOpenRaf)
+    imageScaleCalibrationDialogOpenRaf = null
+  }
+  imageScaleCalibrationDialogOpenRaf = requestAnimationFrame(() => {
+    imageScaleCalibrationDialogOpenRaf = null
+    if (!dialogOpen.value) {
+      return
+    }
+    const draft = imageScaleCalibrationDraft.value
+    if (!draft || currentTool.value !== 'calibrate') {
+      return
+    }
+    imageScaleCalibrationDialogOpen.value = true
+  })
 }
 
 function closeImageScaleCalibrationDialog() {
+  if (imageScaleCalibrationDialogOpenRaf !== null) {
+    cancelAnimationFrame(imageScaleCalibrationDialogOpenRaf)
+    imageScaleCalibrationDialogOpenRaf = null
+  }
   imageScaleCalibrationDialogOpen.value = false
   imageScaleCalibrationRealMeters.value = null
   imageScaleCalibrationError.value = null
@@ -4315,6 +4338,18 @@ const imageScaleCalibrationPreview = computed(() => {
   }
 })
 
+const imageScaleCalibrationScreenPreview = computed(() => {
+  const preview = imageScaleCalibrationPreview.value
+  if (!preview) {
+    return null
+  }
+  return {
+    ...preview,
+    start: worldToClient(preview.start),
+    current: worldToClient(preview.current),
+  }
+})
+
 // clearSelectedScatterAssignment removed (unused)
 
 function handleEditorPointerDown(event: PointerEvent) {
@@ -4361,7 +4396,6 @@ function handleEditorPointerDown(event: PointerEvent) {
   frozenCanvasSize.value = { ...canvasSize.value }
   const tool = getEffectiveTool()
   const world = screenToWorld(event)
-  const insideCanvas = isPointInsideCanvas(world)
 
   // When clicking on empty canvas, clear current selection (applies to all tools).
   selectedFeature.value = null
@@ -4376,28 +4410,16 @@ function handleEditorPointerDown(event: PointerEvent) {
   }
 
   if (tool === 'rectangle') {
-    if (!insideCanvas) {
-      frozenCanvasSize.value = null
-      return
-    }
     startRectangleDrag(world, event)
     return
   }
 
   if (tool === 'lasso') {
-    if (!insideCanvas) {
-      frozenCanvasSize.value = null
-      return
-    }
     addPolygonDraftPoint(world)
     return
   }
 
   if (tool === 'line') {
-    if (!insideCanvas) {
-      frozenCanvasSize.value = null
-      return
-    }
     startLineDraft(world)
     return
   }
@@ -4557,6 +4579,15 @@ function handlePointerMove(event: PointerEvent) {
     }
     return
   }
+  if (state.type === 'calibrate-line') {
+    const world = screenToWorld(event)
+    updateImageScaleCalibration(world)
+    dragState.value = {
+      ...state,
+      current: { x: world.x, y: world.y },
+    }
+    return
+  }
   if (state.type === 'drag-vertex') {
     const world = screenToWorld(event)
     if (state.feature === 'polygon') {
@@ -4661,13 +4692,6 @@ function handlePointerMove(event: PointerEvent) {
     image.scale = scale
     return
   }
-
-  if (currentTool.value === 'calibrate' && imageScaleCalibrationDraft.value && !imageScaleCalibrationDialogOpen.value) {
-    const image = getCalibrationDraftImage()
-    if (image) {
-      updateImageScaleCalibration(screenToWorld(event))
-    }
-  }
 }
 
 async function handlePointerUp(event: PointerEvent) {
@@ -4695,6 +4719,16 @@ async function handlePointerUp(event: PointerEvent) {
     dragState.value = { type: 'idle' }
     // Release frozen stage size so the canvas updates uniformly after the operation ends.
     frozenCanvasSize.value = null
+
+    if (state.type === 'calibrate-line') {
+      const preview = imageScaleCalibrationPreview.value
+      if (preview && preview.pixelLength > 0) {
+        openImageScaleCalibrationDialog()
+      } else {
+        cancelImageScaleCalibration()
+      }
+      return
+    }
 
     if (shouldDirty) {
       // Ensure any pending RAF-applied moves are flushed before persisting metadata.
@@ -4763,20 +4797,15 @@ function handleWheel(event: WheelEvent) {
   if (!rect) {
     return
   }
-  const delta = event.deltaY > 0 ? -0.1 : 0.1
-  const previousViewScale = viewTransform.scale
-
-  const fitScale = getFitScaleForViewport(rect)
-  const minViewScale = fitScale * 0.1
-  const maxViewScale = fitScale * 4
-
-  const nextViewScale = Math.min(maxViewScale, Math.max(minViewScale, previousViewScale + delta * previousViewScale))
-  if (nextViewScale === previousViewScale) {
-    return
+  const normalizedDelta = event.deltaMode === WheelEvent.DOM_DELTA_LINE
+    ? event.deltaY * 16
+    : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
+      ? event.deltaY * rect.height
+      : event.deltaY
+  const factor = Math.exp(-normalizedDelta * 0.0015)
+  if (zoomViewByFactor(factor, event.clientX, event.clientY)) {
+    markPlanningDirty()
   }
-
-  applyZoomToView({ nextViewScale, rect, anchorClientX: event.clientX, anchorClientY: event.clientY })
-  markPlanningDirty()
 }
 
 function cancelActiveDrafts() {
@@ -4840,6 +4869,8 @@ function handleKeydown(event: KeyboardEvent) {
   if (!dialogOpen.value) {
     return
   }
+  const active = document.activeElement
+  const isEditable = Boolean(active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || (active as HTMLElement).isContentEditable))
   if (event.key === 'Escape') {
     cancelActiveDrafts()
     return
@@ -4850,14 +4881,28 @@ function handleKeydown(event: KeyboardEvent) {
     return
   }
   if ((event.key === 'Delete' || event.key === 'Backspace') && selectedFeature.value) {
-    // If focus is in an input or textarea, do not delete shape/layer
-    const active = document.activeElement
-    if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || (active as HTMLElement).isContentEditable)) {
-      // Let default text editing behavior happen
+    // If focus is in an input or textarea, do not delete shape/layer.
+    if (isEditable) {
       return
     }
     event.preventDefault()
     deleteSelectedFeature()
+    return
+  }
+  const isZoomShortcut = (event.ctrlKey || event.metaKey) && !event.altKey && (event.key === '=' || event.key === '+' || event.key === '-' || event.key === '_' || event.key === '0')
+  if (isZoomShortcut) {
+    event.preventDefault()
+    if (event.key === '0') {
+      handleResetView()
+      return
+    }
+    if (event.key === '-' || event.key === '_') {
+      zoomViewOut()
+      markPlanningDirty()
+      return
+    }
+    zoomViewIn()
+    markPlanningDirty()
     return
   }
   if (event.key === 'Enter') {
@@ -5573,6 +5618,18 @@ function handleResetView() {
   fitViewToCanvas({ markDirty: true })
 }
 
+function handleZoomInClick() {
+  if (zoomViewIn()) {
+    markPlanningDirty()
+  }
+}
+
+function handleZoomOutClick() {
+  if (zoomViewOut()) {
+    markPlanningDirty()
+  }
+}
+
 function handleImageLayerToggle(imageId: string) {
   const image = planningImages.value.find((img) => img.id === imageId)
   if (image) {
@@ -5756,14 +5813,14 @@ function handleImageLayerPointerDown(imageId: string, event: PointerEvent) {
     event.stopPropagation()
     event.preventDefault()
     const world = screenToWorld(event)
-    const draft = imageScaleCalibrationDraft.value
-    if (!draft || draft.imageId !== image.id) {
-      startImageScaleCalibration(world, image)
-      event.currentTarget instanceof Element && event.currentTarget.setPointerCapture(event.pointerId)
-      return
+    startImageScaleCalibration(world, image)
+    dragState.value = {
+      type: 'calibrate-line',
+      pointerId: event.pointerId,
+      imageId,
+      start: { x: world.x, y: world.y },
+      current: { x: world.x, y: world.y },
     }
-    updateImageScaleCalibration(world)
-    openImageScaleCalibrationDialog()
     event.currentTarget instanceof Element && event.currentTarget.setPointerCapture(event.pointerId)
     return
   }
@@ -6231,6 +6288,10 @@ onBeforeUnmount(() => {
   window.removeEventListener('pointercancel', handlePointerUp)
   window.removeEventListener('resize', updateEditorRect)
   window.removeEventListener('keydown', handleKeydown)
+  if (imageScaleCalibrationDialogOpenRaf !== null) {
+    cancelAnimationFrame(imageScaleCalibrationDialogOpenRaf)
+    imageScaleCalibrationDialogOpenRaf = null
+  }
 })
 </script>
 
@@ -6467,16 +6528,37 @@ onBeforeUnmount(() => {
 
             <div class="toolbar-right">
               <div class="zoom-control">
-                <v-slider
-                  v-model="zoomPercentModel"
-                  min="10"
-                  max="400"
-                  step="1"
-                  density="compact"
-                  hide-details
-                  class="zoom-slider"
-                />
-                <div class="zoom-value">{{ zoomPercentModel }}%</div>
+                <v-tooltip text="Zoom out (Ctrl/⌘ + -)" location="bottom">
+                  <template #activator="{ props }">
+                    <v-btn
+                      v-bind="props"
+                      variant="tonal"
+                      density="comfortable"
+                      class="tool-button tool-button--zoom"
+                      @click="handleZoomOutClick"
+                    >
+                      <v-icon>mdi-magnify-minus-outline</v-icon>
+                    </v-btn>
+                  </template>
+                </v-tooltip>
+
+                <div class="zoom-value" :title="`Canvas zoom ${formatZoomLabel(viewTransform.scale)}`">
+                  {{ formatZoomLabel(viewTransform.scale) }}
+                </div>
+
+                <v-tooltip text="Zoom in (Ctrl/⌘ + =)" location="bottom">
+                  <template #activator="{ props }">
+                    <v-btn
+                      v-bind="props"
+                      variant="tonal"
+                      density="comfortable"
+                      class="tool-button tool-button--zoom"
+                      @click="handleZoomInClick"
+                    >
+                      <v-icon>mdi-magnify-plus-outline</v-icon>
+                    </v-btn>
+                  </template>
+                </v-tooltip>
               </div>
 
               <v-tooltip text="Reset View" location="bottom">
@@ -6520,46 +6602,6 @@ onBeforeUnmount(() => {
                   <img v-if="planningDemPreviewUrl" class="dem-preview-stage__image dem-preview-stage__image--dem" :src="planningDemPreviewUrl" alt="DEM stage preview">
                   <img v-if="planningOrthophotoPreviewUrl" class="dem-preview-stage__image dem-preview-stage__image--orthophoto" :src="planningOrthophotoPreviewUrl" alt="Orthophoto stage preview">
                 </div>
-
-                <svg
-                  class="vector-overlay"
-                  :width="effectiveCanvasPixelSize.width"
-                  :height="effectiveCanvasPixelSize.height"
-                  :viewBox="`0 0 ${effectiveCanvasSize.width} ${effectiveCanvasSize.height}`"
-                  aria-hidden="true"
-                >
-                  <g v-if="imageScaleCalibrationPreview">
-                    <line
-                      class="planning-scale-calibration"
-                      :x1="imageScaleCalibrationPreview.start.x"
-                      :y1="imageScaleCalibrationPreview.start.y"
-                      :x2="imageScaleCalibrationPreview.current.x"
-                      :y2="imageScaleCalibrationPreview.current.y"
-                      vector-effect="non-scaling-stroke"
-                    />
-                    <circle
-                      class="planning-scale-calibration__handle"
-                      :cx="imageScaleCalibrationPreview.start.x"
-                      :cy="imageScaleCalibrationPreview.start.y"
-                      :r="Math.max(0.35, vertexHandleRadiusWorld)"
-                      vector-effect="non-scaling-stroke"
-                    />
-                    <circle
-                      class="planning-scale-calibration__handle"
-                      :cx="imageScaleCalibrationPreview.current.x"
-                      :cy="imageScaleCalibrationPreview.current.y"
-                      :r="Math.max(0.35, vertexHandleRadiusWorld)"
-                      vector-effect="non-scaling-stroke"
-                    />
-                    <text
-                      class="planning-scale-calibration__label"
-                      :x="(imageScaleCalibrationPreview.start.x + imageScaleCalibrationPreview.current.x) * 0.5"
-                      :y="(imageScaleCalibrationPreview.start.y + imageScaleCalibrationPreview.current.y) * 0.5 - pxToWorld(10)"
-                    >
-                      {{ imageScaleCalibrationPreview.pixelLength.toFixed(1) }} px
-                    </text>
-                  </g>
-                </svg>
 
                 <div class="planning-guides-overlay" :style="getGuidesOverlayStyle()" aria-hidden="true">
                   <div
@@ -6647,7 +6689,52 @@ onBeforeUnmount(() => {
                 />
               </div>
 
-              <div class="canvas-boundary-overlay" :style="canvasBoundaryStyle" />
+              <svg
+                v-if="imageScaleCalibrationScreenPreview"
+                class="vector-overlay vector-overlay--calibration"
+                :width="editorRect?.width ?? 0"
+                :height="editorRect?.height ?? 0"
+                :viewBox="`0 0 ${editorRect?.width ?? 0} ${editorRect?.height ?? 0}`"
+                aria-hidden="true"
+              >
+                <g>
+                  <line
+                    class="planning-scale-calibration"
+                    :x1="imageScaleCalibrationScreenPreview.start.x"
+                    :y1="imageScaleCalibrationScreenPreview.start.y"
+                    :x2="imageScaleCalibrationScreenPreview.current.x"
+                    :y2="imageScaleCalibrationScreenPreview.current.y"
+                    vector-effect="non-scaling-stroke"
+                  />
+                  <circle
+                    class="planning-scale-calibration__handle"
+                    :cx="imageScaleCalibrationScreenPreview.start.x"
+                    :cy="imageScaleCalibrationScreenPreview.start.y"
+                    :r="6"
+                    vector-effect="non-scaling-stroke"
+                  />
+                  <circle
+                    class="planning-scale-calibration__handle"
+                    :cx="imageScaleCalibrationScreenPreview.current.x"
+                    :cy="imageScaleCalibrationScreenPreview.current.y"
+                    :r="6"
+                    vector-effect="non-scaling-stroke"
+                  />
+                  <text
+                    class="planning-scale-calibration__label"
+                    :x="(imageScaleCalibrationScreenPreview.start.x + imageScaleCalibrationScreenPreview.current.x) * 0.5"
+                    :y="(imageScaleCalibrationScreenPreview.start.y + imageScaleCalibrationScreenPreview.current.y) * 0.5 - 12"
+                  >
+                    {{ imageScaleCalibrationScreenPreview.pixelLength.toFixed(1) }} px
+                  </text>
+                </g>
+              </svg>
+
+              <div class="canvas-center-cross" aria-hidden="true">
+                <div class="canvas-center-cross__line canvas-center-cross__line--horizontal" />
+                <div class="canvas-center-cross__line canvas-center-cross__line--vertical" />
+                <div class="canvas-center-cross__dot" />
+              </div>
             </div>
 
             <div v-if="scaleBarSpec.label" class="scale-bar-overlay" aria-hidden="true">
@@ -6915,6 +7002,8 @@ onBeforeUnmount(() => {
       <v-dialog
         v-model="imageScaleCalibrationDialogOpen"
         max-width="540"
+        persistent
+        no-click-animation
       >
         <v-card class="planning-image-calibration-dialog">
           <v-card-title class="planning-image-calibration-dialog__title">
@@ -7522,15 +7611,13 @@ onBeforeUnmount(() => {
   gap: 10px;
 }
 
-.zoom-slider {
-  width: 140px;
-}
-
 .zoom-value {
   font-size: 0.85rem;
   opacity: 0.75;
-  min-width: 44px;
+  min-width: 52px;
   text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .tool-button {
@@ -7542,6 +7629,12 @@ onBeforeUnmount(() => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+}
+
+.tool-button--zoom {
+  min-width: 40px;
+  width: 40px;
+  height: 40px;
 }
 
 .tool-info {
@@ -7568,7 +7661,9 @@ onBeforeUnmount(() => {
 }
 
 .canvas-stage {
-  position: relative;
+  position: absolute;
+  top: 0;
+  left: 0;
   transform-origin: top left;
   will-change: transform;
 }
@@ -7724,7 +7819,7 @@ onBeforeUnmount(() => {
   position: absolute;
   top: 0;
   left: 0;
-  z-index: 5000;
+  z-index: 9500;
   pointer-events: none;
 }
 
@@ -7755,19 +7850,6 @@ onBeforeUnmount(() => {
 
 .planning-guide-line--hover {
   background: rgba(244, 246, 251, 0.38);
-}
-
-.canvas-boundary-overlay {
-  position: absolute;
-  top: 0;
-  left: 0;
-  z-index: 6000;
-  border: 2px solid rgba(0, 229, 255, 0.75);
-  box-shadow:
-    0 0 6px rgba(0, 229, 255, 0.6),
-    0 0 14px rgba(0, 229, 255, 0.45),
-    0 0 24px rgba(0, 229, 255, 0.35);
-  pointer-events: none;
 }
 
 .scale-bar-overlay {
@@ -7817,23 +7899,69 @@ onBeforeUnmount(() => {
   right: 0;
 }
 
+.canvas-center-cross {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 42px;
+  height: 42px;
+  transform: translate(-50%, -50%);
+  z-index: 6200;
+  pointer-events: none;
+  filter: drop-shadow(0 0 4px rgba(0, 0, 0, 0.45));
+}
+
+.canvas-center-cross__line {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  background: rgba(255, 255, 255, 0.86);
+}
+
+.canvas-center-cross__line--horizontal {
+  width: 42px;
+  height: 2px;
+  transform: translate(-50%, -50%);
+}
+
+.canvas-center-cross__line--vertical {
+  width: 2px;
+  height: 42px;
+  transform: translate(-50%, -50%);
+}
+
+.canvas-center-cross__dot {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(0, 229, 255, 0.95);
+  box-shadow:
+    0 0 0 2px rgba(0, 229, 255, 0.22),
+    0 0 12px rgba(0, 229, 255, 0.45);
+}
+
 .planning-scale-calibration {
-  stroke: rgba(255, 214, 92, 0.98);
-  stroke-width: 2px;
+  stroke: rgba(255, 244, 179, 0.98);
+  stroke-width: 4px;
   stroke-linecap: round;
-  stroke-dasharray: 10 7;
-  filter: drop-shadow(0 0 6px rgba(255, 214, 92, 0.4));
+  filter:
+    drop-shadow(0 0 2px rgba(12, 17, 26, 0.9))
+    drop-shadow(0 0 8px rgba(255, 214, 92, 0.45));
 }
 
 .planning-scale-calibration__handle {
-  fill: rgba(12, 17, 26, 0.95);
-  stroke: rgba(255, 214, 92, 0.98);
-  stroke-width: 2px;
+  fill: rgba(12, 17, 26, 0.98);
+  stroke: rgba(255, 244, 179, 0.98);
+  stroke-width: 2.5px;
 }
 
 .planning-scale-calibration__label {
-  fill: rgba(255, 244, 179, 0.98);
-  font-size: 0.75rem;
+  fill: rgba(255, 250, 225, 0.98);
+  font-size: 0.8rem;
   font-weight: 700;
   letter-spacing: 0.02em;
   paint-order: stroke;

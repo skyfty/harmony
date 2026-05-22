@@ -4,10 +4,15 @@ import { GRID_MAJOR_SPACING } from './constants'
 import { setBoundingBoxFromObject } from './sceneUtils'
 
 const MAJOR_COLOR = '#7f8fa6'
-const MAJOR_OPACITY = 0.9
+const MAJOR_OPACITY = 0.6
 const GRID_MAJOR_LINE_WIDTH_PX = 0.85
+const GRID_ACCENT_SPACING = 10
+const GRID_ACCENT_LINE_WIDTH_PX = 1.25
+const GRID_ACCENT_COLOR = '#c7d2e0'
+const GRID_ACCENT_OPACITY = 0.48
 const TERRAIN_GRID_SHADER_KEY = 'harmony-terrain-grid-overlay-v3'
 const MAJOR_COLOR_VALUE = new THREE.Color(MAJOR_COLOR)
+const GRID_ACCENT_COLOR_VALUE = new THREE.Color(GRID_ACCENT_COLOR)
 
 export type TerrainGridVisibleRange = {
   minRow: number
@@ -69,6 +74,10 @@ function updateTerrainGridShaderUniforms(
   const majorWidthUniform = shader.uniforms.uHarmonyTerrainGridMajorWidthPx
   const majorColorUniform = shader.uniforms.uHarmonyTerrainGridMajorColor
   const majorOpacityUniform = shader.uniforms.uHarmonyTerrainGridMajorOpacity
+  const accentSpacingUniform = shader.uniforms.uHarmonyTerrainGridAccentSpacing
+  const accentWidthUniform = shader.uniforms.uHarmonyTerrainGridAccentWidthPx
+  const accentColorUniform = shader.uniforms.uHarmonyTerrainGridAccentColor
+  const accentOpacityUniform = shader.uniforms.uHarmonyTerrainGridAccentOpacity
   if (
     !enabledUniform
     || !boundsUniform
@@ -76,6 +85,10 @@ function updateTerrainGridShaderUniforms(
     || !majorWidthUniform
     || !majorColorUniform
     || !majorOpacityUniform
+    || !accentSpacingUniform
+    || !accentWidthUniform
+    || !accentColorUniform
+    || !accentOpacityUniform
   ) {
     return
   }
@@ -85,6 +98,10 @@ function updateTerrainGridShaderUniforms(
   majorWidthUniform.value = GRID_MAJOR_LINE_WIDTH_PX
   majorColorUniform.value.copy(MAJOR_COLOR_VALUE)
   majorOpacityUniform.value = MAJOR_OPACITY
+  accentSpacingUniform.value = GRID_ACCENT_SPACING
+  accentWidthUniform.value = GRID_ACCENT_LINE_WIDTH_PX
+  accentColorUniform.value.copy(GRID_ACCENT_COLOR_VALUE)
+  accentOpacityUniform.value = GRID_ACCENT_OPACITY
 }
 
 function installTerrainGridShaderHooks(
@@ -110,6 +127,10 @@ function installTerrainGridShaderHooks(
     shader.uniforms.uHarmonyTerrainGridMajorWidthPx = { value: GRID_MAJOR_LINE_WIDTH_PX }
     shader.uniforms.uHarmonyTerrainGridMajorColor = { value: MAJOR_COLOR_VALUE.clone() }
     shader.uniforms.uHarmonyTerrainGridMajorOpacity = { value: MAJOR_OPACITY }
+    shader.uniforms.uHarmonyTerrainGridAccentSpacing = { value: GRID_ACCENT_SPACING }
+    shader.uniforms.uHarmonyTerrainGridAccentWidthPx = { value: GRID_ACCENT_LINE_WIDTH_PX }
+    shader.uniforms.uHarmonyTerrainGridAccentColor = { value: GRID_ACCENT_COLOR_VALUE.clone() }
+    shader.uniforms.uHarmonyTerrainGridAccentOpacity = { value: GRID_ACCENT_OPACITY }
     shader.vertexShader = shader.vertexShader
       .replace(
         'void main() {',
@@ -140,6 +161,10 @@ function installTerrainGridShaderHooks(
           'uniform float uHarmonyTerrainGridMajorWidthPx;',
           'uniform vec3 uHarmonyTerrainGridMajorColor;',
           'uniform float uHarmonyTerrainGridMajorOpacity;',
+          'uniform float uHarmonyTerrainGridAccentSpacing;',
+          'uniform float uHarmonyTerrainGridAccentWidthPx;',
+          'uniform vec3 uHarmonyTerrainGridAccentColor;',
+          'uniform float uHarmonyTerrainGridAccentOpacity;',
           'varying vec2 vHarmonyTerrainGridWorldXZ;',
           'float harmonyGridLineFactor(vec2 worldXZ, float spacing, float widthPx) {',
           '  vec2 grid = worldXZ / max(spacing, 1e-5);',
@@ -161,10 +186,12 @@ function installTerrainGridShaderHooks(
           '  bool harmonyGridInside = harmonyGridLocal.x >= 0.0 && harmonyGridLocal.x <= harmonyGridSize.x && harmonyGridLocal.y >= 0.0 && harmonyGridLocal.y <= harmonyGridSize.y;',
           '  if (harmonyGridInside) {',
           '    float harmonyMajorLine = harmonyGridLineFactor(vHarmonyTerrainGridWorldXZ, uHarmonyTerrainGridMajorSpacing, uHarmonyTerrainGridMajorWidthPx);',
+          '    float harmonyAccentLine = harmonyGridLineFactor(vHarmonyTerrainGridWorldXZ, uHarmonyTerrainGridAccentSpacing, uHarmonyTerrainGridAccentWidthPx);',
           '    float harmonyMajorAlpha = clamp(harmonyMajorLine * uHarmonyTerrainGridMajorOpacity, 0.0, 1.0);',
-          '    float harmonyGridAlpha = harmonyMajorAlpha;',
+          '    float harmonyAccentAlpha = clamp(harmonyAccentLine * uHarmonyTerrainGridAccentOpacity, 0.0, 1.0);',
+          '    float harmonyGridAlpha = max(harmonyMajorAlpha, harmonyAccentAlpha);',
           '    if (harmonyGridAlpha > 1e-4) {',
-          '      vec3 harmonyGridColor = uHarmonyTerrainGridMajorColor;',
+          '      vec3 harmonyGridColor = mix(uHarmonyTerrainGridMajorColor, uHarmonyTerrainGridAccentColor, step(harmonyMajorAlpha, harmonyAccentAlpha));',
           '      diffuseColor.rgb = mix(diffuseColor.rgb, harmonyGridColor, harmonyGridAlpha);',
           '    }',
           '  }',
