@@ -118,7 +118,6 @@ import {
 	type SceneCsmConfig,
 	type SceneCsmShadowRuntime,
 } from '@schema/sceneCsm'
-import { createDefaultGroundSurfacePreviewLoaders, syncGroundSurfacePreviewForGround } from '@schema/groundSurfacePreview'
 import {
 	type PhysicsBodyBindingEntry as RigidbodyInstance,
 	type PhysicsOrientationAdjustment as RigidbodyOrientationAdjustment,
@@ -1493,8 +1492,6 @@ const textureLoader = new THREE.TextureLoader()
 const materialTextureCache = new Map<string, THREE.Texture>()
 const pendingMaterialTextureRequests = new Map<string, Promise<THREE.Texture | null>>()
 
-const groundSurfacePreviewLoaders = createDefaultGroundSurfacePreviewLoaders(resolveAssetUrlFromCache)
-const ENABLE_SCENE_PREVIEW_SURFACE_PREVIEW = true
 
 // Baked ground preview loader disabled — function removed.
 
@@ -1502,24 +1499,6 @@ const ENABLE_SCENE_PREVIEW_SURFACE_PREVIEW = true
 
 
 
-
-function syncGroundSurfacePreviewForGroundNode(groundObject: THREE.Object3D, groundNode: SceneNode, dynamicMesh: GroundDynamicMesh): void {
-	const usesSurfacePreview = ENABLE_SCENE_PREVIEW_SURFACE_PREVIEW
-		? syncGroundSurfacePreviewForGround(
-			groundObject,
-			groundNode,
-			dynamicMesh,
-			groundSurfacePreviewLoaders,
-			() => groundSurfacePreviewLoadToken,
-			{
-				applyToMaterialMap: true,
-			},
-		)
-		: false
-	if (usesSurfacePreview) {
-		return
-	}
-}
 
 const MAX_CONCURRENT_LAZY_LOADS = 2
 
@@ -1907,7 +1886,7 @@ type ScenePreviewCompiledGroundPackage = {
 }
 let scenePreviewCompiledGroundPackage: ScenePreviewCompiledGroundPackage | null = null
 let scenePreviewCompiledGroundInjected = false
-let groundSurfacePreviewLoadToken = 0
+let groundCacheLoadToken = 0
 let unsubscribe: (() => void) | null = null
 let livePreviewEnabled = true
 let isApplyingSnapshot = false
@@ -2248,8 +2227,8 @@ async function syncGroundCache(document: SceneJsonExportDocument | null): Promis
 	cachedGroundDynamicMesh = null
 	cachedGroundNode = null
 	cameraDependentUpdateInitialized = false
-	groundSurfacePreviewLoadToken += 1
-	const loadToken = groundSurfacePreviewLoadToken
+	groundCacheLoadToken += 1
+	const loadToken = groundCacheLoadToken
 	if (!document) {
 		if (previousGroundObject) {
 			setInfiniteGroundHiddenChunkKeys(previousGroundObject, [])
@@ -2270,14 +2249,14 @@ async function syncGroundCache(document: SceneJsonExportDocument | null): Promis
 	if (hasEmbeddedGroundRuntimeHeightmaps(groundNode.dynamicMesh)) {
 	} else {
 		const sidecar = await resolvePreviewGroundHeightSidecar(document.id, groundNode)
-		if (groundSurfacePreviewLoadToken !== loadToken) {
+		if (groundCacheLoadToken !== loadToken) {
 			return
 		}
 		if (sidecar) {
 			groundNode.dynamicMesh = createGroundRuntimeMeshFromSidecar(groundNode.dynamicMesh, sidecar)
 		}
 	}
-	if (groundSurfacePreviewLoadToken !== loadToken) {
+	if (groundCacheLoadToken !== loadToken) {
 		return
 	}
 	attachGroundScatterRuntimeToNode(document.id, groundNode)
@@ -9136,7 +9115,6 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
 	if (shouldUpdateCameraSystems && cachedGroundNodeId && cachedGroundDynamicMesh && cachedGroundNode) {
 		const groundObject = nodeObjectMap.get(cachedGroundNodeId) ?? null
 		if (groundObject) {
-			syncGroundSurfacePreviewForGroundNode(groundObject, cachedGroundNode, cachedGroundDynamicMesh)
 			syncScenePreviewCompiledGroundRenderTiles(activeCamera)
 		}
 	}

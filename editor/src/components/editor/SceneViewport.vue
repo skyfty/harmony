@@ -248,12 +248,6 @@ import {
   getCompiledGroundRenderWorkState,
   syncCompiledGroundRenderTiles,
 } from '@schema/compiledGroundRuntime'
-import {
-  createDefaultGroundSurfacePreviewLoaders,
-  syncGroundSurfaceLiveChunkPreviews,
-  syncGroundSurfacePreviewForGround,
-  type GroundSurfaceLiveChunkPreview,
-} from '@schema/groundSurfacePreview'
 import { compileRoadStaticMeshMetadata, createRoadGroup, updateRoadGroup } from '@schema/roadMesh'
 import { createFloorGroup, updateFloorGroup } from '@schema/floorMesh'
 import { createGuideRouteGroup, updateGuideRouteGroup } from '@schema/guideRouteMesh'
@@ -1103,20 +1097,6 @@ let skyCubeZipAssetId: string | null = null
 let skyCubeZipAssetKey: string | null = null
 let skyCubeZipFaceUrlCleanup: (() => void) | null = null
 let backgroundLoadToken = 0
-let lastGroundSurfacePreviewRequestKey: string | null = null
-let lastTerrainPaintSurfacePreviewRequestKey: string | null = null
-
-// Ground preview request invalidation not required here; helper removed.
-
-function bumpGroundSurfacePreviewTokenIfNeeded(requestKey: string): void {
-  if (!requestKey) {
-    return
-  }
-  if (lastGroundSurfacePreviewRequestKey === requestKey) {
-    return
-  }
-  lastGroundSurfacePreviewRequestKey = requestKey
-}
 
 function disposeGradientBackgroundResources() {
   disposeGradientBackgroundDome(gradientBackgroundDome)
@@ -3692,7 +3672,6 @@ const groundEditor = createGroundEditor({
   onSculptStart: () => {
     handleGroundTerrainMenuOpen(false)
   },
-  onTerrainPaintSurfacePreviewChanged: syncGroundSurfacePreviewFromLiveTerrainPaint,
   disableOrbitForGroundSelection,
   restoreOrbitAfterGroundSelection,
   isAltOverrideActive: () => isAltOverrideActive,
@@ -13768,102 +13747,6 @@ function cloneEnvironmentSettingsLocal(settings: EnvironmentSettings): Environme
   } catch (_error) {
     return JSON.parse(JSON.stringify(settings)) as EnvironmentSettings
   }
-}
-
-function normalizeCloudAssetReference(value: string | null | undefined): string {
-  const trimmed = typeof value === 'string' ? value.trim() : ''
-  if (!trimmed.length) {
-    return ''
-  }
-  return trimmed.startsWith('asset://') ? trimmed.slice('asset://'.length) : trimmed
-}
-
-async function resolveAssetUrlFromCache(assetId: string): Promise<{ url: string | null } | null> {
-  const normalized = normalizeCloudAssetReference(assetId)
-  if (!normalized) {
-    return null
-  }
-  const asset = sceneStore.getAsset(normalized)
-  if (!asset) {
-    try {
-      const cachedEntry = await assetCacheStore.ensureAssetEntry(normalized)
-      if (cachedEntry?.blobUrl) {
-        assetCacheStore.touch(normalized)
-        return { url: cachedEntry.blobUrl }
-      }
-    } catch (error) {
-      console.warn('[SceneViewport] Failed to restore asset from IndexedDB', normalized, error)
-      return null
-    }
-    return { url: normalized }
-  }
-  try {
-    const entry = await assetCacheStore.downloadProjectAsset(asset)
-    const url = entry.blobUrl ?? asset.downloadUrl ?? asset.description ?? null
-    if (!url) {
-      return null
-    }
-    assetCacheStore.touch(asset.id)
-    return { url }
-  } catch (error) {
-    console.warn('[SceneViewport] Failed to resolve asset URL', normalized, error)
-    return null
-  }
-}
-
-const groundSurfacePreviewLoaders = createDefaultGroundSurfacePreviewLoaders(resolveAssetUrlFromCache)
-const LIVE_TERRAIN_PAINT_SURFACE_PREVIEW_MAX_RESOLUTION = 512
-
-
-function syncGroundSurfacePreviewFromLiveTerrainPaint(payload: {
-  groundObject: THREE.Object3D
-  groundNode: SceneNode
-  dynamicMesh: GroundDynamicMesh
-  previewRevision: number
-  mode: 'live' | 'surface-rebuild'
-  liveChunkPreviews?: GroundSurfaceLiveChunkPreview[] | null
-}): void {
-  const liveChunkPreviewSignature = payload.mode === 'live'
-    ? (payload.liveChunkPreviews ?? []).map((entry) => `${entry.chunkKey}:${entry.revision}`).join('|')
-    : ''
-  const requestKey = stableSerialize({
-    mode: payload.mode,
-    nodeId: payload.groundNode.id,
-    previewRevision: payload.previewRevision,
-    groundSignature: computeGroundDynamicMeshSignature(payload.dynamicMesh),
-    liveChunkPreviewCount: payload.liveChunkPreviews?.length ?? 0,
-    liveChunkPreviewSignature,
-  })
-  if (lastTerrainPaintSurfacePreviewRequestKey === requestKey) {
-    return
-  }
-  lastTerrainPaintSurfacePreviewRequestKey = requestKey
-  bumpGroundSurfacePreviewTokenIfNeeded(requestKey)
-  if (payload.mode === 'live' && payload.liveChunkPreviews?.length) {
-    const applied = syncGroundSurfaceLiveChunkPreviews({
-      groundObject: payload.groundObject,
-      groundNode: payload.groundNode,
-      dynamicMesh: payload.dynamicMesh,
-      chunkPreviews: payload.liveChunkPreviews,
-      maxResolution: LIVE_TERRAIN_PAINT_SURFACE_PREVIEW_MAX_RESOLUTION,
-      applyToMaterialMap: true,
-    })
-    if (applied) {
-      return
-    }
-  }
-  syncGroundSurfacePreviewForGround(
-    payload.groundObject,
-    payload.groundNode,
-    payload.dynamicMesh,
-    groundSurfacePreviewLoaders,
-    () => 0,
-    {
-      previewRevision: payload.previewRevision,
-      maxResolution: payload.mode === 'live' ? LIVE_TERRAIN_PAINT_SURFACE_PREVIEW_MAX_RESOLUTION : undefined,
-      applyToMaterialMap: true,
-    },
-  )
 }
 
 function resolveAssetExtension(asset: ProjectAsset | null, override?: string | null): string | null {
