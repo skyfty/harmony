@@ -1711,85 +1711,6 @@ export interface GroundGenerationSettings {
 
 export type GroundSculptOperation = 'raise' | 'depress' | 'smooth' | 'flatten' | 'flatten-zero'
 
-export type TerrainPaintChannel = 'r' | 'g' | 'b' | 'a'
-export type TerrainPaintBlendMode = 'normal' | 'multiply' | 'screen' | 'overlay'
-export const TERRAIN_PAINT_V2_VERSION = 2 as const
-export const TERRAIN_PAINT_V3_VERSION = 3 as const
-export const TERRAIN_PAINT_VERSION = TERRAIN_PAINT_V2_VERSION
-export const TERRAIN_PAINT_PAGE_CHANNELS = ['r', 'g', 'b', 'a'] as const
-export const TERRAIN_PAINT_PAGE_SIZE = TERRAIN_PAINT_PAGE_CHANNELS.length
-export const TERRAIN_PAINT_MAX_PAGE_COUNT = 4 as const
-export const TERRAIN_PAINT_MAX_LAYER_COUNT = TERRAIN_PAINT_PAGE_SIZE * TERRAIN_PAINT_MAX_PAGE_COUNT
-export const TERRAIN_PAINT_V3_TILE_RESOLUTION = 128 as const
-export const TERRAIN_PAINT_V3_TILE_WORLD_SIZE = 8 as const
-
-export const TERRAIN_PAINT_DEFAULT_OPACITY = 1
-export const TERRAIN_PAINT_DEFAULT_ROTATION_DEG = 0
-export const TERRAIN_PAINT_DEFAULT_TILE_SCALE = { x: 1, y: 1 } as const
-export const TERRAIN_PAINT_DEFAULT_OFFSET = { x: 0, y: 0 } as const
-export const TERRAIN_PAINT_DEFAULT_WORLD_SPACE = true
-
-export interface TerrainPaintLayerStyle {
-  opacity: number
-  tileScale: { x: number; y: number }
-  offset: { x: number; y: number }
-  rotationDeg: number
-  blendMode: TerrainPaintBlendMode
-  worldSpace: boolean
-}
-
-function clampTerrainPaintFinite(value: unknown, fallback = 0): number {
-  const numeric = typeof value === 'number' ? value : Number(value)
-  return Number.isFinite(numeric) ? numeric : fallback
-}
-
-function clampTerrainPaintBoolean(value: unknown, fallback: boolean): boolean {
-  return typeof value === 'boolean' ? value : fallback
-}
-
-function clampTerrainPaintVector2(
-  value: Vector2Like | null | undefined,
-  fallback: { x: number; y: number },
-  min?: number,
-): { x: number; y: number } {
-  const x = clampTerrainPaintFinite(value?.x, fallback.x)
-  const y = clampTerrainPaintFinite(value?.y, fallback.y)
-  return {
-    x: min === undefined ? x : Math.max(min, x),
-    y: min === undefined ? y : Math.max(min, y),
-  }
-}
-
-export function clampTerrainPaintBlendMode(value: unknown): TerrainPaintBlendMode {
-  if (value === 'multiply' || value === 'screen' || value === 'overlay') {
-    return value
-  }
-  return 'normal'
-}
-
-export function clampTerrainPaintLayerStyle(
-  style: Partial<TerrainPaintLayerStyle> | null | undefined,
-): TerrainPaintLayerStyle {
-  return {
-    opacity: Math.min(1, Math.max(0, clampTerrainPaintFinite(style?.opacity, TERRAIN_PAINT_DEFAULT_OPACITY))),
-    tileScale: clampTerrainPaintVector2(style?.tileScale as Vector2Like | null | undefined, TERRAIN_PAINT_DEFAULT_TILE_SCALE, 0.001),
-    offset: clampTerrainPaintVector2(style?.offset as Vector2Like | null | undefined, TERRAIN_PAINT_DEFAULT_OFFSET),
-    rotationDeg: Math.min(360, Math.max(-360, clampTerrainPaintFinite(style?.rotationDeg, TERRAIN_PAINT_DEFAULT_ROTATION_DEG))),
-    blendMode: clampTerrainPaintBlendMode(style?.blendMode),
-    worldSpace: clampTerrainPaintBoolean(style?.worldSpace, TERRAIN_PAINT_DEFAULT_WORLD_SPACE),
-  }
-}
-
-export function cloneTerrainPaintLayerStyle(style: TerrainPaintLayerStyle): TerrainPaintLayerStyle {
-  return {
-    opacity: style.opacity,
-    tileScale: { x: style.tileScale.x, y: style.tileScale.y },
-    offset: { x: style.offset.x, y: style.offset.y },
-    rotationDeg: style.rotationDeg,
-    blendMode: style.blendMode,
-    worldSpace: style.worldSpace,
-  }
-}
 
 export interface GroundSurfaceChunkTextureRef {
   textureAssetId: string
@@ -1814,7 +1735,7 @@ export interface GroundChunkBounds {
   maxChunkZ: number
 }
 
-export type GroundChunkSource = 'manual' | 'dem' | 'import' | 'paint' | 'scatter'
+export type GroundChunkSource = 'manual' | 'dem' | 'import' | 'scatter'
 
 export interface GroundChunkCoord {
   chunkX: number
@@ -2064,7 +1985,7 @@ export function normalizeGroundSurfaceChunkTextureMap(
         }
         return [normalizedChunkKey, {
           textureAssetId,
-          revision: Math.max(0, Math.trunc(clampTerrainPaintFinite(chunkRef?.revision, 0))),
+          revision: Math.max(0, Math.trunc(Number.isFinite(Number(chunkRef?.revision)) ? Number(chunkRef?.revision) : 0)),
         }] as const
       })
       .filter((entry): entry is readonly [string, GroundSurfaceChunkTextureRef] => Boolean(entry)),
@@ -2122,10 +2043,7 @@ export interface GroundDynamicMesh {
   /** Sparse local high-resolution authoring tiles for Terrain Tools and DEM-preserved detail. */
   localEditTiles?: GroundLocalEditTileMap | null
   terrainScatter?: TerrainScatterStoreSnapshot | null
-  /** @deprecated Ground paint now persists via groundSurfaceChunks only. */
-  terrainPaint?: null
   groundSurfaceChunks?: GroundSurfaceChunkTextureMap | null
-  terrainPaintBakedTextureAssetId?: string | null
 }
 
 export function resolveGroundEditTileSizeMeters(definition: Pick<GroundDynamicMesh, 'editTileSizeMeters' | 'cellSize'>): number {

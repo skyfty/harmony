@@ -117,7 +117,6 @@
       "resourceTypes": {
         "localAsset": "本地资产",
         "planningImage": "规划图",
-        "terrainWeightmap": "地形权重图",
         "lightmap": "光照贴图",
         "navmesh": "导航网格",
         "baked": "烘焙资源",

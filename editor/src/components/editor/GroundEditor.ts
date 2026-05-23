@@ -132,8 +132,8 @@ export type GroundEditorOptions = {
 	brushShape: Ref<TerrainBrushShape | undefined>
 	brushOperation: Ref<GroundSculptOperation | null>
 	groundPanelTab: Ref<GroundPanelTab>
-	paintAsset: Ref<ProjectAsset | null>
-	paintLayerStyle: Ref<TerrainPaintBrushSettings>
+	paintAsset?: Ref<ProjectAsset | null>
+	paintLayerStyle?: Ref<TerrainPaintBrushSettings>
 	scatterCategory: Ref<TerrainScatterCategory>
 	scatterAsset: Ref<ProjectAsset | null>
 	scatterBrushRadius: Ref<number>
@@ -307,15 +307,15 @@ async function convertCanvasToBlob(canvas: OffscreenCanvas | HTMLCanvasElement):
 	return null
 }
 
-const terrainPaintBrushImageCache = new Map<string, Promise<LoadedPaintImage | null>>()
-const terrainPaintBrushImageResolvedCache = new Map<string, LoadedPaintImage | null>()
+const paintBrushImageCache = new Map<string, Promise<LoadedPaintImage | null>>()
+const paintBrushImageResolvedCache = new Map<string, LoadedPaintImage | null>()
 
-function getLoadedTerrainPaintBrushImage(assetId: string): LoadedPaintImage | null {
+function getLoadedPaintBrushImage(assetId: string): LoadedPaintImage | null {
 	const normalized = typeof assetId === 'string' ? assetId.trim() : ''
 	if (!normalized) {
 		return null
 	}
-	return terrainPaintBrushImageResolvedCache.get(normalized) ?? null
+	return paintBrushImageResolvedCache.get(normalized) ?? null
 }
 
 function resolveCanvasImageSourceSize(source: CanvasImageSource): { width: number; height: number } | null {
@@ -376,17 +376,17 @@ function extractPaintImageDataFromSource(source: CanvasImageSource, width?: numb
 	}
 }
 
-async function loadTerrainPaintBrushImage(asset: ProjectAsset): Promise<LoadedPaintImage | null> {
+async function loadPaintBrushImage(asset: ProjectAsset): Promise<LoadedPaintImage | null> {
 	const assetId = typeof asset?.id === 'string' ? asset.id.trim() : ''
 	const normalized = typeof assetId === 'string' ? assetId.trim() : ''
 	if (!normalized) {
 		return null
 	}
-	const cached = terrainPaintBrushImageResolvedCache.get(normalized)
+	const cached = paintBrushImageResolvedCache.get(normalized)
 	if (cached) {
 		return cached
 	}
-	const inflight = terrainPaintBrushImageCache.get(normalized)
+	const inflight = paintBrushImageCache.get(normalized)
 	if (inflight) {
 		return await inflight
 	}
@@ -419,14 +419,14 @@ async function loadTerrainPaintBrushImage(asset: ProjectAsset): Promise<LoadedPa
 		}
 		return { source, imageData }
 	})()
-	terrainPaintBrushImageCache.set(normalized, pending)
+	paintBrushImageCache.set(normalized, pending)
 	const loaded = await pending
-	terrainPaintBrushImageResolvedCache.set(normalized, loaded)
-	terrainPaintBrushImageCache.delete(normalized)
+	paintBrushImageResolvedCache.set(normalized, loaded)
+	paintBrushImageCache.delete(normalized)
 	return loaded
 }
 
-function createTerrainPaintImageSamplingContext(image: PaintImageDataSource): TerrainPaintImageSamplingContext {
+function createPaintImageSamplingContext(image: PaintImageDataSource): TerrainPaintImageSamplingContext {
 	return {
 		image,
 		widthMinusOne: Math.max(0, image.width - 1),
@@ -462,7 +462,7 @@ function samplePaintImageData(imageContext: TerrainPaintImageSamplingContext, u:
 	}
 }
 
-function sampleTerrainPaintBrushColor(
+function samplePaintBrushColor(
 	meshU: number,
 	meshV: number,
 	worldU: number,
@@ -485,7 +485,7 @@ function sampleTerrainPaintBrushColor(
 	)
 }
 
-function createTerrainPaintSamplingSettings(settings: TerrainPaintBrushSettings): TerrainPaintSamplingSettings {
+function createPaintSamplingSettings(settings: TerrainPaintBrushSettings): TerrainPaintSamplingSettings {
 	const rotation = (clampFinite(settings.rotationDeg, 0) * Math.PI) / 180
 	return {
 		worldSpace: settings.worldSpace,
@@ -789,8 +789,6 @@ type PaintSessionState = {
 
 let paintSessionState: PaintSessionState | null = null
 let paintCommitToken = 0
-let pendingTerrainPaintFlush: Promise<boolean> | null = null
-
 // Scatter sampling/config constants
 const SCATTER_EXISTING_CHECKS_PER_STAMP_MAX = 4096
 const SCATTER_SAMPLE_ATTEMPTS_MAX = 500
@@ -833,7 +831,7 @@ const SCATTER_MAX_INSTANCES_PER_STAMP = 20000
 // Performance caps for interactive terrain paint.
 const TERRAIN_PAINT_STAMP_AFFECTED_CHUNKS_MAX = 64
 
-function resolveTerrainPaintChunkScratchResolution(session: PaintSessionState, chunkRow: number, chunkColumn: number): number {
+function resolvePaintChunkScratchResolution(session: PaintSessionState, chunkRow: number, chunkColumn: number): number {
 	const chunkBounds = resolvePaintChunkBounds(session.definition, session.chunkCells, chunkRow, chunkColumn)
 	if (!chunkBounds) {
 		return 256
@@ -1255,6 +1253,16 @@ function tagBrushGeometry(geometry: THREE.BufferGeometry): THREE.BufferGeometry 
 }
 
 export function createGroundEditor(options: GroundEditorOptions) {
+	const paintAsset = options.paintAsset ?? ref<ProjectAsset | null>(null)
+	const paintLayerStyle = options.paintLayerStyle ?? ref<TerrainPaintBrushSettings>({
+		opacity: 1,
+		tileScale: { x: 1, y: 1 },
+		offset: { x: 0, y: 0 },
+		rotationDeg: 0,
+		blendMode: 'normal',
+		worldSpace: true,
+		feather: 0.6,
+	})
 	type GroundNormalsIndexType = 'u16' | 'u32'
 	type GroundNormalsComputeRequest = {
 		kind: 'compute-normals'
@@ -1656,7 +1664,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	const scatterLodCameraPosition = new THREE.Vector3()
 
 	const TERRAIN_PAINT_STREAMING_SYNC_DEBOUNCE_MS = 160
-	let terrainPaintStreamingSyncTimer: number | null = null
+	let paintStreamingSyncTimer: number | null = null
 	let lastVisibleTerrainPaintChunkKeys = new Set<string>()
 	let lastTerrainPaintSceneSwitchToken: number | null = null
 
@@ -1708,7 +1716,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return 0x5fb0ff
 		}
 		if (options.groundPanelTab.value === 'paint') {
-			return options.paintAsset.value ? 0x8bc34a : 0xffb347
+			return paintAsset.value ? 0x8bc34a : 0xffb347
 		}
 		if (scatterModeEnabled()) {
 			return 0x4dd0e1
@@ -1730,7 +1738,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	const stopScatterEraseModeWatch = watch(options.scatterEraseModeActive, () => {
 		refreshBrushAppearance()
 	})
-	watch(options.paintAsset, () => {
+	watch(paintAsset, () => {
 		refreshBrushAppearance()
 	})
 	watch(options.scatterBrushShape, () => {
@@ -1758,7 +1766,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				const session = ensurePaintSession(definition, groundNode.id)
 				const loadedChunkKeys = new Set(
 					groundObject
-						? collectVisibleTerrainPaintChunks(groundObject).map((chunk) => chunk.key)
+					? collectVisiblePaintChunks(groundObject).map((chunk) => chunk.key)
 						: [],
 				)
 				Object.entries(session.previewGroundSurfaceChunks ?? {}).forEach(([key]) => {
@@ -2300,21 +2308,19 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 				// Invalidate any in-flight paint work tied to the previous scene.
 				paintCommitToken += 1
-				pendingTerrainPaintFlush = null
-
 				resetScatterStoreState('scene-changed')
 				paintSessionState = null
 				lastVisibleTerrainPaintChunkKeys = new Set()
 				lastTerrainPaintSceneSwitchToken = null
-				if (terrainPaintStreamingSyncTimer !== null) {
-					window.clearTimeout(terrainPaintStreamingSyncTimer)
-					terrainPaintStreamingSyncTimer = null
+				if (paintStreamingSyncTimer !== null) {
+					window.clearTimeout(paintStreamingSyncTimer)
+					paintStreamingSyncTimer = null
 				}
 			}
 		},
 	)
 
-	function collectVisibleTerrainPaintChunks(groundObject: THREE.Object3D): Array<{ key: string; chunkRow: number; chunkColumn: number }> {
+	function collectVisiblePaintChunks(groundObject: THREE.Object3D): Array<{ key: string; chunkRow: number; chunkColumn: number }> {
 		const result: Array<{ key: string; chunkRow: number; chunkColumn: number }> = []
 		const seen = new Set<string>()
 		groundObject.traverse((obj) => {
@@ -2337,7 +2343,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		return result
 	}
 
-	function warmTerrainPaintChunkState(session: PaintSessionState, chunk: { key: string; chunkRow: number; chunkColumn: number }): void {
+	function warmPaintChunkState(session: PaintSessionState, chunk: { key: string; chunkRow: number; chunkColumn: number }): void {
 		ensurePaintChunkState(session, chunk)
 	}
 
@@ -2359,30 +2365,30 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		session.chunkStates = new Map()
 		session.hasPendingChanges = false
 
-		const visibleChunks = collectVisibleTerrainPaintChunks(groundMesh)
+		const visibleChunks = collectVisiblePaintChunks(groundMesh)
 		const nextVisibleKeys = new Set<string>()
 		for (const chunk of visibleChunks) {
 			if (tokenSnapshot !== options.sceneStore.sceneSwitchToken) {
 				return
 			}
 			nextVisibleKeys.add(chunk.key)
-			warmTerrainPaintChunkState(session, chunk)
+			warmPaintChunkState(session, chunk)
 		}
 		lastVisibleTerrainPaintChunkKeys = nextVisibleKeys
 		lastTerrainPaintSceneSwitchToken = tokenSnapshot
 	}
 
-	function scheduleTerrainPaintStreamingSync(): void {
-		if (terrainPaintStreamingSyncTimer !== null) {
+	function schedulePaintStreamingSync(): void {
+		if (paintStreamingSyncTimer !== null) {
 			return
 		}
-		terrainPaintStreamingSyncTimer = window.setTimeout(() => {
-			terrainPaintStreamingSyncTimer = null
-			void syncTerrainPaintForVisibleChunksIncremental()
+		paintStreamingSyncTimer = window.setTimeout(() => {
+			paintStreamingSyncTimer = null
+			void syncPaintForVisibleChunksIncremental()
 		}, TERRAIN_PAINT_STREAMING_SYNC_DEBOUNCE_MS)
 	}
 
-	async function syncTerrainPaintForVisibleChunksIncremental(): Promise<void> {
+	async function syncPaintForVisibleChunksIncremental(): Promise<void> {
 		const tokenSnapshot = options.sceneStore.sceneSwitchToken
 		// If we haven't successfully restored for this scene yet, do a full initial restore.
 		if (lastTerrainPaintSceneSwitchToken !== tokenSnapshot) {
@@ -2400,7 +2406,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		}
 		const session = ensurePaintSession(definition, groundNode.id)
 
-		const visibleChunks = collectVisibleTerrainPaintChunks(groundMesh)
+		const visibleChunks = collectVisiblePaintChunks(groundMesh)
 		const nextVisibleKeys = new Set<string>()
 		const newlyVisible: Array<{ key: string; chunkRow: number; chunkColumn: number }> = []
 		for (const chunk of visibleChunks) {
@@ -2413,14 +2419,14 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			if (tokenSnapshot !== options.sceneStore.sceneSwitchToken) {
 				return
 			}
-			warmTerrainPaintChunkState(session, chunk)
+			warmPaintChunkState(session, chunk)
 		}
 
 		lastVisibleTerrainPaintChunkKeys = nextVisibleKeys
 	}
 
 	function onGroundChunkSetChanged(): void {
-		scheduleTerrainPaintStreamingSync()
+		schedulePaintStreamingSync()
 	}
 
 	async function restoreGroupdScatter(): Promise<void> {
@@ -3722,7 +3728,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (existing) {
 			return existing
 		}
-		const resolution = resolveTerrainPaintChunkScratchResolution(session, payload.chunkRow, payload.chunkColumn)
+		const resolution = resolvePaintChunkScratchResolution(session, payload.chunkRow, payload.chunkColumn)
 		const state: PaintChunkState = {
 			key: payload.key,
 			chunkRow: payload.chunkRow,
@@ -3886,7 +3892,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				const meshU = normalizedMeshU <= 0 ? 0 : normalizedMeshU >= 1 ? 1 : normalizedMeshU
 				const normalizedLocalBrushU = ((x + 0.5) - (centerX - radiusX)) * invLocalBrushWidth
 				const localBrushU = normalizedLocalBrushU <= 0 ? 0 : normalizedLocalBrushU >= 1 ? 1 : normalizedLocalBrushU
-				sampleTerrainPaintBrushColor(
+				samplePaintBrushColor(
 					localBrushU,
 					localBrushV,
 					meshU,
@@ -3968,45 +3974,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		}
 	}
 
-	function hasDirtyPaintChunks(session: PaintSessionState | null): boolean {
-		if (!session) {
-			return false
-		}
-		for (const chunk of session.chunkStates.values()) {
-			if (chunk.dirty) {
-				return true
-			}
-		}
-		return false
-	}
-
-	function flushTerrainPaintChanges(): Promise<boolean> {
-		if (pendingTerrainPaintFlush) {
-			return pendingTerrainPaintFlush
-		}
-
-		const flushPromise = (async () => {
-			for (let attempts = 0; attempts < 16; attempts += 1) {
-				if (!hasDirtyPaintChunks(paintSessionState)) {
-					return true
-				}
-				const ok = await commitPaintSession(options.sceneStore.selectedNode ?? null)
-				if (!ok && hasDirtyPaintChunks(paintSessionState)) {
-					return false
-				}
-			}
-			return !hasDirtyPaintChunks(paintSessionState)
-		})()
-
-		pendingTerrainPaintFlush = flushPromise
-		void flushPromise.finally(() => {
-			if (pendingTerrainPaintFlush === flushPromise) {
-				pendingTerrainPaintFlush = null
-			}
-		})
-		return flushPromise
-	}
-
 	async function commitPaintSession(selectedNode: SceneNode | null): Promise<boolean> {
 		if (!paintSessionState) {
 			return false
@@ -4030,12 +3997,11 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 		// Persist layer texture asset mapping so terrain paint can be restored after reload.
 		// We only register after we have actual paint data to persist (i.e. at least one dirty chunk).
-		const paintAsset = options.paintAsset.value
-		if (paintAsset?.id) {
-			const existing = options.sceneStore.findAssetInCatalog(paintAsset.id)
+		if (paintAsset.value?.id) {
+			const existing = options.sceneStore.findAssetInCatalog(paintAsset.value.id)
 			if (!existing) {
-				options.sceneStore.registerAssets([paintAsset], {
-					source: { type: 'package', providerId: assetProvider.id, originalAssetId: paintAsset.id },
+				options.sceneStore.registerAssets([paintAsset.value], {
+					source: { type: 'package', providerId: assetProvider.id, originalAssetId: paintAsset.value.id },
 					commitOptions: { updateNodes: false },
 					autoSave: false,
 				})
@@ -4077,9 +4043,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				return false
 			}
 			session.previewGroundSurfaceChunks = nextGroundSurfaceChunks
-			if (targetNode.dynamicMesh?.type === 'Ground') {
-				targetNode.dynamicMesh.terrainPaint = null
-			}
 			const groundObject = getGroundObject()
 			const runtimeDefinition = getGroundDynamicMeshDefinition()
 			if (groundObject && runtimeDefinition) {
@@ -7016,41 +6979,40 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		}
 
 		const session = ensurePaintSession(definition, groundNode.id)
-		const paintAsset = options.paintAsset.value
-		const strokeMode: TerrainPaintStrokeMode = paintAsset?.id ? 'paint' : 'erase'
+		const strokeMode: TerrainPaintStrokeMode = paintAsset.value?.id ? 'paint' : 'erase'
 		const brushStrength = clamp01(options.brushStrength.value)
 		if (brushStrength <= 0) {
 			return
 		}
-		const paintLayerStyle = toRaw(options.paintLayerStyle.value)
-		const feather = clamp01(paintLayerStyle.feather ?? 0)
+		const currentPaintLayerStyle = toRaw(paintLayerStyle.value)
+		const feather = clamp01(currentPaintLayerStyle.feather ?? 0)
 		const brushSettings: TerrainPaintBrushSettings = {
-			...paintLayerStyle,
+			...currentPaintLayerStyle,
 			tileScale: {
-				x: paintLayerStyle.tileScale.x,
-				y: paintLayerStyle.tileScale.y,
+				x: currentPaintLayerStyle.tileScale.x,
+				y: currentPaintLayerStyle.tileScale.y,
 			},
 			offset: {
-				x: paintLayerStyle.offset.x,
-				y: paintLayerStyle.offset.y,
+				x: currentPaintLayerStyle.offset.x,
+				y: currentPaintLayerStyle.offset.y,
 			},
 			feather,
 		}
-		const sampling = createTerrainPaintSamplingSettings(brushSettings)
+		const sampling = createPaintSamplingSettings(brushSettings)
 		if (sampling.opacity <= 0) {
 			return
 		}
 		let brushImageContext: TerrainPaintImageSamplingContext | null = null
 		if (strokeMode === 'paint') {
-			if (!paintAsset?.id) {
+			if (!paintAsset.value?.id) {
 				return
 			}
-			const brushImage = getLoadedTerrainPaintBrushImage(paintAsset.id)
+			const brushImage = getLoadedPaintBrushImage(paintAsset.value.id)
 			if (!brushImage) {
-				void loadTerrainPaintBrushImage(paintAsset)
+				void loadPaintBrushImage(paintAsset.value)
 				return
 			}
-			brushImageContext = createTerrainPaintImageSamplingContext(brushImage.imageData)
+			brushImageContext = createPaintImageSamplingContext(brushImage.imageData)
 		}
 
 		for (let i = 0; i < steps; i += 1) {
@@ -7625,7 +7587,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		scatterPreviewGroup.clear()
 		sculptSessionState = null
 		sculptPolygonSession = null
-		pendingTerrainPaintFlush = null
 		resetScatterStoreState('dispose')
 	}
 
@@ -7662,7 +7623,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		handleGroundTextureFileChange,
 		handleGroundCancel,
 		refreshGroundMesh,
-		flushTerrainPaintChanges,
 		hasActiveSelection,
 		handleActiveBuildToolChange,
 		dispose,

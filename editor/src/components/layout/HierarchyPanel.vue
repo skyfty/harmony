@@ -522,7 +522,7 @@ const assetReferenceSearchResults = computed<AssetReferenceSearchResult[]>(() =>
     summary.references.forEach((reference: SceneAssetReferenceSummary['references'][number], index: number) => {
       const fallbackNodeId = reference.category === 'environment'
         ? ENVIRONMENT_NODE_ID
-        : (reference.category === 'ground' || reference.category === 'terrain-scatter' || reference.category === 'terrain-paint'
+        : (reference.category === 'ground' || reference.category === 'terrain-scatter'
             ? GROUND_NODE_ID
             : null)
       results.push({

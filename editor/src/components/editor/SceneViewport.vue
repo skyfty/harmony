@@ -519,8 +519,6 @@ const {
   brushShape,
   brushOperation,
   groundPanelTab,
-  paintSelectedAsset,
-  paintBrushSettings,
   scatterCategory,
   scatterSelectedAsset,
   scatterProviderAssetId,
@@ -624,7 +622,6 @@ watch(hasGroundNode, (hasGround, prevHasGround) => {
   if (prevHasGround && !hasGround) {
     terrainStore.setBrushOperation(null)
     terrainStore.setGroundPanelTab('terrain')
-    terrainStore.setPaintSelection(null)
     terrainStore.setScatterSelection({ asset: null, providerAssetId: null })
   }
 }, { flush: 'sync' })
@@ -3647,8 +3644,6 @@ const groundEditor = createGroundEditor({
   brushShape,
   brushOperation,
   groundPanelTab,
-  paintAsset: paintSelectedAsset,
-  paintLayerStyle: paintBrushSettings,
   scatterCategory,
   scatterAsset: scatterSelectedAsset,
   scatterBrushRadius,
@@ -3761,7 +3756,6 @@ const {
   applyScatterAutoOverlayPlan,
   dispose: disposeGroundEditor,
   clearScatterInstances,
-  flushTerrainPaintChanges,
 } = groundEditor
 
 function exitScatterEraseMode() {
@@ -7527,7 +7521,7 @@ function tryBeginFloorEdgeDrag(event: PointerEvent): boolean {
 }
 
 type GroundSculptBlockedBuildTool = 'wall' | 'road' | 'floor' | 'landform' | 'region' | 'water' | 'displayBoard' | 'warpGate'
-type GroundBuildTool = 'terrain' | 'paint' | 'scatter'
+type GroundBuildTool = 'terrain' | 'scatter'
 
 function isBuildToolBlockedDuringGroundSculptConfig(
   tool: BuildTool | null,
@@ -7536,7 +7530,7 @@ function isBuildToolBlockedDuringGroundSculptConfig(
 }
 
 function isGroundBuildTool(tool: BuildTool | null): tool is GroundBuildTool {
-  return tool === 'terrain' || tool === 'paint' || tool === 'scatter'
+  return tool === 'terrain' || tool === 'scatter'
 }
 
 function isGroundSculptContext(context: string | null): boolean {
@@ -7562,9 +7556,6 @@ function resolveSelectionContextForBuildTool(tool: BuildTool | null): string | n
   if (tool === 'terrain') {
     return terrainStore.brushOperation ? 'terrain-sculpt' : 'build-tool:terrain'
   }
-  if (tool === 'paint') {
-    return terrainStore.groundPanelTab === 'paint' ? 'terrain-paint' : 'build-tool:paint'
-  }
   if (tool === 'scatter') {
     if (scatterEraseModeActive.value) {
       return 'scatter-erase'
@@ -7578,9 +7569,6 @@ function resolveGroundToolFromTab(tab: GroundPanelTab): GroundBuildTool {
   if (tab === 'terrain') {
     return 'terrain'
   }
-  if (tab === 'paint') {
-    return 'paint'
-  }
   return 'scatter'
 }
 
@@ -7588,10 +7576,7 @@ function resolveGroundTabFromTool(tool: GroundBuildTool): GroundPanelTab {
   if (tool === 'terrain') {
     return 'terrain'
   }
-  if (tool === 'paint') {
-    return 'paint'
-  }
-  return groundPanelTab.value !== 'terrain' && groundPanelTab.value !== 'paint'
+  return groundPanelTab.value !== 'terrain'
     ? groundPanelTab.value
     : scatterCategory.value
 }
@@ -7651,7 +7636,7 @@ function resolveGroundWheelRadiusTarget(): 'terrain' | 'scatter' | 'scatter-eras
     return null
   }
 
-  if (activeBuildTool.value === 'terrain' || activeBuildTool.value === 'paint') {
+  if (activeBuildTool.value === 'terrain') {
     return hasGroundNode.value ? 'terrain' : null
   }
 
@@ -7806,7 +7791,6 @@ function maybeHandleBuildToolRightClick(event: PointerEvent): boolean {
       handled = cancelGroundEditorScatterPlacement()
       break
     case 'terrain':
-    case 'paint':
       handled = false
       break
     default:
@@ -13320,7 +13304,6 @@ const activeToolUsageHints = computed(() => resolveActiveToolUsageHints({
   wallBuildShape: wallBuildShape.value,
   scatterBrushShape: scatterBrushShape.value,
   scatterAssetSelected: Boolean(scatterSelectedAsset.value),
-  paintAssetSelected: Boolean(paintSelectedAsset.value),
 }))
 
 function clearShiftOrbitPivotSession(pointerId?: number) {
@@ -18974,7 +18957,6 @@ function cancelActiveBuildOperation(options?: { restoreTransformTool?: EditorToo
   let handled = false
   switch (tool) {
     case 'terrain':
-    case 'paint':
     case 'scatter':
       if (groundEditorHasActiveSelection()) {
         cancelGroundSelection()
@@ -21547,8 +21529,6 @@ function updateGroundChunkStreaming() {
     refreshPlacementSurfaceTargetsForNode(node.id)
     placementSurfaceTargetsDirty = true
 
-    // Chunk meshes stream in/out without scene patches; notify GroundEditor so
-    // terrain paint preview can bind to new chunk meshes and load newly visible weightmaps.
     onGroundChunkSetChanged()
   }
 }
@@ -23331,7 +23311,6 @@ watch(
 
 defineExpose({
   captureScreenshot,
-  flushTerrainPaintChanges,
 })
 </script>
 
@@ -23390,8 +23369,6 @@ defineExpose({
         :ground-brush-operation="brushOperation"
         :ground-noise-strength="groundNoiseStrength"
         :ground-noise-mode="groundNoiseMode"
-        :ground-paint-asset="paintSelectedAsset"
-        :ground-paint-settings="paintBrushSettings"
         :ground-scatter-category="scatterCategory"
         :ground-scatter-brush-radius="scatterBrushRadius"
         :ground-scatter-brush-shape="scatterBrushShape"

@@ -1703,11 +1703,11 @@ const groundNoiseModeModel = computed({
 const groundScatterCategoryModel = computed<TerrainScatterCategory>({
   get: () => {
     if (groundPanelTab.value !== 'terrain' && groundPanelTab.value !== 'paint') {
-      return groundPanelTab.value
+      return groundPanelTab.value as TerrainScatterCategory
     }
     return groundScatterCategory.value
   },
-  set: (value) => {
+  set: (value: TerrainScatterCategory) => {
     emit('update:ground-scatter-category', value)
     emit('activate-ground-tab', value)
   },

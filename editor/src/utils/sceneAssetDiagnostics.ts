@@ -57,7 +57,6 @@ export type SceneAssetReferenceCategory =
   | 'ground'
   | 'planning'
   | 'terrain-scatter'
-  | 'terrain-paint'
   | 'scene'
 
 export interface SceneAssetReferenceRecord {

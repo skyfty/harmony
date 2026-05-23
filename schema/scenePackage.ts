@@ -24,7 +24,6 @@ export interface ScenePackageRoadCollisionEntry {
 export type ScenePackageResourceType =
   | 'localAsset'
   | 'planningImage'
-  | 'terrainWeightmap'
   | 'lightmap'
   | 'navmesh'
   | 'baked'
@@ -54,7 +53,7 @@ export interface ScenePackageProjectEntry {
 export interface ScenePackageResourceEntry {
   logicalId: string;
   resourceType: ScenePackageResourceType;
-  /** Path within ZIP, e.g. `resources/terrainWeightmap/<logicalId>.png` */
+  /** Path within ZIP, e.g. `resources/lightmap/<logicalId>.png` */
   path: string;
   /** File extension without dot, e.g. `png` */
   ext: string;
