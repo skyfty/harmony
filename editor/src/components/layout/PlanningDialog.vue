@@ -52,6 +52,7 @@ import {
   resolvePlanningDemTargetChunkResolution,
   type PlanningDemImportOptions,
 } from '@/utils/planningDemImport'
+import PlanningRulers from './PlanningRulers.vue'
 
 
 const props = defineProps<{ modelValue: boolean }>()
@@ -5462,6 +5463,7 @@ function handleDemLayerSelect() {
   if (!planningTerrain.value.dem) {
     return
   }
+  activeImageId.value = null
   activeListItem.value = { type: 'dem', id: 'terrain-dem' }
 }
 
@@ -6163,7 +6165,12 @@ onBeforeUnmount(() => {
                 @change="handleDemFileChange"
               >
               <v-list density="compact" class="dem-layer-list">
-                <v-list-item v-if="selectedDem" class="layer-item" @click="handleDemLayerSelect">
+                <v-list-item
+                  v-if="selectedDem"
+                  class="layer-item"
+                  :class="{ active: activeDemId === 'terrain-dem' }"
+                  @click="handleDemLayerSelect"
+                >
                   <div class="layer-content">
                     <div class="layer-name">DEM / Heightmap Layer</div>
                     <div class="layer-meta">{{ currentDemUsesHeightmapImage ? 'Image heightmap source' : 'GeoTIFF elevation source' }}</div>
@@ -6342,6 +6349,17 @@ onBeforeUnmount(() => {
             @wheel.prevent="handleWheel"
             @contextmenu.prevent="handleEditorContextMenu"
           >
+            <PlanningRulers
+              :viewport-width="editorRect?.width ?? 0"
+              :viewport-height="editorRect?.height ?? 0"
+              :render-scale="renderScale"
+              :center-offset="stageCenterOffset"
+              :offset="viewTransform.offset"
+              :canvas-size="effectiveCanvasSize"
+              :thickness="PLANNING_RULER_THICKNESS_PX"
+              @guide-drag="handleRulerGuideDrag"
+            />
+
             <div class="canvas-viewport">
               <div class="canvas-stage" :style="stageStyle">
                 <div v-if="planningDemPreviewUrl" class="dem-preview-stage">
@@ -6474,6 +6492,32 @@ onBeforeUnmount(() => {
                 <div class="property-panel__meta-row"><span>Recommended baseline</span><strong>{{ selectedDemRecommendedAppliedMinElevation ?? '—' }} m</strong></div>
                 <div class="property-panel__meta-row"><span>Max elevation</span><strong>{{ selectedDem.maxElevation ?? '—' }} m</strong></div>
                 <div v-if="selectedDemWorldSpan" class="property-panel__meta-row"><span>World span</span><strong>{{ formatOptionalNumber(selectedDemWorldSpan.width) }} × {{ formatOptionalNumber(selectedDemWorldSpan.height) }} m</strong></div>
+                <div class="property-panel__sub-block">
+                  <div class="property-panel__section-title property-panel__section-title--muted">Conversion Grid</div>
+                  <v-text-field
+                    v-model.number="terrainCellSizeModel"
+                    type="number"
+                    density="compact"
+                    label="Cell size"
+                    suffix="m"
+                    min="0.1"
+                    step="0.1"
+                    hide-details
+                  />
+                  <v-btn
+                    v-if="recommendedTerrainCellSize !== null"
+                    block
+                    variant="tonal"
+                    color="primary"
+                    class="mt-2"
+                    @click="applyRecommendedTerrainCellSize"
+                  >
+                    Apply Recommended Grid
+                  </v-btn>
+                  <div class="property-panel__hint">
+                    {{ terrainCellSizeRecommendationReason || 'Adjust the working-grid cell size used during DEM conversion.' }}
+                  </div>
+                </div>
                 <div v-if="selectedDemUsesHeightmapImage" class="property-panel__sub-block">
                   <div class="property-panel__section-title property-panel__section-title--muted">Heightmap Scale</div>
                   <v-text-field v-model.number="selectedDemMetersPerPixel" type="number" density="compact" label="Meters per pixel" suffix="m/px" min="0.000001" step="0.1" hide-details />
