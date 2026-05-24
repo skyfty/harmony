@@ -24,7 +24,7 @@ const medalSchema = new Schema<MedalDocument>(
   {
     name: { type: String, required: true, trim: true },
     description: { type: String, required: true, default: null, trim: true },
-    lockedIconUrl: { type: String, required: true, default: null, trim: true },
+    lockedIconUrl: { type: String, required: false, default: null, trim: true },
     unlockedIconUrl: { type: String, required: true, default: null, trim: true },
     enabled: { type: Boolean, default: true, index: true },
     sort: { type: Number, default: 0, index: true },

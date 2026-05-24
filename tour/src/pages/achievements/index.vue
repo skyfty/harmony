@@ -239,7 +239,7 @@ function resolveMedalIconState(item: MedalItem): MedalIconRenderState {
     if (lockedIcon) {
       return { src: lockedIcon, muted: false };
     }
-    return { src: displayIcon || unlockedIcon || '', muted: true };
+    return { src: unlockedIcon || displayIcon || '', muted: true };
   }
 
   return { src: displayIcon || unlockedIcon || lockedIcon || '', muted: false };
@@ -507,6 +507,7 @@ function handleNavigate(key: NavKey) {
 
 .medal-icon--muted {
   filter: grayscale(100%) brightness(0.88) saturate(0.35);
+  opacity: 0.88;
 }
 
 .medal-card--earned .medal-progress-shell::before {

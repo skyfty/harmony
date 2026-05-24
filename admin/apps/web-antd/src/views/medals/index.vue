@@ -586,22 +586,6 @@ watch(
             <Form.Item label="描述" name="description">
               <Input.TextArea v-model:value="formModel.description" :rows="3" />
             </Form.Item>
-            <Form.Item label="未获得图标">
-              <Space align="start">
-                <Upload v-model:file-list="lockedFileList" v-bind="imageUploadProps">
-                  <Button>上传图标</Button>
-                </Upload>
-                <div class="flex flex-col gap-2">
-                  <img
-                    v-if="lockedPreview || formModel.lockedIconUrl"
-                    :src="lockedPreview || formModel.lockedIconUrl"
-                    alt="locked"
-                    style="width: 64px; height: 64px; object-fit: cover; border-radius: 12px"
-                  />
-                  <span class="text-text-secondary text-xs">未获得时默认显示</span>
-                </div>
-              </Space>
-            </Form.Item>
             <Form.Item label="已获得图标">
               <Space align="start">
                 <Upload v-model:file-list="unlockedFileList" v-bind="imageUploadProps">
@@ -615,6 +599,22 @@ watch(
                     style="width: 64px; height: 64px; object-fit: cover; border-radius: 12px"
                   />
                   <span class="text-text-secondary text-xs">获得后高亮显示</span>
+                </div>
+              </Space>
+            </Form.Item>
+            <Form.Item label="未获得图标">
+              <Space align="start">
+                <Upload v-model:file-list="lockedFileList" v-bind="imageUploadProps">
+                  <Button>上传图标</Button>
+                </Upload>
+                <div class="flex flex-col gap-2">
+                  <img
+                    v-if="lockedPreview || formModel.lockedIconUrl"
+                    :src="lockedPreview || formModel.lockedIconUrl"
+                    alt="locked"
+                    style="width: 64px; height: 64px; object-fit: cover; border-radius: 12px"
+                  />
+                  <span class="text-text-secondary text-xs">未获得时默认显示</span>
                 </div>
               </Space>
             </Form.Item>
