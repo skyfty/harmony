@@ -20,30 +20,9 @@
           :description="coupon.description"
           :valid-until="coupon.validUntil"
           :status="coupon.status"
+          :purchasing="purchasingId === coupon.id"
+          @purchase="handlePurchase(coupon)"
         />
-        <view class="actions">
-          <button
-            v-if="coupon.status === 'available'"
-            class="action-btn action-btn--primary"
-            :disabled="purchasingId === coupon.id"
-            @tap.stop="handlePurchase(coupon)"
-          >
-            {{ purchasingId === coupon.id ? '购买中...' : '购买' }}
-          </button>
-          <button
-            v-else-if="coupon.status === 'unused' && coupon.userCouponId"
-            class="action-btn action-btn--primary"
-            @tap.stop="openUserCoupon(coupon.userCouponId)"
-          >
-            使用
-          </button>
-          <view
-            v-else
-            class="action-state"
-          >
-            {{ coupon.status === 'expired' ? '已过期' : coupon.status === 'used' ? '已使用' : '不可用' }}
-          </view>
-        </view>
       </view>
 
       <view
@@ -224,38 +203,6 @@ function handleNavigate(key: NavKey) {
 
 .card-item {
   overflow: visible;
-}
-
-.actions {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: 10px;
-}
-
-.action-btn {
-  min-width: 118px;
-  height: 36px;
-  line-height: 36px;
-  border-radius: 999px;
-  font-size: 13px;
-  padding: 0 16px;
-}
-
-.action-btn--primary {
-  background: linear-gradient(135deg, #1f7aec, #4aa3ff);
-  color: #ffffff;
-}
-
-.action-state {
-  min-width: 118px;
-  height: 36px;
-  line-height: 36px;
-  text-align: center;
-  border-radius: 999px;
-  background: rgba(138, 148, 166, 0.12);
-  color: #8a94a6;
-  font-size: 13px;
-  padding: 0 16px;
 }
 
 .empty {

@@ -37,7 +37,16 @@
         <text class="coupon-right__date">
           有效期至 {{ formattedDate }}
         </text>
+        <button
+          v-if="status === 'available'"
+          class="coupon-action"
+          :disabled="purchasing"
+          @tap.stop="emit('purchase')"
+        >
+          {{ purchasing ? '购买中...' : '购买' }}
+        </button>
         <view
+          v-else
           class="coupon-status"
           :class="statusClass"
         >
@@ -61,12 +70,15 @@ const props = defineProps<{
   description: string;
   validUntil: string;
   status: CouponStatus;
+  purchasing?: boolean;
 }>();
 
-defineEmits<{ (event: 'use'): void }>();
+const emit = defineEmits<{
+  (event: 'purchase'): void;
+  (event: 'use'): void;
+}>();
 
 const statusText = computed(() => {
-  if (props.status === 'available') return '可购买';
   if (props.status === 'unused') return '未使用';
   if (props.status === 'used') return '已使用';
   return '已过期';
@@ -248,7 +260,7 @@ $page-bg: #f3f6fb;
   &__footer {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    justify-content: flex-start;
   }
 
   &__date {
@@ -265,13 +277,38 @@ $page-bg: #f3f6fb;
   flex-shrink: 0;
   border-radius: 999px;
   padding: 2px 10px;
-  margin-left: 8px;
+  margin-left: auto;
 
   &__text {
     font-size: 11px;
     font-weight: 500;
     line-height: 1.5;
   }
+}
+
+.coupon-action {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 74px;
+  height: 28px;
+  border-radius: 999px;
+  padding: 0 12px;
+  font-size: 11px;
+  background: linear-gradient(135deg, #1f7aec, #4aa3ff);
+  color: #ffffff;
+  line-height: 1;
+  border: none;
+  margin-left: auto;
+}
+
+.coupon-action::after {
+  border: none;
+}
+
+.coupon-action[disabled] {
+  opacity: 0.72;
 }
 
 .coupon-status--available {
