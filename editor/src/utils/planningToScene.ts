@@ -142,8 +142,8 @@ function groundBoundsChanged(
     || Math.abs(currentBounds.maxZ - nextBounds.maxZ) > 1e-6
 }
 
-function stripTerrainScatterFromGroundDynamicMesh<T extends GroundRuntimeDynamicMesh>(dynamicMesh: T): Omit<T, 'terrainScatter'> {
-  const { terrainScatter: _terrainScatter, ...nextDynamicMesh } = dynamicMesh as T & { terrainScatter?: unknown }
+function stripTransientGroundFieldFromDynamicMesh<T extends GroundRuntimeDynamicMesh>(dynamicMesh: T): Omit<T, 'terrainScatter'> {
+  const { terrainScatter: _ignoredTerrainField, ...nextDynamicMesh } = dynamicMesh as T & { terrainScatter?: unknown }
   return nextDynamicMesh as Omit<T, 'terrainScatter'>
 }
 
@@ -908,7 +908,7 @@ function applyPlanningDemRegionToGround(
   const nextGround = syncGroundCoverageRegionState(sceneStore, groundNode, nextGroundSeed, dirtyChunkKeys)
 
   // 更新场景存储中的地面节点动态网格
-  sceneStore.updateGroundNodeDynamicMesh(groundNode.id, stripTerrainScatterFromGroundDynamicMesh(nextGround))
+  sceneStore.updateGroundNodeDynamicMesh(groundNode.id, stripTransientGroundFieldFromDynamicMesh(nextGround))
   
   // 返回更新后的地面运行时动态网格
   return nextGround
@@ -933,7 +933,7 @@ async function syncGroundTerrainDatasetRuntime(options: {
   } satisfies GroundRuntimeDynamicMesh
   options.sceneStore.updateGroundNodeDynamicMesh(
     options.groundNode.id,
-    stripTerrainScatterFromGroundDynamicMesh(nextGround),
+    stripTransientGroundFieldFromDynamicMesh(nextGround),
   )
   return nextGround
 }
@@ -1843,7 +1843,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
     if (groundBoundsChanged(currentGroundBounds, nextGroundBounds) || needsResolutionUpdate) {
       sceneStore.updateGroundNodeDynamicMesh(
         sceneStore.groundNode.id,
-        stripTerrainScatterFromGroundDynamicMesh({
+        stripTransientGroundFieldFromDynamicMesh({
           ...currentGroundDefinition,
           worldBounds: nextGroundBounds,
           editTileSizeMeters: GROUND_TERRAIN_CHUNK_SIZE_METERS,
@@ -1934,7 +1934,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
       syncPlanningHeightState(sceneStore, groundNode, clearedPlanning as GroundRuntimeDynamicMesh)
       sceneStore.updateGroundNodeDynamicMesh(
         groundNode.id,
-        stripTerrainScatterFromGroundDynamicMesh(clearedPlanning as GroundRuntimeDynamicMesh),
+        stripTransientGroundFieldFromDynamicMesh(clearedPlanning as GroundRuntimeDynamicMesh),
       )
       await yieldController.maybeYield(true)
     }
@@ -2080,7 +2080,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
         syncPlanningHeightState(sceneStore, groundNode, next as GroundRuntimeDynamicMesh)
         sceneStore.updateGroundNodeDynamicMesh(
           groundNode.id,
-          stripTerrainScatterFromGroundDynamicMesh(next as GroundRuntimeDynamicMesh),
+          stripTransientGroundFieldFromDynamicMesh(next as GroundRuntimeDynamicMesh),
         )
         doneUnits += contourPolygons.length
       } catch (err) {
