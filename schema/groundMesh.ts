@@ -5677,14 +5677,6 @@ type GroundRuntimeMaterialMetadata = {
   groundTextureSource?: string | null
   groundTextureSignature?: string | null
 }
-type GroundRuntimeBaseTextureCache = {
-  source: string | null
-  texture: THREE.Texture | null
-}
-
-type GroundTextureTraversalCache = {
-  signature: string
-}
 function isDynamicGroundTexture(texture: THREE.Texture | null | undefined): boolean {
   if (!texture) {
     return false
@@ -5763,242 +5755,6 @@ function applyGroundTextureSamplingDefaults(texture: THREE.Texture): void {
   texture.colorSpace = THREE.SRGBColorSpace
 }
 
-function resolveGroundTextureSourceSize(texture: THREE.Texture | null | undefined): { width: number; height: number } | null {
-  if (!texture) {
-    return null
-  }
-  const image = texture.image as { width?: number; height?: number } | undefined
-  const width = Number(image?.width)
-  const height = Number(image?.height)
-  if (!(width > 0) || !(height > 0)) {
-    return null
-  }
-  return { width, height }
-}
-
-function resolveGroundBaseMaterialSignature(baseMaterial: THREE.Material): string {
-  const baseStandard = baseMaterial as THREE.MeshStandardMaterial & {
-    metalness?: number
-    roughness?: number
-    flatShading?: boolean
-    envMapIntensity?: number
-  }
-  return [
-    baseMaterial.type,
-    baseMaterial.uuid,
-    baseMaterial.name,
-    baseMaterial.side,
-    baseMaterial.depthTest === false ? 0 : 1,
-    (baseMaterial as THREE.Material & { fog?: boolean }).fog === false ? 0 : 1,
-    (baseMaterial as THREE.Material & { toneMapped?: boolean }).toneMapped === false ? 0 : 1,
-    typeof baseStandard.roughness === 'number' ? Number(baseStandard.roughness.toFixed(6)) : 'na',
-    typeof baseStandard.metalness === 'number' ? Number(baseStandard.metalness.toFixed(6)) : 'na',
-    baseStandard.flatShading === true ? 1 : 0,
-    typeof baseStandard.envMapIntensity === 'number' ? Number(baseStandard.envMapIntensity.toFixed(6)) : 'na',
-  ].join('|')
-}
-
-function resolveGroundTextureWindowSignature(window: {
-  offsetX: number
-  offsetY: number
-  repeatX: number
-  repeatY: number
-}): string {
-  return [
-    Number(window.offsetX.toFixed(6)),
-    Number(window.offsetY.toFixed(6)),
-    Number(window.repeatX.toFixed(6)),
-    Number(window.repeatY.toFixed(6)),
-  ].join('|')
-}
-
-function resolveGroundDefinitionTextureWindowSignature(definition: GroundDynamicMesh): string {
-  const bounds = resolveGroundWorldBounds(definition)
-  return [
-    Number(definition.cellSize),
-    Number(bounds.minX.toFixed(4)),
-    Number(bounds.maxX.toFixed(4)),
-    Number(bounds.minZ.toFixed(4)),
-    Number(bounds.maxZ.toFixed(4)),
-  ].join('|')
-}
-
-function resolveGroundTextureSizeSignature(texture: THREE.Texture | null | undefined): string {
-  const size = resolveGroundTextureSourceSize(texture)
-  if (!size) {
-    return '0x0'
-  }
-  return `${size.width}x${size.height}`
-}
-
-function hasGroundTextureSignature(material: THREE.Material | null | undefined, signature: string): boolean {
-  if (!material) {
-    return false
-  }
-  const userData = material.userData as GroundRuntimeMaterialMetadata | undefined
-  return userData?.groundTextureSignature === signature
-}
-
-function hasGroundTextureSource(material: THREE.Material | null | undefined, source: string): boolean {
-  if (!material) {
-    return false
-  }
-  const userData = material.userData as GroundRuntimeMaterialMetadata | undefined
-  return userData?.groundTextureSource === source
-}
-
-function disposeGroundChunkTexturedMaterial(material: THREE.Material | null | undefined): void {
-  if (!material || !isGroundChunkTexturedMaterial(material)) {
-    return
-  }
-  const typed = material as unknown as Record<string, unknown>
-  ;[
-    'map',
-    'normalMap',
-    'roughnessMap',
-    'metalnessMap',
-    'aoMap',
-    'emissiveMap',
-  ].forEach((key) => {
-    const texture = typed[key] as THREE.Texture | null | undefined
-    if (texture && isDynamicGroundTexture(texture)) {
-      disposeGroundTexture(texture)
-      typed[key] = null
-    }
-  })
-  clearGroundRuntimeMaterialMetadata(material)
-  material.dispose()
-}
-
-function clearGroundTextureFromMaterial(material: THREE.Material): void {
-  const typed = material as unknown as Record<string, unknown>
-  if (!('map' in typed)) {
-    return
-  }
-
-  const previousTexture = typed.map as THREE.Texture | null | undefined ?? null
-  const wasDynamicTextureApplied = isDynamicGroundTexture(previousTexture)
-  if (wasDynamicTextureApplied) {
-    disposeGroundTexture(previousTexture)
-    typed.map = null
-    typed.needsUpdate = true
-  }
-  ;(['normalMap', 'roughnessMap', 'metalnessMap', 'aoMap', 'emissiveMap'] as const).forEach((key) => {
-    const texture = typed[key] as THREE.Texture | null | undefined ?? null
-    if (texture && isDynamicGroundTexture(texture)) {
-      disposeGroundTexture(texture)
-      typed[key] = null
-      typed.needsUpdate = true
-    }
-  })
-  
-  clearGroundRuntimeMaterialMetadata(material)
-}
-
-function applyGroundTextureToMaterial(material: THREE.Material, definition: GroundDynamicMesh): void {
-  const typed = material as THREE.MeshStandardMaterial & { map?: THREE.Texture | null; normalMap?: THREE.Texture | null; needsUpdate?: boolean }
-  if (!('map' in typed)) {
-    return
-  }
-  const source = typeof definition.textureDataUrl === 'string' ? definition.textureDataUrl : null
-  if (!source) {
-    clearGroundTextureFromMaterial(material)
-    return
-  }
-  if (isDynamicGroundTexture(typed.map) && hasGroundTextureSource(material, source)) {
-    return
-  }
-  clearGroundTextureFromMaterial(material)
-
-  const texture = textureLoader.load(source, () => {
-    typed.needsUpdate = true
-  })
-  applyGroundTextureSamplingDefaults(texture)
-  texture.name = definition.textureName ?? 'GroundTexture'
-  markDynamicGroundTexture(texture)
-  typed.map = texture
-  typed.needsUpdate = true
-  
-  // Apply normal map if available
-  const normalSource = typeof definition.normalMapDataUrl === 'string' ? definition.normalMapDataUrl : null
-  if (normalSource) {
-    const normalTexture = textureLoader.load(normalSource, () => {
-      typed.needsUpdate = true
-    })
-    applyGroundTextureSamplingDefaults(normalTexture)
-    normalTexture.name = definition.normalMapName ?? 'GroundNormalMap'
-    markDynamicGroundTexture(normalTexture)
-    typed.normalMap = normalTexture
-    typed.needsUpdate = true
-  }
-  
-  const userData = (material.userData ??= {}) as GroundRuntimeMaterialMetadata
-  userData.groundTextureSource = source
-  userData.groundTextureSignature = source
-}
-
-function resolveGroundRuntimeBaseTexture(root: THREE.Object3D, definition: GroundDynamicMesh): THREE.Texture | null {
-  const userData = (root.userData ??= {}) as Record<string, unknown>
-  const cached = (userData.groundRuntimeBaseTextureCache ?? null) as GroundRuntimeBaseTextureCache | null
-  const source = typeof definition.textureDataUrl === 'string' ? definition.textureDataUrl : null
-  if (!source) {
-    if (cached?.texture) {
-      disposeGroundTexture(cached.texture)
-    }
-    userData.groundRuntimeBaseTextureCache = {
-      source: null,
-      texture: null,
-    } satisfies GroundRuntimeBaseTextureCache
-    return null
-  }
-  if (cached && cached.source === source && cached.texture) {
-    return cached.texture
-  }
-  if (cached?.texture) {
-    disposeGroundTexture(cached.texture)
-  }
-  const texture = textureLoader.load(source)
-  applyGroundTextureSamplingDefaults(texture)
-  texture.name = definition.textureName ?? 'GroundTexture'
-  markDynamicGroundTexture(texture)
-  userData.groundRuntimeBaseTextureCache = {
-    source,
-    texture,
-  } satisfies GroundRuntimeBaseTextureCache
-  return texture
-}
-
-function resolveGroundChunkTextureWindow(
-  definition: GroundDynamicMesh,
-  spec: Pick<GroundChunkSpec, 'startRow' | 'startColumn' | 'rows' | 'columns'>,
-): {
-  offsetX: number
-  offsetY: number
-  repeatX: number
-  repeatY: number
-} {
-  const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1
-  const chunkSizeMeters = resolveInfiniteChunkSizeMeters(definition)
-  const chunkOrigin = resolveInfiniteGroundGridOriginMeters(chunkSizeMeters)
-  const bounds = resolveGroundWorldBounds(definition)
-  const groundWidth = Math.max(bounds.maxX - bounds.minX, Number.EPSILON)
-  const groundDepth = Math.max(bounds.maxZ - bounds.minZ, Number.EPSILON)
-  const startX = chunkOrigin + spec.startColumn * cellSize
-  const startZ = chunkOrigin + spec.startRow * cellSize
-  const endX = startX + spec.columns * cellSize
-  const endZ = startZ + spec.rows * cellSize
-  const minU = clampInclusive((startX - bounds.minX) / groundWidth, 0, 1)
-  const maxU = clampInclusive((endX - bounds.minX) / groundWidth, 0, 1)
-  const minZRatio = clampInclusive((startZ - bounds.minZ) / groundDepth, 0, 1)
-  const maxZRatio = clampInclusive((endZ - bounds.minZ) / groundDepth, 0, 1)
-  return {
-    offsetX: minU,
-    offsetY: 1 - maxZRatio,
-    repeatX: Math.max(maxU - minU, Number.EPSILON),
-    repeatY: Math.max(maxZRatio - minZRatio, Number.EPSILON),
-  }
-}
-
 function summarizeGroundMeshUvBounds(mesh: THREE.Mesh): {
   minU: number
   maxU: number
@@ -6020,18 +5776,10 @@ function summarizeGroundMeshUvBounds(mesh: THREE.Mesh): {
   for (let index = 0; index < uvAttr.count; index += 1) {
     const u = uvAttr.getX(index)
     const v = uvAttr.getY(index)
-    if (u < minU) {
-      minU = u
-    }
-    if (u > maxU) {
-      maxU = u
-    }
-    if (v < minV) {
-      minV = v
-    }
-    if (v > maxV) {
-      maxV = v
-    }
+    if (u < minU) minU = u
+    if (u > maxU) maxU = u
+    if (v < minV) minV = v
+    if (v > maxV) maxV = v
   }
   if (!Number.isFinite(minU) || !Number.isFinite(maxU) || !Number.isFinite(minV) || !Number.isFinite(maxV)) {
     return null
@@ -6095,6 +5843,104 @@ function resolveGroundChunkTextureWindowFromMeshBounds(
     repeatX: Math.max(maxU - minU, Number.EPSILON),
     repeatY: Math.max(maxZRatio - minZRatio, Number.EPSILON),
   }
+}
+
+function resolveGroundChunkTextureWindow(
+  definition: GroundDynamicMesh,
+  spec: Pick<GroundChunkSpec, 'startRow' | 'startColumn' | 'rows' | 'columns'>,
+): {
+  offsetX: number
+  offsetY: number
+  repeatX: number
+  repeatY: number
+} {
+  const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1
+  const chunkSizeMeters = resolveInfiniteChunkSizeMeters(definition)
+  const chunkOrigin = resolveInfiniteGroundGridOriginMeters(chunkSizeMeters)
+  const bounds = resolveGroundWorldBounds(definition)
+  const groundWidth = Math.max(bounds.maxX - bounds.minX, Number.EPSILON)
+  const groundDepth = Math.max(bounds.maxZ - bounds.minZ, Number.EPSILON)
+  const startX = chunkOrigin + spec.startColumn * cellSize
+  const startZ = chunkOrigin + spec.startRow * cellSize
+  const endX = startX + spec.columns * cellSize
+  const endZ = startZ + spec.rows * cellSize
+  const minU = clampInclusive((startX - bounds.minX) / groundWidth, 0, 1)
+  const maxU = clampInclusive((endX - bounds.minX) / groundWidth, 0, 1)
+  const minZRatio = clampInclusive((startZ - bounds.minZ) / groundDepth, 0, 1)
+  const maxZRatio = clampInclusive((endZ - bounds.minZ) / groundDepth, 0, 1)
+  return {
+    offsetX: minU,
+    offsetY: 1 - maxZRatio,
+    repeatX: Math.max(maxU - minU, Number.EPSILON),
+    repeatY: Math.max(maxZRatio - minZRatio, Number.EPSILON),
+  }
+}
+
+function resolveGroundBaseMaterialSignature(baseMaterial: THREE.Material): string {
+  const baseStandard = baseMaterial as THREE.MeshStandardMaterial & {
+    metalness?: number
+    roughness?: number
+    flatShading?: boolean
+    envMapIntensity?: number
+  }
+  return [
+    baseMaterial.type,
+    baseMaterial.uuid,
+    baseMaterial.name,
+    baseMaterial.side,
+    baseMaterial.depthTest === false ? 0 : 1,
+    (baseMaterial as THREE.Material & { fog?: boolean }).fog === false ? 0 : 1,
+    (baseMaterial as THREE.Material & { toneMapped?: boolean }).toneMapped === false ? 0 : 1,
+    typeof baseStandard.roughness === 'number' ? Number(baseStandard.roughness.toFixed(6)) : 'na',
+    typeof baseStandard.metalness === 'number' ? Number(baseStandard.metalness.toFixed(6)) : 'na',
+    baseStandard.flatShading === true ? 1 : 0,
+    typeof baseStandard.envMapIntensity === 'number' ? Number(baseStandard.envMapIntensity.toFixed(6)) : 'na',
+  ].join('|')
+}
+
+function resolveGroundTextureWindowSignature(window: {
+  offsetX: number
+  offsetY: number
+  repeatX: number
+  repeatY: number
+}): string {
+  return [
+    Number(window.offsetX.toFixed(6)),
+    Number(window.offsetY.toFixed(6)),
+    Number(window.repeatX.toFixed(6)),
+    Number(window.repeatY.toFixed(6)),
+  ].join('|')
+}
+
+function hasGroundTextureSignature(material: THREE.Material | null | undefined, signature: string): boolean {
+  if (!material) {
+    return false
+  }
+  const userData = material.userData as GroundRuntimeMaterialMetadata | undefined
+  return userData?.groundTextureSignature === signature
+}
+
+function disposeGroundChunkTexturedMaterial(material: THREE.Material | null | undefined): void {
+  if (!material || !isGroundChunkTexturedMaterial(material)) {
+    return
+  }
+  const typed = material as unknown as Record<string, unknown>
+  ;[
+    'map',
+    'normalMap',
+    'roughnessMap',
+    'metalnessMap',
+    'aoMap',
+    'emissiveMap',
+  ].forEach((key) => {
+    const texture = typed[key] as THREE.Texture | null | undefined
+    if (texture && isDynamicGroundTexture(texture)) {
+      disposeGroundTexture(texture)
+      typed[key] = null
+    }
+  })
+  clearGroundRuntimeMaterialMetadata(material)
+  material.dispose()
 }
 
 type GroundChunkTextureBundleSources = {
@@ -6356,9 +6202,6 @@ function applyGroundTextureToChunkMesh(
 
 function applyGroundTextureToObject(object: THREE.Object3D, definition: GroundDynamicMesh): void {
   const root = object as THREE.Object3D & { userData?: Record<string, unknown> }
-  const runtimeState = groundRuntimeStateMap.get(root)
-  const source = typeof definition.textureDataUrl === 'string' ? definition.textureDataUrl : null
-  const normalSource = typeof definition.normalMapDataUrl === 'string' ? definition.normalMapDataUrl : null
   const cachedBaseMaterial = (root.userData as Record<string, unknown> | undefined)?.groundMaterial
   const cachedSculptedMaterial = (root.userData as Record<string, unknown> | undefined)?.groundSculptedMaterial
   const baseMaterial = cachedBaseMaterial && !Array.isArray(cachedBaseMaterial)
@@ -6367,39 +6210,13 @@ function applyGroundTextureToObject(object: THREE.Object3D, definition: GroundDy
   const sculptedMaterial = cachedSculptedMaterial && !Array.isArray(cachedSculptedMaterial)
     ? cachedSculptedMaterial as THREE.Material
     : null
-  const sharedBaseTexture = source ? resolveGroundRuntimeBaseTexture(root, definition) : null
-  const sharedBaseMaterialSignature = baseMaterial
-    ? resolveGroundBaseMaterialSignature(baseMaterial)
-    : 'none'
-  const sculptedMaterialSignature = sculptedMaterial
-    ? resolveGroundBaseMaterialSignature(sculptedMaterial)
-    : 'none'
-  const traversalSignature = [
-    source ?? 'none',
-    normalSource ?? 'none',
-    sharedBaseMaterialSignature,
-    sculptedMaterialSignature,
-    resolveGroundDefinitionTextureWindowSignature(definition),
-    resolveGroundTextureSizeSignature(sharedBaseTexture),
-    runtimeState ? runtimeState.visibleChunkKeysVersion : -1,
-  ].join('|')
-  const rootUserData = (root.userData ??= {}) as Record<string, unknown>
-  const traversalCache = (rootUserData.groundTextureTraversalCache ?? null) as GroundTextureTraversalCache | null
-  if (runtimeState && traversalCache?.signature === traversalSignature) {
-    return
-  }
-  if (baseMaterial) {
-    clearGroundTextureFromMaterial(baseMaterial)
-  }
+
   object.traverse((child) => {
     const mesh = child as THREE.Mesh
     if (!mesh?.isMesh) {
       return
     }
     if (mesh.userData?.groundChunkBatch) {
-      if (baseMaterial && mesh.material !== baseMaterial) {
-        mesh.material = baseMaterial
-      }
       return
     }
     const chunkSpec = mesh.userData?.groundChunk as GroundChunkSpec | undefined
@@ -6412,9 +6229,7 @@ function applyGroundTextureToObject(object: THREE.Object3D, definition: GroundDy
       ? sculptedMaterial
       : (baseMaterial ?? currentMaterial)
     const chunkBaseMaterialSignature = chunkBaseMaterial
-      ? (chunkBaseMaterial === baseMaterial
-        ? sharedBaseMaterialSignature
-        : resolveGroundBaseMaterialSignature(chunkBaseMaterial))
+      ? resolveGroundBaseMaterialSignature(chunkBaseMaterial)
       : 'none'
     if (chunkSpec && chunkBaseMaterial) {
       const chunkMeta = (mesh.userData?.groundChunk ?? null) as { chunkRow?: number; chunkColumn?: number } | null
@@ -6427,31 +6242,24 @@ function applyGroundTextureToObject(object: THREE.Object3D, definition: GroundDy
         chunkKey,
         chunkSpec,
         chunkBaseMaterial,
-        sharedBaseTexture,
+        null,
         chunkBaseMaterialSignature,
       )
       return
     }
     if (isCompiledGroundTile && chunkBaseMaterial) {
-      const chunkKey = resolveCompiledGroundTileChunkKey(rootUserData, definition, compiledGroundTileKey)
+      const chunkKey = resolveCompiledGroundTileChunkKey(root.userData ?? {}, definition, compiledGroundTileKey)
       applyGroundTextureToChunkMesh(
         mesh,
         definition,
         chunkKey,
         null,
         chunkBaseMaterial,
-        sharedBaseTexture,
+        null,
         chunkBaseMaterialSignature,
       )
-      return
-    }
-    if (currentMaterial) {
-      applyGroundTextureToMaterial(currentMaterial, definition)
     }
   })
-  rootUserData.groundTextureTraversalCache = {
-    signature: traversalSignature,
-  } satisfies GroundTextureTraversalCache
 }
 
 export type GroundGeometryUpdateRegion = {
@@ -6646,7 +6454,6 @@ export function createGroundMesh(definition: GroundDynamicMesh): THREE.Object3D 
   const cellSize = Number.isFinite(runtimeDefinition.cellSize) && runtimeDefinition.cellSize > 0 ? runtimeDefinition.cellSize : 1
   const seedRadius = Math.max(50, resolveRuntimeChunkCells(runtimeDefinition) * cellSize * 1.5)
   updateGroundChunks(group, runtimeDefinition, null, { radius: seedRadius })
-  applyGroundTextureToObject(group, runtimeDefinition)
   return group
 }
 
@@ -7217,6 +7024,8 @@ export function updateGroundChunks(
     // 新 chunk 是独立算法线的，边界上会天然有一点不连续；这里统一 stitching，避免块与块之间出现明暗断层。
     stitchGroundChunkNormals(root, definition, stitchRegion, touchedChunkKeys)
   }
+
+  applyGroundTextureToObject(root, definition)
 }
 
 export function syncGroundChunkLoadingMode(
