@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <view class="page">
     <MiniAuthRecovery />
     <PageHeader title="打卡成就"  :showBack="false" />
@@ -35,7 +35,13 @@
               <view class="medal-progress-shell">
                 <view class="medal-progress-ring" :style="buildMedalRingStyle(medal)" />
                 <view class="medal-progress-core">
-                  <image class="medal-icon" :src="resolveMedalIcon(medal)" mode="aspectFit" />
+                  <image
+                    v-if="resolveMedalIconState(medal).src"
+                    class="medal-icon"
+                    :class="{ 'medal-icon--muted': resolveMedalIconState(medal).muted }"
+                    :src="resolveMedalIconState(medal).src"
+                    mode="aspectFit"
+                  />
                 </view>
                 <view class="medal-progress-value">
                   <view class="medal-progress-track">
@@ -219,8 +225,24 @@ function buildCardStyle(item: ScenicCardItem): Record<string, string> {
   };
 }
 
-function resolveMedalIcon(item: MedalItem): string {
-  return item.displayIconUrl || item.unlockedIconUrl || item.lockedIconUrl || '';
+interface MedalIconRenderState {
+  src: string;
+  muted: boolean;
+}
+
+function resolveMedalIconState(item: MedalItem): MedalIconRenderState {
+  const lockedIcon = typeof item.lockedIconUrl === 'string' ? item.lockedIconUrl.trim() : '';
+  const unlockedIcon = typeof item.unlockedIconUrl === 'string' ? item.unlockedIconUrl.trim() : '';
+  const displayIcon = typeof item.displayIconUrl === 'string' ? item.displayIconUrl.trim() : '';
+
+  if (!item.earned) {
+    if (lockedIcon) {
+      return { src: lockedIcon, muted: false };
+    }
+    return { src: displayIcon || unlockedIcon || '', muted: true };
+  }
+
+  return { src: displayIcon || unlockedIcon || lockedIcon || '', muted: false };
 }
 
 function getMedalCompletionRatio(item: MedalItem): number {
@@ -483,6 +505,10 @@ function handleNavigate(key: NavKey) {
   background: transparent;
 }
 
+.medal-icon--muted {
+  filter: grayscale(100%) brightness(0.88) saturate(0.35);
+}
+
 .medal-card--earned .medal-progress-shell::before {
   background: radial-gradient(circle at 28% 28%, rgba(255, 255, 255, 0.52) 0%, rgba(255, 247, 209, 0.26) 24%, rgba(255, 201, 70, 0.24) 58%, rgba(255, 142, 32, 0.12) 100%);
 }
@@ -718,3 +744,5 @@ function handleNavigate(key: NavKey) {
   padding: 28px 0;
 }
 </style>
+
+

@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import type { FormInstance, UploadFile, UploadProps } from 'ant-design-vue';
 
 import { onMounted, reactive, ref, watch } from 'vue';
@@ -268,7 +268,7 @@ function ruleSummary(rule: MedalRuleFormItem) {
     case 'enter_count_gte':
       return `累计进入次数 >= ${rule.threshold}`;
     case 'punch_count_gte':
-      return `累计打卡点数量 >= ${rule.threshold}`;
+      return `累计打卡点数 >= ${rule.threshold}`;
     case 'specific_scenic_set_complete':
       return `${formatScenicNames(rule.scenicIds)}${rule.completeType === 'punch_ratio_gte' ? ` 打卡比例 >= ${rule.completeValue || 0}%` : ' 全部进入'}`;
     default:
@@ -389,11 +389,6 @@ async function submit() {
   const form = formRef.value;
   if (!form) return;
   await form.validate();
-  if (!formModel.lockedIconUrl && !lockedFileList.value.length) {
-    activeTab.value = 'basic';
-    message.error('请上传未获得图标');
-    return;
-  }
   if (!formModel.unlockedIconUrl && !unlockedFileList.value.length) {
     activeTab.value = 'basic';
     message.error('请上传已获得图标');
@@ -728,3 +723,4 @@ watch(
     </Modal>
   </div>
 </template>
+
