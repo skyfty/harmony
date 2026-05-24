@@ -171,7 +171,9 @@ interface PlanningImageImportDraft {
 
 interface PlanningImageScaleCalibrationDraft {
   imageId: string
+  /** Screen-space point relative to the editor viewport, so the preview does not scale with the canvas. */
   start: PlanningPoint
+  /** Screen-space point relative to the editor viewport, so the preview does not scale with the canvas. */
   current: PlanningPoint
 }
 
@@ -484,7 +486,6 @@ const imageScaleCalibrationDraft = ref<PlanningImageScaleCalibrationDraft | null
 const imageScaleCalibrationDialogOpen = ref(false)
 const imageScaleCalibrationRealMeters = ref<number | null>(null)
 const imageScaleCalibrationError = ref<string | null>(null)
-let imageScaleCalibrationDialogOpenRaf: number | null = null
 const planningImageImportDialogOpen = computed({
   get: () => planningImageImportDraft.value !== null,
   set: (value: boolean) => {
@@ -856,20 +857,10 @@ const canvasSize = computed(() => ({
   height: sceneGroundSize.value.height,
 }))
 
-// Performance optimization: dynamically changing stage width/height during drag frequently triggers layout, which can cause noticeable jank over long drags.
-// Therefore freeze stage size during drag and update position only via transform.
+// Performance optimization: dynamically changing stage size during drag frequently triggers layout, which can cause noticeable jank over long drags.
+// Therefore freeze the canvas metadata during drag and update position only via transform.
 const frozenCanvasSize = ref<{ width: number; height: number } | null>(null)
 const effectiveCanvasSize = computed(() => frozenCanvasSize.value ?? canvasSize.value)
-
-// Actual CSS pixel size of the stage (used by DOM/SVG layout).
-// Example: 100m -> 1000px when BASE_PIXELS_PER_METER = 10.
-const effectiveCanvasPixelSize = computed(() => {
-  const meters = effectiveCanvasSize.value
-  return {
-    width: Math.max(1, Math.round(meters.width * BASE_PIXELS_PER_METER)),
-    height: Math.max(1, Math.round(meters.height * BASE_PIXELS_PER_METER)),
-  }
-})
 
 // Screen pixels per meter after considering zoom.
 const renderScale = computed(() => normalizeViewScale(viewTransform.scale) * BASE_PIXELS_PER_METER)
@@ -985,14 +976,14 @@ function zoomViewTo(nextViewScale: number, anchorClientX: number, anchorClientY:
 
   // Keep the world point under the anchor stable while changing the zoom level.
   const previousRenderScale = previousViewScale * BASE_PIXELS_PER_METER
-  const centerBefore = computeStageCenterOffset(rect, previousRenderScale)
+  const centerBefore = computeStageCenterOffset(rect)
   const sx = anchorClientX - rect.left
   const sy = anchorClientY - rect.top
   const worldX = (sx - centerBefore.x) / previousRenderScale - viewTransform.offset.x
   const worldY = (sy - centerBefore.y) / previousRenderScale - viewTransform.offset.y
 
   const nextRenderScale = normalizedNextViewScale * BASE_PIXELS_PER_METER
-  const nextCenter = computeStageCenterOffset(rect, nextRenderScale)
+  const nextCenter = computeStageCenterOffset(rect)
   viewTransform.scale = normalizedNextViewScale
   viewTransform.offset.x = (sx - nextCenter.x) / nextRenderScale - worldX
   viewTransform.offset.y = (sy - nextCenter.y) / nextRenderScale - worldY
@@ -2648,12 +2639,10 @@ const editorBackgroundStyle = computed(() => {
   }
 })
 
-function computeStageCenterOffset(rect: Pick<DOMRect, 'width' | 'height'>, renderScaleValue: number) {
-  const width = effectiveCanvasSize.value.width * renderScaleValue
-  const height = effectiveCanvasSize.value.height * renderScaleValue
+function computeStageCenterOffset(rect: Pick<DOMRect, 'width' | 'height'>) {
   return {
-    x: (rect.width - width) / 2,
-    y: (rect.height - height) / 2,
+    x: rect.width / 2,
+    y: rect.height / 2,
   }
 }
 
@@ -2662,7 +2651,7 @@ const stageCenterOffset = computed(() => {
   if (!rect) {
     return { x: 0, y: 0 }
   }
-  return computeStageCenterOffset(rect, renderScale.value)
+  return computeStageCenterOffset(rect)
 })
 
 const stageStyle = computed(() => {
@@ -2672,8 +2661,8 @@ const stageStyle = computed(() => {
   const translateX = center.x + viewTransform.offset.x * renderScaleValue
   const translateY = center.y + viewTransform.offset.y * renderScaleValue
   return {
-    width: `${effectiveCanvasPixelSize.value.width}px`,
-    height: `${effectiveCanvasPixelSize.value.height}px`,
+    width: '100%',
+    height: '100%',
     transform: `translate3d(${translateX}px, ${translateY}px, 0) scale(${viewScale})`,
     transformOrigin: 'top left',
     willChange: 'transform',
@@ -2758,27 +2747,6 @@ watch(canUseImageScaleCalibration, (enabled) => {
   if (!enabled && currentTool.value === 'calibrate') {
     currentTool.value = 'select'
     cancelImageScaleCalibration()
-  }
-})
-
-watch(selectedImage, (image) => {
-  if (currentTool.value !== 'calibrate') {
-    return
-  }
-  const draft = imageScaleCalibrationDraft.value
-  if (!draft) {
-    return
-  }
-  if (!image || image.id !== draft.imageId) {
-    cancelImageScaleCalibration()
-  }
-})
-
-watch(imageScaleCalibrationDialogOpen, (open, previous) => {
-  if (!open && previous) {
-    imageScaleCalibrationRealMeters.value = null
-    imageScaleCalibrationError.value = null
-    imageScaleCalibrationDraft.value = null
   }
 })
 
@@ -3302,26 +3270,24 @@ function getAlignMarkerStyle(image: PlanningImage): CSSProperties {
 }
 
 function getGuidesOverlayStyle(): CSSProperties {
-  const base = effectiveCanvasPixelSize.value
   return {
-    width: `${base.width}px`,
-    height: `${base.height}px`,
+    width: '100%',
+    height: '100%',
   }
 }
 
 function getGuideLineStyle(guide: PlanningGuide): CSSProperties {
-  const base = effectiveCanvasPixelSize.value
   if (guide.axis === 'x') {
     return {
       left: `${guide.value * BASE_PIXELS_PER_METER}px`,
       top: '0px',
-      height: `${base.height}px`,
+      height: '100%',
     }
   }
   return {
     left: '0px',
     top: `${guide.value * BASE_PIXELS_PER_METER}px`,
-    width: `${base.width}px`,
+    width: '100%',
   }
 }
 
@@ -3573,6 +3539,17 @@ function screenToWorld(event: MouseEvent | PointerEvent): PlanningPoint {
   return clientToWorld(event.clientX, event.clientY)
 }
 
+function clientToViewport(clientX: number, clientY: number): PlanningPoint {
+  const rect = editorRef.value?.getBoundingClientRect()
+  if (!rect) {
+    return { x: 0, y: 0 }
+  }
+  return {
+    x: clientX - rect.left,
+    y: clientY - rect.top,
+  }
+}
+
 function clientToWorld(clientX: number, clientY: number): PlanningPoint {
   // Use the real-time DOMRect to avoid drawing/selection coordinate mismatch due to stale cached rect.
   const rect = editorRef.value?.getBoundingClientRect()
@@ -3580,22 +3557,22 @@ function clientToWorld(clientX: number, clientY: number): PlanningPoint {
     return { x: 0, y: 0 }
   }
   const scale = renderScale.value
-  const center = computeStageCenterOffset(rect, scale)
+  const center = computeStageCenterOffset(rect)
   const x = (clientX - rect.left - center.x) / scale - viewTransform.offset.x
   const y = (clientY - rect.top - center.y) / scale - viewTransform.offset.y
   return { x, y }
 }
 
-function worldToClient(world: PlanningPoint): { x: number; y: number } {
+function viewportPointToWorld(point: PlanningPoint): PlanningPoint {
   const rect = editorRef.value?.getBoundingClientRect()
   if (!rect) {
     return { x: 0, y: 0 }
   }
   const scale = renderScale.value
-  const center = computeStageCenterOffset(rect, scale)
+  const center = computeStageCenterOffset(rect)
   return {
-    x: (world.x + viewTransform.offset.x) * scale + center.x,
-    y: (world.y + viewTransform.offset.y) * scale + center.y,
+    x: (point.x - center.x) / scale - viewTransform.offset.x,
+    y: (point.y - center.y) / scale - viewTransform.offset.y,
   }
 }
 
@@ -4102,28 +4079,13 @@ function updateImageScaleCalibration(point: PlanningPoint) {
 
 function openImageScaleCalibrationDialog() {
   imageScaleCalibrationError.value = null
-  if (imageScaleCalibrationDialogOpenRaf !== null) {
-    cancelAnimationFrame(imageScaleCalibrationDialogOpenRaf)
-    imageScaleCalibrationDialogOpenRaf = null
+  if (!dialogOpen.value || !imageScaleCalibrationDraft.value) {
+    return
   }
-  imageScaleCalibrationDialogOpenRaf = requestAnimationFrame(() => {
-    imageScaleCalibrationDialogOpenRaf = null
-    if (!dialogOpen.value) {
-      return
-    }
-    const draft = imageScaleCalibrationDraft.value
-    if (!draft || currentTool.value !== 'calibrate') {
-      return
-    }
-    imageScaleCalibrationDialogOpen.value = true
-  })
+  imageScaleCalibrationDialogOpen.value = true
 }
 
 function closeImageScaleCalibrationDialog() {
-  if (imageScaleCalibrationDialogOpenRaf !== null) {
-    cancelAnimationFrame(imageScaleCalibrationDialogOpenRaf)
-    imageScaleCalibrationDialogOpenRaf = null
-  }
   imageScaleCalibrationDialogOpen.value = false
   imageScaleCalibrationRealMeters.value = null
   imageScaleCalibrationError.value = null
@@ -4132,6 +4094,10 @@ function closeImageScaleCalibrationDialog() {
 
 function cancelImageScaleCalibration() {
   closeImageScaleCalibrationDialog()
+  if (dragState.value.type === 'calibrate-line') {
+    dragState.value = { type: 'idle' }
+  }
+  frozenCanvasSize.value = null
 }
 
 async function confirmImageScaleCalibration() {
@@ -4152,6 +4118,7 @@ async function confirmImageScaleCalibration() {
 
   applyImageMetersPerPixel(preview.image, realMeters / preview.pixelLength)
   markPlanningDirty()
+  persistPlanningToSceneIfDirty({ force: true })
   try {
     await persistLayersToIndexedDB()
   } catch (error) {
@@ -4246,8 +4213,8 @@ const imageScaleCalibrationPreview = computed(() => {
   if (!draft || !image) {
     return null
   }
-  const startWorld = draft.start
-  const currentWorld = draft.current
+  const startWorld = viewportPointToWorld(draft.start)
+  const currentWorld = viewportPointToWorld(draft.current)
   const startLocal = getImageLocalPoint(image, startWorld)
   const currentLocal = getImageLocalPoint(image, currentWorld)
   const pixelLength = Math.hypot(currentLocal.x - startLocal.x, currentLocal.y - startLocal.y)
@@ -4257,23 +4224,15 @@ const imageScaleCalibrationPreview = computed(() => {
     : null
   return {
     image,
-    start: startWorld,
-    current: currentWorld,
+    start: draft.start,
+    current: draft.current,
     pixelLength,
     nextMetersPerPixel,
   }
 })
 
 const imageScaleCalibrationScreenPreview = computed(() => {
-  const preview = imageScaleCalibrationPreview.value
-  if (!preview) {
-    return null
-  }
-  return {
-    ...preview,
-    start: worldToClient(preview.start),
-    current: worldToClient(preview.current),
-  }
+  return imageScaleCalibrationPreview.value
 })
 
 // clearSelectedScatterAssignment removed (unused)
@@ -4349,6 +4308,10 @@ function handleEditorPointerDown(event: PointerEvent) {
     startLineDraft(world)
     return
   }
+
+  if (tool === 'calibrate') {
+    return
+  }
   
 
   // Pan view: when using pan tool, or when dragging on empty space with select tool
@@ -4362,7 +4325,7 @@ function handleEditorDoubleClick(event: MouseEvent) {
   if (!dialogOpen.value) {
     return
   }
-  if (currentTool.value === 'calibrate' || imageScaleCalibrationDraft.value) {
+  if (currentTool.value === 'calibrate' || imageScaleCalibrationDraft.value || imageScaleCalibrationDialogOpen.value) {
     event.preventDefault()
     event.stopPropagation()
     return
@@ -4418,7 +4381,7 @@ function handleEditorContextMenu(event: MouseEvent) {
   const draftLine = getDraftLine()
   const lineDraftActive = !!(draftLine && draftLine.points.length > 0)
   const calibrationDraftActive = !!imageScaleCalibrationDraft.value
-  if (!rectangleActive && !polygonDraftActive && !lineDraftActive && !calibrationDraftActive) {
+  if (!rectangleActive && !polygonDraftActive && !lineDraftActive && !calibrationDraftActive && !imageScaleCalibrationDialogOpen.value) {
     return
   }
   event.preventDefault()
@@ -4506,11 +4469,11 @@ function handlePointerMove(event: PointerEvent) {
     return
   }
   if (state.type === 'calibrate-line') {
-    const world = screenToWorld(event)
-    updateImageScaleCalibration(world)
+    const viewportPoint = clientToViewport(event.clientX, event.clientY)
+    updateImageScaleCalibration(viewportPoint)
     dragState.value = {
       ...state,
-      current: { x: world.x, y: world.y },
+      current: { x: viewportPoint.x, y: viewportPoint.y },
     }
     return
   }
@@ -4752,10 +4715,7 @@ function handleWheel(event: WheelEvent) {
 function cancelActiveDrafts() {
   polygonDraftPoints.value = []
   polygonDraftHoverPoint.value = null
-  imageScaleCalibrationDraft.value = null
-  imageScaleCalibrationDialogOpen.value = false
-  imageScaleCalibrationRealMeters.value = null
-  imageScaleCalibrationError.value = null
+  closeImageScaleCalibrationDialog()
 
   const draft = lineDraft.value
   const draftLine = getDraftLine()
@@ -4836,11 +4796,11 @@ function handleKeydown(event: KeyboardEvent) {
       finalizePolygonDraft()
       return
     }
-      const draftLine = getDraftLine()
-      if (currentTool.value === 'line' && draftLine && draftLine.points.length >= 2) {
-        event.preventDefault()
-        finalizeLineDraft()
-      }
+    const draftLine = getDraftLine()
+    if (currentTool.value === 'line' && draftLine && draftLine.points.length >= 2) {
+      event.preventDefault()
+      finalizeLineDraft()
+    }
   }
 }
 
@@ -5618,19 +5578,19 @@ function handleImageLayerPointerDown(imageId: string, event: PointerEvent) {
     return
   }
   if (tool === 'calibrate') {
-    if (!canUseImageScaleCalibration.value || activeImageId.value !== imageId) {
+    if (!canUseImageScaleCalibration.value || activeImageId.value !== imageId || !image.visible || image.locked) {
       return
     }
     event.stopPropagation()
     event.preventDefault()
-    const world = screenToWorld(event)
-    startImageScaleCalibration(world, image)
+    const viewportPoint = clientToViewport(event.clientX, event.clientY)
+    startImageScaleCalibration(viewportPoint, image)
     dragState.value = {
       type: 'calibrate-line',
       pointerId: event.pointerId,
       imageId,
-      start: { x: world.x, y: world.y },
-      current: { x: world.x, y: world.y },
+      start: { x: viewportPoint.x, y: viewportPoint.y },
+      current: { x: viewportPoint.x, y: viewportPoint.y },
     }
     event.currentTarget instanceof Element && event.currentTarget.setPointerCapture(event.pointerId)
     return
@@ -5880,7 +5840,7 @@ const toolbarButtons: Array<{ tool: PlanningTool; icon: string; tooltip: string 
   { tool: 'select', icon: 'mdi-cursor-default-outline', tooltip: 'Select' },
   { tool: 'pan', icon: 'mdi-hand-back-right-outline', tooltip: 'Pan' },
   { tool: 'align-marker', icon: 'mdi-crosshairs-gps', tooltip: 'Align marker' },
-  { tool: 'calibrate', icon: 'mdi-ruler', tooltip: 'Scale calibration' },
+  { tool: 'calibrate', icon: 'mdi-ruler', tooltip: 'Scale ruler' },
 ]
 
 const visibleToolbarButtons = computed(() => toolbarButtons)
@@ -6095,10 +6055,6 @@ onBeforeUnmount(() => {
   window.removeEventListener('pointercancel', handlePointerUp)
   window.removeEventListener('resize', updateEditorRect)
   window.removeEventListener('keydown', handleKeydown)
-  if (imageScaleCalibrationDialogOpenRaf !== null) {
-    cancelAnimationFrame(imageScaleCalibrationDialogOpenRaf)
-    imageScaleCalibrationDialogOpenRaf = null
-  }
   if (wheelZoomRaf !== null) {
     cancelAnimationFrame(wheelZoomRaf)
     wheelZoomRaf = null
@@ -6287,7 +6243,7 @@ onBeforeUnmount(() => {
                   </v-btn>
                 </template>
               </v-tooltip>
-              <v-tooltip text="Scale calibration" location="bottom">
+              <v-tooltip text="Scale ruler" location="bottom">
                 <template #activator="{ props }">
                   <v-btn v-bind="props" :color="currentTool === 'calibrate' ? 'primary' : undefined" variant="tonal" density="comfortable" class="tool-button" :disabled="!canUseImageScaleCalibration" @click="handleToolSelect('calibrate')">
                     <v-icon>mdi-ruler</v-icon>
@@ -6401,53 +6357,53 @@ onBeforeUnmount(() => {
                   />
                 </template>
 
-                <svg
-                  v-if="imageScaleCalibrationScreenPreview"
-                  class="vector-overlay vector-overlay--calibration"
-                  :width="editorRect?.width ?? 0"
-                  :height="editorRect?.height ?? 0"
-                  :viewBox="`0 0 ${editorRect?.width ?? 0} ${editorRect?.height ?? 0}`"
-                  aria-hidden="true"
-                >
-                  <g>
-                    <line
-                      class="planning-scale-calibration"
-                      :x1="imageScaleCalibrationScreenPreview.start.x"
-                      :y1="imageScaleCalibrationScreenPreview.start.y"
-                      :x2="imageScaleCalibrationScreenPreview.current.x"
-                      :y2="imageScaleCalibrationScreenPreview.current.y"
-                      vector-effect="non-scaling-stroke"
-                    />
-                    <circle
-                      class="planning-scale-calibration__handle"
-                      :cx="imageScaleCalibrationScreenPreview.start.x"
-                      :cy="imageScaleCalibrationScreenPreview.start.y"
-                      :r="6"
-                      vector-effect="non-scaling-stroke"
-                    />
-                    <circle
-                      class="planning-scale-calibration__handle"
-                      :cx="imageScaleCalibrationScreenPreview.current.x"
-                      :cy="imageScaleCalibrationScreenPreview.current.y"
-                      :r="6"
-                      vector-effect="non-scaling-stroke"
-                    />
-                    <text
-                      class="planning-scale-calibration__label"
-                      :x="(imageScaleCalibrationScreenPreview.start.x + imageScaleCalibrationScreenPreview.current.x) * 0.5"
-                      :y="(imageScaleCalibrationScreenPreview.start.y + imageScaleCalibrationScreenPreview.current.y) * 0.5 - 12"
-                    >
-                      {{ imageScaleCalibrationScreenPreview.pixelLength.toFixed(1) }} px
-                    </text>
-                  </g>
-                </svg>
-
                 <div class="canvas-center-cross" aria-hidden="true">
                   <div class="canvas-center-cross__line canvas-center-cross__line--horizontal" />
                   <div class="canvas-center-cross__line canvas-center-cross__line--vertical" />
                   <div class="canvas-center-cross__dot" />
                 </div>
               </div>
+
+              <svg
+                v-if="imageScaleCalibrationScreenPreview"
+                class="vector-overlay vector-overlay--calibration"
+                :width="editorRect?.width ?? 0"
+                :height="editorRect?.height ?? 0"
+                :viewBox="`0 0 ${editorRect?.width ?? 0} ${editorRect?.height ?? 0}`"
+                aria-hidden="true"
+              >
+                <g>
+                  <line
+                    class="planning-scale-calibration"
+                    :x1="imageScaleCalibrationScreenPreview.start.x"
+                    :y1="imageScaleCalibrationScreenPreview.start.y"
+                    :x2="imageScaleCalibrationScreenPreview.current.x"
+                    :y2="imageScaleCalibrationScreenPreview.current.y"
+                    vector-effect="non-scaling-stroke"
+                  />
+                  <circle
+                    class="planning-scale-calibration__handle"
+                    :cx="imageScaleCalibrationScreenPreview.start.x"
+                    :cy="imageScaleCalibrationScreenPreview.start.y"
+                    :r="6"
+                    vector-effect="non-scaling-stroke"
+                  />
+                  <circle
+                    class="planning-scale-calibration__handle"
+                    :cx="imageScaleCalibrationScreenPreview.current.x"
+                    :cy="imageScaleCalibrationScreenPreview.current.y"
+                    :r="6"
+                    vector-effect="non-scaling-stroke"
+                  />
+                  <text
+                    class="planning-scale-calibration__label"
+                    :x="(imageScaleCalibrationScreenPreview.start.x + imageScaleCalibrationScreenPreview.current.x) * 0.5"
+                    :y="(imageScaleCalibrationScreenPreview.start.y + imageScaleCalibrationScreenPreview.current.y) * 0.5 - 12"
+                  >
+                    {{ imageScaleCalibrationScreenPreview.pixelLength.toFixed(1) }} px
+                  </text>
+                </g>
+              </svg>
 
               <div v-if="scaleBarSpec.label" class="scale-bar-overlay" aria-hidden="true">
                 <div class="scale-bar">
@@ -6624,7 +6580,7 @@ onBeforeUnmount(() => {
               autofocus
             />
             <div class="planning-image-import-dialog__hint">
-              This value controls how the image maps into scene meters. The reference plane will be centered at the scene origin.
+              This is a provisional meters-per-pixel value. You can leave it as a fallback and refine it later with the scale ruler tool.
             </div>
             <div v-if="planningImageImportError" class="planning-image-import-dialog__error">
               {{ planningImageImportError }}
@@ -6646,12 +6602,12 @@ onBeforeUnmount(() => {
       >
         <v-card class="planning-image-calibration-dialog">
           <v-card-title class="planning-image-calibration-dialog__title">
-            Scale calibration
+            Scale ruler
           </v-card-title>
           <v-card-text v-if="imageScaleCalibrationPreview" class="planning-image-calibration-dialog__body">
             <div class="planning-image-calibration-dialog__meta">
               <div><span>Image</span><strong>{{ imageScaleCalibrationPreview.image.name }}</strong></div>
-              <div><span>Measured length</span><strong>{{ imageScaleCalibrationPreview.pixelLength.toFixed(2) }} px</strong></div>
+              <div><span>Line length</span><strong>{{ imageScaleCalibrationPreview.pixelLength.toFixed(2) }} px</strong></div>
             </div>
             <v-text-field
               v-model.number="imageScaleCalibrationRealMeters"

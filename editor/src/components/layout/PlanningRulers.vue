@@ -96,10 +96,10 @@ function drawTopRuler() {
   const ticks = generateTicks({
     visibleMinMeters: visibleMin,
     visibleMaxMeters: visibleMax,
-    axisMaxMeters: props.canvasSize.width,
+    axisMaxMeters: Number.POSITIVE_INFINITY,
     majorStepMeters: steps.majorStepMeters,
     minorStepMeters: steps.minorStepMeters,
-    anchorMeters: props.canvasSize.width / 2,
+    anchorMeters: 0,
   })
 
   // Minor ticks
@@ -132,10 +132,7 @@ function drawTopRuler() {
     ctx.lineTo(px, height - 10)
     ctx.stroke()
 
-    // 以画布中心为原点：右侧为正，左侧为负
-    const centerX = props.canvasSize.width / 2
-    const relX = t.valueMeters - centerX
-    const label = formatMetersValue(relX, steps.majorStepMeters)
+    const label = formatMetersValue(t.valueMeters, steps.majorStepMeters)
     if (label) {
       ctx.fillText(label, px, 3)
     }
@@ -173,10 +170,10 @@ function drawLeftRuler() {
   const ticks = generateTicks({
     visibleMinMeters: visibleMin,
     visibleMaxMeters: visibleMax,
-    axisMaxMeters: props.canvasSize.height,
+    axisMaxMeters: Number.POSITIVE_INFINITY,
     majorStepMeters: steps.majorStepMeters,
     minorStepMeters: steps.minorStepMeters,
-    anchorMeters: props.canvasSize.height / 2,
+    anchorMeters: 0,
   })
 
   // Minor ticks
@@ -211,10 +208,7 @@ function drawLeftRuler() {
     ctx.lineTo(width - 10, py)
     ctx.stroke()
 
-    // 以画布中心为原点：上方为正，下方为负
-    const centerY = props.canvasSize.height / 2
-    const relY = centerY - t.valueMeters
-    const label = formatMetersValue(relY, steps.majorStepMeters)
+    const label = formatMetersValue(-t.valueMeters, steps.majorStepMeters)
     if (label) {
       ctx.font = baseFont
       const maxLabelWidth = Math.max(0, width - 14)
