@@ -17,7 +17,6 @@ import {
 import type {
   PlanningImageData,
   PlanningPolygonData,
-  PlanningPolylineData,
   PlanningSceneData,
   PlanningTerrainDemData,
   PlanningTerrainWorldBounds,
@@ -37,13 +36,7 @@ import {
 import { generateUuid } from '@/utils/uuid'
 import { buildPlanningDemGroundRegionData, type PlanningDemBuildProgress, type PlanningDemHeightRegion, type PlanningDemRegionConversionResult } from '@/utils/planningDemToGround'
 import { buildPlanningDemTerrainConversionInWorker } from '@/utils/planningDemTerrainDataset'
-import {
-  buildGroundSurfaceChunksFromPlanningOrthophoto,
-  stripPlanningOrthophotoGeneratedGroundSurfaceChunks,
-} from '@/utils/terrainImageryChunkPatches'
 import { createScenesStoreTerrainDatasetHeightSampler } from '@/utils/terrainDatasetRuntime'
-
-
 export type PlanningConversionProgress = {
   step: string
   progress: number
@@ -1816,510 +1809,278 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
   return await sceneStore.withScenePatchesSuppressed(async () => {
     throwIfAborted(options.signal)
     emitProgress(options, 'Preparing…', 0)
-
-
-  if (!sceneStore.groundNode) {
-    emitProgress(options, 'Creating ground…', 5)
-    sceneStore.setGroundInfiniteSettings({})
-    await yieldController.maybeYield(true)
-  }
-
-  const planningDem = planningData.terrain?.dem ?? null
-  const demGroundBounds = normalizePlanningDemBoundsForGround(planningDem?.worldBounds ?? null)
-  if (planningDem && !demGroundBounds) {
-    throw new Error('Planning DEM world bounds are missing, invalid, or not centered on the world origin')
-  }
-  if (sceneStore.groundNode?.dynamicMesh?.type === 'Ground' && demGroundBounds) {
-    const currentGroundDefinition = sceneStore.groundNode.dynamicMesh as GroundDynamicMesh
-    const currentGroundBounds = resolveGroundWorldBounds(currentGroundDefinition)
-    const nextEditTileResolution = resolvePlanningDemGroundResolution(planningDem)
-    const nextGroundBounds = hadGroundNodeBeforeConversion
-      ? mergeGroundBounds(currentGroundBounds, demGroundBounds)
-      : demGroundBounds
-
-    const needsResolutionUpdate = Number(currentGroundDefinition.editTileResolution) !== nextEditTileResolution
-      || Number(currentGroundDefinition.editTileSizeMeters) !== GROUND_TERRAIN_CHUNK_SIZE_METERS
-
-    if (groundBoundsChanged(currentGroundBounds, nextGroundBounds) || needsResolutionUpdate) {
-      sceneStore.updateGroundNodeDynamicMesh(
-        sceneStore.groundNode.id,
-        stripTransientGroundFieldFromDynamicMesh({
-          ...currentGroundDefinition,
-          worldBounds: nextGroundBounds,
-          editTileSizeMeters: GROUND_TERRAIN_CHUNK_SIZE_METERS,
-          editTileResolution: nextEditTileResolution,
-        } as GroundRuntimeDynamicMesh),
-      )
+    if (!sceneStore.groundNode) {
+      emitProgress(options, 'Creating ground…', 5)
+      sceneStore.setGroundInfiniteSettings({})
       await yieldController.maybeYield(true)
     }
-  }
 
-  // Use the actual ground node bounds when available; groundSettings can lag behind
-  // an existing node's persisted worldBounds during scene conversion.
-  const activeGroundDefinition = sceneStore.groundNode?.dynamicMesh?.type === 'Ground'
-    ? sceneStore.groundNode.dynamicMesh
-    : sceneStore.groundSettings
-  const groundBounds = resolveGroundWorldBounds(activeGroundDefinition)
-  const groundWidth = groundBounds.maxX - groundBounds.minX
-  const groundDepth = groundBounds.maxZ - groundBounds.minZ
-  const groundMinX = groundBounds.minX
-  const groundMinZ = groundBounds.minZ
+    const planningDem = planningData.terrain?.dem ?? null
+    const demGroundBounds = normalizePlanningDemBoundsForGround(planningDem?.worldBounds ?? null)
+    if (planningDem && !demGroundBounds) {
+      throw new Error('Planning DEM world bounds are missing, invalid, or not centered on the world origin')
+    }
+    if (sceneStore.groundNode?.dynamicMesh?.type === 'Ground' && demGroundBounds) {
+      const currentGroundDefinition = sceneStore.groundNode.dynamicMesh as GroundDynamicMesh
+      const currentGroundBounds = resolveGroundWorldBounds(currentGroundDefinition)
+      const nextEditTileResolution = resolvePlanningDemGroundResolution(planningDem)
+      const nextGroundBounds = hadGroundNodeBeforeConversion
+        ? mergeGroundBounds(currentGroundBounds, demGroundBounds)
+        : demGroundBounds
 
-  const planningUnitsToMeters = resolvePlanningUnitsToMeters(planningData, groundWidth, groundDepth)
-  const terrainDem = planningData.terrain?.dem ?? null
-  void planningUnitsToMeters
+      const needsResolutionUpdate = Number(currentGroundDefinition.editTileResolution) !== nextEditTileResolution
+        || Number(currentGroundDefinition.editTileSizeMeters) !== GROUND_TERRAIN_CHUNK_SIZE_METERS
 
-  if (options.overwriteExisting) {
-    emitProgress(options, 'Removing existing converted content…', 10)
+      if (groundBoundsChanged(currentGroundBounds, nextGroundBounds) || needsResolutionUpdate) {
+        sceneStore.updateGroundNodeDynamicMesh(
+          sceneStore.groundNode.id,
+          stripTransientGroundFieldFromDynamicMesh({
+            ...currentGroundDefinition,
+            worldBounds: nextGroundBounds,
+            editTileSizeMeters: GROUND_TERRAIN_CHUNK_SIZE_METERS,
+            editTileResolution: nextEditTileResolution,
+          } as GroundRuntimeDynamicMesh),
+        )
+        await yieldController.maybeYield(true)
+      }
+    }
+
+    const activeGroundDefinition = sceneStore.groundNode?.dynamicMesh?.type === 'Ground'
+      ? sceneStore.groundNode.dynamicMesh
+      : sceneStore.groundSettings
+    const groundBounds = resolveGroundWorldBounds(activeGroundDefinition)
+    const groundWidth = groundBounds.maxX - groundBounds.minX
+    const groundDepth = groundBounds.maxZ - groundBounds.minZ
+    const groundMinX = groundBounds.minX
+    const groundMinZ = groundBounds.minZ
+    void groundWidth
+    void groundDepth
+    void groundMinX
+    void groundMinZ
+
+    emitProgress(options, 'Preparing converted content…', 10)
     await clearPlanningGeneratedContent(sceneStore)
     await yieldController.maybeYield(true)
-  } else {
-    emitProgress(options, 'Preparing converted content…', 10)
-    await clearPlanningGeneratedContentIncremental({
-      sceneStore,
-      activeLayerIds: new Set<string>(),
-      currentLayerIds: new Set<string>(),
-      currentPolygonIds: new Set<string>(),
-      currentPolylineIds: new Set<string>(),
-      removeImages: true,
-    })
-    await yieldController.maybeYield(true)
-  }
 
-  emitProgress(options, 'Preparing root group…', 15)
-  let root = findPlanningConversionRoot(sceneStore.nodes)
-  if (!root) {
-    const rootNodeId = await stableUuidV5('planning:root')
-    root = sceneStore.addSceneNode({
-      nodeId: rootNodeId,
-      nodeType: 'Group',
-      object: new THREE.Group(),
-      name: 'Planning 3D Scene',
-      canPrefab: false,
-      userData: {
-        [PLANNING_CONVERSION_ROOT_TAG]: true,
-        source: PLANNING_CONVERSION_SOURCE,
-        createdAt: Date.now(),
-      },
-    })
-  }
-  if (!root) {
-    throw new Error('Failed to create planning conversion root.')
-  }
-  sceneStore.setNodeLocked(root.id, true)
-  await yieldController.maybeYield(true)
-
-  // Planning image layers in PlanningDialog already use the dialog's world-space
-  // coordinates/sizes (`position`, `width * scale`, `height * scale`).
-  // Convert them directly so the 3D helper planes exactly match the editor overlay.
-  const images = Array.isArray(planningData.images) ? planningData.images : []
-  const activeLayerIdSet = new Set<string>()
-  const layerOrder: string[] = []
-  const featuresByLayer = new Map<string, { polygons: PlanningPolygonData[]; polylines: PlanningPolylineData[] }>()
-  const totalUnits = images.length
-  let doneUnits = 0
-
-  const groundNode = sceneStore.groundNode
-  let groundDefinition: GroundDynamicMesh | null = groundNode ? resolveGroundRuntimeDefinition(sceneStore, groundNode) : null
-
-  // Terrain contour sculpting: additive height deltas from terrain-layer polygons.
-  // Apply BEFORE other conversions so walls/roads/water sample the updated ground height.
-  if (groundNode && groundDefinition) {
-    const contourPolygons: PlanningPolygonData[] = []
-
-    const resetContours = resetGroundPlanningContours(groundDefinition as GroundRuntimeDynamicMesh)
-    if (resetContours.changed) {
-      const clearedPlanning = resetContours.definition
-      groundDefinition = clearedPlanning
-      syncPlanningHeightState(sceneStore, groundNode, clearedPlanning as GroundRuntimeDynamicMesh)
-      sceneStore.updateGroundNodeDynamicMesh(
-        groundNode.id,
-        stripTransientGroundFieldFromDynamicMesh(clearedPlanning as GroundRuntimeDynamicMesh),
-      )
-      await yieldController.maybeYield(true)
+    emitProgress(options, 'Preparing root group…', 15)
+    let root = findPlanningConversionRoot(sceneStore.nodes)
+    if (!root) {
+      const rootNodeId = await stableUuidV5('planning:root')
+      root = sceneStore.addSceneNode({
+        nodeId: rootNodeId,
+        nodeType: 'Group',
+        object: new THREE.Group(),
+        name: 'Planning 3D Scene',
+        canPrefab: false,
+        userData: {
+          [PLANNING_CONVERSION_ROOT_TAG]: true,
+          source: PLANNING_CONVERSION_SOURCE,
+          createdAt: Date.now(),
+        },
+      })
     }
+    if (!root) {
+      throw new Error('Failed to create planning conversion root.')
+    }
+    sceneStore.setNodeLocked(root.id, true)
+    await yieldController.maybeYield(true)
 
-    // 获取规划数据中的数字高程模型(DEM)数据,如果不存在则为null
-    const terrainDem = planningData.terrain?.dem ?? null
-    // 标记DEM数据是否已成功应用到地形中
-    let demApplied = false
+    const groundNode = sceneStore.groundNode
+    let groundDefinition: GroundDynamicMesh | null = groundNode ? resolveGroundRuntimeDefinition(sceneStore, groundNode) : null
+    const terrainDem = planningDem
     const scenesStore = useScenesStore()
-    // 检查是否存在有效的DEM数据源(通过sourceFileHash判断)
-    if (terrainDem?.sourceFileHash) {
-      // 根据轮廓多边形和地形定义,计算DEM导入的边界范围
-      const demImportBounds = resolvePlanningContourPolygonBounds({
-        definition: groundDefinition as GroundRuntimeDynamicMesh,
-        contourPolygons,
-        defaultBlendMeters: PLANNING_TERRAIN_CONTOUR_BLEND_METERS,
-      })
-      // 更新进度条显示"正在导入DEM…",进度为18%
-      emitProgress(options, 'Importing DEM…', 18)
-      await yieldController.maybeYield(true)
-      const emitDemProgress = createWindowedProgressEmitter(options, { start: 18, end: 24 })
-      // 构建并处理DEM数据,将其转换为地面区域数据
-      // 包括指定的行列范围(从demImportBounds或默认网格范围)
-      // 调用buildPlanningDemGroundRegionData处理DEM数据，生成地面区域数据
-      // 参数说明：
-      //   - definition: GroundRuntimeDynamicMesh - 地面运行时动态网格定义，包含网格尺寸和配置信息
-      //                  示例: {gridSizeX: 100, gridSizeY: 100, heightData: [...]}
-      //   - terrainDem: DEM数据源对象，包含高程图像和元数据
-      //                  示例: {sourceFileHash: "abc123", data: ArrayBuffer}
-      //   - startRow: 数字 - DEM导入起始行索引，若demImportBounds存在则使用其minRow，否则为0
-      //              示例: 10 (表示从第10行开始)
-      //   - endRow: 数字 - DEM导入结束行索引，默认为网格总行数
-      //            示例: 950 (表示到第950行结束)，若未指定则为 Math.max(1, gridRows)
-      //   - startColumn: 数字 - DEM导入起始列索引，若demImportBounds存在则使用其minColumn，否则为0
-      //                  示例: 5 (表示从第5列开始)
-      //   - endColumn: 数字 - DEM导入结束列索引，默认为网格总列数
-      //              示例: 1000 (表示到第1000列结束)，若未指定则为 Math.max(1, gridColumns)
-      const demStartRow = demImportBounds?.minRow ?? 0
-      const demEndRow = demImportBounds?.maxRow ?? Math.max(1, resolveGroundWorkingGridSize(groundDefinition).rows)
-      const demStartColumn = demImportBounds?.minColumn ?? 0
-      const demEndColumn = demImportBounds?.maxColumn ?? Math.max(1, resolveGroundWorkingGridSize(groundDefinition).columns)
-      const activeSceneId = sceneStore.currentSceneId
-      let terrainDataset: Awaited<ReturnType<typeof buildPlanningDemTerrainConversionInWorker>>['dataset'] | null = null
-      let demResult: PlanningDemRegionConversionResult
-      if (activeSceneId) {
-        const conversion = await buildPlanningDemTerrainConversionInWorker({
-          definition: groundDefinition as GroundRuntimeDynamicMesh,
-          terrainDem,
-          datasetId: `${activeSceneId}-terrain-dem`,
-          startRow: demStartRow,
-          endRow: demEndRow,
-          startColumn: demStartColumn,
-          endColumn: demEndColumn,
-          onProgress: (payload: PlanningDemBuildProgress) => {
-            emitDemProgress(payload)
-          },
-        })
-        demResult = conversion.demResult
-        terrainDataset = conversion.dataset
-      } else {
-        demResult = await buildPlanningDemGroundRegionData({
-          definition: groundDefinition as GroundRuntimeDynamicMesh,
-          terrainDem,
-          startRow: demStartRow,
-          endRow: demEndRow,
-          startColumn: demStartColumn,
-          endColumn: demEndColumn,
-          onProgress: (payload: PlanningDemBuildProgress) => {
-            emitDemProgress(payload)
-          },
-        })
-      }
-      // 将处理后的DEM区域数据应用到地面定义中,更新高度信息和编辑瓦片
-      emitDetailedProgress(options, 'Applying DEM to terrain…', 24, {
-        phase: 'apply-dem',
-      })
-      groundDefinition = applyPlanningDemRegionToGround(
-        sceneStore,
-        groundNode,
-        groundDefinition as GroundRuntimeDynamicMesh,
-        demResult.region,
-        demResult.planningMetadata,
-        demResult.localEditTiles,
-      )
-      // 标记DEM已应用,后续可用作基础高度图
-      demApplied = true
-      if (activeSceneId && terrainDataset) {
-        emitDetailedProgress(options, 'Syncing terrain dataset…', 28, {
-          phase: 'sync-terrain-dataset',
-        })
-        await scenesStore.replaceTerrainDatasetBundle(activeSceneId, terrainDataset.manifest, terrainDataset.regionPacks, { syncServer: false })
+
+    if (groundNode && groundDefinition) {
+      if (terrainDem?.sourceFileHash) {
+        emitProgress(options, 'Importing DEM…', 18)
+        await yieldController.maybeYield(true)
+        const emitDemProgress = createWindowedProgressEmitter(options, { start: 18, end: 24 })
+        const demStartRow = 0
+        const demEndRow = Math.max(1, resolveGroundWorkingGridSize(groundDefinition).rows)
+        const demStartColumn = 0
+        const demEndColumn = Math.max(1, resolveGroundWorkingGridSize(groundDefinition).columns)
+        const activeSceneId = sceneStore.currentSceneId
+        let terrainDataset: Awaited<ReturnType<typeof buildPlanningDemTerrainConversionInWorker>>['dataset'] | null = null
+        let demResult: PlanningDemRegionConversionResult
+        if (activeSceneId) {
+          const conversion = await buildPlanningDemTerrainConversionInWorker({
+            definition: groundDefinition as GroundRuntimeDynamicMesh,
+            terrainDem,
+            datasetId: `${activeSceneId}-terrain-dem`,
+            startRow: demStartRow,
+            endRow: demEndRow,
+            startColumn: demStartColumn,
+            endColumn: demEndColumn,
+            onProgress: (payload: PlanningDemBuildProgress) => {
+              emitDemProgress(payload)
+            },
+          })
+          demResult = conversion.demResult
+          terrainDataset = conversion.dataset
+        } else {
+          demResult = await buildPlanningDemGroundRegionData({
+            definition: groundDefinition as GroundRuntimeDynamicMesh,
+            terrainDem,
+            startRow: demStartRow,
+            endRow: demEndRow,
+            startColumn: demStartColumn,
+            endColumn: demEndColumn,
+            onProgress: (payload: PlanningDemBuildProgress) => {
+              emitDemProgress(payload)
+            },
+          })
+        }
+        emitDetailedProgress(options, 'Applying DEM to terrain…', 24, { phase: 'apply-dem' })
+        groundDefinition = applyPlanningDemRegionToGround(
+          sceneStore,
+          groundNode,
+          groundDefinition as GroundRuntimeDynamicMesh,
+          demResult.region,
+          demResult.planningMetadata,
+          demResult.localEditTiles,
+        )
+        if (sceneStore.currentSceneId && terrainDataset) {
+          emitDetailedProgress(options, 'Syncing terrain dataset…', 28, { phase: 'sync-terrain-dataset' })
+          await scenesStore.replaceTerrainDatasetBundle(sceneStore.currentSceneId, terrainDataset.manifest, terrainDataset.regionPacks, { syncServer: false })
+          groundDefinition = await syncGroundTerrainDatasetRuntime({
+            sceneStore,
+            groundNode,
+            definition: groundDefinition as GroundRuntimeDynamicMesh,
+            manifest: terrainDataset.manifest,
+          })
+          emitDetailedProgress(options, 'Terrain dataset ready…', 29, { phase: 'terrain-dataset-ready' })
+        }
+        await yieldController.maybeYield(true)
+      } else if (sceneStore.currentSceneId) {
+        await scenesStore.replaceTerrainDatasetBundle(sceneStore.currentSceneId, null, {}, { syncServer: false })
         groundDefinition = await syncGroundTerrainDatasetRuntime({
           sceneStore,
           groundNode,
           definition: groundDefinition as GroundRuntimeDynamicMesh,
-          manifest: terrainDataset.manifest,
-        })
-        emitDetailedProgress(options, 'Terrain dataset ready…', 29, {
-          phase: 'terrain-dataset-ready',
+          manifest: null,
         })
       }
-      await yieldController.maybeYield(true)
-    } else if (sceneStore.currentSceneId) {
-      await scenesStore.replaceTerrainDatasetBundle(sceneStore.currentSceneId, null, {}, { syncServer: false })
-      groundDefinition = await syncGroundTerrainDatasetRuntime({
-        sceneStore,
-        groundNode,
-        definition: groundDefinition as GroundRuntimeDynamicMesh,
-        manifest: null,
-      })
     }
 
-    if (contourPolygons.length) {
-      emitProgress(options, 'Sculpting terrain…', 30)
-      await yieldController.maybeYield(true)
-      try {
-        const next = await applyPlanningTerrainContoursToGround({
-          definition: groundDefinition as GroundRuntimeDynamicMesh,
-          contourPolygons,
-          baseHeightMap: demApplied ? (groundDefinition as GroundRuntimeDynamicMesh).planningHeightMap : null,
-          signal: options.signal,
-          yieldController,
-          blendMeters: PLANNING_TERRAIN_CONTOUR_BLEND_METERS,
-          smoothingPasses: PLANNING_TERRAIN_CONTOUR_SMOOTH_PASSES,
-          smoothingRadius: PLANNING_TERRAIN_CONTOUR_SMOOTH_RADIUS,
-          onProgress: (payload) => {
-            const contourUnits = Math.max(1, contourPolygons.length)
-            const loaded = Number.isFinite(payload.loaded) ? Math.max(0, Math.min(payload.loaded, payload.total || contourUnits)) : 0
-            const total = Number.isFinite(payload.total) && payload.total > 0 ? payload.total : contourUnits
-            const contourFraction = total > 0 ? loaded / total : 1
-            const overallFraction = totalUnits > 0
-              ? Math.min(1, Math.max(0, (doneUnits + contourFraction * contourUnits) / totalUnits))
-              : 1
-            emitDetailedProgress(options, payload.label, 30 + 65 * overallFraction, {
-              phase: payload.phase,
-              loaded,
-              total,
-              detail: formatProgressDetail(payload),
-            })
-          },
-        })
-        groundDefinition = next as GroundRuntimeDynamicMesh
-        syncPlanningHeightState(sceneStore, groundNode, next as GroundRuntimeDynamicMesh)
-        sceneStore.updateGroundNodeDynamicMesh(
-          groundNode.id,
-          stripTransientGroundFieldFromDynamicMesh(next as GroundRuntimeDynamicMesh),
-        )
-        doneUnits += contourPolygons.length
-      } catch (err) {
-        console.warn('Failed to apply planning terrain contours', err)
-      }
-      await yieldController.maybeYield(true)
+    const groundHeightAt = (x: number, z: number) => (groundDefinition ? sampleGroundHeight(groundDefinition, x, z) : 0)
+    const images = Array.isArray(planningData.images) ? planningData.images : []
+    const totalUnits = images.length
+    let doneUnits = 0
+    const emitUnitProgress = (label: string, unitFraction: number) => {
+      const base = 30
+      const span = 65
+      const safeUnitFraction = Math.min(1, Math.max(0, unitFraction))
+      const fraction = totalUnits > 0 ? (doneUnits + safeUnitFraction) / totalUnits : 1
+      emitProgress(options, label, base + span * fraction)
     }
-  }
-
-  const groundHeightAt = (x: number, z: number) => (groundDefinition ? sampleGroundHeight(groundDefinition, x, z) : 0)
-
-  const emitUnitProgress = (label: string, unitFraction: number) => {
-    const base = 30
-    const span = 65
-    const safeUnitFraction = Math.min(1, Math.max(0, unitFraction))
-    const fraction = totalUnits > 0 ? (doneUnits + safeUnitFraction) / totalUnits : 1
-    emitProgress(options, label, base + span * fraction)
-  }
-  const updateProgressForUnit = async (label: string) => {
-    doneUnits += 1
-    emitUnitProgress(label, 0)
-    await yieldController.maybeYield()
-  }
-
-  if (images.length) {
-    const imageEntries: Array<Record<string, unknown>> = []
-    for (let imageIndex = 0; imageIndex < images.length; imageIndex += 1) {
-      throwIfAborted(options.signal)
-      const image = images[imageIndex]!
-      const unitLabel = `Converting planning image: ${image.name?.trim() || image.id}`
-      emitUnitProgress(unitLabel, 0)
-      try {
-        const width = Math.max(1e-3, Math.abs(Number(image.width) * Number(image.scale)))
-        const height = Math.max(1e-3, Math.abs(Number(image.height) * Number(image.scale)))
-        if (!Number.isFinite(width) || !Number.isFinite(height)) {
-          continue
-        }
-        // Planning reference images are editor-only guides. When an alignment marker exists,
-        // shift the plane so that marker lands on the scene/world origin.
-        const centerOffset = resolvePlanningImageCenterOffsetMeters(image)
-        const groundY = groundHeightAt(0, 0)
-        imageEntries.push({
-          id: image.id,
-          name: image.name?.trim() || `Planning Image ${imageIndex + 1}`,
-          imageHash: typeof image.imageHash === 'string' ? image.imageHash.trim() : '',
-          sourceUrl: typeof image.url === 'string' ? image.url.trim() : '',
-          mimeType: image.mimeType ?? undefined,
-          filename: image.filename ?? undefined,
-          position: {
-            x: centerOffset.x,
-            y: groundY + PLANNING_IMAGE_HEIGHT_OFFSET_M + imageIndex * PLANNING_IMAGE_STACK_OFFSET_M,
-            z: centerOffset.z,
-          },
-          size: {
-            width,
-            height,
-          },
-          visible: image.visible !== false,
-          opacity: clamp01(image.opacity, 1),
-        })
-      } catch (error) {
-        console.warn('Failed to convert planning image to planning image component entry', image, error)
-      } finally {
-        await updateProgressForUnit(unitLabel)
-      }
+    const updateProgressForUnit = async (label: string) => {
+      doneUnits += 1
+      emitUnitProgress(label, 0)
+      await yieldController.maybeYield()
     }
 
-    const normalizedImageProps = clampPlanningImagesComponentProps({ images: imageEntries as any })
-    if (normalizedImageProps.images.length) {
-      const nodeId = await stableUuidV5('planning:images')
-      const runtime = new THREE.Group()
-      runtime.name = 'Planning Images'
-      runtime.userData = {
-        ...(runtime.userData ?? {}),
-        editorOnly: true,
-      }
-      const componentId = generateUuid()
-      const imageNode = sceneStore.addSceneNode({
-        nodeId,
-        nodeType: 'Group',
-        object: runtime,
-        name: 'Planning Images',
-        parentId: root.id,
-        editorFlags: {
-          editorOnly: true,
-          ignoreGridSnapping: true,
-        },
-        userData: {
-          source: PLANNING_CONVERSION_SOURCE,
-          kind: 'image',
-          planningImageCount: normalizedImageProps.images.length,
-        },
-        components: {
-          [PLANNING_IMAGES_COMPONENT_TYPE]: {
-            id: componentId,
-            type: PLANNING_IMAGES_COMPONENT_TYPE,
-            enabled: true,
-            props: normalizedImageProps,
-          },
-        },
-      })
-      if (imageNode) {
-        sceneStore.setNodeLocked(imageNode.id, true)
-      }
-    }
-  }
-
-  // Convert layer-by-layer
-  for (const layerId of layerOrder) {
-    throwIfAborted(options.signal)
-    if (!activeLayerIdSet.has(layerId)) {
-      continue
-    }
-    const kind = resolveLayerKindFromPlanningData(planningData, layerId)
-    if (!kind) continue
-
-    const group = featuresByLayer.get(layerId)!
-
-    if (kind === 'terrain') {
-      const layerName = resolveLayerNameFromPlanningData(planningData, layerId)
-      for (const poly of group.polygons) {
+    if (images.length) {
+      const imageEntries: Array<Record<string, unknown>> = []
+      for (let imageIndex = 0; imageIndex < images.length; imageIndex += 1) {
         throwIfAborted(options.signal)
-        await yieldController.maybeYield()
-
-        if (Boolean(poly.airWallEnabled)) {
-          const baseName = poly.name?.trim()
-            ? poly.name.trim()
-            : (layerName ? `${layerName} Terrain` : 'Planning Terrain')
-          const terrainBoundary = poly.points
-            .map((point) => toWorldPoint(point, groundMinX, groundMinZ, 0))
-            .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.z))
-          const expandedBoundary = expandWorldPolygonRadially(terrainBoundary, PLANNING_TERRAIN_AIR_WALL_OUTSET_M)
-          const segments = expandedBoundary.map((start, index) => {
-            const end = expandedBoundary[(index + 1) % expandedBoundary.length]!
-            const startPoint = {
-              x: start.x,
-              y: groundHeightAt(start.x, start.z),
-              z: start.z,
-            }
-            const endPoint = {
-              x: end.x,
-              y: groundHeightAt(end.x, end.z),
-              z: end.z,
-            }
-            return { start: startPoint, end: endPoint }
+        const image = images[imageIndex]!
+        const unitLabel = `Converting planning image: ${image.name?.trim() || image.id}`
+        emitUnitProgress(unitLabel, 0)
+        try {
+          const width = Math.max(1e-3, Math.abs(Number(image.width) * Number(image.scale)))
+          const height = Math.max(1e-3, Math.abs(Number(image.height) * Number(image.scale)))
+          if (!Number.isFinite(width) || !Number.isFinite(height)) {
+            continue
+          }
+          const centerOffset = resolvePlanningImageCenterOffsetMeters(image)
+          const groundY = groundHeightAt(0, 0)
+          imageEntries.push({
+            id: image.id,
+            name: image.name?.trim() || `Planning Image ${imageIndex + 1}`,
+            imageHash: typeof image.imageHash === 'string' ? image.imageHash.trim() : '',
+            sourceUrl: typeof image.url === 'string' ? image.url.trim() : '',
+            mimeType: image.mimeType ?? undefined,
+            filename: image.filename ?? undefined,
+            position: {
+              x: centerOffset.x,
+              y: groundY + PLANNING_IMAGE_HEIGHT_OFFSET_M + imageIndex * PLANNING_IMAGE_STACK_OFFSET_M,
+              z: centerOffset.z,
+            },
+            size: {
+              width,
+              height,
+            },
+            visible: image.visible !== false,
+            opacity: clamp01(image.opacity, 1),
           })
-          await createAirWallFromSegments({
-            sceneStore,
-            rootNodeId: root.id,
-            name: `${baseName} (Air Wall)`,
-            planningLayerId: layerId,
-            ownerFeatureId: poly.id,
-            ownerFeatureKind: 'terrain',
-            segments,
-          })
+        } catch (error) {
+          console.warn('Failed to convert planning image to planning image component entry', image, error)
+        } finally {
+          await updateProgressForUnit(unitLabel)
         }
+      }
 
-        await createTerrainWaterSurface({
-          sceneStore,
-          rootNodeId: root.id,
-          planningLayerId: layerId,
-          poly,
-          groundMinX,
-          groundMinZ,
-          groundHeightAt,
+      const normalizedImageProps = clampPlanningImagesComponentProps({ images: imageEntries as any })
+      if (normalizedImageProps.images.length) {
+        const nodeId = await stableUuidV5('planning:images')
+        const runtime = new THREE.Group()
+        runtime.name = 'Planning Images'
+        runtime.userData = {
+          ...(runtime.userData ?? {}),
+          editorOnly: true,
+        }
+        const componentId = generateUuid()
+        const imageNode = sceneStore.addSceneNode({
+          nodeId,
+          nodeType: 'Group',
+          object: runtime,
+          name: 'Planning Images',
+          parentId: root.id,
+          editorFlags: {
+            editorOnly: true,
+            ignoreGridSnapping: true,
+          },
+          userData: {
+            source: PLANNING_CONVERSION_SOURCE,
+            kind: 'image',
+            planningImageCount: normalizedImageProps.images.length,
+          },
+          components: {
+            [PLANNING_IMAGES_COMPONENT_TYPE]: {
+              id: componentId,
+              type: PLANNING_IMAGES_COMPONENT_TYPE,
+              enabled: true,
+              props: normalizedImageProps,
+            },
+          },
         })
+        if (imageNode) {
+          sceneStore.setNodeLocked(imageNode.id, true)
+        }
       }
     }
-  }
 
-  const currentGroundSurfaceChunks = (sceneStore.groundNode?.dynamicMesh?.type === 'Ground'
-    ? sceneStore.groundNode.dynamicMesh.groundSurfaceChunks
-    : null)
-
-  if (
-    groundNode
-    && groundDefinition
-    && terrainDem?.orthophoto?.sourceFileHash
-    && sceneStore.currentSceneId
-  ) {
-    emitDetailedProgress(options, 'Applying terrain imagery chunks...', 94, {
-      phase: 'ground-imagery-chunks',
-    })
-    const imageryChunks = await buildGroundSurfaceChunksFromPlanningOrthophoto({
-      terrainDem,
-      definition: groundDefinition as GroundRuntimeDynamicMesh,
-      groundNodeId: groundNode.id,
-      existingGroundSurfaceChunks: currentGroundSurfaceChunks,
-      registerAssets: sceneStore.registerAssets.bind(sceneStore),
-      revision: Date.now(),
-    })
-    if (imageryChunks.staleAssetIds.length > 0) {
-      await sceneStore.cleanUnusedAssetsByIds(imageryChunks.staleAssetIds)
-    }
-    emitDetailedProgress(options, 'Terrain imagery chunks ready', 95, {
-      phase: 'ground-imagery-chunks',
-      detail: `${imageryChunks.generatedChunkCount}/${imageryChunks.coverageChunkCount}`,
-    })
+    emitProgress(options, 'Refreshing scene…', 98)
     await yieldController.maybeYield(true)
-  } else if (groundNode && sceneStore.currentSceneId && currentGroundSurfaceChunks) {
-    const cleanup = stripPlanningOrthophotoGeneratedGroundSurfaceChunks({
-      groundSurfaceChunks: currentGroundSurfaceChunks,
-      getAsset: (assetId) => sceneStore.getAsset(assetId),
-    })
-    if (cleanup.removedChunkCount > 0) {
-      emitDetailedProgress(options, 'Clearing terrain imagery chunks...', 94, {
-        phase: 'ground-imagery-chunks',
-        detail: String(cleanup.removedChunkCount),
+
+    if (sceneStore.groundNode?.dynamicMesh?.type === 'Ground') {
+      emitProgress(options, 'Compiling terrain cache…', 99)
+      emitDetailedProgress(options, 'Compiling terrain cache…', 99, {
+        phase: 'compiled-ground',
+        detail: 'Checking compiled terrain cache...',
       })
-      if (cleanup.removedAssetIds.length > 0) {
-        await sceneStore.cleanUnusedAssetsByIds(cleanup.removedAssetIds)
-      }
+      await sceneStore.ensureCurrentSceneCompiledGroundReady({
+        onStatus: (status) => {
+          emitDetailedProgress(options, status.step, 99 + status.progress * 0.01, {
+            phase: `compiled-ground:${status.phase}`,
+            detail: status.detail,
+          })
+        },
+      })
       await yieldController.maybeYield(true)
     }
-  }
-
-  // Ensure runtime objects/components are synced so the converted content shows up immediately.
-  // Conversion creates/moves many nodes; some runtime consumers require an explicit refresh.
-  emitProgress(options, 'Refreshing scene…', 98)
-  await yieldController.maybeYield(true)
-
-  if (sceneStore.groundNode?.dynamicMesh?.type === 'Ground') {
-    emitProgress(options, 'Compiling terrain cache…', 99)
-    emitDetailedProgress(options, 'Compiling terrain cache…', 99, {
-      phase: 'compiled-ground',
-      detail: 'Checking compiled terrain cache...',
-    })
-    await sceneStore.ensureCurrentSceneCompiledGroundReady({
-      onStatus: (status) => {
-        emitDetailedProgress(options, status.step, 99 + status.progress * 0.01, {
-          phase: `compiled-ground:${status.phase}`,
-          detail: status.detail,
-        })
-      },
-    })
-    await yieldController.maybeYield(true)
-  }
-  emitProgress(options, 'Done', 100)
-  return { rootNodeId: root.id }
+    emitProgress(options, 'Done', 100)
+    return { rootNodeId: root.id }
   })
 }
 
@@ -2328,3 +2089,12 @@ void resolveLayerKindFromPlanningData
 void resolveLayerNameFromPlanningData
 void normalizePlanningPoints
 void offsetPlanningPointsToGroundLocal
+void PLANNING_TERRAIN_AIR_WALL_OUTSET_M
+void createAirWallFromSegments
+void createTerrainWaterSurface
+void clearPlanningGeneratedContentIncremental
+void resetGroundPlanningContours
+void syncPlanningHeightState
+void resolvePlanningUnitsToMeters
+void resolvePlanningContourPolygonBounds
+void applyPlanningTerrainContoursToGround

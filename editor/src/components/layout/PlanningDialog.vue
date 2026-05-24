@@ -5,7 +5,6 @@ import { storeToRefs } from 'pinia'
 import { generateUuid } from '@/utils/uuid'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useUiStore } from '@/stores/uiStore'
-import PlanningRulers from '@/components/layout/PlanningRulers.vue'
 import { WATER_PRESETS, type WaterPresetId } from '@schema/components'
 import { clearPlanningGeneratedContent, convertPlanningTo3DScene } from '@/utils/planningToScene'
 import { snapCandidatePointToAnglesRelative } from '@/utils/angleSnap'
@@ -23,7 +22,6 @@ import type {
   PlanningTerrainControlPoint,
   PlanningTerrainFalloff,
   PlanningTerrainGeographicBounds,
-  PlanningTerrainOrthophotoData,
   PlanningTerrainProjectedBounds,
   PlanningTerrainNoiseMode,
   PlanningTerrainRidgeValleyLine,
@@ -37,7 +35,6 @@ import {
   savePlanningImageToIndexedDB as savePlanningImageToStorage,
 } from '@/utils/planningImageStorage'
 import {
-  computeSha256Hex,
   loadPlanningDemBlobByHash,
   savePlanningDemToIndexedDB as savePlanningDemToStorage,
   storePlanningDemBlobByHash,
@@ -382,27 +379,6 @@ function clonePlanningTerrainWorldBounds(bounds: PlanningTerrainWorldBounds | nu
   }
 }
 
-function clonePlanningTerrainOrthophotoData(data: PlanningTerrainOrthophotoData | null | undefined): PlanningTerrainOrthophotoData | null {
-  if (!data) {
-    return null
-  }
-  return {
-    version: 1,
-    sourceFileHash: data.sourceFileHash ?? null,
-    filename: data.filename ?? null,
-    mimeType: data.mimeType ?? null,
-    source: data.source ?? null,
-    providerId: data.providerId ?? null,
-    providerLabel: data.providerLabel ?? null,
-    width: data.width,
-    height: data.height,
-    previewHash: data.previewHash ?? null,
-    previewSize: data.previewSize ? { width: data.previewSize.width, height: data.previewSize.height } : null,
-    opacity: data.opacity,
-    visible: data.visible,
-  }
-}
-
 function clonePlanningTerrainDemHeightmapEncoding(data: PlanningTerrainDemHeightmapEncoding | null | undefined): PlanningTerrainDemHeightmapEncoding | null {
   if (!data) {
     return null
@@ -451,25 +427,22 @@ function clonePlanningTerrainDemData(data: PlanningTerrainDemData | null | undef
     heightmapEncoding: clonePlanningTerrainDemHeightmapEncoding(data.heightmapEncoding ?? null),
     previewHash: data.previewHash ?? null,
     previewSize: data.previewSize ? { width: data.previewSize.width, height: data.previewSize.height } : null,
-    orthophoto: clonePlanningTerrainOrthophotoData(data.orthophoto ?? null),
   }
 }
 
 function buildTerrainSnapshot(): PlanningTerrainData | null {
-  if (!planningTerrain.value) {
+  const dem = clonePlanningTerrainDemData(planningTerrain.value.dem ?? null)
+  if (!dem) {
     return null
   }
   return {
-    ...planningTerrain.value,
-    dem: clonePlanningTerrainDemData(planningTerrain.value.dem ?? null),
+    version: 1,
+    dem,
   }
 }
 
 function isTerrainEmptyForSnapshot(snapshot: PlanningTerrainData | null | undefined): boolean {
   if (!snapshot) return true
-  if ((snapshot.controlPoints && snapshot.controlPoints.length > 0) || (snapshot.ridgeValleyLines && snapshot.ridgeValleyLines.length > 0)) return false
-  if (snapshot.overrides && snapshot.overrides.cells && Object.keys(snapshot.overrides.cells).length > 0) return false
-  if (snapshot.noise && snapshot.noise.enabled) return false
   if (snapshot.dem && (
     typeof snapshot.dem.sourceFileHash === 'string'
     || typeof snapshot.dem.previewHash === 'string'
@@ -477,19 +450,14 @@ function isTerrainEmptyForSnapshot(snapshot: PlanningTerrainData | null | undefi
     || snapshot.dem.worldBounds
     || snapshot.dem.geographicBounds
     || snapshot.dem.projectedBounds
-    || snapshot.dem.orthophoto
   )) return false
   return true
 }
 
-// Terrain brush removed: Terrain layer uses polygon/rectangle tools only.
-
-// Temporary guides that follow the mouse (not added to the persistent guides list)
-const hoverGuideX = ref<PlanningGuide | null>(null)
-const hoverGuideY = ref<PlanningGuide | null>(null)
-// Keep list display order consistent with canvas stacking: upper layers appear earlier in the list.
 // The canvas uses DOM stacking order (later array elements are on top), so the list needs to be shown in reverse.
 const planningImagesForList = computed(() => [...planningImages.value].reverse())
+const hoverGuideX = ref<PlanningGuide | null>(null)
+const hoverGuideY = ref<PlanningGuide | null>(null)
 const activeImageId = computed<string | null>({
   get: () => (activeListItem.value?.type === 'image' ? activeListItem.value.id : null),
   set: (v: string | null) => {
@@ -507,12 +475,8 @@ const alignModeActive = ref(false)
 const uploadError = ref<string | null>(null)
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const demFileInputRef = ref<HTMLInputElement | null>(null)
-const orthophotoFileInputRef = ref<HTMLInputElement | null>(null)
-const autoImageryBusy = ref(false)
-const autoImageryError = ref<string | null>(null)
 const demImportError = ref<string | null>(null)
 const planningDemPreviewUrl = ref<string | null>(null)
-const planningOrthophotoPreviewUrl = ref<string | null>(null)
 const demHydrationToken = ref(0)
 const imageScaleCalibrationDraft = ref<PlanningImageScaleCalibrationDraft | null>(null)
 const imageScaleCalibrationDialogOpen = ref(false)
@@ -1199,47 +1163,10 @@ function handleRulerGuideDrag(event: RulerGuideDragEvent) {
 function buildPlanningSnapshot(): PlanningSceneData {
   return {
     version: 1 as const,
-    activeLayerId: activeLayerId.value ?? undefined,
-    layers: layers.value.map((layer) => ({
-      id: layer.id,
-      name: layer.name,
-      kind: layer.kind,
-      color: layer.color,
-      visible: layer.visible,
-      locked: layer.locked,
-      conversionEnabled: layer.conversionEnabled !== false,
-    })),
-    viewTransform: {
-      scale: viewTransform.scale,
-      offset: { x: viewTransform.offset.x, y: viewTransform.offset.y },
-    },
-    guides: planningGuides.value.map((g) => ({ id: g.id, axis: g.axis, value: g.value })),
+    layers: [],
+    polygons: [],
+    polylines: [],
     terrain: buildTerrainSnapshot() ?? undefined,
-    polygons: polygons.value.map((poly) => ({
-      id: poly.id,
-      name: poly.name,
-      layerId: poly.layerId,
-      points: poly.points.map((p) => ({ x: p.x, y: p.y })),
-      terrainHeightMeters: getLayerKind(poly.layerId) === 'terrain'
-        ? roundTerrainHeight(poly.terrainHeightMeters)
-        : undefined,
-      terrainBlendMeters: getLayerKind(poly.layerId) === 'terrain'
-        ? roundTerrainBlend(poly.terrainBlendMeters)
-        : undefined,
-      terrainWaterPresetId: getLayerKind(poly.layerId) === 'terrain'
-        ? normalizeTerrainWaterPresetId(poly.terrainWaterPresetId)
-        : undefined,
-      airWallEnabled: poly.airWallEnabled ? true : undefined,
-    })),
-    polylines: polylines.value.map((line) => ({
-      id: line.id,
-      name: line.name,
-      layerId: line.layerId,
-      points: line.points.map((p) => ({ id: p.id, x: p.x, y: p.y })),
-      waypoints: undefined,
-      airWallEnabled: line.airWallEnabled ? true : undefined,
-      scatter: undefined,
-    })),
     images: planningImages.value.map((img) => ({
       id: img.id,
       name: img.name,
@@ -1263,9 +1190,6 @@ function buildPlanningSnapshot(): PlanningSceneData {
 function isPlanningSnapshotEmpty(snapshot: ReturnType<typeof buildPlanningSnapshot>) {
   return (
     snapshot.images.length === 0
-    && snapshot.polygons.length === 0
-    && snapshot.polylines.length === 0
-    && (!snapshot.guides || snapshot.guides.length === 0)
     && (!snapshot.terrain || isTerrainEmptyForSnapshot(snapshot.terrain))
   )
 }
@@ -1344,9 +1268,6 @@ async function handleConvertTo3DScene() {
   persistPlanningToSceneIfDirty({ force: true })
 
   const planningData = sceneStore.planningData
-  const convertedLayerIds = planningData?.layers
-    .filter((layer) => layer.conversionEnabled !== false)
-    .map((layer) => layer.id) ?? []
   convertingTo3DScene.value = true
 
   const abortController = new AbortController()
@@ -1434,11 +1355,6 @@ async function handleConvertTo3DScene() {
           })
         },
       })
-
-      if (convertedLayerIds.length) {
-        setLayersConversionEnabled(convertedLayerIds, false)
-        persistPlanningToSceneIfDirty({ force: true })
-      }
     }
 
     updateConversionProgress({
@@ -1496,23 +1412,10 @@ async function handleConvertTo3DScene() {
 
 function resetPlanningState() {
   planningImages.value = []
-  planningGuides.value = []
-  guideDraft.value = null
   planningTerrain.value = createDefaultPlanningTerrain()
   demImportError.value = null
   planningDemPreviewUrl.value = null
-  if (planningOrthophotoPreviewUrl.value) {
-    try { URL.revokeObjectURL(planningOrthophotoPreviewUrl.value) } catch {}
-  }
-  planningOrthophotoPreviewUrl.value = null
-  polygons.value = []
-  polylines.value = []
-  polygonDraftPoints.value = []
-  clearLineDraft()
-  selectedFeature.value = null
   activeImageId.value = null
-  layers.value = layerPresets.map((layer) => ({ ...layer }))
-  activeLayerId.value = layers.value[0]?.id ?? 'terrain-layer'
   viewTransform.scale = 1
   viewTransform.offset.x = 0
   viewTransform.offset.y = 0
@@ -1725,9 +1628,6 @@ function normalizePlanningTerrain(raw: unknown): PlanningTerrainData {
     if (Math.abs(centerX) > 1e-6 || Math.abs(centerY) > 1e-6) {
       throw new Error('DEM config validation failed: worldBounds must stay centered on the world origin.')
     }
-    const orthophoto = dem.orthophoto && typeof dem.orthophoto === 'object'
-      ? dem.orthophoto as Record<string, unknown>
-      : null
     const rawMinElevation = Number.isFinite(Number(dem.rawMinElevation)) ? Number(dem.rawMinElevation) : undefined
     const recommendedAppliedMinElevation = Number.isFinite(Number(dem.recommendedAppliedMinElevation)) ? Number(dem.recommendedAppliedMinElevation) : undefined
     next.dem = {
@@ -1773,30 +1673,6 @@ function normalizePlanningTerrain(raw: unknown): PlanningTerrainData {
         ? {
             width: Math.max(0, Math.trunc(Number((dem.previewSize as Record<string, unknown> | null | undefined)?.width))),
             height: Math.max(0, Math.trunc(Number((dem.previewSize as Record<string, unknown> | null | undefined)?.height))),
-          }
-        : undefined,
-      orthophoto: orthophoto
-        ? {
-            version: 1,
-            sourceFileHash: typeof orthophoto.sourceFileHash === 'string' ? orthophoto.sourceFileHash : undefined,
-            filename: typeof orthophoto.filename === 'string' ? orthophoto.filename : null,
-            mimeType: typeof orthophoto.mimeType === 'string' ? orthophoto.mimeType : null,
-            source: orthophoto.source === 'auto-imagery' || orthophoto.source === 'manual-upload'
-              ? orthophoto.source
-              : null,
-            providerId: typeof orthophoto.providerId === 'string' ? orthophoto.providerId : null,
-            providerLabel: typeof orthophoto.providerLabel === 'string' ? orthophoto.providerLabel : null,
-            width: Number.isFinite(Number(orthophoto.width)) ? Math.max(0, Math.trunc(Number(orthophoto.width))) : undefined,
-            height: Number.isFinite(Number(orthophoto.height)) ? Math.max(0, Math.trunc(Number(orthophoto.height))) : undefined,
-            previewHash: typeof orthophoto.previewHash === 'string' ? orthophoto.previewHash : null,
-            previewSize: Number.isFinite(Number((orthophoto.previewSize as Record<string, unknown> | null | undefined)?.width)) && Number.isFinite(Number((orthophoto.previewSize as Record<string, unknown> | null | undefined)?.height))
-              ? {
-                  width: Math.max(0, Math.trunc(Number((orthophoto.previewSize as Record<string, unknown> | null | undefined)?.width))),
-                  height: Math.max(0, Math.trunc(Number((orthophoto.previewSize as Record<string, unknown> | null | undefined)?.height))),
-                }
-              : undefined,
-            opacity: Number.isFinite(Number(orthophoto.opacity)) ? Number(orthophoto.opacity) : undefined,
-            visible: typeof orthophoto.visible === 'boolean' ? orthophoto.visible : undefined,
           }
         : undefined,
     }
@@ -5491,25 +5367,12 @@ function handleDemUploadClick() {
   demFileInputRef.value?.click()
 }
 
-function handleOrthophotoUploadClick() {
-  orthophotoFileInputRef.value?.click()
-}
-
 function handleDemFileChange(event: Event) {
   const input = event.target as HTMLInputElement | null
   if (!input?.files?.length) {
     return
   }
   void loadPlanningDemFile(input.files[0]!)
-  input.value = ''
-}
-
-function handleOrthophotoFileChange(event: Event) {
-  const input = event.target as HTMLInputElement | null
-  if (!input?.files?.length) {
-    return
-  }
-  void loadPlanningOrthophotoFile(input.files[0]!)
   input.value = ''
 }
 
@@ -5522,29 +5385,13 @@ function clearPlanningDemImport() {
     dem: null,
   }
   demImportError.value = null
-  autoImageryError.value = null
-  autoImageryBusy.value = false
   planningDemPreviewUrl.value = null
-  if (planningOrthophotoPreviewUrl.value) {
-    try { URL.revokeObjectURL(planningOrthophotoPreviewUrl.value) } catch {}
-  }
-  planningOrthophotoPreviewUrl.value = null
   markPlanningDirty()
-}
-
-function isPlanningOrthophotoFile(file: File): boolean {
-  const name = file.name.toLowerCase()
-  return file.type.startsWith('image/') || name.endsWith('.png') || name.endsWith('.jpg') || name.endsWith('.jpeg') || name.endsWith('.webp')
 }
 
 async function loadPlanningDemFile(file: File) {
   demImportError.value = null
-  autoImageryError.value = null
   try {
-    if (planningOrthophotoPreviewUrl.value) {
-      try { URL.revokeObjectURL(planningOrthophotoPreviewUrl.value) } catch {}
-    }
-    planningOrthophotoPreviewUrl.value = null
     const validation = validatePlanningDemImport(file)
     const result = await parsePlanningDemFile(file, buildPlanningDemParseOptions(planningTerrain.value.dem, validation))
     await storePlanningDemBlobByHash(result.sourceFileHash, file)
@@ -5558,76 +5405,6 @@ async function loadPlanningDemFile(file: File) {
     markPlanningDirty()
   } catch (error) {
     demImportError.value = error instanceof Error ? error.message : 'Failed to import DEM file.'
-  }
-}
-
-async function loadPlanningOrthophotoFile(file: File) {
-  demImportError.value = null
-  autoImageryError.value = null
-  try {
-    if (!isPlanningOrthophotoFile(file)) {
-      throw new Error('Only image files are supported for orthophoto import.')
-    }
-    const buffer = await file.arrayBuffer()
-    const hash = await computeSha256Hex(buffer)
-    await storePlanningDemBlobByHash(hash, file)
-    const image = await loadImageFromFile(file)
-    const nextOrthophoto: PlanningTerrainOrthophotoData = {
-      version: 1,
-      sourceFileHash: hash,
-      filename: file.name,
-      mimeType: file.type || null,
-      source: 'manual-upload',
-      providerId: null,
-      providerLabel: null,
-      width: image.naturalWidth,
-      height: image.naturalHeight,
-      previewHash: hash,
-      previewSize: { width: image.naturalWidth, height: image.naturalHeight },
-      opacity: 1,
-      visible: true,
-    }
-    const currentDem = planningTerrain.value.dem ?? {
-      version: 1,
-      sourceFileHash: null,
-      filename: null,
-      mimeType: null,
-      width: undefined,
-      height: undefined,
-      minElevation: null,
-      maxElevation: null,
-      sampleStepMeters: null,
-      sourceSampleStepMeters: null,
-      appliedSampleStepMeters: null,
-      targetChunkResolution: null,
-      resolutionMode: null,
-      autoGenerateBaseTexture: true,
-      baseTextureMaxResolution: 3072,
-      baseTexturePixelsPerMeter: 2.5,
-      baseTextureVegetationBoost: 1,
-      baseTextureBasinVariationBoost: 1,
-      projectedCrs: null,
-      geographicBounds: null,
-      worldBounds: null,
-      heightmapEncoding: null,
-      previewHash: null,
-      previewSize: null,
-      orthophoto: null,
-    }
-    planningTerrain.value = {
-      ...planningTerrain.value,
-      dem: {
-        ...currentDem,
-        orthophoto: nextOrthophoto,
-      },
-    }
-    if (planningOrthophotoPreviewUrl.value) {
-      try { URL.revokeObjectURL(planningOrthophotoPreviewUrl.value) } catch {}
-    }
-    planningOrthophotoPreviewUrl.value = URL.createObjectURL(file)
-    markPlanningDirty()
-  } catch (error) {
-    demImportError.value = error instanceof Error ? error.message : 'Failed to import orthophoto file.'
   }
 }
 
@@ -6175,6 +5952,18 @@ void closeDialog
 void toggleAlignMode
 void handleDeleteButtonClick
 void reorderPlanningImages
+void roundTerrainHeight
+void roundTerrainBlend
+void visibleToolbarButtons
+void activeToolbarTool
+void setLayersConversionEnabled
+void handleRulerGuideDrag
+void terrainCellSizeRecommendationReason
+void applyRecommendedTerrainCellSize
+void getGuidesOverlayStyle
+void getGuideLineStyle
+void loadImageFromFile
+void terrainCellSizeModel
 // Keep terrain-related symbols to avoid unused-local errors (terrain panel removed)
 void terrainContourHeightModel
 void terrainContourBlendModel
@@ -6270,17 +6059,6 @@ async function hydratePlanningDemResources() {
     if (parsed.preview?.dataUrl) {
       planningDemPreviewUrl.value = parsed.preview.dataUrl
     }
-
-    const orthophotoHash = terrainDem.orthophoto?.sourceFileHash
-    if (orthophotoHash) {
-      const orthophotoBlob = await loadPlanningDemBlobByHash(orthophotoHash)
-      if (orthophotoBlob && demHydrationToken.value === token) {
-        if (planningOrthophotoPreviewUrl.value) {
-          try { URL.revokeObjectURL(planningOrthophotoPreviewUrl.value) } catch {}
-        }
-        planningOrthophotoPreviewUrl.value = URL.createObjectURL(orthophotoBlob)
-      }
-    }
   } catch (error) {
     demImportError.value = error instanceof Error ? error.message : 'Failed to hydrate planning DEM resources.'
     console.warn('Failed to hydrate planning DEM resources', error)
@@ -6308,9 +6086,6 @@ onBeforeUnmount(() => {
       }
     }
   } catch {}
-  if (planningOrthophotoPreviewUrl.value) {
-    try { URL.revokeObjectURL(planningOrthophotoPreviewUrl.value) } catch {}
-  }
   if (planningImageImportDraft.value) {
     try { URL.revokeObjectURL(planningImageImportDraft.value.previewUrl) } catch {}
   }
@@ -6373,24 +6148,11 @@ onBeforeUnmount(() => {
                 Current source: {{ currentDemUsesHeightmapImage ? 'Image heightmap' : 'GeoTIFF DEM' }}
               </div>
               <div class="dem-import-panel__hint">
-                Import a GeoTIFF DEM or grayscale PNG heightmap, then choose it here for terrain conversion.
+                Import a GeoTIFF DEM or grayscale PNG heightmap, then use the property panel to tune the conversion settings.
               </div>
               <div class="dem-import-panel__actions">
-                <v-btn
-                  block
-                  variant="tonal"
-                  color="primary"
-                  @click="handleDemUploadClick"
-                >
+                <v-btn block variant="tonal" color="primary" @click="handleDemUploadClick">
                   Import DEM
-                </v-btn>
-                <v-btn
-                  block
-                  variant="tonal"
-                  color="secondary"
-                  @click="handleOrthophotoUploadClick"
-                >
-                  Import Orthophoto
                 </v-btn>
               </div>
               <input
@@ -6399,13 +6161,6 @@ onBeforeUnmount(() => {
                 accept=".tif,.tiff,.png"
                 class="sr-only"
                 @change="handleDemFileChange"
-              >
-              <input
-                ref="orthophotoFileInputRef"
-                type="file"
-                accept=".jpg,.jpeg,.png,.webp,.tif,.tiff"
-                class="sr-only"
-                @change="handleOrthophotoFileChange"
               >
               <v-list density="compact" class="dem-layer-list">
                 <v-list-item v-if="selectedDem" class="layer-item" @click="handleDemLayerSelect">
@@ -6418,23 +6173,23 @@ onBeforeUnmount(() => {
                   <div class="dem-import-panel__empty">No DEM imported yet.</div>
                 </v-list-item>
               </v-list>
-              <div v-if="planningDemPreviewUrl || planningOrthophotoPreviewUrl" class="dem-import-panel__preview">
-                <img v-if="planningDemPreviewUrl" :src="planningDemPreviewUrl" alt="DEM preview">
-                <img v-if="planningOrthophotoPreviewUrl" :src="planningOrthophotoPreviewUrl" alt="Orthophoto preview">
+              <div v-if="planningDemPreviewUrl" class="dem-import-panel__preview">
+                <img :src="planningDemPreviewUrl" alt="DEM preview">
               </div>
             </div>
           </section>
+
           <section class="image-layer-panel">
             <header>
               <div class="panel-header">
-                <h3>Planning Layers</h3>
+                <h3>Planning Images</h3>
                 <v-btn
                   icon
                   size="small"
                   variant="text"
                   color="primary"
                   draggable="true"
-                  title="Upload planning map"
+                  title="Upload planning image"
                   @click.stop="handleUploadClick"
                   @dragstart="handleUploadIconDragStart"
                 >
@@ -6488,31 +6243,13 @@ onBeforeUnmount(() => {
                   </v-tooltip>
                 </div>
                 <template #append>
-                  <v-btn
-                    icon
-                    size="small"
-                    variant="text"
-                    color="error"
-                    @click.stop="handleImageLayerDelete(image.id)"
-                  >
+                  <v-btn icon size="small" variant="text" color="error" @click.stop="handleImageLayerDelete(image.id)">
                     <v-icon>mdi-delete-outline</v-icon>
                   </v-btn>
-                  <v-btn
-                    icon
-                    size="small"
-                    variant="text"
-                    :color="image.locked ? 'primary' : 'grey'"
-                    @click.stop="handleImageLayerLockToggle(image.id)"
-                  >
+                  <v-btn icon size="small" variant="text" :color="image.locked ? 'primary' : 'grey'" @click.stop="handleImageLayerLockToggle(image.id)">
                     <v-icon>{{ image.locked ? 'mdi-lock-outline' : 'mdi-lock-open-outline' }}</v-icon>
                   </v-btn>
-                  <v-btn
-                    icon
-                    size="small"
-                    variant="text"
-                    :color="image.visible ? 'primary' : 'grey'"
-                    @click.stop="handleImageLayerToggle(image.id)"
-                  >
+                  <v-btn icon size="small" variant="text" :color="image.visible ? 'primary' : 'grey'" @click.stop="handleImageLayerToggle(image.id)">
                     <v-icon>{{ image.visible ? 'mdi-eye-outline' : 'mdi-eye-off-outline' }}</v-icon>
                   </v-btn>
                 </template>
@@ -6524,100 +6261,71 @@ onBeforeUnmount(() => {
         <main class="editor-panel">
           <div class="toolbar">
             <div class="tool-buttons">
-              <v-tooltip
-                v-for="button in visibleToolbarButtons"
-                :key="button.tool"
-                :text="button.tooltip"
-                location="bottom"
-              >
+              <v-tooltip text="Select" location="bottom">
                 <template #activator="{ props }">
-                  <v-btn
-                    v-bind="props"
-                    :color="activeToolbarTool === button.tool ? 'primary' : undefined"
-                    variant="tonal"
-                    density="comfortable"
-                    class="tool-button"
-                    :disabled="button.tool === 'calibrate' && !canUseImageScaleCalibration"
-                    @click="handleToolSelect(button.tool)"
-                  >
-                    <v-icon>{{ button.icon }}</v-icon>
+                  <v-btn v-bind="props" :color="currentTool === 'select' ? 'primary' : undefined" variant="tonal" density="comfortable" class="tool-button" @click="handleToolSelect('select')">
+                    <v-icon>mdi-cursor-default-outline</v-icon>
                   </v-btn>
                 </template>
               </v-tooltip>
-
+              <v-tooltip text="Pan" location="bottom">
+                <template #activator="{ props }">
+                  <v-btn v-bind="props" :color="currentTool === 'pan' ? 'primary' : undefined" variant="tonal" density="comfortable" class="tool-button" @click="handleToolSelect('pan')">
+                    <v-icon>mdi-hand-back-right-outline</v-icon>
+                  </v-btn>
+                </template>
+              </v-tooltip>
+              <v-tooltip text="Align marker" location="bottom">
+                <template #activator="{ props }">
+                  <v-btn v-bind="props" :color="currentTool === 'align-marker' ? 'primary' : undefined" variant="tonal" density="comfortable" class="tool-button" :disabled="!canUseImageScaleCalibration && !selectedImage" @click="handleToolSelect('align-marker')">
+                    <v-icon>mdi-crosshairs-gps</v-icon>
+                  </v-btn>
+                </template>
+              </v-tooltip>
+              <v-tooltip text="Scale calibration" location="bottom">
+                <template #activator="{ props }">
+                  <v-btn v-bind="props" :color="currentTool === 'calibrate' ? 'primary' : undefined" variant="tonal" density="comfortable" class="tool-button" :disabled="!canUseImageScaleCalibration" @click="handleToolSelect('calibrate')">
+                    <v-icon>mdi-ruler</v-icon>
+                  </v-btn>
+                </template>
+              </v-tooltip>
               <v-tooltip text="Convert to 3D Scene" location="bottom">
                 <template #activator="{ props }">
-                  <v-btn
-                    v-bind="props"
-                    variant="tonal"
-                    density="comfortable"
-                    class="tool-button"
-                    :disabled="convertingTo3DScene"
-                    @click="handleConvertTo3DScene"
-                  >
+                  <v-btn v-bind="props" variant="tonal" density="comfortable" class="tool-button" :disabled="convertingTo3DScene" @click="handleConvertTo3DScene">
                     <v-icon>mdi-cube-outline</v-icon>
                   </v-btn>
                 </template>
               </v-tooltip>
-
             </div>
 
             <div class="toolbar-right">
               <div class="zoom-control">
                 <v-tooltip text="Zoom Out" location="bottom">
                   <template #activator="{ props }">
-                    <v-btn
-                      v-bind="props"
-                      variant="tonal"
-                      density="comfortable"
-                      class="tool-button tool-button--zoom"
-                      @click="handleZoomOutView"
-                    >
+                    <v-btn v-bind="props" variant="tonal" density="comfortable" class="tool-button tool-button--zoom" @click="handleZoomOutView">
                       <v-icon>mdi-magnify-minus-outline</v-icon>
                     </v-btn>
                   </template>
                 </v-tooltip>
-
                 <div class="zoom-value">{{ formatZoomLabel(viewTransform.scale) }}</div>
-
                 <v-tooltip text="Zoom In" location="bottom">
                   <template #activator="{ props }">
-                    <v-btn
-                      v-bind="props"
-                      variant="tonal"
-                      density="comfortable"
-                      class="tool-button tool-button--zoom"
-                      @click="handleZoomInView"
-                    >
+                    <v-btn v-bind="props" variant="tonal" density="comfortable" class="tool-button tool-button--zoom" @click="handleZoomInView">
                       <v-icon>mdi-magnify-plus-outline</v-icon>
                     </v-btn>
                   </template>
                 </v-tooltip>
               </div>
-
               <v-tooltip text="Fit View" location="bottom">
                 <template #activator="{ props }">
-                  <v-btn
-                    v-bind="props"
-                    variant="tonal"
-                    density="comfortable"
-                    class="tool-button"
-                    @click="handleFitView"
-                  >
+                  <v-btn v-bind="props" variant="tonal" density="comfortable" class="tool-button" @click="handleFitView">
                     <v-icon>mdi-fit-to-screen-outline</v-icon>
                   </v-btn>
                 </template>
               </v-tooltip>
-
               <v-tooltip text="Reset View" location="bottom">
                 <template #activator="{ props }">
-                  <v-btn
-                    v-bind="props"
-                    variant="tonal"
-                    density="comfortable"
-                    class="tool-button"
-                    @click="handleResetView"
-                  >
+                  <v-btn v-bind="props" variant="tonal" density="comfortable" class="tool-button" @click="handleResetView">
                     <v-icon>mdi-backup-restore</v-icon>
                   </v-btn>
                 </template>
@@ -6634,39 +6342,12 @@ onBeforeUnmount(() => {
             @wheel.prevent="handleWheel"
             @contextmenu.prevent="handleEditorContextMenu"
           >
-            <PlanningRulers
-              :viewport-width="editorRect?.width ?? 0"
-              :viewport-height="editorRect?.height ?? 0"
-              :render-scale="renderScale"
-              :center-offset="stageCenterOffset"
-              :offset="viewTransform.offset"
-              :canvas-size="effectiveCanvasSize"
-              :thickness="PLANNING_RULER_THICKNESS_PX"
-              @guide-drag="handleRulerGuideDrag"
-            />
             <div class="canvas-viewport">
               <div class="canvas-stage" :style="stageStyle">
-                <div v-if="planningDemPreviewUrl || planningOrthophotoPreviewUrl" class="dem-preview-stage">
-                  <img v-if="planningDemPreviewUrl" class="dem-preview-stage__image dem-preview-stage__image--dem" :src="planningDemPreviewUrl" alt="DEM stage preview">
-                  <img v-if="planningOrthophotoPreviewUrl" class="dem-preview-stage__image dem-preview-stage__image--orthophoto" :src="planningOrthophotoPreviewUrl" alt="Orthophoto stage preview">
+                <div v-if="planningDemPreviewUrl" class="dem-preview-stage">
+                  <img class="dem-preview-stage__image dem-preview-stage__image--dem" :src="planningDemPreviewUrl" alt="DEM stage preview">
                 </div>
 
-                <div class="planning-guides-overlay" :style="getGuidesOverlayStyle()" aria-hidden="true">
-                  <div
-                    v-for="guide in planningGuides"
-                    :key="guide.id"
-                    class="planning-guide-line"
-                    :class="`planning-guide-line--${guide.axis}`"
-                    :style="getGuideLineStyle(guide)"
-                  />
-                  <div
-                    v-if="guideDraft"
-                    class="planning-guide-line planning-guide-line--draft"
-                    :class="`planning-guide-line--${guideDraft.axis}`"
-                    :style="getGuideLineStyle(guideDraft)"
-                  />
-                  <!-- hover guides removed -->
-                </div>
                 <div
                   v-for="(image, index) in planningImages"
                   :key="image.id"
@@ -6680,117 +6361,85 @@ onBeforeUnmount(() => {
                   :style="getImageLayerStyle(image, index)"
                   @pointerdown="handleImageLayerPointerDown(image.id, $event as PointerEvent)"
                 >
-                  <img
-                    class="planning-image-img"
-                    :src="image.url"
-                    :alt="image.name"
-                    draggable="false"
-                  >
-                  <div
-                    v-if="activeImageId === image.id"
-                    class="planning-image__frame"
-                    aria-hidden="false"
-                  >
+                  <img class="planning-image-img" :src="image.url" :alt="image.name" draggable="false">
+                  <div v-if="activeImageId === image.id" class="planning-image__frame" aria-hidden="false">
                     <div class="planning-image__border" />
-                    <div
-                      class="image-resize-handle image-resize-handle--nw"
-                      @pointerdown.stop="handleImageResizePointerDown(image.id, 'nw', $event as PointerEvent)"
-                    />
-                    <div
-                      class="image-resize-handle image-resize-handle--n"
-                      @pointerdown.stop="handleImageResizePointerDown(image.id, 'n', $event as PointerEvent)"
-                    />
-                    <div
-                      class="image-resize-handle image-resize-handle--ne"
-                      @pointerdown.stop="handleImageResizePointerDown(image.id, 'ne', $event as PointerEvent)"
-                    />
-                    <div
-                      class="image-resize-handle image-resize-handle--e"
-                      @pointerdown.stop="handleImageResizePointerDown(image.id, 'e', $event as PointerEvent)"
-                    />
-                    <div
-                      class="image-resize-handle image-resize-handle--se"
-                      @pointerdown.stop="handleImageResizePointerDown(image.id, 'se', $event as PointerEvent)"
-                    />
-                    <div
-                      class="image-resize-handle image-resize-handle--s"
-                      @pointerdown.stop="handleImageResizePointerDown(image.id, 's', $event as PointerEvent)"
-                    />
-                    <div
-                      class="image-resize-handle image-resize-handle--sw"
-                      @pointerdown.stop="handleImageResizePointerDown(image.id, 'sw', $event as PointerEvent)"
-                    />
-                    <div
-                      class="image-resize-handle image-resize-handle--w"
-                      @pointerdown.stop="handleImageResizePointerDown(image.id, 'w', $event as PointerEvent)"
-                    />
+                    <div class="image-resize-handle image-resize-handle--nw" @pointerdown.stop="handleImageResizePointerDown(image.id, 'nw', $event as PointerEvent)" />
+                    <div class="image-resize-handle image-resize-handle--n" @pointerdown.stop="handleImageResizePointerDown(image.id, 'n', $event as PointerEvent)" />
+                    <div class="image-resize-handle image-resize-handle--ne" @pointerdown.stop="handleImageResizePointerDown(image.id, 'ne', $event as PointerEvent)" />
+                    <div class="image-resize-handle image-resize-handle--e" @pointerdown.stop="handleImageResizePointerDown(image.id, 'e', $event as PointerEvent)" />
+                    <div class="image-resize-handle image-resize-handle--se" @pointerdown.stop="handleImageResizePointerDown(image.id, 'se', $event as PointerEvent)" />
+                    <div class="image-resize-handle image-resize-handle--s" @pointerdown.stop="handleImageResizePointerDown(image.id, 's', $event as PointerEvent)" />
+                    <div class="image-resize-handle image-resize-handle--sw" @pointerdown.stop="handleImageResizePointerDown(image.id, 'sw', $event as PointerEvent)" />
+                    <div class="image-resize-handle image-resize-handle--w" @pointerdown.stop="handleImageResizePointerDown(image.id, 'w', $event as PointerEvent)" />
                   </div>
                 </div>
 
-                <div
-                  v-for="image in planningImages"
-                  :key="`${image.id}-align-marker`"
-                  class="align-marker"
-                  :class="{ active: activeImageId === image.id }"
-                  :style="getAlignMarkerStyle(image)"
-                  @pointerdown="handleAlignMarkerPointerDown(image.id, $event as PointerEvent)"
-                />
+                <template v-for="image in planningImages" :key="`${image.id}-align-marker`">
+                  <div
+                    v-if="image.alignMarker"
+                    class="align-marker"
+                    :class="{ active: activeImageId === image.id }"
+                    :style="getAlignMarkerStyle(image)"
+                    @pointerdown="handleAlignMarkerPointerDown(image.id, $event as PointerEvent)"
+                  />
+                </template>
+
+                <svg
+                  v-if="imageScaleCalibrationScreenPreview"
+                  class="vector-overlay vector-overlay--calibration"
+                  :width="editorRect?.width ?? 0"
+                  :height="editorRect?.height ?? 0"
+                  :viewBox="`0 0 ${editorRect?.width ?? 0} ${editorRect?.height ?? 0}`"
+                  aria-hidden="true"
+                >
+                  <g>
+                    <line
+                      class="planning-scale-calibration"
+                      :x1="imageScaleCalibrationScreenPreview.start.x"
+                      :y1="imageScaleCalibrationScreenPreview.start.y"
+                      :x2="imageScaleCalibrationScreenPreview.current.x"
+                      :y2="imageScaleCalibrationScreenPreview.current.y"
+                      vector-effect="non-scaling-stroke"
+                    />
+                    <circle
+                      class="planning-scale-calibration__handle"
+                      :cx="imageScaleCalibrationScreenPreview.start.x"
+                      :cy="imageScaleCalibrationScreenPreview.start.y"
+                      :r="6"
+                      vector-effect="non-scaling-stroke"
+                    />
+                    <circle
+                      class="planning-scale-calibration__handle"
+                      :cx="imageScaleCalibrationScreenPreview.current.x"
+                      :cy="imageScaleCalibrationScreenPreview.current.y"
+                      :r="6"
+                      vector-effect="non-scaling-stroke"
+                    />
+                    <text
+                      class="planning-scale-calibration__label"
+                      :x="(imageScaleCalibrationScreenPreview.start.x + imageScaleCalibrationScreenPreview.current.x) * 0.5"
+                      :y="(imageScaleCalibrationScreenPreview.start.y + imageScaleCalibrationScreenPreview.current.y) * 0.5 - 12"
+                    >
+                      {{ imageScaleCalibrationScreenPreview.pixelLength.toFixed(1) }} px
+                    </text>
+                  </g>
+                </svg>
+
+                <div class="canvas-center-cross" aria-hidden="true">
+                  <div class="canvas-center-cross__line canvas-center-cross__line--horizontal" />
+                  <div class="canvas-center-cross__line canvas-center-cross__line--vertical" />
+                  <div class="canvas-center-cross__dot" />
+                </div>
               </div>
 
-              <svg
-                v-if="imageScaleCalibrationScreenPreview"
-                class="vector-overlay vector-overlay--calibration"
-                :width="editorRect?.width ?? 0"
-                :height="editorRect?.height ?? 0"
-                :viewBox="`0 0 ${editorRect?.width ?? 0} ${editorRect?.height ?? 0}`"
-                aria-hidden="true"
-              >
-                <g>
-                  <line
-                    class="planning-scale-calibration"
-                    :x1="imageScaleCalibrationScreenPreview.start.x"
-                    :y1="imageScaleCalibrationScreenPreview.start.y"
-                    :x2="imageScaleCalibrationScreenPreview.current.x"
-                    :y2="imageScaleCalibrationScreenPreview.current.y"
-                    vector-effect="non-scaling-stroke"
-                  />
-                  <circle
-                    class="planning-scale-calibration__handle"
-                    :cx="imageScaleCalibrationScreenPreview.start.x"
-                    :cy="imageScaleCalibrationScreenPreview.start.y"
-                    :r="6"
-                    vector-effect="non-scaling-stroke"
-                  />
-                  <circle
-                    class="planning-scale-calibration__handle"
-                    :cx="imageScaleCalibrationScreenPreview.current.x"
-                    :cy="imageScaleCalibrationScreenPreview.current.y"
-                    :r="6"
-                    vector-effect="non-scaling-stroke"
-                  />
-                  <text
-                    class="planning-scale-calibration__label"
-                    :x="(imageScaleCalibrationScreenPreview.start.x + imageScaleCalibrationScreenPreview.current.x) * 0.5"
-                    :y="(imageScaleCalibrationScreenPreview.start.y + imageScaleCalibrationScreenPreview.current.y) * 0.5 - 12"
-                  >
-                    {{ imageScaleCalibrationScreenPreview.pixelLength.toFixed(1) }} px
-                  </text>
-                </g>
-              </svg>
-
-              <div class="canvas-center-cross" aria-hidden="true">
-                <div class="canvas-center-cross__line canvas-center-cross__line--horizontal" />
-                <div class="canvas-center-cross__line canvas-center-cross__line--vertical" />
-                <div class="canvas-center-cross__dot" />
-              </div>
-            </div>
-
-            <div v-if="scaleBarSpec.label" class="scale-bar-overlay" aria-hidden="true">
-              <div class="scale-bar">
-                <div class="scale-bar__label">{{ scaleBarSpec.label }}</div>
-                <div class="scale-bar__ruler" :style="{ width: `${scaleBarSpec.pixels}px` }">
-                  <div class="scale-bar__tick scale-bar__tick--left" />
-                  <div class="scale-bar__tick scale-bar__tick--right" />
+              <div v-if="scaleBarSpec.label" class="scale-bar-overlay" aria-hidden="true">
+                <div class="scale-bar">
+                  <div class="scale-bar__label">{{ scaleBarSpec.label }}</div>
+                  <div class="scale-bar__ruler" :style="{ width: `${scaleBarSpec.pixels}px` }">
+                    <div class="scale-bar__tick scale-bar__tick--left" />
+                    <div class="scale-bar__tick scale-bar__tick--right" />
+                  </div>
                 </div>
               </div>
             </div>
@@ -6799,206 +6448,106 @@ onBeforeUnmount(() => {
 
         <aside
           class="property-panel"
-          :class="{
-            'property-panel--disabled': propertyPanelDisabled,
-          }"
+          :class="{ 'property-panel--disabled': propertyPanelDisabled }"
         >
-            <header class="property-panel__header">
+          <header class="property-panel__header">
             <div class="property-panel__title">
               <div class="property-panel__subtitle">Planning properties</div>
             </div>
           </header>
 
           <div class="property-panel__body">
-          <div v-if="propertyPanelDisabled" class="property-panel__placeholder">
-            <v-icon icon="mdi-shape-outline" size="28" />
-            <span>{{ propertyPanelDisabledReason }}</span>
-          </div>
-          <template v-else>
-            <div v-if="selectedDem" class="property-panel__block">
-              <div class="property-panel__section-title">DEM Properties</div>
-              <div class="property-panel__meta-row"><span>Source hash</span><strong>{{ formatShortHash(selectedDem.sourceFileHash) }}</strong></div>
-              <div class="property-panel__meta-row"><span>File</span><strong>{{ selectedDem.filename || 'Unnamed DEM' }}</strong></div>
-              <div class="property-panel__meta-row"><span>MIME</span><strong>{{ selectedDem.mimeType || '—' }}</strong></div>
-              <div class="property-panel__meta-row"><span>Source type</span><strong>{{ selectedDemUsesHeightmapImage ? 'Image heightmap' : 'GeoTIFF DEM' }}</strong></div>
-              <div class="property-panel__meta-row"><span>Size</span><strong>{{ selectedDem.width ?? '—' }} × {{ selectedDem.height ?? '—' }}</strong></div>
-              <div class="property-panel__meta-row"><span>Raw min elevation</span><strong>{{ selectedDemRawMinElevation ?? '—' }} m</strong></div>
-              <div class="property-panel__meta-row"><span>Applied min elevation</span><strong>{{ selectedDemAppliedMinElevation ?? '—' }} m</strong></div>
-              <div class="property-panel__meta-row"><span>Recommended baseline</span><strong>{{ selectedDemRecommendedAppliedMinElevation ?? '—' }} m</strong></div>
-              <div class="property-panel__meta-row"><span>Max elevation</span><strong>{{ selectedDem.maxElevation ?? '—' }} m</strong></div>
-              <div v-if="selectedDemWorldSpan" class="property-panel__meta-row"><span>World span</span><strong>{{ formatOptionalNumber(selectedDemWorldSpan.width) }} × {{ formatOptionalNumber(selectedDemWorldSpan.height) }} m</strong></div>
-              <div v-if="selectedDemUsesHeightmapImage" class="property-panel__sub-block">
-                <div class="property-panel__section-title property-panel__section-title--muted">Heightmap Scale</div>
-                <v-text-field
-                  v-model.number="selectedDemMetersPerPixel"
-                  type="number"
-                  density="compact"
-                  label="Meters per pixel"
-                  suffix="m/px"
-                  min="0.000001"
-                  step="0.1"
-                  hide-details
-                />
-                <div class="property-panel__hint">
-                  Change this only when the imported PNG uses a different real-world spacing. The grayscale-to-elevation contract itself is fixed.
-                </div>
-                <div class="property-panel__section-title property-panel__section-title--muted">Heightmap Protocol</div>
-                <div class="property-panel__hint">
-                  {{ planningPngHeightmapProtocolHint }}
-                </div>
-              </div>
-              <div v-else class="property-panel__sub-block">
-                <div class="property-panel__section-title property-panel__section-title--muted">Elevation Baseline</div>
-                <v-text-field
-                  v-model.number="selectedDemMinElevation"
-                  type="number"
-                  density="compact"
-                  label="Min elevation"
-                  suffix="m"
-                  step="1"
-                  hide-details
-                />
-                <v-btn
-                  v-if="selectedDemRecommendedAppliedMinElevation !== null"
-                  block
-                  variant="tonal"
-                  color="primary"
-                  class="mt-2"
-                  @click="applyRecommendedDemMinElevation"
-                >
-                  Apply Recommended Elevation
-                </v-btn>
-                <div class="property-panel__section-title property-panel__section-title--muted">Sculpt Resolution</div>
-                <v-text-field
-                  v-model.number="selectedDemAppliedSampleStep"
-                  type="number"
-                  density="compact"
-                  label="Applied sample step"
-                  suffix="m/sample"
-                  min="0.000001"
-                  step="0.1"
-                  hide-details
-                />
-                <v-text-field
-                  v-model.number="selectedDemTargetChunkResolution"
-                  type="number"
-                  density="compact"
-                  :label="`Chunk subdivisions (${GROUND_TERRAIN_CHUNK_SIZE_METERS}m)`"
-                  suffix="seg"
-                  min="1"
-                  step="1"
-                  hide-details
-                />
-                <div class="property-panel__hint">{{ selectedDemHeightmapModeDescription }}</div>
-                <template v-if="selectedDemUsesCustomHeightmapRange">
-                  <div class="property-panel__section-title property-panel__section-title--muted">Heightmap Range</div>
-                  <v-text-field
-                    v-model.number="selectedDemMinElevationModel"
-                    type="number"
-                    density="compact"
-                    label="Min elevation (m)"
-                    hide-details
-                  />
-                  <v-text-field
-                    v-model.number="selectedDemMaxElevationModel"
-                    type="number"
-                    density="compact"
-                    label="Max elevation (m)"
-                    hide-details
-                  />
-                </template>
-              </div>
-              <div class="property-panel__sub-block">
-                <div class="property-panel__section-title property-panel__section-title--muted">Conversion Grid</div>
-                <v-text-field
-                  v-model.number="terrainCellSizeModel"
-                  type="number"
-                  density="compact"
-                  label="Terrain cell size (m)"
-                  min="0.1"
-                  max="20"
-                  step="0.1"
-                  hide-details
-                />
-                <div v-if="terrainCellSizeRecommendationReason" class="property-panel__hint">{{ terrainCellSizeRecommendationReason }}</div>
-                <v-btn
-                  v-if="recommendedTerrainCellSize"
-                  block
-                  variant="tonal"
-                  color="primary"
-                  class="mt-2"
-                  @click="applyRecommendedTerrainCellSize"
-                >
-                  Apply {{ formatOptionalNumber(recommendedTerrainCellSize) }} m cell size
-                </v-btn>
-              </div>
-              <div class="property-panel__meta-row"><span>Source sample step</span><strong>{{ formatOptionalNumber(selectedDem.sourceSampleStepMeters ?? selectedDem.sampleStepMeters) }} m</strong></div>
-              <div class="property-panel__meta-row"><span>Applied sample step</span><strong>{{ formatOptionalNumber(selectedDem.appliedSampleStepMeters) }} m</strong></div>
-              <div class="property-panel__meta-row"><span>Chunk subdivisions</span><strong>{{ selectedDem.targetChunkResolution ?? '—' }}</strong></div>
-              <div class="property-panel__meta-row"><span>Projected bounds</span><strong>{{ formatBoundsLine(selectedDem.projectedBounds) }}</strong></div>
-              <div class="property-panel__meta-row"><span>Geographic bounds</span><strong>{{ formatBoundsLine(selectedDem.geographicBounds) }}</strong></div>
-              <div class="property-panel__meta-row"><span>World bounds</span><strong>{{ formatBoundsLine(selectedDem.worldBounds) }}</strong></div>
-              <div class="property-panel__meta-row"><span>Preview size</span><strong>{{ formatOptionalSize(selectedDem.previewSize) }}</strong></div>
-              <div class="property-panel__meta-row"><span>Projected CRS</span><strong>{{ selectedDem.projectedCrs || '—' }}</strong></div>
-              <div v-if="selectedDem.orthophoto" class="property-panel__sub-block">
-                <div class="property-panel__section-title property-panel__section-title--muted">Orthophoto</div>
-                <div class="property-panel__meta-row"><span>Source</span><strong>{{ selectedDem.orthophoto.source === 'auto-imagery' ? 'Auto imagery' : 'Manual upload' }}</strong></div>
-                <div v-if="selectedDem.orthophoto.providerLabel || selectedDem.orthophoto.providerId" class="property-panel__meta-row"><span>Provider</span><strong>{{ selectedDem.orthophoto.providerLabel || selectedDem.orthophoto.providerId }}</strong></div>
-                <div class="property-panel__meta-row"><span>Source hash</span><strong>{{ formatShortHash(selectedDem.orthophoto.sourceFileHash) }}</strong></div>
-                <div class="property-panel__meta-row"><span>File</span><strong>{{ selectedDem.orthophoto.filename || 'Unnamed image' }}</strong></div>
-                <div class="property-panel__meta-row"><span>MIME</span><strong>{{ selectedDem.orthophoto.mimeType || '—' }}</strong></div>
-                <div class="property-panel__meta-row"><span>Size</span><strong>{{ selectedDem.orthophoto.width ?? '—' }} × {{ selectedDem.orthophoto.height ?? '—' }}</strong></div>
-                <div class="property-panel__meta-row"><span>Preview size</span><strong>{{ formatOptionalSize(selectedDem.orthophoto.previewSize) }}</strong></div>
-                <div class="property-panel__meta-row"><span>Opacity</span><strong>{{ Math.round((selectedDem.orthophoto.opacity ?? 1) * 100) }}%</strong></div>
-                <div class="property-panel__meta-row"><span>Visible</span><strong>{{ selectedDem.orthophoto.visible === false ? 'No' : 'Yes' }}</strong></div>
-              </div>
+            <div v-if="propertyPanelDisabled" class="property-panel__placeholder">
+              <v-icon icon="mdi-shape-outline" size="28" />
+              <span>{{ propertyPanelDisabledReason }}</span>
             </div>
-
-            <div v-if="selectedImage">
-              <div class="property-panel__block">
-                <div style="display:flex;gap:8px;align-items:center;">
-                  <v-text-field
-                    v-model="imageNameModel"
-                    density="compact"
-                    hide-details
-                    :disabled="propertyPanelDisabled"
-                    style="flex:1"
-                  />
+            <template v-else>
+              <div v-if="selectedDem" class="property-panel__block">
+                <div class="property-panel__section-title">DEM Properties</div>
+                <div class="property-panel__meta-row"><span>Source hash</span><strong>{{ formatShortHash(selectedDem.sourceFileHash) }}</strong></div>
+                <div class="property-panel__meta-row"><span>File</span><strong>{{ selectedDem.filename || 'Unnamed DEM' }}</strong></div>
+                <div class="property-panel__meta-row"><span>MIME</span><strong>{{ selectedDem.mimeType || '—' }}</strong></div>
+                <div class="property-panel__meta-row"><span>Source type</span><strong>{{ selectedDemUsesHeightmapImage ? 'Image heightmap' : 'GeoTIFF DEM' }}</strong></div>
+                <div class="property-panel__meta-row"><span>Size</span><strong>{{ selectedDem.width ?? '—' }} × {{ selectedDem.height ?? '—' }}</strong></div>
+                <div class="property-panel__meta-row"><span>Raw min elevation</span><strong>{{ selectedDemRawMinElevation ?? '—' }} m</strong></div>
+                <div class="property-panel__meta-row"><span>Applied min elevation</span><strong>{{ selectedDemAppliedMinElevation ?? '—' }} m</strong></div>
+                <div class="property-panel__meta-row"><span>Recommended baseline</span><strong>{{ selectedDemRecommendedAppliedMinElevation ?? '—' }} m</strong></div>
+                <div class="property-panel__meta-row"><span>Max elevation</span><strong>{{ selectedDem.maxElevation ?? '—' }} m</strong></div>
+                <div v-if="selectedDemWorldSpan" class="property-panel__meta-row"><span>World span</span><strong>{{ formatOptionalNumber(selectedDemWorldSpan.width) }} × {{ formatOptionalNumber(selectedDemWorldSpan.height) }} m</strong></div>
+                <div v-if="selectedDemUsesHeightmapImage" class="property-panel__sub-block">
+                  <div class="property-panel__section-title property-panel__section-title--muted">Heightmap Scale</div>
+                  <v-text-field v-model.number="selectedDemMetersPerPixel" type="number" density="compact" label="Meters per pixel" suffix="m/px" min="0.000001" step="0.1" hide-details />
+                  <div class="property-panel__hint">Change this only when the imported PNG uses a different real-world spacing.</div>
+                  <div class="property-panel__hint">{{ planningPngHeightmapProtocolHint }}</div>
                 </div>
+                <div v-else class="property-panel__sub-block">
+                  <div class="property-panel__section-title property-panel__section-title--muted">Elevation Baseline</div>
+                  <v-text-field v-model.number="selectedDemMinElevation" type="number" density="compact" label="Min elevation" suffix="m" step="1" hide-details />
+                  <v-btn v-if="selectedDemRecommendedAppliedMinElevation !== null" block variant="tonal" color="primary" class="mt-2" @click="applyRecommendedDemMinElevation">
+                    Apply Recommended Elevation
+                  </v-btn>
+                  <div class="property-panel__section-title property-panel__section-title--muted">Sculpt Resolution</div>
+                  <v-text-field v-model.number="selectedDemAppliedSampleStep" type="number" density="compact" label="Applied sample step" suffix="m/sample" min="0.000001" step="0.1" hide-details />
+                  <v-text-field v-model.number="selectedDemTargetChunkResolution" type="number" density="compact" :label="`Chunk subdivisions (${GROUND_TERRAIN_CHUNK_SIZE_METERS}m)`" suffix="seg" min="1" step="1" hide-details />
+                  <div class="property-panel__hint">{{ selectedDemHeightmapModeDescription }}</div>
+                  <template v-if="selectedDemUsesCustomHeightmapRange">
+                    <div class="property-panel__section-title property-panel__section-title--muted">Heightmap Range</div>
+                    <v-text-field v-model.number="selectedDemMinElevationModel" type="number" density="compact" label="Min elevation (m)" hide-details />
+                    <v-text-field v-model.number="selectedDemMaxElevationModel" type="number" density="compact" label="Max elevation (m)" hide-details />
+                  </template>
+                </div>
+                <div class="property-panel__meta-row"><span>Source sample step</span><strong>{{ formatOptionalNumber(selectedDem.sourceSampleStepMeters ?? selectedDem.sampleStepMeters) }} m</strong></div>
+                <div class="property-panel__meta-row"><span>Applied sample step</span><strong>{{ formatOptionalNumber(selectedDem.appliedSampleStepMeters) }} m</strong></div>
+                <div class="property-panel__meta-row"><span>Chunk subdivisions</span><strong>{{ selectedDem.targetChunkResolution ?? '—' }}</strong></div>
+                <div class="property-panel__meta-row"><span>Projected bounds</span><strong>{{ formatBoundsLine(selectedDem.projectedBounds) }}</strong></div>
+                <div class="property-panel__meta-row"><span>Geographic bounds</span><strong>{{ formatBoundsLine(selectedDem.geographicBounds) }}</strong></div>
+                <div class="property-panel__meta-row"><span>World bounds</span><strong>{{ formatBoundsLine(selectedDem.worldBounds) }}</strong></div>
+                <div class="property-panel__meta-row"><span>Preview size</span><strong>{{ formatOptionalSize(selectedDem.previewSize) }}</strong></div>
+                <div class="property-panel__meta-row"><span>Projected CRS</span><strong>{{ selectedDem.projectedCrs || '—' }}</strong></div>
               </div>
 
-              <div class="property-panel__density">
-                <div class="property-panel__density-title">Meters per pixel</div>
-                <div class="property-panel__density-row">
-                  <v-text-field
-                    v-model.number="imageMetersPerPixelModel"
-                    type="number"
-                    density="compact"
-                    hide-details
-                    min="0.000001"
-                    step="0.01"
-                    suffix="m/px"
-                  />
+              <div v-if="selectedImage">
+                <div class="property-panel__block">
+                  <div style="display:flex;gap:8px;align-items:center;">
+                    <v-text-field
+                      v-model="imageNameModel"
+                      density="compact"
+                      hide-details
+                      :disabled="propertyPanelDisabled"
+                      style="flex:1"
+                    />
+                  </div>
                 </div>
-                <div class="property-panel__hint">
-                  {{ formatOptionalNumber(selectedImage.width * selectedImage.scale) }} m × {{ formatOptionalNumber(selectedImage.height * selectedImage.scale) }} m
+
+                <div class="property-panel__density">
+                  <div class="property-panel__density-title">Meters per pixel</div>
+                  <div class="property-panel__density-row">
+                    <v-text-field
+                      v-model.number="imageMetersPerPixelModel"
+                      type="number"
+                      density="compact"
+                      hide-details
+                      min="0.000001"
+                      step="0.01"
+                      suffix="m/px"
+                    />
+                  </div>
+                  <div class="property-panel__hint">
+                    {{ formatOptionalNumber(selectedImage.width * selectedImage.scale) }} m × {{ formatOptionalNumber(selectedImage.height * selectedImage.scale) }} m
+                  </div>
+                </div>
+
+                <div class="property-panel__density">
+                  <div class="property-panel__density-title">Opacity</div>
+                  <div class="property-panel__density-row">
+                    <v-slider v-model="imageOpacityModel" min="0" max="1" step="0.01" density="compact" hide-details />
+                    <div class="property-panel__density-value">{{ Math.round(imageOpacityModel * 100) }}%</div>
+                  </div>
                 </div>
               </div>
-
-              <div class="property-panel__density">
-                <div class="property-panel__density-title">Opacity</div>
-                <div class="property-panel__density-row">
-                  <v-slider v-model="imageOpacityModel" min="0" max="1" step="0.01" density="compact" hide-details />
-                  <div class="property-panel__density-value">{{ Math.round(imageOpacityModel * 100) }}%</div>
-                </div>
-              </div>
-            </div>
-
-            <!-- terrain / guide-route editing removed -->
-          </template>
+            </template>
           </div>
         </aside>
-
       </section>
       <v-dialog
         v-model="planningImageImportDialogOpen"
