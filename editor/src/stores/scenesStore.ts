@@ -296,11 +296,9 @@ function stripGroundTextureRuntimeUrlForPersistence(document: StoredSceneDocumen
     return document
   }
   const definition = groundNode.dynamicMesh as GroundDynamicMesh & {
-    textureAssetId?: string | null
     textureDataUrl?: string | null
   }
-  const textureAssetId = typeof definition.textureAssetId === 'string' ? definition.textureAssetId.trim() : ''
-  if (!textureAssetId || !definition.textureDataUrl) {
+  if (!('textureDataUrl' in definition)) {
     return document
   }
   groundNode.dynamicMesh = {

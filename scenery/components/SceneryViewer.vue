@@ -5194,10 +5194,16 @@ function attachScenePackageCompiledGroundRuntime(
     return;
   }
   const compiledManifest = readCompiledGroundManifestFromScenePackage(pkg, sceneEntry);
+  if (!compiledManifest) {
+    throw new Error(`场景包缺少 compiled ground manifest: ${sceneEntry.path}`)
+  }
+  if (!Array.isArray(compiledManifest.renderTiles) || compiledManifest.renderTiles.length === 0) {
+    throw new Error(`场景包 compiled ground manifest 为空或无 renderTiles: ${sceneEntry.path}`)
+  }
   const groundUserData = groundNode.userData && typeof groundNode.userData === 'object'
     ? (groundNode.userData as Record<string, unknown>)
     : {};
-  groundUserData.compiledGroundEnabled = Boolean(compiledManifest);
+  groundUserData.compiledGroundEnabled = true;
   groundUserData.compiledGroundManifest = compiledManifest;
   groundNode.userData = groundUserData;
 }
@@ -6376,15 +6382,21 @@ function syncSceneryCompiledGroundRenderTiles(camera: THREE.Camera | null | unde
   }
   const groundObject = resolveSceneObjectByNodeId(groundNode.id);
   if (!groundObject) {
-    clearSceneryCompiledGroundRenderRuntime();
-    return false;
+    throw new Error(`无法找到 ground 对象: ${groundNode.id}`)
   }
   const compiledManifest = readCompiledGroundManifestFromDocument(currentDocument);
   const buildKey = activeScenePackageBuildKey?.trim() || '';
-  if (!compiledManifest || !buildKey || !activeScenePackagePkg) {
-    clearCompiledGroundRenderTiles(groundObject);
-    setInfiniteGroundHiddenChunkKeys(groundObject, []);
-    return false;
+  if (!compiledManifest) {
+    throw new Error(`场景缺少 compiled ground manifest: ${groundNode.id}`)
+  }
+  if (!Array.isArray(compiledManifest.renderTiles) || compiledManifest.renderTiles.length === 0) {
+    throw new Error(`场景 compiled ground manifest 无 renderTiles: ${groundNode.id}`)
+  }
+  if (!buildKey) {
+    throw new Error(`场景缺少 compiled ground build key: ${groundNode.id}`)
+  }
+  if (!activeScenePackagePkg) {
+    throw new Error(`场景缺少 compiled ground package: ${groundNode.id}`)
   }
   const revision = Number.isFinite(Number(compiledManifest.revision))
     ? Math.max(0, Math.trunc(Number(compiledManifest.revision)))
@@ -13459,7 +13471,17 @@ function startRenderLoop(
             }
           }
         }
-        syncSceneryCompiledGroundRenderTiles(camera);
+        try {
+          syncSceneryCompiledGroundRenderTiles(camera);
+        } catch (caughtError) {
+          const message = caughtError instanceof Error
+            ? caughtError.message
+            : 'compiled ground 渲染失败';
+          console.error('[SceneViewer] Compiled ground runtime failed', caughtError);
+          error.value = message;
+          cancel();
+          return;
+        }
 
         const instancingNow = typeof performance !== 'undefined' && typeof performance.now === 'function'
           ? performance.now()

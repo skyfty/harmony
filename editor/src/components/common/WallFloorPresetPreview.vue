@@ -292,7 +292,7 @@ async function buildRoadPreviewObject(preset: RoadPresetData): Promise<THREE.Obj
 
 async function buildLandformPreviewObject(preset: LandformPresetData): Promise<THREE.Object3D> {
   const object = createLandformGroup(buildLandformPresetPreviewDefinition(preset))
-  object.name = preset.name || 'Landform Preset Preview'
+  object.name = preset.name || 'Ground Splat Preset Preview'
   object.rotation.x = -0.08
 
   const nodeMaterials = buildLandformNodeMaterialsFromPreset(preset).filter(

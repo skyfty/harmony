@@ -26,6 +26,7 @@ import type {
   GroundChunkData,
   GroundChunkManifestRecord,
   GroundDynamicMesh,
+  CompiledGroundManifest,
   GroundGenerationSettings,
   GroundHeightMap,
   GroundPlanningMetadata,
@@ -5715,6 +5716,18 @@ function disposeGroundTexture(texture: THREE.Texture | null | undefined) {
   clearDynamicGroundFlag(texture)
 }
 
+function loadGroundTextureFromSource(source: string | null | undefined, textureName: string): THREE.Texture | null {
+  const normalizedSource = typeof source === 'string' ? source.trim() : ''
+  if (!normalizedSource) {
+    return null
+  }
+  const texture = textureLoader.load(normalizedSource)
+  applyGroundTextureSamplingDefaults(texture)
+  texture.name = textureName
+  markDynamicGroundTexture(texture)
+  return texture
+}
+
 function isGroundChunkTexturedMaterial(material: THREE.Material | null | undefined): boolean {
   if (!material) {
     return false
@@ -5761,36 +5774,6 @@ function resolveGroundTextureSourceSize(texture: THREE.Texture | null | undefine
     return null
   }
   return { width, height }
-}
-
-function applyGroundTextureWindowGutter(
-  window: {
-    offsetX: number
-    offsetY: number
-    repeatX: number
-    repeatY: number
-  },
-  texture: THREE.Texture | null | undefined,
-): {
-  offsetX: number
-  offsetY: number
-  repeatX: number
-  repeatY: number
-} {
-  const sourceSize = resolveGroundTextureSourceSize(texture)
-  if (!sourceSize) {
-    return window
-  }
-  const texelInsetX = 1 / Math.max(sourceSize.width, 1)
-  const texelInsetY = 1 / Math.max(sourceSize.height, 1)
-  const safeRepeatX = Math.max(window.repeatX - texelInsetX * 2, Number.EPSILON)
-  const safeRepeatY = Math.max(window.repeatY - texelInsetY * 2, Number.EPSILON)
-  return {
-    offsetX: clampInclusive(window.offsetX + texelInsetX, 0, 1),
-    offsetY: clampInclusive(window.offsetY + texelInsetY, 0, 1),
-    repeatX: safeRepeatX,
-    repeatY: safeRepeatY,
-  }
 }
 
 function resolveGroundBaseMaterialSignature(baseMaterial: THREE.Material): string {
@@ -5868,35 +5851,46 @@ function disposeGroundChunkTexturedMaterial(material: THREE.Material | null | un
   if (!material || !isGroundChunkTexturedMaterial(material)) {
     return
   }
-  const typed = material as THREE.MeshStandardMaterial & { map?: THREE.Texture | null }
-  if (typed.map && isDynamicGroundTexture(typed.map)) {
-    disposeGroundTexture(typed.map)
-    typed.map = null
-  }
+  const typed = material as unknown as Record<string, unknown>
+  ;[
+    'map',
+    'normalMap',
+    'roughnessMap',
+    'metalnessMap',
+    'aoMap',
+    'emissiveMap',
+  ].forEach((key) => {
+    const texture = typed[key] as THREE.Texture | null | undefined
+    if (texture && isDynamicGroundTexture(texture)) {
+      disposeGroundTexture(texture)
+      typed[key] = null
+    }
+  })
   clearGroundRuntimeMaterialMetadata(material)
   material.dispose()
 }
 
 function clearGroundTextureFromMaterial(material: THREE.Material): void {
-  const typed = material as THREE.MeshStandardMaterial & { map?: THREE.Texture | null; normalMap?: THREE.Texture | null; needsUpdate?: boolean }
+  const typed = material as unknown as Record<string, unknown>
   if (!('map' in typed)) {
     return
   }
 
-  const previousTexture = typed.map ?? null
+  const previousTexture = typed.map as THREE.Texture | null | undefined ?? null
   const wasDynamicTextureApplied = isDynamicGroundTexture(previousTexture)
   if (wasDynamicTextureApplied) {
     disposeGroundTexture(previousTexture)
     typed.map = null
     typed.needsUpdate = true
   }
-  
-  // Also clear normal map
-  if (typed.normalMap && isDynamicGroundTexture(typed.normalMap)) {
-    disposeGroundTexture(typed.normalMap)
-    typed.normalMap = null
-    typed.needsUpdate = true
-  }
+  ;(['normalMap', 'roughnessMap', 'metalnessMap', 'aoMap', 'emissiveMap'] as const).forEach((key) => {
+    const texture = typed[key] as THREE.Texture | null | undefined ?? null
+    if (texture && isDynamicGroundTexture(texture)) {
+      disposeGroundTexture(texture)
+      typed[key] = null
+      typed.needsUpdate = true
+    }
+  })
   
   clearGroundRuntimeMaterialMetadata(material)
 }
@@ -6103,6 +6097,101 @@ function resolveGroundChunkTextureWindowFromMeshBounds(
   }
 }
 
+type GroundChunkTextureBundleSources = {
+  albedo: string | null
+  normal: string | null
+  roughness: string | null
+  metalness: string | null
+  ao: string | null
+  emissive: string | null
+  splatMap: string | null
+}
+
+function resolveCompiledGroundTileChunkKey(
+  rootUserData: Record<string, unknown>,
+  definition: GroundDynamicMesh,
+  compiledGroundTileKey: string | null | undefined,
+): string | null {
+  const normalizedTileKey = typeof compiledGroundTileKey === 'string' ? compiledGroundTileKey.trim() : ''
+  if (!normalizedTileKey) {
+    return null
+  }
+  const compiledGroundManifest = rootUserData.compiledGroundManifest as CompiledGroundManifest | null | undefined
+  if (!compiledGroundManifest || !Array.isArray(compiledGroundManifest.renderTiles)) {
+    return null
+  }
+  const record = compiledGroundManifest.renderTiles.find((entry) => entry?.key === normalizedTileKey) ?? null
+  if (!record) {
+    return null
+  }
+  const safeChunkSizeMeters = Number.isFinite(definition.chunkSizeMeters) && Number(definition.chunkSizeMeters) > 0
+    ? Number(definition.chunkSizeMeters)
+    : Number.isFinite(compiledGroundManifest.chunkSizeMeters) && Number(compiledGroundManifest.chunkSizeMeters) > 0
+      ? Number(compiledGroundManifest.chunkSizeMeters)
+      : 1
+  const coord = resolveGroundChunkCoordFromWorldPosition(
+    Number(record.centerX) || 0,
+    Number(record.centerZ) || 0,
+    safeChunkSizeMeters,
+  )
+  return `${coord.chunkX}:${coord.chunkZ}`
+}
+
+function resolveGroundChunkTextureBundleSources(
+  definition: GroundDynamicMesh,
+  chunkKey: string | null,
+): GroundChunkTextureBundleSources | null {
+  if (!chunkKey || !definition.groundSurfaceChunks) {
+    return null
+  }
+  const entry = definition.groundSurfaceChunks[chunkKey] ?? null
+  if (!entry) {
+    return null
+  }
+  const albedo = typeof entry.textureAssetId === 'string' ? entry.textureAssetId.trim() : ''
+  const normal = typeof entry.normalTextureAssetId === 'string' ? entry.normalTextureAssetId.trim() : ''
+  const roughness = typeof entry.roughnessTextureAssetId === 'string' ? entry.roughnessTextureAssetId.trim() : ''
+  const metalness = typeof entry.metalnessTextureAssetId === 'string' ? entry.metalnessTextureAssetId.trim() : ''
+  const ao = typeof entry.aoTextureAssetId === 'string' ? entry.aoTextureAssetId.trim() : ''
+  const emissive = typeof entry.emissiveTextureAssetId === 'string' ? entry.emissiveTextureAssetId.trim() : ''
+  const splatMap = Array.isArray(entry.splatMapAssetIds)
+    ? entry.splatMapAssetIds.map((value) => (typeof value === 'string' ? value.trim() : '')).filter((value) => value.length > 0).join(',')
+    : ''
+  return {
+    albedo: albedo || null,
+    normal: normal || null,
+    roughness: roughness || null,
+    metalness: metalness || null,
+    ao: ao || null,
+    emissive: emissive || null,
+    splatMap: splatMap || null,
+  }
+}
+
+function loadGroundChunkSplatMaps(source: string | null, chunkKey: string): THREE.Texture[] {
+  void chunkKey
+  const normalized = typeof source === 'string' ? source.trim() : ''
+  if (!normalized) {
+    return []
+  }
+  const textures = normalized
+    .split(',')
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0)
+    .map((value, index) => {
+      const texture = loadGroundTextureFromSource(value, `GroundChunkSplatMap${index + 1}`)
+      if (texture) {
+        texture.colorSpace = THREE.NoColorSpace
+      }
+      return texture
+    })
+    .filter((texture): texture is THREE.Texture => Boolean(texture))
+  if (textures.length !== 2) {
+    throw new Error(`Invalid baked splat map count for ground chunk ${chunkKey}: expected 2, received ${textures.length}`)
+  }
+  return textures
+}
+
 function createGroundChunkTexturedMaterial(baseMaterial: THREE.Material): THREE.MeshStandardMaterial {
   const baseStandard = baseMaterial as THREE.MeshStandardMaterial & {
     metalness?: number
@@ -6111,7 +6200,7 @@ function createGroundChunkTexturedMaterial(baseMaterial: THREE.Material): THREE.
     envMapIntensity?: number
   }
   const nextMaterial = new THREE.MeshStandardMaterial({
-    color: '#ffffff',
+    color: typeof baseStandard.color?.clone === 'function' ? baseStandard.color.clone() : '#ffffff',
     roughness: typeof baseStandard.roughness === 'number' ? baseStandard.roughness : 0.85,
     metalness: typeof baseStandard.metalness === 'number' ? baseStandard.metalness : 0.05,
   })
@@ -6143,30 +6232,22 @@ function createGroundChunkTexturedMaterial(baseMaterial: THREE.Material): THREE.
 function applyGroundTextureToChunkMesh(
   mesh: THREE.Mesh,
   definition: GroundDynamicMesh,
+  chunkKey: string | null,
   spec: Pick<GroundChunkSpec, 'startRow' | 'startColumn' | 'rows' | 'columns'> | null,
   baseMaterial: THREE.Material,
   baseTexture: THREE.Texture | null,
   baseMaterialSignature: string,
 ): void {
+  void baseTexture
   const currentMaterial = Array.isArray(mesh.material) ? (mesh.material[0] ?? null) : (mesh.material ?? null)
-  const source = typeof definition.textureDataUrl === 'string' ? definition.textureDataUrl : null
-  if (!source) {
-    if (currentMaterial && currentMaterial !== baseMaterial) {
-      disposeGroundChunkTexturedMaterial(currentMaterial)
-    }
-    if (mesh.material !== baseMaterial) {
-      mesh.material = baseMaterial
-    }
-    return
+  const userData = mesh.userData as Record<string, unknown>
+  if (!chunkKey) {
+    throw new Error('Missing baked ground chunk key.')
   }
-  if (!baseTexture) {
-    if (currentMaterial && currentMaterial !== baseMaterial) {
-      disposeGroundChunkTexturedMaterial(currentMaterial)
-    }
-    if (mesh.material !== baseMaterial) {
-      mesh.material = baseMaterial
-    }
-    return
+  const bundle = resolveGroundChunkTextureBundleSources(definition, chunkKey)
+  const activeSource = bundle?.albedo ?? null
+  if (bundle && !definition.groundSurfaceChunks) {
+    throw new Error(`Missing baked groundSurfaceChunks for ground chunk ${chunkKey}.`)
   }
 
   const uvBounds = summarizeGroundMeshUvBounds(mesh)
@@ -6175,7 +6256,7 @@ function applyGroundTextureToChunkMesh(
   const meshBoundsWindow = useLocalUvWindow
     ? resolveGroundChunkTextureWindowFromMeshBounds(definition, mesh)
     : null
-  const window = useLocalUvWindow
+  const _window = useLocalUvWindow
     ? (meshBoundsWindow ?? (spec ? resolveGroundChunkTextureWindow(definition, spec) : null) ?? {
       offsetX: 0,
       offsetY: 0,
@@ -6188,9 +6269,21 @@ function applyGroundTextureToChunkMesh(
       repeatX: 1,
       repeatY: 1,
     }
-  const safeWindow = applyGroundTextureWindowGutter(window, baseTexture)
+  void _window
+  const safeWindow = {
+    offsetX: 0,
+    offsetY: 0,
+    repeatX: 1,
+    repeatY: 1,
+  }
   const signature = [
-    source,
+    bundle?.albedo ?? 'none',
+    bundle?.normal ?? 'none',
+    bundle?.roughness ?? 'none',
+    bundle?.metalness ?? 'none',
+    bundle?.ao ?? 'none',
+    bundle?.emissive ?? 'none',
+    bundle?.splatMap ?? 'none',
     baseMaterialSignature,
     resolveGroundTextureWindowSignature(safeWindow),
   ].join('|')
@@ -6202,15 +6295,57 @@ function applyGroundTextureToChunkMesh(
   }
 
   const nextMaterial = createGroundChunkTexturedMaterial(baseMaterial)
-  markGroundChunkTexturedMaterial(nextMaterial, signature, source)
-  const typed = nextMaterial as THREE.MeshStandardMaterial & { map?: THREE.Texture | null; needsUpdate?: boolean }
-  const texture = baseTexture.clone()
-  applyGroundTextureSamplingDefaults(texture)
-  texture.offset.set(safeWindow.offsetX, safeWindow.offsetY)
-  texture.repeat.set(safeWindow.repeatX, safeWindow.repeatY)
-  texture.needsUpdate = true
-  markDynamicGroundTexture(texture)
-  typed.map = texture
+  markGroundChunkTexturedMaterial(nextMaterial, signature, activeSource)
+  const typed = nextMaterial as THREE.MeshStandardMaterial & {
+    map?: THREE.Texture | null
+    normalMap?: THREE.Texture | null
+    roughnessMap?: THREE.Texture | null
+    metalnessMap?: THREE.Texture | null
+    aoMap?: THREE.Texture | null
+    emissiveMap?: THREE.Texture | null
+    needsUpdate?: boolean
+  }
+  const previousSplatMaps = Array.isArray(userData.groundChunkSplatMaps)
+    ? userData.groundChunkSplatMaps.filter((entry): entry is THREE.Texture => Boolean(entry))
+    : []
+  previousSplatMaps.forEach((texture) => {
+    if (isDynamicGroundTexture(texture)) {
+      disposeGroundTexture(texture)
+    }
+  })
+  if (activeSource) {
+    const texture = loadGroundTextureFromSource(activeSource, 'GroundChunkAlbedo')
+    if (!texture) {
+      throw new Error(`Failed to load baked albedo texture for ground chunk ${chunkKey}.`)
+    }
+    applyGroundTextureSamplingDefaults(texture)
+    texture.offset.set(safeWindow.offsetX, safeWindow.offsetY)
+    texture.repeat.set(safeWindow.repeatX, safeWindow.repeatY)
+    texture.needsUpdate = true
+    markDynamicGroundTexture(texture)
+    typed.map = texture
+  }
+  if (bundle?.normal) {
+    typed.normalMap = loadGroundTextureFromSource(bundle.normal, 'GroundChunkNormalMap')
+  }
+  if (bundle?.roughness) {
+    typed.roughnessMap = loadGroundTextureFromSource(bundle.roughness, 'GroundChunkRoughnessMap')
+  }
+  if (bundle?.metalness) {
+    typed.metalnessMap = loadGroundTextureFromSource(bundle.metalness, 'GroundChunkMetalnessMap')
+  }
+  if (bundle?.ao) {
+    typed.aoMap = loadGroundTextureFromSource(bundle.ao, 'GroundChunkAoMap')
+  }
+  if (bundle?.emissive) {
+    typed.emissiveMap = loadGroundTextureFromSource(bundle.emissive, 'GroundChunkEmissiveMap')
+  }
+  const splatMapSource = bundle?.splatMap ?? null
+  userData.groundChunkSplatMaps = loadGroundChunkSplatMaps(splatMapSource, chunkKey)
+  typed.userData = {
+    ...(typed.userData ?? {}),
+    groundChunkSplatMapIds: splatMapSource,
+  }
   typed.needsUpdate = true
 
   if (currentMaterial && currentMaterial !== baseMaterial) {
@@ -6269,6 +6404,9 @@ function applyGroundTextureToObject(object: THREE.Object3D, definition: GroundDy
     }
     const chunkSpec = mesh.userData?.groundChunk as GroundChunkSpec | undefined
     const isCompiledGroundTile = mesh.userData?.compiledGroundTile === true
+    const compiledGroundTileKey = typeof mesh.userData?.compiledGroundTileKey === 'string'
+      ? mesh.userData.compiledGroundTileKey
+      : null
     const currentMaterial = Array.isArray(mesh.material) ? (mesh.material[0] ?? null) : (mesh.material ?? null)
     const chunkBaseMaterial = chunkSpec && sculptedMaterial
       ? sculptedMaterial
@@ -6279,9 +6417,14 @@ function applyGroundTextureToObject(object: THREE.Object3D, definition: GroundDy
         : resolveGroundBaseMaterialSignature(chunkBaseMaterial))
       : 'none'
     if (chunkSpec && chunkBaseMaterial) {
+      const chunkMeta = (mesh.userData?.groundChunk ?? null) as { chunkRow?: number; chunkColumn?: number } | null
+      const chunkKey = chunkMeta && Number.isFinite(Number(chunkMeta.chunkRow)) && Number.isFinite(Number(chunkMeta.chunkColumn))
+        ? `${Math.trunc(Number(chunkMeta.chunkRow))}:${Math.trunc(Number(chunkMeta.chunkColumn))}`
+        : null
       applyGroundTextureToChunkMesh(
         mesh,
         definition,
+        chunkKey,
         chunkSpec,
         chunkBaseMaterial,
         sharedBaseTexture,
@@ -6290,9 +6433,11 @@ function applyGroundTextureToObject(object: THREE.Object3D, definition: GroundDy
       return
     }
     if (isCompiledGroundTile && chunkBaseMaterial) {
+      const chunkKey = resolveCompiledGroundTileChunkKey(rootUserData, definition, compiledGroundTileKey)
       applyGroundTextureToChunkMesh(
         mesh,
         definition,
+        chunkKey,
         null,
         chunkBaseMaterial,
         sharedBaseTexture,
@@ -6307,10 +6452,6 @@ function applyGroundTextureToObject(object: THREE.Object3D, definition: GroundDy
   rootUserData.groundTextureTraversalCache = {
     signature: traversalSignature,
   } satisfies GroundTextureTraversalCache
-}
-
-export function applyGroundTextureToGroundObject(object: THREE.Object3D, definition: GroundDynamicMesh): void {
-  applyGroundTextureToObject(object, definition)
 }
 
 export type GroundGeometryUpdateRegion = {

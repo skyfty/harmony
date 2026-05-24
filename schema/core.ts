@@ -1713,7 +1713,13 @@ export type GroundSculptOperation = 'raise' | 'depress' | 'smooth' | 'flatten' |
 
 
 export interface GroundSurfaceChunkTextureRef {
-  textureAssetId: string
+  textureAssetId?: string | null
+  normalTextureAssetId?: string | null
+  roughnessTextureAssetId?: string | null
+  metalnessTextureAssetId?: string | null
+  aoTextureAssetId?: string | null
+  emissiveTextureAssetId?: string | null
+  splatMapAssetIds?: string[] | null
   revision: number
 }
 
@@ -1975,21 +1981,32 @@ export function formatGroundChunkDataPath(
 export function normalizeGroundSurfaceChunkTextureMap(
   value: GroundSurfaceChunkTextureMap | null | undefined,
 ): GroundSurfaceChunkTextureMap {
-  return Object.fromEntries(
-    Object.entries(value ?? {})
-      .map(([chunkKey, chunkRef]) => {
-        const normalizedChunkKey = typeof chunkKey === 'string' ? chunkKey.trim() : ''
-        const textureAssetId = typeof chunkRef?.textureAssetId === 'string' ? chunkRef.textureAssetId.trim() : ''
-        if (!normalizedChunkKey || !textureAssetId) {
-          return null
-        }
-        return [normalizedChunkKey, {
-          textureAssetId,
-          revision: Math.max(0, Math.trunc(Number.isFinite(Number(chunkRef?.revision)) ? Number(chunkRef?.revision) : 0)),
-        }] as const
-      })
-      .filter((entry): entry is readonly [string, GroundSurfaceChunkTextureRef] => Boolean(entry)),
-  )
+  const normalizeOptionalAssetId = (assetId: unknown): string | null => {
+    const normalized = typeof assetId === 'string' ? assetId.trim() : ''
+    return normalized.length > 0 ? normalized : null
+  }
+  const entries: Array<readonly [string, GroundSurfaceChunkTextureRef]> = []
+  for (const [chunkKey, chunkRef] of Object.entries(value ?? {})) {
+    const normalizedChunkKey = typeof chunkKey === 'string' ? chunkKey.trim() : ''
+    if (!normalizedChunkKey) {
+      continue
+    }
+    entries.push([normalizedChunkKey, {
+      textureAssetId: normalizeOptionalAssetId(chunkRef?.textureAssetId),
+      normalTextureAssetId: normalizeOptionalAssetId(chunkRef?.normalTextureAssetId),
+      roughnessTextureAssetId: normalizeOptionalAssetId(chunkRef?.roughnessTextureAssetId),
+      metalnessTextureAssetId: normalizeOptionalAssetId(chunkRef?.metalnessTextureAssetId),
+      aoTextureAssetId: normalizeOptionalAssetId(chunkRef?.aoTextureAssetId),
+      emissiveTextureAssetId: normalizeOptionalAssetId(chunkRef?.emissiveTextureAssetId),
+      splatMapAssetIds: Array.isArray(chunkRef?.splatMapAssetIds)
+        ? chunkRef.splatMapAssetIds
+            .map((value) => normalizeOptionalAssetId(value))
+            .filter((value): value is string => Boolean(value))
+        : null,
+      revision: Math.max(0, Math.trunc(Number.isFinite(Number(chunkRef?.revision)) ? Number(chunkRef?.revision) : 0)),
+    }])
+  }
+  return Object.fromEntries(entries)
 }
 
 export interface GroundDynamicMesh {
@@ -2044,6 +2061,12 @@ export interface GroundDynamicMesh {
   localEditTiles?: GroundLocalEditTileMap | null
   terrainScatter?: TerrainScatterStoreSnapshot | null
   groundSurfaceChunks?: GroundSurfaceChunkTextureMap | null
+  /** Editor/runtime cache for baked landform splat texture bundles. */
+  groundSplatBake?: {
+    revision: number
+    chunkTextureMap?: GroundSurfaceChunkTextureMap | null
+    surfaceLayerTextureAssetIds?: string[] | null
+  } | null
 }
 
 export function resolveGroundEditTileSizeMeters(definition: Pick<GroundDynamicMesh, 'editTileSizeMeters' | 'cellSize'>): number {
@@ -2425,6 +2448,17 @@ export interface LandformDynamicMesh {
     /** Optional ground texture source used to blend landform edges into the underlying terrain. */
     groundTextureDataUrl?: string | null
   } | null
+  /** Optional baked landform splat layer ordering and PBR authoring metadata. */
+  surfaceLayers?: Array<{
+    id: string
+    order: number
+    materialConfigId?: string | null
+    materialProps?: SceneMaterialProps | null
+    textureAssetIds?: string[] | null
+    enableFeather?: boolean
+    feather?: number
+    uvScale?: Vector2Like | null
+  }> | null
   /** Material config id used for the landform surface mesh. */
   materialConfigId?: string | null
   /** Whether feathered edge fading is enabled for this landform surface. */
@@ -2433,6 +2467,12 @@ export interface LandformDynamicMesh {
   feather?: number
   /** Surface UV scale in local XZ meters per UV repeat (U/V). */
   uvScale?: Vector2Like | null
+  /** Editor-only cache for the baked ground splat texture bundle. */
+  groundSplatBake?: {
+    revision: number
+    chunkTextureMap?: GroundSurfaceChunkTextureMap | null
+    surfaceLayerTextureAssetIds?: string[] | null
+  } | null
 }
 
 export interface GuideRouteDynamicMesh {

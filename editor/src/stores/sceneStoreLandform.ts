@@ -204,7 +204,6 @@ function buildLandformRenderCache(
     surfaceUvs,
     surfaceFeather: buildLandformSurfaceFeather(footprint, localSurfaceVertices, featherWidth, enableFeather),
     surfaceGroundUvs,
-    groundTextureDataUrl: typeof groundDefinition?.textureDataUrl === 'string' ? groundDefinition.textureDataUrl : null,
   }
 }
 
@@ -215,10 +214,7 @@ function buildLandformGroundBlendUvs(
   if (!groundDefinition) {
     return []
   }
-  const textureSource = typeof groundDefinition?.textureDataUrl === 'string'
-    ? groundDefinition.textureDataUrl.trim()
-    : ''
-  if (!textureSource || !surfaceVertices.length) {
+  if (!surfaceVertices.length) {
     return []
   }
 
@@ -1609,6 +1605,37 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
         node.materials = nextMaterials as any
       }
 
+      const nextSurfaceLayers = nextMaterials.map((entry, order) => ({
+        id: entry.id,
+        order,
+        materialConfigId: entry.id ?? null,
+        materialProps: {
+          color: entry.color,
+          transparent: entry.transparent,
+          opacity: entry.opacity,
+          alphaTest: entry.alphaTest,
+          side: entry.side,
+          wireframe: entry.wireframe,
+          metalness: entry.metalness,
+          roughness: entry.roughness,
+          emissive: entry.emissive,
+          emissiveIntensity: entry.emissiveIntensity,
+          aoStrength: entry.aoStrength,
+          envMapIntensity: entry.envMapIntensity,
+          textures: entry.textures ? { ...entry.textures } : {},
+        },
+        textureAssetIds: Object.values(entry.textures ?? {})
+          .flatMap((texture) => {
+            const assetId = typeof texture?.assetId === 'string' ? texture.assetId.trim() : ''
+            return assetId ? [assetId] : []
+          }),
+        enableFeather: typeof (node.dynamicMesh as any).enableFeather === 'boolean'
+          ? (node.dynamicMesh as any).enableFeather
+          : undefined,
+        feather: Number.isFinite((node.dynamicMesh as any).feather) ? Number((node.dynamicMesh as any).feather) : undefined,
+        uvScale: (node.dynamicMesh as any).uvScale ?? null,
+      }))
+
       const normalizeId = (value: unknown) => (typeof value === 'string' && value.trim().length ? value.trim() : null)
       const materialIds = (nextMaterials as any[]).map((entry) => entry.id)
       const fallbackId = (nextMaterials as any[])[0]?.id ?? null
@@ -1618,6 +1645,7 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
       }
 
       const mesh = node.dynamicMesh as LandformDynamicMesh
+      const currentBake = mesh.groundSplatBake ?? null
       const footprint = Array.isArray(mesh.vertices)
         ? mesh.vertices
           .map((entry) => [Number(entry?.[0]), Number(entry?.[1])] as [number, number])
@@ -1639,10 +1667,23 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
         || expectedFeather.some((value, index) => Math.abs(value - Number(currentFeather[index])) > 1e-5)
 
       const meshChanged = mesh.materialConfigId !== materialConfigId || featherNeedsSync
-      if (meshChanged) {
+      const bakeNeedsRefresh = materialsChanged || meshChanged
+      const nextBake = bakeNeedsRefresh
+        ? {
+            revision: Date.now(),
+            chunkTextureMap: null,
+            surfaceLayerTextureAssetIds: Array.from(new Set(
+              nextSurfaceLayers.flatMap((layer) => Array.isArray(layer.textureAssetIds) ? layer.textureAssetIds : []),
+            )),
+          }
+        : currentBake
+
+      if (meshChanged || (materialsChanged && currentBake !== nextBake)) {
         node.dynamicMesh = {
           ...mesh,
           materialConfigId,
+          surfaceLayers: nextSurfaceLayers,
+          groundSplatBake: nextBake,
           renderCache: {
             ...(mesh.renderCache ?? {
               surfaceVertices: [],
@@ -1650,10 +1691,15 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
               surfaceUvs: [],
               surfaceGroundUvs: [],
               surfaceFeather: [],
-              groundTextureDataUrl: null,
             }),
             surfaceFeather: expectedFeather,
           },
+        }
+      } else if (materialsChanged && !meshChanged) {
+        node.dynamicMesh = {
+          ...mesh,
+          surfaceLayers: nextSurfaceLayers,
+          groundSplatBake: nextBake,
         }
       }
 
@@ -2025,7 +2071,6 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
             surfaceUvs: [],
             surfaceGroundUvs: [],
             surfaceFeather: [],
-            groundTextureDataUrl: null,
           }),
           surfaceUvs: Array.isArray(mesh.renderCache?.surfaceVertices)
             ? mesh.renderCache!.surfaceVertices

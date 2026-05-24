@@ -140,27 +140,27 @@ function resolveLandformRows(shape: LandformBuildShape): ToolUsageHintRow[] {
   const shapeLabel = resolveShapeLabel(shape)
   if (shape === 'polygon') {
     return createRows([
-      { label: '入口', text: '视口工具栏 -> Landform Brush' },
-      { label: '模式', text: `${shapeLabel}绘制` },
+      { label: '入口', text: '视口工具栏 -> Ground Splat Brush' },
+      { label: '模式', text: `${shapeLabel}烘焙区域` },
       { label: '鼠标', text: '左键逐点添加顶点' },
-      { label: '完成', text: '双击左键完成地貌' },
+      { label: '完成', text: '双击左键完成烘焙区域' },
       { label: '修饰', text: 'Shift 顶点吸附 · C 相对角度吸附' },
       { label: '取消', text: '右键或 Escape 取消当前草图' },
     ])
   }
   if (shape === 'rectangle') {
     return createRows([
-      { label: '入口', text: '视口工具栏 -> Landform Brush' },
-      { label: '模式', text: `${shapeLabel}绘制` },
-      { label: '鼠标', text: '左键拖拽生成矩形地貌' },
+      { label: '入口', text: '视口工具栏 -> Ground Splat Brush' },
+      { label: '模式', text: `${shapeLabel}烘焙区域` },
+      { label: '鼠标', text: '左键拖拽生成矩形烘焙区域' },
       { label: '修饰', text: 'Shift 顶点吸附到已有顶点' },
       { label: '取消', text: '右键或 Escape 取消当前草图' },
     ])
   }
   return createRows([
-    { label: '入口', text: '视口工具栏 -> Landform Brush' },
-    { label: '模式', text: `${shapeLabel}绘制` },
-    { label: '鼠标', text: '左键拖拽生成圆形或正多边形地貌' },
+    { label: '入口', text: '视口工具栏 -> Ground Splat Brush' },
+    { label: '模式', text: `${shapeLabel}烘焙区域` },
+    { label: '鼠标', text: '左键拖拽生成圆形或正多边形烘焙区域' },
     { label: '修饰', text: 'Shift 顶点吸附到已有顶点' },
     { label: '取消', text: '右键或 Escape 取消当前草图' },
   ])
@@ -217,7 +217,7 @@ function resolveGenericRows(tool: BuildTool): ToolUsageHintRow[] {
     case 'paint':
       return createRows([
         { label: '入口', text: '视口工具栏 -> Terrain Paint' },
-        { label: '准备', text: '先在绘制面板中选择地表材质资源' },
+        { label: '准备', text: '在绘制面板中按需选择地表材质资源，或直接使用当前材质颜色' },
         { label: '鼠标', text: '左键拖拽连续涂刷地表材质' },
         { label: '修饰', text: 'Ctrl/Cmd + 滚轮调整笔刷半径' },
         { label: '完成', text: '松开左键提交当前笔触' },
@@ -374,7 +374,7 @@ export function resolveActiveToolUsageHints(context: ActiveToolUsageHintContext)
   if (tool === 'landform') {
     return {
       tool,
-      title: `地貌工具 · ${resolveShapeLabel(context.landformBuildShape)}`,
+      title: `地貌烘焙工具 · ${resolveShapeLabel(context.landformBuildShape)}`,
       rows: resolveLandformRows(context.landformBuildShape),
     }
   }

@@ -224,7 +224,6 @@ import type { LandformBuildShape } from '@/types/landform-build-shape'
 import type { WaterBuildShape } from '@/types/water-build-shape'
 import type { WallBuildShape } from '@/types/wall-build-shape'
 import {
-  applyGroundTextureToGroundObject,
   createGroundMesh,
   getVisibleInfiniteGroundChunkVersion,
   hasPendingGroundChunkWork,
@@ -1436,15 +1435,8 @@ function refreshGroundRuntimeMaterials(node: SceneNode, targetObject: THREE.Obje
     }
     applyMaterialConfigToMaterial(sculptedMaterial, sculptedConfig, materialOverrideOptions)
     setGroundSculptedMaterial(groundObject, sculptedMaterial)
-    // When user has assigned an albedo texture to sculpted material, skip runtime-authored texture.
-    const hasUserTexture = !!(sculptedConfig.textures?.albedo?.assetId)
-    if (!hasUserTexture) {
-      applyGroundTextureToGroundObject(groundObject, groundDefinition)
-    }
   } else {
     setGroundSculptedMaterial(groundObject, null)
-    // Ground base textures are runtime-authored and should win over node albedo overrides.
-    applyGroundTextureToGroundObject(groundObject, groundDefinition)
   }
 }
 
@@ -3738,7 +3730,6 @@ const {
   scatterPreviewGroup,
   groundSelectionGroup,
   groundSelection,
-  groundTextureInputRef,
   restoreGroupdScatter,
   onGroundChunkSetChanged,
   updateScatterLod,
@@ -3748,7 +3739,6 @@ const {
   handlePointerMove: handleGroundEditorPointerMove,
   handlePointerUp: handleGroundEditorPointerUp,
   handlePointerCancel: handleGroundEditorPointerCancel,
-  handleGroundTextureFileChange,
   hasActiveSelection: groundEditorHasActiveSelection,
   handleActiveBuildToolChange: handleGroundEditorBuildToolChange,
   cancelScatterErase: cancelGroundEditorScatterErase,
@@ -17440,7 +17430,6 @@ async function handlePointerUp(event: PointerEvent) {
         setActiveLandformVertexHandle(null)
 
         if (state.moved) {
-          sceneStore.flushPendingLandformSurfacePreview()
           if (!commitLandformContourNode(state.nodeId, state.workingPoints)) {
             sceneStore.restoreLandformSurfaceMeshRuntime(state.nodeId)
           }
@@ -17578,7 +17567,6 @@ async function handlePointerUp(event: PointerEvent) {
         setActiveLandformVertexHandle(null)
 
         if (state.moved) {
-          sceneStore.flushPendingLandformSurfacePreview()
           if (!commitLandformContourNode(state.nodeId, state.workingPoints)) {
             sceneStore.restoreLandformSurfaceMeshRuntime(state.nodeId)
           }
@@ -22951,7 +22939,6 @@ onBeforeUnmount(() => {
     nodePickerStore.cancelActivePick('user')
   }
   disposeGroundEditor()
-  groundTextureInputRef.value = null
   disposeSceneNodes()
   disposeScene()
   disposeWallDoorSelectionController()
@@ -23733,14 +23720,6 @@ defineExpose({
         ]"
       />
     </div>
-    <input
-      ref="groundTextureInputRef"
-      class="ground-texture-input"
-      type="file"
-      accept="image/*"
-      @change="handleGroundTextureFileChange"
-    >
-
     <AssetPickerDialog
       v-model="wallPresetDialogOpen"
       :asset-id="wallBrushPresetAssetId ?? ''"
@@ -24309,7 +24288,4 @@ defineExpose({
   pointer-events: none;
 }
 
-.ground-texture-input {
-  display: none;
-}
 </style>

@@ -243,6 +243,7 @@ import { visitExplicitComponentAssetReferences } from '../utils/sceneExplicitAss
 import { createSceneStoreWallHelpers } from './sceneStoreWall'
 import { mergeUserDataWithWaterBuildShape, isWaterSurfaceNode } from '@/utils/waterBuildShapeUserData'
 import { createLatestIdleScheduler } from '@/utils/latestIdleScheduler'
+import { bakeLandformGroundSplatForSceneDocument } from '@/utils/landformGroundBake'
 import type { WaterBuildShape } from '@/types/water-build-shape'
 import {
   createNodePrefabHelpers,
@@ -1070,56 +1071,99 @@ const landformHelpers = createSceneStoreLandformHelpers({
   updateLandformGroup,
 })
 
-type LandformSurfacePreviewRequest = {
-  store: { nodes: SceneNode[] }
-  nodeId: string
-  localPoints: Array<[number, number]>
+type LandformGroundSplatBakeRequest = {
+  version: number
+  scene: Pick<SceneState, 'nodes'> & { currentSceneId?: string | null }
+  snapshot: StoredSceneDocument
+  reason: string
 }
 
-const landformSurfacePreviewScheduler = createLatestIdleScheduler<LandformSurfacePreviewRequest>((request) => {
-  const target = findNodeById(request.store.nodes, request.nodeId)
-  if (!target || target.dynamicMesh?.type !== 'Landform') {
-    return
+function collectLandformSurfaceLayerTextureAssetIdsFromNodes(nodes: SceneNode[] | undefined | null): string[] {
+  const assetIds = new Set<string>()
+  const visit = (items: SceneNode[] | undefined | null): void => {
+    if (!Array.isArray(items)) {
+      return
+    }
+    for (const node of items) {
+      const layers = node?.dynamicMesh?.type === 'Landform' && Array.isArray(node.dynamicMesh.surfaceLayers)
+        ? node.dynamicMesh.surfaceLayers
+        : []
+      for (const layer of layers) {
+        if (!Array.isArray(layer?.textureAssetIds)) {
+          continue
+        }
+        for (const assetId of layer.textureAssetIds) {
+          const normalized = typeof assetId === 'string' ? assetId.trim() : ''
+          if (normalized) {
+            assetIds.add(normalized)
+          }
+        }
+      }
+      if (Array.isArray(node?.children) && node.children.length) {
+        visit(node.children)
+      }
+    }
   }
+  visit(nodes)
+  return Array.from(assetIds)
+}
 
-  const runtime = getRuntimeObject(request.nodeId)
-  if (!runtime) {
-    return
-  }
+let landformGroundSplatBakeVersion = 0
+  const landformGroundSplatBakeScheduler = createLatestIdleScheduler<LandformGroundSplatBakeRequest>((request) => {
+  void (async () => {
+    const baked = await bakeLandformGroundSplatForSceneDocument(request.snapshot)
+    if (request.version !== landformGroundSplatBakeVersion) {
+      return
+    }
 
-  const groundNode = resolveGroundNodeForHeightSampling(request.store.nodes)
-  const groundDefinition = groundNode?.dynamicMesh?.type === 'Ground'
-    ? resolveGroundRuntimeDefinition(request.store as any, groundNode.id)
-    : null
-  const existingMesh = target.dynamicMesh as LandformDynamicMesh
-  const componentState = target.components?.[LANDFORM_COMPONENT_TYPE] as { props?: unknown } | undefined
-  const componentProps = clampLandformComponentProps(
-    (componentState?.props as Partial<LandformComponentProps> | undefined)
-      ?? resolveLandformComponentPropsFromMesh(existingMesh),
-  )
+    const groundNode = findGroundNode(request.scene.nodes)
+    if (!groundNode?.dynamicMesh || groundNode.dynamicMesh.type !== 'Ground') {
+      return
+    }
 
-  const previewMesh = landformHelpers.buildLandformDynamicMeshFromLocalPoints(
-    target,
-    request.localPoints,
-    groundDefinition,
-    groundNode,
-    {
-      ...componentProps,
-      buildShape: readLandformBuildShapeFromNode(target),
-    },
-    runtime,
-  )
-  if (!previewMesh) {
-    return
-  }
+    if (!baked) {
+      groundNode.dynamicMesh = {
+        ...groundNode.dynamicMesh,
+        groundSurfaceChunks: null,
+        groundSplatBake: null,
+      } as GroundDynamicMesh
+      return
+    }
 
-  updateLandformGroup(runtime, {
-    ...previewMesh,
-    materialConfigId: existingMesh.materialConfigId ?? previewMesh.materialConfigId ?? null,
+    groundNode.dynamicMesh = {
+      ...groundNode.dynamicMesh,
+      groundSurfaceChunks: manualDeepClone(baked),
+      groundSplatBake: {
+        revision: Date.now(),
+        chunkTextureMap: manualDeepClone(baked),
+        surfaceLayerTextureAssetIds: collectLandformSurfaceLayerTextureAssetIdsFromNodes(request.snapshot.nodes),
+      },
+    } as GroundDynamicMesh
+  })().catch((error) => {
+    console.warn('[SceneStore] Failed to bake landform ground splat', error)
   })
 }, {
-  timeoutMs: 96,
+  timeoutMs: 180,
 })
+
+function scheduleLandformGroundSplatBake(
+  store: Pick<SceneState, 'nodes'> & { currentSceneId?: string | null },
+  reason: string,
+): void {
+  const snapshot = manualDeepClone({
+    id: typeof store.currentSceneId === 'string' && store.currentSceneId.trim().length
+      ? store.currentSceneId.trim()
+      : 'landform-ground-bake',
+    nodes: store.nodes,
+  }) as StoredSceneDocument
+  landformGroundSplatBakeVersion += 1
+  landformGroundSplatBakeScheduler.schedule({
+    version: landformGroundSplatBakeVersion,
+    scene: store,
+    snapshot,
+    reason,
+  })
+}
 
 const wallHelpers = createSceneStoreWallHelpers({
   createWallNodeMaterials,
@@ -2349,9 +2393,6 @@ function cloneDynamicMeshDefinition(mesh?: SceneDynamicMesh): SceneDynamicMesh |
       const surfaceFeather = (Array.isArray(landformMesh.renderCache?.surfaceFeather) ? landformMesh.renderCache?.surfaceFeather : [])
         .map((entry) => Number(entry))
         .filter((entry) => Number.isFinite(entry))
-      const groundTextureDataUrl = typeof landformMesh.renderCache?.groundTextureDataUrl === 'string'
-        ? landformMesh.renderCache.groundTextureDataUrl
-        : null
       const normalizeId = (value: unknown) => (typeof value === 'string' && value.trim().length ? value.trim() : null)
       const uvScaleX = Number.isFinite((landformMesh.uvScale as any)?.x) ? Number((landformMesh.uvScale as any).x) : 1
       const uvScaleY = Number.isFinite((landformMesh.uvScale as any)?.y) ? Number((landformMesh.uvScale as any).y) : 1
@@ -2368,7 +2409,6 @@ function cloneDynamicMeshDefinition(mesh?: SceneDynamicMesh): SceneDynamicMesh |
           surfaceUvs,
           surfaceGroundUvs,
           surfaceFeather,
-          groundTextureDataUrl,
         },
         materialConfigId: normalizeId(landformMesh.materialConfigId),
         enableFeather: typeof landformMesh.enableFeather === 'boolean' ? landformMesh.enableFeather : undefined,
@@ -2871,6 +2911,8 @@ function rebuildLandformNodeForTerrain(store: {
     )
     updateLandformGroup(runtime, node.dynamicMesh as LandformDynamicMesh)
   }
+
+  scheduleLandformGroundSplatBake(store, `rebuild:${nodeId}`)
 
   return true
 }
@@ -9416,93 +9458,6 @@ export const useSceneStore = defineStore('scene', {
       commitSceneSnapshot(this)
       return true
     },
-    setGroundTexture(payload: { dataUrl: string | null; name?: string | null; assetId?: string | null }) {
-      const groundNode = this.groundNode
-      if (!groundNode) {
-        return false
-      }
-      if (groundNode.dynamicMesh?.type !== 'Ground') {
-        groundNode.dynamicMesh = createGroundDynamicMeshDefinition({}, this.groundSettings)
-      }
-      const definition = groundNode.dynamicMesh as GroundDynamicMesh
-      const nextDataUrl = payload.dataUrl ?? null
-      const nextName = payload.name ?? null
-      const nextAssetId = payload.assetId ?? null
-      if (
-        definition.textureDataUrl === nextDataUrl
-        && definition.textureName === nextName
-        && (definition.textureAssetId ?? null) === nextAssetId
-      ) {
-        return false
-      }
-
-      this.appendUndoEntry({
-        kind: 'ground-texture',
-        nodeId: groundNode.id,
-        dataUrl: definition.textureDataUrl ?? null,
-        name: definition.textureName ?? null,
-        assetId: definition.textureAssetId ?? null,
-      })
-
-      groundNode.dynamicMesh = {
-        ...definition,
-        textureDataUrl: nextDataUrl,
-        textureName: nextName,
-        textureAssetId: nextAssetId,
-      }
-      this.nodes = [...this.nodes]
-      finalizeDynamicMeshRuntimePatch(this, groundNode.id, 'Ground')
-
-      commitSceneSnapshot(this)
-      return true
-    },
-    async setGroundTextureFromDataUrl(payload: { dataUrl: string | null; name?: string | null }) {
-      const nextDataUrl = payload.dataUrl ?? null
-      const nextName = payload.name ?? null
-      if (!nextDataUrl) {
-        const changed = this.setGroundTexture({ dataUrl: null, name: nextName, assetId: null })
-        return { changed, assetId: null as string | null, textureUrl: null as string | null }
-      }
-
-      const blob = dataUrlToBlob(nextDataUrl)
-      const assetId = await computeBlobHash(blob)
-      const trimmedName = typeof nextName === 'string' ? nextName.trim() : ''
-      const inferredExtension = getExtensionFromMimeType(blob.type) ?? 'png'
-      const filenameBase = trimmedName.length ? trimmedName : 'terrain-base-texture'
-      const filename = extractExtension(filenameBase) ? filenameBase : `${filenameBase}.${inferredExtension}`
-      const assetCache = useAssetCacheStore()
-      const cachedEntry = await assetCache.storeAssetBlob(assetId, {
-        blob,
-        mimeType: blob.type || 'image/png',
-        filename,
-      })
-
-      this.registerAsset({
-        id: assetId,
-        name: filename,
-        extension: extractExtension(filename) ?? inferredExtension,
-        type: 'image',
-        downloadUrl: assetId,
-        previewColor: '#ffffff',
-        thumbnail: null,
-        description: 'Ground base texture',
-        gleaned: true,
-      }, {
-        source: { type: 'local' },
-        autoSave: false,
-      })
-
-      const changed = this.setGroundTexture({
-        dataUrl: cachedEntry.blobUrl ?? cachedEntry.downloadUrl ?? null,
-        name: nextName ?? filename,
-        assetId,
-      })
-      return {
-        changed,
-        assetId,
-        textureUrl: cachedEntry.blobUrl ?? cachedEntry.downloadUrl ?? null,
-      }
-    },
     setGroundNormalMap(payload: { dataUrl: string | null; name?: string | null; assetId?: string | null }) {
       const groundNode = this.groundNode
       if (!groundNode) {
@@ -10245,6 +10200,9 @@ export const useSceneStore = defineStore('scene', {
         syncRoadDynamicMeshStaticMetadataImported(updatedTarget, updatedTarget.dynamicMesh as RoadDynamicMesh)
         this.queueSceneNodePatch(nodeId, ['userData'])
       }
+      if (updatedTarget?.dynamicMesh?.type === 'Landform') {
+        scheduleLandformGroundSplatBake(this, 'updateNodeDynamicMesh')
+      }
 
       finalizeDynamicMeshRuntimePatch(this, nodeId, resolveDynamicMeshType(updatedTarget?.dynamicMesh ?? target.dynamicMesh))
       commitSceneSnapshot(this)
@@ -10439,6 +10397,9 @@ export const useSceneStore = defineStore('scene', {
       if (requiresDynamicMeshPatch) {
         this.queueSceneNodePatch(nodeId, ['dynamicMesh'])
       }
+      if (findNodeById(this.nodes, nodeId)?.dynamicMesh?.type === 'Landform') {
+        scheduleLandformGroundSplatBake(this, 'updateNodeMaterialProps')
+      }
       commitSceneSnapshot(this)
     },
     updateNodeMaterialType(nodeId: string, nodeMaterialId: string, type: SceneMaterialType) {
@@ -10471,6 +10432,9 @@ export const useSceneStore = defineStore('scene', {
       this.queueSceneNodePatch(nodeId, ['materials'])
       if (requiresDynamicMeshPatch) {
         this.queueSceneNodePatch(nodeId, ['dynamicMesh'])
+      }
+      if (findNodeById(this.nodes, nodeId)?.dynamicMesh?.type === 'Landform') {
+        scheduleLandformGroundSplatBake(this, 'updateNodeMaterialType')
       }
       commitSceneSnapshot(this)
       return true
@@ -10524,6 +10488,9 @@ export const useSceneStore = defineStore('scene', {
       if (requiresDynamicMeshPatch) {
         this.queueSceneNodePatch(nodeId, ['dynamicMesh'])
       }
+      if (findNodeById(this.nodes, nodeId)?.dynamicMesh?.type === 'Landform') {
+        scheduleLandformGroundSplatBake(this, 'assignNodeMaterial')
+      }
       commitSceneSnapshot(this)
       return true
     },
@@ -10557,6 +10524,9 @@ export const useSceneStore = defineStore('scene', {
       this.queueSceneNodePatch(nodeId, ['materials'])
       if (requiresDynamicMeshPatch) {
         this.queueSceneNodePatch(nodeId, ['dynamicMesh'])
+      }
+      if (findNodeById(this.nodes, nodeId)?.dynamicMesh?.type === 'Landform') {
+        scheduleLandformGroundSplatBake(this, 'setNodeMaterials')
       }
       commitSceneSnapshot(this)
       return true
@@ -15601,6 +15571,7 @@ export const useSceneStore = defineStore('scene', {
           if (materialsChanged || meshChanged) {
             this.nodes = [...this.nodes]
             commitSceneSnapshot(this)
+            scheduleLandformGroundSplatBake(this, 'createLandformNode:existing')
           }
           return updated
         }
@@ -15743,19 +15714,20 @@ export const useSceneStore = defineStore('scene', {
           editorFlags: payload.editorFlags,
         })
 
-        if (node) {
-          this.setNodeMaterials(node.id, defaultMaterials)
-          const result = this.addNodeComponent(node.id, LANDFORM_COMPONENT_TYPE)
-          const component = result?.component
-          if (component?.id) {
+      if (node) {
+        this.setNodeMaterials(node.id, defaultMaterials)
+        const result = this.addNodeComponent(node.id, LANDFORM_COMPONENT_TYPE)
+        const component = result?.component
+        if (component?.id) {
             const nextProps = resolveLandformComponentPropsFromMesh(defaultMesh)
             this.updateNodeComponentProps(node.id, component.id, {
               enableFeather: nextProps.enableFeather,
-              feather: nextProps.feather,
-              uvScale: nextProps.uvScale,
-            })
-          }
+            feather: nextProps.feather,
+            uvScale: nextProps.uvScale,
+          })
         }
+        scheduleLandformGroundSplatBake(this, 'createLandformNode')
+      }
 
         return node
       } finally {
@@ -15995,7 +15967,6 @@ export const useSceneStore = defineStore('scene', {
       nodeId: string
       localPoints: Array<[number, number]>
     }): SceneNode | null {
-      landformSurfacePreviewScheduler.cancel()
       const target = findNodeById(this.nodes, payload.nodeId)
       if (!target || target.dynamicMesh?.type !== 'Landform') {
         return null
@@ -16057,6 +16028,7 @@ export const useSceneStore = defineStore('scene', {
         this.queueSceneNodePatch(payload.nodeId, ['dynamicMesh'])
       }
       replaceSceneNodes(this, [...this.nodes])
+      scheduleLandformGroundSplatBake(this, 'updateLandformSurfaceMeshNode')
       commitSceneSnapshot(this)
       return findNodeById(this.nodes, payload.nodeId)
     },
@@ -16075,24 +16047,40 @@ export const useSceneStore = defineStore('scene', {
         return false
       }
 
-      landformSurfacePreviewScheduler.schedule({
-        store: this as { nodes: SceneNode[] },
-        nodeId: payload.nodeId,
-        localPoints: payload.localPoints.map(([x, z]) => [Number(x), Number(z)] as [number, number]),
+      const groundNode = resolveGroundNodeForHeightSampling(this.nodes)
+      const groundDefinition = groundNode?.dynamicMesh?.type === 'Ground'
+        ? resolveGroundRuntimeDefinition(this, groundNode.id)
+        : null
+      const existingMesh = target.dynamicMesh as LandformDynamicMesh
+      const componentState = target.components?.[LANDFORM_COMPONENT_TYPE] as { props?: unknown } | undefined
+      const componentProps = clampLandformComponentProps(
+        (componentState?.props as Partial<LandformComponentProps> | undefined)
+          ?? resolveLandformComponentPropsFromMesh(existingMesh),
+      )
+
+      const previewMesh = landformHelpers.buildLandformDynamicMeshFromLocalPoints(
+        target,
+        payload.localPoints,
+        groundDefinition,
+        groundNode,
+        {
+          ...componentProps,
+          buildShape: readLandformBuildShapeFromNode(target),
+        },
+        runtime,
+      )
+      if (!previewMesh) {
+        return false
+      }
+
+      updateLandformGroup(runtime, {
+        ...previewMesh,
+        materialConfigId: existingMesh.materialConfigId ?? previewMesh.materialConfigId ?? null,
       })
       return true
     },
 
-    flushPendingLandformSurfacePreview(): void {
-      landformSurfacePreviewScheduler.flushNow()
-    },
-
-    cancelPendingLandformSurfacePreview(): void {
-      landformSurfacePreviewScheduler.cancel()
-    },
-
     restoreLandformSurfaceMeshRuntime(nodeId: string): boolean {
-      landformSurfacePreviewScheduler.cancel()
       const target = findNodeById(this.nodes, nodeId)
       if (!target || target.dynamicMesh?.type !== 'Landform') {
         return false
@@ -17447,6 +17435,9 @@ export const useSceneStore = defineStore('scene', {
       if (updatedNode) {
         componentManager.syncNode(updatedNode)
       }
+      if (type === LANDFORM_COMPONENT_TYPE) {
+        scheduleLandformGroundSplatBake(this, 'updateNodeComponentProps')
+      }
       commitSceneSnapshot(this)
       return true
     },
@@ -17652,6 +17643,7 @@ export const useSceneStore = defineStore('scene', {
       if (!existingIds.length) {
         return
       }
+      const shouldRebakeLandformGround = existingIds.some((id) => findNodeById(this.nodes, id)?.dynamicMesh?.type === 'Landform')
       const idSet = new Set(existingIds)
       const parentMap = buildParentMap(this.nodes)
 
@@ -17710,6 +17702,9 @@ export const useSceneStore = defineStore('scene', {
       const prevSelection = cloneSelection(this.selectedNodeIds)
       const nextSelection = prevSelection.filter((id) => !removed.includes(id))
       this.setSelection(nextSelection)
+      if (shouldRebakeLandformGround) {
+        scheduleLandformGroundSplatBake(this, 'removeSceneNodes')
+      }
       commitSceneSnapshot(this)
     },
 

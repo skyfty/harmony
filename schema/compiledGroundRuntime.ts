@@ -6,7 +6,6 @@ import {
   type CompiledGroundRenderTileRecord,
 } from './compiledGround'
 import type { GroundDynamicMesh } from './core'
-import { applyGroundTextureToGroundObject } from './groundMesh'
 
 type CompiledGroundRenderRuntime = {
   group: THREE.Group
@@ -723,7 +722,6 @@ export function syncCompiledGroundRenderTiles(params: SyncCompiledGroundRenderTi
         activeRuntime.group.add(mesh)
         activeRuntime.meshes.set(record.key, mesh)
         activeRuntime.loadedChunkKeysVersion += 1
-        applyGroundTextureToGroundObject(params.groundObject, params.groundDefinition)
       })
       .finally(() => {
         renderRuntimeMap.get(params.groundObject)?.pendingLoads.delete(record.key)

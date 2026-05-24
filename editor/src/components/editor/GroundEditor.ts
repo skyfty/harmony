@@ -260,8 +260,9 @@ function cloneGroundSurfaceChunks(definition: GroundDynamicMesh): GroundSurfaceC
 	const nextChunks: GroundSurfaceChunkTextureMap = {}
 	for (const [key, value] of Object.entries(source)) {
 		nextChunks[key] = {
-			textureAssetId: value.textureAssetId,
-			revision: value.revision,
+			...value,
+			textureAssetId: typeof value.textureAssetId === 'string' && value.textureAssetId.trim().length > 0 ? value.textureAssetId.trim() : null,
+			revision: Number.isFinite(value.revision) ? Math.max(0, Math.trunc(value.revision)) : 0,
 		}
 	}
 	return nextChunks
@@ -569,7 +570,17 @@ async function bakeDirtyGroundSurfaceChunks(params: {
 	const nextChunks: GroundSurfaceChunkTextureMap = params.groundSurfaceChunks
 		? Object.fromEntries(
 			Object.entries(params.groundSurfaceChunks).map(([key, value]) => [key, {
-				textureAssetId: value.textureAssetId,
+				textureAssetId: typeof value.textureAssetId === 'string' && value.textureAssetId.trim().length > 0 ? value.textureAssetId.trim() : null,
+				normalTextureAssetId: typeof value.normalTextureAssetId === 'string' && value.normalTextureAssetId.trim().length > 0 ? value.normalTextureAssetId.trim() : null,
+				roughnessTextureAssetId: typeof value.roughnessTextureAssetId === 'string' && value.roughnessTextureAssetId.trim().length > 0 ? value.roughnessTextureAssetId.trim() : null,
+				metalnessTextureAssetId: typeof value.metalnessTextureAssetId === 'string' && value.metalnessTextureAssetId.trim().length > 0 ? value.metalnessTextureAssetId.trim() : null,
+				aoTextureAssetId: typeof value.aoTextureAssetId === 'string' && value.aoTextureAssetId.trim().length > 0 ? value.aoTextureAssetId.trim() : null,
+				emissiveTextureAssetId: typeof value.emissiveTextureAssetId === 'string' && value.emissiveTextureAssetId.trim().length > 0 ? value.emissiveTextureAssetId.trim() : null,
+				splatMapAssetIds: Array.isArray(value.splatMapAssetIds)
+					? value.splatMapAssetIds
+						.map((assetId) => (typeof assetId === 'string' ? assetId.trim() : ''))
+						.filter((assetId) => assetId.length > 0)
+					: null,
 				revision: value.revision,
 			}]),
 		) as GroundSurfaceChunkTextureMap
@@ -600,6 +611,12 @@ async function bakeDirtyGroundSurfaceChunks(params: {
 		})
 		nextChunks[chunk.key] = {
 			textureAssetId,
+			normalTextureAssetId: null,
+			roughnessTextureAssetId: null,
+			metalnessTextureAssetId: null,
+			aoTextureAssetId: null,
+			emissiveTextureAssetId: null,
+			splatMapAssetIds: null,
 			revision: chunk.surfaceRevision,
 		}
 	}
@@ -1596,7 +1613,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		top: '0px',
 		opacity: 0,
 	})
-	const groundTextureInputRef = ref<HTMLInputElement | null>(null)
 	const isSculpting = ref(false)
 	const isPainting = ref(false)
 
@@ -7507,41 +7523,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		commitGroundModification((bounds) => options.sceneStore.resetGroundRegion(bounds))
 	}
 
-	function handleGroundTextureSelectRequest() {
-		if (!groundTextureInputRef.value) {
-			return
-		}
-		groundTextureInputRef.value.value = ''
-		groundTextureInputRef.value.click()
-	}
-
-	function handleGroundTextureFileChange(event: Event) {
-		const input = event.target as HTMLInputElement | null
-		if (!input?.files || input.files.length === 0) {
-			return
-		}
-		const file = input.files[0]
-		if (!file) {
-			return
-		}
-		const reader = new FileReader()
-		reader.onload = async () => {
-			const result = typeof reader.result === 'string' ? reader.result : null
-			if (!result) {
-				return
-			}
-			const { changed } = await options.sceneStore.setGroundTextureFromDataUrl({
-				dataUrl: result,
-				name: file.name ?? null,
-			})
-			if (!changed) {
-				return
-			}
-			refreshGroundMesh(getGroundDynamicMeshDefinition())
-		}
-		reader.readAsDataURL(file)
-	}
-
 	function handleGroundCancel() {
 		cancelGroundSelection()
 	}
@@ -7599,7 +7580,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		groundSelection,
 		isGroundToolbarVisible,
 		groundSelectionToolbarStyle,
-		groundTextureInputRef,
 		isSculpting,
 		restoreGroupdScatter,
 		restoreTerrainSurfaceChunks,
@@ -7619,8 +7599,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		handleGroundRaise,
 		handleGroundLower,
 		handleGroundReset,
-		handleGroundTextureSelectRequest,
-		handleGroundTextureFileChange,
 		handleGroundCancel,
 		refreshGroundMesh,
 		hasActiveSelection,

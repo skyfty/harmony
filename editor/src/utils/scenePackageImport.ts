@@ -29,6 +29,25 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+function assertNoLandformNodes(nodes: StoredSceneDocument['nodes'], path = 'root'): void {
+  if (!Array.isArray(nodes)) {
+    return
+  }
+  nodes.forEach((node, index) => {
+    if (!node || typeof node !== 'object') {
+      return
+    }
+    const nextPath = `${path}.nodes[${index}]`
+    const dynamicMesh = (node as { dynamicMesh?: { type?: string } | null }).dynamicMesh
+    if (dynamicMesh?.type === 'Landform') {
+      throw new Error(`Scene package contains unsupported Landform runtime data at ${nextPath}. Export must bake landforms before packaging.`)
+    }
+    if (Array.isArray(node.children) && node.children.length > 0) {
+      assertNoLandformNodes(node.children as StoredSceneDocument['nodes'], `${nextPath}.children`)
+    }
+  })
+}
+
 function normalizePlanningPackageImageEntry(raw: unknown): PlanningScenePackageImageEntry | null {
   if (!isPlainObject(raw)) {
     return null
@@ -247,6 +266,7 @@ export async function loadStoredScenesFromScenePackage(zipBytes: ArrayBuffer): P
       throw new Error(`Invalid scene document in scene bundle: ${sceneEntry.path}`)
     }
     const sceneDocument = stripGroundHeightMapsFromSceneDocument(rawScene as unknown as StoredSceneDocument)
+    assertNoLandformNodes(sceneDocument.nodes, `scenes[${sceneEntry.sceneId}]`)
     groundHeightSidecars[sceneEntry.sceneId] = extractGroundHeightSidecarFromPackage(zip, sceneEntry, sceneDocument)
     groundScatterSidecars[sceneEntry.sceneId] = extractGroundScatterSidecarFromPackage(zip, sceneEntry, sceneDocument)
     terrainDatasetManifests[sceneEntry.sceneId] = extractTerrainDatasetManifestFromPackage(zip, sceneEntry)

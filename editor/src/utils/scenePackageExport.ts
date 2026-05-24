@@ -41,6 +41,7 @@ import { buildAssetRegistryAliasMap, normalizeAssetIdWithRegistry } from '@/util
 import {
   stripGroundHeightMapsFromSceneDocument,
 } from '@/utils/groundHeightSidecar'
+import { bakeLandformGroundSplatForSceneDocument } from '@/utils/landformGroundBake'
 import {
   computeSceneCompiledGroundBuildKey,
   computeSceneCompiledGroundSourceSignature,
@@ -500,10 +501,63 @@ function buildCombinedAssetEventContext(
 
 function stripGroundBakedTextureAssetIds(nodes: SceneJsonExportDocument['nodes']): void {
   for (const node of nodes) {
+    if (node && typeof node === 'object') {
+      const dynamicMesh = (node as { dynamicMesh?: Record<string, unknown> | null }).dynamicMesh
+      if (dynamicMesh && typeof dynamicMesh === 'object') {
+        if ('groundSurfaceChunks' in dynamicMesh) {
+          dynamicMesh.groundSurfaceChunks = null
+        }
+        if ('groundSplatBake' in dynamicMesh) {
+          dynamicMesh.groundSplatBake = null
+        }
+      }
+    }
     if (Array.isArray(node.children) && node.children.length > 0) {
       stripGroundBakedTextureAssetIds(node.children)
     }
   }
+}
+
+function stripLandformNodes(nodes: SceneJsonExportDocument['nodes']): void {
+  if (!Array.isArray(nodes)) {
+    return
+  }
+  for (let index = nodes.length - 1; index >= 0; index -= 1) {
+    const node = nodes[index]
+    if (!node || typeof node !== 'object') {
+      continue
+    }
+    const dynamicMesh = (node as { dynamicMesh?: { type?: string } | null }).dynamicMesh
+    if (dynamicMesh?.type === 'Landform') {
+      nodes.splice(index, 1)
+      continue
+    }
+    if (Array.isArray(node.children) && node.children.length > 0) {
+      stripLandformNodes(node.children)
+      if (node.children.length === 0) {
+        delete node.children
+      }
+    }
+  }
+}
+
+function assertNoLandformNodes(nodes: SceneJsonExportDocument['nodes'], path = 'root'): void {
+  if (!Array.isArray(nodes)) {
+    return
+  }
+  nodes.forEach((node, index) => {
+    if (!node || typeof node !== 'object') {
+      return
+    }
+    const nextPath = `${path}.nodes[${index}]`
+    const dynamicMesh = (node as { dynamicMesh?: { type?: string } | null }).dynamicMesh
+    if (dynamicMesh?.type === 'Landform') {
+      throw new Error(`Scene export still contains unsupported Landform data at ${nextPath}. Bake landforms before export.`)
+    }
+    if (Array.isArray(node.children) && node.children.length > 0) {
+      assertNoLandformNodes(node.children, `${nextPath}.children`)
+    }
+  })
 }
 
 async function prepareSceneDocumentForPackageExport(document: SceneJsonExportDocument): Promise<SceneJsonExportDocument> {
@@ -512,6 +566,16 @@ async function prepareSceneDocumentForPackageExport(document: SceneJsonExportDoc
     return document
   }
   stripGroundBakedTextureAssetIds(cloned.nodes ?? [])
+  await bakeLandformGroundSplatForSceneDocument(cloned as StoredSceneDocument)
+  stripLandformNodes(cloned.nodes ?? [])
+  assertNoLandformNodes(cloned.nodes ?? [])
+  const bakedGroundNode = cloned.nodes ? cloned.nodes.find((node) => node?.dynamicMesh?.type === 'Ground') : null
+  if (bakedGroundNode?.dynamicMesh && bakedGroundNode.dynamicMesh.type === 'Ground') {
+    bakedGroundNode.dynamicMesh = {
+      ...bakedGroundNode.dynamicMesh,
+      groundSplatBake: null,
+    }
+  }
   const looksEditableScene = 'assetCatalog' in cloned
   if (!looksEditableScene) {
     return cloned

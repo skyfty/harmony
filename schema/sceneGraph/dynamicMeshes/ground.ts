@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { GroundDynamicMesh } from '../../index';
 import type { SceneNodeWithExtras } from '../types';
-import { applyGroundTextureToGroundObject, createGroundMesh, setGroundMaterial, setGroundSculptedMaterial, updateGroundMesh } from '../../groundMesh';
+import { createGroundMesh, setGroundMaterial, setGroundSculptedMaterial, updateGroundMesh } from '../../groundMesh';
 
 export async function buildGroundMesh(
   deps: {
@@ -62,8 +62,6 @@ export async function buildGroundMesh(
     setGroundMaterial(groundObject, groundMaterial);
     setGroundSculptedMaterial(groundObject, null);
   }
-  applyGroundTextureToGroundObject(groundObject, meshInfo);
-
   deps.applyTransform(groundObject, node);
   deps.applyVisibility(groundObject, node);
 
