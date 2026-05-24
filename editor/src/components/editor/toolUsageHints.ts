@@ -29,7 +29,7 @@ export type ActiveToolUsageHintContext = {
   wallBuildShape: WallBuildShape
   scatterBrushShape: TerrainScatterBrushShape
   scatterAssetSelected: boolean
-  paintAssetSelected: boolean
+  paintAssetSelected?: boolean
 }
 
 function createRows(rows: ToolUsageHintRow[]): ToolUsageHintRow[] {

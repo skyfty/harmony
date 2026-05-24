@@ -38,7 +38,6 @@ function createGroundDefinition(overrides = {}) {
     planningMetadata: null,
     castShadow: false,
     terrainScatterInstancesUpdatedAt: 0,
-    terrainPaint: null,
     groundSurfaceChunks: null,
     optimizedMesh: overrides.optimizedMesh ?? null,
     localEditTiles: overrides.localEditTiles ?? null,

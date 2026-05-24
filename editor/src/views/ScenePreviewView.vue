@@ -6,6 +6,7 @@ import { MapControls } from 'three/examples/jsm/controls/MapControls.js'
 import type { KTX2Loader } from 'three/examples/jsm/loaders/KTX2Loader.js'
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js'
 import Stats from 'three/examples/jsm/libs/stats.module.js'
+import { createInstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCuller'
 import {
 	DEFAULT_ENVIRONMENT_SETTINGS,
 	DEFAULT_ENVIRONMENT_GRAVITY,
@@ -435,7 +436,6 @@ const isGroundWireframeVisible = ref(true)
 const isOtherRigidbodyWireframeVisible = ref(true)
 const isPhysicsCollisionDebugVisible = ref(true)
 const isInstancedCullingVisualizationVisible = ref(false)
-const { createInstancedBvhFrustumCuller } = await import('@schema/instancedBvhFrustumCuller')
 const instancedLodFrustumCuller = createInstancedBvhFrustumCuller()
 const isRendererDebugVisible = ref(false)
 const isInstancingDebugVisible = ref(false)

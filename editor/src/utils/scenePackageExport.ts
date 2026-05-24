@@ -500,9 +500,6 @@ function buildCombinedAssetEventContext(
 
 function stripGroundBakedTextureAssetIds(nodes: SceneJsonExportDocument['nodes']): void {
   for (const node of nodes) {
-    if (node.dynamicMesh?.type === 'Ground') {
-      node.dynamicMesh.terrainPaintBakedTextureAssetId = null
-    }
     if (Array.isArray(node.children) && node.children.length > 0) {
       stripGroundBakedTextureAssetIds(node.children)
     }
@@ -867,8 +864,6 @@ function buildProjectExportMetadata(options: {
       addBreakdownBytes(breakdown, 'localAssetBytes', size)
     } else if (entry.resourceType === 'planningImage') {
       addBreakdownBytes(breakdown, 'planningImageBytes', size)
-    } else if (entry.resourceType === 'terrainWeightmap') {
-      addBreakdownBytes(breakdown, 'terrainBytes', size)
     } else if (entry.resourceType === 'other') {
       addBreakdownBytes(breakdown, 'embeddedAssetBytes', size)
     } else {

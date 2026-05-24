@@ -452,7 +452,6 @@ function collectNodeAssetDependenciesLocal(node: SceneNode | null | undefined, b
   if ((node as any).dynamicMesh?.type === 'Ground') {
     const definition = (node as any).dynamicMesh as any
     collectTerrainScatterAssetDependencies(definition.terrainScatter, bucket)
-    collectAssetIdCandidate(bucket, definition?.terrainPaintBakedTextureAssetId)
   }
   if (Array.isArray(node.children) && node.children.length) {
     node.children.forEach((child) => collectNodeAssetDependenciesLocal(child, bucket))

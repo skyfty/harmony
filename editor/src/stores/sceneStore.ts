@@ -2096,7 +2096,10 @@ function persistGroundScatterSidecarForNode(groundNode: SceneNode | null): boole
   if (!groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
     return false
   }
-  void useScenesStore().saveGroundScatterSidecar(buildSceneDocumentFromState(useSceneStore())).catch((error: unknown) => {
+  const sceneStore = useSceneStore()
+  const document = buildSceneDocumentFromState(sceneStore)
+  const sidecar = useGroundScatterStore().buildSceneDocumentSidecar(document.id, findGroundNode(document.nodes ?? []))
+  void useScenesStore().saveSceneGroundScatterSidecar(document.id, sidecar).catch((error: unknown) => {
     console.warn('[SceneStore] Failed to persist ground scatter sidecar', error)
   })
   return true

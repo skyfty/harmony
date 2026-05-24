@@ -83,8 +83,8 @@ function manualDeepCloneLocal(source: unknown): unknown {
   return source
 }
 
-type GroundDynamicMeshLike = GroundDynamicMesh & { terrainScatter?: unknown; terrainPaint?: unknown }
-type GroundDynamicMeshResult = GroundDynamicMesh & { terrainScatter?: unknown; terrainPaint?: unknown }
+type GroundDynamicMeshLike = GroundDynamicMesh & { terrainScatter?: unknown }
+type GroundDynamicMeshResult = GroundDynamicMesh & { terrainScatter?: unknown }
 type GroundRuntimeDynamicMesh = GroundDynamicMesh & { manualHeightMap: Float64Array; planningHeightMap: Float64Array }
 
 function buildPrimaryGroundMaterialProps(

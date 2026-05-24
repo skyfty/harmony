@@ -117,7 +117,6 @@
       "resourceTypes": {
         "localAsset": "Local Asset",
         "planningImage": "Planning Image",
-        "terrainWeightmap": "Terrain Weightmap",
         "lightmap": "Lightmap",
         "navmesh": "Navmesh",
         "baked": "Baked Resource",
