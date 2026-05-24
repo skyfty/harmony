@@ -308,6 +308,7 @@ const lineDraftHoverPoint = ref<PlanningPoint | null>(null)
 const dragState = ref<DragState>({ type: 'idle' })
 const viewTransform = reactive({ scale: 1, offset: { x: 0, y: 0 } })
 const planningImages = ref<PlanningImage[]>([])
+const imageHydrationToken = ref(0)
 const planningGuides = ref<PlanningGuide[]>([])
 const guideDraft = ref<PlanningGuide | null>(null)
 const planningImageImportQueue = ref<File[]>([])
@@ -5985,8 +5986,6 @@ void updateTerrainLine
 void removeTerrainLine
 void addTerrainLineFromSelected
 
-const imageHydrationToken = ref(0)
-
 onMounted(() => {
   // Do NOT load persisted images here; defer until the dialog is opened to avoid slowing scene load.
   window.addEventListener('pointermove', handlePointerMove, { passive: false })
@@ -6168,7 +6167,7 @@ onBeforeUnmount(() => {
               >
               <v-list density="compact" class="dem-layer-list">
                 <v-list-item
-                  v-if="selectedDem"
+                  v-if="planningTerrain.dem"
                   class="layer-item"
                   :class="{ active: activeDemId === 'terrain-dem' }"
                   @click="handleDemLayerSelect"
