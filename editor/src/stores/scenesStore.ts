@@ -1557,14 +1557,6 @@ export const useScenesStore = defineStore('scenes', {
     async loadGroundHeightSidecar(sceneId: string): Promise<ArrayBuffer | null> {
       return await readSceneGroundHeightSidecar(this.workspaceId, sceneId)
     },
-    async saveGroundScatterSidecar(document: StoredSceneDocument) {
-      const source = cloneForIndexedDb(document)
-      const sidecar = useGroundScatterStore().buildSceneDocumentSidecar(source.id, findGroundNodeInDocument(source))
-      await writeSceneGroundScatterSidecar(this.workspaceId, source.id, sidecar)
-      if (this.workspaceType === 'user') {
-        await this.syncSceneToServer(document)
-      }
-    },
     async loadGroundScatterSidecar(sceneId: string): Promise<ArrayBuffer | null> {
       return await readSceneGroundScatterSidecar(this.workspaceId, sceneId)
     },

@@ -7,17 +7,6 @@ import type {
   SceneNode,
 } from '@schema/core'
 import { GROUND_HEIGHT_UNSET_VALUE, GROUND_TERRAIN_CHUNK_SIZE_METERS, createGroundHeightMap, getGroundVertexIndex } from '@schema/core'
-import {
-  ensureTerrainScatterStore,
-  getTerrainScatterStore,
-  loadTerrainScatterSnapshot,
-  removeTerrainScatterLayer,
-  replaceTerrainScatterInstances,
-  serializeTerrainScatterStore,
-  type TerrainScatterInstance,
-  type TerrainScatterStore,
-  type TerrainScatterStoreSnapshot,
-} from '@schema/terrain-scatter'
 import { sampleGroundHeight } from '@schema/groundMesh'
 import { resolveGroundRuntimeChunkCells } from '@schema/groundMesh'
 import { computeGroundBaseHeightAtVertex } from '@schema/groundGeneration'
@@ -46,7 +35,6 @@ import {
   type WaterPresetId,
 } from '@schema/components'
 import { generateUuid } from '@/utils/uuid'
-import { releaseScatterInstance } from '@/utils/terrainScatterRuntime'
 import { buildPlanningDemGroundRegionData, type PlanningDemBuildProgress, type PlanningDemHeightRegion, type PlanningDemRegionConversionResult } from '@/utils/planningDemToGround'
 import { buildPlanningDemTerrainConversionInWorker } from '@/utils/planningDemTerrainDataset'
 import {
@@ -154,6 +142,11 @@ function groundBoundsChanged(
     || Math.abs(currentBounds.maxZ - nextBounds.maxZ) > 1e-6
 }
 
+function stripTerrainScatterFromGroundDynamicMesh<T extends GroundRuntimeDynamicMesh>(dynamicMesh: T): Omit<T, 'terrainScatter'> {
+  const { terrainScatter: _terrainScatter, ...nextDynamicMesh } = dynamicMesh as T & { terrainScatter?: unknown }
+  return nextDynamicMesh as Omit<T, 'terrainScatter'>
+}
+
 export function isPlanningImageConversionNode(node: SceneNode | null | undefined): boolean {
   if (!node || typeof node !== 'object') {
     return false
@@ -225,12 +218,6 @@ const AIR_WALL_HEIGHT_M = 3
 const AIR_WALL_THICKNESS_M = 0.02
 const AIR_WALL_WIDTH_M = 0.25
 
-type SnapshotWithUpdatedAt = {
-  metadata?: {
-    updatedAt?: number | null
-  } | null
-}
-
 type NodeComponentWithId = {
   id?: string
 }
@@ -238,18 +225,6 @@ type NodeComponentWithId = {
 function getNodeComponent(node: SceneNode, componentType: string): NodeComponentWithId | undefined {
   const components = node.components as Record<string, NodeComponentWithId | undefined> | undefined
   return components?.[componentType]
-}
-
-function monotonicUpdatedAt(previousSnapshot: SnapshotWithUpdatedAt | null | undefined, nextUpdatedAt: number | null | undefined): number {
-  const prev = Number(previousSnapshot?.metadata?.updatedAt)
-  const next = Number(nextUpdatedAt)
-  if (!Number.isFinite(prev)) {
-    return Number.isFinite(next) ? next : Date.now()
-  }
-  if (!Number.isFinite(next)) {
-    return prev + 1
-  }
-  return next <= prev ? prev + 1 : next
 }
 
 type LayerKind = 'terrain' | 'guide-route'
@@ -606,23 +581,6 @@ export async function clearPlanningGeneratedContent(sceneStore: ConvertPlanningT
   if (idsToRemove.length) {
     sceneStore.removeSceneNodes(idsToRemove)
   }
-
-  const groundNode = sceneStore.groundNode
-  if (groundNode?.dynamicMesh?.type === 'Ground') {
-    let nextGroundDynamicMesh = resolveGroundRuntimeDefinition(sceneStore, groundNode)
-    const resetContours = resetGroundPlanningContours(nextGroundDynamicMesh)
-    if (resetContours.changed) {
-      nextGroundDynamicMesh = resetContours.definition
-      syncPlanningHeightState(sceneStore, groundNode, nextGroundDynamicMesh)
-    }
-
-    const prevSnapshot = nextGroundDynamicMesh.terrainScatter ?? null
-    const storeLocal = ensureScatterStore(groundNode.id, prevSnapshot)
-    removePlanningScatterLayers(storeLocal)
-    const snapshot = serializeTerrainScatterStore(storeLocal)
-    snapshot.metadata.updatedAt = monotonicUpdatedAt(prevSnapshot, snapshot.metadata.updatedAt)
-    sceneStore.commitGroundScatterEdit(groundNode.id, snapshot)
-  }
 }
 
 async function clearPlanningGeneratedContentIncremental(options: {
@@ -685,48 +643,6 @@ async function clearPlanningGeneratedContentIncremental(options: {
   if (!groundNode?.dynamicMesh || groundNode.dynamicMesh.type !== 'Ground') {
     return
   }
-
-  const previousSnapshot = groundNode.dynamicMesh.terrainScatter ?? null
-  const store = ensureScatterStore(groundNode.id, previousSnapshot)
-  const currentFeatureIds = new Set<string>([
-    ...options.currentPolygonIds,
-    ...options.currentPolylineIds,
-  ])
-
-  store.layers.forEach((layer) => {
-    const payload = layer.params?.payload
-    if (payload?.source !== PLANNING_CONVERSION_SOURCE) {
-      return
-    }
-
-    const existingRaw = Array.isArray(layer.instances) ? (layer.instances as TerrainScatterInstance[]) : []
-    const nextInstances = existingRaw.filter((instance) => {
-      const meta = instance.metadata as Record<string, unknown> | null | undefined
-      if (!meta || meta.source !== PLANNING_CONVERSION_SOURCE) {
-        return true
-      }
-
-      const planningLayerId = typeof meta.planningLayerId === 'string' ? meta.planningLayerId : null
-      const featureId = typeof meta.featureId === 'string' ? meta.featureId : null
-      const layerRemoved = planningLayerId ? !options.currentLayerIds.has(planningLayerId) : false
-      const layerRebuild = planningLayerId ? options.activeLayerIds.has(planningLayerId) : false
-      const featureRemoved = featureId ? !currentFeatureIds.has(featureId) : false
-      const shouldRemove = layerRemoved || layerRebuild || featureRemoved
-
-      if (shouldRemove) {
-        releaseScatterInstance(instance)
-      }
-      return !shouldRemove
-    })
-
-    if (nextInstances.length !== existingRaw.length) {
-      replaceTerrainScatterInstances(store, layer.id, nextInstances)
-    }
-  })
-
-  const snapshot = serializeTerrainScatterStore(store)
-  snapshot.metadata.updatedAt = monotonicUpdatedAt(previousSnapshot, snapshot.metadata.updatedAt)
-  options.sceneStore.commitGroundScatterEdit(groundNode.id, snapshot)
 }
 
 function resetGroundPlanningContours(definition: GroundRuntimeDynamicMesh): { definition: GroundRuntimeDynamicMesh; changed: boolean } {
@@ -992,7 +908,7 @@ function applyPlanningDemRegionToGround(
   const nextGround = syncGroundCoverageRegionState(sceneStore, groundNode, nextGroundSeed, dirtyChunkKeys)
 
   // 更新场景存储中的地面节点动态网格
-  sceneStore.updateGroundNodeDynamicMesh(groundNode.id, nextGround)
+  sceneStore.updateGroundNodeDynamicMesh(groundNode.id, stripTerrainScatterFromGroundDynamicMesh(nextGround))
   
   // 返回更新后的地面运行时动态网格
   return nextGround
@@ -1015,7 +931,10 @@ async function syncGroundTerrainDatasetRuntime(options: {
     runtimeTerrainDatasetEnabled: Boolean(sampler),
     runtimeTerrainHeightSampler: sampler,
   } satisfies GroundRuntimeDynamicMesh
-  options.sceneStore.updateGroundNodeDynamicMesh(options.groundNode.id, nextGround)
+  options.sceneStore.updateGroundNodeDynamicMesh(
+    options.groundNode.id,
+    stripTerrainScatterFromGroundDynamicMesh(nextGround),
+  )
   return nextGround
 }
 
@@ -1889,57 +1808,6 @@ async function applyPlanningTerrainContoursToGround(options: {
   return next
 }
 
-function ensureScatterStore(groundNodeId: string, snapshot: TerrainScatterStoreSnapshot | null | undefined): TerrainScatterStore {
-  let store = getTerrainScatterStore(groundNodeId) ?? ensureTerrainScatterStore(groundNodeId)
-  if (snapshot) {
-    const snapshotUpdatedAt = Number(snapshot.metadata?.updatedAt)
-    const storeUpdatedAt = Number(store.metadata?.updatedAt)
-    const hasSnapshotUpdatedAt = Number.isFinite(snapshotUpdatedAt)
-    const hasStoreUpdatedAt = Number.isFinite(storeUpdatedAt)
-    const shouldHydrate = hasSnapshotUpdatedAt
-      ? (!hasStoreUpdatedAt || snapshotUpdatedAt !== storeUpdatedAt)
-      : true
-
-    if (shouldHydrate) {
-      // IMPORTANT: release existing runtime bindings BEFORE rehydrating the store.
-      // Otherwise we'd overwrite in-memory instances (with binding info) and leak instanced slots.
-      try {
-        for (const layer of Array.from(store.layers.values())) {
-          for (const instance of layer.instances ?? []) {
-            releaseScatterInstance(instance)
-          }
-        }
-      } catch {
-        // ignore
-      }
-
-      try {
-        store = loadTerrainScatterSnapshot(groundNodeId, snapshot)
-      } catch (_error) {
-        // ignore invalid snapshot
-        store = ensureTerrainScatterStore(groundNodeId)
-      }
-    }
-  }
-  return store
-}
-
-function removePlanningScatterLayers(store: TerrainScatterStore) {
-  const layersToRemove: string[] = []
-  store.layers.forEach((layer) => {
-    const payload = layer.params?.payload
-    if (payload?.source === PLANNING_CONVERSION_SOURCE) {
-      layersToRemove.push(layer.id)
-      // Release runtime bindings immediately so instancing cache count updates now.
-      for (const instance of layer.instances ?? []) {
-        releaseScatterInstance(instance)
-      }
-    }
-  })
-  layersToRemove.forEach((id) => removeTerrainScatterLayer(store, id))
-}
-
-
 export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOptions): Promise<{ rootNodeId: string }> {
   const { sceneStore, planningData } = options
   const yieldController = createYieldController({ signal: options.signal, minIntervalMs: 12 })
@@ -1973,12 +1841,15 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
       || Number(currentGroundDefinition.editTileSizeMeters) !== GROUND_TERRAIN_CHUNK_SIZE_METERS
 
     if (groundBoundsChanged(currentGroundBounds, nextGroundBounds) || needsResolutionUpdate) {
-      sceneStore.updateGroundNodeDynamicMesh(sceneStore.groundNode.id, {
-        ...currentGroundDefinition,
-        worldBounds: nextGroundBounds,
-        editTileSizeMeters: GROUND_TERRAIN_CHUNK_SIZE_METERS,
-        editTileResolution: nextEditTileResolution,
-      })
+      sceneStore.updateGroundNodeDynamicMesh(
+        sceneStore.groundNode.id,
+        stripTerrainScatterFromGroundDynamicMesh({
+          ...currentGroundDefinition,
+          worldBounds: nextGroundBounds,
+          editTileSizeMeters: GROUND_TERRAIN_CHUNK_SIZE_METERS,
+          editTileResolution: nextEditTileResolution,
+        } as GroundRuntimeDynamicMesh),
+      )
       await yieldController.maybeYield(true)
     }
   }
@@ -2048,12 +1919,8 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
   const totalUnits = images.length
   let doneUnits = 0
 
-  // Terrain scatter preparation
-  let store: TerrainScatterStore = ensureTerrainScatterStore(sceneStore.groundNode?.id ?? 'ground')
-  let previousSnapshot: TerrainScatterStoreSnapshot | null = null
   const groundNode = sceneStore.groundNode
   let groundDefinition: GroundDynamicMesh | null = groundNode ? resolveGroundRuntimeDefinition(sceneStore, groundNode) : null
-  previousSnapshot = groundDefinition?.terrainScatter ?? null
 
   // Terrain contour sculpting: additive height deltas from terrain-layer polygons.
   // Apply BEFORE other conversions so walls/roads/water sample the updated ground height.
@@ -2065,7 +1932,10 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
       const clearedPlanning = resetContours.definition
       groundDefinition = clearedPlanning
       syncPlanningHeightState(sceneStore, groundNode, clearedPlanning as GroundRuntimeDynamicMesh)
-      sceneStore.updateGroundNodeDynamicMesh(groundNode.id, clearedPlanning)
+      sceneStore.updateGroundNodeDynamicMesh(
+        groundNode.id,
+        stripTerrainScatterFromGroundDynamicMesh(clearedPlanning as GroundRuntimeDynamicMesh),
+      )
       await yieldController.maybeYield(true)
     }
 
@@ -2208,7 +2078,10 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
         })
         groundDefinition = next as GroundRuntimeDynamicMesh
         syncPlanningHeightState(sceneStore, groundNode, next as GroundRuntimeDynamicMesh)
-        sceneStore.updateGroundNodeDynamicMesh(groundNode.id, next as GroundRuntimeDynamicMesh)
+        sceneStore.updateGroundNodeDynamicMesh(
+          groundNode.id,
+          stripTerrainScatterFromGroundDynamicMesh(next as GroundRuntimeDynamicMesh),
+        )
         doneUnits += contourPolygons.length
       } catch (err) {
         console.warn('Failed to apply planning terrain contours', err)
@@ -2422,18 +2295,6 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
       }
       await yieldController.maybeYield(true)
     }
-  }
-
-  const finalGround = sceneStore.groundNode
-  if (finalGround?.dynamicMesh?.type === 'Ground') {
-    emitProgress(options, 'Applying scatter…', 96)
-    await yieldController.maybeYield(true)
-    if (store) {
-      const snapshot = serializeTerrainScatterStore(store)
-      snapshot.metadata.updatedAt = monotonicUpdatedAt(previousSnapshot, snapshot.metadata.updatedAt)
-      sceneStore.commitGroundScatterEdit(finalGround.id, snapshot)
-    }
-    await yieldController.maybeYield(true)
   }
 
   // Ensure runtime objects/components are synced so the converted content shows up immediately.
