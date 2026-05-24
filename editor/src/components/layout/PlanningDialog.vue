@@ -6132,31 +6132,33 @@ onBeforeUnmount(() => {
             <header>
               <div class="panel-header">
                 <h3>DEM / Heightmap</h3>
-                <v-btn
-                  icon
-                  size="small"
-                  variant="text"
-                  color="primary"
-                  title="Clear DEM import"
-                  @click="clearPlanningDemImport"
-                >
-                  <v-icon>mdi-close-circle-outline</v-icon>
-                </v-btn>
+                <div class="panel-header__actions">
+                  <v-btn
+                    icon
+                    size="small"
+                    variant="text"
+                    color="primary"
+                    title="Import DEM"
+                    @click="handleDemUploadClick"
+                  >
+                    <v-icon>mdi-cloud-upload-outline</v-icon>
+                  </v-btn>
+                  <v-btn
+                    icon
+                    size="small"
+                    variant="text"
+                    color="primary"
+                    title="Clear DEM import"
+                    @click="clearPlanningDemImport"
+                  >
+                    <v-icon>mdi-close-circle-outline</v-icon>
+                  </v-btn>
+                </div>
               </div>
             </header>
             <div class="dem-import-panel__body">
               <div v-if="demImportError" class="upload-error">{{ demImportError }}</div>
-              <div v-if="selectedDem" class="dem-import-panel__hint">
-                Current source: {{ currentDemUsesHeightmapImage ? 'Image heightmap' : 'GeoTIFF DEM' }}
-              </div>
-              <div class="dem-import-panel__hint">
-                Import a GeoTIFF DEM or grayscale PNG heightmap, then use the property panel to tune the conversion settings.
-              </div>
-              <div class="dem-import-panel__actions">
-                <v-btn block variant="tonal" color="primary" @click="handleDemUploadClick">
-                  Import DEM
-                </v-btn>
-              </div>
+        
               <input
                 ref="demFileInputRef"
                 type="file"
@@ -6180,9 +6182,6 @@ onBeforeUnmount(() => {
                   <div class="dem-import-panel__empty">No DEM imported yet.</div>
                 </v-list-item>
               </v-list>
-              <div v-if="planningDemPreviewUrl" class="dem-import-panel__preview">
-                <img :src="planningDemPreviewUrl" alt="DEM preview">
-              </div>
             </div>
           </section>
 
