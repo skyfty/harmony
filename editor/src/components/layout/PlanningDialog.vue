@@ -862,6 +862,16 @@ const canvasSize = computed(() => ({
 const frozenCanvasSize = ref<{ width: number; height: number } | null>(null)
 const effectiveCanvasSize = computed(() => frozenCanvasSize.value ?? canvasSize.value)
 
+// Actual CSS pixel size of the stage (used by DOM/SVG layout).
+// Example: 100m -> 1000px when BASE_PIXELS_PER_METER = 10.
+const effectiveCanvasPixelSize = computed(() => {
+  const meters = effectiveCanvasSize.value
+  return {
+    width: Math.max(1, Math.round(meters.width * BASE_PIXELS_PER_METER)),
+    height: Math.max(1, Math.round(meters.height * BASE_PIXELS_PER_METER)),
+  }
+})
+
 // Screen pixels per meter after considering zoom.
 const renderScale = computed(() => normalizeViewScale(viewTransform.scale) * BASE_PIXELS_PER_METER)
 
@@ -976,14 +986,14 @@ function zoomViewTo(nextViewScale: number, anchorClientX: number, anchorClientY:
 
   // Keep the world point under the anchor stable while changing the zoom level.
   const previousRenderScale = previousViewScale * BASE_PIXELS_PER_METER
-  const centerBefore = computeStageCenterOffset(rect)
+  const centerBefore = computeStageCenterOffset(rect, previousRenderScale)
   const sx = anchorClientX - rect.left
   const sy = anchorClientY - rect.top
   const worldX = (sx - centerBefore.x) / previousRenderScale - viewTransform.offset.x
   const worldY = (sy - centerBefore.y) / previousRenderScale - viewTransform.offset.y
 
   const nextRenderScale = normalizedNextViewScale * BASE_PIXELS_PER_METER
-  const nextCenter = computeStageCenterOffset(rect)
+  const nextCenter = computeStageCenterOffset(rect, nextRenderScale)
   viewTransform.scale = normalizedNextViewScale
   viewTransform.offset.x = (sx - nextCenter.x) / nextRenderScale - worldX
   viewTransform.offset.y = (sy - nextCenter.y) / nextRenderScale - worldY
@@ -2639,10 +2649,12 @@ const editorBackgroundStyle = computed(() => {
   }
 })
 
-function computeStageCenterOffset(rect: Pick<DOMRect, 'width' | 'height'>) {
+function computeStageCenterOffset(rect: Pick<DOMRect, 'width' | 'height'>, renderScaleValue: number) {
+  const width = effectiveCanvasSize.value.width * renderScaleValue
+  const height = effectiveCanvasSize.value.height * renderScaleValue
   return {
-    x: rect.width / 2,
-    y: rect.height / 2,
+    x: (rect.width - width) / 2,
+    y: (rect.height - height) / 2,
   }
 }
 
@@ -2651,7 +2663,7 @@ const stageCenterOffset = computed(() => {
   if (!rect) {
     return { x: 0, y: 0 }
   }
-  return computeStageCenterOffset(rect)
+  return computeStageCenterOffset(rect, renderScale.value)
 })
 
 const stageStyle = computed(() => {
@@ -2661,8 +2673,8 @@ const stageStyle = computed(() => {
   const translateX = center.x + viewTransform.offset.x * renderScaleValue
   const translateY = center.y + viewTransform.offset.y * renderScaleValue
   return {
-    width: '100%',
-    height: '100%',
+    width: `${effectiveCanvasPixelSize.value.width}px`,
+    height: `${effectiveCanvasPixelSize.value.height}px`,
     transform: `translate3d(${translateX}px, ${translateY}px, 0) scale(${viewScale})`,
     transformOrigin: 'top left',
     willChange: 'transform',
@@ -3270,24 +3282,26 @@ function getAlignMarkerStyle(image: PlanningImage): CSSProperties {
 }
 
 function getGuidesOverlayStyle(): CSSProperties {
+  const base = effectiveCanvasPixelSize.value
   return {
-    width: '100%',
-    height: '100%',
+    width: `${base.width}px`,
+    height: `${base.height}px`,
   }
 }
 
 function getGuideLineStyle(guide: PlanningGuide): CSSProperties {
+  const base = effectiveCanvasPixelSize.value
   if (guide.axis === 'x') {
     return {
       left: `${guide.value * BASE_PIXELS_PER_METER}px`,
       top: '0px',
-      height: '100%',
+      height: `${base.height}px`,
     }
   }
   return {
     left: '0px',
     top: `${guide.value * BASE_PIXELS_PER_METER}px`,
-    width: '100%',
+    width: `${base.width}px`,
   }
 }
 
@@ -3557,7 +3571,7 @@ function clientToWorld(clientX: number, clientY: number): PlanningPoint {
     return { x: 0, y: 0 }
   }
   const scale = renderScale.value
-  const center = computeStageCenterOffset(rect)
+  const center = computeStageCenterOffset(rect, scale)
   const x = (clientX - rect.left - center.x) / scale - viewTransform.offset.x
   const y = (clientY - rect.top - center.y) / scale - viewTransform.offset.y
   return { x, y }
@@ -3569,7 +3583,7 @@ function viewportPointToWorld(point: PlanningPoint): PlanningPoint {
     return { x: 0, y: 0 }
   }
   const scale = renderScale.value
-  const center = computeStageCenterOffset(rect)
+  const center = computeStageCenterOffset(rect, scale)
   return {
     x: (point.x - center.x) / scale - viewTransform.offset.x,
     y: (point.y - center.y) / scale - viewTransform.offset.y,
