@@ -9368,7 +9368,7 @@ const {
   instancedMeshes,
   {
     syncInstancedOutlineEntryTransform,
-    resolveSceneNodeById: (nodeId: string) => findSceneNode(sceneStore.nodes, nodeId),
+    resolveSceneNodeById: (nodeId: string) => sceneStore.getNodeById(nodeId),
     syncInstancedTransformOverride: ({ nodeId, object, baseMatrix, assetId }) => {
       if (wallRenderer.syncWallDragInstancedMatrices(nodeId, baseMatrix)) {
         return true
@@ -9378,7 +9378,7 @@ const {
         return true
       }
 
-      const node = findSceneNode(sceneStore.nodes, nodeId)
+      const node = sceneStore.getNodeById(nodeId)
       if (node && assetId) {
         const layout = clampSceneNodeInstanceLayout(node.instanceLayout ?? null)
         if (layout && layout.mode === 'grid') {
@@ -9645,7 +9645,7 @@ function updateInstancedCullingAndBinding(): void {
     if (!object?.userData?.instancedAssetId) {
       return
     }
-    const node = resolveSceneNodeById(nodeId)
+    const node = sceneStore.getNodeById(nodeId)
     if (!node) {
       return
     }
