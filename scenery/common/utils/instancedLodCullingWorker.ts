@@ -11,7 +11,22 @@ import {
 	computeInstancedLodCullingResult,
 } from '@harmony/schema/core'
 
-let instancedLodCullingWorker: Worker | null = null
+type InstancedLodCullingWorkerLike = {
+  postMessage: (message: unknown, transferables?: Transferable[]) => void
+  terminate: () => void
+}
+
+type H5InstancedLodCullingWorkerLike = InstancedLodCullingWorkerLike & {
+  onmessage: ((event: MessageEvent<InstancedLodCullingResponse>) => void) | null
+  onerror: ((event: Event | string) => void) | null
+}
+
+type WechatInstancedLodCullingWorkerLike = InstancedLodCullingWorkerLike & {
+  onMessage?: (callback: (event: { data: InstancedLodCullingResponse }) => void) => void
+  onProcessKilled?: (callback: (event: unknown) => void) => void
+}
+
+let instancedLodCullingWorker: InstancedLodCullingWorkerLike | null = null
 let instancedLodCullingPendingRequestId: number | null = null
 let instancedLodCullingLatestResult: InstancedLodCullingResponse | null = null
 let instancedLodCullingLastSettledResult: InstancedLodCullingResponse | null = null
@@ -23,37 +38,96 @@ type InstancedLodRuntimeEntryLike = {
   snapshot: InstancedLodCullingCandidateSnapshot
 }
 
-function getInstancedLodCullingWorker(): Worker | null {
+function handleInstancedLodCullingWorkerMessage(data: InstancedLodCullingResponse): void {
+  if (!data || data.kind !== 'cull-instanced-lod-result') {
+    return
+  }
+  if (instancedLodCullingPendingRequestId !== data.requestId) {
+    return
+  }
+  instancedLodCullingPendingRequestId = null
+  instancedLodCullingLatestResult = data
+  instancedLodCullingLastSettledResult = data
+}
+
+function handleInstancedLodCullingWorkerFailure(worker: InstancedLodCullingWorkerLike, event: unknown): void {
+  console.warn('[Scenery][InstancedLodCulling] Worker failed', event)
+  instancedLodCullingPendingRequestId = null
+  instancedLodCullingLatestResult = null
+  worker.terminate()
+  instancedLodCullingWorker = null
+}
+
+function postInstancedLodCullingMessage(
+  worker: InstancedLodCullingWorkerLike,
+  message: InstancedLodCullingRequest | InstancedLodCullingSyncRequest,
+  transferables?: Transferable[],
+): void {
+  if ('onMessage' in worker && typeof (worker as WechatInstancedLodCullingWorkerLike).onMessage === 'function') {
+    worker.postMessage(message)
+    return
+  }
+  worker.postMessage(message, transferables)
+}
+
+function createH5InstancedLodCullingWorker(): H5InstancedLodCullingWorkerLike | null {
   if (typeof Worker === 'undefined') {
     return null
   }
+  const worker = new Worker(new URL('../../workers/instancedLodCulling.worker.ts', import.meta.url), {
+    type: 'module',
+  }) as H5InstancedLodCullingWorkerLike
+  worker.onmessage = (event: MessageEvent<InstancedLodCullingResponse>) => {
+    handleInstancedLodCullingWorkerMessage(event.data)
+  }
+  worker.onerror = (event) => {
+    handleInstancedLodCullingWorkerFailure(worker, event)
+  }
+  return worker
+}
+
+function createMpWeixinInstancedLodCullingWorker(): WechatInstancedLodCullingWorkerLike | null {
+  const wxAny = (globalThis as typeof globalThis & {
+    wx?: {
+      createWorker?: (scriptPath: string) => WechatInstancedLodCullingWorkerLike | null
+    }
+  }).wx
+  if (!wxAny || typeof wxAny.createWorker !== 'function') {
+    return null
+  }
+  const worker = wxAny.createWorker('pages/scenery/workers/instancedLodCulling.worker.js')
+  if (!worker) {
+    return null
+  }
+  worker.onMessage?.((event) => {
+    handleInstancedLodCullingWorkerMessage(event.data)
+  })
+  worker.onProcessKilled?.((event) => {
+    handleInstancedLodCullingWorkerFailure(worker, event)
+  })
+  return worker
+}
+
+function getInstancedLodCullingWorker(): InstancedLodCullingWorkerLike | null {
   if (instancedLodCullingWorker) {
     return instancedLodCullingWorker
   }
   try {
-    instancedLodCullingWorker = new Worker(new URL('../workers/instancedLodCulling.worker.ts', import.meta.url), {
-      type: 'module',
-    })
-		instancedLodCullingWorker.onmessage = (event: MessageEvent<InstancedLodCullingResponse>) => {
-			const data = event.data
-			if (!data || data.kind !== 'cull-instanced-lod-result') {
-				return
-			}
-			if (instancedLodCullingPendingRequestId !== data.requestId) {
-				return
-			}
-			instancedLodCullingPendingRequestId = null
-			instancedLodCullingLatestResult = data
-			instancedLodCullingLastSettledResult = data
-		}
-    instancedLodCullingWorker.onerror = (event) => {
-      console.warn('[Scenery][InstancedLodCulling] Worker failed', event)
-      instancedLodCullingPendingRequestId = null
-      instancedLodCullingLatestResult = null
-      instancedLodCullingWorker?.terminate()
-      instancedLodCullingWorker = null
+    // #ifdef H5
+    const h5Worker = createH5InstancedLodCullingWorker()
+    if (h5Worker) {
+      instancedLodCullingWorker = h5Worker
+      return h5Worker
     }
-    return instancedLodCullingWorker
+    // #endif
+    // #ifdef MP-WEIXIN
+    const mpWorker = createMpWeixinInstancedLodCullingWorker()
+    if (mpWorker) {
+      instancedLodCullingWorker = mpWorker
+      return mpWorker
+    }
+    // #endif
+    return null
   } catch (error) {
     console.warn('[Scenery][InstancedLodCulling] Unable to initialize worker; falling back to main thread', error)
     instancedLodCullingWorker = null
@@ -102,12 +176,12 @@ export function dispatchInstancedLodCullingRequestWithCandidates(
   }
 	if (runtimeRevision >= 0 && runtimeRevision !== instancedLodCullingSyncedRevision) {
 		const staticSnapshots = buildStaticCandidateSnapshots(runtimeEntries)
-		const syncRequest: InstancedLodCullingSyncRequest = buildInstancedLodCullingSyncRequest({
+    const syncRequest: InstancedLodCullingSyncRequest = buildInstancedLodCullingSyncRequest({
 			revision: runtimeRevision,
 			candidates: staticSnapshots,
     })
     try {
-      worker.postMessage(syncRequest)
+      postInstancedLodCullingMessage(worker, syncRequest)
       instancedLodCullingSyncedRevision = runtimeRevision
     } catch (error) {
       console.warn('[Scenery][InstancedLodCulling] Failed to post worker sync request', error)
@@ -116,7 +190,7 @@ export function dispatchInstancedLodCullingRequestWithCandidates(
   }
 	instancedLodCullingPendingRequestId = request.requestId
 	try {
-		worker.postMessage(request, [
+		postInstancedLodCullingMessage(worker, request, [
 			request.cameraProjectionMatrix.buffer,
 			request.cameraMatrixWorldInverse.buffer,
 			request.cameraPosition.buffer,

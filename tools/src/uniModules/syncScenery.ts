@@ -36,7 +36,7 @@ export type SyncSceneryToConsumerUniModulesOptions = SyncSceneryCommonOptions & 
   consumerRoot?: string;
 };
 
-const DEFAULT_ALLOWED_ROOTS = ["package.json", "components", "common", "composables", "static"];
+const DEFAULT_ALLOWED_ROOTS = ["package.json", "components", "common", "composables", "static", "workers"];
 
 const DEFAULT_EXCLUDES = [
   "scripts/",
@@ -119,7 +119,6 @@ export function syncSceneryToSubpackageUniModules(options: SyncSceneryToSubpacka
   ensureDir(dest);
 
   const shouldCopy = defaultShouldCopyFactory(sceneryRoot);
-
   copyDirFiltered(sceneryRoot, sceneryRoot, dest, (rel, entry, srcAbsPath) => {
     return shouldCopy(toPosixPath(rel), entry, srcAbsPath);
   });

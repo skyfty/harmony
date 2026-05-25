@@ -49,6 +49,7 @@
             "urlCheck" : false,
             "es6": false
         },
+        "workers" : "pages/scenery/workers",
         "usingComponents" : true
     },
     "uniStatistics": {

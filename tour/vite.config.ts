@@ -3,7 +3,7 @@ import { createRequire } from 'node:module';
 import uni from '@dcloudio/vite-plugin-uni';
 import bundleOptimizer from '@uni-ku/bundle-optimizer';
 import threePlatformAdapter from '@minisheep/three-platform-adapter/plugin';
-import { toCustomChunkPlugin } from '@harmony/tools/vite';
+import { emitMpWorkerAssetPlugin, toCustomChunkPlugin } from '@harmony/tools/vite';
 import glsl from 'vite-plugin-glsl';
 import { visualizer } from 'rollup-plugin-visualizer';
 
@@ -415,6 +415,10 @@ export default {
         worker: 'pages/scenery/workers',
         wasm: 'pages/scenery/wasms',
       },
+    }),
+    emitMpWorkerAssetPlugin({
+      sourceChunkName: 'instancedLodCulling.worker',
+      fileName: 'pages/scenery/workers/instancedLodCulling.worker.js',
     }),
     {
       name: 'find-dep',

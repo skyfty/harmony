@@ -725,7 +725,7 @@ import {
 	type InstancedLodCullingResponse,
 	type InstancedLodCullingCandidateSnapshot,
 	type InstancedLodCullingRequest,
-} from '../utils/instancedLodCullingWorker';
+} from '../common/utils/instancedLodCullingWorker';
 import type { InstancedLodTarget } from '@harmony/schema/core';
 import type {
   SignboardPlacementSmoothingState,
