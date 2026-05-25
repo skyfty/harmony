@@ -326,6 +326,8 @@ export { rebuildSceneNodeIndex, resolveSceneNodeById, resolveSceneParentNodeId }
 export type { SceneNodeId, SceneNodeMap, SceneNodeParentMap } from './nodeIndexUtils'
 
 export * from './instanceLayout'
+export * from './instancedLodSelection'
+export * from './instancedLodCulling'
 export * from './components'
 
 export {

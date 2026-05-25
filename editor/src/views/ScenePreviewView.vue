@@ -6,7 +6,6 @@ import { MapControls } from 'three/examples/jsm/controls/MapControls.js'
 import type { KTX2Loader } from 'three/examples/jsm/loaders/KTX2Loader.js'
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js'
 import Stats from 'three/examples/jsm/libs/stats.module.js'
-import { createInstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCuller'
 import {
 	DEFAULT_ENVIRONMENT_SETTINGS,
 	DEFAULT_ENVIRONMENT_GRAVITY,
@@ -31,6 +30,8 @@ import {
 	parseRuntimePrefabData,
 	loadSkyCubeTexture,
 	extractSkycubeZipFaces,
+	resolveInstancedLodTargetFromSnapshot,
+	type InstancedLodTarget,
 } from '@schema/core'
 import type {
 	EnvironmentCsmSettings,
@@ -216,6 +217,16 @@ import {
 	DEFAULT_AXLE,
 	SCENE_STATE_ANCHOR_COMPONENT_TYPE,
 	} from '@schema/components'
+import {
+	buildInstancedLodCullingRequest,
+	buildInstancedLodCullingCandidateSnapshot,
+	computeInstancedLodCullingResult,
+	consumeInstancedLodCullingResult,
+	getLastInstancedLodCullingResult,
+	dispatchInstancedLodCullingRequest,
+	type InstancedLodCullingCandidateSnapshot,
+	type InstancedLodCullingRequest,
+} from '../utils/instancedLodCullingWorker'
 import { VehicleDriveController } from '@schema/motion'
 import type { VehicleDriveRuntimeState, VehicleDriveVehicle } from '@schema/motion'
 import { createBridgeVehicleProxy } from '@schema/motion'
@@ -436,7 +447,6 @@ const isGroundWireframeVisible = ref(true)
 const isOtherRigidbodyWireframeVisible = ref(true)
 const isPhysicsCollisionDebugVisible = ref(true)
 const isInstancedCullingVisualizationVisible = ref(false)
-const instancedLodFrustumCuller = createInstancedBvhFrustumCuller()
 const isRendererDebugVisible = ref(false)
 const isInstancingDebugVisible = ref(false)
 const isGroundChunkStatsVisible = ref(false)
@@ -449,6 +459,7 @@ const instancedLodTotalCount = ref(0)
 const terrainScatterVisibleCount = ref(0)
 const terrainScatterTotalCount = ref(0)
 const isDebugMenuOpen = ref(false)
+let instancedLodCullingRequestId = 0
 
 const rendererDebug = reactive({
 	width: 0,
@@ -1553,8 +1564,6 @@ const tempObserverPosition = new THREE.Vector3()
 const tempRegionObserverPosition = new THREE.Vector3()
 const tempCameraMatrix = new THREE.Matrix4()
 const cameraViewFrustum = new THREE.Frustum()
-const instancedCullingProjView = new THREE.Matrix4()
-const instancedCullingFrustum = new THREE.Frustum()
 const instancedCullingBox = new THREE.Box3()
 const instancedCullingSphere = new THREE.Sphere()
 const SCENE_PREVIEW_FOG_HEADROOM_RATIO = 0.88
@@ -1983,15 +1992,6 @@ const instancedMeshes: THREE.InstancedMesh[] = []
 let stopInstancedMeshSubscription: (() => void) | null = null
 let stopBillboardMeshSubscription: (() => void) | null = null
 
-type InstancedLodTarget = {
-	kind: 'model' | 'billboard'
-	assetId: string | null
-	sourceModelAssetId: string | null
-	faceCamera: boolean
-	forwardAxis: LodFaceCameraForwardAxis
-	key: string | null
-}
-
 let instancedCullingVisualizationGroup: THREE.Group | null = null
 let instancedCullingVisualizationMesh: THREE.InstancedMesh | null = null
 let instancedCullingVisualizationGeometry: THREE.BoxGeometry | null = null
@@ -2268,7 +2268,6 @@ async function syncGroundCache(document: SceneJsonExportDocument | null): Promis
 
 function shouldUpdateCameraDependentSystems(activeCamera: THREE.PerspectiveCamera, delta: number): boolean {
 	cameraDependentUpdateElapsed += Math.max(0, delta)
-	activeCamera.updateMatrixWorld(true)
 	activeCamera.getWorldPosition(cameraDependentUpdatePosition)
 	activeCamera.getWorldQuaternion(cameraDependentUpdateQuaternion)
 
@@ -2374,6 +2373,7 @@ type GroundChunkUserData = {
 type VehicleWheelBinding = {
 	nodeId: string | null
 	object: THREE.Object3D | null
+	instancedTargets: THREE.Object3D[]
 	radius: number
 	axleAxis: THREE.Vector3
 	isFrontWheel: boolean
@@ -3340,62 +3340,14 @@ function resolveLodComponent(
 }
 
 function resolveDesiredLodTarget(node: SceneNode, object: THREE.Object3D): InstancedLodTarget {
-	const sourceAssetId = typeof node.sourceAssetId === 'string' ? node.sourceAssetId : null
-	const rawLayout = (node as unknown as { instanceLayout?: unknown }).instanceLayout
-	const layout = rawLayout ? clampSceneNodeInstanceLayout(rawLayout) : null
-	const baseAssetId = resolveInstanceLayoutTemplateAssetId(layout, sourceAssetId)
-	const normalizedBase = typeof baseAssetId === 'string' ? baseAssetId.trim() : null
-	const component = resolveLodComponent(node)
-	if (!component) {
-		return {
-			kind: 'model',
-			assetId: normalizedBase,
-			sourceModelAssetId: normalizedBase,
-			faceCamera: false,
-			forwardAxis: LOD_FACE_CAMERA_FORWARD_AXIS_X,
-			key: normalizedBase ? `model:${normalizedBase}` : null,
-		}
-	}
-
-	const props = clampLodComponentProps(component.props)
-	const levels = props.levels
-	if (!levels.length) {
-		return {
-			kind: 'model',
-			assetId: normalizedBase,
-			sourceModelAssetId: normalizedBase,
-			faceCamera: false,
-			forwardAxis: LOD_FACE_CAMERA_FORWARD_AXIS_X,
-			key: normalizedBase ? `model:${normalizedBase}` : null,
-		}
-	}
-
 	resolveInstancedProxyWorldCenter(object, instancedCullingWorldPosition)
-	const distance = instancedCullingWorldPosition.distanceTo(camera?.position ?? instancedCullingWorldPosition)
-
-	let chosen: (typeof levels)[number] | null = null
-	for (let i = levels.length - 1; i >= 0; i -= 1) {
-		const candidate = levels[i]
-		if (candidate && distance >= candidate.distance) {
-			chosen = candidate
-			break
-		}
-	}
-	const renderTarget = resolveLodRenderTarget(chosen)
-	const assetId = typeof renderTarget.assetId === 'string' ? renderTarget.assetId.trim() : ''
-	const resolvedAssetId = assetId || normalizedBase || null
-	const kind = renderTarget.kind === 'billboard' && assetId ? 'billboard' : 'model'
-	const forwardAxis = kind === 'model'
-		? chosen?.forwardAxis ?? LOD_FACE_CAMERA_FORWARD_AXIS_X
-		: LOD_FACE_CAMERA_FORWARD_AXIS_Z
-	return {
-		kind,
-		assetId: resolvedAssetId,
-		sourceModelAssetId: normalizedBase,
-		faceCamera: chosen?.faceCamera === true,
-		forwardAxis,
-		key: resolvedAssetId ? `${kind}:${resolvedAssetId}` : null,
-	}
+	return resolveInstancedLodTargetFromSnapshot({
+		sourceAssetId: typeof node.sourceAssetId === 'string' ? node.sourceAssetId : null,
+		instanceLayout: (node as unknown as { instanceLayout?: unknown }).instanceLayout,
+		lodProps: resolveLodComponent(node)?.props ?? null,
+		worldPosition: instancedCullingWorldPosition,
+		cameraPosition: camera?.position ?? null,
+	})
 }
 
 function resolveModelFaceCameraAxis(axis: LodFaceCameraForwardAxis): THREE.Vector3 {
@@ -3817,14 +3769,79 @@ function updateInstancedCullingVisualization(
 	}
 }
 
+type InstancedLodRuntimeEntry = {
+	nodeId: string
+	object: THREE.Object3D
+	node: SceneNode
+	snapshot: InstancedLodCullingCandidateSnapshot
+}
+
+function collectInstancedLodRuntimeEntries(): InstancedLodRuntimeEntry[] {
+	const entries: InstancedLodRuntimeEntry[] = []
+	nodeObjectMap.forEach((object, nodeId) => {
+		if (!object?.userData?.instancedAssetId) {
+			return
+		}
+		const node = resolveNodeById(nodeId)
+		if (!node) {
+			return
+		}
+		const lodComponent = resolveLodComponent(node)
+		if (!lodComponent) {
+			return
+		}
+		const props = clampLodComponentProps(lodComponent.props)
+		object.updateMatrixWorld(true)
+		entries.push({
+			nodeId,
+			object,
+			node,
+			snapshot: buildInstancedLodCullingCandidateSnapshot({
+				nodeId,
+				enableCulling: props.enableCulling !== false,
+				matrixWorld: object.matrixWorld.elements,
+				bounds: (object.userData?.instancedBounds as InstancedLodCullingCandidateSnapshot['bounds'] | undefined) ?? null,
+				radiusHint: typeof object.userData?.__harmonyInstancedRadius === 'number'
+					&& Number.isFinite(object.userData.__harmonyInstancedRadius)
+					&& object.userData.__harmonyInstancedRadius > 0
+					? object.userData.__harmonyInstancedRadius
+					: null,
+				sourceAssetId: typeof node.sourceAssetId === 'string' ? node.sourceAssetId : null,
+				instanceLayout: (node as unknown as { instanceLayout?: unknown }).instanceLayout,
+				lodProps: props,
+			}),
+		})
+	})
+	entries.sort((a, b) => a.nodeId.localeCompare(b.nodeId))
+	return entries
+}
+
+function buildInstancedLodCullingRequestForFrame(
+	activeCamera: THREE.PerspectiveCamera,
+	entries: InstancedLodRuntimeEntry[],
+): InstancedLodCullingRequest {
+	instancedLodCullingRequestId += 1
+	return buildInstancedLodCullingRequest({
+		requestId: instancedLodCullingRequestId,
+		cameraProjectionMatrix: activeCamera.projectionMatrix.elements,
+		cameraMatrixWorldInverse: activeCamera.matrixWorldInverse.elements,
+		cameraPosition: {
+			x: activeCamera.position.x,
+			y: activeCamera.position.y,
+			z: activeCamera.position.z,
+		},
+		candidates: entries.map((entry) => entry.snapshot),
+	})
+}
+
 function updateInstancedCullingAndLod(): void {
 	if (!camera) {
 		return
 	}
-
-	camera.updateMatrixWorld(true)
-	instancedCullingProjView.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)
-	instancedCullingFrustum.setFromProjectionMatrix(instancedCullingProjView)
+	const cullingProjView = new THREE.Matrix4()
+	const cullingFrustum = new THREE.Frustum()
+	cullingProjView.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)
+	cullingFrustum.setFromProjectionMatrix(cullingProjView)
 
 	// Visualization (and counters) are driven by all instanced proxy nodes, even if they don't have an LOD component.
 	// This makes the debug overlay useful in scenes that don't opt into LOD-based culling.
@@ -3858,7 +3875,7 @@ function updateInstancedCullingAndLod(): void {
 
 			instancedCullingSphere.center.copy(instancedCullingWorldPosition)
 			instancedCullingSphere.radius = radius
-			if (instancedCullingFrustum.intersectsSphere(instancedCullingSphere)) {
+			if (cullingFrustum.intersectsSphere(instancedCullingSphere)) {
 				visualizationVisibleIds.add(nodeId)
 			}
 		}
@@ -3866,50 +3883,15 @@ function updateInstancedCullingAndLod(): void {
 		updateInstancedCullingVisualization(visualizationIds, visualizationObjects, visualizationVisibleIds)
 	}
 
-	const lodNodeIds: string[] = []
-	const lodObjects = new Map<string, THREE.Object3D>()
-	const cullingCandidateIds: string[] = []
-	const cullingCandidateObjects = new Map<string, THREE.Object3D>()
-	nodeObjectMap.forEach((object, nodeId) => {
-		if (!object?.userData?.instancedAssetId) {
-			return
-		}
-		const node = resolveNodeById(nodeId)
-		if (!node) {
-			return
-		}
-		const lodComponent = resolveLodComponent(node)
-		if (!lodComponent) {
-			return
-		}
-		lodNodeIds.push(nodeId)
-		lodObjects.set(nodeId, object)
-		const props = clampLodComponentProps(lodComponent.props)
-		if (props.enableCulling === false) {
-			return
-		}
-		cullingCandidateIds.push(nodeId)
-		cullingCandidateObjects.set(nodeId, object)
-	})
+	const lodEntries = collectInstancedLodRuntimeEntries()
+	const cullingRequest = buildInstancedLodCullingRequestForFrame(camera, lodEntries)
+	const workerResult = consumeInstancedLodCullingResult()
+	const cullingResult = workerResult ?? getLastInstancedLodCullingResult() ?? computeInstancedLodCullingResult(cullingRequest)
+	void dispatchInstancedLodCullingRequest(cullingRequest)
+	const visibleIds = new Set(cullingResult.visibleIds)
+	const targetByNodeId = new Map(cullingResult.targets.map((entry) => [entry.nodeId, entry.target] as const))
 
-	cullingCandidateIds.sort()
-	instancedLodFrustumCuller.setIds(cullingCandidateIds)
-	const visibleIds = instancedLodFrustumCuller.updateAndQueryVisible(instancedCullingFrustum, (id, centerTarget) => {
-		const object = cullingCandidateObjects.get(id)
-		if (!object) {
-			return null
-		}
-		object.updateMatrixWorld(true)
-		resolveInstancedProxyWorldCenter(object, centerTarget)
-		object.matrixWorld.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
-		const scale = Math.max(instancedScaleHelper.x, instancedScaleHelper.y, instancedScaleHelper.z)
-		const baseRadius = resolveInstancedProxyRadius(object)
-		const radius = Number.isFinite(scale) && scale > 0 ? baseRadius * scale : baseRadius
-		return { radius }
-	})
-
-
-	instancedLodTotalCount.value = lodNodeIds.length
+	instancedLodTotalCount.value = lodEntries.length
 	const scatterStats = terrainScatterRuntime.getInstanceStats()
 	terrainScatterTotalCount.value = scatterStats.total
 	terrainScatterVisibleCount.value = scatterStats.visible
@@ -3938,21 +3920,9 @@ function updateInstancedCullingAndLod(): void {
 	}
 
 	let lodVisibleCount = 0
-	lodNodeIds.forEach((nodeId) => {
-		const object = lodObjects.get(nodeId)
-		if (!object) {
-			return
-		}
-		const node = resolveNodeById(nodeId)
-		if (!node) {
-			return
-		}
-		const lodComponent = resolveLodComponent(node)
-		if (!lodComponent) {
-			return
-		}
-		const props = clampLodComponentProps(lodComponent.props)
-		const cullingEnabled = props.enableCulling !== false
+	lodEntries.forEach((entry) => {
+		const { nodeId, object, node, snapshot } = entry
+		const cullingEnabled = snapshot.enableCulling
 		const isVisible = !cullingEnabled || visibleIds.has(nodeId)
 		if (cullingEnabled && !isVisible) {
 			if (object.userData.__harmonyCulled !== true) {
@@ -3966,7 +3936,7 @@ function updateInstancedCullingAndLod(): void {
 
 		lodVisibleCount += 1
 		object.userData.__harmonyCulled = false
-		const desiredTarget = resolveDesiredLodTarget(node, object)
+		const desiredTarget = targetByNodeId.get(nodeId) ?? resolveDesiredLodTarget(node, object)
 		if (!desiredTarget.assetId || !desiredTarget.key) {
 			return
 		}
@@ -8697,6 +8667,9 @@ function initRenderer() {
 	renderer.outputColorSpace = THREE.SRGBColorSpace
 	renderer.shadowMap.enabled = true
 	renderer.shadowMap.type = THREE.PCFSoftShadowMap
+	// Transmission is one of the most expensive extra passes in scenes with physical materials.
+	// Lowering this buffer keeps the preview responsive while preserving the main render target.
+	;(renderer as THREE.WebGLRenderer & { transmissionResolutionScale?: number }).transmissionResolutionScale = 0.5
 	renderer.setPixelRatio(Math.min(window.devicePixelRatio ?? 1, 2))
 	host.appendChild(renderer.domElement)
 
@@ -9082,6 +9055,7 @@ function updateVehicleCameraForFrame(
  * Throttled internally by `shouldUpdateCameraDependentSystems`.
  */
 function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCamera, delta: number): void {
+	activeCamera.updateMatrixWorld(true)
 	const environmentSettings = currentScenePreviewEnvironmentSettings
 	if (environmentSettings) {
 		applyFogSettings(environmentSettings, activeCamera)
@@ -9106,7 +9080,8 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
 	}
 	if (shouldUpdateCameraSystems) {
 		terrainScatterRuntime.update(activeCamera, resolveGroundMeshObject)
-		if (scenePreviewPerf.shouldRunInstancedCulling(activeCamera, Date.now())) {
+		const nowMs = Date.now()
+		if (scenePreviewPerf.shouldRunInstancedCulling(activeCamera, nowMs)) {
 			updateInstancedCullingAndLod()
 		}
 		updateBehaviorProximity()
@@ -11851,6 +11826,7 @@ function createBridgeVehicleInstance(
 			wheelIndex: index,
 			spinAngle: 0,
 			lastSteeringAngle: 0,
+			instancedTargets: wheelObject ? collectInstancedTransformTargets(wheelObject) : [],
 			baseQuaternion: wheelObject ? wheelObject.quaternion.clone() : new THREE.Quaternion(),
 			basePosition: wheelObject ? wheelObject.position.clone() : new THREE.Vector3(),
 			baseScale: wheelObject ? wheelObject.scale.clone() : new THREE.Vector3(1, 1, 1),
@@ -12104,6 +12080,7 @@ function updateVehicleWheelVisuals(delta: number): void {
 			const wheelObject = nodeObjectMap.get(binding.nodeId) ?? null
 			if (!wheelObject) {
 				binding.object = null
+				binding.instancedTargets = []
 				return
 			}
 
@@ -12116,6 +12093,7 @@ function updateVehicleWheelVisuals(delta: number): void {
 				binding.baseQuaternion.copy(wheelObject.quaternion)
 				binding.spinAngle = 0
 				binding.lastSteeringAngle = 0
+				binding.instancedTargets = collectInstancedTransformTargets(wheelObject)
 			}
 
 			// Keep wheel translation/scale stable; only rotate for steer + spin.
@@ -12204,9 +12182,177 @@ function updateVehicleWheelVisuals(delta: number): void {
 			}
 			wheelObject.quaternion.copy(wheelVisualQuaternionHelper)
 
-			syncInstancedTransform(wheelObject)
+			if (binding.instancedTargets.length) {
+				wheelObject.updateMatrixWorld(true)
+				binding.instancedTargets.forEach((target) => {
+					syncInstancedTransformTarget(target)
+				})
+			}
 		})
 	})
+}
+
+function collectInstancedTransformTargets(object: THREE.Object3D): THREE.Object3D[] {
+	const targets: THREE.Object3D[] = []
+	object.traverse((child) => {
+		if (child.userData?.instancedAssetId) {
+			targets.push(child)
+		}
+	})
+	return targets
+}
+
+function syncInstancedTransformTarget(target: THREE.Object3D): void {
+	if (!target.userData?.instancedAssetId) {
+		return
+	}
+	const nodeId = target.userData.nodeId as string | undefined
+	if (!nodeId) {
+		return
+	}
+	const assetIdRaw = target.userData.instancedAssetId as string | undefined
+	const assetId = typeof assetIdRaw === 'string' ? assetIdRaw.trim() : ''
+	if (!assetId) {
+		return
+	}
+	const renderKind = target.userData?.instancedRenderKind === 'billboard' ? 'billboard' : 'model'
+	const node = resolveNodeById(nodeId)
+	if (!node) {
+		return
+	}
+	const rawLayout = (node as unknown as { instanceLayout?: unknown }).instanceLayout
+	const layout = rawLayout ? clampSceneNodeInstanceLayout(rawLayout) : { mode: 'single' as const, templateAssetId: null }
+	const resolvedAssetId = resolveInstanceLayoutTemplateAssetId(layout, node.sourceAssetId ?? null)
+	if (resolvedAssetId && resolvedAssetId !== assetId) {
+		// Asset changed; normally allow the document sync pipeline to rebuild this proxy.
+		// Exception: LOD switches intentionally swap instancedAssetId at runtime; still need to apply matrices.
+		const lodComponent = resolveLodComponent(node)
+		if (!lodComponent) {
+			return
+		}
+		const props = clampLodComponentProps(lodComponent.props)
+		const isKnownLodAsset = props.levels.some((level) => {
+			const levelTarget = resolveLodRenderTarget(level)
+			const levelAssetId = typeof levelTarget.assetId === 'string' ? levelTarget.assetId.trim() : ''
+			return Boolean(levelAssetId) && levelAssetId === assetId
+		})
+		if (!isKnownLodAsset) {
+			return
+		}
+	}
+	const modelGroup = renderKind === 'model' ? getCachedModelObject(assetId) : null
+	if (renderKind === 'model' && !modelGroup) {
+		return
+	}
+
+	const desiredCount = getInstanceLayoutCount(layout)
+	const existingBindings = renderKind === 'billboard' ? getBillboardInstanceBindingsForNode(nodeId) : getModelInstanceBindingsForNode(nodeId)
+	if (existingBindings.length !== desiredCount) {
+		releaseBillboardInstance(nodeId)
+		releaseModelInstance(nodeId)
+		const baseBinding = renderKind === 'billboard'
+			? allocateBillboardInstance(assetId, nodeId)
+			: allocateModelInstance(assetId, nodeId)
+		if (!baseBinding) {
+			return
+		}
+		for (let i = 1; i < desiredCount; i += 1) {
+			const bindingId = getInstanceLayoutBindingId(nodeId, i)
+			const binding = renderKind === 'billboard'
+				? allocateBillboardInstanceBinding(assetId, bindingId, nodeId)
+				: allocateModelInstanceBinding(assetId, bindingId, nodeId)
+			if (!binding) {
+				releaseBillboardInstance(nodeId)
+				releaseModelInstance(nodeId)
+				return
+			}
+		}
+		clearInstancedMatrixCacheForNode(nodeId)
+	}
+
+	removeVehicleInstance(nodeId)
+	const isCulled = target.userData?.__harmonyCulled === true
+	const isVisible = isRuntimeObjectEffectivelyVisible(target) && !isCulled
+	if (isVisible) {
+		instancedMatrixHelper.copy(target.matrixWorld)
+		if (renderKind === 'model' && target.userData?.__harmonyLodFaceCamera === true) {
+			applyModelFaceCameraMatrix(
+				instancedMatrixHelper,
+				(target.userData?.__harmonyLodForwardAxis as LodFaceCameraForwardAxis | undefined)
+					?? LOD_FACE_CAMERA_FORWARD_AXIS_X,
+			)
+		}
+	} else {
+		target.matrixWorld.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
+		instancedScaleHelper.setScalar(0)
+		instancedMatrixHelper.compose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
+	}
+
+	const billboardBounds = buildBillboardLayoutBoundingBox({
+		kind: 'billboard',
+		assetId,
+		sourceModelAssetId: typeof target.userData?.__harmonyBillboardSourceAssetId === 'string' ? target.userData.__harmonyBillboardSourceAssetId : null,
+		faceCamera: target.userData?.__harmonyLodFaceCamera === true,
+		forwardAxis: (target.userData?.__harmonyLodForwardAxis as LodFaceCameraForwardAxis | undefined)
+			?? LOD_FACE_CAMERA_FORWARD_AXIS_Z,
+		key: null,
+	})
+	const layoutBounds = renderKind === 'billboard'
+		? (computeInstanceLayoutLocalBoundingBox(layout, billboardBounds) ?? billboardBounds)
+		: (computeInstanceLayoutLocalBoundingBox(layout, modelGroup!.boundingBox) ?? modelGroup!.boundingBox)
+	target.userData.instancedBounds = serializeBoundingBox(layoutBounds)
+	const sphere = new THREE.Sphere()
+	layoutBounds.getBoundingSphere(sphere)
+	target.userData.__harmonyInstancedRadius = sphere.radius
+
+	const cache = {
+		signature: (target.userData.__harmonyInstanceLayoutSignature as string | null | undefined) ?? null,
+		locals: (target.userData.__harmonyInstanceLayoutLocals as THREE.Matrix4[] | undefined) ?? [],
+	}
+
+	const result = forEachInstanceWorldMatrix({
+		nodeId,
+		baseMatrixWorld: instancedMatrixHelper,
+		layout,
+		templateBoundingBox: renderKind === 'billboard' ? billboardBounds : modelGroup!.boundingBox,
+		cache,
+		onMatrix: (bindingId, worldMatrix) => {
+			const binding = renderKind === 'billboard' ? null : getModelInstanceBindingById(bindingId)
+			const bindingKey = binding ? buildModelInstanceBindingKey(binding) : `${bindingId}:billboard`
+			const cached = instancedMatrixCache.get(bindingId)
+			if (cached && cached.bindingKey === bindingKey && matrixElementsEqual(cached.elements, worldMatrix.elements)) {
+				return
+			}
+			const nextEntry = cached ?? { bindingKey, elements: new Float32Array(16) }
+			nextEntry.bindingKey = bindingKey
+			copyMatrixElements(nextEntry.elements, worldMatrix.elements)
+			instancedMatrixCache.set(bindingId, nextEntry)
+			if (isInstancingDebugVisible.value) {
+				(binding?.slots ?? []).forEach((slot) => {
+					instancedMatrixUploadMeshes.add(slot.mesh)
+				})
+			}
+			(binding?.slots ?? []).forEach((slot) => {
+				addInstancedBoundsMesh(slot.mesh)
+			})
+			if (bindingId === nodeId) {
+				if (renderKind === 'billboard') {
+					updateBillboardInstanceMatrix(nodeId, worldMatrix)
+				} else {
+					updateModelInstanceMatrix(nodeId, worldMatrix)
+				}
+			} else {
+				if (renderKind === 'billboard') {
+					updateBillboardInstanceBindingMatrix(bindingId, worldMatrix)
+				} else {
+					updateModelInstanceBindingMatrix(bindingId, worldMatrix)
+				}
+			}
+		},
+	})
+
+	target.userData.__harmonyInstanceLayoutSignature = result.signature
+	target.userData.__harmonyInstanceLayoutLocals = result.locals
 }
 
 function updateNodeTransfrom(object: THREE.Object3D, node: SceneNode) {

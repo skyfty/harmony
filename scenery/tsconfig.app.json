@@ -3,6 +3,9 @@
   "include": [
     "common/**/*.ts",
     "common/**/*.d.ts",
+    "utils/**/*.ts",
+    "utils/**/*.d.ts",
+    "workers/**/*.ts",
     "components/**/*.ts",
     "components/**/*.d.ts",
     "components/**/*.vue",
