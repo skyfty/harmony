@@ -718,14 +718,11 @@ import {
 	buildInstancedLodCullingRequest,
 	buildInstancedLodCullingCandidateSnapshot,
 	buildInstancedLodTargetFromParallelSnapshot,
-	computeInstancedLodCullingResultWithCache,
-	consumeInstancedLodCullingResult,
-	getLastInstancedLodCullingResult,
 	dispatchInstancedLodCullingRequestWithCandidates,
 	type InstancedLodCullingResponse,
 	type InstancedLodCullingCandidateSnapshot,
 	type InstancedLodCullingRequest,
-} from '../common/utils/instancedLodCullingWorker';
+} from '../common/utils/instancedLodCulling';
 import type { InstancedLodTarget } from '@harmony/schema/core';
 import type {
   SignboardPlacementSmoothingState,
@@ -5932,9 +5929,11 @@ function updateInstancedCullingAndLod(): void {
 
   const lodEntries = collectInstancedLodRuntimeEntries();
   const cullingRequest = buildInstancedLodCullingRequestForFrame(camera, lodEntries);
-  const workerResult = consumeInstancedLodCullingResult();
-  const cullingResult: InstancedLodCullingResponse = workerResult ?? getLastInstancedLodCullingResult() ?? computeInstancedLodCullingResultWithCache(cullingRequest);
-  void dispatchInstancedLodCullingRequestWithCandidates(cullingRequest, lodEntries, instancedLodRuntimeRevision);
+  const cullingResult: InstancedLodCullingResponse = dispatchInstancedLodCullingRequestWithCandidates(
+    cullingRequest,
+    lodEntries,
+    instancedLodRuntimeRevision,
+  );
   const visibleIndices = cullingResult.visibleIndices;
   const visibleCount = visibleIndices.length;
   let visibleCursor = 0;

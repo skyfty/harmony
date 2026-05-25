@@ -221,13 +221,10 @@ import {
 	buildInstancedLodCullingRequest,
 	buildInstancedLodCullingCandidateSnapshot,
 	buildInstancedLodTargetFromParallelSnapshot,
-	computeInstancedLodCullingResultWithCache,
-	consumeInstancedLodCullingResult,
-	getLastInstancedLodCullingResult,
 	dispatchInstancedLodCullingRequestWithCandidates,
 	type InstancedLodCullingCandidateSnapshot,
 	type InstancedLodCullingRequest,
-} from '../utils/instancedLodCullingWorker'
+} from '../utils/instancedLodCulling'
 import type { InstancedLodBoundsSnapshot } from '@schema/core'
 import { VehicleDriveController } from '@schema/motion'
 import type { VehicleDriveRuntimeState, VehicleDriveVehicle } from '@schema/motion'
@@ -4000,9 +3997,7 @@ function updateInstancedCullingAndLod(): void {
 
 	const lodEntries = collectInstancedLodRuntimeEntries()
 	const cullingRequest = buildInstancedLodCullingRequestForFrame(camera, lodEntries)
-	const workerResult = consumeInstancedLodCullingResult()
-	const cullingResult = workerResult ?? getLastInstancedLodCullingResult() ?? computeInstancedLodCullingResultWithCache(cullingRequest)
-	void dispatchInstancedLodCullingRequestWithCandidates(cullingRequest, lodEntries, instancedLodRuntimeRevision)
+	const cullingResult = dispatchInstancedLodCullingRequestWithCandidates(cullingRequest, lodEntries, instancedLodRuntimeRevision)
 	const visibleIndices = cullingResult.visibleIndices
 	const visibleCount = visibleIndices.length
 	let visibleCursor = 0
