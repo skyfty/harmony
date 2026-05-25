@@ -5,7 +5,6 @@ import {
   SIGNBOARD_MAX_DISTANCE,
   SIGNBOARD_WORLD_Y_OFFSET,
   formatSignboardDistance,
-  resolveSignboardAnchorWorldPosition,
 } from './signboardOverlay'
 
 type SignboardCanvas = HTMLCanvasElement | OffscreenCanvas | { width: number; height: number; getContext: (type: '2d') => SignboardCanvasContext }
@@ -369,7 +368,6 @@ function createSignboardEntry(scene: THREE.Scene, nodeId: string, labelText: str
 
 function updateSignboardEntry(
   scene: THREE.Scene,
-  camera: THREE.Camera,
   nodeId: string,
   object: THREE.Object3D | null,
   resolveLabel: (nodeId: string) => string,
@@ -388,9 +386,8 @@ function updateSignboardEntry(
 
   const labelText = resolveLabel(nodeId)
   const punchBadgeVisible = isPunched(nodeId)
-  object.updateWorldMatrix(true, true)
-  resolveSignboardAnchorWorldPosition(object, signboardAnchorScratch, SIGNBOARD_WORLD_Y_OFFSET + BILLBOARD_WORLD_Y_OFFSET)
-  camera.getWorldPosition(signboardCameraScratch)
+  object.getWorldPosition(signboardAnchorScratch)
+  signboardAnchorScratch.y += SIGNBOARD_WORLD_Y_OFFSET + BILLBOARD_WORLD_Y_OFFSET
   const distanceReference = distanceReferenceWorld ?? signboardCameraScratch
   const distanceMeters = signboardAnchorScratch.distanceTo(distanceReference)
   const opacity = computeOpacity(distanceMeters)
@@ -443,6 +440,8 @@ export function syncSignboardBillboards(params: {
   }
   const style = resolveStyle(params.appearance)
   const isPunched = params.isPunched ?? (() => false)
+  camera.getWorldPosition(signboardCameraScratch)
+  const resolvedDistanceReference = distanceReferenceWorld ?? signboardCameraScratch
 
   for (const [nodeId, entry] of signboardEntries) {
     if (!signboardNodeIds.has(nodeId)) {
@@ -456,13 +455,12 @@ export function syncSignboardBillboards(params: {
   signboardNodeIds.forEach((nodeId) => {
     updateSignboardEntry(
       scene,
-      camera,
       nodeId,
       nodeObjectMap.get(nodeId) ?? null,
       resolveLabel,
       isPunched,
       style,
-      distanceReferenceWorld,
+      resolvedDistanceReference,
     )
   })
 }

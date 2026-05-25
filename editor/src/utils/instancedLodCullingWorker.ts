@@ -1,9 +1,13 @@
 import {
 	type InstancedLodCullingCandidateSnapshot,
 	type InstancedLodCullingRequest,
+	type InstancedLodCullingSyncRequest,
 	type InstancedLodCullingResponse,
+	type InstancedLodStaticCandidateSnapshot,
 	buildInstancedLodCullingCandidateSnapshot,
 	buildInstancedLodCullingRequest,
+	buildInstancedLodCullingSyncRequest,
+	buildInstancedLodTargetFromParallelSnapshot,
 	computeInstancedLodCullingResult,
 } from '@schema/core'
 
@@ -11,6 +15,13 @@ let instancedLodCullingWorker: Worker | null = null
 let instancedLodCullingPendingRequestId: number | null = null
 let instancedLodCullingLatestResult: InstancedLodCullingResponse | null = null
 let instancedLodCullingLastSettledResult: InstancedLodCullingResponse | null = null
+let instancedLodCullingSyncedRevision = -1
+const instancedLodCullingStaticCandidateCache: InstancedLodStaticCandidateSnapshot[] = []
+
+type InstancedLodRuntimeEntryLike = {
+	nodeId: string
+	snapshot: InstancedLodCullingCandidateSnapshot
+}
 
 function getInstancedLodCullingWorker(): Worker | null {
 	if (typeof Worker === 'undefined') {
@@ -51,6 +62,37 @@ function getInstancedLodCullingWorker(): Worker | null {
 }
 
 export function dispatchInstancedLodCullingRequest(request: InstancedLodCullingRequest): boolean {
+	return dispatchInstancedLodCullingRequestWithCandidates(request)
+}
+
+function buildStaticCandidateSnapshots(entries: InstancedLodRuntimeEntryLike[]): InstancedLodStaticCandidateSnapshot[] {
+	const snapshots: InstancedLodStaticCandidateSnapshot[] = []
+	for (let i = 0; i < entries.length; i += 1) {
+		const entry = entries[i]
+		if (!entry) {
+			continue
+		}
+		snapshots.push({
+			nodeId: entry.nodeId,
+			sourceAssetId: entry.snapshot.sourceAssetId ?? null,
+			instanceLayout: entry.snapshot.instanceLayout ?? null,
+			lodProps: entry.snapshot.lodProps ?? null,
+		})
+	}
+	return snapshots
+}
+
+export function dispatchInstancedLodCullingRequestWithCandidates(
+	request: InstancedLodCullingRequest,
+	runtimeEntries: InstancedLodRuntimeEntryLike[] = [],
+	runtimeRevision = -1,
+): boolean {
+	if (runtimeRevision >= 0 && runtimeRevision !== instancedLodCullingSyncedRevision) {
+		const staticSnapshots = buildStaticCandidateSnapshots(runtimeEntries)
+		instancedLodCullingStaticCandidateCache.length = 0
+		instancedLodCullingStaticCandidateCache.push(...staticSnapshots)
+	}
+
 	const worker = getInstancedLodCullingWorker()
 	if (!worker) {
 		return false
@@ -58,9 +100,31 @@ export function dispatchInstancedLodCullingRequest(request: InstancedLodCullingR
 	if (instancedLodCullingPendingRequestId !== null) {
 		return false
 	}
+	if (runtimeRevision >= 0 && runtimeRevision !== instancedLodCullingSyncedRevision) {
+		const staticSnapshots = buildStaticCandidateSnapshots(runtimeEntries)
+		const syncRequest: InstancedLodCullingSyncRequest = buildInstancedLodCullingSyncRequest({
+			revision: runtimeRevision,
+			candidates: staticSnapshots,
+		})
+		try {
+			worker.postMessage(syncRequest)
+			instancedLodCullingSyncedRevision = runtimeRevision
+		} catch (error) {
+			console.warn('[InstancedLodCulling] Failed to post worker sync request', error)
+			instancedLodCullingSyncedRevision = -1
+		}
+	}
 	instancedLodCullingPendingRequestId = request.requestId
 	try {
-		worker.postMessage(request)
+		worker.postMessage(request, [
+			request.cameraProjectionMatrix.buffer,
+			request.cameraMatrixWorldInverse.buffer,
+			request.cameraPosition.buffer,
+			request.candidateIndices.buffer,
+			request.candidateEnableCulling.buffer,
+			request.candidateWorldPositions.buffer,
+			request.candidateRadii.buffer,
+		])
 		return true
 	} catch (error) {
 		console.warn('[InstancedLodCulling] Failed to post worker request', error)
@@ -82,6 +146,10 @@ export function getLastInstancedLodCullingResult(): InstancedLodCullingResponse 
 	return instancedLodCullingLastSettledResult
 }
 
+export function computeInstancedLodCullingResultWithCache(request: InstancedLodCullingRequest): InstancedLodCullingResponse {
+	return computeInstancedLodCullingResult(request, instancedLodCullingStaticCandidateCache)
+}
+
 export function hasInstancedLodCullingWorker(): boolean {
 	return instancedLodCullingWorker !== null
 }
@@ -95,5 +163,7 @@ export type {
 export {
 	buildInstancedLodCullingCandidateSnapshot,
 	buildInstancedLodCullingRequest,
+	buildInstancedLodCullingSyncRequest,
+	buildInstancedLodTargetFromParallelSnapshot,
 	computeInstancedLodCullingResult,
 }

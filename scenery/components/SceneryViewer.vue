@@ -632,6 +632,7 @@ import {
 import {
   lodComponentDefinition,
   LOD_COMPONENT_TYPE,
+  LOD_FACE_CAMERA_FORWARD_AXIS_X,
   clampLodComponentProps,
   type LodComponentProps,
 } from '@harmony/schema/components/definitions/lodComponent';
@@ -712,13 +713,15 @@ import {
   smoothSignboardPlacement,
 } from '@harmony/schema/overlay';
 import { createTerrainScatterLodRuntime } from '@harmony/schema/scatter';
+import type { InstancedLodBoundsSnapshot } from '@harmony/schema/core';
 import {
 	buildInstancedLodCullingRequest,
 	buildInstancedLodCullingCandidateSnapshot,
-	computeInstancedLodCullingResult,
+	buildInstancedLodTargetFromParallelSnapshot,
+	computeInstancedLodCullingResultWithCache,
 	consumeInstancedLodCullingResult,
 	getLastInstancedLodCullingResult,
-	dispatchInstancedLodCullingRequest,
+	dispatchInstancedLodCullingRequestWithCandidates,
 	type InstancedLodCullingResponse,
 	type InstancedLodCullingCandidateSnapshot,
 	type InstancedLodCullingRequest,
@@ -1813,6 +1816,30 @@ const terrainScatterCameraQuatScratch = new THREE.Quaternion();
 let terrainScatterLastUpdateAtMs = 0;
 let terrainScatterForceNextUpdate = true;
 
+const COMPILED_GROUND_MOVE_THRESHOLD_M = isWeChatMiniProgram ? 0.16 : 0.1;
+const COMPILED_GROUND_ROT_THRESHOLD_DEG = isWeChatMiniProgram ? 0.8 : 0.4;
+const COMPILED_GROUND_MAX_STALE_MS = isWeChatMiniProgram ? 180 : 120;
+const COMPILED_GROUND_MIN_INTERVAL_MS = isWeChatMiniProgram ? 48 : 33;
+const COMPILED_GROUND_ROT_THRESHOLD_RAD = (COMPILED_GROUND_ROT_THRESHOLD_DEG * Math.PI) / 180;
+const compiledGroundLastCameraPos = new THREE.Vector3();
+const compiledGroundLastCameraQuat = new THREE.Quaternion();
+const compiledGroundCameraPosScratch = new THREE.Vector3();
+const compiledGroundCameraQuatScratch = new THREE.Quaternion();
+let compiledGroundLastUpdateAtMs = 0;
+let compiledGroundForceNextUpdate = true;
+
+const SCENE_CSM_MOVE_THRESHOLD_M = isWeChatMiniProgram ? 0.06 : 0.04;
+const SCENE_CSM_ROT_THRESHOLD_DEG = isWeChatMiniProgram ? 0.35 : 0.2;
+const SCENE_CSM_MAX_STALE_MS = isWeChatMiniProgram ? 220 : 160;
+const SCENE_CSM_MIN_INTERVAL_MS = isWeChatMiniProgram ? 40 : 33;
+const SCENE_CSM_ROT_THRESHOLD_RAD = (SCENE_CSM_ROT_THRESHOLD_DEG * Math.PI) / 180;
+const sceneCsmLastCameraPos = new THREE.Vector3();
+const sceneCsmLastCameraQuat = new THREE.Quaternion();
+const sceneCsmCameraPosScratch = new THREE.Vector3();
+const sceneCsmCameraQuatScratch = new THREE.Quaternion();
+let sceneCsmLastUpdateAtMs = 0;
+let sceneCsmForceNextUpdate = true;
+
 function markTerrainScatterUpdateDirty(): void {
   terrainScatterForceNextUpdate = true;
 }
@@ -1860,6 +1887,92 @@ function shouldRunTerrainScatterUpdate(camera: THREE.Camera, nowMs: number): boo
   }
 
   return false;
+}
+
+function shouldRunCompiledGroundTileSync(camera: THREE.Camera, nowMs: number): boolean {
+  if (!camera) {
+    return true;
+  }
+  camera.updateMatrixWorld(true);
+  camera.getWorldPosition(compiledGroundCameraPosScratch);
+  camera.getWorldQuaternion(compiledGroundCameraQuatScratch);
+
+  if (compiledGroundForceNextUpdate) {
+    compiledGroundForceNextUpdate = false;
+    compiledGroundLastUpdateAtMs = nowMs;
+    compiledGroundLastCameraPos.copy(compiledGroundCameraPosScratch);
+    compiledGroundLastCameraQuat.copy(compiledGroundCameraQuatScratch);
+    return true;
+  }
+
+  const moveThresholdSq = COMPILED_GROUND_MOVE_THRESHOLD_M * COMPILED_GROUND_MOVE_THRESHOLD_M;
+  const movedEnough = moveThresholdSq > 0
+    && compiledGroundCameraPosScratch.distanceToSquared(compiledGroundLastCameraPos) >= moveThresholdSq;
+  const rotatedEnough = (() => {
+    if (COMPILED_GROUND_ROT_THRESHOLD_RAD <= 0) {
+      return false;
+    }
+    const dot = Math.min(1, Math.abs(compiledGroundLastCameraQuat.dot(compiledGroundCameraQuatScratch)));
+    const angle = 2 * Math.acos(dot);
+    return Number.isFinite(angle) && angle >= COMPILED_GROUND_ROT_THRESHOLD_RAD;
+  })();
+  const shouldUpdateForMotion = movedEnough || rotatedEnough;
+
+  if (shouldUpdateForMotion && nowMs - compiledGroundLastUpdateAtMs < COMPILED_GROUND_MIN_INTERVAL_MS) {
+    return false;
+  }
+
+  if (!shouldUpdateForMotion && COMPILED_GROUND_MAX_STALE_MS > 0 && nowMs - compiledGroundLastUpdateAtMs < COMPILED_GROUND_MAX_STALE_MS) {
+    return false;
+  }
+
+  compiledGroundLastUpdateAtMs = nowMs;
+  compiledGroundLastCameraPos.copy(compiledGroundCameraPosScratch);
+  compiledGroundLastCameraQuat.copy(compiledGroundCameraQuatScratch);
+  return true;
+}
+
+function shouldRunSceneCsmShadowUpdate(camera: THREE.Camera, nowMs: number): boolean {
+  if (!camera) {
+    return true;
+  }
+  camera.updateMatrixWorld(true);
+  camera.getWorldPosition(sceneCsmCameraPosScratch);
+  camera.getWorldQuaternion(sceneCsmCameraQuatScratch);
+
+  if (sceneCsmForceNextUpdate) {
+    sceneCsmForceNextUpdate = false;
+    sceneCsmLastUpdateAtMs = nowMs;
+    sceneCsmLastCameraPos.copy(sceneCsmCameraPosScratch);
+    sceneCsmLastCameraQuat.copy(sceneCsmCameraQuatScratch);
+    return true;
+  }
+
+  const moveThresholdSq = SCENE_CSM_MOVE_THRESHOLD_M * SCENE_CSM_MOVE_THRESHOLD_M;
+  const movedEnough = moveThresholdSq > 0
+    && sceneCsmCameraPosScratch.distanceToSquared(sceneCsmLastCameraPos) >= moveThresholdSq;
+  const rotatedEnough = (() => {
+    if (SCENE_CSM_ROT_THRESHOLD_RAD <= 0) {
+      return false;
+    }
+    const dot = Math.min(1, Math.abs(sceneCsmLastCameraQuat.dot(sceneCsmCameraQuatScratch)));
+    const angle = 2 * Math.acos(dot);
+    return Number.isFinite(angle) && angle >= SCENE_CSM_ROT_THRESHOLD_RAD;
+  })();
+  const shouldUpdateForMotion = movedEnough || rotatedEnough;
+
+  if (shouldUpdateForMotion && nowMs - sceneCsmLastUpdateAtMs < SCENE_CSM_MIN_INTERVAL_MS) {
+    return false;
+  }
+
+  if (!shouldUpdateForMotion && SCENE_CSM_MAX_STALE_MS > 0 && nowMs - sceneCsmLastUpdateAtMs < SCENE_CSM_MAX_STALE_MS) {
+    return false;
+  }
+
+  sceneCsmLastUpdateAtMs = nowMs;
+  sceneCsmLastCameraPos.copy(sceneCsmCameraPosScratch);
+  sceneCsmLastCameraQuat.copy(sceneCsmCameraQuatScratch);
+  return true;
 }
 
 function markInstancedCullingDirty(): void {
@@ -5371,7 +5484,7 @@ function resolveDesiredLodTarget(
   node: SceneNode,
   object: THREE.Object3D,
   camera: THREE.Camera
-): { kind: 'model', assetId: string, faceCamera: boolean } | { kind: 'billboard', imageAssetId: string, width: number, height: number, faceCamera: boolean } | null {
+): SceneryInstancedLodTarget | null {
   object.getWorldPosition(instancedCullingWorldPosition);
   const target = resolveInstancedLodTargetFromSnapshot({
     sourceAssetId: typeof node.sourceAssetId === 'string' ? node.sourceAssetId : null,
@@ -5383,7 +5496,16 @@ function resolveDesiredLodTarget(
     cameraPosition: camera.position,
   })
   if (!target.assetId) {
-    return target.sourceModelAssetId ? { kind: 'model', assetId: target.sourceModelAssetId, faceCamera: false } : null
+    return target.sourceModelAssetId
+      ? {
+        kind: 'model',
+        assetId: target.sourceModelAssetId,
+        sourceModelAssetId: target.sourceModelAssetId,
+        faceCamera: false,
+        forwardAxis: LOD_FACE_CAMERA_FORWARD_AXIS_X,
+        key: `model:${target.sourceModelAssetId}`,
+      }
+      : null
   }
   if (target.kind === 'billboard') {
     // Billboard: use node's bounding box for size if available, fallback to 1x1
@@ -5393,12 +5515,48 @@ function resolveDesiredLodTarget(
       width = Math.abs(bounds.max[0] - bounds.min[0]);
       height = Math.abs(bounds.max[1] - bounds.min[1]);
     }
-    return { kind: 'billboard', imageAssetId: target.assetId, width, height, faceCamera: target.faceCamera === true };
+    return {
+      kind: 'billboard',
+      assetId: target.assetId,
+      sourceModelAssetId: target.sourceModelAssetId,
+      imageAssetId: target.assetId,
+      width,
+      height,
+      faceCamera: target.faceCamera === true,
+      forwardAxis: target.forwardAxis,
+      key: `billboard:${target.assetId}`,
+    };
   }
-  return { kind: 'model', assetId: target.assetId, faceCamera: target.faceCamera === true };
+  return {
+    kind: 'model',
+    assetId: target.assetId,
+    sourceModelAssetId: target.sourceModelAssetId,
+    faceCamera: target.faceCamera === true,
+    forwardAxis: target.forwardAxis,
+    key: `model:${target.assetId}`,
+  };
 }
 
-type SceneryInstancedLodTarget = ReturnType<typeof resolveDesiredLodTarget>;
+type SceneryInstancedLodTarget =
+  | {
+    kind: 'model';
+    assetId: string;
+    sourceModelAssetId: string | null;
+    faceCamera: boolean;
+    forwardAxis: InstancedLodTarget['forwardAxis'];
+    key: string | null;
+  }
+  | {
+    kind: 'billboard';
+    assetId: string;
+    sourceModelAssetId: string | null;
+    imageAssetId: string;
+    width: number;
+    height: number;
+    faceCamera: boolean;
+    forwardAxis: InstancedLodTarget['forwardAxis'];
+    key: string | null;
+  };
 
 function resolveSceneryInstancedLodTargetFromWorkerTarget(
   object: THREE.Object3D,
@@ -5417,23 +5575,37 @@ function resolveSceneryInstancedLodTargetFromWorkerTarget(
     }
     return {
       kind: 'billboard',
+      assetId: target.assetId,
+      sourceModelAssetId: target.sourceModelAssetId,
       imageAssetId: target.assetId,
       width,
       height,
       faceCamera: target.faceCamera === true,
+      forwardAxis: target.forwardAxis,
+      key: target.key ?? `billboard:${target.assetId}`,
     };
   }
 
   if (!target.assetId) {
     return target.sourceModelAssetId
-      ? { kind: 'model', assetId: target.sourceModelAssetId, faceCamera: false }
+      ? {
+        kind: 'model',
+        assetId: target.sourceModelAssetId,
+        sourceModelAssetId: target.sourceModelAssetId,
+        faceCamera: false,
+        forwardAxis: target.forwardAxis,
+        key: `model:${target.sourceModelAssetId}`,
+      }
       : null;
   }
 
   return {
     kind: 'model',
     assetId: target.assetId,
+    sourceModelAssetId: target.sourceModelAssetId,
     faceCamera: target.faceCamera === true,
+    forwardAxis: target.forwardAxis,
+    key: target.key ?? `model:${target.assetId}`,
   };
 }
 
@@ -5533,47 +5705,189 @@ type InstancedLodRuntimeEntry = {
   nodeId: string;
   object: THREE.Object3D;
   node: SceneNode;
+  transformRevision: number;
+  componentProps: LodComponentProps;
+  sourceAssetId: string | null;
+  instanceLayout: unknown;
+  instancedBounds: InstancedLodBoundsSnapshot;
+  radiusHint: number | null;
+  lastVisible: boolean | null;
+  appliedTargetKey: string | null;
+  appliedTransformRevision: number;
   snapshot: InstancedLodCullingCandidateSnapshot;
 };
 
+const instancedLodRuntimeEntryCache = new Map<string, InstancedLodRuntimeEntry>();
+let instancedLodRuntimeRevision = 0;
+let instancedLodLastProcessedRevision = -1;
+const instancedLodLastCameraProjectionMatrix = new Float32Array(16);
+const instancedLodLastCameraMatrixWorldInverse = new Float32Array(16);
+let instancedLodLastCameraStateValid = false;
+
+function clearInstancedLodRuntimeEntryCacheForNode(nodeId: string): void {
+  if (instancedLodRuntimeEntryCache.delete(nodeId)) {
+    instancedLodRuntimeRevision += 1;
+  }
+}
+
+function getInstancedTransformRevision(object: THREE.Object3D): number {
+  const rawRevision = Number(object.userData?.__harmonyInstancedTransformRevision ?? 0);
+  return Number.isFinite(rawRevision) ? Math.max(0, Math.trunc(rawRevision)) : 0;
+}
+
+function updateInstancedLodRuntimeEntryCacheForObject(object: THREE.Object3D): void {
+  const nodeId = object.userData?.nodeId as string | undefined;
+  if (!nodeId) {
+    return;
+  }
+
+  if (!object.userData?.instancedAssetId && !object.userData?.billboardImageAssetId) {
+    if (instancedLodRuntimeEntryCache.delete(nodeId)) {
+      instancedLodRuntimeRevision += 1;
+    }
+    return;
+  }
+
+  const node = resolveNodeById(nodeId);
+  if (!node) {
+    instancedLodRuntimeEntryCache.delete(nodeId);
+    return;
+  }
+
+  const component = node.components?.[LOD_COMPONENT_TYPE] as SceneNodeComponentState<LodComponentProps> | undefined;
+  if (!component || !component.enabled) {
+    instancedLodRuntimeEntryCache.delete(nodeId);
+    return;
+  }
+
+  const props = clampLodComponentProps(component.props);
+  const sourceAssetId = typeof node.sourceAssetId === 'string' ? node.sourceAssetId : null;
+  const instanceLayout = (node as unknown as { instanceLayout?: unknown }).instanceLayout;
+  const instancedBounds = (object.userData?.instancedBounds as InstancedLodBoundsSnapshot | undefined) ?? null;
+  const radiusHint = typeof object.userData?.__harmonyInstancedRadius === 'number'
+    && Number.isFinite(object.userData.__harmonyInstancedRadius)
+    && object.userData.__harmonyInstancedRadius > 0
+    ? object.userData.__harmonyInstancedRadius
+    : null;
+  const transformRevision = getInstancedTransformRevision(object);
+  const existingEntry = instancedLodRuntimeEntryCache.get(nodeId) ?? null;
+  if (
+    existingEntry
+    && existingEntry.object === object
+    && existingEntry.node === node
+    && existingEntry.transformRevision === transformRevision
+    && existingEntry.componentProps === component.props
+    && existingEntry.sourceAssetId === sourceAssetId
+    && existingEntry.instanceLayout === instanceLayout
+    && existingEntry.instancedBounds === instancedBounds
+    && existingEntry.radiusHint === radiusHint
+  ) {
+    return;
+  }
+
+  object.updateMatrixWorld(true);
+  instancedLodRuntimeEntryCache.set(nodeId, {
+    nodeId,
+    object,
+    node,
+    transformRevision,
+    componentProps: component.props,
+    sourceAssetId,
+    instanceLayout,
+    instancedBounds,
+    radiusHint,
+    lastVisible: null,
+    appliedTargetKey: null,
+    appliedTransformRevision: -1,
+    snapshot: buildInstancedLodCullingCandidateSnapshot({
+      nodeId,
+      enableCulling: props.enableCulling !== false,
+      matrixWorld: object.matrixWorld.elements,
+      bounds: instancedBounds,
+      radiusHint,
+      sourceAssetId,
+      instanceLayout,
+      lodProps: props,
+    }),
+  });
+  instancedLodRuntimeRevision += 1;
+}
+
 function collectInstancedLodRuntimeEntries(): InstancedLodRuntimeEntry[] {
+  if (instancedLodRuntimeEntryCache.size === 0 && nodeObjectMap.size > 0) {
+    nodeObjectMap.forEach((object) => {
+      if (!object?.userData?.instancedAssetId && !object?.userData?.billboardImageAssetId) {
+        return;
+      }
+      updateInstancedLodRuntimeEntryCacheForObject(object);
+    });
+  }
+
   const entries: InstancedLodRuntimeEntry[] = [];
-  nodeObjectMap.forEach((object, nodeId) => {
-    if (!object?.userData?.instancedAssetId && !object?.userData?.billboardImageAssetId) {
+  const staleNodeIds: string[] = [];
+
+  instancedLodRuntimeEntryCache.forEach((entry, nodeId) => {
+    const currentObject = nodeObjectMap.get(nodeId) ?? null;
+    if (currentObject !== entry.object) {
+      staleNodeIds.push(nodeId);
       return;
     }
+
+    if (!entry.object?.userData?.instancedAssetId && !entry.object?.userData?.billboardImageAssetId) {
+      staleNodeIds.push(nodeId);
+      return;
+    }
+
     const node = resolveNodeById(nodeId);
     if (!node) {
+      staleNodeIds.push(nodeId);
       return;
     }
+
     const component = node.components?.[LOD_COMPONENT_TYPE] as SceneNodeComponentState<LodComponentProps> | undefined;
     if (!component || !component.enabled) {
+      staleNodeIds.push(nodeId);
       return;
     }
-    const props = clampLodComponentProps(component.props);
-    object.updateMatrixWorld(true);
-    entries.push({
-      nodeId,
-      object,
-      node,
-      snapshot: buildInstancedLodCullingCandidateSnapshot({
-        nodeId,
-        enableCulling: props.enableCulling !== false,
-        matrixWorld: object.matrixWorld.elements,
-        bounds: (object.userData?.instancedBounds as InstancedLodCullingCandidateSnapshot['bounds'] | undefined) ?? null,
-        radiusHint: typeof object.userData?.__harmonyInstancedRadius === 'number'
-          && Number.isFinite(object.userData.__harmonyInstancedRadius)
-          && object.userData.__harmonyInstancedRadius > 0
-          ? object.userData.__harmonyInstancedRadius
-          : null,
-        sourceAssetId: typeof node.sourceAssetId === 'string' ? node.sourceAssetId : null,
-        instanceLayout: (node as unknown as { instanceLayout?: unknown }).instanceLayout,
-        lodProps: props,
-      }),
-    });
+
+    updateInstancedLodRuntimeEntryCacheForObject(currentObject);
+    const refreshedEntry = instancedLodRuntimeEntryCache.get(nodeId) ?? null;
+    if (refreshedEntry) {
+      entries.push(refreshedEntry);
+    }
   });
+
+  staleNodeIds.forEach((nodeId) => {
+    if (instancedLodRuntimeEntryCache.delete(nodeId)) {
+      instancedLodRuntimeRevision += 1;
+    }
+  });
+
   entries.sort((a, b) => a.nodeId.localeCompare(b.nodeId));
   return entries;
+}
+
+function areInstancedLodCameraMatricesUnchanged(camera: THREE.Camera): boolean {
+  if (!instancedLodLastCameraStateValid) {
+    return false;
+  }
+  const projectionMatrix = camera.projectionMatrix.elements;
+  const matrixWorldInverse = camera.matrixWorldInverse.elements;
+  for (let i = 0; i < 16; i += 1) {
+    if (projectionMatrix[i] !== instancedLodLastCameraProjectionMatrix[i]) {
+      return false;
+    }
+    if (matrixWorldInverse[i] !== instancedLodLastCameraMatrixWorldInverse[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function rememberInstancedLodCameraMatrices(camera: THREE.Camera): void {
+  instancedLodLastCameraProjectionMatrix.set(camera.projectionMatrix.elements);
+  instancedLodLastCameraMatrixWorldInverse.set(camera.matrixWorldInverse.elements);
+  instancedLodLastCameraStateValid = true;
 }
 
 function buildInstancedLodCullingRequestForFrame(
@@ -5590,7 +5904,12 @@ function buildInstancedLodCullingRequestForFrame(
       y: activeCamera.position.y,
       z: activeCamera.position.z,
     },
-    candidates: entries.map((entry) => entry.snapshot),
+    candidates: entries.map((entry, index) => ({
+      index,
+      enableCulling: entry.snapshot.enableCulling,
+      worldPosition: entry.snapshot.worldPosition,
+      radius: entry.snapshot.radius,
+    })),
   });
 }
 
@@ -5604,42 +5923,78 @@ function updateInstancedCullingAndLod(): void {
   const now = Date.now();
   const camera = context.camera;
 
+  if (
+    instancedLodLastProcessedRevision === instancedLodRuntimeRevision
+    && areInstancedLodCameraMatricesUnchanged(camera)
+  ) {
+    return;
+  }
+
   const lodEntries = collectInstancedLodRuntimeEntries();
   const cullingRequest = buildInstancedLodCullingRequestForFrame(camera, lodEntries);
   const workerResult = consumeInstancedLodCullingResult();
-  const cullingResult: InstancedLodCullingResponse = workerResult ?? getLastInstancedLodCullingResult() ?? computeInstancedLodCullingResult(cullingRequest);
-  void dispatchInstancedLodCullingRequest(cullingRequest);
-  const visibleIds = new Set(cullingResult.visibleIds);
-  const targetByNodeId = new Map<string, InstancedLodTarget>(
-    cullingResult.targets.map((entry) => [entry.nodeId, entry.target] as const),
-  );
+  const cullingResult: InstancedLodCullingResponse = workerResult ?? getLastInstancedLodCullingResult() ?? computeInstancedLodCullingResultWithCache(cullingRequest);
+  void dispatchInstancedLodCullingRequestWithCandidates(cullingRequest, lodEntries, instancedLodRuntimeRevision);
+  const visibleIndices = cullingResult.visibleIndices;
+  const visibleCount = visibleIndices.length;
+  let visibleCursor = 0;
+  let targetCursor = 0;
 
   let lodVisibleCount = 0;
-  lodEntries.forEach((entry) => {
+  lodEntries.forEach((entry, index) => {
     const { nodeId, object, node, snapshot } = entry;
     const cullingEnabled = snapshot.enableCulling;
-    const isVisible = !cullingEnabled || visibleIds.has(nodeId);
+    let isVisible = !cullingEnabled;
+    if (cullingEnabled) {
+      if (visibleCursor < visibleCount && visibleIndices[visibleCursor] === index) {
+        isVisible = true;
+        visibleCursor += 1;
+      } else {
+        isVisible = false;
+      }
+    }
+    if (!isVisible && entry.lastVisible === false) {
+      return;
+    }
     if (cullingEnabled && !isVisible) {
       const lastSeen = instancedCullingLastVisibleAt.get(nodeId) ?? 0;
       if (INSTANCED_CULL_GRACE_MS > 0 && now - lastSeen < INSTANCED_CULL_GRACE_MS) {
+        entry.lastVisible = isVisible;
         return;
       }
       releaseModelInstance(nodeId);
       if (object.userData?.billboardImageAssetId) {
         releaseBillboardInstance(nodeId);
       }
+      entry.lastVisible = false;
+      entry.appliedTargetKey = null;
+      entry.appliedTransformRevision = -1;
       return;
     }
 
     lodVisibleCount += 1;
+    entry.lastVisible = true;
     if (cullingEnabled) {
       instancedCullingLastVisibleAt.set(nodeId, now);
     }
-    const workerTarget = targetByNodeId.get(nodeId);
+    const workerTarget = targetCursor < cullingResult.targetKeys.length
+      ? buildInstancedLodTargetFromParallelSnapshot({
+        kind: cullingResult.targetKinds[targetCursor] ?? 0,
+        assetId: cullingResult.targetAssetIds[targetCursor] ?? null,
+        sourceModelAssetId: cullingResult.targetSourceModelAssetIds[targetCursor] ?? null,
+        faceCamera: (cullingResult.targetFaceCameras[targetCursor] ?? 0) === 1,
+        forwardAxis: cullingResult.targetForwardAxes[targetCursor] ?? null,
+        key: cullingResult.targetKeys[targetCursor] ?? null,
+      })
+      : null;
+    targetCursor += 1;
     const desiredTarget = workerTarget
       ? resolveSceneryInstancedLodTargetFromWorkerTarget(object, workerTarget) ?? resolveDesiredLodTarget(node, object, camera)
       : resolveDesiredLodTarget(node, object, camera);
     if (!desiredTarget) {
+      return;
+    }
+    if (entry.lastVisible === true && entry.appliedTargetKey === desiredTarget.key && entry.appliedTransformRevision === entry.transformRevision) {
       return;
     }
     if (desiredTarget.kind === 'model') {
@@ -5657,6 +6012,8 @@ function updateInstancedCullingAndLod(): void {
         return;
       }
       syncInstancedTransform(object, shouldForceUpload);
+      entry.appliedTargetKey = desiredTarget.key;
+      entry.appliedTransformRevision = entry.transformRevision;
     } else if (desiredTarget.kind === 'billboard') {
       const currentImageAssetId = object.userData?.billboardImageAssetId as string | undefined;
       if (currentImageAssetId !== desiredTarget.imageAssetId) {
@@ -5665,8 +6022,13 @@ function updateInstancedCullingAndLod(): void {
       }
       object.userData.__harmonyLodFaceCamera = desiredTarget.faceCamera === true;
       syncInstancedTransform(object, true);
+      entry.appliedTargetKey = desiredTarget.key;
+      entry.appliedTransformRevision = entry.transformRevision;
     }
   });
+
+  instancedLodLastProcessedRevision = instancedLodRuntimeRevision;
+  rememberInstancedLodCameraMatrices(camera);
 
   if (debugEnabled.value && debugMode.value === 'full') {
     syncInstancingDebugCounters(lodEntries.length, lodVisibleCount, instancedMeshes, terrainScatterRuntime);
@@ -8116,6 +8478,7 @@ async function loadActualAssetForPlaceholder(state: LazyPlaceholderState): Promi
     placeholder.parent?.remove(placeholder);
     disposeObject(placeholder);
     nodeObjectMap.delete(nodeId);
+    clearInstancedLodRuntimeEntryCacheForNode(nodeId);
     removeRigidbodyInstance(nodeId);
     registerSceneSubtree(detailed);
     markLoadedAndCleanup();
@@ -8156,6 +8519,7 @@ function syncInstancedTransform(object: THREE.Object3D | null, force = false): v
   // InstancedMesh 支持完整矩阵，但 decompose/compose 会丢失 shear，导致实例位置/朝向偏差。
   // 因此这里优先直接写入 matrixWorld，仅在需要“隐藏”(scale=0) 时才做分解。
   object.updateMatrixWorld(true);
+  object.userData.__harmonyInstancedTransformRevision = getInstancedTransformRevision(object) + 1;
 
   const handleTarget = (target: THREE.Object3D) => {
     if (!target.userData?.instancedAssetId) {
@@ -8305,6 +8669,8 @@ function syncInstancedTransform(object: THREE.Object3D | null, force = false): v
 
     target.userData.__harmonyInstanceLayoutSignature = result.signature;
     target.userData.__harmonyInstanceLayoutLocals = result.locals;
+    updateInstancedLodRuntimeEntryCacheForObject(target);
+    markInstancedCullingDirty();
   };
 
   // Fast path: instanced proxy itself.
@@ -8336,6 +8702,8 @@ function updateNodeTransfrom(object: THREE.Object3D, node: SceneNode) {
       object,
       assetId: object.userData.instancedAssetId as string,
     });
+    updateInstancedLodRuntimeEntryCacheForObject(object);
+    markInstancedCullingDirty();
     return;
   }
   syncInstancedTransform(object);
@@ -12934,6 +13302,10 @@ function teardownRenderer() {
     releaseModelInstance(nodeId);
   });
   nodeObjectMap.clear();
+  instancedLodRuntimeEntryCache.clear();
+  instancedLodRuntimeRevision += 1;
+  instancedLodLastProcessedRevision = -1;
+  instancedLodLastCameraStateValid = false;
   multiuserNodeIds.clear();
   multiuserNodeObjects.clear();
   resetPhysicsWorld();
@@ -12966,6 +13338,8 @@ function teardownRenderer() {
   viewerResourceCache = null;
   activeScenePackageBuildKey = null;
   lastCompiledGroundLoadedChunkVersion = -1;
+  compiledGroundForceNextUpdate = true;
+  sceneCsmForceNextUpdate = true;
 }
 
 function handleUseCanvas(result: UseCanvasResult) {
@@ -12982,6 +13356,10 @@ async function ensureRendererContext(result: UseCanvasResult) {
 
   activeCameraWatchTween = null;
   frameDeltaMode = null;
+  compiledGroundForceNextUpdate = true;
+  sceneCsmForceNextUpdate = true;
+  instancedLodLastProcessedRevision = -1;
+  instancedLodLastCameraStateValid = false;
   const { canvas } = result;
   const devicePixelRatio = result.canvas?.ownerDocument?.defaultView?.devicePixelRatio || uni.getSystemInfoSync().pixelRatio || 1;
   // WeChat mini-program adapter canvas is typically already in physical pixels.
@@ -13630,8 +14008,12 @@ function startRenderLoop(
           applyFogSettings(activeEnvironmentSettings, camera);
 
         // Keep chunked ground meshes in sync with camera position.
+        const instancingNow = typeof performance !== 'undefined' && typeof performance.now === 'function'
+          ? performance.now()
+          : Date.now();
         const cachedGround = dynamicGroundCache;
-        if (cachedGround) {
+        if (cachedGround && shouldRunCompiledGroundTileSync(camera, instancingNow)) {
+          syncSceneryCompiledGroundRenderTiles(camera);
           const groundObject = nodeObjectMap.get(cachedGround.nodeId) ?? null;
           if (groundObject) {
             const hasGroundCollisionReference = resolveSceneryGroundCollisionReferenceWorld(camera, sceneryGroundCollisionReferencePosition);
@@ -13646,11 +14028,7 @@ function startRenderLoop(
             }
           }
         }
-        syncSceneryCompiledGroundRenderTiles(camera);
 
-        const instancingNow = typeof performance !== 'undefined' && typeof performance.now === 'function'
-          ? performance.now()
-          : Date.now();
           updateLazyPlaceholders(deltaSeconds);
         if (shouldRunTerrainScatterUpdate(camera, instancingNow)) {
           terrainScatterRuntime.update(camera, resolveGroundMeshObject);
@@ -13663,7 +14041,9 @@ function startRenderLoop(
           if (gradientBackgroundDome) {
             gradientBackgroundDome.mesh.position.copy(camera.position);
           }
-          sceneCsmShadowRuntime?.update();
+          if (sceneCsmShadowRuntime && shouldRunSceneCsmShadowUpdate(camera, instancingNow)) {
+            sceneCsmShadowRuntime.update();
+          }
         renderer.render(scene, camera);
         // Pull renderer.info after rendering so calls/triangles reflect the current frame.
         if (debugEnabled.value && debugMode.value === 'full') {
@@ -13729,6 +14109,10 @@ function cleanupForUnrelatedSceneSwitch(): void {
     releaseModelInstance(nodeId);
   });
   nodeObjectMap.clear();
+  instancedLodRuntimeEntryCache.clear();
+  instancedLodRuntimeRevision += 1;
+  instancedLodLastProcessedRevision = -1;
+  instancedLodLastCameraStateValid = false;
   multiuserNodeIds.clear();
   multiuserNodeObjects.clear();
   clearSceneryCompiledGroundRenderRuntime();
