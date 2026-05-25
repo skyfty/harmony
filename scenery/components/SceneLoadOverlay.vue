@@ -307,7 +307,18 @@ const overlayBytesLabel = computed(() => {
   return '';
 });
 
-const overlayIndeterminate = computed(() => props.sceneInit.active ? props.sceneInit.indeterminate : props.sceneDownload.active && props.sceneDownload.indeterminate);
+const overlayIndeterminate = computed(() => {
+  if (props.sceneInit.active) {
+    return props.sceneInit.indeterminate;
+  }
+  if (!props.sceneDownload.active) {
+    return false;
+  }
+  if (props.sceneDownload.phase === 'download' && props.sceneDownload.total > 0) {
+    return false;
+  }
+  return props.sceneDownload.indeterminate;
+});
 const overlayPercentText = computed(() => (overlayIndeterminate.value ? '解析中…' : `${overlayPercent.value}%`));
 const overlayProgressStyle = computed(() => (overlayIndeterminate.value ? {} : { width: `${overlayPercent.value}%` }));
 

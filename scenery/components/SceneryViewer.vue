@@ -12587,14 +12587,22 @@ function requestBinary(url: string): Promise<ArrayBuffer> {
     task?.onProgressUpdate?.((info: SceneDownloadProgress) => {
       sceneDownload.phase = 'download';
       if (typeof info.progress === 'number' && Number.isFinite(info.progress)) {
-        sceneDownload.percent = info.progress;
-        sceneDownload.label = `正在下载场景包… ${Math.max(0, Math.min(100, Math.round(info.progress)))}%`;
+        sceneDownload.percent = clampPercent(info.progress);
       }
       if (typeof info.totalBytesWritten === 'number') {
         sceneDownload.loaded = info.totalBytesWritten;
       }
       if (typeof info.totalBytesExpectedToWrite === 'number') {
-        sceneDownload.total = info.totalBytesExpectedToWrite;
+        sceneDownload.total = Math.max(0, Math.floor(info.totalBytesExpectedToWrite));
+      }
+      if (sceneDownload.total > 0) {
+        sceneDownload.indeterminate = false;
+        const ratio = Math.min(1, Math.max(0, sceneDownload.loaded / sceneDownload.total));
+        sceneDownload.percent = Math.round(ratio * 100);
+        sceneDownload.label = `正在下载场景包… ${sceneDownload.percent}%`;
+      } else if (typeof info.progress === 'number' && Number.isFinite(info.progress)) {
+        sceneDownload.indeterminate = true;
+        sceneDownload.label = `正在下载场景包… ${Math.max(0, Math.min(100, Math.round(info.progress)))}%`;
       }
     });
   });
@@ -12647,6 +12655,7 @@ async function loadProjectFromScenePackageUrl(url: string, cacheKey?: string): P
       currentIndex: 0,
       currentTotal: 0,
       currentLabel: '',
+      indeterminate: false,
     });
     const buffer = await requestBinary(url);
     await loadProjectFromScenePackageBytes(buffer, cacheKeyParam || url);
