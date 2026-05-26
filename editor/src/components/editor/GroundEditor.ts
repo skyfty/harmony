@@ -581,6 +581,27 @@ async function bakeDirtyGroundSurfaceChunks(params: {
 						.map((assetId) => (typeof assetId === 'string' ? assetId.trim() : ''))
 						.filter((assetId) => assetId.length > 0)
 					: null,
+				layerTextureAssetIds: Array.isArray(value.layerTextureAssetIds)
+					? value.layerTextureAssetIds
+						.map((assetId) => (typeof assetId === 'string' ? assetId.trim() : ''))
+						.map((assetId) => assetId.length > 0 ? assetId : null)
+					: null,
+				layerColorTints: Array.isArray(value.layerColorTints)
+					? value.layerColorTints
+						.map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
+						.map((entry) => entry.length > 0 ? entry : null)
+					: null,
+				layerUvScales: Array.isArray(value.layerUvScales)
+					? value.layerUvScales
+						.map((entry) => {
+							if (!entry || typeof entry !== 'object') {
+								return null
+							}
+							const x = Number((entry as { x?: unknown }).x)
+							const y = Number((entry as { y?: unknown }).y)
+							return Number.isFinite(x) && x > 0 && Number.isFinite(y) && y > 0 ? { x, y } : null
+						})
+					: null,
 				revision: value.revision,
 			}]),
 		) as GroundSurfaceChunkTextureMap
@@ -617,6 +638,9 @@ async function bakeDirtyGroundSurfaceChunks(params: {
 			aoTextureAssetId: null,
 			emissiveTextureAssetId: null,
 			splatMapAssetIds: null,
+			layerTextureAssetIds: null,
+			layerColorTints: null,
+			layerUvScales: null,
 			revision: chunk.surfaceRevision,
 		}
 	}

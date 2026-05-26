@@ -227,6 +227,7 @@ import {
   createGroundMesh,
   getVisibleInfiniteGroundChunkVersion,
   hasPendingGroundChunkWork,
+  refreshGroundChunkMaterials,
   resolveGroundRuntimeChunkCells,
   setInfiniteGroundHiddenChunkKeys,
   setGroundMaterial,
@@ -1390,16 +1391,27 @@ function resolveSharedGroundRuntimeMaterial(targetObject: THREE.Object3D): THREE
       return
     }
     const mesh = child as THREE.Mesh
-    if (mesh.userData?.groundChunk || mesh.userData?.compiledGroundTile) {
+    const material = mesh.material
+    const candidate = Array.isArray(material) ? (material[0] ?? null) : (material ?? null)
+    if (!candidate) {
       return
     }
-    const material = mesh.material
-    resolved = Array.isArray(material) ? (material[0] ?? null) : (material ?? null)
+    const activeSource = (candidate.userData as Record<string, unknown> | undefined)?.groundChunkTextureSource
+    if (typeof activeSource === 'string' && activeSource.length > 0) {
+      return
+    }
+    resolved = candidate
   })
   return resolved
 }
 
-function refreshGroundRuntimeMaterials(node: SceneNode, targetObject: THREE.Object3D): void {
+function refreshGroundRuntimeMaterials(
+  node: SceneNode,
+  targetObject: THREE.Object3D,
+  options: {
+    refreshChunks?: boolean
+  } = {},
+): void {
   if (node.dynamicMesh?.type !== 'Ground') {
     return
   }
@@ -1437,6 +1449,9 @@ function refreshGroundRuntimeMaterials(node: SceneNode, targetObject: THREE.Obje
     setGroundSculptedMaterial(groundObject, sculptedMaterial)
   } else {
     setGroundSculptedMaterial(groundObject, null)
+  }
+  if (options.refreshChunks !== false) {
+    refreshGroundChunkMaterials(groundObject, groundDefinition)
   }
 }
 
@@ -11173,7 +11188,7 @@ const viewportForceDenseGroundMesh = ref(shouldForceDenseGroundMeshForViewport()
 let pendingViewportGroundOptimizedRebuild = false
 
 function applyViewportGroundRuntimeMode(definition: GroundRuntimeDynamicMesh): GroundRuntimeDynamicMesh {
-  const shouldForceDense = viewportForceDenseGroundMesh.value || Boolean(definition.groundSurfaceChunks) || Boolean(definition.groundSplatBake)
+  const shouldForceDense = viewportForceDenseGroundMesh.value
   if (shouldForceDense) {
     if (definition.runtimeDisableOptimizedChunks !== true) {
       console.debug('[SceneViewport][GroundRuntime] force dense chunk mesh', {
@@ -21037,6 +21052,7 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
       if (!groundDefinition) {
         return
       }
+      refreshGroundRuntimeMaterials(node, object, { refreshChunks: false })
       const nextSignature = computeGroundDynamicMeshSignature(groundDefinition)
       if (groundData[DYNAMIC_MESH_SIGNATURE_KEY] !== nextSignature) {
         const shouldSkipSculptRefresh = groundData[GROUND_SCULPT_SKIP_REFRESH_SIGNATURE_KEY] === nextSignature
@@ -21047,7 +21063,7 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
         if (shouldSkipSculptRefresh) {
           delete groundData[GROUND_SCULPT_SKIP_REFRESH_SIGNATURE_KEY]
         }
-        syncViewportGroundChunks(groundObject, groundDefinition)
+        syncViewportGroundChunks(groundObject, groundDefinition, { forceChunkRefresh: true })
 
       } else if (groundData[GROUND_SCULPT_SKIP_REFRESH_SIGNATURE_KEY] === nextSignature) {
         delete groundData[GROUND_SCULPT_SKIP_REFRESH_SIGNATURE_KEY]
@@ -21206,7 +21222,9 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
     }
   }
 
-  applyNodeMaterialOverrides(object, node)
+  if (node.dynamicMesh?.type !== 'Ground') {
+    applyNodeMaterialOverrides(object, node)
+  }
 
 
   if (nodeType === 'WarpGate' && !hasRuntimeObject) {
@@ -21305,10 +21323,18 @@ function resolveViewportGroundStreamingDefinition(
 function syncViewportGroundChunks(
   groundObject: THREE.Object3D,
   groundDefinition: GroundRuntimeDynamicMesh,
+  options: {
+    forceChunkRefresh?: boolean
+  } = {},
 ): void {
   syncViewportCompiledGroundTiles(groundObject, groundDefinition)
   const streamingDefinition = resolveViewportGroundStreamingDefinition(groundObject, groundDefinition)
-  syncGroundChunkLoadingMode(groundObject, streamingDefinition, camera)
+  syncGroundChunkLoadingMode(
+    groundObject,
+    streamingDefinition,
+    camera,
+    options.forceChunkRefresh ? { force: true, minIntervalMs: 0 } : {},
+  )
   const sceneId = typeof sceneStore.currentSceneId === 'string' ? sceneStore.currentSceneId.trim() : ''
   const manifestRevision = Number.isFinite(streamingDefinition.chunkManifestRevision)
     ? Math.max(0, Math.trunc(streamingDefinition.chunkManifestRevision as number))
@@ -21445,11 +21471,23 @@ function updateGroundChunkStreaming() {
   const surfaceRevision = Number.isFinite(groundDefinition.surfaceRevision)
     ? Math.max(0, Math.trunc(groundDefinition.surfaceRevision as number))
     : 0
+  const groundSplatBakeRevision = Number.isFinite(groundDefinition.groundSplatBake?.revision)
+    ? Math.max(0, Math.trunc(groundDefinition.groundSplatBake!.revision as number))
+    : 0
+  const groundSurfaceChunkKeySignature = groundDefinition.groundSurfaceChunks
+    ? Object.keys(groundDefinition.groundSurfaceChunks).sort().join(',')
+    : ''
+  const groundSurfaceChunkCount = groundDefinition.groundSurfaceChunks
+    ? Object.keys(groundDefinition.groundSurfaceChunks).length
+    : 0
   const streamingStateSignature = [
     buildKey,
     manifestRevision,
     groundDefinition.terrainMode,
     surfaceRevision,
+    groundSplatBakeRevision,
+    groundSurfaceChunkKeySignature,
+    groundSurfaceChunkCount,
   ].join('|')
   const chunkSizeCandidate = Number(groundDefinition.chunkSizeMeters)
   const chunkSizeMeters = Number.isFinite(chunkSizeCandidate) && chunkSizeCandidate > 0
@@ -22307,6 +22345,7 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
       const groundMesh = createGroundMesh(groundDefinition)
       groundMesh.removeFromParent()
       groundMesh.userData.nodeId = node.id
+      tagInternalRuntimeGroup(groundMesh, node.id, 'Ground')
       groundMesh.userData[DYNAMIC_MESH_SIGNATURE_KEY] = computeGroundDynamicMeshSignature(groundDefinition)
       syncViewportGroundChunks(groundMesh, groundDefinition)
       container.add(groundMesh)
@@ -23491,10 +23530,10 @@ defineExpose({
           </div>
         </div>
 
-        <div
-          v-if="wallDoorSelectionOverlayBox"
-          class="wall-door-selection-overlay"
-          :style="{
+      <div
+        v-if="wallDoorSelectionOverlayBox"
+        class="wall-door-selection-overlay"
+        :style="{
             left: wallDoorSelectionOverlayBox.left + 'px',
             top: wallDoorSelectionOverlayBox.top + 'px',
             width: wallDoorSelectionOverlayBox.width + 'px',

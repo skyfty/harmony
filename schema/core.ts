@@ -2006,6 +2006,31 @@ export function normalizeGroundSurfaceChunkTextureMap(
             .map((value) => normalizeOptionalAssetId(value))
             .filter((value): value is string => Boolean(value))
         : null,
+      layerTextureAssetIds: Array.isArray(chunkRef?.layerTextureAssetIds)
+        ? chunkRef.layerTextureAssetIds
+            .map((value) => normalizeOptionalAssetId(value))
+        : null,
+      layerColorTints: Array.isArray(chunkRef?.layerColorTints)
+        ? chunkRef.layerColorTints
+            .map((value) => {
+              const normalized = typeof value === 'string' ? value.trim() : ''
+              return normalized.length > 0 ? normalized : null
+            })
+        : null,
+      layerUvScales: Array.isArray(chunkRef?.layerUvScales)
+        ? chunkRef.layerUvScales
+            .map((value) => {
+              if (!value || typeof value !== 'object') {
+                return null
+              }
+              const x = Number((value as { x?: unknown }).x)
+              const y = Number((value as { y?: unknown }).y)
+              if (!Number.isFinite(x) || !Number.isFinite(y) || x <= 0 || y <= 0) {
+                return null
+              }
+              return { x, y } satisfies Vector2Like
+            })
+        : null,
       revision: Math.max(0, Math.trunc(Number.isFinite(Number(chunkRef?.revision)) ? Number(chunkRef?.revision) : 0)),
     }])
   }

@@ -1646,6 +1646,7 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
 
       const mesh = node.dynamicMesh as LandformDynamicMesh
       const currentBake = mesh.groundSplatBake ?? null
+      const currentSurfaceLayers = Array.isArray(mesh.surfaceLayers) ? mesh.surfaceLayers : []
       const footprint = Array.isArray(mesh.vertices)
         ? mesh.vertices
           .map((entry) => [Number(entry?.[0]), Number(entry?.[1])] as [number, number])
@@ -1666,8 +1667,21 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
       const featherNeedsSync = expectedFeather.length !== currentFeather.length
         || expectedFeather.some((value, index) => Math.abs(value - Number(currentFeather[index])) > 1e-5)
 
+      const normalizeSurfaceLayerSignature = (layers: typeof nextSurfaceLayers) => JSON.stringify(layers.map((layer) => ({
+        id: layer.id ?? null,
+        order: Number.isFinite(layer.order) ? layer.order : 0,
+        materialConfigId: layer.materialConfigId ?? null,
+        materialProps: layer.materialProps ?? null,
+        textureAssetIds: Array.isArray(layer.textureAssetIds) ? [...layer.textureAssetIds] : [],
+        enableFeather: typeof layer.enableFeather === 'boolean' ? layer.enableFeather : null,
+        feather: Number.isFinite(layer.feather) ? Number(layer.feather) : null,
+        uvScale: layer.uvScale ? { x: Number(layer.uvScale.x) || 0, y: Number(layer.uvScale.y) || 0 } : null,
+      })))
+      const surfaceLayersChanged = normalizeSurfaceLayerSignature(nextSurfaceLayers)
+        !== normalizeSurfaceLayerSignature(currentSurfaceLayers as typeof nextSurfaceLayers)
+
       const meshChanged = mesh.materialConfigId !== materialConfigId || featherNeedsSync
-      const bakeNeedsRefresh = materialsChanged || meshChanged
+      const bakeNeedsRefresh = materialsChanged || meshChanged || surfaceLayersChanged
       const nextBake = bakeNeedsRefresh
         ? {
             revision: Date.now(),
@@ -1678,7 +1692,7 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
           }
         : currentBake
 
-      if (meshChanged || (materialsChanged && currentBake !== nextBake)) {
+      if (meshChanged || surfaceLayersChanged || (materialsChanged && currentBake !== nextBake)) {
         node.dynamicMesh = {
           ...mesh,
           materialConfigId,

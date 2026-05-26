@@ -1081,6 +1081,7 @@ type LandformGroundSplatBakeRequest = {
 type SceneStoreGroundSplatBakeTarget = Pick<SceneState, 'nodes'> & {
   currentSceneId?: string | null
   queueSceneNodePatch: (nodeId: string, fields: ScenePatchField[], options?: { bumpVersion?: boolean }) => boolean
+  bumpSceneNodePropertyVersion?: () => void
 }
 
 function collectLandformSurfaceLayerTextureAssetIdsFromNodes(nodes: SceneNode[] | undefined | null): string[] {
@@ -1135,7 +1136,10 @@ let landformGroundSplatBakeVersion = 0
       const runtimeGroundDefinition = groundNode.dynamicMesh as GroundRuntimeDynamicMesh
       runtimeGroundDefinition.runtimeDisableOptimizedChunks = false
       useGroundHeightmapStore().syncRuntimeGroundState(groundNode.id, runtimeGroundDefinition)
-      request.scene.queueSceneNodePatch(groundNode.id, ['dynamicMesh'])
+      const queued = request.scene.queueSceneNodePatch(groundNode.id, ['dynamicMesh'])
+      if (!queued) {
+        request.scene.bumpSceneNodePropertyVersion?.()
+      }
       return
     }
 
@@ -1149,9 +1153,12 @@ let landformGroundSplatBakeVersion = 0
       },
     } as GroundDynamicMesh
     const runtimeGroundDefinition = groundNode.dynamicMesh as GroundRuntimeDynamicMesh
-    runtimeGroundDefinition.runtimeDisableOptimizedChunks = true
+    runtimeGroundDefinition.runtimeDisableOptimizedChunks = false
     useGroundHeightmapStore().syncRuntimeGroundState(groundNode.id, runtimeGroundDefinition)
-    request.scene.queueSceneNodePatch(groundNode.id, ['dynamicMesh'])
+    const queued = request.scene.queueSceneNodePatch(groundNode.id, ['dynamicMesh'])
+    if (!queued) {
+      request.scene.bumpSceneNodePropertyVersion?.()
+    }
   })().catch((error) => {
     console.warn('[SceneStore] Failed to bake landform ground splat', error)
   })
@@ -1163,8 +1170,6 @@ function scheduleLandformGroundSplatBake(
   store: SceneStoreGroundSplatBakeTarget,
   reason: string,
 ): void {
-  const landformCount = store.nodes.filter((node) => node?.dynamicMesh?.type === 'Landform').length
-  const groundNode = findGroundNode(store.nodes)
   const snapshot = manualDeepClone({
     id: typeof store.currentSceneId === 'string' && store.currentSceneId.trim().length
       ? store.currentSceneId.trim()
@@ -1178,6 +1183,20 @@ function scheduleLandformGroundSplatBake(
     snapshot,
     reason,
   })
+}
+
+function nodeSubtreeContainsLandform(node: SceneNode | null | undefined): boolean {
+  if (!node) {
+    return false
+  }
+  if (node.dynamicMesh?.type === 'Landform') {
+    return true
+  }
+  return Array.isArray(node.children) && node.children.some((child) => nodeSubtreeContainsLandform(child))
+}
+
+function shouldRebakeLandformGroundForNodeIds(nodes: SceneNode[], ids: string[]): boolean {
+  return ids.some((id) => nodeSubtreeContainsLandform(findNodeById(nodes, id)))
 }
 
 const wallHelpers = createSceneStoreWallHelpers({
@@ -2906,6 +2925,7 @@ function rebuildLandformNodeForTerrain(store: {
     ...rebuilt.definition,
     materialConfigId: mesh.materialConfigId ?? rebuilt.definition.materialConfigId ?? null,
   }
+  landformHelpers.ensureLandformMaterialConvention(node)
   node.position = createVector(rebuilt.center.x, rebuilt.center.y, rebuilt.center.z)
 
   const runtime = getRuntimeObject(nodeId)
@@ -11189,6 +11209,9 @@ export const useSceneStore = defineStore('scene', {
       } else {
         affectedIds.forEach((affectedId) => this.queueSceneNodePatch(affectedId, ['visibility']))
       }
+      if (shouldRebakeLandformGroundForNodeIds(this.nodes, [id])) {
+        scheduleLandformGroundSplatBake(this, 'setNodeVisibility')
+      }
       commitSceneSnapshot(this)
     },
     toggleNodeVisibility(id: string) {
@@ -11221,6 +11244,9 @@ export const useSceneStore = defineStore('scene', {
       this.nodes = [...this.nodes]
       // queue visibility patches for changed nodes so the runtime updates
       changedIds.forEach((id) => this.queueSceneNodePatch(id, ['visibility']))
+      if (shouldRebakeLandformGroundForNodeIds(this.nodes, changedIds)) {
+        scheduleLandformGroundSplatBake(this, 'setAllNodesVisibility')
+      }
       commitSceneSnapshot(this)
     },
 
@@ -11281,6 +11307,10 @@ export const useSceneStore = defineStore('scene', {
         changedIds.forEach((id) => this.queueSceneNodePatch(id, ['visibility']))
       }
 
+      if (shouldRebakeLandformGroundForNodeIds(this.nodes, changedIds)) {
+        scheduleLandformGroundSplatBake(this, 'setAllUserNodesVisibility')
+      }
+
       commitSceneSnapshot(this)
       return { changedCount: changedIds.length }
     },
@@ -11322,6 +11352,10 @@ export const useSceneStore = defineStore('scene', {
         ;(node as any).visible = targetVisible
       })
       this.nodes = [...this.nodes]
+      changedIds.forEach((id) => this.queueSceneNodePatch(id, ['visibility']))
+      if (shouldRebakeLandformGroundForNodeIds(this.nodes, changedIds)) {
+        scheduleLandformGroundSplatBake(this, 'toggleSelectionVisibility')
+      }
       commitSceneSnapshot(this)
       return true
     },

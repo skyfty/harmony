@@ -183,6 +183,27 @@ function cloneGroundSurfaceChunks(
           .map((assetId) => (typeof assetId === 'string' ? assetId.trim() : ''))
           .filter((assetId) => assetId.length > 0)
       : null,
+    layerTextureAssetIds: Array.isArray(chunkRef?.layerTextureAssetIds)
+      ? chunkRef.layerTextureAssetIds
+          .map((assetId) => (typeof assetId === 'string' ? assetId.trim() : ''))
+          .map((assetId) => assetId.length > 0 ? assetId : null)
+      : null,
+    layerColorTints: Array.isArray(chunkRef?.layerColorTints)
+      ? chunkRef.layerColorTints
+          .map((value) => (typeof value === 'string' ? value.trim() : ''))
+          .map((value) => value.length > 0 ? value : null)
+      : null,
+    layerUvScales: Array.isArray(chunkRef?.layerUvScales)
+      ? chunkRef.layerUvScales
+          .map((value) => {
+            if (!value || typeof value !== 'object') {
+              return null
+            }
+            const x = Number((value as { x?: unknown }).x)
+            const y = Number((value as { y?: unknown }).y)
+            return Number.isFinite(x) && x > 0 && Number.isFinite(y) && y > 0 ? { x, y } : null
+          })
+      : null,
     revision: Number.isFinite(chunkRef?.revision) ? Math.max(0, Math.trunc(chunkRef.revision)) : 0,
   }] as const)
   return nextEntries.length ? Object.fromEntries(nextEntries) as GroundSurfaceChunkTextureMap : null
