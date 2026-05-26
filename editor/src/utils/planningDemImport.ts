@@ -8,7 +8,7 @@ import type {
   PlanningTerrainWorldBounds,
   PlanningTerrainDemHeightmapEncoding,
 } from '@/types/planning-scene-data'
-import { computeSha256Hex } from '@/utils/planningDemStorage'
+import { sha256Hex as computeSha256Hex } from '@harmony/utils/hash'
 
 export interface PlanningDemPreviewResult {
   dataUrl: string

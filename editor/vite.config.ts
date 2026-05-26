@@ -34,6 +34,14 @@ export default defineConfig({
         replacement: resolveDir('../schema'),
       },
       {
+        find: /^@harmony\/utils$/,
+        replacement: resolveDir('../utils/src/index.ts'),
+      },
+      {
+        find: /^@harmony\/utils\/(.*)$/,
+        replacement: `${resolveDir('../utils/src')}/$1`,
+      },
+      {
         find: '@harmony/physics-core',
         replacement: resolveDir('../physics-core/src'),
       },

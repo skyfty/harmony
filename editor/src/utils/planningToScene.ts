@@ -37,6 +37,7 @@ import { generateUuid } from '@/utils/uuid'
 import { buildPlanningDemGroundRegionData, type PlanningDemBuildProgress, type PlanningDemHeightRegion, type PlanningDemRegionConversionResult } from '@/utils/planningDemToGround'
 import { buildPlanningDemTerrainConversionInWorker } from '@/utils/planningDemTerrainDataset'
 import { createScenesStoreTerrainDatasetHeightSampler } from '@/utils/terrainDatasetRuntime'
+import { sha1Bytes } from '@harmony/utils/hash'
 export type PlanningConversionProgress = {
   step: string
   progress: number
@@ -190,14 +191,7 @@ async function stableUuidV5(name: string, namespaceUuid = PLANNING_UUID_NAMESPAC
   input.set(ns, 0)
   input.set(nameBytes, ns.length)
 
-  const cryptoRef = typeof crypto !== 'undefined' ? crypto : undefined
-  const subtle = cryptoRef?.subtle
-  if (!subtle || typeof subtle.digest !== 'function') {
-    // No deterministic digest available; fall back to random.
-    return generateUuid()
-  }
-
-  const hash = new Uint8Array(await subtle.digest('SHA-1', input))
+  const hash = sha1Bytes(input)
   const bytes = hash.slice(0, 16)
   // Set version (5) and variant (RFC 4122)
   bytes[6] = (bytes[6]! & 0x0f) | 0x50

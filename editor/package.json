@@ -29,6 +29,7 @@
     "@harmony/physics-bridge": "file:../physics-bridge",
     "@harmony/physics-core": "file:../physics-core",
     "@harmony/schema": "file:../schema",
+    "@harmony/utils": "file:../utils",
     "@mdi/font": "^7.4.47",
     "@rollup/plugin-replace": "^6.0.3",
     "@types/three": "^0.171.0",

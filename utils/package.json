@@ -38,6 +38,11 @@
       "default": "./dist/query.js",
       "types": "./dist/query.d.ts"
     },
+    "./hash": {
+      "import": "./dist/hash.js",
+      "default": "./dist/hash.js",
+      "types": "./dist/hash.d.ts"
+    },
     "./scene-package-storage": {
       "import": "./dist/scenePackageStorage.js",
       "default": "./dist/scenePackageStorage.js",

@@ -33,8 +33,9 @@ import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { PlanningSceneData } from '@/types/planning-scene-data'
 import type { PlanningScenePackageImageEntry, PlanningScenePackageSidecar } from '@/types/planning-package'
 import type { SceneExportEventReporter } from '@/types/scene-export'
-import { computeSha256Hex, getPlanningImageBlobByHash } from '@/utils/planningImageStorage'
+import { getPlanningImageBlobByHash } from '@/utils/planningImageStorage'
 import { loadPlanningDemBlobByHash } from '@/utils/planningDemStorage'
+import { sha256Hex } from '@harmony/utils/hash'
 import { fetchResourceAsset } from '@/api/resourceAssets'
 import { mapServerAssetToProjectAsset } from '@/api/serverAssetTypes'
 import { buildAssetRegistryAliasMap, normalizeAssetIdWithRegistry } from '@/utils/assetRegistryIdNormalization'
@@ -289,31 +290,6 @@ async function buildTerrainDatasetPackageFiles(
     manifest,
     files,
   }
-}
-
-async function sha256Hex(input: string): Promise<string> {
-  const text = typeof input === 'string' ? input : String(input)
-  try {
-    if (typeof crypto !== 'undefined' && crypto.subtle) {
-      const bytes = new TextEncoder().encode(text)
-      const digest = await crypto.subtle.digest('SHA-256', bytes)
-      const view = new Uint8Array(digest)
-      let out = ''
-      for (let i = 0; i < view.length; i += 1) {
-        out += view[i]!.toString(16).padStart(2, '0')
-      }
-      return out
-    }
-  } catch (_error) {
-    // fall through
-  }
-
-  // Fallback (non-crypto hash): stable enough for filenames.
-  let hash = 5381
-  for (let i = 0; i < text.length; i += 1) {
-    hash = ((hash << 5) + hash) ^ text.charCodeAt(i)
-  }
-  return `djb2_${(hash >>> 0).toString(16).padStart(8, '0')}`
 }
 
 type ResolvedEmbedAsset = {
@@ -990,7 +966,7 @@ async function resolvePlanningImageBlob(image: {
   }
   const blob = await response.blob()
   const buffer = await blob.arrayBuffer()
-  const resolvedHash = await computeSha256Hex(buffer)
+  const resolvedHash = sha256Hex(buffer)
   return {
     blob: new Blob([buffer], { type: blob.type || image.mimeType || 'application/octet-stream' }),
     imageHash: resolvedHash,

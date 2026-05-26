@@ -15,16 +15,6 @@ const DB_VERSION = 1
 const BLOBS_STORE = 'blobs'
 const SCENES_STORE = 'scenes'
 
-function hexFromBuffer(buffer: ArrayBuffer) {
-  const bytes = new Uint8Array(buffer)
-  return Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('')
-}
-
-export async function computeSha256Hex(buffer: ArrayBuffer) {
-  const hash = await crypto.subtle.digest('SHA-256', buffer)
-  return hexFromBuffer(hash)
-}
-
 export function openPlanningDemDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     try {

@@ -5,3 +5,4 @@ export * from './http';
 export * from './miniClient';
 export * from './query';
 export * from './runtimeConfig';
+export * from './hash';

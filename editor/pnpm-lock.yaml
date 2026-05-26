@@ -23,6 +23,9 @@ importers:
       '@harmony/schema':
         specifier: file:../schema
         version: file:../schema
+      '@harmony/utils':
+        specifier: file:../utils
+        version: file:../utils
       '@mdi/font':
         specifier: ^7.4.47
         version: 7.4.47
@@ -335,6 +338,10 @@ packages:
 
   '@harmony/schema@file:../schema':
     resolution: {directory: ../schema, type: directory}
+    engines: {pnpm: '>=10.0.0'}
+
+  '@harmony/utils@file:../utils':
+    resolution: {directory: ../utils, type: directory}
     engines: {pnpm: '>=10.0.0'}
 
   '@jridgewell/resolve-uri@3.1.2':
@@ -1316,6 +1323,8 @@ snapshots:
       three: 0.172.0
       three-csm: 4.2.1
       three-mesh-bvh: 0.9.8(three@0.172.0)
+
+  '@harmony/utils@file:../utils': {}
 
   '@jridgewell/resolve-uri@3.1.2': {}
 

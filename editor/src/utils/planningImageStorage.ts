@@ -1,4 +1,5 @@
 import type { PlanningImageData } from '@/types/planning-scene-data'
+import { sha256Hex as computeSha256Hex } from '@harmony/utils/hash'
 
 export interface PlanningImageBlobRecord {
   hash: string
@@ -38,16 +39,6 @@ const DB_NAME = 'harmony-planning-images'
 const DB_VERSION = 2
 const IMAGES_STORE = 'images'
 const LAYERS_STORE = 'layers'
-
-function hexFromBuffer(buffer: ArrayBuffer) {
-  const bytes = new Uint8Array(buffer)
-  return Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('')
-}
-
-export async function computeSha256Hex(buffer: ArrayBuffer) {
-  const hash = await crypto.subtle.digest('SHA-256', buffer)
-  return hexFromBuffer(hash)
-}
 
 export function openPlanningImageDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
