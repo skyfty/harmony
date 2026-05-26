@@ -157,13 +157,15 @@ function mapMedal(row: any) {
   }
 }
 
-function mapUserMedalStatus(row: any, userMedal: any, completionRatio = 0) {
+function mapUserMedalStatus(row: any, userMedal: any, completionRatio = 0, completedRuleCount = 0, totalRuleCount = 0) {
   return {
     ...mapMedal(row),
     awarded: Boolean(userMedal),
     awardedAt: userMedal?.awardedAt?.toISOString?.() ?? (userMedal?.awardedAt ? new Date(userMedal.awardedAt).toISOString() : null),
     userMedalId: userMedal?._id?.toString?.() ?? null,
     completionRatio,
+    completedRuleCount,
+    totalRuleCount,
   }
 }
 
@@ -234,7 +236,11 @@ export async function listUserMedals(ctx: Context): Promise<void> {
   ctx.body = {
     data: rows.map((row: any) => {
       const status = statusMap.get(row._id.toString())
-      return mapUserMedalStatus(row, userMedalMap.get(row._id.toString()), status?.completionRatio ?? 0)
+      return mapUserMedalStatus(row, 
+        userMedalMap.get(row._id.toString()), 
+        status?.completionRatio ?? 0, 
+        status?.completedRuleCount ?? 0, 
+        status?.totalRuleCount ?? 0)
     }),
     page: pageNumber,
     pageSize: limit,

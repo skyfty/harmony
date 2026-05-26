@@ -17,6 +17,8 @@ export interface MedalItem {
   earned: boolean;
   awardedAt?: null | string;
   completionRatio?: number;
+  completedRuleCount?: number;
+  totalRuleCount?: number;
   sort: number;
 }
 

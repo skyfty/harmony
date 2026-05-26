@@ -37,6 +37,8 @@ type MedalStatusSummary = {
   earned: boolean
   awardedAt: Date | null
   completionRatio: number
+  completedRuleCount: number
+  totalRuleCount: number
 }
 
 function toRecord(value: unknown): Record<string, unknown> {
@@ -186,10 +188,11 @@ function evaluateRule(rule: MedalRule, stats: MedalUserStats): boolean {
   }
 }
 
-function summarizeMedalCompletion(medal: Pick<MedalLean, 'rules'>, stats: MedalUserStats): number {
+
+function summarizeMedalCompletion(medal: Pick<MedalLean, 'rules'>, stats: MedalUserStats): number[] {
   const rules = Array.isArray(medal.rules) ? medal.rules : []
   if (!rules.length) {
-    return 0
+    return [0, 0, 0]
   }
 
   let completedRuleCount = 0
@@ -199,7 +202,7 @@ function summarizeMedalCompletion(medal: Pick<MedalLean, 'rules'>, stats: MedalU
     }
   }
 
-  return Math.max(0, Math.min(1, completedRuleCount / rules.length))
+  return [Math.max(0, Math.min(1, completedRuleCount / rules.length)),completedRuleCount, rules.length]
 }
 
 export async function buildMedalStatusMapForUser(
@@ -223,12 +226,15 @@ export async function buildMedalStatusMapForUser(
     const medalId = medal._id.toString()
     const earnedRow = earnedMap.get(medalId)
     const earned = Boolean(earnedRow)
-    const completionRatio = earned ? 1 : summarizeMedalCompletion(medal, stats)
+    const complectionData = summarizeMedalCompletion(medal, stats)
+    const completionRatio = earned ? 1 : complectionData[0]
 
     statusMap.set(medalId, {
       earned,
       awardedAt: earnedRow?.awardedAt ?? null,
       completionRatio,
+      completedRuleCount: complectionData[1],
+      totalRuleCount: complectionData[2],
     })
   }
 
@@ -250,6 +256,8 @@ function mapMedalForUser(medal: MedalLean, status?: MedalStatusSummary) {
     earned,
     awardedAt: status?.awardedAt ? status.awardedAt.toISOString() : null,
     completionRatio: status?.completionRatio ?? 0,
+    completedRuleCount: status?.completedRuleCount ?? 0,
+    totalRuleCount: status?.totalRuleCount ?? 0,
     sort: medal.sort,
   }
 }

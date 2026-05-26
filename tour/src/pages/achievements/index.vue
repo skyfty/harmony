@@ -199,7 +199,9 @@ function computeAchievementRatio(item: ScenicCardItem): number {
 }
 
 function formatPercent(item: ScenicCardItem): string {
-  return `${Math.round(computeAchievementRatio(item) * 100)}%`;
+  const checkedCount = clampCount(item.checkedCount);
+  const totalCount = clampCount(item.totalCount);
+  return `${checkedCount}/${totalCount}`;
 }
 
 function resolveBackgroundImage(item: ScenicCardItem): string {
@@ -256,12 +258,15 @@ function getMedalCompletionRatio(item: MedalItem): number {
   return Math.max(0, Math.min(1, parsed));
 }
 
-function getMedalCompletionPercent(item: MedalItem): number {
-  return Math.round(getMedalCompletionRatio(item) * 100);
-}
+// function getMedalCompletionPercent(item: MedalItem): number {
+//   return Math.round(getMedalCompletionRatio(item) * 100);
+// }
 
 function formatMedalCompletionPercent(item: MedalItem): string {
-  return `${getMedalCompletionPercent(item)}%`;
+  // 假设 MedalItem 有 checkedCount 和 totalCount 字段，否则只显示百分比
+  return  `${item.completedRuleCount}/${item.totalRuleCount}`
+  // 若无则回退为百分比
+  // return `${getMedalCompletionPercent(item)}%`;
 }
 
 function buildMedalProgressBarStyle(item: MedalItem): Record<string, string> {

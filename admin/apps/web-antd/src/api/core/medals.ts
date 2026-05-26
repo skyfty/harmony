@@ -45,6 +45,8 @@ export interface UserMedalStatusItem extends MedalItem {
   awardedAt?: null | string;
   completionRatio?: number;
   userMedalId?: null | string;
+  completedRuleCount?: number;
+  totalRuleCount?: number;
 }
 
 function normalizeGridPage<T>(result: ServerPageResult<T>): GridPageResult<T> {
