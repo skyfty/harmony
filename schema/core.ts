@@ -1720,6 +1720,9 @@ export interface GroundSurfaceChunkTextureRef {
   aoTextureAssetId?: string | null
   emissiveTextureAssetId?: string | null
   splatMapAssetIds?: string[] | null
+  layerTextureAssetIds?: Array<string | null> | null
+  layerColorTints?: Array<string | null> | null
+  layerUvScales?: Array<Vector2Like | null> | null
   revision: number
 }
 

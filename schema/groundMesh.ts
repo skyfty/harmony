@@ -537,6 +537,9 @@ function definitionStructureSignature(definition: GroundDynamicMesh): string {
   const optimizedSignature = optimizedMesh
     ? `${optimizedMesh.chunkCells}:${optimizedMesh.chunkCount}:${optimizedMesh.optimizedVertexCount}:${optimizedMesh.optimizedTriangleCount}`
     : 'none'
+  const bakedSurfaceChunkSignature = definition.groundSurfaceChunks
+    ? Object.keys(definition.groundSurfaceChunks).sort().join(',')
+    : 'none'
   const surfaceRevision = Number.isFinite(definition.surfaceRevision) ? Math.trunc(definition.surfaceRevision as number) : 0
   const optimizedChunkState = runtimeDefinition.runtimeDisableOptimizedChunks === true ? 'disabled' : 'enabled'
   const hydratedHeightState = runtimeDefinition.runtimeHydratedHeightState ?? 'none'
@@ -555,6 +558,7 @@ function definitionStructureSignature(definition: GroundDynamicMesh): string {
     depth.toFixed(6),
     surfaceRevision,
     optimizedSignature,
+    bakedSurfaceChunkSignature,
     optimizedChunkState,
     hydratedHeightState,
     tileResolution,
@@ -590,7 +594,7 @@ export function setGroundFlatChunkInstanceMatrixBuilder(builder: GroundFlatChunk
   groundFlatChunkInstanceMatrixBuilder = typeof builder === 'function' ? builder : null
 }
 
-function resolveInfiniteChunkSizeMeters(definition: GroundDynamicMesh): number {
+function resolveInfiniteChunkSizeMeters(definition: Pick<GroundDynamicMesh, 'chunkSizeMeters'>): number {
   // 这是无限地形最基础的尺度换算：世界坐标里移动多少米，对应 chunk 坐标跨过一格。
   // 如果这里算错，后面所有 chunkKey、窗口边界、拾取和实例平铺的位置都会整体偏移。
   // 没有显式配置时回退到默认值，保证旧场景数据缺少该字段时依然能运行。
@@ -1842,7 +1846,7 @@ function chunkIntersectsGroundLocalEditTileFromRuntime(
 }
 
 function resolveGroundChunkWorldBoundsFromSpec(
-  definition: GroundRuntimeDynamicMesh,
+  definition: Pick<GroundDynamicMesh, 'cellSize' | 'worldBounds' | 'chunkSizeMeters' | 'renderRadiusChunks' | 'collisionRadiusChunks'>,
   spec: GroundChunkSpec,
 ): { minX: number; maxX: number; minZ: number; maxZ: number } {
   const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1
@@ -3957,9 +3961,6 @@ function buildGroundChunkGeometry(definition: GroundRuntimeDynamicMesh, spec: Gr
   const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1
   const chunkSizeMeters = resolveInfiniteChunkSizeMeters(definition)
   const chunkOrigin = resolveInfiniteGroundGridOriginMeters(chunkSizeMeters)
-  const groundBounds = resolveGroundWorldBounds(definition)
-  const groundWidth = Math.max(groundBounds.maxX - groundBounds.minX, Number.EPSILON)
-  const groundDepth = Math.max(groundBounds.maxZ - groundBounds.minZ, Number.EPSILON)
   const startX = chunkOrigin + spec.startColumn * cellSize
   const startZ = chunkOrigin + spec.startRow * cellSize
   const importedLocalEditCellSize = resolveGroundChunkLocalEditCellSize(definition, spec)
@@ -3984,8 +3985,8 @@ function buildGroundChunkGeometry(definition: GroundRuntimeDynamicMesh, spec: Gr
       const height = useWorldSpaceHeightSampling
         ? sampleGroundHeight(definition, x, z)
         : heightValues?.[localRow * heightStride + localColumn] ?? sampleGroundHeight(definition, x, z)
-      const u = clampInclusive((x - groundBounds.minX) / groundWidth, 0, 1)
-      const v = 1 - clampInclusive((z - groundBounds.minZ) / groundDepth, 0, 1)
+      const u = chunkColumns === 0 ? 0 : localColumn / chunkColumns
+      const v = chunkRows === 0 ? 0 : 1 - (localRow / chunkRows)
 
       positions[vertexIndex * 3 + 0] = x
       positions[vertexIndex * 3 + 1] = height
@@ -4678,9 +4679,15 @@ function syncGroundFlatChunkBatches(
   const nextBatches = new Map<string, GroundFlatChunkBatchRuntime>(state.flatChunkBatches)
   const hiddenChunkKeysChanged = state.lastFlatChunkSyncHiddenChunkKeysVersion !== state.hiddenChunkKeysVersion
   const batchesNeedingAsyncBuild = new Set<GroundFlatChunkBatchRuntime>()
+  const requiredChunkKeys = new Set<string>()
   let changed = false
 
   desiredFlatChunkGroups.forEach((group, specKey) => {
+    group.keys.forEach((key) => {
+      if (typeof key === 'string' && key.length > 0) {
+        requiredChunkKeys.add(key)
+      }
+    })
     const existing = state.flatChunkBatches.get(specKey)
     if (existing) {
       existing.pendingChunkKeys = existing.pendingChunkKeys instanceof Set ? existing.pendingChunkKeys : new Set<string>()
@@ -4794,6 +4801,38 @@ function syncGroundFlatChunkBatches(
     nextBatches.set(specKey, batch)
     changed = true
   })
+
+  // nextBatches.forEach((batch, specKey) => {
+  //   const nextKeys = batch.chunkKeys.filter((key) => {
+  //     if (state.chunks.has(key) || state.hiddenChunkKeys.has(key)) {
+  //       return false
+  //     }
+  //     return requiredChunkKeys.has(key)
+  //   })
+  //   const nextPendingKeys = Array.from(batch.pendingChunkKeys).filter((key) => {
+  //     if (state.chunks.has(key) || state.hiddenChunkKeys.has(key)) {
+  //       return false
+  //     }
+  //     return requiredChunkKeys.has(key)
+  //   })
+  //   if (nextKeys.length === batch.chunkKeys.length && nextPendingKeys.length === batch.pendingChunkKeys.size) {
+  //     return
+  //   }
+  //   batch.pendingChunkKeys = new Set<string>(nextPendingKeys)
+  //   if (nextKeys.length !== batch.chunkKeys.length) {
+  //     compactGroundFlatChunkBatchInstances(batch, nextKeys)
+  //   }
+  //   if (!nextKeys.length && nextPendingKeys.length === 0) {
+  //     batch.mesh.removeFromParent()
+  //     try {
+  //       ;(batch.mesh.geometry as any)?.dispose?.()
+  //     } catch (_error) {
+  //       /* noop */
+  //     }
+  //     nextBatches.delete(specKey)
+  //   }
+  //   changed = true
+  // })
 
   if (hiddenChunkKeysChanged) {
     nextBatches.forEach((batch, specKey) => {
@@ -4922,7 +4961,10 @@ function ensureChunkMesh(
     state.meshPool.delete(poolKey)
   }
   const sculptedCached = (root.userData as Record<string, unknown> | undefined)?.groundSculptedMaterial
-  let material = (sculptedCached && !Array.isArray(sculptedCached))
+  const shouldUseSculptedMaterial = (sculptedCached && !Array.isArray(sculptedCached))
+    ? chunkIntersectsGroundLocalEditTileFromRuntime(definition, spec)
+    : false
+  let material = shouldUseSculptedMaterial
     ? (sculptedCached as THREE.Material)
     : resolveGroundRuntimeMaterial(root, state)
 
@@ -5708,13 +5750,20 @@ function disposeGroundTexture(texture: THREE.Texture | null | undefined) {
   clearDynamicGroundFlag(texture)
 }
 
-function loadGroundTextureFromSource(source: string | null | undefined, textureName: string): THREE.Texture | null {
+function loadGroundTextureFromSource(
+  source: string | null | undefined,
+  textureName: string,
+  options: { flipY?: boolean } = {},
+): THREE.Texture | null {
   const normalizedSource = typeof source === 'string' ? source.trim() : ''
   if (!normalizedSource) {
     return null
   }
   const texture = textureLoader.load(normalizedSource)
   applyGroundTextureSamplingDefaults(texture)
+  if (typeof options.flipY === 'boolean') {
+    texture.flipY = options.flipY
+  }
   texture.name = textureName
   markDynamicGroundTexture(texture)
   return texture
@@ -5746,8 +5795,8 @@ function clearGroundRuntimeMaterialMetadata(material: THREE.Material): void {
 }
 
 function applyGroundTextureSamplingDefaults(texture: THREE.Texture): void {
-  texture.wrapS = THREE.ClampToEdgeWrapping
-  texture.wrapT = THREE.ClampToEdgeWrapping
+  texture.wrapS = THREE.RepeatWrapping
+  texture.wrapT = THREE.RepeatWrapping
   texture.anisotropy = Math.min(16, texture.anisotropy || 8)
   texture.generateMipmaps = true
   texture.minFilter = THREE.LinearMipmapLinearFilter
@@ -5837,11 +5886,15 @@ function resolveGroundChunkTextureWindowFromMeshBounds(
   const maxU = clampInclusive((bounds.max.x - groundBounds.minX) / groundWidth, 0, 1)
   const minZRatio = clampInclusive((bounds.min.z - groundBounds.minZ) / groundDepth, 0, 1)
   const maxZRatio = clampInclusive((bounds.max.z - groundBounds.minZ) / groundDepth, 0, 1)
+  const spanX = Math.max(maxU - minU, Number.EPSILON)
+  const spanY = Math.max(maxZRatio - minZRatio, Number.EPSILON)
+  const repeatX = 1 / spanX
+  const repeatY = 1 / spanY
   return {
-    offsetX: minU,
-    offsetY: 1 - maxZRatio,
-    repeatX: Math.max(maxU - minU, Number.EPSILON),
-    repeatY: Math.max(maxZRatio - minZRatio, Number.EPSILON),
+    offsetX: -minU * repeatX,
+    offsetY: -(1 - maxZRatio) * repeatY,
+    repeatX,
+    repeatY,
   }
 }
 
@@ -5854,25 +5907,23 @@ function resolveGroundChunkTextureWindow(
   repeatX: number
   repeatY: number
 } {
-  const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1
-  const chunkSizeMeters = resolveInfiniteChunkSizeMeters(definition)
-  const chunkOrigin = resolveInfiniteGroundGridOriginMeters(chunkSizeMeters)
+  const chunkBounds = resolveGroundChunkWorldBoundsFromSpec(definition, spec)
   const bounds = resolveGroundWorldBounds(definition)
   const groundWidth = Math.max(bounds.maxX - bounds.minX, Number.EPSILON)
   const groundDepth = Math.max(bounds.maxZ - bounds.minZ, Number.EPSILON)
-  const startX = chunkOrigin + spec.startColumn * cellSize
-  const startZ = chunkOrigin + spec.startRow * cellSize
-  const endX = startX + spec.columns * cellSize
-  const endZ = startZ + spec.rows * cellSize
-  const minU = clampInclusive((startX - bounds.minX) / groundWidth, 0, 1)
-  const maxU = clampInclusive((endX - bounds.minX) / groundWidth, 0, 1)
-  const minZRatio = clampInclusive((startZ - bounds.minZ) / groundDepth, 0, 1)
-  const maxZRatio = clampInclusive((endZ - bounds.minZ) / groundDepth, 0, 1)
+  const minU = clampInclusive((chunkBounds.minX - bounds.minX) / groundWidth, 0, 1)
+  const maxU = clampInclusive((chunkBounds.maxX - bounds.minX) / groundWidth, 0, 1)
+  const minZRatio = clampInclusive((chunkBounds.minZ - bounds.minZ) / groundDepth, 0, 1)
+  const maxZRatio = clampInclusive((chunkBounds.maxZ - bounds.minZ) / groundDepth, 0, 1)
+  const spanX = Math.max(maxU - minU, Number.EPSILON)
+  const spanY = Math.max(maxZRatio - minZRatio, Number.EPSILON)
+  const repeatX = 1 / spanX
+  const repeatY = 1 / spanY
   return {
-    offsetX: minU,
-    offsetY: 1 - maxZRatio,
-    repeatX: Math.max(maxU - minU, Number.EPSILON),
-    repeatY: Math.max(maxZRatio - minZRatio, Number.EPSILON),
+    offsetX: -minU * repeatX,
+    offsetY: -(1 - maxZRatio) * repeatY,
+    repeatX,
+    repeatY,
   }
 }
 
@@ -5950,7 +6001,7 @@ type GroundChunkTextureBundleSources = {
   metalness: string | null
   ao: string | null
   emissive: string | null
-  splatMap: string | null
+  splatMaps: string[]
 }
 
 function resolveCompiledGroundTileChunkKey(
@@ -6000,9 +6051,11 @@ function resolveGroundChunkTextureBundleSources(
   const metalness = typeof entry.metalnessTextureAssetId === 'string' ? entry.metalnessTextureAssetId.trim() : ''
   const ao = typeof entry.aoTextureAssetId === 'string' ? entry.aoTextureAssetId.trim() : ''
   const emissive = typeof entry.emissiveTextureAssetId === 'string' ? entry.emissiveTextureAssetId.trim() : ''
-  const splatMap = Array.isArray(entry.splatMapAssetIds)
-    ? entry.splatMapAssetIds.map((value) => (typeof value === 'string' ? value.trim() : '')).filter((value) => value.length > 0).join(',')
-    : ''
+  const splatMaps = Array.isArray(entry.splatMapAssetIds)
+    ? entry.splatMapAssetIds
+      .map((value) => (typeof value === 'string' ? value.trim() : ''))
+      .filter((value) => value.length > 0)
+    : []
   return {
     albedo: albedo || null,
     normal: normal || null,
@@ -6010,32 +6063,40 @@ function resolveGroundChunkTextureBundleSources(
     metalness: metalness || null,
     ao: ao || null,
     emissive: emissive || null,
-    splatMap: splatMap || null,
+    splatMaps,
   }
 }
 
-function loadGroundChunkSplatMaps(source: string | null, chunkKey: string): THREE.Texture[] {
+// function hasGroundChunkSurfaceTextureData(
+//   definition: GroundDynamicMesh,
+//   chunkKey: string | null,
+// ): boolean {
+//   if (!chunkKey || !definition.groundSurfaceChunks) {
+//     return false
+//   }
+//   return Boolean(definition.groundSurfaceChunks[chunkKey])
+// }
+
+function loadGroundChunkSplatMaps(sources: string[], chunkKey: string): THREE.Texture[] {
   void chunkKey
-  const normalized = typeof source === 'string' ? source.trim() : ''
-  if (!normalized) {
+  if (!Array.isArray(sources) || sources.length === 0) {
     return []
   }
-  const textures = normalized
-    .split(',')
-    .map((value) => value.trim())
+  const textures = sources
+    .map((value) => (typeof value === 'string' ? value.trim() : ''))
     .filter((value) => value.length > 0)
     .map((value, index) => {
-      const texture = loadGroundTextureFromSource(value, `GroundChunkSplatMap${index + 1}`)
+      const texture = loadGroundTextureFromSource(value, `GroundChunkSplatMap${index + 1}`, { flipY: false })
       if (texture) {
         texture.colorSpace = THREE.NoColorSpace
       }
       return texture
     })
     .filter((texture): texture is THREE.Texture => Boolean(texture))
-  if (textures.length !== 2) {
-    throw new Error(`Invalid baked splat map count for ground chunk ${chunkKey}: expected 2, received ${textures.length}`)
+  if (textures.length > 2) {
+    textures.length = 2
   }
-  return textures
+  return textures.slice(0, 2)
 }
 
 function createGroundChunkTexturedMaterial(baseMaterial: THREE.Material): THREE.MeshStandardMaterial {
@@ -6095,33 +6156,45 @@ function applyGroundTextureToChunkMesh(
   if (bundle && !definition.groundSurfaceChunks) {
     throw new Error(`Missing baked groundSurfaceChunks for ground chunk ${chunkKey}.`)
   }
+  const hasBakedBundle = Boolean(
+    activeSource
+    || bundle?.normal
+    || bundle?.roughness
+    || bundle?.metalness
+    || bundle?.ao
+    || bundle?.emissive
+    || (bundle?.splatMaps?.length ?? 0) > 0,
+  )
+
+  if (!hasBakedBundle) {
+    if (currentMaterial && currentMaterial !== baseMaterial) {
+      disposeGroundChunkTexturedMaterial(currentMaterial)
+    }
+    if (mesh.material !== baseMaterial) {
+      mesh.material = baseMaterial
+    }
+    delete userData.groundChunkSplatMaps
+    return
+  }
 
   const uvBounds = summarizeGroundMeshUvBounds(mesh)
-  const hasOptimizedGlobalUv = spec ? resolveOptimizedChunkForSpec(definition, spec) !== null : false
-  const useLocalUvWindow = !hasOptimizedGlobalUv && isGroundChunkLocalUvBounds(uvBounds)
+  const useLocalUvWindow = isGroundChunkLocalUvBounds(uvBounds)
   const meshBoundsWindow = useLocalUvWindow
     ? resolveGroundChunkTextureWindowFromMeshBounds(definition, mesh)
     : null
-  const _window = useLocalUvWindow
-    ? (meshBoundsWindow ?? (spec ? resolveGroundChunkTextureWindow(definition, spec) : null) ?? {
-      offsetX: 0,
-      offsetY: 0,
-      repeatX: 1,
-      repeatY: 1,
-    })
-    : {
+  const safeWindow = useLocalUvWindow
+    ? {
       offsetX: 0,
       offsetY: 0,
       repeatX: 1,
       repeatY: 1,
     }
-  void _window
-  const safeWindow = {
-    offsetX: 0,
-    offsetY: 0,
-    repeatX: 1,
-    repeatY: 1,
-  }
+    : (meshBoundsWindow ?? (spec ? resolveGroundChunkTextureWindow(definition, spec) : null) ?? {
+      offsetX: 0,
+      offsetY: 0,
+      repeatX: 1,
+      repeatY: 1,
+    })
   const signature = [
     bundle?.albedo ?? 'none',
     bundle?.normal ?? 'none',
@@ -6129,7 +6202,7 @@ function applyGroundTextureToChunkMesh(
     bundle?.metalness ?? 'none',
     bundle?.ao ?? 'none',
     bundle?.emissive ?? 'none',
-    bundle?.splatMap ?? 'none',
+    bundle ? bundle.splatMaps.join('|') : 'none',
     baseMaterialSignature,
     resolveGroundTextureWindowSignature(safeWindow),
   ].join('|')
@@ -6160,37 +6233,42 @@ function applyGroundTextureToChunkMesh(
     }
   })
   if (activeSource) {
-    const texture = loadGroundTextureFromSource(activeSource, 'GroundChunkAlbedo')
+    const texture = loadGroundTextureFromSource(activeSource, 'GroundChunkAlbedo', { flipY: false })
     if (!texture) {
       throw new Error(`Failed to load baked albedo texture for ground chunk ${chunkKey}.`)
     }
     applyGroundTextureSamplingDefaults(texture)
     texture.offset.set(safeWindow.offsetX, safeWindow.offsetY)
     texture.repeat.set(safeWindow.repeatX, safeWindow.repeatY)
-    texture.needsUpdate = true
     markDynamicGroundTexture(texture)
     typed.map = texture
   }
   if (bundle?.normal) {
-    typed.normalMap = loadGroundTextureFromSource(bundle.normal, 'GroundChunkNormalMap')
+    typed.normalMap = loadGroundTextureFromSource(bundle.normal, 'GroundChunkNormalMap', { flipY: false })
   }
   if (bundle?.roughness) {
-    typed.roughnessMap = loadGroundTextureFromSource(bundle.roughness, 'GroundChunkRoughnessMap')
+    typed.roughnessMap = loadGroundTextureFromSource(bundle.roughness, 'GroundChunkRoughnessMap', { flipY: false })
+    nextMaterial.roughness = 1
   }
   if (bundle?.metalness) {
-    typed.metalnessMap = loadGroundTextureFromSource(bundle.metalness, 'GroundChunkMetalnessMap')
+    typed.metalnessMap = loadGroundTextureFromSource(bundle.metalness, 'GroundChunkMetalnessMap', { flipY: false })
+    nextMaterial.metalness = 1
   }
   if (bundle?.ao) {
-    typed.aoMap = loadGroundTextureFromSource(bundle.ao, 'GroundChunkAoMap')
+    typed.aoMap = loadGroundTextureFromSource(bundle.ao, 'GroundChunkAoMap', { flipY: false })
   }
   if (bundle?.emissive) {
-    typed.emissiveMap = loadGroundTextureFromSource(bundle.emissive, 'GroundChunkEmissiveMap')
+    typed.emissiveMap = loadGroundTextureFromSource(bundle.emissive, 'GroundChunkEmissiveMap', { flipY: false })
+    nextMaterial.emissive.set('#ffffff')
+    nextMaterial.emissiveIntensity = 1
   }
-  const splatMapSource = bundle?.splatMap ?? null
-  userData.groundChunkSplatMaps = loadGroundChunkSplatMaps(splatMapSource, chunkKey)
+  const splatMapSources = bundle?.splatMaps ?? []
+  // These splat maps and layer metadata are preserved for future true shader-based splatting,
+  // but the current editor/runtime path still consumes the pre-baked per-chunk texture bundle.
+  userData.groundChunkSplatMaps = loadGroundChunkSplatMaps(splatMapSources, chunkKey)
   typed.userData = {
     ...(typed.userData ?? {}),
-    groundChunkSplatMapIds: splatMapSource,
+    groundChunkSplatMapIds: splatMapSources,
   }
   typed.needsUpdate = true
 
@@ -6225,7 +6303,10 @@ function applyGroundTextureToObject(object: THREE.Object3D, definition: GroundDy
       ? mesh.userData.compiledGroundTileKey
       : null
     const currentMaterial = Array.isArray(mesh.material) ? (mesh.material[0] ?? null) : (mesh.material ?? null)
-    const chunkBaseMaterial = chunkSpec && sculptedMaterial
+    const shouldUseSculptedMaterial = chunkSpec && sculptedMaterial
+      ? chunkIntersectsGroundLocalEditTileFromRuntime(ensureGroundRuntimeDefinition(definition), chunkSpec)
+      : false
+    const chunkBaseMaterial = shouldUseSculptedMaterial
       ? sculptedMaterial
       : (baseMaterial ?? currentMaterial)
     const chunkBaseMaterialSignature = chunkBaseMaterial
@@ -6288,9 +6369,6 @@ function updateChunkGeometry(geometry: THREE.BufferGeometry, definition: GroundR
   const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1
   const chunkSizeMeters = resolveInfiniteChunkSizeMeters(definition)
   const chunkOrigin = resolveInfiniteGroundGridOriginMeters(chunkSizeMeters)
-  const groundBounds = resolveGroundWorldBounds(definition)
-  const groundWidth = Math.max(groundBounds.maxX - groundBounds.minX, Number.EPSILON)
-  const groundDepth = Math.max(groundBounds.maxZ - groundBounds.minZ, Number.EPSILON)
   const startX = chunkOrigin + spec.startColumn * cellSize
   const startZ = chunkOrigin + spec.startRow * cellSize
   const importedLocalEditCellSize = resolveGroundChunkLocalEditCellSize(definition, spec)
@@ -6314,8 +6392,8 @@ function updateChunkGeometry(geometry: THREE.BufferGeometry, definition: GroundR
       const height = useWorldSpaceHeightSampling
         ? sampleGroundHeight(definition, x, z)
         : heightValues?.[localRow * heightStride + localColumn] ?? sampleGroundHeight(definition, x, z)
-      const u = clampInclusive((x - groundBounds.minX) / groundWidth, 0, 1)
-      const v = 1 - clampInclusive((z - groundBounds.minZ) / groundDepth, 0, 1)
+      const u = chunkColumns === 0 ? 0 : localColumn / chunkColumns
+      const v = chunkRows === 0 ? 0 : 1 - (localRow / chunkRows)
       positionAttr.setXYZ(vertexIndex, x, height, z)
       uvAttr.setXY(vertexIndex, u, v)
       vertexIndex += 1
@@ -6358,25 +6436,19 @@ function updateChunkGeometryRegion(
     return false
   }
 
-  const { minX: chunkMinX, maxX: chunkMaxX, minZ: chunkMinZ, maxZ: chunkMaxZ } = resolveGroundChunkWorldBoundsFromSpec(definition, spec)
   const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1
-  const startX = chunkMinX
-  const startZ = chunkMinZ
+  const startX = resolveInfiniteGroundGridOriginMeters(resolveInfiniteChunkSizeMeters(definition)) + spec.startColumn * cellSize
+  const startZ = resolveInfiniteGroundGridOriginMeters(resolveInfiniteChunkSizeMeters(definition)) + spec.startRow * cellSize
 
   const regionStartRow = clampInclusive(region.minRow, spec.startRow, spec.startRow + spec.rows)
   const regionEndRow = clampInclusive(region.maxRow, spec.startRow, spec.startRow + spec.rows)
   const regionStartColumn = clampInclusive(region.minColumn, spec.startColumn, spec.startColumn + spec.columns)
   const regionEndColumn = clampInclusive(region.maxColumn, spec.startColumn, spec.startColumn + spec.columns)
 
-  const updateMinX = chunkMinX + (regionStartColumn - spec.startColumn) * cellSize
-  const updateMaxX = chunkMinX + (regionEndColumn - spec.startColumn) * cellSize
-  const updateMinZ = chunkMinZ + (regionStartRow - spec.startRow) * cellSize
-  const updateMaxZ = chunkMinZ + (regionEndRow - spec.startRow) * cellSize
-
-  const startLocalColumn = clampInclusive(Math.floor((Math.max(startX, updateMinX) - startX) / layout.stepX), 0, chunkColumns)
-  const endLocalColumn = clampInclusive(Math.ceil((Math.min(chunkMaxX, updateMaxX) - startX) / layout.stepX), 0, chunkColumns)
-  const startLocalRow = clampInclusive(Math.floor((Math.max(startZ, updateMinZ) - startZ) / layout.stepZ), 0, chunkRows)
-  const endLocalRow = clampInclusive(Math.ceil((Math.min(chunkMaxZ, updateMaxZ) - startZ) / layout.stepZ), 0, chunkRows)
+  const startLocalColumn = clampInclusive(regionStartColumn - spec.startColumn, 0, chunkColumns)
+  const endLocalColumn = clampInclusive(regionEndColumn - spec.startColumn, 0, chunkColumns)
+  const startLocalRow = clampInclusive(regionStartRow - spec.startRow, 0, chunkRows)
+  const endLocalRow = clampInclusive(regionEndRow - spec.startRow, 0, chunkRows)
 
   if (startLocalColumn > endLocalColumn || startLocalRow > endLocalRow) {
     return true
@@ -6481,6 +6553,11 @@ export function setGroundMaterial(target: THREE.Object3D, material: THREE.Materi
   })
 }
 
+export function refreshGroundChunkMaterials(target: THREE.Object3D, definition: GroundDynamicMesh): void {
+  const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
+  applyGroundTextureToObject(target, runtimeDefinition)
+}
+
 /**
  * Set the material used for sculpted (heightmap) ground chunks.
  * When set, sculpted chunks use this material instead of the shared groundMaterial.
@@ -6494,31 +6571,6 @@ export function setGroundSculptedMaterial(target: THREE.Object3D, material: THRE
     delete userData.groundSculptedMaterial
   }
   delete userData.groundTextureTraversalCache
-
-  const fallbackMaterial = material ?? (() => {
-    const cached = userData.groundMaterial
-    return (cached && !Array.isArray(cached)) ? cached as THREE.Material : null
-  })()
-
-  if (!fallbackMaterial) {
-    return
-  }
-
-  target.traverse((child) => {
-    const mesh = child as THREE.Mesh
-    if (!mesh?.isMesh) {
-      return
-    }
-    if (!mesh.userData?.groundChunk && !mesh.userData?.compiledGroundTile) {
-      return
-    }
-    const currentMaterial = Array.isArray(mesh.material) ? (mesh.material[0] ?? null) : (mesh.material ?? null)
-    if (currentMaterial && currentMaterial !== fallbackMaterial) {
-      disposeGroundChunkTexturedMaterial(currentMaterial)
-    }
-    fallbackMaterial.needsUpdate = true
-    mesh.material = fallbackMaterial
-  })
 }
 
 export function updateGroundChunks(
