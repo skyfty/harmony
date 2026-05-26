@@ -6067,15 +6067,15 @@ function resolveGroundChunkTextureBundleSources(
   }
 }
 
-// function hasGroundChunkSurfaceTextureData(
-//   definition: GroundDynamicMesh,
-//   chunkKey: string | null,
-// ): boolean {
-//   if (!chunkKey || !definition.groundSurfaceChunks) {
-//     return false
-//   }
-//   return Boolean(definition.groundSurfaceChunks[chunkKey])
-// }
+function hasGroundChunkSurfaceTextureData(
+  definition: GroundDynamicMesh,
+  chunkKey: string | null,
+): boolean {
+  if (!chunkKey || !definition.groundSurfaceChunks) {
+    return false
+  }
+  return Boolean(definition.groundSurfaceChunks[chunkKey])
+}
 
 function loadGroundChunkSplatMaps(sources: string[], chunkKey: string): THREE.Texture[] {
   void chunkKey
@@ -6593,6 +6593,10 @@ export function updateGroundChunks(
 
   const state = ensureGroundRuntimeState(root, definition)
   const runtimeDefinition = definition
+  const forceDenseChunkMeshes = false;//runtimeDefinition.runtimeDisableOptimizedChunks === true
+  if (forceDenseChunkMeshes && state.flatChunkBatches.size > 0) {
+    clearGroundFlatChunkBatches(root)
+  }
   const now = Date.now()
   const force = options.force === true
   const minIntervalMs = Math.max(0, Math.trunc(Number.isFinite(options.minIntervalMs as number) ? (options.minIntervalMs as number) : 120))
@@ -6648,7 +6652,6 @@ export function updateGroundChunks(
   const normalizeChunkRow = (value: number) => Math.trunc(value)
   const normalizeChunkColumn = (value: number) => Math.trunc(value)
 
-  const bounds = resolveGroundWorldBounds(definition)
   const minLoadChunkColumn = normalizeChunkColumn(cameraChunkCoord.chunkX - loadRadiusChunks)
   const maxLoadChunkColumn = normalizeChunkColumn(cameraChunkCoord.chunkX + loadRadiusChunks)
   const minLoadChunkRow = normalizeChunkRow(cameraChunkCoord.chunkZ - loadRadiusChunks)
@@ -6694,11 +6697,7 @@ export function updateGroundChunks(
   if (force && camera) {
     // force 模式下至少确保相机正下方的核心 chunk 已经存在，避免强刷时先出现空洞。
     // 这条逻辑的目的不是优化，而是保证调试、手动刷新或初始化时“中心不会缺块”。
-    const cameraColumn = Math.floor((localX - bounds.minX) / cellSize)
-    const cameraRow = Math.floor((localZ - bounds.minZ) / cellSize)
-    const cameraChunkColumn = normalizeChunkColumn(Math.floor(cameraColumn / chunkCells))
-    const cameraChunkRow = normalizeChunkRow(Math.floor(cameraRow / chunkCells))
-    const coreKey = groundChunkKey(cameraChunkRow, cameraChunkColumn)
+    const coreKey = groundChunkKey(cameraChunkCoord.chunkZ, cameraChunkCoord.chunkX)
     if (!state.chunks.has(coreKey)) {
       allowBypassInterval = true
     }
@@ -6737,10 +6736,8 @@ export function updateGroundChunks(
     if (force && camera) {
       // forceCore 是一个 3x3 核心区优先集合：调试或强刷时先保中心，再补外围。
       // 这样即使预算很小，也能先让相机周围看起来“站稳”，而不是先加载远处 chunk。
-      const cameraColumn = Math.floor((localX - bounds.minX) / cellSize)
-      const cameraRow = Math.floor((localZ - bounds.minZ) / cellSize)
-      const cameraChunkColumn = normalizeChunkColumn(Math.floor(cameraColumn / chunkCells))
-      const cameraChunkRow = normalizeChunkRow(Math.floor(cameraRow / chunkCells))
+      const cameraChunkColumn = normalizeChunkColumn(cameraChunkCoord.chunkX)
+      const cameraChunkRow = normalizeChunkRow(cameraChunkCoord.chunkZ)
       forceCore = new Set<string>()
       for (let dr = -1; dr <= 1; dr += 1) {
         for (let dc = -1; dc <= 1; dc += 1) {
@@ -6757,26 +6754,32 @@ export function updateGroundChunks(
     for (let cr = minLoadChunkRow; cr <= maxLoadChunkRow; cr += 1) {
       for (let cc = minLoadChunkColumn; cc <= maxLoadChunkColumn; cc += 1) {
         const key = groundChunkKey(cr, cc)
-        // 已经存在的 chunk 或被隐藏的 chunk，不应该再次进入创建队列。
-        if (state.chunks.has(key) || state.flatChunkKeys.has(key) || state.hiddenChunkKeys.has(key)) {
+        if (state.hiddenChunkKeys.has(key)) {
           continue
         }
 
         const spec = computeChunkSpec(definition, cr, cc)
+        const isDenseChunkLoaded = state.chunks.has(key)
+        const hasBakedSurfaceChunk = hasGroundChunkSurfaceTextureData(definition, key)
+        const hasLocalEditCoverage = chunkIntersectsGroundLocalEditTileFromRuntime(runtimeDefinition, spec, localEditTiles)
+        const requiresDenseChunkMesh = forceDenseChunkMeshes || hasBakedSurfaceChunk || hasLocalEditCoverage
         // 先算出这个 chunk 的中心点位置，再与相机位置比较，用于创建优先级排序。
-        const centerX = bounds.minX + (spec.startColumn + spec.columns * 0.5) * cellSize
-        const centerZ = bounds.minZ + (spec.startRow + spec.rows * 0.5) * cellSize
+        const chunkWorldBounds = resolveGroundChunkWorldBoundsFromSpec(definition, spec)
+        const centerX = (chunkWorldBounds.minX + chunkWorldBounds.maxX) * 0.5
+        const centerZ = (chunkWorldBounds.minZ + chunkWorldBounds.maxZ) * 0.5
         const dx = centerX - localX
         const dz = centerZ - localZ
         const priority = forceCore && forceCore.has(key) ? -1 : 0
-        if (chunkIntersectsGroundLocalEditTileFromRuntime(runtimeDefinition, spec, localEditTiles)) {
-          // 只要这个 chunk 覆盖到了局部雕刻瓦片，就必须走独立 Mesh 路径，不能并入平面实例批次。
-          // 因为一旦并入实例批次，单独的雕刻编辑就无法只改这一块，而必须把整批都拆开，代价更高。
-          creates.push({ key, chunkRow: cr, chunkColumn: cc, priority, distSq: dx * dx + dz * dz })
+        if (requiresDenseChunkMesh) {
+          // 覆盖了局部雕刻或 baked surface 纹理的 chunk，必须走独立 Mesh 路径。
+          // 这样 landform 烘焙结果才能真正进入 per-chunk 材质，而不是被 flat InstancedMesh 吞掉。
+          if (!isDenseChunkLoaded) {
+            creates.push({ key, chunkRow: cr, chunkColumn: cc, priority, distSq: dx * dx + dz * dz })
+          }
         } else {
           // 没有局部雕刻的 chunk 进入 flat 分组，后续会被合并成 InstancedMesh 批次。
           // 这就是 hybrid 方案的关键：大部分地形走快路径，只有少量被编辑过的区域保留慢路径。
-          if (state.chunks.has(key)) {
+          if (isDenseChunkLoaded) {
             transitionToFlatKeys.add(key)
           }
           // flat chunk 按 spec 分组，是为了让相同尺寸的 chunk 共用一套 InstancedMesh 几何。
@@ -6796,6 +6799,18 @@ export function updateGroundChunks(
 
     creates.sort((a, b) => (a.priority - b.priority) || (a.distSq - b.distSq))
     state.pendingCreates = creates
+
+    if (definition.groundSurfaceChunks && Object.keys(definition.groundSurfaceChunks).length > 0) {
+      const bakedChunkKeySet = new Set(Object.keys(definition.groundSurfaceChunks))
+      const desiredDenseChunkKeys = creates
+        .map((entry) => entry.key)
+        .filter((key) => bakedChunkKeySet.has(key))
+      state.chunks.forEach((_runtime, key) => {
+        if (bakedChunkKeySet.has(key) && !desiredDenseChunkKeys.includes(key)) {
+          desiredDenseChunkKeys.push(key)
+        }
+      })
+    }
 
     transitionToFlatKeys.forEach((key) => {
       // 当 chunk 从独立 Mesh 退回平面实例时，必须先释放旧 Mesh，避免同一块地形同时存在两份渲染对象。
@@ -6829,8 +6844,9 @@ export function updateGroundChunks(
       }
       const spec = entry.spec
       // 对于真正要卸载的 chunk，再按它的中心点与相机距离排序，越远越先删。
-      const centerX = bounds.minX + (spec.startColumn + spec.columns * 0.5) * cellSize
-      const centerZ = bounds.minZ + (spec.startRow + spec.rows * 0.5) * cellSize
+      const chunkWorldBounds = resolveGroundChunkWorldBoundsFromSpec(definition, spec)
+      const centerX = (chunkWorldBounds.minX + chunkWorldBounds.maxX) * 0.5
+      const centerZ = (chunkWorldBounds.minZ + chunkWorldBounds.maxZ) * 0.5
       const dx = centerX - localX
       const dz = centerZ - localZ
       destroys.push({ key, distSq: dx * dx + dz * dz })
@@ -6855,7 +6871,7 @@ export function updateGroundChunks(
     || state.lastFlatChunkSyncTilingVersion < 0
     || state.lastFlatChunkSyncHiddenChunkKeysVersion !== state.hiddenChunkKeysVersion
 
-  if (shouldSyncFlatChunks) {
+  if (!forceDenseChunkMeshes && shouldSyncFlatChunks) {
     const localEditTiles = getLocalEditTiles()
     const skipLoadWindow = {
       minChunkRow: minLoadChunkRow,
@@ -6961,8 +6977,8 @@ export function updateGroundChunks(
 
     desiredFlatChunkGroups = flatChunkGroups
 
-  // 同步 flat 批次。这里不会按视锥销毁，只会把新进入大平铺范围的 chunk 追加进实例批次。
-  // 已经存在的 flat chunk 会一直保留，直到它被雕刻 chunk 替代。
+  // 同步 flat 批次。这里既会追加新的 flat chunk，也会把现在必须走独立 Mesh 的 key 从批次里剔除。
+  // 这样 landform baked chunk 在显示纹理时可以从 flat -> dense，而清空 baked 数据后又能退回 flat。
     syncGroundFlatChunkBatches(
       root,
       state,
@@ -6978,6 +6994,8 @@ export function updateGroundChunks(
     )
     state.lastFlatChunkSyncTilingVersion = state.flatTilingVersion
     state.lastFlatChunkSyncHiddenChunkKeysVersion = state.hiddenChunkKeysVersion
+  } else if (forceDenseChunkMeshes && state.flatChunkBatches.size > 0) {
+    clearGroundFlatChunkBatches(root)
   }
 
   const defaultBudget: GroundChunkBudget = camera
