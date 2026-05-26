@@ -1532,6 +1532,9 @@ function computeGroundDynamicMeshSignature(definition: GroundDynamicMesh): strin
     surfaceRevision: Number.isFinite(definition.surfaceRevision)
       ? Math.max(0, Math.trunc(definition.surfaceRevision as number))
       : 0,
+    groundSplatBakeRevision: Number.isFinite(definition.groundSplatBake?.revision)
+      ? Math.max(0, Math.trunc(definition.groundSplatBake!.revision as number))
+      : 0,
   }))
 }
 
@@ -11170,8 +11173,18 @@ const viewportForceDenseGroundMesh = ref(shouldForceDenseGroundMeshForViewport()
 let pendingViewportGroundOptimizedRebuild = false
 
 function applyViewportGroundRuntimeMode(definition: GroundRuntimeDynamicMesh): GroundRuntimeDynamicMesh {
-  if (viewportForceDenseGroundMesh.value) {
-    return setGroundRuntimeOptimizedChunksEnabled(definition, false)
+  const shouldForceDense = viewportForceDenseGroundMesh.value || Boolean(definition.groundSurfaceChunks) || Boolean(definition.groundSplatBake)
+  if (shouldForceDense) {
+    if (definition.runtimeDisableOptimizedChunks !== true) {
+      console.debug('[SceneViewport][GroundRuntime] force dense chunk mesh', {
+        tool: activeBuildTool.value,
+        forceTerrainMode: viewportForceDenseGroundMesh.value,
+        hasGroundSurfaceChunks: Boolean(definition.groundSurfaceChunks),
+        hasGroundSplatBake: Boolean(definition.groundSplatBake),
+      })
+      return setGroundRuntimeOptimizedChunksEnabled(definition, false)
+    }
+    return definition
   }
   return definition
 }

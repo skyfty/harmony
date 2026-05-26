@@ -1073,9 +1073,14 @@ const landformHelpers = createSceneStoreLandformHelpers({
 
 type LandformGroundSplatBakeRequest = {
   version: number
-  scene: Pick<SceneState, 'nodes'> & { currentSceneId?: string | null }
+  scene: SceneStoreGroundSplatBakeTarget
   snapshot: StoredSceneDocument
   reason: string
+}
+
+type SceneStoreGroundSplatBakeTarget = Pick<SceneState, 'nodes'> & {
+  currentSceneId?: string | null
+  queueSceneNodePatch: (nodeId: string, fields: ScenePatchField[], options?: { bumpVersion?: boolean }) => boolean
 }
 
 function collectLandformSurfaceLayerTextureAssetIdsFromNodes(nodes: SceneNode[] | undefined | null): string[] {
@@ -1127,6 +1132,10 @@ let landformGroundSplatBakeVersion = 0
         groundSurfaceChunks: null,
         groundSplatBake: null,
       } as GroundDynamicMesh
+      const runtimeGroundDefinition = groundNode.dynamicMesh as GroundRuntimeDynamicMesh
+      runtimeGroundDefinition.runtimeDisableOptimizedChunks = false
+      useGroundHeightmapStore().syncRuntimeGroundState(groundNode.id, runtimeGroundDefinition)
+      request.scene.queueSceneNodePatch(groundNode.id, ['dynamicMesh'])
       return
     }
 
@@ -1139,6 +1148,10 @@ let landformGroundSplatBakeVersion = 0
         surfaceLayerTextureAssetIds: collectLandformSurfaceLayerTextureAssetIdsFromNodes(request.snapshot.nodes),
       },
     } as GroundDynamicMesh
+    const runtimeGroundDefinition = groundNode.dynamicMesh as GroundRuntimeDynamicMesh
+    runtimeGroundDefinition.runtimeDisableOptimizedChunks = true
+    useGroundHeightmapStore().syncRuntimeGroundState(groundNode.id, runtimeGroundDefinition)
+    request.scene.queueSceneNodePatch(groundNode.id, ['dynamicMesh'])
   })().catch((error) => {
     console.warn('[SceneStore] Failed to bake landform ground splat', error)
   })
@@ -1147,9 +1160,11 @@ let landformGroundSplatBakeVersion = 0
 })
 
 function scheduleLandformGroundSplatBake(
-  store: Pick<SceneState, 'nodes'> & { currentSceneId?: string | null },
+  store: SceneStoreGroundSplatBakeTarget,
   reason: string,
 ): void {
+  const landformCount = store.nodes.filter((node) => node?.dynamicMesh?.type === 'Landform').length
+  const groundNode = findGroundNode(store.nodes)
   const snapshot = manualDeepClone({
     id: typeof store.currentSceneId === 'string' && store.currentSceneId.trim().length
       ? store.currentSceneId.trim()
@@ -2848,6 +2863,7 @@ function buildGroundManualRegionFromHeightMap(
 function rebuildLandformNodeForTerrain(store: {
   nodes: SceneNode[]
   currentSceneId?: string | null
+  queueSceneNodePatch: (nodeId: string, fields: ScenePatchField[], options?: { bumpVersion?: boolean }) => boolean
 }, nodeId: string): boolean {
   const node = findNodeById(store.nodes, nodeId)
   if (!node || node.dynamicMesh?.type !== 'Landform') {
@@ -7702,7 +7718,7 @@ function createSceneDocument(
   }
 }
 
-function normalizeCurrentSceneMeta(store: SceneState) {
+function normalizeCurrentSceneMeta(store: Pick<SceneState, 'currentSceneMeta'>) {
   const now = new Date().toISOString()
   if (!store.currentSceneMeta) {
     store.currentSceneMeta = {
@@ -7851,7 +7867,7 @@ function clonePlanningData(data: PlanningSceneData | null | undefined): Planning
 }
 
 function commitSceneSnapshot(
-  store: SceneState,
+  store: Pick<SceneState, 'nodes' | 'currentSceneId' | 'environment' | 'hasUnsavedChanges' | 'groundNode' | 'currentSceneMeta'>,
   _options: { updateNodes?: boolean; } = {},
 ) {
   if (!store.currentSceneId) {
