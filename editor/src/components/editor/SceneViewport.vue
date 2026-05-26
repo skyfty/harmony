@@ -11191,12 +11191,6 @@ function applyViewportGroundRuntimeMode(definition: GroundRuntimeDynamicMesh): G
   const shouldForceDense = viewportForceDenseGroundMesh.value
   if (shouldForceDense) {
     if (definition.runtimeDisableOptimizedChunks !== true) {
-      console.debug('[SceneViewport][GroundRuntime] force dense chunk mesh', {
-        tool: activeBuildTool.value,
-        forceTerrainMode: viewportForceDenseGroundMesh.value,
-        hasGroundSurfaceChunks: Boolean(definition.groundSurfaceChunks),
-        hasGroundSplatBake: Boolean(definition.groundSplatBake),
-      })
       return setGroundRuntimeOptimizedChunksEnabled(definition, false)
     }
     return definition
