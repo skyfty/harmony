@@ -703,7 +703,7 @@ const canUpdatePrefab = computed(() => {
 const canDelete = computed(() => {
   const node = activeSceneNode.value
   if (!node ) {
-    return false
+    return true
   }
   return isNormalNodeType(node)
 })
