@@ -13238,6 +13238,158 @@ function enterMapTopView(): boolean {
   return resetCameraToSelectionDirection('pos-y')
 }
 
+function setViewportRayFromClientPoint(event: { clientX: number; clientY: number }): boolean {
+  if (!canvasRef.value || !camera) {
+    return false
+  }
+  const rect = canvasRef.value.getBoundingClientRect()
+  if (rect.width === 0 || rect.height === 0) {
+    return false
+  }
+  pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
+  pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
+  raycaster.setFromCamera(pointer, camera)
+  return true
+}
+
+function computeLandformScreenPickArea(points: Array<{ x: number; z: number }>): number {
+  if (points.length < 3) {
+    return Number.POSITIVE_INFINITY
+  }
+  let area = 0
+  for (let index = 0; index < points.length; index += 1) {
+    const current = points[index]!
+    const next = points[(index + 1) % points.length]!
+    area += current.x * next.z - next.x * current.z
+  }
+  return Math.abs(area) * 0.5
+}
+
+function isPointInsideLandformFootprintXZ(point: { x: number; z: number }, footprint: Array<{ x: number; z: number }>): boolean {
+  if (footprint.length < 3) {
+    return false
+  }
+  let inside = false
+  for (let i = 0, j = footprint.length - 1; i < footprint.length; j = i, i += 1) {
+    const current = footprint[i]!
+    const previous = footprint[j]!
+    const intersects = ((current.z > point.z) !== (previous.z > point.z))
+      && (point.x < ((previous.x - current.x) * (point.z - current.z)) / ((previous.z - current.z) || Number.EPSILON) + current.x)
+    if (intersects) {
+      inside = !inside
+    }
+  }
+  return inside
+}
+
+function buildLandformWorldFootprintForPicking(node: SceneNode, object: THREE.Object3D | null): Array<{ x: number; z: number }> {
+  if (node.dynamicMesh?.type !== 'Landform') {
+    return []
+  }
+  const vertices = Array.isArray(node.dynamicMesh.vertices) ? node.dynamicMesh.vertices : []
+  if (vertices.length < 3) {
+    return []
+  }
+  const matrixWorld = object
+    ? (object.updateWorldMatrix(true, false), object.matrixWorld.clone())
+    : new THREE.Matrix4().compose(
+      new THREE.Vector3(
+        Number.isFinite(node.position?.x) ? node.position.x : 0,
+        Number.isFinite(node.position?.y) ? node.position.y : 0,
+        Number.isFinite(node.position?.z) ? node.position.z : 0,
+      ),
+      new THREE.Quaternion().setFromEuler(new THREE.Euler(
+        Number.isFinite(node.rotation?.x) ? node.rotation.x : 0,
+        Number.isFinite(node.rotation?.y) ? node.rotation.y : 0,
+        Number.isFinite(node.rotation?.z) ? node.rotation.z : 0,
+        'XYZ',
+      )),
+      new THREE.Vector3(
+        Number.isFinite(node.scale?.x) ? node.scale.x : 1,
+        Number.isFinite(node.scale?.y) ? node.scale.y : 1,
+        Number.isFinite(node.scale?.z) ? node.scale.z : 1,
+      ),
+    )
+  return vertices
+    .map((entry) => {
+      if (!Array.isArray(entry) || entry.length < 2) {
+        return null
+      }
+      const localX = Number(entry[0])
+      const localZ = Number(entry[1])
+      if (!Number.isFinite(localX) || !Number.isFinite(localZ)) {
+        return null
+      }
+      const world = new THREE.Vector3(localX, 0, localZ).applyMatrix4(matrixWorld)
+      return { x: world.x, z: world.z }
+    })
+    .filter((entry): entry is { x: number; z: number } => Boolean(entry))
+}
+
+function pickHiddenLandformNodeAtPointer(event: { clientX: number; clientY: number }): NodeHitResult | null {
+  if (!setViewportRayFromClientPoint(event)) {
+    return null
+  }
+
+  const worldPoint = intersectRayWithGroundHeightfieldWorld(raycaster.ray)
+    ?? raycaster.ray.intersectPlane(groundPlane, new THREE.Vector3())
+  if (!worldPoint) {
+    return null
+  }
+
+  const selectedIds = collectSelectedLandformNodeIds()
+  let best: { hit: NodeHitResult; selected: boolean; area: number } | null = null
+
+  for (const [nodeId, object] of objectMap.entries()) {
+    const node = resolveSceneNodeById(nodeId)
+    if (!node || node.dynamicMesh?.type !== 'Landform') {
+      continue
+    }
+    if (!sceneStore.isNodeVisible(nodeId)) {
+      continue
+    }
+    if (sceneStore.isNodeSelectionLocked(nodeId)) {
+      continue
+    }
+    if (isObjectWorldVisible(object)) {
+      continue
+    }
+
+    const footprint = buildLandformWorldFootprintForPicking(node, object)
+    if (!isPointInsideLandformFootprintXZ({ x: worldPoint.x, z: worldPoint.z }, footprint)) {
+      continue
+    }
+
+    const area = computeLandformScreenPickArea(footprint)
+    const selected = selectedIds.has(nodeId)
+    const hit: NodeHitResult = {
+      nodeId,
+      object,
+      point: worldPoint.clone(),
+      roadSegmentIndex: null,
+      groundChunkKey: null,
+    }
+
+    if (!best) {
+      best = { hit, selected, area }
+      continue
+    }
+    if (selected && !best.selected) {
+      best = { hit, selected, area }
+      continue
+    }
+    if (selected === best.selected && area < best.area) {
+      best = { hit, selected, area }
+    }
+  }
+
+  return best ? best.hit : null
+}
+
+function pickSceneNodeAtPointerIncludingHiddenLandform(event: { clientX: number; clientY: number }): NodeHitResult | null {
+  return pickNodeAtPointer(event) ?? pickHiddenLandformNodeAtPointer(event)
+}
+
 function handleViewportDoubleClickNode(nodeId: string): void {
   const wasAlreadySingleSelected = sceneStore.selectedNodeIds.length === 1 && sceneStore.selectedNodeIds[0] === nodeId
   const toolForNode = resolveBuildToolForNodeId(nodeId)
@@ -16009,7 +16161,7 @@ async function handlePointerDown(event: PointerEvent) {
     }
 
     flushPendingScenePatchesForInteraction()
-    const hit = pickNodeAtPointer(event)
+    const hit = pickSceneNodeAtPointerIncludingHiddenLandform(event)
     if (hit) {
       const hitNodeId = hit.nodeId
       handleViewportDoubleClickNode(hitNodeId)
@@ -18962,7 +19114,7 @@ function handleCanvasDoubleClick(event: MouseEvent) {
   }
 
   flushPendingScenePatchesForInteraction()
-  const hit = pickNodeAtPointer(event)
+  const hit = pickSceneNodeAtPointerIncludingHiddenLandform(event)
   if (!hit) {
     return
   }
