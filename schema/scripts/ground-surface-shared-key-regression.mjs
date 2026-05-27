@@ -13,8 +13,8 @@ assert.match(
 
 assert.match(
   source,
-  /const chunkKey = chunkMeta[\s\S]*resolveGroundSurfaceSharedKeyFromChunkMeta\(chunkMeta\.chunkRow, chunkMeta\.chunkColumn\)/,
-  'runtime ground chunk materials should convert chunkMeta row/column into shared chunk keys before surface lookup',
+  /export function applyGroundTextureToRuntimeChunkMesh\([\s\S]*const resolvedChunkKey = chunkKey[\s\S]*resolveGroundSurfaceSharedKeyFromChunkMeta\(chunkMeta\?\.chunkRow, chunkMeta\?\.chunkColumn\)/,
+  'runtime ground chunk materials should convert chunkMeta row/column into shared chunk keys before surface lookup through the shared runtime helper',
 )
 
 assert.match(
@@ -25,7 +25,7 @@ assert.match(
 
 assert.match(
   source,
-  /const chunkKey = resolveCompiledGroundTileChunkKey\(root\.userData \?\? \{\}, definition, compiledGroundTileKey, mesh\)/,
+  /resolveCompiledGroundTileChunkKey\(rootUserData \?\? \{\}, definition, compiledGroundTileKey, mesh\)/,
   'compiled ground tiles should continue resolving shared chunk keys through the compiled ground path',
 )
 

@@ -7135,6 +7135,52 @@ function applyGroundTextureToChunkMesh(
   mesh.material = nextMaterial
 }
 
+export function applyGroundTextureToRuntimeChunkMesh(params: {
+  mesh: THREE.Mesh
+  definition: GroundDynamicMesh
+  baseMaterial: THREE.Material
+  baseMaterialSignature?: string | null
+  chunkKey?: string | null
+  compiledGroundTileKey?: string | null
+  rootUserData?: Record<string, unknown> | null | undefined
+}): string | null {
+  const {
+    mesh,
+    definition,
+    baseMaterial,
+    baseMaterialSignature,
+    chunkKey = null,
+    compiledGroundTileKey = null,
+    rootUserData = null,
+  } = params
+  const chunkSpec = mesh.userData?.groundChunk as GroundChunkSpec | undefined
+  const chunkMeta = chunkSpec as { chunkRow?: number; chunkColumn?: number } | null
+  const isCompiledGroundTile = mesh.userData?.compiledGroundTile === true || Boolean(compiledGroundTileKey)
+  const resolvedChunkKey = chunkKey
+    ?? (chunkSpec
+      ? resolveGroundSurfaceSharedKeyFromChunkMeta(chunkMeta?.chunkRow, chunkMeta?.chunkColumn)
+      : resolveCompiledGroundTileChunkKey(rootUserData ?? {}, definition, compiledGroundTileKey, mesh))
+  const resolvedBaseMaterialSignature = typeof baseMaterialSignature === 'string' && baseMaterialSignature.trim().length > 0
+    ? baseMaterialSignature
+    : resolveGroundBaseMaterialSignature(baseMaterial)
+
+  applyGroundTextureToChunkMesh(
+    mesh,
+    definition,
+    resolvedChunkKey,
+    chunkSpec ?? null,
+    baseMaterial,
+    null,
+    resolvedBaseMaterialSignature,
+    {
+      isCompiledGroundTile,
+      compiledGroundTileKey,
+    },
+  )
+
+  return resolvedChunkKey
+}
+
 function applyGroundTextureToObject(object: THREE.Object3D, definition: GroundDynamicMesh): void {
   const root = object as THREE.Object3D & { userData?: Record<string, unknown> }
   const cachedBaseMaterial = (root.userData as Record<string, unknown> | undefined)?.groundMaterial
@@ -7169,38 +7215,15 @@ function applyGroundTextureToObject(object: THREE.Object3D, definition: GroundDy
     const chunkBaseMaterialSignature = chunkBaseMaterial
       ? resolveGroundBaseMaterialSignature(chunkBaseMaterial)
       : 'none'
-    if (chunkSpec && chunkBaseMaterial) {
-      const chunkMeta = (mesh.userData?.groundChunk ?? null) as { chunkRow?: number; chunkColumn?: number } | null
-      const chunkKey = chunkMeta
-        ? resolveGroundSurfaceSharedKeyFromChunkMeta(chunkMeta.chunkRow, chunkMeta.chunkColumn)
-        : null
-      applyGroundTextureToChunkMesh(
+    if ((chunkSpec || isCompiledGroundTile) && chunkBaseMaterial) {
+      applyGroundTextureToRuntimeChunkMesh({
         mesh,
         definition,
-        chunkKey,
-        chunkSpec,
-        chunkBaseMaterial,
-        null,
-        chunkBaseMaterialSignature,
-        {},
-      )
-      return
-    }
-    if (isCompiledGroundTile && chunkBaseMaterial) {
-      const chunkKey = resolveCompiledGroundTileChunkKey(root.userData ?? {}, definition, compiledGroundTileKey, mesh)
-      applyGroundTextureToChunkMesh(
-        mesh,
-        definition,
-        chunkKey,
-        null,
-        chunkBaseMaterial,
-        null,
-        chunkBaseMaterialSignature,
-        {
-          isCompiledGroundTile: true,
-          compiledGroundTileKey,
-        },
-      )
+        baseMaterial: chunkBaseMaterial,
+        baseMaterialSignature: chunkBaseMaterialSignature,
+        compiledGroundTileKey,
+        rootUserData: root.userData ?? {},
+      })
     }
   })
 }

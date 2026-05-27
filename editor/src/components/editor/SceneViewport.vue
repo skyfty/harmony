@@ -2184,6 +2184,49 @@ function resolveEditableLandformNode(nodeId: string | null | undefined): SceneNo
   return node
 }
 
+function collectSelectedLandformNodeIds(): Set<string> {
+  const ids = new Set<string>()
+  const primaryId = getPrimarySelectedNodeId()
+  if (primaryId) {
+    ids.add(primaryId)
+  }
+  const selectedIds = Array.isArray(sceneStore.selectedNodeIds) ? sceneStore.selectedNodeIds : []
+  selectedIds.forEach((id) => {
+    if (typeof id === 'string' && id.length > 0) {
+      ids.add(id)
+    }
+  })
+  return ids
+}
+
+function shouldShowLandformRuntimeObject(node: SceneNode): boolean {
+  if (node.dynamicMesh?.type !== 'Landform') {
+    return sceneStore.isNodeVisible(node.id)
+  }
+  if (!sceneStore.isNodeVisible(node.id)) {
+    return false
+  }
+  return collectSelectedLandformNodeIds().has(node.id) && Boolean(resolveEditableLandformNode(node.id))
+}
+
+function syncLandformEditorVisibility(nodeIds?: Iterable<string>): void {
+  const targetIds = nodeIds ? Array.from(nodeIds) : Array.from(objectMap.keys())
+  targetIds.forEach((nodeId) => {
+    const object = objectMap.get(nodeId) ?? null
+    if (!object) {
+      return
+    }
+    const node = resolveSceneNodeById(nodeId)
+    if (!node || node.dynamicMesh?.type !== 'Landform') {
+      return
+    }
+    const nextVisible = shouldShowLandformRuntimeObject(node)
+    if (object.visible !== nextVisible) {
+      object.visible = nextVisible
+    }
+  })
+}
+
 function resolveEditableRegionNode(nodeId: string | null | undefined): SceneNode | null {
   if (!nodeId) {
     return null
@@ -2274,6 +2317,7 @@ function resolveEditableWaterNode(nodeId: string | null | undefined): SceneNode 
 }
 
 function refreshSelectionHighlightsForEditModeChange(): void {
+  syncLandformEditorVisibility()
   updateOutlineSelectionTargets()
   updateSelectionHighlights()
 }
@@ -10990,6 +11034,7 @@ function applyNodePatchesFast(nodePatches: PendingNodePatch[], removedIds: Set<s
     updateNodeObject(object, node)
     refreshPlacementSurfaceTargetsForNode(nodeId)
   }
+  syncLandformEditorVisibility()
 }
 
 function applyNodePatchesWithTopology(
@@ -11057,6 +11102,7 @@ function applyNodePatchesWithTopology(
     updateNodeObject(object, node)
     refreshPlacementSurfaceTargetsForNode(nodeId)
   }
+  syncLandformEditorVisibility()
   return false
 }
 
@@ -14836,7 +14882,7 @@ function updateSelectionHighlights() {
     if (!group) {
       return
     }
-    if (!object) {
+    if (!object || !isObjectWorldVisible(object)) {
       group.visible = false
       return
     }
@@ -21071,7 +21117,7 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
   // mirrored-material side flip (Front<->Back) to avoid inside-out/backface artifacts.
   syncMirroredMeshMaterials(object, node.mirror === 'horizontal' || node.mirror === 'vertical', node.mirror)
 
-  object.visible = sceneStore.isNodeVisible(node.id)
+  object.visible = shouldShowLandformRuntimeObject(node)
 
   if (object.userData?.instancedAssetId) {
     ensureInstancedPickProxy(object, node)
@@ -21885,6 +21931,8 @@ function syncSceneGraph() {
     }
   })
 
+  syncLandformEditorVisibility(encountered)
+
   // 重新附加选择并确保工具模式正确
   attachSelection(props.selectedNodeId, props.activeTool)
   updateOutlineSelectionTargets()
@@ -22693,6 +22741,7 @@ function attachSelection(nodeId: string | null, tool: EditorTool = props.activeT
   const primaryId = nodeId ?? sceneStore.selectedNodeId ?? null
   const locked = primaryId ? sceneStore.isNodeSelectionLocked(primaryId) : false
   const target = !locked && primaryId ? (objectMap.get(primaryId) ?? null) : null
+  syncLandformEditorVisibility()
   updateOutlineSelectionTargets()
 
   if (!primaryId || locked || !target) {
@@ -23214,6 +23263,7 @@ watch(
   () => props.selectedNodeId,
   (id) => {
     attachSelection(id)
+    syncLandformEditorVisibility()
     updateOutlineSelectionTargets()
     updateSelectionHighlights()
     refreshEffectRuntimeTickers()
@@ -23223,6 +23273,7 @@ watch(
 watch(
   () => sceneStore.selectedNodeIds.slice(),
   () => {
+    syncLandformEditorVisibility()
     if (!transformControls?.dragging) {
       attachSelection(props.selectedNodeId, props.activeTool)
     }
