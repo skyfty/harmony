@@ -21340,17 +21340,24 @@ function syncViewportCompiledGroundTiles(
   groundObject: THREE.Object3D,
   groundDefinition: GroundRuntimeDynamicMesh,
 ): void {
+  const groundUserData = groundObject.userData ?? (groundObject.userData = {})
   const manifestSource = sceneStore.compiledGroundManifest
   const manifest = manifestSource ? toRaw(manifestSource) : null
   const buildKey = typeof sceneStore.compiledGroundBuildKey === 'string'
     ? sceneStore.compiledGroundBuildKey.trim()
     : ''
   if (!manifest || !buildKey) {
+    groundUserData.compiledGroundEnabled = false
+    groundUserData.compiledGroundManifest = null
+    groundUserData.compiledGroundBuildKey = null
     setInfiniteGroundHiddenChunkKeys(groundObject, [])
     clearCompiledGroundRenderTiles(groundObject)
     return
   }
 
+  groundUserData.compiledGroundEnabled = true
+  groundUserData.compiledGroundManifest = manifest
+  groundUserData.compiledGroundBuildKey = buildKey
   const revision = Number.isFinite(manifest.revision)
     ? Math.max(0, Math.trunc(manifest.revision))
     : computeCompiledGroundManifestRevision(manifest)

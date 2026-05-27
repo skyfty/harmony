@@ -470,6 +470,18 @@ function resolveSharedGroundChunkKeyFromRuntimeKey(key: string): string | null {
   return `${key.slice(separatorIndex + 1)}:${key.slice(0, separatorIndex)}`
 }
 
+function resolveGroundSurfaceSharedKeyFromChunkMeta(
+  chunkRow: unknown,
+  chunkColumn: unknown,
+): string | null {
+  const row = Number(chunkRow)
+  const column = Number(chunkColumn)
+  if (!Number.isFinite(row) || !Number.isFinite(column)) {
+    return null
+  }
+  return resolveSharedGroundChunkKeyFromRuntimeKey(groundChunkKey(Math.trunc(row), Math.trunc(column)))
+}
+
 function resolveRuntimeGroundChunkKeyFromSharedKey(key: string): string | null {
   const parsed = parseGroundChunkKey(key)
   if (!parsed) {
@@ -6008,27 +6020,39 @@ function resolveCompiledGroundTileChunkKey(
   rootUserData: Record<string, unknown>,
   definition: GroundDynamicMesh,
   compiledGroundTileKey: string | null | undefined,
+  mesh: THREE.Mesh | null = null,
 ): string | null {
   const normalizedTileKey = typeof compiledGroundTileKey === 'string' ? compiledGroundTileKey.trim() : ''
-  if (!normalizedTileKey) {
-    return null
-  }
   const compiledGroundManifest = rootUserData.compiledGroundManifest as CompiledGroundManifest | null | undefined
-  if (!compiledGroundManifest || !Array.isArray(compiledGroundManifest.renderTiles)) {
-    return null
-  }
-  const record = compiledGroundManifest.renderTiles.find((entry) => entry?.key === normalizedTileKey) ?? null
-  if (!record) {
-    return null
-  }
   const safeChunkSizeMeters = Number.isFinite(definition.chunkSizeMeters) && Number(definition.chunkSizeMeters) > 0
     ? Number(definition.chunkSizeMeters)
-    : Number.isFinite(compiledGroundManifest.chunkSizeMeters) && Number(compiledGroundManifest.chunkSizeMeters) > 0
+    : compiledGroundManifest && Number.isFinite(compiledGroundManifest.chunkSizeMeters) && Number(compiledGroundManifest.chunkSizeMeters) > 0
       ? Number(compiledGroundManifest.chunkSizeMeters)
       : 1
+  if (compiledGroundManifest && Array.isArray(compiledGroundManifest.renderTiles) && normalizedTileKey) {
+    const record = compiledGroundManifest.renderTiles.find((entry) => entry?.key === normalizedTileKey) ?? null
+    if (record) {
+      const coord = resolveGroundChunkCoordFromWorldPosition(
+        Number(record.centerX) || 0,
+        Number(record.centerZ) || 0,
+        safeChunkSizeMeters,
+      )
+      return `${coord.chunkX}:${coord.chunkZ}`
+    }
+  }
+  if (!mesh) {
+    return null
+  }
+  mesh.geometry?.computeBoundingBox?.()
+  const boundingBox = mesh.geometry?.boundingBox ?? null
+  if (!boundingBox) {
+    return null
+  }
+  const center = boundingBox.getCenter(new THREE.Vector3())
+  const worldCenter = mesh.localToWorld(center)
   const coord = resolveGroundChunkCoordFromWorldPosition(
-    Number(record.centerX) || 0,
-    Number(record.centerZ) || 0,
+    Number(worldCenter.x) || 0,
+    Number(worldCenter.z) || 0,
     safeChunkSizeMeters,
   )
   return `${coord.chunkX}:${coord.chunkZ}`
@@ -6144,13 +6168,36 @@ function applyGroundTextureToChunkMesh(
   baseMaterial: THREE.Material,
   baseTexture: THREE.Texture | null,
   baseMaterialSignature: string,
+  options: {
+    isCompiledGroundTile?: boolean
+    compiledGroundTileKey?: string | null
+  } = {},
 ): void {
   void baseTexture
   const currentMaterial = Array.isArray(mesh.material) ? (mesh.material[0] ?? null) : (mesh.material ?? null)
   const userData = mesh.userData as Record<string, unknown>
   if (!chunkKey) {
-    throw new Error('Missing baked ground chunk key.')
+    if (currentMaterial && currentMaterial !== baseMaterial) {
+      disposeGroundChunkTexturedMaterial(currentMaterial)
+    }
+    if (mesh.material !== baseMaterial) {
+      mesh.material = baseMaterial
+    }
+    delete userData.groundChunkSplatMaps
+    const surfaceChunkCount = definition.groundSurfaceChunks
+      ? Object.keys(definition.groundSurfaceChunks).length
+      : 0
+    if (options.isCompiledGroundTile && surfaceChunkCount > 0 && userData.missingBakedGroundChunkKeyWarningLogged !== true) {
+      console.warn('[Ground] Missing baked ground chunk key for compiled ground tile; falling back to base material.', {
+        compiledGroundTileKey: options.compiledGroundTileKey ?? null,
+        meshName: mesh.name || null,
+        surfaceChunkCount,
+      })
+      userData.missingBakedGroundChunkKeyWarningLogged = true
+    }
+    return
   }
+  delete userData.missingBakedGroundChunkKeyWarningLogged
   const bundle = resolveGroundChunkTextureBundleSources(definition, chunkKey)
   const activeSource = bundle?.albedo ?? null
   if (bundle && !definition.groundSurfaceChunks) {
@@ -6314,8 +6361,8 @@ function applyGroundTextureToObject(object: THREE.Object3D, definition: GroundDy
       : 'none'
     if (chunkSpec && chunkBaseMaterial) {
       const chunkMeta = (mesh.userData?.groundChunk ?? null) as { chunkRow?: number; chunkColumn?: number } | null
-      const chunkKey = chunkMeta && Number.isFinite(Number(chunkMeta.chunkRow)) && Number.isFinite(Number(chunkMeta.chunkColumn))
-        ? `${Math.trunc(Number(chunkMeta.chunkRow))}:${Math.trunc(Number(chunkMeta.chunkColumn))}`
+      const chunkKey = chunkMeta
+        ? resolveGroundSurfaceSharedKeyFromChunkMeta(chunkMeta.chunkRow, chunkMeta.chunkColumn)
         : null
       applyGroundTextureToChunkMesh(
         mesh,
@@ -6325,11 +6372,12 @@ function applyGroundTextureToObject(object: THREE.Object3D, definition: GroundDy
         chunkBaseMaterial,
         null,
         chunkBaseMaterialSignature,
+        {},
       )
       return
     }
     if (isCompiledGroundTile && chunkBaseMaterial) {
-      const chunkKey = resolveCompiledGroundTileChunkKey(root.userData ?? {}, definition, compiledGroundTileKey)
+      const chunkKey = resolveCompiledGroundTileChunkKey(root.userData ?? {}, definition, compiledGroundTileKey, mesh)
       applyGroundTextureToChunkMesh(
         mesh,
         definition,
@@ -6338,6 +6386,10 @@ function applyGroundTextureToObject(object: THREE.Object3D, definition: GroundDy
         chunkBaseMaterial,
         null,
         chunkBaseMaterialSignature,
+        {
+          isCompiledGroundTile: true,
+          compiledGroundTileKey,
+        },
       )
     }
   })
@@ -6760,7 +6812,10 @@ export function updateGroundChunks(
 
         const spec = computeChunkSpec(definition, cr, cc)
         const isDenseChunkLoaded = state.chunks.has(key)
-        const hasBakedSurfaceChunk = hasGroundChunkSurfaceTextureData(definition, key)
+        const hasBakedSurfaceChunk = hasGroundChunkSurfaceTextureData(
+          definition,
+          resolveSharedGroundChunkKeyFromRuntimeKey(key),
+        )
         const hasLocalEditCoverage = chunkIntersectsGroundLocalEditTileFromRuntime(runtimeDefinition, spec, localEditTiles)
         const requiresDenseChunkMesh = forceDenseChunkMeshes || hasBakedSurfaceChunk || hasLocalEditCoverage
         // 先算出这个 chunk 的中心点位置，再与相机位置比较，用于创建优先级排序。

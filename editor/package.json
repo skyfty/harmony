@@ -17,6 +17,7 @@
     "check:ground-height-sidecar-alignment": "node ./scripts/ground-height-sidecar-alignment-regression.mjs",
     "check:ground-height-sidecar-local-edits": "node ./scripts/ground-height-sidecar-local-edits-regression.mjs",
     "check:infinite-sculpt-chunk-keys": "node ./scripts/infinite-sculpt-chunk-keys-regression.mjs",
+    "check:landform-ground-bake-chunk-keys": "node ./scripts/landform-ground-bake-chunk-key-regression.mjs",
     "check:road-collision-compiled": "node ./scripts/road-collision-compiled-regression.mjs"
   },
   "enginewwws": {

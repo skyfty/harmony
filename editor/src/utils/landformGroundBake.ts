@@ -9,7 +9,9 @@ import type {
   SceneNode,
 } from '@schema/core'
 import {
+  formatGroundChunkKey,
   normalizeGroundWorldBounds,
+  parseGroundChunkKey,
   resolveGroundChunkCoordFromWorldPosition,
   resolveGroundWorldBounds,
   resolveInfiniteGroundGridOriginMeters,
@@ -979,7 +981,7 @@ function getSurfaceIndices(node: SceneNode): number[] {
 }
 
 function resolveChunkKey(chunkRow: number, chunkColumn: number): string {
-  return `${Math.trunc(chunkRow)}:${Math.trunc(chunkColumn)}`
+  return formatGroundChunkKey(chunkColumn, chunkRow)
 }
 
 function resolveLandformBakeChunkClipBounds(definition: GroundDynamicMesh): WorldRect | null {
@@ -990,15 +992,13 @@ function resolveLandformBakeChunkClipBounds(definition: GroundDynamicMesh): Worl
 }
 
 function parseChunkKey(chunkKey: string): { chunkRow: number; chunkColumn: number } | null {
-  const [rowText, columnText] = chunkKey.split(':')
-  const chunkRow = Number.parseInt(rowText ?? '', 10)
-  const chunkColumn = Number.parseInt(columnText ?? '', 10)
-  if (!Number.isFinite(chunkRow) || !Number.isFinite(chunkColumn)) {
+  const coord = parseGroundChunkKey(chunkKey)
+  if (!coord) {
     return null
   }
   return {
-    chunkRow: Math.trunc(chunkRow),
-    chunkColumn: Math.trunc(chunkColumn),
+    chunkRow: coord.chunkZ,
+    chunkColumn: coord.chunkX,
   }
 }
 
@@ -1352,7 +1352,7 @@ function collectLandformBakeAffectedChunkKeys(
     if (!leftParts || !rightParts) {
       return left.localeCompare(right)
     }
-    return leftParts.chunkRow - rightParts.chunkRow || leftParts.chunkColumn - rightParts.chunkColumn
+    return leftParts.chunkColumn - rightParts.chunkColumn || leftParts.chunkRow - rightParts.chunkRow
   })
 }
 
