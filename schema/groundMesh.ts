@@ -4453,6 +4453,10 @@ function ensureGroundRuntimeState(root: THREE.Object3D, definition: GroundDynami
         } catch (_error) {
           /* noop */
         }
+        const material = Array.isArray(mesh.material) ? (mesh.material[0] ?? null) : (mesh.material ?? null)
+        if (material) {
+          disposeGroundChunkTexturedMaterial(material)
+        }
       })
     })
     existing.meshPool.clear()
@@ -5275,10 +5279,6 @@ function releaseChunkToPool(state: GroundRuntimeState, runtime: GroundChunkRunti
   }
 
   runtime.mesh.removeFromParent()
-  const material = Array.isArray(runtime.mesh.material) ? (runtime.mesh.material[0] ?? null) : (runtime.mesh.material ?? null)
-  if (material) {
-    disposeGroundChunkTexturedMaterial(material)
-  }
   runtime.mesh.visible = false
   bucket.push(runtime.mesh)
   state.meshPool.set(key, bucket)
@@ -5345,6 +5345,7 @@ function ensureChunkMesh(
   mesh.frustumCulled = true
   mesh.userData.dynamicMeshType = 'Ground'
   mesh.userData.groundChunk = { ...spec, chunkRow, chunkColumn }
+  mesh.userData.groundChunkTextureReady = true
   mesh.visible = true
   root.add(mesh)
   const runtime: GroundChunkRuntime = { key, chunkRow, chunkColumn, spec, mesh }
@@ -5363,6 +5364,7 @@ function disposeChunk(runtime: GroundChunkRuntime): void {
   if (material) {
     disposeGroundChunkTexturedMaterial(material)
   }
+  delete runtime.mesh.userData.groundChunkTextureReady
   runtime.mesh.removeFromParent()
 }
 
@@ -6056,12 +6058,34 @@ export function updateGroundGeometry(geometry: THREE.BufferGeometry, definition:
   return true
 }
 
-type GroundTextureMetadata = { groundDynamic?: boolean }
+type GroundTextureMetadata = {
+  groundDynamic?: boolean
+  groundTextureCacheKey?: string | null
+}
 type GroundRuntimeMaterialMetadata = {
   groundChunkTextured?: boolean
   groundTextureSource?: string | null
   groundTextureSignature?: string | null
   groundSplatShader?: boolean
+  groundMaterialCacheKey?: string | null
+}
+
+type GroundTextureCacheEntry = {
+  key: string
+  texture: THREE.Texture
+  refCount: number
+  ready: boolean
+  failed: boolean
+  readyListeners: Set<() => void>
+}
+
+type GroundMaterialCacheEntry = {
+  key: string
+  material: THREE.Material
+  refCount: number
+  ready: boolean
+  textureKeys: string[]
+  readyListeners: Set<() => void>
 }
 
 type GroundChunkRuntimeSurfaceLayer = {
@@ -6090,6 +6114,8 @@ const GROUND_SPLAT_RUNTIME_STATE = '__groundSplatRuntimeState'
 const GROUND_SPLAT_LAYER_TEXTURES = '__groundSplatLayerTextures'
 const GROUND_SPLAT_MASK_TEXTURES = '__groundSplatMaskTextures'
 const GROUND_SPLAT_MAX_LAYERS = 8
+const groundTextureCache = new Map<string, GroundTextureCacheEntry>()
+const groundMaterialCache = new Map<string, GroundMaterialCacheEntry>()
 // Keep the first shader version conservative so it stays under common WebGL fragment sampler limits
 // after accounting for base ground maps, environment lighting, and shadow samplers.
 const GROUND_SPLAT_SHADER_MAX_LAYERS = 4
@@ -6104,6 +6130,232 @@ function isDynamicGroundTexture(texture: THREE.Texture | null | undefined): bool
 function markDynamicGroundTexture(texture: THREE.Texture): void {
   const userData = (texture.userData ??= {}) as GroundTextureMetadata
   userData.groundDynamic = true
+}
+
+function resolveGroundTextureCacheKey(
+  source: string,
+  options: {
+    flipY?: boolean
+    textureSettingsKey?: string | null
+  } = {},
+): string {
+  return [
+    source.trim(),
+    options.flipY === false ? 'flip:0' : 'flip:1',
+    options.textureSettingsKey?.trim() || 'settings:none',
+  ].join('|')
+}
+
+function isGroundTextureReady(texture: THREE.Texture | null | undefined): boolean {
+  if (!texture) {
+    return true
+  }
+  const cacheKey = (texture.userData as GroundTextureMetadata | undefined)?.groundTextureCacheKey
+  if (!cacheKey) {
+    const image = (texture as THREE.Texture & { image?: { complete?: boolean } }).image
+    return image ? image.complete !== false : true
+  }
+  const entry = groundTextureCache.get(cacheKey)
+  return entry ? entry.ready && !entry.failed : true
+}
+
+function trackGroundTextureReady(texture: THREE.Texture | null | undefined, listener: () => void): void {
+  if (!texture) {
+    listener()
+    return
+  }
+  const cacheKey = (texture.userData as GroundTextureMetadata | undefined)?.groundTextureCacheKey
+  if (!cacheKey) {
+    listener()
+    return
+  }
+  const entry = groundTextureCache.get(cacheKey)
+  if (!entry || entry.ready || entry.failed) {
+    listener()
+    return
+  }
+  entry.readyListeners.add(listener)
+}
+
+function retainGroundTextureCacheEntry(entry: GroundTextureCacheEntry): void {
+  entry.refCount += 1
+}
+
+function releaseGroundTexture(texture: THREE.Texture | null | undefined): void {
+  if (!texture) {
+    return
+  }
+  const cacheKey = (texture.userData as GroundTextureMetadata | undefined)?.groundTextureCacheKey
+  if (!cacheKey) {
+    if (isDynamicGroundTexture(texture)) {
+      disposeGroundTexture(texture)
+    }
+    return
+  }
+  const entry = groundTextureCache.get(cacheKey)
+  if (!entry) {
+    if (isDynamicGroundTexture(texture)) {
+      disposeGroundTexture(texture)
+    }
+    return
+  }
+  entry.refCount = Math.max(0, entry.refCount - 1)
+}
+
+function retainGroundChunkTexturedMaterial(material: THREE.Material | null | undefined): void {
+  if (!material) {
+    return
+  }
+  const cacheKey = (material.userData as GroundRuntimeMaterialMetadata | undefined)?.groundMaterialCacheKey
+  if (!cacheKey) {
+    return
+  }
+  const entry = groundMaterialCache.get(cacheKey)
+  if (entry) {
+    entry.refCount += 1
+  }
+}
+
+function subscribeGroundMaterialReady(material: THREE.Material | null | undefined, listener: () => void): void {
+  if (!material) {
+    listener()
+    return
+  }
+  const cacheKey = (material.userData as GroundRuntimeMaterialMetadata | undefined)?.groundMaterialCacheKey
+  if (!cacheKey) {
+    listener()
+    return
+  }
+  const entry = groundMaterialCache.get(cacheKey)
+  if (!entry || entry.ready) {
+    listener()
+    return
+  }
+  entry.readyListeners.add(listener)
+}
+
+function finalizeGroundMaterialCacheEntry(entry: GroundMaterialCacheEntry): void {
+  if (entry.ready) {
+    return
+  }
+  const allReady = entry.textureKeys.every((key) => {
+    const textureEntry = groundTextureCache.get(key)
+    return !textureEntry || textureEntry.ready || textureEntry.failed
+  })
+  if (!allReady) {
+    return
+  }
+  entry.ready = true
+  entry.readyListeners.forEach((listener) => listener())
+  entry.readyListeners.clear()
+}
+
+function createGroundMaterialCacheEntry(
+  key: string,
+  material: THREE.Material,
+  textures: Array<THREE.Texture | null | undefined>,
+): GroundMaterialCacheEntry {
+  const textureKeys = textures
+    .map((texture) => (texture?.userData as GroundTextureMetadata | undefined)?.groundTextureCacheKey ?? null)
+    .filter((value): value is string => typeof value === 'string' && value.length > 0)
+  const entry: GroundMaterialCacheEntry = {
+    key,
+    material,
+    refCount: 1,
+    ready: textureKeys.every((textureKey) => {
+      const textureEntry = groundTextureCache.get(textureKey)
+      return !textureEntry || textureEntry.ready || textureEntry.failed
+    }),
+    textureKeys,
+    readyListeners: new Set(),
+  }
+  textureKeys.forEach((textureKey) => {
+    const textureEntry = groundTextureCache.get(textureKey)
+    if (!textureEntry || textureEntry.ready || textureEntry.failed) {
+      return
+    }
+    textureEntry.readyListeners.add(() => finalizeGroundMaterialCacheEntry(entry))
+  })
+  const userData = (material.userData ??= {}) as GroundRuntimeMaterialMetadata
+  userData.groundMaterialCacheKey = key
+  groundMaterialCache.set(key, entry)
+  finalizeGroundMaterialCacheEntry(entry)
+  return entry
+}
+
+function setGroundChunkTextureReady(mesh: THREE.Mesh, ready: boolean): void {
+  mesh.userData.groundChunkTextureReady = ready
+}
+
+function syncGroundChunkTextureReadyFromMaterial(mesh: THREE.Mesh, material: THREE.Material | null | undefined): void {
+  if (!material || !isGroundChunkTexturedMaterial(material)) {
+    setGroundChunkTextureReady(mesh, true)
+    return
+  }
+  const cacheKey = (material.userData as GroundRuntimeMaterialMetadata | undefined)?.groundMaterialCacheKey
+  if (!cacheKey) {
+    const typed = material as THREE.MeshStandardMaterial & Record<string, unknown>
+    const textures: Array<THREE.Texture | null | undefined> = [
+      typed.map ?? null,
+      typed.normalMap ?? null,
+      ...(Array.isArray(typed[GROUND_SPLAT_LAYER_TEXTURES]) ? typed[GROUND_SPLAT_LAYER_TEXTURES] as Array<THREE.Texture | null> : []),
+      ...(Array.isArray(typed[GROUND_SPLAT_MASK_TEXTURES]) ? typed[GROUND_SPLAT_MASK_TEXTURES] as Array<THREE.Texture | null> : []),
+    ]
+    const ready = textures.every((texture) => isGroundTextureReady(texture))
+    setGroundChunkTextureReady(mesh, ready)
+    if (!ready) {
+      textures.forEach((texture) => {
+        if (!texture || isGroundTextureReady(texture)) {
+          return
+        }
+        trackGroundTextureReady(texture, () => {
+          if (mesh.material === material) {
+            syncGroundChunkTextureReadyFromMaterial(mesh, material)
+          }
+        })
+      })
+    }
+    return
+  }
+  const entry = groundMaterialCache.get(cacheKey)
+  const ready = entry ? entry.ready : true
+  setGroundChunkTextureReady(mesh, ready)
+  if (!ready) {
+    subscribeGroundMaterialReady(material, () => {
+      if (mesh.material === material) {
+        syncGroundChunkTextureReadyFromMaterial(mesh, material)
+      }
+    })
+  }
+}
+
+export function isGroundChunkTextureReady(mesh: THREE.Mesh | null | undefined): boolean {
+  if (!mesh) {
+    return true
+  }
+  return mesh.userData?.groundChunkTextureReady !== false
+}
+
+export function onGroundChunkTextureReady(mesh: THREE.Mesh | null | undefined, listener: () => void): void {
+  if (!mesh) {
+    listener()
+    return
+  }
+  if (isGroundChunkTextureReady(mesh)) {
+    listener()
+    return
+  }
+  const material = Array.isArray(mesh.material) ? (mesh.material[0] ?? null) : (mesh.material ?? null)
+  syncGroundChunkTextureReadyFromMaterial(mesh, material)
+  if (isGroundChunkTextureReady(mesh)) {
+    listener()
+    return
+  }
+  subscribeGroundMaterialReady(material, () => {
+    if (mesh.material === material && isGroundChunkTextureReady(mesh)) {
+      listener()
+    }
+  })
 }
 
 function clearDynamicGroundFlag(texture: THREE.Texture | null | undefined): void {
@@ -6127,19 +6379,59 @@ function disposeGroundTexture(texture: THREE.Texture | null | undefined) {
 function loadGroundTextureFromSource(
   source: string | null | undefined,
   textureName: string,
-  options: { flipY?: boolean } = {},
+  options: { flipY?: boolean; textureSettingsKey?: string | null } = {},
 ): THREE.Texture | null {
   const normalizedSource = typeof source === 'string' ? source.trim() : ''
   if (!normalizedSource) {
     return null
   }
-  const texture = textureLoader.load(normalizedSource)
+  const cacheKey = resolveGroundTextureCacheKey(normalizedSource, options)
+  const cached = groundTextureCache.get(cacheKey)
+  if (cached) {
+    retainGroundTextureCacheEntry(cached)
+    cached.texture.name = textureName
+    return cached.texture
+  }
+  const texture = textureLoader.load(
+    normalizedSource,
+    () => {
+      const entry = groundTextureCache.get(cacheKey)
+      if (!entry) {
+        return
+      }
+      entry.ready = true
+      entry.failed = false
+      entry.readyListeners.forEach((listener) => listener())
+      entry.readyListeners.clear()
+    },
+    undefined,
+    () => {
+      const entry = groundTextureCache.get(cacheKey)
+      if (!entry) {
+        return
+      }
+      entry.failed = true
+      entry.ready = true
+      entry.readyListeners.forEach((listener) => listener())
+      entry.readyListeners.clear()
+    },
+  )
   applyGroundTextureSamplingDefaults(texture)
   if (typeof options.flipY === 'boolean') {
     texture.flipY = options.flipY
   }
   texture.name = textureName
   markDynamicGroundTexture(texture)
+  const userData = (texture.userData ??= {}) as GroundTextureMetadata
+  userData.groundTextureCacheKey = cacheKey
+  groundTextureCache.set(cacheKey, {
+    key: cacheKey,
+    texture,
+    refCount: 1,
+    ready: false,
+    failed: false,
+    readyListeners: new Set(),
+  })
   return texture
 }
 
@@ -6168,6 +6460,7 @@ function clearGroundRuntimeMaterialMetadata(material: THREE.Material): void {
   delete userData.groundTextureSignature
   delete userData.groundTextureSource
   delete userData.groundSplatShader
+  delete userData.groundMaterialCacheKey
 }
 
 function applyGroundTextureSamplingDefaults(texture: THREE.Texture): void {
@@ -6210,7 +6503,10 @@ function createGroundSplatLayerTexture(
   index: number,
   settings: SceneMaterialTextureSettings | null | undefined,
 ): THREE.Texture | null {
-  const texture = loadGroundTextureFromSource(source, `GroundSplatLayer${index + 1}`, { flipY: settings?.flipY })
+  const texture = loadGroundTextureFromSource(source, `GroundSplatLayer${index + 1}`, {
+    flipY: settings?.flipY,
+    textureSettingsKey: stableSerialize(createTextureSettings(settings ?? null)),
+  })
   if (!texture) {
     return null
   }
@@ -6377,17 +6673,17 @@ function resolveGroundTextureWindowSignature(window: {
   ].join('|')
 }
 
-function hasGroundTextureSignature(material: THREE.Material | null | undefined, signature: string): boolean {
-  if (!material) {
-    return false
-  }
-  const userData = material.userData as GroundRuntimeMaterialMetadata | undefined
-  return userData?.groundTextureSignature === signature
-}
-
 function disposeGroundChunkTexturedMaterial(material: THREE.Material | null | undefined): void {
   if (!material || !isGroundChunkTexturedMaterial(material)) {
     return
+  }
+  const cacheKey = (material.userData as GroundRuntimeMaterialMetadata | undefined)?.groundMaterialCacheKey
+  if (cacheKey) {
+    const cached = groundMaterialCache.get(cacheKey)
+    if (cached) {
+      cached.refCount = Math.max(0, cached.refCount - 1)
+      return
+    }
   }
   const typed = material as unknown as Record<string, unknown>
   ;[
@@ -6395,26 +6691,20 @@ function disposeGroundChunkTexturedMaterial(material: THREE.Material | null | un
     'normalMap',
   ].forEach((key) => {
     const texture = typed[key] as THREE.Texture | null | undefined
-    if (texture && isDynamicGroundTexture(texture)) {
-      disposeGroundTexture(texture)
-      typed[key] = null
-    }
+    releaseGroundTexture(texture)
+    typed[key] = null
   })
   const layerTextures = Array.isArray(typed[GROUND_SPLAT_LAYER_TEXTURES])
     ? typed[GROUND_SPLAT_LAYER_TEXTURES] as Array<THREE.Texture | null>
     : []
   layerTextures.forEach((texture) => {
-    if (texture && isDynamicGroundTexture(texture)) {
-      disposeGroundTexture(texture)
-    }
+    releaseGroundTexture(texture)
   })
   const maskTextures = Array.isArray(typed[GROUND_SPLAT_MASK_TEXTURES])
     ? typed[GROUND_SPLAT_MASK_TEXTURES] as Array<THREE.Texture | null>
     : []
   maskTextures.forEach((texture) => {
-    if (texture && isDynamicGroundTexture(texture)) {
-      disposeGroundTexture(texture)
-    }
+    releaseGroundTexture(texture)
   })
   clearGroundSplatMaterialUniforms(material)
   delete typed[GROUND_SPLAT_LAYER_TEXTURES]
@@ -6858,14 +7148,10 @@ function disposeGroundChunkSplatRuntimeState(state: GroundChunkTextureRuntimeSta
     return
   }
   state.layerTextures.forEach((texture) => {
-    if (texture && isDynamicGroundTexture(texture)) {
-      disposeGroundTexture(texture)
-    }
+    releaseGroundTexture(texture)
   })
   state.splatMaps.forEach((texture) => {
-    if (texture && isDynamicGroundTexture(texture)) {
-      disposeGroundTexture(texture)
-    }
+    releaseGroundTexture(texture)
   })
 }
 
@@ -6939,6 +7225,10 @@ function applyGroundTextureToChunkMesh(
   void baseTexture
   const currentMaterial = Array.isArray(mesh.material) ? (mesh.material[0] ?? null) : (mesh.material ?? null)
   const userData = mesh.userData as Record<string, unknown>
+  const revisionSignature = [
+    Number.isFinite(definition.surfaceRevision) ? Math.max(0, Math.trunc(definition.surfaceRevision as number)) : 0,
+    Number.isFinite(definition.groundSplatBake?.revision) ? Math.max(0, Math.trunc(definition.groundSplatBake?.revision as number)) : 0,
+  ].join('|')
   if (!chunkKey) {
     if (currentMaterial && currentMaterial !== baseMaterial) {
       disposeGroundChunkTexturedMaterial(currentMaterial)
@@ -6947,6 +7237,7 @@ function applyGroundTextureToChunkMesh(
       mesh.material = baseMaterial
     }
     delete userData.groundChunkSplatMaps
+    setGroundChunkTextureReady(mesh, true)
     const surfaceChunkCount = definition.groundSurfaceChunks
       ? Object.keys(definition.groundSurfaceChunks).length
       : 0
@@ -6980,72 +7271,8 @@ function applyGroundTextureToChunkMesh(
       mesh.material = baseMaterial
     }
     delete userData.groundChunkSplatMaps
+    setGroundChunkTextureReady(mesh, true)
     return
-  }
-
-  const splatRuntimeState = bundle
-    ? createGroundChunkSplatRuntimeState(definition, mesh, spec, bundle)
-    : null
-  const shouldUseShaderSplat = Boolean(splatRuntimeState && chunkKey && bundle?.surfaceLayers.length)
-
-  if (shouldUseShaderSplat && chunkKey && bundle) {
-    const signature = createGroundSplatSignature(chunkKey, baseMaterialSignature, bundle)
-    if (currentMaterial && isGroundChunkTexturedMaterial(currentMaterial) && hasGroundTextureSignature(currentMaterial, signature)) {
-      const currentTyped = currentMaterial as THREE.MeshStandardMaterial & Record<string, unknown>
-      const previousLayerTextures = Array.isArray(currentTyped[GROUND_SPLAT_LAYER_TEXTURES])
-        ? currentTyped[GROUND_SPLAT_LAYER_TEXTURES] as Array<THREE.Texture | null>
-        : []
-      previousLayerTextures.forEach((texture) => {
-        if (texture && isDynamicGroundTexture(texture)) {
-          disposeGroundTexture(texture)
-        }
-      })
-      const previousMaskTextures = Array.isArray(currentTyped[GROUND_SPLAT_MASK_TEXTURES])
-        ? currentTyped[GROUND_SPLAT_MASK_TEXTURES] as Array<THREE.Texture | null>
-        : []
-      previousMaskTextures.forEach((texture) => {
-        if (texture && isDynamicGroundTexture(texture)) {
-          disposeGroundTexture(texture)
-        }
-      })
-      syncGroundSplatMaterialUniforms(currentMaterial, splatRuntimeState)
-      currentTyped[GROUND_SPLAT_LAYER_TEXTURES] = splatRuntimeState?.layerTextures ?? []
-      currentTyped[GROUND_SPLAT_MASK_TEXTURES] = splatRuntimeState?.splatMaps ?? []
-      currentTyped.userData = {
-        ...(currentTyped.userData ?? {}),
-        groundChunkSplatMapIds: bundle.splatMaps,
-      }
-      userData.groundChunkSplatMaps = splatRuntimeState?.splatMaps ?? []
-      if (mesh.material !== currentMaterial) {
-        mesh.material = currentMaterial
-      }
-      return
-    }
-
-    const nextMaterial = createGroundChunkSplatMaterial(baseMaterial)
-    if (nextMaterial) {
-      markGroundChunkTexturedMaterial(nextMaterial, signature, activeSource)
-      syncGroundSplatMaterialUniforms(nextMaterial, splatRuntimeState)
-      const typed = nextMaterial as THREE.MeshStandardMaterial & Record<string, unknown>
-      typed[GROUND_SPLAT_LAYER_TEXTURES] = splatRuntimeState?.layerTextures ?? []
-      typed[GROUND_SPLAT_MASK_TEXTURES] = splatRuntimeState?.splatMaps ?? []
-      typed.userData = {
-        ...(typed.userData ?? {}),
-        groundChunkSplatMapIds: bundle.splatMaps,
-      }
-      if (bundle.normal) {
-        typed.normalMap = loadGroundTextureFromSource(bundle.normal, 'GroundChunkNormalMap', { flipY: false })
-      }
-      typed.needsUpdate = true
-      userData.groundChunkSplatMaps = splatRuntimeState?.splatMaps ?? []
-      if (currentMaterial && currentMaterial !== baseMaterial) {
-        disposeGroundChunkTexturedMaterial(currentMaterial)
-      }
-      mesh.material = nextMaterial
-      return
-    }
-
-    disposeGroundChunkSplatRuntimeState(splatRuntimeState)
   }
 
   const uvBounds = summarizeGroundMeshUvBounds(mesh)
@@ -7066,19 +7293,81 @@ function applyGroundTextureToChunkMesh(
       repeatX: 1,
       repeatY: 1,
     })
+  const windowSignature = resolveGroundTextureWindowSignature(safeWindow)
+  const signatureBase = `${baseMaterialSignature}|rev:${revisionSignature}`
+  const splatRuntimeState = bundle
+    ? createGroundChunkSplatRuntimeState(definition, mesh, spec, bundle)
+    : null
+  const shouldUseShaderSplat = Boolean(splatRuntimeState && chunkKey && bundle?.surfaceLayers.length)
+
+  if (shouldUseShaderSplat && chunkKey && bundle) {
+    const signature = createGroundSplatSignature(chunkKey, signatureBase, bundle)
+    const cachedEntry = groundMaterialCache.get(signature)
+    const nextMaterial = cachedEntry?.material ?? createGroundChunkSplatMaterial(baseMaterial)
+    if (nextMaterial) {
+      if (!cachedEntry) {
+        markGroundChunkTexturedMaterial(nextMaterial, signature, activeSource)
+        syncGroundSplatMaterialUniforms(nextMaterial, splatRuntimeState)
+        const typed = nextMaterial as THREE.MeshStandardMaterial & Record<string, unknown>
+        typed[GROUND_SPLAT_LAYER_TEXTURES] = splatRuntimeState?.layerTextures ?? []
+        typed[GROUND_SPLAT_MASK_TEXTURES] = splatRuntimeState?.splatMaps ?? []
+        typed.userData = {
+          ...(typed.userData ?? {}),
+          groundChunkSplatMapIds: bundle.splatMaps,
+        }
+        if (bundle.normal) {
+          typed.normalMap = loadGroundTextureFromSource(bundle.normal, 'GroundChunkNormalMap', {
+            flipY: false,
+            textureSettingsKey: `${windowSignature}|normal`,
+          })
+        }
+        typed.needsUpdate = true
+        createGroundMaterialCacheEntry(signature, nextMaterial, [
+          typed.normalMap ?? null,
+          ...(splatRuntimeState?.layerTextures ?? []),
+          ...(splatRuntimeState?.splatMaps ?? []),
+        ])
+      }
+      userData.groundChunkSplatMaps = (nextMaterial as THREE.MeshStandardMaterial & Record<string, unknown>)[GROUND_SPLAT_MASK_TEXTURES] ?? []
+      if (currentMaterial && currentMaterial !== baseMaterial && currentMaterial !== nextMaterial) {
+        disposeGroundChunkTexturedMaterial(currentMaterial)
+      }
+      if (mesh.material !== nextMaterial) {
+        if (cachedEntry) {
+          retainGroundChunkTexturedMaterial(nextMaterial)
+        }
+        mesh.material = nextMaterial
+      }
+      syncGroundChunkTextureReadyFromMaterial(mesh, nextMaterial)
+      return
+    }
+
+    disposeGroundChunkSplatRuntimeState(splatRuntimeState)
+  }
+
   const signature = [
     'ground-chunk-albedo-v2',
     bundle?.albedo ?? 'none',
     bundle?.normal ?? 'none',
     bundle ? bundle.splatMaps.join('|') : 'none',
-    baseMaterialSignature,
-    resolveGroundTextureWindowSignature(safeWindow),
+    signatureBase,
+    windowSignature,
   ].join('|')
-  if (currentMaterial && isGroundChunkTexturedMaterial(currentMaterial) && hasGroundTextureSignature(currentMaterial, signature)) {
-    disposeGroundChunkSplatRuntimeState(splatRuntimeState)
-    if (mesh.material !== currentMaterial) {
-      mesh.material = currentMaterial
+  const cachedEntry = groundMaterialCache.get(signature)
+  if (cachedEntry) {
+    if (currentMaterial && currentMaterial !== baseMaterial && currentMaterial !== cachedEntry.material) {
+      disposeGroundChunkTexturedMaterial(currentMaterial)
     }
+    if (mesh.material !== cachedEntry.material) {
+      retainGroundChunkTexturedMaterial(cachedEntry.material)
+      mesh.material = cachedEntry.material
+    }
+    const cachedTyped = cachedEntry.material as THREE.MeshStandardMaterial & Record<string, unknown>
+    userData.groundChunkSplatMaps = Array.isArray(cachedTyped[GROUND_SPLAT_MASK_TEXTURES])
+      ? cachedTyped[GROUND_SPLAT_MASK_TEXTURES] as THREE.Texture[]
+      : []
+    disposeGroundChunkSplatRuntimeState(splatRuntimeState)
+    syncGroundChunkTextureReadyFromMaterial(mesh, cachedEntry.material)
     return
   }
 
@@ -7100,12 +7389,13 @@ function applyGroundTextureToChunkMesh(
     ? userData.groundChunkSplatMaps.filter((entry): entry is THREE.Texture => Boolean(entry))
     : []
   previousSplatMaps.forEach((texture) => {
-    if (isDynamicGroundTexture(texture)) {
-      disposeGroundTexture(texture)
-    }
+    releaseGroundTexture(texture)
   })
   if (activeSource) {
-    const texture = loadGroundTextureFromSource(activeSource, 'GroundChunkAlbedo', { flipY: false })
+    const texture = loadGroundTextureFromSource(activeSource, 'GroundChunkAlbedo', {
+      flipY: false,
+      textureSettingsKey: `${windowSignature}|albedo`,
+    })
     if (!texture) {
       throw new Error(`Failed to load baked albedo texture for ground chunk ${chunkKey}.`)
     }
@@ -7116,7 +7406,10 @@ function applyGroundTextureToChunkMesh(
     typed.map = texture
   }
   if (bundle?.normal) {
-    typed.normalMap = loadGroundTextureFromSource(bundle.normal, 'GroundChunkNormalMap', { flipY: false })
+    typed.normalMap = loadGroundTextureFromSource(bundle.normal, 'GroundChunkNormalMap', {
+      flipY: false,
+      textureSettingsKey: `${windowSignature}|normal`,
+    })
   }
   const splatMapSources = bundle?.splatMaps ?? []
   // These splat maps and layer metadata are preserved for future true shader-based splatting,
@@ -7127,12 +7420,18 @@ function applyGroundTextureToChunkMesh(
     groundChunkSplatMapIds: splatMapSources,
   }
   typed.needsUpdate = true
+  createGroundMaterialCacheEntry(signature, nextMaterial, [
+    typed.map ?? null,
+    typed.normalMap ?? null,
+    ...(Array.isArray(userData.groundChunkSplatMaps) ? userData.groundChunkSplatMaps as THREE.Texture[] : []),
+  ])
 
   if (currentMaterial && currentMaterial !== baseMaterial) {
     disposeGroundChunkTexturedMaterial(currentMaterial)
   }
   disposeGroundChunkSplatRuntimeState(splatRuntimeState)
   mesh.material = nextMaterial
+  syncGroundChunkTextureReadyFromMaterial(mesh, nextMaterial)
 }
 
 export function applyGroundTextureToRuntimeChunkMesh(params: {
@@ -7160,9 +7459,17 @@ export function applyGroundTextureToRuntimeChunkMesh(params: {
     ?? (chunkSpec
       ? resolveGroundSurfaceSharedKeyFromChunkMeta(chunkMeta?.chunkRow, chunkMeta?.chunkColumn)
       : resolveCompiledGroundTileChunkKey(rootUserData ?? {}, definition, compiledGroundTileKey, mesh))
+  const compiledManifest = rootUserData?.compiledGroundManifest as { revision?: unknown } | null | undefined
+  const compiledManifestRevision = Number(compiledManifest?.revision)
+  const cacheScopeSignature = [
+    typeof rootUserData?.compiledGroundBuildKey === 'string' ? rootUserData.compiledGroundBuildKey : '',
+    Number.isFinite(compiledManifestRevision)
+      ? Math.max(0, Math.trunc(compiledManifestRevision))
+      : 0,
+  ].join('|')
   const resolvedBaseMaterialSignature = typeof baseMaterialSignature === 'string' && baseMaterialSignature.trim().length > 0
-    ? baseMaterialSignature
-    : resolveGroundBaseMaterialSignature(baseMaterial)
+    ? `${baseMaterialSignature}|scope:${cacheScopeSignature}`
+    : `${resolveGroundBaseMaterialSignature(baseMaterial)}|scope:${cacheScopeSignature}`
 
   applyGroundTextureToChunkMesh(
     mesh,

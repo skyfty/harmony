@@ -6,7 +6,11 @@ import {
   type CompiledGroundRenderTileRecord,
 } from './compiledGround'
 import type { GroundDynamicMesh } from './core'
-import { applyGroundTextureToRuntimeChunkMesh } from './groundMesh'
+import {
+  applyGroundTextureToRuntimeChunkMesh,
+  isGroundChunkTextureReady,
+  onGroundChunkTextureReady,
+} from './groundMesh'
 
 type CompiledGroundRenderRuntime = {
   group: THREE.Group
@@ -466,7 +470,10 @@ export function collectLoadedCompiledGroundChunkKeys(
   }
   const recordMap = resolveCompiledGroundRenderTileRecordMap(manifest)
   const chunkKeys = new Set<string>()
-  runtime.meshes.forEach((_mesh, tileKey) => {
+  runtime.meshes.forEach((mesh, tileKey) => {
+    if (!isGroundChunkTextureReady(mesh)) {
+      return
+    }
     const record = recordMap.get(tileKey)
     if (!record) {
       return
@@ -727,6 +734,15 @@ export function syncCompiledGroundRenderTiles(params: SyncCompiledGroundRenderTi
           compiledGroundTileKey: record.key,
           rootUserData: (params.groundObject.userData as Record<string, unknown> | undefined) ?? null,
         })
+        if (!isGroundChunkTextureReady(mesh)) {
+          onGroundChunkTextureReady(mesh, () => {
+            const latestRuntime = renderRuntimeMap.get(params.groundObject)
+            if (!latestRuntime || latestRuntime.meshes.get(record.key) !== mesh) {
+              return
+            }
+            latestRuntime.loadedChunkKeysVersion += 1
+          })
+        }
         activeRuntime.group.add(mesh)
         activeRuntime.meshes.set(record.key, mesh)
         activeRuntime.loadedChunkKeysVersion += 1
