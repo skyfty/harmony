@@ -11535,24 +11535,78 @@ let lastPointerClientX = 0
 let lastPointerClientY = 0
 let lastPointerType: string | null = null
 let selectionPreviewVisibilityRaf: number | null = null
+const OVERLAY_UI_HIT_TEST_SELECTORS = [
+  '.v-overlay',
+  '.v-overlay__content',
+  '.viewport-toolbar',
+  '.popup-menu-card',
+  '.ground-tool-menu__card',
+  '.floor-shape-menu__card',
+  '.wall-shape-menu__card',
+  '.scatter-erase-menu__card',
+]
+const OVERLAY_UI_HIT_TEST_CACHE_MS = 32
+let overlayUiHitTestCacheExpiresAt = 0
+let overlayUiHitTestCacheRects: DOMRect[] = []
 
 function hasPlacementPreviewActive(): boolean {
   return selectionPreviewActive || nodePlacementPreviewActive
 }
 
+function isPointWithinRect(x: number, y: number, rect: DOMRect): boolean {
+  return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom
+}
+
+function collectOverlayUiHitTestRects(now: number): DOMRect[] {
+  if (overlayUiHitTestCacheExpiresAt > now) {
+    return overlayUiHitTestCacheRects
+  }
+  overlayUiHitTestCacheExpiresAt = now + OVERLAY_UI_HIT_TEST_CACHE_MS
+  if (typeof document === 'undefined') {
+    overlayUiHitTestCacheRects = []
+    return overlayUiHitTestCacheRects
+  }
+  const rects: DOMRect[] = []
+  for (const selector of OVERLAY_UI_HIT_TEST_SELECTORS) {
+    const elements = document.querySelectorAll(selector)
+    elements.forEach((element) => {
+      if (!(element instanceof HTMLElement)) {
+        return
+      }
+      const clientRects = element.getClientRects()
+      if (!clientRects.length) {
+        return
+      }
+      const rect = element.getBoundingClientRect()
+      if (rect.width <= 0 || rect.height <= 0) {
+        return
+      }
+      rects.push(rect)
+    })
+  }
+  overlayUiHitTestCacheRects = rects
+  return overlayUiHitTestCacheRects
+}
+
+function isPointInsideOverlayUi(x: number, y: number): boolean {
+  const now = typeof performance !== 'undefined' ? performance.now() : Date.now()
+  const rects = collectOverlayUiHitTestRects(now)
+  return rects.some((rect) => isPointWithinRect(x, y, rect))
+}
+
 function isStrictPointOnCanvas(x: number, y: number): boolean {
   const canvas = canvasRef.value
-  if (!canvas || typeof document === 'undefined') {
+  if (!canvas) {
     return false
   }
   if (!Number.isFinite(x) || !Number.isFinite(y)) {
     return false
   }
-  try {
-    return document.elementFromPoint(x, y) === canvas
-  } catch {
+  const rect = canvas.getBoundingClientRect()
+  if (!isPointWithinRect(x, y, rect)) {
     return false
   }
+  return !isPointInsideOverlayUi(x, y)
 }
 
 function stopSelectionPreviewVisibilityMonitor(): void {

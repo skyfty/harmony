@@ -53,6 +53,15 @@ const DEFAULT_GROUND_CHUNK_CELLS = 100
 const DEFAULT_GROUND_CHUNK_RADIUS_METERS = 200
 const GROUND_TRIANGLE_SLICE_EPSILON = 1e-6
 const GROUND_TRIANGLE_SLICE_PLANAR_TOLERANCE = 0.004
+const GROUND_TRIANGLE_SLICE_MAX_PLANAR_REGION_CELLS = 4096
+const GROUND_TRIANGLE_SLICE_MAX_COVERED_CELLS = 6000
+const GROUND_TRIANGLE_SLICE_MAX_FRAGMENT_COUNT = 8192
+const GROUND_TRIANGLE_SLICE_MAX_INTERSECTION_BUDGET = 12000
+const GROUND_TRIANGLE_SLICE_MAX_PLANAR_REGION_RATIO = 0.45
+const GROUND_TRIANGLE_SLICE_MAX_TRIANGLE_CELL_RATIO = 0.35
+const GROUND_TRIANGLE_SLICE_DEBUG_ENABLED = typeof window !== 'undefined'
+  && /^(localhost|127(?:\.\d+){3}|0\.0\.0\.0)$/u.test(window.location.hostname)
+const GROUND_TRIANGLE_SLICE_SLOW_THRESHOLD_MS = 12
 const GROUND_FLAT_TILING_MIN_RADIUS_CHUNKS = 32
 const GROUND_FLAT_TILING_BUFFER_MIN_CHUNKS = 8
 const GROUND_FLAT_TILING_BUFFER_FACTOR = 0.5
@@ -60,6 +69,21 @@ const GROUND_FLAT_TILING_RELEASE_BUFFER_MIN_CHUNKS = 12
 const GROUND_FLAT_TILING_RELEASE_BUFFER_FACTOR = 0.35
 const GROUND_FLAT_CHUNK_ASYNC_BUILD_BATCH_SIZE = 4096
 const GROUND_LOCAL_EDIT_TILE_COVERAGE_BUCKET_CHUNKS = 4
+
+function nowForGroundTextureDebug(): number {
+  return typeof performance !== 'undefined' ? performance.now() : Date.now()
+}
+
+function logGroundTriangleSliceDebug(message: string, details?: Record<string, unknown>): void {
+  if (!GROUND_TRIANGLE_SLICE_DEBUG_ENABLED) {
+    return
+  }
+  if (details) {
+    console.info(`[GroundSlice] ${message}`, details)
+    return
+  }
+  console.info(`[GroundSlice] ${message}`)
+}
 
 type GroundLocalEditTileCache = {
   tiles: GroundLocalEditTileData[]
@@ -113,6 +137,17 @@ type GroundPlanarSliceRegion = {
 export type GroundTriangleSliceMesh = {
   vertices: Array<{ x: number; y: number; z: number }>
   indices: number[]
+  mode?: 'exact' | 'approx'
+  stats?: {
+    coveredCellCount: number
+    planarRegionCount: number
+    triangleCellCount: number
+    intersectionBudget: number
+    mergePlanarRegions: boolean
+    degraded: boolean
+    reason?: 'footprint-too-small' | 'fragment-budget' | 'fragmentation' | 'covered-cell-budget'
+    durationMs?: number
+  }
 }
 
 type GroundRuntimeState = {
@@ -3230,10 +3265,12 @@ function resolveGroundPlanarSliceRegions(
   startColumn: number,
   endColumn: number,
   tolerance: number,
-): { planarRegions: GroundPlanarSliceRegion[]; triangleCells: Array<{ row: number; column: number }> } {
+  maxFragments: number = Number.POSITIVE_INFINITY,
+): { planarRegions: GroundPlanarSliceRegion[]; triangleCells: Array<{ row: number; column: number }>; aborted: boolean } {
   const visited = new Set<string>()
   const planarRegions: GroundPlanarSliceRegion[] = []
   const triangleCells: Array<{ row: number; column: number }> = []
+  let aborted = false
 
   const isVisited = (row: number, column: number) => visited.has(`${row}:${column}`)
   const markVisited = (row0: number, row1: number, column0: number, column1: number) => {
@@ -3259,6 +3296,10 @@ function resolveGroundPlanarSliceRegions(
       if (isVisited(row, column)) {
         continue
       }
+      if ((planarRegions.length + triangleCells.length) >= maxFragments) {
+        aborted = true
+        break
+      }
 
       if (!regionMatchesGroundPlane(definition, row, row + 1, column, column + 1, tolerance)) {
         visited.add(`${row}:${column}`)
@@ -3280,13 +3321,17 @@ function resolveGroundPlanarSliceRegions(
       planarRegions.push(region)
       markVisited(row, regionEndRow, column, regionEndColumn)
     }
+    if (aborted) {
+      break
+    }
   }
 
-  return { planarRegions, triangleCells }
+  return { planarRegions, triangleCells, aborted }
 }
 
-function appendGroundSliceClip(
-  clip: PolygonClippingMultiPolygon,
+function appendGroundSlicePolygon(
+  contour: THREE.Vector2[],
+  holes: THREE.Vector2[][],
   resolveHeight: (x: number, z: number) => number,
   vertices: Array<{ x: number; y: number; z: number }>,
   indices: number[],
@@ -3308,6 +3353,61 @@ function appendGroundSliceClip(
     return nextIndex
   }
 
+  if (contour.length < 3) {
+    return
+  }
+
+  const faces = THREE.ShapeUtils.triangulateShape(contour, holes)
+  if (!Array.isArray(faces) || !faces.length) {
+    return
+  }
+
+  const triangulationPoints: THREE.Vector2[] = [...contour]
+  holes.forEach((hole) => {
+    triangulationPoints.push(...hole)
+  })
+
+  faces.forEach((face) => {
+    if (!Array.isArray(face) || face.length !== 3) {
+      return
+    }
+    const p0 = triangulationPoints[face[0]!]
+    const p1 = triangulationPoints[face[1]!]
+    const p2 = triangulationPoints[face[2]!]
+    if (!p0 || !p1 || !p2) {
+      return
+    }
+    const i0 = resolveVertexIndex(p0)
+    const i1 = resolveVertexIndex(p1)
+    const i2 = resolveVertexIndex(p2)
+    if (i0 === i1 || i1 === i2 || i0 === i2) {
+      return
+    }
+    const area = new THREE.Vector3(
+      vertices[i1]!.x - vertices[i0]!.x,
+      0,
+      vertices[i1]!.z - vertices[i0]!.z,
+    ).cross(
+      new THREE.Vector3(
+        vertices[i2]!.x - vertices[i0]!.x,
+        0,
+        vertices[i2]!.z - vertices[i0]!.z,
+      ),
+    ).y
+    if (Math.abs(area) <= GROUND_TRIANGLE_SLICE_EPSILON) {
+      return
+    }
+    indices.push(i0, i1, i2)
+  })
+}
+
+function appendGroundSliceClip(
+  clip: PolygonClippingMultiPolygon,
+  resolveHeight: (x: number, z: number) => number,
+  vertices: Array<{ x: number; y: number; z: number }>,
+  indices: number[],
+  vertexIndexByKey: Map<string, number>,
+): void {
   if (!Array.isArray(clip) || !clip.length) {
     return
   }
@@ -3328,49 +3428,168 @@ function appendGroundSliceClip(
       .map((ring) => ensureGroundLoopWinding(groundClippingRingToVector2Loop(ring as PolygonClippingRing), false))
       .filter((ring) => ring.length >= 3)
 
-    const faces = THREE.ShapeUtils.triangulateShape(contour, holes)
-    if (!Array.isArray(faces) || !faces.length) {
-      continue
-    }
-
-    const triangulationPoints: THREE.Vector2[] = [...contour]
-    holes.forEach((hole) => {
-      triangulationPoints.push(...hole)
-    })
-
-    faces.forEach((face) => {
-      if (!Array.isArray(face) || face.length !== 3) {
-        return
-      }
-      const p0 = triangulationPoints[face[0]!]
-      const p1 = triangulationPoints[face[1]!]
-      const p2 = triangulationPoints[face[2]!]
-      if (!p0 || !p1 || !p2) {
-        return
-      }
-      const i0 = resolveVertexIndex(p0)
-      const i1 = resolveVertexIndex(p1)
-      const i2 = resolveVertexIndex(p2)
-      if (i0 === i1 || i1 === i2 || i0 === i2) {
-        return
-      }
-      const area = new THREE.Vector3(
-        vertices[i1]!.x - vertices[i0]!.x,
-        0,
-        vertices[i1]!.z - vertices[i0]!.z,
-      ).cross(
-        new THREE.Vector3(
-          vertices[i2]!.x - vertices[i0]!.x,
-          0,
-          vertices[i2]!.z - vertices[i0]!.z,
-        ),
-      ).y
-      if (Math.abs(area) <= GROUND_TRIANGLE_SLICE_EPSILON) {
-        return
-      }
-      indices.push(i0, i1, i2)
-    })
+    appendGroundSlicePolygon(contour, holes, resolveHeight, vertices, indices, vertexIndexByKey)
   }
+}
+
+function computeGroundLoopBounds(points: THREE.Vector2[]): { minX: number; maxX: number; minZ: number; maxZ: number } | null {
+  if (!points.length) {
+    return null
+  }
+  let minX = Number.POSITIVE_INFINITY
+  let maxX = Number.NEGATIVE_INFINITY
+  let minZ = Number.POSITIVE_INFINITY
+  let maxZ = Number.NEGATIVE_INFINITY
+  points.forEach((point) => {
+    minX = Math.min(minX, point.x)
+    maxX = Math.max(maxX, point.x)
+    minZ = Math.min(minZ, point.y)
+    maxZ = Math.max(maxZ, point.y)
+  })
+  return { minX, maxX, minZ, maxZ }
+}
+
+function groundSliceBoundsOverlap(
+  a: { minX: number; maxX: number; minZ: number; maxZ: number },
+  b: { minX: number; maxX: number; minZ: number; maxZ: number },
+): boolean {
+  return !(a.maxX < b.minX || a.minX > b.maxX || a.maxZ < b.minZ || a.minZ > b.maxZ)
+}
+
+function groundSlicePointInPolygon(point: THREE.Vector2, polygon: THREE.Vector2[]): boolean {
+  let inside = false
+  for (let index = 0, previous = polygon.length - 1; index < polygon.length; previous = index, index += 1) {
+    const currentPoint = polygon[index]!
+    const previousPoint = polygon[previous]!
+    const intersects = ((currentPoint.y > point.y) !== (previousPoint.y > point.y))
+      && (point.x < ((previousPoint.x - currentPoint.x) * (point.y - currentPoint.y)) / ((previousPoint.y - currentPoint.y) || 1e-12) + currentPoint.x)
+    if (intersects) {
+      inside = !inside
+    }
+  }
+  return inside
+}
+
+function groundSliceCross2d(a: THREE.Vector2, b: THREE.Vector2, c: THREE.Vector2): number {
+  return ((b.x - a.x) * (c.y - a.y)) - ((b.y - a.y) * (c.x - a.x))
+}
+
+function groundSlicePointOnSegment(point: THREE.Vector2, a: THREE.Vector2, b: THREE.Vector2): boolean {
+  const cross = groundSliceCross2d(a, b, point)
+  if (Math.abs(cross) > 1e-8) {
+    return false
+  }
+  const minX = Math.min(a.x, b.x) - 1e-8
+  const maxX = Math.max(a.x, b.x) + 1e-8
+  const minZ = Math.min(a.y, b.y) - 1e-8
+  const maxZ = Math.max(a.y, b.y) + 1e-8
+  return point.x >= minX && point.x <= maxX && point.y >= minZ && point.y <= maxZ
+}
+
+function groundSliceOrientation(a: THREE.Vector2, b: THREE.Vector2, c: THREE.Vector2): number {
+  const value = groundSliceCross2d(a, b, c)
+  if (Math.abs(value) <= 1e-8) {
+    return 0
+  }
+  return value > 0 ? 1 : -1
+}
+
+function groundSliceSegmentsIntersect(a1: THREE.Vector2, a2: THREE.Vector2, b1: THREE.Vector2, b2: THREE.Vector2): boolean {
+  const o1 = groundSliceOrientation(a1, a2, b1)
+  const o2 = groundSliceOrientation(a1, a2, b2)
+  const o3 = groundSliceOrientation(b1, b2, a1)
+  const o4 = groundSliceOrientation(b1, b2, a2)
+  if (o1 !== o2 && o3 !== o4) {
+    return true
+  }
+  return (o1 === 0 && groundSlicePointOnSegment(b1, a1, a2))
+    || (o2 === 0 && groundSlicePointOnSegment(b2, a1, a2))
+    || (o3 === 0 && groundSlicePointOnSegment(a1, b1, b2))
+    || (o4 === 0 && groundSlicePointOnSegment(a2, b1, b2))
+}
+
+function groundSliceEdgesIntersect(loopA: THREE.Vector2[], loopB: THREE.Vector2[]): boolean {
+  for (let indexA = 0; indexA < loopA.length; indexA += 1) {
+    const a0 = loopA[indexA]!
+    const a1 = loopA[(indexA + 1) % loopA.length]!
+    for (let indexB = 0; indexB < loopB.length; indexB += 1) {
+      const b0 = loopB[indexB]!
+      const b1 = loopB[(indexB + 1) % loopB.length]!
+      if (groundSliceSegmentsIntersect(a0, a1, b0, b1)) {
+        return true
+      }
+    }
+  }
+  return false
+}
+
+function groundSliceLoopContainedByPolygon(loop: THREE.Vector2[], polygon: THREE.Vector2[]): boolean {
+  if (!loop.length || !polygon.length) {
+    return false
+  }
+  if (loop.some((point) => !groundSlicePointInPolygon(point, polygon) && !polygon.some((vertex) => point.distanceToSquared(vertex) <= 1e-12))) {
+    return false
+  }
+  return !groundSliceEdgesIntersect(loop, polygon)
+}
+
+function buildGroundSliceTriangleBounds(triangle: GroundCellTriangleDefinition): { minX: number; maxX: number; minZ: number; maxZ: number } {
+  const [a, b, c] = triangle.vertices
+  return {
+    minX: Math.min(a.x, b.x, c.x),
+    maxX: Math.max(a.x, b.x, c.x),
+    minZ: Math.min(a.y, b.y, c.y),
+    maxZ: Math.max(a.y, b.y, c.y),
+  }
+}
+
+function buildGroundSliceStats(
+  coveredCellCount: number,
+  planarRegionCount: number,
+  triangleCellCount: number,
+  mergePlanarRegions: boolean,
+  degraded: boolean,
+  reason?: NonNullable<GroundTriangleSliceMesh['stats']>['reason'],
+  durationMs?: number,
+): NonNullable<GroundTriangleSliceMesh['stats']> {
+  return {
+    coveredCellCount,
+    planarRegionCount,
+    triangleCellCount,
+    intersectionBudget: planarRegionCount + (triangleCellCount * 2),
+    mergePlanarRegions,
+    degraded,
+    reason,
+    durationMs,
+  }
+}
+
+function shouldDegradeGroundTriangleSlice(
+  coveredCellCount: number,
+  planarRegionCount: number,
+  triangleCellCount: number,
+  aborted: boolean,
+): NonNullable<GroundTriangleSliceMesh['stats']>['reason'] | null {
+  if (coveredCellCount > GROUND_TRIANGLE_SLICE_MAX_COVERED_CELLS) {
+    return 'covered-cell-budget'
+  }
+  if (aborted) {
+    return 'fragment-budget'
+  }
+  const intersectionBudget = planarRegionCount + (triangleCellCount * 2)
+  if (intersectionBudget > GROUND_TRIANGLE_SLICE_MAX_INTERSECTION_BUDGET) {
+    return 'fragment-budget'
+  }
+  if (coveredCellCount <= 0) {
+    return null
+  }
+  if ((planarRegionCount / coveredCellCount) > GROUND_TRIANGLE_SLICE_MAX_PLANAR_REGION_RATIO) {
+    return 'fragmentation'
+  }
+  if ((triangleCellCount / coveredCellCount) > GROUND_TRIANGLE_SLICE_MAX_TRIANGLE_CELL_RATIO) {
+    return 'fragmentation'
+  }
+  return null
 }
 
 export function sampleGroundTriangleHeight(definition: GroundDynamicMesh, x: number, z: number): number {
@@ -3443,6 +3662,7 @@ export function sliceGroundTrianglesByPolygon(
   polygon: Array<THREE.Vector2 | { x: number; y: number } | [number, number]>,
   options: { mergePlanarRegions?: boolean } = {},
 ): GroundTriangleSliceMesh {
+  const startedAt = nowForGroundTextureDebug()
   const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
   const footprint = sanitizeGroundClippingLoop(
     polygon.map((entry) => {
@@ -3456,7 +3676,12 @@ export function sliceGroundTrianglesByPolygon(
     }),
   )
   if (footprint.length < 3) {
-    return { vertices: [], indices: [] }
+    return {
+      vertices: [],
+      indices: [],
+      mode: 'exact',
+      stats: buildGroundSliceStats(0, 0, 0, options.mergePlanarRegions !== false, false, 'footprint-too-small', nowForGroundTextureDebug() - startedAt),
+    }
   }
 
   const gridSize = resolveGroundWorkingGridSize(runtimeDefinition)
@@ -3482,14 +3707,17 @@ export function sliceGroundTrianglesByPolygon(
   const endColumn = clampInclusive(Math.floor((maxX - bounds.minX) / cellSize), 0, Math.max(0, columns - 1))
   const startRow = clampInclusive(Math.floor((minZ - bounds.minZ) / cellSize), 0, Math.max(0, rows - 1))
   const endRow = clampInclusive(Math.floor((maxZ - bounds.minZ) / cellSize), 0, Math.max(0, rows - 1))
+  const coveredCellCount = Math.max(0, endColumn - startColumn + 1) * Math.max(0, endRow - startRow + 1)
 
   const footprintPolygon: PolygonClippingMultiPolygon = [[vector2LoopToGroundClippingRing(footprint)]]
+  const footprintBounds = { minX, maxX, minZ, maxZ }
   const vertices: Array<{ x: number; y: number; z: number }> = []
   const indices: number[] = []
   const vertexIndexByKey = new Map<string, number>()
 
-  const mergePlanarRegions = options.mergePlanarRegions !== false
-  const { planarRegions, triangleCells } = mergePlanarRegions
+  const allowPlanarRegionMerge = options.mergePlanarRegions !== false
+    && coveredCellCount <= GROUND_TRIANGLE_SLICE_MAX_PLANAR_REGION_CELLS
+  const { planarRegions, triangleCells, aborted } = allowPlanarRegionMerge
     ? resolveGroundPlanarSliceRegions(
       runtimeDefinition,
       startRow,
@@ -3497,6 +3725,7 @@ export function sliceGroundTrianglesByPolygon(
       startColumn,
       endColumn,
       GROUND_TRIANGLE_SLICE_PLANAR_TOLERANCE,
+      GROUND_TRIANGLE_SLICE_MAX_FRAGMENT_COUNT,
     )
     : {
       planarRegions: [] as GroundPlanarSliceRegion[],
@@ -3505,12 +3734,70 @@ export function sliceGroundTrianglesByPolygon(
           row,
           column: columnOffset + startColumn,
         }))),
+      aborted: false,
     }
+  const degradeReason = shouldDegradeGroundTriangleSlice(
+    coveredCellCount,
+    planarRegions.length,
+    triangleCells.length,
+    aborted,
+  )
+  if (degradeReason) {
+    const durationMs = nowForGroundTextureDebug() - startedAt
+    const stats = buildGroundSliceStats(
+      coveredCellCount,
+      planarRegions.length,
+      triangleCells.length,
+      allowPlanarRegionMerge,
+      true,
+      degradeReason,
+      durationMs,
+    )
+    if (durationMs >= GROUND_TRIANGLE_SLICE_SLOW_THRESHOLD_MS || degradeReason) {
+      logGroundTriangleSliceDebug('Degraded sliceGroundTrianglesByPolygon to approximate mode', {
+        coveredCellCount,
+        planarRegionCount: planarRegions.length,
+        triangleCellCount: triangleCells.length,
+        intersectionBudget: stats.intersectionBudget,
+        mergePlanarRegions: allowPlanarRegionMerge,
+        reason: degradeReason,
+        durationMs: Number(durationMs.toFixed(2)),
+      })
+    }
+    return {
+      vertices: [],
+      indices: [],
+      mode: 'approx',
+      stats,
+    }
+  }
 
   planarRegions.forEach((region) => {
+    const regionPolygon = buildGroundPlanarSliceRegionPolygon(runtimeDefinition, region)
+    const regionBounds = computeGroundLoopBounds(regionPolygon)
+    if (!regionBounds || !groundSliceBoundsOverlap(footprintBounds, regionBounds)) {
+      return
+    }
+    if (groundSliceLoopContainedByPolygon(regionPolygon, footprint)) {
+      appendGroundSlicePolygon(
+        regionPolygon,
+        [],
+        (x, z) => {
+          const localColumn = (x - bounds.minX) / cellSize
+          const localRow = (z - bounds.minZ) / cellSize
+          return region.h00
+            + region.slopeX * (localColumn - region.startColumn)
+            + region.slopeZ * (localRow - region.startRow)
+        },
+        vertices,
+        indices,
+        vertexIndexByKey,
+      )
+      return
+    }
     const clip = polygonClipping.intersection(
       footprintPolygon as any,
-      [[vector2LoopToGroundClippingRing(buildGroundPlanarSliceRegionPolygon(runtimeDefinition, region))]] as any,
+      [[vector2LoopToGroundClippingRing(regionPolygon)]] as any,
     ) as PolygonClippingMultiPolygon
     appendGroundSliceClip(
       clip,
@@ -3530,6 +3817,24 @@ export function sliceGroundTrianglesByPolygon(
   triangleCells.forEach(({ row, column }) => {
     const triangles = resolveGroundCellTriangleDefinitions(runtimeDefinition, row, column)
     triangles.forEach((triangle) => {
+      const triangleBounds = buildGroundSliceTriangleBounds(triangle)
+      if (!groundSliceBoundsOverlap(footprintBounds, triangleBounds)) {
+        return
+      }
+      if (groundSliceLoopContainedByPolygon(triangle.vertices, footprint)) {
+        appendGroundSlicePolygon(
+          triangle.vertices,
+          [],
+          (x, z) => {
+            const sampled = interpolateGroundTrianglePlaneHeight(triangle, x, z)
+            return Number.isFinite(sampled) ? (sampled as number) : sampleGroundTriangleHeight(runtimeDefinition, x, z)
+          },
+          vertices,
+          indices,
+          vertexIndexByKey,
+        )
+        return
+      }
       const clip = polygonClipping.intersection(
         footprintPolygon as any,
         [[vector2LoopToGroundClippingRing(triangle.vertices)]] as any,
@@ -3547,7 +3852,29 @@ export function sliceGroundTrianglesByPolygon(
     })
   })
 
-  return { vertices, indices }
+  const durationMs = nowForGroundTextureDebug() - startedAt
+  const stats = buildGroundSliceStats(
+    coveredCellCount,
+    planarRegions.length,
+    triangleCells.length,
+    allowPlanarRegionMerge,
+    false,
+    undefined,
+    durationMs,
+  )
+  if (durationMs >= GROUND_TRIANGLE_SLICE_SLOW_THRESHOLD_MS) {
+    logGroundTriangleSliceDebug('Completed exact ground slice', {
+      coveredCellCount,
+      planarRegionCount: planarRegions.length,
+      triangleCellCount: triangleCells.length,
+      intersectionBudget: stats.intersectionBudget,
+      mergePlanarRegions: allowPlanarRegionMerge,
+      vertexCount: vertices.length,
+      triangleIndexCount: indices.length,
+      durationMs: Number(durationMs.toFixed(2)),
+    })
+  }
+  return { vertices, indices, mode: 'exact', stats }
 }
 
 export function sampleGroundHeight(definition: GroundDynamicMesh, x: number, z: number): number {
