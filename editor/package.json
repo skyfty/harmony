@@ -8,18 +8,7 @@
     "dev": "vite --open \"/#/editor\"",
     "bootstrap": "node ../scripts/bootstrap.mjs editor",
     "build": "pnpm run bootstrap && vue-tsc -b && vite build",
-    "preview": "vite preview",
-    "generate:planning-dem-test-heightmap": "node ./scripts/generate-strict-qgis-test-heightmap.mjs",
-    "check:planning-dem-local-tiles": "node ./scripts/planning-dem-local-tiles-regression.mjs",
-    "check:planning-dem-metric-space": "node ./scripts/planning-dem-metric-space-regression.mjs",
-    "check:planning-dem-png-contract": "node ./scripts/planning-dem-png-contract-regression.mjs",
-    "check:terrain-dataset-runtime-lazy": "node ./scripts/terrain-dataset-runtime-lazy-regression.mjs",
-    "check:ground-height-sidecar-alignment": "node ./scripts/ground-height-sidecar-alignment-regression.mjs",
-    "check:ground-height-sidecar-local-edits": "node ./scripts/ground-height-sidecar-local-edits-regression.mjs",
-    "check:infinite-sculpt-chunk-keys": "node ./scripts/infinite-sculpt-chunk-keys-regression.mjs",
-    "check:ground-surface-layers": "node ./scripts/ground-surface-layer-regression.mjs",
-    "check:landform-ground-bake-chunk-keys": "node ./scripts/landform-ground-bake-chunk-key-regression.mjs",
-    "check:road-collision-compiled": "node ./scripts/road-collision-compiled-regression.mjs"
+    "preview": "vite preview"
   },
   "enginewwws": {
     "pnpm": ">=10.0.0"

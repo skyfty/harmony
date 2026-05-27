@@ -4263,10 +4263,85 @@ function computeHeightfieldNormals(
   }
 }
 
+type GroundHeightSampleCache = Map<number, Map<number, number>>
+
+type GroundNormalScratch = {
+  normalA: THREE.Vector3
+  normalB: THREE.Vector3
+  blended: THREE.Vector3
+  boundaryNormal: THREE.Vector3
+  cornerNormalA: THREE.Vector3
+  cornerNormalB: THREE.Vector3
+  cornerNormalC: THREE.Vector3
+  cornerNormalD: THREE.Vector3
+  cornerAverage: THREE.Vector3
+}
+
+function createGroundNormalScratch(): GroundNormalScratch {
+  return {
+    normalA: new THREE.Vector3(),
+    normalB: new THREE.Vector3(),
+    blended: new THREE.Vector3(),
+    boundaryNormal: new THREE.Vector3(),
+    cornerNormalA: new THREE.Vector3(),
+    cornerNormalB: new THREE.Vector3(),
+    cornerNormalC: new THREE.Vector3(),
+    cornerNormalD: new THREE.Vector3(),
+    cornerAverage: new THREE.Vector3(),
+  }
+}
+
+function sampleGroundHeightCached(
+  definition: GroundDynamicMesh,
+  x: number,
+  z: number,
+  cache: GroundHeightSampleCache,
+): number {
+  const xCache = cache.get(x)
+  const cached = xCache?.get(z)
+  if (typeof cached === 'number' && Number.isFinite(cached)) {
+    return cached
+  }
+  const height = sampleGroundHeight(definition, x, z)
+  if (xCache) {
+    xCache.set(z, height)
+  } else {
+    cache.set(x, new Map<number, number>([[z, height]]))
+  }
+  return height
+}
+
+function sampleGroundNormalWithHeightCache(
+  definition: GroundRuntimeDynamicMesh,
+  x: number,
+  z: number,
+  target: THREE.Vector3 | undefined,
+  heightCache: GroundHeightSampleCache,
+): THREE.Vector3 {
+  const result = target ?? new THREE.Vector3()
+  const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
+  const delta = Math.max(0.01, cellSize * 0.5)
+  const heightL = sampleGroundHeightCached(definition, x - delta, z, heightCache)
+  const heightR = sampleGroundHeightCached(definition, x + delta, z, heightCache)
+  const heightF = sampleGroundHeightCached(definition, x, z + delta, heightCache)
+  const heightB = sampleGroundHeightCached(definition, x, z - delta, heightCache)
+  const dx = heightL - heightR
+  const dz = heightB - heightF
+  result.set(dx, delta * 2, dz)
+  if (result.lengthSq() === 0) {
+    result.set(0, 1, 0)
+  } else {
+    result.normalize()
+  }
+  return result
+}
+
 function computeSampledGroundNormals(
   definition: GroundRuntimeDynamicMesh,
   positions: Float32Array,
   normals: Float32Array,
+  heightCache: GroundHeightSampleCache,
+  scratch: GroundNormalScratch,
 ): void {
   const normal = new THREE.Vector3()
   const vertexCount = Math.min(
@@ -4277,7 +4352,7 @@ function computeSampledGroundNormals(
     const offset = vertexIndex * 3
     const x = positions[offset] ?? 0
     const z = positions[offset + 2] ?? 0
-    sampleGroundSeamAwareNormal(definition, x, z, normal)
+    sampleGroundSeamAwareNormal(definition, x, z, normal, heightCache, scratch)
     normals[offset] = normal.x
     normals[offset + 1] = normal.y
     normals[offset + 2] = normal.z
@@ -4300,6 +4375,8 @@ function buildGroundChunkGeometry(definition: GroundRuntimeDynamicMesh, spec: Gr
   const normals = new Float32Array(vertexCount * 3)
   const uvs = new Float32Array(vertexCount * 2)
   const indices = new Uint32Array(chunkColumns * chunkRows * 6)
+  const heightCache: GroundHeightSampleCache = new Map<number, Map<number, number>>()
+  const normalScratch = createGroundNormalScratch()
 
   const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1
   const chunkSizeMeters = resolveInfiniteChunkSizeMeters(definition)
@@ -4326,8 +4403,8 @@ function buildGroundChunkGeometry(definition: GroundRuntimeDynamicMesh, spec: Gr
     for (let localColumn = 0; localColumn <= chunkColumns; localColumn += 1) {
       const x = startX + localColumn * layout.stepX
       const height = useWorldSpaceHeightSampling
-        ? sampleGroundHeight(definition, x, z)
-        : heightValues?.[localRow * heightStride + localColumn] ?? sampleGroundHeight(definition, x, z)
+        ? sampleGroundHeightCached(definition, x, z, heightCache)
+        : heightValues?.[localRow * heightStride + localColumn] ?? sampleGroundHeightCached(definition, x, z, heightCache)
       const u = chunkColumns === 0 ? 0 : localColumn / chunkColumns
       const v = chunkRows === 0 ? 0 : 1 - (localRow / chunkRows)
 
@@ -4370,7 +4447,7 @@ function buildGroundChunkGeometry(definition: GroundRuntimeDynamicMesh, spec: Gr
   geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2))
   geometry.setIndex(new THREE.BufferAttribute(indices, 1))
   if (useWorldSpaceHeightSampling || shouldUseGroundLocalEditTiles(definition)) {
-    computeSampledGroundNormals(definition, positions, normals)
+    computeSampledGroundNormals(definition, positions, normals, heightCache, normalScratch)
   } else {
     computeHeightfieldNormals(positions, normals, chunkRows, chunkColumns, layout.stepX, layout.stepZ)
   }
@@ -7563,6 +7640,8 @@ function updateChunkGeometry(geometry: THREE.BufferGeometry, definition: GroundR
   const chunkOrigin = resolveInfiniteGroundGridOriginMeters(chunkSizeMeters)
   const startX = chunkOrigin + spec.startColumn * cellSize
   const startZ = chunkOrigin + spec.startRow * cellSize
+  const heightCache: GroundHeightSampleCache = new Map<number, Map<number, number>>()
+  const normalScratch = createGroundNormalScratch()
   const importedLocalEditCellSize = resolveGroundChunkLocalEditCellSize(definition, spec)
   const useWorldSpaceHeightSampling = importedLocalEditCellSize > (Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1)
   const heightRegion = useWorldSpaceHeightSampling
@@ -7582,8 +7661,8 @@ function updateChunkGeometry(geometry: THREE.BufferGeometry, definition: GroundR
     for (let localColumn = 0; localColumn <= chunkColumns; localColumn += 1) {
       const x = startX + localColumn * layout.stepX
       const height = useWorldSpaceHeightSampling
-        ? sampleGroundHeight(definition, x, z)
-        : heightValues?.[localRow * heightStride + localColumn] ?? sampleGroundHeight(definition, x, z)
+        ? sampleGroundHeightCached(definition, x, z, heightCache)
+        : heightValues?.[localRow * heightStride + localColumn] ?? sampleGroundHeightCached(definition, x, z, heightCache)
       const u = chunkColumns === 0 ? 0 : localColumn / chunkColumns
       const v = chunkRows === 0 ? 0 : 1 - (localRow / chunkRows)
       positionAttr.setXYZ(vertexIndex, x, height, z)
@@ -7593,7 +7672,7 @@ function updateChunkGeometry(geometry: THREE.BufferGeometry, definition: GroundR
   }
   positionAttr.needsUpdate = true
   if (useWorldSpaceHeightSampling || shouldUseGroundLocalEditTiles(definition)) {
-    computeSampledGroundNormals(definition, positionAttr.array as Float32Array, normalAttr.array as Float32Array)
+    computeSampledGroundNormals(definition, positionAttr.array as Float32Array, normalAttr.array as Float32Array, heightCache, normalScratch)
   } else {
     computeHeightfieldNormals(positionAttr.array as Float32Array, normalAttr.array as Float32Array, chunkRows, chunkColumns, layout.stepX, layout.stepZ)
   }
@@ -7631,6 +7710,8 @@ function updateChunkGeometryRegion(
   const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1
   const startX = resolveInfiniteGroundGridOriginMeters(resolveInfiniteChunkSizeMeters(definition)) + spec.startColumn * cellSize
   const startZ = resolveInfiniteGroundGridOriginMeters(resolveInfiniteChunkSizeMeters(definition)) + spec.startRow * cellSize
+  const heightCache: GroundHeightSampleCache = new Map<number, Map<number, number>>()
+  const normalScratch = createGroundNormalScratch()
 
   const regionStartRow = clampInclusive(region.minRow, spec.startRow, spec.startRow + spec.rows)
   const regionEndRow = clampInclusive(region.maxRow, spec.startRow, spec.startRow + spec.rows)
@@ -7651,14 +7732,14 @@ function updateChunkGeometryRegion(
     for (let localColumn = startLocalColumn; localColumn <= endLocalColumn; localColumn += 1) {
       const x = startX + localColumn * layout.stepX
       const vertexIndex = localRow * vertexColumns + localColumn
-      const height = sampleGroundHeight(definition, x, z)
+      const height = sampleGroundHeightCached(definition, x, z, heightCache)
       positionAttr.setXYZ(vertexIndex, x, height, z)
     }
   }
   positionAttr.needsUpdate = true
   if (options.computeNormals !== false) {
     if (shouldUseGroundLocalEditTiles(definition)) {
-      computeSampledGroundNormals(definition, positionAttr.array as Float32Array, normalAttr.array as Float32Array)
+      computeSampledGroundNormals(definition, positionAttr.array as Float32Array, normalAttr.array as Float32Array, heightCache, normalScratch)
     } else {
       computeHeightfieldNormals(positionAttr.array as Float32Array, normalAttr.array as Float32Array, chunkRows, chunkColumns, layout.stepX, layout.stepZ)
     }
@@ -8974,8 +9055,11 @@ export function setInfiniteGroundHiddenChunkKeys(
     x: number,
     z: number,
     target?: THREE.Vector3,
+    heightCache?: GroundHeightSampleCache,
+    scratch?: GroundNormalScratch,
   ): THREE.Vector3 {
-    const result = sampleGroundNormal(definition, x, z, target)
+    const workingHeightCache = heightCache ?? new Map<number, Map<number, number>>()
+    const result = sampleGroundNormalWithHeightCache(definition, x, z, target, workingHeightCache)
     if (!shouldUseGroundLocalEditTiles(definition)) {
       return result
     }
@@ -8992,20 +9076,22 @@ export function setInfiniteGroundHiddenChunkKeys(
       return result
     }
 
+    const localScratch = scratch ?? createGroundNormalScratch()
+    const {
+      normalA,
+      normalB,
+      blended,
+      boundaryNormal,
+      cornerNormalA,
+      cornerNormalB,
+      cornerNormalC,
+      cornerNormalD,
+      cornerAverage,
+    } = localScratch
     const localEditCellSize = tileSizeMeters / Math.max(1, resolution)
     const baseSeamBandMeters = Math.max(localEditCellSize * 1.5, 0.1)
     const baseSampleOffset = Math.max(localEditCellSize * 0.75, 0.05)
     const maxSeamBandMeters = Math.max(baseSeamBandMeters, Math.min(tileSizeMeters * 0.18, localEditCellSize * 4))
-
-    const normalA = new THREE.Vector3().copy(result)
-    const normalB = new THREE.Vector3().copy(result)
-    const blended = new THREE.Vector3().copy(result)
-    const boundaryNormal = new THREE.Vector3().copy(result)
-    const cornerNormalA = new THREE.Vector3().copy(result)
-    const cornerNormalB = new THREE.Vector3().copy(result)
-    const cornerNormalC = new THREE.Vector3().copy(result)
-    const cornerNormalD = new THREE.Vector3().copy(result)
-    const cornerAverage = new THREE.Vector3().copy(result)
 
     const tileFracX = localTileX - Math.floor(localTileX)
     const tileFracZ = localTileZ - Math.floor(localTileZ)
@@ -9049,8 +9135,8 @@ export function setInfiniteGroundHiddenChunkKeys(
       )
       blendBoundaryNormals(
         distToVerticalBoundary,
-        () => sampleGroundNormal(definition, boundaryX - sampleOffset, z, normalA),
-        () => sampleGroundNormal(definition, boundaryX + sampleOffset, z, normalB),
+        () => sampleGroundNormalWithHeightCache(definition, boundaryX - sampleOffset, z, normalA, workingHeightCache),
+        () => sampleGroundNormalWithHeightCache(definition, boundaryX + sampleOffset, z, normalB, workingHeightCache),
       )
     }
 
@@ -9064,8 +9150,8 @@ export function setInfiniteGroundHiddenChunkKeys(
       )
       blendBoundaryNormals(
         distToHorizontalBoundary,
-        () => sampleGroundNormal(definition, x, boundaryZ - sampleOffset, normalA),
-        () => sampleGroundNormal(definition, x, boundaryZ + sampleOffset, normalB),
+        () => sampleGroundNormalWithHeightCache(definition, x, boundaryZ - sampleOffset, normalA, workingHeightCache),
+        () => sampleGroundNormalWithHeightCache(definition, x, boundaryZ + sampleOffset, normalB, workingHeightCache),
       )
     }
 
@@ -9079,10 +9165,10 @@ export function setInfiniteGroundHiddenChunkKeys(
         baseSampleOffset,
         Math.max(baseSampleOffset, localEditCellSize * 2.25),
       )
-      sampleGroundNormal(definition, boundaryX - sampleOffset, boundaryZ - sampleOffset, cornerNormalA)
-      sampleGroundNormal(definition, boundaryX + sampleOffset, boundaryZ - sampleOffset, cornerNormalB)
-      sampleGroundNormal(definition, boundaryX - sampleOffset, boundaryZ + sampleOffset, cornerNormalC)
-      sampleGroundNormal(definition, boundaryX + sampleOffset, boundaryZ + sampleOffset, cornerNormalD)
+      sampleGroundNormalWithHeightCache(definition, boundaryX - sampleOffset, boundaryZ - sampleOffset, cornerNormalA, workingHeightCache)
+      sampleGroundNormalWithHeightCache(definition, boundaryX + sampleOffset, boundaryZ - sampleOffset, cornerNormalB, workingHeightCache)
+      sampleGroundNormalWithHeightCache(definition, boundaryX - sampleOffset, boundaryZ + sampleOffset, cornerNormalC, workingHeightCache)
+      sampleGroundNormalWithHeightCache(definition, boundaryX + sampleOffset, boundaryZ + sampleOffset, cornerNormalD, workingHeightCache)
       cornerAverage
         .copy(cornerNormalA)
         .add(cornerNormalB)

@@ -11189,6 +11189,37 @@ function shouldForceDenseGroundMeshForViewport(
 
 const viewportForceDenseGroundMesh = ref(shouldForceDenseGroundMeshForViewport())
 let pendingViewportGroundOptimizedRebuild = false
+type PendingViewportGroundChunkSync = {
+  groundObject: THREE.Object3D
+  groundDefinition: GroundRuntimeDynamicMesh
+  forceChunkRefresh: boolean
+}
+let pendingViewportGroundChunkSync: PendingViewportGroundChunkSync | null = null
+let pendingViewportGroundChunkSyncFrame: number | null = null
+
+function flushPendingViewportGroundChunkSync(): void {
+  const pending = pendingViewportGroundChunkSync
+  if (!pending) {
+    return
+  }
+  pendingViewportGroundChunkSync = null
+  pendingViewportGroundChunkSyncFrame = null
+
+  const { groundObject, groundDefinition, forceChunkRefresh } = pending
+  syncViewportCompiledGroundTiles(groundObject, groundDefinition)
+  const streamingDefinition = resolveViewportGroundStreamingDefinition(groundObject, groundDefinition)
+  syncGroundChunkLoadingMode(
+    groundObject,
+    streamingDefinition,
+    camera,
+    forceChunkRefresh ? { force: true, minIntervalMs: 0 } : {},
+  )
+  const sceneId = typeof sceneStore.currentSceneId === 'string' ? sceneStore.currentSceneId.trim() : ''
+  const manifestRevision = Number.isFinite(streamingDefinition.chunkManifestRevision)
+    ? Math.max(0, Math.trunc(streamingDefinition.chunkManifestRevision as number))
+    : 0
+  maybeAutoPersistViewportInfiniteGroundChunks(groundObject, streamingDefinition, sceneId, manifestRevision)
+}
 
 function applyViewportGroundRuntimeMode(definition: GroundRuntimeDynamicMesh): GroundRuntimeDynamicMesh {
   const shouldForceDense = viewportForceDenseGroundMesh.value
@@ -21256,7 +21287,8 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
       }
       refreshGroundRuntimeMaterials(node, object, { refreshChunks: false })
       const nextSignature = computeGroundDynamicMeshSignature(groundDefinition)
-      if (groundData[DYNAMIC_MESH_SIGNATURE_KEY] !== nextSignature) {
+      const signatureChanged = groundData[DYNAMIC_MESH_SIGNATURE_KEY] !== nextSignature
+      if (signatureChanged) {
         const shouldSkipSculptRefresh = groundData[GROUND_SCULPT_SKIP_REFRESH_SIGNATURE_KEY] === nextSignature
         if (!shouldSkipSculptRefresh) {
           updateGroundMesh(groundObject, groundDefinition)
@@ -21265,12 +21297,14 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
         if (shouldSkipSculptRefresh) {
           delete groundData[GROUND_SCULPT_SKIP_REFRESH_SIGNATURE_KEY]
         }
-        syncViewportGroundChunks(groundObject, groundDefinition, { forceChunkRefresh: true })
-
       } else if (groundData[GROUND_SCULPT_SKIP_REFRESH_SIGNATURE_KEY] === nextSignature) {
         delete groundData[GROUND_SCULPT_SKIP_REFRESH_SIGNATURE_KEY]
       }
-      syncViewportGroundChunks(groundObject, groundDefinition)
+      syncViewportGroundChunks(
+        groundObject,
+        groundDefinition,
+        signatureChanged ? { forceChunkRefresh: true } : {},
+      )
     }
   } else if (node.dynamicMesh?.type === 'Wall') {
     const wallComponent = node.components?.[WALL_COMPONENT_TYPE] as
@@ -21529,19 +21563,28 @@ function syncViewportGroundChunks(
     forceChunkRefresh?: boolean
   } = {},
 ): void {
-  syncViewportCompiledGroundTiles(groundObject, groundDefinition)
-  const streamingDefinition = resolveViewportGroundStreamingDefinition(groundObject, groundDefinition)
-  syncGroundChunkLoadingMode(
+  const shouldForceChunkRefresh = options.forceChunkRefresh === true
+  if (pendingViewportGroundChunkSync) {
+    pendingViewportGroundChunkSync.groundObject = groundObject
+    pendingViewportGroundChunkSync.groundDefinition = groundDefinition
+    pendingViewportGroundChunkSync.forceChunkRefresh ||= shouldForceChunkRefresh
+    return
+  }
+
+  pendingViewportGroundChunkSync = {
     groundObject,
-    streamingDefinition,
-    camera,
-    options.forceChunkRefresh ? { force: true, minIntervalMs: 0 } : {},
-  )
-  const sceneId = typeof sceneStore.currentSceneId === 'string' ? sceneStore.currentSceneId.trim() : ''
-  const manifestRevision = Number.isFinite(streamingDefinition.chunkManifestRevision)
-    ? Math.max(0, Math.trunc(streamingDefinition.chunkManifestRevision as number))
-    : 0
-  maybeAutoPersistViewportInfiniteGroundChunks(groundObject, streamingDefinition, sceneId, manifestRevision)
+    groundDefinition,
+    forceChunkRefresh: shouldForceChunkRefresh,
+  }
+
+  if (typeof requestAnimationFrame === 'function') {
+    pendingViewportGroundChunkSyncFrame = requestAnimationFrame(() => {
+      flushPendingViewportGroundChunkSync()
+    })
+    return
+  }
+
+  flushPendingViewportGroundChunkSync()
 }
 
 function syncViewportCompiledGroundTiles(
@@ -23251,6 +23294,11 @@ onBeforeUnmount(() => {
     window.cancelAnimationFrame(viewportCompositionUpdateFrame)
     viewportCompositionUpdateFrame = null
   }
+  if (pendingViewportGroundChunkSyncFrame !== null && typeof window !== 'undefined') {
+    window.cancelAnimationFrame(pendingViewportGroundChunkSyncFrame)
+    pendingViewportGroundChunkSyncFrame = null
+  }
+  pendingViewportGroundChunkSync = null
   viewportCompositionUpdateQueued = false
   viewportCompositionUpdateForce = false
 })
