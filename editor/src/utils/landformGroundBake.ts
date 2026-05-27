@@ -55,6 +55,7 @@ type LoadedBakedImage = {
 
 export type LandformGroundBakeOptions = {
   maxTextureSize?: number
+  debugBaseTextureOnly?: boolean
 }
 
 const GROUNDSPLAT_DEBUG_TINT = 'rgba(255, 64, 160, 0.72)'
@@ -1287,33 +1288,61 @@ export async function bakeLandformGroundSurfaceChunks(
   definition: GroundDynamicMesh,
   options: LandformGroundBakeOptions = {},
 ): Promise<GroundSurfaceChunkTextureMap | null> {
+  // 这个函数的目标很简单：
+  // 把场景里的 landform（地形/地貌覆盖层）按 ground chunk 分块烘焙成 mask + 图层元数据，
+  // 但不再烘焙 ground 底图本身。
+  //
+  // 这样 runtime 就可以继续保留 ground 的原始材质，只把 landform 作为覆盖层叠加上去。
+  //
+  // 它不是在“生成地形几何”，而是在“生成地表渲染用的叠加数据”。
+  // 所以这里的核心工作是：
+  // 1. 找到会影响地表的 landform 节点
+  // 2. 找到这些 landform 实际覆盖到哪些 ground chunk
+  // 3. 逐块把 landform 图层画进离屏 canvas
+  // 4. 把 mask 通道重新打包成最终可给 shader 用的纹理
   const groundNode = findGroundNode(scene.nodes ?? [])
   const landformNodes = getGroundLandformNodes(scene.nodes)
   if (!landformNodes.length) {
+    // 场景里根本没有 landform，就不需要烘焙任何地表图。
     return null
   }
   const landformEntries = collectLandformBakeEntries(scene.nodes, definition)
   if (!landformEntries.length) {
+    // 没有可参与烘焙的有效几何数据，也直接返回。
     return null
   }
 
+  // chunkSizeMeters 决定 ground 被切成多大的世界单位分块。
+  // 如果外部没有给合法值，就回退到 100m，避免后面所有计算都失去基准。
   const chunkSizeMetersValue = Number(definition.chunkSizeMeters ?? 0)
   const chunkSizeMeters = Number.isFinite(chunkSizeMetersValue) && chunkSizeMetersValue > 0
     ? chunkSizeMetersValue
     : 100
+  // chunkOrigin 是无限地形网格的原点，用于把世界坐标稳定映射到 chunk 坐标。
+  // authoredBounds 则是“作者显式指定的地形边界”：
+  // - 无限地形时为 null
+  // - 有限地形时会把超出边界的 chunk 裁掉
   const chunkOrigin = resolveInfiniteGroundGridOriginMeters(chunkSizeMeters)
   const authoredBounds = resolveLandformBakeChunkClipBounds(definition)
-  const sceneBounds = resolveGroundWorldBounds(definition)
+
+  // 先做一次粗筛：只找“确实被 landform 覆盖到”的 chunk。
+  // 这样后面不会无意义地给整张地表都生成贴图。
   const affectedChunkKeys = collectLandformBakeAffectedChunkKeys(landformEntries, definition)
   if (!affectedChunkKeys.length) {
     return null
   }
+
+  // 最终输出纹理尺寸的上限。
+  // 这里不是固定大小，而是根据 chunk 的实际世界尺寸按比例缩放后再限制最大值。
   const maxTextureSize = Math.max(128, Math.round(options.maxTextureSize ?? 1024))
+
+  // nextChunks 就是最终返回的结果：chunkKey -> GroundSurfaceChunkTextureRef。
+  // 这些缓存用来避免同一张贴图反复解码/转 dataURL。
   const nextChunks: GroundSurfaceChunkTextureMap = {}
   const layerTextureCache = new Map<string, Promise<LoadedBakedImage | null>>()
   const layerTextureRuntimeSourceCache = new Map<string, Promise<string | null>>()
-  const groundMaterialProps = resolvePrimaryMaterialProps(groundNode)
 
+  // 逐个处理受影响的 chunk。
   for (const chunkKey of affectedChunkKeys) {
     const chunkIndices = parseChunkKey(chunkKey)
     if (!chunkIndices) {
@@ -1329,39 +1358,20 @@ export async function bakeLandformGroundSurfaceChunks(
     if (!chunkRect) {
       continue
     }
+    // 当前 chunk 的世界坐标范围。
+    // 这个范围会被后续用于：
+    // - 把 world vertex 坐标映射到 canvas 像素坐标
+    // - 计算纹理平铺（tiling）大小
     const minX = chunkRect.minX
     const minZ = chunkRect.minZ
     const chunkWidth = Math.max(1e-6, chunkRect.maxX - chunkRect.minX)
     const chunkDepth = Math.max(1e-6, chunkRect.maxZ - chunkRect.minZ)
-    const size = resolveChunkCanvasSize(chunkWidth, chunkDepth, maxTextureSize)
-    const canvases = {
-      albedo: createCanvas(size.width, size.height),
-      normal: createCanvas(size.width, size.height),
-    }
-    if (!canvases.albedo || !canvases.normal) {
-      continue
-    }
-    const draw = {
-      albedo: canvases.albedo.context,
-      normal: canvases.normal.context,
-    }
 
+    // 把 chunk 的世界尺寸换算成离屏画布尺寸。
+    // 这里仍然需要 size，因为 mask 纹理要和 chunk 分辨率对齐。
+    const size = resolveChunkCanvasSize(chunkWidth, chunkDepth, maxTextureSize)
     const chunkMaxX = chunkRect.maxX
     const chunkMaxZ = chunkRect.maxZ
-    await paintGroundMaterialBaseIntoChunk(
-      scene,
-      draw,
-      size,
-      sceneBounds,
-      {
-        minX,
-        maxX: chunkMaxX,
-        minZ,
-        maxZ: chunkMaxZ,
-      },
-      groundMaterialProps,
-      layerTextureCache,
-    )
     const chunkBounds = {
       minX,
       maxX: chunkMaxX,
@@ -1376,132 +1386,145 @@ export async function bakeLandformGroundSurfaceChunks(
       continue
     }
 
-      const chunkLayers = chunkLandforms
-        .slice()
-        .sort((a, b) => a.order - b.order || a.nodeOrder - b.nodeOrder || a.layer.id.localeCompare(b.layer.id))
-        .slice(0, 8)
-      const applyDebugTint = false
-      const activeLayerCount = Math.min(8, Math.max(1, chunkLayers.length))
-      const chunkSurfaceLayers: GroundSurfaceChunkLayerRef[] = []
-      const maskCanvases = createMaskCanvasSet(size, activeLayerCount)
-      if (!maskCanvases) {
+    // 按层级顺序排序，并且最多取 8 层。
+    // 原因是后面 mask 只打包到 8 个通道里：RGBA + RGBA = 8 个通道。
+    const chunkLayers = chunkLandforms
+      .slice()
+      .sort((a, b) => a.order - b.order || a.nodeOrder - b.nodeOrder || a.layer.id.localeCompare(b.layer.id))
+      .slice(0, 8)
+
+    // feather 是图层边缘柔化效果。
+    // 它最终会影响 mask alpha，从而让图层在边缘过渡更自然。
+    const activeLayerCount = Math.min(8, Math.max(1, chunkLayers.length))
+    const chunkSurfaceLayers: GroundSurfaceChunkLayerRef[] = []
+
+    // 为每个图层准备一张独立 mask 画布。
+    // 这些 mask 最后会被打包进两张 RGBA 纹理，供 shader 读取每层权重。
+    const maskCanvases = createMaskCanvasSet(size, activeLayerCount)
+    if (!maskCanvases) {
+      continue
+    }
+
+    // 逐图层烘焙。
+    for (let entryIndex = 0; entryIndex < chunkLayers.length; entryIndex += 1) {
+      const layerEntry = chunkLayers[entryIndex]!
+      const landform = layerEntry.node
+      const targetLayer = layerEntry.layer
+
+      // 图层材质优先取 layer 自己绑定的 materialConfigId / materialProps，
+      // 找不到时再退回到节点默认材质。
+      const props = resolveLandformMaterialProps(landform, targetLayer?.materialConfigId ?? targetLayer?.id ?? null)
+      if (!props) {
         continue
       }
 
-      for (let entryIndex = 0; entryIndex < chunkLayers.length; entryIndex += 1) {
-        const layerEntry = chunkLayers[entryIndex]!
-        const landform = layerEntry.node
-        const targetLayer = layerEntry.layer
-        const props = resolveLandformMaterialProps(landform, targetLayer?.materialConfigId ?? targetLayer?.id ?? null)
-        if (!props) {
+      // 当前图层的可视化参数：
+      // - color：用作 landform 覆盖层的色调参考
+      // - opacity：整体透明度
+      // - albedo/normal：用于告诉运行时 layer 应该加载什么纹理
+      const landformColor = parseColor(props.color)
+      const opacity = clamp(Number(props.opacity) || 1, 0, 1)
+      const albedoTextureRef = resolveMaterialTextureRef(props, 'albedo')
+      const normalTextureRef = resolveMaterialTextureRef(props, 'normal')
+
+      // feather 既可以来自图层自身，也可以继承 landform 的全局设置。
+      // 它用于让图层边缘不要过于生硬。
+      const landformMesh = landform.dynamicMesh as LandformDynamicMesh | null | undefined
+      const layerFeatherEnabled = typeof targetLayer.enableFeather === 'boolean'
+        ? targetLayer.enableFeather
+        : Boolean(landformMesh?.enableFeather)
+      const layerFeatherWidth = Number.isFinite(targetLayer.feather)
+        ? Number(targetLayer.feather)
+        : Number(landformMesh?.feather ?? 0)
+
+      // feather 越大，边缘越“软”，这里把它换算成 0~0.65 的额外 alpha 折减。
+      const featherRatio = clamp(layerFeatherWidth > 0 ? layerFeatherWidth / Math.max(chunkWidth, chunkDepth) : 0, 0, 0.65)
+      const alpha = clamp(layerFeatherEnabled ? Math.max(0.45, 1 - featherRatio * 0.55) : 1, 0, 1)
+
+      // 图层顺序对应 mask 通道序号。
+      // 第 0~3 层进 splat0，第 4~7 层进 splat1。
+      const layerIndex = Math.min(maskCanvases.length - 1, entryIndex)
+      const maskContext = maskCanvases[layerIndex]?.context ?? null
+
+      // 这层最终用于 shader 的主纹理来源。
+      // 优先取 albedo 贴图；如果没有，则尝试 layer 自己声明的 textureAssetIds。
+      const primaryTextureAssetId = resolveTextureAssetId(albedoTextureRef)
+        ?? (Array.isArray(targetLayer?.textureAssetIds) ? targetLayer.textureAssetIds[0] ?? null : null)
+      const primaryTextureRuntimeSource = primaryTextureAssetId
+        ? await resolveLayerTextureRuntimeSource(scene, primaryTextureAssetId, layerTextureRuntimeSourceCache)
+        : null
+
+      // UV scale 决定这层在 chunk 内如何重复平铺。
+      // 如果 layer 没有明确给，就用 chunk 尺寸兜底，保证平铺逻辑能正常工作。
+      const chunkLayerUvScale = targetLayer?.uvScale && Number(targetLayer.uvScale.x) > 0 && Number(targetLayer.uvScale.y) > 0
+        ? { x: Number(targetLayer.uvScale.x), y: Number(targetLayer.uvScale.y) }
+        : { x: Math.max(chunkWidth, 1e-6), y: Math.max(chunkDepth, 1e-6) }
+
+      // 这里把“将来 shader 需要知道的信息”先整理进 chunkSurfaceLayers，
+      // 最终会写入 GroundSurfaceChunkTextureRef.surfaceLayers。
+      const albedoTextureSettings = albedoTextureRef?.settings
+        ? createTextureSettings(albedoTextureRef.settings as Partial<SceneMaterialTextureSettings>)
+        : null
+      chunkSurfaceLayers.push({
+        albedoSource: primaryTextureRuntimeSource,
+        albedoTextureSettings,
+        colorTint: landformColor,
+        opacity,
+        uvScale: chunkLayerUvScale,
+        maskChannel: layerIndex,
+        featherEnabled: layerFeatherEnabled,
+        featherWidth: layerFeatherWidth,
+      })
+
+      // 取出当前 chunk 内真正需要绘制的几何片段。
+      // 这里可能同时包含 surface 和 outline 两类来源。
+      let paintedTriangleCount = 0
+      const paintGeometries = collectLandformChunkPaintGeometries(layerEntry, chunkBounds)
+      for (const geometry of paintGeometries) {
+        const vertices = geometry.vertices
+        const indices = geometry.indices
+        if (!vertices.length || indices.length < 3) {
           continue
         }
-        const landformColor = parseColor(props.color)
-        const opacity = clamp(Number(props.opacity) || 1, 0, 1)
-        const albedoTextureRef = resolveMaterialTextureRef(props, 'albedo')
-        const normalTextureRef = resolveMaterialTextureRef(props, 'normal')
 
-        const landformMesh = landform.dynamicMesh as LandformDynamicMesh | null | undefined
-        const layerFeatherEnabled = typeof targetLayer.enableFeather === 'boolean'
-          ? targetLayer.enableFeather
-          : Boolean(landformMesh?.enableFeather)
-        const layerFeatherWidth = Number.isFinite(targetLayer.feather)
-          ? Number(targetLayer.feather)
-          : Number(landformMesh?.feather ?? 0)
-        const featherRatio = clamp(layerFeatherWidth > 0 ? layerFeatherWidth / Math.max(chunkWidth, chunkDepth) : 0, 0, 0.65)
-        const alpha = clamp(layerFeatherEnabled ? Math.max(0.45, 1 - featherRatio * 0.55) : 1, 0, 1)
-        const layerIndex = Math.min(maskCanvases.length - 1, entryIndex)
-        const maskContext = maskCanvases[layerIndex]?.context ?? null
-        const primaryTextureAssetId = resolveTextureAssetId(albedoTextureRef)
-          ?? (Array.isArray(targetLayer?.textureAssetIds) ? targetLayer.textureAssetIds[0] ?? null : null)
-        const primaryTextureRuntimeSource = primaryTextureAssetId
-          ? await resolveLayerTextureRuntimeSource(scene, primaryTextureAssetId, layerTextureRuntimeSourceCache)
-          : null
-        const chunkLayerUvScale = targetLayer?.uvScale && Number(targetLayer.uvScale.x) > 0 && Number(targetLayer.uvScale.y) > 0
-          ? { x: Number(targetLayer.uvScale.x), y: Number(targetLayer.uvScale.y) }
-          : { x: Math.max(chunkWidth, 1e-6), y: Math.max(chunkDepth, 1e-6) }
-        const albedoTextureSettings = albedoTextureRef?.settings
-          ? createTextureSettings(albedoTextureRef.settings as Partial<SceneMaterialTextureSettings>)
-          : null
-        chunkSurfaceLayers.push({
-          albedoSource: primaryTextureRuntimeSource,
-          albedoTextureSettings,
-          colorTint: landformColor,
-          opacity,
-          uvScale: chunkLayerUvScale,
-          maskChannel: layerIndex,
-          featherEnabled: layerFeatherEnabled,
-          featherWidth: layerFeatherWidth,
-        })
-        const loadedLayerTexture = primaryTextureAssetId
-          ? await loadLayerTextureImage(scene, primaryTextureAssetId, layerTextureCache)
-          : null
-        const loadedNormalTexture = resolveTextureAssetId(normalTextureRef)
-          ? await loadLayerTextureImage(scene, resolveTextureAssetId(normalTextureRef), layerTextureCache)
-          : null
-        const albedoTilePixels = getLayerTileSizePixels(targetLayer, chunkWidth, chunkDepth, size.width, size.height, albedoTextureRef)
-        const normalTilePixels = getLayerTileSizePixels(targetLayer, chunkWidth, chunkDepth, size.width, size.height, normalTextureRef)
+        // 把世界坐标转换成当前 chunk 画布内的局部像素坐标。
+        // x 使用 chunk 左边界归一化，y 使用 z 轴并做反向映射，
+        // 这样 mask 和 chunk 俯视方向一致。
+        const localPoints = vertices.map((vertex) => ({
+          x: ((vertex.x - minX) / chunkWidth) * size.width,
+          y: ((chunkMaxZ - vertex.z) / chunkDepth) * size.height,
+        }))
 
-        draw.albedo.save()
-        draw.albedo.fillStyle = landformColor
-        draw.normal.save()
-        const paintGeometries = collectLandformChunkPaintGeometries(layerEntry, chunkBounds)
-        let paintedTriangleCount = 0
-        for (const geometry of paintGeometries) {
-          const vertices = geometry.vertices
-          const indices = geometry.indices
-          if (!vertices.length || indices.length < 3) {
+        // 一个 geometry 可能包含很多三角形，这里按 index 每三个一组来画。
+        for (let index = 0; index + 2 < indices.length; index += 3) {
+          const i0 = indices[index]!
+          const i1 = indices[index + 1]!
+          const i2 = indices[index + 2]!
+          const p0 = localPoints[i0]
+          const p1 = localPoints[i1]
+          const p2 = localPoints[i2]
+          if (!p0 || !p1 || !p2) {
             continue
           }
-          const localPoints = vertices.map((vertex) => ({
-            x: ((vertex.x - minX) / chunkWidth) * size.width,
-            y: ((chunkMaxZ - vertex.z) / chunkDepth) * size.height,
-          }))
-          for (let index = 0; index + 2 < indices.length; index += 3) {
-            const i0 = indices[index]!
-            const i1 = indices[index + 1]!
-            const i2 = indices[index + 2]!
-            const p0 = localPoints[i0]
-            const p1 = localPoints[i1]
-            const p2 = localPoints[i2]
-            if (!p0 || !p1 || !p2) {
-              continue
-            }
-            paintedTriangleCount += 1
-            if (loadedLayerTexture) {
-              paintTiledTextureIntoTriangle(draw.albedo, loadedLayerTexture, [p0, p1, p2], {
-                alpha: alpha * opacity,
-                tintColor: landformColor,
-                tintOpacity: 1,
-                tintBlendMode: 'multiply',
-                tilePixels: albedoTilePixels,
-                textureRef: albedoTextureRef,
-              })
-            } else {
-              drawTriangleMask(draw.albedo, [p0, p1, p2], alpha * opacity, landformColor)
-            }
-            if (applyDebugTint) {
-              drawTriangleMask(draw.albedo, [p0, p1, p2], GROUNDSPLAT_DEBUG_TINT_ALPHA, GROUNDSPLAT_DEBUG_TINT)
-            }
-            if (loadedNormalTexture) {
-              paintTiledTextureIntoTriangle(draw.normal, loadedNormalTexture, [p0, p1, p2], {
-                alpha: 1,
-                tilePixels: normalTilePixels,
-                textureRef: normalTextureRef,
-              })
-            } else {
-              drawTriangleMask(draw.normal, [p0, p1, p2], 1, 'rgb(128, 128, 255)')
-            }
-            if (maskContext) {
-              drawTriangleMask(maskContext, [p0, p1, p2], alpha, '#ffffff')
-            }
+          paintedTriangleCount += 1
+
+          if (maskContext) {
+            drawTriangleMask(maskContext, [p0, p1, p2], alpha, '#ffffff')
           }
         }
-        draw.albedo.restore()
-        draw.normal.restore()
       }
 
+      // 如果这个图层在当前 chunk 里没有实际画出任何三角形，就跳过后续打包。
+      if (paintedTriangleCount <= 0) {
+        continue
+      }
+
+      // 把每个独立 mask 画布读回 ImageData，准备进行通道打包。
       const maskImages = await Promise.all(maskCanvases.map(({ canvas }) => canvasToImageData(canvas)))
+
+      // splat 纹理分成两张 RGBA 图：
+      // splat0 = layer 0~3
+      // splat1 = layer 4~7
       const splat0 = createCanvas(size.width, size.height)
       const splat1 = createCanvas(size.width, size.height)
       if (!splat0 || !splat1) {
@@ -1519,21 +1542,23 @@ export async function bakeLandformGroundSurfaceChunks(
         if (!target) {
           continue
         }
+        // 把单独的 mask 通道压进 RGBA 的某个分量里。
+        // 这一步的结果就是 shader 可直接读取的 splat map。
         packMaskChannel(target, size.width, size.height, mask, channel % 4)
       }
       splat0.context.putImageData(splat0Data, 0, 0)
       splat1.context.putImageData(splat1Data, 0, 0)
 
-      const [albedoBlob, normalBlob, splat0Blob, splat1Blob] = await Promise.all([
-        canvasToBlob(canvases.albedo.canvas),
-        canvasToBlob(canvases.normal.canvas),
+      // 最后把 canvas 编码成 blob，再转成 dataURL。
+      // 这样 GroundSurfaceChunkTextureRef 就能直接携带可序列化的纹理数据。
+      const [splat0Blob, splat1Blob] = await Promise.all([
         canvasToBlob(splat0.canvas),
         canvasToBlob(splat1.canvas),
       ])
       const nextChunkRef: GroundSurfaceChunkTextureRef = {
         baseBlendMode: 'shader-splat-v1',
-        textureAssetId: albedoBlob ? (await blobToDataUrl(albedoBlob)) : null,
-        normalTextureAssetId: normalBlob ? await blobToDataUrl(normalBlob) : null,
+        textureAssetId: null,
+        normalTextureAssetId: null,
         splatMapAssetIds: [
           splat0Blob ? await blobToDataUrl(splat0Blob) : null,
           splat1Blob ? await blobToDataUrl(splat1Blob) : null,
@@ -1544,6 +1569,10 @@ export async function bakeLandformGroundSurfaceChunks(
       nextChunks[chunkKey] = nextChunkRef
     }
 
+  }
+
+  // 如果这轮烘焙一个 chunk 都没生成，就返回 null，
+  // 这样上层可以明确知道“没有新结果”，而不是一个空对象。
   return Object.keys(nextChunks).length > 0 ? nextChunks : null
 }
 

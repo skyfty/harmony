@@ -23,4 +23,16 @@ assert.match(
   'landform ground bake should write surface layer descriptors into groundSurfaceChunks',
 )
 
+assert.match(
+  source,
+  /debugBaseTextureOnly\?: boolean/,
+  'landform ground bake should expose a base-only diagnostic bake mode',
+)
+
+assert.match(
+  source,
+  /debugBaseTextureOnly === true/,
+  'base-only diagnostic bake should skip landform overlay work when enabled',
+)
+
 console.log('ground-surface-layer regression checks passed')
