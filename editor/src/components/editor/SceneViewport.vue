@@ -288,6 +288,7 @@ import { createGuideRouteBuildTool } from './GuideRouteBuildTool'
 import { createWaterBuildTool } from './WaterBuildTool'
 import { createDisplayBoardBuildTool } from './DisplayBoardBuildTool'
 import { createBuildStartIndicatorRenderer } from './BuildStartIndicatorRenderer'
+import { raycastGroundRuntimeSurface } from './groundSurfaceSampler'
 import {
   buildClosedWallSegmentsFromWorldPoints,
   buildOpenWallSegmentsFromWorldPoints,
@@ -19224,6 +19225,11 @@ function intersectRayWithGroundHeightfieldWorld(ray: THREE.Ray): THREE.Vector3 |
   const groundObject = objectMap.get(groundNodeId) ?? getRuntimeObject(groundNodeId)
   if (!groundObject) {
     return null
+  }
+
+  const runtimeSurfaceHit = raycastGroundRuntimeSurface(ray, groundObject)
+  if (runtimeSurfaceHit?.point) {
+    return runtimeSurfaceHit.point.clone()
   }
 
   const bounds = resolveGroundWorldBounds(groundDefinition)
