@@ -11,6 +11,8 @@
     "type-check": "node ./node_modules/typescript/bin/tsc -p tsconfig.build.json --noEmit",
     "type-check:asset-types": "node ./node_modules/typescript/bin/tsc -p tsconfig.asset-types.json --noEmit",
     "check": "npm run type-check && npm run type-check:asset-types",
+    "check:ground-chunk-albedo": "node ./scripts/ground-chunk-albedo-regression.mjs",
+    "check:ground-splat": "node ./scripts/ground-splat-regression.mjs",
     "check:compiled-ground-collision": "npm run build && node ./scripts/fix-esm-extensions.mjs ./dist && node ./scripts/compiled-ground-collision-parity-regression.mjs",
     "check:ground-local-edit": "npm run build && node ./scripts/fix-esm-extensions.mjs ./dist && node ./scripts/ground-local-edit-regression.mjs",
     "check:ground-surface-shared-key": "node ./scripts/ground-surface-shared-key-regression.mjs",

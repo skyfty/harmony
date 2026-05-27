@@ -160,49 +160,49 @@ function cloneGroundSurfaceChunks(
   }
   const nextEntries = Object.entries(value).map(([key, chunkRef]) => [key, {
     ...chunkRef,
+    baseBlendMode: chunkRef?.baseBlendMode === 'shader-splat-v1' ? 'shader-splat-v1' : null,
     textureAssetId: typeof chunkRef?.textureAssetId === 'string' && chunkRef.textureAssetId.trim().length > 0
       ? chunkRef.textureAssetId.trim()
       : null,
     normalTextureAssetId: typeof chunkRef?.normalTextureAssetId === 'string' && chunkRef.normalTextureAssetId.trim().length > 0
       ? chunkRef.normalTextureAssetId.trim()
       : null,
-    roughnessTextureAssetId: typeof chunkRef?.roughnessTextureAssetId === 'string' && chunkRef.roughnessTextureAssetId.trim().length > 0
-      ? chunkRef.roughnessTextureAssetId.trim()
-      : null,
-    metalnessTextureAssetId: typeof chunkRef?.metalnessTextureAssetId === 'string' && chunkRef.metalnessTextureAssetId.trim().length > 0
-      ? chunkRef.metalnessTextureAssetId.trim()
-      : null,
-    aoTextureAssetId: typeof chunkRef?.aoTextureAssetId === 'string' && chunkRef.aoTextureAssetId.trim().length > 0
-      ? chunkRef.aoTextureAssetId.trim()
-      : null,
-    emissiveTextureAssetId: typeof chunkRef?.emissiveTextureAssetId === 'string' && chunkRef.emissiveTextureAssetId.trim().length > 0
-      ? chunkRef.emissiveTextureAssetId.trim()
-      : null,
     splatMapAssetIds: Array.isArray(chunkRef?.splatMapAssetIds)
       ? chunkRef.splatMapAssetIds
           .map((assetId) => (typeof assetId === 'string' ? assetId.trim() : ''))
           .filter((assetId) => assetId.length > 0)
       : null,
-    layerTextureAssetIds: Array.isArray(chunkRef?.layerTextureAssetIds)
-      ? chunkRef.layerTextureAssetIds
-          .map((assetId) => (typeof assetId === 'string' ? assetId.trim() : ''))
-          .map((assetId) => assetId.length > 0 ? assetId : null)
-      : null,
-    layerColorTints: Array.isArray(chunkRef?.layerColorTints)
-      ? chunkRef.layerColorTints
-          .map((value) => (typeof value === 'string' ? value.trim() : ''))
-          .map((value) => value.length > 0 ? value : null)
-      : null,
-    layerUvScales: Array.isArray(chunkRef?.layerUvScales)
-      ? chunkRef.layerUvScales
-          .map((value) => {
-            if (!value || typeof value !== 'object') {
-              return null
+    surfaceLayers: Array.isArray(chunkRef?.surfaceLayers)
+      ? chunkRef.surfaceLayers.map((layer) => {
+          if (!layer) {
+            return {
+              maskChannel: 0,
             }
-            const x = Number((value as { x?: unknown }).x)
-            const y = Number((value as { y?: unknown }).y)
-            return Number.isFinite(x) && x > 0 && Number.isFinite(y) && y > 0 ? { x, y } : null
-          })
+          }
+          return {
+            ...layer,
+            albedoSource: typeof layer.albedoSource === 'string' && layer.albedoSource.trim().length > 0
+              ? layer.albedoSource.trim()
+              : null,
+            albedoTextureSettings: layer.albedoTextureSettings
+              ? {
+                  ...layer.albedoTextureSettings,
+                  offset: { ...layer.albedoTextureSettings.offset },
+                  repeat: { ...layer.albedoTextureSettings.repeat },
+                  tileSizeMeters: { ...layer.albedoTextureSettings.tileSizeMeters },
+                  center: { ...layer.albedoTextureSettings.center },
+                }
+              : null,
+            colorTint: typeof layer.colorTint === 'string' && layer.colorTint.trim().length > 0
+              ? layer.colorTint.trim()
+              : null,
+            uvScale: layer.uvScale ? { x: Number(layer.uvScale.x) || 0, y: Number(layer.uvScale.y) || 0 } : null,
+            maskChannel: Number.isFinite(layer.maskChannel) ? Math.max(0, Math.min(7, Math.trunc(layer.maskChannel))) : 0,
+            opacity: Number.isFinite(layer.opacity) ? Math.max(0, Math.min(1, Number(layer.opacity))) : 1,
+            featherEnabled: typeof layer.featherEnabled === 'boolean' ? layer.featherEnabled : null,
+            featherWidth: Number.isFinite(layer.featherWidth) ? Math.max(0, Number(layer.featherWidth)) : null,
+          }
+        })
       : null,
     revision: Number.isFinite(chunkRef?.revision) ? Math.max(0, Math.trunc(chunkRef.revision)) : 0,
   }] as const)

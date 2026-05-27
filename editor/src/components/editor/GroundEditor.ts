@@ -261,7 +261,31 @@ function cloneGroundSurfaceChunks(definition: GroundDynamicMesh): GroundSurfaceC
 	for (const [key, value] of Object.entries(source)) {
 		nextChunks[key] = {
 			...value,
+			baseBlendMode: value.baseBlendMode === 'shader-splat-v1' ? 'shader-splat-v1' : null,
 			textureAssetId: typeof value.textureAssetId === 'string' && value.textureAssetId.trim().length > 0 ? value.textureAssetId.trim() : null,
+			normalTextureAssetId: typeof value.normalTextureAssetId === 'string' && value.normalTextureAssetId.trim().length > 0 ? value.normalTextureAssetId.trim() : null,
+			splatMapAssetIds: Array.isArray(value.splatMapAssetIds) ? value.splatMapAssetIds.map((entry) => typeof entry === 'string' ? entry.trim() : '').filter((entry) => entry.length > 0) : null,
+			surfaceLayers: Array.isArray(value.surfaceLayers)
+				? value.surfaceLayers.map((layer) => ({
+					...layer,
+					albedoSource: typeof layer?.albedoSource === 'string' && layer.albedoSource.trim().length > 0 ? layer.albedoSource.trim() : null,
+					albedoTextureSettings: layer?.albedoTextureSettings
+						? {
+							...layer.albedoTextureSettings,
+							offset: { ...layer.albedoTextureSettings.offset },
+							repeat: { ...layer.albedoTextureSettings.repeat },
+							tileSizeMeters: { ...layer.albedoTextureSettings.tileSizeMeters },
+							center: { ...layer.albedoTextureSettings.center },
+						}
+						: null,
+					colorTint: typeof layer?.colorTint === 'string' && layer.colorTint.trim().length > 0 ? layer.colorTint.trim() : null,
+					uvScale: layer?.uvScale ? { x: Number(layer.uvScale.x) || 0, y: Number(layer.uvScale.y) || 0 } : null,
+					maskChannel: Number.isFinite(layer?.maskChannel) ? Math.max(0, Math.min(7, Math.trunc(Number(layer.maskChannel)))) : 0,
+					opacity: Number.isFinite(layer?.opacity) ? Math.max(0, Math.min(1, Number(layer.opacity))) : 1,
+					featherEnabled: typeof layer?.featherEnabled === 'boolean' ? layer.featherEnabled : null,
+					featherWidth: Number.isFinite(layer?.featherWidth) ? Math.max(0, Number(layer.featherWidth)) : null,
+				}))
+				: null,
 			revision: Number.isFinite(value.revision) ? Math.max(0, Math.trunc(value.revision)) : 0,
 		}
 	}
@@ -570,37 +594,34 @@ async function bakeDirtyGroundSurfaceChunks(params: {
 	const nextChunks: GroundSurfaceChunkTextureMap = params.groundSurfaceChunks
 		? Object.fromEntries(
 			Object.entries(params.groundSurfaceChunks).map(([key, value]) => [key, {
+				baseBlendMode: value.baseBlendMode === 'shader-splat-v1' ? 'shader-splat-v1' : null,
 				textureAssetId: typeof value.textureAssetId === 'string' && value.textureAssetId.trim().length > 0 ? value.textureAssetId.trim() : null,
 				normalTextureAssetId: typeof value.normalTextureAssetId === 'string' && value.normalTextureAssetId.trim().length > 0 ? value.normalTextureAssetId.trim() : null,
-				roughnessTextureAssetId: typeof value.roughnessTextureAssetId === 'string' && value.roughnessTextureAssetId.trim().length > 0 ? value.roughnessTextureAssetId.trim() : null,
-				metalnessTextureAssetId: typeof value.metalnessTextureAssetId === 'string' && value.metalnessTextureAssetId.trim().length > 0 ? value.metalnessTextureAssetId.trim() : null,
-				aoTextureAssetId: typeof value.aoTextureAssetId === 'string' && value.aoTextureAssetId.trim().length > 0 ? value.aoTextureAssetId.trim() : null,
-				emissiveTextureAssetId: typeof value.emissiveTextureAssetId === 'string' && value.emissiveTextureAssetId.trim().length > 0 ? value.emissiveTextureAssetId.trim() : null,
 				splatMapAssetIds: Array.isArray(value.splatMapAssetIds)
 					? value.splatMapAssetIds
 						.map((assetId) => (typeof assetId === 'string' ? assetId.trim() : ''))
 						.filter((assetId) => assetId.length > 0)
 					: null,
-				layerTextureAssetIds: Array.isArray(value.layerTextureAssetIds)
-					? value.layerTextureAssetIds
-						.map((assetId) => (typeof assetId === 'string' ? assetId.trim() : ''))
-						.map((assetId) => assetId.length > 0 ? assetId : null)
-					: null,
-				layerColorTints: Array.isArray(value.layerColorTints)
-					? value.layerColorTints
-						.map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
-						.map((entry) => entry.length > 0 ? entry : null)
-					: null,
-				layerUvScales: Array.isArray(value.layerUvScales)
-					? value.layerUvScales
-						.map((entry) => {
-							if (!entry || typeof entry !== 'object') {
-								return null
+				surfaceLayers: Array.isArray(value.surfaceLayers)
+					? value.surfaceLayers.map((layer) => ({
+						...layer,
+						albedoSource: typeof layer?.albedoSource === 'string' && layer.albedoSource.trim().length > 0 ? layer.albedoSource.trim() : null,
+						albedoTextureSettings: layer?.albedoTextureSettings
+							? {
+								...layer.albedoTextureSettings,
+								offset: { ...layer.albedoTextureSettings.offset },
+								repeat: { ...layer.albedoTextureSettings.repeat },
+								tileSizeMeters: { ...layer.albedoTextureSettings.tileSizeMeters },
+								center: { ...layer.albedoTextureSettings.center },
 							}
-							const x = Number((entry as { x?: unknown }).x)
-							const y = Number((entry as { y?: unknown }).y)
-							return Number.isFinite(x) && x > 0 && Number.isFinite(y) && y > 0 ? { x, y } : null
-						})
+							: null,
+						colorTint: typeof layer?.colorTint === 'string' && layer.colorTint.trim().length > 0 ? layer.colorTint.trim() : null,
+						uvScale: layer?.uvScale ? { x: Number(layer.uvScale.x) || 0, y: Number(layer.uvScale.y) || 0 } : null,
+						maskChannel: Number.isFinite(layer?.maskChannel) ? Math.max(0, Math.min(7, Math.trunc(Number(layer.maskChannel)))) : 0,
+						opacity: Number.isFinite(layer?.opacity) ? Math.max(0, Math.min(1, Number(layer.opacity))) : 1,
+						featherEnabled: typeof layer?.featherEnabled === 'boolean' ? layer.featherEnabled : null,
+						featherWidth: Number.isFinite(layer?.featherWidth) ? Math.max(0, Number(layer.featherWidth)) : null,
+					}))
 					: null,
 				revision: value.revision,
 			}]),
@@ -633,14 +654,9 @@ async function bakeDirtyGroundSurfaceChunks(params: {
 		nextChunks[chunk.key] = {
 			textureAssetId,
 			normalTextureAssetId: null,
-			roughnessTextureAssetId: null,
-			metalnessTextureAssetId: null,
-			aoTextureAssetId: null,
-			emissiveTextureAssetId: null,
+			baseBlendMode: null,
 			splatMapAssetIds: null,
-			layerTextureAssetIds: null,
-			layerColorTints: null,
-			layerUvScales: null,
+			surfaceLayers: null,
 			revision: chunk.surfaceRevision,
 		}
 	}

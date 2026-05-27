@@ -1,11 +1,13 @@
 import * as THREE from 'three'
 import type {
   GroundDynamicMesh,
+  GroundSurfaceChunkLayerRef,
   GroundSurfaceChunkTextureMap,
   GroundSurfaceChunkTextureRef,
   LandformDynamicMesh,
   SceneMaterialProps,
   SceneMaterialTextureRef,
+  SceneMaterialTextureSettings,
   SceneNode,
 } from '@schema/core'
 import {
@@ -349,52 +351,6 @@ function resolveTextureAssetId(ref: SceneMaterialTextureRef | null | undefined):
   return assetId.length > 0 ? assetId : null
 }
 
-function paintScalarTextureTint(
-  context: Canvas2DContext,
-  triangle: Array<{ x: number; y: number }>,
-  color: string,
-  alpha: number,
-): void {
-  const bounds = computeTriangleBounds(triangle)
-  if (!bounds) {
-    return
-  }
-  context.save()
-  context.beginPath()
-  context.moveTo(triangle[0]!.x, triangle[0]!.y)
-  context.lineTo(triangle[1]!.x, triangle[1]!.y)
-  context.lineTo(triangle[2]!.x, triangle[2]!.y)
-  context.closePath()
-  context.clip()
-  context.globalCompositeOperation = 'multiply'
-  context.globalAlpha = clamp(alpha, 0, 1)
-  context.fillStyle = color
-  context.fillRect(bounds.minX, bounds.minY, bounds.maxX - bounds.minX, bounds.maxY - bounds.minY)
-  context.restore()
-}
-
-function paintScalarTextureTintRect(
-  context: Canvas2DContext,
-  width: number,
-  height: number,
-  color: string,
-  alpha: number,
-): void {
-  context.save()
-  context.globalCompositeOperation = 'multiply'
-  context.globalAlpha = clamp(alpha, 0, 1)
-  context.fillStyle = color
-  context.fillRect(0, 0, width, height)
-  context.restore()
-}
-
-function scaleColor(hex: string, intensity: number): string {
-  const color = new THREE.Color(hex)
-  const normalized = Math.max(0, intensity)
-  color.multiplyScalar(normalized)
-  return `rgb(${Math.round(clamp(color.r, 0, 1) * 255)}, ${Math.round(clamp(color.g, 0, 1) * 255)}, ${Math.round(clamp(color.b, 0, 1) * 255)})`
-}
-
 function resolvePrimaryMaterialProps(node: SceneNode | null | undefined): SceneMaterialProps | null {
   const first = Array.isArray(node?.materials) ? node!.materials[0] : null
   return first ? first as SceneMaterialProps : null
@@ -478,10 +434,6 @@ async function paintGroundMaterialBaseIntoChunk(
   draw: {
     albedo: Canvas2DContext
     normal: Canvas2DContext
-    roughness: Canvas2DContext
-    metalness: Canvas2DContext
-    ao: Canvas2DContext
-    emissive: Canvas2DContext
   },
   size: { width: number; height: number },
   sceneWorldBounds: WorldRect,
@@ -491,32 +443,15 @@ async function paintGroundMaterialBaseIntoChunk(
 ): Promise<void> {
   const albedoTextureRef = resolveMaterialTextureRef(groundProps, 'albedo')
   const normalTextureRef = resolveMaterialTextureRef(groundProps, 'normal')
-  const roughnessTextureRef = resolveMaterialTextureRef(groundProps, 'roughness')
-  const metalnessTextureRef = resolveMaterialTextureRef(groundProps, 'metalness')
-  const aoTextureRef = resolveMaterialTextureRef(groundProps, 'ao')
-  const emissiveTextureRef = resolveMaterialTextureRef(groundProps, 'emissive')
   const [
     loadedAlbedoTexture,
     loadedNormalTexture,
-    loadedRoughnessTexture,
-    loadedMetalnessTexture,
-    loadedAoTexture,
-    loadedEmissiveTexture,
   ] = await Promise.all([
     resolveMaterialTextureImage(scene, albedoTextureRef, cache),
     resolveMaterialTextureImage(scene, normalTextureRef, cache),
-    resolveMaterialTextureImage(scene, roughnessTextureRef, cache),
-    resolveMaterialTextureImage(scene, metalnessTextureRef, cache),
-    resolveMaterialTextureImage(scene, aoTextureRef, cache),
-    resolveMaterialTextureImage(scene, emissiveTextureRef, cache),
   ])
 
   const baseColor = parseColor(groundProps?.color)
-  const baseRoughness = clamp(Number(groundProps?.roughness) || 1, 0, 1)
-  const baseMetalness = clamp(Number(groundProps?.metalness) || 0, 0, 1)
-  const baseAoStrength = clamp(Number(groundProps?.aoStrength) || 1, 0, 1)
-  const baseEmissive = parseColor(groundProps?.emissive, '#000000')
-  const baseEmissiveIntensity = Math.max(0, Number(groundProps?.emissiveIntensity) || 0)
 
   draw.albedo.fillStyle = baseColor
   draw.albedo.fillRect(0, 0, size.width, size.height)
@@ -528,46 +463,6 @@ async function paintGroundMaterialBaseIntoChunk(
   draw.normal.fillRect(0, 0, size.width, size.height)
   if (loadedNormalTexture) {
     paintWorldAlignedTextureIntoRect(draw.normal, loadedNormalTexture, chunkWorldRect, sceneWorldBounds, size.width, size.height, normalTextureRef)
-  }
-
-  draw.roughness.fillStyle = 'rgb(255, 255, 255)'
-  draw.roughness.fillRect(0, 0, size.width, size.height)
-  if (loadedRoughnessTexture) {
-    paintWorldAlignedTextureIntoRect(draw.roughness, loadedRoughnessTexture, chunkWorldRect, sceneWorldBounds, size.width, size.height, roughnessTextureRef)
-    paintScalarTextureTintRect(draw.roughness, size.width, size.height, scaleColor('#ffffff', baseRoughness), 1)
-  } else {
-    draw.roughness.fillStyle = scaleColor('#ffffff', baseRoughness)
-    draw.roughness.fillRect(0, 0, size.width, size.height)
-  }
-
-  draw.metalness.fillStyle = 'rgb(0, 0, 0)'
-  draw.metalness.fillRect(0, 0, size.width, size.height)
-  if (loadedMetalnessTexture) {
-    paintWorldAlignedTextureIntoRect(draw.metalness, loadedMetalnessTexture, chunkWorldRect, sceneWorldBounds, size.width, size.height, metalnessTextureRef)
-    paintScalarTextureTintRect(draw.metalness, size.width, size.height, scaleColor('#ffffff', baseMetalness), 1)
-  } else {
-    draw.metalness.fillStyle = scaleColor('#ffffff', baseMetalness)
-    draw.metalness.fillRect(0, 0, size.width, size.height)
-  }
-
-  draw.ao.fillStyle = 'rgb(255, 255, 255)'
-  draw.ao.fillRect(0, 0, size.width, size.height)
-  if (loadedAoTexture) {
-    paintWorldAlignedTextureIntoRect(draw.ao, loadedAoTexture, chunkWorldRect, sceneWorldBounds, size.width, size.height, aoTextureRef)
-    paintScalarTextureTintRect(draw.ao, size.width, size.height, scaleColor('#ffffff', baseAoStrength), 1)
-  } else {
-    draw.ao.fillStyle = scaleColor('#ffffff', baseAoStrength)
-    draw.ao.fillRect(0, 0, size.width, size.height)
-  }
-
-  draw.emissive.fillStyle = 'rgb(0, 0, 0)'
-  draw.emissive.fillRect(0, 0, size.width, size.height)
-  if (loadedEmissiveTexture) {
-    paintWorldAlignedTextureIntoRect(draw.emissive, loadedEmissiveTexture, chunkWorldRect, sceneWorldBounds, size.width, size.height, emissiveTextureRef)
-    paintScalarTextureTintRect(draw.emissive, size.width, size.height, scaleColor(baseEmissive, baseEmissiveIntensity), 1)
-  } else if (baseEmissiveIntensity > 0) {
-    draw.emissive.fillStyle = scaleColor(baseEmissive, baseEmissiveIntensity)
-    draw.emissive.fillRect(0, 0, size.width, size.height)
   }
 }
 
@@ -1442,21 +1337,13 @@ export async function bakeLandformGroundSurfaceChunks(
     const canvases = {
       albedo: createCanvas(size.width, size.height),
       normal: createCanvas(size.width, size.height),
-      roughness: createCanvas(size.width, size.height),
-      metalness: createCanvas(size.width, size.height),
-      ao: createCanvas(size.width, size.height),
-      emissive: createCanvas(size.width, size.height),
     }
-    if (!canvases.albedo || !canvases.normal || !canvases.roughness || !canvases.metalness || !canvases.ao || !canvases.emissive) {
+    if (!canvases.albedo || !canvases.normal) {
       continue
     }
     const draw = {
       albedo: canvases.albedo.context,
       normal: canvases.normal.context,
-      roughness: canvases.roughness.context,
-      metalness: canvases.metalness.context,
-      ao: canvases.ao.context,
-      emissive: canvases.emissive.context,
     }
 
     const chunkMaxX = chunkRect.maxX
@@ -1495,9 +1382,7 @@ export async function bakeLandformGroundSurfaceChunks(
         .slice(0, 8)
       const applyDebugTint = false
       const activeLayerCount = Math.min(8, Math.max(1, chunkLayers.length))
-      const chunkLayerTextureAssetIds: Array<string | null> = []
-      const chunkLayerColorTints: Array<string | null> = []
-      const chunkLayerUvScales: Array<{ x: number; y: number } | null> = []
+      const chunkSurfaceLayers: GroundSurfaceChunkLayerRef[] = []
       const maskCanvases = createMaskCanvasSet(size, activeLayerCount)
       if (!maskCanvases) {
         continue
@@ -1513,17 +1398,8 @@ export async function bakeLandformGroundSurfaceChunks(
         }
         const landformColor = parseColor(props.color)
         const opacity = clamp(Number(props.opacity) || 1, 0, 1)
-        const roughness = clamp(Number(props.roughness) || 1, 0, 1)
-        const metalness = clamp(Number(props.metalness) || 0, 0, 1)
-        const aoStrength = clamp(Number(props.aoStrength) || 1, 0, 1)
-        const emissive = parseColor(props.emissive, '#000000')
-        const emissiveIntensity = Math.max(0, Number(props.emissiveIntensity) || 0)
         const albedoTextureRef = resolveMaterialTextureRef(props, 'albedo')
         const normalTextureRef = resolveMaterialTextureRef(props, 'normal')
-        const roughnessTextureRef = resolveMaterialTextureRef(props, 'roughness')
-        const metalnessTextureRef = resolveMaterialTextureRef(props, 'metalness')
-        const aoTextureRef = resolveMaterialTextureRef(props, 'ao')
-        const emissiveTextureRef = resolveMaterialTextureRef(props, 'emissive')
 
         const landformMesh = landform.dynamicMesh as LandformDynamicMesh | null | undefined
         const layerFeatherEnabled = typeof targetLayer.enableFeather === 'boolean'
@@ -1541,43 +1417,34 @@ export async function bakeLandformGroundSurfaceChunks(
         const primaryTextureRuntimeSource = primaryTextureAssetId
           ? await resolveLayerTextureRuntimeSource(scene, primaryTextureAssetId, layerTextureRuntimeSourceCache)
           : null
-        chunkLayerTextureAssetIds.push(primaryTextureRuntimeSource)
-        chunkLayerColorTints.push(landformColor)
-        chunkLayerUvScales.push(targetLayer?.uvScale && Number(targetLayer.uvScale.x) > 0 && Number(targetLayer.uvScale.y) > 0
+        const chunkLayerUvScale = targetLayer?.uvScale && Number(targetLayer.uvScale.x) > 0 && Number(targetLayer.uvScale.y) > 0
           ? { x: Number(targetLayer.uvScale.x), y: Number(targetLayer.uvScale.y) }
-          : { x: Math.max(chunkWidth, 1e-6), y: Math.max(chunkDepth, 1e-6) })
+          : { x: Math.max(chunkWidth, 1e-6), y: Math.max(chunkDepth, 1e-6) }
+        const albedoTextureSettings = albedoTextureRef?.settings
+          ? createTextureSettings(albedoTextureRef.settings as Partial<SceneMaterialTextureSettings>)
+          : null
+        chunkSurfaceLayers.push({
+          albedoSource: primaryTextureRuntimeSource,
+          albedoTextureSettings,
+          colorTint: landformColor,
+          opacity,
+          uvScale: chunkLayerUvScale,
+          maskChannel: layerIndex,
+          featherEnabled: layerFeatherEnabled,
+          featherWidth: layerFeatherWidth,
+        })
         const loadedLayerTexture = primaryTextureAssetId
           ? await loadLayerTextureImage(scene, primaryTextureAssetId, layerTextureCache)
           : null
         const loadedNormalTexture = resolveTextureAssetId(normalTextureRef)
           ? await loadLayerTextureImage(scene, resolveTextureAssetId(normalTextureRef), layerTextureCache)
           : null
-        const loadedRoughnessTexture = resolveTextureAssetId(roughnessTextureRef)
-          ? await loadLayerTextureImage(scene, resolveTextureAssetId(roughnessTextureRef), layerTextureCache)
-          : null
-        const loadedMetalnessTexture = resolveTextureAssetId(metalnessTextureRef)
-          ? await loadLayerTextureImage(scene, resolveTextureAssetId(metalnessTextureRef), layerTextureCache)
-          : null
-        const loadedAoTexture = resolveTextureAssetId(aoTextureRef)
-          ? await loadLayerTextureImage(scene, resolveTextureAssetId(aoTextureRef), layerTextureCache)
-          : null
-        const loadedEmissiveTexture = resolveTextureAssetId(emissiveTextureRef)
-          ? await loadLayerTextureImage(scene, resolveTextureAssetId(emissiveTextureRef), layerTextureCache)
-          : null
         const albedoTilePixels = getLayerTileSizePixels(targetLayer, chunkWidth, chunkDepth, size.width, size.height, albedoTextureRef)
         const normalTilePixels = getLayerTileSizePixels(targetLayer, chunkWidth, chunkDepth, size.width, size.height, normalTextureRef)
-        const roughnessTilePixels = getLayerTileSizePixels(targetLayer, chunkWidth, chunkDepth, size.width, size.height, roughnessTextureRef)
-        const metalnessTilePixels = getLayerTileSizePixels(targetLayer, chunkWidth, chunkDepth, size.width, size.height, metalnessTextureRef)
-        const aoTilePixels = getLayerTileSizePixels(targetLayer, chunkWidth, chunkDepth, size.width, size.height, aoTextureRef)
-        const emissiveTilePixels = getLayerTileSizePixels(targetLayer, chunkWidth, chunkDepth, size.width, size.height, emissiveTextureRef)
 
         draw.albedo.save()
         draw.albedo.fillStyle = landformColor
         draw.normal.save()
-        draw.roughness.save()
-        draw.metalness.save()
-        draw.ao.save()
-        draw.emissive.save()
         const paintGeometries = collectLandformChunkPaintGeometries(layerEntry, chunkBounds)
         let paintedTriangleCount = 0
         for (const geometry of paintGeometries) {
@@ -1625,57 +1492,13 @@ export async function bakeLandformGroundSurfaceChunks(
             } else {
               drawTriangleMask(draw.normal, [p0, p1, p2], 1, 'rgb(128, 128, 255)')
             }
-            if (loadedRoughnessTexture) {
-              paintTiledTextureIntoTriangle(draw.roughness, loadedRoughnessTexture, [p0, p1, p2], {
-                alpha: 1,
-                tilePixels: roughnessTilePixels,
-                textureRef: roughnessTextureRef,
-              })
-              paintScalarTextureTint(draw.roughness, [p0, p1, p2], scaleColor('#ffffff', roughness), 1)
-            } else {
-              drawTriangleMask(draw.roughness, [p0, p1, p2], roughness, 'rgb(255, 255, 255)')
-            }
-            if (loadedMetalnessTexture) {
-              paintTiledTextureIntoTriangle(draw.metalness, loadedMetalnessTexture, [p0, p1, p2], {
-                alpha: 1,
-                tilePixels: metalnessTilePixels,
-                textureRef: metalnessTextureRef,
-              })
-              paintScalarTextureTint(draw.metalness, [p0, p1, p2], scaleColor('#ffffff', metalness), 1)
-            } else {
-              drawTriangleMask(draw.metalness, [p0, p1, p2], metalness, 'rgb(255, 255, 255)')
-            }
-            if (loadedAoTexture) {
-              paintTiledTextureIntoTriangle(draw.ao, loadedAoTexture, [p0, p1, p2], {
-                alpha: 1,
-                tilePixels: aoTilePixels,
-                textureRef: aoTextureRef,
-              })
-              paintScalarTextureTint(draw.ao, [p0, p1, p2], scaleColor('#ffffff', aoStrength), 1)
-            } else {
-              drawTriangleMask(draw.ao, [p0, p1, p2], aoStrength, 'rgb(255, 255, 255)')
-            }
-            if (loadedEmissiveTexture) {
-              paintTiledTextureIntoTriangle(draw.emissive, loadedEmissiveTexture, [p0, p1, p2], {
-                alpha: 1,
-                tilePixels: emissiveTilePixels,
-                textureRef: emissiveTextureRef,
-              })
-              paintScalarTextureTint(draw.emissive, [p0, p1, p2], scaleColor(emissive, emissiveIntensity), 1)
-            } else {
-              drawTriangleMask(draw.emissive, [p0, p1, p2], Math.min(1, emissiveIntensity), scaleColor(emissive, 1))
-            }
             if (maskContext) {
-              drawTriangleMask(maskContext, [p0, p1, p2], alpha * opacity, '#ffffff')
+              drawTriangleMask(maskContext, [p0, p1, p2], alpha, '#ffffff')
             }
           }
         }
         draw.albedo.restore()
         draw.normal.restore()
-        draw.roughness.restore()
-        draw.metalness.restore()
-        draw.ao.restore()
-        draw.emissive.restore()
       }
 
       const maskImages = await Promise.all(maskCanvases.map(({ canvas }) => canvasToImageData(canvas)))
@@ -1701,30 +1524,21 @@ export async function bakeLandformGroundSurfaceChunks(
       splat0.context.putImageData(splat0Data, 0, 0)
       splat1.context.putImageData(splat1Data, 0, 0)
 
-      const [albedoBlob, normalBlob, roughnessBlob, metalnessBlob, aoBlob, emissiveBlob, splat0Blob, splat1Blob] = await Promise.all([
+      const [albedoBlob, normalBlob, splat0Blob, splat1Blob] = await Promise.all([
         canvasToBlob(canvases.albedo.canvas),
         canvasToBlob(canvases.normal.canvas),
-        canvasToBlob(canvases.roughness.canvas),
-        canvasToBlob(canvases.metalness.canvas),
-        canvasToBlob(canvases.ao.canvas),
-        canvasToBlob(canvases.emissive.canvas),
         canvasToBlob(splat0.canvas),
         canvasToBlob(splat1.canvas),
       ])
       const nextChunkRef: GroundSurfaceChunkTextureRef = {
+        baseBlendMode: 'shader-splat-v1',
         textureAssetId: albedoBlob ? (await blobToDataUrl(albedoBlob)) : null,
         normalTextureAssetId: normalBlob ? await blobToDataUrl(normalBlob) : null,
-        roughnessTextureAssetId: roughnessBlob ? await blobToDataUrl(roughnessBlob) : null,
-        metalnessTextureAssetId: metalnessBlob ? await blobToDataUrl(metalnessBlob) : null,
-        aoTextureAssetId: aoBlob ? await blobToDataUrl(aoBlob) : null,
-        emissiveTextureAssetId: emissiveBlob ? await blobToDataUrl(emissiveBlob) : null,
         splatMapAssetIds: [
           splat0Blob ? await blobToDataUrl(splat0Blob) : null,
           splat1Blob ? await blobToDataUrl(splat1Blob) : null,
         ].filter((value): value is string => typeof value === 'string' && value.length > 0),
-        layerTextureAssetIds: chunkLayerTextureAssetIds,
-        layerColorTints: chunkLayerColorTints,
-        layerUvScales: chunkLayerUvScales,
+        surfaceLayers: chunkSurfaceLayers,
         revision: Date.now(),
       }
       nextChunks[chunkKey] = nextChunkRef

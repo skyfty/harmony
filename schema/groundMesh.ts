@@ -25,6 +25,7 @@ import type {
   GroundTerrainHeightSampler,
   GroundChunkData,
   GroundChunkManifestRecord,
+  GroundSurfaceChunkLayerRef,
   GroundDynamicMesh,
   CompiledGroundManifest,
   GroundGenerationSettings,
@@ -36,8 +37,11 @@ import type {
   GroundOptimizedMeshData,
   GroundRuntimeDynamicMesh,
   GroundSculptOperation,
+  SceneMaterialTextureSettings,
 } from './core'
 import { addMesh as markInstancedBoundsDirty } from './instancedBoundsTracker'
+import { createTextureSettings } from './material'
+import { hashString, stableSerialize } from './stableSerialize'
 
 import {
   computeGroundBaseHeightAtVertex,
@@ -6057,7 +6061,38 @@ type GroundRuntimeMaterialMetadata = {
   groundChunkTextured?: boolean
   groundTextureSource?: string | null
   groundTextureSignature?: string | null
+  groundSplatShader?: boolean
 }
+
+type GroundChunkRuntimeSurfaceLayer = {
+  albedoSource: string | null
+  albedoTextureSettings: SceneMaterialTextureSettings | null
+  colorTint: string | null
+  opacity: number
+  uvScale: { x: number; y: number } | null
+  maskChannel: number
+  featherEnabled: boolean
+  featherWidth: number
+}
+
+type GroundChunkTextureRuntimeState = {
+  chunkBounds: { minX: number; minZ: number; width: number; depth: number }
+  layerTextures: Array<THREE.Texture | null>
+  layerStates: GroundChunkRuntimeSurfaceLayer[]
+  splatMaps: THREE.Texture[]
+}
+
+const GROUND_SPLAT_SHADER_HOOK_INSTALLED = '__groundSplatShaderHookInstalled'
+const GROUND_SPLAT_SHADER_REF = '__groundSplatShaderRef'
+const GROUND_SPLAT_ORIGINAL_ON_BEFORE_COMPILE = '__groundSplatOriginalOnBeforeCompile'
+const GROUND_SPLAT_ORIGINAL_PROGRAM_CACHE_KEY = '__groundSplatOriginalProgramCacheKey'
+const GROUND_SPLAT_RUNTIME_STATE = '__groundSplatRuntimeState'
+const GROUND_SPLAT_LAYER_TEXTURES = '__groundSplatLayerTextures'
+const GROUND_SPLAT_MASK_TEXTURES = '__groundSplatMaskTextures'
+const GROUND_SPLAT_MAX_LAYERS = 8
+// Keep the first shader version conservative so it stays under common WebGL fragment sampler limits
+// after accounting for base ground maps, environment lighting, and shadow samplers.
+const GROUND_SPLAT_SHADER_MAX_LAYERS = 4
 function isDynamicGroundTexture(texture: THREE.Texture | null | undefined): boolean {
   if (!texture) {
     return false
@@ -6121,6 +6156,7 @@ function markGroundChunkTexturedMaterial(material: THREE.Material, signature: st
   userData.groundChunkTextured = true
   userData.groundTextureSignature = signature
   userData.groundTextureSource = source
+  userData.groundSplatShader = signature.includes('ground-splat-v1')
 }
 
 function clearGroundRuntimeMaterialMetadata(material: THREE.Material): void {
@@ -6131,6 +6167,7 @@ function clearGroundRuntimeMaterialMetadata(material: THREE.Material): void {
   delete userData.groundChunkTextured
   delete userData.groundTextureSignature
   delete userData.groundTextureSource
+  delete userData.groundSplatShader
 }
 
 function applyGroundTextureSamplingDefaults(texture: THREE.Texture): void {
@@ -6141,6 +6178,44 @@ function applyGroundTextureSamplingDefaults(texture: THREE.Texture): void {
   texture.minFilter = THREE.LinearMipmapLinearFilter
   texture.magFilter = THREE.LinearFilter
   texture.colorSpace = THREE.SRGBColorSpace
+}
+
+function resolveGroundTextureWrapMode(mode: string | null | undefined): THREE.Wrapping {
+  switch (mode) {
+    case 'MirroredRepeatWrapping':
+      return THREE.MirroredRepeatWrapping
+    case 'ClampToEdgeWrapping':
+      return THREE.ClampToEdgeWrapping
+    case 'RepeatWrapping':
+    default:
+      return THREE.RepeatWrapping
+  }
+}
+
+function applyGroundLayerTextureSettings(
+  texture: THREE.Texture,
+  settings: SceneMaterialTextureSettings | null | undefined,
+): void {
+  const resolved = createTextureSettings(settings ?? null)
+  texture.wrapS = resolveGroundTextureWrapMode(resolved.wrapS)
+  texture.wrapT = resolveGroundTextureWrapMode(resolved.wrapT)
+  texture.flipY = resolved.flipY
+  texture.generateMipmaps = resolved.generateMipmaps
+  texture.premultiplyAlpha = resolved.premultiplyAlpha
+  texture.needsUpdate = true
+}
+
+function createGroundSplatLayerTexture(
+  source: string | null | undefined,
+  index: number,
+  settings: SceneMaterialTextureSettings | null | undefined,
+): THREE.Texture | null {
+  const texture = loadGroundTextureFromSource(source, `GroundSplatLayer${index + 1}`, { flipY: settings?.flipY })
+  if (!texture) {
+    return null
+  }
+  applyGroundLayerTextureSettings(texture, settings)
+  return texture
 }
 
 function summarizeGroundMeshUvBounds(mesh: THREE.Mesh): {
@@ -6318,10 +6393,6 @@ function disposeGroundChunkTexturedMaterial(material: THREE.Material | null | un
   ;[
     'map',
     'normalMap',
-    'roughnessMap',
-    'metalnessMap',
-    'aoMap',
-    'emissiveMap',
   ].forEach((key) => {
     const texture = typed[key] as THREE.Texture | null | undefined
     if (texture && isDynamicGroundTexture(texture)) {
@@ -6329,18 +6400,67 @@ function disposeGroundChunkTexturedMaterial(material: THREE.Material | null | un
       typed[key] = null
     }
   })
+  const layerTextures = Array.isArray(typed[GROUND_SPLAT_LAYER_TEXTURES])
+    ? typed[GROUND_SPLAT_LAYER_TEXTURES] as Array<THREE.Texture | null>
+    : []
+  layerTextures.forEach((texture) => {
+    if (texture && isDynamicGroundTexture(texture)) {
+      disposeGroundTexture(texture)
+    }
+  })
+  const maskTextures = Array.isArray(typed[GROUND_SPLAT_MASK_TEXTURES])
+    ? typed[GROUND_SPLAT_MASK_TEXTURES] as Array<THREE.Texture | null>
+    : []
+  maskTextures.forEach((texture) => {
+    if (texture && isDynamicGroundTexture(texture)) {
+      disposeGroundTexture(texture)
+    }
+  })
+  clearGroundSplatMaterialUniforms(material)
+  delete typed[GROUND_SPLAT_LAYER_TEXTURES]
+  delete typed[GROUND_SPLAT_MASK_TEXTURES]
+  delete typed[GROUND_SPLAT_RUNTIME_STATE]
   clearGroundRuntimeMaterialMetadata(material)
   material.dispose()
 }
 
 type GroundChunkTextureBundleSources = {
+  baseBlendMode: 'shader-splat-v1' | null
   albedo: string | null
   normal: string | null
-  roughness: string | null
-  metalness: string | null
-  ao: string | null
-  emissive: string | null
   splatMaps: string[]
+  surfaceLayers: GroundChunkRuntimeSurfaceLayer[]
+}
+
+function normalizeGroundChunkRuntimeSurfaceLayer(
+  layer: GroundSurfaceChunkLayerRef | null | undefined,
+  fallbackTexture: string | null,
+  fallbackTint: string | null,
+  fallbackUvScale: { x: number; y: number } | null,
+  index: number,
+): GroundChunkRuntimeSurfaceLayer {
+  const opacity = Number(layer?.opacity)
+  const featherWidth = Number(layer?.featherWidth)
+  const uvScaleX = Number(layer?.uvScale?.x)
+  const uvScaleY = Number(layer?.uvScale?.y)
+  return {
+    albedoSource: typeof layer?.albedoSource === 'string' && layer.albedoSource.trim().length > 0
+      ? layer.albedoSource.trim()
+      : fallbackTexture,
+    albedoTextureSettings: layer?.albedoTextureSettings ? createTextureSettings(layer.albedoTextureSettings) : null,
+    colorTint: typeof layer?.colorTint === 'string' && layer.colorTint.trim().length > 0
+      ? layer.colorTint.trim()
+      : fallbackTint,
+    opacity: Number.isFinite(opacity) ? Math.max(0, Math.min(1, opacity)) : 1,
+    uvScale: Number.isFinite(uvScaleX) && uvScaleX > 0 && Number.isFinite(uvScaleY) && uvScaleY > 0
+      ? { x: uvScaleX, y: uvScaleY }
+      : fallbackUvScale,
+    maskChannel: Number.isInteger(layer?.maskChannel) && Number(layer?.maskChannel) >= 0 && Number(layer?.maskChannel) < GROUND_SPLAT_MAX_LAYERS
+      ? Number(layer?.maskChannel)
+      : index,
+    featherEnabled: typeof layer?.featherEnabled === 'boolean' ? layer.featherEnabled : false,
+    featherWidth: Number.isFinite(featherWidth) ? Math.max(0, featherWidth) : 0,
+  }
 }
 
 function resolveCompiledGroundTileChunkKey(
@@ -6398,23 +6518,27 @@ function resolveGroundChunkTextureBundleSources(
   }
   const albedo = typeof entry.textureAssetId === 'string' ? entry.textureAssetId.trim() : ''
   const normal = typeof entry.normalTextureAssetId === 'string' ? entry.normalTextureAssetId.trim() : ''
-  const roughness = typeof entry.roughnessTextureAssetId === 'string' ? entry.roughnessTextureAssetId.trim() : ''
-  const metalness = typeof entry.metalnessTextureAssetId === 'string' ? entry.metalnessTextureAssetId.trim() : ''
-  const ao = typeof entry.aoTextureAssetId === 'string' ? entry.aoTextureAssetId.trim() : ''
-  const emissive = typeof entry.emissiveTextureAssetId === 'string' ? entry.emissiveTextureAssetId.trim() : ''
   const splatMaps = Array.isArray(entry.splatMapAssetIds)
     ? entry.splatMapAssetIds
       .map((value) => (typeof value === 'string' ? value.trim() : ''))
       .filter((value) => value.length > 0)
     : []
+  const directSurfaceLayers = Array.isArray(entry.surfaceLayers) ? entry.surfaceLayers : []
+  const surfaceLayers = Array.from({ length: Math.min(GROUND_SPLAT_MAX_LAYERS, directSurfaceLayers.length) }, (_, index) => {
+    return normalizeGroundChunkRuntimeSurfaceLayer(
+      directSurfaceLayers[index] ?? null,
+      null,
+      null,
+      null,
+      index,
+    )
+  }).filter((layer) => Boolean(layer.albedoSource) || Boolean(layer.colorTint))
   return {
+    baseBlendMode: entry.baseBlendMode === 'shader-splat-v1' ? 'shader-splat-v1' : null,
     albedo: albedo || null,
     normal: normal || null,
-    roughness: roughness || null,
-    metalness: metalness || null,
-    ao: ao || null,
-    emissive: emissive || null,
     splatMaps,
+    surfaceLayers,
   }
 }
 
@@ -6450,6 +6574,301 @@ function loadGroundChunkSplatMaps(sources: string[], chunkKey: string): THREE.Te
   return textures.slice(0, 2)
 }
 
+function createGroundSplatSignature(
+  chunkKey: string,
+  baseMaterialSignature: string,
+  bundle: GroundChunkTextureBundleSources,
+): string {
+  return [
+    'ground-splat-v1',
+    chunkKey,
+    baseMaterialSignature,
+    bundle.splatMaps.join('|'),
+    hashString(stableSerialize({
+      baseBlendMode: bundle.baseBlendMode,
+      surfaceLayers: bundle.surfaceLayers.map((layer) => ({
+        albedoSource: layer.albedoSource,
+        albedoTextureSettings: layer.albedoTextureSettings,
+        colorTint: layer.colorTint,
+        opacity: layer.opacity,
+        uvScale: layer.uvScale,
+        maskChannel: layer.maskChannel,
+        featherEnabled: layer.featherEnabled,
+        featherWidth: layer.featherWidth,
+      })),
+    })),
+  ].join('|')
+}
+
+function buildGroundSplatChunkBounds(
+  definition: GroundDynamicMesh,
+  spec: Pick<GroundChunkSpec, 'startRow' | 'startColumn' | 'rows' | 'columns'> | null,
+  mesh: THREE.Mesh,
+): { minX: number; minZ: number; width: number; depth: number } | null {
+  if (spec) {
+    const bounds = resolveGroundChunkWorldBoundsFromSpec(definition, spec as GroundChunkSpec)
+    return {
+      minX: bounds.minX,
+      minZ: bounds.minZ,
+      width: Math.max(bounds.maxX - bounds.minX, Number.EPSILON),
+      depth: Math.max(bounds.maxZ - bounds.minZ, Number.EPSILON),
+    }
+  }
+  mesh.geometry?.computeBoundingBox?.()
+  const boundingBox = mesh.geometry?.boundingBox ?? null
+  if (!boundingBox) {
+    return null
+  }
+  const min = mesh.localToWorld(boundingBox.min.clone())
+  const max = mesh.localToWorld(boundingBox.max.clone())
+  return {
+    minX: Math.min(min.x, max.x),
+    minZ: Math.min(min.z, max.z),
+    width: Math.max(Math.abs(max.x - min.x), Number.EPSILON),
+    depth: Math.max(Math.abs(max.z - min.z), Number.EPSILON),
+  }
+}
+
+function createGroundSplatLayerTransform(
+  layer: GroundChunkRuntimeSurfaceLayer,
+): {
+  uvScale: THREE.Vector2
+  transform: THREE.Vector4
+  rotation: THREE.Vector4
+} {
+  const settings = createTextureSettings(layer.albedoTextureSettings ?? null)
+  const uvScale = {
+    x: Number.isFinite(layer.uvScale?.x) && Number(layer.uvScale?.x) > 1e-6 ? Number(layer.uvScale?.x) : 1,
+    y: Number.isFinite(layer.uvScale?.y) && Number(layer.uvScale?.y) > 1e-6 ? Number(layer.uvScale?.y) : 1,
+  }
+  const tileScaleX = Number.isFinite(settings.tileSizeMeters.x) && settings.tileSizeMeters.x > 1e-6 ? settings.tileSizeMeters.x : 1
+  const tileScaleY = Number.isFinite(settings.tileSizeMeters.y) && settings.tileSizeMeters.y > 1e-6 ? settings.tileSizeMeters.y : 1
+  const repeatX = Number.isFinite(settings.repeat.x) ? settings.repeat.x : 1
+  const repeatY = Number.isFinite(settings.repeat.y) ? settings.repeat.y : 1
+  return {
+    uvScale: new THREE.Vector2(uvScale.x, uvScale.y),
+    transform: new THREE.Vector4(
+      repeatX / (uvScale.x * tileScaleX),
+      repeatY / (uvScale.y * tileScaleY),
+      Number.isFinite(settings.offset.x) ? settings.offset.x : 0,
+      Number.isFinite(settings.offset.y) ? settings.offset.y : 0,
+    ),
+    rotation: new THREE.Vector4(
+      Math.cos(Number.isFinite(settings.rotation) ? settings.rotation : 0),
+      Math.sin(Number.isFinite(settings.rotation) ? settings.rotation : 0),
+      Number.isFinite(settings.center.x) ? settings.center.x : 0,
+      Number.isFinite(settings.center.y) ? settings.center.y : 0,
+    ),
+  }
+}
+
+function ensureGroundSplatShaderHooks(material: THREE.MeshStandardMaterial): boolean {
+  const typed = material as THREE.MeshStandardMaterial & Record<string, unknown>
+  if (typed[GROUND_SPLAT_SHADER_HOOK_INSTALLED] === true) {
+    return false
+  }
+  const originalOnBeforeCompile = material.onBeforeCompile
+  const originalCustomProgramCacheKey = material.customProgramCacheKey
+  typed[GROUND_SPLAT_ORIGINAL_ON_BEFORE_COMPILE] = originalOnBeforeCompile
+  typed[GROUND_SPLAT_ORIGINAL_PROGRAM_CACHE_KEY] = originalCustomProgramCacheKey
+
+  const layerUniformDeclarations = Array.from({ length: GROUND_SPLAT_SHADER_MAX_LAYERS }, (_, index) => `
+uniform sampler2D groundSplatLayerMap${index};
+uniform bool groundSplatLayerHasMap${index};
+uniform bool groundSplatLayerEnabled${index};
+uniform vec3 groundSplatLayerTint${index};
+uniform float groundSplatLayerOpacity${index};
+uniform vec2 groundSplatLayerUvScale${index};
+uniform vec4 groundSplatLayerTransform${index};
+uniform vec4 groundSplatLayerRotation${index};`).join('\n')
+
+  const layerBlendBlocks = Array.from({ length: GROUND_SPLAT_SHADER_MAX_LAYERS }, (_, index) => {
+    const maskSample = 'groundSplatMaskSample0'
+    const maskChannel = ['r', 'g', 'b', 'a'][index % 4]
+    return `
+if (groundSplatLayerEnabled${index}) {
+  vec2 groundSplatUv${index} = vec2(
+    vGroundSplatWorldXZ.x * groundSplatLayerTransform${index}.x,
+    vGroundSplatWorldXZ.y * groundSplatLayerTransform${index}.y
+  ) + groundSplatLayerTransform${index}.zw;
+  vec2 groundSplatCentered${index} = groundSplatUv${index} - groundSplatLayerRotation${index}.zw;
+  groundSplatUv${index} = vec2(
+    groundSplatCentered${index}.x * groundSplatLayerRotation${index}.x - groundSplatCentered${index}.y * groundSplatLayerRotation${index}.y,
+    groundSplatCentered${index}.x * groundSplatLayerRotation${index}.y + groundSplatCentered${index}.y * groundSplatLayerRotation${index}.x
+  ) + groundSplatLayerRotation${index}.zw;
+  vec3 groundSplatLayerColor${index} = groundSplatLayerHasMap${index}
+    ? texture2D(groundSplatLayerMap${index}, groundSplatUv${index}).rgb
+    : vec3(1.0);
+  groundSplatLayerColor${index} *= groundSplatLayerTint${index};
+  float groundSplatMask${index} = ${maskSample}.${maskChannel} * groundSplatLayerOpacity${index};
+  groundSplatMixedColor = mix(groundSplatMixedColor, groundSplatLayerColor${index}, clamp(groundSplatMask${index}, 0.0, 1.0));
+}`
+  }).join('\n')
+
+  material.onBeforeCompile = (shader, renderer) => {
+    typed[GROUND_SPLAT_SHADER_REF] = shader
+    shader.uniforms.groundSplatEnabled = { value: false }
+    shader.uniforms.groundSplatChunkRect = { value: new THREE.Vector4(0, 0, 1, 1) }
+    shader.uniforms.groundSplatMask0 = { value: null }
+    shader.uniforms.groundSplatHasMask0 = { value: false }
+    for (let index = 0; index < GROUND_SPLAT_SHADER_MAX_LAYERS; index += 1) {
+      shader.uniforms[`groundSplatLayerMap${index}`] = { value: null }
+      shader.uniforms[`groundSplatLayerHasMap${index}`] = { value: false }
+      shader.uniforms[`groundSplatLayerEnabled${index}`] = { value: false }
+      shader.uniforms[`groundSplatLayerTint${index}`] = { value: new THREE.Color('#ffffff') }
+      shader.uniforms[`groundSplatLayerOpacity${index}`] = { value: 0 }
+      shader.uniforms[`groundSplatLayerUvScale${index}`] = { value: new THREE.Vector2(1, 1) }
+      shader.uniforms[`groundSplatLayerTransform${index}`] = { value: new THREE.Vector4(1, 1, 0, 0) }
+      shader.uniforms[`groundSplatLayerRotation${index}`] = { value: new THREE.Vector4(1, 0, 0, 0) }
+    }
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec2 vGroundSplatWorldXZ;')
+      .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvGroundSplatWorldXZ = vec2(worldPosition.x, worldPosition.z);')
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        '#include <common>',
+        `#include <common>
+varying vec2 vGroundSplatWorldXZ;
+uniform bool groundSplatEnabled;
+uniform vec4 groundSplatChunkRect;
+uniform sampler2D groundSplatMask0;
+uniform bool groundSplatHasMask0;
+${layerUniformDeclarations}`,
+      )
+      .replace(
+        '#include <map_fragment>',
+        `#include <map_fragment>
+if (groundSplatEnabled) {
+  vec2 groundSplatMaskUv = vec2(
+    clamp((vGroundSplatWorldXZ.x - groundSplatChunkRect.x) / max(groundSplatChunkRect.z, 1e-6), 0.0, 1.0),
+    clamp(((groundSplatChunkRect.y + groundSplatChunkRect.w) - vGroundSplatWorldXZ.y) / max(groundSplatChunkRect.w, 1e-6), 0.0, 1.0)
+  );
+  vec4 groundSplatMaskSample0 = groundSplatHasMask0 ? texture2D(groundSplatMask0, groundSplatMaskUv) : vec4(0.0);
+  vec3 groundSplatMixedColor = diffuseColor.rgb;
+  ${layerBlendBlocks}
+  diffuseColor.rgb = groundSplatMixedColor;
+}`,
+      )
+    originalOnBeforeCompile?.(shader, renderer)
+    syncGroundSplatMaterialUniforms(material, typed[GROUND_SPLAT_RUNTIME_STATE] as GroundChunkTextureRuntimeState | null | undefined)
+  }
+
+  material.customProgramCacheKey = () => {
+    const originalKey = typeof originalCustomProgramCacheKey === 'function'
+      ? originalCustomProgramCacheKey.call(material)
+      : 'ground-splat'
+    return `${originalKey}|ground-splat-v1`
+  }
+
+  typed[GROUND_SPLAT_SHADER_HOOK_INSTALLED] = true
+  typed.userData = {
+    ...(typed.userData ?? {}),
+    groundSplatShader: true,
+  }
+  material.needsUpdate = true
+  return true
+}
+
+function syncGroundSplatMaterialUniforms(
+  material: THREE.Material | null | undefined,
+  state: GroundChunkTextureRuntimeState | null | undefined,
+): void {
+  if (!material || !(material as THREE.MeshStandardMaterial).isMeshStandardMaterial) {
+    return
+  }
+  const typed = material as THREE.MeshStandardMaterial & Record<string, unknown>
+  typed[GROUND_SPLAT_RUNTIME_STATE] = state ?? null
+  const shader = typed[GROUND_SPLAT_SHADER_REF] as
+    | { uniforms?: Record<string, { value: unknown }> }
+    | undefined
+  if (!shader?.uniforms) {
+    return
+  }
+  const enabled = Boolean(state && state.layerStates.length > 0)
+  const setUniform = (key: string, value: unknown) => {
+    if (shader.uniforms?.[key]) {
+      shader.uniforms[key]!.value = value
+    }
+  }
+  setUniform('groundSplatEnabled', enabled)
+  setUniform('groundSplatChunkRect', state
+    ? new THREE.Vector4(state.chunkBounds.minX, state.chunkBounds.minZ, state.chunkBounds.width, state.chunkBounds.depth)
+    : new THREE.Vector4(0, 0, 1, 1))
+  setUniform('groundSplatMask0', state?.splatMaps[0] ?? null)
+  setUniform('groundSplatHasMask0', Boolean(state?.splatMaps[0]))
+  for (let index = 0; index < GROUND_SPLAT_SHADER_MAX_LAYERS; index += 1) {
+    const layer = state?.layerStates[index] ?? null
+    const layerTexture = state?.layerTextures[index] ?? null
+    const tint = new THREE.Color(layer?.colorTint || '#ffffff')
+    const transformState = layer ? createGroundSplatLayerTransform(layer) : {
+      uvScale: new THREE.Vector2(1, 1),
+      transform: new THREE.Vector4(1, 1, 0, 0),
+      rotation: new THREE.Vector4(1, 0, 0, 0),
+    }
+    setUniform(`groundSplatLayerMap${index}`, layerTexture)
+    setUniform(`groundSplatLayerHasMap${index}`, Boolean(layerTexture))
+    setUniform(`groundSplatLayerEnabled${index}`, Boolean(layer))
+    setUniform(`groundSplatLayerTint${index}`, tint)
+    setUniform(`groundSplatLayerOpacity${index}`, layer ? layer.opacity : 0)
+    setUniform(`groundSplatLayerUvScale${index}`, transformState.uvScale)
+    setUniform(`groundSplatLayerTransform${index}`, transformState.transform)
+    setUniform(`groundSplatLayerRotation${index}`, transformState.rotation)
+  }
+}
+
+function clearGroundSplatMaterialUniforms(material: THREE.Material | null | undefined): void {
+  syncGroundSplatMaterialUniforms(material, null)
+}
+
+function createGroundChunkSplatRuntimeState(
+  definition: GroundDynamicMesh,
+  mesh: THREE.Mesh,
+  spec: Pick<GroundChunkSpec, 'startRow' | 'startColumn' | 'rows' | 'columns'> | null,
+  bundle: GroundChunkTextureBundleSources,
+): GroundChunkTextureRuntimeState | null {
+  if (bundle.baseBlendMode !== 'shader-splat-v1' || bundle.surfaceLayers.length === 0 || bundle.surfaceLayers.length > GROUND_SPLAT_SHADER_MAX_LAYERS) {
+    return null
+  }
+  const chunkBounds = buildGroundSplatChunkBounds(definition, spec, mesh)
+  if (!chunkBounds) {
+    return null
+  }
+  const maskSources = bundle.splatMaps.slice(0, 1)
+  const splatMaps = loadGroundChunkSplatMaps(maskSources, 'ground-splat')
+  if (maskSources.length > 0 && splatMaps.length !== maskSources.length) {
+    splatMaps.forEach((texture) => disposeGroundTexture(texture))
+    return null
+  }
+  const layerTextures = bundle.surfaceLayers.map((layer, index) => {
+    if (!layer.albedoSource) {
+      return null
+    }
+    return createGroundSplatLayerTexture(layer.albedoSource, index, layer.albedoTextureSettings)
+  })
+  return {
+    chunkBounds,
+    layerTextures,
+    layerStates: bundle.surfaceLayers.slice(0, GROUND_SPLAT_SHADER_MAX_LAYERS),
+    splatMaps,
+  }
+}
+
+function disposeGroundChunkSplatRuntimeState(state: GroundChunkTextureRuntimeState | null | undefined): void {
+  if (!state) {
+    return
+  }
+  state.layerTextures.forEach((texture) => {
+    if (texture && isDynamicGroundTexture(texture)) {
+      disposeGroundTexture(texture)
+    }
+  })
+  state.splatMaps.forEach((texture) => {
+    if (texture && isDynamicGroundTexture(texture)) {
+      disposeGroundTexture(texture)
+    }
+  })
+}
+
 function createGroundChunkTexturedMaterial(baseMaterial: THREE.Material): THREE.MeshStandardMaterial {
   const baseStandard = baseMaterial as THREE.MeshStandardMaterial & {
     metalness?: number
@@ -6458,7 +6877,9 @@ function createGroundChunkTexturedMaterial(baseMaterial: THREE.Material): THREE.
     envMapIntensity?: number
   }
   const nextMaterial = new THREE.MeshStandardMaterial({
-    color: typeof baseStandard.color?.clone === 'function' ? baseStandard.color.clone() : '#ffffff',
+    // Baked chunk albedo already contains the resolved ground + landform base color.
+    // Keep runtime chunk materials white so we do not multiply that color a second time.
+    color: '#ffffff',
     roughness: typeof baseStandard.roughness === 'number' ? baseStandard.roughness : 0.85,
     metalness: typeof baseStandard.metalness === 'number' ? baseStandard.metalness : 0.05,
   })
@@ -6479,11 +6900,26 @@ function createGroundChunkTexturedMaterial(baseMaterial: THREE.Material): THREE.
   nextMaterial.emissive.set('#000000')
   nextMaterial.emissiveIntensity = 0
   nextMaterial.normalMap = null
+  nextMaterial.displacementMap = null
+  return nextMaterial
+}
+
+function createGroundChunkSplatMaterial(baseMaterial: THREE.Material): THREE.MeshStandardMaterial | null {
+  if (!(baseMaterial as THREE.MeshStandardMaterial).isMeshStandardMaterial) {
+    return null
+  }
+  const nextMaterial = (baseMaterial as THREE.MeshStandardMaterial).clone()
+  nextMaterial.name = baseMaterial.name ? `${baseMaterial.name} GroundSplat` : 'Ground Splat'
+  nextMaterial.depthWrite = true
+  nextMaterial.transparent = false
+  nextMaterial.opacity = 1
+  nextMaterial.alphaTest = 0
+  nextMaterial.wireframe = false
   nextMaterial.roughnessMap = null
   nextMaterial.metalnessMap = null
   nextMaterial.aoMap = null
   nextMaterial.emissiveMap = null
-  nextMaterial.displacementMap = null
+  ensureGroundSplatShaderHooks(nextMaterial)
   return nextMaterial
 }
 
@@ -6533,10 +6969,6 @@ function applyGroundTextureToChunkMesh(
   const hasBakedBundle = Boolean(
     activeSource
     || bundle?.normal
-    || bundle?.roughness
-    || bundle?.metalness
-    || bundle?.ao
-    || bundle?.emissive
     || (bundle?.splatMaps?.length ?? 0) > 0,
   )
 
@@ -6549,6 +6981,71 @@ function applyGroundTextureToChunkMesh(
     }
     delete userData.groundChunkSplatMaps
     return
+  }
+
+  const splatRuntimeState = bundle
+    ? createGroundChunkSplatRuntimeState(definition, mesh, spec, bundle)
+    : null
+  const shouldUseShaderSplat = Boolean(splatRuntimeState && chunkKey && bundle?.surfaceLayers.length)
+
+  if (shouldUseShaderSplat && chunkKey && bundle) {
+    const signature = createGroundSplatSignature(chunkKey, baseMaterialSignature, bundle)
+    if (currentMaterial && isGroundChunkTexturedMaterial(currentMaterial) && hasGroundTextureSignature(currentMaterial, signature)) {
+      const currentTyped = currentMaterial as THREE.MeshStandardMaterial & Record<string, unknown>
+      const previousLayerTextures = Array.isArray(currentTyped[GROUND_SPLAT_LAYER_TEXTURES])
+        ? currentTyped[GROUND_SPLAT_LAYER_TEXTURES] as Array<THREE.Texture | null>
+        : []
+      previousLayerTextures.forEach((texture) => {
+        if (texture && isDynamicGroundTexture(texture)) {
+          disposeGroundTexture(texture)
+        }
+      })
+      const previousMaskTextures = Array.isArray(currentTyped[GROUND_SPLAT_MASK_TEXTURES])
+        ? currentTyped[GROUND_SPLAT_MASK_TEXTURES] as Array<THREE.Texture | null>
+        : []
+      previousMaskTextures.forEach((texture) => {
+        if (texture && isDynamicGroundTexture(texture)) {
+          disposeGroundTexture(texture)
+        }
+      })
+      syncGroundSplatMaterialUniforms(currentMaterial, splatRuntimeState)
+      currentTyped[GROUND_SPLAT_LAYER_TEXTURES] = splatRuntimeState?.layerTextures ?? []
+      currentTyped[GROUND_SPLAT_MASK_TEXTURES] = splatRuntimeState?.splatMaps ?? []
+      currentTyped.userData = {
+        ...(currentTyped.userData ?? {}),
+        groundChunkSplatMapIds: bundle.splatMaps,
+      }
+      userData.groundChunkSplatMaps = splatRuntimeState?.splatMaps ?? []
+      if (mesh.material !== currentMaterial) {
+        mesh.material = currentMaterial
+      }
+      return
+    }
+
+    const nextMaterial = createGroundChunkSplatMaterial(baseMaterial)
+    if (nextMaterial) {
+      markGroundChunkTexturedMaterial(nextMaterial, signature, activeSource)
+      syncGroundSplatMaterialUniforms(nextMaterial, splatRuntimeState)
+      const typed = nextMaterial as THREE.MeshStandardMaterial & Record<string, unknown>
+      typed[GROUND_SPLAT_LAYER_TEXTURES] = splatRuntimeState?.layerTextures ?? []
+      typed[GROUND_SPLAT_MASK_TEXTURES] = splatRuntimeState?.splatMaps ?? []
+      typed.userData = {
+        ...(typed.userData ?? {}),
+        groundChunkSplatMapIds: bundle.splatMaps,
+      }
+      if (bundle.normal) {
+        typed.normalMap = loadGroundTextureFromSource(bundle.normal, 'GroundChunkNormalMap', { flipY: false })
+      }
+      typed.needsUpdate = true
+      userData.groundChunkSplatMaps = splatRuntimeState?.splatMaps ?? []
+      if (currentMaterial && currentMaterial !== baseMaterial) {
+        disposeGroundChunkTexturedMaterial(currentMaterial)
+      }
+      mesh.material = nextMaterial
+      return
+    }
+
+    disposeGroundChunkSplatRuntimeState(splatRuntimeState)
   }
 
   const uvBounds = summarizeGroundMeshUvBounds(mesh)
@@ -6570,23 +7067,24 @@ function applyGroundTextureToChunkMesh(
       repeatY: 1,
     })
   const signature = [
+    'ground-chunk-albedo-v2',
     bundle?.albedo ?? 'none',
     bundle?.normal ?? 'none',
-    bundle?.roughness ?? 'none',
-    bundle?.metalness ?? 'none',
-    bundle?.ao ?? 'none',
-    bundle?.emissive ?? 'none',
     bundle ? bundle.splatMaps.join('|') : 'none',
     baseMaterialSignature,
     resolveGroundTextureWindowSignature(safeWindow),
   ].join('|')
   if (currentMaterial && isGroundChunkTexturedMaterial(currentMaterial) && hasGroundTextureSignature(currentMaterial, signature)) {
+    disposeGroundChunkSplatRuntimeState(splatRuntimeState)
     if (mesh.material !== currentMaterial) {
       mesh.material = currentMaterial
     }
     return
   }
 
+  // groundSurfaceChunks[*].textureAssetId is treated as the final baked albedo for this chunk.
+  // Ground inspector color reaches baked chunks through landform/ground bake, so the runtime
+  // chunk material must stay white and only contribute non-color material properties here.
   const nextMaterial = createGroundChunkTexturedMaterial(baseMaterial)
   markGroundChunkTexturedMaterial(nextMaterial, signature, activeSource)
   const typed = nextMaterial as THREE.MeshStandardMaterial & {
@@ -6620,22 +7118,6 @@ function applyGroundTextureToChunkMesh(
   if (bundle?.normal) {
     typed.normalMap = loadGroundTextureFromSource(bundle.normal, 'GroundChunkNormalMap', { flipY: false })
   }
-  if (bundle?.roughness) {
-    typed.roughnessMap = loadGroundTextureFromSource(bundle.roughness, 'GroundChunkRoughnessMap', { flipY: false })
-    nextMaterial.roughness = 1
-  }
-  if (bundle?.metalness) {
-    typed.metalnessMap = loadGroundTextureFromSource(bundle.metalness, 'GroundChunkMetalnessMap', { flipY: false })
-    nextMaterial.metalness = 1
-  }
-  if (bundle?.ao) {
-    typed.aoMap = loadGroundTextureFromSource(bundle.ao, 'GroundChunkAoMap', { flipY: false })
-  }
-  if (bundle?.emissive) {
-    typed.emissiveMap = loadGroundTextureFromSource(bundle.emissive, 'GroundChunkEmissiveMap', { flipY: false })
-    nextMaterial.emissive.set('#ffffff')
-    nextMaterial.emissiveIntensity = 1
-  }
   const splatMapSources = bundle?.splatMaps ?? []
   // These splat maps and layer metadata are preserved for future true shader-based splatting,
   // but the current editor/runtime path still consumes the pre-baked per-chunk texture bundle.
@@ -6649,6 +7131,7 @@ function applyGroundTextureToChunkMesh(
   if (currentMaterial && currentMaterial !== baseMaterial) {
     disposeGroundChunkTexturedMaterial(currentMaterial)
   }
+  disposeGroundChunkSplatRuntimeState(splatRuntimeState)
   mesh.material = nextMaterial
 }
 

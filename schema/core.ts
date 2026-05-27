@@ -1711,18 +1711,23 @@ export interface GroundGenerationSettings {
 
 export type GroundSculptOperation = 'raise' | 'depress' | 'smooth' | 'flatten' | 'flatten-zero'
 
+export interface GroundSurfaceChunkLayerRef {
+  albedoSource?: string | null
+  albedoTextureSettings?: SceneMaterialTextureSettings | null
+  colorTint?: string | null
+  opacity?: number | null
+  uvScale?: Vector2Like | null
+  maskChannel: number
+  featherEnabled?: boolean | null
+  featherWidth?: number | null
+}
 
 export interface GroundSurfaceChunkTextureRef {
+  baseBlendMode?: 'shader-splat-v1' | null
   textureAssetId?: string | null
   normalTextureAssetId?: string | null
-  roughnessTextureAssetId?: string | null
-  metalnessTextureAssetId?: string | null
-  aoTextureAssetId?: string | null
-  emissiveTextureAssetId?: string | null
   splatMapAssetIds?: string[] | null
-  layerTextureAssetIds?: Array<string | null> | null
-  layerColorTints?: Array<string | null> | null
-  layerUvScales?: Array<Vector2Like | null> | null
+  surfaceLayers?: GroundSurfaceChunkLayerRef[] | null
   revision: number
 }
 
@@ -1984,6 +1989,40 @@ export function formatGroundChunkDataPath(
 export function normalizeGroundSurfaceChunkTextureMap(
   value: GroundSurfaceChunkTextureMap | null | undefined,
 ): GroundSurfaceChunkTextureMap {
+  const normalizeTextureSettings = (settings: unknown): SceneMaterialTextureSettings | null => {
+    if (!settings || typeof settings !== 'object') {
+      return null
+    }
+    const record = settings as Partial<SceneMaterialTextureSettings>
+    const tileSizeX = Number(record.tileSizeMeters?.x)
+    const tileSizeY = Number(record.tileSizeMeters?.y)
+    return {
+      wrapS: typeof record.wrapS === 'string' ? record.wrapS : 'ClampToEdgeWrapping',
+      wrapT: typeof record.wrapT === 'string' ? record.wrapT : 'ClampToEdgeWrapping',
+      wrapR: typeof record.wrapR === 'string' ? record.wrapR : 'ClampToEdgeWrapping',
+      offset: {
+        x: Number.isFinite(Number(record.offset?.x)) ? Number(record.offset?.x) : 0,
+        y: Number.isFinite(Number(record.offset?.y)) ? Number(record.offset?.y) : 0,
+      },
+      repeat: {
+        x: Number.isFinite(Number(record.repeat?.x)) ? Number(record.repeat?.x) : 1,
+        y: Number.isFinite(Number(record.repeat?.y)) ? Number(record.repeat?.y) : 1,
+      },
+      tileSizeMeters: {
+        x: Number.isFinite(tileSizeX) && tileSizeX > 1e-6 ? tileSizeX : 1,
+        y: Number.isFinite(tileSizeY) && tileSizeY > 1e-6 ? tileSizeY : 1,
+      },
+      rotation: Number.isFinite(Number(record.rotation)) ? Number(record.rotation) : 0,
+      center: {
+        x: Number.isFinite(Number(record.center?.x)) ? Number(record.center?.x) : 0,
+        y: Number.isFinite(Number(record.center?.y)) ? Number(record.center?.y) : 0,
+      },
+      matrixAutoUpdate: typeof record.matrixAutoUpdate === 'boolean' ? record.matrixAutoUpdate : true,
+      generateMipmaps: typeof record.generateMipmaps === 'boolean' ? record.generateMipmaps : true,
+      premultiplyAlpha: typeof record.premultiplyAlpha === 'boolean' ? record.premultiplyAlpha : false,
+      flipY: typeof record.flipY === 'boolean' ? record.flipY : true,
+    }
+  }
   const normalizeOptionalAssetId = (assetId: unknown): string | null => {
     const normalized = typeof assetId === 'string' ? assetId.trim() : ''
     return normalized.length > 0 ? normalized : null
@@ -1994,43 +2033,50 @@ export function normalizeGroundSurfaceChunkTextureMap(
     if (!normalizedChunkKey) {
       continue
     }
+    const normalizedSurfaceLayers = Array.isArray(chunkRef?.surfaceLayers)
+      ? chunkRef.surfaceLayers
+          .map((layer): GroundSurfaceChunkLayerRef | null => {
+            if (!layer || typeof layer !== 'object') {
+              return null
+            }
+            const uvScaleX = Number((layer as { uvScale?: { x?: unknown } }).uvScale?.x)
+            const uvScaleY = Number((layer as { uvScale?: { y?: unknown } }).uvScale?.y)
+            const opacity = Number((layer as { opacity?: unknown }).opacity)
+            const featherWidth = Number((layer as { featherWidth?: unknown }).featherWidth)
+            const maskChannel = Math.trunc(Number((layer as { maskChannel?: unknown }).maskChannel))
+            if (!Number.isInteger(maskChannel) || maskChannel < 0 || maskChannel > 7) {
+              return null
+            }
+            const colorTint = typeof (layer as { colorTint?: unknown }).colorTint === 'string'
+              ? String((layer as { colorTint?: unknown }).colorTint).trim()
+              : ''
+            return {
+              albedoSource: normalizeOptionalAssetId((layer as { albedoSource?: unknown }).albedoSource),
+              albedoTextureSettings: normalizeTextureSettings((layer as { albedoTextureSettings?: unknown }).albedoTextureSettings),
+              colorTint: colorTint.length > 0 ? colorTint : null,
+              opacity: Number.isFinite(opacity) ? Math.max(0, Math.min(1, opacity)) : 1,
+              uvScale: Number.isFinite(uvScaleX) && uvScaleX > 0 && Number.isFinite(uvScaleY) && uvScaleY > 0
+                ? { x: uvScaleX, y: uvScaleY } satisfies Vector2Like
+                : null,
+              maskChannel,
+              featherEnabled: typeof (layer as { featherEnabled?: unknown }).featherEnabled === 'boolean'
+                ? Boolean((layer as { featherEnabled?: unknown }).featherEnabled)
+                : null,
+              featherWidth: Number.isFinite(featherWidth) ? Math.max(0, featherWidth) : null,
+            } satisfies GroundSurfaceChunkLayerRef
+          })
+          .filter((layer): layer is GroundSurfaceChunkLayerRef => layer !== null)
+      : null
     entries.push([normalizedChunkKey, {
+      baseBlendMode: chunkRef?.baseBlendMode === 'shader-splat-v1' ? 'shader-splat-v1' : null,
       textureAssetId: normalizeOptionalAssetId(chunkRef?.textureAssetId),
       normalTextureAssetId: normalizeOptionalAssetId(chunkRef?.normalTextureAssetId),
-      roughnessTextureAssetId: normalizeOptionalAssetId(chunkRef?.roughnessTextureAssetId),
-      metalnessTextureAssetId: normalizeOptionalAssetId(chunkRef?.metalnessTextureAssetId),
-      aoTextureAssetId: normalizeOptionalAssetId(chunkRef?.aoTextureAssetId),
-      emissiveTextureAssetId: normalizeOptionalAssetId(chunkRef?.emissiveTextureAssetId),
       splatMapAssetIds: Array.isArray(chunkRef?.splatMapAssetIds)
         ? chunkRef.splatMapAssetIds
             .map((value) => normalizeOptionalAssetId(value))
             .filter((value): value is string => Boolean(value))
         : null,
-      layerTextureAssetIds: Array.isArray(chunkRef?.layerTextureAssetIds)
-        ? chunkRef.layerTextureAssetIds
-            .map((value) => normalizeOptionalAssetId(value))
-        : null,
-      layerColorTints: Array.isArray(chunkRef?.layerColorTints)
-        ? chunkRef.layerColorTints
-            .map((value) => {
-              const normalized = typeof value === 'string' ? value.trim() : ''
-              return normalized.length > 0 ? normalized : null
-            })
-        : null,
-      layerUvScales: Array.isArray(chunkRef?.layerUvScales)
-        ? chunkRef.layerUvScales
-            .map((value) => {
-              if (!value || typeof value !== 'object') {
-                return null
-              }
-              const x = Number((value as { x?: unknown }).x)
-              const y = Number((value as { y?: unknown }).y)
-              if (!Number.isFinite(x) || !Number.isFinite(y) || x <= 0 || y <= 0) {
-                return null
-              }
-              return { x, y } satisfies Vector2Like
-            })
-        : null,
+      surfaceLayers: normalizedSurfaceLayers,
       revision: Math.max(0, Math.trunc(Number.isFinite(Number(chunkRef?.revision)) ? Number(chunkRef?.revision) : 0)),
     }])
   }
