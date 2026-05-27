@@ -22,6 +22,7 @@ import type {
   AnimationBehaviorParams,
   DriveBehaviorParams,
   ControlCharacterBehaviorParams,
+  CouponBehaviorParams,
 } from '../core'
 import { behaviorMapToList, cloneBehaviorList, ensureBehaviorParams } from './definitions'
 
@@ -283,6 +284,16 @@ export type BehaviorRuntimeEvent =
       behaviorSequenceId: string
       behaviorId: string
       punchedAt: string
+    }
+  | {
+      type: 'coupon'
+      nodeId: string
+      action: BehaviorEventType
+      sequenceId: string
+      behaviorSequenceId: string
+      behaviorId: string
+      targetNodeId: string | null
+      triggeredAt: string
     }
   | {
       type: 'sequence-complete'
@@ -975,6 +986,23 @@ function createPunchEvent(
   }
 }
 
+function createCouponEvent(
+  state: BehaviorSequenceState,
+  behavior: SceneBehavior,
+): Extract<BehaviorRuntimeEvent, { type: 'coupon' }> {
+  const params = behavior.script.params as Partial<CouponBehaviorParams> | undefined
+  return {
+    type: 'coupon',
+    nodeId: state.nodeId,
+    action: state.action,
+    sequenceId: state.id,
+    behaviorSequenceId: state.behaviorSequenceId,
+    behaviorId: behavior.id,
+    targetNodeId: typeof params?.targetNodeId === 'string' && params.targetNodeId.trim().length ? params.targetNodeId.trim() : state.nodeId,
+    triggeredAt: new Date().toISOString(),
+  }
+}
+
 function advanceSequence(state: BehaviorSequenceState): BehaviorRuntimeEvent[] {
   const events: BehaviorRuntimeEvent[] = []
   while (state.status === 'running' && state.index < state.steps.length) {
@@ -1116,6 +1144,10 @@ function advanceSequence(state: BehaviorSequenceState): BehaviorRuntimeEvent[] {
         continue
       case 'punch':
         events.push(createPunchEvent(state, behavior))
+        state.index += 1
+        continue
+      case 'coupon':
+        events.push(createCouponEvent(state, behavior))
         state.index += 1
         continue
       default:

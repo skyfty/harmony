@@ -49,6 +49,51 @@ export interface PunchProgressSummary {
   punchedNodeIds: string[];
 }
 
+export type MiniCouponStatus = 'available' | 'unused' | 'used' | 'expired';
+
+export interface CouponTypeInfo {
+  id: string;
+  name: string;
+  code: string;
+  iconUrl?: string | null;
+}
+
+export interface CouponSceneItem {
+  id: string;
+  title: string;
+  description: string;
+  validUntil: string;
+  type: CouponTypeInfo | null;
+  status: MiniCouponStatus;
+  claimedAt?: string | null;
+  usedAt?: string | null;
+  expiresAt?: string | null;
+  userCouponId?: string | null;
+  owned?: boolean;
+}
+
+export interface ListCouponCatalogParams {
+  couponIds?: string[];
+}
+
+export interface GrantCouponPayload {
+  sceneId?: string;
+  sceneName?: string;
+  nodeId?: string;
+  couponJson?: string;
+  triggeredAt?: string;
+  source?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface GrantCouponResponse {
+  claimed: boolean;
+  couponId: string;
+  userCouponId: string;
+  status: MiniCouponStatus;
+  metadata?: Record<string, unknown> | null;
+}
+
 export interface CreateTravelEnterPayload {
   sceneId: string;
   scenicId: string;
@@ -438,6 +483,24 @@ export function getPunchProgress(payload: GetPunchProgressPayload): Promise<Punc
       sceneId: payload.sceneId,
       scenicId: payload.scenicId,
     },
+  });
+}
+
+export function listCouponCatalog(params?: ListCouponCatalogParams): Promise<CouponSceneItem[]> {
+  return miniRequest<CouponSceneItem[]>('/coupons/catalog', {
+    method: 'GET',
+    query: params?.couponIds?.length
+      ? {
+          couponIds: params.couponIds.join(','),
+        }
+      : undefined,
+  });
+}
+
+export function grantCouponById(couponId: string, payload?: GrantCouponPayload): Promise<GrantCouponResponse> {
+  return miniRequest<GrantCouponResponse>(`/coupons/${encodeURIComponent(couponId)}/grant`, {
+    method: 'POST',
+    body: payload ?? {},
   });
 }
 

@@ -33,6 +33,7 @@
       :debug-console-max-entries="200"
       :initial-punched-node-ids="initialPunchedNodeIds"
       @punch="handlePunch"
+      @coupon="handleCoupon"
     />
   </view>
 </template>
@@ -169,6 +170,25 @@ type PunchEventPayload = {
   };
 };
 
+type CouponEventPayload = {
+  eventName: 'coupon';
+  sceneId: string;
+  clientCouponTime: string;
+  behaviorCouponTime: string;
+  location: {
+    nodeId: string;
+    nodeName: string;
+  };
+  coupon: {
+    id: string;
+    rawJson: string;
+    type: string | null;
+    name: string | null;
+    description: string | null;
+    validUntil: string | null;
+  };
+};
+
 function handlePunch(payload: PunchEventPayload): void {
   if (!sceneSpotId.value) {
     return;
@@ -187,6 +207,16 @@ function handlePunch(payload: PunchEventPayload): void {
     },
     source: 'tour-miniapp',
     path: '/pages/scenery/index',
+  });
+}
+
+function handleCoupon(payload: CouponEventPayload): void {
+  if (!payload.coupon.id) {
+    return;
+  }
+  void uni.showToast({
+    title: payload.coupon.name || '已获得奖励',
+    icon: 'none',
   });
 }
 

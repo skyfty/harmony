@@ -34,6 +34,7 @@ import { extractCompiledStaticMeshMetadataFromUserData, createCompiledStaticMesh
 import { isRoadDynamicMesh } from '@schema/roadCollision'
 import {
   RIGIDBODY_COMPONENT_TYPE,
+  COUPON_COMPONENT_TYPE,
   type RigidbodyComponentProps,
   type RigidbodyComponentMetadata,
   type RigidbodyConvexSimplifyConfig,
@@ -47,6 +48,7 @@ import {
   type WallComponentProps,
   clampWallProps,
   clampRigidbodyComponentProps,
+  parseCouponComponentSpec,
   RIGIDBODY_METADATA_KEY,
   VEHICLE_COMPONENT_TYPE,
   resolveModelCollisionComponentPropsFromNode,
@@ -169,6 +171,29 @@ export function collectPunchPointsFromNodes(nodes: SceneNode[]): ScenePunchPoint
     }
   }
   return points
+}
+
+export function collectCouponIdsFromNodes(nodes: SceneNode[]): string[] {
+  if (!Array.isArray(nodes) || !nodes.length) {
+    return []
+  }
+  const couponIds = new Set<string>()
+  const stack: SceneNode[] = [...nodes]
+  while (stack.length) {
+    const current = stack.pop()
+    if (!current) {
+      continue
+    }
+    const component = current.components?.[COUPON_COMPONENT_TYPE]
+    const couponSpec = component?.props ? parseCouponComponentSpec((component.props as { couponJson?: unknown }).couponJson as string | null | undefined) : null
+    if (couponSpec?.id) {
+      couponIds.add(couponSpec.id)
+    }
+    if (Array.isArray(current.children) && current.children.length) {
+      stack.push(...current.children)
+    }
+  }
+  return Array.from(couponIds)
 }
 
 export interface PreparedSceneExportBundle {
@@ -377,6 +402,10 @@ export async function prepareJsonSceneExportBundle(
   const punchPoints = collectPunchPointsFromNodes(snapshot.nodes)
   if (punchPoints.length) {
     exportDocument.punchPoints = punchPoints
+  }
+  const couponIds = collectCouponIdsFromNodes(snapshot.nodes)
+  if (couponIds.length) {
+    exportDocument.couponIds = couponIds
   }
   const sanitizedDocument = await sanitizeSceneDocumentForJsonExport(exportDocument, options, reportEvent)
   const diagnostics = validateSceneAssetReferences(

@@ -34,6 +34,7 @@ import DriveParams from '@/components/inspector/behavior/DriveParams.vue'
 import ControlCharacterParams from '@/components/inspector/behavior/ControlCharacterParams.vue'
 import ReleaseCharacterParams from '@/components/inspector/behavior/ReleaseCharacterParams.vue'
 import DebusParams from '@/components/inspector/behavior/DebusParams.vue'
+import CouponParams from '@/components/inspector/behavior/CouponParams.vue'
 import ShowCockpitParams from '@/components/inspector/behavior/ShowCockpitParams.vue'
 import HideCockpitParams from '@/components/inspector/behavior/HideCockpitParams.vue'
 import LoadSceneParams from '@/components/inspector/behavior/LoadSceneParams.vue'
@@ -114,6 +115,7 @@ const PARAMETER_COMPONENTS: Partial<Record<BehaviorScriptType, unknown>> = {
   controlCharacter: ControlCharacterParams,
   releaseCharacter: ReleaseCharacterParams,
   debus: DebusParams,
+  coupon: CouponParams,
 }
 
 function isBehaviorAssetDrag(event: DragEvent): boolean {
@@ -224,7 +226,8 @@ function applyDefaultTarget(step: SceneBehavior): void {
     scriptType !== 'moveTo' &&
     scriptType !== 'playSound' &&
     scriptType !== 'controlCharacter' &&
-    scriptType !== 'spawnPrefab'
+    scriptType !== 'spawnPrefab' &&
+    scriptType !== 'coupon'
   ) {
     return
   }

@@ -414,6 +414,25 @@ const emit = defineEmits<{
       nodeName: string;
     };
   }];
+  coupon: [payload: {
+    eventName: 'coupon';
+    sceneId: string;
+    sceneName: string;
+    clientCouponTime: string;
+    behaviorCouponTime: string;
+    location: {
+      nodeId: string;
+      nodeName: string;
+    };
+    coupon: {
+      id: string;
+      rawJson: string;
+      type: string | null;
+      name: string | null;
+      description: string | null;
+      validUntil: string | null;
+    };
+  }];
 }>();
 import {
   buildSceneGraph,
@@ -470,6 +489,7 @@ import {
   updateBillboardInstanceCameraWorldPosition,
   updateBillboardInstanceMatrix,
 } from '@harmony/schema/instancedBillboardCache';
+import { listCouponCatalog, grantCouponById, type CouponSceneItem } from '@harmony/utils';
 import { addMesh as addInstancedBoundsMesh, flush as flushInstancedBounds, tick as tickInstancedBounds, clear as clearInstancedBounds, hasPending as instancedBoundsHasPending } from '@harmony/schema/instancedBoundsTracker';
 import { syncContinuousInstancedModelCommitted } from '@harmony/schema/continuousInstancedModel';
 import { hasWallInstancedBindings, syncWallInstancedBindingsForObject } from '@harmony/schema/wallInstancing';
@@ -593,6 +613,12 @@ import {
 import {
   effectComponentDefinition,
 } from '@harmony/schema/components/definitions/effectComponent';
+import {
+  couponComponentDefinition,
+  COUPON_COMPONENT_TYPE,
+  parseCouponComponentSpec,
+  type CouponComponentSpec,
+} from '@harmony/schema/components/definitions/couponComponent';
 import {
   rigidbodyComponentDefinition,
   clampRigidbodyComponentProps,
@@ -1749,6 +1775,7 @@ previewComponentManager.registerDefinition(signboardComponentDefinition);
 previewComponentManager.registerDefinition(viewPointComponentDefinition);
 previewComponentManager.registerDefinition(warpGateComponentDefinition);
 previewComponentManager.registerDefinition(effectComponentDefinition);
+previewComponentManager.registerDefinition(couponComponentDefinition);
 previewComponentManager.registerDefinition(behaviorComponentDefinition);
 previewComponentManager.registerDefinition(rigidbodyComponentDefinition);
 previewComponentManager.registerDefinition(vehicleComponentDefinition);
@@ -5224,6 +5251,118 @@ function refreshMultiuserNodeReferences(document: SceneJsonExportDocument | null
 
 function resolveNodeById(nodeId: string): SceneNode | null {
   return resolveSceneNodeById(previewNodeMap, nodeId);
+}
+
+type CouponNodeVisibilityEntry = {
+  couponId: string;
+  hideExpired: boolean;
+  hideOwned: boolean;
+  rawJson: string;
+  spec: CouponComponentSpec;
+};
+
+function resolveCouponNodeEntry(node: SceneNode | null | undefined): CouponNodeVisibilityEntry | null {
+  if (!node) {
+    return null;
+  }
+  const component = node.components?.[COUPON_COMPONENT_TYPE] as SceneNodeComponentState<{
+    couponJson?: unknown;
+    hideExpired?: unknown;
+    hideOwned?: unknown;
+  }> | undefined;
+  const rawJson = typeof component?.props?.couponJson === 'string' ? component.props.couponJson : '';
+  const spec = parseCouponComponentSpec(rawJson);
+  if (!spec) {
+    return null;
+  }
+  return {
+    couponId: spec.id,
+    hideExpired: component?.props?.hideExpired === true,
+    hideOwned: component?.props?.hideOwned === true,
+    rawJson,
+    spec,
+  };
+}
+
+function collectCouponIdsFromDocument(document: SceneJsonExportDocument | null | undefined): string[] {
+  if (!document) {
+    return [];
+  }
+  const couponIds = new Set<string>();
+  if (Array.isArray(document.couponIds)) {
+    document.couponIds.forEach((value) => {
+      const trimmed = typeof value === 'string' ? value.trim() : '';
+      if (trimmed) {
+        couponIds.add(trimmed);
+      }
+    });
+  }
+  const stack: SceneNode[] = Array.isArray(document.nodes) ? [...document.nodes] : [];
+  while (stack.length) {
+    const current = stack.pop();
+    if (!current) {
+      continue;
+    }
+    const entry = resolveCouponNodeEntry(current);
+    if (entry?.couponId) {
+      couponIds.add(entry.couponId);
+    }
+    if (Array.isArray(current.children) && current.children.length) {
+      stack.push(...current.children);
+    }
+  }
+  return Array.from(couponIds);
+}
+
+function pruneCouponNodes(
+  nodes: SceneNode[] | null | undefined,
+  couponMap: Map<string, CouponSceneItem>,
+): SceneNode[] {
+  if (!Array.isArray(nodes) || !nodes.length) {
+    return [];
+  }
+  const nextNodes: SceneNode[] = [];
+  nodes.forEach((node) => {
+    const entry = resolveCouponNodeEntry(node);
+    if (entry) {
+      const coupon = couponMap.get(entry.couponId) ?? null;
+      const validUntil = entry.spec.validUntil ? new Date(entry.spec.validUntil) : null;
+      const expired = coupon?.status === 'expired' || Boolean(validUntil && Number.isFinite(validUntil.getTime()) && validUntil.getTime() <= Date.now());
+      const owned = Boolean(coupon?.owned);
+      if ((entry.hideExpired && expired) || (entry.hideOwned && owned)) {
+        return;
+      }
+    }
+    if (Array.isArray(node.children) && node.children.length) {
+      node.children = pruneCouponNodes(node.children, couponMap);
+    }
+    nextNodes.push(node);
+  });
+  return nextNodes;
+}
+
+async function prepareCouponSceneDocument(document: SceneJsonExportDocument): Promise<SceneJsonExportDocument> {
+  const couponIds = collectCouponIdsFromDocument(document);
+  if (!couponIds.length) {
+    return document;
+  }
+
+  let couponMap = new Map<string, CouponSceneItem>();
+  try {
+    const coupons = await listCouponCatalog({ couponIds });
+    couponMap = new Map(coupons.map((item) => [item.id, item]));
+  } catch (error) {
+    console.warn('[SceneryViewer] Failed to load coupon catalog for scene visibility', error);
+  }
+
+  if (!couponMap.size) {
+    return document;
+  }
+
+  const nextDocument = JSON.parse(JSON.stringify(document)) as SceneJsonExportDocument;
+  nextDocument.nodes = pruneCouponNodes(nextDocument.nodes, couponMap);
+  nextDocument.couponIds = couponIds;
+  return nextDocument;
 }
 
 function setVehicleDriveNodeVisibility(nodeId: string, visible: boolean): void {
@@ -11572,6 +11711,60 @@ function handlePunchEvent(event: Extract<BehaviorRuntimeEvent, { type: 'punch' }
   });
 }
 
+async function handleCouponEvent(event: Extract<BehaviorRuntimeEvent, { type: 'coupon' }>): Promise<void> {
+  const targetNodeId = (event.targetNodeId ?? event.nodeId).trim();
+  if (!targetNodeId) {
+    return;
+  }
+  const targetNode = resolveNodeById(targetNodeId);
+  const entry = resolveCouponNodeEntry(targetNode);
+  if (!entry) {
+    return;
+  }
+  const sceneId = (currentSceneId.value ?? currentDocument?.id ?? '').trim();
+  const sceneName = (currentDocument?.name ?? '').trim();
+  const nodeName = typeof targetNode?.name === 'string' ? targetNode.name : '';
+
+  try {
+    await grantCouponById(entry.couponId, {
+      sceneId: sceneId || undefined,
+      sceneName: sceneName || undefined,
+      nodeId: targetNodeId,
+      couponJson: entry.rawJson,
+      triggeredAt: event.triggeredAt,
+      source: 'scenery-viewer',
+      metadata: {
+        behaviorId: event.behaviorId,
+        behaviorSequenceId: event.behaviorSequenceId,
+        sequenceId: event.sequenceId,
+        action: event.action,
+      },
+    });
+  } catch (error) {
+    console.warn('[SceneryViewer] Failed to grant coupon', error);
+  }
+
+  emit('coupon', {
+    eventName: 'coupon',
+    sceneId,
+    sceneName,
+    clientCouponTime: new Date().toISOString(),
+    behaviorCouponTime: event.triggeredAt,
+    location: {
+      nodeId: targetNodeId,
+      nodeName,
+    },
+    coupon: {
+      id: entry.couponId,
+      rawJson: entry.rawJson,
+      type: entry.spec.type,
+      name: entry.spec.name,
+      description: entry.spec.description,
+      validUntil: entry.spec.validUntil,
+    },
+  });
+}
+
 
 function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
   switch (event.type) {
@@ -11650,6 +11843,9 @@ function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
       break;
     case 'punch':
       handlePunchEvent(event);
+      break;
+    case 'coupon':
+      void handleCouponEvent(event);
       break;
     case 'sequence-complete':
       resetLanternOverlay();
@@ -13501,8 +13697,15 @@ async function buildSceneGraphWithProgress(
 } | null> {
   let graph: Awaited<ReturnType<typeof buildSceneGraph>> | null = null;
   let resourceCache: ResourceCache | null = null;
+  let runtimePayload: ScenePreviewPayload = payload;
   try {
-    lazyLoadMeshesEnabled = payload.document.lazyLoadMeshes !== false;
+    const runtimeDocument = await prepareCouponSceneDocument(payload.document);
+    payload.document = runtimeDocument;
+    runtimePayload = {
+      ...payload,
+      document: runtimeDocument,
+    };
+    lazyLoadMeshesEnabled = runtimeDocument.lazyLoadMeshes !== false;
     setSceneInitState({
       stage: 'building',
       label: '姝ｅ湪鏋勫缓鍦烘櫙鍥炬牳',
@@ -13513,7 +13716,7 @@ async function buildSceneGraphWithProgress(
       currentLabel: '',
       active: true,
     });
-    const buildOptions = createSceneGraphBuildOptions(payload, (info) => {
+    const buildOptions = createSceneGraphBuildOptions(runtimePayload, (info) => {
       resourcePreload.total = info.total;
       resourcePreload.loaded = info.loaded;
 
@@ -13547,9 +13750,9 @@ async function buildSceneGraphWithProgress(
       resourcePreload.active = stillLoadingByCount || stillLoadingByBytes;
     });
 
-    resourceCache = ensureResourceCache(payload.document, buildOptions);
+    resourceCache = ensureResourceCache(runtimePayload.document, buildOptions);
     viewerResourceCache = resourceCache;
-    graph = await buildSceneGraph(payload.document, resourceCache, buildOptions);
+    graph = await buildSceneGraph(runtimePayload.document, resourceCache, buildOptions);
   } finally {
     const fullyLoadedByCount = resourcePreload.total > 0 && resourcePreload.loaded >= resourcePreload.total;
     const fullyLoadedByBytes =

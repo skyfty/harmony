@@ -794,6 +794,7 @@ export type BehaviorScriptType =
   | 'releaseCharacter'
   | 'debus'
   | 'punch'
+  | 'coupon'
 
 export interface DelayBehaviorParams {
   /** Duration to wait before continuing, measured in seconds. */
@@ -1014,6 +1015,11 @@ export interface PunchBehaviorParams {
   // no configuration required
 }
 
+export interface CouponBehaviorParams {
+  /** Target node that carries the coupon component. Defaults to the behavior owner node. */
+  targetNodeId: string | null
+}
+
 export interface LoadSceneBehaviorParams {
   /** Target scene id that should be opened by the runtime. */
   scene: string
@@ -1152,6 +1158,10 @@ export type SceneBehaviorScriptBinding =
   | {
       type: 'punch'
       params: PunchBehaviorParams
+    }
+  | {
+      type: 'coupon'
+      params: CouponBehaviorParams
     }
 
 export interface SceneBehavior {
@@ -1378,6 +1388,7 @@ export interface SceneJsonExportDocument {
   lazyLoadMeshes?: boolean;
   assetPreload?: SceneAssetPreloadInfo;
   punchPoints?: ScenePunchPoint[];
+  couponIds?: string[];
   loadProgressHints?: SceneLoadProgressHints;
 }
 

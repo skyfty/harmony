@@ -264,6 +264,7 @@ import {
   type SignboardPlacementSmoothingState,
 } from '@schema/overlay'
 import { disposeSignboardBillboards, syncSignboardBillboards, type SignboardBillboardStyle } from '@schema/overlay'
+import { grantCouponById, listCouponCatalog, type CouponSceneItem } from '@harmony/utils'
 import type {
 	GuideboardComponentProps,
 	LodFaceCameraForwardAxis,
@@ -279,6 +280,12 @@ import type {
 	SteerComponentProps,
 	WarpGateComponentProps,
 } from '@schema/components'
+import {
+	COUPON_COMPONENT_TYPE,
+	couponComponentDefinition,
+	parseCouponComponentSpec,
+	type CouponComponentSpec,
+} from '@schema/components/definitions/couponComponent'
 import { setBoundingBoxFromObject } from '@/components/editor/sceneUtils'
 import {
 	addBehaviorRuntimeListener,
@@ -1178,6 +1185,7 @@ previewComponentManager.registerDefinition(signboardComponentDefinition)
 previewComponentManager.registerDefinition(viewPointComponentDefinition)
 previewComponentManager.registerDefinition(warpGateComponentDefinition)
 previewComponentManager.registerDefinition(effectComponentDefinition)
+previewComponentManager.registerDefinition(couponComponentDefinition)
 previewComponentManager.registerDefinition(rigidbodyComponentDefinition)
 previewComponentManager.registerDefinition(vehicleComponentDefinition)
 previewComponentManager.registerDefinition(steerComponentDefinition)
@@ -2517,6 +2525,117 @@ function rebuildPreviewNodeMap(document: SceneJsonExportDocument | null | undefi
 	syncStoredPunchedNodeIdsForScene(document?.id ?? null)
 }
 
+type CouponNodeVisibilityEntry = {
+	couponId: string
+	hideExpired: boolean
+	hideOwned: boolean
+	rawJson: string
+	spec: CouponComponentSpec
+}
+
+function resolveCouponNodeEntry(node: SceneNode | null | undefined): CouponNodeVisibilityEntry | null {
+	if (!node) {
+		return null
+	}
+	const component = node.components?.[COUPON_COMPONENT_TYPE] as
+		| SceneNodeComponentState<{
+			couponJson?: unknown
+			hideExpired?: unknown
+			hideOwned?: unknown
+		}>
+		| undefined
+	const rawJson = typeof component?.props?.couponJson === 'string' ? component.props.couponJson : ''
+	const spec = parseCouponComponentSpec(rawJson)
+	if (!spec) {
+		return null
+	}
+	return {
+		couponId: spec.id,
+		hideExpired: component?.props?.hideExpired === true,
+		hideOwned: component?.props?.hideOwned === true,
+		rawJson,
+		spec,
+	}
+}
+
+function collectCouponIdsFromDocument(document: SceneJsonExportDocument | null | undefined): string[] {
+	if (!document) {
+		return []
+	}
+	const couponIds = new Set<string>()
+	if (Array.isArray(document.couponIds)) {
+		document.couponIds.forEach((value) => {
+			const trimmed = typeof value === 'string' ? value.trim() : ''
+			if (trimmed) {
+				couponIds.add(trimmed)
+			}
+		})
+	}
+	const stack: SceneNode[] = Array.isArray(document.nodes) ? [...document.nodes] : []
+	while (stack.length) {
+		const current = stack.pop()
+		if (!current) {
+			continue
+		}
+		const entry = resolveCouponNodeEntry(current)
+		if (entry?.couponId) {
+			couponIds.add(entry.couponId)
+		}
+		if (Array.isArray(current.children) && current.children.length) {
+			stack.push(...current.children)
+		}
+	}
+	return Array.from(couponIds)
+}
+
+function pruneCouponNodes(
+	nodes: SceneNode[] | null | undefined,
+	couponMap: Map<string, CouponSceneItem>,
+): SceneNode[] {
+	if (!Array.isArray(nodes) || !nodes.length) {
+		return []
+	}
+	const nextNodes: SceneNode[] = []
+	nodes.forEach((node) => {
+		const entry = resolveCouponNodeEntry(node)
+		if (entry) {
+			const coupon = couponMap.get(entry.couponId) ?? null
+			const validUntil = entry.spec.validUntil ? new Date(entry.spec.validUntil) : null
+			const expired = coupon?.status === 'expired' || Boolean(validUntil && Number.isFinite(validUntil.getTime()) && validUntil.getTime() <= Date.now())
+			const owned = Boolean(coupon?.owned)
+			if ((entry.hideExpired && expired) || (entry.hideOwned && owned)) {
+				return
+			}
+		}
+		if (Array.isArray(node.children) && node.children.length) {
+			node.children = pruneCouponNodes(node.children, couponMap)
+		}
+		nextNodes.push(node)
+	})
+	return nextNodes
+}
+
+async function prepareCouponSceneDocument(document: SceneJsonExportDocument): Promise<SceneJsonExportDocument> {
+	const couponIds = collectCouponIdsFromDocument(document)
+	if (!couponIds.length) {
+		return document
+	}
+	let couponMap = new Map<string, CouponSceneItem>()
+	try {
+		const coupons = await listCouponCatalog({ couponIds })
+		couponMap = new Map(coupons.map((item) => [item.id, item]))
+	} catch (error) {
+		console.warn('[ScenePreviewView] Failed to load coupon catalog for scene visibility', error)
+	}
+	if (!couponMap.size) {
+		return document
+	}
+	const nextDocument = JSON.parse(JSON.stringify(document)) as SceneJsonExportDocument
+	nextDocument.nodes = pruneCouponNodes(nextDocument.nodes, couponMap)
+	nextDocument.couponIds = couponIds
+	return nextDocument
+}
+
 function resolveParentNodeId(nodeId: string): string | null {
 	return resolveSceneParentNodeId(previewParentMap, nodeId)
 }
@@ -2712,6 +2831,37 @@ function handlePunchEvent(event: Extract<BehaviorRuntimeEvent, { type: 'punch' }
 	const next = new Set(punchedNodeIds.value)
 	next.add(event.nodeId)
 	punchedNodeIds.value = next
+}
+
+async function handleCouponEvent(event: Extract<BehaviorRuntimeEvent, { type: 'coupon' }>): Promise<void> {
+	const targetNodeId = (event.targetNodeId ?? event.nodeId).trim()
+	if (!targetNodeId) {
+		return
+	}
+	const targetNode = resolveNodeById(targetNodeId)
+	const entry = resolveCouponNodeEntry(targetNode)
+	if (!entry) {
+		return
+	}
+
+	try {
+		await grantCouponById(entry.couponId, {
+			sceneId: currentDocument?.id?.trim() || undefined,
+			sceneName: currentDocument?.name?.trim() || undefined,
+			nodeId: targetNodeId,
+			couponJson: entry.rawJson,
+			triggeredAt: event.triggeredAt,
+			source: 'scene-preview',
+			metadata: {
+				behaviorId: event.behaviorId,
+				behaviorSequenceId: event.behaviorSequenceId,
+				sequenceId: event.sequenceId,
+				action: event.action,
+			},
+		})
+	} catch (error) {
+		console.warn('[ScenePreviewView] Failed to grant coupon', error)
+	}
 }
 
 function findGroundNode(nodes: SceneNode[] | undefined | null): SceneNode | null {
@@ -7147,6 +7297,7 @@ async function buildPreviewRuntimeDocument(
 	document: SceneJsonExportDocument,
 	options: { groundHeightSidecar?: ArrayBuffer | null; groundScatterSidecar?: ArrayBuffer | null } = {},
 ): Promise<SceneJsonExportDocument> {
+	document = await prepareCouponSceneDocument(document)
 	const defaultSteerNodeId = resolveDefaultSteerBinding(document)
 	pendingDefaultSteerDriveEvent.value = defaultSteerNodeId ? buildDefaultSteerDriveEvent(defaultSteerNodeId) : null
 	const groundNode = findGroundNode(document.nodes)
@@ -8393,6 +8544,9 @@ function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
 			break
 		case 'punch':
 			handlePunchEvent(event)
+			break
+		case 'coupon':
+			void handleCouponEvent(event)
 			break
 		case 'exit-scene':
 			void handleExitSceneEvent()
@@ -13026,6 +13180,7 @@ async function updateScene(document: SceneJsonExportDocument) {
 	releaseTerrainScatterInstances()
 	resetProtagonistPoseState()
 	clearRuntimePrefabPreviewRoots()
+	document = await prepareCouponSceneDocument(document)
 	await syncScenePreviewGroundChunkManifest(document)
 	await hydrateScenePreviewCompiledGroundPackage(document)
 

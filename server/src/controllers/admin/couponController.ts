@@ -1,11 +1,9 @@
 import type { Context } from 'koa'
 import { Types } from 'mongoose'
 import { CouponModel } from '@/models/Coupon'
-import { ProductModel } from '@/models/Product'
 import { CouponTypeModel } from '@/models/CouponType'
 import { UserCouponModel } from '@/models/UserCoupon'
 import { UserModel } from '@/models/User'
-import { getCouponProductCategory } from '@/services/productCategoryService'
 import { computeUserCouponStatus } from '@/controllers/miniprogram/miniDtoUtils'
 
 type CouponPayload = {
@@ -62,43 +60,11 @@ function toDateValue(value: unknown): Date | null {
   return Number.isNaN(parsed.getTime()) ? null : parsed
 }
 
-function toNumberValue(value: unknown): number | null {
-  const parsed = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN
-  return Number.isFinite(parsed) ? parsed : null
-}
-
 function toBooleanValue(value: unknown, fallback = false): boolean {
   if (value === undefined) {
     return fallback
   }
   return value === true
-}
-
-function normalizeSlugPart(value: string): string {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-}
-
-async function buildCouponProductSlug(base: string): Promise<string> {
-  const normalized = normalizeSlugPart(base) || 'coupon-product'
-  let next = normalized
-  let cursor = 1
-  while (await ProductModel.exists({ slug: next })) {
-    cursor += 1
-    next = `${normalized}-${cursor}`
-  }
-  return next
-}
-
-async function resolveCouponProductCategoryId(): Promise<Types.ObjectId> {
-  const category = await getCouponProductCategory()
-  if (!category) {
-    throw new Error('Coupon product category is not initialized')
-  }
-  return new Types.ObjectId(category.id)
 }
 
 function mapProduct(row: any): CouponProductView | null {
@@ -264,7 +230,6 @@ export async function createCoupon(ctx: Context): Promise<void> {
   const title = toStringValue(body.title) ?? toStringValue(body.name)
   const description = toStringValue(body.description)
   const validUntil = toDateValue(body.validUntil)
-  const price = toNumberValue(body.price) ?? 0
   if (!title || !description || !validUntil) {
     ctx.throw(400, 'typeId, name/title, description and validUntil are required')
   }
@@ -277,46 +242,18 @@ export async function createCoupon(ctx: Context): Promise<void> {
     return
   }
 
-  let categoryId: Types.ObjectId
-  try {
-    categoryId = await resolveCouponProductCategoryId()
-  } catch (error) {
-    ctx.throw(500, (error as Error).message)
-    return
-  }
-
-  const slug = await buildCouponProductSlug(`coupon-${title}`)
-  const product = await ProductModel.create({
-    name: title,
-    slug,
-    categoryId,
+  const created = await CouponModel.create({
+    typeId,
+    title,
     description,
-    coverUrl: '',
-    price,
-    metadata: {
-      source: 'coupon',
-      couponTitle: title,
-    },
+    validUntil,
+    isVisible: toBooleanValue(body.isVisible, true),
+    usageRules: body.useConditions ?? body.usageRules ?? null,
+    metadata: body.metadata ?? null,
   })
-
-  try {
-    const created = await CouponModel.create({
-      typeId,
-      title,
-      description,
-      validUntil,
-      isVisible: toBooleanValue(body.isVisible, true),
-      productId: product._id,
-      usageRules: body.useConditions ?? body.usageRules ?? null,
-      metadata: body.metadata ?? null,
-    })
-    const row = await CouponModel.findById(created._id).populate('typeId').populate('productId').lean().exec()
-    ctx.status = 201
-    ctx.body = mapCoupon(row)
-  } catch (error) {
-    await ProductModel.findByIdAndDelete(product._id).exec()
-    throw error
-  }
+  const row = await CouponModel.findById(created._id).populate('typeId').populate('productId').lean().exec()
+  ctx.status = 201
+  ctx.body = mapCoupon(row)
 }
 
 export async function updateCoupon(ctx: Context): Promise<void> {
@@ -365,45 +302,6 @@ export async function updateCoupon(ctx: Context): Promise<void> {
     return
   }
 
-  const product = (current as any).productId ? (current as any).productId : null
-  const productId = product?._id ?? product
-  if (productId) {
-    await ProductModel.findByIdAndUpdate(productId, {
-      name: updated.title,
-      description: updated.description ?? '',
-      price: toNumberValue(body.price) ?? Number(product?.price ?? 0),
-      isDeleted: false,
-      deletedAt: null,
-      metadata: {
-        ...(typeof product.metadata === 'object' && product.metadata ? product.metadata : {}),
-        source: 'coupon',
-        couponTitle: updated.title,
-      },
-    }).exec()
-  } else {
-    let categoryId: Types.ObjectId
-    try {
-      categoryId = await resolveCouponProductCategoryId()
-    } catch (error) {
-      ctx.throw(500, (error as Error).message)
-      return
-    }
-    const slug = await buildCouponProductSlug(`coupon-${updated.title}`)
-    const createdProduct = await ProductModel.create({
-      name: updated.title,
-      slug,
-      categoryId,
-      description: updated.description ?? '',
-      coverUrl: '',
-      price: toNumberValue(body.price) ?? 0,
-      metadata: {
-        source: 'coupon',
-        couponTitle: updated.title,
-      },
-    })
-    await CouponModel.findByIdAndUpdate(id, { productId: createdProduct._id }).exec()
-  }
-
   const finalRow = await CouponModel.findById(id).populate('typeId').populate('productId').lean().exec()
   if (!finalRow) {
     ctx.throw(404, 'Coupon not found')
@@ -420,10 +318,6 @@ export async function deleteCoupon(ctx: Context): Promise<void> {
   const current = await CouponModel.findById(id).lean().exec()
   if (!current) {
     ctx.throw(404, 'Coupon not found')
-  }
-  const productId = (current as any).productId?._id ?? current.productId
-  if (productId) {
-    await ProductModel.findByIdAndUpdate(productId, { isDeleted: true, deletedAt: new Date() }).exec()
   }
   await UserCouponModel.deleteMany({ couponId: id }).exec()
   await CouponModel.findByIdAndDelete(id).exec()

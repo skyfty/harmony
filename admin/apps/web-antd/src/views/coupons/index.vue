@@ -15,15 +15,14 @@ import {
   updateCouponApi,
 } from '#/api';
 
-import { Button, DatePicker, Form, Input, InputNumber, message, Modal, Select, Space, Switch, Tag, Tooltip } from 'ant-design-vue';
-import { DeleteOutlined, EditOutlined } from '@ant-design/icons-vue';
+import { Button, DatePicker, Form, Input, message, Modal, Select, Space, Switch, Tag, Tooltip } from 'ant-design-vue';
+import { CopyOutlined, DeleteOutlined, EditOutlined } from '@ant-design/icons-vue';
 
 interface CouponFormModel {
   typeId: string;
   title: string;
   description: string;
   validUntil?: Dayjs;
-  price: number;
   isVisible: boolean;
 }
 
@@ -38,7 +37,6 @@ const formModel = reactive<CouponFormModel>({
   title: '',
   description: '',
   validUntil: undefined,
-  price: 0,
   isVisible: true,
 });
 
@@ -49,7 +47,6 @@ function resetForm() {
   formModel.title = '';
   formModel.description = '';
   formModel.validUntil = undefined;
-  formModel.price = 0;
   formModel.isVisible = true;
 }
 
@@ -61,14 +58,10 @@ function formatVisible(value: boolean) {
   return value ? '可见' : '隐藏';
 }
 
-function formatPrice(value?: number | null) {
-  return Number(value ?? 0).toFixed(2);
-}
-
 async function loadCouponTypes() {
   couponTypes.value = await listCouponTypesApi();
   if (!formModel.typeId && couponTypes.value.length) {
-    formModel.typeId = couponTypes.value[0].id;
+    formModel.typeId = couponTypes.value[0]?.id ?? '';
   }
 }
 
@@ -84,9 +77,25 @@ function openEdit(row: CouponItem) {
   formModel.title = row.title;
   formModel.description = row.description;
   formModel.validUntil = row.validUntil ? dayjs(row.validUntil) : undefined;
-  formModel.price = Number(row.product?.price ?? 0);
   formModel.isVisible = row.isVisible !== false;
   modalOpen.value = true;
+}
+
+async function copyCouponToken(row: CouponItem) {
+  const payload = {
+    id: row.id,
+    validUntil: row.validUntil,
+    type: row.type?.code ?? row.typeId,
+    name: row.title,
+    description: row.description,
+  };
+  const text = JSON.stringify(payload, null, 2);
+  try {
+    await navigator.clipboard.writeText(text);
+    message.success('已复制卡券标识');
+  } catch {
+    message.error('复制失败，请手动复制');
+  }
 }
 
 async function submit() {
@@ -103,7 +112,6 @@ async function submit() {
       title: formModel.title.trim(),
       description: formModel.description.trim(),
       validUntil: formModel.validUntil?.toISOString() ?? '',
-      price: formModel.price,
       isVisible: formModel.isVisible,
     };
 
@@ -124,7 +132,7 @@ async function submit() {
 function handleDelete(row: CouponItem) {
   Modal.confirm({
     title: `确认删除卡券「${row.title}」吗？`,
-    content: '删除后将同时移除关联商品和用户持有记录，操作不可恢复。',
+    content: '删除后将同时移除用户持有记录，操作不可恢复。',
     okType: 'danger',
     onOk: async () => {
       await deleteCouponApi(row.id);
@@ -158,12 +166,6 @@ const [CouponGrid, couponGridApi] = useVbenVxeGrid<CouponItem>({
         slots: { default: 'visible' },
       },
       {
-        field: 'product',
-        minWidth: 120,
-        title: '商品价格',
-        slots: { default: 'price' },
-      },
-      {
         field: 'validUntil',
         minWidth: 180,
         formatter: 'formatDateTime',
@@ -185,7 +187,7 @@ const [CouponGrid, couponGridApi] = useVbenVxeGrid<CouponItem>({
         align: 'left',
         field: 'actions',
         fixed: 'right',
-        minWidth: 160,
+        minWidth: 220,
         slots: { default: 'actions' },
         title: '操作',
       },
@@ -231,12 +233,13 @@ onMounted(async () => {
         </Tag>
       </template>
 
-      <template #price="{ row }">
-        <span>{{ formatPrice(row.product?.price) }}</span>
-      </template>
-
       <template #actions="{ row }">
         <Space>
+          <Tooltip title="复制标识">
+            <Button v-access:code="'coupon:write'" size="small" type="text" @click="copyCouponToken(row)">
+              <CopyOutlined />
+            </Button>
+          </Tooltip>
           <Tooltip title="编辑">
             <Button v-access:code="'coupon:write'" size="small" type="text" @click="openEdit(row)">
               <EditOutlined />
@@ -288,14 +291,6 @@ onMounted(async () => {
           :rules="[{ required: true, message: '请输入描述' }]"
         >
           <Input.TextArea v-model:value="formModel.description" :rows="4" allow-clear />
-        </Form.Item>
-
-        <Form.Item
-          label="商品价格"
-          name="price"
-          :rules="[{ required: true, message: '请输入商品价格' }]"
-        >
-          <InputNumber v-model:value="formModel.price" :min="0" :precision="2" style="width: 100%" />
         </Form.Item>
 
         <Form.Item label="是否可见" name="isVisible">

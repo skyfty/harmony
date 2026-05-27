@@ -37,6 +37,27 @@ type CouponCatalogDto = {
   usedAt?: string | null
   expiresAt?: string | null
   userCouponId?: string | null
+  owned?: boolean
+}
+
+type CouponSceneGrantPayload = {
+  sceneId?: string
+  sceneName?: string
+  nodeId?: string
+  couponJson?: string
+  triggeredAt?: string
+  source?: string
+  metadata?: Record<string, unknown> | null
+}
+
+function parseCouponIds(value: unknown): string[] {
+  if (typeof value !== 'string') {
+    return []
+  }
+  return value
+    .split(',')
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0)
 }
 
 function mapUserCouponDto(entry: any): CouponDto | null {
@@ -111,14 +132,20 @@ function mapCouponCatalogDto(entry: any, userEntry?: any | null): CouponCatalogD
     usedAt: userCoupon?.usedAt?.toISOString?.() ?? null,
     expiresAt: expiresAt?.toISOString?.() ?? null,
     userCouponId: userCoupon?._id?.toString?.() ?? null,
+    owned: Boolean(userCoupon),
   }
 }
 
 export async function listCouponCatalog(ctx: Context): Promise<void> {
   const userId = getOptionalUserId(ctx)
+  const couponIds = parseCouponIds((ctx.query as Record<string, unknown>)?.couponIds)
   const rows = await CouponModel.find({
-    isVisible: { $ne: false },
-    productId: { $ne: null },
+    ...(couponIds.length
+      ? { _id: { $in: couponIds } }
+      : {
+          isVisible: { $ne: false },
+          productId: { $ne: null },
+        }),
   })
     .populate('typeId')
     .populate('productId')
@@ -126,10 +153,10 @@ export async function listCouponCatalog(ctx: Context): Promise<void> {
     .lean()
     .exec()
 
-  const couponIds = rows.map((row: any) => row._id)
+  const catalogCouponIds = rows.map((row: any) => row._id)
   const ownedRows =
-    userId && couponIds.length
-      ? await UserCouponModel.find({ userId, couponId: { $in: couponIds } }).lean().exec()
+    userId && catalogCouponIds.length
+      ? await UserCouponModel.find({ userId, couponId: { $in: catalogCouponIds } }).lean().exec()
       : []
   const ownedMap = new Map((ownedRows as any[]).map((row) => [row.couponId.toString(), row]))
 
@@ -291,5 +318,71 @@ export async function claimCoupon(ctx: Context): Promise<void> {
     couponId: coupon._id.toString(),
     userCouponId: entry._id.toString(),
     status: 'unused',
+  }
+}
+
+export async function grantCoupon(ctx: Context): Promise<void> {
+  const userId = ensureUserId(ctx)
+  const { id } = ctx.params as { id: string }
+  if (!Types.ObjectId.isValid(id)) {
+    ctx.throw(400, 'Invalid coupon id')
+  }
+
+  const body = (ctx.request.body ?? {}) as CouponSceneGrantPayload
+  const coupon = await CouponModel.findById(id).populate('typeId').lean().exec()
+  if (!coupon) {
+    ctx.throw(404, 'Coupon not found')
+    return
+  }
+
+  const now = new Date()
+  if (coupon.validUntil && coupon.validUntil.getTime() <= now.getTime()) {
+    ctx.throw(400, 'Coupon expired')
+    return
+  }
+
+  const existing = await UserCouponModel.findOne({ userId, couponId: coupon._id }).populate('couponId').lean().exec()
+  if (existing) {
+    const couponDoc = existing.couponId as any
+    const expiresAt = existing.expiresAt ?? couponDoc?.validUntil ?? coupon.validUntil ?? null
+    ctx.body = {
+      claimed: false,
+      couponId: coupon._id.toString(),
+      userCouponId: existing._id.toString(),
+      status: computeUserCouponStatus({
+        status: existing.status,
+        expiresAt,
+        usedAt: existing.usedAt,
+      }),
+    }
+    return
+  }
+
+  const metadata = {
+    ...(body.metadata && typeof body.metadata === 'object' ? body.metadata : {}),
+    source: body.source ?? 'scene-coupon',
+    sceneId: typeof body.sceneId === 'string' ? body.sceneId.trim() : '',
+    sceneName: typeof body.sceneName === 'string' ? body.sceneName.trim() : '',
+    nodeId: typeof body.nodeId === 'string' ? body.nodeId.trim() : '',
+    couponJson: typeof body.couponJson === 'string' ? body.couponJson : '',
+    triggeredAt: typeof body.triggeredAt === 'string' ? body.triggeredAt : now.toISOString(),
+  }
+
+  const created = await UserCouponModel.create({
+    userId,
+    couponId: coupon._id,
+    status: 'unused',
+    claimedAt: now,
+    expiresAt: coupon.validUntil ?? null,
+    metadata,
+  })
+
+  ctx.status = 201
+  ctx.body = {
+    claimed: true,
+    couponId: coupon._id.toString(),
+    userCouponId: created._id.toString(),
+    status: 'unused',
+    metadata,
   }
 }

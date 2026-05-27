@@ -1,4 +1,4 @@
-import type { Coupon, CouponCatalogItem } from '@/types/coupon'
+import type { Coupon } from '@/types/coupon'
 import { MiniApiError, buildQueryString, miniRequest } from '@harmony/utils'
 import { ensureMiniAuth } from './session'
 
@@ -12,25 +12,30 @@ type CouponListParams = {
   keyword?: string
 }
 
-type CouponCatalogResponse = {
-  total: number
-  coupons: CouponCatalogItem[]
+type CouponSceneItem = {
+  id: string
+  title: string
+  description: string
+  validUntil: string
+  type?: {
+    id: string
+    name: string
+    code: string
+    iconUrl?: string | null
+  } | null
+  status: 'available' | 'unused' | 'used' | 'expired'
+  claimedAt?: string | null
+  usedAt?: string | null
+  expiresAt?: string | null
+  userCouponId?: string | null
+  owned?: boolean
 }
 
-type PurchaseCouponResponse = {
-  order?: {
-    id: string
-    orderNumber?: string
-    paymentStatus?: string
-  }
-  payParams?: {
-    appId: string
-    timeStamp: string
-    nonceStr: string
-    package: string
-    signType: 'RSA'
-    paySign: string
-  }
+type GrantCouponResponse = {
+  claimed: boolean
+  couponId: string
+  userCouponId: string
+  status: 'available' | 'unused' | 'used' | 'expired'
 }
 
 function buildQuery(params?: CouponListParams): string {
@@ -57,52 +62,19 @@ export async function listMyCoupons(params?: CouponListParams): Promise<Coupon[]
   }
 }
 
-export async function listCouponCatalog(): Promise<CouponCatalogItem[]> {
+export async function listCouponCatalog(params?: { couponIds?: string[] }): Promise<CouponSceneItem[]> {
   await ensureMiniAuth()
   try {
-    const res = await miniRequest<CouponCatalogResponse>('/coupons/catalog', { method: 'GET' })
+    const res = await miniRequest<{ total: number; coupons: CouponSceneItem[] }>('/coupons/catalog', {
+      method: 'GET',
+      query: params?.couponIds?.length ? { couponIds: params.couponIds.join(',') } : undefined,
+    })
     return Array.isArray(res.coupons) ? res.coupons : []
   } catch (err) {
     if (err instanceof MiniApiError && err.kind === 'auth') {
       return []
     }
     throw err
-  }
-}
-
-export async function purchaseCouponByProduct(productId: string): Promise<PurchaseCouponResponse> {
-  await ensureMiniAuth()
-  const order = await miniRequest<{ id: string; orderNumber: string }>('/orders', {
-    method: 'POST',
-    body: {
-      paymentMethod: 'wechat',
-      items: [
-        {
-          productId,
-          itemType: 'product',
-          quantity: 1,
-        },
-      ],
-      metadata: {
-        source: 'tour-coupons',
-        productId,
-      },
-    },
-  })
-  const payment = await miniRequest<{ payParams?: PurchaseCouponResponse['payParams']; paymentStatus?: string }>(
-    `/orders/${encodeURIComponent(order.id)}/pay`,
-    {
-      method: 'POST',
-      body: {},
-    },
-  )
-  return {
-    order: {
-      id: order.id,
-      orderNumber: order.orderNumber,
-      paymentStatus: payment.paymentStatus,
-    },
-    payParams: payment.payParams,
   }
 }
 
@@ -114,4 +86,23 @@ export async function getMyCouponDetail(id: string): Promise<Coupon> {
 export async function useMyCoupon(id: string): Promise<Coupon> {
   await ensureMiniAuth()
   return miniRequest<Coupon>(`/coupons/${encodeURIComponent(id)}/use`, { method: 'POST' })
+}
+
+export async function grantCouponById(
+  id: string,
+  payload?: {
+    sceneId?: string
+    sceneName?: string
+    nodeId?: string
+    couponJson?: string
+    triggeredAt?: string
+    source?: string
+    metadata?: Record<string, unknown>
+  },
+): Promise<GrantCouponResponse> {
+  await ensureMiniAuth()
+  return miniRequest<GrantCouponResponse>(`/coupons/${encodeURIComponent(id)}/grant`, {
+    method: 'POST',
+    body: payload ?? {},
+  })
 }

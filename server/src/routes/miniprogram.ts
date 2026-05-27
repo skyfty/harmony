@@ -22,6 +22,7 @@ import {
   claimCoupon,
   getUserCouponDetail,
   useUserCoupon,
+  grantCoupon,
 } from '@/controllers/miniprogram/couponController'
 import {
   createWorks,
@@ -189,6 +190,7 @@ miniRouter.get('/coupons', listUserCoupons)
 miniRouter.get('/coupons/:id', getUserCouponDetail)
 miniRouter.post('/coupons/:id/use', useUserCoupon)
 miniRouter.post('/coupons/:id/claim', claimCoupon)
+miniRouter.post('/coupons/:id/grant', grantCoupon)
 
 // orders
 miniRouter.get('/orders', listOrders)

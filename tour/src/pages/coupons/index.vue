@@ -20,26 +20,31 @@
           :description="coupon.description"
           :valid-until="coupon.validUntil"
           :status="coupon.status"
-          :purchasing="purchasingId === coupon.id"
-          @purchase="handlePurchase(coupon)"
         />
+        <view
+          v-if="coupon.status === 'unused'"
+          class="card-actions"
+        >
+          <button
+            class="use-button"
+            @tap.stop="handleUseCoupon(coupon)"
+          >
+            使用
+          </button>
+        </view>
       </view>
 
       <view
         v-if="!coupons.length"
         class="empty"
       >
-        <text>暂无可见卡券</text>
+        <text>暂无已获得奖励</text>
       </view>
     </view>
 
     <BottomNav
       active="coupon"
       @navigate="handleNavigate"
-    />
-    <PhoneBindSheet
-      v-model="showPhoneBindSheet"
-      @bound="handlePhoneBound"
     />
   </view>
 </template>
@@ -49,75 +54,36 @@ import { onMounted, ref } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
 import BottomNav from '@/components/BottomNav.vue';
 import CouponCard from '@/components/CouponCard.vue';
-import PhoneBindSheet from '@/components/PhoneBindSheet.vue';
 import MiniAuthRecovery from '@/components/MiniAuthRecovery.vue';
 import PageHeader from '@/components/PageHeader.vue';
-import { listCouponCatalog, purchaseCouponByProduct } from '@/api/mini/coupons';
+import { listMyCoupons } from '@/api/mini/coupons';
 import { redirectToNav, type NavKey } from '@/utils/navKey';
-import {
-  requestMiniProgramPayment,
-  toCheckoutErrorMessage,
-  isPhoneBindingRequiredError,
-  isProfileCompletionRequiredError,
-  promptCompleteProfileBeforeCheckout,
-} from '@/utils/checkout';
-import type { CouponCatalogItem } from '@/types/coupon';
+import type { Coupon } from '@/types/coupon';
 
 defineOptions({
   name: 'CouponsIndexPage',
 });
 
-const coupons = ref<CouponCatalogItem[]>([]);
-const purchasingId = ref('');
-const showPhoneBindSheet = ref(false);
-const pendingPurchaseProductId = ref('');
-const purchaseCoupon = purchaseCouponByProduct as unknown as (productId: string) => Promise<{
-  order?: { id: string };
-  payParams?: {
-    appId: string;
-    timeStamp: string;
-    nonceStr: string;
-    package: string;
-    signType: 'RSA';
-    paySign: string;
-  };
-}>;
+const coupons = ref<Coupon[]>([]);
 
 async function reload() {
-  coupons.value = await listCouponCatalog();
+  coupons.value = await listMyCoupons();
 }
 
-async function waitForOwnershipSync(couponId: string): Promise<boolean> {
-  const maxAttempts = 8;
-  const intervalMs = 700;
-  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    await reload();
-    const current = coupons.value.find((item) => item.id === couponId);
-    if (current && current.status !== 'available') {
-      return true;
-    }
-    if (attempt < maxAttempts - 1) {
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, intervalMs);
-      });
-    }
-  }
-  return false;
-}
-
-function handleCardTap(coupon: CouponCatalogItem) {
-  if (coupon.status === 'unused' && coupon.userCouponId) {
-    openUserCoupon(coupon.userCouponId);
+function handleCardTap(coupon: Coupon) {
+  if (coupon.id) {
+    openUserCoupon(coupon.id);
   }
 }
 
-async function handlePhoneBound() {
-  const productId = pendingPurchaseProductId.value;
-  pendingPurchaseProductId.value = '';
-  if (!productId) {
+function handleUseCoupon(coupon: Coupon) {
+  if (coupon.status !== 'unused') {
     return;
   }
-  await handlePurchaseByProductId(productId, true);
+  void uni.showToast({
+    title: '使用接口待接入',
+    icon: 'none',
+  });
 }
 
 function openUserCoupon(userCouponId: string) {
@@ -125,49 +91,6 @@ function openUserCoupon(userCouponId: string) {
     return;
   }
   void uni.navigateTo({ url: `/pages/coupons/detail?id=${encodeURIComponent(userCouponId)}` });
-}
-
-async function handlePurchaseByProductId(productId: string, fromRetry = false) {
-  if (!productId || purchasingId.value) {
-    return;
-  }
-
-  const coupon = coupons.value.find((item) => item.productId === productId && item.status === 'available') ?? null;
-  if (!coupon) {
-    return;
-  }
-
-  purchasingId.value = coupon.id;
-  void uni.showLoading({ title: fromRetry ? '重新购买中...' : '购买中...' });
-  try {
-    const result = await purchaseCoupon(productId);
-    if (result.payParams) {
-      await requestMiniProgramPayment(result.payParams);
-    }
-    const synced = await waitForOwnershipSync(coupon.id);
-    void uni.showToast({ title: synced ? '购买成功' : '支付完成，状态同步中...', icon: 'none' });
-  } catch (error: unknown) {
-    if (isPhoneBindingRequiredError(error)) {
-      pendingPurchaseProductId.value = productId;
-      showPhoneBindSheet.value = true;
-      return;
-    }
-    if (isProfileCompletionRequiredError(error)) {
-      await promptCompleteProfileBeforeCheckout();
-      return;
-    }
-    void uni.showToast({ title: toCheckoutErrorMessage(error, '购买失败'), icon: 'none' });
-  } finally {
-    purchasingId.value = '';
-    void uni.hideLoading();
-  }
-}
-
-async function handlePurchase(coupon: CouponCatalogItem) {
-  if (!coupon.productId || purchasingId.value || coupon.status !== 'available') {
-    return;
-  }
-  await handlePurchaseByProductId(coupon.productId);
 }
 
 onMounted(() => {
@@ -203,6 +126,27 @@ function handleNavigate(key: NavKey) {
 
 .card-item {
   overflow: visible;
+}
+
+.card-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+.use-button {
+  min-width: 88px;
+  height: 34px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #1f7aec, #4aa3ff);
+  color: #fff;
+  font-size: 12px;
+  line-height: 34px;
+  border: none;
+}
+
+.use-button::after {
+  border: none;
 }
 
 .empty {

@@ -35,6 +35,7 @@ import type {
   ControlCharacterBehaviorParams,
   ReleaseCharacterBehaviorParams,
   DebusBehaviorParams,
+  CouponBehaviorParams,
   LoadSceneBehaviorParams,
   ExitSceneBehaviorParams,
   PunchBehaviorParams,
@@ -623,6 +624,17 @@ const scriptDefinitions: BehaviorScriptDefinition[] = [
       return {}
     },
   },
+  {
+    id: 'coupon',
+    label: 'Coupon',
+    description: 'Emit a coupon event for the target coupon node.',
+    icon: 'mdi-gift-outline',
+    createDefaultParams(): CouponBehaviorParams {
+      return {
+        targetNodeId: null,
+      }
+    },
+  },
 ]
 
 let sequenceIdCounter = 0
@@ -1066,6 +1078,15 @@ function cloneScriptBinding(binding: SceneBehaviorScriptBinding): SceneBehaviorS
         type: 'punch',
         params: {},
       }
+    case 'coupon': {
+      const params = binding.params as Partial<CouponBehaviorParams> | undefined
+      return {
+        type: 'coupon',
+        params: {
+          targetNodeId: normalizeTargetNodeId(params?.targetNodeId),
+        },
+      }
+    }
     case 'trigger': {
       const params = binding.params as TriggerBehaviorParams | undefined
       return {
@@ -1466,6 +1487,15 @@ export function ensureBehaviorParams(
           type: 'punch',
           params: {},
         }
+      case 'coupon': {
+        const params = script.params as Partial<CouponBehaviorParams> | undefined
+        return {
+          type: 'coupon',
+          params: {
+            targetNodeId: params?.targetNodeId ?? null,
+          },
+        }
+      }
       case 'trigger': {
         const params = script.params as Partial<TriggerBehaviorParams> | undefined
         return {
