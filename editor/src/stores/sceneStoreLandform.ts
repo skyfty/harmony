@@ -79,6 +79,22 @@ type LandformHeightSamplingResult = {
   runtimeDefinition: GroundRuntimeDynamicMesh
   sampleHeight: LandformHeightSampler
   sampleSurface?: (x: number, z: number) => { height: number; source: GroundSurfaceSampleSource } | null
+  getStats: () => {
+    sampleRequests: number
+    cacheHits: number
+    terrainSamplerHits: number
+    raycastFallbackHits: number
+    triangleFallbackHits: number
+  }
+}
+
+function resolveRuntimeTerrainHeightSamplerLocal(
+  definition: Pick<GroundRuntimeDynamicMesh, 'runtimeTerrainHeightSampler'>,
+): { sampleHeightAtWorld: (x: number, z: number) => number | null } | null {
+  const candidate = (definition.runtimeTerrainHeightSampler as { sampleHeightAtWorld?: unknown } | null | undefined) ?? null
+  return candidate && typeof candidate.sampleHeightAtWorld === 'function'
+    ? candidate as { sampleHeightAtWorld: (x: number, z: number) => number | null }
+    : null
 }
 
 type LandformAdaptiveGroundClearanceContext = {
@@ -724,25 +740,52 @@ function createLandformHeightSampler(
 ): LandformHeightSamplingResult {
   const { runtimeDefinition, context } = prepareGroundTriangleHeightSamplingContext(groundDefinition)
   const transform = getGroundTransform(groundNode)
+  const terrainSampler = resolveRuntimeTerrainHeightSamplerLocal(runtimeDefinition)
   const surfaceHeightCache = new Map<string, { height: number; source: GroundSurfaceSampleSource } | null>()
+  const toWorldX = (localX: number): number => transform.position.x + localX * transform.scale.x
+  const toWorldZ = (localZ: number): number => transform.position.z + localZ * transform.scale.z
+  const toLocalY = (worldY: number): number => (worldY - transform.position.y) / transform.scale.y
+  const stats = {
+    sampleRequests: 0,
+    cacheHits: 0,
+    terrainSamplerHits: 0,
+    raycastFallbackHits: 0,
+    triangleFallbackHits: 0,
+  }
   const encodeCacheNumber = (value: number) => `${Math.round(value * 1000)}`
   const sampleSurface = (x: number, z: number): { height: number; source: GroundSurfaceSampleSource } | null => {
-    if (!groundObject) {
-      return null
-    }
+    stats.sampleRequests += 1
     const cacheKey = `${encodeCacheNumber(x)},${encodeCacheNumber(z)}`
     if (surfaceHeightCache.has(cacheKey)) {
+      stats.cacheHits += 1
       return surfaceHeightCache.get(cacheKey) ?? null
     }
-    const worldPoint = groundLocalToWorld(new Vector3(x, 0, z), transform)
-    const sample = sampleGroundRuntimeSurfaceAtWorldXZ(groundObject, worldPoint.x, worldPoint.z)
+    const worldX = toWorldX(x)
+    const worldZ = toWorldZ(z)
+    if (terrainSampler) {
+      const sampledHeight = terrainSampler.sampleHeightAtWorld(worldX, worldZ)
+      if (Number.isFinite(sampledHeight)) {
+        stats.terrainSamplerHits += 1
+        const result = {
+          height: toLocalY(Number(sampledHeight)),
+          source: 'fallback' as GroundSurfaceSampleSource,
+        }
+        surfaceHeightCache.set(cacheKey, result)
+        return result
+      }
+    }
+    if (!groundObject) {
+      surfaceHeightCache.set(cacheKey, null)
+      return null
+    }
+    const sample = sampleGroundRuntimeSurfaceAtWorldXZ(groundObject, worldX, worldZ)
     if (!sample) {
       surfaceHeightCache.set(cacheKey, null)
       return null
     }
-    const localSurfacePoint = worldToGroundLocal(sample.point, transform)
-    const result = Number.isFinite(localSurfacePoint.y)
-      ? { height: localSurfacePoint.y, source: sample.source }
+    stats.raycastFallbackHits += 1
+    const result = Number.isFinite(sample.point.y)
+      ? { height: toLocalY(sample.point.y), source: sample.source }
       : null
     surfaceHeightCache.set(cacheKey, result)
     return result
@@ -754,9 +797,11 @@ function createLandformHeightSampler(
       if (surfaceSample) {
         return surfaceSample.height
       }
+      stats.triangleFallbackHits += 1
       return sampleGroundTriangleHeightWithContext(runtimeDefinition, context, x, z)
     },
     sampleSurface,
+    getStats: () => ({ ...stats }),
   }
 }
 
@@ -1895,12 +1940,14 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
       const runtimeGroundObject = groundNode ? deps.getRuntimeObject(groundNode.id) : null
       const polygonLocalPoints = normalizePolygonWinding(buildPoints.map((point) => worldToGroundLocal(point, transform)))
       const polygonLocal = polygonLocalPoints.map((point) => new Vector2(point.x, point.z))
-      const { runtimeDefinition: groundRuntimeDefinition, sampleHeight } = createLandformHeightSampler(
+      const landformHeightSampler = createLandformHeightSampler(
         groundDefinition,
         groundNode,
         runtimeGroundObject,
       )
+      const groundRuntimeDefinition = landformHeightSampler.runtimeDefinition
       const clearanceContext = createLandformAdaptiveGroundClearanceContext(groundRuntimeDefinition, transform)
+      const sampleHeight = landformHeightSampler.sampleHeight
       const conformedControlWorldPoints = polygonLocalPoints.map((point) => {
         const localHeight = sampleHeight(point.x, point.z)
         const localClearance = resolveLandformAdaptiveGroundClearance(
@@ -1971,6 +2018,7 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
             degradeReason: sliced.stats?.reason ?? null,
             sliceDurationMs: Number(sliceDurationMs.toFixed(2)),
             totalDurationMs: Number(totalDurationMs.toFixed(2)),
+            sampleStats: landformHeightSampler.getStats(),
           })
         }
       }
@@ -2056,6 +2104,11 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
         return null
       }
 
+      let landformHeightSampler: LandformHeightSamplingResult | null = null
+      let polygonLocalPoints: Vector3[] | null = null
+      let clearanceContext: LandformAdaptiveGroundClearanceContext | null = null
+      let groundRuntimeDefinition: GroundRuntimeDynamicMesh | null = null
+      let transform: GroundTransform | null = null
       let surfaceWorldVertices: Vector3[] = []
       let surfaceIndices: number[] = []
 
@@ -2076,16 +2129,19 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
         })
         surfaceIndices = [...triangulation.indices]
       } else {
-        const transform = getGroundTransform(groundNode)
+        transform = getGroundTransform(groundNode)
         const runtimeGroundObject = groundNode ? deps.getRuntimeObject(groundNode.id) : null
-        const polygonLocalPoints = normalizePolygonWinding(buildPoints.map((point) => worldToGroundLocal(point, transform)))
+        const safeTransform = transform ?? getGroundTransform(groundNode)
+        polygonLocalPoints = normalizePolygonWinding(buildPoints.map((point) => worldToGroundLocal(point, safeTransform)))
         const polygonLocal = polygonLocalPoints.map((point) => new Vector2(point.x, point.z))
-        const { runtimeDefinition: groundRuntimeDefinition, sampleHeight } = createLandformHeightSampler(
+        landformHeightSampler = createLandformHeightSampler(
           groundDefinition,
           groundNode,
           runtimeGroundObject,
         )
-        const clearanceContext = createLandformAdaptiveGroundClearanceContext(groundRuntimeDefinition, transform)
+        groundRuntimeDefinition = landformHeightSampler.runtimeDefinition
+        clearanceContext = createLandformAdaptiveGroundClearanceContext(groundRuntimeDefinition, safeTransform)
+        const sampleHeight = landformHeightSampler.sampleHeight
         const buildStartedAt = nowForLandformBuildDebug()
         const sliced = sliceGroundTrianglesByPolygon(groundDefinition, polygonLocal, {
           mergePlanarRegions: !normalizedProps.enableFeather,
@@ -2098,7 +2154,7 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
             groundDefinition,
             sampleHeight,
             clearanceContext,
-            transform,
+            safeTransform,
             normalizedProps.enableFeather,
             featherWidth,
           )
@@ -2110,7 +2166,7 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
             sliced,
             sampleHeight,
             clearanceContext,
-            transform,
+            safeTransform,
           )
         }
 
@@ -2130,6 +2186,7 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
             degradeReason: sliced.stats?.reason ?? null,
             sliceDurationMs: Number(sliceDurationMs.toFixed(2)),
             totalDurationMs: Number(totalDurationMs.toFixed(2)),
+            sampleStats: landformHeightSampler?.getStats() ?? null,
           })
         }
 
@@ -2140,7 +2197,7 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
             groundDefinition,
             sampleHeight,
             clearanceContext,
-            transform,
+            safeTransform,
             normalizedProps.enableFeather,
             featherWidth,
           )
@@ -2157,24 +2214,27 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
         if (!groundDefinition) {
           return buildPoints.map((point) => point.clone())
         }
-        const transform = getGroundTransform(groundNode)
-        const runtimeGroundObject = groundNode ? deps.getRuntimeObject(groundNode.id) : null
-        const polygonLocalPoints = normalizePolygonWinding(buildPoints.map((point) => worldToGroundLocal(point, transform)))
-        const { runtimeDefinition: groundRuntimeDefinition, sampleHeight } = createLandformHeightSampler(
+        const safeTransform = transform ?? getGroundTransform(groundNode)
+        const localPoints = polygonLocalPoints ?? normalizePolygonWinding(buildPoints.map((point) => worldToGroundLocal(point, safeTransform)))
+        const sampler = landformHeightSampler ?? createLandformHeightSampler(
           groundDefinition,
           groundNode,
-          runtimeGroundObject,
+          groundNode ? deps.getRuntimeObject(groundNode.id) : null,
         )
-        const clearanceContext = createLandformAdaptiveGroundClearanceContext(groundRuntimeDefinition, transform)
-        return polygonLocalPoints.map((point) => {
+        const safeClearanceContext = clearanceContext ?? createLandformAdaptiveGroundClearanceContext(
+          groundRuntimeDefinition ?? sampler.runtimeDefinition,
+          safeTransform,
+        )
+        const sampleHeight = sampler.sampleHeight
+        return localPoints.map((point) => {
           const localHeight = sampleHeight(point.x, point.z)
           const localClearance = resolveLandformAdaptiveGroundClearance(
             sampleHeight,
             new Vector2(point.x, point.z),
             localHeight,
-            clearanceContext,
+            safeClearanceContext,
           )
-          return groundLocalToWorld(new Vector3(point.x, localHeight + localClearance, point.z), transform)
+          return groundLocalToWorld(new Vector3(point.x, localHeight + localClearance, point.z), safeTransform)
         })
       })()
       const renderCache = buildLandformRenderCache(
