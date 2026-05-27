@@ -7141,19 +7141,6 @@ function commitRegionContourNode(nodeId: string, points: Array<[number, number]>
   return Boolean(updated)
 }
 
-function buildLandformPreviewFromLocalPoints(
-  nodeId: string,
-  points: Array<[number, number]>,
-): boolean {
-  if (points.length < 3) {
-    return false
-  }
-  return sceneStore.previewLandformSurfaceMeshNode({
-    nodeId,
-    localPoints: points.map(([x, z]) => [x, z] as [number, number]),
-  })
-}
-
 function computeLandformCircleFromLocalPoints(points: Array<[number, number]>): { centerX: number; centerZ: number; radius: number; segments: number } | null {
   const circle = computeApproxCircleFromPlanarPoints(sanitizePlanarPoints(points))
   if (!circle) {
@@ -7178,35 +7165,6 @@ function buildLandformCircleLocalPoints(options: {
     centerY: options.centerZ,
     radius: options.radius,
     segments: options.segments,
-  })
-}
-
-function previewLandformNodeDuringTranslate(nodeId: string): void {
-  const node = sceneStore.getNodeById(nodeId)
-  if (!node || node.dynamicMesh?.type !== 'Landform') {
-    return
-  }
-  const points = cloneLandformFootprintPoints(node)
-  if (points.length < 3) {
-    return
-  }
-  buildLandformPreviewFromLocalPoints(nodeId, points)
-}
-
-function previewLandformNodesDuringTransform(updates: TransformUpdatePayload[], mode: string): void {
-  if (mode !== 'translate' || !updates.length) {
-    return
-  }
-
-  const previewIds = new Set<string>()
-  updates.forEach((update) => {
-    if (typeof update.id === 'string' && update.id.length > 0) {
-      previewIds.add(update.id)
-    }
-  })
-
-  previewIds.forEach((id) => {
-    previewLandformNodeDuringTranslate(id)
   })
 }
 
@@ -9868,9 +9826,7 @@ const {
         queueMicrotask(() => applyCapturedLightTargetUpdates(captured))
       }
     },
-    onSelectionDragUpdates: (updates) => {
-      previewLandformNodesDuringTransform(updates, 'translate')
-    },
+    onSelectionDragUpdates: () => {},
     resolveDropSurfaceHeight: ({ bounds, excludedNodeIds }) => {
       const excludedObjects = new Set<THREE.Object3D>()
       excludedNodeIds.forEach((id) => {
@@ -16994,9 +16950,7 @@ function handlePointerMove(event: PointerEvent) {
     }
     nextPoints[state.vertexIndex] = [local.x, local.z]
     state.workingPoints = nextPoints
-      if (buildLandformPreviewFromLocalPoints(state.nodeId, nextPoints)) {
-        ensureLandformVertexHandlesForSelectedNode({ force: true, previewPoints: nextPoints })
-      }
+    ensureLandformVertexHandlesForSelectedNode({ force: true, previewPoints: nextPoints })
     return
   }
 
@@ -17310,9 +17264,7 @@ function handlePointerMove(event: PointerEvent) {
       segments: state.segments,
     })
     state.workingPoints = nextPoints
-    if (buildLandformPreviewFromLocalPoints(state.nodeId, nextPoints)) {
-      ensureLandformVertexHandlesForSelectedNode({ force: true, previewPoints: nextPoints })
-    }
+    ensureLandformVertexHandlesForSelectedNode({ force: true, previewPoints: nextPoints })
     return
   }
 
@@ -21138,8 +21090,6 @@ function handleTransformChange() {
     isActiveTranslateTool,
     shouldSnapTranslate,
   })
-
-  previewLandformNodesDuringTransform(updates, mode)
 
   finalizeTransformChange({
     updates,
