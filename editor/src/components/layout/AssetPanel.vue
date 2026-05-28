@@ -449,6 +449,69 @@ function normalizeTextValue(value: string | null | undefined): string {
   return typeof value === 'string' ? value.trim() : ''
 }
 
+function normalizeSearchText(value: string | null | undefined): string {
+  return normalizeTextValue(value).toLowerCase()
+}
+
+interface AssetSearchQueryParts {
+  pathSegments: string[]
+  text: string
+}
+
+function splitAssetSearchQuery(query: string): AssetSearchQueryParts {
+  const trimmed = query.trim()
+  if (!trimmed.length) {
+    return { pathSegments: [], text: '' }
+  }
+
+  if (!trimmed.includes('/')) {
+    return { pathSegments: [], text: trimmed }
+  }
+
+  const segments = trimmed
+    .split('/')
+    .map((segment) => segment.trim())
+    .filter((segment) => segment.length > 0)
+
+  if (!segments.length) {
+    return { pathSegments: [], text: '' }
+  }
+
+  if (segments.length === 1) {
+    return trimmed.endsWith('/')
+      ? { pathSegments: segments, text: '' }
+      : { pathSegments: [], text: segments[0] ?? '' }
+  }
+
+  return {
+    pathSegments: segments.slice(0, -1),
+    text: segments[segments.length - 1] ?? '',
+  }
+}
+
+function assetMatchesSearchText(asset: ProjectAsset, queryText: string): boolean {
+  const search = normalizeSearchText(queryText)
+  if (!search.length) {
+    return true
+  }
+
+  const haystack = [
+    normalizeSearchText(asset.name),
+    ...(Array.isArray(asset.tags) ? asset.tags.map((tag) => normalizeSearchText(tag)) : []),
+  ]
+    .filter((value) => value.length > 0)
+    .join(' ')
+
+  if (!haystack.length) {
+    return false
+  }
+
+  return search
+    .split(/\s+/)
+    .filter((token) => token.length > 0)
+    .every((token) => haystack.includes(token))
+}
+
 function toggleSelectionValue(values: string[], value: string): string[] {
   const next = new Set(values)
   if (next.has(value)) {
@@ -3528,20 +3591,75 @@ watch(projectTree, () => {
   }
 })
 
-function collectAssets(directories: ProjectDirectory[], matches: ProjectAsset[], query: string, seen: Set<string>) {
+function collectAssetsFromAssetList(
+  assets: ProjectAsset[],
+  matches: ProjectAsset[],
+  queryText: string,
+  seen: Set<string>,
+): void {
+  for (const asset of assets) {
+    if (seen.has(asset.id)) {
+      continue
+    }
+    if (assetMatchesSearchText(asset, queryText)) {
+      matches.push(asset)
+      seen.add(asset.id)
+    }
+  }
+}
+
+function collectAssetsFromDirectory(
+  directory: ProjectDirectory,
+  matches: ProjectAsset[],
+  queryText: string,
+  seen: Set<string>,
+  pathSegments: string[],
+  matchedDepth: number,
+): void {
+  const normalizedName = normalizeSearchText(directory.name)
+  if (pathSegments.length > matchedDepth) {
+    const expectedSegment = normalizeSearchText(pathSegments[matchedDepth] ?? '')
+    if (!expectedSegment.length || !normalizedName.includes(expectedSegment)) {
+      return
+    }
+  }
+
+  const scopeReached = pathSegments.length === 0 || matchedDepth + 1 >= pathSegments.length
+  if (directory.assets?.length && scopeReached) {
+    collectAssetsFromAssetList(directory.assets, matches, queryText, seen)
+  }
+
+  if (directory.children?.length) {
+    const nextMatchedDepth = pathSegments.length > matchedDepth
+      ? matchedDepth + 1
+      : pathSegments.length
+    for (const child of directory.children) {
+      collectAssetsFromDirectory(child, matches, queryText, seen, pathSegments, nextMatchedDepth)
+    }
+  }
+}
+
+function collectAssetsForSearch(
+  directories: ProjectDirectory[],
+  matches: ProjectAsset[],
+  queryText: string,
+  seen: Set<string>,
+  pathSegments: string[],
+): void {
   for (const directory of directories) {
-    if (directory.assets) {
-      for (const asset of directory.assets) {
-        if (seen.has(asset.id)) continue
-        if (asset.name.toLowerCase().includes(query)) {
-          matches.push(asset)
-          seen.add(asset.id)
+    if (directory.id === ASSETS_ROOT_DIRECTORY_ID || directory.id === PACKAGES_ROOT_DIRECTORY_ID) {
+      if (directory.assets?.length && !pathSegments.length) {
+        collectAssetsFromAssetList(directory.assets, matches, queryText, seen)
+      }
+      if (directory.children?.length) {
+        for (const child of directory.children) {
+          collectAssetsFromDirectory(child, matches, queryText, seen, pathSegments, 0)
         }
       }
+      continue
     }
-    if (directory.children?.length) {
-      collectAssets(directory.children, matches, query, seen)
-    }
+
+    collectAssetsFromDirectory(directory, matches, queryText, seen, pathSegments, 0)
   }
 }
 
@@ -3551,7 +3669,7 @@ function searchAsset() {
     searchDebounceHandle = null
   }
 
-  const query = normalizedSearchQuery.value.toLowerCase()
+  const query = normalizedSearchQuery.value
   if (!query) {
     searchResults.value = []
     searchLoaded.value = false
@@ -3562,7 +3680,8 @@ function searchAsset() {
   try {
     const matches: ProjectAsset[] = []
     const seen = new Set<string>()
-    collectAssets(filteredProjectTree.value ?? [], matches, query, seen)
+    const { pathSegments, text } = splitAssetSearchQuery(query)
+    collectAssetsForSearch(filteredProjectTree.value ?? [], matches, text, seen, pathSegments)
     matches.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
     searchResults.value = matches
     searchLoaded.value = true
@@ -3952,7 +4071,7 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
               v-model="searchQuery"
               :loading="searchLoading"
               density="compact"
-              variant="solo"
+              variant="underlined"
               hide-details
               clearable
               single-line
