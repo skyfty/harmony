@@ -7179,6 +7179,16 @@ function commitLandformContourNode(nodeId: string, points: Array<[number, number
   return Boolean(updated)
 }
 
+function previewLandformContourNode(nodeId: string, points: Array<[number, number]>): boolean {
+  if (points.length < 3) {
+    return false
+  }
+  return sceneStore.previewLandformSurfaceMeshNode({
+    nodeId,
+    localPoints: points.map(([x, z]) => [x, z] as [number, number]),
+  })
+}
+
 function tryBeginLandformVertexDrag(event: PointerEvent): boolean {
   if (landformContourVertexDragState || landformCircleRadiusDragState) {
     return false
@@ -16981,7 +16991,9 @@ function handlePointerMove(event: PointerEvent) {
     }
     nextPoints[state.vertexIndex] = [local.x, local.z]
     state.workingPoints = nextPoints
-    ensureLandformVertexHandlesForSelectedNode({ force: true, previewPoints: nextPoints })
+    if (previewLandformContourNode(state.nodeId, nextPoints)) {
+      ensureLandformVertexHandlesForSelectedNode({ force: true, previewPoints: nextPoints })
+    }
     return
   }
 
@@ -17167,23 +17179,6 @@ function handlePointerMove(event: PointerEvent) {
     return
   }
 
-  if (landformContourVertexDragState && event.pointerId === landformContourVertexDragState.pointerId) {
-    landformContourVertexDragState = null
-    pointerInteraction.releaseIfCaptured(event.pointerId)
-    setActiveLandformVertexHandle(null)
-
-    try {
-      ensureLandformVertexHandlesForSelectedNode({ force: true })
-    } catch {
-      /* noop */
-    }
-
-    event.preventDefault()
-    event.stopPropagation()
-    event.stopImmediatePropagation()
-    return
-  }
-
   if (waterCircleCenterDragState && event.pointerId === waterCircleCenterDragState.pointerId) {
     const state = waterCircleCenterDragState
     const dx = event.clientX - state.startX
@@ -17295,7 +17290,9 @@ function handlePointerMove(event: PointerEvent) {
       segments: state.segments,
     })
     state.workingPoints = nextPoints
-    ensureLandformVertexHandlesForSelectedNode({ force: true, previewPoints: nextPoints })
+    if (previewLandformContourNode(state.nodeId, nextPoints)) {
+      ensureLandformVertexHandlesForSelectedNode({ force: true, previewPoints: nextPoints })
+    }
     return
   }
 
@@ -17673,31 +17670,6 @@ async function handlePointerUp(event: PointerEvent) {
           ensureModelCollisionFaceVertexHandlesForSelectedNode({ force: true })
         } catch {
           /* noop */
-        }
-
-        event.preventDefault()
-        event.stopPropagation()
-        event.stopImmediatePropagation()
-        return
-      }
-
-      if (landformCircleRadiusDragState && event.pointerId === landformCircleRadiusDragState.pointerId && event.button === 0) {
-        const state = landformCircleRadiusDragState
-        landformCircleRadiusDragState = null
-        pointerInteraction.releaseIfCaptured(event.pointerId)
-        setActiveLandformVertexHandle(null)
-
-        if (state.moved) {
-          if (!commitLandformContourNode(state.nodeId, state.workingPoints)) {
-            sceneStore.restoreLandformSurfaceMeshRuntime(state.nodeId)
-          }
-          ensureLandformVertexHandlesForSelectedNode({ force: true })
-          void nextTick(() => {
-            ensureLandformVertexHandlesForSelectedNode({ force: true })
-          })
-        } else {
-          sceneStore.restoreLandformSurfaceMeshRuntime(state.nodeId)
-          ensureLandformVertexHandlesForSelectedNode({ force: true })
         }
 
         event.preventDefault()
