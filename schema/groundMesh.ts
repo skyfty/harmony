@@ -63,9 +63,6 @@ const GROUND_TRIANGLE_SLICE_MAX_FRAGMENT_COUNT = 8192
 const GROUND_TRIANGLE_SLICE_MAX_INTERSECTION_BUDGET = 12000
 const GROUND_TRIANGLE_SLICE_MAX_PLANAR_REGION_RATIO = 0.45
 const GROUND_TRIANGLE_SLICE_MAX_TRIANGLE_CELL_RATIO = 0.35
-const GROUND_TRIANGLE_SLICE_DEBUG_ENABLED = typeof window !== 'undefined'
-  && /^(localhost|127(?:\.\d+){3}|0\.0\.0\.0)$/u.test(window.location.hostname)
-const GROUND_TRIANGLE_SLICE_SLOW_THRESHOLD_MS = 12
 const GROUND_FLAT_TILING_MIN_RADIUS_CHUNKS = 32
 const GROUND_FLAT_TILING_BUFFER_MIN_CHUNKS = 8
 const GROUND_FLAT_TILING_BUFFER_FACTOR = 0.5
@@ -73,21 +70,6 @@ const GROUND_FLAT_TILING_RELEASE_BUFFER_MIN_CHUNKS = 12
 const GROUND_FLAT_TILING_RELEASE_BUFFER_FACTOR = 0.35
 const GROUND_FLAT_CHUNK_ASYNC_BUILD_BATCH_SIZE = 4096
 const GROUND_LOCAL_EDIT_TILE_COVERAGE_BUCKET_CHUNKS = 4
-
-function nowForGroundTextureDebug(): number {
-  return typeof performance !== 'undefined' ? performance.now() : Date.now()
-}
-
-function logGroundTriangleSliceDebug(message: string, details?: Record<string, unknown>): void {
-  if (!GROUND_TRIANGLE_SLICE_DEBUG_ENABLED) {
-    return
-  }
-  if (details) {
-    console.info(`[GroundSlice] ${message}`, details)
-    return
-  }
-  console.info(`[GroundSlice] ${message}`)
-}
 
 type GroundLocalEditTileCache = {
   tiles: GroundLocalEditTileData[]
@@ -142,16 +124,6 @@ export type GroundTriangleSliceMesh = {
   vertices: Array<{ x: number; y: number; z: number }>
   indices: number[]
   mode?: 'exact' | 'approx'
-  stats?: {
-    coveredCellCount: number
-    planarRegionCount: number
-    triangleCellCount: number
-    intersectionBudget: number
-    mergePlanarRegions: boolean
-    degraded: boolean
-    reason?: 'footprint-too-small' | 'fragment-budget' | 'fragmentation' | 'covered-cell-budget'
-    durationMs?: number
-  }
 }
 
 type GroundRuntimeState = {
@@ -3547,33 +3519,14 @@ function buildGroundSliceTriangleBounds(triangle: GroundCellTriangleDefinition):
   }
 }
 
-function buildGroundSliceStats(
-  coveredCellCount: number,
-  planarRegionCount: number,
-  triangleCellCount: number,
-  mergePlanarRegions: boolean,
-  degraded: boolean,
-  reason?: NonNullable<GroundTriangleSliceMesh['stats']>['reason'],
-  durationMs?: number,
-): NonNullable<GroundTriangleSliceMesh['stats']> {
-  return {
-    coveredCellCount,
-    planarRegionCount,
-    triangleCellCount,
-    intersectionBudget: planarRegionCount + (triangleCellCount * 2),
-    mergePlanarRegions,
-    degraded,
-    reason,
-    durationMs,
-  }
-}
+type GroundTriangleSliceDegradeReason = 'fragment-budget' | 'fragmentation' | 'covered-cell-budget'
 
 function shouldDegradeGroundTriangleSlice(
   coveredCellCount: number,
   planarRegionCount: number,
   triangleCellCount: number,
   aborted: boolean,
-): NonNullable<GroundTriangleSliceMesh['stats']>['reason'] | null {
+): GroundTriangleSliceDegradeReason | null {
   if (coveredCellCount > GROUND_TRIANGLE_SLICE_MAX_COVERED_CELLS) {
     return 'covered-cell-budget'
   }
@@ -3666,7 +3619,6 @@ export function sliceGroundTrianglesByPolygon(
   polygon: Array<THREE.Vector2 | { x: number; y: number } | [number, number]>,
   options: { mergePlanarRegions?: boolean } = {},
 ): GroundTriangleSliceMesh {
-  const startedAt = nowForGroundTextureDebug()
   const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
   const footprint = sanitizeGroundClippingLoop(
     polygon.map((entry) => {
@@ -3684,7 +3636,6 @@ export function sliceGroundTrianglesByPolygon(
       vertices: [],
       indices: [],
       mode: 'exact',
-      stats: buildGroundSliceStats(0, 0, 0, options.mergePlanarRegions !== false, false, 'footprint-too-small', nowForGroundTextureDebug() - startedAt),
     }
   }
 
@@ -3747,32 +3698,10 @@ export function sliceGroundTrianglesByPolygon(
     aborted,
   )
   if (degradeReason) {
-    const durationMs = nowForGroundTextureDebug() - startedAt
-    const stats = buildGroundSliceStats(
-      coveredCellCount,
-      planarRegions.length,
-      triangleCells.length,
-      allowPlanarRegionMerge,
-      true,
-      degradeReason,
-      durationMs,
-    )
-    if (durationMs >= GROUND_TRIANGLE_SLICE_SLOW_THRESHOLD_MS || degradeReason) {
-      logGroundTriangleSliceDebug('Degraded sliceGroundTrianglesByPolygon to approximate mode', {
-        coveredCellCount,
-        planarRegionCount: planarRegions.length,
-        triangleCellCount: triangleCells.length,
-        intersectionBudget: stats.intersectionBudget,
-        mergePlanarRegions: allowPlanarRegionMerge,
-        reason: degradeReason,
-        durationMs: Number(durationMs.toFixed(2)),
-      })
-    }
     return {
       vertices: [],
       indices: [],
       mode: 'approx',
-      stats,
     }
   }
 
@@ -3856,29 +3785,7 @@ export function sliceGroundTrianglesByPolygon(
     })
   })
 
-  const durationMs = nowForGroundTextureDebug() - startedAt
-  const stats = buildGroundSliceStats(
-    coveredCellCount,
-    planarRegions.length,
-    triangleCells.length,
-    allowPlanarRegionMerge,
-    false,
-    undefined,
-    durationMs,
-  )
-  if (durationMs >= GROUND_TRIANGLE_SLICE_SLOW_THRESHOLD_MS) {
-    logGroundTriangleSliceDebug('Completed exact ground slice', {
-      coveredCellCount,
-      planarRegionCount: planarRegions.length,
-      triangleCellCount: triangleCells.length,
-      intersectionBudget: stats.intersectionBudget,
-      mergePlanarRegions: allowPlanarRegionMerge,
-      vertexCount: vertices.length,
-      triangleIndexCount: indices.length,
-      durationMs: Number(durationMs.toFixed(2)),
-    })
-  }
-  return { vertices, indices, mode: 'exact', stats }
+  return { vertices, indices, mode: 'exact' }
 }
 
 export function sampleGroundHeight(definition: GroundDynamicMesh, x: number, z: number): number {
