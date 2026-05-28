@@ -14074,6 +14074,9 @@ export const useSceneStore = defineStore('scene', {
       } else {
         replaceSceneNodes(this, [node, ...this.nodes])
       }
+      // New nodes change the hierarchy index immediately.
+      // Keep `sceneNodeIndex` in sync so visibility/parent lookups work before a full refresh.
+      this.bumpSceneGraphStructureVersion()
       this.setSelection([id])
 
       // A new node was inserted. Use incremental viewport updates.
@@ -14500,6 +14503,9 @@ export const useSceneStore = defineStore('scene', {
 
       this.captureHistorySnapshot()
       this.nodes = [node, ...this.nodes]
+      // New nodes change the hierarchy index immediately.
+      // Keep `sceneNodeIndex` in sync so visibility/parent lookups work before a full refresh.
+      this.bumpSceneGraphStructureVersion()
       this.setSelection([node.id])
 
       // SceneViewport only applies pending patches when `sceneNodePropertyVersion` bumps.
@@ -14857,6 +14863,9 @@ export const useSceneStore = defineStore('scene', {
         nextTree = [node, ...this.nodes]
       }
       this.nodes = nextTree
+      // New nodes change the hierarchy index immediately.
+      // Keep `sceneNodeIndex` in sync so visibility/parent lookups work before a full refresh.
+      this.bumpSceneGraphStructureVersion()
       this.setSelection([id], { primaryId: id })
       // New nodes can be handled incrementally by SceneViewport via ensureNodeSubtreeExists.
       // Avoid full syncs on every add when scenes get large.
