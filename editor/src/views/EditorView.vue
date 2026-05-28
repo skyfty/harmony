@@ -160,6 +160,8 @@ const exportPreferences = ref<SceneExportOptions>({
 const viewportRef = ref<SceneViewportHandle | null>(null)
 const isNewSceneDialogOpen = ref(false)
 const isNewProjectDialogOpen = ref(false)
+const newProjectDialogErrorMessage = ref('')
+const isCreatingProject = ref(false)
 // OpenProjectDialog removed; use Project Manager page for opening projects
 const isProjectManagerOverlayOpen = ref(false)
 const projectManagerOverlayRef = ref<HTMLElement | null>(null)
@@ -169,6 +171,14 @@ const isImportingScenes = ref(false)
 const isSceneBundleExporting = ref(false)
 const externalSceneInputRef = ref<HTMLInputElement | null>(null)
 const isImportingExternalScene = ref(false)
+
+watch(isNewProjectDialogOpen, (open) => {
+  if (open) {
+    newProjectDialogErrorMessage.value = ''
+  } else {
+    newProjectDialogErrorMessage.value = ''
+  }
+})
 
 const exportDiagnosticsSeverityOptions = [
   { title: '全部', value: 'all' },
@@ -322,8 +332,27 @@ watch(isProjectManagerOverlayOpen, (open) => {
 })
 
 async function handleCreateProject(payload: ProjectCreateParams) {
-  const { project, scene } = await createProjectWithDefaultScene(payload)
-  await router.push({ path: '/editor', query: { projectId: project.id, sceneId: scene.id } })
+  if (isCreatingProject.value) {
+    return
+  }
+  isCreatingProject.value = true
+  newProjectDialogErrorMessage.value = ''
+  try {
+    const { project, scene } = await createProjectWithDefaultScene(payload)
+    isNewProjectDialogOpen.value = false
+    await router.push({ path: '/editor', query: { projectId: project.id, sceneId: scene.id } })
+  } catch (error) {
+    newProjectDialogErrorMessage.value = error instanceof Error ? error.message : '创建工程失败'
+  } finally {
+    isCreatingProject.value = false
+  }
+}
+
+async function handleNewProjectDialogConfirm(payload: ProjectCreateParams | { name: string }) {
+  if (!('defaultScene' in payload)) {
+    return
+  }
+  await handleCreateProject(payload)
 }
 
 type InspectorPanelPublicInstance = InstanceType<typeof InspectorPanel> & {
@@ -2672,7 +2701,9 @@ onBeforeUnmount(() => {
     />
     <NewProjectDialog
       v-model="isNewProjectDialogOpen"
-      @confirm="handleCreateProject"
+      :error-message="newProjectDialogErrorMessage"
+      :submitting="isCreatingProject"
+      @confirm="handleNewProjectDialogConfirm"
     />
     <!-- OpenProjectDialog removed; use Project Manager page to select/open projects -->
     <SceneExportDialog

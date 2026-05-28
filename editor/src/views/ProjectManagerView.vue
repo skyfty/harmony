@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, inject, onMounted, ref } from 'vue'
+import { computed, inject, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useRouter } from 'vue-router'
 import { useProjectsStore } from '@/stores/projectsStore'
@@ -26,7 +26,12 @@ const authStore = useAuthStore()
 const route = useRoute()
 
 const loginOpen = ref(false)
-const newProjectOpen = ref(false)
+const projectNameDialogOpen = ref(false)
+const projectNameDialogMode = ref<'create' | 'rename'>('create')
+const projectNameDialogInitialName = ref('')
+const projectNameDialogErrorMessage = ref('')
+const projectNameDialogSubmitting = ref(false)
+const projectNameDialogTargetId = ref<string | null>(null)
 const projectImportInputRef = ref<HTMLInputElement | null>(null)
 // OpenProjectDialog removed — opening projects is handled on the Project Manager page
 const deletingId = ref<string | null>(null)
@@ -98,14 +103,98 @@ function openLogin() {
   loginOpen.value = true
 }
 
+function resetProjectNameDialogState() {
+  projectNameDialogMode.value = 'create'
+  projectNameDialogInitialName.value = ''
+  projectNameDialogErrorMessage.value = ''
+  projectNameDialogSubmitting.value = false
+  projectNameDialogTargetId.value = null
+}
+
+watch(projectNameDialogOpen, (open) => {
+  if (!open) {
+    resetProjectNameDialogState()
+  }
+})
+
+function openCreateProjectDialog() {
+  if (!canManageProjects.value) {
+    openLogin()
+    return
+  }
+  projectNameDialogMode.value = 'create'
+  projectNameDialogInitialName.value = ''
+  projectNameDialogErrorMessage.value = ''
+  projectNameDialogTargetId.value = null
+  projectNameDialogOpen.value = true
+}
+
+function openRenameProjectDialog(project: { id: string; name: string }) {
+  if (!canManageProjects.value) {
+    openLogin()
+    return
+  }
+  if (deletingId.value || exportingId.value !== null || importingProject.value || projectNameDialogSubmitting.value) {
+    return
+  }
+  projectNameDialogMode.value = 'rename'
+  projectNameDialogInitialName.value = project.name
+  projectNameDialogErrorMessage.value = ''
+  projectNameDialogTargetId.value = project.id
+  projectNameDialogOpen.value = true
+}
+
 async function handleCreateProject(payload: ProjectCreateParams) {
   if (!canManageProjects.value) {
     openLogin()
     return
   }
-  const { project, scene } = await createProjectWithDefaultScene(payload)
-  await router.push({ path: '/editor', query: { projectId: project.id, sceneId: scene.id } })
-  overlayClose?.()
+  if (projectNameDialogSubmitting.value) {
+    return
+  }
+
+  projectNameDialogSubmitting.value = true
+  projectNameDialogErrorMessage.value = ''
+  try {
+    const { project, scene } = await createProjectWithDefaultScene(payload)
+    projectNameDialogOpen.value = false
+    await router.push({ path: '/editor', query: { projectId: project.id, sceneId: scene.id } })
+    overlayClose?.()
+  } catch (error) {
+    projectNameDialogErrorMessage.value = error instanceof Error ? error.message : '创建工程失败'
+  } finally {
+    projectNameDialogSubmitting.value = false
+  }
+}
+
+async function handleRenameProject(payload: { name: string }) {
+  if (!canManageProjects.value) {
+    openLogin()
+    return
+  }
+  const projectId = projectNameDialogTargetId.value
+  if (!projectId || projectNameDialogSubmitting.value) {
+    return
+  }
+
+  projectNameDialogSubmitting.value = true
+  projectNameDialogErrorMessage.value = ''
+  try {
+    await projectsStore.renameProject(projectId, payload.name)
+    projectNameDialogOpen.value = false
+  } catch (error) {
+    projectNameDialogErrorMessage.value = error instanceof Error ? error.message : '重命名工程失败'
+  } finally {
+    projectNameDialogSubmitting.value = false
+  }
+}
+
+async function handleProjectNameConfirm(payload: ProjectCreateParams | { name: string }) {
+  if (projectNameDialogMode.value === 'create') {
+    await handleCreateProject(payload as ProjectCreateParams)
+    return
+  }
+  await handleRenameProject(payload as { name: string })
 }
 
 async function handleSignOut() {
@@ -321,7 +410,7 @@ async function handleExportProject(projectId: string): Promise<void> {
           {{ refreshButtonLabel }}
         </v-btn>
         <v-btn variant="text" :disabled="!canManageProjects || importingProject || deletingId !== null || exportingId !== null" @click="requestProjectImport">Import</v-btn>
-        <v-btn color="primary" variant="flat" :disabled="!canManageProjects" @click="newProjectOpen = true">New Project</v-btn>
+        <v-btn color="primary" variant="flat" :disabled="!canManageProjects" @click="openCreateProjectDialog">New Project</v-btn>
       </div>
     </div>
 
@@ -333,7 +422,7 @@ async function handleExportProject(projectId: string): Promise<void> {
       <v-card v-if="!projects.length" class="pm-empty" variant="tonal">
         <v-card-text>
           No projects yet.
-          <v-btn class="ml-2" size="small" color="primary" variant="flat" :disabled="!canManageProjects" @click="newProjectOpen = true">Create one</v-btn>
+          <v-btn class="ml-2" size="small" color="primary" variant="flat" :disabled="!canManageProjects" @click="openCreateProjectDialog">Create one</v-btn>
         </v-card-text>
       </v-card>
 
@@ -343,24 +432,54 @@ async function handleExportProject(projectId: string): Promise<void> {
             <v-card-title class="pm-project__title">{{ p.name }}</v-card-title>
             <v-card-subtitle>{{ p.sceneCount }} scenes</v-card-subtitle>
             <v-card-actions>
-              <v-btn color="primary" variant="flat" :disabled="!canManageProjects" @click="handleOpenProject({ projectId: p.id, sceneId: p.lastEditedSceneId })">Open</v-btn>
               <v-btn
+                icon
+                color="primary"
+                variant="flat"
+                size="small"
+                :disabled="!canManageProjects"
+                title="Open"
+                aria-label="Open project"
+                @click="handleOpenProject({ projectId: p.id, sceneId: p.lastEditedSceneId })"
+              >
+                <v-icon size="18">mdi-folder-open-outline</v-icon>
+              </v-btn>
+              <v-btn
+                icon
                 variant="text"
+                size="small"
+                :disabled="!canManageProjects || deletingId !== null || exportingId !== null || importingProject"
+                title="Rename"
+                aria-label="Rename project"
+                @click="openRenameProjectDialog(p)"
+              >
+                <v-icon size="18">mdi-rename-outline</v-icon>
+              </v-btn>
+              <v-btn
+                icon
+                variant="text"
+                size="small"
                 :loading="exportingId === p.id"
                 :disabled="!canManageProjects || deletingId !== null || importingProject || (exportingId !== null && exportingId !== p.id)"
+                title="Export"
+                aria-label="Export project"
                 @click="handleExportProject(p.id)"
               >
-                Export
+                <v-icon size="18">mdi-export-variant</v-icon>
               </v-btn>
               <v-spacer />
               <v-btn
+                icon
                 color="error"
                 variant="text"
+                size="small"
                 :loading="deletingId === p.id"
                 :disabled="!canManageProjects || deletingId !== null || exportingId !== null || importingProject"
+                title="Move to Trash"
+                aria-label="Move project to trash"
                 @click="requestDeleteProject(p.id, p.name)"
               >
-                Move to Trash
+                <v-icon size="18">mdi-trash-can-outline</v-icon>
               </v-btn>
             </v-card-actions>
           </v-card>
@@ -376,7 +495,14 @@ async function handleExportProject(projectId: string): Promise<void> {
       style="display: none"
       @change="handleProjectImportFileChange"
     >
-    <NewProjectDialog v-model="newProjectOpen" @confirm="handleCreateProject" />
+    <NewProjectDialog
+      v-model="projectNameDialogOpen"
+      :mode="projectNameDialogMode"
+      :initial-name="projectNameDialogInitialName"
+      :error-message="projectNameDialogErrorMessage"
+      :submitting="projectNameDialogSubmitting"
+      @confirm="handleProjectNameConfirm"
+    />
     <v-dialog v-model="confirmDeleteOpen" max-width="420" :persistent="deletingId !== null">
       <v-card>
         <v-card-title>Move project to trash?</v-card-title>

@@ -221,6 +221,28 @@ function toMetadata(document: Project): ProjectSummary {
   }
 }
 
+function normalizeProjectName(name: string, fallback = '新工程'): string {
+  const trimmed = name.trim()
+  return trimmed.length ? trimmed : fallback
+}
+
+function isProjectNameTaken(
+  metadata: ProjectSummary[],
+  name: string,
+  options: { excludeProjectId?: string } = {},
+): boolean {
+  const normalized = name.trim()
+  if (!normalized) {
+    return false
+  }
+  return metadata.some((entry) => {
+    if (options.excludeProjectId && entry.id === options.excludeProjectId) {
+      return false
+    }
+    return entry.name.trim() === normalized
+  })
+}
+
 async function readAllMetadata(workspaceId: string): Promise<ProjectSummary[]> {
   if (!isIndexedDbAvailable()) {
     const records: ProjectSummary[] = []
@@ -721,16 +743,40 @@ export const useProjectsStore = defineStore('projects', {
       await this.saveProjectDocument({ ...project, scenes: nextScenes })
     },
     async createProject(name: string): Promise<Project> {
-      const trimmed = name.trim()
+      const resolvedName = normalizeProjectName(name)
+      if (isProjectNameTaken(this.metadata, resolvedName)) {
+        throw new Error('工程名称已存在')
+      }
       const id = generateUuid()
       const project: Project = {
         id,
-        name: trimmed.length ? trimmed : '新工程',
+        name: resolvedName,
         scenes: [],
         lastEditedSceneId: null,
       }
       await this.saveProjectDocument(project)
       return project
+    },
+    async renameProject(projectId: string, name: string): Promise<Project> {
+      const project = await this.loadProjectDocument(projectId)
+      if (!project) {
+        throw new Error('Project not found')
+      }
+
+      const resolvedName = normalizeProjectName(name, project.name)
+      if (resolvedName.trim() === project.name.trim()) {
+        return project
+      }
+      if (isProjectNameTaken(this.metadata, resolvedName, { excludeProjectId: projectId })) {
+        throw new Error('工程名称已存在')
+      }
+
+      const next: Project = {
+        ...project,
+        name: resolvedName,
+      }
+      await this.saveProjectDocument(next)
+      return next
     },
   },
 })
