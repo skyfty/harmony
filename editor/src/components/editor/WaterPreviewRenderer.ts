@@ -29,6 +29,9 @@ const PREVIEW_SIGNATURE_PRECISION = 1000
 const PREVIEW_Y_OFFSET = 0.02
 const CIRCLE_SEGMENTS = 32
 const WATER_LINE_PREVIEW_Y_OFFSET = 0.02
+const WATER_LINE_PREVIEW_RADIUS = 0.06
+const WATER_LINE_PREVIEW_HALO_RADIUS = 0.11
+const WATER_LINE_PREVIEW_POINT_RADIUS = 0.12
 
 function encodePreviewNumber(value: number): string {
   return `${Math.round(value * PREVIEW_SIGNATURE_PRECISION)}`
@@ -290,28 +293,79 @@ function createLinePreviewGroup(points: THREE.Vector3[]): THREE.Group {
   const group = new THREE.Group()
   group.name = '__WaterLinePreview'
   group.userData.isWaterLinePreview = true
-  const line = new THREE.Line(
-    new THREE.BufferGeometry().setFromPoints(points),
-    new THREE.LineBasicMaterial({
-      color: 0x81d4fa,
-      transparent: true,
-      opacity: 0.95,
-      depthWrite: false,
-    }),
-  )
-  line.renderOrder = 101
-  group.userData.line = line
-  group.add(line)
+  updateLinePreviewGroup(group, points)
   return group
 }
 
 function updateLinePreviewGroup(group: THREE.Group, points: THREE.Vector3[]): void {
-  const line = group.userData.line as THREE.Line | undefined
-  if (!line) {
+  while (group.children.length) {
+    const child = group.children.pop()
+    child?.removeFromParent()
+    ;(child as THREE.Mesh | THREE.Line | undefined)?.geometry?.dispose?.()
+    const material = (child as THREE.Mesh | THREE.Line | undefined)?.material as THREE.Material | THREE.Material[] | undefined
+    if (Array.isArray(material)) {
+      material.forEach((entry) => entry?.dispose?.())
+    } else {
+      material?.dispose?.()
+    }
+  }
+  if (points.length < 2) {
     return
   }
-  line.geometry?.dispose?.()
-  line.geometry = new THREE.BufferGeometry().setFromPoints(points)
+  const buildSegmentMesh = (start: THREE.Vector3, end: THREE.Vector3, radius: number, color: number, opacity: number, renderOrder: number) => {
+    const direction = end.clone().sub(start)
+    const length = direction.length()
+    if (!Number.isFinite(length) || length <= 1e-6) {
+      return null
+    }
+    const mesh = new THREE.Mesh(
+      new THREE.CylinderGeometry(radius, radius, length, 12),
+      new THREE.MeshBasicMaterial({
+        color,
+        transparent: opacity < 1,
+        opacity,
+        depthWrite: false,
+        depthTest: false,
+      }),
+    )
+    mesh.position.copy(start).add(end).multiplyScalar(0.5)
+    mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction.normalize())
+    mesh.renderOrder = renderOrder
+    return mesh
+  }
+  const addPointMarker = (point: THREE.Vector3, radius: number, color: number, opacity: number, renderOrder: number) => {
+    const marker = new THREE.Mesh(
+      new THREE.SphereGeometry(radius, 12, 12),
+      new THREE.MeshBasicMaterial({
+        color,
+        transparent: opacity < 1,
+        opacity,
+        depthWrite: false,
+        depthTest: false,
+      }),
+    )
+    marker.position.copy(point)
+    marker.renderOrder = renderOrder
+    group.add(marker)
+  }
+
+  for (let index = 1; index < points.length; index += 1) {
+    const start = points[index - 1]!
+    const end = points[index]!
+    const halo = buildSegmentMesh(start, end, WATER_LINE_PREVIEW_HALO_RADIUS, 0x0a2530, 0.72, 140)
+    const core = buildSegmentMesh(start, end, WATER_LINE_PREVIEW_RADIUS, 0x9be7ff, 1, 141)
+    if (halo) {
+      group.add(halo)
+    }
+    if (core) {
+      group.add(core)
+    }
+  }
+
+  points.forEach((point) => {
+    addPointMarker(point, WATER_LINE_PREVIEW_POINT_RADIUS, 0x0a2530, 0.72, 142)
+    addPointMarker(point, WATER_LINE_PREVIEW_POINT_RADIUS * 0.58, 0xe1f5fe, 1, 143)
+  })
 }
 
 export function createWaterPreviewRenderer(options: { rootGroup: THREE.Group }): WaterPreviewRenderer {
