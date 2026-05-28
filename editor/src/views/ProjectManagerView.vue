@@ -32,6 +32,8 @@ const projectImportInputRef = ref<HTMLInputElement | null>(null)
 const deletingId = ref<string | null>(null)
 const exportingId = ref<string | null>(null)
 const importingProject = ref(false)
+const syncingWorkspace = ref(false)
+const syncStatusText = ref('')
 const confirmDeleteOpen = ref(false)
 const pendingDeleteProjectId = ref<string | null>(null)
 const pendingDeleteProjectName = ref('')
@@ -46,6 +48,13 @@ const projects = computed(() => projectsStore.sortedMetadata)
 
 const overlayClose = inject(PROJECT_MANAGER_OVERLAY_CLOSE_KEY, null)
 const isOverlay = computed(() => overlayClose !== null)
+const isWorkspaceSyncing = computed(() => syncingWorkspace.value || projectsStore.initializing || scenesStore.initializing)
+const refreshButtonLabel = computed(() => {
+  if (syncStatusText.value) {
+    return syncStatusText.value
+  }
+  return 'Refresh'
+})
 
 const returnTo = computed(() => {
   const q = route.query?.returnTo
@@ -165,10 +174,18 @@ async function handleSync() {
     openLogin()
     return
   }
-  await Promise.all([
-    projectsStore.syncUserWorkspaceFromServer({ replace: false }),
-    scenesStore.refreshUserWorkspaceMetadataFromServer(),
-  ])
+  if (isWorkspaceSyncing.value) {
+    return
+  }
+
+  syncingWorkspace.value = true
+  try {
+    syncStatusText.value = '同步项目中...'
+    await projectsStore.syncUserWorkspaceFromServer({ replace: false })
+  } finally {
+    syncingWorkspace.value = false
+    syncStatusText.value = ''
+  }
 }
 
 function openDuplicateImportDialog(payload: {
@@ -286,7 +303,23 @@ async function handleExportProject(projectId: string): Promise<void> {
       <div class="pm-actions">
         <v-btn v-if="!isLoggedIn" variant="text" @click="openLogin">Sign In</v-btn>
         <v-btn v-else variant="text" @click="handleSignOut">Sign Out</v-btn>
-        <v-btn variant="text" :disabled="!canManageProjects" @click="handleSync">Refresh</v-btn>
+        <v-btn
+          variant="text"
+          :loading="isWorkspaceSyncing"
+          :disabled="!canManageProjects || isWorkspaceSyncing"
+          @click="handleSync"
+        >
+          <template v-if="isWorkspaceSyncing" #prepend>
+            <v-progress-circular
+              indeterminate
+              size="14"
+              width="2"
+              color="currentColor"
+              class="mr-2"
+            />
+          </template>
+          {{ refreshButtonLabel }}
+        </v-btn>
         <v-btn variant="text" :disabled="!canManageProjects || importingProject || deletingId !== null || exportingId !== null" @click="requestProjectImport">Import</v-btn>
         <v-btn color="primary" variant="flat" :disabled="!canManageProjects" @click="newProjectOpen = true">New Project</v-btn>
       </div>
