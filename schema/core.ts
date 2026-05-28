@@ -277,6 +277,14 @@ export {
 export type { GroundScatterSidecarPayload } from './groundScatterSidecar'
 
 export {
+  GROUND_SPLAT_SIDECAR_FILENAME,
+  GROUND_SPLAT_SIDECAR_VERSION,
+  serializeGroundSplatSidecar,
+  deserializeGroundSplatSidecar,
+} from './groundSplatSidecar'
+export type { GroundSplatSidecarPayload } from './groundSplatSidecar'
+
+export {
   formatTerrainPaintChunkKey,
   parseTerrainPaintChunkKey,
   formatTerrainPaintTileKey,

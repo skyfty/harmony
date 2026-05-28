@@ -175,6 +175,7 @@ export async function runProjectImportWorkflow(options: {
     const idMap = new Map<string, string>()
     const preparedScenes: StoredSceneDocument[] = []
     const preparedHeightSidecars: Record<string, ArrayBuffer | null> = {}
+    const preparedSplatSidecars: Record<string, ArrayBuffer | null> = {}
     const preparedScatterSidecars: Record<string, ArrayBuffer | null> = {}
     const preparedTerrainDatasetManifests: Record<string, import('@schema').QuantizedTerrainDatasetRootManifest | null> = {}
     const preparedTerrainDatasetRegionPacks: Record<string, Record<string, ArrayBuffer | null>> = {}
@@ -200,6 +201,7 @@ export async function runProjectImportWorkflow(options: {
       }
       preparedScenes.push(prepared)
       preparedHeightSidecars[nextId] = loaded.groundHeightSidecars[oldId] ?? null
+      preparedSplatSidecars[nextId] = loaded.groundSplatSidecars[oldId] ?? null
       preparedScatterSidecars[nextId] = loaded.groundScatterSidecars[oldId] ?? null
       preparedTerrainDatasetManifests[nextId] = loaded.terrainDatasetManifests[oldId] ?? null
       preparedTerrainDatasetRegionPacks[nextId] = loaded.terrainDatasetRegionPacks[oldId] ?? {}
@@ -207,6 +209,7 @@ export async function runProjectImportWorkflow(options: {
 
     await scenesStore.saveSceneDocuments(preparedScenes, {
       groundHeightSidecars: preparedHeightSidecars,
+      groundSplatSidecars: preparedSplatSidecars,
       groundScatterSidecars: preparedScatterSidecars,
       terrainDatasetManifests: preparedTerrainDatasetManifests,
       terrainDatasetRegionPacks: preparedTerrainDatasetRegionPacks,

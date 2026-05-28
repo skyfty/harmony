@@ -1,5 +1,5 @@
 export const SCENE_PACKAGE_FORMAT = 'harmony-scene-package' as const;
-export const SCENE_PACKAGE_VERSION = 11 as const;
+export const SCENE_PACKAGE_VERSION = 12 as const;
 
 export interface ScenePackageTerrainEntry {
   datasetId: string;
@@ -35,6 +35,8 @@ export interface ScenePackageSceneEntry {
   path: string;
   /** Optional editor-only planning sidecar path, e.g. `scenes/<sceneId>/planning.json` */
   planningPath?: string;
+  /** Optional ground splat sidecar path, e.g. `scenes/<sceneId>/ground-splat.bin` */
+  groundSplatPath?: string;
   /** Optional ground scatter sidecar path, e.g. `scenes/<sceneId>/ground-scatter.bin` */
   groundScatterPath?: string;
   /** Readonly runtime terrain package entry used by preview/mobile viewers. */
@@ -82,7 +84,7 @@ export function isScenePackageManifest(raw: unknown): raw is ScenePackageManifes
   const candidate = raw as Partial<ScenePackageManifestV1>;
   if (candidate.format !== SCENE_PACKAGE_FORMAT) return false;
   const version = Number((candidate as Record<string, unknown>).version);
-  if (version !== 10 && version !== SCENE_PACKAGE_VERSION) return false;
+  if (version !== 10 && version !== 11 && version !== SCENE_PACKAGE_VERSION) return false;
   if (!candidate.project || typeof candidate.project !== 'object') return false;
   if (typeof (candidate.project as any).path !== 'string') return false;
   if (!Array.isArray(candidate.scenes)) return false;

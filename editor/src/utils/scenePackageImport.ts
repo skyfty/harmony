@@ -20,6 +20,7 @@ export type LoadedStoredScenePackage = {
   project: LoadedScenePackageProject
   scenes: StoredSceneDocument[]
   groundHeightSidecars: Record<string, ArrayBuffer | null>
+  groundSplatSidecars: Record<string, ArrayBuffer | null>
   groundScatterSidecars: Record<string, ArrayBuffer | null>
   terrainDatasetManifests: Record<string, QuantizedTerrainDatasetRootManifest | null>
   terrainDatasetRegionPacks: Record<string, Record<string, ArrayBuffer | null>>
@@ -209,6 +210,27 @@ function extractGroundScatterSidecarFromPackage(
   return new Uint8Array(bytes).buffer
 }
 
+function extractGroundSplatSidecarFromPackage(
+  zip: ReturnType<typeof unzipScenePackage>,
+  sceneEntry: ScenePackageSceneEntry,
+  rawScene: StoredSceneDocument,
+): ArrayBuffer | null {
+  const hasGroundNode = Array.isArray(rawScene.nodes)
+    && rawScene.nodes.some((node) => node?.dynamicMesh?.type === 'Ground')
+  if (!hasGroundNode) {
+    return null
+  }
+  const sidecarPath = sceneEntry.groundSplatPath
+  if (!sidecarPath) {
+    return null
+  }
+  const bytes = zip.files[sidecarPath]
+  if (!bytes) {
+    throw new Error(`Missing ground splat sidecar in scene bundle: ${sidecarPath}`)
+  }
+  return new Uint8Array(bytes).buffer
+}
+
 function extractTerrainDatasetManifestFromPackage(
   zip: ReturnType<typeof unzipScenePackage>,
   sceneEntry: ScenePackageSceneEntry,
@@ -257,6 +279,7 @@ export async function loadStoredScenesFromScenePackage(zipBytes: ArrayBuffer): P
   const project = (JSON.parse(projectText) as LoadedScenePackageProject) ?? {}
   const scenes: StoredSceneDocument[] = []
   const groundHeightSidecars: Record<string, ArrayBuffer | null> = {}
+  const groundSplatSidecars: Record<string, ArrayBuffer | null> = {}
   const groundScatterSidecars: Record<string, ArrayBuffer | null> = {}
   const terrainDatasetManifests: Record<string, QuantizedTerrainDatasetRootManifest | null> = {}
   const terrainDatasetRegionPacks: Record<string, Record<string, ArrayBuffer | null>> = {}
@@ -268,6 +291,7 @@ export async function loadStoredScenesFromScenePackage(zipBytes: ArrayBuffer): P
     const sceneDocument = stripGroundHeightMapsFromSceneDocument(rawScene as unknown as StoredSceneDocument)
     assertNoLandformNodes(sceneDocument.nodes, `scenes[${sceneEntry.sceneId}]`)
     groundHeightSidecars[sceneEntry.sceneId] = extractGroundHeightSidecarFromPackage(zip, sceneEntry, sceneDocument)
+    groundSplatSidecars[sceneEntry.sceneId] = extractGroundSplatSidecarFromPackage(zip, sceneEntry, sceneDocument)
     groundScatterSidecars[sceneEntry.sceneId] = extractGroundScatterSidecarFromPackage(zip, sceneEntry, sceneDocument)
     terrainDatasetManifests[sceneEntry.sceneId] = extractTerrainDatasetManifestFromPackage(zip, sceneEntry)
     terrainDatasetRegionPacks[sceneEntry.sceneId] = extractTerrainDatasetRegionPacksFromPackage(zip, terrainDatasetManifests[sceneEntry.sceneId] ?? null)
@@ -279,6 +303,7 @@ export async function loadStoredScenesFromScenePackage(zipBytes: ArrayBuffer): P
     project,
     scenes,
     groundHeightSidecars,
+    groundSplatSidecars,
     groundScatterSidecars,
     terrainDatasetManifests,
     terrainDatasetRegionPacks,

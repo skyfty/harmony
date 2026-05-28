@@ -11,6 +11,7 @@ import {
   buildQuantizedTerrainRegionPackPath,
   buildQuantizedTerrainRootManifestPath,
   encodeScenePackageSceneDocument,
+  GROUND_SPLAT_SIDECAR_FILENAME,
   GROUND_SCATTER_SIDECAR_FILENAME,
   SCENE_PACKAGE_FORMAT,
   SCENE_PACKAGE_VERSION,
@@ -21,6 +22,7 @@ import {
 
 import { inferExtFromMimeType } from '@schema/core'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
+import { useGroundSplatStore } from '@/stores/groundSplatStore'
 import { useGroundScatterStore } from '@/stores/groundScatterStore'
 import {
   buildAssetRegistryForExport,
@@ -1338,6 +1340,7 @@ export async function exportScenePackageZip(payload: {
     const preparedDocument = await prepareSceneDocumentForPackageExport(scene.document)
     const scenePath = `scenes/${encodeURIComponent(scene.id)}/scene.bin`
     let planningPath: string | undefined
+    let groundSplatPath: string | undefined
     let groundScatterPath: string | undefined
     let terrain: ScenePackageManifestV1['scenes'][number]['terrain'] | undefined
     let compiledGround: ScenePackageManifestV1['scenes'][number]['compiledGround'] | undefined
@@ -1349,6 +1352,9 @@ export async function exportScenePackageZip(payload: {
       : JSON.parse(JSON.stringify(preparedDocument))
     const groundNode = findGroundNode(sidecarSource.nodes)
     const storedTerrainDatasetManifest = await scenesStore.loadTerrainDatasetManifest(scene.id)
+    const groundSplatSidecar = scene.id === sceneStore.currentSceneId
+      ? useGroundSplatStore().buildSceneDocumentSidecar(scene.id, groundNode)
+      : await scenesStore.loadGroundSplatSidecar(scene.id)
     const groundScatterSidecar = scene.id === sceneStore.currentSceneId
       ? useGroundScatterStore().buildSceneDocumentSidecar(scene.id, groundNode)
       : await scenesStore.loadGroundScatterSidecar(scene.id)
@@ -1607,6 +1613,19 @@ export async function exportScenePackageZip(payload: {
       detail: scenePath,
       message: `场景二进制已写入 ${sceneName}`,
     })
+    if (groundSplatSidecar) {
+      groundSplatPath = `scenes/${encodeURIComponent(scene.id)}/${GROUND_SPLAT_SIDECAR_FILENAME}`
+      files[groundSplatPath] = new Uint8Array(groundSplatSidecar)
+      emitSceneExportEvent(payload.reportEvent, {
+        phase: 'sidecar',
+        level: 'info',
+        status: 'completed',
+        sceneId: scene.id,
+        sceneName,
+        detail: groundSplatPath,
+        message: `已写入 ground splat sidecar`,
+      })
+    }
     if (groundScatterSidecar) {
       groundScatterPath = `scenes/${encodeURIComponent(scene.id)}/${GROUND_SCATTER_SIDECAR_FILENAME}`
       files[groundScatterPath] = new Uint8Array(groundScatterSidecar)
@@ -1638,6 +1657,7 @@ export async function exportScenePackageZip(payload: {
       sceneId: scene.id,
       path: scenePath,
       planningPath,
+      groundSplatPath,
       groundScatterPath,
       terrain,
       compiledGround,

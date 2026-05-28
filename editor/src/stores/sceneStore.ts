@@ -182,6 +182,7 @@ import { findObjectByPath } from '@schema/modelAssetLoader'
 
 import { useAssetCacheStore } from './assetCacheStore'
 import { useGroundHeightmapStore, type GroundPlanningHeightRegion, type GroundRuntimeDynamicMesh } from './groundHeightmapStore'
+import { attachGroundSplatRuntimeToNode, useGroundSplatStore } from './groundSplatStore'
 import { attachGroundScatterRuntimeToNode, useGroundScatterStore } from './groundScatterStore'
 import { useUiStore } from './uiStore'
 import { useScenesStore, type SceneWorkspaceType } from './scenesStore'
@@ -1115,7 +1116,7 @@ function collectLandformSurfaceLayerTextureAssetIdsFromNodes(nodes: SceneNode[] 
 }
 
 let landformGroundSplatBakeVersion = 0
-  const landformGroundSplatBakeScheduler = createLatestIdleScheduler<LandformGroundSplatBakeRequest>((request) => {
+const landformGroundSplatBakeScheduler = createLatestIdleScheduler<LandformGroundSplatBakeRequest>((request) => {
   void (async () => {
     const baked = await bakeLandformGroundSplatForSceneDocument(request.snapshot)
     if (request.version !== landformGroundSplatBakeVersion) {
@@ -1127,12 +1128,19 @@ let landformGroundSplatBakeVersion = 0
       return
     }
 
+    const scenesStore = useScenesStore()
+    const groundSplatStore = useGroundSplatStore()
+
     if (!baked) {
       groundNode.dynamicMesh = {
         ...groundNode.dynamicMesh,
         groundSurfaceChunks: null,
         groundSplatBake: null,
       } as GroundDynamicMesh
+      if (request.scene.currentSceneId) {
+        groundSplatStore.replaceGroundSplat(request.scene.currentSceneId, groundNode.id, null)
+        await scenesStore.saveSceneGroundSplatSidecar(request.scene.currentSceneId, null, { syncServer: false })
+      }
       const runtimeGroundDefinition = groundNode.dynamicMesh as GroundRuntimeDynamicMesh
       runtimeGroundDefinition.runtimeDisableOptimizedChunks = false
       useGroundHeightmapStore().syncRuntimeGroundState(groundNode.id, runtimeGroundDefinition)
@@ -1143,15 +1151,29 @@ let landformGroundSplatBakeVersion = 0
       return
     }
 
+    const nextRevision = Date.now()
+    const nextSurfaceLayerTextureAssetIds = collectLandformSurfaceLayerTextureAssetIdsFromNodes(request.snapshot.nodes)
     groundNode.dynamicMesh = {
       ...groundNode.dynamicMesh,
       groundSurfaceChunks: manualDeepClone(baked),
       groundSplatBake: {
-        revision: Date.now(),
+        revision: nextRevision,
         chunkTextureMap: manualDeepClone(baked),
-        surfaceLayerTextureAssetIds: collectLandformSurfaceLayerTextureAssetIdsFromNodes(request.snapshot.nodes),
+        surfaceLayerTextureAssetIds: nextSurfaceLayerTextureAssetIds,
       },
     } as GroundDynamicMesh
+    if (request.scene.currentSceneId) {
+      groundSplatStore.replaceGroundSplat(request.scene.currentSceneId, groundNode.id, {
+        revision: nextRevision,
+        surfaceLayerTextureAssetIds: nextSurfaceLayerTextureAssetIds,
+        groundSurfaceChunks: manualDeepClone(baked),
+      })
+      const sidecar = groundSplatStore.buildSceneDocumentSidecar(request.scene.currentSceneId, {
+        ...groundNode,
+        dynamicMesh: groundNode.dynamicMesh,
+      })
+      await scenesStore.saveSceneGroundSplatSidecar(request.scene.currentSceneId, sidecar, { syncServer: false })
+    }
     const runtimeGroundDefinition = groundNode.dynamicMesh as GroundRuntimeDynamicMesh
     runtimeGroundDefinition.runtimeDisableOptimizedChunks = false
     useGroundHeightmapStore().syncRuntimeGroundState(groundNode.id, runtimeGroundDefinition)
@@ -2568,6 +2590,7 @@ function attachRuntimeGroundSidecarsToDocument(document: StoredSceneDocument): S
   if (!groundNode) {
     return document
   }
+  attachGroundSplatRuntimeToNode(document.id, groundNode)
   attachGroundScatterRuntimeToNode(document.id, groundNode)
   return document
 }
@@ -18715,6 +18738,7 @@ export const useSceneStore = defineStore('scene', {
       const {
         scenes,
         groundHeightSidecars,
+        groundSplatSidecars,
         groundScatterSidecars,
         terrainDatasetManifests,
         terrainDatasetRegionPacks,
@@ -18733,6 +18757,7 @@ export const useSceneStore = defineStore('scene', {
       const existingNames = new Set(scenesStore.metadata.map((scene) => scene.name))
       const imported: StoredSceneDocument[] = []
       const importedGroundHeightSidecars = new Map<string, ArrayBuffer | null>()
+      const importedGroundSplatSidecars = new Map<string, ArrayBuffer | null>()
       const importedGroundScatterSidecars = new Map<string, ArrayBuffer | null>()
       const importedTerrainDatasetManifests = new Map<string, import('@schema').QuantizedTerrainDatasetRootManifest | null>()
       const importedTerrainDatasetRegionPacks = new Map<string, Record<string, ArrayBuffer | null>>()
@@ -18781,6 +18806,7 @@ export const useSceneStore = defineStore('scene', {
         await projectsStore.addSceneToProject(projectId, { id: sceneDocument.id, name: sceneDocument.name })
         imported.push(sceneDocument)
         importedGroundHeightSidecars.set(sceneDocument.id, groundHeightSidecars[entry.id] ?? null)
+        importedGroundSplatSidecars.set(sceneDocument.id, groundSplatSidecars[entry.id] ?? null)
         importedGroundScatterSidecars.set(sceneDocument.id, groundScatterSidecars[entry.id] ?? null)
         importedTerrainDatasetManifests.set(sceneDocument.id, terrainDatasetManifests[entry.id] ?? null)
         importedTerrainDatasetRegionPacks.set(sceneDocument.id, terrainDatasetRegionPacks[entry.id] ?? {})
@@ -18791,6 +18817,9 @@ export const useSceneStore = defineStore('scene', {
         {
           groundHeightSidecars: Object.fromEntries(
             imported.map((sceneDocument) => [sceneDocument.id, importedGroundHeightSidecars.get(sceneDocument.id) ?? null]),
+          ),
+          groundSplatSidecars: Object.fromEntries(
+            imported.map((sceneDocument) => [sceneDocument.id, importedGroundSplatSidecars.get(sceneDocument.id) ?? null]),
           ),
           groundScatterSidecars: Object.fromEntries(
             imported.map((sceneDocument) => [sceneDocument.id, importedGroundScatterSidecars.get(sceneDocument.id) ?? null]),
@@ -18909,9 +18938,12 @@ export const useSceneStore = defineStore('scene', {
         if (this.currentSceneId) {
           const sidecar = await useScenesStore().loadGroundHeightSidecar(this.currentSceneId)
           await useGroundHeightmapStore().hydrateSceneDocument(findGroundNode(this.nodes), sidecar)
+          const splatSidecar = await useScenesStore().loadGroundSplatSidecar(this.currentSceneId)
+          await useGroundSplatStore().hydrateSceneDocument(this.currentSceneId, findGroundNode(this.nodes), splatSidecar)
           const scatterSidecar = await useScenesStore().loadGroundScatterSidecar(this.currentSceneId)
           await useGroundScatterStore().hydrateSceneDocument(this.currentSceneId, findGroundNode(this.nodes), scatterSidecar)
           const groundNode = findGroundNode(this.nodes)
+          attachGroundSplatRuntimeToNode(this.currentSceneId, groundNode)
           attachGroundScatterRuntimeToNode(this.currentSceneId, groundNode)
           await this.ensureCurrentSceneCompiledGroundReady()
         }
