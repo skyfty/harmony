@@ -492,13 +492,18 @@ export function getPunchProgress(payload: GetPunchProgressPayload): Promise<Punc
 }
 
 export function listCouponCatalog(params?: ListCouponCatalogParams): Promise<CouponSceneItem[]> {
-  return miniRequest<CouponSceneItem[]>('/coupons/catalog', {
+  return miniRequest<{ total?: number; coupons?: CouponSceneItem[] } | CouponSceneItem[]>('/coupons/catalog', {
     method: 'GET',
     query: params?.couponIds?.length
       ? {
           couponIds: params.couponIds.join(','),
         }
       : undefined,
+  }).then((res) => {
+    if (Array.isArray(res)) {
+      return res;
+    }
+    return Array.isArray(res?.coupons) ? res.coupons : [];
   });
 }
 

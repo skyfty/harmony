@@ -2623,7 +2623,8 @@ async function prepareCouponSceneDocument(document: SceneJsonExportDocument): Pr
 	let couponMap = new Map<string, CouponSceneItem>()
 	try {
 		const coupons = await listCouponCatalog({ couponIds })
-		couponMap = new Map(coupons.map((item) => [item.id, item]))
+		const couponList = Array.isArray(coupons) ? coupons : []
+		couponMap = new Map(couponList.map((item) => [item.id, item]))
 	} catch (error) {
 		console.warn('[ScenePreviewView] Failed to load coupon catalog for scene visibility', error)
 	}

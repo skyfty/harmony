@@ -23,12 +23,6 @@ const couponComponent = computed(
 const componentEnabled = computed(() => couponComponent.value?.enabled !== false)
 const couponProps = computed(() => clampCouponComponentProps(couponComponent.value?.props))
 const couponSpec = computed(() => parseCouponComponentSpec(couponProps.value.couponJson))
-const couponJsonStatus = computed(() => {
-  if (!couponProps.value.couponJson.trim()) {
-    return 'Please paste the coupon JSON here.'
-  }
-  return couponSpec.value ? `Resolved coupon id: ${couponSpec.value.id}` : 'Invalid coupon JSON.'
-})
 
 const localValues = reactive({
   couponJson: '',
@@ -134,7 +128,6 @@ function handleHideOwnedChange(value: boolean | null): void {
           auto-grow
           rows="5"
           persistent-hint
-          :hint="couponJsonStatus"
           :model-value="localValues.couponJson"
           :disabled="!componentEnabled"
           placeholder='{"id":"coupon-id","validUntil":"2026-12-31","type":"reward"}'
@@ -159,13 +152,6 @@ function handleHideOwnedChange(value: boolean | null): void {
             :disabled="!componentEnabled"
             @update:modelValue="handleHideOwnedChange"
           />
-        </div>
-        <div v-if="couponSpec" class="coupon-panel__summary">
-          <div class="coupon-panel__summary-title">Parsed Coupon</div>
-          <div class="coupon-panel__summary-line">ID: {{ couponSpec.id }}</div>
-          <div class="coupon-panel__summary-line">Type: {{ couponSpec.type ?? 'n/a' }}</div>
-          <div class="coupon-panel__summary-line">Name: {{ couponSpec.name ?? 'n/a' }}</div>
-          <div class="coupon-panel__summary-line">Expires: {{ couponSpec.validUntil ?? 'n/a' }}</div>
         </div>
       </div>
     </v-expansion-panel-text>

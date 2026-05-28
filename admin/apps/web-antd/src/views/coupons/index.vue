@@ -27,6 +27,9 @@ interface CouponFormModel {
 }
 
 const modalOpen = ref(false);
+const couponTokenModalOpen = ref(false);
+const couponTokenValue = ref('');
+const couponTokenTitle = ref('');
 const submitting = ref(false);
 const editingId = ref<string | null>(null);
 const formRef = ref<FormInstance>();
@@ -52,6 +55,12 @@ function resetForm() {
 
 function closeModal() {
   modalOpen.value = false;
+}
+
+function closeCouponTokenModal() {
+  couponTokenModalOpen.value = false;
+  couponTokenTitle.value = '';
+  couponTokenValue.value = '';
 }
 
 function formatVisible(value: boolean) {
@@ -81,7 +90,7 @@ function openEdit(row: CouponItem) {
   modalOpen.value = true;
 }
 
-async function copyCouponToken(row: CouponItem) {
+function openCouponTokenModal(row: CouponItem) {
   const payload = {
     id: row.id,
     validUntil: row.validUntil,
@@ -89,13 +98,9 @@ async function copyCouponToken(row: CouponItem) {
     name: row.title,
     description: row.description,
   };
-  const text = JSON.stringify(payload, null, 2);
-  try {
-    await navigator.clipboard.writeText(text);
-    message.success('已复制卡券标识');
-  } catch {
-    message.error('复制失败，请手动复制');
-  }
+  couponTokenTitle.value = `复制卡券标识 - ${row.title}`;
+  couponTokenValue.value = JSON.stringify(payload, null, 2);
+  couponTokenModalOpen.value = true;
 }
 
 async function submit() {
@@ -236,7 +241,7 @@ onMounted(async () => {
       <template #actions="{ row }">
         <Space>
           <Tooltip title="复制标识">
-            <Button v-access:code="'coupon:write'" size="small" type="text" @click="copyCouponToken(row)">
+            <Button v-access:code="'coupon:write'" size="small" type="text" @click="openCouponTokenModal(row)">
               <CopyOutlined />
             </Button>
           </Tooltip>
@@ -310,6 +315,25 @@ onMounted(async () => {
           />
         </Form.Item>
       </Form>
+    </Modal>
+
+    <Modal
+      :open="couponTokenModalOpen"
+      :title="couponTokenTitle"
+      :footer="null"
+      destroy-on-close
+      @cancel="closeCouponTokenModal"
+    >
+      <div class="coupon-token-modal__body">
+        <div class="coupon-token-modal__hint">
+          请手动复制下面的 JSON 内容，并粘贴到 editor 的 Coupon 配置中。
+        </div>
+        <Input.TextArea
+          :value="couponTokenValue"
+          :auto-size="{ minRows: 8, maxRows: 16 }"
+          readonly
+        />
+      </div>
     </Modal>
   </div>
 </template>

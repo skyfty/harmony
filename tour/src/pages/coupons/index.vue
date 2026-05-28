@@ -20,18 +20,8 @@
           :description="coupon.description"
           :valid-until="coupon.validUntil"
           :status="coupon.status"
+          @use="handleUseCoupon(coupon)"
         />
-        <view
-          v-if="coupon.status === 'unused'"
-          class="card-actions"
-        >
-          <button
-            class="use-button"
-            @tap.stop="handleUseCoupon(coupon)"
-          >
-            使用
-          </button>
-        </view>
       </view>
 
       <view
@@ -126,27 +116,6 @@ function handleNavigate(key: NavKey) {
 
 .card-item {
   overflow: visible;
-}
-
-.card-actions {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: 8px;
-}
-
-.use-button {
-  min-width: 88px;
-  height: 34px;
-  border-radius: 999px;
-  background: linear-gradient(135deg, #1f7aec, #4aa3ff);
-  color: #fff;
-  font-size: 12px;
-  line-height: 34px;
-  border: none;
-}
-
-.use-button::after {
-  border: none;
 }
 
 .empty {

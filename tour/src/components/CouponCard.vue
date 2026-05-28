@@ -37,7 +37,19 @@
         <text class="coupon-right__date">
           有效期至 {{ formattedDate }}
         </text>
+        <button
+          v-if="status === 'unused'"
+          class="coupon-status coupon-status--action"
+          plain
+          hover-class="none"
+          @tap.stop="emit('use')"
+        >
+          <text class="coupon-status__text">
+            使用
+          </text>
+        </button>
         <view
+          v-else
           class="coupon-status"
           :class="statusClass"
         >
@@ -53,6 +65,10 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import type { CouponStatus } from '@/types/coupon';
+
+const emit = defineEmits<{
+  use: [];
+}>();
 
 const props = defineProps<{
   typeCode?: string;
@@ -262,11 +278,16 @@ $page-bg: #f3f6fb;
 .coupon-status {
   flex-shrink: 0;
   border-radius: 999px;
-  padding: 2px 10px;
+  padding: 3px 14px;
   margin-left: auto;
+  border: none;
+  background: transparent;
+  line-height: 1;
+  min-width: 54px;
+  text-align: center;
 
   &__text {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 500;
     line-height: 1.5;
   }
@@ -285,6 +306,23 @@ $page-bg: #f3f6fb;
 
   .coupon-status__text {
     color: #059669;
+  }
+}
+
+.coupon-status--action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 72px;
+  padding: 4px 18px;
+  background: linear-gradient(135deg, #1f7aec, #4aa3ff);
+
+  .coupon-status__text {
+    color: #fff;
+  }
+
+  &::after {
+    border: none;
   }
 }
 
