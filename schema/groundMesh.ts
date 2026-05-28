@@ -160,6 +160,11 @@ type GroundRuntimeState = {
   poolMaxPerSize: number
 }
 
+type GroundTextureTraversalCache = {
+  version: number
+  meshes: THREE.Mesh[]
+}
+
 type GroundFlatChunkBatchRuntime = {
   specKey: string
   spec: GroundChunkSpec
@@ -4742,28 +4747,36 @@ function compactGroundFlatChunkBatchInstances(
   chunkKeys: string[],
 ): void {
   const targetArray = batch.mesh.instanceMatrix.array as Float32Array
-  const sourceKeys = batch.chunkKeys
-  const sourceIndexByKey = new Map<string, number>()
-  sourceKeys.forEach((key, index) => {
-    sourceIndexByKey.set(key, index)
-  })
-  const nextKeys: string[] = []
-  let writeIndex = 0
-  chunkKeys.forEach((key) => {
-    const sourceIndex = sourceIndexByKey.get(key)
-    if (sourceIndex == null) {
-      return
+  const nextKeys = [...batch.chunkKeys]
+  const keepKeys = new Set(chunkKeys)
+
+  // 删除时不再维持原始顺序：把最后一个实例交换到被删位置，再弹出尾部。
+  // 对 InstancedMesh 来说，实例顺序本身没有渲染语义，这样可以把压缩从大量内存搬移降成 O(removedCount)。
+  for (let readIndex = nextKeys.length - 1; readIndex >= 0; readIndex -= 1) {
+    const key = nextKeys[readIndex]!
+    if (keepKeys.has(key)) {
+      continue
     }
-    if (writeIndex !== sourceIndex) {
-      targetArray.copyWithin(writeIndex * 16, sourceIndex * 16, (sourceIndex + 1) * 16)
+
+    const lastIndex = nextKeys.length - 1
+    if (readIndex !== lastIndex) {
+      const lastKey = nextKeys[lastIndex]!
+      const readOffset = readIndex * 16
+      const lastOffset = lastIndex * 16
+      for (let i = 0; i < 16; i += 1) {
+        const temp = targetArray[readOffset + i]
+        targetArray[readOffset + i] = targetArray[lastOffset + i]
+        targetArray[lastOffset + i] = temp
+      }
+      nextKeys[readIndex] = lastKey
     }
-    nextKeys.push(key)
-    writeIndex += 1
-  })
-  batch.mesh.count = writeIndex
+    nextKeys.pop()
+  }
+
+  batch.mesh.count = nextKeys.length
   batch.mesh.instanceMatrix.needsUpdate = true
   markInstancedBoundsDirty(batch.mesh)
-  batch.mesh.visible = writeIndex > 0
+  batch.mesh.visible = nextKeys.length > 0
   batch.mesh.userData.groundChunkBatch = {
     specKey: batch.specKey,
     chunkKeys: [...nextKeys],
@@ -5262,10 +5275,14 @@ function releaseChunkToPool(state: GroundRuntimeState, runtime: GroundChunkRunti
     return
   }
 
+  const parent = runtime.mesh.parent
   runtime.mesh.removeFromParent()
   runtime.mesh.visible = false
   bucket.push(runtime.mesh)
   state.meshPool.set(key, bucket)
+  if (parent && (parent as THREE.Object3D).isObject3D) {
+    markGroundTextureTraversalCacheDirty(parent as THREE.Object3D)
+  }
 }
 
 function ensureChunkMesh(
@@ -5332,6 +5349,7 @@ function ensureChunkMesh(
   mesh.userData.groundChunkTextureReady = true
   mesh.visible = true
   root.add(mesh)
+  markGroundTextureTraversalCacheDirty(root)
   const runtime: GroundChunkRuntime = { key, chunkRow, chunkColumn, spec, mesh }
   state.chunks.set(key, runtime)
   markGroundVisibleChunkKeysDirty(state)
@@ -5339,6 +5357,7 @@ function ensureChunkMesh(
 }
 
 function disposeChunk(runtime: GroundChunkRuntime): void {
+  const parent = runtime.mesh.parent
   try {
     runtime.mesh.geometry?.dispose?.()
   } catch (_error) {
@@ -5350,6 +5369,9 @@ function disposeChunk(runtime: GroundChunkRuntime): void {
   }
   delete runtime.mesh.userData.groundChunkTextureReady
   runtime.mesh.removeFromParent()
+  if (parent && (parent as THREE.Object3D).isObject3D) {
+    markGroundTextureTraversalCacheDirty(parent as THREE.Object3D)
+  }
 }
 
 const sculptNoise = createPerlinNoise(911)
@@ -6443,6 +6465,48 @@ function markGroundChunkTexturedMaterial(material: THREE.Material, signature: st
   userData.groundTextureSignature = signature
   userData.groundTextureSource = source
   userData.groundSplatShader = signature.includes('ground-splat-v1')
+}
+
+function markGroundTextureTraversalCacheDirty(target: THREE.Object3D): void {
+  const userData = (target.userData ??= {}) as Record<string, unknown>
+  const currentVersion = Number.isFinite(userData.groundTextureTraversalCacheVersion as number)
+    ? Math.max(0, Math.trunc(userData.groundTextureTraversalCacheVersion as number))
+    : 0
+  userData.groundTextureTraversalCacheVersion = currentVersion + 1
+  delete userData.groundTextureTraversalCache
+  delete userData.groundTextureTraversalAppliedSignature
+}
+
+function getGroundTextureTraversalCache(root: THREE.Object3D): GroundTextureTraversalCache {
+  const userData = (root.userData ??= {}) as Record<string, unknown>
+  const version = Number.isFinite(userData.groundTextureTraversalCacheVersion as number)
+    ? Math.max(0, Math.trunc(userData.groundTextureTraversalCacheVersion as number))
+    : 0
+  const cached = userData.groundTextureTraversalCache as GroundTextureTraversalCache | undefined
+  if (cached && cached.version === version) {
+    return cached
+  }
+
+  const meshes: THREE.Mesh[] = []
+  root.traverse((child) => {
+    const mesh = child as THREE.Mesh
+    if (!mesh?.isMesh) {
+      return
+    }
+    if (mesh.userData?.groundChunkBatch) {
+      return
+    }
+    if (mesh.userData?.groundChunk || mesh.userData?.compiledGroundTile) {
+      meshes.push(mesh)
+    }
+  })
+
+  const nextCache: GroundTextureTraversalCache = {
+    version,
+    meshes,
+  }
+  userData.groundTextureTraversalCache = nextCache
+  return nextCache
 }
 
 function clearGroundRuntimeMaterialMetadata(material: THREE.Material): void {
@@ -7586,26 +7650,44 @@ export function applyGroundTextureToRuntimeChunkMesh(params: {
 
 function applyGroundTextureToObject(object: THREE.Object3D, definition: GroundDynamicMesh): void {
   const root = object as THREE.Object3D & { userData?: Record<string, unknown> }
+  const rootUserData = (root.userData ??= {}) as Record<string, unknown>
   const groundSplatRuntimeProfile = (definition as GroundDynamicMesh & {
     groundSplatRuntimeProfile?: GroundSplatRuntimeProfile | null
   }).groundSplatRuntimeProfile ?? null
-  const cachedBaseMaterial = (root.userData as Record<string, unknown> | undefined)?.groundMaterial
-  const cachedSculptedMaterial = (root.userData as Record<string, unknown> | undefined)?.groundSculptedMaterial
+  const cachedBaseMaterial = rootUserData.groundMaterial
+  const cachedSculptedMaterial = rootUserData.groundSculptedMaterial
   const baseMaterial = cachedBaseMaterial && !Array.isArray(cachedBaseMaterial)
     ? cachedBaseMaterial as THREE.Material
     : null
   const sculptedMaterial = cachedSculptedMaterial && !Array.isArray(cachedSculptedMaterial)
     ? cachedSculptedMaterial as THREE.Material
     : null
+  const compiledManifest = rootUserData.compiledGroundManifest as { revision?: unknown } | null | undefined
+  const compiledManifestRevision = Number(compiledManifest?.revision)
+  const traversalVersion = Number.isFinite(rootUserData.groundTextureTraversalCacheVersion as number)
+    ? Math.max(0, Math.trunc(rootUserData.groundTextureTraversalCacheVersion as number))
+    : 0
+  const normalizedProfile = normalizeGroundSplatRuntimeProfile(groundSplatRuntimeProfile)
+  const currentSignature = [
+    traversalVersion,
+    typeof rootUserData.compiledGroundBuildKey === 'string' ? rootUserData.compiledGroundBuildKey : '',
+    Number.isFinite(compiledManifestRevision) ? Math.max(0, Math.trunc(compiledManifestRevision)) : 0,
+    Number.isFinite(definition.surfaceRevision) ? Math.max(0, Math.trunc(definition.surfaceRevision as number)) : 0,
+    Number.isFinite(definition.groundSplatBake?.revision)
+      ? Math.max(0, Math.trunc(definition.groundSplatBake?.revision as number))
+      : 0,
+    baseMaterial ? resolveGroundBaseMaterialSignature(baseMaterial) : 'nobase',
+    sculptedMaterial ? resolveGroundBaseMaterialSignature(sculptedMaterial) : 'nosculpt',
+    normalizedProfile.maxLayers,
+    normalizedProfile.enableLayerNormalMap ? 1 : 0,
+  ].join('|')
+  if (rootUserData.groundTextureTraversalAppliedSignature === currentSignature) {
+    return
+  }
 
-  object.traverse((child) => {
-    const mesh = child as THREE.Mesh
-    if (!mesh?.isMesh) {
-      return
-    }
-    if (mesh.userData?.groundChunkBatch) {
-      return
-    }
+  const traversalCache = getGroundTextureTraversalCache(root)
+  const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
+  traversalCache.meshes.forEach((mesh) => {
     const chunkSpec = mesh.userData?.groundChunk as GroundChunkSpec | undefined
     const isCompiledGroundTile = mesh.userData?.compiledGroundTile === true
     const compiledGroundTileKey = typeof mesh.userData?.compiledGroundTileKey === 'string'
@@ -7613,7 +7695,7 @@ function applyGroundTextureToObject(object: THREE.Object3D, definition: GroundDy
       : null
     const currentMaterial = Array.isArray(mesh.material) ? (mesh.material[0] ?? null) : (mesh.material ?? null)
     const shouldUseSculptedMaterial = chunkSpec && sculptedMaterial
-      ? chunkIntersectsGroundLocalEditTileFromRuntime(ensureGroundRuntimeDefinition(definition), chunkSpec)
+      ? chunkIntersectsGroundLocalEditTileFromRuntime(runtimeDefinition, chunkSpec)
       : false
     const chunkBaseMaterial = shouldUseSculptedMaterial
       ? sculptedMaterial
@@ -7628,11 +7710,12 @@ function applyGroundTextureToObject(object: THREE.Object3D, definition: GroundDy
         baseMaterial: chunkBaseMaterial,
         baseMaterialSignature: chunkBaseMaterialSignature,
         compiledGroundTileKey,
-        rootUserData: root.userData ?? {},
+        rootUserData,
         groundSplatRuntimeProfile,
       })
     }
   })
+  rootUserData.groundTextureTraversalAppliedSignature = currentSignature
 }
 
 export type GroundGeometryUpdateRegion = {
@@ -7833,6 +7916,7 @@ export function setGroundMaterial(target: THREE.Object3D, material: THREE.Materi
 
   const userData = (target.userData ??= {}) as Record<string, unknown>
   userData.groundMaterial = resolvedMaterial
+  markGroundTextureTraversalCacheDirty(target)
 
   target.traverse((child) => {
     const mesh = child as THREE.Mesh
@@ -7866,7 +7950,7 @@ export function setGroundSculptedMaterial(target: THREE.Object3D, material: THRE
   } else {
     delete userData.groundSculptedMaterial
   }
-  delete userData.groundTextureTraversalCache
+  markGroundTextureTraversalCacheDirty(target)
 }
 
 export function updateGroundChunks(

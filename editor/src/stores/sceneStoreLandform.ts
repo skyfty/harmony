@@ -60,8 +60,6 @@ const LANDFORM_CLEARANCE_SAMPLE_RADIUS_SCALE = 0.35
 const LANDFORM_CLEARANCE_FLAT_VARIATION = 0.004
 const LANDFORM_CLEARANCE_ROUGH_VARIATION = 0.03
 const LANDFORM_SEGMENT_HEIGHT_SAMPLE_COUNT = 8
-const LANDFORM_BUILD_DEBUG_ENABLED = import.meta.env.DEV
-const LANDFORM_BUILD_SLOW_THRESHOLD_MS = 16
 
 type GroundTransform = {
   position: { x: number; y: number; z: number }
@@ -110,21 +108,6 @@ type LandformFeatherRefinementOptions = {
   protectedDistance?: number
   segmentIndex?: FootprintSegmentIndex | null
   distanceCache?: Map<string, number>
-}
-
-function nowForLandformBuildDebug(): number {
-  return typeof performance !== 'undefined' ? performance.now() : Date.now()
-}
-
-function logLandformBuildDebug(message: string, details?: Record<string, unknown>): void {
-  if (!LANDFORM_BUILD_DEBUG_ENABLED) {
-    return
-  }
-  if (details) {
-    console.info(`[LandformBuild] ${message}`, details)
-    return
-  }
-  console.info(`[LandformBuild] ${message}`)
 }
 
 function buildWorldPoints(points: Vector3Like[]): Vector3[] {
@@ -1962,7 +1945,6 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
       const controlSegmentHeights = buildLandformSegmentHeights(conformedControlWorldPoints, (point) => point.sub(center))
       let surfaceIndices: number[] = []
       let surfaceWorldVertices: Vector3[] = []
-      const buildStartedAt = nowForLandformBuildDebug()
 
       if (previewMode === 'interactive') {
         const previewSurface = buildLandformGroundPreviewSurface(
@@ -1974,11 +1956,9 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
         surfaceIndices = previewSurface?.surfaceIndices ?? []
         surfaceWorldVertices = previewSurface?.surfaceWorldVertices ?? []
       } else {
-        const sliceStartedAt = nowForLandformBuildDebug()
         const sliced = sliceGroundTrianglesByPolygon(groundDefinition, polygonLocal, {
           mergePlanarRegions: !normalizedProps.enableFeather,
         })
-        const sliceDurationMs = nowForLandformBuildDebug() - sliceStartedAt
         if (sliced.mode === 'approx') {
           const approximateSurface = buildLandformApproximateGroundSurface(
             polygonLocalPoints,
@@ -2000,21 +1980,6 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
             clearanceContext,
             transform,
           )
-        }
-        const totalDurationMs = nowForLandformBuildDebug() - buildStartedAt
-        if (
-          sliced.mode === 'approx'
-          || sliceDurationMs >= LANDFORM_BUILD_SLOW_THRESHOLD_MS
-          || totalDurationMs >= LANDFORM_BUILD_SLOW_THRESHOLD_MS
-        ) {
-          logLandformBuildDebug('Built landform ground surface from world points', {
-            previewMode: previewMode ?? 'final',
-            surfaceMode: sliced.mode ?? 'exact',
-            enableFeather: normalizedProps.enableFeather,
-            sliceDurationMs: Number(sliceDurationMs.toFixed(2)),
-            totalDurationMs: Number(totalDurationMs.toFixed(2)),
-            sampleStats: landformHeightSampler.getStats(),
-          })
         }
       }
 
@@ -2137,11 +2102,9 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
         groundRuntimeDefinition = landformHeightSampler.runtimeDefinition
         clearanceContext = createLandformAdaptiveGroundClearanceContext(groundRuntimeDefinition, safeTransform)
         const sampleHeight = landformHeightSampler.sampleHeight
-        const buildStartedAt = nowForLandformBuildDebug()
         const sliced = sliceGroundTrianglesByPolygon(groundDefinition, polygonLocal, {
           mergePlanarRegions: !normalizedProps.enableFeather,
         })
-        const sliceDurationMs = nowForLandformBuildDebug() - buildStartedAt
         if (sliced.mode === 'approx') {
           const approximateSurface = buildLandformApproximateGroundSurface(
             polygonLocalPoints,
@@ -2163,21 +2126,6 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
             clearanceContext,
             safeTransform,
           )
-        }
-
-        const totalDurationMs = nowForLandformBuildDebug() - buildStartedAt
-        if (
-          sliced.mode === 'approx'
-          || sliceDurationMs >= LANDFORM_BUILD_SLOW_THRESHOLD_MS
-          || totalDurationMs >= LANDFORM_BUILD_SLOW_THRESHOLD_MS
-        ) {
-          logLandformBuildDebug('Built landform ground surface from local points', {
-            surfaceMode: sliced.mode ?? 'exact',
-            enableFeather: normalizedProps.enableFeather,
-            sliceDurationMs: Number(sliceDurationMs.toFixed(2)),
-            totalDurationMs: Number(totalDurationMs.toFixed(2)),
-            sampleStats: landformHeightSampler?.getStats() ?? null,
-          })
         }
 
         if (surfaceWorldVertices.length < 3 || surfaceIndices.length < 3) {
