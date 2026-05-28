@@ -43,25 +43,26 @@
                     mode="aspectFit"
                   />
                 </view>
-                <view class="medal-progress-value">
-                  <view class="medal-progress-track">
-                    <view class="medal-progress-fill" :style="buildMedalProgressBarStyle(medal)" />
-                    <text class="medal-progress-text">
-                      {{ formatMedalCompletionPercent(medal) }}
-                    </text>
-                  </view>
-                </view>
               </view>
-              <text :class="['medal-status', medal.earned ? 'medal-status--earned' : 'medal-status--locked']">
-                {{ medal.earned ? '已获得' : '未获得' }}
-              </text>
             </view>
 
             <view class="medal-body">
-              <text :class="['medal-name', medal.earned ? 'medal-name--earned' : 'medal-name--locked']">
-                {{ medal.name }}
-              </text>
-              <text class="medal-description">{{ getMedalDescription(medal) }}</text>
+              <view class="medal-content-top">
+                <text :class="['medal-name', medal.earned ? 'medal-name--earned' : 'medal-name--locked']">
+                  {{ medal.name }}
+                </text>
+                <view class="medal-meta-row">
+                  <text class="medal-description">{{ getMedalDescription(medal) }}</text>
+                  <text class="medal-progress-text medal-progress-text--inline">
+                    {{ formatMedalCompletionPercent(medal) }}
+                  </text>
+                </view>
+              </view>
+              <view class="medal-progress-bar">
+                <view class="medal-progress-track">
+                  <view class="medal-progress-fill" :style="buildMedalProgressBarStyle(medal)" />
+                </view>
+              </view>
             </view>
           </view>
         </view>
@@ -433,6 +434,10 @@ function handleNavigate(key: NavKey) {
   border-color: rgba(109, 123, 150, 0.14);
 }
 
+.medal-card--locked .medal-visual {
+  filter: grayscale(100%) saturate(0.35) brightness(0.92);
+}
+
 .medal-visual {
   width: 188rpx;
   flex-shrink: 0;
@@ -561,6 +566,11 @@ function handleNavigate(key: NavKey) {
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.68) 0%, rgba(200, 229, 255, 0.12) 100%);
 }
 
+.medal-card--locked .medal-progress-value,
+.medal-card--locked .medal-progress-text {
+  filter: grayscale(100%);
+}
+
 .medal-card--locked .medal-icon {
   filter: drop-shadow(0 8rpx 10rpx rgba(45, 74, 132, 0.16));
 }
@@ -617,18 +627,50 @@ function handleNavigate(key: NavKey) {
   text-shadow: 0 1px 4px rgba(11, 16, 30, 0.32);
 }
 
+.medal-progress-text--inline {
+  position: static;
+  z-index: auto;
+  width: auto;
+  height: auto;
+  color: #6b7280;
+  text-align: right;
+  text-shadow: none;
+  flex-shrink: 0;
+}
+
 .medal-body {
   flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
+  align-items: stretch;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 6px;
+  padding-bottom: 2px;
+}
+
+.medal-content-top {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.medal-meta-row {
+  width: 100%;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
   gap: 12px;
 }
 
 .medal-name {
+  width: 100%;
   font-size: 32rpx;
   font-weight: 800;
   line-height: 1.35;
+  align-self: center;
+  text-align: center;
 }
 
 .medal-name--earned {
@@ -640,9 +682,20 @@ function handleNavigate(key: NavKey) {
 }
 
 .medal-description {
+  flex: 1;
+  min-width: 0;
   font-size: 25rpx;
   line-height: 1.6;
   color: #6b7280;
+  text-align: left;
+}
+
+.medal-progress-bar {
+  width: 100%;
+}
+
+.medal-progress-bar .medal-progress-track {
+  height: 14rpx;
 }
 
 .medal-status {
