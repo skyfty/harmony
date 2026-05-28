@@ -1888,6 +1888,32 @@ function resolveGroundChunkWorldBoundsFromSpec(
   }
 }
 
+export function canTreatGroundChunkAsFlatPlane(
+  definition: GroundDynamicMesh,
+  chunkRow: number,
+  chunkColumn: number,
+  options: { allowBakedSurfaceTexture?: boolean } = {},
+): boolean {
+  const normalizedChunkRow = Math.trunc(Number(chunkRow))
+  const normalizedChunkColumn = Math.trunc(Number(chunkColumn))
+  if (!Number.isFinite(normalizedChunkRow) || !Number.isFinite(normalizedChunkColumn)) {
+    return false
+  }
+
+  const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
+  const spec = computeChunkSpec(definition, normalizedChunkRow, normalizedChunkColumn)
+  if (chunkIntersectsGroundLocalEditTileFromRuntime(runtimeDefinition, spec)) {
+    return false
+  }
+
+  const sharedChunkKey = resolveGroundSurfaceSharedKeyFromChunkMeta(normalizedChunkRow, normalizedChunkColumn)
+  if (!options.allowBakedSurfaceTexture && hasGroundChunkSurfaceTextureData(definition, sharedChunkKey)) {
+    return false
+  }
+
+  return true
+}
+
   function resolveImportedLocalEditCellSize(definition: GroundRuntimeDynamicMesh): number | null {
     const metadata = definition.planningMetadata as GroundPlanningMetadata | null | undefined
     const demSource = metadata?.demSource
@@ -4764,8 +4790,8 @@ function compactGroundFlatChunkBatchInstances(
       const readOffset = readIndex * 16
       const lastOffset = lastIndex * 16
       for (let i = 0; i < 16; i += 1) {
-        const temp = targetArray[readOffset + i]
-        targetArray[readOffset + i] = targetArray[lastOffset + i]
+        const temp = targetArray[readOffset + i]!
+        targetArray[readOffset + i] = targetArray[lastOffset + i]!
         targetArray[lastOffset + i] = temp
       }
       nextKeys[readIndex] = lastKey
