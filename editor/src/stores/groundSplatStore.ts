@@ -66,11 +66,11 @@ function replaceRuntimeState(
     nodeId: groundNode.id,
     revision: Number.isFinite(payload.revision) ? Math.max(0, Math.trunc(payload.revision)) : 0,
     surfaceLayerTextureAssetIds: normalizeAssetIds(payload.surfaceLayerTextureAssetIds),
-    groundSurfaceChunks: cloneValue(payload.groundSurfaceChunks),
+    groundSurfaceChunks: null,
   })
   groundNode.dynamicMesh = {
     ...definition,
-    groundSurfaceChunks: cloneValue(payload.groundSurfaceChunks),
+    groundSurfaceChunks: null,
     groundSplatBake: {
       revision: Number.isFinite(payload.revision) ? Math.max(0, Math.trunc(payload.revision)) : 0,
       chunkTextureMap: cloneValue(payload.groundSurfaceChunks),
