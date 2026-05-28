@@ -789,6 +789,22 @@ function buildFlatGroundChunkGeometry(spec: GroundChunkSpec, cellSize: number): 
   return new THREE.PlaneGeometry(width, depth, 1, 1)
 }
 
+function buildDenseFlatGroundChunkGeometry(
+  definition: GroundRuntimeDynamicMesh,
+  spec: GroundChunkSpec,
+): THREE.PlaneGeometry {
+  const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
+  const geometry = buildFlatGroundChunkGeometry(spec, cellSize)
+  const chunkBounds = resolveGroundChunkWorldBoundsFromSpec(definition, spec)
+  const centerX = (chunkBounds.minX + chunkBounds.maxX) * 0.5
+  const centerZ = (chunkBounds.minZ + chunkBounds.maxZ) * 0.5
+  const baseHeight = Number(definition.baseHeight)
+  const centerY = Number.isFinite(baseHeight) ? baseHeight : 0
+  geometry.rotateX(-Math.PI / 2)
+  geometry.translate(centerX, centerY, centerZ)
+  return geometry
+}
+
 function resolveInfiniteNearChunkWindowBounds(
   centerCoord: { chunkX: number; chunkZ: number },
   chunkSizeMeters: number,
@@ -4303,6 +4319,13 @@ function buildGroundChunkGeometry(definition: GroundRuntimeDynamicMesh, spec: Gr
     return createGroundOptimizedChunkGeometry(optimizedChunk)
   }
 
+  const chunkCells = resolveRuntimeChunkCells(definition)
+  const chunkRow = Math.trunc(spec.startRow / Math.max(1, chunkCells))
+  const chunkColumn = Math.trunc(spec.startColumn / Math.max(1, chunkCells))
+  if (canTreatGroundChunkAsFlatPlane(definition, chunkRow, chunkColumn, { allowBakedSurfaceTexture: true })) {
+    return buildDenseFlatGroundChunkGeometry(definition, spec)
+  }
+
   const layout = resolveGroundChunkGeometryLayout(definition, spec)
   const chunkColumns = layout.segmentColumns
   const chunkRows = layout.segmentRows
@@ -6815,6 +6838,7 @@ type GroundChunkTextureBundleSources = {
   normal: string | null
   splatMaps: string[]
   surfaceLayers: GroundChunkRuntimeSurfaceLayer[]
+  revision: number
 }
 
 function normalizeGroundChunkRuntimeSurfaceLayer(
@@ -6928,6 +6952,7 @@ function resolveGroundChunkTextureBundleSources(
     normal: normal || null,
     splatMaps,
     surfaceLayers,
+    revision: Number.isFinite(entry.revision) ? Math.max(0, Math.trunc(entry.revision)) : 0,
   }
 }
 
@@ -7405,10 +7430,6 @@ function applyGroundTextureToChunkMesh(
   void baseTexture
   const currentMaterial = Array.isArray(mesh.material) ? (mesh.material[0] ?? null) : (mesh.material ?? null)
   const userData = mesh.userData as Record<string, unknown>
-  const revisionSignature = [
-    Number.isFinite(definition.surfaceRevision) ? Math.max(0, Math.trunc(definition.surfaceRevision as number)) : 0,
-    Number.isFinite(definition.groundSplatBake?.revision) ? Math.max(0, Math.trunc(definition.groundSplatBake?.revision as number)) : 0,
-  ].join('|')
   if (!chunkKey) {
     if (currentMaterial && currentMaterial !== baseMaterial) {
       disposeGroundChunkTexturedMaterial(currentMaterial)
@@ -7474,11 +7495,13 @@ function applyGroundTextureToChunkMesh(
       repeatY: 1,
     })
   const windowSignature = resolveGroundTextureWindowSignature(safeWindow)
-  const signatureBase = `${baseMaterialSignature}|rev:${revisionSignature}`
   const splatRuntimeState = bundle
     ? createGroundChunkSplatRuntimeState(definition, mesh, spec, bundle, options.groundSplatRuntimeProfile)
     : null
   const shouldUseShaderSplat = Boolean(splatRuntimeState && chunkKey && bundle?.surfaceLayers.length)
+  const signatureBase = bundle
+    ? `${baseMaterialSignature}|chunk-rev:${bundle.revision}`
+    : `${baseMaterialSignature}|chunk-rev:0`
 
   if (shouldUseShaderSplat && chunkKey && bundle) {
     const signature = createGroundSplatSignature(chunkKey, signatureBase, bundle, options.groundSplatRuntimeProfile)
@@ -7755,6 +7778,13 @@ function updateChunkGeometry(geometry: THREE.BufferGeometry, definition: GroundR
   const optimizedChunk = resolveOptimizedChunkForSpec(definition, spec)
   if (optimizedChunk) {
     return applyGroundOptimizedChunkGeometry(geometry, optimizedChunk)
+  }
+
+  const chunkCells = resolveRuntimeChunkCells(definition)
+  const chunkRow = Math.trunc(spec.startRow / Math.max(1, chunkCells))
+  const chunkColumn = Math.trunc(spec.startColumn / Math.max(1, chunkCells))
+  if (canTreatGroundChunkAsFlatPlane(definition, chunkRow, chunkColumn, { allowBakedSurfaceTexture: true })) {
+    return false
   }
 
   const layout = resolveGroundChunkGeometryLayout(definition, spec)
