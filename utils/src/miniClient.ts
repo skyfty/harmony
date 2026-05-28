@@ -208,7 +208,7 @@ function resolveRequestTarget(path: string): string {
 function buildQueryString(query?: Record<string, string | number | boolean | null | undefined>): string {
   if (!query) return '';
 
-  const params = Object.entries(query)
+  const params: Array<[string, string]> = Object.entries(query)
     .filter(([, value]) => value !== undefined && value !== null)
     .map(([key, value]) => [key, String(value)]);
 
@@ -227,7 +227,8 @@ async function requestWithUni<R>(target: string, options: HttpRequestOptions): P
     ...(authHeader as Record<string, string>),
   };
   return await new Promise<R>((resolve, reject) => {
-    uni.request({
+    const globalAny = globalThis as any;
+    globalAny.uni.request({
       url: `${target}${buildQueryString(options.query)}`,
       method,
       data: options.body as any,
@@ -282,7 +283,8 @@ async function requestWithFetch<R>(target: string, options: HttpRequestOptions):
 }
 
 async function requestRaw<R>(target: string, options: HttpRequestOptions): Promise<R> {
-  if (typeof uni !== 'undefined' && typeof uni.request === 'function') {
+  const globalAny = globalThis as any;
+  if (typeof globalAny.uni !== 'undefined' && typeof globalAny.uni.request === 'function') {
     return await requestWithUni<R>(target, options);
   }
 

@@ -5318,7 +5318,7 @@ async function confirmPlanningImageImport() {
     height: draft.height,
     visible: true,
     locked: false,
-    opacity: 1,
+    opacity: 0.7,
     position: {
       x: -widthMeters / 2,
       y: -heightMeters / 2,

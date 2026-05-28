@@ -12,7 +12,8 @@ export type ScenePackagePointer =
   | { kind: 'idb'; ref: string };
 
 function isWeChatFileSystemAvailable(): boolean {
-  const wxAny = (typeof wx !== 'undefined' ? (wx as any) : null) as any;
+  const globalAny = globalThis as any;
+  const wxAny = typeof globalAny.wx !== 'undefined' ? globalAny.wx : null;
   return Boolean(wxAny && typeof wxAny.getFileSystemManager === 'function' && typeof wxAny?.env?.USER_DATA_PATH === 'string');
 }
 

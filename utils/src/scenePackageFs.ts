@@ -7,7 +7,8 @@ type WxFileSystemManagerLike = {
 };
 
 function getWxFileSystemManager(): WxFileSystemManagerLike {
-  const wxAny = (typeof wx !== 'undefined' ? (wx as any) : null) as any;
+  const globalAny = globalThis as any;
+  const wxAny = typeof globalAny.wx !== 'undefined' ? globalAny.wx : null;
   if (!wxAny || typeof wxAny.getFileSystemManager !== 'function') {
     throw new Error('当前环境不支持微信文件系统（getFileSystemManager 不存在）');
   }
@@ -15,7 +16,8 @@ function getWxFileSystemManager(): WxFileSystemManagerLike {
 }
 
 function getUserDataPath(): string {
-  const wxAny = (typeof wx !== 'undefined' ? (wx as any) : null) as any;
+  const globalAny = globalThis as any;
+  const wxAny = typeof globalAny.wx !== 'undefined' ? globalAny.wx : null;
   const path = wxAny?.env?.USER_DATA_PATH;
   if (typeof path !== 'string' || !path.trim()) {
     throw new Error('无法获取 USER_DATA_PATH');

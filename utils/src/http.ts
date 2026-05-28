@@ -130,7 +130,11 @@ export function getApiOrigin(): string {
 
 export function getAuthToken(): string | undefined {
   try {
-    const token = (typeof uni !== 'undefined' && typeof uni.getStorageSync === 'function') ? uni.getStorageSync(TOKEN_STORAGE_KEY) : undefined;
+    const globalAny = globalThis as any;
+    const token =
+      typeof globalAny.uni !== 'undefined' && typeof globalAny.uni.getStorageSync === 'function'
+        ? globalAny.uni.getStorageSync(TOKEN_STORAGE_KEY)
+        : undefined;
     return typeof token === 'string' && token.length ? token : undefined;
   } catch {
     return undefined;
@@ -139,8 +143,9 @@ export function getAuthToken(): string | undefined {
 
 export function setAuthToken(token: string): void {
   try {
-    if (typeof uni !== 'undefined' && typeof uni.setStorageSync === 'function') {
-      uni.setStorageSync(TOKEN_STORAGE_KEY, token);
+    const globalAny = globalThis as any;
+    if (typeof globalAny.uni !== 'undefined' && typeof globalAny.uni.setStorageSync === 'function') {
+      globalAny.uni.setStorageSync(TOKEN_STORAGE_KEY, token);
     }
   } catch {
     // ignore
@@ -149,8 +154,9 @@ export function setAuthToken(token: string): void {
 
 export function clearAuthToken(): void {
   try {
-    if (typeof uni !== 'undefined' && typeof uni.removeStorageSync === 'function') {
-      uni.removeStorageSync(TOKEN_STORAGE_KEY);
+    const globalAny = globalThis as any;
+    if (typeof globalAny.uni !== 'undefined' && typeof globalAny.uni.removeStorageSync === 'function') {
+      globalAny.uni.removeStorageSync(TOKEN_STORAGE_KEY);
     }
   } catch {
     // ignore
@@ -162,6 +168,7 @@ async function requestWithUni(
   options: { method?: string; data?: any; timeout?: number; headers?: Record<string, string> } = {},
 ) {
   return new Promise<MiniRequestResponse>((resolve, reject) => {
+    const globalAny = globalThis as any;
     const req: any = {
       url,
       method: options.method ?? 'GET',
@@ -173,7 +180,7 @@ async function requestWithUni(
     if (options.data !== undefined) {
       req.data = options.data;
     }
-    uni.request(req);
+    globalAny.uni.request(req);
   });
 }
 
@@ -191,7 +198,8 @@ export async function httpRequest<T>(url: string, options: HttpRequestOptions = 
   const requestData = getRequestData(options.body);
   const headers = buildHeaders(options);
 
-  if (typeof uni !== 'undefined' && typeof uni.request === 'function') {
+  const globalAny = globalThis as any;
+  if (typeof globalAny.uni !== 'undefined' && typeof globalAny.uni.request === 'function') {
     const response = await requestWithUni(full, {
       method,
       ...(requestData === undefined ? {} : { data: requestData }),
