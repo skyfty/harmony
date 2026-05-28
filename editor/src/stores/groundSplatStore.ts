@@ -43,6 +43,8 @@ function normalizeAssetIds(value: string[] | null | undefined): string[] | null 
   return normalized.length > 0 ? normalized : null
 }
 
+
+/// Replaces the runtime state for the ground splat associated with the given scene and node, based on the provided payload.
 function replaceRuntimeState(
   sceneId: string,
   groundNode: SceneNode | null,
@@ -61,20 +63,23 @@ function replaceRuntimeState(
     }
     return
   }
+  const revision = Number.isFinite(payload.revision) ? Math.max(0, Math.trunc(payload.revision)) : 0
+  const surfaceLayerTextureAssetIds = normalizeAssetIds(payload.surfaceLayerTextureAssetIds)
+  const groundSurfaceChunks = cloneValue(payload.groundSurfaceChunks)
   runtimeGroundSplats.set(sceneId, {
     sceneId,
     nodeId: groundNode.id,
-    revision: Number.isFinite(payload.revision) ? Math.max(0, Math.trunc(payload.revision)) : 0,
-    surfaceLayerTextureAssetIds: normalizeAssetIds(payload.surfaceLayerTextureAssetIds),
-    groundSurfaceChunks: null,
+    revision,
+    surfaceLayerTextureAssetIds,
+    groundSurfaceChunks,
   })
   groundNode.dynamicMesh = {
     ...definition,
-    groundSurfaceChunks: null,
+    groundSurfaceChunks: cloneValue(groundSurfaceChunks),
     groundSplatBake: {
-      revision: Number.isFinite(payload.revision) ? Math.max(0, Math.trunc(payload.revision)) : 0,
-      chunkTextureMap: cloneValue(payload.groundSurfaceChunks),
-      surfaceLayerTextureAssetIds: normalizeAssetIds(payload.surfaceLayerTextureAssetIds),
+      revision,
+      chunkTextureMap: cloneValue(groundSurfaceChunks),
+      surfaceLayerTextureAssetIds,
     },
   }
 }

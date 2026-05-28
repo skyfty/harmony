@@ -2117,15 +2117,32 @@ function shouldUseCompiledGroundForDefinition(
   return chunkManifestRevision > 0
 }
 
+function stripGroundSplatRuntimeFromCompiledGroundSourceDocument(
+  document: SceneJsonExportDocument,
+): SceneJsonExportDocument {
+  const nextDocument = manualDeepClone(document) as SceneJsonExportDocument
+  const groundNode = findGroundNode(nextDocument.nodes as unknown as SceneNode[])
+  if (!groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
+    return nextDocument
+  }
+  const definition = groundNode.dynamicMesh as GroundDynamicMesh
+  groundNode.dynamicMesh = {
+    ...definition,
+    groundSurfaceChunks: null,
+    groundSplatBake: null,
+  }
+  return nextDocument
+}
+
 function createCompiledGroundSourceDocument(store: Pick<SceneState, 'currentSceneId' | 'nodes'>): SceneJsonExportDocument | null {
   const sceneId = typeof store.currentSceneId === 'string' ? store.currentSceneId.trim() : ''
   if (!sceneId) {
     return null
   }
-  return {
+  return stripGroundSplatRuntimeFromCompiledGroundSourceDocument({
     id: sceneId,
     nodes: store.nodes as unknown as SceneJsonExportDocument['nodes'],
-  } as SceneJsonExportDocument
+  } as SceneJsonExportDocument)
 }
 
 type SceneLoadProgress = {
@@ -9031,25 +9048,32 @@ export const useSceneStore = defineStore('scene', {
     ): Promise<boolean> {
       const document = createCompiledGroundSourceDocument(this)
       const groundNode = this.groundNode
-      if (!document || !groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
+      const sourceGroundNode = document ? findGroundNode(document.nodes as unknown as SceneNode[]) : null
+      if (
+        !document
+        || !groundNode
+        || groundNode.dynamicMesh?.type !== 'Ground'
+        || !sourceGroundNode
+        || sourceGroundNode.dynamicMesh?.type !== 'Ground'
+      ) {
         applyCompiledGroundPackageToStore(this, '', null)
         return false
       }
       const scenesStore = useScenesStore()
       const terrainDatasetManifest = await scenesStore.loadTerrainDatasetManifest(document.id)
-      if (!shouldUseCompiledGroundForDefinition(groundNode.dynamicMesh, terrainDatasetManifest?.datasetId ?? null)) {
+      if (!shouldUseCompiledGroundForDefinition(sourceGroundNode.dynamicMesh, terrainDatasetManifest?.datasetId ?? null)) {
         applyCompiledGroundPackageToStore(this, '', null)
         await scenesStore.saveCompiledGroundBundle(document.id, null)
         return true
       }
       const buildKey = computeSceneCompiledGroundBuildKey(
         document.id,
-        groundNode.dynamicMesh,
+        sourceGroundNode.dynamicMesh,
         terrainDatasetManifest?.datasetId ?? null,
       )
       const sourceSignature = computeSceneCompiledGroundSourceSignature(
         document.id,
-        groundNode.dynamicMesh,
+        sourceGroundNode.dynamicMesh,
         terrainDatasetManifest?.datasetId ?? null,
       )
       const pkg = await ensureSceneCompiledGroundPackage(document, buildKey, {
@@ -9091,24 +9115,32 @@ export const useSceneStore = defineStore('scene', {
     ): Promise<boolean> {
       const document = createCompiledGroundSourceDocument(this)
       const groundNode = this.groundNode
-      if (!document || !groundNode || groundNode.id !== nodeId || groundNode.dynamicMesh?.type !== 'Ground') {
+      const sourceGroundNode = document ? findGroundNode(document.nodes as unknown as SceneNode[]) : null
+      if (
+        !document
+        || !groundNode
+        || groundNode.id !== nodeId
+        || groundNode.dynamicMesh?.type !== 'Ground'
+        || !sourceGroundNode
+        || sourceGroundNode.dynamicMesh?.type !== 'Ground'
+      ) {
         return false
       }
       const scenesStore = useScenesStore()
       const terrainDatasetManifest = await scenesStore.loadTerrainDatasetManifest(document.id)
-      if (!shouldUseCompiledGroundForDefinition(groundNode.dynamicMesh, terrainDatasetManifest?.datasetId ?? null)) {
+      if (!shouldUseCompiledGroundForDefinition(sourceGroundNode.dynamicMesh, terrainDatasetManifest?.datasetId ?? null)) {
         applyCompiledGroundPackageToStore(this, '', null)
         await scenesStore.saveCompiledGroundBundle(document.id, null)
         return false
       }
       const buildKey = computeSceneCompiledGroundBuildKey(
         document.id,
-        groundNode.dynamicMesh,
+        sourceGroundNode.dynamicMesh,
         terrainDatasetManifest?.datasetId ?? null,
       )
       const sourceSignature = computeSceneCompiledGroundSourceSignature(
         document.id,
-        groundNode.dynamicMesh,
+        sourceGroundNode.dynamicMesh,
         terrainDatasetManifest?.datasetId ?? null,
       )
       if (this.compiledGroundBuildKey && this.compiledGroundBuildKey !== buildKey) {
