@@ -4,7 +4,7 @@ import type { BuildTool } from '@/types/build-tool'
 import type { WaterBuildShape } from '@/types/water-build-shape'
 import type { useSceneStore } from '@/stores/sceneStore'
 import { createWaterPreviewRenderer, type WaterPreviewSession } from './WaterPreviewRenderer'
-import { buildRotatedRectangleFromCorner, resolveRectangleDragDirection } from './rotatedRectangleBuild'
+import { buildRotatedRectangleFromEdge, resolveRectangleDragDirection } from './rotatedRectangleBuild'
 
 export type WaterBuildToolHandle = {
   getSession: () => WaterPreviewSession | null
@@ -21,6 +21,8 @@ type Session = {
   shape: WaterBuildShape
   points: THREE.Vector3[]
   previewEnd: THREE.Vector3 | null
+  baseEdgeEnd: THREE.Vector3 | null
+  rectanglePhase: 'idle' | 'edgeDraft' | 'rectangleDraft'
   rectangleDirection: THREE.Vector3 | null
   previewGroup: THREE.Group | null
 }
@@ -34,7 +36,7 @@ type RightClickState = {
 
 type LeftDragState = {
   pointerId: number
-  kind: Exclude<WaterBuildShape, 'polygon'>
+  kind: Exclude<WaterBuildShape, 'polygon' | 'rectangle'>
 }
 
 type LeftClickState = {
@@ -145,6 +147,8 @@ export function createWaterBuildTool(options: {
       shape: getShape(),
       points: [],
       previewEnd: null,
+      baseEdgeEnd: null,
+      rectanglePhase: 'idle',
       rectangleDirection: null,
       previewGroup: null,
     }
@@ -228,8 +232,9 @@ export function createWaterBuildTool(options: {
     current.shape = 'rectangle'
     current.points = [start.clone()]
     current.previewEnd = start.clone()
+    current.baseEdgeEnd = null
+    current.rectanglePhase = 'edgeDraft'
     current.rectangleDirection = null
-    leftDragState = { pointerId: event.pointerId, kind: 'rectangle' }
     showLockedStartIndicator(start)
     markPreviewDirty()
     return true
@@ -249,6 +254,8 @@ export function createWaterBuildTool(options: {
     current.shape = 'circle'
     current.points = [center.clone()]
     current.previewEnd = initialEnd
+    current.baseEdgeEnd = null
+    current.rectanglePhase = 'idle'
     current.rectangleDirection = null
     leftDragState = { pointerId: event.pointerId, kind: 'circle' }
     showLockedStartIndicator(center)
@@ -269,13 +276,6 @@ export function createWaterBuildTool(options: {
       ? resolvePlacementPoint(event, raw, { fallback: 'raw' })
       : resolvePlacementPoint(event, raw)
     alignPointYToSession(next, session)
-
-    if (session.shape === 'rectangle' && !session.rectangleDirection) {
-      const start = session.points[0] ?? next
-      const rawDirectionPoint = raw.clone()
-      alignPointYToSession(rawDirectionPoint, session)
-      session.rectangleDirection = resolveRectangleDragDirection(start, rawDirectionPoint)
-    }
 
     const previous = session.previewEnd
     if (previous && previous.equals(next)) {
@@ -373,6 +373,63 @@ export function createWaterBuildTool(options: {
     }
   }
 
+  const resolveRectanglePoint = (event: PointerEvent): THREE.Vector3 | null => {
+    if (!raycastPlacementPoint(event, groundPointerHelper)) {
+      return null
+    }
+    const point = resolvePlacementPoint(event, groundPointerHelper.clone())
+    alignPointYToSession(point, session)
+    return point
+  }
+
+  const confirmRectangleBaseEdge = (): boolean => {
+    if (!session || session.shape !== 'rectangle' || session.rectanglePhase !== 'edgeDraft') {
+      return false
+    }
+    const start = session.points[0]
+    const end = session.previewEnd
+    if (!start || !end) {
+      return false
+    }
+    const direction = resolveRectangleDragDirection(start, end)
+    if (!direction) {
+      return true
+    }
+    session.baseEdgeEnd = end.clone()
+    session.points = [start.clone(), end.clone()]
+    session.rectangleDirection = direction
+    session.rectanglePhase = 'rectangleDraft'
+    markPreviewDirty()
+    return true
+  }
+
+  const finalizeRectangle = (): boolean => {
+    if (!session || session.shape !== 'rectangle' || session.rectanglePhase !== 'rectangleDraft') {
+      return false
+    }
+    const start = session.points[0]
+    const baseEdgeEnd = session.baseEdgeEnd
+    const previewEnd = session.previewEnd
+    if (!start || !baseEdgeEnd || !previewEnd) {
+      clearSession(true)
+      return true
+    }
+    const rectangle = buildRotatedRectangleFromEdge(start, baseEdgeEnd, previewEnd)
+    if (!rectangle || rectangle.width <= WATER_MIN_SIZE || rectangle.depth <= WATER_MIN_SIZE) {
+      return true
+    }
+    const created = options.sceneStore.createWaterSurfaceMeshNode({
+      buildShape: 'rectangle',
+      points: rectangle.corners.map((point) => ({ x: point.x, y: point.y, z: point.z })),
+    })
+    const startPoint = start.clone()
+    clearSession(true)
+    if (created) {
+      holdStartIndicatorUntilNodeVisible(created.id, startPoint)
+    }
+    return true
+  }
+
   return {
     getSession: () => session,
 
@@ -387,11 +444,6 @@ export function createWaterBuildTool(options: {
 
       const shape = getShape()
       if (event.button === 0 && !options.isAltOverrideActive()) {
-        if (shape === 'rectangle') {
-          clearSession(true)
-          startRectangleDraft(event)
-          return false
-        }
         if (shape === 'circle') {
           clearSession(true)
           startCircleDraft(event)
@@ -438,7 +490,7 @@ export function createWaterBuildTool(options: {
       if (session && session.points.length > 0) {
         const isCameraNavActive = (event.buttons & 2) !== 0 || (event.buttons & 4) !== 0
         if (!isCameraNavActive) {
-          if (session.shape === 'polygon') {
+          if (session.shape === 'polygon' || session.shape === 'rectangle') {
             updateCursorPreview(event)
           }
           return true
@@ -455,39 +507,23 @@ export function createWaterBuildTool(options: {
 
       const shape = getShape()
       if (event.button === 0 && !options.isAltOverrideActive()) {
-        if (shape === 'rectangle' && leftDragState?.kind === 'rectangle' && leftDragState.pointerId === event.pointerId) {
-          leftDragState = null
-
-          if (!session || session.shape !== 'rectangle' || session.points.length < 1) {
+        if (shape === 'rectangle') {
+          if (!session || session.shape !== 'rectangle') {
             clearSession(true)
+            startRectangleDraft(event)
             return true
           }
-
-          if (!raycastPlacementPoint(event, groundPointerHelper)) {
-            clearSession(true)
+          const point = resolveRectanglePoint(event)
+          if (!point) {
             return true
           }
-
-          const end = resolvePlacementPoint(event, groundPointerHelper.clone())
-          end.y = session.points[0]?.y ?? end.y
-          session.previewEnd = end.clone()
+          session.previewEnd = point.clone()
           markPreviewDirty()
-
-          const start = session.points[0]!
-          const rectangle = buildRotatedRectangleFromCorner(start, end, session.rectangleDirection)
-          if (!rectangle || rectangle.width <= WATER_MIN_SIZE || rectangle.depth <= WATER_MIN_SIZE) {
-            clearSession(true)
-            return true
+          if (session.rectanglePhase === 'edgeDraft') {
+            return confirmRectangleBaseEdge()
           }
-
-          const created = options.sceneStore.createWaterSurfaceMeshNode({
-            buildShape: 'rectangle',
-            points: rectangle.corners.map((point) => ({ x: point.x, y: point.y, z: point.z })),
-          })
-          const startPoint = start.clone()
-          clearSession(true)
-          if (created) {
-            holdStartIndicatorUntilNodeVisible(created.id, startPoint)
+          if (session.rectanglePhase === 'rectangleDraft') {
+            return finalizeRectangle()
           }
           return true
         }

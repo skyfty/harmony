@@ -70,7 +70,7 @@ import {
 	buildScatterNodeId,
 	type ScatterRuntimeTarget,
 } from '@/utils/terrainScatterRuntime'
-import { buildRotatedRectangleFromCorner, resolveRectangleDragDirection } from './rotatedRectangleBuild'
+import { buildRotatedRectangleFromCorner, buildRotatedRectangleFromEdge, resolveRectangleDragDirection, type RectangleBuildPhase } from './rotatedRectangleBuild'
 import { resolveAutoOverlayBuildPlan, type AutoOverlayBuildPlan } from './autoOverlayBuild'
 import { GROUND_NODE_ID, GROUND_HEIGHT_STEP } from './constants'
 import type { BuildTool } from '@/types/build-tool'
@@ -653,6 +653,8 @@ type ScatterSessionState = {
 	lastPoint: THREE.Vector3 | null
 	anchorPoint: THREE.Vector3 | null
 	currentPoint: THREE.Vector3 | null
+	baseEdgeEnd: THREE.Vector3 | null
+	rectanglePhase: RectangleBuildPhase
 	rectangleDirection: THREE.Vector3 | null
 	polygonPoints: THREE.Vector3[]
 	polygonPreviewEnd: THREE.Vector3 | null
@@ -4488,23 +4490,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		return projectScatterPointToGround(definition, groundMesh, snapped) ?? projected
 	}
 
-	function resolveRawScatterPointFromEvent(
-		event: PointerEvent,
-		definition: GroundDynamicMesh,
-		groundMesh: THREE.Object3D,
-	): THREE.Vector3 | null {
-		if (raycastGroundMeshSurfacePoint(event, groundMesh, scatterPointerHelper)) {
-			return isPointerOverGround(groundMesh, scatterPointerHelper) ? scatterPointerHelper.clone() : null
-		}
-		if (!raycastGroundPoint(event, scatterPointerHelper)) {
-			return null
-		}
-		if (!isPointerOverGround(groundMesh, scatterPointerHelper)) {
-			return null
-		}
-		return projectScatterPointToGround(definition, groundMesh, scatterPointerHelper)
-	}
-
 	function projectScatterPoint(worldPoint: THREE.Vector3): THREE.Vector3 | null {
 		if (!scatterSession) {
 			return null
@@ -4693,6 +4678,19 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			const current = session.currentPoint
 			if (!anchor || !current) {
 				return null
+			}
+			if (session.rectanglePhase === 'edgeDraft') {
+				if (anchor.distanceToSquared(current) <= 1e-6) {
+					return null
+				}
+				return { points: [anchor.clone(), current.clone()], closed: false, fill: false }
+			}
+			if (session.rectanglePhase === 'rectangleDraft' && session.baseEdgeEnd) {
+				const rectangle = buildRotatedRectangleFromEdge(anchor, session.baseEdgeEnd, current)
+				if (!rectangle) {
+					return null
+				}
+				return { points: rectangle.corners.map((point) => point.clone()), closed: true, fill: true }
 			}
 			const direction = session.rectangleDirection ?? resolveRectangleDragDirection(anchor, current)
 			const rectangle = buildRotatedRectangleFromCorner(anchor, current, direction)
@@ -5271,7 +5269,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!scatterSession) {
 			return []
 		}
-		const rectangle = buildRotatedRectangleFromCorner(anchorPoint, currentPoint, scatterSession.rectangleDirection)
+		const rectangle = scatterSession.baseEdgeEnd
+			? buildRotatedRectangleFromEdge(anchorPoint, scatterSession.baseEdgeEnd, currentPoint)
+			: buildRotatedRectangleFromCorner(anchorPoint, currentPoint, scatterSession.rectangleDirection)
 		if (!rectangle || rectangle.width <= 1e-6 || rectangle.depth <= 1e-6) {
 			return []
 		}
@@ -5396,6 +5396,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		}
 		if (scatterSession.brushShape === 'rectangle') {
 			const currentPoint = scatterSession.currentPoint ?? worldCenterPoint
+			if (scatterSession.rectanglePhase === 'edgeDraft') {
+				return sampleScatterPointsOnLine(scatterSession.anchorPoint ?? worldCenterPoint, currentPoint)
+			}
 			return sampleScatterPointsInRectangle(scatterSession.anchorPoint ?? worldCenterPoint, currentPoint)
 		}
 		if (scatterSession.brushShape === 'line') {
@@ -5638,6 +5641,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			lastPoint: null,
 			anchorPoint: null,
 			currentPoint: null,
+			baseEdgeEnd: null,
+			rectanglePhase: 'idle',
 			rectangleDirection: null,
 			polygonPoints,
 			polygonPreviewEnd: null,
@@ -5667,7 +5672,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!scatterModeEnabled()) {
 			return false
 		}
-		if (event.button === 2 && scatterSession?.brushShape === 'polygon') {
+		if (event.button === 2 && (scatterSession?.brushShape === 'polygon' || scatterSession?.brushShape === 'rectangle')) {
 			scatterRightClickState = {
 				pointerId: event.pointerId,
 				startX: event.clientX,
@@ -5807,6 +5812,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 					lastPoint: null,
 					anchorPoint: null,
 					currentPoint: null,
+					baseEdgeEnd: null,
+					rectanglePhase: 'idle',
 					rectangleDirection: null,
 					polygonPoints: [],
 					polygonPreviewEnd: null,
@@ -5846,6 +5853,82 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return true
 		}
 
+		if (brushShape === 'rectangle') {
+			if (!scatterSession || scatterSession.brushShape !== 'rectangle') {
+				scatterSession = {
+					pointerId: event.pointerId,
+					asset,
+					bindingAssetId,
+					lodPresetAssetId: scatterResolvedLodPresetAssetId,
+					category,
+					brushShape,
+					definition,
+					groundMesh,
+					spacing: effectiveSpacing,
+					radius: effectiveRadius,
+					targetCountPerStamp,
+					minScale: presetMinScale,
+					maxScale: presetMaxScale,
+					store: ensureScatterStoreRef(),
+					layer,
+					modelGroup: scatterModelGroup,
+					chunkCells,
+					neighborIndex: buildScatterNeighborIndex(layer, definition, chunkCells),
+					lastPoint: null,
+					anchorPoint: startPoint.clone(),
+					currentPoint: startPoint.clone(),
+					baseEdgeEnd: null,
+					rectanglePhase: 'edgeDraft',
+					rectangleDirection: null,
+					polygonPoints: [],
+					polygonPreviewEnd: null,
+					previewLayerId: `scatter-preview:${layer.id}:${event.pointerId}`,
+					previewInstances: [],
+					lastPreviewRefreshAt: 0,
+					lastPreviewRefreshPoint: null,
+				}
+				options.onScatterPlacementStart?.()
+				refreshScatterSessionPreview(scatterSession)
+				event.preventDefault()
+				event.stopPropagation()
+				event.stopImmediatePropagation()
+				return true
+			}
+
+			scatterSession.pointerId = event.pointerId
+			scatterSession.currentPoint = startPoint.clone()
+			if (scatterSession.rectanglePhase === 'edgeDraft') {
+				const direction = resolveRectangleDragDirection(scatterSession.anchorPoint ?? startPoint, startPoint)
+				if (!direction) {
+					event.preventDefault()
+					event.stopPropagation()
+					event.stopImmediatePropagation()
+					return true
+				}
+				scatterSession.baseEdgeEnd = startPoint.clone()
+				scatterSession.rectangleDirection = direction
+				scatterSession.rectanglePhase = 'rectangleDraft'
+				refreshScatterSessionPreview(scatterSession)
+				event.preventDefault()
+				event.stopPropagation()
+				event.stopImmediatePropagation()
+				return true
+			}
+
+			if (scatterSession.rectanglePhase === 'rectangleDraft') {
+				refreshScatterSessionPreview(scatterSession)
+				commitScatterSessionPreview(scatterSession)
+				queueScatterSidecarSave()
+				clearScatterAreaPreview()
+				options.clearVertexSnap?.()
+				scatterSession = null
+				event.preventDefault()
+				event.stopPropagation()
+				event.stopImmediatePropagation()
+				return true
+			}
+		}
+
 		scatterSession = {
 			pointerId: event.pointerId,
 			asset,
@@ -5868,6 +5951,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			lastPoint: null,
 			anchorPoint: startPoint.clone(),
 			currentPoint: startPoint.clone(),
+			baseEdgeEnd: null,
+			rectanglePhase: brushShape === 'rectangle' ? 'edgeDraft' : 'idle',
 			rectangleDirection: null,
 			polygonPoints: [],
 			polygonPreviewEnd: null,
@@ -6110,13 +6195,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return true
 		}
 		scatterSession.currentPoint = nextPoint.clone()
-		if (scatterSession.brushShape === 'rectangle' && scatterSession.anchorPoint && !scatterSession.rectangleDirection) {
-			const rawPoint = resolveRawScatterPointFromEvent(event, scatterSession.definition, scatterSession.groundMesh)
-			if (rawPoint) {
-				rawPoint.y = scatterSession.anchorPoint.y
-				scatterSession.rectangleDirection = resolveRectangleDragDirection(scatterSession.anchorPoint, rawPoint)
-			}
-		}
 		if (scatterSession.brushShape === 'circle') {
 			traceScatterPath(nextPoint)
 		} else {
@@ -6136,13 +6214,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return false
 		}
 		session.currentPoint = nextPoint.clone()
-		if (session.brushShape === 'rectangle' && session.anchorPoint && !session.rectangleDirection) {
-			const rawPoint = resolveRawScatterPointFromEvent(event, session.definition, session.groundMesh)
-			if (rawPoint) {
-				rawPoint.y = session.anchorPoint.y
-				session.rectangleDirection = resolveRectangleDragDirection(session.anchorPoint, rawPoint)
-			}
-		}
 		return true
 	}
 
@@ -6173,8 +6244,16 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (event.pointerId !== scatterSession.pointerId) {
 			return false
 		}
+		if (scatterSession.brushShape === 'rectangle') {
+			if (event.button === 2 && scatterRightClickState && scatterRightClickState.pointerId === event.pointerId) {
+				cancelScatterPlacement()
+				scatterRightClickState = null
+				return true
+			}
+			return false
+		}
 		if (scatterSession.brushShape !== 'circle') {
-			if (scatterSession.brushShape === 'rectangle' || scatterSession.brushShape === 'line') {
+			if (scatterSession.brushShape === 'line') {
 				if (syncScatterDragShapeFromEvent(event, scatterSession)) {
 					refreshScatterSessionPreview(scatterSession)
 				}

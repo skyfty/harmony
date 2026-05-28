@@ -4,12 +4,14 @@ import {
   normalizeWaterSurfaceMeshInput,
 } from '@schema/core'
 import type { WaterBuildShape } from '@/types/water-build-shape'
-import { buildRotatedRectangleFromCorner } from './rotatedRectangleBuild'
+import { buildRotatedRectangleFromCorner, buildRotatedRectangleFromEdge, type RectangleBuildPhase } from './rotatedRectangleBuild'
 
 export type WaterPreviewSession = {
   shape: WaterBuildShape
   points: THREE.Vector3[]
   previewEnd: THREE.Vector3 | null
+  baseEdgeEnd: THREE.Vector3 | null
+  rectanglePhase: RectangleBuildPhase
   rectangleDirection: THREE.Vector3 | null
   previewGroup: THREE.Group | null
 }
@@ -97,6 +99,8 @@ function getPreviewVertices(
   shape: WaterBuildShape,
   points: THREE.Vector3[],
   previewEnd: THREE.Vector3 | null,
+  baseEdgeEnd: THREE.Vector3 | null,
+  rectanglePhase: RectangleBuildPhase,
   rectangleDirection: THREE.Vector3 | null,
 ): THREE.Vector3[] {
   if (!points.length) {
@@ -106,6 +110,13 @@ function getPreviewVertices(
   if (shape === 'rectangle' && previewEnd) {
     const start = points[0]
     if (start) {
+      if (rectanglePhase === 'edgeDraft') {
+        return [start.clone(), previewEnd.clone()]
+      }
+      if (rectanglePhase === 'rectangleDraft' && baseEdgeEnd) {
+        const rectangle = buildRotatedRectangleFromEdge(start, baseEdgeEnd, previewEnd)
+        return rectangle ? rectangle.corners.map((point) => point.clone()) : []
+      }
       return buildRectanglePreviewPoints(start, previewEnd, rectangleDirection)
     }
   }
@@ -329,6 +340,8 @@ export function createWaterPreviewRenderer(options: { rootGroup: THREE.Group }):
       session.shape,
       session.points,
       session.previewEnd,
+      session.baseEdgeEnd,
+      session.rectanglePhase,
       session.rectangleDirection,
     )
     if (previewVertices.length < 2) {

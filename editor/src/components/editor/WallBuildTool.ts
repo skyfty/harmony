@@ -21,7 +21,7 @@ import type { WallPresetData } from '@/utils/wallPreset'
 import type { WallBuildShape } from '@/types/wall-build-shape'
 import { mergeUserDataWithDynamicMeshBuildShape } from '@/utils/dynamicMeshBuildShapeUserData'
 import type { WallPreviewRenderData } from './WallRenderer'
-import { buildRotatedRectangleFromCorner, resolveRectangleDragDirection } from './rotatedRectangleBuild'
+import { buildRotatedRectangleFromEdge, resolveRectangleDragDirection, type RectangleBuildPhase } from './rotatedRectangleBuild'
 import { snapPointToRelativeAngleStep } from './planarEditMath'
 
 type PointerInteractionApi = {
@@ -81,8 +81,10 @@ export type WallBuildToolSession = WallPreviewSession & {
   shapeDraft: {
     kind: Exclude<WallBuildShape, 'polygon' | 'line'>
     pointerId: number
+    phase: RectangleBuildPhase
     start: THREE.Vector3
     end: THREE.Vector3
+    baseEdgeEnd: THREE.Vector3 | null
     direction: THREE.Vector3 | null
   } | null
   lastCommittedSegment: WallPreviewSegment | null
@@ -902,8 +904,10 @@ export function createWallBuildTool(options: {
     current.shapeDraft = {
       kind,
       pointerId: event.pointerId,
+      phase: kind === 'rectangle' ? 'edgeDraft' : 'idle',
       start: start.clone(),
       end: end.clone(),
+      baseEdgeEnd: null,
       direction: null,
     }
     current.lastCommittedSegment = null
@@ -974,12 +978,12 @@ export function createWallBuildTool(options: {
     return Math.min(256, Math.max(12, estimate))
   }
 
-  const buildRectangleSegments = (
+  const buildRectangleSegmentsFromEdge = (
     start: THREE.Vector3,
-    end: THREE.Vector3,
-    direction: THREE.Vector3 | null,
+    baseEdgeEnd: THREE.Vector3,
+    currentPoint: THREE.Vector3,
   ): WallPreviewSegment[] => {
-    const rectangle = buildRotatedRectangleFromCorner(start, end, direction)
+    const rectangle = buildRotatedRectangleFromEdge(start, baseEdgeEnd, currentPoint)
     if (!rectangle) {
       return []
     }
@@ -1066,16 +1070,14 @@ export function createWallBuildTool(options: {
     }
     session.shapeDraft.end.copy(end)
 
-    if (kind === 'rectangle' && !session.shapeDraft.direction) {
-      const rawDirectionPoint = rawPointer.clone()
-      rawDirectionPoint.y = start.y
-      session.shapeDraft.direction = resolveRectangleDragDirection(start, rawDirectionPoint)
-    }
-
     const regularPolygonSides = kind === 'circle' ? getRegularPolygonSides() : 0
 
     session.segments = kind === 'rectangle'
-      ? buildRectangleSegments(start, end, session.shapeDraft.direction)
+      ? (session.shapeDraft.phase === 'edgeDraft'
+        ? [{ start: start.clone(), end: end.clone() }]
+        : session.shapeDraft.baseEdgeEnd
+          ? buildRectangleSegmentsFromEdge(start, session.shapeDraft.baseEdgeEnd, end)
+          : [])
       : buildCircleSegments(start, end, regularPolygonSides)
 
     previewRenderer.markDirty()
@@ -1096,7 +1098,9 @@ export function createWallBuildTool(options: {
     const regularPolygonSides = kind === 'circle' ? getRegularPolygonSides() : 0
 
     const segments = kind === 'rectangle'
-      ? buildRectangleSegments(start, end, session.shapeDraft.direction)
+      ? (session.shapeDraft.baseEdgeEnd
+        ? buildRectangleSegmentsFromEdge(start, session.shapeDraft.baseEdgeEnd, end)
+        : [])
       : buildCircleSegments(start, end, regularPolygonSides)
 
     if (!segments.length) {
@@ -1139,6 +1143,24 @@ export function createWallBuildTool(options: {
     const createdNodeId = created.id
     clearSession(true)
     holdStartIndicatorUntilNodeVisible(createdNodeId, start)
+    return true
+  }
+
+  const confirmRectangleShapeDraft = (): boolean => {
+    if (!session?.shapeDraft || session.shapeDraft.kind !== 'rectangle' || session.shapeDraft.phase !== 'edgeDraft') {
+      return false
+    }
+    const start = session.shapeDraft.start.clone()
+    const end = session.shapeDraft.end.clone()
+    const direction = resolveRectangleDragDirection(start, end)
+    if (!direction) {
+      return true
+    }
+    session.shapeDraft.baseEdgeEnd = end.clone()
+    session.shapeDraft.direction = direction
+    session.shapeDraft.phase = 'rectangleDraft'
+    session.segments = [{ start: start.clone(), end: end.clone() }]
+    previewRenderer.markDirty()
     return true
   }
 
@@ -1598,7 +1620,7 @@ export function createWallBuildTool(options: {
         return false
       }
       const shape = getShape()
-      if (shape !== 'line' && shape !== 'polygon') {
+      if (shape === 'circle') {
         const event = _event
         if (event.button === 0 && !options.isAltOverrideActive()) {
           beginShapeDraft(shape, event)
@@ -1663,10 +1685,20 @@ export function createWallBuildTool(options: {
             finalizePolygon()
           }
         } else {
-          const hadDraft = Boolean(session?.shapeDraft)
-          if (hadDraft) {
-            commitShapeDraft()
-            handled = true
+          if (shape === 'rectangle') {
+            if (!session?.shapeDraft) {
+              handled = beginShapeDraft(shape, event)
+            } else if (session.shapeDraft.phase === 'edgeDraft') {
+              handled = confirmRectangleShapeDraft()
+            } else if (session.shapeDraft.phase === 'rectangleDraft') {
+              handled = commitShapeDraft()
+            }
+          } else {
+            const hadDraft = Boolean(session?.shapeDraft)
+            if (hadDraft) {
+              commitShapeDraft()
+              handled = true
+            }
           }
         }
         if (handled) {

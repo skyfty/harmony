@@ -4,12 +4,14 @@ import { createFloorGroup, updateFloorGroup } from '@schema/floorMesh'
 import type { FloorBuildShape } from '@/types/floor-build-shape'
 import type { FloorPresetData } from '@/utils/floorPreset'
 import { buildFloorDynamicMeshPresetPatch } from '@/utils/floorPresetNodeMaterials'
-import { buildRotatedRectangleFromCorner } from './rotatedRectangleBuild'
+import { buildRotatedRectangleFromCorner, buildRotatedRectangleFromEdge, type RectangleBuildPhase } from './rotatedRectangleBuild'
 
 export type FloorPreviewSession = {
   shape: FloorBuildShape
   points: THREE.Vector3[]
   previewEnd: THREE.Vector3 | null
+  baseEdgeEnd: THREE.Vector3 | null
+  rectanglePhase: RectangleBuildPhase
   rectangleDirection: THREE.Vector3 | null
   previewGroup: THREE.Group | null
 }
@@ -110,6 +112,8 @@ function getPreviewVertices(
   shape: FloorBuildShape,
   points: THREE.Vector3[],
   previewEnd: THREE.Vector3 | null,
+  baseEdgeEnd: THREE.Vector3 | null,
+  rectanglePhase: RectangleBuildPhase,
   rectangleDirection: THREE.Vector3 | null,
   regularPolygonSides = 0,
 ): THREE.Vector3[] {
@@ -120,6 +124,13 @@ function getPreviewVertices(
   if (shape === 'rectangle' && previewEnd) {
     const start = points[0]
     if (start) {
+      if (rectanglePhase === 'edgeDraft') {
+        return buildTwoPointPreviewPoints(start, previewEnd)
+      }
+      if (rectanglePhase === 'rectangleDraft' && baseEdgeEnd) {
+        const rectangle = buildRotatedRectangleFromEdge(start, baseEdgeEnd, previewEnd)
+        return rectangle ? rectangle.corners.map((point) => point.clone()) : []
+      }
       return buildRectanglePreviewPoints(start, previewEnd, rectangleDirection)
     }
   }
@@ -329,6 +340,8 @@ export function createFloorPreviewRenderer(options: {
       session.shape,
       session.points,
       session.previewEnd,
+      session.baseEdgeEnd,
+      session.rectanglePhase,
       session.rectangleDirection,
       lastRegularPolygonSides,
     )

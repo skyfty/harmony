@@ -6,7 +6,6 @@ import { useSceneStore } from '@/stores/sceneStore'
 import {
   COUPON_COMPONENT_TYPE,
   clampCouponComponentProps,
-  parseCouponComponentSpec,
   type CouponComponentProps,
 } from '@schema/components'
 
@@ -22,7 +21,6 @@ const couponComponent = computed(
 
 const componentEnabled = computed(() => couponComponent.value?.enabled !== false)
 const couponProps = computed(() => clampCouponComponentProps(couponComponent.value?.props))
-const couponSpec = computed(() => parseCouponComponentSpec(couponProps.value.couponJson))
 
 const localValues = reactive({
   couponJson: '',

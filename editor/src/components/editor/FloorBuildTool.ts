@@ -7,7 +7,7 @@ import {
   createFloorPreviewRenderer,
   type FloorPreviewSession,
 } from './FloorPreviewRenderer'
-import { buildRotatedRectangleFromCorner, resolveRectangleDragDirection } from './rotatedRectangleBuild'
+import { buildRotatedRectangleFromEdge, resolveRectangleDragDirection } from './rotatedRectangleBuild'
 import type { useSceneStore } from '@/stores/sceneStore'
 import type { FloorBuildShape } from '@/types/floor-build-shape'
 import type { FloorPresetData } from '@/utils/floorPreset'
@@ -35,7 +35,7 @@ type RightClickState = {
 
 type LeftDragState = {
   pointerId: number
-  kind: Exclude<FloorBuildShape, 'polygon'>
+  kind: Exclude<FloorBuildShape, 'polygon' | 'rectangle'>
 }
 
 type LeftClickState = {
@@ -195,6 +195,8 @@ export function createFloorBuildTool(options: {
       shape: getShape(),
       points: [],
       previewEnd: null,
+      baseEdgeEnd: null,
+      rectanglePhase: 'idle',
       rectangleDirection: null,
       previewGroup: null,
     }
@@ -227,8 +229,9 @@ export function createFloorBuildTool(options: {
     current.shape = 'rectangle'
     current.points = [start.clone()]
     current.previewEnd = start.clone()
+    current.baseEdgeEnd = null
+    current.rectanglePhase = 'edgeDraft'
     current.rectangleDirection = null
-    leftDragState = { pointerId: event.pointerId, kind: 'rectangle' }
     showLockedStartIndicator(start)
     previewRenderer.markDirty()
     return true
@@ -252,6 +255,8 @@ export function createFloorBuildTool(options: {
     current.shape = 'circle'
     current.points = [center.clone()]
     current.previewEnd = initialEnd
+    current.baseEdgeEnd = null
+    current.rectanglePhase = 'idle'
     current.rectangleDirection = null
     leftDragState = { pointerId: event.pointerId, kind: 'circle' }
     showLockedStartIndicator(center)
@@ -318,11 +323,14 @@ export function createFloorBuildTool(options: {
       }
     }
 
-    if (session.shape === 'rectangle' && !session.rectangleDirection) {
-      const start = session.points[0] ?? next
-      const rawDirectionPoint = raw.clone()
-      alignPointYToSession(rawDirectionPoint, session)
-      session.rectangleDirection = resolveRectangleDragDirection(start, rawDirectionPoint)
+    if (session.shape === 'rectangle') {
+      const previous = session.previewEnd
+      if (previous && previous.equals(next)) {
+        return
+      }
+      session.previewEnd = next.clone()
+      previewRenderer.markDirty()
+      return
     }
 
     const previous = session.previewEnd
@@ -440,6 +448,55 @@ export function createFloorBuildTool(options: {
     }
   }
 
+  const resolveRectanglePoint = (event: PointerEvent): THREE.Vector3 | null => {
+    if (!raycastPlacementPoint(event, groundPointerHelper)) {
+      return null
+    }
+    const point = resolvePlacementPoint(event, groundPointerHelper.clone())
+    alignPointYToSession(point, session)
+    return point
+  }
+
+  const confirmRectangleBaseEdge = (): boolean => {
+    if (!session || session.shape !== 'rectangle' || session.rectanglePhase !== 'edgeDraft') {
+      return false
+    }
+    const start = session.points[0]
+    const end = session.previewEnd
+    if (!start || !end) {
+      return false
+    }
+    const direction = resolveRectangleDragDirection(start, end)
+    if (!direction) {
+      return true
+    }
+    session.baseEdgeEnd = end.clone()
+    session.points = [start.clone(), end.clone()]
+    session.rectangleDirection = direction
+    session.rectanglePhase = 'rectangleDraft'
+    previewRenderer.markDirty()
+    return true
+  }
+
+  const finalizeRectangle = (): boolean => {
+    if (!session || session.shape !== 'rectangle' || session.rectanglePhase !== 'rectangleDraft') {
+      return false
+    }
+    const start = session.points[0]
+    const baseEdgeEnd = session.baseEdgeEnd
+    const previewEnd = session.previewEnd
+    if (!start || !baseEdgeEnd || !previewEnd) {
+      clearSession(true)
+      return true
+    }
+    const rectangle = buildRotatedRectangleFromEdge(start, baseEdgeEnd, previewEnd)
+    if (!rectangle || rectangle.width * rectangle.depth <= 1e-6) {
+      return true
+    }
+    finalizeFromVertices(rectangle.corners)
+    return true
+  }
+
   return {
     getSession: () => session,
 
@@ -455,12 +512,6 @@ export function createFloorBuildTool(options: {
       const shape = getShape()
 
       if (event.button === 0 && !options.isAltOverrideActive()) {
-        if (shape === 'rectangle') {
-          // Start drag-to-size draft.
-          clearSession(true)
-          startRectangleDraft(event)
-          return false
-        }
         if (shape === 'circle') {
           // Start draft with default radius; allow dragging to adjust.
           clearSession(true)
@@ -509,7 +560,7 @@ export function createFloorBuildTool(options: {
       if (session && session.points.length > 0) {
         const isCameraNavActive = (event.buttons & 2) !== 0 || (event.buttons & 4) !== 0
         if (!isCameraNavActive) {
-          if (session.shape === 'polygon') {
+          if (session.shape === 'polygon' || session.shape === 'rectangle') {
             updateCursorPreview(event)
           }
           return true
@@ -527,33 +578,24 @@ export function createFloorBuildTool(options: {
       const shape = getShape()
 
       if (event.button === 0 && !options.isAltOverrideActive()) {
-        if (shape === 'rectangle' && leftDragState?.kind === 'rectangle' && leftDragState.pointerId === event.pointerId) {
-          leftDragState = null
-
-          if (!session || session.shape !== 'rectangle' || session.points.length < 1) {
+        if (shape === 'rectangle') {
+          if (!session || session.shape !== 'rectangle') {
             clearSession(true)
+            startRectangleDraft(event)
             return true
           }
-
-          if (!raycastPlacementPoint(event, groundPointerHelper)) {
-            clearSession(true)
+          const point = resolveRectanglePoint(event)
+          if (!point) {
             return true
           }
-
-          const raw = groundPointerHelper.clone()
-          const end = resolvePlacementPoint(event, raw)
-          end.y = session.points[0]?.y ?? end.y
-          session.previewEnd = end.clone()
+          session.previewEnd = point.clone()
           previewRenderer.markDirty()
-
-          const start = session.points[0]!
-          const rectangle = buildRotatedRectangleFromCorner(start, end, session.rectangleDirection)
-          if (!rectangle || rectangle.width * rectangle.depth <= 1e-6) {
-            clearSession(true)
-            return true
+          if (session.rectanglePhase === 'edgeDraft') {
+            return confirmRectangleBaseEdge()
           }
-
-          finalizeFromVertices(rectangle.corners)
+          if (session.rectanglePhase === 'rectangleDraft') {
+            return finalizeRectangle()
+          }
           return true
         }
 

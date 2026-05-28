@@ -16,6 +16,8 @@ export type RotatedRectangleBuild = {
   yaw: number
 }
 
+export type RectangleBuildPhase = 'idle' | 'edgeDraft' | 'rectangleDraft'
+
 export function resolveRectangleDirection(
   start: THREE.Vector3,
   end: THREE.Vector3,
@@ -65,6 +67,54 @@ export function buildRotatedRectangleFromCorner(
     || width <= MIN_RECT_SIZE
     || depth <= MIN_RECT_SIZE
   ) {
+    return null
+  }
+
+  const p1 = start.clone()
+  const p2 = start.clone().addScaledVector(axisWidth, signedWidth)
+  const p3 = p2.clone().addScaledVector(axisDepth, signedDepth)
+  const p4 = start.clone().addScaledVector(axisDepth, signedDepth)
+  const center = start.clone()
+    .addScaledVector(axisWidth, signedWidth * 0.5)
+    .addScaledVector(axisDepth, signedDepth * 0.5)
+
+  return {
+    corners: [p1, p2, p3, p4],
+    center,
+    axisWidth,
+    axisDepth,
+    signedWidth,
+    signedDepth,
+    width,
+    depth,
+    yaw: Math.atan2(-axisWidth.z, axisWidth.x),
+  }
+}
+
+export function buildRotatedRectangleFromEdge(
+  start: THREE.Vector3,
+  baseEdgeEnd: THREE.Vector3,
+  currentPoint: THREE.Vector3,
+): RotatedRectangleBuild | null {
+  const axisWidth = resolveRectangleDirection(start, baseEdgeEnd)
+  if (!axisWidth) {
+    return null
+  }
+
+  const baseDelta = baseEdgeEnd.clone().sub(start)
+  baseDelta.y = 0
+  const signedWidth = baseDelta.dot(axisWidth)
+  const width = Math.abs(signedWidth)
+  if (!Number.isFinite(signedWidth) || width <= MIN_RECT_SIZE) {
+    return null
+  }
+
+  const axisDepth = new THREE.Vector3(-axisWidth.z, 0, axisWidth.x)
+  const depthDelta = currentPoint.clone().sub(start)
+  depthDelta.y = 0
+  const signedDepth = depthDelta.dot(axisDepth)
+  const depth = Math.abs(signedDepth)
+  if (!Number.isFinite(signedDepth) || depth <= MIN_RECT_SIZE) {
     return null
   }
 

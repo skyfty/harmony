@@ -7,7 +7,7 @@ import {
   buildFloorCircleOrRegularPolygonPoints,
   type FloorPreviewSession,
 } from './FloorPreviewRenderer'
-import { buildRotatedRectangleFromCorner, resolveRectangleDragDirection } from './rotatedRectangleBuild'
+import { buildRotatedRectangleFromCorner, buildRotatedRectangleFromEdge, resolveRectangleDragDirection } from './rotatedRectangleBuild'
 import type { useSceneStore } from '@/stores/sceneStore'
 import type { LandformBuildShape } from '@/types/landform-build-shape'
 import { mergeUserDataWithDynamicMeshBuildShape } from '@/utils/dynamicMeshBuildShapeUserData'
@@ -40,7 +40,7 @@ type RightClickState = {
 
 type LeftDragState = {
   pointerId: number
-  kind: Exclude<LandformBuildShape, 'polygon'>
+  kind: Exclude<LandformBuildShape, 'polygon' | 'rectangle'>
 }
 
 type LeftClickState = {
@@ -185,6 +185,15 @@ export function createLandformBuildTool(options: {
     if (targetSession.shape === 'rectangle' && targetSession.previewEnd) {
       const start = targetSession.points[0]
       if (start) {
+        if (targetSession.rectanglePhase === 'edgeDraft') {
+          return [start.clone(), targetSession.previewEnd.clone()]
+        }
+        if (targetSession.rectanglePhase === 'rectangleDraft' && targetSession.baseEdgeEnd) {
+          const rectangle = buildRotatedRectangleFromEdge(start, targetSession.baseEdgeEnd, targetSession.previewEnd)
+          if (rectangle?.corners?.length) {
+            return rectangle.corners.map((point) => point.clone())
+          }
+        }
         const rectangle = buildRotatedRectangleFromCorner(start, targetSession.previewEnd, targetSession.rectangleDirection)
         if (rectangle?.corners?.length) {
           return rectangle.corners.map((point) => point.clone())
@@ -480,6 +489,8 @@ export function createLandformBuildTool(options: {
       shape: getShape(),
       points: [],
       previewEnd: null,
+      baseEdgeEnd: null,
+      rectanglePhase: 'idle',
       rectangleDirection: null,
       previewGroup: null,
       previewLineGroup: null,
@@ -516,8 +527,9 @@ export function createLandformBuildTool(options: {
     current.shape = 'rectangle'
     current.points = [start.clone()]
     current.previewEnd = start.clone()
+    current.baseEdgeEnd = null
+    current.rectanglePhase = 'edgeDraft'
     current.rectangleDirection = null
-    leftDragState = { pointerId: event.pointerId, kind: 'rectangle' }
     showLockedStartIndicator(start)
     previewRenderer.markDirty()
     return true
@@ -536,6 +548,8 @@ export function createLandformBuildTool(options: {
     current.shape = 'circle'
     current.points = [center.clone()]
     current.previewEnd = initialEnd
+    current.baseEdgeEnd = null
+    current.rectanglePhase = 'idle'
     current.rectangleDirection = null
     leftDragState = { pointerId: event.pointerId, kind: 'circle' }
     showLockedStartIndicator(center)
@@ -592,13 +606,6 @@ export function createLandformBuildTool(options: {
         next.copy(relativeSnapped)
         alignPointYToSession(next, session)
       }
-    }
-
-    if (session.shape === 'rectangle' && !session.rectangleDirection) {
-      const start = session.points[0] ?? next
-      const rawDirectionPoint = raw.clone()
-      alignPointYToSession(rawDirectionPoint, session)
-      session.rectangleDirection = resolveRectangleDragDirection(start, rawDirectionPoint)
     }
 
     const previous = session.previewEnd
@@ -711,6 +718,55 @@ export function createLandformBuildTool(options: {
     }
   }
 
+  const resolveRectanglePoint = (event: PointerEvent): THREE.Vector3 | null => {
+    if (!raycastPlacementPoint(event, groundPointerHelper)) {
+      return null
+    }
+    const point = resolvePlacementPoint(event, groundPointerHelper.clone())
+    alignPointYToSession(point, session)
+    return point
+  }
+
+  const confirmRectangleBaseEdge = (): boolean => {
+    if (!session || session.shape !== 'rectangle' || session.rectanglePhase !== 'edgeDraft') {
+      return false
+    }
+    const start = session.points[0]
+    const end = session.previewEnd
+    if (!start || !end) {
+      return false
+    }
+    const direction = resolveRectangleDragDirection(start, end)
+    if (!direction) {
+      return true
+    }
+    session.baseEdgeEnd = end.clone()
+    session.points = [start.clone(), end.clone()]
+    session.rectangleDirection = direction
+    session.rectanglePhase = 'rectangleDraft'
+    previewRenderer.markDirty()
+    return true
+  }
+
+  const finalizeRectangle = (): boolean => {
+    if (!session || session.shape !== 'rectangle' || session.rectanglePhase !== 'rectangleDraft') {
+      return false
+    }
+    const start = session.points[0]
+    const baseEdgeEnd = session.baseEdgeEnd
+    const previewEnd = session.previewEnd
+    if (!start || !baseEdgeEnd || !previewEnd) {
+      clearSession(true)
+      return true
+    }
+    const rectangle = buildRotatedRectangleFromEdge(start, baseEdgeEnd, previewEnd)
+    if (!rectangle || rectangle.width * rectangle.depth <= 1e-6) {
+      return true
+    }
+    finalizeFromVertices(rectangle.corners)
+    return true
+  }
+
   return {
     getSession: () => session,
     flushPreviewIfNeeded: (scene: THREE.Scene | null) => {
@@ -722,11 +778,6 @@ export function createLandformBuildTool(options: {
       }
       const shape = getShape()
       if (event.button === 0 && !options.isAltOverrideActive()) {
-        if (shape === 'rectangle') {
-          clearSession(true)
-          startRectangleDraft(event)
-          return false
-        }
         if (shape === 'circle') {
           clearSession(true)
           startCircleDraft(event)
@@ -766,7 +817,7 @@ export function createLandformBuildTool(options: {
       if (session && session.points.length > 0) {
         const isCameraNavActive = (event.buttons & 2) !== 0 || (event.buttons & 4) !== 0
         if (!isCameraNavActive) {
-          if (session.shape === 'polygon') {
+          if (session.shape === 'polygon' || session.shape === 'rectangle') {
             updateCursorPreview(event)
           }
           return true
@@ -780,27 +831,24 @@ export function createLandformBuildTool(options: {
       }
       const shape = getShape()
       if (event.button === 0 && !options.isAltOverrideActive()) {
-        if (shape === 'rectangle' && leftDragState?.kind === 'rectangle' && leftDragState.pointerId === event.pointerId) {
-          leftDragState = null
-          if (!session || session.shape !== 'rectangle' || session.points.length < 1) {
+        if (shape === 'rectangle') {
+          if (!session || session.shape !== 'rectangle') {
             clearSession(true)
+            startRectangleDraft(event)
             return true
           }
-          if (!raycastPlacementPoint(event, groundPointerHelper)) {
-            clearSession(true)
+          const point = resolveRectanglePoint(event)
+          if (!point) {
             return true
           }
-          const end = resolvePlacementPoint(event, groundPointerHelper.clone())
-          end.y = session.points[0]?.y ?? end.y
-          session.previewEnd = end.clone()
+          session.previewEnd = point.clone()
           previewRenderer.markDirty()
-          const start = session.points[0]!
-          const rectangle = buildRotatedRectangleFromCorner(start, end, session.rectangleDirection)
-          if (!rectangle || rectangle.width * rectangle.depth <= 1e-6) {
-            clearSession(true)
-            return true
+          if (session.rectanglePhase === 'edgeDraft') {
+            return confirmRectangleBaseEdge()
           }
-          finalizeFromVertices(rectangle.corners)
+          if (session.rectanglePhase === 'rectangleDraft') {
+            return finalizeRectangle()
+          }
           return true
         }
         if (shape === 'circle' && leftDragState?.kind === 'circle' && leftDragState.pointerId === event.pointerId) {
