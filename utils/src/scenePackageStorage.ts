@@ -1,3 +1,5 @@
+declare const wx: any;
+
 import {
   normalizeScenePackageCacheKey,
   resolveScenePackageCacheZipPath,
@@ -12,8 +14,7 @@ export type ScenePackagePointer =
   | { kind: 'idb'; ref: string };
 
 function isWeChatFileSystemAvailable(): boolean {
-  const globalAny = globalThis as any;
-  const wxAny = typeof globalAny.wx !== 'undefined' ? globalAny.wx : null;
+  const wxAny = typeof wx !== 'undefined' ? wx : null;
   return Boolean(wxAny && typeof wxAny.getFileSystemManager === 'function' && typeof wxAny?.env?.USER_DATA_PATH === 'string');
 }
 

@@ -1,5 +1,7 @@
 import { getHarmonyRuntime } from './runtimeConfig';
 
+declare const uni: any;
+
 const TOKEN_STORAGE_KEY = 'miniapp:authToken';
 const DEFAULT_DEV_API_BASE_URL = 'http://localhost:4000/api/mini';
 const DEFAULT_PROD_API_BASE_URL = 'https://v.touchmagic.cn/api/mini';
@@ -130,11 +132,9 @@ export function getApiOrigin(): string {
 
 export function getAuthToken(): string | undefined {
   try {
-    const globalAny = globalThis as any;
-    const token =
-      typeof globalAny.uni !== 'undefined' && typeof globalAny.uni.getStorageSync === 'function'
-        ? globalAny.uni.getStorageSync(TOKEN_STORAGE_KEY)
-        : undefined;
+    const token = typeof uni !== 'undefined' && typeof uni.getStorageSync === 'function'
+      ? uni.getStorageSync(TOKEN_STORAGE_KEY)
+      : undefined;
     return typeof token === 'string' && token.length ? token : undefined;
   } catch {
     return undefined;
@@ -143,9 +143,8 @@ export function getAuthToken(): string | undefined {
 
 export function setAuthToken(token: string): void {
   try {
-    const globalAny = globalThis as any;
-    if (typeof globalAny.uni !== 'undefined' && typeof globalAny.uni.setStorageSync === 'function') {
-      globalAny.uni.setStorageSync(TOKEN_STORAGE_KEY, token);
+    if (typeof uni !== 'undefined' && typeof uni.setStorageSync === 'function') {
+      uni.setStorageSync(TOKEN_STORAGE_KEY, token);
     }
   } catch {
     // ignore
@@ -154,9 +153,8 @@ export function setAuthToken(token: string): void {
 
 export function clearAuthToken(): void {
   try {
-    const globalAny = globalThis as any;
-    if (typeof globalAny.uni !== 'undefined' && typeof globalAny.uni.removeStorageSync === 'function') {
-      globalAny.uni.removeStorageSync(TOKEN_STORAGE_KEY);
+    if (typeof uni !== 'undefined' && typeof uni.removeStorageSync === 'function') {
+      uni.removeStorageSync(TOKEN_STORAGE_KEY);
     }
   } catch {
     // ignore
@@ -168,7 +166,6 @@ async function requestWithUni(
   options: { method?: string; data?: any; timeout?: number; headers?: Record<string, string> } = {},
 ) {
   return new Promise<MiniRequestResponse>((resolve, reject) => {
-    const globalAny = globalThis as any;
     const req: any = {
       url,
       method: options.method ?? 'GET',
@@ -180,7 +177,7 @@ async function requestWithUni(
     if (options.data !== undefined) {
       req.data = options.data;
     }
-    globalAny.uni.request(req);
+    uni.request(req);
   });
 }
 
@@ -198,8 +195,7 @@ export async function httpRequest<T>(url: string, options: HttpRequestOptions = 
   const requestData = getRequestData(options.body);
   const headers = buildHeaders(options);
 
-  const globalAny = globalThis as any;
-  if (typeof globalAny.uni !== 'undefined' && typeof globalAny.uni.request === 'function') {
+  if (typeof uni !== 'undefined' && typeof uni.request === 'function') {
     const response = await requestWithUni(full, {
       method,
       ...(requestData === undefined ? {} : { data: requestData }),
@@ -215,6 +211,10 @@ export async function httpRequest<T>(url: string, options: HttpRequestOptions = 
 
     const message = typeof (data as any)?.message === 'string' ? (data as any).message : `HTTP ${statusCode}`;
     throw new HttpError(message, statusCode, data);
+  }
+
+  if (typeof fetch !== 'function') {
+    throw new HttpError('No request transport is available in this runtime', 0, null);
   }
 
   const resp = await fetch(full, {

@@ -1,6 +1,8 @@
 import { getApiOrigin, getAuthToken, getBaseUrl, HttpError, httpRequest } from './http';
 import type { HttpRequestOptions } from './http';
 
+declare const uni: any;
+
 type RequestErrorKind = 'auth' | 'network' | 'server' | 'business' | 'unknown';
 
 type MiniApiEnvelope<T> = {
@@ -227,8 +229,7 @@ async function requestWithUni<R>(target: string, options: HttpRequestOptions): P
     ...(authHeader as Record<string, string>),
   };
   return await new Promise<R>((resolve, reject) => {
-    const globalAny = globalThis as any;
-    globalAny.uni.request({
+    uni.request({
       url: `${target}${buildQueryString(options.query)}`,
       method,
       data: options.body as any,
@@ -283,14 +284,16 @@ async function requestWithFetch<R>(target: string, options: HttpRequestOptions):
 }
 
 async function requestRaw<R>(target: string, options: HttpRequestOptions): Promise<R> {
-  const globalAny = globalThis as any;
-  if (typeof globalAny.uni !== 'undefined' && typeof globalAny.uni.request === 'function') {
+  if (typeof uni !== 'undefined' && typeof uni.request === 'function') {
     return await requestWithUni<R>(target, options);
   }
 
   try {
     return await httpRequest<R>(target, options);
   } catch {
+    if (typeof fetch !== 'function') {
+      throw new MiniApiError('No request transport is available', { kind: 'network' });
+    }
     return await requestWithFetch<R>(target, options);
   }
 }
