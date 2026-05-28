@@ -36,6 +36,7 @@ import PreloadablePanel from '@/components/inspector/PreloadablePanel.vue'
 import InstanceLayoutPanel from '@/components/inspector/InstanceLayoutPanel.vue'
 import PlanningImagesPanel from '@/components/inspector/PlanningImagesPanel.vue'
 import NominatePanel from '@/components/inspector/NominatePanel.vue'
+import CouponPanel from '@/components/inspector/CouponPanel.vue'
 import { useSceneStore, GROUND_NODE_ID, ENVIRONMENT_NODE_ID,MULTIUSER_NODE_ID,PROTAGONIST_NODE_ID } from '@/stores/sceneStore'
 import { getNodeIcon } from '@/types/node-icons'
 import { isGeometryType, type BehaviorEventType, type SceneBehavior, type SceneNodeComponentState } from '@schema/core'
@@ -54,6 +55,7 @@ import {
   PROTAGONIST_COMPONENT_TYPE,
   CHARACTER_CONTROLLER_COMPONENT_TYPE,
   PRELOADABLE_COMPONENT_TYPE,
+  COUPON_COMPONENT_TYPE,
   ONLINE_COMPONENT_TYPE,
   PLANNING_IMAGES_COMPONENT_TYPE,
   RIGIDBODY_COMPONENT_TYPE,
@@ -601,6 +603,7 @@ watch(
               <ProtagonistPanel v-else-if="component.type === PROTAGONIST_COMPONENT_TYPE" />
               <CharacterControllerPanel v-else-if="component.type === CHARACTER_CONTROLLER_COMPONENT_TYPE" />
               <PreloadablePanel v-else-if="component.type === PRELOADABLE_COMPONENT_TYPE" />
+              <CouponPanel v-else-if="component.type === COUPON_COMPONENT_TYPE" />
               <PlanningImagesPanel v-else-if="component.type === PLANNING_IMAGES_COMPONENT_TYPE" />
               <WarpGatePanel v-else-if="component.type === WARP_GATE_COMPONENT_TYPE" />
               <EffectPanel v-else-if="component.type === EFFECT_COMPONENT_TYPE" />
