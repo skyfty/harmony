@@ -34,6 +34,7 @@ export type LandformVertexRenderer = {
     resolveRuntimeObject: (nodeId: string) => THREE.Object3D | null
     buildShape?: LandformBuildShape | null
     previewPoints?: Array<[number, number]>
+    previewVertexHeights?: number[]
   }): void
   forceRebuild(options: {
     active: boolean
@@ -43,6 +44,7 @@ export type LandformVertexRenderer = {
     resolveRuntimeObject: (nodeId: string) => THREE.Object3D | null
     buildShape?: LandformBuildShape | null
     previewPoints?: Array<[number, number]>
+    previewVertexHeights?: number[]
   }): void
   pick(options: {
     camera: THREE.Camera | null
@@ -64,8 +66,12 @@ const LANDFORM_VERTEX_HANDLE_SCREEN_DIAMETER_PX = 48
 const LANDFORM_VERTEX_HANDLE_Y_OFFSET = 0.02
 const LANDFORM_VERTEX_HANDLE_COLOR = 0xff4081
 
-function computeLandformVertexHandleSignature(points: Array<[number, number]>, buildShape: LandformBuildShape | null | undefined): string {
-  return hashString(stableSerialize([buildShape ?? null, points]))
+function computeLandformVertexHandleSignature(
+  points: Array<[number, number]>,
+  vertexHeights: number[],
+  buildShape: LandformBuildShape | null | undefined,
+): string {
+  return hashString(stableSerialize([buildShape ?? null, points, vertexHeights]))
 }
 
 function disposeGroup(group: THREE.Group) {
@@ -82,6 +88,19 @@ function sanitizePreviewPoints(points: Array<[number, number]> | undefined | nul
   return points
     .map(([x, z]) => [Number(x), Number(z)] as [number, number])
     .filter(([x, z]) => Number.isFinite(x) && Number.isFinite(z))
+}
+
+function sanitizeVertexHeights(vertexHeights: number[] | undefined | null, vertexCount: number): number[] {
+  if (vertexCount <= 0) {
+    return []
+  }
+  const source = Array.isArray(vertexHeights) ? vertexHeights : []
+  const result: number[] = []
+  for (let index = 0; index < vertexCount; index += 1) {
+    const value = Number(source[index])
+    result.push(Number.isFinite(value) ? value : 0)
+  }
+  return result
 }
 
 function computeCircleFromPoints(points: Array<[number, number]>): { centerX: number; centerZ: number; radius: number } | null {
@@ -171,6 +190,7 @@ export function createLandformVertexRenderer(): LandformVertexRenderer {
     resolveRuntimeObject: (nodeId: string) => THREE.Object3D | null
     buildShape?: LandformBuildShape | null
     previewPoints?: Array<[number, number]>
+    previewVertexHeights?: number[]
     force?: boolean
   }) {
     const selectedNodeId = options.selectedNodeId
@@ -206,13 +226,16 @@ export function createLandformVertexRenderer(): LandformVertexRenderer {
           .map((entry) => [Number(entry?.[0]), Number(entry?.[1])] as [number, number])
           .filter(([x, z]) => Number.isFinite(x) && Number.isFinite(z))
         : [])
+    const sourceVertexHeights = usePreviewPoints
+      ? sanitizeVertexHeights(options.previewVertexHeights, sourcePoints.length)
+      : sanitizeVertexHeights(Array.isArray(mesh?.vertexHeights) ? mesh.vertexHeights : undefined, sourcePoints.length)
 
     if (sourcePoints.length < 3) {
       clear()
       return
     }
 
-    const signature = computeLandformVertexHandleSignature(sourcePoints, buildShape)
+    const signature = computeLandformVertexHandleSignature(sourcePoints, sourceVertexHeights, buildShape)
     if (!options.force && state && state.nodeId === selectedNodeId && state.signature === signature) {
       if (!runtimeObject.children.includes(state.group)) {
         runtimeObject.add(state.group)
@@ -230,13 +253,18 @@ export function createLandformVertexRenderer(): LandformVertexRenderer {
       ? (() => {
           const circle = computeCircleFromPoints(sourcePoints)
           if (!circle) {
-            return [] as Array<{ x: number; z: number; index: number }>
+            return [] as Array<{ x: number; z: number; y: number; index: number }>
           }
-          return [{ x: circle.centerX + circle.radius, z: circle.centerZ, index: 0 }]
+          return [{
+            x: circle.centerX + circle.radius,
+            z: circle.centerZ,
+            y: sourceVertexHeights[0] ?? 0,
+            index: 0,
+          }]
         })()
-      : sourcePoints.map(([x, z], index) => ({ x, z, index }))
+      : sourcePoints.map(([x, z], index) => ({ x, z, y: sourceVertexHeights[index] ?? 0, index }))
 
-    handlePoints.forEach(({ x, z, index }) => {
+    handlePoints.forEach(({ x, z, y, index }) => {
       const gizmo = createEndpointGizmoObject({
         axes: buildShape === 'circle' ? { x: false, y: false, z: false } : { x: true, y: false, z: true },
         showNegativeAxes: buildShape === 'circle' ? false : true,
@@ -249,7 +277,8 @@ export function createLandformVertexRenderer(): LandformVertexRenderer {
 
       const handle = gizmo.root
       handle.name = buildShape === 'circle' ? 'LandformCircleRadiusHandle' : `LandformVertexHandle_${index + 1}`
-      handle.position.set(x, LANDFORM_VERTEX_HANDLE_Y_OFFSET, z)
+      const endpointLocalY = Number.isFinite(y) ? y : 0
+      handle.position.set(x, endpointLocalY + LANDFORM_VERTEX_HANDLE_Y_OFFSET, z)
       handle.layers.enableAll()
       handle.userData.isLandformVertexHandle = true
       handle.userData.nodeId = selectedNodeId
@@ -258,6 +287,10 @@ export function createLandformVertexRenderer(): LandformVertexRenderer {
       handle.userData.baseDiameter = gizmo.baseDiameter
       handle.userData.endpointGizmo = gizmo
       handle.userData.handleKey = `${selectedNodeId}:${index}`
+      handle.userData.anchorLocalX = x
+      handle.userData.anchorLocalY = endpointLocalY
+      handle.userData.anchorLocalZ = z
+      handle.userData.endpointLocalY = endpointLocalY
       handle.userData.yOffset = LANDFORM_VERTEX_HANDLE_Y_OFFSET
 
       handle.traverse((child) => {

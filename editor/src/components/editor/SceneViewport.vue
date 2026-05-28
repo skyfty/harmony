@@ -6373,7 +6373,11 @@ function setActiveFloorCircleHandle(active: { nodeId: string; circleKind: 'cente
   floorCircleHandleRenderer.setActiveHandle(active as any)
 }
 
-function ensureLandformVertexHandlesForSelectedNode(options?: { force?: boolean; previewPoints?: Array<[number, number]> }) {
+function ensureLandformVertexHandlesForSelectedNode(options?: {
+  force?: boolean
+  previewPoints?: Array<[number, number]>
+  previewVertexHeights?: number[]
+}) {
   const selectedId = isSelectedLandformEditMode() ? getPrimarySelectedNodeId() : null
   const active = activeBuildTool.value === 'landform' && isSelectedLandformEditMode() && !landformBuildTool.getSession()
   const buildShape = selectedId && isSelectedLandformCircleEditMode()
@@ -6390,6 +6394,7 @@ function ensureLandformVertexHandlesForSelectedNode(options?: { force?: boolean;
     resolveRuntimeObject: (nodeId: string) => objectMap.get(nodeId) ?? null,
     buildShape,
     previewPoints: options?.previewPoints,
+    previewVertexHeights: options?.previewVertexHeights,
   }
   if (options?.force) {
     landformVertexRenderer.forceRebuild(common)
@@ -7179,9 +7184,9 @@ function commitLandformContourNode(nodeId: string, points: Array<[number, number
   return Boolean(updated)
 }
 
-function previewLandformContourNode(nodeId: string, points: Array<[number, number]>): boolean {
+function previewLandformContourNode(nodeId: string, points: Array<[number, number]>): LandformDynamicMesh | null {
   if (points.length < 3) {
-    return false
+    return null
   }
   return sceneStore.previewLandformSurfaceMeshNode({
     nodeId,
@@ -16991,8 +16996,13 @@ function handlePointerMove(event: PointerEvent) {
     }
     nextPoints[state.vertexIndex] = [local.x, local.z]
     state.workingPoints = nextPoints
-    if (previewLandformContourNode(state.nodeId, nextPoints)) {
-      ensureLandformVertexHandlesForSelectedNode({ force: true, previewPoints: nextPoints })
+    const previewMesh = previewLandformContourNode(state.nodeId, nextPoints)
+    if (previewMesh) {
+      ensureLandformVertexHandlesForSelectedNode({
+        force: true,
+        previewPoints: nextPoints,
+        previewVertexHeights: Array.isArray(previewMesh.vertexHeights) ? previewMesh.vertexHeights : [],
+      })
     }
     return
   }
@@ -17290,8 +17300,13 @@ function handlePointerMove(event: PointerEvent) {
       segments: state.segments,
     })
     state.workingPoints = nextPoints
-    if (previewLandformContourNode(state.nodeId, nextPoints)) {
-      ensureLandformVertexHandlesForSelectedNode({ force: true, previewPoints: nextPoints })
+    const previewMesh = previewLandformContourNode(state.nodeId, nextPoints)
+    if (previewMesh) {
+      ensureLandformVertexHandlesForSelectedNode({
+        force: true,
+        previewPoints: nextPoints,
+        previewVertexHeights: Array.isArray(previewMesh.vertexHeights) ? previewMesh.vertexHeights : [],
+      })
     }
     return
   }

@@ -16141,15 +16141,15 @@ export const useSceneStore = defineStore('scene', {
     previewLandformSurfaceMeshNode(payload: {
       nodeId: string
       localPoints: Array<[number, number]>
-    }): boolean {
+    }): LandformDynamicMesh | null {
       const target = findNodeById(this.nodes, payload.nodeId)
       if (!target || target.dynamicMesh?.type !== 'Landform') {
-        return false
+        return null
       }
 
       const runtime = getRuntimeObject(payload.nodeId)
       if (!runtime) {
-        return false
+        return null
       }
 
       const groundNode = resolveGroundNodeForHeightSampling(this.nodes)
@@ -16175,14 +16175,14 @@ export const useSceneStore = defineStore('scene', {
         runtime,
       )
       if (!previewMesh) {
-        return false
+        return null
       }
 
       updateLandformGroup(runtime, {
         ...previewMesh,
         materialConfigId: existingMesh.materialConfigId ?? previewMesh.materialConfigId ?? null,
       })
-      return true
+      return previewMesh
     },
 
     restoreLandformSurfaceMeshRuntime(nodeId: string): boolean {
