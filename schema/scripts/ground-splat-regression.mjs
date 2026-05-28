@@ -9,8 +9,8 @@ const groundMeshSource = fs.readFileSync(groundMeshPath, 'utf8')
 
 assert.match(
   coreSource,
-  /export interface GroundSurfaceChunkLayerRef \{[\s\S]*albedoTextureSettings\?: SceneMaterialTextureSettings \| null[\s\S]*maskChannel: number[\s\S]*\}/,
-  'ground surface chunk layers should preserve full albedo texture settings and mask channel metadata',
+  /export interface GroundSurfaceChunkLayerRef \{[\s\S]*albedoTextureSettings\?: SceneMaterialTextureSettings \| null[\s\S]*normalSource\?: string \| null[\s\S]*normalTextureSettings\?: SceneMaterialTextureSettings \| null[\s\S]*maskChannel: number[\s\S]*\}/,
+  'ground surface chunk layers should preserve albedo/normal texture settings and mask channel metadata',
 )
 
 assert.match(
@@ -29,6 +29,24 @@ assert.match(
   groundMeshSource,
   /function ensureGroundSplatShaderHooks\([\s\S]*groundSplatMask0[\s\S]*groundSplatLayerMap\$\{index\}/,
   'ground mesh should install shader hooks for splat masks and layer textures',
+)
+
+assert.match(
+  groundMeshSource,
+  /groundSplatLayerNormalMap\$\{index\}[\s\S]*#ifdef USE_NORMALMAP_TANGENTSPACE[\s\S]*groundSplatNormalMixed/,
+  'ground mesh should keep layer normal-map support behind the tangent-space normal path',
+)
+
+assert.match(
+  groundMeshSource,
+  /const GROUND_SPLAT_MAX_LAYERS = 4/,
+  'ground splat runtime should stay limited to one RGBA mask / four layers',
+)
+
+assert.match(
+  groundMeshSource,
+  /export type GroundSplatRuntimeProfile = \{[\s\S]*maxLayers\?: number \| null[\s\S]*enableLayerNormalMap\?: boolean \| null[\s\S]*\}/,
+  'ground splat runtime should expose a lightweight profile for mini-program tuning',
 )
 
 console.log('ground-splat regression checks passed')

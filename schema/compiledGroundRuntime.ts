@@ -8,6 +8,7 @@ import {
 import type { GroundDynamicMesh } from './core'
 import {
   applyGroundTextureToRuntimeChunkMesh,
+  type GroundSplatRuntimeProfile,
   isGroundChunkTextureReady,
   onGroundChunkTextureReady,
 } from './groundMesh'
@@ -46,6 +47,7 @@ type SyncCompiledGroundRenderTilesParams = {
   retainRadiusTiles?: number
   streamingMode?: 'runtime-camera' | 'editor-overview'
   tileFrustumCulled?: boolean
+  groundSplatRuntimeProfile?: GroundSplatRuntimeProfile | null
 }
 
 const renderRuntimeMap = new WeakMap<THREE.Object3D, CompiledGroundRenderRuntime>()
@@ -733,6 +735,7 @@ export function syncCompiledGroundRenderTiles(params: SyncCompiledGroundRenderTi
           baseMaterial: material,
           compiledGroundTileKey: record.key,
           rootUserData: (params.groundObject.userData as Record<string, unknown> | undefined) ?? null,
+          groundSplatRuntimeProfile: params.groundSplatRuntimeProfile ?? null,
         })
         if (!isGroundChunkTextureReady(mesh)) {
           onGroundChunkTextureReady(mesh, () => {

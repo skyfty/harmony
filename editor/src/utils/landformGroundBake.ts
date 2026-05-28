@@ -48,6 +48,11 @@ type LandformBakeEntry = {
   worldSurfaceSource: 'ground-uv' | 'transformed' | 'transformed-infinite'
 }
 
+type LandformFeatherSettings = {
+  enabled: boolean
+  width: number
+}
+
 type LoadedBakedImage = {
   source: CanvasImageSource
   imageData: ImageDataSource
@@ -55,14 +60,25 @@ type LoadedBakedImage = {
 
 export type LandformGroundBakeOptions = {
   maxTextureSize?: number
+  maxSplatLayers?: number
   debugBaseTextureOnly?: boolean
 }
 
 const GROUNDSPLAT_DEBUG_TINT = 'rgba(255, 64, 160, 0.72)'
 const GROUNDSPLAT_DEBUG_TINT_ALPHA = 0.72
+void GROUNDSPLAT_DEBUG_TINT
+void GROUNDSPLAT_DEBUG_TINT_ALPHA
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value))
+}
+
+function smoothstep(edge0: number, edge1: number, value: number): number {
+  if (edge0 === edge1) {
+    return value < edge0 ? 0 : 1
+  }
+  const t = clamp((value - edge0) / (edge1 - edge0), 0, 1)
+  return t * t * (3 - 2 * t)
 }
 
 function createCanvas(width: number, height: number): { canvas: CanvasLike; context: Canvas2DContext } | null {
@@ -230,6 +246,110 @@ function drawTriangleMask(
   context.closePath()
   context.fill()
   context.restore()
+}
+
+function resolveLayerFeatherSettings(entry: LandformBakeEntry): LandformFeatherSettings {
+  const landformMesh = entry.node.dynamicMesh as LandformDynamicMesh | null | undefined
+  const enabled = typeof entry.layer.enableFeather === 'boolean'
+    ? entry.layer.enableFeather
+    : Boolean(landformMesh?.enableFeather)
+  const rawWidth = Number.isFinite(entry.layer.feather)
+    ? Number(entry.layer.feather)
+    : Number(landformMesh?.feather ?? 0)
+  return {
+    enabled,
+    width: Number.isFinite(rawWidth) ? Math.max(0, rawWidth) : 0,
+  }
+}
+
+function computeLandformEntryMaxFeatherWidth(entry: LandformBakeEntry): number {
+  const feather = resolveLayerFeatherSettings(entry)
+  return feather.enabled ? feather.width : 0
+}
+
+function expandWorldRect(rect: WorldRect, amount: number): WorldRect {
+  const safeAmount = Number.isFinite(amount) ? Math.max(0, amount) : 0
+  if (safeAmount <= 0) {
+    return rect
+  }
+  return {
+    minX: rect.minX - safeAmount,
+    maxX: rect.maxX + safeAmount,
+    minZ: rect.minZ - safeAmount,
+    maxZ: rect.maxZ + safeAmount,
+  }
+}
+
+function softenMaskImageData(
+  source: ImageData,
+  featherPixels: number,
+  opacity: number,
+): ImageData {
+  const width = Math.max(1, source.width)
+  const height = Math.max(1, source.height)
+  const alphaScale = clamp(opacity, 0, 1)
+  const out = new ImageData(width, height)
+  const sourceData = source.data
+  const outData = out.data
+  const safeFeatherPixels = Number.isFinite(featherPixels) ? Math.max(0, featherPixels) : 0
+  if (safeFeatherPixels <= 0.001) {
+    for (let index = 0; index < width * height; index += 1) {
+      const offset = index * 4
+      const alpha = (sourceData[offset + 3] ?? 0) / 255
+      outData[offset] = 255
+      outData[offset + 1] = 255
+      outData[offset + 2] = 255
+      outData[offset + 3] = Math.round(clamp(alpha * alphaScale, 0, 1) * 255)
+    }
+    return out
+  }
+
+  const pixelCount = width * height
+  const distances = new Float32Array(pixelCount)
+  const maxDistance = width + height + safeFeatherPixels + 8
+  for (let index = 0; index < pixelCount; index += 1) {
+    const alpha = sourceData[index * 4 + 3] ?? 0
+    distances[index] = alpha > 0 ? maxDistance : 0
+  }
+
+  const diagonalCost = Math.SQRT2
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const index = y * width + x
+      let best = distances[index]!
+      if (x > 0) best = Math.min(best, distances[index - 1]! + 1)
+      if (y > 0) best = Math.min(best, distances[index - width]! + 1)
+      if (x > 0 && y > 0) best = Math.min(best, distances[index - width - 1]! + diagonalCost)
+      if (x + 1 < width && y > 0) best = Math.min(best, distances[index - width + 1]! + diagonalCost)
+      distances[index] = best
+    }
+  }
+  for (let y = height - 1; y >= 0; y -= 1) {
+    for (let x = width - 1; x >= 0; x -= 1) {
+      const index = y * width + x
+      let best = distances[index]!
+      if (x + 1 < width) best = Math.min(best, distances[index + 1]! + 1)
+      if (y + 1 < height) best = Math.min(best, distances[index + width]! + 1)
+      if (x + 1 < width && y + 1 < height) best = Math.min(best, distances[index + width + 1]! + diagonalCost)
+      if (x > 0 && y + 1 < height) best = Math.min(best, distances[index + width - 1]! + diagonalCost)
+      distances[index] = best
+    }
+  }
+
+  for (let index = 0; index < pixelCount; index += 1) {
+    const offset = index * 4
+    const sourceAlpha = (sourceData[offset + 3] ?? 0) / 255
+    const distance = distances[index]!
+    const featherWeight = sourceAlpha > 0
+      ? smoothstep(0, safeFeatherPixels, Math.max(0, distance - 0.5 + sourceAlpha * 0.5))
+      : 0
+    const alpha = clamp(sourceAlpha * featherWeight * alphaScale, 0, 1)
+    outData[offset] = 255
+    outData[offset + 1] = 255
+    outData[offset + 2] = 255
+    outData[offset + 3] = Math.round(alpha * 255)
+  }
+  return out
 }
 
 function computeTriangleBounds(points: Array<{ x: number; y: number }>): { minX: number; minY: number; maxX: number; maxY: number } | null {
@@ -466,6 +586,10 @@ async function paintGroundMaterialBaseIntoChunk(
     paintWorldAlignedTextureIntoRect(draw.normal, loadedNormalTexture, chunkWorldRect, sceneWorldBounds, size.width, size.height, normalTextureRef)
   }
 }
+void getLayerTileSizePixels
+void paintTiledTextureIntoTriangle
+void resolvePrimaryMaterialProps
+void paintGroundMaterialBaseIntoChunk
 
 type LandformSurfaceLayerLike = {
   id: string
@@ -1223,8 +1347,19 @@ function collectLandformBakeAffectedChunkKeys(
     if (!Number.isFinite(minX) || !Number.isFinite(maxX) || !Number.isFinite(minZ) || !Number.isFinite(maxZ)) {
       continue
     }
-    const minCoord = resolveGroundChunkCoordFromWorldPosition(minX, minZ, chunkSizeMeters)
-    const maxCoord = resolveGroundChunkCoordFromWorldPosition(maxX - maxEdgeEpsilon, maxZ - maxEdgeEpsilon, chunkSizeMeters)
+    const featherWidth = computeLandformEntryMaxFeatherWidth(entry)
+    const queryMinX = minX - featherWidth
+    const queryMaxX = maxX + featherWidth
+    const queryMinZ = minZ - featherWidth
+    const queryMaxZ = maxZ + featherWidth
+    const expandedEntryBounds = {
+      minX: queryMinX,
+      maxX: queryMaxX,
+      minZ: queryMinZ,
+      maxZ: queryMaxZ,
+    }
+    const minCoord = resolveGroundChunkCoordFromWorldPosition(queryMinX, queryMinZ, chunkSizeMeters)
+    const maxCoord = resolveGroundChunkCoordFromWorldPosition(queryMaxX - maxEdgeEpsilon, queryMaxZ - maxEdgeEpsilon, chunkSizeMeters)
     const minChunkRow = Math.min(minCoord.chunkZ, maxCoord.chunkZ)
     const maxChunkRow = Math.max(minCoord.chunkZ, maxCoord.chunkZ)
     const minChunkColumn = Math.min(minCoord.chunkX, maxCoord.chunkX)
@@ -1235,7 +1370,11 @@ function collectLandformBakeAffectedChunkKeys(
         if (!chunkRect) {
           continue
         }
-        if (geometries.some((geometry) => landformIntersectsChunk(geometry.vertices, geometry.indices, chunkRect))) {
+        if (
+          rangesOverlap(chunkRect.minX, chunkRect.maxX, expandedEntryBounds.minX, expandedEntryBounds.maxX)
+          && rangesOverlap(chunkRect.minZ, chunkRect.maxZ, expandedEntryBounds.minZ, expandedEntryBounds.maxZ)
+          && geometries.some((geometry) => landformIntersectsChunk(geometry.vertices, geometry.indices, expandWorldRect(chunkRect, featherWidth)))
+        ) {
           affectedChunkKeys.add(resolveChunkKey(chunkRow, chunkColumn))
         }
       }
@@ -1300,7 +1439,6 @@ export async function bakeLandformGroundSurfaceChunks(
   // 2. 找到这些 landform 实际覆盖到哪些 ground chunk
   // 3. 逐块把 landform 图层画进离屏 canvas
   // 4. 把 mask 通道重新打包成最终可给 shader 用的纹理
-  const groundNode = findGroundNode(scene.nodes ?? [])
   const landformNodes = getGroundLandformNodes(scene.nodes)
   if (!landformNodes.length) {
     // 场景里根本没有 landform，就不需要烘焙任何地表图。
@@ -1339,7 +1477,6 @@ export async function bakeLandformGroundSurfaceChunks(
   // nextChunks 就是最终返回的结果：chunkKey -> GroundSurfaceChunkTextureRef。
   // 这些缓存用来避免同一张贴图反复解码/转 dataURL。
   const nextChunks: GroundSurfaceChunkTextureMap = {}
-  const layerTextureCache = new Map<string, Promise<LoadedBakedImage | null>>()
   const layerTextureRuntimeSourceCache = new Map<string, Promise<string | null>>()
 
   // 逐个处理受影响的 chunk。
@@ -1380,30 +1517,35 @@ export async function bakeLandformGroundSurfaceChunks(
     }
     const chunkLandforms = landformEntries.filter((entry) => {
       const geometries = collectLandformIntersectionGeometries(entry)
-      return geometries.some((geometry) => landformIntersectsChunk(geometry.vertices, geometry.indices, chunkBounds))
+      const featherWidth = computeLandformEntryMaxFeatherWidth(entry)
+      const queryBounds = expandWorldRect(chunkBounds, featherWidth)
+      return geometries.some((geometry) => landformIntersectsChunk(geometry.vertices, geometry.indices, queryBounds))
     })
     if (!chunkLandforms.length) {
       continue
     }
 
-    // 按层级顺序排序，并且最多取 8 层。
-    // 原因是后面 mask 只打包到 8 个通道里：RGBA + RGBA = 8 个通道。
+    // 按层级顺序排序，并且最多取 4 层。
+    // 小程序运行时只采样一张 RGBA mask，避免额外纹理采样和 shader 分支。
+    const maxSplatLayers = Math.max(1, Math.min(4, Math.trunc(Number(options.maxSplatLayers) || 4)))
     const chunkLayers = chunkLandforms
       .slice()
       .sort((a, b) => a.order - b.order || a.nodeOrder - b.nodeOrder || a.layer.id.localeCompare(b.layer.id))
-      .slice(0, 8)
+      .slice(0, maxSplatLayers)
 
     // feather 是图层边缘柔化效果。
     // 它最终会影响 mask alpha，从而让图层在边缘过渡更自然。
-    const activeLayerCount = Math.min(8, Math.max(1, chunkLayers.length))
+    const activeLayerCount = Math.min(4, Math.max(1, chunkLayers.length))
     const chunkSurfaceLayers: GroundSurfaceChunkLayerRef[] = []
 
     // 为每个图层准备一张独立 mask 画布。
-    // 这些 mask 最后会被打包进两张 RGBA 纹理，供 shader 读取每层权重。
+    // 这些 mask 最后会被打包进一张 RGBA 纹理，供 shader 读取每层权重。
     const maskCanvases = createMaskCanvasSet(size, activeLayerCount)
     if (!maskCanvases) {
       continue
     }
+    const layerFeatherSettings: LandformFeatherSettings[] = []
+    let chunkPaintedTriangleCount = 0
 
     // 逐图层烘焙。
     for (let entryIndex = 0; entryIndex < chunkLayers.length; entryIndex += 1) {
@@ -1429,22 +1571,13 @@ export async function bakeLandformGroundSurfaceChunks(
 
       // feather 既可以来自图层自身，也可以继承 landform 的全局设置。
       // 它用于让图层边缘不要过于生硬。
-      const landformMesh = landform.dynamicMesh as LandformDynamicMesh | null | undefined
-      const layerFeatherEnabled = typeof targetLayer.enableFeather === 'boolean'
-        ? targetLayer.enableFeather
-        : Boolean(landformMesh?.enableFeather)
-      const layerFeatherWidth = Number.isFinite(targetLayer.feather)
-        ? Number(targetLayer.feather)
-        : Number(landformMesh?.feather ?? 0)
-
-      // feather 越大，边缘越“软”，这里把它换算成 0~0.65 的额外 alpha 折减。
-      const featherRatio = clamp(layerFeatherWidth > 0 ? layerFeatherWidth / Math.max(chunkWidth, chunkDepth) : 0, 0, 0.65)
-      const alpha = clamp(layerFeatherEnabled ? Math.max(0.45, 1 - featherRatio * 0.55) : 1, 0, 1)
+      const featherSettings = resolveLayerFeatherSettings(layerEntry)
 
       // 图层顺序对应 mask 通道序号。
-      // 第 0~3 层进 splat0，第 4~7 层进 splat1。
+      // 第 0~3 层进唯一的 splat0。
       const layerIndex = Math.min(maskCanvases.length - 1, entryIndex)
       const maskContext = maskCanvases[layerIndex]?.context ?? null
+      layerFeatherSettings[layerIndex] = featherSettings
 
       // 这层最终用于 shader 的主纹理来源。
       // 优先取 albedo 贴图；如果没有，则尝试 layer 自己声明的 textureAssetIds。
@@ -1452,6 +1585,10 @@ export async function bakeLandformGroundSurfaceChunks(
         ?? (Array.isArray(targetLayer?.textureAssetIds) ? targetLayer.textureAssetIds[0] ?? null : null)
       const primaryTextureRuntimeSource = primaryTextureAssetId
         ? await resolveLayerTextureRuntimeSource(scene, primaryTextureAssetId, layerTextureRuntimeSourceCache)
+        : null
+      const normalTextureAssetId = resolveTextureAssetId(normalTextureRef)
+      const normalTextureRuntimeSource = normalTextureAssetId
+        ? await resolveLayerTextureRuntimeSource(scene, normalTextureAssetId, layerTextureRuntimeSourceCache)
         : null
 
       // UV scale 决定这层在 chunk 内如何重复平铺。
@@ -1465,15 +1602,20 @@ export async function bakeLandformGroundSurfaceChunks(
       const albedoTextureSettings = albedoTextureRef?.settings
         ? createTextureSettings(albedoTextureRef.settings as Partial<SceneMaterialTextureSettings>)
         : null
+      const normalTextureSettings = normalTextureRef?.settings
+        ? createTextureSettings(normalTextureRef.settings as Partial<SceneMaterialTextureSettings>)
+        : null
       chunkSurfaceLayers.push({
         albedoSource: primaryTextureRuntimeSource,
         albedoTextureSettings,
+        normalSource: normalTextureRuntimeSource,
+        normalTextureSettings,
         colorTint: landformColor,
         opacity,
         uvScale: chunkLayerUvScale,
         maskChannel: layerIndex,
-        featherEnabled: layerFeatherEnabled,
-        featherWidth: layerFeatherWidth,
+        featherEnabled: featherSettings.enabled,
+        featherWidth: featherSettings.width,
       })
 
       // 取出当前 chunk 内真正需要绘制的几何片段。
@@ -1507,9 +1649,10 @@ export async function bakeLandformGroundSurfaceChunks(
             continue
           }
           paintedTriangleCount += 1
+          chunkPaintedTriangleCount += 1
 
           if (maskContext) {
-            drawTriangleMask(maskContext, [p0, p1, p2], alpha, '#ffffff')
+            drawTriangleMask(maskContext, [p0, p1, p2], 1, '#ffffff')
           }
         }
       }
@@ -1518,57 +1661,56 @@ export async function bakeLandformGroundSurfaceChunks(
       if (paintedTriangleCount <= 0) {
         continue
       }
-
-      // 把每个独立 mask 画布读回 ImageData，准备进行通道打包。
-      const maskImages = await Promise.all(maskCanvases.map(({ canvas }) => canvasToImageData(canvas)))
-
-      // splat 纹理分成两张 RGBA 图：
-      // splat0 = layer 0~3
-      // splat1 = layer 4~7
-      const splat0 = createCanvas(size.width, size.height)
-      const splat1 = createCanvas(size.width, size.height)
-      if (!splat0 || !splat1) {
-        continue
-      }
-      const splat0Data = splat0.context.createImageData(size.width, size.height)
-      const splat1Data = splat1.context.createImageData(size.width, size.height)
-      const splat0Buffer = splat0Data.data
-      const splat1Buffer = splat1Data.data
-      const emptyMask = new Uint8ClampedArray(size.width * size.height * 4)
-      const packTargets = [splat0Buffer, splat1Buffer]
-      for (let channel = 0; channel < 8; channel += 1) {
-        const mask = maskImages[channel] ?? { data: emptyMask, width: size.width, height: size.height } as ImageData
-        const target = packTargets[Math.floor(channel / 4)]
-        if (!target) {
-          continue
-        }
-        // 把单独的 mask 通道压进 RGBA 的某个分量里。
-        // 这一步的结果就是 shader 可直接读取的 splat map。
-        packMaskChannel(target, size.width, size.height, mask, channel % 4)
-      }
-      splat0.context.putImageData(splat0Data, 0, 0)
-      splat1.context.putImageData(splat1Data, 0, 0)
-
-      // 最后把 canvas 编码成 blob，再转成 dataURL。
-      // 这样 GroundSurfaceChunkTextureRef 就能直接携带可序列化的纹理数据。
-      const [splat0Blob, splat1Blob] = await Promise.all([
-        canvasToBlob(splat0.canvas),
-        canvasToBlob(splat1.canvas),
-      ])
-      const nextChunkRef: GroundSurfaceChunkTextureRef = {
-        baseBlendMode: 'shader-splat-v1',
-        textureAssetId: null,
-        normalTextureAssetId: null,
-        splatMapAssetIds: [
-          splat0Blob ? await blobToDataUrl(splat0Blob) : null,
-          splat1Blob ? await blobToDataUrl(splat1Blob) : null,
-        ].filter((value): value is string => typeof value === 'string' && value.length > 0),
-        surfaceLayers: chunkSurfaceLayers,
-        revision: Date.now(),
-      }
-      nextChunks[chunkKey] = nextChunkRef
     }
 
+    if (chunkPaintedTriangleCount <= 0 || chunkSurfaceLayers.length <= 0) {
+      continue
+    }
+
+    // 把每个独立 mask 画布读回 ImageData，按每层 feather 生成空间渐变权重后再打包。
+    const metersPerPixel = Math.max(chunkWidth / Math.max(1, size.width), chunkDepth / Math.max(1, size.height), 1e-6)
+    const maskImages = await Promise.all(maskCanvases.map(async ({ canvas }, index) => {
+      const rawMask = await canvasToImageData(canvas)
+      if (!rawMask) {
+        return null
+      }
+      const feather = layerFeatherSettings[index]
+      const featherPixels = feather?.enabled && feather.width > 0
+        ? feather.width / metersPerPixel
+        : 0
+      return softenMaskImageData(rawMask, featherPixels, 1)
+    }))
+
+    // splat 纹理只输出一张 RGBA 图：
+    // splat0 = layer 0~3
+    const splat0 = createCanvas(size.width, size.height)
+    if (!splat0) {
+      continue
+    }
+    const splat0Data = splat0.context.createImageData(size.width, size.height)
+    const splat0Buffer = splat0Data.data
+    const emptyMask = new Uint8ClampedArray(size.width * size.height * 4)
+    for (let channel = 0; channel < 4; channel += 1) {
+      const mask = maskImages[channel] ?? { data: emptyMask, width: size.width, height: size.height } as ImageData
+      // 把单独的 mask 通道压进 RGBA 的某个分量里。
+      // 这一步的结果就是 shader 可直接读取的 splat map。
+      packMaskChannel(splat0Buffer, size.width, size.height, mask, channel)
+    }
+    splat0.context.putImageData(splat0Data, 0, 0)
+
+    // 最后把 canvas 编码成 blob，再转成 dataURL。
+    // 这样 GroundSurfaceChunkTextureRef 就能直接携带可序列化的纹理数据。
+    const splat0Blob = await canvasToBlob(splat0.canvas)
+    const nextChunkRef: GroundSurfaceChunkTextureRef = {
+      baseBlendMode: 'shader-splat-v1',
+      textureAssetId: null,
+      normalTextureAssetId: null,
+      splatMapAssetIds: [splat0Blob ? await blobToDataUrl(splat0Blob) : null]
+        .filter((value): value is string => typeof value === 'string' && value.length > 0),
+      surfaceLayers: chunkSurfaceLayers,
+      revision: Date.now(),
+    }
+    nextChunks[chunkKey] = nextChunkRef
   }
 
   // 如果这轮烘焙一个 chunk 都没生成，就返回 null，

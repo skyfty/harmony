@@ -1714,6 +1714,8 @@ export type GroundSculptOperation = 'raise' | 'depress' | 'smooth' | 'flatten' |
 export interface GroundSurfaceChunkLayerRef {
   albedoSource?: string | null
   albedoTextureSettings?: SceneMaterialTextureSettings | null
+  normalSource?: string | null
+  normalTextureSettings?: SceneMaterialTextureSettings | null
   colorTint?: string | null
   opacity?: number | null
   uvScale?: Vector2Like | null
@@ -2044,7 +2046,7 @@ export function normalizeGroundSurfaceChunkTextureMap(
             const opacity = Number((layer as { opacity?: unknown }).opacity)
             const featherWidth = Number((layer as { featherWidth?: unknown }).featherWidth)
             const maskChannel = Math.trunc(Number((layer as { maskChannel?: unknown }).maskChannel))
-            if (!Number.isInteger(maskChannel) || maskChannel < 0 || maskChannel > 7) {
+            if (!Number.isInteger(maskChannel) || maskChannel < 0 || maskChannel > 3) {
               return null
             }
             const colorTint = typeof (layer as { colorTint?: unknown }).colorTint === 'string'
@@ -2053,6 +2055,8 @@ export function normalizeGroundSurfaceChunkTextureMap(
             return {
               albedoSource: normalizeOptionalAssetId((layer as { albedoSource?: unknown }).albedoSource),
               albedoTextureSettings: normalizeTextureSettings((layer as { albedoTextureSettings?: unknown }).albedoTextureSettings),
+              normalSource: normalizeOptionalAssetId((layer as { normalSource?: unknown }).normalSource),
+              normalTextureSettings: normalizeTextureSettings((layer as { normalTextureSettings?: unknown }).normalTextureSettings),
               colorTint: colorTint.length > 0 ? colorTint : null,
               opacity: Number.isFinite(opacity) ? Math.max(0, Math.min(1, opacity)) : 1,
               uvScale: Number.isFinite(uvScaleX) && uvScaleX > 0 && Number.isFinite(uvScaleY) && uvScaleY > 0

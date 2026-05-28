@@ -9,6 +9,7 @@ import {
   type GroundDynamicMesh,
   type SceneJsonExportDocument,
 } from '@schema/core'
+import { hashString, stableSerialize } from '@schema/stableSerialize'
 import {
   buildCompiledGroundPackageFilesAsync,
   resolvePreferredCompiledGroundWorkerCount,
@@ -436,12 +437,50 @@ export function computeSceneCompiledGroundBuildKey(
   ].join('|')
 }
 
+function summarizeGroundSurfaceChunksForSignature(dynamicGround: GroundDynamicMesh): unknown {
+  const chunks = dynamicGround.groundSurfaceChunks ?? null
+  if (!chunks) {
+    return null
+  }
+  return Object.fromEntries(Object.entries(chunks)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([chunkKey, chunk]) => [chunkKey, {
+      baseBlendMode: chunk?.baseBlendMode ?? null,
+      textureAssetId: chunk?.textureAssetId ? hashString(chunk.textureAssetId) : null,
+      normalTextureAssetId: chunk?.normalTextureAssetId ? hashString(chunk.normalTextureAssetId) : null,
+      splatMapAssetIds: Array.isArray(chunk?.splatMapAssetIds)
+        ? chunk.splatMapAssetIds.map((value) => (typeof value === 'string' ? hashString(value) : null))
+        : null,
+      surfaceLayers: Array.isArray(chunk?.surfaceLayers)
+        ? chunk.surfaceLayers.map((layer) => ({
+            albedoSource: layer?.albedoSource ? hashString(layer.albedoSource) : null,
+            normalSource: layer?.normalSource ? hashString(layer.normalSource) : null,
+            colorTint: layer?.colorTint ?? null,
+            opacity: layer?.opacity ?? null,
+            uvScale: layer?.uvScale ?? null,
+            maskChannel: layer?.maskChannel ?? null,
+            featherEnabled: layer?.featherEnabled ?? null,
+            featherWidth: layer?.featherWidth ?? null,
+            albedoTextureSettings: layer?.albedoTextureSettings ?? null,
+            normalTextureSettings: layer?.normalTextureSettings ?? null,
+          }))
+        : null,
+    }]))
+}
+
 export function computeSceneCompiledGroundSourceSignature(
   sceneId: string,
   dynamicGround: GroundDynamicMesh | null,
   terrainDatasetId: string | null = null,
 ): string {
-  return computeSceneCompiledGroundBuildKey(sceneId, dynamicGround, terrainDatasetId)
+  const buildKey = computeSceneCompiledGroundBuildKey(sceneId, dynamicGround, terrainDatasetId)
+  if (!dynamicGround) {
+    return buildKey
+  }
+  const groundSurfaceSignature = hashString(stableSerialize({
+    groundSurfaceChunks: summarizeGroundSurfaceChunksForSignature(dynamicGround),
+  }))
+  return `${buildKey}|surface:${groundSurfaceSignature}`
 }
 
 export function resolveSceneCompiledGroundPackagePaths(sceneId: string): {

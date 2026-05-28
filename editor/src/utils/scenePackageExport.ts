@@ -566,7 +566,10 @@ async function prepareSceneDocumentForPackageExport(document: SceneJsonExportDoc
     return document
   }
   stripGroundBakedTextureAssetIds(cloned.nodes ?? [])
-  await bakeLandformGroundSplatForSceneDocument(cloned as StoredSceneDocument)
+  await bakeLandformGroundSplatForSceneDocument(cloned as StoredSceneDocument, {
+    maxTextureSize: 512,
+    maxSplatLayers: 4,
+  })
   stripLandformNodes(cloned.nodes ?? [])
   assertNoLandformNodes(cloned.nodes ?? [])
   const bakedGroundNode = cloned.nodes ? cloned.nodes.find((node) => node?.dynamicMesh?.type === 'Ground') : null

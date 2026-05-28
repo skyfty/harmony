@@ -6168,6 +6168,8 @@ type GroundMaterialCacheEntry = {
 type GroundChunkRuntimeSurfaceLayer = {
   albedoSource: string | null
   albedoTextureSettings: SceneMaterialTextureSettings | null
+  normalSource: string | null
+  normalTextureSettings: SceneMaterialTextureSettings | null
   colorTint: string | null
   opacity: number
   uvScale: { x: number; y: number } | null
@@ -6179,8 +6181,14 @@ type GroundChunkRuntimeSurfaceLayer = {
 type GroundChunkTextureRuntimeState = {
   chunkBounds: { minX: number; minZ: number; width: number; depth: number }
   layerTextures: Array<THREE.Texture | null>
+  layerNormalTextures: Array<THREE.Texture | null>
   layerStates: GroundChunkRuntimeSurfaceLayer[]
   splatMaps: THREE.Texture[]
+}
+
+export type GroundSplatRuntimeProfile = {
+  maxLayers?: number | null
+  enableLayerNormalMap?: boolean | null
 }
 
 const GROUND_SPLAT_SHADER_HOOK_INSTALLED = '__groundSplatShaderHookInstalled'
@@ -6189,8 +6197,9 @@ const GROUND_SPLAT_ORIGINAL_ON_BEFORE_COMPILE = '__groundSplatOriginalOnBeforeCo
 const GROUND_SPLAT_ORIGINAL_PROGRAM_CACHE_KEY = '__groundSplatOriginalProgramCacheKey'
 const GROUND_SPLAT_RUNTIME_STATE = '__groundSplatRuntimeState'
 const GROUND_SPLAT_LAYER_TEXTURES = '__groundSplatLayerTextures'
+const GROUND_SPLAT_LAYER_NORMAL_TEXTURES = '__groundSplatLayerNormalTextures'
 const GROUND_SPLAT_MASK_TEXTURES = '__groundSplatMaskTextures'
-const GROUND_SPLAT_MAX_LAYERS = 8
+const GROUND_SPLAT_MAX_LAYERS = 4
 const groundTextureCache = new Map<string, GroundTextureCacheEntry>()
 const groundMaterialCache = new Map<string, GroundMaterialCacheEntry>()
 // Keep the first shader version conservative so it stays under common WebGL fragment sampler limits
@@ -6376,6 +6385,7 @@ function syncGroundChunkTextureReadyFromMaterial(mesh: THREE.Mesh, material: THR
       typed.map ?? null,
       typed.normalMap ?? null,
       ...(Array.isArray(typed[GROUND_SPLAT_LAYER_TEXTURES]) ? typed[GROUND_SPLAT_LAYER_TEXTURES] as Array<THREE.Texture | null> : []),
+      ...(Array.isArray(typed[GROUND_SPLAT_LAYER_NORMAL_TEXTURES]) ? typed[GROUND_SPLAT_LAYER_NORMAL_TEXTURES] as Array<THREE.Texture | null> : []),
       ...(Array.isArray(typed[GROUND_SPLAT_MASK_TEXTURES]) ? typed[GROUND_SPLAT_MASK_TEXTURES] as Array<THREE.Texture | null> : []),
     ]
     const ready = textures.every((texture) => isGroundTextureReady(texture))
@@ -6777,6 +6787,12 @@ function disposeGroundChunkTexturedMaterial(material: THREE.Material | null | un
   layerTextures.forEach((texture) => {
     releaseGroundTexture(texture)
   })
+  const layerNormalTextures = Array.isArray(typed[GROUND_SPLAT_LAYER_NORMAL_TEXTURES])
+    ? typed[GROUND_SPLAT_LAYER_NORMAL_TEXTURES] as Array<THREE.Texture | null>
+    : []
+  layerNormalTextures.forEach((texture) => {
+    releaseGroundTexture(texture)
+  })
   const maskTextures = Array.isArray(typed[GROUND_SPLAT_MASK_TEXTURES])
     ? typed[GROUND_SPLAT_MASK_TEXTURES] as Array<THREE.Texture | null>
     : []
@@ -6785,6 +6801,7 @@ function disposeGroundChunkTexturedMaterial(material: THREE.Material | null | un
   })
   clearGroundSplatMaterialUniforms(material)
   delete typed[GROUND_SPLAT_LAYER_TEXTURES]
+  delete typed[GROUND_SPLAT_LAYER_NORMAL_TEXTURES]
   delete typed[GROUND_SPLAT_MASK_TEXTURES]
   delete typed[GROUND_SPLAT_RUNTIME_STATE]
   clearGroundRuntimeMaterialMetadata(material)
@@ -6815,6 +6832,10 @@ function normalizeGroundChunkRuntimeSurfaceLayer(
       ? layer.albedoSource.trim()
       : fallbackTexture,
     albedoTextureSettings: layer?.albedoTextureSettings ? createTextureSettings(layer.albedoTextureSettings) : null,
+    normalSource: typeof layer?.normalSource === 'string' && layer.normalSource.trim().length > 0
+      ? layer.normalSource.trim()
+      : null,
+    normalTextureSettings: layer?.normalTextureSettings ? createTextureSettings(layer.normalTextureSettings) : null,
     colorTint: typeof layer?.colorTint === 'string' && layer.colorTint.trim().length > 0
       ? layer.colorTint.trim()
       : fallbackTint,
@@ -6899,7 +6920,7 @@ function resolveGroundChunkTextureBundleSources(
       null,
       index,
     )
-  }).filter((layer) => Boolean(layer.albedoSource) || Boolean(layer.colorTint))
+  }).filter((layer) => Boolean(layer.albedoSource) || Boolean(layer.normalSource) || Boolean(layer.colorTint))
   return {
     baseBlendMode: entry.baseBlendMode === 'shader-splat-v1' ? 'shader-splat-v1' : null,
     albedo: albedo || null,
@@ -6935,27 +6956,45 @@ function loadGroundChunkSplatMaps(sources: string[], chunkKey: string): THREE.Te
       return texture
     })
     .filter((texture): texture is THREE.Texture => Boolean(texture))
-  if (textures.length > 2) {
-    textures.length = 2
+  if (textures.length > 1) {
+    textures.length = 1
   }
-  return textures.slice(0, 2)
+  return textures.slice(0, 1)
+}
+
+function normalizeGroundSplatRuntimeProfile(
+  profile: GroundSplatRuntimeProfile | null | undefined,
+): { maxLayers: number; enableLayerNormalMap: boolean } {
+  const maxLayers = Number(profile?.maxLayers)
+  return {
+    maxLayers: Number.isFinite(maxLayers)
+      ? Math.max(0, Math.min(GROUND_SPLAT_SHADER_MAX_LAYERS, Math.trunc(maxLayers)))
+      : GROUND_SPLAT_SHADER_MAX_LAYERS,
+    enableLayerNormalMap: profile?.enableLayerNormalMap === true,
+  }
 }
 
 function createGroundSplatSignature(
   chunkKey: string,
   baseMaterialSignature: string,
   bundle: GroundChunkTextureBundleSources,
+  profile?: GroundSplatRuntimeProfile | null,
 ): string {
+  const runtimeProfile = normalizeGroundSplatRuntimeProfile(profile)
   return [
     'ground-splat-v1',
     chunkKey,
     baseMaterialSignature,
-    bundle.splatMaps.join('|'),
+    `layers:${runtimeProfile.maxLayers}`,
+    `normals:${runtimeProfile.enableLayerNormalMap ? 1 : 0}`,
+    bundle.splatMaps.slice(0, 1).join('|'),
     hashString(stableSerialize({
       baseBlendMode: bundle.baseBlendMode,
-      surfaceLayers: bundle.surfaceLayers.map((layer) => ({
+      surfaceLayers: bundle.surfaceLayers.slice(0, runtimeProfile.maxLayers).map((layer) => ({
         albedoSource: layer.albedoSource,
         albedoTextureSettings: layer.albedoTextureSettings,
+        normalSource: layer.normalSource,
+        normalTextureSettings: layer.normalTextureSettings,
         colorTint: layer.colorTint,
         opacity: layer.opacity,
         uvScale: layer.uvScale,
@@ -7041,7 +7080,9 @@ function ensureGroundSplatShaderHooks(material: THREE.MeshStandardMaterial): boo
 
   const layerUniformDeclarations = Array.from({ length: GROUND_SPLAT_SHADER_MAX_LAYERS }, (_, index) => `
 uniform sampler2D groundSplatLayerMap${index};
+uniform sampler2D groundSplatLayerNormalMap${index};
 uniform bool groundSplatLayerHasMap${index};
+uniform bool groundSplatLayerHasNormalMap${index};
 uniform bool groundSplatLayerEnabled${index};
 uniform vec3 groundSplatLayerTint${index};
 uniform float groundSplatLayerOpacity${index};
@@ -7067,8 +7108,14 @@ if (groundSplatLayerEnabled${index}) {
     ? texture2D(groundSplatLayerMap${index}, groundSplatUv${index}).rgb
     : vec3(1.0);
   groundSplatLayerColor${index} *= groundSplatLayerTint${index};
-  float groundSplatMask${index} = ${maskSample}.${maskChannel} * groundSplatLayerOpacity${index};
-  groundSplatMixedColor = mix(groundSplatMixedColor, groundSplatLayerColor${index}, clamp(groundSplatMask${index}, 0.0, 1.0));
+  float groundSplatMask${index} = min(clamp(${maskSample}.${maskChannel} * groundSplatLayerOpacity${index}, 0.0, 1.0), groundSplatRemainingWeight);
+  groundSplatRemainingWeight = max(groundSplatRemainingWeight - groundSplatMask${index}, 0.0);
+  groundSplatMixedColor = mix(groundSplatMixedColor, groundSplatLayerColor${index}, groundSplatMask${index});
+  if (groundSplatLayerHasNormalMap${index}) {
+    vec3 groundSplatLayerNormal${index} = texture2D(groundSplatLayerNormalMap${index}, groundSplatUv${index}).xyz * 2.0 - 1.0;
+    groundSplatNormalMixed = normalize(mix(groundSplatNormalMixed, groundSplatLayerNormal${index}, groundSplatMask${index}));
+    groundSplatNormalWeight = max(groundSplatNormalWeight, groundSplatMask${index});
+  }
 }`
   }).join('\n')
 
@@ -7080,7 +7127,9 @@ if (groundSplatLayerEnabled${index}) {
     shader.uniforms.groundSplatHasMask0 = { value: false }
     for (let index = 0; index < GROUND_SPLAT_SHADER_MAX_LAYERS; index += 1) {
       shader.uniforms[`groundSplatLayerMap${index}`] = { value: null }
+      shader.uniforms[`groundSplatLayerNormalMap${index}`] = { value: null }
       shader.uniforms[`groundSplatLayerHasMap${index}`] = { value: false }
+      shader.uniforms[`groundSplatLayerHasNormalMap${index}`] = { value: false }
       shader.uniforms[`groundSplatLayerEnabled${index}`] = { value: false }
       shader.uniforms[`groundSplatLayerTint${index}`] = { value: new THREE.Color('#ffffff') }
       shader.uniforms[`groundSplatLayerOpacity${index}`] = { value: 0 }
@@ -7090,7 +7139,25 @@ if (groundSplatLayerEnabled${index}) {
     }
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec2 vGroundSplatWorldXZ;')
-      .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvGroundSplatWorldXZ = vec2(worldPosition.x, worldPosition.z);')
+      .replace(
+        '#include <worldpos_vertex>',
+        `vec4 worldPosition = vec4( transformed, 1.0 );
+
+#ifdef USE_BATCHING
+
+	worldPosition = batchingMatrix * worldPosition;
+
+#endif
+
+#ifdef USE_INSTANCING
+
+	worldPosition = instanceMatrix * worldPosition;
+
+#endif
+
+worldPosition = modelMatrix * worldPosition;
+vGroundSplatWorldXZ = vec2(worldPosition.x, worldPosition.z);`,
+      )
     shader.fragmentShader = shader.fragmentShader
       .replace(
         '#include <common>',
@@ -7105,6 +7172,8 @@ ${layerUniformDeclarations}`,
       .replace(
         '#include <map_fragment>',
         `#include <map_fragment>
+float groundSplatNormalWeight = 0.0;
+vec3 groundSplatNormalMixed = vec3(0.0, 0.0, 1.0);
 if (groundSplatEnabled) {
   vec2 groundSplatMaskUv = vec2(
     clamp((vGroundSplatWorldXZ.x - groundSplatChunkRect.x) / max(groundSplatChunkRect.z, 1e-6), 0.0, 1.0),
@@ -7112,9 +7181,19 @@ if (groundSplatEnabled) {
   );
   vec4 groundSplatMaskSample0 = groundSplatHasMask0 ? texture2D(groundSplatMask0, groundSplatMaskUv) : vec4(0.0);
   vec3 groundSplatMixedColor = diffuseColor.rgb;
+  float groundSplatRemainingWeight = 1.0;
   ${layerBlendBlocks}
   diffuseColor.rgb = groundSplatMixedColor;
 }`,
+      )
+      .replace(
+        '#include <normal_fragment_maps>',
+        `#include <normal_fragment_maps>
+#ifdef USE_NORMALMAP_TANGENTSPACE
+if (groundSplatEnabled && groundSplatNormalWeight > 0.0001) {
+  normal = normalize(mix(normal, normalize(tbn * groundSplatNormalMixed), clamp(groundSplatNormalWeight, 0.0, 1.0)));
+}
+#endif`,
       )
     originalOnBeforeCompile?.(shader, renderer)
     syncGroundSplatMaterialUniforms(material, typed[GROUND_SPLAT_RUNTIME_STATE] as GroundChunkTextureRuntimeState | null | undefined)
@@ -7166,6 +7245,7 @@ function syncGroundSplatMaterialUniforms(
   for (let index = 0; index < GROUND_SPLAT_SHADER_MAX_LAYERS; index += 1) {
     const layer = state?.layerStates[index] ?? null
     const layerTexture = state?.layerTextures[index] ?? null
+    const layerNormalTexture = state?.layerNormalTextures[index] ?? null
     const tint = new THREE.Color(layer?.colorTint || '#ffffff')
     const transformState = layer ? createGroundSplatLayerTransform(layer) : {
       uvScale: new THREE.Vector2(1, 1),
@@ -7173,7 +7253,9 @@ function syncGroundSplatMaterialUniforms(
       rotation: new THREE.Vector4(1, 0, 0, 0),
     }
     setUniform(`groundSplatLayerMap${index}`, layerTexture)
+    setUniform(`groundSplatLayerNormalMap${index}`, layerNormalTexture)
     setUniform(`groundSplatLayerHasMap${index}`, Boolean(layerTexture))
+    setUniform(`groundSplatLayerHasNormalMap${index}`, Boolean(layerNormalTexture))
     setUniform(`groundSplatLayerEnabled${index}`, Boolean(layer))
     setUniform(`groundSplatLayerTint${index}`, tint)
     setUniform(`groundSplatLayerOpacity${index}`, layer ? layer.opacity : 0)
@@ -7192,8 +7274,11 @@ function createGroundChunkSplatRuntimeState(
   mesh: THREE.Mesh,
   spec: Pick<GroundChunkSpec, 'startRow' | 'startColumn' | 'rows' | 'columns'> | null,
   bundle: GroundChunkTextureBundleSources,
+  profile?: GroundSplatRuntimeProfile | null,
 ): GroundChunkTextureRuntimeState | null {
-  if (bundle.baseBlendMode !== 'shader-splat-v1' || bundle.surfaceLayers.length === 0 || bundle.surfaceLayers.length > GROUND_SPLAT_SHADER_MAX_LAYERS) {
+  const runtimeProfile = normalizeGroundSplatRuntimeProfile(profile)
+  const activeLayers = bundle.surfaceLayers.slice(0, runtimeProfile.maxLayers)
+  if (bundle.baseBlendMode !== 'shader-splat-v1' || activeLayers.length === 0) {
     return null
   }
   const chunkBounds = buildGroundSplatChunkBounds(definition, spec, mesh)
@@ -7206,16 +7291,29 @@ function createGroundChunkSplatRuntimeState(
     splatMaps.forEach((texture) => disposeGroundTexture(texture))
     return null
   }
-  const layerTextures = bundle.surfaceLayers.map((layer, index) => {
+  const layerTextures = activeLayers.map((layer, index) => {
     if (!layer.albedoSource) {
       return null
     }
     return createGroundSplatLayerTexture(layer.albedoSource, index, layer.albedoTextureSettings)
   })
+  const layerNormalTextures = runtimeProfile.enableLayerNormalMap
+    ? activeLayers.map((layer, index) => {
+      if (!layer.normalSource) {
+        return null
+      }
+      const texture = createGroundSplatLayerTexture(layer.normalSource, index, layer.normalTextureSettings)
+      if (texture) {
+        texture.colorSpace = THREE.NoColorSpace
+      }
+      return texture
+    })
+    : activeLayers.map(() => null)
   return {
     chunkBounds,
     layerTextures,
-    layerStates: bundle.surfaceLayers.slice(0, GROUND_SPLAT_SHADER_MAX_LAYERS),
+    layerNormalTextures,
+    layerStates: activeLayers,
     splatMaps,
   }
 }
@@ -7225,6 +7323,9 @@ function disposeGroundChunkSplatRuntimeState(state: GroundChunkTextureRuntimeSta
     return
   }
   state.layerTextures.forEach((texture) => {
+    releaseGroundTexture(texture)
+  })
+  state.layerNormalTextures.forEach((texture) => {
     releaseGroundTexture(texture)
   })
   state.splatMaps.forEach((texture) => {
@@ -7297,6 +7398,7 @@ function applyGroundTextureToChunkMesh(
   options: {
     isCompiledGroundTile?: boolean
     compiledGroundTileKey?: string | null
+    groundSplatRuntimeProfile?: GroundSplatRuntimeProfile | null
   } = {},
 ): void {
   void baseTexture
@@ -7373,12 +7475,12 @@ function applyGroundTextureToChunkMesh(
   const windowSignature = resolveGroundTextureWindowSignature(safeWindow)
   const signatureBase = `${baseMaterialSignature}|rev:${revisionSignature}`
   const splatRuntimeState = bundle
-    ? createGroundChunkSplatRuntimeState(definition, mesh, spec, bundle)
+    ? createGroundChunkSplatRuntimeState(definition, mesh, spec, bundle, options.groundSplatRuntimeProfile)
     : null
   const shouldUseShaderSplat = Boolean(splatRuntimeState && chunkKey && bundle?.surfaceLayers.length)
 
   if (shouldUseShaderSplat && chunkKey && bundle) {
-    const signature = createGroundSplatSignature(chunkKey, signatureBase, bundle)
+    const signature = createGroundSplatSignature(chunkKey, signatureBase, bundle, options.groundSplatRuntimeProfile)
     const cachedEntry = groundMaterialCache.get(signature)
     const nextMaterial = cachedEntry?.material ?? createGroundChunkSplatMaterial(baseMaterial)
     if (nextMaterial) {
@@ -7387,10 +7489,12 @@ function applyGroundTextureToChunkMesh(
         syncGroundSplatMaterialUniforms(nextMaterial, splatRuntimeState)
         const typed = nextMaterial as THREE.MeshStandardMaterial & Record<string, unknown>
         typed[GROUND_SPLAT_LAYER_TEXTURES] = splatRuntimeState?.layerTextures ?? []
+        typed[GROUND_SPLAT_LAYER_NORMAL_TEXTURES] = splatRuntimeState?.layerNormalTextures ?? []
         typed[GROUND_SPLAT_MASK_TEXTURES] = splatRuntimeState?.splatMaps ?? []
         typed.userData = {
           ...(typed.userData ?? {}),
           groundChunkSplatMapIds: bundle.splatMaps,
+          groundSplatLayerNormalMapEnabled: Boolean(splatRuntimeState?.layerNormalTextures.some(Boolean)),
         }
         if (bundle.normal) {
           typed.normalMap = loadGroundTextureFromSource(bundle.normal, 'GroundChunkNormalMap', {
@@ -7402,6 +7506,7 @@ function applyGroundTextureToChunkMesh(
         createGroundMaterialCacheEntry(signature, nextMaterial, [
           typed.normalMap ?? null,
           ...(splatRuntimeState?.layerTextures ?? []),
+          ...(splatRuntimeState?.layerNormalTextures ?? []),
           ...(splatRuntimeState?.splatMaps ?? []),
         ])
       }
@@ -7519,6 +7624,7 @@ export function applyGroundTextureToRuntimeChunkMesh(params: {
   chunkKey?: string | null
   compiledGroundTileKey?: string | null
   rootUserData?: Record<string, unknown> | null | undefined
+  groundSplatRuntimeProfile?: GroundSplatRuntimeProfile | null
 }): string | null {
   const {
     mesh,
@@ -7528,6 +7634,7 @@ export function applyGroundTextureToRuntimeChunkMesh(params: {
     chunkKey = null,
     compiledGroundTileKey = null,
     rootUserData = null,
+    groundSplatRuntimeProfile = null,
   } = params
   const chunkSpec = mesh.userData?.groundChunk as GroundChunkSpec | undefined
   const chunkMeta = chunkSpec as { chunkRow?: number; chunkColumn?: number } | null
@@ -7559,6 +7666,7 @@ export function applyGroundTextureToRuntimeChunkMesh(params: {
     {
       isCompiledGroundTile,
       compiledGroundTileKey,
+      groundSplatRuntimeProfile,
     },
   )
 
@@ -7567,6 +7675,9 @@ export function applyGroundTextureToRuntimeChunkMesh(params: {
 
 function applyGroundTextureToObject(object: THREE.Object3D, definition: GroundDynamicMesh): void {
   const root = object as THREE.Object3D & { userData?: Record<string, unknown> }
+  const groundSplatRuntimeProfile = (definition as GroundDynamicMesh & {
+    groundSplatRuntimeProfile?: GroundSplatRuntimeProfile | null
+  }).groundSplatRuntimeProfile ?? null
   const cachedBaseMaterial = (root.userData as Record<string, unknown> | undefined)?.groundMaterial
   const cachedSculptedMaterial = (root.userData as Record<string, unknown> | undefined)?.groundSculptedMaterial
   const baseMaterial = cachedBaseMaterial && !Array.isArray(cachedBaseMaterial)
@@ -7607,6 +7718,7 @@ function applyGroundTextureToObject(object: THREE.Object3D, definition: GroundDy
         baseMaterialSignature: chunkBaseMaterialSignature,
         compiledGroundTileKey,
         rootUserData: root.userData ?? {},
+        groundSplatRuntimeProfile,
       })
     }
   })

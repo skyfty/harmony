@@ -5215,6 +5215,12 @@ function refreshDynamicGroundCache(document: SceneJsonExportDocument | null): vo
   }
   const groundNode = findGroundNode(document.nodes);
   if (groundNode && isGroundDynamicMesh(groundNode.dynamicMesh)) {
+    (groundNode.dynamicMesh as GroundRuntimeDynamicMesh & {
+      groundSplatRuntimeProfile?: { maxLayers: number; enableLayerNormalMap: boolean };
+    }).groundSplatRuntimeProfile = {
+      maxLayers: isWeChatMiniProgram ? 2 : 4,
+      enableLayerNormalMap: false,
+    };
     dynamicGroundCache = {
       nodeId: groundNode.id,
       node: groundNode,
@@ -6416,6 +6422,10 @@ function syncSceneryCompiledGroundRenderTiles(camera: THREE.Camera | null | unde
       return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
     },
     streamingMode: 'runtime-camera',
+    groundSplatRuntimeProfile: {
+      maxLayers: isWeChatMiniProgram ? 2 : 4,
+      enableLayerNormalMap: false,
+    },
   });
   const workState = getCompiledGroundRenderWorkState(groundObject);
   const loadedChunkVersion = workState?.loadedChunkKeysVersion ?? -1;
@@ -12988,6 +12998,7 @@ async function buildSceneGraphWithProgress(
 
     resourceCache = ensureResourceCache(payload.document, buildOptions);
     viewerResourceCache = resourceCache;
+    refreshDynamicGroundCache(payload.document);
     graph = await buildSceneGraph(payload.document, resourceCache, buildOptions);
   } finally {
     const fullyLoadedByCount = resourcePreload.total > 0 && resourcePreload.loaded >= resourcePreload.total;

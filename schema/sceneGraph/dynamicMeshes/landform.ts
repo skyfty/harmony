@@ -12,5 +12,9 @@ export async function buildLandformMesh(
   _meshInfo: LandformDynamicMesh,
   _node: SceneNodeWithExtras,
 ): Promise<THREE.Object3D | null> {
-  throw new Error('Landform runtime rendering has been removed. Exported scenes must be baked to groundSurfaceChunks before preview or runtime build.')
+  console.warn('[SceneGraph] Landform runtime rendering has been removed. Expected baked groundSurfaceChunks before preview or runtime build.', {
+    nodeId: _node.id,
+    name: _node.name ?? null,
+  })
+  return null
 }
