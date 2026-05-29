@@ -42,7 +42,9 @@ import type { SceneExportEventReporter } from '@/types/scene-export'
 import {
   serializePlanningScenePackageSidecar,
 } from '@/types/planning-package'
-import { computeSha256Hex, getPlanningImageBlobByHash } from '@/utils/planningImageStorage'
+import { getPlanningImageBlobByHash } from '@/utils/planningImageStorage'
+import { sha256Hex as computeSha256Hex } from '@harmony/utils/hash'
+
 import { loadPlanningDemBlobByHash } from '@/utils/planningDemStorage'
 import { sha256Hex } from '@harmony/utils/hash'
 import { fetchResourceAsset } from '@/api/resourceAssets'
