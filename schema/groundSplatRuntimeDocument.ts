@@ -1,6 +1,5 @@
 import type {
   GroundDynamicMesh,
-  GroundSurfaceChunkTextureMap,
   SceneJsonExportDocument,
   SceneNode,
 } from './core'
