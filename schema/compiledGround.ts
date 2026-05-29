@@ -1,4 +1,12 @@
+import { decode, encode } from '@msgpack/msgpack'
 import * as THREE from 'three'
+import {
+  normalizeBounds3D,
+  isPlainObject,
+  normalizeFiniteNumber,
+  normalizeInteger,
+  normalizeString,
+} from './valueNormalization'
 
 export const COMPILED_GROUND_MANIFEST_VERSION = 1 as const
 export const COMPILED_GROUND_RENDER_TILE_MAGIC = 0x48474d31
@@ -104,6 +112,121 @@ export interface CompiledGroundCollisionTileHeader {
 export interface CompiledGroundCollisionTileData {
   header: CompiledGroundCollisionTileHeader
   heights: Float32Array
+}
+
+function normalizeCompiledGroundChunkBounds(value: unknown): CompiledGroundChunkBounds | null {
+  if (!isPlainObject(value)) {
+    return null
+  }
+  const minChunkX = Number(value.minChunkX)
+  const maxChunkX = Number(value.maxChunkX)
+  const minChunkZ = Number(value.minChunkZ)
+  const maxChunkZ = Number(value.maxChunkZ)
+  if (![minChunkX, maxChunkX, minChunkZ, maxChunkZ].every(Number.isFinite)) {
+    return null
+  }
+  return {
+    minChunkX: Math.trunc(minChunkX),
+    maxChunkX: Math.trunc(maxChunkX),
+    minChunkZ: Math.trunc(minChunkZ),
+    maxChunkZ: Math.trunc(maxChunkZ),
+  }
+}
+
+function normalizeCompiledGroundRenderTileRecord(value: unknown): CompiledGroundRenderTileRecord | null {
+  if (!isPlainObject(value)) {
+    return null
+  }
+  const key = normalizeString(value.key)
+  const path = normalizeString(value.path)
+  const bounds = normalizeBounds3D(value.bounds)
+  if (!key || !path || !bounds) {
+    return null
+  }
+  return {
+    key,
+    row: normalizeInteger(value.row),
+    column: normalizeInteger(value.column),
+    centerX: normalizeFiniteNumber(value.centerX),
+    centerZ: normalizeFiniteNumber(value.centerZ),
+    sizeMeters: normalizeFiniteNumber(value.sizeMeters),
+    widthMeters: normalizeFiniteNumber(value.widthMeters),
+    depthMeters: normalizeFiniteNumber(value.depthMeters),
+    path,
+    bounds,
+    vertexCount: Math.max(0, Math.trunc(normalizeFiniteNumber(value.vertexCount))),
+    triangleCount: Math.max(0, Math.trunc(normalizeFiniteNumber(value.triangleCount))),
+  }
+}
+
+function normalizeCompiledGroundCollisionTileRecord(value: unknown): CompiledGroundCollisionTileRecord | null {
+  if (!isPlainObject(value)) {
+    return null
+  }
+  const key = normalizeString(value.key)
+  const path = normalizeString(value.path)
+  const bounds = normalizeBounds3D(value.bounds)
+  if (!key || !path || !bounds) {
+    return null
+  }
+  return {
+    key,
+    row: normalizeInteger(value.row),
+    column: normalizeInteger(value.column),
+    centerX: normalizeFiniteNumber(value.centerX),
+    centerZ: normalizeFiniteNumber(value.centerZ),
+    sizeMeters: normalizeFiniteNumber(value.sizeMeters),
+    widthMeters: normalizeFiniteNumber(value.widthMeters),
+    depthMeters: normalizeFiniteNumber(value.depthMeters),
+    path,
+    bounds,
+    rows: Math.max(1, Math.trunc(normalizeFiniteNumber(value.rows, 1))),
+    columns: Math.max(1, Math.trunc(normalizeFiniteNumber(value.columns, 1))),
+    elementSize: normalizeFiniteNumber(value.elementSize),
+  }
+}
+
+export function normalizeCompiledGroundManifest(input: unknown): CompiledGroundManifest | null {
+  if (!isPlainObject(input) || input.version !== COMPILED_GROUND_MANIFEST_VERSION) {
+    return null
+  }
+  const sceneId = normalizeString(input.sceneId)
+  const groundNodeId = normalizeString(input.groundNodeId)
+  const chunkSizeMeters = normalizeFiniteNumber(input.chunkSizeMeters, Number.NaN)
+  const baseHeight = normalizeFiniteNumber(input.baseHeight, Number.NaN)
+  const renderTileSizeMeters = normalizeFiniteNumber(input.renderTileSizeMeters, Number.NaN)
+  const collisionTileSizeMeters = normalizeFiniteNumber(input.collisionTileSizeMeters, Number.NaN)
+  const coveredChunkBounds = normalizeCompiledGroundChunkBounds(input.coveredChunkBounds)
+  const bounds = normalizeBounds3D(input.bounds)
+  if (!sceneId || !groundNodeId || !Number.isFinite(chunkSizeMeters) || !Number.isFinite(baseHeight)
+    || !Number.isFinite(renderTileSizeMeters) || !Number.isFinite(collisionTileSizeMeters)
+    || !coveredChunkBounds || !bounds) {
+    return null
+  }
+  const renderTiles = Array.isArray(input.renderTiles)
+    ? input.renderTiles
+        .map((entry) => normalizeCompiledGroundRenderTileRecord(entry))
+        .filter((entry): entry is CompiledGroundRenderTileRecord => entry !== null)
+    : []
+  const collisionTiles = Array.isArray(input.collisionTiles)
+    ? input.collisionTiles
+        .map((entry) => normalizeCompiledGroundCollisionTileRecord(entry))
+        .filter((entry): entry is CompiledGroundCollisionTileRecord => entry !== null)
+    : []
+  return {
+    version: COMPILED_GROUND_MANIFEST_VERSION,
+    revision: Math.max(0, Math.trunc(normalizeFiniteNumber(input.revision))),
+    sceneId,
+    groundNodeId,
+    chunkSizeMeters,
+    baseHeight,
+    renderTileSizeMeters,
+    collisionTileSizeMeters,
+    coveredChunkBounds,
+    bounds,
+    renderTiles,
+    collisionTiles,
+  }
 }
 
 export function formatCompiledGroundTileKey(row: number, column: number): string {
@@ -213,10 +336,10 @@ export function deserializeCompiledGroundRenderTile(buffer: ArrayBuffer | null |
   const indices = new Uint32Array(buffer!.slice(offset, offset + indicesByteLength))
   return {
     header: {
-      version: 1,
-      key: String(header.key ?? ''),
-      row: Math.trunc(Number(header.row) || 0),
-      column: Math.trunc(Number(header.column) || 0),
+    version: 1,
+    key: String(header.key ?? ''),
+      row: normalizeInteger(header.row),
+      column: normalizeInteger(header.column),
       bounds: header.bounds,
       vertexCount,
       triangleCount: Math.max(0, Math.trunc(Number(header.triangleCount) || 0)),
@@ -255,8 +378,8 @@ export function deserializeCompiledGroundCollisionTile(buffer: ArrayBuffer | nul
     header: {
       version: 1,
       key: String(header.key ?? ''),
-      row: Math.trunc(Number(header.row) || 0),
-      column: Math.trunc(Number(header.column) || 0),
+      row: normalizeInteger(header.row),
+      column: normalizeInteger(header.column),
       bounds: header.bounds,
       rows,
       columns,
@@ -288,6 +411,19 @@ export function collectCompiledGroundCoveredChunkKeys(manifest: CompiledGroundMa
   }
   compiledGroundCoveredChunkKeyCache.set(manifest, keys)
   return keys
+}
+
+export function serializeCompiledGroundManifest(manifest: CompiledGroundManifest): Uint8Array {
+  return encode(manifest)
+}
+
+export function deserializeCompiledGroundManifest(payload: ArrayBuffer | Uint8Array): CompiledGroundManifest | null {
+  try {
+    const decoded = decode(payload instanceof Uint8Array ? payload : new Uint8Array(payload)) as unknown
+    return normalizeCompiledGroundManifest(decoded)
+  } catch (_error) {
+    return null
+  }
 }
 
 export function computeCompiledGroundManifestRevision(

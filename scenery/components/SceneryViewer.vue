@@ -527,7 +527,10 @@ import type {
   SceneResourceSummaryEntry,
   Vector3Like,
 } from '@harmony/schema/core';
-import { resolveGroundWorkingGridSize } from '@harmony/schema/core';
+import {
+  deserializeCompiledGroundManifest,
+  resolveGroundWorkingGridSize,
+} from '@harmony/schema/core';
 import { isPointInsideRegionXZ } from '@harmony/schema/core';
 import { applyMirroredScaleToObject, syncMirroredMeshMaterials } from '@harmony/schema/mirror';
 import {
@@ -5180,9 +5183,9 @@ function readCompiledGroundManifestFromScenePackage(
   if (!manifestPath) {
     return null;
   }
-  return JSON.parse(readTextFileFromScenePackage(pkg, manifestPath)) as Parameters<
+  return deserializeCompiledGroundManifest(readBinaryFileFromScenePackage(pkg, manifestPath)) as Parameters<
     typeof syncCompiledGroundRenderTiles
-  >[0]['manifest'];
+  >[0]['manifest'] | null;
 }
 
 function attachScenePackageCompiledGroundRuntime(
@@ -12544,9 +12547,6 @@ async function startRenderIfReady() {
     await ensureRendererContext(canvasResult);
     resourcePreload.label = '正在准备运行时 prefab 资源...';
     const runtimePrefabPreloadContext = await collectRuntimePrefabPreloadContext(props.runtimePrefabSpawns);
-    if (token !== initializeToken) {
-      return;
-    }
     const renderPayload = runtimePrefabPreloadContext && previewPayload.value
       ? {
           ...previewPayload.value,
@@ -12566,25 +12566,16 @@ async function startRenderIfReady() {
         }
       : previewPayload.value;
     const steerPreparedPayload = await prepareRenderPayloadForDefaultSteer(renderPayload);
-    if (token !== initializeToken) {
-      return;
-    }
     const runtimeGroundPrepared = await prepareRuntimeGroundSplatSceneDocument(steerPreparedPayload.document);
     const preparedPayload: ScenePreviewPayload = {
       ...steerPreparedPayload,
       document: runtimeGroundPrepared.document,
     };
-    if (token !== initializeToken) {
-      return;
-    }
     if (runtimePrefabPreloadContext) {
       const prewarmBuildOptions = createSceneGraphBuildOptions(preparedPayload);
       const resourceCache = ensureResourceCache(preparedPayload.document, prewarmBuildOptions);
       viewerResourceCache = resourceCache;
       await warmRuntimePrefabAssetsBeforeSceneEntry(resourceCache, runtimePrefabPreloadContext);
-      if (token !== initializeToken) {
-        return;
-      }
     }
     await initializeRenderer(preparedPayload, canvasResult, token);
     if (token === initializeToken && !error.value) {

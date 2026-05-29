@@ -490,7 +490,7 @@ export function resolveSceneCompiledGroundPackagePaths(sceneId: string): {
 } {
   const sceneRoot = `scenes/${encodeURIComponent(sceneId)}/compiled-ground`
   return {
-    manifestPath: `${sceneRoot}/manifest.json`,
+    manifestPath: `${sceneRoot}/manifest.bin`,
     renderRootPath: `${sceneRoot}/render`,
     collisionRootPath: `${sceneRoot}/collision`,
   }

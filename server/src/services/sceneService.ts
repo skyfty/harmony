@@ -5,7 +5,7 @@ import { Types, type FilterQuery } from 'mongoose'
 import { appConfig } from '@/config/env'
 import { SceneModel } from '@/models/Scene'
 import type { SceneDocument } from '@/types/models'
-import { readTextFileFromScenePackage, unzipScenePackage } from '@harmony/schema/core'
+import { deserializeScenePackageManifest, readBinaryFileFromScenePackage, readTextFileFromScenePackage, unzipScenePackage } from '@harmony/schema/core'
 
 const SCENE_STORAGE_PREFIX = 'scenes'
 
@@ -147,7 +147,7 @@ async function parseScenePackageMetadataFromSceneFile(file: UploadedFilePayload)
       return { checkpointTotal, metadata }
     }
     try {
-      const manifestRaw = JSON.parse(readTextFileFromScenePackage(pkg, 'manifest.json'))
+      const manifestRaw = deserializeScenePackageManifest(readBinaryFileFromScenePackage(pkg, 'manifest.bin'))
       return { checkpointTotal, metadata: buildManifestMetadataFallback(manifestRaw) }
     } catch {
       return { checkpointTotal, metadata: null }

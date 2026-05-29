@@ -15,6 +15,9 @@ import {
   GROUND_SCATTER_SIDECAR_FILENAME,
   SCENE_PACKAGE_FORMAT,
   SCENE_PACKAGE_VERSION,
+  serializeScenePackageManifest,
+  serializeQuantizedTerrainDatasetRootManifest,
+  serializeCompiledGroundManifest,
   type QuantizedTerrainDatasetRootManifest,
   type ScenePackageManifestV1,
   type ScenePackageResourceEntry,
@@ -35,6 +38,9 @@ import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { PlanningSceneData } from '@/types/planning-scene-data'
 import type { PlanningScenePackageImageEntry, PlanningScenePackageSidecar } from '@/types/planning-package'
 import type { SceneExportEventReporter } from '@/types/scene-export'
+import {
+  serializePlanningScenePackageSidecar,
+} from '@/types/planning-package'
 import { computeSha256Hex, getPlanningImageBlobByHash } from '@/utils/planningImageStorage'
 import { loadPlanningDemBlobByHash } from '@/utils/planningDemStorage'
 import { fetchResourceAsset } from '@/api/resourceAssets'
@@ -266,7 +272,7 @@ async function buildTerrainDatasetPackageFiles(
   const rootManifestPath = buildQuantizedTerrainRootManifestPath(terrainRoot)
   const regionsPath = `${terrainRoot}/regions`
   const files: Record<string, Uint8Array> = {
-    [rootManifestPath]: jsonBytes(manifest),
+    [rootManifestPath]: serializeQuantizedTerrainDatasetRootManifest(manifest),
   }
 
   for (const region of manifest.regions ?? []) {
@@ -948,7 +954,7 @@ function buildProjectExportMetadata(options: {
       addBreakdownBytes(breakdown, 'sceneDocumentBytes', size)
     } else if (isTerrainPackagePath(path)) {
       addBreakdownBytes(breakdown, 'terrainBytes', size)
-    } else if (path === 'manifest.json') {
+    } else if (path === 'manifest.bin') {
       addBreakdownBytes(breakdown, 'manifestBytes', size)
     } else if (path === 'project/project.json') {
       addBreakdownBytes(breakdown, 'projectBytes', size)
@@ -1068,7 +1074,7 @@ async function buildPlanningSidecar(
   resources: ScenePackageResourceEntry[],
 ): Promise<{ planningPath: string; sidecar: PlanningScenePackageSidecar }> {
   const encodedSceneId = encodeURIComponent(sceneId)
-  const nextPlanningData = JSON.parse(JSON.stringify(planningData)) as PlanningSceneData
+  const nextPlanningData = structuredClone(planningData) as PlanningSceneData
   const images: PlanningScenePackageImageEntry[] = []
   const resourcePathByHash = new Map<string, string>()
 
@@ -1151,7 +1157,7 @@ async function buildPlanningSidecar(
     }
   }
 
-  const planningPath = `scenes/${encodedSceneId}/planning.json`
+  const planningPath = `scenes/${encodedSceneId}/planning.bin`
   return {
     planningPath,
     sidecar: {
@@ -1374,7 +1380,7 @@ export async function exportScenePackageZip(payload: {
           renderRootPath: compiledGroundPaths.renderRootPath,
           collisionRootPath: compiledGroundPaths.collisionRootPath,
         }
-        files[compiledGroundPaths.manifestPath] = jsonBytes(compiledGroundPackage.manifest)
+        files[compiledGroundPaths.manifestPath] = serializeCompiledGroundManifest(compiledGroundPackage.manifest)
         Object.assign(files, getSceneCompiledGroundPackageFileBytes(compiledGroundPackage))
         groundNode.userData = {
           ...(groundNode.userData ?? {}),
@@ -1422,7 +1428,7 @@ export async function exportScenePackageZip(payload: {
           rootManifestPath: packagedTerrainDataset.rootManifestPath,
           regionsPath: packagedTerrainDataset.regionsPath,
         }
-        files[packagedTerrainDataset.rootManifestPath] = jsonBytes(packagedTerrainDataset.manifest)
+        files[packagedTerrainDataset.rootManifestPath] = serializeQuantizedTerrainDatasetRootManifest(packagedTerrainDataset.manifest)
         Object.assign(files, packagedTerrainDataset.files)
         emitSceneExportEvent(payload.reportEvent, {
           phase: 'sidecar',
@@ -1623,7 +1629,7 @@ export async function exportScenePackageZip(payload: {
     if (payload.includePlanningData && scene.planningData) {
       const planningSidecar = await buildPlanningSidecar(scene.id, scene.planningData, files, resources)
       planningPath = planningSidecar.planningPath
-      files[planningPath] = jsonBytes(planningSidecar.sidecar)
+      files[planningPath] = serializePlanningScenePackageSidecar(planningSidecar.sidecar)
       emitSceneExportEvent(payload.reportEvent, {
         phase: 'sidecar',
         level: 'info',
@@ -1655,7 +1661,7 @@ export async function exportScenePackageZip(payload: {
     resources,
   }
 
-  const manifestBytes = jsonBytes(manifest)
+  const manifestBytes = serializeScenePackageManifest(manifest)
   let projectBytes = jsonBytes(projectWithCheckpointTotal)
   for (let attempt = 0; attempt < 4; attempt += 1) {
     const metadata = buildProjectExportMetadata({
@@ -1682,12 +1688,12 @@ export async function exportScenePackageZip(payload: {
   }
 
   files[projectPath] = projectBytes
-  files['manifest.json'] = manifestBytes
+  files['manifest.bin'] = manifestBytes
   emitSceneExportEvent(payload.reportEvent, {
     phase: 'manifest',
     level: 'info',
     status: 'completed',
-    detail: 'manifest.json',
+    detail: 'manifest.bin',
     message: `清单文件已生成 (${manifest.scenes.length} 个场景, ${manifest.resources.length} 个资源)`,
   })
 
@@ -1697,7 +1703,7 @@ export async function exportScenePackageZip(payload: {
     level: 'info',
     status: 'running',
     progress: 96,
-    detail: 'manifest.json',
+    detail: 'manifest.bin',
     message: '开始压缩 ZIP 包',
   })
   const zipBytes = zipSync(files, { level: 6 })

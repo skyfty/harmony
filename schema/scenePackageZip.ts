@@ -1,7 +1,7 @@
 import { unzipSync } from 'fflate';
 import { inferMimeTypeFromAssetId } from './assetTypeConversion';
+import { deserializeScenePackageManifest } from './scenePackage';
 import type { ScenePackageManifest } from './scenePackage';
-import { isScenePackageManifest } from './scenePackage';
 
 export type ScenePackageUnzipped = {
   manifest: ScenePackageManifest;
@@ -25,7 +25,6 @@ function decodeUtf8(bytes: Uint8Array): string {
   if (typeof TextDecoder !== 'undefined') {
     return new TextDecoder('utf-8').decode(bytes);
   }
-  // Fallback: best-effort ASCII.
   let out = '';
   for (let i = 0; i < bytes.length; i += 1) {
     out += String.fromCharCode(bytes[i] ?? 0);
@@ -35,12 +34,12 @@ function decodeUtf8(bytes: Uint8Array): string {
 
 export function unzipScenePackage(zip: ArrayBuffer | Uint8Array): ScenePackageUnzipped {
   const files = unzipSync(toUint8Array(zip));
-  const manifestBytes = files['manifest.json'];
+  const manifestBytes = files['manifest.bin'];
   if (!manifestBytes) {
-    throw new Error('Scene package missing manifest.json');
+    throw new Error('Scene package missing manifest.bin');
   }
-  const manifestRaw = JSON.parse(decodeUtf8(manifestBytes)) as unknown;
-  if (!isScenePackageManifest(manifestRaw)) {
+  const manifestRaw = deserializeScenePackageManifest(manifestBytes);
+  if (!manifestRaw) {
     throw new Error('Invalid scene package manifest');
   }
   return {

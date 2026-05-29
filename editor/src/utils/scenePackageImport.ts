@@ -1,5 +1,6 @@
 import {
   decodeScenePackageSceneDocument,
+  deserializeQuantizedTerrainDatasetRootManifest,
   type QuantizedTerrainDatasetRootManifest,
   readBinaryFileFromScenePackage,
   readTextFileFromScenePackage,
@@ -9,7 +10,7 @@ import {
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { PlanningSceneData } from '@/types/planning-scene-data'
-import type { PlanningScenePackageImageEntry, PlanningScenePackageSidecar } from '@/types/planning-package'
+import { deserializePlanningScenePackageSidecar, type PlanningScenePackageImageEntry } from '@/types/planning-package'
 import { stripGroundHeightMapsFromSceneDocument } from '@/utils/groundHeightSidecar'
 import { storePlanningImageBlobByHash } from '@/utils/planningImageStorage'
 import { storePlanningDemBlobByHash } from '@/utils/planningDemStorage'
@@ -49,54 +50,6 @@ function assertNoLandformNodes(nodes: StoredSceneDocument['nodes'], path = 'root
   })
 }
 
-function normalizePlanningPackageImageEntry(raw: unknown): PlanningScenePackageImageEntry | null {
-  if (!isPlainObject(raw)) {
-    return null
-  }
-  const imageId = typeof raw.imageId === 'string' ? raw.imageId.trim() : ''
-  if (!imageId) {
-    return null
-  }
-  return {
-    imageId,
-    imageHash: typeof raw.imageHash === 'string' && raw.imageHash.trim().length ? raw.imageHash.trim() : null,
-    resourcePath: typeof raw.resourcePath === 'string' && raw.resourcePath.trim().length ? raw.resourcePath.trim() : null,
-    filename: typeof raw.filename === 'string' ? raw.filename : null,
-    mimeType: typeof raw.mimeType === 'string' ? raw.mimeType : null,
-  }
-}
-
-function normalizePlanningSidecar(raw: unknown): PlanningScenePackageSidecar | null {
-  if (!isPlainObject(raw)) {
-    return null
-  }
-  const version = Number(raw.version)
-  if (version !== 1) {
-    return null
-  }
-  const planningData = isPlainObject(raw.planningData) ? (raw.planningData as unknown as PlanningSceneData) : null
-  const images = Array.isArray(raw.images)
-    ? raw.images.map((entry) => normalizePlanningPackageImageEntry(entry)).filter((entry): entry is PlanningScenePackageImageEntry => !!entry)
-    : []
-  return {
-    version: 1,
-    planningData,
-    images,
-    orthophoto: isPlainObject(raw.orthophoto)
-      ? {
-          sourceFileHash: typeof raw.orthophoto.sourceFileHash === 'string' && raw.orthophoto.sourceFileHash.trim().length
-            ? raw.orthophoto.sourceFileHash.trim()
-            : null,
-          resourcePath: typeof raw.orthophoto.resourcePath === 'string' && raw.orthophoto.resourcePath.trim().length
-            ? raw.orthophoto.resourcePath.trim()
-            : null,
-          filename: typeof raw.orthophoto.filename === 'string' ? raw.orthophoto.filename : null,
-          mimeType: typeof raw.orthophoto.mimeType === 'string' ? raw.orthophoto.mimeType : null,
-        }
-      : null,
-  }
-}
-
 async function restoreRuntimeResourcesFromPackage(zip: ReturnType<typeof unzipScenePackage>): Promise<void> {
   const assetCache = useAssetCacheStore()
   for (const entry of zip.manifest.resources ?? []) {
@@ -123,15 +76,15 @@ async function applyPlanningSidecarToScene(
     return rawScene
   }
 
-  const sidecarText = readTextFileFromScenePackage(zip, sceneEntry.planningPath)
-  const rawSidecar = JSON.parse(sidecarText) as unknown
-  const sidecar = normalizePlanningSidecar(rawSidecar)
+  const sidecar = deserializePlanningScenePackageSidecar(readBinaryFileFromScenePackage(zip, sceneEntry.planningPath))
   if (!sidecar?.planningData) {
     return rawScene
   }
 
-  const imageEntryById = new Map(sidecar.images.map((entry) => [entry.imageId, entry]))
-  const nextPlanningData = JSON.parse(JSON.stringify(sidecar.planningData)) as PlanningSceneData
+  const imageEntryById = new Map<string, PlanningScenePackageImageEntry>(
+    sidecar.images.map((entry) => [entry.imageId, entry] as const),
+  )
+  const nextPlanningData = structuredClone(sidecar.planningData) as PlanningSceneData
 
   for (const image of nextPlanningData.images ?? []) {
     const entry = imageEntryById.get(image.id)
@@ -241,7 +194,7 @@ function extractTerrainDatasetManifestFromPackage(
   if (!manifestPath) {
     return null
   }
-  return JSON.parse(readTextFileFromScenePackage(zip, manifestPath)) as QuantizedTerrainDatasetRootManifest
+  return deserializeQuantizedTerrainDatasetRootManifest(readBinaryFileFromScenePackage(zip, manifestPath))
 }
 
 function extractTerrainDatasetRegionPacksFromPackage(

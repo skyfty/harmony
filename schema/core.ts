@@ -1,4 +1,6 @@
 
+export { decode, encode } from '@msgpack/msgpack'
+
 import * as THREE from 'three'
 import type { SceneNodeInstanceLayout } from './instanceLayout'
 import type { TerrainScatterStoreSnapshot } from './terrain-scatter'
@@ -125,9 +127,19 @@ export {
 } from './asset-api'
 
 export {
+  normalizeBounds3D,
+  isPlainObject,
+  normalizeFiniteNumber,
+  normalizeInteger,
+  normalizeString,
+} from './valueNormalization'
+
+export {
   SCENE_PACKAGE_FORMAT,
   SCENE_PACKAGE_VERSION,
+  deserializeScenePackageManifest,
   isScenePackageManifest,
+  serializeScenePackageManifest,
 } from './scenePackage'
 export type {
   ScenePackageRoadCollisionEntry,
@@ -149,6 +161,9 @@ export {
   COMPILED_GROUND_COLLISION_TILE_MAGIC,
   computeCompiledGroundManifestRevision,
   formatCompiledGroundTileKey,
+  normalizeCompiledGroundManifest,
+  serializeCompiledGroundManifest,
+  deserializeCompiledGroundManifest,
   serializeCompiledGroundRenderTile,
   deserializeCompiledGroundRenderTile,
   serializeCompiledGroundCollisionTile,
@@ -231,6 +246,7 @@ export {
   buildQuantizedTerrainRegionPackPath,
   buildQuantizedTerrainRootManifestPath,
   clampQuantizedTerrainLevel,
+  deserializeQuantizedTerrainDatasetRootManifest,
   formatQuantizedTerrainRegionKey,
   formatQuantizedTerrainTileKey,
   getQuantizedTerrainChildMask,
@@ -239,9 +255,11 @@ export {
   isValidQuantizedTerrainLevel,
   parseQuantizedTerrainRegionKey,
   parseQuantizedTerrainTileKey,
+  normalizeQuantizedTerrainDatasetRootManifest,
   resolveQuantizedTerrainRegionIdForTile,
   resolveQuantizedTerrainTileBounds,
   resolveQuantizedTerrainTileSpanMeters,
+  serializeQuantizedTerrainDatasetRootManifest,
 } from './quantizedTerrainDataset'
 export type {
   QuantizedTerrainDatasetAvailabilityRange,
