@@ -15750,6 +15750,13 @@ function raycastPlanePoint(event: PointerEvent, plane: THREE.Plane, result: THRE
   return !!raycaster.ray.intersectPlane(plane, result)
 }
 
+function raycastLandformDragPoint(event: PointerEvent, plane: THREE.Plane, result: THREE.Vector3): boolean {
+  if (raycastGroundHeightfieldPoint(event, result)) {
+    return true
+  }
+  return raycastPlanePoint(event, plane, result)
+}
+
 function createEndpointDragPlane(options: {
   mode: 'free' | 'axis'
   axisWorld: THREE.Vector3 | null
@@ -16972,12 +16979,12 @@ function handlePointerMove(event: PointerEvent) {
     }
 
     if (!state.startHitWorld) {
-      if (!raycastPlanePoint(event, state.dragPlane, waterDragIntersectionHelper)) {
+      if (!raycastLandformDragPoint(event, state.dragPlane, waterDragIntersectionHelper)) {
         return
       }
       state.startHitWorld = waterDragIntersectionHelper.clone()
     }
-    if (!raycastPlanePoint(event, state.dragPlane, waterDragIntersectionHelper)) {
+    if (!raycastLandformDragPoint(event, state.dragPlane, waterDragIntersectionHelper)) {
       return
     }
 
@@ -17021,12 +17028,12 @@ function handlePointerMove(event: PointerEvent) {
     }
 
     if (!state.startHitWorld) {
-      if (!raycastPlanePoint(event, state.dragPlane, waterDragIntersectionHelper)) {
+      if (!raycastLandformDragPoint(event, state.dragPlane, waterDragIntersectionHelper)) {
         return
       }
       state.startHitWorld = waterDragIntersectionHelper.clone()
     }
-    if (!raycastPlanePoint(event, state.dragPlane, waterDragIntersectionHelper)) {
+    if (!raycastLandformDragPoint(event, state.dragPlane, waterDragIntersectionHelper)) {
       return
     }
 
