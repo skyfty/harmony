@@ -109,7 +109,6 @@ import {
 import { createGroundCollisionRuntimeBridgeDeps } from '@schema/groundCollisionRuntimeBridge'
 import { syncGroundCollisionRuntimeLoadedTileKeys } from '@schema/groundCollisionRuntimeState'
 import { setInfiniteGroundHiddenChunkKeys } from '@schema/groundMesh'
-import { isGroundChunkTextureReady } from '@schema/groundMesh'
 import { prepareRuntimeGroundSceneDocument } from '@schema/groundSplatRuntimeDocument'
 import { resolveModelCollisionFaceSegments } from '@schema/physicsShapeResolvers'
 import {
@@ -570,257 +569,6 @@ function collectGroundChunkRenderSnapshot(groundObject: THREE.Object3D | null | 
 		estimatedTriangles,
 		chunkKeys,
 	}
-}
-
-function describeScenePreviewTextureState(texture: THREE.Texture | null | undefined): string {
-	if (!texture) {
-		return 'null'
-	}
-	const image = texture.image as { src?: string; width?: number; height?: number } | null | undefined
-	return [
-		texture.uuid,
-		String(texture.colorSpace ?? ''),
-		texture.flipY ? 'flipY:1' : 'flipY:0',
-		`wrap:${texture.wrapS}:${texture.wrapT}`,
-		`repeat:${texture.repeat.x.toFixed(3)},${texture.repeat.y.toFixed(3)}`,
-		`offset:${texture.offset.x.toFixed(3)},${texture.offset.y.toFixed(3)}`,
-		`rot:${texture.rotation.toFixed(3)}`,
-		`src:${typeof image?.src === 'string' ? image.src.slice(0, 120) : ''}`,
-	].join('|')
-}
-
-function logScenePreviewGroundChunkSplatUniformsOnce(): void {
-	if (!currentDocument || !cachedGroundNodeId) {
-		return
-	}
-	const groundObject = nodeObjectMap.get(cachedGroundNodeId) ?? null
-	if (!groundObject) {
-		return
-	}
-	let firstChunk: THREE.Mesh | null = null
-	groundObject.traverseVisible((object) => {
-		if (firstChunk || !(object instanceof THREE.Mesh)) {
-			return
-		}
-		if (object.userData?.groundChunk) {
-			firstChunk = object as THREE.Mesh
-		}
-	})
-	const firstChunkMesh = firstChunk as THREE.Mesh | null
-	const material = firstChunkMesh
-		? (Array.isArray(firstChunkMesh.material)
-			? ((firstChunkMesh.material as Array<THREE.Material | null>)[0] ?? null)
-			: (firstChunkMesh.material ?? null))
-		: null
-	const materialAny = material as (THREE.MeshStandardMaterial & Record<string, unknown>) | null
-	const shader = materialAny?.__groundSplatShaderRef as
-		| { uniforms?: Record<string, { value: unknown }> }
-		| undefined
-	const runtimeState = materialAny?.__groundSplatRuntimeState as
-		| {
-			layerStates?: Array<{ albedoSource?: string | null; normalSource?: string | null; opacity?: number; maskChannel?: number } | null>
-			splatMaps?: Array<THREE.Texture | null>
-			layerTextures?: Array<THREE.Texture | null>
-			layerNormalTextures?: Array<THREE.Texture | null>
-			chunkBounds?: { minX: number; minZ: number; width: number; depth: number }
-		}
-		| null
-		| undefined
-	const signature = [
-		currentDocument.id,
-		cachedGroundNodeId,
-		firstChunkMesh ? '1' : '0',
-		material?.type ?? 'nomaterial',
-		String(Boolean(shader?.uniforms)),
-		String(shader?.uniforms?.groundSplatEnabled?.value ?? ''),
-		String(shader?.uniforms?.groundSplatHasMask0?.value ?? ''),
-		String(shader?.uniforms?.groundSplatLayerEnabled0?.value ?? ''),
-		String(shader?.uniforms?.groundSplatLayerHasMap0?.value ?? ''),
-		String(shader?.uniforms?.groundSplatLayerHasNormalMap0?.value ?? ''),
-		String(shader?.uniforms?.groundSplatLayerOpacity0?.value ?? ''),
-		String(Boolean(runtimeState?.layerStates?.length ?? 0)),
-		String(Boolean(runtimeState?.splatMaps?.length ?? 0)),
-		String(Boolean(runtimeState?.layerTextures?.length ?? 0)),
-		String(Boolean(runtimeState?.layerNormalTextures?.length ?? 0)),
-	].join('|')
-	if (signature === lastScenePreviewGroundChunkSplatUniformLogSignature) {
-		return
-	}
-	lastScenePreviewGroundChunkSplatUniformLogSignature = signature
-	console.info('[ScenePreview][GroundChunkSplat] uniforms', {
-		sceneId: currentDocument.id,
-		groundNodeId: cachedGroundNodeId,
-		materialType: material?.type ?? null,
-		hasShader: Boolean(shader?.uniforms),
-		groundSplatEnabled: shader?.uniforms?.groundSplatEnabled?.value ?? null,
-		groundSplatHasMask0: shader?.uniforms?.groundSplatHasMask0?.value ?? null,
-		groundSplatLayerEnabled0: shader?.uniforms?.groundSplatLayerEnabled0?.value ?? null,
-		groundSplatLayerHasMap0: shader?.uniforms?.groundSplatLayerHasMap0?.value ?? null,
-		groundSplatLayerHasNormalMap0: shader?.uniforms?.groundSplatLayerHasNormalMap0?.value ?? null,
-		groundSplatLayerOpacity0: shader?.uniforms?.groundSplatLayerOpacity0?.value ?? null,
-		runtimeLayerCount: runtimeState?.layerStates?.length ?? 0,
-		runtimeSplatMapCount: runtimeState?.splatMaps?.length ?? 0,
-		runtimeLayerTextureCount: runtimeState?.layerTextures?.length ?? 0,
-		runtimeLayerNormalTextureCount: runtimeState?.layerNormalTextures?.length ?? 0,
-		runtimeChunkBounds: runtimeState?.chunkBounds ?? null,
-		runtimeLayer0: runtimeState?.layerStates?.[0] ?? null,
-		runtimeLayerMap0: describeScenePreviewTextureState(runtimeState?.layerTextures?.[0] ?? null),
-		runtimeLayerNormalMap0: describeScenePreviewTextureState(runtimeState?.layerNormalTextures?.[0] ?? null),
-		runtimeMask0: describeScenePreviewTextureState(runtimeState?.splatMaps?.[0] ?? null),
-	})
-}
-
-function logScenePreviewGroundChunkMaterialDetailsOnce(): void {
-	if (!currentDocument || !cachedGroundNodeId) {
-		return
-	}
-	const groundObject = nodeObjectMap.get(cachedGroundNodeId) ?? null
-	if (!groundObject) {
-		return
-	}
-	let firstChunk: THREE.Mesh | null = null
-	groundObject.traverseVisible((object) => {
-		if (firstChunk || !(object instanceof THREE.Mesh)) {
-			return
-		}
-		if (object.userData?.groundChunk) {
-			firstChunk = object as THREE.Mesh
-		}
-	})
-
-	const firstChunkMesh = firstChunk as THREE.Mesh | null
-	const chunkAny = firstChunkMesh as unknown as Record<string, unknown> | null
-	const material = firstChunkMesh
-		? (Array.isArray(firstChunkMesh.material)
-			? ((firstChunkMesh.material as Array<THREE.Material | null>)[0] ?? null)
-			: (firstChunkMesh.material ?? null))
-		: null
-	const materialAny = material as (THREE.MeshStandardMaterial & Record<string, unknown>) | null
-	const map = materialAny?.map ?? null
-	const normalMap = materialAny?.normalMap ?? null
-	const signature = [
-		currentDocument.id,
-		cachedGroundNodeId,
-		firstChunk ? '1' : '0',
-		material?.type ?? 'nomaterial',
-		String(Boolean(chunkAny?.groundChunkTextureReady)),
-		String(Boolean(materialAny?.userData?.groundChunkTextured)),
-		describeScenePreviewTextureState(map),
-		describeScenePreviewTextureState(normalMap),
-		typeof materialAny?.color?.getHexString === 'function' ? `color:#${materialAny.color.getHexString()}` : 'color:na',
-		typeof materialAny?.roughness === 'number' ? `rough:${materialAny.roughness.toFixed(3)}` : 'rough:na',
-		typeof materialAny?.metalness === 'number' ? `metal:${materialAny.metalness.toFixed(3)}` : 'metal:na',
-		String(Boolean(materialAny?.toneMapped)),
-		String(Boolean(materialAny?.transparent)),
-		String(materialAny?.opacity ?? 'na'),
-		String(materialAny?.side ?? 'na'),
-		String(materialAny?.flatShading === true ? 1 : 0),
-		String(materialAny?.userData?.groundTextureSignature ?? ''),
-	].join('|')
-	if (signature === lastScenePreviewGroundChunkMaterialDetailsLogSignature) {
-		return
-	}
-	lastScenePreviewGroundChunkMaterialDetailsLogSignature = signature
-	console.info('[ScenePreview][GroundChunkMaterial] details', {
-		sceneId: currentDocument.id,
-		groundNodeId: cachedGroundNodeId,
-		hasFirstChunk: Boolean(firstChunk),
-		chunkTextureReady: Boolean(chunkAny?.groundChunkTextureReady),
-		materialType: material?.type ?? null,
-		materialGroundChunkTextured: Boolean(materialAny?.userData?.groundChunkTextured),
-		materialColor: typeof materialAny?.color?.getHexString === 'function' ? `#${materialAny.color.getHexString()}` : null,
-		materialRoughness: typeof materialAny?.roughness === 'number' ? materialAny.roughness : null,
-		materialMetalness: typeof materialAny?.metalness === 'number' ? materialAny.metalness : null,
-		materialToneMapped: materialAny?.toneMapped ?? null,
-		materialTransparent: materialAny?.transparent ?? null,
-		materialOpacity: typeof materialAny?.opacity === 'number' ? materialAny.opacity : null,
-		materialSide: materialAny?.side ?? null,
-		materialFlatShading: materialAny?.flatShading ?? null,
-		materialHasMap: Boolean(map),
-		materialHasNormalMap: Boolean(normalMap),
-		materialMapColorSpace: map ? map.colorSpace ?? null : null,
-		materialMapFlipY: map ? map.flipY ?? null : null,
-		materialMapRepeat: map ? [map.repeat.x, map.repeat.y] : null,
-		materialMapOffset: map ? [map.offset.x, map.offset.y] : null,
-		materialMapRotation: map ? map.rotation : null,
-		materialNormalMapColorSpace: normalMap ? normalMap.colorSpace ?? null : null,
-		materialNormalMapFlipY: normalMap ? normalMap.flipY ?? null : null,
-		materialNormalMapRepeat: normalMap ? [normalMap.repeat.x, normalMap.repeat.y] : null,
-		materialNormalMapOffset: normalMap ? [normalMap.offset.x, normalMap.offset.y] : null,
-		materialNormalMapRotation: normalMap ? normalMap.rotation : null,
-		materialMapSource: describeScenePreviewTextureState(map),
-		materialNormalMapSource: describeScenePreviewTextureState(normalMap),
-		materialGroundTextureSignature: typeof materialAny?.userData?.groundTextureSignature === 'string'
-			? materialAny.userData.groundTextureSignature
-			: null,
-	})
-}
-
-function logScenePreviewGroundChunkMaterialReadyOnce(): void {
-	if (!currentDocument || !cachedGroundNodeId) {
-		return
-	}
-	const groundObject = nodeObjectMap.get(cachedGroundNodeId) ?? null
-	if (!groundObject) {
-		return
-	}
-	let firstChunk: THREE.Mesh | null = null
-	groundObject.traverseVisible((object) => {
-		if (firstChunk || !(object instanceof THREE.Mesh)) {
-			return
-		}
-		if (object.userData?.groundChunk) {
-			firstChunk = object as THREE.Mesh
-		}
-	})
-	if (!firstChunk || !isGroundChunkTextureReady(firstChunk)) {
-		return
-	}
-	const firstChunkMesh = firstChunk as THREE.Mesh | null
-	const material = firstChunkMesh
-		? (Array.isArray(firstChunkMesh.material)
-			? ((firstChunkMesh.material as Array<THREE.Material | null>)[0] ?? null)
-			: (firstChunkMesh.material ?? null))
-		: null
-	const materialAny = material as (THREE.MeshStandardMaterial & Record<string, unknown>) | null
-	const map = materialAny?.map ?? null
-	const normalMap = materialAny?.normalMap ?? null
-	const signature = [
-		currentDocument.id,
-		cachedGroundNodeId,
-		firstChunkMesh ? '1' : '0',
-		material?.type ?? 'nomaterial',
-		'ready',
-		describeScenePreviewTextureState(map),
-		describeScenePreviewTextureState(normalMap),
-		String(materialAny?.userData?.groundTextureSignature ?? ''),
-	].join('|')
-	if (signature === lastScenePreviewGroundChunkMaterialReadyLogSignature) {
-		return
-	}
-	lastScenePreviewGroundChunkMaterialReadyLogSignature = signature
-	console.info('[ScenePreview][GroundChunkMaterial] ready', {
-		sceneId: currentDocument.id,
-		groundNodeId: cachedGroundNodeId,
-		materialType: material?.type ?? null,
-		materialHasMap: Boolean(map),
-		materialHasNormalMap: Boolean(normalMap),
-		materialMapColorSpace: map ? map.colorSpace ?? null : null,
-		materialMapFlipY: map ? map.flipY ?? null : null,
-		materialMapRepeat: map ? [map.repeat.x, map.repeat.y] : null,
-		materialMapOffset: map ? [map.offset.x, map.offset.y] : null,
-		materialMapRotation: map ? map.rotation : null,
-		materialNormalMapColorSpace: normalMap ? normalMap.colorSpace ?? null : null,
-		materialNormalMapFlipY: normalMap ? normalMap.flipY ?? null : null,
-		materialNormalMapRepeat: normalMap ? [normalMap.repeat.x, normalMap.repeat.y] : null,
-		materialNormalMapOffset: normalMap ? [normalMap.offset.x, normalMap.offset.y] : null,
-		materialNormalMapRotation: normalMap ? normalMap.rotation : null,
-		materialMapSource: describeScenePreviewTextureState(map),
-		materialNormalMapSource: describeScenePreviewTextureState(normalMap),
-		materialGroundTextureSignature: typeof materialAny?.userData?.groundTextureSignature === 'string'
-			? materialAny.userData.groundTextureSignature
-			: null,
-	})
 }
 
 const instancingDebug = reactive({
@@ -2159,10 +1907,6 @@ let cachedGroundNodeId: string | null = null
 let cachedGroundDynamicMesh: GroundDynamicMesh | null = null
 let cachedGroundNode: SceneNode | null = null
 let lastScenePreviewCompiledGroundRenderLoadedChunkKeysVersion = -1
-let lastScenePreviewGroundSplatRuntimeLogSignature = ''
-let lastScenePreviewGroundChunkMaterialDetailsLogSignature = ''
-let lastScenePreviewGroundChunkMaterialReadyLogSignature = ''
-let lastScenePreviewGroundChunkSplatUniformLogSignature = ''
 type ScenePreviewCompiledGroundPackage = {
 	sceneId: string
 	buildKey: string
@@ -7332,30 +7076,6 @@ async function buildPreviewRuntimeDocument(
 ): Promise<SceneJsonExportDocument> {
 	const preparedRuntime = await prepareRuntimeGroundSceneDocument(document)
 	const runtimeDocument = preparedRuntime.document
-	const runtimeGroundNode = findGroundNode(runtimeDocument.nodes)
-	const runtimeGroundSurfaceChunkCount = runtimeGroundNode?.dynamicMesh?.type === 'Ground'
-		? Object.keys((runtimeGroundNode.dynamicMesh as GroundDynamicMesh).groundSurfaceChunks ?? {}).length
-		: 0
-	const runtimeGroundLogSignature = [
-		runtimeDocument.id,
-		preparedRuntime.hasBakedGroundSplat ? '1' : '0',
-		preparedRuntime.promotedGroundSplatBake ? '1' : '0',
-		preparedRuntime.strippedLandformNodes ? '1' : '0',
-		preparedRuntime.landformNodeCount,
-		runtimeGroundSurfaceChunkCount,
-	].join('|')
-	if (runtimeGroundLogSignature !== lastScenePreviewGroundSplatRuntimeLogSignature) {
-		lastScenePreviewGroundSplatRuntimeLogSignature = runtimeGroundLogSignature
-		console.info('[ScenePreview][GroundSplat] runtime document prepared', {
-			sceneId: runtimeDocument.id,
-			hasBakedGroundSplat: preparedRuntime.hasBakedGroundSplat,
-			promotedGroundSplatBake: preparedRuntime.promotedGroundSplatBake,
-			strippedLandformNodes: preparedRuntime.strippedLandformNodes,
-			landformNodeCount: preparedRuntime.landformNodeCount,
-			groundSurfaceChunkCount: runtimeGroundSurfaceChunkCount,
-		})
-	}
-
 	const defaultSteerNodeId = resolveDefaultSteerBinding(document)
 	pendingDefaultSteerDriveEvent.value = defaultSteerNodeId ? buildDefaultSteerDriveEvent(defaultSteerNodeId) : null
 	const groundNode = findGroundNode(runtimeDocument.nodes)
@@ -9454,9 +9174,6 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
  */
 function updatePerFrameDiagnostics(delta: number): void {
 	updateLazyPlaceholders(delta)
-	logScenePreviewGroundChunkMaterialDetailsOnce()
-	logScenePreviewGroundChunkMaterialReadyOnce()
-	logScenePreviewGroundChunkSplatUniformsOnce()
 	void delta
 }
 

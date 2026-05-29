@@ -51,7 +51,6 @@ import {
   stripGroundHeightMapsFromSceneDocument,
 } from '@/utils/groundHeightSidecar'
 import { bakeLandformGroundSplatForSceneDocument } from '@/utils/landformGroundBake'
-import { buildGroundSplatDebugPreviewBlobFromPayload } from '@/utils/landformGroundBake'
 import {
   computeSceneCompiledGroundBuildKey,
   computeSceneCompiledGroundSourceSignature,
@@ -76,7 +75,6 @@ import {
   collectTransitiveConfigDependencyAssetIds,
 } from '@/stores/sceneAssetCleanup'
 import { attachRoadCollisionCompiledPackagesToDocument } from '@schema/core'
-import { deserializeGroundSplatSidecar } from '@schema/core'
 
 type SceneGroundTerrainOverrideState = {
   runtimeDisableOptimizedChunks?: boolean
@@ -1642,37 +1640,6 @@ export async function exportScenePackageZip(payload: {
         detail: groundSplatPath,
         message: `已写入 ground splat sidecar`,
       })
-
-      try {
-        const groundSplatPreviewPayload = deserializeGroundSplatSidecar(groundSplatSidecar)
-        const groundSplatPreviewBlob = await buildGroundSplatDebugPreviewBlobFromPayload(
-          scene.document as StoredSceneDocument,
-          groundSplatPreviewPayload,
-          { cellSize: 512 },
-        )
-        if (groundSplatPreviewBlob) {
-          const groundSplatPreviewPath = `scenes/${encodeURIComponent(scene.id)}/ground-splat-preview.png`
-          files[groundSplatPreviewPath] = new Uint8Array(await groundSplatPreviewBlob.arrayBuffer())
-          emitSceneExportEvent(payload.reportEvent, {
-            phase: 'sidecar',
-            level: 'info',
-            status: 'completed',
-            sceneId: scene.id,
-            sceneName,
-            detail: groundSplatPreviewPath,
-            message: `已写入 ground splat preview PNG`,
-          })
-        }
-      } catch (previewError) {
-        emitSceneExportEvent(payload.reportEvent, {
-          phase: 'sidecar',
-          level: 'warning',
-          status: 'skipped',
-          sceneId: scene.id,
-          sceneName,
-          message: `ground splat preview PNG 生成失败：${previewError instanceof Error ? previewError.message : String(previewError)}`,
-        })
-      }
     }
     if (groundScatterSidecar) {
       groundScatterPath = `scenes/${encodeURIComponent(scene.id)}/${GROUND_SCATTER_SIDECAR_FILENAME}`

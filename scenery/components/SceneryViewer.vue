@@ -436,7 +436,7 @@ import { clearGroundCollisionRuntimeHost, syncGroundCollisionRuntimeHost } from 
 import { createGroundCollisionRuntimeBridgeDeps } from '@harmony/schema/groundCollisionRuntimeBridge';
 import { clearCompiledGroundRenderTiles, collectLoadedCompiledGroundChunkKeys, getCompiledGroundRenderWorkState, syncCompiledGroundRenderTiles } from '@harmony/schema/compiledGroundRuntime';
 import { attachOptimizedGroundMeshToDocument, prepareRuntimeGroundSceneDocument } from '@harmony/schema/groundSplatRuntimeDocument';
-import { isGroundChunkTextureReady, onGroundChunkTextureReady, refreshGroundChunkMaterials, resolveInfiniteGroundVisibleChunkWindow, setInfiniteGroundHiddenChunkKeys } from '@harmony/schema/groundMesh';
+import { onGroundChunkTextureReady, refreshGroundChunkMaterials, resolveInfiniteGroundVisibleChunkWindow, setInfiniteGroundHiddenChunkKeys } from '@harmony/schema/groundMesh';
 
 import {
   type PhysicsBodyBindingEntry as RigidbodyInstance,
@@ -1446,15 +1446,6 @@ let dynamicGroundCache: { nodeId: string; node: SceneNode; dynamicMesh: GroundRu
 let sceneGraphRoot: THREE.Object3D | null = null;
 let activeScenePackageBuildKey: string | null = null;
 let lastCompiledGroundLoadedChunkVersion = -1;
-let lastSceneryGroundSplatHydrationLogSignature = '';
-let lastSceneryGroundRuntimePreparedLogSignature = '';
-let lastSceneryGroundGraphSnapshotLogSignature = '';
-let lastSceneryGroundChunkSnapshotLogSignature = '';
-let lastSceneryGroundChunkMaterialSnapshotLogSignature = '';
-let lastSceneryGroundChunkMaterialDetailsLogSignature = '';
-let lastSceneryGroundChunkMaterialReadyLogSignature = '';
-let lastSceneryGroundChunkSplatUniformLogSignature = '';
-let lastSceneryCompiledGroundLogSignature = '';
 type WindowResizeCallback = Parameters<typeof uni.onWindowResize>[0];
 let resizeListener: WindowResizeCallback | null = null;
 let canvasResult: UseCanvasResult | null = null;
@@ -6393,429 +6384,14 @@ function clearSceneryCompiledGroundRenderRuntime(): void {
   setInfiniteGroundHiddenChunkKeys(groundObject, []);
 }
 
-function logSceneryGroundGraphSnapshotOnce(document: SceneJsonExportDocument, root: THREE.Object3D): void {
-  const groundNode = findGroundNode(document.nodes);
-  const groundObject = groundNode ? resolveSceneObjectByNodeId(groundNode.id) : null;
-  const signature = [
-    document.id,
-    groundNode?.id ?? '',
-    groundObject ? '1' : '0',
-    root.children.length,
-    nodeObjectMap.size,
-  ].join('|');
-  if (signature === lastSceneryGroundGraphSnapshotLogSignature) {
-    return;
-  }
-  lastSceneryGroundGraphSnapshotLogSignature = signature;
-  console.info('[SceneryViewer][GroundGraph] scene graph mounted', {
-    sceneId: document.id,
-    groundNodeId: groundNode?.id ?? null,
-    groundObjectPresent: Boolean(groundObject),
-    sceneRootChildrenCount: root.children.length,
-    nodeObjectCount: nodeObjectMap.size,
-    groundVisible: groundObject ? isRuntimeObjectEffectivelyVisible(groundObject) : false,
-  });
-}
-
-function resolveGeometryTriangleCount(geometry: THREE.BufferGeometry): number {
-  if (!geometry) {
-    return 0;
-  }
-  const index = geometry.index;
-  if (!index) {
-    const positionCount = geometry.getAttribute('position')?.count ?? 0;
-    return positionCount > 0 ? Math.floor(positionCount / 3) : 0;
-  }
-  const drawRangeCount = Number.isFinite(geometry.drawRange.count) && geometry.drawRange.count > 0
-    ? Math.trunc(geometry.drawRange.count)
-    : index.count;
-  return Math.floor(Math.min(index.count, drawRangeCount) / 3);
-}
-
-function collectGroundChunkRenderSnapshot(groundObject: THREE.Object3D | null | undefined): {
-  visibleChunkCount: number;
-  estimatedTriangles: number;
-  chunkKeys: string[];
-} {
-  if (!groundObject) {
-    return {
-      visibleChunkCount: 0,
-      estimatedTriangles: 0,
-      chunkKeys: [],
-    };
-  }
-
-  let visibleChunkCount = 0;
-  let estimatedTriangles = 0;
-  const chunkKeys: string[] = [];
-
-  groundObject.traverseVisible((object: THREE.Object3D) => {
-    const mesh = object as THREE.Mesh;
-    if (!mesh.isMesh) {
-      return;
-    }
-    const chunk = (mesh.userData?.groundChunk ?? null) as { chunkRow?: unknown; chunkColumn?: unknown } | null;
-    if (!chunk) {
-      return;
-    }
-    visibleChunkCount += 1;
-    const key = `${String(chunk.chunkRow ?? '')}:${String(chunk.chunkColumn ?? '')}`;
-    chunkKeys.push(key);
-    const triangleCount = resolveGeometryTriangleCount(mesh.geometry);
-    if (triangleCount <= 0) {
-      return;
-    }
-    estimatedTriangles += mesh instanceof THREE.InstancedMesh
-      ? triangleCount * Math.max(0, Math.trunc(mesh.count))
-      : triangleCount;
-  });
-
-  chunkKeys.sort();
-  return {
-    visibleChunkCount,
-    estimatedTriangles,
-    chunkKeys,
-  };
-}
-
-function logSceneryGroundChunkSnapshotOnce(document: SceneJsonExportDocument): void {
-  const groundNode = findGroundNode(document.nodes);
-  const groundObject = groundNode ? resolveSceneObjectByNodeId(groundNode.id) : null;
-  const snapshot = collectGroundChunkRenderSnapshot(groundObject);
-  const signature = [
-    document.id,
-    groundNode?.id ?? '',
-    groundObject ? '1' : '0',
-    snapshot.visibleChunkCount,
-    snapshot.estimatedTriangles,
-    snapshot.chunkKeys.join(','),
-  ].join('|');
-  if (signature === lastSceneryGroundChunkSnapshotLogSignature) {
-    return;
-  }
-  lastSceneryGroundChunkSnapshotLogSignature = signature;
-  console.info('[SceneryViewer][GroundChunk] snapshot', {
-    sceneId: document.id,
-    groundNodeId: groundNode?.id ?? null,
-    groundObjectPresent: Boolean(groundObject),
-    visibleChunkCount: snapshot.visibleChunkCount,
-    estimatedTriangles: snapshot.estimatedTriangles,
-    chunkKeysPreview: snapshot.chunkKeys.slice(0, 8),
-  });
-}
-
-function logSceneryGroundChunkMaterialSnapshotOnce(document: SceneJsonExportDocument): void {
-  const groundNode = findGroundNode(document.nodes);
-  const groundObject = groundNode ? resolveSceneObjectByNodeId(groundNode.id) : null;
-  let firstChunk: THREE.Mesh | null = null;
-  if (groundObject) {
-    groundObject.traverseVisible((object) => {
-      if (firstChunk || !(object instanceof THREE.Mesh)) {
-        return;
-      }
-      if (object.userData?.groundChunk) {
-        firstChunk = object as THREE.Mesh;
-      }
-    });
-  }
-  let material: THREE.Material | null = null;
-  const firstChunkAny = firstChunk as unknown as Record<string, unknown> | null;
-  if (firstChunkAny) {
-    const chunkMaterial = Array.isArray((firstChunk as unknown as THREE.Mesh).material)
-      ? (((firstChunk as unknown as THREE.Mesh).material as Array<THREE.Material | null>)[0] ?? null)
-      : ((firstChunk as unknown as THREE.Mesh).material ?? null);
-    material = chunkMaterial as THREE.Material | null;
-  }
-  const materialUserData = material?.userData as Record<string, unknown> | undefined;
-  const signature = [
-    document.id,
-    groundNode?.id ?? '',
-    firstChunkAny ? '1' : '0',
-    material ? material.type : 'nomaterial',
-    String(Boolean(firstChunkAny?.groundChunkTextureReady)),
-    String(Boolean(materialUserData?.groundChunkTextured)),
-    String(Boolean((material as THREE.MeshStandardMaterial | null)?.map)),
-    String(Boolean((material as THREE.MeshStandardMaterial | null)?.normalMap)),
-    String(materialUserData?.groundTextureSignature ?? ''),
-  ].join('|');
-  if (signature === lastSceneryGroundChunkMaterialSnapshotLogSignature) {
-    return;
-  }
-  lastSceneryGroundChunkMaterialSnapshotLogSignature = signature;
-  console.info('[SceneryViewer][GroundChunkMaterial] snapshot', {
-    sceneId: document.id,
-    groundNodeId: groundNode?.id ?? null,
-    hasFirstChunk: Boolean(firstChunkAny),
-    chunkTextureReady: Boolean(firstChunkAny?.groundChunkTextureReady),
-    materialType: material?.type ?? null,
-    materialGroundChunkTextured: Boolean(materialUserData?.groundChunkTextured),
-    materialHasMap: Boolean((material as THREE.MeshStandardMaterial | null)?.map),
-    materialHasNormalMap: Boolean((material as THREE.MeshStandardMaterial | null)?.normalMap),
-    materialGroundTextureSignature: typeof materialUserData?.groundTextureSignature === 'string'
-      ? materialUserData.groundTextureSignature
-      : null,
-  });
-}
-
-function describeSceneryTextureState(texture: THREE.Texture | null | undefined): string {
-  if (!texture) {
-    return 'null';
-  }
-  const image = texture.image as { src?: string; width?: number; height?: number } | null | undefined;
-  return [
-    texture.uuid,
-    String(texture.colorSpace ?? ''),
-    texture.flipY ? 'flipY:1' : 'flipY:0',
-    `wrap:${texture.wrapS}:${texture.wrapT}`,
-    `repeat:${texture.repeat.x.toFixed(3)},${texture.repeat.y.toFixed(3)}`,
-    `offset:${texture.offset.x.toFixed(3)},${texture.offset.y.toFixed(3)}`,
-    `rot:${texture.rotation.toFixed(3)}`,
-    `src:${typeof image?.src === 'string' ? image.src.slice(0, 120) : ''}`,
-  ].join('|');
-}
-
-function logSceneryGroundChunkSplatUniformsOnce(document: SceneJsonExportDocument): void {
-  const groundNode = findGroundNode(document.nodes);
-  const groundObject = groundNode ? resolveSceneObjectByNodeId(groundNode.id) : null;
-  let firstChunk: THREE.Mesh | null = null;
-  if (groundObject) {
-    groundObject.traverseVisible((object) => {
-      if (firstChunk || !(object instanceof THREE.Mesh)) {
-        return;
-      }
-      if (object.userData?.groundChunk) {
-        firstChunk = object as THREE.Mesh;
-      }
-    });
-  }
-  const firstChunkMesh = firstChunk as THREE.Mesh | null;
-  const material = firstChunkMesh
-    ? (Array.isArray(firstChunkMesh.material)
-      ? ((firstChunkMesh.material as Array<THREE.Material | null>)[0] ?? null)
-      : (firstChunkMesh.material ?? null))
-    : null;
-  const materialAny = material as (THREE.MeshStandardMaterial & Record<string, unknown>) | null;
-  const shader = materialAny?.__groundSplatShaderRef as
-    | { uniforms?: Record<string, { value: unknown }> }
-    | undefined;
-  const runtimeState = materialAny?.__groundSplatRuntimeState as
-    | {
-      layerStates?: Array<{ albedoSource?: string | null; normalSource?: string | null; opacity?: number; maskChannel?: number } | null>;
-      splatMaps?: Array<THREE.Texture | null>;
-      layerTextures?: Array<THREE.Texture | null>;
-      layerNormalTextures?: Array<THREE.Texture | null>;
-      chunkBounds?: { minX: number; minZ: number; width: number; depth: number };
-    }
-    | null
-    | undefined;
-  const signature = [
-    document.id,
-    groundNode?.id ?? '',
-    firstChunkMesh ? '1' : '0',
-    material?.type ?? 'nomaterial',
-    String(Boolean(shader?.uniforms)),
-    String(shader?.uniforms?.groundSplatEnabled?.value ?? ''),
-    String(shader?.uniforms?.groundSplatHasMask0?.value ?? ''),
-    String(shader?.uniforms?.groundSplatLayerEnabled0?.value ?? ''),
-    String(shader?.uniforms?.groundSplatLayerHasMap0?.value ?? ''),
-    String(shader?.uniforms?.groundSplatLayerHasNormalMap0?.value ?? ''),
-    String(shader?.uniforms?.groundSplatLayerOpacity0?.value ?? ''),
-    String(Boolean(runtimeState?.layerStates?.length ?? 0)),
-    String(Boolean(runtimeState?.splatMaps?.length ?? 0)),
-    String(Boolean(runtimeState?.layerTextures?.length ?? 0)),
-    String(Boolean(runtimeState?.layerNormalTextures?.length ?? 0)),
-  ].join('|');
-  if (signature === lastSceneryGroundChunkSplatUniformLogSignature) {
-    return;
-  }
-  lastSceneryGroundChunkSplatUniformLogSignature = signature;
-  console.info('[SceneryViewer][GroundChunkSplat] uniforms', {
-    sceneId: document.id,
-    groundNodeId: groundNode?.id ?? null,
-    materialType: material?.type ?? null,
-    hasShader: Boolean(shader?.uniforms),
-    groundSplatEnabled: shader?.uniforms?.groundSplatEnabled?.value ?? null,
-    groundSplatHasMask0: shader?.uniforms?.groundSplatHasMask0?.value ?? null,
-    groundSplatLayerEnabled0: shader?.uniforms?.groundSplatLayerEnabled0?.value ?? null,
-    groundSplatLayerHasMap0: shader?.uniforms?.groundSplatLayerHasMap0?.value ?? null,
-    groundSplatLayerHasNormalMap0: shader?.uniforms?.groundSplatLayerHasNormalMap0?.value ?? null,
-    groundSplatLayerOpacity0: shader?.uniforms?.groundSplatLayerOpacity0?.value ?? null,
-    runtimeLayerCount: runtimeState?.layerStates?.length ?? 0,
-    runtimeSplatMapCount: runtimeState?.splatMaps?.length ?? 0,
-    runtimeLayerTextureCount: runtimeState?.layerTextures?.length ?? 0,
-    runtimeLayerNormalTextureCount: runtimeState?.layerNormalTextures?.length ?? 0,
-    runtimeChunkBounds: runtimeState?.chunkBounds ?? null,
-    runtimeLayer0: runtimeState?.layerStates?.[0] ?? null,
-    runtimeLayerMap0: describeSceneryTextureState(runtimeState?.layerTextures?.[0] ?? null),
-    runtimeLayerNormalMap0: describeSceneryTextureState(runtimeState?.layerNormalTextures?.[0] ?? null),
-    runtimeMask0: describeSceneryTextureState(runtimeState?.splatMaps?.[0] ?? null),
-  });
-}
-
-function logSceneryGroundChunkMaterialDetailsOnce(document: SceneJsonExportDocument): void {
-  const groundNode = findGroundNode(document.nodes);
-  const groundObject = groundNode ? resolveSceneObjectByNodeId(groundNode.id) : null;
-  let firstChunk: THREE.Mesh | null = null;
-  if (groundObject) {
-    groundObject.traverseVisible((object) => {
-      if (firstChunk || !(object instanceof THREE.Mesh)) {
-        return;
-      }
-      if (object.userData?.groundChunk) {
-        firstChunk = object as THREE.Mesh;
-      }
-    });
-  }
-
-  const firstChunkMesh = firstChunk as THREE.Mesh | null;
-  const chunkAny = firstChunkMesh as unknown as Record<string, unknown> | null;
-  const material = firstChunkMesh
-    ? (Array.isArray(firstChunkMesh.material)
-      ? ((firstChunkMesh.material as Array<THREE.Material | null>)[0] ?? null)
-      : (firstChunkMesh.material ?? null))
-    : null;
-  const materialAny = material as (THREE.MeshStandardMaterial & Record<string, unknown>) | null;
-  const map = materialAny?.map ?? null;
-  const normalMap = materialAny?.normalMap ?? null;
-  const signature = [
-    document.id,
-    groundNode?.id ?? '',
-    firstChunk ? '1' : '0',
-    material?.type ?? 'nomaterial',
-    String(Boolean(chunkAny?.groundChunkTextureReady)),
-    String(Boolean(materialAny?.userData?.groundChunkTextured)),
-    describeSceneryTextureState(map),
-    describeSceneryTextureState(normalMap),
-    typeof materialAny?.color?.getHexString === 'function' ? `color:#${materialAny.color.getHexString()}` : 'color:na',
-    typeof materialAny?.roughness === 'number' ? `rough:${materialAny.roughness.toFixed(3)}` : 'rough:na',
-    typeof materialAny?.metalness === 'number' ? `metal:${materialAny.metalness.toFixed(3)}` : 'metal:na',
-    String(Boolean(materialAny?.toneMapped)),
-    String(Boolean(materialAny?.transparent)),
-    String(materialAny?.opacity ?? 'na'),
-    String(materialAny?.side ?? 'na'),
-    String(materialAny?.flatShading === true ? 1 : 0),
-    String(materialAny?.userData?.groundTextureSignature ?? ''),
-  ].join('|');
-  if (signature === lastSceneryGroundChunkMaterialDetailsLogSignature) {
-    return;
-  }
-  lastSceneryGroundChunkMaterialDetailsLogSignature = signature;
-  console.info('[SceneryViewer][GroundChunkMaterial] details', {
-    sceneId: document.id,
-    groundNodeId: groundNode?.id ?? null,
-    hasFirstChunk: Boolean(firstChunk),
-    chunkTextureReady: Boolean(chunkAny?.groundChunkTextureReady),
-    materialType: material?.type ?? null,
-    materialGroundChunkTextured: Boolean(materialAny?.userData?.groundChunkTextured),
-    materialColor: typeof materialAny?.color?.getHexString === 'function' ? `#${materialAny.color.getHexString()}` : null,
-    materialRoughness: typeof materialAny?.roughness === 'number' ? materialAny.roughness : null,
-    materialMetalness: typeof materialAny?.metalness === 'number' ? materialAny.metalness : null,
-    materialToneMapped: materialAny?.toneMapped ?? null,
-    materialTransparent: materialAny?.transparent ?? null,
-    materialOpacity: typeof materialAny?.opacity === 'number' ? materialAny.opacity : null,
-    materialSide: materialAny?.side ?? null,
-    materialFlatShading: materialAny?.flatShading ?? null,
-    materialHasMap: Boolean(map),
-    materialHasNormalMap: Boolean(normalMap),
-    materialMapColorSpace: map ? map.colorSpace ?? null : null,
-    materialMapFlipY: map ? map.flipY ?? null : null,
-    materialMapRepeat: map ? [map.repeat.x, map.repeat.y] : null,
-    materialMapOffset: map ? [map.offset.x, map.offset.y] : null,
-    materialMapRotation: map ? map.rotation : null,
-    materialNormalMapColorSpace: normalMap ? normalMap.colorSpace ?? null : null,
-    materialNormalMapFlipY: normalMap ? normalMap.flipY ?? null : null,
-    materialNormalMapRepeat: normalMap ? [normalMap.repeat.x, normalMap.repeat.y] : null,
-    materialNormalMapOffset: normalMap ? [normalMap.offset.x, normalMap.offset.y] : null,
-    materialNormalMapRotation: normalMap ? normalMap.rotation : null,
-    materialMapSource: describeSceneryTextureState(map),
-    materialNormalMapSource: describeSceneryTextureState(normalMap),
-    materialGroundTextureSignature: typeof materialAny?.userData?.groundTextureSignature === 'string'
-      ? materialAny.userData.groundTextureSignature
-      : null,
-  });
-}
-
-function logSceneryGroundChunkMaterialReadyOnce(document: SceneJsonExportDocument): void {
-  const groundNode = findGroundNode(document.nodes);
-  const groundObject = groundNode ? resolveSceneObjectByNodeId(groundNode.id) : null;
-  let firstChunk: THREE.Mesh | null = null;
-  if (groundObject) {
-    groundObject.traverseVisible((object) => {
-      if (firstChunk || !(object instanceof THREE.Mesh)) {
-        return;
-      }
-      if (object.userData?.groundChunk) {
-        firstChunk = object as THREE.Mesh;
-      }
-    });
-  }
-  if (!firstChunk || !isGroundChunkTextureReady(firstChunk)) {
-    return;
-  }
-  const firstChunkMesh = firstChunk as THREE.Mesh | null;
-  const material = firstChunkMesh
-    ? (Array.isArray(firstChunkMesh.material)
-      ? ((firstChunkMesh.material as Array<THREE.Material | null>)[0] ?? null)
-      : (firstChunkMesh.material ?? null))
-    : null;
-  const materialAny = material as (THREE.MeshStandardMaterial & Record<string, unknown>) | null;
-  const map = materialAny?.map ?? null;
-  const normalMap = materialAny?.normalMap ?? null;
-  const signature = [
-    document.id,
-    groundNode?.id ?? '',
-    firstChunkMesh ? '1' : '0',
-    material?.type ?? 'nomaterial',
-    'ready',
-    describeSceneryTextureState(map),
-    describeSceneryTextureState(normalMap),
-    String(materialAny?.userData?.groundTextureSignature ?? ''),
-  ].join('|');
-  if (signature === lastSceneryGroundChunkMaterialReadyLogSignature) {
-    return;
-  }
-  lastSceneryGroundChunkMaterialReadyLogSignature = signature;
-  console.info('[SceneryViewer][GroundChunkMaterial] ready', {
-    sceneId: document.id,
-    groundNodeId: groundNode?.id ?? null,
-    materialType: material?.type ?? null,
-    materialHasMap: Boolean(map),
-    materialHasNormalMap: Boolean(normalMap),
-    materialMapColorSpace: map ? map.colorSpace ?? null : null,
-    materialMapFlipY: map ? map.flipY ?? null : null,
-    materialMapRepeat: map ? [map.repeat.x, map.repeat.y] : null,
-    materialMapOffset: map ? [map.offset.x, map.offset.y] : null,
-    materialMapRotation: map ? map.rotation : null,
-    materialNormalMapColorSpace: normalMap ? normalMap.colorSpace ?? null : null,
-    materialNormalMapFlipY: normalMap ? normalMap.flipY ?? null : null,
-    materialNormalMapRepeat: normalMap ? [normalMap.repeat.x, normalMap.repeat.y] : null,
-    materialNormalMapOffset: normalMap ? [normalMap.offset.x, normalMap.offset.y] : null,
-    materialNormalMapRotation: normalMap ? normalMap.rotation : null,
-    materialMapSource: describeSceneryTextureState(map),
-    materialNormalMapSource: describeSceneryTextureState(normalMap),
-    materialGroundTextureSignature: typeof materialAny?.userData?.groundTextureSignature === 'string'
-      ? materialAny.userData.groundTextureSignature
-      : null,
-  });
-}
-
 function primeSceneryGroundChunkTextureRefresh(root: THREE.Object3D, definition: GroundDynamicMesh): void {
   refreshGroundChunkMaterials(root, definition);
-  if (currentDocument) {
-    logSceneryGroundChunkMaterialDetailsOnce(currentDocument);
-    logSceneryGroundChunkSplatUniformsOnce(currentDocument);
-  }
   root.traverse((object) => {
     if (!(object instanceof THREE.Mesh) || !object.userData?.groundChunk) {
       return;
     }
     onGroundChunkTextureReady(object, () => {
       refreshGroundChunkMaterials(root, definition);
-      if (currentDocument) {
-        logSceneryGroundChunkMaterialDetailsOnce(currentDocument);
-        logSceneryGroundChunkMaterialReadyOnce(currentDocument);
-        logSceneryGroundChunkSplatUniformsOnce(currentDocument);
-      }
     });
   });
 }
@@ -6856,24 +6432,6 @@ function syncSceneryCompiledGroundRenderTiles(camera: THREE.Camera | null | unde
   const revision = Number.isFinite(Number(compiledManifest.revision))
     ? Math.max(0, Math.trunc(Number(compiledManifest.revision)))
     : 0;
-  const enterSignature = [
-    currentDocument.id,
-    groundNode.id,
-    buildKey,
-    revision,
-    compiledManifest.renderTiles?.length ?? 0,
-  ].join('|');
-  if (enterSignature !== lastSceneryCompiledGroundLogSignature) {
-    lastSceneryCompiledGroundLogSignature = enterSignature;
-    console.info('[SceneryViewer][CompiledGround] syncing render tiles', {
-      sceneId: currentDocument.id,
-      groundNodeId: groundNode.id,
-      buildKey,
-      revision,
-      renderTileCount: compiledManifest.renderTiles?.length ?? 0,
-      compiledGroundManifestPresent: true,
-    });
-  }
   const workState = getCompiledGroundRenderWorkState(groundObject);
   syncCompiledGroundRenderTiles({
     groundObject,
@@ -12399,26 +11957,6 @@ function hydrateGroundSidecarFromPackage(
   if (!splatPayload.groundSurfaceChunks || Object.keys(splatPayload.groundSurfaceChunks).length <= 0) {
     throw new Error(`场景 ${sceneEntry.sceneId} 的 ground splat sidecar 缺少 baked chunk 数据`);
   }
-  const groundSurfaceChunkKeys = Object.keys(splatPayload.groundSurfaceChunks)
-  const splatHydrationLogSignature = [
-    sceneEntry.sceneId,
-    splatPayload.revision,
-    groundSurfaceChunkKeys.length,
-    Array.isArray(splatPayload.surfaceLayerTextureAssetIds) ? splatPayload.surfaceLayerTextureAssetIds.length : 0,
-    groundSurfaceChunkKeys.slice(0, 8).join(','),
-  ].join('|')
-  if (splatHydrationLogSignature !== lastSceneryGroundSplatHydrationLogSignature) {
-    lastSceneryGroundSplatHydrationLogSignature = splatHydrationLogSignature
-    console.info('[SceneryViewer][GroundSplat] hydrated scene package sidecar', {
-      sceneId: sceneEntry.sceneId,
-      revision: splatPayload.revision,
-      groundSurfaceChunkCount: groundSurfaceChunkKeys.length,
-      surfaceLayerTextureAssetIdCount: Array.isArray(splatPayload.surfaceLayerTextureAssetIds)
-        ? splatPayload.surfaceLayerTextureAssetIds.length
-        : 0,
-      groundSurfaceChunkKeysPreview: groundSurfaceChunkKeys.slice(0, 8),
-    });
-  }
   definition.groundSurfaceChunks = JSON.parse(JSON.stringify(splatPayload.groundSurfaceChunks));
   definition.groundSplatBake = {
     revision: Number.isFinite(splatPayload.revision) ? Math.max(0, Math.trunc(splatPayload.revision)) : 0,
@@ -13081,25 +12619,6 @@ async function startRenderIfReady() {
     const steerPreparedPayload = await prepareRenderPayloadForDefaultSteer(renderPayload);
     const runtimeGroundPrepared = await prepareRuntimeGroundSceneDocument(steerPreparedPayload.document);
     const preparedGroundDocument = runtimeGroundPrepared.document;
-    const runtimeGroundLogSignature = [
-      preparedGroundDocument.id,
-      runtimeGroundPrepared.hasBakedGroundSplat ? '1' : '0',
-      runtimeGroundPrepared.promotedGroundSplatBake ? '1' : '0',
-      runtimeGroundPrepared.strippedLandformNodes ? '1' : '0',
-      runtimeGroundPrepared.landformNodeCount,
-      runtimeGroundPrepared.groundSurfaceChunkCount,
-    ].join('|');
-    if (runtimeGroundLogSignature !== lastSceneryGroundRuntimePreparedLogSignature) {
-      lastSceneryGroundRuntimePreparedLogSignature = runtimeGroundLogSignature;
-      console.info('[SceneryViewer][GroundSplat] runtime document prepared', {
-        sceneId: preparedGroundDocument.id,
-        hasBakedGroundSplat: runtimeGroundPrepared.hasBakedGroundSplat,
-        promotedGroundSplatBake: runtimeGroundPrepared.promotedGroundSplatBake,
-        strippedLandformNodes: runtimeGroundPrepared.strippedLandformNodes,
-        landformNodeCount: runtimeGroundPrepared.landformNodeCount,
-        groundSurfaceChunkCount: runtimeGroundPrepared.groundSurfaceChunkCount,
-      });
-    }
     currentDocument = preparedGroundDocument;
     refreshDynamicGroundCache(currentDocument);
     const preparedPayload: ScenePreviewPayload = {
@@ -13736,9 +13255,6 @@ async function mountGraphAndSyncSubsystems(
   applyWeChatShadowPolicy(root);
   refreshMultiuserNodeReferences(payload.document);
   refreshBehaviorProximityCandidates();
-  logSceneryGroundGraphSnapshotOnce(payload.document, root);
-  logSceneryGroundChunkSnapshotOnce(payload.document);
-  logSceneryGroundChunkMaterialSnapshotOnce(payload.document);
   await yieldToMainThread();
 
   setSceneInitState({
