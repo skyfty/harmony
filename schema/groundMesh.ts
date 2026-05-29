@@ -664,6 +664,16 @@ function resolveInfiniteFlatTilingReleaseRadiusChunks(definition: GroundDynamicM
   return loadRadiusChunks + releaseBufferChunks
 }
 
+function resolveInfiniteDenseChunkLoadRadiusChunks(definition: GroundDynamicMesh): number {
+  const runtimeDenseRadius = Number((definition as GroundDynamicMesh & {
+    runtimeDenseChunkLoadRadiusChunks?: unknown
+  }).runtimeDenseChunkLoadRadiusChunks)
+  if (Number.isFinite(runtimeDenseRadius) && runtimeDenseRadius > 0) {
+    return Math.max(1, Math.trunc(runtimeDenseRadius))
+  }
+  return resolveInfiniteRenderRadiusChunks(definition)
+}
+
 function updateInfiniteFlatTilingBounds(
   state: GroundRuntimeState,
   cameraChunkCoord: { chunkX: number; chunkZ: number },
@@ -8069,9 +8079,10 @@ export function updateGroundChunks(
 
   const cameraChunkCoord = resolveGroundChunkCoordFromWorldPosition(localX, localZ, chunkSizeMeters)
 
-  const loadRadiusChunks = resolveInfiniteFlatTilingRadiusChunks(definition)
+  const loadRadiusChunks = resolveInfiniteDenseChunkLoadRadiusChunks(definition)
   const flatReleaseRadiusChunks = resolveInfiniteFlatTilingReleaseRadiusChunks(definition)
-  const flatTilingExpansion = updateInfiniteFlatTilingBounds(state, cameraChunkCoord, loadRadiusChunks)
+  const flatLoadRadiusChunks = resolveInfiniteFlatTilingRadiusChunks(definition)
+  const flatTilingExpansion = updateInfiniteFlatTilingBounds(state, cameraChunkCoord, flatLoadRadiusChunks)
   const flatTilingChanged = flatTilingExpansion !== null
   const unloadRadiusChunks = loadRadiusChunks + Math.max(4, Math.ceil(loadRadiusChunks * 0.5))
 
@@ -8118,7 +8129,7 @@ export function updateGroundChunks(
     minUnloadChunkColumn,
     maxUnloadChunkColumn,
     Math.round(loadRadiusChunks * 1000),
-    `${cameraChunkCoord.chunkX}:${cameraChunkCoord.chunkZ}:${loadRadiusChunks}:${unloadRadiusChunks}:${flatMinLoadChunkRow}:${flatMaxLoadChunkRow}:${flatMinLoadChunkColumn}:${flatMaxLoadChunkColumn}`,
+    `${cameraChunkCoord.chunkX}:${cameraChunkCoord.chunkZ}:${loadRadiusChunks}:${flatLoadRadiusChunks}:${unloadRadiusChunks}:${flatMinLoadChunkRow}:${flatMaxLoadChunkRow}:${flatMinLoadChunkColumn}:${flatMaxLoadChunkColumn}`,
     state.hiddenChunkKeysVersion,
   ].join('|')
   // 这个 signature 是“当前应该保留哪些 chunk”的摘要；只要它变了，就说明窗口发生了实质变化。

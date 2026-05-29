@@ -21534,12 +21534,19 @@ function resolveViewportGroundStreamingDefinition(
     ? Math.max(1, Math.trunc(authoredRadiusCandidate))
     : 1
   const renderRadiusChunks = Math.max(authoredRadiusChunks, dynamicRadiusChunks)
-  if (renderRadiusChunks === authoredRadiusChunks) {
+  const currentDenseRadiusChunks = Number((groundDefinition as GroundRuntimeDynamicMesh & {
+    runtimeDenseChunkLoadRadiusChunks?: unknown
+  }).runtimeDenseChunkLoadRadiusChunks)
+  const denseRadiusUnchanged = Number.isFinite(currentDenseRadiusChunks)
+    ? Math.max(1, Math.trunc(currentDenseRadiusChunks)) === authoredRadiusChunks
+    : authoredRadiusChunks === Math.max(1, Math.trunc(Number(groundDefinition.renderRadiusChunks) || 1))
+  if (renderRadiusChunks === authoredRadiusChunks && denseRadiusUnchanged) {
     return groundDefinition
   }
   return {
     ...groundDefinition,
     renderRadiusChunks,
+    runtimeDenseChunkLoadRadiusChunks: authoredRadiusChunks,
   }
 }
 

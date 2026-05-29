@@ -2143,6 +2143,8 @@ export interface GroundDynamicMesh {
   /** Runtime-only dataset metadata hydrated by the viewer. */
   runtimeTerrainDatasetManifest?: unknown
   runtimeTerrainDatasetEnabled?: boolean
+  /** Runtime-only dense chunk radius override used to keep expensive standalone chunk meshes inside a tighter window than flat tiling. */
+  runtimeDenseChunkLoadRadiusChunks?: number
   /** Sparse local high-resolution authoring tiles for Terrain Tools and DEM-preserved detail. */
   localEditTiles?: GroundLocalEditTileMap | null
   terrainScatter?: TerrainScatterStoreSnapshot | null
