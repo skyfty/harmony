@@ -574,13 +574,6 @@ async function prepareSceneDocumentForPackageExport(document: SceneJsonExportDoc
   })
   stripLandformNodes(cloned.nodes ?? [])
   assertNoLandformNodes(cloned.nodes ?? [])
-  const bakedGroundNode = cloned.nodes ? cloned.nodes.find((node) => node?.dynamicMesh?.type === 'Ground') : null
-  if (bakedGroundNode?.dynamicMesh && bakedGroundNode.dynamicMesh.type === 'Ground') {
-    bakedGroundNode.dynamicMesh = {
-      ...bakedGroundNode.dynamicMesh,
-      groundSplatBake: null,
-    }
-  }
   const looksEditableScene = 'assetCatalog' in cloned
   if (!looksEditableScene) {
     return cloned

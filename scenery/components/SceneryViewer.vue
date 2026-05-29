@@ -435,6 +435,7 @@ import { syncGroundCollisionRuntimeLoadedTileKeys } from '@harmony/schema/ground
 import { clearGroundCollisionRuntimeHost, syncGroundCollisionRuntimeHost } from '@harmony/schema/groundCollisionRuntimeHost';
 import { createGroundCollisionRuntimeBridgeDeps } from '@harmony/schema/groundCollisionRuntimeBridge';
 import { clearCompiledGroundRenderTiles, collectLoadedCompiledGroundChunkKeys, getCompiledGroundRenderWorkState, syncCompiledGroundRenderTiles } from '@harmony/schema/compiledGroundRuntime';
+import { prepareRuntimeGroundSplatSceneDocument } from '@harmony/schema/groundSplatRuntimeDocument';
 import { resolveInfiniteGroundVisibleChunkWindow, setInfiniteGroundHiddenChunkKeys } from '@harmony/schema/groundMesh';
 
 import {
@@ -12564,7 +12565,15 @@ async function startRenderIfReady() {
           },
         }
       : previewPayload.value;
-    const preparedPayload = await prepareRenderPayloadForDefaultSteer(renderPayload);
+    const steerPreparedPayload = await prepareRenderPayloadForDefaultSteer(renderPayload);
+    if (token !== initializeToken) {
+      return;
+    }
+    const runtimeGroundPrepared = await prepareRuntimeGroundSplatSceneDocument(steerPreparedPayload.document);
+    const preparedPayload: ScenePreviewPayload = {
+      ...steerPreparedPayload,
+      document: runtimeGroundPrepared.document,
+    };
     if (token !== initializeToken) {
       return;
     }

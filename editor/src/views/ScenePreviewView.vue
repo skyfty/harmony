@@ -110,6 +110,7 @@ import {
 import { createGroundCollisionRuntimeBridgeDeps } from '@schema/groundCollisionRuntimeBridge'
 import { syncGroundCollisionRuntimeLoadedTileKeys } from '@schema/groundCollisionRuntimeState'
 import { setInfiniteGroundHiddenChunkKeys } from '@schema/groundMesh'
+import { prepareRuntimeGroundSplatSceneDocument } from '@schema/groundSplatRuntimeDocument'
 import { resolveModelCollisionFaceSegments } from '@schema/physicsShapeResolvers'
 import {
 	createSceneCsmShadowRuntime,
@@ -6992,8 +6993,11 @@ function handleLookLevelEvent(event: Extract<BehaviorRuntimeEvent, { type: 'look
 }
 
 async function ensureScenePreviewExportDocument(document: StoredSceneDocument) {
+	await bakeLandformGroundSplatForSceneDocument(document, {
+		maxTextureSize: 512,
+		maxSplatLayers: 4,
+	})
 	const bundle = await prepareStoredSceneJsonExportBundle(document, SCENE_PREVIEW_EXPORT_OPTIONS)
-
 	return bundle.document
 }
 
@@ -7028,30 +7032,6 @@ function isSceneJsonExportDocument(raw: unknown): raw is SceneJsonExportDocument
 	const candidate = raw as Partial<SceneJsonExportDocument>
 	return typeof candidate.id === 'string' && Array.isArray(candidate.nodes)
 }
-
-function stripLandformNodes(nodes: SceneJsonExportDocument['nodes']): void {
-	if (!Array.isArray(nodes)) {
-		return
-	}
-	for (let index = nodes.length - 1; index >= 0; index -= 1) {
-		const node = nodes[index]
-		if (!node || typeof node !== 'object') {
-			continue
-		}
-		const dynamicMesh = (node as { dynamicMesh?: { type?: string } | null }).dynamicMesh
-		if (dynamicMesh?.type === 'Landform') {
-			nodes.splice(index, 1)
-			continue
-		}
-		if (Array.isArray(node.children) && node.children.length > 0) {
-			stripLandformNodes(node.children)
-			if (node.children.length === 0) {
-				delete node.children
-			}
-		}
-	}
-}
-
 async function buildPreviewRuntimeDocument(
 	document: SceneJsonExportDocument,
 	options: {
@@ -7060,39 +7040,9 @@ async function buildPreviewRuntimeDocument(
 		sourceDocument?: StoredSceneDocument | SceneJsonExportDocument | null
 	} = {},
 ): Promise<SceneJsonExportDocument> {
-	const runtimeDocument = (typeof structuredClone === 'function'
-		? structuredClone(document)
-		: JSON.parse(JSON.stringify(document))) as SceneJsonExportDocument
-	const bakeSourceDocument = (options.sourceDocument
-		? (typeof structuredClone === 'function'
-			? structuredClone(options.sourceDocument)
-			: JSON.parse(JSON.stringify(options.sourceDocument)))
-		: runtimeDocument) as StoredSceneDocument
-	await bakeLandformGroundSplatForSceneDocument(bakeSourceDocument, {
-		maxTextureSize: 512,
-		maxSplatLayers: 4,
-	})
-	const bakedGroundNode = findGroundNode(bakeSourceDocument.nodes)
-	const bakedGroundMesh = bakedGroundNode?.dynamicMesh && isGroundDynamicMesh(bakedGroundNode.dynamicMesh)
-		? bakedGroundNode.dynamicMesh
-		: null
-	const runtimeGroundNode = findGroundNode(runtimeDocument.nodes)
-	if (runtimeGroundNode && runtimeGroundNode.dynamicMesh && isGroundDynamicMesh(runtimeGroundNode.dynamicMesh) && bakedGroundMesh) {
-		runtimeGroundNode.dynamicMesh = {
-			...runtimeGroundNode.dynamicMesh,
-			groundSurfaceChunks: bakedGroundMesh.groundSurfaceChunks
-				? (typeof structuredClone === 'function'
-					? structuredClone(bakedGroundMesh.groundSurfaceChunks)
-					: JSON.parse(JSON.stringify(bakedGroundMesh.groundSurfaceChunks)))
-				: null,
-			groundSplatBake: bakedGroundMesh.groundSplatBake
-				? (typeof structuredClone === 'function'
-					? structuredClone(bakedGroundMesh.groundSplatBake)
-					: JSON.parse(JSON.stringify(bakedGroundMesh.groundSplatBake)))
-				: null,
-		} as GroundDynamicMesh
-	}
-	stripLandformNodes(runtimeDocument.nodes)
+	const preparedRuntime = await prepareRuntimeGroundSplatSceneDocument(document)
+	const runtimeDocument = preparedRuntime.document
+
 	const defaultSteerNodeId = resolveDefaultSteerBinding(document)
 	pendingDefaultSteerDriveEvent.value = defaultSteerNodeId ? buildDefaultSteerDriveEvent(defaultSteerNodeId) : null
 	const groundNode = findGroundNode(runtimeDocument.nodes)

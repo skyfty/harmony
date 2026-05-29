@@ -213,16 +213,12 @@ export function cloneGroundSettings(settings: Partial<GroundSettings> | null | u
 }
 
 export function resolveGroundCreationProfile(
-  width: number,
-  depth: number,
   baseCellSize = DEFAULT_GROUND_CELL_SIZE,
 ): GroundCreationProfile {
-  const safeWidth = Math.max(MIN_GROUND_EXTENT, Number.isFinite(width) ? Math.abs(width) : DEFAULT_GROUND_EXTENT)
-  const safeDepth = Math.max(MIN_GROUND_EXTENT, Number.isFinite(depth) ? Math.abs(depth) : DEFAULT_GROUND_EXTENT)
   const normalizedBaseCellSize = Math.max(DEFAULT_GROUND_CELL_SIZE, Number.isFinite(baseCellSize) ? Math.abs(baseCellSize) : DEFAULT_GROUND_CELL_SIZE)
 
-  const denseColumns = Math.max(1, Math.ceil(safeWidth / normalizedBaseCellSize))
-  const denseRows = Math.max(1, Math.ceil(safeDepth / normalizedBaseCellSize))
+  const denseColumns = Math.max(1, Math.ceil(DEFAULT_GROUND_EXTENT / normalizedBaseCellSize))
+  const denseRows = Math.max(1, Math.ceil(DEFAULT_GROUND_EXTENT / normalizedBaseCellSize))
   const denseVertexCount = (denseColumns + 1) * (denseRows + 1)
 
   let quality: GroundCreationQuality = 'high'
@@ -233,16 +229,16 @@ export function resolveGroundCreationProfile(
   if (denseVertexCount > GROUND_CREATION_HIGH_VERTEX_BUDGET) {
     quality = 'balanced'
     warningLevel = 'info'
-    cellSize = Math.max(normalizedBaseCellSize, Math.ceil(Math.max(safeWidth, safeDepth) / GROUND_CREATION_AXIS_TARGET))
+    cellSize = Math.max(normalizedBaseCellSize, Math.ceil(Math.max(DEFAULT_GROUND_EXTENT, DEFAULT_GROUND_EXTENT) / GROUND_CREATION_AXIS_TARGET))
     warningMessage = '地形已自动切换为分层/流式配置，并提高单元尺寸以控制工作集。'
   }
 
-  const columns = Math.max(1, Math.ceil(safeWidth / cellSize))
-  const rows = Math.max(1, Math.ceil(safeDepth / cellSize))
+  const columns = Math.max(1, Math.ceil(DEFAULT_GROUND_EXTENT / cellSize))
+  const rows = Math.max(1, Math.ceil(DEFAULT_GROUND_EXTENT / cellSize))
   const estimatedVertexCount = (columns + 1) * (rows + 1)
   const estimatedHeightBytes = estimatedVertexCount * Float64Array.BYTES_PER_ELEMENT * 2
   const estimatedTileCount = Math.max(1, Math.ceil(columns / GROUND_CREATION_AXIS_TARGET) * Math.ceil(rows / GROUND_CREATION_AXIS_TARGET))
-  const editTileSizeMeters = Math.max(cellSize, Math.min(Math.max(safeWidth, safeDepth), GROUND_CREATION_EDIT_TILE_WORLD_TARGET))
+  const editTileSizeMeters = Math.max(cellSize, Math.min(Math.max(DEFAULT_GROUND_EXTENT, DEFAULT_GROUND_EXTENT), GROUND_CREATION_EDIT_TILE_WORLD_TARGET))
   const editTileResolution = Math.max(
     GROUND_CREATION_EDIT_TILE_MIN_RESOLUTION,
     Math.min(
@@ -283,11 +279,7 @@ export function resolveGroundCreationProfile(
 export function createGroundDynamicMeshDefinition(overrides: Partial<GroundDynamicMesh> = {}, settings?: GroundSettings): GroundDynamicMesh {
   const baseSettings = normalizeGroundSettings(settings ?? null)
   const o = overrides as Partial<GroundDynamicMeshLike>
-  const creationProfile = resolveGroundCreationProfile(
-    baseSettings.width,
-    baseSettings.depth,
-    overrides.cellSize ?? DEFAULT_GROUND_CELL_SIZE,
-  )
+  const creationProfile = resolveGroundCreationProfile(overrides.cellSize ?? DEFAULT_GROUND_CELL_SIZE,)
   const cellSize = overrides.cellSize ?? creationProfile.cellSize
   const initialGeneration = cloneGroundGenerationSettings(overrides.generation) ?? null
   const worldBounds = normalizeGroundWorldBounds(overrides.worldBounds)
@@ -326,7 +318,15 @@ export function createGroundDynamicMeshDefinition(overrides: Partial<GroundDynam
   }
 
   if (o.optimizedMesh !== undefined) {
-    definition.optimizedMesh = manualDeepCloneLocal(o.optimizedMesh) as GroundDynamicMesh['optimizedMesh']
+    definition.optimizedMesh = o.optimizedMesh
+  }
+
+  if (o.groundSurfaceChunks !== undefined) {
+    definition.groundSurfaceChunks = o.groundSurfaceChunks
+  }
+
+  if (o.groundSplatBake !== undefined) {
+    definition.groundSplatBake = o.groundSplatBake
   }
 
   if (typeof (o as any).castShadow === 'boolean') {
