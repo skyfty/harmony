@@ -7144,13 +7144,13 @@ if (groundSplatLayerEnabled${index}) {
     ? texture2D(groundSplatLayerMap${index}, groundSplatUv${index}).rgb
     : vec3(1.0);
   groundSplatLayerColor${index} *= groundSplatLayerTint${index};
-  float groundSplatMask${index} = min(clamp(${maskSample}.${maskChannel} * groundSplatLayerOpacity${index}, 0.0, 1.0), groundSplatRemainingWeight);
-  groundSplatRemainingWeight = max(groundSplatRemainingWeight - groundSplatMask${index}, 0.0);
-  groundSplatMixedColor = mix(groundSplatMixedColor, groundSplatLayerColor${index}, groundSplatMask${index});
+  float groundSplatMask${index} = clamp(${maskSample}.${maskChannel} * groundSplatLayerOpacity${index}, 0.0, 1.0);
+  groundSplatLayerWeightSum += groundSplatMask${index};
+  groundSplatLayerColorSum += groundSplatLayerColor${index} * groundSplatMask${index};
   if (groundSplatLayerHasNormalMap${index}) {
     vec3 groundSplatLayerNormal${index} = texture2D(groundSplatLayerNormalMap${index}, groundSplatUv${index}).xyz * 2.0 - 1.0;
-    groundSplatNormalMixed = normalize(mix(groundSplatNormalMixed, groundSplatLayerNormal${index}, groundSplatMask${index}));
-    groundSplatNormalWeight = max(groundSplatNormalWeight, groundSplatMask${index});
+    groundSplatNormalMixed += groundSplatLayerNormal${index} * groundSplatMask${index};
+    groundSplatNormalWeight += groundSplatMask${index};
   }
 }`
   }).join('\n')
@@ -7209,17 +7209,19 @@ ${layerUniformDeclarations}`,
         '#include <map_fragment>',
         `#include <map_fragment>
 float groundSplatNormalWeight = 0.0;
-vec3 groundSplatNormalMixed = vec3(0.0, 0.0, 1.0);
+vec3 groundSplatNormalMixed = vec3(0.0);
 if (groundSplatEnabled) {
   vec2 groundSplatMaskUv = vec2(
     clamp((vGroundSplatWorldXZ.x - groundSplatChunkRect.x) / max(groundSplatChunkRect.z, 1e-6), 0.0, 1.0),
     clamp(((groundSplatChunkRect.y + groundSplatChunkRect.w) - vGroundSplatWorldXZ.y) / max(groundSplatChunkRect.w, 1e-6), 0.0, 1.0)
   );
   vec4 groundSplatMaskSample0 = groundSplatHasMask0 ? texture2D(groundSplatMask0, groundSplatMaskUv) : vec4(0.0);
-  vec3 groundSplatMixedColor = diffuseColor.rgb;
-  float groundSplatRemainingWeight = 1.0;
+  float groundSplatLayerWeightSum = 0.0;
+  vec3 groundSplatLayerColorSum = vec3(0.0);
   ${layerBlendBlocks}
-  diffuseColor.rgb = groundSplatMixedColor;
+  float groundSplatNormalizedLayerWeight = clamp(groundSplatLayerWeightSum, 0.0, 1.0);
+  float groundSplatBaseWeight = max(1.0 - groundSplatNormalizedLayerWeight, 0.0);
+  diffuseColor.rgb = (diffuseColor.rgb * groundSplatBaseWeight) + groundSplatLayerColorSum;
 }`,
       )
       .replace(
@@ -7227,7 +7229,9 @@ if (groundSplatEnabled) {
         `#include <normal_fragment_maps>
 #ifdef USE_NORMALMAP_TANGENTSPACE
 if (groundSplatEnabled && groundSplatNormalWeight > 0.0001) {
-  normal = normalize(mix(normal, normalize(tbn * groundSplatNormalMixed), clamp(groundSplatNormalWeight, 0.0, 1.0)));
+  vec3 groundSplatLayerNormalWeighted = normalize(groundSplatNormalMixed / groundSplatNormalWeight);
+  float groundSplatLayerNormalBlendWeight = clamp(groundSplatNormalWeight, 0.0, 1.0);
+  normal = normalize((normal * (1.0 - groundSplatLayerNormalBlendWeight)) + (normalize(tbn * groundSplatLayerNormalWeighted) * groundSplatLayerNormalBlendWeight));
 }
 #endif`,
       )
@@ -7469,9 +7473,10 @@ function applyGroundTextureToChunkMesh(
   )
 
   if (!hasBakedBundle) {
-    if (options.isCompiledGroundTile) {
-      throw new Error(`Missing baked ground texture bundle for compiled ground chunk ${chunkKey}.`)
-    }
+    // Compiled ground tiles may span many chunk coordinates, while baked surface data is sparse
+    // and only authored for chunks that actually need landform/texture blending.
+    // When a tile resolves to a chunk key without an authored bundle, fall back to the base ground
+    // material instead of treating it as a hard runtime error.
     if (currentMaterial && currentMaterial !== baseMaterial) {
       disposeGroundChunkTexturedMaterial(currentMaterial)
     }

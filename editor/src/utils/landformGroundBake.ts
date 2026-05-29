@@ -1405,6 +1405,40 @@ function packMaskChannel(
   }
 }
 
+function normalizePackedMaskWeights(
+  target: Uint8ClampedArray,
+  width: number,
+  height: number,
+  channelCount: number,
+): void {
+  const safeChannelCount = Math.max(0, Math.min(4, Math.trunc(channelCount)))
+  if (safeChannelCount <= 0) {
+    return
+  }
+  const pixelCount = Math.max(0, width * height)
+  for (let pixelIndex = 0; pixelIndex < pixelCount; pixelIndex += 1) {
+    const offset = pixelIndex * 4
+    let total = 0
+    for (let channel = 0; channel < safeChannelCount; channel += 1) {
+      total += target[offset + channel] ?? 0
+    }
+    if (total <= 255 || total <= 0) {
+      target[offset + 3] = 255
+      continue
+    }
+    const scale = 255 / total
+    let accumulated = 0
+    for (let channel = 0; channel < safeChannelCount; channel += 1) {
+      const normalized = channel === safeChannelCount - 1
+        ? Math.max(0, 255 - accumulated)
+        : clamp(Math.round((target[offset + channel] ?? 0) * scale), 0, 255)
+      target[offset + channel] = normalized
+      accumulated += normalized
+    }
+    target[offset + 3] = 255
+  }
+}
+
 async function canvasToImageData(canvas: CanvasLike): Promise<ImageData | null> {
   const context = 'getContext' in canvas ? canvas.getContext('2d') : null
   if (!context || !('getImageData' in context)) {
@@ -1568,9 +1602,9 @@ export async function bakeLandformGroundSurfaceChunks(
       // 它用于让图层边缘不要过于生硬。
       const featherSettings = resolveLayerFeatherSettings(layerEntry)
 
-      // 图层顺序对应 mask 通道序号。
-      // 第 0~3 层进唯一的 splat0。
-      const layerIndex = Math.min(maskCanvases.length - 1, entryIndex)
+      // mask 通道按“当前 chunk 内真正有效的图层序号”紧凑分配。
+      // 这样即使前一个 landform 在这个 chunk 里没有实际绘制，后一个也不会把通道打偏。
+      const layerIndex = Math.min(maskCanvases.length - 1, chunkSurfaceLayers.length)
       const maskContext = maskCanvases[layerIndex]?.context ?? null
       layerFeatherSettings[layerIndex] = featherSettings
 
@@ -1600,7 +1634,7 @@ export async function bakeLandformGroundSurfaceChunks(
       const normalTextureSettings = normalTextureRef?.settings
         ? createTextureSettings(normalTextureRef.settings as Partial<SceneMaterialTextureSettings>)
         : null
-      chunkSurfaceLayers.push({
+      const pendingSurfaceLayer: GroundSurfaceChunkLayerRef = {
         albedoSource: primaryTextureRuntimeSource,
         albedoTextureSettings,
         normalSource: normalTextureRuntimeSource,
@@ -1611,7 +1645,7 @@ export async function bakeLandformGroundSurfaceChunks(
         maskChannel: layerIndex,
         featherEnabled: featherSettings.enabled,
         featherWidth: featherSettings.width,
-      })
+      }
 
       // 取出当前 chunk 内真正需要绘制的几何片段。
       // 这里可能同时包含 surface 和 outline 两类来源。
@@ -1656,6 +1690,10 @@ export async function bakeLandformGroundSurfaceChunks(
       if (paintedTriangleCount <= 0) {
         continue
       }
+      chunkSurfaceLayers.push({
+        ...pendingSurfaceLayer,
+        maskChannel: layerIndex,
+      })
     }
 
     if (chunkPaintedTriangleCount <= 0 || chunkSurfaceLayers.length <= 0) {
@@ -1691,6 +1729,7 @@ export async function bakeLandformGroundSurfaceChunks(
       // 这一步的结果就是 shader 可直接读取的 splat map。
       packMaskChannel(splat0Buffer, size.width, size.height, mask, channel)
     }
+    normalizePackedMaskWeights(splat0Buffer, size.width, size.height, chunkSurfaceLayers.length)
     splat0.context.putImageData(splat0Data, 0, 0)
 
     // 最后把 canvas 编码成 blob，再转成 dataURL。
