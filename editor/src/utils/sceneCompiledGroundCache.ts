@@ -598,27 +598,6 @@ export async function loadSceneCompiledGroundPackageFromCache(
     }
   }
 
-  if (
-    expectedSourceSignature
-    && index.sourceSignature !== expectedSourceSignature
-    && options.allowStale !== true
-  ) {
-    return {
-      pkg: null,
-      diagnostics: {
-        buildKey: normalizedBuildKey,
-        status: 'stale',
-        elapsedMs: Date.now() - startedAt,
-        indexedFileCount: index.files.length,
-        loadedFileCount: 0,
-        missingFileCount: 0,
-        renderTileCount: index.manifest.renderTiles.length,
-        collisionTileCount: index.manifest.collisionTiles.length,
-        totalBytes: estimateCompiledGroundManifestBytes(index.manifest),
-      },
-    }
-  }
-
   const files = new Map<string, ArrayBuffer>()
   let missingFile = false
   let missingFileCount = 0

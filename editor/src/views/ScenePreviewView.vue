@@ -1790,12 +1790,30 @@ function resolveScenePreviewCompiledGroundPackage(): ScenePreviewCompiledGroundP
 		&& manifestSource
 		&& sceneStore.compiledGroundFiles.size > 0
 	) {
-		return {
+		const cacheState = scenePreviewCompiledGroundPackageCacheState
+		if (
+			cacheState
+			&& cacheState.sceneId === sceneId
+			&& cacheState.buildKey === buildKey
+			&& cacheState.manifestSource === manifestSource
+			&& cacheState.filesSource === sceneStore.compiledGroundFiles
+		) {
+			return scenePreviewCompiledGroundPackage
+		}
+		const normalizedManifest = toRaw(manifestSource) as CompiledGroundManifest
+		scenePreviewCompiledGroundPackage = {
 			sceneId,
 			buildKey,
-			manifest: toRaw(manifestSource),
+			manifest: normalizedManifest,
 			files: new Map(sceneStore.compiledGroundFiles),
 		}
+		scenePreviewCompiledGroundPackageCacheState = {
+			sceneId,
+			buildKey,
+			manifestSource: manifestSource as CompiledGroundManifest,
+			filesSource: sceneStore.compiledGroundFiles,
+		}
+		return scenePreviewCompiledGroundPackage
 	}
 	if (scenePreviewCompiledGroundPackage?.sceneId === sceneId) {
 		return scenePreviewCompiledGroundPackage
@@ -1807,6 +1825,7 @@ async function hydrateScenePreviewCompiledGroundPackage(document: SceneJsonExpor
 	const sceneId = typeof document.id === 'string' ? document.id.trim() : ''
 	if (!sceneId) {
 		scenePreviewCompiledGroundPackage = null
+		scenePreviewCompiledGroundPackageCacheState = null
 		return
 	}
 
@@ -1836,12 +1855,19 @@ async function hydrateScenePreviewCompiledGroundPackage(document: SceneJsonExpor
 			manifest: compiledGroundManifest,
 			files: new Map(sceneStore.compiledGroundFiles),
 		}
+		scenePreviewCompiledGroundPackageCacheState = {
+			sceneId,
+			buildKey,
+			manifestSource: manifestSource as CompiledGroundManifest,
+			filesSource: sceneStore.compiledGroundFiles,
+		}
 		return
 	}
 
 	const bundle = await useScenesStore().loadCompiledGroundBundle(sceneId)
 	if (!bundle) {
 		scenePreviewCompiledGroundPackage = null
+		scenePreviewCompiledGroundPackageCacheState = null
 		if (scenePreviewCompiledGroundInjected) {
 			scenePreviewCompiledGroundInjected = false
 			sceneStore.compiledGroundBuildKey = null
@@ -1853,6 +1879,7 @@ async function hydrateScenePreviewCompiledGroundPackage(document: SceneJsonExpor
 	const bundleManifest = bundle.manifest
 	if (!bundleManifest) {
 		scenePreviewCompiledGroundPackage = null
+		scenePreviewCompiledGroundPackageCacheState = null
 		if (scenePreviewCompiledGroundInjected) {
 			scenePreviewCompiledGroundInjected = false
 			sceneStore.compiledGroundBuildKey = null
@@ -1868,6 +1895,7 @@ async function hydrateScenePreviewCompiledGroundPackage(document: SceneJsonExpor
 		manifest: bundleManifest,
 		files: new Map<string, ArrayBuffer>(Object.entries(bundle.files)),
 	}
+	scenePreviewCompiledGroundPackageCacheState = null
 	if (!storeHasAnyCompiledGroundState && !scenePreviewCompiledGroundInjected) {
 		sceneStore.compiledGroundBuildKey = scenePreviewCompiledGroundPackage.buildKey || null
 		sceneStore.compiledGroundManifest = scenePreviewCompiledGroundPackage.manifest
@@ -1887,6 +1915,13 @@ type ScenePreviewCompiledGroundPackage = {
 	files: Map<string, ArrayBuffer>
 }
 let scenePreviewCompiledGroundPackage: ScenePreviewCompiledGroundPackage | null = null
+type ScenePreviewCompiledGroundPackageCacheState = {
+	sceneId: string
+	buildKey: string
+	manifestSource: CompiledGroundManifest
+	filesSource: Map<string, ArrayBuffer>
+}
+let scenePreviewCompiledGroundPackageCacheState: ScenePreviewCompiledGroundPackageCacheState | null = null
 let scenePreviewCompiledGroundInjected = false
 let groundCacheLoadToken = 0
 let unsubscribe: (() => void) | null = null
@@ -10200,7 +10235,12 @@ function resolveScenePreviewCompiledGroundTileLoader(): ((record: { path: string
 	if (!compiledGroundPackage) {
 		return undefined
 	}
-	return async (record) => compiledGroundPackage.files.get(record.path) ?? null
+	return loadScenePreviewCompiledGroundTileData
+}
+
+async function loadScenePreviewCompiledGroundTileData(record: { path: string }): Promise<ArrayBuffer | null> {
+	const compiledGroundPackage = resolveScenePreviewCompiledGroundPackage()
+	return compiledGroundPackage?.files.get(record.path) ?? null
 }
 
 function resolveScenePreviewCompiledGroundRuntime(): {
@@ -10250,7 +10290,7 @@ function syncScenePreviewCompiledGroundRenderTiles(activeCamera: THREE.Perspecti
 		sourceId: buildKey,
 		revision,
 		manifest,
-		loadTileData: async (record) => compiledGroundPackage.files.get(record.path) ?? null,
+		loadTileData: loadScenePreviewCompiledGroundTileData,
 		streamingMode: 'runtime-camera',
 		groundSplatRuntimeProfile: {
 			maxLayers: 4,
@@ -13028,6 +13068,7 @@ onBeforeUnmount(() => {
 	}
 	clearRuntimePrefabPreviewRoots()
 	scenePreviewCompiledGroundPackage = null
+	scenePreviewCompiledGroundPackageCacheState = null
 	scenePreviewCompiledGroundInjected = false
 	dismissBehaviorBubble({ type: 'continue' })
 	rendererInitialized = false

@@ -1261,10 +1261,6 @@ export async function exportScenePackageZip(payload: {
       if (!blob) {
         if (!item.downloadUrl) {
           continue;
-          throw new Error(
-            `Missing downloadUrl for embedded asset (assetId=${item.assetId}). ` +
-              `Ensure the scene includes resourceSummary.assets[].downloadUrl for all runtime assets, or that the asset is cached locally before exporting.`,
-          )
         }
         const response = await fetch(item.downloadUrl, { method: 'GET', credentials: 'omit', cache: 'no-cache' })
         if (!response.ok) {
@@ -1338,12 +1334,7 @@ export async function exportScenePackageZip(payload: {
     let terrain: ScenePackageManifestV1['scenes'][number]['terrain'] | undefined
     let compiledGround: ScenePackageManifestV1['scenes'][number]['compiledGround'] | undefined
     let roadCollision: ScenePackageManifestV1['scenes'][number]['roadCollision'] | undefined
-
-    // Collect local asset IDs from effective registry and explicit local source metadata.
-    const sidecarSource = typeof structuredClone === 'function'
-      ? structuredClone(preparedDocument)
-      : JSON.parse(JSON.stringify(preparedDocument))
-    const groundNode = findGroundNode(sidecarSource.nodes)
+    const groundNode = findGroundNode(preparedDocument.nodes)
     const storedTerrainDatasetManifest = await scenesStore.loadTerrainDatasetManifest(scene.id)
     const groundSplatSidecar = scene.id === sceneStore.currentSceneId
       ? useGroundSplatStore().buildSceneDocumentSidecar(scene.id, groundNode)
@@ -1352,7 +1343,6 @@ export async function exportScenePackageZip(payload: {
       ? useGroundScatterStore().buildSceneDocumentSidecar(scene.id, groundNode)
       : await scenesStore.loadGroundScatterSidecar(scene.id)
     if (groundNode?.dynamicMesh?.type === 'Ground') {
-      const sceneGroundNode = findGroundNode(sidecarSource.nodes)
       const compiledGroundStartedAt = typeof performance !== 'undefined' ? performance.now() : Date.now()
       const compiledGroundBuildKey = computeSceneCompiledGroundBuildKey(
         scene.id,
@@ -1386,13 +1376,12 @@ export async function exportScenePackageZip(payload: {
         }
         files[compiledGroundPaths.manifestPath] = jsonBytes(compiledGroundPackage.manifest)
         Object.assign(files, getSceneCompiledGroundPackageFileBytes(compiledGroundPackage))
-        if (sceneGroundNode) {
-          sceneGroundNode.userData = {
-            ...(sceneGroundNode.userData ?? {}),
-            compiledGroundEnabled: true,
-            compiledGroundManifest: compiledGroundPackage.manifest,
-          }
+        groundNode.userData = {
+          ...(groundNode.userData ?? {}),
+          compiledGroundEnabled: true,
+          compiledGroundManifest: compiledGroundPackage.manifest,
         }
+        
         emitSceneExportEvent(payload.reportEvent, {
           phase: 'sidecar',
           level: 'info',
@@ -1403,8 +1392,7 @@ export async function exportScenePackageZip(payload: {
           message: `Compiled ground cache packaged (${Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - compiledGroundStartedAt)} ms)`,
         })
       } else {
-        const shouldRequireCompiledGround = sceneGroundNode?.dynamicMesh?.type === 'Ground'
-          && hasSceneGroundTerrainOverrides(sceneGroundNode.dynamicMesh)
+        const shouldRequireCompiledGround =  hasSceneGroundTerrainOverrides(groundNode.dynamicMesh)
         if (shouldRequireCompiledGround) {
           throw new Error(
             cacheLoad.diagnostics.status === 'partial' || cacheLoad.diagnostics.status === 'corrupt'
@@ -1447,13 +1435,13 @@ export async function exportScenePackageZip(payload: {
         })
       }
     }
-    const roadCollisionExport = buildRoadCollisionCompiledExport(sidecarSource as SceneJsonExportDocument)
+    const roadCollisionExport = buildRoadCollisionCompiledExport(preparedDocument as SceneJsonExportDocument)
     if (roadCollisionExport.manifest.roads.length > 0) {
       roadCollision = {
         manifestPath: roadCollisionExport.manifestPath,
       }
       attachRoadCollisionCompiledPackagesToDocument(
-        sidecarSource as SceneJsonExportDocument,
+        preparedDocument as SceneJsonExportDocument,
         roadCollisionExport.packagesByNodeId,
       )
       Object.assign(files, roadCollisionExport.files)
@@ -1467,8 +1455,8 @@ export async function exportScenePackageZip(payload: {
         message: `Road collision cache packaged (${roadCollisionExport.manifest.roads.length})`,
       })
     }
-    stripGroundHeightMapsFromSceneDocument(sidecarSource as StoredSceneDocument)
-    const docClone = sidecarSource as SceneExportDocumentWithEditorFields
+    stripGroundHeightMapsFromSceneDocument(preparedDocument as StoredSceneDocument)
+    const docClone = preparedDocument as SceneExportDocumentWithEditorFields
     const retainedConfigAssetIds = collectRuntimeRetainedConfigAssetIds(docClone)
     stripEditorOnlySceneFields(docClone, retainedConfigAssetIds)
 
