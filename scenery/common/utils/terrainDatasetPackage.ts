@@ -1,5 +1,6 @@
 import {
   dequantizeTerrainHeight,
+  deserializeQuantizedTerrainDatasetRootManifest,
   deserializeQuantizedTerrainPack,
   deserializeQuantizedTerrainMesh,
   formatQuantizedTerrainTileKey,
@@ -27,8 +28,7 @@ export function readTerrainDatasetManifestFromScenePackage(
   if (!bytes) {
     throw new Error(`场景包缺少 terrain dataset manifest: ${rootManifestPath}`)
   }
-  const text = new TextDecoder().decode(bytes)
-  return JSON.parse(text) as QuantizedTerrainDatasetRootManifest
+  return deserializeQuantizedTerrainDatasetRootManifest(bytes)
 }
 
 export function readTerrainDatasetRegionPackFromScenePackage(

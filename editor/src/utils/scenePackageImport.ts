@@ -1,5 +1,6 @@
 import {
   decodeScenePackageSceneDocument,
+  deserializeQuantizedTerrainDatasetRootManifest,
   type QuantizedTerrainDatasetRootManifest,
   readBinaryFileFromScenePackage,
   readTextFileFromScenePackage,
@@ -9,7 +10,7 @@ import {
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { PlanningSceneData } from '@/types/planning-scene-data'
-import type { PlanningScenePackageImageEntry, PlanningScenePackageSidecar } from '@/types/planning-package'
+import { deserializePlanningScenePackageSidecar, type PlanningScenePackageImageEntry } from '@/types/planning-package'
 import { stripGroundHeightMapsFromSceneDocument } from '@/utils/groundHeightSidecar'
 import { storePlanningImageBlobByHash } from '@/utils/planningImageStorage'
 import { storePlanningDemBlobByHash } from '@/utils/planningDemStorage'
@@ -20,6 +21,7 @@ export type LoadedStoredScenePackage = {
   project: LoadedScenePackageProject
   scenes: StoredSceneDocument[]
   groundHeightSidecars: Record<string, ArrayBuffer | null>
+  groundSplatSidecars: Record<string, ArrayBuffer | null>
   groundScatterSidecars: Record<string, ArrayBuffer | null>
   terrainDatasetManifests: Record<string, QuantizedTerrainDatasetRootManifest | null>
   terrainDatasetRegionPacks: Record<string, Record<string, ArrayBuffer | null>>
@@ -29,52 +31,23 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-function normalizePlanningPackageImageEntry(raw: unknown): PlanningScenePackageImageEntry | null {
-  if (!isPlainObject(raw)) {
-    return null
+function assertNoLandformNodes(nodes: StoredSceneDocument['nodes'], path = 'root'): void {
+  if (!Array.isArray(nodes)) {
+    return
   }
-  const imageId = typeof raw.imageId === 'string' ? raw.imageId.trim() : ''
-  if (!imageId) {
-    return null
-  }
-  return {
-    imageId,
-    imageHash: typeof raw.imageHash === 'string' && raw.imageHash.trim().length ? raw.imageHash.trim() : null,
-    resourcePath: typeof raw.resourcePath === 'string' && raw.resourcePath.trim().length ? raw.resourcePath.trim() : null,
-    filename: typeof raw.filename === 'string' ? raw.filename : null,
-    mimeType: typeof raw.mimeType === 'string' ? raw.mimeType : null,
-  }
-}
-
-function normalizePlanningSidecar(raw: unknown): PlanningScenePackageSidecar | null {
-  if (!isPlainObject(raw)) {
-    return null
-  }
-  const version = Number(raw.version)
-  if (version !== 1) {
-    return null
-  }
-  const planningData = isPlainObject(raw.planningData) ? (raw.planningData as unknown as PlanningSceneData) : null
-  const images = Array.isArray(raw.images)
-    ? raw.images.map((entry) => normalizePlanningPackageImageEntry(entry)).filter((entry): entry is PlanningScenePackageImageEntry => !!entry)
-    : []
-  return {
-    version: 1,
-    planningData,
-    images,
-    orthophoto: isPlainObject(raw.orthophoto)
-      ? {
-          sourceFileHash: typeof raw.orthophoto.sourceFileHash === 'string' && raw.orthophoto.sourceFileHash.trim().length
-            ? raw.orthophoto.sourceFileHash.trim()
-            : null,
-          resourcePath: typeof raw.orthophoto.resourcePath === 'string' && raw.orthophoto.resourcePath.trim().length
-            ? raw.orthophoto.resourcePath.trim()
-            : null,
-          filename: typeof raw.orthophoto.filename === 'string' ? raw.orthophoto.filename : null,
-          mimeType: typeof raw.orthophoto.mimeType === 'string' ? raw.orthophoto.mimeType : null,
-        }
-      : null,
-  }
+  nodes.forEach((node, index) => {
+    if (!node || typeof node !== 'object') {
+      return
+    }
+    const nextPath = `${path}.nodes[${index}]`
+    const dynamicMesh = (node as { dynamicMesh?: { type?: string } | null }).dynamicMesh
+    if (dynamicMesh?.type === 'Landform') {
+      throw new Error(`Scene package contains unsupported Landform runtime data at ${nextPath}. Export must bake landforms before packaging.`)
+    }
+    if (Array.isArray(node.children) && node.children.length > 0) {
+      assertNoLandformNodes(node.children as StoredSceneDocument['nodes'], `${nextPath}.children`)
+    }
+  })
 }
 
 async function restoreRuntimeResourcesFromPackage(zip: ReturnType<typeof unzipScenePackage>): Promise<void> {
@@ -103,15 +76,15 @@ async function applyPlanningSidecarToScene(
     return rawScene
   }
 
-  const sidecarText = readTextFileFromScenePackage(zip, sceneEntry.planningPath)
-  const rawSidecar = JSON.parse(sidecarText) as unknown
-  const sidecar = normalizePlanningSidecar(rawSidecar)
+  const sidecar = deserializePlanningScenePackageSidecar(readBinaryFileFromScenePackage(zip, sceneEntry.planningPath))
   if (!sidecar?.planningData) {
     return rawScene
   }
 
-  const imageEntryById = new Map(sidecar.images.map((entry) => [entry.imageId, entry]))
-  const nextPlanningData = JSON.parse(JSON.stringify(sidecar.planningData)) as PlanningSceneData
+  const imageEntryById = new Map<string, PlanningScenePackageImageEntry>(
+    sidecar.images.map((entry) => [entry.imageId, entry] as const),
+  )
+  const nextPlanningData = structuredClone(sidecar.planningData) as PlanningSceneData
 
   for (const image of nextPlanningData.images ?? []) {
     const entry = imageEntryById.get(image.id)
@@ -190,6 +163,27 @@ function extractGroundScatterSidecarFromPackage(
   return new Uint8Array(bytes).buffer
 }
 
+function extractGroundSplatSidecarFromPackage(
+  zip: ReturnType<typeof unzipScenePackage>,
+  sceneEntry: ScenePackageSceneEntry,
+  rawScene: StoredSceneDocument,
+): ArrayBuffer | null {
+  const hasGroundNode = Array.isArray(rawScene.nodes)
+    && rawScene.nodes.some((node) => node?.dynamicMesh?.type === 'Ground')
+  if (!hasGroundNode) {
+    return null
+  }
+  const sidecarPath = sceneEntry.groundSplatPath
+  if (!sidecarPath) {
+    return null
+  }
+  const bytes = zip.files[sidecarPath]
+  if (!bytes) {
+    throw new Error(`Missing ground splat sidecar in scene bundle: ${sidecarPath}`)
+  }
+  return new Uint8Array(bytes).buffer
+}
+
 function extractTerrainDatasetManifestFromPackage(
   zip: ReturnType<typeof unzipScenePackage>,
   sceneEntry: ScenePackageSceneEntry,
@@ -200,7 +194,7 @@ function extractTerrainDatasetManifestFromPackage(
   if (!manifestPath) {
     return null
   }
-  return JSON.parse(readTextFileFromScenePackage(zip, manifestPath)) as QuantizedTerrainDatasetRootManifest
+  return deserializeQuantizedTerrainDatasetRootManifest(readBinaryFileFromScenePackage(zip, manifestPath))
 }
 
 function extractTerrainDatasetRegionPacksFromPackage(
@@ -238,6 +232,7 @@ export async function loadStoredScenesFromScenePackage(zipBytes: ArrayBuffer): P
   const project = (JSON.parse(projectText) as LoadedScenePackageProject) ?? {}
   const scenes: StoredSceneDocument[] = []
   const groundHeightSidecars: Record<string, ArrayBuffer | null> = {}
+  const groundSplatSidecars: Record<string, ArrayBuffer | null> = {}
   const groundScatterSidecars: Record<string, ArrayBuffer | null> = {}
   const terrainDatasetManifests: Record<string, QuantizedTerrainDatasetRootManifest | null> = {}
   const terrainDatasetRegionPacks: Record<string, Record<string, ArrayBuffer | null>> = {}
@@ -247,7 +242,9 @@ export async function loadStoredScenesFromScenePackage(zipBytes: ArrayBuffer): P
       throw new Error(`Invalid scene document in scene bundle: ${sceneEntry.path}`)
     }
     const sceneDocument = stripGroundHeightMapsFromSceneDocument(rawScene as unknown as StoredSceneDocument)
+    assertNoLandformNodes(sceneDocument.nodes, `scenes[${sceneEntry.sceneId}]`)
     groundHeightSidecars[sceneEntry.sceneId] = extractGroundHeightSidecarFromPackage(zip, sceneEntry, sceneDocument)
+    groundSplatSidecars[sceneEntry.sceneId] = extractGroundSplatSidecarFromPackage(zip, sceneEntry, sceneDocument)
     groundScatterSidecars[sceneEntry.sceneId] = extractGroundScatterSidecarFromPackage(zip, sceneEntry, sceneDocument)
     terrainDatasetManifests[sceneEntry.sceneId] = extractTerrainDatasetManifestFromPackage(zip, sceneEntry)
     terrainDatasetRegionPacks[sceneEntry.sceneId] = extractTerrainDatasetRegionPacksFromPackage(zip, terrainDatasetManifests[sceneEntry.sceneId] ?? null)
@@ -259,6 +256,7 @@ export async function loadStoredScenesFromScenePackage(zipBytes: ArrayBuffer): P
     project,
     scenes,
     groundHeightSidecars,
+    groundSplatSidecars,
     groundScatterSidecars,
     terrainDatasetManifests,
     terrainDatasetRegionPacks,

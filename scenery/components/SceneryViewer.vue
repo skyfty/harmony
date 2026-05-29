@@ -454,7 +454,8 @@ import { syncGroundCollisionRuntimeLoadedTileKeys } from '@harmony/schema/ground
 import { clearGroundCollisionRuntimeHost, syncGroundCollisionRuntimeHost } from '@harmony/schema/groundCollisionRuntimeHost';
 import { createGroundCollisionRuntimeBridgeDeps } from '@harmony/schema/groundCollisionRuntimeBridge';
 import { clearCompiledGroundRenderTiles, collectLoadedCompiledGroundChunkKeys, getCompiledGroundRenderWorkState, syncCompiledGroundRenderTiles } from '@harmony/schema/compiledGroundRuntime';
-import { resolveInfiniteGroundVisibleChunkWindow, setInfiniteGroundHiddenChunkKeys } from '@harmony/schema/groundMesh';
+import { attachOptimizedGroundMeshToDocument, prepareRuntimeGroundSceneDocument } from '@harmony/schema/groundSplatRuntimeDocument';
+import { onGroundChunkTextureReady, refreshGroundChunkMaterials, resolveInfiniteGroundVisibleChunkWindow, setInfiniteGroundHiddenChunkKeys } from '@harmony/schema/groundMesh';
 
 import {
   type PhysicsBodyBindingEntry as RigidbodyInstance,
@@ -504,6 +505,7 @@ import {
   type EnvironmentCsmSettings,
 } from '@harmony/schema/environmentSettingsUtils';
 import { deserializeGroundScatterSidecar } from '@harmony/schema/groundScatterSidecar';
+import { deserializeGroundSplatSidecar } from '@harmony/schema/groundSplatSidecar';
 import {
   clampSceneNodeInstanceLayout,
   computeInstanceLayoutLocalBoundingBox,
@@ -546,7 +548,10 @@ import type {
   SceneResourceSummaryEntry,
   Vector3Like,
 } from '@harmony/schema/core';
-import { resolveGroundWorkingGridSize } from '@harmony/schema/core';
+import {
+  deserializeCompiledGroundManifest,
+  resolveGroundWorkingGridSize,
+} from '@harmony/schema/core';
 import { isPointInsideRegionXZ } from '@harmony/schema/core';
 import { applyMirroredScaleToObject, syncMirroredMeshMaterials } from '@harmony/schema/mirror';
 import {
@@ -5440,9 +5445,13 @@ function readCompiledGroundManifestFromScenePackage(
   if (!manifestPath) {
     return null;
   }
-  return JSON.parse(readTextFileFromScenePackage(pkg, manifestPath)) as Parameters<
+  const manifestBytes = pkg.files[manifestPath];
+  if (!manifestBytes) {
+    return null;
+  }
+  return deserializeCompiledGroundManifest(manifestBytes) as Parameters<
     typeof syncCompiledGroundRenderTiles
-  >[0]['manifest'];
+  >[0]['manifest'] | null;
 }
 
 function attachScenePackageCompiledGroundRuntime(
@@ -5455,10 +5464,16 @@ function attachScenePackageCompiledGroundRuntime(
     return;
   }
   const compiledManifest = readCompiledGroundManifestFromScenePackage(pkg, sceneEntry);
+  if (!compiledManifest) {
+    return;
+  }
+  if (!Array.isArray(compiledManifest.renderTiles) || compiledManifest.renderTiles.length === 0) {
+    return;
+  }
   const groundUserData = groundNode.userData && typeof groundNode.userData === 'object'
     ? (groundNode.userData as Record<string, unknown>)
     : {};
-  groundUserData.compiledGroundEnabled = Boolean(compiledManifest);
+  groundUserData.compiledGroundEnabled = true;
   groundUserData.compiledGroundManifest = compiledManifest;
   groundNode.userData = groundUserData;
 }
@@ -5470,6 +5485,12 @@ function refreshDynamicGroundCache(document: SceneJsonExportDocument | null): vo
   }
   const groundNode = findGroundNode(document.nodes);
   if (groundNode && isGroundDynamicMesh(groundNode.dynamicMesh)) {
+    (groundNode.dynamicMesh as GroundRuntimeDynamicMesh & {
+      groundSplatRuntimeProfile?: { maxLayers: number; enableLayerNormalMap: boolean };
+    }).groundSplatRuntimeProfile = {
+      maxLayers: 4,
+      enableLayerNormalMap: true,
+    };
     dynamicGroundCache = {
       nodeId: groundNode.id,
       node: groundNode,
@@ -6886,6 +6907,18 @@ function clearSceneryCompiledGroundRenderRuntime(): void {
   setInfiniteGroundHiddenChunkKeys(groundObject, []);
 }
 
+function primeSceneryGroundChunkTextureRefresh(root: THREE.Object3D, definition: GroundDynamicMesh): void {
+  refreshGroundChunkMaterials(root, definition);
+  root.traverse((object) => {
+    if (!(object instanceof THREE.Mesh) || !object.userData?.groundChunk) {
+      return;
+    }
+    onGroundChunkTextureReady(object, () => {
+      refreshGroundChunkMaterials(root, definition);
+    });
+  });
+}
+
 function syncSceneryCompiledGroundRenderTiles(camera: THREE.Camera | null | undefined): boolean {
   if (!currentDocument || !camera) {
     clearSceneryCompiledGroundRenderRuntime();
@@ -6899,19 +6932,30 @@ function syncSceneryCompiledGroundRenderTiles(camera: THREE.Camera | null | unde
   }
   const groundObject = resolveSceneObjectByNodeId(groundNode.id);
   if (!groundObject) {
-    clearSceneryCompiledGroundRenderRuntime();
-    return false;
+    throw new Error(`无法找到 ground 对象: ${groundNode.id}`)
   }
   const compiledManifest = readCompiledGroundManifestFromDocument(currentDocument);
   const buildKey = activeScenePackageBuildKey?.trim() || '';
-  if (!compiledManifest || !buildKey || !activeScenePackagePkg) {
-    clearCompiledGroundRenderTiles(groundObject);
-    setInfiniteGroundHiddenChunkKeys(groundObject, []);
+  if (!compiledManifest) {
+    clearSceneryCompiledGroundRenderRuntime();
+    return false;
+  }
+  if (!Array.isArray(compiledManifest.renderTiles) || compiledManifest.renderTiles.length === 0) {
+    clearSceneryCompiledGroundRenderRuntime();
+    return false;
+  }
+  if (!buildKey) {
+    clearSceneryCompiledGroundRenderRuntime();
+    return false;
+  }
+  if (!activeScenePackagePkg) {
+    clearSceneryCompiledGroundRenderRuntime();
     return false;
   }
   const revision = Number.isFinite(Number(compiledManifest.revision))
     ? Math.max(0, Math.trunc(Number(compiledManifest.revision)))
     : 0;
+  const workState = getCompiledGroundRenderWorkState(groundObject);
   syncCompiledGroundRenderTiles({
     groundObject,
     groundDefinition: groundMesh,
@@ -6927,12 +6971,17 @@ function syncSceneryCompiledGroundRenderTiles(camera: THREE.Camera | null | unde
       return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
     },
     streamingMode: 'runtime-camera',
+    groundSplatRuntimeProfile: {
+      maxLayers: 4,
+      enableLayerNormalMap: true,
+    },
   });
-  const workState = getCompiledGroundRenderWorkState(groundObject);
-  const loadedChunkVersion = workState?.loadedChunkKeysVersion ?? -1;
-  if (loadedChunkVersion !== lastCompiledGroundLoadedChunkVersion) {
+  const nextWorkState = getCompiledGroundRenderWorkState(groundObject);
+  if (!nextWorkState || nextWorkState.loadedChunkKeysVersion !== lastCompiledGroundLoadedChunkVersion) {
     setInfiniteGroundHiddenChunkKeys(groundObject, collectLoadedCompiledGroundChunkKeys(groundObject, compiledManifest));
-    lastCompiledGroundLoadedChunkVersion = loadedChunkVersion;
+    lastCompiledGroundLoadedChunkVersion = nextWorkState?.loadedChunkKeysVersion ?? -1;
+  } else if (workState?.pendingLoads !== nextWorkState.pendingLoads) {
+    setInfiniteGroundHiddenChunkKeys(groundObject, collectLoadedCompiledGroundChunkKeys(groundObject, compiledManifest));
   }
   return true;
 }
@@ -12576,7 +12625,13 @@ function findFirstGroundDynamicMesh(document: SceneJsonExportDocument): GroundDy
 
 function hydrateGroundSidecarFromPackage(
   pkg: ScenePackageUnzipped,
-  sceneEntry: { sceneId: string; path: string; groundHeightsPath?: string; groundScatterPath?: string },
+  sceneEntry: {
+    sceneId: string;
+    path: string;
+    groundHeightsPath?: string;
+    groundSplatPath?: string;
+    groundScatterPath?: string;
+  },
   document: SceneJsonExportDocument,
 ): SceneJsonExportDocument {
   const definition = findFirstGroundDynamicMesh(document) as GroundRuntimeDynamicMesh | null;
@@ -12584,60 +12639,81 @@ function hydrateGroundSidecarFromPackage(
     return document;
   }
   const sidecarPath = typeof sceneEntry.groundHeightsPath === 'string' ? sceneEntry.groundHeightsPath.trim() : '';
-  if (!sidecarPath) {
-    return document;
-  }
-  const sidecarBytes = pkg.files[sidecarPath];
-  if (!sidecarBytes) {
-    console.warn(`场景 ${sceneEntry.sceneId} 缺少 ground 高度 sidecar 文件，已回退为场景内置地形数据`);
-    return document;
-  }
-
-  const sidecarBuffer = sidecarBytes.buffer.slice(sidecarBytes.byteOffset, sidecarBytes.byteOffset + sidecarBytes.byteLength);
-  const { rows, columns } = resolveGroundWorkingGridSize(definition);
-  const vertexCount = getGroundVertexCount(rows, columns);
-  const expectedByteLength = GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES + vertexCount * Float64Array.BYTES_PER_ELEMENT * 2;
-  if (sidecarBuffer.byteLength !== expectedByteLength) {
-    throw new Error(
-      `场景 ${sceneEntry.sceneId} 的 ground sidecar 大小异常：期望 ${expectedByteLength}，实际 ${sidecarBuffer.byteLength}`,
-    );
-  }
-
-  const headerView = new DataView(sidecarBuffer, 0, GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES);
-  const magic = headerView.getUint32(0, true);
-  const version = headerView.getUint32(4, true);
-  if (magic !== GROUND_HEIGHTMAP_SIDECAR_MAGIC || version !== GROUND_HEIGHTMAP_SIDECAR_VERSION) {
-    throw new Error(`场景 ${sceneEntry.sceneId} 的 ground sidecar 头无效`);
-  }
-
-  const minRow = headerView.getInt32(8, true);
-  const maxRow = headerView.getInt32(12, true);
-  const minColumn = headerView.getInt32(16, true);
-  const maxColumn = headerView.getInt32(20, true);
-  const generatedAt = headerView.getFloat64(24, true);
-  const hasBounds = minRow !== EMPTY_GROUND_BOUND && maxRow !== EMPTY_GROUND_BOUND && minColumn !== EMPTY_GROUND_BOUND && maxColumn !== EMPTY_GROUND_BOUND;
-  const hasGeneratedAt = Number.isFinite(generatedAt);
-
-  definition.manualHeightMap = new Float64Array(sidecarBuffer, GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES, vertexCount);
-  definition.planningHeightMap = new Float64Array(
-    sidecarBuffer,
-    GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES + vertexCount * Float64Array.BYTES_PER_ELEMENT,
-    vertexCount,
-  );
-  definition.planningMetadata = hasBounds || hasGeneratedAt
-    ? {
-        contourBounds: hasBounds ? { minRow, maxRow, minColumn, maxColumn } : null,
-        generatedAt: hasGeneratedAt ? generatedAt : undefined,
+  if (sidecarPath) {
+    const sidecarBytes = pkg.files[sidecarPath];
+    if (!sidecarBytes) {
+      console.warn(`场景 ${sceneEntry.sceneId} 缺少 ground 高度 sidecar 文件，已回退为场景内置地形数据`);
+    } else {
+      const sidecarBuffer = sidecarBytes.buffer.slice(sidecarBytes.byteOffset, sidecarBytes.byteOffset + sidecarBytes.byteLength);
+      const { rows, columns } = resolveGroundWorkingGridSize(definition);
+      const vertexCount = getGroundVertexCount(rows, columns);
+      const expectedByteLength = GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES + vertexCount * Float64Array.BYTES_PER_ELEMENT * 2;
+      if (sidecarBuffer.byteLength !== expectedByteLength) {
+        throw new Error(
+          `场景 ${sceneEntry.sceneId} 的 ground sidecar 大小异常：期望 ${expectedByteLength}，实际 ${sidecarBuffer.byteLength}`,
+        );
       }
-    : null;
-  definition.surfaceRevision = Number.isFinite(definition.surfaceRevision)
-    ? Math.max(0, Math.trunc(definition.surfaceRevision as number))
-    : 0;
+
+      const headerView = new DataView(sidecarBuffer, 0, GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES);
+      const magic = headerView.getUint32(0, true);
+      const version = headerView.getUint32(4, true);
+      if (magic !== GROUND_HEIGHTMAP_SIDECAR_MAGIC || version !== GROUND_HEIGHTMAP_SIDECAR_VERSION) {
+        throw new Error(`场景 ${sceneEntry.sceneId} 的 ground sidecar 头无效`);
+      }
+
+      const minRow = headerView.getInt32(8, true);
+      const maxRow = headerView.getInt32(12, true);
+      const minColumn = headerView.getInt32(16, true);
+      const maxColumn = headerView.getInt32(20, true);
+      const generatedAt = headerView.getFloat64(24, true);
+      const hasBounds = minRow !== EMPTY_GROUND_BOUND && maxRow !== EMPTY_GROUND_BOUND && minColumn !== EMPTY_GROUND_BOUND && maxColumn !== EMPTY_GROUND_BOUND;
+      const hasGeneratedAt = Number.isFinite(generatedAt);
+
+      definition.manualHeightMap = new Float64Array(sidecarBuffer, GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES, vertexCount);
+      definition.planningHeightMap = new Float64Array(
+        sidecarBuffer,
+        GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES + vertexCount * Float64Array.BYTES_PER_ELEMENT,
+        vertexCount,
+      );
+      definition.planningMetadata = hasBounds || hasGeneratedAt
+        ? {
+            contourBounds: hasBounds ? { minRow, maxRow, minColumn, maxColumn } : null,
+            generatedAt: hasGeneratedAt ? generatedAt : undefined,
+          }
+        : null;
+      definition.surfaceRevision = Number.isFinite(definition.surfaceRevision)
+        ? Math.max(0, Math.trunc(definition.surfaceRevision as number))
+        : 0;
+    }
+  }
   (definition as GroundDynamicMesh & {
     runtimeHydratedHeightState?: 'pristine' | 'dirty';
     runtimeDisableOptimizedChunks?: boolean;
   }).runtimeHydratedHeightState = 'pristine';
   definition.runtimeDisableOptimizedChunks = false;
+
+  const splatSidecarPath = typeof sceneEntry.groundSplatPath === 'string' ? sceneEntry.groundSplatPath.trim() : '';
+  if (!splatSidecarPath) {
+    throw new Error(`场景 ${sceneEntry.sceneId} 缺少 ground splat sidecar 文件`);
+  }
+  const splatSidecarBytes = pkg.files[splatSidecarPath];
+  if (!splatSidecarBytes) {
+    throw new Error(`场景 ${sceneEntry.sceneId} 缺少 ground splat sidecar 文件内容`);
+  }
+  const splatSidecarBuffer = new ArrayBuffer(splatSidecarBytes.byteLength);
+  new Uint8Array(splatSidecarBuffer).set(splatSidecarBytes);
+  const splatPayload = deserializeGroundSplatSidecar(splatSidecarBuffer);
+  if (!splatPayload.groundSurfaceChunks || Object.keys(splatPayload.groundSurfaceChunks).length <= 0) {
+    throw new Error(`场景 ${sceneEntry.sceneId} 的 ground splat sidecar 缺少 baked chunk 数据`);
+  }
+  definition.groundSurfaceChunks = JSON.parse(JSON.stringify(splatPayload.groundSurfaceChunks));
+  definition.groundSplatBake = {
+    revision: Number.isFinite(splatPayload.revision) ? Math.max(0, Math.trunc(splatPayload.revision)) : 0,
+    chunkTextureMap: JSON.parse(JSON.stringify(splatPayload.groundSurfaceChunks)),
+    surfaceLayerTextureAssetIds: Array.isArray(splatPayload.surfaceLayerTextureAssetIds)
+      ? [...splatPayload.surfaceLayerTextureAssetIds]
+      : null,
+  };
 
   const scatterSidecarPath = typeof sceneEntry.groundScatterPath === 'string' ? sceneEntry.groundScatterPath.trim() : '';
   if (!scatterSidecarPath) {
@@ -12991,6 +13067,7 @@ function parseScenePackageToProjectData(pkg: ScenePackageUnzipped, compiledGroun
     const document = hydrateGroundSidecarFromPackage(pkg, sceneEntry, sceneRaw as SceneJsonExportDocument);
     attachScenePackageTerrainRuntime(pkg, sceneEntry, document);
     attachScenePackageCompiledGroundRuntime(pkg, sceneEntry, document);
+    attachOptimizedGroundMeshToDocument(document);
     const assetRegistry: Record<string, SceneAssetRegistryEntry> = {
       ...(document.assetRegistry ?? {}),
     };
@@ -13279,9 +13356,6 @@ async function startRenderIfReady() {
     await ensureRendererContext(canvasResult);
     resourcePreload.label = '正在准备运行时 prefab 资源...';
     const runtimePrefabPreloadContext = await collectRuntimePrefabPreloadContext(props.runtimePrefabSpawns);
-    if (token !== initializeToken) {
-      return;
-    }
     const renderPayload = runtimePrefabPreloadContext && previewPayload.value
       ? {
           ...previewPayload.value,
@@ -13300,18 +13374,20 @@ async function startRenderIfReady() {
           },
         }
       : previewPayload.value;
-    const preparedPayload = await prepareRenderPayloadForDefaultSteer(renderPayload);
-    if (token !== initializeToken) {
-      return;
-    }
+    const steerPreparedPayload = await prepareRenderPayloadForDefaultSteer(renderPayload);
+    const runtimeGroundPrepared = await prepareRuntimeGroundSceneDocument(steerPreparedPayload.document);
+    const preparedGroundDocument = runtimeGroundPrepared.document;
+    currentDocument = preparedGroundDocument;
+    refreshDynamicGroundCache(currentDocument);
+    const preparedPayload: ScenePreviewPayload = {
+      ...steerPreparedPayload,
+      document: preparedGroundDocument,
+    };
     if (runtimePrefabPreloadContext) {
       const prewarmBuildOptions = createSceneGraphBuildOptions(preparedPayload);
       const resourceCache = ensureResourceCache(preparedPayload.document, prewarmBuildOptions);
       viewerResourceCache = resourceCache;
       await warmRuntimePrefabAssetsBeforeSceneEntry(resourceCache, runtimePrefabPreloadContext);
-      if (token !== initializeToken) {
-        return;
-      }
     }
     await initializeRenderer(preparedPayload, canvasResult, token);
     if (token === initializeToken && !error.value) {
@@ -13753,7 +13829,8 @@ async function buildSceneGraphWithProgress(
 
     resourceCache = ensureResourceCache(runtimePayload.document, buildOptions);
     viewerResourceCache = resourceCache;
-    graph = await buildSceneGraph(runtimePayload.document, resourceCache, buildOptions);
+    refreshDynamicGroundCache(payload.document);
+    graph = await buildSceneGraph(payload.document, resourceCache, buildOptions);
   } finally {
     const fullyLoadedByCount = resourcePreload.total > 0 && resourcePreload.loaded >= resourcePreload.total;
     const fullyLoadedByBytes =
@@ -14045,6 +14122,10 @@ async function mountGraphAndSyncSubsystems(
     active: true,
   });
   registerSceneSubtree(root);
+  const groundNode = findGroundNode(payload.document.nodes);
+  if (groundNode && isGroundDynamicMesh(groundNode.dynamicMesh)) {
+    primeSceneryGroundChunkTextureRefresh(root, groundNode.dynamicMesh);
+  }
   await yieldToMainThread();
 
   setSceneInitState({
@@ -14239,6 +14320,17 @@ function startRenderLoop(
               syncSceneryGroundCollisionRuntimeLoadedTileKeys(currentDocument, camera);
             }
           }
+        }
+        try {
+          syncSceneryCompiledGroundRenderTiles(camera);
+        } catch (caughtError) {
+          const message = caughtError instanceof Error
+            ? caughtError.message
+            : 'compiled ground 渲染失败';
+          console.error('[SceneViewer] Compiled ground runtime failed', caughtError);
+          error.value = message;
+          cancel();
+          return;
         }
 
           updateLazyPlaceholders(deltaSeconds);

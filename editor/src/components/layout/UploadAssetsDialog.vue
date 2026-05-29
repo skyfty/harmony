@@ -69,10 +69,10 @@ const DEFAULT_CATEGORY_PATHS: Record<PresetAssetKind, string[][]> = {
     ['Road Presets', 'Road'],
   ],
   landform: [
-    ['预置', '地形'],
-    ['预制', '地形'],
-    ['Prefabs', 'Landform'],
-    ['Prefab', 'Landform'],
+    ['预置', '地貌烘焙'],
+    ['预制', '地貌烘焙'],
+    ['Prefabs', 'Ground Splat'],
+    ['Prefab', 'Ground Splat'],
   ],
   lod: [
     ['预置', '撒件'],

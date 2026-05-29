@@ -18,9 +18,6 @@ const LANDFORM_FEATHER_SHADER_HOOK_INSTALLED = '__landformFeatherShaderHookInsta
 const LANDFORM_FEATHER_ORIGINAL_ON_BEFORE_COMPILE = '__landformFeatherOriginalOnBeforeCompile'
 const LANDFORM_FEATHER_ORIGINAL_PROGRAM_CACHE_KEY = '__landformFeatherOriginalProgramCacheKey'
 const LANDFORM_FEATHER_SHADER_REF = '__landformFeatherShaderRef'
-const LANDFORM_GROUND_TEXTURE_CACHE = '__landformGroundTextureCache'
-
-const textureLoader = new THREE.TextureLoader()
 
 type LandformGeometryData = {
   positions: Float32Array
@@ -28,12 +25,6 @@ type LandformGeometryData = {
   uvs: Float32Array
   feather: Float32Array
   groundUvs: Float32Array
-  groundTextureDataUrl: string | null
-}
-
-type LandformGroundTextureCache = {
-  source: string | null
-  texture: THREE.Texture | null
 }
 
 function enforceLandformFeatherState(material: THREE.MeshStandardMaterial): boolean {
@@ -128,37 +119,8 @@ if (landformHasGroundMap) {
   return true
 }
 
-function resolveLandformGroundTextureFromMesh(mesh: THREE.Mesh): THREE.Texture | null {
-  const userData = (mesh.userData ??= {}) as Record<string, unknown>
-  const source = typeof userData.landformGroundTextureDataUrl === 'string'
-    ? userData.landformGroundTextureDataUrl.trim()
-    : ''
-  const cached = (userData[LANDFORM_GROUND_TEXTURE_CACHE] ?? null) as LandformGroundTextureCache | null
-
-  if (!source) {
-    if (cached?.texture) {
-      disposeGroundTexture(cached.texture)
-    }
-    userData[LANDFORM_GROUND_TEXTURE_CACHE] = { source: null, texture: null } satisfies LandformGroundTextureCache
-    return null
-  }
-  if (cached?.source === source && cached.texture) {
-    return cached.texture
-  }
-
-  if (cached?.texture) {
-    disposeGroundTexture(cached.texture)
-  }
-  const texture = textureLoader.load(source)
-  applyGroundTextureSamplingDefaults(texture)
-  texture.name = 'LandformGroundBlendTexture'
-  userData[LANDFORM_GROUND_TEXTURE_CACHE] = { source, texture } satisfies LandformGroundTextureCache
-  return texture
-}
-
 function syncLandformBlendMaterialUniforms(
   material: THREE.Material | null | undefined,
-  mesh: THREE.Mesh<THREE.BufferGeometry, THREE.Material | THREE.Material[]>,
 ): void {
   if (!material || !(material as THREE.MeshStandardMaterial).isMeshStandardMaterial) {
     return
@@ -171,14 +133,13 @@ function syncLandformBlendMaterialUniforms(
     return
   }
 
-  const groundTexture = resolveLandformGroundTextureFromMesh(mesh)
   const hasGroundMapUniform = shader.uniforms.landformHasGroundMap
   if (hasGroundMapUniform) {
-    hasGroundMapUniform.value = Boolean(groundTexture)
+    hasGroundMapUniform.value = false
   }
   const groundMapUniform = shader.uniforms.landformGroundMap
   if (groundMapUniform) {
-    groundMapUniform.value = groundTexture
+    groundMapUniform.value = null
   }
 }
 
@@ -215,10 +176,6 @@ function disposeObject3D(object: THREE.Object3D): void {
       material.forEach((entry) => entry?.dispose?.())
     } else {
       material?.dispose?.()
-    }
-    const cached = (mesh.userData?.[LANDFORM_GROUND_TEXTURE_CACHE] ?? null) as LandformGroundTextureCache | null
-    if (cached?.texture) {
-      disposeGroundTexture(cached.texture)
     }
   })
 }
@@ -304,20 +261,6 @@ function buildGroundUvAttribute(values: Vector2Like[] | null | undefined, vertex
   return groundUvs
 }
 
-function applyGroundTextureSamplingDefaults(texture: THREE.Texture): void {
-  texture.wrapS = THREE.ClampToEdgeWrapping
-  texture.wrapT = THREE.ClampToEdgeWrapping
-  texture.anisotropy = Math.min(16, texture.anisotropy || 8)
-  texture.generateMipmaps = true
-  texture.minFilter = THREE.LinearMipmapLinearFilter
-  texture.magFilter = THREE.LinearFilter
-  texture.colorSpace = THREE.SRGBColorSpace
-}
-
-function disposeGroundTexture(texture: THREE.Texture | null | undefined): void {
-  texture?.dispose()
-}
-
 function buildLandformGeometryData(definition: LandformDynamicMesh): LandformGeometryData | null {
   const renderCache = definition.renderCache ?? null
   const cachedVertices = Array.isArray(renderCache?.surfaceVertices)
@@ -335,9 +278,6 @@ function buildLandformGeometryData(definition: LandformDynamicMesh): LandformGeo
   const cachedGroundUvs = Array.isArray(renderCache?.surfaceGroundUvs)
     ? renderCache!.surfaceGroundUvs
     : []
-  const groundTextureDataUrl = typeof renderCache?.groundTextureDataUrl === 'string'
-    ? renderCache.groundTextureDataUrl.trim() || null
-    : null
 
   const fallbackVertices2d = Array.isArray(definition.vertices)
     ? definition.vertices
@@ -419,7 +359,6 @@ function buildLandformGeometryData(definition: LandformDynamicMesh): LandformGeo
     uvs,
     feather,
     groundUvs: buildGroundUvAttribute(cachedGroundUvs, vertices.length),
-    groundTextureDataUrl,
   }
 }
 
@@ -513,9 +452,6 @@ function applyLandformMeshState(
   mesh: THREE.Mesh<THREE.BufferGeometry, THREE.Material | THREE.Material[]>,
   definition: LandformDynamicMesh,
 ): void {
-  const groundTextureDataUrl = typeof definition.renderCache?.groundTextureDataUrl === 'string'
-    ? definition.renderCache.groundTextureDataUrl.trim() || null
-    : null
   mesh.userData = {
     ...(mesh.userData ?? {}),
     [MATERIAL_CONFIG_ID_KEY]: normalizeMaterialConfigId(definition.materialConfigId),
@@ -524,7 +460,6 @@ function applyLandformMeshState(
       repeatScale: { x: 1, y: 1 },
     },
     landformSurface: true,
-    landformGroundTextureDataUrl: groundTextureDataUrl,
   }
 }
 
@@ -542,13 +477,13 @@ function configureLandformMesh(
     if (Array.isArray(currentMaterial)) {
       mesh.material = currentMaterial.map((entry) => {
         const patched = applyLandformFeatherMaterial(entry) ?? entry
-        syncLandformBlendMaterialUniforms(patched, mesh)
+        syncLandformBlendMaterialUniforms(patched)
         return patched
       })
       return
     }
     const patched = applyLandformFeatherMaterial(currentMaterial ?? null) ?? (currentMaterial as THREE.Material)
-    syncLandformBlendMaterialUniforms(patched, mesh)
+    syncLandformBlendMaterialUniforms(patched)
     mesh.material = patched
   }
 }

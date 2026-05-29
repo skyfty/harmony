@@ -1,4 +1,6 @@
 
+export { decode, encode } from '@msgpack/msgpack'
+
 import * as THREE from 'three'
 import type { SceneNodeInstanceLayout } from './instanceLayout'
 import type { TerrainScatterStoreSnapshot } from './terrain-scatter'
@@ -125,9 +127,19 @@ export {
 } from './asset-api'
 
 export {
+  normalizeBounds3D,
+  isPlainObject,
+  normalizeFiniteNumber,
+  normalizeInteger,
+  normalizeString,
+} from './valueNormalization'
+
+export {
   SCENE_PACKAGE_FORMAT,
   SCENE_PACKAGE_VERSION,
+  deserializeScenePackageManifest,
   isScenePackageManifest,
+  serializeScenePackageManifest,
 } from './scenePackage'
 export type {
   ScenePackageRoadCollisionEntry,
@@ -149,6 +161,9 @@ export {
   COMPILED_GROUND_COLLISION_TILE_MAGIC,
   computeCompiledGroundManifestRevision,
   formatCompiledGroundTileKey,
+  normalizeCompiledGroundManifest,
+  serializeCompiledGroundManifest,
+  deserializeCompiledGroundManifest,
   serializeCompiledGroundRenderTile,
   deserializeCompiledGroundRenderTile,
   serializeCompiledGroundCollisionTile,
@@ -231,6 +246,7 @@ export {
   buildQuantizedTerrainRegionPackPath,
   buildQuantizedTerrainRootManifestPath,
   clampQuantizedTerrainLevel,
+  deserializeQuantizedTerrainDatasetRootManifest,
   formatQuantizedTerrainRegionKey,
   formatQuantizedTerrainTileKey,
   getQuantizedTerrainChildMask,
@@ -239,9 +255,11 @@ export {
   isValidQuantizedTerrainLevel,
   parseQuantizedTerrainRegionKey,
   parseQuantizedTerrainTileKey,
+  normalizeQuantizedTerrainDatasetRootManifest,
   resolveQuantizedTerrainRegionIdForTile,
   resolveQuantizedTerrainTileBounds,
   resolveQuantizedTerrainTileSpanMeters,
+  serializeQuantizedTerrainDatasetRootManifest,
 } from './quantizedTerrainDataset'
 export type {
   QuantizedTerrainDatasetAvailabilityRange,
@@ -275,6 +293,14 @@ export {
   deserializeGroundScatterSidecar,
 } from './groundScatterSidecar'
 export type { GroundScatterSidecarPayload } from './groundScatterSidecar'
+
+export {
+  GROUND_SPLAT_SIDECAR_FILENAME,
+  GROUND_SPLAT_SIDECAR_VERSION,
+  serializeGroundSplatSidecar,
+  deserializeGroundSplatSidecar,
+} from './groundSplatSidecar'
+export type { GroundSplatSidecarPayload } from './groundSplatSidecar'
 
 export {
   formatTerrainPaintChunkKey,
@@ -1724,9 +1750,25 @@ export interface GroundGenerationSettings {
 
 export type GroundSculptOperation = 'raise' | 'depress' | 'smooth' | 'flatten' | 'flatten-zero'
 
+export interface GroundSurfaceChunkLayerRef {
+  albedoSource?: string | null
+  albedoTextureSettings?: SceneMaterialTextureSettings | null
+  normalSource?: string | null
+  normalTextureSettings?: SceneMaterialTextureSettings | null
+  colorTint?: string | null
+  opacity?: number | null
+  uvScale?: Vector2Like | null
+  maskChannel: number
+  featherEnabled?: boolean | null
+  featherWidth?: number | null
+}
 
 export interface GroundSurfaceChunkTextureRef {
-  textureAssetId: string
+  baseBlendMode?: 'shader-splat-v1' | null
+  textureAssetId?: string | null
+  normalTextureAssetId?: string | null
+  splatMapAssetIds?: string[] | null
+  surfaceLayers?: GroundSurfaceChunkLayerRef[] | null
   revision: number
 }
 
@@ -1988,21 +2030,100 @@ export function formatGroundChunkDataPath(
 export function normalizeGroundSurfaceChunkTextureMap(
   value: GroundSurfaceChunkTextureMap | null | undefined,
 ): GroundSurfaceChunkTextureMap {
-  return Object.fromEntries(
-    Object.entries(value ?? {})
-      .map(([chunkKey, chunkRef]) => {
-        const normalizedChunkKey = typeof chunkKey === 'string' ? chunkKey.trim() : ''
-        const textureAssetId = typeof chunkRef?.textureAssetId === 'string' ? chunkRef.textureAssetId.trim() : ''
-        if (!normalizedChunkKey || !textureAssetId) {
-          return null
-        }
-        return [normalizedChunkKey, {
-          textureAssetId,
-          revision: Math.max(0, Math.trunc(Number.isFinite(Number(chunkRef?.revision)) ? Number(chunkRef?.revision) : 0)),
-        }] as const
-      })
-      .filter((entry): entry is readonly [string, GroundSurfaceChunkTextureRef] => Boolean(entry)),
-  )
+  const normalizeTextureSettings = (settings: unknown): SceneMaterialTextureSettings | null => {
+    if (!settings || typeof settings !== 'object') {
+      return null
+    }
+    const record = settings as Partial<SceneMaterialTextureSettings>
+    const tileSizeX = Number(record.tileSizeMeters?.x)
+    const tileSizeY = Number(record.tileSizeMeters?.y)
+    return {
+      wrapS: typeof record.wrapS === 'string' ? record.wrapS : 'ClampToEdgeWrapping',
+      wrapT: typeof record.wrapT === 'string' ? record.wrapT : 'ClampToEdgeWrapping',
+      wrapR: typeof record.wrapR === 'string' ? record.wrapR : 'ClampToEdgeWrapping',
+      offset: {
+        x: Number.isFinite(Number(record.offset?.x)) ? Number(record.offset?.x) : 0,
+        y: Number.isFinite(Number(record.offset?.y)) ? Number(record.offset?.y) : 0,
+      },
+      repeat: {
+        x: Number.isFinite(Number(record.repeat?.x)) ? Number(record.repeat?.x) : 1,
+        y: Number.isFinite(Number(record.repeat?.y)) ? Number(record.repeat?.y) : 1,
+      },
+      tileSizeMeters: {
+        x: Number.isFinite(tileSizeX) && tileSizeX > 1e-6 ? tileSizeX : 1,
+        y: Number.isFinite(tileSizeY) && tileSizeY > 1e-6 ? tileSizeY : 1,
+      },
+      rotation: Number.isFinite(Number(record.rotation)) ? Number(record.rotation) : 0,
+      center: {
+        x: Number.isFinite(Number(record.center?.x)) ? Number(record.center?.x) : 0,
+        y: Number.isFinite(Number(record.center?.y)) ? Number(record.center?.y) : 0,
+      },
+      matrixAutoUpdate: typeof record.matrixAutoUpdate === 'boolean' ? record.matrixAutoUpdate : true,
+      generateMipmaps: typeof record.generateMipmaps === 'boolean' ? record.generateMipmaps : true,
+      premultiplyAlpha: typeof record.premultiplyAlpha === 'boolean' ? record.premultiplyAlpha : false,
+      flipY: typeof record.flipY === 'boolean' ? record.flipY : true,
+    }
+  }
+  const normalizeOptionalAssetId = (assetId: unknown): string | null => {
+    const normalized = typeof assetId === 'string' ? assetId.trim() : ''
+    return normalized.length > 0 ? normalized : null
+  }
+  const entries: Array<readonly [string, GroundSurfaceChunkTextureRef]> = []
+  for (const [chunkKey, chunkRef] of Object.entries(value ?? {})) {
+    const normalizedChunkKey = typeof chunkKey === 'string' ? chunkKey.trim() : ''
+    if (!normalizedChunkKey) {
+      continue
+    }
+    const normalizedSurfaceLayers = Array.isArray(chunkRef?.surfaceLayers)
+      ? chunkRef.surfaceLayers
+          .map((layer): GroundSurfaceChunkLayerRef | null => {
+            if (!layer || typeof layer !== 'object') {
+              return null
+            }
+            const uvScaleX = Number((layer as { uvScale?: { x?: unknown } }).uvScale?.x)
+            const uvScaleY = Number((layer as { uvScale?: { y?: unknown } }).uvScale?.y)
+            const opacity = Number((layer as { opacity?: unknown }).opacity)
+            const featherWidth = Number((layer as { featherWidth?: unknown }).featherWidth)
+            const maskChannel = Math.trunc(Number((layer as { maskChannel?: unknown }).maskChannel))
+            if (!Number.isInteger(maskChannel) || maskChannel < 0 || maskChannel > 3) {
+              return null
+            }
+            const colorTint = typeof (layer as { colorTint?: unknown }).colorTint === 'string'
+              ? String((layer as { colorTint?: unknown }).colorTint).trim()
+              : ''
+            return {
+              albedoSource: normalizeOptionalAssetId((layer as { albedoSource?: unknown }).albedoSource),
+              albedoTextureSettings: normalizeTextureSettings((layer as { albedoTextureSettings?: unknown }).albedoTextureSettings),
+              normalSource: normalizeOptionalAssetId((layer as { normalSource?: unknown }).normalSource),
+              normalTextureSettings: normalizeTextureSettings((layer as { normalTextureSettings?: unknown }).normalTextureSettings),
+              colorTint: colorTint.length > 0 ? colorTint : null,
+              opacity: Number.isFinite(opacity) ? Math.max(0, Math.min(1, opacity)) : 1,
+              uvScale: Number.isFinite(uvScaleX) && uvScaleX > 0 && Number.isFinite(uvScaleY) && uvScaleY > 0
+                ? { x: uvScaleX, y: uvScaleY } satisfies Vector2Like
+                : null,
+              maskChannel,
+              featherEnabled: typeof (layer as { featherEnabled?: unknown }).featherEnabled === 'boolean'
+                ? Boolean((layer as { featherEnabled?: unknown }).featherEnabled)
+                : null,
+              featherWidth: Number.isFinite(featherWidth) ? Math.max(0, featherWidth) : null,
+            } satisfies GroundSurfaceChunkLayerRef
+          })
+          .filter((layer): layer is GroundSurfaceChunkLayerRef => layer !== null)
+      : null
+    entries.push([normalizedChunkKey, {
+      baseBlendMode: chunkRef?.baseBlendMode === 'shader-splat-v1' ? 'shader-splat-v1' : null,
+      textureAssetId: normalizeOptionalAssetId(chunkRef?.textureAssetId),
+      normalTextureAssetId: normalizeOptionalAssetId(chunkRef?.normalTextureAssetId),
+      splatMapAssetIds: Array.isArray(chunkRef?.splatMapAssetIds)
+        ? chunkRef.splatMapAssetIds
+            .map((value) => normalizeOptionalAssetId(value))
+            .filter((value): value is string => Boolean(value))
+        : null,
+      surfaceLayers: normalizedSurfaceLayers,
+      revision: Math.max(0, Math.trunc(Number.isFinite(Number(chunkRef?.revision)) ? Number(chunkRef?.revision) : 0)),
+    }])
+  }
+  return Object.fromEntries(entries)
 }
 
 export interface GroundDynamicMesh {
@@ -2053,10 +2174,18 @@ export interface GroundDynamicMesh {
   /** Runtime-only dataset metadata hydrated by the viewer. */
   runtimeTerrainDatasetManifest?: unknown
   runtimeTerrainDatasetEnabled?: boolean
+  /** Runtime-only dense chunk radius override used to keep expensive standalone chunk meshes inside a tighter window than flat tiling. */
+  runtimeDenseChunkLoadRadiusChunks?: number
   /** Sparse local high-resolution authoring tiles for Terrain Tools and DEM-preserved detail. */
   localEditTiles?: GroundLocalEditTileMap | null
   terrainScatter?: TerrainScatterStoreSnapshot | null
   groundSurfaceChunks?: GroundSurfaceChunkTextureMap | null
+  /** Editor/runtime cache for baked landform splat texture bundles. */
+  groundSplatBake?: {
+    revision: number
+    chunkTextureMap?: GroundSurfaceChunkTextureMap | null
+    surfaceLayerTextureAssetIds?: string[] | null
+  } | null
 }
 
 export function resolveGroundEditTileSizeMeters(definition: Pick<GroundDynamicMesh, 'editTileSizeMeters' | 'cellSize'>): number {
@@ -2438,6 +2567,17 @@ export interface LandformDynamicMesh {
     /** Optional ground texture source used to blend landform edges into the underlying terrain. */
     groundTextureDataUrl?: string | null
   } | null
+  /** Optional baked landform splat layer ordering and PBR authoring metadata. */
+  surfaceLayers?: Array<{
+    id: string
+    order: number
+    materialConfigId?: string | null
+    materialProps?: SceneMaterialProps | null
+    textureAssetIds?: string[] | null
+    enableFeather?: boolean
+    feather?: number
+    uvScale?: Vector2Like | null
+  }> | null
   /** Material config id used for the landform surface mesh. */
   materialConfigId?: string | null
   /** Whether feathered edge fading is enabled for this landform surface. */
@@ -2446,6 +2586,12 @@ export interface LandformDynamicMesh {
   feather?: number
   /** Surface UV scale in local XZ meters per UV repeat (U/V). */
   uvScale?: Vector2Like | null
+  /** Editor-only cache for the baked ground splat texture bundle. */
+  groundSplatBake?: {
+    revision: number
+    chunkTextureMap?: GroundSurfaceChunkTextureMap | null
+    surfaceLayerTextureAssetIds?: string[] | null
+  } | null
 }
 
 export interface GuideRouteDynamicMesh {

@@ -75,11 +75,11 @@ import { subscribeToScenePreview } from '@/utils/previewChannel'
 import type { SceneExportOptions } from '@/types/scene-export'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import { prepareStoredSceneJsonExportBundle } from '@/utils/sceneExport'
+import { bakeLandformGroundSplatForSceneDocument } from '@/utils/landformGroundBake'
 import { type SceneAssetDiagnosticsSummary } from '@/utils/sceneAssetDiagnostics'
 import { collectRuntimeModelNodesByAssetId } from '@/utils/sceneAssetCollectors'
 import { createGroundRuntimeMeshFromSidecar } from '@/utils/groundHeightSidecar'
 import { attachRoadCollisionCompiledExportToDocument } from '@/utils/roadCollisionCompiledExport'
-import { attachOptimizedGroundMeshToDocument } from '@/utils/groundOptimizedMeshExport'
 import { useGroundHeightmapStore } from '@/stores/groundHeightmapStore'
 import { useScenesStore } from '@/stores/scenesStore'
 import { useSceneStore } from '@/stores/sceneStore'
@@ -110,6 +110,7 @@ import {
 import { createGroundCollisionRuntimeBridgeDeps } from '@schema/groundCollisionRuntimeBridge'
 import { syncGroundCollisionRuntimeLoadedTileKeys } from '@schema/groundCollisionRuntimeState'
 import { setInfiniteGroundHiddenChunkKeys } from '@schema/groundMesh'
+import { prepareRuntimeGroundSceneDocument } from '@schema/groundSplatRuntimeDocument'
 import { resolveModelCollisionFaceSegments } from '@schema/physicsShapeResolvers'
 import {
 	createSceneCsmShadowRuntime,
@@ -1804,12 +1805,30 @@ function resolveScenePreviewCompiledGroundPackage(): ScenePreviewCompiledGroundP
 		&& manifestSource
 		&& sceneStore.compiledGroundFiles.size > 0
 	) {
-		return {
+		const cacheState = scenePreviewCompiledGroundPackageCacheState
+		if (
+			cacheState
+			&& cacheState.sceneId === sceneId
+			&& cacheState.buildKey === buildKey
+			&& cacheState.manifestSource === manifestSource
+			&& cacheState.filesSource === sceneStore.compiledGroundFiles
+		) {
+			return scenePreviewCompiledGroundPackage
+		}
+		const normalizedManifest = toRaw(manifestSource) as CompiledGroundManifest
+		scenePreviewCompiledGroundPackage = {
 			sceneId,
 			buildKey,
-			manifest: toRaw(manifestSource),
+			manifest: normalizedManifest,
 			files: new Map(sceneStore.compiledGroundFiles),
 		}
+		scenePreviewCompiledGroundPackageCacheState = {
+			sceneId,
+			buildKey,
+			manifestSource: manifestSource as CompiledGroundManifest,
+			filesSource: sceneStore.compiledGroundFiles,
+		}
+		return scenePreviewCompiledGroundPackage
 	}
 	if (scenePreviewCompiledGroundPackage?.sceneId === sceneId) {
 		return scenePreviewCompiledGroundPackage
@@ -1821,6 +1840,7 @@ async function hydrateScenePreviewCompiledGroundPackage(document: SceneJsonExpor
 	const sceneId = typeof document.id === 'string' ? document.id.trim() : ''
 	if (!sceneId) {
 		scenePreviewCompiledGroundPackage = null
+		scenePreviewCompiledGroundPackageCacheState = null
 		return
 	}
 
@@ -1850,12 +1870,19 @@ async function hydrateScenePreviewCompiledGroundPackage(document: SceneJsonExpor
 			manifest: compiledGroundManifest,
 			files: new Map(sceneStore.compiledGroundFiles),
 		}
+		scenePreviewCompiledGroundPackageCacheState = {
+			sceneId,
+			buildKey,
+			manifestSource: manifestSource as CompiledGroundManifest,
+			filesSource: sceneStore.compiledGroundFiles,
+		}
 		return
 	}
 
 	const bundle = await useScenesStore().loadCompiledGroundBundle(sceneId)
 	if (!bundle) {
 		scenePreviewCompiledGroundPackage = null
+		scenePreviewCompiledGroundPackageCacheState = null
 		if (scenePreviewCompiledGroundInjected) {
 			scenePreviewCompiledGroundInjected = false
 			sceneStore.compiledGroundBuildKey = null
@@ -1867,6 +1894,7 @@ async function hydrateScenePreviewCompiledGroundPackage(document: SceneJsonExpor
 	const bundleManifest = bundle.manifest
 	if (!bundleManifest) {
 		scenePreviewCompiledGroundPackage = null
+		scenePreviewCompiledGroundPackageCacheState = null
 		if (scenePreviewCompiledGroundInjected) {
 			scenePreviewCompiledGroundInjected = false
 			sceneStore.compiledGroundBuildKey = null
@@ -1882,6 +1910,7 @@ async function hydrateScenePreviewCompiledGroundPackage(document: SceneJsonExpor
 		manifest: bundleManifest,
 		files: new Map<string, ArrayBuffer>(Object.entries(bundle.files)),
 	}
+	scenePreviewCompiledGroundPackageCacheState = null
 	if (!storeHasAnyCompiledGroundState && !scenePreviewCompiledGroundInjected) {
 		sceneStore.compiledGroundBuildKey = scenePreviewCompiledGroundPackage.buildKey || null
 		sceneStore.compiledGroundManifest = scenePreviewCompiledGroundPackage.manifest
@@ -1901,6 +1930,13 @@ type ScenePreviewCompiledGroundPackage = {
 	files: Map<string, ArrayBuffer>
 }
 let scenePreviewCompiledGroundPackage: ScenePreviewCompiledGroundPackage | null = null
+type ScenePreviewCompiledGroundPackageCacheState = {
+	sceneId: string
+	buildKey: string
+	manifestSource: CompiledGroundManifest
+	filesSource: Map<string, ArrayBuffer>
+}
+let scenePreviewCompiledGroundPackageCacheState: ScenePreviewCompiledGroundPackageCacheState | null = null
 let scenePreviewCompiledGroundInjected = false
 let groundCacheLoadToken = 0
 let unsubscribe: (() => void) | null = null
@@ -7257,8 +7293,11 @@ function handleLookLevelEvent(event: Extract<BehaviorRuntimeEvent, { type: 'look
 }
 
 async function ensureScenePreviewExportDocument(document: StoredSceneDocument) {
+	await bakeLandformGroundSplatForSceneDocument(document, {
+		maxTextureSize: 512,
+		maxSplatLayers: 4,
+	})
 	const bundle = await prepareStoredSceneJsonExportBundle(document, SCENE_PREVIEW_EXPORT_OPTIONS)
-
 	return bundle.document
 }
 
@@ -7293,17 +7332,22 @@ function isSceneJsonExportDocument(raw: unknown): raw is SceneJsonExportDocument
 	const candidate = raw as Partial<SceneJsonExportDocument>
 	return typeof candidate.id === 'string' && Array.isArray(candidate.nodes)
 }
-
 async function buildPreviewRuntimeDocument(
 	document: SceneJsonExportDocument,
-	options: { groundHeightSidecar?: ArrayBuffer | null; groundScatterSidecar?: ArrayBuffer | null } = {},
+	options: {
+		groundHeightSidecar?: ArrayBuffer | null
+		groundScatterSidecar?: ArrayBuffer | null
+		sourceDocument?: StoredSceneDocument | SceneJsonExportDocument | null
+	} = {},
 ): Promise<SceneJsonExportDocument> {
 	document = await prepareCouponSceneDocument(document)
+	const preparedRuntime = await prepareRuntimeGroundSceneDocument(document)
+	const runtimeDocument = preparedRuntime.document
 	const defaultSteerNodeId = resolveDefaultSteerBinding(document)
 	pendingDefaultSteerDriveEvent.value = defaultSteerNodeId ? buildDefaultSteerDriveEvent(defaultSteerNodeId) : null
-	const groundNode = findGroundNode(document.nodes)
-	const sidecar = await resolvePreviewGroundHeightSidecar(document.id, groundNode, options.groundHeightSidecar)
-	const scatterSidecar = options.groundScatterSidecar ?? await useScenesStore().loadGroundScatterSidecar(document.id)
+	const groundNode = findGroundNode(runtimeDocument.nodes)
+	const sidecar = await resolvePreviewGroundHeightSidecar(runtimeDocument.id, groundNode, options.groundHeightSidecar)
+	const scatterSidecar = options.groundScatterSidecar ?? await useScenesStore().loadGroundScatterSidecar(runtimeDocument.id)
 	const scatterStore = useGroundScatterStore()
 	if (groundNode && groundNode.dynamicMesh && sidecar && isGroundDynamicMesh(groundNode.dynamicMesh)) {
 		groundNode.dynamicMesh = createGroundRuntimeMeshFromSidecar(groundNode.dynamicMesh, sidecar)
@@ -7322,23 +7366,22 @@ async function buildPreviewRuntimeDocument(
 			&& (embeddedScatter as { layers: unknown[] }).layers.length > 0,
 		)
 		if (scatterSidecar) {
-			await scatterStore.hydrateSceneDocument(document.id, groundNode, scatterSidecar)
+			await scatterStore.hydrateSceneDocument(runtimeDocument.id, groundNode, scatterSidecar)
 		} else if (hasEmbeddedScatter) {
 			scatterStore.replaceTerrainScatter(
-				document.id,
+				runtimeDocument.id,
 				groundNode.id,
 				JSON.parse(JSON.stringify(embeddedScatter)),
 				{ bumpRuntimeVersion: false, reason: 'preview-embedded-document' },
 			)
 		} else {
-			await scatterStore.hydrateSceneDocument(document.id, groundNode, null)
+			await scatterStore.hydrateSceneDocument(runtimeDocument.id, groundNode, null)
 		}
 
-		attachGroundScatterRuntimeToNode(document.id, groundNode)
+		attachGroundScatterRuntimeToNode(runtimeDocument.id, groundNode)
 	}
-	attachRoadCollisionCompiledExportToDocument(document)
-	attachOptimizedGroundMeshToDocument(document)
-	return document
+	attachRoadCollisionCompiledExportToDocument(runtimeDocument)
+	return runtimeDocument
 }
 
 async function switchToProjectScene(sceneId: string): Promise<void> {
@@ -7360,6 +7403,7 @@ async function switchToProjectScene(sceneId: string): Promise<void> {
 			cleanupForUnrelatedSceneSwitch()
 			const waitApplied = waitForSnapshotApplied(timestamp, token)
 			const runtimeDocument = await buildPreviewRuntimeDocument(entry.document, {
+				sourceDocument: entry.document,
 				groundHeightSidecar: entry.groundHeightSidecar,
 				groundScatterSidecar: entry.groundScatterSidecar,
 			})
@@ -7436,7 +7480,9 @@ async function handleLoadSceneEvent(event: Extract<BehaviorRuntimeEvent, { type:
 			return
 		}
 		const exportDocument = await ensureScenePreviewExportDocument(document)
-		const runtimeDocument = await buildPreviewRuntimeDocument(exportDocument)
+		const runtimeDocument = await buildPreviewRuntimeDocument(exportDocument, {
+			sourceDocument: document,
+		})
 		if (sceneSwitchToken !== token) {
 			return
 		}
@@ -10467,7 +10513,12 @@ function resolveScenePreviewCompiledGroundTileLoader(): ((record: { path: string
 	if (!compiledGroundPackage) {
 		return undefined
 	}
-	return async (record) => compiledGroundPackage.files.get(record.path) ?? null
+	return loadScenePreviewCompiledGroundTileData
+}
+
+async function loadScenePreviewCompiledGroundTileData(record: { path: string }): Promise<ArrayBuffer | null> {
+	const compiledGroundPackage = resolveScenePreviewCompiledGroundPackage()
+	return compiledGroundPackage?.files.get(record.path) ?? null
 }
 
 function resolveScenePreviewCompiledGroundRuntime(): {
@@ -10517,8 +10568,12 @@ function syncScenePreviewCompiledGroundRenderTiles(activeCamera: THREE.Perspecti
 		sourceId: buildKey,
 		revision,
 		manifest,
-		loadTileData: async (record) => compiledGroundPackage.files.get(record.path) ?? null,
+		loadTileData: loadScenePreviewCompiledGroundTileData,
 		streamingMode: 'runtime-camera',
+		groundSplatRuntimeProfile: {
+			maxLayers: 4,
+			enableLayerNormalMap: true,
+		},
 	})
 	const nextWorkState = getCompiledGroundRenderWorkState(runtime.groundObject)
 	if (!nextWorkState || nextWorkState.loadedChunkKeysVersion !== lastScenePreviewCompiledGroundRenderLoadedChunkKeysVersion) {
@@ -13464,6 +13519,7 @@ onBeforeUnmount(() => {
 	}
 	clearRuntimePrefabPreviewRoots()
 	scenePreviewCompiledGroundPackage = null
+	scenePreviewCompiledGroundPackageCacheState = null
 	scenePreviewCompiledGroundInjected = false
 	dismissBehaviorBubble({ type: 'continue' })
 	rendererInitialized = false

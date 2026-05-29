@@ -158,12 +158,54 @@ function cloneGroundSurfaceChunks(
   if (!value) {
     return null
   }
-  const nextEntries = Object.entries(value)
-    .filter(([, chunkRef]) => typeof chunkRef?.textureAssetId === 'string' && chunkRef.textureAssetId.trim().length > 0)
-    .map(([key, chunkRef]) => [key, {
-      textureAssetId: chunkRef.textureAssetId.trim(),
-      revision: Number.isFinite(chunkRef.revision) ? Math.max(0, Math.trunc(chunkRef.revision)) : 0,
-    }])
+  const nextEntries = Object.entries(value).map(([key, chunkRef]) => [key, {
+    ...chunkRef,
+    baseBlendMode: chunkRef?.baseBlendMode === 'shader-splat-v1' ? 'shader-splat-v1' : null,
+    textureAssetId: typeof chunkRef?.textureAssetId === 'string' && chunkRef.textureAssetId.trim().length > 0
+      ? chunkRef.textureAssetId.trim()
+      : null,
+    normalTextureAssetId: typeof chunkRef?.normalTextureAssetId === 'string' && chunkRef.normalTextureAssetId.trim().length > 0
+      ? chunkRef.normalTextureAssetId.trim()
+      : null,
+    splatMapAssetIds: Array.isArray(chunkRef?.splatMapAssetIds)
+      ? chunkRef.splatMapAssetIds
+          .map((assetId) => (typeof assetId === 'string' ? assetId.trim() : ''))
+          .filter((assetId) => assetId.length > 0)
+      : null,
+    surfaceLayers: Array.isArray(chunkRef?.surfaceLayers)
+      ? chunkRef.surfaceLayers.map((layer) => {
+          if (!layer) {
+            return {
+              maskChannel: 0,
+            }
+          }
+          return {
+            ...layer,
+            albedoSource: typeof layer.albedoSource === 'string' && layer.albedoSource.trim().length > 0
+              ? layer.albedoSource.trim()
+              : null,
+            albedoTextureSettings: layer.albedoTextureSettings
+              ? {
+                  ...layer.albedoTextureSettings,
+                  offset: { ...layer.albedoTextureSettings.offset },
+                  repeat: { ...layer.albedoTextureSettings.repeat },
+                  tileSizeMeters: { ...layer.albedoTextureSettings.tileSizeMeters },
+                  center: { ...layer.albedoTextureSettings.center },
+                }
+              : null,
+            colorTint: typeof layer.colorTint === 'string' && layer.colorTint.trim().length > 0
+              ? layer.colorTint.trim()
+              : null,
+            uvScale: layer.uvScale ? { x: Number(layer.uvScale.x) || 0, y: Number(layer.uvScale.y) || 0 } : null,
+            maskChannel: Number.isFinite(layer.maskChannel) ? Math.max(0, Math.min(7, Math.trunc(layer.maskChannel))) : 0,
+            opacity: Number.isFinite(layer.opacity) ? Math.max(0, Math.min(1, Number(layer.opacity))) : 1,
+            featherEnabled: typeof layer.featherEnabled === 'boolean' ? layer.featherEnabled : null,
+            featherWidth: Number.isFinite(layer.featherWidth) ? Math.max(0, Number(layer.featherWidth)) : null,
+          }
+        })
+      : null,
+    revision: Number.isFinite(chunkRef?.revision) ? Math.max(0, Math.trunc(chunkRef.revision)) : 0,
+  }] as const)
   return nextEntries.length ? Object.fromEntries(nextEntries) as GroundSurfaceChunkTextureMap : null
 }
 
@@ -195,7 +237,7 @@ export function stripPlanningOrthophotoGeneratedGroundSurfaceChunks(options: {
   let removedChunkCount = 0
 
   for (const [chunkKey, chunkRef] of Object.entries(current)) {
-    const textureAssetId = chunkRef.textureAssetId.trim()
+    const textureAssetId = typeof chunkRef.textureAssetId === 'string' ? chunkRef.textureAssetId.trim() : ''
     if (textureAssetId && isPlanningTerrainImageryAsset(options.getAsset(textureAssetId))) {
       removedAssetIds.add(textureAssetId)
       removedChunkCount += 1

@@ -8,7 +8,6 @@ import type { ProjectAsset } from '@/types/project-asset'
 import { buildLandformPresetFilename, isLandformPresetFilename } from '@/utils/landformPreset'
 import {
   LANDFORM_COMPONENT_TYPE,
-  LANDFORM_DEFAULT_ENABLE_FEATHER,
   LANDFORM_DEFAULT_FEATHER,
   LANDFORM_MAX_FEATHER,
   LANDFORM_MIN_FEATHER,
@@ -26,7 +25,6 @@ const landformComponent = computed(() => {
   return component as SceneNodeComponentState<LandformComponentProps>
 })
 
-const localEnableFeather = ref(LANDFORM_DEFAULT_ENABLE_FEATHER)
 const localFeather = ref(LANDFORM_DEFAULT_FEATHER)
 const localUvScaleX = ref(1)
 const localUvScaleY = ref(1)
@@ -139,8 +137,8 @@ async function handleLandformPresetDropCapture(event: DragEvent): Promise<void> 
   try {
     await sceneStore.applyLandformPresetToSelectedLandform(presetId)
   } catch (error) {
-    console.error('Failed to apply landform preset', error)
-    landformPresetFeedbackMessage.value = (error as Error).message ?? 'Failed to apply landform preset.'
+    console.error('Failed to apply ground splat preset', error)
+    landformPresetFeedbackMessage.value = (error as Error).message ?? 'Failed to apply ground splat preset.'
   }
 }
 
@@ -152,7 +150,7 @@ function openSaveLandformPresetDialog(): void {
   overwriteConfirmDialogVisible.value = false
   overwriteTargetAssetId.value = null
   overwriteTargetFilename.value = null
-  savePresetName.value = selectedNode.value?.name?.trim() ? selectedNode.value.name.trim() : 'Landform Preset'
+  savePresetName.value = selectedNode.value?.name?.trim() ? selectedNode.value.name.trim() : 'Ground Splat Preset'
   savePresetDialogVisible.value = true
 }
 
@@ -183,8 +181,8 @@ async function performSaveLandformPreset(overwriteAssetId: string | null): Promi
     overwriteTargetAssetId.value = null
     overwriteTargetFilename.value = null
   } catch (error) {
-    console.error('Failed to save landform preset', error)
-    landformPresetFeedbackMessage.value = (error as Error).message ?? 'Failed to save landform preset.'
+    console.error('Failed to save ground splat preset', error)
+    landformPresetFeedbackMessage.value = (error as Error).message ?? 'Failed to save ground splat preset.'
   }
 }
 
@@ -199,7 +197,6 @@ watch(
   (component) => {
     isSyncingFromScene.value = true
     if (!component) {
-      localEnableFeather.value = LANDFORM_DEFAULT_ENABLE_FEATHER
       localFeather.value = LANDFORM_DEFAULT_FEATHER
       localUvScaleX.value = 1
       localUvScaleY.value = 1
@@ -209,9 +206,6 @@ watch(
       return
     }
 
-    localEnableFeather.value = typeof component.props.enableFeather === 'boolean'
-      ? component.props.enableFeather
-      : LANDFORM_DEFAULT_ENABLE_FEATHER
     localFeather.value = Number.isFinite(component.props.feather) ? component.props.feather : LANDFORM_DEFAULT_FEATHER
     localUvScaleX.value = Number.isFinite(component.props.uvScale?.x) ? component.props.uvScale.x : 1
     localUvScaleY.value = Number.isFinite(component.props.uvScale?.y) ? component.props.uvScale.y : 1
@@ -239,7 +233,6 @@ function applyLandformPropsUpdate() {
   if (!nodeId || !component) {
     return
   }
-  const enableFeather = Boolean(localEnableFeather.value)
   const feather = Number(localFeather.value)
   const uvX = Number(localUvScaleX.value)
   const uvY = Number(localUvScaleY.value)
@@ -253,7 +246,7 @@ function applyLandformPropsUpdate() {
   localUvScaleX.value = clampedUvX
   localUvScaleY.value = clampedUvY
   sceneStore.updateNodeComponentProps(nodeId, component.id, {
-    enableFeather,
+    enableFeather: clampedFeather > 0,
     feather: clampedFeather,
     uvScale: { x: clampedUvX, y: clampedUvY },
   })
@@ -264,7 +257,7 @@ function applyLandformPropsUpdate() {
   <v-expansion-panel value="landform">
     <v-expansion-panel-title>
       <div class="landform-panel-header">
-        <span class="landform-panel-title">Landform</span>
+        <span class="landform-panel-title">地貌烘焙</span>
         <v-spacer />
         <v-btn
           v-if="landformComponent"
@@ -291,15 +284,6 @@ function applyLandformPropsUpdate() {
         <p v-if="landformPresetFeedbackMessage" class="asset-feedback landform-preset-feedback">{{ landformPresetFeedbackMessage }}</p>
 
         <div class="landform-field-grid">
-          <v-switch
-            v-model="localEnableFeather"
-            label="启用羽化"
-            density="compact"
-            hide-details
-            color="primary"
-            @update:modelValue="applyLandformPropsUpdate"
-          />
-
           <v-text-field
             v-model.number="localFeather"
             label="Feather (m)"
@@ -310,7 +294,6 @@ function applyLandformPropsUpdate() {
             :min="LANDFORM_MIN_FEATHER"
             :max="LANDFORM_MAX_FEATHER"
             step="0.1"
-            @update:modelValue="(value) => { localFeather = Number(value); applyLandformPropsUpdate() }"
             @blur="applyLandformPropsUpdate"
             @keydown.enter.prevent="applyLandformPropsUpdate"
           />
@@ -347,11 +330,11 @@ function applyLandformPropsUpdate() {
 
         <v-dialog v-model="savePresetDialogVisible" max-width="420">
           <v-card>
-            <v-card-title>Save Landform Preset</v-card-title>
+            <v-card-title>保存地貌烘焙预设</v-card-title>
             <v-card-text>
               <v-text-field
                 v-model="savePresetName"
-                label="Preset Name"
+                label="预设名称"
                 density="compact"
                 variant="underlined"
                 autofocus
@@ -360,22 +343,22 @@ function applyLandformPropsUpdate() {
             </v-card-text>
             <v-card-actions>
               <v-spacer />
-              <v-btn variant="text" @click="savePresetDialogVisible = false">Cancel</v-btn>
-              <v-btn color="primary" @click="confirmSaveLandformPreset">Save</v-btn>
+              <v-btn variant="text" @click="savePresetDialogVisible = false">取消</v-btn>
+              <v-btn color="primary" @click="confirmSaveLandformPreset">保存</v-btn>
             </v-card-actions>
           </v-card>
         </v-dialog>
 
         <v-dialog v-model="overwriteConfirmDialogVisible" max-width="420">
           <v-card>
-            <v-card-title>Overwrite preset?</v-card-title>
+            <v-card-title>覆盖地貌烘焙预设？</v-card-title>
             <v-card-text>
-              This preset already exists: <strong>{{ overwriteTargetFilename }}</strong>. Overwrite it?
+              该预设已存在：<strong>{{ overwriteTargetFilename }}</strong>。是否覆盖？
             </v-card-text>
             <v-card-actions>
               <v-spacer />
-              <v-btn variant="text" @click="cancelOverwriteLandformPreset">Cancel</v-btn>
-              <v-btn color="primary" @click="performSaveLandformPreset(overwriteTargetAssetId)">Overwrite</v-btn>
+              <v-btn variant="text" @click="cancelOverwriteLandformPreset">取消</v-btn>
+              <v-btn color="primary" @click="performSaveLandformPreset(overwriteTargetAssetId)">覆盖</v-btn>
             </v-card-actions>
           </v-card>
         </v-dialog>
@@ -395,6 +378,13 @@ function applyLandformPropsUpdate() {
 .landform-panel-title {
   font-weight: 600;
   letter-spacing: 0.02em;
+}
+
+.landform-panel-note {
+  margin: 0 0 0.35rem;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 0.75rem;
+  line-height: 1.5;
 }
 
 .landform-field-grid {

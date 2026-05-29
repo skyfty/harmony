@@ -577,7 +577,7 @@
             >
               <v-toolbar density="compact" class="menu-toolbar" height="36px">
                 <div class="toolbar-text">
-                  <div class="menu-title">Landform Brush</div>
+                  <div class="menu-title">Ground Splat Brush</div>
                 </div>
                 <v-spacer />
                 <v-btn class="menu-close-btn" icon="mdi-close" size="small" variant="text" @click="emit('update:landform-shape-menu-open', false)" />
@@ -2023,7 +2023,7 @@ const buildToolButtons = [
   { id: 'scatter', icon: 'mdi-sprout', label: 'Terrain Scatter' },
   { id: 'wall', icon: 'mdi-wall', label: 'Wall Brush' },
   { id: 'floor', icon: 'mdi-floor-plan', label: 'Floor Brush' },
-  { id: 'landform', icon: 'mdi-image-filter-hdr', label: 'Landform Brush' },
+  { id: 'landform', icon: 'mdi-image-filter-hdr', label: 'Ground Splat Brush' },
   { id: 'region', icon: 'mdi-vector-polygon', label: 'Region Tool (Left Mouse)' },
   { id: 'guideRoute', icon: 'mdi-map-marker-path', label: 'Guide Route Tool (Left Mouse)' },
   { id: 'road', icon: 'mdi-road-variant', label: 'Road Tool (Left Mouse)' },

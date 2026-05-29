@@ -6,7 +6,12 @@ import {
   type CompiledGroundRenderTileRecord,
 } from './compiledGround'
 import type { GroundDynamicMesh } from './core'
-import { applyGroundTextureToGroundObject } from './groundMesh'
+import {
+  applyGroundTextureToRuntimeChunkMesh,
+  type GroundSplatRuntimeProfile,
+  isGroundChunkTextureReady,
+  onGroundChunkTextureReady,
+} from './groundMesh'
 
 type CompiledGroundRenderRuntime = {
   group: THREE.Group
@@ -42,6 +47,7 @@ type SyncCompiledGroundRenderTilesParams = {
   retainRadiusTiles?: number
   streamingMode?: 'runtime-camera' | 'editor-overview'
   tileFrustumCulled?: boolean
+  groundSplatRuntimeProfile?: GroundSplatRuntimeProfile | null
 }
 
 const renderRuntimeMap = new WeakMap<THREE.Object3D, CompiledGroundRenderRuntime>()
@@ -466,7 +472,10 @@ export function collectLoadedCompiledGroundChunkKeys(
   }
   const recordMap = resolveCompiledGroundRenderTileRecordMap(manifest)
   const chunkKeys = new Set<string>()
-  runtime.meshes.forEach((_mesh, tileKey) => {
+  runtime.meshes.forEach((mesh, tileKey) => {
+    if (!isGroundChunkTextureReady(mesh)) {
+      return
+    }
     const record = recordMap.get(tileKey)
     if (!record) {
       return
@@ -720,10 +729,26 @@ export function syncCompiledGroundRenderTiles(params: SyncCompiledGroundRenderTi
         mesh.frustumCulled = tileFrustumCulled
         mesh.userData.compiledGroundTile = true
         mesh.userData.compiledGroundTileKey = record.key
+        applyGroundTextureToRuntimeChunkMesh({
+          mesh,
+          definition: params.groundDefinition,
+          baseMaterial: material,
+          compiledGroundTileKey: record.key,
+          rootUserData: (params.groundObject.userData as Record<string, unknown> | undefined) ?? null,
+          groundSplatRuntimeProfile: params.groundSplatRuntimeProfile ?? null,
+        })
+        if (!isGroundChunkTextureReady(mesh)) {
+          onGroundChunkTextureReady(mesh, () => {
+            const latestRuntime = renderRuntimeMap.get(params.groundObject)
+            if (!latestRuntime || latestRuntime.meshes.get(record.key) !== mesh) {
+              return
+            }
+            latestRuntime.loadedChunkKeysVersion += 1
+          })
+        }
         activeRuntime.group.add(mesh)
         activeRuntime.meshes.set(record.key, mesh)
         activeRuntime.loadedChunkKeysVersion += 1
-        applyGroundTextureToGroundObject(params.groundObject, params.groundDefinition)
       })
       .finally(() => {
         renderRuntimeMap.get(params.groundObject)?.pendingLoads.delete(record.key)

@@ -1,3 +1,12 @@
+import { decode, encode } from '@msgpack/msgpack'
+import {
+  normalizeBounds3D,
+  isPlainObject,
+  normalizeFiniteNumber,
+  normalizeInteger,
+  normalizeString,
+} from './valueNormalization'
+
 export const QUANTIZED_TERRAIN_DATASET_FORMAT = 'harmony-quantized-terrain-dataset' as const
 export const QUANTIZED_TERRAIN_DATASET_VERSION = 1 as const
 
@@ -99,6 +108,126 @@ export type QuantizedTerrainDatasetRootManifest = {
     ranges: QuantizedTerrainDatasetAvailabilityRange[]
   }>
   regions: QuantizedTerrainDatasetRegionPackIndex[]
+}
+
+function normalizeTileId(value: unknown): QuantizedTerrainTileId | null {
+  if (!isPlainObject(value)) {
+    return null
+  }
+  const level = normalizeInteger(value.level, Number.NaN)
+  const x = normalizeInteger(value.x, Number.NaN)
+  const y = normalizeInteger(value.y, Number.NaN)
+  if (!Number.isFinite(level) || !Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0) {
+    return null
+  }
+  return { level, x, y }
+}
+
+function normalizeAvailabilityRange(value: unknown): QuantizedTerrainDatasetAvailabilityRange | null {
+  if (!isPlainObject(value)) {
+    return null
+  }
+  const startX = normalizeInteger(value.startX, Number.NaN)
+  const endX = normalizeInteger(value.endX, Number.NaN)
+  const startY = normalizeInteger(value.startY, Number.NaN)
+  const endY = normalizeInteger(value.endY, Number.NaN)
+  if (![startX, endX, startY, endY].every(Number.isFinite)) {
+    return null
+  }
+  return { startX, endX, startY, endY }
+}
+
+function normalizeRegionPackIndex(value: unknown): QuantizedTerrainDatasetRegionPackIndex | null {
+  if (!isPlainObject(value)) {
+    return null
+  }
+  const regionKey = normalizeString(value.regionKey)
+  const path = normalizeString(value.path)
+  const regionId = normalizeTileId(value.regionId)
+  const bounds = normalizeBounds3D(value.bounds)
+  if (!regionKey || !path || !regionId || !bounds) {
+    return null
+  }
+  const levelRange = isPlainObject(value.levelRange)
+    ? {
+        min: normalizeInteger(value.levelRange.min, Number.NaN),
+        max: normalizeInteger(value.levelRange.max, Number.NaN),
+      }
+    : null
+  if (!levelRange || !Number.isFinite(levelRange.min) || !Number.isFinite(levelRange.max)) {
+    return null
+  }
+  return {
+    regionKey,
+    regionId,
+    path,
+    byteLength: value.byteLength == null ? null : Math.max(0, normalizeInteger(value.byteLength, 0)),
+    tileCount: Math.max(0, normalizeInteger(value.tileCount, 0)),
+    levelRange,
+    bounds,
+  }
+}
+
+export function normalizeQuantizedTerrainDatasetRootManifest(input: unknown): QuantizedTerrainDatasetRootManifest | null {
+  if (!isPlainObject(input) || input.format !== QUANTIZED_TERRAIN_DATASET_FORMAT || input.version !== QUANTIZED_TERRAIN_DATASET_VERSION) {
+    return null
+  }
+  const datasetId = normalizeString(input.datasetId)
+  const scenePath = normalizeString(input.scenePath)
+  const storageMode = input.storageMode === 'region-packs' ? 'region-packs' : null
+  const tileScheme = input.tileScheme === 'quadtree' ? 'quadtree' : null
+  const bounds = normalizeBounds3D(input.bounds)
+  if (!datasetId || !scenePath || !storageMode || !tileScheme || !bounds) {
+    return null
+  }
+  const rootLevel = Math.max(0, normalizeInteger(input.rootLevel, 0))
+  const maxLevel = Math.max(rootLevel, normalizeInteger(input.maxLevel, rootLevel))
+  const regionLevel = Math.max(0, normalizeInteger(input.regionLevel, 0))
+  const rootTiles = Array.isArray(input.rootTiles)
+    ? input.rootTiles.map((entry) => normalizeTileId(entry)).filter((entry): entry is QuantizedTerrainTileId => entry !== null)
+    : []
+  const availability = Array.isArray(input.availability)
+    ? input.availability
+        .map((entry) => {
+          if (!isPlainObject(entry) || !Array.isArray(entry.ranges)) {
+            return null
+          }
+          const level = normalizeInteger(entry.level, Number.NaN)
+          if (!Number.isFinite(level)) {
+            return null
+          }
+          const ranges = entry.ranges
+            .map((range) => normalizeAvailabilityRange(range))
+            .filter((range): range is QuantizedTerrainDatasetAvailabilityRange => range !== null)
+          return { level, ranges }
+        })
+        .filter((entry): entry is { level: number; ranges: QuantizedTerrainDatasetAvailabilityRange[] } => entry !== null)
+    : []
+  const regions = Array.isArray(input.regions)
+    ? input.regions
+        .map((entry) => normalizeRegionPackIndex(entry))
+        .filter((entry): entry is QuantizedTerrainDatasetRegionPackIndex => entry !== null)
+    : []
+  return {
+    format: QUANTIZED_TERRAIN_DATASET_FORMAT,
+    version: QUANTIZED_TERRAIN_DATASET_VERSION,
+    datasetId,
+    scenePath,
+    storageMode,
+    tileScheme,
+    rootLevel,
+    maxLevel,
+    regionLevel,
+    geometricError: normalizeFiniteNumber(input.geometricError, 0),
+    bounds,
+    verticalScale: normalizeFiniteNumber(input.verticalScale, 1),
+    hasNormals: Boolean(input.hasNormals),
+    hasWatermask: Boolean(input.hasWatermask),
+    hasOverlayLayers: Boolean(input.hasOverlayLayers),
+    rootTiles,
+    availability,
+    regions,
+  }
 }
 
 export function isValidQuantizedTerrainLevel(level: number): boolean {
@@ -239,5 +368,18 @@ export function buildQuantizedTerrainRegionPackPath(regionId: QuantizedTerrainRe
 
 export function buildQuantizedTerrainRootManifestPath(root = 'terrain'): string {
   const normalizedRoot = typeof root === 'string' && root.trim().length ? root.replace(/\/$/, '') : 'terrain'
-  return `${normalizedRoot}/root.json`
+  return `${normalizedRoot}/root.bin`
+}
+
+export function serializeQuantizedTerrainDatasetRootManifest(manifest: QuantizedTerrainDatasetRootManifest): Uint8Array {
+  return encode(manifest)
+}
+
+export function deserializeQuantizedTerrainDatasetRootManifest(payload: ArrayBuffer | Uint8Array): QuantizedTerrainDatasetRootManifest | null {
+  try {
+    const decoded = decode(payload instanceof Uint8Array ? payload : new Uint8Array(payload)) as unknown
+    return normalizeQuantizedTerrainDatasetRootManifest(decoded)
+  } catch (_error) {
+    return null
+  }
 }

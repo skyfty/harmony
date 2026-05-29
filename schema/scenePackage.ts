@@ -1,16 +1,19 @@
+import { decode, encode } from '@msgpack/msgpack';
+import { isPlainObject } from './valueNormalization';
+
 export const SCENE_PACKAGE_FORMAT = 'harmony-scene-package' as const;
-export const SCENE_PACKAGE_VERSION = 11 as const;
+export const SCENE_PACKAGE_VERSION = 12 as const;
 
 export interface ScenePackageTerrainEntry {
   datasetId: string;
-  /** Path within ZIP, e.g. `scenes/<sceneId>/terrain/root.json` */
+  /** Path within ZIP, e.g. `scenes/<sceneId>/terrain/root.bin` */
   rootManifestPath: string;
   /** Region pack directory within ZIP, e.g. `scenes/<sceneId>/terrain/regions/` */
   regionsPath?: string;
 }
 
 export interface ScenePackageCompiledGroundEntry {
-  /** Path within ZIP, e.g. `scenes/<sceneId>/compiled-ground/manifest.json` */
+  /** Path within ZIP, e.g. `scenes/<sceneId>/compiled-ground/manifest.bin` */
   manifestPath: string;
   renderRootPath?: string;
   collisionRootPath?: string;
@@ -33,8 +36,10 @@ export interface ScenePackageSceneEntry {
   sceneId: string;
   /** Path within ZIP, e.g. `scenes/<sceneId>/scene.bin` */
   path: string;
-  /** Optional editor-only planning sidecar path, e.g. `scenes/<sceneId>/planning.json` */
+  /** Optional editor-only planning sidecar path, e.g. `scenes/<sceneId>/planning.bin` */
   planningPath?: string;
+  /** Optional ground splat sidecar path, e.g. `scenes/<sceneId>/ground-splat.bin` */
+  groundSplatPath?: string;
   /** Optional ground scatter sidecar path, e.g. `scenes/<sceneId>/ground-scatter.bin` */
   groundScatterPath?: string;
   /** Readonly runtime terrain package entry used by preview/mobile viewers. */
@@ -77,12 +82,25 @@ export interface ScenePackageManifestV1 {
 
 export type ScenePackageManifest = ScenePackageManifestV1;
 
+export function serializeScenePackageManifest(manifest: ScenePackageManifest): Uint8Array {
+  return encode(manifest);
+}
+
+export function deserializeScenePackageManifest(payload: ArrayBuffer | Uint8Array): ScenePackageManifest | null {
+  try {
+    const decoded = decode(payload instanceof Uint8Array ? payload : new Uint8Array(payload)) as unknown;
+    return isScenePackageManifest(decoded) ? decoded : null;
+  } catch {
+    return null;
+  }
+}
+
 export function isScenePackageManifest(raw: unknown): raw is ScenePackageManifestV1 {
-  if (!raw || typeof raw !== 'object') return false;
+  if (!isPlainObject(raw)) return false;
   const candidate = raw as Partial<ScenePackageManifestV1>;
   if (candidate.format !== SCENE_PACKAGE_FORMAT) return false;
   const version = Number((candidate as Record<string, unknown>).version);
-  if (version !== 10 && version !== SCENE_PACKAGE_VERSION) return false;
+  if (version !== 10 && version !== 11 && version !== SCENE_PACKAGE_VERSION) return false;
   if (!candidate.project || typeof candidate.project !== 'object') return false;
   if (typeof (candidate.project as any).path !== 'string') return false;
   if (!Array.isArray(candidate.scenes)) return false;

@@ -260,8 +260,33 @@ function cloneGroundSurfaceChunks(definition: GroundDynamicMesh): GroundSurfaceC
 	const nextChunks: GroundSurfaceChunkTextureMap = {}
 	for (const [key, value] of Object.entries(source)) {
 		nextChunks[key] = {
-			textureAssetId: value.textureAssetId,
-			revision: value.revision,
+			...value,
+			baseBlendMode: value.baseBlendMode === 'shader-splat-v1' ? 'shader-splat-v1' : null,
+			textureAssetId: typeof value.textureAssetId === 'string' && value.textureAssetId.trim().length > 0 ? value.textureAssetId.trim() : null,
+			normalTextureAssetId: typeof value.normalTextureAssetId === 'string' && value.normalTextureAssetId.trim().length > 0 ? value.normalTextureAssetId.trim() : null,
+			splatMapAssetIds: Array.isArray(value.splatMapAssetIds) ? value.splatMapAssetIds.map((entry) => typeof entry === 'string' ? entry.trim() : '').filter((entry) => entry.length > 0) : null,
+			surfaceLayers: Array.isArray(value.surfaceLayers)
+				? value.surfaceLayers.map((layer) => ({
+					...layer,
+					albedoSource: typeof layer?.albedoSource === 'string' && layer.albedoSource.trim().length > 0 ? layer.albedoSource.trim() : null,
+					albedoTextureSettings: layer?.albedoTextureSettings
+						? {
+							...layer.albedoTextureSettings,
+							offset: { ...layer.albedoTextureSettings.offset },
+							repeat: { ...layer.albedoTextureSettings.repeat },
+							tileSizeMeters: { ...layer.albedoTextureSettings.tileSizeMeters },
+							center: { ...layer.albedoTextureSettings.center },
+						}
+						: null,
+					colorTint: typeof layer?.colorTint === 'string' && layer.colorTint.trim().length > 0 ? layer.colorTint.trim() : null,
+					uvScale: layer?.uvScale ? { x: Number(layer.uvScale.x) || 0, y: Number(layer.uvScale.y) || 0 } : null,
+					maskChannel: Number.isFinite(layer?.maskChannel) ? Math.max(0, Math.min(7, Math.trunc(Number(layer.maskChannel)))) : 0,
+					opacity: Number.isFinite(layer?.opacity) ? Math.max(0, Math.min(1, Number(layer.opacity))) : 1,
+					featherEnabled: typeof layer?.featherEnabled === 'boolean' ? layer.featherEnabled : null,
+					featherWidth: Number.isFinite(layer?.featherWidth) ? Math.max(0, Number(layer.featherWidth)) : null,
+				}))
+				: null,
+			revision: Number.isFinite(value.revision) ? Math.max(0, Math.trunc(value.revision)) : 0,
 		}
 	}
 	return nextChunks
@@ -569,7 +594,35 @@ async function bakeDirtyGroundSurfaceChunks(params: {
 	const nextChunks: GroundSurfaceChunkTextureMap = params.groundSurfaceChunks
 		? Object.fromEntries(
 			Object.entries(params.groundSurfaceChunks).map(([key, value]) => [key, {
-				textureAssetId: value.textureAssetId,
+				baseBlendMode: value.baseBlendMode === 'shader-splat-v1' ? 'shader-splat-v1' : null,
+				textureAssetId: typeof value.textureAssetId === 'string' && value.textureAssetId.trim().length > 0 ? value.textureAssetId.trim() : null,
+				normalTextureAssetId: typeof value.normalTextureAssetId === 'string' && value.normalTextureAssetId.trim().length > 0 ? value.normalTextureAssetId.trim() : null,
+				splatMapAssetIds: Array.isArray(value.splatMapAssetIds)
+					? value.splatMapAssetIds
+						.map((assetId) => (typeof assetId === 'string' ? assetId.trim() : ''))
+						.filter((assetId) => assetId.length > 0)
+					: null,
+				surfaceLayers: Array.isArray(value.surfaceLayers)
+					? value.surfaceLayers.map((layer) => ({
+						...layer,
+						albedoSource: typeof layer?.albedoSource === 'string' && layer.albedoSource.trim().length > 0 ? layer.albedoSource.trim() : null,
+						albedoTextureSettings: layer?.albedoTextureSettings
+							? {
+								...layer.albedoTextureSettings,
+								offset: { ...layer.albedoTextureSettings.offset },
+								repeat: { ...layer.albedoTextureSettings.repeat },
+								tileSizeMeters: { ...layer.albedoTextureSettings.tileSizeMeters },
+								center: { ...layer.albedoTextureSettings.center },
+							}
+							: null,
+						colorTint: typeof layer?.colorTint === 'string' && layer.colorTint.trim().length > 0 ? layer.colorTint.trim() : null,
+						uvScale: layer?.uvScale ? { x: Number(layer.uvScale.x) || 0, y: Number(layer.uvScale.y) || 0 } : null,
+						maskChannel: Number.isFinite(layer?.maskChannel) ? Math.max(0, Math.min(7, Math.trunc(Number(layer.maskChannel)))) : 0,
+						opacity: Number.isFinite(layer?.opacity) ? Math.max(0, Math.min(1, Number(layer.opacity))) : 1,
+						featherEnabled: typeof layer?.featherEnabled === 'boolean' ? layer.featherEnabled : null,
+						featherWidth: Number.isFinite(layer?.featherWidth) ? Math.max(0, Number(layer.featherWidth)) : null,
+					}))
+					: null,
 				revision: value.revision,
 			}]),
 		) as GroundSurfaceChunkTextureMap
@@ -600,6 +653,10 @@ async function bakeDirtyGroundSurfaceChunks(params: {
 		})
 		nextChunks[chunk.key] = {
 			textureAssetId,
+			normalTextureAssetId: null,
+			baseBlendMode: null,
+			splatMapAssetIds: null,
+			surfaceLayers: null,
 			revision: chunk.surfaceRevision,
 		}
 	}
@@ -1598,7 +1655,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		top: '0px',
 		opacity: 0,
 	})
-	const groundTextureInputRef = ref<HTMLInputElement | null>(null)
 	const isSculpting = ref(false)
 	const isPainting = ref(false)
 
@@ -7586,41 +7642,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		commitGroundModification((bounds) => options.sceneStore.resetGroundRegion(bounds))
 	}
 
-	function handleGroundTextureSelectRequest() {
-		if (!groundTextureInputRef.value) {
-			return
-		}
-		groundTextureInputRef.value.value = ''
-		groundTextureInputRef.value.click()
-	}
-
-	function handleGroundTextureFileChange(event: Event) {
-		const input = event.target as HTMLInputElement | null
-		if (!input?.files || input.files.length === 0) {
-			return
-		}
-		const file = input.files[0]
-		if (!file) {
-			return
-		}
-		const reader = new FileReader()
-		reader.onload = async () => {
-			const result = typeof reader.result === 'string' ? reader.result : null
-			if (!result) {
-				return
-			}
-			const { changed } = await options.sceneStore.setGroundTextureFromDataUrl({
-				dataUrl: result,
-				name: file.name ?? null,
-			})
-			if (!changed) {
-				return
-			}
-			refreshGroundMesh(getGroundDynamicMeshDefinition())
-		}
-		reader.readAsDataURL(file)
-	}
-
 	function handleGroundCancel() {
 		cancelGroundSelection()
 	}
@@ -7678,7 +7699,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		groundSelection,
 		isGroundToolbarVisible,
 		groundSelectionToolbarStyle,
-		groundTextureInputRef,
 		isSculpting,
 		restoreGroupdScatter,
 		restoreTerrainSurfaceChunks,
@@ -7698,8 +7718,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		handleGroundRaise,
 		handleGroundLower,
 		handleGroundReset,
-		handleGroundTextureSelectRequest,
-		handleGroundTextureFileChange,
 		handleGroundCancel,
 		refreshGroundMesh,
 		hasActiveSelection,

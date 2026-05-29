@@ -269,7 +269,6 @@ async function renderGroundSurfaceChunks(
   context.imageSmoothingEnabled = true
   context.imageSmoothingQuality = 'high'
   const chunkEntries = Object.entries(definition.groundSurfaceChunks ?? {})
-    .filter(([, chunkRef]) => typeof chunkRef?.textureAssetId === 'string' && chunkRef.textureAssetId.trim().length)
   if (!chunkEntries.length) {
     return false
   }
@@ -288,7 +287,7 @@ async function renderGroundSurfaceChunks(
     if (!bounds) {
       continue
     }
-    const textureAssetId = chunkRef?.textureAssetId?.trim() ?? ''
+    const textureAssetId = typeof chunkRef?.textureAssetId === 'string' ? chunkRef.textureAssetId.trim() : ''
     if (!textureAssetId) {
       continue
     }
@@ -332,7 +331,7 @@ async function canvasToBlob(canvas: CanvasLike): Promise<Blob | null> {
 // Landforms feature removed — no-op helper removed.
 
 function hasTerrainPaintContent(definition: GroundDynamicMesh): boolean {
-  return Object.values(definition.groundSurfaceChunks ?? {}).some((chunkRef) => typeof chunkRef?.textureAssetId === 'string' && chunkRef.textureAssetId.trim().length)
+  return Object.keys(definition.groundSurfaceChunks ?? {}).length > 0
 }
 
 export async function bakeGroundSurfaceTexture(

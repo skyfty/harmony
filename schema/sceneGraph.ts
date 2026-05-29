@@ -17,7 +17,6 @@ import type {
   WallDynamicMesh,
   RoadDynamicMesh,
   FloorDynamicMesh,
-  LandformDynamicMesh,
   GuideRouteDynamicMesh,
   SceneResourceSummaryEntry,
   SceneMaterialTextureSlot,
@@ -55,7 +54,6 @@ import { applyMaterialConfigAssignment, buildMaterialConfigMap } from './sceneGr
 import { buildGroundMesh as buildGroundDynamicMesh } from './sceneGraph/dynamicMeshes/ground';
 import { buildWallMesh as buildWallDynamicMesh } from './sceneGraph/dynamicMeshes/wall';
 import { buildFloorMesh as buildFloorDynamicMesh } from './sceneGraph/dynamicMeshes/floor';
-import { buildLandformMesh as buildLandformDynamicMesh } from './sceneGraph/dynamicMeshes/landform';
 import { buildGuideRouteMesh as buildGuideRouteDynamicMesh } from './sceneGraph/dynamicMeshes/guideRoute';
 import { createThreeLightFromLightNode } from './lightsRuntime';
 import { applyMirroredScaleToObject } from './mirror';
@@ -1297,8 +1295,6 @@ class SceneGraphBuilder {
         return this.buildWallMesh(meshInfo, node);
       case 'Floor':
         return this.buildFloorMesh(meshInfo as FloorDynamicMesh, node);
-      case 'Landform':
-        return this.buildLandformMesh(meshInfo as LandformDynamicMesh, node);
       case 'GuideRoute':
         return this.buildGuideRouteMesh(meshInfo as GuideRouteDynamicMesh, node);
       case 'Region':
@@ -1576,19 +1572,6 @@ class SceneGraphBuilder {
 
   private async buildFloorMesh(meshInfo: FloorDynamicMesh, node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
     return buildFloorDynamicMesh(
-      {
-        resolveNodeMaterials: (targetNode) => this.resolveNodeMaterials(targetNode),
-        pickMaterialAssignment: (materials) => this.pickMaterialAssignment(materials),
-        applyTransform: (object, targetNode) => this.applyTransform(object, targetNode),
-        applyVisibility: (object, targetNode) => this.applyVisibility(object, targetNode),
-      },
-      meshInfo,
-      node,
-    );
-  }
-
-  private async buildLandformMesh(meshInfo: LandformDynamicMesh, node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
-    return buildLandformDynamicMesh(
       {
         resolveNodeMaterials: (targetNode) => this.resolveNodeMaterials(targetNode),
         pickMaterialAssignment: (materials) => this.pickMaterialAssignment(materials),

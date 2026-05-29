@@ -224,10 +224,10 @@ import type { LandformBuildShape } from '@/types/landform-build-shape'
 import type { WaterBuildShape } from '@/types/water-build-shape'
 import type { WallBuildShape } from '@/types/wall-build-shape'
 import {
-  applyGroundTextureToGroundObject,
   createGroundMesh,
   getVisibleInfiniteGroundChunkVersion,
   hasPendingGroundChunkWork,
+  refreshGroundChunkMaterials,
   resolveGroundRuntimeChunkCells,
   setInfiniteGroundHiddenChunkKeys,
   setGroundMaterial,
@@ -288,6 +288,7 @@ import { createGuideRouteBuildTool } from './GuideRouteBuildTool'
 import { createWaterBuildTool } from './WaterBuildTool'
 import { createDisplayBoardBuildTool } from './DisplayBoardBuildTool'
 import { createBuildStartIndicatorRenderer } from './BuildStartIndicatorRenderer'
+import { raycastGroundRuntimeSurface } from './groundSurfaceSampler'
 import {
   buildClosedWallSegmentsFromWorldPoints,
   buildOpenWallSegmentsFromWorldPoints,
@@ -1391,16 +1392,27 @@ function resolveSharedGroundRuntimeMaterial(targetObject: THREE.Object3D): THREE
       return
     }
     const mesh = child as THREE.Mesh
-    if (mesh.userData?.groundChunk || mesh.userData?.compiledGroundTile) {
+    const material = mesh.material
+    const candidate = Array.isArray(material) ? (material[0] ?? null) : (material ?? null)
+    if (!candidate) {
       return
     }
-    const material = mesh.material
-    resolved = Array.isArray(material) ? (material[0] ?? null) : (material ?? null)
+    const activeSource = (candidate.userData as Record<string, unknown> | undefined)?.groundChunkTextureSource
+    if (typeof activeSource === 'string' && activeSource.length > 0) {
+      return
+    }
+    resolved = candidate
   })
   return resolved
 }
 
-function refreshGroundRuntimeMaterials(node: SceneNode, targetObject: THREE.Object3D): void {
+function refreshGroundRuntimeMaterials(
+  node: SceneNode,
+  targetObject: THREE.Object3D,
+  options: {
+    refreshChunks?: boolean
+  } = {},
+): void {
   if (node.dynamicMesh?.type !== 'Ground') {
     return
   }
@@ -1436,15 +1448,11 @@ function refreshGroundRuntimeMaterials(node: SceneNode, targetObject: THREE.Obje
     }
     applyMaterialConfigToMaterial(sculptedMaterial, sculptedConfig, materialOverrideOptions)
     setGroundSculptedMaterial(groundObject, sculptedMaterial)
-    // When user has assigned an albedo texture to sculpted material, skip runtime-authored texture.
-    const hasUserTexture = !!(sculptedConfig.textures?.albedo?.assetId)
-    if (!hasUserTexture) {
-      applyGroundTextureToGroundObject(groundObject, groundDefinition)
-    }
   } else {
     setGroundSculptedMaterial(groundObject, null)
-    // Ground base textures are runtime-authored and should win over node albedo overrides.
-    applyGroundTextureToGroundObject(groundObject, groundDefinition)
+  }
+  if (options.refreshChunks !== false) {
+    refreshGroundChunkMaterials(groundObject, groundDefinition)
   }
 }
 
@@ -1539,6 +1547,9 @@ function computeGroundDynamicMeshSignature(definition: GroundDynamicMesh): strin
     heightComposition: definition.heightComposition ?? { mode: 'planning_plus_manual' },
     surfaceRevision: Number.isFinite(definition.surfaceRevision)
       ? Math.max(0, Math.trunc(definition.surfaceRevision as number))
+      : 0,
+    groundSplatBakeRevision: Number.isFinite(definition.groundSplatBake?.revision)
+      ? Math.max(0, Math.trunc(definition.groundSplatBake!.revision as number))
       : 0,
   }))
 }
@@ -2173,6 +2184,49 @@ function resolveEditableLandformNode(nodeId: string | null | undefined): SceneNo
   return node
 }
 
+function collectSelectedLandformNodeIds(): Set<string> {
+  const ids = new Set<string>()
+  const primaryId = getPrimarySelectedNodeId()
+  if (primaryId) {
+    ids.add(primaryId)
+  }
+  const selectedIds = Array.isArray(sceneStore.selectedNodeIds) ? sceneStore.selectedNodeIds : []
+  selectedIds.forEach((id) => {
+    if (typeof id === 'string' && id.length > 0) {
+      ids.add(id)
+    }
+  })
+  return ids
+}
+
+function shouldShowLandformRuntimeObject(node: SceneNode): boolean {
+  if (node.dynamicMesh?.type !== 'Landform') {
+    return sceneStore.isNodeVisible(node.id)
+  }
+  if (!sceneStore.isNodeVisible(node.id)) {
+    return false
+  }
+  return collectSelectedLandformNodeIds().has(node.id) && Boolean(resolveEditableLandformNode(node.id))
+}
+
+function syncLandformEditorVisibility(nodeIds?: Iterable<string>): void {
+  const targetIds = nodeIds ? Array.from(nodeIds) : Array.from(objectMap.keys())
+  targetIds.forEach((nodeId) => {
+    const object = objectMap.get(nodeId) ?? null
+    if (!object) {
+      return
+    }
+    const node = resolveSceneNodeById(nodeId)
+    if (!node || node.dynamicMesh?.type !== 'Landform') {
+      return
+    }
+    const nextVisible = shouldShowLandformRuntimeObject(node)
+    if (object.visible !== nextVisible) {
+      object.visible = nextVisible
+    }
+  })
+}
+
 function resolveEditableRegionNode(nodeId: string | null | undefined): SceneNode | null {
   if (!nodeId) {
     return null
@@ -2263,6 +2317,7 @@ function resolveEditableWaterNode(nodeId: string | null | undefined): SceneNode 
 }
 
 function refreshSelectionHighlightsForEditModeChange(): void {
+  syncLandformEditorVisibility()
   updateOutlineSelectionTargets()
   updateSelectionHighlights()
 }
@@ -3738,7 +3793,6 @@ const {
   scatterPreviewGroup,
   groundSelectionGroup,
   groundSelection,
-  groundTextureInputRef,
   restoreGroupdScatter,
   onGroundChunkSetChanged,
   updateScatterLod,
@@ -3748,7 +3802,6 @@ const {
   handlePointerMove: handleGroundEditorPointerMove,
   handlePointerUp: handleGroundEditorPointerUp,
   handlePointerCancel: handleGroundEditorPointerCancel,
-  handleGroundTextureFileChange,
   hasActiveSelection: groundEditorHasActiveSelection,
   handleActiveBuildToolChange: handleGroundEditorBuildToolChange,
   cancelScatterErase: cancelGroundEditorScatterErase,
@@ -6320,7 +6373,11 @@ function setActiveFloorCircleHandle(active: { nodeId: string; circleKind: 'cente
   floorCircleHandleRenderer.setActiveHandle(active as any)
 }
 
-function ensureLandformVertexHandlesForSelectedNode(options?: { force?: boolean; previewPoints?: Array<[number, number]> }) {
+function ensureLandformVertexHandlesForSelectedNode(options?: {
+  force?: boolean
+  previewPoints?: Array<[number, number]>
+  previewVertexHeights?: number[]
+}) {
   const selectedId = isSelectedLandformEditMode() ? getPrimarySelectedNodeId() : null
   const active = activeBuildTool.value === 'landform' && isSelectedLandformEditMode() && !landformBuildTool.getSession()
   const buildShape = selectedId && isSelectedLandformCircleEditMode()
@@ -6337,6 +6394,7 @@ function ensureLandformVertexHandlesForSelectedNode(options?: { force?: boolean;
     resolveRuntimeObject: (nodeId: string) => objectMap.get(nodeId) ?? null,
     buildShape,
     previewPoints: options?.previewPoints,
+    previewVertexHeights: options?.previewVertexHeights,
   }
   if (options?.force) {
     landformVertexRenderer.forceRebuild(common)
@@ -7088,19 +7146,6 @@ function commitRegionContourNode(nodeId: string, points: Array<[number, number]>
   return Boolean(updated)
 }
 
-function buildLandformPreviewFromLocalPoints(
-  nodeId: string,
-  points: Array<[number, number]>,
-): boolean {
-  if (points.length < 3) {
-    return false
-  }
-  return sceneStore.previewLandformSurfaceMeshNode({
-    nodeId,
-    localPoints: points.map(([x, z]) => [x, z] as [number, number]),
-  })
-}
-
 function computeLandformCircleFromLocalPoints(points: Array<[number, number]>): { centerX: number; centerZ: number; radius: number; segments: number } | null {
   const circle = computeApproxCircleFromPlanarPoints(sanitizePlanarPoints(points))
   if (!circle) {
@@ -7128,35 +7173,6 @@ function buildLandformCircleLocalPoints(options: {
   })
 }
 
-function previewLandformNodeDuringTranslate(nodeId: string): void {
-  const node = sceneStore.getNodeById(nodeId)
-  if (!node || node.dynamicMesh?.type !== 'Landform') {
-    return
-  }
-  const points = cloneLandformFootprintPoints(node)
-  if (points.length < 3) {
-    return
-  }
-  buildLandformPreviewFromLocalPoints(nodeId, points)
-}
-
-function previewLandformNodesDuringTransform(updates: TransformUpdatePayload[], mode: string): void {
-  if (mode !== 'translate' || !updates.length) {
-    return
-  }
-
-  const previewIds = new Set<string>()
-  updates.forEach((update) => {
-    if (typeof update.id === 'string' && update.id.length > 0) {
-      previewIds.add(update.id)
-    }
-  })
-
-  previewIds.forEach((id) => {
-    previewLandformNodeDuringTranslate(id)
-  })
-}
-
 function commitLandformContourNode(nodeId: string, points: Array<[number, number]>): boolean {
   if (points.length < 3) {
     return false
@@ -7166,6 +7182,16 @@ function commitLandformContourNode(nodeId: string, points: Array<[number, number
     localPoints: points.map(([x, z]) => [x, z] as [number, number]),
   })
   return Boolean(updated)
+}
+
+function previewLandformContourNode(nodeId: string, points: Array<[number, number]>): LandformDynamicMesh | null {
+  if (points.length < 3) {
+    return null
+  }
+  return sceneStore.previewLandformSurfaceMeshNode({
+    nodeId,
+    localPoints: points.map(([x, z]) => [x, z] as [number, number]),
+  })
 }
 
 function tryBeginLandformVertexDrag(event: PointerEvent): boolean {
@@ -9815,9 +9841,7 @@ const {
         queueMicrotask(() => applyCapturedLightTargetUpdates(captured))
       }
     },
-    onSelectionDragUpdates: (updates) => {
-      previewLandformNodesDuringTransform(updates, 'translate')
-    },
+    onSelectionDragUpdates: () => {},
     resolveDropSurfaceHeight: ({ bounds, excludedNodeIds }) => {
       const excludedObjects = new Set<THREE.Object3D>()
       excludedNodeIds.forEach((id) => {
@@ -10981,6 +11005,7 @@ function applyNodePatchesFast(nodePatches: PendingNodePatch[], removedIds: Set<s
     updateNodeObject(object, node)
     refreshPlacementSurfaceTargetsForNode(nodeId)
   }
+  syncLandformEditorVisibility()
 }
 
 function applyNodePatchesWithTopology(
@@ -11048,6 +11073,7 @@ function applyNodePatchesWithTopology(
     updateNodeObject(object, node)
     refreshPlacementSurfaceTargetsForNode(nodeId)
   }
+  syncLandformEditorVisibility()
   return false
 }
 
@@ -11178,10 +11204,45 @@ function shouldForceDenseGroundMeshForViewport(
 
 const viewportForceDenseGroundMesh = ref(shouldForceDenseGroundMeshForViewport())
 let pendingViewportGroundOptimizedRebuild = false
+type PendingViewportGroundChunkSync = {
+  groundObject: THREE.Object3D
+  groundDefinition: GroundRuntimeDynamicMesh
+  forceChunkRefresh: boolean
+}
+let pendingViewportGroundChunkSync: PendingViewportGroundChunkSync | null = null
+let pendingViewportGroundChunkSyncFrame: number | null = null
+
+function flushPendingViewportGroundChunkSync(): void {
+  const pending = pendingViewportGroundChunkSync
+  if (!pending) {
+    return
+  }
+  pendingViewportGroundChunkSync = null
+  pendingViewportGroundChunkSyncFrame = null
+
+  const { groundObject, groundDefinition, forceChunkRefresh } = pending
+  syncViewportCompiledGroundTiles(groundObject, groundDefinition)
+  const streamingDefinition = resolveViewportGroundStreamingDefinition(groundObject, groundDefinition)
+  syncGroundChunkLoadingMode(
+    groundObject,
+    streamingDefinition,
+    camera,
+    forceChunkRefresh ? { force: true, minIntervalMs: 0 } : {},
+  )
+  const sceneId = typeof sceneStore.currentSceneId === 'string' ? sceneStore.currentSceneId.trim() : ''
+  const manifestRevision = Number.isFinite(streamingDefinition.chunkManifestRevision)
+    ? Math.max(0, Math.trunc(streamingDefinition.chunkManifestRevision as number))
+    : 0
+  maybeAutoPersistViewportInfiniteGroundChunks(groundObject, streamingDefinition, sceneId, manifestRevision)
+}
 
 function applyViewportGroundRuntimeMode(definition: GroundRuntimeDynamicMesh): GroundRuntimeDynamicMesh {
-  if (viewportForceDenseGroundMesh.value) {
-    return setGroundRuntimeOptimizedChunksEnabled(definition, false)
+  const shouldForceDense = viewportForceDenseGroundMesh.value
+  if (shouldForceDense) {
+    if (definition.runtimeDisableOptimizedChunks !== true) {
+      return setGroundRuntimeOptimizedChunksEnabled(definition, false)
+    }
+    return definition
   }
   return definition
 }
@@ -11522,24 +11583,78 @@ let lastPointerClientX = 0
 let lastPointerClientY = 0
 let lastPointerType: string | null = null
 let selectionPreviewVisibilityRaf: number | null = null
+const OVERLAY_UI_HIT_TEST_SELECTORS = [
+  '.v-overlay',
+  '.v-overlay__content',
+  '.viewport-toolbar',
+  '.popup-menu-card',
+  '.ground-tool-menu__card',
+  '.floor-shape-menu__card',
+  '.wall-shape-menu__card',
+  '.scatter-erase-menu__card',
+]
+const OVERLAY_UI_HIT_TEST_CACHE_MS = 32
+let overlayUiHitTestCacheExpiresAt = 0
+let overlayUiHitTestCacheRects: DOMRect[] = []
 
 function hasPlacementPreviewActive(): boolean {
   return selectionPreviewActive || nodePlacementPreviewActive
 }
 
+function isPointWithinRect(x: number, y: number, rect: DOMRect): boolean {
+  return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom
+}
+
+function collectOverlayUiHitTestRects(now: number): DOMRect[] {
+  if (overlayUiHitTestCacheExpiresAt > now) {
+    return overlayUiHitTestCacheRects
+  }
+  overlayUiHitTestCacheExpiresAt = now + OVERLAY_UI_HIT_TEST_CACHE_MS
+  if (typeof document === 'undefined') {
+    overlayUiHitTestCacheRects = []
+    return overlayUiHitTestCacheRects
+  }
+  const rects: DOMRect[] = []
+  for (const selector of OVERLAY_UI_HIT_TEST_SELECTORS) {
+    const elements = document.querySelectorAll(selector)
+    elements.forEach((element) => {
+      if (!(element instanceof HTMLElement)) {
+        return
+      }
+      const clientRects = element.getClientRects()
+      if (!clientRects.length) {
+        return
+      }
+      const rect = element.getBoundingClientRect()
+      if (rect.width <= 0 || rect.height <= 0) {
+        return
+      }
+      rects.push(rect)
+    })
+  }
+  overlayUiHitTestCacheRects = rects
+  return overlayUiHitTestCacheRects
+}
+
+function isPointInsideOverlayUi(x: number, y: number): boolean {
+  const now = typeof performance !== 'undefined' ? performance.now() : Date.now()
+  const rects = collectOverlayUiHitTestRects(now)
+  return rects.some((rect) => isPointWithinRect(x, y, rect))
+}
+
 function isStrictPointOnCanvas(x: number, y: number): boolean {
   const canvas = canvasRef.value
-  if (!canvas || typeof document === 'undefined') {
+  if (!canvas) {
     return false
   }
   if (!Number.isFinite(x) || !Number.isFinite(y)) {
     return false
   }
-  try {
-    return document.elementFromPoint(x, y) === canvas
-  } catch {
+  const rect = canvas.getBoundingClientRect()
+  if (!isPointWithinRect(x, y, rect)) {
     return false
   }
+  return !isPointInsideOverlayUi(x, y)
 }
 
 function stopSelectionPreviewVisibilityMonitor(): void {
@@ -13123,6 +13238,158 @@ function enterMapTopView(): boolean {
   }
 
   return resetCameraToSelectionDirection('pos-y')
+}
+
+function setViewportRayFromClientPoint(event: { clientX: number; clientY: number }): boolean {
+  if (!canvasRef.value || !camera) {
+    return false
+  }
+  const rect = canvasRef.value.getBoundingClientRect()
+  if (rect.width === 0 || rect.height === 0) {
+    return false
+  }
+  pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
+  pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
+  raycaster.setFromCamera(pointer, camera)
+  return true
+}
+
+function computeLandformScreenPickArea(points: Array<{ x: number; z: number }>): number {
+  if (points.length < 3) {
+    return Number.POSITIVE_INFINITY
+  }
+  let area = 0
+  for (let index = 0; index < points.length; index += 1) {
+    const current = points[index]!
+    const next = points[(index + 1) % points.length]!
+    area += current.x * next.z - next.x * current.z
+  }
+  return Math.abs(area) * 0.5
+}
+
+function isPointInsideLandformFootprintXZ(point: { x: number; z: number }, footprint: Array<{ x: number; z: number }>): boolean {
+  if (footprint.length < 3) {
+    return false
+  }
+  let inside = false
+  for (let i = 0, j = footprint.length - 1; i < footprint.length; j = i, i += 1) {
+    const current = footprint[i]!
+    const previous = footprint[j]!
+    const intersects = ((current.z > point.z) !== (previous.z > point.z))
+      && (point.x < ((previous.x - current.x) * (point.z - current.z)) / ((previous.z - current.z) || Number.EPSILON) + current.x)
+    if (intersects) {
+      inside = !inside
+    }
+  }
+  return inside
+}
+
+function buildLandformWorldFootprintForPicking(node: SceneNode, object: THREE.Object3D | null): Array<{ x: number; z: number }> {
+  if (node.dynamicMesh?.type !== 'Landform') {
+    return []
+  }
+  const vertices = Array.isArray(node.dynamicMesh.vertices) ? node.dynamicMesh.vertices : []
+  if (vertices.length < 3) {
+    return []
+  }
+  const matrixWorld = object
+    ? (object.updateWorldMatrix(true, false), object.matrixWorld.clone())
+    : new THREE.Matrix4().compose(
+      new THREE.Vector3(
+        Number.isFinite(node.position?.x) ? node.position.x : 0,
+        Number.isFinite(node.position?.y) ? node.position.y : 0,
+        Number.isFinite(node.position?.z) ? node.position.z : 0,
+      ),
+      new THREE.Quaternion().setFromEuler(new THREE.Euler(
+        Number.isFinite(node.rotation?.x) ? node.rotation.x : 0,
+        Number.isFinite(node.rotation?.y) ? node.rotation.y : 0,
+        Number.isFinite(node.rotation?.z) ? node.rotation.z : 0,
+        'XYZ',
+      )),
+      new THREE.Vector3(
+        Number.isFinite(node.scale?.x) ? node.scale.x : 1,
+        Number.isFinite(node.scale?.y) ? node.scale.y : 1,
+        Number.isFinite(node.scale?.z) ? node.scale.z : 1,
+      ),
+    )
+  return vertices
+    .map((entry) => {
+      if (!Array.isArray(entry) || entry.length < 2) {
+        return null
+      }
+      const localX = Number(entry[0])
+      const localZ = Number(entry[1])
+      if (!Number.isFinite(localX) || !Number.isFinite(localZ)) {
+        return null
+      }
+      const world = new THREE.Vector3(localX, 0, localZ).applyMatrix4(matrixWorld)
+      return { x: world.x, z: world.z }
+    })
+    .filter((entry): entry is { x: number; z: number } => Boolean(entry))
+}
+
+function pickHiddenLandformNodeAtPointer(event: { clientX: number; clientY: number }): NodeHitResult | null {
+  if (!setViewportRayFromClientPoint(event)) {
+    return null
+  }
+
+  const worldPoint = intersectRayWithGroundHeightfieldWorld(raycaster.ray)
+    ?? raycaster.ray.intersectPlane(groundPlane, new THREE.Vector3())
+  if (!worldPoint) {
+    return null
+  }
+
+  const selectedIds = collectSelectedLandformNodeIds()
+  let best: { hit: NodeHitResult; selected: boolean; area: number } | null = null
+
+  for (const [nodeId, object] of objectMap.entries()) {
+    const node = resolveSceneNodeById(nodeId)
+    if (!node || node.dynamicMesh?.type !== 'Landform') {
+      continue
+    }
+    if (!sceneStore.isNodeVisible(nodeId)) {
+      continue
+    }
+    if (sceneStore.isNodeSelectionLocked(nodeId)) {
+      continue
+    }
+    if (isObjectWorldVisible(object)) {
+      continue
+    }
+
+    const footprint = buildLandformWorldFootprintForPicking(node, object)
+    if (!isPointInsideLandformFootprintXZ({ x: worldPoint.x, z: worldPoint.z }, footprint)) {
+      continue
+    }
+
+    const area = computeLandformScreenPickArea(footprint)
+    const selected = selectedIds.has(nodeId)
+    const hit: NodeHitResult = {
+      nodeId,
+      object,
+      point: worldPoint.clone(),
+      roadSegmentIndex: null,
+      groundChunkKey: null,
+    }
+
+    if (!best) {
+      best = { hit, selected, area }
+      continue
+    }
+    if (selected && !best.selected) {
+      best = { hit, selected, area }
+      continue
+    }
+    if (selected === best.selected && area < best.area) {
+      best = { hit, selected, area }
+    }
+  }
+
+  return best ? best.hit : null
+}
+
+function pickSceneNodeAtPointerIncludingHiddenLandform(event: { clientX: number; clientY: number }): NodeHitResult | null {
+  return pickNodeAtPointer(event) ?? pickHiddenLandformNodeAtPointer(event)
 }
 
 function handleViewportDoubleClickNode(nodeId: string): void {
@@ -14769,7 +15036,7 @@ function updateSelectionHighlights() {
     if (!group) {
       return
     }
-    if (!object) {
+    if (!object || !isObjectWorldVisible(object)) {
       group.visible = false
       return
     }
@@ -15483,6 +15750,13 @@ function raycastPlanePoint(event: PointerEvent, plane: THREE.Plane, result: THRE
   return !!raycaster.ray.intersectPlane(plane, result)
 }
 
+function raycastLandformDragPoint(event: PointerEvent, plane: THREE.Plane, result: THREE.Vector3): boolean {
+  if (raycastGroundHeightfieldPoint(event, result)) {
+    return true
+  }
+  return raycastPlanePoint(event, plane, result)
+}
+
 function createEndpointDragPlane(options: {
   mode: 'free' | 'axis'
   axisWorld: THREE.Vector3 | null
@@ -15896,7 +16170,7 @@ async function handlePointerDown(event: PointerEvent) {
     }
 
     flushPendingScenePatchesForInteraction()
-    const hit = pickNodeAtPointer(event)
+    const hit = pickSceneNodeAtPointerIncludingHiddenLandform(event)
     if (hit) {
       const hitNodeId = hit.nodeId
       handleViewportDoubleClickNode(hitNodeId)
@@ -16705,12 +16979,12 @@ function handlePointerMove(event: PointerEvent) {
     }
 
     if (!state.startHitWorld) {
-      if (!raycastPlanePoint(event, state.dragPlane, waterDragIntersectionHelper)) {
+      if (!raycastLandformDragPoint(event, state.dragPlane, waterDragIntersectionHelper)) {
         return
       }
       state.startHitWorld = waterDragIntersectionHelper.clone()
     }
-    if (!raycastPlanePoint(event, state.dragPlane, waterDragIntersectionHelper)) {
+    if (!raycastLandformDragPoint(event, state.dragPlane, waterDragIntersectionHelper)) {
       return
     }
 
@@ -16729,9 +17003,14 @@ function handlePointerMove(event: PointerEvent) {
     }
     nextPoints[state.vertexIndex] = [local.x, local.z]
     state.workingPoints = nextPoints
-      if (buildLandformPreviewFromLocalPoints(state.nodeId, nextPoints)) {
-        ensureLandformVertexHandlesForSelectedNode({ force: true, previewPoints: nextPoints })
-      }
+    const previewMesh = previewLandformContourNode(state.nodeId, nextPoints)
+    if (previewMesh) {
+      ensureLandformVertexHandlesForSelectedNode({
+        force: true,
+        previewPoints: nextPoints,
+        previewVertexHeights: Array.isArray(previewMesh.vertexHeights) ? previewMesh.vertexHeights : [],
+      })
+    }
     return
   }
 
@@ -16749,12 +17028,12 @@ function handlePointerMove(event: PointerEvent) {
     }
 
     if (!state.startHitWorld) {
-      if (!raycastPlanePoint(event, state.dragPlane, waterDragIntersectionHelper)) {
+      if (!raycastLandformDragPoint(event, state.dragPlane, waterDragIntersectionHelper)) {
         return
       }
       state.startHitWorld = waterDragIntersectionHelper.clone()
     }
-    if (!raycastPlanePoint(event, state.dragPlane, waterDragIntersectionHelper)) {
+    if (!raycastLandformDragPoint(event, state.dragPlane, waterDragIntersectionHelper)) {
       return
     }
 
@@ -16917,23 +17196,6 @@ function handlePointerMove(event: PointerEvent) {
     return
   }
 
-  if (landformContourVertexDragState && event.pointerId === landformContourVertexDragState.pointerId) {
-    landformContourVertexDragState = null
-    pointerInteraction.releaseIfCaptured(event.pointerId)
-    setActiveLandformVertexHandle(null)
-
-    try {
-      ensureLandformVertexHandlesForSelectedNode({ force: true })
-    } catch {
-      /* noop */
-    }
-
-    event.preventDefault()
-    event.stopPropagation()
-    event.stopImmediatePropagation()
-    return
-  }
-
   if (waterCircleCenterDragState && event.pointerId === waterCircleCenterDragState.pointerId) {
     const state = waterCircleCenterDragState
     const dx = event.clientX - state.startX
@@ -17045,8 +17307,13 @@ function handlePointerMove(event: PointerEvent) {
       segments: state.segments,
     })
     state.workingPoints = nextPoints
-    if (buildLandformPreviewFromLocalPoints(state.nodeId, nextPoints)) {
-      ensureLandformVertexHandlesForSelectedNode({ force: true, previewPoints: nextPoints })
+    const previewMesh = previewLandformContourNode(state.nodeId, nextPoints)
+    if (previewMesh) {
+      ensureLandformVertexHandlesForSelectedNode({
+        force: true,
+        previewPoints: nextPoints,
+        previewVertexHeights: Array.isArray(previewMesh.vertexHeights) ? previewMesh.vertexHeights : [],
+      })
     }
     return
   }
@@ -17433,32 +17700,6 @@ async function handlePointerUp(event: PointerEvent) {
         return
       }
 
-      if (landformCircleRadiusDragState && event.pointerId === landformCircleRadiusDragState.pointerId && event.button === 0) {
-        const state = landformCircleRadiusDragState
-        landformCircleRadiusDragState = null
-        pointerInteraction.releaseIfCaptured(event.pointerId)
-        setActiveLandformVertexHandle(null)
-
-        if (state.moved) {
-          sceneStore.flushPendingLandformSurfacePreview()
-          if (!commitLandformContourNode(state.nodeId, state.workingPoints)) {
-            sceneStore.restoreLandformSurfaceMeshRuntime(state.nodeId)
-          }
-          ensureLandformVertexHandlesForSelectedNode({ force: true })
-          void nextTick(() => {
-            ensureLandformVertexHandlesForSelectedNode({ force: true })
-          })
-        } else {
-          sceneStore.restoreLandformSurfaceMeshRuntime(state.nodeId)
-          ensureLandformVertexHandlesForSelectedNode({ force: true })
-        }
-
-        event.preventDefault()
-        event.stopPropagation()
-        event.stopImmediatePropagation()
-        return
-      }
-
       if (wallDoorRectangleSelectionState && event.pointerId === wallDoorRectangleSelectionState.pointerId && event.button === 0) {
         const state = wallDoorRectangleSelectionState
         const bounds = wallDoorSelectionController.computeWallDoorRectangleBounds(state)
@@ -17578,7 +17819,6 @@ async function handlePointerUp(event: PointerEvent) {
         setActiveLandformVertexHandle(null)
 
         if (state.moved) {
-          sceneStore.flushPendingLandformSurfacePreview()
           if (!commitLandformContourNode(state.nodeId, state.workingPoints)) {
             sceneStore.restoreLandformSurfaceMeshRuntime(state.nodeId)
           }
@@ -18851,7 +19091,7 @@ function handleCanvasDoubleClick(event: MouseEvent) {
   }
 
   flushPendingScenePatchesForInteraction()
-  const hit = pickNodeAtPointer(event)
+  const hit = pickSceneNodeAtPointerIncludingHiddenLandform(event)
   if (!hit) {
     return
   }
@@ -19214,6 +19454,11 @@ function intersectRayWithGroundHeightfieldWorld(ray: THREE.Ray): THREE.Vector3 |
   const groundObject = objectMap.get(groundNodeId) ?? getRuntimeObject(groundNodeId)
   if (!groundObject) {
     return null
+  }
+
+  const runtimeSurfaceHit = raycastGroundRuntimeSurface(ray, groundObject)
+  if (runtimeSurfaceHit?.point) {
+    return runtimeSurfaceHit.point.clone()
   }
 
   const bounds = resolveGroundWorldBounds(groundDefinition)
@@ -20871,8 +21116,6 @@ function handleTransformChange() {
     shouldSnapTranslate,
   })
 
-  previewLandformNodesDuringTransform(updates, mode)
-
   finalizeTransformChange({
     updates,
     isGroupTransform,
@@ -21001,7 +21244,7 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
   // mirrored-material side flip (Front<->Back) to avoid inside-out/backface artifacts.
   syncMirroredMeshMaterials(object, node.mirror === 'horizontal' || node.mirror === 'vertical', node.mirror)
 
-  object.visible = sceneStore.isNodeVisible(node.id)
+  object.visible = shouldShowLandformRuntimeObject(node)
 
   if (object.userData?.instancedAssetId) {
     ensureInstancedPickProxy(object, node)
@@ -21036,8 +21279,10 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
       if (!groundDefinition) {
         return
       }
+      refreshGroundRuntimeMaterials(node, object, { refreshChunks: false })
       const nextSignature = computeGroundDynamicMeshSignature(groundDefinition)
-      if (groundData[DYNAMIC_MESH_SIGNATURE_KEY] !== nextSignature) {
+      const signatureChanged = groundData[DYNAMIC_MESH_SIGNATURE_KEY] !== nextSignature
+      if (signatureChanged) {
         const shouldSkipSculptRefresh = groundData[GROUND_SCULPT_SKIP_REFRESH_SIGNATURE_KEY] === nextSignature
         if (!shouldSkipSculptRefresh) {
           updateGroundMesh(groundObject, groundDefinition)
@@ -21046,12 +21291,14 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
         if (shouldSkipSculptRefresh) {
           delete groundData[GROUND_SCULPT_SKIP_REFRESH_SIGNATURE_KEY]
         }
-        syncViewportGroundChunks(groundObject, groundDefinition)
-
       } else if (groundData[GROUND_SCULPT_SKIP_REFRESH_SIGNATURE_KEY] === nextSignature) {
         delete groundData[GROUND_SCULPT_SKIP_REFRESH_SIGNATURE_KEY]
       }
-      syncViewportGroundChunks(groundObject, groundDefinition)
+      syncViewportGroundChunks(
+        groundObject,
+        groundDefinition,
+        signatureChanged ? { forceChunkRefresh: true } : {},
+      )
     }
   } else if (node.dynamicMesh?.type === 'Wall') {
     const wallComponent = node.components?.[WALL_COMPONENT_TYPE] as
@@ -21205,7 +21452,9 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
     }
   }
 
-  applyNodeMaterialOverrides(object, node)
+  if (node.dynamicMesh?.type !== 'Ground') {
+    applyNodeMaterialOverrides(object, node)
+  }
 
 
   if (nodeType === 'WarpGate' && !hasRuntimeObject) {
@@ -21292,44 +21541,75 @@ function resolveViewportGroundStreamingDefinition(
     ? Math.max(1, Math.trunc(authoredRadiusCandidate))
     : 1
   const renderRadiusChunks = Math.max(authoredRadiusChunks, dynamicRadiusChunks)
-  if (renderRadiusChunks === authoredRadiusChunks) {
+  const currentDenseRadiusChunks = Number((groundDefinition as GroundRuntimeDynamicMesh & {
+    runtimeDenseChunkLoadRadiusChunks?: unknown
+  }).runtimeDenseChunkLoadRadiusChunks)
+  const denseRadiusUnchanged = Number.isFinite(currentDenseRadiusChunks)
+    ? Math.max(1, Math.trunc(currentDenseRadiusChunks)) === authoredRadiusChunks
+    : authoredRadiusChunks === Math.max(1, Math.trunc(Number(groundDefinition.renderRadiusChunks) || 1))
+  if (renderRadiusChunks === authoredRadiusChunks && denseRadiusUnchanged) {
     return groundDefinition
   }
   return {
     ...groundDefinition,
     renderRadiusChunks,
+    runtimeDenseChunkLoadRadiusChunks: authoredRadiusChunks,
   }
 }
 
 function syncViewportGroundChunks(
   groundObject: THREE.Object3D,
   groundDefinition: GroundRuntimeDynamicMesh,
+  options: {
+    forceChunkRefresh?: boolean
+  } = {},
 ): void {
-  syncViewportCompiledGroundTiles(groundObject, groundDefinition)
-  const streamingDefinition = resolveViewportGroundStreamingDefinition(groundObject, groundDefinition)
-  syncGroundChunkLoadingMode(groundObject, streamingDefinition, camera)
-  const sceneId = typeof sceneStore.currentSceneId === 'string' ? sceneStore.currentSceneId.trim() : ''
-  const manifestRevision = Number.isFinite(streamingDefinition.chunkManifestRevision)
-    ? Math.max(0, Math.trunc(streamingDefinition.chunkManifestRevision as number))
-    : 0
-  maybeAutoPersistViewportInfiniteGroundChunks(groundObject, streamingDefinition, sceneId, manifestRevision)
+  const shouldForceChunkRefresh = options.forceChunkRefresh === true
+  if (pendingViewportGroundChunkSync) {
+    pendingViewportGroundChunkSync.groundObject = groundObject
+    pendingViewportGroundChunkSync.groundDefinition = groundDefinition
+    pendingViewportGroundChunkSync.forceChunkRefresh ||= shouldForceChunkRefresh
+    return
+  }
+
+  pendingViewportGroundChunkSync = {
+    groundObject,
+    groundDefinition,
+    forceChunkRefresh: shouldForceChunkRefresh,
+  }
+
+  if (typeof requestAnimationFrame === 'function') {
+    pendingViewportGroundChunkSyncFrame = requestAnimationFrame(() => {
+      flushPendingViewportGroundChunkSync()
+    })
+    return
+  }
+
+  flushPendingViewportGroundChunkSync()
 }
 
 function syncViewportCompiledGroundTiles(
   groundObject: THREE.Object3D,
   groundDefinition: GroundRuntimeDynamicMesh,
 ): void {
+  const groundUserData = groundObject.userData ?? (groundObject.userData = {})
   const manifestSource = sceneStore.compiledGroundManifest
   const manifest = manifestSource ? toRaw(manifestSource) : null
   const buildKey = typeof sceneStore.compiledGroundBuildKey === 'string'
     ? sceneStore.compiledGroundBuildKey.trim()
     : ''
   if (!manifest || !buildKey) {
+    groundUserData.compiledGroundEnabled = false
+    groundUserData.compiledGroundManifest = null
+    groundUserData.compiledGroundBuildKey = null
     setInfiniteGroundHiddenChunkKeys(groundObject, [])
     clearCompiledGroundRenderTiles(groundObject)
     return
   }
 
+  groundUserData.compiledGroundEnabled = true
+  groundUserData.compiledGroundManifest = manifest
+  groundUserData.compiledGroundBuildKey = buildKey
   const revision = Number.isFinite(manifest.revision)
     ? Math.max(0, Math.trunc(manifest.revision))
     : computeCompiledGroundManifestRevision(manifest)
@@ -21444,11 +21724,23 @@ function updateGroundChunkStreaming() {
   const surfaceRevision = Number.isFinite(groundDefinition.surfaceRevision)
     ? Math.max(0, Math.trunc(groundDefinition.surfaceRevision as number))
     : 0
+  const groundSplatBakeRevision = Number.isFinite(groundDefinition.groundSplatBake?.revision)
+    ? Math.max(0, Math.trunc(groundDefinition.groundSplatBake!.revision as number))
+    : 0
+  const groundSurfaceChunkKeySignature = groundDefinition.groundSurfaceChunks
+    ? Object.keys(groundDefinition.groundSurfaceChunks).sort().join(',')
+    : ''
+  const groundSurfaceChunkCount = groundDefinition.groundSurfaceChunks
+    ? Object.keys(groundDefinition.groundSurfaceChunks).length
+    : 0
   const streamingStateSignature = [
     buildKey,
     manifestRevision,
     groundDefinition.terrainMode,
     surfaceRevision,
+    groundSplatBakeRevision,
+    groundSurfaceChunkKeySignature,
+    groundSurfaceChunkCount,
   ].join('|')
   const chunkSizeCandidate = Number(groundDefinition.chunkSizeMeters)
   const chunkSizeMeters = Number.isFinite(chunkSizeCandidate) && chunkSizeCandidate > 0
@@ -21784,6 +22076,8 @@ function syncSceneGraph() {
       disposeNodeSubtree(id)
     }
   })
+
+  syncLandformEditorVisibility(encountered)
 
   // 重新附加选择并确保工具模式正确
   attachSelection(props.selectedNodeId, props.activeTool)
@@ -22306,6 +22600,7 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
       const groundMesh = createGroundMesh(groundDefinition)
       groundMesh.removeFromParent()
       groundMesh.userData.nodeId = node.id
+      tagInternalRuntimeGroup(groundMesh, node.id, 'Ground')
       groundMesh.userData[DYNAMIC_MESH_SIGNATURE_KEY] = computeGroundDynamicMeshSignature(groundDefinition)
       syncViewportGroundChunks(groundMesh, groundDefinition)
       container.add(groundMesh)
@@ -22592,6 +22887,7 @@ function attachSelection(nodeId: string | null, tool: EditorTool = props.activeT
   const primaryId = nodeId ?? sceneStore.selectedNodeId ?? null
   const locked = primaryId ? sceneStore.isNodeSelectionLocked(primaryId) : false
   const target = !locked && primaryId ? (objectMap.get(primaryId) ?? null) : null
+  syncLandformEditorVisibility()
   updateOutlineSelectionTargets()
 
   if (!primaryId || locked || !target) {
@@ -22951,7 +23247,6 @@ onBeforeUnmount(() => {
     nodePickerStore.cancelActivePick('user')
   }
   disposeGroundEditor()
-  groundTextureInputRef.value = null
   disposeSceneNodes()
   disposeScene()
   disposeWallDoorSelectionController()
@@ -23000,6 +23295,11 @@ onBeforeUnmount(() => {
     window.cancelAnimationFrame(viewportCompositionUpdateFrame)
     viewportCompositionUpdateFrame = null
   }
+  if (pendingViewportGroundChunkSyncFrame !== null && typeof window !== 'undefined') {
+    window.cancelAnimationFrame(pendingViewportGroundChunkSyncFrame)
+    pendingViewportGroundChunkSyncFrame = null
+  }
+  pendingViewportGroundChunkSync = null
   viewportCompositionUpdateQueued = false
   viewportCompositionUpdateForce = false
 })
@@ -23114,6 +23414,7 @@ watch(
   () => props.selectedNodeId,
   (id) => {
     attachSelection(id)
+    syncLandformEditorVisibility()
     updateOutlineSelectionTargets()
     updateSelectionHighlights()
     refreshEffectRuntimeTickers()
@@ -23123,6 +23424,7 @@ watch(
 watch(
   () => sceneStore.selectedNodeIds.slice(),
   () => {
+    syncLandformEditorVisibility()
     if (!transformControls?.dragging) {
       attachSelection(props.selectedNodeId, props.activeTool)
     }
@@ -23491,10 +23793,10 @@ defineExpose({
           </div>
         </div>
 
-        <div
-          v-if="wallDoorSelectionOverlayBox"
-          class="wall-door-selection-overlay"
-          :style="{
+      <div
+        v-if="wallDoorSelectionOverlayBox"
+        class="wall-door-selection-overlay"
+        :style="{
             left: wallDoorSelectionOverlayBox.left + 'px',
             top: wallDoorSelectionOverlayBox.top + 'px',
             width: wallDoorSelectionOverlayBox.width + 'px',
@@ -23733,14 +24035,6 @@ defineExpose({
         ]"
       />
     </div>
-    <input
-      ref="groundTextureInputRef"
-      class="ground-texture-input"
-      type="file"
-      accept="image/*"
-      @change="handleGroundTextureFileChange"
-    >
-
     <AssetPickerDialog
       v-model="wallPresetDialogOpen"
       :asset-id="wallBrushPresetAssetId ?? ''"
@@ -24309,7 +24603,4 @@ defineExpose({
   pointer-events: none;
 }
 
-.ground-texture-input {
-  display: none;
-}
 </style>

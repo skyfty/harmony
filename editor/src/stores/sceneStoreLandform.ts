@@ -1,8 +1,13 @@
 import { Object3D, Shape, ShapeGeometry, ShapeUtils, Vector2, Vector3 } from 'three'
 import type { GroundDynamicMesh, GroundRuntimeDynamicMesh, LandformDynamicMesh, RoadSegment, SceneNode, Vector3Like, Vector2Like } from '@schema/core'
-import { resolveGroundWorldBounds } from '@schema/core'
+import {
+  GROUND_TERRAIN_CHUNK_SIZE_METERS,
+  resolveGroundChunkCoordFromWorldPosition,
+  resolveGroundWorldBounds,
+} from '@schema/core'
 import {
   buildSmoothedSculptPolygonContour,
+  canTreatGroundChunkAsFlatPlane,
   prepareGroundTriangleHeightSamplingContext,
   sampleGroundTriangleHeightWithContext,
   sliceGroundTrianglesByPolygon,
@@ -16,6 +21,7 @@ import {
 } from '@schema/components'
 import type { SceneMaterialProps, SceneNodeMaterial } from '@/types/material'
 import type { LandformBuildShape } from '@/types/landform-build-shape'
+import { sampleGroundRuntimeSurfaceAtWorldXZ, type GroundSurfaceSampleSource } from '@/components/editor/groundSurfaceSampler'
 
 export type SceneStoreLandformHelpersDeps = {
   createLandformNodeMaterials: (options: { surfaceName: string }) => SceneNodeMaterial[]
@@ -75,12 +81,42 @@ type LandformMeshBuildOptions = Partial<LandformComponentProps> & {
 type LandformHeightSamplingResult = {
   runtimeDefinition: GroundRuntimeDynamicMesh
   sampleHeight: LandformHeightSampler
+  sampleSurface?: (x: number, z: number) => { height: number; source: GroundSurfaceSampleSource } | null
+  getStats: () => {
+    sampleRequests: number
+    cacheHits: number
+    terrainSamplerHits: number
+    raycastFallbackHits: number
+    triangleFallbackHits: number
+  }
+}
+
+function resolveRuntimeTerrainHeightSamplerLocal(
+  definition: Pick<GroundRuntimeDynamicMesh, 'runtimeTerrainHeightSampler'>,
+): { sampleHeightAtWorld: (x: number, z: number) => number | null } | null {
+  const candidate = (definition.runtimeTerrainHeightSampler as { sampleHeightAtWorld?: unknown } | null | undefined) ?? null
+  return candidate && typeof candidate.sampleHeightAtWorld === 'function'
+    ? candidate as { sampleHeightAtWorld: (x: number, z: number) => number | null }
+    : null
 }
 
 type LandformAdaptiveGroundClearanceContext = {
   sampleRadius: number
   worldVerticalScale: number
   neighborOffsets: Array<[number, number]>
+}
+
+type LandformFlatChunkCoverage = {
+  minChunkRow: number
+  maxChunkRow: number
+  minChunkColumn: number
+  maxChunkColumn: number
+}
+
+type LandformFlatChunkFastPathResult = {
+  surfaceWorldVertices: Vector3[]
+  surfaceIndices: number[]
+  conformedControlWorldPoints: Vector3[]
 }
 
 type LandformFeatherRefinementOptions = {
@@ -204,7 +240,6 @@ function buildLandformRenderCache(
     surfaceUvs,
     surfaceFeather: buildLandformSurfaceFeather(footprint, localSurfaceVertices, featherWidth, enableFeather),
     surfaceGroundUvs,
-    groundTextureDataUrl: typeof groundDefinition?.textureDataUrl === 'string' ? groundDefinition.textureDataUrl : null,
   }
 }
 
@@ -215,10 +250,7 @@ function buildLandformGroundBlendUvs(
   if (!groundDefinition) {
     return []
   }
-  const textureSource = typeof groundDefinition?.textureDataUrl === 'string'
-    ? groundDefinition.textureDataUrl.trim()
-    : ''
-  if (!textureSource || !surfaceVertices.length) {
+  if (!surfaceVertices.length) {
     return []
   }
 
@@ -702,11 +734,75 @@ type SampledLandformVertex = {
 
 type LandformHeightSampler = (x: number, z: number) => number
 
-function createLandformHeightSampler(groundDefinition: GroundDynamicMesh): LandformHeightSamplingResult {
+function createLandformHeightSampler(
+  groundDefinition: GroundDynamicMesh,
+  groundNode: SceneNode | null,
+  groundObject: Object3D | null = null,
+): LandformHeightSamplingResult {
   const { runtimeDefinition, context } = prepareGroundTriangleHeightSamplingContext(groundDefinition)
+  const transform = getGroundTransform(groundNode)
+  const terrainSampler = resolveRuntimeTerrainHeightSamplerLocal(runtimeDefinition)
+  const surfaceHeightCache = new Map<string, { height: number; source: GroundSurfaceSampleSource } | null>()
+  const toWorldX = (localX: number): number => transform.position.x + localX * transform.scale.x
+  const toWorldZ = (localZ: number): number => transform.position.z + localZ * transform.scale.z
+  const toLocalY = (worldY: number): number => (worldY - transform.position.y) / transform.scale.y
+  const stats = {
+    sampleRequests: 0,
+    cacheHits: 0,
+    terrainSamplerHits: 0,
+    raycastFallbackHits: 0,
+    triangleFallbackHits: 0,
+  }
+  const encodeCacheNumber = (value: number) => `${Math.round(value * 1000)}`
+  const sampleSurface = (x: number, z: number): { height: number; source: GroundSurfaceSampleSource } | null => {
+    stats.sampleRequests += 1
+    const cacheKey = `${encodeCacheNumber(x)},${encodeCacheNumber(z)}`
+    if (surfaceHeightCache.has(cacheKey)) {
+      stats.cacheHits += 1
+      return surfaceHeightCache.get(cacheKey) ?? null
+    }
+    const worldX = toWorldX(x)
+    const worldZ = toWorldZ(z)
+    if (terrainSampler) {
+      const sampledHeight = terrainSampler.sampleHeightAtWorld(worldX, worldZ)
+      if (Number.isFinite(sampledHeight)) {
+        stats.terrainSamplerHits += 1
+        const result = {
+          height: toLocalY(Number(sampledHeight)),
+          source: 'fallback' as GroundSurfaceSampleSource,
+        }
+        surfaceHeightCache.set(cacheKey, result)
+        return result
+      }
+    }
+    if (!groundObject) {
+      surfaceHeightCache.set(cacheKey, null)
+      return null
+    }
+    const sample = sampleGroundRuntimeSurfaceAtWorldXZ(groundObject, worldX, worldZ)
+    if (!sample) {
+      surfaceHeightCache.set(cacheKey, null)
+      return null
+    }
+    stats.raycastFallbackHits += 1
+    const result = Number.isFinite(sample.point.y)
+      ? { height: toLocalY(sample.point.y), source: sample.source }
+      : null
+    surfaceHeightCache.set(cacheKey, result)
+    return result
+  }
   return {
     runtimeDefinition,
-    sampleHeight: (x: number, z: number) => sampleGroundTriangleHeightWithContext(runtimeDefinition, context, x, z),
+    sampleHeight: (x: number, z: number) => {
+      const surfaceSample = sampleSurface(x, z)
+      if (surfaceSample) {
+        return surfaceSample.height
+      }
+      stats.triangleFallbackHits += 1
+      return sampleGroundTriangleHeightWithContext(runtimeDefinition, context, x, z)
+    },
+    sampleSurface,
+    getStats: () => ({ ...stats }),
   }
 }
 
@@ -734,6 +830,112 @@ function createLandformAdaptiveGroundClearanceContext(
       [-sampleRadius, sampleRadius],
       [-sampleRadius, -sampleRadius],
     ],
+  }
+}
+
+function resolveLandformGroundChunkSizeMeters(groundDefinition: GroundDynamicMesh): number {
+  const chunkSizeMeters = Number(groundDefinition.chunkSizeMeters)
+  return Number.isFinite(chunkSizeMeters) && chunkSizeMeters > 0
+    ? chunkSizeMeters
+    : GROUND_TERRAIN_CHUNK_SIZE_METERS
+}
+
+function resolveFlatChunkCoverage(
+  polygonLocalPoints: Vector3[],
+  chunkSizeMeters: number,
+): LandformFlatChunkCoverage | null {
+  if (polygonLocalPoints.length < 3) {
+    return null
+  }
+
+  let minX = Number.POSITIVE_INFINITY
+  let maxX = Number.NEGATIVE_INFINITY
+  let minZ = Number.POSITIVE_INFINITY
+  let maxZ = Number.NEGATIVE_INFINITY
+  polygonLocalPoints.forEach((point) => {
+    minX = Math.min(minX, point.x)
+    maxX = Math.max(maxX, point.x)
+    minZ = Math.min(minZ, point.z)
+    maxZ = Math.max(maxZ, point.z)
+  })
+  if (!Number.isFinite(minX) || !Number.isFinite(maxX) || !Number.isFinite(minZ) || !Number.isFinite(maxZ)) {
+    return null
+  }
+
+  const epsilon = Math.max(1e-6, chunkSizeMeters * 1e-9)
+  if (maxX - minX <= epsilon || maxZ - minZ <= epsilon) {
+    return null
+  }
+
+  const minCoord = resolveGroundChunkCoordFromWorldPosition(minX + epsilon, minZ + epsilon, chunkSizeMeters)
+  const maxCoord = resolveGroundChunkCoordFromWorldPosition(maxX - epsilon, maxZ - epsilon, chunkSizeMeters)
+
+  return {
+    minChunkRow: minCoord.chunkZ,
+    maxChunkRow: maxCoord.chunkZ,
+    minChunkColumn: minCoord.chunkX,
+    maxChunkColumn: maxCoord.chunkX,
+  }
+}
+
+function resolveFlatChunkPlaneLocalY(groundDefinition: GroundDynamicMesh): number {
+  const baseHeight = Number(groundDefinition.baseHeight)
+  return Number.isFinite(baseHeight) ? baseHeight : 0
+}
+
+function buildFlatChunkConformedWorldPoint(
+  x: number,
+  z: number,
+  planeLocalY: number,
+  localClearance: number,
+  transform: GroundTransform,
+): Vector3 {
+  return groundLocalToWorld(new Vector3(x, planeLocalY + localClearance, z), transform)
+}
+
+function isFlatChunkCoverageFullyFlat(
+  groundDefinition: GroundDynamicMesh,
+  coverage: LandformFlatChunkCoverage,
+): boolean {
+  for (let chunkRow = coverage.minChunkRow; chunkRow <= coverage.maxChunkRow; chunkRow += 1) {
+    for (let chunkColumn = coverage.minChunkColumn; chunkColumn <= coverage.maxChunkColumn; chunkColumn += 1) {
+      if (!canTreatGroundChunkAsFlatPlane(groundDefinition, chunkRow, chunkColumn, { allowBakedSurfaceTexture: true })) {
+        return false
+      }
+    }
+  }
+  return true
+}
+
+function tryBuildFlatChunkRegionLandformFastPath(
+  groundDefinition: GroundDynamicMesh,
+  polygonLocalPoints: Vector3[],
+  transform: GroundTransform,
+): LandformFlatChunkFastPathResult | null {
+  const chunkSizeMeters = resolveLandformGroundChunkSizeMeters(groundDefinition)
+  const flatChunkCoverage = resolveFlatChunkCoverage(polygonLocalPoints, chunkSizeMeters)
+  if (!flatChunkCoverage) {
+    return null
+  }
+  if (!isFlatChunkCoverageFullyFlat(groundDefinition, flatChunkCoverage)) {
+    return null
+  }
+
+  const triangulation = buildShapeTriangulation(polygonLocalPoints)
+  if (!triangulation) {
+    return null
+  }
+
+  const planeLocalY = resolveFlatChunkPlaneLocalY(groundDefinition)
+  const localClearance = LANDFORM_FLAT_WORLD_CLEARANCE / resolveGroundVerticalScale(transform)
+  return {
+    surfaceIndices: [...triangulation.indices],
+    surfaceWorldVertices: triangulation.vertices.map((vertex) => (
+      buildFlatChunkConformedWorldPoint(vertex.x, vertex.y, planeLocalY, localClearance, transform)
+    )),
+    conformedControlWorldPoints: polygonLocalPoints.map((point) => (
+      buildFlatChunkConformedWorldPoint(point.x, point.z, planeLocalY, localClearance, transform)
+    )),
   }
 }
 
@@ -788,6 +990,50 @@ function buildLandformGroundPreviewSurface(
   return {
     surfaceWorldVertices,
     surfaceIndices: [...triangulation.indices],
+  }
+}
+
+function buildLandformApproximateGroundSurface(
+  polygonLocalPoints: Vector3[],
+  polygonLocal: Vector2[],
+  groundDefinition: GroundDynamicMesh,
+  sampleHeight: LandformHeightSampler,
+  clearanceContext: LandformAdaptiveGroundClearanceContext,
+  transform: GroundTransform,
+  enableFeather: boolean,
+  featherWidth: number,
+): { surfaceWorldVertices: Vector3[]; surfaceIndices: number[] } | null {
+  const polygonTriangulation = buildShapeTriangulation(polygonLocalPoints)
+  if (!polygonTriangulation) {
+    return null
+  }
+
+  const refinedTriangulation = refineLandformTriangulationForGround(
+    polygonTriangulation,
+    groundDefinition,
+    sampleHeight,
+    enableFeather,
+    {
+      footprint: polygonLocal.map((point) => [point.x, point.y] as [number, number]),
+      featherWidth: resolveGroundLocalDistance(featherWidth, transform),
+    },
+  )
+  const triangulation = enableFeather
+    ? refinedTriangulation
+    : compactLandformTriangulation(refinedTriangulation)
+
+  return {
+    surfaceIndices: [...triangulation.indices],
+    surfaceWorldVertices: triangulation.vertices.map((vertex) => {
+      const localHeight = sampleHeight(vertex.x, vertex.y)
+      const localClearance = resolveLandformAdaptiveGroundClearance(
+        sampleHeight,
+        vertex,
+        localHeight,
+        clearanceContext,
+      )
+      return groundLocalToWorld(new Vector3(vertex.x, localHeight + localClearance, vertex.y), transform)
+    }),
   }
 }
 
@@ -1609,6 +1855,37 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
         node.materials = nextMaterials as any
       }
 
+      const nextSurfaceLayers = nextMaterials.map((entry, order) => ({
+        id: entry.id,
+        order,
+        materialConfigId: entry.id ?? null,
+        materialProps: {
+          color: entry.color,
+          transparent: entry.transparent,
+          opacity: entry.opacity,
+          alphaTest: entry.alphaTest,
+          side: entry.side,
+          wireframe: entry.wireframe,
+          metalness: entry.metalness,
+          roughness: entry.roughness,
+          emissive: entry.emissive,
+          emissiveIntensity: entry.emissiveIntensity,
+          aoStrength: entry.aoStrength,
+          envMapIntensity: entry.envMapIntensity,
+          textures: entry.textures ? { ...entry.textures } : {},
+        },
+        textureAssetIds: Object.values(entry.textures ?? {})
+          .flatMap((texture) => {
+            const assetId = typeof texture?.assetId === 'string' ? texture.assetId.trim() : ''
+            return assetId ? [assetId] : []
+          }),
+        enableFeather: typeof (node.dynamicMesh as any).enableFeather === 'boolean'
+          ? (node.dynamicMesh as any).enableFeather
+          : undefined,
+        feather: Number.isFinite((node.dynamicMesh as any).feather) ? Number((node.dynamicMesh as any).feather) : undefined,
+        uvScale: (node.dynamicMesh as any).uvScale ?? null,
+      }))
+
       const normalizeId = (value: unknown) => (typeof value === 'string' && value.trim().length ? value.trim() : null)
       const materialIds = (nextMaterials as any[]).map((entry) => entry.id)
       const fallbackId = (nextMaterials as any[])[0]?.id ?? null
@@ -1618,6 +1895,8 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
       }
 
       const mesh = node.dynamicMesh as LandformDynamicMesh
+      const currentBake = mesh.groundSplatBake ?? null
+      const currentSurfaceLayers = Array.isArray(mesh.surfaceLayers) ? mesh.surfaceLayers : []
       const footprint = Array.isArray(mesh.vertices)
         ? mesh.vertices
           .map((entry) => [Number(entry?.[0]), Number(entry?.[1])] as [number, number])
@@ -1638,11 +1917,37 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
       const featherNeedsSync = expectedFeather.length !== currentFeather.length
         || expectedFeather.some((value, index) => Math.abs(value - Number(currentFeather[index])) > 1e-5)
 
+      const normalizeSurfaceLayerSignature = (layers: typeof nextSurfaceLayers) => JSON.stringify(layers.map((layer) => ({
+        id: layer.id ?? null,
+        order: Number.isFinite(layer.order) ? layer.order : 0,
+        materialConfigId: layer.materialConfigId ?? null,
+        materialProps: layer.materialProps ?? null,
+        textureAssetIds: Array.isArray(layer.textureAssetIds) ? [...layer.textureAssetIds] : [],
+        enableFeather: typeof layer.enableFeather === 'boolean' ? layer.enableFeather : null,
+        feather: Number.isFinite(layer.feather) ? Number(layer.feather) : null,
+        uvScale: layer.uvScale ? { x: Number(layer.uvScale.x) || 0, y: Number(layer.uvScale.y) || 0 } : null,
+      })))
+      const surfaceLayersChanged = normalizeSurfaceLayerSignature(nextSurfaceLayers)
+        !== normalizeSurfaceLayerSignature(currentSurfaceLayers as typeof nextSurfaceLayers)
+
       const meshChanged = mesh.materialConfigId !== materialConfigId || featherNeedsSync
-      if (meshChanged) {
+      const bakeNeedsRefresh = materialsChanged || meshChanged || surfaceLayersChanged
+      const nextBake = bakeNeedsRefresh
+        ? {
+            revision: Date.now(),
+            chunkTextureMap: null,
+            surfaceLayerTextureAssetIds: Array.from(new Set(
+              nextSurfaceLayers.flatMap((layer) => Array.isArray(layer.textureAssetIds) ? layer.textureAssetIds : []),
+            )),
+          }
+        : currentBake
+
+      if (meshChanged || surfaceLayersChanged || (materialsChanged && currentBake !== nextBake)) {
         node.dynamicMesh = {
           ...mesh,
           materialConfigId,
+          surfaceLayers: nextSurfaceLayers,
+          groundSplatBake: nextBake,
           renderCache: {
             ...(mesh.renderCache ?? {
               surfaceVertices: [],
@@ -1650,10 +1955,15 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
               surfaceUvs: [],
               surfaceGroundUvs: [],
               surfaceFeather: [],
-              groundTextureDataUrl: null,
             }),
             surfaceFeather: expectedFeather,
           },
+        }
+      } else if (materialsChanged && !meshChanged) {
+        node.dynamicMesh = {
+          ...mesh,
+          surfaceLayers: nextSurfaceLayers,
+          groundSplatBake: nextBake,
         }
       }
 
@@ -1736,8 +2046,51 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
       const transform = getGroundTransform(groundNode)
       const polygonLocalPoints = normalizePolygonWinding(buildPoints.map((point) => worldToGroundLocal(point, transform)))
       const polygonLocal = polygonLocalPoints.map((point) => new Vector2(point.x, point.z))
-      const { runtimeDefinition: groundRuntimeDefinition, sampleHeight } = createLandformHeightSampler(groundDefinition)
+      const flatChunkFastPath = tryBuildFlatChunkRegionLandformFastPath(
+        groundDefinition,
+        polygonLocalPoints,
+        transform,
+      )
+      if (flatChunkFastPath) {
+        const renderCache = buildLandformRenderCache(
+          flatChunkFastPath.surfaceWorldVertices,
+          (point) => point.sub(center),
+          flatChunkFastPath.surfaceIndices,
+          normalizedProps.uvScale,
+          controlVertices,
+          featherWidth,
+          normalizedProps.enableFeather,
+          groundDefinition,
+        )
+        const vertexHeights = buildLandformVertexHeights(flatChunkFastPath.conformedControlWorldPoints, (point) => point.sub(center))
+        const segmentHeights = buildLandformSegmentHeights(flatChunkFastPath.conformedControlWorldPoints, (point) => point.sub(center))
+        return {
+          center,
+          definition: {
+            type: 'Landform',
+            vertices: controlVertices,
+            segments,
+            vertexHeights,
+            segmentHeights,
+            buildShape: buildShape ?? 'polygon',
+            renderCache,
+            materialConfigId: null,
+            enableFeather: normalizedProps.enableFeather,
+            feather: normalizedProps.feather,
+            uvScale: { ...normalizedProps.uvScale },
+          },
+        }
+      }
+
+      const runtimeGroundObject = groundNode ? deps.getRuntimeObject(groundNode.id) : null
+      const landformHeightSampler = createLandformHeightSampler(
+        groundDefinition,
+        groundNode,
+        runtimeGroundObject,
+      )
+      const groundRuntimeDefinition = landformHeightSampler.runtimeDefinition
       const clearanceContext = createLandformAdaptiveGroundClearanceContext(groundRuntimeDefinition, transform)
+      const sampleHeight = landformHeightSampler.sampleHeight
       const conformedControlWorldPoints = polygonLocalPoints.map((point) => {
         const localHeight = sampleHeight(point.x, point.z)
         const localClearance = resolveLandformAdaptiveGroundClearance(
@@ -1766,46 +2119,43 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
         const sliced = sliceGroundTrianglesByPolygon(groundDefinition, polygonLocal, {
           mergePlanarRegions: !normalizedProps.enableFeather,
         })
-        surfaceIndices = [...sliced.indices]
-        surfaceWorldVertices = buildLandformGroundSliceSurface(
-          sliced,
-          sampleHeight,
-          clearanceContext,
-          transform,
-        )
+        if (sliced.mode === 'approx') {
+          const approximateSurface = buildLandformApproximateGroundSurface(
+            polygonLocalPoints,
+            polygonLocal,
+            groundDefinition,
+            sampleHeight,
+            clearanceContext,
+            transform,
+            normalizedProps.enableFeather,
+            featherWidth,
+          )
+          surfaceIndices = approximateSurface?.surfaceIndices ?? []
+          surfaceWorldVertices = approximateSurface?.surfaceWorldVertices ?? []
+        } else {
+          surfaceIndices = [...sliced.indices]
+          surfaceWorldVertices = buildLandformGroundSliceSurface(
+            sliced,
+            sampleHeight,
+            clearanceContext,
+            transform,
+          )
+        }
       }
 
       if (surfaceWorldVertices.length < 3 || surfaceIndices.length < 3) {
-        const polygonTriangulation = buildShapeTriangulation(polygonLocalPoints)
-        if (!polygonTriangulation) {
-          return null
-        }
-
-        const refinedTriangulation = refineLandformTriangulationForGround(
-          polygonTriangulation,
+        const approximateSurface = buildLandformApproximateGroundSurface(
+          polygonLocalPoints,
+          polygonLocal,
           groundDefinition,
           sampleHeight,
+          clearanceContext,
+          transform,
           normalizedProps.enableFeather,
-          {
-            footprint: polygonLocal.map((point) => [point.x, point.y] as [number, number]),
-            featherWidth: resolveGroundLocalDistance(featherWidth, transform),
-          },
+          featherWidth,
         )
-        const triangulation = normalizedProps.enableFeather
-          ? refinedTriangulation
-          : compactLandformTriangulation(refinedTriangulation)
-
-        surfaceIndices = [...triangulation.indices]
-        surfaceWorldVertices = triangulation.vertices.map((vertex) => {
-          const localHeight = sampleHeight(vertex.x, vertex.y)
-          const localClearance = resolveLandformAdaptiveGroundClearance(
-            sampleHeight,
-            vertex,
-            localHeight,
-            clearanceContext,
-          )
-          return groundLocalToWorld(new Vector3(vertex.x, localHeight + localClearance, vertex.y), transform)
-        })
+        surfaceIndices = approximateSurface?.surfaceIndices ?? []
+        surfaceWorldVertices = approximateSurface?.surfaceWorldVertices ?? []
       }
 
       if (surfaceWorldVertices.length < 3 || surfaceIndices.length < 3) {
@@ -1874,8 +2224,14 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
         return null
       }
 
+      let landformHeightSampler: LandformHeightSamplingResult | null = null
+      let polygonLocalPoints: Vector3[] | null = null
+      let clearanceContext: LandformAdaptiveGroundClearanceContext | null = null
+      let groundRuntimeDefinition: GroundRuntimeDynamicMesh | null = null
+      let transform: GroundTransform | null = null
       let surfaceWorldVertices: Vector3[] = []
       let surfaceIndices: number[] = []
+      let cachedConformedControlPoints: Vector3[] | null = null
 
       if (!groundDefinition) {
         const triangulation = buildShapeTriangulation(buildPoints)
@@ -1894,53 +2250,69 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
         })
         surfaceIndices = [...triangulation.indices]
       } else {
-        const transform = getGroundTransform(groundNode)
-        const polygonLocalPoints = normalizePolygonWinding(buildPoints.map((point) => worldToGroundLocal(point, transform)))
+        transform = getGroundTransform(groundNode)
+        const runtimeGroundObject = groundNode ? deps.getRuntimeObject(groundNode.id) : null
+        const safeTransform = transform ?? getGroundTransform(groundNode)
+        polygonLocalPoints = normalizePolygonWinding(buildPoints.map((point) => worldToGroundLocal(point, safeTransform)))
         const polygonLocal = polygonLocalPoints.map((point) => new Vector2(point.x, point.z))
-        const { runtimeDefinition: groundRuntimeDefinition, sampleHeight } = createLandformHeightSampler(groundDefinition)
-        const clearanceContext = createLandformAdaptiveGroundClearanceContext(groundRuntimeDefinition, transform)
-        const sliced = sliceGroundTrianglesByPolygon(groundDefinition, polygonLocal, {
-          mergePlanarRegions: !normalizedProps.enableFeather,
-        })
-        surfaceIndices = [...sliced.indices]
-        surfaceWorldVertices = buildLandformGroundSliceSurface(
-          sliced,
-          sampleHeight,
-          clearanceContext,
-          transform,
+        const flatChunkFastPath = tryBuildFlatChunkRegionLandformFastPath(
+          groundDefinition,
+          polygonLocalPoints,
+          safeTransform,
         )
-
-        if (surfaceWorldVertices.length < 3 || surfaceIndices.length < 3) {
-          const polygonTriangulation = buildShapeTriangulation(polygonLocalPoints)
-          if (!polygonTriangulation) {
-            return null
+        if (flatChunkFastPath) {
+          surfaceIndices = flatChunkFastPath.surfaceIndices
+          surfaceWorldVertices = flatChunkFastPath.surfaceWorldVertices
+          cachedConformedControlPoints = flatChunkFastPath.conformedControlWorldPoints
+        } else {
+          landformHeightSampler = createLandformHeightSampler(
+            groundDefinition,
+            groundNode,
+            runtimeGroundObject,
+          )
+          groundRuntimeDefinition = landformHeightSampler.runtimeDefinition
+          clearanceContext = createLandformAdaptiveGroundClearanceContext(groundRuntimeDefinition, safeTransform)
+          const sampleHeight = landformHeightSampler.sampleHeight
+          const sliced = sliceGroundTrianglesByPolygon(groundDefinition, polygonLocal, {
+            mergePlanarRegions: !normalizedProps.enableFeather,
+          })
+          if (sliced.mode === 'approx') {
+            const approximateSurface = buildLandformApproximateGroundSurface(
+              polygonLocalPoints,
+              polygonLocal,
+              groundDefinition,
+              sampleHeight,
+              clearanceContext,
+              safeTransform,
+              normalizedProps.enableFeather,
+              featherWidth,
+            )
+            surfaceIndices = approximateSurface?.surfaceIndices ?? []
+            surfaceWorldVertices = approximateSurface?.surfaceWorldVertices ?? []
+          } else {
+            surfaceIndices = [...sliced.indices]
+            surfaceWorldVertices = buildLandformGroundSliceSurface(
+              sliced,
+              sampleHeight,
+              clearanceContext,
+              safeTransform,
+            )
           }
 
-          const refinedTriangulation = refineLandformTriangulationForGround(
-            polygonTriangulation,
-            groundDefinition,
-            sampleHeight,
-            normalizedProps.enableFeather,
-            {
-              footprint: polygonLocal.map((point) => [point.x, point.y] as [number, number]),
-              featherWidth: resolveGroundLocalDistance(featherWidth, transform),
-            },
-          )
-          const triangulation = normalizedProps.enableFeather
-            ? refinedTriangulation
-            : compactLandformTriangulation(refinedTriangulation)
-
-          surfaceIndices = [...triangulation.indices]
-          surfaceWorldVertices = triangulation.vertices.map((vertex) => {
-            const localHeight = sampleHeight(vertex.x, vertex.y)
-            const localClearance = resolveLandformAdaptiveGroundClearance(
+          if (surfaceWorldVertices.length < 3 || surfaceIndices.length < 3) {
+            const approximateSurface = buildLandformApproximateGroundSurface(
+              polygonLocalPoints,
+              polygonLocal,
+              groundDefinition,
               sampleHeight,
-              vertex,
-              localHeight,
               clearanceContext,
+              safeTransform,
+              normalizedProps.enableFeather,
+              featherWidth,
             )
-            return groundLocalToWorld(new Vector3(vertex.x, localHeight + localClearance, vertex.y), transform)
-          })
+            surfaceIndices = approximateSurface?.surfaceIndices ?? []
+            surfaceWorldVertices = approximateSurface?.surfaceWorldVertices ?? []
+          }
         }
       }
 
@@ -1949,22 +2321,33 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
       }
 
       const conformedControlPoints = (() => {
+        if (cachedConformedControlPoints) {
+          return cachedConformedControlPoints
+        }
         if (!groundDefinition) {
           return buildPoints.map((point) => point.clone())
         }
-        const transform = getGroundTransform(groundNode)
-        const polygonLocalPoints = normalizePolygonWinding(buildPoints.map((point) => worldToGroundLocal(point, transform)))
-        const { runtimeDefinition: groundRuntimeDefinition, sampleHeight } = createLandformHeightSampler(groundDefinition)
-        const clearanceContext = createLandformAdaptiveGroundClearanceContext(groundRuntimeDefinition, transform)
-        return polygonLocalPoints.map((point) => {
+        const safeTransform = transform ?? getGroundTransform(groundNode)
+        const localPoints = polygonLocalPoints ?? normalizePolygonWinding(buildPoints.map((point) => worldToGroundLocal(point, safeTransform)))
+        const sampler = landformHeightSampler ?? createLandformHeightSampler(
+          groundDefinition,
+          groundNode,
+          groundNode ? deps.getRuntimeObject(groundNode.id) : null,
+        )
+        const safeClearanceContext = clearanceContext ?? createLandformAdaptiveGroundClearanceContext(
+          groundRuntimeDefinition ?? sampler.runtimeDefinition,
+          safeTransform,
+        )
+        const sampleHeight = sampler.sampleHeight
+        return localPoints.map((point) => {
           const localHeight = sampleHeight(point.x, point.z)
           const localClearance = resolveLandformAdaptiveGroundClearance(
             sampleHeight,
             new Vector2(point.x, point.z),
             localHeight,
-            clearanceContext,
+            safeClearanceContext,
           )
-          return groundLocalToWorld(new Vector3(point.x, localHeight + localClearance, point.z), transform)
+          return groundLocalToWorld(new Vector3(point.x, localHeight + localClearance, point.z), safeTransform)
         })
       })()
       const renderCache = buildLandformRenderCache(
@@ -2025,7 +2408,6 @@ export function createSceneStoreLandformHelpers(deps: SceneStoreLandformHelpersD
             surfaceUvs: [],
             surfaceGroundUvs: [],
             surfaceFeather: [],
-            groundTextureDataUrl: null,
           }),
           surfaceUvs: Array.isArray(mesh.renderCache?.surfaceVertices)
             ? mesh.renderCache!.surfaceVertices
