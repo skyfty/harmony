@@ -1,5 +1,6 @@
 import { zipSync, strToU8 } from 'fflate'
 import type {
+  GroundDynamicMesh,
   SceneAssetOverrideEntry,
   SceneAssetRegistryEntry,
   SceneJsonExportDocument,
@@ -50,6 +51,7 @@ import {
   stripGroundHeightMapsFromSceneDocument,
 } from '@/utils/groundHeightSidecar'
 import { bakeLandformGroundSplatForSceneDocument } from '@/utils/landformGroundBake'
+import { buildGroundSplatDebugPreviewBlobFromPayload } from '@/utils/landformGroundBake'
 import {
   computeSceneCompiledGroundBuildKey,
   computeSceneCompiledGroundSourceSignature,
@@ -74,6 +76,7 @@ import {
   collectTransitiveConfigDependencyAssetIds,
 } from '@/stores/sceneAssetCleanup'
 import { attachRoadCollisionCompiledPackagesToDocument } from '@schema/core'
+import { deserializeGroundSplatSidecar } from '@schema/core'
 
 type SceneGroundTerrainOverrideState = {
   runtimeDisableOptimizedChunks?: boolean
@@ -566,6 +569,30 @@ function assertNoLandformNodes(nodes: SceneJsonExportDocument['nodes'], path = '
       assertNoLandformNodes(node.children, `${nextPath}.children`)
     }
   })
+}
+
+function requiresGroundSplatSidecar(document: SceneJsonExportDocument): boolean {
+  const stack = Array.isArray(document.nodes) ? [...document.nodes] : []
+  while (stack.length > 0) {
+    const node = stack.pop()
+    if (!node || typeof node !== 'object') {
+      continue
+    }
+    const dynamicMesh = node.dynamicMesh as GroundDynamicMesh | { type?: string } | null | undefined
+    if (dynamicMesh?.type === 'Ground') {
+      const groundDynamicMesh = dynamicMesh as GroundDynamicMesh
+      if (groundDynamicMesh.groundSurfaceChunks && Object.keys(groundDynamicMesh.groundSurfaceChunks).length > 0) {
+        return true
+      }
+      if (groundDynamicMesh.groundSplatBake?.chunkTextureMap && Object.keys(groundDynamicMesh.groundSplatBake.chunkTextureMap).length > 0) {
+        return true
+      }
+    }
+    if (Array.isArray(node.children) && node.children.length > 0) {
+      stack.push(...node.children)
+    }
+  }
+  return false
 }
 
 async function prepareSceneDocumentForPackageExport(document: SceneJsonExportDocument): Promise<SceneJsonExportDocument> {
@@ -1342,9 +1369,8 @@ export async function exportScenePackageZip(payload: {
     let roadCollision: ScenePackageManifestV1['scenes'][number]['roadCollision'] | undefined
     const groundNode = findGroundNode(preparedDocument.nodes)
     const storedTerrainDatasetManifest = await scenesStore.loadTerrainDatasetManifest(scene.id)
-    const groundSplatSidecar = scene.id === sceneStore.currentSceneId
-      ? useGroundSplatStore().buildSceneDocumentSidecar(scene.id, groundNode)
-      : await scenesStore.loadGroundSplatSidecar(scene.id)
+    const groundSplatSidecar = useGroundSplatStore().buildSceneDocumentSidecar(scene.id, groundNode)
+      ?? await scenesStore.loadGroundSplatSidecar(scene.id)
     const groundScatterSidecar = scene.id === sceneStore.currentSceneId
       ? useGroundScatterStore().buildSceneDocumentSidecar(scene.id, groundNode)
       : await scenesStore.loadGroundScatterSidecar(scene.id)
@@ -1440,6 +1466,9 @@ export async function exportScenePackageZip(payload: {
           message: `已写入 quantized terrain dataset`,
         })
       }
+    }
+    if (requiresGroundSplatSidecar(preparedDocument) && !groundSplatSidecar) {
+      throw new Error(`Ground baked splat sidecar is required for scene ${scene.id} before export.`)
     }
     const roadCollisionExport = buildRoadCollisionCompiledExport(preparedDocument as SceneJsonExportDocument)
     if (roadCollisionExport.manifest.roads.length > 0) {
@@ -1587,6 +1616,7 @@ export async function exportScenePackageZip(payload: {
         }
       })
     }
+    stripGroundBakedTextureAssetIds(docClone.nodes ?? [])
     // Add the prepared binary scene document to files and manifest.
     files[scenePath] = encodeScenePackageSceneDocument(docClone)
     emitSceneExportEvent(payload.reportEvent, {
@@ -1612,6 +1642,37 @@ export async function exportScenePackageZip(payload: {
         detail: groundSplatPath,
         message: `已写入 ground splat sidecar`,
       })
+
+      try {
+        const groundSplatPreviewPayload = deserializeGroundSplatSidecar(groundSplatSidecar)
+        const groundSplatPreviewBlob = await buildGroundSplatDebugPreviewBlobFromPayload(
+          scene.document as StoredSceneDocument,
+          groundSplatPreviewPayload,
+          { cellSize: 512 },
+        )
+        if (groundSplatPreviewBlob) {
+          const groundSplatPreviewPath = `scenes/${encodeURIComponent(scene.id)}/ground-splat-preview.png`
+          files[groundSplatPreviewPath] = new Uint8Array(await groundSplatPreviewBlob.arrayBuffer())
+          emitSceneExportEvent(payload.reportEvent, {
+            phase: 'sidecar',
+            level: 'info',
+            status: 'completed',
+            sceneId: scene.id,
+            sceneName,
+            detail: groundSplatPreviewPath,
+            message: `已写入 ground splat preview PNG`,
+          })
+        }
+      } catch (previewError) {
+        emitSceneExportEvent(payload.reportEvent, {
+          phase: 'sidecar',
+          level: 'warning',
+          status: 'skipped',
+          sceneId: scene.id,
+          sceneName,
+          message: `ground splat preview PNG 生成失败：${previewError instanceof Error ? previewError.message : String(previewError)}`,
+        })
+      }
     }
     if (groundScatterSidecar) {
       groundScatterPath = `scenes/${encodeURIComponent(scene.id)}/${GROUND_SCATTER_SIDECAR_FILENAME}`

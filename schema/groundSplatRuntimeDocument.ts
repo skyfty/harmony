@@ -3,6 +3,8 @@ import type {
   SceneJsonExportDocument,
   SceneNode,
 } from './core'
+import { buildGroundOptimizedMeshData } from './groundOptimizedMesh'
+import { isGroundDynamicMesh } from './groundHeightfield'
 
 export type PrepareRuntimeGroundSplatSceneDocumentResult = {
   document: SceneJsonExportDocument
@@ -54,6 +56,15 @@ function countLandformNodes(nodes: SceneNode[] | undefined | null): number {
   return count
 }
 
+export function attachOptimizedGroundMeshToDocument(document: SceneJsonExportDocument): SceneJsonExportDocument {
+  const groundNode = findGroundNode(document.nodes)
+  if (!groundNode || !isGroundDynamicMesh(groundNode.dynamicMesh)) {
+    return document
+  }
+  groundNode.dynamicMesh.optimizedMesh = buildGroundOptimizedMeshData(groundNode.dynamicMesh)
+  return document
+}
+
 function stripLandformNodes(nodes: SceneNode[] | undefined | null): boolean {
   if (!Array.isArray(nodes)) {
     return false
@@ -86,10 +97,11 @@ export async function prepareRuntimeGroundSplatSceneDocument(
   const groundNode = findGroundNode(document.nodes)
   const groundDefinition = groundNode?.dynamicMesh?.type === 'Ground' ? (groundNode.dynamicMesh as GroundDynamicMesh)  : null
   const directChunks = groundDefinition?.groundSurfaceChunks
-  const bakedChunks = !directChunks? groundDefinition?.groundSplatBake?.chunkTextureMap  : null
+  const bakedChunks = !directChunks ? groundDefinition?.groundSplatBake?.chunkTextureMap : null
   const nextChunks = directChunks ?? bakedChunks
   const hasBakedGroundSplat = Boolean(nextChunks)
   const promotedGroundSplatBake = Boolean(!directChunks && bakedChunks)
+  const landformNodeCount = countLandformNodes(document.nodes)
 
   if (groundNode && groundDefinition && nextChunks) {
     groundNode.dynamicMesh = {
@@ -98,12 +110,24 @@ export async function prepareRuntimeGroundSplatSceneDocument(
     } as GroundDynamicMesh
   }
 
+  if (landformNodeCount > 0 && !hasBakedGroundSplat) {
+    throw new Error('Ground baked splat data is required before runtime landform stripping.')
+  }
+
   return {
     document: document,
     hasBakedGroundSplat,
     promotedGroundSplatBake,
-    strippedLandformNodes: hasBakedGroundSplat ? stripLandformNodes(document.nodes) : false,
+    strippedLandformNodes: stripLandformNodes(document.nodes),
     groundSurfaceChunkCount: nextChunks ? Object.keys(nextChunks).length : 0,
-    landformNodeCount: countLandformNodes(document.nodes),
+    landformNodeCount,
   }
+}
+
+export async function prepareRuntimeGroundSceneDocument(
+  document: SceneJsonExportDocument,
+): Promise<PrepareRuntimeGroundSplatSceneDocumentResult> {
+  const prepared = await prepareRuntimeGroundSplatSceneDocument(document)
+  attachOptimizedGroundMeshToDocument(prepared.document)
+  return prepared
 }

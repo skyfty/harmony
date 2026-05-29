@@ -7441,6 +7441,12 @@ function applyGroundTextureToChunkMesh(
   const currentMaterial = Array.isArray(mesh.material) ? (mesh.material[0] ?? null) : (mesh.material ?? null)
   const userData = mesh.userData as Record<string, unknown>
   if (!chunkKey) {
+    if (options.isCompiledGroundTile) {
+      const tileLabel = options.compiledGroundTileKey ?? mesh.name ?? 'unknown'
+      throw new Error(
+        `Missing baked ground chunk key for compiled ground tile ${tileLabel}.`,
+      )
+    }
     if (currentMaterial && currentMaterial !== baseMaterial) {
       disposeGroundChunkTexturedMaterial(currentMaterial)
     }
@@ -7449,20 +7455,8 @@ function applyGroundTextureToChunkMesh(
     }
     delete userData.groundChunkSplatMaps
     setGroundChunkTextureReady(mesh, true)
-    const surfaceChunkCount = definition.groundSurfaceChunks
-      ? Object.keys(definition.groundSurfaceChunks).length
-      : 0
-    if (options.isCompiledGroundTile && surfaceChunkCount > 0 && userData.missingBakedGroundChunkKeyWarningLogged !== true) {
-      console.warn('[Ground] Missing baked ground chunk key for compiled ground tile; falling back to base material.', {
-        compiledGroundTileKey: options.compiledGroundTileKey ?? null,
-        meshName: mesh.name || null,
-        surfaceChunkCount,
-      })
-      userData.missingBakedGroundChunkKeyWarningLogged = true
-    }
     return
   }
-  delete userData.missingBakedGroundChunkKeyWarningLogged
   const bundle = resolveGroundChunkTextureBundleSources(definition, chunkKey)
   const activeSource = bundle?.albedo ?? null
   if (bundle && !definition.groundSurfaceChunks) {
@@ -7475,6 +7469,9 @@ function applyGroundTextureToChunkMesh(
   )
 
   if (!hasBakedBundle) {
+    if (options.isCompiledGroundTile) {
+      throw new Error(`Missing baked ground texture bundle for compiled ground chunk ${chunkKey}.`)
+    }
     if (currentMaterial && currentMaterial !== baseMaterial) {
       disposeGroundChunkTexturedMaterial(currentMaterial)
     }

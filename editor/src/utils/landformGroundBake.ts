@@ -17,6 +17,7 @@ import {
   resolveGroundChunkCoordFromWorldPosition,
   resolveGroundWorldBounds,
   resolveInfiniteGroundGridOriginMeters,
+  type GroundSplatSidecarPayload,
 } from '@schema/core'
 import { createTextureSettings } from '@schema/material'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
@@ -62,6 +63,10 @@ export type LandformGroundBakeOptions = {
   maxTextureSize?: number
   maxSplatLayers?: number
   debugBaseTextureOnly?: boolean
+}
+
+export type GroundSplatDebugPreviewOptions = {
+  cellSize?: number
 }
 
 const GROUNDSPLAT_DEBUG_TINT = 'rgba(255, 64, 160, 0.72)'
@@ -200,6 +205,14 @@ function getGroundLandformNodes(nodes: SceneNode[]): SceneNode[] {
   }
   visit(nodes)
   return out
+}
+
+function asGroundDynamicMesh(node: SceneNode | null | undefined): GroundDynamicMesh | null {
+  const dynamicMesh = node?.dynamicMesh
+  if (dynamicMesh?.type !== 'Ground') {
+    return null
+  }
+  return dynamicMesh
 }
 
 function buildSceneNodeLocalMatrix(node: SceneNode): THREE.Matrix4 {
@@ -931,6 +944,150 @@ async function resolveLayerTextureRuntimeSource(
   })()
   cache.set(normalized, loading)
   return await loading
+}
+
+function looksLikeRemoteOrDataUrl(value: string): boolean {
+  return /^https?:\/\//i.test(value) || /^data:/i.test(value)
+}
+
+async function loadPreviewImageDataFromSource(
+  scene: StoredSceneDocument,
+  source: string | null | undefined,
+  cache: Map<string, Promise<LoadedBakedImage | null>>,
+): Promise<LoadedBakedImage | null> {
+  const normalized = typeof source === 'string' ? source.trim() : ''
+  if (!normalized) {
+    return null
+  }
+  const existing = cache.get(normalized)
+  if (existing) {
+    return await existing
+  }
+  const loading = (async () => {
+    let blob: Blob | null = null
+    if (looksLikeRemoteOrDataUrl(normalized)) {
+      try {
+        const response = await fetch(normalized, { method: 'GET', credentials: 'omit', cache: 'no-cache' })
+        if (response.ok) {
+          blob = await response.blob()
+        }
+      } catch {
+        blob = null
+      }
+    }
+    if (!blob) {
+      blob = await resolveSceneAssetBlob(scene, normalized)
+    }
+    if (!blob) {
+      return null
+    }
+    const sourceImage = await blobToCanvasImageSource(blob)
+    if (!sourceImage) {
+      return null
+    }
+    const imageData = extractImageDataFromSource(sourceImage)
+    if (!imageData) {
+      return null
+    }
+    return { source: sourceImage, imageData }
+  })()
+  cache.set(normalized, loading)
+  return await loading
+}
+
+function resolveGroundSplatLayerPreviewTransform(layer: GroundSurfaceChunkLayerRef): {
+  uvScale: { x: number; y: number }
+  transform: { x: number; y: number; z: number; w: number }
+  rotation: { x: number; y: number; z: number; w: number }
+} {
+  const settings = createTextureSettings(layer.albedoTextureSettings ?? null)
+  const uvScale = {
+    x: Number.isFinite(layer.uvScale?.x) && Number(layer.uvScale?.x) > 1e-6 ? Number(layer.uvScale?.x) : 1,
+    y: Number.isFinite(layer.uvScale?.y) && Number(layer.uvScale?.y) > 1e-6 ? Number(layer.uvScale?.y) : 1,
+  }
+  const tileScaleX = Number.isFinite(settings.tileSizeMeters.x) && settings.tileSizeMeters.x > 1e-6 ? settings.tileSizeMeters.x : 1
+  const tileScaleY = Number.isFinite(settings.tileSizeMeters.y) && settings.tileSizeMeters.y > 1e-6 ? settings.tileSizeMeters.y : 1
+  const repeatX = Number.isFinite(settings.repeat.x) ? settings.repeat.x : 1
+  const repeatY = Number.isFinite(settings.repeat.y) ? settings.repeat.y : 1
+  const rotation = Number.isFinite(settings.rotation) ? settings.rotation : 0
+  return {
+    uvScale,
+    transform: {
+      x: repeatX / (uvScale.x * tileScaleX),
+      y: repeatY / (uvScale.y * tileScaleY),
+      z: Number.isFinite(settings.offset.x) ? settings.offset.x : 0,
+      w: Number.isFinite(settings.offset.y) ? settings.offset.y : 0,
+    },
+    rotation: {
+      x: Math.cos(rotation),
+      y: Math.sin(rotation),
+      z: Number.isFinite(settings.center.x) ? settings.center.x : 0,
+      w: Number.isFinite(settings.center.y) ? settings.center.y : 0,
+    },
+  }
+}
+
+function describeGroundSplatLayerDebugInfo(layer: GroundSurfaceChunkLayerRef, panelLabel: string): string[] {
+  const settings = createTextureSettings(layer.albedoTextureSettings ?? null)
+  const uvScaleX = Number.isFinite(layer.uvScale?.x) ? Number(layer.uvScale?.x).toFixed(2) : '1.00'
+  const uvScaleY = Number.isFinite(layer.uvScale?.y) ? Number(layer.uvScale?.y).toFixed(2) : '1.00'
+  const opacity = Number.isFinite(layer.opacity) ? Number(layer.opacity).toFixed(2) : '1.00'
+  const maskChannel = Number.isInteger(layer.maskChannel) ? `${Math.max(0, Math.min(3, Math.trunc(layer.maskChannel)))}` : '0'
+  return [
+    `${panelLabel}`,
+    `src:${typeof layer.albedoSource === 'string' ? layer.albedoSource.slice(0, 42) : 'null'}`,
+    `uv:${uvScaleX},${uvScaleY} op:${opacity} mask:${maskChannel}`,
+    `tile:${Number.isFinite(settings.tileSizeMeters.x) ? Number(settings.tileSizeMeters.x).toFixed(2) : 'n/a'},${Number.isFinite(settings.tileSizeMeters.y) ? Number(settings.tileSizeMeters.y).toFixed(2) : 'n/a'}`,
+    `repeat:${Number.isFinite(settings.repeat.x) ? Number(settings.repeat.x).toFixed(2) : 'n/a'},${Number.isFinite(settings.repeat.y) ? Number(settings.repeat.y).toFixed(2) : 'n/a'}`,
+    `off:${Number.isFinite(settings.offset.x) ? Number(settings.offset.x).toFixed(2) : 'n/a'},${Number.isFinite(settings.offset.y) ? Number(settings.offset.y).toFixed(2) : 'n/a'} rot:${Number.isFinite(settings.rotation) ? Number(settings.rotation).toFixed(2) : 'n/a'}`,
+  ]
+}
+
+function resolveGroundSplatDebugChunkWorldBounds(
+  definition: Pick<GroundDynamicMesh, 'cellSize' | 'chunkSizeMeters'>,
+  chunkKey: string,
+): WorldRect | null {
+  const coord = parseGroundChunkKey(chunkKey)
+  if (!coord) {
+    return null
+  }
+  const chunkSizeMeters = Number.isFinite(definition.chunkSizeMeters) && Number(definition.chunkSizeMeters) > 0
+    ? Number(definition.chunkSizeMeters)
+    : 100
+  const cellSize = Number.isFinite(definition.cellSize) && Number(definition.cellSize) > 0
+    ? Number(definition.cellSize)
+    : 1
+  const chunkSpanCells = Math.max(1, Math.round(chunkSizeMeters / Math.max(cellSize, Number.EPSILON)))
+  const origin = resolveInfiniteGroundGridOriginMeters(chunkSizeMeters)
+  const startColumn = coord.chunkX * chunkSpanCells
+  const startRow = coord.chunkZ * chunkSpanCells
+  return {
+    minX: origin + startColumn * cellSize,
+    maxX: origin + (startColumn + chunkSpanCells) * cellSize,
+    minZ: origin + startRow * cellSize,
+    maxZ: origin + (startRow + chunkSpanCells) * cellSize,
+  }
+}
+
+function samplePreviewImageData(
+  image: ImageDataSource,
+  u: number,
+  v: number,
+): [number, number, number, number] {
+  if (!image.width || !image.height) {
+    return [255, 255, 255, 255]
+  }
+  const wrappedU = ((u % 1) + 1) % 1
+  const wrappedV = ((v % 1) + 1) % 1
+  const x = Math.min(image.width - 1, Math.max(0, Math.floor(wrappedU * image.width)))
+  const y = Math.min(image.height - 1, Math.max(0, Math.floor((1 - wrappedV) * image.height)))
+  const index = (y * image.width + x) * 4
+  return [
+    image.data[index] ?? 255,
+    image.data[index + 1] ?? 255,
+    image.data[index + 2] ?? 255,
+    image.data[index + 3] ?? 255,
+  ]
 }
 
 function resolveLandformMaterialProps(node: SceneNode, layerId?: string | null): SceneMaterialProps | null {
@@ -1762,6 +1919,266 @@ export async function bakeLandformGroundSplatForSceneDocument(
   }
   groundNode.dynamicMesh = nextGroundMesh
   return baked
+}
+
+function drawChunkPreviewPixel(
+  chunk: GroundSurfaceChunkTextureRef,
+  chunkMaskImage: ImageDataSource | null,
+  layerImages: Array<LoadedBakedImage | null>,
+  worldX: number,
+  worldZ: number,
+  maskU: number,
+  maskV: number,
+): [number, number, number, number] {
+  const maskPixel = chunkMaskImage ? samplePreviewImageData(chunkMaskImage, maskU, maskV) : [255, 255, 255, 255]
+  const maskChannels = maskPixel.map((value) => value / 255)
+  let r = 255
+  let g = 255
+  let b = 255
+  let remaining = 1
+  const layers = Array.isArray(chunk.surfaceLayers) ? chunk.surfaceLayers.slice(0, 4) : []
+
+  layers.forEach((layer, index) => {
+    if (!layer) {
+      return
+    }
+    const opacity = Number.isFinite(layer.opacity) ? Math.max(0, Math.min(1, Number(layer.opacity))) : 1
+    const maskChannel = Number.isInteger(layer.maskChannel) ? Math.max(0, Math.min(3, Math.trunc(layer.maskChannel))) : index
+    const weight = Math.min(Math.max(0, maskChannels[maskChannel] ?? 0) * opacity, remaining)
+    if (weight <= 0) {
+      return
+    }
+    const layerImage = layerImages[index]
+    let layerColor: [number, number, number] = [255, 255, 255]
+    if (layerImage?.imageData) {
+      const transform = resolveGroundSplatLayerPreviewTransform(layer)
+      let sampleU = worldX * transform.transform.x + transform.transform.z
+      let sampleV = worldZ * transform.transform.y + transform.transform.w
+      const centeredU = sampleU - transform.rotation.z
+      const centeredV = sampleV - transform.rotation.w
+      sampleU = centeredU * transform.rotation.x - centeredV * transform.rotation.y + transform.rotation.z
+      sampleV = centeredU * transform.rotation.y + centeredV * transform.rotation.x + transform.rotation.w
+      const [sr, sg, sb] = samplePreviewImageData(layerImage.imageData, sampleU, sampleV)
+      layerColor = [sr, sg, sb]
+    } else if (layer.colorTint) {
+      const color = new THREE.Color(layer.colorTint)
+      layerColor = [
+        Math.round(color.r * 255),
+        Math.round(color.g * 255),
+        Math.round(color.b * 255),
+      ]
+    }
+    const tintColor = new THREE.Color(layer.colorTint ?? '#ffffff')
+    const targetR = Math.round(layerColor[0] * tintColor.r)
+    const targetG = Math.round(layerColor[1] * tintColor.g)
+    const targetB = Math.round(layerColor[2] * tintColor.b)
+    r = Math.round(r * (1 - weight) + targetR * weight)
+    g = Math.round(g * (1 - weight) + targetG * weight)
+    b = Math.round(b * (1 - weight) + targetB * weight)
+    remaining = Math.max(0, remaining - weight)
+  })
+
+  return [r, g, b, 255]
+}
+
+function drawChunkSourcePreviewPixel(
+  chunk: GroundSurfaceChunkTextureRef,
+  layerImages: Array<LoadedBakedImage | null>,
+  worldX: number,
+  worldZ: number,
+): [number, number, number, number] {
+  let r = 255
+  let g = 255
+  let b = 255
+  const layers = Array.isArray(chunk.surfaceLayers) ? chunk.surfaceLayers.slice(0, 4) : []
+
+  layers.forEach((layer, index) => {
+    if (!layer) {
+      return
+    }
+    const opacity = Number.isFinite(layer.opacity) ? Math.max(0, Math.min(1, Number(layer.opacity))) : 1
+    if (opacity <= 0) {
+      return
+    }
+    const layerImage = layerImages[index]
+    let layerColor: [number, number, number] = [255, 255, 255]
+    if (layerImage?.imageData) {
+      const transform = resolveGroundSplatLayerPreviewTransform(layer)
+      let sampleU = worldX * transform.transform.x + transform.transform.z
+      let sampleV = worldZ * transform.transform.y + transform.transform.w
+      const centeredU = sampleU - transform.rotation.z
+      const centeredV = sampleV - transform.rotation.w
+      sampleU = centeredU * transform.rotation.x - centeredV * transform.rotation.y + transform.rotation.z
+      sampleV = centeredU * transform.rotation.y + centeredV * transform.rotation.x + transform.rotation.w
+      const [sr, sg, sb] = samplePreviewImageData(layerImage.imageData, sampleU, sampleV)
+      layerColor = [sr, sg, sb]
+    } else if (layer.colorTint) {
+      const color = new THREE.Color(layer.colorTint)
+      layerColor = [
+        Math.round(color.r * 255),
+        Math.round(color.g * 255),
+        Math.round(color.b * 255),
+      ]
+    }
+    const tintColor = new THREE.Color(layer.colorTint ?? '#ffffff')
+    const targetR = Math.round(layerColor[0] * tintColor.r)
+    const targetG = Math.round(layerColor[1] * tintColor.g)
+    const targetB = Math.round(layerColor[2] * tintColor.b)
+    r = Math.round(r * (1 - opacity) + targetR * opacity)
+    g = Math.round(g * (1 - opacity) + targetG * opacity)
+    b = Math.round(b * (1 - opacity) + targetB * opacity)
+  })
+
+  return [r, g, b, 255]
+}
+
+export async function buildGroundSplatDebugPreviewBlob(
+  scene: StoredSceneDocument,
+  groundNode: SceneNode | null | undefined,
+  options: GroundSplatDebugPreviewOptions = {},
+): Promise<Blob | null> {
+  const definition = asGroundDynamicMesh(groundNode)
+  const chunkMap = definition?.groundSplatBake?.chunkTextureMap ?? definition?.groundSurfaceChunks ?? null
+  if (!groundNode || !definition || !chunkMap) {
+    return null
+  }
+  const chunkKeys = Object.keys(chunkMap).sort((left, right) => left.localeCompare(right))
+  if (!chunkKeys.length) {
+    return null
+  }
+
+  const cellSize = Math.max(128, Math.min(512, Math.trunc(options.cellSize ?? (chunkKeys.length <= 1 ? 512 : 256))))
+  const panelCount = 3
+  const composition = createCanvas(panelCount * cellSize, chunkKeys.length * cellSize)
+  if (!composition) {
+    return null
+  }
+  const chunkMaskCache = new Map<string, Promise<LoadedBakedImage | null>>()
+  const layerImageCache = new Map<string, Promise<LoadedBakedImage | null>>()
+
+  const drawText = (text: string, x: number, y: number, width = cellSize): void => {
+    composition.context.save()
+    composition.context.font = '16px sans-serif'
+    composition.context.fillStyle = 'rgba(0, 0, 0, 0.72)'
+    composition.context.fillRect(x, y - 18, Math.min(width, text.length * 10 + 16), 22)
+    composition.context.fillStyle = '#ffffff'
+    composition.context.fillText(text, x + 8, y)
+    composition.context.restore()
+  }
+
+  for (let index = 0; index < chunkKeys.length; index += 1) {
+    const chunkKey = chunkKeys[index]!
+    const chunk = chunkMap[chunkKey]
+    if (!chunk) {
+      continue
+    }
+    const chunkBounds = resolveGroundSplatDebugChunkWorldBounds(definition, chunkKey)
+    const originY = index * cellSize
+
+    const maskSource = Array.isArray(chunk.splatMapAssetIds) ? chunk.splatMapAssetIds[0] ?? null : null
+    const chunkMask = maskSource
+      ? await loadPreviewImageDataFromSource(scene, maskSource, chunkMaskCache)
+      : null
+
+    const layerImages: Array<LoadedBakedImage | null> = []
+    for (let layerIndex = 0; layerIndex < 4; layerIndex += 1) {
+      const layer = Array.isArray(chunk.surfaceLayers) ? chunk.surfaceLayers[layerIndex] ?? null : null
+      if (!layer?.albedoSource) {
+        layerImages.push(null)
+        continue
+      }
+      layerImages.push(await loadPreviewImageDataFromSource(scene, layer.albedoSource, layerImageCache))
+    }
+
+    const panelX = [0, cellSize, cellSize * 2]
+    const panelLabels = ['mask', 'source', 'final']
+    panelLabels.forEach((label, panelIndex) => {
+      const panelOriginX = panelX[panelIndex] ?? 0
+      const panelOriginY = originY
+      composition.context.fillStyle = '#ffffff'
+      composition.context.fillRect(panelOriginX, panelOriginY, cellSize, cellSize)
+      composition.context.strokeStyle = 'rgba(0, 0, 0, 0.24)'
+      composition.context.strokeRect(panelOriginX + 0.5, panelOriginY + 0.5, cellSize - 1, cellSize - 1)
+      const textLines = [`${chunkKey} ${label}`]
+      const leftLayer = Array.isArray(chunk.surfaceLayers) ? chunk.surfaceLayers[0] ?? null : null
+      if (leftLayer) {
+        textLines.push(...describeGroundSplatLayerDebugInfo(leftLayer, label))
+      }
+
+      if (label === 'mask') {
+        if (chunkMask?.source) {
+          composition.context.drawImage(chunkMask.source, panelOriginX, panelOriginY, cellSize, cellSize)
+        }
+      } else {
+        const imageData = composition.context.createImageData(cellSize, cellSize)
+        for (let y = 0; y < cellSize; y += 1) {
+          for (let x = 0; x < cellSize; x += 1) {
+            const maskU = cellSize > 1 ? x / (cellSize - 1) : 0
+            const maskV = cellSize > 1 ? y / (cellSize - 1) : 0
+            const worldX = chunkBounds
+              ? chunkBounds.minX + (chunkBounds.maxX - chunkBounds.minX) * maskU
+              : maskU
+            const worldZ = chunkBounds
+              ? chunkBounds.maxZ - (chunkBounds.maxZ - chunkBounds.minZ) * maskV
+              : maskV
+            const [r, g, b, a] = label === 'source'
+              ? drawChunkSourcePreviewPixel(chunk, layerImages, worldX, worldZ)
+              : drawChunkPreviewPixel(
+                chunk,
+                chunkMask?.imageData ?? null,
+                layerImages,
+                worldX,
+                worldZ,
+                maskU,
+                maskV,
+              )
+            const offset = (y * cellSize + x) * 4
+            imageData.data[offset] = r
+            imageData.data[offset + 1] = g
+            imageData.data[offset + 2] = b
+            imageData.data[offset + 3] = a
+          }
+        }
+        composition.context.putImageData(imageData, panelOriginX, panelOriginY)
+      }
+      textLines.forEach((line, lineIndex) => {
+        drawText(line, panelOriginX + 8, panelOriginY + 22 + lineIndex * 18, cellSize)
+      })
+    })
+  }
+
+  return await canvasToBlob(composition.canvas)
+}
+
+export async function buildGroundSplatDebugPreviewBlobFromPayload(
+  scene: StoredSceneDocument,
+  payload: GroundSplatSidecarPayload | null | undefined,
+  options: GroundSplatDebugPreviewOptions = {},
+): Promise<Blob | null> {
+  const chunkMap = payload?.groundSurfaceChunks ?? null
+  if (!chunkMap || !Object.keys(chunkMap).length) {
+    return null
+  }
+  const syntheticGroundNode: SceneNode = {
+    id: payload?.groundNodeId || 'ground',
+    name: 'ground',
+    nodeType: 'Empty',
+    position: { x: 0, y: 0, z: 0 },
+    rotation: { x: 0, y: 0, z: 0 },
+    scale: { x: 1, y: 1, z: 1 },
+    dynamicMesh: {
+      type: 'Ground',
+      groundSurfaceChunks: chunkMap,
+      groundSplatBake: {
+        revision: Number.isFinite(payload?.revision) ? Math.max(0, Math.trunc(Number(payload?.revision))) : 0,
+        chunkTextureMap: chunkMap,
+        surfaceLayerTextureAssetIds: Array.isArray(payload?.surfaceLayerTextureAssetIds)
+          ? payload.surfaceLayerTextureAssetIds
+          : null,
+      },
+    } as GroundDynamicMesh,
+  }
+  return await buildGroundSplatDebugPreviewBlob(scene, syntheticGroundNode, options)
 }
 
 function findGroundNode(nodes: SceneNode[]): SceneNode | null {
