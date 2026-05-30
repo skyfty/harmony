@@ -2,11 +2,20 @@ import * as THREE from 'three'
 import type {
   GroundDynamicMesh,
   GroundHeightMap,
+  GroundLocalEditTileMap,
   GroundRuntimeDynamicMesh,
   QuantizedTerrainDatasetRootManifest,
   SceneNode,
 } from '@schema/core'
-import { GROUND_HEIGHT_UNSET_VALUE, GROUND_TERRAIN_CHUNK_SIZE_METERS, createGroundHeightMap, getGroundVertexIndex } from '@schema/core'
+import {
+  GROUND_HEIGHT_UNSET_VALUE,
+  GROUND_TERRAIN_CHUNK_SIZE_METERS,
+  formatGroundLocalEditTileKey,
+  getGroundVertexIndex,
+  resolveInfiniteGroundGridOriginMeters,
+  resolveGroundEditTileResolution,
+  resolveGroundEditTileSizeMeters,
+} from '@schema/core'
 import { sampleGroundHeight } from '@schema/groundMesh'
 import { resolveGroundRuntimeChunkCells } from '@schema/groundMesh'
 import { computeGroundBaseHeightAtVertex } from '@schema/groundGeneration'
@@ -38,6 +47,7 @@ import { buildPlanningDemGroundRegionData, type PlanningDemBuildProgress, type P
 import { buildPlanningDemTerrainConversionInWorker } from '@/utils/planningDemTerrainDataset'
 import { createScenesStoreTerrainDatasetHeightSampler } from '@/utils/terrainDatasetRuntime'
 import { sha1Bytes } from '@harmony/utils/hash'
+import { applyTerrainAuthoringPatch, buildTerrainAuthoringPatch } from '@/utils/terrainAuthoring'
 export type PlanningConversionProgress = {
   step: string
   progress: number
@@ -632,76 +642,6 @@ async function clearPlanningGeneratedContentIncremental(options: {
   }
 }
 
-function resetGroundPlanningContours(definition: GroundRuntimeDynamicMesh): { definition: GroundRuntimeDynamicMesh; changed: boolean } {
-  let hadPlanningContours = false
-  for (let index = 0; index < definition.planningHeightMap.length; index += 1) {
-    if (Number.isFinite(definition.planningHeightMap[index])) {
-      hadPlanningContours = true
-      break
-    }
-  }
-  if (!hadPlanningContours) {
-    return { definition, changed: false }
-  }
-
-  const gridSize = resolveGroundWorkingGridSize(definition)
-  const clearedPlanningHeightMap = createGroundHeightMap(gridSize.rows, gridSize.columns)
-  for (let index = 0; index < clearedPlanningHeightMap.length; index += 1) {
-    clearedPlanningHeightMap[index] = GROUND_HEIGHT_UNSET_VALUE
-  }
-
-  return {
-    changed: true,
-    definition: {
-      ...definition,
-      planningHeightMap: clearedPlanningHeightMap,
-      planningMetadata: {
-        ...(definition.planningMetadata ?? {}),
-        contourBounds: null,
-        generatedAt: Date.now(),
-      },
-    },
-  }
-}
-
-function createClearedGroundHeightMap(source: GroundHeightMap, rows: number, columns: number): GroundHeightMap {
-  const cleared = createGroundHeightMap(rows, columns)
-  const length = Math.min(cleared.length, source.length)
-  for (let index = 0; index < length; index += 1) {
-    cleared[index] = GROUND_HEIGHT_UNSET_VALUE
-  }
-  return cleared
-}
-
-function derivePlanningContourBounds(definition: GroundRuntimeDynamicMesh): GroundContourBounds | null {
-  let minRow = Number.POSITIVE_INFINITY
-  let maxRow = Number.NEGATIVE_INFINITY
-  let minColumn = Number.POSITIVE_INFINITY
-  let maxColumn = Number.NEGATIVE_INFINITY
-  let found = false
-
-  const gridSize = resolveGroundWorkingGridSize(definition)
-  for (let row = 0; row <= gridSize.rows; row += 1) {
-    for (let column = 0; column <= gridSize.columns; column += 1) {
-      const value = definition.planningHeightMap[getGroundVertexIndex(gridSize.columns, row, column)]
-      if (typeof value !== 'number' || !Number.isFinite(value)) {
-        continue
-      }
-      found = true
-      minRow = Math.min(minRow, row)
-      maxRow = Math.max(maxRow, row)
-      minColumn = Math.min(minColumn, column)
-      maxColumn = Math.max(maxColumn, column)
-    }
-  }
-
-  if (!found) {
-    return null
-  }
-
-  return { minRow, maxRow, minColumn, maxColumn }
-}
-
 function resolveLayerOrderFromPlanningData(planningData: PlanningSceneData): string[] {
   return planningData.layers.map((layer) => layer.id)
 }
@@ -735,39 +675,6 @@ function resolveGroundRuntimeDefinition(
   return useGroundHeightmapStore().resolveGroundRuntimeMesh(
     groundNode.id,
     groundNode.dynamicMesh,
-  )
-}
-
-function syncPlanningHeightState(
-  sceneStore: ConvertPlanningToSceneOptions['sceneStore'],
-  groundNode: SceneNode,
-  definition: GroundRuntimeDynamicMesh,
-): void {
-  const sceneId = typeof sceneStore.currentSceneId === 'string' ? sceneStore.currentSceneId.trim() : ''
-  if (!sceneId) {
-    throw new Error('Planning height runtime state cannot be synchronized before the scene is persisted')
-  }
-  const groundRuntimeDefinition = groundNode.dynamicMesh as GroundRuntimeDynamicMesh
-  const nextRevision = Number.isFinite(groundRuntimeDefinition.surfaceRevision)
-    ? Math.max(0, Math.trunc(groundRuntimeDefinition.surfaceRevision as number)) + 1
-    : 1
-  groundRuntimeDefinition.surfaceRevision = nextRevision
-  groundRuntimeDefinition.runtimeHydratedHeightState = 'dirty'
-  groundRuntimeDefinition.runtimeDisableOptimizedChunks = true
-  definition.surfaceRevision = nextRevision
-  definition.runtimeHydratedHeightState = 'dirty'
-  definition.runtimeDisableOptimizedChunks = true
-  const fullGridDirtyChunkKeys = resolvePlanningDirtyChunkKeysForFullGrid(definition)
-  useGroundHeightmapStore().replacePlanningHeightMap(
-    groundNode.id,
-    groundNode.dynamicMesh as GroundDynamicMesh,
-    definition.planningHeightMap,
-    definition.planningMetadata ?? null,
-  )
-  useGroundHeightmapStore().markOptimizedMeshDirtyChunkKeys(
-    groundNode.id,
-    groundNode.dynamicMesh as GroundDynamicMesh,
-    fullGridDirtyChunkKeys,
   )
 }
 
@@ -847,16 +754,34 @@ function applyPlanningDemRegionToGround(
   planningMetadata: GroundRuntimeDynamicMesh['planningMetadata'],
   localEditTiles: GroundRuntimeDynamicMesh['localEditTiles'] = null,
 ): GroundRuntimeDynamicMesh {
+  const canonicalLocalEditTiles = localEditTiles ?? buildAbsoluteRegionAuthoringLocalEditTiles({
+    definition,
+    minRow: region.startRow,
+    maxRow: region.endRow,
+    minColumn: region.startColumn,
+    maxColumn: region.endColumn,
+    values: region.values,
+    columns: region.vertexColumns,
+    source: 'dem',
+  })
+  const authoringPatch = buildTerrainAuthoringPatch({
+    definition,
+    source: 'dem',
+    localEditTiles: canonicalLocalEditTiles,
+    affectedRegion: canonicalLocalEditTiles ? null : {
+      minRow: region.startRow,
+      maxRow: region.endRow,
+      minColumn: region.startColumn,
+      maxColumn: region.endColumn,
+    },
+  })
   // 创建下一个地面种子对象，包含更新的规划元数据和本地编辑图块
   const nextGroundSeed = {
     ...definition,
     planningMetadata,
     // 合并现有的本地编辑图块与新的本地编辑图块
-    localEditTiles: localEditTiles
-      ? {
-          ...(definition.localEditTiles ?? {}),
-          ...localEditTiles,
-        }
+    localEditTiles: canonicalLocalEditTiles
+      ? applyTerrainAuthoringPatch(definition.localEditTiles ?? null, authoringPatch)
       : definition.localEditTiles ?? null,
   } satisfies GroundRuntimeDynamicMesh
   const mergedLocalEditTiles = nextGroundSeed.localEditTiles ?? null
@@ -875,20 +800,13 @@ function applyPlanningDemRegionToGround(
   
   // 确定需要标记为脏的区块键
   // 如果有本地编辑图块，则使用其键；否则根据区域计算脏区块键
-  const dirtyChunkKeys = localEditTiles
-    ? Object.keys(localEditTiles)
+  const dirtyChunkKeys = canonicalLocalEditTiles
+    ? authoringPatch.affectedChunkKeys
     : resolvePlanningDirtyChunkKeysFromRegion(definition, region)
   
   // 如果存在本地编辑图块，将其替换到高度图存储中
-  if (localEditTiles) {
+  if (canonicalLocalEditTiles) {
     useGroundHeightmapStore().replaceLocalEditTiles(groundNode.id, nextGroundSeed, mergedLocalEditTiles)
-  } else {
-    useGroundHeightmapStore().replacePlanningHeightRegion(
-      groundNode.id,
-      nextGroundSeed,
-      region,
-      planningMetadata ?? null,
-    )
   }
   
   // 同步地面覆盖区域状态，返回最新的地面运行时网格
@@ -1384,44 +1302,128 @@ function boundsFromPlanningPolygon(definition: GroundDynamicMesh, polyPoints: Pl
   }
 }
 
-function resolvePlanningContourPolygonBounds(options: {
+function buildContourAuthoringLocalEditTiles(options: {
   definition: GroundRuntimeDynamicMesh
-  contourPolygons: PlanningPolygonData[]
-  defaultBlendMeters: number
-}): GroundContourBounds | null {
-  let nextBounds: GroundContourBounds | null = null
-  for (const poly of options.contourPolygons) {
-    const points = sanitizePlanningContourPoints(poly?.points ?? [])
-    if (points.length < 3) {
-      continue
-    }
-    const blendMeters = normalizeContourBlendMeters(poly.terrainBlendMeters, options.defaultBlendMeters)
-    nextBounds = unionBounds(nextBounds, boundsFromPlanningPolygon(options.definition, points, blendMeters))
+  minRow: number
+  maxRow: number
+  minColumn: number
+  maxColumn: number
+  heightGrid: Float32Array
+  cols: number
+  baseHeightMap?: GroundHeightMap | null
+}): GroundLocalEditTileMap | null {
+  const tileSizeMeters = resolveGroundEditTileSizeMeters(options.definition)
+  const resolution = resolveGroundEditTileResolution(options.definition)
+  if (!(tileSizeMeters > 0) || !(resolution > 0)) {
+    return null
   }
-  return nextBounds
+  const cellSize = tileSizeMeters / resolution
+  if (!(cellSize > 0)) {
+    return null
+  }
+  const groundBounds = resolveGroundWorldBounds(options.definition)
+  const localEditTiles: GroundLocalEditTileMap = {}
+
+  for (let row = options.minRow; row <= options.maxRow; row += 1) {
+    const localRow = row - options.minRow
+    for (let column = options.minColumn; column <= options.maxColumn; column += 1) {
+      const localColumn = column - options.minColumn
+      const h = options.heightGrid[localRow * options.cols + localColumn]!
+      const base = options.baseHeightMap
+        ? Number(options.baseHeightMap[getGroundVertexIndex(resolveGroundWorkingGridSize(options.definition).columns, row, column)])
+        : Number.NaN
+      const effectiveBase = Number.isFinite(base)
+        ? base
+        : computeGroundBaseHeightAtVertex(options.definition, row, column)
+      const finalHeight = effectiveBase + h
+      const worldX = groundBounds.minX + column * options.definition.cellSize
+      const worldZ = groundBounds.minZ + row * options.definition.cellSize
+      const tileColumn = Math.floor((worldX - resolveInfiniteGroundGridOriginMeters(tileSizeMeters)) / tileSizeMeters)
+      const tileRow = Math.floor((worldZ - resolveInfiniteGroundGridOriginMeters(tileSizeMeters)) / tileSizeMeters)
+      const tileKey = formatGroundLocalEditTileKey(tileRow, tileColumn)
+      const tileMinX = resolveInfiniteGroundGridOriginMeters(tileSizeMeters) + tileColumn * tileSizeMeters
+      const tileMinZ = resolveInfiniteGroundGridOriginMeters(tileSizeMeters) + tileRow * tileSizeMeters
+      const vertexColumn = Math.max(0, Math.min(resolution, Math.round((worldX - tileMinX) / cellSize)))
+      const vertexRow = Math.max(0, Math.min(resolution, Math.round((worldZ - tileMinZ) / cellSize)))
+      const expectedLength = (resolution + 1) * (resolution + 1)
+      const tile = localEditTiles[tileKey] ?? {
+        key: tileKey,
+        tileRow,
+        tileColumn,
+        tileSizeMeters,
+        resolution,
+        values: new Array<number>(expectedLength).fill(GROUND_HEIGHT_UNSET_VALUE),
+        source: 'mixed' as const,
+        updatedAt: Date.now(),
+      }
+      tile.values[vertexRow * (resolution + 1) + vertexColumn] = Math.round(finalHeight * 100) / 100
+      localEditTiles[tileKey] = tile
+    }
+  }
+
+  return Object.keys(localEditTiles).length ? localEditTiles : null
 }
 
-function setHeightOverrideValueForContours(
-  definition: GroundRuntimeDynamicMesh,
-  map: GroundRuntimeDynamicMesh['planningHeightMap'],
-  row: number,
-  column: number,
-  value: number,
-  baseHeightMap?: GroundRuntimeDynamicMesh['planningHeightMap'] | null,
-): void {
-  const gridSize = resolveGroundWorkingGridSize(definition)
-  const index = getGroundVertexIndex(gridSize.columns, row, column)
-  const base = baseHeightMap ? Number(baseHeightMap[index]) : Number.NaN
-  const effectiveBase = Number.isFinite(base) ? base : computeGroundBaseHeightAtVertex(definition, row, column)
-  let rounded = Math.round(value * 100) / 100
-  let baseRounded = Math.round(effectiveBase * 100) / 100
-  if (Object.is(rounded, -0)) rounded = 0
-  if (Object.is(baseRounded, -0)) baseRounded = 0
-  if (rounded === baseRounded) {
-    map[index] = Number.isFinite(base) ? base : Number.NaN
-    return
+function buildAbsoluteRegionAuthoringLocalEditTiles(options: {
+  definition: GroundRuntimeDynamicMesh
+  minRow: number
+  maxRow: number
+  minColumn: number
+  maxColumn: number
+  values: ArrayLike<number>
+  columns: number
+  source: 'dem' | 'mixed'
+}): GroundLocalEditTileMap | null {
+  const tileSizeMeters = resolveGroundEditTileSizeMeters(options.definition)
+  const resolution = resolveGroundEditTileResolution(options.definition)
+  if (!(tileSizeMeters > 0) || !(resolution > 0)) {
+    return null
   }
-  map[index] = rounded
+  const localEditCellSize = tileSizeMeters / resolution
+  if (!(localEditCellSize > 0)) {
+    return null
+  }
+  const groundBounds = resolveGroundWorldBounds(options.definition)
+  const worldCellSize = Number.isFinite(options.definition.cellSize) && options.definition.cellSize > 1e-6
+    ? options.definition.cellSize
+    : 1
+  const tileOrigin = resolveInfiniteGroundGridOriginMeters(tileSizeMeters)
+  const expectedLength = (resolution + 1) * (resolution + 1)
+  const localEditTiles: GroundLocalEditTileMap = {}
+
+  for (let row = options.minRow; row <= options.maxRow; row += 1) {
+    const localRow = row - options.minRow
+    const worldZ = groundBounds.minZ + row * worldCellSize
+    for (let column = options.minColumn; column <= options.maxColumn; column += 1) {
+      const localColumn = column - options.minColumn
+      const height = Number(options.values[localRow * options.columns + localColumn])
+      if (!Number.isFinite(height)) {
+        continue
+      }
+      const worldX = groundBounds.minX + column * worldCellSize
+      const tileColumn = Math.floor((worldX - tileOrigin) / tileSizeMeters)
+      const tileRow = Math.floor((worldZ - tileOrigin) / tileSizeMeters)
+      const tileKey = formatGroundLocalEditTileKey(tileRow, tileColumn)
+      const tileMinX = tileOrigin + tileColumn * tileSizeMeters
+      const tileMinZ = tileOrigin + tileRow * tileSizeMeters
+      const vertexColumn = Math.max(0, Math.min(resolution, Math.round((worldX - tileMinX) / localEditCellSize)))
+      const vertexRow = Math.max(0, Math.min(resolution, Math.round((worldZ - tileMinZ) / localEditCellSize)))
+      const tile = localEditTiles[tileKey] ?? {
+        key: tileKey,
+        tileRow,
+        tileColumn,
+        tileSizeMeters,
+        resolution,
+        values: new Array<number>(expectedLength).fill(GROUND_HEIGHT_UNSET_VALUE),
+        source: options.source,
+        updatedAt: Date.now(),
+      }
+      tile.values[vertexRow * (resolution + 1) + vertexColumn] = Math.round(height * 100) / 100
+      localEditTiles[tileKey] = tile
+    }
+  }
+
+  return Object.keys(localEditTiles).length > 0 ? localEditTiles : null
 }
 
 /**
@@ -1519,7 +1521,7 @@ async function blurHeightGrid(
 async function applyPlanningTerrainContoursToGround(options: {
   definition: GroundRuntimeDynamicMesh
   contourPolygons: PlanningPolygonData[]
-  baseHeightMap?: GroundRuntimeDynamicMesh['planningHeightMap'] | null
+  baseHeightMap?: GroundHeightMap | null
   signal?: AbortSignal
   yieldController: ReturnType<typeof createYieldController>
   blendMeters?: number
@@ -1556,7 +1558,6 @@ async function applyPlanningTerrainContoursToGround(options: {
     return a.height - b.height
   })
 
-  const previousBounds = derivePlanningContourBounds(definition)
   const groundBounds = resolveGroundWorldBounds(definition)
 
   let nextBounds: GroundContourBounds | null = null
@@ -1565,12 +1566,10 @@ async function applyPlanningTerrainContoursToGround(options: {
     nextBounds = unionBounds(nextBounds, b)
   }
 
-  const rewriteBounds = unionBounds(previousBounds, nextBounds)
+  const rewriteBounds = nextBounds
   if (!rewriteBounds) {
-    const gridSize = resolveGroundWorkingGridSize(definition)
-    const clearedPlanningHeightMap = createClearedGroundHeightMap(definition.planningHeightMap, gridSize.rows, gridSize.columns)
     const cleared = { ...definition }
-    cleared.planningHeightMap = clearedPlanningHeightMap
+    cleared.localEditTiles = null
     cleared.planningMetadata = {
       ...(cleared.planningMetadata ?? {}),
       contourBounds: null,
@@ -1747,45 +1746,24 @@ async function applyPlanningTerrainContoursToGround(options: {
     }, true)
   }
 
-  // --- Phase 3: Write final heights into planningHeightMap ---
-  const nextHeightMap = definition.planningHeightMap
-  const writeRowTotal = Math.max(1, rows)
-
-  reportProgress({
-    phase: 'write-heights',
-    loaded: 0,
-    total: writeRowTotal,
-    label: 'Writing terrain heights…',
-    detail: rows > 0 ? `0/${rows} rows` : '0 rows',
-  }, true)
-  for (let row = minRow; row <= maxRow; row += 1) {
-    if ((row & 63) === 0) {
-      await options.yieldController.maybeYield()
-    }
-    const localRow = row - minRow
-    for (let col = minCol; col <= maxCol; col += 1) {
-      const localCol = col - minCol
-      const h = heightGrid[localRow * cols + localCol]!
-        const gridSize = resolveGroundWorkingGridSize(definition)
-        const base = options.baseHeightMap ? Number(options.baseHeightMap[getGroundVertexIndex(gridSize.columns, row, col)]) : Number.NaN
-      const effectiveBase = Number.isFinite(base)
-        ? base
-        : computeGroundBaseHeightAtVertex(definition, row, col)
-      setHeightOverrideValueForContours(definition, nextHeightMap, row, col, effectiveBase + h, options.baseHeightMap ?? null)
-    }
-    const writtenRows = row - minRow + 1
-    reportProgress({
-      phase: 'write-heights',
-      loaded: writtenRows,
-      total: writeRowTotal,
-      label: 'Writing terrain heights…',
-      detail: `${writtenRows}/${rows} rows`,
-    }, writtenRows === rows)
-  }
+  const contourLocalEditTiles = buildContourAuthoringLocalEditTiles({
+    definition,
+    minRow,
+    maxRow,
+    minColumn: minCol,
+    maxColumn: maxCol,
+    heightGrid,
+    cols,
+    baseHeightMap: options.baseHeightMap ?? null,
+  })
 
   const next = {
     ...definition,
-    planningHeightMap: nextHeightMap,
+    localEditTiles: contourLocalEditTiles
+      ? applyTerrainAuthoringPatch(definition.localEditTiles ?? null, {
+          localEditTiles: contourLocalEditTiles,
+        })
+      : definition.localEditTiles ?? null,
     planningMetadata: {
       ...(definition.planningMetadata ?? {}),
       contourBounds: nextBounds,
@@ -2087,8 +2065,4 @@ void PLANNING_TERRAIN_AIR_WALL_OUTSET_M
 void createAirWallFromSegments
 void createTerrainWaterSurface
 void clearPlanningGeneratedContentIncremental
-void resetGroundPlanningContours
-void syncPlanningHeightState
 void resolvePlanningUnitsToMeters
-void resolvePlanningContourPolygonBounds
-void applyPlanningTerrainContoursToGround

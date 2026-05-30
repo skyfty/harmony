@@ -2,7 +2,6 @@ import { reactive, ref, toRaw, watch, type Ref } from 'vue'
 import * as THREE from 'three'
 import type {
 	GroundDynamicMesh,
-	GroundHeightMap,
 	GroundSurfaceChunkTextureMap,
 	GroundRuntimeDynamicMesh,
 	GroundSculptOperation,
@@ -90,6 +89,10 @@ import { computeBlobHash } from '@/utils/blob'
 import { createInstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCuller'
 import { normalizeScatterMaterials } from '@schema/scatterMaterials'
 import { computeOccupancyMinDistance, computeOccupancyTargetCount } from '@/utils/scatterOccupancy'
+import {
+	buildTerrainAuthoringPatch,
+	collectTerrainAuthoringTilesForChunkKeys,
+} from '@/utils/terrainAuthoring'
 
 export type TerrainBrushShape = 'circle' | 'polygon'
 
@@ -1241,7 +1244,6 @@ function recordScatterRestorePerf(durationMs: number): void {
 type SculptSessionState = {
 	nodeId: string
 	definition: GroundRuntimeDynamicMesh
-	heightMap: GroundHeightMap
 	dirty: boolean
 	affectedRegion: GroundGeometryUpdateRegion | null
 	touchedChunkKeys: Set<string>
@@ -3608,7 +3610,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			if (sculptSessionState && sculptSessionState.nodeId === node.id) {
 				if (!sculptSessionState.dirty) {
 					sculptSessionState.definition = mergedRuntimeDefinition
-					sculptSessionState.heightMap = mergedRuntimeDefinition.manualHeightMap
 					return mergedRuntimeDefinition
 				}
 				return sculptSessionState.definition
@@ -3695,11 +3696,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		// PERF: Cloning a very large sparse heightMap can stall the UI for seconds.
 		// Sculpt currently has no cancel/revert flow, so we avoid the full clone and mutate the existing map.
 		const sessionDefinition = definition
-		const clonedHeightMap = sessionDefinition.manualHeightMap
 		sculptSessionState = {
 			nodeId,
 			definition: sessionDefinition,
-			heightMap: clonedHeightMap,
 			dirty: false,
 			affectedRegion: null,
 			touchedChunkKeys: new Set<string>(),
@@ -3739,15 +3738,47 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		const chunkKeys = sculptSessionState.touchedChunkKeys.size
 			? Array.from(sculptSessionState.touchedChunkKeys)
 			: []
-		const committed = options.sceneStore.commitGroundSculptEdit(
+		const authoringTiles = collectTerrainAuthoringTilesForChunkKeys(
+			committedDefinition,
+			committedDefinition.localEditTiles ?? null,
+			chunkKeys,
+		)
+		const groundObject = getGroundObject()
+		let dirtyWorldBounds: { minX: number; maxX: number; minZ: number; maxZ: number } | null = null
+		if (groundObject && sculptSessionState.dirtyBounds) {
+			const corners = [
+				new THREE.Vector3(sculptSessionState.dirtyBounds.minX, 0, sculptSessionState.dirtyBounds.minZ),
+				new THREE.Vector3(sculptSessionState.dirtyBounds.minX, 0, sculptSessionState.dirtyBounds.maxZ),
+				new THREE.Vector3(sculptSessionState.dirtyBounds.maxX, 0, sculptSessionState.dirtyBounds.minZ),
+				new THREE.Vector3(sculptSessionState.dirtyBounds.maxX, 0, sculptSessionState.dirtyBounds.maxZ),
+			]
+			let minX = Number.POSITIVE_INFINITY
+			let maxX = Number.NEGATIVE_INFINITY
+			let minZ = Number.POSITIVE_INFINITY
+			let maxZ = Number.NEGATIVE_INFINITY
+			for (const corner of corners) {
+				groundObject.localToWorld(corner)
+				minX = Math.min(minX, corner.x)
+				maxX = Math.max(maxX, corner.x)
+				minZ = Math.min(minZ, corner.z)
+				maxZ = Math.max(maxZ, corner.z)
+			}
+			if (Number.isFinite(minX) && Number.isFinite(maxX) && Number.isFinite(minZ) && Number.isFinite(maxZ)) {
+				dirtyWorldBounds = { minX, maxX, minZ, maxZ }
+			}
+		}
+		const patch = buildTerrainAuthoringPatch({
+			definition: committedDefinition,
+			source: 'manual',
+			localEditTiles: authoringTiles,
+			affectedChunkKeys: chunkKeys,
+			worldBounds: dirtyWorldBounds,
+			affectedRegion: sculptSessionState.affectedRegion,
+		})
+		const committed = options.sceneStore.commitTerrainAuthoringEdit(
 			targetNode.id,
 			committedDefinition,
-			{
-				affectedRegion: sculptSessionState.affectedRegion,
-				touchedChunkKeys: chunkKeys,
-				localEditTiles: committedDefinition.localEditTiles ?? null,
-				dirtyBounds: sculptSessionState.dirtyBounds,
-			},
+			patch,
 		)
 		logGroundSculptEvent('session-commit', {
 			nodeId: targetNode.id,
@@ -3760,7 +3791,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			localEditTilesDirty: sculptSessionState.localEditTilesDirty,
 			localEditTileCount: committedDefinition.localEditTiles ? Object.keys(committedDefinition.localEditTiles).length : 0,
 		})
-		const groundObject = getGroundObject()
 		if (groundObject) {
 			options.onSculptCommitApplied?.({
 				groundObject,

@@ -6,8 +6,6 @@ import type {
   MultiPolygon as PolygonClippingMultiPolygon,
 } from 'polygon-clipping'
 import {
-  createGroundHeightMap,
-  ensureGroundHeightMap,
   formatGroundLocalEditTileKey,
   parseGroundChunkKey,
   GROUND_TERRAIN_CHUNK_SIZE_METERS,
@@ -29,7 +27,6 @@ import type {
   GroundDynamicMesh,
   CompiledGroundManifest,
   GroundGenerationSettings,
-  GroundHeightMap,
   GroundPlanningMetadata,
   GroundLocalEditTileData,
   GroundLocalEditTileMap,
@@ -1241,30 +1238,6 @@ export function analyzeGroundOptimizedMeshUsage(definition: GroundDynamicMesh): 
     }
   }
 
-  const manualHeightMap = runtimeDefinition.manualHeightMap
-  const planningHeightMap = runtimeDefinition.planningHeightMap
-  const limit = Math.max(manualHeightMap?.length ?? 0, planningHeightMap?.length ?? 0)
-  for (let index = 0; index < limit; index += 1) {
-    const manual = manualHeightMap[index]
-    if (typeof manual === 'number' && Number.isFinite(manual)) {
-      return {
-        ...base,
-        runtimeChunkCells: sourceChunkCells,
-        canUseOptimizedMesh: false,
-        reason: 'manual-height-overrides-present',
-      }
-    }
-    const planning = planningHeightMap[index]
-    if (typeof planning === 'number' && Number.isFinite(planning)) {
-      return {
-        ...base,
-        runtimeChunkCells: sourceChunkCells,
-        canUseOptimizedMesh: false,
-        reason: 'planning-height-overrides-present',
-      }
-    }
-  }
-
   return {
     ...base,
     runtimeChunkCells: Math.max(1, Math.trunc(optimizedMesh.chunkCells)),
@@ -1326,86 +1299,10 @@ function clampVertexIndex(value: number, max: number): number {
 
 function ensureGroundRuntimeDefinition(definition: GroundDynamicMesh): GroundRuntimeDynamicMesh {
   const runtimeDefinition = definition as GroundRuntimeDynamicMesh
-  const gridSize = resolveGroundWorkingGridSizeCached(runtimeDefinition)
-  runtimeDefinition.manualHeightMap = ensureGroundHeightMap(
-    runtimeDefinition.manualHeightMap,
-    gridSize.rows,
-    gridSize.columns,
-  )
-  runtimeDefinition.planningHeightMap = ensureGroundHeightMap(
-    runtimeDefinition.planningHeightMap,
-    gridSize.rows,
-    gridSize.columns,
-  )
   if (!Array.isArray(runtimeDefinition.runtimeLoadedTileKeys)) {
     runtimeDefinition.runtimeLoadedTileKeys = []
   }
   return runtimeDefinition
-}
-
-function countGroundHeightOverrides(map: GroundHeightMap | null | undefined): number {
-  const length = map?.length ?? 0
-  let count = 0
-  for (let index = 0; index < length; index += 1) {
-    if (Number.isFinite(map![index])) {
-      count += 1
-    }
-  }
-  return count
-}
-
-function adjustRuntimeGroundHeightOverrideCount(
-  definition: GroundRuntimeDynamicMesh,
-  map: GroundHeightMap,
-  delta: number,
-): void {
-  if (!Number.isFinite(delta) || delta === 0) {
-    return
-  }
-
-  if (definition.runtimeManualHeightOverrideSourceRef === map && Number.isFinite(definition.runtimeManualHeightOverrideCount)) {
-    definition.runtimeManualHeightOverrideCount = Math.max(
-      0,
-      Math.trunc(definition.runtimeManualHeightOverrideCount as number) + Math.trunc(delta),
-    )
-    definition.runtimeManualHeightOverrideSourceLength = map.length
-    return
-  }
-
-  if (definition.runtimePlanningHeightOverrideSourceRef === map && Number.isFinite(definition.runtimePlanningHeightOverrideCount)) {
-    definition.runtimePlanningHeightOverrideCount = Math.max(
-      0,
-      Math.trunc(definition.runtimePlanningHeightOverrideCount as number) + Math.trunc(delta),
-    )
-    definition.runtimePlanningHeightOverrideSourceLength = map.length
-  }
-}
-
-function ensureRuntimeGroundHeightOverrideCounts(definition: GroundRuntimeDynamicMesh): void {
-  const manualHeightMap = definition.manualHeightMap
-  const planningHeightMap = definition.planningHeightMap
-  const manualLength = manualHeightMap?.length ?? 0
-  const planningLength = planningHeightMap?.length ?? 0
-
-  if (
-    definition.runtimeManualHeightOverrideSourceRef !== manualHeightMap
-    || definition.runtimeManualHeightOverrideSourceLength !== manualLength
-    || !Number.isFinite(definition.runtimeManualHeightOverrideCount)
-  ) {
-    definition.runtimeManualHeightOverrideCount = countGroundHeightOverrides(manualHeightMap)
-    definition.runtimeManualHeightOverrideSourceRef = manualHeightMap
-    definition.runtimeManualHeightOverrideSourceLength = manualLength
-  }
-
-  if (
-    definition.runtimePlanningHeightOverrideSourceRef !== planningHeightMap
-    || definition.runtimePlanningHeightOverrideSourceLength !== planningLength
-    || !Number.isFinite(definition.runtimePlanningHeightOverrideCount)
-  ) {
-    definition.runtimePlanningHeightOverrideCount = countGroundHeightOverrides(planningHeightMap)
-    definition.runtimePlanningHeightOverrideSourceRef = planningHeightMap
-    definition.runtimePlanningHeightOverrideSourceLength = planningLength
-  }
 }
 
 function hasRuntimeGroundHeightOverrides(definition: GroundRuntimeDynamicMesh): boolean {
@@ -1433,19 +1330,10 @@ function hasRuntimeGroundHeightOverrides(definition: GroundRuntimeDynamicMesh): 
     return true
   }
 
-  ensureRuntimeGroundHeightOverrideCounts(definition)
-  const manualOverrideCount = definition.runtimeManualHeightOverrideCount
-  const planningOverrideCount = definition.runtimePlanningHeightOverrideCount
-  if (Number.isFinite(manualOverrideCount) || Number.isFinite(planningOverrideCount)) {
-    if ((manualOverrideCount ?? 0) > 0 || (planningOverrideCount ?? 0) > 0) {
-      definition.runtimeHydratedHeightState = 'dirty'
-      definition.runtimeDisableOptimizedChunks = true
-      return true
-    }
+  if (shouldPreferCanonicalTerrainAuthoring(definition)) {
     definition.runtimeDisableOptimizedChunks = false
     return false
   }
-
   definition.runtimeDisableOptimizedChunks = false
   return false
 }
@@ -2130,71 +2018,47 @@ function resolveGroundChunkGeometryLayout(definition: GroundRuntimeDynamicMesh, 
   }
 }
 
-function getPlanningVertexHeight(definition: GroundRuntimeDynamicMesh, row: number, column: number): number {
-  // planningHeightMap 保存的是“规划/自动生成层”的绝对高度。
-  // 它表示在基础地形之上，规划阶段希望该顶点呈现的目标基准高度；
-  // 如果没有显式记录，则回退到基础高度，表示规划层对该点没有额外改动。
-  const gridSize = resolveGroundWorkingGridSize(definition)
-  const raw = definition.planningHeightMap[getGroundVertexIndex(gridSize.columns, row, column)]
-  if (typeof raw === 'number' && Number.isFinite(raw)) {
-    return raw
-  }
-  return computeGroundBaseHeightAtVertex(definition, row, column)
+function shouldPreferCanonicalTerrainAuthoring(definition: GroundRuntimeDynamicMesh): boolean {
+  const hasLocalEditTiles = Boolean(definition.localEditTiles && Object.keys(definition.localEditTiles).length)
+  return hasLocalEditTiles || Boolean(definition.planningMetadata?.demSource) || Boolean(resolveRuntimeTerrainHeightSampler(definition))
 }
 
 /**
  * 计算某个顶点的“最终有效高度”。
  *
- * 这里的地形高度不是单一来源，而是由三层概念叠加得到：
- * 1. base: 纯程序化生成得到的基础高度，代表未做任何额外编辑时的原始地形。
- * 2. planning: 规划层高度，代表生成/规划流程想要得到的目标地形。
- * 3. manual: 手工层高度，代表用户雕刻后保存下来的绝对高度。
- *
- * 当前实现并不是简单地在 planning 与 manual 之间二选一，而是保留“手工层相对 base 的偏移量”：
- * manual - base = 用户相对原始地形做出的雕刻量。
- *
- * 最终把这段雕刻量叠加到 planning 上：
- * effective = planning + (manual - base)
- *
- * 这样做的目的，是当规划层重新生成或被调整后，用户之前的雕刻结果仍能尽量保持：
- * 用户修改的是“相对地形的局部塑形”，而不是把规划层完全覆盖掉。
+ * canonical 流程只认 localEditTiles 和 terrain sampler；
+ * 没有作者数据时直接回落到 base height。
  */
 export function resolveGroundEffectiveHeightAtVertex(definition: GroundDynamicMesh, row: number, column: number): number {
   const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
+  const worldX = resolveGroundWorldXForColumn(runtimeDefinition, column)
+  const worldZ = resolveGroundWorldZForRow(runtimeDefinition, row)
   const localEditSample = sampleGroundLocalEditHeightAtWorldFromRuntime(
     runtimeDefinition,
-    resolveGroundWorldXForColumn(runtimeDefinition, column),
-    resolveGroundWorldZForRow(runtimeDefinition, row),
+    worldX,
+    worldZ,
   )
   if (Number.isFinite(localEditSample)) {
     return localEditSample as number
   }
-  // 原始程序化地形高度。
   const base = computeGroundBaseHeightAtVertex(runtimeDefinition, row, column)
-  const gridSize = resolveGroundWorkingGridSize(runtimeDefinition)
-  const heightIndex = getGroundVertexIndex(gridSize.columns, row, column)
-  // 用户手工雕刻后的绝对高度；若无手工覆盖则退回 base。
-  const manualRaw = runtimeDefinition.manualHeightMap[heightIndex]
-  const manual = typeof manualRaw === 'number' && Number.isFinite(manualRaw) ? manualRaw : base
-  // 规划/自动生成层的绝对高度；若无规划覆盖则同样退回 base。
-  const planningRaw = runtimeDefinition.planningHeightMap[heightIndex]
-  const planning = typeof planningRaw === 'number' && Number.isFinite(planningRaw) ? planningRaw : base
-  // 保留 manual 相对 base 的编辑增量，再把这个增量叠加到 planning 上，得到最终显示/采样高度。
-  const effective = planning + (manual - base)
-  if (manual !== base || planning !== base) {
-    return effective
-  }
   const terrainSampler = resolveRuntimeTerrainHeightSampler(runtimeDefinition)
+  if (shouldPreferCanonicalTerrainAuthoring(runtimeDefinition)) {
+    if (terrainSampler) {
+      const sampled = terrainSampler.sampleHeightAtWorld(worldX, worldZ)
+      if (Number.isFinite(sampled)) {
+        return sampled as number
+      }
+    }
+    return base
+  }
   if (terrainSampler) {
-    const sampled = terrainSampler.sampleHeightAtWorld(
-      resolveGroundWorldXForColumn(runtimeDefinition, column),
-      resolveGroundWorldZForRow(runtimeDefinition, row),
-    )
+    const sampled = terrainSampler.sampleHeightAtWorld(worldX, worldZ)
     if (Number.isFinite(sampled)) {
       return sampled as number
     }
   }
-  return effective
+  return base
 }
 
 /**
@@ -2206,7 +2070,6 @@ function resolveGroundEffectiveHeightAtVertexWithContext(
   runtimeDefinition: GroundRuntimeDynamicMesh,
   row: number,
   column: number,
-  columns: number,
   boundsMinX: number,
   boundsMinZ: number,
   cellSize: number,
@@ -2219,14 +2082,14 @@ function resolveGroundEffectiveHeightAtVertexWithContext(
     return localEditSample as number
   }
   const base = computeGroundBaseHeightAtVertex(runtimeDefinition, row, column)
-  const heightIndex = getGroundVertexIndex(columns, row, column)
-  const manualRaw = runtimeDefinition.manualHeightMap[heightIndex]
-  const manual = typeof manualRaw === 'number' && Number.isFinite(manualRaw) ? manualRaw : base
-  const planningRaw = runtimeDefinition.planningHeightMap[heightIndex]
-  const planning = typeof planningRaw === 'number' && Number.isFinite(planningRaw) ? planningRaw : base
-  const effective = planning + (manual - base)
-  if (manual !== base || planning !== base) {
-    return effective
+  if (shouldPreferCanonicalTerrainAuthoring(runtimeDefinition)) {
+    if (terrainSampler) {
+      const sampled = terrainSampler.sampleHeightAtWorld(worldX, worldZ)
+      if (Number.isFinite(sampled)) {
+        return sampled as number
+      }
+    }
+    return base
   }
   if (terrainSampler) {
     const sampled = terrainSampler.sampleHeightAtWorld(worldX, worldZ)
@@ -2234,7 +2097,7 @@ function resolveGroundEffectiveHeightAtVertexWithContext(
       return sampled as number
     }
   }
-  return effective
+  return base
 }
 
 function sampleGroundHeightOutsideWorkingBounds(
@@ -2264,10 +2127,7 @@ export type GroundEffectiveHeightRegion = GroundBaseHeightRegion & {
 }
 
 export type GroundHeightFieldSampler = {
-  rows: number
-  columns: number
-  getManualHeight: (row: number, column: number) => number
-  getPlanningHeight: (row: number, column: number) => number
+  sampleHeightAtWorld: (x: number, z: number) => number | null
 }
 
 export function sampleGroundEffectiveHeightRegion(
@@ -2295,29 +2155,12 @@ function sampleGroundEffectiveHeightRegionInternal(
   const values = new Float32Array(total)
   let heightMin = 0
   let heightMax = 0
+  const terrainSampler = resolveRuntimeTerrainHeightSampler(runtimeDefinition)
 
   if (stride <= 0 || maxRow < minRow || maxColumn < minColumn) {
     return { ...baseRegion, values, heightMin, heightMax }
   }
 
-  const gridSize = resolveGroundWorkingGridSize(runtimeDefinition)
-  const manualRegion = runtimeDefinition.runtimeSampleHeightRegion?.('manual', minRow, maxRow, minColumn, maxColumn)
-  const planningRegion = runtimeDefinition.runtimeSampleHeightRegion?.('planning', minRow, maxRow, minColumn, maxColumn)
-  const canUseManualRegion = manualRegion
-    && manualRegion.minRow === minRow
-    && manualRegion.maxRow === maxRow
-    && manualRegion.minColumn === minColumn
-    && manualRegion.maxColumn === maxColumn
-    && manualRegion.stride === stride
-  const canUsePlanningRegion = planningRegion
-    && planningRegion.minRow === minRow
-    && planningRegion.maxRow === maxRow
-    && planningRegion.minColumn === minColumn
-    && planningRegion.maxColumn === maxColumn
-    && planningRegion.stride === stride
-  const manualValues = canUseManualRegion ? manualRegion.values : null
-  const planningValues = canUsePlanningRegion ? planningRegion.values : null
-  const terrainSampler = resolveRuntimeTerrainHeightSampler(runtimeDefinition)
   const bounds = includeLocalEdit || terrainSampler ? resolveGroundGridWorldBounds(runtimeDefinition) : null
   const cellSize = Number.isFinite(runtimeDefinition.cellSize) && runtimeDefinition.cellSize > 1e-6
     ? runtimeDefinition.cellSize
@@ -2337,18 +2180,8 @@ function sampleGroundEffectiveHeightRegionInternal(
       if (Number.isFinite(localEditSample)) {
         effective = localEditSample as number
       } else {
-        const heightIndex = getGroundVertexIndex(gridSize.columns, row, column)
-        const manualRaw = manualValues ? manualValues[offset] : runtimeDefinition.manualHeightMap[heightIndex]
-        const planningRaw = planningValues ? planningValues[offset] : runtimeDefinition.planningHeightMap[heightIndex]
-        const manual = typeof manualRaw === 'number' && Number.isFinite(manualRaw) ? manualRaw : base
-        const planning = typeof planningRaw === 'number' && Number.isFinite(planningRaw) ? planningRaw : base
-        effective = planning + (manual - base)
-        if (manual === base && planning === base) {
-          const sampled = terrainSampler ? terrainSampler.sampleHeightAtWorld(worldX, worldZ) : null
-          if (Number.isFinite(sampled)) {
-            effective = sampled as number
-          }
-        }
+        const sampled = terrainSampler ? terrainSampler.sampleHeightAtWorld(worldX, worldZ) : null
+        effective = Number.isFinite(sampled) ? sampled as number : base
       }
       values[offset] = effective
       heightMin = Math.min(heightMin, effective)
@@ -2385,12 +2218,25 @@ export function resolveGroundEffectiveHeightAtVertexFromSampler(
   column: number,
 ): number {
   const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
+  const worldX = resolveGroundWorldXForColumn(runtimeDefinition, column)
+  const worldZ = resolveGroundWorldZForRow(runtimeDefinition, row)
+  const sampled = sampler.sampleHeightAtWorld(worldX, worldZ)
+  if (Number.isFinite(sampled)) {
+    return sampled as number
+  }
+  const localEditSample = sampleGroundLocalEditHeightAtWorldFromRuntime(runtimeDefinition, worldX, worldZ)
+  if (Number.isFinite(localEditSample)) {
+    return localEditSample as number
+  }
   const base = computeGroundBaseHeightAtVertex(runtimeDefinition, row, column)
-  const manualRaw = sampler.getManualHeight(row, column)
-  const manual = Number.isFinite(manualRaw) ? manualRaw : base
-  const planningRaw = sampler.getPlanningHeight(row, column)
-  const planning = Number.isFinite(planningRaw) ? planningRaw : base
-  return planning + (manual - base)
+  const terrainSampler = resolveRuntimeTerrainHeightSampler(runtimeDefinition)
+  if (terrainSampler) {
+    const worldSample = terrainSampler.sampleHeightAtWorld(worldX, worldZ)
+    if (Number.isFinite(worldSample)) {
+      return worldSample as number
+    }
+  }
+  return base
 }
 
 export function sampleGroundEffectiveHeightRegionFromSampler(
@@ -2408,6 +2254,7 @@ export function sampleGroundEffectiveHeightRegionFromSampler(
   const values = new Float32Array(total)
   let heightMin = 0
   let heightMax = 0
+  const terrainSampler = resolveRuntimeTerrainHeightSampler(runtimeDefinition)
 
   if (stride <= 0 || maxRow < minRow || maxColumn < minColumn) {
     return { ...baseRegion, values, heightMin, heightMax }
@@ -2415,14 +2262,24 @@ export function sampleGroundEffectiveHeightRegionFromSampler(
 
   for (let row = minRow; row <= maxRow; row += 1) {
     const baseOffset = (row - minRow) * stride
+    const worldZ = resolveGroundWorldZForRow(runtimeDefinition, row)
     for (let column = minColumn; column <= maxColumn; column += 1) {
       const offset = baseOffset + (column - minColumn)
       const base = baseValues[offset] ?? 0
-      const manualRaw = sampler.getManualHeight(row, column)
-      const planningRaw = sampler.getPlanningHeight(row, column)
-      const manual = Number.isFinite(manualRaw) ? manualRaw : base
-      const planning = Number.isFinite(planningRaw) ? planningRaw : base
-      const effective = planning + (manual - base)
+      const worldX = resolveGroundWorldXForColumn(runtimeDefinition, column)
+      const samplerSample = sampler.sampleHeightAtWorld(worldX, worldZ)
+      let effective = base
+      if (Number.isFinite(samplerSample)) {
+        effective = samplerSample as number
+      } else {
+        const localEditSample = sampleGroundLocalEditHeightAtWorldFromRuntime(runtimeDefinition, worldX, worldZ)
+        if (Number.isFinite(localEditSample)) {
+          effective = localEditSample as number
+        } else {
+          const worldSample = terrainSampler?.sampleHeightAtWorld(worldX, worldZ)
+          effective = Number.isFinite(worldSample) ? worldSample as number : base
+        }
+      }
       values[offset] = effective
       heightMin = Math.min(heightMin, effective)
       heightMax = Math.max(heightMax, effective)
@@ -2441,89 +2298,16 @@ export function sampleGroundEffectiveHeightRegionFromSampler(
   }
 }
 
-/**
- * 已知某个顶点期望达到的“最终有效高度”，反推出 manualHeightMap 中应写入的手工层绝对高度。
- *
- * 由 resolveGroundEffectiveHeightAtVertex 的公式：
- * effective = planning + (manual - base)
- * 可推导出：
- * manual = base + (effective - planning)
- *
- * 这个函数用于雕刻、平滑、压低等编辑操作。
- * 编辑工具面对的是用户看到的最终地形高度，因此先在 effective 空间里算出目标值，
- * 再通过这里把目标值转换回 manual 层保存，避免直接破坏规划层数据。
- */
-export function resolveGroundManualHeightForEffectiveTarget(
-  definition: GroundRuntimeDynamicMesh,
-  row: number,
-  column: number,
-  effectiveHeight: number,
-): number {
-  const base = computeGroundBaseHeightAtVertex(definition, row, column)
-  const planning = getPlanningVertexHeight(definition, row, column)
-  // 把“最终想看到的高度”换算为 manual 层需要记录的绝对高度。
-  return base + (effectiveHeight - planning)
-}
-
-function setHeightOverrideValue(definition: GroundRuntimeDynamicMesh, map: GroundHeightMap, row: number, column: number, value: number): void {
-  const gridSize = resolveGroundWorkingGridSize(definition)
-  const heightIndex = getGroundVertexIndex(gridSize.columns, row, column)
-  const previousValue = map[heightIndex]
-  const hadOverride = typeof previousValue === 'number' && Number.isFinite(previousValue)
-  const baseHeight = computeGroundBaseHeightAtVertex(definition, row, column)
-  let rounded = Math.round(value * 100) / 100
-  let baseRounded = Math.round(baseHeight * 100) / 100
-  if (Object.is(rounded, -0)) rounded = 0
-  if (Object.is(baseRounded, -0)) baseRounded = 0
-  if (rounded === baseRounded) {
-    map[heightIndex] = GROUND_HEIGHT_UNSET_VALUE
-    if (hadOverride) {
-      adjustRuntimeGroundHeightOverrideCount(definition, map, -1)
-    }
-    return
-  }
-  map[heightIndex] = rounded
-  if (!hadOverride) {
-    adjustRuntimeGroundHeightOverrideCount(definition, map, 1)
-  }
-}
-
-export function setManualHeightOverrideValue(definition: GroundRuntimeDynamicMesh, map: GroundHeightMap, row: number, column: number, value: number): void {
-  setHeightOverrideValue(definition, map, row, column, value)
-}
-
-export function setPlanningHeightOverrideValue(definition: GroundRuntimeDynamicMesh, map: GroundHeightMap, row: number, column: number, value: number): void {
-  setHeightOverrideValue(definition, map, row, column, value)
-}
-
-function setManualHeightOverrideForEffectiveValue(
-  definition: GroundRuntimeDynamicMesh,
-  map: GroundHeightMap,
-  row: number,
-  column: number,
-  effectiveHeight: number,
-): void {
-  // 外部编辑逻辑通常基于最终效果高度进行运算，
-  // 这里统一把 effective 高度反解到 manual 层，再复用普通写入逻辑。
-  const manualHeight = resolveGroundManualHeightForEffectiveTarget(definition, row, column, effectiveHeight)
-  setManualHeightOverrideValue(definition, map, row, column, manualHeight)
-}
-
 function setGroundCoverageHeightOverrideForEffectiveValue(
   definition: GroundRuntimeDynamicMesh,
-  map: GroundHeightMap,
-  row: number,
-  column: number,
   x: number,
   z: number,
   effectiveHeight: number,
 ): void {
-  void map
   const localPlacement = shouldUseGroundLocalEditTiles(definition)
     ? resolveGroundLocalEditVertexPlacement(definition, x, z)
     : null
   if (!localPlacement) {
-    setManualHeightOverrideForEffectiveValue(definition, map, row, column, effectiveHeight)
     return
   }
 
@@ -2633,6 +2417,20 @@ function setGroundCoverageHeightOverrideForEffectiveValue(
       localEditSource,
     )
   }
+}
+
+export function setGroundEffectiveHeightAtWorld(
+  definition: GroundRuntimeDynamicMesh,
+  x: number,
+  z: number,
+  effectiveHeight: number,
+): void {
+  setGroundCoverageHeightOverrideForEffectiveValue(
+    definition,
+    x,
+    z,
+    effectiveHeight,
+  )
 }
 
 function sampleNeighborAverage(
@@ -2846,7 +2644,7 @@ function resolveGroundSculptSampleWindow(
 
 function accumulateGroundDeltaAtPoint(
   definition: GroundRuntimeDynamicMesh,
-  accumulator: Map<number, GroundHeightDeltaAccumulatorEntry>,
+  accumulator: Map<string, GroundHeightDeltaAccumulatorEntry>,
   x: number,
   z: number,
   delta: number,
@@ -2862,7 +2660,7 @@ function accumulateGroundDeltaAtPoint(
         return
       }
       const index = `${localPlacement.tileRow}:${localPlacement.tileColumn}:${localRow}:${localColumn}`
-      const entry = accumulator.get(index as unknown as number) ?? {
+      const entry = accumulator.get(index) ?? {
         mode: 'local' as const,
         delta: 0,
         weight: 0,
@@ -2875,7 +2673,7 @@ function accumulateGroundDeltaAtPoint(
       }
       entry.delta += delta * weight * sampleWeight
       entry.weight += weight * sampleWeight
-      accumulator.set(index as unknown as number, entry)
+      accumulator.set(index, entry)
     }
 
     write(localPlacement.row0, localPlacement.column0, (1 - localPlacement.tx) * (1 - localPlacement.tz))
@@ -2903,7 +2701,7 @@ function accumulateGroundDeltaAtPoint(
     if (weight <= 0) {
       return
     }
-    const index = getGroundVertexIndex(columns, row, column)
+    const index = `${row}:${column}`
     const entry = accumulator.get(index) ?? { mode: 'coarse' as const, delta: 0, weight: 0, row, column }
     entry.delta += delta * weight * sampleWeight
     entry.weight += weight * sampleWeight
@@ -2918,13 +2716,12 @@ function accumulateGroundDeltaAtPoint(
 
 function applyAccumulatedGroundDeltas(
   definition: GroundRuntimeDynamicMesh,
-  map: GroundHeightMap,
-  accumulator: Map<number, GroundHeightDeltaAccumulatorEntry>,
+  accumulator: Map<string, GroundHeightDeltaAccumulatorEntry>,
 ): boolean {
   let modified = false
-  const gridSize = resolveGroundWorkingGridSize(definition)
-  const columns = gridSize.columns
-  accumulator.forEach((entry, index) => {
+  const bounds = resolveGroundGridWorldBounds(definition)
+  const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1
+  accumulator.forEach((entry, key) => {
     if (!(entry.weight > 0) || !Number.isFinite(entry.delta)) {
       return
     }
@@ -2955,11 +2752,17 @@ function applyAccumulatedGroundDeltas(
       modified = true
       return
     }
-    const row = Math.floor(index / (columns + 1))
-    const column = index % (columns + 1)
+    const [rowPart, columnPart] = key.split(':')
+    const row = Number.parseInt(rowPart ?? '', 10)
+    const column = Number.parseInt(columnPart ?? '', 10)
+    if (!Number.isFinite(row) || !Number.isFinite(column)) {
+      return
+    }
+    const x = bounds.minX + column * cellSize
+    const z = bounds.minZ + row * cellSize
     const currentHeight = resolveGroundEffectiveHeightAtVertex(definition, row, column)
     const nextHeight = currentHeight + entry.delta / entry.weight
-    setManualHeightOverrideForEffectiveValue(definition, map, row, column, nextHeight)
+    setGroundCoverageHeightOverrideForEffectiveValue(definition, x, z, nextHeight)
     modified = true
   })
   return modified
@@ -2967,7 +2770,6 @@ function applyAccumulatedGroundDeltas(
 
 function applyCircularRaiseDepressSubsampled(
   definition: GroundRuntimeDynamicMesh,
-  map: GroundHeightMap,
   params: Pick<SculptParams, 'point' | 'radius' | 'strength' | 'operation'>,
 ): boolean {
   const { point, radius, strength, operation } = params
@@ -2989,7 +2791,7 @@ function applyCircularRaiseDepressSubsampled(
     maxZ: localZ + radius,
   })
   const direction = operation === 'depress' ? -1 : 1
-  const accumulator = new Map<number, GroundHeightDeltaAccumulatorEntry>()
+  const accumulator = new Map<string, GroundHeightDeltaAccumulatorEntry>()
   const sampleWeight = 1 / (Math.max(1, subdivisions) * Math.max(1, subdivisions))
 
   for (let row = window.minRow; row <= window.maxRow; row += 1) {
@@ -3011,12 +2813,11 @@ function applyCircularRaiseDepressSubsampled(
     }
   }
 
-  return applyAccumulatedGroundDeltas(definition, map, accumulator)
+  return applyAccumulatedGroundDeltas(definition, accumulator)
 }
 
 function applyPolygonRaiseDepressSubsampled(
   definition: GroundRuntimeDynamicMesh,
-  map: GroundHeightMap,
   polygonBounds: { minX: number; maxX: number; minZ: number; maxZ: number },
   normalizedPolygon: SculptPolygonPoint[],
   params: Pick<SculptParams, 'operation' | 'strength' | 'depth' | 'slope'>,
@@ -3034,7 +2835,7 @@ function applyPolygonRaiseDepressSubsampled(
   const direction = params.operation === 'depress' ? -1 : 1
   const effectiveDepth = Number.isFinite(params.depth) ? Math.max(0, params.depth ?? 0) : 0
   const effectiveSlope = Number.isFinite(params.slope) ? params.slope ?? 0.5 : 0.5
-  const accumulator = new Map<number, GroundHeightDeltaAccumulatorEntry>()
+  const accumulator = new Map<string, GroundHeightDeltaAccumulatorEntry>()
   const sampleWeight = 1 / (Math.max(1, subdivisions) * Math.max(1, subdivisions))
   const candidates: Array<{ x: number; z: number; boundaryDistance: number }> = []
   let maxBoundaryDistance = 0
@@ -3067,12 +2868,11 @@ function applyPolygonRaiseDepressSubsampled(
     accumulateGroundDeltaAtPoint(definition, accumulator, candidate.x, candidate.z, delta, sampleWeight)
   }
 
-  return applyAccumulatedGroundDeltas(definition, map, accumulator)
+  return applyAccumulatedGroundDeltas(definition, accumulator)
 }
 
 function applyCircularSurfaceSubsampled(
   definition: GroundRuntimeDynamicMesh,
-  map: GroundHeightMap,
   params: Pick<SculptParams, 'point' | 'radius' | 'strength' | 'operation' | 'targetHeight'>,
 ): boolean {
   const { point, radius, strength, operation, targetHeight } = params
@@ -3093,7 +2893,7 @@ function applyCircularSurfaceSubsampled(
     minZ: localZ - radius,
     maxZ: localZ + radius,
   })
-  const accumulator = new Map<number, GroundHeightDeltaAccumulatorEntry>()
+  const accumulator = new Map<string, GroundHeightDeltaAccumulatorEntry>()
   const sampleWeight = 1 / (Math.max(1, subdivisions) * Math.max(1, subdivisions))
 
   for (let row = window.minRow; row <= window.maxRow; row += 1) {
@@ -3168,12 +2968,11 @@ function applyCircularSurfaceSubsampled(
     }
   }
 
-  return applyAccumulatedGroundDeltas(definition, map, accumulator)
+  return applyAccumulatedGroundDeltas(definition, accumulator)
 }
 
 function applyPolygonSurfaceSubsampled(
   definition: GroundRuntimeDynamicMesh,
-  map: GroundHeightMap,
   polygonBounds: { minX: number; maxX: number; minZ: number; maxZ: number },
   normalizedPolygon: SculptPolygonPoint[],
   params: Pick<SculptParams, 'operation' | 'strength' | 'targetHeight'>,
@@ -3188,7 +2987,7 @@ function applyPolygonSurfaceSubsampled(
     ? Math.min(cellSize, Math.max(resolveGroundEditCellSize(definition), Number.EPSILON))
     : cellSize / subdivisions
   const window = resolveGroundSculptSampleWindow(sampleStep, polygonBounds)
-  const accumulator = new Map<number, GroundHeightDeltaAccumulatorEntry>()
+  const accumulator = new Map<string, GroundHeightDeltaAccumulatorEntry>()
   const sampleWeight = 1 / (Math.max(1, subdivisions) * Math.max(1, subdivisions))
 
   for (let row = window.minRow; row <= window.maxRow; row += 1) {
@@ -3220,7 +3019,7 @@ function applyPolygonSurfaceSubsampled(
     }
   }
 
-  return applyAccumulatedGroundDeltas(definition, map, accumulator)
+  return applyAccumulatedGroundDeltas(definition, accumulator)
 }
 
 function sanitizeGroundClippingLoop(loop: THREE.Vector2[]): THREE.Vector2[] {
@@ -3340,7 +3139,6 @@ function resolveGroundEffectiveHeightAtVertexWithTriangleContext(
     runtimeDefinition,
     row,
     column,
-    context.columns,
     context.bounds.minX,
     context.bounds.minZ,
     context.cellSize,
@@ -4070,10 +3868,10 @@ export function sampleGroundHeight(definition: GroundDynamicMesh, x: number, z: 
   const tx = clampInclusive(localColumnFloat - column0, 0, 1)
   const tz = clampInclusive(localRowFloat - row0, 0, 1)
 
-  const h00 = resolveGroundEffectiveHeightAtVertexWithContext(runtimeDefinition, row0, column0, columns, boundsMinX, boundsMinZ, cellSize, terrainSampler)
-  const h10 = resolveGroundEffectiveHeightAtVertexWithContext(runtimeDefinition, row0, column1, columns, boundsMinX, boundsMinZ, cellSize, terrainSampler)
-  const h01 = resolveGroundEffectiveHeightAtVertexWithContext(runtimeDefinition, row1, column0, columns, boundsMinX, boundsMinZ, cellSize, terrainSampler)
-  const h11 = resolveGroundEffectiveHeightAtVertexWithContext(runtimeDefinition, row1, column1, columns, boundsMinX, boundsMinZ, cellSize, terrainSampler)
+  const h00 = resolveGroundEffectiveHeightAtVertexWithContext(runtimeDefinition, row0, column0, boundsMinX, boundsMinZ, cellSize, terrainSampler)
+  const h10 = resolveGroundEffectiveHeightAtVertexWithContext(runtimeDefinition, row0, column1, boundsMinX, boundsMinZ, cellSize, terrainSampler)
+  const h01 = resolveGroundEffectiveHeightAtVertexWithContext(runtimeDefinition, row1, column0, boundsMinX, boundsMinZ, cellSize, terrainSampler)
+  const h11 = resolveGroundEffectiveHeightAtVertexWithContext(runtimeDefinition, row1, column1, boundsMinX, boundsMinZ, cellSize, terrainSampler)
 
   const hx0 = h00 + (h10 - h00) * tx
   const hx1 = h01 + (h11 - h01) * tx
@@ -4109,10 +3907,10 @@ export function sampleGroundHeightWithContext(
   const row1 = clampVertexIndex(row0 + 1, rows)
   const tx = clampInclusive(localColumnFloat - column0, 0, 1)
   const tz = clampInclusive(localRowFloat - row0, 0, 1)
-  const h00 = resolveGroundEffectiveHeightAtVertexWithContext(runtimeDefinition, row0, column0, columns, boundsMinX, boundsMinZ, cellSize, terrainSampler)
-  const h10 = resolveGroundEffectiveHeightAtVertexWithContext(runtimeDefinition, row0, column1, columns, boundsMinX, boundsMinZ, cellSize, terrainSampler)
-  const h01 = resolveGroundEffectiveHeightAtVertexWithContext(runtimeDefinition, row1, column0, columns, boundsMinX, boundsMinZ, cellSize, terrainSampler)
-  const h11 = resolveGroundEffectiveHeightAtVertexWithContext(runtimeDefinition, row1, column1, columns, boundsMinX, boundsMinZ, cellSize, terrainSampler)
+  const h00 = resolveGroundEffectiveHeightAtVertexWithContext(runtimeDefinition, row0, column0, boundsMinX, boundsMinZ, cellSize, terrainSampler)
+  const h10 = resolveGroundEffectiveHeightAtVertexWithContext(runtimeDefinition, row0, column1, boundsMinX, boundsMinZ, cellSize, terrainSampler)
+  const h01 = resolveGroundEffectiveHeightAtVertexWithContext(runtimeDefinition, row1, column0, boundsMinX, boundsMinZ, cellSize, terrainSampler)
+  const h11 = resolveGroundEffectiveHeightAtVertexWithContext(runtimeDefinition, row1, column1, boundsMinX, boundsMinZ, cellSize, terrainSampler)
   const hx0 = h00 + (h10 - h00) * tx
   const hx1 = h01 + (h11 - h01) * tx
   return hx0 + (hx1 - hx0) * tz
@@ -4165,7 +3963,7 @@ function sampleGroundHeightWithVertexCache(
     if (typeof cachedHeight === 'number' && Number.isFinite(cachedHeight)) {
       return cachedHeight
     }
-    const height = resolveGroundEffectiveHeightAtVertexWithContext(runtimeDefinition, row, column, columns, boundsMinX, boundsMinZ, cellSize, terrainSampler)
+    const height = resolveGroundEffectiveHeightAtVertexWithContext(runtimeDefinition, row, column, boundsMinX, boundsMinZ, cellSize, terrainSampler)
     vertexHeightCache.set(heightIndex, height)
     return height
   }
@@ -5637,8 +5435,6 @@ export function applyGroundGeneration(
   const normalized = normalizeGroundGenerationSettings(settings)
   definition.generation = normalized
   // Generation is evaluated on demand; keep explicit edits as sparse absolute overrides.
-  const gridSize = resolveGroundWorkingGridSize(definition)
-  definition.planningHeightMap = createGroundHeightMap(gridSize.rows, gridSize.columns)
   return normalized
 }
 
@@ -6068,28 +5864,25 @@ export function sculptGround(definition: GroundRuntimeDynamicMesh, params: Sculp
     : Math.ceil((localZ + radius - bounds.minZ) / cellSize)
 
   let modified = false
-  let heightMap = definition.manualHeightMap
 
   if (shape === 'polygon') {
     if (operation === 'raise' || operation === 'depress') {
-      const subsampled = applyPolygonRaiseDepressSubsampled(definition, heightMap, polygonBounds, normalizedPolygon, {
+      const subsampled = applyPolygonRaiseDepressSubsampled(definition, polygonBounds, normalizedPolygon, {
         operation,
         strength,
         depth,
         slope,
       })
       if (subsampled) {
-        definition.manualHeightMap = heightMap
         return true
       }
     }
 
-    if ((operation === 'smooth' || operation === 'flatten' || operation === 'flatten-zero') && applyPolygonSurfaceSubsampled(definition, heightMap, polygonBounds, normalizedPolygon, {
+    if ((operation === 'smooth' || operation === 'flatten' || operation === 'flatten-zero') && applyPolygonSurfaceSubsampled(definition, polygonBounds, normalizedPolygon, {
       operation,
       strength,
       targetHeight,
     })) {
-      definition.manualHeightMap = heightMap
       return true
     }
 
@@ -6154,34 +5947,29 @@ export function sculptGround(definition: GroundRuntimeDynamicMesh, params: Sculp
         }
       }
 
-      setGroundCoverageHeightOverrideForEffectiveValue(definition, heightMap, row, col, bounds.minX + col * cellSize, bounds.minZ + row * cellSize, nextHeight)
+      setGroundCoverageHeightOverrideForEffectiveValue(definition, bounds.minX + col * cellSize, bounds.minZ + row * cellSize, nextHeight)
       modified = true
     }
 
-    if (modified) {
-      definition.manualHeightMap = heightMap
-    }
     return modified
   }
 
-  if ((operation === 'raise' || operation === 'depress') && applyCircularRaiseDepressSubsampled(definition, heightMap, {
+  if ((operation === 'raise' || operation === 'depress') && applyCircularRaiseDepressSubsampled(definition, {
     point,
     radius,
     strength,
     operation,
   })) {
-    definition.manualHeightMap = heightMap
     return true
   }
 
-  if ((operation === 'smooth' || operation === 'flatten' || operation === 'flatten-zero') && applyCircularSurfaceSubsampled(definition, heightMap, {
+  if ((operation === 'smooth' || operation === 'flatten' || operation === 'flatten-zero') && applyCircularSurfaceSubsampled(definition, {
     point,
     radius,
     strength,
     operation,
     targetHeight,
   })) {
-    definition.manualHeightMap = heightMap
     return true
   }
 
@@ -6223,7 +6011,7 @@ export function sculptGround(definition: GroundRuntimeDynamicMesh, params: Sculp
         nextHeight = currentHeight + offset
       }
 
-      setGroundCoverageHeightOverrideForEffectiveValue(definition, heightMap, row, col, x, z, nextHeight)
+      setGroundCoverageHeightOverrideForEffectiveValue(definition, x, z, nextHeight)
       modified = true
     }
   }
@@ -6255,14 +6043,11 @@ export function sculptGround(definition: GroundRuntimeDynamicMesh, params: Sculp
           const currentHeight = resolveGroundEffectiveHeightAtVertex(definition, row, col)
           const average = sampleNeighborAverage(definition, row, col, rows, columns)
           const smoothedHeight = currentHeight + (average - currentHeight) * smoothingFactor
-          setGroundCoverageHeightOverrideForEffectiveValue(definition, heightMap, row, col, x, z, smoothedHeight)
+          setGroundCoverageHeightOverrideForEffectiveValue(definition, x, z, smoothedHeight)
           modified = true
         }
       }
     }
-  }
-  if (modified) {
-    definition.manualHeightMap = heightMap
   }
   return modified
 }

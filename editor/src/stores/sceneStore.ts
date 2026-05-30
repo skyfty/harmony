@@ -26,8 +26,6 @@ import {
   ENVIRONMENT_NODE_ID,
   MULTIUSER_NODE_ID,
   PROTAGONIST_NODE_ID,
-  GROUND_HEIGHT_UNSET_VALUE,
-  getGroundVertexIndex,
   createPrimitiveMesh,
   resolveGroundWorldBounds,
   resolveServerAssetDownloadUrl,
@@ -61,7 +59,6 @@ import type {
   CameraNodeProperties,
   CompiledGroundManifest,
   GroundDynamicMesh,
-  GroundHeightMap,
   GroundLocalEditTileMap,
   GroundGenerationSettings,
   GroundSettings,
@@ -87,6 +84,7 @@ import type {
   LandformDynamicMesh,
   GuideRouteDynamicMesh,
   RegionDynamicMesh,
+  TerrainAuthoringPatch,
 } from '@schema/core'
 import type { LandformBuildShape } from '@/types/landform-build-shape'
 import { normalizeNodeComponents } from './normalizeNodeComponentsUtils'
@@ -118,6 +116,13 @@ import type { SceneState } from '@/types/scene-state'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { PlanningSceneData } from '@/types/planning-scene-data'
 import { useProjectsStore } from '@/stores/projectsStore'
+import {
+  applyTerrainAuthoringPatch,
+  buildTerrainAuthoringPatch,
+  collectTerrainAuthoringChunkKeysFromTiles,
+  collectTerrainAuthoringTilesForChunkKeys,
+  mergeTerrainAuthoringLocalEditTiles,
+} from '@/utils/terrainAuthoring'
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import type { SceneViewportSettings, SceneViewportSnapMode } from '@/types/scene-viewport-settings'
 import type {
@@ -185,7 +190,7 @@ import { createBehaviorSequenceId } from '@schema/behaviors/definitions'
 import { findObjectByPath } from '@schema/modelAssetLoader'
 
 import { useAssetCacheStore } from './assetCacheStore'
-import { useGroundHeightmapStore, type GroundPlanningHeightRegion, type GroundRuntimeDynamicMesh } from './groundHeightmapStore'
+import { useGroundHeightmapStore, type GroundRuntimeDynamicMesh } from './groundHeightmapStore'
 import { attachGroundSplatRuntimeToNode, useGroundSplatStore } from './groundSplatStore'
 import { attachGroundScatterRuntimeToNode, useGroundScatterStore } from './groundScatterStore'
 import { useUiStore } from './uiStore'
@@ -1955,50 +1960,6 @@ function persistGroundHeightSidecarForNode(groundNode: SceneNode | null): boolea
   return true
 }
 
-function commitGroundHeightMapRuntimeEdit(
-  store: {
-    nodes: SceneNode[]
-    currentSceneId?: string | null
-    queueSceneNodePatch: (nodeId: string, fields: ScenePatchField[], options?: { bumpVersion?: boolean }) => boolean
-    bumpSceneNodePropertyVersion: () => void
-  },
-  nodeId: string,
-  definition: GroundDynamicMesh,
-  manualHeightMap: GroundHeightMap,
-  manualRegion: GroundPlanningHeightRegion | null = null,
-  dirtyBounds: WorldBoundsXZ | null = null,
-): boolean {
-  const target = findNodeById(store.nodes, nodeId)
-  if (!target || target.dynamicMesh?.type !== 'Ground' || !store.currentSceneId) {
-    return false
-  }
-  const runtimeDefinition = definition as GroundRuntimeDynamicMesh
-  const resolvedDirtyBounds = dirtyBounds ?? computeGroundDirtyBoundsXZ(target, runtimeDefinition, runtimeDefinition.manualHeightMap, manualHeightMap)
-  const currentRevision = normalizeGroundSurfaceRevision(target.dynamicMesh.surfaceRevision)
-  const nextRevision = currentRevision + 1
-  const targetRuntimeDefinition = target.dynamicMesh as GroundRuntimeDynamicMesh
-  targetRuntimeDefinition.surfaceRevision = nextRevision
-  targetRuntimeDefinition.runtimeHydratedHeightState = 'dirty'
-  targetRuntimeDefinition.runtimeDisableOptimizedChunks = true
-  definition.surfaceRevision = nextRevision
-  runtimeDefinition.runtimeHydratedHeightState = 'dirty'
-  runtimeDefinition.runtimeDisableOptimizedChunks = true
-  if (manualRegion) {
-    useGroundHeightmapStore().replaceManualHeightRegion(nodeId, definition, manualRegion)
-  } else {
-    useGroundHeightmapStore().replaceManualHeightMap(nodeId, definition, manualHeightMap)
-  }
-  useGroundHeightmapStore().markOptimizedMeshDirtyChunkKeys(
-    nodeId,
-    definition,
-    resolveGroundDirtyChunkKeysFromRegion(definition, manualRegion),
-  )
-  refreshLandformNodesForGroundChange(store, nodeId, resolvedDirtyBounds)
-  finalizeDynamicMeshRuntimePatch(store, nodeId, 'Ground')
-  persistGroundHeightSidecarForNode(target)
-  return true
-}
-
 function commitGroundLocalEditTilesRuntimeEdit(
   store: {
     nodes: SceneNode[]
@@ -2021,15 +1982,19 @@ function commitGroundLocalEditTilesRuntimeEdit(
   const resolvedDirtyBounds = dirtyBounds ?? computeGroundDirtyBoundsXZFromRegion(target, runtimeDefinition, affectedRegion)
   const currentRevision = normalizeGroundSurfaceRevision(target.dynamicMesh.surfaceRevision)
   const nextRevision = currentRevision + 1
+  const mergedLocalEditTiles = mergeTerrainAuthoringLocalEditTiles(
+    targetRuntimeDefinition.localEditTiles ?? runtimeDefinition.localEditTiles ?? null,
+    localEditTiles,
+  )
   target.dynamicMesh.surfaceRevision = nextRevision
   targetRuntimeDefinition.runtimeHydratedHeightState = 'dirty'
   targetRuntimeDefinition.runtimeDisableOptimizedChunks = true
-  targetRuntimeDefinition.localEditTiles = localEditTiles
+  targetRuntimeDefinition.localEditTiles = mergedLocalEditTiles
   definition.surfaceRevision = nextRevision
   runtimeDefinition.runtimeHydratedHeightState = 'dirty'
   runtimeDefinition.runtimeDisableOptimizedChunks = true
-  runtimeDefinition.localEditTiles = localEditTiles
-  useGroundHeightmapStore().replaceLocalEditTiles(nodeId, definition, localEditTiles)
+  runtimeDefinition.localEditTiles = mergedLocalEditTiles
+  useGroundHeightmapStore().replaceLocalEditTiles(nodeId, definition, mergedLocalEditTiles)
   useGroundHeightmapStore().markOptimizedMeshDirtyChunkKeys(
     nodeId,
     definition,
@@ -2050,30 +2015,34 @@ function commitGroundSculptRuntimeEdit(
   },
   nodeId: string,
   definition: GroundDynamicMesh,
-  localEditTiles: GroundLocalEditTileMap | null,
-  affectedRegion: { minRow: number; maxRow: number; minColumn: number; maxColumn: number } | null = null,
-  touchedChunkKeys: string[] | null = null,
-  dirtyBounds: WorldBoundsXZ | null = null,
+  patch: TerrainAuthoringPatch,
 ): { committed: boolean; dirtyChunkKeys: string[] } {
   const committed = commitGroundLocalEditTilesRuntimeEdit(
     store,
     nodeId,
     definition,
-    localEditTiles,
-    affectedRegion,
-    dirtyBounds,
+    patch.localEditTiles,
+    patch.affectedRegion ?? null,
+    patch.worldBounds
+      ? {
+          minX: patch.worldBounds.minX,
+          maxX: patch.worldBounds.maxX,
+          minZ: patch.worldBounds.minZ,
+          maxZ: patch.worldBounds.maxZ,
+        }
+      : null,
   )
   if (!committed) {
     return { committed: false, dirtyChunkKeys: [] }
   }
-  const exactDirtyChunkKeys = Array.isArray(touchedChunkKeys) && touchedChunkKeys.length
-    ? Array.from(new Set(touchedChunkKeys.filter((key) => typeof key === 'string' && key.length > 0)))
-    : affectedRegion
-      ? collectGroundAffectedChunkKeysFromRegion(definition, affectedRegion, {
-      chunkCells: resolveGroundRuntimeChunkCells(definition),
-      padding: 0,
-      })
-      : []
+  const exactDirtyChunkKeys = Array.isArray(patch.affectedChunkKeys) && patch.affectedChunkKeys.length
+    ? Array.from(new Set(patch.affectedChunkKeys.filter((key) => typeof key === 'string' && key.length > 0)))
+    : patch.affectedRegion
+      ? collectGroundAffectedChunkKeysFromRegion(definition, patch.affectedRegion, {
+          chunkCells: resolveGroundRuntimeChunkCells(definition),
+          padding: 0,
+        })
+      : collectTerrainAuthoringChunkKeysFromTiles(definition, patch.localEditTiles)
   return {
     committed: true,
     dirtyChunkKeys: expandGroundChunkKeysWithNeighbors(exactDirtyChunkKeys, 1),
@@ -2773,69 +2742,6 @@ function boundsIntersectXZ(a: WorldBoundsXZ | null, b: WorldBoundsXZ | null): bo
     && a.maxZ >= b.minZ
 }
 
-function computeGroundDirtyBoundsXZ(
-  groundNode: SceneNode,
-  definition: GroundRuntimeDynamicMesh,
-  previousHeightMap: GroundHeightMap,
-  nextHeightMap: GroundHeightMap,
-): WorldBoundsXZ | null {
-  const total = Math.min(previousHeightMap.length, nextHeightMap.length)
-  if (total <= 0) {
-    return null
-  }
-
-  let minRow = Number.POSITIVE_INFINITY
-  let maxRow = Number.NEGATIVE_INFINITY
-  let minColumn = Number.POSITIVE_INFINITY
-  let maxColumn = Number.NEGATIVE_INFINITY
-  const gridSize = resolveGroundWorkingGridSize(definition)
-  const columns = gridSize.columns
-  const rows = gridSize.rows
-
-  for (let index = 0; index < total; index += 1) {
-    const previous = previousHeightMap[index] ?? 0
-    const next = nextHeightMap[index] ?? 0
-    if (Math.abs(previous - next) <= 1e-9) {
-      continue
-    }
-    const row = Math.floor(index / (columns + 1))
-    const column = index % (columns + 1)
-    minRow = Math.min(minRow, row)
-    maxRow = Math.max(maxRow, row)
-    minColumn = Math.min(minColumn, column)
-    maxColumn = Math.max(maxColumn, column)
-  }
-
-  if (!Number.isFinite(minRow) || !Number.isFinite(maxRow) || !Number.isFinite(minColumn) || !Number.isFinite(maxColumn)) {
-    return null
-  }
-
-  const expandedMinRow = Math.max(0, Math.floor(minRow) - 1)
-  const expandedMaxRow = Math.min(rows, Math.ceil(maxRow) + 1)
-  const expandedMinColumn = Math.max(0, Math.floor(minColumn) - 1)
-  const expandedMaxColumn = Math.min(columns, Math.ceil(maxColumn) + 1)
-
-  const groundBounds = resolveGroundWorldBounds(definition)
-  const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1
-  const localMinX = groundBounds.minX + expandedMinColumn * cellSize
-  const localMaxX = groundBounds.minX + expandedMaxColumn * cellSize
-  const localMinZ = groundBounds.minZ + expandedMinRow * cellSize
-  const localMaxZ = groundBounds.minZ + expandedMaxRow * cellSize
-
-  const position = groundNode.position ?? { x: 0, y: 0, z: 0 }
-  const scale = groundNode.scale ?? { x: 1, y: 1, z: 1 }
-  const worldX0 = position.x + localMinX * scale.x
-  const worldX1 = position.x + localMaxX * scale.x
-  const worldZ0 = position.z + localMinZ * scale.z
-  const worldZ1 = position.z + localMaxZ * scale.z
-  return {
-    minX: Math.min(worldX0, worldX1),
-    maxX: Math.max(worldX0, worldX1),
-    minZ: Math.min(worldZ0, worldZ1),
-    maxZ: Math.max(worldZ0, worldZ1),
-  }
-}
-
 function computeGroundDirtyBoundsXZFromRegion(
   groundNode: SceneNode,
   definition: GroundRuntimeDynamicMesh,
@@ -2910,7 +2816,7 @@ function computeGroundDirtyBoundsFromRegionXZ(
 
 function resolveGroundDirtyChunkKeysFromRegion(
   definition: GroundDynamicMesh,
-  region: GroundPlanningHeightRegion | { minRow: number; maxRow: number; minColumn: number; maxColumn: number } | null,
+  region: { minRow: number; maxRow: number; minColumn: number; maxColumn: number } | null,
 ): string[] | null {
   if (!region) {
     return null
@@ -2921,36 +2827,6 @@ function resolveGroundDirtyChunkKeysFromRegion(
     padding: 1,
   })
   return chunkKeys.length ? chunkKeys : null
-}
-
-function buildGroundManualRegionFromHeightMap(
-  definition: GroundRuntimeDynamicMesh,
-  bounds: GroundRegionBounds,
-): GroundPlanningHeightRegion | null {
-  const normalized = groundUtils.normalizeGroundBounds(definition, bounds)
-  const vertexRows = normalized.maxRow - normalized.minRow + 1
-  const vertexColumns = normalized.maxColumn - normalized.minColumn + 1
-  if (!(vertexRows > 0) || !(vertexColumns > 0)) {
-    return null
-  }
-  const gridSize = resolveGroundWorkingGridSize(definition)
-  const values = new Float64Array(vertexRows * vertexColumns)
-  for (let row = normalized.minRow; row <= normalized.maxRow; row += 1) {
-    const rowOffset = (row - normalized.minRow) * vertexColumns
-    for (let column = normalized.minColumn; column <= normalized.maxColumn; column += 1) {
-      const source = Number(definition.manualHeightMap[getGroundVertexIndex(gridSize.columns, row, column)])
-      values[rowOffset + (column - normalized.minColumn)] = Number.isFinite(source) ? source : GROUND_HEIGHT_UNSET_VALUE
-    }
-  }
-  return {
-    startRow: normalized.minRow,
-    endRow: normalized.maxRow,
-    startColumn: normalized.minColumn,
-    endColumn: normalized.maxColumn,
-    vertexRows,
-    vertexColumns,
-    values,
-  }
 }
 
 function rebuildLandformNodeForTerrain(store: {
@@ -9450,16 +9326,22 @@ export const useSceneStore = defineStore('scene', {
       if (!result.changed) {
         return false
       }
-      const manualRegion = buildGroundManualRegionFromHeightMap(currentDefinition, bounds)
-
-      return commitGroundHeightMapRuntimeEdit(
-        this,
-        groundNode.id,
+      const affectedRegion = groundUtils.normalizeGroundBounds(currentDefinition, bounds)
+      const dirtyChunkKeys = resolveGroundDirtyChunkKeysFromRegion(currentDefinition, affectedRegion)
+      const authoringTiles = collectTerrainAuthoringTilesForChunkKeys(
         currentDefinition,
-        result.definition.manualHeightMap,
-        manualRegion,
-        dirtyBounds,
+        currentDefinition.localEditTiles ?? null,
+        dirtyChunkKeys,
       )
+      const patch = buildTerrainAuthoringPatch({
+        definition: currentDefinition,
+        source: 'manual',
+        localEditTiles: authoringTiles,
+        affectedChunkKeys: dirtyChunkKeys ?? [],
+        worldBounds: dirtyBounds,
+        affectedRegion,
+      })
+      return this.commitTerrainAuthoringEdit(groundNode.id, currentDefinition, patch)
     },
     raiseGroundRegion(bounds: GroundRegionBounds, amount = 1) {
       const delta = Number.isFinite(amount) ? amount : 1
@@ -10257,22 +10139,6 @@ export const useSceneStore = defineStore('scene', {
       }
       commitSceneSnapshot(this)
     },
-    commitGroundHeightMapEdit(
-      nodeId: string,
-      definition: GroundDynamicMesh,
-      manualHeightMap: GroundHeightMap,
-    ) {
-      const committed = commitGroundHeightMapRuntimeEdit(this, nodeId, definition, manualHeightMap)
-      if (committed) {
-        const dirtyChunkKeys = resolveGroundDirtyChunkKeysFromRegion(definition, null)
-        if (dirtyChunkKeys?.length) {
-          void this.rebuildCurrentSceneCompiledGroundChunks(nodeId, dirtyChunkKeys).catch((error) => {
-            console.warn('[SceneStore] Failed to rebuild compiled ground after heightmap edit', error)
-          })
-        }
-      }
-      return committed
-    },
     commitGroundLocalEditTilesEdit(
       nodeId: string,
       definition: GroundDynamicMesh,
@@ -10290,6 +10156,29 @@ export const useSceneStore = defineStore('scene', {
       }
       return committed
     },
+    commitTerrainAuthoringEdit(
+      nodeId: string,
+      definition: GroundDynamicMesh,
+      patch: TerrainAuthoringPatch,
+    ) {
+      const mergedPatch = {
+        ...patch,
+        localEditTiles: applyTerrainAuthoringPatch(definition.localEditTiles ?? null, patch),
+      } satisfies TerrainAuthoringPatch
+      const committed = commitGroundSculptRuntimeEdit(this, nodeId, definition, mergedPatch)
+      if (committed.committed && committed.dirtyChunkKeys.length) {
+        void this.rebuildTerrainDerivedArtifacts(nodeId, committed.dirtyChunkKeys).catch((error) => {
+          console.warn('[SceneStore] Failed to rebuild compiled ground after terrain authoring edit', error)
+        })
+      }
+      return committed.committed
+    },
+    async rebuildTerrainDerivedArtifacts(
+      nodeId: string,
+      dirtyChunkKeys: string[],
+    ) {
+      return this.rebuildCurrentSceneCompiledGroundChunks(nodeId, dirtyChunkKeys)
+    },
     commitGroundSculptEdit(
       nodeId: string,
       definition: GroundDynamicMesh,
@@ -10300,17 +10189,24 @@ export const useSceneStore = defineStore('scene', {
         dirtyBounds?: WorldBoundsXZ | null
       },
     ) {
-      const committed = commitGroundSculptRuntimeEdit(
-        this,
-        nodeId,
+      const patch = buildTerrainAuthoringPatch({
         definition,
-        payload.localEditTiles,
-        payload.affectedRegion,
-        payload.touchedChunkKeys,
-        payload.dirtyBounds ?? null,
-      )
+        source: 'manual',
+        localEditTiles: payload.localEditTiles,
+        affectedChunkKeys: payload.touchedChunkKeys,
+        worldBounds: payload.dirtyBounds
+          ? {
+              minX: payload.dirtyBounds.minX,
+              maxX: payload.dirtyBounds.maxX,
+              minZ: payload.dirtyBounds.minZ,
+              maxZ: payload.dirtyBounds.maxZ,
+            }
+          : null,
+        affectedRegion: payload.affectedRegion,
+      })
+      const committed = commitGroundSculptRuntimeEdit(this, nodeId, definition, patch)
       if (committed.committed && committed.dirtyChunkKeys.length) {
-        void this.rebuildCurrentSceneCompiledGroundChunks(nodeId, committed.dirtyChunkKeys).catch((error) => {
+        void this.rebuildTerrainDerivedArtifacts(nodeId, committed.dirtyChunkKeys).catch((error) => {
           console.warn('[SceneStore] Failed to rebuild compiled ground after sculpt edit', error)
         })
       }

@@ -2,9 +2,7 @@ import type { GroundHeightMap, GroundLocalEditTileData, GroundLocalEditTileMap, 
 import {
   GROUND_HEIGHT_UNSET_VALUE,
   GROUND_TERRAIN_CHUNK_SIZE_METERS,
-  createGroundHeightMap,
   formatGroundLocalEditTileKey,
-  getGroundVertexIndex,
   resolveInfiniteGroundGridOriginMeters,
   resolveGroundEditTileResolution,
   resolveGroundWorldBounds,
@@ -14,14 +12,6 @@ import {
 import type { PlanningTerrainDemData } from '@/types/planning-scene-data'
 import { loadPlanningDemBlobByHash } from '@/utils/planningDemStorage'
 import { isPlanningDemHeightmapImageSource, parsePlanningDemBlob } from '@/utils/planningDemImport'
-
-export interface PlanningDemGroundConversionResult {
-  planningHeightMap: GroundHeightMap
-  localEditTiles: GroundLocalEditTileMap | null
-  planningMetadata: GroundPlanningMetadata
-  normalMapDataUrl?: string | null
-  normalMapName?: string | null
-}
 
 export interface PlanningDemRegionConversionResult {
   region: PlanningDemHeightRegion
@@ -1430,44 +1420,3 @@ export function resolvePlanningDemSourceTileLayout(options: {
   }
 }
 
-export async function buildPlanningDemGroundData(options: {
-  definition: GroundRuntimeDynamicMesh
-  terrainDem: PlanningTerrainDemData
-  applyOrthophoto?: boolean
-}): Promise<PlanningDemGroundConversionResult> {
-  const { definition, terrainDem } = options
-  const gridSize = resolveGroundWorkingGridSize(definition)
-  const rows = Math.max(1, Math.trunc(gridSize.rows))
-  const columns = Math.max(1, Math.trunc(gridSize.columns))
-  const heightMap = createGroundHeightMap(rows, columns)
-  const prepared = await resolvePlanningDemPreparedSource({ definition, terrainDem })
-  const fullRegionResult = await buildPlanningDemRegionFromPreparedSource({
-    definition,
-    prepared,
-    startRow: 0,
-    endRow: rows,
-    startColumn: 0,
-    endColumn: columns,
-  })
-  const fullRegion = fullRegionResult.region
-  for (let row = fullRegion.startRow; row <= fullRegion.endRow; row += 1) {
-    const sourceOffset = (row - fullRegion.startRow) * fullRegion.vertexColumns
-    for (let column = fullRegion.startColumn; column <= fullRegion.endColumn; column += 1) {
-      heightMap[getGroundVertexIndex(columns, row, column)] = fullRegion.values[sourceOffset + (column - fullRegion.startColumn)] ?? 0
-    }
-  }
-  const localEditTiles = buildPlanningDemLocalEditTilesForRegion({
-    definition,
-    source: prepared.rasterSource,
-    startRow: 0,
-    endRow: rows,
-    startColumn: 0,
-    endColumn: columns,
-  })
-
-  return {
-    planningHeightMap: heightMap,
-    localEditTiles,
-    planningMetadata: fullRegionResult.planningMetadata,
-  }
-}

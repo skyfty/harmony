@@ -1,6 +1,5 @@
 import {
   formatGroundLocalEditTileKey,
-  getGroundVertexCount,
   type GroundDynamicMesh,
   type GroundLocalEditTileMap,
   type GroundLocalEditTileSource,
@@ -11,7 +10,7 @@ import {
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 
 export const GROUND_HEIGHTMAP_SIDECAR_FILENAME = 'ground-heightmaps.bin'
-export const GROUND_HEIGHTMAP_SIDECAR_VERSION = 5
+export const GROUND_HEIGHTMAP_SIDECAR_VERSION = 6
 
 const GROUND_HEIGHTMAP_SIDECAR_MAGIC = 0x48474d32
 const GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES = 40
@@ -35,8 +34,6 @@ type GroundHeightSidecarHeader = {
 
 type GroundHeightSidecarLayout = {
   metadataByteLength: number
-  manualOffset: number
-  planningOffset: number
   localEditTilesByteLength: number
   localEditTilesOffset: number
   totalByteLength: number
@@ -48,13 +45,11 @@ function alignToFloat64Boundary(byteLength: number): number {
 
 function resolveGroundHeightSidecarLayout(
   metadataByteLength: number,
-  vertexCount: number,
   localEditTilesByteLength = 0,
 ): GroundHeightSidecarLayout {
   return resolveGroundHeightSidecarLayoutFromHeader(
     GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES,
     metadataByteLength,
-    vertexCount,
     localEditTilesByteLength,
   )
 }
@@ -62,16 +57,11 @@ function resolveGroundHeightSidecarLayout(
 function resolveGroundHeightSidecarLayoutFromHeader(
   headerByteLength: number,
   metadataByteLength: number,
-  vertexCount: number,
   localEditTilesByteLength = 0,
 ): GroundHeightSidecarLayout {
-  const manualOffset = alignToFloat64Boundary(headerByteLength + metadataByteLength)
-  const planningOffset = manualOffset + vertexCount * FLOAT64_ALIGNMENT_BYTES
-  const localEditTilesOffset = planningOffset + vertexCount * FLOAT64_ALIGNMENT_BYTES
+  const localEditTilesOffset = alignToFloat64Boundary(headerByteLength + metadataByteLength)
   return {
     metadataByteLength,
-    manualOffset,
-    planningOffset,
     localEditTilesByteLength,
     localEditTilesOffset,
     totalByteLength: localEditTilesOffset + localEditTilesByteLength,
@@ -83,31 +73,14 @@ export type GroundHeightSidecarSampler = {
   columns: number
   planningMetadata?: GroundPlanningMetadata | null
   localEditTiles?: GroundLocalEditTileMap | null
-  getManualHeight: (row: number, column: number) => number
-  getPlanningHeight: (row: number, column: number) => number
-  sampleHeightRegion?: (
-    kind: 'manual' | 'planning',
-    minRowInput: number,
-    maxRowInput: number,
-    minColumnInput: number,
-    maxColumnInput: number,
-  ) => {
-    minRow: number
-    maxRow: number
-    minColumn: number
-    maxColumn: number
-    stride: number
-    values: ArrayLike<number>
-  }
+  sampleHeightAtWorld?: (x: number, z: number) => number | null
 }
 
 export function getGroundHeightSidecarByteLength(definition: GroundDynamicMesh): number {
   const metadataPayload = encodePlanningMetadataPayload(definition.planningMetadata ?? null)
   const localEditTilesPayload = encodeLocalEditTilesPayload(definition.localEditTiles ?? null)
-  const gridSize = resolveGroundWorkingGridSize(definition)
   return resolveGroundHeightSidecarLayout(
     metadataPayload.byteLength,
-    getGroundVertexCount(gridSize.rows, gridSize.columns),
     localEditTilesPayload.byteLength,
   ).totalByteLength
 }
@@ -697,38 +670,12 @@ function writeGroundHeightSidecarValues(
   localEditTilesPayload: Uint8Array,
   sampler: GroundHeightSidecarSampler,
 ): void {
-  const vertexCount = getGroundVertexCount(sampler.rows, sampler.columns)
-  const layout = resolveGroundHeightSidecarLayout(metadataPayload.byteLength, vertexCount, localEditTilesPayload.byteLength)
+  const layout = resolveGroundHeightSidecarLayout(metadataPayload.byteLength, localEditTilesPayload.byteLength)
   const view = new DataView(buffer, 0, GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES)
   writeSidecarHeader(view, sampler.planningMetadata ?? null, localEditTilesPayload.byteLength)
   new Uint8Array(buffer, GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES, metadataPayload.byteLength).set(metadataPayload)
-  const manual = new Float64Array(buffer, layout.manualOffset, vertexCount)
-  const planning = new Float64Array(buffer, layout.planningOffset, vertexCount)
   if (localEditTilesPayload.byteLength > 0) {
     new Uint8Array(buffer, layout.localEditTilesOffset, localEditTilesPayload.byteLength).set(localEditTilesPayload)
-  }
-  const sampleHeightRegion = typeof sampler.sampleHeightRegion === 'function'
-    ? sampler.sampleHeightRegion.bind(sampler)
-    : null
-  const manualRegion = sampleHeightRegion
-    ? sampleHeightRegion('manual', 0, sampler.rows, 0, sampler.columns)
-    : null
-  const planningRegion = sampleHeightRegion
-    ? sampleHeightRegion('planning', 0, sampler.rows, 0, sampler.columns)
-    : null
-
-  for (let row = 0; row <= sampler.rows; row += 1) {
-    for (let column = 0; column <= sampler.columns; column += 1) {
-      const index = row * (sampler.columns + 1) + column
-      const manualHeight = manualRegion
-        ? Number(manualRegion.values[(row - manualRegion.minRow) * manualRegion.stride + (column - manualRegion.minColumn)])
-        : Number(sampler.getManualHeight(row, column))
-      const planningHeight = planningRegion
-        ? Number(planningRegion.values[(row - planningRegion.minRow) * planningRegion.stride + (column - planningRegion.minColumn)])
-        : Number(sampler.getPlanningHeight(row, column))
-      manual[index] = Number.isFinite(manualHeight) ? manualHeight : Number.NaN
-      planning[index] = Number.isFinite(planningHeight) ? planningHeight : Number.NaN
-    }
   }
 }
 
@@ -739,8 +686,6 @@ export function serializeGroundHeightSidecar(definition: GroundRuntimeDynamicMes
     columns: gridSize.columns,
     planningMetadata: definition.planningMetadata ?? null,
     localEditTiles: definition.localEditTiles ?? null,
-    getManualHeight: (row, column) => definition.manualHeightMap[row * (gridSize.columns + 1) + column] ?? Number.NaN,
-    getPlanningHeight: (row, column) => definition.planningHeightMap[row * (gridSize.columns + 1) + column] ?? Number.NaN,
   })
 }
 
@@ -750,7 +695,6 @@ export function serializeGroundHeightSidecarFromSampler(sampler: GroundHeightSid
   const buffer = new ArrayBuffer(
     resolveGroundHeightSidecarLayout(
       metadataPayload.byteLength,
-      getGroundVertexCount(sampler.rows, sampler.columns),
       localEditTilesPayload.byteLength,
     ).totalByteLength,
   )
@@ -773,8 +717,6 @@ export function stripGroundHeightMapsFromSceneDocument(document: StoredSceneDocu
       return
     }
     const groundDynamicMesh = dynamicMesh as GroundDynamicMesh & Record<string, unknown>
-    delete groundDynamicMesh.manualHeightMap
-    delete groundDynamicMesh.planningHeightMap
     delete groundDynamicMesh.planningMetadata
     delete groundDynamicMesh.surfaceRevision
     delete groundDynamicMesh.runtimeHydratedHeightState
@@ -788,8 +730,6 @@ export function createGroundRuntimeMeshFromSidecar(
   definition: GroundDynamicMesh,
   sidecar: ArrayBuffer | null | undefined,
 ): GroundRuntimeDynamicMesh {
-  const gridSize = resolveGroundWorkingGridSize(definition)
-  const vertexCount = getGroundVertexCount(gridSize.rows, gridSize.columns)
   if (!sidecar) {
     throw new Error(`Missing ${GROUND_HEIGHTMAP_SIDECAR_FILENAME}`)
   }
@@ -801,9 +741,6 @@ export function createGroundRuntimeMeshFromSidecar(
   if (buffer.byteLength < headerByteLength) {
     throw new Error(`Invalid ${GROUND_HEIGHTMAP_SIDECAR_FILENAME} header`)
   }
-  if (buffer.byteLength < headerByteLength + vertexCount * Float64Array.BYTES_PER_ELEMENT * 2) {
-    throw new Error(`Invalid ${GROUND_HEIGHTMAP_SIDECAR_FILENAME} size: received ${buffer.byteLength}`)
-  }
   const headerView = new DataView(buffer, 0, GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES)
   readSidecarHeader(headerView)
   const metadataByteLength = headerView.getUint32(32, true)
@@ -814,7 +751,6 @@ export function createGroundRuntimeMeshFromSidecar(
   const layout = resolveGroundHeightSidecarLayoutFromHeader(
     headerByteLength,
     metadataByteLength,
-    vertexCount,
     localEditTilesByteLength,
   )
   const expectedByteLength = layout.totalByteLength
@@ -830,15 +766,11 @@ export function createGroundRuntimeMeshFromSidecar(
   }
 
   const header = readSidecarHeader(new DataView(buffer, 0, headerByteLength + metadataByteLength))
-  const manualHeightMap = new Float64Array(buffer, layout.manualOffset, vertexCount)
-  const planningHeightMap = new Float64Array(buffer, layout.planningOffset, vertexCount)
   const localEditTiles = layout.localEditTilesByteLength > 0
     ? decodeLocalEditTilesPayload(new Uint8Array(buffer, layout.localEditTilesOffset, layout.localEditTilesByteLength))
     : null
   return {
     ...definition,
-    manualHeightMap,
-    planningHeightMap,
     planningMetadata: header.planningMetadata,
     localEditTiles,
     surfaceRevision: Number.isFinite(definition.surfaceRevision) ? Math.max(0, Math.trunc(definition.surfaceRevision as number)) : 0,

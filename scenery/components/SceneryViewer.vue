@@ -12602,8 +12602,8 @@ function parseSceneDocument(payload: unknown): SceneJsonExportDocument {
 }
 
 const GROUND_HEIGHTMAP_SIDECAR_MAGIC = 0x48474d32;
-const GROUND_HEIGHTMAP_SIDECAR_VERSION = 2;
-const GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES = 32;
+const GROUND_HEIGHTMAP_SIDECAR_VERSION = 6;
+const GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES = 40;
 const EMPTY_GROUND_BOUND = -1;
 
 function findFirstGroundDynamicMesh(document: SceneJsonExportDocument): GroundDynamicMesh | null {
@@ -12645,15 +12645,6 @@ function hydrateGroundSidecarFromPackage(
       console.warn(`场景 ${sceneEntry.sceneId} 缺少 ground 高度 sidecar 文件，已回退为场景内置地形数据`);
     } else {
       const sidecarBuffer = sidecarBytes.buffer.slice(sidecarBytes.byteOffset, sidecarBytes.byteOffset + sidecarBytes.byteLength);
-      const { rows, columns } = resolveGroundWorkingGridSize(definition);
-      const vertexCount = getGroundVertexCount(rows, columns);
-      const expectedByteLength = GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES + vertexCount * Float64Array.BYTES_PER_ELEMENT * 2;
-      if (sidecarBuffer.byteLength !== expectedByteLength) {
-        throw new Error(
-          `场景 ${sceneEntry.sceneId} 的 ground sidecar 大小异常：期望 ${expectedByteLength}，实际 ${sidecarBuffer.byteLength}`,
-        );
-      }
-
       const headerView = new DataView(sidecarBuffer, 0, GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES);
       const magic = headerView.getUint32(0, true);
       const version = headerView.getUint32(4, true);
@@ -12666,15 +12657,18 @@ function hydrateGroundSidecarFromPackage(
       const minColumn = headerView.getInt32(16, true);
       const maxColumn = headerView.getInt32(20, true);
       const generatedAt = headerView.getFloat64(24, true);
+      const metadataByteLength = headerView.getUint32(32, true);
+      const localEditTilesByteLength = headerView.getUint32(36, true);
+      const localEditTilesOffset = Math.ceil((GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES + metadataByteLength) / Float64Array.BYTES_PER_ELEMENT) * Float64Array.BYTES_PER_ELEMENT;
+      const expectedByteLength = localEditTilesOffset + localEditTilesByteLength;
+      if (sidecarBuffer.byteLength !== expectedByteLength) {
+        throw new Error(
+          `场景 ${sceneEntry.sceneId} 的 ground sidecar 大小异常：期望 ${expectedByteLength}，实际 ${sidecarBuffer.byteLength}`,
+        );
+      }
       const hasBounds = minRow !== EMPTY_GROUND_BOUND && maxRow !== EMPTY_GROUND_BOUND && minColumn !== EMPTY_GROUND_BOUND && maxColumn !== EMPTY_GROUND_BOUND;
       const hasGeneratedAt = Number.isFinite(generatedAt);
 
-      definition.manualHeightMap = new Float64Array(sidecarBuffer, GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES, vertexCount);
-      definition.planningHeightMap = new Float64Array(
-        sidecarBuffer,
-        GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES + vertexCount * Float64Array.BYTES_PER_ELEMENT,
-        vertexCount,
-      );
       definition.planningMetadata = hasBounds || hasGeneratedAt
         ? {
             contourBounds: hasBounds ? { minRow, maxRow, minColumn, maxColumn } : null,

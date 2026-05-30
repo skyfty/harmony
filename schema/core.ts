@@ -1699,6 +1699,28 @@ export interface GroundLocalEditTileData {
 
 export type GroundLocalEditTileMap = Record<string, GroundLocalEditTileData>
 
+export type TerrainAuthoringSource = 'manual' | 'dem'
+
+export interface TerrainAuthoringPatch {
+  source: TerrainAuthoringSource
+  localEditTiles: GroundLocalEditTileMap
+  affectedChunkKeys: string[]
+  worldBounds?: GroundWorldBounds | null
+  affectedRegion?: {
+    minRow: number
+    maxRow: number
+    minColumn: number
+    maxColumn: number
+  } | null
+  updatedAt?: number
+}
+
+export interface TerrainAuthoringBuildResult {
+  patch: TerrainAuthoringPatch
+  dirtyChunkKeys: string[]
+  localEditTiles: GroundLocalEditTileMap
+}
+
 export function formatGroundLocalEditTileKey(tileRow: number, tileColumn: number): string {
   return `${Math.trunc(tileRow)}:${Math.trunc(tileColumn)}`
 }
@@ -2219,23 +2241,7 @@ export type GroundTerrainHeightSampler = {
 }
 
 export type GroundRuntimeDynamicMesh = GroundDynamicMesh & {
-  manualHeightMap: GroundHeightMap
-  planningHeightMap: GroundHeightMap
   localEditTiles?: GroundLocalEditTileMap | null
-  runtimeSampleHeightRegion?: (
-    kind: 'manual' | 'planning',
-    minRowInput: number,
-    maxRowInput: number,
-    minColumnInput: number,
-    maxColumnInput: number,
-  ) => {
-    minRow: number
-    maxRow: number
-    minColumn: number
-    maxColumn: number
-    stride: number
-    values: ArrayLike<number>
-  }
   runtimeLocalEditTileArrayCache?: GroundLocalEditTileData[]
   runtimeLocalEditTileLookupCache?: Map<string, GroundLocalEditTileData>
   runtimeLocalEditTileCoverageIndexCache?: Map<string, GroundLocalEditTileData[]>
@@ -2252,12 +2258,6 @@ export type GroundRuntimeDynamicMesh = GroundDynamicMesh & {
   /** Runtime-only guard to bypass optimized streamed chunk geometry when sidecar/runtime overrides are active. */
   runtimeDisableOptimizedChunks?: boolean
   runtimeLoadedTileKeys?: string[]
-  runtimeManualHeightOverrideCount?: number
-  runtimePlanningHeightOverrideCount?: number
-  runtimeManualHeightOverrideSourceRef?: GroundHeightMap
-  runtimePlanningHeightOverrideSourceRef?: GroundHeightMap
-  runtimeManualHeightOverrideSourceLength?: number
-  runtimePlanningHeightOverrideSourceLength?: number
 }
 
 function clampPositiveGroundMetric(value: number | null | undefined, fallback: number): number {

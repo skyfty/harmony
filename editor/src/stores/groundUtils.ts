@@ -4,18 +4,17 @@
 
 import {
   GROUND_TERRAIN_CHUNK_SIZE_METERS,
-  getGroundVertexIndex,
-  GROUND_HEIGHT_UNSET_VALUE,
   type GroundDynamicMesh,
   type GroundGenerationSettings,
   type GroundSettings,
   type SceneNode,
   normalizeGroundWorldBounds,
+  resolveGroundWorldBounds,
   resolveGroundWorkingGridSize,
 } from '@schema/core'
 import type { SceneMaterialProps, SceneNodeMaterial, SceneMaterialType } from '@/types/material'
 import type { Vector3 } from 'three'
-import { computeGroundBaseHeightAtVertex } from '@schema/groundGeneration'
+import { resolveGroundEffectiveHeightAtVertex, setGroundEffectiveHeightAtWorld } from '@schema/groundMesh'
 
 const DEFAULT_GROUND_CELL_SIZE = 1
 const DEFAULT_GROUND_EXTENT = 100
@@ -85,7 +84,7 @@ function manualDeepCloneLocal(source: unknown): unknown {
 
 type GroundDynamicMeshLike = GroundDynamicMesh & { terrainScatter?: unknown }
 type GroundDynamicMeshResult = GroundDynamicMesh & { terrainScatter?: unknown }
-type GroundRuntimeDynamicMesh = GroundDynamicMesh & { manualHeightMap: Float64Array; planningHeightMap: Float64Array }
+type GroundRuntimeDynamicMesh = GroundDynamicMesh
 
 function buildPrimaryGroundMaterialProps(
   createMaterialProps: GroundDeps['createMaterialProps'],
@@ -236,7 +235,7 @@ export function resolveGroundCreationProfile(
   const columns = Math.max(1, Math.ceil(DEFAULT_GROUND_EXTENT / cellSize))
   const rows = Math.max(1, Math.ceil(DEFAULT_GROUND_EXTENT / cellSize))
   const estimatedVertexCount = (columns + 1) * (rows + 1)
-  const estimatedHeightBytes = estimatedVertexCount * Float64Array.BYTES_PER_ELEMENT * 2
+  const estimatedHeightBytes = estimatedVertexCount * Float64Array.BYTES_PER_ELEMENT
   const estimatedTileCount = Math.max(1, Math.ceil(columns / GROUND_CREATION_AXIS_TARGET) * Math.ceil(rows / GROUND_CREATION_AXIS_TARGET))
   const editTileSizeMeters = Math.max(cellSize, Math.min(Math.max(DEFAULT_GROUND_EXTENT, DEFAULT_GROUND_EXTENT), GROUND_CREATION_EDIT_TILE_WORLD_TARGET))
   const editTileResolution = Math.max(
@@ -355,72 +354,23 @@ export function applyGroundRegionTransform(
   bounds: GroundRegionBounds,
   transform: (current: number, row: number, column: number) => number,
 ): { definition: GroundRuntimeDynamicMesh; changed: boolean } {
-  const gridSize = resolveGroundWorkingGridSize(definition)
-  const getBaseHeight = (row: number, column: number): number => computeGroundBaseHeightAtVertex(definition, row, column)
-  const getManualHeight = (row: number, column: number): number => {
-    const raw = definition.manualHeightMap[getGroundVertexIndex(gridSize.columns, row, column)]
-    if (typeof raw === 'number' && Number.isFinite(raw)) {
-      return raw
-    }
-    return getBaseHeight(row, column)
-  }
-  const getPlanningHeight = (row: number, column: number): number => {
-    const raw = definition.planningHeightMap[getGroundVertexIndex(gridSize.columns, row, column)]
-    if (typeof raw === 'number' && Number.isFinite(raw)) {
-      return raw
-    }
-    return getBaseHeight(row, column)
-  }
-  const resolveEffectiveHeight = (row: number, column: number): number => {
-    const base = getBaseHeight(row, column)
-    const manual = getManualHeight(row, column)
-    const planning = getPlanningHeight(row, column)
-    return planning + (manual - base)
-  }
-  const resolveManualForEffective = (row: number, column: number, effective: number): number => {
-    const base = getBaseHeight(row, column)
-    const planning = getPlanningHeight(row, column)
-    return base + (effective - planning)
-  }
-  const roundHeight = (value: number): number => {
-    const rounded = Math.round(value * 100) / 100
-    return Object.is(rounded, -0) ? 0 : rounded
-  }
-
   const normalized = normalizeGroundBounds(definition, bounds)
-  const nextHeightMap = definition.manualHeightMap
+  const worldBounds = resolveGroundWorldBounds(definition)
+  const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6
+    ? definition.cellSize
+    : 1
   let changed = false
   for (let row = normalized.minRow; row <= normalized.maxRow; row += 1) {
     for (let column = normalized.minColumn; column <= normalized.maxColumn; column += 1) {
-      const heightIndex = getGroundVertexIndex(gridSize.columns, row, column)
-      const previousStored = nextHeightMap[heightIndex] ?? Number.NaN
-      const currentEffective = resolveEffectiveHeight(row, column)
+      const currentEffective = resolveGroundEffectiveHeightAtVertex(definition, row, column)
       const nextEffective = transform(currentEffective, row, column)
       if (!Number.isFinite(nextEffective)) {
         continue
       }
-
-      const nextManual = resolveManualForEffective(row, column, nextEffective)
-      const roundedManual = roundHeight(nextManual)
-      const roundedBase = roundHeight(getBaseHeight(row, column))
-
-      if (roundedManual === roundedBase) {
-        nextHeightMap[heightIndex] = GROUND_HEIGHT_UNSET_VALUE
-      } else {
-        nextHeightMap[heightIndex] = roundedManual
-      }
-
-      const nextStored = nextHeightMap[heightIndex]
-      const previousFinite = Number.isFinite(previousStored)
-      const nextFinite = Number.isFinite(nextStored)
-      if (!previousFinite && !nextFinite) {
-        continue
-      }
-      if (!previousFinite || !nextFinite) {
-        changed = true
-        continue
-      }
-      if (Math.abs(nextStored - previousStored) > HEIGHT_EPSILON) {
+      if (Math.abs(nextEffective - currentEffective) > HEIGHT_EPSILON) {
+        const worldX = worldBounds.minX + column * cellSize
+        const worldZ = worldBounds.minZ + row * cellSize
+        setGroundEffectiveHeightAtWorld(definition, worldX, worldZ, nextEffective)
         changed = true
       }
     }

@@ -88,7 +88,7 @@ function cloneGroundFlatChunkDefinitionForWorker(definition: GroundRuntimeDynami
     if (typeof value === 'function') {
       return
     }
-    if (key === 'runtimeTerrainHeightSampler' || key === 'runtimeSampleHeightRegion' || key === 'localEditTiles') {
+    if (key === 'runtimeTerrainHeightSampler' || key === 'localEditTiles') {
       return
     }
     if (key.startsWith('runtime') && key !== 'runtimeHydratedHeightState' && key !== 'runtimeDisableOptimizedChunks' && key !== 'runtimeLoadedTileKeys') {

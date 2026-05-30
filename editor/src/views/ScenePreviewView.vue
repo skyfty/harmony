@@ -2237,8 +2237,14 @@ function hasEmbeddedGroundRuntimeHeightmaps(definition: GroundDynamicMesh | null
 	if (!definition || definition.type !== 'Ground') {
 		return false
 	}
-	const runtime = definition as GroundDynamicMesh & { manualHeightMap?: unknown; planningHeightMap?: unknown }
-	return runtime.manualHeightMap instanceof Float64Array && runtime.planningHeightMap instanceof Float64Array
+	const runtime = definition as GroundDynamicMesh & {
+		localEditTiles?: unknown
+		planningMetadata?: { demSource?: unknown } | null
+	}
+	if (runtime.localEditTiles && typeof runtime.localEditTiles === 'object' && Object.keys(runtime.localEditTiles as Record<string, unknown>).length > 0) {
+		return true
+	}
+	return Boolean(runtime.planningMetadata?.demSource)
 }
 
 async function resolvePreviewGroundHeightSidecar(

@@ -228,7 +228,7 @@ function cloneCompiledGroundWorkerValue(value: unknown): unknown {
   if (typeof value === 'object') {
     const result: Record<string, unknown> = {}
     Object.entries(value as Record<string, unknown>).forEach(([key, entry]) => {
-      if (key === 'runtimeTerrainHeightSampler' || key === 'runtimeSampleHeightRegion') {
+      if (key === 'runtimeTerrainHeightSampler') {
         return
       }
       const clonedEntry = cloneCompiledGroundWorkerValue(entry)

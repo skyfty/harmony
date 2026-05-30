@@ -280,7 +280,7 @@ function buildGroundRegionSampleGrid(node: SceneNode, mesh: GroundDynamicMesh): 
   const columns = gridSize.columns
   const { scaleY } = resolveNodeScaleVector(node.scale)
   const sample = sampleGroundEffectiveHeightRegion(
-    mesh as GroundDynamicMesh & { manualHeightMap: Float64Array; planningHeightMap: Float64Array },
+    mesh,
     0,
     rows,
     0,
