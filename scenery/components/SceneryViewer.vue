@@ -450,6 +450,7 @@ import ResourceCache from '@harmony/schema/ResourceCache';
 import { AssetCache, AssetLoader, configureAssetDownloadHostMirrors, type AssetCacheEntry } from '@harmony/schema/assetCache';
 import { ASSET_DOWNLOAD_HOST_MIRRORS } from '@harmony/schema/assetDownloadMirrors';
 import { isGroundDynamicMesh } from '@harmony/schema/groundHeightfield';
+import { resolveDocumentGroundNode as resolveSharedDocumentGroundNode } from '@harmony/schema/groundNode';
 import { syncGroundCollisionRuntimeLoadedTileKeys } from '@harmony/schema/groundCollisionRuntimeState';
 import { clearGroundCollisionRuntimeHost, syncGroundCollisionRuntimeHost } from '@harmony/schema/groundCollisionRuntimeHost';
 import { createGroundCollisionRuntimeBridgeDeps } from '@harmony/schema/groundCollisionRuntimeBridge';
@@ -1475,6 +1476,24 @@ let skyCubeZipFaceUrlCleanup: (() => void) | null = null;
 let backgroundLoadToken = 0;
 let pendingEnvironmentSettings: EnvironmentSettings | null = null;
 let activeEnvironmentSettings = cloneEnvironmentSettings(DEFAULT_ENVIRONMENT_SETTINGS);
+type AppliedSceneryFogSnapshot = {
+  mode: EnvironmentSettings['fogMode'];
+  color: string;
+  cameraFar: number;
+  fogNear: number;
+  fogFar: number;
+  fogDensity: number;
+};
+let appliedSceneryFogSnapshot: AppliedSceneryFogSnapshot | null = null;
+const sceneryFogColorScratch = new THREE.Color();
+const sceneryFogCameraWorldScratch = new THREE.Vector3();
+type CameraFrameSnapshot = {
+  nowMs: number;
+  position: THREE.Vector3;
+  quaternion: THREE.Quaternion;
+};
+const cameraFrameSnapshotPosition = new THREE.Vector3();
+const cameraFrameSnapshotQuaternion = new THREE.Quaternion();
 let renderContext: RenderContext | null = null;
 let currentDocument: SceneJsonExportDocument | null = null;
 const pendingRuntimePrefabSpawnRequests: RuntimePrefabSpawnRequest[] = [];
@@ -1868,29 +1887,57 @@ const sceneCsmCameraPosScratch = new THREE.Vector3();
 const sceneCsmCameraQuatScratch = new THREE.Quaternion();
 let sceneCsmLastUpdateAtMs = 0;
 let sceneCsmForceNextUpdate = true;
+const OVERLAY_SYNC_MOVE_THRESHOLD_M = isWeChatMiniProgram ? 0.12 : 0.06;
+const OVERLAY_SYNC_ROT_THRESHOLD_DEG = isWeChatMiniProgram ? 0.45 : 0.2;
+const OVERLAY_SYNC_MAX_STALE_MS = isWeChatMiniProgram ? 140 : 90;
+const OVERLAY_SYNC_MIN_INTERVAL_MS = isWeChatMiniProgram ? 48 : 33;
+const OVERLAY_SYNC_ROT_THRESHOLD_RAD = (OVERLAY_SYNC_ROT_THRESHOLD_DEG * Math.PI) / 180;
+const overlaySyncLastCameraPos = new THREE.Vector3();
+const overlaySyncLastCameraQuat = new THREE.Quaternion();
+const overlaySyncCameraPosScratch = new THREE.Vector3();
+const overlaySyncCameraQuatScratch = new THREE.Quaternion();
+let overlaySyncLastUpdateAtMs = 0;
+let overlaySyncForceNextUpdate = true;
 
 function markTerrainScatterUpdateDirty(): void {
   terrainScatterForceNextUpdate = true;
 }
 
-function shouldRunTerrainScatterUpdate(camera: THREE.Camera, nowMs: number): boolean {
-  if (!camera) {
+function markOverlayRuntimeDirty(): void {
+  overlaySyncForceNextUpdate = true;
+}
+
+function refreshCameraFrameSnapshot(camera: THREE.Camera, nowMs: number): CameraFrameSnapshot {
+  camera.updateMatrixWorld(true);
+  camera.getWorldPosition(cameraFrameSnapshotPosition);
+  camera.getWorldQuaternion(cameraFrameSnapshotQuaternion);
+  return {
+    nowMs,
+    position: cameraFrameSnapshotPosition,
+    quaternion: cameraFrameSnapshotQuaternion,
+  };
+}
+
+function shouldRunTerrainScatterUpdate(snapshot: CameraFrameSnapshot | null): boolean {
+  if (!snapshot) {
     return true;
   }
-  camera.updateMatrixWorld(true);
-  camera.getWorldPosition(terrainScatterCameraPosScratch);
-  camera.getWorldQuaternion(terrainScatterCameraQuatScratch);
+  terrainScatterCameraPosScratch.copy(snapshot.position);
+  terrainScatterCameraQuatScratch.copy(snapshot.quaternion);
 
   if (terrainScatterForceNextUpdate) {
     terrainScatterForceNextUpdate = false;
-    terrainScatterLastUpdateAtMs = nowMs;
+    terrainScatterLastUpdateAtMs = snapshot.nowMs;
     terrainScatterLastCameraPos.copy(terrainScatterCameraPosScratch);
     terrainScatterLastCameraQuat.copy(terrainScatterCameraQuatScratch);
     return true;
   }
 
-  if (TERRAIN_SCATTER_MAX_STALE_MS > 0 && nowMs - terrainScatterLastUpdateAtMs >= TERRAIN_SCATTER_MAX_STALE_MS) {
-    terrainScatterLastUpdateAtMs = nowMs;
+  if (
+    TERRAIN_SCATTER_MAX_STALE_MS > 0
+    && snapshot.nowMs - terrainScatterLastUpdateAtMs >= TERRAIN_SCATTER_MAX_STALE_MS
+  ) {
+    terrainScatterLastUpdateAtMs = snapshot.nowMs;
     terrainScatterLastCameraPos.copy(terrainScatterCameraPosScratch);
     terrainScatterLastCameraQuat.copy(terrainScatterCameraQuatScratch);
     return true;
@@ -1898,7 +1945,7 @@ function shouldRunTerrainScatterUpdate(camera: THREE.Camera, nowMs: number): boo
 
   const moveThresholdSq = TERRAIN_SCATTER_MOVE_THRESHOLD_M * TERRAIN_SCATTER_MOVE_THRESHOLD_M;
   if (moveThresholdSq > 0 && terrainScatterCameraPosScratch.distanceToSquared(terrainScatterLastCameraPos) >= moveThresholdSq) {
-    terrainScatterLastUpdateAtMs = nowMs;
+    terrainScatterLastUpdateAtMs = snapshot.nowMs;
     terrainScatterLastCameraPos.copy(terrainScatterCameraPosScratch);
     terrainScatterLastCameraQuat.copy(terrainScatterCameraQuatScratch);
     return true;
@@ -1908,7 +1955,7 @@ function shouldRunTerrainScatterUpdate(camera: THREE.Camera, nowMs: number): boo
     const dot = Math.min(1, Math.abs(terrainScatterLastCameraQuat.dot(terrainScatterCameraQuatScratch)));
     const angle = 2 * Math.acos(dot);
     if (Number.isFinite(angle) && angle >= TERRAIN_SCATTER_ROT_THRESHOLD_RAD) {
-      terrainScatterLastUpdateAtMs = nowMs;
+      terrainScatterLastUpdateAtMs = snapshot.nowMs;
       terrainScatterLastCameraPos.copy(terrainScatterCameraPosScratch);
       terrainScatterLastCameraQuat.copy(terrainScatterCameraQuatScratch);
       return true;
@@ -1918,17 +1965,16 @@ function shouldRunTerrainScatterUpdate(camera: THREE.Camera, nowMs: number): boo
   return false;
 }
 
-function shouldRunCompiledGroundTileSync(camera: THREE.Camera, nowMs: number): boolean {
-  if (!camera) {
+function shouldRunCompiledGroundTileSync(snapshot: CameraFrameSnapshot | null): boolean {
+  if (!snapshot) {
     return true;
   }
-  camera.updateMatrixWorld(true);
-  camera.getWorldPosition(compiledGroundCameraPosScratch);
-  camera.getWorldQuaternion(compiledGroundCameraQuatScratch);
+  compiledGroundCameraPosScratch.copy(snapshot.position);
+  compiledGroundCameraQuatScratch.copy(snapshot.quaternion);
 
   if (compiledGroundForceNextUpdate) {
     compiledGroundForceNextUpdate = false;
-    compiledGroundLastUpdateAtMs = nowMs;
+    compiledGroundLastUpdateAtMs = snapshot.nowMs;
     compiledGroundLastCameraPos.copy(compiledGroundCameraPosScratch);
     compiledGroundLastCameraQuat.copy(compiledGroundCameraQuatScratch);
     return true;
@@ -1947,31 +1993,34 @@ function shouldRunCompiledGroundTileSync(camera: THREE.Camera, nowMs: number): b
   })();
   const shouldUpdateForMotion = movedEnough || rotatedEnough;
 
-  if (shouldUpdateForMotion && nowMs - compiledGroundLastUpdateAtMs < COMPILED_GROUND_MIN_INTERVAL_MS) {
+  if (shouldUpdateForMotion && snapshot.nowMs - compiledGroundLastUpdateAtMs < COMPILED_GROUND_MIN_INTERVAL_MS) {
     return false;
   }
 
-  if (!shouldUpdateForMotion && COMPILED_GROUND_MAX_STALE_MS > 0 && nowMs - compiledGroundLastUpdateAtMs < COMPILED_GROUND_MAX_STALE_MS) {
+  if (
+    !shouldUpdateForMotion
+    && COMPILED_GROUND_MAX_STALE_MS > 0
+    && snapshot.nowMs - compiledGroundLastUpdateAtMs < COMPILED_GROUND_MAX_STALE_MS
+  ) {
     return false;
   }
 
-  compiledGroundLastUpdateAtMs = nowMs;
+  compiledGroundLastUpdateAtMs = snapshot.nowMs;
   compiledGroundLastCameraPos.copy(compiledGroundCameraPosScratch);
   compiledGroundLastCameraQuat.copy(compiledGroundCameraQuatScratch);
   return true;
 }
 
-function shouldRunSceneCsmShadowUpdate(camera: THREE.Camera, nowMs: number): boolean {
-  if (!camera) {
+function shouldRunSceneCsmShadowUpdate(snapshot: CameraFrameSnapshot | null): boolean {
+  if (!snapshot) {
     return true;
   }
-  camera.updateMatrixWorld(true);
-  camera.getWorldPosition(sceneCsmCameraPosScratch);
-  camera.getWorldQuaternion(sceneCsmCameraQuatScratch);
+  sceneCsmCameraPosScratch.copy(snapshot.position);
+  sceneCsmCameraQuatScratch.copy(snapshot.quaternion);
 
   if (sceneCsmForceNextUpdate) {
     sceneCsmForceNextUpdate = false;
-    sceneCsmLastUpdateAtMs = nowMs;
+    sceneCsmLastUpdateAtMs = snapshot.nowMs;
     sceneCsmLastCameraPos.copy(sceneCsmCameraPosScratch);
     sceneCsmLastCameraQuat.copy(sceneCsmCameraQuatScratch);
     return true;
@@ -1990,17 +2039,67 @@ function shouldRunSceneCsmShadowUpdate(camera: THREE.Camera, nowMs: number): boo
   })();
   const shouldUpdateForMotion = movedEnough || rotatedEnough;
 
-  if (shouldUpdateForMotion && nowMs - sceneCsmLastUpdateAtMs < SCENE_CSM_MIN_INTERVAL_MS) {
+  if (shouldUpdateForMotion && snapshot.nowMs - sceneCsmLastUpdateAtMs < SCENE_CSM_MIN_INTERVAL_MS) {
     return false;
   }
 
-  if (!shouldUpdateForMotion && SCENE_CSM_MAX_STALE_MS > 0 && nowMs - sceneCsmLastUpdateAtMs < SCENE_CSM_MAX_STALE_MS) {
+  if (
+    !shouldUpdateForMotion
+    && SCENE_CSM_MAX_STALE_MS > 0
+    && snapshot.nowMs - sceneCsmLastUpdateAtMs < SCENE_CSM_MAX_STALE_MS
+  ) {
     return false;
   }
 
-  sceneCsmLastUpdateAtMs = nowMs;
+  sceneCsmLastUpdateAtMs = snapshot.nowMs;
   sceneCsmLastCameraPos.copy(sceneCsmCameraPosScratch);
   sceneCsmLastCameraQuat.copy(sceneCsmCameraQuatScratch);
+  return true;
+}
+
+function shouldRunOverlaySync(snapshot: CameraFrameSnapshot | null): boolean {
+  if (!snapshot) {
+    return true;
+  }
+  overlaySyncCameraPosScratch.copy(snapshot.position);
+  overlaySyncCameraQuatScratch.copy(snapshot.quaternion);
+
+  if (overlaySyncForceNextUpdate) {
+    overlaySyncForceNextUpdate = false;
+    overlaySyncLastUpdateAtMs = snapshot.nowMs;
+    overlaySyncLastCameraPos.copy(overlaySyncCameraPosScratch);
+    overlaySyncLastCameraQuat.copy(overlaySyncCameraQuatScratch);
+    return true;
+  }
+
+  const moveThresholdSq = OVERLAY_SYNC_MOVE_THRESHOLD_M * OVERLAY_SYNC_MOVE_THRESHOLD_M;
+  const movedEnough = moveThresholdSq > 0
+    && overlaySyncCameraPosScratch.distanceToSquared(overlaySyncLastCameraPos) >= moveThresholdSq;
+  const rotatedEnough = (() => {
+    if (OVERLAY_SYNC_ROT_THRESHOLD_RAD <= 0) {
+      return false;
+    }
+    const dot = Math.min(1, Math.abs(overlaySyncLastCameraQuat.dot(overlaySyncCameraQuatScratch)));
+    const angle = 2 * Math.acos(dot);
+    return Number.isFinite(angle) && angle >= OVERLAY_SYNC_ROT_THRESHOLD_RAD;
+  })();
+  const shouldUpdateForMotion = movedEnough || rotatedEnough;
+
+  if (shouldUpdateForMotion && snapshot.nowMs - overlaySyncLastUpdateAtMs < OVERLAY_SYNC_MIN_INTERVAL_MS) {
+    return false;
+  }
+
+  if (
+    !shouldUpdateForMotion
+    && OVERLAY_SYNC_MAX_STALE_MS > 0
+    && snapshot.nowMs - overlaySyncLastUpdateAtMs < OVERLAY_SYNC_MAX_STALE_MS
+  ) {
+    return false;
+  }
+
+  overlaySyncLastUpdateAtMs = snapshot.nowMs;
+  overlaySyncLastCameraPos.copy(overlaySyncCameraPosScratch);
+  overlaySyncLastCameraQuat.copy(overlaySyncCameraQuatScratch);
   return true;
 }
 
@@ -2036,14 +2135,17 @@ const SCENERY_SIGNBOARD_BILLBOARD_STYLE: SignboardBillboardStyle = {
   punchBadgeShadowColor: 'rgba(83, 126, 173, 0.12)',
   distanceTextAccentColor: '#c88c12',
 }
-const punchBadgeOverlayEntries = ref<Array<{
+type PunchBadgeOverlayEntry = {
   id: string;
   xPercent: number;
   yPercent: number;
   scale: number;
   opacity: number;
   referenceKind: 'camera' | 'vehicle';
-}>>([]);
+};
+const punchBadgeOverlayEntries = ref<PunchBadgeOverlayEntry[]>([]);
+const nextPunchBadgeEntriesScratch: PunchBadgeOverlayEntry[] = [];
+const activePunchBadgeNodeIdsScratch = new Set<string>();
 const punchedNodeIds = ref<Set<string>>(new Set());
 const punchTotalCount = ref(0);
 const punchSceneRevision = ref(0);
@@ -2057,6 +2159,7 @@ const behaviorBubbleAnchorScratch = new THREE.Vector3();
 const behaviorBubbleCameraScratch = new THREE.Vector3();
 const OVERLAY_HORIZONTAL_DISTANCE_Y_EPSILON = 1.5;
 const browserStoredPunchedNodeIds = ref<string[]>([]);
+const previewFrameCameraWorldPosition = { x: 0, y: 0, z: 0 };
 
 const normalizedInitialPunchedNodeIds = computed(() => {
   const next = new Set<string>();
@@ -2084,6 +2187,7 @@ function applyMergedPunchedNodeIds(): void {
     ...normalizedInitialPunchedNodeIds.value,
     ...browserStoredPunchedNodeIds.value,
   ]);
+  markOverlayRuntimeDirty();
 }
 
 function syncStoredPunchedNodeIdsForScene(preferredSceneId?: string | null): void {
@@ -2122,6 +2226,28 @@ watch(normalizedInitialPunchedNodeIds, () => {
 function resetPunchOverlaySmoothing(): void {
   punchBadgePlacementSmoothingStates.clear();
   punchBadgeOverlayEntries.value = [];
+  markOverlayRuntimeDirty();
+}
+
+function arePunchBadgeEntriesEqual(nextEntries: PunchBadgeOverlayEntry[], currentEntries: PunchBadgeOverlayEntry[]): boolean {
+  if (nextEntries.length !== currentEntries.length) {
+    return false;
+  }
+  for (let index = 0; index < nextEntries.length; index += 1) {
+    const nextEntry = nextEntries[index];
+    const currentEntry = currentEntries[index];
+    if (
+      nextEntry.id !== currentEntry.id
+      || nextEntry.referenceKind !== currentEntry.referenceKind
+      || Math.abs(nextEntry.xPercent - currentEntry.xPercent) > 1e-4
+      || Math.abs(nextEntry.yPercent - currentEntry.yPercent) > 1e-4
+      || Math.abs(nextEntry.scale - currentEntry.scale) > 1e-4
+      || Math.abs(nextEntry.opacity - currentEntry.opacity) > 1e-4
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
 let physicsBridge: PhysicsBridge | null = null;
@@ -2152,6 +2278,9 @@ type PhysicsBridgeBodyFrameState = {
   quaternion: THREE.Quaternion;
   motionState: number;
 };
+type ViewerRigidbodyInstance = RigidbodyInstance & {
+  bridgeSyncDirty?: boolean;
+};
 const physicsBridgeFrameBodiesByNodeId = new Map<string, PhysicsBridgeBodyFrameState>();
 const physicsBridgeSyncPositionHelper = new THREE.Vector3();
 const physicsBridgeSyncQuaternionHelper = new THREE.Quaternion();
@@ -2162,7 +2291,12 @@ const physicsBridgeBodySyncPositionHelper = new THREE.Vector3();
 const physicsBridgeBodySyncQuaternionHelper = new THREE.Quaternion();
 const physicsEnvironmentEnabled = ref(true);
 
-const rigidbodyInstances = new Map<string, RigidbodyInstance>();
+const rigidbodyInstances = new Map<string, ViewerRigidbodyInstance>();
+const physicsBridgeDirtyBodyNodeIds = new Set<string>();
+const physicsBridgeBodyDirtyRevisionByNodeId = new Map<string, number>();
+const physicsBridgePendingBodySyncRevisionByNodeId = new Map<string, number>();
+const PHYSICS_BRIDGE_FULL_BODY_SYNC_INTERVAL_MS = 250;
+let physicsBridgeLastFullBodySyncAtMs = 0;
 let protagonistNodeId: string | null = null;
 
 const vehicleInstances = new Map<string, VehicleInstanceWithWheels>();
@@ -2760,6 +2894,7 @@ const vehicleSpeedDisplayMps = ref(0);
 const vehicleSpeedKmh = computed(() => Math.round(vehicleSpeedDisplayMps.value * 3.6));
 let vehicleSpeedDisplayLastCommitAtMs = 0;
 let vehicleSpeedDisplayLowSpeedSinceAtMs: number | null = null;
+const VEHICLE_HEADING_UPDATE_EPSILON_DEGREES = 0.25;
 
 function getVehicleSpeedDisplayNowMs(): number {
   if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
@@ -2803,6 +2938,28 @@ function commitVehicleSpeedDisplay(speedMps: number, nowMs: number): void {
 }
 
 const vehicleHeadingDegrees = ref(0);
+
+function normalizeHeadingDegrees(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return ((value % 360) + 360) % 360;
+}
+
+function isHeadingCloseDegrees(current: number, next: number, epsilon = VEHICLE_HEADING_UPDATE_EPSILON_DEGREES): boolean {
+  const normalizedCurrent = normalizeHeadingDegrees(current);
+  const normalizedNext = normalizeHeadingDegrees(next);
+  const delta = Math.abs(normalizedCurrent - normalizedNext);
+  return Math.min(delta, 360 - delta) <= epsilon;
+}
+
+function commitVehicleHeadingDegrees(nextHeading: number): void {
+  const normalizedHeading = normalizeHeadingDegrees(nextHeading);
+  if (isHeadingCloseDegrees(vehicleHeadingDegrees.value, normalizedHeading)) {
+    return;
+  }
+  vehicleHeadingDegrees.value = normalizedHeading;
+}
 const vehicleCompassStyle = computed(() => ({
   '--vehicle-heading': `${vehicleHeadingDegrees.value}deg`,
 }));
@@ -3862,7 +4019,7 @@ async function resolveAssetUrlFromCache(assetId: string): Promise<ResolvedAssetU
 function readCompiledGroundManifestFromDocument(document: SceneJsonExportDocument | null | undefined): Parameters<
   typeof syncCompiledGroundRenderTiles
 >[0]['manifest'] | null {
-  const groundNode = document ? findGroundNode(document.nodes) : null;
+  const groundNode = resolveDocumentGroundNode(document);
   if (!groundNode || !isGroundDynamicMesh(groundNode.dynamicMesh)) {
     return null;
   }
@@ -4345,6 +4502,77 @@ async function collectRuntimePrefabPreloadContext(
     meshAssetIds: normalizeAssetIdList(meshAssetIds),
     warmAssetIds: normalizeAssetIdList(warmAssetIds),
   };
+}
+
+function isCurrentInitializationToken(token: number): boolean {
+  return token === initializeToken;
+}
+
+function buildRenderPayloadWithRuntimePrefabContext(
+  payload: ScenePreviewPayload,
+  runtimePrefabPreloadContext: RuntimePrefabPreloadContext | null,
+): ScenePreviewPayload {
+  if (!runtimePrefabPreloadContext) {
+    return payload;
+  }
+
+  const mergedDocument: SceneJsonExportDocument = {
+    ...payload.document,
+    assetRegistry: runtimePrefabPreloadContext.assetRegistry
+      ? {
+          ...(payload.document.assetRegistry ?? {}),
+          ...runtimePrefabPreloadContext.assetRegistry,
+        }
+      : payload.document.assetRegistry,
+    assetPreload: mergeAssetPreloadMeshInfo(
+      payload.document.assetPreload,
+      runtimePrefabPreloadContext.meshAssetIds,
+    ),
+  };
+
+  return {
+    ...payload,
+    document: mergedDocument,
+  };
+}
+
+async function prepareRenderPayloadForSceneEntry(
+  payload: ScenePreviewPayload,
+  runtimePrefabPreloadContext: RuntimePrefabPreloadContext | null,
+): Promise<ScenePreviewPayload> {
+  const renderPayload = buildRenderPayloadWithRuntimePrefabContext(payload, runtimePrefabPreloadContext);
+  const steerPreparedPayload = await prepareRenderPayloadForDefaultSteer(renderPayload);
+  const runtimeGroundPrepared = await prepareRuntimeGroundSceneDocument(steerPreparedPayload.document);
+
+  return {
+    ...steerPreparedPayload,
+    document: runtimeGroundPrepared.document,
+  };
+}
+
+async function warmRuntimePrefabAssetsForSceneEntry(
+  preparedPayload: ScenePreviewPayload,
+  runtimePrefabPreloadContext: RuntimePrefabPreloadContext | null,
+  token: number,
+): Promise<boolean> {
+  if (!runtimePrefabPreloadContext) {
+    return true;
+  }
+
+  const prewarmBuildOptions = createSceneGraphBuildOptions(preparedPayload);
+  const resourceCache = ensureResourceCache(preparedPayload.document, prewarmBuildOptions);
+  viewerResourceCache = resourceCache;
+  await warmRuntimePrefabAssetsBeforeSceneEntry(resourceCache, runtimePrefabPreloadContext);
+  return isCurrentInitializationToken(token);
+}
+
+async function commitSceneEntryRendering(
+  preparedPayload: ScenePreviewPayload,
+  canvas: UseCanvasResult,
+  token: number,
+): Promise<boolean> {
+  await initializeRenderer(preparedPayload, canvas, token);
+  return isCurrentInitializationToken(token) && !error.value;
 }
 
 type ResolvedSteerBinding = {
@@ -5069,7 +5297,10 @@ function resolveOverlayDistanceReferenceWorld(
   return overlayDistanceReferenceScratch;
 }
 
-function resolvePunchBadgeReference(activeCamera: THREE.Camera): { position: THREE.Vector3; kind: 'camera' | 'vehicle'; nodeId: string | null } {
+function resolvePunchBadgeReference(
+  activeCamera: THREE.Camera,
+  snapshot: CameraFrameSnapshot | null = null,
+): { position: THREE.Vector3; kind: 'camera' | 'vehicle'; nodeId: string | null } {
   const manualDriveNode = vehicleDriveActive.value ? vehicleDriveNodeId.value : null;
   if (manualDriveNode) {
     if (resolveVehicleOrObjectWorldPosition({
@@ -5096,11 +5327,19 @@ function resolvePunchBadgeReference(activeCamera: THREE.Camera): { position: THR
     }
   }
 
-  activeCamera.getWorldPosition(signboardReferenceScratch);
+  if (snapshot) {
+    signboardReferenceScratch.copy(snapshot.position);
+  } else {
+    activeCamera.getWorldPosition(signboardReferenceScratch);
+  }
   return { position: signboardReferenceScratch, kind: 'camera', nodeId: resolveCameraDistanceReferenceNodeId() };
 }
 
-function updatePunchBadgeOverlayEntries(activeCamera: THREE.Camera, deltaSeconds: number): void {
+function updatePunchBadgeOverlayEntries(
+  activeCamera: THREE.Camera,
+  deltaSeconds: number,
+  reference: { position: THREE.Vector3; kind: 'camera' | 'vehicle'; nodeId: string | null },
+): void {
   if (!punchNodeIds.size) {
     if (punchBadgeOverlayEntries.value.length) {
       punchBadgeOverlayEntries.value = [];
@@ -5109,16 +5348,8 @@ function updatePunchBadgeOverlayEntries(activeCamera: THREE.Camera, deltaSeconds
     return;
   }
 
-  const reference = resolvePunchBadgeReference(activeCamera);
-  const nextPunchBadgeEntries: Array<{
-    id: string;
-    xPercent: number;
-    yPercent: number;
-    scale: number;
-    opacity: number;
-    referenceKind: 'camera' | 'vehicle';
-  }> = [];
-  const activePunchBadgeNodeIds = new Set<string>();
+  nextPunchBadgeEntriesScratch.length = 0;
+  activePunchBadgeNodeIdsScratch.clear();
 
   for (const nodeId of punchNodeIds) {
     if (signboardNodeIds.has(nodeId) || !punchedNodeIds.value.has(nodeId)) {
@@ -5157,8 +5388,8 @@ function updatePunchBadgeOverlayEntries(activeCamera: THREE.Camera, deltaSeconds
       deltaSeconds,
       speed: DEFAULT_SIGNBOARD_PLACEMENT_SMOOTH_SPEED,
     });
-    activePunchBadgeNodeIds.add(nodeId);
-    nextPunchBadgeEntries.push({
+    activePunchBadgeNodeIdsScratch.add(nodeId);
+    nextPunchBadgeEntriesScratch.push({
       id: nodeId,
       xPercent: smoothedPlacement.xPercent,
       yPercent: smoothedPlacement.yPercent,
@@ -5169,12 +5400,14 @@ function updatePunchBadgeOverlayEntries(activeCamera: THREE.Camera, deltaSeconds
   }
 
   for (const nodeId of punchBadgePlacementSmoothingStates.keys()) {
-    if (!activePunchBadgeNodeIds.has(nodeId)) {
+    if (!activePunchBadgeNodeIdsScratch.has(nodeId)) {
       punchBadgePlacementSmoothingStates.delete(nodeId);
     }
   }
 
-  punchBadgeOverlayEntries.value = nextPunchBadgeEntries;
+  if (!arePunchBadgeEntriesEqual(nextPunchBadgeEntriesScratch, punchBadgeOverlayEntries.value)) {
+    punchBadgeOverlayEntries.value = nextPunchBadgeEntriesScratch.map((entry) => ({ ...entry }));
+  }
 }
 
 function resolveSceneSignboardLabel(nodeId: string): string {
@@ -5192,6 +5425,13 @@ function resolveSceneSignboardLabel(nodeId: string): string {
 function syncSceneSignboards(): void {
   const renderCamera = renderContext?.camera ?? null;
   const distanceReference = renderCamera ? resolvePunchBadgeReference(renderCamera) : null;
+  syncSceneSignboardsWithReference(distanceReference);
+}
+
+function syncSceneSignboardsWithReference(
+  distanceReference: { position: THREE.Vector3; kind: 'camera' | 'vehicle'; nodeId: string | null } | null,
+): void {
+  const renderCamera = renderContext?.camera ?? null;
   syncSignboardBillboards({
     scene: renderContext?.scene ?? null,
     camera: renderCamera,
@@ -5394,24 +5634,12 @@ function restoreHiddenVehicleDriveNodes(): void {
   hiddenVehicleDriveNodeIds.clear();
 }
 
-function findGroundNode(nodes: SceneNode[] | undefined | null): SceneNode | null {
-  if (!Array.isArray(nodes)) {
-    return null;
-  }
-  const stack: SceneNode[] = [...nodes];
-  while (stack.length) {
-    const node = stack.pop();
-    if (!node) {
-      continue;
-    }
-    if (isGroundDynamicMesh(node.dynamicMesh)) {
-      return node;
-    }
-    if (Array.isArray(node.children) && node.children.length) {
-      stack.push(...node.children);
-    }
-  }
-  return null;
+function resolveDocumentGroundNode(document: SceneJsonExportDocument | null | undefined): SceneNode | null {
+  return resolveSharedDocumentGroundNode(document);
+}
+
+function resolveCurrentGroundNode(): SceneNode | null {
+  return resolveSharedDocumentGroundNode(currentDocument);
 }
 
 function attachScenePackageTerrainRuntime(
@@ -5419,7 +5647,7 @@ function attachScenePackageTerrainRuntime(
   sceneEntry: ScenePackageManifestSceneEntry,
   document: SceneJsonExportDocument,
 ): void {
-  const groundNode = findGroundNode(document.nodes);
+  const groundNode = resolveDocumentGroundNode(document);
   if (!groundNode || !isGroundDynamicMesh(groundNode.dynamicMesh)) {
     return;
   }
@@ -5459,7 +5687,7 @@ function attachScenePackageCompiledGroundRuntime(
   sceneEntry: ScenePackageManifestSceneEntry,
   document: SceneJsonExportDocument,
 ): void {
-  const groundNode = findGroundNode(document.nodes);
+  const groundNode = resolveDocumentGroundNode(document);
   if (!groundNode || !isGroundDynamicMesh(groundNode.dynamicMesh)) {
     return;
   }
@@ -5483,7 +5711,7 @@ function refreshDynamicGroundCache(document: SceneJsonExportDocument | null): vo
     dynamicGroundCache = null;
     return;
   }
-  const groundNode = findGroundNode(document.nodes);
+  const groundNode = resolveDocumentGroundNode(document);
   if (groundNode && isGroundDynamicMesh(groundNode.dynamicMesh)) {
     (groundNode.dynamicMesh as GroundRuntimeDynamicMesh & {
       groundSplatRuntimeProfile?: { maxLayers: number; enableLayerNormalMap: boolean };
@@ -6572,6 +6800,7 @@ const autoTourRuntime = createAutoTourRuntime({
     entry.body.velocity.set(0, 0, 0);
     entry.body.angularVelocity.set(0, 0, 0);
     trySleepBody(entry.body);
+    markPhysicsBridgeBodyDirty(nodeId);
   },
 });
 
@@ -6698,6 +6927,10 @@ function clearLegacyPhysicsWorld(): void {
 
 function resetPhysicsWorld(): void {
   void disposeSceneryPhysicsBridgeScene();
+  physicsBridgeDirtyBodyNodeIds.clear();
+  physicsBridgeBodyDirtyRevisionByNodeId.clear();
+  physicsBridgePendingBodySyncRevisionByNodeId.clear();
+  physicsBridgeLastFullBodySyncAtMs = 0;
   clearLegacyPhysicsWorld();
   sceneryGroundCollisionReferenceInitialized = false;
   sceneryGroundCollisionReferenceElapsed = 0;
@@ -6833,7 +7066,7 @@ function syncSceneryGroundCollisionRuntimeLoadedTileKeys(document: SceneJsonExpo
   if (!document) {
     return false;
   }
-  const groundNode = findGroundNode(document.nodes);
+  const groundNode = resolveDocumentGroundNode(document);
   const groundMesh = groundNode?.dynamicMesh as GroundRuntimeDynamicMesh | null | undefined;
   if (!groundNode || !isGroundDynamicMesh(groundMesh)) {
     return false;
@@ -6898,7 +7131,7 @@ function resolveSceneObjectByNodeId(nodeId: string): THREE.Object3D | null {
 
 function clearSceneryCompiledGroundRenderRuntime(): void {
   lastCompiledGroundLoadedChunkVersion = -1;
-  const groundNode = currentDocument ? findGroundNode(currentDocument.nodes) : null;
+  const groundNode = resolveCurrentGroundNode();
   const groundObject = groundNode ? resolveSceneObjectByNodeId(groundNode.id) : null;
   if (!groundObject) {
     return;
@@ -6924,7 +7157,7 @@ function syncSceneryCompiledGroundRenderTiles(camera: THREE.Camera | null | unde
     clearSceneryCompiledGroundRenderRuntime();
     return false;
   }
-  const groundNode = findGroundNode(currentDocument.nodes);
+  const groundNode = resolveCurrentGroundNode();
   const groundMesh = groundNode?.dynamicMesh as GroundRuntimeDynamicMesh | null | undefined;
   if (!groundNode || !isGroundDynamicMesh(groundMesh)) {
     clearSceneryCompiledGroundRenderRuntime();
@@ -7016,6 +7249,10 @@ function updateSceneryPhysicsBridgeIndex(asset: PhysicsSceneAsset): void {
   physicsBridgeNodeIdByBodyId.clear();
   physicsBridgeVehicleIdByNodeId.clear();
   physicsBridgeFrameBodiesByNodeId.clear();
+  physicsBridgeDirtyBodyNodeIds.clear();
+  physicsBridgeBodyDirtyRevisionByNodeId.clear();
+  physicsBridgePendingBodySyncRevisionByNodeId.clear();
+  physicsBridgeLastFullBodySyncAtMs = 0;
   asset.bodies.forEach((body) => {
     if (!body.userDataKey) {
       return;
@@ -7095,22 +7332,28 @@ function syncSceneryBridgeVehicleFromFrame(nodeId: string, state: PhysicsBridgeB
   }
   const chassisBody = instance.vehicle.chassisBody;
   const lastPosition = instance.lastBridgeFramePosition ?? new THREE.Vector3();
+  let nextVelocityX = 0;
+  let nextVelocityY = 0;
+  let nextVelocityZ = 0;
   if (instance.hasBridgeFrameSample) {
     const invStep = PHYSICS_FIXED_TIMESTEP > 1e-6 ? 1 / PHYSICS_FIXED_TIMESTEP : 0;
-    chassisBody.velocity.set(
-      (state.position.x - lastPosition.x) * invStep,
-      (state.position.y - lastPosition.y) * invStep,
-      (state.position.z - lastPosition.z) * invStep,
-    );
-  } else {
-    chassisBody.velocity.set(0, 0, 0);
+    nextVelocityX = (state.position.x - lastPosition.x) * invStep;
+    nextVelocityY = (state.position.y - lastPosition.y) * invStep;
+    nextVelocityZ = (state.position.z - lastPosition.z) * invStep;
   }
-  chassisBody.angularVelocity.set(0, 0, 0);
-  chassisBody.position.set(state.position.x, state.position.y, state.position.z);
-  chassisBody.quaternion.x = state.quaternion.x;
-  chassisBody.quaternion.y = state.quaternion.y;
-  chassisBody.quaternion.z = state.quaternion.z;
-  chassisBody.quaternion.w = state.quaternion.w;
+  if (!isPhysicsVectorClose(chassisBody.velocity, nextVelocityX, nextVelocityY, nextVelocityZ)) {
+    chassisBody.velocity.set(nextVelocityX, nextVelocityY, nextVelocityZ);
+  }
+  if (!isPhysicsVectorClose(chassisBody.angularVelocity, 0, 0, 0)) {
+    chassisBody.angularVelocity.set(0, 0, 0);
+  }
+  if (!isPhysicsTransformClose(chassisBody.position, chassisBody.quaternion, state)) {
+    chassisBody.position.set(state.position.x, state.position.y, state.position.z);
+    chassisBody.quaternion.x = state.quaternion.x;
+    chassisBody.quaternion.y = state.quaternion.y;
+    chassisBody.quaternion.z = state.quaternion.z;
+    chassisBody.quaternion.w = state.quaternion.w;
+  }
   lastPosition.copy(state.position);
   instance.lastBridgeFramePosition = lastPosition;
   instance.hasBridgeFrameSample = true;
@@ -7238,6 +7481,20 @@ function applySceneryPhysicsBridgeTransformToObject(
 
 const VEHICLE_BRIDGE_SYNC_POSITION_EPSILON_SQ = 1e-8;
 const VEHICLE_BRIDGE_SYNC_QUATERNION_DOT_THRESHOLD = 1 - 1e-6;
+const VEHICLE_BRIDGE_SYNC_VELOCITY_EPSILON_SQ = 1e-6;
+
+function isPhysicsVectorClose(
+  current: { x: number; y: number; z: number },
+  nextX: number,
+  nextY: number,
+  nextZ: number,
+  epsilonSq = VEHICLE_BRIDGE_SYNC_VELOCITY_EPSILON_SQ,
+): boolean {
+  const dx = current.x - nextX;
+  const dy = current.y - nextY;
+  const dz = current.z - nextZ;
+  return ((dx * dx) + (dy * dy) + (dz * dz)) <= epsilonSq;
+}
 
 function isPhysicsTransformClose(
   currentPosition: { x: number; y: number; z: number },
@@ -7290,6 +7547,14 @@ function stepSceneryPhysicsBridge(delta: number): void {
   ) {
     return;
   }
+  // Bridge worker requests are processed strictly in-order, but if a local body
+  // mutation is still waiting on an earlier `setBodyTransform` flush, stepping
+  // again here can advance the remote world before that mutation has landed.
+  // Hold the step for one frame in that narrow case so teleports/stops snap in
+  // before the next simulation advance.
+  if (physicsBridgeBodySyncPromise && physicsBridgePendingBodySyncRevisionByNodeId.size > 0) {
+    return;
+  }
   const bridge = physicsBridge;
   physicsBridgeStepPromise = bridge.step(delta * 1000)
     .then((frame) => {
@@ -7317,37 +7582,62 @@ function syncSceneryPhysicsBridgeBodyTransforms(): void {
   }
   const bridge = physicsBridge;
   const commands: Array<Promise<void>> = [];
-  const syncedNodeIds = new Set<string>();
-  rigidbodyInstances.forEach((entry, nodeId) => {
-    if (entry.body.type === LEGACY_STATIC_BODY_TYPE) {
-      return;
-    }
+  const syncedBodyRevisions = new Map<string, number>();
+  const nowMs = Date.now();
+  const shouldRunFullSync =
+    physicsBridgeLastFullBodySyncAtMs <= 0
+    || nowMs - physicsBridgeLastFullBodySyncAtMs >= PHYSICS_BRIDGE_FULL_BODY_SYNC_INTERVAL_MS;
+  const candidateNodeIds = shouldRunFullSync
+    ? Array.from(physicsBridgeBodyIdByNodeId.keys())
+    : Array.from(physicsBridgeDirtyBodyNodeIds);
+  if (shouldRunFullSync) {
+    physicsBridgeLastFullBodySyncAtMs = nowMs;
+  }
+  candidateNodeIds.forEach((nodeId) => {
     const bodyId = physicsBridgeBodyIdByNodeId.get(nodeId);
     if (typeof bodyId !== 'number') {
+      physicsBridgeDirtyBodyNodeIds.delete(nodeId);
+      physicsBridgeBodyDirtyRevisionByNodeId.delete(nodeId);
+      physicsBridgePendingBodySyncRevisionByNodeId.delete(nodeId);
       return;
     }
-    const frameState = physicsBridgeFrameBodiesByNodeId.get(nodeId);
-    if (isPhysicsTransformClose(entry.body.position, entry.body.quaternion, frameState)) {
-      return;
-    }
-    syncedNodeIds.add(nodeId);
-    commands.push(
-      bridge.setBodyTransform({
-        bodyId,
-        transform: {
-          position: [entry.body.position.x, entry.body.position.y, entry.body.position.z],
-          rotation: [entry.body.quaternion.x, entry.body.quaternion.y, entry.body.quaternion.z, entry.body.quaternion.w],
-        },
-      }),
-    );
-  });
-  physicsBridgeBodyIdByNodeId.forEach((bodyId, nodeId) => {
-    if (syncedNodeIds.has(nodeId)) {
+    const entry = rigidbodyInstances.get(nodeId) ?? null;
+    if (entry) {
+      if (entry.body.type === LEGACY_STATIC_BODY_TYPE) {
+        physicsBridgeDirtyBodyNodeIds.delete(nodeId);
+        physicsBridgeBodyDirtyRevisionByNodeId.delete(nodeId);
+        physicsBridgePendingBodySyncRevisionByNodeId.delete(nodeId);
+        entry.bridgeSyncDirty = false;
+        return;
+      }
+      const frameState = physicsBridgeFrameBodiesByNodeId.get(nodeId);
+      if (isPhysicsTransformClose(entry.body.position, entry.body.quaternion, frameState)) {
+        physicsBridgeDirtyBodyNodeIds.delete(nodeId);
+        physicsBridgeBodyDirtyRevisionByNodeId.delete(nodeId);
+        physicsBridgePendingBodySyncRevisionByNodeId.delete(nodeId);
+        entry.bridgeSyncDirty = false;
+        return;
+      }
+      commands.push(
+        bridge.setBodyTransform({
+          bodyId,
+          transform: {
+            position: [entry.body.position.x, entry.body.position.y, entry.body.position.z],
+            rotation: [entry.body.quaternion.x, entry.body.quaternion.y, entry.body.quaternion.z, entry.body.quaternion.w],
+          },
+        }),
+      );
+      const dirtyRevision = physicsBridgeBodyDirtyRevisionByNodeId.get(nodeId) ?? 0;
+      physicsBridgePendingBodySyncRevisionByNodeId.set(nodeId, dirtyRevision);
+      syncedBodyRevisions.set(nodeId, dirtyRevision);
       return;
     }
     const node = resolveNodeById(nodeId);
     const component = resolvePhysicsRigidbodyComponent(node);
     if (!node || !component || component.props.bodyType === 'STATIC') {
+      physicsBridgeDirtyBodyNodeIds.delete(nodeId);
+      physicsBridgeBodyDirtyRevisionByNodeId.delete(nodeId);
+      physicsBridgePendingBodySyncRevisionByNodeId.delete(nodeId);
       return;
     }
     const object = resolveRigidbodyBindingObject(component, nodeObjectMap.get(nodeId) ?? null);
@@ -7359,6 +7649,9 @@ function syncSceneryPhysicsBridgeBodyTransforms(): void {
     object.getWorldQuaternion(physicsBridgeBodySyncQuaternionHelper).normalize();
     const frameState = physicsBridgeFrameBodiesByNodeId.get(nodeId);
     if (isPhysicsTransformClose(physicsBridgeBodySyncPositionHelper, physicsBridgeBodySyncQuaternionHelper, frameState)) {
+      physicsBridgeDirtyBodyNodeIds.delete(nodeId);
+      physicsBridgeBodyDirtyRevisionByNodeId.delete(nodeId);
+      physicsBridgePendingBodySyncRevisionByNodeId.delete(nodeId);
       return;
     }
     commands.push(
@@ -7379,6 +7672,9 @@ function syncSceneryPhysicsBridgeBodyTransforms(): void {
         },
       }),
     );
+    const dirtyRevision = physicsBridgeBodyDirtyRevisionByNodeId.get(nodeId) ?? 0;
+    physicsBridgePendingBodySyncRevisionByNodeId.set(nodeId, dirtyRevision);
+    syncedBodyRevisions.set(nodeId, dirtyRevision);
   });
   if (!commands.length) {
     return;
@@ -7389,6 +7685,18 @@ function syncSceneryPhysicsBridgeBodyTransforms(): void {
     })
     .then(() => undefined)
     .finally(() => {
+      syncedBodyRevisions.forEach((queuedRevision, nodeId) => {
+        physicsBridgePendingBodySyncRevisionByNodeId.delete(nodeId);
+        if ((physicsBridgeBodyDirtyRevisionByNodeId.get(nodeId) ?? 0) !== queuedRevision) {
+          return;
+        }
+        physicsBridgeDirtyBodyNodeIds.delete(nodeId);
+        physicsBridgeBodyDirtyRevisionByNodeId.delete(nodeId);
+        const entry = rigidbodyInstances.get(nodeId);
+        if (entry) {
+          entry.bridgeSyncDirty = false;
+        }
+      });
       physicsBridgeBodySyncPromise = null;
     });
 }
@@ -7481,17 +7789,25 @@ function syncSceneryPhysicsBridgeVehicleInput(): void {
 async function disposeSceneryPhysicsBridgeScene(): Promise<void> {
   physicsBridgeSceneRequestId += 1;
   sceneryGroundCollisionRuntimeBodyIds.clear();
-  const groundNode = currentDocument ? findGroundNode(currentDocument.nodes) : null;
+  const groundNode = resolveCurrentGroundNode();
   clearGroundCollisionRuntimeHost(groundNode ? (nodeObjectMap.get(groundNode.id) ?? null) : null);
   physicsBridgeBodyIdByNodeId.clear();
   physicsBridgeNodeIdByBodyId.clear();
   physicsBridgeVehicleIdByNodeId.clear();
   physicsBridgeFrameBodiesByNodeId.clear();
+  physicsBridgeDirtyBodyNodeIds.clear();
+  physicsBridgeBodyDirtyRevisionByNodeId.clear();
+  physicsBridgePendingBodySyncRevisionByNodeId.clear();
+  physicsBridgeLastFullBodySyncAtMs = 0;
   resetPhysicsBridgeVehicleInputSyncState(physicsBridgeVehicleInputSyncState);
   if (!physicsBridge || !physicsBridgeSceneLoaded) {
     physicsBridgeStepPromise = null;
     physicsBridgeBodySyncPromise = null;
     resetPhysicsBridgeVehicleInputSyncState(physicsBridgeVehicleInputSyncState);
+    physicsBridgeDirtyBodyNodeIds.clear();
+    physicsBridgeBodyDirtyRevisionByNodeId.clear();
+    physicsBridgePendingBodySyncRevisionByNodeId.clear();
+    physicsBridgeLastFullBodySyncAtMs = 0;
     return;
   }
   try {
@@ -7507,6 +7823,10 @@ async function disposeSceneryPhysicsBridgeScene(): Promise<void> {
     sceneryGroundCollisionReferenceElapsed = 0;
     resetPhysicsBridgeVehicleInputSyncState(physicsBridgeVehicleInputSyncState);
     physicsBridgeFrameBodiesByNodeId.clear();
+    physicsBridgeDirtyBodyNodeIds.clear();
+    physicsBridgeBodyDirtyRevisionByNodeId.clear();
+    physicsBridgePendingBodySyncRevisionByNodeId.clear();
+    physicsBridgeLastFullBodySyncAtMs = 0;
   }
 }
 
@@ -7526,7 +7846,7 @@ async function destroySceneryPhysicsBridge(): Promise<void> {
   } finally {
     physicsBridgeSceneRequestId += 1;
     sceneryGroundCollisionRuntimeBodyIds.clear();
-    const groundNode = currentDocument ? findGroundNode(currentDocument.nodes) : null;
+    const groundNode = resolveCurrentGroundNode();
     clearGroundCollisionRuntimeHost(groundNode ? (nodeObjectMap.get(groundNode.id) ?? null) : null);
     sceneryGroundCollisionReferenceInitialized = false;
     sceneryGroundCollisionReferenceElapsed = 0;
@@ -7534,6 +7854,9 @@ async function destroySceneryPhysicsBridge(): Promise<void> {
     physicsBridgeNodeIdByBodyId.clear();
     physicsBridgeVehicleIdByNodeId.clear();
     physicsBridgeFrameBodiesByNodeId.clear();
+    physicsBridgeDirtyBodyNodeIds.clear();
+    physicsBridgeBodyDirtyRevisionByNodeId.clear();
+    physicsBridgePendingBodySyncRevisionByNodeId.clear();
     resetPhysicsBridgeVehicleInputSyncState(physicsBridgeVehicleInputSyncState);
     physicsBridgeSceneLoaded = false;
   }
@@ -7541,6 +7864,9 @@ async function destroySceneryPhysicsBridge(): Promise<void> {
 
 function removeRigidbodyInstance(nodeId: string): void {
   rigidbodyInstances.delete(nodeId);
+  physicsBridgeDirtyBodyNodeIds.delete(nodeId);
+  physicsBridgeBodyDirtyRevisionByNodeId.delete(nodeId);
+  physicsBridgePendingBodySyncRevisionByNodeId.delete(nodeId);
   scenePreviewPerf.notifyRemovedNode(nodeId);
   if (protagonistNodeId === nodeId) {
     protagonistNodeId = null;
@@ -7716,7 +8042,9 @@ function syncVehicleRigidbodyInstance(
     bodies: [chassisBody],
     object,
     orientationAdjustment: null,
+    bridgeSyncDirty: true,
   });
+  markPhysicsBridgeBodyDirty(nodeId);
 }
 
 function removeVehicleInstance(nodeId: string): void {
@@ -10751,11 +11079,6 @@ function updateVehicleSpeedFromVehicle(): void {
     }
 
     const sampledSpeed = Math.sqrt(velocity.x * velocity.x + velocity.y * velocity.y + velocity.z * velocity.z);
-    if (!vehicleInstance) {
-      vehicleSpeedDisplayMps.value = Number.isFinite(sampledSpeed) && sampledSpeed >= VEHICLE_PARKED_SPEED_EPSILON ? sampledSpeed : 0;
-      vehicleSpeedDisplayLastCommitAtMs = nowMs;
-      vehicleSpeedDisplayLowSpeedSinceAtMs = null;
-    }
     commitVehicleSpeedDisplay(sampledSpeed, nowMs);
 
     vehicleCompassQuaternion.set(
@@ -10775,20 +11098,18 @@ function updateVehicleSpeedFromVehicle(): void {
         Math.atan2(vehicleCompassForward.z, vehicleCompassForward.x),
       );
       const northDirectionAngleDegrees = resolveNorthDirectionAngleDegrees(activeEnvironmentSettings.northDirection);
-      vehicleHeadingDegrees.value = (worldHeadingDegrees - northDirectionAngleDegrees + 360) % 360;
+      commitVehicleHeadingDegrees(worldHeadingDegrees - northDirectionAngleDegrees);
     }
     return;
   }
 
   const transformSpeed = vehicleDriveController.getCurrentSpeed();
-  vehicleSpeedDisplayMps.value = Number.isFinite(transformSpeed) ? transformSpeed : 0;
-  vehicleSpeedDisplayLastCommitAtMs = nowMs;
-  vehicleSpeedDisplayLowSpeedSinceAtMs = null;
+  commitVehicleSpeedDisplay(transformSpeed, nowMs);
 
   const driveNodeId = vehicleDriveNodeId.value;
   const driveObject = driveNodeId ? nodeObjectMap.get(driveNodeId) ?? null : null;
   if (!driveObject) {
-    vehicleHeadingDegrees.value = 0;
+    commitVehicleHeadingDegrees(0);
     return;
   }
 
@@ -10805,7 +11126,7 @@ function updateVehicleSpeedFromVehicle(): void {
       Math.atan2(vehicleCompassForward.z, vehicleCompassForward.x),
     );
     const northDirectionAngleDegrees = resolveNorthDirectionAngleDegrees(activeEnvironmentSettings.northDirection);
-    vehicleHeadingDegrees.value = (worldHeadingDegrees - northDirectionAngleDegrees + 360) % 360;
+    commitVehicleHeadingDegrees(worldHeadingDegrees - northDirectionAngleDegrees);
   }
 }
 
@@ -10840,13 +11161,14 @@ function updateVehicleDriveCamera(
   deltaSeconds = 0,
   options: VehicleDriveCameraUpdateOptions = {},
 ): boolean {
+  if (!renderContext?.camera) {
+    return false;
+  }
   const disableOrbitControlsForDriveFollow = vehicleDriveCameraMode.value === 'follow';
-  const ctx = renderContext
-    ? {
-      camera: renderContext.camera,
-      mapControls: disableOrbitControlsForDriveFollow ? undefined : renderContext.controls,
-    }
-    : { camera: null as THREE.PerspectiveCamera | null };
+  const ctx = {
+    camera: renderContext.camera,
+    mapControls: disableOrbitControlsForDriveFollow ? undefined : renderContext.controls,
+  };
   return runWithProgrammaticCameraMutationAndAnchor(() =>
     vehicleDriveController.updateCamera(deltaSeconds, ctx, options),
   );
@@ -11075,6 +11397,7 @@ function applyAutoTourRigidBodyStop(nodeId: string): void {
     entry.body.velocity.set(0, 0, 0);
     entry.body.angularVelocity.set(0, 0, 0);
     entry.body.sleep?.();
+    markPhysicsBridgeBodyDirty(nodeId);
   } catch {
     // best-effort
   }
@@ -11119,6 +11442,7 @@ function applyAutoTourSnapToVehicle(nodeId: string, snap: AutoTourRouteSnapResul
     rigidbodyEntry.body.angularVelocity.set(0, 0, 0);
     resetPhysicsInterpolationState(rigidbodyEntry.body);
     trySleepBody(rigidbodyEntry.body);
+    markPhysicsBridgeBodyDirty(nodeId);
   }
 
   if (vehicleInstance && chassisBody) {
@@ -11134,6 +11458,7 @@ function applyAutoTourSnapToVehicle(nodeId: string, snap: AutoTourRouteSnapResul
     resetPhysicsInterpolationState(chassisBody as PhysicsBodyLike);
     holdVehicleBrakeSafe({ vehicleInstance, brakeForce });
     trySleepBody(chassisBody as PhysicsBodyLike);
+    markPhysicsBridgeBodyDirty(nodeId);
   }
 
   return object;
@@ -11743,6 +12068,7 @@ function handlePunchEvent(event: Extract<BehaviorRuntimeEvent, { type: 'punch' }
     const next = new Set(punchedNodeIds.value);
     next.add(event.nodeId);
     punchedNodeIds.value = next;
+    markOverlayRuntimeDirty();
   }
   const sceneId = (currentSceneId.value ?? currentDocument?.id ?? '').trim();
   const sceneName = (currentDocument?.name ?? '').trim();
@@ -12129,7 +12455,10 @@ type SceneryFogState =
     }
   | null;
 
-function resolveSceneryGroundFogCoverageDistance(activeCamera: THREE.PerspectiveCamera | null): number | null {
+function resolveSceneryGroundFogCoverageDistance(
+  activeCamera: THREE.PerspectiveCamera | null,
+  snapshot: CameraFrameSnapshot | null = null,
+): number | null {
   if (!activeCamera || !dynamicGroundCache) {
     return null;
   }
@@ -12150,10 +12479,13 @@ function resolveSceneryGroundFogCoverageDistance(activeCamera: THREE.Perspective
   );
   const visibleWindow = resolveInfiniteGroundVisibleChunkWindow(groundObject, groundMesh, activeCamera);
   const { minX, maxX, minZ, maxZ } = visibleWindow.localBounds;
-  activeCamera.updateMatrixWorld(true);
-  const cameraWorld = new THREE.Vector3();
-  activeCamera.getWorldPosition(cameraWorld);
-  const cameraLocal = groundObject.worldToLocal(cameraWorld);
+  if (snapshot) {
+    sceneryFogCameraWorldScratch.copy(snapshot.position);
+  } else {
+    activeCamera.updateMatrixWorld(true);
+    activeCamera.getWorldPosition(sceneryFogCameraWorldScratch);
+  }
+  const cameraLocal = groundObject.worldToLocal(sceneryFogCameraWorldScratch);
   const farCornerDistance = Math.max(
     Math.hypot(cameraLocal.x - minX, cameraLocal.z - minZ),
     Math.hypot(cameraLocal.x - minX, cameraLocal.z - maxZ),
@@ -12173,11 +12505,12 @@ function resolveSceneryGroundFogCoverageDistance(activeCamera: THREE.Perspective
 function resolveSceneryFogState(
   settings: EnvironmentSettings,
   activeCamera: THREE.PerspectiveCamera | null = renderContext?.camera ?? null,
+  snapshot: CameraFrameSnapshot | null = null,
 ): SceneryFogState {
   if (settings.fogMode === 'none') {
     return null;
   }
-  const groundCoverageDistance = resolveSceneryGroundFogCoverageDistance(activeCamera);
+  const groundCoverageDistance = resolveSceneryGroundFogCoverageDistance(activeCamera, snapshot);
   if (settings.fogMode === 'linear') {
     const sourceNear = Math.max(0, settings.fogNear);
     const sourceFar = Math.max(sourceNear + SCENERY_FOG_MIN_DISTANCE, settings.fogFar);
@@ -12215,12 +12548,16 @@ function resolveSceneryFogState(
   };
 }
 
-function applyFogSettings(settings: EnvironmentSettings, activeCamera: THREE.PerspectiveCamera | null = renderContext?.camera ?? null) {
+function applyFogSettings(
+  settings: EnvironmentSettings,
+  activeCamera: THREE.PerspectiveCamera | null = renderContext?.camera ?? null,
+  snapshot: CameraFrameSnapshot | null = null,
+) {
   const scene = renderContext?.scene ?? null;
   if (!scene) {
     return;
   }
-  const fogState = resolveSceneryFogState(settings, activeCamera);
+  const fogState = resolveSceneryFogState(settings, activeCamera, snapshot);
   const syncCameraFar = (nextFar: number) => {
     if (!activeCamera || Math.abs(activeCamera.far - nextFar) <= 1e-6) {
       return;
@@ -12231,28 +12568,60 @@ function applyFogSettings(settings: EnvironmentSettings, activeCamera: THREE.Per
     markInstancedCullingDirty();
   };
   if (!fogState) {
-    scene.fog = null;
+    if (scene.fog) {
+      scene.fog = null;
+    }
     syncCameraFar(DEFAULT_SCENE_CAMERA_FAR);
+    appliedSceneryFogSnapshot = {
+      mode: 'none',
+      color: '',
+      cameraFar: DEFAULT_SCENE_CAMERA_FAR,
+      fogNear: 0,
+      fogFar: 0,
+      fogDensity: 0,
+    };
     return;
   }
-  const fogColor = new THREE.Color(settings.fogColor);
+  const nextSnapshot: AppliedSceneryFogSnapshot = {
+    mode: settings.fogMode,
+    color: settings.fogColor,
+    cameraFar: fogState.cameraFar,
+    fogNear: fogState.fogNear,
+    fogFar: fogState.fogFar,
+    fogDensity: fogState.fogDensity,
+  };
+  const previousSnapshot = appliedSceneryFogSnapshot;
   syncCameraFar(fogState.cameraFar);
+  if (
+    previousSnapshot
+    && previousSnapshot.mode === nextSnapshot.mode
+    && previousSnapshot.color === nextSnapshot.color
+    && Math.abs(previousSnapshot.cameraFar - nextSnapshot.cameraFar) <= 1e-6
+    && Math.abs(previousSnapshot.fogNear - nextSnapshot.fogNear) <= 1e-6
+    && Math.abs(previousSnapshot.fogFar - nextSnapshot.fogFar) <= 1e-6
+    && Math.abs(previousSnapshot.fogDensity - nextSnapshot.fogDensity) <= 1e-6
+  ) {
+    return;
+  }
+  sceneryFogColorScratch.set(settings.fogColor);
   if (settings.fogMode === 'linear') {
     if (scene.fog instanceof THREE.Fog) {
-      scene.fog.color.copy(fogColor);
+      scene.fog.color.copy(sceneryFogColorScratch);
       scene.fog.near = fogState.fogNear;
       scene.fog.far = fogState.fogFar;
     } else {
-      scene.fog = new THREE.Fog(fogColor, fogState.fogNear, fogState.fogFar);
+      scene.fog = new THREE.Fog(sceneryFogColorScratch.clone(), fogState.fogNear, fogState.fogFar);
     }
+    appliedSceneryFogSnapshot = nextSnapshot;
     return;
   }
   if (scene.fog instanceof THREE.FogExp2) {
-    scene.fog.color.copy(fogColor);
+    scene.fog.color.copy(sceneryFogColorScratch);
     scene.fog.density = fogState.fogDensity;
   } else {
-    scene.fog = new THREE.FogExp2(fogColor, fogState.fogDensity);
+    scene.fog = new THREE.FogExp2(sceneryFogColorScratch.clone(), fogState.fogDensity);
   }
+  appliedSceneryFogSnapshot = nextSnapshot;
 }
 
 function applyPhysicsEnvironmentSettings(settings: EnvironmentSettings) {
@@ -12557,6 +12926,7 @@ function disposeEnvironmentResources() {
   backgroundLoadToken += 1;
   pendingEnvironmentSettings = null;
   activeEnvironmentSettings = cloneEnvironmentSettings(DEFAULT_ENVIRONMENT_SETTINGS);
+  appliedSceneryFogSnapshot = null;
 }
 
 function resetRemovedSkyState() {
@@ -13317,6 +13687,25 @@ function resetSceneDownloadState(): void {
   clearSceneDownloadState();
 }
 
+function resetScenePreviewRuntimeState(): void {
+  teardownRenderer();
+  resetRemovedSkyState();
+  clearSceneInitState();
+  warnings.value = [];
+}
+
+function prepareScenePreviewPayload(payload: ScenePreviewPayload): void {
+  error.value = null;
+  warnings.value = [];
+  resetRemovedSkyState();
+  pendingEnvironmentSettings = cloneEnvironmentSettings(resolveDocumentEnvironment(payload.document));
+  try {
+    uni.setNavigationBarTitle({ title: payload.title || '场景预览' });
+  } catch (_error) {
+    // ignore
+  }
+}
+
 function formatByteSize(value: number): string {
   if (!value || value <= 0) {
     return '0B';
@@ -13339,9 +13728,7 @@ watch(
       return;
     }
     if (!payload) {
-      teardownRenderer();
-      resetRemovedSkyState();
-      warnings.value = [];
+      resetScenePreviewRuntimeState();
       return;
     }
     handlePreviewPayload(payload);
@@ -13351,26 +13738,17 @@ watch(
 
 function handlePreviewPayload(payload: ScenePreviewPayload | null) {
   if (!payload) {
-    teardownRenderer();
-    resetRemovedSkyState();
-    clearSceneInitState();
-    warnings.value = [];
+    resetScenePreviewRuntimeState();
     return;
   }
-  error.value = null;
-  warnings.value = [];
-  resetRemovedSkyState();
-  pendingEnvironmentSettings = cloneEnvironmentSettings(resolveDocumentEnvironment(payload.document));
-  try {
-    uni.setNavigationBarTitle({ title: payload.title || '场景预览' });
-  } catch (_error) {
-    // ignore
-  }
+  prepareScenePreviewPayload(payload);
   startRenderIfReady();
 }
 
 async function startRenderIfReady() {
-  if (!previewPayload.value || !canvasResult) {
+  const payload = previewPayload.value;
+  const canvas = canvasResult;
+  if (!payload || !canvas) {
     return;
   }
 
@@ -13390,51 +13768,29 @@ async function startRenderIfReady() {
   beginSceneSwitchTransition(token);
 
   try {
-    await ensureRendererContext(canvasResult);
+    await ensureRendererContext(canvas);
     resourcePreload.label = '正在准备运行时 prefab 资源...';
     const runtimePrefabPreloadContext = await collectRuntimePrefabPreloadContext(props.runtimePrefabSpawns);
-    const renderPayload = runtimePrefabPreloadContext && previewPayload.value
-      ? {
-          ...previewPayload.value,
-          document: {
-            ...previewPayload.value.document,
-            assetRegistry: runtimePrefabPreloadContext.assetRegistry
-              ? {
-                  ...(previewPayload.value.document.assetRegistry ?? {}),
-                  ...runtimePrefabPreloadContext.assetRegistry,
-                }
-              : previewPayload.value.document.assetRegistry,
-            assetPreload: mergeAssetPreloadMeshInfo(
-              previewPayload.value.document.assetPreload,
-              runtimePrefabPreloadContext.meshAssetIds,
-            ),
-          },
-        }
-      : previewPayload.value;
-    const steerPreparedPayload = await prepareRenderPayloadForDefaultSteer(renderPayload);
-    const runtimeGroundPrepared = await prepareRuntimeGroundSceneDocument(steerPreparedPayload.document);
-    const preparedGroundDocument = runtimeGroundPrepared.document;
-    currentDocument = preparedGroundDocument;
-    refreshDynamicGroundCache(currentDocument);
-    const preparedPayload: ScenePreviewPayload = {
-      ...steerPreparedPayload,
-      document: preparedGroundDocument,
-    };
-    if (runtimePrefabPreloadContext) {
-      const prewarmBuildOptions = createSceneGraphBuildOptions(preparedPayload);
-      const resourceCache = ensureResourceCache(preparedPayload.document, prewarmBuildOptions);
-      viewerResourceCache = resourceCache;
-      await warmRuntimePrefabAssetsBeforeSceneEntry(resourceCache, runtimePrefabPreloadContext);
+    if (!isCurrentInitializationToken(token)) {
+      return;
     }
-    await initializeRenderer(preparedPayload, canvasResult, token);
-    if (token === initializeToken && !error.value) {
+    const preparedPayload = await prepareRenderPayloadForSceneEntry(payload, runtimePrefabPreloadContext);
+    if (!isCurrentInitializationToken(token)) {
+      return;
+    }
+    const warmReady = await warmRuntimePrefabAssetsForSceneEntry(preparedPayload, runtimePrefabPreloadContext, token);
+    if (!warmReady) {
+      return;
+    }
+    const rendered = await commitSceneEntryRendering(preparedPayload, canvas, token);
+    if (rendered) {
       hasRenderedSceneOnce = true;
       emit('loaded');
     }
   } catch (initializationError) {
     console.error('Renderer initialization failed', initializationError);
     console.error(initializationError);
-    if (token === initializeToken) {
+    if (isCurrentInitializationToken(token)) {
       error.value = '初始化渲染器失败';
       setSceneInitState({
         stage: 'error',
@@ -13446,7 +13802,7 @@ async function startRenderIfReady() {
       });
     }
   } finally {
-    if (token === initializeToken) {
+    if (isCurrentInitializationToken(token)) {
       loading.value = false;
       clearSceneInitState();
     }
@@ -13658,6 +14014,7 @@ function teardownRenderer() {
   lastCompiledGroundLoadedChunkVersion = -1;
   compiledGroundForceNextUpdate = true;
   sceneCsmForceNextUpdate = true;
+  overlaySyncForceNextUpdate = true;
 }
 
 function handleUseCanvas(result: UseCanvasResult) {
@@ -13676,6 +14033,7 @@ async function ensureRendererContext(result: UseCanvasResult) {
   frameDeltaMode = null;
   compiledGroundForceNextUpdate = true;
   sceneCsmForceNextUpdate = true;
+  overlaySyncForceNextUpdate = true;
   instancedLodLastProcessedRevision = -1;
   instancedLodLastCameraStateValid = false;
   const { canvas } = result;
@@ -13866,8 +14224,8 @@ async function buildSceneGraphWithProgress(
 
     resourceCache = ensureResourceCache(runtimePayload.document, buildOptions);
     viewerResourceCache = resourceCache;
-    refreshDynamicGroundCache(payload.document);
-    graph = await buildSceneGraph(payload.document, resourceCache, buildOptions);
+    refreshDynamicGroundCache(runtimePayload.document);
+    graph = await buildSceneGraph(runtimePayload.document, resourceCache, buildOptions);
   } finally {
     const fullyLoadedByCount = resourcePreload.total > 0 && resourcePreload.loaded >= resourcePreload.total;
     const fullyLoadedByBytes =
@@ -14159,7 +14517,7 @@ async function mountGraphAndSyncSubsystems(
     active: true,
   });
   registerSceneSubtree(root);
-  const groundNode = findGroundNode(payload.document.nodes);
+  const groundNode = resolveDocumentGroundNode(payload.document);
   if (groundNode && isGroundDynamicMesh(groundNode.dynamicMesh)) {
     primeSceneryGroundChunkTextureRefresh(root, groundNode.dynamicMesh);
   }
@@ -14220,6 +14578,7 @@ function applyDocumentViewSettings(document: SceneJsonExportDocument, camera: TH
   camera.aspect = width / height;
   camera.updateProjectionMatrix();
   sceneCsmShadowRuntime?.updateFrustums();
+  markOverlayRuntimeDirty();
 }
 
 /**
@@ -14275,12 +14634,11 @@ function startRenderLoop(
         }
 
         if (deltaSeconds > 0) {
+          previewFrameCameraWorldPosition.x = camera.position.x;
+          previewFrameCameraWorldPosition.y = camera.position.y;
+          previewFrameCameraWorldPosition.z = camera.position.z;
           previewComponentManager.setFrameState({
-            cameraWorldPosition: {
-              x: camera.position.x,
-              y: camera.position.y,
-              z: camera.position.z,
-            },
+            cameraWorldPosition: previewFrameCameraWorldPosition,
           });
           previewComponentManager.update(deltaSeconds);
           waterRuntime.update(deltaSeconds, { renderer, scene, camera });
@@ -14332,34 +14690,39 @@ function startRenderLoop(
           updateVehicleDriveCamera(deltaSeconds);
         }
 
-          updateBehaviorProximity();
-          updatePunchBadgeOverlayEntries(camera, deltaSeconds);
-          syncSceneSignboards();
-          applyFogSettings(activeEnvironmentSettings, camera);
-
-        // Keep chunked ground meshes in sync with camera position.
+        updateBehaviorProximity();
         const instancingNow = typeof performance !== 'undefined' && typeof performance.now === 'function'
           ? performance.now()
           : Date.now();
+        const cameraFrameSnapshot = refreshCameraFrameSnapshot(camera, instancingNow);
+        const shouldSyncOverlayUi = shouldRunOverlaySync(cameraFrameSnapshot);
+        let overlayReference: ReturnType<typeof resolvePunchBadgeReference> | null = null;
+        if (shouldSyncOverlayUi) {
+          overlayReference = resolvePunchBadgeReference(camera, cameraFrameSnapshot);
+          updatePunchBadgeOverlayEntries(camera, deltaSeconds, overlayReference);
+          syncSceneSignboardsWithReference(overlayReference);
+        }
+        applyFogSettings(activeEnvironmentSettings, camera, cameraFrameSnapshot);
+
+        // Keep chunked ground meshes in sync with camera position.
         const cachedGround = dynamicGroundCache;
-        if (cachedGround && shouldRunCompiledGroundTileSync(camera, instancingNow)) {
-          syncSceneryCompiledGroundRenderTiles(camera);
-          const groundObject = nodeObjectMap.get(cachedGround.nodeId) ?? null;
-          if (groundObject) {
-            const hasGroundCollisionReference = resolveSceneryGroundCollisionReferenceWorld(camera, sceneryGroundCollisionReferencePosition);
-            if (!hasGroundCollisionReference) {
-              clearGroundCollisionRuntimeHost(groundObject);
-            }
-            const shouldUpdateGroundCollisionSystems = hasGroundCollisionReference
-              ? shouldUpdateSceneryGroundCollisionForFrame(deltaSeconds, sceneryGroundCollisionReferencePosition)
-              : false;
-            if (shouldUpdateGroundCollisionSystems && physicsBridgeSceneLoaded) {
-              syncSceneryGroundCollisionRuntimeLoadedTileKeys(currentDocument, camera);
+        try {
+          if (cachedGround && shouldRunCompiledGroundTileSync(cameraFrameSnapshot)) {
+            syncSceneryCompiledGroundRenderTiles(camera);
+            const groundObject = nodeObjectMap.get(cachedGround.nodeId) ?? null;
+            if (groundObject) {
+              const hasGroundCollisionReference = resolveSceneryGroundCollisionReferenceWorld(camera, sceneryGroundCollisionReferencePosition);
+              if (!hasGroundCollisionReference) {
+                clearGroundCollisionRuntimeHost(groundObject);
+              }
+              const shouldUpdateGroundCollisionSystems = hasGroundCollisionReference
+                ? shouldUpdateSceneryGroundCollisionForFrame(deltaSeconds, sceneryGroundCollisionReferencePosition)
+                : false;
+              if (shouldUpdateGroundCollisionSystems && physicsBridgeSceneLoaded) {
+                syncSceneryGroundCollisionRuntimeLoadedTileKeys(currentDocument, camera);
+              }
             }
           }
-        }
-        try {
-          syncSceneryCompiledGroundRenderTiles(camera);
         } catch (caughtError) {
           const message = caughtError instanceof Error
             ? caughtError.message
@@ -14371,7 +14734,7 @@ function startRenderLoop(
         }
 
           updateLazyPlaceholders(deltaSeconds);
-        if (shouldRunTerrainScatterUpdate(camera, instancingNow)) {
+        if (shouldRunTerrainScatterUpdate(cameraFrameSnapshot)) {
           terrainScatterRuntime.update(camera, resolveGroundMeshObject);
         }
         if (shouldRunInstancedCulling(camera, instancingNow)) {
@@ -14382,7 +14745,7 @@ function startRenderLoop(
           if (gradientBackgroundDome) {
             gradientBackgroundDome.mesh.position.copy(camera.position);
           }
-          if (sceneCsmShadowRuntime && shouldRunSceneCsmShadowUpdate(camera, instancingNow)) {
+          if (sceneCsmShadowRuntime && shouldRunSceneCsmShadowUpdate(cameraFrameSnapshot)) {
             sceneCsmShadowRuntime.update();
           }
         renderer.render(scene, camera);
@@ -14474,7 +14837,7 @@ function cleanupForUnrelatedSceneSwitch(): void {
   stopBillboardMeshSubscription?.();
   stopBillboardMeshSubscription = null;
   clearInstancedMeshes();
-  const groundNode = currentDocument ? findGroundNode(currentDocument.nodes) : null;
+  const groundNode = resolveCurrentGroundNode();
   clearGroundCollisionRuntimeHost(groundNode ? (nodeObjectMap.get(groundNode.id) ?? null) : null);
   sceneryGroundCollisionReferenceInitialized = false;
   sceneryGroundCollisionReferenceElapsed = 0;
@@ -14487,6 +14850,7 @@ function cleanupForUnrelatedSceneSwitch(): void {
   dynamicGroundCache = null;
   setActiveMultiuserSceneId(null);
   viewerResourceCache = null;
+  overlaySyncForceNextUpdate = true;
 }
 
 async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanvasResult, token: number) {
@@ -14582,6 +14946,7 @@ const handleResize: WindowResizeCallback = (_result: unknown) => {
     renderContext!.camera.updateProjectionMatrix();
     sceneCsmShadowRuntime?.updateFrustums();
     markInstancedCullingDirty();
+    markOverlayRuntimeDirty();
   });
 };
 
@@ -14665,6 +15030,164 @@ function configurePhysicsInterpolation(physinterpParam: string): void {
   physicsInterpolationAlpha = 0;
 }
 
+function normalizeSceneInputValue(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function normalizeScenePackageUrl(value: string): string {
+  if (!value.includes('%')) {
+    return value;
+  }
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+function buildSceneInputKey(params: {
+  projectId: string;
+  packageUrl: string;
+  packageCacheKey: string;
+  physinterp: string;
+}): string {
+  return [
+    params.projectId,
+    params.packageUrl,
+    params.packageCacheKey,
+    String(props.physicsInterpolation ?? ''),
+    String(props.physicsEngine ?? ''),
+    params.physinterp,
+  ].join('::');
+}
+
+function reportMissingSceneInput(): void {
+  console.error('Input missing projectId and packageUrl');
+  requestedMode.value = null;
+  error.value = '缺少工程数据';
+  loading.value = false;
+}
+
+function reportProjectLoadMissing(projectId: string): void {
+  requestedMode.value = null;
+  error.value = '未找到对应的项目，请返回首页重新导入';
+  loading.value = false;
+  currentProjectId.value = projectId;
+}
+
+function beginSceneLoadState(input: ResolvedSceneInput): void {
+  requestedMode.value = 'project';
+  if (input.mode === 'package-url') {
+    currentProjectId.value = null;
+    loading.value = true;
+    return;
+  }
+  if (input.mode === 'project-id') {
+    currentProjectId.value = input.projectId;
+    loading.value = true;
+  }
+}
+
+type ResolvedSceneInput = {
+  projectId: string;
+  packageUrl: string;
+  packageCacheKey: string;
+  physinterp: string;
+  inputKey: string;
+  mode: 'package-url' | 'project-id' | 'missing';
+  effectiveCacheKey: string;
+};
+
+function applySceneInputFromProps(): void {
+  applyInput({
+    projectId: props.projectId,
+    packageUrl: props.packageUrl,
+    packageCacheKey: props.packageCacheKey,
+    physinterp: '',
+  });
+}
+
+function markPhysicsBridgeBodyDirty(nodeId: string | null | undefined): void {
+  const normalized = typeof nodeId === 'string' ? nodeId.trim() : '';
+  if (!normalized) {
+    return;
+  }
+  physicsBridgeDirtyBodyNodeIds.add(normalized);
+  physicsBridgeBodyDirtyRevisionByNodeId.set(
+    normalized,
+    (physicsBridgeBodyDirtyRevisionByNodeId.get(normalized) ?? 0) + 1,
+  );
+  const entry = rigidbodyInstances.get(normalized);
+  if (entry) {
+    entry.bridgeSyncDirty = true;
+  }
+}
+
+function resolveSceneInput(params: {
+  projectId?: string;
+  packageUrl?: string;
+  packageCacheKey?: string;
+  physinterp?: string;
+}): ResolvedSceneInput {
+  const projectId = normalizeSceneInputValue(params.projectId);
+  const packageUrl = normalizeScenePackageUrl(normalizeSceneInputValue(params.packageUrl));
+  const packageCacheKey = normalizeSceneInputValue(params.packageCacheKey);
+  const physinterp = normalizeSceneInputValue(params.physinterp);
+  return {
+    projectId,
+    packageUrl,
+    packageCacheKey,
+    physinterp,
+    mode: packageUrl ? 'package-url' : projectId ? 'project-id' : 'missing',
+    effectiveCacheKey: packageCacheKey || packageUrl,
+    inputKey: buildSceneInputKey({
+      projectId,
+      packageUrl,
+      packageCacheKey,
+      physinterp,
+    }),
+  };
+}
+
+function startSceneLoad(input: ResolvedSceneInput): void {
+  beginSceneLoadState(input);
+  if (input.mode === 'package-url') {
+    void loadProjectFromScenePackageUrl(input.packageUrl, input.effectiveCacheKey);
+    return;
+  }
+
+  if (input.mode === 'project-id') {
+    const entry = projectStore.getProject();
+    if (!entry || entry.id !== input.projectId) {
+      reportProjectLoadMissing(input.projectId);
+      return;
+    }
+    void loadProjectFromScenePackagePointer(entry.scenePackage);
+    return;
+  }
+
+  reportMissingSceneInput();
+}
+
+function applyResolvedSceneInput(input: ResolvedSceneInput): void {
+  const requestedPhysicsPreference = resolveSceneryPhysicsBridgePreference(
+    currentDocument ? resolveDocumentEnvironment(currentDocument) : activeEnvironmentSettings,
+  );
+  currentPhysicsBridgePreference = requestedPhysicsPreference;
+  // void syncCannonDebugger();
+
+  configurePhysicsInterpolation(input.physinterp);
+  error.value = null;
+  startSceneLoad(input);
+
+  bootstrapFinished.value = true;
+  if (previewPayload.value) {
+    handlePreviewPayload(previewPayload.value);
+  } else {
+    resetScenePreviewRuntimeState();
+  }
+}
+
 function applyInput(params: {
   projectId?: string;
   packageUrl?: string;
@@ -14672,66 +15195,12 @@ function applyInput(params: {
   physinterp?: string;
 }): void {
   bootstrapRuntimeIfNeeded();
-  const projectIdParam = typeof params.projectId === 'string' ? params.projectId.trim() : '';
-  const packageUrlParamRaw = typeof params.packageUrl === 'string' ? params.packageUrl.trim() : '';
-  const packageCacheKeyParam = typeof params.packageCacheKey === 'string' ? params.packageCacheKey.trim() : '';
-  let packageUrlParam = packageUrlParamRaw;
-  if (packageUrlParam.includes('%')) {
-    try {
-      packageUrlParam = decodeURIComponent(packageUrlParam);
-    } catch {
-      packageUrlParam = packageUrlParamRaw;
-    }
-  }
-  const physinterpParam = typeof params.physinterp === 'string' ? params.physinterp.trim() : '';
-
-  const inputKey = `${projectIdParam}::${packageUrlParam}::${packageCacheKeyParam}::${String(props.physicsInterpolation ?? '')}::${String(props.physicsEngine ?? '')}::${physinterpParam}`;
-  if (inputKey === lastAppliedInputKey) {
+  const input = resolveSceneInput(params);
+  if (input.inputKey === lastAppliedInputKey) {
     return;
   }
-  lastAppliedInputKey = inputKey;
-
-  const requestedPhysicsPreference = resolveSceneryPhysicsBridgePreference(
-    currentDocument ? resolveDocumentEnvironment(currentDocument) : activeEnvironmentSettings,
-  );
-  currentPhysicsBridgePreference = requestedPhysicsPreference;
-  // void syncCannonDebugger();
-
-  configurePhysicsInterpolation(physinterpParam);
-  error.value = null;
-
-  if (packageUrlParam) {
-    requestedMode.value = 'project';
-    currentProjectId.value = null;
-    loading.value = true;
-    const effectiveCacheKey = packageCacheKeyParam || packageUrlParam;
-    void loadProjectFromScenePackageUrl(packageUrlParam, effectiveCacheKey);
-  } else if (projectIdParam) {
-    requestedMode.value = 'project';
-    currentProjectId.value = projectIdParam;
-    const entry = projectStore.getProject();
-    if (!entry || entry.id !== projectIdParam) {
-      requestedMode.value = null;
-      error.value = '未找到对应的项目，请返回首页重新导入';
-      loading.value = false;
-    } else {
-      loading.value = true;
-      void loadProjectFromScenePackagePointer(entry.scenePackage);
-    }
-  } else {
-    console.error('Input missing projectId and packageUrl');
-    requestedMode.value = null;
-    error.value = '缺少工程数据';
-    loading.value = false;
-  }
-
-  bootstrapFinished.value = true;
-  if (previewPayload.value) {
-    handlePreviewPayload(previewPayload.value);
-  } else {
-    teardownRenderer();
-    resetRemovedSkyState();
-  }
+  lastAppliedInputKey = input.inputKey;
+  applyResolvedSceneInput(input);
 }
 
 function hasAnyPropInput(): boolean {
@@ -14748,12 +15217,7 @@ onMounted(() => {
   }
 
   if (hasAnyPropInput()) {
-    applyInput({
-      projectId: props.projectId,
-      packageUrl: props.packageUrl,
-      packageCacheKey: props.packageCacheKey,
-      physinterp: '',
-    });
+    applySceneInputFromProps();
   }
 });
 
@@ -14763,12 +15227,7 @@ watch(
     if (!hasAnyPropInput()) {
       return;
     }
-    applyInput({
-      projectId: props.projectId,
-      packageUrl: props.packageUrl,
-      packageCacheKey: props.packageCacheKey,
-      physinterp: '',
-    });
+    applySceneInputFromProps();
   },
 );
 

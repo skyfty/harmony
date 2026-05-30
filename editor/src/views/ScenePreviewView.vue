@@ -96,6 +96,7 @@ import {
 	buildGroundCollisionDebugShapesFromNode,
 	isGroundDynamicMesh,
 } from '@schema/groundHeightfield'
+import { resolveDocumentGroundNode as resolveSharedDocumentGroundNode } from '@schema/groundNode'
 import { computeCompiledGroundManifestRevision } from '@schema/compiledGround'
 import {
 	clearCompiledGroundRenderTiles,
@@ -2280,7 +2281,7 @@ async function syncGroundCache(document: SceneJsonExportDocument | null): Promis
 		lastScenePreviewCompiledGroundRenderLoadedChunkKeysVersion = -1
 		return
 	}
-	const groundNode = findGroundNode(document.nodes)
+	const groundNode = resolveSharedDocumentGroundNode(document)
 	if (!groundNode || !isGroundDynamicMesh(groundNode.dynamicMesh)) {
 		if (previousGroundObject) {
 			setInfiniteGroundHiddenChunkKeys(previousGroundObject, [])
@@ -2899,26 +2900,6 @@ async function handleCouponEvent(event: Extract<BehaviorRuntimeEvent, { type: 'c
 	} catch (error) {
 		console.warn('[ScenePreviewView] Failed to grant coupon', error)
 	}
-}
-
-function findGroundNode(nodes: SceneNode[] | undefined | null): SceneNode | null {
-	if (!Array.isArray(nodes)) {
-		return null
-	}
-	const stack: SceneNode[] = [...nodes]
-	while (stack.length) {
-		const node = stack.pop()
-		if (!node) {
-			continue
-		}
-		if (isGroundDynamicMesh(node.dynamicMesh)) {
-			return node
-		}
-		if (Array.isArray(node.children) && node.children.length) {
-			stack.push(...node.children)
-		}
-	}
-	return null
 }
 
 function resolveVehicleAncestorNodeId(nodeId: string | null): string | null {
@@ -7345,7 +7326,7 @@ async function buildPreviewRuntimeDocument(
 	const runtimeDocument = preparedRuntime.document
 	const defaultSteerNodeId = resolveDefaultSteerBinding(document)
 	pendingDefaultSteerDriveEvent.value = defaultSteerNodeId ? buildDefaultSteerDriveEvent(defaultSteerNodeId) : null
-	const groundNode = findGroundNode(runtimeDocument.nodes)
+	const groundNode = resolveSharedDocumentGroundNode(runtimeDocument)
 	const sidecar = await resolvePreviewGroundHeightSidecar(runtimeDocument.id, groundNode, options.groundHeightSidecar)
 	const scatterSidecar = options.groundScatterSidecar ?? await useScenesStore().loadGroundScatterSidecar(runtimeDocument.id)
 	const scatterStore = useGroundScatterStore()
@@ -10528,7 +10509,7 @@ function resolveScenePreviewCompiledGroundRuntime(): {
 	if (!currentDocument) {
 		return null
 	}
-	const groundNode = cachedGroundNode ?? findGroundNode(currentDocument.nodes)
+	const groundNode = cachedGroundNode ?? resolveSharedDocumentGroundNode(currentDocument)
 	const groundDefinition = cachedGroundDynamicMesh ?? groundNode?.dynamicMesh
 	if (!groundNode || !isGroundDynamicMesh(groundDefinition)) {
 		return null
@@ -10669,7 +10650,7 @@ function syncScenePreviewGroundCollisionRuntimeHost(
 	if (!document) {
 		return false
 	}
-	const groundNode = findGroundNode(document.nodes)
+	const groundNode = resolveSharedDocumentGroundNode(document)
 	const groundMesh = groundNode?.dynamicMesh as GroundRuntimeDynamicMesh | null | undefined
 	if (!groundNode || !isGroundDynamicMesh(groundMesh)) {
 		return false
@@ -10766,7 +10747,7 @@ async function loadScenePreviewPhysicsBridgeScene(
 	}
 	await ensureScenePreviewPhysicsBridgeReady()
 	await syncScenePreviewGroundChunkManifest(document)
-	const groundNode = findGroundNode(document.nodes)
+	const groundNode = resolveSharedDocumentGroundNode(document)
 	const groundMesh = groundNode?.dynamicMesh as GroundRuntimeDynamicMesh | null | undefined
 	const groundObject = groundNode ? (nodeObjectMap.get(groundNode.id) ?? null) : null
 	if (resolveGroundCollisionReferenceWorld(groundCollisionReferencePosition)) {

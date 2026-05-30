@@ -136,7 +136,8 @@ class ComponentContextImpl<TProps> implements ComponentRuntimeContext<TProps> {
 export class ComponentManager {
   private readonly definitions = new Map<NodeComponentType, AnyComponentDefinition>()
   private readonly nodeBundles = new Map<string, NodeComponentBundle>()
-  private frameState: Readonly<ComponentFrameState> = { cameraWorldPosition: null }
+  private readonly frameState: ComponentFrameState = { cameraWorldPosition: null }
+  private readonly frameStateCameraWorldPosition = { x: 0, y: 0, z: 0 }
 
   registerDefinition<TProps>(definition: ComponentDefinition<TProps>): void {
     this.definitions.set(definition.type, definition as AnyComponentDefinition)
@@ -170,18 +171,19 @@ export class ComponentManager {
       })
     })
     this.nodeBundles.clear()
-    this.frameState = { cameraWorldPosition: null }
+    this.frameState.cameraWorldPosition = null
   }
 
   setFrameState(frameState: Partial<ComponentFrameState> | null | undefined): void {
-    this.frameState = {
-      cameraWorldPosition: frameState?.cameraWorldPosition ?? null,
+    const nextCameraWorldPosition = frameState?.cameraWorldPosition ?? null
+    if (!nextCameraWorldPosition) {
+      this.frameState.cameraWorldPosition = null
+      return
     }
-    this.nodeBundles.forEach((bundle) => {
-      bundle.instances.forEach((wrapper) => {
-        wrapper.context.setFrameState(this.frameState)
-      })
-    })
+    this.frameStateCameraWorldPosition.x = nextCameraWorldPosition.x
+    this.frameStateCameraWorldPosition.y = nextCameraWorldPosition.y
+    this.frameStateCameraWorldPosition.z = nextCameraWorldPosition.z
+    this.frameState.cameraWorldPosition = this.frameStateCameraWorldPosition
   }
 
   syncScene(nodes: SceneNode[]): void {

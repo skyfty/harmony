@@ -5,6 +5,7 @@ import type {
 } from './core'
 import { buildGroundOptimizedMeshData } from './groundOptimizedMesh'
 import { isGroundDynamicMesh } from './groundHeightfield'
+import { resolveDocumentGroundNode } from './groundNode'
 
 export type PrepareRuntimeGroundSplatSceneDocumentResult = {
   document: SceneJsonExportDocument
@@ -13,26 +14,6 @@ export type PrepareRuntimeGroundSplatSceneDocumentResult = {
   strippedLandformNodes: boolean
   groundSurfaceChunkCount: number
   landformNodeCount: number
-}
-
-function findGroundNode(nodes: SceneNode[] | undefined | null): SceneNode | null {
-  if (!Array.isArray(nodes)) {
-    return null
-  }
-  const stack = [...nodes]
-  while (stack.length > 0) {
-    const node = stack.pop()
-    if (!node) {
-      continue
-    }
-    if (node.dynamicMesh?.type === 'Ground') {
-      return node
-    }
-    if (Array.isArray(node.children) && node.children.length > 0) {
-      stack.push(...node.children)
-    }
-  }
-  return null
 }
 
 function countLandformNodes(nodes: SceneNode[] | undefined | null): number {
@@ -57,7 +38,7 @@ function countLandformNodes(nodes: SceneNode[] | undefined | null): number {
 }
 
 export function attachOptimizedGroundMeshToDocument(document: SceneJsonExportDocument): SceneJsonExportDocument {
-  const groundNode = findGroundNode(document.nodes)
+  const groundNode = resolveDocumentGroundNode(document)
   if (!groundNode || !isGroundDynamicMesh(groundNode.dynamicMesh)) {
     return document
   }
@@ -94,7 +75,7 @@ function stripLandformNodes(nodes: SceneNode[] | undefined | null): boolean {
 export async function prepareRuntimeGroundSplatSceneDocument(
   document: SceneJsonExportDocument,
 ): Promise<PrepareRuntimeGroundSplatSceneDocumentResult> {
-  const groundNode = findGroundNode(document.nodes)
+  const groundNode = resolveDocumentGroundNode(document)
   const groundDefinition = groundNode?.dynamicMesh?.type === 'Ground' ? (groundNode.dynamicMesh as GroundDynamicMesh)  : null
   const directChunks = groundDefinition?.groundSurfaceChunks
   const bakedChunks = !directChunks ? groundDefinition?.groundSplatBake?.chunkTextureMap : null

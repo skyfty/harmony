@@ -6,6 +6,7 @@ import { buildBoundaryWallSegments } from './boundaryWall'
 import {
   isGroundDynamicMesh,
 } from './groundHeightfield'
+import { resolveDocumentGroundNode } from './groundNode'
 import { resolveFloorShape, resolveModelCollisionFaceSegments, resolveWallShape, type FloorShapeCache, type WallTrimeshCache } from './physicsShapeResolvers'
 import { isRoadDynamicMesh } from './roadCollision'
 import {
@@ -205,22 +206,6 @@ function resolvePhysicsSceneRigidbodyComponent(
       targetNodeId: node.id ?? null,
     }),
   }
-}
-
-function findGroundNode(nodes: SceneNode[] | null | undefined): SceneNode | null {
-  if (!Array.isArray(nodes)) {
-    return null
-  }
-  for (const node of nodes) {
-    if (isGroundDynamicMesh(node.dynamicMesh)) {
-      return node
-    }
-    const nested = findGroundNode(Array.isArray(node.children) ? node.children : null)
-    if (nested) {
-      return nested
-    }
-  }
-  return null
 }
 
 function scaleShapeOffset(shape: RigidbodyPhysicsShape, worldScale: THREE.Vector3): PhysicsVector3 {
@@ -690,7 +675,7 @@ export async function buildPhysicsSceneAsset(
   const bodyIdsByNodeId = new Map<string, number>()
   const floorShapeCache: FloorShapeCache = new Map()
   const wallShapeCache: WallTrimeshCache = new Map()
-  const groundNode = findGroundNode(document.nodes)
+  const groundNode = resolveDocumentGroundNode(document)
   let groundWorldTransform: PhysicsTransform | null = null
   let groundWorldScale: PhysicsVector3 | null = null
   let nextMaterialId = 1

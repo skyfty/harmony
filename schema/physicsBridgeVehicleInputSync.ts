@@ -3,6 +3,7 @@ import type {
 } from '@harmony/physics-core'
 
 export const PHYSICS_BRIDGE_VEHICLE_STOP_INPUT_DEADZONE = 0.05
+const PHYSICS_BRIDGE_VEHICLE_INPUT_EPSILON = 1e-4
 
 type PhysicsBridgeVehicleControlInput = {
   steering: number
@@ -24,6 +25,9 @@ export type PhysicsBridgeVehicleInputSyncState = {
   lastDrivenVehicleId: number | null
   lastDrivenNodeId: string | null
   motionInputActive: boolean
+  lastSentSteering: number | null
+  lastSentThrottle: number | null
+  lastSentBrake: number | null
 }
 
 export type PhysicsBridgeVehicleInputSyncOptions = {
@@ -45,6 +49,9 @@ export function createPhysicsBridgeVehicleInputSyncState(): PhysicsBridgeVehicle
     lastDrivenVehicleId: null,
     lastDrivenNodeId: null,
     motionInputActive: false,
+    lastSentSteering: null,
+    lastSentThrottle: null,
+    lastSentBrake: null,
   }
 }
 
@@ -53,6 +60,9 @@ export function resetPhysicsBridgeVehicleInputSyncState(state: PhysicsBridgeVehi
   state.lastDrivenVehicleId = null
   state.lastDrivenNodeId = null
   state.motionInputActive = false
+  state.lastSentSteering = null
+  state.lastSentThrottle = null
+  state.lastSentBrake = null
 }
 
 export function syncPhysicsBridgeVehicleInput(options: PhysicsBridgeVehicleInputSyncOptions): void {
@@ -74,6 +84,9 @@ export function syncPhysicsBridgeVehicleInput(options: PhysicsBridgeVehicleInput
     if (typeof state.lastDrivenVehicleId !== 'number') {
       state.lastDrivenNodeId = null
       state.motionInputActive = false
+      state.lastSentSteering = null
+      state.lastSentThrottle = null
+      state.lastSentBrake = null
       return
     }
     const lastDrivenNodeId = state.lastDrivenNodeId
@@ -91,6 +104,9 @@ export function syncPhysicsBridgeVehicleInput(options: PhysicsBridgeVehicleInput
         state.lastDrivenVehicleId = null
         state.lastDrivenNodeId = null
         state.motionInputActive = false
+        state.lastSentSteering = null
+        state.lastSentThrottle = null
+        state.lastSentBrake = null
         state.pendingPromise = null
       })
     return
@@ -121,17 +137,33 @@ export function syncPhysicsBridgeVehicleInput(options: PhysicsBridgeVehicleInput
     || Math.abs(input.brake) > PHYSICS_BRIDGE_VEHICLE_STOP_INPUT_DEADZONE
   const shouldStopImmediately = state.motionInputActive && !motionInputActive
   const bridgeBrake = motionInputActive ? input.brake : 1
+  const shouldSyncInput =
+    state.lastDrivenVehicleId !== vehicleId
+    || state.lastSentSteering === null
+    || state.lastSentThrottle === null
+    || state.lastSentBrake === null
+    || Math.abs(state.lastSentSteering - input.steering) > PHYSICS_BRIDGE_VEHICLE_INPUT_EPSILON
+    || Math.abs(state.lastSentThrottle - input.throttle) > PHYSICS_BRIDGE_VEHICLE_INPUT_EPSILON
+    || Math.abs(state.lastSentBrake - bridgeBrake) > PHYSICS_BRIDGE_VEHICLE_INPUT_EPSILON
 
   state.lastDrivenVehicleId = vehicleId
   state.lastDrivenNodeId = activeNodeId
   state.motionInputActive = motionInputActive
+  if (!shouldSyncInput && !shouldStopImmediately) {
+    return
+  }
 
-  const inputPromise = bridge.setVehicleInput({
-    vehicleId,
-    steering: input.steering,
-    throttle: input.throttle,
-    brake: bridgeBrake,
-  })
+  state.lastSentSteering = input.steering
+  state.lastSentThrottle = input.throttle
+  state.lastSentBrake = bridgeBrake
+  const inputPromise = shouldSyncInput
+    ? bridge.setVehicleInput({
+        vehicleId,
+        steering: input.steering,
+        throttle: input.throttle,
+        brake: bridgeBrake,
+      })
+    : Promise.resolve()
   const stopPromise = shouldStopImmediately
     ? stopPhysicsBridgeVehicleImmediately(options, activeNodeId)
     : Promise.resolve()
