@@ -8,7 +8,13 @@ import { useUiStore } from '@/stores/uiStore'
 const uiStore = useUiStore()
 const authStore = useAuthStore()
 const { loadingOverlay } = storeToRefs(uiStore)
-const { sessionNotice, sessionNoticeVisible } = storeToRefs(authStore)
+const {
+  sessionNotice,
+  sessionNoticeVisible,
+  pendingEditorLoginRequest,
+  editorLoginRequestVisible,
+  editorLoginRequestResponding,
+} = storeToRefs(authStore)
 
 const sessionNoticeSnackbarVisible = ref(false)
 
@@ -30,6 +36,14 @@ watch(
 function handleOverlayClose() {
   uiStore.requestClose()
 }
+
+function rejectEditorLoginRequest() {
+  void authStore.respondToEditorLoginRequest(false)
+}
+
+function approveEditorLoginRequest() {
+  void authStore.respondToEditorLoginRequest(true)
+}
 </script>
 
 <template>
@@ -45,6 +59,38 @@ function handleOverlayClose() {
     >
       {{ sessionNotice ?? '账号已在另一台设备登录，当前会话已下线。' }}
     </v-snackbar>
+    <v-dialog :model-value="editorLoginRequestVisible" max-width="460" persistent>
+      <v-card>
+        <v-card-title class="text-h6">账号登录确认</v-card-title>
+        <v-card-text>
+          <p class="mb-2">
+            账号 {{ pendingEditorLoginRequest?.username ?? '' }} 正在另一台设备登录。
+          </p>
+          <p class="text-medium-emphasis mb-0">
+            允许后，当前 editor 会退出登录，并让另一台设备完成登录。
+          </p>
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn
+            variant="text"
+            :disabled="editorLoginRequestResponding"
+            @click="rejectEditorLoginRequest"
+          >
+            拒绝
+          </v-btn>
+          <v-btn
+            color="primary"
+            variant="flat"
+            :loading="editorLoginRequestResponding"
+            :disabled="editorLoginRequestResponding"
+            @click="approveEditorLoginRequest"
+          >
+            允许登录
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
     <LoadingOverlay
       :visible="loadingOverlay.visible"
       :mode="loadingOverlay.mode"

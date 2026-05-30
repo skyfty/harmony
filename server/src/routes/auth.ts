@@ -1,5 +1,5 @@
 import Router from 'koa-router'
-import { login, logout, profile } from '@/controllers/authController'
+import { login, logout, profile, respondEditorLoginRequest } from '@/controllers/authController'
 import { UserModel } from '@/models/User'
 import { authMiddleware } from '@/middleware/auth'
 import { editorSessionService } from '@/services/editorSessionService'
@@ -10,6 +10,7 @@ const authRouter = new Router({ prefix: '/api/auth' })
 authRouter.post('/login', login)
 authRouter.get('/profile', authMiddleware, profile)
 authRouter.post('/logout', authMiddleware, logout)
+authRouter.post('/editor-session/login-request/:requestId/respond', authMiddleware, respondEditorLoginRequest)
 
 authRouter.get('/editor-session/stream', async (ctx) => {
 	const token = typeof ctx.query.token === 'string' ? ctx.query.token : ''

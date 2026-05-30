@@ -101,6 +101,16 @@ export interface AuthSessionResponse {
   permissions: string[]
 }
 
+export class AuthLoginError extends Error {
+  constructor(
+    message: string,
+    readonly code: 'INVALID_CREDENTIALS' | 'ACCOUNT_DISABLED' | 'LOGIN_REQUEST_REJECTED' | 'LOGIN_REQUEST_TIMEOUT',
+  ) {
+    super(message)
+    this.name = 'AuthLoginError'
+  }
+}
+
 function mapSessionUser(user: UserLean): SessionUser {
   return {
     id: user._id.toString(),
@@ -325,15 +335,15 @@ export async function loginWithPassword(username: string, password: string): Pro
   const safeUsername = username.trim()
   const user = await UserModel.findOne({ username: safeUsername }).exec()
   if (!user) {
-    throw new Error('Invalid credentials')
+    throw new AuthLoginError('Invalid credentials', 'INVALID_CREDENTIALS')
   }
   if (user.status !== 'active') {
-    throw new Error('Account disabled')
+    throw new AuthLoginError('Account disabled', 'ACCOUNT_DISABLED')
   }
 
   const ok = await verifyPassword(password, user.password)
   if (!ok) {
-    throw new Error('Invalid credentials')
+    throw new AuthLoginError('Invalid credentials', 'INVALID_CREDENTIALS')
   }
 
   const roleIds = user.roles as Types.ObjectId[]
@@ -345,6 +355,21 @@ export async function loginWithPassword(username: string, password: string): Pro
   const isEditorAccount = roles.some((role) => role.code === 'editor')
   let editorSessionId: string | undefined
   if (isEditorAccount) {
+    const previousEditorSessionId = user.editorSessionId ?? null
+    if (previousEditorSessionId && editorSessionService.hasActiveEditorSession(sessionUser.id, previousEditorSessionId)) {
+      const approvalResult = await editorSessionService.requestLoginApproval({
+        userId: sessionUser.id,
+        editorSessionId: previousEditorSessionId,
+        username: sessionUser.username,
+      })
+      if (approvalResult === 'timeout') {
+        throw new AuthLoginError('LOGIN_REQUEST_TIMEOUT', 'LOGIN_REQUEST_TIMEOUT')
+      }
+      if (approvalResult !== 'approved') {
+        throw new AuthLoginError('LOGIN_REQUEST_REJECTED', 'LOGIN_REQUEST_REJECTED')
+      }
+    }
+
     const activeEditorSessionId = nanoid()
     editorSessionId = activeEditorSessionId
     user.editorSessionId = activeEditorSessionId

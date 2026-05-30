@@ -2,7 +2,12 @@ import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import type { SessionUser } from '@/types/auth'
 import { fetchProfile, loginWithPassword, logoutSession } from '@/api/auth'
-import { openEditorSessionStream, type EditorSessionStreamHandle } from '@/api/editorSession'
+import {
+  openEditorSessionStream,
+  respondEditorLoginRequest,
+  type EditorLoginRequest,
+  type EditorSessionStreamHandle,
+} from '@/api/editorSession'
 import router from '@/router'
 
 type StoredSession = {
@@ -108,6 +113,11 @@ export const useAuthStore = defineStore('auth', () => {
   const sessionNotice = ref<string | null>(null)
   const sessionNoticeVisible = ref(false)
   const editorSessionStream = ref<EditorSessionStreamHandle | null>(null)
+  const pendingEditorLoginRequest = ref<EditorLoginRequest | null>(null)
+  const editorLoginRequestVisible = ref(false)
+  const editorLoginRequestResponding = ref(false)
+  const editorLoginRequestTimer = ref<number | null>(null)
+  const approvedLogoutNotice = ref<string | null>(null)
 
   const authorizationHeader = computed(() => (token.value ? `Bearer ${token.value}` : null))
   const isAuthenticated = computed(() => !!token.value && !!user.value)
@@ -122,6 +132,30 @@ export const useAuthStore = defineStore('auth', () => {
     sessionNoticeVisible.value = false
   }
 
+  function clearEditorLoginRequest() {
+    pendingEditorLoginRequest.value = null
+    editorLoginRequestVisible.value = false
+    editorLoginRequestResponding.value = false
+    if (editorLoginRequestTimer.value !== null && typeof window !== 'undefined') {
+      window.clearTimeout(editorLoginRequestTimer.value)
+    }
+    editorLoginRequestTimer.value = null
+  }
+
+  function showEditorLoginRequest(request: EditorLoginRequest) {
+    clearEditorLoginRequest()
+    pendingEditorLoginRequest.value = request
+    editorLoginRequestVisible.value = true
+    if (typeof window === 'undefined') {
+      return
+    }
+    const expiresAt = Date.parse(request.expiresAt)
+    const delay = Number.isFinite(expiresAt) ? Math.max(0, expiresAt - Date.now()) : 30000
+    editorLoginRequestTimer.value = window.setTimeout(() => {
+      clearEditorLoginRequest()
+    }, delay)
+  }
+
   function disconnectEditorSessionStream() {
     editorSessionStream.value?.close()
     editorSessionStream.value = null
@@ -134,17 +168,20 @@ export const useAuthStore = defineStore('auth', () => {
     }
     editorSessionStream.value = openEditorSessionStream(token.value, {
       onForcedLogout: () => {
-        handleForcedLogout('账号已在另一台设备登录，当前会话已下线。')
+        handleForcedLogout(approvedLogoutNotice.value ?? '账号已在另一台设备登录，当前会话已下线。')
       },
+      onLoginRequest: showEditorLoginRequest,
     })
   }
 
   function handleForcedLogout(message: string) {
     disconnectEditorSessionStream()
+    clearEditorLoginRequest()
     clearPersistedState()
     token.value = null
     user.value = null
     permissions.value = []
+    approvedLogoutNotice.value = null
     loginLoading.value = false
     loginError.value = null
     loginDialogVisible.value = false
@@ -337,6 +374,7 @@ export const useAuthStore = defineStore('auth', () => {
 
   function clearSessionState() {
     disconnectEditorSessionStream()
+    clearEditorLoginRequest()
     token.value = null
     user.value = null
     permissions.value = []
@@ -368,7 +406,13 @@ export const useAuthStore = defineStore('auth', () => {
       hideLoginDialog()
       await router.replace('/')
     } catch (error) {
-      const message = (error as Error)?.message ?? '登录失败'
+      const rawMessage = (error as Error)?.message ?? '登录失败'
+      const message =
+        rawMessage === 'LOGIN_REQUEST_REJECTED'
+          ? '登录请求被当前在线用户拒绝'
+          : rawMessage === 'LOGIN_REQUEST_TIMEOUT'
+            ? '登录请求超时'
+            : rawMessage
       loginError.value = message
       throw error
     } finally {
@@ -398,6 +442,27 @@ export const useAuthStore = defineStore('auth', () => {
     return permissions.value.includes(permission)
   }
 
+  async function respondToEditorLoginRequest(approved: boolean): Promise<void> {
+    const request = pendingEditorLoginRequest.value
+    const currentToken = token.value
+    if (!request || !currentToken || editorLoginRequestResponding.value) {
+      return
+    }
+    editorLoginRequestResponding.value = true
+    try {
+      const handled = await respondEditorLoginRequest(currentToken, request.requestId, approved)
+      if (handled && approved) {
+        approvedLogoutNotice.value = '已允许另一台设备登录，当前会话已退出。'
+      }
+      clearEditorLoginRequest()
+    } catch (error) {
+      console.warn('[auth] respond editor login request failed', error)
+      clearEditorLoginRequest()
+      sessionNotice.value = '登录确认响应失败，请稍后重试'
+      sessionNoticeVisible.value = true
+    }
+  }
+
   return {
     token,
     user,
@@ -415,8 +480,12 @@ export const useAuthStore = defineStore('auth', () => {
     initialized,
     sessionNotice,
     sessionNoticeVisible,
+    pendingEditorLoginRequest,
+    editorLoginRequestVisible,
+    editorLoginRequestResponding,
     clearSessionNotice,
     hasPermission,
+    respondToEditorLoginRequest,
     getLoginDefaults,
     initialize,
     login,
