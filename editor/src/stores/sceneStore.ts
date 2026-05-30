@@ -38,7 +38,11 @@ import {
   extractWaterSurfaceMeshMetadataFromUserData,
   normalizeWaterSurfaceMeshInput,
 } from '@schema/core'
-import { resolveGroundRuntimeChunkCells } from '@schema/groundMesh'
+import {
+  collectGroundAffectedChunkKeysFromRegion,
+  expandGroundChunkKeysWithNeighbors,
+  resolveGroundRuntimeChunkCells,
+} from '@schema/groundMesh'
 import { DEFAULT_INTENSITY } from '@schema/lightDefaults'
 import { createScenesStoreTerrainDatasetHeightSampler } from '@/utils/terrainDatasetRuntime'
 import {
@@ -2006,6 +2010,7 @@ function commitGroundLocalEditTilesRuntimeEdit(
   definition: GroundDynamicMesh,
   localEditTiles: GroundLocalEditTileMap | null,
   affectedRegion: { minRow: number; maxRow: number; minColumn: number; maxColumn: number } | null = null,
+  dirtyBounds: WorldBoundsXZ | null = null,
 ): boolean {
   const target = findNodeById(store.nodes, nodeId)
   if (!target || target.dynamicMesh?.type !== 'Ground' || !store.currentSceneId) {
@@ -2013,7 +2018,7 @@ function commitGroundLocalEditTilesRuntimeEdit(
   }
   const runtimeDefinition = definition as GroundRuntimeDynamicMesh
   const targetRuntimeDefinition = target.dynamicMesh as GroundRuntimeDynamicMesh
-  const resolvedDirtyBounds = computeGroundDirtyBoundsXZFromRegion(target, runtimeDefinition, affectedRegion)
+  const resolvedDirtyBounds = dirtyBounds ?? computeGroundDirtyBoundsXZFromRegion(target, runtimeDefinition, affectedRegion)
   const currentRevision = normalizeGroundSurfaceRevision(target.dynamicMesh.surfaceRevision)
   const nextRevision = currentRevision + 1
   target.dynamicMesh.surfaceRevision = nextRevision
@@ -2034,6 +2039,45 @@ function commitGroundLocalEditTilesRuntimeEdit(
   finalizeDynamicMeshRuntimePatch(store, nodeId, 'Ground')
   persistGroundHeightSidecarForNode(target)
   return true
+}
+
+function commitGroundSculptRuntimeEdit(
+  store: {
+    nodes: SceneNode[]
+    currentSceneId?: string | null
+    queueSceneNodePatch: (nodeId: string, fields: ScenePatchField[], options?: { bumpVersion?: boolean }) => boolean
+    bumpSceneNodePropertyVersion: () => void
+  },
+  nodeId: string,
+  definition: GroundDynamicMesh,
+  localEditTiles: GroundLocalEditTileMap | null,
+  affectedRegion: { minRow: number; maxRow: number; minColumn: number; maxColumn: number } | null = null,
+  touchedChunkKeys: string[] | null = null,
+  dirtyBounds: WorldBoundsXZ | null = null,
+): { committed: boolean; dirtyChunkKeys: string[] } {
+  const committed = commitGroundLocalEditTilesRuntimeEdit(
+    store,
+    nodeId,
+    definition,
+    localEditTiles,
+    affectedRegion,
+    dirtyBounds,
+  )
+  if (!committed) {
+    return { committed: false, dirtyChunkKeys: [] }
+  }
+  const exactDirtyChunkKeys = Array.isArray(touchedChunkKeys) && touchedChunkKeys.length
+    ? Array.from(new Set(touchedChunkKeys.filter((key) => typeof key === 'string' && key.length > 0)))
+    : affectedRegion
+      ? collectGroundAffectedChunkKeysFromRegion(definition, affectedRegion, {
+      chunkCells: resolveGroundRuntimeChunkCells(definition),
+      padding: 0,
+      })
+      : []
+  return {
+    committed: true,
+    dirtyChunkKeys: expandGroundChunkKeysWithNeighbors(exactDirtyChunkKeys, 1),
+  }
 }
 
 function refreshGroundOptimizedMeshRuntime(
@@ -2872,21 +2916,11 @@ function resolveGroundDirtyChunkKeysFromRegion(
     return null
   }
   const chunkCells = Math.max(1, resolveGroundRuntimeChunkCells(definition))
-  const startRow = 'startRow' in region ? region.startRow : region.minRow
-  const endRow = 'endRow' in region ? region.endRow : region.maxRow
-  const startColumn = 'startColumn' in region ? region.startColumn : region.minColumn
-  const endColumn = 'endColumn' in region ? region.endColumn : region.maxColumn
-  const minRow = Math.max(0, Math.floor(startRow / chunkCells) - 1)
-  const maxRow = Math.max(0, Math.floor(endRow / chunkCells) + 1)
-  const minColumn = Math.max(0, Math.floor(startColumn / chunkCells) - 1)
-  const maxColumn = Math.max(0, Math.floor(endColumn / chunkCells) + 1)
-  const chunkKeys: string[] = []
-  for (let row = minRow; row <= maxRow; row += 1) {
-    for (let column = minColumn; column <= maxColumn; column += 1) {
-      chunkKeys.push(`${row}:${column}`)
-    }
-  }
-  return chunkKeys
+  const chunkKeys = collectGroundAffectedChunkKeysFromRegion(definition, region, {
+    chunkCells,
+    padding: 1,
+  })
+  return chunkKeys.length ? chunkKeys : null
 }
 
 function buildGroundManualRegionFromHeightMap(
@@ -9126,6 +9160,10 @@ export const useSceneStore = defineStore('scene', {
       ) {
         return false
       }
+      const normalizedChunkKeys = expandGroundChunkKeysWithNeighbors(chunkKeys, 0)
+      if (!normalizedChunkKeys.length) {
+        return false
+      }
       const scenesStore = useScenesStore()
       const terrainDatasetManifest = await scenesStore.loadTerrainDatasetManifest(document.id)
       if (!shouldUseCompiledGroundForDefinition(sourceGroundNode.dynamicMesh, terrainDatasetManifest?.datasetId ?? null)) {
@@ -9161,7 +9199,7 @@ export const useSceneStore = defineStore('scene', {
         })
         return true
       }
-      const rebuilt = await rebuildSceneCompiledGroundPackageChunks(document, buildKey, chunkKeys, {
+      const rebuilt = await rebuildSceneCompiledGroundPackageChunks(document, buildKey, normalizedChunkKeys, {
         sourceSignature,
         workspaceId: this.workspaceId,
       })
@@ -10251,6 +10289,32 @@ export const useSceneStore = defineStore('scene', {
         }
       }
       return committed
+    },
+    commitGroundSculptEdit(
+      nodeId: string,
+      definition: GroundDynamicMesh,
+      payload: {
+        affectedRegion: { minRow: number; maxRow: number; minColumn: number; maxColumn: number } | null
+        touchedChunkKeys: string[]
+        localEditTiles: GroundLocalEditTileMap | null
+        dirtyBounds?: WorldBoundsXZ | null
+      },
+    ) {
+      const committed = commitGroundSculptRuntimeEdit(
+        this,
+        nodeId,
+        definition,
+        payload.localEditTiles,
+        payload.affectedRegion,
+        payload.touchedChunkKeys,
+        payload.dirtyBounds ?? null,
+      )
+      if (committed.committed && committed.dirtyChunkKeys.length) {
+        void this.rebuildCurrentSceneCompiledGroundChunks(nodeId, committed.dirtyChunkKeys).catch((error) => {
+          console.warn('[SceneStore] Failed to rebuild compiled ground after sculpt edit', error)
+        })
+      }
+      return committed.committed
     },
     refreshGroundOptimizedMesh(nodeId: string) {
       return refreshGroundOptimizedMeshRuntime(this, nodeId)

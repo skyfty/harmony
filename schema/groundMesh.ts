@@ -506,6 +506,98 @@ function resolveRuntimeGroundChunkKeyFromSharedKey(key: string): string | null {
   return groundChunkKey(parsed.chunkZ, parsed.chunkX)
 }
 
+export function expandGroundChunkKeysWithNeighbors(
+  chunkKeys: Iterable<string> | null | undefined,
+  padding = 1,
+): string[] {
+  const safePadding = Math.max(0, Math.trunc(padding))
+  const expanded = new Set<string>()
+  if (!chunkKeys) {
+    return []
+  }
+  for (const key of chunkKeys) {
+    if (typeof key !== 'string' || key.length === 0) {
+      continue
+    }
+    const parsed = parseGroundChunkKey(key)
+    if (!parsed) {
+      continue
+    }
+    for (let chunkZ = parsed.chunkZ - safePadding; chunkZ <= parsed.chunkZ + safePadding; chunkZ += 1) {
+      for (let chunkX = parsed.chunkX - safePadding; chunkX <= parsed.chunkX + safePadding; chunkX += 1) {
+        expanded.add(`${chunkX}:${chunkZ}`)
+      }
+    }
+  }
+  return Array.from(expanded)
+}
+
+export function collectGroundAffectedChunkKeysFromWorldBounds(
+  definition: Pick<GroundDynamicMesh, 'chunkSizeMeters'>,
+  bounds: { minX: number; maxX: number; minZ: number; maxZ: number } | null | undefined,
+  options: { padding?: number } = {},
+): string[] {
+  if (!bounds) {
+    return []
+  }
+  const minX = Number(bounds.minX)
+  const maxX = Number(bounds.maxX)
+  const minZ = Number(bounds.minZ)
+  const maxZ = Number(bounds.maxZ)
+  if (![minX, maxX, minZ, maxZ].every(Number.isFinite)) {
+    return []
+  }
+  const chunkSizeMeters = Number.isFinite(definition.chunkSizeMeters) && Number(definition.chunkSizeMeters) > 0
+    ? Number(definition.chunkSizeMeters)
+    : GROUND_TERRAIN_CHUNK_SIZE_METERS
+  const epsilon = Math.max(1e-9, chunkSizeMeters * 1e-9)
+  const minCoord = resolveGroundChunkCoordFromWorldPosition(Math.min(minX, maxX), Math.min(minZ, maxZ), chunkSizeMeters)
+  const maxCoord = resolveGroundChunkCoordFromWorldPosition(Math.max(minX, maxX) - epsilon, Math.max(minZ, maxZ) - epsilon, chunkSizeMeters)
+  const keys: string[] = []
+  for (let chunkZ = Math.min(minCoord.chunkZ, maxCoord.chunkZ); chunkZ <= Math.max(minCoord.chunkZ, maxCoord.chunkZ); chunkZ += 1) {
+    for (let chunkX = Math.min(minCoord.chunkX, maxCoord.chunkX); chunkX <= Math.max(minCoord.chunkX, maxCoord.chunkX); chunkX += 1) {
+      keys.push(`${chunkX}:${chunkZ}`)
+    }
+  }
+  return options.padding && options.padding > 0
+    ? expandGroundChunkKeysWithNeighbors(keys, options.padding)
+    : keys
+}
+
+export function collectGroundAffectedChunkKeysFromRegion(
+  definition: GroundDynamicMesh,
+  region: (
+    { startRow: number; endRow: number; startColumn: number; endColumn: number }
+    | { minRow: number; maxRow: number; minColumn: number; maxColumn: number }
+    | null
+    | undefined
+  ),
+  options: { padding?: number; chunkCells?: number } = {},
+): string[] {
+  if (!region) {
+    return []
+  }
+  const explicitChunkCells = typeof options.chunkCells === 'number' ? options.chunkCells : Number.NaN
+  const chunkCells = Math.max(1, Math.trunc(Number.isFinite(explicitChunkCells) ? explicitChunkCells : resolveRuntimeChunkCells(definition)))
+  const startRow = Math.trunc('startRow' in region ? region.startRow : region.minRow)
+  const endRow = Math.trunc('endRow' in region ? region.endRow : region.maxRow)
+  const startColumn = Math.trunc('startColumn' in region ? region.startColumn : region.minColumn)
+  const endColumn = Math.trunc('endColumn' in region ? region.endColumn : region.maxColumn)
+  const minChunkRow = Math.floor(Math.min(startRow, endRow) / chunkCells)
+  const maxChunkRow = Math.floor(Math.max(startRow, endRow) / chunkCells)
+  const minChunkColumn = Math.floor(Math.min(startColumn, endColumn) / chunkCells)
+  const maxChunkColumn = Math.floor(Math.max(startColumn, endColumn) / chunkCells)
+  const keys: string[] = []
+  for (let chunkRow = minChunkRow; chunkRow <= maxChunkRow; chunkRow += 1) {
+    for (let chunkColumn = minChunkColumn; chunkColumn <= maxChunkColumn; chunkColumn += 1) {
+      keys.push(`${chunkColumn}:${chunkRow}`)
+    }
+  }
+  return options.padding && options.padding > 0
+    ? expandGroundChunkKeysWithNeighbors(keys, options.padding)
+    : keys
+}
+
 function resolveRuntimeChunkIndexFromSharedKey(
   key: string,
 ): { row: number; column: number } | null {
@@ -2077,16 +2169,6 @@ export function resolveGroundEffectiveHeightAtVertex(definition: GroundDynamicMe
   if (Number.isFinite(localEditSample)) {
     return localEditSample as number
   }
-  const terrainSampler = resolveRuntimeTerrainHeightSampler(runtimeDefinition)
-  if (terrainSampler) {
-    const sampled = terrainSampler.sampleHeightAtWorld(
-      resolveGroundWorldXForColumn(runtimeDefinition, column),
-      resolveGroundWorldZForRow(runtimeDefinition, row),
-    )
-    if (Number.isFinite(sampled)) {
-      return sampled as number
-    }
-  }
   // 原始程序化地形高度。
   const base = computeGroundBaseHeightAtVertex(runtimeDefinition, row, column)
   const gridSize = resolveGroundWorkingGridSize(runtimeDefinition)
@@ -2098,7 +2180,21 @@ export function resolveGroundEffectiveHeightAtVertex(definition: GroundDynamicMe
   const planningRaw = runtimeDefinition.planningHeightMap[heightIndex]
   const planning = typeof planningRaw === 'number' && Number.isFinite(planningRaw) ? planningRaw : base
   // 保留 manual 相对 base 的编辑增量，再把这个增量叠加到 planning 上，得到最终显示/采样高度。
-  return planning + (manual - base)
+  const effective = planning + (manual - base)
+  if (manual !== base || planning !== base) {
+    return effective
+  }
+  const terrainSampler = resolveRuntimeTerrainHeightSampler(runtimeDefinition)
+  if (terrainSampler) {
+    const sampled = terrainSampler.sampleHeightAtWorld(
+      resolveGroundWorldXForColumn(runtimeDefinition, column),
+      resolveGroundWorldZForRow(runtimeDefinition, row),
+    )
+    if (Number.isFinite(sampled)) {
+      return sampled as number
+    }
+  }
+  return effective
 }
 
 /**
@@ -2122,19 +2218,23 @@ function resolveGroundEffectiveHeightAtVertexWithContext(
   if (Number.isFinite(localEditSample)) {
     return localEditSample as number
   }
-  if (terrainSampler) {
-    const sampled = terrainSampler.sampleHeightAtWorld(worldX, worldZ)
-    if (Number.isFinite(sampled)) {
-      return sampled as number
-    }
-  }
   const base = computeGroundBaseHeightAtVertex(runtimeDefinition, row, column)
   const heightIndex = getGroundVertexIndex(columns, row, column)
   const manualRaw = runtimeDefinition.manualHeightMap[heightIndex]
   const manual = typeof manualRaw === 'number' && Number.isFinite(manualRaw) ? manualRaw : base
   const planningRaw = runtimeDefinition.planningHeightMap[heightIndex]
   const planning = typeof planningRaw === 'number' && Number.isFinite(planningRaw) ? planningRaw : base
-  return planning + (manual - base)
+  const effective = planning + (manual - base)
+  if (manual !== base || planning !== base) {
+    return effective
+  }
+  if (terrainSampler) {
+    const sampled = terrainSampler.sampleHeightAtWorld(worldX, worldZ)
+    if (Number.isFinite(sampled)) {
+      return sampled as number
+    }
+  }
+  return effective
 }
 
 function sampleGroundHeightOutsideWorkingBounds(
@@ -2237,16 +2337,17 @@ function sampleGroundEffectiveHeightRegionInternal(
       if (Number.isFinite(localEditSample)) {
         effective = localEditSample as number
       } else {
-        const sampled = terrainSampler ? terrainSampler.sampleHeightAtWorld(worldX, worldZ) : null
-        if (Number.isFinite(sampled)) {
-          effective = sampled as number
-        } else {
-          const heightIndex = getGroundVertexIndex(gridSize.columns, row, column)
-          const manualRaw = manualValues ? manualValues[offset] : runtimeDefinition.manualHeightMap[heightIndex]
-          const planningRaw = planningValues ? planningValues[offset] : runtimeDefinition.planningHeightMap[heightIndex]
-          const manual = typeof manualRaw === 'number' && Number.isFinite(manualRaw) ? manualRaw : base
-          const planning = typeof planningRaw === 'number' && Number.isFinite(planningRaw) ? planningRaw : base
-          effective = planning + (manual - base)
+        const heightIndex = getGroundVertexIndex(gridSize.columns, row, column)
+        const manualRaw = manualValues ? manualValues[offset] : runtimeDefinition.manualHeightMap[heightIndex]
+        const planningRaw = planningValues ? planningValues[offset] : runtimeDefinition.planningHeightMap[heightIndex]
+        const manual = typeof manualRaw === 'number' && Number.isFinite(manualRaw) ? manualRaw : base
+        const planning = typeof planningRaw === 'number' && Number.isFinite(planningRaw) ? planningRaw : base
+        effective = planning + (manual - base)
+        if (manual === base && planning === base) {
+          const sampled = terrainSampler ? terrainSampler.sampleHeightAtWorld(worldX, worldZ) : null
+          if (Number.isFinite(sampled)) {
+            effective = sampled as number
+          }
         }
       }
       values[offset] = effective
@@ -2417,6 +2518,7 @@ function setGroundCoverageHeightOverrideForEffectiveValue(
   z: number,
   effectiveHeight: number,
 ): void {
+  void map
   const localPlacement = shouldUseGroundLocalEditTiles(definition)
     ? resolveGroundLocalEditVertexPlacement(definition, x, z)
     : null
@@ -2425,29 +2527,112 @@ function setGroundCoverageHeightOverrideForEffectiveValue(
     return
   }
 
+  const localEditSource: 'manual' | 'mixed' = (
+    resolveRuntimeTerrainHeightSampler(definition)
+    || definition.planningMetadata?.demSource
+  ) ? 'mixed' : 'manual'
   const blendEpsilon = 1e-6
   const useLeftColumn = localPlacement.tx <= blendEpsilon
   const useRightColumn = localPlacement.tx >= 1 - blendEpsilon
   const useTopRow = localPlacement.tz <= blendEpsilon
   const useBottomRow = localPlacement.tz >= 1 - blendEpsilon
   if (useLeftColumn && useTopRow) {
-    setGroundLocalEditTileValue(definition, localPlacement.tileRow, localPlacement.tileColumn, localPlacement.row0, localPlacement.column0, effectiveHeight)
+    setGroundLocalEditTileValue(
+      definition,
+      localPlacement.tileRow,
+      localPlacement.tileColumn,
+      localPlacement.row0,
+      localPlacement.column0,
+      effectiveHeight,
+      localEditSource,
+    )
     return
   }
   if (useRightColumn && useTopRow) {
-    setGroundLocalEditTileValue(definition, localPlacement.tileRow, localPlacement.tileColumn, localPlacement.row0, localPlacement.column1, effectiveHeight)
+    setGroundLocalEditTileValue(
+      definition,
+      localPlacement.tileRow,
+      localPlacement.tileColumn,
+      localPlacement.row0,
+      localPlacement.column1,
+      effectiveHeight,
+      localEditSource,
+    )
     return
   }
   if (useLeftColumn && useBottomRow) {
-    setGroundLocalEditTileValue(definition, localPlacement.tileRow, localPlacement.tileColumn, localPlacement.row1, localPlacement.column0, effectiveHeight)
+    setGroundLocalEditTileValue(
+      definition,
+      localPlacement.tileRow,
+      localPlacement.tileColumn,
+      localPlacement.row1,
+      localPlacement.column0,
+      effectiveHeight,
+      localEditSource,
+    )
     return
   }
   if (useRightColumn && useBottomRow) {
-    setGroundLocalEditTileValue(definition, localPlacement.tileRow, localPlacement.tileColumn, localPlacement.row1, localPlacement.column1, effectiveHeight)
+    setGroundLocalEditTileValue(
+      definition,
+      localPlacement.tileRow,
+      localPlacement.tileColumn,
+      localPlacement.row1,
+      localPlacement.column1,
+      effectiveHeight,
+      localEditSource,
+    )
     return
   }
-
-  setManualHeightOverrideForEffectiveValue(definition, map, row, column, effectiveHeight)
+  const currentHeight = sampleGroundHeight(definition, x, z)
+  const delta = effectiveHeight - currentHeight
+  if (!Number.isFinite(delta) || Math.abs(delta) <= 1e-9) {
+    return
+  }
+  const writes: Array<[number, number, number]> = [
+    [localPlacement.row0, localPlacement.column0, (1 - localPlacement.tx) * (1 - localPlacement.tz)],
+    [localPlacement.row0, localPlacement.column1, localPlacement.tx * (1 - localPlacement.tz)],
+    [localPlacement.row1, localPlacement.column0, (1 - localPlacement.tx) * localPlacement.tz],
+    [localPlacement.row1, localPlacement.column1, localPlacement.tx * localPlacement.tz],
+  ]
+  const currentVertexHeights = new Map<string, number>()
+  const tile = ensureGroundLocalEditTileStorage(
+    definition,
+    localPlacement.tileRow,
+    localPlacement.tileColumn,
+    localPlacement.tileSizeMeters,
+    localPlacement.resolution,
+  )
+  const resolution = Math.max(1, Math.trunc(tile.resolution))
+  const { minX: tileMinX, minZ: tileMinZ } = resolveGroundLocalEditTileWorldMin(
+    definition,
+    localPlacement.tileRow,
+    localPlacement.tileColumn,
+    tile.tileSizeMeters,
+  )
+  for (const [localRow, localColumn, weight] of writes) {
+    if (!(weight > 0)) {
+      continue
+    }
+    const vertexKey = `${localRow}:${localColumn}`
+    let currentVertexHeight = currentVertexHeights.get(vertexKey)
+    if (!Number.isFinite(currentVertexHeight)) {
+      const stored = getGroundLocalEditTileStoredValue(tile, localRow, localColumn)
+      const vertexX = tileMinX + (localColumn / resolution) * tile.tileSizeMeters
+      const vertexZ = tileMinZ + (localRow / resolution) * tile.tileSizeMeters
+      currentVertexHeight = stored ?? sampleGroundHeight(definition, vertexX, vertexZ)
+      currentVertexHeights.set(vertexKey, currentVertexHeight)
+    }
+    setGroundLocalEditTileValue(
+      definition,
+      localPlacement.tileRow,
+      localPlacement.tileColumn,
+      localRow,
+      localColumn,
+      (currentVertexHeight as number) + delta,
+      localEditSource,
+    )
+  }
 }
 
 function sampleNeighborAverage(
@@ -2748,6 +2933,10 @@ function applyAccumulatedGroundDeltas(
       const tileColumn = Math.trunc(entry.tileColumn ?? 0)
       const localRow = Math.trunc(entry.localRow ?? 0)
       const localColumn = Math.trunc(entry.localColumn ?? 0)
+      const localEditSource: 'manual' | 'mixed' = (
+        resolveRuntimeTerrainHeightSampler(definition)
+        || definition.planningMetadata?.demSource
+      ) ? 'mixed' : 'manual'
       const tile = ensureGroundLocalEditTileStorage(
         definition,
         tileRow,
@@ -2762,7 +2951,7 @@ function applyAccumulatedGroundDeltas(
       const storedHeight = getGroundLocalEditTileStoredValue(tile, localRow, localColumn)
       const currentHeight = storedHeight ?? sampleGroundHeight(definition, x, z)
       const nextHeight = currentHeight + entry.delta / entry.weight
-      setGroundLocalEditTileValue(definition, tileRow, tileColumn, localRow, localColumn, nextHeight)
+      setGroundLocalEditTileValue(definition, tileRow, tileColumn, localRow, localColumn, nextHeight, localEditSource)
       modified = true
       return
     }
