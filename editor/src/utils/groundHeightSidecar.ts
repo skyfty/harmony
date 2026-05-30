@@ -73,7 +73,7 @@ export type GroundHeightSidecarSampler = {
   columns: number
   planningMetadata?: GroundPlanningMetadata | null
   localEditTiles?: GroundLocalEditTileMap | null
-  sampleHeightAtWorld?: (x: number, z: number) => number | null
+  sampleHeightAtWorld: (x: number, z: number) => number | null
 }
 
 export function getGroundHeightSidecarByteLength(definition: GroundDynamicMesh): number {

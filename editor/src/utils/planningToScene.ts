@@ -12,7 +12,6 @@ import {
   GROUND_TERRAIN_CHUNK_SIZE_METERS,
   formatGroundLocalEditTileKey,
   getGroundVertexIndex,
-  resolveInfiniteGroundGridOriginMeters,
   resolveGroundEditTileResolution,
   resolveGroundEditTileSizeMeters,
 } from '@schema/core'
@@ -48,6 +47,7 @@ import { buildPlanningDemTerrainConversionInWorker } from '@/utils/planningDemTe
 import { createScenesStoreTerrainDatasetHeightSampler } from '@/utils/terrainDatasetRuntime'
 import { sha1Bytes } from '@harmony/utils/hash'
 import { applyTerrainAuthoringPatch, buildTerrainAuthoringPatch } from '@/utils/terrainAuthoring'
+import { resolveGroundHeightfieldTileGridOrigin } from '@/utils/groundHeightfieldAuthoring'
 export type PlanningConversionProgress = {
   step: string
   progress: number
@@ -1323,6 +1323,7 @@ function buildContourAuthoringLocalEditTiles(options: {
   }
   const groundBounds = resolveGroundWorldBounds(options.definition)
   const localEditTiles: GroundLocalEditTileMap = {}
+  const tileOrigin = resolveGroundHeightfieldTileGridOrigin(options.definition, tileSizeMeters)
 
   for (let row = options.minRow; row <= options.maxRow; row += 1) {
     const localRow = row - options.minRow
@@ -1338,11 +1339,11 @@ function buildContourAuthoringLocalEditTiles(options: {
       const finalHeight = effectiveBase + h
       const worldX = groundBounds.minX + column * options.definition.cellSize
       const worldZ = groundBounds.minZ + row * options.definition.cellSize
-      const tileColumn = Math.floor((worldX - resolveInfiniteGroundGridOriginMeters(tileSizeMeters)) / tileSizeMeters)
-      const tileRow = Math.floor((worldZ - resolveInfiniteGroundGridOriginMeters(tileSizeMeters)) / tileSizeMeters)
+      const tileColumn = Math.floor((worldX - tileOrigin.originX) / tileSizeMeters)
+      const tileRow = Math.floor((worldZ - tileOrigin.originZ) / tileSizeMeters)
       const tileKey = formatGroundLocalEditTileKey(tileRow, tileColumn)
-      const tileMinX = resolveInfiniteGroundGridOriginMeters(tileSizeMeters) + tileColumn * tileSizeMeters
-      const tileMinZ = resolveInfiniteGroundGridOriginMeters(tileSizeMeters) + tileRow * tileSizeMeters
+      const tileMinX = tileOrigin.originX + tileColumn * tileSizeMeters
+      const tileMinZ = tileOrigin.originZ + tileRow * tileSizeMeters
       const vertexColumn = Math.max(0, Math.min(resolution, Math.round((worldX - tileMinX) / cellSize)))
       const vertexRow = Math.max(0, Math.min(resolution, Math.round((worldZ - tileMinZ) / cellSize)))
       const expectedLength = (resolution + 1) * (resolution + 1)
@@ -1387,7 +1388,7 @@ function buildAbsoluteRegionAuthoringLocalEditTiles(options: {
   const worldCellSize = Number.isFinite(options.definition.cellSize) && options.definition.cellSize > 1e-6
     ? options.definition.cellSize
     : 1
-  const tileOrigin = resolveInfiniteGroundGridOriginMeters(tileSizeMeters)
+  const tileOrigin = resolveGroundHeightfieldTileGridOrigin(options.definition, tileSizeMeters)
   const expectedLength = (resolution + 1) * (resolution + 1)
   const localEditTiles: GroundLocalEditTileMap = {}
 
@@ -1401,11 +1402,11 @@ function buildAbsoluteRegionAuthoringLocalEditTiles(options: {
         continue
       }
       const worldX = groundBounds.minX + column * worldCellSize
-      const tileColumn = Math.floor((worldX - tileOrigin) / tileSizeMeters)
-      const tileRow = Math.floor((worldZ - tileOrigin) / tileSizeMeters)
+      const tileColumn = Math.floor((worldX - tileOrigin.originX) / tileSizeMeters)
+      const tileRow = Math.floor((worldZ - tileOrigin.originZ) / tileSizeMeters)
       const tileKey = formatGroundLocalEditTileKey(tileRow, tileColumn)
-      const tileMinX = tileOrigin + tileColumn * tileSizeMeters
-      const tileMinZ = tileOrigin + tileRow * tileSizeMeters
+      const tileMinX = tileOrigin.originX + tileColumn * tileSizeMeters
+      const tileMinZ = tileOrigin.originZ + tileRow * tileSizeMeters
       const vertexColumn = Math.max(0, Math.min(resolution, Math.round((worldX - tileMinX) / localEditCellSize)))
       const vertexRow = Math.max(0, Math.min(resolution, Math.round((worldZ - tileMinZ) / localEditCellSize)))
       const tile = localEditTiles[tileKey] ?? {
@@ -1772,6 +1773,9 @@ async function applyPlanningTerrainContoursToGround(options: {
   }
   return next
 }
+
+void resolvePlanningDirtyChunkKeysForFullGrid
+void applyPlanningTerrainContoursToGround
 
 export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOptions): Promise<{ rootNodeId: string }> {
   const { sceneStore, planningData } = options

@@ -1,9 +1,8 @@
-import type { GroundHeightMap, GroundLocalEditTileData, GroundLocalEditTileMap, GroundRuntimeDynamicMesh } from '@schema/core'
+import type { GroundLocalEditTileData, GroundLocalEditTileMap, GroundRuntimeDynamicMesh } from '@schema/core'
 import {
   GROUND_HEIGHT_UNSET_VALUE,
   GROUND_TERRAIN_CHUNK_SIZE_METERS,
   formatGroundLocalEditTileKey,
-  resolveInfiniteGroundGridOriginMeters,
   resolveGroundEditTileResolution,
   resolveGroundWorldBounds,
   resolveGroundWorkingGridSize,
@@ -12,6 +11,7 @@ import {
 import type { PlanningTerrainDemData } from '@/types/planning-scene-data'
 import { loadPlanningDemBlobByHash } from '@/utils/planningDemStorage'
 import { isPlanningDemHeightmapImageSource, parsePlanningDemBlob } from '@/utils/planningDemImport'
+import { resolveGroundHeightfieldTileGridOrigin } from '@/utils/groundHeightfieldAuthoring'
 
 export interface PlanningDemRegionConversionResult {
   region: PlanningDemHeightRegion
@@ -330,15 +330,7 @@ function resolvePlanningDemSourceSpan(options: {
 }
 
 function resolvePlanningDemLocalEditTileOrigin(definition: GroundRuntimeDynamicMesh): { originX: number; originZ: number } {
-  if (definition.terrainMode === 'infinite') {
-    const origin = resolveInfiniteGroundGridOriginMeters(resolvePlanningDemChunkSizeMeters())
-    return { originX: origin, originZ: origin }
-  }
-  const bounds = resolveGroundWorldBounds(definition)
-  return {
-    originX: bounds.minX,
-    originZ: bounds.minZ,
-  }
+  return resolveGroundHeightfieldTileGridOrigin(definition, resolvePlanningDemChunkSizeMeters())
 }
 
 function resolvePlanningDemChunkSizeMeters(): number {

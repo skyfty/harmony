@@ -8,10 +8,12 @@ import type {
   TerrainAuthoringSource,
 } from '@schema/core'
 import {
-  formatGroundLocalEditTileKey,
-  resolveGroundChunkCoordFromWorldPosition,
-  resolveInfiniteGroundGridOriginMeters,
-} from '@schema/core'
+  buildGroundHeightfieldPatch,
+  collectGroundHeightfieldChunkKeysFromTiles,
+  collectGroundHeightfieldTilesForChunkKeys,
+  mergeGroundHeightfieldLocalEditTiles,
+  resolveGroundHeightfieldTileWorldBounds,
+} from '@/utils/groundHeightfieldAuthoring'
 
 function cloneTerrainAuthoringTile(tile: GroundLocalEditTileData): GroundLocalEditTileData {
   return {
@@ -44,29 +46,14 @@ export function mergeTerrainAuthoringLocalEditTiles(
   base: GroundLocalEditTileMap | null | undefined,
   incoming: GroundLocalEditTileMap | null | undefined,
 ): GroundLocalEditTileMap {
-  const merged = cloneTerrainAuthoringLocalEditTiles(base)
-  Object.entries(cloneTerrainAuthoringLocalEditTiles(incoming)).forEach(([key, tile]) => {
-    merged[key] = tile
-  })
-  return merged
+  return mergeGroundHeightfieldLocalEditTiles(base, incoming)
 }
 
-export function resolveTerrainAuthoringTileWorldBounds(tile: GroundLocalEditTileData): GroundWorldBounds | null {
-  const tileSizeMeters = Number(tile.tileSizeMeters)
-  const tileRow = Number(tile.tileRow)
-  const tileColumn = Number(tile.tileColumn)
-  if (!Number.isFinite(tileSizeMeters) || tileSizeMeters <= 0 || !Number.isFinite(tileRow) || !Number.isFinite(tileColumn)) {
-    return null
-  }
-  const origin = resolveInfiniteGroundGridOriginMeters(tileSizeMeters)
-  const minX = origin + tileColumn * tileSizeMeters
-  const minZ = origin + tileRow * tileSizeMeters
-  return {
-    minX,
-    maxX: minX + tileSizeMeters,
-    minZ,
-    maxZ: minZ + tileSizeMeters,
-  }
+export function resolveTerrainAuthoringTileWorldBounds(
+  definition: Pick<GroundDynamicMesh, 'terrainMode' | 'worldBounds' | 'editTileSizeMeters' | 'cellSize' | 'chunkSizeMeters' | 'renderRadiusChunks' | 'collisionRadiusChunks'>,
+  tile: GroundLocalEditTileData,
+): GroundWorldBounds | null {
+  return resolveGroundHeightfieldTileWorldBounds(definition, tile)
 }
 
 function mergeWorldBounds(
@@ -106,7 +93,15 @@ export function collectTerrainAuthoringTilesForWorldBounds(
     if (!tile || typeof tile !== 'object') {
       return
     }
-    const tileBounds = resolveTerrainAuthoringTileWorldBounds(tile)
+    const tileBounds = resolveTerrainAuthoringTileWorldBounds({
+      terrainMode: 'infinite',
+      worldBounds: null,
+      editTileSizeMeters: tile.tileSizeMeters,
+      cellSize: tile.tileSizeMeters,
+      chunkSizeMeters: tile.tileSizeMeters,
+      renderRadiusChunks: 1,
+      collisionRadiusChunks: 1,
+    }, tile)
     if (!tileBounds || !overlapsBounds(tileBounds, worldBounds)) {
       return
     }
@@ -115,70 +110,25 @@ export function collectTerrainAuthoringTilesForWorldBounds(
   return collected
 }
 
+void mergeWorldBounds
+
 export function collectTerrainAuthoringChunkKeysFromTiles(
-  definition: Pick<GroundDynamicMesh, 'chunkSizeMeters'>,
+  definition: GroundDynamicMesh,
   localEditTiles: GroundLocalEditTileMap | null | undefined,
 ): string[] {
-  const tileMap = localEditTiles && typeof localEditTiles === 'object' ? localEditTiles : null
-  if (!tileMap) {
-    return []
-  }
-  const chunkSizeMeters = Number.isFinite(definition.chunkSizeMeters) && definition.chunkSizeMeters > 0
-    ? definition.chunkSizeMeters
-    : GROUND_TERRAIN_CHUNK_SIZE_METERS
-  const chunkKeys = new Set<string>()
-  Object.values(tileMap).forEach((tile) => {
-    if (!tile || typeof tile !== 'object') {
-      return
-    }
-    const bounds = resolveTerrainAuthoringTileWorldBounds(tile)
-    if (!bounds) {
-      return
-    }
-    const maxEdgeEpsilon = Math.max(1e-9, chunkSizeMeters * 1e-9)
-    const minCoord = resolveGroundChunkCoordFromWorldPosition(bounds.minX, bounds.minZ, chunkSizeMeters)
-    const maxCoord = resolveGroundChunkCoordFromWorldPosition(bounds.maxX - maxEdgeEpsilon, bounds.maxZ - maxEdgeEpsilon, chunkSizeMeters)
-    for (let row = minCoord.chunkZ; row <= maxCoord.chunkZ; row += 1) {
-      for (let column = minCoord.chunkX; column <= maxCoord.chunkX; column += 1) {
-        chunkKeys.add(formatGroundLocalEditTileKey(row, column))
-      }
-    }
-  })
-  return Array.from(chunkKeys)
+  return collectGroundHeightfieldChunkKeysFromTiles(definition, localEditTiles)
 }
 
 export function collectTerrainAuthoringTilesForChunkKeys(
-  definition: Pick<GroundDynamicMesh, 'chunkSizeMeters'>,
+  definition: GroundDynamicMesh,
   localEditTiles: GroundLocalEditTileMap | null | undefined,
   chunkKeys: Iterable<string> | null | undefined,
 ): GroundLocalEditTileMap {
-  const requested = new Set<string>()
-  if (chunkKeys) {
-    for (const key of chunkKeys) {
-      if (typeof key === 'string' && key.length > 0) {
-        requested.add(key)
-      }
-    }
-  }
-  if (!requested.size) {
-    return {}
-  }
-  const collected: GroundLocalEditTileMap = {}
-  Object.entries(localEditTiles ?? {}).forEach(([key, tile]) => {
-    if (!tile || typeof tile !== 'object') {
-      return
-    }
-    const tileChunkKeys = collectTerrainAuthoringChunkKeysFromTiles(definition, { [key]: tile })
-    if (!tileChunkKeys.some((chunkKey) => requested.has(chunkKey))) {
-      return
-    }
-    collected[key] = cloneTerrainAuthoringTile(tile)
-  })
-  return collected
+  return collectGroundHeightfieldTilesForChunkKeys(definition, localEditTiles, chunkKeys)
 }
 
 export function buildTerrainAuthoringPatch(options: {
-  definition: Pick<GroundDynamicMesh, 'chunkSizeMeters'>
+  definition: GroundDynamicMesh
   source: TerrainAuthoringSource
   localEditTiles: GroundLocalEditTileMap | null | undefined
   affectedChunkKeys?: string[] | null
@@ -186,28 +136,27 @@ export function buildTerrainAuthoringPatch(options: {
   affectedRegion?: TerrainAuthoringPatch['affectedRegion']
   updatedAt?: number
 }): TerrainAuthoringPatch {
-  const localEditTiles = cloneTerrainAuthoringLocalEditTiles(options.localEditTiles)
-  let worldBounds = options.worldBounds ?? null
-  if (!worldBounds) {
-    Object.values(localEditTiles).forEach((tile) => {
-      worldBounds = mergeWorldBounds(worldBounds, resolveTerrainAuthoringTileWorldBounds(tile))
-    })
-  }
-  const affectedChunkKeys = Array.isArray(options.affectedChunkKeys) && options.affectedChunkKeys.length
-    ? Array.from(new Set(options.affectedChunkKeys.filter((key) => typeof key === 'string' && key.length > 0)))
-    : collectTerrainAuthoringChunkKeysFromTiles(options.definition, localEditTiles)
-  return {
+  const patch = buildGroundHeightfieldPatch({
+    definition: options.definition,
     source: options.source,
-    localEditTiles,
-    affectedChunkKeys,
-    worldBounds,
+    localEditTiles: options.localEditTiles,
+    affectedChunkKeys: options.affectedChunkKeys,
+    worldBounds: options.worldBounds ?? null,
     affectedRegion: options.affectedRegion ?? null,
-    updatedAt: Number.isFinite(options.updatedAt) ? Number(options.updatedAt) : Date.now(),
+    updatedAt: options.updatedAt,
+  })
+  return {
+    source: patch.source,
+    localEditTiles: patch.localEditTiles,
+    affectedChunkKeys: patch.affectedChunkKeys,
+    worldBounds: patch.worldBounds,
+    affectedRegion: patch.affectedRegion,
+    updatedAt: patch.updatedAt,
   }
 }
 
 export function buildTerrainAuthoringResult(options: {
-  definition: Pick<GroundDynamicMesh, 'chunkSizeMeters'>
+  definition: GroundDynamicMesh
   source: TerrainAuthoringSource
   localEditTiles: GroundLocalEditTileMap | null | undefined
   affectedChunkKeys?: string[] | null
@@ -227,5 +176,5 @@ export function applyTerrainAuthoringPatch(
   base: GroundLocalEditTileMap | null | undefined,
   patch: Pick<TerrainAuthoringPatch, 'localEditTiles'>,
 ): GroundLocalEditTileMap {
-  return mergeTerrainAuthoringLocalEditTiles(base, patch.localEditTiles)
+  return mergeGroundHeightfieldLocalEditTiles(base, patch.localEditTiles)
 }

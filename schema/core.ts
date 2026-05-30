@@ -1699,7 +1699,7 @@ export interface GroundLocalEditTileData {
 
 export type GroundLocalEditTileMap = Record<string, GroundLocalEditTileData>
 
-export type TerrainAuthoringSource = 'manual' | 'dem'
+export type TerrainAuthoringSource = 'manual' | 'dem' | 'mixed'
 
 export interface TerrainAuthoringPatch {
   source: TerrainAuthoringSource

@@ -1597,15 +1597,17 @@ function resolveGroundLocalEditTileGridOriginFromRuntime(
   const safeTileSize = Number.isFinite(tileSizeMeters) && tileSizeMeters > 0
     ? tileSizeMeters
     : resolveGroundEditTileSizeMeters(definition)
-  const cacheKey = `infinite:${safeTileSize}`
+  const worldBounds = resolveGroundWorldBounds(definition)
+  const cacheKey = `${definition.terrainMode ?? 'finite'}:${safeTileSize}:${worldBounds.minX}:${worldBounds.minZ}`
   const cached = definition.runtimeLocalEditTileGridOriginCache
   if (cached?.cacheKey === cacheKey) {
     return cached
   }
+  const isInfiniteTerrain = definition.terrainMode === 'infinite'
   const next = {
     cacheKey,
-    originX: resolveInfiniteGroundGridOriginMeters(safeTileSize),
-    originZ: resolveInfiniteGroundGridOriginMeters(safeTileSize),
+    originX: isInfiniteTerrain ? resolveInfiniteGroundGridOriginMeters(safeTileSize) : worldBounds.minX,
+    originZ: isInfiniteTerrain ? resolveInfiniteGroundGridOriginMeters(safeTileSize) : worldBounds.minZ,
   }
   definition.runtimeLocalEditTileGridOriginCache = next
   return next
@@ -1855,15 +1857,7 @@ function chunkIntersectsGroundLocalEditTileFromRuntime(
   if (!candidateTiles.length) {
     return false
   }
-  const cellSize = Number.isFinite(runtimeDefinition.cellSize) && runtimeDefinition.cellSize > 1e-6
-    ? runtimeDefinition.cellSize
-    : 1
-  const chunkSizeMeters = resolveGroundEditTileSizeMeters(runtimeDefinition)
-  const chunkOrigin = resolveInfiniteGroundGridOriginMeters(chunkSizeMeters)
-  const chunkMinX = chunkOrigin + spec.startColumn * cellSize
-  const chunkMaxX = chunkOrigin + (spec.startColumn + spec.columns) * cellSize
-  const chunkMinZ = chunkOrigin + spec.startRow * cellSize
-  const chunkMaxZ = chunkOrigin + (spec.startRow + spec.rows) * cellSize
+  const { minX: chunkMinX, maxX: chunkMaxX, minZ: chunkMinZ, maxZ: chunkMaxZ } = resolveGroundChunkWorldBoundsFromSpec(runtimeDefinition, spec)
   return candidateTiles.some((tile) => {
     const tileSizeMeters = Number(tile.tileSizeMeters)
     if (!Number.isFinite(tileSizeMeters) || tileSizeMeters <= 0) {
@@ -1885,12 +1879,18 @@ function resolveGroundChunkWorldBoundsFromSpec(
 ): { minX: number; maxX: number; minZ: number; maxZ: number } {
   const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1
   const chunkSizeMeters = resolveInfiniteChunkSizeMeters(definition)
-  const chunkOrigin = resolveInfiniteGroundGridOriginMeters(chunkSizeMeters)
+  const worldBounds = resolveGroundWorldBounds(definition)
+  const chunkOriginX = (definition as GroundDynamicMesh).terrainMode === 'infinite'
+    ? resolveInfiniteGroundGridOriginMeters(chunkSizeMeters)
+    : worldBounds.minX
+  const chunkOriginZ = (definition as GroundDynamicMesh).terrainMode === 'infinite'
+    ? resolveInfiniteGroundGridOriginMeters(chunkSizeMeters)
+    : worldBounds.minZ
   return {
-    minX: chunkOrigin + spec.startColumn * cellSize,
-    maxX: chunkOrigin + (spec.startColumn + spec.columns) * cellSize,
-    minZ: chunkOrigin + spec.startRow * cellSize,
-    maxZ: chunkOrigin + (spec.startRow + spec.rows) * cellSize,
+    minX: chunkOriginX + spec.startColumn * cellSize,
+    maxX: chunkOriginX + (spec.startColumn + spec.columns) * cellSize,
+    minZ: chunkOriginZ + spec.startRow * cellSize,
+    maxZ: chunkOriginZ + (spec.startRow + spec.rows) * cellSize,
   }
 }
 

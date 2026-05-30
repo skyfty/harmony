@@ -69,7 +69,7 @@ function shouldUseCanonicalTerrainAuthoringState(
   )
 }
 
-function clearLegacyHeightTileState(state: GroundHeightRuntimeState): void {
+function clearLegacyHeightTileState(): void {
 }
 
 function resolveRuntimeLoadedTileKeys(definition: GroundDynamicMesh): string[] {
@@ -430,7 +430,7 @@ function replaceRuntimeGroundHeightmapsFromSidecar(
   runtimeGroundDefinition.surfaceRevision = runtimeDefinition.surfaceRevision
   runtimeGroundDefinition.runtimeLoadedTileKeys = runtimeDefinition.runtimeLoadedTileKeys ?? []
   const created = createRuntimeState(groundNode.id, runtimeDefinition)
-  clearLegacyHeightTileState(created)
+  clearLegacyHeightTileState()
   created.planningMetadata = clonePlanningMetadata(runtimeDefinition.planningMetadata ?? null)
   created.optimizedMeshDirtyBounds = null
   created.runtimeHydratedHeightState = runtimeDefinition.runtimeHydratedHeightState
@@ -581,7 +581,7 @@ export const useGroundHeightmapStore = defineStore('groundHeightmap', {
       state.runtimeLoadedTileKeys = (definition as GroundRuntimeDynamicMesh).runtimeLoadedTileKeys ?? resolveRuntimeLoadedTileKeys(definition)
       state.surfaceRevision = Number.isFinite(definition.surfaceRevision) ? Math.max(0, Math.trunc(definition.surfaceRevision as number)) : 0
       if (shouldUseCanonicalTerrainAuthoringState(state, definition)) {
-        clearLegacyHeightTileState(state)
+        clearLegacyHeightTileState()
       }
       touchRuntimeMeshState(state)
       return state
@@ -594,7 +594,7 @@ export const useGroundHeightmapStore = defineStore('groundHeightmap', {
       const state = ensureNodeRuntimeState(nodeId, definition)
       state.localEditTiles = cloneRuntimeLocalEditTiles(localEditTiles)
       if (shouldUseCanonicalTerrainAuthoringState(state, definition)) {
-        clearLegacyHeightTileState(state)
+        clearLegacyHeightTileState()
       }
       state.runtimeHydratedHeightState = (definition as GroundRuntimeDynamicMesh).runtimeHydratedHeightState
       state.runtimeDisableOptimizedChunks = (definition as GroundRuntimeDynamicMesh).runtimeDisableOptimizedChunks
@@ -615,7 +615,7 @@ export const useGroundHeightmapStore = defineStore('groundHeightmap', {
       const state = ensureNodeRuntimeState(nodeId, definition)
       state.planningMetadata = clonePlanningMetadata(planningMetadata)
       if (shouldUseCanonicalTerrainAuthoringState(state, definition)) {
-        clearLegacyHeightTileState(state)
+        clearLegacyHeightTileState()
       }
       state.runtimeHydratedHeightState = (definition as GroundRuntimeDynamicMesh).runtimeHydratedHeightState
       state.runtimeDisableOptimizedChunks = (definition as GroundRuntimeDynamicMesh).runtimeDisableOptimizedChunks
