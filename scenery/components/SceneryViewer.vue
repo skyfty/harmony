@@ -12623,6 +12623,24 @@ function findFirstGroundDynamicMesh(document: SceneJsonExportDocument): GroundDy
   return null;
 }
 
+function countLandformNodes(document: SceneJsonExportDocument): number {
+  const stack = [...document.nodes];
+  let count = 0;
+  while (stack.length) {
+    const node = stack.pop();
+    if (!node) {
+      continue;
+    }
+    if (node.dynamicMesh?.type === 'Landform') {
+      count += 1;
+    }
+    if (Array.isArray(node.children) && node.children.length) {
+      stack.push(...node.children);
+    }
+  }
+  return count;
+}
+
 function hydrateGroundSidecarFromPackage(
   pkg: ScenePackageUnzipped,
   sceneEntry: {
@@ -12638,6 +12656,7 @@ function hydrateGroundSidecarFromPackage(
   if (!definition) {
     return document;
   }
+  const hasLandformNodes = countLandformNodes(document) > 0;
   const sidecarPath = typeof sceneEntry.groundHeightsPath === 'string' ? sceneEntry.groundHeightsPath.trim() : '';
   if (sidecarPath) {
     const sidecarBytes = pkg.files[sidecarPath];
@@ -12693,27 +12712,45 @@ function hydrateGroundSidecarFromPackage(
   definition.runtimeDisableOptimizedChunks = false;
 
   const splatSidecarPath = typeof sceneEntry.groundSplatPath === 'string' ? sceneEntry.groundSplatPath.trim() : '';
-  if (!splatSidecarPath) {
-    throw new Error(`场景 ${sceneEntry.sceneId} 缺少 ground splat sidecar 文件`);
+  if (splatSidecarPath) {
+    const splatSidecarBytes = pkg.files[splatSidecarPath];
+    if (!splatSidecarBytes) {
+      if (hasLandformNodes) {
+        throw new Error(`场景 ${sceneEntry.sceneId} 缺少 ground splat sidecar 文件内容`);
+      }
+      definition.groundSurfaceChunks = null;
+      definition.groundSplatBake = null;
+    } else {
+      const splatSidecarBuffer = new ArrayBuffer(splatSidecarBytes.byteLength);
+      new Uint8Array(splatSidecarBuffer).set(splatSidecarBytes);
+      const splatPayload = deserializeGroundSplatSidecar(splatSidecarBuffer);
+      const bakedChunks = splatPayload.groundSurfaceChunks && Object.keys(splatPayload.groundSurfaceChunks).length > 0
+        ? splatPayload.groundSurfaceChunks
+        : null;
+      if (!bakedChunks) {
+        if (hasLandformNodes) {
+          throw new Error(`场景 ${sceneEntry.sceneId} 的 ground splat sidecar 缺少 baked chunk 数据`);
+        }
+        definition.groundSurfaceChunks = null;
+        definition.groundSplatBake = null;
+      } else {
+        definition.groundSurfaceChunks = JSON.parse(JSON.stringify(bakedChunks));
+        definition.groundSplatBake = {
+          revision: Number.isFinite(splatPayload.revision) ? Math.max(0, Math.trunc(splatPayload.revision)) : 0,
+          chunkTextureMap: JSON.parse(JSON.stringify(bakedChunks)),
+          surfaceLayerTextureAssetIds: Array.isArray(splatPayload.surfaceLayerTextureAssetIds)
+            ? [...splatPayload.surfaceLayerTextureAssetIds]
+            : null,
+        };
+      }
+    }
+  } else {
+    definition.groundSurfaceChunks = null;
+    definition.groundSplatBake = null;
+    if (hasLandformNodes) {
+      throw new Error(`场景 ${sceneEntry.sceneId} 缺少 ground splat sidecar 文件`);
+    }
   }
-  const splatSidecarBytes = pkg.files[splatSidecarPath];
-  if (!splatSidecarBytes) {
-    throw new Error(`场景 ${sceneEntry.sceneId} 缺少 ground splat sidecar 文件内容`);
-  }
-  const splatSidecarBuffer = new ArrayBuffer(splatSidecarBytes.byteLength);
-  new Uint8Array(splatSidecarBuffer).set(splatSidecarBytes);
-  const splatPayload = deserializeGroundSplatSidecar(splatSidecarBuffer);
-  if (!splatPayload.groundSurfaceChunks || Object.keys(splatPayload.groundSurfaceChunks).length <= 0) {
-    throw new Error(`场景 ${sceneEntry.sceneId} 的 ground splat sidecar 缺少 baked chunk 数据`);
-  }
-  definition.groundSurfaceChunks = JSON.parse(JSON.stringify(splatPayload.groundSurfaceChunks));
-  definition.groundSplatBake = {
-    revision: Number.isFinite(splatPayload.revision) ? Math.max(0, Math.trunc(splatPayload.revision)) : 0,
-    chunkTextureMap: JSON.parse(JSON.stringify(splatPayload.groundSurfaceChunks)),
-    surfaceLayerTextureAssetIds: Array.isArray(splatPayload.surfaceLayerTextureAssetIds)
-      ? [...splatPayload.surfaceLayerTextureAssetIds]
-      : null,
-  };
 
   const scatterSidecarPath = typeof sceneEntry.groundScatterPath === 'string' ? sceneEntry.groundScatterPath.trim() : '';
   if (!scatterSidecarPath) {
