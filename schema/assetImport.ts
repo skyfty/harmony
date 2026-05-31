@@ -91,7 +91,7 @@ export function prepareImportedObject(object: THREE.Object3D) {
 }
 
 function createLoadTimeoutError(fileName: string): Error {
-  return new Error(`鍔犺浇璧勬簮瀵硅薄瓒呮椂 (${fileName})`)
+  return new Error(`Timed out while loading asset object (${fileName})`)
 }
 
 export function cloneImportedObject(source: THREE.Object3D): THREE.Object3D {
@@ -158,7 +158,7 @@ export async function loadObjectFromFile(
       }
       try {
         if (!payload) {
-          throw new Error('鏈兘鍔犺浇璧勬簮瀵硅薄')
+          throw new Error('Failed to load asset object')
         }
         const object = payload as THREE.Object3D
         prepareImportedObject(object)

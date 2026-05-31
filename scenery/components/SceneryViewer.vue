@@ -2312,6 +2312,7 @@ const vehicleInstances = new Map<string, VehicleInstanceWithWheels>();
 type RemoteMultiuserPeerEntry = {
   root: THREE.Object3D;
   signature: string;
+  state: MultiuserPeerState;
   ownsResources: boolean;
 };
 const remoteMultiuserPeerEntries = new Map<string, RemoteMultiuserPeerEntry>();
@@ -9930,6 +9931,69 @@ function cloneRemoteMultiuserObjectFromRuntime(nodeId: string | null): THREE.Obj
   return sanitizeRemoteMultiuserObject(cloneSkinned(source));
 }
 
+function cloneRemoteMultiuserObjectFromLocalRuntimePrefab(state: MultiuserPeerState): THREE.Object3D | null {
+  if (state.subjectType !== 'vehicle') {
+    return null;
+  }
+  const matchedVehicleRequest = resolveRemoteMultiuserVehiclePrefabRequest(state);
+  if (!matchedVehicleRequest) {
+    return null;
+  }
+  const requestKey = buildRuntimePrefabRequestKey(matchedVehicleRequest);
+  const spawnedRoot = spawnedRuntimePrefabRoots.get(requestKey)?.root ?? null;
+  if (!spawnedRoot) {
+    return null;
+  }
+  return sanitizeRemoteMultiuserObject(cloneSkinned(spawnedRoot));
+}
+
+function stripRemoteMultiuserPrefabRuntimeComponents(node: SceneNode | null | undefined): void {
+  if (!node || typeof node !== 'object') {
+    return;
+  }
+  if (node.components && typeof node.components === 'object') {
+    delete node.components;
+  }
+  if (Array.isArray(node.children) && node.children.length) {
+    node.children.forEach((child) => stripRemoteMultiuserPrefabRuntimeComponents(child));
+  }
+}
+
+function resolveRemoteMultiuserPrefabSpawnRequest(state: MultiuserPeerState): RuntimePrefabSpawnRequest | null {
+  const matchedVehicleRequest = resolveRemoteMultiuserVehiclePrefabRequest(state);
+  const candidateAssetId = typeof state.subjectAssetId === 'string' && state.subjectAssetId.trim().length
+    ? state.subjectAssetId.trim()
+    : typeof matchedVehicleRequest?.assetId === 'string' && matchedVehicleRequest.assetId.trim().length
+      ? matchedVehicleRequest.assetId.trim()
+      : '';
+  const candidateAssetUrl = typeof state.subjectAssetUrl === 'string' && state.subjectAssetUrl.trim().length
+    ? state.subjectAssetUrl.trim()
+    : typeof matchedVehicleRequest?.assetUrl === 'string' && matchedVehicleRequest.assetUrl.trim().length
+      ? matchedVehicleRequest.assetUrl.trim()
+      : '';
+  const candidateAssetRef = candidateAssetId || candidateAssetUrl;
+  if (!candidateAssetRef) {
+    return null;
+  }
+  const assetType = inferAssetTypeOrNull({ nameOrUrl: candidateAssetRef });
+  if (assetType !== 'prefab' && !candidateAssetRef.toLowerCase().endsWith('.prefab')) {
+    return null;
+  }
+  return normalizeRuntimePrefabRequest({
+    requestId: matchedVehicleRequest?.requestId ?? null,
+    vehicleIdentifier: state.subjectIdentifier ?? matchedVehicleRequest?.vehicleIdentifier ?? null,
+    assetId: candidateAssetId || candidateAssetRef,
+    assetUrl: candidateAssetUrl || null,
+    targetNodeId: matchedVehicleRequest?.targetNodeId ?? null,
+    targetNodeName: matchedVehicleRequest?.targetNodeName ?? null,
+    position: null,
+    rotation: null,
+    scale: null,
+    initializationMode: 'render-only',
+    placement: null,
+  });
+}
+
 function resolveRemoteMultiuserVehiclePrefabRequest(state: MultiuserPeerState): RuntimePrefabSpawnRequest | null {
   if (state.subjectType !== 'vehicle') {
     return null;
@@ -9942,6 +10006,38 @@ function resolveRemoteMultiuserVehiclePrefabRequest(state: MultiuserPeerState): 
   return findMatchingSteerRuntimePrefabRequest(props.runtimePrefabSpawns, subjectIdentifier || null)
     ?? findRuntimePrefabRequestByVehicleNode(props.runtimePrefabSpawns, subjectNodeId || null, subjectNodeName)
     ?? null;
+}
+
+async function loadRemoteMultiuserPrefabObject(state: MultiuserPeerState): Promise<THREE.Object3D | null> {
+  const sourceRequest = resolveRemoteMultiuserPrefabSpawnRequest(state);
+  if (!sourceRequest) {
+    return null;
+  }
+  try {
+    const source = await resolveRuntimePrefabSource(sourceRequest);
+    if (!source) {
+      return null;
+    }
+    const cloned = cloneRuntimePrefabNode(source.prefab);
+    stripRemoteMultiuserPrefabRuntimeComponents(cloned.root);
+    const runtimeDocument = createRuntimePrefabDocument(source.prefab, cloned.root);
+    const buildOptions: SceneGraphBuildOptions = {};
+    if (typeof props.serverAssetBaseUrl === 'string' && props.serverAssetBaseUrl.trim().length) {
+      buildOptions.serverAssetBaseUrl = props.serverAssetBaseUrl.trim();
+    }
+    const resourceCache = ensureResourceCache(runtimeDocument, buildOptions);
+    const graph = await buildSceneGraph(runtimeDocument, resourceCache, buildOptions);
+    applyWeChatShadowPolicy(graph.root);
+    return sanitizeRemoteMultiuserObject(graph.root);
+  } catch (error) {
+    console.warn('[SceneryViewer] Failed to instantiate remote multiuser prefab', {
+      assetId: sourceRequest.assetId ?? null,
+      assetUrl: sourceRequest.assetUrl ?? null,
+      subjectNodeId: state.subjectNodeId,
+      error,
+    });
+    return null;
+  }
 }
 
 async function loadRemoteMultiuserObjectFromAsset(state: MultiuserPeerState): Promise<THREE.Object3D | null> {
@@ -9957,6 +10053,9 @@ async function loadRemoteMultiuserObjectFromAsset(state: MultiuserPeerState): Pr
           ? matchedVehicleRequest.assetUrl.trim()
           : '';
   if (!resourceCache || !assetId) {
+    return null;
+  }
+  if (inferAssetTypeOrNull({ nameOrUrl: assetId }) === 'prefab' || assetId.toLowerCase().endsWith('.prefab')) {
     return null;
   }
   const sampleNode = state.subjectNodeId ? resolveNodeById(state.subjectNodeId) : null;
@@ -9978,13 +10077,21 @@ async function loadRemoteMultiuserObjectFromAsset(state: MultiuserPeerState): Pr
 }
 
 async function createRemoteMultiuserPeerObject(state: MultiuserPeerState): Promise<{ object: THREE.Object3D; ownsResources: boolean }> {
+  const localRuntimePrefabClone = cloneRemoteMultiuserObjectFromLocalRuntimePrefab(state);
+  if (localRuntimePrefabClone) {
+    return { object: localRuntimePrefabClone, ownsResources: false };
+  }
   const runtimeClone = cloneRemoteMultiuserObjectFromRuntime(state.subjectNodeId);
   if (runtimeClone) {
     return { object: runtimeClone, ownsResources: false };
   }
-  const assetObject = await loadRemoteMultiuserObjectFromAsset(state);
-  if (assetObject) {
-    return { object: assetObject, ownsResources: true };
+  const prefabObject = await loadRemoteMultiuserPrefabObject(state);
+  if (prefabObject) {
+    return { object: prefabObject, ownsResources: true };
+  }
+  const resourceObject = await loadRemoteMultiuserObjectFromAsset(state);
+  if (resourceObject) {
+    return { object: resourceObject, ownsResources: true };
   }
   return { object: createRemoteMultiuserPlaceholder(state.subjectType), ownsResources: true };
 }
@@ -10046,28 +10153,50 @@ function handleRemoteMultiuserPeerSnapshot(peer: MultiuserPeerSnapshot): void {
   const signature = getRemoteMultiuserPeerSignature(peer.state);
   const existing = remoteMultiuserPeerEntries.get(peer.userId) ?? null;
   if (existing && existing.signature === signature) {
+    existing.state = peer.state;
     applyRemoteMultiuserPeerTransform(existing.root, peer.state);
     return;
   }
   removeRemoteMultiuserPeer(peer.userId);
   const loadToken = (remoteMultiuserPeerLoadTokens.get(peer.userId) ?? 0) + 1;
   remoteMultiuserPeerLoadTokens.set(peer.userId, loadToken);
+  const latestRoot = ensureRemoteMultiuserPeerRoot();
+  if (!latestRoot) {
+    return;
+  }
+
+  const placeholder = createRemoteMultiuserPlaceholder(peer.state.subjectType);
+  placeholder.name = `RemotePeer:${peer.userId}`;
+  latestRoot.add(placeholder);
+  applyRemoteMultiuserPeerTransform(placeholder, peer.state);
+  remoteMultiuserPeerEntries.set(peer.userId, {
+    root: placeholder,
+    signature,
+    state: peer.state,
+    ownsResources: true,
+  });
+  markInstancedCullingDirty();
+
   void createRemoteMultiuserPeerObject(peer.state).then(({ object, ownsResources }) => {
     if (remoteMultiuserPeerLoadTokens.get(peer.userId) !== loadToken) {
       disposeRemoteMultiuserObject(object, ownsResources);
       return;
     }
-    const latestRoot = ensureRemoteMultiuserPeerRoot();
-    if (!latestRoot) {
+    const latestEntry = remoteMultiuserPeerEntries.get(peer.userId) ?? null;
+    if (!latestEntry || latestEntry.signature !== signature) {
       disposeRemoteMultiuserObject(object, ownsResources);
       return;
     }
+    const currentRoot = latestEntry.root;
+    currentRoot.parent?.remove(currentRoot);
+    disposeRemoteMultiuserObject(currentRoot, latestEntry.ownsResources);
     object.name = `RemotePeer:${peer.userId}`;
     latestRoot.add(object);
-    applyRemoteMultiuserPeerTransform(object, peer.state!);
+    applyRemoteMultiuserPeerTransform(object, latestEntry.state);
     remoteMultiuserPeerEntries.set(peer.userId, {
       root: object,
       signature,
+      state: latestEntry.state,
       ownsResources,
     });
     markInstancedCullingDirty();
@@ -14998,16 +15127,6 @@ function startRenderLoop(
 
         if (debugEnabled.value) {
           updateDebugFps(deltaSeconds);
-        }
-
-        // Sync multiuser avatars to the camera pose.
-        if (renderContext && multiuserNodeObjects.size) {
-          const cameraObj = renderContext.camera;
-          multiuserNodeObjects.forEach((object) => {
-            object.position.copy(cameraObj.position);
-            object.quaternion.copy(cameraObj.quaternion);
-            object.updateMatrixWorld(true);
-          });
         }
 
         if (deltaSeconds > 0) {

@@ -21,13 +21,14 @@ export interface OnlineComponentProps {
 const ONLINE_DEFAULT_CONFIG: OnlineComponentProps = {
   enabled: true,
   maxUsers: 10,
-  syncInterval: 100,
+  syncInterval: 250,
   server: 'ws://localhost',
   port: 7645,
 }
 
 const VALID_PORT_RANGE = { min: 1, max: 65535 }
 const SYNC_INTERVAL_RANGE = { min: 33, max: 5000 }
+const DEFAULT_EFFECTIVE_SYNC_INTERVAL = 250
 
 interface MultiuserJoinMessage {
   type: 'join'
@@ -355,7 +356,8 @@ class OnlineComponent extends Component<OnlineComponentProps> {
       return
     }
     const now = Date.now()
-    if (now - this.lastSyncTimestamp < this.props.syncInterval) {
+    const effectiveSyncInterval = Math.max(this.props.syncInterval, DEFAULT_EFFECTIVE_SYNC_INTERVAL)
+    if (now - this.lastSyncTimestamp < effectiveSyncInterval) {
       return
     }
     const state = bridge.resolveLocalPeerState()
