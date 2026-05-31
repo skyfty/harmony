@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { Ref } from 'vue'
+import { watch, type Ref } from 'vue'
 import type { BuildTool } from '@/types/build-tool'
 import type { PointerInteractionSession } from '@/types/pointer-interaction'
 import type { SceneNodeComponentState, SceneNode, WallDynamicMesh } from '@schema/core'
@@ -21,7 +21,12 @@ import type { WallPresetData } from '@/utils/wallPreset'
 import type { WallBuildShape } from '@/types/wall-build-shape'
 import { mergeUserDataWithDynamicMeshBuildShape } from '@/utils/dynamicMeshBuildShapeUserData'
 import type { WallPreviewRenderData } from './WallRenderer'
-import { buildRotatedRectangleFromEdge, resolveRectangleDragDirection, type RectangleBuildPhase } from './rotatedRectangleBuild'
+import {
+  buildAxisAlignedRectangleEdgePreviewPoints,
+  buildRotatedRectangleFromEdge,
+  resolveRectangleDragDirection,
+  type RectangleBuildPhase,
+} from './rotatedRectangleBuild'
 import { snapPointToRelativeAngleStep } from './planarEditMath'
 
 type PointerInteractionApi = {
@@ -86,6 +91,7 @@ export type WallBuildToolSession = WallPreviewSession & {
     end: THREE.Vector3
     baseEdgeEnd: THREE.Vector3 | null
     direction: THREE.Vector3 | null
+    axisAligned: boolean
   } | null
   lastCommittedSegment: WallPreviewSegment | null
   polygonPoints: THREE.Vector3[]
@@ -110,6 +116,7 @@ export function createWallBuildTool(options: {
   clearVertexSnap?: () => void
   isAltOverrideActive: () => boolean
   isRelativeAngleSnapActive?: () => boolean
+  isAxisAlignedRectangleActive?: Ref<boolean>
   isEditReferenceVisible?: () => boolean
   showStartIndicator?: (point: THREE.Vector3, options?: { height?: number | null }) => void
   hideStartIndicator?: () => void
@@ -243,6 +250,21 @@ export function createWallBuildTool(options: {
   }
 
   const getShape = (): WallBuildShape => options.wallBuildShape.value ?? 'line'
+
+  const syncRectangleAxisConstraint = (): void => {
+    const next = options.isAxisAlignedRectangleActive?.value ?? false
+    if (!session?.shapeDraft || session.shapeDraft.kind !== 'rectangle' || session.shapeDraft.axisAligned === next) {
+      return
+    }
+    session.shapeDraft.axisAligned = next
+    syncShapeDraftPreview()
+  }
+
+  if (options.isAxisAlignedRectangleActive) {
+    watch(options.isAxisAlignedRectangleActive, () => {
+      syncRectangleAxisConstraint()
+    })
+  }
 
   const getRegularPolygonSides = (): number => {
     const raw = options.wallRegularPolygonSides?.value ?? 0
@@ -909,6 +931,7 @@ export function createWallBuildTool(options: {
       end: end.clone(),
       baseEdgeEnd: null,
       direction: null,
+      axisAligned: options.isAxisAlignedRectangleActive?.value ?? false,
     }
     current.lastCommittedSegment = null
     current.segments = []
@@ -982,8 +1005,9 @@ export function createWallBuildTool(options: {
     start: THREE.Vector3,
     baseEdgeEnd: THREE.Vector3,
     currentPoint: THREE.Vector3,
+    axisAligned: boolean,
   ): WallPreviewSegment[] => {
-    const rectangle = buildRotatedRectangleFromEdge(start, baseEdgeEnd, currentPoint)
+    const rectangle = buildRotatedRectangleFromEdge(start, baseEdgeEnd, currentPoint, axisAligned)
     if (!rectangle) {
       return []
     }
@@ -1033,6 +1057,32 @@ export function createWallBuildTool(options: {
     return result
   }
 
+  const syncShapeDraftPreview = (): void => {
+    if (!session?.shapeDraft) {
+      return
+    }
+    const kind = session.shapeDraft.kind
+    const start = session.shapeDraft.start.clone()
+    const end = session.shapeDraft.end.clone()
+    const regularPolygonSides = kind === 'circle' ? getRegularPolygonSides() : 0
+
+    session.segments = kind === 'rectangle'
+      ? (session.shapeDraft.phase === 'edgeDraft'
+        ? (
+            session.shapeDraft.axisAligned
+              ? (() => {
+                  const edgePreview = buildAxisAlignedRectangleEdgePreviewPoints(start, end)
+                  return edgePreview ? [{ start: edgePreview[0].clone(), end: edgePreview[1].clone() }] : [{ start, end }]
+                })()
+              : [{ start, end }]
+          )
+        : session.shapeDraft.baseEdgeEnd
+          ? buildRectangleSegmentsFromEdge(start, session.shapeDraft.baseEdgeEnd, end, session.shapeDraft.axisAligned)
+          : [])
+      : buildCircleSegments(start, end, regularPolygonSides)
+    previewRenderer.markDirty()
+  }
+
   const updateShapeDraft = (event: PointerEvent): boolean => {
     if (!session?.shapeDraft) {
       return false
@@ -1050,7 +1100,6 @@ export function createWallBuildTool(options: {
 
     const rawPointer = resolvedPlacement.point.clone()
     const kind = session.shapeDraft.kind
-    const start = session.shapeDraft.start.clone()
     const excludeNodeId = getActiveSnapExcludeNodeId()
     const surfaceNodeId = resolvedPlacement.surfaceNodeId
     session.surfaceNodeId = surfaceNodeId
@@ -1069,18 +1118,7 @@ export function createWallBuildTool(options: {
       return false
     }
     session.shapeDraft.end.copy(end)
-
-    const regularPolygonSides = kind === 'circle' ? getRegularPolygonSides() : 0
-
-    session.segments = kind === 'rectangle'
-      ? (session.shapeDraft.phase === 'edgeDraft'
-        ? [{ start: start.clone(), end: end.clone() }]
-        : session.shapeDraft.baseEdgeEnd
-          ? buildRectangleSegmentsFromEdge(start, session.shapeDraft.baseEdgeEnd, end)
-          : [])
-      : buildCircleSegments(start, end, regularPolygonSides)
-
-    previewRenderer.markDirty()
+    syncShapeDraftPreview()
     return true
   }
 
@@ -1099,7 +1137,7 @@ export function createWallBuildTool(options: {
 
     const segments = kind === 'rectangle'
       ? (session.shapeDraft.baseEdgeEnd
-        ? buildRectangleSegmentsFromEdge(start, session.shapeDraft.baseEdgeEnd, end)
+        ? buildRectangleSegmentsFromEdge(start, session.shapeDraft.baseEdgeEnd, end, session.shapeDraft.axisAligned)
         : [])
       : buildCircleSegments(start, end, regularPolygonSides)
 
@@ -1152,15 +1190,14 @@ export function createWallBuildTool(options: {
     }
     const start = session.shapeDraft.start.clone()
     const end = session.shapeDraft.end.clone()
-    const direction = resolveRectangleDragDirection(start, end)
+    const direction = resolveRectangleDragDirection(start, end, session.shapeDraft.axisAligned)
     if (!direction) {
       return true
     }
     session.shapeDraft.baseEdgeEnd = end.clone()
     session.shapeDraft.direction = direction
     session.shapeDraft.phase = 'rectangleDraft'
-    session.segments = [{ start: start.clone(), end: end.clone() }]
-    previewRenderer.markDirty()
+    syncShapeDraftPreview()
     return true
   }
 

@@ -1,10 +1,13 @@
 import * as THREE from 'three'
-import type { Ref } from 'vue'
+import { watch, type Ref } from 'vue'
 import type { BuildTool } from '@/types/build-tool'
 import type { WaterBuildShape } from '@/types/water-build-shape'
 import type { useSceneStore } from '@/stores/sceneStore'
 import { createWaterPreviewRenderer, type WaterPreviewSession } from './WaterPreviewRenderer'
-import { buildRotatedRectangleFromEdge, resolveRectangleDragDirection } from './rotatedRectangleBuild'
+import {
+  buildRotatedRectangleFromEdge,
+  resolveRectangleDragDirection,
+} from './rotatedRectangleBuild'
 
 export type WaterBuildToolHandle = {
   getSession: () => WaterPreviewSession | null
@@ -24,6 +27,7 @@ type Session = {
   baseEdgeEnd: THREE.Vector3 | null
   rectanglePhase: 'idle' | 'edgeDraft' | 'rectangleDraft'
   rectangleDirection: THREE.Vector3 | null
+  rectangleAxisAligned: boolean
   previewGroup: THREE.Group | null
 }
 
@@ -65,6 +69,7 @@ export function createWaterBuildTool(options: {
   resolveVertexSnapPoint?: (event: PointerEvent, point: THREE.Vector3, options?: VertexSnapResolverOptions) => THREE.Vector3 | null
   clearVertexSnap?: () => void
   isAltOverrideActive: () => boolean
+  isAxisAlignedRectangleActive?: Ref<boolean>
   isEditReferenceVisible?: () => boolean
   showStartIndicator?: (point: THREE.Vector3, options?: { height?: number | null }) => void
   hideStartIndicator?: () => void
@@ -139,6 +144,21 @@ export function createWaterBuildTool(options: {
 
   const getShape = (): WaterBuildShape => options.waterBuildShape.value ?? 'rectangle'
 
+  const syncRectangleAxisConstraint = (): void => {
+    const next = options.isAxisAlignedRectangleActive?.value ?? false
+    if (!session || session.shape !== 'rectangle' || session.rectangleAxisAligned === next) {
+      return
+    }
+    session.rectangleAxisAligned = next
+    previewRenderer.markDirty()
+  }
+
+  if (options.isAxisAlignedRectangleActive) {
+    watch(options.isAxisAlignedRectangleActive, () => {
+      syncRectangleAxisConstraint()
+    })
+  }
+
   const ensureSession = (): WaterPreviewSession => {
     if (session) {
       return session
@@ -150,6 +170,7 @@ export function createWaterBuildTool(options: {
       baseEdgeEnd: null,
       rectanglePhase: 'idle',
       rectangleDirection: null,
+      rectangleAxisAligned: options.isAxisAlignedRectangleActive?.value ?? false,
       previewGroup: null,
     }
     return session
@@ -235,6 +256,7 @@ export function createWaterBuildTool(options: {
     current.baseEdgeEnd = null
     current.rectanglePhase = 'edgeDraft'
     current.rectangleDirection = null
+    current.rectangleAxisAligned = options.isAxisAlignedRectangleActive?.value ?? false
     showLockedStartIndicator(start)
     markPreviewDirty()
     return true
@@ -276,6 +298,7 @@ export function createWaterBuildTool(options: {
       ? resolvePlacementPoint(event, raw, { fallback: 'raw' })
       : resolvePlacementPoint(event, raw)
     alignPointYToSession(next, session)
+    syncRectangleAxisConstraint()
 
     const previous = session.previewEnd
     if (previous && previous.equals(next)) {
@@ -391,7 +414,7 @@ export function createWaterBuildTool(options: {
     if (!start || !end) {
       return false
     }
-    const direction = resolveRectangleDragDirection(start, end)
+    const direction = resolveRectangleDragDirection(start, end, session.rectangleAxisAligned)
     if (!direction) {
       return true
     }
@@ -414,7 +437,7 @@ export function createWaterBuildTool(options: {
       clearSession(true)
       return true
     }
-    const rectangle = buildRotatedRectangleFromEdge(start, baseEdgeEnd, previewEnd)
+    const rectangle = buildRotatedRectangleFromEdge(start, baseEdgeEnd, previewEnd, session.rectangleAxisAligned)
     if (!rectangle || rectangle.width <= WATER_MIN_SIZE || rectangle.depth <= WATER_MIN_SIZE) {
       return true
     }

@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { Ref } from 'vue'
+import { watch, type Ref } from 'vue'
 import type { BuildTool } from '@/types/build-tool'
 import type { Vector3Like } from '@schema/core'
 import {
@@ -7,7 +7,10 @@ import {
   createFloorPreviewRenderer,
   type FloorPreviewSession,
 } from './FloorPreviewRenderer'
-import { buildRotatedRectangleFromEdge, resolveRectangleDragDirection } from './rotatedRectangleBuild'
+import {
+  buildRotatedRectangleFromEdge,
+  resolveRectangleDragDirection,
+} from './rotatedRectangleBuild'
 import type { useSceneStore } from '@/stores/sceneStore'
 import type { FloorBuildShape } from '@/types/floor-build-shape'
 import type { FloorPresetData } from '@/utils/floorPreset'
@@ -63,6 +66,7 @@ export function createFloorBuildTool(options: {
   clearVertexSnap?: () => void
   isAltOverrideActive: () => boolean
   isRelativeAngleSnapActive?: () => boolean
+  isAxisAlignedRectangleActive?: Ref<boolean>
   isEditReferenceVisible?: () => boolean
   showStartIndicator?: (point: THREE.Vector3, options?: { height?: number | null }) => void
   hideStartIndicator?: () => void
@@ -187,6 +191,21 @@ export function createFloorBuildTool(options: {
 
   const getShape = (): FloorBuildShape => options.floorBuildShape.value ?? 'polygon'
 
+  const syncRectangleAxisConstraint = (): void => {
+    const next = options.isAxisAlignedRectangleActive?.value ?? false
+    if (!session || session.shape !== 'rectangle' || session.rectangleAxisAligned === next) {
+      return
+    }
+    session.rectangleAxisAligned = next
+    previewRenderer.markDirty()
+  }
+
+  if (options.isAxisAlignedRectangleActive) {
+    watch(options.isAxisAlignedRectangleActive, () => {
+      syncRectangleAxisConstraint()
+    })
+  }
+
   const ensureSession = (): FloorPreviewSession => {
     if (session) {
       return session
@@ -198,6 +217,7 @@ export function createFloorBuildTool(options: {
       baseEdgeEnd: null,
       rectanglePhase: 'idle',
       rectangleDirection: null,
+      rectangleAxisAligned: options.isAxisAlignedRectangleActive?.value ?? false,
       previewGroup: null,
     }
     return session
@@ -232,6 +252,7 @@ export function createFloorBuildTool(options: {
     current.baseEdgeEnd = null
     current.rectanglePhase = 'edgeDraft'
     current.rectangleDirection = null
+    current.rectangleAxisAligned = options.isAxisAlignedRectangleActive?.value ?? false
     showLockedStartIndicator(start)
     previewRenderer.markDirty()
     return true
@@ -307,6 +328,7 @@ export function createFloorBuildTool(options: {
       ? resolvePlacementPoint(event, raw, { fallback: 'raw' })
       : resolvePlacementPoint(event, raw)
     alignPointYToSession(next, session)
+    syncRectangleAxisConstraint()
 
     if (session.shape === 'polygon' && options.isRelativeAngleSnapActive?.() && session.points.length >= 2) {
       const anchor = session.points[session.points.length - 1]
@@ -466,7 +488,7 @@ export function createFloorBuildTool(options: {
     if (!start || !end) {
       return false
     }
-    const direction = resolveRectangleDragDirection(start, end)
+    const direction = resolveRectangleDragDirection(start, end, session.rectangleAxisAligned)
     if (!direction) {
       return true
     }
@@ -489,7 +511,7 @@ export function createFloorBuildTool(options: {
       clearSession(true)
       return true
     }
-    const rectangle = buildRotatedRectangleFromEdge(start, baseEdgeEnd, previewEnd)
+    const rectangle = buildRotatedRectangleFromEdge(start, baseEdgeEnd, previewEnd, session.rectangleAxisAligned)
     if (!rectangle || rectangle.width * rectangle.depth <= 1e-6) {
       return true
     }

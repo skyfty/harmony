@@ -4,7 +4,12 @@ import {
   normalizeWaterSurfaceMeshInput,
 } from '@schema/core'
 import type { WaterBuildShape } from '@/types/water-build-shape'
-import { buildRotatedRectangleFromCorner, buildRotatedRectangleFromEdge, type RectangleBuildPhase } from './rotatedRectangleBuild'
+import {
+  buildAxisAlignedRectangleEdgePreviewPoints,
+  buildRotatedRectangleFromCorner,
+  buildRotatedRectangleFromEdge,
+  type RectangleBuildPhase,
+} from './rotatedRectangleBuild'
 
 export type WaterPreviewSession = {
   shape: WaterBuildShape
@@ -13,6 +18,7 @@ export type WaterPreviewSession = {
   baseEdgeEnd: THREE.Vector3 | null
   rectanglePhase: RectangleBuildPhase
   rectangleDirection: THREE.Vector3 | null
+  rectangleAxisAligned: boolean
   previewGroup: THREE.Group | null
 }
 
@@ -105,6 +111,7 @@ function getPreviewVertices(
   baseEdgeEnd: THREE.Vector3 | null,
   rectanglePhase: RectangleBuildPhase,
   rectangleDirection: THREE.Vector3 | null,
+  rectangleAxisAligned: boolean,
 ): THREE.Vector3[] {
   if (!points.length) {
     return []
@@ -114,10 +121,13 @@ function getPreviewVertices(
     const start = points[0]
     if (start) {
       if (rectanglePhase === 'edgeDraft') {
-        return [start.clone(), previewEnd.clone()]
+        const edgePreview = rectangleAxisAligned
+          ? buildAxisAlignedRectangleEdgePreviewPoints(start, previewEnd)
+          : null
+        return edgePreview ?? [start.clone(), previewEnd.clone()]
       }
       if (rectanglePhase === 'rectangleDraft' && baseEdgeEnd) {
-        const rectangle = buildRotatedRectangleFromEdge(start, baseEdgeEnd, previewEnd)
+        const rectangle = buildRotatedRectangleFromEdge(start, baseEdgeEnd, previewEnd, rectangleAxisAligned)
         return rectangle ? rectangle.corners.map((point) => point.clone()) : []
       }
       return buildRectanglePreviewPoints(start, previewEnd, rectangleDirection)
@@ -397,6 +407,7 @@ export function createWaterPreviewRenderer(options: { rootGroup: THREE.Group }):
       session.baseEdgeEnd,
       session.rectanglePhase,
       session.rectangleDirection,
+      session.rectangleAxisAligned,
     )
     if (previewVertices.length < 2) {
       clear(session)

@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { Ref } from 'vue'
+import { watch, type Ref } from 'vue'
 import type { BuildTool } from '@/types/build-tool'
 import type { Vector3Like } from '@schema/core'
 import { createLandformGroup, updateLandformGroup } from '@schema/landformMesh'
@@ -7,7 +7,12 @@ import {
   buildFloorCircleOrRegularPolygonPoints,
   type FloorPreviewSession,
 } from './FloorPreviewRenderer'
-import { buildRotatedRectangleFromCorner, buildRotatedRectangleFromEdge, resolveRectangleDragDirection } from './rotatedRectangleBuild'
+import {
+  buildAxisAlignedRectangleEdgePreviewPoints,
+  buildRotatedRectangleFromCorner,
+  buildRotatedRectangleFromEdge,
+  resolveRectangleDragDirection,
+} from './rotatedRectangleBuild'
 import type { useSceneStore } from '@/stores/sceneStore'
 import type { LandformBuildShape } from '@/types/landform-build-shape'
 import { mergeUserDataWithDynamicMeshBuildShape } from '@/utils/dynamicMeshBuildShapeUserData'
@@ -185,6 +190,7 @@ export function createLandformBuildTool(options: {
   clearVertexSnap?: () => void
   isAltOverrideActive: () => boolean
   isRelativeAngleSnapActive?: () => boolean
+  isAxisAlignedRectangleActive?: Ref<boolean>
   showStartIndicator?: (point: THREE.Vector3, options?: { height?: number | null }) => void
   hideStartIndicator?: () => void
   holdStartIndicatorUntilNodeVisible?: (options: {
@@ -240,15 +246,18 @@ export function createLandformBuildTool(options: {
       const start = targetSession.points[0]
       if (start) {
         if (targetSession.rectanglePhase === 'edgeDraft') {
-          return [start.clone(), targetSession.previewEnd.clone()]
+          const edgePreview = targetSession.rectangleAxisAligned
+            ? buildAxisAlignedRectangleEdgePreviewPoints(start, targetSession.previewEnd)
+            : null
+          return edgePreview ?? [start.clone(), targetSession.previewEnd.clone()]
         }
         if (targetSession.rectanglePhase === 'rectangleDraft' && targetSession.baseEdgeEnd) {
-          const rectangle = buildRotatedRectangleFromEdge(start, targetSession.baseEdgeEnd, targetSession.previewEnd)
+          const rectangle = buildRotatedRectangleFromEdge(start, targetSession.baseEdgeEnd, targetSession.previewEnd, targetSession.rectangleAxisAligned)
           if (rectangle?.corners?.length) {
             return rectangle.corners.map((point) => point.clone())
           }
         }
-        const rectangle = buildRotatedRectangleFromCorner(start, targetSession.previewEnd, targetSession.rectangleDirection)
+        const rectangle = buildRotatedRectangleFromCorner(start, targetSession.previewEnd, targetSession.rectangleDirection, targetSession.rectangleAxisAligned)
         if (rectangle?.corners?.length) {
           return rectangle.corners.map((point) => point.clone())
         }
@@ -521,6 +530,21 @@ export function createLandformBuildTool(options: {
 
   const getShape = (): LandformBuildShape => options.landformBuildShape.value ?? 'polygon'
 
+  const syncRectangleAxisConstraint = (): void => {
+    const next = options.isAxisAlignedRectangleActive?.value ?? false
+    if (!session || session.shape !== 'rectangle' || session.rectangleAxisAligned === next) {
+      return
+    }
+    session.rectangleAxisAligned = next
+    previewRenderer.markDirty()
+  }
+
+  if (options.isAxisAlignedRectangleActive) {
+    watch(options.isAxisAlignedRectangleActive, () => {
+      syncRectangleAxisConstraint()
+    })
+  }
+
   const applyBrushPresetIfNeeded = (nodeId: string | null | undefined) => {
     if (!nodeId || !options.getLandformBrush || !options.applyLandformPresetToNode) {
       return
@@ -546,6 +570,7 @@ export function createLandformBuildTool(options: {
       baseEdgeEnd: null,
       rectanglePhase: 'idle',
       rectangleDirection: null,
+      rectangleAxisAligned: options.isAxisAlignedRectangleActive?.value ?? false,
       previewGroup: null,
       previewLineGroup: null,
     }
@@ -584,6 +609,7 @@ export function createLandformBuildTool(options: {
     current.baseEdgeEnd = null
     current.rectanglePhase = 'edgeDraft'
     current.rectangleDirection = null
+    current.rectangleAxisAligned = options.isAxisAlignedRectangleActive?.value ?? false
     showLockedStartIndicator(start)
     previewRenderer.markDirty()
     return true
@@ -646,6 +672,7 @@ export function createLandformBuildTool(options: {
       ? resolvePlacementPoint(event, raw, { fallback: 'raw' })
       : resolvePlacementPoint(event, raw)
     alignPointYToSession(next, session)
+    syncRectangleAxisConstraint()
 
     if (session.shape === 'polygon' && options.isRelativeAngleSnapActive?.() && session.points.length >= 2) {
       const anchor = session.points[session.points.length - 1]
@@ -790,7 +817,7 @@ export function createLandformBuildTool(options: {
     if (!start || !end) {
       return false
     }
-    const direction = resolveRectangleDragDirection(start, end)
+    const direction = resolveRectangleDragDirection(start, end, session.rectangleAxisAligned)
     if (!direction) {
       return true
     }
@@ -813,7 +840,7 @@ export function createLandformBuildTool(options: {
       clearSession(true)
       return true
     }
-    const rectangle = buildRotatedRectangleFromEdge(start, baseEdgeEnd, previewEnd)
+    const rectangle = buildRotatedRectangleFromEdge(start, baseEdgeEnd, previewEnd, session.rectangleAxisAligned)
     if (!rectangle || rectangle.width * rectangle.depth <= 1e-6) {
       return true
     }

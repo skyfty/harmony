@@ -70,7 +70,13 @@ import {
 	buildScatterNodeId,
 	type ScatterRuntimeTarget,
 } from '@/utils/terrainScatterRuntime'
-import { buildRotatedRectangleFromCorner, buildRotatedRectangleFromEdge, resolveRectangleDragDirection, type RectangleBuildPhase } from './rotatedRectangleBuild'
+import {
+  buildAxisAlignedRectangleEdgePreviewPoints,
+  buildRotatedRectangleFromCorner,
+  buildRotatedRectangleFromEdge,
+  resolveRectangleDragDirection,
+  type RectangleBuildPhase,
+} from './rotatedRectangleBuild'
 import { resolveAutoOverlayBuildPlan, type AutoOverlayBuildPlan } from './autoOverlayBuild'
 import { GROUND_NODE_ID, GROUND_HEIGHT_STEP } from './constants'
 import type { BuildTool } from '@/types/build-tool'
@@ -191,6 +197,7 @@ export type GroundEditorOptions = {
 	disableOrbitForGroundSelection: () => void
 	restoreOrbitAfterGroundSelection: () => void
 	isAltOverrideActive: () => boolean
+	isAxisAlignedRectangleActive?: Ref<boolean>
 }
 
 export type GroundEditorHandle = ReturnType<typeof createGroundEditor>
@@ -713,6 +720,7 @@ type ScatterSessionState = {
 	baseEdgeEnd: THREE.Vector3 | null
 	rectanglePhase: RectangleBuildPhase
 	rectangleDirection: THREE.Vector3 | null
+	rectangleAxisAligned: boolean
 	polygonPoints: THREE.Vector3[]
 	polygonPreviewEnd: THREE.Vector3 | null
 	previewLayerId: string
@@ -1785,6 +1793,21 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	function refreshBrushAppearance() {
 		brushMaterial.color.setHex(getBrushColor())
 		updateBrushGeometry(getIndicatorBrushShape())
+	}
+
+	const syncScatterRectangleAxisConstraint = (): void => {
+		const next = options.isAxisAlignedRectangleActive?.value ?? false
+		if (!scatterSession || scatterSession.brushShape !== 'rectangle' || scatterSession.rectangleAxisAligned === next) {
+			return
+		}
+		scatterSession.rectangleAxisAligned = next
+		refreshScatterSessionPreview(scatterSession)
+	}
+
+	if (options.isAxisAlignedRectangleActive) {
+		watch(options.isAxisAlignedRectangleActive, () => {
+			syncScatterRectangleAxisConstraint()
+		})
 	}
 
 	const stopBrushShapeWatch = watch(options.brushShape, () => {
@@ -4739,17 +4762,20 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				if (anchor.distanceToSquared(current) <= 1e-6) {
 					return null
 				}
-				return { points: [anchor.clone(), current.clone()], closed: false, fill: false }
+				const edgePreview = session.rectangleAxisAligned
+					? buildAxisAlignedRectangleEdgePreviewPoints(anchor, current)
+					: null
+				return { points: edgePreview ?? [anchor.clone(), current.clone()], closed: false, fill: false }
 			}
 			if (session.rectanglePhase === 'rectangleDraft' && session.baseEdgeEnd) {
-				const rectangle = buildRotatedRectangleFromEdge(anchor, session.baseEdgeEnd, current)
+				const rectangle = buildRotatedRectangleFromEdge(anchor, session.baseEdgeEnd, current, session.rectangleAxisAligned)
 				if (!rectangle) {
 					return null
 				}
 				return { points: rectangle.corners.map((point) => point.clone()), closed: true, fill: true }
 			}
-			const direction = session.rectangleDirection ?? resolveRectangleDragDirection(anchor, current)
-			const rectangle = buildRotatedRectangleFromCorner(anchor, current, direction)
+			const direction = session.rectangleDirection ?? resolveRectangleDragDirection(anchor, current, session.rectangleAxisAligned)
+			const rectangle = buildRotatedRectangleFromCorner(anchor, current, direction, session.rectangleAxisAligned)
 			if (!rectangle) {
 				return null
 			}
@@ -5326,8 +5352,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return []
 		}
 		const rectangle = scatterSession.baseEdgeEnd
-			? buildRotatedRectangleFromEdge(anchorPoint, scatterSession.baseEdgeEnd, currentPoint)
-			: buildRotatedRectangleFromCorner(anchorPoint, currentPoint, scatterSession.rectangleDirection)
+			? buildRotatedRectangleFromEdge(anchorPoint, scatterSession.baseEdgeEnd, currentPoint, scatterSession.rectangleAxisAligned)
+			: buildRotatedRectangleFromCorner(anchorPoint, currentPoint, scatterSession.rectangleDirection, scatterSession.rectangleAxisAligned)
 		if (!rectangle || rectangle.width <= 1e-6 || rectangle.depth <= 1e-6) {
 			return []
 		}
@@ -5700,6 +5726,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			baseEdgeEnd: null,
 			rectanglePhase: 'idle',
 			rectangleDirection: null,
+			rectangleAxisAligned: options.isAxisAlignedRectangleActive?.value ?? false,
 			polygonPoints,
 			polygonPreviewEnd: null,
 			previewLayerId: `scatter-preview:${layer.id}:${optionsOverride?.pointerId ?? 'dialog'}:autooverlay`,
@@ -5871,6 +5898,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 					baseEdgeEnd: null,
 					rectanglePhase: 'idle',
 					rectangleDirection: null,
+					rectangleAxisAligned: options.isAxisAlignedRectangleActive?.value ?? false,
 					polygonPoints: [],
 					polygonPreviewEnd: null,
 					previewLayerId: `scatter-preview:${layer.id}:polygon`,
@@ -5936,6 +5964,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 					baseEdgeEnd: null,
 					rectanglePhase: 'edgeDraft',
 					rectangleDirection: null,
+					rectangleAxisAligned: options.isAxisAlignedRectangleActive?.value ?? false,
 					polygonPoints: [],
 					polygonPreviewEnd: null,
 					previewLayerId: `scatter-preview:${layer.id}:${event.pointerId}`,
@@ -5954,7 +5983,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			scatterSession.pointerId = event.pointerId
 			scatterSession.currentPoint = startPoint.clone()
 			if (scatterSession.rectanglePhase === 'edgeDraft') {
-				const direction = resolveRectangleDragDirection(scatterSession.anchorPoint ?? startPoint, startPoint)
+				const direction = resolveRectangleDragDirection(scatterSession.anchorPoint ?? startPoint, startPoint, scatterSession.rectangleAxisAligned)
 				if (!direction) {
 					event.preventDefault()
 					event.stopPropagation()
@@ -6010,6 +6039,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			baseEdgeEnd: null,
 			rectanglePhase: brushShape === 'rectangle' ? 'edgeDraft' : 'idle',
 			rectangleDirection: null,
+			rectangleAxisAligned: options.isAxisAlignedRectangleActive?.value ?? false,
 			polygonPoints: [],
 			polygonPreviewEnd: null,
 			previewLayerId: `scatter-preview:${layer.id}:${event.pointerId}`,

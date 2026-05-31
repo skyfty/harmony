@@ -7,7 +7,7 @@
       :label="axis.toUpperCase()"
       :model-value="localValues[axis]"
       type="number"
-      :step="props.step ?? 0.1"
+      :step="props.step ?? 0.01"
       :min="props.min"
       density="compact"
       variant="underlined"

@@ -2076,6 +2076,7 @@ const scatterEraseRestoreModifierActive = ref(false)
 const scatterEraseMenuOpen = ref(false)
 const vertexSnapShiftModifierActive = ref(false)
 const relativeAngleSnapCModifierActive = ref(false)
+const rectangleAxisAlignedModifierActive = ref(false)
 const navigationSpeedBoostModifierActive = ref(false)
 const wallEditNodeId = ref<string | null>(null)
 const roadEditNodeId = ref<string | null>(null)
@@ -3712,6 +3713,7 @@ const groundEditor = createGroundEditor({
   scatterEraseModeActive,
   resolveVertexSnapPoint: resolveBuildToolVertexSnapPoint,
   clearVertexSnap: clearBuildToolVertexSnap,
+  isAxisAlignedRectangleActive: rectangleAxisAlignedModifierActive,
   lockScatterLodToBaseAsset: true,
   disableScatterLodRuntime: DISABLE_EDITOR_VIEWPORT_SCATTER_LOD_RUNTIME,
   isScatterVisible: isEditorGroundScatterVisible,
@@ -7914,6 +7916,7 @@ const wallBuildTool = createWallBuildTool({
   resolveVertexSnapPoint: resolveBuildToolVertexSnapPoint,
   clearVertexSnap: clearBuildToolVertexSnap,
   isAltOverrideActive: () => isAltOverrideActive,
+  isAxisAlignedRectangleActive: rectangleAxisAlignedModifierActive,
   isEditReferenceVisible: () => isSelectedWallEditMode(),
   showStartIndicator: showBuildStartIndicator,
   hideStartIndicator: hideBuildStartIndicator,
@@ -8264,6 +8267,7 @@ const floorBuildTool = createFloorBuildTool({
   resolveVertexSnapPoint: resolveBuildToolVertexSnapPoint,
   clearVertexSnap: clearBuildToolVertexSnap,
   isAltOverrideActive: () => isAltOverrideActive,
+  isAxisAlignedRectangleActive: rectangleAxisAlignedModifierActive,
   isEditReferenceVisible: () => isSelectedFloorEditMode(),
   showStartIndicator: showBuildStartIndicator,
   hideStartIndicator: hideBuildStartIndicator,
@@ -8296,6 +8300,7 @@ const landformBuildTool = createLandformBuildTool({
   resolveVertexSnapPoint: resolveBuildToolVertexSnapPoint,
   clearVertexSnap: clearBuildToolVertexSnap,
   isAltOverrideActive: () => isAltOverrideActive,
+  isAxisAlignedRectangleActive: rectangleAxisAlignedModifierActive,
   showStartIndicator: showBuildStartIndicator,
   hideStartIndicator: hideBuildStartIndicator,
   holdStartIndicatorUntilNodeVisible: holdBuildStartIndicatorUntilNodeVisible,
@@ -8385,6 +8390,7 @@ const waterBuildTool = createWaterBuildTool({
   resolveVertexSnapPoint: resolveBuildToolVertexSnapPoint,
   clearVertexSnap: clearBuildToolVertexSnap,
   isAltOverrideActive: () => isAltOverrideActive,
+  isAxisAlignedRectangleActive: rectangleAxisAlignedModifierActive,
   isEditReferenceVisible: () => isSelectedWaterEditMode(),
   showStartIndicator: showBuildStartIndicator,
   hideStartIndicator: hideBuildStartIndicator,
@@ -23191,6 +23197,33 @@ function handleRelativeAngleSnapCBlur() {
   relativeAngleSnapCModifierActive.value = false
 }
 
+function handleRectangleAxisAlignedBKeyDown(event: KeyboardEvent) {
+  if (!shouldHandleViewportShortcut(event)) {
+    return
+  }
+  if (event.repeat) {
+    return
+  }
+  if (event.code !== 'KeyB') {
+    return
+  }
+  if (event.ctrlKey || event.metaKey || event.altKey) {
+    return
+  }
+  rectangleAxisAlignedModifierActive.value = true
+}
+
+function handleRectangleAxisAlignedBKeyUp(event: KeyboardEvent) {
+  if (event.code !== 'KeyB') {
+    return
+  }
+  rectangleAxisAlignedModifierActive.value = false
+}
+
+function handleRectangleAxisAlignedBBlur() {
+  rectangleAxisAlignedModifierActive.value = false
+}
+
 onMounted(() => {
   initScene()
   if (canvasRef.value) {
@@ -23209,6 +23242,9 @@ onMounted(() => {
     window.addEventListener('keydown', handleRelativeAngleSnapCKeyDown, { capture: true })
     window.addEventListener('keyup', handleRelativeAngleSnapCKeyUp, { capture: true })
     window.addEventListener('blur', handleRelativeAngleSnapCBlur, { capture: true })
+  window.addEventListener('keydown', handleRectangleAxisAlignedBKeyDown, { capture: true })
+  window.addEventListener('keyup', handleRectangleAxisAlignedBKeyUp, { capture: true })
+  window.addEventListener('blur', handleRectangleAxisAlignedBBlur, { capture: true })
   window.addEventListener('keydown', handleScatterEraseRestoreKeyDown, { capture: true })
   window.addEventListener('keyup', handleScatterEraseRestoreKeyUp, { capture: true })
   window.addEventListener('blur', handleScatterEraseRestoreBlur, { capture: true })
@@ -23262,6 +23298,9 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleRelativeAngleSnapCKeyDown, { capture: true })
   window.removeEventListener('keyup', handleRelativeAngleSnapCKeyUp, { capture: true })
   window.removeEventListener('blur', handleRelativeAngleSnapCBlur, { capture: true })
+  window.removeEventListener('keydown', handleRectangleAxisAlignedBKeyDown, { capture: true })
+  window.removeEventListener('keyup', handleRectangleAxisAlignedBKeyUp, { capture: true })
+  window.removeEventListener('blur', handleRectangleAxisAlignedBBlur, { capture: true })
   window.removeEventListener('keydown', handleScatterEraseRestoreKeyDown, { capture: true })
   window.removeEventListener('keyup', handleScatterEraseRestoreKeyUp, { capture: true })
   window.removeEventListener('blur', handleScatterEraseRestoreBlur, { capture: true })

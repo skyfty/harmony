@@ -4,7 +4,12 @@ import { createFloorGroup, updateFloorGroup } from '@schema/floorMesh'
 import type { FloorBuildShape } from '@/types/floor-build-shape'
 import type { FloorPresetData } from '@/utils/floorPreset'
 import { buildFloorDynamicMeshPresetPatch } from '@/utils/floorPresetNodeMaterials'
-import { buildRotatedRectangleFromCorner, buildRotatedRectangleFromEdge, type RectangleBuildPhase } from './rotatedRectangleBuild'
+import {
+  buildAxisAlignedRectangleEdgePreviewPoints,
+  buildRotatedRectangleFromCorner,
+  buildRotatedRectangleFromEdge,
+  type RectangleBuildPhase,
+} from './rotatedRectangleBuild'
 
 export type FloorPreviewSession = {
   shape: FloorBuildShape
@@ -13,6 +18,7 @@ export type FloorPreviewSession = {
   baseEdgeEnd: THREE.Vector3 | null
   rectanglePhase: RectangleBuildPhase
   rectangleDirection: THREE.Vector3 | null
+  rectangleAxisAligned: boolean
   previewGroup: THREE.Group | null
 }
 
@@ -118,6 +124,7 @@ function getPreviewVertices(
   baseEdgeEnd: THREE.Vector3 | null,
   rectanglePhase: RectangleBuildPhase,
   rectangleDirection: THREE.Vector3 | null,
+  rectangleAxisAligned: boolean,
   regularPolygonSides = 0,
 ): THREE.Vector3[] {
   if (!points.length) {
@@ -128,10 +135,13 @@ function getPreviewVertices(
     const start = points[0]
     if (start) {
       if (rectanglePhase === 'edgeDraft') {
-        return buildTwoPointPreviewPoints(start, previewEnd)
+        const edgePreview = rectangleAxisAligned
+          ? buildAxisAlignedRectangleEdgePreviewPoints(start, previewEnd)
+          : null
+        return buildTwoPointPreviewPoints(start, edgePreview?.[1] ?? previewEnd)
       }
       if (rectanglePhase === 'rectangleDraft' && baseEdgeEnd) {
-        const rectangle = buildRotatedRectangleFromEdge(start, baseEdgeEnd, previewEnd)
+        const rectangle = buildRotatedRectangleFromEdge(start, baseEdgeEnd, previewEnd, rectangleAxisAligned)
         return rectangle ? rectangle.corners.map((point) => point.clone()) : []
       }
       return buildRectanglePreviewPoints(start, previewEnd, rectangleDirection)
@@ -397,6 +407,7 @@ export function createFloorPreviewRenderer(options: {
       session.baseEdgeEnd,
       session.rectanglePhase,
       session.rectangleDirection,
+      session.rectangleAxisAligned,
       lastRegularPolygonSides,
     )
     if (previewVertices.length < 2) {

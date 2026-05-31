@@ -79,6 +79,7 @@ function resolveScatterPlacementRows(
       { label: '模式', text: `${shapeLabel}区域撒件` },
       { label: '鼠标', text: '左键逐点定义区域' },
       { label: '完成', text: '双击左键完成当前区域撒件' },
+      { label: '修饰', text: 'B 世界坐标轴约束' },
       { label: '取消', text: '右键取消当前区域 · Escape 退出当前操作' },
       { label: '准备', text: scatterAssetSelected ? '已选择散布资源，可直接撒件' : '先在散布面板里选择资源，再进行撒件' },
     ])
@@ -122,7 +123,7 @@ function resolveFloorRows(shape: FloorBuildShape): ToolUsageHintRow[] {
       { label: '模式', text: `${shapeLabel}绘制` },
       { label: '鼠标', text: '左键拖拽生成矩形地面' },
       { label: '快捷', text: '自动平铺通过 Floor Brush 面板切换形状，没有独立键盘快捷键' },
-      { label: '修饰', text: 'Shift 顶点吸附到已有顶点' },
+      { label: '修饰', text: 'Shift 顶点吸附到已有顶点 · B 世界坐标轴约束' },
       { label: '取消', text: '右键或 Escape 取消当前草图' },
     ])
   }
@@ -153,7 +154,7 @@ function resolveLandformRows(shape: LandformBuildShape): ToolUsageHintRow[] {
       { label: '入口', text: '视口工具栏 -> Ground Splat Brush' },
       { label: '模式', text: `${shapeLabel}烘焙区域` },
       { label: '鼠标', text: '左键拖拽生成矩形烘焙区域' },
-      { label: '修饰', text: 'Shift 顶点吸附到已有顶点' },
+      { label: '修饰', text: 'Shift 顶点吸附到已有顶点 · B 世界坐标轴约束' },
       { label: '取消', text: '右键或 Escape 取消当前草图' },
     ])
   }
@@ -185,19 +186,19 @@ function resolveWallRows(shape: WallBuildShape): ToolUsageHintRow[] {
       { label: '鼠标', text: '左键逐点定义闭合轮廓' },
       { label: '完成', text: '双击左键完成闭合墙体' },
       { label: '快捷', text: 'Shift+G 仅线段墙体可用；当前闭合墙体依赖双击完成' },
-      { label: '修饰', text: 'C 相对角度吸附' },
+      { label: '修饰', text: 'C 相对角度吸附 · B 世界坐标轴约束' },
       { label: '取消', text: '右键或 Escape 取消当前草图' },
     ])
   }
-  return createRows([
-    { label: '入口', text: '视口工具栏 -> Wall Brush' },
-    { label: '模式', text: `${shapeLabel}墙体` },
-    { label: '鼠标', text: '左键拖拽生成当前形状的墙体' },
-    { label: '快捷', text: 'Shift+G 仅线段墙体可用；当前形状通过工具栏切换' },
-    { label: '修饰', text: 'Shift 顶点吸附到已有顶点' },
-    { label: '取消', text: '右键或 Escape 取消当前草图' },
-  ])
-}
+    return createRows([
+      { label: '入口', text: '视口工具栏 -> Wall Brush' },
+      { label: '模式', text: `${shapeLabel}墙体` },
+      { label: '鼠标', text: '左键拖拽生成当前形状的墙体' },
+      { label: '快捷', text: 'Shift+G 仅线段墙体可用；当前形状通过工具栏切换' },
+      { label: '修饰', text: 'Shift 顶点吸附到已有顶点 · B 世界坐标轴约束' },
+      { label: '取消', text: '右键或 Escape 取消当前草图' },
+    ])
+  }
 
 function resolveGenericRows(tool: BuildTool): ToolUsageHintRow[] {
   switch (tool) {
@@ -248,13 +249,13 @@ function resolveGenericRows(tool: BuildTool): ToolUsageHintRow[] {
       ])
     case 'water':
       return createRows([
-        { label: '入口', text: '视口工具栏 -> Water Tool' },
-        { label: '模式', text: '矩形 / 圆形模式左键拖拽创建，Polygon 模式左键逐点添加顶点' },
-        { label: '完成', text: '拖拽模式在松开左键时完成，Polygon 模式双击左键完成' },
-        { label: '快捷', text: '通过 Water Brush 面板切换形状，没有独立键盘快捷键' },
-        { label: '修饰', text: '顶点吸附会优先对齐已有顶点' },
-        { label: '取消', text: '右键或 Escape 取消当前水面草图' },
-      ])
+      { label: '入口', text: '视口工具栏 -> Water Tool' },
+      { label: '模式', text: '矩形 / 圆形模式左键拖拽创建，Polygon 模式左键逐点添加顶点' },
+      { label: '完成', text: '拖拽模式在松开左键时完成，Polygon 模式双击左键完成' },
+      { label: '快捷', text: '通过 Water Brush 面板切换形状，没有独立键盘快捷键' },
+      { label: '修饰', text: '顶点吸附会优先对齐已有顶点 · B 世界坐标轴约束' },
+      { label: '取消', text: '右键或 Escape 取消当前水面草图' },
+    ])
     case 'boundaryWall':
       return createRows([
         { label: '入口', text: '边界墙面板 -> 自定义边界墙绘制' },
