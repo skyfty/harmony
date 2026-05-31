@@ -28,7 +28,10 @@ const ONLINE_DEFAULT_CONFIG: OnlineComponentProps = {
 
 const VALID_PORT_RANGE = { min: 1, max: 65535 }
 const SYNC_INTERVAL_RANGE = { min: 33, max: 5000 }
-const DEFAULT_EFFECTIVE_SYNC_INTERVAL = 250
+const DEFAULT_EFFECTIVE_SYNC_INTERVAL = 500
+const STATE_KEEPALIVE_INTERVAL = 4000
+const POSITION_CHANGE_EPSILON = 0.05
+const QUATERNION_DOT_EPSILON = 0.9995
 
 interface MultiuserJoinMessage {
   type: 'join'
@@ -101,6 +104,70 @@ function isLocalhostLikeHost(hostname: string): boolean {
   return normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '::1'
 }
 
+function normalizeOptionalString(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null
+  }
+  const trimmed = value.trim()
+  return trimmed.length ? trimmed : null
+}
+
+function getMultiuserStateSignature(state: MultiuserPeerState): string {
+  return [
+    state.subjectType,
+    normalizeOptionalString(state.subjectNodeId) ?? '',
+    normalizeOptionalString(state.subjectIdentifier) ?? '',
+    normalizeOptionalString(state.subjectAssetId) ?? '',
+    normalizeOptionalString(state.subjectAssetUrl) ?? '',
+    state.position.x,
+    state.position.y,
+    state.position.z,
+    state.quaternion.x,
+    state.quaternion.y,
+    state.quaternion.z,
+    state.quaternion.w,
+    normalizeOptionalString(state.action) ?? '',
+  ].join('|')
+}
+
+function isMultiuserStateMeaningfullyChanged(prev: MultiuserPeerState | null, next: MultiuserPeerState): boolean {
+  if (!prev) {
+    return true
+  }
+  if (prev.subjectType !== next.subjectType) {
+    return true
+  }
+  if (normalizeOptionalString(prev.subjectNodeId) !== normalizeOptionalString(next.subjectNodeId)) {
+    return true
+  }
+  if (normalizeOptionalString(prev.subjectIdentifier) !== normalizeOptionalString(next.subjectIdentifier)) {
+    return true
+  }
+  if (normalizeOptionalString(prev.subjectAssetId) !== normalizeOptionalString(next.subjectAssetId)) {
+    return true
+  }
+  if (normalizeOptionalString(prev.subjectAssetUrl) !== normalizeOptionalString(next.subjectAssetUrl)) {
+    return true
+  }
+  if (normalizeOptionalString(prev.action) !== normalizeOptionalString(next.action)) {
+    return true
+  }
+
+  const dx = next.position.x - prev.position.x
+  const dy = next.position.y - prev.position.y
+  const dz = next.position.z - prev.position.z
+  if ((dx * dx) + (dy * dy) + (dz * dz) >= POSITION_CHANGE_EPSILON * POSITION_CHANGE_EPSILON) {
+    return true
+  }
+
+  const dot =
+    (prev.quaternion.x * next.quaternion.x)
+    + (prev.quaternion.y * next.quaternion.y)
+    + (prev.quaternion.z * next.quaternion.z)
+    + (prev.quaternion.w * next.quaternion.w)
+  return Math.abs(dot) < QUATERNION_DOT_EPSILON
+}
+
 export function clampOnlineComponentProps(overrides?: Partial<OnlineComponentProps> | null): OnlineComponentProps {
   const source = overrides ?? {}
   return {
@@ -121,6 +188,9 @@ class OnlineComponent extends Component<OnlineComponentProps> {
   private socket: WebSocket | null = null
   private reconnectTimer: ReturnType<typeof globalThis.setTimeout> | null = null
   private lastSyncTimestamp = 0
+  private lastKeepaliveTimestamp = 0
+  private lastSentState: MultiuserPeerState | null = null
+  private lastSentStateSignature = ''
   private anonymousUserId = `anonymous-${Math.random().toString(36).slice(2, 10)}`
 
   constructor(context: ComponentRuntimeContext<OnlineComponentProps>) {
@@ -239,6 +309,9 @@ class OnlineComponent extends Component<OnlineComponentProps> {
 
   private handleSocketOpen(): void {
     this.lastSyncTimestamp = 0
+    this.lastKeepaliveTimestamp = 0
+    this.lastSentState = null
+    this.lastSentStateSignature = ''
     this.sendJoin()
   }
 
@@ -342,6 +415,10 @@ class OnlineComponent extends Component<OnlineComponentProps> {
       }
     }
     this.socket = null
+    this.lastSyncTimestamp = 0
+    this.lastKeepaliveTimestamp = 0
+    this.lastSentState = null
+    this.lastSentStateSignature = ''
     if (fully) {
       this.runtimeBridge?.clearRemotePeers()
     }
@@ -364,12 +441,27 @@ class OnlineComponent extends Component<OnlineComponentProps> {
     if (!state) {
       return
     }
+    const signature = getMultiuserStateSignature(state)
+    const shouldKeepalive = now - this.lastKeepaliveTimestamp >= STATE_KEEPALIVE_INTERVAL
+    const changed = signature !== this.lastSentStateSignature && isMultiuserStateMeaningfullyChanged(this.lastSentState, state)
+    if (!changed && !shouldKeepalive) {
+      return
+    }
     const message: MultiuserStateMessage = {
       type: 'state',
       state,
     }
     this.socket.send(JSON.stringify(message satisfies MultiuserClientMessage))
     this.lastSyncTimestamp = now
+    if (changed) {
+      this.lastSentState = {
+        ...state,
+        position: { ...state.position },
+        quaternion: { ...state.quaternion },
+      }
+      this.lastSentStateSignature = signature
+    }
+    this.lastKeepaliveTimestamp = now
   }
 }
 
