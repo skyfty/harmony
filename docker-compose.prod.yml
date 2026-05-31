@@ -46,6 +46,7 @@ services:
         condition: service_healthy
     ports:
       - "127.0.0.1:4000:4000"
+      - "7645:7645"
     volumes:
       - /www/web/v_touchmagic_cn/data/uploads:/app/uploads
       - ./server/.env.production:/app/server/.env.production:ro

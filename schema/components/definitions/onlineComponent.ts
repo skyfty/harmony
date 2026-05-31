@@ -89,6 +89,17 @@ function clampString(value: unknown, fallback: string): string {
   return trimmed.length ? trimmed : fallback
 }
 
+function getBrowserLocationHostname(): string | null {
+  const locationRef = typeof globalThis.location !== 'undefined' ? globalThis.location : null
+  const hostname = typeof locationRef?.hostname === 'string' ? locationRef.hostname.trim() : ''
+  return hostname.length ? hostname : null
+}
+
+function isLocalhostLikeHost(hostname: string): boolean {
+  const normalized = hostname.trim().toLowerCase()
+  return normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '::1'
+}
+
 export function clampOnlineComponentProps(overrides?: Partial<OnlineComponentProps> | null): OnlineComponentProps {
   const source = overrides ?? {}
   return {
@@ -162,15 +173,29 @@ class OnlineComponent extends Component<OnlineComponentProps> {
   private buildEndpoint(): string | null {
     const server = this.props.server
     const port = this.props.port
-    if (!server) {
+    const fallbackHostname = getBrowserLocationHostname()
+    const browserProtocol = typeof globalThis.location?.protocol === 'string' ? globalThis.location.protocol : ''
+    const preferSecureTransport = browserProtocol === 'https:'
+    let target = server.trim()
+    if (!target && fallbackHostname) {
+      target = `${preferSecureTransport ? 'wss' : 'ws'}://${fallbackHostname}`
+    }
+    if (!target) {
       return null
     }
-    let target = server
     if (!target.startsWith('ws://') && !target.startsWith('wss://')) {
-      target = `ws://${target}`
+      target = `${preferSecureTransport ? 'wss' : 'ws'}://${target}`
     }
     try {
       const url = new URL(target)
+      if (fallbackHostname && isLocalhostLikeHost(url.hostname)) {
+        url.hostname = fallbackHostname
+        if (preferSecureTransport && url.protocol === 'ws:') {
+          url.protocol = 'wss:'
+        }
+      } else if (preferSecureTransport && url.protocol === 'ws:') {
+        url.protocol = 'wss:'
+      }
       if (port && Number.isFinite(port)) {
         url.port = String(port)
       }
