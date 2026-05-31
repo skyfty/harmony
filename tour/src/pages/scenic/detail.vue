@@ -182,19 +182,19 @@ onLoad((query) => {
   void getScenic(id)
     .then((scenicRes) => {
       scenic.value = scenicRes ? cloneScenicDetail(scenicRes) : null;
-      // if (scenicRes) {
-      //   void loadScenicCheckinProgress(scenicRes.id);
-      //   void trackAnalyticsEvent({
-      //     eventType: 'view_spot',
-      //     sceneId: scenicRes.sceneId,
-      //     sceneSpotId: scenicRes.id,
-      //     source: 'tour-miniapp',
-      //     path: '/pages/scenic/detail',
-      //     metadata: {
-      //       scenicTitle: scenicRes.title,
-      //     },
-      //   });
-      // }
+      if (scenicRes) {
+        void loadScenicCheckinProgress(scenicRes.id);
+        void trackAnalyticsEvent({
+          eventType: 'view_spot',
+          sceneId: scenicRes.sceneId,
+          sceneSpotId: scenicRes.id,
+          source: 'tour-miniapp',
+          path: '/pages/scenic/detail',
+          metadata: {
+            scenicTitle: scenicRes.title,
+          },
+        });
+      }
     })
     .catch((e) => {
       console.error('Failed to load scenic detail', e);
@@ -242,6 +242,7 @@ async function enterScenery() {
       // ignore, fallback to empty
     }
   }
+  
 
   const queryParts = [
     `packageUrl=${encodeURIComponent(scenic.value.scene.fileUrl)}`,
@@ -251,6 +252,7 @@ async function enterScenery() {
     `scenicTitle=${encodeURIComponent(scenic.value.title)}`,
     `vehicleIdentifier=${encodeURIComponent(vehicleIdentifier)}`,
   ];
+  console.log(queryParts);
   uni.navigateTo({
     url: `/pages/scenery/index?${queryParts.join('&')}`,
   });

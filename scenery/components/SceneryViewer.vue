@@ -14763,6 +14763,7 @@ function requestBinary(url: string): Promise<ArrayBuffer> {
       sceneDownloadTask.abort();
       sceneDownloadTask = null;
     }
+    console.log(url);
     const task = uni.request({
       url,
       method: 'GET',
