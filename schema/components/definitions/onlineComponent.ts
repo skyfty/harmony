@@ -12,6 +12,12 @@ import {
   type MultiuserSharedEntitySnapshot,
   type MultiuserSharedEntityState,
 } from '../../multiuserContext'
+import {
+  createRuntimeSocketAdapter,
+  SOCKET_READY_STATE_CONNECTING,
+  SOCKET_READY_STATE_OPEN,
+  type RuntimeSocketAdapter,
+} from '../../runtimeSocketAdapter'
 
 export const ONLINE_COMPONENT_TYPE = 'online'
 
@@ -20,18 +26,15 @@ export interface OnlineComponentProps {
   maxUsers: number
   syncInterval: number
   server: string
-  port: number
 }
 
 const ONLINE_DEFAULT_CONFIG: OnlineComponentProps = {
   enabled: true,
   maxUsers: 10,
   syncInterval: 250,
-  server: 'ws://localhost',
-  port: 7645,
+  server: 'ws://localhost:7645',
 }
 
-const VALID_PORT_RANGE = { min: 1, max: 65535 }
 const SYNC_INTERVAL_RANGE = { min: 33, max: 5000 }
 const DEFAULT_MOVING_SYNC_INTERVAL = 160
 const DEFAULT_IDLE_SYNC_INTERVAL = 500
@@ -118,15 +121,17 @@ function clampString(value: unknown, fallback: string): string {
   return trimmed.length ? trimmed : fallback
 }
 
-function getBrowserLocationHostname(): string | null {
-  const locationRef = typeof globalThis.location !== 'undefined' ? globalThis.location : null
-  const hostname = typeof locationRef?.hostname === 'string' ? locationRef.hostname.trim() : ''
-  return hostname.length ? hostname : null
-}
-
-function isLocalhostLikeHost(hostname: string): boolean {
-  const normalized = hostname.trim().toLowerCase()
-  return normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '::1'
+function normalizeWebSocketUrl(value: unknown, fallback: string): string {
+  const candidate = clampString(value, fallback)
+  try {
+    const url = new URL(candidate)
+    if (url.protocol !== 'ws:' && url.protocol !== 'wss:') {
+      return fallback
+    }
+    return url.toString()
+  } catch {
+    return fallback
+  }
 }
 
 function normalizeOptionalString(value: unknown): string | null {
@@ -276,13 +281,12 @@ export function clampOnlineComponentProps(overrides?: Partial<OnlineComponentPro
       SYNC_INTERVAL_RANGE.min,
       SYNC_INTERVAL_RANGE.max,
     ),
-    server: clampString(source.server ?? ONLINE_DEFAULT_CONFIG.server, ONLINE_DEFAULT_CONFIG.server),
-    port: clampNumber(source.port ?? ONLINE_DEFAULT_CONFIG.port, ONLINE_DEFAULT_CONFIG.port, VALID_PORT_RANGE.min, VALID_PORT_RANGE.max),
+    server: normalizeWebSocketUrl(source.server, ONLINE_DEFAULT_CONFIG.server),
   }
 }
 
 class OnlineComponent extends Component<OnlineComponentProps> {
-  private socket: WebSocket | null = null
+  private socket: RuntimeSocketAdapter | null = null
   private reconnectTimer: ReturnType<typeof globalThis.setTimeout> | null = null
   private lastPeerSyncTimestamp = 0
   private lastKeepaliveTimestamp = 0
@@ -294,6 +298,7 @@ class OnlineComponent extends Component<OnlineComponentProps> {
   private readonly lastPhysicsInputSignatureByNodeId = new Map<string, string>()
   private lastPhysicsInputSyncTimestamp = 0
   private anonymousUserId = `anonymous-${Math.random().toString(36).slice(2, 10)}`
+  private connectionToken = 0
 
   constructor(context: ComponentRuntimeContext<OnlineComponentProps>) {
     super(context)
@@ -344,39 +349,8 @@ class OnlineComponent extends Component<OnlineComponentProps> {
   }
 
   private buildEndpoint(): string | null {
-    const server = this.props.server
-    const port = this.props.port
-    const fallbackHostname = getBrowserLocationHostname()
-    const browserProtocol = typeof globalThis.location?.protocol === 'string' ? globalThis.location.protocol : ''
-    const preferSecureTransport = browserProtocol === 'https:'
-    let target = server.trim()
-    if (!target && fallbackHostname) {
-      target = `${preferSecureTransport ? 'wss' : 'ws'}://${fallbackHostname}`
-    }
-    if (!target) {
-      return null
-    }
-    if (!target.startsWith('ws://') && !target.startsWith('wss://')) {
-      target = `${preferSecureTransport ? 'wss' : 'ws'}://${target}`
-    }
-    try {
-      const url = new URL(target)
-      if (fallbackHostname && isLocalhostLikeHost(url.hostname)) {
-        url.hostname = fallbackHostname
-        if (preferSecureTransport && url.protocol === 'ws:') {
-          url.protocol = 'wss:'
-        }
-      } else if (preferSecureTransport && url.protocol === 'ws:') {
-        url.protocol = 'wss:'
-      }
-      if (port && Number.isFinite(port)) {
-        url.port = String(port)
-      }
-      return url.toString()
-    } catch (error) {
-      console.warn('无法解析多人在线服务器地址', error)
-      return null
-    }
+    const target = this.props.server.trim()
+    return target;
   }
 
   private restartConnection(): void {
@@ -385,31 +359,49 @@ class OnlineComponent extends Component<OnlineComponentProps> {
   }
 
   private ensureConnected(): void {
+    console.log('确保多人在线连接');
     if (!this.shouldConnect()) {
       this.closeConnection()
       return
     }
-    if (this.socket && (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING)) {
-      return
-    }
-    if (typeof WebSocket === 'undefined') {
-      console.warn('浏览器不支持 WebSocket，多人在线漫游不可用')
+    if (this.socket && (this.socket.readyState === SOCKET_READY_STATE_OPEN || this.socket.readyState === SOCKET_READY_STATE_CONNECTING)) {
       return
     }
     const endpoint = this.buildEndpoint()
     if (!endpoint) {
       return
     }
-    this.socket = new WebSocket(endpoint)
-    this.socket.addEventListener('open', () => this.handleSocketOpen())
-    this.socket.addEventListener('message', (event) => this.handleSocketMessage(event.data))
-    this.socket.addEventListener('close', () => this.handleSocketClose())
-    this.socket.addEventListener('error', (event) => {
+    const socket = createRuntimeSocketAdapter(endpoint)
+    if (!socket) {
+      console.warn('当前运行环境不支持多人在线所需的 WebSocket/SocketTask，漫游功能不可用')
+      return
+    }
+    const token = this.nextConnectionToken()
+    this.socket = socket
+    socket.onOpen(() => this.handleSocketOpen(token))
+    socket.onMessage((data: unknown) => this.handleSocketMessage(token, data))
+    socket.onClose(() => this.handleSocketClose(token))
+    socket.onError((event) => {
+      if (!this.isCurrentConnectionToken(token)) {
+        return
+      }
       console.warn('多用户同步连接出错', event)
     })
   }
 
-  private handleSocketOpen(): void {
+  private nextConnectionToken(): number {
+    this.connectionToken += 1
+    return this.connectionToken
+  }
+
+  private isCurrentConnectionToken(token: number): boolean {
+    return token === this.connectionToken
+  }
+
+  private handleSocketOpen(token: number): void {
+    if (!this.isCurrentConnectionToken(token)) {
+      return
+    }
     this.lastPeerSyncTimestamp = 0
     this.lastKeepaliveTimestamp = 0
     this.lastSentState = null
@@ -438,7 +430,7 @@ class OnlineComponent extends Component<OnlineComponentProps> {
   }
 
   private sendJoin(): void {
-    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+    if (!this.socket || this.socket.readyState !== SOCKET_READY_STATE_OPEN) {
       return
     }
     const message = this.buildJoinMessage()
@@ -448,7 +440,10 @@ class OnlineComponent extends Component<OnlineComponentProps> {
     this.socket.send(JSON.stringify(message satisfies MultiuserClientMessage))
   }
 
-  private handleSocketMessage(raw: unknown): void {
+  private handleSocketMessage(token: number, raw: unknown): void {
+    if (!this.isCurrentConnectionToken(token)) {
+      return
+    }
     const payloadText = typeof raw === 'string' ? raw : String(raw)
     try {
       const parsed = JSON.parse(payloadText)
@@ -508,7 +503,10 @@ class OnlineComponent extends Component<OnlineComponentProps> {
     }
   }
 
-  private handleSocketClose(): void {
+  private handleSocketClose(token: number): void {
+    if (!this.isCurrentConnectionToken(token)) {
+      return
+    }
     if (this.socket) {
       this.socket = null
     }
@@ -537,6 +535,7 @@ class OnlineComponent extends Component<OnlineComponentProps> {
 
   private closeConnection(fully = false): void {
     this.clearReconnectTimer()
+    this.nextConnectionToken()
     if (this.socket) {
       try {
         this.socket.close()
@@ -576,7 +575,7 @@ class OnlineComponent extends Component<OnlineComponentProps> {
   }
 
   private maybeSendState(): void {
-    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+    if (!this.socket || this.socket.readyState !== SOCKET_READY_STATE_OPEN) {
       return
     }
     const socket = this.socket
@@ -691,8 +690,7 @@ const onlineComponentDefinition: ComponentDefinition<OnlineComponentProps> = {
         { kind: 'boolean', key: 'enabled', label: 'Enabled' },
         { kind: 'number', key: 'maxUsers', label: 'Max Users', min: 2, max: 128, step: 1 },
         { kind: 'number', key: 'syncInterval', label: 'Sync Interval (ms)', min: 33, max: 5000, step: 33 },
-        { kind: 'text', key: 'server', label: 'Server', placeholder: 'ws://muluser.v.touchmagic.cn' },
-        { kind: 'number', key: 'port', label: 'Port', min: 1, max: 65535, step: 1 },
+        { kind: 'text', key: 'server', label: 'Server URL', placeholder: 'ws://muluser.v.touchmagic.cn:7645' },
       ],
     },
   ],

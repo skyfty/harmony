@@ -18,7 +18,6 @@ const componentEnabled = computed(() => onlineComponent.value?.enabled !== false
 
 const localValues = reactive({
   server: '',
-  port: '',
   maxUsers: '',
   syncInterval: '',
 })
@@ -27,7 +26,6 @@ watch(
   () => onlineComponent.value?.props,
   (props) => {
     localValues.server = props?.server ?? ''
-    localValues.port = props?.port?.toString() ?? ''
     localValues.maxUsers = props?.maxUsers?.toString() ?? ''
     localValues.syncInterval = props?.syncInterval?.toString() ?? ''
   },
@@ -72,14 +70,6 @@ function parseInteger(value: string | number): number | null {
 function handleServerChange(value: string) {
   localValues.server = value
   updateComponentProps({ server: value.trim() })
-}
-
-function handlePortChange(value: string) {
-  localValues.port = value
-  const parsed = parseInteger(value)
-  if (parsed !== null) {
-    updateComponentProps({ port: parsed })
-  }
 }
 
 function handleMaxUsersChange(value: string) {
@@ -138,23 +128,13 @@ function handleSyncIntervalChange(value: string) {
     <v-expansion-panel-text>
       <div class="online-settings">
         <v-text-field
-          label="Server Endpoint"
+          label="Server URL"
           density="compact"
           variant="underlined"
           hide-details
           :model-value="localValues.server"
           :disabled="!componentEnabled"
           @update:modelValue="handleServerChange"
-        />
-        <v-text-field
-          label="Port"
-          density="compact"
-          variant="underlined"
-          hide-details
-          type="number"
-          :model-value="localValues.port"
-          :disabled="!componentEnabled"
-          @update:modelValue="handlePortChange"
         />
         <v-text-field
           label="Scene User Limit"

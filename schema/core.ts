@@ -17,6 +17,7 @@ export const PROTAGONIST_NODE_ID = 'harmony:protagonist'
 export { AssetCache, AssetLoader } from './assetCache'
 export type { AssetCacheEntry, AssetCacheStatus, AssetSource, AssetLoadOptions, AssetLoadPersistenceOptions } from './assetCache'
 export * from './runtimePrefab'
+export * from './runtimeSocketAdapter'
 export {
   createIndexedDbPersistentAssetStorage,
   createNoopPersistentAssetStorage,
