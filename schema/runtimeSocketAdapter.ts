@@ -150,20 +150,16 @@ class WeChatMiniProgramSocketAdapter implements RuntimeSocketAdapter {
     }
     this.wxApi = wxApi
     const task = wxApi.connectSocket?.({ url: normalizedUrl }) ?? null
-    console.log('微信小程序多人在线连接初始化', { url: normalizedUrl, task })
     this.task = task
     if (task && typeof task.onOpen === 'function') {
       task.onOpen(() => {
-        console.log('微信小程序多人在线连接已打开')
         this.readyStateValue = SOCKET_READY_STATE_OPEN
         this.emitOpen()
       })
       task.onMessage?.((event) => {
-        console.log('微信小程序多人在线连接收到消息', event?.data)
         this.emitMessage(event?.data)
       })
       task.onClose?.(() => {
-        console.log('微信小程序多人在线连接已关闭')
         this.readyStateValue = SOCKET_READY_STATE_CLOSED
         this.emitClose()
       })

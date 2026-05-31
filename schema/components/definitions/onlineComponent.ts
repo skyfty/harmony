@@ -359,7 +359,6 @@ class OnlineComponent extends Component<OnlineComponentProps> {
   }
 
   private ensureConnected(): void {
-    console.log('确保多人在线连接');
     if (!this.shouldConnect()) {
       this.closeConnection()
       return
