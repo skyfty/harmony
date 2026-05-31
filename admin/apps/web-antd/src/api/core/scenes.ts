@@ -59,6 +59,25 @@ export interface ScenePackageSceneSummary {
   sidecarBytes: number;
 }
 
+export interface ScenePackageMultiuserSceneSummary {
+  enabledNodeCount: number;
+  maxUsers?: number | null;
+  nodeCount: number;
+  port?: number | null;
+  sceneId: string;
+  sceneName?: null | string;
+  server?: null | string;
+  syncInterval?: number | null;
+}
+
+export interface ScenePackageMultiuserSummary {
+  enabled: boolean;
+  enabledNodeCount: number;
+  nodeCount: number;
+  sceneCount: number;
+  scenes: ScenePackageMultiuserSceneSummary[];
+}
+
 export interface ScenePackageMetadata {
   breakdown?: ScenePackageResourceBreakdown;
   checkpointTotal?: number;
@@ -76,6 +95,7 @@ export interface ScenePackageMetadata {
   sceneCount?: number;
   sceneOrder?: string[];
   sceneSummaries?: ScenePackageSceneSummary[];
+  multiuser?: null | ScenePackageMultiuserSummary;
   uncompressedEntryBytes?: number;
   zipEntryCount?: number;
 }

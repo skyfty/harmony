@@ -65,6 +65,15 @@ const routes: RouteRecordRaw[] = [
           title: $t('page.sceneSpotCategories.title'),
         },
       },
+      {
+        name: 'MultiuserScenes',
+        path: 'multiuser-scenes',
+        component: () => import('#/views/multiuser-scenes/index.vue'),
+        meta: {
+          icon: 'lucide:network',
+          title: '多人在线管理',
+        },
+      },
     ],
   },
   {

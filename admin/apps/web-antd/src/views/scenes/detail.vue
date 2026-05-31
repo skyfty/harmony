@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { TableColumnsType } from 'ant-design-vue';
-import type { SceneItem, ScenePackageResourceSummary, ScenePackageSceneSummary } from '#/api';
+import type { SceneItem, ScenePackageMultiuserSceneSummary, ScenePackageResourceSummary, ScenePackageSceneSummary } from '#/api';
 
 import { computed, onMounted, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
@@ -22,6 +22,8 @@ const unitPriceCnyPerGb = ref(0.24);
 const downloadCount = ref(1);
 
 const metadata = computed(() => scene.value?.metadata ?? null);
+const multiuserSummary = computed(() => metadata.value?.multiuser ?? null);
+const multiuserSceneRows = computed(() => multiuserSummary.value?.scenes ?? []);
 
 const packageAssetCount = computed(() => safeNumber(metadata.value?.packageAssetCount));
 const packageAssetBytes = computed(() => safeNumber(metadata.value?.packageAssetBytes ?? metadata.value?.manifestResourceBytes));
@@ -84,6 +86,17 @@ const sceneColumns: TableColumnsType<ScenePackageSceneSummary> = [
   { key: 'totalBytes', title: t('page.scenes.detail.tables.scenes.totalBytes'), width: 160 },
 ];
 
+const multiuserColumns: TableColumnsType<ScenePackageMultiuserSceneSummary> = [
+  { dataIndex: 'sceneName', key: 'sceneName', title: '场景', width: 180 },
+  { dataIndex: 'sceneId', key: 'sceneId', title: '场景 ID', width: 220 },
+  { dataIndex: 'nodeCount', key: 'nodeCount', title: '节点数', width: 110 },
+  { dataIndex: 'enabledNodeCount', key: 'enabledNodeCount', title: '启用节点', width: 110 },
+  { dataIndex: 'server', key: 'server', title: '服务器', width: 220 },
+  { dataIndex: 'port', key: 'port', title: '端口', width: 100 },
+  { dataIndex: 'syncInterval', key: 'syncInterval', title: '同步间隔(ms)', width: 140 },
+  { dataIndex: 'maxUsers', key: 'maxUsers', title: '上限', width: 100 },
+];
+
 function safeNumber(value: unknown): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
@@ -116,8 +129,21 @@ function formatResourceType(value: string): string {
   return translated === key ? value : translated;
 }
 
-function sceneTotalBytes(row: ScenePackageSceneSummary): number {
-  return safeNumber(row.sceneDocumentBytes) + safeNumber(row.sidecarBytes) + safeNumber(row.resourceBytes);
+function sceneTotalBytes(row: unknown): number {
+  const candidate = row as Partial<ScenePackageSceneSummary>;
+  return safeNumber(candidate?.sceneDocumentBytes) + safeNumber(candidate?.sidecarBytes) + safeNumber(candidate?.resourceBytes);
+}
+
+function formatMultiuserEndpoint(row: unknown): string {
+  const candidate = row as Partial<ScenePackageMultiuserSceneSummary>;
+  const server = typeof candidate?.server === 'string' ? candidate.server.trim() || '-' : '-';
+  const port = Number.isFinite(candidate?.port ?? Number.NaN) ? candidate.port : '-';
+  return `${server}:${port}`;
+}
+
+function getMultiuserSceneTagColor(row: unknown): string {
+  const candidate = row as Partial<ScenePackageMultiuserSceneSummary>;
+  return Number(candidate?.enabledNodeCount ?? 0) > 0 ? 'green' : 'default';
 }
 
 async function load() {
@@ -185,6 +211,38 @@ onMounted(load);
         <Descriptions.Item :label="t('page.scenes.detail.fields.createdAt')">{{ scene?.createdAt || '-' }}</Descriptions.Item>
         <Descriptions.Item :label="t('page.scenes.detail.fields.updatedAt')">{{ scene?.updatedAt || '-' }}</Descriptions.Item>
       </Descriptions>
+
+      <div v-if="multiuserSummary" class="scene-detail-section">
+        <h4>多人在线</h4>
+        <Row :gutter="16" class="scene-detail-stats">
+          <Col :xs="24" :sm="12" :lg="6">
+            <Statistic title="启用状态" :value="multiuserSummary.enabled ? '已启用' : '未启用'" />
+          </Col>
+          <Col :xs="24" :sm="12" :lg="6">
+            <Statistic title="启用节点数" :value="multiuserSummary.enabledNodeCount ?? 0" />
+          </Col>
+          <Col :xs="24" :sm="12" :lg="6">
+            <Statistic title="场景数" :value="multiuserSummary.sceneCount ?? 0" />
+          </Col>
+          <Col :xs="24" :sm="12" :lg="6">
+            <Statistic title="节点数" :value="multiuserSummary.nodeCount ?? 0" />
+          </Col>
+        </Row>
+        <Table
+          :columns="multiuserColumns"
+          :data-source="multiuserSceneRows"
+          :pagination="false"
+          row-key="sceneId"
+          size="small"
+          :scroll="{ x: 1200 }"
+        >
+          <template #bodyCell="{ column, record: row }">
+            <template v-if="column.key === 'server'">
+              <Tag :color="getMultiuserSceneTagColor(row)">{{ formatMultiuserEndpoint(row) }}</Tag>
+            </template>
+          </template>
+        </Table>
+      </div>
 
       <div class="scene-detail-cost scene-detail-section">
         <div class="scene-detail-cost-controls">
