@@ -691,7 +691,7 @@ const onlineComponentDefinition: ComponentDefinition<OnlineComponentProps> = {
         { kind: 'boolean', key: 'enabled', label: 'Enabled' },
         { kind: 'number', key: 'maxUsers', label: 'Max Users', min: 2, max: 128, step: 1 },
         { kind: 'number', key: 'syncInterval', label: 'Sync Interval (ms)', min: 33, max: 5000, step: 33 },
-        { kind: 'text', key: 'server', label: 'Server', placeholder: 'ws://localhost' },
+        { kind: 'text', key: 'server', label: 'Server', placeholder: 'ws://muluser.v.touchmagic.cn' },
         { kind: 'number', key: 'port', label: 'Port', min: 1, max: 65535, step: 1 },
       ],
     },

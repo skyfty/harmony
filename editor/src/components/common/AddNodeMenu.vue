@@ -312,7 +312,7 @@ async function handleCreateMultiuserNode(): Promise<void> {
       enabled: true,
       maxUsers: 10,
       syncInterval: 100,
-      server: 'ws://localhost',
+      server: 'ws://muluser.v.touchmagic.cn',
       port: 7645,
     })
   }

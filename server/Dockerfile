@@ -17,6 +17,7 @@ COPY schema ./schema
 # Bring in the local physics packages that schema depends on via file:../ paths.
 COPY physics-core ./physics-core
 COPY physics-bridge ./physics-bridge
+COPY physics-cannon ./physics-cannon
 # Also bring in local tools package so file:../tools can be resolved
 COPY tools ./tools
 
@@ -30,6 +31,7 @@ RUN pnpm --dir /app/tools install --frozen-lockfile --registry=${NPM_REGISTRY_UR
 # declarations during its own TypeScript compile.
 RUN pnpm --dir /app/physics-core install --frozen-lockfile --registry=${NPM_REGISTRY_URL} && pnpm --dir /app/physics-core run build
 RUN pnpm --dir /app/physics-bridge install --frozen-lockfile --registry=${NPM_REGISTRY_URL} && pnpm --dir /app/physics-bridge run build
+RUN pnpm --dir /app/physics-cannon install --frozen-lockfile --registry=${NPM_REGISTRY_URL} && pnpm --dir /app/physics-cannon run build
 
 # Install deps for server (use pnpm with lockfile for reproducibility)
 WORKDIR /app/server
