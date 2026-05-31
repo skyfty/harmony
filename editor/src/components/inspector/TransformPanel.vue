@@ -18,7 +18,7 @@ type NumericVector = { x: number; y: number; z: number }
 
 const MIN_SCALE = 0.01
 
-function isFieldDisabled(field: TransformField): boolean {
+function isFieldDisabled(_field: TransformField): boolean {
   if (props.disabled) {
     return true
   }
