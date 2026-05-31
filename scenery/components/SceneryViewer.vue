@@ -573,6 +573,8 @@ import {
   setActiveMultiuserRuntimeBridge,
   setActiveMultiuserSceneId,
   type MultiuserIdentity,
+  type MultiuserPhysicsAuthorityInput,
+  type MultiuserPhysicsAuthoritySnapshot,
   type MultiuserPeerSnapshot,
   type MultiuserPeerState,
   type MultiuserSharedEntitySnapshot,
@@ -689,6 +691,11 @@ import {
   clampNetworkSyncComponentProps,
   type NetworkSyncComponentProps,
 } from '@harmony/schema/components/definitions/networkSyncComponent';
+import {
+  PHYSICS_AUTHORITY_COMPONENT_TYPE,
+  clampPhysicsAuthorityComponentProps,
+  type PhysicsAuthorityComponentProps,
+} from '@harmony/schema/components/definitions/physicsAuthorityComponent';
 import {
   guideRouteComponentDefinition,
 } from '@harmony/schema/components/definitions/guideRouteComponent';
@@ -2333,6 +2340,14 @@ type NetworkSyncNodeRuntimeEntry = {
   ownerUserId: string | null;
   updatedAt: string;
 };
+type PhysicsAuthorityNodeRuntimeEntry = {
+  nodeId: string;
+  props: PhysicsAuthorityComponentProps;
+  localInputSequence: number;
+  ownerUserId: string | null;
+  updatedAt: string;
+  lastLocalSignature: string;
+};
 type RemoteSharedEntityEntry = {
   entityId: string;
   nodeId: string;
@@ -2340,12 +2355,22 @@ type RemoteSharedEntityEntry = {
   targetState: MultiuserSharedEntityState;
   displayState: MultiuserSharedEntityState | null;
 };
+type RemotePhysicsAuthorityEntry = {
+  nodeId: string;
+  props: PhysicsAuthorityComponentProps;
+  targetState: MultiuserPhysicsAuthoritySnapshot;
+  displayState: MultiuserPhysicsAuthoritySnapshot | null;
+};
+type PhysicsAuthorityContactPairKey = string;
 const remoteMultiuserPeerEntries = new Map<string, RemoteMultiuserPeerEntry>();
 const remoteMultiuserPeerLoadTokens = new Map<string, number>();
 const remoteMultiuserPeerRoot = new THREE.Group();
 remoteMultiuserPeerRoot.name = 'RemoteMultiuserPeers';
 const networkSyncNodeEntries = new Map<string, NetworkSyncNodeRuntimeEntry>();
+const physicsAuthorityNodeEntries = new Map<string, PhysicsAuthorityNodeRuntimeEntry>();
 const remoteSharedEntityEntries = new Map<string, RemoteSharedEntityEntry>();
+const remotePhysicsAuthorityEntries = new Map<string, RemotePhysicsAuthorityEntry>();
+const remotePhysicsAuthorityContactPairs = new Map<string, Set<PhysicsAuthorityContactPairKey>>();
 const REMOTE_MULTIUSER_SMOOTHING_SECONDS = 0.16;
 const remoteMultiuserDisplayPositionScratch = new THREE.Vector3();
 const remoteMultiuserTargetPositionScratch = new THREE.Vector3();
@@ -2353,6 +2378,9 @@ const remoteMultiuserDisplayQuaternionScratch = new THREE.Quaternion();
 const remoteMultiuserTargetQuaternionScratch = new THREE.Quaternion();
 const remoteSharedEntityDisplayScaleScratch = new THREE.Vector3();
 const remoteSharedEntityTargetScaleScratch = new THREE.Vector3();
+const remotePhysicsAuthorityTargetPositionScratch = new THREE.Vector3();
+const remotePhysicsAuthorityTargetQuaternionScratch = new THREE.Quaternion();
+const remotePhysicsAuthorityDisplayQuaternionScratch = new THREE.Quaternion();
 const physicsGravity = createHostPhysicsVec3(0, -DEFAULT_ENVIRONMENT_GRAVITY, 0);
 // On WeChat iOS, 30 Hz physics is sufficient for 1–2 dynamic bodies and halves step cost.
 const PHYSICS_FIXED_TIMESTEP = isWeChatMiniProgram ? 1 / 30 : 1 / 60;
@@ -2948,6 +2976,25 @@ const vehicleSpeedKmh = computed(() => Math.round(vehicleSpeedDisplayMps.value *
 let vehicleSpeedDisplayLastCommitAtMs = 0;
 let vehicleSpeedDisplayLowSpeedSinceAtMs: number | null = null;
 const VEHICLE_HEADING_UPDATE_EPSILON_DEGREES = 0.25;
+const characterAuthorityInput = reactive({
+  moveX: 0,
+  moveZ: 0,
+  jump: false,
+  sprint: false,
+  crouch: false,
+  interact: false,
+});
+const characterKeyState = reactive({
+  forward: false,
+  backward: false,
+  left: false,
+  right: false,
+  jump: false,
+  sprint: false,
+  crouch: false,
+  interact: false,
+});
+let characterInputJumpLatch = false;
 
 function getVehicleSpeedDisplayNowMs(): number {
   if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
@@ -5629,6 +5676,34 @@ function collectNetworkSyncNodeEntries(document: SceneJsonExportDocument | null)
         lastLocalSignature: '',
         ownerUserId: null,
         updatedAt: new Date(0).toISOString(),
+      });
+    }
+    if (Array.isArray(node.children) && node.children.length) {
+      stack.push(...node.children);
+    }
+  }
+}
+
+function collectPhysicsAuthorityNodeEntries(document: SceneJsonExportDocument | null): void {
+  physicsAuthorityNodeEntries.clear();
+  if (!document?.nodes?.length) {
+    return;
+  }
+  const stack: SceneNode[] = [...document.nodes];
+  while (stack.length) {
+    const node = stack.pop();
+    if (!node) {
+      continue;
+    }
+    const component = node.components?.[PHYSICS_AUTHORITY_COMPONENT_TYPE] as SceneNodeComponentState<PhysicsAuthorityComponentProps> | undefined;
+    if (component && component.enabled !== false) {
+      physicsAuthorityNodeEntries.set(node.id, {
+        nodeId: node.id,
+        props: clampPhysicsAuthorityComponentProps(component.props),
+        localInputSequence: 0,
+        ownerUserId: null,
+        updatedAt: new Date(0).toISOString(),
+        lastLocalSignature: '',
       });
     }
     if (Array.isArray(node.children) && node.children.length) {
@@ -10474,6 +10549,441 @@ function resetRemoteSharedEntities(): void {
   });
 }
 
+function clonePhysicsAuthoritySnapshot(snapshot: MultiuserPhysicsAuthoritySnapshot): MultiuserPhysicsAuthoritySnapshot {
+  return {
+    nodeId: snapshot.nodeId,
+    actorType: snapshot.actorType,
+    ownerUserId: snapshot.ownerUserId ?? null,
+    tick: snapshot.tick,
+    revision: snapshot.revision,
+    updatedAt: snapshot.updatedAt,
+    bodyId: snapshot.bodyId,
+    transform: {
+      position: {
+        x: snapshot.transform.position.x,
+        y: snapshot.transform.position.y,
+        z: snapshot.transform.position.z,
+      },
+      quaternion: {
+        x: snapshot.transform.quaternion.x,
+        y: snapshot.transform.quaternion.y,
+        z: snapshot.transform.quaternion.z,
+        w: snapshot.transform.quaternion.w,
+      },
+    },
+    linearVelocity: snapshot.linearVelocity
+      ? {
+          x: snapshot.linearVelocity.x,
+          y: snapshot.linearVelocity.y,
+          z: snapshot.linearVelocity.z,
+        }
+      : null,
+    angularVelocity: snapshot.angularVelocity
+      ? {
+          x: snapshot.angularVelocity.x,
+          y: snapshot.angularVelocity.y,
+          z: snapshot.angularVelocity.z,
+        }
+      : null,
+    sleeping: snapshot.sleeping ?? false,
+    contacts: Array.isArray(snapshot.contacts)
+      ? snapshot.contacts.map((contact) => ({
+          bodyIdA: contact.bodyIdA,
+          bodyIdB: contact.bodyIdB,
+          normal: {
+            x: contact.normal.x,
+            y: contact.normal.y,
+            z: contact.normal.z,
+          },
+          point: {
+            x: contact.point.x,
+            y: contact.point.y,
+            z: contact.point.z,
+          },
+          impulse: contact.impulse ?? null,
+          impactSpeed: contact.impactSpeed ?? null,
+        }))
+      : null,
+  };
+}
+
+function applyPhysicsAuthoritySnapshotToObject(object: THREE.Object3D, snapshot: MultiuserPhysicsAuthoritySnapshot): void {
+  remotePhysicsAuthorityTargetPositionScratch.set(
+    snapshot.transform.position.x,
+    snapshot.transform.position.y,
+    snapshot.transform.position.z,
+  );
+  remotePhysicsAuthorityTargetQuaternionScratch.set(
+    snapshot.transform.quaternion.x,
+    snapshot.transform.quaternion.y,
+    snapshot.transform.quaternion.z,
+    snapshot.transform.quaternion.w,
+  );
+  applyObjectWorldPose(object, remotePhysicsAuthorityTargetPositionScratch, remotePhysicsAuthorityTargetQuaternionScratch);
+  object.updateMatrixWorld(true);
+  syncInstancedTransform(object, true);
+}
+
+function getPhysicsAuthoritySnapThreshold(props: PhysicsAuthorityComponentProps): number {
+  return Math.max(0.01, props.snapThreshold)
+}
+
+function getPhysicsAuthorityLerpAlpha(props: PhysicsAuthorityComponentProps, deltaSeconds: number): number {
+  const lerpSeconds = Math.max(0.016, (props.snapshotLerpMs || 120) / 1000)
+  if (!Number.isFinite(deltaSeconds) || deltaSeconds <= 0) {
+    return 1
+  }
+  return Math.min(1, Math.max(0.01, deltaSeconds / lerpSeconds))
+}
+
+function shouldSnapPhysicsAuthoritySnapshot(
+  displayState: MultiuserPhysicsAuthoritySnapshot | null,
+  targetState: MultiuserPhysicsAuthoritySnapshot,
+  props: PhysicsAuthorityComponentProps,
+): boolean {
+  if (!displayState) {
+    return true
+  }
+  const dx = targetState.transform.position.x - displayState.transform.position.x
+  const dy = targetState.transform.position.y - displayState.transform.position.y
+  const dz = targetState.transform.position.z - displayState.transform.position.z
+  const positionDistance = Math.hypot(dx, dy, dz)
+  if (positionDistance >= getPhysicsAuthoritySnapThreshold(props)) {
+    return true
+  }
+  const dot =
+    displayState.transform.quaternion.x * targetState.transform.quaternion.x
+    + displayState.transform.quaternion.y * targetState.transform.quaternion.y
+    + displayState.transform.quaternion.z * targetState.transform.quaternion.z
+    + displayState.transform.quaternion.w * targetState.transform.quaternion.w
+  return Math.abs(dot) < 0.82
+}
+
+function updateRemotePhysicsAuthorityTransforms(deltaSeconds: number): void {
+  if (!remotePhysicsAuthorityEntries.size || deltaSeconds < 0) {
+    return;
+  }
+  remotePhysicsAuthorityEntries.forEach((entry) => {
+    const object = nodeObjectMap.get(entry.nodeId) ?? null;
+    if (!object) {
+      return;
+    }
+    const target = entry.targetState;
+    const bodyId = entry.targetState.bodyId ?? physicsBridgeBodyIdByNodeId.get(entry.nodeId) ?? null;
+    const node = resolveNodeById(entry.nodeId);
+    if (!node) {
+      return;
+    }
+    const displayState = entry.displayState ?? clonePhysicsAuthoritySnapshot(target);
+    const shouldSnap = shouldSnapPhysicsAuthoritySnapshot(displayState, target, entry.props);
+    if (shouldSnap) {
+      entry.displayState = clonePhysicsAuthoritySnapshot(target);
+    } else {
+      const alpha = getPhysicsAuthorityLerpAlpha(entry.props, deltaSeconds)
+      displayState.transform.position.x += (target.transform.position.x - displayState.transform.position.x) * alpha
+      displayState.transform.position.y += (target.transform.position.y - displayState.transform.position.y) * alpha
+      displayState.transform.position.z += (target.transform.position.z - displayState.transform.position.z) * alpha
+      remotePhysicsAuthorityDisplayQuaternionScratch.set(
+        displayState.transform.quaternion.x,
+        displayState.transform.quaternion.y,
+        displayState.transform.quaternion.z,
+        displayState.transform.quaternion.w,
+      )
+      remotePhysicsAuthorityTargetQuaternionScratch.set(
+        target.transform.quaternion.x,
+        target.transform.quaternion.y,
+        target.transform.quaternion.z,
+        target.transform.quaternion.w,
+      )
+      remotePhysicsAuthorityDisplayQuaternionScratch.slerp(remotePhysicsAuthorityTargetQuaternionScratch, alpha)
+      displayState.transform.quaternion.x = remotePhysicsAuthorityDisplayQuaternionScratch.x
+      displayState.transform.quaternion.y = remotePhysicsAuthorityDisplayQuaternionScratch.y
+      displayState.transform.quaternion.z = remotePhysicsAuthorityDisplayQuaternionScratch.z
+      displayState.transform.quaternion.w = remotePhysicsAuthorityDisplayQuaternionScratch.w
+      if (typeof target.linearVelocity?.x === 'number' && typeof displayState.linearVelocity?.x === 'number') {
+        displayState.linearVelocity.x += (target.linearVelocity.x - displayState.linearVelocity.x) * alpha
+        displayState.linearVelocity.y += (target.linearVelocity.y - displayState.linearVelocity.y) * alpha
+        displayState.linearVelocity.z += (target.linearVelocity.z - displayState.linearVelocity.z) * alpha
+      }
+      if (typeof target.angularVelocity?.x === 'number' && typeof displayState.angularVelocity?.x === 'number') {
+        displayState.angularVelocity.x += (target.angularVelocity.x - displayState.angularVelocity.x) * alpha
+        displayState.angularVelocity.y += (target.angularVelocity.y - displayState.angularVelocity.y) * alpha
+        displayState.angularVelocity.z += (target.angularVelocity.z - displayState.angularVelocity.z) * alpha
+      }
+      entry.displayState = displayState
+    }
+    applyPhysicsAuthoritySnapshotToObject(object, entry.displayState)
+    syncSceneNodeLocalTransformFromObject(node, object);
+    if (bodyId !== null) {
+      try {
+        physicsBridge?.setBodyTransform({
+          bodyId,
+          transform: {
+            position: [
+              entry.displayState.transform.position.x,
+              entry.displayState.transform.position.y,
+              entry.displayState.transform.position.z,
+            ],
+            rotation: [
+              entry.displayState.transform.quaternion.x,
+              entry.displayState.transform.quaternion.y,
+              entry.displayState.transform.quaternion.z,
+              entry.displayState.transform.quaternion.w,
+            ],
+          },
+          resetVelocity: shouldSnap,
+        });
+      } catch (error) {
+        console.warn('[SceneViewer] Failed to apply authoritative physics snapshot', error);
+      }
+    }
+    const rigidbodyEntry = rigidbodyInstances.get(entry.nodeId) ?? null;
+    if (rigidbodyEntry) {
+      syncSharedBodyFromObject(rigidbodyEntry.body, object, rigidbodyEntry.orientationAdjustment);
+      if (entry.displayState.linearVelocity) {
+        rigidbodyEntry.body.velocity.set(
+          entry.displayState.linearVelocity.x,
+          entry.displayState.linearVelocity.y,
+          entry.displayState.linearVelocity.z,
+        );
+      }
+      if (entry.displayState.angularVelocity) {
+        rigidbodyEntry.body.angularVelocity.set(
+          entry.displayState.angularVelocity.x,
+          entry.displayState.angularVelocity.y,
+          entry.displayState.angularVelocity.z,
+        );
+      }
+      resetPhysicsInterpolationState(rigidbodyEntry.body);
+      if (entry.displayState.sleeping) {
+        trySleepBody(rigidbodyEntry.body as PhysicsBodyLike);
+      }
+      markPhysicsBridgeBodyDirty(entry.nodeId);
+    }
+    const vehicleInstance = vehicleInstances.get(entry.nodeId) ?? null;
+    if (vehicleInstance?.vehicle?.chassisBody) {
+      if (entry.displayState.linearVelocity) {
+        vehicleInstance.vehicle.chassisBody.velocity.set(
+          entry.displayState.linearVelocity.x,
+          entry.displayState.linearVelocity.y,
+          entry.displayState.linearVelocity.z,
+        );
+      }
+      if (entry.displayState.angularVelocity) {
+        vehicleInstance.vehicle.chassisBody.angularVelocity.set(
+          entry.displayState.angularVelocity.x,
+          entry.displayState.angularVelocity.y,
+          entry.displayState.angularVelocity.z,
+        );
+      }
+      resetPhysicsInterpolationState(vehicleInstance.vehicle.chassisBody as PhysicsBodyLike);
+      if (entry.displayState.sleeping) {
+        trySleepBody(vehicleInstance.vehicle.chassisBody as PhysicsBodyLike);
+      }
+      markPhysicsBridgeBodyDirty(entry.nodeId);
+    }
+  });
+}
+
+function processRemotePhysicsAuthoritySnapshot(snapshot: MultiuserPhysicsAuthoritySnapshot): void {
+  const runtimeEntry = physicsAuthorityNodeEntries.get(snapshot.nodeId);
+  if (!runtimeEntry) {
+    return;
+  }
+  runtimeEntry.ownerUserId = snapshot.ownerUserId ?? null;
+  runtimeEntry.updatedAt = snapshot.updatedAt;
+  runtimeEntry.lastLocalSignature = [
+    snapshot.tick,
+    snapshot.revision,
+    snapshot.transform.position.x,
+    snapshot.transform.position.y,
+    snapshot.transform.position.z,
+    snapshot.transform.quaternion.x,
+    snapshot.transform.quaternion.y,
+    snapshot.transform.quaternion.z,
+    snapshot.transform.quaternion.w,
+  ].join('|');
+  remotePhysicsAuthorityEntries.set(snapshot.nodeId, {
+    nodeId: snapshot.nodeId,
+    props: runtimeEntry.props,
+    targetState: clonePhysicsAuthoritySnapshot(snapshot),
+    displayState: clonePhysicsAuthoritySnapshot(snapshot),
+  });
+  processPhysicsAuthorityCollisionContacts(snapshot);
+  updateRemotePhysicsAuthorityTransforms(0);
+}
+
+function processRemotePhysicsAuthorityRemoved(nodeId: string): void {
+  remotePhysicsAuthorityEntries.delete(nodeId);
+  remotePhysicsAuthorityContactPairs.delete(nodeId);
+  const runtimeEntry = physicsAuthorityNodeEntries.get(nodeId);
+  if (runtimeEntry) {
+    runtimeEntry.ownerUserId = null;
+  }
+}
+
+function resetRemotePhysicsAuthority(): void {
+  remotePhysicsAuthorityEntries.clear();
+  remotePhysicsAuthorityContactPairs.clear();
+  physicsAuthorityNodeEntries.forEach((entry) => {
+    entry.ownerUserId = null;
+  });
+}
+
+function buildPhysicsAuthorityContactPairKey(bodyIdA: number, bodyIdB: number): PhysicsAuthorityContactPairKey {
+  return bodyIdA < bodyIdB ? `${bodyIdA}:${bodyIdB}` : `${bodyIdB}:${bodyIdA}`;
+}
+
+function processPhysicsAuthorityCollisionContacts(snapshot: MultiuserPhysicsAuthoritySnapshot): void {
+  const bodyId = snapshot.bodyId
+  if (bodyId === null || !Array.isArray(snapshot.contacts) || !snapshot.contacts.length) {
+    remotePhysicsAuthorityContactPairs.delete(snapshot.nodeId)
+    return
+  }
+  const previousPairs = remotePhysicsAuthorityContactPairs.get(snapshot.nodeId) ?? new Set<PhysicsAuthorityContactPairKey>()
+  const nextPairs = new Set<PhysicsAuthorityContactPairKey>()
+  snapshot.contacts.forEach((contact) => {
+    if (contact.bodyIdA !== bodyId && contact.bodyIdB !== bodyId) {
+      return
+    }
+    const pairKey = buildPhysicsAuthorityContactPairKey(contact.bodyIdA, contact.bodyIdB)
+    nextPairs.add(pairKey)
+    if (previousPairs.has(pairKey)) {
+      return
+    }
+    const otherBodyId = contact.bodyIdA === bodyId ? contact.bodyIdB : contact.bodyIdA
+    const otherNodeId = physicsBridgeNodeIdByBodyId.get(otherBodyId) ?? null
+    const followUps = triggerBehaviorAction(snapshot.nodeId, 'collision', {
+      payload: {
+        nodeId: snapshot.nodeId,
+        otherNodeId,
+        bodyId,
+        otherBodyId,
+        pairKey,
+        tick: snapshot.tick,
+        revision: snapshot.revision,
+        ownerUserId: snapshot.ownerUserId ?? null,
+        impactSpeed: contact.impactSpeed ?? null,
+        normal: {
+          x: contact.normal.x,
+          y: contact.normal.y,
+          z: contact.normal.z,
+        },
+        point: {
+          x: contact.point.x,
+          y: contact.point.y,
+          z: contact.point.z,
+        },
+        impulse: contact.impulse ?? null,
+      },
+    })
+    if (followUps.length) {
+      processBehaviorEvents(followUps)
+    }
+  })
+  remotePhysicsAuthorityContactPairs.set(snapshot.nodeId, nextPairs)
+}
+
+function resolveLocalPhysicsAuthorityInputs(): MultiuserPhysicsAuthorityInput[] {
+  const identity = getNormalizedMultiuserIdentity();
+  if (!identity) {
+    return [];
+  }
+  const inputs: MultiuserPhysicsAuthorityInput[] = [];
+  physicsAuthorityNodeEntries.forEach((entry, nodeId) => {
+    const node = resolveNodeById(nodeId);
+    if (!node) {
+      return;
+    }
+    const resolvedActorType = entry.props.actorType === 'auto'
+      ? (resolveVehicleComponent(node) ? 'vehicle' : 'character')
+      : entry.props.actorType;
+    if (!vehicleDriveActive.value || vehicleDriveNodeId.value !== nodeId || resolvedActorType !== 'vehicle') {
+      return;
+    }
+    const vehicleId = physicsBridgeVehicleIdByNodeId.get(nodeId) ?? null;
+    if (vehicleId === null) {
+      return;
+    }
+    entry.localInputSequence += 1;
+    entry.ownerUserId = identity.userId;
+    entry.updatedAt = new Date().toISOString();
+    entry.lastLocalSignature = [
+      vehicleDriveInput.steering,
+      vehicleDriveInput.throttle,
+      vehicleDriveInput.brake,
+      vehicleDriveInputFlags.brake ? 1 : 0,
+      vehicleId,
+    ].join('|');
+    inputs.push({
+      nodeId,
+      actorType: 'vehicle',
+      inputSequence: entry.localInputSequence,
+      ownerUserId: identity.userId,
+      leaseMs: entry.props.inputLeaseMs,
+      vehicle: {
+        vehicleId,
+        steering: vehicleDriveInput.steering,
+        throttle: vehicleDriveInput.throttle,
+        brake: vehicleDriveInput.brake,
+        handbrake: vehicleDriveInputFlags.brake ? 1 : 0,
+      },
+      character: null,
+    });
+  });
+  physicsAuthorityNodeEntries.forEach((entry, nodeId) => {
+    const node = resolveNodeById(nodeId);
+    if (!node) {
+      return;
+    }
+    const resolvedActorType = entry.props.actorType === 'auto'
+      ? (resolveVehicleComponent(node) ? 'vehicle' : 'character')
+      : entry.props.actorType;
+    if (resolvedActorType !== 'character') {
+      return;
+    }
+    const characterInput = {
+      moveX: characterAuthorityInput.moveX,
+      moveZ: characterAuthorityInput.moveZ,
+      jump: characterAuthorityInput.jump,
+      sprint: characterAuthorityInput.sprint,
+      crouch: characterAuthorityInput.crouch,
+      interact: characterAuthorityInput.interact,
+    };
+    const hasAnyCharacterInput =
+      Math.abs(characterInput.moveX) > 0.001
+      || Math.abs(characterInput.moveZ) > 0.001
+      || characterInput.jump
+      || characterInput.sprint
+      || characterInput.crouch
+      || characterInput.interact;
+    if (!hasAnyCharacterInput && entry.ownerUserId !== identity.userId) {
+      return;
+    }
+    entry.localInputSequence += 1;
+    entry.ownerUserId = identity.userId;
+    entry.updatedAt = new Date().toISOString();
+    entry.lastLocalSignature = [
+      characterInput.moveX,
+      characterInput.moveZ,
+      characterInput.jump ? 1 : 0,
+      characterInput.sprint ? 1 : 0,
+      characterInput.crouch ? 1 : 0,
+      characterInput.interact ? 1 : 0,
+    ].join('|');
+    inputs.push({
+      nodeId,
+      actorType: 'character',
+      inputSequence: entry.localInputSequence,
+      ownerUserId: identity.userId,
+      leaseMs: entry.props.inputLeaseMs,
+      vehicle: null,
+      character: characterInput,
+    });
+  });
+  return inputs;
+}
+
 function getRemoteMultiuserPeerSignature(state: MultiuserPeerState): string {
   return [
     state.subjectType,
@@ -10702,6 +11212,9 @@ const multiuserRuntimeBridge: MultiuserRuntimeBridge = {
   resolveLocalSharedEntityStates() {
     return resolveLocalSharedEntityStates();
   },
+  resolveLocalPhysicsAuthorityInputs() {
+    return resolveLocalPhysicsAuthorityInputs();
+  },
   handleRemotePeerSnapshot(peer) {
     handleRemoteMultiuserPeerSnapshot(peer);
   },
@@ -10714,11 +11227,20 @@ const multiuserRuntimeBridge: MultiuserRuntimeBridge = {
   handleRemoteSharedEntityRemoved(entityId) {
     processRemoteSharedEntityRemoved(entityId);
   },
+  handleRemotePhysicsAuthoritySnapshot(snapshot) {
+    processRemotePhysicsAuthoritySnapshot(snapshot);
+  },
+  handleRemotePhysicsAuthorityRemoved(nodeId) {
+    processRemotePhysicsAuthorityRemoved(nodeId);
+  },
   clearRemotePeers() {
     clearRemoteMultiuserPeers();
   },
   clearRemoteSharedEntities() {
     resetRemoteSharedEntities();
+  },
+  clearRemotePhysicsAuthority() {
+    resetRemotePhysicsAuthority();
   },
 };
 
@@ -11647,6 +12169,65 @@ function resolveJoystickDriveInput(): { throttle: number; steering: number } {
     throttle: y * scale,
     steering: x * scale,
   };
+}
+
+function updateCharacterAuthorityInputFromKeys(): void {
+  const moveX = (characterKeyState.right ? 1 : 0) - (characterKeyState.left ? 1 : 0);
+  const moveZ = (characterKeyState.forward ? 1 : 0) - (characterKeyState.backward ? 1 : 0);
+  characterAuthorityInput.moveX = clampAxisScalar(moveX);
+  characterAuthorityInput.moveZ = clampAxisScalar(moveZ);
+  characterAuthorityInput.sprint = characterKeyState.sprint;
+  characterAuthorityInput.crouch = characterKeyState.crouch;
+  characterAuthorityInput.interact = characterKeyState.interact;
+  if (characterKeyState.jump) {
+    if (!characterInputJumpLatch) {
+      characterAuthorityInput.jump = true;
+      characterInputJumpLatch = true;
+      return;
+    }
+    characterAuthorityInput.jump = false;
+    return;
+  }
+  characterInputJumpLatch = false;
+  characterAuthorityInput.jump = false;
+}
+
+function setCharacterKeyState(key: string, pressed: boolean): void {
+  const normalized = key.toLowerCase();
+  if (normalized === 'w' || normalized === 'arrowup') {
+    characterKeyState.forward = pressed;
+  } else if (normalized === 's' || normalized === 'arrowdown') {
+    characterKeyState.backward = pressed;
+  } else if (normalized === 'a' || normalized === 'arrowleft') {
+    characterKeyState.left = pressed;
+  } else if (normalized === 'd' || normalized === 'arrowright') {
+    characterKeyState.right = pressed;
+  } else if (normalized === ' ' || normalized === 'space' || normalized === 'spacebar') {
+    characterKeyState.jump = pressed;
+  } else if (normalized === 'shift' || normalized === 'shiftleft' || normalized === 'shiftright') {
+    characterKeyState.sprint = pressed;
+  } else if (normalized === 'control' || normalized === 'ctrl' || normalized === 'controlleft' || normalized === 'controlright') {
+    characterKeyState.crouch = pressed;
+  } else if (normalized === 'e' || normalized === 'enter') {
+    characterKeyState.interact = pressed;
+  } else {
+    return;
+  }
+  updateCharacterAuthorityInputFromKeys();
+}
+
+function handleWindowKeyDown(event: KeyboardEvent): void {
+  if (event.defaultPrevented) {
+    return;
+  }
+  setCharacterKeyState(event.key, true);
+}
+
+function handleWindowKeyUp(event: KeyboardEvent): void {
+  if (event.defaultPrevented) {
+    return;
+  }
+  setCharacterKeyState(event.key, false);
 }
 
 function applyJoystickFromPoint(x: number, y: number): void {
@@ -14932,7 +15513,9 @@ function teardownRenderer() {
   multiuserNodeIds.clear();
   multiuserNodeObjects.clear();
   networkSyncNodeEntries.clear();
+  physicsAuthorityNodeEntries.clear();
   remoteSharedEntityEntries.clear();
+  remotePhysicsAuthorityEntries.clear();
   resetPhysicsWorld();
   lazyPlaceholderStates.clear();
   deferredInstancingNodeIds.clear();
@@ -14958,6 +15541,7 @@ function teardownRenderer() {
   canvasResult = null;
   clearRemoteMultiuserPeers();
   resetRemoteSharedEntities();
+  resetRemotePhysicsAuthority();
   setActiveMultiuserRuntimeBridge(null);
   setActiveMultiuserSceneId(null);
   currentDocument = null;
@@ -15381,6 +15965,7 @@ async function mountGraphAndSyncSubsystems(
   applyWeChatShadowPolicy(root);
   refreshMultiuserNodeReferences(payload.document);
   collectNetworkSyncNodeEntries(payload.document);
+  collectPhysicsAuthorityNodeEntries(payload.document);
   refreshBehaviorProximityCandidates();
   await yieldToMainThread();
 
@@ -15623,6 +16208,7 @@ function startRenderLoop(
           updateVehicleWheelVisuals(deltaSeconds);
           updateRemoteMultiuserPeers(deltaSeconds);
           updateRemoteSharedEntityTransforms(deltaSeconds);
+          updateRemotePhysicsAuthorityTransforms(deltaSeconds);
           retryPendingVehicleDriveIfNeeded();
           activatePendingDefaultSteerDriveIfNeeded();
         }
@@ -15767,7 +16353,9 @@ function cleanupForUnrelatedSceneSwitch(): void {
   multiuserNodeIds.clear();
   multiuserNodeObjects.clear();
   networkSyncNodeEntries.clear();
+  physicsAuthorityNodeEntries.clear();
   remoteSharedEntityEntries.clear();
+  remotePhysicsAuthorityEntries.clear();
   clearSceneryCompiledGroundRenderRuntime();
 
   resetPhysicsWorld();
@@ -15798,6 +16386,7 @@ function cleanupForUnrelatedSceneSwitch(): void {
   sceneGraphRoot = null;
   dynamicGroundCache = null;
   clearRemoteMultiuserPeers();
+  resetRemotePhysicsAuthority();
   setActiveMultiuserRuntimeBridge(null);
   setActiveMultiuserSceneId(null);
   viewerResourceCache = null;
@@ -16168,6 +16757,11 @@ onMounted(() => {
     uni.onWindowResize(handleResize);
   }
 
+  if (typeof window !== 'undefined') {
+    window.addEventListener('keydown', handleWindowKeyDown, { passive: true });
+    window.addEventListener('keyup', handleWindowKeyUp, { passive: true });
+  }
+
   if (hasAnyPropInput()) {
     applySceneInputFromProps();
   }
@@ -16227,6 +16821,21 @@ function cleanupRuntime(): void {
   }
   detachDrivePadMouseListeners();
   hideDrivePadImmediate();
+  characterAuthorityInput.moveX = 0;
+  characterAuthorityInput.moveZ = 0;
+  characterAuthorityInput.jump = false;
+  characterAuthorityInput.sprint = false;
+  characterAuthorityInput.crouch = false;
+  characterAuthorityInput.interact = false;
+  characterKeyState.forward = false;
+  characterKeyState.backward = false;
+  characterKeyState.left = false;
+  characterKeyState.right = false;
+  characterKeyState.jump = false;
+  characterKeyState.sprint = false;
+  characterKeyState.crouch = false;
+  characterKeyState.interact = false;
+  characterInputJumpLatch = false;
   if (sceneDownloadTask) {
     sceneDownloadTask.abort();
     sceneDownloadTask = null;
@@ -16245,6 +16854,10 @@ function cleanupRuntime(): void {
 
 onUnmounted(() => {
   void destroySceneryPhysicsBridge();
+  if (typeof window !== 'undefined') {
+    window.removeEventListener('keydown', handleWindowKeyDown);
+    window.removeEventListener('keyup', handleWindowKeyUp);
+  }
   cleanupRuntime();
 });
 

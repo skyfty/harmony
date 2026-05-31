@@ -7,6 +7,8 @@ import {
   getActiveMultiuserSceneId,
   type MultiuserPeerSnapshot,
   type MultiuserPeerState,
+  type MultiuserPhysicsAuthorityInput,
+  type MultiuserPhysicsAuthoritySnapshot,
   type MultiuserSharedEntitySnapshot,
   type MultiuserSharedEntityState,
 } from '../../multiuserContext'
@@ -56,7 +58,16 @@ interface MultiuserEntityStateMessage {
   entity: MultiuserSharedEntityState
 }
 
-type MultiuserClientMessage = MultiuserJoinMessage | MultiuserStateMessage | MultiuserEntityStateMessage
+interface MultiuserPhysicsInputMessage {
+  type: 'physics-input'
+  input: MultiuserPhysicsAuthorityInput
+}
+
+type MultiuserClientMessage =
+  | MultiuserJoinMessage
+  | MultiuserStateMessage
+  | MultiuserEntityStateMessage
+  | MultiuserPhysicsInputMessage
 
 type MultiuserServerMessage =
   | { type: 'welcome'; sceneId: string; userId: string; peers: MultiuserPeerSnapshot[]; entities: MultiuserSharedEntitySnapshot[] }
@@ -65,6 +76,8 @@ type MultiuserServerMessage =
   | { type: 'peer-left'; sceneId: string; userId: string }
   | { type: 'entity-state'; sceneId: string; entity: MultiuserSharedEntitySnapshot }
   | { type: 'entity-removed'; sceneId: string; entityId: string }
+  | { type: 'physics-snapshot'; sceneId: string; snapshot: MultiuserPhysicsAuthoritySnapshot }
+  | { type: 'physics-removed'; sceneId: string; nodeId: string }
   | { type: 'error'; reason?: string }
 
 function clampNumber(value: unknown, fallback: number, min: number, max: number): number {
@@ -277,6 +290,9 @@ class OnlineComponent extends Component<OnlineComponentProps> {
   private lastSentStateSignature = ''
   private readonly lastSharedEntityById = new Map<string, MultiuserSharedEntityState>()
   private readonly lastSharedEntitySignatureById = new Map<string, string>()
+  private readonly lastPhysicsInputByNodeId = new Map<string, MultiuserPhysicsAuthorityInput>()
+  private readonly lastPhysicsInputSignatureByNodeId = new Map<string, string>()
+  private lastPhysicsInputSyncTimestamp = 0
   private anonymousUserId = `anonymous-${Math.random().toString(36).slice(2, 10)}`
 
   constructor(context: ComponentRuntimeContext<OnlineComponentProps>) {
@@ -400,6 +416,9 @@ class OnlineComponent extends Component<OnlineComponentProps> {
     this.lastSentStateSignature = ''
     this.lastSharedEntityById.clear()
     this.lastSharedEntitySignatureById.clear()
+    this.lastPhysicsInputByNodeId.clear()
+    this.lastPhysicsInputSignatureByNodeId.clear()
+    this.lastPhysicsInputSyncTimestamp = 0
     this.sendJoin()
   }
 
@@ -451,6 +470,7 @@ class OnlineComponent extends Component<OnlineComponentProps> {
       const bridge = this.runtimeBridge
       bridge?.clearRemotePeers()
       bridge?.clearRemoteSharedEntities()
+      bridge?.clearRemotePhysicsAuthority()
       if (Array.isArray(payload.peers)) {
         payload.peers.forEach((peer) => bridge?.handleRemotePeerSnapshot(peer))
       }
@@ -477,6 +497,14 @@ class OnlineComponent extends Component<OnlineComponentProps> {
     }
     if (payload.type === 'entity-removed' && payload.entityId) {
       this.runtimeBridge?.handleRemoteSharedEntityRemoved(payload.entityId)
+      return
+    }
+    if (payload.type === 'physics-snapshot' && payload.snapshot) {
+      this.runtimeBridge?.handleRemotePhysicsAuthoritySnapshot(payload.snapshot)
+      return
+    }
+    if (payload.type === 'physics-removed' && payload.nodeId) {
+      this.runtimeBridge?.handleRemotePhysicsAuthorityRemoved(payload.nodeId)
     }
   }
 
@@ -486,6 +514,7 @@ class OnlineComponent extends Component<OnlineComponentProps> {
     }
     this.runtimeBridge?.clearRemotePeers()
     this.runtimeBridge?.clearRemoteSharedEntities()
+    this.runtimeBridge?.clearRemotePhysicsAuthority()
     if (this.shouldConnect()) {
       this.scheduleReconnect()
     }
@@ -522,10 +551,28 @@ class OnlineComponent extends Component<OnlineComponentProps> {
     this.lastSentStateSignature = ''
     this.lastSharedEntityById.clear()
     this.lastSharedEntitySignatureById.clear()
+    this.lastPhysicsInputByNodeId.clear()
+    this.lastPhysicsInputSignatureByNodeId.clear()
+    this.lastPhysicsInputSyncTimestamp = 0
     if (fully) {
       this.runtimeBridge?.clearRemotePeers()
       this.runtimeBridge?.clearRemoteSharedEntities()
+      this.runtimeBridge?.clearRemotePhysicsAuthority()
     }
+  }
+
+  private getPhysicsInputSignature(input: MultiuserPhysicsAuthorityInput): string {
+    const vehicle = input.vehicle
+    const character = input.character
+    return [
+      input.nodeId,
+      input.actorType,
+      input.inputSequence,
+      input.ownerUserId ?? '',
+      input.leaseMs,
+      vehicle ? `${vehicle.vehicleId}|${vehicle.steering}|${vehicle.throttle}|${vehicle.brake}|${vehicle.handbrake ?? ''}` : '',
+      character ? `${character.moveX}|${character.moveZ}|${character.jump ? 1 : 0}|${character.sprint ? 1 : 0}|${character.crouch ? 1 : 0}|${character.interact ? 1 : 0}` : '',
+    ].join('|')
   }
 
   private maybeSendState(): void {
@@ -567,40 +614,66 @@ class OnlineComponent extends Component<OnlineComponentProps> {
 
     const sharedStates = bridge.resolveLocalSharedEntityStates()
     if (!Array.isArray(sharedStates) || sharedStates.length === 0) {
+      // Continue to physics input handling below.
+    } else {
+      sharedStates.forEach((state) => {
+        if (!state || typeof state.entityId !== 'string' || !state.entityId.trim()) {
+          return
+        }
+        const signature = getMultiuserEntityStateSignature(state)
+        const previous = this.lastSharedEntityById.get(state.entityId) ?? null
+        const changed = signature !== this.lastSharedEntitySignatureById.get(state.entityId)
+          && isMultiuserEntityStateMeaningfullyChanged(previous, state)
+        const intervalHint = state.lease?.leaseMs ?? this.props.syncInterval
+        const effectiveSyncInterval = changed
+          ? computeMovingSyncInterval(intervalHint)
+          : computeIdleSyncInterval(intervalHint)
+        if (!changed && now - this.lastKeepaliveTimestamp < Math.max(effectiveSyncInterval, STATE_KEEPALIVE_INTERVAL)) {
+          return
+        }
+        if (changed || now - this.lastPeerSyncTimestamp >= effectiveSyncInterval) {
+          const message: MultiuserEntityStateMessage = {
+            type: 'entity-state',
+            entity: state,
+          }
+          socket.send(JSON.stringify(message satisfies MultiuserClientMessage))
+          this.lastSharedEntityById.set(state.entityId, {
+            ...state,
+            transform: {
+              position: { ...state.transform.position },
+              quaternion: { ...state.transform.quaternion },
+              scale: state.transform.scale ? { ...state.transform.scale } : null,
+            },
+            lease: state.lease ? { ...state.lease } : null,
+          })
+          this.lastSharedEntitySignatureById.set(state.entityId, signature)
+        }
+      })
+    }
+
+    const physicsInputs = bridge.resolveLocalPhysicsAuthorityInputs()
+    if (!Array.isArray(physicsInputs) || physicsInputs.length === 0) {
       return
     }
-    sharedStates.forEach((state) => {
-      if (!state || typeof state.entityId !== 'string' || !state.entityId.trim()) {
+    physicsInputs.forEach((input) => {
+      if (!input || typeof input.nodeId !== 'string' || !input.nodeId.trim()) {
         return
       }
-      const signature = getMultiuserEntityStateSignature(state)
-      const previous = this.lastSharedEntityById.get(state.entityId) ?? null
-      const changed = signature !== this.lastSharedEntitySignatureById.get(state.entityId)
-        && isMultiuserEntityStateMeaningfullyChanged(previous, state)
-      const intervalHint = state.lease?.leaseMs ?? this.props.syncInterval
-      const effectiveSyncInterval = changed
-        ? computeMovingSyncInterval(intervalHint)
-        : computeIdleSyncInterval(intervalHint)
-      if (!changed && now - this.lastKeepaliveTimestamp < Math.max(effectiveSyncInterval, STATE_KEEPALIVE_INTERVAL)) {
+      const signature = this.getPhysicsInputSignature(input)
+      const previousSignature = this.lastPhysicsInputSignatureByNodeId.get(input.nodeId)
+      const changed = signature !== previousSignature
+      const inputInterval = Math.max(16, Math.min(5000, input.leaseMs || this.props.syncInterval))
+      if (!changed && now - this.lastPhysicsInputSyncTimestamp < inputInterval) {
         return
       }
-      if (changed || now - this.lastPeerSyncTimestamp >= effectiveSyncInterval) {
-        const message: MultiuserEntityStateMessage = {
-          type: 'entity-state',
-          entity: state,
-        }
-        socket.send(JSON.stringify(message satisfies MultiuserClientMessage))
-        this.lastSharedEntityById.set(state.entityId, {
-          ...state,
-          transform: {
-            position: { ...state.transform.position },
-            quaternion: { ...state.transform.quaternion },
-            scale: state.transform.scale ? { ...state.transform.scale } : null,
-          },
-          lease: state.lease ? { ...state.lease } : null,
-        })
-        this.lastSharedEntitySignatureById.set(state.entityId, signature)
+      const message: MultiuserPhysicsInputMessage = {
+        type: 'physics-input',
+        input,
       }
+      socket.send(JSON.stringify(message satisfies MultiuserClientMessage))
+      this.lastPhysicsInputByNodeId.set(input.nodeId, { ...input })
+      this.lastPhysicsInputSignatureByNodeId.set(input.nodeId, signature)
+      this.lastPhysicsInputSyncTimestamp = now
     })
   }
 }

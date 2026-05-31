@@ -753,7 +753,7 @@ export type SceneOutlineMeshMap = Record<string, SceneOutlineMesh>
 
 export type SceneNodeOutlineMesh = SceneOutlineMesh
 
-export type BehaviorEventType = 'click' | 'approach' | 'depart' | 'perform'
+export type BehaviorEventType = 'click' | 'approach' | 'depart' | 'perform' | 'collision'
 
 export type RuntimePrefabInitializationMode = 'full' | 'render-only'
 

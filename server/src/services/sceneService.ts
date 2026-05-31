@@ -86,6 +86,7 @@ export type ScenePackageMultiuserSceneSummary = {
   enabledNodeCount: number
   replicatedNodeCount: number
   replicatedPhysicsNodeCount: number
+  physicsAuthorityNodeCount: number
   server: string | null
   port: number | null
   syncInterval: number | null
@@ -99,6 +100,7 @@ export type ScenePackageMultiuserSummary = {
   enabledNodeCount: number
   replicatedNodeCount: number
   replicatedPhysicsNodeCount: number
+  physicsAuthorityNodeCount: number
   scenes: ScenePackageMultiuserSceneSummary[]
 }
 
@@ -215,6 +217,7 @@ function collectMultiuserNodeSummaries(nodes: SceneNode[] | undefined | null): A
 }
 
 const NETWORK_SYNC_COMPONENT_TYPE = 'networkSync'
+const PHYSICS_AUTHORITY_COMPONENT_TYPE = 'physicsAuthority'
 const RIGIDBODY_COMPONENT_TYPE = 'rigidbody'
 
 function collectNetworkSyncNodeSummaries(nodes: SceneNode[] | undefined | null): Array<{
@@ -245,6 +248,28 @@ function collectNetworkSyncNodeSummaries(nodes: SceneNode[] | undefined | null):
   return matches
 }
 
+function collectPhysicsAuthorityNodeCount(nodes: SceneNode[] | undefined | null): number {
+  if (!Array.isArray(nodes)) {
+    return 0
+  }
+  let count = 0
+  const stack: SceneNode[] = [...nodes]
+  while (stack.length) {
+    const node = stack.pop()
+    if (!node) {
+      continue
+    }
+    const component = node.components?.[PHYSICS_AUTHORITY_COMPONENT_TYPE]
+    if (component && typeof component === 'object' && component.type === PHYSICS_AUTHORITY_COMPONENT_TYPE && component.enabled !== false) {
+      count += 1
+    }
+    if (Array.isArray(node.children) && node.children.length) {
+      stack.push(...node.children)
+    }
+  }
+  return count
+}
+
 function normalizeMultiuserSceneSummary(
   sceneEntryId: string,
   document: SceneJsonExportDocument,
@@ -259,6 +284,7 @@ function normalizeMultiuserSceneSummary(
   const maxUsers = toFiniteInteger(props?.maxUsers)
   const replicatedNodeCount = networkSyncNodes.length
   const replicatedPhysicsNodeCount = networkSyncNodes.filter((entry) => entry.hasRigidbody).length
+  const physicsAuthorityNodeCount = collectPhysicsAuthorityNodeCount(document.nodes)
   return {
     sceneId: sceneEntryId || document.id,
     sceneName: toNonEmptyString(document.name),
@@ -266,6 +292,7 @@ function normalizeMultiuserSceneSummary(
     enabledNodeCount: onlineComponents.filter((component) => component.enabled !== false).length,
     replicatedNodeCount,
     replicatedPhysicsNodeCount,
+    physicsAuthorityNodeCount,
     server,
     port,
     syncInterval,
@@ -282,6 +309,7 @@ function buildScenePackageMultiuserSummary(scenes: Array<{ sceneId: string; docu
   const nodeCount = summaries.reduce((sum, scene) => sum + scene.nodeCount, 0)
   const replicatedNodeCount = summaries.reduce((sum, scene) => sum + scene.replicatedNodeCount, 0)
   const replicatedPhysicsNodeCount = summaries.reduce((sum, scene) => sum + scene.replicatedPhysicsNodeCount, 0)
+  const physicsAuthorityNodeCount = summaries.reduce((sum, scene) => sum + Number(scene.physicsAuthorityNodeCount ?? 0), 0)
   const enabled = enabledNodeCount > 0
   return {
     enabled,
@@ -290,6 +318,7 @@ function buildScenePackageMultiuserSummary(scenes: Array<{ sceneId: string; docu
     enabledNodeCount,
     replicatedNodeCount,
     replicatedPhysicsNodeCount,
+    physicsAuthorityNodeCount,
     scenes: summaries,
   }
 }
@@ -315,6 +344,7 @@ function normalizeStoredMultiuserSummary(value: unknown): ScenePackageMultiuserS
             enabledNodeCount: Number(scene.enabledNodeCount ?? 0) || 0,
             replicatedNodeCount: Number(scene.replicatedNodeCount ?? 0) || 0,
             replicatedPhysicsNodeCount: Number(scene.replicatedPhysicsNodeCount ?? 0) || 0,
+            physicsAuthorityNodeCount: Number(scene.physicsAuthorityNodeCount ?? 0) || 0,
             server: toNonEmptyString(scene.server),
             port: toFiniteInteger(scene.port),
             syncInterval: toFiniteInteger(scene.syncInterval),
@@ -330,6 +360,7 @@ function normalizeStoredMultiuserSummary(value: unknown): ScenePackageMultiuserS
     enabledNodeCount: Number(value.enabledNodeCount ?? 0) || 0,
     replicatedNodeCount: Number(value.replicatedNodeCount ?? 0) || 0,
     replicatedPhysicsNodeCount: Number(value.replicatedPhysicsNodeCount ?? 0) || 0,
+    physicsAuthorityNodeCount: Number(value.physicsAuthorityNodeCount ?? 0) || 0,
     scenes,
   }
 }

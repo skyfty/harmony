@@ -2,6 +2,7 @@ import {
   type PhysicsAddRuntimeBodiesCommand,
   type PhysicsBodyDesc,
   type PhysicsBodyTransformCommand,
+  type PhysicsBodyVelocityCommand,
   type PhysicsMaterialDesc,
   type PhysicsQuaternion,
   type PhysicsRaycastCommand,
@@ -133,9 +134,13 @@ export class AmmoPhysicsWorld {
     const bodyCount = this.scene.bodies.length
     const bodyTransforms = new Float32Array(bodyCount * 8)
     const bodyMeta = new Uint32Array(bodyCount)
+    const bodyLinearVelocities = new Float32Array(bodyCount * 3)
+    const bodyAngularVelocities = new Float32Array(bodyCount * 3)
+    const bodySleeping = new Uint8Array(bodyCount)
     this.scene.bodies.forEach((body, index) => {
       const state = this.bodies.get(body.id)
-      const transform = state ? readAmmoBodyTransform(state.body) : body.transform
+      const physicsBody = state?.body ?? null
+      const transform = physicsBody ? readAmmoBodyTransform(physicsBody) : body.transform
       const base = index * 8
       bodyTransforms[base] = transform.position[0]
       bodyTransforms[base + 1] = transform.position[1]
@@ -146,6 +151,16 @@ export class AmmoPhysicsWorld {
       bodyTransforms[base + 6] = transform.rotation[3]
       bodyTransforms[base + 7] = body.type === 'dynamic' ? 1 : body.type === 'kinematic' ? 2 : 0
       bodyMeta[index] = body.id
+      const linearBase = index * 3
+      const linearVelocity = physicsBody?.getLinearVelocity?.()
+      const angularVelocity = physicsBody?.getAngularVelocity?.()
+      bodyLinearVelocities[linearBase] = linearVelocity?.x?.() ?? 0
+      bodyLinearVelocities[linearBase + 1] = linearVelocity?.y?.() ?? 0
+      bodyLinearVelocities[linearBase + 2] = linearVelocity?.z?.() ?? 0
+      bodyAngularVelocities[linearBase] = angularVelocity?.x?.() ?? 0
+      bodyAngularVelocities[linearBase + 1] = angularVelocity?.y?.() ?? 0
+      bodyAngularVelocities[linearBase + 2] = angularVelocity?.z?.() ?? 0
+      bodySleeping[index] = physicsBody?.getActivationState?.() === 2 ? 1 : 0
     })
 
     const totalWheelCount = this.scene.vehicles.reduce((count, vehicle) => count + vehicle.wheels.length, 0)
@@ -183,6 +198,9 @@ export class AmmoPhysicsWorld {
       bodyTransforms,
       wheelTransforms,
       bodyMeta,
+      bodyLinearVelocities,
+      bodyAngularVelocities,
+      bodySleeping,
     }
   }
 
@@ -207,6 +225,27 @@ export class AmmoPhysicsWorld {
       ammo.destroy(zero)
     }
     ammo.destroy(worldTransform)
+  }
+
+  setBodyVelocity(command: PhysicsBodyVelocityCommand): void {
+    const ammo = this.ammo
+    const state = this.bodies.get(command.bodyId)
+    if (!ammo || !state) {
+      return
+    }
+    if (command.linearVelocity) {
+      const linear = createAmmoVector3(ammo, command.linearVelocity)
+      state.body.setLinearVelocity?.(linear)
+      ammo.destroy(linear)
+    }
+    if (command.angularVelocity) {
+      const angular = createAmmoVector3(ammo, command.angularVelocity)
+      state.body.setAngularVelocity?.(angular)
+      ammo.destroy(angular)
+    }
+    if (command.wakeUp !== false) {
+      state.body.activate?.(true)
+    }
   }
 
   setVehicleInput(command: PhysicsVehicleInputCommand): void {

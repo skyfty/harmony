@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@harmony/physics-cannon':
+        specifier: file:../physics-cannon
+        version: file:../physics-cannon(typescript@5.9.3)
       '@harmony/schema':
         specifier: file:../schema
         version: file:../schema
@@ -290,6 +293,10 @@ packages:
     resolution: {directory: ../physics-bridge, type: directory}
     engines: {pnpm: '>=10.0.0'}
 
+  '@harmony/physics-cannon@file:../physics-cannon':
+    resolution: {directory: ../physics-cannon, type: directory}
+    engines: {pnpm: '>=10.0.0'}
+
   '@harmony/physics-core@file:../physics-core':
     resolution: {directory: ../physics-core, type: directory}
     engines: {pnpm: '>=10.0.0'}
@@ -552,6 +559,16 @@ packages:
   '@types/ws@8.18.1':
     resolution: {integrity: sha512-ThVF6DCVhA8kUGy+aazFQ4kXQ7E1Ty7A3ypFOe0IcJV8O/M511G99AW24irKrW56Wt44yG9+ij8FaqoBGkuBXg==}
 
+  '@vladkrutenyuk/cannon-es-debugger-pro@0.2.4':
+    resolution: {integrity: sha512-7YleJQXZtHLUu4XwSixwkvtwpp2sJ/LwEKm0+yuYxVU1Nhy2o+cm0Q9UY/J5NGtUMo9v79CkiXLxDOmjRApMOA==}
+    peerDependencies:
+      cannon-es: '>=0.20.0'
+      three: '>=0.160.0'
+      typescript: '>=5.0'
+    peerDependenciesMeta:
+      typescript:
+        optional: true
+
   '@webgpu/types@0.1.69':
     resolution: {integrity: sha512-RPmm6kgRbI8e98zSD3RVACvnuktIja5+yLgDAkTmxLr90BEwdTXRQWNLF3ETTTyH/8mKhznZuN5AveXYFEsMGQ==}
 
@@ -633,6 +650,9 @@ packages:
   call-bound@1.0.4:
     resolution: {integrity: sha512-+ys997U96po4Kx/ABpBCqhA9EuxJaQWDQg7295H4hBphv3IZg0boBKuwYpt4YXp6MZ5AmZQnU/tyMTlRpaSejg==}
     engines: {node: '>= 0.4'}
+
+  cannon-es@0.20.0:
+    resolution: {integrity: sha512-eZhWTZIkFOnMAJOgfXJa9+b3kVlvG+FX4mdkpePev/w/rP5V8NRquGyEozcjPfEoXUlb+p7d9SUcmDSn14prOA==}
 
   chalk@2.4.2:
     resolution: {integrity: sha512-Mti+f9lpJNcwF4tWV8/OrTTtF1gZi+f8FqlyAdouralcFWFQWF2+NgCHShjkCb+IFBLq9buZwE1xckQU4peSuQ==}
@@ -1609,6 +1629,16 @@ snapshots:
     dependencies:
       '@harmony/physics-core': file:../physics-core
 
+  '@harmony/physics-cannon@file:../physics-cannon(typescript@5.9.3)':
+    dependencies:
+      '@harmony/physics-bridge': file:../physics-bridge
+      '@harmony/physics-core': file:../physics-core
+      '@vladkrutenyuk/cannon-es-debugger-pro': 0.2.4(cannon-es@0.20.0)(three@0.172.0)(typescript@5.9.3)
+      cannon-es: 0.20.0
+      three: 0.172.0
+    transitivePeerDependencies:
+      - typescript
+
   '@harmony/physics-core@file:../physics-core': {}
 
   '@harmony/schema@file:../schema':
@@ -1886,6 +1916,13 @@ snapshots:
     dependencies:
       '@types/node': 20.19.33
 
+  '@vladkrutenyuk/cannon-es-debugger-pro@0.2.4(cannon-es@0.20.0)(three@0.172.0)(typescript@5.9.3)':
+    dependencies:
+      cannon-es: 0.20.0
+      three: 0.172.0
+    optionalDependencies:
+      typescript: 5.9.3
+
   '@webgpu/types@0.1.69': {}
 
   abort-controller@3.0.0:
@@ -1954,6 +1991,8 @@ snapshots:
     dependencies:
       call-bind-apply-helpers: 1.0.2
       get-intrinsic: 1.3.0
+
+  cannon-es@0.20.0: {}
 
   chalk@2.4.2:
     dependencies:

@@ -1,5 +1,6 @@
 import {
   collectStepFrameTransferables,
+  type PhysicsBodyVelocityCommand,
   type PhysicsBridgeInitResult,
   type PhysicsInitOptions,
   type PhysicsRaycastHit,
@@ -14,6 +15,7 @@ export interface PhysicsWorkerController {
   loadScene(asset: PhysicsSceneAsset): Promise<{ bodyCount: number; vehicleCount: number }>
   step(deltaMs: number): Promise<PhysicsStepFrame>
   setBodyTransform(command: Extract<PhysicsWorkerRequest, { type: 'set-body-transform' }>['payload']): Promise<void>
+  setBodyVelocity(command: PhysicsBodyVelocityCommand): Promise<void>
   setVehicleInput(command: Extract<PhysicsWorkerRequest, { type: 'set-vehicle-input' }>['payload']): Promise<void>
   addRuntimeBodies(command: Extract<PhysicsWorkerRequest, { type: 'add-runtime-bodies' }>['payload']): Promise<void>
   removeRuntimeBodies(command: Extract<PhysicsWorkerRequest, { type: 'remove-runtime-bodies' }>['payload']): Promise<void>
@@ -45,9 +47,13 @@ export function createNoopPhysicsWorkerController(): PhysicsWorkerController {
         wheelCount: 0,
         bodyTransforms: new Float32Array(0),
         wheelTransforms: new Float32Array(0),
+        bodyLinearVelocities: new Float32Array(0),
+        bodyAngularVelocities: new Float32Array(0),
+        bodySleeping: new Uint8Array(0),
       };
     },
     async setBodyTransform() {},
+    async setBodyVelocity() {},
     async setVehicleInput() {},
     async addRuntimeBodies() {},
     async removeRuntimeBodies() {},
@@ -117,6 +123,11 @@ export function attachPhysicsWorkerRuntime(
             }
             case 'set-body-transform': {
               await controller.setBodyTransform(request.payload)
+              scope.postMessage({ id: request.id, ok: true, type: request.type, payload: null } satisfies PhysicsWorkerResponse)
+              break
+            }
+            case 'set-body-velocity': {
+              await controller.setBodyVelocity(request.payload)
               scope.postMessage({ id: request.id, ok: true, type: request.type, payload: null } satisfies PhysicsWorkerResponse)
               break
             }

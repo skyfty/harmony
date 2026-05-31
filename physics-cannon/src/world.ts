@@ -3,6 +3,8 @@ import {
   type PhysicsAddRuntimeBodiesCommand,
   type PhysicsBodyDesc,
   type PhysicsBodyTransformCommand,
+  type PhysicsBodyVelocityCommand,
+  type PhysicsContactEvent,
   type PhysicsMaterialDesc,
   type PhysicsRemoveRuntimeBodiesCommand,
   type PhysicsRaycastCommand,
@@ -66,6 +68,8 @@ export class CannonPhysicsWorld {
   private readonly runtimeMaterials = new Map<number, PhysicsMaterialDesc>()
   private readonly vehicles = new Map<number, VehicleState>()
   private readonly vehicleInputs = new Map<number, PhysicsVehicleInputCommand>()
+  private readonly bodyContactListeners = new Map<number, (event: unknown) => void>()
+  private stepContacts: PhysicsContactEvent[] = []
 
   setWorldSettings(settings: PhysicsWorldSettings): void {
     this.worldSettings = {
@@ -109,6 +113,7 @@ export class CannonPhysicsWorld {
       };
     }
     this.frame += 1
+    this.stepContacts = []
     this.applyVehicleInputs()
 
     const deltaSeconds = Math.max(0, deltaMs) / 1000
@@ -123,9 +128,13 @@ export class CannonPhysicsWorld {
     const bodyCount = this.scene.bodies.length
     const bodyTransforms = new Float32Array(bodyCount * 8)
     const bodyMeta = new Uint32Array(bodyCount)
+    const bodyLinearVelocities = new Float32Array(bodyCount * 3)
+    const bodyAngularVelocities = new Float32Array(bodyCount * 3)
+    const bodySleeping = new Uint8Array(bodyCount)
     this.scene.bodies.forEach((body, index) => {
       const state = this.bodies.get(body.id)
-      const transform = state ? readBodyTransform(state.body) : body.transform
+      const physicsBody = state?.body ?? null
+      const transform = physicsBody ? readBodyTransform(physicsBody) : body.transform
       const base = index * 8
       bodyTransforms[base] = transform.position[0]
       bodyTransforms[base + 1] = transform.position[1]
@@ -136,6 +145,14 @@ export class CannonPhysicsWorld {
       bodyTransforms[base + 6] = transform.rotation[3]
       bodyTransforms[base + 7] = body.type === 'dynamic' ? 1 : body.type === 'kinematic' ? 2 : 0
       bodyMeta[index] = body.id
+      const linearBase = index * 3
+      bodyLinearVelocities[linearBase] = physicsBody?.velocity.x ?? 0
+      bodyLinearVelocities[linearBase + 1] = physicsBody?.velocity.y ?? 0
+      bodyLinearVelocities[linearBase + 2] = physicsBody?.velocity.z ?? 0
+      bodyAngularVelocities[linearBase] = physicsBody?.angularVelocity.x ?? 0
+      bodyAngularVelocities[linearBase + 1] = physicsBody?.angularVelocity.y ?? 0
+      bodyAngularVelocities[linearBase + 2] = physicsBody?.angularVelocity.z ?? 0
+      bodySleeping[index] = physicsBody?.sleepState === CANNON.Body.SLEEPING ? 1 : 0
     })
 
     const totalWheelCount = this.scene.vehicles.reduce((count, vehicle) => count + vehicle.wheels.length, 0)
@@ -171,6 +188,10 @@ export class CannonPhysicsWorld {
       bodyTransforms,
       wheelTransforms,
       bodyMeta,
+      bodyLinearVelocities,
+      bodyAngularVelocities,
+      bodySleeping,
+      contacts: this.stepContacts.length ? [...this.stepContacts] : undefined,
     }
   }
 
@@ -188,6 +209,22 @@ export class CannonPhysicsWorld {
       state.body.angularVelocity.set(0, 0, 0)
       state.body.force.set(0, 0, 0)
       state.body.torque.set(0, 0, 0)
+    }
+  }
+
+  setBodyVelocity(command: PhysicsBodyVelocityCommand): void {
+    const state = this.bodies.get(command.bodyId)
+    if (!state) {
+      return
+    }
+    if (command.linearVelocity) {
+      state.body.velocity.set(command.linearVelocity[0], command.linearVelocity[1], command.linearVelocity[2])
+    }
+    if (command.angularVelocity) {
+      state.body.angularVelocity.set(command.angularVelocity[0], command.angularVelocity[1], command.angularVelocity[2])
+    }
+    if (command.wakeUp !== false) {
+      state.body.wakeUp()
     }
   }
 
@@ -269,6 +306,13 @@ export class CannonPhysicsWorld {
     }
     this.vehicles.clear()
     this.vehicleInputs.clear()
+    this.bodyContactListeners.forEach((listener, bodyId) => {
+      const state = this.bodies.get(bodyId) ?? this.runtimeBodies.get(bodyId) ?? null
+      try {
+        (state?.body as CANNON.Body | null)?.removeEventListener?.('collide', listener as never)
+      } catch {}
+    })
+    this.bodyContactListeners.clear()
     this.bodies.clear()
     this.shapes.clear()
     this.runtimeBodies.clear()
@@ -309,13 +353,101 @@ export class CannonPhysicsWorld {
       shapeMap,
       desc,
     })
+    this.attachBodyContactListener(body, desc.id)
     return { desc, body }
+  }
+
+  private attachBodyContactListener(body: CANNON.Body, bodyId: number): void {
+    if (this.bodyContactListeners.has(bodyId)) {
+      return
+    }
+    const listener = (event: unknown) => {
+      const contact = event as {
+        body?: CANNON.Body | null
+        contact?: {
+          ri?: CANNON.Vec3 | null
+          rj?: CANNON.Vec3 | null
+          ni?: CANNON.Vec3 | null
+        } | null
+      }
+      const otherBody = contact.body ?? null
+      if (!otherBody) {
+        return
+      }
+      const otherBodyId = resolveBodyId(otherBody)
+      if (otherBodyId === null || otherBodyId === bodyId) {
+        return
+      }
+      const bodyPosition = body.position
+      const otherPosition = otherBody.position
+      const normal = contact.contact?.ni ?? null
+      const contactPoint = contact.contact?.ri ?? null
+      const fallbackContactPoint = contact.contact?.rj ?? null
+      const relativeVelocity = new CANNON.Vec3(
+        body.velocity.x - otherBody.velocity.x,
+        body.velocity.y - otherBody.velocity.y,
+        body.velocity.z - otherBody.velocity.z,
+      )
+      const normalizedNormal = normal
+        ? normalizePhysicsVector([normal.x, normal.y, normal.z])
+        : normalizePhysicsVector([
+            otherPosition.x - bodyPosition.x,
+            otherPosition.y - bodyPosition.y,
+            otherPosition.z - bodyPosition.z,
+          ])
+      const impactSpeed = Math.max(
+        0,
+        -(relativeVelocity.x * normalizedNormal[0] + relativeVelocity.y * normalizedNormal[1] + relativeVelocity.z * normalizedNormal[2]),
+      )
+      const worldContactPoint = contactPoint
+        ? [
+            bodyPosition.x + contactPoint.x,
+            bodyPosition.y + contactPoint.y,
+            bodyPosition.z + contactPoint.z,
+          ] as [number, number, number]
+        : fallbackContactPoint
+          ? [
+              otherPosition.x + fallbackContactPoint.x,
+              otherPosition.y + fallbackContactPoint.y,
+              otherPosition.z + fallbackContactPoint.z,
+            ] as [number, number, number]
+          : [bodyPosition.x, bodyPosition.y, bodyPosition.z] as [number, number, number]
+      const key = bodyId < otherBodyId
+        ? `${bodyId}:${otherBodyId}`
+        : `${otherBodyId}:${bodyId}`
+      const existing = this.stepContacts.find((entry) => {
+        const pairKey = entry.bodyIdA < entry.bodyIdB
+          ? `${entry.bodyIdA}:${entry.bodyIdB}`
+          : `${entry.bodyIdB}:${entry.bodyIdA}`
+        return pairKey === key
+      })
+      if (existing) {
+        return
+      }
+      this.stepContacts.push({
+        bodyIdA: bodyId,
+        bodyIdB: otherBodyId,
+        point: worldContactPoint,
+        normal: normalizedNormal,
+        impulse: null,
+        impactSpeed,
+      } as PhysicsContactEvent)
+    }
+    this.bodyContactListeners.set(bodyId, listener)
+    body.addEventListener?.('collide', listener as never)
   }
 
   private removeRuntimeBodyById(bodyId: number): void {
     const state = this.runtimeBodies.get(bodyId)
     if (!state) {
       return
+    }
+    const listener = this.bodyContactListeners.get(bodyId) ?? null
+    if (listener) {
+      try {
+        (state.body as CANNON.Body | null)?.removeEventListener?.('collide', listener as never)
+      } catch {}
+      this.bodyContactListeners.delete(bodyId)
     }
     try {
       this.world?.removeBody?.(state.body)
@@ -575,6 +707,14 @@ function distanceSquared(a: CANNON.Vec3, b: CANNON.Vec3): number {
   const dy = a.y - b.y
   const dz = a.z - b.z
   return dx * dx + dy * dy + dz * dz
+}
+
+function normalizePhysicsVector(vector: [number, number, number]): [number, number, number] {
+  const length = Math.hypot(vector[0], vector[1], vector[2])
+  if (!Number.isFinite(length) || length <= 1e-12) {
+    return [0, 1, 0]
+  }
+  return [vector[0] / length, vector[1] / length, vector[2] / length]
 }
 
 function clamp(value: number, min: number, max: number): number {

@@ -78,6 +78,11 @@ const actionDefinitions: BehaviorActionDefinition[] = [
     label: 'Perform',
     description: 'Triggered manually to run a scripted sequence.',
   },
+  {
+    id: 'collision',
+    label: 'On Collision',
+    description: 'Triggered when the node collides with another physics body.',
+  },
 ]
 
 const DEFAULT_CONFIRM_TEXT = 'Confirm'
@@ -781,7 +786,7 @@ export interface NamedBehaviorSequenceEntry {
 
 export type NamedBehaviorSequenceMap = Record<string, NamedBehaviorSequenceEntry>
 
-const VALID_BEHAVIOR_ACTIONS: BehaviorEventType[] = ['click', 'approach', 'depart', 'perform']
+const VALID_BEHAVIOR_ACTIONS: BehaviorEventType[] = ['click', 'approach', 'depart', 'perform', 'collision']
 
 function normalizeNamedSequenceKey(name: string): string {
   return name.trim().toLowerCase()

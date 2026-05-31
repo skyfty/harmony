@@ -13,6 +13,15 @@ export type PhysicsTransform = {
   rotation: PhysicsQuaternion
 }
 
+export type PhysicsContactEvent = {
+  bodyIdA: number
+  bodyIdB: number
+  normal: PhysicsVector3
+  point: PhysicsVector3
+  impulse?: number | null
+  impactSpeed?: number | null
+}
+
 export type PhysicsMaterialDesc = {
   id: number
   friction: number
@@ -138,6 +147,15 @@ export type PhysicsSceneAsset = {
   vehicles: PhysicsVehicleDesc[]
 }
 
+export type PhysicsBodySnapshot = {
+  bodyId: number
+  position: PhysicsVector3
+  rotation: PhysicsQuaternion
+  linearVelocity?: PhysicsVector3 | null
+  angularVelocity?: PhysicsVector3 | null
+  sleeping?: boolean
+}
+
 export type PhysicsRuntimeBodyEntry = {
   materials?: PhysicsMaterialDesc[]
   shapes: PhysicsShapeDesc[]
@@ -148,6 +166,13 @@ export type PhysicsBodyTransformCommand = {
   bodyId: number
   transform: PhysicsTransform
   resetVelocity?: boolean
+}
+
+export type PhysicsBodyVelocityCommand = {
+  bodyId: number
+  linearVelocity?: PhysicsVector3 | null
+  angularVelocity?: PhysicsVector3 | null
+  wakeUp?: boolean
 }
 
 export type PhysicsVehicleInputCommand = {

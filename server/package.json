@@ -23,6 +23,7 @@
   "packageManager": "pnpm@10.28.2",
   "dependencies": {
     "@harmony/schema": "file:../schema",
+    "@harmony/physics-cannon": "file:../physics-cannon",
     "@koa/cors": "^5.0.0",
     "@types/three": "^0.171.0",
     "bcryptjs": "^2.4.3",

@@ -1,6 +1,7 @@
 import type {
   PhysicsAddRuntimeBodiesCommand,
   PhysicsBodyTransformCommand,
+  PhysicsBodyVelocityCommand,
   PhysicsBridgeInitResult,
   PhysicsInitOptions,
   PhysicsRaycastCommand,
@@ -16,6 +17,7 @@ export interface PhysicsBridge {
   loadScene(asset: PhysicsSceneAsset): Promise<void>
   step(deltaMs: number): Promise<PhysicsStepFrame>
   setBodyTransform(command: PhysicsBodyTransformCommand): Promise<void>
+  setBodyVelocity(command: PhysicsBodyVelocityCommand): Promise<void>
   setVehicleInput(command: PhysicsVehicleInputCommand): Promise<void>
   addRuntimeBodies(command: PhysicsAddRuntimeBodiesCommand): Promise<void>
   removeRuntimeBodies(command: PhysicsRemoveRuntimeBodiesCommand): Promise<void>

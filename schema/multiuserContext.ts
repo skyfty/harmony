@@ -3,6 +3,7 @@ let currentSceneId: string | null = null
 export type MultiuserSubjectType = 'vehicle' | 'character'
 export type MultiuserSharedEntityMode = 'transform'
 export type MultiuserOwnershipMode = 'lease'
+export type MultiuserPhysicsAuthorityActorType = 'auto' | 'vehicle' | 'character'
 
 export type MultiuserVector3Like = { x: number; y: number; z: number }
 export type MultiuserQuaternionLike = { x: number; y: number; z: number; w: number }
@@ -56,16 +57,68 @@ export interface MultiuserSharedEntitySnapshot {
   state: MultiuserSharedEntityState | null
 }
 
+export interface MultiuserPhysicsAuthorityInput {
+  nodeId: string
+  actorType: MultiuserPhysicsAuthorityActorType
+  inputSequence: number
+  ownerUserId?: string | null
+  leaseMs: number
+  vehicle?: {
+    vehicleId: number
+    steering: number
+    throttle: number
+    brake: number
+    handbrake?: number | null
+  } | null
+  character?: {
+    moveX: number
+    moveZ: number
+    jump: boolean
+    sprint: boolean
+    crouch: boolean
+    interact: boolean
+  } | null
+}
+
+export interface MultiuserPhysicsAuthoritySnapshot {
+  nodeId: string
+  actorType: MultiuserPhysicsAuthorityActorType
+  ownerUserId?: string | null
+  tick: number
+  revision: number
+  updatedAt: string
+  bodyId: number | null
+  transform: {
+    position: MultiuserVector3Like
+    quaternion: MultiuserQuaternionLike
+  }
+  linearVelocity?: MultiuserVector3Like | null
+  angularVelocity?: MultiuserVector3Like | null
+  sleeping?: boolean
+  contacts?: Array<{
+    bodyIdA: number
+    bodyIdB: number
+    normal: MultiuserVector3Like
+    point: MultiuserVector3Like
+    impulse?: number | null
+    impactSpeed?: number | null
+  }> | null
+}
+
 export interface MultiuserRuntimeBridge {
   getIdentity(): MultiuserIdentity | null
   resolveLocalPeerState(): MultiuserPeerState | null
   resolveLocalSharedEntityStates(): MultiuserSharedEntityState[]
+  resolveLocalPhysicsAuthorityInputs(): MultiuserPhysicsAuthorityInput[]
   handleRemotePeerSnapshot(peer: MultiuserPeerSnapshot): void
   handleRemotePeerLeft(userId: string): void
   handleRemoteSharedEntitySnapshot(snapshot: MultiuserSharedEntitySnapshot): void
   handleRemoteSharedEntityRemoved(entityId: string): void
+  handleRemotePhysicsAuthoritySnapshot(snapshot: MultiuserPhysicsAuthoritySnapshot): void
+  handleRemotePhysicsAuthorityRemoved(nodeId: string): void
   clearRemotePeers(): void
   clearRemoteSharedEntities(): void
+  clearRemotePhysicsAuthority(): void
 }
 
 let currentRuntimeBridge: MultiuserRuntimeBridge | null = null

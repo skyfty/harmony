@@ -2,6 +2,7 @@ import type {
   PhysicsAddRuntimeBodiesCommand,
   PhysicsBackendPreference,
   PhysicsBodyTransformCommand,
+  PhysicsBodyVelocityCommand,
   PhysicsBridge,
   PhysicsBridgeInitResult,
   PhysicsInitOptions,
@@ -58,6 +59,11 @@ class LazyScenePreviewPhysicsBridge implements PhysicsBridge {
   async setBodyTransform(command: PhysicsBodyTransformCommand): Promise<void> {
     const bridge = await this.ensureBridge()
     await bridge.setBodyTransform(command)
+  }
+
+  async setBodyVelocity(command: PhysicsBodyVelocityCommand): Promise<void> {
+    const bridge = await this.ensureBridge()
+    await bridge.setBodyVelocity(command)
   }
 
   async setVehicleInput(command: PhysicsVehicleInputCommand): Promise<void> {
