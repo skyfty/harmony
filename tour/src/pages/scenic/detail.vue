@@ -118,7 +118,7 @@
 <script setup lang="ts">
 import { onLoad } from '@dcloudio/uni-app';
 import { computed, ref } from 'vue';
-import { buildQueryString, trackAnalyticsEvent } from '@harmony/utils';
+import { trackAnalyticsEvent } from '@harmony/utils';
 import {
   getScenic,
   listAchievements,
@@ -181,20 +181,20 @@ onLoad((query) => {
   scenicCheckinProgress.value = null;
   void getScenic(id)
     .then((scenicRes) => {
-      scenic.value = scenicRes ?? null;
-      if (scenicRes) {
-        void loadScenicCheckinProgress(scenicRes.id);
-        void trackAnalyticsEvent({
-          eventType: 'view_spot',
-          sceneId: scenicRes.sceneId,
-          sceneSpotId: scenicRes.id,
-          source: 'tour-miniapp',
-          path: '/pages/scenic/detail',
-          metadata: {
-            scenicTitle: scenicRes.title,
-          },
-        });
-      }
+      scenic.value = scenicRes ? cloneScenicDetail(scenicRes) : null;
+      // if (scenicRes) {
+      //   void loadScenicCheckinProgress(scenicRes.id);
+      //   void trackAnalyticsEvent({
+      //     eventType: 'view_spot',
+      //     sceneId: scenicRes.sceneId,
+      //     sceneSpotId: scenicRes.id,
+      //     source: 'tour-miniapp',
+      //     path: '/pages/scenic/detail',
+      //     metadata: {
+      //       scenicTitle: scenicRes.title,
+      //     },
+      //   });
+      // }
     })
     .catch((e) => {
       console.error('Failed to load scenic detail', e);
@@ -277,11 +277,14 @@ function applyInteractionState(next: {
   userRating: number | null;
 }) {
   if (!scenic.value) return;
-  scenic.value.averageRating = Number(next.averageRating ?? 0);
-  scenic.value.ratingCount = Number(next.ratingCount ?? 0);
-  scenic.value.favoriteCount = Number(next.favoriteCount ?? 0);
-  scenic.value.favorited = next.favorited === true;
-  scenic.value.userRating = typeof next.userRating === 'number' ? next.userRating : null;
+  scenic.value = {
+    ...scenic.value,
+    averageRating: Number(next.averageRating ?? 0),
+    ratingCount: Number(next.ratingCount ?? 0),
+    favoriteCount: Number(next.favoriteCount ?? 0),
+    favorited: next.favorited === true,
+    userRating: typeof next.userRating === 'number' ? next.userRating : null,
+  };
 }
 
 async function handleToggleFavorite(): Promise<void> {
@@ -360,6 +363,17 @@ function computeScenicCheckinRatio(): number {
     return 0;
   }
   return Math.min(checked / total, 1);
+}
+
+function cloneScenicDetail(detail: ScenicDetailWithFlags): ScenicDetailWithFlags {
+  return {
+    ...detail,
+    slides: Array.isArray(detail.slides) ? detail.slides.slice() : [],
+    location: detail.location ? { ...detail.location } : null,
+    scene: {
+      ...detail.scene,
+    },
+  };
 }
 </script>
 

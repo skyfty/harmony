@@ -258,10 +258,6 @@ function validate(): boolean {
     fileNameError.value = '请输入文件名'
     return false
   }
-  if (!/^[\p{L}\p{N} _.-]+$/u.test(trimmed)) {
-    fileNameError.value = '文件名只能包含中文、字母、数字、空格、下划线和连字符'
-    return false
-  }
   fileNameError.value = null
   return true
 }
