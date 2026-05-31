@@ -251,6 +251,15 @@ const routes: RouteRecordRaw[] = [
           hideInMenu: true,
         },
       },
+      {
+        name: 'UserOrders',
+        path: 'user-orders',
+        component: () => import('#/views/orders/user-orders.vue'),
+        meta: {
+          icon: 'lucide:users',
+          title: '用户订单',
+        },
+      },
     ],
   },
   {
@@ -302,11 +311,30 @@ const routes: RouteRecordRaw[] = [
   {
     name: 'PunchRecords',
     path: '/punch-records',
-    component: () => import('#/views/punch-records/index.vue'),
     meta: {
       icon: 'lucide:map-pin',
       title: $t('page.punchRecords.title'),
     },
+    children: [
+      {
+        name: 'PunchRecordsIndex',
+        path: '',
+        component: () => import('#/views/punch-records/index.vue'),
+        meta: {
+          icon: 'lucide:map-pin',
+          title: $t('page.punchRecords.title'),
+        },
+      },
+      {
+        name: 'UserPunchRecords',
+        path: 'user-punch-records',
+        component: () => import('#/views/punch-records/user-punch-records.vue'),
+        meta: {
+          icon: 'lucide:users',
+          title: '用户打卡记录',
+        },
+      },
+    ],
   },
   {
     name: 'TravelRecords',
@@ -316,15 +344,45 @@ const routes: RouteRecordRaw[] = [
       icon: 'lucide:route',
       title: $t('page.travelRecords.title'),
     },
+    children: [
+      {
+        name: 'UserTravelRecords',
+        path: 'user-travel-records',
+        component: () => import('#/views/travel-records/user-travel-records.vue'),
+        meta: {
+          icon: 'lucide:users',
+          title: '用户游历记录',
+        },
+      },
+    ],
   },
   {
     name: 'Medals',
     path: '/medals',
-    component: () => import('#/views/medals/index.vue'),
     meta: {
       icon: 'lucide:medal',
       title: '勋章管理',
     },
+    children: [
+      { 
+        name: 'MedalsIndex',
+        path: '',
+        component: () => import('#/views/medals/index.vue'),
+        meta: {
+          icon: 'lucide:medal',
+          title: '勋章列表',
+        },
+      },
+      {
+        name: 'UserMedals',
+        path: 'user-medals',
+        component: () => import('#/views/medals/user-medals.vue'),
+        meta: {
+          icon: 'lucide:users',
+          title: '用户勋章',
+        },
+      },
+    ],
   },
   {
     name: 'PunchRecordDetail',

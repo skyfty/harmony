@@ -18,16 +18,8 @@ type NumericVector = { x: number; y: number; z: number }
 
 const MIN_SCALE = 0.01
 
-const selectionContainsLandform = computed(() => {
-  const selectedIds = Array.isArray(sceneStore.selectedNodeIds) ? sceneStore.selectedNodeIds : []
-  return selectedIds.some((id) => sceneStore.getNodeById(id)?.dynamicMesh?.type === 'Landform')
-})
-
 function isFieldDisabled(field: TransformField): boolean {
   if (props.disabled) {
-    return true
-  }
-  if (selectionContainsLandform.value && (field === 'rotation' || field === 'scale')) {
     return true
   }
   return false
