@@ -160,6 +160,7 @@ const exportPreferences = ref<SceneExportOptions>({
 const viewportRef = ref<SceneViewportHandle | null>(null)
 const isNewSceneDialogOpen = ref(false)
 const isNewProjectDialogOpen = ref(false)
+const newProjectDialogInitialName = ref('New Project')
 const newProjectDialogErrorMessage = ref('')
 const isCreatingProject = ref(false)
 // OpenProjectDialog removed; use Project Manager page for opening projects
@@ -171,6 +172,25 @@ const isImportingScenes = ref(false)
 const isSceneBundleExporting = ref(false)
 const externalSceneInputRef = ref<HTMLInputElement | null>(null)
 const isImportingExternalScene = ref(false)
+
+function resolveUniqueProjectName(baseName: string): string {
+  const trimmedBase = baseName.trim() || 'New Project'
+  const existingNames = new Set(
+    projectsStore.sortedMetadata
+      .map((project) => project.name.trim())
+      .filter((name) => name.length > 0),
+  )
+
+  if (!existingNames.has(trimmedBase)) {
+    return trimmedBase
+  }
+
+  let suffix = 2
+  while (existingNames.has(`${trimmedBase} (${suffix})`)) {
+    suffix += 1
+  }
+  return `${trimmedBase} (${suffix})`
+}
 
 watch(isNewProjectDialogOpen, (open) => {
   if (open) {
@@ -1790,6 +1810,8 @@ async function handleAction(action: string) {
         if (!proceed) break
       }
       await projectsStore.initialize()
+      newProjectDialogErrorMessage.value = ''
+      newProjectDialogInitialName.value = resolveUniqueProjectName('New Project')
       isNewProjectDialogOpen.value = true
       break
     case 'OpenProject':
@@ -2701,6 +2723,7 @@ onBeforeUnmount(() => {
     />
     <NewProjectDialog
       v-model="isNewProjectDialogOpen"
+      :initial-name="newProjectDialogInitialName"
       :error-message="newProjectDialogErrorMessage"
       :submitting="isCreatingProject"
       @confirm="handleNewProjectDialogConfirm"

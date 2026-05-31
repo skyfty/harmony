@@ -104,7 +104,7 @@ function handleConfirm() {
         <v-text-field
           v-model="name"
           label="Project Name"
-          variant="outlined"
+          variant="underlined"
           density="comfortable"
           clearable
           :disabled="props.submitting === true"

@@ -61,6 +61,25 @@ const refreshButtonLabel = computed(() => {
   return 'Refresh'
 })
 
+function resolveUniqueProjectName(baseName: string): string {
+  const trimmedBase = baseName.trim() || '新工程'
+  const existingNames = new Set(
+    projects.value
+      .map((project) => project.name.trim())
+      .filter((name) => name.length > 0),
+  )
+
+  if (!existingNames.has(trimmedBase)) {
+    return trimmedBase
+  }
+
+  let suffix = 2
+  while (existingNames.has(`${trimmedBase} (${suffix})`)) {
+    suffix += 1
+  }
+  return `${trimmedBase} (${suffix})`
+}
+
 const returnTo = computed(() => {
   const q = route.query?.returnTo
   return typeof q === 'string' && q.length ? q : null
@@ -123,7 +142,7 @@ function openCreateProjectDialog() {
     return
   }
   projectNameDialogMode.value = 'create'
-  projectNameDialogInitialName.value = ''
+  projectNameDialogInitialName.value = resolveUniqueProjectName('New Project')
   projectNameDialogErrorMessage.value = ''
   projectNameDialogTargetId.value = null
   projectNameDialogOpen.value = true
