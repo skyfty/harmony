@@ -575,6 +575,8 @@ import {
   type MultiuserIdentity,
   type MultiuserPeerSnapshot,
   type MultiuserPeerState,
+  type MultiuserSharedEntitySnapshot,
+  type MultiuserSharedEntityState,
   type MultiuserRuntimeBridge,
 } from '@harmony/schema/multiuserContext';
 import {
@@ -681,6 +683,12 @@ import {
   onlineComponentDefinition,
   ONLINE_COMPONENT_TYPE,
 } from '@harmony/schema/components/definitions/onlineComponent';
+import {
+  networkSyncComponentDefinition,
+  NETWORK_SYNC_COMPONENT_TYPE,
+  clampNetworkSyncComponentProps,
+  type NetworkSyncComponentProps,
+} from '@harmony/schema/components/definitions/networkSyncComponent';
 import {
   guideRouteComponentDefinition,
 } from '@harmony/schema/components/definitions/guideRouteComponent';
@@ -1817,6 +1825,7 @@ previewComponentManager.registerDefinition(waterComponentDefinition);
 previewComponentManager.registerDefinition(protagonistComponentDefinition);
 previewComponentManager.registerDefinition(lodComponentDefinition);
 previewComponentManager.registerDefinition(onlineComponentDefinition);
+previewComponentManager.registerDefinition(networkSyncComponentDefinition);
 previewComponentManager.registerDefinition(guideRouteComponentDefinition);
 previewComponentManager.registerDefinition(autoTourComponentDefinition);
 previewComponentManager.registerDefinition(purePursuitComponentDefinition);
@@ -2316,15 +2325,34 @@ type RemoteMultiuserPeerEntry = {
   displayState: MultiuserPeerState;
   ownsResources: boolean;
 };
+type NetworkSyncNodeRuntimeEntry = {
+  nodeId: string;
+  props: NetworkSyncComponentProps;
+  localRevision: number;
+  lastLocalSignature: string;
+  ownerUserId: string | null;
+  updatedAt: string;
+};
+type RemoteSharedEntityEntry = {
+  entityId: string;
+  nodeId: string;
+  props: NetworkSyncComponentProps;
+  targetState: MultiuserSharedEntityState;
+  displayState: MultiuserSharedEntityState | null;
+};
 const remoteMultiuserPeerEntries = new Map<string, RemoteMultiuserPeerEntry>();
 const remoteMultiuserPeerLoadTokens = new Map<string, number>();
 const remoteMultiuserPeerRoot = new THREE.Group();
 remoteMultiuserPeerRoot.name = 'RemoteMultiuserPeers';
+const networkSyncNodeEntries = new Map<string, NetworkSyncNodeRuntimeEntry>();
+const remoteSharedEntityEntries = new Map<string, RemoteSharedEntityEntry>();
 const REMOTE_MULTIUSER_SMOOTHING_SECONDS = 0.16;
 const remoteMultiuserDisplayPositionScratch = new THREE.Vector3();
 const remoteMultiuserTargetPositionScratch = new THREE.Vector3();
 const remoteMultiuserDisplayQuaternionScratch = new THREE.Quaternion();
 const remoteMultiuserTargetQuaternionScratch = new THREE.Quaternion();
+const remoteSharedEntityDisplayScaleScratch = new THREE.Vector3();
+const remoteSharedEntityTargetScaleScratch = new THREE.Vector3();
 const physicsGravity = createHostPhysicsVec3(0, -DEFAULT_ENVIRONMENT_GRAVITY, 0);
 // On WeChat iOS, 30 Hz physics is sufficient for 1–2 dynamic bodies and halves step cost.
 const PHYSICS_FIXED_TIMESTEP = isWeChatMiniProgram ? 1 / 30 : 1 / 60;
@@ -5579,6 +5607,34 @@ function refreshMultiuserNodeReferences(document: SceneJsonExportDocument | null
       multiuserNodeObjects.set(nodeId, object);
     }
   });
+}
+
+function collectNetworkSyncNodeEntries(document: SceneJsonExportDocument | null): void {
+  networkSyncNodeEntries.clear();
+  if (!document?.nodes?.length) {
+    return;
+  }
+  const stack: SceneNode[] = [...document.nodes];
+  while (stack.length) {
+    const node = stack.pop();
+    if (!node) {
+      continue;
+    }
+    const component = node.components?.[NETWORK_SYNC_COMPONENT_TYPE] as SceneNodeComponentState<NetworkSyncComponentProps> | undefined;
+    if (component && component.enabled !== false) {
+      networkSyncNodeEntries.set(node.id, {
+        nodeId: node.id,
+        props: clampNetworkSyncComponentProps(component.props),
+        localRevision: 0,
+        lastLocalSignature: '',
+        ownerUserId: null,
+        updatedAt: new Date(0).toISOString(),
+      });
+    }
+    if (Array.isArray(node.children) && node.children.length) {
+      stack.push(...node.children);
+    }
+  }
 }
 
 function resolveNodeById(nodeId: string): SceneNode | null {
@@ -10211,6 +10267,213 @@ function clearRemoteMultiuserPeers(): void {
   markInstancedCullingDirty();
 }
 
+function cloneSharedEntityState(state: MultiuserSharedEntityState): MultiuserSharedEntityState {
+  return {
+    entityId: state.entityId,
+    nodeId: state.nodeId,
+    ownerUserId: state.ownerUserId ?? null,
+    mode: state.mode,
+    transform: {
+      position: { ...state.transform.position },
+      quaternion: { ...state.transform.quaternion },
+      scale: state.transform.scale ? { ...state.transform.scale } : null,
+    },
+    revision: state.revision,
+    updatedAt: state.updatedAt,
+    lease: state.lease ? { ...state.lease } : null,
+  };
+}
+
+function buildLocalNetworkSyncSignature(
+  props: NetworkSyncComponentProps,
+  worldPosition: THREE.Vector3,
+  worldQuaternion: THREE.Quaternion,
+  worldScale: THREE.Vector3,
+): string {
+  return [
+    props.syncPosition ? `${worldPosition.x}|${worldPosition.y}|${worldPosition.z}` : '',
+    props.syncRotation ? `${worldQuaternion.x}|${worldQuaternion.y}|${worldQuaternion.z}|${worldQuaternion.w}` : '',
+    props.syncScale ? `${worldScale.x}|${worldScale.y}|${worldScale.z}` : '',
+  ].join('|');
+}
+
+function applyNetworkSyncTransformToObject(
+  object: THREE.Object3D,
+  state: MultiuserSharedEntityState,
+): void {
+  remoteMultiuserTargetPositionScratch.set(
+    state.transform.position.x,
+    state.transform.position.y,
+    state.transform.position.z,
+  );
+  remoteMultiuserTargetQuaternionScratch.set(
+    state.transform.quaternion.x,
+    state.transform.quaternion.y,
+    state.transform.quaternion.z,
+    state.transform.quaternion.w,
+  );
+  applySceneryPhysicsBridgeTransformToObject(object, remoteMultiuserTargetPositionScratch, remoteMultiuserTargetQuaternionScratch, null);
+  if (state.transform.scale) {
+    remoteSharedEntityTargetScaleScratch.set(
+      state.transform.scale.x,
+      state.transform.scale.y,
+      state.transform.scale.z,
+    );
+    if (object.parent) {
+      object.parent.updateMatrixWorld(true);
+      const parentScale = object.parent.getWorldScale(remoteSharedEntityDisplayScaleScratch);
+      object.scale.set(
+        parentScale.x !== 0 ? remoteSharedEntityTargetScaleScratch.x / parentScale.x : remoteSharedEntityTargetScaleScratch.x,
+        parentScale.y !== 0 ? remoteSharedEntityTargetScaleScratch.y / parentScale.y : remoteSharedEntityTargetScaleScratch.y,
+        parentScale.z !== 0 ? remoteSharedEntityTargetScaleScratch.z / parentScale.z : remoteSharedEntityTargetScaleScratch.z,
+      );
+    } else {
+      object.scale.copy(remoteSharedEntityTargetScaleScratch);
+    }
+    object.updateMatrixWorld(true);
+    syncInstancedTransform(object);
+  }
+}
+
+function updateRemoteSharedEntityTransforms(deltaSeconds: number): void {
+  if (!remoteSharedEntityEntries.size || deltaSeconds <= 0) {
+    return;
+  }
+  const alpha = 1 - Math.exp(-Math.max(0, deltaSeconds) / REMOTE_MULTIUSER_SMOOTHING_SECONDS);
+  remoteSharedEntityEntries.forEach((entry) => {
+    const runtimeEntry = networkSyncNodeEntries.get(entry.nodeId) ?? null;
+    const props = runtimeEntry?.props ?? entry.props;
+    const object = nodeObjectMap.get(entry.nodeId) ?? null;
+    if (!object) {
+      return;
+    }
+    if (!entry.displayState) {
+      entry.displayState = cloneSharedEntityState(entry.targetState);
+      applyNetworkSyncTransformToObject(object, entry.targetState);
+      return;
+    }
+    const display = entry.displayState;
+    const target = entry.targetState;
+    const dx = target.transform.position.x - display.transform.position.x;
+    const dy = target.transform.position.y - display.transform.position.y;
+    const dz = target.transform.position.z - display.transform.position.z;
+    const distance = Math.sqrt((dx * dx) + (dy * dy) + (dz * dz));
+    if (distance >= props.teleportThreshold) {
+      entry.displayState = cloneSharedEntityState(target);
+      applyNetworkSyncTransformToObject(object, target);
+      return;
+    }
+    remoteMultiuserDisplayPositionScratch.set(
+      display.transform.position.x,
+      display.transform.position.y,
+      display.transform.position.z,
+    );
+    remoteMultiuserTargetPositionScratch.set(
+      target.transform.position.x,
+      target.transform.position.y,
+      target.transform.position.z,
+    );
+    remoteMultiuserDisplayPositionScratch.lerp(remoteMultiuserTargetPositionScratch, alpha);
+    display.transform.position.x = remoteMultiuserDisplayPositionScratch.x;
+    display.transform.position.y = remoteMultiuserDisplayPositionScratch.y;
+    display.transform.position.z = remoteMultiuserDisplayPositionScratch.z;
+    remoteMultiuserDisplayQuaternionScratch.set(
+      display.transform.quaternion.x,
+      display.transform.quaternion.y,
+      display.transform.quaternion.z,
+      display.transform.quaternion.w,
+    );
+    remoteMultiuserTargetQuaternionScratch.set(
+      target.transform.quaternion.x,
+      target.transform.quaternion.y,
+      target.transform.quaternion.z,
+      target.transform.quaternion.w,
+    );
+    remoteMultiuserDisplayQuaternionScratch.slerp(remoteMultiuserTargetQuaternionScratch, alpha);
+    display.transform.quaternion.x = remoteMultiuserDisplayQuaternionScratch.x;
+    display.transform.quaternion.y = remoteMultiuserDisplayQuaternionScratch.y;
+    display.transform.quaternion.z = remoteMultiuserDisplayQuaternionScratch.z;
+    display.transform.quaternion.w = remoteMultiuserDisplayQuaternionScratch.w;
+    if (display.transform.scale && target.transform.scale) {
+      remoteSharedEntityDisplayScaleScratch.set(
+        display.transform.scale.x,
+        display.transform.scale.y,
+        display.transform.scale.z,
+      );
+      remoteSharedEntityTargetScaleScratch.set(
+        target.transform.scale.x,
+        target.transform.scale.y,
+        target.transform.scale.z,
+      );
+      remoteSharedEntityDisplayScaleScratch.lerp(remoteSharedEntityTargetScaleScratch, alpha);
+      display.transform.scale.x = remoteSharedEntityDisplayScaleScratch.x;
+      display.transform.scale.y = remoteSharedEntityDisplayScaleScratch.y;
+      display.transform.scale.z = remoteSharedEntityDisplayScaleScratch.z;
+    }
+    applyNetworkSyncTransformToObject(object, display);
+  });
+}
+
+function processRemoteSharedEntitySnapshot(snapshot: MultiuserSharedEntitySnapshot): void {
+  const localIdentity = getNormalizedMultiuserIdentity();
+  const state = snapshot.state;
+  if (!state) {
+    remoteSharedEntityEntries.delete(snapshot.entityId);
+    return;
+  }
+  const runtimeEntry = networkSyncNodeEntries.get(state.nodeId);
+  if (!runtimeEntry) {
+    return;
+  }
+  runtimeEntry.ownerUserId = state.ownerUserId ?? null;
+  runtimeEntry.localRevision = Math.max(runtimeEntry.localRevision, state.revision);
+  runtimeEntry.updatedAt = state.updatedAt;
+  runtimeEntry.lastLocalSignature = buildLocalNetworkSyncSignature(
+    runtimeEntry.props,
+    new THREE.Vector3(state.transform.position.x, state.transform.position.y, state.transform.position.z),
+    new THREE.Quaternion(
+      state.transform.quaternion.x,
+      state.transform.quaternion.y,
+      state.transform.quaternion.z,
+      state.transform.quaternion.w,
+    ),
+    new THREE.Vector3(
+      state.transform.scale?.x ?? 1,
+      state.transform.scale?.y ?? 1,
+      state.transform.scale?.z ?? 1,
+    ),
+  );
+  if (localIdentity?.userId && state.ownerUserId === localIdentity.userId) {
+    remoteSharedEntityEntries.delete(state.entityId);
+    return;
+  }
+  remoteSharedEntityEntries.set(state.entityId, {
+    entityId: state.entityId,
+    nodeId: state.nodeId,
+    props: runtimeEntry.props,
+    targetState: cloneSharedEntityState(state),
+    displayState: remoteSharedEntityEntries.get(state.entityId)?.displayState ?? null,
+  });
+}
+
+function processRemoteSharedEntityRemoved(entityId: string): void {
+  const existing = remoteSharedEntityEntries.get(entityId) ?? null;
+  if (existing) {
+    const runtimeEntry = networkSyncNodeEntries.get(existing.nodeId);
+    if (runtimeEntry) {
+      runtimeEntry.ownerUserId = null;
+    }
+  }
+  remoteSharedEntityEntries.delete(entityId);
+}
+
+function resetRemoteSharedEntities(): void {
+  remoteSharedEntityEntries.clear();
+  networkSyncNodeEntries.forEach((entry) => {
+    entry.ownerUserId = null;
+  });
+}
+
 function getRemoteMultiuserPeerSignature(state: MultiuserPeerState): string {
   return [
     state.subjectType,
@@ -10361,6 +10624,74 @@ function resolveLocalMultiuserPeerState(): MultiuserPeerState | null {
   };
 }
 
+function resolveLocalSharedEntityStates(): MultiuserSharedEntityState[] {
+  const identity = getNormalizedMultiuserIdentity();
+  if (!identity) {
+    return [];
+  }
+  const states: MultiuserSharedEntityState[] = [];
+  networkSyncNodeEntries.forEach((entry, nodeId) => {
+    const object = nodeObjectMap.get(nodeId) ?? null;
+    if (!object) {
+      return;
+    }
+    object.updateMatrixWorld(true);
+    object.getWorldPosition(protagonistPosePosition);
+    object.getWorldQuaternion(protagonistPoseQuaternion);
+    const worldScale = object.getWorldScale(remoteSharedEntityTargetScaleScratch);
+    const signature = buildLocalNetworkSyncSignature(entry.props, protagonistPosePosition, protagonistPoseQuaternion, worldScale);
+    if (!entry.lastLocalSignature) {
+      entry.lastLocalSignature = signature;
+      if (entry.ownerUserId !== identity.userId) {
+        return;
+      }
+    }
+    const changed = signature !== entry.lastLocalSignature;
+    if (changed) {
+      entry.localRevision += 1;
+      entry.lastLocalSignature = signature;
+      entry.ownerUserId = identity.userId;
+      entry.updatedAt = new Date().toISOString();
+    }
+    if (entry.ownerUserId !== identity.userId && !changed) {
+      return;
+    }
+    states.push({
+      entityId: nodeId,
+      nodeId,
+      ownerUserId: entry.ownerUserId ?? identity.userId,
+      mode: 'transform',
+      transform: {
+        position: {
+          x: protagonistPosePosition.x,
+          y: protagonistPosePosition.y,
+          z: protagonistPosePosition.z,
+        },
+        quaternion: {
+          x: protagonistPoseQuaternion.x,
+          y: protagonistPoseQuaternion.y,
+          z: protagonistPoseQuaternion.z,
+          w: protagonistPoseQuaternion.w,
+        },
+        scale: entry.props.syncScale
+          ? {
+            x: worldScale.x,
+            y: worldScale.y,
+            z: worldScale.z,
+          }
+          : null,
+      },
+      revision: entry.localRevision,
+      updatedAt: entry.updatedAt,
+      lease: {
+        mode: 'lease',
+        leaseMs: entry.props.leaseMs,
+      },
+    });
+  });
+  return states;
+}
+
 const multiuserRuntimeBridge: MultiuserRuntimeBridge = {
   getIdentity() {
     return getNormalizedMultiuserIdentity();
@@ -10368,14 +10699,26 @@ const multiuserRuntimeBridge: MultiuserRuntimeBridge = {
   resolveLocalPeerState() {
     return resolveLocalMultiuserPeerState();
   },
+  resolveLocalSharedEntityStates() {
+    return resolveLocalSharedEntityStates();
+  },
   handleRemotePeerSnapshot(peer) {
     handleRemoteMultiuserPeerSnapshot(peer);
   },
   handleRemotePeerLeft(userId) {
     removeRemoteMultiuserPeer(userId);
   },
+  handleRemoteSharedEntitySnapshot(snapshot) {
+    processRemoteSharedEntitySnapshot(snapshot);
+  },
+  handleRemoteSharedEntityRemoved(entityId) {
+    processRemoteSharedEntityRemoved(entityId);
+  },
   clearRemotePeers() {
     clearRemoteMultiuserPeers();
+  },
+  clearRemoteSharedEntities() {
+    resetRemoteSharedEntities();
   },
 };
 
@@ -14588,6 +14931,8 @@ function teardownRenderer() {
   instancedLodLastCameraStateValid = false;
   multiuserNodeIds.clear();
   multiuserNodeObjects.clear();
+  networkSyncNodeEntries.clear();
+  remoteSharedEntityEntries.clear();
   resetPhysicsWorld();
   lazyPlaceholderStates.clear();
   deferredInstancingNodeIds.clear();
@@ -14612,6 +14957,7 @@ function teardownRenderer() {
   renderContext = null;
   canvasResult = null;
   clearRemoteMultiuserPeers();
+  resetRemoteSharedEntities();
   setActiveMultiuserRuntimeBridge(null);
   setActiveMultiuserSceneId(null);
   currentDocument = null;
@@ -15034,6 +15380,7 @@ async function mountGraphAndSyncSubsystems(
   indexSceneObjects(root);
   applyWeChatShadowPolicy(root);
   refreshMultiuserNodeReferences(payload.document);
+  collectNetworkSyncNodeEntries(payload.document);
   refreshBehaviorProximityCandidates();
   await yieldToMainThread();
 
@@ -15275,6 +15622,7 @@ function startRenderLoop(
           updateVehicleSpeedFromVehicle();
           updateVehicleWheelVisuals(deltaSeconds);
           updateRemoteMultiuserPeers(deltaSeconds);
+          updateRemoteSharedEntityTransforms(deltaSeconds);
           retryPendingVehicleDriveIfNeeded();
           activatePendingDefaultSteerDriveIfNeeded();
         }
@@ -15418,6 +15766,8 @@ function cleanupForUnrelatedSceneSwitch(): void {
   instancedLodLastCameraStateValid = false;
   multiuserNodeIds.clear();
   multiuserNodeObjects.clear();
+  networkSyncNodeEntries.clear();
+  remoteSharedEntityEntries.clear();
   clearSceneryCompiledGroundRenderRuntime();
 
   resetPhysicsWorld();

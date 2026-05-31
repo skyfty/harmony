@@ -63,6 +63,8 @@ export interface ScenePackageMultiuserSceneSummary {
   enabledNodeCount: number;
   maxUsers?: number | null;
   nodeCount: number;
+  replicatedNodeCount: number;
+  replicatedPhysicsNodeCount: number;
   port?: number | null;
   sceneId: string;
   sceneName?: null | string;
@@ -74,6 +76,8 @@ export interface ScenePackageMultiuserSummary {
   enabled: boolean;
   enabledNodeCount: number;
   nodeCount: number;
+  replicatedNodeCount: number;
+  replicatedPhysicsNodeCount: number;
   sceneCount: number;
   scenes: ScenePackageMultiuserSceneSummary[];
 }

@@ -1,6 +1,8 @@
 let currentSceneId: string | null = null
 
 export type MultiuserSubjectType = 'vehicle' | 'character'
+export type MultiuserSharedEntityMode = 'transform'
+export type MultiuserOwnershipMode = 'lease'
 
 export type MultiuserVector3Like = { x: number; y: number; z: number }
 export type MultiuserQuaternionLike = { x: number; y: number; z: number; w: number }
@@ -27,12 +29,43 @@ export interface MultiuserPeerSnapshot {
   state: MultiuserPeerState | null
 }
 
+export interface MultiuserSharedEntityTransform {
+  position: MultiuserVector3Like
+  quaternion: MultiuserQuaternionLike
+  scale?: MultiuserVector3Like | null
+}
+
+export interface MultiuserSharedEntityLease {
+  mode: MultiuserOwnershipMode
+  leaseMs: number
+}
+
+export interface MultiuserSharedEntityState {
+  entityId: string
+  nodeId: string
+  ownerUserId?: string | null
+  mode: MultiuserSharedEntityMode
+  transform: MultiuserSharedEntityTransform
+  revision: number
+  updatedAt: string
+  lease?: MultiuserSharedEntityLease | null
+}
+
+export interface MultiuserSharedEntitySnapshot {
+  entityId: string
+  state: MultiuserSharedEntityState | null
+}
+
 export interface MultiuserRuntimeBridge {
   getIdentity(): MultiuserIdentity | null
   resolveLocalPeerState(): MultiuserPeerState | null
+  resolveLocalSharedEntityStates(): MultiuserSharedEntityState[]
   handleRemotePeerSnapshot(peer: MultiuserPeerSnapshot): void
   handleRemotePeerLeft(userId: string): void
+  handleRemoteSharedEntitySnapshot(snapshot: MultiuserSharedEntitySnapshot): void
+  handleRemoteSharedEntityRemoved(entityId: string): void
   clearRemotePeers(): void
+  clearRemoteSharedEntities(): void
 }
 
 let currentRuntimeBridge: MultiuserRuntimeBridge | null = null

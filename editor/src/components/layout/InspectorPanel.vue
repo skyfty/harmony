@@ -25,6 +25,7 @@ import BillboardPanel from '@/components/inspector/BillboardPanel.vue'
 import SignboardPanel from '@/components/inspector/SignboardPanel.vue'
 import BoundaryWallPanel from '@/components/inspector/BoundaryWallPanel.vue'
 import OnlinePanel from '@/components/inspector/OnlinePanel.vue'
+import NetworkSyncPanel from '@/components/inspector/NetworkSyncPanel.vue'
 import RigidbodyPanel from '@/components/inspector/RigidbodyPanel.vue'
 import VehiclePanel from '@/components/inspector/VehiclePanel.vue'
 import SteerPanel from '@/components/inspector/SteerPanel.vue'
@@ -57,6 +58,7 @@ import {
   PRELOADABLE_COMPONENT_TYPE,
   COUPON_COMPONENT_TYPE,
   ONLINE_COMPONENT_TYPE,
+  NETWORK_SYNC_COMPONENT_TYPE,
   PLANNING_IMAGES_COMPONENT_TYPE,
   RIGIDBODY_COMPONENT_TYPE,
   VEHICLE_COMPONENT_TYPE,
@@ -600,6 +602,7 @@ watch(
               <GuideboardPanel v-else-if="component.type === GUIDEBOARD_COMPONENT_TYPE" />
               <ViewPointPanel v-else-if="component.type === VIEW_POINT_COMPONENT_TYPE" />
               <OnlinePanel v-else-if="component.type === ONLINE_COMPONENT_TYPE" />
+              <NetworkSyncPanel v-else-if="component.type === NETWORK_SYNC_COMPONENT_TYPE" />
               <ProtagonistPanel v-else-if="component.type === PROTAGONIST_COMPONENT_TYPE" />
               <CharacterControllerPanel v-else-if="component.type === CHARACTER_CONTROLLER_COMPONENT_TYPE" />
               <PreloadablePanel v-else-if="component.type === PRELOADABLE_COMPONENT_TYPE" />

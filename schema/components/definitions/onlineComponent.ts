@@ -1,4 +1,5 @@
 import type { SceneNode, SceneNodeComponentState } from '../../index'
+import { MULTIUSER_NODE_ID } from '../../core'
 import { Component, type ComponentRuntimeContext } from '../Component'
 import { componentManager, type ComponentDefinition } from '../componentManager'
 import {
@@ -6,6 +7,8 @@ import {
   getActiveMultiuserSceneId,
   type MultiuserPeerSnapshot,
   type MultiuserPeerState,
+  type MultiuserSharedEntitySnapshot,
+  type MultiuserSharedEntityState,
 } from '../../multiuserContext'
 
 export const ONLINE_COMPONENT_TYPE = 'online'
@@ -33,6 +36,7 @@ const DEFAULT_IDLE_SYNC_INTERVAL = 500
 const STATE_KEEPALIVE_INTERVAL = 4000
 const POSITION_CHANGE_EPSILON = 0.05
 const QUATERNION_DOT_EPSILON = 0.9995
+const SCALE_CHANGE_EPSILON = 0.01
 
 interface MultiuserJoinMessage {
   type: 'join'
@@ -47,13 +51,20 @@ interface MultiuserStateMessage {
   state: MultiuserPeerState
 }
 
-type MultiuserClientMessage = MultiuserJoinMessage | MultiuserStateMessage
+interface MultiuserEntityStateMessage {
+  type: 'entity-state'
+  entity: MultiuserSharedEntityState
+}
+
+type MultiuserClientMessage = MultiuserJoinMessage | MultiuserStateMessage | MultiuserEntityStateMessage
 
 type MultiuserServerMessage =
-  | { type: 'welcome'; sceneId: string; userId: string; peers: MultiuserPeerSnapshot[] }
+  | { type: 'welcome'; sceneId: string; userId: string; peers: MultiuserPeerSnapshot[]; entities: MultiuserSharedEntitySnapshot[] }
   | { type: 'peer-joined'; sceneId: string; peer: MultiuserPeerSnapshot }
   | { type: 'peer-state'; sceneId: string; userId: string; peer: MultiuserPeerSnapshot }
   | { type: 'peer-left'; sceneId: string; userId: string }
+  | { type: 'entity-state'; sceneId: string; entity: MultiuserSharedEntitySnapshot }
+  | { type: 'entity-removed'; sceneId: string; entityId: string }
   | { type: 'error'; reason?: string }
 
 function clampNumber(value: unknown, fallback: number, min: number, max: number): number {
@@ -178,6 +189,69 @@ function computeIdleSyncInterval(baseInterval: number): number {
   return Math.max(DEFAULT_IDLE_SYNC_INTERVAL, baseInterval)
 }
 
+function getScaleSignature(state: MultiuserSharedEntityState): string {
+  const scale = state.transform.scale
+  return scale ? `${scale.x}|${scale.y}|${scale.z}` : ''
+}
+
+function getMultiuserEntityStateSignature(state: MultiuserSharedEntityState): string {
+  return [
+    state.entityId,
+    state.nodeId,
+    state.ownerUserId ?? '',
+    state.mode,
+    state.transform.position.x,
+    state.transform.position.y,
+    state.transform.position.z,
+    state.transform.quaternion.x,
+    state.transform.quaternion.y,
+    state.transform.quaternion.z,
+    state.transform.quaternion.w,
+    getScaleSignature(state),
+    state.revision,
+    state.updatedAt,
+    state.lease?.mode ?? '',
+    state.lease?.leaseMs ?? '',
+  ].join('|')
+}
+
+function isMultiuserEntityStateMeaningfullyChanged(prev: MultiuserSharedEntityState | null, next: MultiuserSharedEntityState): boolean {
+  if (!prev) {
+    return true
+  }
+  if (prev.entityId !== next.entityId || prev.nodeId !== next.nodeId || prev.mode !== next.mode) {
+    return true
+  }
+  const dx = next.transform.position.x - prev.transform.position.x
+  const dy = next.transform.position.y - prev.transform.position.y
+  const dz = next.transform.position.z - prev.transform.position.z
+  if ((dx * dx) + (dy * dy) + (dz * dz) >= POSITION_CHANGE_EPSILON * POSITION_CHANGE_EPSILON) {
+    return true
+  }
+  const dot =
+    (prev.transform.quaternion.x * next.transform.quaternion.x)
+    + (prev.transform.quaternion.y * next.transform.quaternion.y)
+    + (prev.transform.quaternion.z * next.transform.quaternion.z)
+    + (prev.transform.quaternion.w * next.transform.quaternion.w)
+  if (Math.abs(dot) < QUATERNION_DOT_EPSILON) {
+    return true
+  }
+  const prevScale = prev.transform.scale ?? null
+  const nextScale = next.transform.scale ?? null
+  if (Boolean(prevScale) !== Boolean(nextScale)) {
+    return true
+  }
+  if (prevScale && nextScale) {
+    const dsx = nextScale.x - prevScale.x
+    const dsy = nextScale.y - prevScale.y
+    const dsz = nextScale.z - prevScale.z
+    if ((dsx * dsx) + (dsy * dsy) + (dsz * dsz) >= SCALE_CHANGE_EPSILON * SCALE_CHANGE_EPSILON) {
+      return true
+    }
+  }
+  return false
+}
+
 export function clampOnlineComponentProps(overrides?: Partial<OnlineComponentProps> | null): OnlineComponentProps {
   const source = overrides ?? {}
   return {
@@ -197,10 +271,12 @@ export function clampOnlineComponentProps(overrides?: Partial<OnlineComponentPro
 class OnlineComponent extends Component<OnlineComponentProps> {
   private socket: WebSocket | null = null
   private reconnectTimer: ReturnType<typeof globalThis.setTimeout> | null = null
-  private lastSyncTimestamp = 0
+  private lastPeerSyncTimestamp = 0
   private lastKeepaliveTimestamp = 0
   private lastSentState: MultiuserPeerState | null = null
   private lastSentStateSignature = ''
+  private readonly lastSharedEntityById = new Map<string, MultiuserSharedEntityState>()
+  private readonly lastSharedEntitySignatureById = new Map<string, string>()
   private anonymousUserId = `anonymous-${Math.random().toString(36).slice(2, 10)}`
 
   constructor(context: ComponentRuntimeContext<OnlineComponentProps>) {
@@ -318,10 +394,12 @@ class OnlineComponent extends Component<OnlineComponentProps> {
   }
 
   private handleSocketOpen(): void {
-    this.lastSyncTimestamp = 0
+    this.lastPeerSyncTimestamp = 0
     this.lastKeepaliveTimestamp = 0
     this.lastSentState = null
     this.lastSentStateSignature = ''
+    this.lastSharedEntityById.clear()
+    this.lastSharedEntitySignatureById.clear()
     this.sendJoin()
   }
 
@@ -372,8 +450,12 @@ class OnlineComponent extends Component<OnlineComponentProps> {
     if (payload.type === 'welcome') {
       const bridge = this.runtimeBridge
       bridge?.clearRemotePeers()
+      bridge?.clearRemoteSharedEntities()
       if (Array.isArray(payload.peers)) {
         payload.peers.forEach((peer) => bridge?.handleRemotePeerSnapshot(peer))
+      }
+      if (Array.isArray(payload.entities)) {
+        payload.entities.forEach((entity) => bridge?.handleRemoteSharedEntitySnapshot(entity))
       }
       return
     }
@@ -387,6 +469,14 @@ class OnlineComponent extends Component<OnlineComponentProps> {
     }
     if (payload.type === 'peer-left' && payload.userId) {
       this.runtimeBridge?.handleRemotePeerLeft(payload.userId)
+      return
+    }
+    if (payload.type === 'entity-state' && payload.entity) {
+      this.runtimeBridge?.handleRemoteSharedEntitySnapshot(payload.entity)
+      return
+    }
+    if (payload.type === 'entity-removed' && payload.entityId) {
+      this.runtimeBridge?.handleRemoteSharedEntityRemoved(payload.entityId)
     }
   }
 
@@ -395,6 +485,7 @@ class OnlineComponent extends Component<OnlineComponentProps> {
       this.socket = null
     }
     this.runtimeBridge?.clearRemotePeers()
+    this.runtimeBridge?.clearRemoteSharedEntities()
     if (this.shouldConnect()) {
       this.scheduleReconnect()
     }
@@ -425,12 +516,15 @@ class OnlineComponent extends Component<OnlineComponentProps> {
       }
     }
     this.socket = null
-    this.lastSyncTimestamp = 0
+    this.lastPeerSyncTimestamp = 0
     this.lastKeepaliveTimestamp = 0
     this.lastSentState = null
     this.lastSentStateSignature = ''
+    this.lastSharedEntityById.clear()
+    this.lastSharedEntitySignatureById.clear()
     if (fully) {
       this.runtimeBridge?.clearRemotePeers()
+      this.runtimeBridge?.clearRemoteSharedEntities()
     }
   }
 
@@ -438,42 +532,76 @@ class OnlineComponent extends Component<OnlineComponentProps> {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
       return
     }
+    const socket = this.socket
     const bridge = this.runtimeBridge
     if (!bridge) {
       return
     }
     const now = Date.now()
-    const state = bridge.resolveLocalPeerState()
-    if (!state) {
-      return
-    }
-    const signature = getMultiuserStateSignature(state)
-    const shouldKeepalive = now - this.lastKeepaliveTimestamp >= STATE_KEEPALIVE_INTERVAL
-    const changed = signature !== this.lastSentStateSignature && isMultiuserStateMeaningfullyChanged(this.lastSentState, state)
-    const effectiveSyncInterval = changed
-      ? computeMovingSyncInterval(this.props.syncInterval)
-      : computeIdleSyncInterval(this.props.syncInterval)
-    if (now - this.lastSyncTimestamp < effectiveSyncInterval) {
-      return
-    }
-    if (!changed && !shouldKeepalive) {
-      return
-    }
-    const message: MultiuserStateMessage = {
-      type: 'state',
-      state,
-    }
-    this.socket.send(JSON.stringify(message satisfies MultiuserClientMessage))
-    this.lastSyncTimestamp = now
-    if (changed) {
-      this.lastSentState = {
-        ...state,
-        position: { ...state.position },
-        quaternion: { ...state.quaternion },
+    const peerState = bridge.resolveLocalPeerState()
+    if (peerState) {
+      const signature = getMultiuserStateSignature(peerState)
+      const shouldKeepalive = now - this.lastKeepaliveTimestamp >= STATE_KEEPALIVE_INTERVAL
+      const changed = signature !== this.lastSentStateSignature && isMultiuserStateMeaningfullyChanged(this.lastSentState, peerState)
+      const effectiveSyncInterval = changed
+        ? computeMovingSyncInterval(this.props.syncInterval)
+        : computeIdleSyncInterval(this.props.syncInterval)
+      if (now - this.lastPeerSyncTimestamp >= effectiveSyncInterval && (changed || shouldKeepalive)) {
+        const message: MultiuserStateMessage = {
+          type: 'state',
+          state: peerState,
+        }
+        this.socket.send(JSON.stringify(message satisfies MultiuserClientMessage))
+        this.lastPeerSyncTimestamp = now
+        if (changed) {
+          this.lastSentState = {
+            ...peerState,
+            position: { ...peerState.position },
+            quaternion: { ...peerState.quaternion },
+          }
+          this.lastSentStateSignature = signature
+        }
+        this.lastKeepaliveTimestamp = now
       }
-      this.lastSentStateSignature = signature
     }
-    this.lastKeepaliveTimestamp = now
+
+    const sharedStates = bridge.resolveLocalSharedEntityStates()
+    if (!Array.isArray(sharedStates) || sharedStates.length === 0) {
+      return
+    }
+    sharedStates.forEach((state) => {
+      if (!state || typeof state.entityId !== 'string' || !state.entityId.trim()) {
+        return
+      }
+      const signature = getMultiuserEntityStateSignature(state)
+      const previous = this.lastSharedEntityById.get(state.entityId) ?? null
+      const changed = signature !== this.lastSharedEntitySignatureById.get(state.entityId)
+        && isMultiuserEntityStateMeaningfullyChanged(previous, state)
+      const intervalHint = state.lease?.leaseMs ?? this.props.syncInterval
+      const effectiveSyncInterval = changed
+        ? computeMovingSyncInterval(intervalHint)
+        : computeIdleSyncInterval(intervalHint)
+      if (!changed && now - this.lastKeepaliveTimestamp < Math.max(effectiveSyncInterval, STATE_KEEPALIVE_INTERVAL)) {
+        return
+      }
+      if (changed || now - this.lastPeerSyncTimestamp >= effectiveSyncInterval) {
+        const message: MultiuserEntityStateMessage = {
+          type: 'entity-state',
+          entity: state,
+        }
+        socket.send(JSON.stringify(message satisfies MultiuserClientMessage))
+        this.lastSharedEntityById.set(state.entityId, {
+          ...state,
+          transform: {
+            position: { ...state.transform.position },
+            quaternion: { ...state.transform.quaternion },
+            scale: state.transform.scale ? { ...state.transform.scale } : null,
+          },
+          lease: state.lease ? { ...state.lease } : null,
+        })
+        this.lastSharedEntitySignatureById.set(state.entityId, signature)
+      }
+    })
   }
 }
 
@@ -495,8 +623,8 @@ const onlineComponentDefinition: ComponentDefinition<OnlineComponentProps> = {
       ],
     },
   ],
-  canAttach(): boolean {
-    return true
+  canAttach(node: SceneNode): boolean {
+    return node?.id === MULTIUSER_NODE_ID
   },
   createDefaultProps(): OnlineComponentProps {
     return { ...ONLINE_DEFAULT_CONFIG }

@@ -91,6 +91,8 @@ const multiuserColumns: TableColumnsType<ScenePackageMultiuserSceneSummary> = [
   { dataIndex: 'sceneId', key: 'sceneId', title: '场景 ID', width: 220 },
   { dataIndex: 'nodeCount', key: 'nodeCount', title: '节点数', width: 110 },
   { dataIndex: 'enabledNodeCount', key: 'enabledNodeCount', title: '启用节点', width: 110 },
+  { dataIndex: 'replicatedNodeCount', key: 'replicatedNodeCount', title: '同步节点', width: 110 },
+  { dataIndex: 'replicatedPhysicsNodeCount', key: 'replicatedPhysicsNodeCount', title: '物理同步节点', width: 130 },
   { dataIndex: 'server', key: 'server', title: '服务器', width: 220 },
   { dataIndex: 'port', key: 'port', title: '端口', width: 100 },
   { dataIndex: 'syncInterval', key: 'syncInterval', title: '同步间隔(ms)', width: 140 },
@@ -226,6 +228,12 @@ onMounted(load);
           </Col>
           <Col :xs="24" :sm="12" :lg="6">
             <Statistic title="节点数" :value="multiuserSummary.nodeCount ?? 0" />
+          </Col>
+          <Col :xs="24" :sm="12" :lg="6">
+            <Statistic title="同步节点数" :value="multiuserSummary.replicatedNodeCount ?? 0" />
+          </Col>
+          <Col :xs="24" :sm="12" :lg="6">
+            <Statistic title="物理同步节点数" :value="multiuserSummary.replicatedPhysicsNodeCount ?? 0" />
           </Col>
         </Row>
         <Table

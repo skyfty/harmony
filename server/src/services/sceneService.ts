@@ -84,6 +84,8 @@ export type ScenePackageMultiuserSceneSummary = {
   sceneName: string | null
   nodeCount: number
   enabledNodeCount: number
+  replicatedNodeCount: number
+  replicatedPhysicsNodeCount: number
   server: string | null
   port: number | null
   syncInterval: number | null
@@ -95,6 +97,8 @@ export type ScenePackageMultiuserSummary = {
   sceneCount: number
   nodeCount: number
   enabledNodeCount: number
+  replicatedNodeCount: number
+  replicatedPhysicsNodeCount: number
   scenes: ScenePackageMultiuserSceneSummary[]
 }
 
@@ -210,22 +214,58 @@ function collectMultiuserNodeSummaries(nodes: SceneNode[] | undefined | null): A
   return matches
 }
 
+const NETWORK_SYNC_COMPONENT_TYPE = 'networkSync'
+const RIGIDBODY_COMPONENT_TYPE = 'rigidbody'
+
+function collectNetworkSyncNodeSummaries(nodes: SceneNode[] | undefined | null): Array<{
+  networkSync: SceneNodeComponentState<Record<string, unknown>>
+  hasRigidbody: boolean
+}> {
+  const matches: Array<{ networkSync: SceneNodeComponentState<Record<string, unknown>>; hasRigidbody: boolean }> = []
+  if (!Array.isArray(nodes)) {
+    return matches
+  }
+  const stack: SceneNode[] = [...nodes]
+  while (stack.length) {
+    const node = stack.pop()
+    if (!node) {
+      continue
+    }
+    const networkSync = node.components?.[NETWORK_SYNC_COMPONENT_TYPE]
+    if (networkSync && typeof networkSync === 'object' && networkSync.type === NETWORK_SYNC_COMPONENT_TYPE) {
+      matches.push({
+        networkSync: networkSync as SceneNodeComponentState<Record<string, unknown>>,
+        hasRigidbody: Boolean(node.components?.[RIGIDBODY_COMPONENT_TYPE]),
+      })
+    }
+    if (Array.isArray(node.children) && node.children.length) {
+      stack.push(...node.children)
+    }
+  }
+  return matches
+}
+
 function normalizeMultiuserSceneSummary(
   sceneEntryId: string,
   document: SceneJsonExportDocument,
 ): ScenePackageMultiuserSceneSummary {
   const onlineComponents = collectMultiuserNodeSummaries(document.nodes)
+  const networkSyncNodes = collectNetworkSyncNodeSummaries(document.nodes)
   const firstOnlineComponent = onlineComponents.find((component) => component.enabled !== false) ?? onlineComponents[0] ?? null
   const props = isRecord(firstOnlineComponent?.props) ? firstOnlineComponent.props : null
   const server = toNonEmptyString(props?.server)
   const port = toFiniteInteger(props?.port)
   const syncInterval = toFiniteInteger(props?.syncInterval)
   const maxUsers = toFiniteInteger(props?.maxUsers)
+  const replicatedNodeCount = networkSyncNodes.length
+  const replicatedPhysicsNodeCount = networkSyncNodes.filter((entry) => entry.hasRigidbody).length
   return {
     sceneId: sceneEntryId || document.id,
     sceneName: toNonEmptyString(document.name),
     nodeCount: onlineComponents.length,
     enabledNodeCount: onlineComponents.filter((component) => component.enabled !== false).length,
+    replicatedNodeCount,
+    replicatedPhysicsNodeCount,
     server,
     port,
     syncInterval,
@@ -240,12 +280,16 @@ function buildScenePackageMultiuserSummary(scenes: Array<{ sceneId: string; docu
   const summaries = scenes.map((scene) => normalizeMultiuserSceneSummary(scene.sceneId, scene.document))
   const enabledNodeCount = summaries.reduce((sum, scene) => sum + scene.enabledNodeCount, 0)
   const nodeCount = summaries.reduce((sum, scene) => sum + scene.nodeCount, 0)
+  const replicatedNodeCount = summaries.reduce((sum, scene) => sum + scene.replicatedNodeCount, 0)
+  const replicatedPhysicsNodeCount = summaries.reduce((sum, scene) => sum + scene.replicatedPhysicsNodeCount, 0)
   const enabled = enabledNodeCount > 0
   return {
     enabled,
     sceneCount: summaries.length,
     nodeCount,
     enabledNodeCount,
+    replicatedNodeCount,
+    replicatedPhysicsNodeCount,
     scenes: summaries,
   }
 }
@@ -269,6 +313,8 @@ function normalizeStoredMultiuserSummary(value: unknown): ScenePackageMultiuserS
             sceneName: toNonEmptyString(scene.sceneName),
             nodeCount: Number(scene.nodeCount ?? 0) || 0,
             enabledNodeCount: Number(scene.enabledNodeCount ?? 0) || 0,
+            replicatedNodeCount: Number(scene.replicatedNodeCount ?? 0) || 0,
+            replicatedPhysicsNodeCount: Number(scene.replicatedPhysicsNodeCount ?? 0) || 0,
             server: toNonEmptyString(scene.server),
             port: toFiniteInteger(scene.port),
             syncInterval: toFiniteInteger(scene.syncInterval),
@@ -282,6 +328,8 @@ function normalizeStoredMultiuserSummary(value: unknown): ScenePackageMultiuserS
     sceneCount: Number(value.sceneCount ?? scenes.length) || scenes.length,
     nodeCount: Number(value.nodeCount ?? 0) || 0,
     enabledNodeCount: Number(value.enabledNodeCount ?? 0) || 0,
+    replicatedNodeCount: Number(value.replicatedNodeCount ?? 0) || 0,
+    replicatedPhysicsNodeCount: Number(value.replicatedPhysicsNodeCount ?? 0) || 0,
     scenes,
   }
 }
