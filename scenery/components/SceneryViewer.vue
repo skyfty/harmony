@@ -343,6 +343,7 @@ import { effectScope, watchEffect, ref, computed, onMounted, onUnmounted, watch,
 import '@minisheep/three-platform-adapter/wechat';
 // #endif
 import * as THREE from 'three';
+import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
 import type { KTX2Loader } from 'three/examples/jsm/loaders/KTX2Loader.js';
@@ -383,6 +384,7 @@ type SceneryProps = {
   physicsEngine?: PhysicsBackendPreference;
   createPhysicsBridge?: (engine?: PhysicsBackendPreference) => Promise<PhysicsBridge> | PhysicsBridge;
   defaultSteerIdentifier?: string;
+  multiuserIdentity?: MultiuserIdentity | null;
   nominateStateMap?: NominateExternalStateMap;
   physicsInterpolation?: boolean;
   serverAssetBaseUrl?: string;
@@ -567,7 +569,14 @@ import {
   type SceneCsmShadowRuntime,
 } from '@harmony/schema/sceneCsm';
 import { ComponentManager } from '@harmony/schema/components/componentManager';
-import { setActiveMultiuserSceneId } from '@harmony/schema/multiuserContext';
+import {
+  setActiveMultiuserRuntimeBridge,
+  setActiveMultiuserSceneId,
+  type MultiuserIdentity,
+  type MultiuserPeerSnapshot,
+  type MultiuserPeerState,
+  type MultiuserRuntimeBridge,
+} from '@harmony/schema/multiuserContext';
 import {
   type WarpGateComponentProps,
 } from '@harmony/schema/components/definitions/warpGateComponent';
@@ -2300,6 +2309,15 @@ let physicsBridgeLastFullBodySyncAtMs = 0;
 let protagonistNodeId: string | null = null;
 
 const vehicleInstances = new Map<string, VehicleInstanceWithWheels>();
+type RemoteMultiuserPeerEntry = {
+  root: THREE.Object3D;
+  signature: string;
+  ownsResources: boolean;
+};
+const remoteMultiuserPeerEntries = new Map<string, RemoteMultiuserPeerEntry>();
+const remoteMultiuserPeerLoadTokens = new Map<string, number>();
+const remoteMultiuserPeerRoot = new THREE.Group();
+remoteMultiuserPeerRoot.name = 'RemoteMultiuserPeers';
 const physicsGravity = createHostPhysicsVec3(0, -DEFAULT_ENVIRONMENT_GRAVITY, 0);
 // On WeChat iOS, 30 Hz physics is sufficient for 1–2 dynamic bodies and halves step cost.
 const PHYSICS_FIXED_TIMESTEP = isWeChatMiniProgram ? 1 / 30 : 1 / 60;
@@ -4671,6 +4689,40 @@ function resolveDefaultSteerBinding(
   return fallback;
 }
 
+function resolveSteerBindingByTargetNodeId(
+  document: SceneJsonExportDocument | null,
+  targetNodeId: string | null,
+): ResolvedSteerBinding | null {
+  const normalizedTargetNodeId = typeof targetNodeId === 'string' ? targetNodeId.trim() : '';
+  if (!document || !normalizedTargetNodeId) {
+    return null;
+  }
+  const stack: SceneNode[] = Array.isArray(document.nodes) ? [...document.nodes] : [];
+  while (stack.length) {
+    const node = stack.pop();
+    if (!node) {
+      continue;
+    }
+    const steerComponent = resolveEnabledComponentState<SteerComponentProps>(node, STEER_COMPONENT_TYPE);
+    if (steerComponent) {
+      const steerProps = clampSteerComponentProps(steerComponent.props ?? null);
+      if (steerProps.targetType === 'vehicle' && steerProps.targetNodeId === normalizedTargetNodeId) {
+        return {
+          steerNodeId: node.id,
+          steerNode: node,
+          steerComponent,
+          steerProps,
+          targetNodeId: normalizedTargetNodeId,
+        };
+      }
+    }
+    if (Array.isArray(node.children) && node.children.length) {
+      stack.push(...node.children);
+    }
+  }
+  return null;
+}
+
 function findMatchingSteerRuntimePrefabRequest(
   requests: RuntimePrefabSpawnRequest[] | undefined,
   vehicleIdentifier: string | null,
@@ -4691,6 +4743,40 @@ function findMatchingSteerRuntimePrefabRequest(
     }
   }
   return normalized.length === 1 ? normalized[0] : null;
+}
+
+function findRuntimePrefabRequestByVehicleNode(
+  requests: RuntimePrefabSpawnRequest[] | undefined,
+  targetNodeId: string | null,
+  targetNodeName: string | null,
+): RuntimePrefabSpawnRequest | null {
+  if (!Array.isArray(requests) || !requests.length) {
+    return null;
+  }
+  const normalizedTargetNodeId = typeof targetNodeId === 'string' ? targetNodeId.trim() : '';
+  const normalizedTargetNodeName = typeof targetNodeName === 'string' ? targetNodeName.trim() : '';
+  if (!normalizedTargetNodeId && !normalizedTargetNodeName) {
+    return null;
+  }
+  const normalized = requests
+    .map((request) => normalizeRuntimePrefabRequest(request))
+    .filter((request): request is RuntimePrefabSpawnRequest => Boolean(request));
+  if (!normalized.length) {
+    return null;
+  }
+  if (normalizedTargetNodeId) {
+    const matchedByNodeId = normalized.find((request) => request.targetNodeId === normalizedTargetNodeId);
+    if (matchedByNodeId) {
+      return matchedByNodeId;
+    }
+  }
+  if (normalizedTargetNodeName) {
+    const matchedByNodeName = normalized.find((request) => request.targetNodeName === normalizedTargetNodeName);
+    if (matchedByNodeName) {
+      return matchedByNodeName;
+    }
+  }
+  return null;
 }
 
 async function prepareRenderPayloadForDefaultSteer(payload: ScenePreviewPayload): Promise<ScenePreviewPayload> {
@@ -5420,12 +5506,6 @@ function resolveSceneSignboardLabel(nodeId: string): string {
   const label = typeof signboardState?.props?.label === 'string' ? signboardState.props.label : '';
   const nodeName = typeof node.name === 'string' ? node.name : '';
   return label.trim() || nodeName.trim() || nodeId;
-}
-
-function syncSceneSignboards(): void {
-  const renderCamera = renderContext?.camera ?? null;
-  const distanceReference = renderCamera ? resolvePunchBadgeReference(renderCamera) : null;
-  syncSceneSignboardsWithReference(distanceReference);
 }
 
 function syncSceneSignboardsWithReference(
@@ -9773,6 +9853,315 @@ function syncProtagonistCameraPose(options: ProtagonistPoseOptions = {}): boolea
   return true;
 }
 
+function getNormalizedMultiuserIdentity(): MultiuserIdentity | null {
+  const userId = typeof props.multiuserIdentity?.userId === 'string' ? props.multiuserIdentity.userId.trim() : '';
+  if (!userId) {
+    return null;
+  }
+  const displayName = typeof props.multiuserIdentity?.displayName === 'string'
+    ? props.multiuserIdentity.displayName.trim()
+    : '';
+  return {
+    userId,
+    displayName: displayName || userId,
+  };
+}
+
+function ensureRemoteMultiuserPeerRoot(): THREE.Group | null {
+  const context = renderContext;
+  if (!context) {
+    return null;
+  }
+  if (remoteMultiuserPeerRoot.parent !== context.scene) {
+    remoteMultiuserPeerRoot.parent?.remove(remoteMultiuserPeerRoot);
+    context.scene.add(remoteMultiuserPeerRoot);
+  }
+  return remoteMultiuserPeerRoot;
+}
+
+function createRemoteMultiuserPlaceholder(subjectType: 'vehicle' | 'character'): THREE.Object3D {
+  const color = subjectType === 'vehicle' ? 0xffb300 : 0x4d9bff;
+  const geometry = new THREE.CapsuleGeometry(0.32, 0.9, 4, 8);
+  const material = new THREE.MeshStandardMaterial({ color });
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  mesh.name = subjectType === 'vehicle' ? 'RemoteVehiclePlaceholder' : 'RemoteCharacterPlaceholder';
+  return mesh;
+}
+
+function sanitizeRemoteMultiuserObject(object: THREE.Object3D): THREE.Object3D {
+  const scale = object.scale.clone();
+  object.position.set(0, 0, 0);
+  object.quaternion.identity();
+  object.rotation.set(0, 0, 0);
+  object.scale.copy(scale);
+  object.name = `RemotePeer:${object.name || 'Object'}`;
+  object.traverse((child) => {
+    child.userData = {
+      remoteMultiuserPeer: true,
+    };
+    child.frustumCulled = false;
+    if ((child as THREE.Mesh).isMesh) {
+      const mesh = child as THREE.Mesh;
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+    }
+  });
+  return object;
+}
+
+function disposeRemoteMultiuserObject(object: THREE.Object3D, ownsResources: boolean): void {
+  if (ownsResources) {
+    disposeObject(object);
+    return;
+  }
+  object.parent?.remove(object);
+}
+
+function cloneRemoteMultiuserObjectFromRuntime(nodeId: string | null): THREE.Object3D | null {
+  if (!nodeId) {
+    return null;
+  }
+  const source = nodeObjectMap.get(nodeId) ?? null;
+  if (!source) {
+    return null;
+  }
+  return sanitizeRemoteMultiuserObject(cloneSkinned(source));
+}
+
+function resolveRemoteMultiuserVehiclePrefabRequest(state: MultiuserPeerState): RuntimePrefabSpawnRequest | null {
+  if (state.subjectType !== 'vehicle') {
+    return null;
+  }
+  const subjectIdentifier = typeof state.subjectIdentifier === 'string' ? state.subjectIdentifier.trim() : '';
+  const subjectNodeId = typeof state.subjectNodeId === 'string' ? state.subjectNodeId.trim() : '';
+  const subjectNodeName = subjectNodeId
+    ? resolveNodeById(subjectNodeId)?.name ?? null
+    : null;
+  return findMatchingSteerRuntimePrefabRequest(props.runtimePrefabSpawns, subjectIdentifier || null)
+    ?? findRuntimePrefabRequestByVehicleNode(props.runtimePrefabSpawns, subjectNodeId || null, subjectNodeName)
+    ?? null;
+}
+
+async function loadRemoteMultiuserObjectFromAsset(state: MultiuserPeerState): Promise<THREE.Object3D | null> {
+  const resourceCache = viewerResourceCache;
+  const matchedVehicleRequest = resolveRemoteMultiuserVehiclePrefabRequest(state);
+  const assetId = typeof state.subjectAssetId === 'string' && state.subjectAssetId.trim().length
+    ? state.subjectAssetId.trim()
+    : typeof matchedVehicleRequest?.assetId === 'string' && matchedVehicleRequest.assetId.trim().length
+      ? matchedVehicleRequest.assetId.trim()
+      : typeof state.subjectAssetUrl === 'string' && state.subjectAssetUrl.trim().length
+        ? state.subjectAssetUrl.trim()
+        : typeof matchedVehicleRequest?.assetUrl === 'string' && matchedVehicleRequest.assetUrl.trim().length
+          ? matchedVehicleRequest.assetUrl.trim()
+          : '';
+  if (!resourceCache || !assetId) {
+    return null;
+  }
+  const sampleNode = state.subjectNodeId ? resolveNodeById(state.subjectNodeId) : null;
+  try {
+    const object = await loadNodeObject(resourceCache, assetId, sampleNode?.importMetadata ?? null);
+    if (!object) {
+      return null;
+    }
+    prepareImportedObjectForPreview(object);
+    return sanitizeRemoteMultiuserObject(object);
+  } catch (error) {
+    console.warn('[SceneryViewer] Failed to load remote multiuser asset', {
+      assetId,
+      subjectNodeId: state.subjectNodeId,
+      error,
+    });
+    return null;
+  }
+}
+
+async function createRemoteMultiuserPeerObject(state: MultiuserPeerState): Promise<{ object: THREE.Object3D; ownsResources: boolean }> {
+  const runtimeClone = cloneRemoteMultiuserObjectFromRuntime(state.subjectNodeId);
+  if (runtimeClone) {
+    return { object: runtimeClone, ownsResources: false };
+  }
+  const assetObject = await loadRemoteMultiuserObjectFromAsset(state);
+  if (assetObject) {
+    return { object: assetObject, ownsResources: true };
+  }
+  return { object: createRemoteMultiuserPlaceholder(state.subjectType), ownsResources: true };
+}
+
+function applyRemoteMultiuserPeerTransform(object: THREE.Object3D, state: MultiuserPeerState): void {
+  object.position.set(state.position.x, state.position.y, state.position.z);
+  object.quaternion.set(state.quaternion.x, state.quaternion.y, state.quaternion.z, state.quaternion.w);
+  object.visible = true;
+  object.updateMatrixWorld(true);
+}
+
+function removeRemoteMultiuserPeer(userId: string): void {
+  const entry = remoteMultiuserPeerEntries.get(userId);
+  if (!entry) {
+    return;
+  }
+  entry.root.parent?.remove(entry.root);
+  disposeRemoteMultiuserObject(entry.root, entry.ownsResources);
+  remoteMultiuserPeerEntries.delete(userId);
+  remoteMultiuserPeerLoadTokens.delete(userId);
+  markInstancedCullingDirty();
+}
+
+function clearRemoteMultiuserPeers(): void {
+  remoteMultiuserPeerEntries.forEach((entry) => {
+    entry.root.parent?.remove(entry.root);
+    disposeRemoteMultiuserObject(entry.root, entry.ownsResources);
+  });
+  remoteMultiuserPeerEntries.clear();
+  remoteMultiuserPeerLoadTokens.clear();
+  remoteMultiuserPeerRoot.clear();
+  remoteMultiuserPeerRoot.parent?.remove(remoteMultiuserPeerRoot);
+  markInstancedCullingDirty();
+}
+
+function getRemoteMultiuserPeerSignature(state: MultiuserPeerState): string {
+  return [
+    state.subjectType,
+    state.subjectNodeId ?? '',
+    state.subjectIdentifier ?? '',
+    state.subjectAssetId ?? '',
+    state.subjectAssetUrl ?? '',
+  ].join('|');
+}
+
+function handleRemoteMultiuserPeerSnapshot(peer: MultiuserPeerSnapshot): void {
+  const localIdentity = getNormalizedMultiuserIdentity();
+  if (localIdentity && peer.userId === localIdentity.userId) {
+    return;
+  }
+  if (!peer.state) {
+    removeRemoteMultiuserPeer(peer.userId);
+    return;
+  }
+  const root = ensureRemoteMultiuserPeerRoot();
+  if (!root) {
+    return;
+  }
+  const signature = getRemoteMultiuserPeerSignature(peer.state);
+  const existing = remoteMultiuserPeerEntries.get(peer.userId) ?? null;
+  if (existing && existing.signature === signature) {
+    applyRemoteMultiuserPeerTransform(existing.root, peer.state);
+    return;
+  }
+  removeRemoteMultiuserPeer(peer.userId);
+  const loadToken = (remoteMultiuserPeerLoadTokens.get(peer.userId) ?? 0) + 1;
+  remoteMultiuserPeerLoadTokens.set(peer.userId, loadToken);
+  void createRemoteMultiuserPeerObject(peer.state).then(({ object, ownsResources }) => {
+    if (remoteMultiuserPeerLoadTokens.get(peer.userId) !== loadToken) {
+      disposeRemoteMultiuserObject(object, ownsResources);
+      return;
+    }
+    const latestRoot = ensureRemoteMultiuserPeerRoot();
+    if (!latestRoot) {
+      disposeRemoteMultiuserObject(object, ownsResources);
+      return;
+    }
+    object.name = `RemotePeer:${peer.userId}`;
+    latestRoot.add(object);
+    applyRemoteMultiuserPeerTransform(object, peer.state!);
+    remoteMultiuserPeerEntries.set(peer.userId, {
+      root: object,
+      signature,
+      ownsResources,
+    });
+    markInstancedCullingDirty();
+  }).catch((error) => {
+    console.warn('[SceneryViewer] Failed to create remote multiuser peer object', error);
+  });
+}
+
+function resolveLocalMultiuserPeerState(): MultiuserPeerState | null {
+  if (vehicleDriveActive.value && vehicleDriveNodeId.value) {
+    const nodeId = vehicleDriveNodeId.value;
+    const node = resolveNodeById(nodeId);
+    const object = nodeObjectMap.get(nodeId) ?? null;
+    if (object) {
+      const steerBinding = resolveSteerBindingByTargetNodeId(currentDocument, nodeId);
+      const resolvedVehicleIdentifier = steerBinding?.steerProps.defaultIdentifier?.trim()
+        || findRuntimePrefabRequestByVehicleNode(props.runtimePrefabSpawns, nodeId, node?.name ?? null)?.vehicleIdentifier?.trim()
+        || props.defaultSteerIdentifier?.trim()
+        || nodeId;
+      const matchedRequest = findMatchingSteerRuntimePrefabRequest(
+        props.runtimePrefabSpawns,
+        resolvedVehicleIdentifier || null,
+      ) ?? findRuntimePrefabRequestByVehicleNode(props.runtimePrefabSpawns, nodeId, node?.name ?? null);
+      object.getWorldPosition(protagonistPosePosition);
+      object.getWorldQuaternion(protagonistPoseQuaternion);
+      return {
+        subjectType: 'vehicle',
+        subjectNodeId: nodeId,
+        subjectIdentifier: resolvedVehicleIdentifier,
+        subjectAssetId: typeof node?.sourceAssetId === 'string' && node.sourceAssetId.trim().length
+          ? node.sourceAssetId.trim()
+          : matchedRequest?.assetId ?? null,
+        subjectAssetUrl: matchedRequest?.assetUrl ?? null,
+        position: {
+          x: protagonistPosePosition.x,
+          y: protagonistPosePosition.y,
+          z: protagonistPosePosition.z,
+        },
+        quaternion: {
+          x: protagonistPoseQuaternion.x,
+          y: protagonistPoseQuaternion.y,
+          z: protagonistPoseQuaternion.z,
+          w: protagonistPoseQuaternion.w,
+        },
+      };
+    }
+  }
+
+  const protagonistObject = findProtagonistObject();
+  const resolvedNodeId = protagonistNodeId ?? resolveNodeIdFromObject(protagonistObject);
+  if (!protagonistObject || !resolvedNodeId) {
+    return null;
+  }
+  const node = resolveNodeById(resolvedNodeId);
+  protagonistObject.getWorldPosition(protagonistPosePosition);
+  protagonistObject.getWorldQuaternion(protagonistPoseQuaternion);
+  return {
+    subjectType: 'character',
+    subjectNodeId: resolvedNodeId,
+    subjectIdentifier: node?.name ?? resolvedNodeId,
+    subjectAssetId: typeof node?.sourceAssetId === 'string' ? node.sourceAssetId : null,
+    subjectAssetUrl: null,
+    position: {
+      x: protagonistPosePosition.x,
+      y: protagonistPosePosition.y,
+      z: protagonistPosePosition.z,
+    },
+    quaternion: {
+      x: protagonistPoseQuaternion.x,
+      y: protagonistPoseQuaternion.y,
+      z: protagonistPoseQuaternion.z,
+      w: protagonistPoseQuaternion.w,
+    },
+  };
+}
+
+const multiuserRuntimeBridge: MultiuserRuntimeBridge = {
+  getIdentity() {
+    return getNormalizedMultiuserIdentity();
+  },
+  resolveLocalPeerState() {
+    return resolveLocalMultiuserPeerState();
+  },
+  handleRemotePeerSnapshot(peer) {
+    handleRemoteMultiuserPeerSnapshot(peer);
+  },
+  handleRemotePeerLeft(userId) {
+    removeRemoteMultiuserPeer(userId);
+  },
+  clearRemotePeers() {
+    clearRemoteMultiuserPeers();
+  },
+};
+
 function easeInOutCubic(t: number): number {
   if (t <= 0) {
     return 0;
@@ -14005,6 +14394,8 @@ function teardownRenderer() {
   renderer.dispose();
   renderContext = null;
   canvasResult = null;
+  clearRemoteMultiuserPeers();
+  setActiveMultiuserRuntimeBridge(null);
   setActiveMultiuserSceneId(null);
   currentDocument = null;
   dynamicGroundCache = null;
@@ -14848,6 +15239,8 @@ function cleanupForUnrelatedSceneSwitch(): void {
   }
   sceneGraphRoot = null;
   dynamicGroundCache = null;
+  clearRemoteMultiuserPeers();
+  setActiveMultiuserRuntimeBridge(null);
   setActiveMultiuserSceneId(null);
   viewerResourceCache = null;
   overlaySyncForceNextUpdate = true;
@@ -14877,6 +15270,7 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   // Phase 1: bind state for the new payload.
   currentDocument = payload.document;
   refreshDynamicGroundCache(currentDocument);
+  setActiveMultiuserRuntimeBridge(multiuserRuntimeBridge);
   setActiveMultiuserSceneId(payload.document.id ?? null);
   resetProtagonistPoseState();
   if (behaviorAlertToken.value) {
@@ -15284,6 +15678,8 @@ function cleanupRuntime(): void {
   resetSceneDownloadState();
   runtimePrefabSourceCache.clear();
   waterRuntime.reset();
+  clearRemoteMultiuserPeers();
+  setActiveMultiuserRuntimeBridge(null);
   sharedResourceCache = null;
   lanternViewerInstance = null;
   delete (globalThis as typeof globalThis & Record<string, unknown>)[DISPLAY_BOARD_RESOLVER_KEY];

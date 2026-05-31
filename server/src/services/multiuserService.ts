@@ -7,8 +7,14 @@ const MIN_USERS_LIMIT = 2
 
 type Vector3 = { x: number; y: number; z: number }
 type Quaternion = { x: number; y: number; z: number; w: number }
+type MultiuserSubjectType = 'vehicle' | 'character'
 
 interface MultiuserPeerState {
+  subjectType: MultiuserSubjectType
+  subjectNodeId: string | null
+  subjectIdentifier?: string | null
+  subjectAssetId?: string | null
+  subjectAssetUrl?: string | null
   position: Vector3
   quaternion: Quaternion
   action?: string | null
@@ -17,6 +23,7 @@ interface MultiuserPeerState {
 interface MultiuserJoinMessage {
   type: 'join'
   sceneId: string
+  userId?: string | null
   displayName?: string | null
   maxUsers?: number | null
 }
@@ -37,12 +44,13 @@ interface MultiuserPeerSnapshot {
 type MultiuserServerMessage =
   | { type: 'welcome'; sceneId: string; userId: string; peers: MultiuserPeerSnapshot[] }
   | { type: 'peer-joined'; sceneId: string; peer: MultiuserPeerSnapshot }
-  | { type: 'peer-state'; sceneId: string; userId: string; state: MultiuserPeerState }
+  | { type: 'peer-state'; sceneId: string; userId: string; peer: MultiuserPeerSnapshot }
   | { type: 'peer-left'; sceneId: string; userId: string }
   | { type: 'error'; reason?: string }
 
 interface SceneClient {
   socket: WebSocket
+  sessionId: string
   userId: string | null
   displayName: string
   state: MultiuserPeerState | null
@@ -51,6 +59,7 @@ interface SceneClient {
 
 class SceneSession {
   public readonly clients = new Set<SceneClient>()
+
   constructor(public readonly sceneId: string, public maxUsers: number) {}
 
   isFull(): boolean {
@@ -114,6 +123,59 @@ function clampSceneMaxUsers(value: number | undefined | null): number {
   return rounded
 }
 
+function normalizeOptionalText(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null
+  }
+  const trimmed = value.trim()
+  return trimmed.length ? trimmed : null
+}
+
+function isVector3(value: unknown): value is Vector3 {
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+  const candidate = value as Partial<Vector3>
+  return Number.isFinite(candidate.x) && Number.isFinite(candidate.y) && Number.isFinite(candidate.z)
+}
+
+function isQuaternion(value: unknown): value is Quaternion {
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+  const candidate = value as Partial<Quaternion>
+  return Number.isFinite(candidate.x) && Number.isFinite(candidate.y) && Number.isFinite(candidate.z) && Number.isFinite(candidate.w)
+}
+
+function normalizePeerState(value: unknown): MultiuserPeerState | null {
+  if (!value || typeof value !== 'object') {
+    return null
+  }
+  const candidate = value as Partial<MultiuserPeerState>
+  if ((candidate.subjectType !== 'vehicle' && candidate.subjectType !== 'character') || !isVector3(candidate.position) || !isQuaternion(candidate.quaternion)) {
+    return null
+  }
+  return {
+    subjectType: candidate.subjectType,
+    subjectNodeId: normalizeOptionalText(candidate.subjectNodeId),
+    subjectIdentifier: normalizeOptionalText(candidate.subjectIdentifier),
+    subjectAssetId: normalizeOptionalText(candidate.subjectAssetId),
+    subjectAssetUrl: normalizeOptionalText(candidate.subjectAssetUrl),
+    position: {
+      x: candidate.position.x,
+      y: candidate.position.y,
+      z: candidate.position.z,
+    },
+    quaternion: {
+      x: candidate.quaternion.x,
+      y: candidate.quaternion.y,
+      z: candidate.quaternion.z,
+      w: candidate.quaternion.w,
+    },
+    action: normalizeOptionalText(candidate.action),
+  }
+}
+
 export class MultiuserService {
   private wsServer: WebSocketServer | null = null
   private readonly sessions = new Map<string, SceneSession>()
@@ -155,6 +217,7 @@ export class MultiuserService {
   private handleConnection(socket: WebSocket): void {
     const client: SceneClient = {
       socket,
+      sessionId: nanoid(),
       userId: null,
       displayName: 'Guest',
       state: null,
@@ -213,7 +276,7 @@ export class MultiuserService {
       this.sendError(client.socket, 'Already joined a scene')
       return
     }
-    const sceneId = (message.sceneId ?? '').trim()
+    const sceneId = normalizeOptionalText(message.sceneId)
     if (!sceneId) {
       this.sendError(client.socket, 'Scene ID is required')
       return
@@ -230,8 +293,10 @@ export class MultiuserService {
       this.sendError(client.socket, 'Scene has reached the user limit')
       return
     }
-    client.userId = nanoid()
-    client.displayName = (message.displayName?.trim() ?? '') || `Guest-${client.userId.slice(0, 6)}`
+
+    client.userId = normalizeOptionalText(message.userId) ?? client.sessionId
+    client.displayName = normalizeOptionalText(message.displayName) ?? `Guest-${client.userId.slice(0, 6)}`
+
     session.addClient(client)
     const peers = session.getPeerSnapshots(client)
     const welcome: MultiuserServerMessage = {
@@ -241,6 +306,7 @@ export class MultiuserService {
       peers,
     }
     client.socket.send(JSON.stringify(welcome))
+
     const joinedMessage: MultiuserServerMessage = {
       type: 'peer-joined',
       sceneId,
@@ -253,18 +319,28 @@ export class MultiuserService {
     session.broadcast(joinedMessage, { exclude: client })
   }
 
-  private handleState(client: SceneClient, state: MultiuserPeerState): void {
+  private handleState(client: SceneClient, rawState: unknown): void {
     const session = client.session
     if (!session || !client.userId) {
       this.sendError(client.socket, 'Must join a scene before sending state')
       return
     }
+    const state = normalizePeerState(rawState)
+    if (!state) {
+      this.sendError(client.socket, 'Invalid peer state')
+      return
+    }
     client.state = state
+    const peer = {
+      userId: client.userId,
+      displayName: client.displayName,
+      state,
+    }
     const message: MultiuserServerMessage = {
       type: 'peer-state',
       sceneId: session.sceneId,
       userId: client.userId,
-      state,
+      peer,
     }
     session.broadcast(message, { exclude: client })
   }
@@ -288,7 +364,7 @@ export class MultiuserService {
 
   private sendError(socket: WebSocket, reason: string): void {
     try {
-      socket.send(JSON.stringify({ type: 'error', reason }))
+      socket.send(JSON.stringify({ type: 'error', reason } satisfies MultiuserServerMessage))
     } catch (error) {
       console.warn('Failed to send multiuser error message', error)
     }

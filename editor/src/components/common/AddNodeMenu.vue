@@ -277,7 +277,7 @@ async function handleCreateMultiuserNode(): Promise<void> {
   if (!canAddMultiuser.value) {
     return
   }
-  const name = 'Multiuser'
+  const name = 'Multiuser Scene'
   const helperObject = new THREE.Object3D()
   helperObject.name = name
   helperObject.userData = {
@@ -336,7 +336,7 @@ function handleAddLight(type: string) {
     <v-list class="add-menu-list">
       <v-list-item title="Group" @click="handleAddGroup()" />
       <v-list-item title="Nominate" @click="handleCreateNominateNode()" />
-      <v-list-item title="Multiuser" @click="handleCreateMultiuserNode()" :disabled="!canAddMultiuser" />
+      <v-list-item title="Multiuser Scene" @click="handleCreateMultiuserNode()" :disabled="!canAddMultiuser" />
 
       <v-menu  transition="none" location="end" offset="8">
         <template #activator="{ props: lightMenuProps }">

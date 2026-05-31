@@ -23,6 +23,7 @@
       :project-id="projectId"
       :package-url="packageUrl"
       :package-cache-key="packageCacheKey"
+      :multiuser-identity="multiuserIdentity"
       :nominate-state-map="nominateStateMap"
       :create-physics-bridge="createSceneryPhysicsBridge"
       :default-steer-identifier="selectedVehicleIdentifier"
@@ -43,6 +44,7 @@ import { computed, ref } from 'vue';
 import { onLoad, onShow, onUnload } from '@dcloudio/uni-app';
 import SceneryViewer from './uni_modules/scenery/components/SceneryViewer.vue';
 import { createSceneryPhysicsBridge } from './createSceneryPhysicsBridge';
+import { getProfile } from '@/api/mini/profile';
 import { getDownloadCdnBaseUrl } from '@harmony/utils/http';
 import {
   completeTravelLeaveRecord,
@@ -81,6 +83,7 @@ const explicitPrefabPlacementOffset = ref<{ x: number; y: number; z: number } | 
 const backButtonTop = ref<number>(8);
 const initialPunchedNodeIds = ref<string[]>([]);
 const serverAssetBaseUrl = getDownloadCdnBaseUrl();
+const multiuserIdentity = ref<{ userId: string; displayName?: string | null } | null>(null);
 
 const nominateStateMap = computed(() => {
   const vehicleIdentifier = selectedVehicleIdentifier.value.trim();
@@ -239,6 +242,24 @@ async function loadPunchProgress(): Promise<void> {
   }
 }
 
+async function loadMultiuserIdentity(): Promise<void> {
+  try {
+    const profile = await getProfile();
+    const userId = typeof profile.id === 'string' ? profile.id.trim() : '';
+    if (!userId) {
+      multiuserIdentity.value = null;
+      return;
+    }
+    const displayName = typeof profile.displayName === 'string' ? profile.displayName.trim() : '';
+    multiuserIdentity.value = {
+      userId,
+      displayName: displayName || userId,
+    };
+  } catch {
+    multiuserIdentity.value = null;
+  }
+}
+
 function handleBack(): void {
   uni.showModal({
     title: '确认离开',
@@ -340,6 +361,7 @@ onLoad((query: Record<string, unknown> | undefined) => {
 
   enterAt.value = Date.now();
   void loadPunchProgress();
+  void loadMultiuserIdentity();
 
   if (sceneId.value && sceneSpotId.value) {
     void createTravelEnterRecord({

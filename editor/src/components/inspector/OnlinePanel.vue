@@ -103,7 +103,7 @@ function handleSyncIntervalChange(value: string) {
   <v-expansion-panel value="online">
     <v-expansion-panel-title>
       <div class="online-panel__header">
-        <span class="online-panel__title">Multiuser</span>
+        <span class="online-panel__title">Scene Multiuser</span>
         <v-spacer />
         <v-menu
           v-if="onlineComponent"
@@ -138,7 +138,7 @@ function handleSyncIntervalChange(value: string) {
     <v-expansion-panel-text>
       <div class="online-settings">
         <v-text-field
-          label="Server"
+          label="Server Endpoint"
           density="compact"
           variant="underlined"
           hide-details
@@ -157,7 +157,7 @@ function handleSyncIntervalChange(value: string) {
           @update:modelValue="handlePortChange"
         />
         <v-text-field
-          label="Max Users"
+          label="Scene User Limit"
           density="compact"
           variant="underlined"
           hide-details
