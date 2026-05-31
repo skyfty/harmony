@@ -28,7 +28,8 @@ const ONLINE_DEFAULT_CONFIG: OnlineComponentProps = {
 
 const VALID_PORT_RANGE = { min: 1, max: 65535 }
 const SYNC_INTERVAL_RANGE = { min: 33, max: 5000 }
-const DEFAULT_EFFECTIVE_SYNC_INTERVAL = 500
+const DEFAULT_MOVING_SYNC_INTERVAL = 160
+const DEFAULT_IDLE_SYNC_INTERVAL = 500
 const STATE_KEEPALIVE_INTERVAL = 4000
 const POSITION_CHANGE_EPSILON = 0.05
 const QUATERNION_DOT_EPSILON = 0.9995
@@ -166,6 +167,15 @@ function isMultiuserStateMeaningfullyChanged(prev: MultiuserPeerState | null, ne
     + (prev.quaternion.z * next.quaternion.z)
     + (prev.quaternion.w * next.quaternion.w)
   return Math.abs(dot) < QUATERNION_DOT_EPSILON
+}
+
+function computeMovingSyncInterval(baseInterval: number): number {
+  const scaled = Math.round(baseInterval / 3)
+  return Math.max(80, Math.min(180, Number.isFinite(scaled) ? scaled : DEFAULT_MOVING_SYNC_INTERVAL))
+}
+
+function computeIdleSyncInterval(baseInterval: number): number {
+  return Math.max(DEFAULT_IDLE_SYNC_INTERVAL, baseInterval)
 }
 
 export function clampOnlineComponentProps(overrides?: Partial<OnlineComponentProps> | null): OnlineComponentProps {
@@ -433,10 +443,6 @@ class OnlineComponent extends Component<OnlineComponentProps> {
       return
     }
     const now = Date.now()
-    const effectiveSyncInterval = Math.max(this.props.syncInterval, DEFAULT_EFFECTIVE_SYNC_INTERVAL)
-    if (now - this.lastSyncTimestamp < effectiveSyncInterval) {
-      return
-    }
     const state = bridge.resolveLocalPeerState()
     if (!state) {
       return
@@ -444,6 +450,12 @@ class OnlineComponent extends Component<OnlineComponentProps> {
     const signature = getMultiuserStateSignature(state)
     const shouldKeepalive = now - this.lastKeepaliveTimestamp >= STATE_KEEPALIVE_INTERVAL
     const changed = signature !== this.lastSentStateSignature && isMultiuserStateMeaningfullyChanged(this.lastSentState, state)
+    const effectiveSyncInterval = changed
+      ? computeMovingSyncInterval(this.props.syncInterval)
+      : computeIdleSyncInterval(this.props.syncInterval)
+    if (now - this.lastSyncTimestamp < effectiveSyncInterval) {
+      return
+    }
     if (!changed && !shouldKeepalive) {
       return
     }

@@ -2312,13 +2312,19 @@ const vehicleInstances = new Map<string, VehicleInstanceWithWheels>();
 type RemoteMultiuserPeerEntry = {
   root: THREE.Object3D;
   signature: string;
-  state: MultiuserPeerState;
+  targetState: MultiuserPeerState;
+  displayState: MultiuserPeerState;
   ownsResources: boolean;
 };
 const remoteMultiuserPeerEntries = new Map<string, RemoteMultiuserPeerEntry>();
 const remoteMultiuserPeerLoadTokens = new Map<string, number>();
 const remoteMultiuserPeerRoot = new THREE.Group();
 remoteMultiuserPeerRoot.name = 'RemoteMultiuserPeers';
+const REMOTE_MULTIUSER_SMOOTHING_SECONDS = 0.16;
+const remoteMultiuserDisplayPositionScratch = new THREE.Vector3();
+const remoteMultiuserTargetPositionScratch = new THREE.Vector3();
+const remoteMultiuserDisplayQuaternionScratch = new THREE.Quaternion();
+const remoteMultiuserTargetQuaternionScratch = new THREE.Quaternion();
 const physicsGravity = createHostPhysicsVec3(0, -DEFAULT_ENVIRONMENT_GRAVITY, 0);
 // On WeChat iOS, 30 Hz physics is sufficient for 1–2 dynamic bodies and halves step cost.
 const PHYSICS_FIXED_TIMESTEP = isWeChatMiniProgram ? 1 / 30 : 1 / 60;
@@ -9891,6 +9897,28 @@ function createRemoteMultiuserPlaceholder(subjectType: 'vehicle' | 'character'):
   return mesh;
 }
 
+function cloneRemoteMultiuserPeerState(state: MultiuserPeerState): MultiuserPeerState {
+  return {
+    subjectType: state.subjectType,
+    subjectNodeId: state.subjectNodeId,
+    subjectIdentifier: state.subjectIdentifier,
+    subjectAssetId: state.subjectAssetId,
+    subjectAssetUrl: state.subjectAssetUrl,
+    action: state.action,
+    position: {
+      x: state.position.x,
+      y: state.position.y,
+      z: state.position.z,
+    },
+    quaternion: {
+      x: state.quaternion.x,
+      y: state.quaternion.y,
+      z: state.quaternion.z,
+      w: state.quaternion.w,
+    },
+  };
+}
+
 function sanitizeRemoteMultiuserObject(object: THREE.Object3D): THREE.Object3D {
   const scale = object.scale.clone();
   object.position.set(0, 0, 0);
@@ -10103,6 +10131,62 @@ function applyRemoteMultiuserPeerTransform(object: THREE.Object3D, state: Multiu
   object.updateMatrixWorld(true);
 }
 
+function updateRemoteMultiuserPeerTransform(entry: RemoteMultiuserPeerEntry, deltaSeconds: number): void {
+  const smoothingSeconds = REMOTE_MULTIUSER_SMOOTHING_SECONDS;
+  const alpha = 1 - Math.exp(-Math.max(0, deltaSeconds) / smoothingSeconds);
+  const targetState = entry.targetState;
+  const displayState = entry.displayState;
+  if (!displayState) {
+    entry.displayState = cloneRemoteMultiuserPeerState(targetState);
+    applyRemoteMultiuserPeerTransform(entry.root, targetState);
+    return;
+  }
+
+  remoteMultiuserDisplayPositionScratch.set(
+    displayState.position.x,
+    displayState.position.y,
+    displayState.position.z,
+  );
+  remoteMultiuserTargetPositionScratch.set(
+    targetState.position.x,
+    targetState.position.y,
+    targetState.position.z,
+  );
+  remoteMultiuserDisplayPositionScratch.lerp(remoteMultiuserTargetPositionScratch, alpha);
+  displayState.position.x = remoteMultiuserDisplayPositionScratch.x;
+  displayState.position.y = remoteMultiuserDisplayPositionScratch.y;
+  displayState.position.z = remoteMultiuserDisplayPositionScratch.z;
+
+  remoteMultiuserDisplayQuaternionScratch.set(
+    displayState.quaternion.x,
+    displayState.quaternion.y,
+    displayState.quaternion.z,
+    displayState.quaternion.w,
+  );
+  remoteMultiuserTargetQuaternionScratch.set(
+    targetState.quaternion.x,
+    targetState.quaternion.y,
+    targetState.quaternion.z,
+    targetState.quaternion.w,
+  );
+  remoteMultiuserDisplayQuaternionScratch.slerp(remoteMultiuserTargetQuaternionScratch, alpha);
+  displayState.quaternion.x = remoteMultiuserDisplayQuaternionScratch.x;
+  displayState.quaternion.y = remoteMultiuserDisplayQuaternionScratch.y;
+  displayState.quaternion.z = remoteMultiuserDisplayQuaternionScratch.z;
+  displayState.quaternion.w = remoteMultiuserDisplayQuaternionScratch.w;
+
+  applyRemoteMultiuserPeerTransform(entry.root, displayState);
+}
+
+function updateRemoteMultiuserPeers(deltaSeconds: number): void {
+  if (!remoteMultiuserPeerEntries.size || deltaSeconds <= 0) {
+    return;
+  }
+  remoteMultiuserPeerEntries.forEach((entry) => {
+    updateRemoteMultiuserPeerTransform(entry, deltaSeconds);
+  });
+}
+
 function removeRemoteMultiuserPeer(userId: string): void {
   const entry = remoteMultiuserPeerEntries.get(userId);
   if (!entry) {
@@ -10153,8 +10237,10 @@ function handleRemoteMultiuserPeerSnapshot(peer: MultiuserPeerSnapshot): void {
   const signature = getRemoteMultiuserPeerSignature(peer.state);
   const existing = remoteMultiuserPeerEntries.get(peer.userId) ?? null;
   if (existing && existing.signature === signature) {
-    existing.state = peer.state;
-    applyRemoteMultiuserPeerTransform(existing.root, peer.state);
+    existing.targetState = cloneRemoteMultiuserPeerState(peer.state);
+    if (!existing.displayState) {
+      existing.displayState = cloneRemoteMultiuserPeerState(peer.state);
+    }
     return;
   }
   removeRemoteMultiuserPeer(peer.userId);
@@ -10172,7 +10258,8 @@ function handleRemoteMultiuserPeerSnapshot(peer: MultiuserPeerSnapshot): void {
   remoteMultiuserPeerEntries.set(peer.userId, {
     root: placeholder,
     signature,
-    state: peer.state,
+    targetState: cloneRemoteMultiuserPeerState(peer.state),
+    displayState: cloneRemoteMultiuserPeerState(peer.state),
     ownsResources: true,
   });
   markInstancedCullingDirty();
@@ -10192,11 +10279,12 @@ function handleRemoteMultiuserPeerSnapshot(peer: MultiuserPeerSnapshot): void {
     disposeRemoteMultiuserObject(currentRoot, latestEntry.ownsResources);
     object.name = `RemotePeer:${peer.userId}`;
     latestRoot.add(object);
-    applyRemoteMultiuserPeerTransform(object, latestEntry.state);
+    applyRemoteMultiuserPeerTransform(object, latestEntry.displayState ?? latestEntry.targetState);
     remoteMultiuserPeerEntries.set(peer.userId, {
       root: object,
       signature,
-      state: latestEntry.state,
+      targetState: cloneRemoteMultiuserPeerState(latestEntry.targetState),
+      displayState: cloneRemoteMultiuserPeerState(latestEntry.displayState ?? latestEntry.targetState),
       ownsResources,
     });
     markInstancedCullingDirty();
@@ -15186,6 +15274,7 @@ function startRenderLoop(
           stepSceneryPhysicsBridge(deltaSeconds);
           updateVehicleSpeedFromVehicle();
           updateVehicleWheelVisuals(deltaSeconds);
+          updateRemoteMultiuserPeers(deltaSeconds);
           retryPendingVehicleDriveIfNeeded();
           activatePendingDefaultSteerDriveIfNeeded();
         }
