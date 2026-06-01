@@ -2519,6 +2519,8 @@ const defaultWheelAxisVector = new THREE.Vector3(DEFAULT_AXLE.x, DEFAULT_AXLE.y,
 const VEHICLE_WHEEL_MIN_RADIUS = 0.01;
 const VEHICLE_WHEEL_SPIN_EPSILON = 1e-4;
 const VEHICLE_TRAVEL_EPSILON = 1e-5;
+const multiuserWheelDebugLastLogAtByKey = new Map<string, number>();
+const multiuserWheelDebugMinIntervalMs = 4000;
 const autoTourSnapLocalPosition = new THREE.Vector3();
 const autoTourSnapWorldPosition = new THREE.Vector3();
 const autoTourSnapWorldQuaternion = new THREE.Quaternion();
@@ -10196,6 +10198,17 @@ function interpolateWrappedAngle(current: number, target: number, alpha: number)
   return normalizeRemotePresentationAngle(normalizedCurrent + (delta * alpha));
 }
 
+function logMultiuserWheelDebug(message: string, payload: Record<string, unknown>): void {
+  const key = message;
+  const now = Date.now();
+  const lastAt = multiuserWheelDebugLastLogAtByKey.get(key) ?? 0;
+  if (now - lastAt < multiuserWheelDebugMinIntervalMs) {
+    return;
+  }
+  multiuserWheelDebugLastLogAtByKey.set(key, now);
+  console.info(`[MultiuserWheel] ${message} ${JSON.stringify(payload)}`);
+}
+
 function sanitizeRemoteMultiuserObject(object: THREE.Object3D): THREE.Object3D {
   const scale = object.scale.clone();
   object.position.set(0, 0, 0);
@@ -10239,13 +10252,24 @@ function disposeRemoteMultiuserObject(object: THREE.Object3D, ownsResources: boo
   object.parent?.remove(object);
 }
 
-function collectRemoteMultiuserWheelBindings(root: THREE.Object3D): RemoteMultiuserWheelBinding[] {
+function collectRemoteMultiuserWheelBindings(
+  root: THREE.Object3D,
+  allowedNodeIds: Set<string> | null,
+): RemoteMultiuserWheelBinding[] {
   const bindings: RemoteMultiuserWheelBinding[] = [];
+  const seenNodeIds = new Set<string>();
   root.traverse((child) => {
     const nodeId = typeof child.userData?.nodeId === 'string' ? child.userData.nodeId.trim() : '';
     if (!nodeId || nodeId === root.userData?.nodeId) {
       return;
     }
+    if (allowedNodeIds && (!allowedNodeIds.has(nodeId) || seenNodeIds.has(nodeId))) {
+      return;
+    }
+    if (seenNodeIds.has(nodeId)) {
+      return;
+    }
+    seenNodeIds.add(nodeId);
     bindings.push({
       nodeId,
       object: child,
@@ -10295,7 +10319,18 @@ function collectRemoteMultiuserAnimationControllers(root: THREE.Object3D): Map<s
 }
 
 function attachRemoteMultiuserPeerRuntime(entry: RemoteMultiuserPeerEntry): void {
-  entry.wheelBindings = collectRemoteMultiuserWheelBindings(entry.root);
+  const allowedWheelNodeIds = new Set<string>();
+  const presentationWheels = entry.targetState.presentation?.vehicle?.wheels ?? [];
+  presentationWheels.forEach((wheel) => {
+    const nodeId = typeof wheel.nodeId === 'string' ? wheel.nodeId.trim() : '';
+    if (nodeId) {
+      allowedWheelNodeIds.add(nodeId);
+    }
+  });
+  entry.wheelBindings = collectRemoteMultiuserWheelBindings(
+    entry.root,
+    allowedWheelNodeIds.size ? allowedWheelNodeIds : null,
+  );
   entry.animationControllers = collectRemoteMultiuserAnimationControllers(entry.root);
 }
 
@@ -10548,6 +10583,9 @@ function applyRemoteMultiuserVehiclePresentation(
   }
   const wheelBindings = entry.wheelBindings;
   if (!Array.isArray(wheelBindings) || !wheelBindings.length) {
+    logMultiuserWheelDebug('apply-remote-vehicle-presentation:no-bindings', {
+      wheelCount: presentation.wheels.length,
+    });
     return;
   }
   const wheelStateByNodeId = new Map<string, MultiuserVehicleWheelPresentation>();
@@ -10557,11 +10595,34 @@ function applyRemoteMultiuserVehiclePresentation(
       wheelStateByNodeId.set(nodeId, wheel);
     }
   });
+    logMultiuserWheelDebug('apply-remote-vehicle-presentation', {
+      bindingCount: wheelBindings.length,
+      wheelCount: presentation.wheels.length,
+      wheelStates: presentation.wheels.map((wheel) => ({
+        nodeId: wheel.nodeId ?? null,
+        wheelIndex: wheel.wheelIndex,
+        steeringAngle: wheel.steeringAngle ?? null,
+        spinAngle: wheel.spinAngle ?? null,
+      })),
+    });
+ 
   wheelBindings.forEach((binding) => {
     const wheelState = binding.nodeId ? wheelStateByNodeId.get(binding.nodeId) ?? null : null;
     if (!wheelState) {
+        logMultiuserWheelDebug('apply-remote-vehicle-wheel:missing-binding', {
+          bindingNodeId: binding.nodeId,
+          wheelBindingObjectName: binding.object?.name ?? null,
+        });
+      
       return;
     }
+      logMultiuserWheelDebug('apply-remote-vehicle-wheel:matched', {
+        bindingNodeId: binding.nodeId,
+        wheelBindingObjectName: binding.object?.name ?? null,
+        steeringAngle: wheelState.steeringAngle ?? null,
+        spinAngle: wheelState.spinAngle ?? null,
+      });
+    
     if (alpha >= 1 || !binding.object) {
       applyRemoteMultiuserVehicleWheelState(binding, wheelState);
       return;
@@ -11623,6 +11684,16 @@ function resolveLocalMultiuserVehiclePresentation(nodeId: string): MultiuserVehi
   if (!wheels.length) {
     return null;
   }
+  logMultiuserWheelDebug('resolve-local-vehicle-presentation', {
+    nodeId,
+    wheelCount: wheels.length,
+    wheels: wheels.map((wheel) => ({
+      nodeId: wheel.nodeId,
+      wheelIndex: wheel.wheelIndex,
+      steeringAngle: wheel.steeringAngle,
+      spinAngle: wheel.spinAngle,
+    })),
+  });
   return { wheels };
 }
 
