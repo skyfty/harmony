@@ -42,6 +42,36 @@ type MultiuserSubjectType = 'vehicle' | 'character'
 type MultiuserSharedEntityMode = 'transform'
 type MultiuserOwnershipMode = 'lease'
 
+interface MultiuserVehicleWheelPresentation {
+  nodeId?: string | null
+  wheelIndex: number
+  position: Vector3
+  quaternion: Quaternion
+  scale?: Vector3 | null
+}
+
+interface MultiuserVehiclePresentation {
+  wheels: MultiuserVehicleWheelPresentation[]
+}
+
+interface MultiuserCharacterAnimationPresentation {
+  clipName: string | null
+  time: number
+  duration: number
+  loop: boolean
+  timeScale: number
+  normalizedTime?: number | null
+}
+
+interface MultiuserCharacterPresentation {
+  animation: MultiuserCharacterAnimationPresentation | null
+}
+
+interface MultiuserPeerPresentationState {
+  vehicle?: MultiuserVehiclePresentation | null
+  character?: MultiuserCharacterPresentation | null
+}
+
 interface MultiuserPeerState {
   subjectType: MultiuserSubjectType
   subjectNodeId: string | null
@@ -51,6 +81,7 @@ interface MultiuserPeerState {
   position: Vector3
   quaternion: Quaternion
   action?: string | null
+  presentation?: MultiuserPeerPresentationState | null
 }
 
 interface MultiuserSharedEntityTransform {
@@ -297,6 +328,7 @@ function normalizePeerState(value: unknown): MultiuserPeerState | null {
   if ((candidate.subjectType !== 'vehicle' && candidate.subjectType !== 'character') || !isVector3(candidate.position) || !isQuaternion(candidate.quaternion)) {
     return null
   }
+  const presentation = normalizePeerPresentation(candidate.presentation)
   return {
     subjectType: candidate.subjectType,
     subjectNodeId: normalizeOptionalText(candidate.subjectNodeId),
@@ -315,6 +347,96 @@ function normalizePeerState(value: unknown): MultiuserPeerState | null {
       w: candidate.quaternion.w,
     },
     action: normalizeOptionalText(candidate.action),
+    presentation,
+  }
+}
+
+function normalizeVehiclePresentation(value: unknown): MultiuserVehiclePresentation | null {
+  if (!value || typeof value !== 'object') {
+    return null
+  }
+  const candidate = value as Partial<MultiuserVehiclePresentation> & { wheels?: unknown }
+  if (!Array.isArray(candidate.wheels)) {
+    return null
+  }
+  const wheels: MultiuserVehicleWheelPresentation[] = []
+  candidate.wheels.forEach((wheel: unknown, index: number) => {
+    if (!wheel || typeof wheel !== 'object') {
+      return
+    }
+    const item = wheel as Partial<MultiuserVehicleWheelPresentation>
+    if (!isVector3(item.position) || !isQuaternion(item.quaternion)) {
+      return
+    }
+    wheels.push({
+      nodeId: normalizeOptionalText(item.nodeId),
+      wheelIndex: Number.isFinite(item.wheelIndex) ? Math.max(0, Math.trunc(item.wheelIndex as number)) : index,
+      position: {
+        x: item.position.x,
+        y: item.position.y,
+        z: item.position.z,
+      },
+      quaternion: {
+        x: item.quaternion.x,
+        y: item.quaternion.y,
+        z: item.quaternion.z,
+        w: item.quaternion.w,
+      },
+      scale: isVector3(item.scale)
+        ? {
+            x: item.scale.x,
+            y: item.scale.y,
+            z: item.scale.z,
+          }
+        : null,
+    })
+  })
+  return {
+    wheels,
+  }
+}
+
+function normalizeCharacterPresentation(value: unknown): MultiuserCharacterPresentation | null {
+  if (!value || typeof value !== 'object') {
+    return null
+  }
+  const candidate = value as Partial<MultiuserCharacterPresentation> & { animation?: unknown }
+  if (!candidate.animation || typeof candidate.animation !== 'object') {
+    return null
+  }
+  const animation = candidate.animation as Partial<MultiuserCharacterAnimationPresentation> & { loop?: unknown }
+  const clipName = normalizeOptionalText(animation.clipName)
+  const time = typeof animation.time === 'number' && Number.isFinite(animation.time) ? animation.time : 0
+  const duration = typeof animation.duration === 'number' && Number.isFinite(animation.duration) ? Math.max(0, animation.duration) : 0
+  const timeScale = typeof animation.timeScale === 'number' && Number.isFinite(animation.timeScale) ? animation.timeScale : 1
+  const normalizedTime = typeof animation.normalizedTime === 'number' && Number.isFinite(animation.normalizedTime)
+    ? animation.normalizedTime
+    : null
+  return {
+    animation: {
+      clipName,
+      time,
+      duration,
+      loop: Boolean(animation.loop),
+      timeScale,
+      normalizedTime,
+    },
+  }
+}
+
+function normalizePeerPresentation(value: unknown): MultiuserPeerPresentationState | null {
+  if (!value || typeof value !== 'object') {
+    return null
+  }
+  const candidate = value as Partial<MultiuserPeerPresentationState>
+  const vehicle = candidate.vehicle ? normalizeVehiclePresentation(candidate.vehicle) : null
+  const character = candidate.character ? normalizeCharacterPresentation(candidate.character) : null
+  if (!vehicle && !character) {
+    return null
+  }
+  return {
+    vehicle,
+    character,
   }
 }
 

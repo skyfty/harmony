@@ -5,10 +5,13 @@ import { componentManager, type ComponentDefinition } from '../componentManager'
 import {
   getActiveMultiuserRuntimeBridge,
   getActiveMultiuserSceneId,
+  type MultiuserCharacterPresentation,
+  type MultiuserPeerPresentationState,
   type MultiuserPeerSnapshot,
   type MultiuserPeerState,
   type MultiuserPhysicsAuthorityInput,
   type MultiuserPhysicsAuthoritySnapshot,
+  type MultiuserVehiclePresentation,
   type MultiuserSharedEntitySnapshot,
   type MultiuserSharedEntityState,
 } from '../../multiuserContext'
@@ -142,6 +145,58 @@ function normalizeOptionalString(value: unknown): string | null {
   return trimmed.length ? trimmed : null
 }
 
+function getPresentationVectorSignature(value: { x: number; y: number; z: number } | null | undefined): string {
+  if (!value) {
+    return ''
+  }
+  return `${value.x}|${value.y}|${value.z}`
+}
+
+function getPresentationQuaternionSignature(value: { x: number; y: number; z: number; w: number } | null | undefined): string {
+  if (!value) {
+    return ''
+  }
+  return `${value.x}|${value.y}|${value.z}|${value.w}`
+}
+
+function getMultiuserVehiclePresentationSignature(presentation: MultiuserVehiclePresentation | null | undefined): string {
+  if (!presentation || !Array.isArray(presentation.wheels) || !presentation.wheels.length) {
+    return ''
+  }
+  return presentation.wheels.map((wheel) => [
+    normalizeOptionalString(wheel.nodeId) ?? '',
+    wheel.wheelIndex,
+    getPresentationVectorSignature(wheel.position),
+    getPresentationQuaternionSignature(wheel.quaternion),
+    getPresentationVectorSignature(wheel.scale ?? null),
+  ].join(':')).join('|')
+}
+
+function getMultiuserCharacterPresentationSignature(presentation: MultiuserCharacterPresentation | null | undefined): string {
+  const animation = presentation?.animation ?? null
+  if (!animation) {
+    return ''
+  }
+  return [
+    normalizeOptionalString(animation.clipName) ?? '',
+    animation.time,
+    animation.duration,
+    animation.loop ? 1 : 0,
+    animation.timeScale,
+    animation.normalizedTime ?? '',
+  ].join('|')
+}
+
+function getMultiuserPresentationSignature(presentation: MultiuserPeerPresentationState | null | undefined): string {
+  if (!presentation) {
+    return ''
+  }
+  return [
+    getMultiuserVehiclePresentationSignature(presentation.vehicle ?? null),
+    getMultiuserCharacterPresentationSignature(presentation.character ?? null),
+  ].join('#')
+}
+
 function getMultiuserStateSignature(state: MultiuserPeerState): string {
   return [
     state.subjectType,
@@ -157,6 +212,7 @@ function getMultiuserStateSignature(state: MultiuserPeerState): string {
     state.quaternion.z,
     state.quaternion.w,
     normalizeOptionalString(state.action) ?? '',
+    getMultiuserPresentationSignature(state.presentation ?? null),
   ].join('|')
 }
 
@@ -180,6 +236,9 @@ function isMultiuserStateMeaningfullyChanged(prev: MultiuserPeerState | null, ne
     return true
   }
   if (normalizeOptionalString(prev.action) !== normalizeOptionalString(next.action)) {
+    return true
+  }
+  if (getMultiuserPresentationSignature(prev.presentation ?? null) !== getMultiuserPresentationSignature(next.presentation ?? null)) {
     return true
   }
 

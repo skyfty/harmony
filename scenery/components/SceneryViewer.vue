@@ -572,11 +572,18 @@ import { ComponentManager } from '@harmony/schema/components/componentManager';
 import {
   setActiveMultiuserRuntimeBridge,
   setActiveMultiuserSceneId,
+  type MultiuserCharacterPresentation,
+  type MultiuserCharacterAnimationPresentation,
   type MultiuserIdentity,
+  type MultiuserPeerPresentationState,
   type MultiuserPhysicsAuthorityInput,
   type MultiuserPhysicsAuthoritySnapshot,
   type MultiuserPeerSnapshot,
   type MultiuserPeerState,
+  type MultiuserPresentationQuaternionLike,
+  type MultiuserPresentationVector3Like,
+  type MultiuserVehiclePresentation,
+  type MultiuserVehicleWheelPresentation,
   type MultiuserSharedEntitySnapshot,
   type MultiuserSharedEntityState,
   type MultiuserRuntimeBridge,
@@ -2325,12 +2332,32 @@ let physicsBridgeLastFullBodySyncAtMs = 0;
 let protagonistNodeId: string | null = null;
 
 const vehicleInstances = new Map<string, VehicleInstanceWithWheels>();
+type RemoteMultiuserWheelBinding = {
+  nodeId: string | null;
+  object: THREE.Object3D | null;
+  basePosition: THREE.Vector3;
+  baseQuaternion: THREE.Quaternion;
+  baseScale: THREE.Vector3;
+};
+type RemoteMultiuserAnimationController = {
+  nodeId: string;
+  object: THREE.Object3D;
+  mixer: THREE.AnimationMixer;
+  clips: THREE.AnimationClip[];
+  defaultClip: THREE.AnimationClip | null;
+  activeAction: THREE.AnimationAction | null;
+  activeClipName: string | null;
+  activeLoop: boolean;
+  activeTimeScale: number;
+};
 type RemoteMultiuserPeerEntry = {
   root: THREE.Object3D;
   signature: string;
   targetState: MultiuserPeerState;
   displayState: MultiuserPeerState;
   ownsResources: boolean;
+  wheelBindings: RemoteMultiuserWheelBinding[];
+  animationControllers: Map<string, RemoteMultiuserAnimationController>;
 };
 type NetworkSyncNodeRuntimeEntry = {
   nodeId: string;
@@ -3511,6 +3538,10 @@ const nodeAnimationControllers = new Map<string, {
   mixer: THREE.AnimationMixer;
   clips: THREE.AnimationClip[];
   defaultClip: THREE.AnimationClip | null;
+  activeAction: THREE.AnimationAction | null;
+  activeClipName: string | null;
+  activeLoop: boolean;
+  activeTimeScale: number;
 }>();
 let animationMixers: THREE.AnimationMixer[] = [];
 let effectRuntimeTickers: Array<(delta: number) => void> = [];
@@ -10047,7 +10078,71 @@ function cloneRemoteMultiuserPeerState(state: MultiuserPeerState): MultiuserPeer
       z: state.quaternion.z,
       w: state.quaternion.w,
     },
+    presentation: cloneRemoteMultiuserPeerPresentation(state.presentation ?? null),
   };
+}
+
+function cloneRemoteMultiuserPeerPresentation(presentation: MultiuserPeerPresentationState | null | undefined): MultiuserPeerPresentationState | null {
+  if (!presentation) {
+    return null;
+  }
+  const vehicle = presentation.vehicle
+    ? {
+        wheels: Array.isArray(presentation.vehicle.wheels)
+          ? presentation.vehicle.wheels.map((wheel) => ({
+              nodeId: wheel.nodeId ?? null,
+              wheelIndex: wheel.wheelIndex,
+              position: {
+                x: wheel.position.x,
+                y: wheel.position.y,
+                z: wheel.position.z,
+              },
+              quaternion: {
+                x: wheel.quaternion.x,
+                y: wheel.quaternion.y,
+                z: wheel.quaternion.z,
+                w: wheel.quaternion.w,
+              },
+              scale: wheel.scale
+                ? {
+                    x: wheel.scale.x,
+                    y: wheel.scale.y,
+                    z: wheel.scale.z,
+                  }
+                : null,
+            }))
+          : [],
+      }
+    : null;
+  const character = presentation.character
+    ? {
+        animation: presentation.character.animation
+          ? {
+              clipName: presentation.character.animation.clipName,
+              time: presentation.character.animation.time,
+              duration: presentation.character.animation.duration,
+              loop: presentation.character.animation.loop,
+              timeScale: presentation.character.animation.timeScale,
+              normalizedTime: presentation.character.animation.normalizedTime ?? null,
+            }
+          : null,
+      }
+    : null;
+  if (!vehicle && !character) {
+    return null;
+  }
+  return {
+    vehicle,
+    character,
+  };
+}
+
+function cloneRemotePresentationVector3(value: MultiuserPresentationVector3Like): THREE.Vector3 {
+  return new THREE.Vector3(value.x, value.y, value.z);
+}
+
+function cloneRemotePresentationQuaternion(value: MultiuserPresentationQuaternionLike): THREE.Quaternion {
+  return new THREE.Quaternion(value.x, value.y, value.z, value.w);
 }
 
 function sanitizeRemoteMultiuserObject(object: THREE.Object3D): THREE.Object3D {
@@ -10058,12 +10153,26 @@ function sanitizeRemoteMultiuserObject(object: THREE.Object3D): THREE.Object3D {
   object.scale.copy(scale);
   object.name = `RemotePeer:${object.name || 'Object'}`;
   object.traverse((child) => {
-    child.userData = {
+    const sourceUserData = (child.userData ?? {}) as Record<string, unknown>;
+    const nextUserData: Record<string, unknown> = {
       remoteMultiuserPeer: true,
     };
+    if (typeof sourceUserData.nodeId === 'string' && sourceUserData.nodeId.trim().length) {
+      nextUserData.nodeId = sourceUserData.nodeId.trim();
+    }
+    if (typeof sourceUserData.nodeType === 'string' && sourceUserData.nodeType.trim().length) {
+      nextUserData.nodeType = sourceUserData.nodeType.trim();
+    }
+    if (typeof sourceUserData.sourceAssetId === 'string' && sourceUserData.sourceAssetId.trim().length) {
+      nextUserData.sourceAssetId = sourceUserData.sourceAssetId.trim();
+    }
+    if (typeof sourceUserData.sourceAssetUrl === 'string' && sourceUserData.sourceAssetUrl.trim().length) {
+      nextUserData.sourceAssetUrl = sourceUserData.sourceAssetUrl.trim();
+    }
+    child.userData = nextUserData;
     child.frustumCulled = false;
-    if ((child as THREE.Mesh).isMesh) {
-      const mesh = child as THREE.Mesh;
+    if (child instanceof THREE.Mesh) {
+      const mesh = child;
       mesh.castShadow = true;
       mesh.receiveShadow = true;
     }
@@ -10077,6 +10186,81 @@ function disposeRemoteMultiuserObject(object: THREE.Object3D, ownsResources: boo
     return;
   }
   object.parent?.remove(object);
+}
+
+function collectRemoteMultiuserWheelBindings(root: THREE.Object3D): RemoteMultiuserWheelBinding[] {
+  const bindings: RemoteMultiuserWheelBinding[] = [];
+  root.traverse((child) => {
+    const nodeId = typeof child.userData?.nodeId === 'string' ? child.userData.nodeId.trim() : '';
+    if (!nodeId || nodeId === root.userData?.nodeId) {
+      return;
+    }
+    bindings.push({
+      nodeId,
+      object: child,
+      basePosition: child.position.clone(),
+      baseQuaternion: child.quaternion.clone(),
+      baseScale: child.scale.clone(),
+    });
+  });
+  return bindings;
+}
+
+function collectRemoteMultiuserAnimationControllers(root: THREE.Object3D): Map<string, RemoteMultiuserAnimationController> {
+  const controllers = new Map<string, RemoteMultiuserAnimationController>();
+  root.traverse((object) => {
+    const nodeId = typeof object.userData?.nodeId === 'string' ? object.userData.nodeId.trim() : '';
+    if (!nodeId) {
+      return;
+    }
+    const clips = (object as unknown as { animations?: THREE.AnimationClip[] })?.animations;
+    if (!Array.isArray(clips) || !clips.length) {
+      return;
+    }
+    const validClips = clips.filter((clip): clip is THREE.AnimationClip => Boolean(clip));
+    if (!validClips.length) {
+      return;
+    }
+    const mixer = new THREE.AnimationMixer(object);
+    const defaultClip = pickDefaultAnimationClip(validClips);
+    let activeAction: THREE.AnimationAction | null = null;
+    if (defaultClip) {
+      activeAction = playAnimationClip(mixer, defaultClip, { loop: true });
+    }
+    controllers.set(nodeId, {
+      nodeId,
+      object,
+      mixer,
+      clips: validClips,
+      defaultClip,
+      activeAction,
+      activeClipName: defaultClip?.name ?? null,
+      activeLoop: true,
+      activeTimeScale: 1,
+    });
+  });
+  return controllers;
+}
+
+function attachRemoteMultiuserPeerRuntime(entry: RemoteMultiuserPeerEntry): void {
+  entry.wheelBindings = collectRemoteMultiuserWheelBindings(entry.root);
+  entry.animationControllers = collectRemoteMultiuserAnimationControllers(entry.root);
+}
+
+function releaseRemoteMultiuserPeerRuntime(entry: RemoteMultiuserPeerEntry): void {
+  entry.animationControllers.forEach((controller) => {
+    try {
+      controller.mixer.stopAllAction();
+      const root = controller.mixer.getRoot();
+      if (root) {
+        controller.mixer.uncacheRoot(root);
+      }
+    } catch (error) {
+      console.warn('[SceneryViewer] Failed to release remote multiuser animation controller', error);
+    }
+  });
+  entry.animationControllers.clear();
+  entry.wheelBindings = [];
 }
 
 function cloneRemoteMultiuserObjectFromRuntime(nodeId: string | null): THREE.Object3D | null {
@@ -10262,6 +10446,183 @@ function applyRemoteMultiuserPeerTransform(object: THREE.Object3D, state: Multiu
   object.updateMatrixWorld(true);
 }
 
+function applyRemoteMultiuserVehicleWheelState(
+  binding: RemoteMultiuserWheelBinding,
+  wheelState: MultiuserVehicleWheelPresentation,
+): void {
+  const object = binding.object;
+  if (!object) {
+    return;
+  }
+  object.position.copy(cloneRemotePresentationVector3(wheelState.position));
+  object.quaternion.copy(cloneRemotePresentationQuaternion(wheelState.quaternion));
+  if (wheelState.scale) {
+    object.scale.copy(cloneRemotePresentationVector3(wheelState.scale));
+  }
+  object.updateMatrixWorld(true);
+}
+
+function applyRemoteMultiuserVehiclePresentation(
+  entry: RemoteMultiuserPeerEntry,
+  presentation: MultiuserVehiclePresentation | null | undefined,
+  alpha: number,
+): void {
+  if (!presentation || !Array.isArray(presentation.wheels) || !presentation.wheels.length) {
+    return;
+  }
+  const wheelBindings = entry.wheelBindings;
+  if (!Array.isArray(wheelBindings) || !wheelBindings.length) {
+    return;
+  }
+  const wheelStateByNodeId = new Map<string, MultiuserVehicleWheelPresentation>();
+  presentation.wheels.forEach((wheel) => {
+    const nodeId = typeof wheel.nodeId === 'string' ? wheel.nodeId.trim() : '';
+    if (nodeId) {
+      wheelStateByNodeId.set(nodeId, wheel);
+    }
+  });
+  wheelBindings.forEach((binding, index) => {
+    const wheelState = (binding.nodeId && wheelStateByNodeId.get(binding.nodeId)) ?? presentation.wheels[index] ?? null;
+    if (!wheelState) {
+      return;
+    }
+    if (alpha >= 1 || !binding.object) {
+      applyRemoteMultiuserVehicleWheelState(binding, wheelState);
+      return;
+    }
+    const currentPosition = binding.object.position.clone();
+    const currentQuaternion = binding.object.quaternion.clone();
+    currentPosition.lerp(cloneRemotePresentationVector3(wheelState.position), alpha);
+    currentQuaternion.slerp(cloneRemotePresentationQuaternion(wheelState.quaternion), alpha);
+    binding.object.position.copy(currentPosition);
+    binding.object.quaternion.copy(currentQuaternion);
+    if (wheelState.scale) {
+      const currentScale = binding.object.scale.clone();
+      currentScale.lerp(cloneRemotePresentationVector3(wheelState.scale), alpha);
+      binding.object.scale.copy(currentScale);
+    }
+    binding.object.updateMatrixWorld(true);
+  });
+}
+
+function applyRemoteMultiuserAnimationControllerState(
+  controller: RemoteMultiuserAnimationController,
+  animation: MultiuserCharacterAnimationPresentation | null | undefined,
+  deltaSeconds: number,
+): void {
+  const mixer = controller.mixer;
+  if (!animation) {
+    mixer.update(deltaSeconds);
+    return;
+  }
+  const requestedClipName = typeof animation.clipName === 'string' && animation.clipName.trim().length
+    ? animation.clipName.trim()
+    : null;
+  const clip = requestedClipName
+    ? controller.clips.find((entry) => entry.name === requestedClipName) ?? controller.defaultClip
+    : controller.defaultClip;
+  if (!clip) {
+    mixer.update(deltaSeconds);
+    return;
+  }
+  if (controller.activeClipName !== clip.name) {
+    mixer.stopAllAction();
+    controller.activeAction = playAnimationClip(mixer, clip, { loop: Boolean(animation.loop) });
+    controller.activeClipName = clip.name ?? null;
+  }
+  if (controller.activeAction) {
+    controller.activeAction.timeScale = Number.isFinite(animation.timeScale) ? animation.timeScale : 1;
+    controller.activeTimeScale = controller.activeAction.timeScale;
+    if (Number.isFinite(animation.time)) {
+      const clipDuration = Number.isFinite(animation.duration) && animation.duration > 0 ? animation.duration : (Number.isFinite(clip.duration) ? clip.duration : 0);
+      const nextTime = Math.max(0, animation.time);
+      controller.activeAction.time = clipDuration > 0 && animation.loop ? THREE.MathUtils.euclideanModulo(nextTime, clipDuration) : nextTime;
+      controller.activeAction.clampWhenFinished = !animation.loop;
+      controller.activeLoop = animation.loop;
+      controller.activeAction.play();
+    }
+  }
+  mixer.update(deltaSeconds);
+}
+
+function interpolateRemoteMultiuserPeerPresentation(
+  display: MultiuserPeerPresentationState | null,
+  target: MultiuserPeerPresentationState | null,
+  alpha: number,
+): MultiuserPeerPresentationState | null {
+  if (!target) {
+    return null;
+  }
+  if (!display) {
+    return cloneRemoteMultiuserPeerPresentation(target);
+  }
+  const next = cloneRemoteMultiuserPeerPresentation(display) ?? cloneRemoteMultiuserPeerPresentation(target);
+  if (!next) {
+    return null;
+  }
+  if (target.vehicle?.wheels?.length) {
+    const targetWheels = target.vehicle.wheels;
+    const displayWheels = display.vehicle?.wheels ?? [];
+    next.vehicle = {
+      wheels: targetWheels.map((wheel, index) => {
+        const currentWheel = displayWheels[index] ?? wheel;
+        const position = cloneRemotePresentationVector3(currentWheel.position).lerp(cloneRemotePresentationVector3(wheel.position), alpha);
+        const quaternion = cloneRemotePresentationQuaternion(currentWheel.quaternion).slerp(cloneRemotePresentationQuaternion(wheel.quaternion), alpha);
+        const scale = wheel.scale
+          ? (currentWheel.scale
+              ? cloneRemotePresentationVector3(currentWheel.scale).lerp(cloneRemotePresentationVector3(wheel.scale), alpha)
+              : cloneRemotePresentationVector3(wheel.scale))
+          : currentWheel.scale
+            ? cloneRemotePresentationVector3(currentWheel.scale)
+            : null;
+        return {
+          nodeId: wheel.nodeId ?? null,
+          wheelIndex: wheel.wheelIndex,
+          position: {
+            x: position.x,
+            y: position.y,
+            z: position.z,
+          },
+          quaternion: {
+            x: quaternion.x,
+            y: quaternion.y,
+            z: quaternion.z,
+            w: quaternion.w,
+          },
+          scale: scale
+            ? {
+                x: scale.x,
+                y: scale.y,
+                z: scale.z,
+              }
+            : null,
+        };
+      }),
+    };
+  }
+  if (target.character?.animation) {
+    const targetAnimation = target.character.animation;
+    const displayAnimation = display.character?.animation ?? targetAnimation;
+    const clipName = targetAnimation.clipName ?? displayAnimation.clipName ?? null;
+    const time = displayAnimation.clipName === targetAnimation.clipName
+      ? displayAnimation.time + ((targetAnimation.time - displayAnimation.time) * alpha)
+      : targetAnimation.time;
+    const duration = targetAnimation.duration || displayAnimation.duration || 0;
+    const timeScale = displayAnimation.timeScale + ((targetAnimation.timeScale - displayAnimation.timeScale) * alpha);
+    next.character = {
+      animation: {
+        clipName,
+        time,
+        duration,
+        loop: targetAnimation.loop,
+        timeScale,
+        normalizedTime: duration > 0 ? time / duration : null,
+      },
+    };
+  }
+  return next;
+}
+
 function updateRemoteMultiuserPeerTransform(entry: RemoteMultiuserPeerEntry, deltaSeconds: number): void {
   const smoothingSeconds = REMOTE_MULTIUSER_SMOOTHING_SECONDS;
   const alpha = 1 - Math.exp(-Math.max(0, deltaSeconds) / smoothingSeconds);
@@ -10270,6 +10631,7 @@ function updateRemoteMultiuserPeerTransform(entry: RemoteMultiuserPeerEntry, del
   if (!displayState) {
     entry.displayState = cloneRemoteMultiuserPeerState(targetState);
     applyRemoteMultiuserPeerTransform(entry.root, targetState);
+    applyRemoteMultiuserPeerRuntime(entry, targetState, 1, deltaSeconds);
     return;
   }
 
@@ -10307,6 +10669,35 @@ function updateRemoteMultiuserPeerTransform(entry: RemoteMultiuserPeerEntry, del
   displayState.quaternion.w = remoteMultiuserDisplayQuaternionScratch.w;
 
   applyRemoteMultiuserPeerTransform(entry.root, displayState);
+  displayState.presentation = interpolateRemoteMultiuserPeerPresentation(displayState.presentation ?? null, targetState.presentation ?? null, alpha);
+  applyRemoteMultiuserPeerRuntime(entry, displayState, alpha, deltaSeconds);
+}
+
+function applyRemoteMultiuserPeerRuntime(
+  entry: RemoteMultiuserPeerEntry,
+  state: MultiuserPeerState,
+  alpha: number,
+  deltaSeconds: number,
+): void {
+  if (!state.presentation) {
+    entry.animationControllers.forEach((controller) => {
+      controller.mixer.update(deltaSeconds);
+    });
+    return;
+  }
+  if (state.subjectType === 'vehicle') {
+    applyRemoteMultiuserVehiclePresentation(entry, state.presentation.vehicle ?? null, alpha);
+  }
+  const animation = state.presentation.character?.animation ?? null;
+  if (animation) {
+    entry.animationControllers.forEach((controller) => {
+      applyRemoteMultiuserAnimationControllerState(controller, animation, deltaSeconds);
+    });
+    return;
+  }
+  entry.animationControllers.forEach((controller) => {
+    controller.mixer.update(deltaSeconds);
+  });
 }
 
 function updateRemoteMultiuserPeers(deltaSeconds: number): void {
@@ -10324,6 +10715,7 @@ function removeRemoteMultiuserPeer(userId: string): void {
     return;
   }
   entry.root.parent?.remove(entry.root);
+  releaseRemoteMultiuserPeerRuntime(entry);
   disposeRemoteMultiuserObject(entry.root, entry.ownsResources);
   remoteMultiuserPeerEntries.delete(userId);
   remoteMultiuserPeerLoadTokens.delete(userId);
@@ -10333,6 +10725,7 @@ function removeRemoteMultiuserPeer(userId: string): void {
 function clearRemoteMultiuserPeers(): void {
   remoteMultiuserPeerEntries.forEach((entry) => {
     entry.root.parent?.remove(entry.root);
+    releaseRemoteMultiuserPeerRuntime(entry);
     disposeRemoteMultiuserObject(entry.root, entry.ownsResources);
   });
   remoteMultiuserPeerEntries.clear();
@@ -11034,6 +11427,8 @@ function handleRemoteMultiuserPeerSnapshot(peer: MultiuserPeerSnapshot): void {
     targetState: cloneRemoteMultiuserPeerState(peer.state),
     displayState: cloneRemoteMultiuserPeerState(peer.state),
     ownsResources: true,
+    wheelBindings: [],
+    animationControllers: new Map(),
   });
   markInstancedCullingDirty();
 
@@ -11049,12 +11444,19 @@ function handleRemoteMultiuserPeerSnapshot(peer: MultiuserPeerSnapshot): void {
     }
     const currentRoot = latestEntry.root;
     currentRoot.parent?.remove(currentRoot);
+    releaseRemoteMultiuserPeerRuntime(latestEntry);
     disposeRemoteMultiuserObject(currentRoot, latestEntry.ownsResources);
     object.name = `RemotePeer:${peer.userId}`;
     latestRoot.add(object);
     applyRemoteMultiuserPeerTransform(object, latestEntry.displayState ?? latestEntry.targetState);
-    remoteMultiuserPeerEntries.set(peer.userId, {
+    const runtimeEntry = {
+      ...latestEntry,
       root: object,
+    };
+    attachRemoteMultiuserPeerRuntime(runtimeEntry);
+    applyRemoteMultiuserPeerRuntime(runtimeEntry, runtimeEntry.displayState ?? runtimeEntry.targetState, 1, 0);
+    remoteMultiuserPeerEntries.set(peer.userId, {
+      ...runtimeEntry,
       signature,
       targetState: cloneRemoteMultiuserPeerState(latestEntry.targetState),
       displayState: cloneRemoteMultiuserPeerState(latestEntry.displayState ?? latestEntry.targetState),
@@ -11064,6 +11466,74 @@ function handleRemoteMultiuserPeerSnapshot(peer: MultiuserPeerSnapshot): void {
   }).catch((error) => {
     console.warn('[SceneryViewer] Failed to create remote multiuser peer object', error);
   });
+}
+
+function resolveLocalMultiuserVehiclePresentation(nodeId: string): MultiuserVehiclePresentation | null {
+  const vehicleInstance = vehicleInstances.get(nodeId) ?? null;
+  if (!vehicleInstance || !Array.isArray(vehicleInstance.wheelBindings) || !vehicleInstance.wheelBindings.length) {
+    return null;
+  }
+  const wheels: MultiuserVehicleWheelPresentation[] = [];
+  const wheelBindings = vehicleInstance.wheelBindings as VehicleWheelBinding[];
+  wheelBindings.forEach((binding: VehicleWheelBinding, wheelIndex: number) => {
+    const object = binding.object ?? (binding.nodeId ? nodeObjectMap.get(binding.nodeId) ?? null : null);
+    if (!object) {
+      return;
+    }
+    object.updateMatrixWorld(true);
+    wheels.push({
+      nodeId: binding.nodeId ?? null,
+      wheelIndex,
+      position: {
+        x: object.position.x,
+        y: object.position.y,
+        z: object.position.z,
+      },
+      quaternion: {
+        x: object.quaternion.x,
+        y: object.quaternion.y,
+        z: object.quaternion.z,
+        w: object.quaternion.w,
+      },
+      scale: {
+        x: object.scale.x,
+        y: object.scale.y,
+        z: object.scale.z,
+      },
+    });
+  });
+  if (!wheels.length) {
+    return null;
+  }
+  return { wheels };
+}
+
+function resolveLocalMultiuserCharacterPresentation(nodeId: string): MultiuserCharacterPresentation | null {
+  const controller = nodeAnimationControllers.get(nodeId) ?? null;
+  if (!controller) {
+    return null;
+  }
+  const action = controller.activeAction ?? null;
+  const clip = controller.clips.find((entry) => entry.name === controller.activeClipName)
+    ?? controller.defaultClip
+    ?? action?.getClip()
+    ?? null;
+  if (!action || !clip) {
+    return null;
+  }
+  const duration = Number.isFinite(clip.duration) && clip.duration > 0 ? clip.duration : 0;
+  const time = Number.isFinite(action.time) ? action.time : 0;
+  const timeScale = Number.isFinite(action.timeScale) ? action.timeScale : controller.activeTimeScale || 1;
+  return {
+    animation: {
+      clipName: clip.name?.trim().length ? clip.name : null,
+      time,
+      duration,
+      loop: controller.activeLoop,
+      timeScale,
+      normalizedTime: duration > 0 ? time / duration : null,
+    },
+  };
 }
 
 function resolveLocalMultiuserPeerState(): MultiuserPeerState | null {
@@ -11102,6 +11572,10 @@ function resolveLocalMultiuserPeerState(): MultiuserPeerState | null {
           z: protagonistPoseQuaternion.z,
           w: protagonistPoseQuaternion.w,
         },
+        presentation: {
+          vehicle: resolveLocalMultiuserVehiclePresentation(nodeId),
+          character: null,
+        },
       };
     }
   }
@@ -11130,6 +11604,10 @@ function resolveLocalMultiuserPeerState(): MultiuserPeerState | null {
       y: protagonistPoseQuaternion.y,
       z: protagonistPoseQuaternion.z,
       w: protagonistPoseQuaternion.w,
+    },
+    presentation: {
+      vehicle: null,
+      character: resolveLocalMultiuserCharacterPresentation(resolvedNodeId),
     },
   };
 }
@@ -11623,7 +12101,10 @@ function restartDefaultAnimation(nodeId: string): void {
     return;
   }
   controller.defaultClip = clip;
-  playAnimationClip(controller.mixer, clip, { loop: true });
+  controller.activeAction = playAnimationClip(controller.mixer, clip, { loop: true });
+  controller.activeClipName = clip.name ?? null;
+  controller.activeLoop = true;
+  controller.activeTimeScale = controller.activeAction.timeScale;
 }
 
 function refreshAnimationControllers(root: THREE.Object3D): void {
@@ -11646,9 +12127,18 @@ function refreshAnimationControllers(root: THREE.Object3D): void {
     mixer.timeScale = 1;
     mixers.push(mixer);
     const defaultClip = pickDefaultAnimationClip(validClips);
-    nodeAnimationControllers.set(nodeId, { mixer, clips: validClips, defaultClip });
+    const activeAction = defaultClip ? playAnimationClip(mixer, defaultClip, { loop: true }) : null;
+    nodeAnimationControllers.set(nodeId, {
+      mixer,
+      clips: validClips,
+      defaultClip,
+      activeAction,
+      activeClipName: defaultClip?.name ?? null,
+      activeLoop: true,
+      activeTimeScale: 1,
+    });
     if (defaultClip) {
-      playAnimationClip(mixer, defaultClip, { loop: true });
+      // already playing above
     }
   });
   animationMixers = mixers;
@@ -11760,6 +12250,10 @@ function handlePlayAnimationEvent(event: Extract<BehaviorRuntimeEvent, { type: '
   const mixer = controller.mixer;
   mixer.stopAllAction();
   const action = playAnimationClip(mixer, clip, { loop: Boolean(event.loop) });
+  controller.activeAction = action;
+  controller.activeClipName = clip.name ?? null;
+  controller.activeLoop = Boolean(event.loop);
+  controller.activeTimeScale = action.timeScale;
   const token = event.token;
   if (!token) {
     return;

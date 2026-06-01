@@ -13,6 +13,49 @@ export interface MultiuserIdentity {
   displayName?: string | null
 }
 
+export interface MultiuserPresentationVector3Like {
+  x: number
+  y: number
+  z: number
+}
+
+export interface MultiuserPresentationQuaternionLike {
+  x: number
+  y: number
+  z: number
+  w: number
+}
+
+export interface MultiuserVehicleWheelPresentation {
+  nodeId?: string | null
+  wheelIndex: number
+  position: MultiuserPresentationVector3Like
+  quaternion: MultiuserPresentationQuaternionLike
+  scale?: MultiuserPresentationVector3Like | null
+}
+
+export interface MultiuserVehiclePresentation {
+  wheels: MultiuserVehicleWheelPresentation[]
+}
+
+export interface MultiuserCharacterAnimationPresentation {
+  clipName: string | null
+  time: number
+  duration: number
+  loop: boolean
+  timeScale: number
+  normalizedTime?: number | null
+}
+
+export interface MultiuserCharacterPresentation {
+  animation: MultiuserCharacterAnimationPresentation | null
+}
+
+export interface MultiuserPeerPresentationState {
+  vehicle?: MultiuserVehiclePresentation | null
+  character?: MultiuserCharacterPresentation | null
+}
+
 export interface MultiuserPeerState {
   subjectType: MultiuserSubjectType
   subjectNodeId: string | null
@@ -22,6 +65,7 @@ export interface MultiuserPeerState {
   position: MultiuserVector3Like
   quaternion: MultiuserQuaternionLike
   action?: string | null
+  presentation?: MultiuserPeerPresentationState | null
 }
 
 export interface MultiuserPeerSnapshot {
