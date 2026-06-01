@@ -61,6 +61,7 @@ export interface ScenePackageSceneSummary {
 
 export interface ScenePackageMultiuserSceneSummary {
   enabledNodeCount: number;
+  maxVisiblePeers?: number | null;
   maxUsers?: number | null;
   nodeCount: number;
   replicatedNodeCount: number;

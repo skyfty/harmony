@@ -693,6 +693,17 @@ import {
   ONLINE_COMPONENT_TYPE,
 } from '@harmony/schema/components/definitions/onlineComponent';
 import {
+  DEFAULT_REMOTE_MULTIUSER_VISIBLE_PEERS,
+  getRemoteMultiuserPeerSelectionRadius,
+  createRemoteMultiuserPeerVisibilityState,
+  markRemoteMultiuserPeerHidden,
+  markRemoteMultiuserPeerVisible,
+  REMOTE_MULTIUSER_MIN_RESIDENCY_FRAMES,
+  resolveMultiuserVisiblePeerLimit,
+  shouldKeepRemoteMultiuserPeerVisible,
+  type RemoteMultiuserPeerVisibilityState,
+} from '@harmony/schema/multiuserPeerVisibility';
+import {
   networkSyncComponentDefinition,
   NETWORK_SYNC_COMPONENT_TYPE,
   clampNetworkSyncComponentProps,
@@ -1527,6 +1538,8 @@ const cameraFrameSnapshotPosition = new THREE.Vector3();
 const cameraFrameSnapshotQuaternion = new THREE.Quaternion();
 let renderContext: RenderContext | null = null;
 let currentDocument: SceneJsonExportDocument | null = null;
+let remoteMultiuserVisiblePeerLimit = DEFAULT_REMOTE_MULTIUSER_VISIBLE_PEERS;
+let remoteMultiuserVisibilityFrame = 0;
 const pendingRuntimePrefabSpawnRequests: RuntimePrefabSpawnRequest[] = [];
 const appliedRuntimePrefabSpawnKeys = new Set<string>();
 const spawnedRuntimePrefabRoots = new Map<string, { root: THREE.Object3D; mode: RuntimePrefabInitializationMode }>();
@@ -2350,14 +2363,16 @@ type RemoteMultiuserAnimationController = {
   activeLoop: boolean;
   activeTimeScale: number;
 };
-type RemoteMultiuserPeerEntry = {
-  root: THREE.Object3D;
+type RemoteMultiuserPeerEntry = RemoteMultiuserPeerVisibilityState & {
+  root: THREE.Object3D | null;
   signature: string;
   targetState: MultiuserPeerState;
-  displayState: MultiuserPeerState;
+  displayState: MultiuserPeerState | null;
   ownsResources: boolean;
   wheelBindings: RemoteMultiuserWheelBinding[];
   animationControllers: Map<string, RemoteMultiuserAnimationController>;
+  rootSignature: string;
+  loadToken: number;
 };
 type NetworkSyncNodeRuntimeEntry = {
   nodeId: string;
@@ -2403,6 +2418,7 @@ const remoteMultiuserDisplayPositionScratch = new THREE.Vector3();
 const remoteMultiuserTargetPositionScratch = new THREE.Vector3();
 const remoteMultiuserDisplayQuaternionScratch = new THREE.Quaternion();
 const remoteMultiuserTargetQuaternionScratch = new THREE.Quaternion();
+const remoteMultiuserCameraPositionScratch = new THREE.Vector3();
 const remoteSharedEntityDisplayScaleScratch = new THREE.Vector3();
 const remoteSharedEntityTargetScaleScratch = new THREE.Vector3();
 const remotePhysicsAuthorityTargetPositionScratch = new THREE.Vector3();
@@ -5675,6 +5691,7 @@ function collectMultiuserNodeIds(nodes: SceneNode[] | undefined | null, collecto
 function refreshMultiuserNodeReferences(document: SceneJsonExportDocument | null): void {
   multiuserNodeIds.clear();
   multiuserNodeObjects.clear();
+  remoteMultiuserVisiblePeerLimit = resolveMultiuserVisiblePeerLimit(document);
   if (!document) {
     return;
   }
@@ -10048,6 +10065,31 @@ function ensureRemoteMultiuserPeerRoot(): THREE.Group | null {
   return remoteMultiuserPeerRoot;
 }
 
+function hideRemoteMultiuserPeer(entry: RemoteMultiuserPeerEntry): void {
+  if (entry.root) {
+    entry.root.parent?.remove(entry.root);
+  }
+  releaseRemoteMultiuserPeerRuntime(entry);
+  markRemoteMultiuserPeerHidden(entry);
+  entry.displayState = null;
+  markInstancedCullingDirty();
+}
+
+function createRemoteMultiuserPeerPlaceholderEntry(peerState: MultiuserPeerState): RemoteMultiuserPeerEntry {
+  return {
+    ...createRemoteMultiuserPeerVisibilityState(),
+    root: null,
+    signature: getRemoteMultiuserPeerSignature(peerState),
+    targetState: cloneRemoteMultiuserPeerState(peerState),
+    displayState: null,
+    ownsResources: true,
+    wheelBindings: [],
+    animationControllers: new Map(),
+    rootSignature: '',
+    loadToken: 0,
+  };
+}
+
 function createRemoteMultiuserPlaceholder(subjectType: 'vehicle' | 'character'): THREE.Object3D {
   const color = subjectType === 'vehicle' ? 0xffb300 : 0x4d9bff;
   const geometry = new THREE.CapsuleGeometry(0.32, 0.9, 4, 8);
@@ -10243,6 +10285,11 @@ function collectRemoteMultiuserAnimationControllers(root: THREE.Object3D): Map<s
 }
 
 function attachRemoteMultiuserPeerRuntime(entry: RemoteMultiuserPeerEntry): void {
+  if (!entry.root) {
+    entry.wheelBindings = [];
+    entry.animationControllers = new Map();
+    return;
+  }
   entry.wheelBindings = collectRemoteMultiuserWheelBindings(entry.root);
   entry.animationControllers = collectRemoteMultiuserAnimationControllers(entry.root);
 }
@@ -10630,7 +10677,9 @@ function updateRemoteMultiuserPeerTransform(entry: RemoteMultiuserPeerEntry, del
   const displayState = entry.displayState;
   if (!displayState) {
     entry.displayState = cloneRemoteMultiuserPeerState(targetState);
-    applyRemoteMultiuserPeerTransform(entry.root, targetState);
+    if (entry.root) {
+      applyRemoteMultiuserPeerTransform(entry.root, targetState);
+    }
     applyRemoteMultiuserPeerRuntime(entry, targetState, 1, deltaSeconds);
     return;
   }
@@ -10668,7 +10717,9 @@ function updateRemoteMultiuserPeerTransform(entry: RemoteMultiuserPeerEntry, del
   displayState.quaternion.z = remoteMultiuserDisplayQuaternionScratch.z;
   displayState.quaternion.w = remoteMultiuserDisplayQuaternionScratch.w;
 
-  applyRemoteMultiuserPeerTransform(entry.root, displayState);
+  if (entry.root) {
+    applyRemoteMultiuserPeerTransform(entry.root, displayState);
+  }
   displayState.presentation = interpolateRemoteMultiuserPeerPresentation(displayState.presentation ?? null, targetState.presentation ?? null, alpha);
   applyRemoteMultiuserPeerRuntime(entry, displayState, alpha, deltaSeconds);
 }
@@ -10700,11 +10751,189 @@ function applyRemoteMultiuserPeerRuntime(
   });
 }
 
+function disposeRemoteMultiuserPeerRender(entry: RemoteMultiuserPeerEntry): void {
+  if (entry.root) {
+    entry.root.parent?.remove(entry.root);
+    releaseRemoteMultiuserPeerRuntime(entry);
+    disposeRemoteMultiuserObject(entry.root, entry.ownsResources);
+  }
+  entry.root = null;
+  entry.visible = false;
+  entry.displayState = null;
+  entry.rootSignature = '';
+}
+
+function attachRemoteMultiuserPeerRender(entry: RemoteMultiuserPeerEntry, frameIndex: number): void {
+  if (!entry.root) {
+    return;
+  }
+  const root = ensureRemoteMultiuserPeerRoot();
+  if (!root) {
+    return;
+  }
+  if (entry.root.parent !== root) {
+    entry.root.parent?.remove(entry.root);
+    root.add(entry.root);
+  }
+  if (!entry.wheelBindings.length && !entry.animationControllers.size) {
+    attachRemoteMultiuserPeerRuntime(entry);
+  }
+  const displayState = entry.displayState ?? cloneRemoteMultiuserPeerState(entry.targetState);
+  entry.displayState = displayState;
+  applyRemoteMultiuserPeerTransform(entry.root, displayState);
+  applyRemoteMultiuserPeerRuntime(entry, displayState, 1, 0);
+  markRemoteMultiuserPeerVisible(entry, frameIndex);
+  markInstancedCullingDirty();
+}
+
+function ensureRemoteMultiuserPeerVisible(userId: string, entry: RemoteMultiuserPeerEntry, frameIndex: number): void {
+  const root = ensureRemoteMultiuserPeerRoot();
+  if (entry.root && entry.rootSignature === entry.signature) {
+    if (!entry.visible || (root && entry.root.parent !== root)) {
+      attachRemoteMultiuserPeerRender(entry, frameIndex);
+    }
+    return;
+  }
+
+  if (entry.root && entry.rootSignature !== entry.signature) {
+    disposeRemoteMultiuserPeerRender(entry);
+  } else if (entry.visible && entry.root) {
+    disposeRemoteMultiuserPeerRender(entry);
+  }
+
+  if (!root) {
+    return;
+  }
+
+  const currentLoadToken = (remoteMultiuserPeerLoadTokens.get(userId) ?? 0) + 1;
+  remoteMultiuserPeerLoadTokens.set(userId, currentLoadToken);
+  entry.loadToken = currentLoadToken;
+
+  const placeholder = createRemoteMultiuserPlaceholder(entry.targetState.subjectType);
+  placeholder.name = `RemotePeer:${userId}`;
+  root.add(placeholder);
+  applyRemoteMultiuserPeerTransform(placeholder, entry.displayState ?? entry.targetState);
+  entry.root = placeholder;
+  entry.rootSignature = entry.signature;
+  entry.ownsResources = true;
+  entry.wheelBindings = [];
+  entry.animationControllers = new Map();
+  entry.displayState = cloneRemoteMultiuserPeerState(entry.displayState ?? entry.targetState);
+  markRemoteMultiuserPeerVisible(entry, frameIndex);
+  markInstancedCullingDirty();
+
+  void createRemoteMultiuserPeerObject(entry.targetState).then(({ object, ownsResources }) => {
+    if (remoteMultiuserPeerLoadTokens.get(userId) !== currentLoadToken) {
+      disposeRemoteMultiuserObject(object, ownsResources);
+      return;
+    }
+    const latestEntry = remoteMultiuserPeerEntries.get(userId) ?? null;
+    if (!latestEntry || latestEntry.signature !== entry.signature || !latestEntry.visible) {
+      disposeRemoteMultiuserObject(object, ownsResources);
+      return;
+    }
+    const currentRoot = latestEntry.root;
+    if (currentRoot) {
+      currentRoot.parent?.remove(currentRoot);
+      releaseRemoteMultiuserPeerRuntime(latestEntry);
+      disposeRemoteMultiuserObject(currentRoot, latestEntry.ownsResources);
+    }
+    object.name = `RemotePeer:${userId}`;
+    root.add(object);
+    applyRemoteMultiuserPeerTransform(object, latestEntry.displayState ?? latestEntry.targetState);
+    const runtimeEntry: RemoteMultiuserPeerEntry = {
+      ...latestEntry,
+      root: object,
+      ownsResources,
+      rootSignature: latestEntry.signature,
+    };
+    attachRemoteMultiuserPeerRuntime(runtimeEntry);
+    applyRemoteMultiuserPeerRuntime(runtimeEntry, runtimeEntry.displayState ?? runtimeEntry.targetState, 1, 0);
+    markRemoteMultiuserPeerVisible(runtimeEntry, frameIndex);
+    remoteMultiuserPeerEntries.set(userId, runtimeEntry);
+    markInstancedCullingDirty();
+  }).catch((error) => {
+    console.warn('[SceneryViewer] Failed to create remote multiuser peer object', error);
+  });
+}
+
+function syncRemoteMultiuserPeerVisibility(camera?: THREE.Camera | null): void {
+  const activeCamera = camera ?? renderContext?.camera ?? null;
+  if (!activeCamera) {
+    return;
+  }
+  remoteMultiuserVisibilityFrame += 1;
+  const frameIndex = remoteMultiuserVisibilityFrame;
+  const visibleCandidates: Array<{
+    userId: string;
+    entry: RemoteMultiuserPeerEntry;
+    distanceSq: number;
+    stayPriority: number;
+    residencyPriority: number;
+  }> = [];
+
+  cameraViewFrustum.setFromProjectionMatrix(tempCameraMatrix.multiplyMatrices(activeCamera.projectionMatrix, activeCamera.matrixWorldInverse));
+  activeCamera.getWorldPosition(remoteMultiuserCameraPositionScratch);
+  remoteMultiuserPeerEntries.forEach((entry, userId) => {
+    const state = entry.targetState;
+    remoteMultiuserTargetPositionScratch.set(state.position.x, state.position.y, state.position.z);
+    tempSphere.center.copy(remoteMultiuserTargetPositionScratch);
+    tempSphere.radius = getRemoteMultiuserPeerSelectionRadius(state);
+    const inFrustum = cameraViewFrustum.intersectsSphere(tempSphere);
+    if (inFrustum) {
+      entry.lastInFrustumFrame = frameIndex;
+    } else {
+      entry.lastOutFrustumFrame = frameIndex;
+    }
+    if (!shouldKeepRemoteMultiuserPeerVisible(entry, frameIndex)) {
+      if (entry.visible) {
+        disposeRemoteMultiuserPeerRender(entry);
+      }
+      return;
+    }
+    const dx = remoteMultiuserTargetPositionScratch.x - remoteMultiuserCameraPositionScratch.x;
+    const dy = remoteMultiuserTargetPositionScratch.y - remoteMultiuserCameraPositionScratch.y;
+    const dz = remoteMultiuserTargetPositionScratch.z - remoteMultiuserCameraPositionScratch.z;
+    const distanceSq = (dx * dx) + (dy * dy) + (dz * dz);
+    visibleCandidates.push({
+      userId,
+      entry,
+      distanceSq,
+      stayPriority: entry.visible ? 0 : 1,
+      residencyPriority: entry.visible && frameIndex - entry.visibleSinceFrame <= REMOTE_MULTIUSER_MIN_RESIDENCY_FRAMES ? 0 : 1,
+    });
+  });
+
+  visibleCandidates.sort((a, b) => a.residencyPriority - b.residencyPriority || a.stayPriority - b.stayPriority || a.distanceSq - b.distanceSq);
+  const selected = new Set<string>();
+  const visibleLimit = Math.max(0, Math.min(remoteMultiuserVisiblePeerLimit, visibleCandidates.length));
+  for (let index = 0; index < visibleLimit; index += 1) {
+    const candidate = visibleCandidates[index];
+    if (!candidate) {
+      continue;
+    }
+    selected.add(candidate.userId);
+  }
+
+  remoteMultiuserPeerEntries.forEach((entry, userId) => {
+    if (!selected.has(userId)) {
+      if (entry.visible) {
+        hideRemoteMultiuserPeer(entry);
+      }
+      return;
+    }
+    ensureRemoteMultiuserPeerVisible(userId, entry, frameIndex);
+  });
+}
+
 function updateRemoteMultiuserPeers(deltaSeconds: number): void {
   if (!remoteMultiuserPeerEntries.size || deltaSeconds <= 0) {
     return;
   }
   remoteMultiuserPeerEntries.forEach((entry) => {
+    if (!entry.visible) {
+      return;
+    }
     updateRemoteMultiuserPeerTransform(entry, deltaSeconds);
   });
 }
@@ -10714,19 +10943,16 @@ function removeRemoteMultiuserPeer(userId: string): void {
   if (!entry) {
     return;
   }
-  entry.root.parent?.remove(entry.root);
-  releaseRemoteMultiuserPeerRuntime(entry);
-  disposeRemoteMultiuserObject(entry.root, entry.ownsResources);
+  disposeRemoteMultiuserPeerRender(entry);
   remoteMultiuserPeerEntries.delete(userId);
   remoteMultiuserPeerLoadTokens.delete(userId);
+  syncRemoteMultiuserPeerVisibility();
   markInstancedCullingDirty();
 }
 
 function clearRemoteMultiuserPeers(): void {
   remoteMultiuserPeerEntries.forEach((entry) => {
-    entry.root.parent?.remove(entry.root);
-    releaseRemoteMultiuserPeerRuntime(entry);
-    disposeRemoteMultiuserObject(entry.root, entry.ownsResources);
+    disposeRemoteMultiuserPeerRender(entry);
   });
   remoteMultiuserPeerEntries.clear();
   remoteMultiuserPeerLoadTokens.clear();
@@ -11396,10 +11622,6 @@ function handleRemoteMultiuserPeerSnapshot(peer: MultiuserPeerSnapshot): void {
     removeRemoteMultiuserPeer(peer.userId);
     return;
   }
-  const root = ensureRemoteMultiuserPeerRoot();
-  if (!root) {
-    return;
-  }
   const signature = getRemoteMultiuserPeerSignature(peer.state);
   const existing = remoteMultiuserPeerEntries.get(peer.userId) ?? null;
   if (existing && existing.signature === signature) {
@@ -11407,65 +11629,19 @@ function handleRemoteMultiuserPeerSnapshot(peer: MultiuserPeerSnapshot): void {
     if (!existing.displayState) {
       existing.displayState = cloneRemoteMultiuserPeerState(peer.state);
     }
+    syncRemoteMultiuserPeerVisibility();
     return;
   }
-  removeRemoteMultiuserPeer(peer.userId);
-  const loadToken = (remoteMultiuserPeerLoadTokens.get(peer.userId) ?? 0) + 1;
-  remoteMultiuserPeerLoadTokens.set(peer.userId, loadToken);
-  const latestRoot = ensureRemoteMultiuserPeerRoot();
-  if (!latestRoot) {
-    return;
+  const nextEntry = existing ?? createRemoteMultiuserPeerPlaceholderEntry(peer.state);
+  nextEntry.signature = signature;
+  nextEntry.targetState = cloneRemoteMultiuserPeerState(peer.state);
+  nextEntry.displayState = nextEntry.displayState ?? cloneRemoteMultiuserPeerState(peer.state);
+  if (existing) {
+    remoteMultiuserPeerEntries.set(peer.userId, nextEntry);
+  } else {
+    remoteMultiuserPeerEntries.set(peer.userId, nextEntry);
   }
-
-  const placeholder = createRemoteMultiuserPlaceholder(peer.state.subjectType);
-  placeholder.name = `RemotePeer:${peer.userId}`;
-  latestRoot.add(placeholder);
-  applyRemoteMultiuserPeerTransform(placeholder, peer.state);
-  remoteMultiuserPeerEntries.set(peer.userId, {
-    root: placeholder,
-    signature,
-    targetState: cloneRemoteMultiuserPeerState(peer.state),
-    displayState: cloneRemoteMultiuserPeerState(peer.state),
-    ownsResources: true,
-    wheelBindings: [],
-    animationControllers: new Map(),
-  });
-  markInstancedCullingDirty();
-
-  void createRemoteMultiuserPeerObject(peer.state).then(({ object, ownsResources }) => {
-    if (remoteMultiuserPeerLoadTokens.get(peer.userId) !== loadToken) {
-      disposeRemoteMultiuserObject(object, ownsResources);
-      return;
-    }
-    const latestEntry = remoteMultiuserPeerEntries.get(peer.userId) ?? null;
-    if (!latestEntry || latestEntry.signature !== signature) {
-      disposeRemoteMultiuserObject(object, ownsResources);
-      return;
-    }
-    const currentRoot = latestEntry.root;
-    currentRoot.parent?.remove(currentRoot);
-    releaseRemoteMultiuserPeerRuntime(latestEntry);
-    disposeRemoteMultiuserObject(currentRoot, latestEntry.ownsResources);
-    object.name = `RemotePeer:${peer.userId}`;
-    latestRoot.add(object);
-    applyRemoteMultiuserPeerTransform(object, latestEntry.displayState ?? latestEntry.targetState);
-    const runtimeEntry = {
-      ...latestEntry,
-      root: object,
-    };
-    attachRemoteMultiuserPeerRuntime(runtimeEntry);
-    applyRemoteMultiuserPeerRuntime(runtimeEntry, runtimeEntry.displayState ?? runtimeEntry.targetState, 1, 0);
-    remoteMultiuserPeerEntries.set(peer.userId, {
-      ...runtimeEntry,
-      signature,
-      targetState: cloneRemoteMultiuserPeerState(latestEntry.targetState),
-      displayState: cloneRemoteMultiuserPeerState(latestEntry.displayState ?? latestEntry.targetState),
-      ownsResources,
-    });
-    markInstancedCullingDirty();
-  }).catch((error) => {
-    console.warn('[SceneryViewer] Failed to create remote multiuser peer object', error);
-  });
+  syncRemoteMultiuserPeerVisibility();
 }
 
 function resolveLocalMultiuserVehiclePresentation(nodeId: string): MultiuserVehiclePresentation | null {
@@ -16701,6 +16877,7 @@ function startRenderLoop(
           stepSceneryPhysicsBridge(deltaSeconds);
           updateVehicleSpeedFromVehicle();
           updateVehicleWheelVisuals(deltaSeconds);
+          syncRemoteMultiuserPeerVisibility(camera);
           updateRemoteMultiuserPeers(deltaSeconds);
           updateRemoteSharedEntityTransforms(deltaSeconds);
           updateRemotePhysicsAuthorityTransforms(deltaSeconds);

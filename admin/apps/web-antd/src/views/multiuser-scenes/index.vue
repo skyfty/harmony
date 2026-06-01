@@ -32,6 +32,7 @@ function resolveMultiuserSummary(row: SceneItem) {
     port: primaryScene?.port ?? null,
     syncInterval: primaryScene?.syncInterval ?? null,
     maxUsers: primaryScene?.maxUsers ?? null,
+    maxVisiblePeers: primaryScene?.maxVisiblePeers ?? null,
   };
 }
 
@@ -76,6 +77,7 @@ const [MultiuserGrid] = useVbenVxeGrid<MultiuserRow>({
       { field: 'multiuserSummary.physicsAuthorityNodeCount', minWidth: 130, title: '权威物理节点' },
       { field: 'multiuserSummary.server', minWidth: 190, title: '服务器', slots: { default: 'server' } },
       { field: 'multiuserSummary.syncInterval', minWidth: 120, title: '同步间隔(ms)' },
+      { field: 'multiuserSummary.maxVisiblePeers', minWidth: 120, title: '可见上限' },
       { field: 'multiuserSummary.maxUsers', minWidth: 100, title: '上限' },
       { field: 'updatedAt', minWidth: 180, sortable: true, formatter: 'formatDateTime', title: '更新时间' },
       {

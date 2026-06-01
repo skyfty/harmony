@@ -163,6 +163,12 @@ import { hasWallInstancedBindings, syncWallInstancedBindingsForObject } from '@s
 import { applyMirroredScaleToObject, syncMirroredMeshMaterials } from '@schema/mirror'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { ComponentManager } from '@schema/components/componentManager'
+import { onlineComponentDefinition } from '@schema/components/definitions/onlineComponent'
+import { setActiveMultiuserSceneId } from '@schema/multiuserContext'
+import {
+	DEFAULT_REMOTE_MULTIUSER_VISIBLE_PEERS,
+	resolveMultiuserVisiblePeerLimit,
+} from '@schema/multiuserPeerVisibility'
 import {
 	behaviorComponentDefinition,
 	billboardComponentDefinition,
@@ -358,6 +364,7 @@ const isLiveUpdatesDisabled = computed(() => Boolean(liveUpdatesDisabledSourceUr
 
 let pendingEnvironmentSettings: EnvironmentSettings | null = null
 let currentScenePreviewEnvironmentSettings: EnvironmentSettings | null = null
+const scenePreviewMultiuserVisiblePeerLimit = ref(DEFAULT_REMOTE_MULTIUSER_VISIBLE_PEERS)
 
 // LOD debug helpers removed
 
@@ -373,6 +380,11 @@ function switchToLivePreviewMode(): void {
 	} catch {
 		// ignore
 	}
+}
+
+function refreshScenePreviewMultiuserContext(document: SceneJsonExportDocument | null | undefined): void {
+	scenePreviewMultiuserVisiblePeerLimit.value = resolveMultiuserVisiblePeerLimit(document ?? null)
+	setActiveMultiuserSceneId(document?.id ?? null)
 }
 
 type ScenePreviewProject = {
@@ -1200,6 +1212,7 @@ previewComponentManager.registerDefinition(autoTourComponentDefinition)
 previewComponentManager.registerDefinition(purePursuitComponentDefinition)
 previewComponentManager.registerDefinition(sceneStateAnchorComponentDefinition)
 previewComponentManager.registerDefinition(nominateComponentDefinition)
+previewComponentManager.registerDefinition(onlineComponentDefinition)
 
 const previewNodeMap = new Map<string, SceneNode>()
 const previewParentMap = new Map<string, string | null>()
@@ -13158,6 +13171,7 @@ async function applyInitialDocumentGraph(
 ): Promise<void> {
 	disposeScene({ preservePreviewNodeMap: true })
 	currentDocument = document
+	refreshScenePreviewMultiuserContext(document)
 	attachBuiltRootToPreview(previewRoot, builtRoot, pendingObjects)
 	setSceneInitState({
 		stage: 'syncingPhysics',
@@ -13222,6 +13236,7 @@ async function updateScene(document: SceneJsonExportDocument) {
 	await hydrateScenePreviewCompiledGroundPackage(document)
 
 	refreshResourceAssetInfo(document)
+	refreshScenePreviewMultiuserContext(document)
 	disposeSkyResources()
 	if (renderer) {
 		renderer.toneMappingExposure = DEFAULT_TONE_MAPPING_EXPOSURE
@@ -13498,6 +13513,7 @@ onBeforeUnmount(() => {
 	if (typeof window !== 'undefined') {
 		window.removeEventListener('harmony-preview-nominate-change', syncPreviewNominateStateMap)
 	}
+	setActiveMultiuserSceneId(null)
 	clearRuntimePrefabPreviewRoots()
 	scenePreviewCompiledGroundPackage = null
 	scenePreviewCompiledGroundPackageCacheState = null
@@ -13634,6 +13650,9 @@ watch(
 				v-if="isDebugOverlayVisible"
 				class="scene-preview__debug-overlay"
 			>
+				<div class="scene-preview__stats-fallback">
+					Multiuser visible peers max: {{ scenePreviewMultiuserVisiblePeerLimit }}
+				</div>
 				<template v-if="isRendererDebugVisible">
 					<div class="scene-preview__stats-fallback">[Renderer]</div>
 					<div class="scene-preview__stats-fallback">

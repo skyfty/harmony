@@ -19,6 +19,7 @@ const componentEnabled = computed(() => onlineComponent.value?.enabled !== false
 const localValues = reactive({
   server: '',
   maxUsers: '',
+  maxVisiblePeers: '',
   syncInterval: '',
 })
 
@@ -27,6 +28,7 @@ watch(
   (props) => {
     localValues.server = props?.server ?? ''
     localValues.maxUsers = props?.maxUsers?.toString() ?? ''
+    localValues.maxVisiblePeers = props?.maxVisiblePeers?.toString() ?? ''
     localValues.syncInterval = props?.syncInterval?.toString() ?? ''
   },
   { immediate: true, deep: true },
@@ -77,6 +79,14 @@ function handleMaxUsersChange(value: string) {
   const parsed = parseInteger(value)
   if (parsed !== null) {
     updateComponentProps({ maxUsers: parsed })
+  }
+}
+
+function handleMaxVisiblePeersChange(value: string) {
+  localValues.maxVisiblePeers = value
+  const parsed = parseInteger(value)
+  if (parsed !== null) {
+    updateComponentProps({ maxVisiblePeers: parsed })
   }
 }
 
@@ -145,6 +155,16 @@ function handleSyncIntervalChange(value: string) {
           :model-value="localValues.maxUsers"
           :disabled="!componentEnabled"
           @update:modelValue="handleMaxUsersChange"
+        />
+        <v-text-field
+          label="Visible Player Limit"
+          density="compact"
+          variant="underlined"
+          hide-details
+          type="number"
+          :model-value="localValues.maxVisiblePeers"
+          :disabled="!componentEnabled"
+          @update:modelValue="handleMaxVisiblePeersChange"
         />
         <v-text-field
           label="Sync Interval (ms)"

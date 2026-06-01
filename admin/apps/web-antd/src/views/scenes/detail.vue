@@ -97,6 +97,7 @@ const multiuserColumns: TableColumnsType<ScenePackageMultiuserSceneSummary> = [
   { dataIndex: 'server', key: 'server', title: '服务器', width: 220 },
   { dataIndex: 'port', key: 'port', title: '端口', width: 100 },
   { dataIndex: 'syncInterval', key: 'syncInterval', title: '同步间隔(ms)', width: 140 },
+  { dataIndex: 'maxVisiblePeers', key: 'maxVisiblePeers', title: '可见上限', width: 110 },
   { dataIndex: 'maxUsers', key: 'maxUsers', title: '上限', width: 100 },
 ];
 

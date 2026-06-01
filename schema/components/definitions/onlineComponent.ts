@@ -27,6 +27,7 @@ export const ONLINE_COMPONENT_TYPE = 'online'
 export interface OnlineComponentProps {
   enabled: boolean
   maxUsers: number
+  maxVisiblePeers: number
   syncInterval: number
   server: string
 }
@@ -34,6 +35,7 @@ export interface OnlineComponentProps {
 const ONLINE_DEFAULT_CONFIG: OnlineComponentProps = {
   enabled: true,
   maxUsers: 10,
+  maxVisiblePeers: 6,
   syncInterval: 250,
   server: 'ws://localhost:7645',
 }
@@ -334,6 +336,12 @@ export function clampOnlineComponentProps(overrides?: Partial<OnlineComponentPro
   return {
     enabled: clampBoolean(source.enabled, ONLINE_DEFAULT_CONFIG.enabled),
     maxUsers: clampNumber(source.maxUsers ?? ONLINE_DEFAULT_CONFIG.maxUsers, ONLINE_DEFAULT_CONFIG.maxUsers, 1, 128),
+    maxVisiblePeers: clampNumber(
+      source.maxVisiblePeers ?? ONLINE_DEFAULT_CONFIG.maxVisiblePeers,
+      ONLINE_DEFAULT_CONFIG.maxVisiblePeers,
+      1,
+      64,
+    ),
     syncInterval: clampNumber(
       source.syncInterval ?? ONLINE_DEFAULT_CONFIG.syncInterval,
       ONLINE_DEFAULT_CONFIG.syncInterval,
@@ -747,6 +755,7 @@ const onlineComponentDefinition: ComponentDefinition<OnlineComponentProps> = {
       fields: [
         { kind: 'boolean', key: 'enabled', label: 'Enabled' },
         { kind: 'number', key: 'maxUsers', label: 'Max Users', min: 2, max: 128, step: 1 },
+        { kind: 'number', key: 'maxVisiblePeers', label: 'Visible Peers', min: 1, max: 64, step: 1 },
         { kind: 'number', key: 'syncInterval', label: 'Sync Interval (ms)', min: 33, max: 5000, step: 33 },
         { kind: 'text', key: 'server', label: 'Server URL', placeholder: 'ws://muluser.v.touchmagic.cn:7645' },
       ],

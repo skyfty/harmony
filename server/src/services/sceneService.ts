@@ -87,6 +87,7 @@ export type ScenePackageMultiuserSceneSummary = {
   replicatedNodeCount: number
   replicatedPhysicsNodeCount: number
   physicsAuthorityNodeCount: number
+  maxVisiblePeers: number | null
   server: string | null
   port: number | null
   syncInterval: number | null
@@ -282,6 +283,7 @@ function normalizeMultiuserSceneSummary(
   const port = toFiniteInteger(props?.port)
   const syncInterval = toFiniteInteger(props?.syncInterval)
   const maxUsers = toFiniteInteger(props?.maxUsers)
+  const maxVisiblePeers = toFiniteInteger(props?.maxVisiblePeers)
   const replicatedNodeCount = networkSyncNodes.length
   const replicatedPhysicsNodeCount = networkSyncNodes.filter((entry) => entry.hasRigidbody).length
   const physicsAuthorityNodeCount = collectPhysicsAuthorityNodeCount(document.nodes)
@@ -293,6 +295,7 @@ function normalizeMultiuserSceneSummary(
     replicatedNodeCount,
     replicatedPhysicsNodeCount,
     physicsAuthorityNodeCount,
+    maxVisiblePeers,
     server,
     port,
     syncInterval,
@@ -345,6 +348,7 @@ function normalizeStoredMultiuserSummary(value: unknown): ScenePackageMultiuserS
             replicatedNodeCount: Number(scene.replicatedNodeCount ?? 0) || 0,
             replicatedPhysicsNodeCount: Number(scene.replicatedPhysicsNodeCount ?? 0) || 0,
             physicsAuthorityNodeCount: Number(scene.physicsAuthorityNodeCount ?? 0) || 0,
+            maxVisiblePeers: toFiniteInteger(scene.maxVisiblePeers),
             server: toNonEmptyString(scene.server),
             port: toFiniteInteger(scene.port),
             syncInterval: toFiniteInteger(scene.syncInterval),
