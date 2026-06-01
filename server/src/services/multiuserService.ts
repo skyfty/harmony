@@ -1068,7 +1068,7 @@ export class MultiuserService {
     this.wsServer = new WebSocketServer({ port: this.port })
     this.wsServer.on('connection', (socket) => this.handleConnection(socket))
     this.wsServer.on('listening', () => {
-      console.log(`Multiuser service listening on ws://muluser.v.touchmagic.cn:${this.port}`)
+      console.log(`Multiuser service listening on wss://muluser.v.touchmagic.cn:${this.port}`)
     })
   }
 
