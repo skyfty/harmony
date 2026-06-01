@@ -448,6 +448,7 @@ import {
   type RuntimePrefabPlacementOptions,
   type RuntimePrefabSpawnRequest,
 } from '@harmony/schema/core';
+import { type NodePrefabData } from '@harmony/schema/runtimePrefab';
 import ResourceCache from '@harmony/schema/ResourceCache';
 import { AssetCache, AssetLoader, configureAssetDownloadHostMirrors, type AssetCacheEntry } from '@harmony/schema/assetCache';
 import { ASSET_DOWNLOAD_HOST_MIRRORS } from '@harmony/schema/assetDownloadMirrors';
@@ -1529,7 +1530,7 @@ let renderContext: RenderContext | null = null;
 let currentDocument: SceneJsonExportDocument | null = null;
 const pendingRuntimePrefabSpawnRequests: RuntimePrefabSpawnRequest[] = [];
 const appliedRuntimePrefabSpawnKeys = new Set<string>();
-const spawnedRuntimePrefabRoots = new Map<string, { root: THREE.Object3D; mode: RuntimePrefabInitializationMode }>();
+const spawnedRuntimePrefabRoots = new Map<string, { root: THREE.Object3D; mode: RuntimePrefabInitializationMode; wheelNodeIds: string[] }>();
 let runtimePrefabBehaviorCounter = 0;
 let runtimePrefabFlushInFlight = false;
 let dynamicGroundCache: { nodeId: string; node: SceneNode; dynamicMesh: GroundRuntimeDynamicMesh } | null = null;
@@ -2357,6 +2358,7 @@ type RemoteMultiuserPeerEntry = {
   targetState: MultiuserPeerState;
   displayState: MultiuserPeerState;
   ownsResources: boolean;
+  wheelNodeIds: string[];
   wheelBindings: RemoteMultiuserWheelBinding[];
   animationControllers: Map<string, RemoteMultiuserAnimationController>;
 };
@@ -4986,6 +4988,7 @@ async function spawnRuntimePrefabRequest(request: RuntimePrefabSpawnRequest): Pr
 
   const { prefab } = source;
   const cloned = cloneRuntimePrefabNode(prefab);
+  const wheelNodeIds = collectPrefabVehicleWheelNodeIds(prefab, cloned.idMap);
   const anchorTransform = applyRuntimePrefabTransform(cloned.root, request);
   const runtimeDocument = createRuntimePrefabDocument(prefab, cloned.root);
   const buildOptions: SceneGraphBuildOptions = {};
@@ -5006,6 +5009,7 @@ async function spawnRuntimePrefabRequest(request: RuntimePrefabSpawnRequest): Pr
   spawnedRuntimePrefabRoots.set(requestKey, {
     root: graph.root,
     mode: normalizeRuntimePrefabMode(request.initializationMode),
+    wheelNodeIds,
   });
 
   if (normalizeRuntimePrefabMode(request.initializationMode) === 'full') {
@@ -10209,6 +10213,38 @@ function logMultiuserWheelDebug(message: string, payload: Record<string, unknown
   console.info(`[MultiuserWheel] ${message} ${JSON.stringify(payload)}`);
 }
 
+function collectPrefabVehicleWheelNodeIds(prefab: NodePrefabData, idMap?: Map<string, string> | null): string[] {
+  const collected: string[] = [];
+  const seen = new Set<string>();
+  const stack: SceneNode[] = [prefab.root];
+  while (stack.length) {
+    const node = stack.pop();
+    if (!node) {
+      continue;
+    }
+    const component = node.components?.[VEHICLE_COMPONENT_TYPE] as SceneNodeComponentState<VehicleComponentProps> | undefined;
+    const wheelProps = component?.enabled !== false ? component?.props?.wheels : null;
+    if (Array.isArray(wheelProps)) {
+      wheelProps.forEach((wheel) => {
+        const nodeId = typeof wheel.nodeId === 'string' ? wheel.nodeId.trim() : '';
+        if (!nodeId) {
+          return;
+        }
+        const remappedNodeId = idMap?.get(nodeId) ?? nodeId;
+        if (!remappedNodeId || seen.has(remappedNodeId)) {
+          return;
+        }
+        seen.add(remappedNodeId);
+        collected.push(remappedNodeId);
+      });
+    }
+    if (Array.isArray(node.children) && node.children.length) {
+      stack.push(...node.children);
+    }
+  }
+  return collected;
+}
+
 function sanitizeRemoteMultiuserObject(object: THREE.Object3D): THREE.Object3D {
   const scale = object.scale.clone();
   object.position.set(0, 0, 0);
@@ -10254,12 +10290,16 @@ function disposeRemoteMultiuserObject(object: THREE.Object3D, ownsResources: boo
 
 function collectRemoteMultiuserWheelBindings(
   root: THREE.Object3D,
-  expectedWheelCount: number | null,
+  wheelNodeIds: string[] | null,
 ): RemoteMultiuserWheelBinding[] {
   const bindings: RemoteMultiuserWheelBinding[] = [];
+  const allowedWheelNodeIds = wheelNodeIds && wheelNodeIds.length ? new Set(wheelNodeIds) : null;
   root.traverse((child) => {
     const nodeId = typeof child.userData?.nodeId === 'string' ? child.userData.nodeId.trim() : '';
     if (!nodeId || nodeId === root.userData?.nodeId) {
+      return;
+    }
+    if (allowedWheelNodeIds && !allowedWheelNodeIds.has(nodeId)) {
       return;
     }
     bindings.push({
@@ -10271,8 +10311,8 @@ function collectRemoteMultiuserWheelBindings(
       instancedTargets: collectInstancedTransformTargets(child),
     });
   });
-  if (typeof expectedWheelCount === 'number' && Number.isFinite(expectedWheelCount) && expectedWheelCount >= 0) {
-    return bindings.slice(0, Math.max(0, Math.trunc(expectedWheelCount)));
+  if (allowedWheelNodeIds) {
+    return bindings.filter((binding) => binding.nodeId && allowedWheelNodeIds.has(binding.nodeId));
   }
   return bindings;
 }
@@ -10315,9 +10355,12 @@ function collectRemoteMultiuserAnimationControllers(root: THREE.Object3D): Map<s
 
 function attachRemoteMultiuserPeerRuntime(entry: RemoteMultiuserPeerEntry): void {
   const presentationWheels = entry.targetState.presentation?.vehicle?.wheels ?? [];
+  const wheelNodeIds = entry.wheelNodeIds.length
+    ? entry.wheelNodeIds
+    : presentationWheels.map((wheel) => (typeof wheel.nodeId === 'string' ? wheel.nodeId.trim() : '')).filter((nodeId) => nodeId.length);
   entry.wheelBindings = collectRemoteMultiuserWheelBindings(
     entry.root,
-    presentationWheels.length,
+    wheelNodeIds.length ? wheelNodeIds : null,
   );
   entry.animationControllers = collectRemoteMultiuserAnimationControllers(entry.root);
 }
@@ -10349,7 +10392,7 @@ function cloneRemoteMultiuserObjectFromRuntime(nodeId: string | null): THREE.Obj
   return sanitizeRemoteMultiuserObject(cloneSkinned(source));
 }
 
-function cloneRemoteMultiuserObjectFromLocalRuntimePrefab(state: MultiuserPeerState): THREE.Object3D | null {
+function cloneRemoteMultiuserObjectFromLocalRuntimePrefab(state: MultiuserPeerState): { object: THREE.Object3D; wheelNodeIds: string[] } | null {
   if (state.subjectType !== 'vehicle') {
     return null;
   }
@@ -10358,11 +10401,15 @@ function cloneRemoteMultiuserObjectFromLocalRuntimePrefab(state: MultiuserPeerSt
     return null;
   }
   const requestKey = buildRuntimePrefabRequestKey(matchedVehicleRequest);
-  const spawnedRoot = spawnedRuntimePrefabRoots.get(requestKey)?.root ?? null;
+  const spawnedEntry = spawnedRuntimePrefabRoots.get(requestKey) ?? null;
+  const spawnedRoot = spawnedEntry?.root ?? null;
   if (!spawnedRoot) {
     return null;
   }
-  return sanitizeRemoteMultiuserObject(cloneSkinned(spawnedRoot));
+  return {
+    object: sanitizeRemoteMultiuserObject(cloneSkinned(spawnedRoot)),
+    wheelNodeIds: spawnedEntry?.wheelNodeIds ?? [],
+  };
 }
 
 function stripRemoteMultiuserPrefabRuntimeComponents(node: SceneNode | null | undefined): void {
@@ -10426,7 +10473,7 @@ function resolveRemoteMultiuserVehiclePrefabRequest(state: MultiuserPeerState): 
     ?? null;
 }
 
-async function loadRemoteMultiuserPrefabObject(state: MultiuserPeerState): Promise<THREE.Object3D | null> {
+async function loadRemoteMultiuserPrefabObject(state: MultiuserPeerState): Promise<{ object: THREE.Object3D; wheelNodeIds: string[] } | null> {
   const sourceRequest = resolveRemoteMultiuserPrefabSpawnRequest(state);
   if (!sourceRequest) {
     return null;
@@ -10437,6 +10484,7 @@ async function loadRemoteMultiuserPrefabObject(state: MultiuserPeerState): Promi
       return null;
     }
     const cloned = cloneRuntimePrefabNode(source.prefab);
+    const wheelNodeIds = collectPrefabVehicleWheelNodeIds(source.prefab, cloned.idMap);
     stripRemoteMultiuserPrefabRuntimeComponents(cloned.root);
     const runtimeDocument = createRuntimePrefabDocument(source.prefab, cloned.root);
     const buildOptions: SceneGraphBuildOptions = {};
@@ -10446,7 +10494,10 @@ async function loadRemoteMultiuserPrefabObject(state: MultiuserPeerState): Promi
     const resourceCache = ensureResourceCache(runtimeDocument, buildOptions);
     const graph = await buildSceneGraph(runtimeDocument, resourceCache, buildOptions);
     applyWeChatShadowPolicy(graph.root);
-    return sanitizeRemoteMultiuserObject(graph.root);
+    return {
+      object: sanitizeRemoteMultiuserObject(graph.root),
+      wheelNodeIds,
+    };
   } catch (error) {
     console.warn('[SceneryViewer] Failed to instantiate remote multiuser prefab', {
       assetId: sourceRequest.assetId ?? null,
@@ -10494,24 +10545,24 @@ async function loadRemoteMultiuserObjectFromAsset(state: MultiuserPeerState): Pr
   }
 }
 
-async function createRemoteMultiuserPeerObject(state: MultiuserPeerState): Promise<{ object: THREE.Object3D; ownsResources: boolean }> {
+async function createRemoteMultiuserPeerObject(state: MultiuserPeerState): Promise<{ object: THREE.Object3D; ownsResources: boolean; wheelNodeIds: string[] }> {
   const localRuntimePrefabClone = cloneRemoteMultiuserObjectFromLocalRuntimePrefab(state);
   if (localRuntimePrefabClone) {
-    return { object: localRuntimePrefabClone, ownsResources: false };
+    return { object: localRuntimePrefabClone.object, ownsResources: false, wheelNodeIds: localRuntimePrefabClone.wheelNodeIds };
   }
   const runtimeClone = cloneRemoteMultiuserObjectFromRuntime(state.subjectNodeId);
   if (runtimeClone) {
-    return { object: runtimeClone, ownsResources: false };
+    return { object: runtimeClone, ownsResources: false, wheelNodeIds: [] };
   }
   const prefabObject = await loadRemoteMultiuserPrefabObject(state);
   if (prefabObject) {
-    return { object: prefabObject, ownsResources: true };
+    return { object: prefabObject.object, ownsResources: true, wheelNodeIds: prefabObject.wheelNodeIds };
   }
   const resourceObject = await loadRemoteMultiuserObjectFromAsset(state);
   if (resourceObject) {
-    return { object: resourceObject, ownsResources: true };
+    return { object: resourceObject, ownsResources: true, wheelNodeIds: [] };
   }
-  return { object: createRemoteMultiuserPlaceholder(state.subjectType), ownsResources: true };
+  return { object: createRemoteMultiuserPlaceholder(state.subjectType), ownsResources: true, wheelNodeIds: [] };
 }
 
 function applyRemoteMultiuserPeerTransform(object: THREE.Object3D, state: MultiuserPeerState): void {
@@ -11583,12 +11634,13 @@ function handleRemoteMultiuserPeerSnapshot(peer: MultiuserPeerSnapshot): void {
     targetState: cloneRemoteMultiuserPeerState(peer.state),
     displayState: cloneRemoteMultiuserPeerState(peer.state),
     ownsResources: true,
+    wheelNodeIds: [],
     wheelBindings: [],
     animationControllers: new Map(),
   });
   markInstancedCullingDirty();
 
-  void createRemoteMultiuserPeerObject(peer.state).then(({ object, ownsResources }) => {
+  void createRemoteMultiuserPeerObject(peer.state).then(({ object, ownsResources, wheelNodeIds }) => {
     if (remoteMultiuserPeerLoadTokens.get(peer.userId) !== loadToken) {
       disposeRemoteMultiuserObject(object, ownsResources);
       return;
@@ -11608,6 +11660,7 @@ function handleRemoteMultiuserPeerSnapshot(peer: MultiuserPeerSnapshot): void {
     const runtimeEntry = {
       ...latestEntry,
       root: object,
+      wheelNodeIds,
     };
     attachRemoteMultiuserPeerRuntime(runtimeEntry);
     applyRemoteMultiuserPeerRuntime(runtimeEntry, runtimeEntry.displayState ?? runtimeEntry.targetState, 1, 0);
@@ -11617,6 +11670,7 @@ function handleRemoteMultiuserPeerSnapshot(peer: MultiuserPeerSnapshot): void {
       targetState: cloneRemoteMultiuserPeerState(latestEntry.targetState),
       displayState: cloneRemoteMultiuserPeerState(latestEntry.displayState ?? latestEntry.targetState),
       ownsResources,
+      wheelNodeIds,
     });
     markInstancedCullingDirty();
   }).catch((error) => {
