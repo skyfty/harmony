@@ -448,6 +448,7 @@ import {
   type RuntimePrefabPlacementOptions,
   type RuntimePrefabSpawnRequest,
 } from '@harmony/schema/core';
+import { type NodePrefabData } from '@harmony/schema/runtimePrefab';
 import ResourceCache from '@harmony/schema/ResourceCache';
 import { AssetCache, AssetLoader, configureAssetDownloadHostMirrors, type AssetCacheEntry } from '@harmony/schema/assetCache';
 import { ASSET_DOWNLOAD_HOST_MIRRORS } from '@harmony/schema/assetDownloadMirrors';
@@ -1542,7 +1543,7 @@ let remoteMultiuserVisiblePeerLimit = DEFAULT_REMOTE_MULTIUSER_VISIBLE_PEERS;
 let remoteMultiuserVisibilityFrame = 0;
 const pendingRuntimePrefabSpawnRequests: RuntimePrefabSpawnRequest[] = [];
 const appliedRuntimePrefabSpawnKeys = new Set<string>();
-const spawnedRuntimePrefabRoots = new Map<string, { root: THREE.Object3D; mode: RuntimePrefabInitializationMode }>();
+const spawnedRuntimePrefabRoots = new Map<string, { root: THREE.Object3D; mode: RuntimePrefabInitializationMode; wheelNodeIds: string[] }>();
 let runtimePrefabBehaviorCounter = 0;
 let runtimePrefabFlushInFlight = false;
 let dynamicGroundCache: { nodeId: string; node: SceneNode; dynamicMesh: GroundRuntimeDynamicMesh } | null = null;
@@ -2351,6 +2352,7 @@ type RemoteMultiuserWheelBinding = {
   basePosition: THREE.Vector3;
   baseQuaternion: THREE.Quaternion;
   baseScale: THREE.Vector3;
+  instancedTargets: THREE.Object3D[];
 };
 type RemoteMultiuserAnimationController = {
   nodeId: string;
@@ -2369,6 +2371,7 @@ type RemoteMultiuserPeerEntry = RemoteMultiuserPeerVisibilityState & {
   targetState: MultiuserPeerState;
   displayState: MultiuserPeerState | null;
   ownsResources: boolean;
+  wheelNodeIds: string[];
   wheelBindings: RemoteMultiuserWheelBinding[];
   animationControllers: Map<string, RemoteMultiuserAnimationController>;
   rootSignature: string;
@@ -2623,6 +2626,8 @@ type VehicleWheelBinding = {
   instancedTargets: THREE.Object3D[];
   radius: number;
   axleAxis: THREE.Vector3;
+  steeringAxis: THREE.Vector3;
+  spinAxis: THREE.Vector3;
   isFrontWheel: boolean;
   wheelIndex: number;
   spinAngle: number;
@@ -4997,6 +5002,7 @@ async function spawnRuntimePrefabRequest(request: RuntimePrefabSpawnRequest): Pr
 
   const { prefab } = source;
   const cloned = cloneRuntimePrefabNode(prefab);
+  const wheelNodeIds = collectPrefabVehicleWheelNodeIds(prefab, cloned.idMap);
   const anchorTransform = applyRuntimePrefabTransform(cloned.root, request);
   const runtimeDocument = createRuntimePrefabDocument(prefab, cloned.root);
   const buildOptions: SceneGraphBuildOptions = {};
@@ -5017,6 +5023,7 @@ async function spawnRuntimePrefabRequest(request: RuntimePrefabSpawnRequest): Pr
   spawnedRuntimePrefabRoots.set(requestKey, {
     root: graph.root,
     mode: normalizeRuntimePrefabMode(request.initializationMode),
+    wheelNodeIds,
   });
 
   if (normalizeRuntimePrefabMode(request.initializationMode) === 'full') {
@@ -8257,6 +8264,8 @@ function createBridgeVehicleInstance(
       instancedTargets: wheelObject ? collectInstancedTransformTargets(wheelObject) : [],
       radius: Math.max(config.radius, VEHICLE_WHEEL_MIN_RADIUS),
       axleAxis: axis,
+      steeringAxis: axis.clone(),
+      spinAxis: axis.clone(),
       isFrontWheel: config.isFrontWheel === true,
       wheelIndex: index,
       spinAngle: 0,
@@ -8652,6 +8661,7 @@ function updateVehicleWheelVisuals(delta: number): void {
       } else {
         wheelAxisHelper.normalize();
       }
+      binding.steeringAxis.copy(wheelAxisHelper);
       wheelSteeringQuaternionHelper.setFromAxisAngle(wheelAxisHelper, steeringAngle);
 
       // Build local-space spin quaternion (around wheel axle).
@@ -8678,6 +8688,7 @@ function updateVehicleWheelVisuals(delta: number): void {
       } else {
         wheelAxisHelper.normalize();
       }
+      binding.spinAxis.copy(wheelAxisHelper);
       wheelSpinQuaternionHelper.setFromAxisAngle(wheelAxisHelper, binding.spinAngle);
 
       // Compose: base -> (parent-space steer) -> (local-space spin).
@@ -10152,6 +10163,22 @@ function cloneRemoteMultiuserPeerPresentation(presentation: MultiuserPeerPresent
                     z: wheel.scale.z,
                   }
                 : null,
+              steeringAxis: wheel.steeringAxis
+                ? {
+                    x: wheel.steeringAxis.x,
+                    y: wheel.steeringAxis.y,
+                    z: wheel.steeringAxis.z,
+                  }
+                : null,
+              spinAxis: wheel.spinAxis
+                ? {
+                    x: wheel.spinAxis.x,
+                    y: wheel.spinAxis.y,
+                    z: wheel.spinAxis.z,
+                  }
+                : null,
+              steeringAngle: wheel.steeringAngle ?? null,
+              spinAngle: wheel.spinAngle ?? null,
             }))
           : [],
       }
@@ -10185,6 +10212,66 @@ function cloneRemotePresentationVector3(value: MultiuserPresentationVector3Like)
 
 function cloneRemotePresentationQuaternion(value: MultiuserPresentationQuaternionLike): THREE.Quaternion {
   return new THREE.Quaternion(value.x, value.y, value.z, value.w);
+}
+
+function isFiniteVector3Like(value: MultiuserPresentationVector3Like | null | undefined): value is MultiuserPresentationVector3Like {
+  if (!value) {
+    return false;
+  }
+  return Number.isFinite(value.x)
+    && Number.isFinite(value.y)
+    && Number.isFinite(value.z);
+}
+
+function normalizeRemotePresentationAngle(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return THREE.MathUtils.euclideanModulo(value + Math.PI, Math.PI * 2) - Math.PI;
+}
+
+function interpolateWrappedAngle(current: number, target: number, alpha: number): number {
+  const normalizedCurrent = normalizeRemotePresentationAngle(current);
+  const normalizedTarget = normalizeRemotePresentationAngle(target);
+  let delta = normalizedTarget - normalizedCurrent;
+  if (delta > Math.PI) {
+    delta -= Math.PI * 2;
+  } else if (delta < -Math.PI) {
+    delta += Math.PI * 2;
+  }
+  return normalizeRemotePresentationAngle(normalizedCurrent + (delta * alpha));
+}
+
+function collectPrefabVehicleWheelNodeIds(prefab: NodePrefabData, idMap?: Map<string, string> | null): string[] {
+  const collected: string[] = [];
+  const seen = new Set<string>();
+  const stack: SceneNode[] = [prefab.root];
+  while (stack.length) {
+    const node = stack.pop();
+    if (!node) {
+      continue;
+    }
+    const component = node.components?.[VEHICLE_COMPONENT_TYPE] as SceneNodeComponentState<VehicleComponentProps> | undefined;
+    const wheelProps = component?.enabled !== false ? component?.props?.wheels : null;
+    if (Array.isArray(wheelProps)) {
+      wheelProps.forEach((wheel) => {
+        const nodeId = typeof wheel.nodeId === 'string' ? wheel.nodeId.trim() : '';
+        if (!nodeId) {
+          return;
+        }
+        const remappedNodeId = idMap?.get(nodeId) ?? nodeId;
+        if (!remappedNodeId || seen.has(remappedNodeId)) {
+          return;
+        }
+        seen.add(remappedNodeId);
+        collected.push(remappedNodeId);
+      });
+    }
+    if (Array.isArray(node.children) && node.children.length) {
+      stack.push(...node.children);
+    }
+  }
+  return collected;
 }
 
 function sanitizeRemoteMultiuserObject(object: THREE.Object3D): THREE.Object3D {
@@ -10230,11 +10317,18 @@ function disposeRemoteMultiuserObject(object: THREE.Object3D, ownsResources: boo
   object.parent?.remove(object);
 }
 
-function collectRemoteMultiuserWheelBindings(root: THREE.Object3D): RemoteMultiuserWheelBinding[] {
+function collectRemoteMultiuserWheelBindings(
+  root: THREE.Object3D,
+  wheelNodeIds: string[] | null,
+): RemoteMultiuserWheelBinding[] {
   const bindings: RemoteMultiuserWheelBinding[] = [];
+  const allowedWheelNodeIds = wheelNodeIds && wheelNodeIds.length ? new Set(wheelNodeIds) : null;
   root.traverse((child) => {
     const nodeId = typeof child.userData?.nodeId === 'string' ? child.userData.nodeId.trim() : '';
     if (!nodeId || nodeId === root.userData?.nodeId) {
+      return;
+    }
+    if (allowedWheelNodeIds && !allowedWheelNodeIds.has(nodeId)) {
       return;
     }
     bindings.push({
@@ -10243,8 +10337,12 @@ function collectRemoteMultiuserWheelBindings(root: THREE.Object3D): RemoteMultiu
       basePosition: child.position.clone(),
       baseQuaternion: child.quaternion.clone(),
       baseScale: child.scale.clone(),
+      instancedTargets: collectInstancedTransformTargets(child),
     });
   });
+  if (allowedWheelNodeIds) {
+    return bindings.filter((binding) => binding.nodeId && allowedWheelNodeIds.has(binding.nodeId));
+  }
   return bindings;
 }
 
@@ -10285,12 +10383,14 @@ function collectRemoteMultiuserAnimationControllers(root: THREE.Object3D): Map<s
 }
 
 function attachRemoteMultiuserPeerRuntime(entry: RemoteMultiuserPeerEntry): void {
-  if (!entry.root) {
-    entry.wheelBindings = [];
-    entry.animationControllers = new Map();
-    return;
-  }
-  entry.wheelBindings = collectRemoteMultiuserWheelBindings(entry.root);
+  const presentationWheels = entry.targetState.presentation?.vehicle?.wheels ?? [];
+  const wheelNodeIds = entry.wheelNodeIds.length
+    ? entry.wheelNodeIds
+    : presentationWheels.map((wheel) => (typeof wheel.nodeId === 'string' ? wheel.nodeId.trim() : '')).filter((nodeId) => nodeId.length);
+  entry.wheelBindings = collectRemoteMultiuserWheelBindings(
+    entry.root,
+    wheelNodeIds.length ? wheelNodeIds : null,
+  );
   entry.animationControllers = collectRemoteMultiuserAnimationControllers(entry.root);
 }
 
@@ -10321,7 +10421,7 @@ function cloneRemoteMultiuserObjectFromRuntime(nodeId: string | null): THREE.Obj
   return sanitizeRemoteMultiuserObject(cloneSkinned(source));
 }
 
-function cloneRemoteMultiuserObjectFromLocalRuntimePrefab(state: MultiuserPeerState): THREE.Object3D | null {
+function cloneRemoteMultiuserObjectFromLocalRuntimePrefab(state: MultiuserPeerState): { object: THREE.Object3D; wheelNodeIds: string[] } | null {
   if (state.subjectType !== 'vehicle') {
     return null;
   }
@@ -10330,11 +10430,15 @@ function cloneRemoteMultiuserObjectFromLocalRuntimePrefab(state: MultiuserPeerSt
     return null;
   }
   const requestKey = buildRuntimePrefabRequestKey(matchedVehicleRequest);
-  const spawnedRoot = spawnedRuntimePrefabRoots.get(requestKey)?.root ?? null;
+  const spawnedEntry = spawnedRuntimePrefabRoots.get(requestKey) ?? null;
+  const spawnedRoot = spawnedEntry?.root ?? null;
   if (!spawnedRoot) {
     return null;
   }
-  return sanitizeRemoteMultiuserObject(cloneSkinned(spawnedRoot));
+  return {
+    object: sanitizeRemoteMultiuserObject(cloneSkinned(spawnedRoot)),
+    wheelNodeIds: spawnedEntry?.wheelNodeIds ?? [],
+  };
 }
 
 function stripRemoteMultiuserPrefabRuntimeComponents(node: SceneNode | null | undefined): void {
@@ -10398,7 +10502,7 @@ function resolveRemoteMultiuserVehiclePrefabRequest(state: MultiuserPeerState): 
     ?? null;
 }
 
-async function loadRemoteMultiuserPrefabObject(state: MultiuserPeerState): Promise<THREE.Object3D | null> {
+async function loadRemoteMultiuserPrefabObject(state: MultiuserPeerState): Promise<{ object: THREE.Object3D; wheelNodeIds: string[] } | null> {
   const sourceRequest = resolveRemoteMultiuserPrefabSpawnRequest(state);
   if (!sourceRequest) {
     return null;
@@ -10409,6 +10513,7 @@ async function loadRemoteMultiuserPrefabObject(state: MultiuserPeerState): Promi
       return null;
     }
     const cloned = cloneRuntimePrefabNode(source.prefab);
+    const wheelNodeIds = collectPrefabVehicleWheelNodeIds(source.prefab, cloned.idMap);
     stripRemoteMultiuserPrefabRuntimeComponents(cloned.root);
     const runtimeDocument = createRuntimePrefabDocument(source.prefab, cloned.root);
     const buildOptions: SceneGraphBuildOptions = {};
@@ -10418,7 +10523,10 @@ async function loadRemoteMultiuserPrefabObject(state: MultiuserPeerState): Promi
     const resourceCache = ensureResourceCache(runtimeDocument, buildOptions);
     const graph = await buildSceneGraph(runtimeDocument, resourceCache, buildOptions);
     applyWeChatShadowPolicy(graph.root);
-    return sanitizeRemoteMultiuserObject(graph.root);
+    return {
+      object: sanitizeRemoteMultiuserObject(graph.root),
+      wheelNodeIds,
+    };
   } catch (error) {
     console.warn('[SceneryViewer] Failed to instantiate remote multiuser prefab', {
       assetId: sourceRequest.assetId ?? null,
@@ -10466,24 +10574,24 @@ async function loadRemoteMultiuserObjectFromAsset(state: MultiuserPeerState): Pr
   }
 }
 
-async function createRemoteMultiuserPeerObject(state: MultiuserPeerState): Promise<{ object: THREE.Object3D; ownsResources: boolean }> {
+async function createRemoteMultiuserPeerObject(state: MultiuserPeerState): Promise<{ object: THREE.Object3D; ownsResources: boolean; wheelNodeIds: string[] }> {
   const localRuntimePrefabClone = cloneRemoteMultiuserObjectFromLocalRuntimePrefab(state);
   if (localRuntimePrefabClone) {
-    return { object: localRuntimePrefabClone, ownsResources: false };
+    return { object: localRuntimePrefabClone.object, ownsResources: false, wheelNodeIds: localRuntimePrefabClone.wheelNodeIds };
   }
   const runtimeClone = cloneRemoteMultiuserObjectFromRuntime(state.subjectNodeId);
   if (runtimeClone) {
-    return { object: runtimeClone, ownsResources: false };
+    return { object: runtimeClone, ownsResources: false, wheelNodeIds: [] };
   }
   const prefabObject = await loadRemoteMultiuserPrefabObject(state);
   if (prefabObject) {
-    return { object: prefabObject, ownsResources: true };
+    return { object: prefabObject.object, ownsResources: true, wheelNodeIds: prefabObject.wheelNodeIds };
   }
   const resourceObject = await loadRemoteMultiuserObjectFromAsset(state);
   if (resourceObject) {
-    return { object: resourceObject, ownsResources: true };
+    return { object: resourceObject, ownsResources: true, wheelNodeIds: [] };
   }
-  return { object: createRemoteMultiuserPlaceholder(state.subjectType), ownsResources: true };
+  return { object: createRemoteMultiuserPlaceholder(state.subjectType), ownsResources: true, wheelNodeIds: [] };
 }
 
 function applyRemoteMultiuserPeerTransform(object: THREE.Object3D, state: MultiuserPeerState): void {
@@ -10502,11 +10610,35 @@ function applyRemoteMultiuserVehicleWheelState(
     return;
   }
   object.position.copy(cloneRemotePresentationVector3(wheelState.position));
-  object.quaternion.copy(cloneRemotePresentationQuaternion(wheelState.quaternion));
-  if (wheelState.scale) {
-    object.scale.copy(cloneRemotePresentationVector3(wheelState.scale));
+  object.scale.copy(wheelState.scale ? cloneRemotePresentationVector3(wheelState.scale) : binding.baseScale);
+  const steeringAngle = typeof wheelState.steeringAngle === 'number' && Number.isFinite(wheelState.steeringAngle)
+    ? wheelState.steeringAngle
+    : null;
+  const spinAngle = typeof wheelState.spinAngle === 'number' && Number.isFinite(wheelState.spinAngle)
+    ? wheelState.spinAngle
+    : null;
+  const steeringAxis = wheelState.steeringAxis && isFiniteVector3Like(wheelState.steeringAxis)
+    ? cloneRemotePresentationVector3(wheelState.steeringAxis).normalize()
+    : null;
+  const spinAxis = wheelState.spinAxis && isFiniteVector3Like(wheelState.spinAxis)
+    ? cloneRemotePresentationVector3(wheelState.spinAxis).normalize()
+    : null;
+  if (steeringAxis && spinAxis && steeringAngle !== null && spinAngle !== null) {
+    wheelVisualQuaternionHelper.copy(binding.baseQuaternion);
+    wheelSteeringQuaternionHelper.setFromAxisAngle(steeringAxis, steeringAngle);
+    wheelSpinQuaternionHelper.setFromAxisAngle(spinAxis, spinAngle);
+    wheelVisualQuaternionHelper.premultiply(wheelSteeringQuaternionHelper);
+    wheelVisualQuaternionHelper.multiply(wheelSpinQuaternionHelper);
+    object.quaternion.copy(wheelVisualQuaternionHelper);
+  } else {
+    object.quaternion.copy(cloneRemotePresentationQuaternion(wheelState.quaternion));
   }
   object.updateMatrixWorld(true);
+  if (binding.instancedTargets.length) {
+    binding.instancedTargets.forEach((target) => {
+      target.updateMatrixWorld(true);
+    });
+  }
 }
 
 function applyRemoteMultiuserVehiclePresentation(
@@ -10529,7 +10661,9 @@ function applyRemoteMultiuserVehiclePresentation(
     }
   });
   wheelBindings.forEach((binding, index) => {
-    const wheelState = (binding.nodeId && wheelStateByNodeId.get(binding.nodeId)) ?? presentation.wheels[index] ?? null;
+    const wheelState = (binding.nodeId ? wheelStateByNodeId.get(binding.nodeId) ?? null : null)
+      ?? presentation.wheels[index]
+      ?? null;
     if (!wheelState) {
       return;
     }
@@ -10622,6 +10756,32 @@ function interpolateRemoteMultiuserPeerPresentation(
           : currentWheel.scale
             ? cloneRemotePresentationVector3(currentWheel.scale)
             : null;
+        const steeringAxis = wheel.steeringAxis
+          ? {
+              x: wheel.steeringAxis.x,
+              y: wheel.steeringAxis.y,
+              z: wheel.steeringAxis.z,
+            }
+          : currentWheel.steeringAxis ?? null;
+        const spinAxis = wheel.spinAxis
+          ? {
+              x: wheel.spinAxis.x,
+              y: wheel.spinAxis.y,
+              z: wheel.spinAxis.z,
+            }
+          : currentWheel.spinAxis ?? null;
+        const steeringAngle = typeof wheel.steeringAngle === 'number'
+          ? (typeof currentWheel.steeringAngle === 'number'
+              ? currentWheel.steeringAngle + ((wheel.steeringAngle - currentWheel.steeringAngle) * alpha)
+              : wheel.steeringAngle)
+          : currentWheel.steeringAngle ?? null;
+        const spinAngle = typeof wheel.spinAngle === 'number'
+          ? interpolateWrappedAngle(
+              typeof currentWheel.spinAngle === 'number' ? currentWheel.spinAngle : wheel.spinAngle,
+              wheel.spinAngle,
+              alpha,
+            )
+          : currentWheel.spinAngle ?? null;
         return {
           nodeId: wheel.nodeId ?? null,
           wheelIndex: wheel.wheelIndex,
@@ -10643,6 +10803,10 @@ function interpolateRemoteMultiuserPeerPresentation(
                 z: scale.z,
               }
             : null,
+          steeringAxis,
+          spinAxis,
+          steeringAngle,
+          spinAngle,
         };
       }),
     };
@@ -11641,7 +11805,59 @@ function handleRemoteMultiuserPeerSnapshot(peer: MultiuserPeerSnapshot): void {
   } else {
     remoteMultiuserPeerEntries.set(peer.userId, nextEntry);
   }
-  syncRemoteMultiuserPeerVisibility();
+
+  const placeholder = createRemoteMultiuserPlaceholder(peer.state.subjectType);
+  placeholder.name = `RemotePeer:${peer.userId}`;
+  latestRoot.add(placeholder);
+  applyRemoteMultiuserPeerTransform(placeholder, peer.state);
+  remoteMultiuserPeerEntries.set(peer.userId, {
+    root: placeholder,
+    signature,
+    targetState: cloneRemoteMultiuserPeerState(peer.state),
+    displayState: cloneRemoteMultiuserPeerState(peer.state),
+    ownsResources: true,
+    wheelNodeIds: [],
+    wheelBindings: [],
+    animationControllers: new Map(),
+  });
+  markInstancedCullingDirty();
+
+  void createRemoteMultiuserPeerObject(peer.state).then(({ object, ownsResources, wheelNodeIds }) => {
+    if (remoteMultiuserPeerLoadTokens.get(peer.userId) !== loadToken) {
+      disposeRemoteMultiuserObject(object, ownsResources);
+      return;
+    }
+    const latestEntry = remoteMultiuserPeerEntries.get(peer.userId) ?? null;
+    if (!latestEntry || latestEntry.signature !== signature) {
+      disposeRemoteMultiuserObject(object, ownsResources);
+      return;
+    }
+    const currentRoot = latestEntry.root;
+    currentRoot.parent?.remove(currentRoot);
+    releaseRemoteMultiuserPeerRuntime(latestEntry);
+    disposeRemoteMultiuserObject(currentRoot, latestEntry.ownsResources);
+    object.name = `RemotePeer:${peer.userId}`;
+    latestRoot.add(object);
+    applyRemoteMultiuserPeerTransform(object, latestEntry.displayState ?? latestEntry.targetState);
+    const runtimeEntry = {
+      ...latestEntry,
+      root: object,
+      wheelNodeIds,
+    };
+    attachRemoteMultiuserPeerRuntime(runtimeEntry);
+    applyRemoteMultiuserPeerRuntime(runtimeEntry, runtimeEntry.displayState ?? runtimeEntry.targetState, 1, 0);
+    remoteMultiuserPeerEntries.set(peer.userId, {
+      ...runtimeEntry,
+      signature,
+      targetState: cloneRemoteMultiuserPeerState(latestEntry.targetState),
+      displayState: cloneRemoteMultiuserPeerState(latestEntry.displayState ?? latestEntry.targetState),
+      ownsResources,
+      wheelNodeIds,
+    });
+    markInstancedCullingDirty();
+  }).catch((error) => {
+    console.warn('[SceneryViewer] Failed to create remote multiuser peer object', error);
+  });
 }
 
 function resolveLocalMultiuserVehiclePresentation(nodeId: string): MultiuserVehiclePresentation | null {
@@ -11676,6 +11892,18 @@ function resolveLocalMultiuserVehiclePresentation(nodeId: string): MultiuserVehi
         y: object.scale.y,
         z: object.scale.z,
       },
+      steeringAxis: {
+        x: binding.steeringAxis.x,
+        y: binding.steeringAxis.y,
+        z: binding.steeringAxis.z,
+      },
+      spinAxis: {
+        x: binding.spinAxis.x,
+        y: binding.spinAxis.y,
+        z: binding.spinAxis.z,
+      },
+      steeringAngle: binding.lastSteeringAngle,
+      spinAngle: binding.spinAngle,
     });
   });
   if (!wheels.length) {

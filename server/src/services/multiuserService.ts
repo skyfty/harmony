@@ -48,6 +48,10 @@ interface MultiuserVehicleWheelPresentation {
   position: Vector3
   quaternion: Quaternion
   scale?: Vector3 | null
+  steeringAxis?: Vector3 | null
+  spinAxis?: Vector3 | null
+  steeringAngle?: number | null
+  spinAngle?: number | null
 }
 
 interface MultiuserVehiclePresentation {
@@ -388,6 +392,26 @@ function normalizeVehiclePresentation(value: unknown): MultiuserVehiclePresentat
             y: item.scale.y,
             z: item.scale.z,
           }
+        : null,
+      steeringAxis: isVector3(item.steeringAxis)
+        ? {
+            x: item.steeringAxis.x,
+            y: item.steeringAxis.y,
+            z: item.steeringAxis.z,
+          }
+        : null,
+      spinAxis: isVector3(item.spinAxis)
+        ? {
+            x: item.spinAxis.x,
+            y: item.spinAxis.y,
+            z: item.spinAxis.z,
+          }
+        : null,
+      steeringAngle: typeof item.steeringAngle === 'number' && Number.isFinite(item.steeringAngle)
+        ? item.steeringAngle
+        : null,
+      spinAngle: typeof item.spinAngle === 'number' && Number.isFinite(item.spinAngle)
+        ? item.spinAngle
         : null,
     })
   })
