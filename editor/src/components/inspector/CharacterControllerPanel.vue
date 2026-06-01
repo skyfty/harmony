@@ -2,17 +2,20 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import {
+  ANIMATION_COMPONENT_TYPE,
   CHARACTER_CONTROLLER_COMPONENT_TYPE,
   clampCharacterControllerComponentProps,
+  type AnimationComponentProps,
   type CharacterAnimationSlot,
   type CharacterControllerComponentProps,
 } from '@schema/components'
 import type { SceneNodeComponentState } from '@schema/core'
 import { getRuntimeObject, useSceneStore } from '@/stores/sceneStore'
-import { collectRuntimeAnimationClipOptions } from '@/utils/runtimeAnimationClips'
+import { collectAnimationClipCatalog } from '@schema/runtimeAnimationCatalog'
+import { findSceneNodeById } from '@/utils/animationClipCatalog'
 
 const sceneStore = useSceneStore()
-const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)
+const { selectedNode, selectedNodeId, nodes } = storeToRefs(sceneStore)
 
 const component = computed(() =>
   selectedNode.value?.components?.[CHARACTER_CONTROLLER_COMPONENT_TYPE] as
@@ -22,6 +25,14 @@ const component = computed(() =>
 
 const componentEnabled = computed(() => component.value?.enabled !== false)
 const normalizedProps = computed(() => clampCharacterControllerComponentProps(component.value?.props ?? null))
+const animationComponent = computed(() =>
+  selectedNode.value?.components?.[ANIMATION_COMPONENT_TYPE] as
+    | SceneNodeComponentState<AnimationComponentProps>
+    | undefined,
+)
+const animationSourceNodeId = computed(() => {
+  return selectedNode.value?.id ?? null
+})
 const clipOptions = ref<Array<{ label: string; value: string }>>([])
 const isLoadingClips = ref(false)
 const clipLoadError = ref<string | null>(null)
@@ -96,21 +107,26 @@ async function loadClipsForNode(nodeId: string) {
   const requestId = ++clipLoadRequestId
   clipOptions.value = []
   clipLoadError.value = null
+  if (!animationComponent.value) {
+    clipLoadError.value = 'Add an Animation component before configuring character animation bindings.'
+    return
+  }
   isLoadingClips.value = true
   try {
-    let runtimeObject = getRuntimeObject(nodeId)
+    const sourceId = animationSourceNodeId.value ?? nodeId
+    let runtimeObject = getRuntimeObject(sourceId)
     if (!runtimeObject) {
-      const node = selectedNode.value
+      const node = findSceneNodeById(nodes.value, sourceId) ?? selectedNode.value
       if (node) {
         await sceneStore.ensureSceneAssetsReady({ nodes: [node], showOverlay: false, refreshViewport: false })
-        runtimeObject = getRuntimeObject(nodeId)
+        runtimeObject = getRuntimeObject(sourceId)
       }
     }
     if (!runtimeObject) {
       return
     }
 
-    const clipEntries = collectRuntimeAnimationClipOptions(runtimeObject)
+    const clipEntries = collectAnimationClipCatalog(runtimeObject)
     if (requestId === clipLoadRequestId) {
       clipOptions.value = clipEntries
     }
@@ -127,7 +143,7 @@ async function loadClipsForNode(nodeId: string) {
 }
 
 watch(
-  () => [selectedNodeId.value, component.value?.id ?? null] as const,
+  () => [selectedNodeId.value, component.value?.id ?? null, animationComponent.value?.id ?? null, animationSourceNodeId.value] as const,
   ([nodeId, componentId]) => {
     if (!componentId || !nodeId) {
       clipOptions.value = []

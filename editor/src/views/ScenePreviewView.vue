@@ -171,6 +171,8 @@ import {
 } from '@schema/multiuserPeerVisibility'
 import {
 	behaviorComponentDefinition,
+	ANIMATION_COMPONENT_TYPE,
+	type AnimationComponentProps,
 	billboardComponentDefinition,
 	guideboardComponentDefinition,
 	displayBoardComponentDefinition,
@@ -179,6 +181,7 @@ import {
 	roadComponentDefinition,
 	landformComponentDefinition,
 	viewPointComponentDefinition,
+	animationComponentDefinition,
 	warpGateComponentDefinition,
 	effectComponentDefinition,
 	rigidbodyComponentDefinition,
@@ -225,6 +228,7 @@ import {
 	DEFAULT_AXLE,
 	SCENE_STATE_ANCHOR_COMPONENT_TYPE,
 	} from '@schema/components'
+import { SceneAnimationRuntimeManager } from '@schema/sceneAnimationRuntime'
 import {
 	buildInstancedLodCullingRequest,
 	buildInstancedLodCullingCandidateSnapshot,
@@ -1197,6 +1201,7 @@ previewComponentManager.registerDefinition(displayBoardComponentDefinition)
 previewComponentManager.registerDefinition(billboardComponentDefinition)
 previewComponentManager.registerDefinition(signboardComponentDefinition)
 previewComponentManager.registerDefinition(viewPointComponentDefinition)
+previewComponentManager.registerDefinition(animationComponentDefinition)
 previewComponentManager.registerDefinition(warpGateComponentDefinition)
 previewComponentManager.registerDefinition(effectComponentDefinition)
 previewComponentManager.registerDefinition(couponComponentDefinition)
@@ -1502,11 +1507,7 @@ const behaviorAudioBufferCache = new Map<string, AudioBuffer>()
 const pendingBehaviorAudioBufferRequests = new Map<string, Promise<AudioBuffer | null>>()
 const activeBehaviorSounds = new Map<string, BehaviorSoundInstance>()
 const behaviorSoundDistanceScratch = new THREE.Vector3()
-const nodeAnimationControllers = new Map<string, {
-	mixer: THREE.AnimationMixer
-	clips: THREE.AnimationClip[]
-	defaultClip: THREE.AnimationClip | null
-}>()
+const nodeAnimationRuntime = new SceneAnimationRuntimeManager()
 type BehaviorProximityCandidate = { hasApproach: boolean; hasDepart: boolean }
 type BehaviorProximityStateEntry = { inside: boolean; lastDistance: number | null }
 type BehaviorProximityThreshold = { enter: number; exit: number; objectId: string }
@@ -2504,7 +2505,6 @@ const lastOrbitState = {
 	position: defaultOrbitState.position.clone(),
 	target: defaultOrbitState.target.clone(),
 }
-let animationMixers: THREE.AnimationMixer[] = []
 let effectRuntimeTickers: Array<(delta: number) => void> = []
 
 type WarpGateRuntimeRegistryEntry = {
@@ -6577,7 +6577,7 @@ function resetAnimationControllers(): void {
 			activeBehaviorAnimations.delete(token)
 		}
 	})
-	animationMixers.forEach((mixer) => {
+	nodeAnimationRuntime.listMixers().forEach((mixer) => {
 		try {
 			mixer.stopAllAction()
 			const root = mixer.getRoot()
@@ -6588,50 +6588,12 @@ function resetAnimationControllers(): void {
 			console.warn('[ScenePreview] Failed to reset animation mixer', error)
 		}
 	})
-	animationMixers = []
-	nodeAnimationControllers.clear()
+	nodeAnimationRuntime.reset()
 	resetEffectRuntimeTickers()
 }
 
-function pickDefaultAnimationClip(clips: THREE.AnimationClip[]): THREE.AnimationClip | null {
-	if (!Array.isArray(clips) || !clips.length) {
-		return null
-	}
-	const finite = clips.find((clip) => Number.isFinite(clip.duration) && clip.duration > 0)
-	return finite ?? clips[0] ?? null
-}
-
-function playAnimationClip(
-	mixer: THREE.AnimationMixer,
-	clip: THREE.AnimationClip,
-	options: { loop?: boolean } = {},
-): THREE.AnimationAction {
-	const { loop = false } = options
-	const action = mixer.clipAction(clip)
-	action.reset()
-	action.enabled = true
-	if (loop) {
-		action.setLoop(THREE.LoopRepeat, Number.POSITIVE_INFINITY)
-		action.clampWhenFinished = false
-	} else {
-		action.setLoop(THREE.LoopOnce, 0)
-		action.clampWhenFinished = true
-	}
-	action.play()
-	return action
-}
-
 function restartDefaultAnimation(nodeId: string): void {
-	const controller = nodeAnimationControllers.get(nodeId)
-	if (!controller) {
-		return
-	}
-	const clip = controller.defaultClip ?? pickDefaultAnimationClip(controller.clips)
-	if (!clip) {
-		return
-	}
-	controller.defaultClip = clip
-	playAnimationClip(controller.mixer, clip, { loop: true })
+	nodeAnimationRuntime.restoreDefaultNodeAnimation(nodeId)
 }
 
 function startTimedAnimation(
@@ -7065,7 +7027,7 @@ function handlePlayAnimationEvent(event: Extract<BehaviorRuntimeEvent, { type: '
 		console.warn('[ScenePreview] Play animation skipped: no target node')
 		return
 	}
-	const controller = nodeAnimationControllers.get(targetNodeId)
+	const controller = nodeAnimationRuntime.get(targetNodeId)
 	if (!controller) {
 		if (event.token) {
 			resolveBehaviorToken(event.token, { type: 'fail', message: 'Animation target not available' })
@@ -7075,27 +7037,28 @@ function handlePlayAnimationEvent(event: Extract<BehaviorRuntimeEvent, { type: '
 		})
 		return
 	}
-	const clips = controller.clips
-	const requestedName = event.clipName && event.clipName.trim().length ? event.clipName.trim() : null
-	let clip = requestedName
-		? clips.find((entry) => entry.name === requestedName)
-		: clips[0] ?? null
+	const clip = nodeAnimationRuntime.resolveClip(targetNodeId, event.clipName)
 	if (!clip) {
 		if (event.token) {
 			resolveBehaviorToken(event.token, {
 				type: 'fail',
-				message: requestedName ? `Animation clip "${requestedName}" not found` : 'No animation clips available',
+				message: event.clipName ? `Animation clip "${event.clipName}" not found` : 'No animation clips available',
 			})
 		}
 		console.warn('[ScenePreview] Play animation skipped: clip not found', {
 			targetNodeId,
-			requestedName,
+			requestedName: event.clipName,
 		})
 		return
 	}
+	const action = nodeAnimationRuntime.playNodeAnimation(targetNodeId, event.clipName, { loop: Boolean(event.loop) })
 	const mixer = controller.mixer
-	mixer.stopAllAction()
-	const action = playAnimationClip(mixer, clip, { loop: Boolean(event.loop) })
+	if (!action) {
+		if (event.token) {
+			resolveBehaviorToken(event.token, { type: 'fail', message: 'Unable to start animation.' })
+		}
+		return
+	}
 	const token = event.token
 	if (!token) {
 		return
@@ -7149,6 +7112,14 @@ function handleTriggerBehaviorEvent(event: Extract<BehaviorRuntimeEvent, { type:
 		sequenceId ? { sequenceId } : {},
 	)
 	processBehaviorEvents(followUps)
+}
+
+function handleStopAnimationEvent(event: Extract<BehaviorRuntimeEvent, { type: 'stop-animation' }>) {
+	const targetNodeId = event.targetNodeId || event.nodeId
+	if (!targetNodeId) {
+		return
+	}
+	nodeAnimationRuntime.stopNodeAnimation(targetNodeId, { restoreDefault: true })
 }
 
 function setCameraViewState(mode: CameraViewMode, targetNodeId: string | null = null): void {
@@ -8550,6 +8521,9 @@ function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
 		case 'play-animation':
 			handlePlayAnimationEvent(event)
 			break
+		case 'stop-animation':
+			handleStopAnimationEvent(event)
+			break
 		case 'trigger-behavior':
 			handleTriggerBehaviorEvent(event)
 			break
@@ -8860,7 +8834,7 @@ function updateFirstPersonCameraLookTween(delta: number): void {
 }
 
 watch(isPlaying, (playing) => {
-	animationMixers.forEach((mixer) => {
+	nodeAnimationRuntime.listMixers().forEach((mixer) => {
 		mixer.timeScale = playing ? 1 : 0
 	})
 })
@@ -9234,7 +9208,7 @@ function updatePlaybackSystemsForFrame(delta: number): boolean {
 		},
 	})
 	previewComponentManager.update(delta)
-	animationMixers.forEach((mixer) => mixer.update(delta))
+	nodeAnimationRuntime.update(delta)
 	activeBehaviorSounds.forEach((instance) => {
 		if (!instance.params.spatial || instance.stopped) {
 			return
@@ -10232,15 +10206,7 @@ function removeNodeSubtree(nodeId: string) {
 			clearInstancedLodRuntimeEntryCacheForNode(id)
 			removeRigidbodyInstance(id)
 			previewComponentManager.removeNode(id)
-			const controller = nodeAnimationControllers.get(id)
-			if (controller) {
-				try {
-					controller.mixer.stopAllAction()
-				} catch (error) {
-					console.warn('[ScenePreview] Failed to stop animation mixer for removed node', error)
-				}
-				nodeAnimationControllers.delete(id)
-			}
+			nodeAnimationRuntime.unregister(id)
 		}
 		ancestors.push(child)
 	})
@@ -13098,25 +13064,26 @@ function prepareImportedObjectForPreview(object: THREE.Object3D): void {
 function refreshAnimations() {
 	resetAnimationControllers()
 
-	nodeObjectMap.forEach((object, nodeId) => {
-		const clips = (object as unknown as { animations?: THREE.AnimationClip[] }).animations
-		if (!Array.isArray(clips) || !clips.length) {
+	previewNodeMap.forEach((node, nodeId) => {
+		const component = node.components?.[ANIMATION_COMPONENT_TYPE] as SceneNodeComponentState<AnimationComponentProps> | undefined
+		if (!component || component.enabled === false) {
+			nodeAnimationRuntime.unregister(nodeId)
 			return
 		}
-		const validClips = clips.filter((clip): clip is THREE.AnimationClip => Boolean(clip))
-		if (!validClips.length) {
-			return
-		}
-		const mixer = new THREE.AnimationMixer(object)
-		mixer.timeScale = isPlaying.value ? 1 : 0
-		animationMixers.push(mixer)
-		const defaultClip = pickDefaultAnimationClip(validClips)
-		nodeAnimationControllers.set(nodeId, { mixer, clips: validClips, defaultClip })
-		if (defaultClip) {
-			playAnimationClip(mixer, defaultClip, { loop: true })
-		}
+		const sourceNodeId = nodeId
+		const runtimeObject = nodeObjectMap.get(sourceNodeId) ?? null
+		nodeAnimationRuntime.sync({
+			nodeId,
+			sourceNodeId,
+			runtimeObject,
+			defaultClipName: component.props.defaultClipName,
+			autoplay: component.props.autoplay,
+		})
 	})
 
+	nodeAnimationRuntime.listMixers().forEach((mixer) => {
+		mixer.timeScale = isPlaying.value ? 1 : 0
+	})
 	refreshEffectRuntimeTickers()
 }
 
@@ -13557,8 +13524,8 @@ onBeforeUnmount(() => {
 	disposeMaterialTextureCache()
 	disposeSceneCsmShadowRuntime()
 	lanternViewerInstance = null
-	animationMixers.forEach((mixer) => mixer.stopAllAction())
-	animationMixers = []
+	nodeAnimationRuntime.listMixers().forEach((mixer) => mixer.stopAllAction())
+	nodeAnimationRuntime.reset()
 	if (firstPersonControls) {
 		firstPersonControls.dispose()
 		firstPersonControls = null

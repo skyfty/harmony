@@ -813,7 +813,8 @@ export type BehaviorScriptType =
   | 'loadScene'
   | 'exitScene'
   | 'trigger'
-  | 'animation'
+  | 'playAnimation'
+  | 'stopAnimation'
   | 'showCockpit'
   | 'hideCockpit'
   | 'drive'
@@ -992,7 +993,7 @@ export interface HideBehaviorParams {
   targetNodeId: string | null
 }
 
-export interface AnimationBehaviorParams {
+export interface PlayAnimationBehaviorParams {
   /** Target node that owns the animation clip to play. */
   targetNodeId: string | null
   /** Identifier or name of the animation clip to play. */
@@ -1001,6 +1002,11 @@ export interface AnimationBehaviorParams {
   loop: boolean
   /** Wait for the animation to finish before continuing. Ignored when loop is enabled. */
   waitForCompletion: boolean
+}
+
+export interface StopAnimationBehaviorParams {
+  /** Target node whose animation component should be stopped. */
+  targetNodeId: string | null
 }
 
 export interface TriggerBehaviorParams {
@@ -1155,8 +1161,12 @@ export type SceneBehaviorScriptBinding =
       params: TriggerBehaviorParams
     }
   | {
-      type: 'animation'
-      params: AnimationBehaviorParams
+      type: 'playAnimation'
+      params: PlayAnimationBehaviorParams
+    }
+  | {
+      type: 'stopAnimation'
+      params: StopAnimationBehaviorParams
     }
   | {
       type: 'showCockpit'

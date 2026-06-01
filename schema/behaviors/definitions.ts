@@ -28,7 +28,8 @@ import type {
   ShowPurposeBehaviorParams,
   HidePurposeBehaviorParams,
   TriggerBehaviorParams,
-  AnimationBehaviorParams,
+  PlayAnimationBehaviorParams,
+  StopAnimationBehaviorParams,
   ShowCockpitBehaviorParams,
   HideCockpitBehaviorParams,
   DriveBehaviorParams,
@@ -548,16 +549,27 @@ const scriptDefinitions: BehaviorScriptDefinition[] = [
     },
   },
   {
-    id: 'animation',
+    id: 'playAnimation',
     label: 'Play Animation',
-    description: 'Play an animation clip on the selected node.',
-    icon: 'mdi-animation-outline',
-    createDefaultParams(): AnimationBehaviorParams {
+    description: 'Play an animation clip through the target animation component.',
+    icon: 'mdi-animation-play-outline',
+    createDefaultParams(): PlayAnimationBehaviorParams {
       return {
         targetNodeId: null,
         clipName: null,
         loop: false,
         waitForCompletion: false,
+      }
+    },
+  },
+  {
+    id: 'stopAnimation',
+    label: 'Stop Animation',
+    description: 'Stop animation playback on the target animation component.',
+    icon: 'mdi-animation-stop',
+    createDefaultParams(): StopAnimationBehaviorParams {
+      return {
+        targetNodeId: null,
       }
     },
   },
@@ -1102,17 +1114,26 @@ function cloneScriptBinding(binding: SceneBehaviorScriptBinding): SceneBehaviorS
         },
       }
     }
-    case 'animation': {
-      const params = binding.params as AnimationBehaviorParams | undefined
+    case 'playAnimation': {
+      const params = binding.params as PlayAnimationBehaviorParams | undefined
       const loop = Boolean(params?.loop)
       const clipName = params?.clipName && params.clipName.trim().length ? params.clipName.trim() : null
       return {
-        type: 'animation',
+        type: 'playAnimation',
         params: {
           targetNodeId: params?.targetNodeId ?? null,
           clipName,
           loop,
           waitForCompletion: loop ? false : Boolean(params?.waitForCompletion),
+        },
+      }
+    }
+    case 'stopAnimation': {
+      const params = binding.params as StopAnimationBehaviorParams | undefined
+      return {
+        type: 'stopAnimation',
+        params: {
+          targetNodeId: normalizeTargetNodeId(params?.targetNodeId),
         },
       }
     }
@@ -1511,17 +1532,26 @@ export function ensureBehaviorParams(
           },
         }
       }
-      case 'animation': {
-        const params = script.params as Partial<AnimationBehaviorParams> | undefined
+      case 'playAnimation': {
+        const params = script.params as Partial<PlayAnimationBehaviorParams> | undefined
         const loop = Boolean(params?.loop)
         const clipName = params?.clipName && params.clipName.trim().length ? params.clipName.trim() : null
         return {
-          type: 'animation',
+          type: 'playAnimation',
           params: {
             targetNodeId: params?.targetNodeId ?? null,
             clipName,
             loop,
             waitForCompletion: loop ? false : Boolean(params?.waitForCompletion),
+          },
+        }
+      }
+      case 'stopAnimation': {
+        const params = script.params as Partial<StopAnimationBehaviorParams> | undefined
+        return {
+          type: 'stopAnimation',
+          params: {
+            targetNodeId: normalizeTargetNodeId(params?.targetNodeId),
           },
         }
       }

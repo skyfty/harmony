@@ -19,7 +19,8 @@ import type {
   WatchBehaviorParams,
   ShowPurposeBehaviorParams,
   TriggerBehaviorParams,
-  AnimationBehaviorParams,
+  PlayAnimationBehaviorParams,
+  StopAnimationBehaviorParams,
   DriveBehaviorParams,
   ControlCharacterBehaviorParams,
   CouponBehaviorParams,
@@ -222,6 +223,15 @@ export type BehaviorRuntimeEvent =
       loop: boolean
       waitForCompletion: boolean
       token?: string
+    }
+  | {
+      type: 'stop-animation'
+      nodeId: string
+      action: BehaviorEventType
+      sequenceId: string
+      behaviorSequenceId: string
+      behaviorId: string
+      targetNodeId: string
     }
   | {
       type: 'vehicle-drive'
@@ -787,7 +797,7 @@ function createAnimationEvent(
   state: BehaviorSequenceState,
   behavior: SceneBehavior,
 ): Extract<BehaviorRuntimeEvent, { type: 'play-animation' }> {
-  const params = behavior.script.params as AnimationBehaviorParams | undefined
+  const params = behavior.script.params as PlayAnimationBehaviorParams | undefined
   const fallbackTarget = state.nodeId
   const rawTargetNodeId = params?.targetNodeId && params.targetNodeId.trim().length ? params.targetNodeId : null
   const targetNodeId = rawTargetNodeId ?? fallbackTarget
@@ -816,6 +826,24 @@ function createAnimationEvent(
     loop,
     waitForCompletion,
     token,
+  }
+}
+
+function createStopAnimationEvent(
+  state: BehaviorSequenceState,
+  behavior: SceneBehavior,
+): Extract<BehaviorRuntimeEvent, { type: 'stop-animation' }> {
+  const params = behavior.script.params as StopAnimationBehaviorParams | undefined
+  const fallbackTarget = state.nodeId
+  const targetNodeId = params?.targetNodeId && params.targetNodeId.trim().length ? params.targetNodeId.trim() : fallbackTarget
+  return {
+    type: 'stop-animation',
+    nodeId: state.nodeId,
+    action: state.action,
+    sequenceId: state.id,
+    behaviorSequenceId: state.behaviorSequenceId,
+    behaviorId: behavior.id,
+    targetNodeId,
   }
 }
 
@@ -1111,7 +1139,7 @@ function advanceSequence(state: BehaviorSequenceState): BehaviorRuntimeEvent[] {
         events.push(createTriggerEvent(state, behavior))
         state.index += 1
         continue
-      case 'animation': {
+      case 'playAnimation': {
         const event = createAnimationEvent(state, behavior)
         events.push(event)
         if (event.waitForCompletion) {
@@ -1120,6 +1148,10 @@ function advanceSequence(state: BehaviorSequenceState): BehaviorRuntimeEvent[] {
         state.index += 1
         continue
       }
+      case 'stopAnimation':
+        events.push(createStopAnimationEvent(state, behavior))
+        state.index += 1
+        continue
       case 'showCockpit':
         events.push(createShowCockpitEvent(state, behavior))
         state.index += 1

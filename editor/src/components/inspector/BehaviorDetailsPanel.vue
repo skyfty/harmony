@@ -29,7 +29,8 @@ import ShowParams from '@/components/inspector/behavior/ShowParams.vue'
 import HideParams from '@/components/inspector/behavior/HideParams.vue'
 import LanternParams from '@/components/inspector/behavior/LanternParams.vue'
 import TriggerParams from '@/components/inspector/behavior/TriggerParams.vue'
-import AnimationParams from '@/components/inspector/behavior/AnimationParams.vue'
+import PlayAnimationParams from '@/components/inspector/behavior/PlayAnimationParams.vue'
+import StopAnimationParams from '@/components/inspector/behavior/StopAnimationParams.vue'
 import DriveParams from '@/components/inspector/behavior/DriveParams.vue'
 import ControlCharacterParams from '@/components/inspector/behavior/ControlCharacterParams.vue'
 import ReleaseCharacterParams from '@/components/inspector/behavior/ReleaseCharacterParams.vue'
@@ -106,7 +107,8 @@ const PARAMETER_COMPONENTS: Partial<Record<BehaviorScriptType, unknown>> = {
   hide: HideParams,
   lantern: LanternParams,
   trigger: TriggerParams,
-  animation: AnimationParams,
+  playAnimation: PlayAnimationParams,
+  stopAnimation: StopAnimationParams,
   loadScene: LoadSceneParams,
   exitScene: ExitSceneParams,
   showCockpit: ShowCockpitParams,
@@ -222,7 +224,8 @@ function applyDefaultTarget(step: SceneBehavior): void {
     scriptType !== 'show' &&
     scriptType !== 'hide' &&
     scriptType !== 'watch' &&
-    scriptType !== 'animation' &&
+    scriptType !== 'playAnimation' &&
+    scriptType !== 'stopAnimation' &&
     scriptType !== 'moveTo' &&
     scriptType !== 'playSound' &&
     scriptType !== 'controlCharacter' &&

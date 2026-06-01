@@ -570,6 +570,7 @@ import {
   type SceneCsmShadowRuntime,
 } from '@harmony/schema/sceneCsm';
 import { ComponentManager } from '@harmony/schema/components/componentManager';
+import { SceneAnimationRuntimeManager } from '@harmony/schema/sceneAnimationRuntime';
 import {
   setActiveMultiuserRuntimeBridge,
   setActiveMultiuserSceneId,
@@ -594,6 +595,11 @@ import {
 } from '@harmony/schema/components/definitions/warpGateComponent';
 
 type RigidbodyComponentProps = any;
+import {
+  animationComponentDefinition,
+  ANIMATION_COMPONENT_TYPE,
+  type AnimationComponentProps,
+} from '@harmony/schema/components/definitions/animationComponent';
 import {
   behaviorComponentDefinition,
 } from '@harmony/schema/components/definitions/behaviorComponent';
@@ -1833,6 +1839,7 @@ function disposeMaterialTextureCache(): void {
 
 const previewComponentManager = new ComponentManager();
 previewComponentManager.registerDefinition(floorComponentDefinition);
+previewComponentManager.registerDefinition(animationComponentDefinition);
 previewComponentManager.registerDefinition(wallComponentDefinition);
 previewComponentManager.registerDefinition(boundaryWallComponentDefinition);
 previewComponentManager.registerDefinition(roadComponentDefinition);
@@ -3555,16 +3562,7 @@ type BehaviorSoundInstance = {
 };
 
 const activeBehaviorSounds = new Map<string, BehaviorSoundInstance>();
-const nodeAnimationControllers = new Map<string, {
-  mixer: THREE.AnimationMixer;
-  clips: THREE.AnimationClip[];
-  defaultClip: THREE.AnimationClip | null;
-  activeAction: THREE.AnimationAction | null;
-  activeClipName: string | null;
-  activeLoop: boolean;
-  activeTimeScale: number;
-}>();
-let animationMixers: THREE.AnimationMixer[] = [];
+const nodeAnimationRuntime = new SceneAnimationRuntimeManager();
 let effectRuntimeTickers: Array<(delta: number) => void> = [];
 
 type WarpGateRuntimeRegistryEntry = {
@@ -11863,30 +11861,12 @@ function resolveLocalMultiuserVehiclePresentation(nodeId: string): MultiuserVehi
 }
 
 function resolveLocalMultiuserCharacterPresentation(nodeId: string): MultiuserCharacterPresentation | null {
-  const controller = nodeAnimationControllers.get(nodeId) ?? null;
-  if (!controller) {
+  const animation = nodeAnimationRuntime.getPresentation(nodeId);
+  if (!animation) {
     return null;
   }
-  const action = controller.activeAction ?? null;
-  const clip = controller.clips.find((entry) => entry.name === controller.activeClipName)
-    ?? controller.defaultClip
-    ?? action?.getClip()
-    ?? null;
-  if (!action || !clip) {
-    return null;
-  }
-  const duration = Number.isFinite(clip.duration) && clip.duration > 0 ? clip.duration : 0;
-  const time = Number.isFinite(action.time) ? action.time : 0;
-  const timeScale = Number.isFinite(action.timeScale) ? action.timeScale : controller.activeTimeScale || 1;
   return {
-    animation: {
-      clipName: clip.name?.trim().length ? clip.name : null,
-      time,
-      duration,
-      loop: controller.activeLoop,
-      timeScale,
-      normalizedTime: duration > 0 ? time / duration : null,
-    },
+    animation,
   };
 }
 
@@ -12397,11 +12377,11 @@ function resetAnimationControllers(): void {
     try {
       cancel();
     } catch (error) {
-      console.warn('取消行为动画失败', error);
+      console.warn('Failed to cancel behavior animation', error);
     }
   });
   activeBehaviorAnimations.clear();
-  animationMixers.forEach((mixer) => {
+  nodeAnimationRuntime.listMixers().forEach((mixer) => {
     try {
       mixer.stopAllAction();
       const root = mixer.getRoot();
@@ -12409,11 +12389,10 @@ function resetAnimationControllers(): void {
         mixer.uncacheRoot(root);
       }
     } catch (error) {
-      console.warn('重置动画控制器失败', error);
+      console.warn('Failed to reset animation controllers', error);
     }
   });
-  animationMixers = [];
-  nodeAnimationControllers.clear();
+  nodeAnimationRuntime.reset();
   resetEffectRuntimeTickers();
 }
 
@@ -12446,56 +12425,29 @@ function playAnimationClip(
 }
 
 function restartDefaultAnimation(nodeId: string): void {
-  const controller = nodeAnimationControllers.get(nodeId);
-  if (!controller) {
-    return;
-  }
-  const clip = controller.defaultClip ?? pickDefaultAnimationClip(controller.clips);
-  if (!clip) {
-    return;
-  }
-  controller.defaultClip = clip;
-  controller.activeAction = playAnimationClip(controller.mixer, clip, { loop: true });
-  controller.activeClipName = clip.name ?? null;
-  controller.activeLoop = true;
-  controller.activeTimeScale = controller.activeAction.timeScale;
+  nodeAnimationRuntime.restoreDefaultNodeAnimation(nodeId);
 }
 
 function refreshAnimationControllers(root: THREE.Object3D): void {
+  void root;
   resetAnimationControllers();
-  const mixers: THREE.AnimationMixer[] = [];
-  root.traverse((object) => {
-    const nodeId = object.userData?.nodeId as string | undefined;
-    if (!nodeId) {
+  nodeObjectMap.forEach((_object, nodeId) => {
+    const node = resolveNodeById(nodeId);
+    const component = node?.components?.[ANIMATION_COMPONENT_TYPE] as SceneNodeComponentState<AnimationComponentProps> | undefined;
+    if (!node || !component || component.enabled === false) {
+      nodeAnimationRuntime.unregister(nodeId);
       return;
     }
-    const clips = (object as unknown as { animations?: THREE.AnimationClip[] }).animations;
-    if (!Array.isArray(clips) || !clips.length) {
-      return;
-    }
-    const validClips = clips.filter((clip): clip is THREE.AnimationClip => Boolean(clip));
-    if (!validClips.length) {
-      return;
-    }
-    const mixer = new THREE.AnimationMixer(object);
-    mixer.timeScale = 1;
-    mixers.push(mixer);
-    const defaultClip = pickDefaultAnimationClip(validClips);
-    const activeAction = defaultClip ? playAnimationClip(mixer, defaultClip, { loop: true }) : null;
-    nodeAnimationControllers.set(nodeId, {
-      mixer,
-      clips: validClips,
-      defaultClip,
-      activeAction,
-      activeClipName: defaultClip?.name ?? null,
-      activeLoop: true,
-      activeTimeScale: 1,
+    const sourceNodeId = nodeId;
+    const runtimeObject = nodeObjectMap.get(sourceNodeId) ?? null;
+    nodeAnimationRuntime.sync({
+      nodeId,
+      sourceNodeId,
+      runtimeObject,
+      defaultClipName: component.props.defaultClipName,
+      autoplay: component.props.autoplay,
     });
-    if (defaultClip) {
-      // already playing above
-    }
   });
-  animationMixers = mixers;
   refreshEffectRuntimeTickers();
 }
 
@@ -12575,39 +12527,38 @@ function handlePlayAnimationEvent(event: Extract<BehaviorRuntimeEvent, { type: '
   const targetNodeId = event.targetNodeId || event.nodeId;
   if (!targetNodeId) {
     if (event.token) {
-      resolveBehaviorToken(event.token, { type: 'fail', message: '缺少动画目标' });
+      resolveBehaviorToken(event.token, { type: 'fail', message: 'Animation target missing' });
     }
-    console.warn('播放动画失败：未提供节点 ID');
+    console.warn('Play animation skipped: no target node');
     return;
   }
-  const controller = nodeAnimationControllers.get(targetNodeId);
+  const controller = nodeAnimationRuntime.get(targetNodeId);
   if (!controller) {
     if (event.token) {
-      resolveBehaviorToken(event.token, { type: 'fail', message: '目标节点没有动画' });
+      resolveBehaviorToken(event.token, { type: 'fail', message: 'Animation target not available' });
     }
-    console.warn('播放动画失败：目标节点未暴露动画', { targetNodeId });
+    console.warn('Play animation skipped: animation target not available', { targetNodeId });
     return;
   }
-  const clips = controller.clips;
-  const requestedName = event.clipName && event.clipName.trim().length ? event.clipName.trim() : null;
-  const clip = requestedName ? clips.find((entry) => entry.name === requestedName) : clips[0] ?? null;
+  const clip = nodeAnimationRuntime.resolveClip(targetNodeId, event.clipName);
   if (!clip) {
     if (event.token) {
       resolveBehaviorToken(event.token, {
         type: 'fail',
-        message: requestedName ? `未找到动画片段 ${requestedName}` : '没有可用的动画片段',
+        message: event.clipName ? `Animation clip "${event.clipName}" not found` : 'No animation clips available',
       });
     }
-    console.warn('播放动画失败：未找到片段', { targetNodeId, requestedName });
+    console.warn('Play animation skipped: clip not found', { targetNodeId, requestedName: event.clipName });
     return;
   }
   const mixer = controller.mixer;
-  mixer.stopAllAction();
-  const action = playAnimationClip(mixer, clip, { loop: Boolean(event.loop) });
-  controller.activeAction = action;
-  controller.activeClipName = clip.name ?? null;
-  controller.activeLoop = Boolean(event.loop);
-  controller.activeTimeScale = action.timeScale;
+  const action = nodeAnimationRuntime.playNodeAnimation(targetNodeId, event.clipName, { loop: Boolean(event.loop) });
+  if (!action) {
+    if (event.token) {
+      resolveBehaviorToken(event.token, { type: 'fail', message: 'Unable to start animation.' });
+    }
+    return;
+  }
   const token = event.token;
   if (!token) {
     return;
@@ -12635,12 +12586,20 @@ function handlePlayAnimationEvent(event: Extract<BehaviorRuntimeEvent, { type: '
     try {
       action.stop();
     } catch (error) {
-      console.warn('停止动画失败', error);
+      console.warn('Failed to stop animation', error);
     }
     restartDefaultAnimation(targetNodeId);
   };
   activeBehaviorAnimations.set(token, cancel);
   mixer.addEventListener('finished', onFinished);
+}
+
+function handleStopAnimationEvent(event: Extract<BehaviorRuntimeEvent, { type: 'stop-animation' }>) {
+  const targetNodeId = event.targetNodeId || event.nodeId;
+  if (!targetNodeId) {
+    return;
+  }
+  nodeAnimationRuntime.stopNodeAnimation(targetNodeId, { restoreDefault: true });
 }
 
 function handleTriggerBehaviorEvent(event: Extract<BehaviorRuntimeEvent, { type: 'trigger-behavior' }>) {
@@ -14558,6 +14517,9 @@ function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
       break;
     case 'play-animation':
       handlePlayAnimationEvent(event);
+      break;
+    case 'stop-animation':
+      handleStopAnimationEvent(event);
       break;
     case 'trigger-behavior':
       handleTriggerBehaviorEvent(event);
@@ -16820,8 +16782,8 @@ async function mountGraphAndSyncSubsystems(
 
   setSceneInitState({
     stage: 'mounting',
-    label: '正在挂载场景',
-    detail: '正在刷新动画与交互...',
+    label: 'Mounting Scene',
+    detail: 'Refreshing animation and interactions...',
     stagePercent: 52,
     currentIndex: 3,
     currentTotal: 6,
@@ -16914,8 +16876,8 @@ async function mountGraphAndSyncSubsystems(
 
   setSceneInitState({
     stage: 'finalizing',
-    label: '正在刷新动画控制器',
-    detail: '正在刷新动画控制器...',
+    label: 'Refreshing Animation Controllers',
+    detail: 'Refreshing animation controllers...',
     stagePercent: 34,
     currentIndex: 1,
     currentTotal: 4,
@@ -17021,7 +16983,7 @@ function startRenderLoop(
           });
           previewComponentManager.update(deltaSeconds);
           waterRuntime.update(deltaSeconds, { renderer, scene, camera });
-          animationMixers.forEach((mixer) => mixer.update(deltaSeconds));
+          nodeAnimationRuntime.update(deltaSeconds);
           activeBehaviorSounds.forEach((instance) => {
             if (!instance.audio || !instance.params.spatial || instance.stopped) {
               return;
