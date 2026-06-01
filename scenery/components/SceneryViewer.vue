@@ -10481,8 +10481,8 @@ function applyRemoteMultiuserVehiclePresentation(
       wheelStateByNodeId.set(nodeId, wheel);
     }
   });
-  wheelBindings.forEach((binding, index) => {
-    const wheelState = (binding.nodeId && wheelStateByNodeId.get(binding.nodeId)) ?? presentation.wheels[index] ?? null;
+  wheelBindings.forEach((binding) => {
+    const wheelState = binding.nodeId ? wheelStateByNodeId.get(binding.nodeId) ?? null : null;
     if (!wheelState) {
       return;
     }
