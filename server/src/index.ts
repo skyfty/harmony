@@ -18,7 +18,7 @@ import { ensureAppUserWechatIndexes } from '@/services/appUserIndexService'
 import { ensureMiniProgramTestUserV2 } from '@/services/miniAuthService'
 import { ensureEditorAuthBootstrap } from '@/services/authService'
 import { koaBody } from '@/utils/bodyParser'
-import { MultiuserService } from '@/services/multiuserService'
+import { MultiuserService, setActiveMultiuserService } from '@/services/multiuserService'
 import { ensureVehicleCoverUrlField, ensureVehicleIdentifierField, ensureVehicleSortOrderField } from '@/services/vehicleMigrationService'
 import { ensureCouponProductCategory, ensureTransportProductCategory } from '@/services/productCategoryService'
 
@@ -141,6 +141,7 @@ async function bootstrap(): Promise<void> {
   registerRoutes(app)
 
   const multiuserService = new MultiuserService(appConfig.multiuserPort)
+  setActiveMultiuserService(multiuserService)
   multiuserService.start()
 
   const server = app.listen(appConfig.port, () => {
@@ -151,6 +152,7 @@ async function bootstrap(): Promise<void> {
     server.close()
     await disconnectDatabase().catch(() => undefined)
     await multiuserService.stop().catch(() => undefined)
+    setActiveMultiuserService(null)
     process.exit(0)
   }
 

@@ -12,6 +12,7 @@ export * from './scene-spots';
 export * from './scene-spot-comments';
 export * from './scene-spot-categories';
 export * from './hotFeatured';
+export * from './multiuser';
 export * from './user-projects';
 export * from './loginLogs';
 export * from './analytics';

@@ -1,3 +1,4 @@
+import type { IncomingMessage } from 'node:http'
 import { WebSocketServer, type WebSocket } from 'ws'
 import { nanoid } from 'nanoid'
 import fs from 'fs-extra'
@@ -169,11 +170,83 @@ type MultiuserServerMessage =
   | { type: 'physics-removed'; sceneId: string; nodeId: string }
   | { type: 'error'; reason?: string }
 
+export interface MultiuserRuntimeConnectionSummary {
+  sessionId: string
+  userId: string
+  displayName: string
+  connectedAt: string
+  lastActiveAt: string
+  remoteAddress: string | null
+  forwardedFor: string | null
+  origin: string | null
+  userAgent: string | null
+  state: MultiuserPeerState | null
+}
+
+export interface MultiuserRuntimeEntitySummary {
+  entityId: string
+  state: MultiuserSharedEntitySnapshot['state']
+}
+
+export interface MultiuserRuntimeActivitySummary {
+  id: string
+  type:
+    | 'peer-connected'
+    | 'peer-disconnected'
+    | 'peer-state'
+    | 'entity-state'
+    | 'entity-removed'
+    | 'physics-input'
+    | 'admin-kick-connection'
+    | 'admin-kick-user'
+    | 'admin-clear'
+  sceneId: string
+  sessionId: string | null
+  userId: string | null
+  displayName: string | null
+  entityId: string | null
+  nodeId: string | null
+  summary: string
+  createdAt: string
+}
+
+export interface MultiuserRuntimePhysicsAuthoritySummary {
+  nodeId: string
+  snapshot: MultiuserPhysicsAuthoritySnapshot
+}
+
+export interface MultiuserRuntimeRoomSummary {
+  sceneId: string
+  userCount: number
+  maxUsers: number
+  entityCount: number
+  physicsAuthorityCount: number
+  updatedAt: string
+}
+
+export interface MultiuserRuntimeRoomDetail extends MultiuserRuntimeRoomSummary {
+  connections: MultiuserRuntimeConnectionSummary[]
+  entities: MultiuserRuntimeEntitySummary[]
+  physicsAuthority: MultiuserRuntimePhysicsAuthoritySummary[]
+  activities: MultiuserRuntimeActivitySummary[]
+}
+
+export interface MultiuserRuntimeSnapshot {
+  rooms: MultiuserRuntimeRoomSummary[]
+  updatedAt: string
+}
+
 interface SceneClient {
   socket: WebSocket
   sessionId: string
   userId: string | null
   displayName: string
+  connectedAt: string
+  lastActiveAt: string
+  remoteAddress: string | null
+  forwardedFor: string | null
+  origin: string | null
+  userAgent: string | null
   state: MultiuserPeerState | null
   session: SceneSession | null
 }
@@ -181,12 +254,31 @@ interface SceneClient {
 class SceneSession {
   public readonly clients = new Set<SceneClient>()
   public readonly sharedEntities = new Map<string, StoredSharedEntity>()
+  public readonly activities: MultiuserRuntimeActivitySummary[] = []
   public authoritativePhysicsRoom: AuthoritativePhysicsRoom | null = null
+  public readonly createdAt: string = new Date().toISOString()
+  public updatedAt: string = this.createdAt
 
   constructor(public readonly sceneId: string, public maxUsers: number) {}
 
   isFull(): boolean {
     return this.clients.size >= this.maxUsers
+  }
+
+  touch(timestamp = new Date().toISOString()): void {
+    this.updatedAt = timestamp
+  }
+
+  recordActivity(activity: Omit<MultiuserRuntimeActivitySummary, 'id' | 'createdAt' | 'sceneId'>): void {
+    this.activities.unshift({
+      id: nanoid(),
+      createdAt: new Date().toISOString(),
+      sceneId: this.sceneId,
+      ...activity,
+    })
+    if (this.activities.length > 50) {
+      this.activities.length = 50
+    }
   }
 
   broadcast(message: MultiuserServerMessage, options?: { exclude?: SceneClient | null }): void {
@@ -206,11 +298,13 @@ class SceneSession {
   addClient(client: SceneClient): void {
     this.clients.add(client)
     client.session = this
+    this.touch(client.connectedAt)
   }
 
   removeClient(client: SceneClient): void {
     this.clients.delete(client)
     client.session = null
+    this.touch()
   }
 
   getPeerSnapshots(exclude?: SceneClient): MultiuserPeerSnapshot[] {
@@ -231,6 +325,29 @@ class SceneSession {
     return snapshots
   }
 
+  getConnectionSummaries(): MultiuserRuntimeConnectionSummary[] {
+    return Array.from(this.clients.values()).map((client) => ({
+      sessionId: client.sessionId,
+      userId: client.userId ?? client.sessionId,
+      displayName: client.displayName,
+      connectedAt: client.connectedAt,
+      lastActiveAt: client.lastActiveAt,
+      remoteAddress: client.remoteAddress,
+      forwardedFor: client.forwardedFor,
+      origin: client.origin,
+      userAgent: client.userAgent,
+      state: client.state,
+    }))
+  }
+
+  getConnectionBySessionId(sessionId: string): SceneClient | null {
+    return Array.from(this.clients.values()).find((client) => client.sessionId === sessionId) ?? null
+  }
+
+  getConnectionsByUserId(userId: string): SceneClient[] {
+    return Array.from(this.clients.values()).filter((client) => client.userId === userId)
+  }
+
   getEntitySnapshots(): MultiuserSharedEntitySnapshot[] {
     const now = Date.now()
     const snapshots: MultiuserSharedEntitySnapshot[] = []
@@ -247,6 +364,13 @@ class SceneSession {
     return snapshots
   }
 
+  getEntitySummaries(): MultiuserRuntimeEntitySummary[] {
+    return this.getEntitySnapshots().map((entity) => ({
+      entityId: entity.entityId,
+      state: entity.state,
+    }))
+  }
+
   releaseEntitiesOwnedBy(userId: string): string[] {
     const removed: string[] = []
     this.sharedEntities.forEach((entity, entityId) => {
@@ -257,7 +381,30 @@ class SceneSession {
       entity.leaseExpiresAt = 0
       removed.push(entityId)
     })
+    this.touch()
     return removed
+  }
+
+  clear(): void {
+    this.clients.clear()
+    this.sharedEntities.clear()
+    this.touch()
+  }
+
+  getActivities(): MultiuserRuntimeActivitySummary[] {
+    return [...this.activities]
+  }
+
+  getSummary(): MultiuserRuntimeRoomSummary {
+    const entityCount = this.getEntitySnapshots().length
+    return {
+      sceneId: this.sceneId,
+      userCount: this.clients.size,
+      maxUsers: this.maxUsers,
+      entityCount,
+      physicsAuthorityCount: this.authoritativePhysicsRoom?.getLatestSnapshots().length ?? 0,
+      updatedAt: this.updatedAt,
+    }
   }
 }
 
@@ -1062,6 +1209,18 @@ class AuthoritativePhysicsRoom {
     }))
   }
 
+  getLatestSnapshots(): MultiuserPhysicsAuthoritySnapshot[] {
+    return Array.from(this.latestSnapshotByNodeId.values()).map((snapshot) => ({
+      ...snapshot,
+      transform: {
+        position: { ...snapshot.transform.position },
+        quaternion: { ...snapshot.transform.quaternion },
+      },
+      linearVelocity: snapshot.linearVelocity ? { ...snapshot.linearVelocity } : null,
+      angularVelocity: snapshot.angularVelocity ? { ...snapshot.angularVelocity } : null,
+    }))
+  }
+
   async dispose(): Promise<void> {
     this.stopTicker()
     this.inputByNodeId.clear()
@@ -1082,15 +1241,159 @@ class AuthoritativePhysicsRoom {
 export class MultiuserService {
   private wsServer: WebSocketServer | null = null
   private readonly sessions = new Map<string, SceneSession>()
+  private readonly runtimeListeners = new Set<(snapshot: MultiuserRuntimeSnapshot & { changedSceneId: string | null }) => void>()
+  private runtimeSnapshotUpdatedAt = new Date().toISOString()
 
   constructor(private readonly port: number) {}
+
+  subscribeRuntimeSnapshot(listener: (snapshot: MultiuserRuntimeSnapshot & { changedSceneId: string | null }) => void): () => void {
+    this.runtimeListeners.add(listener)
+    listener(this.getRuntimeSnapshot(null))
+    return () => {
+      this.runtimeListeners.delete(listener)
+    }
+  }
+
+  getRuntimeSnapshot(changedSceneId: string | null = null): MultiuserRuntimeSnapshot & { changedSceneId: string | null } {
+    return {
+      rooms: this.getRuntimeRoomSummaries(),
+      updatedAt: this.runtimeSnapshotUpdatedAt,
+      changedSceneId,
+    }
+  }
+
+  getRuntimeRoomSummaries(): MultiuserRuntimeRoomSummary[] {
+    return Array.from(this.sessions.values())
+      .map((session) => session.getSummary())
+      .sort((left, right) => {
+        if (left.updatedAt === right.updatedAt) {
+          return left.sceneId.localeCompare(right.sceneId)
+        }
+        return right.updatedAt.localeCompare(left.updatedAt)
+      })
+  }
+
+  getRuntimeRoomDetail(sceneId: string): MultiuserRuntimeRoomDetail | null {
+    const session = this.sessions.get(sceneId)
+    if (!session) {
+      return null
+    }
+    return {
+      ...session.getSummary(),
+      connections: session.getConnectionSummaries(),
+      entities: session.getEntitySummaries(),
+      physicsAuthority: session.authoritativePhysicsRoom?.getLatestSnapshots().map((snapshot) => ({
+        nodeId: snapshot.nodeId,
+        snapshot,
+      })) ?? [],
+      activities: session.getActivities(),
+    }
+  }
+
+  kickRuntimeRoomConnection(sceneId: string, sessionId: string): boolean {
+    const session = this.sessions.get(sceneId)
+    if (!session) {
+      return false
+    }
+    const client = session.getConnectionBySessionId(sessionId)
+    if (!client) {
+      return false
+    }
+    session.recordActivity({
+      type: 'admin-kick-connection',
+      sessionId: client.sessionId,
+      userId: client.userId,
+      displayName: client.displayName,
+      entityId: null,
+      nodeId: null,
+      summary: `管理员断开连接 ${client.displayName} (${client.sessionId})`,
+    })
+    try {
+      client.socket.close(4000, 'ADMIN_KICK')
+    } catch (error) {
+      console.warn('Failed to kick multiuser connection', error)
+    }
+    session.touch()
+    this.emitRuntimeSnapshot(sceneId)
+    return true
+  }
+
+  kickRuntimeRoomUser(sceneId: string, userId: string): boolean {
+    const session = this.sessions.get(sceneId)
+    if (!session) {
+      return false
+    }
+    const clients = session.getConnectionsByUserId(userId)
+    if (!clients.length) {
+      return false
+    }
+    session.recordActivity({
+      type: 'admin-kick-user',
+      sessionId: clients[0]?.sessionId ?? null,
+      userId,
+      displayName: clients[0]?.displayName ?? null,
+      entityId: null,
+      nodeId: null,
+      summary: `管理员断开用户 ${userId} 的全部连接`,
+    })
+    clients.forEach((client) => {
+      try {
+        client.socket.close(4000, 'ADMIN_KICK')
+      } catch (error) {
+        console.warn('Failed to kick multiuser user connection', error)
+      }
+    })
+    session.touch()
+    this.emitRuntimeSnapshot(sceneId)
+    return true
+  }
+
+  clearRuntimeRoom(sceneId: string): boolean {
+    const session = this.sessions.get(sceneId)
+    if (!session) {
+      return false
+    }
+    session.recordActivity({
+      type: 'admin-clear',
+      sessionId: null,
+      userId: null,
+      displayName: null,
+      entityId: null,
+      nodeId: null,
+      summary: '管理员清空房间',
+    })
+    const clients = Array.from(session.clients.values())
+    this.sessions.delete(sceneId)
+    session.clear()
+    clients.forEach((client) => {
+      try {
+        client.socket.close(4000, 'ADMIN_CLEAR')
+      } catch (error) {
+        console.warn('Failed to clear multiuser connection', error)
+      }
+    })
+    this.emitRuntimeSnapshot(sceneId)
+    return true
+  }
+
+  private emitRuntimeSnapshot(changedSceneId: string | null): void {
+    this.runtimeSnapshotUpdatedAt = new Date().toISOString()
+    const snapshot = this.getRuntimeSnapshot(changedSceneId)
+    this.runtimeListeners.forEach((listener) => {
+      try {
+        listener(snapshot)
+      } catch (error) {
+        console.warn('Failed to notify multiuser runtime listener', error)
+      }
+    })
+  }
 
   start(): void {
     if (this.wsServer) {
       return
     }
     this.wsServer = new WebSocketServer({ port: this.port })
-    this.wsServer.on('connection', (socket) => this.handleConnection(socket))
+    this.wsServer.on('connection', (socket, request) => this.handleConnection(socket, request))
     this.wsServer.on('listening', () => {
       console.log(`Multiuser service listening on wss://muluser.v.touchmagic.cn:${this.port}`)
     })
@@ -1118,12 +1421,24 @@ export class MultiuserService {
     })
   }
 
-  private handleConnection(socket: WebSocket): void {
+  private handleConnection(socket: WebSocket, request?: IncomingMessage): void {
+    const headers = request?.headers ?? {}
+    const forwardedFor = this.normalizeForwardedFor(headers['x-forwarded-for'])
+    const origin = this.normalizeHeaderValue(headers.origin)
+    const userAgent = this.normalizeHeaderValue(headers['user-agent'])
+    const remoteAddress = this.normalizeHeaderValue(request?.socket?.remoteAddress)
+      ?? this.normalizeHeaderValue((socket as WebSocket & { _socket?: { remoteAddress?: string | null } })._socket?.remoteAddress)
     const client: SceneClient = {
       socket,
       sessionId: nanoid(),
       userId: null,
       displayName: 'Guest',
+      connectedAt: new Date().toISOString(),
+      lastActiveAt: new Date().toISOString(),
+      remoteAddress,
+      forwardedFor,
+      origin,
+      userAgent,
       state: null,
       session: null,
     }
@@ -1135,6 +1450,7 @@ export class MultiuserService {
         socket.close()
         return
       }
+      client.lastActiveAt = new Date().toISOString()
       void this.handleClientMessage(client, payload)
     })
 
@@ -1210,6 +1526,16 @@ export class MultiuserService {
     client.displayName = normalizeOptionalText(message.displayName) ?? `Guest-${client.userId.slice(0, 6)}`
 
     session.addClient(client)
+    session.recordActivity({
+      type: 'peer-connected',
+      sessionId: client.sessionId,
+      userId: client.userId,
+      displayName: client.displayName,
+      entityId: null,
+      nodeId: null,
+      summary: `${client.displayName} 加入房间`,
+    })
+    this.emitRuntimeSnapshot(sceneId)
     const peers = session.getPeerSnapshots(client)
     const entities = session.getEntitySnapshots()
     const welcome: MultiuserServerMessage = {
@@ -1243,6 +1569,27 @@ export class MultiuserService {
     session.broadcast(joinedMessage, { exclude: client })
   }
 
+  private normalizeHeaderValue(value: string | string[] | undefined | null): string | null {
+    if (typeof value === 'string') {
+      const trimmed = value.trim()
+      return trimmed.length ? trimmed : null
+    }
+    if (Array.isArray(value)) {
+      const first = value.find((item) => item.trim().length > 0)
+      return first ? first.trim() : null
+    }
+    return null
+  }
+
+  private normalizeForwardedFor(value: string | string[] | undefined | null): string | null {
+    const normalized = this.normalizeHeaderValue(value)
+    if (!normalized) {
+      return null
+    }
+    const first = normalized.split(',')[0]?.trim()
+    return first?.length ? first : null
+  }
+
   private handleState(client: SceneClient, rawState: unknown): void {
     const session = client.session
     if (!session || !client.userId) {
@@ -1255,6 +1602,18 @@ export class MultiuserService {
       return
     }
     client.state = state
+    client.lastActiveAt = new Date().toISOString()
+    session.touch(client.lastActiveAt)
+    session.recordActivity({
+      type: 'peer-state',
+      sessionId: client.sessionId,
+      userId: client.userId,
+      displayName: client.displayName,
+      entityId: null,
+      nodeId: state.subjectNodeId,
+      summary: `${client.displayName} 更新角色状态${state.action ? ` · ${state.action}` : ''}`,
+    })
+    this.emitRuntimeSnapshot(session.sceneId)
     const peer = {
       userId: client.userId,
       displayName: client.displayName,
@@ -1299,6 +1658,7 @@ export class MultiuserService {
       return
     }
     const leaseMs = clampLeaseMs(entity.lease?.leaseMs)
+    client.lastActiveAt = new Date().toISOString()
     const stored: StoredSharedEntity = {
       entityId: entity.entityId,
       nodeId: entity.nodeId,
@@ -1318,6 +1678,17 @@ export class MultiuserService {
       leaseExpiresAt: now + leaseMs,
     }
     session.sharedEntities.set(entity.entityId, stored)
+    session.touch()
+    session.recordActivity({
+      type: 'entity-state',
+      sessionId: client.sessionId,
+      userId: client.userId,
+      displayName: client.displayName,
+      entityId: entity.entityId,
+      nodeId: entity.nodeId,
+      summary: `${client.displayName} 更新实体 ${entity.entityId}`,
+    })
+    this.emitRuntimeSnapshot(session.sceneId)
     const message: MultiuserServerMessage = {
       type: 'entity-state',
       sceneId: session.sceneId,
@@ -1345,6 +1716,17 @@ export class MultiuserService {
     const room = this.getOrCreatePhysicsRoom(session)
     try {
       await room.handleInput(client, input)
+      session.touch()
+      session.recordActivity({
+        type: 'physics-input',
+        sessionId: client.sessionId,
+        userId: client.userId,
+        displayName: client.displayName,
+        entityId: null,
+        nodeId: input.nodeId ?? null,
+        summary: `${client.displayName} 提交物理输入`,
+      })
+      this.emitRuntimeSnapshot(session.sceneId)
     } catch (error) {
       console.warn('Failed to process authoritative physics input', error)
       this.sendError(client.socket, 'Failed to process authoritative physics input')
@@ -1357,6 +1739,16 @@ export class MultiuserService {
       return
     }
     session.removeClient(client)
+    session.recordActivity({
+      type: 'peer-disconnected',
+      sessionId: client.sessionId,
+      userId: client.userId,
+      displayName: client.displayName,
+      entityId: null,
+      nodeId: null,
+      summary: `${client.displayName} 离开房间`,
+    })
+    this.emitRuntimeSnapshot(session.sceneId)
     const left: MultiuserServerMessage = {
       type: 'peer-left',
       sceneId: session.sceneId,
@@ -1384,6 +1776,7 @@ export class MultiuserService {
       void session.authoritativePhysicsRoom?.dispose()
       session.authoritativePhysicsRoom = null
       this.sessions.delete(session.sceneId)
+      this.emitRuntimeSnapshot(session.sceneId)
     }
   }
 
@@ -1394,4 +1787,14 @@ export class MultiuserService {
       console.warn('Failed to send multiuser error message', error)
     }
   }
+}
+
+let activeMultiuserService: MultiuserService | null = null
+
+export function setActiveMultiuserService(service: MultiuserService | null): void {
+  activeMultiuserService = service
+}
+
+export function getActiveMultiuserService(): MultiuserService | null {
+  return activeMultiuserService
 }

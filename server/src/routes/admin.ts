@@ -9,6 +9,14 @@ import {
   updateScene,
 } from '@/controllers/sceneController'
 import {
+  clearMultiuserRuntimeRoom,
+  getMultiuserRuntimeRoom,
+  kickMultiuserRuntimeConnection,
+  kickMultiuserRuntimeUser,
+  listMultiuserRuntimeRooms,
+  streamMultiuserRuntimeRooms,
+} from '@/controllers/admin/multiuserController'
+import {
   listSceneSpots,
   getSceneSpot,
   createSceneSpot,
@@ -225,6 +233,21 @@ adminRouter.put(
   updateScene,
 )
 adminRouter.delete('/scenes/:id', requireAnyPermission(['scene:write']), deleteScene)
+
+adminRouter.get('/multiuser/runtime', requireAnyPermission(['scene:read']), listMultiuserRuntimeRooms)
+adminRouter.get('/multiuser/runtime/stream', requireAnyPermission(['scene:read']), streamMultiuserRuntimeRooms)
+adminRouter.get('/multiuser/runtime/:sceneId', requireAnyPermission(['scene:read']), getMultiuserRuntimeRoom)
+adminRouter.post('/multiuser/runtime/:sceneId/clear', requireAnyPermission(['scene:write']), clearMultiuserRuntimeRoom)
+adminRouter.post(
+  '/multiuser/runtime/:sceneId/peers/:sessionId/kick',
+  requireAnyPermission(['scene:write']),
+  kickMultiuserRuntimeConnection,
+)
+adminRouter.post(
+  '/multiuser/runtime/:sceneId/users/:userId/kick',
+  requireAnyPermission(['scene:write']),
+  kickMultiuserRuntimeUser,
+)
 
 // Scene spots (POIs)
 adminRouter.get('/scene-spots', requireAnyPermission(['sceneSpot:read']), listSceneSpots)

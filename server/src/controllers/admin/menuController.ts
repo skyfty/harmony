@@ -66,6 +66,13 @@ const BACKEND_MENU_TREE: MenuNode[] = [
     meta: { icon: 'lucide:map-pinned', title: '景点管理' },
   },
   {
+    name: 'MultiuserScenes',
+    path: '/scene-management/multiuser-scenes',
+    component: '/views/multiuser-scenes/index.vue',
+    requiredPermissions: ['scene:read'],
+    meta: { icon: 'lucide:network', title: '多人在线管理' },
+  },
+  {
     name: 'Project',
     path: '/projects',
     component: 'BasicLayout',
