@@ -9,6 +9,26 @@ export const ANIMATION_COMPONENT_TYPE = 'animationComponent'
 export interface AnimationComponentProps {
   defaultClipName: string | null
   autoplay: boolean
+  loop: boolean
+  timeScale: number
+}
+
+function clampBoolean(value: unknown, fallback: boolean): boolean {
+  if (typeof value === 'boolean') {
+    return value
+  }
+  if (value === 1 || value === '1' || value === 'true') {
+    return true
+  }
+  if (value === 0 || value === '0' || value === 'false') {
+    return false
+  }
+  return fallback
+}
+
+function clampFiniteNumber(value: unknown, fallback: number): number {
+  const numeric = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(numeric) ? numeric : fallback
 }
 
 export function clampAnimationComponentProps(
@@ -16,7 +36,9 @@ export function clampAnimationComponentProps(
 ): AnimationComponentProps {
   return {
     defaultClipName: sanitizeAnimationClipName(props?.defaultClipName),
-    autoplay: props?.autoplay !== false,
+    autoplay: clampBoolean(props?.autoplay, true),
+    loop: clampBoolean(props?.loop, true),
+    timeScale: clampFiniteNumber(props?.timeScale, 1),
   }
 }
 
@@ -26,6 +48,8 @@ export function cloneAnimationComponentProps(
   return {
     defaultClipName: props.defaultClipName,
     autoplay: props.autoplay,
+    loop: props.loop,
+    timeScale: props.timeScale,
   }
 }
 

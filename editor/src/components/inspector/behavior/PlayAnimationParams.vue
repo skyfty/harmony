@@ -205,7 +205,6 @@ onBeforeUnmount(() => {
         label="Loop"
         density="compact"
         hide-details
-        inset
         @update:model-value="updateLoop(Boolean($event))"
       />
       <v-switch
@@ -213,7 +212,6 @@ onBeforeUnmount(() => {
         label="Wait for completion"
         density="compact"
         hide-details
-        inset
         :disabled="params.loop"
         @update:model-value="updateWait(Boolean($event))"
       />

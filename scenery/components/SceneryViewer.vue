@@ -12436,6 +12436,8 @@ function refreshAnimationControllers(root: THREE.Object3D): void {
       runtimeObject,
       defaultClipName: component.props.defaultClipName,
       autoplay: component.props.autoplay,
+      loop: component.props.loop,
+      timeScale: component.props.timeScale,
     });
   });
   refreshEffectRuntimeTickers();

@@ -11,10 +11,13 @@ export interface AnimationRuntimeRegistration {
   runtimeObject: THREE.Object3D | null
   defaultClipName: string | null
   autoplay: boolean
+  loop: boolean
+  timeScale: number
 }
 
 export interface AnimationPlaybackOptions {
   loop?: boolean
+  timeScale?: number
 }
 
 export interface AnimationRuntimePresentation {
@@ -34,10 +37,30 @@ type AnimationRuntimeController = {
   clips: THREE.AnimationClip[]
   defaultClipName: string | null
   autoplay: boolean
+  defaultLoop: boolean
+  defaultTimeScale: number
   activeAction: THREE.AnimationAction | null
   activeClipName: string | null
   activeLoop: boolean
   activeTimeScale: number
+}
+
+function normalizeAnimationLoop(value: unknown, fallback: boolean): boolean {
+  if (typeof value === 'boolean') {
+    return value
+  }
+  if (value === 1 || value === '1' || value === 'true') {
+    return true
+  }
+  if (value === 0 || value === '0' || value === 'false') {
+    return false
+  }
+  return fallback
+}
+
+function normalizeAnimationTimeScale(value: unknown, fallback: number): number {
+  const numeric = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(numeric) ? numeric : fallback
 }
 
 function playAnimationClip(
@@ -55,6 +78,7 @@ function playAnimationClip(
     action.setLoop(THREE.LoopOnce, 0)
     action.clampWhenFinished = true
   }
+  action.timeScale = normalizeAnimationTimeScale(options.timeScale, 1)
   action.play()
   return action
 }
@@ -107,6 +131,8 @@ export class SceneAnimationRuntimeManager {
 
     const existing = this.controllers.get(registration.nodeId) ?? null
     const nextDefaultClipName = sanitizeAnimationClipName(registration.defaultClipName)
+    const nextDefaultLoop = normalizeAnimationLoop(registration.loop, true)
+    const nextDefaultTimeScale = normalizeAnimationTimeScale(registration.timeScale, 1)
 
     if (
       existing
@@ -116,6 +142,8 @@ export class SceneAnimationRuntimeManager {
       existing.clips = clips
       existing.defaultClipName = nextDefaultClipName
       existing.autoplay = registration.autoplay
+      existing.defaultLoop = nextDefaultLoop
+      existing.defaultTimeScale = nextDefaultTimeScale
       return
     }
 
@@ -130,6 +158,8 @@ export class SceneAnimationRuntimeManager {
       clips,
       defaultClipName: nextDefaultClipName,
       autoplay: registration.autoplay,
+      defaultLoop: nextDefaultLoop,
+      defaultTimeScale: nextDefaultTimeScale,
       activeAction: null,
       activeClipName: null,
       activeLoop: false,
@@ -177,7 +207,7 @@ export class SceneAnimationRuntimeManager {
     controller.activeAction = action
     controller.activeClipName = sanitizeAnimationClipName(clip.name)
     controller.activeLoop = Boolean(options.loop)
-    controller.activeTimeScale = action.timeScale
+    controller.activeTimeScale = normalizeAnimationTimeScale(action.timeScale, 1)
     return action
   }
 
@@ -214,7 +244,10 @@ export class SceneAnimationRuntimeManager {
       this.stopNodeAnimation(nodeId)
       return null
     }
-    return this.playNodeAnimation(nodeId, sanitizeAnimationClipName(defaultClip.name), { loop: true })
+    return this.playNodeAnimation(nodeId, sanitizeAnimationClipName(defaultClip.name), {
+      loop: controller.defaultLoop,
+      timeScale: controller.defaultTimeScale,
+    })
   }
 
   getPresentation(nodeId: string): AnimationRuntimePresentation | null {

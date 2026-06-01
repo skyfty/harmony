@@ -73,6 +73,18 @@ function updateAutoplay(value: boolean) {
   })
 }
 
+function updateLoop(value: boolean) {
+  updateComponent({
+    loop: value,
+  })
+}
+
+function updateTimeScale(value: unknown) {
+  updateComponent({
+    timeScale: Number(value),
+  })
+}
+
 async function loadClipsForNode(nodeId: string | null) {
   const requestId = ++clipLoadRequestId
   clipOptions.value = []
@@ -186,9 +198,6 @@ watch(
         <div v-if="clipLoadError" class="animation-component-panel__message animation-component-panel__message--error">
           {{ clipLoadError }}
         </div>
-        <div v-else-if="!isLoadingClips && selectedNode && !clipOptions.length" class="animation-component-panel__message">
-          No playable animation clips were found on the selected model node.
-        </div>
 
         <v-switch
           :model-value="normalizedProps.autoplay"
@@ -197,6 +206,26 @@ watch(
           hide-details
           :disabled="!componentEnabled"
           @update:model-value="updateAutoplay(Boolean($event))"
+        />
+
+        <v-switch
+          :model-value="normalizedProps.loop"
+          label="Loop Default Animation"
+          density="compact"
+          hide-details
+          :disabled="!componentEnabled"
+          @update:model-value="updateLoop(Boolean($event))"
+        />
+
+        <v-text-field
+          :model-value="normalizedProps.timeScale"
+          type="number"
+          label="Playback Speed"
+          density="compact"
+          variant="underlined"
+          hide-details
+          :disabled="!componentEnabled"
+          @update:model-value="updateTimeScale"
         />
       </div>
     </v-expansion-panel-text>

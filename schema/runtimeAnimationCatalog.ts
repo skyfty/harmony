@@ -19,10 +19,14 @@ export function resolveRuntimeAnimationClipSourceObject(runtimeObject: THREE.Obj
     return null
   }
   const instancedAssetId = runtimeObject.userData?.instancedAssetId as string | undefined
-  if (!instancedAssetId) {
-    return runtimeObject
+  if (instancedAssetId) {
+    return getCachedModelObject(instancedAssetId)?.object ?? runtimeObject
   }
-  return getCachedModelObject(instancedAssetId)?.object ?? runtimeObject
+  const sourceAssetId = runtimeObject.userData?.sourceAssetId as string | undefined
+  if (sourceAssetId) {
+    return getCachedModelObject(sourceAssetId)?.object ?? runtimeObject
+  }
+  return runtimeObject
 }
 
 export function collectAnimationClips(runtimeObject: THREE.Object3D | null | undefined): THREE.AnimationClip[] {
@@ -120,4 +124,3 @@ export function findAnimationClipByName(
   }
   return clips.find((clip) => sanitizeAnimationClipName(clip.name) === normalizedName) ?? null
 }
-
