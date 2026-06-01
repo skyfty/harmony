@@ -16,7 +16,8 @@
 ## 权威文件（优先参照）
 - `docker-compose.prod.yml`, `server/.env.production`, `server/Dockerfile`, `admin/admin-app-config.prod.js`, `config/*`
 
-## 最小部署流程
+
+## 最小部署流程a
 在仓库根运行：
 
 ```bash
