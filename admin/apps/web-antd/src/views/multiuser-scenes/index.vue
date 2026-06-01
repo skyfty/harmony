@@ -13,17 +13,13 @@ import {
   type MultiuserRuntimePhysicsItem,
   type MultiuserRuntimeRoomDetail,
   type MultiuserRuntimeRoomItem,
-  type MultiuserRuntimeSnapshot,
   type MultiuserRuntimePeerState,
 } from '#/api'
-import { useAccessStore } from '@vben/stores'
 
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 
-import { Alert, Button, Card, Col, Descriptions, Drawer, Empty, Input, Modal, Row, Select, Space, Spin, Statistic, Table, Tag, Timeline, message } from 'ant-design-vue'
+import { Button, Card, Col, Descriptions, Drawer, Empty, Input, Modal, Row, Select, Space, Spin, Statistic, Table, Tag, Timeline, message } from 'ant-design-vue'
 import { DeleteOutlined, ReloadOutlined } from '@ant-design/icons-vue'
-
-import { connectMultiuserRuntimeStream } from '#/utils/multiuserRuntimeStream'
 
 type RoomStatusFilter = 'all' | 'active'
 type ActivityTimelineFilter = 'all' | 'peer' | 'entity' | 'physics' | 'admin'
@@ -44,12 +40,8 @@ type PeerLike = {
   state?: MultiuserRuntimePeerState | null
 }
 
-const accessStore = useAccessStore()
-
 const rooms = ref<MultiuserRuntimeRoomItem[]>([])
 const roomsLoading = ref(false)
-const streamStatus = ref<'connecting' | 'connected' | 'disconnected' | 'error'>('disconnected')
-const lastStreamError = ref<string | null>(null)
 const selectedSceneId = ref<string | null>(null)
 const selectedRoom = ref<MultiuserRuntimeRoomDetail | null>(null)
 const selectedPeerSessionId = ref<string | null>(null)
@@ -59,9 +51,6 @@ const roomStatusFilter = ref<RoomStatusFilter>('active')
 const activityTimelineFilter = ref<ActivityTimelineFilter>('all')
 const activityTimelineKeyword = ref('')
 const lastUpdatedAt = ref<string | null>(null)
-
-let streamAbortController: AbortController | null = null
-let reconnectTimer: ReturnType<typeof globalThis.setTimeout> | null = null
 
 const timeFormatter = new Intl.DateTimeFormat('zh-CN', {
   dateStyle: 'short',
@@ -379,30 +368,21 @@ function showSceneDetail(sceneId: string | null | undefined): void {
   void loadRoomDetail(currentSceneId)
 }
 
-function scheduleReconnect(): void {
-  if (streamAbortController?.signal.aborted) {
-    return
-  }
-  clearReconnectTimer()
-  reconnectTimer = globalThis.setTimeout(() => {
-    reconnectTimer = null
-    void startStream()
-  }, 2500)
-}
-
-function clearReconnectTimer(): void {
-  if (reconnectTimer) {
-    globalThis.clearTimeout(reconnectTimer)
-    reconnectTimer = null
-  }
-}
-
 async function refreshRooms(): Promise<void> {
   roomsLoading.value = true
   try {
     const response = await listMultiuserRuntimeRoomsApi()
     rooms.value = response.rooms ?? []
     lastUpdatedAt.value = response.updatedAt ?? null
+    if (selectedSceneId.value && !rooms.value.some((room) => room.sceneId === selectedSceneId.value)) {
+      selectedSceneId.value = null
+      selectedRoom.value = null
+      selectedPeerSessionId.value = null
+    } else if (selectedSceneId.value) {
+      void loadRoomDetail(selectedSceneId.value)
+    }
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : '刷新房间列表失败')
   } finally {
     roomsLoading.value = false
   }
@@ -430,71 +410,6 @@ async function loadRoomDetail(sceneId: string): Promise<void> {
       selectedRoomLoading.value = false
     }
   }
-}
-
-function syncSelectedRoomFromRooms(): void {
-  if (!selectedSceneId.value) {
-    return
-  }
-  if (!rooms.value.some((room) => room.sceneId === selectedSceneId.value)) {
-    selectedSceneId.value = null
-    selectedRoom.value = null
-    selectedPeerSessionId.value = null
-  }
-}
-
-async function handleSnapshot(snapshot: MultiuserRuntimeSnapshot): Promise<void> {
-  rooms.value = snapshot.rooms ?? []
-  lastUpdatedAt.value = snapshot.updatedAt ?? null
-  streamStatus.value = 'connected'
-  lastStreamError.value = null
-  syncSelectedRoomFromRooms()
-  if (selectedSceneId.value && snapshot.rooms.some((room) => room.sceneId === selectedSceneId.value)) {
-    await loadRoomDetail(selectedSceneId.value)
-  }
-}
-
-async function startStream(): Promise<void> {
-  if (streamAbortController) {
-    streamAbortController.abort()
-  }
-  clearReconnectTimer()
-  const controller = new AbortController()
-  streamAbortController = controller
-  streamStatus.value = 'connecting'
-  lastStreamError.value = null
-  const token = accessStore.accessToken || ''
-  try {
-    await connectMultiuserRuntimeStream(token, {
-      onSnapshot: (snapshot) => {
-        void handleSnapshot(snapshot)
-      },
-      onError: (messageText) => {
-        lastStreamError.value = messageText
-      },
-    }, controller.signal)
-    if (controller.signal.aborted) {
-      return
-    }
-    streamStatus.value = 'disconnected'
-    scheduleReconnect()
-  } catch (error) {
-    if (controller.signal.aborted) {
-      return
-    }
-    streamStatus.value = 'error'
-    lastStreamError.value = error instanceof Error ? error.message : '实时通道连接失败'
-    scheduleReconnect()
-  }
-}
-
-function stopStream(): void {
-  clearReconnectTimer()
-  if (streamAbortController) {
-    streamAbortController.abort()
-    streamAbortController = null
-  }
-  streamStatus.value = 'disconnected'
 }
 
 function selectPeer(peer: PeerLike | null | undefined): void {
@@ -632,11 +547,6 @@ function renderRoomDescription(room: MultiuserRuntimeRoomItem | null): string {
 
 onMounted(async () => {
   await refreshRooms()
-  void startStream()
-})
-
-onBeforeUnmount(() => {
-  stopStream()
 })
 </script>
 
@@ -649,28 +559,20 @@ onBeforeUnmount(() => {
             <div class="multiuser-dashboard-kicker">在线运行态管理</div>
             <h2 class="multiuser-dashboard-title">多人在线房间监控</h2>
             <div class="multiuser-dashboard-subtitle">
-              {{ streamStatus === 'connected' ? '实时已连接' : '实时通道待连接' }}
+              手动刷新模式
               <span v-if="lastUpdatedAt"> · 最近更新 {{ formatTimestamp(lastUpdatedAt) }}</span>
             </div>
           </div>
           <Space wrap>
-            <Tag :color="streamStatus === 'connected' ? 'green' : streamStatus === 'connecting' ? 'blue' : 'orange'">
-              {{ streamStatus }}
+            <Tag color="blue">
+              手动刷新
             </Tag>
-            <Button @click="refreshRooms">
+            <Button :loading="roomsLoading" @click="refreshRooms">
               <ReloadOutlined />
               刷新
             </Button>
           </Space>
         </div>
-
-        <Alert
-          v-if="lastStreamError"
-          class="mt-4"
-          type="warning"
-          show-icon
-          :message="lastStreamError"
-        />
 
         <Row :gutter="16" class="mt-4">
           <Col :xs="24" :sm="12" :lg="6">

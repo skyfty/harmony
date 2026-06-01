@@ -50,15 +50,6 @@ function ensureRuntimeService(ctx: Context) {
   return service
 }
 
-function writeSseEvent(response: Context['res'], event: string, data: unknown): void {
-  response.write(`event: ${event}\n`)
-  response.write(`data: ${JSON.stringify(data)}\n\n`)
-}
-
-function writeSseComment(response: Context['res'], comment: string): void {
-  response.write(`: ${comment}\n\n`)
-}
-
 async function resolveRoomDetail(sceneId: string): Promise<(MultiuserRuntimeRoomDetail & { sceneName: string | null }) | null> {
   const service = getActiveMultiuserService()
   if (!service) {
@@ -95,66 +86,6 @@ export async function getMultiuserRuntimeRoom(ctx: Context): Promise<void> {
     ctx.throw(404, 'Room not found')
   }
   ctx.body = room
-}
-
-export async function streamMultiuserRuntimeRooms(ctx: Context): Promise<void> {
-  const service = ensureRuntimeService(ctx)
-
-  ctx.status = 200
-  ctx.respond = false
-  const response = ctx.res
-  response.statusCode = 200
-  response.setHeader('Content-Type', 'text/event-stream; charset=utf-8')
-  response.setHeader('Cache-Control', 'no-cache, no-transform')
-  response.setHeader('Connection', 'keep-alive')
-  response.setHeader('X-Accel-Buffering', 'no')
-  response.flushHeaders?.()
-
-  let disposed = false
-  const dispose = service.subscribeRuntimeSnapshot(async (snapshot) => {
-    if (disposed) {
-      return
-    }
-    try {
-      const sceneNameMap = await loadSceneNameMap(snapshot.rooms.map((room) => room.sceneId))
-      if (disposed) {
-        return
-      }
-      writeSseEvent(response, 'snapshot', {
-        ...snapshot,
-        rooms: attachSceneNames(snapshot.rooms, sceneNameMap),
-      })
-    } catch (error) {
-      console.warn('Failed to write multiuser runtime snapshot', error)
-    }
-  })
-
-  const heartbeatTimer = globalThis.setInterval(() => {
-    try {
-      writeSseComment(response, 'keep-alive')
-    } catch (error) {
-      console.warn('Failed to write multiuser runtime heartbeat', error)
-      cleanup()
-    }
-  }, 25000)
-
-  function cleanup(): void {
-    if (disposed) {
-      return
-    }
-    disposed = true
-    globalThis.clearInterval(heartbeatTimer)
-    dispose()
-    try {
-      response.end()
-    } catch {
-      // ignore
-    }
-  }
-
-  response.on('close', cleanup)
-  response.on('error', cleanup)
-  ctx.req.on('close', cleanup)
 }
 
 export async function kickMultiuserRuntimeConnection(ctx: Context): Promise<void> {
