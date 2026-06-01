@@ -1,4 +1,5 @@
 import type { Context } from 'koa'
+import { Types } from 'mongoose'
 import { SceneModel } from '@/models/Scene'
 import { getActiveMultiuserService, type MultiuserRuntimeRoomDetail } from '@/services/multiuserService'
 
@@ -13,14 +14,25 @@ function toNonEmptyString(value: unknown): string | null {
 }
 
 async function loadSceneNameMap(sceneIds: string[]): Promise<SceneNameMap> {
-  if (!sceneIds.length) {
+  const validSceneIds = Array.from(
+    new Set(sceneIds.filter((sceneId): sceneId is string => Types.ObjectId.isValid(sceneId))),
+  )
+  if (!validSceneIds.length) {
     return new Map()
   }
-  const rows = await SceneModel.find({ _id: { $in: sceneIds } }, { name: 1 }).lean().exec()
-  return new Map((rows as Array<{ _id: unknown; name?: string | null }>).map((row) => [
-    String(row._id),
-    toNonEmptyString(row.name),
-  ]))
+  try {
+    const rows = await SceneModel.find({ _id: { $in: validSceneIds } }, { name: 1 }).lean().exec()
+    return new Map((rows as Array<{ _id: unknown; name?: string | null }>).map((row) => [
+      String(row._id),
+      toNonEmptyString(row.name),
+    ]))
+  } catch (error) {
+    console.warn('Failed to load scene names for multiuser runtime', {
+      sceneIds: validSceneIds,
+      error,
+    })
+    return new Map()
+  }
 }
 
 function attachSceneNames<T extends { sceneId: string }>(rows: T[], sceneNameMap: SceneNameMap): Array<T & { sceneName: string | null }> {
