@@ -2,6 +2,7 @@ import type { WatchStopHandle } from 'vue'
 import type { Object3D } from 'three'
 import type { SceneNode } from '@schema/core'
 import { cloneImportedObject } from '@schema/assetImport'
+import { canNodeUseRuntimeModelInstancing } from '@schema/runtimeModelInstancing'
 import type { EnsureSceneAssetsOptions, EnsureSceneAssetsProgress } from '@/types/ensure-scene-assets-options'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ModelInstanceGroup } from '@schema/modelObjectCache'
@@ -437,7 +438,7 @@ export async function updateSceneAssets(args: {
       const metadata = node.importMetadata
       let runtimeObject: Object3D | null = null
 
-      if (!runtimeObject && canUseInstancing && !metadata && modelGroup) {
+      if (!runtimeObject && canUseInstancing && !metadata && modelGroup && canNodeUseRuntimeModelInstancing(node)) {
         runtimeObject = createInstancedRuntimeProxy(node, modelGroup) ?? null
       }
 
