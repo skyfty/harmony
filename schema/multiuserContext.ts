@@ -32,6 +32,10 @@ export interface MultiuserVehicleWheelPresentation {
   position: MultiuserPresentationVector3Like
   quaternion: MultiuserPresentationQuaternionLike
   scale?: MultiuserPresentationVector3Like | null
+  steeringAxis?: MultiuserPresentationVector3Like | null
+  spinAxis?: MultiuserPresentationVector3Like | null
+  steeringAngle?: number | null
+  spinAngle?: number | null
 }
 
 export interface MultiuserVehiclePresentation {

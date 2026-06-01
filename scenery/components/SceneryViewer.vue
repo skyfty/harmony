@@ -2338,6 +2338,7 @@ type RemoteMultiuserWheelBinding = {
   basePosition: THREE.Vector3;
   baseQuaternion: THREE.Quaternion;
   baseScale: THREE.Vector3;
+  instancedTargets: THREE.Object3D[];
 };
 type RemoteMultiuserAnimationController = {
   nodeId: string;
@@ -2607,6 +2608,8 @@ type VehicleWheelBinding = {
   instancedTargets: THREE.Object3D[];
   radius: number;
   axleAxis: THREE.Vector3;
+  steeringAxis: THREE.Vector3;
+  spinAxis: THREE.Vector3;
   isFrontWheel: boolean;
   wheelIndex: number;
   spinAngle: number;
@@ -8240,6 +8243,8 @@ function createBridgeVehicleInstance(
       instancedTargets: wheelObject ? collectInstancedTransformTargets(wheelObject) : [],
       radius: Math.max(config.radius, VEHICLE_WHEEL_MIN_RADIUS),
       axleAxis: axis,
+      steeringAxis: axis.clone(),
+      spinAxis: axis.clone(),
       isFrontWheel: config.isFrontWheel === true,
       wheelIndex: index,
       spinAngle: 0,
@@ -8635,6 +8640,7 @@ function updateVehicleWheelVisuals(delta: number): void {
       } else {
         wheelAxisHelper.normalize();
       }
+      binding.steeringAxis.copy(wheelAxisHelper);
       wheelSteeringQuaternionHelper.setFromAxisAngle(wheelAxisHelper, steeringAngle);
 
       // Build local-space spin quaternion (around wheel axle).
@@ -8661,6 +8667,7 @@ function updateVehicleWheelVisuals(delta: number): void {
       } else {
         wheelAxisHelper.normalize();
       }
+      binding.spinAxis.copy(wheelAxisHelper);
       wheelSpinQuaternionHelper.setFromAxisAngle(wheelAxisHelper, binding.spinAngle);
 
       // Compose: base -> (parent-space steer) -> (local-space spin).
@@ -10110,6 +10117,22 @@ function cloneRemoteMultiuserPeerPresentation(presentation: MultiuserPeerPresent
                     z: wheel.scale.z,
                   }
                 : null,
+              steeringAxis: wheel.steeringAxis
+                ? {
+                    x: wheel.steeringAxis.x,
+                    y: wheel.steeringAxis.y,
+                    z: wheel.steeringAxis.z,
+                  }
+                : null,
+              spinAxis: wheel.spinAxis
+                ? {
+                    x: wheel.spinAxis.x,
+                    y: wheel.spinAxis.y,
+                    z: wheel.spinAxis.z,
+                  }
+                : null,
+              steeringAngle: wheel.steeringAngle ?? null,
+              spinAngle: wheel.spinAngle ?? null,
             }))
           : [],
       }
@@ -10143,6 +10166,34 @@ function cloneRemotePresentationVector3(value: MultiuserPresentationVector3Like)
 
 function cloneRemotePresentationQuaternion(value: MultiuserPresentationQuaternionLike): THREE.Quaternion {
   return new THREE.Quaternion(value.x, value.y, value.z, value.w);
+}
+
+function isFiniteVector3Like(value: MultiuserPresentationVector3Like | null | undefined): value is MultiuserPresentationVector3Like {
+  if (!value) {
+    return false;
+  }
+  return Number.isFinite(value.x)
+    && Number.isFinite(value.y)
+    && Number.isFinite(value.z);
+}
+
+function normalizeRemotePresentationAngle(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return THREE.MathUtils.euclideanModulo(value + Math.PI, Math.PI * 2) - Math.PI;
+}
+
+function interpolateWrappedAngle(current: number, target: number, alpha: number): number {
+  const normalizedCurrent = normalizeRemotePresentationAngle(current);
+  const normalizedTarget = normalizeRemotePresentationAngle(target);
+  let delta = normalizedTarget - normalizedCurrent;
+  if (delta > Math.PI) {
+    delta -= Math.PI * 2;
+  } else if (delta < -Math.PI) {
+    delta += Math.PI * 2;
+  }
+  return normalizeRemotePresentationAngle(normalizedCurrent + (delta * alpha));
 }
 
 function sanitizeRemoteMultiuserObject(object: THREE.Object3D): THREE.Object3D {
@@ -10201,6 +10252,7 @@ function collectRemoteMultiuserWheelBindings(root: THREE.Object3D): RemoteMultiu
       basePosition: child.position.clone(),
       baseQuaternion: child.quaternion.clone(),
       baseScale: child.scale.clone(),
+      instancedTargets: collectInstancedTransformTargets(child),
     });
   });
   return bindings;
@@ -10455,11 +10507,35 @@ function applyRemoteMultiuserVehicleWheelState(
     return;
   }
   object.position.copy(cloneRemotePresentationVector3(wheelState.position));
-  object.quaternion.copy(cloneRemotePresentationQuaternion(wheelState.quaternion));
-  if (wheelState.scale) {
-    object.scale.copy(cloneRemotePresentationVector3(wheelState.scale));
+  object.scale.copy(wheelState.scale ? cloneRemotePresentationVector3(wheelState.scale) : binding.baseScale);
+  const steeringAngle = typeof wheelState.steeringAngle === 'number' && Number.isFinite(wheelState.steeringAngle)
+    ? wheelState.steeringAngle
+    : null;
+  const spinAngle = typeof wheelState.spinAngle === 'number' && Number.isFinite(wheelState.spinAngle)
+    ? wheelState.spinAngle
+    : null;
+  const steeringAxis = wheelState.steeringAxis && isFiniteVector3Like(wheelState.steeringAxis)
+    ? cloneRemotePresentationVector3(wheelState.steeringAxis).normalize()
+    : null;
+  const spinAxis = wheelState.spinAxis && isFiniteVector3Like(wheelState.spinAxis)
+    ? cloneRemotePresentationVector3(wheelState.spinAxis).normalize()
+    : null;
+  if (steeringAxis && spinAxis && steeringAngle !== null && spinAngle !== null) {
+    wheelVisualQuaternionHelper.copy(binding.baseQuaternion);
+    wheelSteeringQuaternionHelper.setFromAxisAngle(steeringAxis, steeringAngle);
+    wheelSpinQuaternionHelper.setFromAxisAngle(spinAxis, spinAngle);
+    wheelVisualQuaternionHelper.premultiply(wheelSteeringQuaternionHelper);
+    wheelVisualQuaternionHelper.multiply(wheelSpinQuaternionHelper);
+    object.quaternion.copy(wheelVisualQuaternionHelper);
+  } else {
+    object.quaternion.copy(cloneRemotePresentationQuaternion(wheelState.quaternion));
   }
   object.updateMatrixWorld(true);
+  if (binding.instancedTargets.length) {
+    binding.instancedTargets.forEach((target) => {
+      target.updateMatrixWorld(true);
+    });
+  }
 }
 
 function applyRemoteMultiuserVehiclePresentation(
@@ -10575,6 +10651,32 @@ function interpolateRemoteMultiuserPeerPresentation(
           : currentWheel.scale
             ? cloneRemotePresentationVector3(currentWheel.scale)
             : null;
+        const steeringAxis = wheel.steeringAxis
+          ? {
+              x: wheel.steeringAxis.x,
+              y: wheel.steeringAxis.y,
+              z: wheel.steeringAxis.z,
+            }
+          : currentWheel.steeringAxis ?? null;
+        const spinAxis = wheel.spinAxis
+          ? {
+              x: wheel.spinAxis.x,
+              y: wheel.spinAxis.y,
+              z: wheel.spinAxis.z,
+            }
+          : currentWheel.spinAxis ?? null;
+        const steeringAngle = typeof wheel.steeringAngle === 'number'
+          ? (typeof currentWheel.steeringAngle === 'number'
+              ? currentWheel.steeringAngle + ((wheel.steeringAngle - currentWheel.steeringAngle) * alpha)
+              : wheel.steeringAngle)
+          : currentWheel.steeringAngle ?? null;
+        const spinAngle = typeof wheel.spinAngle === 'number'
+          ? interpolateWrappedAngle(
+              typeof currentWheel.spinAngle === 'number' ? currentWheel.spinAngle : wheel.spinAngle,
+              wheel.spinAngle,
+              alpha,
+            )
+          : currentWheel.spinAngle ?? null;
         return {
           nodeId: wheel.nodeId ?? null,
           wheelIndex: wheel.wheelIndex,
@@ -10596,6 +10698,10 @@ function interpolateRemoteMultiuserPeerPresentation(
                 z: scale.z,
               }
             : null,
+          steeringAxis,
+          spinAxis,
+          steeringAngle,
+          spinAngle,
         };
       }),
     };
@@ -11500,6 +11606,18 @@ function resolveLocalMultiuserVehiclePresentation(nodeId: string): MultiuserVehi
         y: object.scale.y,
         z: object.scale.z,
       },
+      steeringAxis: {
+        x: binding.steeringAxis.x,
+        y: binding.steeringAxis.y,
+        z: binding.steeringAxis.z,
+      },
+      spinAxis: {
+        x: binding.spinAxis.x,
+        y: binding.spinAxis.y,
+        z: binding.spinAxis.z,
+      },
+      steeringAngle: binding.lastSteeringAngle,
+      spinAngle: binding.spinAngle,
     });
   });
   if (!wheels.length) {
