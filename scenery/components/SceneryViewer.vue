@@ -10254,22 +10254,14 @@ function disposeRemoteMultiuserObject(object: THREE.Object3D, ownsResources: boo
 
 function collectRemoteMultiuserWheelBindings(
   root: THREE.Object3D,
-  allowedNodeIds: Set<string> | null,
+  expectedWheelCount: number | null,
 ): RemoteMultiuserWheelBinding[] {
   const bindings: RemoteMultiuserWheelBinding[] = [];
-  const seenNodeIds = new Set<string>();
   root.traverse((child) => {
     const nodeId = typeof child.userData?.nodeId === 'string' ? child.userData.nodeId.trim() : '';
     if (!nodeId || nodeId === root.userData?.nodeId) {
       return;
     }
-    if (allowedNodeIds && (!allowedNodeIds.has(nodeId) || seenNodeIds.has(nodeId))) {
-      return;
-    }
-    if (seenNodeIds.has(nodeId)) {
-      return;
-    }
-    seenNodeIds.add(nodeId);
     bindings.push({
       nodeId,
       object: child,
@@ -10279,6 +10271,9 @@ function collectRemoteMultiuserWheelBindings(
       instancedTargets: collectInstancedTransformTargets(child),
     });
   });
+  if (typeof expectedWheelCount === 'number' && Number.isFinite(expectedWheelCount) && expectedWheelCount >= 0) {
+    return bindings.slice(0, Math.max(0, Math.trunc(expectedWheelCount)));
+  }
   return bindings;
 }
 
@@ -10319,17 +10314,10 @@ function collectRemoteMultiuserAnimationControllers(root: THREE.Object3D): Map<s
 }
 
 function attachRemoteMultiuserPeerRuntime(entry: RemoteMultiuserPeerEntry): void {
-  const allowedWheelNodeIds = new Set<string>();
   const presentationWheels = entry.targetState.presentation?.vehicle?.wheels ?? [];
-  presentationWheels.forEach((wheel) => {
-    const nodeId = typeof wheel.nodeId === 'string' ? wheel.nodeId.trim() : '';
-    if (nodeId) {
-      allowedWheelNodeIds.add(nodeId);
-    }
-  });
   entry.wheelBindings = collectRemoteMultiuserWheelBindings(
     entry.root,
-    allowedWheelNodeIds.size ? allowedWheelNodeIds : null,
+    presentationWheels.length,
   );
   entry.animationControllers = collectRemoteMultiuserAnimationControllers(entry.root);
 }
@@ -10595,34 +10583,35 @@ function applyRemoteMultiuserVehiclePresentation(
       wheelStateByNodeId.set(nodeId, wheel);
     }
   });
-    logMultiuserWheelDebug('apply-remote-vehicle-presentation', {
-      bindingCount: wheelBindings.length,
-      wheelCount: presentation.wheels.length,
-      wheelStates: presentation.wheels.map((wheel) => ({
-        nodeId: wheel.nodeId ?? null,
-        wheelIndex: wheel.wheelIndex,
-        steeringAngle: wheel.steeringAngle ?? null,
-        spinAngle: wheel.spinAngle ?? null,
-      })),
-    });
- 
-  wheelBindings.forEach((binding) => {
-    const wheelState = binding.nodeId ? wheelStateByNodeId.get(binding.nodeId) ?? null : null;
+  logMultiuserWheelDebug('apply-remote-vehicle-presentation', {
+    bindingCount: wheelBindings.length,
+    wheelCount: presentation.wheels.length,
+    wheelStates: presentation.wheels.map((wheel) => ({
+      nodeId: wheel.nodeId ?? null,
+      wheelIndex: wheel.wheelIndex,
+      steeringAngle: wheel.steeringAngle ?? null,
+      spinAngle: wheel.spinAngle ?? null,
+    })),
+  });
+
+  wheelBindings.forEach((binding, index) => {
+    const wheelState = (binding.nodeId ? wheelStateByNodeId.get(binding.nodeId) ?? null : null)
+      ?? presentation.wheels[index]
+      ?? null;
     if (!wheelState) {
-        logMultiuserWheelDebug('apply-remote-vehicle-wheel:missing-binding', {
-          bindingNodeId: binding.nodeId,
-          wheelBindingObjectName: binding.object?.name ?? null,
-        });
-      
-      return;
-    }
-      logMultiuserWheelDebug('apply-remote-vehicle-wheel:matched', {
+      logMultiuserWheelDebug('apply-remote-vehicle-wheel:missing-binding', {
         bindingNodeId: binding.nodeId,
         wheelBindingObjectName: binding.object?.name ?? null,
-        steeringAngle: wheelState.steeringAngle ?? null,
-        spinAngle: wheelState.spinAngle ?? null,
       });
-    
+      return;
+    }
+    logMultiuserWheelDebug('apply-remote-vehicle-wheel:matched', {
+      bindingNodeId: binding.nodeId,
+      wheelBindingObjectName: binding.object?.name ?? null,
+      steeringAngle: wheelState.steeringAngle ?? null,
+      spinAngle: wheelState.spinAngle ?? null,
+    });
+
     if (alpha >= 1 || !binding.object) {
       applyRemoteMultiuserVehicleWheelState(binding, wheelState);
       return;
