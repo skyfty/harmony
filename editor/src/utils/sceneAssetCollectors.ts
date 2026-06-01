@@ -1,5 +1,8 @@
 import type { SceneNode } from '@schema/core'
 import { clampSceneNodeInstanceLayout, resolveInstanceLayoutTemplateAssetId } from '@schema/instanceLayout'
+import {
+  collectRuntimeModelNodesByAssetId as collectSharedRuntimeModelNodesByAssetId,
+} from '@schema/runtimeModelInstancing'
 
 const PREFAB_SOURCE_METADATA_KEY = '__prefabAssetId'
 const ASSET_REFERENCE_SKIP_KEYS = new Set<string>([PREFAB_SOURCE_METADATA_KEY])
@@ -83,44 +86,7 @@ function collectAssetIdsFromUnknown(value: unknown, bucket: Set<string>): void {
 export function collectRuntimeModelNodesByAssetId(
   nodes: SceneNode[] | null | undefined,
 ): Map<string, SceneNode[]> {
-  const map = new Map<string, SceneNode[]>()
-  if (!Array.isArray(nodes) || !nodes.length) {
-    return map
-  }
-
-  const ensureNodeAssetId = (assetId: string, node: SceneNode): void => {
-    const normalized = assetId.trim()
-    if (!normalized) {
-      return
-    }
-    if (!map.has(normalized)) {
-      map.set(normalized, [])
-    }
-    map.get(normalized)!.push(node)
-  }
-
-  const stack: SceneNode[] = [...nodes]
-  while (stack.length) {
-    const node = stack.pop()
-    if (!node) {
-      continue
-    }
-
-    const rawLayout = (node as { instanceLayout?: unknown }).instanceLayout
-    const layout = rawLayout
-      ? clampSceneNodeInstanceLayout(rawLayout)
-      : { mode: 'single' as const, templateAssetId: null }
-    const runtimeAssetId = resolveInstanceLayoutTemplateAssetId(layout, node.sourceAssetId ?? null)
-    if (runtimeAssetId) {
-      ensureNodeAssetId(runtimeAssetId, node)
-    }
-
-    if (Array.isArray(node.children) && node.children.length) {
-      stack.push(...node.children)
-    }
-  }
-
-  return map
+  return collectSharedRuntimeModelNodesByAssetId(nodes)
 }
 
 export function collectSceneNodeDependencyAssetIds(

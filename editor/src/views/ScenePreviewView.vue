@@ -329,6 +329,7 @@ import type { ViewerOptions } from 'viewerjs'
 import { readServerDownloadBaseUrl } from '@/api/serverApiConfig'
 import { createAutoTourRuntime } from '@schema/motion'
 import { createScenePreviewPerfController } from '@schema/overlay'
+import { canNodeUseRuntimeModelInstancing } from '@schema/runtimeModelInstancing'
 
 
 const SCENE_PREVIEW_EXPORT_OPTIONS: SceneExportOptions = {
@@ -3643,6 +3644,12 @@ function applyInstancedLodSwitch(nodeId: string, object: THREE.Object3D, target:
 		return
 	}
 	const node = resolveNodeById(nodeId)
+	if (!canNodeUseRuntimeModelInstancing(node)) {
+		releaseBillboardInstance(nodeId)
+		releaseModelInstance(nodeId)
+		object.userData.__harmonyCulled = false
+		return
+	}
 	if (target.kind === 'model') {
 		const cached = getCachedModelObject(target.assetId)
 		if (!cached) {
@@ -4277,6 +4284,13 @@ function updateInstancedCullingAndLod(): void {
 		// Ensure bindings exist for this node/layout.
 		const bindings = currentRenderKind === 'billboard' ? getBillboardInstanceBindingsForNode(nodeId) : getModelInstanceBindingsForNode(nodeId)
 		if (bindings.length !== desiredCount) {
+			if (!canNodeUseRuntimeModelInstancing(node)) {
+				releaseBillboardInstance(nodeId)
+				releaseModelInstance(nodeId)
+				entry.appliedTargetKey = null
+				entry.appliedTransformRevision = -1
+				return
+			}
 			releaseBillboardInstance(nodeId)
 			releaseModelInstance(nodeId)
 			const baseBinding = currentRenderKind === 'billboard'
@@ -4380,6 +4394,10 @@ async function ensureModelInstanceGroup(
 }
 
 function createInstancedPreviewProxy(node: SceneNode, group: ModelInstanceGroup): THREE.Object3D | null {
+	if (!canNodeUseRuntimeModelInstancing(node)) {
+		releaseModelInstance(node.id)
+		return null
+	}
 	const rawLayout = (node as unknown as { instanceLayout?: unknown }).instanceLayout
 	const layout = rawLayout ? clampSceneNodeInstanceLayout(rawLayout) : { mode: 'single' as const, templateAssetId: null }
 	const resolvedAssetId = resolveInstanceLayoutTemplateAssetId(layout, node.sourceAssetId ?? null)
@@ -13321,7 +13339,9 @@ async function updateScene(document: SceneJsonExportDocument) {
 		const pendingObjects = collectPendingObjects(root)
 		const instancingSkipNodeIds = resolveInstancingSkipNodeIds(pendingObjects)
 		instancingSkipNodeIds?.forEach((nodeId) => {
-			deferredInstancingNodeIds.add(nodeId)
+			if (canNodeUseRuntimeModelInstancing(resolveNodeById(nodeId))) {
+				deferredInstancingNodeIds.add(nodeId)
+			}
 		})
 		if (resourceCache) {
 			await prepareInstancedNodesForDocument(document, pendingObjects, resourceCache, {

@@ -523,6 +523,10 @@ import { rebuildSceneNodeIndex, resolveSceneNodeById, resolveSceneParentNodeId }
 import { resolveEnabledComponentState } from '@harmony/schema/componentRuntimeUtils';
 import { createGradientBackgroundDome, disposeGradientBackgroundDome, type GradientBackgroundDome } from '@harmony/schema/gradientBackground';
 import { disposeSkyCubeTexture, loadSkyCubeTexture, extractSkycubeZipFaces } from '@harmony/schema/skyCubeTexture';
+import {
+  canNodeUseRuntimeModelInstancing,
+  collectRuntimeModelNodesByAssetId,
+} from '@harmony/schema/runtimeModelInstancing';
 // LanternSlideDefinition is not exported from skyCubeTexture, so remove it from import and use 'any' or define locally if needed
 import {
   decodeScenePackageSceneDocument,
@@ -6001,33 +6005,6 @@ function refreshDynamicGroundCache(document: SceneJsonExportDocument | null): vo
 }
 
 
-function collectNodesByAssetId(nodes: SceneNode[] | undefined | null): Map<string, SceneNode[]> {
-  const map = new Map<string, SceneNode[]>();
-  if (!Array.isArray(nodes)) {
-    return map;
-  }
-  const stack: SceneNode[] = [...nodes];
-  while (stack.length) {
-    const node = stack.pop();
-    if (!node) {
-      continue;
-    }
-    const rawLayout = (node as unknown as { instanceLayout?: unknown }).instanceLayout;
-    const layout = rawLayout ? clampSceneNodeInstanceLayout(rawLayout) : null;
-    const resolvedAssetId = resolveInstanceLayoutTemplateAssetId(layout, node.sourceAssetId ?? null);
-    if (resolvedAssetId) {
-      if (!map.has(resolvedAssetId)) {
-        map.set(resolvedAssetId, []);
-      }
-      map.get(resolvedAssetId)!.push(node);
-    }
-    if (Array.isArray(node.children) && node.children.length) {
-      stack.push(...node.children);
-    }
-  }
-  return map;
-}
-
 function serializeBoundingBox(box: THREE.Box3): { min: [number, number, number]; max: [number, number, number] } {
   return {
     min: [box.min.x, box.min.y, box.min.z],
@@ -6063,6 +6040,10 @@ async function ensureModelInstanceGroup(
 }
 
 function createInstancedPreviewProxy(node: SceneNode, group: ModelInstanceGroup): THREE.Object3D | null {
+  if (!canNodeUseRuntimeModelInstancing(node)) {
+    releaseModelInstance(node.id);
+    return null;
+  }
   const rawLayout = (node as unknown as { instanceLayout?: unknown }).instanceLayout;
   const layout = rawLayout ? clampSceneNodeInstanceLayout(rawLayout) : { mode: 'single' as const, templateAssetId: null };
   const resolvedAssetId = resolveInstanceLayoutTemplateAssetId(layout, node.sourceAssetId ?? null);
@@ -6285,15 +6266,19 @@ function applyModelFaceCameraMatrix(camera: THREE.Camera | null | undefined, mat
 // Enhanced: support both model and billboard LOD targets
 function applyInstancedLodSwitch(nodeId: string, object: THREE.Object3D, target: SceneryInstancedLodTarget): void {
   if (!target) return;
+  const node = resolveNodeById(nodeId);
+  if (!canNodeUseRuntimeModelInstancing(node)) {
+    releaseBillboardInstance(nodeId);
+    releaseModelInstance(nodeId);
+    return;
+  }
   if (target.kind === 'model') {
     const assetId = target.assetId;
     const cached = getCachedModelObject(assetId);
     if (!cached) {
-      const node = resolveNodeById(nodeId);
       void ensureModelObjectCached(assetId, node);
       return;
     }
-    const node = resolveNodeById(nodeId);
     const rawLayout = (node as unknown as { instanceLayout?: unknown } | null)?.instanceLayout;
     const layout = rawLayout ? clampSceneNodeInstanceLayout(rawLayout) : { mode: 'single' as const, templateAssetId: null };
     const desiredCount = getInstanceLayoutCount(layout);
@@ -6702,7 +6687,7 @@ async function prepareInstancedNodesForGraph(
 ): Promise<void> {
   const includeNodeIds = options.includeNodeIds ?? null;
   const skipNodeIds = options.skipNodeIds ?? null;
-  const grouped = collectNodesByAssetId(document.nodes ?? []);
+  const grouped = collectRuntimeModelNodesByAssetId(document.nodes ?? []);
   if (!grouped.size) {
     return;
   }
@@ -9353,6 +9338,11 @@ function syncInstancedTransform(object: THREE.Object3D | null, force = false): v
       ? getBillboardInstanceBindingsForNode(nodeId)
       : getModelInstanceBindingsForNode(nodeId);
     if (existingBindings.length !== desiredCount) {
+      if (!canNodeUseRuntimeModelInstancing(node)) {
+        releaseBillboardInstance(nodeId);
+        releaseModelInstance(nodeId);
+        return;
+      }
       if (!assetId) {
         return;
       }
@@ -16625,7 +16615,11 @@ async function prepareInstancedNodesIfPossible(
   skipNodeIds: Set<string> | null,
 ): Promise<void> {
   if (skipNodeIds?.size) {
-    skipNodeIds.forEach((nodeId) => deferredInstancingNodeIds.add(nodeId));
+    skipNodeIds.forEach((nodeId) => {
+      if (canNodeUseRuntimeModelInstancing(resolveNodeById(nodeId))) {
+        deferredInstancingNodeIds.add(nodeId);
+      }
+    });
   }
 
   if (!resourceCache) {

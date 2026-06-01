@@ -6282,6 +6282,20 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		}
 		scatterSession.currentPoint = nextPoint.clone()
 		if (scatterSession.brushShape === 'circle') {
+			const isLeftDown = (event.buttons & 1) !== 0
+			if (!isLeftDown) {
+				if (options.canvasRef.value && options.canvasRef.value.hasPointerCapture(event.pointerId)) {
+					options.canvasRef.value.releasePointerCapture(event.pointerId)
+				}
+				queueScatterSidecarSave()
+				clearScatterAreaPreview()
+				options.clearVertexSnap?.()
+				scatterSession = null
+				event.preventDefault()
+				event.stopPropagation()
+				event.stopImmediatePropagation()
+				return true
+			}
 			traceScatterPath(nextPoint)
 		} else {
 			if (shouldRefreshScatterSessionPreview(scatterSession, nextPoint)) {
