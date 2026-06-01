@@ -21,7 +21,7 @@ export interface RemoteMultiuserPeerVisibilityState {
 export function createRemoteMultiuserPeerVisibilityState(): RemoteMultiuserPeerVisibilityState {
   return {
     visible: false,
-    lastInFrustumFrame: 0,
+    lastInFrustumFrame: -1,
     lastOutFrustumFrame: 0,
     visibleSinceFrame: 0,
   }
@@ -47,7 +47,8 @@ export function shouldKeepRemoteMultiuserPeerVisible(
   state: RemoteMultiuserPeerVisibilityState,
   frameIndex: number,
 ): boolean {
-  const enteredRecently = frameIndex - state.lastInFrustumFrame <= REMOTE_MULTIUSER_ENTER_GRACE_FRAMES
+  const enteredRecently = state.lastInFrustumFrame > 0
+    && frameIndex - state.lastInFrustumFrame <= REMOTE_MULTIUSER_ENTER_GRACE_FRAMES
   if (enteredRecently) {
     return true
   }

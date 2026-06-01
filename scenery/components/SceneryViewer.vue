@@ -10094,6 +10094,7 @@ function createRemoteMultiuserPeerPlaceholderEntry(peerState: MultiuserPeerState
     targetState: cloneRemoteMultiuserPeerState(peerState),
     displayState: null,
     ownsResources: true,
+    wheelNodeIds: [],
     wheelBindings: [],
     animationControllers: new Map(),
     rootSignature: '',
@@ -10383,6 +10384,11 @@ function collectRemoteMultiuserAnimationControllers(root: THREE.Object3D): Map<s
 }
 
 function attachRemoteMultiuserPeerRuntime(entry: RemoteMultiuserPeerEntry): void {
+  if (!entry.root) {
+    entry.wheelBindings = [];
+    entry.animationControllers = new Map();
+    return;
+  }
   const presentationWheels = entry.targetState.presentation?.vehicle?.wheels ?? [];
   const wheelNodeIds = entry.wheelNodeIds.length
     ? entry.wheelNodeIds
@@ -11800,64 +11806,8 @@ function handleRemoteMultiuserPeerSnapshot(peer: MultiuserPeerSnapshot): void {
   nextEntry.signature = signature;
   nextEntry.targetState = cloneRemoteMultiuserPeerState(peer.state);
   nextEntry.displayState = nextEntry.displayState ?? cloneRemoteMultiuserPeerState(peer.state);
-  if (existing) {
-    remoteMultiuserPeerEntries.set(peer.userId, nextEntry);
-  } else {
-    remoteMultiuserPeerEntries.set(peer.userId, nextEntry);
-  }
-
-  const placeholder = createRemoteMultiuserPlaceholder(peer.state.subjectType);
-  placeholder.name = `RemotePeer:${peer.userId}`;
-  latestRoot.add(placeholder);
-  applyRemoteMultiuserPeerTransform(placeholder, peer.state);
-  remoteMultiuserPeerEntries.set(peer.userId, {
-    root: placeholder,
-    signature,
-    targetState: cloneRemoteMultiuserPeerState(peer.state),
-    displayState: cloneRemoteMultiuserPeerState(peer.state),
-    ownsResources: true,
-    wheelNodeIds: [],
-    wheelBindings: [],
-    animationControllers: new Map(),
-  });
-  markInstancedCullingDirty();
-
-  void createRemoteMultiuserPeerObject(peer.state).then(({ object, ownsResources, wheelNodeIds }) => {
-    if (remoteMultiuserPeerLoadTokens.get(peer.userId) !== loadToken) {
-      disposeRemoteMultiuserObject(object, ownsResources);
-      return;
-    }
-    const latestEntry = remoteMultiuserPeerEntries.get(peer.userId) ?? null;
-    if (!latestEntry || latestEntry.signature !== signature) {
-      disposeRemoteMultiuserObject(object, ownsResources);
-      return;
-    }
-    const currentRoot = latestEntry.root;
-    currentRoot.parent?.remove(currentRoot);
-    releaseRemoteMultiuserPeerRuntime(latestEntry);
-    disposeRemoteMultiuserObject(currentRoot, latestEntry.ownsResources);
-    object.name = `RemotePeer:${peer.userId}`;
-    latestRoot.add(object);
-    applyRemoteMultiuserPeerTransform(object, latestEntry.displayState ?? latestEntry.targetState);
-    const runtimeEntry = {
-      ...latestEntry,
-      root: object,
-      wheelNodeIds,
-    };
-    attachRemoteMultiuserPeerRuntime(runtimeEntry);
-    applyRemoteMultiuserPeerRuntime(runtimeEntry, runtimeEntry.displayState ?? runtimeEntry.targetState, 1, 0);
-    remoteMultiuserPeerEntries.set(peer.userId, {
-      ...runtimeEntry,
-      signature,
-      targetState: cloneRemoteMultiuserPeerState(latestEntry.targetState),
-      displayState: cloneRemoteMultiuserPeerState(latestEntry.displayState ?? latestEntry.targetState),
-      ownsResources,
-      wheelNodeIds,
-    });
-    markInstancedCullingDirty();
-  }).catch((error) => {
-    console.warn('[SceneryViewer] Failed to create remote multiuser peer object', error);
-  });
+  remoteMultiuserPeerEntries.set(peer.userId, nextEntry);
+  syncRemoteMultiuserPeerVisibility();
 }
 
 function resolveLocalMultiuserVehiclePresentation(nodeId: string): MultiuserVehiclePresentation | null {
