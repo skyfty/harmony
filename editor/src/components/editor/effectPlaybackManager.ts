@@ -1,9 +1,9 @@
 import type * as THREE from 'three'
 import {
   GUIDEBOARD_RUNTIME_REGISTRY_KEY,
-  WARP_GATE_RUNTIME_REGISTRY_KEY,
+  PARTICLE_SYSTEM_RUNTIME_REGISTRY_KEY,
 } from '@schema/components'
-import type { GuideboardComponentProps, WarpGateComponentProps } from '@schema/components'
+import type { GuideboardComponentProps, ParticleRuntimeRegistryEntry } from '@schema/components'
 
 export type EffectPlaybackEntry = {
   id: string
@@ -24,12 +24,6 @@ type EffectRuntimeAdapter = {
   requiresSelection?: boolean
 }
 
-type WarpGateRuntimeRegistryEntry = {
-  tick?: (delta: number) => void
-  setPlaybackActive?: (active: boolean) => void
-  props?: Partial<WarpGateComponentProps> | null
-}
-
 type GuideboardRuntimeRegistryEntry = {
   tick?: (delta: number) => void
   setPlaybackActive?: (active: boolean) => void
@@ -42,16 +36,16 @@ export function createEffectPlaybackManager(): EffectPlaybackManager {
 
   const adapters: EffectRuntimeAdapter[] = [
     {
-      registryKey: WARP_GATE_RUNTIME_REGISTRY_KEY,
+      registryKey: PARTICLE_SYSTEM_RUNTIME_REGISTRY_KEY,
       collect(object, nodeId) {
-        const registry = object.userData?.[WARP_GATE_RUNTIME_REGISTRY_KEY] as
-          | Record<string, WarpGateRuntimeRegistryEntry>
+        const registry = object.userData?.[PARTICLE_SYSTEM_RUNTIME_REGISTRY_KEY] as
+          | Record<string, ParticleRuntimeRegistryEntry>
           | undefined
         if (!registry) {
           return []
         }
         return Object.entries(registry).map(([componentId, entry]) => {
-          const playbackId = `${nodeId}:${WARP_GATE_RUNTIME_REGISTRY_KEY}:${componentId}`
+          const playbackId = `${nodeId}:${PARTICLE_SYSTEM_RUNTIME_REGISTRY_KEY}:${componentId}`
           return {
             id: playbackId,
             tick: typeof entry.tick === 'function' ? entry.tick.bind(entry) : undefined,

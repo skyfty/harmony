@@ -721,10 +721,6 @@ import {
   type MultiuserSharedEntityState,
   type MultiuserRuntimeBridge,
 } from '@harmony/schema/multiuserContext';
-import {
-  type WarpGateComponentProps,
-} from '@harmony/schema/components/definitions/warpGateComponent';
-
 type RigidbodyComponentProps = any;
 import {
   animationComponentDefinition,
@@ -750,11 +746,7 @@ import {
 } from '@harmony/schema/components/definitions/billboardComponent';
 import {
   guideboardComponentDefinition,
-  GUIDEBOARD_RUNTIME_REGISTRY_KEY,
-  GUIDEBOARD_EFFECT_ACTIVE_FLAG,
   GUIDEBOARD_COMPONENT_TYPE,
-  clampGuideboardComponentProps,
-  computeGuideboardEffectActive,
   type GuideboardComponentProps,
 } from '@harmony/schema/components/definitions/guideboardComponent';
 import {
@@ -781,13 +773,11 @@ import {
   viewPointComponentDefinition,
 } from '@harmony/schema/components/definitions/viewPointComponent';
 import {
-  warpGateComponentDefinition,
-  WARP_GATE_RUNTIME_REGISTRY_KEY,
-  WARP_GATE_EFFECT_ACTIVE_FLAG,
-} from '@harmony/schema/components/definitions/warpGateComponent';
-import {
-  effectComponentDefinition,
-} from '@harmony/schema/components/definitions/effectComponent';
+  particleSystemComponentDefinition,
+  PARTICLE_SYSTEM_RUNTIME_REGISTRY_KEY,
+  applyParticleRuntimeCommand,
+  setParticleTextureResolver,
+} from '@harmony/schema/components/definitions/particleSystemComponent';
 import {
   couponComponentDefinition,
   COUPON_COMPONENT_TYPE,
@@ -1991,8 +1981,7 @@ previewComponentManager.registerDefinition(displayBoardComponentDefinition);
 previewComponentManager.registerDefinition(billboardComponentDefinition);
 previewComponentManager.registerDefinition(signboardComponentDefinition);
 previewComponentManager.registerDefinition(viewPointComponentDefinition);
-previewComponentManager.registerDefinition(warpGateComponentDefinition);
-previewComponentManager.registerDefinition(effectComponentDefinition);
+previewComponentManager.registerDefinition(particleSystemComponentDefinition);
 previewComponentManager.registerDefinition(couponComponentDefinition);
 previewComponentManager.registerDefinition(behaviorComponentDefinition);
 previewComponentManager.registerDefinition(rigidbodyComponentDefinition);
@@ -3748,42 +3737,7 @@ type BehaviorSoundInstance = {
 
 const activeBehaviorSounds = new Map<string, BehaviorSoundInstance>();
 const nodeAnimationRuntime = new SceneAnimationRuntimeManager();
-let effectRuntimeTickers: Array<(delta: number) => void> = [];
-
-type WarpGateRuntimeRegistryEntry = {
-  tick?: (delta: number) => void;
-  props?: Partial<WarpGateComponentProps> | null;
-  setPlaybackActive?: (active: boolean) => void
-};
-
-type GuideboardRuntimeRegistryEntry = {
-  tick?: (delta: number) => void;
-  props?: Partial<GuideboardComponentProps> | null;
-  setPlaybackActive?: (active: boolean) => void
-};
-
-function isWarpGateEffectActive(props: Partial<WarpGateComponentProps> | null | undefined): boolean {
-  if (!props) {
-    return false;
-  }
-  const nested = (props as { groundLight?: Partial<WarpGateComponentProps> | null | undefined }).groundLight;
-  if (nested && typeof nested === 'object') {
-    return isWarpGateEffectActive(nested);
-  }
-  const showParticles = props.showParticles === true;
-  const particleCount = typeof props.particleCount === 'number' ? props.particleCount : 0;
-  const showBeams = props.showBeams === true;
-  const showRings = props.showRings === true;
-  return (showParticles && particleCount > 0) || showBeams || showRings;
-}
-
-function isGuideboardEffectActive(props: Partial<GuideboardComponentProps> | null | undefined): boolean {
-  if (!props) {
-    return false;
-  }
-  const normalized = clampGuideboardComponentProps(props);
-  return computeGuideboardEffectActive(normalized);
-}
+const pendingParticleRuntimeCommands: Array<{ nodeId: string; command: { type: 'play' | 'stop' | 'burst'; componentId: string | null; emitterId?: string | null; count?: number; restart?: boolean; softStop?: boolean } }> = [];
 
 type BehaviorProximityCandidate = { hasApproach: boolean; hasDepart: boolean };
 type BehaviorProximityState = { inside: boolean; lastDistance: number | null };
@@ -4489,9 +4443,48 @@ async function resolveDisplayBoardMediaSource(candidate: string): Promise<Resolv
 	return await resolveAssetUrlFromCache(assetId)
 }
 
+async function resolveParticleTextureAssetSource(assetId: string): Promise<THREE.Texture | null> {
+  const trimmed = assetId.trim();
+  if (!trimmed.length) {
+    return null;
+  }
+  try {
+    if (trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.startsWith('data:')) {
+      const directTexture = await textureLoader.loadAsync(trimmed);
+      directTexture.name = trimmed;
+      directTexture.colorSpace = THREE.SRGBColorSpace;
+      ensureFloatTextureFilterCompatibility(directTexture);
+      directTexture.needsUpdate = true;
+      return directTexture;
+    }
+    const cache = viewerResourceCache ?? sharedResourceCache;
+    if (!cache) {
+      return null;
+    }
+    const entry = await cache.acquireAssetEntry(trimmed);
+    if (!entry) {
+      return null;
+    }
+    const source = entry.blobUrl ?? entry.downloadUrl ?? '';
+    if (!source) {
+      return null;
+    }
+    const texture = await textureLoader.loadAsync(source);
+    texture.name = entry.filename ?? trimmed;
+    texture.colorSpace = THREE.SRGBColorSpace;
+    ensureFloatTextureFilterCompatibility(texture);
+    texture.needsUpdate = true;
+    return texture;
+  } catch (error) {
+    console.warn('[SceneViewer] Failed to resolve particle texture', trimmed, error);
+    return null;
+  }
+}
+
 (globalThis as typeof globalThis & { [DISPLAY_BOARD_RESOLVER_KEY]?: typeof resolveDisplayBoardMediaSource })[
   DISPLAY_BOARD_RESOLVER_KEY
 ] = resolveDisplayBoardMediaSource;
+setParticleTextureResolver(resolveParticleTextureAssetSource);
 
 function clearAssetObjectUrlCache(): void {
   assetObjectUrlCache.forEach((url) => {
@@ -12851,83 +12844,32 @@ function updateBehaviorProximity(): void {
 }
 
 function resetEffectRuntimeTickers(): void {
-  effectRuntimeTickers = [];
-  nodeObjectMap.forEach((object) => {
-    const userData = object.userData;
-    if (!userData) {
-      return;
-    }
-    if (Object.prototype.hasOwnProperty.call(userData, WARP_GATE_EFFECT_ACTIVE_FLAG)) {
-      delete userData[WARP_GATE_EFFECT_ACTIVE_FLAG];
-    }
-    if (Object.prototype.hasOwnProperty.call(userData, GUIDEBOARD_EFFECT_ACTIVE_FLAG)) {
-      delete userData[GUIDEBOARD_EFFECT_ACTIVE_FLAG];
-    }
-  });
 }
 
 function refreshEffectRuntimeTickers(): void {
   resetEffectRuntimeTickers();
-  const uniqueTickers = new Set<(delta: number) => void>();
-  nodeObjectMap.forEach((object) => {
-    const warpGateRegistry = object.userData?.[WARP_GATE_RUNTIME_REGISTRY_KEY] as Record<string, WarpGateRuntimeRegistryEntry> | undefined;
-    const guideboardRegistry = object.userData?.[GUIDEBOARD_RUNTIME_REGISTRY_KEY] as Record<string, GuideboardRuntimeRegistryEntry> | undefined;
-    if (!warpGateRegistry && !guideboardRegistry) {
+}
+
+function flushParticleRuntimeCommands(): void {
+  if (!pendingParticleRuntimeCommands.length) {
+    return;
+  }
+  const pending = pendingParticleRuntimeCommands.splice(0, pendingParticleRuntimeCommands.length);
+  pending.forEach(({ nodeId, command }) => {
+    const object = nodeObjectMap.get(nodeId);
+    if (!object) {
       return;
     }
-    const userData = object.userData ?? (object.userData = {});
-    if (warpGateRegistry) {
-      let warpGateSeen = false;
-      let warpGateActive = false;
-      Object.values(warpGateRegistry).forEach((entry) => {
-        if (!entry) {
-          return;
-        }
-        if (typeof entry.tick === 'function') {
-          uniqueTickers.add(entry.tick);
-        }
-        if (entry.props) {
-          warpGateSeen = true;
-          if (isWarpGateEffectActive(entry.props)) {
-            warpGateActive = true;
-          }
-        }
-      });
-      if (warpGateSeen) {
-        userData[WARP_GATE_EFFECT_ACTIVE_FLAG] = warpGateActive;
-      } else if (Object.prototype.hasOwnProperty.call(userData, WARP_GATE_EFFECT_ACTIVE_FLAG)) {
-        delete userData[WARP_GATE_EFFECT_ACTIVE_FLAG];
-      }
-    } else if (Object.prototype.hasOwnProperty.call(userData, WARP_GATE_EFFECT_ACTIVE_FLAG)) {
-      delete userData[WARP_GATE_EFFECT_ACTIVE_FLAG];
-    }
-    if (guideboardRegistry) {
-      let guideboardSeen = false;
-      let guideboardActive = false;
-      Object.values(guideboardRegistry).forEach((entry) => {
-        if (!entry) {
-          return;
-        }
-        if (typeof entry.tick === 'function') {
-          uniqueTickers.add(entry.tick);
-        }
-        if (entry.props) {
-          guideboardSeen = true;
-          if (isGuideboardEffectActive(entry.props)) {
-            guideboardActive = true;
-          }
-        }
-      });
-      if (guideboardSeen) {
-        userData[GUIDEBOARD_EFFECT_ACTIVE_FLAG] = guideboardActive;
-      } else if (Object.prototype.hasOwnProperty.call(userData, GUIDEBOARD_EFFECT_ACTIVE_FLAG)) {
-        delete userData[GUIDEBOARD_EFFECT_ACTIVE_FLAG];
-      }
-    } else if (Object.prototype.hasOwnProperty.call(userData, GUIDEBOARD_EFFECT_ACTIVE_FLAG)) {
-      delete userData[GUIDEBOARD_EFFECT_ACTIVE_FLAG];
-    }
+    const registry = object.userData?.[PARTICLE_SYSTEM_RUNTIME_REGISTRY_KEY] as Record<string, unknown> | undefined;
+    applyParticleRuntimeCommand(registry as any, {
+      type: command.type,
+      componentId: command.componentId ?? null,
+      emitterId: command.emitterId ?? null,
+      count: command.count,
+      restart: command.restart,
+      softStop: command.softStop,
+    } as any);
   });
-  effectRuntimeTickers = uniqueTickers.size ? Array.from(uniqueTickers) : [];
 }
 
 function resetAnimationControllers(): void {
@@ -15130,6 +15072,37 @@ function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
         initializationMode: event.initializationMode,
         placement: event.placement,
       }, { dedupe: false });
+      break;
+    case 'play-particle-effect':
+      pendingParticleRuntimeCommands.push({
+        nodeId: event.targetNodeId,
+        command: {
+          type: 'play',
+          componentId: event.componentId,
+          restart: event.restart,
+        },
+      });
+      break;
+    case 'stop-particle-effect':
+      pendingParticleRuntimeCommands.push({
+        nodeId: event.targetNodeId,
+        command: {
+          type: 'stop',
+          componentId: event.componentId,
+          softStop: event.softStop,
+        },
+      });
+      break;
+    case 'burst-particle-effect':
+      pendingParticleRuntimeCommands.push({
+        nodeId: event.targetNodeId,
+        command: {
+          type: 'burst',
+          componentId: event.componentId,
+          emitterId: event.emitterId,
+          count: event.count ?? undefined,
+        },
+      });
       break;
     case 'show-bubble':
       presentBehaviorBubble(event);
@@ -17622,6 +17595,7 @@ function startRenderLoop(
             cameraWorldPosition: previewFrameCameraWorldPosition,
           });
           previewComponentManager.update(deltaSeconds);
+          flushParticleRuntimeCommands();
           waterRuntime.update(deltaSeconds, { renderer, scene, camera });
           updateCharacterControllerAnimations(deltaSeconds);
           nodeAnimationRuntime.update(deltaSeconds);
@@ -17630,14 +17604,6 @@ function startRenderLoop(
               return;
             }
             applyBehaviorSoundVolume(instance);
-          });
-
-          effectRuntimeTickers.forEach((tick) => {
-            try {
-              tick(deltaSeconds);
-            } catch (error) {
-              console.warn('更新特效动画失败', error);
-            }
           });
 
           if (autoTourPaused.value) {
@@ -18222,6 +18188,7 @@ onMounted(() => {
   if (hasAnyPropInput()) {
     applySceneInputFromProps();
   }
+  setParticleTextureResolver(resolveParticleTextureAssetSource);
 });
 
 watch(
@@ -18293,6 +18260,7 @@ function cleanupRuntime(): void {
   sharedResourceCache = null;
   lanternViewerInstance = null;
   delete (globalThis as typeof globalThis & Record<string, unknown>)[DISPLAY_BOARD_RESOLVER_KEY];
+  setParticleTextureResolver(null);
 }
 
 onUnmounted(() => {

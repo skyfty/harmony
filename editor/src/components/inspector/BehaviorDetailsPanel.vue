@@ -19,6 +19,9 @@ import { instantiateBehaviorPrefab } from '@/utils/behaviorPrefab'
 import DelayParams from '@/components/inspector/behavior/DelayParams.vue'
 import MoveToParams from '@/components/inspector/behavior/MoveToParams.vue'
 import SpawnPrefabParams from '@/components/inspector/behavior/SpawnPrefabParams.vue'
+import PlayParticleEffectParams from '@/components/inspector/behavior/PlayParticleEffectParams.vue'
+import StopParticleEffectParams from '@/components/inspector/behavior/StopParticleEffectParams.vue'
+import BurstParticleEffectParams from '@/components/inspector/behavior/BurstParticleEffectParams.vue'
 import ShowAlertParams from '@/components/inspector/behavior/ShowAlertParams.vue'
 import BubbleParams from '@/components/inspector/behavior/BubbleParams.vue'
 import PlaySoundParams from '@/components/inspector/behavior/PlaySoundParams.vue'
@@ -96,6 +99,9 @@ const PARAMETER_COMPONENTS: Partial<Record<BehaviorScriptType, unknown>> = {
   delay: DelayParams,
   moveTo: MoveToParams,
   spawnPrefab: SpawnPrefabParams,
+  playParticleEffect: PlayParticleEffectParams,
+  stopParticleEffect: StopParticleEffectParams,
+  burstParticleEffect: BurstParticleEffectParams,
   showAlert: ShowAlertParams,
   bubble: BubbleParams,
   playSound: PlaySoundParams,
@@ -228,6 +234,9 @@ function applyDefaultTarget(step: SceneBehavior): void {
     scriptType !== 'stopAnimation' &&
     scriptType !== 'moveTo' &&
     scriptType !== 'playSound' &&
+    scriptType !== 'playParticleEffect' &&
+    scriptType !== 'stopParticleEffect' &&
+    scriptType !== 'burstParticleEffect' &&
     scriptType !== 'controlCharacter' &&
     scriptType !== 'spawnPrefab' &&
     scriptType !== 'coupon'

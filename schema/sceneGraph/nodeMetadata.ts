@@ -12,14 +12,7 @@ import {
 
 import type { ViewPointComponentProps } from '../components/definitions/viewPointComponent';
 import { VIEW_POINT_COMPONENT_TYPE } from '../components/definitions/viewPointComponent';
-
-import type { WarpGateComponentProps } from '../components/definitions/warpGateComponent';
-import {
-  WARP_GATE_COMPONENT_TYPE,
-  WARP_GATE_EFFECT_METADATA_KEY,
-  clampWarpGateComponentProps,
-  cloneWarpGateComponentProps,
-} from '../components/definitions/warpGateComponent';
+import { PARTICLE_SYSTEM_COMPONENT_TYPE } from '../components/definitions/particleSystemComponent';
 
 export function applyNodeMetadata(object: THREE.Object3D, node: SceneNodeWithExtras): void {
   if (!object || !node || !node.id) {
@@ -52,12 +45,10 @@ export function applyNodeMetadata(object: THREE.Object3D, node: SceneNodeWithExt
     metadata.viewPointInitiallyVisible = viewPointProps?.initiallyVisible === true;
   }
 
-  const warpGateState = node.components?.[WARP_GATE_COMPONENT_TYPE] as
-    | SceneNodeComponentState<WarpGateComponentProps>
+  const particleSystemState = node.components?.[PARTICLE_SYSTEM_COMPONENT_TYPE] as
+    | SceneNodeComponentState<unknown>
     | undefined;
-  if (warpGateState?.enabled) {
+  if (particleSystemState?.enabled && node.nodeType === 'WarpGate') {
     metadata.warpGate = true;
-    const props = clampWarpGateComponentProps(warpGateState.props as Partial<WarpGateComponentProps>);
-    metadata[WARP_GATE_EFFECT_METADATA_KEY] = cloneWarpGateComponentProps(props);
   }
 }

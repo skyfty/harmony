@@ -6,6 +6,9 @@ import type {
   LookBehaviorParams,
   MoveToBehaviorParams,
   SpawnPrefabBehaviorParams,
+  PlayParticleEffectBehaviorParams,
+  StopParticleEffectBehaviorParams,
+  BurstParticleEffectBehaviorParams,
   SceneBehavior,
   SceneBehaviorMap,
   SceneBehaviorScriptBinding,
@@ -332,6 +335,46 @@ const scriptDefinitions: BehaviorScriptDefinition[] = [
           alignment: 'origin',
           offset: null,
         },
+      }
+    },
+  },
+  {
+    id: 'playParticleEffect',
+    label: 'Play Particle',
+    description: 'Activate a particle system on the chosen node.',
+    icon: 'mdi-play-circle-outline',
+    createDefaultParams(): PlayParticleEffectBehaviorParams {
+      return {
+        targetNodeId: null,
+        componentId: null,
+        restart: false,
+      }
+    },
+  },
+  {
+    id: 'stopParticleEffect',
+    label: 'Stop Particle',
+    description: 'Stop a particle system on the chosen node.',
+    icon: 'mdi-stop-circle-outline',
+    createDefaultParams(): StopParticleEffectBehaviorParams {
+      return {
+        targetNodeId: null,
+        componentId: null,
+        softStop: true,
+      }
+    },
+  },
+  {
+    id: 'burstParticleEffect',
+    label: 'Burst Particle',
+    description: 'Emit a one-shot particle burst.',
+    icon: 'mdi-shimmer',
+    createDefaultParams(): BurstParticleEffectBehaviorParams {
+      return {
+        targetNodeId: null,
+        componentId: null,
+        emitterId: null,
+        count: 24,
       }
     },
   },
@@ -901,6 +944,40 @@ function cloneScriptBinding(binding: SceneBehaviorScriptBinding): SceneBehaviorS
         },
       }
     }
+    case 'playParticleEffect': {
+      const params = binding.params as PlayParticleEffectBehaviorParams | undefined
+      return {
+        type: 'playParticleEffect',
+        params: {
+          targetNodeId: normalizeTargetNodeId(params?.targetNodeId),
+          componentId: normalizeTargetNodeId(params?.componentId),
+          restart: params?.restart === true,
+        },
+      }
+    }
+    case 'stopParticleEffect': {
+      const params = binding.params as StopParticleEffectBehaviorParams | undefined
+      return {
+        type: 'stopParticleEffect',
+        params: {
+          targetNodeId: normalizeTargetNodeId(params?.targetNodeId),
+          componentId: normalizeTargetNodeId(params?.componentId),
+          softStop: params?.softStop !== false,
+        },
+      }
+    }
+    case 'burstParticleEffect': {
+      const params = binding.params as BurstParticleEffectBehaviorParams | undefined
+      return {
+        type: 'burstParticleEffect',
+        params: {
+          targetNodeId: normalizeTargetNodeId(params?.targetNodeId),
+          componentId: normalizeTargetNodeId(params?.componentId),
+          emitterId: normalizeTargetNodeId(params?.emitterId),
+          count: Math.max(0, Math.trunc(normalizeNonNegativeNumber(params?.count, 24))),
+        },
+      }
+    }
     case 'showAlert':
       return {
         type: 'showAlert',
@@ -1286,6 +1363,40 @@ export function ensureBehaviorParams(
             targetNodeId: normalizeTargetNodeId(params?.targetNodeId),
             initializationMode: normalizeRuntimePrefabInitializationMode(params?.initializationMode),
             placement: normalizeRuntimePrefabPlacement(params?.placement),
+          },
+        }
+      }
+      case 'playParticleEffect': {
+        const params = script.params as Partial<PlayParticleEffectBehaviorParams> | undefined
+        return {
+          type: 'playParticleEffect',
+          params: {
+            targetNodeId: normalizeTargetNodeId(params?.targetNodeId),
+            componentId: normalizeTargetNodeId(params?.componentId),
+            restart: params?.restart === true,
+          },
+        }
+      }
+      case 'stopParticleEffect': {
+        const params = script.params as Partial<StopParticleEffectBehaviorParams> | undefined
+        return {
+          type: 'stopParticleEffect',
+          params: {
+            targetNodeId: normalizeTargetNodeId(params?.targetNodeId),
+            componentId: normalizeTargetNodeId(params?.componentId),
+            softStop: params?.softStop !== false,
+          },
+        }
+      }
+      case 'burstParticleEffect': {
+        const params = script.params as Partial<BurstParticleEffectBehaviorParams> | undefined
+        return {
+          type: 'burstParticleEffect',
+          params: {
+            targetNodeId: normalizeTargetNodeId(params?.targetNodeId),
+            componentId: normalizeTargetNodeId(params?.componentId),
+            emitterId: normalizeTargetNodeId(params?.emitterId),
+            count: Math.max(0, Math.trunc(normalizeNonNegativeNumber(params?.count, 24))),
           },
         }
       }

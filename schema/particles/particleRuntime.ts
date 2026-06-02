@@ -1,0 +1,459 @@
+import * as THREE from 'three'
+import System, {
+  Alpha,
+  Body,
+  BoxZone,
+  Color as NebulaColor,
+  Emitter,
+  Life,
+  Mass,
+  PointZone,
+  Position,
+  RadialVelocity,
+  Radius,
+  Rate,
+  Scale,
+  Span,
+  SphereZone,
+  SpriteRenderer,
+  Vector3D,
+  Velocity,
+} from 'three-nebula'
+import type { ParticleBudgetDecision, ParticleBudgetRuntimeStats } from './particleBudget'
+import { applyEmitterBudget, resolveParticleBudgetDecision } from './particleBudget'
+import { getParticleTextureResolver } from './particleTextureResolver'
+import {
+  PARTICLE_SYSTEM_ACTIVE_FLAG,
+  PARTICLE_SYSTEM_METADATA_KEY,
+  PARTICLE_SYSTEM_RUNTIME_REGISTRY_KEY,
+  clampParticleSystemComponentProps,
+  cloneParticleSystemComponentProps,
+  estimateParticleSystemCost,
+  type ParticleEmitterConfig,
+  type ParticleExposedParams,
+  type ParticleSystemComponentProps,
+} from './particleSchema'
+
+export type ParticleRuntimeRegistryEntry = {
+  props: ParticleSystemComponentProps
+  play(): void
+  stop(options?: { soft?: boolean }): void
+  burst(count?: number, emitterId?: string): void
+  tick(delta: number, frameState?: { cameraWorldPosition: { x: number; y: number; z: number } | null }, runtimeStats?: ParticleBudgetRuntimeStats): void
+  setPlaybackActive(active: boolean): void
+  setExposedParams(patch: Partial<ParticleExposedParams>): void
+  dispose(): void
+}
+
+export interface ParticleSystemRuntimeHandle extends ParticleRuntimeRegistryEntry {
+  group: THREE.Group
+}
+
+const sharedTextureCache = new Map<string, THREE.Texture>()
+const pendingTextureLoads = new Map<string, Promise<THREE.Texture | null>>()
+const sharedTextureLoader = new THREE.TextureLoader()
+
+function getBlendMode(mode: ParticleSystemComponentProps['render']['blendMode']): THREE.Blending {
+  if (mode === 'normal') {
+    return THREE.NormalBlending
+  }
+  if (mode === 'alpha') {
+    return THREE.NormalBlending
+  }
+  return THREE.AdditiveBlending
+}
+
+function getFallbackTexture(): THREE.Texture {
+  const cacheKey = 'fallback-soft-circle'
+  const cached = sharedTextureCache.get(cacheKey)
+  if (cached) {
+    return cached
+  }
+  const size = 64
+  const data = new Uint8Array(size * size * 4)
+  const center = (size - 1) * 0.5
+  const radius = center
+  for (let y = 0; y < size; y += 1) {
+    for (let x = 0; x < size; x += 1) {
+      const dx = x - center
+      const dy = y - center
+      const distance = Math.hypot(dx, dy)
+      const alpha = Math.max(0, 1 - distance / Math.max(1e-6, radius))
+      const smooth = alpha * alpha
+      const offset = (y * size + x) * 4
+      data[offset] = 255
+      data[offset + 1] = 255
+      data[offset + 2] = 255
+      data[offset + 3] = Math.round(smooth * 255)
+    }
+  }
+  const texture = new THREE.DataTexture(data, size, size, THREE.RGBAFormat)
+  texture.needsUpdate = true
+  texture.magFilter = THREE.LinearFilter
+  texture.minFilter = THREE.LinearMipMapLinearFilter
+  texture.wrapS = THREE.ClampToEdgeWrapping
+  texture.wrapT = THREE.ClampToEdgeWrapping
+  texture.generateMipmaps = true
+  sharedTextureCache.set(cacheKey, texture)
+  return texture
+}
+
+function prepareParticleTexture(texture: THREE.Texture, cacheKey: string): THREE.Texture {
+  texture.name = texture.name || cacheKey
+  texture.colorSpace = THREE.SRGBColorSpace
+  texture.magFilter = THREE.LinearFilter
+  texture.minFilter = THREE.LinearMipMapLinearFilter
+  texture.wrapS = THREE.ClampToEdgeWrapping
+  texture.wrapT = THREE.ClampToEdgeWrapping
+  texture.generateMipmaps = true
+  texture.needsUpdate = true
+  return texture
+}
+
+function isDirectTextureUrl(assetId: string): boolean {
+  return assetId.startsWith('http://') || assetId.startsWith('https://') || assetId.startsWith('data:')
+}
+
+async function loadTextureFromDirectUrl(assetId: string): Promise<THREE.Texture | null> {
+  try {
+    const texture = await sharedTextureLoader.loadAsync(assetId)
+    return prepareParticleTexture(texture, assetId)
+  } catch (error) {
+    console.warn('[ParticleSystem] Failed to load direct texture URL', assetId, error)
+    return null
+  }
+}
+
+async function resolveParticleTextureAsset(assetId: string): Promise<THREE.Texture | null> {
+  const normalized = assetId.trim()
+  if (!normalized.length) {
+    return null
+  }
+  const cacheKey = `asset:${normalized}`
+  const cached = sharedTextureCache.get(cacheKey)
+  if (cached) {
+    return cached
+  }
+  const pending = pendingTextureLoads.get(cacheKey)
+  if (pending) {
+    return pending
+  }
+
+  const task = (async (): Promise<THREE.Texture | null> => {
+    const resolver = getParticleTextureResolver()
+    const resolved = resolver
+      ? await resolver(normalized)
+      : (isDirectTextureUrl(normalized) ? await loadTextureFromDirectUrl(normalized) : null)
+    if (!resolved) {
+      return null
+    }
+    const prepared = prepareParticleTexture(resolved, cacheKey)
+    sharedTextureCache.set(cacheKey, prepared)
+    return prepared
+  })().finally(() => {
+    pendingTextureLoads.delete(cacheKey)
+  })
+
+  pendingTextureLoads.set(cacheKey, task)
+  return task
+}
+
+function createSpriteBody(props: ParticleSystemComponentProps, texture: THREE.Texture | null): THREE.Sprite {
+  const material = new THREE.SpriteMaterial({
+    map: texture ?? getFallbackTexture(),
+    color: props.exposedParams.color,
+    transparent: true,
+    opacity: props.exposedParams.opacity,
+    depthWrite: props.render.depthWrite,
+    blending: getBlendMode(props.render.blendMode),
+  })
+  const sprite = new THREE.Sprite(material)
+  sprite.renderOrder = props.render.sortOffset
+  return sprite
+}
+
+function createZone(config: ParticleEmitterConfig): unknown {
+  if (config.shape === 'box') {
+    return new BoxZone(config.size.x, config.size.y, config.size.z)
+  }
+  if (config.shape === 'sphere') {
+    return new SphereZone(config.radius)
+  }
+  return new PointZone(config.position.x, config.position.y, config.position.z)
+}
+
+function createVelocity(config: ParticleEmitterConfig): unknown {
+  if (config.velocityMode === 'vector') {
+    return new Velocity(
+      new Vector3D(config.direction.x * config.speed, config.direction.y * config.speed, config.direction.z * config.speed),
+      config.spread,
+    )
+  }
+  return new RadialVelocity(config.speed, new Vector3D(config.direction.x, config.direction.y, config.direction.z), config.spread * 57.2958)
+}
+
+function buildEmitter(config: ParticleEmitterConfig, props: ParticleSystemComponentProps, texture: THREE.Texture | null): any {
+  const emitter = new Emitter()
+  const budgeted = applyEmitterBudget(config, props.budget)
+  emitter.setRate(new Rate(new Span(Math.max(0, budgeted.emissionRate * 0.6), Math.max(0, budgeted.emissionRate)), new Span(0.08, 0.16)))
+  emitter.setInitializers([
+    new Body(createSpriteBody(props, texture)),
+    new Position(createZone(budgeted)),
+    new Mass(1),
+    new Radius(Math.max(1, budgeted.particleSize * 18)),
+    new Life(Math.max(0.05, budgeted.lifetime * 0.6), budgeted.lifetime),
+    createVelocity(budgeted),
+  ])
+  emitter.setBehaviours([
+    new Alpha(budgeted.alphaStart, budgeted.alphaEnd),
+    new Scale(budgeted.scaleStart, budgeted.scaleEnd),
+    new NebulaColor(budgeted.color, budgeted.color2),
+  ])
+  emitter.position.set(budgeted.position.x, budgeted.position.y, budgeted.position.z)
+  return emitter
+}
+
+class ParticleSystemRuntimeController implements ParticleSystemRuntimeHandle {
+  readonly group = new THREE.Group()
+  props: ParticleSystemComponentProps
+  private readonly renderGroup = new THREE.Group()
+  private readonly tempWorldPosition = new THREE.Vector3()
+  private readonly tempCameraPosition = new THREE.Vector3()
+  private active = false
+  private disposed = false
+  private lowFpsAccumulator = 0
+  private updateAccumulator = 0
+  private currentTexture: THREE.Texture | null = null
+  private currentTextureAssetId: string | null = null
+  private textureLoadVersion = 0
+  private system: any
+  private renderer: any
+  private emitters: Array<{ id: string; emitter: any }> = []
+
+  constructor(initialProps: ParticleSystemComponentProps) {
+    this.props = clampParticleSystemComponentProps(initialProps)
+    this.group.name = 'Effect:ParticleSystem'
+    this.renderGroup.name = 'Effect:ParticleRenderGroup'
+    this.group.add(this.renderGroup)
+    this.applyTransform()
+    this.buildSystem()
+    this.syncTextureAsset()
+    if (this.props.playback.autoPlay && this.props.playback.startActive) {
+      this.play()
+    }
+  }
+
+  private applyTransform(): void {
+    const { positionOffset, rotationOffset, scaleMultiplier } = this.props.transform
+    this.group.position.set(positionOffset.x, positionOffset.y, positionOffset.z)
+    this.group.rotation.set(rotationOffset.x, rotationOffset.y, rotationOffset.z)
+    this.group.scale.setScalar(scaleMultiplier)
+  }
+
+  private buildSystem(): void {
+    this.disposeSystemOnly()
+    this.system = new System()
+    this.renderer = new SpriteRenderer(this.renderGroup, THREE)
+    this.emitters = this.props.emitters.map((entry) => ({
+      id: entry.id,
+      emitter: buildEmitter(entry, this.props, this.currentTexture),
+    }))
+    this.emitters.forEach((entry) => {
+      this.system.addEmitter(entry.emitter)
+    })
+    this.system.addRenderer(this.renderer)
+    if (this.props.playback.prewarmSeconds > 0) {
+      const step = 1 / Math.max(1, this.props.budget.updateHz)
+      const iterations = Math.min(180, Math.round(this.props.playback.prewarmSeconds / step))
+      for (let index = 0; index < iterations; index += 1) {
+        this.system.update(step)
+      }
+    }
+    this.updateUserData()
+  }
+
+  private syncTextureAsset(): void {
+    const nextAssetId = typeof this.props.render.textureAssetId === 'string'
+      ? this.props.render.textureAssetId.trim()
+      : ''
+    if (!nextAssetId) {
+      if (this.currentTextureAssetId !== null || this.currentTexture !== null) {
+        this.currentTextureAssetId = null
+        this.currentTexture = null
+        this.buildSystem()
+      }
+      return
+    }
+    if (this.currentTextureAssetId === nextAssetId && this.currentTexture !== null) {
+      return
+    }
+
+    this.currentTextureAssetId = nextAssetId
+    this.currentTexture = null
+    this.buildSystem()
+
+    const version = ++this.textureLoadVersion
+    void resolveParticleTextureAsset(nextAssetId).then((texture) => {
+      if (this.disposed || version !== this.textureLoadVersion) {
+        return
+      }
+      if ((this.props.render.textureAssetId?.trim() ?? '') !== nextAssetId) {
+        return
+      }
+      this.currentTextureAssetId = nextAssetId
+      this.currentTexture = texture
+      this.buildSystem()
+      if (this.active) {
+        this.play()
+      }
+    })
+  }
+
+  private disposeSystemOnly(): void {
+    if (this.system && typeof this.system.destroy === 'function') {
+      this.system.destroy()
+    }
+    this.renderGroup.clear()
+    this.system = null
+    this.renderer = null
+    this.emitters = []
+  }
+
+  private updateUserData(): void {
+    const userData = this.group.userData ?? (this.group.userData = {})
+    userData[PARTICLE_SYSTEM_METADATA_KEY] = cloneParticleSystemComponentProps(this.props)
+    userData[PARTICLE_SYSTEM_ACTIVE_FLAG] = this.active
+  }
+
+  play(): void {
+    if (this.disposed) {
+      return
+    }
+    this.active = true
+    if (this.system && typeof this.system.emit === 'function') {
+      this.system.emit()
+    }
+    this.updateUserData()
+  }
+
+  stop(options: { soft?: boolean } = {}): void {
+    this.active = false
+    if (this.system && typeof this.system.stop === 'function') {
+      this.system.stop(Boolean(options.soft))
+    }
+    this.updateUserData()
+  }
+
+  burst(count?: number, emitterId?: string): void {
+    const target = emitterId ? this.emitters.find((entry) => entry.id === emitterId) : this.emitters[0]
+    if (!target?.emitter) {
+      return
+    }
+    const burstCount = Math.max(0, Math.min(count ?? this.props.exposedParams.burstCount, this.props.budget.maxParticles))
+    if (typeof target.emitter.emit === 'function') {
+      target.emitter.emit(burstCount)
+    } else if (this.system && typeof this.system.emit === 'function') {
+      this.system.emit({
+        totalTime: 0.05,
+      })
+    }
+    this.active = true
+    this.updateUserData()
+  }
+
+  setPlaybackActive(active: boolean): void {
+    if (active) {
+      this.play()
+      return
+    }
+    this.stop({ soft: true })
+  }
+
+  setExposedParams(patch: Partial<ParticleExposedParams>): void {
+    this.props = clampParticleSystemComponentProps({
+      ...this.props,
+      exposedParams: {
+        ...this.props.exposedParams,
+        ...patch,
+      },
+    })
+    this.buildSystem()
+    this.syncTextureAsset()
+    if (this.active) {
+      this.play()
+    }
+  }
+
+  tick(
+    delta: number,
+    frameState: { cameraWorldPosition: { x: number; y: number; z: number } | null } = { cameraWorldPosition: null },
+    runtimeStats: ParticleBudgetRuntimeStats = { activeSystems: 1, totalEstimatedParticles: estimateParticleSystemCost(this.props).estimatedParticles, lowFpsMode: false, isMiniProgram: false },
+  ): void {
+    if (this.disposed || !this.system || !Number.isFinite(delta) || delta <= 0) {
+      return
+    }
+    this.lowFpsAccumulator = delta > 0.05 ? Math.min(this.lowFpsAccumulator + delta, 2) : Math.max(0, this.lowFpsAccumulator - delta)
+    const lowFpsMode = runtimeStats.lowFpsMode || this.lowFpsAccumulator >= 0.5
+    const distanceToCamera = frameState.cameraWorldPosition
+      ? this.group.getWorldPosition(this.tempWorldPosition).distanceTo(this.tempCameraPosition.set(
+        frameState.cameraWorldPosition.x,
+        frameState.cameraWorldPosition.y,
+        frameState.cameraWorldPosition.z,
+      ))
+      : null
+    const decision: ParticleBudgetDecision = resolveParticleBudgetDecision({
+      budget: this.props.budget,
+      distanceToCamera,
+      visible: this.group.visible,
+      runtimeStats: {
+        ...runtimeStats,
+        lowFpsMode,
+      },
+    })
+    if (!decision.enabled || !this.active) {
+      return
+    }
+    this.updateAccumulator += delta
+    if (this.updateAccumulator < decision.updateIntervalSeconds) {
+      return
+    }
+    const step = this.updateAccumulator
+    this.updateAccumulator = 0
+    this.system.update(step)
+  }
+
+  dispose(): void {
+    if (this.disposed) {
+      return
+    }
+    this.disposed = true
+    this.stop({ soft: false })
+    this.disposeSystemOnly()
+    this.group.removeFromParent()
+  }
+}
+
+export function createParticleSystemRuntime(props: ParticleSystemComponentProps): ParticleSystemRuntimeHandle {
+  return new ParticleSystemRuntimeController(props)
+}
+
+export function registerParticleSystemRuntime(object: THREE.Object3D, componentId: string, runtime: ParticleRuntimeRegistryEntry): void {
+  const userData = object.userData ?? (object.userData = {})
+  let registry = userData[PARTICLE_SYSTEM_RUNTIME_REGISTRY_KEY] as Record<string, ParticleRuntimeRegistryEntry> | undefined
+  if (!registry) {
+    registry = {}
+    userData[PARTICLE_SYSTEM_RUNTIME_REGISTRY_KEY] = registry
+  }
+  registry[componentId] = runtime
+}
+
+export function unregisterParticleSystemRuntime(object: THREE.Object3D, componentId: string): void {
+  const registry = object.userData?.[PARTICLE_SYSTEM_RUNTIME_REGISTRY_KEY] as Record<string, ParticleRuntimeRegistryEntry> | undefined
+  if (!registry) {
+    return
+  }
+  delete registry[componentId]
+  if (!Object.keys(registry).length) {
+    delete object.userData[PARTICLE_SYSTEM_RUNTIME_REGISTRY_KEY]
+  }
+}

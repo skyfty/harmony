@@ -43,13 +43,10 @@ import {
   clampViewPointComponentProps,
   cloneViewPointComponentProps,
   createViewPointComponentState,
-  WARP_GATE_COMPONENT_TYPE,
-  clampWarpGateComponentProps,
-  cloneWarpGateComponentProps,
-  createWarpGateComponentState,
-  EFFECT_COMPONENT_TYPE,
-  clampEffectComponentProps,
-  cloneEffectComponentProps,
+  PARTICLE_SYSTEM_COMPONENT_TYPE,
+  clampParticleSystemComponentProps,
+  cloneParticleSystemComponentProps,
+  createParticleSystemComponentState,
   PLANNING_IMAGES_COMPONENT_TYPE,
   clampPlanningImagesComponentProps,
   clonePlanningImagesComponentProps,
@@ -337,33 +334,25 @@ export function normalizeNodeComponents(
     }
   }
 
-  const existingWarpGate = normalized[WARP_GATE_COMPONENT_TYPE] as SceneNodeComponentState<any> | undefined
-  if (existingWarpGate) {
-    const nextProps = cloneWarpGateComponentProps(clampWarpGateComponentProps(existingWarpGate.props as any))
-    const clonedMetadata: Record<string, unknown> | undefined = existingWarpGate.metadata
-    normalized[WARP_GATE_COMPONENT_TYPE] = {
-      id: existingWarpGate.id && existingWarpGate.id.trim().length ? existingWarpGate.id : generateUuid(),
-      type: WARP_GATE_COMPONENT_TYPE,
-      enabled: existingWarpGate.enabled ?? true,
+  const existingParticleSystem = normalized[PARTICLE_SYSTEM_COMPONENT_TYPE] as SceneNodeComponentState<any> | undefined
+  if (existingParticleSystem) {
+    const nextProps = cloneParticleSystemComponentProps(clampParticleSystemComponentProps(existingParticleSystem.props as any))
+    normalized[PARTICLE_SYSTEM_COMPONENT_TYPE] = {
+      id: existingParticleSystem.id && existingParticleSystem.id.trim().length ? existingParticleSystem.id : generateUuid(),
+      type: PARTICLE_SYSTEM_COMPONENT_TYPE,
+      enabled: existingParticleSystem.enabled ?? true,
       props: nextProps,
-      metadata: clonedMetadata,
+      metadata: existingParticleSystem.metadata,
     }
-  } else if ((options as any).attachWarpGate) {
-    normalized[WARP_GATE_COMPONENT_TYPE] = {
-      ...createWarpGateComponentState(node, undefined, { id: generateUuid(), enabled: true }),
-    }
-  }
-
-  const existingEffect = normalized[EFFECT_COMPONENT_TYPE] as SceneNodeComponentState<any> | undefined
-  if (existingEffect) {
-    const nextProps = cloneEffectComponentProps(clampEffectComponentProps(existingEffect.props as any))
-    const clonedMetadata: Record<string, unknown> | undefined = existingEffect.metadata
-    normalized[EFFECT_COMPONENT_TYPE] = {
-      id: existingEffect.id && existingEffect.id.trim().length ? existingEffect.id : generateUuid(),
-      type: EFFECT_COMPONENT_TYPE,
-      enabled: existingEffect.enabled ?? true,
-      props: nextProps,
-      metadata: clonedMetadata,
+  } else if (options.attachWarpGate) {
+    normalized[PARTICLE_SYSTEM_COMPONENT_TYPE] = {
+      ...createParticleSystemComponentState(
+        node,
+        {
+          presetId: 'warpColumnLite',
+        },
+        { id: generateUuid(), enabled: true },
+      ),
     }
   }
 
