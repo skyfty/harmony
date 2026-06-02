@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import type { PurePursuitComponentProps, VehicleComponentProps } from './components'
 import type { VehicleDriveVehicle } from './VehicleDriveController'
-import { buildPolylineMetricData, projectPointToPolyline, samplePolylineAtS } from './polylineProgress'
+import { resolvePathFollowSample } from './pathFollowCommon'
 import { sleepPhysicsBody, stopPhysicsBodyMotion } from './physicsRuntimeBridge'
 
 const VEHICLE_CONTROL_DEBUG_KEY = 'harmony:debug:vehicle-control'
@@ -366,14 +366,7 @@ export function applyPurePursuitVehicleControl(params: {
   }
   forwardWorld.normalize()
 
-  const polylineData = buildPolylineMetricData(points, { closed: Boolean(loop), mode: '3d' })
-  if (!polylineData) {
-    return { reachedStop: false }
-  }
-
   currentPositionThree.set(currentPosition.x, currentPosition.y, currentPosition.z)
-  const closest = projectPointToPolyline(points, polylineData, currentPositionThree)
-
   const lookaheadDistance = Math.max(
     pursuitProps.lookaheadMinMeters,
     Math.min(
@@ -381,8 +374,16 @@ export function applyPurePursuitVehicleControl(params: {
       pursuitProps.lookaheadBaseMeters + pursuitProps.lookaheadSpeedGain * (Number.isFinite(pursuitProps.maxSpeedMps) ? Math.min(speedMps, pursuitProps.maxSpeedMps) : speedMps),
     ),
   )
-
-  samplePolylineAtS(points, polylineData, closest.s + lookaheadDistance, lookaheadPoint)
+  const pathSample = resolvePathFollowSample({
+    points,
+    loop,
+    currentPosition: currentPositionThree,
+    lookaheadDistance,
+    outLookaheadPoint: lookaheadPoint,
+  })
+  if (!pathSample) {
+    return { reachedStop: false }
+  }
 
   const endIndex = points.length - 1
   const rawStopIndex = typeof stopIndex === 'number' && Number.isFinite(stopIndex) ? Math.floor(stopIndex) : endIndex

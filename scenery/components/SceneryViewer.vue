@@ -914,6 +914,7 @@ import {
   createAutoTourRuntime,
   createBridgeVehicleProxy,
   createPhysicsAwareAutoTourVehicleInstances,
+  CharacterAutoTourRuntimeManager,
   resolveVehicleOrObjectWorldPosition,
   stopTourAndUnfollow,
   syncAutoTourActiveNodesFromRuntime,
@@ -2568,6 +2569,7 @@ remoteMultiuserPeerRoot.name = 'RemoteMultiuserPeers';
 const networkSyncNodeEntries = new Map<string, NetworkSyncNodeRuntimeEntry>();
 const physicsAuthorityNodeEntries = new Map<string, PhysicsAuthorityNodeRuntimeEntry>();
 const characterControllerAnimationRuntime = new CharacterControllerAnimationRuntimeManager();
+const characterAutoTourRuntime = new CharacterAutoTourRuntimeManager();
 const physicsBridgeContactsByNodeId = new Map<string, PhysicsContactEvent[]>();
 const remoteSharedEntityEntries = new Map<string, RemoteSharedEntityEntry>();
 const remotePhysicsAuthorityEntries = new Map<string, RemotePhysicsAuthorityEntry>();
@@ -2767,6 +2769,8 @@ const protagonistPoseDirection = new THREE.Vector3();
 const protagonistPoseQuaternion = new THREE.Quaternion();
 const protagonistPoseTarget = new THREE.Vector3();
 const protagonistPoseCameraOffset = new THREE.Vector3();
+const protagonistFollowRootPosition = new THREE.Vector3();
+const protagonistFollowLastRootPosition = new THREE.Vector3();
 const vehicleCompassForward = new THREE.Vector3();
 const vehicleCompassQuaternion = new THREE.Quaternion();
 const STEERING_KEYBOARD_RETURN_SPEED = 7;
@@ -2774,6 +2778,7 @@ const STEERING_KEYBOARD_CATCH_SPEED = 18;
 const cameraRotationAnchor = new THREE.Vector3();
 let suppressSelfYawRecenter = false;
 let protagonistPoseSynced = false;
+let protagonistFollowHasSample = false;
 
 const JOYSTICK_INPUT_RADIUS = 64;
 const JOYSTICK_VISUAL_RANGE = 44;
@@ -6023,6 +6028,63 @@ function resolveCharacterControllerBindingNodeId(nodeId: string | null): string 
   return props.targetNodeId ?? nodeId;
 }
 
+function resolveSceneryCharacterAnimationInput(nodeId: string): {
+  moveX: number;
+  moveZ: number;
+  turn: number;
+  jump: boolean;
+  sprint: boolean;
+  crouch: boolean;
+  interact: boolean;
+  locallyControlled: boolean;
+} {
+  const pathFollowInput = characterAutoTourRuntime.getInput(nodeId);
+  if (
+    pathFollowInput
+    && (
+      Math.abs(pathFollowInput.moveX) > 0.001
+      || Math.abs(pathFollowInput.moveZ) > 0.001
+      || Math.abs(pathFollowInput.turn) > 0.001
+      || pathFollowInput.jump
+      || pathFollowInput.sprint
+      || pathFollowInput.crouch
+      || pathFollowInput.interact
+    )
+  ) {
+    return {
+      ...pathFollowInput,
+      locallyControlled: false,
+    };
+  }
+  const controlledNodeId = resolveDefaultControlledCharacterNodeId();
+  if (controlledNodeId === nodeId) {
+    return {
+      moveX: characterAuthorityInput.moveX,
+      moveZ: characterAuthorityInput.moveZ,
+      turn: 0,
+      jump: characterAuthorityInput.jump,
+      sprint: characterAuthorityInput.sprint,
+      crouch: characterAuthorityInput.crouch,
+      interact: characterAuthorityInput.interact,
+      locallyControlled: true,
+    };
+  }
+  const entry = remotePhysicsAuthorityEntries.get(nodeId) ?? null;
+  if (!entry || entry.targetState.actorType !== 'character') {
+    return {
+      moveX: 0,
+      moveZ: 0,
+      turn: 0,
+      jump: false,
+      sprint: false,
+      crouch: false,
+      interact: false,
+      locallyControlled: false,
+    };
+  }
+  return resolveRemoteCharacterAnimationInput(nodeId);
+}
+
 function resolveRemoteCharacterAnimationInput(nodeId: string): {
   moveX: number;
   moveZ: number;
@@ -6148,26 +6210,24 @@ function releaseCharacterControllerBehaviorOverride(token: string | null | undef
 }
 
 function refreshCharacterControllerAnimationRuntimeEntries(): void {
-  const controlledNodeId = resolveDefaultControlledCharacterNodeId();
   characterControllerAnimationRuntime.refresh({
     nodeAnimationRuntime,
     iterNodes: () => previewNodeMap.entries(),
     resolveNode: (nodeId) => resolveNodeById(nodeId),
-    resolveInput: (nodeId) => (
-      controlledNodeId === nodeId
-        ? {
-            moveX: characterAuthorityInput.moveX,
-            moveZ: characterAuthorityInput.moveZ,
-            turn: 0,
-            jump: characterAuthorityInput.jump,
-            sprint: characterAuthorityInput.sprint,
-            crouch: characterAuthorityInput.crouch,
-            interact: characterAuthorityInput.interact,
-            locallyControlled: true,
-          }
-        : resolveRemoteCharacterAnimationInput(nodeId)
-    ),
+    resolveInput: (nodeId) => resolveSceneryCharacterAnimationInput(nodeId),
     resolveGroundContacts: (nodeId) => physicsBridgeContactsByNodeId.get(nodeId) ?? null,
+  });
+}
+
+function refreshCharacterPathFollowRuntimeEntries(): void {
+  characterAutoTourRuntime.refresh({
+    iterNodes: () => previewNodeMap.entries(),
+    resolveNode: (nodeId) => resolveNodeById(nodeId),
+    nodeObjectMap,
+    shouldApplyWorldTransform: (nodeId) => !physicsBridgeCharacterIdByNodeId.has(nodeId),
+    onNodeObjectTransformUpdated: (_nodeId, object) => {
+      syncInstancedTransform(object);
+    },
   });
 }
 
@@ -6175,27 +6235,28 @@ function updateCharacterControllerAnimations(deltaSeconds: number): void {
   if (deltaSeconds < 0) {
     return;
   }
-  const controlledNodeId = resolveDefaultControlledCharacterNodeId();
   characterControllerAnimationRuntime.update({
     nodeAnimationRuntime,
     iterNodes: () => previewNodeMap.entries(),
     resolveNode: (nodeId) => resolveNodeById(nodeId),
-    resolveInput: (nodeId) => (
-      controlledNodeId === nodeId
-        ? {
-            moveX: characterAuthorityInput.moveX,
-            moveZ: characterAuthorityInput.moveZ,
-            turn: 0,
-            jump: characterAuthorityInput.jump,
-            sprint: characterAuthorityInput.sprint,
-            crouch: characterAuthorityInput.crouch,
-            interact: characterAuthorityInput.interact,
-            locallyControlled: true,
-          }
-        : resolveRemoteCharacterAnimationInput(nodeId)
-    ),
+    resolveInput: (nodeId) => resolveSceneryCharacterAnimationInput(nodeId),
     resolveGroundContacts: (nodeId) => physicsBridgeContactsByNodeId.get(nodeId) ?? null,
   }, getCharacterAnimationNowMs());
+}
+
+function updateCharacterPathFollow(deltaSeconds: number): void {
+  if (deltaSeconds <= 0) {
+    return;
+  }
+  characterAutoTourRuntime.update({
+    iterNodes: () => previewNodeMap.entries(),
+    resolveNode: (nodeId) => resolveNodeById(nodeId),
+    nodeObjectMap,
+    shouldApplyWorldTransform: (nodeId) => !physicsBridgeCharacterIdByNodeId.has(nodeId),
+    onNodeObjectTransformUpdated: (_nodeId, object) => {
+      syncInstancedTransform(object);
+    },
+  }, deltaSeconds);
 }
 
 type CouponNodeVisibilityEntry = {
@@ -8574,15 +8635,30 @@ function syncSceneryPhysicsBridgeCharacterInput(): void {
   const yaw = resolveSceneryCharacterInputYaw();
   physicsBridgeCharacterIdByNodeId.forEach((characterId, nodeId) => {
     const isControlled = nodeId === controlledNodeId;
+    const pathFollowInput = characterAutoTourRuntime.getInput(nodeId);
+    const hasPathFollowInput =
+      Boolean(pathFollowInput)
+      && (
+        Math.abs(pathFollowInput!.moveX) > 0.001
+        || Math.abs(pathFollowInput!.moveZ) > 0.001
+        || Math.abs(pathFollowInput!.turn) > 0.001
+        || pathFollowInput!.jump
+        || pathFollowInput!.sprint
+        || pathFollowInput!.crouch
+        || pathFollowInput!.interact
+      );
+    const activeYaw = hasPathFollowInput && typeof pathFollowInput?.yaw === 'number'
+      ? pathFollowInput.yaw
+      : yaw;
     void physicsBridge?.setCharacterInput({
       characterId,
-      moveX: isControlled ? characterAuthorityInput.moveX : 0,
-      moveZ: isControlled ? characterAuthorityInput.moveZ : 0,
-      yaw,
-      jump: isControlled ? characterAuthorityInput.jump : false,
-      sprint: isControlled ? characterAuthorityInput.sprint : false,
-      crouch: isControlled ? characterAuthorityInput.crouch : false,
-      interact: isControlled ? characterAuthorityInput.interact : false,
+      moveX: hasPathFollowInput ? pathFollowInput!.moveX : (isControlled ? characterAuthorityInput.moveX : 0),
+      moveZ: hasPathFollowInput ? pathFollowInput!.moveZ : (isControlled ? characterAuthorityInput.moveZ : 0),
+      yaw: activeYaw,
+      jump: hasPathFollowInput ? pathFollowInput!.jump : (isControlled ? characterAuthorityInput.jump : false),
+      sprint: hasPathFollowInput ? pathFollowInput!.sprint : (isControlled ? characterAuthorityInput.sprint : false),
+      crouch: hasPathFollowInput ? pathFollowInput!.crouch : (isControlled ? characterAuthorityInput.crouch : false),
+      interact: hasPathFollowInput ? pathFollowInput!.interact : (isControlled ? characterAuthorityInput.interact : false),
     }).catch((error) => {
       console.warn('[SceneViewer] Failed to sync character input', error);
     });
@@ -10547,6 +10623,8 @@ function resetProtagonistPoseState(): void {
   protagonistPoseSynced = false;
   scenePreviewPerf.clearProtagonist();
   protagonistNodeId = null;
+  protagonistFollowHasSample = false;
+  protagonistFollowLastRootPosition.set(0, 0, 0);
 }
 
 function registerProtagonistObject(object: THREE.Object3D): void {
@@ -10572,6 +10650,21 @@ function findDefaultControlledCharacterObject(): THREE.Object3D | null {
   return object;
 }
 
+function resolveCharacterRootWorldPosition(
+  nodeId: string,
+  protagonistObject: THREE.Object3D,
+  target: THREE.Vector3,
+): THREE.Vector3 {
+  const rigidbodyEntry = rigidbodyInstances.get(nodeId) ?? null;
+  const rigidbodyBody = rigidbodyEntry?.body ?? null;
+  if (rigidbodyBody) {
+    target.set(rigidbodyBody.position.x, rigidbodyBody.position.y, rigidbodyBody.position.z);
+  } else {
+    protagonistObject.getWorldPosition(target);
+  }
+  return target;
+}
+
 type ProtagonistPoseOptions = {
   force?: boolean;
   applyToCamera?: boolean;
@@ -10582,18 +10675,30 @@ function syncProtagonistCameraPose(options: ProtagonistPoseOptions = {}): boolea
   if (!options.force && protagonistPoseSynced) {
     return false;
   }
+  const controlledNodeId = resolveDefaultControlledCharacterNodeId();
+  if (!controlledNodeId) {
+    return false;
+  }
   const protagonistObject = options.object ?? findDefaultControlledCharacterObject();
   if (!protagonistObject) {
     return false;
   }
   registerProtagonistObject(protagonistObject);
-  protagonistObject.getWorldPosition(protagonistPosePosition);
+  resolveCharacterRootWorldPosition(controlledNodeId, protagonistObject, protagonistFollowRootPosition);
+  if (protagonistFollowHasSample && !options.force) {
+    if (protagonistFollowLastRootPosition.distanceToSquared(protagonistFollowRootPosition) <= 1e-6) {
+      return false;
+    }
+  }
+  protagonistFollowLastRootPosition.copy(protagonistFollowRootPosition);
+  protagonistFollowHasSample = true;
+  protagonistPosePosition.copy(protagonistFollowRootPosition);
   protagonistObject.getWorldQuaternion(protagonistPoseQuaternion);
   protagonistPoseDirection.set(1, 0, 0).applyQuaternion(protagonistPoseQuaternion);
   if (protagonistPoseDirection.lengthSq() < 1e-8) {
     protagonistPoseDirection.set(1, 0, 0);
   } else {
-  protagonistPoseDirection.normalize();
+    protagonistPoseDirection.normalize();
   }
   protagonistPoseTarget.copy(protagonistPosePosition);
   protagonistPoseTarget.y = HUMAN_EYE_HEIGHT;
@@ -12959,6 +13064,7 @@ function resetAnimationControllers(): void {
   });
   activeBehaviorAnimations.clear();
   characterControllerAnimationRuntime.clear();
+  characterAutoTourRuntime.clear();
   nodeAnimationRuntime.listMixers().forEach((mixer) => {
     try {
       mixer.stopAllAction();
@@ -13029,6 +13135,7 @@ function refreshAnimationControllers(root: THREE.Object3D): void {
     });
   });
   refreshCharacterControllerAnimationRuntimeEntries();
+  refreshCharacterPathFollowRuntimeEntries();
   refreshEffectRuntimeTickers();
 }
 
@@ -16979,6 +17086,7 @@ function teardownRenderer() {
   networkSyncNodeEntries.clear();
   physicsAuthorityNodeEntries.clear();
   characterControllerAnimationRuntime.clear();
+  characterAutoTourRuntime.clear();
   physicsBridgeContactsByNodeId.clear();
   remoteSharedEntityEntries.clear();
   remotePhysicsAuthorityEntries.clear();
@@ -17642,6 +17750,7 @@ function startRenderLoop(
           });
           previewComponentManager.update(deltaSeconds);
           waterRuntime.update(deltaSeconds, { renderer, scene, camera });
+          updateCharacterPathFollow(deltaSeconds);
           updateCharacterControllerAnimations(deltaSeconds);
           nodeAnimationRuntime.update(deltaSeconds);
           activeBehaviorSounds.forEach((instance) => {
@@ -17828,6 +17937,7 @@ function cleanupForUnrelatedSceneSwitch(): void {
   networkSyncNodeEntries.clear();
   physicsAuthorityNodeEntries.clear();
   characterControllerAnimationRuntime.clear();
+  characterAutoTourRuntime.clear();
   physicsBridgeContactsByNodeId.clear();
   remoteSharedEntityEntries.clear();
   remotePhysicsAuthorityEntries.clear();

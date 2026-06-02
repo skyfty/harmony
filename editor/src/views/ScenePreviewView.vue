@@ -247,7 +247,7 @@ import {
 	type InstancedLodCullingRequest,
 } from '../utils/instancedLodCulling'
 import type { InstancedLodBoundsSnapshot } from '@schema/core'
-import { VehicleDriveController, resolveCharacterControlMovementMagnitude } from '@schema/motion'
+import { VehicleDriveController, resolveCharacterControlMovementMagnitude, CharacterAutoTourRuntimeManager } from '@schema/motion'
 import type { VehicleDriveRuntimeState, VehicleDriveVehicle } from '@schema/motion'
 import { createBridgeVehicleProxy } from '@schema/motion'
 import {
@@ -1522,6 +1522,7 @@ const activeBehaviorSounds = new Map<string, BehaviorSoundInstance>()
 const behaviorSoundDistanceScratch = new THREE.Vector3()
 const nodeAnimationRuntime = new SceneAnimationRuntimeManager()
 const characterControllerAnimationRuntime = new CharacterControllerAnimationRuntimeManager()
+const characterAutoTourRuntime = new CharacterAutoTourRuntimeManager()
 type BehaviorProximityCandidate = { hasApproach: boolean; hasDepart: boolean }
 type BehaviorProximityStateEntry = { inside: boolean; lastDistance: number | null }
 type BehaviorProximityThreshold = { enter: number; exit: number; objectId: string }
@@ -3179,6 +3180,7 @@ const characterFollowCameraOffsetScratch = new THREE.Vector3()
 const characterFollowVelocity = new THREE.Vector3()
 const characterFollowVelocityScratch = new THREE.Vector3()
 const characterFollowLastAnchor = new THREE.Vector3()
+const characterFollowLastRootPosition = new THREE.Vector3()
 let characterInputYaw = Math.PI
 let characterInputYawInitialized = false
 let characterInputYawNodeId: string | null = null
@@ -6746,6 +6748,7 @@ function resetAnimationControllers(): void {
 		}
 	})
 	characterControllerAnimationRuntime.clear()
+	characterAutoTourRuntime.clear()
 	nodeAnimationRuntime.listMixers().forEach((mixer) => {
 		try {
 			mixer.stopAllAction()
@@ -6840,6 +6843,7 @@ function resetCharacterFollowCameraState(): void {
 	characterFollowVelocity.set(0, 0, 0)
 	characterFollowVelocityScratch.set(0, 0, 0)
 	characterFollowLastAnchor.set(0, 0, 0)
+	characterFollowLastRootPosition.set(0, 0, 0)
 	characterInputYawInitialized = false
 	characterInputYawNodeId = null
 	characterFollowHasSample = false
@@ -6871,16 +6875,15 @@ function resolveControlledCharacterForwardVector(target: THREE.Vector3): THREE.V
 	return writeCharacterLocalForward(target, props?.forwardAxis ?? '+x') as THREE.Vector3
 }
 
-function resolveCharacterFollowPlacementDimensions(protagonistObject: THREE.Object3D | null): { width: number; height: number; length: number } {
+function resolveCharacterFollowPlacementDimensions(_protagonistObject: THREE.Object3D | null): { width: number; height: number; length: number } {
 	const props = resolveDefaultControlledCharacterComponentProps()
 	const colliderRadius = Math.max(0.05, props?.colliderRadius ?? 0.35)
 	const colliderHeight = Math.max(0.1, props?.colliderHeight ?? 1.7)
 	const capsuleDiameter = Math.max(0.4, colliderRadius * 2)
-	const objectDimensions = getApproxDimensions(protagonistObject)
 	return {
-		width: Math.max(capsuleDiameter, objectDimensions.width),
-		height: Math.max(colliderHeight, objectDimensions.height),
-		length: Math.max(capsuleDiameter, colliderHeight * 0.72, objectDimensions.length),
+		width: capsuleDiameter,
+		height: colliderHeight,
+		length: Math.max(capsuleDiameter, colliderHeight * 0.72),
 	}
 }
 
@@ -7020,6 +7023,13 @@ function updateCharacterFollowCamera(
 		return false
 	}
 	protagonistObject.updateMatrixWorld(true)
+	const rootWorld = resolveCharacterRootWorldPosition(controlledNodeId, protagonistObject, characterFollowRootPosition)
+	if (characterFollowHasSample && !immediate) {
+		const rootDeltaSq = characterFollowLastRootPosition.distanceToSquared(rootWorld)
+		if (rootDeltaSq <= 1e-6) {
+			return false
+		}
+	}
 	const desiredForwardWorld = tempDirection
 	const hasForwardMoveInput = Math.abs(characterAuthorityInput.moveZ) > 0.05
 	const isPureStrafeInput =
@@ -7059,6 +7069,7 @@ function updateCharacterFollowCamera(
 	)
 	if (!characterFollowHasSample || delta <= 0 || immediate) {
 		characterFollowLastAnchor.copy(anchorWorld)
+		characterFollowLastRootPosition.copy(rootWorld)
 		characterFollowVelocity.set(0, 0, 0)
 		characterFollowHasSample = true
 	} else {
@@ -7069,6 +7080,7 @@ function updateCharacterFollowCamera(
 		characterFollowLastAnchor.copy(anchorWorld)
 		const alpha = computeFollowLerpAlpha(delta, 8)
 		characterFollowVelocity.lerp(characterFollowVelocityScratch, alpha)
+		characterFollowLastRootPosition.copy(rootWorld)
 	}
 	const characterFollowPlacement = computeFollowPlacement(resolveCharacterFollowPlacementDimensions(protagonistObject))
 	characterFollowPlacement.distance = Math.max(characterFollowPlacement.distance, CHARACTER_FOLLOW_CAMERA_DISTANCE_MIN)
@@ -7127,24 +7139,56 @@ function releaseCharacterControllerBehaviorOverride(token: string | null | undef
 	characterControllerAnimationRuntime.releaseBehaviorOverride(token)
 }
 
+function resolveScenePreviewCharacterAnimationInput(nodeId: string) {
+	const pathFollowInput = characterAutoTourRuntime.getInput(nodeId)
+	if (
+		pathFollowInput
+		&& (
+			Math.abs(pathFollowInput.moveX) > 0.001
+			|| Math.abs(pathFollowInput.moveZ) > 0.001
+			|| Math.abs(pathFollowInput.turn) > 0.001
+			|| pathFollowInput.jump
+			|| pathFollowInput.sprint
+			|| pathFollowInput.crouch
+			|| pathFollowInput.interact
+		)
+	) {
+		return {
+			...pathFollowInput,
+			locallyControlled: false,
+		}
+	}
+	const isLocallyControlled = resolveDefaultControlledCharacterNodeId() === nodeId
+	return {
+		moveX: 0,
+		moveZ: isLocallyControlled ? characterAuthorityInput.moveZ : 0,
+		turn: isLocallyControlled ? characterAuthorityInput.turn : 0,
+		jump: isLocallyControlled ? characterAuthorityInput.jump : false,
+		sprint: isLocallyControlled ? characterAuthorityInput.sprint : false,
+		crouch: isLocallyControlled ? characterAuthorityInput.crouch : false,
+		interact: isLocallyControlled ? characterAuthorityInput.interact : false,
+		locallyControlled: isLocallyControlled,
+	}
+}
+
+function refreshCharacterPathFollowRuntimeEntries(): void {
+	characterAutoTourRuntime.refresh({
+		iterNodes: () => previewNodeMap.entries(),
+		resolveNode: (nodeId) => resolveNodeById(nodeId),
+		nodeObjectMap,
+		shouldApplyWorldTransform: (nodeId) => !physicsBridgeCharacterIdByNodeId.has(nodeId),
+		onNodeObjectTransformUpdated: (_nodeId, object) => {
+			syncInstancedTransform(object)
+		},
+	})
+}
+
 function refreshCharacterControllerAnimationRuntimeEntries(): void {
 	characterControllerAnimationRuntime.refresh({
 		nodeAnimationRuntime,
 		iterNodes: () => previewNodeMap.entries(),
 		resolveNode: (nodeId) => resolveNodeById(nodeId),
-		resolveInput: (nodeId) => {
-			const isLocallyControlled = resolveDefaultControlledCharacterNodeId() === nodeId
-			return {
-				moveX: 0,
-				moveZ: isLocallyControlled ? characterAuthorityInput.moveZ : 0,
-				turn: isLocallyControlled ? characterAuthorityInput.turn : 0,
-				jump: isLocallyControlled ? characterAuthorityInput.jump : false,
-				sprint: isLocallyControlled ? characterAuthorityInput.sprint : false,
-				crouch: isLocallyControlled ? characterAuthorityInput.crouch : false,
-				interact: isLocallyControlled ? characterAuthorityInput.interact : false,
-				locallyControlled: isLocallyControlled,
-			}
-		},
+		resolveInput: (nodeId) => resolveScenePreviewCharacterAnimationInput(nodeId),
 		resolveGroundContacts: (nodeId) => physicsBridgeContactsByNodeId.get(nodeId) ?? null,
 	})
 }
@@ -7175,26 +7219,28 @@ function updateCharacterControllerAnimations(delta: number): void {
 	if (delta < 0) {
 		return
 	}
-	const controlledNodeId = resolveDefaultControlledCharacterNodeId()
 	characterControllerAnimationRuntime.update({
 		nodeAnimationRuntime,
 		iterNodes: () => previewNodeMap.entries(),
 		resolveNode: (nodeId) => resolveNodeById(nodeId),
-		resolveInput: (nodeId) => {
-			const isLocallyControlled = controlledNodeId === nodeId
-			return {
-				moveX: 0,
-				moveZ: isLocallyControlled ? characterAuthorityInput.moveZ : 0,
-				turn: isLocallyControlled ? characterAuthorityInput.turn : 0,
-				jump: isLocallyControlled ? characterAuthorityInput.jump : false,
-				sprint: isLocallyControlled ? characterAuthorityInput.sprint : false,
-				crouch: isLocallyControlled ? characterAuthorityInput.crouch : false,
-				interact: isLocallyControlled ? characterAuthorityInput.interact : false,
-				locallyControlled: isLocallyControlled,
-			}
-		},
+		resolveInput: (nodeId) => resolveScenePreviewCharacterAnimationInput(nodeId),
 		resolveGroundContacts: (nodeId) => physicsBridgeContactsByNodeId.get(nodeId) ?? null,
 	}, getCharacterAnimationNowMs())
+}
+
+function updateCharacterPathFollow(delta: number): void {
+	if (delta <= 0) {
+		return
+	}
+	characterAutoTourRuntime.update({
+		iterNodes: () => previewNodeMap.entries(),
+		resolveNode: (nodeId) => resolveNodeById(nodeId),
+		nodeObjectMap,
+		shouldApplyWorldTransform: (nodeId) => !physicsBridgeCharacterIdByNodeId.has(nodeId),
+		onNodeObjectTransformUpdated: (_nodeId, object) => {
+			syncInstancedTransform(object)
+		},
+	}, delta)
 }
 
 function resetBehaviorProximity(): void {
@@ -9636,6 +9682,7 @@ function updatePlaybackSystemsForFrame(delta: number): boolean {
 		},
 	})
 	previewComponentManager.update(delta)
+	updateCharacterPathFollow(delta)
 	updateCharacterControllerAnimations(delta)
 	nodeAnimationRuntime.update(delta)
 	activeBehaviorSounds.forEach((instance) => {
@@ -11783,15 +11830,30 @@ function syncScenePreviewPhysicsBridgeCharacterInput(deltaSeconds: number): void
 	const yaw = updateScenePreviewCharacterInputYaw(deltaSeconds)
 	physicsBridgeCharacterIdByNodeId.forEach((characterId, nodeId) => {
 		const isControlled = nodeId === controlledNodeId
+		const pathFollowInput = characterAutoTourRuntime.getInput(nodeId)
+		const hasPathFollowInput =
+			Boolean(pathFollowInput)
+			&& (
+				Math.abs(pathFollowInput!.moveX) > 0.001
+				|| Math.abs(pathFollowInput!.moveZ) > 0.001
+				|| Math.abs(pathFollowInput!.turn) > 0.001
+				|| pathFollowInput!.jump
+				|| pathFollowInput!.sprint
+				|| pathFollowInput!.crouch
+				|| pathFollowInput!.interact
+			)
+		const activeYaw = hasPathFollowInput && typeof pathFollowInput?.yaw === 'number'
+			? pathFollowInput.yaw
+			: yaw
 		void physicsBridge?.setCharacterInput({
 			characterId,
-			moveX: 0,
-			moveZ: isControlled ? characterAuthorityInput.moveZ : 0,
-			yaw,
-			jump: isControlled ? characterAuthorityInput.jump : false,
-			sprint: isControlled ? characterAuthorityInput.sprint : false,
-			crouch: isControlled ? characterAuthorityInput.crouch : false,
-			interact: isControlled ? characterAuthorityInput.interact : false,
+			moveX: hasPathFollowInput ? pathFollowInput!.moveX : 0,
+			moveZ: hasPathFollowInput ? pathFollowInput!.moveZ : (isControlled ? characterAuthorityInput.moveZ : 0),
+			yaw: activeYaw,
+			jump: hasPathFollowInput ? pathFollowInput!.jump : (isControlled ? characterAuthorityInput.jump : false),
+			sprint: hasPathFollowInput ? pathFollowInput!.sprint : (isControlled ? characterAuthorityInput.sprint : false),
+			crouch: hasPathFollowInput ? pathFollowInput!.crouch : (isControlled ? characterAuthorityInput.crouch : false),
+			interact: hasPathFollowInput ? pathFollowInput!.interact : (isControlled ? characterAuthorityInput.interact : false),
 		}).catch((error) => {
 			console.warn('[ScenePreview] Failed to sync character input', error)
 		})
@@ -13728,6 +13790,7 @@ function refreshAnimations() {
 		})
 	})
 	refreshCharacterControllerAnimationRuntimeEntries()
+	refreshCharacterPathFollowRuntimeEntries()
 
 	nodeAnimationRuntime.listMixers().forEach((mixer) => {
 		mixer.timeScale = isPlaying.value ? 1 : 0
@@ -14153,6 +14216,7 @@ onBeforeUnmount(() => {
 	})
 	activeBehaviorAnimations.clear()
 	characterControllerAnimationRuntime.clear()
+	characterAutoTourRuntime.clear()
 	physicsBridgeContactsByNodeId.clear()
 	clearBehaviorSounds()
 	unsubscribe?.()

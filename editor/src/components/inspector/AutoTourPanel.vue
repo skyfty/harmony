@@ -16,11 +16,25 @@ import {
   MAX_AUTO_TOUR_MAX_SPEED_MPS,
 } from '@schema/components'
 
+const props = withDefaults(defineProps<{
+  componentType?: string
+  title?: string
+  routePickHint?: string
+  routePlaceholder?: string
+  showMaxSpeed?: boolean
+}>(), {
+  componentType: AUTO_TOUR_COMPONENT_TYPE,
+  title: 'Auto Tour',
+  routePickHint: '选择导览线路节点 (GuideRoute)',
+  routePlaceholder: '未选择导览线路',
+  showMaxSpeed: true,
+})
+
 const sceneStore = useSceneStore()
 const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)
 
 const autoTourComponent = computed(() =>
-  selectedNode.value?.components?.[AUTO_TOUR_COMPONENT_TYPE] as
+  selectedNode.value?.components?.[props.componentType] as
     | SceneNodeComponentState<AutoTourComponentProps>
     | undefined,
 )
@@ -140,10 +154,10 @@ function handleRemoveComponent() {
 </script>
 
 <template>
-  <v-expansion-panel value="autoTour">
+  <v-expansion-panel :value="props.componentType">
     <v-expansion-panel-title>
       <div class="auto-tour-panel-header">
-        <span class="auto-tour-panel-title">Auto Tour</span>
+        <span class="auto-tour-panel-title">{{ props.title }}</span>
         <v-spacer />
         <v-menu
           v-if="autoTourComponent"
@@ -182,8 +196,8 @@ function handleRemoveComponent() {
           :model-value="localRouteNodeId"
           :disabled="!componentEnabled"
           owner="behavior-target"
-          pick-hint="选择导览线路节点 (GuideRoute)"
-          placeholder="未选择导览线路"
+          :pick-hint="props.routePickHint"
+          :placeholder="props.routePlaceholder"
           @update:model-value="handleRouteNodeChange"
         />
 
@@ -201,6 +215,7 @@ function handleRemoveComponent() {
         />
 
         <v-text-field
+          v-if="props.showMaxSpeed"
           label="Max Speed (km/h)"
           type="number"
           density="compact"
