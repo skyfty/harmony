@@ -2335,6 +2335,8 @@ const physicsBridgeBodyIdByNodeId = new Map<string, number>();
 const physicsBridgeNodeIdByBodyId = new Map<number, string>();
 const physicsBridgeVehicleIdByNodeId = new Map<string, number>();
 const physicsBridgeCharacterIdByNodeId = new Map<string, number>();
+const physicsBridgeCharacterBodyNodeIdByControllerNodeId = new Map<string, string>();
+const physicsBridgeCharacterControllerNodeIdByBodyNodeId = new Map<string, string>();
 function nextSceneryGroundCollisionRuntimeId(): number {
   sceneryGroundCollisionNextRuntimeId += 1;
   return sceneryGroundCollisionNextRuntimeId;
@@ -5833,6 +5835,14 @@ function resolveCharacterControllerComponent(
   return resolveEnabledComponentState<CharacterControllerComponentProps>(node, CHARACTER_CONTROLLER_COMPONENT_TYPE);
 }
 
+function resolveCharacterControllerBindingNodeId(nodeId: string | null): string | null {
+  if (!nodeId) {
+    return null;
+  }
+  const props = clampCharacterControllerComponentProps(resolveCharacterControllerComponent(resolveNodeById(nodeId))?.props ?? null);
+  return props.targetNodeId ?? nodeId;
+}
+
 function resolveRemoteCharacterAnimationInput(nodeId: string): {
   moveX: number;
   moveZ: number;
@@ -5883,7 +5893,8 @@ function resolveRemoteCharacterAnimationInput(nodeId: string): {
   const speedScale = Math.max(0.01, props.sprintSpeed || props.runSpeed || props.walkSpeed || 1);
   const movementMagnitude = Math.min(1, speed / speedScale);
   writeCharacterLocalForward(tempCharacterForwardVec, props.forwardAxis);
-  const object = nodeObjectMap.get(nodeId) ?? null;
+  const bindingNodeId = resolveCharacterControllerBindingNodeId(nodeId);
+  const object = bindingNodeId ? (nodeObjectMap.get(bindingNodeId) ?? null) : null;
   if (object) {
     object.getWorldQuaternion(protagonistPoseQuaternion);
   } else {
@@ -7725,11 +7736,13 @@ async function ensureSceneryPhysicsBridgeReady(): Promise<PhysicsBridge> {
   return physicsBridgeInitPromise;
 }
 
-function updateSceneryPhysicsBridgeIndex(asset: PhysicsSceneAsset): void {
+function updateSceneryPhysicsBridgeIndex(document: SceneJsonExportDocument, asset: PhysicsSceneAsset): void {
   physicsBridgeBodyIdByNodeId.clear();
   physicsBridgeNodeIdByBodyId.clear();
   physicsBridgeVehicleIdByNodeId.clear();
   physicsBridgeCharacterIdByNodeId.clear();
+  physicsBridgeCharacterBodyNodeIdByControllerNodeId.clear();
+  physicsBridgeCharacterControllerNodeIdByBodyNodeId.clear();
   physicsBridgeFrameBodiesByNodeId.clear();
   physicsBridgeContactsByNodeId.clear();
   physicsBridgeDirtyBodyNodeIds.clear();
@@ -7751,11 +7764,34 @@ function updateSceneryPhysicsBridgeIndex(asset: PhysicsSceneAsset): void {
     physicsBridgeVehicleIdByNodeId.set(nodeId, vehicle.id);
   });
   asset.characters.forEach((character) => {
-    const nodeId = physicsBridgeNodeIdByBodyId.get(character.bodyId);
-    if (!nodeId) {
+    const bodyNodeId = physicsBridgeNodeIdByBodyId.get(character.bodyId);
+    if (!bodyNodeId) {
       return;
     }
-    physicsBridgeCharacterIdByNodeId.set(nodeId, character.characterId);
+    physicsBridgeCharacterControllerNodeIdByBodyNodeId.set(bodyNodeId, bodyNodeId);
+    physicsBridgeCharacterBodyNodeIdByControllerNodeId.set(bodyNodeId, bodyNodeId);
+    physicsBridgeCharacterIdByNodeId.set(bodyNodeId, character.characterId);
+  });
+  const stack: SceneNode[] = Array.isArray(document.nodes) ? [...document.nodes] : [];
+  while (stack.length) {
+    const node = stack.pop();
+    if (!node) {
+      continue;
+    }
+    const component = resolveCharacterControllerComponent(node);
+    if (component) {
+      const props = clampCharacterControllerComponentProps(component.props ?? null);
+      const bodyNodeId = props.targetNodeId ?? node.id;
+      const characterId = physicsBridgeCharacterIdByNodeId.get(bodyNodeId);
+      if (typeof characterId === 'number') {
+        physicsBridgeCharacterIdByNodeId.set(node.id, characterId);
+        physicsBridgeCharacterBodyNodeIdByControllerNodeId.set(node.id, bodyNodeId);
+        physicsBridgeCharacterControllerNodeIdByBodyNodeId.set(bodyNodeId, node.id);
+      }
+    }
+    if (Array.isArray(node.children) && node.children.length) {
+      stack.push(...node.children);
+    }
   });
   vehicleInstances.forEach((instance, nodeId) => {
     if (instance.source !== 'bridge') {
@@ -7807,7 +7843,7 @@ async function loadSceneryPhysicsBridgeScene(
     if (requestId !== physicsBridgeSceneRequestId) {
       return;
     }
-    updateSceneryPhysicsBridgeIndex(asset);
+    updateSceneryPhysicsBridgeIndex(document, asset);
     physicsBridgeSceneLoaded = true;
     syncSceneryGroundCollisionRuntimeLoadedTileKeys(document, renderContext?.camera ?? null);
   } catch (error) {
@@ -7945,6 +7981,9 @@ function applySceneryPhysicsBridgeFrameToObjects(): void {
   physicsBridgeFrameBodiesByNodeId.forEach((state, nodeId) => {
     const rigidbodyEntry = rigidbodyInstances.get(nodeId);
     if (rigidbodyEntry) {
+      if (physicsBridgeCharacterControllerNodeIdByBodyNodeId.has(nodeId)) {
+        return;
+      }
       if (rigidbodyEntry.syncObjectFromBody === false || !rigidbodyEntry.object) {
         return;
       }
@@ -7956,6 +7995,7 @@ function applySceneryPhysicsBridgeFrameToObjects(): void {
       );
       return;
     }
+    const characterControllerNodeId = physicsBridgeCharacterControllerNodeIdByBodyNodeId.get(nodeId) ?? null;
     const node = resolveNodeById(nodeId);
     const rigidbodyComponent = resolvePhysicsRigidbodyComponent(node);
     const bindingObject = node && rigidbodyComponent
@@ -7963,7 +8003,7 @@ function applySceneryPhysicsBridgeFrameToObjects(): void {
         rigidbodyComponent,
         nodeObjectMap.get(nodeId) ?? null,
       )
-      : (physicsBridgeCharacterIdByNodeId.has(nodeId) ? (nodeObjectMap.get(nodeId) ?? null) : null);
+      : (characterControllerNodeId ? (nodeObjectMap.get(characterControllerNodeId) ?? null) : (physicsBridgeCharacterIdByNodeId.has(nodeId) ? (nodeObjectMap.get(nodeId) ?? null) : null));
     if (!bindingObject) {
       return;
     }
@@ -8125,7 +8165,7 @@ function syncSceneryPhysicsBridgeBodyTransforms(): void {
       physicsBridgePendingBodySyncRevisionByNodeId.delete(nodeId);
       return;
     }
-    if (physicsBridgeCharacterIdByNodeId.has(nodeId)) {
+    if (physicsBridgeCharacterControllerNodeIdByBodyNodeId.has(nodeId)) {
       physicsBridgeDirtyBodyNodeIds.delete(nodeId);
       physicsBridgeBodyDirtyRevisionByNodeId.delete(nodeId);
       physicsBridgePendingBodySyncRevisionByNodeId.delete(nodeId);
@@ -8370,6 +8410,8 @@ async function disposeSceneryPhysicsBridgeScene(): Promise<void> {
   physicsBridgeNodeIdByBodyId.clear();
   physicsBridgeVehicleIdByNodeId.clear();
   physicsBridgeCharacterIdByNodeId.clear();
+  physicsBridgeCharacterBodyNodeIdByControllerNodeId.clear();
+  physicsBridgeCharacterControllerNodeIdByBodyNodeId.clear();
   physicsBridgeFrameBodiesByNodeId.clear();
   physicsBridgeDirtyBodyNodeIds.clear();
   physicsBridgeBodyDirtyRevisionByNodeId.clear();
@@ -8430,6 +8472,8 @@ async function destroySceneryPhysicsBridge(): Promise<void> {
     physicsBridgeNodeIdByBodyId.clear();
     physicsBridgeVehicleIdByNodeId.clear();
     physicsBridgeCharacterIdByNodeId.clear();
+    physicsBridgeCharacterBodyNodeIdByControllerNodeId.clear();
+    physicsBridgeCharacterControllerNodeIdByBodyNodeId.clear();
     physicsBridgeFrameBodiesByNodeId.clear();
     physicsBridgeDirtyBodyNodeIds.clear();
     physicsBridgeBodyDirtyRevisionByNodeId.clear();
@@ -10312,7 +10356,8 @@ function findDefaultControlledCharacterObject(): THREE.Object3D | null {
   if (!controlledNodeId) {
     return null;
   }
-  const object = nodeObjectMap.get(controlledNodeId) ?? null;
+  const bindingNodeId = resolveCharacterControllerBindingNodeId(controlledNodeId);
+  const object = bindingNodeId ? (nodeObjectMap.get(bindingNodeId) ?? null) : null;
   if (object) {
     registerProtagonistObject(object);
   }

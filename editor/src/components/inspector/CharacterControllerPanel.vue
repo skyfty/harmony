@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
+import NodePicker from '@/components/common/NodePicker.vue'
 import {
   ANIMATION_COMPONENT_TYPE,
   CHARACTER_FORWARD_AXIS_OPTIONS,
@@ -27,14 +28,18 @@ const component = computed(() =>
 
 const componentEnabled = computed(() => component.value?.enabled !== false)
 const normalizedProps = computed(() => clampCharacterControllerComponentProps(component.value?.props ?? null))
+const animationSourceNodeId = computed(() => {
+  return normalizedProps.value.targetNodeId ?? selectedNode.value?.id ?? null
+})
+const animationSourceNode = computed(() => {
+  const sourceId = animationSourceNodeId.value
+  return sourceId ? (findSceneNodeById(nodes.value, sourceId) ?? null) : selectedNode.value ?? null
+})
 const animationComponent = computed(() =>
-  selectedNode.value?.components?.[ANIMATION_COMPONENT_TYPE] as
+  animationSourceNode.value?.components?.[ANIMATION_COMPONENT_TYPE] as
     | SceneNodeComponentState<AnimationComponentProps>
     | undefined,
 )
-const animationSourceNodeId = computed(() => {
-  return selectedNode.value?.id ?? null
-})
 const clipOptions = ref<Array<{ label: string; value: string }>>([])
 const isLoadingClips = ref(false)
 const clipLoadError = ref<string | null>(null)
@@ -98,6 +103,10 @@ function updateAnimationBinding(slot: CharacterAnimationSlot, clipName: string |
   updateComponent({ animationBindings: nextBindings })
 }
 
+function handleTargetNodeIdChange(value: string | null) {
+  updateField('targetNodeId', value)
+}
+
 function handleToggleComponent() {
   const currentComponent = component.value
   const nodeId = selectedNodeId.value
@@ -120,16 +129,19 @@ async function loadClipsForNode(nodeId: string) {
   const requestId = ++clipLoadRequestId
   clipOptions.value = []
   clipLoadError.value = null
+  const sourceId = animationSourceNodeId.value ?? nodeId
+  const sourceNode = animationSourceNode.value
   if (!animationComponent.value) {
-    clipLoadError.value = 'Add an Animation component before configuring character animation bindings.'
+    clipLoadError.value = sourceId && sourceId !== selectedNode.value?.id
+      ? 'Add an Animation component to the Target Node before configuring character animation bindings.'
+      : 'Add an Animation component before configuring character animation bindings.'
     return
   }
   isLoadingClips.value = true
   try {
-    const sourceId = animationSourceNodeId.value ?? nodeId
     let runtimeObject = getRuntimeObject(sourceId)
     if (!runtimeObject) {
-      const node = findSceneNodeById(nodes.value, sourceId) ?? selectedNode.value
+      const node = sourceNode ?? selectedNode.value
       if (node) {
         await sceneStore.ensureSceneAssetsReady({ nodes: [node], showOverlay: false, refreshViewport: false })
         runtimeObject = getRuntimeObject(sourceId)
@@ -230,6 +242,18 @@ const clipItems = computed(() => clipOptions.value)
           :disabled="!componentEnabled"
           @update:model-value="(value) => updateField('label', String(value ?? ''))"
         />
+
+        <div class="character-controller-panel__field">
+          <div class="character-controller-panel__field-label">Target Node</div>
+          <NodePicker
+            placeholder="Use this node"
+            pick-hint="Select the node used as the character render/animation target"
+            selection-hint="Choose the scene node whose runtime object should be treated as this character"
+            :model-value="normalizedProps.targetNodeId"
+            :disabled="!componentEnabled"
+            @update:modelValue="handleTargetNodeIdChange"
+          />
+        </div>
 
         <v-select
           :items="forwardAxisItems"
@@ -405,6 +429,17 @@ const clipItems = computed(() => clipOptions.value)
   display: flex;
   flex-direction: column;
   gap: 0.875rem;
+}
+
+.character-controller-panel__field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.character-controller-panel__field-label {
+  font-size: 0.82rem;
+  font-weight: 500;
 }
 
 .character-controller-panel__grid {

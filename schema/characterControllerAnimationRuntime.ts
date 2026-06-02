@@ -17,6 +17,7 @@ import {
 
 export type CharacterControllerAnimationRuntimeEntry = {
 	nodeId: string
+	animationNodeId: string
 	props: CharacterControllerComponentProps
 	behaviorOverrideTokens: Set<string>
 	lastAutoClipName: string | null
@@ -135,6 +136,7 @@ export class CharacterControllerAnimationRuntimeManager {
 			const previous = this.entries.get(nodeId) ?? null
 			nextEntries.set(nodeId, {
 				nodeId,
+				animationNodeId: normalizeNodeId(component.props?.targetNodeId) ?? nodeId,
 				props: clampCharacterControllerComponentProps(component.props),
 				behaviorOverrideTokens: previous?.behaviorOverrideTokens ?? new Set<string>(),
 				lastAutoClipName: previous?.lastAutoClipName ?? null,
@@ -165,9 +167,10 @@ export class CharacterControllerAnimationRuntimeManager {
 			if (entry.behaviorOverrideTokens.size > 0) {
 				return
 			}
-			const node = host.resolveNode(nodeId)
-			const animationComponent = resolveAnimationComponentForNode(node)
-			if (!animationComponent || !host.nodeAnimationRuntime.has(nodeId)) {
+			const animationNodeId = entry.animationNodeId || nodeId
+			const animationNode = host.resolveNode(animationNodeId)
+			const animationComponent = resolveAnimationComponentForNode(animationNode)
+			if (!animationComponent || !host.nodeAnimationRuntime.has(animationNodeId)) {
 				entry.lastAutoClipName = null
 				entry.lastAutoLoop = null
 				return
@@ -196,7 +199,7 @@ export class CharacterControllerAnimationRuntimeManager {
 					interacting: input.interact,
 					jumpPhase: 'start',
 				})
-				const startDurationMs = this.resolveClipDurationMs(host, nodeId, startClipName)
+				const startDurationMs = this.resolveClipDurationMs(host, animationNodeId, startClipName)
 				const maxStartMs = Math.max(0, Math.min(startDurationMs ?? CHARACTER_JUMP_START_FALLBACK_MS, CHARACTER_JUMP_START_FALLBACK_MS))
 				const elapsedMs = entry.jumpStartAtMs != null ? nowMs - entry.jumpStartAtMs : Number.POSITIVE_INFINITY
 				if (elapsedMs >= maxStartMs) {
@@ -231,7 +234,7 @@ export class CharacterControllerAnimationRuntimeManager {
 					interacting: input.interact,
 					jumpPhase: 'land',
 				})
-				const landDurationMs = this.resolveClipDurationMs(host, nodeId, landClipName)
+				const landDurationMs = this.resolveClipDurationMs(host, animationNodeId, landClipName)
 				const maxLandMs = Math.max(0, Math.min(landDurationMs ?? CHARACTER_JUMP_LAND_FALLBACK_MS, CHARACTER_JUMP_LAND_FALLBACK_MS))
 				const elapsedMs = entry.landAtMs != null ? nowMs - entry.landAtMs : Number.POSITIVE_INFINITY
 				if (elapsedMs >= maxLandMs) {
@@ -250,7 +253,7 @@ export class CharacterControllerAnimationRuntimeManager {
 			})
 			if (!desiredClipName) {
 				if (entry.lastAutoClipName !== null || entry.forceResync) {
-					host.nodeAnimationRuntime.restoreDefaultNodeAnimation(nodeId)
+					host.nodeAnimationRuntime.restoreDefaultNodeAnimation(animationNodeId)
 					entry.lastAutoClipName = null
 					entry.lastAutoLoop = null
 					entry.forceResync = false
@@ -261,7 +264,7 @@ export class CharacterControllerAnimationRuntimeManager {
 
 			const shouldLoop = entry.jumpPhase !== 'start' && entry.jumpPhase !== 'land'
 			if (entry.forceResync || entry.lastAutoClipName !== desiredClipName || entry.lastAutoLoop !== shouldLoop) {
-				host.nodeAnimationRuntime.playNodeAnimation(nodeId, desiredClipName, {
+				host.nodeAnimationRuntime.playNodeAnimation(animationNodeId, desiredClipName, {
 					loop: shouldLoop,
 					timeScale: animationComponent.props.timeScale,
 				})
@@ -275,14 +278,14 @@ export class CharacterControllerAnimationRuntimeManager {
 
 	private resolveClipDurationMs(
 		host: CharacterControllerAnimationRuntimeHost,
-		nodeId: string,
+		animationNodeId: string,
 		clipName: string | null,
 	): number | null {
 		if (!clipName) {
 			return null
 		}
-		const controller = host.nodeAnimationRuntime.get(nodeId)
-		const clip = controller?.clips.find((entry) => entry.name === clipName) ?? host.nodeAnimationRuntime.resolveClip(nodeId, clipName)
+		const controller = host.nodeAnimationRuntime.get(animationNodeId)
+		const clip = controller?.clips.find((entry) => entry.name === clipName) ?? host.nodeAnimationRuntime.resolveClip(animationNodeId, clipName)
 		if (!clip || !Number.isFinite(clip.duration) || clip.duration <= 0) {
 			return null
 		}
@@ -305,4 +308,12 @@ export class CharacterControllerAnimationRuntimeManager {
 			grounded: false,
 		}
 	}
+}
+
+function normalizeNodeId(value: unknown): string | null {
+	if (typeof value !== 'string') {
+		return null
+	}
+	const trimmed = value.trim()
+	return trimmed.length ? trimmed : null
 }

@@ -2387,6 +2387,8 @@ const physicsBridgeBodyIdByNodeId = new Map<string, number>()
 const physicsBridgeNodeIdByBodyId = new Map<number, string>()
 const physicsBridgeVehicleIdByNodeId = new Map<string, number>()
 const physicsBridgeCharacterIdByNodeId = new Map<string, number>()
+const physicsBridgeCharacterBodyNodeIdByControllerNodeId = new Map<string, string>()
+const physicsBridgeCharacterControllerNodeIdByBodyNodeId = new Map<string, string>()
 const physicsBridgeContactsByNodeId = new Map<string, PhysicsContactEvent[]>()
 type PhysicsBridgeBodyFrameState = {
 	position: THREE.Vector3
@@ -3498,6 +3500,14 @@ function resolveCharacterControllerComponent(
 	node: SceneNode | null | undefined,
 ): SceneNodeComponentState<CharacterControllerComponentProps> | null {
 	return resolveEnabledComponentState<CharacterControllerComponentProps>(node, CHARACTER_CONTROLLER_COMPONENT_TYPE)
+}
+
+function resolveCharacterControllerBindingNodeId(nodeId: string | null): string | null {
+	if (!nodeId) {
+		return null
+	}
+	const props = clampCharacterControllerComponentProps(resolveCharacterControllerComponent(resolveNodeById(nodeId))?.props ?? null)
+	return props.targetNodeId ?? nodeId
 }
 
 function findNodeById(nodes: SceneNode[] | null | undefined, targetId: string): SceneNode | null {
@@ -6859,7 +6869,8 @@ function findDefaultControlledCharacterObject(): THREE.Object3D | null {
 	if (!controlledNodeId) {
 		return null
 	}
-	return nodeObjectMap.get(controlledNodeId) ?? null
+	const bindingNodeId = resolveCharacterControllerBindingNodeId(controlledNodeId)
+	return bindingNodeId ? (nodeObjectMap.get(bindingNodeId) ?? null) : null
 }
 
 function resolveControlledCharacterForwardVector(target: THREE.Vector3): THREE.Vector3 {
@@ -11369,11 +11380,13 @@ async function ensureScenePreviewPhysicsBridgeReady(): Promise<PhysicsBridge> {
 	return physicsBridgeInitPromise
 }
 
-function updateScenePreviewPhysicsBridgeIndex(asset: PhysicsSceneAsset): void {
+function updateScenePreviewPhysicsBridgeIndex(document: SceneJsonExportDocument, asset: PhysicsSceneAsset): void {
 	physicsBridgeBodyIdByNodeId.clear()
 	physicsBridgeNodeIdByBodyId.clear()
 	physicsBridgeVehicleIdByNodeId.clear()
 	physicsBridgeCharacterIdByNodeId.clear()
+	physicsBridgeCharacterBodyNodeIdByControllerNodeId.clear()
+	physicsBridgeCharacterControllerNodeIdByBodyNodeId.clear()
 	physicsBridgeFrameBodiesByNodeId.clear()
 	physicsBridgeContactsByNodeId.clear()
 	asset.bodies.forEach((body) => {
@@ -11391,12 +11404,35 @@ function updateScenePreviewPhysicsBridgeIndex(asset: PhysicsSceneAsset): void {
 		physicsBridgeVehicleIdByNodeId.set(nodeId, vehicle.id)
 	})
 	asset.characters.forEach((character) => {
-		const nodeId = physicsBridgeNodeIdByBodyId.get(character.bodyId)
-		if (!nodeId) {
+		const bodyNodeId = physicsBridgeNodeIdByBodyId.get(character.bodyId)
+		if (!bodyNodeId) {
 			return
 		}
-		physicsBridgeCharacterIdByNodeId.set(nodeId, character.characterId)
+		physicsBridgeCharacterControllerNodeIdByBodyNodeId.set(bodyNodeId, bodyNodeId)
+		physicsBridgeCharacterBodyNodeIdByControllerNodeId.set(bodyNodeId, bodyNodeId)
+		physicsBridgeCharacterIdByNodeId.set(bodyNodeId, character.characterId)
 	})
+	const stack: SceneNode[] = Array.isArray(document.nodes) ? [...document.nodes] : []
+	while (stack.length) {
+		const node = stack.pop()
+		if (!node) {
+			continue
+		}
+		const component = resolveCharacterControllerComponent(node)
+		if (component) {
+			const props = clampCharacterControllerComponentProps(component.props ?? null)
+			const bodyNodeId = props.targetNodeId ?? node.id
+			const characterId = physicsBridgeCharacterIdByNodeId.get(bodyNodeId)
+			if (typeof characterId === 'number') {
+				physicsBridgeCharacterIdByNodeId.set(node.id, characterId)
+				physicsBridgeCharacterBodyNodeIdByControllerNodeId.set(node.id, bodyNodeId)
+				physicsBridgeCharacterControllerNodeIdByBodyNodeId.set(bodyNodeId, node.id)
+			}
+		}
+		if (Array.isArray(node.children) && node.children.length) {
+			stack.push(...node.children)
+		}
+	}
 	vehicleInstances.forEach((instance, nodeId) => {
 		if (instance.source !== 'bridge') {
 			return
@@ -11447,7 +11483,7 @@ async function loadScenePreviewPhysicsBridgeScene(
 		if (requestId !== physicsBridgeSceneRequestId) {
 			return
 		}
-		updateScenePreviewPhysicsBridgeIndex(asset)
+	updateScenePreviewPhysicsBridgeIndex(document, asset)
 		physicsBridgeSceneLoaded = true
 	} catch (error) {
 		const message = error instanceof Error ? error.message : 'Scene preview physics load failed'
@@ -11625,6 +11661,9 @@ function applyScenePreviewPhysicsBridgeFrameToObjects(): void {
 	physicsBridgeFrameBodiesByNodeId.forEach((state, nodeId) => {
 		const rigidbodyEntry = rigidbodyInstances.get(nodeId)
 		if (rigidbodyEntry) {
+			if (physicsBridgeCharacterControllerNodeIdByBodyNodeId.has(nodeId)) {
+				return
+			}
 			if (rigidbodyEntry.syncObjectFromBody === false || !rigidbodyEntry.object) {
 				return
 			}
@@ -11636,11 +11675,12 @@ function applyScenePreviewPhysicsBridgeFrameToObjects(): void {
 			)
 			return
 		}
+		const characterControllerNodeId = physicsBridgeCharacterControllerNodeIdByBodyNodeId.get(nodeId) ?? null
 		const node = resolveNodeById(nodeId)
 		const component = resolvePhysicsRigidbodyComponent(node)
 		const bindingObject = node && component
 			? resolveRigidbodyBindingObject(component, nodeObjectMap.get(nodeId) ?? null)
-			: (physicsBridgeCharacterIdByNodeId.has(nodeId) ? (nodeObjectMap.get(nodeId) ?? null) : null)
+			: (characterControllerNodeId ? (nodeObjectMap.get(characterControllerNodeId) ?? null) : (physicsBridgeCharacterIdByNodeId.has(nodeId) ? (nodeObjectMap.get(nodeId) ?? null) : null))
 		if (!bindingObject) {
 			return
 		}
@@ -11722,7 +11762,7 @@ function syncScenePreviewPhysicsBridgeBodyTransforms(): void {
 	const commands: Array<Promise<void>> = []
 	const syncedNodeIds = new Set<string>()
 	rigidbodyInstances.forEach((entry, nodeId) => {
-		if (physicsBridgeCharacterIdByNodeId.has(nodeId)) {
+		if (physicsBridgeCharacterControllerNodeIdByBodyNodeId.has(nodeId)) {
 			return
 		}
 		if (entry.body.type === LEGACY_STATIC_BODY_TYPE) {
@@ -11751,7 +11791,7 @@ function syncScenePreviewPhysicsBridgeBodyTransforms(): void {
 		if (syncedNodeIds.has(nodeId)) {
 			return
 		}
-		if (physicsBridgeCharacterIdByNodeId.has(nodeId)) {
+		if (physicsBridgeCharacterControllerNodeIdByBodyNodeId.has(nodeId)) {
 			return
 		}
 		const node = resolveNodeById(nodeId)
@@ -11941,6 +11981,8 @@ async function disposeScenePreviewPhysicsBridgeScene(): Promise<void> {
 	physicsBridgeNodeIdByBodyId.clear()
 	physicsBridgeVehicleIdByNodeId.clear()
 	physicsBridgeCharacterIdByNodeId.clear()
+	physicsBridgeCharacterBodyNodeIdByControllerNodeId.clear()
+	physicsBridgeCharacterControllerNodeIdByBodyNodeId.clear()
 	physicsBridgeFrameBodiesByNodeId.clear()
 	resetPhysicsBridgeVehicleInputSyncState(physicsBridgeVehicleInputSyncState)
 	if (!physicsBridge || !physicsBridgeSceneLoaded) {
@@ -11983,6 +12025,8 @@ async function destroyScenePreviewPhysicsBridge(): Promise<void> {
 		physicsBridgeNodeIdByBodyId.clear()
 		physicsBridgeVehicleIdByNodeId.clear()
 		physicsBridgeCharacterIdByNodeId.clear()
+		physicsBridgeCharacterBodyNodeIdByControllerNodeId.clear()
+		physicsBridgeCharacterControllerNodeIdByBodyNodeId.clear()
 		physicsBridgeFrameBodiesByNodeId.clear()
 		resetPhysicsBridgeVehicleInputSyncState(physicsBridgeVehicleInputSyncState)
 		physicsBridgeSceneLoaded = false

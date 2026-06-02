@@ -32,6 +32,7 @@ export interface CharacterAnimationBinding {
 
 export interface CharacterControllerComponentProps {
   label: string
+  targetNodeId: string | null
   forwardAxis: CharacterForwardAxis
   walkSpeed: number
   runSpeed: number
@@ -85,6 +86,11 @@ function sanitizeClipName(value: unknown): string | null {
   return trimmed.length ? trimmed : null
 }
 
+function normalizeNodeId(value: unknown): string | null {
+  const trimmed = sanitizeString(value)
+  return trimmed.length ? trimmed : null
+}
+
 function normalizeForwardAxis(value: unknown): CharacterForwardAxis {
   return CHARACTER_FORWARD_AXIS_OPTIONS.includes(value as CharacterForwardAxis)
     ? (value as CharacterForwardAxis)
@@ -123,6 +129,7 @@ export function clampCharacterControllerComponentProps(
   const animationBindings = DEFAULT_ANIMATION_SLOTS.map((slot) => bindings.get(slot) ?? normalizeAnimationBinding(null, slot))
   return {
     label: sanitizeString(props?.label) || 'Character Controller',
+    targetNodeId: normalizeNodeId(props?.targetNodeId),
     forwardAxis: normalizeForwardAxis(props?.forwardAxis),
     walkSpeed: sanitizeNumber(props?.walkSpeed, 2.4, 0, 100),
     runSpeed: sanitizeNumber(props?.runSpeed, 4.8, 0, 100),
@@ -143,6 +150,7 @@ export function cloneCharacterControllerComponentProps(
 ): CharacterControllerComponentProps {
   return {
     label: props.label,
+    targetNodeId: props.targetNodeId,
     forwardAxis: props.forwardAxis,
     walkSpeed: props.walkSpeed,
     runSpeed: props.runSpeed,
@@ -203,8 +211,7 @@ const characterControllerComponentDefinition: ComponentDefinition<CharacterContr
   inspector: [],
   canAttach(node: SceneNode) {
     const nodeType = node.nodeType ?? ''
-    const hasSourceAsset = typeof node.sourceAssetId === 'string' && node.sourceAssetId.trim().length > 0
-    return hasSourceAsset && (nodeType === 'Mesh' || nodeType === 'Group')
+    return nodeType === 'Mesh' || nodeType === 'Group'
   },
   createDefaultProps(node: SceneNode) {
     return clampCharacterControllerComponentProps({
