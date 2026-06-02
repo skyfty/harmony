@@ -104,7 +104,6 @@ export type VehicleDriveCameraRestoreState = {
   target: THREE.Vector3
   quaternion: THREE.Quaternion
   up: THREE.Vector3
-  controlMode: string | null
   isCameraCaged: boolean
   viewMode?: string | null
   viewTargetId?: string | null

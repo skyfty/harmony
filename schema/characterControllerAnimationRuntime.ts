@@ -32,6 +32,7 @@ export type CharacterControllerAnimationRuntimeEntry = {
 export type CharacterControllerAnimationInputState = {
 	moveX: number
 	moveZ: number
+	turn: number
 	jump: boolean
 	sprint: boolean
 	crouch: boolean
@@ -178,6 +179,7 @@ export class CharacterControllerAnimationRuntimeManager {
 			const input = host.resolveInput(nodeId)
 			const moveX = input.moveX
 			const moveZ = input.moveZ
+			const turn = input.turn
 			const movementMagnitude = resolveCharacterControlMovementMagnitude(moveX, moveZ)
 			const jumpPressed = input.jump
 			const groundedState = this.resolveGroundedState(host, nodeId)
@@ -197,6 +199,7 @@ export class CharacterControllerAnimationRuntimeManager {
 					sprinting: input.sprint,
 					crouching: input.crouch,
 					interacting: input.interact,
+					turn,
 					jumpPhase: 'start',
 				})
 				const startDurationMs = this.resolveClipDurationMs(host, animationNodeId, startClipName)
@@ -232,6 +235,7 @@ export class CharacterControllerAnimationRuntimeManager {
 					sprinting: input.sprint,
 					crouching: input.crouch,
 					interacting: input.interact,
+					turn,
 					jumpPhase: 'land',
 				})
 				const landDurationMs = this.resolveClipDurationMs(host, animationNodeId, landClipName)
@@ -249,6 +253,7 @@ export class CharacterControllerAnimationRuntimeManager {
 				sprinting: input.sprint,
 				crouching: input.crouch,
 				interacting: input.interact,
+				turn,
 				jumpPhase: entry.jumpPhase,
 			})
 			if (!desiredClipName) {

@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, toRaw, watch, type ComponentPublicInstance } from 'vue'
 import * as THREE from 'three'
-import { FirstPersonControls } from 'three/examples/jsm/controls/FirstPersonControls.js'
 import { MapControls } from 'three/examples/jsm/controls/MapControls.js'
 import type { KTX2Loader } from 'three/examples/jsm/loaders/KTX2Loader.js'
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js'
@@ -366,7 +365,6 @@ const terrainScatterRuntime = createTerrainScatterLodRuntime({
 	
 });
 
-type ControlMode = 'first-person' | 'third-person'
 type RuntimePanelMode = 'vehicle' | 'character'
 type RuntimePanelCameraMode = 'first-person' | 'follow'
 type VehicleDriveCameraMode = RuntimePanelCameraMode | 'free'
@@ -448,10 +446,9 @@ const liveUpdatesDisabledLabel = computed(() => {
 	return 'Live updates disabled.'
 })
 const isPlaying = ref(true)
-const controlMode = ref<ControlMode>('third-person')
 const vehicleDriveCameraMode = ref<VehicleDriveCameraMode>('first-person')
 const vehicleDriveOrbitMode = ref<VehicleDriveOrbitMode>('follow')
-const characterCameraMode = ref<RuntimePanelCameraMode>('follow')
+const characterCameraMode = ref<RuntimePanelCameraMode>('first-person')
 const volumePercent = ref(100)
 const isFullscreen = ref(false)
 const lastUpdateTime = ref<string | null>(null)
@@ -467,13 +464,11 @@ type SceneNodeTransformSnapshot = {
 }
 
 type SceneViewControlSnapshot = {
-	controlMode: ControlMode
 	cameraViewState: { mode: CameraViewMode; watchTargetId: string | null }
 	isCameraCaged: boolean
 	camera: { position: Vec3Tuple; quaternion: QuatTuple; up: Vec3Tuple }
 	mapTarget: Vec3Tuple | null
 	lastOrbit: { position: Vec3Tuple; target: Vec3Tuple }
-	lastFirstPerson: { position: Vec3Tuple; direction: Vec3Tuple }
 	nodeTransforms: Record<string, SceneNodeTransformSnapshot>
 }
 
@@ -1400,6 +1395,7 @@ const vehicleDriveUiOverride = ref<'auto' | 'show' | 'hide'>('auto')
 const pendingVehicleDriveEvent = ref<Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }> | null>(null)
 const pendingVehicleDriveRetryRequested = ref(false)
 const pendingDefaultSteerDriveEvent = ref<Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }> | null>(null)
+const pendingDefaultCharacterControlNodeId = ref<string | null>(null)
 const vehicleDrivePromptBusy = ref(false)
 const vehicleDriveExitBusy = ref(false)
 const scenePreviewDriveBindingsReady = ref(false)
@@ -1586,10 +1582,6 @@ const tempOutlineScale = new THREE.Vector3()
 
 const CAMERA_HEIGHT = 1.7
 const DEFAULT_SCENE_CAMERA_FAR = 2000
-const FIRST_PERSON_ROTATION_SPEED = 25
-const FIRST_PERSON_MOVE_SPEED = 5
-const FIRST_PERSON_LOOK_SPEED = 0.06
-const FIRST_PERSON_PITCH_LIMIT = THREE.MathUtils.degToRad(75)
 const tempDirection = new THREE.Vector3()
 const tempTarget = new THREE.Vector3()
 const tempQuaternion = new THREE.Quaternion()
@@ -1627,7 +1619,7 @@ const DEFAULT_BACKGROUND_COLOR = 0x0d0d12
 const DEFAULT_TONE_MAPPING_EXPOSURE = 1
 const CAMERA_WATCH_TWEEN_DURATION = 0.45
 const CAMERA_LEVEL_TWEEN_DURATION = 0.35
-type CameraLookTweenMode = 'first-person' | 'orbit'
+type CameraLookTweenMode = 'orbit'
 type CameraLookTween = {
 	mode: CameraLookTweenMode
 	from: THREE.Vector3
@@ -1788,12 +1780,10 @@ let skyCubeZipAssetId: string | null = null
 let skyCubeZipAssetKey: string | null = null
 let skyCubeZipFaceUrlCleanup: (() => void) | null = null
 let backgroundLoadToken = 0
-let firstPersonControls: FirstPersonControls | null = null
 let mapControls: MapControls | null = null
 let followCameraControlActive = false
 let followCameraControlDirty = false
 let rendererInitialized = false
-let suppressControlModeApply = false
 const MAP_CONTROL_DEFAULTS = {
 	minDistance: 1,
 	maxDistance: 200,
@@ -2516,8 +2506,7 @@ const vehicleInstances = new Map<string, VehicleInstance>()
 const physicsGravity = createHostPhysicsVec3(0, -DEFAULT_ENVIRONMENT_GRAVITY, 0)
 const PHYSICS_FIXED_TIMESTEP = 1 / 60
 const PHYSICS_MAX_SUB_STEPS = 5
-const rotationState = { q: false, e: false }
-const defaultFirstPersonState = {
+const defaultProtagonistState = {
 	position: new THREE.Vector3(0, CAMERA_HEIGHT, 0),
 	direction: new THREE.Vector3(0, 0, -1),
 }
@@ -2525,9 +2514,9 @@ const defaultOrbitState = {
 	position: new THREE.Vector3(8, 6, 8),
 	target: new THREE.Vector3(0, 0, 0),
 }
-const lastFirstPersonState = {
-	position: defaultFirstPersonState.position.clone(),
-	direction: defaultFirstPersonState.direction.clone(),
+const lastProtagonistState = {
+	position: defaultProtagonistState.position.clone(),
+	direction: defaultProtagonistState.direction.clone(),
 }
 const lastOrbitState = {
 	position: defaultOrbitState.position.clone(),
@@ -2979,7 +2968,6 @@ const runtimePanelUi = computed(() => {
 	const characterNode = characterNodeId ? resolveNodeById(characterNodeId) : null
 	const characterControlActive =
 		!vehicleDriveState.active
-		&& controlMode.value === 'first-person'
 		&& Boolean(characterNodeId && findDefaultControlledCharacterObject())
 	const override = vehicleDriveUiOverride.value
 	const vehicleVisible = override === 'show' ? true : override === 'hide' ? false : vehicleDriveState.active
@@ -3079,6 +3067,7 @@ let vehicleSpeedDisplayLowSpeedSinceAtMs: number | null = null
 const characterAuthorityInput = reactive({
 	moveX: 0,
 	moveZ: 0,
+	turn: 0,
 	jump: false,
 	sprint: false,
 	crouch: false,
@@ -3146,7 +3135,16 @@ const vehicleDriveCameraRestoreState = {
 	target: new THREE.Vector3(),
 	quaternion: new THREE.Quaternion(),
 	up: new THREE.Vector3(),
-	controlMode: controlMode.value as ControlMode,
+	isCameraCaged: false,
+	viewMode: cameraViewState.mode as CameraViewMode,
+	viewTargetId: cameraViewState.watchTargetId as string | null,
+}
+const characterDriveCameraRestoreState = {
+	hasSnapshot: false,
+	position: new THREE.Vector3(),
+	target: new THREE.Vector3(),
+	quaternion: new THREE.Quaternion(),
+	up: new THREE.Vector3(),
 	isCameraCaged: false,
 	viewMode: cameraViewState.mode as CameraViewMode,
 	viewTargetId: cameraViewState.watchTargetId as string | null,
@@ -3174,6 +3172,9 @@ const characterFollowCameraController = new FollowCameraController()
 const characterFollowVelocity = new THREE.Vector3()
 const characterFollowVelocityScratch = new THREE.Vector3()
 const characterFollowLastAnchor = new THREE.Vector3()
+let characterInputYaw = Math.PI
+let characterInputYawInitialized = false
+let characterInputYawNodeId: string | null = null
 let characterFollowHasSample = false
 
 const vehicleDriveController = new VehicleDriveController(
@@ -3380,8 +3381,8 @@ const runtimePanelCameraToggleConfig = computed(() => {
 	if (runtimePanelUi.value.mode === 'character') {
 		const followActive = characterCameraMode.value === 'follow'
 		return followActive
-			? { icon: 'mdi-account-eye', label: '切换到第一人称' }
-			: { icon: 'mdi-crosshairs-gps', label: '跟随角色' }
+			? { icon: 'mdi-crosshairs-off', label: 'Stop following' }
+			: { icon: 'mdi-crosshairs-gps', label: 'Follow character' }
 	}
 	const followActive = vehicleDriveCameraMode.value === 'follow'
 	return followActive
@@ -3398,7 +3399,7 @@ function setVehicleDriveOrbitMode(mode: VehicleDriveOrbitMode): void {
 		return
 	}
 	vehicleDriveOrbitMode.value = mode
-	if (vehicleDriveState.active && controlMode.value === 'third-person') {
+	if (vehicleDriveState.active) {
 		syncVehicleDriveCameraMode()
 	}
 }
@@ -5321,23 +5322,37 @@ watch(isInstancingDebugVisible, (visible) => {
 	instancingDebug.scatterTotal = 0
 })
 
-watch(controlMode, (mode) => {
-	if (mode === 'first-person' && !vehicleDriveState.active) {
-		characterCameraMode.value = 'follow'
-		resetCharacterFollowCameraState()
-	}
-	if (mode !== 'first-person') {
-		resetCharacterFollowCameraState()
-	}
-	if (suppressControlModeApply) {
-		return
-	}
-	applyControlMode(mode)
-})
-
 watch(characterCameraMode, (mode) => {
 	if (mode === 'follow') {
-		resetCharacterFollowCameraState()
+		const activeCamera = camera
+		if (activeCamera) {
+			const target = mapControls?.target ?? tempTarget
+			if (mapControls) {
+				target.copy(mapControls.target)
+			} else {
+				activeCamera.getWorldDirection(tempDirection)
+				tempDirection.y = 0
+				if (tempDirection.lengthSq() <= 1e-8) {
+					tempDirection.set(0, 0, -1)
+				} else {
+					tempDirection.normalize()
+				}
+				target.copy(activeCamera.position).add(tempDirection)
+			}
+			characterDriveCameraRestoreState.hasSnapshot = true
+			characterDriveCameraRestoreState.position.copy(activeCamera.position)
+			characterDriveCameraRestoreState.target.copy(target)
+			characterDriveCameraRestoreState.quaternion.copy(activeCamera.quaternion)
+			characterDriveCameraRestoreState.up.copy(activeCamera.up)
+			characterDriveCameraRestoreState.isCameraCaged = isCameraCaged.value
+			characterDriveCameraRestoreState.viewMode = cameraViewState.mode
+			characterDriveCameraRestoreState.viewTargetId = cameraViewState.watchTargetId
+		}
+		if (activeCamera) {
+			updateCharacterFollowCamera(0, activeCamera, true)
+		}
+	} else {
+		restoreCharacterDriveCameraState()
 	}
 	updateCameraControlActivation()
 })
@@ -5366,17 +5381,8 @@ function isInputLikeElement(target: EventTarget | null): boolean {
 function updateCameraControlActivation(): void {
 	const frozen = sceneSwitching.value
 	const caged = isCameraCaged.value
-	if (firstPersonControls) {
-		const enableFirstPerson =
-			!frozen
-			&& controlMode.value === 'first-person'
-			&& characterCameraMode.value === 'first-person'
-			&& !caged
-		firstPersonControls.enabled = enableFirstPerson
-		firstPersonControls.activeLook = false // enforce keyboard-only control in first-person mode
-	}
 	if (mapControls) {
-		mapControls.enabled = !frozen && controlMode.value === 'third-person' && !caged
+		mapControls.enabled = !frozen && !caged
 	}
 	updateCanvasCursor()
 }
@@ -5432,12 +5438,8 @@ function updateCanvasCursor() {
 		canvas.style.cursor = 'default'
 		return
 	}
-	if (controlMode.value !== 'first-person') {
-		const canOrbit = !isCameraCaged.value && Boolean(mapControls?.enabled)
-		canvas.style.cursor = canOrbit ? 'grab' : 'default'
-		return
-	}
-	canvas.style.cursor = 'default'
+	const canOrbit = !isCameraCaged.value && Boolean(mapControls?.enabled)
+	canvas.style.cursor = canOrbit ? 'grab' : 'default'
 }
 
 function applyMapControlFollowSettings(active: boolean) {
@@ -5465,12 +5467,6 @@ function setCameraCaging(enabled: boolean, options: { force?: boolean } = {}) {
 	}
 	isCameraCaged.value = enabled
 	updateCameraControlActivation()
-	if (!enabled && controlMode.value === 'first-person' && firstPersonControls) {
-		resetFirstPersonPointerDelta()
-		clampFirstPersonPitch(true)
-		syncFirstPersonOrientation()
-		syncLastFirstPersonStateFromCamera()
-	}
 }
 
 function syncVehicleDriveCameraMode(): void {
@@ -5483,20 +5479,6 @@ function syncVehicleDriveCameraMode(): void {
 		followCameraControlActive = false
 		followCameraControlDirty = false
 		applyMapControlFollowSettings(false)
-		return
-	}
-	if (controlMode.value === 'first-person') {
-		if (vehicleDriveCameraMode.value !== 'first-person') {
-			vehicleDriveCameraMode.value = 'first-person'
-		}
-		vehicleDriveCameraFollowState.initialized = false
-		followCameraControlActive = false
-		followCameraControlDirty = false
-		applyMapControlFollowSettings(false)
-		setCameraCaging(true, { force: true })
-		if (camera && renderer) {
-			updateVehicleDriveCamera(0, { immediate: true })
-		}
 		return
 	}
 	const desiredMode: VehicleDriveCameraMode = vehicleDriveOrbitMode.value
@@ -6851,6 +6833,8 @@ function resetCharacterFollowCameraState(): void {
 	characterFollowVelocity.set(0, 0, 0)
 	characterFollowVelocityScratch.set(0, 0, 0)
 	characterFollowLastAnchor.set(0, 0, 0)
+	characterInputYawInitialized = false
+	characterInputYawNodeId = null
 	characterFollowHasSample = false
 }
 
@@ -6981,25 +6965,14 @@ function syncProtagonistCameraPose(options: ProtagonistPoseOptions = {}): boolea
 	if (protagonistPoseDirection.lengthSq() < 1e-8) {
 		resolveControlledCharacterForwardVector(protagonistPoseDirection)
 	} else {
-		protagonistPoseDirection.normalize()
+	protagonistPoseDirection.normalize()
 	}
 	protagonistPosePosition.y = CAMERA_HEIGHT
-	lastFirstPersonState.position.copy(protagonistPosePosition)
-	lastFirstPersonState.direction.copy(protagonistPoseDirection)
+	lastProtagonistState.position.copy(protagonistPosePosition)
+	lastProtagonistState.direction.copy(protagonistPoseDirection)
 	protagonistPoseSynced = true
 	if (options.applyToCamera && !vehicleDriveState.active && camera) {
-		if (controlMode.value === 'first-person' && characterCameraMode.value === 'follow') {
-			updateCharacterFollowCamera(0, camera, true)
-		} else if (controlMode.value === 'first-person' && firstPersonControls) {
-			camera.position.copy(lastFirstPersonState.position)
-			camera.position.y = CAMERA_HEIGHT
-			protagonistPoseTarget.copy(camera.position).add(lastFirstPersonState.direction)
-			firstPersonControls.lookAt(protagonistPoseTarget.x, protagonistPoseTarget.y, protagonistPoseTarget.z)
-			clampFirstPersonPitch(true)
-			syncFirstPersonOrientation()
-			resetFirstPersonPointerDelta()
-			syncLastFirstPersonStateFromCamera()
-		} else if (mapControls) {
+		if (mapControls) {
 			// Align orbit/map controls to protagonist pose: position the camera at the protagonist
 			// and set the controls' target to look in the protagonist's forward direction.
 			camera.position.copy(protagonistPosePosition)
@@ -7018,7 +6991,7 @@ function updateCharacterFollowCamera(
 	activeCamera: THREE.PerspectiveCamera,
 	immediate = false,
 ): boolean {
-	if (vehicleDriveState.active || controlMode.value !== 'first-person' || characterCameraMode.value !== 'follow') {
+	if (vehicleDriveState.active || characterCameraMode.value !== 'follow') {
 		return false
 	}
 	const controlledNodeId = resolveDefaultControlledCharacterNodeId()
@@ -7031,10 +7004,14 @@ function updateCharacterFollowCamera(
 	}
 	protagonistObject.updateMatrixWorld(true)
 	const desiredForwardWorld = tempDirection
+	const hasForwardMoveInput = Math.abs(characterAuthorityInput.moveZ) > 0.05
+	const isPureStrafeInput =
+		Math.abs(characterAuthorityInput.moveX) > 0.05
+		&& Math.abs(characterAuthorityInput.moveZ) <= 0.05
 	const planarVelocitySq =
 		(characterFollowVelocity.x * characterFollowVelocity.x)
 		+ (characterFollowVelocity.z * characterFollowVelocity.z)
-	if (planarVelocitySq > 1e-4) {
+	if (planarVelocitySq > 1e-4 && hasForwardMoveInput && !isPureStrafeInput) {
 		desiredForwardWorld.set(characterFollowVelocity.x, 0, characterFollowVelocity.z)
 	} else {
 		protagonistObject.getWorldQuaternion(tempQuaternion)
@@ -7133,8 +7110,9 @@ function refreshCharacterControllerAnimationRuntimeEntries(): void {
 		resolveInput: (nodeId) => {
 			const isLocallyControlled = resolveDefaultControlledCharacterNodeId() === nodeId
 			return {
-				moveX: isLocallyControlled ? characterAuthorityInput.moveX : 0,
+				moveX: 0,
 				moveZ: isLocallyControlled ? characterAuthorityInput.moveZ : 0,
+				turn: isLocallyControlled ? characterAuthorityInput.turn : 0,
 				jump: isLocallyControlled ? characterAuthorityInput.jump : false,
 				sprint: isLocallyControlled ? characterAuthorityInput.sprint : false,
 				crouch: isLocallyControlled ? characterAuthorityInput.crouch : false,
@@ -7147,10 +7125,11 @@ function refreshCharacterControllerAnimationRuntimeEntries(): void {
 }
 
 function updateCharacterAuthorityInputFromKeys(): void {
-	const moveX = (characterKeyState.right ? 1 : 0) - (characterKeyState.left ? 1 : 0)
 	const moveZ = (characterKeyState.forward ? 1 : 0) - (characterKeyState.backward ? 1 : 0)
-	characterAuthorityInput.moveX = THREE.MathUtils.clamp(moveX, -1, 1)
+	const turn = (characterKeyState.right ? 1 : 0) - (characterKeyState.left ? 1 : 0)
+	characterAuthorityInput.moveX = 0
 	characterAuthorityInput.moveZ = THREE.MathUtils.clamp(moveZ, -1, 1)
+	characterAuthorityInput.turn = THREE.MathUtils.clamp(turn, -1, 1)
 	characterAuthorityInput.sprint = characterKeyState.sprint
 	characterAuthorityInput.crouch = characterKeyState.crouch
 	characterAuthorityInput.interact = characterKeyState.interact
@@ -7179,8 +7158,9 @@ function updateCharacterControllerAnimations(delta: number): void {
 		resolveInput: (nodeId) => {
 			const isLocallyControlled = controlledNodeId === nodeId
 			return {
-				moveX: isLocallyControlled ? characterAuthorityInput.moveX : 0,
+				moveX: 0,
 				moveZ: isLocallyControlled ? characterAuthorityInput.moveZ : 0,
+				turn: isLocallyControlled ? characterAuthorityInput.turn : 0,
 				jump: isLocallyControlled ? characterAuthorityInput.jump : false,
 				sprint: isLocallyControlled ? characterAuthorityInput.sprint : false,
 				crouch: isLocallyControlled ? characterAuthorityInput.crouch : false,
@@ -7464,7 +7444,6 @@ function handleMoveCameraEvent(event: Extract<BehaviorRuntimeEvent, { type: 'mov
 		} else {
 			activeCamera.quaternion.copy(startQuaternion)
 		}
-		syncLastFirstPersonStateFromCamera()
 		resolveBehaviorToken(event.token, { type: 'continue' })
 	}
 	startTimedAnimation(event.token, durationSeconds, updateFrame, finalize)
@@ -7643,27 +7622,7 @@ function performWatchFocus(targetNodeId: string | null, caging = false): { succe
 	}
 	const focusPoint = focus.clone()
 	const orbitControls = mapControls ?? null
-	const isFirstPerson = controlMode.value === 'first-person' && Boolean(firstPersonControls)
-	if (isFirstPerson && firstPersonControls) {
-		activeCamera.getWorldDirection(tempDirection)
-		const startTarget = activeCamera.position.clone().add(tempDirection)
-		if (startTarget.distanceToSquared(focusPoint) < 1e-6) {
-			firstPersonControls.lookAt(focusPoint.x, focusPoint.y, focusPoint.z)
-			clampFirstPersonPitch(true)
-			syncFirstPersonOrientation()
-			resetFirstPersonPointerDelta()
-			syncLastFirstPersonStateFromCamera()
-		} else {
-			activeCameraLookTween = {
-				mode: 'first-person',
-				from: startTarget,
-				to: focusPoint.clone(),
-				duration: CAMERA_WATCH_TWEEN_DURATION,
-				elapsed: 0,
-			}
-			resetFirstPersonPointerDelta()
-		}
-	} else if (orbitControls) {
+	if (orbitControls) {
 		const startTarget = orbitControls.target.clone()
 		if (startTarget.distanceToSquared(focusPoint) < 1e-6) {
 			orbitControls.target.copy(focusPoint)
@@ -7677,9 +7636,6 @@ function performWatchFocus(targetNodeId: string | null, caging = false): { succe
 				elapsed: 0,
 			}
 		}
-	} else {
-		activeCamera.lookAt(focusPoint)
-		syncLastFirstPersonStateFromCamera()
 	}
 	setCameraCaging(Boolean(caging))
 	setCameraViewState('watching', resolvedTarget)
@@ -7799,6 +7755,7 @@ async function buildPreviewRuntimeDocument(
 	const runtimeDocument = preparedRuntime.document
 	const defaultSteerNodeId = resolveDefaultSteerBinding(document)
 	pendingDefaultSteerDriveEvent.value = defaultSteerNodeId ? buildDefaultSteerDriveEvent(defaultSteerNodeId) : null
+	pendingDefaultCharacterControlNodeId.value = resolveDefaultCharacterSteerNodeId(document)
 	const groundNode = resolveSharedDocumentGroundNode(runtimeDocument)
 	const sidecar = await resolvePreviewGroundHeightSidecar(runtimeDocument.id, groundNode, options.groundHeightSidecar)
 	const scatterSidecar = options.groundScatterSidecar ?? await useScenesStore().loadGroundScatterSidecar(runtimeDocument.id)
@@ -8009,7 +7966,6 @@ function captureViewControlSnapshot(): SceneViewControlSnapshot | null {
 	}
 	const mapTarget = mapControls ? sceneStackVec3ToTuple(mapControls.target) : null
 	return {
-		controlMode: controlMode.value,
 		cameraViewState: {
 			mode: cameraViewState.mode,
 			watchTargetId: cameraViewState.watchTargetId,
@@ -8025,10 +7981,6 @@ function captureViewControlSnapshot(): SceneViewControlSnapshot | null {
 			position: sceneStackVec3ToTuple(lastOrbitState.position),
 			target: sceneStackVec3ToTuple(lastOrbitState.target),
 		},
-		lastFirstPerson: {
-			position: sceneStackVec3ToTuple(lastFirstPersonState.position),
-			direction: sceneStackVec3ToTuple(lastFirstPersonState.direction),
-		},
 		nodeTransforms: captureSceneNodeTransformSnapshot(),
 	}
 }
@@ -8038,17 +7990,8 @@ function applyViewControlSnapshot(snapshot: SceneViewControlSnapshot): void {
 		return
 	}
 	activeCameraLookTween = null
-
-	// Avoid the controlMode watcher calling applyControlMode() which would overwrite
-	// our restored camera pose.
-	suppressControlModeApply = true
-	try {
-		controlMode.value = snapshot.controlMode
-		cameraViewState.mode = snapshot.cameraViewState.mode
-		cameraViewState.watchTargetId = snapshot.cameraViewState.watchTargetId
-	} finally {
-		suppressControlModeApply = false
-	}
+	cameraViewState.mode = snapshot.cameraViewState.mode
+	cameraViewState.watchTargetId = snapshot.cameraViewState.watchTargetId
 
 	setCameraCaging(snapshot.isCameraCaged, { force: true })
 
@@ -8057,19 +8000,13 @@ function applyViewControlSnapshot(snapshot: SceneViewControlSnapshot): void {
 	sceneStackApplyVec3Tuple(camera.up, snapshot.camera.up)
 	camera.updateMatrixWorld(true)
 
-	// Restore view caches used by applyControlMode().
+	// Restore view caches used by the preview camera state.
 	sceneStackApplyVec3Tuple(lastOrbitState.position, snapshot.lastOrbit.position)
 	sceneStackApplyVec3Tuple(lastOrbitState.target, snapshot.lastOrbit.target)
-	sceneStackApplyVec3Tuple(lastFirstPersonState.position, snapshot.lastFirstPerson.position)
-	sceneStackApplyVec3Tuple(lastFirstPersonState.direction, snapshot.lastFirstPerson.direction)
 
 	if (mapControls && snapshot.mapTarget) {
 		sceneStackApplyVec3Tuple(mapControls.target, snapshot.mapTarget)
 		mapControls.update()
-	}
-
-	if (snapshot.controlMode === 'first-person') {
-		syncFirstPersonOrientation()
 	}
 
 	updateCameraControlActivation()
@@ -8243,7 +8180,7 @@ function handleVehicleDriveKeyboardInput(event: KeyboardEvent, pressed: boolean)
 }
 
 function setCharacterControlFlag(action: CharacterControlAction, pressed: boolean): void {
-	if (vehicleDriveState.active || controlMode.value !== 'first-person') {
+	if (vehicleDriveState.active || !runtimePanelUi.value.visible || runtimePanelUi.value.mode !== 'character') {
 		return
 	}
 	if (characterKeyState[action] === pressed) {
@@ -8272,29 +8209,14 @@ function restoreVehicleDriveCameraState(): void {
 		return
 	}
 	if (vehicleDriveCameraRestoreState.hasSnapshot) {
-		const restoredMode = vehicleDriveCameraRestoreState.controlMode
-		if (restoredMode === 'first-person') {
-			lastFirstPersonState.position.copy(vehicleDriveCameraRestoreState.position)
-			tempDirection
-				.copy(vehicleDriveCameraRestoreState.target)
-				.sub(vehicleDriveCameraRestoreState.position)
-			if (tempDirection.lengthSq() < 1e-8) {
-				tempDirection.set(0, 0, -1)
-			} else {
-				tempDirection.normalize()
-			}
-			lastFirstPersonState.direction.copy(tempDirection)
-		} else {
-			lastOrbitState.position.copy(vehicleDriveCameraRestoreState.position)
-			lastOrbitState.target.copy(vehicleDriveCameraRestoreState.target)
-		}
+		lastOrbitState.position.copy(vehicleDriveCameraRestoreState.position)
+		lastOrbitState.target.copy(vehicleDriveCameraRestoreState.target)
 		setCameraViewState(
 			vehicleDriveCameraRestoreState.viewMode,
 			vehicleDriveCameraRestoreState.viewMode === 'watching'
 				? vehicleDriveCameraRestoreState.viewTargetId ?? null
 				: null,
 		)
-		controlMode.value = restoredMode
 		setCameraCaging(vehicleDriveCameraRestoreState.isCameraCaged, { force: true })
 		activeCamera.up.copy(vehicleDriveCameraRestoreState.up)
 		activeCamera.position.copy(vehicleDriveCameraRestoreState.position)
@@ -8312,6 +8234,35 @@ function restoreVehicleDriveCameraState(): void {
 	vehicleDriveCameraFollowState.currentAnchor.copy(activeCamera.position)
 	vehicleDriveCameraFollowState.desiredAnchor.copy(activeCamera.position)
 	vehicleDriveCameraRestoreState.hasSnapshot = false
+}
+
+function restoreCharacterDriveCameraState(): void {
+	const activeCamera = camera
+	if (!activeCamera) {
+		characterDriveCameraRestoreState.hasSnapshot = false
+		setCameraCaging(false, { force: true })
+		return
+	}
+	if (characterDriveCameraRestoreState.hasSnapshot) {
+		lastOrbitState.position.copy(characterDriveCameraRestoreState.position)
+		lastOrbitState.target.copy(characterDriveCameraRestoreState.target)
+		setCameraViewState(
+			characterDriveCameraRestoreState.viewMode,
+			characterDriveCameraRestoreState.viewMode === 'watching'
+				? characterDriveCameraRestoreState.viewTargetId ?? null
+				: null,
+		)
+		setCameraCaging(characterDriveCameraRestoreState.isCameraCaged, { force: true })
+		activeCamera.up.copy(characterDriveCameraRestoreState.up)
+		activeCamera.position.copy(characterDriveCameraRestoreState.position)
+		activeCamera.quaternion.copy(characterDriveCameraRestoreState.quaternion)
+		activeCamera.updateMatrixWorld(true)
+		if (mapControls) {
+			mapControls.target.copy(characterDriveCameraRestoreState.target)
+			mapControls.update()
+		}
+	}
+	characterDriveCameraRestoreState.hasSnapshot = false
 }
 
 function startVehicleDriveMode(
@@ -8336,10 +8287,6 @@ function startVehicleDriveMode(
 	vehicleDriveExitBusy.value = false
 	resetVehicleDriveInputs()
 	activeCameraLookTween = null
-	if (controlMode.value === 'first-person') {
-		syncFirstPersonOrientation()
-		resetFirstPersonPointerDelta()
-	}
 	setCameraViewState('watching', targetNodeId)
 	setVehicleDriveUiOverride('show')
 	syncVehicleDriveCameraMode()
@@ -8371,7 +8318,6 @@ function stopVehicleDriveMode(options: { resolution?: BehaviorEventResolution; p
 	vehicleDriveExitBusy.value = false
 	if (options.preserveCamera) {
 		if (vehicleDriveCameraRestoreState.hasSnapshot) {
-			controlMode.value = vehicleDriveCameraRestoreState.controlMode
 			setCameraCaging(vehicleDriveCameraRestoreState.isCameraCaged, { force: true })
 		} else {
 			setCameraCaging(false, { force: true })
@@ -8467,7 +8413,6 @@ function alignCameraToVehicleExit(): boolean {
 			tempTarget.copy(camera.position).addScaledVector(tempDirection, VEHICLE_CAMERA_DEFAULT_LOOK_DISTANCE)
 			lastOrbitState.target.copy(tempTarget)
 		}
-		syncLastFirstPersonStateFromCamera()
 	}
 	return success
 }
@@ -8584,7 +8529,6 @@ function alignCameraToVehicleExitForNode(nodeId: string): boolean {
 	} else {
 		lastOrbitState.target.copy(protagonistPoseTarget)
 	}
-	syncLastFirstPersonStateFromCamera()
 	return true
 }
 
@@ -8645,9 +8589,6 @@ function activatePendingDefaultSteerDriveIfNeeded(): void {
 	if (!scenePreviewDriveBindingsReady.value || !event || vehicleDriveState.active || vehicleDrivePromptBusy.value) {
 		return
 	}
-	if (event.sequenceId === '__manual_vehicle_drive__' && controlMode.value !== 'third-person') {
-		controlMode.value = 'third-person'
-	}
 	vehicleDrivePromptBusy.value = true
 	try {
 		const result = startVehicleDriveMode(event)
@@ -8664,6 +8605,20 @@ function activatePendingDefaultSteerDriveIfNeeded(): void {
 	} finally {
 		vehicleDrivePromptBusy.value = false
 	}
+}
+
+function activatePendingDefaultCharacterControlIfNeeded(): void {
+	const targetNodeId = pendingDefaultCharacterControlNodeId.value
+	if (!scenePreviewDriveBindingsReady.value || !targetNodeId || vehicleDriveState.active) {
+		return
+	}
+	if (!findDefaultControlledCharacterObject()) {
+		return
+	}
+	if (characterCameraMode.value !== 'follow') {
+		characterCameraMode.value = 'follow'
+	}
+	pendingDefaultCharacterControlNodeId.value = null
 }
 
 function isVehicleDrivePendingReadinessMessage(message?: string): boolean {
@@ -8883,9 +8838,6 @@ async function handleVehicleDrivePromptConfirm(): Promise<void> {
 			}
 		})
 	}
-	if (event.sequenceId === '__manual_vehicle_drive__' && controlMode.value !== 'third-person') {
-		controlMode.value = 'third-person'
-	}
 	vehicleDrivePromptBusy.value = true
 	try {
 		const result = startVehicleDriveMode(event)
@@ -8983,36 +8935,22 @@ function handleVehicleDriveCameraToggle(): void {
 	if (!vehicleDriveState.active) {
 		return
 	}
-	if (controlMode.value !== 'third-person') {
-		controlMode.value = 'third-person'
-	}
 	toggleVehicleDriveOrbitMode()
 }
 
 function handleCharacterCameraToggle(): void {
-	if (vehicleDriveState.active || controlMode.value !== 'first-person') {
-		return
-	}
-	characterCameraMode.value = characterCameraMode.value === 'follow' ? 'first-person' : 'follow'
-	resetCharacterFollowCameraState()
-	updateCameraControlActivation()
-	if (!camera) {
+	if (vehicleDriveState.active) {
 		return
 	}
 	if (characterCameraMode.value === 'follow') {
-		updateCharacterFollowCamera(0, camera, true)
+		characterCameraMode.value = 'first-person'
 		return
 	}
-	const protagonistObject = findDefaultControlledCharacterObject()
-	syncProtagonistCameraPose({
-		force: true,
-		applyToCamera: true,
-		object: protagonistObject,
-	})
+	characterCameraMode.value = 'follow'
 }
 
 function handleRuntimePanelCameraToggle(): void {
-	if (runtimePanelUi.value.mode === 'character') {
+	if (runtimePanelUi.value.visible && runtimePanelUi.value.mode === 'character') {
 		handleCharacterCameraToggle()
 		return
 	}
@@ -9023,9 +8961,7 @@ function handleCharacterControlExitClick(): void {
 	if (vehicleDriveState.active) {
 		return
 	}
-	characterCameraMode.value = 'follow'
-	resetCharacterFollowCameraState()
-	controlMode.value = 'third-person'
+	characterCameraMode.value = 'first-person'
 }
 
 function handleRuntimePanelExitClick(): void {
@@ -9224,63 +9160,6 @@ function handleCanvasClick(event: MouseEvent) {
 	}
 }
 
-function resetFirstPersonPointerDelta() {
-	if (!firstPersonControls) {
-		return
-	}
-	const internalControls = firstPersonControls as FirstPersonControls & { _pointerX?: number; _pointerY?: number }
-	if (typeof internalControls._pointerX === 'number') {
-		internalControls._pointerX = 0
-	}
-	if (typeof internalControls._pointerY === 'number') {
-		internalControls._pointerY = 0
-	}
-}
-
-
-function syncFirstPersonOrientation() {
-	if (!firstPersonControls) {
-		return
-	}
-	const internalControls = firstPersonControls as FirstPersonControls & { _setOrientation?: () => void }
-	internalControls._setOrientation?.()
-}
-
-function syncLastFirstPersonStateFromCamera() {
-	if (!camera) {
-		return
-	}
-	lastFirstPersonState.position.copy(camera.position)
-	camera.getWorldDirection(lastFirstPersonState.direction)
-}
-
-function clampFirstPersonPitch(force = false) {
-	if (!camera) {
-		return
-	}
-	if (!force && controlMode.value !== 'first-person') {
-		return
-	}
-	tempDirection.set(0, 0, 0)
-	camera.getWorldDirection(tempDirection)
-	const currentPitch = Math.asin(THREE.MathUtils.clamp(tempDirection.y, -1, 1))
-	const clampedPitch = THREE.MathUtils.clamp(currentPitch, -FIRST_PERSON_PITCH_LIMIT, FIRST_PERSON_PITCH_LIMIT)
-	if (Math.abs(clampedPitch - currentPitch) < 1e-4) {
-		return
-	}
-	const yaw = Math.atan2(tempDirection.x, -tempDirection.z)
-	const cosPitch = Math.cos(clampedPitch)
-	tempDirection.set(
-		Math.sin(yaw) * cosPitch,
-		Math.sin(clampedPitch),
-		-Math.cos(yaw) * cosPitch,
-	)
-	tempTarget.copy(camera.position).add(tempDirection)
-	camera.lookAt(tempTarget)
-	syncFirstPersonOrientation()
-	syncLastFirstPersonStateFromCamera()
-}
-
 // Reset the active camera to a level (horizontal) view without changing yaw
 function resetCameraToLevelView() {
 	if (!camera) {
@@ -9292,30 +9171,7 @@ function resetCameraToLevelView() {
 	}
 	activeCameraLookTween = null
 	setCameraCaging(false)
-	if (controlMode.value === 'first-person' && firstPersonControls) {
-		tempDirection.set(0, 0, 0)
-		camera.getWorldDirection(tempDirection)
-		const startTarget = camera.position.clone().add(tempDirection)
-		const yaw = Math.atan2(tempDirection.x, -tempDirection.z)
-		tempDirection.set(Math.sin(yaw), 0, -Math.cos(yaw))
-		const levelTarget = camera.position.clone().add(tempDirection)
-		if (startTarget.distanceToSquared(levelTarget) < 1e-6) {
-			firstPersonControls.lookAt(levelTarget.x, levelTarget.y, levelTarget.z)
-			clampFirstPersonPitch(true)
-			syncFirstPersonOrientation()
-			resetFirstPersonPointerDelta()
-			syncLastFirstPersonStateFromCamera()
-		} else {
-			activeCameraLookTween = {
-				mode: 'first-person',
-				from: startTarget,
-				to: levelTarget,
-				duration: CAMERA_LEVEL_TWEEN_DURATION,
-				elapsed: 0,
-			}
-			resetFirstPersonPointerDelta()
-		}
-	} else if (mapControls && camera) {
+	if (mapControls && camera) {
 		const startTarget = mapControls.target.clone()
 		const levelTarget = startTarget.clone()
 		if (startTarget.distanceToSquared(levelTarget) < 1e-6) {
@@ -9372,26 +9228,6 @@ function updateOrbitCameraLookTween(delta: number): void {
 	}
 }
 
-function updateFirstPersonCameraLookTween(delta: number): void {
-	if (!activeCameraLookTween || activeCameraLookTween.mode !== 'first-person' || !firstPersonControls || !camera) {
-		return
-	}
-	const tween = activeCameraLookTween
-	const duration = tween.duration > 0 ? tween.duration : 0.0001
-	tween.elapsed = Math.min(tween.elapsed + delta, tween.duration)
-	const progress = easeInOutCubic(Math.min(1, tween.elapsed / duration))
-	tempTarget.copy(tween.from).lerp(tween.to, progress)
-	firstPersonControls.lookAt(tempTarget.x, tempTarget.y, tempTarget.z)
-	if (tween.elapsed >= tween.duration) {
-		firstPersonControls.lookAt(tween.to.x, tween.to.y, tween.to.z)
-		clampFirstPersonPitch(true)
-		syncFirstPersonOrientation()
-		syncLastFirstPersonStateFromCamera()
-		activeCameraLookTween = null
-		scenePreviewPerf.markInstancedCullingDirty()
-	}
-}
-
 watch(isPlaying, (playing) => {
 	nodeAnimationRuntime.listMixers().forEach((mixer) => {
 		mixer.timeScale = playing ? 1 : 0
@@ -9403,56 +9239,6 @@ watch(() => statsContainerRef.value, (value) => {
 		setupStatsPanels()
 	}
 })
-
-function applyControlMode(mode: ControlMode) {
-	const activeCamera = camera
-	if (!activeCamera || !renderer) {
-		return
-	}
-	if (mode !== 'first-person') {
-		characterAuthorityInput.moveX = 0
-		characterAuthorityInput.moveZ = 0
-		characterAuthorityInput.jump = false
-		characterAuthorityInput.sprint = false
-		characterAuthorityInput.crouch = false
-		characterAuthorityInput.interact = false
-		characterKeyState.forward = false
-		characterKeyState.backward = false
-		characterKeyState.left = false
-		characterKeyState.right = false
-		characterKeyState.jump = false
-		characterKeyState.sprint = false
-		characterKeyState.crouch = false
-		characterKeyState.interact = false
-		characterInputJumpLatch = false
-	}
-	activeCameraLookTween = null
-	if (vehicleDriveState.active) {
-		syncVehicleDriveCameraMode()
-		return
-	}
-	if (mode === 'first-person') {
-		setCameraCaging(false, { force: true })
-		if (characterCameraMode.value === 'follow') {
-			resetCharacterFollowCameraState()
-			updateCharacterFollowCamera(0, activeCamera, true)
-		} else {
-			activeCamera.position.copy(lastFirstPersonState.position)
-			const target = new THREE.Vector3().copy(lastFirstPersonState.position).add(lastFirstPersonState.direction)
-			activeCamera.lookAt(target)
-			clampFirstPersonPitch(true)
-			syncFirstPersonOrientation()
-			resetFirstPersonPointerDelta()
-			syncLastFirstPersonStateFromCamera()
-		}
-	} else {
-		activeCamera.position.copy(lastOrbitState.position)
-		mapControls?.target.copy(lastOrbitState.target)
-		mapControls?.update()
-	}
-	updateCameraControlActivation()
-	scenePreviewPerf.markInstancedCullingDirty()
-}
 
 function prepareStatsDom(element: HTMLDivElement, extraClass: string): void {
 	element.classList.add('scene-preview__stats-panel', extraClass)
@@ -9619,11 +9405,6 @@ function initControls() {
 	if (!camera || !renderer) {
 		return
 	}
-	firstPersonControls = new FirstPersonControls(camera, renderer.domElement)
-	firstPersonControls.lookSpeed = FIRST_PERSON_LOOK_SPEED
-	firstPersonControls.movementSpeed = FIRST_PERSON_MOVE_SPEED
-	firstPersonControls.lookVertical = true
-
 	mapControls = new MapControls(camera, renderer.domElement)
 	mapControls.enableDamping = false
 	mapControls.dampingFactor = 0.08
@@ -9646,7 +9427,7 @@ function initControls() {
 			followCameraControlDirty = true
 		}
 	})
-	applyControlMode(controlMode.value)
+	updateCameraControlActivation()
 }
 
 function handleResize() {
@@ -9670,6 +9451,7 @@ function handleFullscreenChange() {
 function handleWindowBlur() {
 	characterAuthorityInput.moveX = 0
 	characterAuthorityInput.moveZ = 0
+	characterAuthorityInput.turn = 0
 	characterAuthorityInput.jump = false
 	characterAuthorityInput.sprint = false
 	characterAuthorityInput.crouch = false
@@ -9695,18 +9477,10 @@ function handleKeyDown(event: KeyboardEvent) {
 	if (isInputLikeElement(event.target)) {
 		return
 	}
-	if (event.code === 'KeyQ' && controlMode.value !== 'first-person') {
-		rotationState.q = true
-		return
-	}
-	if (event.code === 'KeyE' && controlMode.value !== 'first-person') {
-		rotationState.e = true
-		return
-	}
 	if (handleVehicleDriveKeyboardInput(event, true)) {
 		return
 	}
-	if (controlMode.value === 'first-person') {
+	if (runtimePanelUi.value.mode === 'character') {
 		if (event.code === 'KeyW' || event.code === 'ArrowUp') {
 			characterKeyState.forward = true
 			updateCharacterAuthorityInputFromKeys()
@@ -9736,19 +9510,9 @@ function handleKeyDown(event: KeyboardEvent) {
 	if (event.repeat) {
 		return
 	}
-	switch (event.code) {
-		case 'Digit1':
-			controlMode.value = 'first-person'
-			break
-		case 'Digit3':
-			controlMode.value = 'third-person'
-			break
-		case 'KeyP':
-			event.preventDefault()
-			captureScreenshot()
-			break
-		default:
-			break
+	if (event.code === 'KeyP') {
+		event.preventDefault()
+		captureScreenshot()
 	}
 }
 
@@ -9759,15 +9523,10 @@ function handleKeyUp(event: KeyboardEvent) {
 	if (isInputLikeElement(event.target)) {
 		return
 	}
-	if (event.code === 'KeyQ' && controlMode.value !== 'first-person') {
-		rotationState.q = false
-		return
-	}
-	if (event.code === 'KeyE' && controlMode.value !== 'first-person') {
-		rotationState.e = false
-		return
-	}
 	if (handleVehicleDriveKeyboardInput(event, false)) {
+		return
+	}
+	if (!runtimePanelUi.value.visible || runtimePanelUi.value.mode !== 'character') {
 		return
 	}
 	if (event.code === 'KeyW' || event.code === 'ArrowUp') {
@@ -9823,30 +9582,6 @@ function updateCameraControlsForFrame(
 	activeCamera: THREE.PerspectiveCamera,
 	followCameraActive: boolean,
 ): void {
-	if (
-		controlMode.value === 'first-person'
-		&& characterCameraMode.value === 'first-person'
-		&& firstPersonControls
-		&& !vehicleDriveState.active
-	) {
-		const rotationDirection = Number(rotationState.q) - Number(rotationState.e)
-		if (rotationDirection !== 0 && activeCameraLookTween?.mode === 'first-person') {
-			activeCameraLookTween = null
-		}
-		if (rotationDirection !== 0) {
-			const yawDegrees = rotationDirection * FIRST_PERSON_ROTATION_SPEED * delta
-			const controlsInternal = firstPersonControls as FirstPersonControls & { _lon: number }
-			const currentLon = controlsInternal._lon ?? 0
-			const nextLon = THREE.MathUtils.euclideanModulo(currentLon + yawDegrees, 360)
-			controlsInternal._lon = nextLon
-		}
-		firstPersonControls.update(delta)
-		updateFirstPersonCameraLookTween(delta)
-		clampFirstPersonPitch()
-		syncLastFirstPersonStateFromCamera()
-		return
-	}
-
 	if (mapControls && !followCameraActive) {
 		updateOrbitCameraLookTween(delta)
 		mapControls.update()
@@ -9902,7 +9637,7 @@ function updatePlaybackSystemsForFrame(delta: number): boolean {
 	}
 	stepPhysicsWorld(delta)
 	syncScenePreviewPhysicsBridgeVehicleInput()
-	syncScenePreviewPhysicsBridgeCharacterInput()
+	syncScenePreviewPhysicsBridgeCharacterInput(delta)
 	syncScenePreviewPhysicsBridgeBodyTransforms()
 	stepScenePreviewPhysicsBridge(delta)
 	updateVehicleSpeedFromVehicle()
@@ -10174,7 +9909,6 @@ function startAnimationLoop() {
 		const vehicleFollowCameraActive = vehicleDriveState.active && vehicleDriveCameraMode.value === 'follow'
 		const characterFollowCameraActive =
 			!vehicleDriveState.active
-			&& controlMode.value === 'first-person'
 			&& characterCameraMode.value === 'follow'
 		const autoTourFollowCameraActive = Boolean(autoTourFollowNodeId.value) && !vehicleDriveState.active
 		const followCameraActive = vehicleFollowCameraActive || characterFollowCameraActive || autoTourFollowCameraActive
@@ -10187,6 +9921,7 @@ function startAnimationLoop() {
 		}
 		retryPendingVehicleDriveIfNeeded()
 		activatePendingDefaultSteerDriveIfNeeded()
+		activatePendingDefaultCharacterControlIfNeeded()
 		if (!isPlaying.value && vehicleDriveState.active && !physicsEnvironmentEnabled.value) {
 			applyVehicleDriveForces(delta)
 			vehicleTransformDriveUpdated = true
@@ -10245,6 +9980,7 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	resetCharacterFollowCameraState()
 	characterAuthorityInput.moveX = 0
 	characterAuthorityInput.moveZ = 0
+	characterAuthorityInput.turn = 0
 	characterAuthorityInput.jump = false
 	characterAuthorityInput.sprint = false
 	characterAuthorityInput.crouch = false
@@ -10958,7 +10694,7 @@ function registerSubtree(object: THREE.Object3D, pending?: Map<string, THREE.Obj
 				syncInstancedTransform(child)
 			}
 			if (resolveDefaultControlledCharacterNodeId() === nodeId) {
-				const protagonistCameraActive = !vehicleDriveState.active && (controlMode.value === 'first-person' || cameraViewState.mode === 'level')
+				const protagonistCameraActive = !vehicleDriveState.active && cameraViewState.mode === 'level'
 				syncProtagonistCameraPose({
 					object: child,
 					applyToCamera: protagonistCameraActive,
@@ -11484,7 +11220,26 @@ async function loadScenePreviewPhysicsBridgeScene(
 		if (requestId !== physicsBridgeSceneRequestId) {
 			return
 		}
-	updateScenePreviewPhysicsBridgeIndex(document, asset)
+		updateScenePreviewPhysicsBridgeIndex(document, asset)
+		const missingCharacterControllers: string[] = []
+		const stack: SceneNode[] = Array.isArray(document.nodes) ? [...document.nodes] : []
+		while (stack.length) {
+			const node = stack.pop()
+			if (!node) {
+				continue
+			}
+			if (resolveCharacterControllerComponent(node) && !physicsBridgeCharacterIdByNodeId.has(node.id)) {
+				missingCharacterControllers.push(node.name?.trim() || node.id)
+			}
+			if (Array.isArray(node.children) && node.children.length) {
+				stack.push(...node.children)
+			}
+		}
+		if (missingCharacterControllers.length > 0) {
+			appendWarningMessage(
+				`CharacterController nodes need a Rigidbody on the same node to move in preview: ${missingCharacterControllers.join(', ')}`,
+			)
+		}
 		physicsBridgeSceneLoaded = true
 	} catch (error) {
 		const message = error instanceof Error ? error.message : 'Scene preview physics load failed'
@@ -11930,16 +11685,11 @@ function syncScenePreviewPhysicsBridgeVehicleInput(): void {
 	})
 }
 
-function resolveScenePreviewCharacterInputYaw(): number {
-	const activeCamera = camera
-	if (activeCamera) {
-		activeCamera.getWorldDirection(tempDirection)
-		tempDirection.y = 0
-		if (tempDirection.lengthSq() > 1e-8) {
-			tempDirection.normalize()
-			return Math.atan2(tempDirection.x, tempDirection.z)
-		}
-	}
+function normalizeScenePreviewCharacterInputYaw(value: number): number {
+	return THREE.MathUtils.euclideanModulo(value + Math.PI, Math.PI * 2) - Math.PI
+}
+
+function resolveScenePreviewCharacterInputYawSeed(): number {
 	const controlledObject = findDefaultControlledCharacterObject()
 	if (controlledObject) {
 		controlledObject.getWorldQuaternion(tempQuaternion)
@@ -11950,20 +11700,52 @@ function resolveScenePreviewCharacterInputYaw(): number {
 			return Math.atan2(tempDirection.x, tempDirection.z)
 		}
 	}
+	const activeCamera = camera
+	if (activeCamera) {
+		activeCamera.getWorldDirection(tempDirection)
+		tempDirection.y = 0
+		if (tempDirection.lengthSq() > 1e-8) {
+			tempDirection.normalize()
+			return Math.atan2(tempDirection.x, tempDirection.z)
+		}
+	}
 	return Math.PI
 }
 
-function syncScenePreviewPhysicsBridgeCharacterInput(): void {
+function resolveScenePreviewCharacterTurnRateRadiansPerSecond(): number {
+	const props = resolveDefaultControlledCharacterComponentProps()
+	return ((props?.turnRateDegreesPerSecond ?? 540) * Math.PI) / 180
+}
+
+function updateScenePreviewCharacterInputYaw(deltaSeconds: number): number {
+	const controlledNodeId = resolveDefaultControlledCharacterNodeId()
+	const hasTurnInput = Math.abs(characterAuthorityInput.turn) > 0.05
+	if (characterInputYawNodeId !== controlledNodeId) {
+		characterInputYawNodeId = controlledNodeId
+		characterInputYawInitialized = false
+	}
+	if (!characterInputYawInitialized) {
+		characterInputYaw = resolveScenePreviewCharacterInputYawSeed()
+		characterInputYawInitialized = true
+	}
+	if (hasTurnInput && Number.isFinite(deltaSeconds) && deltaSeconds > 0) {
+		characterInputYaw += characterAuthorityInput.turn * resolveScenePreviewCharacterTurnRateRadiansPerSecond() * deltaSeconds
+		characterInputYaw = normalizeScenePreviewCharacterInputYaw(characterInputYaw)
+	}
+	return characterInputYaw
+}
+
+function syncScenePreviewPhysicsBridgeCharacterInput(deltaSeconds: number): void {
 	if (!physicsBridge || !physicsBridgeSceneLoaded || !physicsBridgeCharacterIdByNodeId.size) {
 		return
 	}
 	const controlledNodeId = resolveDefaultControlledCharacterNodeId()
-	const yaw = resolveScenePreviewCharacterInputYaw()
+	const yaw = updateScenePreviewCharacterInputYaw(deltaSeconds)
 	physicsBridgeCharacterIdByNodeId.forEach((characterId, nodeId) => {
 		const isControlled = nodeId === controlledNodeId
 		void physicsBridge?.setCharacterInput({
 			characterId,
-			moveX: isControlled ? characterAuthorityInput.moveX : 0,
+			moveX: 0,
 			moveZ: isControlled ? characterAuthorityInput.moveZ : 0,
 			yaw,
 			jump: isControlled ? characterAuthorityInput.jump : false,
@@ -14008,7 +13790,7 @@ async function applyInitialDocumentGraph(
 	})
 	refreshAnimations()
 	initializeLazyPlaceholders(document)
-	const protagonistCameraActive = !vehicleDriveState.active && (controlMode.value === 'first-person' || controlMode.value === 'third-person')
+	const protagonistCameraActive = !vehicleDriveState.active
 	syncProtagonistCameraPose({ force: true, applyToCamera: protagonistCameraActive })
 	if (isRigidbodyDebugVisible.value) {
 		syncRigidbodyDebugHelpers()
@@ -14357,10 +14139,6 @@ onBeforeUnmount(() => {
 	lanternViewerInstance = null
 	nodeAnimationRuntime.listMixers().forEach((mixer) => mixer.stopAllAction())
 	nodeAnimationRuntime.reset()
-	if (firstPersonControls) {
-		firstPersonControls.dispose()
-		firstPersonControls = null
-	}
 	if (mapControls) {
 		mapControls.dispose()
 		mapControls = null
@@ -15024,31 +14802,6 @@ watch(
 					:title="isPlaying ? 'Pause animation' : 'Play animation'"
 					@click="togglePlayback"
 				/>
-				<v-btn-toggle
-					class="scene-preview__control-mode"
-					v-model="controlMode"
-					mandatory
-					density="compact"
-					:disabled="runtimePanelUi.cameraLocked"
-
-					rounded
-				>
-					<v-btn
-						value="first-person"
-						icon="mdi-human-greeting"
-						size="small"
-						:aria-label="'First-person view'"
-						:title="'First-person view (Hotkey 1)'"
-					/>
-					<v-btn
-						value="third-person"
-						icon="mdi-compass"
-						size="small"
-
-						:aria-label="'Third-person view'"
-						:title="'Third-person view (Hotkey 3)'"
-					/>
-				</v-btn-toggle>
 				<v-menu
 					v-model="isVolumeMenuOpen"
 					location="top"

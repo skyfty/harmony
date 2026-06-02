@@ -12,6 +12,7 @@ export type CharacterControlRuntimeState = {
 	crouching?: boolean
 	jumpPhase?: 'start' | 'loop' | 'land' | null
 	interacting?: boolean
+	turn?: number
 	moveX?: number
 	moveZ?: number
 }
@@ -87,7 +88,7 @@ export function resolveCharacterControlSpeed(
 export function chooseCharacterControlClipName(
 	props: CharacterControllerComponentProps,
 	movementMagnitude: number,
- 	state: CharacterControlRuntimeState = {},
+	state: CharacterControlRuntimeState = {},
 ): string | null {
 	if (state.interacting) {
 		return resolveAnimationBindingClipName(props, 'interact')
@@ -136,6 +137,12 @@ export function chooseCharacterControlClipName(
 			?? null
 	}
 	if (movementMagnitude <= 0.05) {
+		const turn = state.turn ?? 0
+		if (Math.abs(turn) > 0.05) {
+			return resolveAnimationBindingClipName(props, turn > 0 ? 'turnRight' : 'turnLeft')
+				?? resolveAnimationBindingClipName(props, 'idle')
+				?? null
+		}
 		return resolveAnimationBindingClipName(props, 'idle')
 			?? null
 	}
