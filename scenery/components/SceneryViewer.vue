@@ -358,6 +358,7 @@ import { buildPhysicsSceneAsset } from '@harmony/schema/physicsSceneAsset';
 import {
   type PhysicsBackendPreference,
   type PhysicsBridge,
+  type PhysicsContactEvent,
   type PhysicsSceneAsset,
   type PhysicsStepFrame,
   type PhysicsTransform,
@@ -604,6 +605,7 @@ import {
   ANIMATION_COMPONENT_TYPE,
   type AnimationComponentProps,
 } from '@harmony/schema/components/definitions/animationComponent';
+import { CharacterControllerAnimationRuntimeManager } from '@harmony/schema/characterControllerAnimationRuntime';
 import {
   behaviorComponentDefinition,
 } from '@harmony/schema/components/definitions/behaviorComponent';
@@ -2424,6 +2426,8 @@ const remoteMultiuserPeerRoot = new THREE.Group();
 remoteMultiuserPeerRoot.name = 'RemoteMultiuserPeers';
 const networkSyncNodeEntries = new Map<string, NetworkSyncNodeRuntimeEntry>();
 const physicsAuthorityNodeEntries = new Map<string, PhysicsAuthorityNodeRuntimeEntry>();
+const characterControllerAnimationRuntime = new CharacterControllerAnimationRuntimeManager();
+const physicsBridgeContactsByNodeId = new Map<string, PhysicsContactEvent[]>();
 const remoteSharedEntityEntries = new Map<string, RemoteSharedEntityEntry>();
 const remotePhysicsAuthorityEntries = new Map<string, RemotePhysicsAuthorityEntry>();
 const remotePhysicsAuthorityContactPairs = new Map<string, Set<PhysicsAuthorityContactPairKey>>();
@@ -3054,12 +3058,15 @@ const characterKeyState = reactive({
   interact: false,
 });
 let characterInputJumpLatch = false;
-
 function getVehicleSpeedDisplayNowMs(): number {
   if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
     return performance.now();
   }
   return Date.now();
+}
+
+function getCharacterAnimationNowMs(): number {
+  return getVehicleSpeedDisplayNowMs();
 }
 
 function commitVehicleSpeedDisplay(speedMps: number, nowMs: number): void {
@@ -4448,7 +4455,7 @@ function resolveRuntimePrefabAnchorNodeId(request: RuntimePrefabSpawnRequest): s
       return byName.id;
     }
   }
-  return protagonistNodeId ?? null;
+  return resolveDefaultControlledCharacterNodeId();
 }
 
 function cloneVectorLikeValue(value: Vector3Like | null | undefined): Vector3Like | null {
@@ -4816,6 +4823,37 @@ function resolveDefaultSteerBinding(
           return binding;
         }
         fallback ??= binding;
+      }
+    }
+    if (Array.isArray(node.children) && node.children.length) {
+      stack.push(...node.children);
+    }
+  }
+  return fallback;
+}
+
+function resolveDefaultCharacterSteerNodeId(
+  document: SceneJsonExportDocument | null,
+  defaultSteerIdentifier: string | null,
+): string | null {
+  if (!document) {
+    return null;
+  }
+  const stack: SceneNode[] = Array.isArray(document.nodes) ? [...document.nodes] : [];
+  let fallback: string | null = null;
+  while (stack.length) {
+    const node = stack.pop();
+    if (!node) {
+      continue;
+    }
+    const steerComponent = resolveEnabledComponentState<SteerComponentProps>(node, STEER_COMPONENT_TYPE);
+    if (steerComponent) {
+      const steerProps = clampSteerComponentProps(steerComponent.props ?? null);
+      if (steerProps.targetType === 'character' && steerProps.targetNodeId && steerProps.autoEnterOnSceneLoad) {
+        if (defaultSteerIdentifier && steerProps.defaultIdentifier === defaultSteerIdentifier) {
+          return steerProps.targetNodeId;
+        }
+        fallback ??= steerProps.targetNodeId;
       }
     }
     if (Array.isArray(node.children) && node.children.length) {
@@ -5481,8 +5519,15 @@ function resolveParentNodeId(nodeId: string): string | null {
   return resolveSceneParentNodeId(previewParentMap, nodeId);
 }
 
+function resolveDefaultControlledCharacterNodeId(): string | null {
+  const defaultSteerIdentifier = typeof props.defaultSteerIdentifier === 'string'
+    ? props.defaultSteerIdentifier.trim() || null
+    : null;
+  return resolveDefaultCharacterSteerNodeId(currentDocument, defaultSteerIdentifier);
+}
+
 function resolveCameraDistanceReferenceNodeId(): string | null {
-  return protagonistNodeId ?? resolveNodeIdFromObject(findProtagonistObject());
+  return resolveDefaultControlledCharacterNodeId();
 }
 
 function resolveNodePlaneAnchorPoint(nodeId: string | null): THREE.Vector3 | null {
@@ -5771,6 +5816,63 @@ function collectPhysicsAuthorityNodeEntries(document: SceneJsonExportDocument | 
 
 function resolveNodeById(nodeId: string): SceneNode | null {
   return resolveSceneNodeById(previewNodeMap, nodeId);
+}
+
+function isCharacterControllerAnimationNode(nodeId: string): boolean {
+  return characterControllerAnimationRuntime.has(nodeId);
+}
+
+function scheduleCharacterControllerAnimationResync(nodeId: string): void {
+  characterControllerAnimationRuntime.scheduleResync(nodeId);
+}
+
+function acquireCharacterControllerBehaviorOverride(nodeId: string, token: string | null | undefined): void {
+  characterControllerAnimationRuntime.acquireBehaviorOverride(nodeId, token);
+}
+
+function releaseCharacterControllerBehaviorOverride(token: string | null | undefined): void {
+  characterControllerAnimationRuntime.releaseBehaviorOverride(token);
+}
+
+function refreshCharacterControllerAnimationRuntimeEntries(): void {
+  const controlledNodeId = resolveDefaultControlledCharacterNodeId();
+  characterControllerAnimationRuntime.refresh({
+    nodeAnimationRuntime,
+    iterNodes: () => previewNodeMap.entries(),
+    resolveNode: (nodeId) => resolveNodeById(nodeId),
+    resolveInput: (nodeId) => ({
+      moveX: controlledNodeId === nodeId ? characterAuthorityInput.moveX : 0,
+      moveZ: controlledNodeId === nodeId ? characterAuthorityInput.moveZ : 0,
+      jump: controlledNodeId === nodeId ? characterAuthorityInput.jump : false,
+      sprint: controlledNodeId === nodeId ? characterAuthorityInput.sprint : false,
+      crouch: controlledNodeId === nodeId ? characterAuthorityInput.crouch : false,
+      interact: controlledNodeId === nodeId ? characterAuthorityInput.interact : false,
+      locallyControlled: controlledNodeId === nodeId,
+    }),
+    resolveGroundContacts: (nodeId) => physicsBridgeContactsByNodeId.get(nodeId) ?? null,
+  });
+}
+
+function updateCharacterControllerAnimations(deltaSeconds: number): void {
+  if (deltaSeconds < 0) {
+    return;
+  }
+  const controlledNodeId = resolveDefaultControlledCharacterNodeId();
+  characterControllerAnimationRuntime.update({
+    nodeAnimationRuntime,
+    iterNodes: () => previewNodeMap.entries(),
+    resolveNode: (nodeId) => resolveNodeById(nodeId),
+    resolveInput: (nodeId) => ({
+      moveX: controlledNodeId === nodeId ? characterAuthorityInput.moveX : 0,
+      moveZ: controlledNodeId === nodeId ? characterAuthorityInput.moveZ : 0,
+      jump: controlledNodeId === nodeId ? characterAuthorityInput.jump : false,
+      sprint: controlledNodeId === nodeId ? characterAuthorityInput.sprint : false,
+      crouch: controlledNodeId === nodeId ? characterAuthorityInput.crouch : false,
+      interact: controlledNodeId === nodeId ? characterAuthorityInput.interact : false,
+      locallyControlled: controlledNodeId === nodeId,
+    }),
+    resolveGroundContacts: (nodeId) => physicsBridgeContactsByNodeId.get(nodeId) ?? null,
+  }, getCharacterAnimationNowMs());
 }
 
 type CouponNodeVisibilityEntry = {
@@ -7139,7 +7241,7 @@ function registerSceneSubtree(root: THREE.Object3D): void {
       applyMaterialOverrides(object, nodeState.materials, materialOverrideOptions);
     }
     syncInstancedTransform(object);
-    if (object.userData?.protagonist) {
+    if (resolveDefaultControlledCharacterNodeId() === nodeId) {
       syncProtagonistCameraPose({
         force: true,
         object,
@@ -7505,6 +7607,7 @@ function updateSceneryPhysicsBridgeIndex(asset: PhysicsSceneAsset): void {
   physicsBridgeNodeIdByBodyId.clear();
   physicsBridgeVehicleIdByNodeId.clear();
   physicsBridgeFrameBodiesByNodeId.clear();
+  physicsBridgeContactsByNodeId.clear();
   physicsBridgeDirtyBodyNodeIds.clear();
   physicsBridgeBodyDirtyRevisionByNodeId.clear();
   physicsBridgePendingBodySyncRevisionByNodeId.clear();
@@ -7616,6 +7719,40 @@ function syncSceneryBridgeVehicleFromFrame(nodeId: string, state: PhysicsBridgeB
 }
 
 function consumeSceneryPhysicsBridgeStepFrame(frame: PhysicsStepFrame): void {
+  const nextContactsByNodeId = new Map<string, PhysicsContactEvent[]>();
+  if (frame.bodyCount > 0 && frame.bodyMeta?.length) {
+    for (let index = 0; index < frame.bodyCount; index += 1) {
+      const bodyId = frame.bodyMeta[index];
+      if (typeof bodyId !== 'number') {
+        continue;
+      }
+      const nodeId = physicsBridgeNodeIdByBodyId.get(bodyId);
+      if (!nodeId) {
+        continue;
+      }
+      nextContactsByNodeId.set(nodeId, []);
+    }
+  }
+  if (Array.isArray(frame.contacts) && frame.contacts.length) {
+    frame.contacts.forEach((contact) => {
+      const nodeIdA = physicsBridgeNodeIdByBodyId.get(contact.bodyIdA);
+      if (nodeIdA) {
+        const contacts = nextContactsByNodeId.get(nodeIdA) ?? [];
+        contacts.push(contact);
+        nextContactsByNodeId.set(nodeIdA, contacts);
+      }
+      const nodeIdB = physicsBridgeNodeIdByBodyId.get(contact.bodyIdB);
+      if (nodeIdB) {
+        const contacts = nextContactsByNodeId.get(nodeIdB) ?? [];
+        contacts.push(contact);
+        nextContactsByNodeId.set(nodeIdB, contacts);
+      }
+    });
+  }
+  physicsBridgeContactsByNodeId.clear();
+  nextContactsByNodeId.forEach((contacts, nodeId) => {
+    physicsBridgeContactsByNodeId.set(nodeId, contacts);
+  });
   if (
     frame.bodyCount <= 0
     || frame.bodyTransforms.length === 0
@@ -9567,6 +9704,7 @@ function clearDelayTimer(token: string): void {
 function stopBehaviorAnimation(token: string): void {
   const cancel = activeBehaviorAnimations.get(token);
   if (!cancel) {
+    releaseCharacterControllerBehaviorOverride(token);
     return;
   }
   try {
@@ -9985,14 +10123,16 @@ function registerProtagonistObject(object: THREE.Object3D): void {
   scenePreviewPerf.registerProtagonist(id, rigidbody?.body ?? null);
 }
 
-function findProtagonistObject(): THREE.Object3D | null {
-  for (const object of nodeObjectMap.values()) {
-    if (object.userData?.protagonist) {
-      registerProtagonistObject(object);
-      return object;
-    }
+function findDefaultControlledCharacterObject(): THREE.Object3D | null {
+  const controlledNodeId = resolveDefaultControlledCharacterNodeId();
+  if (!controlledNodeId) {
+    return null;
   }
-  return null;
+  const object = nodeObjectMap.get(controlledNodeId) ?? null;
+  if (object) {
+    registerProtagonistObject(object);
+  }
+  return object;
 }
 
 type ProtagonistPoseOptions = {
@@ -10005,7 +10145,7 @@ function syncProtagonistCameraPose(options: ProtagonistPoseOptions = {}): boolea
   if (!options.force && protagonistPoseSynced) {
     return false;
   }
-  const protagonistObject = options.object ?? findProtagonistObject();
+  const protagonistObject = options.object ?? findDefaultControlledCharacterObject();
   if (!protagonistObject) {
     return false;
   }
@@ -11904,8 +12044,8 @@ function resolveLocalMultiuserPeerState(): MultiuserPeerState | null {
     }
   }
 
-  const protagonistObject = findProtagonistObject();
-  const resolvedNodeId = protagonistNodeId ?? resolveNodeIdFromObject(protagonistObject);
+  const protagonistObject = findDefaultControlledCharacterObject();
+  const resolvedNodeId = resolveDefaultControlledCharacterNodeId();
   if (!protagonistObject || !resolvedNodeId) {
     return null;
   }
@@ -12371,6 +12511,7 @@ function resetAnimationControllers(): void {
     }
   });
   activeBehaviorAnimations.clear();
+  characterControllerAnimationRuntime.clear();
   nodeAnimationRuntime.listMixers().forEach((mixer) => {
     try {
       mixer.stopAllAction();
@@ -12440,6 +12581,7 @@ function refreshAnimationControllers(root: THREE.Object3D): void {
       timeScale: component.props.timeScale,
     });
   });
+  refreshCharacterControllerAnimationRuntimeEntries();
   refreshEffectRuntimeTickers();
 }
 
@@ -12552,10 +12694,16 @@ function handlePlayAnimationEvent(event: Extract<BehaviorRuntimeEvent, { type: '
     return;
   }
   const token = event.token;
+  if (token) {
+    stopBehaviorAnimation(token);
+  }
+  const isCharacterControlledTarget = isCharacterControllerAnimationNode(targetNodeId);
+  if (isCharacterControlledTarget) {
+    acquireCharacterControllerBehaviorOverride(targetNodeId, token);
+  }
   if (!token) {
     return;
   }
-  stopBehaviorAnimation(token);
   if (event.loop) {
     resolveBehaviorToken(token, { type: 'continue' });
     return;
@@ -12570,7 +12718,10 @@ function handlePlayAnimationEvent(event: Extract<BehaviorRuntimeEvent, { type: '
     }
     mixer.removeEventListener('finished', onFinished);
     activeBehaviorAnimations.delete(token);
-    restartDefaultAnimation(targetNodeId);
+    releaseCharacterControllerBehaviorOverride(token);
+    if (!isCharacterControlledTarget) {
+      restartDefaultAnimation(targetNodeId);
+    }
     resolveBehaviorToken(token, { type: 'continue' });
   };
   const cancel = () => {
@@ -12580,7 +12731,10 @@ function handlePlayAnimationEvent(event: Extract<BehaviorRuntimeEvent, { type: '
     } catch (error) {
       console.warn('Failed to stop animation', error);
     }
-    restartDefaultAnimation(targetNodeId);
+    releaseCharacterControllerBehaviorOverride(token);
+    if (!isCharacterControlledTarget) {
+      restartDefaultAnimation(targetNodeId);
+    }
   };
   activeBehaviorAnimations.set(token, cancel);
   mixer.addEventListener('finished', onFinished);
@@ -12589,6 +12743,18 @@ function handlePlayAnimationEvent(event: Extract<BehaviorRuntimeEvent, { type: '
 function handleStopAnimationEvent(event: Extract<BehaviorRuntimeEvent, { type: 'stop-animation' }>) {
   const targetNodeId = event.targetNodeId || event.nodeId;
   if (!targetNodeId) {
+    return;
+  }
+  if (isCharacterControllerAnimationNode(targetNodeId)) {
+    const overrideTokens = characterControllerAnimationRuntime.getBehaviorOverrideTokens(targetNodeId);
+    if (overrideTokens.length) {
+      overrideTokens.forEach((token) => {
+        stopBehaviorAnimation(token);
+      });
+    } else {
+      scheduleCharacterControllerAnimationResync(targetNodeId);
+    }
+    nodeAnimationRuntime.stopNodeAnimation(targetNodeId, { restoreDefault: false });
     return;
   }
   nodeAnimationRuntime.stopNodeAnimation(targetNodeId, { restoreDefault: true });
@@ -16317,6 +16483,8 @@ function teardownRenderer() {
   multiuserNodeObjects.clear();
   networkSyncNodeEntries.clear();
   physicsAuthorityNodeEntries.clear();
+  characterControllerAnimationRuntime.clear();
+  physicsBridgeContactsByNodeId.clear();
   remoteSharedEntityEntries.clear();
   remotePhysicsAuthorityEntries.clear();
   resetPhysicsWorld();
@@ -16979,6 +17147,7 @@ function startRenderLoop(
           });
           previewComponentManager.update(deltaSeconds);
           waterRuntime.update(deltaSeconds, { renderer, scene, camera });
+          updateCharacterControllerAnimations(deltaSeconds);
           nodeAnimationRuntime.update(deltaSeconds);
           activeBehaviorSounds.forEach((instance) => {
             if (!instance.audio || !instance.params.spatial || instance.stopped) {
@@ -17162,6 +17331,8 @@ function cleanupForUnrelatedSceneSwitch(): void {
   multiuserNodeObjects.clear();
   networkSyncNodeEntries.clear();
   physicsAuthorityNodeEntries.clear();
+  characterControllerAnimationRuntime.clear();
+  physicsBridgeContactsByNodeId.clear();
   remoteSharedEntityEntries.clear();
   remotePhysicsAuthorityEntries.clear();
   clearSceneryCompiledGroundRenderRuntime();

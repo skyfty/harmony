@@ -208,7 +208,7 @@ const backgroundAssetHint = computed(() => {
   if (!asset) {
     return 'Supports HDRI, .hdr, or .skycube assets'
   }
-  const extension = inferAssetExtension(asset)
+  const extension = asset.extension ? asset.extension.toLowerCase() : null
   if (isSkyCubeArchiveExtension(extension)) {
     return '.skycube archive'
   }
@@ -810,7 +810,7 @@ function isEnvironmentAsset(asset: ProjectAsset | null): asset is ProjectAsset {
     return true
   }
   if (asset.type === 'file') {
-    const extension = inferAssetExtension(asset)
+      const extension = asset.extension ? asset.extension.toLowerCase() : null
     return isHdrExtension(extension) || isSkyCubeArchiveExtension(extension)
   }
   return false
@@ -860,7 +860,7 @@ function handleBackgroundDragLeave(event: DragEvent) {
 }
 
 function applySkyAsset(asset: ProjectAsset) {
-  const extension = inferAssetExtension(asset)
+  const extension = asset.extension ? asset.extension.toLowerCase() : null
   if (isSkyCubeArchiveExtension(extension)) {
     patchEnvironmentBackground({
       mode: 'skycube',

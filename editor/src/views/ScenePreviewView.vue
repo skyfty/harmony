@@ -59,6 +59,7 @@ import { buildPhysicsSceneAsset } from '@schema/physicsSceneAsset'
 import {
 	type PhysicsBackendPreference,
 	type PhysicsBridge,
+	type PhysicsContactEvent,
 	type PhysicsSceneAsset,
 	type PhysicsStepFrame,
 	type PhysicsTransform,
@@ -228,6 +229,8 @@ import {
 	DEFAULT_AXLE,
 	SCENE_STATE_ANCHOR_COMPONENT_TYPE,
 	} from '@schema/components'
+import { characterControllerComponentDefinition } from '@schema/components/definitions/characterControllerComponent'
+import { CharacterControllerAnimationRuntimeManager } from '@schema/characterControllerAnimationRuntime'
 import { SceneAnimationRuntimeManager } from '@schema/sceneAnimationRuntime'
 import {
 	buildInstancedLodCullingRequest,
@@ -1212,6 +1215,7 @@ previewComponentManager.registerDefinition(steerComponentDefinition)
 previewComponentManager.registerDefinition(waterComponentDefinition)
 previewComponentManager.registerDefinition(behaviorComponentDefinition)
 previewComponentManager.registerDefinition(protagonistComponentDefinition)
+previewComponentManager.registerDefinition(characterControllerComponentDefinition)
 previewComponentManager.registerDefinition(lodComponentDefinition)
 previewComponentManager.registerDefinition(guideRouteComponentDefinition)
 previewComponentManager.registerDefinition(autoTourComponentDefinition)
@@ -1509,6 +1513,7 @@ const pendingBehaviorAudioBufferRequests = new Map<string, Promise<AudioBuffer |
 const activeBehaviorSounds = new Map<string, BehaviorSoundInstance>()
 const behaviorSoundDistanceScratch = new THREE.Vector3()
 const nodeAnimationRuntime = new SceneAnimationRuntimeManager()
+const characterControllerAnimationRuntime = new CharacterControllerAnimationRuntimeManager()
 type BehaviorProximityCandidate = { hasApproach: boolean; hasDepart: boolean }
 type BehaviorProximityStateEntry = { inside: boolean; lastDistance: number | null }
 type BehaviorProximityThreshold = { enter: number; exit: number; objectId: string }
@@ -2365,6 +2370,7 @@ const currentPhysicsBridgePreference = ref<PhysicsBackendPreference | undefined>
 const physicsBridgeBodyIdByNodeId = new Map<string, number>()
 const physicsBridgeNodeIdByBodyId = new Map<number, string>()
 const physicsBridgeVehicleIdByNodeId = new Map<string, number>()
+const physicsBridgeContactsByNodeId = new Map<string, PhysicsContactEvent[]>()
 type PhysicsBridgeBodyFrameState = {
 	position: THREE.Vector3
 	quaternion: THREE.Quaternion
@@ -2697,7 +2703,7 @@ function resolveNodeById(nodeId: string): SceneNode | null {
 }
 
 function resolveCameraDistanceReferenceNodeId(): string | null {
-	return resolveNodeIdFromObject(findProtagonistObject())
+	return resolveDefaultControlledCharacterNodeId()
 }
 
 function resolveNodePlaneAnchorPoint(nodeId: string | null, target: THREE.Vector3): THREE.Vector3 | null {
@@ -3011,12 +3017,34 @@ const vehicleSpeedDisplayMps = ref(0)
 const vehicleSpeedKmh = computed(() => Math.round(vehicleSpeedDisplayMps.value * 3.6))
 let vehicleSpeedDisplayLastCommitAtMs = 0
 let vehicleSpeedDisplayLowSpeedSinceAtMs: number | null = null
-
+const characterAuthorityInput = reactive({
+	moveX: 0,
+	moveZ: 0,
+	jump: false,
+	sprint: false,
+	crouch: false,
+	interact: false,
+})
+const characterKeyState = reactive({
+	forward: false,
+	backward: false,
+	left: false,
+	right: false,
+	jump: false,
+	sprint: false,
+	crouch: false,
+	interact: false,
+})
+let characterInputJumpLatch = false
 function getVehicleSpeedDisplayNowMs(): number {
 	if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
 		return performance.now()
 	}
 	return Date.now()
+}
+
+function getCharacterAnimationNowMs(): number {
+	return getVehicleSpeedDisplayNowMs()
 }
 
 function commitVehicleSpeedDisplay(speedMps: number, nowMs: number): void {
@@ -3435,6 +3463,35 @@ function resolveDefaultSteerBinding(document: SceneJsonExportDocument): string |
 			}
 			const targetNode = findNodeById(nodes, props.targetNodeId)
 			if (resolveVehicleComponent(targetNode)) {
+				return props.targetNodeId
+			}
+		}
+		if (Array.isArray(node.children) && node.children.length) {
+			stack.push(...node.children)
+		}
+	}
+	return null
+}
+
+function resolveDefaultCharacterSteerNodeId(
+	document: SceneJsonExportDocument | null | undefined,
+): string | null {
+	const nodes = Array.isArray(document?.nodes) ? document.nodes : []
+	const stack = [...nodes]
+	while (stack.length) {
+		const node = stack.pop()
+		if (!node) {
+			continue
+		}
+		const steer = resolveSteerComponent(node)
+		if (steer) {
+			const props = clampSteerComponentProps(steer.props)
+			if (
+				props.autoEnterOnSceneLoad
+				&& props.targetType === 'character'
+				&& props.targetNodeId
+				&& findNodeById(nodes, props.targetNodeId)
+			) {
 				return props.targetNodeId
 			}
 		}
@@ -6223,6 +6280,7 @@ function clearDelayTimer(token: string) {
 function stopBehaviorAnimation(token: string) {
 	const cancel = activeBehaviorAnimations.get(token)
 	if (!cancel) {
+		releaseCharacterControllerBehaviorOverride(token)
 		return
 	}
 	try {
@@ -6595,6 +6653,7 @@ function resetAnimationControllers(): void {
 			activeBehaviorAnimations.delete(token)
 		}
 	})
+	characterControllerAnimationRuntime.clear()
 	nodeAnimationRuntime.listMixers().forEach((mixer) => {
 		try {
 			mixer.stopAllAction()
@@ -6684,13 +6743,16 @@ function resetProtagonistPoseState() {
 	protagonistPoseSynced = false
 }
 
-function findProtagonistObject(): THREE.Object3D | null {
-	for (const object of nodeObjectMap.values()) {
-		if (object.userData?.protagonist) {
-			return object
-		}
+function resolveDefaultControlledCharacterNodeId(): string | null {
+	return resolveDefaultCharacterSteerNodeId(currentDocument)
+}
+
+function findDefaultControlledCharacterObject(): THREE.Object3D | null {
+	const controlledNodeId = resolveDefaultControlledCharacterNodeId()
+	if (!controlledNodeId) {
+		return null
 	}
-	return null
+	return nodeObjectMap.get(controlledNodeId) ?? null
 }
 
 type ProtagonistPoseOptions = {
@@ -6703,7 +6765,7 @@ function syncProtagonistCameraPose(options: ProtagonistPoseOptions = {}): boolea
 	if (!options.force && protagonistPoseSynced) {
 		return false
 	}
-	const protagonistObject = options.object ?? findProtagonistObject()
+	const protagonistObject = options.object ?? findDefaultControlledCharacterObject()
 	if (!protagonistObject) {
 		return false
 	}
@@ -6743,6 +6805,89 @@ function syncProtagonistCameraPose(options: ProtagonistPoseOptions = {}): boolea
 		}
 	}
 	return true
+}
+
+function isCharacterControllerAnimationNode(nodeId: string): boolean {
+	return characterControllerAnimationRuntime.has(nodeId)
+}
+
+function scheduleCharacterControllerAnimationResync(nodeId: string): void {
+	characterControllerAnimationRuntime.scheduleResync(nodeId)
+}
+
+function acquireCharacterControllerBehaviorOverride(nodeId: string, token: string | null | undefined): void {
+	characterControllerAnimationRuntime.acquireBehaviorOverride(nodeId, token)
+}
+
+function releaseCharacterControllerBehaviorOverride(token: string | null | undefined): void {
+	characterControllerAnimationRuntime.releaseBehaviorOverride(token)
+}
+
+function refreshCharacterControllerAnimationRuntimeEntries(): void {
+	characterControllerAnimationRuntime.refresh({
+		nodeAnimationRuntime,
+		iterNodes: () => previewNodeMap.entries(),
+		resolveNode: (nodeId) => resolveNodeById(nodeId),
+		resolveInput: (nodeId) => {
+			const isLocallyControlled = resolveDefaultControlledCharacterNodeId() === nodeId
+			return {
+				moveX: isLocallyControlled ? characterAuthorityInput.moveX : 0,
+				moveZ: isLocallyControlled ? characterAuthorityInput.moveZ : 0,
+				jump: isLocallyControlled ? characterAuthorityInput.jump : false,
+				sprint: isLocallyControlled ? characterAuthorityInput.sprint : false,
+				crouch: isLocallyControlled ? characterAuthorityInput.crouch : false,
+				interact: isLocallyControlled ? characterAuthorityInput.interact : false,
+				locallyControlled: isLocallyControlled,
+			}
+		},
+		resolveGroundContacts: (nodeId) => physicsBridgeContactsByNodeId.get(nodeId) ?? null,
+	})
+}
+
+function updateCharacterAuthorityInputFromKeys(): void {
+	const moveX = (characterKeyState.right ? 1 : 0) - (characterKeyState.left ? 1 : 0)
+	const moveZ = (characterKeyState.forward ? 1 : 0) - (characterKeyState.backward ? 1 : 0)
+	characterAuthorityInput.moveX = THREE.MathUtils.clamp(moveX, -1, 1)
+	characterAuthorityInput.moveZ = THREE.MathUtils.clamp(moveZ, -1, 1)
+	characterAuthorityInput.sprint = characterKeyState.sprint
+	characterAuthorityInput.crouch = characterKeyState.crouch
+	characterAuthorityInput.interact = characterKeyState.interact
+	if (characterKeyState.jump) {
+		if (!characterInputJumpLatch) {
+			characterAuthorityInput.jump = true
+			characterInputJumpLatch = true
+			return
+		}
+		characterAuthorityInput.jump = false
+		return
+	}
+	characterInputJumpLatch = false
+	characterAuthorityInput.jump = false
+}
+
+function updateCharacterControllerAnimations(delta: number): void {
+	if (delta < 0) {
+		return
+	}
+	const controlledNodeId = resolveDefaultControlledCharacterNodeId()
+	characterControllerAnimationRuntime.update({
+		nodeAnimationRuntime,
+		iterNodes: () => previewNodeMap.entries(),
+		resolveNode: (nodeId) => resolveNodeById(nodeId),
+		resolveInput: (nodeId) => {
+			const isLocallyControlled = controlledNodeId === nodeId
+			return {
+				moveX: isLocallyControlled ? characterAuthorityInput.moveX : 0,
+				moveZ: isLocallyControlled ? characterAuthorityInput.moveZ : 0,
+				jump: isLocallyControlled ? characterAuthorityInput.jump : false,
+				sprint: isLocallyControlled ? characterAuthorityInput.sprint : false,
+				crouch: isLocallyControlled ? characterAuthorityInput.crouch : false,
+				interact: isLocallyControlled ? characterAuthorityInput.interact : false,
+				locallyControlled: isLocallyControlled,
+			}
+		},
+		resolveGroundContacts: (nodeId) => physicsBridgeContactsByNodeId.get(nodeId) ?? null,
+	}, getCharacterAnimationNowMs())
 }
 
 function resetBehaviorProximity(): void {
@@ -7078,10 +7223,16 @@ function handlePlayAnimationEvent(event: Extract<BehaviorRuntimeEvent, { type: '
 		return
 	}
 	const token = event.token
+	if (token) {
+		stopBehaviorAnimation(token)
+	}
+	const isCharacterControlledTarget = isCharacterControllerAnimationNode(targetNodeId)
+	if (isCharacterControlledTarget) {
+		acquireCharacterControllerBehaviorOverride(targetNodeId, token)
+	}
 	if (!token) {
 		return
 	}
-	stopBehaviorAnimation(token)
 	if (event.loop) {
 		resolveBehaviorToken(token, { type: 'continue' })
 		return
@@ -7096,7 +7247,10 @@ function handlePlayAnimationEvent(event: Extract<BehaviorRuntimeEvent, { type: '
 		}
 		mixer.removeEventListener('finished', onFinished)
 		activeBehaviorAnimations.delete(token)
-		restartDefaultAnimation(targetNodeId)
+		releaseCharacterControllerBehaviorOverride(token)
+		if (!isCharacterControlledTarget) {
+			restartDefaultAnimation(targetNodeId)
+		}
 		resolveBehaviorToken(token, { type: 'continue' })
 	}
 	const cancel = () => {
@@ -7106,7 +7260,10 @@ function handlePlayAnimationEvent(event: Extract<BehaviorRuntimeEvent, { type: '
 		} catch (cancelError) {
 			console.warn('[ScenePreview] Failed to stop animation action', cancelError)
 		}
-		restartDefaultAnimation(targetNodeId)
+		releaseCharacterControllerBehaviorOverride(token)
+		if (!isCharacterControlledTarget) {
+			restartDefaultAnimation(targetNodeId)
+		}
 	}
 	activeBehaviorAnimations.set(token, cancel)
 	mixer.addEventListener('finished', onFinished)
@@ -7135,6 +7292,18 @@ function handleTriggerBehaviorEvent(event: Extract<BehaviorRuntimeEvent, { type:
 function handleStopAnimationEvent(event: Extract<BehaviorRuntimeEvent, { type: 'stop-animation' }>) {
 	const targetNodeId = event.targetNodeId || event.nodeId
 	if (!targetNodeId) {
+		return
+	}
+	if (isCharacterControllerAnimationNode(targetNodeId)) {
+		const overrideTokens = characterControllerAnimationRuntime.getBehaviorOverrideTokens(targetNodeId)
+		if (overrideTokens.length) {
+			overrideTokens.forEach((token) => {
+				stopBehaviorAnimation(token)
+			})
+		} else {
+			scheduleCharacterControllerAnimationResync(targetNodeId)
+		}
+		nodeAnimationRuntime.stopNodeAnimation(targetNodeId, { restoreDefault: false })
 		return
 	}
 	nodeAnimationRuntime.stopNodeAnimation(targetNodeId, { restoreDefault: true })
@@ -8868,6 +9037,23 @@ function applyControlMode(mode: ControlMode) {
 	if (!activeCamera || !renderer) {
 		return
 	}
+	if (mode !== 'first-person') {
+		characterAuthorityInput.moveX = 0
+		characterAuthorityInput.moveZ = 0
+		characterAuthorityInput.jump = false
+		characterAuthorityInput.sprint = false
+		characterAuthorityInput.crouch = false
+		characterAuthorityInput.interact = false
+		characterKeyState.forward = false
+		characterKeyState.backward = false
+		characterKeyState.left = false
+		characterKeyState.right = false
+		characterKeyState.jump = false
+		characterKeyState.sprint = false
+		characterKeyState.crouch = false
+		characterKeyState.interact = false
+		characterInputJumpLatch = false
+	}
 	activeCameraLookTween = null
 	if (vehicleDriveState.active) {
 		syncVehicleDriveCameraMode()
@@ -9104,6 +9290,21 @@ function handleFullscreenChange() {
 }
 
 function handleWindowBlur() {
+	characterAuthorityInput.moveX = 0
+	characterAuthorityInput.moveZ = 0
+	characterAuthorityInput.jump = false
+	characterAuthorityInput.sprint = false
+	characterAuthorityInput.crouch = false
+	characterAuthorityInput.interact = false
+	characterKeyState.forward = false
+	characterKeyState.backward = false
+	characterKeyState.left = false
+	characterKeyState.right = false
+	characterKeyState.jump = false
+	characterKeyState.sprint = false
+	characterKeyState.crouch = false
+	characterKeyState.interact = false
+	characterInputJumpLatch = false
 	if (!vehicleDriveState.active) {
 		return
 	}
@@ -9116,16 +9317,43 @@ function handleKeyDown(event: KeyboardEvent) {
 	if (isInputLikeElement(event.target)) {
 		return
 	}
-	if (event.code === 'KeyQ') {
+	if (event.code === 'KeyQ' && controlMode.value !== 'first-person') {
 		rotationState.q = true
 		return
 	}
-	if (event.code === 'KeyE') {
+	if (event.code === 'KeyE' && controlMode.value !== 'first-person') {
 		rotationState.e = true
 		return
 	}
 	if (handleVehicleDriveKeyboardInput(event, true)) {
 		return
+	}
+	if (controlMode.value === 'first-person') {
+		if (event.code === 'KeyW' || event.code === 'ArrowUp') {
+			characterKeyState.forward = true
+			updateCharacterAuthorityInputFromKeys()
+		} else if (event.code === 'KeyS' || event.code === 'ArrowDown') {
+			characterKeyState.backward = true
+			updateCharacterAuthorityInputFromKeys()
+		} else if (event.code === 'KeyA' || event.code === 'ArrowLeft') {
+			characterKeyState.left = true
+			updateCharacterAuthorityInputFromKeys()
+		} else if (event.code === 'KeyD' || event.code === 'ArrowRight') {
+			characterKeyState.right = true
+			updateCharacterAuthorityInputFromKeys()
+		} else if (event.code === 'ShiftLeft' || event.code === 'ShiftRight') {
+			characterKeyState.sprint = true
+			updateCharacterAuthorityInputFromKeys()
+		} else if (event.code === 'ControlLeft' || event.code === 'ControlRight') {
+			characterKeyState.crouch = true
+			updateCharacterAuthorityInputFromKeys()
+		} else if (event.code === 'Space') {
+			characterKeyState.jump = true
+			updateCharacterAuthorityInputFromKeys()
+		} else if (event.code === 'KeyE' || event.code === 'Enter') {
+			characterKeyState.interact = true
+			updateCharacterAuthorityInputFromKeys()
+		}
 	}
 	if (event.repeat) {
 		return
@@ -9153,16 +9381,55 @@ function handleKeyUp(event: KeyboardEvent) {
 	if (isInputLikeElement(event.target)) {
 		return
 	}
-	if (event.code === 'KeyQ') {
+	if (event.code === 'KeyQ' && controlMode.value !== 'first-person') {
 		rotationState.q = false
 		return
 	}
-	if (event.code === 'KeyE') {
+	if (event.code === 'KeyE' && controlMode.value !== 'first-person') {
 		rotationState.e = false
 		return
 	}
 	if (handleVehicleDriveKeyboardInput(event, false)) {
 		return
+	}
+	if (event.code === 'KeyW' || event.code === 'ArrowUp') {
+		characterKeyState.forward = false
+		updateCharacterAuthorityInputFromKeys()
+		return
+	}
+	if (event.code === 'KeyS' || event.code === 'ArrowDown') {
+		characterKeyState.backward = false
+		updateCharacterAuthorityInputFromKeys()
+		return
+	}
+	if (event.code === 'KeyA' || event.code === 'ArrowLeft') {
+		characterKeyState.left = false
+		updateCharacterAuthorityInputFromKeys()
+		return
+	}
+	if (event.code === 'KeyD' || event.code === 'ArrowRight') {
+		characterKeyState.right = false
+		updateCharacterAuthorityInputFromKeys()
+		return
+	}
+	if (event.code === 'ShiftLeft' || event.code === 'ShiftRight') {
+		characterKeyState.sprint = false
+		updateCharacterAuthorityInputFromKeys()
+		return
+	}
+	if (event.code === 'ControlLeft' || event.code === 'ControlRight') {
+		characterKeyState.crouch = false
+		updateCharacterAuthorityInputFromKeys()
+		return
+	}
+	if (event.code === 'Space') {
+		characterKeyState.jump = false
+		updateCharacterAuthorityInputFromKeys()
+		return
+	}
+	if (event.code === 'KeyE' || event.code === 'Enter') {
+		characterKeyState.interact = false
+		updateCharacterAuthorityInputFromKeys()
 	}
 }
 
@@ -9226,6 +9493,7 @@ function updatePlaybackSystemsForFrame(delta: number): boolean {
 		},
 	})
 	previewComponentManager.update(delta)
+	updateCharacterControllerAnimations(delta)
 	nodeAnimationRuntime.update(delta)
 	activeBehaviorSounds.forEach((instance) => {
 		if (!instance.params.spatial || instance.stopped) {
@@ -9583,6 +9851,21 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	lastCameraDependentUpdateQuaternion.identity()
 	releaseTerrainScatterInstances()
 	resetProtagonistPoseState()
+	characterAuthorityInput.moveX = 0
+	characterAuthorityInput.moveZ = 0
+	characterAuthorityInput.jump = false
+	characterAuthorityInput.sprint = false
+	characterAuthorityInput.crouch = false
+	characterAuthorityInput.interact = false
+	characterKeyState.forward = false
+	characterKeyState.backward = false
+	characterKeyState.left = false
+	characterKeyState.right = false
+	characterKeyState.jump = false
+	characterKeyState.sprint = false
+	characterKeyState.crouch = false
+	characterKeyState.interact = false
+	characterInputJumpLatch = false
 	sceneCsmShadowRuntime?.setActive(false)
 	nodeObjectMap.forEach((_object, nodeId) => {
 		releaseModelInstance(nodeId)
@@ -9604,6 +9887,7 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	autoTourCameraFollowHasSample = false
 	followCameraControlActive = false
 	followCameraControlDirty = false
+	physicsBridgeContactsByNodeId.clear()
 	resetPhysicsWorld()
 	clearGroundCollisionRuntimeHost(groundCollisionHostObject)
 	if (groundCollisionHostObject) {
@@ -10281,13 +10565,13 @@ function registerSubtree(object: THREE.Object3D, pending?: Map<string, THREE.Obj
 				updateBehaviorVisibility(nodeId, false)
 				syncInstancedTransform(child)
 			}
-				if (child.userData?.protagonist) {
-					const protagonistCameraActive = !vehicleDriveState.active && (controlMode.value === 'first-person' || cameraViewState.mode === 'level')
-					syncProtagonistCameraPose({
-						object: child,
-						applyToCamera: protagonistCameraActive,
-					})
-				}
+			if (resolveDefaultControlledCharacterNodeId() === nodeId) {
+				const protagonistCameraActive = !vehicleDriveState.active && (controlMode.value === 'first-person' || cameraViewState.mode === 'level')
+				syncProtagonistCameraPose({
+					object: child,
+					applyToCamera: protagonistCameraActive,
+				})
+			}
 		}
 	})
 	sceneCsmShadowRuntime?.registerObject(object)
@@ -10711,6 +10995,7 @@ function updateScenePreviewPhysicsBridgeIndex(asset: PhysicsSceneAsset): void {
 	physicsBridgeNodeIdByBodyId.clear()
 	physicsBridgeVehicleIdByNodeId.clear()
 	physicsBridgeFrameBodiesByNodeId.clear()
+	physicsBridgeContactsByNodeId.clear()
 	asset.bodies.forEach((body) => {
 		if (!body.userDataKey) {
 			return
@@ -10814,6 +11099,40 @@ function syncScenePreviewBridgeVehicleFromFrame(nodeId: string, state: PhysicsBr
 }
 
 function consumeScenePreviewPhysicsBridgeStepFrame(frame: PhysicsStepFrame): void {
+	const nextContactsByNodeId = new Map<string, PhysicsContactEvent[]>()
+	if (frame.bodyCount > 0 && frame.bodyMeta?.length) {
+		for (let index = 0; index < frame.bodyCount; index += 1) {
+			const bodyId = frame.bodyMeta[index]
+			if (typeof bodyId !== 'number') {
+				continue
+			}
+			const nodeId = physicsBridgeNodeIdByBodyId.get(bodyId)
+			if (!nodeId) {
+				continue
+			}
+			nextContactsByNodeId.set(nodeId, [])
+		}
+	}
+	if (Array.isArray(frame.contacts) && frame.contacts.length) {
+		frame.contacts.forEach((contact) => {
+			const nodeIdA = physicsBridgeNodeIdByBodyId.get(contact.bodyIdA)
+			if (nodeIdA) {
+				const contacts = nextContactsByNodeId.get(nodeIdA) ?? []
+				contacts.push(contact)
+				nextContactsByNodeId.set(nodeIdA, contacts)
+			}
+			const nodeIdB = physicsBridgeNodeIdByBodyId.get(contact.bodyIdB)
+			if (nodeIdB) {
+				const contacts = nextContactsByNodeId.get(nodeIdB) ?? []
+				contacts.push(contact)
+				nextContactsByNodeId.set(nodeIdB, contacts)
+			}
+		})
+	}
+	physicsBridgeContactsByNodeId.clear()
+	nextContactsByNodeId.forEach((contacts, nodeId) => {
+		physicsBridgeContactsByNodeId.set(nodeId, contacts)
+	})
 	if (
 		frame.bodyCount <= 0
 		|| frame.bodyTransforms.length === 0
@@ -13100,6 +13419,7 @@ function refreshAnimations() {
 			timeScale: component.props.timeScale,
 		})
 	})
+	refreshCharacterControllerAnimationRuntimeEntries()
 
 	nodeAnimationRuntime.listMixers().forEach((mixer) => {
 		mixer.timeScale = isPlaying.value ? 1 : 0
@@ -13523,6 +13843,8 @@ onBeforeUnmount(() => {
 		}
 	})
 	activeBehaviorAnimations.clear()
+	characterControllerAnimationRuntime.clear()
+	physicsBridgeContactsByNodeId.clear()
 	clearBehaviorSounds()
 	unsubscribe?.()
 	unsubscribe = null
