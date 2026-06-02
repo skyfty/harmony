@@ -29,6 +29,8 @@ export type CameraFollowOptions = {
   immediate?: boolean
   applyOrbitTween?: boolean
   followControlsDirty?: boolean
+  localOffsetOverride?: THREE.Vector3 | null
+  lockLocalOffset?: boolean
 }
 
 export type CameraFollowContext = {
@@ -273,6 +275,8 @@ export class FollowCameraController {
     constrainPose?: CameraFollowPoseConstraint
     onUpdateOrbitLookTween?: (deltaSeconds: number) => void
     followControlsDirty?: boolean
+    localOffsetOverride?: THREE.Vector3 | null
+    lockLocalOffset?: boolean
     immediate?: boolean
     applyOrbitTween?: boolean
   }): boolean {
@@ -439,13 +443,19 @@ export class FollowCameraController {
     }
     const anchorForCamera = follow.currentAnchor
 
-    // local offset (defaults to behind + above) + clamping.
-    if (!follow.hasLocalOffset) {
+    const lockLocalOffset = Boolean(options.lockLocalOffset)
+    if (options.localOffsetOverride) {
+      follow.localOffset.copy(options.localOffsetOverride)
+      follow.hasLocalOffset = true
+    } else if (!follow.hasLocalOffset) {
       follow.localOffset.set(0, placementWorking.heightOffset, -placementWorking.distance)
       follow.hasLocalOffset = true
     }
-    enforceFollowBehind(follow, placementWorking, tuning)
-    clampFollowLocalOffset(follow, placementWorking, tuning)
+    if (!lockLocalOffset) {
+      // local offset (defaults to behind + above) + clamping.
+      enforceFollowBehind(follow, placementWorking, tuning)
+      clampFollowLocalOffset(follow, placementWorking, tuning)
+    }
 
     // target offset.
     temp.followOffsetLocal.set(0, placementWorking.targetLift, placementWorking.targetForward)
@@ -465,7 +475,7 @@ export class FollowCameraController {
       const deltaPosition = camera.position.distanceTo(follow.currentPosition)
       userAdjusted = deltaPosition > 1e-3
     }
-    if (allowCameraAdjustments && userAdjusted) {
+    if (allowCameraAdjustments && userAdjusted && !lockLocalOffset) {
       temp.followWorldOffset.copy(camera.position).sub(anchorForCamera)
       follow.localOffset.set(
         temp.followWorldOffset.dot(headingRight),
@@ -534,7 +544,11 @@ export class FollowCameraController {
   }
 }
 
-function enforceFollowBehind(follow: CameraFollowState, placement: CameraFollowPlacement, tuning: CameraFollowTuning): void {
+function enforceFollowBehind(
+  follow: CameraFollowState,
+  placement: CameraFollowPlacement,
+  tuning: CameraFollowTuning,
+): void {
   const local = follow.localOffset
   const minBack = Math.max(placement.distance, tuning.distanceMin)
   const minHeight = Math.max(placement.heightOffset, tuning.heightMin)

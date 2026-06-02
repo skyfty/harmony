@@ -735,6 +735,8 @@ import { CharacterControllerAnimationRuntimeManager } from '@harmony/schema/char
 import {
   CHARACTER_CONTROLLER_COMPONENT_TYPE,
   clampCharacterControllerComponentProps,
+  DEFAULT_CHARACTER_CAMERA_FOLLOW_DISTANCE,
+  DEFAULT_CHARACTER_CAMERA_FOLLOW_HEIGHT,
   writeCharacterLocalForward,
   type CharacterControllerComponentProps,
 } from '@harmony/schema/components/definitions/characterControllerComponent';
@@ -2764,6 +2766,7 @@ const protagonistPosePosition = new THREE.Vector3();
 const protagonistPoseDirection = new THREE.Vector3();
 const protagonistPoseQuaternion = new THREE.Quaternion();
 const protagonistPoseTarget = new THREE.Vector3();
+const protagonistPoseCameraOffset = new THREE.Vector3();
 const vehicleCompassForward = new THREE.Vector3();
 const vehicleCompassQuaternion = new THREE.Quaternion();
 const STEERING_KEYBOARD_RETURN_SPEED = 7;
@@ -5698,6 +5701,14 @@ function resolveDefaultControlledCharacterNodeId(): string | null {
     ? props.defaultSteerIdentifier.trim() || null
     : null;
   return resolveDefaultCharacterSteerNodeId(currentDocument, defaultSteerIdentifier);
+}
+
+function resolveDefaultControlledCharacterComponentProps(): CharacterControllerComponentProps | null {
+  const controlledNodeId = resolveDefaultControlledCharacterNodeId();
+  if (!controlledNodeId) {
+    return null;
+  }
+  return clampCharacterControllerComponentProps(resolveCharacterControllerComponent(resolveNodeById(controlledNodeId))?.props ?? null);
 }
 
 function resolveCameraDistanceReferenceNodeId(): string | null {
@@ -10582,10 +10593,18 @@ function syncProtagonistCameraPose(options: ProtagonistPoseOptions = {}): boolea
   if (protagonistPoseDirection.lengthSq() < 1e-8) {
     protagonistPoseDirection.set(1, 0, 0);
   } else {
-    protagonistPoseDirection.normalize();
+  protagonistPoseDirection.normalize();
   }
-  protagonistPosePosition.y = HUMAN_EYE_HEIGHT;
-  protagonistPoseTarget.copy(protagonistPosePosition).addScaledVector(protagonistPoseDirection, CAMERA_FORWARD_OFFSET);
+  protagonistPoseTarget.copy(protagonistPosePosition);
+  protagonistPoseTarget.y = HUMAN_EYE_HEIGHT;
+  const characterProps = resolveDefaultControlledCharacterComponentProps();
+  protagonistPoseCameraOffset.set(
+    0,
+    characterProps?.cameraFollowHeight ?? DEFAULT_CHARACTER_CAMERA_FOLLOW_HEIGHT,
+    -(characterProps?.cameraFollowDistance ?? DEFAULT_CHARACTER_CAMERA_FOLLOW_DISTANCE),
+  ).applyQuaternion(protagonistPoseQuaternion);
+  protagonistPosePosition.copy(protagonistPoseTarget).add(protagonistPoseCameraOffset);
+  protagonistPoseTarget.addScaledVector(protagonistPoseDirection, CAMERA_FORWARD_OFFSET);
   protagonistPoseSynced = true;
   if (options.applyToCamera) {
     const context = renderContext;

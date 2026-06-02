@@ -56,6 +56,8 @@ export interface CharacterControllerComponentProps {
   label: string
   targetNodeId: string | null
   forwardAxis: CharacterForwardAxis
+  cameraFollowDistance: number
+  cameraFollowHeight: number
   walkSpeed: number
   runSpeed: number
   sprintSpeed: number
@@ -71,6 +73,8 @@ export interface CharacterControllerComponentProps {
 
 export const CHARACTER_FORWARD_AXIS_OPTIONS: CharacterForwardAxis[] = ['+x', '-x', '+z', '-z']
 export const DEFAULT_CHARACTER_FORWARD_AXIS: CharacterForwardAxis = '+x'
+export const DEFAULT_CHARACTER_CAMERA_FOLLOW_DISTANCE = 6.1
+export const DEFAULT_CHARACTER_CAMERA_FOLLOW_HEIGHT = 4.4
 
 const DEFAULT_ANIMATION_SLOTS: CharacterAnimationSlot[] = CHARACTER_ANIMATION_EDITOR_SLOTS.map((slot) => slot.value)
 
@@ -131,6 +135,8 @@ export function clampCharacterControllerComponentProps(
     label: sanitizeString(props?.label) || 'Character Controller',
     targetNodeId: normalizeNodeId(props?.targetNodeId),
     forwardAxis: normalizeForwardAxis(props?.forwardAxis),
+    cameraFollowDistance: sanitizeNumber(props?.cameraFollowDistance, DEFAULT_CHARACTER_CAMERA_FOLLOW_DISTANCE, 0.1, 100),
+    cameraFollowHeight: sanitizeNumber(props?.cameraFollowHeight, DEFAULT_CHARACTER_CAMERA_FOLLOW_HEIGHT, 0, 100),
     walkSpeed: sanitizeNumber(props?.walkSpeed, 2.4, 0, 100),
     runSpeed: sanitizeNumber(props?.runSpeed, 4.8, 0, 100),
     sprintSpeed: sanitizeNumber(props?.sprintSpeed, 6.4, 0, 100),
@@ -152,6 +158,8 @@ export function cloneCharacterControllerComponentProps(
     label: props.label,
     targetNodeId: props.targetNodeId,
     forwardAxis: props.forwardAxis,
+    cameraFollowDistance: props.cameraFollowDistance,
+    cameraFollowHeight: props.cameraFollowHeight,
     walkSpeed: props.walkSpeed,
     runSpeed: props.runSpeed,
     sprintSpeed: props.sprintSpeed,

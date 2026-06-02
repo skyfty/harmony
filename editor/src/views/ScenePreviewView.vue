@@ -230,6 +230,8 @@ import {
 	resolveLodRenderTarget,
 	resolveModelCollisionComponentPropsFromNode,
 	DEFAULT_AXLE,
+	DEFAULT_CHARACTER_CAMERA_FOLLOW_DISTANCE,
+	DEFAULT_CHARACTER_CAMERA_FOLLOW_HEIGHT,
 	writeCharacterLocalForward,
 	SCENE_STATE_ANCHOR_COMPONENT_TYPE,
 	} from '@schema/components'
@@ -1610,6 +1612,10 @@ const instancedCullingWorldPosition = new THREE.Vector3()
 const VEHICLE_CAMERA_DEFAULT_LOOK_DISTANCE = 6
 const VEHICLE_FOLLOW_DISTANCE_MIN = 4
 const VEHICLE_FOLLOW_DISTANCE_MAX = 26
+const CHARACTER_FOLLOW_CAMERA_DISTANCE_SCALE = 1.16
+const CHARACTER_FOLLOW_CAMERA_DISTANCE_MIN = 6.1
+const CHARACTER_FOLLOW_CAMERA_HEIGHT_MIN = 4.4
+const CHARACTER_FOLLOW_CAMERA_TARGET_FORWARD_MIN = 4.2
 const CHARACTER_FOLLOW_GROUND_PROJECTION_DISTANCE_RATIO = 0.55
 const CHARACTER_FOLLOW_GROUND_PROJECTION_DISTANCE_MIN = 0.9
 const CHARACTER_FOLLOW_GROUND_PROJECTION_DISTANCE_MAX = 1.8
@@ -3169,6 +3175,7 @@ const vehicleDriveCameraFollowState = {
 }
 const characterFollowCameraState = createCameraFollowState()
 const characterFollowCameraController = new FollowCameraController()
+const characterFollowCameraOffsetScratch = new THREE.Vector3()
 const characterFollowVelocity = new THREE.Vector3()
 const characterFollowVelocityScratch = new THREE.Vector3()
 const characterFollowLastAnchor = new THREE.Vector3()
@@ -6864,16 +6871,26 @@ function resolveControlledCharacterForwardVector(target: THREE.Vector3): THREE.V
 	return writeCharacterLocalForward(target, props?.forwardAxis ?? '+x') as THREE.Vector3
 }
 
-function resolveCharacterFollowPlacementDimensions(): { width: number; height: number; length: number } {
+function resolveCharacterFollowPlacementDimensions(protagonistObject: THREE.Object3D | null): { width: number; height: number; length: number } {
 	const props = resolveDefaultControlledCharacterComponentProps()
 	const colliderRadius = Math.max(0.05, props?.colliderRadius ?? 0.35)
 	const colliderHeight = Math.max(0.1, props?.colliderHeight ?? 1.7)
 	const capsuleDiameter = Math.max(0.4, colliderRadius * 2)
+	const objectDimensions = getApproxDimensions(protagonistObject)
 	return {
-		width: capsuleDiameter,
-		height: colliderHeight,
-		length: Math.max(capsuleDiameter, colliderHeight * 0.72),
+		width: Math.max(capsuleDiameter, objectDimensions.width),
+		height: Math.max(colliderHeight, objectDimensions.height),
+		length: Math.max(capsuleDiameter, colliderHeight * 0.72, objectDimensions.length),
 	}
+}
+
+function resolveCharacterFollowCameraOffset(target: THREE.Vector3): THREE.Vector3 {
+	const props = resolveDefaultControlledCharacterComponentProps()
+	return target.set(
+		0,
+		props?.cameraFollowHeight ?? DEFAULT_CHARACTER_CAMERA_FOLLOW_HEIGHT,
+		-(props?.cameraFollowDistance ?? DEFAULT_CHARACTER_CAMERA_FOLLOW_DISTANCE),
+	)
 }
 
 function resolveCharacterRootWorldPosition(
@@ -7053,26 +7070,34 @@ function updateCharacterFollowCamera(
 		const alpha = computeFollowLerpAlpha(delta, 8)
 		characterFollowVelocity.lerp(characterFollowVelocityScratch, alpha)
 	}
+	const characterFollowPlacement = computeFollowPlacement(resolveCharacterFollowPlacementDimensions(protagonistObject))
+	characterFollowPlacement.distance = Math.max(characterFollowPlacement.distance, CHARACTER_FOLLOW_CAMERA_DISTANCE_MIN)
+	characterFollowPlacement.heightOffset = Math.max(characterFollowPlacement.heightOffset, CHARACTER_FOLLOW_CAMERA_HEIGHT_MIN)
+	characterFollowPlacement.targetForward = Math.max(characterFollowPlacement.targetForward, CHARACTER_FOLLOW_CAMERA_TARGET_FORWARD_MIN)
+	const characterFollowCameraOffset = resolveCharacterFollowCameraOffset(characterFollowCameraOffsetScratch)
 	const updated = characterFollowCameraController.update({
 		follow: characterFollowCameraState,
-		placement: computeFollowPlacement(resolveCharacterFollowPlacementDimensions()),
+		placement: characterFollowPlacement,
 		anchorWorld,
 		desiredForwardWorld,
 		velocityWorld: characterFollowVelocity,
 		deltaSeconds: delta,
 		ctx: { camera: activeCamera, mapControls: mapControls ?? undefined },
 		worldUp: AUTO_TOUR_CAMERA_WORLD_UP,
+		distanceScale: CHARACTER_FOLLOW_CAMERA_DISTANCE_SCALE,
+		localOffsetOverride: characterFollowCameraOffset,
+		lockLocalOffset: true,
 		applyOrbitTween: false,
 		followControlsDirty: false,
 		immediate,
 		tuning: {
-			distanceMin: 2.2,
-			distanceMax: 5.5,
-			heightMin: 1.2,
+			distanceMin: 4.0,
+			distanceMax: 8.0,
+			heightMin: 2.0,
 			motionSpeedThreshold: 0.1,
 			motionSpeedFull: 3.5,
-			motionDistanceBoost: 0.08,
-			motionHeightBoost: 0.05,
+			motionDistanceBoost: 0.12,
+			motionHeightBoost: 0.08,
 		},
 	})
 	if (updated) {

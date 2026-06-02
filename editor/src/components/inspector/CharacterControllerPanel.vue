@@ -90,6 +90,14 @@ function updateAnimationBinding(slot: CharacterControllerComponentProps['animati
   })
 }
 
+function updateCameraFollowDistance(value: number) {
+  updateField('cameraFollowDistance', value)
+}
+
+function updateCameraFollowHeight(value: number) {
+  updateField('cameraFollowHeight', value)
+}
+
 function handleTargetNodeIdChange(value: string | null) {
   updateField('targetNodeId', value)
 }
@@ -362,6 +370,37 @@ const advancedAnimationSlots = CHARACTER_ANIMATION_ADVANCED_SLOTS
             :disabled="!componentEnabled"
             @update:model-value="(value) => updateField('colliderHeight', Number(value))"
           />
+        </div>
+
+        <div class="character-controller-panel__field">
+          <div class="character-controller-panel__section-title">Camera follow</div>
+          <p class="character-controller-panel__note">
+            Controls how far behind and how high above the character the camera stays.
+          </p>
+          <div class="character-controller-panel__grid">
+            <v-text-field
+              :model-value="normalizedProps.cameraFollowDistance"
+              type="number"
+              step="0.1"
+              variant="underlined"
+              label="Follow distance"
+              density="compact"
+              hide-details
+              :disabled="!componentEnabled"
+              @update:model-value="(value) => updateCameraFollowDistance(Number(value))"
+            />
+            <v-text-field
+              :model-value="normalizedProps.cameraFollowHeight"
+              type="number"
+              step="0.1"
+              variant="underlined"
+              label="Follow height"
+              density="compact"
+              hide-details
+              :disabled="!componentEnabled"
+              @update:model-value="(value) => updateCameraFollowHeight(Number(value))"
+            />
+          </div>
         </div>
 
         <div class="character-controller-panel__animations">
