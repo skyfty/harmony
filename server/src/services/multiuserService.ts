@@ -455,22 +455,6 @@ function isQuaternion(value: unknown): value is Quaternion {
   return Number.isFinite(candidate.x) && Number.isFinite(candidate.y) && Number.isFinite(candidate.z) && Number.isFinite(candidate.w)
 }
 
-function rotateAxisByQuaternion(quaternion: Quaternion, x: number, y: number, z: number): Vector3 {
-  const qx = quaternion.x
-  const qy = quaternion.y
-  const qz = quaternion.z
-  const qw = quaternion.w
-  const ix = qw * x + qy * z - qz * y
-  const iy = qw * y + qz * x - qx * z
-  const iz = qw * z + qx * y - qy * x
-  const iw = -qx * x - qy * y - qz * z
-  return {
-    x: ix * qw + iw * -qx + iy * -qz - iz * -qy,
-    y: iy * qw + iw * -qy + iz * -qx - ix * -qz,
-    z: iz * qw + iw * -qz + ix * -qy - iy * -qx,
-  }
-}
-
 function normalizePeerState(value: unknown): MultiuserPeerState | null {
   if (!value || typeof value !== 'object') {
     return null
@@ -773,6 +757,7 @@ type LoadedPhysicsAuthorityNode = {
   characterProps: CharacterControllerComponentProps | null
   bodyId: number | null
   vehicleId: number | null
+  characterId: number | null
   ownerUserId: string | null
   leaseExpiresAt: number
   inputSequence: number
@@ -784,7 +769,6 @@ type LoadedPhysicsScene = {
   asset: Awaited<ReturnType<typeof buildPhysicsSceneAsset>>
   nodes: Map<string, LoadedPhysicsAuthorityNode>
   bodyNodeIdByBodyId: Map<number, string>
-  bodyTransformByNodeId: Map<string, { position: [number, number, number]; quaternion: [number, number, number, number] }>
 }
 
 type LoadedPhysicsStepFrame = Awaited<ReturnType<ReturnType<typeof createCannonPhysicsController>['step']>>
@@ -795,7 +779,6 @@ type LoadedPhysicsStepContact = NonNullable<LoadedPhysicsStepFrame['contacts']>[
 class AuthoritativePhysicsRoom {
   private readonly inputByNodeId = new Map<string, MultiuserPhysicsAuthorityInput>()
   private readonly latestSnapshotByNodeId = new Map<string, MultiuserPhysicsAuthoritySnapshot>()
-  private readonly lastCharacterJumpStateByNodeId = new Map<string, boolean>()
   private readonly loadPromise: Promise<void> | null = null
   private loadPromiseInternal: Promise<void> | null = null
   private loadedScene: LoadedPhysicsScene | null = null
@@ -839,22 +822,24 @@ class AuthoritativePhysicsRoom {
     const bodyNodeIdByBodyId = new Map<number, string>()
     const bodyIdByNodeId = new Map<string, number>()
     const vehicleIdByNodeId = new Map<string, number>()
-    const bodyTransformByNodeId = new Map<string, { position: [number, number, number]; quaternion: [number, number, number, number] }>()
+    const characterIdByNodeId = new Map<string, number>()
     asset.bodies.forEach((body) => {
       if (typeof body.userDataKey === 'string' && body.userDataKey.trim()) {
         const nodeId = body.userDataKey.trim()
         bodyNodeIdByBodyId.set(body.id, nodeId)
         bodyIdByNodeId.set(nodeId, body.id)
-        bodyTransformByNodeId.set(nodeId, {
-          position: [...body.transform.position] as [number, number, number],
-          quaternion: [...body.transform.rotation] as [number, number, number, number],
-        })
       }
     })
     asset.vehicles.forEach((vehicle) => {
       const nodeId = bodyNodeIdByBodyId.get(vehicle.bodyId) ?? null
       if (nodeId) {
         vehicleIdByNodeId.set(nodeId, vehicle.id)
+      }
+    })
+    asset.characters.forEach((character) => {
+      const nodeId = bodyNodeIdByBodyId.get(character.bodyId) ?? null
+      if (nodeId) {
+        characterIdByNodeId.set(nodeId, character.characterId)
       }
     })
 
@@ -885,6 +870,7 @@ class AuthoritativePhysicsRoom {
             characterProps,
             bodyId: bodyIdByNodeId.get(node.id) ?? null,
             vehicleId: vehicleIdByNodeId.get(node.id) ?? null,
+            characterId: characterIdByNodeId.get(node.id) ?? null,
             ownerUserId: null,
             leaseExpiresAt: 0,
             inputSequence: 0,
@@ -912,7 +898,6 @@ class AuthoritativePhysicsRoom {
       asset,
       nodes,
       bodyNodeIdByBodyId,
-      bodyTransformByNodeId,
     }
     this.tick = 0
     this.startTicker()
@@ -1004,90 +989,12 @@ class AuthoritativePhysicsRoom {
     }
   }
 
-  private resolveCharacterBodyTransform(node: LoadedPhysicsAuthorityNode): { position: Vector3; quaternion: Quaternion } {
-    const snapshot = this.latestSnapshotByNodeId.get(node.nodeId)
-    if (snapshot) {
-      return {
-        position: snapshot.transform.position,
-        quaternion: snapshot.transform.quaternion,
-      }
-    }
-    const initial = this.loadedScene?.bodyTransformByNodeId.get(node.nodeId) ?? null
-    if (initial) {
-      return {
-        position: {
-          x: initial.position[0],
-          y: initial.position[1],
-          z: initial.position[2],
-        },
-        quaternion: {
-          x: initial.quaternion[0],
-          y: initial.quaternion[1],
-          z: initial.quaternion[2],
-          w: initial.quaternion[3],
-        },
-      }
-    }
-    return {
-      position: { x: 0, y: 0, z: 0 },
-      quaternion: { x: 0, y: 0, z: 0, w: 1 },
-    }
-  }
-
-  private resolveCharacterVelocity(node: LoadedPhysicsAuthorityNode, input: MultiuserPhysicsAuthorityInput): Vector3 {
-    const character = input.character
-    const characterProps = node.characterProps ?? null
-    const moveX = Math.max(-1, Math.min(1, character?.moveX ?? 0))
-    const moveZ = Math.max(-1, Math.min(1, character?.moveZ ?? 0))
-    const crouching = Boolean(character?.crouch)
-    const sprinting = Boolean(character?.sprint)
-    const movementMagnitude = Math.min(1, Math.hypot(moveX, moveZ))
-    let speed = characterProps?.walkSpeed ?? 2.4
-    if (crouching) {
-      speed = Math.max(0, speed * 0.4)
-    } else if (sprinting && movementMagnitude > 0.05) {
-      speed = characterProps?.sprintSpeed ?? 6.4
-    } else if (movementMagnitude >= 0.85) {
-      speed = characterProps?.sprintSpeed ?? 6.4
-    } else if (movementMagnitude >= 0.5) {
-      speed = characterProps?.runSpeed ?? 4.8
-    }
-
-    const transform = this.resolveCharacterBodyTransform(node)
-    const quaternion = transform.quaternion
-    const forward = rotateAxisByQuaternion(quaternion, 1, 0, 0)
-    const right = rotateAxisByQuaternion(quaternion, 0, 0, 1)
-    const horizontal = {
-      x: forward.x * moveZ * speed + right.x * moveX * speed,
-      y: 0,
-      z: forward.z * moveZ * speed + right.z * moveX * speed,
-    }
-    const snapshot = this.latestSnapshotByNodeId.get(node.nodeId)
-    const currentVertical = snapshot?.linearVelocity?.y ?? 0
-    const wantsJump = Boolean(character?.jump)
-    const jumpedLastFrame = this.lastCharacterJumpStateByNodeId.get(node.nodeId) ?? false
-    if (wantsJump && !jumpedLastFrame) {
-      this.lastCharacterJumpStateByNodeId.set(node.nodeId, true)
-      return {
-        x: horizontal.x,
-        y: characterProps?.jumpImpulse ?? 6.5,
-        z: horizontal.z,
-      }
-    }
-    this.lastCharacterJumpStateByNodeId.set(node.nodeId, wantsJump)
-    return {
-      x: horizontal.x,
-      y: currentVertical,
-      z: horizontal.z,
-    }
-  }
-
   private async applyCharacterInputs(now: number): Promise<void> {
     if (!this.controller || !this.loadedScene) {
       return
     }
     for (const node of this.loadedScene.nodes.values()) {
-      if (node.actorType !== 'character' || node.bodyId === null) {
+      if (node.actorType !== 'character' || node.characterId === null) {
         continue
       }
       const input = this.inputByNodeId.get(node.nodeId) ?? null
@@ -1097,12 +1004,15 @@ class AuthoritativePhysicsRoom {
       const leaseMs = Math.min(MAX_LEASE_MS, Math.max(MIN_LEASE_MS, Math.round(input.leaseMs || AUTHORITY_DEFAULT_LEASE_MS)))
       node.ownerUserId = input.ownerUserId ?? node.ownerUserId
       node.leaseExpiresAt = now + leaseMs
-      const linearVelocity = this.resolveCharacterVelocity(node, input)
-      await this.controller.setBodyVelocity({
-        bodyId: node.bodyId,
-        linearVelocity: [linearVelocity.x, linearVelocity.y, linearVelocity.z],
-        angularVelocity: [0, 0, 0],
-        wakeUp: true,
+      await this.controller.setCharacterInput({
+        characterId: node.characterId,
+        moveX: input.character.moveX,
+        moveZ: input.character.moveZ,
+        yaw: input.character.yaw ?? null,
+        jump: input.character.jump,
+        sprint: input.character.sprint,
+        crouch: input.character.crouch,
+        interact: input.character.interact,
       })
     }
   }
@@ -1194,7 +1104,6 @@ class AuthoritativePhysicsRoom {
       node.ownerUserId = null
       node.leaseExpiresAt = 0
       this.inputByNodeId.delete(node.nodeId)
-      this.lastCharacterJumpStateByNodeId.delete(node.nodeId)
     })
   }
 

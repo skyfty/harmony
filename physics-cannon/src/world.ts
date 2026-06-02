@@ -1,9 +1,13 @@
 import * as CANNON from 'cannon-es'
 import {
+  createPhysicsCharacterMotorState,
+  stepPhysicsCharacterMotor,
   type PhysicsAddRuntimeBodiesCommand,
   type PhysicsBodyDesc,
   type PhysicsBodyTransformCommand,
   type PhysicsBodyVelocityCommand,
+  type PhysicsCharacterDesc,
+  type PhysicsCharacterInputCommand,
   type PhysicsContactEvent,
   type PhysicsMaterialDesc,
   type PhysicsRemoveRuntimeBodiesCommand,
@@ -38,6 +42,14 @@ type VehicleState = {
   speedGovernorSmoothedForwardSpeedAbs: number
 }
 
+type CharacterState = {
+  desc: PhysicsCharacterDesc
+  bodyId: number
+  body: CANNON.Body
+  input: PhysicsCharacterInputCommand | null
+  motorState: ReturnType<typeof createPhysicsCharacterMotorState>
+}
+
 const DEFAULT_WORLD_SETTINGS: PhysicsWorldSettings = {
   gravity: [0, -9.8, 0],
   fixedTimeStepMs: 1000 / 60,
@@ -68,8 +80,10 @@ export class CannonPhysicsWorld {
   private readonly runtimeMaterials = new Map<number, PhysicsMaterialDesc>()
   private readonly vehicles = new Map<number, VehicleState>()
   private readonly vehicleInputs = new Map<number, PhysicsVehicleInputCommand>()
+  private readonly characters = new Map<number, CharacterState>()
   private readonly bodyContactListeners = new Map<number, (event: unknown) => void>()
   private stepContacts: PhysicsContactEvent[] = []
+  private lastContactNormalYByBodyId = new Map<number, number>()
 
   setWorldSettings(settings: PhysicsWorldSettings): void {
     this.worldSettings = {
@@ -96,6 +110,22 @@ export class CannonPhysicsWorld {
     scene.vehicles.forEach((vehicle) => {
       this.vehicles.set(vehicle.id, this.createVehicleState(vehicle))
     })
+    scene.characters.forEach((character) => {
+      const body = this.bodies.get(character.bodyId)?.body ?? null
+      if (!body) {
+        return
+      }
+      body.fixedRotation = true
+      body.updateMassProperties()
+      body.angularVelocity.set(0, 0, 0)
+      this.characters.set(character.characterId, {
+        desc: character,
+        bodyId: character.bodyId,
+        body,
+        input: null,
+        motorState: createPhysicsCharacterMotorState(),
+      })
+    })
     return {
       bodyCount: scene.bodies.length,
       vehicleCount: scene.vehicles.length,
@@ -115,6 +145,8 @@ export class CannonPhysicsWorld {
     this.frame += 1
     this.stepContacts = []
     this.applyVehicleInputs()
+    this.applyCharacterInputs(deltaMs)
+    this.lastContactNormalYByBodyId.clear()
 
     const deltaSeconds = Math.max(0, deltaMs) / 1000
     if (deltaSeconds > 0) {
@@ -232,6 +264,15 @@ export class CannonPhysicsWorld {
     this.vehicleInputs.set(command.vehicleId, command)
   }
 
+  setCharacterInput(command: PhysicsCharacterInputCommand): void {
+    const state = this.characters.get(command.characterId)
+    if (!state) {
+      return
+    }
+    state.input = command
+    state.body.wakeUp()
+  }
+
   addRuntimeBodies(command: PhysicsAddRuntimeBodiesCommand): void {
     this.ensureWorld()
     for (const entry of command.bodies) {
@@ -306,6 +347,8 @@ export class CannonPhysicsWorld {
     }
     this.vehicles.clear()
     this.vehicleInputs.clear()
+    this.characters.clear()
+    this.lastContactNormalYByBodyId.clear()
     this.bodyContactListeners.forEach((listener, bodyId) => {
       const state = this.bodies.get(bodyId) ?? this.runtimeBodies.get(bodyId) ?? null
       try {
@@ -355,6 +398,106 @@ export class CannonPhysicsWorld {
     })
     this.attachBodyContactListener(body, desc.id)
     return { desc, body }
+  }
+
+  private applyCharacterInputs(deltaMs: number): void {
+    if (!this.characters.size) {
+      return
+    }
+    const deltaSeconds = Math.max(0, deltaMs) / 1000
+    this.characters.forEach((characterState) => {
+      const input = characterState.input ?? {
+        characterId: characterState.desc.characterId,
+        moveX: 0,
+        moveZ: 0,
+        yaw: characterState.motorState.yaw,
+        jump: false,
+        sprint: false,
+        crouch: false,
+        interact: false,
+      }
+      const contactNormalY = this.lastContactNormalYByBodyId.get(characterState.bodyId) ?? null
+      const probe = this.resolveCharacterGroundProbe(characterState)
+      const stepResult = stepPhysicsCharacterMotor(characterState.desc, characterState.motorState, {
+        moveX: input.moveX,
+        moveZ: input.moveZ,
+        yaw: input.yaw,
+        jump: input.jump,
+        sprint: input.sprint,
+        crouch: input.crouch,
+        interact: input.interact,
+        deltaSeconds,
+        gravityY: this.worldSettings.gravity[1] ?? -9.8,
+        probe,
+        contactNormalY,
+      })
+      characterState.body.velocity.set(
+        stepResult.linearVelocity[0],
+        stepResult.linearVelocity[1],
+        stepResult.linearVelocity[2],
+      )
+      characterState.body.angularVelocity.set(0, 0, 0)
+      characterState.body.quaternion.setFromEuler(0, stepResult.yaw, 0, 'YXZ')
+      characterState.body.aabbNeedsUpdate = true
+      characterState.body.wakeUp()
+    })
+  }
+
+  private resolveCharacterGroundProbe(characterState: CharacterState): {
+    hit: boolean
+    distance: number
+    normalY: number
+    normal?: [number, number, number]
+  } {
+    const body = characterState.body
+    const radius = Math.max(0.05, characterState.desc.radius)
+    const halfHeight = Math.max(radius, characterState.desc.height * 0.5)
+    const probeRise = Math.max(0.08, Math.min(0.4, characterState.desc.stepHeight + 0.05))
+    const probeDepth = Math.max(0.2, characterState.desc.stepHeight + radius + 0.12)
+    const baseY = body.position.y - halfHeight + radius
+    const offsets = resolveCharacterProbeOffsets(radius)
+    const candidates = [
+      ...this.bodies.values(),
+      ...this.runtimeBodies.values(),
+    ]
+      .map((state) => state.body)
+      .filter((candidateBody) => candidateBody !== body)
+    let bestHit: { distance: number; normal: [number, number, number] } | null = null
+    for (const [offsetX, offsetZ] of offsets) {
+      const from = new CANNON.Vec3(body.position.x + offsetX, baseY + probeRise, body.position.z + offsetZ)
+      const to = new CANNON.Vec3(body.position.x + offsetX, baseY - probeDepth, body.position.z + offsetZ)
+      const ray = new CANNON.Ray(from, to)
+      ray.mode = CANNON.Ray.CLOSEST
+      ray.skipBackfaces = true
+      ray.checkCollisionResponse = true
+      const result = new CANNON.RaycastResult()
+      ray.intersectBodies(candidates, result)
+      if (!result.hasHit || !result.body || result.body === body) {
+        continue
+      }
+      const distance = Math.max(0, from.distanceTo(result.hitPointWorld))
+      const normal = normalizePhysicsVector([
+        result.hitNormalWorld.x,
+        result.hitNormalWorld.y,
+        result.hitNormalWorld.z,
+      ])
+      if (!bestHit || distance < bestHit.distance) {
+        bestHit = { distance, normal }
+      }
+    }
+    if (!bestHit) {
+      return {
+        hit: false,
+        distance: Number.POSITIVE_INFINITY,
+        normalY: 0,
+      }
+    }
+    return {
+      hit: true,
+      distance: bestHit.distance,
+      normalY: bestHit.normal[1] ?? 0,
+      normal: bestHit.normal,
+    }
   }
 
   private attachBodyContactListener(body: CANNON.Body, bodyId: number): void {
@@ -422,7 +565,21 @@ export class CannonPhysicsWorld {
         return pairKey === key
       })
       if (existing) {
+        const absNormalY = Math.abs(normalizedNormal[1] ?? 0)
+        if (absNormalY > (this.lastContactNormalYByBodyId.get(bodyId) ?? 0)) {
+          this.lastContactNormalYByBodyId.set(bodyId, absNormalY)
+        }
+        if (absNormalY > (this.lastContactNormalYByBodyId.get(otherBodyId) ?? 0)) {
+          this.lastContactNormalYByBodyId.set(otherBodyId, absNormalY)
+        }
         return
+      }
+      const absNormalY = Math.abs(normalizedNormal[1] ?? 0)
+      if (absNormalY > (this.lastContactNormalYByBodyId.get(bodyId) ?? 0)) {
+        this.lastContactNormalYByBodyId.set(bodyId, absNormalY)
+      }
+      if (absNormalY > (this.lastContactNormalYByBodyId.get(otherBodyId) ?? 0)) {
+        this.lastContactNormalYByBodyId.set(otherBodyId, absNormalY)
       }
       this.stepContacts.push({
         bodyIdA: bodyId,
@@ -638,6 +795,22 @@ function smoothstep(edge0: number, edge1: number, x: number): number {
   }
   const t = Math.min(1, Math.max(0, (x - edge0) / (edge1 - edge0)))
   return t * t * (3 - 2 * t)
+}
+
+function resolveCharacterProbeOffsets(radius: number): Array<[number, number]> {
+  const ring = Math.max(0.06, radius + 0.02)
+  const diagonal = ring * Math.SQRT1_2
+  return [
+    [0, 0],
+    [ring, 0],
+    [-ring, 0],
+    [0, ring],
+    [0, -ring],
+    [diagonal, diagonal],
+    [diagonal, -diagonal],
+    [-diagonal, diagonal],
+    [-diagonal, -diagonal],
+  ]
 }
 
 export function createCannonWorld(settings: PhysicsWorldSettings): CANNON.World {

@@ -607,6 +607,12 @@ import {
 } from '@harmony/schema/components/definitions/animationComponent';
 import { CharacterControllerAnimationRuntimeManager } from '@harmony/schema/characterControllerAnimationRuntime';
 import {
+  CHARACTER_CONTROLLER_COMPONENT_TYPE,
+  clampCharacterControllerComponentProps,
+  writeCharacterLocalForward,
+  type CharacterControllerComponentProps,
+} from '@harmony/schema/components/definitions/characterControllerComponent';
+import {
   behaviorComponentDefinition,
 } from '@harmony/schema/components/definitions/behaviorComponent';
 import {
@@ -2328,6 +2334,7 @@ let sceneryGroundCollisionReferenceElapsed = 0;
 const physicsBridgeBodyIdByNodeId = new Map<string, number>();
 const physicsBridgeNodeIdByBodyId = new Map<number, string>();
 const physicsBridgeVehicleIdByNodeId = new Map<string, number>();
+const physicsBridgeCharacterIdByNodeId = new Map<string, number>();
 function nextSceneryGroundCollisionRuntimeId(): number {
   sceneryGroundCollisionNextRuntimeId += 1;
   return sceneryGroundCollisionNextRuntimeId;
@@ -2619,6 +2626,8 @@ const tempForwardVec = new THREE.Vector3();
 const tempRightVec = new THREE.Vector3();
 const tempMovementVec = new THREE.Vector3();
 const tempYawForwardVec = new THREE.Vector3();
+const tempCharacterForwardVec = new THREE.Vector3();
+const tempCharacterRightVec = new THREE.Vector3();
 const protagonistPosePosition = new THREE.Vector3();
 const protagonistPoseDirection = new THREE.Vector3();
 const protagonistPoseQuaternion = new THREE.Quaternion();
@@ -5818,6 +5827,112 @@ function resolveNodeById(nodeId: string): SceneNode | null {
   return resolveSceneNodeById(previewNodeMap, nodeId);
 }
 
+function resolveCharacterControllerComponent(
+  node: SceneNode | null | undefined,
+): SceneNodeComponentState<CharacterControllerComponentProps> | null {
+  return resolveEnabledComponentState<CharacterControllerComponentProps>(node, CHARACTER_CONTROLLER_COMPONENT_TYPE);
+}
+
+function resolveRemoteCharacterAnimationInput(nodeId: string): {
+  moveX: number;
+  moveZ: number;
+  jump: boolean;
+  sprint: boolean;
+  crouch: boolean;
+  interact: boolean;
+  locallyControlled: boolean;
+} {
+  const entry = remotePhysicsAuthorityEntries.get(nodeId) ?? null;
+  if (!entry || entry.targetState.actorType !== 'character') {
+    return {
+      moveX: 0,
+      moveZ: 0,
+      jump: false,
+      sprint: false,
+      crouch: false,
+      interact: false,
+      locallyControlled: false,
+    };
+  }
+  const linearVelocity = entry.displayState?.linearVelocity ?? entry.targetState.linearVelocity ?? null;
+  if (!linearVelocity) {
+    return {
+      moveX: 0,
+      moveZ: 0,
+      jump: false,
+      sprint: false,
+      crouch: false,
+      interact: false,
+      locallyControlled: false,
+    };
+  }
+  const speed = Math.hypot(linearVelocity.x ?? 0, linearVelocity.z ?? 0);
+  if (!(speed > 0.05)) {
+    return {
+      moveX: 0,
+      moveZ: 0,
+      jump: false,
+      sprint: false,
+      crouch: false,
+      interact: false,
+      locallyControlled: false,
+    };
+  }
+  const node = resolveNodeById(nodeId);
+  const props = clampCharacterControllerComponentProps(resolveCharacterControllerComponent(node)?.props ?? null);
+  const speedScale = Math.max(0.01, props.sprintSpeed || props.runSpeed || props.walkSpeed || 1);
+  const movementMagnitude = Math.min(1, speed / speedScale);
+  writeCharacterLocalForward(tempCharacterForwardVec, props.forwardAxis);
+  const object = nodeObjectMap.get(nodeId) ?? null;
+  if (object) {
+    object.getWorldQuaternion(protagonistPoseQuaternion);
+  } else {
+    protagonistPoseQuaternion.set(
+      entry.displayState.transform.quaternion.x,
+      entry.displayState.transform.quaternion.y,
+      entry.displayState.transform.quaternion.z,
+      entry.displayState.transform.quaternion.w,
+    ).normalize();
+  }
+  tempCharacterForwardVec.applyQuaternion(protagonistPoseQuaternion);
+  tempCharacterForwardVec.y = 0;
+  if (tempCharacterForwardVec.lengthSq() <= 1e-8) {
+    tempCharacterForwardVec.set(0, 0, 1);
+  } else {
+    tempCharacterForwardVec.normalize();
+  }
+  tempCharacterRightVec.crossVectors(worldUp, tempCharacterForwardVec);
+  if (tempCharacterRightVec.lengthSq() <= 1e-8) {
+    tempCharacterRightVec.set(1, 0, 0);
+  } else {
+    tempCharacterRightVec.normalize();
+  }
+  tempMovementVec.set(linearVelocity.x ?? 0, 0, linearVelocity.z ?? 0);
+  if (tempMovementVec.lengthSq() <= 1e-8) {
+    return {
+      moveX: 0,
+      moveZ: 0,
+      jump: false,
+      sprint: false,
+      crouch: false,
+      interact: false,
+      locallyControlled: false,
+    };
+  }
+  tempMovementVec.normalize().multiplyScalar(movementMagnitude);
+  const moveX = THREE.MathUtils.clamp(tempMovementVec.dot(tempCharacterRightVec), -1, 1);
+  const moveZ = THREE.MathUtils.clamp(tempMovementVec.dot(tempCharacterForwardVec), -1, 1);
+  return {
+    moveX,
+    moveZ,
+    jump: false,
+    sprint: speed >= Math.max(props.runSpeed, props.walkSpeed + 0.01),
+    crouch: false,
+    interact: false,
+    locallyControlled: false,
+  };
+}
+
 function isCharacterControllerAnimationNode(nodeId: string): boolean {
   return characterControllerAnimationRuntime.has(nodeId);
 }
@@ -5840,15 +5955,19 @@ function refreshCharacterControllerAnimationRuntimeEntries(): void {
     nodeAnimationRuntime,
     iterNodes: () => previewNodeMap.entries(),
     resolveNode: (nodeId) => resolveNodeById(nodeId),
-    resolveInput: (nodeId) => ({
-      moveX: controlledNodeId === nodeId ? characterAuthorityInput.moveX : 0,
-      moveZ: controlledNodeId === nodeId ? characterAuthorityInput.moveZ : 0,
-      jump: controlledNodeId === nodeId ? characterAuthorityInput.jump : false,
-      sprint: controlledNodeId === nodeId ? characterAuthorityInput.sprint : false,
-      crouch: controlledNodeId === nodeId ? characterAuthorityInput.crouch : false,
-      interact: controlledNodeId === nodeId ? characterAuthorityInput.interact : false,
-      locallyControlled: controlledNodeId === nodeId,
-    }),
+    resolveInput: (nodeId) => (
+      controlledNodeId === nodeId
+        ? {
+            moveX: characterAuthorityInput.moveX,
+            moveZ: characterAuthorityInput.moveZ,
+            jump: characterAuthorityInput.jump,
+            sprint: characterAuthorityInput.sprint,
+            crouch: characterAuthorityInput.crouch,
+            interact: characterAuthorityInput.interact,
+            locallyControlled: true,
+          }
+        : resolveRemoteCharacterAnimationInput(nodeId)
+    ),
     resolveGroundContacts: (nodeId) => physicsBridgeContactsByNodeId.get(nodeId) ?? null,
   });
 }
@@ -5862,15 +5981,19 @@ function updateCharacterControllerAnimations(deltaSeconds: number): void {
     nodeAnimationRuntime,
     iterNodes: () => previewNodeMap.entries(),
     resolveNode: (nodeId) => resolveNodeById(nodeId),
-    resolveInput: (nodeId) => ({
-      moveX: controlledNodeId === nodeId ? characterAuthorityInput.moveX : 0,
-      moveZ: controlledNodeId === nodeId ? characterAuthorityInput.moveZ : 0,
-      jump: controlledNodeId === nodeId ? characterAuthorityInput.jump : false,
-      sprint: controlledNodeId === nodeId ? characterAuthorityInput.sprint : false,
-      crouch: controlledNodeId === nodeId ? characterAuthorityInput.crouch : false,
-      interact: controlledNodeId === nodeId ? characterAuthorityInput.interact : false,
-      locallyControlled: controlledNodeId === nodeId,
-    }),
+    resolveInput: (nodeId) => (
+      controlledNodeId === nodeId
+        ? {
+            moveX: characterAuthorityInput.moveX,
+            moveZ: characterAuthorityInput.moveZ,
+            jump: characterAuthorityInput.jump,
+            sprint: characterAuthorityInput.sprint,
+            crouch: characterAuthorityInput.crouch,
+            interact: characterAuthorityInput.interact,
+            locallyControlled: true,
+          }
+        : resolveRemoteCharacterAnimationInput(nodeId)
+    ),
     resolveGroundContacts: (nodeId) => physicsBridgeContactsByNodeId.get(nodeId) ?? null,
   }, getCharacterAnimationNowMs());
 }
@@ -7606,6 +7729,7 @@ function updateSceneryPhysicsBridgeIndex(asset: PhysicsSceneAsset): void {
   physicsBridgeBodyIdByNodeId.clear();
   physicsBridgeNodeIdByBodyId.clear();
   physicsBridgeVehicleIdByNodeId.clear();
+  physicsBridgeCharacterIdByNodeId.clear();
   physicsBridgeFrameBodiesByNodeId.clear();
   physicsBridgeContactsByNodeId.clear();
   physicsBridgeDirtyBodyNodeIds.clear();
@@ -7625,6 +7749,13 @@ function updateSceneryPhysicsBridgeIndex(asset: PhysicsSceneAsset): void {
       return;
     }
     physicsBridgeVehicleIdByNodeId.set(nodeId, vehicle.id);
+  });
+  asset.characters.forEach((character) => {
+    const nodeId = physicsBridgeNodeIdByBodyId.get(character.bodyId);
+    if (!nodeId) {
+      return;
+    }
+    physicsBridgeCharacterIdByNodeId.set(nodeId, character.characterId);
   });
   vehicleInstances.forEach((instance, nodeId) => {
     if (instance.source !== 'bridge') {
@@ -7832,7 +7963,7 @@ function applySceneryPhysicsBridgeFrameToObjects(): void {
         rigidbodyComponent,
         nodeObjectMap.get(nodeId) ?? null,
       )
-      : null;
+      : (physicsBridgeCharacterIdByNodeId.has(nodeId) ? (nodeObjectMap.get(nodeId) ?? null) : null);
     if (!bindingObject) {
       return;
     }
@@ -7989,6 +8120,12 @@ function syncSceneryPhysicsBridgeBodyTransforms(): void {
   candidateNodeIds.forEach((nodeId) => {
     const bodyId = physicsBridgeBodyIdByNodeId.get(nodeId);
     if (typeof bodyId !== 'number') {
+      physicsBridgeDirtyBodyNodeIds.delete(nodeId);
+      physicsBridgeBodyDirtyRevisionByNodeId.delete(nodeId);
+      physicsBridgePendingBodySyncRevisionByNodeId.delete(nodeId);
+      return;
+    }
+    if (physicsBridgeCharacterIdByNodeId.has(nodeId)) {
       physicsBridgeDirtyBodyNodeIds.delete(nodeId);
       physicsBridgeBodyDirtyRevisionByNodeId.delete(nodeId);
       physicsBridgePendingBodySyncRevisionByNodeId.delete(nodeId);
@@ -8179,6 +8316,51 @@ function syncSceneryPhysicsBridgeVehicleInput(): void {
   });
 }
 
+function resolveSceneryCharacterInputYaw(): number {
+  if (camera) {
+    camera.getWorldDirection(tempDirection);
+    tempDirection.y = 0;
+    if (tempDirection.lengthSq() > 1e-8) {
+      tempDirection.normalize();
+      return Math.atan2(tempDirection.x, tempDirection.z);
+    }
+  }
+  const controlledObject = findDefaultControlledCharacterObject();
+  if (controlledObject) {
+    controlledObject.getWorldQuaternion(tempQuaternion);
+    resolveControlledCharacterForwardVector(tempDirection).applyQuaternion(tempQuaternion);
+    tempDirection.y = 0;
+    if (tempDirection.lengthSq() > 1e-8) {
+      tempDirection.normalize();
+      return Math.atan2(tempDirection.x, tempDirection.z);
+    }
+  }
+  return Math.PI;
+}
+
+function syncSceneryPhysicsBridgeCharacterInput(): void {
+  if (!physicsBridge || !physicsBridgeSceneLoaded || !physicsBridgeCharacterIdByNodeId.size) {
+    return;
+  }
+  const controlledNodeId = resolveDefaultControlledCharacterNodeId();
+  const yaw = resolveSceneryCharacterInputYaw();
+  physicsBridgeCharacterIdByNodeId.forEach((characterId, nodeId) => {
+    const isControlled = nodeId === controlledNodeId;
+    void physicsBridge?.setCharacterInput({
+      characterId,
+      moveX: isControlled ? characterAuthorityInput.moveX : 0,
+      moveZ: isControlled ? characterAuthorityInput.moveZ : 0,
+      yaw,
+      jump: isControlled ? characterAuthorityInput.jump : false,
+      sprint: isControlled ? characterAuthorityInput.sprint : false,
+      crouch: isControlled ? characterAuthorityInput.crouch : false,
+      interact: isControlled ? characterAuthorityInput.interact : false,
+    }).catch((error) => {
+      console.warn('[SceneViewer] Failed to sync character input', error);
+    });
+  });
+}
+
 async function disposeSceneryPhysicsBridgeScene(): Promise<void> {
   physicsBridgeSceneRequestId += 1;
   sceneryGroundCollisionRuntimeBodyIds.clear();
@@ -8187,6 +8369,7 @@ async function disposeSceneryPhysicsBridgeScene(): Promise<void> {
   physicsBridgeBodyIdByNodeId.clear();
   physicsBridgeNodeIdByBodyId.clear();
   physicsBridgeVehicleIdByNodeId.clear();
+  physicsBridgeCharacterIdByNodeId.clear();
   physicsBridgeFrameBodiesByNodeId.clear();
   physicsBridgeDirtyBodyNodeIds.clear();
   physicsBridgeBodyDirtyRevisionByNodeId.clear();
@@ -8246,6 +8429,7 @@ async function destroySceneryPhysicsBridge(): Promise<void> {
     physicsBridgeBodyIdByNodeId.clear();
     physicsBridgeNodeIdByBodyId.clear();
     physicsBridgeVehicleIdByNodeId.clear();
+    physicsBridgeCharacterIdByNodeId.clear();
     physicsBridgeFrameBodiesByNodeId.clear();
     physicsBridgeDirtyBodyNodeIds.clear();
     physicsBridgeBodyDirtyRevisionByNodeId.clear();
@@ -11862,6 +12046,7 @@ function resolveLocalPhysicsAuthorityInputs(): MultiuserPhysicsAuthorityInput[] 
     const characterInput = {
       moveX: characterAuthorityInput.moveX,
       moveZ: characterAuthorityInput.moveZ,
+      yaw: resolveSceneryCharacterInputYaw(),
       jump: characterAuthorityInput.jump,
       sprint: characterAuthorityInput.sprint,
       crouch: characterAuthorityInput.crouch,
@@ -11883,6 +12068,7 @@ function resolveLocalPhysicsAuthorityInputs(): MultiuserPhysicsAuthorityInput[] 
     entry.lastLocalSignature = [
       characterInput.moveX,
       characterInput.moveZ,
+      characterInput.yaw ?? '',
       characterInput.jump ? 1 : 0,
       characterInput.sprint ? 1 : 0,
       characterInput.crouch ? 1 : 0,
@@ -17178,6 +17364,7 @@ function startRenderLoop(
           }
           stepPhysicsWorld(deltaSeconds);
           syncSceneryPhysicsBridgeVehicleInput();
+          syncSceneryPhysicsBridgeCharacterInput();
           syncSceneryPhysicsBridgeBodyTransforms();
           stepSceneryPhysicsBridge(deltaSeconds);
           updateVehicleSpeedFromVehicle();

@@ -1,6 +1,7 @@
 import {
   collectStepFrameTransferables,
   type PhysicsBodyVelocityCommand,
+  type PhysicsCharacterInputCommand,
   type PhysicsBridgeInitResult,
   type PhysicsInitOptions,
   type PhysicsRaycastHit,
@@ -17,6 +18,7 @@ export interface PhysicsWorkerController {
   setBodyTransform(command: Extract<PhysicsWorkerRequest, { type: 'set-body-transform' }>['payload']): Promise<void>
   setBodyVelocity(command: PhysicsBodyVelocityCommand): Promise<void>
   setVehicleInput(command: Extract<PhysicsWorkerRequest, { type: 'set-vehicle-input' }>['payload']): Promise<void>
+  setCharacterInput(command: PhysicsCharacterInputCommand): Promise<void>
   addRuntimeBodies(command: Extract<PhysicsWorkerRequest, { type: 'add-runtime-bodies' }>['payload']): Promise<void>
   removeRuntimeBodies(command: Extract<PhysicsWorkerRequest, { type: 'remove-runtime-bodies' }>['payload']): Promise<void>
   raycast(command: Extract<PhysicsWorkerRequest, { type: 'raycast' }>['payload']): Promise<PhysicsRaycastHit | null>
@@ -55,6 +57,7 @@ export function createNoopPhysicsWorkerController(): PhysicsWorkerController {
     async setBodyTransform() {},
     async setBodyVelocity() {},
     async setVehicleInput() {},
+    async setCharacterInput() {},
     async addRuntimeBodies() {},
     async removeRuntimeBodies() {},
     async raycast() {
@@ -133,6 +136,11 @@ export function attachPhysicsWorkerRuntime(
             }
             case 'set-vehicle-input': {
               await controller.setVehicleInput(request.payload)
+              scope.postMessage({ id: request.id, ok: true, type: request.type, payload: null } satisfies PhysicsWorkerResponse)
+              break
+            }
+            case 'set-character-input': {
+              await controller.setCharacterInput(request.payload)
               scope.postMessage({ id: request.id, ok: true, type: request.type, payload: null } satisfies PhysicsWorkerResponse)
               break
             }

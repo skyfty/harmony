@@ -23,6 +23,8 @@ export type CharacterAnimationSlot =
   | 'interact'
   | 'death'
 
+export type CharacterForwardAxis = '+x' | '-x' | '+z' | '-z'
+
 export interface CharacterAnimationBinding {
   slot: CharacterAnimationSlot
   clipName: string | null
@@ -30,6 +32,7 @@ export interface CharacterAnimationBinding {
 
 export interface CharacterControllerComponentProps {
   label: string
+  forwardAxis: CharacterForwardAxis
   walkSpeed: number
   runSpeed: number
   sprintSpeed: number
@@ -42,6 +45,9 @@ export interface CharacterControllerComponentProps {
   colliderHeight: number
   animationBindings: CharacterAnimationBinding[]
 }
+
+export const CHARACTER_FORWARD_AXIS_OPTIONS: CharacterForwardAxis[] = ['+x', '-x', '+z', '-z']
+export const DEFAULT_CHARACTER_FORWARD_AXIS: CharacterForwardAxis = '+x'
 
 const DEFAULT_ANIMATION_SLOTS: CharacterAnimationSlot[] = [
   'idle',
@@ -79,6 +85,12 @@ function sanitizeClipName(value: unknown): string | null {
   return trimmed.length ? trimmed : null
 }
 
+function normalizeForwardAxis(value: unknown): CharacterForwardAxis {
+  return CHARACTER_FORWARD_AXIS_OPTIONS.includes(value as CharacterForwardAxis)
+    ? (value as CharacterForwardAxis)
+    : DEFAULT_CHARACTER_FORWARD_AXIS
+}
+
 function normalizeAnimationBinding(
   binding: Partial<CharacterAnimationBinding> | null | undefined,
   slot: CharacterAnimationSlot,
@@ -111,6 +123,7 @@ export function clampCharacterControllerComponentProps(
   const animationBindings = DEFAULT_ANIMATION_SLOTS.map((slot) => bindings.get(slot) ?? normalizeAnimationBinding(null, slot))
   return {
     label: sanitizeString(props?.label) || 'Character Controller',
+    forwardAxis: normalizeForwardAxis(props?.forwardAxis),
     walkSpeed: sanitizeNumber(props?.walkSpeed, 2.4, 0, 100),
     runSpeed: sanitizeNumber(props?.runSpeed, 4.8, 0, 100),
     sprintSpeed: sanitizeNumber(props?.sprintSpeed, 6.4, 0, 100),
@@ -130,6 +143,7 @@ export function cloneCharacterControllerComponentProps(
 ): CharacterControllerComponentProps {
   return {
     label: props.label,
+    forwardAxis: props.forwardAxis,
     walkSpeed: props.walkSpeed,
     runSpeed: props.runSpeed,
     sprintSpeed: props.sprintSpeed,
@@ -142,6 +156,27 @@ export function cloneCharacterControllerComponentProps(
     colliderHeight: props.colliderHeight,
     animationBindings: props.animationBindings.map(cloneAnimationBinding),
   }
+}
+
+export function writeCharacterLocalForward(out: { set: (x: number, y: number, z: number) => unknown }, forwardAxis: CharacterForwardAxis): typeof out {
+  switch (forwardAxis) {
+    case '+x':
+      out.set(1, 0, 0)
+      break
+    case '-x':
+      out.set(-1, 0, 0)
+      break
+    case '+z':
+      out.set(0, 0, 1)
+      break
+    case '-z':
+      out.set(0, 0, -1)
+      break
+    default:
+      out.set(1, 0, 0)
+      break
+  }
+  return out
 }
 
 class CharacterControllerComponent extends Component<CharacterControllerComponentProps> {

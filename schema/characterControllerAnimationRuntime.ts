@@ -173,10 +173,10 @@ export class CharacterControllerAnimationRuntimeManager {
 				return
 			}
 			const input = host.resolveInput(nodeId)
-			const moveX = input.locallyControlled ? input.moveX : 0
-			const moveZ = input.locallyControlled ? input.moveZ : 0
+			const moveX = input.moveX
+			const moveZ = input.moveZ
 			const movementMagnitude = resolveCharacterControlMovementMagnitude(moveX, moveZ)
-			const jumpPressed = input.locallyControlled ? input.jump : false
+			const jumpPressed = input.jump
 			const groundedState = this.resolveGroundedState(host, nodeId)
 			const grounded = groundedState.grounded
 			const previousGrounded = entry.lastGrounded
@@ -191,9 +191,9 @@ export class CharacterControllerAnimationRuntimeManager {
 				const startClipName = chooseCharacterControlClipName(entry.props, movementMagnitude, {
 					moveX,
 					moveZ,
-					sprinting: input.locallyControlled ? input.sprint : false,
-					crouching: input.locallyControlled ? input.crouch : false,
-					interacting: input.locallyControlled ? input.interact : false,
+					sprinting: input.sprint,
+					crouching: input.crouch,
+					interacting: input.interact,
 					jumpPhase: 'start',
 				})
 				const startDurationMs = this.resolveClipDurationMs(host, nodeId, startClipName)
@@ -226,9 +226,9 @@ export class CharacterControllerAnimationRuntimeManager {
 				const landClipName = chooseCharacterControlClipName(entry.props, movementMagnitude, {
 					moveX,
 					moveZ,
-					sprinting: input.locallyControlled ? input.sprint : false,
-					crouching: input.locallyControlled ? input.crouch : false,
-					interacting: input.locallyControlled ? input.interact : false,
+					sprinting: input.sprint,
+					crouching: input.crouch,
+					interacting: input.interact,
 					jumpPhase: 'land',
 				})
 				const landDurationMs = this.resolveClipDurationMs(host, nodeId, landClipName)
@@ -243,9 +243,9 @@ export class CharacterControllerAnimationRuntimeManager {
 			const desiredClipName = chooseCharacterControlClipName(entry.props, movementMagnitude, {
 				moveX,
 				moveZ,
-				sprinting: input.locallyControlled ? input.sprint : false,
-				crouching: input.locallyControlled ? input.crouch : false,
-				interacting: input.locallyControlled ? input.interact : false,
+				sprinting: input.sprint,
+				crouching: input.crouch,
+				interacting: input.interact,
 				jumpPhase: entry.jumpPhase,
 			})
 			if (!desiredClipName) {

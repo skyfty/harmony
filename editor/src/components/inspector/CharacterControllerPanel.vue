@@ -3,8 +3,10 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import {
   ANIMATION_COMPONENT_TYPE,
+  CHARACTER_FORWARD_AXIS_OPTIONS,
   CHARACTER_CONTROLLER_COMPONENT_TYPE,
   clampCharacterControllerComponentProps,
+  type CharacterForwardAxis,
   type AnimationComponentProps,
   type CharacterAnimationSlot,
   type CharacterControllerComponentProps,
@@ -56,6 +58,17 @@ const animationSlots: Array<{ label: string; value: CharacterAnimationSlot }> = 
   { label: 'Interact', value: 'interact' },
   { label: 'Death', value: 'death' },
 ]
+const forwardAxisItems: Array<{ label: string; value: CharacterForwardAxis }> = CHARACTER_FORWARD_AXIS_OPTIONS.map((value) => ({
+  value,
+  label:
+    value === '+x'
+      ? 'Local +X'
+      : value === '-x'
+        ? 'Local -X'
+        : value === '+z'
+          ? 'Local +Z'
+          : 'Local -Z',
+}))
 
 function updateComponent(patch: Partial<CharacterControllerComponentProps>) {
   const nodeId = selectedNodeId.value
@@ -216,6 +229,19 @@ const clipItems = computed(() => clipOptions.value)
           hide-details
           :disabled="!componentEnabled"
           @update:model-value="(value) => updateField('label', String(value ?? ''))"
+        />
+
+        <v-select
+          :items="forwardAxisItems"
+          item-title="label"
+          item-value="value"
+          :model-value="normalizedProps.forwardAxis"
+          label="Forward axis"
+          density="compact"
+          variant="underlined"
+          hide-details
+          :disabled="!componentEnabled"
+          @update:model-value="(value) => updateField('forwardAxis', (value as CharacterForwardAxis | null) ?? '+x')"
         />
 
         <div class="character-controller-panel__grid">

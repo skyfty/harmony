@@ -252,6 +252,7 @@ function buildRoadCompiledAssetFromSnapshot(
     shapes: [],
     bodies: [],
     vehicles: [],
+    characters: [],
   }
 
   const material = {

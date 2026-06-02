@@ -1,8 +1,13 @@
 import {
+  createPhysicsCharacterMotorState,
+  stepPhysicsCharacterMotor,
   type PhysicsAddRuntimeBodiesCommand,
   type PhysicsBodyDesc,
   type PhysicsBodyTransformCommand,
   type PhysicsBodyVelocityCommand,
+  type PhysicsCharacterDesc,
+  type PhysicsCharacterInputCommand,
+  type PhysicsContactEvent,
   type PhysicsMaterialDesc,
   type PhysicsQuaternion,
   type PhysicsRaycastCommand,
@@ -38,6 +43,14 @@ type VehicleState = {
   speedGovernorOverHardCap: boolean
   speedGovernorSmoothedForwardSpeedAbs: number
   cleanup: Array<() => void>
+}
+
+type CharacterState = {
+  desc: PhysicsCharacterDesc
+  bodyId: number
+  body: any
+  input: PhysicsCharacterInputCommand | null
+  motorState: ReturnType<typeof createPhysicsCharacterMotorState>
 }
 const BT_DISABLE_DEACTIVATION = 4
 
@@ -76,6 +89,8 @@ export class AmmoPhysicsWorld {
   private readonly runtimeMaterials = new Map<number, PhysicsMaterialDesc>()
   private readonly vehicles = new Map<number, VehicleState>()
   private readonly vehicleInputs = new Map<number, PhysicsVehicleInputCommand>()
+  private readonly characters = new Map<number, CharacterState>()
+  private readonly lastContactNormalYByBodyId = new Map<number, number>()
 
   setModule(module: unknown): void {
     this.ammo = module as AmmoApi
@@ -103,6 +118,25 @@ export class AmmoPhysicsWorld {
     scene.vehicles.forEach((vehicle) => {
       this.vehicles.set(vehicle.id, this.createVehicleState(vehicle))
     })
+    scene.characters.forEach((character) => {
+      const body = this.bodies.get(character.bodyId)?.body ?? null
+      if (!body) {
+        return
+      }
+      const zeroFactor = createAmmoVector3(this.ammo!, [0, 0, 0])
+      const zeroVelocity = createAmmoVector3(this.ammo!, [0, 0, 0])
+      body.setAngularFactor?.(zeroFactor)
+      body.setAngularVelocity?.(zeroVelocity)
+      this.ammo!.destroy(zeroVelocity)
+      this.ammo!.destroy(zeroFactor)
+      this.characters.set(character.characterId, {
+        desc: character,
+        bodyId: character.bodyId,
+        body,
+        input: null,
+        motorState: createPhysicsCharacterMotorState(),
+      })
+    })
     return {
       bodyCount: scene.bodies.length,
       vehicleCount: scene.vehicles.length,
@@ -121,6 +155,7 @@ export class AmmoPhysicsWorld {
     }
     this.frame += 1
     this.applyVehicleInputs()
+    this.applyCharacterInputs(deltaMs)
 
     const deltaSeconds = Math.max(0, deltaMs) / 1000
     if (deltaSeconds > 0) {
@@ -163,6 +198,8 @@ export class AmmoPhysicsWorld {
       bodySleeping[index] = physicsBody?.getActivationState?.() === 2 ? 1 : 0
     })
 
+    const contacts = this.collectContacts()
+
     const totalWheelCount = this.scene.vehicles.reduce((count, vehicle) => count + vehicle.wheels.length, 0)
     const wheelTransforms = new Float32Array(totalWheelCount * 9)
     let wheelOffset = 0
@@ -201,6 +238,7 @@ export class AmmoPhysicsWorld {
       bodyLinearVelocities,
       bodyAngularVelocities,
       bodySleeping,
+      contacts: contacts.length ? contacts : undefined,
     }
   }
 
@@ -250,6 +288,15 @@ export class AmmoPhysicsWorld {
 
   setVehicleInput(command: PhysicsVehicleInputCommand): void {
     this.vehicleInputs.set(command.vehicleId, command)
+  }
+
+  setCharacterInput(command: PhysicsCharacterInputCommand): void {
+    const state = this.characters.get(command.characterId)
+    if (!state) {
+      return
+    }
+    state.input = command
+    state.body.activate?.(true)
   }
 
   addRuntimeBodies(command: PhysicsAddRuntimeBodiesCommand): void {
@@ -319,6 +366,8 @@ export class AmmoPhysicsWorld {
     this.runtimeShapes.clear()
     this.runtimeMaterials.clear()
     this.vehicleInputs.clear()
+    this.characters.clear()
+    this.lastContactNormalYByBodyId.clear()
 
     Array.from(this.vehicles.values()).forEach((state) => {
       state.cleanup.slice().reverse().forEach((cleanup) => cleanup())
@@ -505,6 +554,190 @@ export class AmmoPhysicsWorld {
     }
   }
 
+  private applyCharacterInputs(deltaMs: number): void {
+    const ammo = this.ammo
+    if (!ammo || !this.characters.size) {
+      return
+    }
+    const deltaSeconds = Math.max(0, deltaMs) / 1000
+    this.characters.forEach((characterState) => {
+      const input = characterState.input ?? {
+        characterId: characterState.desc.characterId,
+        moveX: 0,
+        moveZ: 0,
+        yaw: characterState.motorState.yaw,
+        jump: false,
+        sprint: false,
+        crouch: false,
+        interact: false,
+      }
+      const contactNormalY = this.lastContactNormalYByBodyId.get(characterState.bodyId) ?? null
+      const probe = this.resolveCharacterGroundProbe(characterState)
+      const stepResult = stepPhysicsCharacterMotor(characterState.desc, characterState.motorState, {
+        moveX: input.moveX,
+        moveZ: input.moveZ,
+        yaw: input.yaw,
+        jump: input.jump,
+        sprint: input.sprint,
+        crouch: input.crouch,
+        interact: input.interact,
+        deltaSeconds,
+        gravityY: this.worldSettings.gravity[1] ?? -9.8,
+        probe,
+        contactNormalY,
+      })
+      const linearVelocity = createAmmoVector3(ammo, stepResult.linearVelocity)
+      const angularVelocity = createAmmoVector3(ammo, [0, 0, 0])
+      const yawQuaternion = createAmmoQuaternionFromYaw(ammo, stepResult.yaw)
+      const transform = characterState.body.getWorldTransform?.()
+      characterState.body.setLinearVelocity?.(linearVelocity)
+      characterState.body.setAngularVelocity?.(angularVelocity)
+      if (transform && yawQuaternion) {
+        transform.setRotation?.(yawQuaternion)
+        characterState.body.setWorldTransform?.(transform)
+        const motionState = characterState.body.getMotionState?.()
+        motionState?.setWorldTransform?.(transform)
+      }
+      characterState.body.activate?.(true)
+      ammo.destroy(linearVelocity)
+      ammo.destroy(angularVelocity)
+      ammo.destroy(yawQuaternion)
+    })
+  }
+
+  private resolveCharacterGroundProbe(characterState: CharacterState): {
+    hit: boolean
+    distance: number
+    normalY: number
+    normal?: [number, number, number]
+  } {
+    const ammo = this.ammo
+    const world = this.world
+    if (!ammo || !world) {
+      return {
+        hit: false,
+        distance: Number.POSITIVE_INFINITY,
+        normalY: 0,
+      }
+    }
+    const transform = characterState.body.getWorldTransform?.()
+    const origin = transform?.getOrigin?.()
+    if (!origin) {
+      return {
+        hit: false,
+        distance: Number.POSITIVE_INFINITY,
+        normalY: 0,
+      }
+    }
+    const radius = Math.max(0.05, characterState.desc.radius)
+    const halfHeight = Math.max(radius, characterState.desc.height * 0.5)
+    const probeRise = Math.max(0.08, Math.min(0.4, characterState.desc.stepHeight + 0.05))
+    const probeDepth = Math.max(0.2, characterState.desc.stepHeight + radius + 0.12)
+    const baseY = origin.y() - halfHeight + radius
+    const offsets = resolveCharacterProbeOffsets(radius)
+    let bestHit: { distance: number; normal: [number, number, number] } | null = null
+    for (const [offsetX, offsetZ] of offsets) {
+      const fromTuple: PhysicsVector3 = [origin.x() + offsetX, baseY + probeRise, origin.z() + offsetZ]
+      const toTuple: PhysicsVector3 = [origin.x() + offsetX, baseY - probeDepth, origin.z() + offsetZ]
+      const from = createAmmoVector3(ammo, fromTuple)
+      const to = createAmmoVector3(ammo, toTuple)
+      const callback = new ammo.ClosestRayResultCallback(from, to)
+      world.rayTest(from, to, callback)
+      if (callback.hasHit()) {
+        const collisionObject = callback.get_m_collisionObject?.()
+        const bodyId = collisionObject?.getUserIndex?.() ?? 0
+        if (bodyId > 0 && bodyId !== characterState.bodyId) {
+          const point = callback.get_m_hitPointWorld?.()
+          const normal = callback.get_m_hitNormalWorld?.()
+          const distance = distanceBetween(fromTuple, [point.x(), point.y(), point.z()])
+          const normalTuple = normalizeVector([
+            normal.x(),
+            normal.y(),
+            normal.z(),
+          ])
+          if (!bestHit || distance < bestHit.distance) {
+            bestHit = { distance, normal: normalTuple }
+          }
+        }
+      }
+      ammo.destroy(callback)
+      ammo.destroy(to)
+      ammo.destroy(from)
+    }
+    if (!bestHit) {
+      return {
+        hit: false,
+        distance: Number.POSITIVE_INFINITY,
+        normalY: 0,
+      }
+    }
+    return {
+      hit: true,
+      distance: bestHit.distance,
+      normalY: bestHit.normal[1] ?? 0,
+      normal: bestHit.normal,
+    }
+  }
+
+  private collectContacts(): PhysicsContactEvent[] {
+    const ammo = this.ammo
+    const dispatcher = this.dispatcher
+    if (!ammo || !dispatcher) {
+      return []
+    }
+    const contacts: PhysicsContactEvent[] = []
+    this.lastContactNormalYByBodyId.clear()
+    const manifoldCount = dispatcher.getNumManifolds?.() ?? 0
+    for (let manifoldIndex = 0; manifoldIndex < manifoldCount; manifoldIndex += 1) {
+      const manifold = dispatcher.getManifoldByIndexInternal?.(manifoldIndex)
+      if (!manifold) {
+        continue
+      }
+      const bodyA = manifold.getBody0?.()
+      const bodyB = manifold.getBody1?.()
+      const bodyIdA = bodyA?.getUserIndex?.() ?? 0
+      const bodyIdB = bodyB?.getUserIndex?.() ?? 0
+      if (!(bodyIdA > 0) || !(bodyIdB > 0)) {
+        continue
+      }
+      const contactCount = manifold.getNumContacts?.() ?? 0
+      for (let contactIndex = 0; contactIndex < contactCount; contactIndex += 1) {
+        const contactPoint = manifold.getContactPoint?.(contactIndex)
+        if (!contactPoint) {
+          continue
+        }
+        const distance = contactPoint.getDistance?.() ?? 0
+        if (distance > 0.05) {
+          continue
+        }
+        const point = contactPoint.get_m_positionWorldOnB?.()
+        const normal = contactPoint.get_m_normalWorldOnB?.()
+        const normalTuple = normalizeVector([
+          normal?.x?.() ?? 0,
+          normal?.y?.() ?? 1,
+          normal?.z?.() ?? 0,
+        ])
+        const absNormalY = Math.abs(normalTuple[1] ?? 0)
+        if (absNormalY > (this.lastContactNormalYByBodyId.get(bodyIdA) ?? 0)) {
+          this.lastContactNormalYByBodyId.set(bodyIdA, absNormalY)
+        }
+        if (absNormalY > (this.lastContactNormalYByBodyId.get(bodyIdB) ?? 0)) {
+          this.lastContactNormalYByBodyId.set(bodyIdB, absNormalY)
+        }
+        contacts.push({
+          bodyIdA,
+          bodyIdB,
+          point: [point?.x?.() ?? 0, point?.y?.() ?? 0, point?.z?.() ?? 0],
+          normal: normalTuple,
+          impulse: null,
+          impactSpeed: null,
+        })
+        break
+      }
+    }
+    return contacts
+  }
+
   private applyVehicleInputs(): void {
     this.vehicles.forEach((state, vehicleId) => {
       const input = this.vehicleInputs.get(vehicleId)
@@ -622,6 +855,11 @@ function createAmmoQuaternion(ammo: AmmoApi, quaternion: PhysicsQuaternion): any
   return new ammo.btQuaternion(normalized[0], normalized[1], normalized[2], normalized[3])
 }
 
+function createAmmoQuaternionFromYaw(ammo: AmmoApi, yaw: number): any {
+  const halfYaw = (Number.isFinite(yaw) ? yaw : Math.PI) * 0.5
+  return new ammo.btQuaternion(0, Math.sin(halfYaw), 0, Math.cos(halfYaw))
+}
+
 function createAmmoTransform(ammo: AmmoApi, transform: PhysicsTransform): any {
   const position = createAmmoVector3(ammo, transform.position)
   const rotation = createAmmoQuaternion(ammo, transform.rotation)
@@ -686,6 +924,22 @@ function smoothstep(edge0: number, edge1: number, x: number): number {
   }
   const t = Math.min(1, Math.max(0, (x - edge0) / (edge1 - edge0)))
   return t * t * (3 - 2 * t)
+}
+
+function resolveCharacterProbeOffsets(radius: number): Array<[number, number]> {
+  const ring = Math.max(0.06, radius + 0.02)
+  const diagonal = ring * Math.SQRT1_2
+  return [
+    [0, 0],
+    [ring, 0],
+    [-ring, 0],
+    [0, ring],
+    [0, -ring],
+    [diagonal, diagonal],
+    [diagonal, -diagonal],
+    [-diagonal, diagonal],
+    [-diagonal, -diagonal],
+  ]
 }
 
 function axisVectorForIndex(axisIndex: 0 | 1 | 2): PhysicsVector3 {

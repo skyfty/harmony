@@ -121,6 +121,7 @@ export interface MultiuserPhysicsAuthorityInput {
   character?: {
     moveX: number
     moveZ: number
+    yaw?: number | null
     jump: boolean
     sprint: boolean
     crouch: boolean

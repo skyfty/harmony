@@ -636,7 +636,7 @@ class OnlineComponent extends Component<OnlineComponentProps> {
       input.ownerUserId ?? '',
       input.leaseMs,
       vehicle ? `${vehicle.vehicleId}|${vehicle.steering}|${vehicle.throttle}|${vehicle.brake}|${vehicle.handbrake ?? ''}` : '',
-      character ? `${character.moveX}|${character.moveZ}|${character.jump ? 1 : 0}|${character.sprint ? 1 : 0}|${character.crouch ? 1 : 0}|${character.interact ? 1 : 0}` : '',
+      character ? `${character.moveX}|${character.moveZ}|${character.yaw ?? ''}|${character.jump ? 1 : 0}|${character.sprint ? 1 : 0}|${character.crouch ? 1 : 0}|${character.interact ? 1 : 0}` : '',
     ].join('|')
   }
 

@@ -2,6 +2,7 @@ import type {
   PhysicsAddRuntimeBodiesCommand,
   PhysicsBodyTransformCommand,
   PhysicsBodyVelocityCommand,
+  PhysicsCharacterInputCommand,
   PhysicsBridgeInitResult,
   PhysicsInitOptions,
   PhysicsRaycastCommand,
@@ -19,6 +20,7 @@ export interface PhysicsBridge {
   setBodyTransform(command: PhysicsBodyTransformCommand): Promise<void>
   setBodyVelocity(command: PhysicsBodyVelocityCommand): Promise<void>
   setVehicleInput(command: PhysicsVehicleInputCommand): Promise<void>
+  setCharacterInput(command: PhysicsCharacterInputCommand): Promise<void>
   addRuntimeBodies(command: PhysicsAddRuntimeBodiesCommand): Promise<void>
   removeRuntimeBodies(command: PhysicsRemoveRuntimeBodiesCommand): Promise<void>
   raycast(command: PhysicsRaycastCommand): Promise<PhysicsRaycastHit | null>

@@ -334,6 +334,7 @@ export function normalizeRoadCollisionCompiledPackage(input: unknown): RoadColli
       shapes: shapes as PhysicsSceneAsset['shapes'],
       bodies: bodies as PhysicsSceneAsset['bodies'],
       vehicles: vehicles as PhysicsSceneAsset['vehicles'],
+      characters: [],
     },
   }
 }

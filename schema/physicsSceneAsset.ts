@@ -15,16 +15,19 @@ import {
 } from './roadCollisionCompiled'
 import {
   BOUNDARY_WALL_COMPONENT_TYPE,
+  CHARACTER_CONTROLLER_COMPONENT_TYPE,
   RIGIDBODY_COMPONENT_TYPE,
   RIGIDBODY_METADATA_KEY,
   ROAD_COMPONENT_TYPE,
   VEHICLE_COMPONENT_TYPE,
   clampBoundaryWallComponentProps,
+  clampCharacterControllerComponentProps,
   clampRigidbodyComponentProps,
   clampRoadProps,
   resolveModelCollisionComponentPropsFromNode,
   clampVehicleComponentProps,
   type BoundaryWallComponentProps,
+  type CharacterControllerComponentProps,
   type RigidbodyComponentMetadata,
   type RigidbodyComponentProps,
   type RoadComponentProps,
@@ -61,6 +64,7 @@ function createEmptyPhysicsSceneAsset(): PhysicsSceneAsset {
     shapes: [],
     bodies: [],
     vehicles: [],
+    characters: [],
   }
 }
 
@@ -164,6 +168,16 @@ function resolveVehicleComponent(
   node: SceneNode | null | undefined,
 ): SceneNodeComponentState<VehicleComponentProps> | null {
   const state = node?.components?.[VEHICLE_COMPONENT_TYPE] as SceneNodeComponentState<VehicleComponentProps> | undefined
+  if (!state || state.enabled === false) {
+    return null
+  }
+  return state
+}
+
+function resolveCharacterControllerComponent(
+  node: SceneNode | null | undefined,
+): SceneNodeComponentState<CharacterControllerComponentProps> | null {
+  const state = node?.components?.[CHARACTER_CONTROLLER_COMPONENT_TYPE] as SceneNodeComponentState<CharacterControllerComponentProps> | undefined
   if (!state || state.enabled === false) {
     return null
   }
@@ -374,6 +388,62 @@ function buildShapeInstancesFromDefinition(
   }
 
   return []
+}
+
+function buildCharacterControllerShapeInstances(
+  props: CharacterControllerComponentProps,
+  nextShapeId: () => number,
+  shapes: PhysicsShapeDesc[],
+): BuildShapeInstance[] {
+  const radius = Math.max(0.05, props.colliderRadius)
+  const height = Math.max(radius * 2, props.colliderHeight)
+  const cylinderHeight = Math.max(0, height - radius * 2)
+  const instances: BuildShapeInstance[] = []
+  if (cylinderHeight > 1e-4) {
+    const cylinderShapeId = pushShapeDescriptor(shapes, {
+      id: nextShapeId(),
+      kind: 'cylinder',
+      radiusTop: radius,
+      radiusBottom: radius,
+      height: cylinderHeight,
+      segments: 12,
+    })
+    instances.push({
+      shapeId: cylinderShapeId,
+      transform: { position: [0, 0, 0], rotation: identityPhysicsRotation },
+    })
+    const hemisphereOffset = cylinderHeight * 0.5
+    const sphereTopShapeId = pushShapeDescriptor(shapes, {
+      id: nextShapeId(),
+      kind: 'sphere',
+      radius,
+    })
+    const sphereBottomShapeId = pushShapeDescriptor(shapes, {
+      id: nextShapeId(),
+      kind: 'sphere',
+      radius,
+    })
+    instances.push({
+      shapeId: sphereTopShapeId,
+      transform: { position: [0, hemisphereOffset, 0], rotation: identityPhysicsRotation },
+    })
+    instances.push({
+      shapeId: sphereBottomShapeId,
+      transform: { position: [0, -hemisphereOffset, 0], rotation: identityPhysicsRotation },
+    })
+    return instances
+  }
+
+  const sphereShapeId = pushShapeDescriptor(shapes, {
+    id: nextShapeId(),
+    kind: 'sphere',
+    radius,
+  })
+  instances.push({
+    shapeId: sphereShapeId,
+    transform: { position: [0, 0, 0], rotation: identityPhysicsRotation },
+  })
+  return instances
 }
 
 function buildBoundaryWallShapeInstances(
@@ -682,6 +752,7 @@ export async function buildPhysicsSceneAsset(
   let nextShapeIdValue = 1
   let nextBodyId = 1
   let nextVehicleId = 1
+  let nextCharacterId = 1
   let nextWheelId = 1
   const totalNodes = countSceneNodes(document.nodes)
   let processedNodes = 0
@@ -817,6 +888,62 @@ export async function buildPhysicsSceneAsset(
           bodyIdsByNodeId.set(node.id, bodyId)
         }
       }
+    }
+
+    const characterControllerState = resolveCharacterControllerComponent(node)
+    if (characterControllerState) {
+      const characterProps = clampCharacterControllerComponentProps(
+        characterControllerState.props as Partial<CharacterControllerComponentProps> | null | undefined,
+      )
+      let bodyId = bodyIdsByNodeId.get(node.id)
+      if (typeof bodyId !== 'number') {
+        const dynamicCharacterBodyProps = clampRigidbodyComponentProps({
+          bodyType: 'DYNAMIC',
+          mass: 1,
+          linearDamping: 0.08,
+          angularDamping: 1,
+        })
+        const materialId = ensureMaterialId(dynamicCharacterBodyProps)
+        const shapeInstances = buildCharacterControllerShapeInstances(characterProps, nextShapeId, asset.shapes)
+        let shapeId = shapeInstances[0]!.shapeId
+        if (shapeInstances.length > 1) {
+          shapeId = pushShapeDescriptor(asset.shapes, {
+            id: nextShapeId(),
+            kind: 'compound',
+            children: shapeInstances.map((entry) => ({
+              shapeId: entry.shapeId,
+              transform: entry.transform,
+            })),
+          })
+        }
+        bodyId = nextBodyId
+        nextBodyId += 1
+        asset.bodies.push({
+          id: bodyId,
+          type: 'dynamic',
+          mass: 1,
+          materialId,
+          shapeId,
+          transform: toPhysicsTransform(worldPositionHelper, worldQuaternionHelper),
+          linearDamping: dynamicCharacterBodyProps.linearDamping,
+          angularDamping: dynamicCharacterBodyProps.angularDamping,
+          userDataKey: node.id,
+        })
+        bodyIdsByNodeId.set(node.id, bodyId)
+      }
+      asset.characters.push({
+        characterId: nextCharacterId++,
+        bodyId,
+        radius: Math.max(0.05, characterProps.colliderRadius),
+        height: Math.max(Math.max(0.05, characterProps.colliderRadius) * 2, characterProps.colliderHeight),
+        stepHeight: characterProps.stepHeight,
+        slopeLimitDegrees: characterProps.slopeLimitDegrees,
+        jumpImpulse: characterProps.jumpImpulse,
+        airControl: characterProps.airControl,
+        walkSpeed: characterProps.walkSpeed,
+        runSpeed: characterProps.runSpeed,
+        sprintSpeed: characterProps.sprintSpeed,
+      })
     }
 
     const vehicleState = resolveVehicleComponent(node)

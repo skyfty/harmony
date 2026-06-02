@@ -52,6 +52,12 @@ export function createCannonPhysicsController(options: CreateCannonPhysicsContro
       }
       world.setVehicleInput(command)
     },
+    async setCharacterInput(command) {
+      if (!initialized) {
+        throw new Error('Cannon physics controller is not initialized')
+      }
+      world.setCharacterInput(command)
+    },
     async addRuntimeBodies(command) {
       if (!initialized) {
         throw new Error('Cannon physics controller is not initialized')

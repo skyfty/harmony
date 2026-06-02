@@ -72,6 +72,12 @@ export function createAmmoPhysicsController<TAmmoModule>(
       }
       world.setVehicleInput(command)
     },
+    async setCharacterInput(command) {
+      if (!initialized) {
+        throw new Error('Ammo physics controller is not initialized')
+      }
+      world.setCharacterInput(command)
+    },
     async addRuntimeBodies(command) {
       if (!initialized) {
         throw new Error('Ammo physics controller is not initialized')

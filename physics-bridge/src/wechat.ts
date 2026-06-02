@@ -2,6 +2,7 @@ import type {
   PhysicsAddRuntimeBodiesCommand,
   PhysicsBodyTransformCommand,
   PhysicsBodyVelocityCommand,
+  PhysicsCharacterInputCommand,
   PhysicsBridge,
   PhysicsBridgeInitResult,
   PhysicsInitOptions,
@@ -75,6 +76,10 @@ class WechatPhysicsBridge implements PhysicsBridge {
 
   async setVehicleInput(command: PhysicsVehicleInputCommand): Promise<void> {
     await this.request('set-vehicle-input', command)
+  }
+
+  async setCharacterInput(command: PhysicsCharacterInputCommand): Promise<void> {
+    await this.request('set-character-input', command)
   }
 
   async addRuntimeBodies(command: PhysicsAddRuntimeBodiesCommand): Promise<void> {

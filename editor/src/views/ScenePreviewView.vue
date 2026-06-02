@@ -192,6 +192,7 @@ import {
 	protagonistComponentDefinition,
 	signboardComponentDefinition,
 	lodComponentDefinition,
+	CHARACTER_CONTROLLER_COMPONENT_TYPE,
 	guideRouteComponentDefinition,
 	autoTourComponentDefinition,
 	purePursuitComponentDefinition,
@@ -218,6 +219,7 @@ import {
 	LOD_FACE_CAMERA_FORWARD_AXIS_Y,
 	LOD_FACE_CAMERA_FORWARD_AXIS_Z,
 	clampGuideboardComponentProps,
+	clampCharacterControllerComponentProps,
 	computeGuideboardEffectActive,
 	clampRigidbodyComponentProps,
 	clampVehicleComponentProps,
@@ -227,6 +229,7 @@ import {
 	resolveLodRenderTarget,
 	resolveModelCollisionComponentPropsFromNode,
 	DEFAULT_AXLE,
+	writeCharacterLocalForward,
 	SCENE_STATE_ANCHOR_COMPONENT_TYPE,
 	} from '@schema/components'
 import { characterControllerComponentDefinition } from '@schema/components/definitions/characterControllerComponent'
@@ -282,6 +285,7 @@ import { disposeSignboardBillboards, syncSignboardBillboards, type SignboardBill
 import { grantCouponById, listCouponCatalog, type CouponSceneItem } from '@harmony/utils'
 import type {
 	GuideboardComponentProps,
+	CharacterControllerComponentProps,
 	LodFaceCameraForwardAxis,
 	LodComponentProps,
 	RigidbodyComponentMetadata,
@@ -361,7 +365,9 @@ const terrainScatterRuntime = createTerrainScatterLodRuntime({
 });
 
 type ControlMode = 'first-person' | 'third-person'
-type VehicleDriveCameraMode = 'first-person' | 'follow' | 'free'
+type RuntimePanelMode = 'vehicle' | 'character'
+type RuntimePanelCameraMode = 'first-person' | 'follow'
+type VehicleDriveCameraMode = RuntimePanelCameraMode | 'free'
 type VehicleDriveOrbitMode = 'follow' | 'free'
 const containerRef = ref<HTMLDivElement | null>(null)
 const statsContainerRef = ref<HTMLDivElement | null>(null)
@@ -443,6 +449,7 @@ const isPlaying = ref(true)
 const controlMode = ref<ControlMode>('third-person')
 const vehicleDriveCameraMode = ref<VehicleDriveCameraMode>('first-person')
 const vehicleDriveOrbitMode = ref<VehicleDriveOrbitMode>('follow')
+const characterCameraMode = ref<RuntimePanelCameraMode>('follow')
 const volumePercent = ref(100)
 const isFullscreen = ref(false)
 const lastUpdateTime = ref<string | null>(null)
@@ -1586,6 +1593,11 @@ const tempQuaternion = new THREE.Quaternion()
 const protagonistPosePosition = new THREE.Vector3()
 const protagonistPoseDirection = new THREE.Vector3()
 const protagonistPoseTarget = new THREE.Vector3()
+const characterFollowAnchorPosition = new THREE.Vector3()
+const characterFollowRootPosition = new THREE.Vector3()
+const characterFollowForwardScratch = new THREE.Vector3()
+const characterFollowGroundSamplePosition = new THREE.Vector3()
+const characterFollowGroundRayOrigin = new THREE.Vector3()
 const tempBox = new THREE.Box3()
 const tempSphere = new THREE.Sphere()
 const tempPosition = new THREE.Vector3()
@@ -1603,6 +1615,10 @@ const instancedCullingWorldPosition = new THREE.Vector3()
 const VEHICLE_CAMERA_DEFAULT_LOOK_DISTANCE = 6
 const VEHICLE_FOLLOW_DISTANCE_MIN = 4
 const VEHICLE_FOLLOW_DISTANCE_MAX = 26
+const CHARACTER_FOLLOW_GROUND_PROJECTION_DISTANCE_RATIO = 0.55
+const CHARACTER_FOLLOW_GROUND_PROJECTION_DISTANCE_MIN = 0.9
+const CHARACTER_FOLLOW_GROUND_PROJECTION_DISTANCE_MAX = 1.8
+const CHARACTER_FOLLOW_GROUND_RAYCAST_HEIGHT = 100000
 const SKY_ENVIRONMENT_INTENSITY = 0.35
 const DEFAULT_BACKGROUND_COLOR = 0x0d0d12
 const DEFAULT_TONE_MAPPING_EXPOSURE = 1
@@ -2370,6 +2386,7 @@ const currentPhysicsBridgePreference = ref<PhysicsBackendPreference | undefined>
 const physicsBridgeBodyIdByNodeId = new Map<string, number>()
 const physicsBridgeNodeIdByBodyId = new Map<number, string>()
 const physicsBridgeVehicleIdByNodeId = new Map<string, number>()
+const physicsBridgeCharacterIdByNodeId = new Map<string, number>()
 const physicsBridgeContactsByNodeId = new Map<string, PhysicsContactEvent[]>()
 type PhysicsBridgeBodyFrameState = {
 	position: THREE.Vector3
@@ -2953,31 +2970,69 @@ function resolveClickBehaviorAncestorNodeId(nodeId: string | null): string | nul
 	return null
 }
 
-const vehicleDriveUi = computed(() => {
+const runtimePanelUi = computed(() => {
+	const characterNodeId = resolveDefaultControlledCharacterNodeId()
+	const characterNode = characterNodeId ? resolveNodeById(characterNodeId) : null
+	const characterControlActive =
+		!vehicleDriveState.active
+		&& controlMode.value === 'first-person'
+		&& Boolean(characterNodeId && findDefaultControlledCharacterObject())
 	const override = vehicleDriveUiOverride.value
-	const baseActive = vehicleDriveState.active
-	const visible = override === 'show' ? true : override === 'hide' ? false : baseActive
-	if (!visible) {
+	const vehicleVisible = override === 'show' ? true : override === 'hide' ? false : vehicleDriveState.active
+	if (vehicleVisible) {
+		const nodeId = vehicleDriveState.nodeId ?? ''
+		const node = nodeId ? resolveNodeById(nodeId) : null
+		const label = node?.name?.trim() || nodeId || 'Vehicle'
 		return {
-			visible: false,
-			label: '',
-			cameraLocked: false,
-			forwardActive: false,
-			backwardActive: false,
-			brakeActive: false,
+			visible: true,
+			mode: 'vehicle' as RuntimePanelMode,
+			label,
+			cameraLocked: vehicleDriveState.active,
+			cameraMode: vehicleDriveCameraMode.value === 'follow' ? 'follow' : 'first-person',
+			forwardActive: vehicleDriveState.active && vehicleDriveInputFlags.forward,
+			backwardActive: vehicleDriveState.active && vehicleDriveInputFlags.backward,
+			leftActive: vehicleDriveState.active && vehicleDriveInputFlags.left,
+			rightActive: vehicleDriveState.active && vehicleDriveInputFlags.right,
+			brakeActive: vehicleDriveState.active && vehicleDriveInputFlags.brake,
+			jumpActive: false,
+			sprintActive: false,
+			crouchActive: false,
+			interactActive: false,
 		}
 	}
-	const nodeId = vehicleDriveState.nodeId ?? ''
-	const node = nodeId ? resolveNodeById(nodeId) : null
-	const label = node?.name?.trim() || nodeId || 'Vehicle'
-	const driveActive = vehicleDriveState.active
+	if (!characterControlActive) {
+		return {
+			visible: false,
+			mode: 'character' as RuntimePanelMode,
+			label: '',
+			cameraLocked: false,
+			cameraMode: characterCameraMode.value,
+			forwardActive: false,
+			backwardActive: false,
+			leftActive: false,
+			rightActive: false,
+			brakeActive: false,
+			jumpActive: false,
+			sprintActive: false,
+			crouchActive: false,
+			interactActive: false,
+		}
+	}
 	return {
 		visible: true,
-		label,
-		cameraLocked: driveActive,
-		forwardActive: driveActive && vehicleDriveInputFlags.forward,
-		backwardActive: driveActive && vehicleDriveInputFlags.backward,
-		brakeActive: driveActive && vehicleDriveInputFlags.brake,
+		mode: 'character' as RuntimePanelMode,
+		label: characterNode?.name?.trim() || characterNodeId || 'Character',
+		cameraLocked: false,
+		cameraMode: characterCameraMode.value,
+		forwardActive: characterKeyState.forward,
+		backwardActive: characterKeyState.backward,
+		leftActive: characterKeyState.left,
+		rightActive: characterKeyState.right,
+		brakeActive: false,
+		jumpActive: characterKeyState.jump,
+		sprintActive: characterKeyState.sprint,
+		crouchActive: characterKeyState.crouch,
+		interactActive: characterKeyState.interact,
 	}
 })
 
@@ -3110,6 +3165,12 @@ const vehicleDriveCameraFollowState = {
 	motionDistanceBlend: 0,
 	lookaheadOffset: new THREE.Vector3(),
 }
+const characterFollowCameraState = createCameraFollowState()
+const characterFollowCameraController = new FollowCameraController()
+const characterFollowVelocity = new THREE.Vector3()
+const characterFollowVelocityScratch = new THREE.Vector3()
+const characterFollowLastAnchor = new THREE.Vector3()
+let characterFollowHasSample = false
 
 const vehicleDriveController = new VehicleDriveController(
 	{
@@ -3311,7 +3372,13 @@ function updateSteeringAutoCenter(delta: number): void {
 	}
 }
 
-const vehicleDriveCameraToggleConfig = computed(() => {
+const runtimePanelCameraToggleConfig = computed(() => {
+	if (runtimePanelUi.value.mode === 'character') {
+		const followActive = characterCameraMode.value === 'follow'
+		return followActive
+			? { icon: 'mdi-account-eye', label: '切换到第一人称' }
+			: { icon: 'mdi-crosshairs-gps', label: '跟随角色' }
+	}
 	const followActive = vehicleDriveCameraMode.value === 'follow'
 	return followActive
 		? { icon: 'mdi-crosshairs-off', label: 'Stop following' }
@@ -3425,6 +3492,12 @@ function resolveSteerComponent(
 	node: SceneNode | null | undefined,
 ): SceneNodeComponentState<SteerComponentProps> | null {
 	return resolveEnabledComponentState<SteerComponentProps>(node, STEER_COMPONENT_TYPE)
+}
+
+function resolveCharacterControllerComponent(
+	node: SceneNode | null | undefined,
+): SceneNodeComponentState<CharacterControllerComponentProps> | null {
+	return resolveEnabledComponentState<CharacterControllerComponentProps>(node, CHARACTER_CONTROLLER_COMPONENT_TYPE)
 }
 
 function findNodeById(nodes: SceneNode[] | null | undefined, targetId: string): SceneNode | null {
@@ -5237,10 +5310,24 @@ watch(isInstancingDebugVisible, (visible) => {
 })
 
 watch(controlMode, (mode) => {
+	if (mode === 'first-person' && !vehicleDriveState.active) {
+		characterCameraMode.value = 'follow'
+		resetCharacterFollowCameraState()
+	}
+	if (mode !== 'first-person') {
+		resetCharacterFollowCameraState()
+	}
 	if (suppressControlModeApply) {
 		return
 	}
 	applyControlMode(mode)
+})
+
+watch(characterCameraMode, (mode) => {
+	if (mode === 'follow') {
+		resetCharacterFollowCameraState()
+	}
+	updateCameraControlActivation()
 })
 
 watch(
@@ -5268,7 +5355,11 @@ function updateCameraControlActivation(): void {
 	const frozen = sceneSwitching.value
 	const caged = isCameraCaged.value
 	if (firstPersonControls) {
-		const enableFirstPerson = !frozen && controlMode.value === 'first-person' && !caged
+		const enableFirstPerson =
+			!frozen
+			&& controlMode.value === 'first-person'
+			&& characterCameraMode.value === 'first-person'
+			&& !caged
 		firstPersonControls.enabled = enableFirstPerson
 		firstPersonControls.activeLook = false // enforce keyboard-only control in first-person mode
 	}
@@ -6743,8 +6834,24 @@ function resetProtagonistPoseState() {
 	protagonistPoseSynced = false
 }
 
+function resetCharacterFollowCameraState(): void {
+	resetCameraFollowState(characterFollowCameraState)
+	characterFollowVelocity.set(0, 0, 0)
+	characterFollowVelocityScratch.set(0, 0, 0)
+	characterFollowLastAnchor.set(0, 0, 0)
+	characterFollowHasSample = false
+}
+
 function resolveDefaultControlledCharacterNodeId(): string | null {
 	return resolveDefaultCharacterSteerNodeId(currentDocument)
+}
+
+function resolveDefaultControlledCharacterComponentProps(): CharacterControllerComponentProps | null {
+	const controlledNodeId = resolveDefaultControlledCharacterNodeId()
+	if (!controlledNodeId) {
+		return null
+	}
+	return clampCharacterControllerComponentProps(resolveCharacterControllerComponent(resolveNodeById(controlledNodeId))?.props ?? null)
 }
 
 function findDefaultControlledCharacterObject(): THREE.Object3D | null {
@@ -6753,6 +6860,92 @@ function findDefaultControlledCharacterObject(): THREE.Object3D | null {
 		return null
 	}
 	return nodeObjectMap.get(controlledNodeId) ?? null
+}
+
+function resolveControlledCharacterForwardVector(target: THREE.Vector3): THREE.Vector3 {
+	const props = resolveDefaultControlledCharacterComponentProps()
+	return writeCharacterLocalForward(target, props?.forwardAxis ?? '+x') as THREE.Vector3
+}
+
+function resolveCharacterFollowPlacementDimensions(): { width: number; height: number; length: number } {
+	const props = resolveDefaultControlledCharacterComponentProps()
+	const colliderRadius = Math.max(0.05, props?.colliderRadius ?? 0.35)
+	const colliderHeight = Math.max(0.1, props?.colliderHeight ?? 1.7)
+	const capsuleDiameter = Math.max(0.4, colliderRadius * 2)
+	return {
+		width: capsuleDiameter,
+		height: colliderHeight,
+		length: Math.max(capsuleDiameter, colliderHeight * 0.72),
+	}
+}
+
+function resolveCharacterRootWorldPosition(
+	nodeId: string,
+	protagonistObject: THREE.Object3D,
+	target: THREE.Vector3,
+): THREE.Vector3 {
+	const physicsFrameState = physicsBridgeFrameBodiesByNodeId.get(nodeId)
+	if (physicsFrameState) {
+		target.copy(physicsFrameState.position)
+	} else {
+		const rigidbodyEntry = rigidbodyInstances.get(nodeId) ?? null
+		const rigidbodyBody = rigidbodyEntry?.body ?? null
+		if (rigidbodyBody) {
+			target.set(rigidbodyBody.position.x, rigidbodyBody.position.y, rigidbodyBody.position.z)
+		} else {
+			protagonistObject.getWorldPosition(target)
+		}
+	}
+	return target
+}
+
+function resolveCharacterFollowGroundProjectionY(sampleX: number, sampleZ: number): number | null {
+	if (!Number.isFinite(sampleX) || !Number.isFinite(sampleZ) || !cachedGroundNodeId) {
+		return null
+	}
+	const groundObject = nodeObjectMap.get(cachedGroundNodeId) ?? null
+	if (!groundObject) {
+		return null
+	}
+	const raycaster = new THREE.Raycaster()
+	characterFollowGroundRayOrigin.set(sampleX, CHARACTER_FOLLOW_GROUND_RAYCAST_HEIGHT, sampleZ)
+	raycaster.set(characterFollowGroundRayOrigin, new THREE.Vector3(0, -1, 0))
+	raycaster.far = CHARACTER_FOLLOW_GROUND_RAYCAST_HEIGHT * 2
+	const intersections = raycaster.intersectObject(groundObject, true)
+	const hit = intersections.find((entry) => entry.object.visible && Number.isFinite(entry.point.y))
+	return hit?.point.y ?? null
+}
+
+function resolveCharacterFollowAnchorWorld(
+	nodeId: string,
+	protagonistObject: THREE.Object3D,
+	forwardWorld: THREE.Vector3,
+	target: THREE.Vector3,
+): THREE.Vector3 {
+	const rootWorld = resolveCharacterRootWorldPosition(nodeId, protagonistObject, characterFollowRootPosition)
+	target.copy(rootWorld)
+	const props = resolveDefaultControlledCharacterComponentProps()
+	const projectionDistance = THREE.MathUtils.clamp(
+		(props?.colliderHeight ?? 1.7) * CHARACTER_FOLLOW_GROUND_PROJECTION_DISTANCE_RATIO,
+		CHARACTER_FOLLOW_GROUND_PROJECTION_DISTANCE_MIN,
+		CHARACTER_FOLLOW_GROUND_PROJECTION_DISTANCE_MAX,
+	)
+	characterFollowGroundSamplePosition.copy(rootWorld)
+	if (forwardWorld.lengthSq() > 1e-6) {
+		characterFollowGroundSamplePosition.addScaledVector(forwardWorld, projectionDistance)
+	}
+	const projectedY = resolveCharacterFollowGroundProjectionY(
+		characterFollowGroundSamplePosition.x,
+		characterFollowGroundSamplePosition.z,
+	)
+	if (Number.isFinite(projectedY)) {
+		target.set(
+			characterFollowGroundSamplePosition.x,
+			projectedY as number,
+			characterFollowGroundSamplePosition.z,
+		)
+	}
+	return target
 }
 
 type ProtagonistPoseOptions = {
@@ -6770,12 +6963,10 @@ function syncProtagonistCameraPose(options: ProtagonistPoseOptions = {}): boolea
 		return false
 	}
 	protagonistObject.getWorldPosition(protagonistPosePosition)
-	// Use protagonist's local +X as the forward direction so the initial camera
-	// orientation matches the protagonist's +X axis for better scene viewing.
 	protagonistObject.getWorldQuaternion(tempQuaternion)
-	protagonistPoseDirection.set(1, 0, 0).applyQuaternion(tempQuaternion)
+	resolveControlledCharacterForwardVector(protagonistPoseDirection).applyQuaternion(tempQuaternion)
 	if (protagonistPoseDirection.lengthSq() < 1e-8) {
-		protagonistPoseDirection.set(1, 0, 0)
+		resolveControlledCharacterForwardVector(protagonistPoseDirection)
 	} else {
 		protagonistPoseDirection.normalize()
 	}
@@ -6784,7 +6975,9 @@ function syncProtagonistCameraPose(options: ProtagonistPoseOptions = {}): boolea
 	lastFirstPersonState.direction.copy(protagonistPoseDirection)
 	protagonistPoseSynced = true
 	if (options.applyToCamera && !vehicleDriveState.active && camera) {
-		if (controlMode.value === 'first-person' && firstPersonControls) {
+		if (controlMode.value === 'first-person' && characterCameraMode.value === 'follow') {
+			updateCharacterFollowCamera(0, camera, true)
+		} else if (controlMode.value === 'first-person' && firstPersonControls) {
 			camera.position.copy(lastFirstPersonState.position)
 			camera.position.y = CAMERA_HEIGHT
 			protagonistPoseTarget.copy(camera.position).add(lastFirstPersonState.direction)
@@ -6805,6 +6998,102 @@ function syncProtagonistCameraPose(options: ProtagonistPoseOptions = {}): boolea
 		}
 	}
 	return true
+}
+
+function updateCharacterFollowCamera(
+	delta: number,
+	activeCamera: THREE.PerspectiveCamera,
+	immediate = false,
+): boolean {
+	if (vehicleDriveState.active || controlMode.value !== 'first-person' || characterCameraMode.value !== 'follow') {
+		return false
+	}
+	const controlledNodeId = resolveDefaultControlledCharacterNodeId()
+	if (!controlledNodeId) {
+		return false
+	}
+	const protagonistObject = findDefaultControlledCharacterObject()
+	if (!protagonistObject) {
+		return false
+	}
+	protagonistObject.updateMatrixWorld(true)
+	const desiredForwardWorld = tempDirection
+	const planarVelocitySq =
+		(characterFollowVelocity.x * characterFollowVelocity.x)
+		+ (characterFollowVelocity.z * characterFollowVelocity.z)
+	if (planarVelocitySq > 1e-4) {
+		desiredForwardWorld.set(characterFollowVelocity.x, 0, characterFollowVelocity.z)
+	} else {
+		protagonistObject.getWorldQuaternion(tempQuaternion)
+		resolveControlledCharacterForwardVector(characterFollowForwardScratch).applyQuaternion(tempQuaternion)
+		desiredForwardWorld.copy(characterFollowForwardScratch)
+		desiredForwardWorld.y = 0
+		if (desiredForwardWorld.lengthSq() < 1e-6) {
+			if (characterFollowCameraState.heading.lengthSq() > 1e-6) {
+				desiredForwardWorld.copy(characterFollowCameraState.heading)
+			} else if (!characterFollowCameraState.initialized || immediate) {
+				activeCamera.getWorldDirection(desiredForwardWorld)
+				desiredForwardWorld.y = 0
+			} else {
+				desiredForwardWorld.set(0, 0, 1)
+			}
+		}
+	}
+	if (desiredForwardWorld.lengthSq() < 1e-6) {
+		desiredForwardWorld.set(0, 0, 1)
+	} else {
+		desiredForwardWorld.normalize()
+	}
+	const anchorWorld = resolveCharacterFollowAnchorWorld(
+		controlledNodeId,
+		protagonistObject,
+		desiredForwardWorld,
+		characterFollowAnchorPosition,
+	)
+	if (!characterFollowHasSample || delta <= 0 || immediate) {
+		characterFollowLastAnchor.copy(anchorWorld)
+		characterFollowVelocity.set(0, 0, 0)
+		characterFollowHasSample = true
+	} else {
+		characterFollowVelocityScratch
+			.copy(anchorWorld)
+			.sub(characterFollowLastAnchor)
+			.multiplyScalar(1 / Math.max(delta, 1e-5))
+		characterFollowLastAnchor.copy(anchorWorld)
+		const alpha = computeFollowLerpAlpha(delta, 8)
+		characterFollowVelocity.lerp(characterFollowVelocityScratch, alpha)
+	}
+	const updated = characterFollowCameraController.update({
+		follow: characterFollowCameraState,
+		placement: computeFollowPlacement(resolveCharacterFollowPlacementDimensions()),
+		anchorWorld,
+		desiredForwardWorld,
+		velocityWorld: characterFollowVelocity,
+		deltaSeconds: delta,
+		ctx: { camera: activeCamera, mapControls: mapControls ?? undefined },
+		worldUp: AUTO_TOUR_CAMERA_WORLD_UP,
+		applyOrbitTween: false,
+		followControlsDirty: false,
+		immediate,
+		tuning: {
+			distanceMin: 2.2,
+			distanceMax: 5.5,
+			heightMin: 1.2,
+			motionSpeedThreshold: 0.1,
+			motionSpeedFull: 3.5,
+			motionDistanceBoost: 0.08,
+			motionHeightBoost: 0.05,
+		},
+	})
+	if (updated) {
+		lastOrbitState.position.copy(activeCamera.position)
+		if (mapControls) {
+			lastOrbitState.target.copy(mapControls.target)
+		} else {
+			lastOrbitState.target.copy(characterFollowCameraState.currentTarget)
+		}
+	}
+	return updated
 }
 
 function isCharacterControllerAnimationNode(nodeId: string): boolean {
@@ -7875,6 +8164,7 @@ async function handleExitSceneEvent(): Promise<void> {
 }
 
 type DriveControlAction = keyof VehicleDriveControlFlags
+type CharacterControlAction = 'forward' | 'backward' | 'left' | 'right' | 'jump' | 'sprint' | 'crouch' | 'interact'
 
 const vehicleDriveKeyboardMap: Record<string, DriveControlAction> = {
 	KeyW: 'forward',
@@ -7937,6 +8227,28 @@ function handleVehicleDriveKeyboardInput(event: KeyboardEvent, pressed: boolean)
 	event.preventDefault()
 	setVehicleDriveControlFlag(action, pressed)
 	return true
+}
+
+function setCharacterControlFlag(action: CharacterControlAction, pressed: boolean): void {
+	if (vehicleDriveState.active || controlMode.value !== 'first-person') {
+		return
+	}
+	if (characterKeyState[action] === pressed) {
+		return
+	}
+	characterKeyState[action] = pressed
+	updateCharacterAuthorityInputFromKeys()
+}
+
+function handleCharacterControlPointer(
+	action: CharacterControlAction,
+	pressed: boolean,
+	event?: PointerEvent | MouseEvent | TouchEvent,
+): void {
+	if (event) {
+		event.preventDefault()
+	}
+	setCharacterControlFlag(action, pressed)
 }
 
 function restoreVehicleDriveCameraState(): void {
@@ -8664,6 +8976,53 @@ function handleVehicleDriveCameraToggle(): void {
 	toggleVehicleDriveOrbitMode()
 }
 
+function handleCharacterCameraToggle(): void {
+	if (vehicleDriveState.active || controlMode.value !== 'first-person') {
+		return
+	}
+	characterCameraMode.value = characterCameraMode.value === 'follow' ? 'first-person' : 'follow'
+	resetCharacterFollowCameraState()
+	updateCameraControlActivation()
+	if (!camera) {
+		return
+	}
+	if (characterCameraMode.value === 'follow') {
+		updateCharacterFollowCamera(0, camera, true)
+		return
+	}
+	const protagonistObject = findDefaultControlledCharacterObject()
+	syncProtagonistCameraPose({
+		force: true,
+		applyToCamera: true,
+		object: protagonistObject,
+	})
+}
+
+function handleRuntimePanelCameraToggle(): void {
+	if (runtimePanelUi.value.mode === 'character') {
+		handleCharacterCameraToggle()
+		return
+	}
+	handleVehicleDriveCameraToggle()
+}
+
+function handleCharacterControlExitClick(): void {
+	if (vehicleDriveState.active) {
+		return
+	}
+	characterCameraMode.value = 'follow'
+	resetCharacterFollowCameraState()
+	controlMode.value = 'third-person'
+}
+
+function handleRuntimePanelExitClick(): void {
+	if (runtimePanelUi.value.mode === 'character') {
+		handleCharacterControlExitClick()
+		return
+	}
+	handleVehicleDriveExitClick()
+}
+
 function handleVehicleDriveResetClick(): void {
 	if (!vehicleDriveState.active) {
 		return
@@ -9060,13 +9419,19 @@ function applyControlMode(mode: ControlMode) {
 		return
 	}
 	if (mode === 'first-person') {
-		activeCamera.position.copy(lastFirstPersonState.position)
-		const target = new THREE.Vector3().copy(lastFirstPersonState.position).add(lastFirstPersonState.direction)
-		activeCamera.lookAt(target)
-		clampFirstPersonPitch(true)
-		syncFirstPersonOrientation()
-		resetFirstPersonPointerDelta()
-		syncLastFirstPersonStateFromCamera()
+		setCameraCaging(false, { force: true })
+		if (characterCameraMode.value === 'follow') {
+			resetCharacterFollowCameraState()
+			updateCharacterFollowCamera(0, activeCamera, true)
+		} else {
+			activeCamera.position.copy(lastFirstPersonState.position)
+			const target = new THREE.Vector3().copy(lastFirstPersonState.position).add(lastFirstPersonState.direction)
+			activeCamera.lookAt(target)
+			clampFirstPersonPitch(true)
+			syncFirstPersonOrientation()
+			resetFirstPersonPointerDelta()
+			syncLastFirstPersonStateFromCamera()
+		}
 	} else {
 		activeCamera.position.copy(lastOrbitState.position)
 		mapControls?.target.copy(lastOrbitState.target)
@@ -9445,7 +9810,12 @@ function updateCameraControlsForFrame(
 	activeCamera: THREE.PerspectiveCamera,
 	followCameraActive: boolean,
 ): void {
-	if (controlMode.value === 'first-person' && firstPersonControls && !vehicleDriveState.active) {
+	if (
+		controlMode.value === 'first-person'
+		&& characterCameraMode.value === 'first-person'
+		&& firstPersonControls
+		&& !vehicleDriveState.active
+	) {
 		const rotationDirection = Number(rotationState.q) - Number(rotationState.e)
 		if (rotationDirection !== 0 && activeCameraLookTween?.mode === 'first-person') {
 			activeCameraLookTween = null
@@ -9519,6 +9889,7 @@ function updatePlaybackSystemsForFrame(delta: number): boolean {
 	}
 	stepPhysicsWorld(delta)
 	syncScenePreviewPhysicsBridgeVehicleInput()
+	syncScenePreviewPhysicsBridgeCharacterInput()
 	syncScenePreviewPhysicsBridgeBodyTransforms()
 	stepScenePreviewPhysicsBridge(delta)
 	updateVehicleSpeedFromVehicle()
@@ -9788,8 +10159,12 @@ function startAnimationLoop() {
 		updateSteeringAutoCenter(delta)
 		syncAutoTourCameraInputPolicyForFrame(delta)
 		const vehicleFollowCameraActive = vehicleDriveState.active && vehicleDriveCameraMode.value === 'follow'
+		const characterFollowCameraActive =
+			!vehicleDriveState.active
+			&& controlMode.value === 'first-person'
+			&& characterCameraMode.value === 'follow'
 		const autoTourFollowCameraActive = Boolean(autoTourFollowNodeId.value) && !vehicleDriveState.active
-		const followCameraActive = vehicleFollowCameraActive || autoTourFollowCameraActive
+		const followCameraActive = vehicleFollowCameraActive || characterFollowCameraActive || autoTourFollowCameraActive
 		let vehicleTransformDriveUpdated = false
 		updateCameraControlsForFrame(delta, activeCamera, followCameraActive)
 
@@ -9812,6 +10187,9 @@ function startAnimationLoop() {
 		// 3) Vehicle camera and camera-dependent systems
 		updateAutoTourCameraForFrame(delta, autoTourFollowCameraActive, activeCamera)
 		updateVehicleCameraForFrame(delta, vehicleFollowCameraActive, activeCamera, vehicleTransformDriveUpdated)
+		if (!autoTourFollowCameraActive) {
+			updateCharacterFollowCamera(delta, activeCamera, false)
+		}
 		updateCameraDependentSystemsForFrame(activeCamera, delta)
 		updateBillboardInstanceCameraWorldPosition(activeCamera.position)
 		updatePunchBadgeOverlayEntries(activeCamera, delta)
@@ -9851,6 +10229,7 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	lastCameraDependentUpdateQuaternion.identity()
 	releaseTerrainScatterInstances()
 	resetProtagonistPoseState()
+	resetCharacterFollowCameraState()
 	characterAuthorityInput.moveX = 0
 	characterAuthorityInput.moveZ = 0
 	characterAuthorityInput.jump = false
@@ -10994,6 +11373,7 @@ function updateScenePreviewPhysicsBridgeIndex(asset: PhysicsSceneAsset): void {
 	physicsBridgeBodyIdByNodeId.clear()
 	physicsBridgeNodeIdByBodyId.clear()
 	physicsBridgeVehicleIdByNodeId.clear()
+	physicsBridgeCharacterIdByNodeId.clear()
 	physicsBridgeFrameBodiesByNodeId.clear()
 	physicsBridgeContactsByNodeId.clear()
 	asset.bodies.forEach((body) => {
@@ -11009,6 +11389,13 @@ function updateScenePreviewPhysicsBridgeIndex(asset: PhysicsSceneAsset): void {
 			return
 		}
 		physicsBridgeVehicleIdByNodeId.set(nodeId, vehicle.id)
+	})
+	asset.characters.forEach((character) => {
+		const nodeId = physicsBridgeNodeIdByBodyId.get(character.bodyId)
+		if (!nodeId) {
+			return
+		}
+		physicsBridgeCharacterIdByNodeId.set(nodeId, character.characterId)
 	})
 	vehicleInstances.forEach((instance, nodeId) => {
 		if (instance.source !== 'bridge') {
@@ -11253,7 +11640,7 @@ function applyScenePreviewPhysicsBridgeFrameToObjects(): void {
 		const component = resolvePhysicsRigidbodyComponent(node)
 		const bindingObject = node && component
 			? resolveRigidbodyBindingObject(component, nodeObjectMap.get(nodeId) ?? null)
-			: null
+			: (physicsBridgeCharacterIdByNodeId.has(nodeId) ? (nodeObjectMap.get(nodeId) ?? null) : null)
 		if (!bindingObject) {
 			return
 		}
@@ -11335,6 +11722,9 @@ function syncScenePreviewPhysicsBridgeBodyTransforms(): void {
 	const commands: Array<Promise<void>> = []
 	const syncedNodeIds = new Set<string>()
 	rigidbodyInstances.forEach((entry, nodeId) => {
+		if (physicsBridgeCharacterIdByNodeId.has(nodeId)) {
+			return
+		}
 		if (entry.body.type === LEGACY_STATIC_BODY_TYPE) {
 			return
 		}
@@ -11359,6 +11749,9 @@ function syncScenePreviewPhysicsBridgeBodyTransforms(): void {
 	})
 	physicsBridgeBodyIdByNodeId.forEach((bodyId, nodeId) => {
 		if (syncedNodeIds.has(nodeId)) {
+			return
+		}
+		if (physicsBridgeCharacterIdByNodeId.has(nodeId)) {
 			return
 		}
 		const node = resolveNodeById(nodeId)
@@ -11496,11 +11889,58 @@ function syncScenePreviewPhysicsBridgeVehicleInput(): void {
 	})
 }
 
+function resolveScenePreviewCharacterInputYaw(): number {
+	const activeCamera = camera
+	if (activeCamera) {
+		activeCamera.getWorldDirection(tempDirection)
+		tempDirection.y = 0
+		if (tempDirection.lengthSq() > 1e-8) {
+			tempDirection.normalize()
+			return Math.atan2(tempDirection.x, tempDirection.z)
+		}
+	}
+	const controlledObject = findDefaultControlledCharacterObject()
+	if (controlledObject) {
+		controlledObject.getWorldQuaternion(tempQuaternion)
+		resolveControlledCharacterForwardVector(tempDirection).applyQuaternion(tempQuaternion)
+		tempDirection.y = 0
+		if (tempDirection.lengthSq() > 1e-8) {
+			tempDirection.normalize()
+			return Math.atan2(tempDirection.x, tempDirection.z)
+		}
+	}
+	return Math.PI
+}
+
+function syncScenePreviewPhysicsBridgeCharacterInput(): void {
+	if (!physicsBridge || !physicsBridgeSceneLoaded || !physicsBridgeCharacterIdByNodeId.size) {
+		return
+	}
+	const controlledNodeId = resolveDefaultControlledCharacterNodeId()
+	const yaw = resolveScenePreviewCharacterInputYaw()
+	physicsBridgeCharacterIdByNodeId.forEach((characterId, nodeId) => {
+		const isControlled = nodeId === controlledNodeId
+		void physicsBridge?.setCharacterInput({
+			characterId,
+			moveX: isControlled ? characterAuthorityInput.moveX : 0,
+			moveZ: isControlled ? characterAuthorityInput.moveZ : 0,
+			yaw,
+			jump: isControlled ? characterAuthorityInput.jump : false,
+			sprint: isControlled ? characterAuthorityInput.sprint : false,
+			crouch: isControlled ? characterAuthorityInput.crouch : false,
+			interact: isControlled ? characterAuthorityInput.interact : false,
+		}).catch((error) => {
+			console.warn('[ScenePreview] Failed to sync character input', error)
+		})
+	})
+}
+
 async function disposeScenePreviewPhysicsBridgeScene(): Promise<void> {
 	physicsBridgeSceneRequestId += 1
 	physicsBridgeBodyIdByNodeId.clear()
 	physicsBridgeNodeIdByBodyId.clear()
 	physicsBridgeVehicleIdByNodeId.clear()
+	physicsBridgeCharacterIdByNodeId.clear()
 	physicsBridgeFrameBodiesByNodeId.clear()
 	resetPhysicsBridgeVehicleInputSyncState(physicsBridgeVehicleInputSyncState)
 	if (!physicsBridge || !physicsBridgeSceneLoaded) {
@@ -11542,6 +11982,7 @@ async function destroyScenePreviewPhysicsBridge(): Promise<void> {
 		physicsBridgeBodyIdByNodeId.clear()
 		physicsBridgeNodeIdByBodyId.clear()
 		physicsBridgeVehicleIdByNodeId.clear()
+		physicsBridgeCharacterIdByNodeId.clear()
 		physicsBridgeFrameBodiesByNodeId.clear()
 		resetPhysicsBridgeVehicleInputSyncState(physicsBridgeVehicleInputSyncState)
 		physicsBridgeSceneLoaded = false
@@ -13537,6 +13978,7 @@ async function updateScene(document: SceneJsonExportDocument) {
 	resetAssetResolutionCaches()
 	releaseTerrainScatterInstances()
 	resetProtagonistPoseState()
+	resetCharacterFollowCameraState()
 	clearRuntimePrefabPreviewRoots()
 	document = await prepareCouponSceneDocument(document)
 	await syncScenePreviewGroundChunkManifest(document)
@@ -14283,25 +14725,24 @@ watch(
 			</v-btn>
 		</v-btn-group>
 		<div
-			v-if="vehicleDriveUi.visible"
+			v-if="runtimePanelUi.visible"
 			class="scene-preview__drive-panel"
 		>
 			<div class="scene-preview__drive-panel-inner">
 				<div class="scene-preview__drive-heading">
-					<v-icon icon="mdi-steering" size="18" />
+					<v-icon :icon="runtimePanelUi.mode === 'vehicle' ? 'mdi-steering' : 'mdi-run-fast'" size="18" />
 					<div class="scene-preview__drive-heading-text">
-						<span class="scene-preview__drive-heading-label">{{ vehicleDriveUi.label }}</span>
+						<span class="scene-preview__drive-heading-label">{{ runtimePanelUi.label }}</span>
 					</div>
 					<v-btn
-						v-if="vehicleDriveState.active"
 						class="scene-preview__drive-camera-toggle"
 						variant="text"
 						size="small"
 						color="secondary"
-						:icon="vehicleDriveCameraToggleConfig.icon"
-						:title="vehicleDriveCameraToggleConfig.label"
-						:aria-label="vehicleDriveCameraToggleConfig.label"
-						@click="handleVehicleDriveCameraToggle"
+						:icon="runtimePanelCameraToggleConfig.icon"
+						:title="runtimePanelCameraToggleConfig.label"
+						:aria-label="runtimePanelCameraToggleConfig.label"
+						@click="handleRuntimePanelCameraToggle"
 					/>
 					<v-btn
 						class="scene-preview__drive-exit"
@@ -14310,11 +14751,11 @@ watch(
 						size="small"
 						color="secondary"
 						:loading="vehicleDriveExitBusy"
-						:disabled="vehicleDriveExitBusy"
-						@click="handleVehicleDriveExitClick"
+						:disabled="vehicleDriveExitBusy && runtimePanelUi.mode === 'vehicle'"
+						@click="handleRuntimePanelExitClick"
 					/>
 				</div>
-				<div class="scene-preview__drive-controls">
+				<div v-if="runtimePanelUi.mode === 'vehicle'" class="scene-preview__drive-controls">
 					<div class="scene-preview__steering-column">
 						<div class="scene-preview__speed-display" aria-live="polite">
 							<span class="scene-preview__speed-display-value">{{ vehicleSpeedKmh }}</span>
@@ -14343,7 +14784,7 @@ watch(
 					<div class="scene-preview__pedal-row">
 						<v-btn
 							class="scene-preview__pedal-button"
-							:class="{ 'scene-preview__pedal-button--active': vehicleDriveUi.forwardActive }"
+							:class="{ 'scene-preview__pedal-button--active': runtimePanelUi.forwardActive }"
 							variant="tonal"
 							color="primary"
 							size="small"
@@ -14358,7 +14799,7 @@ watch(
 						/>
 						<v-btn
 							class="scene-preview__pedal-button"
-							:class="{ 'scene-preview__pedal-button--active': vehicleDriveUi.backwardActive }"
+							:class="{ 'scene-preview__pedal-button--active': runtimePanelUi.backwardActive }"
 							variant="tonal"
 							color="secondary"
 							size="small"
@@ -14373,7 +14814,7 @@ watch(
 						/>
 						<v-btn
 							class="scene-preview__pedal-button"
-							:class="{ 'scene-preview__pedal-button--active': vehicleDriveUi.brakeActive }"
+							:class="{ 'scene-preview__pedal-button--active': runtimePanelUi.brakeActive }"
 							variant="tonal"
 							color="error"
 							size="small"
@@ -14398,6 +14839,132 @@ watch(
 						/>
 					</div>
 				</div>
+				<div v-else class="scene-preview__character-controls">
+					<div class="scene-preview__character-row">
+						<v-btn
+							class="scene-preview__pedal-button"
+							:class="{ 'scene-preview__pedal-button--active': runtimePanelUi.leftActive }"
+							variant="tonal"
+							color="secondary"
+							size="small"
+							icon="mdi-arrow-left-bold"
+							title="Left (A)"
+							aria-label="Left"
+							@click.prevent
+							@pointerdown.prevent="handleCharacterControlPointer('left', true, $event)"
+							@pointerup.prevent="handleCharacterControlPointer('left', false, $event)"
+							@pointerleave="handleCharacterControlPointer('left', false)"
+							@pointercancel="handleCharacterControlPointer('left', false)"
+						/>
+						<v-btn
+							class="scene-preview__pedal-button"
+							:class="{ 'scene-preview__pedal-button--active': runtimePanelUi.forwardActive }"
+							variant="tonal"
+							color="primary"
+							size="small"
+							icon="mdi-arrow-up-bold"
+							title="Forward (W)"
+							aria-label="Forward"
+							@click.prevent
+							@pointerdown.prevent="handleCharacterControlPointer('forward', true, $event)"
+							@pointerup.prevent="handleCharacterControlPointer('forward', false, $event)"
+							@pointerleave="handleCharacterControlPointer('forward', false)"
+							@pointercancel="handleCharacterControlPointer('forward', false)"
+						/>
+						<v-btn
+							class="scene-preview__pedal-button"
+							:class="{ 'scene-preview__pedal-button--active': runtimePanelUi.rightActive }"
+							variant="tonal"
+							color="secondary"
+							size="small"
+							icon="mdi-arrow-right-bold"
+							title="Right (D)"
+							aria-label="Right"
+							@click.prevent
+							@pointerdown.prevent="handleCharacterControlPointer('right', true, $event)"
+							@pointerup.prevent="handleCharacterControlPointer('right', false, $event)"
+							@pointerleave="handleCharacterControlPointer('right', false)"
+							@pointercancel="handleCharacterControlPointer('right', false)"
+						/>
+						<v-btn
+							class="scene-preview__pedal-button"
+							:class="{ 'scene-preview__pedal-button--active': runtimePanelUi.backwardActive }"
+							variant="tonal"
+							color="secondary"
+							size="small"
+							icon="mdi-arrow-down-bold"
+							title="Backward (S)"
+							aria-label="Backward"
+							@click.prevent
+							@pointerdown.prevent="handleCharacterControlPointer('backward', true, $event)"
+							@pointerup.prevent="handleCharacterControlPointer('backward', false, $event)"
+							@pointerleave="handleCharacterControlPointer('backward', false)"
+							@pointercancel="handleCharacterControlPointer('backward', false)"
+						/>
+					</div>
+					<div class="scene-preview__character-row">
+						<v-btn
+							class="scene-preview__pedal-button"
+							:class="{ 'scene-preview__pedal-button--active': runtimePanelUi.jumpActive }"
+							variant="tonal"
+							color="info"
+							size="small"
+							icon="mdi-arrow-up-circle"
+							title="Jump (Space)"
+							aria-label="Jump"
+							@click.prevent
+							@pointerdown.prevent="handleCharacterControlPointer('jump', true, $event)"
+							@pointerup.prevent="handleCharacterControlPointer('jump', false, $event)"
+							@pointerleave="handleCharacterControlPointer('jump', false)"
+							@pointercancel="handleCharacterControlPointer('jump', false)"
+						/>
+						<v-btn
+							class="scene-preview__pedal-button"
+							:class="{ 'scene-preview__pedal-button--active': runtimePanelUi.sprintActive }"
+							variant="tonal"
+							color="warning"
+							size="small"
+							icon="mdi-run-fast"
+							title="Sprint (Shift)"
+							aria-label="Sprint"
+							@click.prevent
+							@pointerdown.prevent="handleCharacterControlPointer('sprint', true, $event)"
+							@pointerup.prevent="handleCharacterControlPointer('sprint', false, $event)"
+							@pointerleave="handleCharacterControlPointer('sprint', false)"
+							@pointercancel="handleCharacterControlPointer('sprint', false)"
+						/>
+						<v-btn
+							class="scene-preview__pedal-button"
+							:class="{ 'scene-preview__pedal-button--active': runtimePanelUi.crouchActive }"
+							variant="tonal"
+							color="secondary"
+							size="small"
+							icon="mdi-human-male-height-variant"
+							title="Crouch (Ctrl)"
+							aria-label="Crouch"
+							@click.prevent
+							@pointerdown.prevent="handleCharacterControlPointer('crouch', true, $event)"
+							@pointerup.prevent="handleCharacterControlPointer('crouch', false, $event)"
+							@pointerleave="handleCharacterControlPointer('crouch', false)"
+							@pointercancel="handleCharacterControlPointer('crouch', false)"
+						/>
+						<v-btn
+							class="scene-preview__pedal-button"
+							:class="{ 'scene-preview__pedal-button--active': runtimePanelUi.interactActive }"
+							variant="tonal"
+							color="success"
+							size="small"
+							icon="mdi-hand-pointing-up"
+							title="Interact (E)"
+							aria-label="Interact"
+							@click.prevent
+							@pointerdown.prevent="handleCharacterControlPointer('interact', true, $event)"
+							@pointerup.prevent="handleCharacterControlPointer('interact', false, $event)"
+							@pointerleave="handleCharacterControlPointer('interact', false)"
+							@pointercancel="handleCharacterControlPointer('interact', false)"
+						/>
+					</div>
+				</div>
 			</div>
 		</div>
 		<v-sheet class="scene-preview__control-bar" elevation="10">
@@ -14417,7 +14984,7 @@ watch(
 					v-model="controlMode"
 					mandatory
 					density="compact"
-					:disabled="vehicleDriveUi.cameraLocked"
+					:disabled="runtimePanelUi.cameraLocked"
 
 					rounded
 				>
@@ -15542,6 +16109,19 @@ watch(
 }
 
 .scene-preview__pedal-row {
+	display: grid;
+	grid-template-columns: repeat(4, minmax(0, 1fr));
+	gap: 8px;
+}
+
+.scene-preview__character-controls {
+	margin-top: 12px;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.scene-preview__character-row {
 	display: grid;
 	grid-template-columns: repeat(4, minmax(0, 1fr));
 	gap: 8px;

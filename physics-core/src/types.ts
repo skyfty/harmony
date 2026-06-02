@@ -139,12 +139,27 @@ export type PhysicsVehicleDesc = {
   wheels: PhysicsVehicleWheelDesc[]
 }
 
+export type PhysicsCharacterDesc = {
+  characterId: number
+  bodyId: number
+  radius: number
+  height: number
+  stepHeight: number
+  slopeLimitDegrees: number
+  jumpImpulse: number
+  airControl: number
+  walkSpeed: number
+  runSpeed: number
+  sprintSpeed: number
+}
+
 export type PhysicsSceneAsset = {
   format: 'harmony-physics'
   materials: PhysicsMaterialDesc[]
   shapes: PhysicsShapeDesc[]
   bodies: PhysicsBodyDesc[]
   vehicles: PhysicsVehicleDesc[]
+  characters: PhysicsCharacterDesc[]
 }
 
 export type PhysicsBodySnapshot = {
@@ -181,6 +196,17 @@ export type PhysicsVehicleInputCommand = {
   throttle: number
   brake: number
   handbrake?: number
+}
+
+export type PhysicsCharacterInputCommand = {
+  characterId: number
+  moveX: number
+  moveZ: number
+  yaw?: number | null
+  jump: boolean
+  sprint: boolean
+  crouch: boolean
+  interact: boolean
 }
 
 export type PhysicsRaycastCommand = {
