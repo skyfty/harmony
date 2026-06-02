@@ -134,7 +134,7 @@ export function clampCharacterControllerComponentProps(
     walkSpeed: sanitizeNumber(props?.walkSpeed, 2.4, 0, 100),
     runSpeed: sanitizeNumber(props?.runSpeed, 4.8, 0, 100),
     sprintSpeed: sanitizeNumber(props?.sprintSpeed, 6.4, 0, 100),
-    turnRateDegreesPerSecond: sanitizeNumber(props?.turnRateDegreesPerSecond, 540, 0, 5000),
+    turnRateDegreesPerSecond: sanitizeNumber(props?.turnRateDegreesPerSecond, 210, 0, 5000),
     jumpImpulse: sanitizeNumber(props?.jumpImpulse, 6.5, 0, 100),
     airControl: sanitizeNumber(props?.airControl, 0.35, 0, 1),
     stepHeight: sanitizeNumber(props?.stepHeight, 0.3, 0, 5),

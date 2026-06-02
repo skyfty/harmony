@@ -245,7 +245,7 @@ import {
 	type InstancedLodCullingRequest,
 } from '../utils/instancedLodCulling'
 import type { InstancedLodBoundsSnapshot } from '@schema/core'
-import { VehicleDriveController } from '@schema/motion'
+import { VehicleDriveController, resolveCharacterControlMovementMagnitude } from '@schema/motion'
 import type { VehicleDriveRuntimeState, VehicleDriveVehicle } from '@schema/motion'
 import { createBridgeVehicleProxy } from '@schema/motion'
 import {
@@ -11712,14 +11712,27 @@ function resolveScenePreviewCharacterInputYawSeed(): number {
 	return Math.PI
 }
 
-function resolveScenePreviewCharacterTurnRateRadiansPerSecond(): number {
+const CHARACTER_PREVIEW_MAX_TURN_RATE_DEGREES_PER_SECOND = 180
+const CHARACTER_PREVIEW_MOVING_TURN_RATE_SCALE = 0.5
+const CHARACTER_PREVIEW_REVERSE_TURN_RATE_SCALE = 0.88
+
+function resolveScenePreviewCharacterTurnRateRadiansPerSecond(movementMagnitude: number, moveZ: number): number {
 	const props = resolveDefaultControlledCharacterComponentProps()
-	return ((props?.turnRateDegreesPerSecond ?? 540) * Math.PI) / 180
+	const configuredTurnRate = props?.turnRateDegreesPerSecond ?? 540
+	const cappedTurnRate = Math.min(configuredTurnRate, CHARACTER_PREVIEW_MAX_TURN_RATE_DEGREES_PER_SECOND)
+	const movingBlend = THREE.MathUtils.clamp(movementMagnitude, 0, 1)
+	const turnScale = THREE.MathUtils.lerp(1, CHARACTER_PREVIEW_MOVING_TURN_RATE_SCALE, movingBlend)
+	const reverseScale = moveZ < -0.05 ? CHARACTER_PREVIEW_REVERSE_TURN_RATE_SCALE : 1
+	return ((cappedTurnRate * turnScale * reverseScale) * Math.PI) / 180
 }
 
 function updateScenePreviewCharacterInputYaw(deltaSeconds: number): number {
 	const controlledNodeId = resolveDefaultControlledCharacterNodeId()
 	const hasTurnInput = Math.abs(characterAuthorityInput.turn) > 0.05
+	const movementMagnitude = resolveCharacterControlMovementMagnitude(
+		characterAuthorityInput.moveX,
+		characterAuthorityInput.moveZ,
+	)
 	if (characterInputYawNodeId !== controlledNodeId) {
 		characterInputYawNodeId = controlledNodeId
 		characterInputYawInitialized = false
@@ -11729,7 +11742,9 @@ function updateScenePreviewCharacterInputYaw(deltaSeconds: number): number {
 		characterInputYawInitialized = true
 	}
 	if (hasTurnInput && Number.isFinite(deltaSeconds) && deltaSeconds > 0) {
-		characterInputYaw += characterAuthorityInput.turn * resolveScenePreviewCharacterTurnRateRadiansPerSecond() * deltaSeconds
+		characterInputYaw += characterAuthorityInput.turn
+			* resolveScenePreviewCharacterTurnRateRadiansPerSecond(movementMagnitude, characterAuthorityInput.moveZ)
+			* deltaSeconds
 		characterInputYaw = normalizeScenePreviewCharacterInputYaw(characterInputYaw)
 	}
 	return characterInputYaw
