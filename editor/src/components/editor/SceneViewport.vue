@@ -1939,6 +1939,7 @@ const defaultCameraStatusDistance = new THREE.Vector3(
   Math.max(DEFAULT_CAMERA_TARGET.y, MIN_TARGET_HEIGHT),
   DEFAULT_CAMERA_TARGET.z,
 ))
+const CAMERA_DOUBLE_CLICK_FOCUS_DISTANCE = Math.max(8, defaultCameraStatusDistance)
 const cameraStatusDistance = ref(defaultCameraStatusDistance)
 const cameraNorthHeadingDegrees = ref(0)
 const cameraNorthForwardHelper = new THREE.Vector3()
@@ -13187,7 +13188,33 @@ function focusCameraOnNode(nodeId: string): boolean {
   if (!focus) {
     return false
   }
-  return applyCameraFocus(focus.target, focus.radiusEstimate)
+  if (!camera || !mapControls) {
+    return false
+  }
+
+  const clampedTargetY = Math.max(focus.target.y, MIN_TARGET_HEIGHT)
+  const focusTarget = new THREE.Vector3(focus.target.x, clampedTargetY, focus.target.z)
+  const direction = sceneStore.viewportSettings.cameraControlMode === 'map'
+    ? new THREE.Vector3(1, 1.1, 1).normalize()
+    : new THREE.Vector3(1, 0.65, 1).normalize()
+  const newPosition = focusTarget.clone().addScaledVector(direction, CAMERA_DOUBLE_CLICK_FOCUS_DISTANCE)
+
+  if (newPosition.y < MIN_CAMERA_HEIGHT) {
+    newPosition.y = MIN_CAMERA_HEIGHT
+  }
+
+  isApplyingCameraState = true
+  mapControls.setLookAt(newPosition, focusTarget, false)
+  applyViewportCompositionOffset(true)
+  syncControlsConstraintsAndSpeeds()
+  isApplyingCameraState = false
+
+  if (perspectiveCamera && camera !== perspectiveCamera) {
+    perspectiveCamera.position.copy(camera.position)
+    perspectiveCamera.quaternion.copy(camera.quaternion)
+  }
+
+  return true
 }
 
 function focusViewportSelection(): boolean {
