@@ -316,6 +316,131 @@
       </view>
 
       <view
+        v-if="characterControlUi.visible && isWeChatMiniProgram"
+        class="viewer-character-console viewer-character-console--mobile"
+      >
+        <view class="viewer-character-panel">
+          <view class="viewer-character-panel__header">
+            <view class="viewer-character-panel__title-row">
+              <text class="viewer-character-panel__title">{{ characterControlUi.label }}</text>
+              <view class="viewer-character-panel__status-pill">
+                <text class="viewer-character-panel__status-dot"></text>
+                <text class="viewer-character-panel__status-text">多端同步</text>
+              </view>
+            </view>
+            <text class="viewer-character-panel__subtitle">按住控制，松开归零</text>
+          </view>
+          <view class="viewer-character-dpad">
+            <button
+              class="viewer-character-button viewer-character-button--direction viewer-character-button--left"
+              :class="{ 'is-active': characterControlUi.leftActive }"
+              type="button"
+              hover-class="none"
+              aria-label="左移"
+              @touchstart.stop.prevent="handleCharacterControlPointer('left', true, $event)"
+              @touchend.stop.prevent="handleCharacterControlPointer('left', false, $event)"
+              @touchcancel.stop.prevent="handleCharacterControlPointer('left', false, $event)"
+            >
+              <text class="viewer-character-button__icon">←</text>
+            </button>
+            <button
+              class="viewer-character-button viewer-character-button--direction viewer-character-button--forward"
+              :class="{ 'is-active': characterControlUi.forwardActive }"
+              type="button"
+              hover-class="none"
+              aria-label="前进"
+              @touchstart.stop.prevent="handleCharacterControlPointer('forward', true, $event)"
+              @touchend.stop.prevent="handleCharacterControlPointer('forward', false, $event)"
+              @touchcancel.stop.prevent="handleCharacterControlPointer('forward', false, $event)"
+            >
+              <text class="viewer-character-button__icon">↑</text>
+            </button>
+            <button
+              class="viewer-character-button viewer-character-button--direction viewer-character-button--right"
+              :class="{ 'is-active': characterControlUi.rightActive }"
+              type="button"
+              hover-class="none"
+              aria-label="右移"
+              @touchstart.stop.prevent="handleCharacterControlPointer('right', true, $event)"
+              @touchend.stop.prevent="handleCharacterControlPointer('right', false, $event)"
+              @touchcancel.stop.prevent="handleCharacterControlPointer('right', false, $event)"
+            >
+              <text class="viewer-character-button__icon">→</text>
+            </button>
+            <button
+              class="viewer-character-button viewer-character-button--direction viewer-character-button--backward"
+              :class="{ 'is-active': characterControlUi.backwardActive }"
+              type="button"
+              hover-class="none"
+              aria-label="后退"
+              @touchstart.stop.prevent="handleCharacterControlPointer('backward', true, $event)"
+              @touchend.stop.prevent="handleCharacterControlPointer('backward', false, $event)"
+              @touchcancel.stop.prevent="handleCharacterControlPointer('backward', false, $event)"
+            >
+              <text class="viewer-character-button__icon">↓</text>
+            </button>
+            <view class="viewer-character-dpad__center" aria-hidden="true">
+              <text class="viewer-character-dpad__center-label">移动</text>
+            </view>
+          </view>
+          <view class="viewer-character-grid viewer-character-grid--actions">
+            <button
+              class="viewer-character-button viewer-character-button--action viewer-character-button--accent"
+              :class="{ 'is-active': characterControlUi.jumpActive }"
+              type="button"
+              hover-class="none"
+              aria-label="跳跃"
+              @touchstart.stop.prevent="handleCharacterControlPointer('jump', true, $event)"
+              @touchend.stop.prevent="handleCharacterControlPointer('jump', false, $event)"
+              @touchcancel.stop.prevent="handleCharacterControlPointer('jump', false, $event)"
+            >
+              <text class="viewer-character-button__icon">跳</text>
+              <text class="viewer-character-button__label">跳跃</text>
+            </button>
+            <button
+              class="viewer-character-button viewer-character-button--action viewer-character-button--warning"
+              :class="{ 'is-active': characterControlUi.sprintActive }"
+              type="button"
+              hover-class="none"
+              aria-label="冲刺"
+              @touchstart.stop.prevent="handleCharacterControlPointer('sprint', true, $event)"
+              @touchend.stop.prevent="handleCharacterControlPointer('sprint', false, $event)"
+              @touchcancel.stop.prevent="handleCharacterControlPointer('sprint', false, $event)"
+            >
+              <text class="viewer-character-button__icon">跑</text>
+              <text class="viewer-character-button__label">冲刺</text>
+            </button>
+            <button
+              class="viewer-character-button viewer-character-button--action"
+              :class="{ 'is-active': characterControlUi.crouchActive }"
+              type="button"
+              hover-class="none"
+              aria-label="蹲下"
+              @touchstart.stop.prevent="handleCharacterControlPointer('crouch', true, $event)"
+              @touchend.stop.prevent="handleCharacterControlPointer('crouch', false, $event)"
+              @touchcancel.stop.prevent="handleCharacterControlPointer('crouch', false, $event)"
+            >
+              <text class="viewer-character-button__icon">蹲</text>
+              <text class="viewer-character-button__label">蹲下</text>
+            </button>
+            <button
+              class="viewer-character-button viewer-character-button--action viewer-character-button--success"
+              :class="{ 'is-active': characterControlUi.interactActive }"
+              type="button"
+              hover-class="none"
+              aria-label="交互"
+              @touchstart.stop.prevent="handleCharacterControlPointer('interact', true, $event)"
+              @touchend.stop.prevent="handleCharacterControlPointer('interact', false, $event)"
+              @touchcancel.stop.prevent="handleCharacterControlPointer('interact', false, $event)"
+            >
+              <text class="viewer-character-button__icon">交</text>
+              <text class="viewer-character-button__label">交互</text>
+            </button>
+          </view>
+        </view>
+      </view>
+
+      <view
         v-if="debugOverlayVisible && debugMode !== 'off'"
         class="viewer-debug-overlay viewer-debug-overlay--interactive"
         :aria-label="debugOverlayAriaLabel"
@@ -3040,7 +3165,6 @@ const vehicleDriveCameraRestoreState: VehicleDriveCameraRestoreState = {
   target: new THREE.Vector3(),
   quaternion: new THREE.Quaternion(),
   up: new THREE.Vector3(),
-  controlMode: null,
   viewMode: cameraViewState.mode as CameraViewMode,
   viewTargetId: cameraViewState.targetNodeId as string | null,
   isCameraCaged: false,
@@ -3246,6 +3370,40 @@ const vehicleDriveUi = computed(() => {
     joystickActive: active && joystickState.active,
     accelerating: active && (vehicleDriveInputFlags.forward || vehicleDriveInput.throttle > 0.1),
     braking: active && vehicleDriveInputFlags.brake,
+  } as const;
+});
+
+const characterControlUi = computed(() => {
+  const controlledNodeId = resolveDefaultControlledCharacterNodeId();
+  const visible = !vehicleDriveUi.value.visible && Boolean(controlledNodeId);
+  if (!visible) {
+    return {
+      visible: false,
+      label: '',
+      cameraLocked: false,
+      forwardActive: false,
+      backwardActive: false,
+      leftActive: false,
+      rightActive: false,
+      jumpActive: false,
+      sprintActive: false,
+      crouchActive: false,
+      interactActive: false,
+    } as const;
+  }
+  const node = controlledNodeId ? resolveNodeById(controlledNodeId) : null;
+  return {
+    visible: true,
+    label: node?.name?.trim() || controlledNodeId || 'Character',
+    cameraLocked: false,
+    forwardActive: characterKeyState.forward,
+    backwardActive: characterKeyState.backward,
+    leftActive: characterKeyState.left,
+    rightActive: characterKeyState.right,
+    jumpActive: characterKeyState.jump,
+    sprintActive: characterKeyState.sprint,
+    crouchActive: characterKeyState.crouch,
+    interactActive: characterKeyState.interact,
   } as const;
 });
 
@@ -5857,6 +6015,7 @@ function resolveCharacterControllerBindingNodeId(nodeId: string | null): string 
 function resolveRemoteCharacterAnimationInput(nodeId: string): {
   moveX: number;
   moveZ: number;
+  turn: number;
   jump: boolean;
   sprint: boolean;
   crouch: boolean;
@@ -5868,6 +6027,7 @@ function resolveRemoteCharacterAnimationInput(nodeId: string): {
     return {
       moveX: 0,
       moveZ: 0,
+      turn: 0,
       jump: false,
       sprint: false,
       crouch: false,
@@ -5880,6 +6040,7 @@ function resolveRemoteCharacterAnimationInput(nodeId: string): {
     return {
       moveX: 0,
       moveZ: 0,
+      turn: 0,
       jump: false,
       sprint: false,
       crouch: false,
@@ -5892,6 +6053,7 @@ function resolveRemoteCharacterAnimationInput(nodeId: string): {
     return {
       moveX: 0,
       moveZ: 0,
+      turn: 0,
       jump: false,
       sprint: false,
       crouch: false,
@@ -5935,6 +6097,7 @@ function resolveRemoteCharacterAnimationInput(nodeId: string): {
     return {
       moveX: 0,
       moveZ: 0,
+      turn: 0,
       jump: false,
       sprint: false,
       crouch: false,
@@ -5948,6 +6111,7 @@ function resolveRemoteCharacterAnimationInput(nodeId: string): {
   return {
     moveX,
     moveZ,
+    turn: 0,
     jump: false,
     sprint: speed >= Math.max(props.runSpeed, props.walkSpeed + 0.01),
     crouch: false,
@@ -5983,6 +6147,7 @@ function refreshCharacterControllerAnimationRuntimeEntries(): void {
         ? {
             moveX: characterAuthorityInput.moveX,
             moveZ: characterAuthorityInput.moveZ,
+            turn: 0,
             jump: characterAuthorityInput.jump,
             sprint: characterAuthorityInput.sprint,
             crouch: characterAuthorityInput.crouch,
@@ -6009,6 +6174,7 @@ function updateCharacterControllerAnimations(deltaSeconds: number): void {
         ? {
             moveX: characterAuthorityInput.moveX,
             moveZ: characterAuthorityInput.moveZ,
+            turn: 0,
             jump: characterAuthorityInput.jump,
             sprint: characterAuthorityInput.sprint,
             crouch: characterAuthorityInput.crouch,
@@ -13443,6 +13609,52 @@ function setCharacterKeyState(key: string, pressed: boolean): void {
   updateCharacterAuthorityInputFromKeys();
 }
 
+type CharacterControlAction = 'forward' | 'backward' | 'left' | 'right' | 'jump' | 'sprint' | 'crouch' | 'interact';
+
+function resetCharacterControlInputs(): void {
+  characterAuthorityInput.moveX = 0;
+  characterAuthorityInput.moveZ = 0;
+  characterAuthorityInput.jump = false;
+  characterAuthorityInput.sprint = false;
+  characterAuthorityInput.crouch = false;
+  characterAuthorityInput.interact = false;
+  characterKeyState.forward = false;
+  characterKeyState.backward = false;
+  characterKeyState.left = false;
+  characterKeyState.right = false;
+  characterKeyState.jump = false;
+  characterKeyState.sprint = false;
+  characterKeyState.crouch = false;
+  characterKeyState.interact = false;
+  characterInputJumpLatch = false;
+}
+
+function setCharacterControlFlag(action: CharacterControlAction, pressed: boolean): void {
+  if (vehicleDriveActive.value || !characterControlUi.value.visible) {
+    return;
+  }
+  if (characterKeyState[action] === pressed) {
+    return;
+  }
+  characterKeyState[action] = pressed;
+  updateCharacterAuthorityInputFromKeys();
+}
+
+function handleCharacterControlPointer(
+  action: CharacterControlAction,
+  pressed: boolean,
+  event?: PointerEvent | MouseEvent | TouchEvent,
+): void {
+  if (event) {
+    event.preventDefault();
+  }
+  setCharacterControlFlag(action, pressed);
+}
+
+function handleWindowBlur(): void {
+  resetCharacterControlInputs();
+}
+
 function handleWindowKeyDown(event: KeyboardEvent): void {
   if (event.defaultPrevented) {
     return;
@@ -13787,6 +13999,7 @@ function startVehicleDriveMode(
     : { camera: null as THREE.PerspectiveCamera | null };
   const result = vehicleDriveController.startDrive(event, ctx);
   if (result.success) {
+    resetCharacterControlInputs();
     vehicleDriveCameraFollowState.initialized = false;
     purposeActiveMode.value = 'watch';
     updateVehicleDriveCamera(0, { immediate: true });
@@ -14541,6 +14754,7 @@ function handleVehicleDriveEvent(event: Extract<BehaviorRuntimeEvent, { type: 'v
       message: '已有驾驶请求已取消。',
     });
   }
+  resetCharacterControlInputs();
   if (activeAutoTourNodeIds.has(targetNodeId)) {
     pendingVehicleDriveEvent.value = null;
     vehicleDrivePromptBusy.value = false;
@@ -18002,6 +18216,7 @@ onMounted(() => {
   if (typeof window !== 'undefined') {
     window.addEventListener('keydown', handleWindowKeyDown, { passive: true });
     window.addEventListener('keyup', handleWindowKeyUp, { passive: true });
+    window.addEventListener('blur', handleWindowBlur);
   }
 
   if (hasAnyPropInput()) {
@@ -18063,21 +18278,7 @@ function cleanupRuntime(): void {
   }
   detachDrivePadMouseListeners();
   hideDrivePadImmediate();
-  characterAuthorityInput.moveX = 0;
-  characterAuthorityInput.moveZ = 0;
-  characterAuthorityInput.jump = false;
-  characterAuthorityInput.sprint = false;
-  characterAuthorityInput.crouch = false;
-  characterAuthorityInput.interact = false;
-  characterKeyState.forward = false;
-  characterKeyState.backward = false;
-  characterKeyState.left = false;
-  characterKeyState.right = false;
-  characterKeyState.jump = false;
-  characterKeyState.sprint = false;
-  characterKeyState.crouch = false;
-  characterKeyState.interact = false;
-  characterInputJumpLatch = false;
+  resetCharacterControlInputs();
   if (sceneDownloadTask) {
     sceneDownloadTask.abort();
     sceneDownloadTask = null;
@@ -18099,6 +18300,7 @@ onUnmounted(() => {
   if (typeof window !== 'undefined') {
     window.removeEventListener('keydown', handleWindowKeyDown);
     window.removeEventListener('keyup', handleWindowKeyUp);
+    window.removeEventListener('blur', handleWindowBlur);
   }
   cleanupRuntime();
 });
@@ -19882,6 +20084,260 @@ onUnmounted(() => {
   align-items: flex-end;
   flex-direction: column;
   gap: 12px;
+}
+
+.viewer-character-console {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1550;
+}
+
+.viewer-character-console--mobile {
+  display: block;
+}
+
+.viewer-character-panel {
+  position: absolute;
+  left: 16px;
+  bottom: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  pointer-events: auto;
+  width: min(88vw, 340px);
+  padding: 14px;
+  border-radius: 20px;
+  border: 1px solid rgba(140, 180, 225, 0.2);
+  background: linear-gradient(180deg, rgba(14, 22, 40, 0.84), rgba(9, 14, 28, 0.7));
+  box-shadow: 0 16px 38px rgba(4, 10, 26, 0.28);
+  backdrop-filter: blur(16px) saturate(1.08);
+  -webkit-backdrop-filter: blur(16px) saturate(1.08);
+}
+
+.viewer-character-panel__header {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.viewer-character-panel__title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.viewer-character-panel__title {
+  color: rgba(245, 249, 255, 0.96);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.viewer-character-panel__status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  border: 1px solid rgba(187, 220, 255, 0.18);
+  background: rgba(128, 171, 220, 0.12);
+  color: rgba(224, 240, 255, 0.92);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.viewer-character-panel__status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #77e6a4;
+  box-shadow: 0 0 0 4px rgba(119, 230, 164, 0.14);
+}
+
+.viewer-character-panel__status-text {
+  line-height: 1;
+}
+
+.viewer-character-panel__subtitle {
+  color: rgba(193, 210, 234, 0.8);
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.viewer-character-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.viewer-character-grid--actions {
+  margin-top: 6px;
+}
+
+.viewer-character-dpad {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-rows: repeat(3, minmax(58px, 1fr));
+  gap: 8px;
+  padding: 8px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(173, 205, 238, 0.1);
+}
+
+.viewer-character-dpad__center {
+  grid-column: 2;
+  grid-row: 2;
+  border-radius: 16px;
+  border: 1px dashed rgba(181, 214, 255, 0.16);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02));
+  color: rgba(214, 231, 247, 0.75);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.viewer-character-dpad__center-label {
+  line-height: 1;
+}
+
+.viewer-character-button {
+  min-width: 0;
+  min-height: 60px;
+  padding: 10px 8px 9px;
+  border-radius: 16px;
+  border: 1px solid rgba(181, 214, 255, 0.18);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(236, 243, 250, 0.82));
+  color: #23415b;
+  box-shadow: 0 10px 24px rgba(52, 87, 128, 0.12);
+  backdrop-filter: blur(14px) saturate(1.06);
+  -webkit-backdrop-filter: blur(14px) saturate(1.06);
+  transition: transform 0.18s ease, background-color 0.18s ease, opacity 0.18s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.viewer-character-button--direction {
+  min-height: 58px;
+}
+
+.viewer-character-button--action {
+  min-height: 64px;
+}
+
+.viewer-character-button--forward {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.viewer-character-button--left {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.viewer-character-button--right {
+  grid-column: 3;
+  grid-row: 2;
+}
+
+.viewer-character-button--backward {
+  grid-column: 2;
+  grid-row: 3;
+}
+
+.viewer-character-button--accent {
+  background: linear-gradient(180deg, rgba(221, 247, 255, 0.97), rgba(193, 237, 255, 0.84));
+}
+
+.viewer-character-button--warning {
+  background: linear-gradient(180deg, rgba(255, 244, 227, 0.97), rgba(255, 232, 198, 0.86));
+  color: #8a5b16;
+}
+
+.viewer-character-button--success {
+  background: linear-gradient(180deg, rgba(227, 248, 236, 0.97), rgba(205, 240, 220, 0.86));
+  color: #24663c;
+}
+
+.viewer-character-button.is-active {
+  transform: scale(0.96);
+  background: linear-gradient(180deg, rgba(220, 238, 255, 1), rgba(198, 224, 255, 0.92));
+}
+
+.viewer-character-button:active {
+  transform: scale(0.95);
+}
+
+.viewer-character-button__icon {
+  font-size: 19px;
+  line-height: 1;
+  font-weight: 800;
+}
+
+.viewer-character-button__label {
+  font-size: 10px;
+  line-height: 1.1;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.viewer-character-button::before {
+  content: '';
+  position: absolute;
+  inset: auto auto 8px 50%;
+  width: 8px;
+  height: 8px;
+  background: rgba(102, 178, 255, 0.12);
+  border-radius: 50%;
+  transform: translateX(-50%) scale(0);
+  opacity: 0;
+  transition: transform 420ms cubic-bezier(.2,.9,.2,1), opacity 420ms linear;
+}
+
+.viewer-character-button:active::before {
+  transform: translateX(-50%) scale(10);
+  opacity: 1;
+}
+
+.viewer-character-button:disabled {
+  opacity: 0.7;
+}
+
+@media (max-width: 420px) {
+  .viewer-character-panel {
+    width: min(92vw, 360px);
+    left: 12px;
+    bottom: 12px;
+    padding: 12px;
+    border-radius: 18px;
+  }
+
+  .viewer-character-dpad {
+    gap: 6px;
+    padding: 7px;
+    grid-template-rows: repeat(3, minmax(52px, 1fr));
+  }
+
+  .viewer-character-button {
+    min-height: 54px;
+  }
+
+  .viewer-character-button--action {
+    min-height: 58px;
+  }
 }
 
 .viewer-drive-icon-button {
