@@ -458,6 +458,7 @@ import { resolveDocumentGroundNode as resolveSharedDocumentGroundNode } from '@h
 import { syncGroundCollisionRuntimeLoadedTileKeys } from '@harmony/schema/groundCollisionRuntimeState';
 import { clearGroundCollisionRuntimeHost, syncGroundCollisionRuntimeHost } from '@harmony/schema/groundCollisionRuntimeHost';
 import { createGroundCollisionRuntimeBridgeDeps } from '@harmony/schema/groundCollisionRuntimeBridge';
+import { collectGroundAnchorWorldPositions } from '@harmony/schema/groundAnchorRuntime';
 import { clearCompiledGroundRenderTiles, collectLoadedCompiledGroundChunkKeys, getCompiledGroundRenderWorkState, syncCompiledGroundRenderTiles } from '@harmony/schema/compiledGroundRuntime';
 import { attachOptimizedGroundMeshToDocument, prepareRuntimeGroundSceneDocument } from '@harmony/schema/groundSplatRuntimeDocument';
 import { onGroundChunkTextureReady, refreshGroundChunkMaterials, resolveInfiniteGroundVisibleChunkWindow, setInfiniteGroundHiddenChunkKeys } from '@harmony/schema/groundMesh';
@@ -612,6 +613,10 @@ import {
   writeCharacterLocalForward,
   type CharacterControllerComponentProps,
 } from '@harmony/schema/components/definitions/characterControllerComponent';
+import {
+  GROUND_ANCHOR_COMPONENT_TYPE,
+  groundAnchorComponentDefinition,
+} from '@harmony/schema/components/definitions/groundAnchorComponent';
 import {
   behaviorComponentDefinition,
 } from '@harmony/schema/components/definitions/behaviorComponent';
@@ -1877,6 +1882,7 @@ previewComponentManager.registerDefinition(guideRouteComponentDefinition);
 previewComponentManager.registerDefinition(autoTourComponentDefinition);
 previewComponentManager.registerDefinition(purePursuitComponentDefinition);
 previewComponentManager.registerDefinition(sceneStateAnchorComponentDefinition);
+previewComponentManager.registerDefinition(groundAnchorComponentDefinition);
 previewComponentManager.registerDefinition(nominateComponentDefinition);
 previewComponentManager.registerDefinition(preloadableComponentDefinition);
 
@@ -2326,9 +2332,8 @@ let currentPhysicsBridgePreference: PhysicsBackendPreference | undefined;
 let sceneryGroundCollisionBridgeMutationChain: Promise<void> = Promise.resolve();
 let sceneryGroundCollisionNextRuntimeId = 0x71000000;
 const sceneryGroundCollisionRuntimeBodyIds = new Set<number>();
-const sceneryGroundCollisionReferencePosition = new THREE.Vector3();
-const lastSceneryGroundCollisionReferencePosition = new THREE.Vector3();
-const sceneryGroundCollisionAnchor = new THREE.Object3D();
+const sceneryGroundCollisionReferencePositions: THREE.Vector3[] = [];
+const lastSceneryGroundCollisionReferencePositions: THREE.Vector3[] = [];
 let sceneryGroundCollisionReferenceInitialized = false;
 let sceneryGroundCollisionReferenceElapsed = 0;
 const physicsBridgeBodyIdByNodeId = new Map<string, number>();
@@ -5835,6 +5840,12 @@ function resolveCharacterControllerComponent(
   return resolveEnabledComponentState<CharacterControllerComponentProps>(node, CHARACTER_CONTROLLER_COMPONENT_TYPE);
 }
 
+function resolveGroundAnchorComponent(
+  node: SceneNode | null | undefined,
+): SceneNodeComponentState<Record<string, unknown>> | null {
+  return resolveEnabledComponentState<Record<string, unknown>>(node, GROUND_ANCHOR_COMPONENT_TYPE);
+}
+
 function resolveCharacterControllerBindingNodeId(nodeId: string | null): string | null {
   if (!nodeId) {
     return null;
@@ -5898,11 +5909,12 @@ function resolveRemoteCharacterAnimationInput(nodeId: string): {
   if (object) {
     object.getWorldQuaternion(protagonistPoseQuaternion);
   } else {
+    const fallbackState = entry.displayState ?? entry.targetState;
     protagonistPoseQuaternion.set(
-      entry.displayState.transform.quaternion.x,
-      entry.displayState.transform.quaternion.y,
-      entry.displayState.transform.quaternion.z,
-      entry.displayState.transform.quaternion.w,
+      fallbackState.transform.quaternion.x,
+      fallbackState.transform.quaternion.y,
+      fallbackState.transform.quaternion.z,
+      fallbackState.transform.quaternion.w,
     ).normalize();
   }
   tempCharacterForwardVec.applyQuaternion(protagonistPoseQuaternion);
@@ -7481,54 +7493,43 @@ function resolveSceneryCompiledGroundTileLoader(): ((record: { path: string }) =
 
 function resolveSceneryGroundCollisionReferenceWorld(
   camera: THREE.Camera | null | undefined,
-  targetPosition: THREE.Vector3,
+  targetPositions: THREE.Vector3[],
 ): boolean {
   void camera;
-  const manualDriveNode = vehicleDriveActive.value ? vehicleDriveNodeId.value : null;
-  if (manualDriveNode && resolveVehicleOrObjectWorldPosition({
-    nodeId: manualDriveNode,
-    vehicleInstances,
-    nodeObjectMap,
-    isPhysicsEnabled: () => physicsEnvironmentEnabled.value,
-    target: targetPosition,
-  })) {
-    return true;
-  }
-  const followNodeId = autoTourFollowNodeId.value;
-  if (followNodeId && resolveVehicleOrObjectWorldPosition({
-    nodeId: followNodeId,
-    vehicleInstances,
-    nodeObjectMap,
-    isPhysicsEnabled: () => physicsEnvironmentEnabled.value,
-    target: targetPosition,
-  })) {
-    return true;
-  }
-  return false;
+  targetPositions.length = 0;
+  targetPositions.push(...collectGroundAnchorWorldPositions({
+    document: currentDocument,
+    resolveObjectByNodeId: (nodeId) => nodeObjectMap.get(nodeId) ?? null,
+  }));
+  return targetPositions.length > 0;
 }
 
-function resolveSceneryGroundCollisionAnchor(referenceWorldPosition: THREE.Vector3): THREE.Camera {
-  sceneryGroundCollisionAnchor.position.copy(referenceWorldPosition);
-  sceneryGroundCollisionAnchor.updateMatrixWorld(true);
-  return sceneryGroundCollisionAnchor as unknown as THREE.Camera;
+function syncSceneryGroundCollisionReferencePositions(source: readonly THREE.Vector3[], target: THREE.Vector3[]): void {
+  target.length = 0;
+  source.forEach((position) => {
+    target.push(position.clone());
+  });
 }
 
-function shouldUpdateSceneryGroundCollisionForFrame(delta: number, referenceWorldPosition: THREE.Vector3): boolean {
+function shouldUpdateSceneryGroundCollisionForFrame(delta: number, referenceWorldPositions: readonly THREE.Vector3[]): boolean {
   sceneryGroundCollisionReferenceElapsed += Math.max(0, delta);
   if (!sceneryGroundCollisionReferenceInitialized) {
     sceneryGroundCollisionReferenceInitialized = true;
     sceneryGroundCollisionReferenceElapsed = 0;
-    lastSceneryGroundCollisionReferencePosition.copy(referenceWorldPosition);
+    syncSceneryGroundCollisionReferencePositions(referenceWorldPositions, lastSceneryGroundCollisionReferencePositions);
     return true;
   }
-  const movedSq = referenceWorldPosition.distanceToSquared(lastSceneryGroundCollisionReferencePosition);
-  const moved = movedSq > CAMERA_DEPENDENT_POSITION_EPSILON_SQ;
+  const moved = referenceWorldPositions.length !== lastSceneryGroundCollisionReferencePositions.length
+    || referenceWorldPositions.some((position, index) => {
+      const previous = lastSceneryGroundCollisionReferencePositions[index];
+      return !previous || position.distanceToSquared(previous) > CAMERA_DEPENDENT_POSITION_EPSILON_SQ;
+    });
   const due = sceneryGroundCollisionReferenceElapsed >= CAMERA_DEPENDENT_UPDATE_INTERVAL_SECONDS;
   if (!moved && !due) {
     return false;
   }
   sceneryGroundCollisionReferenceElapsed = 0;
-  lastSceneryGroundCollisionReferencePosition.copy(referenceWorldPosition);
+  syncSceneryGroundCollisionReferencePositions(referenceWorldPositions, lastSceneryGroundCollisionReferencePositions);
   return true;
 }
 
@@ -7576,7 +7577,7 @@ function syncSceneryGroundCollisionRuntimeLoadedTileKeys(document: SceneJsonExpo
     ? (groundNode.userData as Record<string, unknown>)
     : {};
   const compiledManifest = groundUserData.compiledGroundManifest as Parameters<typeof syncGroundCollisionRuntimeHost>[0]['compiledManifest'];
-  if (!resolveSceneryGroundCollisionReferenceWorld(camera, sceneryGroundCollisionReferencePosition)) {
+  if (!resolveSceneryGroundCollisionReferenceWorld(camera, sceneryGroundCollisionReferencePositions)) {
     clearGroundCollisionRuntimeHost(groundObject);
     return false;
   }
@@ -7585,7 +7586,7 @@ function syncSceneryGroundCollisionRuntimeLoadedTileKeys(document: SceneJsonExpo
     sourceId: groundNode.id,
     groundObject,
     groundMesh,
-    camera: resolveSceneryGroundCollisionAnchor(sceneryGroundCollisionReferencePosition),
+    referenceWorldPositions: sceneryGroundCollisionReferencePositions,
     compiledManifest,
     loadCompiledTileData: resolveSceneryCompiledGroundTileLoader(),
     runtimeDeps: resolveSceneryGroundCollisionRuntimeDeps(),
@@ -7780,8 +7781,7 @@ function updateSceneryPhysicsBridgeIndex(document: SceneJsonExportDocument, asse
     }
     const component = resolveCharacterControllerComponent(node);
     if (component) {
-      const props = clampCharacterControllerComponentProps(component.props ?? null);
-      const bodyNodeId = props.targetNodeId ?? node.id;
+      const bodyNodeId = node.id;
       const characterId = physicsBridgeCharacterIdByNodeId.get(bodyNodeId);
       if (typeof characterId === 'number') {
         physicsBridgeCharacterIdByNodeId.set(node.id, characterId);
@@ -7792,7 +7792,7 @@ function updateSceneryPhysicsBridgeIndex(document: SceneJsonExportDocument, asse
     if (Array.isArray(node.children) && node.children.length) {
       stack.push(...node.children);
     }
-  });
+  }
   vehicleInstances.forEach((instance, nodeId) => {
     if (instance.source !== 'bridge') {
       return;
@@ -7830,7 +7830,12 @@ async function loadSceneryPhysicsBridgeScene(
         });
       },
     });
-    if (asset.shapes.length === 0 && asset.bodies.length === 0 && asset.vehicles.length === 0) {
+    if (
+      asset.shapes.length === 0
+      && asset.bodies.length === 0
+      && asset.vehicles.length === 0
+      && !hasGroundAnchorSceneNodes(document.nodes)
+    ) {
       await disposeSceneryPhysicsBridgeScene();
       return;
     }
@@ -8357,22 +8362,28 @@ function syncSceneryPhysicsBridgeVehicleInput(): void {
 }
 
 function resolveSceneryCharacterInputYaw(): number {
-  if (camera) {
-    camera.getWorldDirection(tempDirection);
-    tempDirection.y = 0;
-    if (tempDirection.lengthSq() > 1e-8) {
-      tempDirection.normalize();
-      return Math.atan2(tempDirection.x, tempDirection.z);
+  const activeCamera = renderContext?.camera ?? null;
+  if (activeCamera) {
+    activeCamera.getWorldDirection(tempForwardVec);
+    tempForwardVec.y = 0;
+    if (tempForwardVec.lengthSq() > 1e-8) {
+      tempForwardVec.normalize();
+      return Math.atan2(tempForwardVec.x, tempForwardVec.z);
     }
   }
   const controlledObject = findDefaultControlledCharacterObject();
   if (controlledObject) {
-    controlledObject.getWorldQuaternion(tempQuaternion);
-    resolveControlledCharacterForwardVector(tempDirection).applyQuaternion(tempQuaternion);
-    tempDirection.y = 0;
-    if (tempDirection.lengthSq() > 1e-8) {
-      tempDirection.normalize();
-      return Math.atan2(tempDirection.x, tempDirection.z);
+    const controlledNodeId = resolveDefaultControlledCharacterNodeId();
+    const props = clampCharacterControllerComponentProps(
+      resolveCharacterControllerComponent(resolveNodeById(controlledNodeId ?? ''))?.props ?? null,
+    );
+    controlledObject.getWorldQuaternion(protagonistPoseQuaternion);
+    writeCharacterLocalForward(tempForwardVec, props.forwardAxis);
+    tempForwardVec.applyQuaternion(protagonistPoseQuaternion);
+    tempForwardVec.y = 0;
+    if (tempForwardVec.lengthSq() > 1e-8) {
+      tempForwardVec.normalize();
+      return Math.atan2(tempForwardVec.x, tempForwardVec.z);
     }
   }
   return Math.PI;
@@ -8767,7 +8778,27 @@ function hasPhysicsRelevantSceneNodes(nodes: SceneNode[] | undefined | null): bo
     if (!node) {
       continue;
     }
-    if (resolvePhysicsRigidbodyComponent(node) || resolveVehicleComponent(node)) {
+    if (resolvePhysicsRigidbodyComponent(node) || resolveVehicleComponent(node) || resolveGroundAnchorComponent(node)) {
+      return true;
+    }
+    if (Array.isArray(node.children) && node.children.length) {
+      stack.push(...node.children);
+    }
+  }
+  return false;
+}
+
+function hasGroundAnchorSceneNodes(nodes: SceneNode[] | undefined | null): boolean {
+  if (!Array.isArray(nodes)) {
+    return false;
+  }
+  const stack: SceneNode[] = [...nodes];
+  while (stack.length) {
+    const node = stack.pop();
+    if (!node) {
+      continue;
+    }
+    if (resolveGroundAnchorComponent(node)) {
       return true;
     }
     if (Array.isArray(node.children) && node.children.length) {
@@ -17453,12 +17484,12 @@ function startRenderLoop(
             syncSceneryCompiledGroundRenderTiles(camera);
             const groundObject = nodeObjectMap.get(cachedGround.nodeId) ?? null;
             if (groundObject) {
-              const hasGroundCollisionReference = resolveSceneryGroundCollisionReferenceWorld(camera, sceneryGroundCollisionReferencePosition);
+              const hasGroundCollisionReference = resolveSceneryGroundCollisionReferenceWorld(camera, sceneryGroundCollisionReferencePositions);
               if (!hasGroundCollisionReference) {
                 clearGroundCollisionRuntimeHost(groundObject);
               }
               const shouldUpdateGroundCollisionSystems = hasGroundCollisionReference
-                ? shouldUpdateSceneryGroundCollisionForFrame(deltaSeconds, sceneryGroundCollisionReferencePosition)
+                ? shouldUpdateSceneryGroundCollisionForFrame(deltaSeconds, sceneryGroundCollisionReferencePositions)
                 : false;
               if (shouldUpdateGroundCollisionSystems && physicsBridgeSceneLoaded) {
                 syncSceneryGroundCollisionRuntimeLoadedTileKeys(currentDocument, camera);

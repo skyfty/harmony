@@ -15,6 +15,7 @@ import ViewPointPanel from '@/components/inspector/ViewPointPanel.vue'
 import ProtagonistPanel from '@/components/inspector/ProtagonistPanel.vue'
 import AnimationComponentPanel from '@/components/inspector/AnimationComponentPanel.vue'
 import CharacterControllerPanel from '@/components/inspector/CharacterControllerPanel.vue'
+import GroundAnchorPanel from '@/components/inspector/GroundAnchorPanel.vue'
 import WarpGatePanel from '@/components/inspector/WarpGatePanel.vue'
 import EffectPanel from '@/components/inspector/EffectPanel.vue'
 import GroundPanel from '@/components/inspector/GroundPanel.vue'
@@ -58,6 +59,7 @@ import {
   PROTAGONIST_COMPONENT_TYPE,
   ANIMATION_COMPONENT_TYPE,
   CHARACTER_CONTROLLER_COMPONENT_TYPE,
+  GROUND_ANCHOR_COMPONENT_TYPE,
   PRELOADABLE_COMPONENT_TYPE,
   COUPON_COMPONENT_TYPE,
   ONLINE_COMPONENT_TYPE,
@@ -611,6 +613,7 @@ watch(
               <ProtagonistPanel v-else-if="component.type === PROTAGONIST_COMPONENT_TYPE" />
               <AnimationComponentPanel v-else-if="component.type === ANIMATION_COMPONENT_TYPE" />
               <CharacterControllerPanel v-else-if="component.type === CHARACTER_CONTROLLER_COMPONENT_TYPE" />
+              <GroundAnchorPanel v-else-if="component.type === GROUND_ANCHOR_COMPONENT_TYPE" />
               <PreloadablePanel v-else-if="component.type === PRELOADABLE_COMPONENT_TYPE" />
               <CouponPanel v-else-if="component.type === COUPON_COMPONENT_TYPE" />
               <PlanningImagesPanel v-else-if="component.type === PLANNING_IMAGES_COMPONENT_TYPE" />

@@ -26,10 +26,9 @@ import {
   addPhysicsBodyToWorld,
   removePhysicsBodyBindingBodies,
 } from './physicsRuntimeBridge'
+import { GROUND_COLLISION_RADIUS_METERS } from './groundCollisionRuntimeConstants'
 
 type HeightfieldShapeDefinition = Extract<RigidbodyPhysicsShape, { kind: 'heightfield' }>
-
-const GROUND_COLLISION_RADIUS_METERS = 150
 
 export type CompiledGroundCollisionRuntimeState = {
   enabled: boolean
@@ -54,7 +53,7 @@ type CompiledGroundCollisionRuntimeDeps = {
 type SyncCompiledGroundCollisionTilesParams = {
   enabled: boolean
   groundObject: THREE.Object3D
-  camera: THREE.Camera | null | undefined
+  referenceWorldPositions: readonly THREE.Vector3[] | null | undefined
   sourceId: string
   revision: number
   manifest: CompiledGroundManifest
@@ -168,14 +167,14 @@ function createStaticCollisionNode(nodeId: string): {
 function resolveCollisionTileWindow(
   groundObject: THREE.Object3D,
   manifest: CompiledGroundManifest,
-  camera: THREE.Camera,
+  referenceWorldPositions: readonly THREE.Vector3[],
   activeRadiusTiles?: number,
   retainRadiusTiles?: number,
 ): CollisionTileWindow {
   groundObject.updateWorldMatrix(true, false)
-  camera.updateWorldMatrix(true, false)
-  camera.getWorldPosition(compiledGroundCameraLocalHelper)
-  groundObject.worldToLocal(compiledGroundCameraLocalHelper)
+  const localReferencePositions = referenceWorldPositions
+    .map((position) => compiledGroundCameraLocalHelper.copy(position).clone())
+    .map((position) => groundObject.worldToLocal(position))
 
   const tileSizeMeters = Math.max(1e-6, Number(manifest.collisionTileSizeMeters) || 1)
   const resolvedActiveRadiusTiles = Math.max(
@@ -189,26 +188,31 @@ function resolveCollisionTileWindow(
   const activeRadiusMeters = resolvedActiveRadiusTiles * tileSizeMeters
   const retainRadiusMeters = resolvedRetainRadiusTiles * tileSizeMeters
 
-  const desired: Array<{ record: CompiledGroundCollisionTileRecord; distSq: number }> = []
-  const retained: string[] = []
+  const desired = new Map<string, { record: CompiledGroundCollisionTileRecord; distSq: number }>()
+  const retained = new Set<string>()
   for (const record of manifest.collisionTiles ?? []) {
     const centerX = Number.isFinite(Number(record.centerX)) ? Number(record.centerX) : ((Number(record.bounds?.minX) || 0) + (Number(record.bounds?.maxX) || 0)) * 0.5
     const centerZ = Number.isFinite(Number(record.centerZ)) ? Number(record.centerZ) : ((Number(record.bounds?.minZ) || 0) + (Number(record.bounds?.maxZ) || 0)) * 0.5
-    const dx = centerX - compiledGroundCameraLocalHelper.x
-    const dz = centerZ - compiledGroundCameraLocalHelper.z
-    const distSq = dx * dx + dz * dz
-    if (distSq <= retainRadiusMeters * retainRadiusMeters) {
-      retained.push(record.key)
-      if (distSq <= activeRadiusMeters * activeRadiusMeters) {
-        desired.push({ record, distSq })
+    localReferencePositions.forEach((referencePosition) => {
+      const dx = centerX - referencePosition.x
+      const dz = centerZ - referencePosition.z
+      const distSq = dx * dx + dz * dz
+      if (distSq <= retainRadiusMeters * retainRadiusMeters) {
+        retained.add(record.key)
+        if (distSq <= activeRadiusMeters * activeRadiusMeters) {
+          const existing = desired.get(record.key)
+          if (!existing || distSq < existing.distSq) {
+            desired.set(record.key, { record, distSq })
+          }
+        }
       }
-    }
+    })
   }
-  desired.sort((left, right) => left.distSq - right.distSq)
+  const desiredRecords = Array.from(desired.values()).sort((left, right) => left.distSq - right.distSq)
   return {
-    activeKeys: desired.map((entry) => entry.record.key),
+    activeKeys: desiredRecords.map((entry) => entry.record.key),
     retainedKeys: uniqueSortedKeys(retained),
-    desiredRecords: desired.map((entry) => entry.record),
+    desiredRecords: desiredRecords.map((entry) => entry.record),
   }
 }
 
@@ -289,7 +293,10 @@ export function createCompiledGroundCollisionRuntime(
   }
 
   function sync(params: SyncCompiledGroundCollisionTilesParams): void {
-    if (!params.enabled || !params.camera || !params.manifest?.collisionTiles?.length) {
+    const referenceWorldPositions = Array.isArray(params.referenceWorldPositions)
+      ? params.referenceWorldPositions.filter((position) => Boolean(position))
+      : []
+    if (!params.enabled || referenceWorldPositions.length === 0 || !params.manifest?.collisionTiles?.length) {
       clear()
       return
     }
@@ -302,7 +309,7 @@ export function createCompiledGroundCollisionRuntime(
     const window = resolveCollisionTileWindow(
       params.groundObject,
       params.manifest,
-      params.camera,
+      referenceWorldPositions,
       params.activeRadiusTiles,
       params.retainRadiusTiles,
     )

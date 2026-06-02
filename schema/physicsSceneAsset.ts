@@ -184,14 +184,6 @@ function resolveCharacterControllerComponent(
   return state
 }
 
-function normalizeNodeId(value: unknown): string | null {
-  if (typeof value !== 'string') {
-    return null
-  }
-  const trimmed = value.trim()
-  return trimmed.length ? trimmed : null
-}
-
 function extractRigidbodyShape(
   component: SceneNodeComponentState<RigidbodyComponentProps> | null,
 ): RigidbodyPhysicsShape | null {
@@ -847,7 +839,7 @@ export async function buildPhysicsSceneAsset(
       const characterProps = clampCharacterControllerComponentProps(
         characterControllerState.props as Partial<CharacterControllerComponentProps> | null | undefined,
       )
-      const characterBodyNodeId = normalizeNodeId(characterProps.targetNodeId) ?? node.id
+      const characterBodyNodeId = node.id
       const bodyId = bodyIdsByNodeId.get(characterBodyNodeId)
       if (typeof bodyId === 'number') {
         asset.characters.push({

@@ -26,12 +26,11 @@ import {
   addPhysicsBodyToWorld,
   removePhysicsBodyBindingBodies,
 } from './physicsRuntimeBridge'
+import { GROUND_COLLISION_RADIUS_METERS } from './groundCollisionRuntimeConstants'
 
 type BoxShapeDefinition = Extract<RigidbodyPhysicsShape, { kind: 'box' }>
 
 type InfiniteGroundChunkColliderSource = 'box'
-
-const GROUND_COLLISION_RADIUS_METERS = 150
 const FLAT_COLLIDER_THICKNESS_METERS = 4
 
 export type InfiniteGroundChunkColliderRuntimeDeps = {
@@ -50,7 +49,7 @@ export type InfiniteGroundChunkColliderSyncParams = {
   enabled: boolean
   groundObject: THREE.Object3D
   groundDefinition: GroundRuntimeDynamicMesh
-  camera: THREE.Camera | null | undefined
+  referenceWorldPositions: readonly THREE.Vector3[] | null | undefined
   sourceId: string
   excludedChunkKeys?: Iterable<string> | null
 }
@@ -129,38 +128,39 @@ function resolveBoxRuntimeKey(chunkKey: string): string {
 
 function resolveChunkWindow(
   groundObject: THREE.Object3D,
-  camera: THREE.Camera,
+  referenceWorldPositions: readonly THREE.Vector3[],
   chunkSizeMeters: number,
 ): ChunkWindow {
   groundObject.updateWorldMatrix(true, false)
-  camera.updateWorldMatrix(true, false)
-  camera.getWorldPosition(infiniteGroundCameraLocalHelper)
-  groundObject.worldToLocal(infiniteGroundCameraLocalHelper)
-
-  const centerCoord = resolveGroundChunkCoordFromWorldPosition(
-    infiniteGroundCameraLocalHelper.x,
-    infiniteGroundCameraLocalHelper.z,
-    chunkSizeMeters,
-  )
+  const localReferencePositions = referenceWorldPositions
+    .map((position) => infiniteGroundCameraLocalHelper.copy(position).clone())
+    .map((position) => groundObject.worldToLocal(position))
   const activeRadiusChunks = Math.max(1, Math.ceil(GROUND_COLLISION_RADIUS_METERS / chunkSizeMeters))
   const retainRadiusChunks = activeRadiusChunks + 1
-  const activeChunkKeys: string[] = []
-  const retainedChunkKeys: string[] = []
 
-  for (let chunkZ = centerCoord.chunkZ - retainRadiusChunks; chunkZ <= centerCoord.chunkZ + retainRadiusChunks; chunkZ += 1) {
-    for (let chunkX = centerCoord.chunkX - retainRadiusChunks; chunkX <= centerCoord.chunkX + retainRadiusChunks; chunkX += 1) {
-      const chunkKey = `${chunkX}:${chunkZ}`
-      retainedChunkKeys.push(chunkKey)
-      if (
-        chunkX >= centerCoord.chunkX - activeRadiusChunks
-        && chunkX <= centerCoord.chunkX + activeRadiusChunks
-        && chunkZ >= centerCoord.chunkZ - activeRadiusChunks
-        && chunkZ <= centerCoord.chunkZ + activeRadiusChunks
-      ) {
-        activeChunkKeys.push(chunkKey)
+  const activeChunkKeys = new Set<string>()
+  const retainedChunkKeys = new Set<string>()
+  localReferencePositions.forEach((referencePosition) => {
+    const centerCoord = resolveGroundChunkCoordFromWorldPosition(
+      referencePosition.x,
+      referencePosition.z,
+      chunkSizeMeters,
+    )
+    for (let chunkZ = centerCoord.chunkZ - retainRadiusChunks; chunkZ <= centerCoord.chunkZ + retainRadiusChunks; chunkZ += 1) {
+      for (let chunkX = centerCoord.chunkX - retainRadiusChunks; chunkX <= centerCoord.chunkX + retainRadiusChunks; chunkX += 1) {
+        const chunkKey = `${chunkX}:${chunkZ}`
+        retainedChunkKeys.add(chunkKey)
+        if (
+          chunkX >= centerCoord.chunkX - activeRadiusChunks
+          && chunkX <= centerCoord.chunkX + activeRadiusChunks
+          && chunkZ >= centerCoord.chunkZ - activeRadiusChunks
+          && chunkZ <= centerCoord.chunkZ + activeRadiusChunks
+        ) {
+          activeChunkKeys.add(chunkKey)
+        }
       }
     }
-  }
+  })
 
   return {
     activeChunkKeys: uniqueSortedKeys(activeChunkKeys),
@@ -309,7 +309,10 @@ export function createInfiniteGroundChunkColliderRuntime(
   }
 
   function sync(params: InfiniteGroundChunkColliderSyncParams): void {
-    if (!params.enabled || !params.camera) {
+    const referenceWorldPositions = Array.isArray(params.referenceWorldPositions)
+      ? params.referenceWorldPositions.filter((position) => Boolean(position))
+      : []
+    if (!params.enabled || referenceWorldPositions.length === 0) {
       clear()
       return
     }
@@ -323,7 +326,7 @@ export function createInfiniteGroundChunkColliderRuntime(
     const chunkSizeMeters = resolveChunkSizeMeters(params.groundDefinition)
     const { activeChunkKeys, retainedChunkKeys } = resolveChunkWindow(
       params.groundObject,
-      params.camera,
+      referenceWorldPositions,
       chunkSizeMeters,
     )
     const excludedChunkKeys = new Set(uniqueSortedKeys(params.excludedChunkKeys))

@@ -111,6 +111,7 @@ import {
 } from '@schema/groundCollisionRuntimeHost'
 import { createGroundCollisionRuntimeBridgeDeps } from '@schema/groundCollisionRuntimeBridge'
 import { syncGroundCollisionRuntimeLoadedTileKeys } from '@schema/groundCollisionRuntimeState'
+import { collectGroundAnchorWorldPositions } from '@schema/groundAnchorRuntime'
 import { setInfiniteGroundHiddenChunkKeys } from '@schema/groundMesh'
 import { prepareRuntimeGroundSceneDocument } from '@schema/groundSplatRuntimeDocument'
 import { resolveModelCollisionFaceSegments } from '@schema/physicsShapeResolvers'
@@ -197,6 +198,7 @@ import {
 	autoTourComponentDefinition,
 	purePursuitComponentDefinition,
 	sceneStateAnchorComponentDefinition,
+	groundAnchorComponentDefinition,
 	nominateComponentDefinition,
 	SIGNBOARD_COMPONENT_TYPE,
 	applyNominateStateMapToRuntime,
@@ -1228,6 +1230,7 @@ previewComponentManager.registerDefinition(guideRouteComponentDefinition)
 previewComponentManager.registerDefinition(autoTourComponentDefinition)
 previewComponentManager.registerDefinition(purePursuitComponentDefinition)
 previewComponentManager.registerDefinition(sceneStateAnchorComponentDefinition)
+previewComponentManager.registerDefinition(groundAnchorComponentDefinition)
 previewComponentManager.registerDefinition(nominateComponentDefinition)
 previewComponentManager.registerDefinition(onlineComponentDefinition)
 
@@ -2034,11 +2037,10 @@ const CAMERA_DEPENDENT_UPDATE_INTERVAL_SECONDS = 0.12
 
 const cameraDependentUpdatePosition = new THREE.Vector3()
 const cameraDependentUpdateQuaternion = new THREE.Quaternion()
-const groundCollisionReferencePosition = new THREE.Vector3()
+const groundCollisionReferencePositions: THREE.Vector3[] = []
 const lastCameraDependentUpdatePosition = new THREE.Vector3()
 const lastCameraDependentUpdateQuaternion = new THREE.Quaternion()
-const lastGroundCollisionReferencePosition = new THREE.Vector3()
-const previewGroundCollisionAnchor = new THREE.Object3D()
+const lastGroundCollisionReferencePositions: THREE.Vector3[] = []
 let cameraDependentUpdateInitialized = false
 let cameraDependentUpdateElapsed = 0
 let groundCollisionReferenceInitialized = false
@@ -10043,7 +10045,7 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
 		applyFogSettings(environmentSettings, activeCamera)
 	}
 	const shouldUpdateCameraSystems = shouldUpdateCameraDependentSystems(activeCamera, delta)
-	const hasGroundCollisionReference = resolveGroundCollisionReferenceWorld(groundCollisionReferencePosition)
+	const hasGroundCollisionReference = resolveGroundCollisionReferenceWorld(groundCollisionReferencePositions)
 	if (!hasGroundCollisionReference) {
 		groundCollisionReferenceInitialized = false
 		groundCollisionReferenceElapsed = 0
@@ -10055,7 +10057,7 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
 		}
 	}
 	const shouldUpdateGroundCollisionSystems = hasGroundCollisionReference
-		? shouldUpdateGroundCollisionForFrame(delta, groundCollisionReferencePosition)
+		? shouldUpdateGroundCollisionForFrame(delta, groundCollisionReferencePositions)
 		: false
 	if (!shouldUpdateCameraSystems && !shouldUpdateGroundCollisionSystems) {
 		return
@@ -10076,7 +10078,7 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
 		}
 	}
 	if (shouldUpdateGroundCollisionSystems && currentDocument) {
-		syncScenePreviewGroundCollisionRuntimeHost(currentDocument, groundCollisionReferencePosition)
+		syncScenePreviewGroundCollisionRuntimeHost(currentDocument, groundCollisionReferencePositions)
 	}
 }
 
@@ -11273,50 +11275,50 @@ async function syncScenePreviewGroundChunkManifest(document: SceneJsonExportDocu
 	void document
 }
 
-function resolveGroundCollisionReferenceWorld(targetPosition: THREE.Vector3): boolean {
-	const referenceNodeId = vehicleDriveState.active ? vehicleDriveState.nodeId : null
-	if (referenceNodeId && resolveVehicleOrObjectWorldPosition({
-		nodeId: referenceNodeId,
-		vehicleInstances,
-		nodeObjectMap,
-		isPhysicsEnabled: () => physicsEnvironmentEnabled.value,
-		target: targetPosition,
-	})) {
-		return true
-	}
-	return false
+function resolveGroundCollisionReferenceWorld(targetPositions: THREE.Vector3[]): boolean {
+	targetPositions.length = 0
+	const positions = collectGroundAnchorWorldPositions({
+		document: currentDocument,
+		resolveObjectByNodeId: (nodeId) => nodeObjectMap.get(nodeId) ?? null,
+	})
+	targetPositions.push(...positions)
+	return targetPositions.length > 0
 }
 
-function resolveGroundCollisionAnchor(referenceWorldPosition: THREE.Vector3): THREE.Camera {
-	previewGroundCollisionAnchor.position.copy(referenceWorldPosition)
-	previewGroundCollisionAnchor.updateMatrixWorld(true)
-	return previewGroundCollisionAnchor as unknown as THREE.Camera
+function syncGroundCollisionReferencePositions(source: readonly THREE.Vector3[], target: THREE.Vector3[]): void {
+	target.length = 0
+	source.forEach((position) => {
+		target.push(position.clone())
+	})
 }
 
-function shouldUpdateGroundCollisionForFrame(delta: number, referenceWorldPosition: THREE.Vector3): boolean {
+function shouldUpdateGroundCollisionForFrame(delta: number, referenceWorldPositions: readonly THREE.Vector3[]): boolean {
 	groundCollisionReferenceElapsed += Math.max(0, delta)
 	if (!groundCollisionReferenceInitialized) {
 		groundCollisionReferenceInitialized = true
 		groundCollisionReferenceElapsed = 0
-		lastGroundCollisionReferencePosition.copy(referenceWorldPosition)
+		syncGroundCollisionReferencePositions(referenceWorldPositions, lastGroundCollisionReferencePositions)
 		return true
 	}
 
-	const movedSq = referenceWorldPosition.distanceToSquared(lastGroundCollisionReferencePosition)
-	const moved = movedSq > CAMERA_DEPENDENT_POSITION_EPSILON_SQ
+	const moved = referenceWorldPositions.length !== lastGroundCollisionReferencePositions.length
+		|| referenceWorldPositions.some((position, index) => {
+			const previous = lastGroundCollisionReferencePositions[index]
+			return !previous || position.distanceToSquared(previous) > CAMERA_DEPENDENT_POSITION_EPSILON_SQ
+		})
 	const due = isPlaying.value && groundCollisionReferenceElapsed >= CAMERA_DEPENDENT_UPDATE_INTERVAL_SECONDS
 	if (!moved && !due) {
 		return false
 	}
 
 	groundCollisionReferenceElapsed = 0
-	lastGroundCollisionReferencePosition.copy(referenceWorldPosition)
+	syncGroundCollisionReferencePositions(referenceWorldPositions, lastGroundCollisionReferencePositions)
 	return true
 }
 
 function syncScenePreviewGroundCollisionRuntimeHost(
 	document: SceneJsonExportDocument | null,
-	referenceWorldPosition: THREE.Vector3 | null,
+	referenceWorldPositions: readonly THREE.Vector3[] | null,
 ): boolean {
 	if (!document) {
 		return false
@@ -11330,7 +11332,7 @@ function syncScenePreviewGroundCollisionRuntimeHost(
 	if (!groundObject) {
 		return false
 	}
-	if (!referenceWorldPosition || !physicsEnvironmentEnabled.value) {
+	if (!referenceWorldPositions?.length || !physicsEnvironmentEnabled.value) {
 		clearGroundCollisionRuntimeHost(groundObject)
 		return false
 	}
@@ -11344,7 +11346,7 @@ function syncScenePreviewGroundCollisionRuntimeHost(
 		sourceId: groundNode.id,
 		groundObject,
 		groundMesh,
-		camera: resolveGroundCollisionAnchor(referenceWorldPosition),
+		referenceWorldPositions,
 		compiledManifest: compiledManifest as any,
 		loadCompiledTileData: resolveScenePreviewCompiledGroundTileLoader(),
 		runtimeDeps: resolveScenePreviewGroundCollisionRuntimeDeps(),
@@ -11420,8 +11422,7 @@ function updateScenePreviewPhysicsBridgeIndex(document: SceneJsonExportDocument,
 		}
 		const component = resolveCharacterControllerComponent(node)
 		if (component) {
-			const props = clampCharacterControllerComponentProps(component.props ?? null)
-			const bodyNodeId = props.targetNodeId ?? node.id
+			const bodyNodeId = node.id
 			const characterId = physicsBridgeCharacterIdByNodeId.get(bodyNodeId)
 			if (typeof characterId === 'number') {
 				physicsBridgeCharacterIdByNodeId.set(node.id, characterId)
@@ -11455,8 +11456,8 @@ async function loadScenePreviewPhysicsBridgeScene(
 	const groundNode = resolveSharedDocumentGroundNode(document)
 	const groundMesh = groundNode?.dynamicMesh as GroundRuntimeDynamicMesh | null | undefined
 	const groundObject = groundNode ? (nodeObjectMap.get(groundNode.id) ?? null) : null
-	if (resolveGroundCollisionReferenceWorld(groundCollisionReferencePosition)) {
-		syncScenePreviewGroundCollisionRuntimeHost(document, groundCollisionReferencePosition)
+	if (resolveGroundCollisionReferenceWorld(groundCollisionReferencePositions)) {
+		syncScenePreviewGroundCollisionRuntimeHost(document, groundCollisionReferencePositions)
 	} else if (groundObject && isGroundDynamicMesh(groundMesh)) {
 		clearGroundCollisionRuntimeHost(groundObject)
 	}

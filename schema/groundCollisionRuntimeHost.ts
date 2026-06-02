@@ -16,12 +16,10 @@ import type { PhysicsBodyLike, PhysicsOrientationAdjustment } from './physicsBod
 import type { PhysicsWorldLike } from './physicsRuntimeBridge'
 
 const groundCollisionRuntimeHostStateMap = new WeakMap<THREE.Object3D, GroundCollisionRuntimeHostState>()
-const groundCollisionReferencePositionHelper = new THREE.Vector3()
 
 type GroundCollisionRuntimeHostState = {
   compiledRuntime: ReturnType<typeof createCompiledGroundCollisionRuntime>
   infiniteRuntime: InfiniteGroundChunkColliderRuntime
-  lastReferenceWorldPosition: THREE.Vector3
   lastActiveWindowSignature: string
 }
 
@@ -58,7 +56,6 @@ function ensureHostState(
   const state: GroundCollisionRuntimeHostState = {
     compiledRuntime: createCompiledGroundCollisionRuntime(sharedDeps),
     infiniteRuntime: createInfiniteGroundChunkColliderRuntime(sharedDeps),
-    lastReferenceWorldPosition: new THREE.Vector3(),
     lastActiveWindowSignature: '',
   }
   groundCollisionRuntimeHostStateMap.set(groundObject, state)
@@ -70,7 +67,7 @@ export type SyncGroundCollisionRuntimeHostParams = {
   sourceId: string
   groundObject: THREE.Object3D | null
   groundMesh: GroundRuntimeDynamicMesh | null | undefined
-  camera: THREE.Camera | null | undefined
+  referenceWorldPositions: readonly THREE.Vector3[] | null | undefined
   compiledManifest?: CompiledGroundManifest | null | undefined
   loadCompiledTileData?: (record: CompiledGroundCollisionTileRecord) => Promise<ArrayBuffer | null>
   runtimeDeps?: GroundCollisionRuntimeDeps | null | undefined
@@ -89,12 +86,15 @@ export function syncGroundCollisionRuntimeHost(
     sourceId,
     groundObject,
     groundMesh,
-    camera,
+    referenceWorldPositions,
     compiledManifest,
     loadCompiledTileData,
     runtimeDeps,
   } = params
-  if (!enabled || !groundObject || !groundMesh || !camera) {
+  const references = Array.isArray(referenceWorldPositions)
+    ? referenceWorldPositions.filter((position) => Boolean(position))
+    : []
+  if (!enabled || !groundObject || !groundMesh || references.length === 0) {
     clearGroundCollisionRuntimeHost(groundObject)
     return {
       compiledTileKeys: [],
@@ -110,8 +110,6 @@ export function syncGroundCollisionRuntimeHost(
       infiniteChunkKeys: [],
     }
   }
-  camera.getWorldPosition(groundCollisionReferencePositionHelper)
-  state.lastReferenceWorldPosition.copy(groundCollisionReferencePositionHelper)
 
   const compiledRevision = Math.max(0, Math.trunc(Number(compiledManifest?.revision) || 0))
   const compiledEnabled = Boolean(compiledManifest?.collisionTiles?.length)
@@ -119,7 +117,7 @@ export function syncGroundCollisionRuntimeHost(
     state.compiledRuntime.sync({
       enabled: true,
       groundObject,
-      camera,
+      referenceWorldPositions: references,
       sourceId,
       revision: compiledRevision,
       manifest: compiledManifest,
@@ -129,7 +127,7 @@ export function syncGroundCollisionRuntimeHost(
     state.compiledRuntime.sync({
       enabled: true,
       groundObject,
-      camera,
+      referenceWorldPositions: references,
       sourceId,
       revision: compiledRevision,
       manifest: compiledManifest,
@@ -145,7 +143,7 @@ export function syncGroundCollisionRuntimeHost(
       enabled: true,
       groundObject,
       groundDefinition: groundMesh,
-      camera,
+      referenceWorldPositions: references,
       sourceId,
       excludedChunkKeys,
     })
@@ -157,8 +155,7 @@ export function syncGroundCollisionRuntimeHost(
   const infiniteChunkKeys = state.infiniteRuntime.getActiveChunkKeys()
   state.lastActiveWindowSignature = [
     sourceId.trim(),
-    Math.round(state.lastReferenceWorldPosition.x * 100),
-    Math.round(state.lastReferenceWorldPosition.z * 100),
+    ...references.map((position) => `${Math.round(position.x * 100)}:${Math.round(position.z * 100)}`),
     compiledTileKeys.join(','),
     infiniteChunkKeys.join(','),
   ].join('|')
