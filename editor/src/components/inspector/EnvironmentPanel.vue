@@ -10,7 +10,6 @@ import type {
   EnvironmentRotationDegrees,
 } from '@/types/environment'
 import {
-  getLastExtensionFromFilenameOrUrl,
   isHdriLikeExtension,
   isSkyCubeArchiveExtension,
 } from '@schema/core'
