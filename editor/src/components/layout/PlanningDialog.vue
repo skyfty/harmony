@@ -6,7 +6,7 @@ import { generateUuid } from '@/utils/uuid'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useUiStore } from '@/stores/uiStore'
 import { WATER_PRESETS, type WaterPresetId } from '@schema/components'
-import { clearPlanningGeneratedContent, convertPlanningTo3DScene } from '@/utils/planningToScene'
+import { clearPlanningGeneratedContent, convertPlanningTo3DScene, findPlanningConversionRootIds } from '@/utils/planningToScene'
 import { snapCandidatePointToAnglesRelative } from '@/utils/angleSnap'
 import {
   getPointsBounds
@@ -1267,6 +1267,8 @@ function persistPlanningToSceneIfDirty(options?: { force?: boolean }) {
 async function handleConvertTo3DScene() {
   if (convertingTo3DScene.value) return
 
+  const hadExistingPlanningConversionContent = findPlanningConversionRootIds(sceneStore.nodes).length > 0
+
   // Ensure latest edits are persisted before conversion.
   persistPlanningToSceneIfDirty({ force: true })
 
@@ -1366,6 +1368,11 @@ async function handleConvertTo3DScene() {
       detail: 'Persisting converted terrain, scene graph, and cache references.',
     })
     await sceneStore.saveActiveScene({ force: true })
+    if (hadExistingPlanningConversionContent) {
+      // Only resync when we're replacing an existing planning conversion subtree.
+      // The first conversion already renders correctly from the freshly created runtime objects.
+      await sceneStore.refreshRuntimeState({ showOverlay: false, refreshViewport: false })
+    }
 
     uiStore.updateLoadingOverlay({
       mode: 'determinate',

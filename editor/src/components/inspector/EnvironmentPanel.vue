@@ -790,14 +790,6 @@ function resolveDraggedAsset(event: DragEvent): ProjectAsset | null {
   return sceneStore.getAsset(payload.assetId)
 }
 
-function inferAssetExtension(asset: ProjectAsset | null): string | null {
-  if (!asset) {
-    return null
-  }
-  const source = asset.name || asset.downloadUrl || asset.id
-  return getLastExtensionFromFilenameOrUrl(source)
-}
-
 function isHdrExtension(extension: string | null): boolean {
   return isHdriLikeExtension(extension)
 }
