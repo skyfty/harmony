@@ -15,7 +15,7 @@ import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 import type { HierarchyTreeItem } from '@/types/hierarchy-tree-item'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { SceneNode } from '@schema/core'
-import { PROTAGONIST_COMPONENT_TYPE, VEHICLE_COMPONENT_TYPE } from '@schema/components'
+import { PROTAGONIST_COMPONENT_TYPE, isAnySteerTargetNode } from '@schema/components'
 import { getNodeIcon } from '@/types/node-icons'
 import AddNodeMenu from '../common/AddNodeMenu.vue'
 import AssetReferenceSearchDialog from './AssetReferenceSearchDialog.vue'
@@ -1279,7 +1279,7 @@ function canCompleteNodePick(nodeId: string): boolean {
     return false
   }
   if (nodePickerStore.owner === 'steer-target') {
-    return Boolean(node.components?.[VEHICLE_COMPONENT_TYPE])
+    return isAnySteerTargetNode(node)
   }
   return true
 }

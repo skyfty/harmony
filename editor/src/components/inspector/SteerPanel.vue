@@ -9,6 +9,7 @@ import {
   STEER_COMPONENT_TYPE,
   STEER_TARGET_TYPES,
   clampSteerComponentProps,
+  isSteerTargetNode,
   type SteerComponentProps,
   type SteerControllableTargetType,
 } from '@schema/components'
@@ -31,6 +32,38 @@ const steerComponent = computed(() => {
 
 const normalizedProps = computed(() => clampSteerComponentProps(steerComponent.value?.props ?? null))
 const isComponentEnabled = computed(() => steerComponent.value?.enabled !== false)
+const targetSelectionHint = computed(() => {
+  if (normalizedProps.value.targetType === 'character') {
+    return 'Only nodes with a Character Controller component can be assigned here'
+  }
+  return 'Only controllable target nodes should be assigned here'
+})
+const targetPickHint = computed(() => {
+  if (normalizedProps.value.targetType === 'character') {
+    return 'Select character controller target node'
+  }
+  return 'Select steer target node'
+})
+const selectedTargetValid = computed(() => {
+  const targetNodeId = normalizedProps.value.targetNodeId
+  if (!targetNodeId) {
+    return true
+  }
+  const stack = [...(sceneStore.nodes ?? [])]
+  while (stack.length) {
+    const node = stack.pop()
+    if (!node) {
+      continue
+    }
+    if (node.id === targetNodeId) {
+      return isSteerTargetNode(node, normalizedProps.value.targetType)
+    }
+    if (Array.isArray(node.children) && node.children.length) {
+      stack.push(...node.children)
+    }
+  }
+  return false
+})
 
 function handleToggleComponent() {
   const component = steerComponent.value
@@ -132,13 +165,19 @@ function handleAutoEnterChange(value: boolean | null) {
           <div class="steer-panel-field-label">Default Control Node</div>
           <NodePicker
             owner="steer-target"
-            pick-hint="Select steer target node"
-            selection-hint="Only controllable target nodes should be assigned here"
+            :pick-hint="targetPickHint"
+            :selection-hint="targetSelectionHint"
             placeholder="No control node selected"
             :model-value="normalizedProps.targetNodeId"
             :disabled="!isComponentEnabled"
             @update:modelValue="handleTargetNodeIdChange"
           />
+          <div
+            v-if="normalizedProps.targetNodeId && !selectedTargetValid"
+            class="steer-panel-field-error"
+          >
+            Selected node does not match the current target type.
+          </div>
         </div>
         <v-text-field
           label="Default Identifier"
@@ -216,5 +255,10 @@ function handleAutoEnterChange(value: boolean | null) {
   font-size: 0.78rem;
   line-height: 1.4;
   opacity: 0.72;
+}
+
+.steer-panel-field-error {
+  font-size: 0.76rem;
+  color: rgb(255 138 128);
 }
 </style>

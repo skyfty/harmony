@@ -13,6 +13,7 @@ import { ensureOptimizedGroundMeshOnDocument } from '@/utils/groundOptimizedMesh
 import {
   stripGroundHeightMapsFromSceneDocument,
 } from '@/utils/groundHeightSidecar'
+import { openPlanningImageDB, getPlanningImageLayerRecords } from '@/utils/planningImageStorage'
 import { loadStoredScenesFromScenePackage } from '@/utils/scenePackageImport'
 import { useGroundHeightmapStore } from './groundHeightmapStore'
 import { useGroundSplatStore } from './groundSplatStore'
@@ -374,6 +375,42 @@ async function hydrateGroundTextureRuntimeUrl(document: StoredSceneDocument): Pr
   definition.textureDataUrl = resolvedUrl ?? null
   if ((!definition.textureName || !definition.textureName.trim()) && asset?.name) {
     definition.textureName = asset.name
+  }
+}
+
+async function hydratePlanningImageReferences(document: StoredSceneDocument): Promise<void> {
+  const planningImages = document.planningData?.images
+  if (!Array.isArray(planningImages) || !planningImages.length) {
+    return
+  }
+
+  const db = await openPlanningImageDB()
+  try {
+    const records = await getPlanningImageLayerRecords(db, document.id)
+    if (!records.length) {
+      return
+    }
+
+    const recordById = new Map(records.map((record) => [record.id, record] as const))
+    for (const image of planningImages) {
+      if (!image || typeof image !== 'object') {
+        continue
+      }
+      const record = recordById.get(image.id)
+      if (!record?.imageHash) {
+        continue
+      }
+      if (!image.imageHash) {
+        image.imageHash = record.imageHash
+      }
+      image.filename = image.filename ?? record.filename ?? null
+      image.mimeType = image.mimeType ?? record.mimeType ?? null
+      if (image.imageHash) {
+        image.url = ''
+      }
+    }
+  } finally {
+    db.close()
   }
 }
 
@@ -1010,6 +1047,7 @@ async function readSceneDocument(
       await groundScatterStore.hydrateSceneDocument(hydrated.id, findGroundNodeInDocument(hydrated), scatterSidecar)
     }
     await hydrateGroundTextureRuntimeUrl(hydrated)
+    await hydratePlanningImageReferences(hydrated)
     return stripGroundHeightMapsFromSceneDocument(hydrated)
   }
   const db = await openDatabase(workspaceId)
@@ -1029,6 +1067,7 @@ async function readSceneDocument(
     await groundScatterStore.hydrateSceneDocument(result.id, findGroundNodeInDocument(result), scatterSidecar)
   }
   await hydrateGroundTextureRuntimeUrl(result)
+  await hydratePlanningImageReferences(result)
   return stripGroundHeightMapsFromSceneDocument(result)
 }
 

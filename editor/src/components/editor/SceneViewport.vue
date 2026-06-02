@@ -344,7 +344,7 @@ import {
   WARP_GATE_COMPONENT_TYPE,
   GUIDEBOARD_COMPONENT_TYPE,
   BEHAVIOR_COMPONENT_TYPE,
-  VEHICLE_COMPONENT_TYPE,
+  isAnySteerTargetNode,
   BOUNDARY_WALL_COMPONENT_TYPE,
   MODEL_COLLISION_COMPONENT_TYPE,
   WALL_COMPONENT_TYPE,
@@ -487,7 +487,7 @@ function canCompleteNodePick(nodeId: string): boolean {
     return false
   }
   if (nodePickerStore.owner === 'steer-target') {
-    return Boolean(node.components?.[VEHICLE_COMPONENT_TYPE])
+    return isAnySteerTargetNode(node)
   }
   return true
 }
@@ -21211,6 +21211,9 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
   userData.dynamicMeshType = node.dynamicMesh?.type ?? null
   userData.lightType = node.light?.type ?? null
   userData.sourceAssetId = node.sourceAssetId ?? null
+  userData.planningConversionInstanceId = typeof node.userData?.planningConversionInstanceId === 'string'
+    ? node.userData.planningConversionInstanceId
+    : null
   const runtimeBackedType = usesRuntimeObjectTypes.has(nodeType)
   const hasRuntimeObject = runtimeBackedType ? sceneStore.hasRuntimeObject(node.id) : false
   userData.usesRuntimeObject = hasRuntimeObject
@@ -22721,6 +22724,9 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
     }
 
     containerData.sourceAssetId = node.sourceAssetId ?? null
+    containerData.planningConversionInstanceId = typeof node.userData?.planningConversionInstanceId === 'string'
+      ? node.userData.planningConversionInstanceId
+      : null
     if (typeof containerData.dynamicMeshType === 'undefined') {
       containerData.dynamicMeshType = node.dynamicMesh?.type ?? null
     }

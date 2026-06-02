@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import type { SceneNode } from '@schema/core'
-import { VEHICLE_COMPONENT_TYPE } from '@schema/components'
+import { isAnySteerTargetNode } from '@schema/components'
 import type { HierarchyTreeItem } from '@/types/hierarchy-tree-item'
 import type { NodePickerOwner } from '@/stores/nodePickerStore'
 import { useSceneStore } from '@/stores/sceneStore'
@@ -198,7 +198,7 @@ function canAcceptNodeId(nodeId: string | null | undefined): boolean {
     return false
   }
   if (props.owner === 'steer-target') {
-    return Boolean(node.components?.[VEHICLE_COMPONENT_TYPE])
+    return isAnySteerTargetNode(node)
   }
   return true
 }

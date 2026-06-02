@@ -1,6 +1,8 @@
 import { Component, type ComponentRuntimeContext } from '../Component'
 import { componentManager, type ComponentDefinition } from '../componentManager'
 import type { SceneNode } from '../../index'
+import { CHARACTER_CONTROLLER_COMPONENT_TYPE } from './characterControllerComponent'
+import { VEHICLE_COMPONENT_TYPE } from './vehicleComponent'
 
 export const STEER_COMPONENT_TYPE = 'steer'
 
@@ -39,6 +41,26 @@ export function clampSteerComponentProps(props: Partial<SteerComponentProps> | n
     defaultIdentifier: normalizeString(props?.defaultIdentifier),
     autoEnterOnSceneLoad: props?.autoEnterOnSceneLoad !== false,
   }
+}
+
+export function isSteerTargetNode(
+  node: SceneNode | null | undefined,
+  targetType: SteerControllableTargetType | null | undefined,
+): boolean {
+  if (!node) {
+    return false
+  }
+  if (targetType === 'character') {
+    return Boolean(node.components?.[CHARACTER_CONTROLLER_COMPONENT_TYPE]?.enabled !== false)
+  }
+  return Boolean(node.components?.[VEHICLE_COMPONENT_TYPE]?.enabled !== false)
+}
+
+export function isAnySteerTargetNode(node: SceneNode | null | undefined): boolean {
+  if (!node) {
+    return false
+  }
+  return isSteerTargetNode(node, 'character') || isSteerTargetNode(node, 'vehicle')
 }
 
 class SteerComponent extends Component<SteerComponentProps> {
