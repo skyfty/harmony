@@ -4,12 +4,14 @@ import { storeToRefs } from 'pinia'
 import NodePicker from '@/components/common/NodePicker.vue'
 import {
   ANIMATION_COMPONENT_TYPE,
+  CHARACTER_ANIMATION_ADVANCED_SLOTS,
+  CHARACTER_ANIMATION_COMMON_SLOTS,
+  CHARACTER_ANIMATION_EDITOR_SLOTS,
   CHARACTER_FORWARD_AXIS_OPTIONS,
   CHARACTER_CONTROLLER_COMPONENT_TYPE,
   clampCharacterControllerComponentProps,
   type CharacterForwardAxis,
   type AnimationComponentProps,
-  type CharacterAnimationSlot,
   type CharacterControllerComponentProps,
 } from '@schema/components'
 import type { SceneNodeComponentState } from '@schema/core'
@@ -43,26 +45,8 @@ const animationComponent = computed(() =>
 const clipOptions = ref<Array<{ label: string; value: string }>>([])
 const isLoadingClips = ref(false)
 const clipLoadError = ref<string | null>(null)
+const advancedBindingsExpanded = ref(false)
 let clipLoadRequestId = 0
-
-const animationSlots: Array<{ label: string; value: CharacterAnimationSlot }> = [
-  { label: 'Idle', value: 'idle' },
-  { label: 'Walk', value: 'walk' },
-  { label: 'Run', value: 'run' },
-  { label: 'Sprint', value: 'sprint' },
-  { label: 'Turn Left', value: 'turnLeft' },
-  { label: 'Turn Right', value: 'turnRight' },
-  { label: 'Jump Start', value: 'jumpStart' },
-  { label: 'Jump Loop', value: 'jumpLoop' },
-  { label: 'Jump Land', value: 'jumpLand' },
-  { label: 'Fall', value: 'fall' },
-  { label: 'Strafe Left', value: 'strafeLeft' },
-  { label: 'Strafe Right', value: 'strafeRight' },
-  { label: 'Crouch Idle', value: 'crouchIdle' },
-  { label: 'Crouch Walk', value: 'crouchWalk' },
-  { label: 'Interact', value: 'interact' },
-  { label: 'Death', value: 'death' },
-]
 const forwardAxisItems: Array<{ label: string; value: CharacterForwardAxis }> = CHARACTER_FORWARD_AXIS_OPTIONS.map((value) => ({
   value,
   label:
@@ -96,11 +80,14 @@ function updateField<K extends keyof CharacterControllerComponentProps>(key: K, 
   updateComponent({ [key]: value } as Partial<CharacterControllerComponentProps>)
 }
 
-function updateAnimationBinding(slot: CharacterAnimationSlot, clipName: string | null) {
-  const nextBindings = normalizedProps.value.animationBindings.map((binding) =>
-    binding.slot === slot ? { slot, clipName } : binding,
+function updateAnimationBinding(slot: CharacterControllerComponentProps['animationBindings'][number]['slot'], clipName: string | null) {
+  const bindingMap = new Map(
+    normalizedProps.value.animationBindings.map((binding) => [binding.slot, { slot: binding.slot, clipName: binding.clipName }] as const),
   )
-  updateComponent({ animationBindings: nextBindings })
+  bindingMap.set(slot, { slot, clipName })
+  updateComponent({
+    animationBindings: CHARACTER_ANIMATION_EDITOR_SLOTS.map(({ value }) => bindingMap.get(value) ?? { slot: value, clipName: null }),
+  })
 }
 
 function handleTargetNodeIdChange(value: string | null) {
@@ -193,6 +180,8 @@ onMounted(() => {
 })
 
 const clipItems = computed(() => clipOptions.value)
+const commonAnimationSlots = CHARACTER_ANIMATION_COMMON_SLOTS
+const advancedAnimationSlots = CHARACTER_ANIMATION_ADVANCED_SLOTS
 </script>
 
 <template>
@@ -382,21 +371,58 @@ const clipItems = computed(() => clipOptions.value)
           <p v-else-if="!clipItems.length" class="character-controller-panel__note">
             No animation clips were found on this model.
           </p>
-          <div v-for="slot in animationSlots" :key="slot.value" class="character-controller-panel__binding-row">
-            <div class="character-controller-panel__binding-label">{{ slot.label }}</div>
-            <v-select
-              :items="clipItems"
-              item-title="label"
-              item-value="value"
-              :model-value="normalizedProps.animationBindings.find((binding) => binding.slot === slot.value)?.clipName ?? null"
-              clearable
-              density="compact"
-              hide-details
-              variant="underlined"
-              placeholder="Select a clip"
-              :disabled="!componentEnabled"
-              @update:model-value="(value) => updateAnimationBinding(slot.value, value ? String(value) : null)"
-            />
+          <div class="character-controller-panel__binding-group">
+            <div class="character-controller-panel__binding-group-title">Common</div>
+            <div v-for="slot in commonAnimationSlots" :key="slot.value" class="character-controller-panel__binding-row">
+              <div class="character-controller-panel__binding-label">{{ slot.label }}</div>
+              <v-select
+                :items="clipItems"
+                item-title="label"
+                item-value="value"
+                :model-value="normalizedProps.animationBindings.find((binding) => binding.slot === slot.value)?.clipName ?? null"
+                clearable
+                density="compact"
+                hide-details
+                variant="underlined"
+                placeholder="Select a clip"
+                :disabled="!componentEnabled"
+                @update:model-value="(value) => updateAnimationBinding(slot.value, value ? String(value) : null)"
+              />
+            </div>
+          </div>
+
+          <div class="character-controller-panel__binding-group">
+            <div class="character-controller-panel__binding-group-header">
+              <div class="character-controller-panel__binding-group-title">Advanced</div>
+              <v-btn
+                variant="text"
+                size="x-small"
+                class="character-controller-panel__binding-toggle"
+                @click="advancedBindingsExpanded = !advancedBindingsExpanded"
+              >
+                {{ advancedBindingsExpanded ? 'Hide' : 'Show' }}
+              </v-btn>
+            </div>
+            <v-expand-transition>
+              <div v-show="advancedBindingsExpanded" class="character-controller-panel__binding-group-body">
+                <div v-for="slot in advancedAnimationSlots" :key="slot.value" class="character-controller-panel__binding-row">
+                  <div class="character-controller-panel__binding-label">{{ slot.label }}</div>
+                  <v-select
+                    :items="clipItems"
+                    item-title="label"
+                    item-value="value"
+                    :model-value="normalizedProps.animationBindings.find((binding) => binding.slot === slot.value)?.clipName ?? null"
+                    clearable
+                    density="compact"
+                    hide-details
+                    variant="underlined"
+                    placeholder="Select a clip"
+                    :disabled="!componentEnabled"
+                    @update:model-value="(value) => updateAnimationBinding(slot.value, value ? String(value) : null)"
+                  />
+                </div>
+              </div>
+            </v-expand-transition>
           </div>
         </div>
       </div>
@@ -454,6 +480,20 @@ const clipItems = computed(() => clipOptions.value)
   gap: 0.5rem;
 }
 
+.character-controller-panel__binding-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 0.35rem 0;
+}
+
+.character-controller-panel__binding-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
 .character-controller-panel__section-title {
   font-size: 0.8rem;
   font-weight: 600;
@@ -462,11 +502,30 @@ const clipItems = computed(() => clipOptions.value)
   letter-spacing: 0.08em;
 }
 
+.character-controller-panel__binding-group-title {
+  font-size: 0.74rem;
+  font-weight: 700;
+  color: rgba(233, 236, 241, 0.7);
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+}
+
+.character-controller-panel__binding-toggle {
+  min-width: 0;
+  padding-inline: 0.35rem;
+}
+
 .character-controller-panel__binding-row {
   display: grid;
   grid-template-columns: 120px minmax(0, 1fr);
   gap: 0.75rem;
   align-items: center;
+}
+
+.character-controller-panel__binding-group-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
 }
 
 .character-controller-panel__binding-label {

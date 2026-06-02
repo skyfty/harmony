@@ -96,22 +96,19 @@ export function chooseCharacterControlClipName(
 			?? null
 	}
 	if (state.jumpPhase === 'start') {
-		return resolveAnimationBindingClipName(props, 'jumpStart')
-			?? resolveAnimationBindingClipName(props, 'jumpLoop')
-			?? resolveAnimationBindingClipName(props, 'jumpLand')
+		return resolveAnimationBindingClipName(props, 'jump')
 			?? resolveAnimationBindingClipName(props, 'fall')
 			?? resolveAnimationBindingClipName(props, 'idle')
 			?? null
 	}
 	if (state.jumpPhase === 'loop') {
-		return resolveAnimationBindingClipName(props, 'jumpLoop')
+		return resolveAnimationBindingClipName(props, 'jump')
 			?? resolveAnimationBindingClipName(props, 'fall')
-			?? resolveAnimationBindingClipName(props, 'jumpStart')
 			?? resolveAnimationBindingClipName(props, 'idle')
 			?? null
 	}
 	if (state.jumpPhase === 'land') {
-		return resolveAnimationBindingClipName(props, 'jumpLand')
+		return resolveAnimationBindingClipName(props, 'jump')
 			?? resolveAnimationBindingClipName(props, 'fall')
 			?? resolveAnimationBindingClipName(props, 'idle')
 			?? null
@@ -119,19 +116,19 @@ export function chooseCharacterControlClipName(
 	if (state.crouching) {
 		const moveX = Math.abs(state.moveX ?? 0)
 		const moveZ = Math.abs(state.moveZ ?? 0)
+		if (movementMagnitude <= 0.05) {
+			return resolveAnimationBindingClipName(props, 'crouch')
+				?? resolveAnimationBindingClipName(props, 'idle')
+				?? null
+		}
 		if (moveX > 0.05 && moveZ <= 0.05) {
-			return resolveAnimationBindingClipName(props, (state.moveX ?? 0) > 0 ? 'strafeRight' : 'strafeLeft')
-				?? resolveAnimationBindingClipName(props, 'crouchWalk')
+			return resolveAnimationBindingClipName(props, 'strafe')
+				?? resolveAnimationBindingClipName(props, 'crouch')
 				?? resolveAnimationBindingClipName(props, 'walk')
 				?? resolveAnimationBindingClipName(props, 'idle')
 				?? null
 		}
-		if (movementMagnitude <= 0.05) {
-			return resolveAnimationBindingClipName(props, 'crouchIdle')
-				?? resolveAnimationBindingClipName(props, 'idle')
-				?? null
-		}
-		return resolveAnimationBindingClipName(props, 'crouchWalk')
+		return resolveAnimationBindingClipName(props, 'crouch')
 			?? resolveAnimationBindingClipName(props, 'walk')
 			?? resolveAnimationBindingClipName(props, 'idle')
 			?? null
@@ -139,7 +136,7 @@ export function chooseCharacterControlClipName(
 	if (movementMagnitude <= 0.05) {
 		const turn = state.turn ?? 0
 		if (Math.abs(turn) > 0.05) {
-			return resolveAnimationBindingClipName(props, turn > 0 ? 'turnRight' : 'turnLeft')
+			return resolveAnimationBindingClipName(props, 'turn')
 				?? resolveAnimationBindingClipName(props, 'idle')
 				?? null
 		}
@@ -147,7 +144,7 @@ export function chooseCharacterControlClipName(
 			?? null
 	}
 	if (Math.abs(state.moveX ?? 0) > 0.05 && Math.abs(state.moveZ ?? 0) <= 0.05) {
-		return resolveAnimationBindingClipName(props, (state.moveX ?? 0) > 0 ? 'strafeRight' : 'strafeLeft')
+		return resolveAnimationBindingClipName(props, 'strafe')
 			?? resolveAnimationBindingClipName(props, 'walk')
 			?? resolveAnimationBindingClipName(props, 'run')
 			?? null

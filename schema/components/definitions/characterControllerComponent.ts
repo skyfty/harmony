@@ -10,18 +10,40 @@ export type CharacterAnimationSlot =
   | 'walk'
   | 'run'
   | 'sprint'
-  | 'turnLeft'
-  | 'turnRight'
-  | 'jumpStart'
-  | 'jumpLoop'
-  | 'jumpLand'
+  | 'turn'
+  | 'jump'
   | 'fall'
-  | 'strafeLeft'
-  | 'strafeRight'
-  | 'crouchIdle'
-  | 'crouchWalk'
+  | 'strafe'
+  | 'crouch'
   | 'interact'
   | 'death'
+
+export type CharacterAnimationSlotOption = {
+  label: string
+  value: CharacterAnimationSlot
+}
+
+export const CHARACTER_ANIMATION_COMMON_SLOTS: CharacterAnimationSlotOption[] = [
+  { label: 'Idle', value: 'idle' },
+  { label: 'Walk', value: 'walk' },
+  { label: 'Run', value: 'run' },
+  { label: 'Sprint', value: 'sprint' },
+  { label: 'Turn', value: 'turn' },
+  { label: 'Jump', value: 'jump' },
+  { label: 'Fall', value: 'fall' },
+]
+
+export const CHARACTER_ANIMATION_ADVANCED_SLOTS: CharacterAnimationSlotOption[] = [
+  { label: 'Strafe', value: 'strafe' },
+  { label: 'Crouch', value: 'crouch' },
+  { label: 'Interact', value: 'interact' },
+  { label: 'Death', value: 'death' },
+]
+
+export const CHARACTER_ANIMATION_EDITOR_SLOTS: CharacterAnimationSlotOption[] = [
+  ...CHARACTER_ANIMATION_COMMON_SLOTS,
+  ...CHARACTER_ANIMATION_ADVANCED_SLOTS,
+]
 
 export type CharacterForwardAxis = '+x' | '-x' | '+z' | '-z'
 
@@ -50,24 +72,7 @@ export interface CharacterControllerComponentProps {
 export const CHARACTER_FORWARD_AXIS_OPTIONS: CharacterForwardAxis[] = ['+x', '-x', '+z', '-z']
 export const DEFAULT_CHARACTER_FORWARD_AXIS: CharacterForwardAxis = '+x'
 
-const DEFAULT_ANIMATION_SLOTS: CharacterAnimationSlot[] = [
-  'idle',
-  'walk',
-  'run',
-  'sprint',
-  'turnLeft',
-  'turnRight',
-  'jumpStart',
-  'jumpLoop',
-  'jumpLand',
-  'fall',
-  'strafeLeft',
-  'strafeRight',
-  'crouchIdle',
-  'crouchWalk',
-  'interact',
-  'death',
-]
+const DEFAULT_ANIMATION_SLOTS: CharacterAnimationSlot[] = CHARACTER_ANIMATION_EDITOR_SLOTS.map((slot) => slot.value)
 
 function sanitizeString(value: unknown): string {
   if (typeof value !== 'string') {
@@ -117,16 +122,11 @@ function cloneAnimationBinding(binding: CharacterAnimationBinding): CharacterAni
 export function clampCharacterControllerComponentProps(
   props: Partial<CharacterControllerComponentProps> | null | undefined,
 ): CharacterControllerComponentProps {
-  const bindings = new Map<CharacterAnimationSlot, CharacterAnimationBinding>()
   const sourceBindings = Array.isArray(props?.animationBindings) ? props.animationBindings : []
-  sourceBindings.forEach((binding) => {
-    const slot = sanitizeString((binding as Partial<CharacterAnimationBinding> | null | undefined)?.slot)
-    if (!slot || !DEFAULT_ANIMATION_SLOTS.includes(slot as CharacterAnimationSlot)) {
-      return
-    }
-    bindings.set(slot as CharacterAnimationSlot, normalizeAnimationBinding(binding as Partial<CharacterAnimationBinding>, slot as CharacterAnimationSlot))
+  const animationBindings = DEFAULT_ANIMATION_SLOTS.map((slot) => {
+    const binding = sourceBindings.find((entry) => sanitizeString((entry as Partial<CharacterAnimationBinding> | null | undefined)?.slot) === slot)
+    return normalizeAnimationBinding(binding as Partial<CharacterAnimationBinding> | null | undefined, slot)
   })
-  const animationBindings = DEFAULT_ANIMATION_SLOTS.map((slot) => bindings.get(slot) ?? normalizeAnimationBinding(null, slot))
   return {
     label: sanitizeString(props?.label) || 'Character Controller',
     targetNodeId: normalizeNodeId(props?.targetNodeId),

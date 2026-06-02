@@ -7126,7 +7126,7 @@ function refreshCharacterControllerAnimationRuntimeEntries(): void {
 
 function updateCharacterAuthorityInputFromKeys(): void {
 	const moveZ = (characterKeyState.forward ? 1 : 0) - (characterKeyState.backward ? 1 : 0)
-	const turn = (characterKeyState.right ? 1 : 0) - (characterKeyState.left ? 1 : 0)
+	const turn = (characterKeyState.left ? 1 : 0) - (characterKeyState.right ? 1 : 0)
 	characterAuthorityInput.moveX = 0
 	characterAuthorityInput.moveZ = THREE.MathUtils.clamp(moveZ, -1, 1)
 	characterAuthorityInput.turn = THREE.MathUtils.clamp(turn, -1, 1)
