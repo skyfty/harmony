@@ -21938,6 +21938,14 @@ function shouldRecreateNode(object: THREE.Object3D, node: SceneNode): boolean {
   if ((userData.sourceAssetId ?? null) !== nextSourceAssetId) {
     return true
   }
+  if (node.userData?.source === 'planning-conversion') {
+    const nextPlanningConversionInstanceId = typeof node.userData?.planningConversionInstanceId === 'string'
+      ? node.userData.planningConversionInstanceId
+      : null
+    if ((userData.planningConversionInstanceId ?? null) !== nextPlanningConversionInstanceId) {
+      return true
+    }
+  }
   if (node.dynamicMesh?.type === 'Road') {
     const roadDefinition = node.dynamicMesh as RoadDynamicMesh
     const junctionSmoothing = resolveRoadJunctionSmoothing(node)

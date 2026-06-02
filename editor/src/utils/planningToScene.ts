@@ -1799,6 +1799,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
   const { sceneStore, planningData } = options
   const yieldController = createYieldController({ signal: options.signal, minIntervalMs: 12 })
   const hadGroundNodeBeforeConversion = sceneStore.groundNode?.dynamicMesh?.type === 'Ground'
+  const planningConversionInstanceId = generateUuid()
 
   return await sceneStore.withScenePatchesSuppressed(async () => {
     throwIfAborted(options.signal)
@@ -1870,6 +1871,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
           [PLANNING_CONVERSION_ROOT_TAG]: true,
           source: PLANNING_CONVERSION_SOURCE,
           createdAt: Date.now(),
+          planningConversionInstanceId,
         },
       })
     }
@@ -2038,6 +2040,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
             source: PLANNING_CONVERSION_SOURCE,
             kind: 'image',
             planningImageCount: normalizedImageProps.images.length,
+            planningConversionInstanceId,
           },
           components: {
             [PLANNING_IMAGES_COMPONENT_TYPE]: {
