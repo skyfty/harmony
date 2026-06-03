@@ -2738,46 +2738,6 @@ function resolveGroundRuntimeDefinition(
   return useGroundHeightmapStore().resolveGroundRuntimeMesh(nodeId, definition)
 }
 
-function buildLandformFootprintWorldPoints(node: SceneNode, mesh: LandformDynamicMesh): Vector3Like[] {
-  const vertices = Array.isArray(mesh.vertices) ? mesh.vertices : []
-  if (vertices.length < 3) {
-    return []
-  }
-
-  const temp = new THREE.Object3D()
-  temp.position.set(
-    Number.isFinite(node.position?.x) ? node.position.x : 0,
-    Number.isFinite(node.position?.y) ? node.position.y : 0,
-    Number.isFinite(node.position?.z) ? node.position.z : 0,
-  )
-  temp.rotation.set(
-    Number.isFinite(node.rotation?.x) ? node.rotation.x : 0,
-    Number.isFinite(node.rotation?.y) ? node.rotation.y : 0,
-    Number.isFinite(node.rotation?.z) ? node.rotation.z : 0,
-  )
-  temp.scale.set(
-    Number.isFinite(node.scale?.x) ? node.scale.x : 1,
-    Number.isFinite(node.scale?.y) ? node.scale.y : 1,
-    Number.isFinite(node.scale?.z) ? node.scale.z : 1,
-  )
-  temp.updateMatrixWorld(true)
-
-  return vertices
-    .map((entry) => {
-      if (!Array.isArray(entry) || entry.length < 2) {
-        return null
-      }
-      const localX = Number(entry[0])
-      const localZ = Number(entry[1])
-      if (!Number.isFinite(localX) || !Number.isFinite(localZ)) {
-        return null
-      }
-      const world = new THREE.Vector3(localX, 0, localZ).applyMatrix4(temp.matrixWorld)
-      return { x: world.x, y: world.y, z: world.z } satisfies Vector3Like
-    })
-    .filter((entry): entry is Vector3Like => Boolean(entry))
-}
-
 type WorldBoundsXZ = {
   minX: number
   maxX: number
@@ -3024,8 +2984,22 @@ function rebuildLandformNodeForTerrain(store: {
   }
 
   const mesh = node.dynamicMesh as LandformDynamicMesh
-  const worldPoints = buildLandformFootprintWorldPoints(node, mesh)
-  if (worldPoints.length < 3) {
+  const localPoints = Array.isArray(mesh.vertices)
+    ? mesh.vertices
+      .map((entry) => {
+        if (!Array.isArray(entry) || entry.length < 2) {
+          return null
+        }
+        const x = Number(entry[0])
+        const z = Number(entry[1])
+        if (!Number.isFinite(x) || !Number.isFinite(z)) {
+          return null
+        }
+        return [x, z] as [number, number]
+      })
+      .filter((entry): entry is [number, number] => Boolean(entry))
+    : []
+  if (localPoints.length < 3) {
     return false
   }
 
@@ -3034,8 +3008,9 @@ function rebuildLandformNodeForTerrain(store: {
     (componentState?.props as Partial<LandformComponentProps> | undefined)
       ?? resolveLandformComponentPropsFromMesh(mesh),
   )
-  const rebuilt = landformHelpers.buildLandformDynamicMeshFromWorldPoints(
-    worldPoints,
+  const rebuilt = landformHelpers.buildLandformDynamicMeshFromLocalPoints(
+    node,
+    localPoints,
     groundDefinition,
     groundNode,
     {
@@ -3048,11 +3023,10 @@ function rebuildLandformNodeForTerrain(store: {
   }
 
   node.dynamicMesh = {
-    ...rebuilt.definition,
-    materialConfigId: mesh.materialConfigId ?? rebuilt.definition.materialConfigId ?? null,
+    ...rebuilt,
+    materialConfigId: mesh.materialConfigId ?? rebuilt.materialConfigId ?? null,
   }
   landformHelpers.ensureLandformMaterialConvention(node)
-  node.position = createVector(rebuilt.center.x, rebuilt.center.y, rebuilt.center.z)
 
   const runtime = getRuntimeObject(nodeId)
   if (runtime) {
@@ -3096,7 +3070,43 @@ function refreshLandformNodesForGroundChange(store: {
     nodes.forEach((node) => {
       if (node.dynamicMesh?.type === 'Landform') {
         if (dirtyBounds) {
-          const worldPoints = buildLandformFootprintWorldPoints(node, node.dynamicMesh as LandformDynamicMesh)
+          const landformMesh = node.dynamicMesh as LandformDynamicMesh
+          const meshLocalPoints = Array.isArray(landformMesh.vertices)
+            ? landformMesh.vertices
+              .map((entry) => {
+                if (!Array.isArray(entry) || entry.length < 2) {
+                  return null
+                }
+                const x = Number(entry[0])
+                const z = Number(entry[1])
+                if (!Number.isFinite(x) || !Number.isFinite(z)) {
+                  return null
+                }
+                return [x, z] as [number, number]
+              })
+              .filter((entry): entry is [number, number] => Boolean(entry))
+            : []
+          const frame = new THREE.Object3D()
+          frame.position.set(
+            Number.isFinite(node.position?.x) ? Number(node.position.x) : 0,
+            Number.isFinite(node.position?.y) ? Number(node.position.y) : 0,
+            Number.isFinite(node.position?.z) ? Number(node.position.z) : 0,
+          )
+          frame.rotation.set(
+            Number.isFinite(node.rotation?.x) ? Number(node.rotation.x) : 0,
+            Number.isFinite(node.rotation?.y) ? Number(node.rotation.y) : 0,
+            Number.isFinite(node.rotation?.z) ? Number(node.rotation.z) : 0,
+          )
+          frame.scale.set(
+            Number.isFinite(node.scale?.x) ? Number(node.scale.x) : 1,
+            Number.isFinite(node.scale?.y) ? Number(node.scale.y) : 1,
+            Number.isFinite(node.scale?.z) ? Number(node.scale.z) : 1,
+          )
+          frame.updateMatrixWorld(true)
+          const worldPoints = meshLocalPoints.map(([x, z]) => {
+            const world = frame.localToWorld(new THREE.Vector3(x, 0, z))
+            return { x: world.x, y: world.y, z: world.z }
+          })
           const landformBounds = computeWorldBoundsXZ(worldPoints)
           if (!boundsIntersectXZ(landformBounds, dirtyBounds)) {
             return
