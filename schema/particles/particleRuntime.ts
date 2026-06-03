@@ -37,18 +37,7 @@ const sharedTextureCache = new Map<string, THREE.Texture>()
 const pendingTextureLoads = new Map<string, Promise<THREE.Texture | null>>()
 const sharedTextureLoader = new THREE.TextureLoader()
 
-function getBlendMode(mode: ParticleSystemComponentProps['render']['blendMode']): THREE.Blending {
-  if (mode === 'normal') {
-    return THREE.NormalBlending
-  }
-  if (mode === 'alpha') {
-    return THREE.NormalBlending
-  }
-  return THREE.AdditiveBlending
-}
-
-function getFallbackTexture(): THREE.Texture {
-  const cacheKey = 'fallback-soft-circle'
+function createRadialSoftTexture(cacheKey: string): THREE.Texture {
   const cached = sharedTextureCache.get(cacheKey)
   if (cached) {
     return cached
@@ -80,6 +69,60 @@ function getFallbackTexture(): THREE.Texture {
   texture.generateMipmaps = true
   sharedTextureCache.set(cacheKey, texture)
   return texture
+}
+
+function createRainStreakTexture(): THREE.Texture {
+  const cacheKey = 'fallback-rain-streak'
+  const cached = sharedTextureCache.get(cacheKey)
+  if (cached) {
+    return cached
+  }
+  const size = 64
+  const data = new Uint8Array(size * size * 4)
+  const centerX = (size - 1) * 0.5
+  for (let y = 0; y < size; y += 1) {
+    const vertical = 1 - Math.abs((y / (size - 1)) - 0.5) * 2
+    const streakStrength = Math.pow(Math.max(0, vertical), 1.35)
+    for (let x = 0; x < size; x += 1) {
+      const dx = Math.abs(x - centerX)
+      const horizontal = Math.max(0, 1 - dx / 3.2)
+      const alpha = Math.max(0, streakStrength * horizontal)
+      const offset = (y * size + x) * 4
+      data[offset] = 255
+      data[offset + 1] = 255
+      data[offset + 2] = 255
+      data[offset + 3] = Math.round(alpha * alpha * 255)
+    }
+  }
+  const texture = new THREE.DataTexture(data, size, size, THREE.RGBAFormat)
+  texture.needsUpdate = true
+  texture.magFilter = THREE.LinearFilter
+  texture.minFilter = THREE.LinearMipMapLinearFilter
+  texture.wrapS = THREE.ClampToEdgeWrapping
+  texture.wrapT = THREE.ClampToEdgeWrapping
+  texture.generateMipmaps = true
+  sharedTextureCache.set(cacheKey, texture)
+  return texture
+}
+
+function getPresetFallbackTexture(presetId: string): THREE.Texture {
+  if (presetId.includes('rain')) {
+    return createRainStreakTexture()
+  }
+  if (presetId.includes('snow')) {
+    return createRadialSoftTexture('fallback-snow-soft')
+  }
+  return createRadialSoftTexture('fallback-soft-circle')
+}
+
+function getBlendMode(mode: ParticleSystemComponentProps['render']['blendMode']): THREE.Blending {
+  if (mode === 'normal') {
+    return THREE.NormalBlending
+  }
+  if (mode === 'alpha') {
+    return THREE.NormalBlending
+  }
+  return THREE.AdditiveBlending
 }
 
 function prepareParticleTexture(texture: THREE.Texture, cacheKey: string): THREE.Texture {
@@ -142,8 +185,9 @@ async function resolveParticleTextureAsset(assetId: string): Promise<THREE.Textu
 }
 
 function createSpriteBody(props: ParticleSystemComponentProps, texture: THREE.Texture | null): THREE.Sprite {
+  const resolvedTexture = texture ?? getPresetFallbackTexture(props.presetId)
   const material = new THREE.SpriteMaterial({
-    map: texture ?? getFallbackTexture(),
+    map: resolvedTexture,
     color: props.exposedParams.color,
     transparent: true,
     opacity: props.exposedParams.opacity,
