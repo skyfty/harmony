@@ -11595,78 +11595,24 @@ let lastPointerClientX = 0
 let lastPointerClientY = 0
 let lastPointerType: string | null = null
 let selectionPreviewVisibilityRaf: number | null = null
-const OVERLAY_UI_HIT_TEST_SELECTORS = [
-  '.v-overlay',
-  '.v-overlay__content',
-  '.viewport-toolbar',
-  '.popup-menu-card',
-  '.ground-tool-menu__card',
-  '.floor-shape-menu__card',
-  '.wall-shape-menu__card',
-  '.scatter-erase-menu__card',
-]
-const OVERLAY_UI_HIT_TEST_CACHE_MS = 32
-let overlayUiHitTestCacheExpiresAt = 0
-let overlayUiHitTestCacheRects: DOMRect[] = []
 
 function hasPlacementPreviewActive(): boolean {
   return selectionPreviewActive || nodePlacementPreviewActive
 }
 
-function isPointWithinRect(x: number, y: number, rect: DOMRect): boolean {
-  return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom
-}
-
-function collectOverlayUiHitTestRects(now: number): DOMRect[] {
-  if (overlayUiHitTestCacheExpiresAt > now) {
-    return overlayUiHitTestCacheRects
-  }
-  overlayUiHitTestCacheExpiresAt = now + OVERLAY_UI_HIT_TEST_CACHE_MS
-  if (typeof document === 'undefined') {
-    overlayUiHitTestCacheRects = []
-    return overlayUiHitTestCacheRects
-  }
-  const rects: DOMRect[] = []
-  for (const selector of OVERLAY_UI_HIT_TEST_SELECTORS) {
-    const elements = document.querySelectorAll(selector)
-    elements.forEach((element) => {
-      if (!(element instanceof HTMLElement)) {
-        return
-      }
-      const clientRects = element.getClientRects()
-      if (!clientRects.length) {
-        return
-      }
-      const rect = element.getBoundingClientRect()
-      if (rect.width <= 0 || rect.height <= 0) {
-        return
-      }
-      rects.push(rect)
-    })
-  }
-  overlayUiHitTestCacheRects = rects
-  return overlayUiHitTestCacheRects
-}
-
-function isPointInsideOverlayUi(x: number, y: number): boolean {
-  const now = typeof performance !== 'undefined' ? performance.now() : Date.now()
-  const rects = collectOverlayUiHitTestRects(now)
-  return rects.some((rect) => isPointWithinRect(x, y, rect))
-}
-
 function isStrictPointOnCanvas(x: number, y: number): boolean {
   const canvas = canvasRef.value
-  if (!canvas) {
+  if (!canvas || typeof document === 'undefined') {
     return false
   }
   if (!Number.isFinite(x) || !Number.isFinite(y)) {
     return false
   }
-  const rect = canvas.getBoundingClientRect()
-  if (!isPointWithinRect(x, y, rect)) {
+  try {
+    return document.elementFromPoint(x, y) === canvas
+  } catch {
     return false
   }
-  return !isPointInsideOverlayUi(x, y)
 }
 
 function stopSelectionPreviewVisibilityMonitor(): void {
@@ -13962,6 +13908,7 @@ function initScene() {
   const gizmoContainer = gizmoContainerRef.value ?? viewportEl.value ?? undefined
   gizmoControls = new ViewportGizmo(camera, renderer, {
     container: gizmoContainer,
+    className: 'viewport-gizmo',
     offset: { top: 0, right: 0, bottom: 0, left: 0 },
     size: 70,
     northDirection: environmentSettings.value.northDirection,
@@ -23033,19 +22980,31 @@ function isEditableKeyboardTarget(target: EventTarget | null): boolean {
   return element.isContentEditable || tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
 }
 
+const VIEWPORT_OVERLAY_UI_SELECTORS = [
+  '.transform-toolbar-host',
+  '.viewport-toolbar',
+  '.viewport-toolbar-host',
+  '.camera-status-hud__toolbar',
+  '.camera-status-hud__icon-btn',
+  '.camera-status-hud__help-btn',
+  '.camera-status-hud__ratio',
+  '.csm-hud',
+  '.csm-hud__btn',
+  '.popup-menu-card',
+  '.ground-tool-menu__card',
+  '.floor-shape-menu__card',
+  '.wall-shape-menu__card',
+  '.scatter-erase-menu__card',
+  '.viewport-gizmo',
+  '.stats-panel',
+] as const
+
 function isOverlayUiElement(element: Element | null): boolean {
   if (!element) {
     return false
   }
   return Boolean(
-    element.closest('.v-overlay') ||
-    element.closest('.v-overlay__content') ||
-    element.closest('.viewport-toolbar') ||
-    element.closest('.popup-menu-card') ||
-    element.closest('.ground-tool-menu__card') ||
-    element.closest('.floor-shape-menu__card') ||
-    element.closest('.wall-shape-menu__card') ||
-    element.closest('.scatter-erase-menu__card')
+    VIEWPORT_OVERLAY_UI_SELECTORS.some((selector) => element.closest(selector))
   )
 }
 
