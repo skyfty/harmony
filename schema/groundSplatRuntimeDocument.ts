@@ -1,5 +1,6 @@
 import type {
   GroundDynamicMesh,
+  GroundSurfaceChunkTextureMap,
   SceneJsonExportDocument,
   SceneNode,
 } from './core'
@@ -15,7 +16,24 @@ export type PrepareRuntimeGroundSplatSceneDocumentResult = {
   groundSurfaceChunkCount: number
   landformNodeCount: number
 }
+function cloneSceneJsonExportDocument(document: SceneJsonExportDocument): SceneJsonExportDocument {
+  if (typeof structuredClone === 'function') {
+    return structuredClone(document) as SceneJsonExportDocument
+  }
+  return JSON.parse(JSON.stringify(document)) as SceneJsonExportDocument
+}
 
+function cloneGroundSurfaceChunkTextureMap(
+  value: GroundSurfaceChunkTextureMap | null | undefined,
+): GroundSurfaceChunkTextureMap | null {
+  if (!value || Object.keys(value).length <= 0) {
+    return null
+  }
+  if (typeof structuredClone === 'function') {
+    return structuredClone(value) as GroundSurfaceChunkTextureMap
+  }
+  return JSON.parse(JSON.stringify(value)) as GroundSurfaceChunkTextureMap
+}
 function countLandformNodes(nodes: SceneNode[] | undefined | null): number {
   if (!Array.isArray(nodes)) {
     return 0
@@ -75,10 +93,13 @@ function stripLandformNodes(nodes: SceneNode[] | undefined | null): boolean {
 export async function prepareRuntimeGroundSplatSceneDocument(
   document: SceneJsonExportDocument,
 ): Promise<PrepareRuntimeGroundSplatSceneDocumentResult> {
-  const groundNode = resolveDocumentGroundNode(document)
+  const runtimeDocument = cloneSceneJsonExportDocument(document)
+  const groundNode = resolveDocumentGroundNode(runtimeDocument)
   const groundDefinition = groundNode?.dynamicMesh?.type === 'Ground' ? (groundNode.dynamicMesh as GroundDynamicMesh)  : null
-  const directChunks = groundDefinition?.groundSurfaceChunks
-  const bakedChunks = !directChunks ? groundDefinition?.groundSplatBake?.chunkTextureMap : null
+  const directChunks = cloneGroundSurfaceChunkTextureMap(groundDefinition?.groundSurfaceChunks ?? null)
+  const bakedChunks = !directChunks
+    ? cloneGroundSurfaceChunkTextureMap(groundDefinition?.groundSplatBake?.chunkTextureMap ?? null)
+    : null
   const nextChunks = directChunks ?? bakedChunks
   const hasBakedGroundSplat = Boolean(nextChunks)
   const promotedGroundSplatBake = Boolean(!directChunks && bakedChunks)
@@ -96,10 +117,10 @@ export async function prepareRuntimeGroundSplatSceneDocument(
   }
 
   return {
-    document: document,
+    document: runtimeDocument,
     hasBakedGroundSplat,
     promotedGroundSplatBake,
-    strippedLandformNodes: stripLandformNodes(document.nodes),
+    strippedLandformNodes: stripLandformNodes(runtimeDocument.nodes),
     groundSurfaceChunkCount: nextChunks ? Object.keys(nextChunks).length : 0,
     landformNodeCount,
   }
