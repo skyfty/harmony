@@ -23364,6 +23364,7 @@ watch([sceneGraphStructureVersion, sceneNodePropertyVersion], () => {
   }
 
   applyPendingScenePatches()
+  refreshEffectRuntimeTickers()
 })
 
 const cameraStateSignature = computed(() => {
