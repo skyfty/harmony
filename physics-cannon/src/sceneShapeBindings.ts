@@ -7,6 +7,7 @@ import type {
   PhysicsTransform,
   PhysicsVector3,
 } from '@harmony/physics-core'
+import { createCannonConvexPolyhedron } from './shapeFactory'
 
 export type CannonSceneShapeBinding = {
   shapeKind: PhysicsShapeDesc['kind']
@@ -93,36 +94,25 @@ function createHeightfieldShape(shapeDesc: Extract<PhysicsShapeDesc, { kind: 'he
 }
 
 function createConvexHullShape(shapeDesc: PhysicsConvexHullShapeDesc): CANNON.ConvexPolyhedron {
-  const vertices: CANNON.Vec3[] = []
+  const vertices: Array<[number, number, number]> = []
   for (let index = 0; index < shapeDesc.vertices.length; index += 3) {
-    vertices.push(new CANNON.Vec3(
+    vertices.push([
       shapeDesc.vertices[index] ?? 0,
       shapeDesc.vertices[index + 1] ?? 0,
       shapeDesc.vertices[index + 2] ?? 0,
-    ))
+    ])
   }
-  const faces = Array.isArray(shapeDesc.faces) && shapeDesc.faces.length
-    ? shapeDesc.faces.map((face) => face.map((value) => Math.trunc(value)))
-    : inferConvexHullFaces(vertices.length)
-  return new CANNON.ConvexPolyhedron({ vertices, faces })
+  const polyhedron = createCannonConvexPolyhedron(vertices, shapeDesc.faces, {
+    loggerTag: '[PhysicsCannonScene]',
+  })
+  if (!polyhedron) {
+    throw new Error(`Invalid cannon convex hull shape: ${shapeDesc.id}`)
+  }
+  return polyhedron
 }
 
 function createStaticMeshShape(shapeDesc: PhysicsStaticMeshDesc): CANNON.Trimesh {
   return new CANNON.Trimesh(Array.from(shapeDesc.vertices), Array.from(shapeDesc.indices))
-}
-
-function inferConvexHullFaces(vertexCount: number): number[][] {
-  if (vertexCount === 8) {
-    return [
-      [0, 1, 2, 3],
-      [4, 7, 6, 5],
-      [0, 4, 5, 1],
-      [1, 5, 6, 2],
-      [2, 6, 7, 3],
-      [3, 7, 4, 0],
-    ]
-  }
-  throw new Error('Convex hull faces are required for non-box cannon shapes')
 }
 
 function composeShapeBinding(binding: CannonSceneShapeBinding, transform: PhysicsTransform): CannonSceneShapeBinding {

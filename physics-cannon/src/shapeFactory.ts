@@ -36,6 +36,10 @@ export type CannonShapeDefinition =
 
 type SanitizedFaces = { faces: number[][]; invalidCount: number }
 type LoggerTag = string | undefined
+export type CannonConvexPolyhedronData = {
+  vertices: CANNON.Vec3[]
+  faces: number[][]
+}
 
 const cylinderShapeOffsetHelper = new CANNON.Vec3()
 const cylinderShapeRotationHelper = new CANNON.Quaternion()
@@ -74,63 +78,14 @@ export function createCannonShape(
   }
 
   if (definition.kind === 'convex') {
-    if (!Array.isArray(definition.vertices) || definition.vertices.length < 4) {
+    const polyhedron = createCannonConvexPolyhedron(definition.vertices, definition.faces, {
+      scale: { x: scaleX, y: scaleY, z: scaleZ },
+      loggerTag,
+    })
+    if (!polyhedron) {
       return null
     }
-    const vertices: CANNON.Vec3[] = []
-    const vertexMap = new Map<string, number>()
-    const indexMap = new Map<number, number>()
-    for (let i = 0; i < definition.vertices.length; i += 1) {
-      const tuple = definition.vertices[i]
-      const vx = Number(tuple?.[0])
-      const vy = Number(tuple?.[1])
-      const vz = Number(tuple?.[2])
-      if (![vx, vy, vz].every((value) => Number.isFinite(value))) {
-        return null
-      }
-      const scaledX = vx * scaleX
-      const scaledY = vy * scaleY
-      const scaledZ = vz * scaleZ
-      const key = `${scaledX.toFixed(4)},${scaledY.toFixed(4)},${scaledZ.toFixed(4)}`
-      if (vertexMap.has(key)) {
-        indexMap.set(i, vertexMap.get(key)!)
-      } else {
-        const newIndex = vertices.length
-        vertices.push(new CANNON.Vec3(scaledX, scaledY, scaledZ))
-        vertexMap.set(key, newIndex)
-        indexMap.set(i, newIndex)
-      }
-    }
-    const remappedFaces: number[][] = []
-    if (Array.isArray(definition.faces)) {
-      definition.faces.forEach((face) => {
-        if (!Array.isArray(face)) {
-          return
-        }
-        const newFace: number[] = []
-        face.forEach((idx) => {
-          const numeric = typeof idx === 'number' ? idx : Number(idx)
-          if (Number.isFinite(numeric)) {
-            const originalIndex = Math.trunc(numeric)
-            if (indexMap.has(originalIndex)) {
-              newFace.push(indexMap.get(originalIndex)!)
-            }
-          }
-        })
-        if (newFace.length >= 3) {
-          remappedFaces.push(newFace)
-        }
-      })
-    }
-    const { faces, invalidCount } = sanitizeConvexFaces(remappedFaces, vertices.length)
-    if (!faces.length) {
-      return null
-    }
-    if (invalidCount) {
-      warn(loggerTag, 'Convex collider faces contain invalid vertex indices; skipped %d face(s).', invalidCount)
-    }
-    const orientedFaces = orientConvexFaces(faces, vertices)
-    return new CANNON.ConvexPolyhedron({ vertices, faces: orientedFaces })
+    return polyhedron
   }
 
   if (definition.kind === 'heightfield') {
@@ -176,6 +131,70 @@ export function createCannonShape(
   }
 
   return null
+}
+
+export function createCannonConvexPolyhedron(
+  sourceVertices: Array<[number, number, number]>,
+  sourceFaces?: number[][],
+  options: {
+    scale?: CannonShapeScaleLike
+    loggerTag?: LoggerTag
+  } = {},
+): CANNON.ConvexPolyhedron | null {
+  const normalized = normalizeCannonConvexHullData(sourceVertices, sourceFaces, options)
+  if (!normalized) {
+    return null
+  }
+  return new CANNON.ConvexPolyhedron(normalized)
+}
+
+export function normalizeCannonConvexHullData(
+  sourceVertices: Array<[number, number, number]>,
+  sourceFaces?: number[][],
+  options: {
+    scale?: CannonShapeScaleLike
+    loggerTag?: LoggerTag
+  } = {},
+): CannonConvexPolyhedronData | null {
+  if (!Array.isArray(sourceVertices) || sourceVertices.length < 4) {
+    return null
+  }
+  const safeScale = normalizeCannonShapeScale(options.scale)
+  const vertices: CANNON.Vec3[] = []
+  const vertexMap = new Map<string, number>()
+  const indexMap = new Map<number, number>()
+  for (let i = 0; i < sourceVertices.length; i += 1) {
+    const tuple = sourceVertices[i]
+    const vx = Number(tuple?.[0])
+    const vy = Number(tuple?.[1])
+    const vz = Number(tuple?.[2])
+    if (![vx, vy, vz].every((value) => Number.isFinite(value))) {
+      return null
+    }
+    const scaledX = vx * safeScale.x
+    const scaledY = vy * safeScale.y
+    const scaledZ = vz * safeScale.z
+    const key = `${scaledX.toFixed(4)},${scaledY.toFixed(4)},${scaledZ.toFixed(4)}`
+    if (vertexMap.has(key)) {
+      indexMap.set(i, vertexMap.get(key)!)
+    } else {
+      const newIndex = vertices.length
+      vertices.push(new CANNON.Vec3(scaledX, scaledY, scaledZ))
+      vertexMap.set(key, newIndex)
+      indexMap.set(i, newIndex)
+    }
+  }
+  const remappedFaces = remapConvexFaces(sourceFaces, indexMap)
+  const faces = remappedFaces.length ? remappedFaces : inferConvexHullFaces(vertices.length)
+  const { faces: sanitizedFaces, invalidCount } = sanitizeConvexFaces(faces, vertices.length)
+  if (!sanitizedFaces.length) {
+    return null
+  }
+  if (invalidCount) {
+    warn(options.loggerTag, 'Convex collider faces contain invalid vertex indices; skipped %d face(s).', invalidCount)
+  }
+  const orientedFaces = orientConvexFaces(sanitizedFaces, vertices)
+  return { vertices, faces: orientedFaces }
 }
 
 function warn(loggerTag: LoggerTag, message: string, ...args: unknown[]): void {
@@ -254,6 +273,46 @@ function sanitizeConvexFaces(source: unknown, vertexCount: number): SanitizedFac
     result.faces.push(deduped)
   })
   return result
+}
+
+function remapConvexFaces(sourceFaces: number[][] | undefined, indexMap: Map<number, number>): number[][] {
+  if (!Array.isArray(sourceFaces) || !sourceFaces.length) {
+    return []
+  }
+  const remappedFaces: number[][] = []
+  sourceFaces.forEach((face) => {
+    if (!Array.isArray(face)) {
+      return
+    }
+    const newFace: number[] = []
+    face.forEach((idx) => {
+      const numeric = typeof idx === 'number' ? idx : Number(idx)
+      if (Number.isFinite(numeric)) {
+        const originalIndex = Math.trunc(numeric)
+        if (indexMap.has(originalIndex)) {
+          newFace.push(indexMap.get(originalIndex)!)
+        }
+      }
+    })
+    if (newFace.length >= 3) {
+      remappedFaces.push(newFace)
+    }
+  })
+  return remappedFaces
+}
+
+function inferConvexHullFaces(vertexCount: number): number[][] {
+  if (vertexCount === 8) {
+    return [
+      [0, 1, 2, 3],
+      [4, 7, 6, 5],
+      [0, 4, 5, 1],
+      [1, 5, 6, 2],
+      [2, 6, 7, 3],
+      [3, 7, 4, 0],
+    ]
+  }
+  return []
 }
 
 function orientConvexFaces(faces: number[][], vertices: CANNON.Vec3[]): number[][] {

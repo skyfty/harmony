@@ -1921,8 +1921,6 @@ let directionalLightPivotEditState: DirectionalLightPivotEditState | null = null
 let isApplyingCameraState = false
 let lastCameraFocusRadius: number | null = null
 const CAMERA_MAX_DISTANCE_ABS_CAP = 60000
-const CAMERA_MAX_DISTANCE_MAP_RADIUS_MULTIPLIER = 60
-const CAMERA_MAX_DISTANCE_ORBIT_RADIUS_MULTIPLIER = 40
 const CAMERA_MAX_ZOOM_RATIO_LIMIT = 100
 const VIEWPORT_COMPOSITION_EPSILON_PX = 0.5
 const viewportCompositionOffsetPx = new THREE.Vector2(Number.NaN, Number.NaN)
@@ -13049,9 +13047,6 @@ function syncControlsConstraintsAndSpeeds() {
   const minDistanceBase = mode === 'map'
     ? clampNumber(radiusUsed * 0.2, 0.2, 50)
     : clampNumber(radiusUsed * 0.02, 0.02, 10)
-  const maxDistanceBase = mode === 'map'
-    ? clampNumber(radiusUsed * CAMERA_MAX_DISTANCE_MAP_RADIUS_MULTIPLIER, 20, CAMERA_MAX_DISTANCE_ABS_CAP)
-    : clampNumber(radiusUsed * CAMERA_MAX_DISTANCE_ORBIT_RADIUS_MULTIPLIER, 10, CAMERA_MAX_DISTANCE_ABS_CAP)
   const maxDistanceByZoomRatio = Math.min(
     CAMERA_MAX_DISTANCE_ABS_CAP,
     defaultCameraStatusDistance * CAMERA_MAX_ZOOM_RATIO_LIMIT,
@@ -13061,7 +13056,24 @@ function syncControlsConstraintsAndSpeeds() {
   // Use a smaller fraction of the current distance (instead of 0.95) so there's
   // a meaningful inward range before hitting the minimum constraint.
   mapControls.minDistance = Math.max(0.02, Math.min(minDistanceBase, distance * 0.5))
-  mapControls.maxDistance = Math.max(maxDistanceBase, maxDistanceByZoomRatio, mapControls.minDistance * 2)
+  const resolvedMaxDistance = Math.max(
+    mapControls.minDistance * 2,
+    maxDistanceByZoomRatio,
+  )
+  mapControls.maxDistance = resolvedMaxDistance
+
+  if (distance > resolvedMaxDistance + 1e-6) {
+    const clampedOffset = camera.position.clone().sub(target)
+    if (clampedOffset.lengthSq() > 1e-12) {
+      clampedOffset.setLength(resolvedMaxDistance)
+      camera.position.copy(target).add(clampedOffset)
+      camera.updateMatrixWorld()
+      if (perspectiveCamera && camera !== perspectiveCamera) {
+        perspectiveCamera.position.copy(camera.position)
+        perspectiveCamera.quaternion.copy(camera.quaternion)
+      }
+    }
+  }
 
   // Keep local-detail edits precise while making far-away browsing much faster.
   const normalizedDistance = distance / Math.max(radiusUsed, 1e-6)
@@ -16652,11 +16664,12 @@ async function handlePointerDown(event: PointerEvent) {
     const allowBoundingBoxFallback = !isNodeExcludedFromSelectionBoundingBoxFallback(activeSelectionNode)
     const directHit = pickNodeAtPointer(event)
     const boundingBoxHit = !directHit && allowBoundingBoxFallback ? pickActiveSelectionBoundingBoxHit(event) : null
+    const selectionAwareHit = directHit ?? boundingBoxHit
     const selectedNodeIds = sceneStore.selectedNodeIds
     const hitBelongsToSelection = Boolean(
-      directHit && (
-        selectedNodeIds.includes(directHit.nodeId)
-        || selectedNodeIds.some((selectedNodeId) => sceneStore.isDescendant(selectedNodeId, directHit.nodeId))
+      selectionAwareHit && (
+        selectedNodeIds.includes(selectionAwareHit.nodeId)
+        || selectedNodeIds.some((selectedNodeId) => sceneStore.isDescendant(selectedNodeId, selectionAwareHit.nodeId))
       ),
     )
     const shouldStartCameraSession = !hitBelongsToSelection
@@ -16683,7 +16696,7 @@ async function handlePointerDown(event: PointerEvent) {
         ctrlKey: event.ctrlKey,
         metaKey: event.metaKey,
         shiftKey: event.shiftKey,
-        clickHitResult: directHit ?? boundingBoxHit,
+        clickHitResult: selectionAwareHit,
         cameraGesture,
       }
       return

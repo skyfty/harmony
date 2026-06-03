@@ -17,6 +17,7 @@
   "scripts": {
     "build": "tsc -b tsconfig.json",
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "test:convex": "node ./scripts/convex-regression.mjs",
     "prepack": "pnpm run build"
   },
   "engines": {

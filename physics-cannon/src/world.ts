@@ -81,7 +81,6 @@ export class CannonPhysicsWorld {
   private readonly vehicles = new Map<number, VehicleState>()
   private readonly vehicleInputs = new Map<number, PhysicsVehicleInputCommand>()
   private readonly characters = new Map<number, CharacterState>()
-  private readonly bodyContactListeners = new Map<number, (event: unknown) => void>()
   private stepContacts: PhysicsContactEvent[] = []
   private lastContactNormalYByBodyId = new Map<number, number>()
 
@@ -156,6 +155,7 @@ export class CannonPhysicsWorld {
         Math.max(1, this.worldSettings.maxSubSteps | 0),
       )
     }
+    this.stepContacts = this.collectContacts()
 
     const bodyCount = this.scene.bodies.length
     const bodyTransforms = new Float32Array(bodyCount * 8)
@@ -349,13 +349,6 @@ export class CannonPhysicsWorld {
     this.vehicleInputs.clear()
     this.characters.clear()
     this.lastContactNormalYByBodyId.clear()
-    this.bodyContactListeners.forEach((listener, bodyId) => {
-      const state = this.bodies.get(bodyId) ?? this.runtimeBodies.get(bodyId) ?? null
-      try {
-        (state?.body as CANNON.Body | null)?.removeEventListener?.('collide', listener as never)
-      } catch {}
-    })
-    this.bodyContactListeners.clear()
     this.bodies.clear()
     this.shapes.clear()
     this.runtimeBodies.clear()
@@ -396,7 +389,6 @@ export class CannonPhysicsWorld {
       shapeMap,
       desc,
     })
-    this.attachBodyContactListener(body, desc.id)
     return { desc, body }
   }
 
@@ -468,7 +460,7 @@ export class CannonPhysicsWorld {
       const to = new CANNON.Vec3(body.position.x + offsetX, baseY - probeDepth, body.position.z + offsetZ)
       const ray = new CANNON.Ray(from, to)
       ray.mode = CANNON.Ray.CLOSEST
-      ray.skipBackfaces = true
+      ray.skipBackfaces = false
       ray.checkCollisionResponse = true
       const result = new CANNON.RaycastResult()
       ray.intersectBodies(candidates, result)
@@ -500,111 +492,83 @@ export class CannonPhysicsWorld {
     }
   }
 
-  private attachBodyContactListener(body: CANNON.Body, bodyId: number): void {
-    if (this.bodyContactListeners.has(bodyId)) {
-      return
+  private collectContacts(): PhysicsContactEvent[] {
+    const world = this.world
+    if (!world) {
+      return []
     }
-    const listener = (event: unknown) => {
-      const contact = event as {
-        body?: CANNON.Body | null
-        contact?: {
-          ri?: CANNON.Vec3 | null
-          rj?: CANNON.Vec3 | null
-          ni?: CANNON.Vec3 | null
-        } | null
-      }
-      const otherBody = contact.body ?? null
-      if (!otherBody) {
+    const contacts: PhysicsContactEvent[] = []
+    this.lastContactNormalYByBodyId.clear()
+    const seenPairs = new Set<string>()
+    const equations = ((world as CANNON.World & {
+      contacts?: Array<{
+        bi: CANNON.Body
+        bj: CANNON.Body
+        ni: CANNON.Vec3
+        ri: CANNON.Vec3
+        rj: CANNON.Vec3
+      }>
+    }).contacts ?? [])
+    equations.forEach((equation) => {
+      const bodyA = equation.bi as CANNON.Body | null | undefined
+      const bodyB = equation.bj as CANNON.Body | null | undefined
+      const bodyIdA = bodyA ? resolveBodyId(bodyA) : null
+      const bodyIdB = bodyB ? resolveBodyId(bodyB) : null
+      if (bodyIdA == null || bodyIdB == null || bodyIdA === bodyIdB) {
         return
       }
-      const otherBodyId = resolveBodyId(otherBody)
-      if (otherBodyId === null || otherBodyId === bodyId) {
+      if (!bodyA || !bodyB) {
         return
       }
-      const bodyPosition = body.position
-      const otherPosition = otherBody.position
-      const normal = contact.contact?.ni ?? null
-      const contactPoint = contact.contact?.ri ?? null
-      const fallbackContactPoint = contact.contact?.rj ?? null
+      const normalTuple = normalizePhysicsVector([
+        equation.ni.x,
+        equation.ni.y,
+        equation.ni.z,
+      ])
+      const absNormalY = Math.abs(normalTuple[1] ?? 0)
+      if (absNormalY > (this.lastContactNormalYByBodyId.get(bodyIdA) ?? 0)) {
+        this.lastContactNormalYByBodyId.set(bodyIdA, absNormalY)
+      }
+      if (absNormalY > (this.lastContactNormalYByBodyId.get(bodyIdB) ?? 0)) {
+        this.lastContactNormalYByBodyId.set(bodyIdB, absNormalY)
+      }
+      const key = bodyIdA < bodyIdB
+        ? `${bodyIdA}:${bodyIdB}`
+        : `${bodyIdB}:${bodyIdA}`
+      if (seenPairs.has(key)) {
+        return
+      }
+      seenPairs.add(key)
+      const point = [
+        bodyA.position.x + equation.ri.x,
+        bodyA.position.y + equation.ri.y,
+        bodyA.position.z + equation.ri.z,
+      ] as [number, number, number]
       const relativeVelocity = new CANNON.Vec3(
-        body.velocity.x - otherBody.velocity.x,
-        body.velocity.y - otherBody.velocity.y,
-        body.velocity.z - otherBody.velocity.z,
+        bodyA.velocity.x - bodyB.velocity.x,
+        bodyA.velocity.y - bodyB.velocity.y,
+        bodyA.velocity.z - bodyB.velocity.z,
       )
-      const normalizedNormal = normal
-        ? normalizePhysicsVector([normal.x, normal.y, normal.z])
-        : normalizePhysicsVector([
-            otherPosition.x - bodyPosition.x,
-            otherPosition.y - bodyPosition.y,
-            otherPosition.z - bodyPosition.z,
-          ])
       const impactSpeed = Math.max(
         0,
-        -(relativeVelocity.x * normalizedNormal[0] + relativeVelocity.y * normalizedNormal[1] + relativeVelocity.z * normalizedNormal[2]),
+        -(relativeVelocity.x * normalTuple[0] + relativeVelocity.y * normalTuple[1] + relativeVelocity.z * normalTuple[2]),
       )
-      const worldContactPoint = contactPoint
-        ? [
-            bodyPosition.x + contactPoint.x,
-            bodyPosition.y + contactPoint.y,
-            bodyPosition.z + contactPoint.z,
-          ] as [number, number, number]
-        : fallbackContactPoint
-          ? [
-              otherPosition.x + fallbackContactPoint.x,
-              otherPosition.y + fallbackContactPoint.y,
-              otherPosition.z + fallbackContactPoint.z,
-            ] as [number, number, number]
-          : [bodyPosition.x, bodyPosition.y, bodyPosition.z] as [number, number, number]
-      const key = bodyId < otherBodyId
-        ? `${bodyId}:${otherBodyId}`
-        : `${otherBodyId}:${bodyId}`
-      const existing = this.stepContacts.find((entry) => {
-        const pairKey = entry.bodyIdA < entry.bodyIdB
-          ? `${entry.bodyIdA}:${entry.bodyIdB}`
-          : `${entry.bodyIdB}:${entry.bodyIdA}`
-        return pairKey === key
-      })
-      if (existing) {
-        const absNormalY = Math.abs(normalizedNormal[1] ?? 0)
-        if (absNormalY > (this.lastContactNormalYByBodyId.get(bodyId) ?? 0)) {
-          this.lastContactNormalYByBodyId.set(bodyId, absNormalY)
-        }
-        if (absNormalY > (this.lastContactNormalYByBodyId.get(otherBodyId) ?? 0)) {
-          this.lastContactNormalYByBodyId.set(otherBodyId, absNormalY)
-        }
-        return
-      }
-      const absNormalY = Math.abs(normalizedNormal[1] ?? 0)
-      if (absNormalY > (this.lastContactNormalYByBodyId.get(bodyId) ?? 0)) {
-        this.lastContactNormalYByBodyId.set(bodyId, absNormalY)
-      }
-      if (absNormalY > (this.lastContactNormalYByBodyId.get(otherBodyId) ?? 0)) {
-        this.lastContactNormalYByBodyId.set(otherBodyId, absNormalY)
-      }
-      this.stepContacts.push({
-        bodyIdA: bodyId,
-        bodyIdB: otherBodyId,
-        point: worldContactPoint,
-        normal: normalizedNormal,
+      contacts.push({
+        bodyIdA,
+        bodyIdB,
+        point,
+        normal: normalTuple,
         impulse: null,
         impactSpeed,
-      } as PhysicsContactEvent)
-    }
-    this.bodyContactListeners.set(bodyId, listener)
-    body.addEventListener?.('collide', listener as never)
+      })
+    })
+    return contacts
   }
 
   private removeRuntimeBodyById(bodyId: number): void {
     const state = this.runtimeBodies.get(bodyId)
     if (!state) {
       return
-    }
-    const listener = this.bodyContactListeners.get(bodyId) ?? null
-    if (listener) {
-      try {
-        (state.body as CANNON.Body | null)?.removeEventListener?.('collide', listener as never)
-      } catch {}
-      this.bodyContactListeners.delete(bodyId)
     }
     try {
       this.world?.removeBody?.(state.body)
