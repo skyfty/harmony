@@ -1943,6 +1943,7 @@ const defaultCameraStatusDistance = new THREE.Vector3(
   Math.max(DEFAULT_CAMERA_TARGET.y, MIN_TARGET_HEIGHT),
   DEFAULT_CAMERA_TARGET.z,
 ))
+const CAMERA_MAX_ZOOM_DISTANCE_CAP = defaultCameraStatusDistance * CAMERA_MAX_ZOOM_RATIO_LIMIT
 const CAMERA_DOUBLE_CLICK_FOCUS_DISTANCE = Math.max(8, defaultCameraStatusDistance)
 const cameraStatusDistance = ref(defaultCameraStatusDistance)
 const cameraNorthHeadingDegrees = ref(0)
@@ -13057,14 +13058,26 @@ function syncControlsConstraintsAndSpeeds() {
     : clampNumber(radiusUsed * CAMERA_MAX_DISTANCE_ORBIT_RADIUS_MULTIPLIER, 10, CAMERA_MAX_DISTANCE_ABS_CAP)
   const maxDistanceByZoomRatio = Math.min(
     CAMERA_MAX_DISTANCE_ABS_CAP,
-    defaultCameraStatusDistance * CAMERA_MAX_ZOOM_RATIO_LIMIT,
+    CAMERA_MAX_ZOOM_DISTANCE_CAP,
   )
+  const desiredMinDistance = Math.max(0.02, Math.min(minDistanceBase, distance * 0.5))
+  const cappedMinDistance = Math.min(desiredMinDistance, CAMERA_MAX_ZOOM_DISTANCE_CAP)
 
   // Relax the inward clamp so repeated dolly-in doesn't immediately get blocked.
   // Use a smaller fraction of the current distance (instead of 0.95) so there's
   // a meaningful inward range before hitting the minimum constraint.
-  mapControls.minDistance = Math.max(0.02, Math.min(minDistanceBase, distance * 0.5))
-  mapControls.maxDistance = Math.max(maxDistanceBase, maxDistanceByZoomRatio, mapControls.minDistance * 2)
+  mapControls.minDistance = cappedMinDistance
+  mapControls.maxDistance = Math.max(
+    mapControls.minDistance,
+    Math.min(
+      CAMERA_MAX_ZOOM_DISTANCE_CAP,
+      Math.max(
+        maxDistanceBase,
+        maxDistanceByZoomRatio,
+        mapControls.minDistance * 2,
+      ),
+    ),
+  )
 
   // Keep local-detail edits precise while making far-away browsing much faster.
   const normalizedDistance = distance / Math.max(radiusUsed, 1e-6)
@@ -13503,7 +13516,10 @@ function updateCameraStatusDistance() {
     cameraStatusDistance.value = defaultCameraStatusDistance
     return
   }
-  cameraStatusDistance.value = camera.position.distanceTo(mapControls.target)
+  cameraStatusDistance.value = Math.min(
+    camera.position.distanceTo(mapControls.target),
+    CAMERA_MAX_ZOOM_DISTANCE_CAP,
+  )
 }
 
 function updateCameraNorthHeading() {

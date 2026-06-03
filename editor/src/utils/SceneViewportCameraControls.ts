@@ -37,6 +37,7 @@ export class SceneViewportCameraControls extends THREE.EventDispatcher<SceneView
   private readonly planarPanDelta = new THREE.Vector3()
   private readonly planarPanTarget = new THREE.Vector3()
   private readonly planarPanPosition = new THREE.Vector3()
+  private readonly clampDirection = new THREE.Vector3()
   private orbitRotateSession: { pointerId: number; lastX: number; lastY: number } | null = null
   private readonly boundKeyDown: (event: KeyboardEvent) => void
 
@@ -321,6 +322,7 @@ export class SceneViewportCameraControls extends THREE.EventDispatcher<SceneView
         target.z,
         enableTransition,
       )
+    this.clampCurrentDistanceToBounds()
     this.syncFromControls()
     this.dispatchEvent({ type: 'change' })
   }
@@ -329,12 +331,14 @@ export class SceneViewportCameraControls extends THREE.EventDispatcher<SceneView
     this.controls
       .normalizeRotations()
       .setTarget(target.x, target.y, target.z, enableTransition)
+    this.clampCurrentDistanceToBounds()
     this.syncFromControls()
     this.dispatchEvent({ type: 'change' })
   }
 
   fitToSphere(sphere: THREE.Sphere, enableTransition = false) {
     this.controls.fitToSphere(sphere, enableTransition)
+    this.clampCurrentDistanceToBounds()
     this.syncFromControls()
     this.dispatchEvent({ type: 'change' })
   }
@@ -387,8 +391,9 @@ export class SceneViewportCameraControls extends THREE.EventDispatcher<SceneView
   update(delta = 0): boolean {
     const manualChange = this.syncLegacyStateToControls()
     const changed = this.controls.update(delta)
+    const clamped = this.clampCurrentDistanceToBounds()
     const syncedChange = this.syncFromControls()
-    if (manualChange || changed || syncedChange) {
+    if (manualChange || changed || clamped || syncedChange) {
       this.dispatchEvent({ type: 'change' })
       return true
     }
@@ -469,6 +474,43 @@ export class SceneViewportCameraControls extends THREE.EventDispatcher<SceneView
     }
 
     return Math.max(1e-6, distance) / viewportHeightPx
+  }
+
+  private clampCurrentDistanceToBounds(): boolean {
+    const minDistance = Math.max(0, this.controls.minDistance)
+    const maxDistance = Math.max(minDistance, this.controls.maxDistance)
+    const cameraPosition = this.getPosition(this.planarPanPosition, false)
+    const target = this.getTarget(this.planarPanTarget, false)
+    const direction = this.clampDirection.copy(cameraPosition).sub(target)
+    const distance = direction.length()
+
+    if (!Number.isFinite(distance)) {
+      return false
+    }
+
+    const clampedDistance = THREE.MathUtils.clamp(distance, minDistance, maxDistance)
+    if (Math.abs(clampedDistance - distance) <= POSITION_EPSILON) {
+      return false
+    }
+
+    if (direction.lengthSq() <= POSITION_EPSILON) {
+      direction.set(1, 1, 1).normalize()
+    } else {
+      direction.normalize()
+    }
+
+    this.controls
+      .normalizeRotations()
+      .setLookAt(
+        target.x + direction.x * clampedDistance,
+        target.y + direction.y * clampedDistance,
+        target.z + direction.z * clampedDistance,
+        target.x,
+        target.y,
+        target.z,
+        false,
+      )
+    return true
   }
 
   private syncLegacyStateToControls(): boolean {
