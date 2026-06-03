@@ -737,6 +737,7 @@ import {
   clampCharacterControllerComponentProps,
   DEFAULT_CHARACTER_CAMERA_FOLLOW_DISTANCE,
   DEFAULT_CHARACTER_CAMERA_FOLLOW_HEIGHT,
+  characterControllerComponentDefinition,
   writeCharacterLocalForward,
   type CharacterControllerComponentProps,
 } from '@harmony/schema/components/definitions/characterControllerComponent';
@@ -1998,6 +1999,7 @@ previewComponentManager.registerDefinition(warpGateComponentDefinition);
 previewComponentManager.registerDefinition(effectComponentDefinition);
 previewComponentManager.registerDefinition(couponComponentDefinition);
 previewComponentManager.registerDefinition(behaviorComponentDefinition);
+previewComponentManager.registerDefinition(characterControllerComponentDefinition);
 previewComponentManager.registerDefinition(rigidbodyComponentDefinition);
 previewComponentManager.registerDefinition(vehicleComponentDefinition);
 previewComponentManager.registerDefinition(steerComponentDefinition);

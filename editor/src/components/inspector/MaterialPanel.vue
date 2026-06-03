@@ -7,6 +7,7 @@ import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 import { cloneTextureSettings, createTextureSettings, type SceneNodeMaterial } from '@/types/material'
 import type { ProjectAsset } from '@/types/project-asset'
+import { renderMaterialThumbnailDataUrl } from '@/utils/materialAsset'
 
 type MaterialAsset = ProjectAsset & { type: 'material' }
 type TextureAsset = ProjectAsset & { type: 'image' | 'texture' }
@@ -36,8 +37,32 @@ const materialPickerSlotId = ref<string | null>(null)
 const materialPickerSelectedId = ref('')
 const materialPickerAnchor = ref<{ x: number; y: number } | null>(null)
 const materialPreviewThumbnails = ref<Record<string, string>>({})
+const groundDefaultPreviewThumbnail = ref<string | null>(null)
+let groundDefaultPreviewToken = 0
 
 const DEFAULT_MATERIAL_COLOR = '#ffffff'
+const GROUND_DEFAULT_MATERIAL_PROPS = {
+  color: '#707070',
+  transparent: false,
+  opacity: 1,
+  side: 'front',
+  wireframe: false,
+  metalness: 0.1,
+  roughness: 0.8,
+  emissive: '#000000',
+  emissiveIntensity: 0,
+  aoStrength: 1,
+  envMapIntensity: 1,
+  textures: {
+    albedo: null,
+    normal: null,
+    metalness: null,
+    roughness: null,
+    ao: null,
+    emissive: null,
+    displacement: null,
+  },
+} as const
 
 watch(
   () => props.activeNodeMaterialId,
@@ -73,6 +98,32 @@ watch(
       }
     })
     materialPreviewThumbnails.value = nextThumbnails
+  },
+  { immediate: true },
+)
+
+watch(
+  () => selectedNode.value?.dynamicMesh?.type,
+  (type) => {
+    if (type !== 'Ground') {
+      groundDefaultPreviewThumbnail.value = null
+      return
+    }
+    const token = ++groundDefaultPreviewToken
+    void (async () => {
+      const thumbnail = await renderMaterialThumbnailDataUrl({
+        material: {
+          name: 'Ground Material',
+          type: 'MeshStandardMaterial',
+          ...GROUND_DEFAULT_MATERIAL_PROPS,
+        },
+        width: 50,
+        height: 50,
+      })
+      if (token === groundDefaultPreviewToken) {
+        groundDefaultPreviewThumbnail.value = thumbnail
+      }
+    })()
   },
   { immediate: true },
 )
@@ -140,9 +191,23 @@ function resolveMaterialAssetThumbnail(assetId: string | null | undefined): stri
 }
 
 function getMaterialPreviewThumbnail(entry: SceneNodeMaterial): string | null {
+  const isGroundDefaultSlot =
+    selectedNode.value?.dynamicMesh?.type === 'Ground'
+    && (entry.name === 'Ground Material' || entry.name === 'Ground Sculpted Material')
+  if (isGroundDefaultSlot) {
+    return groundDefaultPreviewThumbnail.value
+  }
+  if (typeof entry.thumbnail === 'string' && entry.thumbnail.trim().length) {
+    return entry.thumbnail.trim()
+  }
   const localThumbnail = materialPreviewThumbnails.value[entry.id]
   if (typeof localThumbnail === 'string' && localThumbnail.trim().length) {
     return localThumbnail.trim()
+  }
+  const asset = sceneStore.getAsset(entry.id)
+  const assetThumbnail = assetCacheStore.resolveAssetThumbnail({ asset, assetId: entry.id })
+  if (typeof assetThumbnail === 'string' && assetThumbnail.trim().length) {
+    return assetThumbnail.trim()
   }
   return null
 }
@@ -323,9 +388,9 @@ async function handleMaterialAssetPicked(asset: ProjectAsset | null) {
     return
   }
   if (!asset) {
-    clearMaterialPreviewThumbnail(slotId)
-    const reset = sceneStore.resetNodeMaterialSlotToDefault(selectedNodeId.value, slotId)
+    const reset = await sceneStore.resetNodeMaterialSlotToDefault(selectedNodeId.value, slotId)
     if (reset) {
+      setMaterialPreviewThumbnail(slotId, reset.thumbnail ?? groundDefaultPreviewThumbnail.value ?? null)
       setActiveSlot(slotId)
       emit('open-details', slotId)
     }
@@ -338,7 +403,7 @@ async function handleMaterialAssetPicked(asset: ProjectAsset | null) {
   if (!applied) {
     return
   }
-  setMaterialPreviewThumbnail(slotId, resolveMaterialAssetThumbnail(asset.id) ?? asset.thumbnail)
+  setMaterialPreviewThumbnail(slotId, applied.thumbnail ?? resolveMaterialAssetThumbnail(asset.id) ?? asset.thumbnail)
   setActiveSlot(slotId)
 }
 
@@ -460,7 +525,7 @@ async function handleListDrop(event: DragEvent) {
   }
   const assigned = await sceneStore.applyMaterialAssetToNodeMaterialSlot(selectedNodeId.value, newSlot.id, asset.id)
   if (assigned) {
-    setMaterialPreviewThumbnail(newSlot.id, resolveMaterialAssetThumbnail(asset.id) ?? asset.thumbnail)
+    setMaterialPreviewThumbnail(newSlot.id, assigned.thumbnail ?? resolveMaterialAssetThumbnail(asset.id) ?? asset.thumbnail)
     setActiveSlot(newSlot.id)
     emit('open-details', newSlot.id)
   }

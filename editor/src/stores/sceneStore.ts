@@ -161,6 +161,7 @@ import {
   buildFloorDynamicMeshPresetPatch,
   buildFloorNodeMaterialsFromPreset,
 } from '@/utils/floorPresetNodeMaterials'
+import { createRoadNodeMaterials } from '@/utils/roadNodeMaterials'
 import { buildRoadNodeMaterialsFromPreset } from '@/utils/roadPresetNodeMaterials'
 import { createWallNodeMaterials } from '@/utils/wallNodeMaterials'
 import type {
@@ -1596,13 +1597,94 @@ function findDefaultSceneMaterial(materials: SceneMaterial[]): SceneMaterial | n
 
 function createNodeMaterial(
   props: SceneMaterialProps,
-  options: { id?: string; name?: string; type?: SceneMaterialType } = {},
+  options: { id?: string; name?: string; type?: SceneMaterialType; thumbnail?: string | null } = {},
 ): SceneNodeMaterial {
   return {
     id: options.id ?? generateUuid(),
     name: options.name,
     type: options.type ?? 'MeshStandardMaterial',
+    thumbnail: options.thumbnail ?? undefined,
     ...cloneMaterialProps(props),
+  }
+}
+
+async function renderNodeMaterialThumbnail(
+  material: SceneMaterialProps & {
+    name: string
+    type: SceneMaterialType
+    thumbnail?: string | null
+  },
+  getAsset: (assetId: string) => ProjectAsset | null,
+): Promise<string | null> {
+  const assetCache = useAssetCacheStore()
+  try {
+    return await renderMaterialThumbnailDataUrl({
+      material,
+      resolveTexture: createMaterialAssetTextureResolver({
+        assetCacheStore: assetCache,
+        getAsset,
+      }),
+      width: ASSET_THUMBNAIL_WIDTH,
+      height: ASSET_THUMBNAIL_HEIGHT,
+    })
+  } catch (error) {
+    console.warn('Failed to generate node material thumbnail', material.name ?? material.type, error)
+    return null
+  }
+}
+
+function resolveDefaultNodeMaterialForReset(
+  node: SceneNode,
+  slotIndex: number,
+): { props: SceneMaterialProps; name?: string; type?: SceneMaterialType } | null {
+  const selectTemplate = (materials: SceneNodeMaterial[]): SceneNodeMaterial | null =>
+    materials[slotIndex] ?? materials[0] ?? null
+
+  const createGroundResetMaterials = (): SceneNodeMaterial[] => {
+    const groundProps = createMaterialProps({
+      color: '#707070',
+    })
+    return [
+      createNodeMaterial(groundProps, {
+        name: 'Ground Material',
+        type: 'MeshStandardMaterial',
+      }),
+      createNodeMaterial(groundProps, {
+        name: 'Ground Sculpted Material',
+        type: 'MeshStandardMaterial',
+      }),
+    ]
+  }
+
+  const defaultTemplate = (() => {
+    switch (node.dynamicMesh?.type) {
+      case 'Wall':
+        return selectTemplate(createWallNodeMaterials({ bodyName: 'Body' }))
+      case 'Floor':
+        return selectTemplate(createFloorNodeMaterials({
+          topBottomName: 'TopBottom',
+          sideName: 'Side',
+        }))
+      case 'Road':
+        return selectTemplate(createRoadNodeMaterials())
+      case 'Landform':
+        return selectTemplate(createLandformNodeMaterials({ surfaceName: 'Surface' }))
+      case 'Ground':
+        return selectTemplate(createGroundResetMaterials())
+      default:
+        return null
+    }
+  })()
+
+  if (!defaultTemplate) {
+    return null
+  }
+
+  const { id: _ignoredId, name, type, ...props } = defaultTemplate
+  return {
+    props: props as SceneMaterialProps,
+    name,
+    type,
   }
 }
 
@@ -1611,6 +1693,7 @@ function cloneNodeMaterial(material: SceneNodeMaterial): SceneNodeMaterial {
     id: material.id,
     name: material.name,
     type: material.type ?? 'MeshStandardMaterial',
+    thumbnail: material.thumbnail ?? null,
   })
 }
 
@@ -10477,6 +10560,7 @@ export const useSceneStore = defineStore('scene', {
             id: entry.id,
             name: entry.name,
             type: entry.type,
+            thumbnail: entry.thumbnail ?? null,
           })
         })
         const landformResult = landformHelpers.ensureLandformMaterialConvention(node)
@@ -10513,6 +10597,7 @@ export const useSceneStore = defineStore('scene', {
             id: entry.id,
             name: entry.name,
             type: type,
+            thumbnail: entry.thumbnail ?? null,
           })
         })
         const landformResult = landformHelpers.ensureLandformMaterialConvention(node)
@@ -10564,6 +10649,7 @@ export const useSceneStore = defineStore('scene', {
             id: entry.id,
             name: fallbackName,
             type: entry.type,
+            thumbnail: entry.thumbnail ?? null,
           })
         })
         const floorResult = floorHelpers.ensureFloorMaterialConvention(node)
@@ -10727,6 +10813,7 @@ export const useSceneStore = defineStore('scene', {
       if (!material) {
         return null
       }
+      const sourceAsset = this.getAsset(normalizedAssetId)
 
       let updated = false
       let requiresDynamicMeshPatch = false
@@ -10744,10 +10831,12 @@ export const useSceneStore = defineStore('scene', {
           updated = true
           const fallbackName = entry.name?.trim() || `Material ${index + 1}`
           const resolvedName = material.name?.trim() || fallbackName
+          const thumbnail = sourceAsset?.thumbnail ?? null
           const nextEntry = createNodeMaterial(material, {
             id: entry.id,
             name: resolvedName,
             type: material.type ?? entry.type ?? DEFAULT_SCENE_MATERIAL_TYPE,
+            thumbnail,
           })
           appliedEntry = nextEntry
           return nextEntry
@@ -10788,14 +10877,29 @@ export const useSceneStore = defineStore('scene', {
         }
       }
 
+      const appliedMaterial = appliedEntry as (SceneNodeMaterial & { thumbnail?: string | null; name?: string }) | null
+      const appliedThumbnail = appliedMaterial?.thumbnail ?? null
+      if (appliedMaterial && !appliedThumbnail) {
+        const renderedThumbnail = await renderNodeMaterialThumbnail({
+          ...appliedMaterial,
+          name: appliedMaterial.name ?? 'Material',
+          type: appliedMaterial.type,
+        }, (assetId: string) => this.getAsset(assetId))
+        if (renderedThumbnail) {
+          appliedMaterial.thumbnail = renderedThumbnail
+        }
+      }
+
       this.queueSceneNodePatch(nodeId, ['materials'])
+      commitSceneSnapshot(this)
       return appliedEntry
     },
-    resetNodeMaterialSlotToDefault(nodeId: string, nodeMaterialId: string): SceneNodeMaterial | null {
+    async resetNodeMaterialSlotToDefault(nodeId: string, nodeMaterialId: string): Promise<SceneNodeMaterial | null> {
       const targetNode = findNodeById(this.nodes, nodeId)
       if (!targetNode || !nodeSupportsMaterials(targetNode) || !targetNode.materials?.length) {
         return null
       }
+      const isGroundNode = targetNode.dynamicMesh?.type === 'Ground'
 
       const defaultMaterial = findDefaultSceneMaterial(this.materials)
       const defaultProps = defaultMaterial ? createMaterialProps(defaultMaterial) : createMaterialProps()
@@ -10815,11 +10919,20 @@ export const useSceneStore = defineStore('scene', {
           }
           updated = true
           const fallbackName = entry.name?.trim() || `Material ${index + 1}`
-          const nextEntry = createNodeMaterial(defaultProps, {
-            id: entry.id,
-            name: defaultMaterial?.name?.trim() || fallbackName,
-            type: defaultMaterial?.type ?? DEFAULT_SCENE_MATERIAL_TYPE,
-          })
+          const defaultTemplate = resolveDefaultNodeMaterialForReset(node, index)
+          const nextEntry = defaultTemplate
+            ? createNodeMaterial(defaultTemplate.props, {
+                id: entry.id,
+                name: defaultTemplate.name?.trim() || fallbackName,
+                type: defaultTemplate.type ?? DEFAULT_SCENE_MATERIAL_TYPE,
+                thumbnail: undefined,
+              })
+            : createNodeMaterial(defaultProps, {
+                id: entry.id,
+                name: defaultMaterial?.name?.trim() || fallbackName,
+                type: defaultMaterial?.type ?? DEFAULT_SCENE_MATERIAL_TYPE,
+                thumbnail: undefined,
+              })
           resetEntry = nextEntry
           return nextEntry
         })
@@ -10835,6 +10948,19 @@ export const useSceneStore = defineStore('scene', {
         return null
       }
 
+      const resetMaterial = resetEntry as (SceneNodeMaterial & { thumbnail?: string | null; name?: string }) | null
+      if (resetMaterial && !isGroundNode && !resetMaterial.thumbnail) {
+        const renderedThumbnail = await renderNodeMaterialThumbnail({
+          ...resetMaterial,
+          name: resetMaterial.name ?? 'Material',
+          type: resetMaterial.type,
+        }, (assetId: string) => this.getAsset(assetId))
+        if (renderedThumbnail) {
+          resetMaterial.thumbnail = renderedThumbnail
+        }
+      } else if (resetMaterial && isGroundNode) {
+        resetMaterial.thumbnail = null
+      }
       this.queueSceneNodePatch(nodeId, ['materials'])
       if (requiresDynamicMeshPatch) {
         this.queueSceneNodePatch(nodeId, ['dynamicMesh'])

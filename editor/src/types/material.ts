@@ -5,9 +5,12 @@ export type {
   SceneMaterialTextureRef,
   SceneMaterialTextureSettings,
   SceneMaterialType,
-  SceneNodeMaterial,
   SceneTextureWrapMode,
 } from '@schema/core'
+
+export type SceneNodeMaterial = import('@schema/core').SceneNodeMaterial & {
+  thumbnail?: string | null
+}
 
 export {
   cloneTextureSettings,

@@ -17,9 +17,7 @@ export type PrepareRuntimeGroundSplatSceneDocumentResult = {
   landformNodeCount: number
 }
 function cloneSceneJsonExportDocument(document: SceneJsonExportDocument): SceneJsonExportDocument {
-  if (typeof structuredClone === 'function') {
-    return structuredClone(document) as SceneJsonExportDocument
-  }
+
   return JSON.parse(JSON.stringify(document)) as SceneJsonExportDocument
 }
 
@@ -28,9 +26,6 @@ function cloneGroundSurfaceChunkTextureMap(
 ): GroundSurfaceChunkTextureMap | null {
   if (!value || Object.keys(value).length <= 0) {
     return null
-  }
-  if (typeof structuredClone === 'function') {
-    return structuredClone(value) as GroundSurfaceChunkTextureMap
   }
   return JSON.parse(JSON.stringify(value)) as GroundSurfaceChunkTextureMap
 }

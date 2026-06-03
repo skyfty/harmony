@@ -679,6 +679,7 @@ export interface SceneNodeMaterial extends SceneMaterialProps {
   id: string;
   type: SceneMaterialType;
   name?: string;
+  thumbnail?: string | null;
 }
 export type AssetSourceMetadata =
   | {
