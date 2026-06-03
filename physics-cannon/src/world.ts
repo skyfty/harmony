@@ -48,6 +48,8 @@ type CharacterState = {
   body: CANNON.Body
   input: PhysicsCharacterInputCommand | null
   motorState: ReturnType<typeof createPhysicsCharacterMotorState>
+  groundProbeRadius: number
+  groundProbeBaseOffsetY: number
 }
 
 const DEFAULT_WORLD_SETTINGS: PhysicsWorldSettings = {
@@ -114,6 +116,12 @@ export class CannonPhysicsWorld {
       if (!body) {
         return
       }
+      const groundProbe = resolveCharacterGroundProbeGeometry(body, character)
+      body.material = new CANNON.Material(`character:${character.characterId}`)
+      body.material.friction = 0
+      body.material.restitution = 0
+      body.linearDamping = 0
+      body.angularDamping = 0
       body.fixedRotation = true
       body.updateMassProperties()
       body.angularVelocity.set(0, 0, 0)
@@ -123,6 +131,8 @@ export class CannonPhysicsWorld {
         body,
         input: null,
         motorState: createPhysicsCharacterMotorState(),
+        groundProbeRadius: groundProbe.radius,
+        groundProbeBaseOffsetY: groundProbe.baseOffsetY,
       })
     })
     return {
@@ -442,11 +452,10 @@ export class CannonPhysicsWorld {
     normal?: [number, number, number]
   } {
     const body = characterState.body
-    const radius = Math.max(0.05, characterState.desc.radius)
-    const halfHeight = Math.max(radius, characterState.desc.height * 0.5)
+    const radius = Math.max(0.05, characterState.groundProbeRadius)
     const probeRise = Math.max(0.08, Math.min(0.4, characterState.desc.stepHeight + 0.05))
     const probeDepth = Math.max(0.2, characterState.desc.stepHeight + radius + 0.12)
-    const baseY = body.position.y - halfHeight + radius
+    const baseY = body.position.y + characterState.groundProbeBaseOffsetY
     const offsets = resolveCharacterProbeOffsets(radius)
     const candidates = [
       ...this.bodies.values(),
@@ -732,6 +741,46 @@ export class CannonPhysicsWorld {
         state.body.wakeUp()
       }
     })
+  }
+}
+
+function resolveCharacterGroundProbeGeometry(
+  body: CANNON.Body,
+  desc: PhysicsCharacterDesc,
+): { radius: number; baseOffsetY: number } {
+  let radius = Math.max(0.05, desc.radius)
+  let baseOffsetY = -Math.max(radius, desc.height * 0.5) + radius
+  let foundShape = false
+  body.shapes.forEach((shape, index) => {
+    const offset = body.shapeOffsets[index] ?? new CANNON.Vec3()
+    if (shape instanceof CANNON.Box) {
+      const halfExtents = shape.halfExtents
+      radius = Math.max(radius, halfExtents.x, halfExtents.z)
+      baseOffsetY = foundShape
+        ? Math.min(baseOffsetY, offset.y - halfExtents.y)
+        : offset.y - halfExtents.y
+      foundShape = true
+      return
+    }
+    if (shape instanceof CANNON.Sphere) {
+      const sphereRadius = Math.max(0.05, shape.radius)
+      radius = Math.max(radius, sphereRadius)
+      baseOffsetY = foundShape
+        ? Math.min(baseOffsetY, offset.y - sphereRadius)
+        : offset.y - sphereRadius
+      foundShape = true
+      return
+    }
+    const boundRadius = Math.max(0.05, shape.boundingSphereRadius || radius)
+    radius = Math.max(radius, boundRadius)
+    baseOffsetY = foundShape
+      ? Math.min(baseOffsetY, offset.y - boundRadius)
+      : offset.y - boundRadius
+    foundShape = true
+  })
+  return {
+    radius,
+    baseOffsetY,
   }
 }
 

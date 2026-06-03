@@ -334,8 +334,26 @@ class ParticleSystemRuntimeController implements ParticleSystemRuntimeHandle {
       return
     }
     const burstCount = Math.max(0, Math.min(count ?? this.props.exposedParams.burstCount, this.props.budget.maxParticles))
-    if (typeof target.emitter.emit === 'function') {
-      target.emitter.emit(burstCount)
+    const emitter = target.emitter as {
+      particles?: Array<unknown>
+      isEmitting?: boolean
+      createParticle?: () => unknown
+      emit?: (totalEmitTimes?: number, life?: number) => unknown
+    }
+    if (typeof emitter.isEmitting === 'boolean' && !emitter.isEmitting) {
+      emitter.isEmitting = true
+    }
+    const currentParticles = Array.isArray(emitter.particles) ? emitter.particles.length : 0
+    const availableParticles = Math.max(0, this.props.budget.maxParticles - currentParticles)
+    const createCount = Math.min(burstCount, availableParticles)
+    if (typeof emitter.createParticle === 'function') {
+      let createdParticles = 0
+      while (createdParticles < createCount) {
+        emitter.createParticle()
+        createdParticles += 1
+      }
+    } else if (typeof emitter.emit === 'function') {
+      emitter.emit(Math.max(1, burstCount))
     } else if (this.system && typeof this.system.emit === 'function') {
       this.system.emit({
         totalTime: 0.05,

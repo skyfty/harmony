@@ -199,6 +199,7 @@ import {
 	groundAnchorComponentDefinition,
 	nominateComponentDefinition,
 	SIGNBOARD_COMPONENT_TYPE,
+	PARTICLE_SYSTEM_COMPONENT_TYPE,
 	applyNominateStateMapToRuntime,
 	type NominateExternalStateMap,
 	GUIDEBOARD_COMPONENT_TYPE,
@@ -230,6 +231,7 @@ import {
 	DEFAULT_CHARACTER_CAMERA_FOLLOW_HEIGHT,
 	writeCharacterLocalForward,
 	SCENE_STATE_ANCHOR_COMPONENT_TYPE,
+	type ParticleSystemComponentProps,
 	} from '@schema/components'
 import { characterControllerComponentDefinition } from '@schema/components/definitions/characterControllerComponent'
 import { CharacterControllerAnimationRuntimeManager } from '@schema/characterControllerAnimationRuntime'
@@ -480,7 +482,10 @@ const isRendererDebugVisible = ref(false)
 const isInstancingDebugVisible = ref(false)
 const isGroundChunkStatsVisible = ref(false)
 const isDebugOverlayVisible = computed(
-	() => isRendererDebugVisible.value || isInstancingDebugVisible.value || isGroundChunkStatsVisible.value,
+	() =>
+		isRendererDebugVisible.value ||
+		isInstancingDebugVisible.value ||
+		isGroundChunkStatsVisible.value,
 )
 
 const instancedLodVisibleCount = ref(0)
@@ -2187,6 +2192,8 @@ const signboardAnchorScratch = new THREE.Vector3()
 const overlayDistanceReferenceScratch = new THREE.Vector3()
 const overlayDistanceTargetAnchorScratch = new THREE.Vector3()
 const overlayDistanceReferenceAnchorScratch = new THREE.Vector3()
+const particleDebugWorldScratch = new THREE.Vector3()
+const particleDebugCameraScratch = new THREE.Vector3()
 const behaviorBubbleAnchorScratch = new THREE.Vector3()
 const behaviorBubbleCameraScratch = new THREE.Vector3()
 const behaviorBubbleSeenKeys = new Set<string>()
@@ -6661,6 +6668,9 @@ function flushParticleRuntimeCommands(): void {
 			return
 		}
 		const registry = object.userData?.[PARTICLE_SYSTEM_RUNTIME_REGISTRY_KEY] as Record<string, unknown> | undefined
+		if (!registry || !Object.keys(registry).length) {
+			return
+		}
 		applyParticleRuntimeCommand(registry as any, {
 			type: command.type,
 			componentId: command.componentId ?? null,
@@ -15415,6 +15425,60 @@ watch(
 	display: flex;
 	flex-direction: column;
 	gap: 6px;
+}
+
+.scene-preview__particle-debug-card {
+	display: grid;
+	gap: 6px;
+	padding: 10px 12px;
+	border-radius: 10px;
+	background: rgba(14, 18, 30, 0.96);
+	box-shadow: 0 8px 22px rgba(0, 0, 0, 0.3);
+	border: 1px solid rgba(255, 255, 255, 0.08);
+	color: #f0f4ff;
+	max-width: 420px;
+}
+
+.scene-preview__particle-debug-head {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 10px;
+}
+
+.scene-preview__particle-debug-title {
+	font-size: 0.82rem;
+	font-weight: 600;
+	line-height: 1.25;
+}
+
+.scene-preview__particle-debug-status {
+	font-size: 0.7rem;
+	font-weight: 700;
+	text-transform: uppercase;
+	letter-spacing: 0.08em;
+	white-space: nowrap;
+}
+
+.scene-preview__particle-debug-status--ok {
+	color: #8cffc8;
+}
+
+.scene-preview__particle-debug-status--warn {
+	color: #ffd38a;
+}
+
+.scene-preview__particle-debug-status--danger {
+	color: #ff9a9a;
+}
+
+.scene-preview__particle-debug-meta {
+	display: grid;
+	gap: 2px;
+	font-size: 0.73rem;
+	line-height: 1.4;
+	color: rgba(240, 244, 255, 0.82);
+	font-family: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
 }
 
 .scene-preview__preload-overlay {
