@@ -22,6 +22,7 @@ export type ParticleRuntimeRegistryEntry = {
   props: ParticleSystemComponentProps
   play(): void
   stop(options?: { soft?: boolean }): void
+  restart(): void
   burst(count?: number, emitterId?: string): void
   tick(delta: number, frameState?: { cameraWorldPosition: { x: number; y: number; z: number } | null }, runtimeStats?: ParticleBudgetRuntimeStats): void
   setPlaybackActive(active: boolean): void
@@ -123,6 +124,30 @@ function getBlendMode(mode: ParticleSystemComponentProps['render']['blendMode'])
     return THREE.NormalBlending
   }
   return THREE.AdditiveBlending
+}
+
+function isWeatherParticlePreset(presetId: string): boolean {
+  return presetId.includes('rain') || presetId.includes('snow')
+}
+
+function resolveWeatherGravityStrength(presetId: string): number {
+  if (presetId.includes('rain')) {
+    return presetId.includes('heavy') ? 15.5 : 12.5
+  }
+  if (presetId.includes('snow')) {
+    return presetId.includes('blizzard') ? 4.1 : 3.2
+  }
+  return 0
+}
+
+function resolveWeatherGroundThreshold(presetId: string): number {
+  if (presetId.includes('rain')) {
+    return 0.12
+  }
+  if (presetId.includes('snow')) {
+    return 0.2
+  }
+  return 0
 }
 
 function prepareParticleTexture(texture: THREE.Texture, cacheKey: string): THREE.Texture {
@@ -289,6 +314,56 @@ class ParticleSystemRuntimeController implements ParticleSystemRuntimeHandle {
     this.group.scale.setScalar(scaleMultiplier)
   }
 
+  private applyWeatherGravity(): void {
+    if (!isWeatherParticlePreset(this.props.presetId)) {
+      return
+    }
+    const gravityStrength = resolveWeatherGravityStrength(this.props.presetId)
+    if (gravityStrength <= 0) {
+      return
+    }
+    for (const entry of this.emitters) {
+      const particles = entry.emitter?.particles
+      if (!Array.isArray(particles) || !particles.length) {
+        continue
+      }
+      for (const particle of particles as Array<{ dead?: boolean; sleep?: boolean; acceleration?: { y?: number } }>) {
+        if (!particle || particle.dead || particle.sleep || !particle.acceleration) {
+          continue
+        }
+        particle.acceleration.y = (particle.acceleration.y ?? 0) - gravityStrength
+      }
+    }
+  }
+
+  private cullWeatherParticlesBelowGround(): void {
+    if (!isWeatherParticlePreset(this.props.presetId)) {
+      return
+    }
+    const groundThreshold = resolveWeatherGroundThreshold(this.props.presetId)
+    this.group.getWorldPosition(this.tempWorldPosition)
+    const groundY = this.tempWorldPosition.y
+    for (const entry of this.emitters) {
+      const particles = entry.emitter?.particles
+      if (!Array.isArray(particles) || !particles.length) {
+        continue
+      }
+      for (const particle of particles as Array<{ dead?: boolean; sleep?: boolean; position?: { y?: number }; destroy?: () => void }>) {
+        if (!particle || particle.dead || particle.sleep || !particle.position) {
+          continue
+        }
+        const particleY = particle.position.y ?? Number.POSITIVE_INFINITY
+        if (particleY <= groundY + groundThreshold) {
+          if (typeof particle.destroy === 'function') {
+            particle.destroy()
+          } else {
+            particle.dead = true
+          }
+        }
+      }
+    }
+  }
+
   private buildSystem(): void {
     this.disposeSystemOnly()
     this.system = new System()
@@ -411,6 +486,14 @@ class ParticleSystemRuntimeController implements ParticleSystemRuntimeHandle {
     this.updateUserData()
   }
 
+  restart(): void {
+    if (this.disposed) {
+      return
+    }
+    this.stop({ soft: false })
+    this.buildSystem()
+  }
+
   burst(count?: number, emitterId?: string): void {
     const target = emitterId ? this.emitters.find((entry) => entry.id === emitterId) : this.emitters[0]
     if (!target?.emitter) {
@@ -504,7 +587,9 @@ class ParticleSystemRuntimeController implements ParticleSystemRuntimeHandle {
     }
     const step = this.updateAccumulator
     this.updateAccumulator = 0
+    this.applyWeatherGravity()
     this.system.update(step)
+    this.cullWeatherParticlesBelowGround()
   }
 
   dispose(): void {

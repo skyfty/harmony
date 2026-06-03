@@ -3,16 +3,18 @@ import { computed, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import type { SceneNodeComponentState } from '@schema/core'
 import AssetPickerDialog from '@/components/common/AssetPickerDialog.vue'
-import { useSceneStore } from '@/stores/sceneStore'
+import { getRuntimeObject, useSceneStore } from '@/stores/sceneStore'
 import type { ProjectAsset } from '@/types/project-asset'
 import { generateUuid } from '@/utils/uuid'
 import {
   PARTICLE_SYSTEM_COMPONENT_TYPE,
+  PARTICLE_SYSTEM_RUNTIME_REGISTRY_KEY,
   clampParticleSystemComponentProps,
   cloneParticleSystemComponentProps,
   createParticlePresetProps,
   listParticlePresetGroups,
   listParticlePresets,
+  type ParticleSystemRuntimeHandle,
   type ParticleSystemComponentProps,
 } from '@schema/components'
 
@@ -86,6 +88,7 @@ const textureAssetWarning = computed(() => {
   return ''
 })
 const presetMenuOpen = ref(false)
+const previewRuntimeAvailable = computed(() => Boolean(resolveSelectedParticleRuntime()))
 type ParticleEmitterConfig = ParticleSystemComponentProps['emitters'][number]
 type ParticleSystemPatch = {
   [K in keyof ParticleSystemComponentProps]?: K extends 'playback'
@@ -196,6 +199,40 @@ function handleTextureAssetDialogUpdate(asset: ProjectAsset | null) {
 
 function handleTextureAssetDialogCancel() {
   textureAssetDialogVisible.value = false
+}
+
+function resolveSelectedParticleRuntime(): ParticleSystemRuntimeHandle | null {
+  const nodeId = selectedNodeId.value
+  const component = componentState.value
+  if (!nodeId || !component) {
+    return null
+  }
+  const runtimeObject = getRuntimeObject(nodeId)
+  if (!runtimeObject) {
+    return null
+  }
+  const registry = runtimeObject.userData?.[PARTICLE_SYSTEM_RUNTIME_REGISTRY_KEY] as
+    | Record<string, ParticleSystemRuntimeHandle>
+    | undefined
+  if (!registry) {
+    return null
+  }
+  return registry[component.id] ?? null
+}
+
+function handlePreviewParticleEffect() {
+  const runtime = resolveSelectedParticleRuntime()
+  if (!runtime) {
+    return
+  }
+  const props = normalizedProps.value
+  const shouldBurst = !props.playback.loop || props.exposedParams.emissionRate <= 0
+  runtime.restart()
+  if (shouldBurst) {
+    runtime.burst(props.exposedParams.burstCount)
+    return
+  }
+  runtime.play()
 }
 
 function handleColorInput(value: string | null) {
@@ -425,61 +462,73 @@ function handleRemoveComponent() {
     <v-expansion-panel-text>
       <div class="particle-system-panel">
         <div class="particle-system-panel__section">
-          <v-menu
-            v-model="presetMenuOpen"
-            location="bottom start"
-            :close-on-content-click="false"
-          >
-            <template #activator="{ props }">
-              <v-btn
-                v-bind="props"
-                block
-                variant="outlined"
-                class="particle-system-panel__preset-button"
-                :disabled="!componentEnabled"
-                append-icon="mdi-menu-down"
-              >
-                {{ selectedPresetLabel }}
-              </v-btn>
-            </template>
-            <v-list class="particle-system-panel__preset-menu" density="compact" min-width="300">
-              <v-list-group
-                v-for="group in presetGroups"
-                :key="group.category"
-                :value="group.category"
-              >
-                <template #activator="{ props: groupProps }">
-                  <v-list-item
-                    v-bind="groupProps"
-                    :title="group.label"
-                    prepend-icon="mdi-folder-outline"
-                  />
-                </template>
-                <v-list-group
-                  v-for="subgroup in group.subgroups"
-                  :key="`${group.category}:${subgroup.subcategory}`"
-                  :value="`${group.category}:${subgroup.subcategory}`"
+          <div class="particle-system-panel__preset-row">
+            <v-menu
+              v-model="presetMenuOpen"
+              location="bottom start"
+              :close-on-content-click="false"
+            >
+              <template #activator="{ props }">
+                <v-btn
+                  v-bind="props"
+                  block
+                  variant="outlined"
+                  class="particle-system-panel__preset-button"
+                  :disabled="!componentEnabled"
+                  append-icon="mdi-menu-down"
                 >
-                  <template #activator="{ props: subgroupProps }">
+                  {{ selectedPresetLabel }}
+                </v-btn>
+              </template>
+              <v-list class="particle-system-panel__preset-menu" density="compact" min-width="300">
+                <v-list-group
+                  v-for="group in presetGroups"
+                  :key="group.category"
+                  :value="group.category"
+                >
+                  <template #activator="{ props: groupProps }">
                     <v-list-item
-                      v-bind="subgroupProps"
-                      :title="subgroup.label"
-                      prepend-icon="mdi-folder-open-outline"
-                      class="particle-system-panel__preset-subgroup"
+                      v-bind="groupProps"
+                      :title="group.label"
+                      prepend-icon="mdi-folder-outline"
                     />
                   </template>
-                  <v-list-item
-                    v-for="preset in subgroup.presets"
-                    :key="preset.id"
-                    :title="preset.label"
-                    :subtitle="preset.description"
-                    class="particle-system-panel__preset-item"
-                    @click.stop="applyPreset(preset.id)"
-                  />
+                  <v-list-group
+                    v-for="subgroup in group.subgroups"
+                    :key="`${group.category}:${subgroup.subcategory}`"
+                    :value="`${group.category}:${subgroup.subcategory}`"
+                  >
+                    <template #activator="{ props: subgroupProps }">
+                      <v-list-item
+                        v-bind="subgroupProps"
+                        :title="subgroup.label"
+                        prepend-icon="mdi-folder-open-outline"
+                        class="particle-system-panel__preset-subgroup"
+                      />
+                    </template>
+                    <v-list-item
+                      v-for="preset in subgroup.presets"
+                      :key="preset.id"
+                      :title="preset.label"
+                      :subtitle="preset.description"
+                      class="particle-system-panel__preset-item"
+                      @click.stop="applyPreset(preset.id)"
+                    />
+                  </v-list-group>
                 </v-list-group>
-              </v-list-group>
-            </v-list>
-          </v-menu>
+              </v-list>
+            </v-menu>
+            <v-btn
+              icon
+              variant="tonal"
+              size="small"
+              class="particle-system-panel__preset-play"
+              :disabled="!componentEnabled || !previewRuntimeAvailable"
+              @click.stop="handlePreviewParticleEffect"
+            >
+              <v-icon size="18">mdi-play</v-icon>
+            </v-btn>
+          </div>
         </div>
 
         <div class="particle-system-panel__section">
@@ -996,6 +1045,18 @@ function handleRemoveComponent() {
 .particle-system-panel__section {
   display: grid;
   gap: 0.9rem;
+}
+
+.particle-system-panel__preset-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.particle-system-panel__preset-play {
+  width: 34px;
+  height: 34px;
 }
 
 .particle-system-panel__section-title {
