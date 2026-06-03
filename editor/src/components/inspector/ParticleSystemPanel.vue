@@ -490,65 +490,35 @@ function handleRemoveComponent() {
 
         <div class="particle-system-panel__section">
           <div class="particle-system-panel__section-title">Visual</div>
-          <div class="particle-system-panel__texture-slot">
-            <div class="particle-system-panel__texture-slot__preview">
-              <div
-                v-if="selectedTextureAsset?.thumbnail"
-                class="particle-system-panel__texture-thumb"
-                :style="{ backgroundImage: `url(${selectedTextureAsset.thumbnail})` }"
-              />
-              <div v-else class="particle-system-panel__texture-thumb particle-system-panel__texture-thumb--empty">
-                <v-icon size="20">mdi-image-outline</v-icon>
-              </div>
-            </div>
-            <div class="particle-system-panel__texture-slot__body">
-              <div class="particle-system-panel__texture-slot__title">{{ textureAssetLabel }}</div>
-              <div class="particle-system-panel__texture-slot__meta">{{ textureAssetMeta }}</div>
-              <div v-if="textureAssetWarning" class="particle-system-panel__texture-slot__warning">
+          <div class="particle-system-panel__texture-tile">
+            <button
+              type="button"
+              class="particle-system-panel__texture-thumb"
+              :class="{ 'particle-system-panel__texture-thumb--empty': !selectedTextureAsset?.thumbnail }"
+              :style="selectedTextureAsset?.thumbnail ? { backgroundImage: `url(${selectedTextureAsset.thumbnail})` } : undefined"
+              :disabled="!componentEnabled"
+              @click.stop="handleOpenTextureAssetDialog"
+            >
+              <v-icon v-if="!selectedTextureAsset?.thumbnail" size="20">mdi-image-outline</v-icon>
+            </button>
+            <div class="particle-system-panel__texture-info">
+              <div class="particle-system-panel__texture-name">{{ textureAssetLabel }}</div>
+              <div class="particle-system-panel__texture-label">{{ textureAssetMeta }}</div>
+              <div v-if="textureAssetWarning" class="particle-system-panel__texture-warning">
                 {{ textureAssetWarning }}
               </div>
             </div>
-            <div class="particle-system-panel__texture-slot__actions">
-              <v-btn
-                size="small"
-                variant="tonal"
-                :disabled="!componentEnabled"
-                @click.stop="handleOpenTextureAssetDialog"
-              >
-                Browse
-              </v-btn>
-              <v-btn
-                size="small"
-                variant="text"
-                :disabled="!componentEnabled || !textureAssetId"
-                @click.stop="handleClearTextureAsset"
-              >
-                Clear
-              </v-btn>
-            </div>
+            <v-btn
+              class="particle-system-panel__texture-remove"
+              icon
+              variant="text"
+              size="small"
+              :disabled="!componentEnabled || !textureAssetId"
+              @click.stop="handleClearTextureAsset"
+            >
+              <v-icon size="18">mdi-close</v-icon>
+            </v-btn>
           </div>
-          <v-text-field
-            :model-value="normalizedProps.render.textureAssetId ?? ''"
-            label="Texture Asset ID"
-            density="compact"
-            variant="underlined"
-            hide-details
-            placeholder="Use default soft circle texture"
-            :disabled="!componentEnabled"
-            @update:model-value="applyPatch({ render: { textureAssetId: String($event ?? '').trim() || null } })"
-          >
-            <template #append-inner>
-              <v-btn
-                icon
-                variant="text"
-                size="x-small"
-                :disabled="!componentEnabled"
-                @click.stop="handleOpenTextureAssetDialog"
-              >
-                <v-icon size="16">mdi-folder-multiple-image</v-icon>
-              </v-btn>
-            </template>
-          </v-text-field>
           <v-text-field
             :model-value="normalizedProps.exposedParams.color"
             label="Color"
@@ -907,7 +877,7 @@ function handleRemoveComponent() {
 <style scoped>
 .particle-system-panel {
   display: grid;
-  gap: 0.9rem;
+  gap: 1.1rem;
 }
 
 .particle-system-panel__header {
@@ -918,7 +888,7 @@ function handleRemoveComponent() {
 
 .particle-system-panel__section {
   display: grid;
-  gap: 0.45rem;
+  gap: 0.72rem;
 }
 
 .particle-system-panel__section-title {
@@ -953,28 +923,23 @@ function handleRemoveComponent() {
 .particle-system-panel__emitter-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.5rem 0.75rem;
+  gap: 0.8rem 1rem;
 }
 
-.particle-system-panel__texture-slot {
+.particle-system-panel__texture-tile {
   display: grid;
   grid-template-columns: 48px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 0.75rem;
-  padding: 0.65rem 0.75rem;
+  gap: 0.85rem;
+  padding: 0.8rem 0.9rem;
   border: 1px solid rgba(140, 155, 175, 0.18);
   border-radius: 0.8rem;
   background: linear-gradient(180deg, rgba(19, 25, 35, 0.82), rgba(11, 15, 22, 0.92));
 }
 
-.particle-system-panel__texture-slot__preview {
-  width: 48px;
-  height: 48px;
-}
-
 .particle-system-panel__texture-thumb {
-  width: 48px;
-  height: 48px;
+  width: 52px;
+  height: 52px;
   border-radius: 0.6rem;
   background-size: cover;
   background-position: center;
@@ -983,20 +948,28 @@ function handleRemoveComponent() {
   display: grid;
   place-items: center;
   color: rgba(233, 236, 241, 0.72);
+  cursor: pointer;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease, transform 0.12s ease;
+}
+
+.particle-system-panel__texture-thumb:hover {
+  border-color: rgba(77, 208, 225, 0.75);
+  box-shadow: 0 0 0 1px rgba(77, 208, 225, 0.35);
+  transform: translateY(-1px);
 }
 
 .particle-system-panel__texture-thumb--empty {
   background-image: linear-gradient(135deg, rgba(90, 148, 255, 0.14), rgba(255, 255, 255, 0.03));
 }
 
-.particle-system-panel__texture-slot__body {
+.particle-system-panel__texture-info {
   display: grid;
-  gap: 0.16rem;
+  gap: 0.22rem;
   min-width: 0;
 }
 
-.particle-system-panel__texture-slot__title {
-  font-size: 0.88rem;
+.particle-system-panel__texture-name {
+  font-size: 0.9rem;
   font-weight: 600;
   color: rgba(233, 236, 241, 0.95);
   white-space: nowrap;
@@ -1004,22 +977,31 @@ function handleRemoveComponent() {
   text-overflow: ellipsis;
 }
 
-.particle-system-panel__texture-slot__meta {
-  font-size: 0.74rem;
+.particle-system-panel__texture-label {
+  font-size: 0.76rem;
   line-height: 1.35;
   color: rgba(233, 236, 241, 0.68);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.particle-system-panel__texture-slot__warning {
-  font-size: 0.72rem;
+.particle-system-panel__texture-warning {
+  font-size: 0.74rem;
   line-height: 1.35;
   color: #ffb86b;
 }
 
-.particle-system-panel__texture-slot__actions {
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
+.particle-system-panel :deep(.v-input) {
+  margin-bottom: 0.2rem;
+}
+
+.particle-system-panel :deep(.v-input:last-child) {
+  margin-bottom: 0;
+}
+
+.particle-system-panel__texture-remove {
+  color: rgba(233, 236, 241, 0.72);
 }
 
 .is-danger {
