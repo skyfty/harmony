@@ -299,7 +299,7 @@ function applyLaneLinesUpdate(rawValue: unknown) {
   if (component.props.laneLines === nextState) {
     return
   }
-  sceneStore.updateNodeComponentProps(nodeId, component.id, { laneLines: nextState })
+  sceneStore.updateNodeComponentProps(nodeId, component.id, { laneLines: nextState }, { autoSaveMode: 'interactive' })
 }
 
 function applyShouldersUpdate(rawValue: unknown) {
@@ -315,7 +315,7 @@ function applyShouldersUpdate(rawValue: unknown) {
   if (component.props.shoulders === nextState) {
     return
   }
-  sceneStore.updateNodeComponentProps(nodeId, component.id, { shoulders: nextState })
+  sceneStore.updateNodeComponentProps(nodeId, component.id, { shoulders: nextState }, { autoSaveMode: 'interactive' })
 }
 
 function applySnapToTerrainUpdate(rawValue: unknown) {
@@ -331,7 +331,7 @@ function applySnapToTerrainUpdate(rawValue: unknown) {
   if (component.props.snapToTerrain === nextState) {
     return
   }
-  sceneStore.updateNodeComponentProps(nodeId, component.id, { snapToTerrain: nextState })
+  sceneStore.updateNodeComponentProps(nodeId, component.id, { snapToTerrain: nextState }, { autoSaveMode: 'interactive' })
 }
 
 const junctionSmoothingDisplay = computed(() => `${Math.round(localJunctionSmoothing.value * 100)}%`)
@@ -412,7 +412,7 @@ function applyJunctionSmoothingUpdate(rawValue: unknown) {
   if (Math.abs(current - clamped) <= 1e-6) {
     return
   }
-  sceneStore.updateNodeComponentProps(nodeId, component.id, { junctionSmoothing: clamped })
+  sceneStore.updateNodeComponentProps(nodeId, component.id, { junctionSmoothing: clamped }, { autoSaveMode: 'interactive' })
 }
 
 function applyWidthUpdate(rawValue: unknown) {
@@ -436,7 +436,7 @@ function applyWidthUpdate(rawValue: unknown) {
     return
   }
 
-  sceneStore.updateNodeComponentProps(nodeId, component.id, { width: clamped })
+  sceneStore.updateNodeComponentProps(nodeId, component.id, { width: clamped }, { autoSaveMode: 'interactive' })
 }
 
 function applySamplingDensityUpdate(rawValue: unknown) {
@@ -457,7 +457,7 @@ function applySamplingDensityUpdate(rawValue: unknown) {
   if (Math.abs(current - clamped) <= 1e-6) {
     return
   }
-  sceneStore.updateNodeComponentProps(nodeId, component.id, { samplingDensityFactor: clamped })
+  sceneStore.updateNodeComponentProps(nodeId, component.id, { samplingDensityFactor: clamped }, { autoSaveMode: 'interactive' })
 }
 
 function applySmoothingStrengthUpdate(rawValue: unknown) {
@@ -478,7 +478,7 @@ function applySmoothingStrengthUpdate(rawValue: unknown) {
   if (Math.abs(current - clamped) <= 1e-6) {
     return
   }
-  sceneStore.updateNodeComponentProps(nodeId, component.id, { smoothingStrengthFactor: clamped })
+  sceneStore.updateNodeComponentProps(nodeId, component.id, { smoothingStrengthFactor: clamped }, { autoSaveMode: 'interactive' })
 }
 
 function applyMinClearanceUpdate(rawValue: unknown) {
@@ -499,7 +499,7 @@ function applyMinClearanceUpdate(rawValue: unknown) {
   if (Math.abs(current - clamped) <= 1e-6) {
     return
   }
-  sceneStore.updateNodeComponentProps(nodeId, component.id, { minClearance: clamped })
+  sceneStore.updateNodeComponentProps(nodeId, component.id, { minClearance: clamped }, { autoSaveMode: 'interactive' })
 }
 
 function applyLaneLineWidthUpdate(rawValue: unknown) {
@@ -521,7 +521,7 @@ function applyLaneLineWidthUpdate(rawValue: unknown) {
   ) {
     return
   }
-  sceneStore.updateNodeComponentProps(nodeId, component.id, { laneLineWidth: nextValue })
+  sceneStore.updateNodeComponentProps(nodeId, component.id, { laneLineWidth: nextValue }, { autoSaveMode: 'interactive' })
 }
 
 function applyShoulderWidthUpdate(rawValue: unknown) {
@@ -543,7 +543,7 @@ function applyShoulderWidthUpdate(rawValue: unknown) {
   ) {
     return
   }
-  sceneStore.updateNodeComponentProps(nodeId, component.id, { shoulderWidth: nextValue })
+  sceneStore.updateNodeComponentProps(nodeId, component.id, { shoulderWidth: nextValue }, { autoSaveMode: 'interactive' })
 }
 
 </script>

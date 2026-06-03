@@ -94,7 +94,10 @@ function handleImplementationModeChange(value: WaterImplementationMode) {
   applyWaterPatch({ implementationMode: value })
 }
 
-function applyWaterPatch(patch: Partial<WaterComponentProps>) {
+function applyWaterPatch(
+  patch: Partial<WaterComponentProps>,
+  options: { autoSaveMode?: 'structural' | 'interactive' } = {},
+) {
   if (!componentEnabled.value) {
     return
   }
@@ -103,7 +106,7 @@ function applyWaterPatch(patch: Partial<WaterComponentProps>) {
   if (!nodeId || !component) {
     return
   }
-  sceneStore.updateNodeComponentProps(nodeId, component.id, patch)
+  sceneStore.updateNodeComponentProps(nodeId, component.id, patch, { autoSaveMode: options.autoSaveMode })
 }
 
 function toCssHex(color: number): string {
@@ -213,7 +216,7 @@ watch(
     if (syncing.value || !componentEnabled.value || !Number.isFinite(value)) {
       return
     }
-    applyWaterPatch({ textureWidth: Math.max(WATER_MIN_TEXTURE_SIZE, Math.round(value)) })
+    applyWaterPatch({ textureWidth: Math.max(WATER_MIN_TEXTURE_SIZE, Math.round(value)) }, { autoSaveMode: 'interactive' })
   },
 )
 
@@ -223,7 +226,7 @@ watch(
     if (syncing.value || !componentEnabled.value || !Number.isFinite(value)) {
       return
     }
-    applyWaterPatch({ textureHeight: Math.max(WATER_MIN_TEXTURE_SIZE, Math.round(value)) })
+    applyWaterPatch({ textureHeight: Math.max(WATER_MIN_TEXTURE_SIZE, Math.round(value)) }, { autoSaveMode: 'interactive' })
   },
 )
 
@@ -233,7 +236,7 @@ watch(
     if (syncing.value || !componentEnabled.value || !Number.isFinite(value)) {
       return
     }
-    applyWaterPatch({ distortionScale: Math.max(WATER_MIN_DISTORTION_SCALE, value) })
+    applyWaterPatch({ distortionScale: Math.max(WATER_MIN_DISTORTION_SCALE, value) }, { autoSaveMode: 'interactive' })
   },
 )
 
@@ -243,7 +246,7 @@ watch(
     if (syncing.value || !componentEnabled.value || !Number.isFinite(value)) {
       return
     }
-    applyWaterPatch({ size: Math.max(WATER_MIN_SIZE, value) })
+    applyWaterPatch({ size: Math.max(WATER_MIN_SIZE, value) }, { autoSaveMode: 'interactive' })
   },
 )
 
@@ -253,7 +256,7 @@ watch(
     if (syncing.value || !componentEnabled.value || !Number.isFinite(value)) {
       return
     }
-    applyWaterPatch({ flowSpeed: Math.max(WATER_MIN_FLOW_SPEED, value) })
+    applyWaterPatch({ flowSpeed: Math.max(WATER_MIN_FLOW_SPEED, value) }, { autoSaveMode: 'interactive' })
   },
 )
 
@@ -266,7 +269,7 @@ function applyFlowDirection() {
   if (!Number.isFinite(x) || !Number.isFinite(y)) {
     return
   }
-  applyWaterPatch({ flowDirection: { x, y } })
+  applyWaterPatch({ flowDirection: { x, y } }, { autoSaveMode: 'interactive' })
 }
 
 function handleFlowDirectionInput(axis: 'x' | 'y', value: number) {

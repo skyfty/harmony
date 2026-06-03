@@ -92,7 +92,7 @@ function coerceNumber(value: number | number[]): number | null {
 
 function patchLight(
   properties: Partial<LightNodeProperties>,
-  options: { captureHistory?: boolean } = {},
+  options: { captureHistory?: boolean; autoSaveMode?: 'structural' | 'interactive' } = {},
 ) {
   const id = selectedNodeId.value
   if (!id || props.disabled || !selectedNode.value?.light) {
@@ -102,7 +102,7 @@ function patchLight(
 }
 
 function patchShadow(properties: Partial<LightShadowProperties>) {
-  patchLight({ shadow: properties })
+  patchLight({ shadow: properties }, { autoSaveMode: 'interactive' })
 }
 
 function setEnabled(enabled: boolean) {
@@ -179,7 +179,7 @@ function applyLightDirection(
         z: node.position.z + normalized.z * distance,
       },
     },
-    options,
+    { ...options, autoSaveMode: options.autoSaveMode ?? 'interactive' },
   )
 }
 
@@ -250,34 +250,34 @@ watch(
 function handleColorInput(event: Event) {
   const value = (event.target as HTMLInputElement).value
   lightForm.color = value
-  patchLight({ color: value })
+  patchLight({ color: value }, { autoSaveMode: 'interactive' })
 }
 
 function handleGroundColorInput(event: Event) {
   const value = (event.target as HTMLInputElement).value
   lightForm.groundColor = value
-  patchLight({ groundColor: value } as any)
+  patchLight({ groundColor: value } as any, { autoSaveMode: 'interactive' })
 }
 
 function handleIntensityChange(value: number | number[]) {
   const numeric = coerceNumber(value)
   if (numeric === null) return
   lightForm.intensity = numeric
-  patchLight({ intensity: numeric })
+  patchLight({ intensity: numeric }, { autoSaveMode: 'interactive' })
 }
 
 function handleDistanceChange(value: number | number[]) {
   const numeric = coerceNumber(value)
   if (numeric === null) return
   lightForm.distance = numeric
-  patchLight({ distance: numeric })
+  patchLight({ distance: numeric }, { autoSaveMode: 'interactive' })
 }
 
 function handleDecayChange(value: number | number[]) {
   const numeric = coerceNumber(value)
   if (numeric === null) return
   lightForm.decay = numeric
-  patchLight({ decay: numeric })
+  patchLight({ decay: numeric }, { autoSaveMode: 'interactive' })
 }
 
 function handleAngleChange(value: number | number[]) {
@@ -285,7 +285,7 @@ function handleAngleChange(value: number | number[]) {
   if (numeric === null) return
   const clamped = Math.max(1, Math.min(90, numeric))
   lightForm.angle = clamped
-  patchLight({ angle: toRadians(clamped) })
+  patchLight({ angle: toRadians(clamped) }, { autoSaveMode: 'interactive' })
 }
 
 function handlePenumbraChange(value: number | number[]) {
@@ -293,13 +293,13 @@ function handlePenumbraChange(value: number | number[]) {
   if (numeric === null) return
   const clamped = Math.max(0, Math.min(1, numeric))
   lightForm.penumbra = clamped
-  patchLight({ penumbra: clamped })
+  patchLight({ penumbra: clamped }, { autoSaveMode: 'interactive' })
 }
 
 function handleCastShadowChange(value: boolean | null) {
   const normalized = Boolean(value)
   lightForm.castShadow = normalized
-  patchLight({ castShadow: normalized })
+  patchLight({ castShadow: normalized }, { autoSaveMode: 'interactive' })
 }
 
 function handleShadowMapSizeChange(value: number | string | null) {

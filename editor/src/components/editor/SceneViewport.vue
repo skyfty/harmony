@@ -20576,7 +20576,7 @@ function updateDirectionalLightTargetFromPivotWorldPosition(primaryId: string): 
         z: directionalLightPivotWorldPositionHelper.z,
       },
     },
-    { captureHistory },
+    { captureHistory, autoSaveMode: 'interactive' },
   )
 }
 
@@ -22206,7 +22206,7 @@ function applyCapturedLightTargetUpdates(updates: CapturedLightTargetUpdate[]) {
     ;(sceneStore as any).updateLightProperties(
       entry.nodeId,
       { target: entry.target },
-      { captureHistory: false },
+      { captureHistory: false, autoSaveMode: 'interactive' },
     )
   })
 }

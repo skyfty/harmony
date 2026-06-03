@@ -200,7 +200,7 @@ function handleVectorChange(field: TransformField, axis: VectorAxis, rawValue: s
   }
 
   payload[field] = baseVector
-  sceneStore.updateNodeProperties(payload)
+  sceneStore.updateNodeProperties(payload, { autoSaveMode: 'interactive' })
 }
 
 function radToDeg(value: number) {

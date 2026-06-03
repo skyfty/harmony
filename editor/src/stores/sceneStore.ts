@@ -8120,7 +8120,7 @@ function commitSceneSnapshot(
     SceneState,
     'nodes' | 'currentSceneId' | 'environment' | 'hasUnsavedChanges' | 'groundNode' | 'currentSceneMeta' | 'activeTransformNodeId' | 'isSceneReady'
   > & { requestSceneAutoSave?: (options?: { mode?: SceneAutoSaveMode }) => void },
-  _options: { updateNodes?: boolean; } = {},
+  options: { updateNodes?: boolean; autoSaveMode?: SceneAutoSaveMode } = {},
 ) {
   if (!store.currentSceneId) {
     return
@@ -8139,7 +8139,9 @@ function commitSceneSnapshot(
   normalizeCurrentSceneMeta(store)
   store.hasUnsavedChanges = true
   store.requestSceneAutoSave?.({
-    mode: store.activeTransformNodeId && store.isSceneReady ? 'interactive' : 'structural',
+    mode:
+      options.autoSaveMode
+      ?? (store.activeTransformNodeId && store.isSceneReady ? 'interactive' : 'structural'),
   })
 }
 
@@ -10103,7 +10105,10 @@ export const useSceneStore = defineStore('scene', {
       }
       commitSceneSnapshot(this)
     },
-    updateNodeProperties(payload: TransformUpdatePayload) {
+    updateNodeProperties(
+      payload: TransformUpdatePayload,
+      options: { autoSaveMode?: SceneAutoSaveMode } = {},
+    ) {
       const target = findNodeById(this.nodes, payload.id)
       if (!target) {
         return
@@ -10154,7 +10159,7 @@ export const useSceneStore = defineStore('scene', {
         const updatedNode = findNodeById(this.nodes, payload.id)
         refreshDisplayBoardGeometry(updatedNode)
       }
-      commitSceneSnapshot(this)
+      commitSceneSnapshot(this, { autoSaveMode: options.autoSaveMode })
     },
     updateNodeUserData(nodeId: string, userData: Record<string, unknown> | null) {
       const target = findNodeById(this.nodes, nodeId)
@@ -10667,7 +10672,12 @@ export const useSceneStore = defineStore('scene', {
       commitSceneSnapshot(this)
       return true
     },
-    updateNodeMaterialProps(nodeId: string, nodeMaterialId: string, update: Partial<SceneMaterialProps>) {
+    updateNodeMaterialProps(
+      nodeId: string,
+      nodeMaterialId: string,
+      update: Partial<SceneMaterialProps>,
+      options: { autoSaveMode?: SceneAutoSaveMode } = {},
+    ) {
       const overrides = materialUpdateToProps(update)
       if (!Object.keys(overrides).length) {
         return
@@ -10708,7 +10718,7 @@ export const useSceneStore = defineStore('scene', {
       if (findNodeById(this.nodes, nodeId)?.dynamicMesh?.type === 'Landform') {
         scheduleLandformGroundSplatBake(this, 'updateNodeMaterialProps')
       }
-      commitSceneSnapshot(this)
+      commitSceneSnapshot(this, { autoSaveMode: options.autoSaveMode })
     },
     updateNodeMaterialType(nodeId: string, nodeMaterialId: string, type: SceneMaterialType) {
       let updated = false
@@ -11440,7 +11450,7 @@ export const useSceneStore = defineStore('scene', {
     updateLightProperties(
       id: string,
       properties: Partial<LightNodeProperties>,
-      options: { captureHistory?: boolean } = {},
+      options: { captureHistory?: boolean; autoSaveMode?: SceneAutoSaveMode } = {},
     ) {
       const target = findNodeById(this.nodes, id)
       if (!target || !target.light) {
@@ -11472,7 +11482,7 @@ export const useSceneStore = defineStore('scene', {
         node.light = next
       })
       this.queueSceneNodePatch(id, ['light'])
-      commitSceneSnapshot(this)
+      commitSceneSnapshot(this, { autoSaveMode: options.autoSaveMode })
     },
     isNodeLocallyVisible(id: string) {
       const node = findNodeById(this.nodes, id)
@@ -17107,7 +17117,12 @@ export const useSceneStore = defineStore('scene', {
       const [, component] = match
       return this.setNodeComponentEnabled(nodeId, componentId, !(component.enabled ?? true))
     },
-  updateNodeComponentProps(nodeId: string, componentId: string, patch: Partial<Record<string, unknown>>): boolean {
+    updateNodeComponentProps(
+      nodeId: string,
+      componentId: string,
+      patch: Partial<Record<string, unknown>>,
+      options: { autoSaveMode?: SceneAutoSaveMode } = {},
+    ): boolean {
       const target = findNodeById(this.nodes, nodeId)
       const match = findComponentEntryById(target?.components, componentId)
       if (!match) {
@@ -17800,7 +17815,7 @@ export const useSceneStore = defineStore('scene', {
       if (type === LANDFORM_COMPONENT_TYPE) {
         scheduleLandformGroundSplatBake(this, 'updateNodeComponentProps')
       }
-      commitSceneSnapshot(this)
+      commitSceneSnapshot(this, { autoSaveMode: options.autoSaveMode })
       return true
     },
     updateNodeComponentMetadata(nodeId: string, componentId: string, metadata: Record<string, unknown> | undefined): boolean {

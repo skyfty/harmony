@@ -368,7 +368,7 @@ function flushPendingMaterialPropsCommit() {
   if (!target || !update || !Object.keys(update).length) {
     return
   }
-  sceneStore.updateNodeMaterialProps(target.nodeId, target.materialId, update)
+  sceneStore.updateNodeMaterialProps(target.nodeId, target.materialId, update, { autoSaveMode: 'interactive' })
 }
 
 function handleClose() {
