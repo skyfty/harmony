@@ -13059,25 +13059,7 @@ function syncControlsConstraintsAndSpeeds() {
   // Use a smaller fraction of the current distance (instead of 0.95) so there's
   // a meaningful inward range before hitting the minimum constraint.
   mapControls.minDistance = Math.max(0.02, Math.min(minDistanceBase, distance * 0.5))
-  const resolvedMaxDistance = Math.max(
-    mapControls.minDistance * 2,
-    maxDistanceByZoomRatio,
-  )
-  mapControls.maxDistance = resolvedMaxDistance
-
-  if (distance > resolvedMaxDistance + 1e-6) {
-    const clampedOffset = camera.position.clone().sub(target)
-    if (clampedOffset.lengthSq() > 1e-12) {
-      clampedOffset.setLength(resolvedMaxDistance)
-      camera.position.copy(target).add(clampedOffset)
-      camera.updateMatrixWorld()
-      if (perspectiveCamera && camera !== perspectiveCamera) {
-        perspectiveCamera.position.copy(camera.position)
-        perspectiveCamera.quaternion.copy(camera.quaternion)
-      }
-    }
-  }
-
+  
   // Keep local-detail edits precise while making far-away browsing much faster.
   const normalizedDistance = distance / Math.max(radiusUsed, 1e-6)
   const distanceScale = normalizedDistance >= 1
