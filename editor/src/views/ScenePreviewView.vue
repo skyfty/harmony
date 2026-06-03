@@ -202,8 +202,6 @@ import {
 	applyNominateStateMapToRuntime,
 	type NominateExternalStateMap,
 	GUIDEBOARD_COMPONENT_TYPE,
-	GUIDEBOARD_RUNTIME_REGISTRY_KEY,
-	GUIDEBOARD_EFFECT_ACTIVE_FLAG,
 	PARTICLE_SYSTEM_RUNTIME_REGISTRY_KEY,
 	applyParticleRuntimeCommand,
 	setParticleTextureResolver,
@@ -219,9 +217,7 @@ import {
 	LOD_FACE_CAMERA_FORWARD_AXIS_X,
 	LOD_FACE_CAMERA_FORWARD_AXIS_Y,
 	LOD_FACE_CAMERA_FORWARD_AXIS_Z,
-	clampGuideboardComponentProps,
 	clampCharacterControllerComponentProps,
-	computeGuideboardEffectActive,
 	clampRigidbodyComponentProps,
 	clampVehicleComponentProps,
 	clampLodComponentProps,
@@ -2528,20 +2524,6 @@ const lastOrbitState = {
 	target: defaultOrbitState.target.clone(),
 }
 const pendingParticleRuntimeCommands: Array<{ nodeId: string; command: { type: 'play' | 'stop' | 'burst'; componentId: string | null; emitterId?: string | null; count?: number; restart?: boolean; softStop?: boolean } }> = []
-
-type GuideboardRuntimeRegistryEntry = {
-	tick?: (delta: number) => void
-	props?: Partial<GuideboardComponentProps> | null
-	setPlaybackActive?: (active: boolean) => void
-}
-
-function isGuideboardEffectActive(props: Partial<GuideboardComponentProps> | null | undefined): boolean {
-	if (!props) {
-		return false
-	}
-	const normalized = clampGuideboardComponentProps(props)
-	return computeGuideboardEffectActive(normalized)
-}
 
 function rebuildPreviewNodeMap(document: SceneJsonExportDocument | null | undefined): void {
 	disposeSignboardBillboards(scene)

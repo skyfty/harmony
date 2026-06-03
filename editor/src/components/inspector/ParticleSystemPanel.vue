@@ -83,6 +83,21 @@ const textureAssetWarning = computed(() => {
   return ''
 })
 type ParticleEmitterConfig = ParticleSystemComponentProps['emitters'][number]
+type ParticleSystemPatch = {
+  [K in keyof ParticleSystemComponentProps]?: K extends 'playback'
+    ? Partial<ParticleSystemComponentProps['playback']>
+    : K extends 'budget'
+      ? Partial<ParticleSystemComponentProps['budget']>
+      : K extends 'transform'
+        ? Partial<ParticleSystemComponentProps['transform']>
+        : K extends 'render'
+          ? Partial<ParticleSystemComponentProps['render']>
+          : K extends 'exposedParams'
+            ? Partial<ParticleSystemComponentProps['exposedParams']>
+            : K extends 'emitters'
+              ? ParticleEmitterConfig[]
+              : ParticleSystemComponentProps[K]
+}
 const emitterShapeOptions = [
   { label: 'Point', value: 'point' },
   { label: 'Box', value: 'box' },
@@ -93,7 +108,7 @@ const velocityModeOptions = [
   { label: 'Vector', value: 'vector' },
 ] as const
 
-function applyPatch(patch: Partial<ParticleSystemComponentProps>) {
+function applyPatch(patch: ParticleSystemPatch) {
   const component = componentState.value
   const nodeId = selectedNodeId.value
   if (!component || !nodeId) {
@@ -194,38 +209,45 @@ function cloneEmitterConfig(emitter: ParticleEmitterConfig, overrides: Partial<P
 
 function resolvePresetEmitterDefaults(index: number): ParticleEmitterConfig {
   const preset = createParticlePresetProps(normalizedProps.value.presetId)
-  const fallback = preset.emitters[0] ?? normalizedProps.value.emitters[index]
-  const emitter = preset.emitters[index] ?? fallback
-  return cloneEmitterConfig(emitter ?? normalizedProps.value.emitters[index], {
-    id: normalizedProps.value.emitters[index]?.id ?? emitter?.id ?? `emitter_${index + 1}`,
+  const currentEmitter = normalizedProps.value.emitters[index]
+  const emitter = preset.emitters[index] ?? preset.emitters[0] ?? currentEmitter
+  if (!emitter) {
+    return createDefaultEmitterConfig(index)
+  }
+  return cloneEmitterConfig(emitter, {
+    id: currentEmitter?.id ?? emitter.id ?? `emitter_${index + 1}`,
   })
+}
+
+function createDefaultEmitterConfig(index: number): ParticleEmitterConfig {
+  return {
+    id: `emitter_${index + 1}_${generateUuid().slice(0, 8)}`,
+    shape: 'point',
+    position: { x: 0, y: 0, z: 0 },
+    size: { x: 1, y: 1, z: 1 },
+    radius: 0.75,
+    emissionRate: 10,
+    emissionBursts: 12,
+    maxParticles: Math.min(32, normalizedProps.value.budget.maxParticles),
+    particleSize: 0.18,
+    lifetime: 1.5,
+    speed: 1.4,
+    velocityMode: 'radial',
+    direction: { x: 0, y: 1, z: 0 },
+    spread: 0.6,
+    color: normalizedProps.value.exposedParams.color,
+    color2: normalizedProps.value.exposedParams.color,
+    alphaStart: normalizedProps.value.exposedParams.opacity,
+    alphaEnd: 0,
+    scaleStart: 1,
+    scaleEnd: 0.2,
+  }
 }
 
 function addEmitter() {
   const nextEmitters: ParticleEmitterConfig[] = [
     ...normalizedProps.value.emitters,
-    {
-      id: `emitter_${generateUuid().slice(0, 8)}`,
-      shape: 'point',
-      position: { x: 0, y: 0, z: 0 },
-      size: { x: 1, y: 1, z: 1 },
-      radius: 0.75,
-      emissionRate: 10,
-      emissionBursts: 12,
-      maxParticles: Math.min(32, normalizedProps.value.budget.maxParticles),
-      particleSize: 0.18,
-      lifetime: 1.5,
-      speed: 1.4,
-      velocityMode: 'radial',
-      direction: { x: 0, y: 1, z: 0 },
-      spread: 0.6,
-      color: normalizedProps.value.exposedParams.color,
-      color2: normalizedProps.value.exposedParams.color,
-      alphaStart: normalizedProps.value.exposedParams.opacity,
-      alphaEnd: 0,
-      scaleStart: 1,
-      scaleEnd: 0.2,
-    },
+    createDefaultEmitterConfig(normalizedProps.value.emitters.length),
   ]
   applyPatch({ emitters: nextEmitters })
 }
@@ -259,6 +281,9 @@ function moveEmitter(index: number, direction: -1 | 1) {
     return
   }
   const [moved] = emitters.splice(index, 1)
+  if (!moved) {
+    return
+  }
   emitters.splice(targetIndex, 0, moved)
   applyPatch({ emitters })
 }

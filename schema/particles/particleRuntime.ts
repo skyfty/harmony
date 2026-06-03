@@ -1,24 +1,8 @@
 import * as THREE from 'three'
-import System, {
-  Alpha,
-  Body,
-  BoxZone,
-  Color as NebulaColor,
-  Emitter,
-  Life,
-  Mass,
-  PointZone,
-  Position,
-  RadialVelocity,
-  Radius,
-  Rate,
-  Scale,
-  Span,
-  SphereZone,
-  SpriteRenderer,
-  Vector3D,
-  VectorVelocity,
-} from 'three-nebula'
+// three-nebula ships without stable bundled typings in this build path.
+// Keep the runtime import and rely on the local ambient declaration file.
+// @ts-ignore
+import System, { Alpha, Body, BoxZone, Color as NebulaColor, Emitter, Life, Mass, PointZone, Position, RadialVelocity, Radius, Rate, Scale, Span, SphereZone, SpriteRenderer, Vector3D, VectorVelocity } from 'three-nebula'
 import type { ParticleBudgetDecision, ParticleBudgetRuntimeStats } from './particleBudget'
 import { applyEmitterBudget, resolveParticleBudgetDecision } from './particleBudget'
 import { getParticleTextureResolver } from './particleTextureResolver'

@@ -160,7 +160,7 @@ function computeSelectedLightDirection(): NumericVector3 {
 
 function applyLightDirection(
   direction: NumericVector3,
-  options: { captureHistory?: boolean } = {},
+  options: { captureHistory?: boolean; autoSaveMode?: 'structural' | 'interactive' } = {},
 ) {
   const node = selectedNode.value
   const light = node?.light
