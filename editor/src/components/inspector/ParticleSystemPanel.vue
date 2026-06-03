@@ -17,6 +17,10 @@ import {
   type ParticleSystemRuntimeHandle,
   type ParticleSystemComponentProps,
 } from '@schema/components'
+import {
+  PARTICLE_COMPONENT_MAX_BURST,
+  PARTICLE_COMPONENT_MAX_PARTICLES,
+} from '@schema/particles/particleSchema'
 
 const sceneStore = useSceneStore()
 const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)
@@ -114,6 +118,55 @@ const velocityModeOptions = [
   { label: 'Radial', value: 'radial' },
   { label: 'Vector', value: 'vector' },
 ] as const
+
+type NumberInputConfig = {
+  min: number
+  max: number
+  step: number
+}
+
+const EXPOSED_NUMBER_INPUTS: Record<'particleSize' | 'lifetime' | 'emissionRate' | 'radius' | 'speed' | 'burstCount', NumberInputConfig> = {
+  particleSize: { min: 0.01, max: 2, step: 0.01 },
+  lifetime: { min: 0.05, max: 12, step: 0.05 },
+  emissionRate: { min: 0, max: 120, step: 0.1 },
+  radius: { min: 0, max: 32, step: 0.05 },
+  speed: { min: 0, max: 24, step: 0.05 },
+  burstCount: { min: 0, max: PARTICLE_COMPONENT_MAX_BURST, step: 1 },
+}
+
+const EMITTER_NUMBER_INPUTS: Record<
+  'maxParticles' | 'emissionRate' | 'emissionBursts' | 'particleSize' | 'lifetime' | 'speed' | 'radius' | 'spread' | 'alphaStart' | 'alphaEnd' | 'scaleStart' | 'scaleEnd',
+  NumberInputConfig
+> = {
+  maxParticles: { min: 1, max: PARTICLE_COMPONENT_MAX_PARTICLES, step: 1 },
+  emissionRate: { min: 0, max: 120, step: 0.1 },
+  emissionBursts: { min: 0, max: PARTICLE_COMPONENT_MAX_BURST, step: 1 },
+  particleSize: { min: 0.01, max: 2, step: 0.01 },
+  lifetime: { min: 0.05, max: 12, step: 0.05 },
+  speed: { min: 0, max: 24, step: 0.05 },
+  radius: { min: 0, max: 32, step: 0.05 },
+  spread: { min: 0, max: 6.28318, step: 0.05 },
+  alphaStart: { min: 0, max: 1, step: 0.01 },
+  alphaEnd: { min: 0, max: 1, step: 0.01 },
+  scaleStart: { min: 0.01, max: 4, step: 0.05 },
+  scaleEnd: { min: 0.01, max: 4, step: 0.05 },
+}
+
+const EMITTER_POSITION_INPUTS: NumberInputConfig = {
+  min: -9999,
+  max: 9999,
+  step: 0.1,
+}
+
+const EMITTER_FORCE_INPUTS: NumberInputConfig = {
+  min: -100,
+  max: 100,
+  step: 0.1,
+}
+
+function resolveEmitterForce(emitter: ParticleEmitterConfig) {
+  return emitter.physics?.force ?? { x: 0, y: 0, z: 0 }
+}
 
 function applyPatch(patch: ParticleSystemPatch) {
   const component = componentState.value
@@ -282,6 +335,8 @@ function updateEmitter(index: number, patch: Partial<ParticleEmitterConfig>) {
     if (emitterIndex !== index) {
       return emitter
     }
+    const emitterForce = emitter.physics?.force ?? { x: 0, y: 0, z: 0 }
+    const patchForce = patch.physics?.force ?? {}
     return {
       ...emitter,
       ...patch,
@@ -297,18 +352,36 @@ function updateEmitter(index: number, patch: Partial<ParticleEmitterConfig>) {
         ...emitter.direction,
         ...(patch.direction ?? {}),
       },
+      physics: {
+        ...emitter.physics,
+        ...(patch.physics ?? {}),
+        force: {
+          ...emitterForce,
+          ...patchForce,
+        },
+      },
     }
   })
   applyPatch({ emitters: nextEmitters })
 }
 
 function cloneEmitterConfig(emitter: ParticleEmitterConfig, overrides: Partial<ParticleEmitterConfig> = {}): ParticleEmitterConfig {
+  const emitterForce = emitter.physics?.force ?? { x: 0, y: 0, z: 0 }
+  const overrideForce = overrides.physics?.force ?? {}
   return {
     ...emitter,
     ...overrides,
     position: { ...emitter.position, ...(overrides.position ?? {}) },
     size: { ...emitter.size, ...(overrides.size ?? {}) },
     direction: { ...emitter.direction, ...(overrides.direction ?? {}) },
+    physics: {
+      ...emitter.physics,
+      ...(overrides.physics ?? {}),
+      force: {
+        ...emitterForce,
+        ...overrideForce,
+      },
+    },
   }
 }
 
@@ -340,6 +413,7 @@ function createDefaultEmitterConfig(index: number): ParticleEmitterConfig {
     velocityMode: 'radial',
     direction: { x: 0, y: 1, z: 0 },
     spread: 0.6,
+    physics: { force: { x: 0, y: 0, z: 0 } },
     color: normalizedProps.value.exposedParams.color,
     color2: normalizedProps.value.exposedParams.color,
     alphaStart: normalizedProps.value.exposedParams.opacity,
@@ -630,6 +704,7 @@ function handleRemoveComponent() {
               variant="underlined"
               hide-details
               :disabled="!componentEnabled"
+              v-bind="EXPOSED_NUMBER_INPUTS.particleSize"
               @update:model-value="applyPatch({ exposedParams: { particleSize: Number($event) || 0 } })"
             />
             <v-text-field
@@ -640,6 +715,7 @@ function handleRemoveComponent() {
               variant="underlined"
               hide-details
               :disabled="!componentEnabled"
+              v-bind="EXPOSED_NUMBER_INPUTS.lifetime"
               @update:model-value="applyPatch({ exposedParams: { lifetime: Number($event) || 0 } })"
             />
             <v-text-field
@@ -650,6 +726,7 @@ function handleRemoveComponent() {
               variant="underlined"
               hide-details
               :disabled="!componentEnabled"
+              v-bind="EXPOSED_NUMBER_INPUTS.emissionRate"
               @update:model-value="applyPatch({ exposedParams: { emissionRate: Number($event) || 0 } })"
             />
           </div>
@@ -666,6 +743,7 @@ function handleRemoveComponent() {
               variant="underlined"
               hide-details
               :disabled="!componentEnabled"
+              v-bind="EXPOSED_NUMBER_INPUTS.radius"
               @update:model-value="applyPatch({ exposedParams: { radius: Number($event) || 0 } })"
             />
             <v-text-field
@@ -676,6 +754,7 @@ function handleRemoveComponent() {
               variant="underlined"
               hide-details
               :disabled="!componentEnabled"
+              v-bind="EXPOSED_NUMBER_INPUTS.speed"
               @update:model-value="applyPatch({ exposedParams: { speed: Number($event) || 0 } })"
             />
             <v-text-field
@@ -686,6 +765,7 @@ function handleRemoveComponent() {
               variant="underlined"
               hide-details
               :disabled="!componentEnabled"
+              v-bind="EXPOSED_NUMBER_INPUTS.burstCount"
               @update:model-value="applyPatch({ exposedParams: { burstCount: Number($event) || 0 } })"
             />
           </div>
@@ -786,6 +866,7 @@ function handleRemoveComponent() {
                     variant="underlined"
                     hide-details
                     :disabled="!componentEnabled"
+                    v-bind="EMITTER_NUMBER_INPUTS.maxParticles"
                     @update:model-value="updateEmitter(index, { maxParticles: Number($event) || 0 })"
                   />
                   <v-text-field
@@ -796,6 +877,7 @@ function handleRemoveComponent() {
                     variant="underlined"
                     hide-details
                     :disabled="!componentEnabled"
+                    v-bind="EMITTER_NUMBER_INPUTS.emissionRate"
                     @update:model-value="updateEmitter(index, { emissionRate: Number($event) || 0 })"
                   />
                   <v-text-field
@@ -806,6 +888,7 @@ function handleRemoveComponent() {
                     variant="underlined"
                     hide-details
                     :disabled="!componentEnabled"
+                    v-bind="EMITTER_NUMBER_INPUTS.emissionBursts"
                     @update:model-value="updateEmitter(index, { emissionBursts: Number($event) || 0 })"
                   />
                   <v-text-field
@@ -816,6 +899,7 @@ function handleRemoveComponent() {
                     variant="underlined"
                     hide-details
                     :disabled="!componentEnabled"
+                    v-bind="EMITTER_NUMBER_INPUTS.particleSize"
                     @update:model-value="updateEmitter(index, { particleSize: Number($event) || 0 })"
                   />
                   <v-text-field
@@ -826,6 +910,7 @@ function handleRemoveComponent() {
                     variant="underlined"
                     hide-details
                     :disabled="!componentEnabled"
+                    v-bind="EMITTER_NUMBER_INPUTS.lifetime"
                     @update:model-value="updateEmitter(index, { lifetime: Number($event) || 0 })"
                   />
                   <v-text-field
@@ -836,6 +921,7 @@ function handleRemoveComponent() {
                     variant="underlined"
                     hide-details
                     :disabled="!componentEnabled"
+                    v-bind="EMITTER_NUMBER_INPUTS.speed"
                     @update:model-value="updateEmitter(index, { speed: Number($event) || 0 })"
                   />
                   <v-text-field
@@ -846,6 +932,7 @@ function handleRemoveComponent() {
                     variant="underlined"
                     hide-details
                     :disabled="!componentEnabled"
+                    v-bind="EMITTER_NUMBER_INPUTS.radius"
                     @update:model-value="updateEmitter(index, { radius: Number($event) || 0 })"
                   />
                   <v-text-field
@@ -856,6 +943,7 @@ function handleRemoveComponent() {
                     variant="underlined"
                     hide-details
                     :disabled="!componentEnabled"
+                    v-bind="EMITTER_NUMBER_INPUTS.spread"
                     @update:model-value="updateEmitter(index, { spread: Number($event) || 0 })"
                   />
                   <div class="particle-system-panel__emitter-color">
@@ -938,76 +1026,121 @@ function handleRemoveComponent() {
                       </v-menu>
                     </div>
                   </div>
-                  <v-text-field
-                    :model-value="emitter.alphaStart"
-                    label="Alpha Start"
-                    type="number"
-                    density="compact"
-                    variant="underlined"
-                    hide-details
-                    :disabled="!componentEnabled"
-                    @update:model-value="updateEmitter(index, { alphaStart: Number($event) || 0 })"
-                  />
-                  <v-text-field
-                    :model-value="emitter.alphaEnd"
-                    label="Alpha End"
-                    type="number"
-                    density="compact"
-                    variant="underlined"
-                    hide-details
-                    :disabled="!componentEnabled"
-                    @update:model-value="updateEmitter(index, { alphaEnd: Number($event) || 0 })"
-                  />
-                  <v-text-field
-                    :model-value="emitter.scaleStart"
-                    label="Scale Start"
-                    type="number"
-                    density="compact"
-                    variant="underlined"
-                    hide-details
-                    :disabled="!componentEnabled"
-                    @update:model-value="updateEmitter(index, { scaleStart: Number($event) || 0 })"
-                  />
-                  <v-text-field
-                    :model-value="emitter.scaleEnd"
-                    label="Scale End"
-                    type="number"
-                    density="compact"
-                    variant="underlined"
-                    hide-details
-                    :disabled="!componentEnabled"
-                    @update:model-value="updateEmitter(index, { scaleEnd: Number($event) || 0 })"
-                  />
-                  <v-text-field
-                    :model-value="emitter.position.x"
-                    label="Pos X"
-                    type="number"
-                    density="compact"
-                    variant="underlined"
-                    hide-details
-                    :disabled="!componentEnabled"
-                    @update:model-value="updateEmitter(index, { position: { x: Number($event) || 0 } as any })"
-                  />
-                  <v-text-field
-                    :model-value="emitter.position.y"
-                    label="Pos Y"
-                    type="number"
-                    density="compact"
-                    variant="underlined"
-                    hide-details
-                    :disabled="!componentEnabled"
-                    @update:model-value="updateEmitter(index, { position: { y: Number($event) || 0 } as any })"
-                  />
+                      <v-text-field
+                        :model-value="emitter.alphaStart"
+                        label="Alpha Start"
+                        type="number"
+                        density="compact"
+                        variant="underlined"
+                        hide-details
+                        :disabled="!componentEnabled"
+                        v-bind="EMITTER_NUMBER_INPUTS.alphaStart"
+                        @update:model-value="updateEmitter(index, { alphaStart: Number($event) || 0 })"
+                      />
+                      <v-text-field
+                        :model-value="emitter.alphaEnd"
+                        label="Alpha End"
+                        type="number"
+                        density="compact"
+                        variant="underlined"
+                        hide-details
+                        :disabled="!componentEnabled"
+                        v-bind="EMITTER_NUMBER_INPUTS.alphaEnd"
+                        @update:model-value="updateEmitter(index, { alphaEnd: Number($event) || 0 })"
+                      />
+                      <v-text-field
+                        :model-value="emitter.scaleStart"
+                        label="Scale Start"
+                        type="number"
+                        density="compact"
+                        variant="underlined"
+                        hide-details
+                        :disabled="!componentEnabled"
+                        v-bind="EMITTER_NUMBER_INPUTS.scaleStart"
+                        @update:model-value="updateEmitter(index, { scaleStart: Number($event) || 0 })"
+                      />
+                      <v-text-field
+                        :model-value="emitter.scaleEnd"
+                        label="Scale End"
+                        type="number"
+                        density="compact"
+                        variant="underlined"
+                        hide-details
+                        :disabled="!componentEnabled"
+                        v-bind="EMITTER_NUMBER_INPUTS.scaleEnd"
+                        @update:model-value="updateEmitter(index, { scaleEnd: Number($event) || 0 })"
+                      />
+                      <v-text-field
+                        :model-value="emitter.position.x"
+                        label="Pos X"
+                        type="number"
+                        density="compact"
+                        variant="underlined"
+                        hide-details
+                        :disabled="!componentEnabled"
+                        v-bind="EMITTER_POSITION_INPUTS"
+                        @update:model-value="updateEmitter(index, { position: { x: Number($event) || 0 } as any })"
+                      />
+                      <v-text-field
+                        :model-value="emitter.position.y"
+                        label="Pos Y"
+                        type="number"
+                        density="compact"
+                        variant="underlined"
+                        hide-details
+                        :disabled="!componentEnabled"
+                        v-bind="EMITTER_POSITION_INPUTS"
+                        @update:model-value="updateEmitter(index, { position: { y: Number($event) || 0 } as any })"
+                      />
                   <v-text-field
                     :model-value="emitter.position.z"
                     label="Pos Z"
                     type="number"
                     density="compact"
-                    variant="underlined"
-                    hide-details
+                        variant="underlined"
+                        hide-details
                     :disabled="!componentEnabled"
+                    v-bind="EMITTER_POSITION_INPUTS"
                     @update:model-value="updateEmitter(index, { position: { z: Number($event) || 0 } as any })"
                   />
+                  <div class="particle-system-panel__emitter-physics">
+                    <div class="particle-system-panel__emitter-physics-title">Force</div>
+                    <div class="particle-system-panel__emitter-physics-grid">
+                      <v-text-field
+                        :model-value="resolveEmitterForce(emitter).x"
+                        label="Force X"
+                        type="number"
+                        density="compact"
+                        variant="underlined"
+                        hide-details
+                        :disabled="!componentEnabled"
+                        v-bind="EMITTER_FORCE_INPUTS"
+                        @update:model-value="updateEmitter(index, { physics: { force: { x: Number($event) || 0 } } as any })"
+                      />
+                      <v-text-field
+                        :model-value="resolveEmitterForce(emitter).y"
+                        label="Force Y"
+                        type="number"
+                        density="compact"
+                        variant="underlined"
+                        hide-details
+                        :disabled="!componentEnabled"
+                        v-bind="EMITTER_FORCE_INPUTS"
+                        @update:model-value="updateEmitter(index, { physics: { force: { y: Number($event) || 0 } } as any })"
+                      />
+                      <v-text-field
+                        :model-value="resolveEmitterForce(emitter).z"
+                        label="Force Z"
+                        type="number"
+                        density="compact"
+                        variant="underlined"
+                        hide-details
+                        :disabled="!componentEnabled"
+                        v-bind="EMITTER_FORCE_INPUTS"
+                        @update:model-value="updateEmitter(index, { physics: { force: { z: Number($event) || 0 } } as any })"
+                      />
+                    </div>
+                  </div>
                 </div>
               </v-expansion-panel-text>
             </v-expansion-panel>
@@ -1090,6 +1223,29 @@ function handleRemoveComponent() {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.8rem 1rem;
+}
+
+.particle-system-panel__emitter-physics {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 0.55rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid rgba(140, 155, 175, 0.14);
+  border-radius: 0.7rem;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.particle-system-panel__emitter-physics-title {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  opacity: 0.7;
+}
+
+.particle-system-panel__emitter-physics-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.75rem 0.85rem;
 }
 
 .particle-system-panel__texture-tile {

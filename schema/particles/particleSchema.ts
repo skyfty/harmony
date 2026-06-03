@@ -71,6 +71,9 @@ export interface ParticleEmitterConfig {
   velocityMode: ParticleVelocityMode
   direction: Vector3Like
   spread: number
+  physics?: {
+    force: Vector3Like
+  }
   color: string
   color2: string
   alphaStart: number
@@ -136,6 +139,12 @@ export const DEFAULT_PARTICLE_EXPOSED_PARAMS: ParticleExposedParams = {
   radius: 0.75,
   spread: 0.6,
   opacity: 0.85,
+}
+
+export const DEFAULT_PARTICLE_EMITTER_FORCE: Vector3Like = {
+  x: 0,
+  y: 0,
+  z: 0,
 }
 
 function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
@@ -228,6 +237,9 @@ function normalizeParticleEmitterConfig(
     velocityMode: normalizeVelocityMode(source.velocityMode),
     direction: normalizeVector3Like(source.direction, { x: 0, y: 1, z: 0 }),
     spread: clampNumber(source.spread, 0, 6.28318, DEFAULT_PARTICLE_EXPOSED_PARAMS.spread),
+    physics: {
+      force: normalizeVector3Like(source.physics?.force, DEFAULT_PARTICLE_EMITTER_FORCE),
+    },
     color: normalizeHexColor(source.color, DEFAULT_PARTICLE_EXPOSED_PARAMS.color),
     color2: normalizeHexColor(source.color2, DEFAULT_PARTICLE_EXPOSED_PARAMS.color),
     alphaStart: clampNumber(source.alphaStart, 0, 1, DEFAULT_PARTICLE_EXPOSED_PARAMS.opacity),
@@ -325,6 +337,9 @@ export function cloneParticleEmitterConfig(props: ParticleEmitterConfig): Partic
     position: { ...props.position },
     size: { ...props.size },
     direction: { ...props.direction },
+    physics: {
+      force: { ...(props.physics?.force ?? DEFAULT_PARTICLE_EMITTER_FORCE) },
+    },
   }
 }
 

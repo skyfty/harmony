@@ -2,7 +2,7 @@ import * as THREE from 'three'
 // three-nebula ships without stable bundled typings in this build path.
 // Keep the runtime import and rely on the local ambient declaration file.
 // @ts-ignore
-import System, { Alpha, Body, BoxZone, Color as NebulaColor, Emitter, Life, Mass, PointZone, Position, RadialVelocity, Radius, Rate, Scale, Span, SphereZone, SpriteRenderer, Vector3D, VectorVelocity } from 'three-nebula'
+import System, { Alpha, Body, BoxZone, Color as NebulaColor, Emitter, Force, Life, Mass, PointZone, Position, RadialVelocity, Radius, Rate, Scale, Span, SphereZone, SpriteRenderer, Vector3D, VectorVelocity } from 'three-nebula'
 import type { ParticleBudgetDecision, ParticleBudgetRuntimeStats } from './particleBudget'
 import { applyEmitterBudget, resolveParticleBudgetDecision } from './particleBudget'
 import { getParticleTextureResolver } from './particleTextureResolver'
@@ -130,16 +130,6 @@ function isWeatherParticlePreset(presetId: string): boolean {
   return presetId.includes('rain') || presetId.includes('snow')
 }
 
-function resolveWeatherGravityStrength(presetId: string): number {
-  if (presetId.includes('rain')) {
-    return presetId.includes('heavy') ? 15.5 : 12.5
-  }
-  if (presetId.includes('snow')) {
-    return presetId.includes('blizzard') ? 4.1 : 3.2
-  }
-  return 0
-}
-
 function resolveWeatherGroundThreshold(presetId: string): number {
   if (presetId.includes('rain')) {
     return 0.12
@@ -254,6 +244,14 @@ function createVelocity(config: ParticleEmitterConfig): unknown {
   return new RadialVelocity(config.speed, new Vector3D(config.direction.x, config.direction.y, config.direction.z), config.spread * 57.2958)
 }
 
+function createForceBehaviour(force: { x: number; y: number; z: number } | undefined): InstanceType<typeof Force> | null {
+  const vector = force ?? { x: 0, y: 0, z: 0 }
+  if (Math.abs(vector.x) <= 1e-6 && Math.abs(vector.y) <= 1e-6 && Math.abs(vector.z) <= 1e-6) {
+    return null
+  }
+  return new Force(vector.x, vector.y, vector.z)
+}
+
 function createEmissionRate(emissionRate: number): InstanceType<typeof Rate> {
   const particlesPerSecond = Math.max(0, emissionRate)
   if (particlesPerSecond <= 0) {
@@ -278,11 +276,16 @@ function buildEmitter(config: ParticleEmitterConfig, props: ParticleSystemCompon
     new Life(Math.max(0.05, budgeted.lifetime * 0.6), budgeted.lifetime),
     createVelocity(budgeted),
   ])
-  emitter.setBehaviours([
+  const behaviours = [
     new Alpha(budgeted.alphaStart, budgeted.alphaEnd),
     new Scale(budgeted.scaleStart, budgeted.scaleEnd),
     new NebulaColor(budgeted.color, budgeted.color2),
-  ])
+  ]
+  const forceBehaviour = createForceBehaviour(budgeted.physics?.force)
+  if (forceBehaviour) {
+    behaviours.push(forceBehaviour)
+  }
+  emitter.setBehaviours(behaviours)
   emitter.position.set(budgeted.position.x, budgeted.position.y, budgeted.position.z)
   return emitter
 }
@@ -322,28 +325,6 @@ class ParticleSystemRuntimeController implements ParticleSystemRuntimeHandle {
     this.group.position.set(positionOffset.x, positionOffset.y, positionOffset.z)
     this.group.rotation.set(rotationOffset.x, rotationOffset.y, rotationOffset.z)
     this.group.scale.setScalar(scaleMultiplier)
-  }
-
-  private applyWeatherGravity(): void {
-    if (!isWeatherParticlePreset(this.props.presetId)) {
-      return
-    }
-    const gravityStrength = resolveWeatherGravityStrength(this.props.presetId)
-    if (gravityStrength <= 0) {
-      return
-    }
-    for (const entry of this.emitters) {
-      const particles = entry.emitter?.particles
-      if (!Array.isArray(particles) || !particles.length) {
-        continue
-      }
-      for (const particle of particles as Array<{ dead?: boolean; sleep?: boolean; acceleration?: { y?: number } }>) {
-        if (!particle || particle.dead || particle.sleep || !particle.acceleration) {
-          continue
-        }
-        particle.acceleration.y = (particle.acceleration.y ?? 0) - gravityStrength
-      }
-    }
   }
 
   private cullWeatherParticlesBelowGround(): void {
@@ -621,7 +602,6 @@ class ParticleSystemRuntimeController implements ParticleSystemRuntimeHandle {
     }
     const step = this.updateAccumulator
     this.updateAccumulator = 0
-    this.applyWeatherGravity()
     this.system.update(step)
     this.cullWeatherParticlesBelowGround()
   }
