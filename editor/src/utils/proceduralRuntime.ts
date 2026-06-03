@@ -4,8 +4,8 @@ import type { SceneNode, SceneNodeComponentState } from '@schema/core'
 import {
   DISPLAY_BOARD_COMPONENT_TYPE,
   GUIDEBOARD_COMPONENT_TYPE,
+  PARTICLE_SYSTEM_COMPONENT_TYPE,
   VIEW_POINT_COMPONENT_TYPE,
-  WARP_GATE_COMPONENT_TYPE,
 } from '@schema/components'
 
 /**
@@ -41,7 +41,7 @@ function hasEnabledComponent(node: SceneNode, componentType: string): boolean {
  * 规则（当前编辑器实现）：
  * - 若节点有非空的 `sourceAssetId`，说明由资源管线负责 → 返回 false。
  * - 否则当满足下列任一条件时认为是过程化节点：
- *   - `nodeType` 为 `WarpGate` 或存在已启用的 WarpGate 组件
+ *   - `nodeType` 为 `WarpGate` 或存在已启用的 Particle System 组件
  *   - `nodeType` 为 `Guideboard` 或存在已启用的 Guideboard 组件
  *   - `nodeType` 为 `Plane` 且存在已启用的 DisplayBoard 组件
  *   - `nodeType` 为 `Sphere` 且存在已启用的 ViewPoint 组件
@@ -53,7 +53,7 @@ export function shouldCreateProceduralRuntimeObject(node: SceneNode): boolean {
 
   const nodeType = node.nodeType ?? (node.light ? 'Light' : 'Mesh')
 
-  if (nodeType === 'WarpGate' || hasEnabledComponent(node, WARP_GATE_COMPONENT_TYPE)) {
+  if (nodeType === 'WarpGate' || hasEnabledComponent(node, PARTICLE_SYSTEM_COMPONENT_TYPE)) {
     return true
   }
   if (nodeType === 'Guideboard' || hasEnabledComponent(node, GUIDEBOARD_COMPONENT_TYPE)) {

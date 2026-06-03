@@ -16,8 +16,7 @@ import ProtagonistPanel from '@/components/inspector/ProtagonistPanel.vue'
 import AnimationComponentPanel from '@/components/inspector/AnimationComponentPanel.vue'
 import CharacterControllerPanel from '@/components/inspector/CharacterControllerPanel.vue'
 import GroundAnchorPanel from '@/components/inspector/GroundAnchorPanel.vue'
-import WarpGatePanel from '@/components/inspector/WarpGatePanel.vue'
-import EffectPanel from '@/components/inspector/EffectPanel.vue'
+import ParticleSystemPanel from '@/components/inspector/ParticleSystemPanel.vue'
 import GroundPanel from '@/components/inspector/GroundPanel.vue'
 import WaterPanel from '@/components/inspector/WaterPanel.vue'
 import EnvironmentPanel from '@/components/inspector/EnvironmentPanel.vue'
@@ -48,6 +47,7 @@ import type { BehaviorActionDefinition } from '@schema/behaviors/definitions'
 
 import {
   BEHAVIOR_COMPONENT_TYPE,
+  PARTICLE_SYSTEM_COMPONENT_TYPE,
   DISPLAY_BOARD_COMPONENT_TYPE,
   BILLBOARD_COMPONENT_TYPE,
   SIGNBOARD_COMPONENT_TYPE,
@@ -70,10 +70,8 @@ import {
   VEHICLE_COMPONENT_TYPE,
   STEER_COMPONENT_TYPE,
   VIEW_POINT_COMPONENT_TYPE,
-  WARP_GATE_COMPONENT_TYPE,
   WALL_COMPONENT_TYPE,
   WATER_COMPONENT_TYPE,
-  EFFECT_COMPONENT_TYPE,
   NOMINATE_COMPONENT_TYPE,
   componentManager,
   type RigidbodyColliderType,
@@ -190,7 +188,12 @@ const availableComponents = computed(() => {
   const existingTypes = new Set(Object.keys(node.components ?? {}))
   return componentManager
     .listDefinitions()
-    .filter((definition) => definition.canAttach(node) && !existingTypes.has(definition.type))
+    .filter((definition) =>
+      definition.canAttach(node)
+      && !existingTypes.has(definition.type)
+      && definition.type !== 'warpGate'
+      && definition.type !== 'effect',
+    )
 })
 function computeDefaultExpandedPanels() {
   const node = selectedNode.value
@@ -617,8 +620,7 @@ watch(
               <PreloadablePanel v-else-if="component.type === PRELOADABLE_COMPONENT_TYPE" />
               <CouponPanel v-else-if="component.type === COUPON_COMPONENT_TYPE" />
               <PlanningImagesPanel v-else-if="component.type === PLANNING_IMAGES_COMPONENT_TYPE" />
-              <WarpGatePanel v-else-if="component.type === WARP_GATE_COMPONENT_TYPE" />
-              <EffectPanel v-else-if="component.type === EFFECT_COMPONENT_TYPE" />
+              <ParticleSystemPanel v-else-if="component.type === PARTICLE_SYSTEM_COMPONENT_TYPE" />
               <RigidbodyPanel
                 v-else-if="component.type === RIGIDBODY_COMPONENT_TYPE"
                 @open-collider-editor="handleOpenRigidbodyColliderEditor"

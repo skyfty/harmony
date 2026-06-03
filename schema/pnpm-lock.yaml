@@ -38,6 +38,9 @@ importers:
       three-mesh-bvh:
         specifier: ^0.9.1
         version: 0.9.8(three@0.172.0)
+      three-nebula:
+        specifier: ^10.0.3
+        version: 10.0.3(three@0.172.0)
     devDependencies:
       '@harmony/tools':
         specifier: file:../tools
@@ -219,6 +222,9 @@ packages:
   lerc@3.0.0:
     resolution: {integrity: sha512-Rm4J/WaHhRa93nCN2mwWDZFoRVF18G1f47C+kvQWyHGEZxFpTUi73p7lMVSAndyxGt6lJ2/CFbOcf9ra5p8aww==}
 
+  lodash@4.18.1:
+    resolution: {integrity: sha512-dMInicTPVE8d1e5otfwmmjlxkZoUpiVLwyeTdUsi/Caj/gfzzblBcCE5sRHV/AsjuCmxWrte2TNGSYuCeCq+0Q==}
+
   mdn-data@2.0.28:
     resolution: {integrity: sha512-aylIc7Z9y4yzHYAJNuESG3hfhC+0Ibp/MAMiaOZgNv4pmEdFyfZhhhny4MNiAfWdBQ1RQ2mfDWmM1x8SvGyp8g==}
 
@@ -242,6 +248,9 @@ packages:
 
   polygon-clipping@0.15.7:
     resolution: {integrity: sha512-nhfdr83ECBg6xtqOAJab1tbksbBAOMUltN60bU+llHVOL0e5Onm1WpAXXWXVB39L8AJFssoIhEVuy/S90MmotA==}
+
+  potpack@1.0.2:
+    resolution: {integrity: sha512-choctRBIV9EMT9WGAZHn3V7t0Z2pMQyl0EZE6pFc/6ml3ssw7Dlf/oAOvFwjm1HVsqfQN8GfeFyJ+d8tRzqueQ==}
 
   quick-lru@6.1.2:
     resolution: {integrity: sha512-AAFUA5O1d83pIHEhJwWCq/RQcRukCkn/NSm2QsTEMle5f2hP0ChI2+3Xb051PZCkLryI/Ir1MVKviT2FIloaTQ==}
@@ -278,12 +287,22 @@ packages:
     peerDependencies:
       three: '>= 0.159.0'
 
+  three-nebula@10.0.3:
+    resolution: {integrity: sha512-cX0UVkCGKx1r36z/yo26HAjsMGa3NcSvGZlODTLo6lfNikpK7oYXgq5r4yVrjaGjhpeKnFalNTI8LsHiZ8KlYw==}
+    peerDependencies:
+      three: '>=0.122.0 <1.0.0'
+
   three@0.172.0:
     resolution: {integrity: sha512-6HMgMlzU97MsV7D/tY8Va38b83kz8YJX+BefKjspMNAv0Vx6dxMogHOrnRl/sbMIs3BPUKijPqDqJ/+UwJbIow==}
 
   typescript@5.9.3:
     resolution: {integrity: sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw==}
     engines: {node: '>=14.17'}
+    hasBin: true
+
+  uuid@3.4.0:
+    resolution: {integrity: sha512-HjSDRw6gZE5JMggctHBcjVak08+KEVhSIiDzFnT9S9aegmp85S/bReBVTb4QTFaRNptJ9kuYaNhnbNEOkbKb/A==}
+    deprecated: uuid@10 and below is no longer supported.  For ESM codebases, update to uuid@latest.  For CommonJS codebases, use uuid@11 (but be aware this version will likely be deprecated in 2028).
     hasBin: true
 
   web-worker@1.5.0:
@@ -444,6 +463,8 @@ snapshots:
 
   lerc@3.0.0: {}
 
+  lodash@4.18.1: {}
+
   mdn-data@2.0.28: {}
 
   mdn-data@2.12.2: {}
@@ -464,6 +485,8 @@ snapshots:
     dependencies:
       robust-predicates: 3.0.2
       splaytree: 3.2.3
+
+  potpack@1.0.2: {}
 
   quick-lru@6.1.2: {}
 
@@ -493,9 +516,18 @@ snapshots:
     dependencies:
       three: 0.172.0
 
+  three-nebula@10.0.3(three@0.172.0):
+    dependencies:
+      lodash: 4.18.1
+      potpack: 1.0.2
+      three: 0.172.0
+      uuid: 3.4.0
+
   three@0.172.0: {}
 
   typescript@5.9.3: {}
+
+  uuid@3.4.0: {}
 
   web-worker@1.5.0: {}
 

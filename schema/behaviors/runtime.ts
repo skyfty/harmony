@@ -14,6 +14,9 @@ import type {
   ShowAlertBehaviorParams,
   ShowBehaviorParams,
   SpawnPrefabBehaviorParams,
+  PlayParticleEffectBehaviorParams,
+  StopParticleEffectBehaviorParams,
+  BurstParticleEffectBehaviorParams,
   RuntimePrefabInitializationMode,
   RuntimePrefabPlacementOptions,
   WatchBehaviorParams,
@@ -77,6 +80,40 @@ export type BehaviorRuntimeEvent =
       targetNodeId: string | null
       initializationMode: RuntimePrefabInitializationMode
       placement: RuntimePrefabPlacementOptions
+    }
+  | {
+      type: 'play-particle-effect'
+      nodeId: string
+      action: BehaviorEventType
+      sequenceId: string
+      behaviorSequenceId: string
+      behaviorId: string
+      targetNodeId: string
+      componentId: string | null
+      restart: boolean
+    }
+  | {
+      type: 'stop-particle-effect'
+      nodeId: string
+      action: BehaviorEventType
+      sequenceId: string
+      behaviorSequenceId: string
+      behaviorId: string
+      targetNodeId: string
+      componentId: string | null
+      softStop: boolean
+    }
+  | {
+      type: 'burst-particle-effect'
+      nodeId: string
+      action: BehaviorEventType
+      sequenceId: string
+      behaviorSequenceId: string
+      behaviorId: string
+      targetNodeId: string
+      componentId: string | null
+      emitterId: string | null
+      count: number | null
     }
   | {
       type: 'show-alert'
@@ -829,6 +866,61 @@ function createAnimationEvent(
   }
 }
 
+function createPlayParticleEffectEvent(
+  state: BehaviorSequenceState,
+  behavior: SceneBehavior,
+): Extract<BehaviorRuntimeEvent, { type: 'play-particle-effect' }> {
+  const params = behavior.script.params as Partial<PlayParticleEffectBehaviorParams> | undefined
+  return {
+    type: 'play-particle-effect',
+    nodeId: state.nodeId,
+    action: state.action,
+    sequenceId: state.id,
+    behaviorSequenceId: state.behaviorSequenceId,
+    behaviorId: behavior.id,
+    targetNodeId: typeof params?.targetNodeId === 'string' && params.targetNodeId.trim().length ? params.targetNodeId.trim() : state.nodeId,
+    componentId: typeof params?.componentId === 'string' && params.componentId.trim().length ? params.componentId.trim() : null,
+    restart: params?.restart === true,
+  }
+}
+
+function createStopParticleEffectEvent(
+  state: BehaviorSequenceState,
+  behavior: SceneBehavior,
+): Extract<BehaviorRuntimeEvent, { type: 'stop-particle-effect' }> {
+  const params = behavior.script.params as Partial<StopParticleEffectBehaviorParams> | undefined
+  return {
+    type: 'stop-particle-effect',
+    nodeId: state.nodeId,
+    action: state.action,
+    sequenceId: state.id,
+    behaviorSequenceId: state.behaviorSequenceId,
+    behaviorId: behavior.id,
+    targetNodeId: typeof params?.targetNodeId === 'string' && params.targetNodeId.trim().length ? params.targetNodeId.trim() : state.nodeId,
+    componentId: typeof params?.componentId === 'string' && params.componentId.trim().length ? params.componentId.trim() : null,
+    softStop: params?.softStop !== false,
+  }
+}
+
+function createBurstParticleEffectEvent(
+  state: BehaviorSequenceState,
+  behavior: SceneBehavior,
+): Extract<BehaviorRuntimeEvent, { type: 'burst-particle-effect' }> {
+  const params = behavior.script.params as Partial<BurstParticleEffectBehaviorParams> | undefined
+  return {
+    type: 'burst-particle-effect',
+    nodeId: state.nodeId,
+    action: state.action,
+    sequenceId: state.id,
+    behaviorSequenceId: state.behaviorSequenceId,
+    behaviorId: behavior.id,
+    targetNodeId: typeof params?.targetNodeId === 'string' && params.targetNodeId.trim().length ? params.targetNodeId.trim() : state.nodeId,
+    componentId: typeof params?.componentId === 'string' && params.componentId.trim().length ? params.componentId.trim() : null,
+    emitterId: typeof params?.emitterId === 'string' && params.emitterId.trim().length ? params.emitterId.trim() : null,
+    count: typeof params?.count === 'number' && Number.isFinite(params.count) ? Math.max(0, Math.trunc(params.count)) : null,
+  }
+}
+
 function createStopAnimationEvent(
   state: BehaviorSequenceState,
   behavior: SceneBehavior,
@@ -1075,6 +1167,18 @@ function advanceSequence(state: BehaviorSequenceState): BehaviorRuntimeEvent[] {
         state.index += 1
         continue
       }
+      case 'playParticleEffect':
+        events.push(createPlayParticleEffectEvent(state, behavior))
+        state.index += 1
+        continue
+      case 'stopParticleEffect':
+        events.push(createStopParticleEffectEvent(state, behavior))
+        state.index += 1
+        continue
+      case 'burstParticleEffect':
+        events.push(createBurstParticleEffectEvent(state, behavior))
+        state.index += 1
+        continue
       case 'showAlert':
         events.push(createShowAlertEvent(state, behavior))
         return events

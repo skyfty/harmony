@@ -2,10 +2,10 @@ import * as THREE from 'three'
 import type { SceneBehavior, SceneNode, SceneNodeComponentState } from '@schema/core'
 import {
   BEHAVIOR_COMPONENT_TYPE,
-  WARP_GATE_COMPONENT_TYPE,
+  PARTICLE_SYSTEM_COMPONENT_TYPE,
 } from '@schema/components'
 import { createBehaviorSequenceId, ensureBehaviorParams } from '@schema/behaviors/definitions'
-import type { WarpGateComponentProps } from '@schema/components'
+import type { ParticleSystemComponentProps } from '@schema/components'
 import { generateUuid } from '@/utils/uuid'
 import { useSceneStore } from './sceneStore'
 
@@ -16,6 +16,9 @@ export type WarpGateNodeCreationOptions = {
   parentId?: string | null
   position?: THREE.Vector3 | null
 }
+
+// The editor tool remains "WarpGate", but the visual/runtime implementation
+// is now entirely particle-system based.
 
 function collectNodeNames(nodes: SceneNode[] | undefined, names: Set<string>): void {
   if (!nodes?.length) {
@@ -50,7 +53,7 @@ export function getNextWarpGateName(nodes: SceneNode[] | undefined): string {
   return `${base} ${index}`
 }
 
-export function createWarpGateObject(name: string): THREE.Object3D {
+export function createWarpGateParticleObject(name: string): THREE.Object3D {
   const warpGateMesh = new THREE.Object3D()
   warpGateMesh.name = `${name} Visual`
   warpGateMesh.castShadow = false
@@ -82,7 +85,7 @@ export async function createWarpGateNode(
     : getNextWarpGateName(sceneStore.nodes)
 
   const created = await sceneStore.addModelNode({
-    object: createWarpGateObject(resolvedName),
+    object: createWarpGateParticleObject(resolvedName),
     nodeType: 'WarpGate',
     name: resolvedName,
     baseY: 0,
@@ -103,12 +106,18 @@ export async function createWarpGateNode(
     sceneStore.updateNodeMaterialProps(created.id, primaryMaterial.id, { side: 'double' })
   }
 
-  let warpGateComponent = created.components?.[WARP_GATE_COMPONENT_TYPE] as
-    | SceneNodeComponentState<WarpGateComponentProps>
+  let particleSystemComponent = created.components?.[PARTICLE_SYSTEM_COMPONENT_TYPE] as
+    | SceneNodeComponentState<ParticleSystemComponentProps>
     | undefined
-  if (!warpGateComponent) {
-    const added = sceneStore.addNodeComponent<typeof WARP_GATE_COMPONENT_TYPE>(created.id, WARP_GATE_COMPONENT_TYPE)
-    warpGateComponent = added?.component
+  if (!particleSystemComponent) {
+    const added = sceneStore.addNodeComponent<typeof PARTICLE_SYSTEM_COMPONENT_TYPE>(created.id, PARTICLE_SYSTEM_COMPONENT_TYPE)
+    particleSystemComponent = added?.component
+  }
+
+  if (particleSystemComponent) {
+    sceneStore.updateNodeComponentProps(created.id, particleSystemComponent.id, {
+      presetId: 'warpColumnLite',
+    })
   }
 
   let behaviorComponent = created.components?.[BEHAVIOR_COMPONENT_TYPE] as

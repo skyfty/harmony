@@ -295,7 +295,6 @@ import type {
   AnimationComponentProps,
   BillboardComponentProps,
   DisplayBoardComponentProps,
-  EffectComponentProps,
   GuideRouteComponentProps,
   GuideRouteWaypoint,
   GuideboardComponentProps,
@@ -312,7 +311,7 @@ import type {
   FloorComponentProps,
   LandformComponentProps,
   PlanningImagesComponentProps,
-  WarpGateComponentProps,
+  ParticleSystemComponentProps,
   WaterComponentProps,
 } from '@schema/components'
 import {
@@ -322,10 +321,9 @@ import {
   GUIDE_ROUTE_COMPONENT_TYPE,
   GUIDEBOARD_COMPONENT_TYPE,
   VIEW_POINT_COMPONENT_TYPE,
-  WARP_GATE_COMPONENT_TYPE,
+  PARTICLE_SYSTEM_COMPONENT_TYPE,
   DISPLAY_BOARD_COMPONENT_TYPE,
   BILLBOARD_COMPONENT_TYPE,
-  EFFECT_COMPONENT_TYPE,
   PROTAGONIST_COMPONENT_TYPE,
   ONLINE_COMPONENT_TYPE,
   BEHAVIOR_COMPONENT_TYPE,
@@ -351,10 +349,8 @@ import {
   cloneDisplayBoardComponentProps,
   clampBillboardComponentProps,
   cloneBillboardComponentProps,
-  clampWarpGateComponentProps,
-  cloneWarpGateComponentProps,
-  clampEffectComponentProps,
-  cloneEffectComponentProps,
+  clampParticleSystemComponentProps,
+  cloneParticleSystemComponentProps,
   clampRigidbodyComponentProps,
   cloneRigidbodyComponentProps,
   clampVehicleComponentProps,
@@ -411,11 +407,10 @@ type NodeComponentPropsByType = {
   [GUIDE_ROUTE_COMPONENT_TYPE]: GuideRouteComponentProps
   [GUIDEBOARD_COMPONENT_TYPE]: GuideboardComponentProps
   [VIEW_POINT_COMPONENT_TYPE]: ViewPointComponentProps
-  [WARP_GATE_COMPONENT_TYPE]: WarpGateComponentProps
+  [PARTICLE_SYSTEM_COMPONENT_TYPE]: ParticleSystemComponentProps
   [DISPLAY_BOARD_COMPONENT_TYPE]: DisplayBoardComponentProps
   [BILLBOARD_COMPONENT_TYPE]: BillboardComponentProps
   [PLANNING_IMAGES_COMPONENT_TYPE]: PlanningImagesComponentProps
-  [EFFECT_COMPONENT_TYPE]: EffectComponentProps
   [PROTAGONIST_COMPONENT_TYPE]: ProtagonistComponentProps
   [ONLINE_COMPONENT_TYPE]: OnlineComponentProps
   [BEHAVIOR_COMPONENT_TYPE]: BehaviorComponentProps
@@ -17007,10 +17002,8 @@ export const useSceneStore = defineStore('scene', {
         | BillboardComponentProps
         | DisplayBoardComponentProps
         | PlanningImagesComponentProps
-        | WarpGateComponentProps
         | FloorComponentProps
         | LandformComponentProps
-        | EffectComponentProps
         | RigidbodyComponentProps
         | VehicleComponentProps
         | WaterComponentProps
@@ -17403,25 +17396,39 @@ export const useSceneStore = defineStore('scene', {
           return false
         }
         nextProps = clonePlanningImagesComponentProps(merged)
-      } else if (type === WARP_GATE_COMPONENT_TYPE) {
-        const currentProps = clampWarpGateComponentProps(component.props as WarpGateComponentProps)
-        const typedPatch = patch as Partial<WarpGateComponentProps>
-        const merged = clampWarpGateComponentProps({
+      } else if (type === PARTICLE_SYSTEM_COMPONENT_TYPE) {
+        const currentProps = clampParticleSystemComponentProps(component.props as ParticleSystemComponentProps)
+        const typedPatch = patch as Partial<ParticleSystemComponentProps>
+        const merged = clampParticleSystemComponentProps({
           ...currentProps,
           ...typedPatch,
+          playback: {
+            ...currentProps.playback,
+            ...(typedPatch.playback ?? {}),
+          },
+          budget: {
+            ...currentProps.budget,
+            ...(typedPatch.budget ?? {}),
+          },
+          transform: {
+            ...currentProps.transform,
+            ...(typedPatch.transform ?? {}),
+          },
+          render: {
+            ...currentProps.render,
+            ...(typedPatch.render ?? {}),
+          },
+          exposedParams: {
+            ...currentProps.exposedParams,
+            ...(typedPatch.exposedParams ?? {}),
+          },
+          emitters: typedPatch.emitters ?? currentProps.emitters,
         })
-        const unchanged =
-          currentProps.color === merged.color &&
-          Math.abs(currentProps.intensity - merged.intensity) <= 1e-4 &&
-          Math.abs(currentProps.particleSize - merged.particleSize) <= 1e-4 &&
-          currentProps.particleCount === merged.particleCount &&
-          currentProps.showParticles === merged.showParticles &&
-          currentProps.showBeams === merged.showBeams &&
-          currentProps.showRings === merged.showRings
+        const unchanged = JSON.stringify(currentProps) === JSON.stringify(merged)
         if (unchanged) {
           return false
         }
-        nextProps = cloneWarpGateComponentProps(merged)
+        nextProps = cloneParticleSystemComponentProps(merged)
       } else if (type === FLOOR_COMPONENT_TYPE) {
         const currentProps = component.props as FloorComponentProps
         const typedPatch = patch as Partial<FloorComponentProps>
@@ -17492,30 +17499,6 @@ export const useSceneStore = defineStore('scene', {
         }
 
         nextProps = cloneLandformComponentProps(merged)
-      } else if (type === EFFECT_COMPONENT_TYPE) {
-        const currentProps = clampEffectComponentProps(component.props as EffectComponentProps)
-        const typedPatch = patch as Partial<EffectComponentProps>
-        const merged = clampEffectComponentProps({
-          ...currentProps,
-          ...typedPatch,
-          groundLight: {
-            ...currentProps.groundLight,
-            ...(typedPatch.groundLight ?? {}),
-          },
-        })
-        const unchanged =
-          currentProps.effectType === merged.effectType &&
-          currentProps.groundLight.color === merged.groundLight.color &&
-          Math.abs(currentProps.groundLight.intensity - merged.groundLight.intensity) <= 1e-4 &&
-          Math.abs(currentProps.groundLight.particleSize - merged.groundLight.particleSize) <= 1e-4 &&
-          currentProps.groundLight.particleCount === merged.groundLight.particleCount &&
-          currentProps.groundLight.showParticles === merged.groundLight.showParticles &&
-          currentProps.groundLight.showBeams === merged.groundLight.showBeams &&
-          currentProps.groundLight.showRings === merged.groundLight.showRings
-        if (unchanged) {
-          return false
-        }
-        nextProps = cloneEffectComponentProps(merged)
       } else if (type === RIGIDBODY_COMPONENT_TYPE) {
         const currentProps = clampRigidbodyComponentProps(component.props as RigidbodyComponentProps)
         const typedPatch = patch as Partial<RigidbodyComponentProps>

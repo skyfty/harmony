@@ -799,6 +799,9 @@ export type BehaviorScriptType =
   | 'delay'
   | 'moveTo'
   | 'spawnPrefab'
+  | 'playParticleEffect'
+  | 'stopParticleEffect'
+  | 'burstParticleEffect'
   | 'showAlert'
   | 'bubble'
   | 'playSound'
@@ -846,6 +849,25 @@ export interface SpawnPrefabBehaviorParams {
   initializationMode: RuntimePrefabInitializationMode
   /** Controls how the prefab instance is positioned relative to the spawn anchor. */
   placement: RuntimePrefabPlacementOptions
+}
+
+export interface PlayParticleEffectBehaviorParams {
+  targetNodeId: string | null
+  componentId: string | null
+  restart?: boolean
+}
+
+export interface StopParticleEffectBehaviorParams {
+  targetNodeId: string | null
+  componentId: string | null
+  softStop?: boolean
+}
+
+export interface BurstParticleEffectBehaviorParams {
+  targetNodeId: string | null
+  componentId: string | null
+  emitterId: string | null
+  count?: number
 }
 
 export interface ShowAlertBehaviorParams {
@@ -1100,6 +1122,18 @@ export type SceneBehaviorScriptBinding =
   | {
       type: 'spawnPrefab'
       params: SpawnPrefabBehaviorParams
+    }
+  | {
+      type: 'playParticleEffect'
+      params: PlayParticleEffectBehaviorParams
+    }
+  | {
+      type: 'stopParticleEffect'
+      params: StopParticleEffectBehaviorParams
+    }
+  | {
+      type: 'burstParticleEffect'
+      params: BurstParticleEffectBehaviorParams
     }
   | {
       type: 'showAlert'
