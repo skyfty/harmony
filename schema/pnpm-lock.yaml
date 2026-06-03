@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@babel/runtime':
+        specifier: ^7.28.6
+        version: 7.29.7
       '@harmony/physics-bridge':
         specifier: file:../physics-bridge
         version: file:../physics-bridge
@@ -53,6 +56,10 @@ importers:
         version: 5.9.3
 
 packages:
+
+  '@babel/runtime@7.29.7':
+    resolution: {integrity: sha512-Nq8OhGWiZIZGV6hLHoyAKLLcJihP/xFeBMGJoUrxTX2psI8dCifzLhZISFb+VWS3wFMRDmCGw5R+dOySCqPLhw==}
+    engines: {node: '>=6.9.0'}
 
   '@harmony/physics-bridge@file:../physics-bridge':
     resolution: {directory: ../physics-bridge, type: directory}
@@ -315,6 +322,8 @@ packages:
     resolution: {integrity: sha512-oyPnDa1X5c13+Y7mA/FDMNJrn4S8UNBe0KCqtDmor40Re7ALrPN6npFwyYVRRh+PqozZQdeg23QtbcamZnG5rA==}
 
 snapshots:
+
+  '@babel/runtime@7.29.7': {}
 
   '@harmony/physics-bridge@file:../physics-bridge':
     dependencies:

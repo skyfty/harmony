@@ -1282,6 +1282,11 @@ declare module '@/types/scene-state' {
 const OPACITY_EPSILON = 1e-3
 
 let workspaceScopeStopHandle: WatchStopHandle | null = null
+let sceneAutoSaveLifecycleBound = false
+let sceneAutoSaveTimerHandle: ReturnType<typeof setTimeout> | null = null
+let sceneAutoSaveActivePromise: Promise<StoredSceneDocument | null> | null = null
+let sceneAutoSaveRequestedGeneration = 0
+let sceneAutoSaveSavedGeneration = 0
 
 type MaterialTextureMap = Partial<Record<SceneMaterialTextureSlot, SceneMaterialTextureRef | null>>
 
@@ -2025,10 +2030,7 @@ function persistGroundHeightSidecarForNode(groundNode: SceneNode | null): boolea
   if (!sceneId) {
     return false
   }
-  const sidecar = useGroundHeightmapStore().buildSceneDocumentSidecar(groundNode)
-  void useScenesStore().saveSceneGroundHeightSidecar(sceneId, sidecar, { syncServer: false }).catch((error: unknown) => {
-    console.warn('[SceneStore] Failed to persist ground height sidecar', error)
-  })
+  groundHeightSidecarSaveScheduler.schedule({ sceneId })
   return true
 }
 
@@ -2296,10 +2298,7 @@ function persistGroundScatterSidecarForNode(groundNode: SceneNode | null): boole
   }
   const sceneStore = useSceneStore()
   const document = buildSceneDocumentFromState(sceneStore)
-  const sidecar = useGroundScatterStore().buildSceneDocumentSidecar(document.id, findGroundNode(document.nodes ?? []))
-  void useScenesStore().saveSceneGroundScatterSidecar(document.id, sidecar).catch((error: unknown) => {
-    console.warn('[SceneStore] Failed to persist ground scatter sidecar', error)
-  })
+  groundScatterSidecarSaveScheduler.schedule({ sceneId: document.id })
   return true
 }
 
@@ -8017,11 +8016,116 @@ function clonePlanningData(data: PlanningSceneData | null | undefined): Planning
   return manualDeepClone(data)
 }
 
+function clearSceneAutoSaveTimer(): void {
+  if (sceneAutoSaveTimerHandle !== null) {
+    clearTimeout(sceneAutoSaveTimerHandle)
+    sceneAutoSaveTimerHandle = null
+  }
+}
+
+function computeSceneAutoSaveMode(store: SceneAutoSaveTarget): SceneAutoSaveMode {
+  if (store.activeTransformNodeId && store.isSceneReady) {
+    return 'interactive'
+  }
+  if (sceneAutoSaveRequestedGeneration - sceneAutoSaveSavedGeneration >= 2) {
+    return 'interactive'
+  }
+  return 'structural'
+}
+
+function scheduleSceneAutoSave(store: SceneAutoSaveTarget, mode?: SceneAutoSaveMode): void {
+  if (!store.currentSceneId) {
+    return
+  }
+
+  const nextMode = mode ?? computeSceneAutoSaveMode(store)
+  const delay = SCENE_AUTO_SAVE_DELAY_MS[nextMode]
+
+  sceneAutoSaveRequestedGeneration += 1
+
+  if (sceneAutoSaveActivePromise) {
+    return
+  }
+
+  clearSceneAutoSaveTimer()
+  sceneAutoSaveTimerHandle = setTimeout(() => {
+    clearSceneAutoSaveTimer()
+    void store.flushPendingSceneAutoSave({ force: true })
+  }, delay)
+}
+
+const groundHeightSidecarSaveScheduler = createLatestIdleScheduler<{ sceneId: string }>((request) => {
+  void (async () => {
+    const sceneStore = useSceneStore()
+    if (sceneStore.currentSceneId !== request.sceneId || !sceneStore.isSceneReady) {
+      return
+    }
+    const groundNode = findGroundNode(sceneStore.nodes)
+    if (!groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
+      return
+    }
+    const sidecar = useGroundHeightmapStore().buildSceneDocumentSidecar(groundNode)
+    try {
+      await useScenesStore().saveSceneGroundHeightSidecar(request.sceneId, sidecar, { syncServer: false })
+    } catch (error) {
+      console.warn('[SceneStore] Failed to persist ground height sidecar', error)
+    }
+  })().catch((error) => {
+    console.warn('[SceneStore] Failed to persist ground height sidecar', error)
+  })
+}, {
+  timeoutMs: 300,
+})
+
+const groundScatterSidecarSaveScheduler = createLatestIdleScheduler<{ sceneId: string }>((request) => {
+  void (async () => {
+    const sceneStore = useSceneStore()
+    if (sceneStore.currentSceneId !== request.sceneId || !sceneStore.isSceneReady) {
+      return
+    }
+    const groundNode = findGroundNode(sceneStore.nodes)
+    if (!groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
+      return
+    }
+    const sidecar = useGroundScatterStore().buildSceneDocumentSidecar(request.sceneId, groundNode)
+    try {
+      await useScenesStore().saveSceneGroundScatterSidecar(request.sceneId, sidecar, { syncServer: false })
+    } catch (error) {
+      console.warn('[SceneStore] Failed to persist ground scatter sidecar', error)
+    }
+  })().catch((error) => {
+    console.warn('[SceneStore] Failed to persist ground scatter sidecar', error)
+  })
+}, {
+  timeoutMs: 300,
+})
+
+type SceneAutoSaveMode = 'structural' | 'interactive'
+
+const SCENE_AUTO_SAVE_DELAY_MS: Record<SceneAutoSaveMode, number> = {
+  structural: 300,
+  interactive: 1000,
+}
+
+type SceneAutoSaveTarget = Pick<
+  SceneState,
+  'currentSceneId' | 'hasUnsavedChanges' | 'activeTransformNodeId' | 'isSceneReady'
+> & {
+  requestSceneAutoSave: (options?: { mode?: SceneAutoSaveMode }) => void
+  flushPendingSceneAutoSave: (options?: { force?: boolean }) => Promise<StoredSceneDocument | null>
+}
+
 function commitSceneSnapshot(
-  store: Pick<SceneState, 'nodes' | 'currentSceneId' | 'environment' | 'hasUnsavedChanges' | 'groundNode' | 'currentSceneMeta'>,
+  store: Pick<
+    SceneState,
+    'nodes' | 'currentSceneId' | 'environment' | 'hasUnsavedChanges' | 'groundNode' | 'currentSceneMeta' | 'activeTransformNodeId' | 'isSceneReady'
+  > & { requestSceneAutoSave?: (options?: { mode?: SceneAutoSaveMode }) => void },
   _options: { updateNodes?: boolean; } = {},
 ) {
   if (!store.currentSceneId) {
+    return
+  }
+  if (!store.isSceneReady) {
     return
   }
 
@@ -8034,6 +8138,9 @@ function commitSceneSnapshot(
 
   normalizeCurrentSceneMeta(store)
   store.hasUnsavedChanges = true
+  store.requestSceneAutoSave?.({
+    mode: store.activeTransformNodeId && store.isSceneReady ? 'interactive' : 'structural',
+  })
 }
 
 function applyCurrentSceneMeta(store: SceneState, document: StoredSceneDocument) {
@@ -8969,9 +9076,26 @@ export const useSceneStore = defineStore('scene', {
 
     initialize() {
       if (workspaceScopeStopHandle) {
+        if (!sceneAutoSaveLifecycleBound && typeof window !== 'undefined') {
+          sceneAutoSaveLifecycleBound = true
+        }
         return
       }
       const scenesStore = useScenesStore()
+      if (!sceneAutoSaveLifecycleBound && typeof window !== 'undefined') {
+        sceneAutoSaveLifecycleBound = true
+        window.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'hidden') {
+            void this.flushPendingSceneAutoSave({ force: true })
+          }
+        })
+        window.addEventListener('pagehide', () => {
+          void this.flushPendingSceneAutoSave({ force: true })
+        })
+        window.addEventListener('beforeunload', () => {
+          void this.flushPendingSceneAutoSave({ force: true })
+        })
+      }
       workspaceScopeStopHandle = watch(
         [() => scenesStore.workspaceId, () => scenesStore.workspaceType],
         ([nextId, nextType], [prevId, prevType]) => {
@@ -9020,7 +9144,7 @@ export const useSceneStore = defineStore('scene', {
       }
       if (!isInitial) {
         try {
-          await this.saveActiveScene({ force: true })
+          await this.flushPendingSceneAutoSave({ force: true })
         } catch (error) {
           console.warn('[SceneStore] Failed to auto-save before workspace switch', error)
         }
@@ -9478,6 +9602,7 @@ export const useSceneStore = defineStore('scene', {
     endTransformInteraction() {
       this.activeTransformNodeId = null
       this.transformSnapshotCaptured = false
+      void this.flushPendingSceneAutoSave({ force: true })
     },
     setActiveTool(tool: EditorTool) {
       if (!isTransformToolAllowedForSelection(this.nodes, this.selectedNodeIds, tool)) {
@@ -10357,7 +10482,7 @@ export const useSceneStore = defineStore('scene', {
 
       const sidecar = useGroundHeightmapStore().buildSceneDocumentSidecar(target)
       await useScenesStore().saveSceneGroundHeightSidecar(sceneId, sidecar, { syncServer: false })
-      await this.saveActiveScene({ force: true })
+      await this.flushPendingSceneAutoSave({ force: true })
       return true
     },
     commitGroundScatterEdit(
@@ -12364,7 +12489,7 @@ export const useSceneStore = defineStore('scene', {
       })
       this.setActiveDirectory(directoryId)
       // Persist scene immediately after modifying asset directories
-      void this.saveActiveScene({ force: true }).catch(() => {})
+      void this.flushPendingSceneAutoSave({ force: true }).catch(() => {})
       return directoryId
     },
     renameAssetDirectory(projectDirectoryId: string, name: string): boolean {
@@ -12390,7 +12515,7 @@ export const useSceneStore = defineStore('scene', {
         updateNodes: false,
       })
       // Persist scene immediately after renaming a directory
-      void this.saveActiveScene({ force: true }).catch(() => {})
+      void this.flushPendingSceneAutoSave({ force: true }).catch(() => {})
       return true
     },
     moveAssetDirectory(projectDirectoryId: string, targetProjectDirectoryId: string): boolean {
@@ -12426,7 +12551,7 @@ export const useSceneStore = defineStore('scene', {
       })
       this.setActiveDirectory(directoryId)
       // Persist scene immediately after moving a directory
-      void this.saveActiveScene({ force: true }).catch(() => {})
+      void this.flushPendingSceneAutoSave({ force: true }).catch(() => {})
       return true
     },
     deleteAssetDirectory(projectDirectoryId: string): { removedDirectoryIds: string[]; removedAssetIds: string[] } {
@@ -12476,7 +12601,7 @@ export const useSceneStore = defineStore('scene', {
       })
       this.setActiveDirectory(parentId === manifest.rootDirectoryId ? ASSETS_ROOT_DIRECTORY_ID : parentId)
       // Persist scene immediately after deleting a directory (and its assets)
-      void this.saveActiveScene({ force: true }).catch(() => {})
+      void this.flushPendingSceneAutoSave({ force: true }).catch(() => {})
       return {
         removedDirectoryIds: Array.from(directoryIdsToRemove),
         removedAssetIds: Array.from(assetIdsToRemove),
@@ -12500,7 +12625,7 @@ export const useSceneStore = defineStore('scene', {
         updateNodes: false,
       })
       // Persist scene immediately after renaming a project asset
-      void this.saveActiveScene({ force: true }).catch(() => {})
+      void this.flushPendingSceneAutoSave({ force: true }).catch(() => {})
       return true
     },
     updateProjectAssetMetadata(assetId: string, updates: Partial<ProjectAsset>): ProjectAsset | null {
@@ -12553,7 +12678,7 @@ export const useSceneStore = defineStore('scene', {
         commitSnapshot: true,
         updateNodes: false,
       })
-      void this.saveActiveScene({ force: true }).catch(() => {})
+      void this.flushPendingSceneAutoSave({ force: true }).catch(() => {})
       return this.findAssetInCatalog(assetId)
     },
     moveProjectAssetToDirectory(assetId: string, targetProjectDirectoryId: string): boolean {
@@ -12583,7 +12708,7 @@ export const useSceneStore = defineStore('scene', {
         updateNodes: false,
       })
       // Persist scene immediately after moving an asset to a different directory
-      void this.saveActiveScene({ force: true }).catch(() => {})
+      void this.flushPendingSceneAutoSave({ force: true }).catch(() => {})
       return true
     },
     getPackageDirectories(providerId: string): ProjectDirectory[] | null {
@@ -12956,7 +13081,7 @@ export const useSceneStore = defineStore('scene', {
 
       if (options.autoSave !== false) {
         // Persist scene immediately after registering new assets so they survive reload.
-        void this.saveActiveScene({ force: true }).catch(() => {})
+        void this.flushPendingSceneAutoSave({ force: true }).catch(() => {})
       }
 
       return registeredAssets
@@ -13606,7 +13731,7 @@ export const useSceneStore = defineStore('scene', {
       if (deletableIds.length) {
         commitSceneSnapshot(this, { updateNodes: false })
         // Persist scene immediately after deleting assets
-        void this.saveActiveScene({ force: true }).catch(() => {})
+        void this.flushPendingSceneAutoSave({ force: true }).catch(() => {})
       }
 
       return deletableIds
@@ -13676,7 +13801,7 @@ export const useSceneStore = defineStore('scene', {
 
       commitSceneSnapshot(this, { updateNodes: true })
       // Persist scene after replacing a local asset with a server asset
-      void this.saveActiveScene({ force: true }).catch(() => {})
+      void this.flushPendingSceneAutoSave({ force: true }).catch(() => {})
       return storedAsset
     },
     setResourceProviderId(providerId: string) {
@@ -17006,6 +17131,7 @@ export const useSceneStore = defineStore('scene', {
         | LandformComponentProps
         | RigidbodyComponentProps
         | VehicleComponentProps
+        | ParticleSystemComponentProps
         | WaterComponentProps
         | NominateComponentProps
       let wallCenterOffsetDelta: { x: number; y: number; z: number } | null = null
@@ -18620,6 +18746,34 @@ export const useSceneStore = defineStore('scene', {
       const clipboardStore = useClipboardStore()
       clipboardStore.clearClipboard()
     },
+    requestSceneAutoSave(options: { mode?: SceneAutoSaveMode } = {}): void {
+      if (!this.currentSceneId) {
+        return
+      }
+      if (!this.isSceneReady) {
+        return
+      }
+      if (!this.hasUnsavedChanges) {
+        this.hasUnsavedChanges = true
+      }
+      scheduleSceneAutoSave(this as SceneAutoSaveTarget, options.mode)
+    },
+    async flushPendingSceneAutoSave(_options: { force?: boolean } = {}): Promise<StoredSceneDocument | null> {
+      clearSceneAutoSaveTimer()
+      if (sceneAutoSaveActivePromise) {
+        try {
+          await sceneAutoSaveActivePromise
+        } catch (_error) {
+          // saveActiveScene already logs the failure.
+        }
+      }
+
+      if (!this.currentSceneId || !this.isSceneReady || !this.hasUnsavedChanges) {
+        return null
+      }
+
+      return await this.saveActiveScene({ force: true })
+    },
     async saveActiveScene(options: { force?: boolean } = {}): Promise<StoredSceneDocument | null> {
       if (!this.currentSceneId) {
         console.warn('[SceneStore] Attempted to save without an active scene')
@@ -18630,24 +18784,52 @@ export const useSceneStore = defineStore('scene', {
         return null
       }
 
+      clearSceneAutoSaveTimer()
+      const saveGeneration = sceneAutoSaveRequestedGeneration
+      const inFlightPromise = sceneAutoSaveActivePromise
+      if (inFlightPromise) {
+        const saved = await inFlightPromise
+        if (options.force && this.hasUnsavedChanges) {
+          return await this.saveActiveScene({ force: true })
+        }
+        return saved
+      }
+
       const scenesStore = useScenesStore()
-      const document = buildSceneDocumentFromState(this)
+      const run = async (): Promise<StoredSceneDocument | null> => {
+        const document = buildSceneDocumentFromState(this)
 
-      const existing = await scenesStore.loadSceneDocument(document.id)
-      const projectsStore = useProjectsStore()
-      const projectId = existing?.projectId ?? projectsStore.activeProjectId
-      if (!projectId) {
-        throw new Error('Project must be opened before saving scene')
-      }
-      document.projectId = projectId
-      await scenesStore.saveSceneDocument(document)
-      applyCurrentSceneMeta(this, document)
-      this.hasUnsavedChanges = false
+        const existing = await scenesStore.loadSceneDocument(document.id)
+        const projectsStore = useProjectsStore()
+        const projectId = existing?.projectId ?? projectsStore.activeProjectId
+        if (!projectId) {
+          throw new Error('Project must be opened before saving scene')
+        }
+        document.projectId = projectId
+        await scenesStore.saveSceneDocument(document)
+        applyCurrentSceneMeta(this, document)
+        this.hasUnsavedChanges = false
 
-      if (projectsStore.activeProjectId === projectId) {
-        await projectsStore.setLastEditedScene(projectId, document.id)
+        if (projectsStore.activeProjectId === projectId) {
+          await projectsStore.setLastEditedScene(projectId, document.id)
+        }
+
+        return document
       }
-      return document
+
+      const promise = run()
+      sceneAutoSaveActivePromise = promise
+      try {
+        const saved = await promise
+        sceneAutoSaveSavedGeneration = saveGeneration
+        return saved
+      } finally {
+        sceneAutoSaveActivePromise = null
+        if (this.hasUnsavedChanges || sceneAutoSaveRequestedGeneration > saveGeneration) {
+          const retryMode = computeSceneAutoSaveMode(this as SceneAutoSaveTarget)
+          scheduleSceneAutoSave(this as SceneAutoSaveTarget, retryMode)
+        }
+      }
     },
     async createScene(
       name = 'Untitled Scene',
@@ -18797,7 +18979,7 @@ export const useSceneStore = defineStore('scene', {
         await projectsStore.setLastEditedScene(scene.projectId, scene.id)
       }
       if (embeddedMigration.migratedEmbeddedAssets) {
-        void this.saveActiveScene({ force: true }).catch((error) => {
+        void this.flushPendingSceneAutoSave({ force: true }).catch((error) => {
           console.warn('[SceneStore] Failed to persist embedded-asset migration result', error)
         })
       }

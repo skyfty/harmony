@@ -52,7 +52,7 @@ const textureAssetLabel = computed(() => {
 
 const textureAssetMeta = computed(() => {
   if (!textureAssetId.value) {
-    return 'Default soft circle texture will be used.'
+    return 'Default'
   }
   const asset = selectedTextureAsset.value
   if (!asset) {

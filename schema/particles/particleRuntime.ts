@@ -17,7 +17,7 @@ import System, {
   SphereZone,
   SpriteRenderer,
   Vector3D,
-  Velocity,
+  VectorVelocity,
 } from 'three-nebula'
 import type { ParticleBudgetDecision, ParticleBudgetRuntimeStats } from './particleBudget'
 import { applyEmitterBudget, resolveParticleBudgetDecision } from './particleBudget'
@@ -184,7 +184,7 @@ function createZone(config: ParticleEmitterConfig): unknown {
 
 function createVelocity(config: ParticleEmitterConfig): unknown {
   if (config.velocityMode === 'vector') {
-    return new Velocity(
+    return new VectorVelocity(
       new Vector3D(config.direction.x * config.speed, config.direction.y * config.speed, config.direction.z * config.speed),
       config.spread,
     )
@@ -331,7 +331,7 @@ class ParticleSystemRuntimeController implements ParticleSystemRuntimeHandle {
     }
     this.active = true
     if (this.system && typeof this.system.emit === 'function') {
-      this.system.emit()
+      this.system.emit({})
     }
     this.updateUserData()
   }

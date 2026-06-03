@@ -13,6 +13,7 @@ declare module 'three-nebula' {
   export const Scale: any
   export const Color: any
   export const Velocity: any
+  export const VectorVelocity: any
   export const RadialVelocity: any
   export const Vector3D: any
   export const PointZone: any
