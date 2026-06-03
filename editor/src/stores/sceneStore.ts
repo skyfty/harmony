@@ -16082,6 +16082,9 @@ export const useSceneStore = defineStore('scene', {
             this.nodes = [...this.nodes]
             commitSceneSnapshot(this)
           }
+          void this.flushPendingSceneAutoSave({ force: true }).catch((error) => {
+            console.warn('[SceneStore] Failed to flush landform scene save after updating existing node', error)
+          })
           return updated
         }
 
@@ -16097,20 +16100,23 @@ export const useSceneStore = defineStore('scene', {
           editorFlags: payload.editorFlags,
         })
 
-      if (node) {
-        this.setNodeMaterials(node.id, defaultMaterials)
-        const result = this.addNodeComponent(node.id, LANDFORM_COMPONENT_TYPE)
-        const component = result?.component
-        if (component?.id) {
+        if (node) {
+          this.setNodeMaterials(node.id, defaultMaterials)
+          const result = this.addNodeComponent(node.id, LANDFORM_COMPONENT_TYPE)
+          const component = result?.component
+          if (component?.id) {
             const nextProps = resolveLandformComponentPropsFromMesh(defaultMesh)
             this.updateNodeComponentProps(node.id, component.id, {
               enableFeather: nextProps.enableFeather,
-            feather: nextProps.feather,
-            uvScale: nextProps.uvScale,
+              feather: nextProps.feather,
+              uvScale: nextProps.uvScale,
+            })
+          }
+          scheduleLandformGroundSplatBake(this, 'createLandformNode')
+          void this.flushPendingSceneAutoSave({ force: true }).catch((error) => {
+            console.warn('[SceneStore] Failed to flush landform scene save after creation', error)
           })
         }
-        scheduleLandformGroundSplatBake(this, 'createLandformNode')
-      }
 
         return node
       } finally {
@@ -18083,6 +18089,9 @@ export const useSceneStore = defineStore('scene', {
         scheduleLandformGroundSplatBake(this, 'removeSceneNodes')
       }
       commitSceneSnapshot(this)
+      void this.flushPendingSceneAutoSave({ force: true }).catch((error) => {
+        console.warn('[SceneStore] Failed to flush landform scene save after removal', error)
+      })
     },
 
     groupSelection(): boolean {
