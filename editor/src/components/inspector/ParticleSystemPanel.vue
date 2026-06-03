@@ -11,7 +11,6 @@ import {
   clampParticleSystemComponentProps,
   cloneParticleSystemComponentProps,
   createParticlePresetProps,
-  estimateParticleSystemCost,
   listParticlePresetGroups,
   listParticlePresets,
   type ParticleSystemComponentProps,
@@ -28,7 +27,6 @@ const componentState = computed(
 
 const componentEnabled = computed(() => componentState.value?.enabled !== false)
 const normalizedProps = computed(() => clampParticleSystemComponentProps(componentState.value?.props))
-const budgetEstimate = computed(() => estimateParticleSystemCost(normalizedProps.value))
 const presetGroups = computed(() => listParticlePresetGroups())
 const presetLabelMap = computed(() => new Map(listParticlePresets().map((entry) => [entry.id, entry.label] as const)))
 const selectedPresetLabel = computed(() => presetLabelMap.value.get(normalizedProps.value.presetId) ?? normalizedProps.value.presetId)
@@ -45,6 +43,8 @@ const textureAssetDialogAnchor = ref<{ x: number; y: number } | null>(null)
 const textureAssetDialogSelectedId = computed(() => textureAssetId.value)
 const textureAssetDialogTypes = 'image,texture,hdri'
 const textureAssetDialogExtensions = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'ktx2', 'hdr', 'exr']
+const particleColorMenuOpen = ref(false)
+const emitterColorMenuState = ref<{ index: number; field: 'color' | 'color2' } | null>(null)
 
 const textureAssetLabel = computed(() => {
   if (!textureAssetId.value) {
@@ -147,6 +147,27 @@ function applyPatch(patch: ParticleSystemPatch) {
   sceneStore.updateNodeComponentProps(nodeId, component.id, next as unknown as Partial<Record<string, unknown>>)
 }
 
+function normalizeHexColor(value: unknown, fallback: string): string {
+  if (typeof value !== 'string') {
+    return fallback
+  }
+  const trimmed = value.trim()
+  if (!trimmed.length) {
+    return fallback
+  }
+  const prefixed = trimmed.startsWith('#') ? trimmed : `#${trimmed}`
+  const match = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(prefixed)
+  if (!match) {
+    return fallback
+  }
+  const hex = match[1] ?? ''
+  if (hex.length === 3) {
+    const [r, g, b] = hex.toLowerCase().split('')
+    return `#${r}${r}${g}${g}${b}${b}`
+  }
+  return `#${hex.toLowerCase()}`
+}
+
 function applyPreset(presetId: string | null) {
   if (!presetId) {
     return
@@ -175,6 +196,48 @@ function handleTextureAssetDialogUpdate(asset: ProjectAsset | null) {
 
 function handleTextureAssetDialogCancel() {
   textureAssetDialogVisible.value = false
+}
+
+function handleColorInput(value: string | null) {
+  const normalized = normalizeHexColor(value, normalizedProps.value.exposedParams.color)
+  if (normalized === normalizedProps.value.exposedParams.color) {
+    return
+  }
+  applyPatch({ exposedParams: { color: normalized } })
+}
+
+function handleColorPickerInput(value: string | null) {
+  if (typeof value !== 'string') {
+    return
+  }
+  handleColorInput(value)
+}
+
+function isEmitterColorMenuOpen(index: number, field: 'color' | 'color2') {
+  return emitterColorMenuState.value?.index === index && emitterColorMenuState.value?.field === field
+}
+
+function setEmitterColorMenuOpen(index: number, field: 'color' | 'color2', value: boolean) {
+  emitterColorMenuState.value = value ? { index, field } : null
+}
+
+function handleEmitterColorInput(index: number, field: 'color' | 'color2', value: string | null) {
+  const emitter = normalizedProps.value.emitters[index]
+  if (!emitter) {
+    return
+  }
+  const normalized = normalizeHexColor(value, emitter[field])
+  if (normalized === emitter[field]) {
+    return
+  }
+  updateEmitter(index, { [field]: normalized } as Partial<ParticleEmitterConfig>)
+}
+
+function handleEmitterColorPickerInput(index: number, field: 'color' | 'color2', value: string | null) {
+  if (typeof value !== 'string') {
+    return
+  }
+  handleEmitterColorInput(index, field, value)
 }
 
 function updateEmitter(index: number, patch: Partial<ParticleEmitterConfig>) {
@@ -362,7 +425,6 @@ function handleRemoveComponent() {
     <v-expansion-panel-text>
       <div class="particle-system-panel">
         <div class="particle-system-panel__section">
-          <div class="particle-system-panel__section-title">Preset</div>
           <v-menu
             v-model="presetMenuOpen"
             location="bottom start"
@@ -441,54 +503,6 @@ function handleRemoveComponent() {
         </div>
 
         <div class="particle-system-panel__section">
-          <div class="particle-system-panel__section-title">Mobile Budget</div>
-          <div class="particle-system-panel__budget-row">
-            <span>Estimated Particles</span>
-            <strong>{{ budgetEstimate.estimatedParticles }}</strong>
-          </div>
-          <div class="particle-system-panel__budget-row">
-            <span>Quality Tier</span>
-            <strong>{{ normalizedProps.budget.qualityTier }}</strong>
-          </div>
-          <div class="particle-system-panel__budget-row">
-            <span>Status</span>
-            <strong :class="{ 'is-danger': budgetEstimate.exceedsMiniBudget }">
-              {{ budgetEstimate.exceedsMiniBudget ? 'Over Mini Budget' : 'Safe' }}
-            </strong>
-          </div>
-          <v-select
-            :model-value="normalizedProps.budget.qualityTier"
-            :items="['mini-safe', 'balanced', 'desktop-rich']"
-            label="Quality Tier"
-            density="compact"
-            variant="underlined"
-            hide-details
-            :disabled="!componentEnabled"
-            @update:model-value="applyPatch({ budget: { qualityTier: $event } })"
-          />
-          <v-text-field
-            :model-value="normalizedProps.budget.maxParticles"
-            label="Max Particles"
-            type="number"
-            density="compact"
-            variant="underlined"
-            hide-details
-            :disabled="!componentEnabled"
-            @update:model-value="applyPatch({ budget: { maxParticles: Number($event) || 0 } })"
-          />
-          <v-text-field
-            :model-value="normalizedProps.budget.cullDistance"
-            label="Cull Distance"
-            type="number"
-            density="compact"
-            variant="underlined"
-            hide-details
-            :disabled="!componentEnabled"
-            @update:model-value="applyPatch({ budget: { cullDistance: Number($event) || 0 } })"
-          />
-        </div>
-
-        <div class="particle-system-panel__section">
           <div class="particle-system-panel__section-title">Visual</div>
           <div class="particle-system-panel__texture-tile">
             <button
@@ -519,86 +533,117 @@ function handleRemoveComponent() {
               <v-icon size="18">mdi-close</v-icon>
             </v-btn>
           </div>
-          <v-text-field
-            :model-value="normalizedProps.exposedParams.color"
-            label="Color"
-            density="compact"
-            variant="underlined"
-            hide-details
-            :disabled="!componentEnabled"
-            @update:model-value="applyPatch({ exposedParams: { color: String($event ?? '') } })"
-          />
-          <v-text-field
-            :model-value="normalizedProps.exposedParams.particleSize"
-            label="Particle Size"
-            type="number"
-            density="compact"
-            variant="underlined"
-            hide-details
-            :disabled="!componentEnabled"
-            @update:model-value="applyPatch({ exposedParams: { particleSize: Number($event) || 0 } })"
-          />
-          <v-text-field
-            :model-value="normalizedProps.exposedParams.lifetime"
-            label="Lifetime"
-            type="number"
-            density="compact"
-            variant="underlined"
-            hide-details
-            :disabled="!componentEnabled"
-            @update:model-value="applyPatch({ exposedParams: { lifetime: Number($event) || 0 } })"
-          />
-          <v-text-field
-            :model-value="normalizedProps.exposedParams.emissionRate"
-            label="Emission Rate"
-            type="number"
-            density="compact"
-            variant="underlined"
-            hide-details
-            :disabled="!componentEnabled"
-            @update:model-value="applyPatch({ exposedParams: { emissionRate: Number($event) || 0 } })"
-          />
+          <div class="particle-system-panel__color">
+            <div class="particle-system-panel__color-input">
+              <v-text-field
+                :model-value="normalizedProps.exposedParams.color"
+                label="Color"
+                density="compact"
+                variant="underlined"
+                hide-details
+                :disabled="!componentEnabled"
+                @update:model-value="handleColorInput($event)"
+              />
+              <v-menu
+                v-model="particleColorMenuOpen"
+                :close-on-content-click="false"
+                transition="scale-transition"
+                location="bottom start"
+              >
+                <template #activator="{ props: menuProps }">
+                  <button
+                    class="particle-system-panel__color-swatch"
+                    type="button"
+                    v-bind="menuProps"
+                    :style="{ backgroundColor: normalizedProps.exposedParams.color }"
+                  >
+                    <span class="sr-only">Choose color</span>
+                  </button>
+                </template>
+                <div class="particle-system-panel__color-picker">
+                  <v-color-picker
+                    :model-value="normalizedProps.exposedParams.color"
+                    mode="hex"
+                    :modes="['hex']"
+                    hide-inputs
+                    @update:model-value="handleColorPickerInput"
+                  />
+                </div>
+              </v-menu>
+            </div>
+          </div>
+          <div class="particle-system-panel__field-list">
+            <v-text-field
+              :model-value="normalizedProps.exposedParams.particleSize"
+              label="Particle Size"
+              type="number"
+              density="compact"
+              variant="underlined"
+              hide-details
+              :disabled="!componentEnabled"
+              @update:model-value="applyPatch({ exposedParams: { particleSize: Number($event) || 0 } })"
+            />
+            <v-text-field
+              :model-value="normalizedProps.exposedParams.lifetime"
+              label="Lifetime"
+              type="number"
+              density="compact"
+              variant="underlined"
+              hide-details
+              :disabled="!componentEnabled"
+              @update:model-value="applyPatch({ exposedParams: { lifetime: Number($event) || 0 } })"
+            />
+            <v-text-field
+              :model-value="normalizedProps.exposedParams.emissionRate"
+              label="Emission Rate"
+              type="number"
+              density="compact"
+              variant="underlined"
+              hide-details
+              :disabled="!componentEnabled"
+              @update:model-value="applyPatch({ exposedParams: { emissionRate: Number($event) || 0 } })"
+            />
+          </div>
         </div>
 
         <div class="particle-system-panel__section">
           <div class="particle-system-panel__section-title">Shape</div>
-          <v-text-field
-            :model-value="normalizedProps.exposedParams.radius"
-            label="Radius"
-            type="number"
-            density="compact"
-            variant="underlined"
-            hide-details
-            :disabled="!componentEnabled"
-            @update:model-value="applyPatch({ exposedParams: { radius: Number($event) || 0 } })"
-          />
-          <v-text-field
-            :model-value="normalizedProps.exposedParams.speed"
-            label="Speed"
-            type="number"
-            density="compact"
-            variant="underlined"
-            hide-details
-            :disabled="!componentEnabled"
-            @update:model-value="applyPatch({ exposedParams: { speed: Number($event) || 0 } })"
-          />
-          <v-text-field
-            :model-value="normalizedProps.exposedParams.burstCount"
-            label="Burst Count"
-            type="number"
-            density="compact"
-            variant="underlined"
-            hide-details
-            :disabled="!componentEnabled"
-            @update:model-value="applyPatch({ exposedParams: { burstCount: Number($event) || 0 } })"
-          />
+          <div class="particle-system-panel__field-list">
+            <v-text-field
+              :model-value="normalizedProps.exposedParams.radius"
+              label="Radius"
+              type="number"
+              density="compact"
+              variant="underlined"
+              hide-details
+              :disabled="!componentEnabled"
+              @update:model-value="applyPatch({ exposedParams: { radius: Number($event) || 0 } })"
+            />
+            <v-text-field
+              :model-value="normalizedProps.exposedParams.speed"
+              label="Speed"
+              type="number"
+              density="compact"
+              variant="underlined"
+              hide-details
+              :disabled="!componentEnabled"
+              @update:model-value="applyPatch({ exposedParams: { speed: Number($event) || 0 } })"
+            />
+            <v-text-field
+              :model-value="normalizedProps.exposedParams.burstCount"
+              label="Burst Count"
+              type="number"
+              density="compact"
+              variant="underlined"
+              hide-details
+              :disabled="!componentEnabled"
+              @update:model-value="applyPatch({ exposedParams: { burstCount: Number($event) || 0 } })"
+            />
+          </div>
         </div>
 
         <div class="particle-system-panel__section">
-          <div class="particle-system-panel__section-title">Advanced Emitters</div>
-          <div class="particle-system-panel__advanced-copy">
-            Emitters: {{ normalizedProps.emitters.length }} / Max Particles: {{ normalizedProps.budget.maxParticles }}
-          </div>
+ 
           <div class="particle-system-panel__emitter-actions">
             <v-btn size="small" variant="tonal" :disabled="!componentEnabled" @click="addEmitter">
               Add Emitter
@@ -764,24 +809,86 @@ function handleRemoveComponent() {
                     :disabled="!componentEnabled"
                     @update:model-value="updateEmitter(index, { spread: Number($event) || 0 })"
                   />
-                  <v-text-field
-                    :model-value="emitter.color"
-                    label="Color A"
-                    density="compact"
-                    variant="underlined"
-                    hide-details
-                    :disabled="!componentEnabled"
-                    @update:model-value="updateEmitter(index, { color: String($event ?? '') })"
-                  />
-                  <v-text-field
-                    :model-value="emitter.color2"
-                    label="Color B"
-                    density="compact"
-                    variant="underlined"
-                    hide-details
-                    :disabled="!componentEnabled"
-                    @update:model-value="updateEmitter(index, { color2: String($event ?? '') })"
-                  />
+                  <div class="particle-system-panel__emitter-color">
+                    <div class="particle-system-panel__emitter-color-input">
+                      <v-text-field
+                        :model-value="emitter.color"
+                        label="Color A"
+                        density="compact"
+                        variant="underlined"
+                        hide-details
+                        :disabled="!componentEnabled"
+                        @update:model-value="handleEmitterColorInput(index, 'color', $event)"
+                      />
+                      <v-menu
+                        :model-value="isEmitterColorMenuOpen(index, 'color')"
+                        :close-on-content-click="false"
+                        transition="scale-transition"
+                        location="bottom start"
+                        @update:model-value="setEmitterColorMenuOpen(index, 'color', $event)"
+                      >
+                        <template #activator="{ props: menuProps }">
+                          <button
+                            class="particle-system-panel__color-swatch"
+                            type="button"
+                            v-bind="menuProps"
+                            :style="{ backgroundColor: emitter.color }"
+                          >
+                            <span class="sr-only">Choose color A</span>
+                          </button>
+                        </template>
+                        <div class="particle-system-panel__color-picker">
+                          <v-color-picker
+                            :model-value="emitter.color"
+                            mode="hex"
+                            :modes="['hex']"
+                            hide-inputs
+                            @update:model-value="(value) => handleEmitterColorPickerInput(index, 'color', value)"
+                          />
+                        </div>
+                      </v-menu>
+                    </div>
+                  </div>
+                  <div class="particle-system-panel__emitter-color">
+                    <div class="particle-system-panel__emitter-color-input">
+                      <v-text-field
+                        :model-value="emitter.color2"
+                        label="Color B"
+                        density="compact"
+                        variant="underlined"
+                        hide-details
+                        :disabled="!componentEnabled"
+                        @update:model-value="handleEmitterColorInput(index, 'color2', $event)"
+                      />
+                      <v-menu
+                        :model-value="isEmitterColorMenuOpen(index, 'color2')"
+                        :close-on-content-click="false"
+                        transition="scale-transition"
+                        location="bottom start"
+                        @update:model-value="setEmitterColorMenuOpen(index, 'color2', $event)"
+                      >
+                        <template #activator="{ props: menuProps }">
+                          <button
+                            class="particle-system-panel__color-swatch"
+                            type="button"
+                            v-bind="menuProps"
+                            :style="{ backgroundColor: emitter.color2 }"
+                          >
+                            <span class="sr-only">Choose color B</span>
+                          </button>
+                        </template>
+                        <div class="particle-system-panel__color-picker">
+                          <v-color-picker
+                            :model-value="emitter.color2"
+                            mode="hex"
+                            :modes="['hex']"
+                            hide-inputs
+                            @update:model-value="(value) => handleEmitterColorPickerInput(index, 'color2', value)"
+                          />
+                        </div>
+                      </v-menu>
+                    </div>
+                  </div>
                   <v-text-field
                     :model-value="emitter.alphaStart"
                     label="Alpha Start"
@@ -888,7 +995,7 @@ function handleRemoveComponent() {
 
 .particle-system-panel__section {
   display: grid;
-  gap: 0.72rem;
+  gap: 0.9rem;
 }
 
 .particle-system-panel__section-title {
@@ -898,11 +1005,9 @@ function handleRemoveComponent() {
   opacity: 0.7;
 }
 
-.particle-system-panel__budget-row {
-  display: flex;
-  justify-content: space-between;
-  gap: 0.75rem;
-  font-size: 0.82rem;
+.particle-system-panel__field-list {
+  display: grid;
+  gap: 0.78rem;
 }
 
 .particle-system-panel__advanced-copy {
@@ -992,12 +1097,79 @@ function handleRemoveComponent() {
   color: #ffb86b;
 }
 
+.particle-system-panel__color {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.particle-system-panel__color-input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.particle-system-panel__color-swatch {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  cursor: pointer;
+  padding: 0;
+  display: inline-block;
+  background: transparent;
+}
+
+.particle-system-panel__color-swatch:focus-visible {
+  outline: 2px solid rgba(107, 152, 255, 0.8);
+  outline-offset: 2px;
+}
+
+.particle-system-panel__color-picker {
+  padding: 12px;
+}
+
+.particle-system-panel__emitter-color {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.particle-system-panel__emitter-color-input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  border: 0;
+}
+
 .particle-system-panel :deep(.v-input) {
-  margin-bottom: 0.2rem;
+  margin-bottom: 0;
 }
 
 .particle-system-panel :deep(.v-input:last-child) {
   margin-bottom: 0;
+}
+
+.particle-system-panel :deep(.v-switch) {
+  margin-bottom: -2px;
+}
+
+.particle-system-panel :deep(.v-field__input) {
+  min-height: 38px;
+}
+
+.particle-system-panel :deep(.v-label) {
+  opacity: 0.9;
 }
 
 .particle-system-panel__texture-remove {
