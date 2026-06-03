@@ -23484,6 +23484,10 @@ watch(
     }
     updateOutlineSelectionTargets()
     updateSelectionHighlights()
+    if (!sceneStore.selectedNodeIds.length) {
+      resetEffectRuntimeTickers()
+      return
+    }
     refreshEffectRuntimeTickers()
   }
 )

@@ -150,6 +150,16 @@ function resolveWeatherGroundThreshold(presetId: string): number {
   return 0
 }
 
+function resolveWeatherFadeRange(presetId: string): number {
+  if (presetId.includes('rain')) {
+    return presetId.includes('heavy') ? 0.8 : 0.62
+  }
+  if (presetId.includes('snow')) {
+    return presetId.includes('blizzard') ? 1.2 : 1
+  }
+  return 0
+}
+
 function prepareParticleTexture(texture: THREE.Texture, cacheKey: string): THREE.Texture {
   texture.name = texture.name || cacheKey
   texture.colorSpace = THREE.SRGBColorSpace
@@ -341,6 +351,7 @@ class ParticleSystemRuntimeController implements ParticleSystemRuntimeHandle {
       return
     }
     const groundThreshold = resolveWeatherGroundThreshold(this.props.presetId)
+    const fadeRange = resolveWeatherFadeRange(this.props.presetId)
     this.group.getWorldPosition(this.tempWorldPosition)
     const groundY = this.tempWorldPosition.y
     for (const entry of this.emitters) {
@@ -348,11 +359,28 @@ class ParticleSystemRuntimeController implements ParticleSystemRuntimeHandle {
       if (!Array.isArray(particles) || !particles.length) {
         continue
       }
-      for (const particle of particles as Array<{ dead?: boolean; sleep?: boolean; position?: { y?: number }; destroy?: () => void }>) {
+      for (const particle of particles as Array<{
+        dead?: boolean
+        sleep?: boolean
+        position?: { y?: number }
+        alpha?: number
+        destroy?: () => void
+        __harmonyBaseAlpha?: number
+      }>) {
         if (!particle || particle.dead || particle.sleep || !particle.position) {
           continue
         }
         const particleY = particle.position.y ?? Number.POSITIVE_INFINITY
+        const heightAboveGround = particleY - groundY
+        const fadeFactor = fadeRange > 0
+          ? Math.min(1, Math.max(0, heightAboveGround / Math.max(1e-6, fadeRange)))
+          : 1
+        if (typeof particle.alpha === 'number') {
+          if (typeof particle.__harmonyBaseAlpha !== 'number') {
+            particle.__harmonyBaseAlpha = particle.alpha
+          }
+          particle.alpha = particle.__harmonyBaseAlpha * fadeFactor
+        }
         if (particleY <= groundY + groundThreshold) {
           if (typeof particle.destroy === 'function') {
             particle.destroy()
@@ -443,6 +471,9 @@ class ParticleSystemRuntimeController implements ParticleSystemRuntimeHandle {
     if (this.disposed) {
       return
     }
+    if (!this.system || !this.renderer || !this.emitters.length) {
+      this.buildSystem()
+    }
     this.active = true
     for (const entry of this.emitters) {
       const emitter = entry.emitter as {
@@ -482,6 +513,9 @@ class ParticleSystemRuntimeController implements ParticleSystemRuntimeHandle {
     }
     if (this.system && typeof this.system.stop === 'function') {
       this.system.stop(Boolean(options.soft))
+    }
+    if (!options.soft) {
+      this.disposeSystemOnly()
     }
     this.updateUserData()
   }

@@ -54,8 +54,10 @@ export function createEffectPlaybackManager(): EffectPlaybackManager {
                 ? () => entry.setPlaybackActive?.(true)
                 : undefined,
             deactivate:
-              typeof entry.setPlaybackActive === 'function'
-                ? () => entry.setPlaybackActive?.(false)
+              typeof entry.stop === 'function'
+                ? () => entry.stop?.({ soft: false })
+                : typeof entry.setPlaybackActive === 'function'
+                  ? () => entry.setPlaybackActive?.(false)
                 : undefined,
           }
         })
