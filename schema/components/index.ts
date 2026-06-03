@@ -50,6 +50,12 @@ export * from './definitions/protagonistComponent'
 export * from './definitions/animationComponent'
 export * from './definitions/characterControllerComponent'
 export * from './definitions/particleSystemComponent'
+export {
+	createParticlePresetProps,
+	getParticlePresetDefinition,
+	listParticlePresets,
+	listParticlePresetGroups,
+} from './definitions/particleSystemComponent'
 export * from './definitions/behaviorComponent'
 export * from './definitions/rigidbodyComponent'
 export * from './definitions/vehicleComponent'

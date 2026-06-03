@@ -103,7 +103,6 @@ async function loadTextureFromDirectUrl(assetId: string): Promise<THREE.Texture 
     const texture = await sharedTextureLoader.loadAsync(assetId)
     return prepareParticleTexture(texture, assetId)
   } catch (error) {
-    console.warn('[ParticleSystem] Failed to load direct texture URL', assetId, error)
     return null
   }
 }
@@ -176,10 +175,22 @@ function createVelocity(config: ParticleEmitterConfig): unknown {
   return new RadialVelocity(config.speed, new Vector3D(config.direction.x, config.direction.y, config.direction.z), config.spread * 57.2958)
 }
 
+function createEmissionRate(emissionRate: number): InstanceType<typeof Rate> {
+  const particlesPerSecond = Math.max(0, emissionRate)
+  if (particlesPerSecond <= 0) {
+    return new Rate(new Span(0, 0), new Span(1, 1))
+  }
+  const baseInterval = 1 / particlesPerSecond
+  const intervalJitter = baseInterval * 0.35
+  const minInterval = Math.max(1 / 120, baseInterval - intervalJitter)
+  const maxInterval = Math.max(minInterval, baseInterval + intervalJitter)
+  return new Rate(new Span(1, 1), new Span(minInterval, maxInterval))
+}
+
 function buildEmitter(config: ParticleEmitterConfig, props: ParticleSystemComponentProps, texture: THREE.Texture | null): any {
   const emitter = new Emitter()
   const budgeted = applyEmitterBudget(config, props.budget)
-  emitter.setRate(new Rate(new Span(Math.max(0, budgeted.emissionRate * 0.6), Math.max(0, budgeted.emissionRate)), new Span(0.08, 0.16)))
+  emitter.setRate(createEmissionRate(budgeted.emissionRate))
   emitter.setInitializers([
     new Body(createSpriteBody(props, texture)),
     new Position(createZone(budgeted)),
@@ -314,14 +325,42 @@ class ParticleSystemRuntimeController implements ParticleSystemRuntimeHandle {
       return
     }
     this.active = true
-    if (this.system && typeof this.system.emit === 'function') {
-      this.system.emit({})
+    for (const entry of this.emitters) {
+      const emitter = entry.emitter as {
+        setTotalEmitTimes?: (totalEmitTimes?: number) => unknown
+        setLife?: (life?: number) => unknown
+        rate?: { init?: () => void }
+        isEmitting?: boolean
+      }
+      if (typeof emitter.setTotalEmitTimes === 'function') {
+        emitter.setTotalEmitTimes(Infinity)
+      }
+      if (typeof emitter.setLife === 'function') {
+        emitter.setLife(Infinity)
+      }
+      if (typeof emitter.rate?.init === 'function') {
+        emitter.rate.init()
+      }
+      if (typeof emitter.isEmitting === 'boolean') {
+        emitter.isEmitting = true
+      }
     }
     this.updateUserData()
   }
 
   stop(options: { soft?: boolean } = {}): void {
     this.active = false
+    for (const entry of this.emitters) {
+      const emitter = entry.emitter as {
+        stopEmit?: () => unknown
+        isEmitting?: boolean
+      }
+      if (typeof emitter.stopEmit === 'function') {
+        emitter.stopEmit()
+      } else if (typeof emitter.isEmitting === 'boolean') {
+        emitter.isEmitting = false
+      }
+    }
     if (this.system && typeof this.system.stop === 'function') {
       this.system.stop(Boolean(options.soft))
     }

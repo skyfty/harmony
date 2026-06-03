@@ -153,6 +153,7 @@ export {
   createParticlePresetProps,
   getParticlePresetDefinition,
   listParticlePresets,
+  listParticlePresetGroups,
 } from '../../particles/particlePresets'
 export {
   PARTICLE_TEXTURE_RESOLVER_KEY,

@@ -10,14 +10,128 @@ export type ParticlePresetDefinition = {
   id: string
   label: string
   description: string
+  category: ParticlePresetCategory
+  subcategory: string
   props: ParticleSystemComponentProps
 }
 
-const PRESETS: ParticlePresetDefinition[] = [
+export type ParticlePresetCategory =
+  | 'Weather'
+  | 'Environment'
+  | 'Combat'
+  | 'Magic'
+  | 'Support'
+  | 'Interaction'
+
+export type ParticlePresetGroup = {
+  category: ParticlePresetCategory
+  label: string
+  subgroups: ParticlePresetSubgroup[]
+}
+
+export type ParticlePresetSubgroup = {
+  subcategory: string
+  label: string
+  presets: ParticlePresetDefinition[]
+}
+
+type ParticlePresetEntry = Omit<ParticlePresetDefinition, 'category'>
+
+const PARTICLE_PRESET_CATEGORY_ORDER: ParticlePresetCategory[] = [
+  'Weather',
+  'Environment',
+  'Combat',
+  'Magic',
+  'Support',
+  'Interaction',
+]
+
+function resolveParticlePresetCategory(id: string): ParticlePresetCategory {
+  if (id.includes('rain') || id.includes('snow') || id.includes('leaf') || id.includes('wind')) {
+    return 'Weather'
+  }
+  if (id.includes('ground') || id.includes('smoke') || id.includes('dust') || id.includes('bubble') || id.includes('embers') || id.includes('firefly')) {
+    return 'Environment'
+  }
+  if (id.includes('spark') || id.includes('impact') || id.includes('explosion') || id.includes('thunder') || id.includes('beam') || id.includes('energyTrail') || id.includes('waterSplash') || id.includes('lavaSplash')) {
+    return 'Combat'
+  }
+  if (id.includes('magic') || id.includes('portal') || id.includes('teleport') || id.includes('frost') || id.includes('poison')) {
+    return 'Magic'
+  }
+  if (id.includes('heal') || id.includes('shield') || id.includes('levelUp') || id.includes('buff') || id.includes('debuff')) {
+    return 'Support'
+  }
+  return 'Interaction'
+}
+
+function resolveParticlePresetSubcategory(id: string): string {
+  if (id.includes('rain')) {
+    return 'Rain'
+  }
+  if (id.includes('snow')) {
+    return 'Snow'
+  }
+  if (id.includes('leaf')) {
+    return 'Leaves'
+  }
+  if (id.includes('wind')) {
+    return 'Wind'
+  }
+  if (id.includes('ground')) {
+    return 'Ground'
+  }
+  if (id.includes('smoke')) {
+    return 'Smoke'
+  }
+  if (id.includes('dust')) {
+    return 'Dust'
+  }
+  if (id.includes('bubble')) {
+    return 'Bubbles'
+  }
+  if (id.includes('embers')) {
+    return 'Embers'
+  }
+  if (id.includes('firefly')) {
+    return 'Fireflies'
+  }
+  if (id.includes('spark')) {
+    return 'Sparks'
+  }
+  if (id.includes('impact') || id.includes('explosion') || id.includes('thunder') || id.includes('beam')) {
+    return 'Impact'
+  }
+  if (id.includes('energyTrail')) {
+    return 'Trails'
+  }
+  if (id.includes('waterSplash') || id.includes('lavaSplash')) {
+    return 'Elemental'
+  }
+  if (id.includes('magic')) {
+    return 'Sparkles'
+  }
+  if (id.includes('portal') || id.includes('teleport')) {
+    return 'Portal'
+  }
+  if (id.includes('frost') || id.includes('poison')) {
+    return 'Status'
+  }
+  if (id.includes('heal') || id.includes('shield') || id.includes('levelUp') || id.includes('buff') || id.includes('debuff')) {
+    return 'Support'
+  }
+  if (id.includes('coin') || id.includes('item')) {
+    return 'Pickup'
+  }
+  return 'General'
+}
+
+const PRESETS: ParticlePresetEntry[] = [
   {
     id: 'groundAuraLite',
     label: 'Ground Aura Lite',
     description: 'Low-cost ring aura for ground highlights.',
+    subcategory: 'Ground',
     props: clampParticleSystemComponentProps({
       presetId: 'groundAuraLite',
       budget: { ...DEFAULT_PARTICLE_BUDGET, maxParticles: 72, cullDistance: 20, updateHz: 30 },
@@ -52,6 +166,7 @@ const PRESETS: ParticlePresetDefinition[] = [
     id: 'warpColumnLite',
     label: 'Warp Column Lite',
     description: 'Vertical portal-style particle column with safe mobile limits.',
+    subcategory: 'General',
     props: clampParticleSystemComponentProps({
       presetId: 'warpColumnLite',
       budget: { qualityTier: 'balanced', maxParticles: 96, spawnRateScale: 1, cullDistance: 28, updateHz: 30 },
@@ -86,6 +201,7 @@ const PRESETS: ParticlePresetDefinition[] = [
     id: 'sparkBurstLite',
     label: 'Spark Burst Lite',
     description: 'One-shot spark burst with capped mobile burst counts.',
+    subcategory: 'Sparks',
     props: clampParticleSystemComponentProps({
       presetId: 'sparkBurstLite',
       playback: { autoPlay: false, loop: false, startActive: false, prewarmSeconds: 0, softStopSeconds: 0.15 },
@@ -121,6 +237,7 @@ const PRESETS: ParticlePresetDefinition[] = [
     id: 'smokeLoopLite',
     label: 'Smoke Loop Lite',
     description: 'Slow drifting smoke tuned for low-frequency updates.',
+    subcategory: 'Smoke',
     props: clampParticleSystemComponentProps({
       presetId: 'smokeLoopLite',
       budget: { qualityTier: 'mini-safe', maxParticles: 64, spawnRateScale: 1, cullDistance: 22, updateHz: 24 },
@@ -156,33 +273,106 @@ const PRESETS: ParticlePresetDefinition[] = [
     id: 'rainCurtainLite',
     label: 'Rain Curtain Lite',
     description: 'Soft falling rain streaks for weather ambience.',
+    subcategory: 'Rain',
     props: clampParticleSystemComponentProps({
       presetId: 'rainCurtainLite',
-      budget: { qualityTier: 'mini-safe', maxParticles: 96, spawnRateScale: 0.8, cullDistance: 40, updateHz: 30 },
-      exposedParams: { ...DEFAULT_PARTICLE_EXPOSED_PARAMS, color: '#8fd7ff', emissionRate: 38, burstCount: 36, radius: 1.1, speed: 8.8, lifetime: 1.1, particleSize: 0.05, opacity: 0.48 },
+      budget: { qualityTier: 'mini-safe', maxParticles: 64, spawnRateScale: 0.65, cullDistance: 42, updateHz: 24 },
+      exposedParams: { ...DEFAULT_PARTICLE_EXPOSED_PARAMS, color: '#8ecff2', emissionRate: 14, burstCount: 8, radius: 1.35, speed: 8.2, lifetime: 0.95, particleSize: 0.045, opacity: 0.42 },
       render: { textureAssetId: null, blendMode: 'alpha', depthWrite: false, sortOffset: 0, renderMode: 'sprite' },
       emitters: [
         {
           id: 'rain_field',
           shape: 'box',
-          position: { x: 0, y: 3.2, z: 0 },
-          size: { x: 4.5, y: 0.2, z: 4.5 },
-          radius: 1.1,
-          emissionRate: 38,
-          emissionBursts: 36,
-          maxParticles: 96,
-          particleSize: 0.05,
-          lifetime: 1.1,
-          speed: 8.8,
+          position: { x: 0, y: 3.6, z: 0 },
+          size: { x: 5.2, y: 0.2, z: 5.2 },
+          radius: 1.35,
+          emissionRate: 14,
+          emissionBursts: 8,
+          maxParticles: 64,
+          particleSize: 0.045,
+          lifetime: 0.95,
+          speed: 8.2,
           velocityMode: 'vector',
           direction: { x: 0, y: -1, z: 0 },
-          spread: 0.18,
-          color: '#8fd7ff',
-          color2: '#d8f4ff',
-          alphaStart: 0.5,
+          spread: 0.12,
+          color: '#8ecff2',
+          color2: '#d6eef8',
+          alphaStart: 0.55,
           alphaEnd: 0,
           scaleStart: 1,
-          scaleEnd: 0.8,
+          scaleEnd: 0.72,
+        },
+      ],
+    }),
+  },
+  {
+    id: 'rainSmallLite',
+    label: 'Light Rain Lite',
+    description: 'A lighter, smaller rain curtain for local weather pockets.',
+    subcategory: 'Rain',
+    props: clampParticleSystemComponentProps({
+      presetId: 'rainSmallLite',
+      budget: { qualityTier: 'mini-safe', maxParticles: 40, spawnRateScale: 0.55, cullDistance: 34, updateHz: 24 },
+      exposedParams: { ...DEFAULT_PARTICLE_EXPOSED_PARAMS, color: '#96d5f4', emissionRate: 8, burstCount: 4, radius: 0.9, speed: 7.1, lifetime: 0.82, particleSize: 0.038, opacity: 0.34 },
+      render: { textureAssetId: null, blendMode: 'alpha', depthWrite: false, sortOffset: 0, renderMode: 'sprite' },
+      emitters: [
+        {
+          id: 'rain_field',
+          shape: 'box',
+          position: { x: 0, y: 3.1, z: 0 },
+          size: { x: 3.8, y: 0.16, z: 3.8 },
+          radius: 0.9,
+          emissionRate: 8,
+          emissionBursts: 4,
+          maxParticles: 40,
+          particleSize: 0.038,
+          lifetime: 0.82,
+          speed: 7.1,
+          velocityMode: 'vector',
+          direction: { x: 0, y: -1, z: 0 },
+          spread: 0.08,
+          color: '#96d5f4',
+          color2: '#d8eef7',
+          alphaStart: 0.42,
+          alphaEnd: 0,
+          scaleStart: 1,
+          scaleEnd: 0.72,
+        },
+      ],
+    }),
+  },
+  {
+    id: 'rainHeavyLite',
+    label: 'Heavy Rain Lite',
+    description: 'Denser, stronger rain curtain for stormier ambience.',
+    subcategory: 'Rain',
+    props: clampParticleSystemComponentProps({
+      presetId: 'rainHeavyLite',
+      budget: { qualityTier: 'balanced', maxParticles: 96, spawnRateScale: 0.72, cullDistance: 50, updateHz: 24 },
+      exposedParams: { ...DEFAULT_PARTICLE_EXPOSED_PARAMS, color: '#7fc6ec', emissionRate: 22, burstCount: 10, radius: 1.6, speed: 10.8, lifetime: 0.98, particleSize: 0.052, opacity: 0.48 },
+      render: { textureAssetId: null, blendMode: 'alpha', depthWrite: false, sortOffset: 0, renderMode: 'sprite' },
+      emitters: [
+        {
+          id: 'rain_field',
+          shape: 'box',
+          position: { x: 0, y: 4.2, z: 0 },
+          size: { x: 7.2, y: 0.26, z: 7.2 },
+          radius: 1.6,
+          emissionRate: 22,
+          emissionBursts: 10,
+          maxParticles: 96,
+          particleSize: 0.052,
+          lifetime: 0.98,
+          speed: 10.8,
+          velocityMode: 'vector',
+          direction: { x: 0, y: -1, z: 0 },
+          spread: 0.14,
+          color: '#7fc6ec',
+          color2: '#cfe8f6',
+          alphaStart: 0.62,
+          alphaEnd: 0,
+          scaleStart: 1,
+          scaleEnd: 0.78,
         },
       ],
     }),
@@ -191,33 +381,106 @@ const PRESETS: ParticlePresetDefinition[] = [
     id: 'snowDriftLite',
     label: 'Snow Drift Lite',
     description: 'Gentle snow flakes drifting downward with soft visibility.',
+    subcategory: 'Snow',
     props: clampParticleSystemComponentProps({
       presetId: 'snowDriftLite',
-      budget: { qualityTier: 'mini-safe', maxParticles: 72, spawnRateScale: 0.7, cullDistance: 42, updateHz: 24 },
-      exposedParams: { ...DEFAULT_PARTICLE_EXPOSED_PARAMS, color: '#ffffff', emissionRate: 14, burstCount: 12, radius: 1.25, speed: 0.9, lifetime: 4.2, particleSize: 0.14, opacity: 0.72 },
+      budget: { qualityTier: 'mini-safe', maxParticles: 64, spawnRateScale: 0.55, cullDistance: 46, updateHz: 20 },
+      exposedParams: { ...DEFAULT_PARTICLE_EXPOSED_PARAMS, color: '#f4fbff', emissionRate: 8, burstCount: 4, radius: 1.4, speed: 0.65, lifetime: 4.8, particleSize: 0.13, opacity: 0.66 },
       render: { textureAssetId: null, blendMode: 'alpha', depthWrite: false, sortOffset: 0, renderMode: 'sprite' },
       emitters: [
         {
           id: 'snow_field',
           shape: 'box',
-          position: { x: 0, y: 4, z: 0 },
-          size: { x: 5.5, y: 0.25, z: 5.5 },
-          radius: 1.25,
-          emissionRate: 14,
-          emissionBursts: 12,
-          maxParticles: 72,
-          particleSize: 0.14,
-          lifetime: 4.2,
-          speed: 0.9,
+          position: { x: 0, y: 4.4, z: 0 },
+          size: { x: 6.2, y: 0.28, z: 6.2 },
+          radius: 1.4,
+          emissionRate: 8,
+          emissionBursts: 4,
+          maxParticles: 64,
+          particleSize: 0.13,
+          lifetime: 4.8,
+          speed: 0.65,
           velocityMode: 'vector',
-          direction: { x: 0.05, y: -1, z: 0.04 },
-          spread: 0.8,
-          color: '#ffffff',
-          color2: '#dce8f2',
-          alphaStart: 0.72,
+          direction: { x: 0.04, y: -1, z: 0.03 },
+          spread: 0.62,
+          color: '#f4fbff',
+          color2: '#dbe8f2',
+          alphaStart: 0.68,
           alphaEnd: 0,
           scaleStart: 0.9,
-          scaleEnd: 0.55,
+          scaleEnd: 0.56,
+        },
+      ],
+    }),
+  },
+  {
+    id: 'snowLightLite',
+    label: 'Light Snow Lite',
+    description: 'A sparse, softer snowfall for lighter winter ambience.',
+    subcategory: 'Snow',
+    props: clampParticleSystemComponentProps({
+      presetId: 'snowLightLite',
+      budget: { qualityTier: 'mini-safe', maxParticles: 40, spawnRateScale: 0.45, cullDistance: 40, updateHz: 20 },
+      exposedParams: { ...DEFAULT_PARTICLE_EXPOSED_PARAMS, color: '#f7fdff', emissionRate: 4, burstCount: 2, radius: 1.2, speed: 0.42, lifetime: 5.8, particleSize: 0.11, opacity: 0.58 },
+      render: { textureAssetId: null, blendMode: 'alpha', depthWrite: false, sortOffset: 0, renderMode: 'sprite' },
+      emitters: [
+        {
+          id: 'snow_field',
+          shape: 'box',
+          position: { x: 0, y: 4.8, z: 0 },
+          size: { x: 5.6, y: 0.3, z: 5.6 },
+          radius: 1.2,
+          emissionRate: 4,
+          emissionBursts: 2,
+          maxParticles: 40,
+          particleSize: 0.11,
+          lifetime: 5.8,
+          speed: 0.42,
+          velocityMode: 'vector',
+          direction: { x: 0.03, y: -1, z: 0.02 },
+          spread: 0.5,
+          color: '#f7fdff',
+          color2: '#dce8f3',
+          alphaStart: 0.58,
+          alphaEnd: 0,
+          scaleStart: 0.86,
+          scaleEnd: 0.52,
+        },
+      ],
+    }),
+  },
+  {
+    id: 'snowBlizzardLite',
+    label: 'Blizzard Lite',
+    description: 'A denser snowfall with more drift for stormy winter weather.',
+    subcategory: 'Snow',
+    props: clampParticleSystemComponentProps({
+      presetId: 'snowBlizzardLite',
+      budget: { qualityTier: 'balanced', maxParticles: 72, spawnRateScale: 0.62, cullDistance: 54, updateHz: 20 },
+      exposedParams: { ...DEFAULT_PARTICLE_EXPOSED_PARAMS, color: '#f8fdff', emissionRate: 11, burstCount: 6, radius: 1.8, speed: 1.05, lifetime: 4.2, particleSize: 0.15, opacity: 0.78 },
+      render: { textureAssetId: null, blendMode: 'alpha', depthWrite: false, sortOffset: 0, renderMode: 'sprite' },
+      emitters: [
+        {
+          id: 'snow_field',
+          shape: 'box',
+          position: { x: 0, y: 5.2, z: 0 },
+          size: { x: 8, y: 0.34, z: 8 },
+          radius: 1.8,
+          emissionRate: 11,
+          emissionBursts: 6,
+          maxParticles: 72,
+          particleSize: 0.15,
+          lifetime: 4.2,
+          speed: 1.05,
+          velocityMode: 'vector',
+          direction: { x: 0.08, y: -1, z: 0.06 },
+          spread: 0.88,
+          color: '#f8fdff',
+          color2: '#d8e7f2',
+          alphaStart: 0.78,
+          alphaEnd: 0,
+          scaleStart: 0.95,
+          scaleEnd: 0.58,
         },
       ],
     }),
@@ -226,6 +489,7 @@ const PRESETS: ParticlePresetDefinition[] = [
     id: 'leafFallLite',
     label: 'Leaf Fall Lite',
     description: 'Autumn leaves gently falling through the air.',
+    subcategory: 'Leaves',
     props: clampParticleSystemComponentProps({
       presetId: 'leafFallLite',
       budget: { qualityTier: 'mini-safe', maxParticles: 64, spawnRateScale: 0.6, cullDistance: 36, updateHz: 24 },
@@ -261,6 +525,7 @@ const PRESETS: ParticlePresetDefinition[] = [
     id: 'embersRiseLite',
     label: 'Embers Rise Lite',
     description: 'Warm ember sparks drifting upward from heat sources.',
+    subcategory: 'Embers',
     props: clampParticleSystemComponentProps({
       presetId: 'embersRiseLite',
       budget: { qualityTier: 'balanced', maxParticles: 80, spawnRateScale: 0.8, cullDistance: 26, updateHz: 30 },
@@ -295,6 +560,7 @@ const PRESETS: ParticlePresetDefinition[] = [
     id: 'dustMotesLite',
     label: 'Dust Motes Lite',
     description: 'Tiny floating dust motes for interiors and caves.',
+    subcategory: 'Dust',
     props: clampParticleSystemComponentProps({
       presetId: 'dustMotesLite',
       budget: { qualityTier: 'mini-safe', maxParticles: 56, spawnRateScale: 0.5, cullDistance: 20, updateHz: 20 },
@@ -330,6 +596,7 @@ const PRESETS: ParticlePresetDefinition[] = [
     id: 'bubbleRiseLite',
     label: 'Bubble Rise Lite',
     description: 'Soft upward bubbles for underwater scenes.',
+    subcategory: 'Bubbles',
     props: clampParticleSystemComponentProps({
       presetId: 'bubbleRiseLite',
       budget: { qualityTier: 'mini-safe', maxParticles: 64, spawnRateScale: 0.7, cullDistance: 24, updateHz: 24 },
@@ -365,6 +632,7 @@ const PRESETS: ParticlePresetDefinition[] = [
     id: 'fireflyGlowLite',
     label: 'Firefly Glow Lite',
     description: 'Tiny glowing dots for nighttime ambience.',
+    subcategory: 'Fireflies',
     props: clampParticleSystemComponentProps({
       presetId: 'fireflyGlowLite',
       budget: { qualityTier: 'mini-safe', maxParticles: 48, spawnRateScale: 0.55, cullDistance: 20, updateHz: 24 },
@@ -399,6 +667,7 @@ const PRESETS: ParticlePresetDefinition[] = [
     id: 'magicSparkleLite',
     label: 'Magic Sparkle Lite',
     description: 'Small glitter sparkles for spells and enchanted UI.',
+    subcategory: 'Sparkles',
     props: clampParticleSystemComponentProps({
       presetId: 'magicSparkleLite',
       budget: { qualityTier: 'mini-safe', maxParticles: 64, spawnRateScale: 0.75, cullDistance: 22, updateHz: 30 },
@@ -434,6 +703,7 @@ const PRESETS: ParticlePresetDefinition[] = [
     id: 'healPulseLite',
     label: 'Heal Pulse Lite',
     description: 'Soft green healing pulse for support skills and recovery.',
+    subcategory: 'Support',
     props: clampParticleSystemComponentProps({
       presetId: 'healPulseLite',
       budget: { qualityTier: 'mini-safe', maxParticles: 72, spawnRateScale: 0.8, cullDistance: 24, updateHz: 30 },
@@ -468,6 +738,7 @@ const PRESETS: ParticlePresetDefinition[] = [
     id: 'shieldAuraLite',
     label: 'Shield Aura Lite',
     description: 'Blue protective aura for buffs and defensive states.',
+    subcategory: 'Support',
     props: clampParticleSystemComponentProps({
       presetId: 'shieldAuraLite',
       budget: { qualityTier: 'mini-safe', maxParticles: 72, spawnRateScale: 0.7, cullDistance: 24, updateHz: 30 },
@@ -503,6 +774,7 @@ const PRESETS: ParticlePresetDefinition[] = [
     id: 'levelUpBurstLite',
     label: 'Level Up Burst Lite',
     description: 'Celebratory vertical burst for level-up and rank-up moments.',
+    subcategory: 'Support',
     props: clampParticleSystemComponentProps({
       presetId: 'levelUpBurstLite',
       playback: { autoPlay: false, loop: false, startActive: false, prewarmSeconds: 0, softStopSeconds: 0.15 },
@@ -538,6 +810,7 @@ const PRESETS: ParticlePresetDefinition[] = [
     id: 'coinPickupLite',
     label: 'Coin Pickup Lite',
     description: 'Gold burst for coins, pickups, and rewards.',
+    subcategory: 'Pickup',
     props: clampParticleSystemComponentProps({
       presetId: 'coinPickupLite',
       playback: { autoPlay: false, loop: false, startActive: false, prewarmSeconds: 0, softStopSeconds: 0.1 },
@@ -573,6 +846,7 @@ const PRESETS: ParticlePresetDefinition[] = [
     id: 'itemPickupLite',
     label: 'Item Pickup Lite',
     description: 'Small white-gold pickup burst for inventory and loot.',
+    subcategory: 'Pickup',
     props: clampParticleSystemComponentProps({
       presetId: 'itemPickupLite',
       playback: { autoPlay: false, loop: false, startActive: false, prewarmSeconds: 0, softStopSeconds: 0.1 },
@@ -608,6 +882,7 @@ const PRESETS: ParticlePresetDefinition[] = [
     id: 'impactDebrisLite',
     label: 'Impact Debris Lite',
     description: 'Small brown debris burst for hits and collision impacts.',
+    subcategory: 'Impact',
     props: clampParticleSystemComponentProps({
       presetId: 'impactDebrisLite',
       playback: { autoPlay: false, loop: false, startActive: false, prewarmSeconds: 0, softStopSeconds: 0.12 },
@@ -643,6 +918,7 @@ const PRESETS: ParticlePresetDefinition[] = [
     id: 'explosionFlashLite',
     label: 'Explosion Flash Lite',
     description: 'Bright orange explosion burst for combat and destruction.',
+    subcategory: 'Impact',
     props: clampParticleSystemComponentProps({
       presetId: 'explosionFlashLite',
       playback: { autoPlay: false, loop: false, startActive: false, prewarmSeconds: 0, softStopSeconds: 0.08 },
@@ -678,6 +954,7 @@ const PRESETS: ParticlePresetDefinition[] = [
     id: 'teleportMistLite',
     label: 'Teleport Mist Lite',
     description: 'Mystic purple mist for warp and teleport transitions.',
+    subcategory: 'Portal',
     props: clampParticleSystemComponentProps({
       presetId: 'teleportMistLite',
       budget: { qualityTier: 'mini-safe', maxParticles: 72, spawnRateScale: 0.8, cullDistance: 24, updateHz: 24 },
@@ -713,6 +990,7 @@ const PRESETS: ParticlePresetDefinition[] = [
     id: 'portalSwirlLite',
     label: 'Portal Swirl Lite',
     description: 'Cyan portal haze with rising motion for gateway scenes.',
+    subcategory: 'Portal',
     props: clampParticleSystemComponentProps({
       presetId: 'portalSwirlLite',
       budget: { qualityTier: 'balanced', maxParticles: 88, spawnRateScale: 0.8, cullDistance: 28, updateHz: 30 },
@@ -747,6 +1025,7 @@ const PRESETS: ParticlePresetDefinition[] = [
     id: 'poisonPuffLite',
     label: 'Poison Puff Lite',
     description: 'Sickly green puff for poison and toxic status effects.',
+    subcategory: 'Status',
     props: clampParticleSystemComponentProps({
       presetId: 'poisonPuffLite',
       budget: { qualityTier: 'mini-safe', maxParticles: 64, spawnRateScale: 0.7, cullDistance: 22, updateHz: 24 },
@@ -782,6 +1061,7 @@ const PRESETS: ParticlePresetDefinition[] = [
     id: 'buffAuraLite',
     label: 'Buff Aura Lite',
     description: 'Positive status aura for power-ups and temporary boosts.',
+    subcategory: 'Support',
     props: clampParticleSystemComponentProps({
       presetId: 'buffAuraLite',
       budget: { qualityTier: 'mini-safe', maxParticles: 72, spawnRateScale: 0.8, cullDistance: 24, updateHz: 30 },
@@ -816,6 +1096,7 @@ const PRESETS: ParticlePresetDefinition[] = [
     id: 'debuffSmokeLite',
     label: 'Debuff Smoke Lite',
     description: 'Dark smoke for slowing, weakness, and negative states.',
+    subcategory: 'Support',
     props: clampParticleSystemComponentProps({
       presetId: 'debuffSmokeLite',
       budget: { qualityTier: 'mini-safe', maxParticles: 64, spawnRateScale: 0.75, cullDistance: 22, updateHz: 24 },
@@ -851,6 +1132,7 @@ const PRESETS: ParticlePresetDefinition[] = [
     id: 'thunderZapLite',
     label: 'Thunder Zap Lite',
     description: 'Blue lightning spark burst for electric hits and stun effects.',
+    subcategory: 'Impact',
     props: clampParticleSystemComponentProps({
       presetId: 'thunderZapLite',
       playback: { autoPlay: false, loop: false, startActive: false, prewarmSeconds: 0, softStopSeconds: 0.08 },
@@ -886,6 +1168,7 @@ const PRESETS: ParticlePresetDefinition[] = [
     id: 'windGustLite',
     label: 'Wind Gust Lite',
     description: 'Directional streaks for strong wind and motion cues.',
+    subcategory: 'Wind',
     props: clampParticleSystemComponentProps({
       presetId: 'windGustLite',
       budget: { qualityTier: 'mini-safe', maxParticles: 72, spawnRateScale: 0.8, cullDistance: 30, updateHz: 24 },
@@ -921,6 +1204,7 @@ const PRESETS: ParticlePresetDefinition[] = [
     id: 'waterSplashLite',
     label: 'Water Splash Lite',
     description: 'Splash burst for water impacts and jump landings.',
+    subcategory: 'Elemental',
     props: clampParticleSystemComponentProps({
       presetId: 'waterSplashLite',
       playback: { autoPlay: false, loop: false, startActive: false, prewarmSeconds: 0, softStopSeconds: 0.08 },
@@ -956,6 +1240,7 @@ const PRESETS: ParticlePresetDefinition[] = [
     id: 'lavaSplashLite',
     label: 'Lava Splash Lite',
     description: 'Hot orange-red splash for lava and magma impacts.',
+    subcategory: 'Elemental',
     props: clampParticleSystemComponentProps({
       presetId: 'lavaSplashLite',
       playback: { autoPlay: false, loop: false, startActive: false, prewarmSeconds: 0, softStopSeconds: 0.08 },
@@ -991,6 +1276,7 @@ const PRESETS: ParticlePresetDefinition[] = [
     id: 'frostMistLite',
     label: 'Frost Mist Lite',
     description: 'Cold blue mist for frozen zones and ice magic.',
+    subcategory: 'Status',
     props: clampParticleSystemComponentProps({
       presetId: 'frostMistLite',
       budget: { qualityTier: 'mini-safe', maxParticles: 72, spawnRateScale: 0.75, cullDistance: 22, updateHz: 24 },
@@ -1026,6 +1312,7 @@ const PRESETS: ParticlePresetDefinition[] = [
     id: 'energyTrailLite',
     label: 'Energy Trail Lite',
     description: 'Short flowing streaks for movement trails and dashes.',
+    subcategory: 'Trails',
     props: clampParticleSystemComponentProps({
       presetId: 'energyTrailLite',
       budget: { qualityTier: 'mini-safe', maxParticles: 72, spawnRateScale: 0.8, cullDistance: 24, updateHz: 30 },
@@ -1061,6 +1348,7 @@ const PRESETS: ParticlePresetDefinition[] = [
     id: 'beamHitLite',
     label: 'Beam Hit Lite',
     description: 'Quick white-blue burst for laser and beam impacts.',
+    subcategory: 'Impact',
     props: clampParticleSystemComponentProps({
       presetId: 'beamHitLite',
       playback: { autoPlay: false, loop: false, startActive: false, prewarmSeconds: 0, softStopSeconds: 0.08 },
@@ -1099,6 +1387,8 @@ const PRESET_MAP = new Map(PRESETS.map((entry) => [entry.id, entry]))
 export function listParticlePresets(): ParticlePresetDefinition[] {
   return PRESETS.map((entry) => ({
     ...entry,
+    category: resolveParticlePresetCategory(entry.id),
+    subcategory: resolveParticlePresetSubcategory(entry.id),
     props: cloneParticleSystemComponentProps(entry.props),
   }))
 }
@@ -1111,6 +1401,8 @@ export function getParticlePresetDefinition(id: string | null | undefined): Part
   }
   return {
     ...found,
+    category: resolveParticlePresetCategory(found.id),
+    subcategory: resolveParticlePresetSubcategory(found.id),
     props: cloneParticleSystemComponentProps(found.props),
   }
 }
@@ -1118,4 +1410,28 @@ export function getParticlePresetDefinition(id: string | null | undefined): Part
 export function createParticlePresetProps(id: string | null | undefined): ParticleSystemComponentProps {
   const found = getParticlePresetDefinition(id)
   return cloneParticleSystemComponentProps(found?.props ?? PRESETS[0]!.props)
+}
+
+export function listParticlePresetGroups(): ParticlePresetGroup[] {
+  const grouped = new Map<ParticlePresetCategory, Map<string, ParticlePresetDefinition[]>>()
+  for (const entry of listParticlePresets()) {
+    const categoryBucket = grouped.get(entry.category) ?? new Map<string, ParticlePresetDefinition[]>()
+    const subBucket = categoryBucket.get(entry.subcategory) ?? []
+    subBucket.push(entry)
+    categoryBucket.set(entry.subcategory, subBucket)
+    grouped.set(entry.category, categoryBucket)
+  }
+  return PARTICLE_PRESET_CATEGORY_ORDER
+    .map((category) => ({
+      category,
+      label: category,
+      subgroups: Array.from(grouped.get(category)?.entries() ?? [])
+        .map(([subcategory, presets]) => ({
+          subcategory,
+          label: subcategory,
+          presets,
+        }))
+        .sort((a, b) => a.label.localeCompare(b.label, 'en')),
+    }))
+    .filter((group) => group.subgroups.length > 0)
 }

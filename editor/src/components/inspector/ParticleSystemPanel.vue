@@ -12,6 +12,7 @@ import {
   cloneParticleSystemComponentProps,
   createParticlePresetProps,
   estimateParticleSystemCost,
+  listParticlePresetGroups,
   listParticlePresets,
   type ParticleSystemComponentProps,
 } from '@schema/components'
@@ -28,7 +29,9 @@ const componentState = computed(
 const componentEnabled = computed(() => componentState.value?.enabled !== false)
 const normalizedProps = computed(() => clampParticleSystemComponentProps(componentState.value?.props))
 const budgetEstimate = computed(() => estimateParticleSystemCost(normalizedProps.value))
-const presetItems = computed(() => listParticlePresets().map((entry) => ({ label: entry.label, value: entry.id })))
+const presetGroups = computed(() => listParticlePresetGroups())
+const presetLabelMap = computed(() => new Map(listParticlePresets().map((entry) => [entry.id, entry.label] as const)))
+const selectedPresetLabel = computed(() => presetLabelMap.value.get(normalizedProps.value.presetId) ?? normalizedProps.value.presetId)
 const textureAssetId = computed(() => normalizedProps.value.render.textureAssetId?.trim() ?? '')
 const selectedTextureAsset = computed<ProjectAsset | null>(() => {
   const assetId = textureAssetId.value
@@ -82,6 +85,7 @@ const textureAssetWarning = computed(() => {
   }
   return ''
 })
+const presetMenuOpen = ref(false)
 type ParticleEmitterConfig = ParticleSystemComponentProps['emitters'][number]
 type ParticleSystemPatch = {
   [K in keyof ParticleSystemComponentProps]?: K extends 'playback'
@@ -149,6 +153,7 @@ function applyPreset(presetId: string | null) {
   }
   const preset = createParticlePresetProps(presetId)
   applyPatch(preset)
+  presetMenuOpen.value = false
 }
 
 function handleOpenTextureAssetDialog(event: MouseEvent) {
@@ -358,18 +363,61 @@ function handleRemoveComponent() {
       <div class="particle-system-panel">
         <div class="particle-system-panel__section">
           <div class="particle-system-panel__section-title">Preset</div>
-          <v-select
-            :model-value="normalizedProps.presetId"
-            :items="presetItems"
-            label="Preset"
-            item-title="label"
-            item-value="value"
-            density="compact"
-            variant="underlined"
-            hide-details
-            :disabled="!componentEnabled"
-            @update:model-value="applyPreset($event)"
-          />
+          <v-menu
+            v-model="presetMenuOpen"
+            location="bottom start"
+            :close-on-content-click="false"
+          >
+            <template #activator="{ props }">
+              <v-btn
+                v-bind="props"
+                block
+                variant="outlined"
+                class="particle-system-panel__preset-button"
+                :disabled="!componentEnabled"
+                append-icon="mdi-menu-down"
+              >
+                {{ selectedPresetLabel }}
+              </v-btn>
+            </template>
+            <v-list class="particle-system-panel__preset-menu" density="compact" min-width="300">
+              <v-list-group
+                v-for="group in presetGroups"
+                :key="group.category"
+                :value="group.category"
+              >
+                <template #activator="{ props: groupProps }">
+                  <v-list-item
+                    v-bind="groupProps"
+                    :title="group.label"
+                    prepend-icon="mdi-folder-outline"
+                  />
+                </template>
+                <v-list-group
+                  v-for="subgroup in group.subgroups"
+                  :key="`${group.category}:${subgroup.subcategory}`"
+                  :value="`${group.category}:${subgroup.subcategory}`"
+                >
+                  <template #activator="{ props: subgroupProps }">
+                    <v-list-item
+                      v-bind="subgroupProps"
+                      :title="subgroup.label"
+                      prepend-icon="mdi-folder-open-outline"
+                      class="particle-system-panel__preset-subgroup"
+                    />
+                  </template>
+                  <v-list-item
+                    v-for="preset in subgroup.presets"
+                    :key="preset.id"
+                    :title="preset.label"
+                    :subtitle="preset.description"
+                    class="particle-system-panel__preset-item"
+                    @click.stop="applyPreset(preset.id)"
+                  />
+                </v-list-group>
+              </v-list-group>
+            </v-list>
+          </v-menu>
         </div>
 
         <div class="particle-system-panel__section">
