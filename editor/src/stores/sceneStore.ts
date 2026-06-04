@@ -1102,18 +1102,20 @@ function buildSceneDocumentSidecarPayload(document: StoredSceneDocument): SceneD
 
 type SceneStoreGroundSplatBakeTarget = Pick<SceneState, 'nodes'> & {
   currentSceneId?: string | null
-  isSceneReady: boolean
-  hasUnsavedChanges: boolean
-  requestSceneAutoSave: (options?: { mode?: SceneAutoSaveMode }) => void
+  isSceneReady?: boolean
+  hasUnsavedChanges?: boolean
+  requestSceneAutoSave?: (options?: { mode?: SceneAutoSaveMode }) => void
   queueSceneNodePatch: (nodeId: string, fields: ScenePatchField[], options?: { bumpVersion?: boolean }) => boolean
   bumpSceneNodePropertyVersion?: () => void
 }
 
 function requestSceneAutoSaveAfterLandformBake(store: SceneStoreGroundSplatBakeTarget): void {
-  if (!store.currentSceneId || !store.isSceneReady) {
+  if (!store.currentSceneId || !store.isSceneReady || !store.requestSceneAutoSave) {
     return
   }
-  store.hasUnsavedChanges = true
+  if (typeof store.hasUnsavedChanges === 'boolean') {
+    store.hasUnsavedChanges = true
+  }
   store.requestSceneAutoSave({ mode: 'structural' })
 }
 
