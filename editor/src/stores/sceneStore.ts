@@ -2712,6 +2712,32 @@ function findGroundNode(nodes: SceneNode[]): SceneNode | null {
   return null
 }
 
+function applyRuntimeHiddenInPreviewFlags(
+  nodes: SceneNode[],
+  shouldHideNode: (node: SceneNode) => boolean,
+): boolean {
+  let changed = false
+  for (const node of nodes) {
+    if (!node) {
+      continue
+    }
+    if (shouldHideNode(node)) {
+      const flags = node.editorFlags ?? {}
+      if (flags.runtimeHiddenInPreview !== true) {
+        node.editorFlags = {
+          ...flags,
+          runtimeHiddenInPreview: true,
+        }
+        changed = true
+      }
+    }
+    if (Array.isArray(node.children) && node.children.length > 0) {
+      changed = applyRuntimeHiddenInPreviewFlags(node.children, shouldHideNode) || changed
+    }
+  }
+  return changed
+}
+
 function attachRuntimeGroundSidecarsToDocument(document: StoredSceneDocument): StoredSceneDocument {
   const groundNode = findGroundNode(document.nodes ?? [])
   if (!groundNode) {
@@ -9247,6 +9273,7 @@ export const useSceneStore = defineStore('scene', {
       applySceneAssetState(this, scene)
       this.environment = resolveSceneDocumentEnvironment(scene)
       const clonedNodes = cloneSceneNodes(scene.nodes)
+      applyRuntimeHiddenInPreviewFlags(clonedNodes, (node) => node.dynamicMesh?.type === 'Landform')
       const effectiveGroundSettings = resolveGroundSettingsFromNodes(clonedNodes, cloneGroundSettings(scene.groundSettings))
       const normalizedNodes = ensureEnvironmentNode(
         ensureGroundNode(clonedNodes, effectiveGroundSettings),
@@ -16127,7 +16154,10 @@ export const useSceneStore = defineStore('scene', {
           rotation: createVector(0, 0, 0),
           scale: createVector(1, 1, 1),
           dynamicMesh: defaultMesh,
-          editorFlags: payload.editorFlags,
+          editorFlags: {
+            ...(payload.editorFlags ?? {}),
+            runtimeHiddenInPreview: true,
+          },
         })
 
         if (node) {

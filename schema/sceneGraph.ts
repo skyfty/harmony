@@ -21,6 +21,7 @@ import type {
   SceneResourceSummaryEntry,
   SceneMaterialTextureSlot,
 } from './core';
+import { isRuntimeHiddenInPreview } from './core';
 import { createPrimitiveGeometry } from './primitiveGeometry';
 import {
   createWaterSurfaceRuntimeMesh,
@@ -980,6 +981,9 @@ class SceneGraphBuilder {
   }
 
   private async buildSingleNode(node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
+    if (isRuntimeHiddenInPreview(node)) {
+      return null;
+    }
     if (node.editorFlags?.editorOnly) {
       return this.buildEditorOnlyNode(node);
     }

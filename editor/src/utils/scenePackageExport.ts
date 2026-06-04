@@ -572,7 +572,10 @@ function requiresGroundSplatSidecar(document: SceneJsonExportDocument): boolean 
   return false
 }
 
-async function prepareSceneDocumentForPackageExport(document: SceneJsonExportDocument): Promise<SceneJsonExportDocument> {
+async function prepareSceneDocumentForPackageExport(
+  document: SceneJsonExportDocument,
+  options: { preserveLandformNodes?: boolean } = {},
+): Promise<SceneJsonExportDocument> {
   const cloned = cloneSceneExportDocument(document) as SceneExportDocumentWithEditorFields
   if (!cloned || typeof cloned !== 'object') {
     return document
@@ -582,8 +585,10 @@ async function prepareSceneDocumentForPackageExport(document: SceneJsonExportDoc
     maxTextureSize: 512,
     maxSplatLayers: 4,
   })
-  stripLandformNodes(cloned.nodes ?? [])
-  assertNoLandformNodes(cloned.nodes ?? [])
+  if (options.preserveLandformNodes !== true) {
+    stripLandformNodes(cloned.nodes ?? [])
+    assertNoLandformNodes(cloned.nodes ?? [])
+  }
   const looksEditableScene = 'assetCatalog' in cloned
   if (!looksEditableScene) {
     return cloned
@@ -1179,6 +1184,7 @@ export async function exportScenePackageZip(payload: {
   scenes: ScenePackageExportScene[]
   embedAssets?: boolean
   planningDataMode: ScenePackagePlanningDataMode
+  preserveLandformNodes?: boolean
   updateProgress?: (value: number, message?: string) => void
   reportEvent?: SceneExportEventReporter
 }): Promise<Blob> {
@@ -1338,7 +1344,9 @@ export async function exportScenePackageZip(payload: {
       total: payload.scenes.length,
       message: `开始打包场景 ${sceneName}`,
     })
-    const preparedDocument = await prepareSceneDocumentForPackageExport(scene.document)
+    const preparedDocument = await prepareSceneDocumentForPackageExport(scene.document, {
+      preserveLandformNodes: payload.preserveLandformNodes === true,
+    })
     const scenePath = `scenes/${encodeURIComponent(scene.id)}/scene.bin`
     let planningPath: string | undefined
     let groundSplatPath: string | undefined

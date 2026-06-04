@@ -922,8 +922,11 @@ async function downloadSceneBundleZip(
   return { bytes, etag }
 }
 
-async function unpackSceneBundleIntoStores(zipBytes: ArrayBuffer): Promise<{ document: StoredSceneDocument; groundHeightSidecar: ArrayBuffer | null; groundSplatSidecar: ArrayBuffer | null; groundScatterSidecar: ArrayBuffer | null; terrainDatasetManifest: QuantizedTerrainDatasetRootManifest | null; terrainDatasetRegionPacks: Record<string, ArrayBuffer | null> }> {
-  const pkg = await loadStoredScenesFromScenePackage(zipBytes)
+async function unpackSceneBundleIntoStores(
+  zipBytes: ArrayBuffer,
+  options: { allowLandformNodes?: boolean } = {},
+): Promise<{ document: StoredSceneDocument; groundHeightSidecar: ArrayBuffer | null; groundSplatSidecar: ArrayBuffer | null; groundScatterSidecar: ArrayBuffer | null; terrainDatasetManifest: QuantizedTerrainDatasetRootManifest | null; terrainDatasetRegionPacks: Record<string, ArrayBuffer | null> }> {
+  const pkg = await loadStoredScenesFromScenePackage(zipBytes, { allowLandformNodes: options.allowLandformNodes === true })
   const scene = pkg.scenes[0]
   if (!scene) {
     throw new Error('Scene bundle missing scene entry')
@@ -955,6 +958,7 @@ async function uploadSceneToServer(document: StoredSceneDocument, authStore: Ret
     },
     scenes: [{ id: document.id, document: cloneForIndexedDb(document) }],
     planningDataMode: 'withPlanningData',
+    preserveLandformNodes: true,
   })
 
   const filename = `${document.name || document.id}.zip`
@@ -1625,7 +1629,7 @@ export const useScenesStore = defineStore('scenes', {
           return false
         }
 
-        const downloaded = await unpackSceneBundleIntoStores(bundle.bytes)
+        const downloaded = await unpackSceneBundleIntoStores(bundle.bytes, { allowLandformNodes: true })
         const bundleEtag = bundle.etag ?? remoteEtag ?? localEtag ?? null
         await writeSceneDocuments(
           this.workspaceId,
@@ -1933,7 +1937,7 @@ export const useScenesStore = defineStore('scenes', {
           if (bundle) {
             return {
               sceneId: entry.id,
-              downloaded: await unpackSceneBundleIntoStores(bundle.bytes),
+              downloaded: await unpackSceneBundleIntoStores(bundle.bytes, { allowLandformNodes: true }),
               bundleEtag: bundle.etag ?? entry.bundle.etag ?? null,
             }
           }
@@ -1973,7 +1977,7 @@ export const useScenesStore = defineStore('scenes', {
           if (!fallbackBundle) {
             continue
           }
-          downloaded.push(await unpackSceneBundleIntoStores(fallbackBundle.bytes))
+          downloaded.push(await unpackSceneBundleIntoStores(fallbackBundle.bytes, { allowLandformNodes: true }))
           syncedBundleEtags[result.sceneId] = fallbackBundle.etag ?? remoteEntry.bundle.etag ?? null
         }
 

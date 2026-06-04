@@ -27,6 +27,10 @@ export type LoadedStoredScenePackage = {
   terrainDatasetRegionPacks: Record<string, Record<string, ArrayBuffer | null>>
 }
 
+export type LoadStoredScenePackageOptions = {
+  allowLandformNodes?: boolean
+}
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
@@ -224,7 +228,10 @@ function extractTerrainDatasetRegionPacksFromPackage(
   return out
 }
 
-export async function loadStoredScenesFromScenePackage(zipBytes: ArrayBuffer): Promise<LoadedStoredScenePackage> {
+export async function loadStoredScenesFromScenePackage(
+  zipBytes: ArrayBuffer,
+  options: LoadStoredScenePackageOptions = {},
+): Promise<LoadedStoredScenePackage> {
   const zip = unzipScenePackage(zipBytes)
   await restoreRuntimeResourcesFromPackage(zip)
 
@@ -242,7 +249,9 @@ export async function loadStoredScenesFromScenePackage(zipBytes: ArrayBuffer): P
       throw new Error(`Invalid scene document in scene bundle: ${sceneEntry.path}`)
     }
     const sceneDocument = stripGroundHeightMapsFromSceneDocument(rawScene as unknown as StoredSceneDocument)
-    assertNoLandformNodes(sceneDocument.nodes, `scenes[${sceneEntry.sceneId}]`)
+    if (options.allowLandformNodes !== true) {
+      assertNoLandformNodes(sceneDocument.nodes, `scenes[${sceneEntry.sceneId}]`)
+    }
     groundHeightSidecars[sceneEntry.sceneId] = extractGroundHeightSidecarFromPackage(zip, sceneEntry, sceneDocument)
     groundSplatSidecars[sceneEntry.sceneId] = extractGroundSplatSidecarFromPackage(zip, sceneEntry, sceneDocument)
     groundScatterSidecars[sceneEntry.sceneId] = extractGroundScatterSidecarFromPackage(zip, sceneEntry, sceneDocument)

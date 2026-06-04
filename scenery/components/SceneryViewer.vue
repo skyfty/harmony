@@ -684,6 +684,7 @@ import type {
   Vector3Like,
 } from '@harmony/schema/core';
 import {
+  isRuntimeHiddenInPreview,
   deserializeCompiledGroundManifest,
   resolveGroundWorkingGridSize,
 } from '@harmony/schema/core';
@@ -10142,7 +10143,7 @@ function updateNodeProperties(object: THREE.Object3D, node: SceneNode): void {
   const guideboardVisibility = resolveGuideboardInitialVisibility(node);
   if (guideboardVisibility !== null) {
     object.visible = guideboardVisibility;
-  } else if (node.editorFlags?.editorOnly || object.userData?.hidden === true) {
+  } else if (isRuntimeHiddenInPreview(node) || node.editorFlags?.editorOnly || object.userData?.hidden === true) {
     object.visible = false;
   } else if (typeof node.visible === 'boolean') {
     object.visible = node.visible;

@@ -1304,6 +1304,7 @@ export interface SceneNodeEditorFlags {
   ignoreDropToGround?: boolean
   editorOnly?: boolean
   ignoreSelection?: boolean
+  runtimeHiddenInPreview?: boolean
 }
 
 export interface CameraNodeProperties {
@@ -1318,6 +1319,10 @@ export interface CameraNodeProperties {
 export interface SceneNodeImportMetadata {
   assetId: string
   objectPath?: number[] | null
+}
+
+export function isRuntimeHiddenInPreview(node: Pick<SceneNode, 'editorFlags'> | null | undefined): boolean {
+  return node?.editorFlags?.runtimeHiddenInPreview === true
 }
 
 export type LightNodeType = 'Directional' | 'Point' | 'Spot' | 'Ambient' | 'Hemisphere'
