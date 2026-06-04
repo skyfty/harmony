@@ -132,20 +132,20 @@ function isWeatherParticlePreset(presetId: string): boolean {
 
 function resolveWeatherGroundThreshold(presetId: string): number {
   if (presetId.includes('rain')) {
-    return 0.12
+    return presetId.includes('heavy') ? 0.08 : 0.06
   }
   if (presetId.includes('snow')) {
-    return 0.2
+    return presetId.includes('blizzard') ? 0.16 : 0.12
   }
   return 0
 }
 
 function resolveWeatherFadeRange(presetId: string): number {
   if (presetId.includes('rain')) {
-    return presetId.includes('heavy') ? 0.8 : 0.62
+    return presetId.includes('heavy') ? 0.56 : 0.46
   }
   if (presetId.includes('snow')) {
-    return presetId.includes('blizzard') ? 1.2 : 1
+    return presetId.includes('blizzard') ? 1.35 : 1.05
   }
   return 0
 }
