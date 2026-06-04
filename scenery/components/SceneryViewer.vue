@@ -10750,7 +10750,7 @@ function ensureRemoteMultiuserPeerRoot(): THREE.Group | null {
   return remoteMultiuserPeerRoot;
 }
 
-function hideRemoteMultiuserPeer(entry: RemoteMultiuserPeerEntry): void {
+function hideRemoteMultiuserPeer(userId: string, entry: RemoteMultiuserPeerEntry): void {
   if (entry.root) {
     entry.root.parent?.remove(entry.root);
   }
@@ -11762,7 +11762,7 @@ function syncRemoteMultiuserPeerVisibility(camera?: THREE.Camera | null): void {
   remoteMultiuserPeerEntries.forEach((entry, userId) => {
     if (!selected.has(userId)) {
       if (entry.visible) {
-        hideRemoteMultiuserPeer(entry);
+        hideRemoteMultiuserPeer(userId, entry);
       }
       return;
     }
