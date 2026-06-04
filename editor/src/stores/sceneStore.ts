@@ -1078,10 +1078,43 @@ type LandformGroundSplatBakeRequest = {
   reason: string
 }
 
+type SceneDocumentSidecarPayload = {
+  groundHeightSidecars: Record<string, ArrayBuffer | null>
+  groundSplatSidecars: Record<string, ArrayBuffer | null>
+  groundScatterSidecars: Record<string, ArrayBuffer | null>
+}
+
+function buildSceneDocumentSidecarPayload(document: StoredSceneDocument): SceneDocumentSidecarPayload {
+  const groundNode = findGroundNode(document.nodes)
+  const sceneId = document.id
+  return {
+    groundHeightSidecars: {
+      [sceneId]: useGroundHeightmapStore().buildSceneDocumentSidecar(groundNode),
+    },
+    groundSplatSidecars: {
+      [sceneId]: useGroundSplatStore().buildSceneDocumentSidecar(sceneId, groundNode),
+    },
+    groundScatterSidecars: {
+      [sceneId]: useGroundScatterStore().buildSceneDocumentSidecar(sceneId, groundNode),
+    },
+  }
+}
+
 type SceneStoreGroundSplatBakeTarget = Pick<SceneState, 'nodes'> & {
   currentSceneId?: string | null
+  isSceneReady: boolean
+  hasUnsavedChanges: boolean
+  requestSceneAutoSave: (options?: { mode?: SceneAutoSaveMode }) => void
   queueSceneNodePatch: (nodeId: string, fields: ScenePatchField[], options?: { bumpVersion?: boolean }) => boolean
   bumpSceneNodePropertyVersion?: () => void
+}
+
+function requestSceneAutoSaveAfterLandformBake(store: SceneStoreGroundSplatBakeTarget): void {
+  if (!store.currentSceneId || !store.isSceneReady) {
+    return
+  }
+  store.hasUnsavedChanges = true
+  store.requestSceneAutoSave({ mode: 'structural' })
 }
 
 function collectLandformSurfaceLayerTextureAssetIdsFromNodes(nodes: SceneNode[] | undefined | null): string[] {
@@ -1127,7 +1160,6 @@ const landformGroundSplatBakeScheduler = createLatestIdleScheduler<LandformGroun
       return
     }
 
-    const scenesStore = useScenesStore()
     const groundSplatStore = useGroundSplatStore()
 
     if (!baked) {
@@ -1138,7 +1170,6 @@ const landformGroundSplatBakeScheduler = createLatestIdleScheduler<LandformGroun
       } as GroundDynamicMesh
       if (request.scene.currentSceneId) {
         groundSplatStore.replaceGroundSplat(request.scene.currentSceneId, groundNode.id, null)
-        await scenesStore.saveSceneGroundSplatSidecar(request.scene.currentSceneId, null, { syncServer: false })
       }
       const runtimeGroundDefinition = groundNode.dynamicMesh as GroundRuntimeDynamicMesh
       runtimeGroundDefinition.runtimeDisableOptimizedChunks = false
@@ -1147,6 +1178,7 @@ const landformGroundSplatBakeScheduler = createLatestIdleScheduler<LandformGroun
       if (!queued) {
         request.scene.bumpSceneNodePropertyVersion?.()
       }
+      requestSceneAutoSaveAfterLandformBake(request.scene)
       return
     }
 
@@ -1167,11 +1199,6 @@ const landformGroundSplatBakeScheduler = createLatestIdleScheduler<LandformGroun
         surfaceLayerTextureAssetIds: nextSurfaceLayerTextureAssetIds,
         groundSurfaceChunks: manualDeepClone(baked),
       })
-      const sidecar = groundSplatStore.buildSceneDocumentSidecar(request.scene.currentSceneId, {
-        ...groundNode,
-        dynamicMesh: groundNode.dynamicMesh,
-      })
-      await scenesStore.saveSceneGroundSplatSidecar(request.scene.currentSceneId, sidecar, { syncServer: false })
     }
     const runtimeGroundDefinition = groundNode.dynamicMesh as GroundRuntimeDynamicMesh
     runtimeGroundDefinition.runtimeDisableOptimizedChunks = false
@@ -1180,6 +1207,7 @@ const landformGroundSplatBakeScheduler = createLatestIdleScheduler<LandformGroun
     if (!queued) {
       request.scene.bumpSceneNodePropertyVersion?.()
     }
+    requestSceneAutoSaveAfterLandformBake(request.scene)
   })().catch((error) => {
     console.warn('[SceneStore] Failed to bake landform ground splat', error)
   })
@@ -18830,7 +18858,8 @@ export const useSceneStore = defineStore('scene', {
           throw new Error('Project must be opened before saving scene')
         }
         document.projectId = projectId
-        await scenesStore.saveSceneDocument(document)
+        const sidecars = buildSceneDocumentSidecarPayload(document)
+        await scenesStore.saveSceneDocuments([document], sidecars)
         applyCurrentSceneMeta(this, document)
         this.hasUnsavedChanges = false
 
