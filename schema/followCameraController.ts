@@ -246,6 +246,11 @@ function readVelocityLengthSquared(velocity: VelocityLike): number {
   return x * x + y * y + z * z
 }
 
+const FOLLOW_CAMERA_PLANAR_VELOCITY_DEAD_ZONE = 0.08
+const FOLLOW_CAMERA_PLANAR_VELOCITY_DEAD_ZONE_SQ = FOLLOW_CAMERA_PLANAR_VELOCITY_DEAD_ZONE * FOLLOW_CAMERA_PLANAR_VELOCITY_DEAD_ZONE
+const FOLLOW_CAMERA_ANCHOR_DEAD_ZONE = 0.015
+const FOLLOW_CAMERA_ANCHOR_DEAD_ZONE_SQ = FOLLOW_CAMERA_ANCHOR_DEAD_ZONE * FOLLOW_CAMERA_ANCHOR_DEAD_ZONE
+
 export class FollowCameraController {
   private readonly temp = {
     cameraForward: new THREE.Vector3(),
@@ -328,6 +333,12 @@ export class FollowCameraController {
       temp.planarVelocity.set(0, 0, 0)
     }
 
+    if (planarSpeedSq <= FOLLOW_CAMERA_PLANAR_VELOCITY_DEAD_ZONE_SQ) {
+      temp.planarVelocity.set(0, 0, 0)
+      planarSpeedSq = 0
+      planarSpeed = 0
+    }
+
     const motionSpeedRange = Math.max(1e-3, tuning.motionSpeedFull - tuning.motionSpeedThreshold)
     const motionBlendTarget = planarSpeed <= tuning.motionSpeedThreshold
       ? 0
@@ -383,7 +394,7 @@ export class FollowCameraController {
       desiredHeading.normalize()
     }
 
-    if (planarSpeedSq > 1e-6) {
+    if (planarSpeedSq > 0) {
       forwardSpeed = temp.planarVelocity.dot(desiredHeading)
       temp.tempVector.copy(temp.planarVelocity).normalize()
       follow.lastVelocityDirection.copy(temp.tempVector)
@@ -431,7 +442,16 @@ export class FollowCameraController {
     }
 
     temp.followPredictedAnchor.add(follow.lookaheadOffset)
-    follow.desiredAnchor.copy(temp.followPredictedAnchor)
+    if (!follow.initialized || options.immediate || isTargetMoving) {
+      follow.desiredAnchor.copy(temp.followPredictedAnchor)
+    } else {
+      temp.tempVector.copy(temp.followPredictedAnchor).sub(follow.currentAnchor)
+      if (temp.tempVector.lengthSq() <= FOLLOW_CAMERA_ANCHOR_DEAD_ZONE_SQ) {
+        follow.desiredAnchor.copy(follow.currentAnchor)
+      } else {
+        follow.desiredAnchor.copy(temp.followPredictedAnchor)
+      }
+    }
 
     const baseAnchorAlpha = options.immediate || !follow.initialized
       ? 1

@@ -218,6 +218,8 @@ const VEHICLE_SPEED_GOVERNOR_BRAKE_ENTER_OFFSET = 0.45
 const VEHICLE_SPEED_GOVERNOR_BRAKE_EXIT_OFFSET = 0.2
 const VEHICLE_SPEED_GOVERNOR_BRAKE_DEADBAND = 0.35
 const VEHICLE_SPEED_GOVERNOR_BRAKE_BAND = 1.8
+const VEHICLE_FOLLOW_CAMERA_VELOCITY_DEAD_ZONE_SQ = 0.0064
+const VEHICLE_FOLLOW_CAMERA_VELOCITY_FLIP_SPEED_SQ = 0.09
 const VEHICLE_SPEED_GOVERNOR_BRAKE_MAX_RATIO = 0.14
 // 松开油门时的惯性阻尼
 const VEHICLE_COASTING_DAMPING = 0.04
@@ -346,6 +348,11 @@ export class VehicleDriveController {
   private readonly deps: VehicleDriveControllerDeps
   private readonly bindings: VehicleDriveControllerBindings
   private readonly followCameraController = new FollowCameraController()
+  private readonly followCameraPlacementCache = {
+    nodeId: null as string | null,
+    objectUuid: null as string | null,
+    placement: null as VehicleFollowPlacement | null,
+  }
   private speedGovernorScale = 1
   private speedGovernorBrakeAssist = 0
   private speedGovernorSmoothedForwardSpeedAbs = 0
@@ -455,6 +462,42 @@ export class VehicleDriveController {
       return undefined
     }
     return resolved
+  }
+
+  private resolveFollowCameraPlacement(vehicleObject: THREE.Object3D | null, instance: VehicleInstance | null): VehicleFollowPlacement {
+    const nodeId = this.deps.normalizeNodeId(instance?.nodeId ?? null) ?? this.state.nodeId ?? null
+    const objectUuid = vehicleObject?.uuid ?? null
+    const cache = this.followCameraPlacementCache
+    if (cache.placement && cache.nodeId === nodeId && cache.objectUuid === objectUuid) {
+      return {
+        distance: cache.placement.distance,
+        heightOffset: cache.placement.heightOffset,
+        targetLift: cache.placement.targetLift,
+        targetForward: cache.placement.targetForward,
+      }
+    }
+
+    const placement = computeVehicleFollowPlacement(getVehicleApproxDimensions(vehicleObject))
+    cache.nodeId = nodeId
+    cache.objectUuid = objectUuid
+    cache.placement = {
+      distance: placement.distance,
+      heightOffset: placement.heightOffset,
+      targetLift: placement.targetLift,
+      targetForward: placement.targetForward,
+    }
+    return {
+      distance: placement.distance,
+      heightOffset: placement.heightOffset,
+      targetLift: placement.targetLift,
+      targetForward: placement.targetForward,
+    }
+  }
+
+  private clearFollowCameraPlacementCache(): void {
+    this.followCameraPlacementCache.nodeId = null
+    this.followCameraPlacementCache.objectUuid = null
+    this.followCameraPlacementCache.placement = null
   }
 
   get orbitMode(): VehicleDriveOrbitMode {
@@ -806,6 +849,7 @@ export class VehicleDriveController {
     this.bindings.cameraFollowState.initialized = false
     this.followCameraSteerLookAngle = 0
     this.resetFollowCameraOffset()
+    this.clearFollowCameraPlacementCache()
     this.resetInputs()
     this.resetSpeedGovernor()
         if (this.deps.setCameraViewState) {
@@ -883,6 +927,7 @@ export class VehicleDriveController {
     this.transformDriveState.velocityWorld.set(0, 0, 0)
     this.bindings.cameraFollowState.initialized = false
     this.resetFollowCameraOffset()
+    this.clearFollowCameraPlacementCache()
     this.clearSmoothStop()
     this.followCameraVelocityHasSample = false
     this.followCameraVelocity.set(0, 0, 0)
@@ -1353,7 +1398,7 @@ export class VehicleDriveController {
   ): boolean {
     const follow = this.bindings.cameraFollowState
     const temp = this.temp
-    const placement = computeVehicleFollowPlacement(getVehicleApproxDimensions(vehicleObject))
+    const placement = this.resolveFollowCameraPlacement(vehicleObject, instance)
 
     this.computeVehicleFollowAnchor(vehicleObject, instance, temp.seatPosition, temp.followAnchor)
 
@@ -1380,8 +1425,28 @@ export class VehicleDriveController {
           .multiplyScalar(1 / dt)
       }
       this.followCameraVelocityScratch.y = 0
-      const alpha = computeFollowLerpAlpha(dt, this.getFollowCameraVelocityLerpSpeed())
-      this.followCameraVelocity.lerp(this.followCameraVelocityScratch, alpha)
+      const sampleSpeedSq =
+        (this.followCameraVelocityScratch.x * this.followCameraVelocityScratch.x)
+        + (this.followCameraVelocityScratch.z * this.followCameraVelocityScratch.z)
+      if (sampleSpeedSq <= VEHICLE_FOLLOW_CAMERA_VELOCITY_DEAD_ZONE_SQ) {
+        if (this.followCameraVelocity.lengthSq() <= VEHICLE_FOLLOW_CAMERA_VELOCITY_DEAD_ZONE_SQ) {
+          this.followCameraVelocity.set(0, 0, 0)
+        } else {
+          const releaseAlpha = computeFollowLerpAlpha(dt, Math.max(2, this.getFollowCameraVelocityLerpSpeed() * 0.5))
+          this.followCameraVelocity.lerp(this.followCameraVelocityScratch.set(0, 0, 0), releaseAlpha)
+        }
+      } else {
+        const smoothedSpeedSq = this.followCameraVelocity.x * this.followCameraVelocity.x + this.followCameraVelocity.z * this.followCameraVelocity.z
+        const isLowSpeedDirectionFlip =
+          smoothedSpeedSq > VEHICLE_FOLLOW_CAMERA_VELOCITY_DEAD_ZONE_SQ
+          && this.followCameraVelocity.dot(this.followCameraVelocityScratch) < 0
+          && sampleSpeedSq < VEHICLE_FOLLOW_CAMERA_VELOCITY_FLIP_SPEED_SQ
+        const blendSpeed = isLowSpeedDirectionFlip
+          ? Math.max(2.5, this.getFollowCameraVelocityLerpSpeed() * 0.5)
+          : this.getFollowCameraVelocityLerpSpeed()
+        const alpha = computeFollowLerpAlpha(dt, blendSpeed)
+        this.followCameraVelocity.lerp(this.followCameraVelocityScratch, alpha)
+      }
     } else if (!this.followCameraVelocityHasSample && deltaSeconds > 0) {
       this.followCameraVelocity.set(0, 0, 0)
       this.followCameraVelocityHasSample = true
@@ -1460,6 +1525,7 @@ export class VehicleDriveController {
         : {}),
       applyOrbitTween: options.applyOrbitTween ?? false,
       followControlsDirty: options.followControlsDirty ?? false,
+      lockLocalOffset: true,
       immediate: options.immediate ?? false,
       ...(updateOrbitLookTween ? { onUpdateOrbitLookTween: updateOrbitLookTween } : {}),
     })
