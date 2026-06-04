@@ -76,7 +76,7 @@ const isBackgroundDropActive = ref(false)
 const isExponentialFog = computed(() => environmentSettings.value.fogMode === 'exp')
 const isLinearFog = computed(() => environmentSettings.value.fogMode === 'linear')
 const isPhysicsEnabled = computed(() => environmentSettings.value.physicsEnabled !== false)
-const physicsEngine = computed<EnvironmentPhysicsEngine>(() => environmentSettings.value.physicsEngine ?? 'auto')
+const physicsEngine = computed<EnvironmentPhysicsEngine>(() => environmentSettings.value.physicsEngine ?? 'cannon')
 
 const orientationPreset = computed<EnvironmentOrientationPreset>(() => environmentSettings.value.environmentOrientationPreset ?? 'yUp')
 const rotationDegrees = computed<EnvironmentRotationDegrees>(() => environmentSettings.value.environmentRotationDegrees ?? { x: 0, y: 0, z: 0 })
@@ -95,7 +95,6 @@ const fogModeOptions: Array<{ title: string; value: EnvironmentFogMode }> = [
 ]
 
 const physicsEngineOptions: Array<{ title: string; value: EnvironmentPhysicsEngine }> = [
-  { title: 'Auto', value: 'auto' },
   { title: 'Ammo', value: 'ammo' },
   { title: 'Cannon', value: 'cannon' },
 ]
@@ -572,10 +571,10 @@ function handlePhysicsEngineChange(nextEngine: EnvironmentPhysicsEngine | { valu
       ? (nextEngine as { value?: unknown }).value
       : null
 
-  if (normalizedEngine !== 'auto' && normalizedEngine !== 'ammo' && normalizedEngine !== 'cannon') {
+  if (normalizedEngine !== 'ammo' && normalizedEngine !== 'cannon') {
     return
   }
-  if (normalizedEngine === (environmentSettings.value.physicsEngine ?? 'auto')) {
+  if (normalizedEngine === (environmentSettings.value.physicsEngine ?? 'cannon')) {
     return
   }
   sceneStore.patchEnvironmentSettings({ physicsEngine: normalizedEngine })

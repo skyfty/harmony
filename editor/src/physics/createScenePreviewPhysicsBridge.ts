@@ -28,7 +28,7 @@ export type CreateScenePreviewPhysicsBridgeOptions = {
 }
 
 function resolveEditorPhysicsBackendPreference(preference: PhysicsBackendPreference | undefined): 'ammo' | 'cannon' {
-  return preference === 'cannon' ? 'cannon' : 'ammo'
+  return preference === 'ammo' ? 'ammo' : 'cannon'
 }
 
 class LazyScenePreviewPhysicsBridge implements PhysicsBridge {

@@ -131,7 +131,7 @@ function resolveManualChunk(id: string): string | undefined {
         return 'pages/physics-cannon/common/vendor';
       }
       if (normalizedId.includes('schema')) {
-        return 'common/scenery-schema';
+        return 'pages/scenery-shared/chunks/schema';
       }
       if (
         normalizedId.includes('three/examples/jsm')

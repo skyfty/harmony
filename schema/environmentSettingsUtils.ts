@@ -22,7 +22,7 @@ export const DEFAULT_ENVIRONMENT_FOG_DENSITY = 0.02
 export const DEFAULT_ENVIRONMENT_FOG_NEAR = 1
 export const DEFAULT_ENVIRONMENT_FOG_FAR = 50
 export const DEFAULT_ENVIRONMENT_PHYSICS_ENABLED = true
-export const DEFAULT_ENVIRONMENT_PHYSICS_ENGINE = 'auto' as const
+export const DEFAULT_ENVIRONMENT_PHYSICS_ENGINE = 'cannon' as const
 export const DEFAULT_ENVIRONMENT_GRAVITY = 9.81
 export const DEFAULT_ENVIRONMENT_RESTITUTION = 0.2
 export const DEFAULT_ENVIRONMENT_FRICTION = 0.3
@@ -285,9 +285,7 @@ export function cloneEnvironmentSettings(
     physicsEngine:
       (normalizedSource as any)?.physicsEngine === 'ammo'
         ? 'ammo'
-        : (normalizedSource as any)?.physicsEngine === 'cannon'
-          ? 'cannon'
-          : DEFAULT_ENVIRONMENT_PHYSICS_ENGINE,
+        : 'cannon',
     viewportPerformanceMode:
       typeof (normalizedSource as any)?.viewportPerformanceMode === 'boolean'
         ? (normalizedSource as any).viewportPerformanceMode

@@ -1527,7 +1527,7 @@ export interface SceneResourceSummary {
 export type EnvironmentBackgroundMode = 'solidColor' | 'hdri' | 'fastHdri' | 'skycube'
 export type EnvironmentFogMode = 'none' | 'linear' | 'exp'
 export type EnvironmentNorthDirection = '+X' | '-X' | '+Z' | '-Z'
-export type EnvironmentPhysicsEngine = 'auto' | 'ammo' | 'cannon'
+export type EnvironmentPhysicsEngine = 'ammo' | 'cannon'
 
 export type EnvironmentOrientationPreset = 'yUp' | 'zUp' | 'xUp' | 'custom'
 

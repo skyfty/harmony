@@ -180,7 +180,7 @@ const PREVIEW_FIXED_TIME_STEP_MS = 1000 / 60
 
 function resolvePreviewPhysicsBackendPreference(): PhysicsBackendPreference | undefined {
   const preference = environmentSettings.value.physicsEngine
-  return preference === 'ammo' || preference === 'cannon' || preference === 'auto'
+  return preference === 'ammo' || preference === 'cannon'
     ? preference
     : undefined
 }

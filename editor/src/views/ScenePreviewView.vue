@@ -10927,7 +10927,7 @@ function resolveScenePreviewPhysicsBridgePreference(
 	settings: Pick<EnvironmentSettings, 'physicsEngine'> | null | undefined,
 ): PhysicsBackendPreference | undefined {
 	const preference = settings?.physicsEngine
-	return preference === 'ammo' || preference === 'cannon' || preference === 'auto'
+	return preference === 'ammo' || preference === 'cannon'
 		? preference
 		: undefined
 }

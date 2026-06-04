@@ -33,6 +33,7 @@
       :debug-console-default-expanded="true"
       :debug-console-max-entries="200"
       :initial-punched-node-ids="initialPunchedNodeIds"
+      :physics-engine="resolvedPhysicsEngine"
       @punch="handlePunch"
       @coupon="handleCoupon"
     />
@@ -84,6 +85,7 @@ const backButtonTop = ref<number>(8);
 const initialPunchedNodeIds = ref<string[]>([]);
 const serverAssetBaseUrl = getDownloadCdnBaseUrl();
 const multiuserIdentity = ref<{ userId: string; displayName?: string | null } | null>(null);
+const resolvedPhysicsEngine = ref<'ammo' | 'cannon' | 'auto' | undefined>(undefined);
 
 const nominateStateMap = computed(() => {
   const vehicleIdentifier = selectedVehicleIdentifier.value.trim();
@@ -165,6 +167,7 @@ function syncBackButtonTop(): void {
 type PunchEventPayload = {
   eventName: 'punch';
   sceneId: string;
+  sceneName: string;
   clientPunchTime: string;
   behaviorPunchTime: string;
   location: {
@@ -192,6 +195,19 @@ type CouponEventPayload = {
   };
 };
 
+function resolvePhysicsEngineFromQuery(value: unknown): 'ammo' | 'cannon' | 'auto' | undefined {
+  if (value === 'ammo' || value === 'cannon' || value === 'auto') {
+    return value;
+  }
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'ammo' || normalized === 'cannon' || normalized === 'auto') {
+    return normalized;
+  }
+  return undefined;
+}
 function handlePunch(payload: PunchEventPayload): void {
   if (!sceneSpotId.value) {
     return;

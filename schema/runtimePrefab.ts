@@ -1,9 +1,11 @@
 import type { SceneAssetRegistryEntry, SceneJsonExportDocument, SceneNode } from './core'
 import {
   BOUNDARY_WALL_COMPONENT_TYPE,
+  GROUND_ANCHOR_COMPONENT_TYPE,
   MODEL_COLLISION_COMPONENT_TYPE,
   RIGIDBODY_COMPONENT_TYPE,
   VEHICLE_COMPONENT_TYPE,
+  createGroundAnchorComponentState,
 } from './components'
 
 export interface NodePrefabData {
@@ -105,6 +107,29 @@ function remapNodeReferences(value: unknown, idMap: Map<string, string>): unknow
   return next
 }
 
+function ensureGroundAnchorForVehicleNodes(node: SceneNode): void {
+  if (!node || typeof node !== 'object') {
+    return
+  }
+
+  const components = node.components && typeof node.components === 'object'
+    ? (node.components as Record<string, unknown>)
+    : null
+  const hasVehicleComponent = Boolean(components && VEHICLE_COMPONENT_TYPE in components)
+  const hasGroundAnchorComponent = Boolean(components && GROUND_ANCHOR_COMPONENT_TYPE in components)
+
+  if (hasVehicleComponent && !hasGroundAnchorComponent) {
+    node.components = {
+      ...(node.components && typeof node.components === 'object' ? node.components : {}),
+      [GROUND_ANCHOR_COMPONENT_TYPE]: createGroundAnchorComponentState(node),
+    }
+  }
+
+  if (Array.isArray(node.children)) {
+    node.children.forEach((child) => ensureGroundAnchorForVehicleNodes(child))
+  }
+}
+
 function remapRuntimeNodeIds(node: SceneNode, idMap: Map<string, string>): void {
   const nextNodeId = createRuntimePrefabId('runtime_node')
   idMap.set(node.id, nextNodeId)
@@ -189,6 +214,7 @@ export function cloneRuntimePrefabNode(prefab: NodePrefabData): RuntimePrefabClo
   const root = deepCloneNode(prefab.root)
   const idMap = new Map<string, string>()
   remapRuntimeNodeIds(root, idMap)
+  ensureGroundAnchorForVehicleNodes(root)
   remapRuntimeNodeComponents(root, idMap)
   applyRuntimeReferenceRemap(root, idMap)
   return { root, idMap }
