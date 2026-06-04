@@ -1463,7 +1463,7 @@ async function exportProjectPackageZip(
     },
     scenes: embeddedScenes,
     embedAssets: options.embedAssets ?? false,
-    includePlanningData: false,
+    planningDataMode: 'withoutPlanningData',
     updateProgress,
     reportEvent,
   })

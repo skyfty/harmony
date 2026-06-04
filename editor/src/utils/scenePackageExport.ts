@@ -238,6 +238,8 @@ export type ScenePackageExportScene = {
   planningData?: PlanningSceneData | null
 }
 
+export type ScenePackagePlanningDataMode = 'withPlanningData' | 'withoutPlanningData'
+
 // inferExtFromMimeType moved to @schema (assetTypeConversion)
 
 function inferExtFromFilename(filename: string | null | undefined): string | null {
@@ -660,6 +662,7 @@ function findGroundNode(nodes: SceneJsonExportDocument['nodes']): SceneJsonExpor
 function stripEditorOnlySceneFields(
   document: SceneExportDocumentWithEditorFields,
   retainedConfigAssetIds: ReadonlySet<string> = new Set<string>(),
+  options: { includePlanningData?: boolean } = {},
 ): void {
   const filterAssetMap = <T>(value: Record<string, T> | null | undefined): Record<string, T> | undefined => {
     if (!value || typeof value !== 'object') {
@@ -704,7 +707,7 @@ function stripEditorOnlySceneFields(
   if ('resourceSummary' in document) {
     delete document.resourceSummary
   }
-  if ('planningData' in document) {
+  if (!options.includePlanningData && 'planningData' in document) {
     delete document.planningData
   }
 
@@ -1175,7 +1178,7 @@ export async function exportScenePackageZip(payload: {
   project: ProjectExportBundleProjectConfig
   scenes: ScenePackageExportScene[]
   embedAssets?: boolean
-  includePlanningData?: boolean
+  planningDataMode: ScenePackagePlanningDataMode
   updateProgress?: (value: number, message?: string) => void
   reportEvent?: SceneExportEventReporter
 }): Promise<Blob> {
@@ -1209,6 +1212,7 @@ export async function exportScenePackageZip(payload: {
   const sceneStore = useSceneStore()
   const resources: ScenePackageResourceEntry[] = []
   const sceneReferenceSummaryMaps = new Map<string, Map<string, SceneAssetReferenceSummary>>()
+  const includePlanningData = payload.planningDataMode === 'withPlanningData'
 
   payload.scenes.forEach((scene) => {
     const document = scene.document as SceneExportDocumentWithEditorFields
@@ -1468,7 +1472,7 @@ export async function exportScenePackageZip(payload: {
     stripGroundHeightMapsFromSceneDocument(preparedDocument as StoredSceneDocument)
     const docClone = preparedDocument as SceneExportDocumentWithEditorFields
     const retainedConfigAssetIds = collectRuntimeRetainedConfigAssetIds(docClone)
-    stripEditorOnlySceneFields(docClone, retainedConfigAssetIds)
+    stripEditorOnlySceneFields(docClone, retainedConfigAssetIds, { includePlanningData })
 
     const localAssetIds = collectLocalAssetIdsForExport(docClone, retainedConfigAssetIds)
     const sceneAssetReferenceSummaries = sceneReferenceSummaryMaps.get(scene.id) ?? new Map<string, SceneAssetReferenceSummary>()
@@ -1592,6 +1596,7 @@ export async function exportScenePackageZip(payload: {
       })
     }
     stripGroundBakedTextureAssetIds(docClone.nodes ?? [])
+    stripEditorOnlySceneFields(docClone, retainedConfigAssetIds, { includePlanningData })
     // Add the prepared binary scene document to files and manifest.
     files[scenePath] = encodeScenePackageSceneDocument(docClone)
     emitSceneExportEvent(payload.reportEvent, {
@@ -1631,7 +1636,7 @@ export async function exportScenePackageZip(payload: {
         message: `已写入地表散布 sidecar`,
       })
     }
-    if (payload.includePlanningData && scene.planningData) {
+    if (includePlanningData && scene.planningData) {
       const planningSidecar = await buildPlanningSidecar(scene.id, scene.planningData, files, resources)
       planningPath = planningSidecar.planningPath
       files[planningPath] = serializePlanningScenePackageSidecar(planningSidecar.sidecar)

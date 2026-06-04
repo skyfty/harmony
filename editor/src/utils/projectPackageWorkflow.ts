@@ -316,7 +316,7 @@ export async function runProjectExportWorkflow(options: {
       },
       scenes: embeddedScenes,
       embedAssets: true,
-      includePlanningData: false,
+      planningDataMode: 'withPlanningData',
     })
 
     const fileNameBase = sanitizeExportFileName(project.name)

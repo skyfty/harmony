@@ -953,7 +953,8 @@ async function uploadSceneToServer(document: StoredSceneDocument, authStore: Ret
       lastEditedSceneId: document.id,
       sceneOrder: [document.id],
     },
-    scenes: [{ id: document.id, document: cloneForIndexedDb(document) }]
+    scenes: [{ id: document.id, document: cloneForIndexedDb(document) }],
+    planningDataMode: 'withPlanningData',
   })
 
   const filename = `${document.name || document.id}.zip`
