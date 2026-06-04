@@ -70,5 +70,8 @@ export function createPlanningDemSamplingSource(options: {
   height: number
   targetWorldBounds: PlanningDemTargetWorldBounds
 }): PlanningDemRasterSource {
-  return createPlanningDemRasterSource(options)
+  return createPlanningDemRasterSource({
+    ...options,
+    sourceWorldBounds: options.targetWorldBounds,
+  })
 }

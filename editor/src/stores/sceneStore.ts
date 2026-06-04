@@ -141,6 +141,92 @@ import {
 
 export { GROUND_NODE_ID, ENVIRONMENT_NODE_ID, MULTIUSER_NODE_ID, PROTAGONIST_NODE_ID }
 
+function cloneGroundLocalEditTileValueMap(
+  source: GroundLocalEditTileMap | null | undefined,
+): GroundLocalEditTileMap | null {
+  if (!source || typeof source !== 'object') {
+    return null
+  }
+  const result: GroundLocalEditTileMap = {}
+  for (const [key, tile] of Object.entries(source)) {
+    if (!tile || typeof tile !== 'object') {
+      continue
+    }
+    const values = Array.isArray(tile.values) ? [...tile.values] : []
+    result[key] = {
+      ...tile,
+      values,
+    }
+  }
+  return Object.keys(result).length > 0 ? result : null
+}
+
+function mergeGroundLocalEditTileMaps(
+  base: GroundLocalEditTileMap | null | undefined,
+  patch: GroundLocalEditTileMap | null | undefined,
+): GroundLocalEditTileMap | null {
+  const normalizedPatch = patch && typeof patch === 'object' ? patch : null
+  if (!normalizedPatch) {
+    return cloneGroundLocalEditTileValueMap(base)
+  }
+
+  const merged = cloneGroundLocalEditTileValueMap(base) ?? {}
+  for (const [key, tile] of Object.entries(normalizedPatch)) {
+    if (!tile || typeof tile !== 'object') {
+      continue
+    }
+    const existing = merged[key]
+    const patchValues = Array.isArray(tile.values) ? tile.values : []
+    const expectedLength = (Math.max(1, Math.trunc(Number(tile.resolution) || 0)) + 1) * (Math.max(1, Math.trunc(Number(tile.resolution) || 0)) + 1)
+    if (
+      existing
+      && Array.isArray(existing.values)
+      && existing.values.length === patchValues.length
+      && existing.resolution === tile.resolution
+      && existing.tileSizeMeters === tile.tileSizeMeters
+    ) {
+      const nextValues = [...existing.values]
+      let changed = false
+      const limit = Math.min(nextValues.length, patchValues.length)
+      for (let index = 0; index < limit; index += 1) {
+        const nextValue = Number(patchValues[index])
+        if (!Number.isFinite(nextValue) || nextValue === GROUND_HEIGHT_UNSET_VALUE) {
+          continue
+        }
+        if (nextValues[index] !== nextValue) {
+          nextValues[index] = nextValue
+          changed = true
+        }
+      }
+      if (changed) {
+        merged[key] = {
+          ...existing,
+          ...tile,
+          values: nextValues,
+          source: existing.source === 'dem' || tile.source === 'dem'
+            ? 'dem'
+            : existing.source === 'mixed' || tile.source === 'mixed'
+              ? 'mixed'
+              : tile.source ?? existing.source ?? null,
+          updatedAt: Date.now(),
+        }
+      }
+      continue
+    }
+    const nextValues = new Array<number>(expectedLength)
+    for (let index = 0; index < expectedLength; index += 1) {
+      const nextValue = Number(patchValues[index])
+      nextValues[index] = Number.isFinite(nextValue) ? nextValue : GROUND_HEIGHT_UNSET_VALUE
+    }
+    merged[key] = {
+      ...tile,
+      values: nextValues,
+      updatedAt: Date.now(),
+    }
+  }
+  return Object.keys(merged).length > 0 ? merged : null
+}
+
 import { normalizeDynamicMeshType } from '@/types/dynamic-mesh'
 import {
   buildAssetDependencySubset,
@@ -2099,15 +2185,19 @@ function commitGroundLocalEditTilesRuntimeEdit(
   const resolvedDirtyBounds = computeGroundDirtyBoundsXZFromRegion(target, runtimeDefinition, affectedRegion)
   const currentRevision = normalizeGroundSurfaceRevision(target.dynamicMesh.surfaceRevision)
   const nextRevision = currentRevision + 1
+  const mergedLocalEditTiles = mergeGroundLocalEditTileMaps(
+    runtimeDefinition.localEditTiles ?? targetRuntimeDefinition.localEditTiles ?? definition.localEditTiles ?? null,
+    localEditTiles,
+  )
   target.dynamicMesh.surfaceRevision = nextRevision
   targetRuntimeDefinition.runtimeHydratedHeightState = 'dirty'
   targetRuntimeDefinition.runtimeDisableOptimizedChunks = true
-  targetRuntimeDefinition.localEditTiles = localEditTiles
+  targetRuntimeDefinition.localEditTiles = mergedLocalEditTiles
   definition.surfaceRevision = nextRevision
   runtimeDefinition.runtimeHydratedHeightState = 'dirty'
   runtimeDefinition.runtimeDisableOptimizedChunks = true
-  runtimeDefinition.localEditTiles = localEditTiles
-  useGroundHeightmapStore().replaceLocalEditTiles(nodeId, definition, localEditTiles)
+  runtimeDefinition.localEditTiles = mergedLocalEditTiles
+  useGroundHeightmapStore().replaceLocalEditTiles(nodeId, definition, mergedLocalEditTiles)
   useGroundHeightmapStore().markOptimizedMeshDirtyChunkKeys(
     nodeId,
     definition,
@@ -2173,21 +2263,25 @@ function commitGroundPlanningDemRuntimeEdit(
   const resolvedDirtyBounds = computeGroundDirtyBoundsXZFromRegion(target, runtimeDefinition, committedAffectedRegion)
   const currentRevision = normalizeGroundSurfaceRevision(target.dynamicMesh.surfaceRevision)
   const nextRevision = currentRevision + 1
+  const mergedLocalEditTiles = mergeGroundLocalEditTileMaps(
+    runtimeDefinition.localEditTiles ?? targetRuntimeDefinition.localEditTiles ?? definition.localEditTiles ?? null,
+    localEditTiles,
+  )
   target.dynamicMesh.surfaceRevision = nextRevision
   targetRuntimeDefinition.surfaceRevision = nextRevision
   targetRuntimeDefinition.runtimeHydratedHeightState = 'dirty'
   targetRuntimeDefinition.runtimeDisableOptimizedChunks = true
   targetRuntimeDefinition.planningMetadata = planningMetadata
-  targetRuntimeDefinition.localEditTiles = localEditTiles
+  targetRuntimeDefinition.localEditTiles = mergedLocalEditTiles
   definition.surfaceRevision = nextRevision
   runtimeDefinition.runtimeHydratedHeightState = 'dirty'
   runtimeDefinition.runtimeDisableOptimizedChunks = true
   runtimeDefinition.planningMetadata = planningMetadata
-  runtimeDefinition.localEditTiles = localEditTiles
+  runtimeDefinition.localEditTiles = mergedLocalEditTiles
 
   useGroundHeightmapStore().replacePlanningHeightRegion(nodeId, definition, normalizedPlanningRegion, planningMetadata)
-  if (localEditTiles) {
-    useGroundHeightmapStore().replaceLocalEditTiles(nodeId, definition, localEditTiles)
+  if (mergedLocalEditTiles) {
+    useGroundHeightmapStore().replaceLocalEditTiles(nodeId, definition, mergedLocalEditTiles)
   }
   useGroundHeightmapStore().replaceManualHeightRegion(nodeId, definition, manualClearRegion)
   useGroundHeightmapStore().markOptimizedMeshDirtyChunkKeys(
@@ -2219,6 +2313,15 @@ function refreshGroundOptimizedMeshRuntime(
   const runtimeDefinition = groundHeightmapStore.resolveGroundRuntimeMesh(nodeId, target.dynamicMesh)
   const heightSampler = groundHeightmapStore.resolveGroundRuntimeHeightSampler(nodeId, target.dynamicMesh)
   const dirtyBounds = groundHeightmapStore.consumeOptimizedMeshDirtyBounds(nodeId, runtimeDefinition)
+  const hasLocalEditTiles = Boolean(runtimeDefinition.localEditTiles && Object.keys(runtimeDefinition.localEditTiles).length > 0)
+  const hasRuntimeHeightOverrides = Boolean(
+    (Number.isFinite(runtimeDefinition.runtimeManualHeightOverrideCount) && (runtimeDefinition.runtimeManualHeightOverrideCount ?? 0) > 0)
+    || (Number.isFinite(runtimeDefinition.runtimePlanningHeightOverrideCount) && (runtimeDefinition.runtimePlanningHeightOverrideCount ?? 0) > 0),
+  )
+  const preserveRuntimeEditState = runtimeDefinition.runtimeHydratedHeightState === 'dirty'
+    || runtimeDefinition.runtimeDisableOptimizedChunks === true
+    || hasLocalEditTiles
+    || hasRuntimeHeightOverrides
   const optimizedMesh = rebuildOptimizedGroundMeshForDefinition(
     runtimeDefinition,
     target.dynamicMesh.optimizedMesh,
@@ -2226,8 +2329,21 @@ function refreshGroundOptimizedMeshRuntime(
     dirtyBounds,
     heightSampler,
   )
-  markGroundOptimizedMeshReady(runtimeDefinition, optimizedMesh)
-  markGroundOptimizedMeshReady(target.dynamicMesh, optimizedMesh)
+  if (preserveRuntimeEditState) {
+    const targetRuntimeMesh = target.dynamicMesh as GroundRuntimeDynamicMesh
+    runtimeDefinition.optimizedMesh = optimizedMesh
+    targetRuntimeMesh.optimizedMesh = optimizedMesh
+    runtimeDefinition.runtimeHydratedHeightState = 'dirty'
+    runtimeDefinition.runtimeDisableOptimizedChunks = true
+    runtimeDefinition.surfaceRevision = Number.isFinite(target.dynamicMesh.surfaceRevision)
+      ? Math.max(0, Math.trunc(target.dynamicMesh.surfaceRevision as number))
+      : runtimeDefinition.surfaceRevision
+    targetRuntimeMesh.runtimeHydratedHeightState = 'dirty'
+    targetRuntimeMesh.runtimeDisableOptimizedChunks = true
+  } else {
+    markGroundOptimizedMeshReady(runtimeDefinition, optimizedMesh)
+    markGroundOptimizedMeshReady(target.dynamicMesh, optimizedMesh)
+  }
   groundHeightmapStore.syncRuntimeGroundState(nodeId, runtimeDefinition)
   finalizeDynamicMeshRuntimePatch(store, nodeId, 'Ground')
   persistGroundHeightSidecarForNode(target)

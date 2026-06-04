@@ -54,7 +54,8 @@ export function rebuildOptimizedGroundMeshForDefinition(
   dirtyBounds: GroundContourBounds | null = null,
   sampler: GroundHeightFieldSampler | null = null,
 ) {
-  const optimizedMesh = sampler
+  const hasLocalEditTiles = Boolean(definition.localEditTiles && Object.keys(definition.localEditTiles).length > 0)
+  const optimizedMesh = sampler && !hasLocalEditTiles
     ? buildGroundOptimizedMeshDataFromSampler(definition, sampler, options)
     : rebuildGroundOptimizedMeshData(definition, previousMesh ?? null, options, dirtyBounds)
   definition.optimizedMesh = optimizedMesh

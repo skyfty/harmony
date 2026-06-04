@@ -751,13 +751,13 @@ function syncPlanningHeightState(
   const nextRevision = Number.isFinite(groundRuntimeDefinition.surfaceRevision)
     ? Math.max(0, Math.trunc(groundRuntimeDefinition.surfaceRevision as number)) + 1
     : 1
+  const fullGridDirtyChunkKeys = resolvePlanningDirtyChunkKeysForFullGrid(definition)
   groundRuntimeDefinition.surfaceRevision = nextRevision
   groundRuntimeDefinition.runtimeHydratedHeightState = 'dirty'
   groundRuntimeDefinition.runtimeDisableOptimizedChunks = true
   definition.surfaceRevision = nextRevision
   definition.runtimeHydratedHeightState = 'dirty'
   definition.runtimeDisableOptimizedChunks = true
-  const fullGridDirtyChunkKeys = resolvePlanningDirtyChunkKeysForFullGrid(definition)
   useGroundHeightmapStore().replacePlanningHeightMap(
     groundNode.id,
     groundNode.dynamicMesh as GroundDynamicMesh,

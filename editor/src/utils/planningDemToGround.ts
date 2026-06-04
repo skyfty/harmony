@@ -79,6 +79,7 @@ export interface PlanningDemRasterSource {
   width: number
   height: number
   targetWorldBounds: PlanningDemTargetWorldBounds
+  sourceWorldBounds: PlanningDemTargetWorldBounds
   sampleStepX: number
   sampleStepZ: number
   elevationOffsetMeters: number
@@ -544,10 +545,10 @@ function resolvePlanningDemCoveredGridRegion(options: {
   const requestedStartColumn = Math.max(0, Math.min(columns, Math.trunc(options.startColumn)))
   const requestedEndColumn = Math.max(requestedStartColumn, Math.min(columns, Math.trunc(options.endColumn)))
   const terrainBounds = resolvePlanningDemTargetWorldBounds(options.definition)
-  const overlapMinX = Math.max(terrainBounds.minX, options.source.targetWorldBounds.minX)
-  const overlapMaxX = Math.min(terrainBounds.maxX, options.source.targetWorldBounds.maxX)
-  const overlapMinZ = Math.max(terrainBounds.minZ, options.source.targetWorldBounds.minZ)
-  const overlapMaxZ = Math.min(terrainBounds.maxZ, options.source.targetWorldBounds.maxZ)
+  const overlapMinX = Math.max(terrainBounds.minX, options.source.sourceWorldBounds.minX)
+  const overlapMaxX = Math.min(terrainBounds.maxX, options.source.sourceWorldBounds.maxX)
+  const overlapMinZ = Math.max(terrainBounds.minZ, options.source.sourceWorldBounds.minZ)
+  const overlapMaxZ = Math.min(terrainBounds.maxZ, options.source.sourceWorldBounds.maxZ)
   const cellSize = Number.isFinite(options.definition.cellSize) && options.definition.cellSize > 0 ? options.definition.cellSize : 1
   const epsilon = Math.max(1e-9, cellSize * 1e-9)
   const overlapStartColumn = Math.max(0, Math.min(columns, Math.ceil((overlapMinX - terrainBounds.minX - epsilon) / cellSize)))
@@ -604,7 +605,7 @@ function resolvePlanningDemHeightRegionBuildPlan(options: {
     boundsMinZ: resolveGroundWorldBounds(options.definition).minZ,
     sourceWidth: options.source.width,
     sourceHeight: options.source.height,
-    sourceBounds: options.source.targetWorldBounds,
+    sourceBounds: options.source.sourceWorldBounds,
     elevationOffsetMeters: options.source.elevationOffsetMeters,
   }
 }
@@ -752,10 +753,10 @@ function resolvePlanningDemLocalEditTileBuildPlan(options: {
   const regionMaxX = terrainBounds.minX + options.endColumn * cellSize
   const regionMinZ = terrainBounds.minZ + options.startRow * cellSize
   const regionMaxZ = terrainBounds.minZ + options.endRow * cellSize
-  const minX = Math.max(regionMinX, options.source.targetWorldBounds.minX)
-  const maxX = Math.min(regionMaxX, options.source.targetWorldBounds.maxX)
-  const minZ = Math.max(regionMinZ, options.source.targetWorldBounds.minZ)
-  const maxZ = Math.min(regionMaxZ, options.source.targetWorldBounds.maxZ)
+  const minX = Math.max(regionMinX, options.source.sourceWorldBounds.minX)
+  const maxX = Math.min(regionMaxX, options.source.sourceWorldBounds.maxX)
+  const minZ = Math.max(regionMinZ, options.source.sourceWorldBounds.minZ)
+  const maxZ = Math.min(regionMaxZ, options.source.sourceWorldBounds.maxZ)
   if (!(maxX > minX) || !(maxZ > minZ)) {
     return null
   }
@@ -798,7 +799,7 @@ function resolvePlanningDemLocalEditTileBuildPlan(options: {
     totalTiles,
     sourceWidth: options.source.width,
     sourceHeight: options.source.height,
-    sourceBounds: options.source.targetWorldBounds,
+    sourceBounds: options.source.sourceWorldBounds,
     elevationOffsetMeters: options.source.elevationOffsetMeters,
   }
 }
@@ -1216,6 +1217,7 @@ export async function resolvePlanningDemPreparedSource(options: {
     width: demWidth,
     height: demHeight,
     targetWorldBounds,
+    sourceWorldBounds: targetWorldBounds,
     elevationOffsetMeters,
   })
   const sampleStepX = computeDemSampleStepAxis(demWidth, demHeight, parsed.worldBounds, 'x')
@@ -1291,6 +1293,12 @@ export function resolvePlanningDemPreparedSourceFromRaster(options: {
   const safeSampleStepMeters = Number.isFinite(sampleStepMeters) && sampleStepMeters > 0 ? sampleStepMeters : 1
   const sourceTransform = normalizePlanningDemSourceTransform(options.sourceTransform ?? null)
   const worldBounds = resolvePlanningDemSourceWorldBounds(options.targetWorldBounds, sourceTransform)
+  const sourceWorldBounds: PlanningDemTargetWorldBounds = {
+    minX: worldBounds.minX,
+    minZ: worldBounds.minY,
+    maxX: worldBounds.maxX,
+    maxZ: worldBounds.maxY,
+  }
   const sourceFileHash = typeof options.sourceFileHash === 'string' && options.sourceFileHash.trim().length > 0
     ? options.sourceFileHash.trim()
     : `terrain-tools-brush-dem:${parsedWidth}x${parsedHeight}`
@@ -1321,6 +1329,7 @@ export function resolvePlanningDemPreparedSourceFromRaster(options: {
     width: parsedWidth,
     height: parsedHeight,
     targetWorldBounds: options.targetWorldBounds,
+    sourceWorldBounds,
     elevationOffsetMeters,
     sourceTransform,
   })
@@ -1413,6 +1422,7 @@ export function createPlanningDemRasterSource(options: {
   width: number
   height: number
   targetWorldBounds: PlanningDemTargetWorldBounds
+  sourceWorldBounds: PlanningDemTargetWorldBounds
   elevationOffsetMeters?: number
   sourceTransform?: PlanningDemSourceTransform | null
 }): PlanningDemRasterSource {
@@ -1425,6 +1435,7 @@ export function createPlanningDemRasterSource(options: {
     width: options.width,
     height: options.height,
     targetWorldBounds: options.targetWorldBounds,
+    sourceWorldBounds: options.sourceWorldBounds,
     sampleStepX: worldWidth / widthSegments,
     sampleStepZ: worldDepth / heightSegments,
     elevationOffsetMeters: Number.isFinite(options.elevationOffsetMeters) ? Math.max(0, Number(options.elevationOffsetMeters)) : 0,

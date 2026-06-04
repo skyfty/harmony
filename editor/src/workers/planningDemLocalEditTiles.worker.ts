@@ -63,6 +63,7 @@ function buildSourceFromPlan(plan: PlanningDemLocalEditTileBuildPlan, rasterData
     width: plan.sourceWidth,
     height: plan.sourceHeight,
     targetWorldBounds,
+    sourceWorldBounds: targetWorldBounds,
     elevationOffsetMeters: plan.elevationOffsetMeters,
   })
 }
@@ -121,6 +122,7 @@ function buildHeightRegionInWorker(plan: PlanningDemHeightRegionBuildPlan, raste
     width: plan.sourceWidth,
     height: plan.sourceHeight,
     targetWorldBounds: plan.sourceBounds,
+    sourceWorldBounds: plan.sourceBounds,
     elevationOffsetMeters: plan.elevationOffsetMeters,
   })
   const values = samplePlanningDemHeightGridFromWorldBounds({

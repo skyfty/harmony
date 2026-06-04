@@ -2078,17 +2078,16 @@ export function resolveGroundEffectiveHeightAtVertex(definition: GroundDynamicMe
     return localEditSample as number
   }
   const terrainSampler = resolveRuntimeTerrainHeightSampler(runtimeDefinition)
-  if (terrainSampler) {
-    const sampled = terrainSampler.sampleHeightAtWorld(
-      resolveGroundWorldXForColumn(runtimeDefinition, column),
-      resolveGroundWorldZForRow(runtimeDefinition, row),
-    )
-    if (Number.isFinite(sampled)) {
-      return sampled as number
-    }
-  }
-  // 原始程序化地形高度。
-  const base = computeGroundBaseHeightAtVertex(runtimeDefinition, row, column)
+  const terrainSample = terrainSampler
+    ? terrainSampler.sampleHeightAtWorld(
+        resolveGroundWorldXForColumn(runtimeDefinition, column),
+        resolveGroundWorldZForRow(runtimeDefinition, row),
+      )
+    : null
+  // 原始程序化地形高度，若存在 infinite/compiled 采样器则将其视为基础层。
+  const base = Number.isFinite(terrainSample)
+    ? (terrainSample as number)
+    : computeGroundBaseHeightAtVertex(runtimeDefinition, row, column)
   const gridSize = resolveGroundWorkingGridSize(runtimeDefinition)
   const heightIndex = getGroundVertexIndex(gridSize.columns, row, column)
   // 用户手工雕刻后的绝对高度；若无手工覆盖则退回 base。
@@ -2238,16 +2237,13 @@ function sampleGroundEffectiveHeightRegionInternal(
         effective = localEditSample as number
       } else {
         const sampled = terrainSampler ? terrainSampler.sampleHeightAtWorld(worldX, worldZ) : null
-        if (Number.isFinite(sampled)) {
-          effective = sampled as number
-        } else {
-          const heightIndex = getGroundVertexIndex(gridSize.columns, row, column)
-          const manualRaw = manualValues ? manualValues[offset] : runtimeDefinition.manualHeightMap[heightIndex]
-          const planningRaw = planningValues ? planningValues[offset] : runtimeDefinition.planningHeightMap[heightIndex]
-          const manual = typeof manualRaw === 'number' && Number.isFinite(manualRaw) ? manualRaw : base
-          const planning = typeof planningRaw === 'number' && Number.isFinite(planningRaw) ? planningRaw : base
-          effective = planning + (manual - base)
-        }
+        const terrainBase = Number.isFinite(sampled) ? (sampled as number) : base
+        const heightIndex = getGroundVertexIndex(gridSize.columns, row, column)
+        const manualRaw = manualValues ? manualValues[offset] : runtimeDefinition.manualHeightMap[heightIndex]
+        const planningRaw = planningValues ? planningValues[offset] : runtimeDefinition.planningHeightMap[heightIndex]
+        const manual = typeof manualRaw === 'number' && Number.isFinite(manualRaw) ? manualRaw : terrainBase
+        const planning = typeof planningRaw === 'number' && Number.isFinite(planningRaw) ? planningRaw : terrainBase
+        effective = planning + (manual - terrainBase)
       }
       values[offset] = effective
       heightMin = Math.min(heightMin, effective)
@@ -2265,16 +2261,6 @@ function sampleGroundEffectiveHeightRegionInternal(
     heightMin,
     heightMax,
   }
-}
-
-function sampleGroundEffectiveHeightRegionWithoutLocalEdit(
-  definition: GroundRuntimeDynamicMesh,
-  minRowInput: number,
-  maxRowInput: number,
-  minColumnInput: number,
-  maxColumnInput: number,
-): GroundEffectiveHeightRegion {
-  return sampleGroundEffectiveHeightRegionInternal(definition, minRowInput, maxRowInput, minColumnInput, maxColumnInput, false)
 }
 
 export function resolveGroundEffectiveHeightAtVertexFromSampler(
@@ -2370,8 +2356,10 @@ function setHeightOverrideValue(definition: GroundRuntimeDynamicMesh, map: Groun
   const previousValue = map[heightIndex]
   const hadOverride = typeof previousValue === 'number' && Number.isFinite(previousValue)
   const baseHeight = computeGroundBaseHeightAtVertex(definition, row, column)
-  let rounded = Math.round(value * 100) / 100
-  let baseRounded = Math.round(baseHeight * 100) / 100
+  // Preserve more precision for sculpt edits so small but visible changes
+  // do not get rounded back to the base surface.
+  let rounded = Math.round(value * 10000) / 10000
+  let baseRounded = Math.round(baseHeight * 10000) / 10000
   if (Object.is(rounded, -0)) rounded = 0
   if (Object.is(baseRounded, -0)) baseRounded = 0
   if (rounded === baseRounded) {
@@ -4358,7 +4346,7 @@ function buildGroundChunkGeometry(definition: GroundRuntimeDynamicMesh, spec: Gr
   const useWorldSpaceHeightSampling = importedLocalEditCellSize > cellSize
   const heightRegion = useWorldSpaceHeightSampling
     ? null
-    : sampleGroundEffectiveHeightRegionWithoutLocalEdit(
+    : sampleGroundEffectiveHeightRegion(
       definition,
       spec.startRow,
       spec.startRow + spec.rows,
@@ -7820,7 +7808,7 @@ function updateChunkGeometry(geometry: THREE.BufferGeometry, definition: GroundR
   const useWorldSpaceHeightSampling = importedLocalEditCellSize > (Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1)
   const heightRegion = useWorldSpaceHeightSampling
     ? null
-    : sampleGroundEffectiveHeightRegionWithoutLocalEdit(
+    : sampleGroundEffectiveHeightRegion(
       definition,
       spec.startRow,
       spec.startRow + spec.rows,
@@ -8038,10 +8026,11 @@ export function updateGroundChunks(
     // 没有找到运行时 ground group，说明当前对象还没挂上地形运行状态；这时直接退出，不做任何加载/卸载。
     return
   }
-
   const state = ensureGroundRuntimeState(root, definition)
   const runtimeDefinition = definition
+  // const forceDenseChunkMeshes = runtimeDefinition.runtimeDisableOptimizedChunks === true
   const forceDenseChunkMeshes = false;//runtimeDefinition.runtimeDisableOptimizedChunks === true
+
   if (forceDenseChunkMeshes && state.flatChunkBatches.size > 0) {
     clearGroundFlatChunkBatches(root)
   }

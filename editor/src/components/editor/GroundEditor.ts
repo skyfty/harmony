@@ -46,6 +46,7 @@ import {
 	updateGroundMeshRegion,
 	type GroundGeometryUpdateRegion,
 } from '@schema/groundMesh'
+import { sampleGroundRuntimeSurfaceAtWorldXZ } from './groundSurfaceSampler'
 import {
 	ensureInstancedMeshesRegistered,
 	getCachedModelObject,
@@ -242,7 +243,6 @@ function clamp01(value: number): number {
 	}
 	return Math.max(0, Math.min(1, value))
 }
-
 function computeSoftBrushFalloff(normalizedDistanceSquared: number, feather: number): number {
 	if (normalizedDistanceSquared >= 1) {
 		return 0
@@ -3730,6 +3730,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 	function buildSculptBrushDemSource(
 		definition: GroundRuntimeDynamicMesh,
+		groundObject: THREE.Object3D | null,
 		region: { minRow: number; maxRow: number; minColumn: number; maxColumn: number } | null,
 		options?: {
 			rotationRadians?: number
@@ -3790,7 +3791,16 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				const localX = targetWorldBounds.minX + column * sampleStepMeters
 				const worldX = sourceTransform.centerX + localX * cos - localZ * sin
 				const worldZ = sourceTransform.centerZ + localX * sin + localZ * cos
-				rasterData[row * width + column] = sampleGroundHeight(definition, worldX, worldZ)
+				const runtimeSample = groundObject
+					? sampleGroundRuntimeSurfaceAtWorldXZ(groundObject, worldX, worldZ)
+					: null
+				if (runtimeSample && Number.isFinite(runtimeSample.height)) {
+					rasterData[row * width + column] = runtimeSample.height
+					continue
+				}
+				const sampleRow = Math.max(0, Math.min(rows, Math.round((worldZ - bounds.minZ) / cellSize)))
+				const sampleColumn = Math.max(0, Math.min(columns, Math.round((worldX - bounds.minX) / cellSize)))
+				rasterData[row * width + column] = resolveGroundEffectiveHeightAtVertex(definition, sampleRow, sampleColumn)
 			}
 		}
 
@@ -3834,7 +3844,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				minColumn: 0,
 				maxColumn: gridSize.columns,
 			}
-		const brushDemSource = buildSculptBrushDemSource(committedDefinition, commitRegion, { rotationRadians: 0 })
+		const groundObject = getGroundObject()
+		const brushDemSource = buildSculptBrushDemSource(committedDefinition, groundObject, commitRegion, { rotationRadians: 0 })
+
 		const planningConversion = buildPlanningDemGroundRegionDataFromRaster({
 			definition: committedDefinition,
 			rasterData: brushDemSource.rasterData,
@@ -3859,7 +3871,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			planningConversion.localEditTiles,
 			sculptSessionState.affectedRegion ?? commitRegion,
 		)
-		const groundObject = getGroundObject()
 		if (groundObject && committed) {
 			options.onSculptCommitApplied?.({
 				groundObject,
@@ -4378,6 +4389,10 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			targetHeight,
 			polygonPoints: localPolygonPoints,
 		})
+		if (modified && sculptSessionState && sculptSessionState.nodeId === session.nodeId) {
+			sculptSessionState.definition = session.definition
+			sculptSessionState.heightMap = session.definition.manualHeightMap
+		}
 		if (!modified) {
 			return false
 		}
@@ -7155,6 +7170,10 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				operation,
 				targetHeight,
 			})
+			if (modified && sculptSessionState && sculptSessionState.nodeId === groundNode.id) {
+				sculptSessionState.definition = definition
+				sculptSessionState.heightMap = definition.manualHeightMap
+			}
 
 			if (modified) {
 				anyModified = true
