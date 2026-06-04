@@ -44,6 +44,7 @@ export interface PlanningDemBuildProgress {
     | 'load-source'
     | 'load-orthophoto'
     | 'build-base-texture'
+    | 'build-brush-heightmap'
     | 'sample-region'
     | 'build-edit-tiles'
     | 'build-terrain-dataset-fields'
@@ -81,6 +82,13 @@ export interface PlanningDemRasterSource {
   sampleStepX: number
   sampleStepZ: number
   elevationOffsetMeters: number
+  sourceTransform?: PlanningDemSourceTransform | null
+}
+
+export interface PlanningDemSourceTransform {
+  centerX: number
+  centerZ: number
+  rotationRadians: number
 }
 
 export interface PlanningDemHeightRegion {
@@ -244,6 +252,111 @@ function createThrottledPlanningDemProgressReporter(
       total: safeTotal,
     })
   }
+}
+
+function normalizePlanningDemSourceTransform(
+  transform: PlanningDemSourceTransform | null | undefined,
+): PlanningDemSourceTransform | null {
+  if (!transform) {
+    return null
+  }
+  const centerX = Number(transform.centerX)
+  const centerZ = Number(transform.centerZ)
+  const rotationRadians = Number(transform.rotationRadians)
+  if (!Number.isFinite(centerX) || !Number.isFinite(centerZ) || !Number.isFinite(rotationRadians)) {
+    return null
+  }
+  return {
+    centerX,
+    centerZ,
+    rotationRadians,
+  }
+}
+
+function rotatePlanningDemLocalPoint(
+  transform: PlanningDemSourceTransform,
+  localX: number,
+  localZ: number,
+): { x: number; z: number } {
+  const cos = Math.cos(transform.rotationRadians)
+  const sin = Math.sin(transform.rotationRadians)
+  return {
+    x: transform.centerX + localX * cos - localZ * sin,
+    z: transform.centerZ + localX * sin + localZ * cos,
+  }
+}
+
+function resolvePlanningDemWorldPointToSourceLocal(
+  source: PlanningDemRasterSource,
+  worldX: number,
+  worldZ: number,
+): { x: number; z: number } {
+  const transform = normalizePlanningDemSourceTransform(source.sourceTransform ?? null)
+  if (!transform) {
+    return { x: worldX, z: worldZ }
+  }
+  const dx = worldX - transform.centerX
+  const dz = worldZ - transform.centerZ
+  const cos = Math.cos(transform.rotationRadians)
+  const sin = Math.sin(transform.rotationRadians)
+  return {
+    x: dx * cos + dz * sin,
+    z: -dx * sin + dz * cos,
+  }
+}
+
+function resolvePlanningDemSourceWorldBounds(
+  localBounds: PlanningDemTargetWorldBounds,
+  sourceTransform: PlanningDemSourceTransform | null | undefined,
+): { minX: number; minY: number; maxX: number; maxY: number } {
+  const transform = normalizePlanningDemSourceTransform(sourceTransform)
+  if (!transform) {
+    return {
+      minX: localBounds.minX,
+      minY: localBounds.minZ,
+      maxX: localBounds.maxX,
+      maxY: localBounds.maxZ,
+    }
+  }
+  const corners = [
+    rotatePlanningDemLocalPoint(transform, localBounds.minX, localBounds.minZ),
+    rotatePlanningDemLocalPoint(transform, localBounds.maxX, localBounds.minZ),
+    rotatePlanningDemLocalPoint(transform, localBounds.minX, localBounds.maxZ),
+    rotatePlanningDemLocalPoint(transform, localBounds.maxX, localBounds.maxZ),
+  ]
+  let minX = Number.POSITIVE_INFINITY
+  let minZ = Number.POSITIVE_INFINITY
+  let maxX = Number.NEGATIVE_INFINITY
+  let maxZ = Number.NEGATIVE_INFINITY
+  for (const corner of corners) {
+    minX = Math.min(minX, corner.x)
+    minZ = Math.min(minZ, corner.z)
+    maxX = Math.max(maxX, corner.x)
+    maxZ = Math.max(maxZ, corner.z)
+  }
+  return {
+    minX,
+    minY: minZ,
+    maxX,
+    maxY: maxZ,
+  }
+}
+
+function computePlanningDemRasterMinMax(values: ArrayLike<number>): { min: number | null; max: number | null } {
+  let min = Number.POSITIVE_INFINITY
+  let max = Number.NEGATIVE_INFINITY
+  for (let index = 0; index < values.length; index += 1) {
+    const value = Number(values[index])
+    if (!Number.isFinite(value)) {
+      continue
+    }
+    min = Math.min(min, value)
+    max = Math.max(max, value)
+  }
+  if (min === Number.POSITIVE_INFINITY || max === Number.NEGATIVE_INFINITY) {
+    return { min: null, max: null }
+  }
+  return { min, max }
 }
 
 function getPlanningDemLocalEditTilesWorker(): Worker | null {
@@ -1159,6 +1272,116 @@ export async function resolvePlanningDemPreparedSource(options: {
   }
 }
 
+export function resolvePlanningDemPreparedSourceFromRaster(options: {
+  definition: GroundRuntimeDynamicMesh
+  rasterData: ArrayLike<number>
+  width: number
+  height: number
+  targetWorldBounds: PlanningDemTargetWorldBounds
+  sourceTransform?: PlanningDemSourceTransform | null
+  sourceFileHash?: string | null
+  filename?: string | null
+  mimeType?: string | null
+  sampleStepMeters?: number | null
+  elevationOffsetMeters?: number | null
+}): PlanningDemPreparedSource {
+  const parsedWidth = Math.max(1, Math.trunc(options.width))
+  const parsedHeight = Math.max(1, Math.trunc(options.height))
+  const sampleStepMeters = Number(options.sampleStepMeters)
+  const safeSampleStepMeters = Number.isFinite(sampleStepMeters) && sampleStepMeters > 0 ? sampleStepMeters : 1
+  const sourceTransform = normalizePlanningDemSourceTransform(options.sourceTransform ?? null)
+  const worldBounds = resolvePlanningDemSourceWorldBounds(options.targetWorldBounds, sourceTransform)
+  const sourceFileHash = typeof options.sourceFileHash === 'string' && options.sourceFileHash.trim().length > 0
+    ? options.sourceFileHash.trim()
+    : `terrain-tools-brush-dem:${parsedWidth}x${parsedHeight}`
+  const gridSize = resolveGroundWorkingGridSize(options.definition)
+  const targetRows = Math.max(1, Math.trunc(gridSize.rows))
+  const targetColumns = Math.max(1, Math.trunc(gridSize.columns))
+  const targetCellSize = Number.isFinite(options.definition.cellSize) && options.definition.cellSize > 0 ? options.definition.cellSize : 1
+  const localEditTileSizeMeters = resolvePlanningDemChunkSizeMeters()
+  const localEditTileResolution = resolvePlanningDemLocalEditTileResolution({
+    definition: options.definition,
+    sampleStepX: safeSampleStepMeters,
+    sampleStepZ: safeSampleStepMeters,
+  })
+  const localEditCellSize = localEditTileSizeMeters / localEditTileResolution
+  const tileLayout = resolvePlanningDemSourceTileLayout({
+    definition: options.definition,
+    demWidth: parsedWidth,
+    demHeight: parsedHeight,
+    worldBounds,
+    targetWorldBounds: options.targetWorldBounds,
+  })
+  const { min, max } = computePlanningDemRasterMinMax(options.rasterData)
+  const elevationOffsetMeters = Number.isFinite(Number(options.elevationOffsetMeters))
+    ? Math.max(0, Number(options.elevationOffsetMeters))
+    : 0
+  const rasterSource = createPlanningDemRasterSource({
+    rasterData: options.rasterData,
+    width: parsedWidth,
+    height: parsedHeight,
+    targetWorldBounds: options.targetWorldBounds,
+    elevationOffsetMeters,
+    sourceTransform,
+  })
+
+  return {
+    parsed: {
+      sourceFileHash,
+      filename: typeof options.filename === 'string' && options.filename.trim().length > 0
+        ? options.filename.trim()
+        : 'Terrain Tools Brush DEM',
+      mimeType: options.mimeType ?? 'application/x-planning-brush-dem',
+      width: parsedWidth,
+      height: parsedHeight,
+      rasterData: options.rasterData,
+      rawMinElevation: min,
+      recommendedAppliedMinElevation: min,
+      minElevation: min,
+      maxElevation: max,
+      sampleStepMeters: safeSampleStepMeters,
+      projectedCrs: null,
+      geographicBounds: null,
+      projectedBounds: null,
+      worldBounds,
+      preview: null,
+      orthophoto: null,
+    },
+    rasterSource,
+    tileLayout,
+    planningMetadata: {
+      contourBounds: null,
+      generatedAt: Date.now(),
+      demSource: {
+        sourceFileHash,
+        filename: typeof options.filename === 'string' && options.filename.trim().length > 0
+          ? options.filename.trim()
+          : 'Terrain Tools Brush DEM',
+        mimeType: options.mimeType ?? 'application/x-planning-brush-dem',
+        width: parsedWidth,
+        height: parsedHeight,
+        minElevation: min,
+        maxElevation: max,
+        elevationOffsetMeters,
+        sampleStepMeters: safeSampleStepMeters,
+        appliedSampleStepMeters: safeSampleStepMeters,
+        sampleStepX: safeSampleStepMeters,
+        sampleStepY: safeSampleStepMeters,
+        worldBounds,
+        targetRows,
+        targetColumns,
+        targetCellSize,
+        localEditCellSize,
+        localEditTileSizeMeters,
+        localEditTileResolution,
+        tileLayout,
+        detailLimitedByGroundGrid: targetCellSize > safeSampleStepMeters,
+        detailLimitedByEditResolution: localEditCellSize > safeSampleStepMeters,
+      },
+    },
+  }
+}
+
 export function resolvePlanningDemTargetWorldBounds(
   definition: GroundRuntimeDynamicMesh,
   source?: {
@@ -1191,6 +1414,7 @@ export function createPlanningDemRasterSource(options: {
   height: number
   targetWorldBounds: PlanningDemTargetWorldBounds
   elevationOffsetMeters?: number
+  sourceTransform?: PlanningDemSourceTransform | null
 }): PlanningDemRasterSource {
   const worldWidth = Math.max(Number.EPSILON, options.targetWorldBounds.maxX - options.targetWorldBounds.minX)
   const worldDepth = Math.max(Number.EPSILON, options.targetWorldBounds.maxZ - options.targetWorldBounds.minZ)
@@ -1204,6 +1428,7 @@ export function createPlanningDemRasterSource(options: {
     sampleStepX: worldWidth / widthSegments,
     sampleStepZ: worldDepth / heightSegments,
     elevationOffsetMeters: Number.isFinite(options.elevationOffsetMeters) ? Math.max(0, Number(options.elevationOffsetMeters)) : 0,
+    sourceTransform: normalizePlanningDemSourceTransform(options.sourceTransform ?? null),
   }
 }
 
@@ -1223,14 +1448,15 @@ export function samplePlanningDemHeightAtWorld(
   x: number,
   z: number,
 ): number {
+  const localPoint = resolvePlanningDemWorldPointToSourceLocal(source, x, z)
   const demX = resolvePlanningDemSampleCoordinate(
-    x,
+    localPoint.x,
     source.targetWorldBounds.minX,
     source.sampleStepX,
     Math.max(0, source.width - 1),
   )
   const demY = resolvePlanningDemSampleCoordinate(
-    z,
+    localPoint.z,
     source.targetWorldBounds.minZ,
     source.sampleStepZ,
     Math.max(0, source.height - 1),
@@ -1374,6 +1600,63 @@ export async function buildPlanningDemGroundTileData(options: {
       startColumn: region.startColumn,
       endColumn: region.endColumn,
     }),
+    planningMetadata: prepared.planningMetadata,
+  }
+}
+
+export function buildPlanningDemGroundRegionDataFromRaster(options: {
+  definition: GroundRuntimeDynamicMesh
+  rasterData: ArrayLike<number>
+  width: number
+  height: number
+  targetWorldBounds: PlanningDemTargetWorldBounds
+  sourceTransform?: PlanningDemSourceTransform | null
+  sourceFileHash?: string | null
+  filename?: string | null
+  mimeType?: string | null
+  sampleStepMeters?: number | null
+  elevationOffsetMeters?: number | null
+  startRow: number
+  endRow: number
+  startColumn: number
+  endColumn: number
+  onProgress?: (payload: PlanningDemBuildProgress) => void
+}): PlanningDemRegionConversionResult {
+  const prepared = resolvePlanningDemPreparedSourceFromRaster({
+    definition: options.definition,
+    rasterData: options.rasterData,
+    width: options.width,
+    height: options.height,
+    targetWorldBounds: options.targetWorldBounds,
+    sourceTransform: options.sourceTransform ?? null,
+    sourceFileHash: options.sourceFileHash ?? null,
+    filename: options.filename ?? 'Terrain Tools Brush DEM',
+    mimeType: options.mimeType ?? 'application/x-planning-brush-dem',
+    sampleStepMeters: options.sampleStepMeters ?? 1,
+    elevationOffsetMeters: options.elevationOffsetMeters ?? 0,
+  })
+  const reportProgress = createThrottledPlanningDemProgressReporter(options.onProgress)
+  const region = buildPlanningDemHeightRegion({
+    definition: options.definition,
+    source: prepared.rasterSource,
+    startRow: options.startRow,
+    endRow: options.endRow,
+    startColumn: options.startColumn,
+    endColumn: options.endColumn,
+    onProgress: (payload) => reportProgress(payload),
+  })
+  const localEditTiles = buildPlanningDemLocalEditTilesForRegion({
+    definition: options.definition,
+    source: prepared.rasterSource,
+    startRow: region.startRow,
+    endRow: region.endRow,
+    startColumn: region.startColumn,
+    endColumn: region.endColumn,
+    onProgress: (payload) => reportProgress(payload),
+  })
+  return {
+    region,
+    localEditTiles,
     planningMetadata: prepared.planningMetadata,
   }
 }

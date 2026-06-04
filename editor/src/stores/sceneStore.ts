@@ -20,7 +20,7 @@ import {
   type Material,
   type Light,
 } from 'three'
-import type { EnvironmentSettings, EnvironmentSettingsPatch } from '@schema/core'
+import type { EnvironmentSettings, EnvironmentSettingsPatch, GroundPlanningMetadata } from '@schema/core'
 import {
   GROUND_NODE_ID,
   ENVIRONMENT_NODE_ID,
@@ -2112,6 +2112,88 @@ function commitGroundLocalEditTilesRuntimeEdit(
     nodeId,
     definition,
     resolveGroundDirtyChunkKeysFromRegion(definition, affectedRegion),
+  )
+  refreshLandformNodesForGroundChange(store, nodeId, resolvedDirtyBounds)
+  finalizeDynamicMeshRuntimePatch(store, nodeId, 'Ground')
+  persistGroundHeightSidecarForNode(target)
+  return true
+}
+
+function commitGroundPlanningDemRuntimeEdit(
+  store: {
+    nodes: SceneNode[]
+    currentSceneId?: string | null
+    queueSceneNodePatch: (nodeId: string, fields: ScenePatchField[], options?: { bumpVersion?: boolean }) => boolean
+    bumpSceneNodePropertyVersion: () => void
+  },
+  nodeId: string,
+  definition: GroundDynamicMesh,
+  planningRegion: GroundPlanningHeightRegion,
+  planningMetadata: GroundPlanningMetadata | null,
+  localEditTiles: GroundLocalEditTileMap | null,
+  affectedRegion: { minRow: number; maxRow: number; minColumn: number; maxColumn: number } | null = null,
+): boolean {
+  const target = findNodeById(store.nodes, nodeId)
+  if (!target || target.dynamicMesh?.type !== 'Ground' || !store.currentSceneId) {
+    return false
+  }
+
+  const runtimeDefinition = definition as GroundRuntimeDynamicMesh
+  const targetRuntimeDefinition = target.dynamicMesh as GroundRuntimeDynamicMesh
+  const committedRegion = {
+    startRow: Math.max(0, Math.trunc(planningRegion.startRow)),
+    endRow: Math.max(0, Math.trunc(planningRegion.endRow)),
+    startColumn: Math.max(0, Math.trunc(planningRegion.startColumn)),
+    endColumn: Math.max(0, Math.trunc(planningRegion.endColumn)),
+  }
+  const normalizedPlanningRegion: GroundPlanningHeightRegion = {
+    startRow: committedRegion.startRow,
+    endRow: committedRegion.endRow,
+    startColumn: committedRegion.startColumn,
+    endColumn: committedRegion.endColumn,
+    vertexRows: Math.max(0, Math.trunc(planningRegion.vertexRows)),
+    vertexColumns: Math.max(0, Math.trunc(planningRegion.vertexColumns)),
+    values: planningRegion.values,
+  }
+  const manualClearRegion: GroundPlanningHeightRegion = {
+    startRow: committedRegion.startRow,
+    endRow: committedRegion.endRow,
+    startColumn: committedRegion.startColumn,
+    endColumn: committedRegion.endColumn,
+    vertexRows: Math.max(0, committedRegion.endRow - committedRegion.startRow + 1),
+    vertexColumns: Math.max(0, committedRegion.endColumn - committedRegion.startColumn + 1),
+    values: new Float64Array(Math.max(0, committedRegion.endRow - committedRegion.startRow + 1) * Math.max(0, committedRegion.endColumn - committedRegion.startColumn + 1)).fill(GROUND_HEIGHT_UNSET_VALUE),
+  }
+  const committedAffectedRegion = affectedRegion ?? {
+    minRow: committedRegion.startRow,
+    maxRow: committedRegion.endRow,
+    minColumn: committedRegion.startColumn,
+    maxColumn: committedRegion.endColumn,
+  }
+  const resolvedDirtyBounds = computeGroundDirtyBoundsXZFromRegion(target, runtimeDefinition, committedAffectedRegion)
+  const currentRevision = normalizeGroundSurfaceRevision(target.dynamicMesh.surfaceRevision)
+  const nextRevision = currentRevision + 1
+  target.dynamicMesh.surfaceRevision = nextRevision
+  targetRuntimeDefinition.surfaceRevision = nextRevision
+  targetRuntimeDefinition.runtimeHydratedHeightState = 'dirty'
+  targetRuntimeDefinition.runtimeDisableOptimizedChunks = true
+  targetRuntimeDefinition.planningMetadata = planningMetadata
+  targetRuntimeDefinition.localEditTiles = localEditTiles
+  definition.surfaceRevision = nextRevision
+  runtimeDefinition.runtimeHydratedHeightState = 'dirty'
+  runtimeDefinition.runtimeDisableOptimizedChunks = true
+  runtimeDefinition.planningMetadata = planningMetadata
+  runtimeDefinition.localEditTiles = localEditTiles
+
+  useGroundHeightmapStore().replacePlanningHeightRegion(nodeId, definition, normalizedPlanningRegion, planningMetadata)
+  if (localEditTiles) {
+    useGroundHeightmapStore().replaceLocalEditTiles(nodeId, definition, localEditTiles)
+  }
+  useGroundHeightmapStore().replaceManualHeightRegion(nodeId, definition, manualClearRegion)
+  useGroundHeightmapStore().markOptimizedMeshDirtyChunkKeys(
+    nodeId,
+    definition,
+    resolveGroundDirtyChunkKeysFromRegion(definition, committedAffectedRegion),
   )
   refreshLandformNodesForGroundChange(store, nodeId, resolvedDirtyBounds)
   finalizeDynamicMeshRuntimePatch(store, nodeId, 'Ground')
@@ -10468,6 +10550,33 @@ export const useSceneStore = defineStore('scene', {
         if (dirtyChunkKeys?.length) {
           void this.rebuildCurrentSceneCompiledGroundChunks(nodeId, dirtyChunkKeys).catch((error) => {
             console.warn('[SceneStore] Failed to rebuild compiled ground after local edit tile update', error)
+          })
+        }
+      }
+      return committed
+    },
+    commitGroundPlanningDemEdit(
+      nodeId: string,
+      definition: GroundDynamicMesh,
+      planningRegion: GroundPlanningHeightRegion,
+      planningMetadata: GroundPlanningMetadata | null,
+      localEditTiles: GroundLocalEditTileMap | null,
+      affectedRegion: { minRow: number; maxRow: number; minColumn: number; maxColumn: number } | null = null,
+    ) {
+      const committed = commitGroundPlanningDemRuntimeEdit(
+        this,
+        nodeId,
+        definition,
+        planningRegion,
+        planningMetadata,
+        localEditTiles,
+        affectedRegion,
+      )
+      if (committed) {
+        const dirtyChunkKeys = resolveGroundDirtyChunkKeysFromRegion(definition, affectedRegion ?? planningRegion)
+        if (dirtyChunkKeys?.length) {
+          void this.rebuildCurrentSceneCompiledGroundChunks(nodeId, dirtyChunkKeys).catch((error) => {
+            console.warn('[SceneStore] Failed to rebuild compiled ground after planning DEM edit', error)
           })
         }
       }

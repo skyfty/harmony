@@ -199,7 +199,6 @@ import {
 	groundAnchorComponentDefinition,
 	nominateComponentDefinition,
 	SIGNBOARD_COMPONENT_TYPE,
-	PARTICLE_SYSTEM_COMPONENT_TYPE,
 	applyNominateStateMapToRuntime,
 	type NominateExternalStateMap,
 	GUIDEBOARD_COMPONENT_TYPE,
@@ -231,7 +230,6 @@ import {
 	DEFAULT_CHARACTER_CAMERA_FOLLOW_HEIGHT,
 	writeCharacterLocalForward,
 	SCENE_STATE_ANCHOR_COMPONENT_TYPE,
-	type ParticleSystemComponentProps,
 	} from '@schema/components'
 import { characterControllerComponentDefinition } from '@schema/components/definitions/characterControllerComponent'
 import { CharacterControllerAnimationRuntimeManager } from '@schema/characterControllerAnimationRuntime'
@@ -2192,8 +2190,6 @@ const signboardAnchorScratch = new THREE.Vector3()
 const overlayDistanceReferenceScratch = new THREE.Vector3()
 const overlayDistanceTargetAnchorScratch = new THREE.Vector3()
 const overlayDistanceReferenceAnchorScratch = new THREE.Vector3()
-const particleDebugWorldScratch = new THREE.Vector3()
-const particleDebugCameraScratch = new THREE.Vector3()
 const behaviorBubbleAnchorScratch = new THREE.Vector3()
 const behaviorBubbleCameraScratch = new THREE.Vector3()
 const behaviorBubbleSeenKeys = new Set<string>()

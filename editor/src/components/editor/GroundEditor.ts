@@ -11,7 +11,6 @@ import type {
 } from '@schema/core'
 import {
 	resolveGroundChunkCoordFromWorldPosition,
-	resolveGroundEditCellSize,
 	resolveGroundWorldBounds,
 	resolveGroundWorkingGridSize,
 } from '@schema/core'
@@ -53,6 +52,11 @@ import {
 	getOrLoadModelObject,
 	type ModelInstanceGroup,
 } from '@schema/modelObjectCache'
+import {
+  buildPlanningDemGroundRegionDataFromRaster,
+  type PlanningDemSourceTransform,
+  type PlanningDemTargetWorldBounds,
+} from '@/utils/planningDemToGround'
 import {
 	getBillboardAspectRatio,
 	getOrLoadBillboardInstanceGroup,
@@ -3724,6 +3728,82 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		return sessionDefinition
 	}
 
+	function buildSculptBrushDemSource(
+		definition: GroundRuntimeDynamicMesh,
+		region: { minRow: number; maxRow: number; minColumn: number; maxColumn: number } | null,
+		options?: {
+			rotationRadians?: number
+		},
+	): {
+		rasterData: Float64Array
+		width: number
+		height: number
+		targetWorldBounds: PlanningDemTargetWorldBounds
+		sourceTransform: PlanningDemSourceTransform
+		sampleStepMeters: number
+	} {
+		const gridSize = resolveGroundWorkingGridSize(definition)
+		const rows = Math.max(1, Math.trunc(gridSize.rows))
+		const columns = Math.max(1, Math.trunc(gridSize.columns))
+		const bounds = resolveGroundWorldBounds(definition)
+		const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
+		const normalizedRegion = region
+			? {
+				minRow: Math.max(0, Math.min(rows, Math.floor(region.minRow))),
+				maxRow: Math.max(0, Math.min(rows, Math.ceil(region.maxRow))),
+				minColumn: Math.max(0, Math.min(columns, Math.floor(region.minColumn))),
+				maxColumn: Math.max(0, Math.min(columns, Math.ceil(region.maxColumn))),
+			}
+			: {
+				minRow: 0,
+				maxRow: rows,
+				minColumn: 0,
+				maxColumn: columns,
+			}
+		const localMinX = bounds.minX + normalizedRegion.minColumn * cellSize
+		const localMaxX = bounds.minX + normalizedRegion.maxColumn * cellSize
+		const localMinZ = bounds.minZ + normalizedRegion.minRow * cellSize
+		const localMaxZ = bounds.minZ + normalizedRegion.maxRow * cellSize
+		const sourceWidthMeters = Math.max(cellSize, localMaxX - localMinX)
+		const sourceDepthMeters = Math.max(cellSize, localMaxZ - localMinZ)
+		const sampleStepMeters = 1
+		const width = Math.max(2, Math.round(sourceWidthMeters / sampleStepMeters) + 1)
+		const height = Math.max(2, Math.round(sourceDepthMeters / sampleStepMeters) + 1)
+		const targetWorldBounds: PlanningDemTargetWorldBounds = {
+			minX: -sourceWidthMeters * 0.5,
+			minZ: -sourceDepthMeters * 0.5,
+			maxX: sourceWidthMeters * 0.5,
+			maxZ: sourceDepthMeters * 0.5,
+		}
+		const sourceTransform: PlanningDemSourceTransform = {
+			centerX: (localMinX + localMaxX) * 0.5,
+			centerZ: (localMinZ + localMaxZ) * 0.5,
+			rotationRadians: Number.isFinite(options?.rotationRadians ?? 0) ? Number(options?.rotationRadians ?? 0) : 0,
+		}
+		const rasterData = new Float64Array(width * height)
+		const cos = Math.cos(sourceTransform.rotationRadians)
+		const sin = Math.sin(sourceTransform.rotationRadians)
+
+		for (let row = 0; row < height; row += 1) {
+			const localZ = targetWorldBounds.minZ + row * sampleStepMeters
+			for (let column = 0; column < width; column += 1) {
+				const localX = targetWorldBounds.minX + column * sampleStepMeters
+				const worldX = sourceTransform.centerX + localX * cos - localZ * sin
+				const worldZ = sourceTransform.centerZ + localX * sin + localZ * cos
+				rasterData[row * width + column] = sampleGroundHeight(definition, worldX, worldZ)
+			}
+		}
+
+		return {
+			rasterData,
+			width,
+			height,
+			targetWorldBounds,
+			sourceTransform,
+			sampleStepMeters,
+		}
+	}
+
 
 	function commitSculptSession(selectedNode: SceneNode | null): boolean {
 		if (!sculptSessionState || !sculptSessionState.dirty) {
@@ -3740,26 +3820,47 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return false
 		}
 		const committedDefinition = sculptSessionState.definition
-		const usesLocalEditTiles = resolveGroundEditCellSize(committedDefinition) < Math.max(committedDefinition.cellSize, Number.EPSILON)
-			&& !!committedDefinition.localEditTiles
-			&& Object.keys(committedDefinition.localEditTiles).length > 0
+		const gridSize = resolveGroundWorkingGridSize(committedDefinition)
+		const commitRegion = sculptSessionState.affectedRegion
+			? {
+				minRow: Math.max(0, Math.min(gridSize.rows, Math.floor(sculptSessionState.affectedRegion.minRow))),
+				maxRow: Math.max(0, Math.min(gridSize.rows, Math.ceil(sculptSessionState.affectedRegion.maxRow))),
+				minColumn: Math.max(0, Math.min(gridSize.columns, Math.floor(sculptSessionState.affectedRegion.minColumn))),
+				maxColumn: Math.max(0, Math.min(gridSize.columns, Math.ceil(sculptSessionState.affectedRegion.maxColumn))),
+			}
+			: {
+				minRow: 0,
+				maxRow: gridSize.rows,
+				minColumn: 0,
+				maxColumn: gridSize.columns,
+			}
+		const brushDemSource = buildSculptBrushDemSource(committedDefinition, commitRegion, { rotationRadians: 0 })
+		const planningConversion = buildPlanningDemGroundRegionDataFromRaster({
+			definition: committedDefinition,
+			rasterData: brushDemSource.rasterData,
+			width: brushDemSource.width,
+			height: brushDemSource.height,
+			targetWorldBounds: brushDemSource.targetWorldBounds,
+			sourceTransform: brushDemSource.sourceTransform,
+			sampleStepMeters: brushDemSource.sampleStepMeters,
+			startRow: commitRegion.minRow,
+			endRow: commitRegion.maxRow,
+			startColumn: commitRegion.minColumn,
+			endColumn: commitRegion.maxColumn,
+		})
 		const chunkKeys = sculptSessionState.touchedChunkKeys.size
 			? Array.from(sculptSessionState.touchedChunkKeys)
 			: undefined
-		const committed = usesLocalEditTiles
-			? options.sceneStore.commitGroundLocalEditTilesEdit(
-				targetNode.id,
-				committedDefinition,
-				committedDefinition.localEditTiles ?? null,
-				sculptSessionState.affectedRegion,
-			)
-			: options.sceneStore.commitGroundHeightMapEdit(
-				targetNode.id,
-				committedDefinition,
-				sculptSessionState.heightMap,
-			)
+		const committed = options.sceneStore.commitGroundPlanningDemEdit(
+			targetNode.id,
+			committedDefinition,
+			planningConversion.region,
+			planningConversion.planningMetadata,
+			planningConversion.localEditTiles,
+			sculptSessionState.affectedRegion ?? commitRegion,
+		)
 		const groundObject = getGroundObject()
-		if (groundObject) {
+		if (groundObject && committed) {
 			options.onSculptCommitApplied?.({
 				groundObject,
 				definition: committedDefinition,
