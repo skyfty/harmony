@@ -3815,22 +3815,36 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 
+	/**
+	 * 提交雕刻会话 - 将地形雕刻的修改保存到场景中
+	 * @param selectedNode - 当前选中的场景节点
+	 * @returns 是否成功提交了修改
+	 */
 	function commitSculptSession(selectedNode: SceneNode | null): boolean {
+		// 检查雕刻会话是否存在且有未保存的修改
 		if (!sculptSessionState || !sculptSessionState.dirty) {
 			sculptSessionState = null
 			return false
 		}
+
+		// 验证目标节点：首先使用传入的选中节点，如果不匹配则从场景中获取
 		let targetNode = selectedNode
 		if (!targetNode || targetNode.id !== sculptSessionState.nodeId) {
 			const sceneNode = getGroundNodeFromScene()
 			targetNode = sceneNode && sceneNode.id === sculptSessionState.nodeId ? sceneNode : null
 		}
+
+		// 确保目标节点存在且类型为地形网格
 		if (!targetNode || targetNode.dynamicMesh?.type !== 'Ground') {
 			sculptSessionState = null
 			return false
 		}
+
+		// 获取提交时的地形定义和网格大小信息
 		const committedDefinition = sculptSessionState.definition
 		const gridSize = resolveGroundWorkingGridSize(committedDefinition)
+
+		// 计算提交的受影响区域：将浮点数坐标转换为整数网格坐标，并限制在网格范围内
 		const commitRegion = sculptSessionState.affectedRegion
 			? {
 				minRow: Math.max(0, Math.min(gridSize.rows, Math.floor(sculptSessionState.affectedRegion.minRow))),
@@ -3839,14 +3853,18 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				maxColumn: Math.max(0, Math.min(gridSize.columns, Math.ceil(sculptSessionState.affectedRegion.maxColumn))),
 			}
 			: {
+				// 如果没有明确的受影响区域，则使用整个网格
 				minRow: 0,
 				maxRow: gridSize.rows,
 				minColumn: 0,
 				maxColumn: gridSize.columns,
 			}
+
+		// 获取地形对象并构建笔刷 DEM 源数据（包含雕刻修改）
 		const groundObject = getGroundObject()
 		const brushDemSource = buildSculptBrushDemSource(committedDefinition, groundObject, commitRegion, { rotationRadians: 0 })
 
+		// 将栅格化的 DEM 数据转换为地形规划格式
 		const planningConversion = buildPlanningDemGroundRegionDataFromRaster({
 			definition: committedDefinition,
 			rasterData: brushDemSource.rasterData,
@@ -3860,9 +3878,13 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			startColumn: commitRegion.minColumn,
 			endColumn: commitRegion.maxColumn,
 		})
+
+		// 收集在本次会话中被修改的所有分块键值
 		const chunkKeys = sculptSessionState.touchedChunkKeys.size
 			? Array.from(sculptSessionState.touchedChunkKeys)
 			: undefined
+
+		// 将地形规划编辑提交到场景存储
 		const committed = options.sceneStore.commitGroundPlanningDemEdit(
 			targetNode.id,
 			committedDefinition,
@@ -3871,6 +3893,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			planningConversion.localEditTiles,
 			sculptSessionState.affectedRegion ?? commitRegion,
 		)
+
+		// 如果提交成功，触发回调通知地形雕刻修改已应用
 		if (groundObject && committed) {
 			options.onSculptCommitApplied?.({
 				groundObject,
@@ -3880,6 +3904,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				chunkCells: resolveChunkCellsForDefinition(committedDefinition),
 			})
 		}
+
+		// 清空会话状态并返回提交结果
 		sculptSessionState = null
 		return committed
 	}
@@ -4360,24 +4386,33 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function applySculptPolygonSession(session: SculptPolygonSessionState): boolean {
+		// 构建多边形雕刻的本地坐标点集合
 		const localPolygonPoints = buildSculptPolygonLocalPoints(session)
+		// 验证多边形点数至少为3个，否则无法形成有效多边形
 		if (localPolygonPoints.length < 3) {
 			return false
 		}
+		// 计算多边形的中心点（重心）
 		const center = new THREE.Vector3()
 		for (const point of localPolygonPoints) {
 			center.add(point)
 		}
 		center.multiplyScalar(1 / localPolygonPoints.length)
+		// 获取刷子操作类型（如拉平、凹陷、抬升等）
 		const operation = options.brushOperation.value
 		if (!operation) {
 			return false
 		}
+		// 根据操作类型计算目标高度
+		// 拉平操作：采样中心点处的地形高度
+		// 零点拉平操作：使用高度0
+		// 其他操作：不指定目标高度
 		const targetHeight = operation === 'flatten'
 			? sampleGroundHeight(session.definition, center.x, center.z)
 			: operation === 'flatten-zero'
 				? 0
 				: undefined
+		// 执行地形雕刻操作
 		const modified = sculptGround(session.definition, {
 			point: center,
 			radius: 0,
@@ -4389,13 +4424,16 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			targetHeight,
 			polygonPoints: localPolygonPoints,
 		})
+		// 如果雕刻成功且当前会话匹配，更新会话状态的定义和高度图
 		if (modified && sculptSessionState && sculptSessionState.nodeId === session.nodeId) {
 			sculptSessionState.definition = session.definition
 			sculptSessionState.heightMap = session.definition.manualHeightMap
 		}
+		// 如果雕刻未发生任何修改，则返回失败
 		if (!modified) {
 			return false
 		}
+		// 计算多边形区域的边界框（X和Z坐标的最小值和最大值）
 		const regionPoints = localPolygonPoints
 		let minX = Number.POSITIVE_INFINITY
 		let maxX = Number.NEGATIVE_INFINITY
@@ -4407,32 +4445,42 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			minZ = Math.min(minZ, point.z)
 			maxZ = Math.max(maxZ, point.z)
 		}
+		// 获取地形网格的世界坐标边界和工作网格尺寸
 		const bounds = resolveGroundWorldBounds(session.definition)
 		const gridSize = resolveGroundWorkingGridSize(session.definition)
+		// 将世界坐标边界框转换为网格行列索引范围
 		const region: GroundGeometryUpdateRegion = {
 			minRow: Math.max(0, Math.floor((minZ - bounds.minZ) / session.definition.cellSize)),
 			maxRow: Math.min(gridSize.rows, Math.ceil((maxZ - bounds.minZ) / session.definition.cellSize)),
 			minColumn: Math.max(0, Math.floor((minX - bounds.minX) / session.definition.cellSize)),
 			maxColumn: Math.min(gridSize.columns, Math.ceil((maxX - bounds.minX) / session.definition.cellSize)),
 		}
+		// 如果存在活跃的雕刻会话，标记受影响的区域并记录触及的块键
 		if (sculptSessionState && sculptSessionState.nodeId === session.nodeId) {
 			sculptSessionState.dirty = true
 			sculptSessionState.affectedRegion = mergeRegions(sculptSessionState.affectedRegion, region)
 			markSculptSessionTouchedChunkKeys(session.groundObject, sculptSessionState, { minX, maxX, minZ, maxZ })
 		}
+		// 获取触及的地形块键集合
 		const touchedChunkKeys = sculptSessionState?.nodeId === session.nodeId ? sculptSessionState.touchedChunkKeys : null
+		// 确保受影响区域的网格块已创建
 		ensureGroundChunkMeshesForKeys(session.groundObject, session.definition, touchedChunkKeys)
+		// 更新受影响区域的网格几何
 		updateGroundMeshRegion(session.groundObject, session.definition, region, { touchedChunkKeys })
+		// 计算接缝填充单元数：对于抬升/凹陷操作使用更大的填充范围以保证平滑过渡
 		const seamPaddingCells = operation === 'raise' || operation === 'depress'
 			? Math.max(4, Math.ceil(Math.max(session.definition.cellSize * 4, options.brushDepth.value * (0.75 + options.brushSlope.value)) / session.definition.cellSize))
 			: 2
+		// 创建填充后的更新区域，以处理相邻块之间的接缝
 		const padded: GroundGeometryUpdateRegion = {
 			minRow: Math.max(0, region.minRow - seamPaddingCells),
 			maxRow: Math.min(gridSize.rows, region.maxRow + seamPaddingCells),
 			minColumn: Math.max(0, region.minColumn - seamPaddingCells),
 			maxColumn: Math.min(gridSize.columns, region.maxColumn + seamPaddingCells),
 		}
+		// 缝合地形块法线，确保块边界处法线平滑过渡
 		stitchGroundChunkNormals(session.groundObject, session.definition, padded, touchedChunkKeys)
+		// 触发雕刻预览应用回调，通知外部系统雕刻已完成
 		options.onSculptPreviewApplied?.({
 			groundObject: session.groundObject,
 			definition: session.definition,
@@ -4440,6 +4488,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			chunkKeys: touchedChunkKeys ? Array.from(touchedChunkKeys) : undefined,
 			chunkCells: resolveChunkCellsForDefinition(session.definition),
 		})
+		// 提交雕刻会话以保存更改
 		commitSculptSession(getGroundNodeFromScene())
 		return true
 	}

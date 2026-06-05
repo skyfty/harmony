@@ -90,73 +90,129 @@ const groundLocalEditTileCoverageIndexBySource = new WeakMap<GroundLocalEditTile
 
 type GroundChunkKey = string
 
+/** 地面块规格定义 - 描述地面块在全局网格中的位置和大小 */
 type GroundChunkSpec = {
+  /** 地面块开始的行索引 */
   startRow: number
+  /** 地面块开始的列索引 */
   startColumn: number
+  /** 地面块包含的行数（单元格数） */
   rows: number
+  /** 地面块包含的列数（单元格数） */
   columns: number
 }
 
+/** 地面块运行时数据 - 存储地面块在运行时的动态信息，包括网格和位置 */
 type GroundChunkRuntime = {
+  /** 地面块的唯一标识符 */
   key: GroundChunkKey
+  /** 地面块所在的行坐标 */
   chunkRow: number
+  /** 地面块所在的列坐标 */
   chunkColumn: number
+  /** 地面块的规格信息 */
   spec: GroundChunkSpec
+  /** 地面块对应的Three.js网格对象 */
   mesh: THREE.Mesh
 }
 
+/** 地面单元格三角形定义 - 描述单个地面单元格中的三角形几何信息 */
 type GroundCellTriangleDefinition = {
+  /** 三角形的三个顶点坐标（使用2D向量表示水平位置） */
   vertices: [THREE.Vector2, THREE.Vector2, THREE.Vector2]
+  /** 三角形三个顶点对应的高度值 */
   heights: [number, number, number]
 }
 
+/** 平面地面切片区域 - 定义地面上的平面区域及其高度信息 */
 type GroundPlanarSliceRegion = {
+  /** 切片区域的开始行索引 */
   startRow: number
+  /** 切片区域的结束行索引 */
   endRow: number
+  /** 切片区域的开始列索引 */
   startColumn: number
+  /** 切片区域的结束列索引 */
   endColumn: number
+  /** 切片区域左上角（0,0）位置的高度值 */
   h00: number
+  /** 沿X轴方向的斜率（高度在X方向的变化率） */
   slopeX: number
+  /** 沿Z轴方向的斜率（高度在Z方向的变化率） */
   slopeZ: number
 }
 
+/** 地面三角形切片网格 - 用于表示地面区域的三角形网格数据，支持精确和近似两种模式 */
 export type GroundTriangleSliceMesh = {
+  /** 网格顶点数组，每个顶点包含x、y、z三个坐标分量 */
   vertices: Array<{ x: number; y: number; z: number }>
+  /** 三角形索引数组，通过顶点索引定义三角形的拓扑结构 */
   indices: number[]
+  /** 网格生成模式：'exact'表示精确计算，'approx'表示近似计算 */
   mode?: 'exact' | 'approx'
 }
 
+/** 地面运行时状态类型定义 */
 type GroundRuntimeState = {
+  /** 定义签名，用于标识地面配置的唯一性 */
   definitionSignature: string
+  /** 每个地面块包含的单元格数量 */
   chunkCells: number
+  /** 是否投射阴影 */
   castShadow: boolean
+  /** 所有地面块的运行时数据映射，使用块坐标作为键 */
   chunks: Map<GroundChunkKey, GroundChunkRuntime>
+  /** 平面地面块批次的集合，用于优化渲染性能 */
   flatChunkBatches: Map<string, GroundFlatChunkBatchRuntime>
+  /** 平面地面块铺贴是否已初始化 */
   flatTilingInitialized: boolean
+  /** 平面地面块铺贴的版本号，用于跟踪更新 */
   flatTilingVersion: number
+  /** 平面地面块铺贴的最小行索引 */
   flatTilingMinChunkRow: number
+  /** 平面地面块铺贴的最大行索引 */
   flatTilingMaxChunkRow: number
+  /** 平面地面块铺贴的最小列索引 */
   flatTilingMinChunkColumn: number
+  /** 平面地面块铺贴的最大列索引 */
   flatTilingMaxChunkColumn: number
+  /** 平面地面块的键集合，存储当前活跃的块 */
   flatChunkKeys: Set<string>
+  /** 上次同步平面地面块铺贴时的版本号 */
   lastFlatChunkSyncTilingVersion: number
+  /** 上次同步隐藏块键时的版本号 */
   lastFlatChunkSyncHiddenChunkKeysVersion: number
+  /** 隐藏地面块的键集合 */
   hiddenChunkKeys: Set<string>
+  /** 隐藏块键集合的版本号 */
   hiddenChunkKeysVersion: number
+  /** 可见地面块键的缓存数组 */
   visibleChunkKeysCache: string[]
+  /** 可见块键集合的版本号 */
   visibleChunkKeysVersion: number
+  /** 可见块键缓存的版本号 */
   visibleChunkKeysCacheVersion: number
+  /** 可见地面块签名的缓存字符串 */
   visibleChunkSignatureCache: string
+  /** 可见块签名缓存的版本号 */
   visibleChunkSignatureCacheVersion: number
+  /** 上次更新块的时间戳 */
   lastChunkUpdateAt: number
 
+  /** 期望的签名值，用于检测配置是否变化 */
   desiredSignature: string
+  /** 上次摄像机在本地坐标系中的X位置 */
   lastCameraLocalX: number
+  /** 上次摄像机在本地坐标系中的Z位置 */
   lastCameraLocalZ: number
+  /** 待创建的地面块数组，按优先级排序 */
   pendingCreates: Array<{ key: GroundChunkKey; chunkRow: number; chunkColumn: number; priority: number; distSq: number }>
+  /** 待销毁的地面块数组 */
   pendingDestroys: Array<{ key: GroundChunkKey; distSq: number }>
 
+  /** 三维网格对象池，按尺寸类别存储可重复使用的网格 */
   meshPool: Map<string, THREE.Mesh[]>
+  /** 每种尺寸网格对象池的最大容量 */
   poolMaxPerSize: number
 }
 
@@ -235,14 +291,23 @@ export type GroundFlatChunkInstanceMatrixBuilder = (params: {
   chunkKeys: string[]
 }) => Promise<GroundFlatChunkInstanceMatrixBuildResult> | null
 
+// 存储地形运行时状态的弱引用映射表
 const groundRuntimeStateMap = new WeakMap<THREE.Object3D, GroundRuntimeState>()
+// 缓存地形世界边界信息的弱引用映射表
 const groundWorldBoundsCache = new WeakMap<object, GroundWorldBoundsCacheEntry>()
+// 缓存地形工作网格大小的弱引用映射表
 const groundWorkingGridSizeCache = new WeakMap<object, GroundWorkingGridSizeCacheEntry>()
+// 缓存地形定义结构签名的弱引用映射表
 const groundDefinitionStructureSignatureCache = new WeakMap<object, GroundDefinitionStructureSignatureCacheEntry>()
+// 运行时块索引缓存，存储行列信息
 const runtimeChunkIndexCache = new Map<string, { row: number; column: number }>()
+// 地形平面块实例矩阵构建器函数
 let groundFlatChunkInstanceMatrixBuilder: GroundFlatChunkInstanceMatrixBuilder | null = null
+// 缓存的原型网格
 let cachedPrototypeMesh: THREE.Mesh | null = null
+// 无限地形摄像机四元数
 const infiniteGroundCameraQuaternion = new THREE.Quaternion()
+// 地形平面块实例矩阵基础变换（绕X轴旋转-90度）
 const groundFlatChunkInstanceMatrixBase = Float32Array.from(
   new THREE.Matrix4()
     .compose(
@@ -8601,29 +8666,53 @@ export function hasPendingGroundChunkWork(target: THREE.Object3D): boolean {
   return false
 }
 
+/**
+ * 更新地面网格
+ * 该函数处理两种场景：单个网格(Mesh)或网格组(Group)
+ * 如果是单个网格，直接更新其几何和纹理
+ * 如果是网格组，通过分块系统进行更新
+ */
 export function updateGroundMesh(target: THREE.Object3D, definition: GroundDynamicMesh) {
+  // 确保并获取运行时定义，包含该地面定义的缓存和预处理数据
   const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
+  
+  // 检查目标是否为单个网格对象
   if ((target as any)?.isMesh) {
     const mesh = target as THREE.Mesh
+    
+    // 如果网格的几何不是缓冲区几何，则创建新的缓冲区几何
     if (!(mesh.geometry instanceof THREE.BufferGeometry)) {
       mesh.geometry = buildGroundGeometry(runtimeDefinition)
     }
+    
+    // 获取缓冲区几何并尝试更新
     const bufferGeometry = mesh.geometry as THREE.BufferGeometry
     const updated = updateGroundGeometry(bufferGeometry, runtimeDefinition)
+    
+    // 如果更新失败，重新构建几何
     if (!updated) {
       bufferGeometry.dispose()
       mesh.geometry = buildGroundGeometry(runtimeDefinition)
     }
+    
+    // 将运行时定义的纹理应用到网格
     applyGroundTextureToObject(mesh, runtimeDefinition)
     return
   }
 
+  // 处理网格组的情况，通过分块系统管理
   const group = resolveGroundRuntimeGroup(target)
   if (!group) {
     return
   }
+  
+  // 确保运行时状态存在
   ensureGroundRuntimeState(group, runtimeDefinition)
+  
+  // 更新所有分块，传递 null 表示更新所有分块而不是特定分块集合
   updateGroundChunks(group, runtimeDefinition, null)
+  
+  // 将纹理应用到网格组
   applyGroundTextureToObject(group, runtimeDefinition)
 }
 
@@ -8680,12 +8769,23 @@ function resolveGroundRuntimeGroup(target: THREE.Object3D): THREE.Group | null {
   return found
 }
 
+/**
+ * 更新地面网格指定区域的几何体数据
+ * @param target 目标 THREE.Object3D 对象（可能是地面组或其父节点）
+ * @param definition 地面运行时动态网格定义
+ * @param region 需要更新的几何体区域范围
+ * @param options 配置选项
+ *   - computeNormals: 是否重新计算法线
+ *   - touchedChunkKeys: 本次编辑真实波及到的 chunk 集合（比扫描整个 region 更精准）
+ * @returns 是否有 chunk 被更新
+ */
 export function updateGroundMeshRegion(
   target: THREE.Object3D,
   definition: GroundRuntimeDynamicMesh,
   region: GroundGeometryUpdateRegion,
   options: { computeNormals?: boolean; touchedChunkKeys?: Iterable<string> | null } = {},
 ): boolean {
+  // 解析出地面运行时组（从目标对象及其子树中查找）
   const group = resolveGroundRuntimeGroup(target)
   if (!group) {
     return false
@@ -8701,44 +8801,61 @@ export function updateGroundMeshRegion(
     ? Array.from(options.touchedChunkKeys).filter((key) => typeof key === 'string' && key.length > 0)
     : []
   let updated = false
+  // 如果指定了具体的 touchedChunkKeys，则只更新这些指定的 chunk
   if (filteredChunkKeys.length) {
+    // 用 visited 集合追踪已处理的 chunk，避免重复处理
     const visited = new Set<string>()
+    // 逐个处理每个被触及的 chunk key
     for (const key of filteredChunkKeys) {
+      // 从共享 key 解析出行列索引
       const indices = resolveRuntimeChunkIndexFromSharedKey(key)
       if (!indices) {
         continue
       }
+      // 根据解析出的行列索引生成运行时的 chunk key
       const runtimeKey = groundChunkKey(indices.row, indices.column)
+      // 跳过已经处理过的 chunk，避免重复更新
       if (visited.has(runtimeKey)) {
         continue
       }
+      // 将此 chunk 标记为已访问
       visited.add(runtimeKey)
+      // 从状态中获取该 chunk 的运行时条目
       const entry = state.chunks.get(runtimeKey)
       if (!entry) {
         continue
       }
+      // 刷新该 chunk 的运行时几何数据
       const ok = refreshChunkRuntimeGeometry(entry, definition, {
         region,
         computeNormals: options.computeNormals,
       })
+      // 累积更新标志：只要有任何 chunk 被更新，就标记为已更新
       updated = updated || ok
     }
+    // 有指定 chunk key 时，直接返回更新结果，不再扫描其他 chunk
     return updated
   }
+  // 若没有指定具体的 chunk key，则遍历所有 chunk 并检查与 region 的重叠关系
   state.chunks.forEach((entry) => {
+    // 判断该 chunk 的边界范围是否与更新 region 重叠
+    // overlaps 为 false 表示两者不相交
     const overlaps = !(
       region.maxRow < entry.spec.startRow ||
       region.minRow > entry.spec.startRow + entry.spec.rows ||
       region.maxColumn < entry.spec.startColumn ||
       region.minColumn > entry.spec.startColumn + entry.spec.columns
     )
+    // 若不重叠，跳过此 chunk 的更新
     if (!overlaps) {
       return
     }
+    // 对于与 region 重叠的 chunk，刷新其运行时几何数据
     const ok = refreshChunkRuntimeGeometry(entry, definition, {
       region,
       computeNormals: options.computeNormals,
     })
+    // 累积更新标志
     updated = updated || ok
   })
   return updated
