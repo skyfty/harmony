@@ -1293,6 +1293,27 @@ function mergeRegions(
 	}
 }
 
+function normalizeGroundGeometryUpdateRegion(
+	region: GroundGeometryUpdateRegion | null,
+	gridSize?: { rows: number; columns: number } | null,
+): GroundGeometryUpdateRegion | null {
+	if (!region) {
+		return null
+	}
+	const minRow = Math.min(region.minRow, region.maxRow)
+	const maxRow = Math.max(region.minRow, region.maxRow)
+	const minColumn = Math.min(region.minColumn, region.maxColumn)
+	const maxColumn = Math.max(region.minColumn, region.maxColumn)
+	const rowLimit = gridSize ? Math.max(0, Math.trunc(gridSize.rows)) : Number.POSITIVE_INFINITY
+	const columnLimit = gridSize ? Math.max(0, Math.trunc(gridSize.columns)) : Number.POSITIVE_INFINITY
+	return {
+		minRow: Math.max(0, Math.min(rowLimit, minRow)),
+		maxRow: Math.max(0, Math.min(rowLimit, maxRow)),
+		minColumn: Math.max(0, Math.min(columnLimit, minColumn)),
+		maxColumn: Math.max(0, Math.min(columnLimit, maxColumn)),
+	}
+}
+
 function resolveChunkCellsForDefinition(definition: GroundDynamicMesh): number {
 	// Keep in sync with schema/groundMesh.ts (DEFAULT_GROUND_CHUNK_CELLS / cellSize).
 	const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
@@ -3843,14 +3864,15 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		// 获取提交时的地形定义和网格大小信息
 		const committedDefinition = sculptSessionState.definition
 		const gridSize = resolveGroundWorkingGridSize(committedDefinition)
+		const normalizedAffectedRegion = normalizeGroundGeometryUpdateRegion(sculptSessionState.affectedRegion, gridSize)
 
 		// 计算提交的受影响区域：将浮点数坐标转换为整数网格坐标，并限制在网格范围内
-		const commitRegion = sculptSessionState.affectedRegion
+		const commitRegion = normalizedAffectedRegion
 			? {
-				minRow: Math.max(0, Math.min(gridSize.rows, Math.floor(sculptSessionState.affectedRegion.minRow))),
-				maxRow: Math.max(0, Math.min(gridSize.rows, Math.ceil(sculptSessionState.affectedRegion.maxRow))),
-				minColumn: Math.max(0, Math.min(gridSize.columns, Math.floor(sculptSessionState.affectedRegion.minColumn))),
-				maxColumn: Math.max(0, Math.min(gridSize.columns, Math.ceil(sculptSessionState.affectedRegion.maxColumn))),
+				minRow: Math.max(0, Math.min(gridSize.rows, Math.floor(normalizedAffectedRegion.minRow))),
+				maxRow: Math.max(0, Math.min(gridSize.rows, Math.ceil(normalizedAffectedRegion.maxRow))),
+				minColumn: Math.max(0, Math.min(gridSize.columns, Math.floor(normalizedAffectedRegion.minColumn))),
+				maxColumn: Math.max(0, Math.min(gridSize.columns, Math.ceil(normalizedAffectedRegion.maxColumn))),
 			}
 			: {
 				// 如果没有明确的受影响区域，则使用整个网格
@@ -3891,7 +3913,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			planningConversion.region,
 			planningConversion.planningMetadata,
 			planningConversion.localEditTiles,
-			sculptSessionState.affectedRegion ?? commitRegion,
+			normalizedAffectedRegion ?? commitRegion,
 		)
 
 		// 如果提交成功，触发回调通知地形雕刻修改已应用
@@ -4455,10 +4477,11 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			minColumn: Math.max(0, Math.floor((minX - bounds.minX) / session.definition.cellSize)),
 			maxColumn: Math.min(gridSize.columns, Math.ceil((maxX - bounds.minX) / session.definition.cellSize)),
 		}
+		const normalizedRegion = normalizeGroundGeometryUpdateRegion(region, gridSize)
 		// 如果存在活跃的雕刻会话，标记受影响的区域并记录触及的块键
 		if (sculptSessionState && sculptSessionState.nodeId === session.nodeId) {
 			sculptSessionState.dirty = true
-			sculptSessionState.affectedRegion = mergeRegions(sculptSessionState.affectedRegion, region)
+			sculptSessionState.affectedRegion = mergeRegions(sculptSessionState.affectedRegion, normalizedRegion ?? region)
 			markSculptSessionTouchedChunkKeys(session.groundObject, sculptSessionState, { minX, maxX, minZ, maxZ })
 		}
 		// 获取触及的地形块键集合
@@ -4466,7 +4489,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		// 确保受影响区域的网格块已创建
 		ensureGroundChunkMeshesForKeys(session.groundObject, session.definition, touchedChunkKeys)
 		// 更新受影响区域的网格几何
-		updateGroundMeshRegion(session.groundObject, session.definition, region, { touchedChunkKeys })
+		updateGroundMeshRegion(session.groundObject, session.definition, normalizedRegion ?? region, { touchedChunkKeys })
 		// 计算接缝填充单元数：对于抬升/凹陷操作使用更大的填充范围以保证平滑过渡
 		const seamPaddingCells = operation === 'raise' || operation === 'depress'
 			? Math.max(4, Math.ceil(Math.max(session.definition.cellSize * 4, options.brushDepth.value * (0.75 + options.brushSlope.value)) / session.definition.cellSize))
@@ -4484,7 +4507,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		options.onSculptPreviewApplied?.({
 			groundObject: session.groundObject,
 			definition: session.definition,
-			affectedRegion: sculptSessionState?.affectedRegion ?? region,
+			affectedRegion: sculptSessionState?.affectedRegion ?? (normalizedRegion ?? region),
 			chunkKeys: touchedChunkKeys ? Array.from(touchedChunkKeys) : undefined,
 			chunkCells: resolveChunkCellsForDefinition(session.definition),
 		})
@@ -7238,7 +7261,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 					minColumn: Math.max(0, minColumn),
 					maxColumn: Math.min(gridSize.columns, maxColumn),
 				}
-				mergedRegion = mergeRegions(mergedRegion, region)
+				const normalizedRegion = normalizeGroundGeometryUpdateRegion(region, gridSize)
+				mergedRegion = mergeRegions(mergedRegion, normalizedRegion ?? region)
 				markSculptSessionTouchedChunkKeys(groundObject, sculptSessionState, {
 					minX: point.x - radius,
 					maxX: point.x + radius,
@@ -7260,25 +7284,26 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		}
 		const touchedChunkKeys = sculptSessionState?.nodeId === groundNode.id ? sculptSessionState.touchedChunkKeys : null
 		const gridSize = resolveGroundWorkingGridSize(definition)
+		const normalizedMergedRegion = normalizeGroundGeometryUpdateRegion(mergedRegion, gridSize) ?? mergedRegion
 		ensureGroundChunkMeshesForKeys(groundObject, definition, touchedChunkKeys)
-		updateGroundMeshRegion(groundObject, definition, mergedRegion, { touchedChunkKeys })
+		updateGroundMeshRegion(groundObject, definition, normalizedMergedRegion, { touchedChunkKeys })
 		// Stitch normals across chunk boundaries to prevent visible seams.
 		const padded: GroundGeometryUpdateRegion = {
-			minRow: Math.max(0, mergedRegion.minRow - 2),
-			maxRow: Math.min(gridSize.rows, mergedRegion.maxRow + 2),
-			minColumn: Math.max(0, mergedRegion.minColumn - 2),
-			maxColumn: Math.min(gridSize.columns, mergedRegion.maxColumn + 2),
+			minRow: Math.max(0, normalizedMergedRegion.minRow - 2),
+			maxRow: Math.min(gridSize.rows, normalizedMergedRegion.maxRow + 2),
+			minColumn: Math.max(0, normalizedMergedRegion.minColumn - 2),
+			maxColumn: Math.min(gridSize.columns, normalizedMergedRegion.maxColumn + 2),
 		}
 		stitchGroundChunkNormals(groundObject, definition, padded, touchedChunkKeys)
 		options.onSculptPreviewApplied?.({
 			groundObject,
 			definition,
-			affectedRegion: sculptSessionState?.affectedRegion ?? mergedRegion,
+			affectedRegion: sculptSessionState?.affectedRegion ?? normalizedMergedRegion,
 			chunkKeys: touchedChunkKeys ? Array.from(touchedChunkKeys) : undefined,
 			chunkCells: resolveChunkCellsForDefinition(definition),
 		})
 		if (sculptSessionState && sculptSessionState.nodeId === groundNode.id) {
-			sculptSessionState.affectedRegion = mergeRegions(sculptSessionState.affectedRegion, mergedRegion)
+			sculptSessionState.affectedRegion = mergeRegions(sculptSessionState.affectedRegion, normalizedMergedRegion)
 		}
 	}
 

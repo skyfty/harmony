@@ -3114,10 +3114,14 @@ function resolveGroundDirtyChunkKeysFromRegion(
   const endRow = 'endRow' in region ? region.endRow : region.maxRow
   const startColumn = 'startColumn' in region ? region.startColumn : region.minColumn
   const endColumn = 'endColumn' in region ? region.endColumn : region.maxColumn
-  const minRow = Math.max(0, Math.floor(startRow / chunkCells) - 1)
-  const maxRow = Math.max(0, Math.floor(endRow / chunkCells) + 1)
-  const minColumn = Math.max(0, Math.floor(startColumn / chunkCells) - 1)
-  const maxColumn = Math.max(0, Math.floor(endColumn / chunkCells) + 1)
+  const normalizedMinRow = Math.min(startRow, endRow)
+  const normalizedMaxRow = Math.max(startRow, endRow)
+  const normalizedMinColumn = Math.min(startColumn, endColumn)
+  const normalizedMaxColumn = Math.max(startColumn, endColumn)
+  const minRow = Math.max(0, Math.floor(normalizedMinRow / chunkCells) - 1)
+  const maxRow = Math.max(0, Math.floor(normalizedMaxRow / chunkCells) + 1)
+  const minColumn = Math.max(0, Math.floor(normalizedMinColumn / chunkCells) - 1)
+  const maxColumn = Math.max(0, Math.floor(normalizedMaxColumn / chunkCells) + 1)
   const chunkKeys: string[] = []
   for (let row = minRow; row <= maxRow; row += 1) {
     for (let column = minColumn; column <= maxColumn; column += 1) {
@@ -10645,12 +10649,9 @@ export const useSceneStore = defineStore('scene', {
     ) {
       const committed = commitGroundHeightMapRuntimeEdit(this, nodeId, definition, manualHeightMap)
       if (committed) {
-        const dirtyChunkKeys = resolveGroundDirtyChunkKeysFromRegion(definition, null)
-        if (dirtyChunkKeys?.length) {
-          void this.rebuildCurrentSceneCompiledGroundChunks(nodeId, dirtyChunkKeys).catch((error) => {
-            console.warn('[SceneStore] Failed to rebuild compiled ground after heightmap edit', error)
-          })
-        }
+        void this.rebuildCurrentSceneCompiledGroundChunks(nodeId, []).catch((error) => {
+          console.warn('[SceneStore] Failed to rebuild compiled ground after heightmap edit', error)
+        })
       }
       return committed
     },
@@ -10662,12 +10663,9 @@ export const useSceneStore = defineStore('scene', {
     ) {
       const committed = commitGroundLocalEditTilesRuntimeEdit(this, nodeId, definition, localEditTiles, affectedRegion)
       if (committed) {
-        const dirtyChunkKeys = resolveGroundDirtyChunkKeysFromRegion(definition, affectedRegion)
-        if (dirtyChunkKeys?.length) {
-          void this.rebuildCurrentSceneCompiledGroundChunks(nodeId, dirtyChunkKeys).catch((error) => {
-            console.warn('[SceneStore] Failed to rebuild compiled ground after local edit tile update', error)
-          })
-        }
+        void this.rebuildCurrentSceneCompiledGroundChunks(nodeId, []).catch((error) => {
+          console.warn('[SceneStore] Failed to rebuild compiled ground after local edit tile update', error)
+        })
       }
       return committed
     },
@@ -10689,12 +10687,9 @@ export const useSceneStore = defineStore('scene', {
         affectedRegion,
       )
       if (committed) {
-        const dirtyChunkKeys = resolveGroundDirtyChunkKeysFromRegion(definition, affectedRegion ?? planningRegion)
-        if (dirtyChunkKeys?.length) {
-          void this.rebuildCurrentSceneCompiledGroundChunks(nodeId, dirtyChunkKeys).catch((error) => {
-            console.warn('[SceneStore] Failed to rebuild compiled ground after planning DEM edit', error)
-          })
-        }
+        void this.rebuildCurrentSceneCompiledGroundChunks(nodeId, []).catch((error) => {
+          console.warn('[SceneStore] Failed to rebuild compiled ground after planning DEM edit', error)
+        })
       }
       return committed
     },

@@ -276,6 +276,8 @@ export type GroundTriangleSamplingContext = GroundHeightSamplingContext & {
 function resolveRuntimeTerrainHeightSampler(
   definition: Pick<GroundRuntimeDynamicMesh, 'runtimeTerrainHeightSampler'>,
 ): GroundTerrainHeightSampler | null {
+  // 运行时采样器可能来自外部注入，因此这里先取出候选对象，再做方法级别的校验。
+  // 只要没有 `sampleHeightAtWorld` 这个可调用入口，就说明这个对象不能安全用于地形采样。
   const candidate = (definition.runtimeTerrainHeightSampler as GroundTerrainHeightSampler | null | undefined) ?? null
   return candidate && typeof candidate.sampleHeightAtWorld === 'function' ? candidate : null
 }
@@ -1298,18 +1300,24 @@ function clampVertexIndex(value: number, max: number): number {
 }
 
 function ensureGroundRuntimeDefinition(definition: GroundDynamicMesh): GroundRuntimeDynamicMesh {
+  // 将普通地形定义视为运行时定义来处理，并补齐编辑、采样和缓存所需的运行时字段。
   const runtimeDefinition = definition as GroundRuntimeDynamicMesh
+  // 根据当前世界边界、cellSize 和 chunk 参数计算工作网格尺寸。
+  // 后续所有高度图、编辑图和采样索引都要依赖这个尺寸，所以这里必须先统一。
   const gridSize = resolveGroundWorkingGridSizeCached(runtimeDefinition)
+  // 手动高度图用于编辑器直接改高程点。这里确保它始终存在，并且尺寸与工作网格一致。
   runtimeDefinition.manualHeightMap = ensureGroundHeightMap(
     runtimeDefinition.manualHeightMap,
     gridSize.rows,
     gridSize.columns,
   )
+  // 规划高度图用于未提交前的预览态或规划态数据，同样需要和当前工作网格严格对齐。
   runtimeDefinition.planningHeightMap = ensureGroundHeightMap(
     runtimeDefinition.planningHeightMap,
     gridSize.rows,
     gridSize.columns,
   )
+  // 运行时已加载的 tile key 必须是数组，后续遍历和追加时才能保持稳定行为。
   if (!Array.isArray(runtimeDefinition.runtimeLoadedTileKeys)) {
     runtimeDefinition.runtimeLoadedTileKeys = []
   }
@@ -2252,21 +2260,40 @@ function sampleGroundEffectiveHeightRegionInternal(
   maxColumnInput: number,
   includeLocalEdit: boolean,
 ): GroundEffectiveHeightRegion {
+  // 先拿到运行时版本的地形定义，确保后续采样使用的是带缓存、带派生状态的对象。
   const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
+
+  // 先生成“基础高度区间”。
+  // 这里的 baseRegion 只负责基础地形/原始地形的高度采样，不包含 manual、planning、local edit 等叠加层。
+  // 后续会在这个基础上逐格补齐最终有效高度。
   const baseRegion = computeGroundBaseHeightRegion(runtimeDefinition, minRowInput, maxRowInput, minColumnInput, maxColumnInput)
   const { minRow, maxRow, minColumn, maxColumn, stride, values: baseValues } = baseRegion
+
+  // 输出数组按 baseRegion 的 stride 和长度来分配，保证和基础采样区域完全对齐。
+  // 这里最终写入的是“有效高度”，也就是用户真正会在编辑器里看到的结果。
   const total = baseValues.length
   const values = new Float32Array(total)
+
+  // 记录当前区域的高度范围，方便后续做包围盒、调试信息或统计。
   let heightMin = 0
   let heightMax = 0
 
+  // 如果采样范围无效，直接返回一个空的有效高度区域。
+  // 这样上层可以统一处理，不需要单独判断异常情况。
   if (stride <= 0 || maxRow < minRow || maxColumn < minColumn) {
     return { ...baseRegion, values, heightMin, heightMax }
   }
 
+  // 预先准备几个运行时缓存：
+  // - gridSize：当前地形网格大小，用来从 row/column 计算 manual / planning 的索引
+  // - manualRegion / planningRegion：如果 runtime 已经能一次性返回整个区间，就直接复用，避免逐点查找
+  // - terrainSampler：如果有外部地形采样器，就允许把采样点落到更高层的地形数据上
   const gridSize = resolveGroundWorkingGridSize(runtimeDefinition)
   const manualRegion = runtimeDefinition.runtimeSampleHeightRegion?.('manual', minRow, maxRow, minColumn, maxColumn)
   const planningRegion = runtimeDefinition.runtimeSampleHeightRegion?.('planning', minRow, maxRow, minColumn, maxColumn)
+
+  // 只有当 runtime 返回的区间和当前请求完全一致时，才安全复用它们。
+  // 否则会出现 stride 或边界不一致的问题，所以必须回退到逐点读取。
   const canUseManualRegion = manualRegion
     && manualRegion.minRow === minRow
     && manualRegion.maxRow === maxRow
@@ -2282,11 +2309,19 @@ function sampleGroundEffectiveHeightRegionInternal(
   const manualValues = canUseManualRegion ? manualRegion.values : null
   const planningValues = canUsePlanningRegion ? planningRegion.values : null
   const terrainSampler = resolveRuntimeTerrainHeightSampler(runtimeDefinition)
+
+  // local edit / terrainSampler 只在需要时才解析世界坐标边界。
+  // 这样可以避免纯 base 采样路径额外创建不必要的世界坐标数据。
   const bounds = includeLocalEdit || terrainSampler ? resolveGroundGridWorldBounds(runtimeDefinition) : null
   const cellSize = Number.isFinite(runtimeDefinition.cellSize) && runtimeDefinition.cellSize > 1e-6
     ? runtimeDefinition.cellSize
     : 1
 
+  // 逐个顶点计算最终有效高度：
+  // 1. 先拿基础高度 base
+  // 2. 如果启用了 local edit，就优先使用 local edit 的世界坐标采样结果
+  // 3. 否则按 terrainSampler / planning / manual 的顺序合成最终高度
+  // 4. 同时顺手统计 min / max，供后续使用
   for (let row = minRow; row <= maxRow; row += 1) {
     const baseOffset = (row - minRow) * stride
     const worldZ = bounds ? bounds.minZ + row * cellSize : 0
@@ -2294,15 +2329,28 @@ function sampleGroundEffectiveHeightRegionInternal(
       const offset = baseOffset + (column - minColumn)
       const base = baseValues[offset] ?? 0
       const worldX = bounds ? bounds.minX + column * cellSize : 0
+
+      // local edit 是最高优先级：
+      // 只要当前点命中了局部雕刻 tile，就直接返回局部雕刻后的高度，
+      // 这样可以保证编辑器里看到的形状与局部覆盖数据一致。
       const localEditSample = includeLocalEdit
         ? sampleGroundLocalEditHeightAtWorldFromRuntime(runtimeDefinition, worldX, worldZ)
         : null
+
       let effective: number
       if (Number.isFinite(localEditSample)) {
         effective = localEditSample as number
       } else {
+        // 若没有 local edit，则考虑 terrainSampler 提供的外部地形采样。
+        // 如果外部采样无效，就回退到 base 高度，保证函数总能返回一个确定值。
         const sampled = terrainSampler ? terrainSampler.sampleHeightAtWorld(worldX, worldZ) : null
         const terrainBase = Number.isFinite(sampled) ? (sampled as number) : base
+
+        // manual / planning 两层是分开的：
+        // - planning 作为规划层高度
+        // - manual 作为手工层高度
+        // 最终有效高度按 planning + (manual - terrainBase) 合成。
+        // 这样 manual 可以在规划层之上做偏移，而不会直接覆盖规划层本身。
         const heightIndex = getGroundVertexIndex(gridSize.columns, row, column)
         const manualRaw = manualValues ? manualValues[offset] : runtimeDefinition.manualHeightMap[heightIndex]
         const planningRaw = planningValues ? planningValues[offset] : runtimeDefinition.planningHeightMap[heightIndex]
@@ -2310,12 +2358,18 @@ function sampleGroundEffectiveHeightRegionInternal(
         const planning = typeof planningRaw === 'number' && Number.isFinite(planningRaw) ? planningRaw : terrainBase
         effective = planning + (manual - terrainBase)
       }
+
+      // 把最终有效高度写回输出区间，并同步更新统计范围。
       values[offset] = effective
       heightMin = Math.min(heightMin, effective)
       heightMax = Math.max(heightMax, effective)
     }
   }
 
+  // 返回的 region 同时包含：
+  // - 采样范围 min/max/stride
+  // - 有效高度数组 values
+  // - 当前区间的高度最小值和最大值
   return {
     minRow,
     maxRow,
@@ -3899,19 +3953,26 @@ export function sliceGroundTrianglesByPolygon(
 }
 
 export function sampleGroundHeight(definition: GroundDynamicMesh, x: number, z: number): number {
+  // 先把定义补成运行时可用形态，避免后续访问工作网格、高度图或运行时采样器时缺字段。
   const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
+  // 本地编辑层拥有最高优先级：如果当前位置已经被编辑数据覆盖，就直接返回覆盖高度。
   const localEditSample = sampleGroundLocalEditHeightAtWorldFromRuntime(runtimeDefinition, x, z)
   if (Number.isFinite(localEditSample)) {
     return localEditSample as number
   }
+  // 获取当前工作网格的行列数量，用来把世界坐标映射到地形网格索引。
   const gridSize = resolveGroundWorkingGridSizeCached(runtimeDefinition)
   const columns = gridSize.columns
   const rows = gridSize.rows
+  // cellSize 必须是一个正数；如果定义里出现非法值，这里回退到 1，避免除零或索引异常。
   const cellSize = Number.isFinite(runtimeDefinition.cellSize) && runtimeDefinition.cellSize > 1e-6
     ? runtimeDefinition.cellSize
     : 1
+  // 当前地形的世界边界，用于判断采样点是否落在工作范围内。
   const bounds = resolveGroundWorldBoundsCached(runtimeDefinition)
+  // 运行时采样器是底层地形来源的回退入口，边界外或缺省值场景会用到它。
   const terrainSampler = resolveRuntimeTerrainHeightSampler(runtimeDefinition)
+  // 如果点已经超出当前工作边界，就不再强行走内部网格插值，而是交给边界外逻辑处理。
   if (x < bounds.minX || x > bounds.maxX || z < bounds.minZ || z > bounds.maxZ) {
     return sampleGroundHeightOutsideWorkingBounds(
       runtimeDefinition,
@@ -3921,24 +3982,32 @@ export function sampleGroundHeight(definition: GroundDynamicMesh, x: number, z: 
     )
   }
 
+  // 将世界坐标换算成工作网格中的浮点列/行坐标。
+  // 保留小数部分，是为了后面的双线性插值能够得到连续、平滑的高度过渡。
   const boundsMinX = bounds.minX
   const boundsMinZ = bounds.minZ
   const localColumnFloat = clampInclusive((x - boundsMinX) / cellSize, 0, columns)
   const localRowFloat = clampInclusive((z - boundsMinZ) / cellSize, 0, rows)
 
+  // 取当前采样点所在单元格的四个角点索引。
+  // 这里通过 floor 找左上角，再向右下各取一个邻点，形成插值所需的四个采样点。
   const column0 = clampVertexIndex(Math.floor(localColumnFloat), columns)
   const row0 = clampVertexIndex(Math.floor(localRowFloat), rows)
   const column1 = clampVertexIndex(column0 + 1, columns)
   const row1 = clampVertexIndex(row0 + 1, rows)
 
+  // 当前点在单元格内部的横向/纵向权重，限制在 [0, 1]，用于插值。
   const tx = clampInclusive(localColumnFloat - column0, 0, 1)
   const tz = clampInclusive(localRowFloat - row0, 0, 1)
 
+  // 读取四个角点的“有效高度”。
+  // 这个函数会把手动编辑、规划态覆盖和基础地形统一折算到同一个结果上。
   const h00 = resolveGroundEffectiveHeightAtVertexWithContext(runtimeDefinition, row0, column0, columns, boundsMinX, boundsMinZ, cellSize, terrainSampler)
   const h10 = resolveGroundEffectiveHeightAtVertexWithContext(runtimeDefinition, row0, column1, columns, boundsMinX, boundsMinZ, cellSize, terrainSampler)
   const h01 = resolveGroundEffectiveHeightAtVertexWithContext(runtimeDefinition, row1, column0, columns, boundsMinX, boundsMinZ, cellSize, terrainSampler)
   const h11 = resolveGroundEffectiveHeightAtVertexWithContext(runtimeDefinition, row1, column1, columns, boundsMinX, boundsMinZ, cellSize, terrainSampler)
 
+  // 先在 X 方向插值，再在 Z 方向插值，得到单元格内任意点的平滑高度值。
   const hx0 = h00 + (h10 - h00) * tx
   const hx1 = h01 + (h11 - h01) * tx
   return hx0 + (hx1 - hx0) * tz
@@ -4314,12 +4383,16 @@ function sampleGroundHeightCached(
   z: number,
   cache: GroundHeightSampleCache,
 ): number {
+  // 这里使用两层 Map 缓存：
+  // 第一层按 x 分桶，第二层按 z 存储结果，这样可以高频复用重复采样点的高度值。
   const xCache = cache.get(x)
   const cached = xCache?.get(z)
   if (typeof cached === 'number' && Number.isFinite(cached)) {
     return cached
   }
+  // 缓存未命中时，回到标准采样函数计算一次高度。
   const height = sampleGroundHeight(definition, x, z)
+  // 将这次计算结果写回缓存，供后续同坐标或重复邻近查询复用。
   if (xCache) {
     xCache.set(z, height)
   } else {
@@ -4377,41 +4450,60 @@ function computeSampledGroundNormals(
 }
 
 function buildGroundChunkGeometry(definition: GroundRuntimeDynamicMesh, spec: GroundChunkSpec): THREE.BufferGeometry {
+  // 这个函数负责把“一个 chunk 范围内的地形高度场”转换成 Three.js 的 BufferGeometry。
+  // 它的输出是独立的 chunk mesh 几何，不是整张地形的总网格。
+  // 这样做的好处是：局部雕刻后只需要重建受影响的 chunk，而不必重算全场。
   const optimizedChunk = resolveOptimizedChunkForSpec(definition, spec)
   if (optimizedChunk) {
+    // 如果这个 chunk 已经存在可直接复用的优化数据，就优先走烘焙/优化后的几何生成路径。
+    // 这样可以跳过高度采样和拓扑重建，减少运行时开销。
     return createGroundOptimizedChunkGeometry(optimizedChunk)
   }
 
+  // chunkCells 表示运行时地形按多大的 cell 组织 chunk。
+  // 这里先把 spec 的起点换算成当前 chunk 所属的 chunk 行列，用于判断是否能退化成平面。
   const chunkCells = resolveRuntimeChunkCells(definition)
   const chunkRow = Math.trunc(spec.startRow / Math.max(1, chunkCells))
   const chunkColumn = Math.trunc(spec.startColumn / Math.max(1, chunkCells))
   if (canTreatGroundChunkAsFlatPlane(definition, chunkRow, chunkColumn, { allowBakedSurfaceTexture: true })) {
+    // 没有局部雕刻、也没有必须保留的 baked surface 纹理时，这个 chunk 可以走平面快速路径。
+    // 平面路径通常会更轻量，适合大面积未编辑区域。
     return buildDenseFlatGroundChunkGeometry(definition, spec)
   }
 
+  // 根据 chunk 的几何规格，计算最终渲染用的分段布局。
+  // 这里的 segmentRows / segmentColumns 可能和原始 chunkCells 不完全一致，
+  // 目的是让世界尺寸、采样精度和局部编辑采样能够在同一个几何里对齐。
   const layout = resolveGroundChunkGeometryLayout(definition, spec)
   const chunkColumns = layout.segmentColumns
   const chunkRows = layout.segmentRows
   const vertexColumns = chunkColumns + 1
   const vertexRows = chunkRows + 1
   const vertexCount = vertexColumns * vertexRows
+
+  // 按顶点数预分配 position / normal / uv / index 缓冲区。
+  // 先申请连续数组，再逐点/逐三角形写入，比动态 push 更稳定，也更适合 Three.js 的 BufferAttribute。
   const positions = new Float32Array(vertexCount * 3)
   const normals = new Float32Array(vertexCount * 3)
   const uvs = new Float32Array(vertexCount * 2)
   const indices = new Uint32Array(chunkColumns * chunkRows * 6)
+
+  // 高度采样缓存：同一 chunk 内多个顶点可能会重复访问同一个世界坐标附近的高度值，
+  // 先缓存再复用，可以减少 sampleGroundHeightCached 的重复计算。
   const heightCache: GroundHeightSampleCache = new Map<number, Map<number, number>>()
   const normalScratch = createGroundNormalScratch()
 
+  // 计算当前 chunk 在世界坐标中的左上角/起始点。
+  // 后续每个局部顶点都要在这个起点基础上加偏移，才能得到世界空间坐标。
   const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1
   const chunkSizeMeters = resolveInfiniteChunkSizeMeters(definition)
   const chunkOrigin = resolveInfiniteGroundGridOriginMeters(chunkSizeMeters)
   const startX = chunkOrigin + spec.startColumn * cellSize
   const startZ = chunkOrigin + spec.startRow * cellSize
-  const importedLocalEditCellSize = resolveGroundChunkLocalEditCellSize(definition, spec)
-  const useWorldSpaceHeightSampling = importedLocalEditCellSize > cellSize
-  const heightRegion = useWorldSpaceHeightSampling
-    ? null
-    : sampleGroundEffectiveHeightRegion(
+
+  // 常规路径：一次性取出当前 chunk 覆盖区域的高度矩阵。
+  // 这会给后续逐顶点写 position 提供一个连续的 height buffer。
+  const heightRegion = sampleGroundEffectiveHeightRegion(
       definition,
       spec.startRow,
       spec.startRow + spec.rows,
@@ -4421,32 +4513,52 @@ function buildGroundChunkGeometry(definition: GroundRuntimeDynamicMesh, spec: Gr
   const heightValues = heightRegion?.values
   const heightStride = heightRegion?.stride ?? 0
 
+  // 逐顶点填充 position / normal / uv。
+  // position.xz 由 chunk 起点和局部网格坐标决定，position.y 则来自高度采样结果。
+  // uv 使用 chunk 内的归一化坐标，保证贴图在 chunk 内可以平滑铺开。
+  // 这里按“行优先”的顺序遍历 chunk 内的每一个网格顶点。
+  // 顶点数量比单元格数量多一行、多一列，因此循环条件使用 `<=`，
+  // 这样才能把边界上的顶点也完整写入缓冲区。
   let vertexIndex = 0
   for (let localRow = 0; localRow <= chunkRows; localRow += 1) {
+    // 当前顶点在世界空间中的 Z 坐标，由 chunk 起点加上行方向步进得到。
     const z = startZ + localRow * layout.stepZ
     for (let localColumn = 0; localColumn <= chunkColumns; localColumn += 1) {
+      // 当前顶点在世界空间中的 X 坐标，由 chunk 起点加上列方向步进得到。
       const x = startX + localColumn * layout.stepX
-      const height = useWorldSpaceHeightSampling
-        ? sampleGroundHeightCached(definition, x, z, heightCache)
-        : heightValues?.[localRow * heightStride + localColumn] ?? sampleGroundHeightCached(definition, x, z, heightCache)
+      // 采样该顶点对应的地形高度。
+      // - 若启用了 world-space 采样，则直接按世界坐标从缓存/采样函数取高度；
+      // - 否则优先使用预先计算好的 heightRegion；
+      // - 如果 region 中没有对应值，再回退到缓存采样，避免出现空洞。
+      const height =  heightValues?.[localRow * heightStride + localColumn] ?? 0
+      // 将局部顶点位置映射到 0~1 的 UV 空间。
+      // U 沿列方向从左到右线性增长，V 沿行方向从上到下反向归一化，
+      // 这样贴图在整个 chunk 上的朝向和视觉效果会更稳定。
       const u = chunkColumns === 0 ? 0 : localColumn / chunkColumns
       const v = chunkRows === 0 ? 0 : 1 - (localRow / chunkRows)
 
+      // position: x / y / z 直接写入对应的顶点槽位。
       positions[vertexIndex * 3 + 0] = x
       positions[vertexIndex * 3 + 1] = height
       positions[vertexIndex * 3 + 2] = z
 
+      // 当前地形网格默认按“朝上”的平面处理，法线先统一写成 (0, 1, 0)。
+      // 如果后续有基于坡度的平滑法线计算，这里通常会被更精细的结果覆盖。
       normals[vertexIndex * 3 + 0] = 0
       normals[vertexIndex * 3 + 1] = 1
       normals[vertexIndex * 3 + 2] = 0
 
+      // UV 按顶点顺序写入，供材质采样、纹理拼接或后续着色逻辑使用。
       uvs[vertexIndex * 2 + 0] = u
       uvs[vertexIndex * 2 + 1] = v
 
+      // 当前顶点写完后，指针后移到下一个顶点槽位。
       vertexIndex += 1
     }
   }
 
+  // 逐单元格写三角形索引。
+  // 每个四边形 cell 会拆成两个三角形，形成标准的地形网格拓扑。
   let indexPointer = 0
   for (let row = 0; row < chunkRows; row += 1) {
     for (let column = 0; column < chunkColumns; column += 1) {
@@ -4465,16 +4577,25 @@ function buildGroundChunkGeometry(definition: GroundRuntimeDynamicMesh, spec: Gr
     }
   }
 
+  // 将原始 typed array 封装成 BufferGeometry 属性。
+  // 这样 Three.js 才能在 GPU 上正确使用这些顶点、法线和 UV 数据。
   const geometry = new THREE.BufferGeometry()
   geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
   geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3))
   geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2))
   geometry.setIndex(new THREE.BufferAttribute(indices, 1))
-  if (useWorldSpaceHeightSampling || shouldUseGroundLocalEditTiles(definition)) {
+
+  // 法线重新计算是为了让地形明暗跟随真实起伏。
+  // 如果使用了世界坐标采样或局部编辑 tile，就需要更精确的采样式法线；
+  // 否则规则 heightfield 的标准法线计算就足够了。
+  if (shouldUseGroundLocalEditTiles(definition)) {
     computeSampledGroundNormals(definition, positions, normals, heightCache, normalScratch)
   } else {
     computeHeightfieldNormals(positions, normals, chunkRows, chunkColumns, layout.stepX, layout.stepZ)
   }
+
+  // 几何变化后要刷新包围信息。
+  // bounding box / sphere 会影响视锥裁剪、拾取和部分空间查询逻辑。
   geometry.computeBoundingBox()
   geometry.computeBoundingSphere()
   return geometry

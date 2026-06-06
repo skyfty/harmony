@@ -7,6 +7,7 @@ import {
   type CompiledGroundManifest,
   type CompiledGroundRenderTileRecord,
   type GroundDynamicMesh,
+  type GroundRuntimeDynamicMesh,
   type SceneJsonExportDocument,
 } from '@schema/core'
 import { hashString, stableSerialize } from '@schema/stableSerialize'
@@ -477,8 +478,21 @@ export function computeSceneCompiledGroundSourceSignature(
   if (!dynamicGround) {
     return buildKey
   }
+  const runtimeGround = dynamicGround as GroundRuntimeDynamicMesh
+  const surfaceRevision = Number.isFinite(dynamicGround.surfaceRevision)
+    ? Math.max(0, Math.trunc(dynamicGround.surfaceRevision as number))
+    : 0
   const groundSurfaceSignature = hashString(stableSerialize({
     groundSurfaceChunks: summarizeGroundSurfaceChunksForSignature(dynamicGround),
+    surfaceRevision,
+    runtimeHydratedHeightState: runtimeGround.runtimeHydratedHeightState ?? null,
+    runtimeDisableOptimizedChunks: runtimeGround.runtimeDisableOptimizedChunks === true,
+    runtimeManualHeightOverrideCount: Number.isFinite(runtimeGround.runtimeManualHeightOverrideCount)
+      ? Math.max(0, Math.trunc(runtimeGround.runtimeManualHeightOverrideCount as number))
+      : 0,
+    runtimePlanningHeightOverrideCount: Number.isFinite(runtimeGround.runtimePlanningHeightOverrideCount)
+      ? Math.max(0, Math.trunc(runtimeGround.runtimePlanningHeightOverrideCount as number))
+      : 0,
   }))
   return `${buildKey}|surface:${groundSurfaceSignature}`
 }

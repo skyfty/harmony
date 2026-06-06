@@ -43,6 +43,7 @@ type SyncCompiledGroundRenderTilesParams = {
   revision: number
   manifest: CompiledGroundManifest
   loadTileData: (record: CompiledGroundRenderTileRecord) => Promise<ArrayBuffer | null>
+  excludedChunkKeys?: Iterable<string> | null
   activeRadiusTiles?: number
   retainRadiusTiles?: number
   streamingMode?: 'runtime-camera' | 'editor-overview'
@@ -490,6 +491,40 @@ export function collectLoadedCompiledGroundChunkKeys(
   return runtime.loadedChunkKeysCache
 }
 
+export function collectCompiledGroundRenderTileKeysForChunkKeys(
+  manifest: CompiledGroundManifest | null | undefined,
+  chunkKeys: Iterable<string> | null | undefined,
+): string[] {
+  if (!manifest || !chunkKeys) {
+    return []
+  }
+  const normalizedChunkKeys = new Set<string>()
+  for (const key of chunkKeys) {
+    if (typeof key !== 'string') {
+      continue
+    }
+    const trimmed = key.trim()
+    if (!trimmed) {
+      continue
+    }
+    normalizedChunkKeys.add(trimmed)
+  }
+  if (!normalizedChunkKeys.size) {
+    return []
+  }
+  const compiledTileKeys = new Set<string>()
+  for (const record of manifest.renderTiles) {
+    for (const chunkKey of collectCompiledGroundRenderTileChunkKeys(manifest, record)) {
+      if (!normalizedChunkKeys.has(chunkKey)) {
+        continue
+      }
+      compiledTileKeys.add(record.key)
+      break
+    }
+  }
+  return Array.from(compiledTileKeys)
+}
+
 export function getCompiledGroundRenderWorkState(
   groundObject: THREE.Object3D,
 ): { pendingLoads: number; loadedChunkKeysVersion: number } | null {
@@ -641,6 +676,11 @@ export function syncCompiledGroundRenderTiles(params: SyncCompiledGroundRenderTi
   }
   const streamingMode = params.streamingMode === 'editor-overview' ? 'editor-overview' : 'runtime-camera'
   const tileFrustumCulled = params.tileFrustumCulled === true
+  const excludedChunkKeys = new Set(
+    Array.from(params.excludedChunkKeys ?? [])
+      .map((key) => typeof key === 'string' ? key.trim() : '')
+      .filter((key) => key.length > 0),
+  )
   const activeRadiusTiles = Math.max(
     1,
     Math.trunc(params.activeRadiusTiles ?? resolveDefaultCompiledGroundActiveRadiusTiles(params.groundDefinition, params.manifest)),
@@ -661,13 +701,15 @@ export function syncCompiledGroundRenderTiles(params: SyncCompiledGroundRenderTi
     retainRadiusTiles,
     streamingMode,
   )
-  const desiredKeys = new Set(desired.map((record) => record.key))
+  const filteredDesired = desired.filter((record) => !excludedChunkKeys.has(record.key))
+  const desiredKeys = new Set(filteredDesired.map((record) => record.key))
+  const filteredRetainedKeys = new Set(Array.from(retainedKeys).filter((key) => !excludedChunkKeys.has(key)))
   params.camera.getWorldPosition(cameraLocalHelper)
   params.groundObject.worldToLocal(cameraLocalHelper)
   const nextDebugSignature = [
     params.sourceId,
     params.revision,
-    desired.length,
+    filteredDesired.length,
     runtime.meshes.size,
     runtime.pendingLoads.size,
     activeRadiusTiles,
@@ -683,7 +725,7 @@ export function syncCompiledGroundRenderTiles(params: SyncCompiledGroundRenderTi
     if (mesh.frustumCulled !== tileFrustumCulled) {
       mesh.frustumCulled = tileFrustumCulled
     }
-    if (desiredKeys.has(key) || retainedKeys.has(key)) {
+    if (desiredKeys.has(key) || filteredRetainedKeys.has(key)) {
       return
     }
     disposeCompiledGroundRenderMesh(mesh)
@@ -692,7 +734,7 @@ export function syncCompiledGroundRenderTiles(params: SyncCompiledGroundRenderTi
   })
 
   const material = resolveGroundMaterial(params.groundObject)
-  for (const record of desired) {
+  for (const record of filteredDesired) {
     if (runtime.meshes.has(record.key) || runtime.pendingLoads.has(record.key)) {
       continue
     }
@@ -700,6 +742,9 @@ export function syncCompiledGroundRenderTiles(params: SyncCompiledGroundRenderTi
       .then((buffer) => {
         const activeRuntime = renderRuntimeMap.get(params.groundObject)
         if (!activeRuntime || activeRuntime.sourceId !== params.sourceId || activeRuntime.revision !== params.revision) {
+          return
+        }
+        if (excludedChunkKeys.has(record.key)) {
           return
         }
         if (!(buffer instanceof ArrayBuffer)) {

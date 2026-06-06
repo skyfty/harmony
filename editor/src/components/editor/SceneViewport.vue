@@ -245,6 +245,7 @@ import {
 } from '@schema/compiledGround'
 import {
   clearCompiledGroundRenderTiles,
+  collectCompiledGroundRenderTileKeysForChunkKeys,
   collectLoadedCompiledGroundChunkKeys,
   getCompiledGroundRenderWorkState,
   syncCompiledGroundRenderTiles,
@@ -1534,7 +1535,23 @@ function refreshEffectRuntimeTickers(): void {
 const DYNAMIC_MESH_SIGNATURE_KEY = '__harmonyDynamicMeshSignature'
 const GROUND_SCULPT_SKIP_REFRESH_SIGNATURE_KEY = '__harmonyGroundSculptSkipRefreshSignature'
 const GROUND_PREVIEW_HIDDEN_CHUNK_KEYS_USERDATA_KEY = '__harmonyGroundPreviewHiddenChunkKeys'
-const GROUND_COMPILED_HIDDEN_CHUNK_KEYS_USERDATA_KEY = '__harmonyGroundCompiledHiddenChunkKeys'
+const GROUND_COMPILED_EXCLUDED_CHUNK_KEYS_USERDATA_KEY = '__harmonyGroundCompiledExcludedChunkKeys'
+const GROUND_LOADED_COMPILED_CHUNK_KEYS_USERDATA_KEY = '__harmonyGroundLoadedCompiledChunkKeys'
+const GROUND_COMPILED_MANIFEST_REVISION_USERDATA_KEY = '__harmonyGroundCompiledManifestRevision'
+const GROUND_COMPILED_BUILD_KEY_USERDATA_KEY = '__harmonyGroundCompiledBuildKey'
+const viewportGroundCompiledExcludedChunkKeysMap = new Map<string, string[]>()
+
+function resolveViewportGroundStateKey(groundObject: THREE.Object3D): string {
+  const objectNodeId = typeof groundObject.userData?.nodeId === 'string' ? groundObject.userData.nodeId.trim() : ''
+  if (objectNodeId) {
+    return objectNodeId
+  }
+  const groundNode = getGroundNodeFromStore()
+  if (groundNode?.dynamicMesh?.type === 'Ground' && typeof groundNode.id === 'string' && groundNode.id.trim()) {
+    return groundNode.id.trim()
+  }
+  return groundObject.uuid
+}
 
 function resolveGroundSignatureTarget(object: THREE.Object3D): THREE.Object3D {
   return resolveGroundRuntimeObject(object) ?? object
@@ -1560,7 +1577,10 @@ function normalizeViewportGroundHiddenChunkKeys(chunkKeys: Iterable<string> | nu
 
 function readViewportGroundHiddenChunkKeys(
   groundObject: THREE.Object3D,
-  userDataKey: typeof GROUND_PREVIEW_HIDDEN_CHUNK_KEYS_USERDATA_KEY | typeof GROUND_COMPILED_HIDDEN_CHUNK_KEYS_USERDATA_KEY,
+  userDataKey:
+    | typeof GROUND_PREVIEW_HIDDEN_CHUNK_KEYS_USERDATA_KEY
+    | typeof GROUND_COMPILED_EXCLUDED_CHUNK_KEYS_USERDATA_KEY
+    | typeof GROUND_LOADED_COMPILED_CHUNK_KEYS_USERDATA_KEY,
 ): string[] {
   const userData = groundObject.userData ?? (groundObject.userData = {})
   const stored = userData[userDataKey]
@@ -1570,28 +1590,75 @@ function readViewportGroundHiddenChunkKeys(
   return normalizeViewportGroundHiddenChunkKeys(stored)
 }
 
-function applyViewportGroundHiddenChunkKeys(groundObject: THREE.Object3D): boolean {
-  const previewKeys = readViewportGroundHiddenChunkKeys(groundObject, GROUND_PREVIEW_HIDDEN_CHUNK_KEYS_USERDATA_KEY)
-  const compiledKeys = readViewportGroundHiddenChunkKeys(groundObject, GROUND_COMPILED_HIDDEN_CHUNK_KEYS_USERDATA_KEY)
-  return setInfiniteGroundHiddenChunkKeys(groundObject, [...compiledKeys, ...previewKeys])
-}
-
-function setViewportGroundHiddenChunkKeys(
+function writeViewportGroundChunkKeys(
   groundObject: THREE.Object3D,
-  source: 'preview' | 'compiled',
+  userDataKey:
+    | typeof GROUND_PREVIEW_HIDDEN_CHUNK_KEYS_USERDATA_KEY
+    | typeof GROUND_COMPILED_EXCLUDED_CHUNK_KEYS_USERDATA_KEY
+    | typeof GROUND_LOADED_COMPILED_CHUNK_KEYS_USERDATA_KEY,
   chunkKeys: Iterable<string> | null | undefined,
-): boolean {
+): string[] {
   const userData = groundObject.userData ?? (groundObject.userData = {})
-  const userDataKey = source === 'preview'
-    ? GROUND_PREVIEW_HIDDEN_CHUNK_KEYS_USERDATA_KEY
-    : GROUND_COMPILED_HIDDEN_CHUNK_KEYS_USERDATA_KEY
   const normalized = normalizeViewportGroundHiddenChunkKeys(chunkKeys)
   if (normalized.length > 0) {
     userData[userDataKey] = normalized
   } else {
     delete userData[userDataKey]
   }
-  return applyViewportGroundHiddenChunkKeys(groundObject)
+  return normalized
+}
+
+function applyViewportGroundChunkVisibility(groundObject: THREE.Object3D): boolean {
+  const previewKeys = readViewportGroundHiddenChunkKeys(groundObject, GROUND_PREVIEW_HIDDEN_CHUNK_KEYS_USERDATA_KEY)
+  const loadedCompiledKeys = readViewportGroundHiddenChunkKeys(groundObject, GROUND_LOADED_COMPILED_CHUNK_KEYS_USERDATA_KEY)
+  const excludedCompiledKeys = new Set(
+    readViewportGroundHiddenChunkKeys(groundObject, GROUND_COMPILED_EXCLUDED_CHUNK_KEYS_USERDATA_KEY),
+  )
+  const visibleHiddenKeys = new Set<string>(previewKeys)
+  for (const key of loadedCompiledKeys) {
+    if (!excludedCompiledKeys.has(key)) {
+      visibleHiddenKeys.add(key)
+    }
+  }
+  return setInfiniteGroundHiddenChunkKeys(groundObject, visibleHiddenKeys)
+}
+
+function setViewportGroundPreviewHiddenChunkKeys(
+  groundObject: THREE.Object3D,
+  chunkKeys: Iterable<string> | null | undefined,
+): boolean {
+  writeViewportGroundChunkKeys(groundObject, GROUND_PREVIEW_HIDDEN_CHUNK_KEYS_USERDATA_KEY, chunkKeys)
+  return applyViewportGroundChunkVisibility(groundObject)
+}
+
+function setViewportGroundCompiledExcludedChunkKeys(
+  groundObject: THREE.Object3D,
+  chunkKeys: Iterable<string> | null | undefined,
+): boolean {
+  const normalized = writeViewportGroundChunkKeys(groundObject, GROUND_COMPILED_EXCLUDED_CHUNK_KEYS_USERDATA_KEY, chunkKeys)
+  const stateKey = resolveViewportGroundStateKey(groundObject)
+  if (normalized.length > 0) {
+    viewportGroundCompiledExcludedChunkKeysMap.set(stateKey, normalized)
+  } else {
+    viewportGroundCompiledExcludedChunkKeysMap.delete(stateKey)
+  }
+  return applyViewportGroundChunkVisibility(groundObject)
+}
+
+function setViewportGroundLoadedCompiledChunkKeys(
+  groundObject: THREE.Object3D,
+  chunkKeys: Iterable<string> | null | undefined,
+): boolean {
+  writeViewportGroundChunkKeys(groundObject, GROUND_LOADED_COMPILED_CHUNK_KEYS_USERDATA_KEY, chunkKeys)
+  return applyViewportGroundChunkVisibility(groundObject)
+}
+
+function readViewportGroundCompiledExcludedChunkKeys(groundObject: THREE.Object3D): string[] {
+  const cached = viewportGroundCompiledExcludedChunkKeysMap.get(resolveViewportGroundStateKey(groundObject))
+  if (Array.isArray(cached) && cached.length > 0) {
+    return normalizeViewportGroundHiddenChunkKeys(cached)
+  }
+  return readViewportGroundHiddenChunkKeys(groundObject, GROUND_COMPILED_EXCLUDED_CHUNK_KEYS_USERDATA_KEY)
 }
 
 function computeGroundDynamicMeshSignature(definition: GroundDynamicMesh): string {
@@ -3793,12 +3860,11 @@ const groundEditor = createGroundEditor({
   prepareGroundRuntimeDefinition: applyViewportGroundRuntimeMode,
   onSculptPreviewApplied: ({ groundObject, chunkKeys }: {
 	groundObject: THREE.Object3D
-	affectedRegion: { minRow: number; maxRow: number; minColumn: number; maxColumn: number } | null
 	chunkKeys?: string[]
 	chunkCells: number
   }) => {
     if (chunkKeys?.length) {
-      setViewportGroundHiddenChunkKeys(groundObject, 'preview', chunkKeys)
+      setViewportGroundPreviewHiddenChunkKeys(groundObject, chunkKeys)
     }
     lastGroundChunkSetSignatureForPlacement = null
     const ownerNodeId = typeof groundObject.userData?.nodeId === 'string' ? groundObject.userData.nodeId : ''
@@ -3814,11 +3880,18 @@ const groundEditor = createGroundEditor({
     chunkKeys?: string[]
     chunkCells: number
   }) => {
-    setViewportGroundHiddenChunkKeys(groundObject, 'preview', [])
+    setViewportGroundPreviewHiddenChunkKeys(groundObject, [])
     if (affectedRegion && chunkKeys?.length) {
       updateGroundMeshRegion(groundObject, definition, affectedRegion, { touchedChunkKeys: chunkKeys })
     }
     updateGroundMesh(groundObject, definition)
+    if (chunkKeys?.length) {
+      const nextExcludedKeys = new Set([
+        ...readViewportGroundHiddenChunkKeys(groundObject, GROUND_COMPILED_EXCLUDED_CHUNK_KEYS_USERDATA_KEY),
+        ...normalizeViewportGroundHiddenChunkKeys(chunkKeys),
+      ])
+      setViewportGroundCompiledExcludedChunkKeys(groundObject, nextExcludedKeys)
+    }
     syncViewportGroundChunks(groundObject, definition, { forceChunkRefresh: true })
     const signature = computeGroundDynamicMeshSignature(definition)
     const signatureTarget = resolveGroundSignatureTarget(groundObject)
@@ -21652,7 +21725,9 @@ function syncViewportCompiledGroundTiles(
     groundUserData.compiledGroundEnabled = false
     groundUserData.compiledGroundManifest = null
     groundUserData.compiledGroundBuildKey = null
-    setViewportGroundHiddenChunkKeys(groundObject, 'compiled', [])
+    groundUserData[GROUND_COMPILED_MANIFEST_REVISION_USERDATA_KEY] = -1
+    groundUserData[GROUND_COMPILED_BUILD_KEY_USERDATA_KEY] = ''
+    setViewportGroundLoadedCompiledChunkKeys(groundObject, [])
     clearCompiledGroundRenderTiles(groundObject)
     return
   }
@@ -21663,6 +21738,18 @@ function syncViewportCompiledGroundTiles(
   const revision = Number.isFinite(manifest.revision)
     ? Math.max(0, Math.trunc(manifest.revision))
     : computeCompiledGroundManifestRevision(manifest)
+  const previousRevision = Number.isFinite(groundUserData[GROUND_COMPILED_MANIFEST_REVISION_USERDATA_KEY] as number)
+    ? Math.max(0, Math.trunc(groundUserData[GROUND_COMPILED_MANIFEST_REVISION_USERDATA_KEY] as number))
+    : -1
+  const previousBuildKey = typeof groundUserData[GROUND_COMPILED_BUILD_KEY_USERDATA_KEY] === 'string'
+    ? String(groundUserData[GROUND_COMPILED_BUILD_KEY_USERDATA_KEY])
+    : ''
+  const excludedChunkKeys = readViewportGroundCompiledExcludedChunkKeys(groundObject)
+  const excludedTileKeys = collectCompiledGroundRenderTileKeysForChunkKeys(manifest, excludedChunkKeys)
+  const compiledPackageChanged = previousRevision !== revision || previousBuildKey !== buildKey
+  if (compiledPackageChanged && excludedChunkKeys.length > 0) {
+    setViewportGroundCompiledExcludedChunkKeys(groundObject, [])
+  }
   syncCompiledGroundRenderTiles({
     groundObject,
     groundDefinition,
@@ -21671,9 +21758,12 @@ function syncViewportCompiledGroundTiles(
     revision,
     manifest,
     loadTileData: async (record) => sceneStore.getCurrentCompiledGroundTileData(record.path),
+    excludedChunkKeys: excludedTileKeys,
     streamingMode: 'editor-overview',
   })
-  setViewportGroundHiddenChunkKeys(groundObject, 'compiled', collectLoadedCompiledGroundChunkKeys(groundObject, manifest))
+  groundUserData[GROUND_COMPILED_MANIFEST_REVISION_USERDATA_KEY] = revision
+  groundUserData[GROUND_COMPILED_BUILD_KEY_USERDATA_KEY] = buildKey
+  setViewportGroundLoadedCompiledChunkKeys(groundObject, collectLoadedCompiledGroundChunkKeys(groundObject, manifest))
 }
 
 function maybeAutoPersistViewportInfiniteGroundChunks(
@@ -21730,8 +21820,8 @@ function syncViewportGroundRenderMode(options: { rebuildOptimizedMesh?: boolean 
   const groundDefinition = resolveGroundDynamicMeshDefinition()
   if (!groundObject || !groundDefinition) {
     if (groundObject) {
-      setViewportGroundHiddenChunkKeys(groundObject, 'preview', [])
-      setViewportGroundHiddenChunkKeys(groundObject, 'compiled', [])
+      setViewportGroundPreviewHiddenChunkKeys(groundObject, [])
+      setViewportGroundLoadedCompiledChunkKeys(groundObject, [])
       clearCompiledGroundRenderTiles(groundObject)
     }
     return
