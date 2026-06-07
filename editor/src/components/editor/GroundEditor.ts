@@ -12,6 +12,7 @@ import type {
 import {
 	resolveGroundChunkCoordFromWorldPosition,
 	resolveGroundWorldBounds,
+	resolveGroundTileMaterialMap,
 	resolveGroundWorkingGridSize,
 } from '@schema/core'
 import {
@@ -30,7 +31,6 @@ import {
 	type TerrainScatterStoreSnapshot,
 } from '@schema/terrain-scatter'
 import {
-	ensureGroundChunkMeshesForKeys,
 	sculptGround,
 	sampleGroundEffectiveHeightRegion,
 	sampleGroundHeight,
@@ -39,11 +39,9 @@ import {
 	prepareGroundHeightSamplingContext,
 	type GroundHeightSamplingContext,
 	resolveGroundEffectiveHeightAtVertex,
-	stitchGroundChunkNormals,
 	resolveGroundChunkCells,
 	updateGroundChunks,
 	updateGroundMesh,
-	updateGroundMeshRegion,
 	type GroundGeometryUpdateRegion,
 } from '@schema/groundMesh'
 import { sampleGroundRuntimeSurfaceAtWorldXZ } from './groundSurfaceSampler'
@@ -264,7 +262,7 @@ function computeSoftBrushFalloff(normalizedDistanceSquared: number, feather: num
 }
 
 function cloneGroundSurfaceChunks(definition: GroundDynamicMesh): GroundSurfaceChunkTextureMap | null {
-	const source = definition.groundSurfaceChunks
+	const source = resolveGroundTileMaterialMap(definition)
 	if (!source) {
 		return null
 	}
@@ -1443,12 +1441,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				}
 				mesh.geometry.computeVertexNormals()
 			})
-			stitchGroundChunkNormals(
-				params.groundObject,
-				params.definition,
-				params.region ?? null,
-				params.touchedChunkKeys ?? null,
-			)
 			return
 		}
 
@@ -1558,12 +1550,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3))
 			}
 		}
-		stitchGroundChunkNormals(
-			params.groundObject,
-			params.definition,
-			params.region ?? null,
-			params.touchedChunkKeys ?? null,
-		)
 	}
 
 	const assetCacheStore = useAssetCacheStore()
@@ -4486,23 +4472,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		}
 		// 获取触及的地形块键集合
 		const touchedChunkKeys = sculptSessionState?.nodeId === session.nodeId ? sculptSessionState.touchedChunkKeys : null
-		// 确保受影响区域的网格块已创建
-		ensureGroundChunkMeshesForKeys(session.groundObject, session.definition, touchedChunkKeys)
-		// 更新受影响区域的网格几何
-		updateGroundMeshRegion(session.groundObject, session.definition, normalizedRegion ?? region, { touchedChunkKeys })
-		// 计算接缝填充单元数：对于抬升/凹陷操作使用更大的填充范围以保证平滑过渡
-		const seamPaddingCells = operation === 'raise' || operation === 'depress'
-			? Math.max(4, Math.ceil(Math.max(session.definition.cellSize * 4, options.brushDepth.value * (0.75 + options.brushSlope.value)) / session.definition.cellSize))
-			: 2
-		// 创建填充后的更新区域，以处理相邻块之间的接缝
-		const padded: GroundGeometryUpdateRegion = {
-			minRow: Math.max(0, region.minRow - seamPaddingCells),
-			maxRow: Math.min(gridSize.rows, region.maxRow + seamPaddingCells),
-			minColumn: Math.max(0, region.minColumn - seamPaddingCells),
-			maxColumn: Math.min(gridSize.columns, region.maxColumn + seamPaddingCells),
-		}
-		// 缝合地形块法线，确保块边界处法线平滑过渡
-		stitchGroundChunkNormals(session.groundObject, session.definition, padded, touchedChunkKeys)
 		// 触发雕刻预览应用回调，通知外部系统雕刻已完成
 		options.onSculptPreviewApplied?.({
 			groundObject: session.groundObject,
@@ -7285,16 +7254,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		const touchedChunkKeys = sculptSessionState?.nodeId === groundNode.id ? sculptSessionState.touchedChunkKeys : null
 		const gridSize = resolveGroundWorkingGridSize(definition)
 		const normalizedMergedRegion = normalizeGroundGeometryUpdateRegion(mergedRegion, gridSize) ?? mergedRegion
-		ensureGroundChunkMeshesForKeys(groundObject, definition, touchedChunkKeys)
-		updateGroundMeshRegion(groundObject, definition, normalizedMergedRegion, { touchedChunkKeys })
 		// Stitch normals across chunk boundaries to prevent visible seams.
-		const padded: GroundGeometryUpdateRegion = {
-			minRow: Math.max(0, normalizedMergedRegion.minRow - 2),
-			maxRow: Math.min(gridSize.rows, normalizedMergedRegion.maxRow + 2),
-			minColumn: Math.max(0, normalizedMergedRegion.minColumn - 2),
-			maxColumn: Math.min(gridSize.columns, normalizedMergedRegion.maxColumn + 2),
-		}
-		stitchGroundChunkNormals(groundObject, definition, padded, touchedChunkKeys)
 		options.onSculptPreviewApplied?.({
 			groundObject,
 			definition,
@@ -7567,12 +7527,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 							}
 							mesh.geometry.computeVertexNormals()
 						})
-						stitchGroundChunkNormals(
-							groundObject,
-							runtimeDefinition,
-							region ?? null,
-							touchedChunkKeys,
-						)
 					} catch (_error) {
 						/* noop */
 					}

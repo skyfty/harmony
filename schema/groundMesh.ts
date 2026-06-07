@@ -23,8 +23,6 @@ import {
 } from './groundRuntimeHelpers'
 import type {
   GroundTerrainHeightSampler,
-  GroundChunkData,
-  GroundChunkManifestRecord,
   GroundSurfaceChunkLayerRef,
   GroundDynamicMesh,
   CompiledGroundManifest,
@@ -39,6 +37,7 @@ import type {
   GroundSculptOperation,
   SceneMaterialTextureSettings,
 } from './core'
+import { resolveGroundTileMaterialMap } from './core'
 import { addMesh as markInstancedBoundsDirty } from './instancedBoundsTracker'
 import { createTextureSettings } from './material'
 import { hashString, stableSerialize } from './stableSerialize'
@@ -553,51 +552,12 @@ function resolveSharedGroundChunkKeyFromRuntimeKey(key: string): string | null {
   return `${key.slice(separatorIndex + 1)}:${key.slice(0, separatorIndex)}`
 }
 
-function resolveGroundSurfaceSharedKeyFromChunkMeta(
-  chunkRow: unknown,
-  chunkColumn: unknown,
-): string | null {
-  const row = Number(chunkRow)
-  const column = Number(chunkColumn)
-  if (!Number.isFinite(row) || !Number.isFinite(column)) {
-    return null
-  }
-  return resolveSharedGroundChunkKeyFromRuntimeKey(groundChunkKey(Math.trunc(row), Math.trunc(column)))
-}
-
 function resolveRuntimeGroundChunkKeyFromSharedKey(key: string): string | null {
   const parsed = parseGroundChunkKey(key)
   if (!parsed) {
     return null
   }
   return groundChunkKey(parsed.chunkZ, parsed.chunkX)
-}
-
-function resolveRuntimeChunkIndexFromSharedKey(
-  key: string,
-): { row: number; column: number } | null {
-  // 现在 ground 只保留无限地形语义，shared key 直接被视为真实 chunk 坐标。
-  // 不再保留有限模式的边界裁剪参数，避免后续维护者误以为这里还有“场景上限”。
-  const parsed = parseGroundChunkKey(key)
-  if (parsed) {
-    return {
-      row: Math.trunc(parsed.chunkZ),
-      column: Math.trunc(parsed.chunkX),
-    }
-  }
-  const parts = key.split(':')
-  if (parts.length !== 2) {
-    return null
-  }
-  const row = Number(parts[0])
-  const column = Number(parts[1])
-  if (!Number.isFinite(row) || !Number.isFinite(column)) {
-    return null
-  }
-  return {
-    row: Math.trunc(row),
-    column: Math.trunc(column),
-  }
 }
 
 function resolveOptimizedMesh(definition: GroundDynamicMesh | null | undefined): GroundOptimizedMeshData | null {
@@ -632,8 +592,8 @@ function definitionStructureSignature(definition: GroundDynamicMesh): string {
   const optimizedSignature = optimizedMesh
     ? `${optimizedMesh.chunkCells}:${optimizedMesh.chunkCount}:${optimizedMesh.optimizedVertexCount}:${optimizedMesh.optimizedTriangleCount}`
     : 'none'
-  const bakedSurfaceChunkSignature = definition.groundSurfaceChunks
-    ? Object.keys(definition.groundSurfaceChunks).sort().join(',')
+  const bakedSurfaceChunkSignature = resolveGroundTileMaterialMap(definition)
+    ? Object.keys(resolveGroundTileMaterialMap(definition) ?? {}).sort().join(',')
     : 'none'
   const surfaceRevision = Number.isFinite(definition.surfaceRevision) ? Math.trunc(definition.surfaceRevision as number) : 0
   const optimizedChunkState = runtimeDefinition.runtimeDisableOptimizedChunks === true ? 'disabled' : 'enabled'
@@ -1998,18 +1958,8 @@ export function canTreatGroundChunkAsFlatPlane(
   if (!Number.isFinite(normalizedChunkRow) || !Number.isFinite(normalizedChunkColumn)) {
     return false
   }
-
-  const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
-  const spec = computeChunkSpec(definition, normalizedChunkRow, normalizedChunkColumn)
-  if (chunkIntersectsGroundLocalEditTileFromRuntime(runtimeDefinition, spec)) {
-    return false
-  }
-
-  const sharedChunkKey = resolveGroundSurfaceSharedKeyFromChunkMeta(normalizedChunkRow, normalizedChunkColumn)
-  if (!options.allowBakedSurfaceTexture && hasGroundChunkSurfaceTextureData(definition, sharedChunkKey)) {
-    return false
-  }
-
+  void definition
+  void options
   return true
 }
 
@@ -4051,114 +4001,6 @@ export function sampleGroundHeightWithContext(
   return hx0 + (hx1 - hx0) * tz
 }
 
-function sampleGroundHeightWithVertexCache(
-  definition: GroundDynamicMesh,
-  x: number,
-  z: number,
-  vertexHeightCache: Map<number, number>,
-): number {
-  const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
-  const localEditSample = sampleGroundLocalEditHeightAtWorldFromRuntime(runtimeDefinition, x, z)
-  if (Number.isFinite(localEditSample)) {
-    return localEditSample as number
-  }
-  const gridSize = resolveGroundWorkingGridSizeCached(runtimeDefinition)
-  const columns = gridSize.columns
-  const rows = gridSize.rows
-  const bounds = resolveGroundWorldBoundsCached(runtimeDefinition)
-  const cellSize = Number.isFinite(runtimeDefinition.cellSize) && runtimeDefinition.cellSize > 1e-6
-    ? runtimeDefinition.cellSize
-    : 1
-  const terrainSampler = resolveRuntimeTerrainHeightSampler(runtimeDefinition)
-  if (x < bounds.minX || x > bounds.maxX || z < bounds.minZ || z > bounds.maxZ) {
-    return sampleGroundHeightOutsideWorkingBounds(
-      runtimeDefinition,
-      x,
-      z,
-      terrainSampler,
-    )
-  }
-
-  const boundsMinX = bounds.minX
-  const boundsMinZ = bounds.minZ
-  const localColumnFloat = clampInclusive((x - boundsMinX) / cellSize, 0, columns)
-  const localRowFloat = clampInclusive((z - boundsMinZ) / cellSize, 0, rows)
-
-  const column0 = clampVertexIndex(Math.floor(localColumnFloat), columns)
-  const row0 = clampVertexIndex(Math.floor(localRowFloat), rows)
-  const column1 = clampVertexIndex(column0 + 1, columns)
-  const row1 = clampVertexIndex(row0 + 1, rows)
-
-  const tx = clampInclusive(localColumnFloat - column0, 0, 1)
-  const tz = clampInclusive(localRowFloat - row0, 0, 1)
-
-  const resolveCachedVertexHeight = (row: number, column: number): number => {
-    const heightIndex = getGroundVertexIndex(columns, row, column)
-    const cachedHeight = vertexHeightCache.get(heightIndex)
-    if (typeof cachedHeight === 'number' && Number.isFinite(cachedHeight)) {
-      return cachedHeight
-    }
-    const height = resolveGroundEffectiveHeightAtVertexWithContext(runtimeDefinition, row, column, columns, boundsMinX, boundsMinZ, cellSize, terrainSampler)
-    vertexHeightCache.set(heightIndex, height)
-    return height
-  }
-
-  const h00 = resolveCachedVertexHeight(row0, column0)
-  const h10 = resolveCachedVertexHeight(row0, column1)
-  const h01 = resolveCachedVertexHeight(row1, column0)
-  const h11 = resolveCachedVertexHeight(row1, column1)
-
-  const hx0 = h00 + (h10 - h00) * tx
-  const hx1 = h01 + (h11 - h01) * tx
-  return hx0 + (hx1 - hx0) * tz
-}
-
-export function buildGroundChunkDataFromManifestRecord(
-  definition: GroundDynamicMesh,
-  record: GroundChunkManifestRecord,
-): GroundChunkData {
-  const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
-  const resolution = Math.max(1, Math.trunc(record.resolution))
-  const cellSize = record.chunkSizeMeters / resolution
-  const heights = new Float32Array((resolution + 1) * (resolution + 1))
-  const vertexHeightCache = new Map<number, number>()
-  let heightMin = Number.POSITIVE_INFINITY
-  let heightMax = Number.NEGATIVE_INFINITY
-
-  let offset = 0
-  for (let row = 0; row <= resolution; row += 1) {
-    for (let column = 0; column <= resolution; column += 1) {
-      const sampleX = record.originX + column * cellSize
-      const sampleZ = record.originZ + row * cellSize
-      const height = sampleGroundHeightWithVertexCache(runtimeDefinition, sampleX, sampleZ, vertexHeightCache)
-      heights[offset] = height
-      heightMin = Math.min(heightMin, height)
-      heightMax = Math.max(heightMax, height)
-      offset += 1
-    }
-  }
-
-  return {
-    header: {
-      version: 1,
-      key: record.key,
-      chunkX: record.chunkX,
-      chunkZ: record.chunkZ,
-      originX: record.originX,
-      originZ: record.originZ,
-      chunkSizeMeters: record.chunkSizeMeters,
-      resolution,
-      cellSize,
-      revision: Math.max(0, Math.trunc(record.revision)),
-      heightMin: Number.isFinite(heightMin) ? heightMin : 0,
-      heightMax: Number.isFinite(heightMax) ? heightMax : 0,
-      updatedAt: Math.max(0, Math.trunc(record.updatedAt)),
-      source: record.source ?? null,
-    },
-    heights,
-  }
-}
-
 export function sampleGroundNormal(
   definition: GroundRuntimeDynamicMesh,
   x: number,
@@ -4284,22 +4126,6 @@ function createGroundOptimizedChunkGeometry(chunk: GroundOptimizedMeshChunkData)
   geometry.computeBoundingBox()
   geometry.computeBoundingSphere()
   return geometry
-}
-
-function applyGroundOptimizedChunkGeometry(
-  geometry: THREE.BufferGeometry,
-  chunk: GroundOptimizedMeshChunkData,
-): boolean {
-  geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(chunk.positions), 3))
-  geometry.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(chunk.uvs), 2))
-  const indexArray = chunk.positions.length / 3 > 65535
-    ? new Uint32Array(chunk.indices)
-    : new Uint16Array(chunk.indices)
-  geometry.setIndex(new THREE.BufferAttribute(indexArray, 1))
-  geometry.computeVertexNormals()
-  geometry.computeBoundingBox()
-  geometry.computeBoundingSphere()
-  return true
 }
 
 function computeHeightfieldNormals(
@@ -4447,6 +4273,29 @@ function computeSampledGroundNormals(
     normals[offset + 1] = normal.y
     normals[offset + 2] = normal.z
   }
+}
+
+export type GroundGeometryUpdateRegion = {
+  minRow: number
+  maxRow: number
+  minColumn: number
+  maxColumn: number
+}
+
+function sampleGroundSeamAwareNormal(
+  definition: GroundRuntimeDynamicMesh,
+  x: number,
+  z: number,
+  target?: THREE.Vector3,
+  heightCache?: GroundHeightSampleCache,
+  scratch?: GroundNormalScratch,
+): THREE.Vector3 {
+  const workingHeightCache = heightCache ?? new Map<number, Map<number, number>>()
+  const result = sampleGroundNormalWithHeightCache(definition, x, z, target, workingHeightCache)
+  void scratch
+  // The old seam-aware branch only mattered for the removed GroundChunk split path.
+  // Keep the function as a thin wrapper so sampled normals still work for the remaining runtime path.
+  return result
 }
 
 function buildGroundChunkGeometry(definition: GroundRuntimeDynamicMesh, spec: GroundChunkSpec): THREE.BufferGeometry {
@@ -5516,77 +5365,6 @@ function releaseChunkToPool(state: GroundRuntimeState, runtime: GroundChunkRunti
   if (parent && (parent as THREE.Object3D).isObject3D) {
     markGroundTextureTraversalCacheDirty(parent as THREE.Object3D)
   }
-}
-
-function ensureChunkMesh(
-  root: THREE.Group,
-  state: GroundRuntimeState,
-  definition: GroundRuntimeDynamicMesh,
-  chunkRow: number,
-  chunkColumn: number,
-): GroundChunkRuntime {
-  const key = groundChunkKey(chunkRow, chunkColumn)
-  const existing = state.chunks.get(key)
-  if (existing) {
-    return existing
-  }
-  const spec = computeChunkSpec(definition, chunkRow, chunkColumn)
-  const poolKey = chunkPoolKey(spec)
-  const pool = state.meshPool.get(poolKey)
-  const pooledMesh = pool && pool.length ? pool.pop() : undefined
-  if (pool && pool.length === 0) {
-    state.meshPool.delete(poolKey)
-  }
-  const sculptedCached = (root.userData as Record<string, unknown> | undefined)?.groundSculptedMaterial
-  const shouldUseSculptedMaterial = (sculptedCached && !Array.isArray(sculptedCached))
-    ? chunkIntersectsGroundLocalEditTileFromRuntime(definition, spec)
-    : false
-  let material = shouldUseSculptedMaterial
-    ? (sculptedCached as THREE.Material)
-    : resolveGroundRuntimeMaterial(root, state)
-
-  // Fallback placeholder (shared material should be set/cached by SceneGraph/editor).
-  if (!material) {
-    material = new THREE.MeshStandardMaterial({
-      color: '#707070',
-      roughness: 1.0,
-      metalness: 0.1,
-    })
-  }
-
-  const mesh = pooledMesh ?? new THREE.Mesh(buildGroundChunkGeometry(definition, spec), material)
-  if (mesh.material !== material) {
-    mesh.material = material
-  }
-
-  // If we reused a pooled mesh, refresh its geometry for the new chunk spec.
-  if (pooledMesh) {
-    const bufferGeometry = mesh.geometry
-    if (bufferGeometry instanceof THREE.BufferGeometry) {
-      const ok = updateChunkGeometry(bufferGeometry, definition, spec)
-      if (!ok) {
-        bufferGeometry.dispose()
-        mesh.geometry = buildGroundChunkGeometry(definition, spec)
-      }
-    } else {
-      mesh.geometry = buildGroundChunkGeometry(definition, spec)
-    }
-  }
-
-  mesh.name = `GroundChunk:${chunkRow},${chunkColumn}`
-  mesh.receiveShadow = true
-  mesh.castShadow = state.castShadow
-  mesh.frustumCulled = true
-  mesh.userData.dynamicMeshType = 'Ground'
-  mesh.userData.groundChunk = { ...spec, chunkRow, chunkColumn }
-  mesh.userData.groundChunkTextureReady = true
-  mesh.visible = true
-  root.add(mesh)
-  markGroundTextureTraversalCacheDirty(root)
-  const runtime: GroundChunkRuntime = { key, chunkRow, chunkColumn, spec, mesh }
-  state.chunks.set(key, runtime)
-  markGroundVisibleChunkKeysDirty(state)
-  return runtime
 }
 
 function disposeChunk(runtime: GroundChunkRuntime): void {
@@ -6729,7 +6507,7 @@ function getGroundTextureTraversalCache(root: THREE.Object3D): GroundTextureTrav
     if (mesh.userData?.groundChunkBatch) {
       return
     }
-    if (mesh.userData?.groundChunk || mesh.userData?.compiledGroundTile) {
+    if (mesh.userData?.compiledGroundTile) {
       meshes.push(mesh)
     }
   })
@@ -7106,10 +6884,11 @@ function resolveGroundChunkTextureBundleSources(
   definition: GroundDynamicMesh,
   chunkKey: string | null,
 ): GroundChunkTextureBundleSources | null {
-  if (!chunkKey || !definition.groundSurfaceChunks) {
+  const tileMaterialMap = resolveGroundTileMaterialMap(definition)
+  if (!chunkKey || !tileMaterialMap) {
     return null
   }
-  const entry = definition.groundSurfaceChunks[chunkKey] ?? null
+  const entry = tileMaterialMap[chunkKey] ?? null
   if (!entry) {
     return null
   }
@@ -7138,16 +6917,6 @@ function resolveGroundChunkTextureBundleSources(
     surfaceLayers,
     revision: Number.isFinite(entry.revision) ? Math.max(0, Math.trunc(entry.revision)) : 0,
   }
-}
-
-function hasGroundChunkSurfaceTextureData(
-  definition: GroundDynamicMesh,
-  chunkKey: string | null,
-): boolean {
-  if (!chunkKey || !definition.groundSurfaceChunks) {
-    return false
-  }
-  return Boolean(definition.groundSurfaceChunks[chunkKey])
 }
 
 function loadGroundChunkSplatMaps(sources: string[], chunkKey: string): THREE.Texture[] {
@@ -7637,8 +7406,8 @@ function applyGroundTextureToChunkMesh(
   }
   const bundle = resolveGroundChunkTextureBundleSources(definition, chunkKey)
   const activeSource = bundle?.albedo ?? null
-  if (bundle && !definition.groundSurfaceChunks) {
-    throw new Error(`Missing baked groundSurfaceChunks for ground chunk ${chunkKey}.`)
+  if (bundle && !resolveGroundTileMaterialMap(definition)) {
+    throw new Error(`Missing baked ground tile material map for chunk ${chunkKey}.`)
   }
   const hasBakedBundle = Boolean(
     activeSource
@@ -7763,7 +7532,7 @@ function applyGroundTextureToChunkMesh(
     return
   }
 
-  // groundSurfaceChunks[*].textureAssetId is treated as the final baked albedo for this chunk.
+  // groundTileMaterialMap[*].textureAssetId is treated as the final baked albedo for this tile.
   // Ground inspector color reaches baked chunks through landform/ground bake, so the runtime
   // chunk material must stay white and only contribute non-color material properties here.
   const nextMaterial = createGroundChunkTexturedMaterial(baseMaterial)
@@ -7846,13 +7615,9 @@ export function applyGroundTextureToRuntimeChunkMesh(params: {
     rootUserData = null,
     groundSplatRuntimeProfile = null,
   } = params
-  const chunkSpec = mesh.userData?.groundChunk as GroundChunkSpec | undefined
-  const chunkMeta = chunkSpec as { chunkRow?: number; chunkColumn?: number } | null
   const isCompiledGroundTile = mesh.userData?.compiledGroundTile === true || Boolean(compiledGroundTileKey)
   const resolvedChunkKey = chunkKey
-    ?? (chunkSpec
-      ? resolveGroundSurfaceSharedKeyFromChunkMeta(chunkMeta?.chunkRow, chunkMeta?.chunkColumn)
-      : resolveCompiledGroundTileChunkKey(rootUserData ?? {}, definition, compiledGroundTileKey, mesh))
+    ?? resolveCompiledGroundTileChunkKey(rootUserData ?? {}, definition, compiledGroundTileKey, mesh)
   const compiledManifest = rootUserData?.compiledGroundManifest as { revision?: unknown } | null | undefined
   const compiledManifestRevision = Number(compiledManifest?.revision)
   const cacheScopeSignature = [
@@ -7869,7 +7634,7 @@ export function applyGroundTextureToRuntimeChunkMesh(params: {
     mesh,
     definition,
     resolvedChunkKey,
-    chunkSpec ?? null,
+    null,
     baseMaterial,
     null,
     resolvedBaseMaterialSignature,
@@ -7890,12 +7655,8 @@ function applyGroundTextureToObject(object: THREE.Object3D, definition: GroundDy
     groundSplatRuntimeProfile?: GroundSplatRuntimeProfile | null
   }).groundSplatRuntimeProfile ?? null
   const cachedBaseMaterial = rootUserData.groundMaterial
-  const cachedSculptedMaterial = rootUserData.groundSculptedMaterial
   const baseMaterial = cachedBaseMaterial && !Array.isArray(cachedBaseMaterial)
     ? cachedBaseMaterial as THREE.Material
-    : null
-  const sculptedMaterial = cachedSculptedMaterial && !Array.isArray(cachedSculptedMaterial)
-    ? cachedSculptedMaterial as THREE.Material
     : null
   const compiledManifest = rootUserData.compiledGroundManifest as { revision?: unknown } | null | undefined
   const compiledManifestRevision = Number(compiledManifest?.revision)
@@ -7912,7 +7673,6 @@ function applyGroundTextureToObject(object: THREE.Object3D, definition: GroundDy
       ? Math.max(0, Math.trunc(definition.groundSplatBake?.revision as number))
       : 0,
     baseMaterial ? resolveGroundBaseMaterialSignature(baseMaterial) : 'nobase',
-    sculptedMaterial ? resolveGroundBaseMaterialSignature(sculptedMaterial) : 'nosculpt',
     normalizedProfile.maxLayers,
     normalizedProfile.enableLayerNormalMap ? 1 : 0,
   ].join('|')
@@ -7921,24 +7681,17 @@ function applyGroundTextureToObject(object: THREE.Object3D, definition: GroundDy
   }
 
   const traversalCache = getGroundTextureTraversalCache(root)
-  const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
   traversalCache.meshes.forEach((mesh) => {
-    const chunkSpec = mesh.userData?.groundChunk as GroundChunkSpec | undefined
     const isCompiledGroundTile = mesh.userData?.compiledGroundTile === true
     const compiledGroundTileKey = typeof mesh.userData?.compiledGroundTileKey === 'string'
       ? mesh.userData.compiledGroundTileKey
       : null
     const currentMaterial = Array.isArray(mesh.material) ? (mesh.material[0] ?? null) : (mesh.material ?? null)
-    const shouldUseSculptedMaterial = chunkSpec && sculptedMaterial
-      ? chunkIntersectsGroundLocalEditTileFromRuntime(runtimeDefinition, chunkSpec)
-      : false
-    const chunkBaseMaterial = shouldUseSculptedMaterial
-      ? sculptedMaterial
-      : (baseMaterial ?? currentMaterial)
+    const chunkBaseMaterial = baseMaterial ?? currentMaterial
     const chunkBaseMaterialSignature = chunkBaseMaterial
       ? resolveGroundBaseMaterialSignature(chunkBaseMaterial)
       : 'none'
-    if ((chunkSpec || isCompiledGroundTile) && chunkBaseMaterial) {
+    if (isCompiledGroundTile && chunkBaseMaterial) {
       applyGroundTextureToRuntimeChunkMesh({
         mesh,
         definition,
@@ -7951,175 +7704,6 @@ function applyGroundTextureToObject(object: THREE.Object3D, definition: GroundDy
     }
   })
   rootUserData.groundTextureTraversalAppliedSignature = currentSignature
-}
-
-export type GroundGeometryUpdateRegion = {
-  minRow: number
-  maxRow: number
-  minColumn: number
-  maxColumn: number
-}
-
-function updateChunkGeometry(geometry: THREE.BufferGeometry, definition: GroundRuntimeDynamicMesh, spec: GroundChunkSpec): boolean {
-  const optimizedChunk = resolveOptimizedChunkForSpec(definition, spec)
-  if (optimizedChunk) {
-    return applyGroundOptimizedChunkGeometry(geometry, optimizedChunk)
-  }
-
-  const chunkCells = resolveRuntimeChunkCells(definition)
-  const chunkRow = Math.trunc(spec.startRow / Math.max(1, chunkCells))
-  const chunkColumn = Math.trunc(spec.startColumn / Math.max(1, chunkCells))
-  if (canTreatGroundChunkAsFlatPlane(definition, chunkRow, chunkColumn, { allowBakedSurfaceTexture: true })) {
-    return false
-  }
-
-  const layout = resolveGroundChunkGeometryLayout(definition, spec)
-  const chunkColumns = layout.segmentColumns
-  const chunkRows = layout.segmentRows
-  const expectedVertexCount = (chunkColumns + 1) * (chunkRows + 1)
-  const positionAttr = geometry.getAttribute('position') as THREE.BufferAttribute | undefined
-  const normalAttr = geometry.getAttribute('normal') as THREE.BufferAttribute | undefined
-  const uvAttr = geometry.getAttribute('uv') as THREE.BufferAttribute | undefined
-  if (!positionAttr || !normalAttr || !uvAttr || positionAttr.count !== expectedVertexCount || normalAttr.count !== expectedVertexCount || uvAttr.count !== expectedVertexCount) {
-    return false
-  }
-  const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1
-  const chunkSizeMeters = resolveInfiniteChunkSizeMeters(definition)
-  const chunkOrigin = resolveInfiniteGroundGridOriginMeters(chunkSizeMeters)
-  const startX = chunkOrigin + spec.startColumn * cellSize
-  const startZ = chunkOrigin + spec.startRow * cellSize
-  const heightCache: GroundHeightSampleCache = new Map<number, Map<number, number>>()
-  const normalScratch = createGroundNormalScratch()
-  const importedLocalEditCellSize = resolveGroundChunkLocalEditCellSize(definition, spec)
-  const useWorldSpaceHeightSampling = importedLocalEditCellSize > (Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1)
-  const heightRegion = useWorldSpaceHeightSampling
-    ? null
-    : sampleGroundEffectiveHeightRegion(
-      definition,
-      spec.startRow,
-      spec.startRow + spec.rows,
-      spec.startColumn,
-      spec.startColumn + spec.columns,
-    )
-  const heightValues = heightRegion?.values
-  const heightStride = heightRegion?.stride ?? 0
-  let vertexIndex = 0
-  for (let localRow = 0; localRow <= chunkRows; localRow += 1) {
-    const z = startZ + localRow * layout.stepZ
-    for (let localColumn = 0; localColumn <= chunkColumns; localColumn += 1) {
-      const x = startX + localColumn * layout.stepX
-      const height = useWorldSpaceHeightSampling
-        ? sampleGroundHeightCached(definition, x, z, heightCache)
-        : heightValues?.[localRow * heightStride + localColumn] ?? sampleGroundHeightCached(definition, x, z, heightCache)
-      const u = chunkColumns === 0 ? 0 : localColumn / chunkColumns
-      const v = chunkRows === 0 ? 0 : 1 - (localRow / chunkRows)
-      positionAttr.setXYZ(vertexIndex, x, height, z)
-      uvAttr.setXY(vertexIndex, u, v)
-      vertexIndex += 1
-    }
-  }
-  positionAttr.needsUpdate = true
-  if (useWorldSpaceHeightSampling || shouldUseGroundLocalEditTiles(definition)) {
-    computeSampledGroundNormals(definition, positionAttr.array as Float32Array, normalAttr.array as Float32Array, heightCache, normalScratch)
-  } else {
-    computeHeightfieldNormals(positionAttr.array as Float32Array, normalAttr.array as Float32Array, chunkRows, chunkColumns, layout.stepX, layout.stepZ)
-  }
-  normalAttr.needsUpdate = true
-  uvAttr.needsUpdate = true
-  geometry.computeBoundingBox()
-  geometry.computeBoundingSphere()
-  return true
-}
-
-function updateChunkGeometryRegion(
-  geometry: THREE.BufferGeometry,
-  definition: GroundRuntimeDynamicMesh,
-  spec: GroundChunkSpec,
-  region: GroundGeometryUpdateRegion,
-  options: { computeNormals?: boolean } = {},
-): boolean {
-  const optimizedChunk = resolveOptimizedChunkForSpec(definition, spec)
-  if (optimizedChunk) {
-    return applyGroundOptimizedChunkGeometry(geometry, optimizedChunk)
-  }
-
-  const layout = resolveGroundChunkGeometryLayout(definition, spec)
-  const chunkColumns = Math.max(1, Math.trunc(layout.segmentColumns))
-  const chunkRows = Math.max(1, Math.trunc(layout.segmentRows))
-  const vertexColumns = chunkColumns + 1
-  const expectedVertexCount = (chunkColumns + 1) * (chunkRows + 1)
-  const positionAttr = geometry.getAttribute('position') as THREE.BufferAttribute | undefined
-  const normalAttr = geometry.getAttribute('normal') as THREE.BufferAttribute | undefined
-  const uvAttr = geometry.getAttribute('uv') as THREE.BufferAttribute | undefined
-  if (!positionAttr || !normalAttr || !uvAttr || positionAttr.count !== expectedVertexCount || normalAttr.count !== expectedVertexCount || uvAttr.count !== expectedVertexCount) {
-    return false
-  }
-
-  const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1
-  const startX = resolveInfiniteGroundGridOriginMeters(resolveInfiniteChunkSizeMeters(definition)) + spec.startColumn * cellSize
-  const startZ = resolveInfiniteGroundGridOriginMeters(resolveInfiniteChunkSizeMeters(definition)) + spec.startRow * cellSize
-  const heightCache: GroundHeightSampleCache = new Map<number, Map<number, number>>()
-  const normalScratch = createGroundNormalScratch()
-
-  const regionStartRow = clampInclusive(region.minRow, spec.startRow, spec.startRow + spec.rows)
-  const regionEndRow = clampInclusive(region.maxRow, spec.startRow, spec.startRow + spec.rows)
-  const regionStartColumn = clampInclusive(region.minColumn, spec.startColumn, spec.startColumn + spec.columns)
-  const regionEndColumn = clampInclusive(region.maxColumn, spec.startColumn, spec.startColumn + spec.columns)
-
-  const startLocalColumn = clampInclusive(regionStartColumn - spec.startColumn, 0, chunkColumns)
-  const endLocalColumn = clampInclusive(regionEndColumn - spec.startColumn, 0, chunkColumns)
-  const startLocalRow = clampInclusive(regionStartRow - spec.startRow, 0, chunkRows)
-  const endLocalRow = clampInclusive(regionEndRow - spec.startRow, 0, chunkRows)
-
-  if (startLocalColumn > endLocalColumn || startLocalRow > endLocalRow) {
-    return true
-  }
-
-  for (let localRow = startLocalRow; localRow <= endLocalRow; localRow += 1) {
-    const z = startZ + localRow * layout.stepZ
-    for (let localColumn = startLocalColumn; localColumn <= endLocalColumn; localColumn += 1) {
-      const x = startX + localColumn * layout.stepX
-      const vertexIndex = localRow * vertexColumns + localColumn
-      const height = sampleGroundHeightCached(definition, x, z, heightCache)
-      positionAttr.setXYZ(vertexIndex, x, height, z)
-    }
-  }
-  positionAttr.needsUpdate = true
-  if (options.computeNormals !== false) {
-    if (shouldUseGroundLocalEditTiles(definition)) {
-      computeSampledGroundNormals(definition, positionAttr.array as Float32Array, normalAttr.array as Float32Array, heightCache, normalScratch)
-    } else {
-      computeHeightfieldNormals(positionAttr.array as Float32Array, normalAttr.array as Float32Array, chunkRows, chunkColumns, layout.stepX, layout.stepZ)
-    }
-    normalAttr.needsUpdate = true
-  }
-  geometry.computeBoundingBox()
-  geometry.computeBoundingSphere()
-  return true
-}
-
-function refreshChunkRuntimeGeometry(
-  runtime: GroundChunkRuntime,
-  definition: GroundRuntimeDynamicMesh,
-  options: {
-    region?: GroundGeometryUpdateRegion
-    computeNormals?: boolean
-  } = {},
-): boolean {
-  const currentGeometry = runtime.mesh.geometry
-  if (!(currentGeometry instanceof THREE.BufferGeometry)) {
-    runtime.mesh.geometry = buildGroundChunkGeometry(definition, runtime.spec)
-    return true
-  }
-  const updated = options.region
-    ? updateChunkGeometryRegion(currentGeometry, definition, runtime.spec, options.region, { computeNormals: options.computeNormals })
-    : updateChunkGeometry(currentGeometry, definition, runtime.spec)
-  if (updated) {
-    return true
-  }
-  currentGeometry.dispose()
-  runtime.mesh.geometry = buildGroundChunkGeometry(definition, runtime.spec)
-  return true
 }
 
 export function createGroundMesh(definition: GroundDynamicMesh): THREE.Object3D {
@@ -8142,7 +7726,6 @@ export function createGroundMesh(definition: GroundDynamicMesh): THREE.Object3D 
   const group = new THREE.Group()
   group.name = 'Ground'
   group.userData.dynamicMeshType = 'Ground'
-  group.userData.groundChunked = true
   ensureGroundRuntimeState(group, runtimeDefinition)
   const cellSize = Number.isFinite(runtimeDefinition.cellSize) && runtimeDefinition.cellSize > 0 ? runtimeDefinition.cellSize : 1
   const seedRadius = Math.max(50, resolveRuntimeChunkCells(runtimeDefinition) * cellSize * 1.5)
@@ -8163,7 +7746,7 @@ export function setGroundMaterial(target: THREE.Object3D, material: THREE.Materi
   target.traverse((child) => {
     const mesh = child as THREE.Mesh
     if (mesh?.isMesh) {
-      if (mesh.userData?.groundChunk || mesh.userData?.compiledGroundTile) {
+      if (mesh.userData?.compiledGroundTile) {
         return
       }
       const currentMaterial = Array.isArray(mesh.material) ? (mesh.material[0] ?? null) : (mesh.material ?? null)
@@ -8311,10 +7894,9 @@ export function updateGroundChunks(
   ].join('|')
   // 这个 signature 是“当前应该保留哪些 chunk”的摘要；只要它变了，就说明窗口发生了实质变化。
   const desiredWindowChanged = nextDesiredSignature !== state.desiredSignature
-  const hasPendingWork = state.pendingCreates.length > 0 || state.pendingDestroys.length > 0
+  const hasPendingWork = false
   let desiredFlatChunkGroups: Map<string, { spec: GroundChunkSpec; keys: string[] }> | null = null
   const flatChunkGroups = new Map<string, { spec: GroundChunkSpec; keys: string[] }>()
-  const transitionToFlatKeys = new Set<string>()
 
   // Force mode should at least guarantee the camera's core chunk exists.
   let allowBypassInterval = false
@@ -8344,151 +7926,28 @@ export function updateGroundChunks(
   state.lastCameraLocalX = localX
   state.lastCameraLocalZ = localZ
 
+  if (state.chunks.size > 0) {
+    state.chunks.forEach((runtime) => {
+      releaseChunkToPool(state, runtime)
+    })
+    state.chunks.clear()
+    state.pendingCreates = []
+    state.pendingDestroys = []
+    markGroundVisibleChunkKeysDirty(state)
+  }
+
   // Rebuild pending queues when the desired window changes.
   if (force || nextDesiredSignature !== state.desiredSignature) {
     // 只有当目标窗口真的变化时，才重建创建/销毁队列。
     // 这样可以把“持续加载”与“窗口变化”分离开，避免每一帧都重新排序整个 chunk 集合。
     state.desiredSignature = nextDesiredSignature
-    const localEditTiles = getLocalEditTiles()
-
-    // Create queue (nearest-first).
-    // 创建队列按距离从近到远排序，保证相机附近优先出现内容，远处 chunk 可以稍后再补。
-    const creates: Array<{ key: GroundChunkKey; chunkRow: number; chunkColumn: number; priority: number; distSq: number }> = []
-
-    // Prefer a 3x3 core around the camera chunk in force mode.
-    let forceCore: Set<string> | null = null
-    if (force && camera) {
-      // forceCore 是一个 3x3 核心区优先集合：调试或强刷时先保中心，再补外围。
-      // 这样即使预算很小，也能先让相机周围看起来“站稳”，而不是先加载远处 chunk。
-      const cameraChunkColumn = normalizeChunkColumn(cameraChunkCoord.chunkX)
-      const cameraChunkRow = normalizeChunkRow(cameraChunkCoord.chunkZ)
-      forceCore = new Set<string>()
-      for (let dr = -1; dr <= 1; dr += 1) {
-        for (let dc = -1; dc <= 1; dc += 1) {
-          const cr = cameraChunkRow + dr
-          const cc = cameraChunkColumn + dc
-          if (cr < minLoadChunkRow || cr > maxLoadChunkRow || cc < minLoadChunkColumn || cc > maxLoadChunkColumn) {
-            continue
-          }
-          forceCore.add(groundChunkKey(cr, cc))
-        }
-      }
-    }
-
-    for (let cr = minLoadChunkRow; cr <= maxLoadChunkRow; cr += 1) {
-      for (let cc = minLoadChunkColumn; cc <= maxLoadChunkColumn; cc += 1) {
-        const key = groundChunkKey(cr, cc)
-        if (state.hiddenChunkKeys.has(key)) {
-          continue
-        }
-
-        const spec = computeChunkSpec(definition, cr, cc)
-        const isDenseChunkLoaded = state.chunks.has(key)
-        const hasBakedSurfaceChunk = hasGroundChunkSurfaceTextureData(
-          definition,
-          resolveSharedGroundChunkKeyFromRuntimeKey(key),
-        )
-        const hasLocalEditCoverage = chunkIntersectsGroundLocalEditTileFromRuntime(runtimeDefinition, spec, localEditTiles)
-        const requiresDenseChunkMesh = forceDenseChunkMeshes || hasBakedSurfaceChunk || hasLocalEditCoverage
-        // 先算出这个 chunk 的中心点位置，再与相机位置比较，用于创建优先级排序。
-        const chunkWorldBounds = resolveGroundChunkWorldBoundsFromSpec(definition, spec)
-        const centerX = (chunkWorldBounds.minX + chunkWorldBounds.maxX) * 0.5
-        const centerZ = (chunkWorldBounds.minZ + chunkWorldBounds.maxZ) * 0.5
-        const dx = centerX - localX
-        const dz = centerZ - localZ
-        const priority = forceCore && forceCore.has(key) ? -1 : 0
-        if (requiresDenseChunkMesh) {
-          // 覆盖了局部雕刻或 baked surface 纹理的 chunk，必须走独立 Mesh 路径。
-          // 这样 landform 烘焙结果才能真正进入 per-chunk 材质，而不是被 flat InstancedMesh 吞掉。
-          if (!isDenseChunkLoaded) {
-            creates.push({ key, chunkRow: cr, chunkColumn: cc, priority, distSq: dx * dx + dz * dz })
-          }
-        } else {
-          // 没有局部雕刻的 chunk 进入 flat 分组，后续会被合并成 InstancedMesh 批次。
-          // 这就是 hybrid 方案的关键：大部分地形走快路径，只有少量被编辑过的区域保留慢路径。
-          if (isDenseChunkLoaded) {
-            transitionToFlatKeys.add(key)
-          }
-          // flat chunk 按 spec 分组，是为了让相同尺寸的 chunk 共用一套 InstancedMesh 几何。
-          const specKey = chunkPoolKey(spec)
-          const entry = flatChunkGroups.get(specKey)
-          if (entry) {
-            entry.keys.push(key)
-          } else {
-            flatChunkGroups.set(specKey, {
-              spec,
-              keys: [key],
-            })
-          }
-        }
-      }
-    }  
-
-    creates.sort((a, b) => (a.priority - b.priority) || (a.distSq - b.distSq))
-    state.pendingCreates = creates
-
-    if (definition.groundSurfaceChunks && Object.keys(definition.groundSurfaceChunks).length > 0) {
-      const bakedChunkKeySet = new Set(Object.keys(definition.groundSurfaceChunks))
-      const desiredDenseChunkKeys = creates
-        .map((entry) => entry.key)
-        .filter((key) => bakedChunkKeySet.has(key))
-      state.chunks.forEach((_runtime, key) => {
-        if (bakedChunkKeySet.has(key) && !desiredDenseChunkKeys.includes(key)) {
-          desiredDenseChunkKeys.push(key)
-        }
-      })
-    }
-
-    transitionToFlatKeys.forEach((key) => {
-      // 当 chunk 从独立 Mesh 退回平面实例时，必须先释放旧 Mesh，避免同一块地形同时存在两份渲染对象。
-      // 这个步骤如果漏掉，会出现“画面看起来没问题，但内存/渲染数量一直上涨”的隐性问题。
-      const runtime = state.chunks.get(key)
-      if (!runtime) {
-        return
-      }
-      releaseChunkToPool(state, runtime)
-      state.chunks.delete(key)
-      markGroundVisibleChunkKeysDirty(state)
-    })
-
-    // Destroy queue (farthest-first outside unload radius).
-    // 卸载队列按距离从远到近排序，优先删除最远的 chunk，保留相机附近的大缓冲带。
-    const destroys: Array<{ key: GroundChunkKey; distSq: number }> = []
-    state.chunks.forEach((entry, key) => {
-      if (state.hiddenChunkKeys.has(key)) {
-        // 隐藏的 chunk 直接视为“必须卸载”，并给一个无穷大距离，确保它们总是最先被清理。
-        destroys.push({ key, distSq: Number.POSITIVE_INFINITY })
-        return
-      }
-      if (
-        entry.chunkRow >= minUnloadChunkRow &&
-        entry.chunkRow <= maxUnloadChunkRow &&
-        entry.chunkColumn >= minUnloadChunkColumn &&
-        entry.chunkColumn <= maxUnloadChunkColumn
-      ) {
-        // 落在更大的卸载缓冲区里的 chunk 继续保留，避免相机稍微挪动时立刻把它删掉。
-        return
-      }
-      const spec = entry.spec
-      // 对于真正要卸载的 chunk，再按它的中心点与相机距离排序，越远越先删。
-      const chunkWorldBounds = resolveGroundChunkWorldBoundsFromSpec(definition, spec)
-      const centerX = (chunkWorldBounds.minX + chunkWorldBounds.maxX) * 0.5
-      const centerZ = (chunkWorldBounds.minZ + chunkWorldBounds.maxZ) * 0.5
-      const dx = centerX - localX
-      const dz = centerZ - localZ
-      destroys.push({ key, distSq: dx * dx + dz * dz })
-    })
-    destroys.sort((a, b) => b.distSq - a.distSq)
-    state.pendingDestroys = destroys
+    state.pendingCreates = []
+    state.pendingDestroys = []
   } else {
     // Drop stale pending work.
     // 如果窗口没变，就只清理那些因为外部状态变化而变得不再有效的待处理项，不重新构建整个队列。
-    if (state.pendingCreates.length) {
-      state.pendingCreates = state.pendingCreates.filter((entry) => !state.chunks.has(entry.key))
-    }
-    if (state.pendingDestroys.length) {
-      state.pendingDestroys = state.pendingDestroys.filter((entry) => state.chunks.has(entry.key))
-    }
+    state.pendingCreates = []
+    state.pendingDestroys = []
   }
 
   // flat 分组不直接创建 Mesh，而是先收集起来，后面统一交给 syncGroundFlatChunkBatches(...) 同步。
@@ -8625,102 +8084,7 @@ export function updateGroundChunks(
     clearGroundFlatChunkBatches(root)
   }
 
-  const defaultBudget: GroundChunkBudget = camera
-    ? ({ maxCreatePerUpdate: 6, maxDestroyPerUpdate: 8 } satisfies GroundChunkBudget)
-    : ({ maxCreatePerUpdate: 12, maxDestroyPerUpdate: 16, maxMs: 8 } satisfies GroundChunkBudget)
-  // 没有显式预算时，给摄像机驱动的更新一个保守默认值：
-  // 创建数量不要太大，否则会卡；销毁数量也不要太大，否则会导致边缘内容瞬间消失。
-  const effectiveBudget: GroundChunkBudget | null = options.budget === undefined ? defaultBudget : (options.budget as GroundChunkBudget | null)
-  const maxCreate = effectiveBudget ? (Number.isFinite(effectiveBudget.maxCreatePerUpdate as number) ? Math.max(0, Math.trunc(effectiveBudget.maxCreatePerUpdate as number)) : Number.POSITIVE_INFINITY) : Number.POSITIVE_INFINITY
-  const maxDestroy = effectiveBudget ? (Number.isFinite(effectiveBudget.maxDestroyPerUpdate as number) ? Math.max(0, Math.trunc(effectiveBudget.maxDestroyPerUpdate as number)) : Number.POSITIVE_INFINITY) : Number.POSITIVE_INFINITY
-  const maxMs = effectiveBudget ? (Number.isFinite(effectiveBudget.maxMs as number) ? Math.max(0, Number(effectiveBudget.maxMs)) : Number.POSITIVE_INFINITY) : Number.POSITIVE_INFINITY
-  const budgetStart = Date.now()
-
-  // 这个闭包把“预算剩余时间”统一成一个判断，后面创建/卸载都能复用。
-  const withinTimeBudget = () => (Date.now() - budgetStart) <= maxMs
-
-  // Load chunks within the tighter load radius (nearest-first).
-  // 下面开始真正执行队列：先创建，再卸载。
-  // 这样做的好处是窗口变化时优先补内容，避免先删后建导致地形短暂空洞。
-  let stitchRegion: GroundGeometryUpdateRegion | null = null
-  const touchedChunkKeys = new Set<string>()
-  const mergeRegion = (current: GroundGeometryUpdateRegion | null, next: GroundGeometryUpdateRegion): GroundGeometryUpdateRegion => {
-    if (!current) {
-      return { ...next }
-    }
-    return {
-      minRow: Math.min(current.minRow, next.minRow),
-      maxRow: Math.max(current.maxRow, next.maxRow),
-      minColumn: Math.min(current.minColumn, next.minColumn),
-      maxColumn: Math.max(current.maxColumn, next.maxColumn),
-    }
-  }
-
-  let createdCount = 0
-  if (state.pendingCreates.length && maxCreate > 0) {
-    const pending = state.pendingCreates
-    let processed = 0
-    for (processed = 0; processed < pending.length; processed += 1) {
-      if (createdCount >= maxCreate || !withinTimeBudget()) {
-        // 预算用完就停止创建，避免一帧内创建过多 chunk 导致卡顿。
-        break
-      }
-      const entry = pending[processed]!
-      if (state.chunks.has(entry.key)) {
-        continue
-      }
-      const runtime = ensureChunkMesh(root, state, definition, entry.chunkRow, entry.chunkColumn)
-      createdCount += 1
-      touchedChunkKeys.add(runtime.key)
-
-      // 新 chunk 创建后，记下它影响的地形区域，后面统一做法线 stitching。
-      stitchRegion = mergeRegion(stitchRegion, {
-        minRow: runtime.spec.startRow,
-        maxRow: runtime.spec.startRow + Math.max(1, runtime.spec.rows),
-        minColumn: runtime.spec.startColumn,
-        maxColumn: runtime.spec.startColumn + Math.max(1, runtime.spec.columns),
-      })
-    }
-
-    // Keep remaining items (and drop any that got created).
-    // 已创建的条目从待创建列表中移除，剩下的继续留待下一帧处理。
-    state.pendingCreates = pending
-      .slice(processed)
-      .filter((entry) => !state.chunks.has(entry.key))
-  }
-
-  // Unload chunks outside the unload radius with a budget.
-  let destroyedCount = 0
-  if (state.pendingDestroys.length && maxDestroy > 0) {
-    const pending = state.pendingDestroys
-    let processed = 0
-    for (processed = 0; processed < pending.length; processed += 1) {
-      if (destroyedCount >= maxDestroy || !withinTimeBudget()) {
-        // 同样，卸载也受预算约束，防止一口气删太多 chunk 造成画面跳变或主线程抖动。
-        break
-      }
-      const entry = pending[processed]!
-      const runtime = state.chunks.get(entry.key)
-      if (!runtime) {
-        continue
-      }
-      // 先把 runtime 放回池子或释放资源，再从 state.chunks 中移除，避免引用悬空。
-      releaseChunkToPool(state, runtime)
-      state.chunks.delete(entry.key)
-      markGroundVisibleChunkKeysDirty(state)
-      destroyedCount += 1
-    }
-    // 卸载完成后，保留还没来得及处理的剩余项，等下一帧继续。
-    state.pendingDestroys = pending
-      .slice(processed)
-      .filter((entry) => state.chunks.has(entry.key))
-  }
-
-  // Newly created chunks compute normals in isolation; stitch boundaries to avoid visible seams.
-  if (stitchRegion) {
-    // 新 chunk 是独立算法线的，边界上会天然有一点不连续；这里统一 stitching，避免块与块之间出现明暗断层。
-    stitchGroundChunkNormals(root, definition, stitchRegion, touchedChunkKeys)
-  }
+  void options.budget
 
   applyGroundTextureToObject(root, definition)
 }
@@ -8890,137 +8254,6 @@ function resolveGroundRuntimeGroup(target: THREE.Object3D): THREE.Group | null {
   return found
 }
 
-/**
- * 更新地面网格指定区域的几何体数据
- * @param target 目标 THREE.Object3D 对象（可能是地面组或其父节点）
- * @param definition 地面运行时动态网格定义
- * @param region 需要更新的几何体区域范围
- * @param options 配置选项
- *   - computeNormals: 是否重新计算法线
- *   - touchedChunkKeys: 本次编辑真实波及到的 chunk 集合（比扫描整个 region 更精准）
- * @returns 是否有 chunk 被更新
- */
-export function updateGroundMeshRegion(
-  target: THREE.Object3D,
-  definition: GroundRuntimeDynamicMesh,
-  region: GroundGeometryUpdateRegion,
-  options: { computeNormals?: boolean; touchedChunkKeys?: Iterable<string> | null } = {},
-): boolean {
-  // 解析出地面运行时组（从目标对象及其子树中查找）
-  const group = resolveGroundRuntimeGroup(target)
-  if (!group) {
-    return false
-  }
-  const state = groundRuntimeStateMap.get(group)
-  if (!state) {
-    return false
-  }
-  // touchedChunkKeys 表示“这次编辑真实波及到哪些 chunk”，比整块 region 扫描更精准。
-  // region 只是一个大概范围，而 chunk key 才是能精确驱动重建、同步和 stitching 的最小单位。
-  // 现在只保留无限地形语义，所以这里不再做任何 0..maxIndex 裁剪。
-  const filteredChunkKeys = options.touchedChunkKeys
-    ? Array.from(options.touchedChunkKeys).filter((key) => typeof key === 'string' && key.length > 0)
-    : []
-  let updated = false
-  // 如果指定了具体的 touchedChunkKeys，则只更新这些指定的 chunk
-  if (filteredChunkKeys.length) {
-    // 用 visited 集合追踪已处理的 chunk，避免重复处理
-    const visited = new Set<string>()
-    // 逐个处理每个被触及的 chunk key
-    for (const key of filteredChunkKeys) {
-      // 从共享 key 解析出行列索引
-      const indices = resolveRuntimeChunkIndexFromSharedKey(key)
-      if (!indices) {
-        continue
-      }
-      // 根据解析出的行列索引生成运行时的 chunk key
-      const runtimeKey = groundChunkKey(indices.row, indices.column)
-      // 跳过已经处理过的 chunk，避免重复更新
-      if (visited.has(runtimeKey)) {
-        continue
-      }
-      // 将此 chunk 标记为已访问
-      visited.add(runtimeKey)
-      // 从状态中获取该 chunk 的运行时条目
-      const entry = state.chunks.get(runtimeKey)
-      if (!entry) {
-        continue
-      }
-      // 刷新该 chunk 的运行时几何数据
-      const ok = refreshChunkRuntimeGeometry(entry, definition, {
-        region,
-        computeNormals: options.computeNormals,
-      })
-      // 累积更新标志：只要有任何 chunk 被更新，就标记为已更新
-      updated = updated || ok
-    }
-    // 有指定 chunk key 时，直接返回更新结果，不再扫描其他 chunk
-    return updated
-  }
-  // 若没有指定具体的 chunk key，则遍历所有 chunk 并检查与 region 的重叠关系
-  state.chunks.forEach((entry) => {
-    // 判断该 chunk 的边界范围是否与更新 region 重叠
-    // overlaps 为 false 表示两者不相交
-    const overlaps = !(
-      region.maxRow < entry.spec.startRow ||
-      region.minRow > entry.spec.startRow + entry.spec.rows ||
-      region.maxColumn < entry.spec.startColumn ||
-      region.minColumn > entry.spec.startColumn + entry.spec.columns
-    )
-    // 若不重叠，跳过此 chunk 的更新
-    if (!overlaps) {
-      return
-    }
-    // 对于与 region 重叠的 chunk，刷新其运行时几何数据
-    const ok = refreshChunkRuntimeGeometry(entry, definition, {
-      region,
-      computeNormals: options.computeNormals,
-    })
-    // 累积更新标志
-    updated = updated || ok
-  })
-  return updated
-}
-
-export function ensureGroundChunkMeshesForKeys(
-  target: THREE.Object3D,
-  definition: GroundRuntimeDynamicMesh,
-  chunkKeys: Iterable<string> | null | undefined,
-): boolean {
-  const group = resolveGroundRuntimeGroup(target)
-  if (!group || !chunkKeys) {
-    return false
-  }
-
-  const state = groundRuntimeStateMap.get(group) ?? ensureGroundRuntimeState(group, definition)
-  // 这个接口给编辑器侧“按 key 预热 chunk”使用。
-  // 现在 ground 已经只有无限模式，因此这里直接把 key 当作真实 chunk 坐标，不再进行边界裁剪。
-  const visited = new Set<string>()
-  let created = false
-
-  for (const key of chunkKeys) {
-    if (typeof key !== 'string' || key.length === 0) {
-      continue
-    }
-    const indices = resolveRuntimeChunkIndexFromSharedKey(key)
-    if (!indices) {
-      continue
-    }
-    const runtimeKey = groundChunkKey(indices.row, indices.column)
-    if (visited.has(runtimeKey)) {
-      continue
-    }
-    visited.add(runtimeKey)
-    if (state.chunks.has(runtimeKey)) {
-      continue
-    }
-    ensureChunkMesh(group, state, definition, indices.row, indices.column)
-    created = true
-  }
-
-  return created
-}
-
 export function resolveInfiniteGroundChunkKeyFromInstanceId(
   target: THREE.Object3D,
   instanceId: number,
@@ -9037,10 +8270,6 @@ export function resolveInfiniteGroundChunkKeyFromInstanceId(
         return batchKey
       }
     }
-  }
-  const directChunk = (target as any)?.userData?.groundChunk as { chunkRow?: number; chunkColumn?: number } | undefined
-  if (directChunk && Number.isInteger(directChunk.chunkRow) && Number.isInteger(directChunk.chunkColumn)) {
-    return groundChunkKey(directChunk.chunkRow as number, directChunk.chunkColumn as number)
   }
   return null
 }
@@ -9221,531 +8450,6 @@ export function setInfiniteGroundHiddenChunkKeys(
   syncGroundFlatChunkKeyCache(state)
   return true
 }
-
-  function averageNormalsOnEdge(params: {
-    geometryA: THREE.BufferGeometry
-    specA: GroundChunkSpec
-    geometryB: THREE.BufferGeometry
-    specB: GroundChunkSpec
-    mode: 'right' | 'down'
-  }): boolean {
-    const { geometryA, specA, geometryB, specB, mode } = params
-    const normalAttrA = geometryA.getAttribute('normal') as THREE.BufferAttribute | undefined
-    const normalAttrB = geometryB.getAttribute('normal') as THREE.BufferAttribute | undefined
-    if (!normalAttrA || !normalAttrB) {
-      return false
-    }
-    const normalsA = normalAttrA.array as Float32Array
-    const normalsB = normalAttrB.array as Float32Array
-    if (!(normalsA instanceof Float32Array) || !(normalsB instanceof Float32Array)) {
-      return false
-    }
-
-    const colsA = Math.max(1, Math.trunc(specA.columns))
-    const rowsA = Math.max(1, Math.trunc(specA.rows))
-    const colsB = Math.max(1, Math.trunc(specB.columns))
-    const rowsB = Math.max(1, Math.trunc(specB.rows))
-    const vertexColumnsA = colsA + 1
-    const vertexColumnsB = colsB + 1
-
-    let touched = false
-    if (mode === 'right') {
-      const edgeColumnA = specA.startColumn + colsA
-      if (edgeColumnA !== specB.startColumn) {
-        return false
-      }
-      const rowStart = Math.max(specA.startRow, specB.startRow)
-      const rowEnd = Math.min(specA.startRow + rowsA, specB.startRow + rowsB)
-      for (let row = rowStart; row <= rowEnd; row += 1) {
-        const localRowA = row - specA.startRow
-        const localRowB = row - specB.startRow
-        const idxA = localRowA * vertexColumnsA + colsA
-        const idxB = localRowB * vertexColumnsB + 0
-        const a3 = idxA * 3
-        const b3 = idxB * 3
-        if (a3 + 2 >= normalsA.length || b3 + 2 >= normalsB.length) {
-          continue
-        }
-        const ax = normalsA[a3] ?? 0
-        const ay = normalsA[a3 + 1] ?? 0
-        const az = normalsA[a3 + 2] ?? 0
-        const bx = normalsB[b3] ?? 0
-        const by = normalsB[b3 + 1] ?? 0
-        const bz = normalsB[b3 + 2] ?? 0
-        let nx = ax + bx
-        let ny = ay + by
-        let nz = az + bz
-        const len = Math.hypot(nx, ny, nz) || 1
-        nx /= len
-        ny /= len
-        nz /= len
-        normalsA[a3] = nx
-        normalsA[a3 + 1] = ny
-        normalsA[a3 + 2] = nz
-        normalsB[b3] = nx
-        normalsB[b3 + 1] = ny
-        normalsB[b3 + 2] = nz
-        touched = true
-      }
-    } else {
-      const edgeRowA = specA.startRow + rowsA
-      if (edgeRowA !== specB.startRow) {
-        return false
-      }
-      const colStart = Math.max(specA.startColumn, specB.startColumn)
-      const colEnd = Math.min(specA.startColumn + colsA, specB.startColumn + colsB)
-      for (let col = colStart; col <= colEnd; col += 1) {
-        const localColA = col - specA.startColumn
-        const localColB = col - specB.startColumn
-        const idxA = rowsA * vertexColumnsA + localColA
-        const idxB = 0 * vertexColumnsB + localColB
-        const a3 = idxA * 3
-        const b3 = idxB * 3
-        if (a3 + 2 >= normalsA.length || b3 + 2 >= normalsB.length) {
-          continue
-        }
-        const ax = normalsA[a3] ?? 0
-        const ay = normalsA[a3 + 1] ?? 0
-        const az = normalsA[a3 + 2] ?? 0
-        const bx = normalsB[b3] ?? 0
-        const by = normalsB[b3 + 1] ?? 0
-        const bz = normalsB[b3 + 2] ?? 0
-        let nx = ax + bx
-        let ny = ay + by
-        let nz = az + bz
-        const len = Math.hypot(nx, ny, nz) || 1
-        nx /= len
-        ny /= len
-        nz /= len
-        normalsA[a3] = nx
-        normalsA[a3 + 1] = ny
-        normalsA[a3 + 2] = nz
-        normalsB[b3] = nx
-        normalsB[b3 + 1] = ny
-        normalsB[b3 + 2] = nz
-        touched = true
-      }
-    }
-
-    if (touched) {
-      normalAttrA.needsUpdate = true
-      normalAttrB.needsUpdate = true
-    }
-    return touched
-  }
-
-  function averageNormalsAtChunkCorner(params: {
-    topLeft: GroundChunkRuntime
-    topRight: GroundChunkRuntime
-    bottomLeft: GroundChunkRuntime
-    bottomRight: GroundChunkRuntime
-  }): boolean {
-    const { topLeft, topRight, bottomLeft, bottomRight } = params
-    const geometryTopLeft = topLeft.mesh.geometry
-    const geometryTopRight = topRight.mesh.geometry
-    const geometryBottomLeft = bottomLeft.mesh.geometry
-    const geometryBottomRight = bottomRight.mesh.geometry
-    if (
-      !(geometryTopLeft instanceof THREE.BufferGeometry)
-      || !(geometryTopRight instanceof THREE.BufferGeometry)
-      || !(geometryBottomLeft instanceof THREE.BufferGeometry)
-      || !(geometryBottomRight instanceof THREE.BufferGeometry)
-    ) {
-      return false
-    }
-
-    const colsTopLeft = Math.max(1, Math.trunc(topLeft.spec.columns))
-    const rowsTopLeft = Math.max(1, Math.trunc(topLeft.spec.rows))
-    const colsTopRight = Math.max(1, Math.trunc(topRight.spec.columns))
-
-    const cornerRow = topLeft.spec.startRow + rowsTopLeft
-    const cornerColumn = topLeft.spec.startColumn + colsTopLeft
-    if (
-      topRight.spec.startColumn !== cornerColumn
-      || topRight.spec.startRow + rowsTopLeft < cornerRow
-      || bottomLeft.spec.startRow !== cornerRow
-      || bottomLeft.spec.startColumn + colsTopLeft < cornerColumn
-      || bottomRight.spec.startRow !== cornerRow
-      || bottomRight.spec.startColumn !== cornerColumn
-    ) {
-      return false
-    }
-
-    const normalAttrTopLeft = geometryTopLeft.getAttribute('normal') as THREE.BufferAttribute | undefined
-    const normalAttrTopRight = geometryTopRight.getAttribute('normal') as THREE.BufferAttribute | undefined
-    const normalAttrBottomLeft = geometryBottomLeft.getAttribute('normal') as THREE.BufferAttribute | undefined
-    const normalAttrBottomRight = geometryBottomRight.getAttribute('normal') as THREE.BufferAttribute | undefined
-    if (!normalAttrTopLeft || !normalAttrTopRight || !normalAttrBottomLeft || !normalAttrBottomRight) {
-      return false
-    }
-
-    const normalsTopLeft = normalAttrTopLeft.array as Float32Array
-    const normalsTopRight = normalAttrTopRight.array as Float32Array
-    const normalsBottomLeft = normalAttrBottomLeft.array as Float32Array
-    const normalsBottomRight = normalAttrBottomRight.array as Float32Array
-    if (
-      !(normalsTopLeft instanceof Float32Array)
-      || !(normalsTopRight instanceof Float32Array)
-      || !(normalsBottomLeft instanceof Float32Array)
-      || !(normalsBottomRight instanceof Float32Array)
-    ) {
-      return false
-    }
-
-    const vertexColumnsTopLeft = colsTopLeft + 1
-    const vertexColumnsTopRight = colsTopRight + 1
-    const vertexColumnsBottomLeft = Math.max(1, Math.trunc(bottomLeft.spec.columns)) + 1
-
-    const topLeftIndex = (rowsTopLeft * vertexColumnsTopLeft + colsTopLeft) * 3
-    const topRightIndex = (rowsTopLeft * vertexColumnsTopRight + 0) * 3
-    const bottomLeftIndex = (0 * vertexColumnsBottomLeft + Math.max(1, Math.trunc(bottomLeft.spec.columns))) * 3
-    const bottomRightIndex = 0
-
-    if (
-      topLeftIndex + 2 >= normalsTopLeft.length
-      || topRightIndex + 2 >= normalsTopRight.length
-      || bottomLeftIndex + 2 >= normalsBottomLeft.length
-      || bottomRightIndex + 2 >= normalsBottomRight.length
-    ) {
-      return false
-    }
-
-    let nx = (normalsTopLeft[topLeftIndex] ?? 0)
-      + (normalsTopRight[topRightIndex] ?? 0)
-      + (normalsBottomLeft[bottomLeftIndex] ?? 0)
-      + (normalsBottomRight[bottomRightIndex] ?? 0)
-    let ny = (normalsTopLeft[topLeftIndex + 1] ?? 0)
-      + (normalsTopRight[topRightIndex + 1] ?? 0)
-      + (normalsBottomLeft[bottomLeftIndex + 1] ?? 0)
-      + (normalsBottomRight[bottomRightIndex + 1] ?? 0)
-    let nz = (normalsTopLeft[topLeftIndex + 2] ?? 0)
-      + (normalsTopRight[topRightIndex + 2] ?? 0)
-      + (normalsBottomLeft[bottomLeftIndex + 2] ?? 0)
-      + (normalsBottomRight[bottomRightIndex + 2] ?? 0)
-    const length = Math.hypot(nx, ny, nz)
-    if (length <= 1e-12) {
-      nx = 0
-      ny = 1
-      nz = 0
-    } else {
-      nx /= length
-      ny /= length
-      nz /= length
-    }
-
-    normalsTopLeft[topLeftIndex] = nx
-    normalsTopLeft[topLeftIndex + 1] = ny
-    normalsTopLeft[topLeftIndex + 2] = nz
-    normalsTopRight[topRightIndex] = nx
-    normalsTopRight[topRightIndex + 1] = ny
-    normalsTopRight[topRightIndex + 2] = nz
-    normalsBottomLeft[bottomLeftIndex] = nx
-    normalsBottomLeft[bottomLeftIndex + 1] = ny
-    normalsBottomLeft[bottomLeftIndex + 2] = nz
-    normalsBottomRight[bottomRightIndex] = nx
-    normalsBottomRight[bottomRightIndex + 1] = ny
-    normalsBottomRight[bottomRightIndex + 2] = nz
-
-    normalAttrTopLeft.needsUpdate = true
-    normalAttrTopRight.needsUpdate = true
-    normalAttrBottomLeft.needsUpdate = true
-    normalAttrBottomRight.needsUpdate = true
-    return true
-  }
-
-  function sampleGroundSeamAwareNormal(
-    definition: GroundRuntimeDynamicMesh,
-    x: number,
-    z: number,
-    target?: THREE.Vector3,
-    heightCache?: GroundHeightSampleCache,
-    scratch?: GroundNormalScratch,
-  ): THREE.Vector3 {
-    const workingHeightCache = heightCache ?? new Map<number, Map<number, number>>()
-    const result = sampleGroundNormalWithHeightCache(definition, x, z, target, workingHeightCache)
-    if (!shouldUseGroundLocalEditTiles(definition)) {
-      return result
-    }
-
-    const tileSizeMeters = resolveGroundEditTileSizeMeters(definition)
-    const resolution = resolveGroundEditTileResolution(definition)
-    if (!(tileSizeMeters > 0) || !(resolution > 0)) {
-      return result
-    }
-    const { originX, originZ } = resolveGroundLocalEditTileGridOriginFromRuntime(definition, tileSizeMeters)
-    const localTileX = (x - originX) / tileSizeMeters
-    const localTileZ = (z - originZ) / tileSizeMeters
-    if (!Number.isFinite(localTileX) || !Number.isFinite(localTileZ)) {
-      return result
-    }
-
-    const localScratch = scratch ?? createGroundNormalScratch()
-    const {
-      normalA,
-      normalB,
-      blended,
-      boundaryNormal,
-      cornerNormalA,
-      cornerNormalB,
-      cornerNormalC,
-      cornerNormalD,
-      cornerAverage,
-    } = localScratch
-    const localEditCellSize = tileSizeMeters / Math.max(1, resolution)
-    const baseSeamBandMeters = Math.max(localEditCellSize * 1.5, 0.1)
-    const baseSampleOffset = Math.max(localEditCellSize * 0.75, 0.05)
-    const maxSeamBandMeters = Math.max(baseSeamBandMeters, Math.min(tileSizeMeters * 0.18, localEditCellSize * 4))
-
-    const tileFracX = localTileX - Math.floor(localTileX)
-    const tileFracZ = localTileZ - Math.floor(localTileZ)
-    const distToVerticalBoundary = Math.min(tileFracX, 1 - tileFracX) * tileSizeMeters
-    const distToHorizontalBoundary = Math.min(tileFracZ, 1 - tileFracZ) * tileSizeMeters
-
-    const blendBoundaryNormals = (
-      distanceToBoundary: number,
-      sampleLeft: () => void,
-      sampleRight: () => void,
-    ) => {
-      sampleLeft()
-      sampleRight()
-      const dot = clampInclusive(normalA.dot(normalB), -1, 1)
-      const mismatch = clampInclusive((1 - dot) * 0.5, 0, 1)
-      const slope = clampInclusive(1 - Math.min(result.y, normalA.y, normalB.y), 0, 1)
-      const adaptiveScale = 1 + slope * 1.75 + mismatch * 2.5
-      const seamBandMeters = clampInclusive(baseSeamBandMeters * adaptiveScale, baseSeamBandMeters, maxSeamBandMeters)
-      if (distanceToBoundary > seamBandMeters) {
-        return
-      }
-      const distanceBlend = 1 - clampInclusive(distanceToBoundary / seamBandMeters, 0, 1)
-      const boundaryBlend = clampInclusive(0.35 + mismatch * 0.45 + slope * 0.2, 0.35, 0.9)
-      boundaryNormal.copy(normalA).add(normalB)
-      if (boundaryNormal.lengthSq() <= 1e-12) {
-        boundaryNormal.copy(result)
-      } else {
-        boundaryNormal.normalize()
-      }
-      blended.copy(result).lerp(boundaryNormal, distanceBlend * boundaryBlend).normalize()
-      result.copy(blended)
-    }
-
-    if (distToVerticalBoundary <= maxSeamBandMeters) {
-      const boundaryIndex = Math.round(localTileX)
-      const boundaryX = originX + boundaryIndex * tileSizeMeters
-      const sampleOffset = clampInclusive(
-        baseSampleOffset * (1 + clampInclusive(1 - result.y, 0, 1) * 1.25),
-        baseSampleOffset,
-        Math.max(baseSampleOffset, localEditCellSize * 1.75),
-      )
-      blendBoundaryNormals(
-        distToVerticalBoundary,
-        () => sampleGroundNormalWithHeightCache(definition, boundaryX - sampleOffset, z, normalA, workingHeightCache),
-        () => sampleGroundNormalWithHeightCache(definition, boundaryX + sampleOffset, z, normalB, workingHeightCache),
-      )
-    }
-
-    if (distToHorizontalBoundary <= maxSeamBandMeters) {
-      const boundaryIndex = Math.round(localTileZ)
-      const boundaryZ = originZ + boundaryIndex * tileSizeMeters
-      const sampleOffset = clampInclusive(
-        baseSampleOffset * (1 + clampInclusive(1 - result.y, 0, 1) * 1.25),
-        baseSampleOffset,
-        Math.max(baseSampleOffset, localEditCellSize * 1.75),
-      )
-      blendBoundaryNormals(
-        distToHorizontalBoundary,
-        () => sampleGroundNormalWithHeightCache(definition, x, boundaryZ - sampleOffset, normalA, workingHeightCache),
-        () => sampleGroundNormalWithHeightCache(definition, x, boundaryZ + sampleOffset, normalB, workingHeightCache),
-      )
-    }
-
-    const cornerDistance = Math.hypot(distToVerticalBoundary, distToHorizontalBoundary)
-    const cornerBandMeters = Math.max(maxSeamBandMeters * 1.15, localEditCellSize * 2)
-    if (distToVerticalBoundary <= cornerBandMeters && distToHorizontalBoundary <= cornerBandMeters) {
-      const boundaryX = originX + Math.round(localTileX) * tileSizeMeters
-      const boundaryZ = originZ + Math.round(localTileZ) * tileSizeMeters
-      const sampleOffset = clampInclusive(
-        baseSampleOffset * (1.15 + clampInclusive(1 - result.y, 0, 1) * 1.5),
-        baseSampleOffset,
-        Math.max(baseSampleOffset, localEditCellSize * 2.25),
-      )
-      sampleGroundNormalWithHeightCache(definition, boundaryX - sampleOffset, boundaryZ - sampleOffset, cornerNormalA, workingHeightCache)
-      sampleGroundNormalWithHeightCache(definition, boundaryX + sampleOffset, boundaryZ - sampleOffset, cornerNormalB, workingHeightCache)
-      sampleGroundNormalWithHeightCache(definition, boundaryX - sampleOffset, boundaryZ + sampleOffset, cornerNormalC, workingHeightCache)
-      sampleGroundNormalWithHeightCache(definition, boundaryX + sampleOffset, boundaryZ + sampleOffset, cornerNormalD, workingHeightCache)
-      cornerAverage
-        .copy(cornerNormalA)
-        .add(cornerNormalB)
-        .add(cornerNormalC)
-        .add(cornerNormalD)
-      if (cornerAverage.lengthSq() > 1e-12) {
-        cornerAverage.normalize()
-        const cornerDot = Math.min(
-          cornerAverage.dot(cornerNormalA),
-          cornerAverage.dot(cornerNormalB),
-          cornerAverage.dot(cornerNormalC),
-          cornerAverage.dot(cornerNormalD),
-        )
-        const cornerMismatch = clampInclusive((1 - clampInclusive(cornerDot, -1, 1)) * 0.5, 0, 1)
-        const cornerSlope = clampInclusive(
-          1 - Math.min(result.y, cornerNormalA.y, cornerNormalB.y, cornerNormalC.y, cornerNormalD.y),
-          0,
-          1,
-        )
-        const cornerBlend = (1 - clampInclusive(cornerDistance / cornerBandMeters, 0, 1))
-          * clampInclusive(0.5 + cornerMismatch * 0.3 + cornerSlope * 0.25, 0.5, 0.95)
-        blended.copy(result).lerp(cornerAverage, cornerBlend).normalize()
-        result.copy(blended)
-      }
-    }
-
-    if (result.lengthSq() === 0) {
-      result.set(0, 1, 0)
-    }
-    return result.normalize()
-  }
-
-
-  function doesGroundChunkOverlapRegion(spec: GroundChunkSpec, region: GroundGeometryUpdateRegion): boolean {
-    return !(
-      region.maxRow < spec.startRow
-      || region.minRow > spec.startRow + spec.rows
-      || region.maxColumn < spec.startColumn
-      || region.minColumn > spec.startColumn + spec.columns
-    )
-  }
-
-  function collectSharedChunkKeysForStitchRegion(
-    state: GroundRuntimeState,
-    region: GroundGeometryUpdateRegion,
-  ): string[] {
-    const sharedKeys = new Set<string>()
-    for (const runtime of state.chunks.values()) {
-      if (!doesGroundChunkOverlapRegion(runtime.spec, region)) {
-        continue
-      }
-      sharedKeys.add(`${runtime.chunkRow}:${runtime.chunkColumn}`)
-      sharedKeys.add(`${runtime.chunkRow}:${runtime.chunkColumn + 1}`)
-      sharedKeys.add(`${runtime.chunkRow + 1}:${runtime.chunkColumn}`)
-      if (runtime.chunkColumn > Number.MIN_SAFE_INTEGER) {
-        sharedKeys.add(`${runtime.chunkRow}:${runtime.chunkColumn - 1}`)
-      }
-      if (runtime.chunkRow > Number.MIN_SAFE_INTEGER) {
-        sharedKeys.add(`${runtime.chunkRow - 1}:${runtime.chunkColumn}`)
-      }
-    }
-    return Array.from(sharedKeys)
-  }
-
-  export function stitchGroundChunkNormals(
-    target: THREE.Object3D,
-    definition: GroundRuntimeDynamicMesh,
-    region: GroundGeometryUpdateRegion | null = null,
-    touchedChunkKeys: Iterable<string> | null = null,
-  ): boolean {
-    const group = resolveGroundRuntimeGroup(target)
-    if (!group) {
-      return false
-    }
-    const state = groundRuntimeStateMap.get(group)
-    if (!state) {
-      return false
-    }
-    void definition
-
-    const filteredChunkKeys = touchedChunkKeys
-      ? Array.from(touchedChunkKeys).filter((key) => typeof key === 'string' && key.length > 0)
-      : []
-    const chunkKeysToStitch = filteredChunkKeys.length
-      ? filteredChunkKeys
-      : (region ? collectSharedChunkKeysForStitchRegion(state, region) : [])
-    if (chunkKeysToStitch.length) {
-      const visitedEdges = new Set<string>()
-      const visitedCorners = new Set<string>()
-      const stitchEdge = (anchorRow: number, anchorColumn: number, mode: 'right' | 'down'): boolean => {
-        // 只有相邻 chunk 都是独立 Mesh 时，边界法线拼接才有意义；flat 批次不参与这条流程。
-        // flat chunk 没有独立雕刻边界，强行拼接只会让逻辑复杂但结果没有收益。
-        const edgeKey = `${mode}:${anchorRow}:${anchorColumn}`
-        if (visitedEdges.has(edgeKey)) {
-          return false
-        }
-        visitedEdges.add(edgeKey)
-
-        const current = state.chunks.get(groundChunkKey(anchorRow, anchorColumn))
-        if (!current || !(current.mesh.geometry instanceof THREE.BufferGeometry)) {
-          return false
-        }
-
-        const neighbor = mode === 'right'
-          ? state.chunks.get(groundChunkKey(anchorRow, anchorColumn + 1))
-          : state.chunks.get(groundChunkKey(anchorRow + 1, anchorColumn))
-        if (!neighbor || !(neighbor.mesh.geometry instanceof THREE.BufferGeometry)) {
-          return false
-        }
-
-        return averageNormalsOnEdge({
-          geometryA: current.mesh.geometry,
-          specA: current.spec,
-          geometryB: neighbor.mesh.geometry,
-          specB: neighbor.spec,
-          mode,
-        })
-      }
-
-      const stitchCorner = (anchorRow: number, anchorColumn: number): boolean => {
-        const cornerKey = `${anchorRow}:${anchorColumn}`
-        if (visitedCorners.has(cornerKey)) {
-          return false
-        }
-        visitedCorners.add(cornerKey)
-
-        const topLeft = state.chunks.get(groundChunkKey(anchorRow, anchorColumn))
-        const topRight = state.chunks.get(groundChunkKey(anchorRow, anchorColumn + 1))
-        const bottomLeft = state.chunks.get(groundChunkKey(anchorRow + 1, anchorColumn))
-        const bottomRight = state.chunks.get(groundChunkKey(anchorRow + 1, anchorColumn + 1))
-        if (!topLeft || !topRight || !bottomLeft || !bottomRight) {
-          return false
-        }
-        return averageNormalsAtChunkCorner({
-          topLeft,
-          topRight,
-          bottomLeft,
-          bottomRight,
-        })
-      }
-
-      let stitched = false
-      for (const key of chunkKeysToStitch) {
-        const indices = resolveRuntimeChunkIndexFromSharedKey(key)
-        if (!indices) {
-          continue
-        }
-        const row = indices.row
-        const column = indices.column
-
-        stitched = stitchEdge(row, column, 'right') || stitched
-        stitched = stitchEdge(row, column, 'down') || stitched
-        if (column > 0) {
-          stitched = stitchEdge(row, column - 1, 'right') || stitched
-        }
-        if (row > 0) {
-          stitched = stitchEdge(row - 1, column, 'down') || stitched
-        }
-
-        stitched = stitchCorner(row, column) || stitched
-        if (column > 0) {
-          stitched = stitchCorner(row, column - 1) || stitched
-        }
-        if (row > 0) {
-          stitched = stitchCorner(row - 1, column) || stitched
-        }
-        if (row > 0 && column > 0) {
-          stitched = stitchCorner(row - 1, column - 1) || stitched
-        }
-      }
-      return stitched
-    }
-    return false
-  }
 
 export function releaseGroundMeshCache(disposeResources = true) {
   if (!cachedPrototypeMesh) {

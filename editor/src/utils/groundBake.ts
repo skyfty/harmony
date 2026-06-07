@@ -1,4 +1,11 @@
-import { parseTerrainPaintChunkKey, resolveTerrainPaintChunkBounds, resolveGroundWorldBounds, type GroundDynamicMesh, type SceneNode } from '@schema/core'
+import {
+  parseTerrainPaintChunkKey,
+  resolveGroundTileMaterialMap,
+  resolveTerrainPaintChunkBounds,
+  resolveGroundWorldBounds,
+  type GroundDynamicMesh,
+  type SceneNode,
+} from '@schema/core'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import { computeBlobHash } from '@/utils/blob'
@@ -268,7 +275,7 @@ async function renderGroundSurfaceChunks(
 ): Promise<boolean> {
   context.imageSmoothingEnabled = true
   context.imageSmoothingQuality = 'high'
-  const chunkEntries = Object.entries(definition.groundSurfaceChunks ?? {})
+  const chunkEntries = Object.entries(resolveGroundTileMaterialMap(definition) ?? {})
   if (!chunkEntries.length) {
     return false
   }
@@ -331,7 +338,7 @@ async function canvasToBlob(canvas: CanvasLike): Promise<Blob | null> {
 // Landforms feature removed — no-op helper removed.
 
 function hasTerrainPaintContent(definition: GroundDynamicMesh): boolean {
-  return Object.keys(definition.groundSurfaceChunks ?? {}).length > 0
+  return Object.keys(resolveGroundTileMaterialMap(definition) ?? {}).length > 0
 }
 
 export async function bakeGroundSurfaceTexture(

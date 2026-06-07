@@ -13,6 +13,7 @@ export type GroundSplatSidecarPayload = {
   revision: number
   surfaceLayerTextureAssetIds?: string[] | null
   groundSurfaceChunks: GroundSurfaceChunkTextureMap | null
+  groundTileMaterialMap?: GroundSurfaceChunkTextureMap | null
 }
 
 type GroundSplatSidecarJson = {
@@ -20,6 +21,7 @@ type GroundSplatSidecarJson = {
   revision: number
   surfaceLayerTextureAssetIds: string[] | null
   groundSurfaceChunks: GroundSurfaceChunkTextureMap | null
+  groundTileMaterialMap: GroundSurfaceChunkTextureMap | null
 }
 
 function normalizeOptionalStringArray(value: string[] | null | undefined): string[] | null {
@@ -87,6 +89,7 @@ function normalizePayload(payload: GroundSplatSidecarPayload): GroundSplatSideca
     revision: Number.isFinite(Number(payload.revision)) ? Math.max(0, Math.trunc(Number(payload.revision))) : 0,
     surfaceLayerTextureAssetIds: normalizeOptionalStringArray(payload.surfaceLayerTextureAssetIds ?? null),
     groundSurfaceChunks: normalizeGroundSurfaceChunks(payload.groundSurfaceChunks),
+    groundTileMaterialMap: normalizeGroundSurfaceChunks(payload.groundTileMaterialMap ?? payload.groundSurfaceChunks ?? null),
   }
 }
 
@@ -130,5 +133,6 @@ export function deserializeGroundSplatSidecar(buffer: ArrayBuffer): GroundSplatS
     revision: Number(parsed.revision),
     surfaceLayerTextureAssetIds: parsed.surfaceLayerTextureAssetIds ?? null,
     groundSurfaceChunks: parsed.groundSurfaceChunks ?? null,
+    groundTileMaterialMap: parsed.groundTileMaterialMap ?? parsed.groundSurfaceChunks ?? null,
   })
 }

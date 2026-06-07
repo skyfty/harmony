@@ -1766,6 +1766,7 @@ export async function bakeLandformGroundSplatForSceneDocument(
     groundNode.dynamicMesh = {
       ...groundNode.dynamicMesh,
       groundSurfaceChunks: null,
+      groundTileMaterialMap: null,
       groundSplatBake: null,
     }
     return null
@@ -1780,6 +1781,7 @@ export async function bakeLandformGroundSplatForSceneDocument(
     groundNode.dynamicMesh = {
       ...groundNode.dynamicMesh,
       groundSurfaceChunks: null,
+      groundTileMaterialMap: null,
       groundSplatBake: null,
     }
     return null
@@ -1788,9 +1790,11 @@ export async function bakeLandformGroundSplatForSceneDocument(
   const nextGroundMesh: GroundDynamicMesh = {
     ...groundNode.dynamicMesh,
     groundSurfaceChunks: baked,
+    groundTileMaterialMap: baked,
     groundSplatBake: {
       revision: Date.now(),
       chunkTextureMap: baked,
+      tileMaterialMap: baked,
       surfaceLayerTextureAssetIds: layerTextureAssetIds.length ? layerTextureAssetIds : null,
     },
   }

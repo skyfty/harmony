@@ -1220,6 +1220,7 @@ const landformGroundSplatBakeScheduler = createLatestIdleScheduler<LandformGroun
       groundNode.dynamicMesh = {
         ...groundNode.dynamicMesh,
         groundSurfaceChunks: null,
+        groundTileMaterialMap: null,
         groundSplatBake: null,
       } as GroundDynamicMesh
       if (request.scene.currentSceneId) {
@@ -1241,9 +1242,11 @@ const landformGroundSplatBakeScheduler = createLatestIdleScheduler<LandformGroun
     groundNode.dynamicMesh = {
       ...groundNode.dynamicMesh,
       groundSurfaceChunks: manualDeepClone(baked),
+      groundTileMaterialMap: manualDeepClone(baked),
       groundSplatBake: {
         revision: nextRevision,
         chunkTextureMap: manualDeepClone(baked),
+        tileMaterialMap: manualDeepClone(baked),
         surfaceLayerTextureAssetIds: nextSurfaceLayerTextureAssetIds,
       },
     } as GroundDynamicMesh
@@ -1252,6 +1255,7 @@ const landformGroundSplatBakeScheduler = createLatestIdleScheduler<LandformGroun
         revision: nextRevision,
         surfaceLayerTextureAssetIds: nextSurfaceLayerTextureAssetIds,
         groundSurfaceChunks: manualDeepClone(baked),
+        groundTileMaterialMap: manualDeepClone(baked),
       })
       const sidecar = groundSplatStore.buildSceneDocumentSidecar(request.scene.currentSceneId, {
         ...groundNode,
@@ -2410,6 +2414,7 @@ function stripGroundSplatRuntimeFromCompiledGroundSourceDocument(
   groundNode.dynamicMesh = {
     ...definition,
     groundSurfaceChunks: null,
+    groundTileMaterialMap: null,
     groundSplatBake: null,
   }
   return nextDocument

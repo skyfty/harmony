@@ -92,6 +92,7 @@ import {
   isVideoLikeExtension,
   loadSkyCubeTexture,
   resolveGroundChunkCoordFromWorldPosition,
+  resolveGroundTileMaterialMap,
   resolveGroundWorldBounds,
 } from '@schema/core'
 import {
@@ -236,7 +237,6 @@ import {
   setGroundRuntimeOptimizedChunksEnabled,
   syncGroundChunkLoadingMode,
   updateGroundMesh,
-  updateGroundMeshRegion,
   releaseGroundMeshCache,
   sampleGroundHeight,
 } from '@schema/groundMesh'
@@ -3881,9 +3881,6 @@ const groundEditor = createGroundEditor({
     chunkCells: number
   }) => {
     setViewportGroundPreviewHiddenChunkKeys(groundObject, [])
-    if (affectedRegion && chunkKeys?.length) {
-      updateGroundMeshRegion(groundObject, definition, affectedRegion, { touchedChunkKeys: chunkKeys })
-    }
     updateGroundMesh(groundObject, definition)
     if (chunkKeys?.length) {
       const nextExcludedKeys = new Set([
@@ -21868,11 +21865,12 @@ function updateGroundChunkStreaming() {
   const groundSplatBakeRevision = Number.isFinite(groundDefinition.groundSplatBake?.revision)
     ? Math.max(0, Math.trunc(groundDefinition.groundSplatBake!.revision as number))
     : 0
-  const groundSurfaceChunkKeySignature = groundDefinition.groundSurfaceChunks
-    ? Object.keys(groundDefinition.groundSurfaceChunks).sort().join(',')
+  const groundTileMaterialMap = resolveGroundTileMaterialMap(groundDefinition)
+  const groundSurfaceChunkKeySignature = groundTileMaterialMap
+    ? Object.keys(groundTileMaterialMap).sort().join(',')
     : ''
-  const groundSurfaceChunkCount = groundDefinition.groundSurfaceChunks
-    ? Object.keys(groundDefinition.groundSurfaceChunks).length
+  const groundSurfaceChunkCount = groundTileMaterialMap
+    ? Object.keys(groundTileMaterialMap).length
     : 0
   const streamingStateSignature = [
     buildKey,

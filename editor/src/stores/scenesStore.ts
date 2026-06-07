@@ -332,10 +332,12 @@ function stripGroundSplatRuntimeDataForPersistence(document: StoredSceneDocument
   groundNode.dynamicMesh = {
     ...definition,
     groundSurfaceChunks: null,
+    groundTileMaterialMap: null,
     groundSplatBake: definition.groundSplatBake
       ? {
           revision: Number.isFinite(definition.groundSplatBake.revision) ? Math.max(0, Math.trunc(definition.groundSplatBake.revision)) : 0,
           chunkTextureMap: null,
+          tileMaterialMap: null,
           surfaceLayerTextureAssetIds: definition.groundSplatBake.surfaceLayerTextureAssetIds ?? null,
         }
       : null,
@@ -1722,27 +1724,6 @@ export const useScenesStore = defineStore('scenes', {
     },
     async loadGroundScatterSidecar(sceneId: string): Promise<ArrayBuffer | null> {
       return await readSceneGroundScatterSidecar(this.workspaceId, sceneId)
-    },
-    async loadGroundChunkManifest(_sceneId: string): Promise<null> {
-      return null
-    },
-    async saveGroundChunkManifest(
-      _sceneId: string,
-      _manifest: unknown,
-      _options: { syncServer?: boolean } = {},
-    ): Promise<void> {
-      return
-    },
-    async loadGroundChunkData(_sceneId: string, _chunkKey: string): Promise<null> {
-      return null
-    },
-    async saveGroundChunkData(
-      _sceneId: string,
-      _chunkKey: string,
-      _data: ArrayBuffer | null,
-      _options: { syncServer?: boolean } = {},
-    ): Promise<void> {
-      return
     },
     async loadTerrainDatasetManifest(sceneId: string): Promise<QuantizedTerrainDatasetRootManifest | null> {
       return await readSceneTerrainDatasetManifest(this.workspaceId, sceneId)

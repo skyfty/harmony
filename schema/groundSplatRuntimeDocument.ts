@@ -4,6 +4,7 @@ import type {
   SceneJsonExportDocument,
   SceneNode,
 } from './core'
+import { resolveGroundTileMaterialMap } from './core'
 import { buildGroundOptimizedMeshData } from './groundOptimizedMesh'
 import { isGroundDynamicMesh } from './groundHeightfield'
 import { resolveDocumentGroundNode } from './groundNode'
@@ -91,9 +92,11 @@ export async function prepareRuntimeGroundSplatSceneDocument(
   const runtimeDocument = cloneSceneJsonExportDocument(document)
   const groundNode = resolveDocumentGroundNode(runtimeDocument)
   const groundDefinition = groundNode?.dynamicMesh?.type === 'Ground' ? (groundNode.dynamicMesh as GroundDynamicMesh)  : null
-  const directChunks = cloneGroundSurfaceChunkTextureMap(groundDefinition?.groundSurfaceChunks ?? null)
+  const directChunks = cloneGroundSurfaceChunkTextureMap(resolveGroundTileMaterialMap(groundDefinition) ?? null)
   const bakedChunks = !directChunks
-    ? cloneGroundSurfaceChunkTextureMap(groundDefinition?.groundSplatBake?.chunkTextureMap ?? null)
+    ? cloneGroundSurfaceChunkTextureMap(groundDefinition?.groundSplatBake?.tileMaterialMap
+      ?? groundDefinition?.groundSplatBake?.chunkTextureMap
+      ?? null)
     : null
   const nextChunks = directChunks ?? bakedChunks
   const hasBakedGroundSplat = Boolean(nextChunks)
@@ -104,6 +107,7 @@ export async function prepareRuntimeGroundSplatSceneDocument(
     groundNode.dynamicMesh = {
       ...groundDefinition,
       groundSurfaceChunks: nextChunks,
+      groundTileMaterialMap: nextChunks,
     } as GroundDynamicMesh
   }
 

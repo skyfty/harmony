@@ -9,6 +9,7 @@ import {
   type GroundDynamicMesh,
   type GroundRuntimeDynamicMesh,
   type SceneJsonExportDocument,
+  resolveGroundTileMaterialMap,
 } from '@schema/core'
 import { hashString, stableSerialize } from '@schema/stableSerialize'
 import {
@@ -439,7 +440,7 @@ export function computeSceneCompiledGroundBuildKey(
 }
 
 function summarizeGroundSurfaceChunksForSignature(dynamicGround: GroundDynamicMesh): unknown {
-  const chunks = dynamicGround.groundSurfaceChunks ?? null
+  const chunks = resolveGroundTileMaterialMap(dynamicGround) ?? null
   if (!chunks) {
     return null
   }

@@ -1836,170 +1836,12 @@ export interface GroundChunkBounds {
   maxChunkZ: number
 }
 
-export type GroundChunkSource = 'manual' | 'dem' | 'import' | 'scatter'
-
 export interface GroundChunkCoord {
   chunkX: number
   chunkZ: number
 }
 
 export type GroundChunkKey = `${number}:${number}` | string
-
-export interface GroundChunkManifestRecord extends GroundChunkCoord {
-  key: GroundChunkKey
-  originX: number
-  originZ: number
-  chunkSizeMeters: number
-  resolution: number
-  revision: number
-  heightMin: number
-  heightMax: number
-  dataPath: string
-  updatedAt: number
-  source?: GroundChunkSource | null
-  paintAssetId?: string | null
-  scatterAssetId?: string | null
-}
-
-export interface GroundChunkManifest {
-  version: 1
-  sceneId: string
-  chunkSizeMeters: number
-  baseHeight: number
-  worldBounds?: GroundWorldBounds | null
-  chunkBounds?: GroundChunkBounds | null
-  revision: number
-  updatedAt: number
-  chunks: Record<GroundChunkKey, GroundChunkManifestRecord>
-}
-
-export interface GroundChunkDataHeader extends GroundChunkCoord {
-  version: 1
-  key: GroundChunkKey
-  originX: number
-  originZ: number
-  chunkSizeMeters: number
-  resolution: number
-  cellSize: number
-  revision: number
-  heightMin: number
-  heightMax: number
-  updatedAt: number
-  source?: GroundChunkSource | null
-}
-
-export interface GroundChunkData {
-  header: GroundChunkDataHeader
-  /** Row-major `(resolution + 1) * (resolution + 1)` effective terrain heights. */
-  heights: Float32Array | number[]
-}
-
-const GROUND_CHUNK_DATA_MAGIC = 0x4847434b
-const GROUND_CHUNK_DATA_PREFIX_BYTES = Uint32Array.BYTES_PER_ELEMENT * 3
-
-function normalizeGroundChunkDataHeights(
-  heights: GroundChunkData['heights'],
-  resolution: number,
-): Float32Array | null {
-  const normalizedResolution = Math.max(1, Math.trunc(resolution))
-  const expectedCount = (normalizedResolution + 1) * (normalizedResolution + 1)
-  const nextHeights = heights instanceof Float32Array ? heights : Float32Array.from(heights ?? [])
-  if (nextHeights.length !== expectedCount) {
-    return null
-  }
-  return nextHeights
-}
-
-export function serializeGroundChunkData(data: GroundChunkData): ArrayBuffer {
-  const heights = normalizeGroundChunkDataHeights(data.heights, data.header.resolution)
-  if (!heights) {
-    throw new Error('Ground chunk data heights length does not match resolution')
-  }
-
-  const serializedHeader = JSON.stringify({
-    ...data.header,
-    source: data.header.source ?? null,
-  })
-  const headerBytes = new TextEncoder().encode(serializedHeader)
-  const totalBytes = GROUND_CHUNK_DATA_PREFIX_BYTES + headerBytes.byteLength + heights.byteLength
-  const buffer = new ArrayBuffer(totalBytes)
-  const prefixView = new Uint32Array(buffer, 0, 3)
-  prefixView[0] = GROUND_CHUNK_DATA_MAGIC
-  prefixView[1] = data.header.version
-  prefixView[2] = headerBytes.byteLength
-
-  new Uint8Array(buffer, GROUND_CHUNK_DATA_PREFIX_BYTES, headerBytes.byteLength).set(headerBytes)
-  new Uint8Array(buffer, GROUND_CHUNK_DATA_PREFIX_BYTES + headerBytes.byteLength, heights.byteLength)
-    .set(new Uint8Array(heights.buffer, heights.byteOffset, heights.byteLength))
-  return buffer
-}
-
-export function deserializeGroundChunkData(buffer: ArrayBuffer | null | undefined): GroundChunkData | null {
-  if (!(buffer instanceof ArrayBuffer) || buffer.byteLength < GROUND_CHUNK_DATA_PREFIX_BYTES) {
-    return null
-  }
-
-  const prefixView = new Uint32Array(buffer, 0, 3)
-  if (prefixView[0] !== GROUND_CHUNK_DATA_MAGIC) {
-    return null
-  }
-
-  const version = Math.trunc(prefixView[1] ?? 0)
-  const headerByteLength = Math.trunc(prefixView[2] ?? 0)
-  const headerOffset = GROUND_CHUNK_DATA_PREFIX_BYTES
-  const heightsOffset = headerOffset + headerByteLength
-  if (version !== 1 || headerByteLength <= 0 || heightsOffset > buffer.byteLength) {
-    return null
-  }
-  if ((buffer.byteLength - heightsOffset) % Float32Array.BYTES_PER_ELEMENT !== 0) {
-    return null
-  }
-
-  try {
-    const headerBytes = new Uint8Array(buffer, headerOffset, headerByteLength)
-    const parsed = JSON.parse(new TextDecoder().decode(headerBytes)) as Partial<GroundChunkDataHeader> | null
-    if (!parsed || typeof parsed !== 'object') {
-      return null
-    }
-
-    const key = typeof parsed.key === 'string' ? parsed.key.trim() : ''
-    const resolution = Number(parsed.resolution)
-    const chunkX = Number(parsed.chunkX)
-    const chunkZ = Number(parsed.chunkZ)
-    if (!key || !Number.isFinite(resolution) || !Number.isFinite(chunkX) || !Number.isFinite(chunkZ)) {
-      return null
-    }
-
-    const heights = new Float32Array(buffer.slice(heightsOffset))
-    const normalizedHeights = normalizeGroundChunkDataHeights(heights, resolution)
-    if (!normalizedHeights) {
-      return null
-    }
-
-    const header: GroundChunkDataHeader = {
-      version: 1,
-      key,
-      chunkX: Math.trunc(chunkX),
-      chunkZ: Math.trunc(chunkZ),
-      originX: Number(parsed.originX) || 0,
-      originZ: Number(parsed.originZ) || 0,
-      chunkSizeMeters: Number(parsed.chunkSizeMeters) || GROUND_TERRAIN_CHUNK_SIZE_METERS,
-      resolution: Math.max(1, Math.trunc(resolution)),
-      cellSize: Number(parsed.cellSize) || 1,
-      revision: Math.max(0, Math.trunc(Number(parsed.revision) || 0)),
-      heightMin: Number.isFinite(parsed.heightMin) ? Number(parsed.heightMin) : 0,
-      heightMax: Number.isFinite(parsed.heightMax) ? Number(parsed.heightMax) : 0,
-      updatedAt: Math.max(0, Math.trunc(Number(parsed.updatedAt) || 0)),
-      source: parsed.source ?? null,
-    }
-    return {
-      header,
-      heights: normalizedHeights,
-    }
-  } catch (_error) {
-    return null
-  }
-}
 
 export function formatGroundChunkKey(chunkX: number, chunkZ: number): GroundChunkKey {
   return `${Math.trunc(chunkX)}:${Math.trunc(chunkZ)}`
@@ -2061,16 +1903,6 @@ export function resolveGroundChunkOrigin(
     x: origin + Math.trunc(coord.chunkX) * safeChunkSize,
     z: origin + Math.trunc(coord.chunkZ) * safeChunkSize,
   }
-}
-
-export function formatGroundChunkDataPath(
-  coord: GroundChunkCoord,
-  root = 'ground/chunks',
-  extension = 'ground.bin',
-): string {
-  const normalizedRoot = typeof root === 'string' && root.trim().length ? root.replace(/\/$/, '') : 'ground/chunks'
-  const normalizedExtension = typeof extension === 'string' && extension.trim().length ? extension.replace(/^\./, '') : 'ground.bin'
-  return `${normalizedRoot}/x_${Math.trunc(coord.chunkX)}_z_${Math.trunc(coord.chunkZ)}.${normalizedExtension}`
 }
 
 export function normalizeGroundSurfaceChunkTextureMap(
@@ -2226,12 +2058,27 @@ export interface GroundDynamicMesh {
   localEditTiles?: GroundLocalEditTileMap | null
   terrainScatter?: TerrainScatterStoreSnapshot | null
   groundSurfaceChunks?: GroundSurfaceChunkTextureMap | null
+  groundTileMaterialMap?: GroundSurfaceChunkTextureMap | null
   /** Editor/runtime cache for baked landform splat texture bundles. */
   groundSplatBake?: {
     revision: number
     chunkTextureMap?: GroundSurfaceChunkTextureMap | null
+    tileMaterialMap?: GroundSurfaceChunkTextureMap | null
     surfaceLayerTextureAssetIds?: string[] | null
   } | null
+}
+
+export function resolveGroundTileMaterialMap(
+  definition: Pick<GroundDynamicMesh, 'groundTileMaterialMap' | 'groundSurfaceChunks' | 'groundSplatBake'> | null | undefined,
+): GroundSurfaceChunkTextureMap | null {
+  if (!definition) {
+    return null
+  }
+  return definition.groundTileMaterialMap
+    ?? definition.groundSurfaceChunks
+    ?? definition.groundSplatBake?.tileMaterialMap
+    ?? definition.groundSplatBake?.chunkTextureMap
+    ?? null
 }
 
 export function resolveGroundEditTileSizeMeters(definition: Pick<GroundDynamicMesh, 'editTileSizeMeters' | 'cellSize'>): number {

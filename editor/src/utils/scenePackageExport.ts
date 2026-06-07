@@ -493,6 +493,9 @@ function stripGroundBakedTextureAssetIds(nodes: SceneJsonExportDocument['nodes']
         if ('groundSurfaceChunks' in dynamicMesh) {
           dynamicMesh.groundSurfaceChunks = null
         }
+        if ('groundTileMaterialMap' in dynamicMesh) {
+          dynamicMesh.groundTileMaterialMap = null
+        }
         if ('groundSplatBake' in dynamicMesh) {
           dynamicMesh.groundSplatBake = null
         }
@@ -556,10 +559,16 @@ function requiresGroundSplatSidecar(document: SceneJsonExportDocument): boolean 
     const dynamicMesh = node.dynamicMesh as GroundDynamicMesh | { type?: string } | null | undefined
     if (dynamicMesh?.type === 'Ground') {
       const groundDynamicMesh = dynamicMesh as GroundDynamicMesh
-      if (groundDynamicMesh.groundSurfaceChunks && Object.keys(groundDynamicMesh.groundSurfaceChunks).length > 0) {
+      if (
+        (groundDynamicMesh.groundTileMaterialMap && Object.keys(groundDynamicMesh.groundTileMaterialMap).length > 0)
+        || (groundDynamicMesh.groundSurfaceChunks && Object.keys(groundDynamicMesh.groundSurfaceChunks).length > 0)
+      ) {
         return true
       }
-      if (groundDynamicMesh.groundSplatBake?.chunkTextureMap && Object.keys(groundDynamicMesh.groundSplatBake.chunkTextureMap).length > 0) {
+      if (
+        (groundDynamicMesh.groundSplatBake?.tileMaterialMap && Object.keys(groundDynamicMesh.groundSplatBake.tileMaterialMap).length > 0)
+        || (groundDynamicMesh.groundSplatBake?.chunkTextureMap && Object.keys(groundDynamicMesh.groundSplatBake.chunkTextureMap).length > 0)
+      ) {
         return true
       }
     }

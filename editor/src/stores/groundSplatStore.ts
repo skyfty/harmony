@@ -55,17 +55,26 @@ function replaceRuntimeState(
   if (!groundNode || !definition) {
     return
   }
-  if (!payload?.groundSurfaceChunks) {
+  const safePayload = payload ?? {
+    groundNodeId: groundNode.id,
+    revision: 0,
+    surfaceLayerTextureAssetIds: null,
+    groundSurfaceChunks: null,
+    groundTileMaterialMap: null,
+  }
+  const tileMaterialMap = safePayload.groundTileMaterialMap ?? safePayload.groundSurfaceChunks ?? null
+  if (!tileMaterialMap) {
     groundNode.dynamicMesh = {
       ...definition,
       groundSurfaceChunks: null,
+      groundTileMaterialMap: null,
       groundSplatBake: null,
     }
     return
   }
-  const revision = Number.isFinite(payload.revision) ? Math.max(0, Math.trunc(payload.revision)) : 0
-  const surfaceLayerTextureAssetIds = normalizeAssetIds(payload.surfaceLayerTextureAssetIds)
-  const groundSurfaceChunks = cloneValue(payload.groundSurfaceChunks)
+  const revision = Number.isFinite(safePayload.revision) ? Math.max(0, Math.trunc(safePayload.revision)) : 0
+  const surfaceLayerTextureAssetIds = normalizeAssetIds(safePayload.surfaceLayerTextureAssetIds)
+  const groundSurfaceChunks = cloneValue(tileMaterialMap)
   runtimeGroundSplats.set(sceneId, {
     sceneId,
     nodeId: groundNode.id,
@@ -76,9 +85,11 @@ function replaceRuntimeState(
   groundNode.dynamicMesh = {
     ...definition,
     groundSurfaceChunks: cloneValue(groundSurfaceChunks),
+    groundTileMaterialMap: cloneValue(groundSurfaceChunks),
     groundSplatBake: {
       revision,
       chunkTextureMap: cloneValue(groundSurfaceChunks),
+      tileMaterialMap: cloneValue(groundSurfaceChunks),
       surfaceLayerTextureAssetIds,
     },
   }
@@ -90,7 +101,12 @@ function buildPayload(sceneId: string, groundNode: SceneNode | null): GroundSpla
     return null
   }
   const currentState = runtimeGroundSplats.get(sceneId) ?? null
-  const groundSurfaceChunks = cloneValue(definition.groundSurfaceChunks ?? currentState?.groundSurfaceChunks ?? null)
+  const groundSurfaceChunks = cloneValue(
+    definition.groundTileMaterialMap
+      ?? definition.groundSurfaceChunks
+      ?? currentState?.groundSurfaceChunks
+      ?? null,
+  )
   if (!groundSurfaceChunks || Object.keys(groundSurfaceChunks).length <= 0) {
     return null
   }
@@ -105,6 +121,7 @@ function buildPayload(sceneId: string, groundNode: SceneNode | null): GroundSpla
     revision,
     surfaceLayerTextureAssetIds,
     groundSurfaceChunks,
+    groundTileMaterialMap: groundSurfaceChunks,
   }
 }
 
@@ -120,10 +137,12 @@ export function attachGroundSplatRuntimeToNode(
   groundNode.dynamicMesh = {
     ...definition,
     groundSurfaceChunks: cloneValue(state.groundSurfaceChunks),
+    groundTileMaterialMap: cloneValue(state.groundSurfaceChunks),
     groundSplatBake: state.groundSurfaceChunks
       ? {
           revision: state.revision,
           chunkTextureMap: cloneValue(state.groundSurfaceChunks),
+          tileMaterialMap: cloneValue(state.groundSurfaceChunks),
           surfaceLayerTextureAssetIds: cloneValue(state.surfaceLayerTextureAssetIds),
         }
       : null,
@@ -152,16 +171,23 @@ export const useGroundSplatStore = defineStore('groundSplat', {
       nodeId: string,
       payload: Omit<GroundSplatSidecarPayload, 'groundNodeId'> | null,
     ): GroundSplatRuntimeState | null {
-      if (!payload?.groundSurfaceChunks || Object.keys(payload.groundSurfaceChunks).length <= 0) {
+      const safePayload = payload ?? {
+        revision: 0,
+        surfaceLayerTextureAssetIds: null,
+        groundSurfaceChunks: null,
+        groundTileMaterialMap: null,
+      }
+      const tileMaterialMap = safePayload.groundTileMaterialMap ?? safePayload.groundSurfaceChunks ?? null
+      if (!tileMaterialMap || Object.keys(tileMaterialMap).length <= 0) {
         runtimeGroundSplats.delete(sceneId)
         return null
       }
       const state: GroundSplatRuntimeState = {
         sceneId,
         nodeId,
-        revision: Number.isFinite(payload.revision) ? Math.max(0, Math.trunc(payload.revision)) : 0,
-        surfaceLayerTextureAssetIds: normalizeAssetIds(payload.surfaceLayerTextureAssetIds),
-        groundSurfaceChunks: cloneValue(payload.groundSurfaceChunks),
+        revision: Number.isFinite(safePayload.revision) ? Math.max(0, Math.trunc(safePayload.revision)) : 0,
+        surfaceLayerTextureAssetIds: normalizeAssetIds(safePayload.surfaceLayerTextureAssetIds),
+        groundSurfaceChunks: cloneValue(tileMaterialMap),
       }
       runtimeGroundSplats.set(sceneId, state)
       return state

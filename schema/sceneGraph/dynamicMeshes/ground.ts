@@ -24,7 +24,6 @@ export async function buildGroundMesh(
     ? (node.userData as Record<string, unknown>)
     : {};
   userData.dynamicMeshType = 'Ground';
-  userData.groundChunked = true;
   if ('runtimeTerrainDatasetManifest' in sourceUserData) {
     userData.runtimeTerrainDatasetManifest = sourceUserData.runtimeTerrainDatasetManifest ?? null;
   }

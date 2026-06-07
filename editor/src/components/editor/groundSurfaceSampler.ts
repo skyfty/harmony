@@ -28,7 +28,7 @@ function resolveGroundSurfaceSource(intersection: THREE.Intersection): GroundSur
   ) {
     return 'flat'
   }
-  if (userData?.groundChunkBatch || userData?.groundChunk) {
+  if (userData?.groundChunkBatch) {
     return 'flat'
   }
   return 'sculpted'
