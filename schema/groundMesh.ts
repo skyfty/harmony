@@ -7959,12 +7959,6 @@ export function updateGroundChunks(
 
   if (!forceDenseChunkMeshes && shouldSyncFlatChunks) {
     const localEditTiles = getLocalEditTiles()
-    const skipLoadWindow = {
-      minChunkRow: minLoadChunkRow,
-      maxChunkRow: maxLoadChunkRow,
-      minChunkColumn: minLoadChunkColumn,
-      maxChunkColumn: maxLoadChunkColumn,
-    }
     const needsFullFlatChunkScan = force
       || desiredWindowChanged
       || state.lastFlatChunkSyncTilingVersion < 0
@@ -7988,7 +7982,7 @@ export function updateGroundChunks(
           minChunkColumn: flatMinLoadChunkColumn,
           maxChunkColumn: flatMaxLoadChunkColumn,
         },
-        skipLoadWindow,
+        null,
       )
     } else {
       const overlapMinChunkRow = Math.max(flatTilingExpansion.nextMinChunkRow, flatTilingExpansion.previousMinChunkRow)
@@ -8006,7 +8000,7 @@ export function updateGroundChunks(
             minChunkColumn: flatTilingExpansion.nextMinChunkColumn,
             maxChunkColumn: flatTilingExpansion.nextMaxChunkColumn,
           },
-          skipLoadWindow,
+          null,
         )
       }
       if (flatTilingExpansion.nextMaxChunkRow > flatTilingExpansion.previousMaxChunkRow) {
@@ -8022,7 +8016,7 @@ export function updateGroundChunks(
             minChunkColumn: flatTilingExpansion.nextMinChunkColumn,
             maxChunkColumn: flatTilingExpansion.nextMaxChunkColumn,
           },
-          skipLoadWindow,
+          null,
         )
       }
       if (overlapMinChunkRow <= overlapMaxChunkRow) {
@@ -8039,7 +8033,7 @@ export function updateGroundChunks(
               minChunkColumn: flatTilingExpansion.nextMinChunkColumn,
               maxChunkColumn: flatTilingExpansion.previousMinChunkColumn - 1,
             },
-            skipLoadWindow,
+            null,
           )
         }
         if (flatTilingExpansion.nextMaxChunkColumn > flatTilingExpansion.previousMaxChunkColumn) {
@@ -8055,7 +8049,7 @@ export function updateGroundChunks(
               minChunkColumn: flatTilingExpansion.previousMaxChunkColumn + 1,
               maxChunkColumn: flatTilingExpansion.nextMaxChunkColumn,
             },
-            skipLoadWindow,
+            null,
           )
         }
       }

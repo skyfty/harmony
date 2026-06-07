@@ -12,6 +12,8 @@ import {
   formatCompiledGroundTileKey,
   resolveGroundChunkBounds,
   resolveGroundChunkOrigin,
+  parseGroundChunkKey,
+  resolveGroundTileMaterialMap,
   resolveGroundWorldBounds,
   serializeCompiledGroundCollisionTile,
   serializeCompiledGroundRenderTile,
@@ -78,6 +80,65 @@ type CompiledGroundBuildContext = {
   files: Record<string, Uint8Array>
   renderTiles: CompiledGroundRenderTileRecord[]
   collisionTiles: CompiledGroundCollisionTileRecord[]
+}
+
+type GroundChunkCoverageBounds = {
+  minChunkX: number
+  maxChunkX: number
+  minChunkZ: number
+  maxChunkZ: number
+}
+
+function expandChunkCoverageBounds(
+  bounds: GroundChunkCoverageBounds | null,
+  chunkX: number,
+  chunkZ: number,
+): GroundChunkCoverageBounds {
+  if (!bounds) {
+    return {
+      minChunkX: chunkX,
+      maxChunkX: chunkX,
+      minChunkZ: chunkZ,
+      maxChunkZ: chunkZ,
+    }
+  }
+  return {
+    minChunkX: Math.min(bounds.minChunkX, chunkX),
+    maxChunkX: Math.max(bounds.maxChunkX, chunkX),
+    minChunkZ: Math.min(bounds.minChunkZ, chunkZ),
+    maxChunkZ: Math.max(bounds.maxChunkZ, chunkZ),
+  }
+}
+
+function resolveGroundTileMaterialCoveredChunkBounds(definition: GroundDynamicMesh): GroundChunkCoverageBounds | null {
+  const tileMaterialMap = resolveGroundTileMaterialMap(definition)
+  if (!tileMaterialMap) {
+    return null
+  }
+  let bounds: GroundChunkCoverageBounds | null = null
+  for (const chunkKey of Object.keys(tileMaterialMap)) {
+    const parsed = parseGroundChunkKey(chunkKey)
+    if (!parsed) {
+      continue
+    }
+    bounds = expandChunkCoverageBounds(bounds, parsed.chunkX, parsed.chunkZ)
+  }
+  return bounds
+}
+
+function mergeChunkCoverageBounds(
+  base: GroundChunkCoverageBounds,
+  overlay: GroundChunkCoverageBounds | null,
+): GroundChunkCoverageBounds {
+  if (!overlay) {
+    return base
+  }
+  return {
+    minChunkX: Math.min(base.minChunkX, overlay.minChunkX),
+    maxChunkX: Math.max(base.maxChunkX, overlay.maxChunkX),
+    minChunkZ: Math.min(base.minChunkZ, overlay.minChunkZ),
+    maxChunkZ: Math.max(base.maxChunkZ, overlay.maxChunkZ),
+  }
 }
 
 type BuildCompiledGroundAsyncOptions = {
@@ -326,7 +387,10 @@ function prepareCompiledGroundBuildContext(
   const renderRootPath = `${sceneRoot}/render`
   const collisionRootPath = `${sceneRoot}/collision`
   const worldBounds = resolveGroundWorldBounds(definition)
-  const coveredChunkBounds = resolveGroundChunkBounds(definition)
+  const coveredChunkBounds = mergeChunkCoverageBounds(
+    resolveGroundChunkBounds(definition),
+    resolveGroundTileMaterialCoveredChunkBounds(definition),
+  )
   const chunkSizeMeters = Number.isFinite(definition.chunkSizeMeters) && definition.chunkSizeMeters! > 0
     ? Number(definition.chunkSizeMeters)
     : 100

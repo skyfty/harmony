@@ -1168,6 +1168,7 @@ type SceneStoreGroundSplatBakeTarget = Pick<SceneState, 'nodes'> & {
   currentSceneId?: string | null
   queueSceneNodePatch: (nodeId: string, fields: ScenePatchField[], options?: { bumpVersion?: boolean }) => boolean
   bumpSceneNodePropertyVersion?: () => void
+  ensureCurrentSceneCompiledGroundReady?: (options?: { forceRebuild?: boolean }) => Promise<boolean>
 }
 
 function collectLandformSurfaceLayerTextureAssetIdsFromNodes(nodes: SceneNode[] | undefined | null): string[] {
@@ -1269,6 +1270,13 @@ const landformGroundSplatBakeScheduler = createLatestIdleScheduler<LandformGroun
     const queued = request.scene.queueSceneNodePatch(groundNode.id, ['dynamicMesh'])
     if (!queued) {
       request.scene.bumpSceneNodePropertyVersion?.()
+    }
+    if (request.scene.currentSceneId && typeof request.scene.ensureCurrentSceneCompiledGroundReady === 'function') {
+      void request.scene.ensureCurrentSceneCompiledGroundReady({
+        forceRebuild: true,
+      }).catch((error) => {
+        console.warn('[SceneStore] Failed to rebuild compiled ground after landform bake', error)
+      })
     }
   })().catch((error) => {
     console.warn('[SceneStore] Failed to bake landform ground splat', error)
@@ -2384,6 +2392,13 @@ function shouldUseCompiledGroundForDefinition(
   if (dynamicGround.planningMetadata?.demSource) {
     return true
   }
+  const tileMaterialMap = dynamicGround.groundTileMaterialMap
+    ?? dynamicGround.groundSplatBake?.tileMaterialMap
+    ?? dynamicGround.groundSplatBake?.chunkTextureMap
+    ?? null
+  if (tileMaterialMap && Object.keys(tileMaterialMap).length > 0) {
+    return true
+  }
   const localEditTileCount = dynamicGround.localEditTiles && typeof dynamicGround.localEditTiles === 'object'
     ? Object.keys(dynamicGround.localEditTiles).length
     : 0
@@ -2414,8 +2429,6 @@ function stripGroundSplatRuntimeFromCompiledGroundSourceDocument(
   groundNode.dynamicMesh = {
     ...definition,
     groundSurfaceChunks: null,
-    groundTileMaterialMap: null,
-    groundSplatBake: null,
   }
   return nextDocument
 }
