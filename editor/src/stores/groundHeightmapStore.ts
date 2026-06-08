@@ -699,8 +699,6 @@ function resolveRuntimeMeshView(
     surfaceRevision: Number.isFinite(state.surfaceRevision) ? Math.max(0, Math.trunc(state.surfaceRevision as number)) : definition.surfaceRevision,
   }
   return state.cachedRuntimeMesh as GroundRuntimeDynamicMesh
-
-  return state.cachedRuntimeMesh as GroundRuntimeDynamicMesh
 }
 
 function replaceRuntimeGroundHeightmapsFromSidecar(
