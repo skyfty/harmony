@@ -2145,33 +2145,56 @@ function commitGroundHeightMapRuntimeEdit(
   manualRegion: GroundHeightRegion | null = null,
   dirtyBounds: WorldBoundsXZ | null = null,
 ): boolean {
+  // 仅允许对当前场景中的 Ground 节点提交运行时高度图修改；
+  // 缺少目标节点、节点不是 Ground，或当前场景尚未建立时直接终止。
   const target = findNodeById(store.nodes, nodeId)
   if (!target || target.dynamicMesh?.type !== 'Ground' || !store.currentSceneId) {
     return false
   }
+
+  // definition 可能是传入的运行时定义副本，这里统一按运行时结构处理，
+  // 后续会同时回写到目标节点与当前定义，保证内存中的两个引用保持一致。
   const runtimeDefinition = definition as GroundRuntimeDynamicMesh
+  // 若调用方未显式提供脏区域，则通过旧/新手工高度图差异自动计算，
+  // 以便后续仅刷新受影响的地形块与相关联的地貌节点。
   const resolvedDirtyBounds = dirtyBounds ?? computeGroundDirtyBoundsXZ(target, runtimeDefinition, runtimeDefinition.manualHeightMap, manualHeightMap)
+  // 每次地表高度发生运行时编辑都递增 surfaceRevision，
+  // 用于触发依赖地形表面的渲染、缓存和编译结果失效。
   const currentRevision = normalizeGroundSurfaceRevision(target.dynamicMesh.surfaceRevision)
   const nextRevision = currentRevision + 1
   const targetRuntimeDefinition = target.dynamicMesh as GroundRuntimeDynamicMesh
+
+  // 先更新场景树中的目标节点运行时状态，标记高度数据已脏，
+  // 并临时禁用优化分块，以避免在高度尚未重新水合完成前显示旧网格。
   targetRuntimeDefinition.surfaceRevision = nextRevision
   targetRuntimeDefinition.runtimeHydratedHeightState = 'dirty'
   targetRuntimeDefinition.runtimeDisableOptimizedChunks = true
+
+  // 同步更新调用侧持有的定义对象，确保外部继续使用该 definition 时看到的是最新状态。
   definition.surfaceRevision = nextRevision
   runtimeDefinition.runtimeHydratedHeightState = 'dirty'
   runtimeDefinition.runtimeDisableOptimizedChunks = true
+
+  // 如果传入的是局部区域，则只替换该手工高度区域；
+  // 否则认为整张 manualHeightMap 已准备好，直接整体替换。
   if (manualRegion) {
     useGroundHeightmapStore().replaceManualHeightRegion(nodeId, definition, manualRegion)
   } else {
     useGroundHeightmapStore().replaceManualHeightMap(nodeId, definition, manualHeightMap)
   }
+
+  // 根据本次修改的区域标记优化网格脏块，后续重建 optimized mesh 时只处理必要 chunk。
   useGroundHeightmapStore().markOptimizedMeshDirtyChunkKeys(
     nodeId,
     definition,
     resolveGroundDirtyChunkKeysFromRegion(definition, manualRegion),
   )
+
+  // 地面高度变化可能影响依附其上的地貌/附属节点，因此需要刷新关联节点。
   refreshLandformNodesForGroundChange(store, nodeId, resolvedDirtyBounds)
+  // 统一走动态网格运行时补丁收尾逻辑，触发场景节点补丁与视图更新。
   finalizeDynamicMeshRuntimePatch(store, nodeId, 'Ground')
+  // 将当前 Ground 的高度侧车数据加入持久化调度，避免运行时编辑丢失。
   persistGroundHeightSidecarForNode(target)
   return true
 }
@@ -2188,33 +2211,50 @@ function commitGroundLocalEditTilesRuntimeEdit(
   localEditTiles: GroundLocalEditTileMap | null,
   affectedRegion: { minRow: number; maxRow: number; minColumn: number; maxColumn: number } | null = null,
 ): boolean {
+  // 仅在当前场景中对 Ground 节点提交局部编辑瓦片时继续执行。
   const target = findNodeById(store.nodes, nodeId)
   if (!target || target.dynamicMesh?.type !== 'Ground' || !store.currentSceneId) {
     return false
   }
+
+  // 运行时定义与目标节点定义都会被更新，避免不同引用上的状态漂移。
   const runtimeDefinition = definition as GroundRuntimeDynamicMesh
   const targetRuntimeDefinition = target.dynamicMesh as GroundRuntimeDynamicMesh
+  // 根据受影响的网格区域换算出世界坐标脏边界，用于最小化联动刷新范围。
   const resolvedDirtyBounds = computeGroundDirtyBoundsXZFromRegion(target, runtimeDefinition, affectedRegion)
+
+  // 局部编辑瓦片也属于地表变更，需要递增 surfaceRevision 使下游缓存失效。
   const currentRevision = normalizeGroundSurfaceRevision(target.dynamicMesh.surfaceRevision)
   const nextRevision = currentRevision + 1
+
+  // 传入的 localEditTiles 不是全量覆盖，而是与已有运行时/节点/定义中的瓦片映射进行合并。
   const mergedLocalEditTiles = mergeGroundLocalEditTileMaps(
     runtimeDefinition.localEditTiles ?? targetRuntimeDefinition.localEditTiles ?? definition.localEditTiles ?? null,
     localEditTiles,
   )
+
+  // 更新场景树中 Ground 节点的运行时状态，标记需要重新生成高度与优化网格。
   target.dynamicMesh.surfaceRevision = nextRevision
   targetRuntimeDefinition.runtimeHydratedHeightState = 'dirty'
   targetRuntimeDefinition.runtimeDisableOptimizedChunks = true
   targetRuntimeDefinition.localEditTiles = mergedLocalEditTiles
+
+  // 同步回写调用方持有的 definition，确保后续逻辑读取的是合并后的最新瓦片数据。
   definition.surfaceRevision = nextRevision
   runtimeDefinition.runtimeHydratedHeightState = 'dirty'
   runtimeDefinition.runtimeDisableOptimizedChunks = true
   runtimeDefinition.localEditTiles = mergedLocalEditTiles
+
+  // 将合并结果写入 GroundHeightmapStore，作为运行时局部编辑瓦片的权威来源。
   useGroundHeightmapStore().replaceLocalEditTiles(nodeId, definition, mergedLocalEditTiles)
+  // 标记受影响的优化网格 chunk，避免全量重建。
   useGroundHeightmapStore().markOptimizedMeshDirtyChunkKeys(
     nodeId,
     definition,
     resolveGroundDirtyChunkKeysFromRegion(definition, affectedRegion),
   )
+
+  // 局部瓦片改动同样会影响相关地貌节点与视图中的动态网格状态。
   refreshLandformNodesForGroundChange(store, nodeId, resolvedDirtyBounds)
   finalizeDynamicMeshRuntimePatch(store, nodeId, 'Ground')
   persistGroundHeightSidecarForNode(target)
@@ -2235,6 +2275,7 @@ function commitGroundHeightRegionRuntimeEdit(
   localEditTiles: GroundLocalEditTileMap | null,
   affectedRegion: { minRow: number; maxRow: number; minColumn: number; maxColumn: number } | null = null,
 ): boolean {
+  // Ground 高度区域提交要求目标节点存在、类型正确且当前场景有效。
   const target = findNodeById(store.nodes, nodeId)
   if (!target || target.dynamicMesh?.type !== 'Ground' || !store.currentSceneId) {
     return false
@@ -2242,12 +2283,15 @@ function commitGroundHeightRegionRuntimeEdit(
 
   const runtimeDefinition = definition as GroundRuntimeDynamicMesh
   const targetRuntimeDefinition = target.dynamicMesh as GroundRuntimeDynamicMesh
+  // 对区域边界做整数化与非负归一，避免外部输入小数或负值导致索引越界。
   const committedRegion = {
     startRow: Math.max(0, Math.trunc(heightRegion.startRow)),
     endRow: Math.max(0, Math.trunc(heightRegion.endRow)),
     startColumn: Math.max(0, Math.trunc(heightRegion.startColumn)),
     endColumn: Math.max(0, Math.trunc(heightRegion.endColumn)),
   }
+  // normalizedHeightRegion 是真正写入 store 的编辑区域：
+  // 保留传入 values，但边界和顶点维度会被标准化，确保数据结构可被后续逻辑安全消费。
   const normalizedHeightRegion: GroundHeightRegion = {
     startRow: committedRegion.startRow,
     endRow: committedRegion.endRow,
@@ -2257,6 +2301,8 @@ function commitGroundHeightRegionRuntimeEdit(
     vertexColumns: Math.max(0, Math.trunc(heightRegion.vertexColumns)),
     values: heightRegion.values,
   }
+  // 对同一范围生成一个“清空手工高度覆盖”的区域，所有值都填充为未设置标记；
+  // 这样在导入/规划区高度覆盖后，可确保旧的 manualHeight 覆盖不会继续污染该区域。
   const manualClearRegion: GroundHeightRegion = {
     startRow: committedRegion.startRow,
     endRow: committedRegion.endRow,
@@ -2266,41 +2312,57 @@ function commitGroundHeightRegionRuntimeEdit(
     vertexColumns: Math.max(0, committedRegion.endColumn - committedRegion.startColumn + 1),
     values: new Float64Array(Math.max(0, committedRegion.endRow - committedRegion.startRow + 1) * Math.max(0, committedRegion.endColumn - committedRegion.startColumn + 1)).fill(GROUND_HEIGHT_UNSET_VALUE),
   }
+  // 若调用方未提供受影响范围，则默认按本次提交的高度区域作为刷新范围。
   const committedAffectedRegion = affectedRegion ?? {
     minRow: committedRegion.startRow,
     maxRow: committedRegion.endRow,
     minColumn: committedRegion.startColumn,
     maxColumn: committedRegion.endColumn,
   }
+
+  // 计算世界坐标脏区域，供地貌联动和优化网格刷新使用。
   const resolvedDirtyBounds = computeGroundDirtyBoundsXZFromRegion(target, runtimeDefinition, committedAffectedRegion)
+  // 区域高度编辑属于实质性地表修改，因此需要推进 surfaceRevision。
   const currentRevision = normalizeGroundSurfaceRevision(target.dynamicMesh.surfaceRevision)
   const nextRevision = currentRevision + 1
+
+  // 合并局部编辑瓦片，兼容本次区域更新同时附带的纹理/局部编辑结果。
   const mergedLocalEditTiles = mergeGroundLocalEditTileMaps(
     runtimeDefinition.localEditTiles ?? targetRuntimeDefinition.localEditTiles ?? definition.localEditTiles ?? null,
     localEditTiles,
   )
+
+  // 先更新目标节点上的运行时状态：包括表面版本、脏标记、规划元数据与局部编辑瓦片。
   target.dynamicMesh.surfaceRevision = nextRevision
   targetRuntimeDefinition.surfaceRevision = nextRevision
   targetRuntimeDefinition.runtimeHydratedHeightState = 'dirty'
   targetRuntimeDefinition.runtimeDisableOptimizedChunks = true
   targetRuntimeDefinition.planningMetadata = metadata
   targetRuntimeDefinition.localEditTiles = mergedLocalEditTiles
+
+  // 再同步更新外部 definition 引用，保持与目标节点一致。
   definition.surfaceRevision = nextRevision
   runtimeDefinition.runtimeHydratedHeightState = 'dirty'
   runtimeDefinition.runtimeDisableOptimizedChunks = true
   runtimeDefinition.planningMetadata = metadata
   runtimeDefinition.localEditTiles = mergedLocalEditTiles
 
+  // 将新的高度区域与规划元数据写入地形高度图 store。
   useGroundHeightmapStore().replaceGroundHeightRegion(nodeId, definition, normalizedHeightRegion, metadata)
+  // 仅当局部编辑瓦片存在时才写回，避免用空值无意义覆盖现有状态。
   if (mergedLocalEditTiles) {
     useGroundHeightmapStore().replaceLocalEditTiles(nodeId, definition, mergedLocalEditTiles)
   }
+  // 清除同范围内的手工高度覆盖，让区域编辑结果成为该区域的最终高度来源。
   useGroundHeightmapStore().replaceManualHeightRegion(nodeId, definition, manualClearRegion)
+  // 标记本次区域涉及的优化网格 chunk 为脏，以触发按需重建。
   useGroundHeightmapStore().markOptimizedMeshDirtyChunkKeys(
     nodeId,
     definition,
     resolveGroundDirtyChunkKeysFromRegion(definition, committedAffectedRegion),
   )
+
+  // 刷新依附于地面的联动节点，随后提交动态网格补丁并安排侧车持久化。
   refreshLandformNodesForGroundChange(store, nodeId, resolvedDirtyBounds)
   finalizeDynamicMeshRuntimePatch(store, nodeId, 'Ground')
   persistGroundHeightSidecarForNode(target)
@@ -2316,15 +2378,22 @@ function refreshGroundOptimizedMeshRuntime(
   },
   nodeId: string,
 ): boolean {
+  // 只有当前场景内的 Ground 节点才允许执行优化网格刷新。
   const target = findNodeById(store.nodes, nodeId)
   if (!target || target.dynamicMesh?.type !== 'Ground' || !store.currentSceneId) {
     return false
   }
 
+  // 统一从 GroundHeightmapStore 解析运行时 Ground 定义与高度采样器；
+  // 这样可以在刷新 optimized mesh 时始终基于最新的运行时高度状态。
   const groundHeightmapStore = useGroundHeightmapStore()
   const runtimeDefinition = groundHeightmapStore.resolveGroundRuntimeMesh(nodeId, target.dynamicMesh)
   const heightSampler = groundHeightmapStore.resolveGroundRuntimeHeightSampler(nodeId, target.dynamicMesh)
+  // 读取并消费已累计的脏边界，让本次优化网格重建尽量局部化。
   const dirtyBounds = groundHeightmapStore.consumeOptimizedMeshDirtyBounds(nodeId, runtimeDefinition)
+
+  // 若仍存在局部编辑瓦片或运行时高度覆盖，说明地形还处于编辑态，
+  // 即使重建了 optimized mesh，也不能将其视为完全稳定的最终结果。
   const hasLocalEditTiles = Boolean(runtimeDefinition.localEditTiles && Object.keys(runtimeDefinition.localEditTiles).length > 0)
   const hasRuntimeHeightOverrides = Boolean(
     (Number.isFinite(runtimeDefinition.runtimeManualHeightOverrideCount) && (runtimeDefinition.runtimeManualHeightOverrideCount ?? 0) > 0)
@@ -2334,6 +2403,9 @@ function refreshGroundOptimizedMeshRuntime(
     || runtimeDefinition.runtimeDisableOptimizedChunks === true
     || hasLocalEditTiles
     || hasRuntimeHeightOverrides
+
+  // 基于当前 runtimeDefinition 与高度采样器重建优化网格；
+  // 如有 dirtyBounds，则底层逻辑可只更新受影响区域。
   const optimizedMesh = rebuildOptimizedGroundMeshForDefinition(
     runtimeDefinition,
     target.dynamicMesh.optimizedMesh,
@@ -2342,6 +2414,8 @@ function refreshGroundOptimizedMeshRuntime(
     heightSampler,
   )
   if (preserveRuntimeEditState) {
+    // 仍处于编辑态时，只更新 optimizedMesh 引用，
+    // 但保留 dirty / disableOptimizedChunks 等标记，避免系统误判为完全收敛状态。
     const targetRuntimeMesh = target.dynamicMesh as GroundRuntimeDynamicMesh
     runtimeDefinition.optimizedMesh = optimizedMesh
     targetRuntimeMesh.optimizedMesh = optimizedMesh
@@ -2353,9 +2427,12 @@ function refreshGroundOptimizedMeshRuntime(
     targetRuntimeMesh.runtimeHydratedHeightState = 'dirty'
     targetRuntimeMesh.runtimeDisableOptimizedChunks = true
   } else {
+    // 若不再存在运行时编辑残留，则将优化网格标记为 ready，表示可正常作为稳定结果使用。
     markGroundOptimizedMeshReady(runtimeDefinition, optimizedMesh)
     markGroundOptimizedMeshReady(target.dynamicMesh, optimizedMesh)
   }
+
+  // 将最新的运行时地形状态同步回 GroundHeightmapStore，再触发补丁与持久化流程。
   groundHeightmapStore.syncRuntimeGroundState(nodeId, runtimeDefinition)
   finalizeDynamicMeshRuntimePatch(store, nodeId, 'Ground')
   persistGroundHeightSidecarForNode(target)
@@ -2367,13 +2444,20 @@ function applyCompiledGroundPackageToStore(
   buildKey: string,
   pkg: SceneCompiledGroundPackage | null,
 ): void {
+  // 编译产物 buildKey 统一去空白后写入，空字符串会被折叠为 null，
+  // 便于下游以是否存在 buildKey 判断当前是否有有效编译结果。
   const normalizedBuildKey = typeof buildKey === 'string' ? buildKey.trim() : ''
   store.compiledGroundBuildKey = normalizedBuildKey || null
+  // manifest 与二进制文件映射一起缓存到 store，供 Ground 编译资源读取逻辑直接消费。
   store.compiledGroundManifest = pkg?.manifest ?? null
   store.compiledGroundFiles = pkg?.files ? new Map<string, ArrayBuffer>(pkg.files) : new Map<string, ArrayBuffer>()
+
+  // 如果当前没有 Ground 节点，则无需同步 userData 上的编译开关与 manifest 摘要。
   if (store.groundNode?.dynamicMesh?.type !== 'Ground') {
     return
   }
+
+  // 在 groundNode.userData 中保留一份编译状态，方便编辑器视图层或检查逻辑快速判断。
   store.groundNode.userData = {
     ...(store.groundNode.userData ?? {}),
     compiledGroundEnabled: Boolean(pkg?.manifest),
@@ -2385,13 +2469,18 @@ function shouldUseCompiledGroundForDefinition(
   dynamicGround: GroundDynamicMesh,
   terrainDatasetId: string | null = null,
 ): boolean {
+  // 指定了地形数据集时，优先使用 compiled ground，
+  // 因为这通常意味着地形需要依赖外部数据源进行编译/切片。
   const normalizedTerrainDatasetId = typeof terrainDatasetId === 'string' ? terrainDatasetId.trim() : ''
   if (normalizedTerrainDatasetId) {
     return true
   }
+  // 带有 DEM 来源的规划元数据，也说明该 Ground 需要走编译地形通道。
   if (dynamicGround.planningMetadata?.demSource) {
     return true
   }
+
+  // 若已存在瓦片材质映射或 splat bake 的贴图映射，说明地面拥有需要编译分发的纹理块数据。
   const tileMaterialMap = dynamicGround.groundTileMaterialMap
     ?? dynamicGround.groundSplatBake?.tileMaterialMap
     ?? dynamicGround.groundSplatBake?.chunkTextureMap
@@ -2399,18 +2488,26 @@ function shouldUseCompiledGroundForDefinition(
   if (tileMaterialMap && Object.keys(tileMaterialMap).length > 0) {
     return true
   }
+
+  // 存在局部编辑瓦片时，同样倾向使用 compiled ground，
+  // 以便这些局部修改能被整理为稳定的编译输出。
   const localEditTileCount = dynamicGround.localEditTiles && typeof dynamicGround.localEditTiles === 'object'
     ? Object.keys(dynamicGround.localEditTiles).length
     : 0
   if (localEditTileCount > 0) {
     return true
   }
+
+  // surfaceRevision 大于 0 说明地表已发生过编辑，通常需要重新编译地形以固化修改结果。
   const surfaceRevision = Number.isFinite(dynamicGround.surfaceRevision)
     ? Math.max(0, Math.trunc(dynamicGround.surfaceRevision as number))
     : 0
   if (surfaceRevision > 0) {
     return true
   }
+
+  // 最后回退到 chunkManifestRevision 判断：
+  // 只要 chunk manifest 已发生版本推进，也表示该 Ground 具备编译地形使用条件。
   const chunkManifestRevision = Number.isFinite(dynamicGround.chunkManifestRevision)
     ? Math.max(0, Math.trunc(dynamicGround.chunkManifestRevision as number))
     : 0
@@ -9485,32 +9582,26 @@ export const useSceneStore = defineStore('scene', {
     ): Promise<boolean> {
       const document = createCompiledGroundSourceDocument(this)
       const groundNode = this.groundNode
-      const sourceGroundNode = document ? findGroundNode(document.nodes as unknown as SceneNode[]) : null
-      if (
-        !document
-        || !groundNode
-        || groundNode.dynamicMesh?.type !== 'Ground'
-        || !sourceGroundNode
-        || sourceGroundNode.dynamicMesh?.type !== 'Ground'
-      ) {
+      if ( !document  || !groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
         applyCompiledGroundPackageToStore(this, '', null)
         return false
       }
+
       const scenesStore = useScenesStore()
       const terrainDatasetManifest = await scenesStore.loadTerrainDatasetManifest(document.id)
-      if (!shouldUseCompiledGroundForDefinition(sourceGroundNode.dynamicMesh, terrainDatasetManifest?.datasetId ?? null)) {
+      if (!shouldUseCompiledGroundForDefinition(groundNode.dynamicMesh, terrainDatasetManifest?.datasetId ?? null)) {
         applyCompiledGroundPackageToStore(this, '', null)
         await scenesStore.saveCompiledGroundBundle(document.id, null)
         return true
       }
       const buildKey = computeSceneCompiledGroundBuildKey(
         document.id,
-        sourceGroundNode.dynamicMesh,
+        groundNode.dynamicMesh,
         terrainDatasetManifest?.datasetId ?? null,
       )
       const sourceSignature = computeSceneCompiledGroundSourceSignature(
         document.id,
-        sourceGroundNode.dynamicMesh,
+        groundNode.dynamicMesh,
         terrainDatasetManifest?.datasetId ?? null,
       )
       const pkg = await ensureSceneCompiledGroundPackage(document, buildKey, {

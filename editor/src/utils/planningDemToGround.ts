@@ -1080,10 +1080,20 @@ export function buildPlanningDemLocalEditTilesForRegion(options: {
   endColumn: number
   onProgress?: (payload: PlanningDemBuildProgress) => void
 }): GroundLocalEditTileMap | null {
+  // 先根据输入的网格定义、DEM 数据源以及目标行列范围，
+  // 解析出本次局部编辑瓦片构建所需的执行计划。
+  // 该计划通常会包含需要覆盖的瓦片范围、采样策略以及后续同步构建阶段所需的上下文信息。
   const plan = resolvePlanningDemLocalEditTileBuildPlan(options)
   if (!plan) {
+    // 当无法生成有效构建计划时，说明当前给定范围没有可构建内容，
+    // 或输入条件不足以支持后续瓦片生成流程。
+    // 此时直接返回 null，调用方可据此判断本次区域无需生成局部编辑瓦片。
     return null
   }
+
+  // 若计划解析成功，则基于该计划和原始栅格数据源执行同步构建。
+  // onProgress 回调会在构建过程中持续向外部报告进度，
+  // 便于界面或任务调度逻辑及时更新状态。
   return buildPlanningDemLocalEditTilesForRegionSyncFromPlan(plan, options.source, options.onProgress)
 }
 
@@ -1633,6 +1643,7 @@ export function buildGroundRegionDataFromRaster(options: {
   endColumn: number
   onProgress?: (payload: PlanningDemBuildProgress) => void
 }): PlanningDemRegionConversionResult {
+  // 先将原始栅格数据整理为内部统一使用的数据源结构。
   const prepared = resolvePlanningDemPreparedSourceFromRaster({
     definition: options.definition,
     rasterData: options.rasterData,
@@ -1646,7 +1657,9 @@ export function buildGroundRegionDataFromRaster(options: {
     sampleStepMeters: options.sampleStepMeters ?? 1,
     elevationOffsetMeters: options.elevationOffsetMeters ?? 0,
   })
+  // 使用节流后的进度回调，避免高频通知影响交互性能。
   const reportProgress = createThrottledPlanningDemProgressReporter(options.onProgress)
+  // 根据指定行列范围生成地面高度区域数据。
   const region = buildPlanningDemHeightRegion({
     definition: options.definition,
     source: prepared.rasterSource,
@@ -1656,6 +1669,7 @@ export function buildGroundRegionDataFromRaster(options: {
     endColumn: options.endColumn,
     onProgress: (payload) => reportProgress(payload),
   })
+  // 基于已生成的区域边界，继续构建对应的本地编辑瓦片。
   const localEditTiles = buildPlanningDemLocalEditTilesForRegion({
     definition: options.definition,
     source: prepared.rasterSource,
@@ -1665,6 +1679,7 @@ export function buildGroundRegionDataFromRaster(options: {
     endColumn: region.endColumn,
     onProgress: (payload) => reportProgress(payload),
   })
+
   return {
     region,
     localEditTiles,
