@@ -21705,12 +21705,25 @@ function syncViewportCompiledGroundTiles(
   groundObject: THREE.Object3D,
   groundDefinition: GroundRuntimeDynamicMesh,
 ): void {
+  // 获取或初始化挂载在地表对象上的用户数据容器。
+  // 这里用于记录编译地表相关的运行时状态，方便后续同步时进行对比、复用和清理。
   const groundUserData = groundObject.userData ?? (groundObject.userData = {})
+
+  // 从场景状态中读取当前编译地表的 Manifest。
+  // 使用 toRaw 取出原始对象，避免把响应式代理直接传递给下层同步逻辑。
   const manifestSource = sceneStore.compiledGroundManifest
   const manifest = manifestSource ? toRaw(manifestSource) : null
+
+  // 读取当前编译包的 BuildKey，并去掉首尾空白。
+  // 如果结果为空，表示当前没有可用的编译地表包。
   const buildKey = typeof sceneStore.compiledGroundBuildKey === 'string'
     ? sceneStore.compiledGroundBuildKey.trim()
     : ''
+
+  // 如果 Manifest 或 BuildKey 无效，则说明编译地表功能当前不可用：
+  // 1. 关闭启用标记；
+  // 2. 清空记录的包信息；
+  // 3. 重置已加载分块并清理渲染瓦片，避免残留旧资源。
   if (!manifest || !buildKey) {
     groundUserData.compiledGroundEnabled = false
     groundUserData.compiledGroundManifest = null
@@ -21722,24 +21735,49 @@ function syncViewportCompiledGroundTiles(
     return
   }
 
+  // 进入这里表示编译地表资源可用，先写入基础状态，供后续逻辑读取。
   groundUserData.compiledGroundEnabled = true
   groundUserData.compiledGroundManifest = manifest
   groundUserData.compiledGroundBuildKey = buildKey
+
+  // 计算当前 Manifest 的版本号：优先采用 Manifest 自带 revision；
+  // 若 revision 不可用，则根据内容计算一个稳定的版本值。
   const revision = Number.isFinite(manifest.revision)
     ? Math.max(0, Math.trunc(manifest.revision))
     : computeCompiledGroundManifestRevision(manifest)
+
+  // 读取上一次同步时记录的 Manifest 版本，用于判断资源包是否发生变化。
   const previousRevision = Number.isFinite(groundUserData[GROUND_COMPILED_MANIFEST_REVISION_USERDATA_KEY] as number)
     ? Math.max(0, Math.trunc(groundUserData[GROUND_COMPILED_MANIFEST_REVISION_USERDATA_KEY] as number))
     : -1
+
+  // 读取上一次同步时记录的 BuildKey，用于判断是否切换到了不同的编译包。
   const previousBuildKey = typeof groundUserData[GROUND_COMPILED_BUILD_KEY_USERDATA_KEY] === 'string'
     ? String(groundUserData[GROUND_COMPILED_BUILD_KEY_USERDATA_KEY])
     : ''
+
+  // 读取当前对象上记录的“排除分块”列表。
+  // 这些分块对应的瓦片需要在当前编译包同步时跳过加载。
   const excludedChunkKeys = readViewportGroundCompiledExcludedChunkKeys(groundObject)
+
+  // 将排除的分块键转换成具体的瓦片键列表，供底层渲染瓦片同步逻辑直接过滤。
   const excludedTileKeys = collectCompiledGroundRenderTileKeysForChunkKeys(manifest, excludedChunkKeys)
+
+  // 判断编译包是否变更：只要版本号或 BuildKey 变化，就视为新的编译包。
   const compiledPackageChanged = previousRevision !== revision || previousBuildKey !== buildKey
+
+  // 如果编译包已变化且之前存在排除分块，则清空排除列表，避免旧配置影响新包。
   if (compiledPackageChanged && excludedChunkKeys.length > 0) {
     setViewportGroundCompiledExcludedChunkKeys(groundObject, [])
   }
+
+  // 同步当前编译地表渲染瓦片：
+  // - groundObject / groundDefinition：当前地表对象及其定义；
+  // - camera：用于视距、可见性等加载判定；
+  // - sourceId / revision / manifest：标识当前资源包；
+  // - loadTileData：按需读取瓦片数据；
+  // - excludedChunkKeys：需要跳过的瓦片键；
+  // - streamingMode：编辑器概览场景下的流式加载模式。
   syncCompiledGroundRenderTiles({
     groundObject,
     groundDefinition,
@@ -21751,8 +21789,12 @@ function syncViewportCompiledGroundTiles(
     excludedChunkKeys: excludedTileKeys,
     streamingMode: 'editor-overview',
   })
+
+  // 将本次同步使用的版本信息写回 userData，作为下次比较的基准。
   groundUserData[GROUND_COMPILED_MANIFEST_REVISION_USERDATA_KEY] = revision
   groundUserData[GROUND_COMPILED_BUILD_KEY_USERDATA_KEY] = buildKey
+
+  // 记录当前已加载的编译分块键，便于后续查询、增量刷新或清理。
   setViewportGroundLoadedCompiledChunkKeys(groundObject, collectLoadedCompiledGroundChunkKeys(groundObject, manifest))
 }
 

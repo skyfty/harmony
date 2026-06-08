@@ -19,8 +19,6 @@ type CompiledGroundRenderRuntime = {
   pendingLoads: Map<string, Promise<void>>
   sourceId: string | null
   revision: number
-  lastDebugLogAt: number
-  lastDebugSignature: string
   loadedChunkKeysVersion: number
   loadedChunkKeysCacheVersion: number
   loadedChunkKeysCacheManifest: CompiledGroundManifest | null
@@ -416,8 +414,6 @@ function ensureCompiledGroundRenderRuntime(groundObject: THREE.Object3D): Compil
     pendingLoads: new Map(),
     sourceId: null,
     revision: -1,
-    lastDebugLogAt: 0,
-    lastDebugSignature: '',
     loadedChunkKeysVersion: 0,
     loadedChunkKeysCacheVersion: -1,
     loadedChunkKeysCacheManifest: null,
@@ -446,8 +442,6 @@ export function clearCompiledGroundRenderTiles(groundObject: THREE.Object3D): vo
   runtime.pendingLoads.clear()
   runtime.sourceId = null
   runtime.revision = -1
-  runtime.lastDebugLogAt = 0
-  runtime.lastDebugSignature = ''
   runtime.loadedChunkKeysVersion += 1
   runtime.loadedChunkKeysCacheVersion = -1
   runtime.loadedChunkKeysCacheManifest = null
@@ -706,20 +700,6 @@ export function syncCompiledGroundRenderTiles(params: SyncCompiledGroundRenderTi
   const filteredRetainedKeys = new Set(Array.from(retainedKeys).filter((key) => !excludedChunkKeys.has(key)))
   params.camera.getWorldPosition(cameraLocalHelper)
   params.groundObject.worldToLocal(cameraLocalHelper)
-  const nextDebugSignature = [
-    params.sourceId,
-    params.revision,
-    filteredDesired.length,
-    runtime.meshes.size,
-    runtime.pendingLoads.size,
-    activeRadiusTiles,
-    retainRadiusTiles,
-    Math.round(cameraLocalHelper.x),
-    Math.round(cameraLocalHelper.z),
-  ].join('|')
-  const now = Date.now()
-  runtime.lastDebugLogAt = now
-  runtime.lastDebugSignature = nextDebugSignature
 
   runtime.meshes.forEach((mesh, key) => {
     if (mesh.frustumCulled !== tileFrustumCulled) {
