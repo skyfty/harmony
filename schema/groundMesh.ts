@@ -2676,18 +2676,25 @@ function applyAccumulatedGroundDeltas(
   definition: GroundRuntimeDynamicMesh,
   accumulator: Map<number, GroundHeightDeltaAccumulatorEntry>,
 ): boolean {
+  // 标记本次批量应用过程中是否实际修改了地形数据。
   let modified = false
+  // 工作网格尺寸用于把累积器中的顶点索引还原为行列坐标。
   const gridSize = resolveGroundWorkingGridSize(definition)
   const columns = gridSize.columns
   accumulator.forEach((entry, index) => {
+    // 没有有效权重，或者累计高度变化不是有限数值时，直接跳过，避免写入非法结果。
     if (!(entry.weight > 0) || !Number.isFinite(entry.delta)) {
       return
     }
+
+    // local 模式表示变化量要写入局部编辑瓦片，而不是基础粗网格顶点。
     if (entry.mode === 'local') {
+      // 所有索引都做整数化，防止外部传入小数或 undefined 导致寻址异常。
       const tileRow = Math.trunc(entry.tileRow ?? 0)
       const tileColumn = Math.trunc(entry.tileColumn ?? 0)
       const localRow = Math.trunc(entry.localRow ?? 0)
       const localColumn = Math.trunc(entry.localColumn ?? 0)
+      // 确保目标局部编辑瓦片已创建，并且使用累积条目记录的瓦片尺寸与分辨率。
       const tile = ensureGroundLocalEditTileStorage(
         definition,
         tileRow,
@@ -2695,24 +2702,34 @@ function applyAccumulatedGroundDeltas(
         entry.tileSizeMeters,
         entry.resolution,
       )
+      // 分辨率至少为 1，避免后续根据局部坐标换算世界坐标时出现除零。
       const resolution = Math.max(1, Math.trunc(tile.resolution))
+      // 先解析瓦片左上角（或最小坐标）在世界空间中的位置，再还原该局部采样点的世界坐标。
       const { minX, minZ } = resolveGroundLocalEditTileWorldMin(definition, tileRow, tileColumn, tile.tileSizeMeters)
       const x = minX + (localColumn / resolution) * tile.tileSizeMeters
       const z = minZ + (localRow / resolution) * tile.tileSizeMeters
+      // 优先读取瓦片中已经存在的存储值；如果该点尚未被写入，则回退到当前地形采样高度。
       const storedHeight = getGroundLocalEditTileStoredValue(tile, localRow, localColumn)
       const currentHeight = storedHeight ?? sampleGroundHeight(definition, x, z)
+      // entry.delta / entry.weight 表示该点的加权平均高度改变量。
       const nextHeight = currentHeight + entry.delta / entry.weight
+      // 将最终高度写回局部编辑瓦片，使局部精细编辑结果生效。
       setGroundLocalEditTileValue(definition, tileRow, tileColumn, localRow, localColumn, nextHeight)
       modified = true
       return
     }
+
+    // coarse 模式下，累积器键值是基础网格顶点索引，需要换算成行列位置。
     const row = Math.floor(index / (columns + 1))
     const column = index % (columns + 1)
+    // 读取该有效顶点当前高度，再叠加平均改变量。
     const currentHeight = resolveGroundEffectiveHeightAtVertex(definition, row, column)
     const nextHeight = currentHeight + entry.delta / entry.weight
+    // 通过覆盖值接口写入，确保后续读取到的是编辑后的有效高度。
     setGroundCoverageHeightOverrideForEffectiveValue(definition, resolveGroundWorldXForColumn(definition, column), resolveGroundWorldZForRow(definition, row), nextHeight)
     modified = true
   })
+  // 返回是否有任何顶点或局部瓦片被修改，用于上层决定是否继续触发刷新逻辑。
   return modified
 }
 
@@ -2720,28 +2737,37 @@ function applyCircularRaiseDepressSubsampled(
   definition: GroundRuntimeDynamicMesh,
   params: Pick<SculptParams, 'point' | 'radius' | 'strength' | 'operation'>,
 ): boolean {
+  // 圆形抬升/下压工具：在采样窗口内进行子采样，再把结果按权重回写到地形。
   const { point, radius, strength, operation } = params
   const subdivisions = resolveGroundSculptSubdivisions(definition)
   const useLocalEditWindow = shouldUseGroundLocalEditTiles(definition)
+  // 如果既没有启用子采样，也没有启用局部编辑窗口，则该高精度路径无需执行。
   if (subdivisions <= 1 && !useLocalEditWindow) {
     return false
   }
+  // 单元尺寸兜底为 1，避免异常 cellSize 导致步长不可用。
   const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1
+  // 启用局部编辑瓦片时，优先使用局部编辑分辨率；否则使用基础网格的子采样步长。
   const sampleStep = useLocalEditWindow
     ? Math.min(cellSize, Math.max(resolveGroundEditCellSize(definition), Number.EPSILON))
     : cellSize / subdivisions
   const localX = point.x
   const localZ = point.z
+  // 基于圆形影响范围生成采样窗口，减少不必要的遍历。
   const window = resolveGroundSculptSampleWindow(sampleStep, {
     minX: localX - radius,
     maxX: localX + radius,
     minZ: localZ - radius,
     maxZ: localZ + radius,
   })
+  // depress 为向下，其余视为向上。
   const direction = operation === 'depress' ? -1 : 1
+  // 累积器负责收集所有采样点对网格顶点或局部瓦片点的贡献。
   const accumulator = new Map<number, GroundHeightDeltaAccumulatorEntry>()
+  // 每个子采样点的基础权重，保证 subdivision 越高时总体强度不会无限放大。
   const sampleWeight = 1 / (Math.max(1, subdivisions) * Math.max(1, subdivisions))
 
+  // 在采样窗口内逐点遍历，对圆形区域内部的采样点计算抬升/下压影响。
   for (let row = window.minRow; row <= window.maxRow; row += 1) {
     const z = window.originZ + row * sampleStep
     for (let column = window.minColumn; column <= window.maxColumn; column += 1) {
@@ -2749,18 +2775,24 @@ function applyCircularRaiseDepressSubsampled(
       const dx = x - localX
       const dz = z - localZ
       const distSq = dx * dx + dz * dz
+      // 圆外的采样点不产生影响。
       if (distSq >= radius * radius) {
         continue
       }
       const dist = Math.sqrt(distSq)
+      // 使用余弦曲线让中心影响最大、边缘逐渐衰减，形成更平滑的笔刷效果。
       let influence = Math.cos((dist / radius) * (Math.PI / 2))
+      // 叠加轻微噪声，避免雕刻结果过于机械、绝对平滑。
       const noiseVal = sculptNoise(x * 0.05, z * 0.05, 0)
       influence *= 1.0 + noiseVal * 0.1
+      // strength 与方向共同决定最终高度增量，0.3 是当前工具的经验缩放系数。
       const delta = direction * strength * influence * 0.3
+      // 将该采样点的影响分发到邻近控制点或局部编辑采样点中。
       accumulateGroundDeltaAtPoint(definition, accumulator, x, z, delta, sampleWeight)
     }
   }
 
+  // 统一应用累积结果，避免在采样过程中重复读写导致结果不稳定。
   return applyAccumulatedGroundDeltas(definition, accumulator)
 }
 
@@ -2770,52 +2802,69 @@ function applyPolygonRaiseDepressSubsampled(
   normalizedPolygon: SculptPolygonPoint[],
   params: Pick<SculptParams, 'operation' | 'strength' | 'depth' | 'slope'>,
 ): boolean {
+  // 多边形抬升/下压工具：先收集所有位于多边形内部的采样点，再统一计算边界渐变与高度变化。
   const subdivisions = resolveGroundSculptSubdivisions(definition)
   const useLocalEditWindow = shouldUseGroundLocalEditTiles(definition)
+  // 仅在启用子采样或局部编辑瓦片时走该精细路径。
   if (subdivisions <= 1 && !useLocalEditWindow) {
     return false
   }
+  // 保证采样步长的基础尺寸合法。
   const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 1e-6 ? definition.cellSize : 1
+  // 根据当前编辑模式选择采样步长，局部编辑优先使用更细的编辑网格分辨率。
   const sampleStep = useLocalEditWindow
     ? Math.min(cellSize, Math.max(resolveGroundEditCellSize(definition), Number.EPSILON))
     : cellSize / subdivisions
+  // 只在多边形包围盒内采样，降低计算开销。
   const window = resolveGroundSculptSampleWindow(sampleStep, polygonBounds)
   const direction = params.operation === 'depress' ? -1 : 1
+  // depth 用于控制带坡度时的绝对高度影响，非法值回退到 0。
   const effectiveDepth = Number.isFinite(params.depth) ? Math.max(0, params.depth ?? 0) : 0
+  // slope 控制从边界向内的渐变宽度，默认值为 0.5。
   const effectiveSlope = Number.isFinite(params.slope) ? params.slope ?? 0.5 : 0.5
   const accumulator = new Map<number, GroundHeightDeltaAccumulatorEntry>()
   const sampleWeight = 1 / (Math.max(1, subdivisions) * Math.max(1, subdivisions))
+  // 先缓存所有候选采样点以及其到边界的距离，后续统一计算 ramp 参数。
   const candidates: Array<{ x: number; z: number; boundaryDistance: number }> = []
   let maxBoundaryDistance = 0
 
+  // 遍历包围盒中的采样点，只保留真正落在多边形内部的点。
   for (let row = window.minRow; row <= window.maxRow; row += 1) {
     const z = window.originZ + row * sampleStep
     for (let column = window.minColumn; column <= window.maxColumn; column += 1) {
       const x = window.originX + column * sampleStep
       const samplePoint = { x, z }
+      // 多边形外部点不参与本次雕刻。
       if (!isPointInsideSculptPolygonXZ(samplePoint, normalizedPolygon)) {
         continue
       }
+      // 记录采样点到最近边界的距离，以便后续构造边缘缓坡或平台效果。
       const boundaryDistance = computeSculptPolygonBoundaryDistance(samplePoint, normalizedPolygon)
       maxBoundaryDistance = Math.max(maxBoundaryDistance, boundaryDistance)
       candidates.push({ x, z, boundaryDistance })
     }
   }
 
+  // 没有任何命中点时，说明包围盒内没有有效编辑区域。
   if (!candidates.length) {
     return false
   }
 
+  // 根据最大边界距离、深度与坡度推导渐变带宽度。
   const rampWidth = computePolygonRaiseDepressRampWidth(maxBoundaryDistance, effectiveDepth, effectiveSlope)
   for (const candidate of candidates) {
+    // 未指定 depth 时，使用 strength 驱动一个统一的平坦增量。
     let delta = direction * params.strength * 0.3
     if (effectiveDepth > 0) {
+      // 指定 depth 后，根据候选点距边界的距离采样剖面曲线，形成边缘过渡效果。
       const profile = computePolygonRaiseDepressProfile(candidate.boundaryDistance, rampWidth)
       delta = direction * effectiveDepth * profile
     }
+    // 将当前采样点的结果累计到对应的地形控制点。
     accumulateGroundDeltaAtPoint(definition, accumulator, candidate.x, candidate.z, delta, sampleWeight)
   }
 
+  // 最后统一回写累计后的高度变化。
   return applyAccumulatedGroundDeltas(definition, accumulator)
 }
 
