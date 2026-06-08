@@ -491,8 +491,8 @@ export function computeSceneCompiledGroundSourceSignature(
     runtimeManualHeightOverrideCount: Number.isFinite(runtimeGround.runtimeManualHeightOverrideCount)
       ? Math.max(0, Math.trunc(runtimeGround.runtimeManualHeightOverrideCount as number))
       : 0,
-    runtimePlanningHeightOverrideCount: Number.isFinite(runtimeGround.runtimePlanningHeightOverrideCount)
-      ? Math.max(0, Math.trunc(runtimeGround.runtimePlanningHeightOverrideCount as number))
+    runtimeEditHeightOverrideCount: Number.isFinite(runtimeGround.runtimeEditHeightOverrideCount)
+      ? Math.max(0, Math.trunc(runtimeGround.runtimeEditHeightOverrideCount as number))
       : 0,
   }))
   return `${buildKey}|surface:${groundSurfaceSignature}`

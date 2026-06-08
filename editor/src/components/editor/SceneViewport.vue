@@ -3882,13 +3882,6 @@ const groundEditor = createGroundEditor({
   }) => {
     setViewportGroundPreviewHiddenChunkKeys(groundObject, [])
     updateGroundMesh(groundObject, definition)
-    if (chunkKeys?.length) {
-      const nextExcludedKeys = new Set([
-        ...readViewportGroundHiddenChunkKeys(groundObject, GROUND_COMPILED_EXCLUDED_CHUNK_KEYS_USERDATA_KEY),
-        ...normalizeViewportGroundHiddenChunkKeys(chunkKeys),
-      ])
-      setViewportGroundCompiledExcludedChunkKeys(groundObject, nextExcludedKeys)
-    }
     syncViewportGroundChunks(groundObject, definition, { forceChunkRefresh: true })
     const signature = computeGroundDynamicMeshSignature(definition)
     const signatureTarget = resolveGroundSignatureTarget(groundObject)
@@ -21389,7 +21382,7 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
       }
       refreshGroundRuntimeMaterials(node, object, { refreshChunks: false })
       const nextSignature = computeGroundDynamicMeshSignature(groundDefinition)
-      const signatureChanged = groundData[DYNAMIC_MESH_SIGNATURE_KEY] !== nextSignature
+      const signatureChanged =true
       if (signatureChanged) {
         const shouldSkipSculptRefresh = groundData[GROUND_SCULPT_SKIP_REFRESH_SIGNATURE_KEY] === nextSignature
         if (!shouldSkipSculptRefresh) {

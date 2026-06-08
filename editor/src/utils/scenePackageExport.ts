@@ -84,7 +84,7 @@ type SceneGroundTerrainOverrideState = {
   surfaceRevision?: number
   localEditTiles?: Record<string, unknown> | null
   runtimeManualHeightOverrideCount?: number
-  runtimePlanningHeightOverrideCount?: number
+  runtimeEditHeightOverrideCount?: number
 }
 
 function hasSceneGroundTerrainOverrides(dynamicMesh: unknown): boolean {
@@ -117,8 +117,8 @@ function hasSceneGroundTerrainOverrides(dynamicMesh: unknown): boolean {
     return true
   }
 
-  const planningOverrideCount = Number(ground.runtimePlanningHeightOverrideCount)
-  return Number.isFinite(planningOverrideCount) && planningOverrideCount > 0
+  const editOverrideCount = Number(ground.runtimeEditHeightOverrideCount)
+  return Number.isFinite(editOverrideCount) && editOverrideCount > 0
 }
 
 function buildEffectiveAssetRegistry(

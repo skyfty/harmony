@@ -52,10 +52,8 @@ import {
 	type ModelInstanceGroup,
 } from '@schema/modelObjectCache'
 import {
-  buildPlanningDemGroundRegionDataFromRaster,
-  type PlanningDemSourceTransform,
-  type PlanningDemTargetWorldBounds,
-} from '@/utils/planningDemToGround'
+  buildGroundRegionDataFromRaster,
+} from '@/utils/groundRegionConversion'
 import {
 	getBillboardAspectRatio,
 	getOrLoadBillboardInstanceGroup,
@@ -229,6 +227,19 @@ const scatterGroundWorldMatrixHelper = new THREE.Matrix4()
 const scatterInstanceWorldPositionHelper = new THREE.Vector3()
 const scatterBboxSizeHelper = new THREE.Vector3()
 const scatterPreviewProjectedHelper = new THREE.Vector3()
+
+type GroundSourceTransform = {
+	centerX: number
+	centerZ: number
+	rotationRadians: number
+}
+
+type GroundTargetWorldBounds = {
+	minX: number
+	minZ: number
+	maxX: number
+	maxZ: number
+}
 
 function clampFinite(value: unknown, fallback: number): number {
 	const num = typeof value === 'number' ? value : Number(value)
@@ -3735,26 +3746,40 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		return sessionDefinition
 	}
 
-	function buildSculptBrushDemSource(
+	/**
+	 * 构建地形区域的采样源
+	 * 根据地形定义和目标区域生成光栅化的高度数据，用于采样和转换
+	 * @param definition - 地形运行时动态网格定义
+	 * @param groundObject - 地形三维对象，用于采样真实运行时表面高度
+	 * @param region - 区域范围，如果为null则使用整个地形范围
+	 * @param options - 可选参数，包含旋转角度
+	 * @returns 包含光栅数据、尺寸、世界边界和变换信息的采样源对象
+	 */
+	function buildGroundSourceFromRegion(
 		definition: GroundRuntimeDynamicMesh,
 		groundObject: THREE.Object3D | null,
 		region: { minRow: number; maxRow: number; minColumn: number; maxColumn: number } | null,
 		options?: {
 			rotationRadians?: number
 		},
-	): {
+		): {
 		rasterData: Float64Array
 		width: number
 		height: number
-		targetWorldBounds: PlanningDemTargetWorldBounds
-		sourceTransform: PlanningDemSourceTransform
+		targetWorldBounds: GroundTargetWorldBounds
+		sourceTransform: GroundSourceTransform
 		sampleStepMeters: number
 	} {
+		// 获取地形网格的行列数
 		const gridSize = resolveGroundWorkingGridSize(definition)
 		const rows = Math.max(1, Math.trunc(gridSize.rows))
 		const columns = Math.max(1, Math.trunc(gridSize.columns))
+		
+		// 获取地形的世界坐标边界
 		const bounds = resolveGroundWorldBounds(definition)
 		const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
+		
+		// 将输入的雕刻区域进行规范化处理，确保在有效范围内
 		const normalizedRegion = region
 			? {
 				minRow: Math.max(0, Math.min(rows, Math.floor(region.minRow))),
@@ -3768,49 +3793,72 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				minColumn: 0,
 				maxColumn: columns,
 			}
+		
+		// 计算规范化区域在本地坐标系中的边界（单位：米）
 		const localMinX = bounds.minX + normalizedRegion.minColumn * cellSize
 		const localMaxX = bounds.minX + normalizedRegion.maxColumn * cellSize
 		const localMinZ = bounds.minZ + normalizedRegion.minRow * cellSize
 		const localMaxZ = bounds.minZ + normalizedRegion.maxRow * cellSize
+		
+		// 计算光栅数据的宽度和深度
 		const sourceWidthMeters = Math.max(cellSize, localMaxX - localMinX)
 		const sourceDepthMeters = Math.max(cellSize, localMaxZ - localMinZ)
-		const sampleStepMeters = 1
+		const sampleStepMeters = 1 // 采样步长为1米
+		
+		// 根据物理尺寸和采样步长计算光栅数据的分辨率（像素数）
 		const width = Math.max(2, Math.round(sourceWidthMeters / sampleStepMeters) + 1)
 		const height = Math.max(2, Math.round(sourceDepthMeters / sampleStepMeters) + 1)
-		const targetWorldBounds: PlanningDemTargetWorldBounds = {
+		
+		// 定义目标世界坐标系边界（以区域中心为原点）
+		const targetWorldBounds: GroundTargetWorldBounds = {
 			minX: -sourceWidthMeters * 0.5,
 			minZ: -sourceDepthMeters * 0.5,
 			maxX: sourceWidthMeters * 0.5,
 			maxZ: sourceDepthMeters * 0.5,
 		}
-		const sourceTransform: PlanningDemSourceTransform = {
+		
+		// 定义采样源的变换信息（中心点和旋转角度）
+		const sourceTransform: GroundSourceTransform = {
 			centerX: (localMinX + localMaxX) * 0.5,
 			centerZ: (localMinZ + localMaxZ) * 0.5,
 			rotationRadians: Number.isFinite(options?.rotationRadians ?? 0) ? Number(options?.rotationRadians ?? 0) : 0,
 		}
+		
+		// 创建用于存储高度数据的数组
 		const rasterData = new Float64Array(width * height)
+		
+		// 预计算旋转的余弦和正弦值，用于坐标变换
 		const cos = Math.cos(sourceTransform.rotationRadians)
 		const sin = Math.sin(sourceTransform.rotationRadians)
 
+		// 遍历每个光栅像素，采样对应的高度值
 		for (let row = 0; row < height; row += 1) {
 			const localZ = targetWorldBounds.minZ + row * sampleStepMeters
 			for (let column = 0; column < width; column += 1) {
 				const localX = targetWorldBounds.minX + column * sampleStepMeters
+				
+				// 将本地坐标通过旋转变换转换为世界坐标
 				const worldX = sourceTransform.centerX + localX * cos - localZ * sin
 				const worldZ = sourceTransform.centerZ + localX * sin + localZ * cos
+				
+				// 首先尝试从运行时地形对象采样高度（具有更高精度）
 				const runtimeSample = groundObject
 					? sampleGroundRuntimeSurfaceAtWorldXZ(groundObject, worldX, worldZ)
 					: null
+				
 				if (runtimeSample && Number.isFinite(runtimeSample.height)) {
 					rasterData[row * width + column] = runtimeSample.height
 					continue
 				}
+				
+				// 如果运行时采样失败，则从网格定义中采样高度
 				const sampleRow = Math.max(0, Math.min(rows, Math.round((worldZ - bounds.minZ) / cellSize)))
 				const sampleColumn = Math.max(0, Math.min(columns, Math.round((worldX - bounds.minX) / cellSize)))
 				rasterData[row * width + column] = resolveGroundEffectiveHeightAtVertex(definition, sampleRow, sampleColumn)
 			}
 		}
 
+		// 返回完整的采样源对象
 		return {
 			rasterData,
 			width,
@@ -3868,19 +3916,19 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				maxColumn: gridSize.columns,
 			}
 
-		// 获取地形对象并构建笔刷 DEM 源数据（包含雕刻修改）
+		// 获取地形对象并构建区域采样源（包含当前编辑结果）
 		const groundObject = getGroundObject()
-		const brushDemSource = buildSculptBrushDemSource(committedDefinition, groundObject, commitRegion, { rotationRadians: 0 })
+		const brushSource = buildGroundSourceFromRegion(committedDefinition, groundObject, commitRegion, { rotationRadians: 0 })
 
-		// 将栅格化的 DEM 数据转换为地形规划格式
-		const planningConversion = buildPlanningDemGroundRegionDataFromRaster({
+		// 将栅格化数据转换为地形编辑格式
+		const groundConversion = buildGroundRegionDataFromRaster({
 			definition: committedDefinition,
-			rasterData: brushDemSource.rasterData,
-			width: brushDemSource.width,
-			height: brushDemSource.height,
-			targetWorldBounds: brushDemSource.targetWorldBounds,
-			sourceTransform: brushDemSource.sourceTransform,
-			sampleStepMeters: brushDemSource.sampleStepMeters,
+			rasterData: brushSource.rasterData,
+			width: brushSource.width,
+			height: brushSource.height,
+			targetWorldBounds: brushSource.targetWorldBounds,
+			sourceTransform: brushSource.sourceTransform,
+			sampleStepMeters: brushSource.sampleStepMeters,
 			startRow: commitRegion.minRow,
 			endRow: commitRegion.maxRow,
 			startColumn: commitRegion.minColumn,
@@ -3893,12 +3941,12 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			: undefined
 
 		// 将地形规划编辑提交到场景存储
-		const committed = options.sceneStore.commitGroundPlanningDemEdit(
+		const committed = options.sceneStore.commitGroundHeightRegionEdit(
 			targetNode.id,
 			committedDefinition,
-			planningConversion.region,
-			planningConversion.planningMetadata,
-			planningConversion.localEditTiles,
+			groundConversion.region,
+			groundConversion.planningMetadata,
+			groundConversion.localEditTiles,
 			normalizedAffectedRegion ?? commitRegion,
 		)
 

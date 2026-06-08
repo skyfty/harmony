@@ -758,7 +758,7 @@ function syncPlanningHeightState(
   definition.surfaceRevision = nextRevision
   definition.runtimeHydratedHeightState = 'dirty'
   definition.runtimeDisableOptimizedChunks = true
-  useGroundHeightmapStore().replacePlanningHeightMap(
+  useGroundHeightmapStore().replaceGroundHeightMap(
     groundNode.id,
     groundNode.dynamicMesh as GroundDynamicMesh,
     definition.planningHeightMap,
@@ -818,7 +818,7 @@ function syncGroundCoverageRegionState(
   const groundHeightmapStore = useGroundHeightmapStore()
   
   // 更新高度图存储中的规划元数据
-  groundHeightmapStore.updatePlanningMetadata(groundNode.id, definition, definition.planningMetadata ?? null)
+  groundHeightmapStore.updateGroundHeightMetadata(groundNode.id, definition, definition.planningMetadata ?? null)
   
   // 标记需要更新的优化分块键
   groundHeightmapStore.markOptimizedMeshDirtyChunkKeys(groundNode.id, definition, dirtyChunkKeys)
@@ -883,7 +883,7 @@ function applyPlanningDemRegionToGround(
   if (localEditTiles) {
     useGroundHeightmapStore().replaceLocalEditTiles(groundNode.id, nextGroundSeed, mergedLocalEditTiles)
   } else {
-    useGroundHeightmapStore().replacePlanningHeightRegion(
+    useGroundHeightmapStore().replaceGroundHeightRegion(
       groundNode.id,
       nextGroundSeed,
       region,

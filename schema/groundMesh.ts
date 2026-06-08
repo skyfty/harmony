@@ -1313,12 +1313,12 @@ function adjustRuntimeGroundHeightOverrideCount(
     return
   }
 
-  if (definition.runtimePlanningHeightOverrideSourceRef === map && Number.isFinite(definition.runtimePlanningHeightOverrideCount)) {
-    definition.runtimePlanningHeightOverrideCount = Math.max(
+  if (definition.runtimeEditHeightOverrideSourceRef === map && Number.isFinite(definition.runtimeEditHeightOverrideCount)) {
+    definition.runtimeEditHeightOverrideCount = Math.max(
       0,
-      Math.trunc(definition.runtimePlanningHeightOverrideCount as number) + Math.trunc(delta),
+      Math.trunc(definition.runtimeEditHeightOverrideCount as number) + Math.trunc(delta),
     )
-    definition.runtimePlanningHeightOverrideSourceLength = map.length
+    definition.runtimeEditHeightOverrideSourceLength = map.length
   }
 }
 
@@ -1339,13 +1339,13 @@ function ensureRuntimeGroundHeightOverrideCounts(definition: GroundRuntimeDynami
   }
 
   if (
-    definition.runtimePlanningHeightOverrideSourceRef !== planningHeightMap
-    || definition.runtimePlanningHeightOverrideSourceLength !== planningLength
-    || !Number.isFinite(definition.runtimePlanningHeightOverrideCount)
+    definition.runtimeEditHeightOverrideSourceRef !== planningHeightMap
+    || definition.runtimeEditHeightOverrideSourceLength !== planningLength
+    || !Number.isFinite(definition.runtimeEditHeightOverrideCount)
   ) {
-    definition.runtimePlanningHeightOverrideCount = countGroundHeightOverrides(planningHeightMap)
-    definition.runtimePlanningHeightOverrideSourceRef = planningHeightMap
-    definition.runtimePlanningHeightOverrideSourceLength = planningLength
+    definition.runtimeEditHeightOverrideCount = countGroundHeightOverrides(planningHeightMap)
+    definition.runtimeEditHeightOverrideSourceRef = planningHeightMap
+    definition.runtimeEditHeightOverrideSourceLength = planningLength
   }
 }
 
@@ -1376,9 +1376,9 @@ function hasRuntimeGroundHeightOverrides(definition: GroundRuntimeDynamicMesh): 
 
   ensureRuntimeGroundHeightOverrideCounts(definition)
   const manualOverrideCount = definition.runtimeManualHeightOverrideCount
-  const planningOverrideCount = definition.runtimePlanningHeightOverrideCount
-  if (Number.isFinite(manualOverrideCount) || Number.isFinite(planningOverrideCount)) {
-    if ((manualOverrideCount ?? 0) > 0 || (planningOverrideCount ?? 0) > 0) {
+  const editOverrideCount = definition.runtimeEditHeightOverrideCount
+  if (Number.isFinite(manualOverrideCount) || Number.isFinite(editOverrideCount)) {
+    if ((manualOverrideCount ?? 0) > 0 || (editOverrideCount ?? 0) > 0) {
       definition.runtimeHydratedHeightState = 'dirty'
       definition.runtimeDisableOptimizedChunks = true
       return true
@@ -4975,44 +4975,25 @@ function appendGroundFlatChunkGroup(
 function collectGroundFlatChunkGroupsInRange(
   target: Map<string, { spec: GroundChunkSpec; keys: string[] }>,
   definition: GroundRuntimeDynamicMesh,
-  runtimeDefinition: GroundRuntimeDynamicMesh,
-  localEditTiles: GroundLocalEditTileData[],
   state: GroundRuntimeState,
   range: {
     minChunkRow: number
     maxChunkRow: number
     minChunkColumn: number
     maxChunkColumn: number
-  },
-  skipLoadWindow: {
-    minChunkRow: number
-    maxChunkRow: number
-    minChunkColumn: number
-    maxChunkColumn: number
-  } | null = null,
+  }
 ): void {
   if (range.minChunkRow > range.maxChunkRow || range.minChunkColumn > range.maxChunkColumn) {
     return
   }
   for (let cr = range.minChunkRow; cr <= range.maxChunkRow; cr += 1) {
     for (let cc = range.minChunkColumn; cc <= range.maxChunkColumn; cc += 1) {
-      if (
-        skipLoadWindow
-        && cr >= skipLoadWindow.minChunkRow && cr <= skipLoadWindow.maxChunkRow
-        && cc >= skipLoadWindow.minChunkColumn && cc <= skipLoadWindow.maxChunkColumn
-      ) {
-        continue
-      }
       const key = groundChunkKey(cr, cc)
       if (state.chunks.has(key) || state.flatChunkKeys.has(key) || state.hiddenChunkKeys.has(key)) {
         continue
       }
 
       const spec = computeChunkSpec(definition, cr, cc)
-      if (chunkIntersectsGroundLocalEditTileFromRuntime(runtimeDefinition, spec, localEditTiles)) {
-        continue
-      }
-
       appendGroundFlatChunkGroup(target, spec, key)
     }
   }
@@ -5803,10 +5784,11 @@ export function sculptGround(definition: GroundRuntimeDynamicMesh, params: Sculp
   const rows = gridSize.rows
   const bounds = resolveGroundGridWorldBounds(definition)
 
-  // Point is in local coordinates
+  // 采样点使用本地坐标
   const localX = point.x
   const localZ = point.z
 
+  // 多边形模式下先复制并归一化轮廓点，避免直接修改输入参数
   const sculptPolygonContour = shape === 'polygon'
     ? (polygonPoints ?? []).map((polygonPoint) => polygonPoint.clone())
     : []
@@ -5815,6 +5797,7 @@ export function sculptGround(definition: GroundRuntimeDynamicMesh, params: Sculp
     return false
   }
 
+  // 计算雕刻影响范围的边界盒
   const polygonBounds = computeSculptPolygonBounds(normalizedPolygon)
 
   const minCol = shape === 'polygon'
@@ -5834,6 +5817,7 @@ export function sculptGround(definition: GroundRuntimeDynamicMesh, params: Sculp
   let heightMap = definition.manualHeightMap
 
   if (shape === 'polygon') {
+    // 多边形抬升/下压优先尝试子采样路径，提高大面积编辑效率
     if (operation === 'raise' || operation === 'depress') {
       const subsampled = applyPolygonRaiseDepressSubsampled(definition, heightMap, polygonBounds, normalizedPolygon, {
         operation,
@@ -5847,6 +5831,7 @@ export function sculptGround(definition: GroundRuntimeDynamicMesh, params: Sculp
       }
     }
 
+    // 多边形平滑与填平也优先走子采样逻辑
     if ((operation === 'smooth' || operation === 'flatten' || operation === 'flatten-zero') && applyPolygonSurfaceSubsampled(definition, heightMap, polygonBounds, normalizedPolygon, {
       operation,
       strength,
@@ -5864,6 +5849,7 @@ export function sculptGround(definition: GroundRuntimeDynamicMesh, params: Sculp
     }> = []
     let maxBoundaryDistance = 0
 
+    // 收集多边形内部的候选顶点，并统计最大边界距离
     for (let row = Math.max(0, minRow); row <= Math.min(rows, maxRow); row++) {
       for (let col = Math.max(0, minCol); col <= Math.min(columns, maxCol); col++) {
         const x = bounds.minX + col * cellSize
@@ -5891,6 +5877,7 @@ export function sculptGround(definition: GroundRuntimeDynamicMesh, params: Sculp
     const effectiveSlope = Number.isFinite(slope) ? slope ?? 0.5 : 0.5
     const rampWidth = computePolygonRaiseDepressRampWidth(maxBoundaryDistance, effectiveDepth, effectiveSlope)
 
+    // 按操作类型计算新的顶点高度
     for (const candidate of polygonCandidates) {
       const { row, col, boundaryDistance, currentHeight } = candidate
       let nextHeight = currentHeight
@@ -5948,11 +5935,13 @@ export function sculptGround(definition: GroundRuntimeDynamicMesh, params: Sculp
     return true
   }
 
+  // 圆形模式下逐网格遍历影响范围内的顶点
   for (let row = Math.max(0, minRow); row <= Math.min(rows, maxRow); row++) {
     for (let col = Math.max(0, minCol); col <= Math.min(columns, maxCol); col++) {
       const x = bounds.minX + col * cellSize
       const z = bounds.minZ + row * cellSize
 
+      // 超出半径范围的点不受影响
       const dx = x - localX
       const dz = z - localZ
       const distSq = dx * dx + dz * dz
@@ -5960,6 +5949,7 @@ export function sculptGround(definition: GroundRuntimeDynamicMesh, params: Sculp
         continue
       }
 
+      // 根据距离计算影响权重，并叠加噪声让边缘更自然
       const dist = Math.sqrt(distSq)
       let influence = Math.cos((dist / radius) * (Math.PI / 2))
       const noiseVal = sculptNoise(x * 0.05, z * 0.05, 0)
@@ -5991,6 +5981,7 @@ export function sculptGround(definition: GroundRuntimeDynamicMesh, params: Sculp
     }
   }
   if (operation === 'flatten-zero') {
+    // flatten-zero 额外处理外围过渡带，减少边缘突变
     const smoothingBand = Math.max(cellSize * 1.5, radius * 0.35)
     if (smoothingBand > 0) {
       const bandRows = Math.ceil(smoothingBand / cellSize)
@@ -6007,6 +5998,7 @@ export function sculptGround(definition: GroundRuntimeDynamicMesh, params: Sculp
           const dx = x - localX
           const dz = z - localZ
           const dist = Math.sqrt(dx * dx + dz * dz)
+          // 只处理外圈过渡带
           if (dist <= radius || dist > smoothingRadius) {
             continue
           }
@@ -7796,7 +7788,6 @@ export function updateGroundChunks(
     return
   }
   const state = ensureGroundRuntimeState(root, definition)
-  const runtimeDefinition = definition
   // const forceDenseChunkMeshes = runtimeDefinition.runtimeDisableOptimizedChunks === true
   const forceDenseChunkMeshes = false;//runtimeDefinition.runtimeDisableOptimizedChunks === true
 
@@ -7812,13 +7803,6 @@ export function updateGroundChunks(
   // 后面所有 loadRadius / unloadRadius / chunk 中心点位置，都要乘这个值才能从“格子数”换成“米”。
   const cellSize = Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1
   const chunkSizeMeters = resolveInfiniteChunkSizeMeters(definition)
-  let localEditTilesCache: GroundLocalEditTileData[] | null = null
-  const getLocalEditTiles = (): GroundLocalEditTileData[] => {
-    if (!localEditTilesCache) {
-      localEditTilesCache = ensureGroundLocalEditTileCachesFromRuntime(runtimeDefinition).tiles
-    }
-    return localEditTilesCache
-  }
 
   let localX = 0
   let localZ = 0
@@ -7958,7 +7942,6 @@ export function updateGroundChunks(
     || state.lastFlatChunkSyncHiddenChunkKeysVersion !== state.hiddenChunkKeysVersion
 
   if (!forceDenseChunkMeshes && shouldSyncFlatChunks) {
-    const localEditTiles = getLocalEditTiles()
     const needsFullFlatChunkScan = force
       || desiredWindowChanged
       || state.lastFlatChunkSyncTilingVersion < 0
@@ -7973,16 +7956,13 @@ export function updateGroundChunks(
       collectGroundFlatChunkGroupsInRange(
         flatChunkGroups,
         definition,
-        runtimeDefinition,
-        localEditTiles,
         state,
         {
           minChunkRow: flatMinLoadChunkRow,
           maxChunkRow: flatMaxLoadChunkRow,
           minChunkColumn: flatMinLoadChunkColumn,
           maxChunkColumn: flatMaxLoadChunkColumn,
-        },
-        null,
+        }
       )
     } else {
       const overlapMinChunkRow = Math.max(flatTilingExpansion.nextMinChunkRow, flatTilingExpansion.previousMinChunkRow)
@@ -7991,32 +7971,26 @@ export function updateGroundChunks(
         collectGroundFlatChunkGroupsInRange(
           flatChunkGroups,
           definition,
-          runtimeDefinition,
-          localEditTiles,
           state,
           {
             minChunkRow: flatTilingExpansion.nextMinChunkRow,
             maxChunkRow: flatTilingExpansion.previousMinChunkRow - 1,
             minChunkColumn: flatTilingExpansion.nextMinChunkColumn,
             maxChunkColumn: flatTilingExpansion.nextMaxChunkColumn,
-          },
-          null,
+          }
         )
       }
       if (flatTilingExpansion.nextMaxChunkRow > flatTilingExpansion.previousMaxChunkRow) {
         collectGroundFlatChunkGroupsInRange(
           flatChunkGroups,
           definition,
-          runtimeDefinition,
-          localEditTiles,
           state,
           {
             minChunkRow: flatTilingExpansion.previousMaxChunkRow + 1,
             maxChunkRow: flatTilingExpansion.nextMaxChunkRow,
             minChunkColumn: flatTilingExpansion.nextMinChunkColumn,
             maxChunkColumn: flatTilingExpansion.nextMaxChunkColumn,
-          },
-          null,
+          }
         )
       }
       if (overlapMinChunkRow <= overlapMaxChunkRow) {
@@ -8024,32 +7998,26 @@ export function updateGroundChunks(
           collectGroundFlatChunkGroupsInRange(
             flatChunkGroups,
             definition,
-            runtimeDefinition,
-            localEditTiles,
             state,
             {
               minChunkRow: overlapMinChunkRow,
               maxChunkRow: overlapMaxChunkRow,
               minChunkColumn: flatTilingExpansion.nextMinChunkColumn,
               maxChunkColumn: flatTilingExpansion.previousMinChunkColumn - 1,
-            },
-            null,
+            }
           )
         }
         if (flatTilingExpansion.nextMaxChunkColumn > flatTilingExpansion.previousMaxChunkColumn) {
           collectGroundFlatChunkGroupsInRange(
             flatChunkGroups,
             definition,
-            runtimeDefinition,
-            localEditTiles,
             state,
             {
               minChunkRow: overlapMinChunkRow,
               maxChunkRow: overlapMaxChunkRow,
               minChunkColumn: flatTilingExpansion.previousMaxChunkColumn + 1,
               maxChunkColumn: flatTilingExpansion.nextMaxChunkColumn,
-            },
-            null,
+            }
           )
         }
       }

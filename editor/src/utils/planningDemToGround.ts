@@ -1615,7 +1615,7 @@ export async function buildPlanningDemGroundTileData(options: {
   }
 }
 
-export function buildPlanningDemGroundRegionDataFromRaster(options: {
+export function buildGroundRegionDataFromRaster(options: {
   definition: GroundRuntimeDynamicMesh
   rasterData: ArrayLike<number>
   width: number
