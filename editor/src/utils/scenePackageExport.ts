@@ -83,7 +83,6 @@ type SceneGroundTerrainOverrideState = {
   runtimeHydratedHeightState?: 'pristine' | 'dirty' | 'none'
   surfaceRevision?: number
   localEditTiles?: Record<string, unknown> | null
-  runtimeManualHeightOverrideCount?: number
   runtimeEditHeightOverrideCount?: number
 }
 
@@ -109,11 +108,6 @@ function hasSceneGroundTerrainOverrides(dynamicMesh: unknown): boolean {
     ? Object.values(ground.localEditTiles)
     : []
   if (localEditTiles.length > 0) {
-    return true
-  }
-
-  const manualOverrideCount = Number(ground.runtimeManualHeightOverrideCount)
-  if (Number.isFinite(manualOverrideCount) && manualOverrideCount > 0) {
     return true
   }
 

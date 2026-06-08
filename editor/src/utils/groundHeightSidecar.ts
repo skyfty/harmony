@@ -739,7 +739,7 @@ export function serializeGroundHeightSidecar(definition: GroundRuntimeDynamicMes
     columns: gridSize.columns,
     planningMetadata: definition.planningMetadata ?? null,
     localEditTiles: definition.localEditTiles ?? null,
-    getManualHeight: (row, column) => definition.manualHeightMap[row * (gridSize.columns + 1) + column] ?? Number.NaN,
+    getManualHeight: (row, column) => definition.planningHeightMap[row * (gridSize.columns + 1) + column] ?? Number.NaN,
     getPlanningHeight: (row, column) => definition.planningHeightMap[row * (gridSize.columns + 1) + column] ?? Number.NaN,
   })
 }
@@ -773,7 +773,6 @@ export function stripGroundHeightMapsFromSceneDocument(document: StoredSceneDocu
       return
     }
     const groundDynamicMesh = dynamicMesh as GroundDynamicMesh & Record<string, unknown>
-    delete groundDynamicMesh.manualHeightMap
     delete groundDynamicMesh.planningHeightMap
     delete groundDynamicMesh.planningMetadata
     delete groundDynamicMesh.surfaceRevision
@@ -830,14 +829,12 @@ export function createGroundRuntimeMeshFromSidecar(
   }
 
   const header = readSidecarHeader(new DataView(buffer, 0, headerByteLength + metadataByteLength))
-  const manualHeightMap = new Float64Array(buffer, layout.manualOffset, vertexCount)
   const planningHeightMap = new Float64Array(buffer, layout.planningOffset, vertexCount)
   const localEditTiles = layout.localEditTilesByteLength > 0
     ? decodeLocalEditTilesPayload(new Uint8Array(buffer, layout.localEditTilesOffset, layout.localEditTilesByteLength))
     : null
   return {
     ...definition,
-    manualHeightMap,
     planningHeightMap,
     planningMetadata: header.planningMetadata,
     localEditTiles,

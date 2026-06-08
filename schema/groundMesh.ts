@@ -1176,19 +1176,9 @@ export function analyzeGroundOptimizedMeshUsage(definition: GroundDynamicMesh): 
     }
   }
 
-  const manualHeightMap = runtimeDefinition.manualHeightMap
   const planningHeightMap = runtimeDefinition.planningHeightMap
-  const limit = Math.max(manualHeightMap?.length ?? 0, planningHeightMap?.length ?? 0)
+  const limit = planningHeightMap?.length ?? 0
   for (let index = 0; index < limit; index += 1) {
-    const manual = manualHeightMap[index]
-    if (typeof manual === 'number' && Number.isFinite(manual)) {
-      return {
-        ...base,
-        runtimeChunkCells: sourceChunkCells,
-        canUseOptimizedMesh: false,
-        reason: 'manual-height-overrides-present',
-      }
-    }
     const planning = planningHeightMap[index]
     if (typeof planning === 'number' && Number.isFinite(planning)) {
       return {
@@ -1265,12 +1255,6 @@ function ensureGroundRuntimeDefinition(definition: GroundDynamicMesh): GroundRun
   // 根据当前世界边界、cellSize 和 chunk 参数计算工作网格尺寸。
   // 后续所有高度图、编辑图和采样索引都要依赖这个尺寸，所以这里必须先统一。
   const gridSize = resolveGroundWorkingGridSizeCached(runtimeDefinition)
-  // 手动高度图用于编辑器直接改高程点。这里确保它始终存在，并且尺寸与工作网格一致。
-  runtimeDefinition.manualHeightMap = ensureGroundHeightMap(
-    runtimeDefinition.manualHeightMap,
-    gridSize.rows,
-    gridSize.columns,
-  )
   // 规划高度图用于未提交前的预览态或规划态数据，同样需要和当前工作网格严格对齐。
   runtimeDefinition.planningHeightMap = ensureGroundHeightMap(
     runtimeDefinition.planningHeightMap,
@@ -1304,15 +1288,6 @@ function adjustRuntimeGroundHeightOverrideCount(
     return
   }
 
-  if (definition.runtimeManualHeightOverrideSourceRef === map && Number.isFinite(definition.runtimeManualHeightOverrideCount)) {
-    definition.runtimeManualHeightOverrideCount = Math.max(
-      0,
-      Math.trunc(definition.runtimeManualHeightOverrideCount as number) + Math.trunc(delta),
-    )
-    definition.runtimeManualHeightOverrideSourceLength = map.length
-    return
-  }
-
   if (definition.runtimeEditHeightOverrideSourceRef === map && Number.isFinite(definition.runtimeEditHeightOverrideCount)) {
     definition.runtimeEditHeightOverrideCount = Math.max(
       0,
@@ -1323,20 +1298,8 @@ function adjustRuntimeGroundHeightOverrideCount(
 }
 
 function ensureRuntimeGroundHeightOverrideCounts(definition: GroundRuntimeDynamicMesh): void {
-  const manualHeightMap = definition.manualHeightMap
   const planningHeightMap = definition.planningHeightMap
-  const manualLength = manualHeightMap?.length ?? 0
   const planningLength = planningHeightMap?.length ?? 0
-
-  if (
-    definition.runtimeManualHeightOverrideSourceRef !== manualHeightMap
-    || definition.runtimeManualHeightOverrideSourceLength !== manualLength
-    || !Number.isFinite(definition.runtimeManualHeightOverrideCount)
-  ) {
-    definition.runtimeManualHeightOverrideCount = countGroundHeightOverrides(manualHeightMap)
-    definition.runtimeManualHeightOverrideSourceRef = manualHeightMap
-    definition.runtimeManualHeightOverrideSourceLength = manualLength
-  }
 
   if (
     definition.runtimeEditHeightOverrideSourceRef !== planningHeightMap
@@ -1375,10 +1338,9 @@ function hasRuntimeGroundHeightOverrides(definition: GroundRuntimeDynamicMesh): 
   }
 
   ensureRuntimeGroundHeightOverrideCounts(definition)
-  const manualOverrideCount = definition.runtimeManualHeightOverrideCount
   const editOverrideCount = definition.runtimeEditHeightOverrideCount
-  if (Number.isFinite(manualOverrideCount) || Number.isFinite(editOverrideCount)) {
-    if ((manualOverrideCount ?? 0) > 0 || (editOverrideCount ?? 0) > 0) {
+  if (Number.isFinite(editOverrideCount)) {
+    if ((editOverrideCount ?? 0) > 0) {
       definition.runtimeHydratedHeightState = 'dirty'
       definition.runtimeDisableOptimizedChunks = true
       return true
@@ -2061,18 +2023,6 @@ function resolveGroundChunkGeometryLayout(definition: GroundRuntimeDynamicMesh, 
   }
 }
 
-function getPlanningVertexHeight(definition: GroundRuntimeDynamicMesh, row: number, column: number): number {
-  // planningHeightMap 保存的是“规划/自动生成层”的绝对高度。
-  // 它表示在基础地形之上，规划阶段希望该顶点呈现的目标基准高度；
-  // 如果没有显式记录，则回退到基础高度，表示规划层对该点没有额外改动。
-  const gridSize = resolveGroundWorkingGridSize(definition)
-  const raw = definition.planningHeightMap[getGroundVertexIndex(gridSize.columns, row, column)]
-  if (typeof raw === 'number' && Number.isFinite(raw)) {
-    return raw
-  }
-  return computeGroundBaseHeightAtVertex(definition, row, column)
-}
-
 /**
  * 计算某个顶点的“最终有效高度”。
  *
@@ -2113,14 +2063,10 @@ export function resolveGroundEffectiveHeightAtVertex(definition: GroundDynamicMe
     : computeGroundBaseHeightAtVertex(runtimeDefinition, row, column)
   const gridSize = resolveGroundWorkingGridSize(runtimeDefinition)
   const heightIndex = getGroundVertexIndex(gridSize.columns, row, column)
-  // 用户手工雕刻后的绝对高度；若无手工覆盖则退回 base。
-  const manualRaw = runtimeDefinition.manualHeightMap[heightIndex]
-  const manual = typeof manualRaw === 'number' && Number.isFinite(manualRaw) ? manualRaw : base
   // 规划/自动生成层的绝对高度；若无规划覆盖则同样退回 base。
   const planningRaw = runtimeDefinition.planningHeightMap[heightIndex]
   const planning = typeof planningRaw === 'number' && Number.isFinite(planningRaw) ? planningRaw : base
-  // 保留 manual 相对 base 的编辑增量，再把这个增量叠加到 planning 上，得到最终显示/采样高度。
-  return planning + (manual - base)
+  return planning
 }
 
 /**
@@ -2152,11 +2098,9 @@ function resolveGroundEffectiveHeightAtVertexWithContext(
   }
   const base = computeGroundBaseHeightAtVertex(runtimeDefinition, row, column)
   const heightIndex = getGroundVertexIndex(columns, row, column)
-  const manualRaw = runtimeDefinition.manualHeightMap[heightIndex]
-  const manual = typeof manualRaw === 'number' && Number.isFinite(manualRaw) ? manualRaw : base
   const planningRaw = runtimeDefinition.planningHeightMap[heightIndex]
   const planning = typeof planningRaw === 'number' && Number.isFinite(planningRaw) ? planningRaw : base
-  return planning + (manual - base)
+  return planning
 }
 
 function sampleGroundHeightOutsideWorkingBounds(
@@ -2235,28 +2179,20 @@ function sampleGroundEffectiveHeightRegionInternal(
   }
 
   // 预先准备几个运行时缓存：
-  // - gridSize：当前地形网格大小，用来从 row/column 计算 manual / planning 的索引
-  // - manualRegion / planningRegion：如果 runtime 已经能一次性返回整个区间，就直接复用，避免逐点查找
+  // - gridSize：当前地形网格大小，用来从 row/column 计算 planning 的索引
+  // - planningRegion：如果 runtime 已经能一次性返回整个区间，就直接复用，避免逐点查找
   // - terrainSampler：如果有外部地形采样器，就允许把采样点落到更高层的地形数据上
   const gridSize = resolveGroundWorkingGridSize(runtimeDefinition)
-  const manualRegion = runtimeDefinition.runtimeSampleHeightRegion?.('manual', minRow, maxRow, minColumn, maxColumn)
   const planningRegion = runtimeDefinition.runtimeSampleHeightRegion?.('planning', minRow, maxRow, minColumn, maxColumn)
 
   // 只有当 runtime 返回的区间和当前请求完全一致时，才安全复用它们。
   // 否则会出现 stride 或边界不一致的问题，所以必须回退到逐点读取。
-  const canUseManualRegion = manualRegion
-    && manualRegion.minRow === minRow
-    && manualRegion.maxRow === maxRow
-    && manualRegion.minColumn === minColumn
-    && manualRegion.maxColumn === maxColumn
-    && manualRegion.stride === stride
   const canUsePlanningRegion = planningRegion
     && planningRegion.minRow === minRow
     && planningRegion.maxRow === maxRow
     && planningRegion.minColumn === minColumn
     && planningRegion.maxColumn === maxColumn
     && planningRegion.stride === stride
-  const manualValues = canUseManualRegion ? manualRegion.values : null
   const planningValues = canUsePlanningRegion ? planningRegion.values : null
   const terrainSampler = resolveRuntimeTerrainHeightSampler(runtimeDefinition)
 
@@ -2296,17 +2232,11 @@ function sampleGroundEffectiveHeightRegionInternal(
         const sampled = terrainSampler ? terrainSampler.sampleHeightAtWorld(worldX, worldZ) : null
         const terrainBase = Number.isFinite(sampled) ? (sampled as number) : base
 
-        // manual / planning 两层是分开的：
-        // - planning 作为规划层高度
-        // - manual 作为手工层高度
-        // 最终有效高度按 planning + (manual - terrainBase) 合成。
-        // 这样 manual 可以在规划层之上做偏移，而不会直接覆盖规划层本身。
+        // localEdit 已经在最前面处理过；若没有局部覆盖，这里只保留规划层高度。
         const heightIndex = getGroundVertexIndex(gridSize.columns, row, column)
-        const manualRaw = manualValues ? manualValues[offset] : runtimeDefinition.manualHeightMap[heightIndex]
         const planningRaw = planningValues ? planningValues[offset] : runtimeDefinition.planningHeightMap[heightIndex]
-        const manual = typeof manualRaw === 'number' && Number.isFinite(manualRaw) ? manualRaw : terrainBase
         const planning = typeof planningRaw === 'number' && Number.isFinite(planningRaw) ? planningRaw : terrainBase
-        effective = planning + (manual - terrainBase)
+        effective = planning
       }
 
       // 把最终有效高度写回输出区间，并同步更新统计范围。
@@ -2395,30 +2325,6 @@ export function sampleGroundEffectiveHeightRegionFromSampler(
   }
 }
 
-/**
- * 已知某个顶点期望达到的“最终有效高度”，反推出 manualHeightMap 中应写入的手工层绝对高度。
- *
- * 由 resolveGroundEffectiveHeightAtVertex 的公式：
- * effective = planning + (manual - base)
- * 可推导出：
- * manual = base + (effective - planning)
- *
- * 这个函数用于雕刻、平滑、压低等编辑操作。
- * 编辑工具面对的是用户看到的最终地形高度，因此先在 effective 空间里算出目标值，
- * 再通过这里把目标值转换回 manual 层保存，避免直接破坏规划层数据。
- */
-export function resolveGroundManualHeightForEffectiveTarget(
-  definition: GroundRuntimeDynamicMesh,
-  row: number,
-  column: number,
-  effectiveHeight: number,
-): number {
-  const base = computeGroundBaseHeightAtVertex(definition, row, column)
-  const planning = getPlanningVertexHeight(definition, row, column)
-  // 把“最终想看到的高度”换算为 manual 层需要记录的绝对高度。
-  return base + (effectiveHeight - planning)
-}
-
 function setHeightOverrideValue(definition: GroundRuntimeDynamicMesh, map: GroundHeightMap, row: number, column: number, value: number): void {
   const gridSize = resolveGroundWorkingGridSize(definition)
   const heightIndex = getGroundVertexIndex(gridSize.columns, row, column)
@@ -2444,32 +2350,12 @@ function setHeightOverrideValue(definition: GroundRuntimeDynamicMesh, map: Groun
   }
 }
 
-export function setManualHeightOverrideValue(definition: GroundRuntimeDynamicMesh, map: GroundHeightMap, row: number, column: number, value: number): void {
-  setHeightOverrideValue(definition, map, row, column, value)
-}
-
 export function setPlanningHeightOverrideValue(definition: GroundRuntimeDynamicMesh, map: GroundHeightMap, row: number, column: number, value: number): void {
   setHeightOverrideValue(definition, map, row, column, value)
 }
 
-function setManualHeightOverrideForEffectiveValue(
-  definition: GroundRuntimeDynamicMesh,
-  map: GroundHeightMap,
-  row: number,
-  column: number,
-  effectiveHeight: number,
-): void {
-  // 外部编辑逻辑通常基于最终效果高度进行运算，
-  // 这里统一把 effective 高度反解到 manual 层，再复用普通写入逻辑。
-  const manualHeight = resolveGroundManualHeightForEffectiveTarget(definition, row, column, effectiveHeight)
-  setManualHeightOverrideValue(definition, map, row, column, manualHeight)
-}
-
 function setGroundCoverageHeightOverrideForEffectiveValue(
   definition: GroundRuntimeDynamicMesh,
-  map: GroundHeightMap,
-  row: number,
-  column: number,
   x: number,
   z: number,
   effectiveHeight: number,
@@ -2478,7 +2364,6 @@ function setGroundCoverageHeightOverrideForEffectiveValue(
     ? resolveGroundLocalEditVertexPlacement(definition, x, z)
     : null
   if (!localPlacement) {
-    setManualHeightOverrideForEffectiveValue(definition, map, row, column, effectiveHeight)
     return
   }
 
@@ -2503,8 +2388,7 @@ function setGroundCoverageHeightOverrideForEffectiveValue(
     setGroundLocalEditTileValue(definition, localPlacement.tileRow, localPlacement.tileColumn, localPlacement.row1, localPlacement.column1, effectiveHeight)
     return
   }
-
-  setManualHeightOverrideForEffectiveValue(definition, map, row, column, effectiveHeight)
+  setGroundLocalEditTileValue(definition, localPlacement.tileRow, localPlacement.tileColumn, localPlacement.row0, localPlacement.column0, effectiveHeight)
 }
 
 function sampleNeighborAverage(
@@ -2790,7 +2674,6 @@ function accumulateGroundDeltaAtPoint(
 
 function applyAccumulatedGroundDeltas(
   definition: GroundRuntimeDynamicMesh,
-  map: GroundHeightMap,
   accumulator: Map<number, GroundHeightDeltaAccumulatorEntry>,
 ): boolean {
   let modified = false
@@ -2827,7 +2710,7 @@ function applyAccumulatedGroundDeltas(
     const column = index % (columns + 1)
     const currentHeight = resolveGroundEffectiveHeightAtVertex(definition, row, column)
     const nextHeight = currentHeight + entry.delta / entry.weight
-    setManualHeightOverrideForEffectiveValue(definition, map, row, column, nextHeight)
+    setGroundCoverageHeightOverrideForEffectiveValue(definition, resolveGroundWorldXForColumn(definition, column), resolveGroundWorldZForRow(definition, row), nextHeight)
     modified = true
   })
   return modified
@@ -2835,7 +2718,6 @@ function applyAccumulatedGroundDeltas(
 
 function applyCircularRaiseDepressSubsampled(
   definition: GroundRuntimeDynamicMesh,
-  map: GroundHeightMap,
   params: Pick<SculptParams, 'point' | 'radius' | 'strength' | 'operation'>,
 ): boolean {
   const { point, radius, strength, operation } = params
@@ -2879,12 +2761,11 @@ function applyCircularRaiseDepressSubsampled(
     }
   }
 
-  return applyAccumulatedGroundDeltas(definition, map, accumulator)
+  return applyAccumulatedGroundDeltas(definition, accumulator)
 }
 
 function applyPolygonRaiseDepressSubsampled(
   definition: GroundRuntimeDynamicMesh,
-  map: GroundHeightMap,
   polygonBounds: { minX: number; maxX: number; minZ: number; maxZ: number },
   normalizedPolygon: SculptPolygonPoint[],
   params: Pick<SculptParams, 'operation' | 'strength' | 'depth' | 'slope'>,
@@ -2935,12 +2816,11 @@ function applyPolygonRaiseDepressSubsampled(
     accumulateGroundDeltaAtPoint(definition, accumulator, candidate.x, candidate.z, delta, sampleWeight)
   }
 
-  return applyAccumulatedGroundDeltas(definition, map, accumulator)
+  return applyAccumulatedGroundDeltas(definition, accumulator)
 }
 
 function applyCircularSurfaceSubsampled(
   definition: GroundRuntimeDynamicMesh,
-  map: GroundHeightMap,
   params: Pick<SculptParams, 'point' | 'radius' | 'strength' | 'operation' | 'targetHeight'>,
 ): boolean {
   const { point, radius, strength, operation, targetHeight } = params
@@ -3036,12 +2916,11 @@ function applyCircularSurfaceSubsampled(
     }
   }
 
-  return applyAccumulatedGroundDeltas(definition, map, accumulator)
+  return applyAccumulatedGroundDeltas(definition, accumulator)
 }
 
 function applyPolygonSurfaceSubsampled(
   definition: GroundRuntimeDynamicMesh,
-  map: GroundHeightMap,
   polygonBounds: { minX: number; maxX: number; minZ: number; maxZ: number },
   normalizedPolygon: SculptPolygonPoint[],
   params: Pick<SculptParams, 'operation' | 'strength' | 'targetHeight'>,
@@ -3088,7 +2967,7 @@ function applyPolygonSurfaceSubsampled(
     }
   }
 
-  return applyAccumulatedGroundDeltas(definition, map, accumulator)
+  return applyAccumulatedGroundDeltas(definition, accumulator)
 }
 
 function sanitizeGroundClippingLoop(loop: THREE.Vector2[]): THREE.Vector2[] {
@@ -5814,30 +5693,30 @@ export function sculptGround(definition: GroundRuntimeDynamicMesh, params: Sculp
     : Math.ceil((localZ + radius - bounds.minZ) / cellSize)
 
   let modified = false
-  let heightMap = definition.manualHeightMap
+  let heightMap = definition.planningHeightMap
 
   if (shape === 'polygon') {
     // 多边形抬升/下压优先尝试子采样路径，提高大面积编辑效率
     if (operation === 'raise' || operation === 'depress') {
-      const subsampled = applyPolygonRaiseDepressSubsampled(definition, heightMap, polygonBounds, normalizedPolygon, {
+      const subsampled = applyPolygonRaiseDepressSubsampled(definition, polygonBounds, normalizedPolygon, {
         operation,
         strength,
         depth,
         slope,
       })
       if (subsampled) {
-        definition.manualHeightMap = heightMap
+        definition.planningHeightMap = heightMap
         return true
       }
     }
 
     // 多边形平滑与填平也优先走子采样逻辑
-    if ((operation === 'smooth' || operation === 'flatten' || operation === 'flatten-zero') && applyPolygonSurfaceSubsampled(definition, heightMap, polygonBounds, normalizedPolygon, {
+    if ((operation === 'smooth' || operation === 'flatten' || operation === 'flatten-zero') && applyPolygonSurfaceSubsampled(definition, polygonBounds, normalizedPolygon, {
       operation,
       strength,
       targetHeight,
     })) {
-      definition.manualHeightMap = heightMap
+      definition.planningHeightMap = heightMap
       return true
     }
 
@@ -5904,34 +5783,34 @@ export function sculptGround(definition: GroundRuntimeDynamicMesh, params: Sculp
         }
       }
 
-      setGroundCoverageHeightOverrideForEffectiveValue(definition, heightMap, row, col, bounds.minX + col * cellSize, bounds.minZ + row * cellSize, nextHeight)
+      setGroundCoverageHeightOverrideForEffectiveValue(definition, bounds.minX + col * cellSize, bounds.minZ + row * cellSize, nextHeight)
       modified = true
     }
 
     if (modified) {
-      definition.manualHeightMap = heightMap
+      definition.planningHeightMap = heightMap
     }
     return modified
   }
 
-  if ((operation === 'raise' || operation === 'depress') && applyCircularRaiseDepressSubsampled(definition, heightMap, {
+  if ((operation === 'raise' || operation === 'depress') && applyCircularRaiseDepressSubsampled(definition, {
     point,
     radius,
     strength,
     operation,
   })) {
-    definition.manualHeightMap = heightMap
+    definition.planningHeightMap = heightMap
     return true
   }
 
-  if ((operation === 'smooth' || operation === 'flatten' || operation === 'flatten-zero') && applyCircularSurfaceSubsampled(definition, heightMap, {
+  if ((operation === 'smooth' || operation === 'flatten' || operation === 'flatten-zero') && applyCircularSurfaceSubsampled(definition, {
     point,
     radius,
     strength,
     operation,
     targetHeight,
   })) {
-    definition.manualHeightMap = heightMap
+    definition.planningHeightMap = heightMap
     return true
   }
 
@@ -5976,7 +5855,7 @@ export function sculptGround(definition: GroundRuntimeDynamicMesh, params: Sculp
         nextHeight = currentHeight + offset
       }
 
-      setGroundCoverageHeightOverrideForEffectiveValue(definition, heightMap, row, col, x, z, nextHeight)
+      setGroundCoverageHeightOverrideForEffectiveValue(definition, x, z, nextHeight)
       modified = true
     }
   }
@@ -6010,14 +5889,14 @@ export function sculptGround(definition: GroundRuntimeDynamicMesh, params: Sculp
           const currentHeight = resolveGroundEffectiveHeightAtVertex(definition, row, col)
           const average = sampleNeighborAverage(definition, row, col, rows, columns)
           const smoothedHeight = currentHeight + (average - currentHeight) * smoothingFactor
-          setGroundCoverageHeightOverrideForEffectiveValue(definition, heightMap, row, col, x, z, smoothedHeight)
+          setGroundCoverageHeightOverrideForEffectiveValue(definition, x, z, smoothedHeight)
           modified = true
         }
       }
     }
   }
   if (modified) {
-    definition.manualHeightMap = heightMap
+    definition.planningHeightMap = heightMap
   }
   return modified
 }

@@ -1670,7 +1670,7 @@ function computeGroundDynamicMeshSignature(definition: GroundDynamicMesh): strin
     cellSize: Number.isFinite(definition.cellSize) && definition.cellSize > 0 ? definition.cellSize : 1,
     worldBounds: bounds,
     generation: definition.generation ?? null,
-    heightComposition: definition.heightComposition ?? { mode: 'planning_plus_manual' },
+    heightComposition: definition.heightComposition ?? { mode: 'planning_plus_edit' },
     surfaceRevision: Number.isFinite(definition.surfaceRevision)
       ? Math.max(0, Math.trunc(definition.surfaceRevision as number))
       : 0,

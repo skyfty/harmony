@@ -85,7 +85,7 @@ function manualDeepCloneLocal(source: unknown): unknown {
 
 type GroundDynamicMeshLike = GroundDynamicMesh & { terrainScatter?: unknown }
 type GroundDynamicMeshResult = GroundDynamicMesh & { terrainScatter?: unknown }
-type GroundRuntimeDynamicMesh = GroundDynamicMesh & { manualHeightMap: Float64Array; planningHeightMap: Float64Array }
+type GroundRuntimeDynamicMesh = GroundDynamicMesh & { planningHeightMap: Float64Array }
 
 function buildPrimaryGroundMaterialProps(
   createMaterialProps: GroundDeps['createMaterialProps'],
@@ -150,7 +150,7 @@ export function cloneGroundDynamicMesh(definition: GroundDynamicMeshLike): Groun
     editTileSizeMeters: definition.editTileSizeMeters,
     editTileResolution: definition.editTileResolution,
     surfaceRevision: Number.isFinite(definition.surfaceRevision) ? Math.max(0, Math.trunc(definition.surfaceRevision as number)) : 0,
-    heightComposition: { ...(definition.heightComposition ?? { mode: 'planning_plus_manual' as const }) },
+    heightComposition: { ...(definition.heightComposition ?? { mode: 'planning_plus_edit' as const }) },
     planningMetadata: manualDeepCloneLocal(definition.planningMetadata ?? null) as unknown as GroundDynamicMesh['planningMetadata'],
     terrainScatterInstancesUpdatedAt: definition.terrainScatterInstancesUpdatedAt,
     textureDataUrl: definition.textureDataUrl ?? null,
@@ -306,7 +306,7 @@ export function createGroundDynamicMeshDefinition(overrides: Partial<GroundDynam
     editTileResolution: creationProfile.editTileResolution,
     surfaceRevision: Number.isFinite(overrides.surfaceRevision) ? Math.max(0, Math.trunc(overrides.surfaceRevision as number)) : 0,
     heightComposition: {
-      mode: overrides.heightComposition?.mode ?? 'planning_plus_manual',
+      mode: overrides.heightComposition?.mode ?? 'planning_plus_edit',
       policyVersion: overrides.heightComposition?.policyVersion,
     },
     planningMetadata: manualDeepCloneLocal(overrides.planningMetadata ?? null) as unknown as GroundDynamicMesh['planningMetadata'],
@@ -357,13 +357,6 @@ export function applyGroundRegionTransform(
 ): { definition: GroundRuntimeDynamicMesh; changed: boolean } {
   const gridSize = resolveGroundWorkingGridSize(definition)
   const getBaseHeight = (row: number, column: number): number => computeGroundBaseHeightAtVertex(definition, row, column)
-  const getManualHeight = (row: number, column: number): number => {
-    const raw = definition.manualHeightMap[getGroundVertexIndex(gridSize.columns, row, column)]
-    if (typeof raw === 'number' && Number.isFinite(raw)) {
-      return raw
-    }
-    return getBaseHeight(row, column)
-  }
   const getPlanningHeight = (row: number, column: number): number => {
     const raw = definition.planningHeightMap[getGroundVertexIndex(gridSize.columns, row, column)]
     if (typeof raw === 'number' && Number.isFinite(raw)) {
@@ -372,15 +365,8 @@ export function applyGroundRegionTransform(
     return getBaseHeight(row, column)
   }
   const resolveEffectiveHeight = (row: number, column: number): number => {
-    const base = getBaseHeight(row, column)
-    const manual = getManualHeight(row, column)
     const planning = getPlanningHeight(row, column)
-    return planning + (manual - base)
-  }
-  const resolveManualForEffective = (row: number, column: number, effective: number): number => {
-    const base = getBaseHeight(row, column)
-    const planning = getPlanningHeight(row, column)
-    return base + (effective - planning)
+    return planning
   }
   const roundHeight = (value: number): number => {
     const rounded = Math.round(value * 100) / 100
@@ -388,7 +374,7 @@ export function applyGroundRegionTransform(
   }
 
   const normalized = normalizeGroundBounds(definition, bounds)
-  const nextHeightMap = definition.manualHeightMap
+  const nextHeightMap = definition.planningHeightMap
   let changed = false
   for (let row = normalized.minRow; row <= normalized.maxRow; row += 1) {
     for (let column = normalized.minColumn; column <= normalized.maxColumn; column += 1) {
@@ -400,14 +386,13 @@ export function applyGroundRegionTransform(
         continue
       }
 
-      const nextManual = resolveManualForEffective(row, column, nextEffective)
-      const roundedManual = roundHeight(nextManual)
+      const roundedPlanning = roundHeight(nextEffective)
       const roundedBase = roundHeight(getBaseHeight(row, column))
 
-      if (roundedManual === roundedBase) {
+      if (roundedPlanning === roundedBase) {
         nextHeightMap[heightIndex] = GROUND_HEIGHT_UNSET_VALUE
       } else {
-        nextHeightMap[heightIndex] = roundedManual
+        nextHeightMap[heightIndex] = roundedPlanning
       }
 
       const nextStored = nextHeightMap[heightIndex]

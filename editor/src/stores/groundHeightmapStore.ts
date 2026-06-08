@@ -28,7 +28,6 @@ export type GroundHeightTileState = {
   startColumn: number
   rows: number
   columns: number
-  manualHeightMap: Float64Array
   editHeightMap: Float64Array
 }
 
@@ -67,19 +66,16 @@ export type GroundHeightRuntimeState = {
   runtimeDisableOptimizedChunks?: boolean
   runtimeLoadedTileKeys?: string[]
   surfaceRevision?: number
-  manualHeightOverrideCount: number
   editHeightOverrideCount: number
   runtimeMeshVersion: number
   cachedRuntimeMeshVersion: number
   cachedRuntimeMesh?: GroundRuntimeDynamicMesh
-  cachedManualHeightMap?: GroundHeightMap
   cachedEditHeightMap?: GroundHeightMap
   cachedLocalEditTiles?: GroundLocalEditTileMap | null
   cachedEditMetadata?: GroundHeightMetadata | null
 }
 
 export type GroundRuntimeDynamicMesh = GroundDynamicMesh & {
-  manualHeightMap: GroundHeightMap
   planningHeightMap: GroundHeightMap
   runtimeSampleHeightRegion?: (
     kind: 'manual' | 'planning',
@@ -98,7 +94,6 @@ export type GroundRuntimeDynamicMesh = GroundDynamicMesh & {
   runtimeHydratedHeightState?: 'pristine' | 'dirty'
   runtimeDisableOptimizedChunks?: boolean
   runtimeLoadedTileKeys?: string[]
-  runtimeManualHeightOverrideCount?: number
   runtimeEditHeightOverrideCount?: number
 }
 
@@ -117,7 +112,6 @@ function clampRegionIndex(value: number, min: number, max: number): number {
 
 function sampleRuntimeHeightRegion(
   state: GroundHeightRuntimeState,
-  kind: 'manual' | 'planning',
   minRowInput: number,
   maxRowInput: number,
   minColumnInput: number,
@@ -158,7 +152,7 @@ function sampleRuntimeHeightRegion(
       const rowEnd = Math.min(maxRow, tile.startRow + tile.rows)
       const columnStart = Math.max(minColumn, tile.startColumn)
       const columnEnd = Math.min(maxColumn, tile.startColumn + tile.columns)
-      const source = kind === 'manual' ? tile.manualHeightMap : tile.editHeightMap
+      const source = tile.editHeightMap
       for (let row = rowStart; row <= rowEnd; row += 1) {
         const targetOffset = (row - minRow) * stride + (columnStart - minColumn)
         const sourceOffset = (row - tile.startRow) * (tile.columns + 1) + (columnStart - tile.startColumn)
@@ -196,7 +190,6 @@ function createGroundHeightTileState(input: {
     startColumn: input.startColumn,
     rows: input.rows,
     columns: input.columns,
-    manualHeightMap: new Float64Array(vertexCount).fill(GROUND_HEIGHT_UNSET_VALUE),
     editHeightMap: new Float64Array(vertexCount).fill(GROUND_HEIGHT_UNSET_VALUE),
   }
 }
@@ -243,7 +236,6 @@ function registerRuntimeLoadedTileKey(state: GroundHeightRuntimeState, key: stri
 function setTileHeightMapValue(
   state: GroundHeightRuntimeState,
   tile: GroundHeightTileState,
-  kind: 'manual' | 'edit',
   row: number,
   column: number,
   value: number,
@@ -254,19 +246,14 @@ function setTileHeightMapValue(
     return
   }
   const index = getGroundVertexIndex(tile.columns, localRow, localColumn)
-  const previousValue = kind === 'manual' ? Number(tile.manualHeightMap[index]) : Number(tile.editHeightMap[index])
+  const previousValue = Number(tile.editHeightMap[index])
   const nextValue = Number.isFinite(value) ? value : GROUND_HEIGHT_UNSET_VALUE
-  updateHeightOverrideCount(state, kind, previousValue, nextValue)
-  if (kind === 'manual') {
-    tile.manualHeightMap[index] = nextValue
-  } else {
-    tile.editHeightMap[index] = nextValue
-  }
+  updateHeightOverrideCount(state, previousValue, nextValue)
+  tile.editHeightMap[index] = nextValue
 }
 
 function getTileHeightMapValue(
   state: GroundHeightRuntimeState,
-  kind: 'manual' | 'edit',
   row: number,
   column: number,
 ): number {
@@ -282,13 +269,12 @@ function getTileHeightMapValue(
     return GROUND_HEIGHT_UNSET_VALUE
   }
   const index = getGroundVertexIndex(tile.columns, localRow, localColumn)
-  const value = kind === 'manual' ? Number(tile.manualHeightMap[index]) : Number(tile.editHeightMap[index])
+  const value = Number(tile.editHeightMap[index])
   return Number.isFinite(value) ? value : GROUND_HEIGHT_UNSET_VALUE
 }
 
 function createHeightMapViewFromTiles(
   state: GroundHeightRuntimeState,
-  kind: 'manual' | 'edit',
 ): GroundHeightMap {
   const length = getGroundVertexCount(state.rows, state.columns)
   const target = { length }
@@ -302,7 +288,7 @@ function createHeightMapViewFromTiles(
         if (Number.isInteger(index) && index >= 0 && index < length) {
           const row = Math.floor(index / (state.columns + 1))
           const column = index % (state.columns + 1)
-          return getTileHeightMapValue(state, kind, row, column)
+          return getTileHeightMapValue(state, row, column)
         }
       }
       return Reflect.get(object, property)
@@ -315,7 +301,7 @@ function createHeightMapViewFromTiles(
           const column = index % (state.columns + 1)
           const tile = getOrCreateGroundHeightTile(state, row, column)
           const numeric = Number(value)
-            setTileHeightMapValue(state, tile, kind, row, column, Number.isFinite(numeric) ? numeric : GROUND_HEIGHT_UNSET_VALUE)
+          setTileHeightMapValue(state, tile, row, column, Number.isFinite(numeric) ? numeric : GROUND_HEIGHT_UNSET_VALUE)
           return true
         }
       }
@@ -327,13 +313,12 @@ function createHeightMapViewFromTiles(
 function syncFlatHeightMapIntoTiles(
   state: GroundHeightRuntimeState,
   source: ArrayLike<number>,
-  kind: 'manual' | 'edit',
 ): void {
   for (let row = 0; row <= state.rows; row += 1) {
     for (let column = 0; column <= state.columns; column += 1) {
       const tile = getOrCreateGroundHeightTile(state, row, column)
       const value = source[getGroundVertexIndex(state.columns, row, column)] ?? GROUND_HEIGHT_UNSET_VALUE
-      setTileHeightMapValue(state, tile, kind, row, column, value)
+      setTileHeightMapValue(state, tile, row, column, value)
     }
   }
 }
@@ -546,7 +531,6 @@ function createRuntimeState(nodeId: string, definition: GroundDynamicMesh): Grou
     runtimeDisableOptimizedChunks: (definition as GroundRuntimeDynamicMesh).runtimeDisableOptimizedChunks,
     runtimeLoadedTileKeys: resolveRuntimeLoadedTileKeys(definition),
     surfaceRevision: Number.isFinite(definition.surfaceRevision) ? Math.max(0, Math.trunc(definition.surfaceRevision as number)) : 0,
-    manualHeightOverrideCount: 0,
     editHeightOverrideCount: 0,
     runtimeMeshVersion: 0,
     cachedRuntimeMeshVersion: -1,
@@ -559,7 +543,6 @@ function touchRuntimeMeshState(state: GroundHeightRuntimeState): void {
 
 function updateHeightOverrideCount(
   state: GroundHeightRuntimeState,
-  kind: 'manual' | 'edit',
   previousValue: number,
   nextValue: number,
 ): void {
@@ -568,16 +551,9 @@ function updateHeightOverrideCount(
   if (hadValue === hasValue) {
     return
   }
-  if (kind === 'manual') {
-    state.manualHeightOverrideCount += hasValue ? 1 : -1
-    if (state.manualHeightOverrideCount < 0) {
-      state.manualHeightOverrideCount = 0
-    }
-  } else {
-    state.editHeightOverrideCount += hasValue ? 1 : -1
-    if (state.editHeightOverrideCount < 0) {
-      state.editHeightOverrideCount = 0
-    }
+  state.editHeightOverrideCount += hasValue ? 1 : -1
+  if (state.editHeightOverrideCount < 0) {
+    state.editHeightOverrideCount = 0
   }
 }
 
@@ -670,8 +646,7 @@ function resolveRuntimeMeshView(
 ): GroundRuntimeDynamicMesh {
   const cacheHit = state.cachedRuntimeMeshVersion === state.runtimeMeshVersion
   if (!cacheHit) {
-    state.cachedManualHeightMap = createHeightMapViewFromTiles(state, 'manual')
-    state.cachedEditHeightMap = createHeightMapViewFromTiles(state, 'edit')
+    state.cachedEditHeightMap = createHeightMapViewFromTiles(state)
     state.cachedLocalEditTiles = serializeRuntimeLocalEditTiles(state.localEditTiles)
     state.cachedEditMetadata = cloneGroundMetadata(state.heightMetadata ?? definition.planningMetadata ?? null)
     state.cachedRuntimeMeshVersion = state.runtimeMeshVersion
@@ -679,7 +654,6 @@ function resolveRuntimeMeshView(
 
   state.cachedRuntimeMesh = {
     ...definition,
-    manualHeightMap: state.cachedManualHeightMap as GroundHeightMap,
     planningHeightMap: state.cachedEditHeightMap as GroundHeightMap,
     localEditTiles: state.cachedLocalEditTiles,
     runtimeSampleHeightRegion: (kind, minRowInput, maxRowInput, minColumnInput, maxColumnInput) => sampleRuntimeHeightRegion(
@@ -694,7 +668,6 @@ function resolveRuntimeMeshView(
     runtimeHydratedHeightState: state.runtimeHydratedHeightState,
     runtimeDisableOptimizedChunks: state.runtimeDisableOptimizedChunks,
     runtimeLoadedTileKeys: state.runtimeLoadedTileKeys ?? [],
-    runtimeManualHeightOverrideCount: state.manualHeightOverrideCount,
     runtimeEditHeightOverrideCount: state.editHeightOverrideCount,
     surfaceRevision: Number.isFinite(state.surfaceRevision) ? Math.max(0, Math.trunc(state.surfaceRevision as number)) : definition.surfaceRevision,
   }
@@ -716,7 +689,6 @@ function replaceRuntimeGroundHeightmapsFromSidecar(
     delete runtimeGroundDefinition.runtimeHydratedHeightState
     delete runtimeGroundDefinition.runtimeDisableOptimizedChunks
     delete runtimeGroundDefinition.runtimeLoadedTileKeys
-    delete runtimeGroundDefinition.runtimeManualHeightOverrideCount
     delete runtimeGroundDefinition.runtimeEditHeightOverrideCount
     return
   }
@@ -728,17 +700,14 @@ function replaceRuntimeGroundHeightmapsFromSidecar(
   runtimeGroundDefinition.runtimeDisableOptimizedChunks = runtimeDefinition.runtimeDisableOptimizedChunks
   runtimeGroundDefinition.surfaceRevision = runtimeDefinition.surfaceRevision
   runtimeGroundDefinition.runtimeLoadedTileKeys = runtimeDefinition.runtimeLoadedTileKeys ?? []
-  runtimeGroundDefinition.runtimeManualHeightOverrideCount = runtimeDefinition.runtimeManualHeightOverrideCount
   runtimeGroundDefinition.runtimeEditHeightOverrideCount = runtimeDefinition.runtimeEditHeightOverrideCount
   const created = createRuntimeState(groundNode.id, runtimeDefinition)
-  syncFlatHeightMapIntoTiles(created, runtimeDefinition.manualHeightMap, 'manual')
-  syncFlatHeightMapIntoTiles(created, runtimeDefinition.planningHeightMap, 'edit')
+  syncFlatHeightMapIntoTiles(created, runtimeDefinition.planningHeightMap)
   created.heightMetadata = cloneGroundMetadata(runtimeDefinition.planningMetadata ?? null)
   created.optimizedMeshDirtyBounds = null
   created.runtimeHydratedHeightState = runtimeDefinition.runtimeHydratedHeightState
   created.runtimeDisableOptimizedChunks = runtimeDefinition.runtimeDisableOptimizedChunks
   created.runtimeLoadedTileKeys = runtimeDefinition.runtimeLoadedTileKeys ?? []
-  created.manualHeightOverrideCount = runtimeDefinition.runtimeManualHeightOverrideCount ?? created.manualHeightOverrideCount
   created.editHeightOverrideCount = runtimeDefinition.runtimeEditHeightOverrideCount ?? created.editHeightOverrideCount
   created.surfaceRevision = Number.isFinite(runtimeDefinition.surfaceRevision) ? Math.max(0, Math.trunc(runtimeDefinition.surfaceRevision as number)) : 0
   runtimeGroundHeightmaps.set(groundNode.id, created)
@@ -763,8 +732,8 @@ function buildSceneGroundSidecar(groundNode: SceneNode | null): ArrayBuffer | nu
     columns: state.columns,
     planningMetadata: state.heightMetadata ?? definition.planningMetadata ?? null,
     localEditTiles: serializeRuntimeLocalEditTiles(state.localEditTiles) ?? definition.localEditTiles ?? null,
-    getManualHeight: (row, column) => getTileHeightMapValue(state, 'manual', row, column),
-    getPlanningHeight: (row, column) => getTileHeightMapValue(state, 'edit', row, column),
+    getManualHeight: (row, column) => getTileHeightMapValue(state, row, column),
+    getPlanningHeight: (row, column) => getTileHeightMapValue(state, row, column),
     sampleHeightRegion: (kind, minRowInput, maxRowInput, minColumnInput, maxColumnInput) => sampleRuntimeHeightRegion(
       state,
       kind,
@@ -803,8 +772,8 @@ export const useGroundHeightmapStore = defineStore('groundHeightmap', {
       return {
         rows: state.rows,
         columns: state.columns,
-        getManualHeight: (row, column) => getTileHeightMapValue(state, 'manual', row, column),
-        getPlanningHeight: (row, column) => getTileHeightMapValue(state, 'edit', row, column),
+        getManualHeight: (row, column) => getTileHeightMapValue(state, row, column),
+        getPlanningHeight: (row, column) => getTileHeightMapValue(state, row, column),
         sampleHeightRegion: (kind, minRowInput, maxRowInput, minColumnInput, maxColumnInput) => sampleRuntimeHeightRegion(
           state,
           kind,
@@ -887,24 +856,6 @@ export const useGroundHeightmapStore = defineStore('groundHeightmap', {
       const state = ensureNodeRuntimeState(nodeId, definition)
       return resolveRuntimeMeshView(state, definition)
     },
-    replaceManualHeightMap(
-      nodeId: string,
-      definition: GroundDynamicMesh,
-      manualHeightMap: ArrayLike<number>,
-    ): GroundHeightRuntimeState {
-      const state = ensureNodeRuntimeState(nodeId, definition)
-      const gridSize = resolveGroundWorkingGridSize(definition)
-      state.rows = gridSize.rows
-      state.columns = gridSize.columns
-      state.tileResolution = resolveRuntimeTileResolution(definition)
-      syncFlatHeightMapIntoTiles(state, manualHeightMap, 'manual')
-      state.runtimeHydratedHeightState = (definition as GroundRuntimeDynamicMesh).runtimeHydratedHeightState
-      state.runtimeDisableOptimizedChunks = (definition as GroundRuntimeDynamicMesh).runtimeDisableOptimizedChunks
-      state.runtimeLoadedTileKeys = (definition as GroundRuntimeDynamicMesh).runtimeLoadedTileKeys ?? resolveRuntimeLoadedTileKeys(definition)
-      state.surfaceRevision = Number.isFinite(definition.surfaceRevision) ? Math.max(0, Math.trunc(definition.surfaceRevision as number)) : 0
-      touchRuntimeMeshState(state)
-      return state
-    },
     syncRuntimeGroundState(
       nodeId: string,
       definition: GroundDynamicMesh,
@@ -914,36 +865,6 @@ export const useGroundHeightmapStore = defineStore('groundHeightmap', {
       state.rows = gridSize.rows
       state.columns = gridSize.columns
       state.tileResolution = resolveRuntimeTileResolution(definition)
-      state.runtimeHydratedHeightState = (definition as GroundRuntimeDynamicMesh).runtimeHydratedHeightState
-      state.runtimeDisableOptimizedChunks = (definition as GroundRuntimeDynamicMesh).runtimeDisableOptimizedChunks
-      state.runtimeLoadedTileKeys = (definition as GroundRuntimeDynamicMesh).runtimeLoadedTileKeys ?? resolveRuntimeLoadedTileKeys(definition)
-      state.surfaceRevision = Number.isFinite(definition.surfaceRevision) ? Math.max(0, Math.trunc(definition.surfaceRevision as number)) : 0
-      touchRuntimeMeshState(state)
-      return state
-    },
-    replaceManualHeightRegion(
-      nodeId: string,
-      definition: GroundDynamicMesh,
-      region: GroundHeightRegion,
-    ): GroundHeightRuntimeState {
-      const state = ensureNodeRuntimeState(nodeId, definition)
-      const gridSize = resolveGroundWorkingGridSize(definition)
-      state.rows = gridSize.rows
-      state.columns = gridSize.columns
-      state.tileResolution = resolveRuntimeTileResolution(definition)
-      const startRow = Math.max(0, Math.min(gridSize.rows, Math.trunc(region.startRow)))
-      const endRow = Math.max(startRow, Math.min(gridSize.rows, Math.trunc(region.endRow)))
-      const startColumn = Math.max(0, Math.min(gridSize.columns, Math.trunc(region.startColumn)))
-      const endColumn = Math.max(startColumn, Math.min(gridSize.columns, Math.trunc(region.endColumn)))
-      const vertexColumns = Math.max(1, Math.trunc(region.vertexColumns))
-      for (let row = startRow; row <= endRow; row += 1) {
-        const sourceOffset = (row - startRow) * vertexColumns
-        for (let column = startColumn; column <= endColumn; column += 1) {
-          const tile = getOrCreateGroundHeightTile(state, row, column)
-          const value = region.values[sourceOffset + (column - startColumn)] ?? GROUND_HEIGHT_UNSET_VALUE
-          setTileHeightMapValue(state, tile, 'manual', row, column, value)
-        }
-      }
       state.runtimeHydratedHeightState = (definition as GroundRuntimeDynamicMesh).runtimeHydratedHeightState
       state.runtimeDisableOptimizedChunks = (definition as GroundRuntimeDynamicMesh).runtimeDisableOptimizedChunks
       state.runtimeLoadedTileKeys = (definition as GroundRuntimeDynamicMesh).runtimeLoadedTileKeys ?? resolveRuntimeLoadedTileKeys(definition)
@@ -962,7 +883,7 @@ export const useGroundHeightmapStore = defineStore('groundHeightmap', {
       state.rows = gridSize.rows
       state.columns = gridSize.columns
       state.tileResolution = resolveRuntimeTileResolution(definition)
-      syncFlatHeightMapIntoTiles(state, heightMap, 'edit')
+      syncFlatHeightMapIntoTiles(state, heightMap)
       state.runtimeHydratedHeightState = (definition as GroundRuntimeDynamicMesh).runtimeHydratedHeightState
       state.runtimeDisableOptimizedChunks = (definition as GroundRuntimeDynamicMesh).runtimeDisableOptimizedChunks
       state.runtimeLoadedTileKeys = (definition as GroundRuntimeDynamicMesh).runtimeLoadedTileKeys ?? resolveRuntimeLoadedTileKeys(definition)
@@ -1012,7 +933,7 @@ export const useGroundHeightmapStore = defineStore('groundHeightmap', {
         for (let column = startColumn; column <= endColumn; column += 1) {
           const tile = getOrCreateGroundHeightTile(state, row, column)
           const value = region.values[sourceOffset + (column - startColumn)] ?? GROUND_HEIGHT_UNSET_VALUE
-          setTileHeightMapValue(state, tile, 'edit', row, column, value)
+          setTileHeightMapValue(state, tile, row, column, value)
         }
       }
       state.runtimeHydratedHeightState = (definition as GroundRuntimeDynamicMesh).runtimeHydratedHeightState

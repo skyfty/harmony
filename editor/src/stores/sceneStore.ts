@@ -1975,7 +1975,7 @@ function cloneGroundDynamicMesh(definition: GroundDynamicMesh): GroundDynamicMes
   const result = manualDeepClone(definition) as GroundDynamicMesh
   result.type = 'Ground'
   result.surfaceRevision = Number.isFinite(definition.surfaceRevision) ? Math.max(0, Math.trunc(definition.surfaceRevision as number)) : 0
-  result.heightComposition = { ...(definition.heightComposition ?? { mode: 'planning_plus_manual' }) }
+  result.heightComposition = { ...(definition.heightComposition ?? { mode: 'planning_plus_edit' }) }
   result.planningMetadata = manualDeepClone(definition.planningMetadata) as GroundDynamicMesh['planningMetadata'] ?? null
   result.textureDataUrl = definition.textureDataUrl ?? null
   result.textureName = definition.textureName ?? null
@@ -2141,8 +2141,8 @@ function commitGroundHeightMapRuntimeEdit(
   },
   nodeId: string,
   definition: GroundDynamicMesh,
-  manualHeightMap: GroundHeightMap,
-  manualRegion: GroundHeightRegion | null = null,
+  planningHeightMap: GroundHeightMap,
+  planningRegion: GroundHeightRegion | null = null,
   dirtyBounds: WorldBoundsXZ | null = null,
 ): boolean {
   // 仅允许对当前场景中的 Ground 节点提交运行时高度图修改；
@@ -2155,9 +2155,9 @@ function commitGroundHeightMapRuntimeEdit(
   // definition 可能是传入的运行时定义副本，这里统一按运行时结构处理，
   // 后续会同时回写到目标节点与当前定义，保证内存中的两个引用保持一致。
   const runtimeDefinition = definition as GroundRuntimeDynamicMesh
-  // 若调用方未显式提供脏区域，则通过旧/新手工高度图差异自动计算，
+  // 若调用方未显式提供脏区域，则通过旧/新规划高度图差异自动计算，
   // 以便后续仅刷新受影响的地形块与相关联的地貌节点。
-  const resolvedDirtyBounds = dirtyBounds ?? computeGroundDirtyBoundsXZ(target, runtimeDefinition, runtimeDefinition.manualHeightMap, manualHeightMap)
+  const resolvedDirtyBounds = dirtyBounds ?? computeGroundDirtyBoundsXZ(target, runtimeDefinition, runtimeDefinition.planningHeightMap, planningHeightMap)
   // 每次地表高度发生运行时编辑都递增 surfaceRevision，
   // 用于触发依赖地形表面的渲染、缓存和编译结果失效。
   const currentRevision = normalizeGroundSurfaceRevision(target.dynamicMesh.surfaceRevision)
@@ -2175,19 +2175,11 @@ function commitGroundHeightMapRuntimeEdit(
   runtimeDefinition.runtimeHydratedHeightState = 'dirty'
   runtimeDefinition.runtimeDisableOptimizedChunks = true
 
-  // 如果传入的是局部区域，则只替换该手工高度区域；
-  // 否则认为整张 manualHeightMap 已准备好，直接整体替换。
-  if (manualRegion) {
-    useGroundHeightmapStore().replaceManualHeightRegion(nodeId, definition, manualRegion)
-  } else {
-    useGroundHeightmapStore().replaceManualHeightMap(nodeId, definition, manualHeightMap)
-  }
-
   // 根据本次修改的区域标记优化网格脏块，后续重建 optimized mesh 时只处理必要 chunk。
   useGroundHeightmapStore().markOptimizedMeshDirtyChunkKeys(
     nodeId,
     definition,
-    resolveGroundDirtyChunkKeysFromRegion(definition, manualRegion),
+    resolveGroundDirtyChunkKeysFromRegion(definition, planningRegion),
   )
 
   // 地面高度变化可能影响依附其上的地貌/附属节点，因此需要刷新关联节点。
@@ -2301,17 +2293,6 @@ function commitGroundHeightRegionRuntimeEdit(
     vertexColumns: Math.max(0, Math.trunc(heightRegion.vertexColumns)),
     values: heightRegion.values,
   }
-  // 对同一范围生成一个“清空手工高度覆盖”的区域，所有值都填充为未设置标记；
-  // 这样在导入/规划区高度覆盖后，可确保旧的 manualHeight 覆盖不会继续污染该区域。
-  const manualClearRegion: GroundHeightRegion = {
-    startRow: committedRegion.startRow,
-    endRow: committedRegion.endRow,
-    startColumn: committedRegion.startColumn,
-    endColumn: committedRegion.endColumn,
-    vertexRows: Math.max(0, committedRegion.endRow - committedRegion.startRow + 1),
-    vertexColumns: Math.max(0, committedRegion.endColumn - committedRegion.startColumn + 1),
-    values: new Float64Array(Math.max(0, committedRegion.endRow - committedRegion.startRow + 1) * Math.max(0, committedRegion.endColumn - committedRegion.startColumn + 1)).fill(GROUND_HEIGHT_UNSET_VALUE),
-  }
   // 若调用方未提供受影响范围，则默认按本次提交的高度区域作为刷新范围。
   const committedAffectedRegion = affectedRegion ?? {
     minRow: committedRegion.startRow,
@@ -2353,8 +2334,6 @@ function commitGroundHeightRegionRuntimeEdit(
   if (mergedLocalEditTiles) {
     useGroundHeightmapStore().replaceLocalEditTiles(nodeId, definition, mergedLocalEditTiles)
   }
-  // 清除同范围内的手工高度覆盖，让区域编辑结果成为该区域的最终高度来源。
-  useGroundHeightmapStore().replaceManualHeightRegion(nodeId, definition, manualClearRegion)
   // 标记本次区域涉及的优化网格 chunk 为脏，以触发按需重建。
   useGroundHeightmapStore().markOptimizedMeshDirtyChunkKeys(
     nodeId,
@@ -2396,8 +2375,8 @@ function refreshGroundOptimizedMeshRuntime(
   // 即使重建了 optimized mesh，也不能将其视为完全稳定的最终结果。
   const hasLocalEditTiles = Boolean(runtimeDefinition.localEditTiles && Object.keys(runtimeDefinition.localEditTiles).length > 0)
   const hasRuntimeHeightOverrides = Boolean(
-    (Number.isFinite(runtimeDefinition.runtimeManualHeightOverrideCount) && (runtimeDefinition.runtimeManualHeightOverrideCount ?? 0) > 0)
-    || (Number.isFinite(runtimeDefinition.runtimeEditHeightOverrideCount) && (runtimeDefinition.runtimeEditHeightOverrideCount ?? 0) > 0),
+    Number.isFinite(runtimeDefinition.runtimeEditHeightOverrideCount)
+    && (runtimeDefinition.runtimeEditHeightOverrideCount ?? 0) > 0,
   )
   const preserveRuntimeEditState = runtimeDefinition.runtimeHydratedHeightState === 'dirty'
     || runtimeDefinition.runtimeDisableOptimizedChunks === true
@@ -3246,7 +3225,7 @@ function resolveGroundDirtyChunkKeysFromRegion(
   return chunkKeys
 }
 
-function buildGroundManualRegionFromHeightMap(
+function buildGroundPlanningRegionFromHeightMap(
   definition: GroundRuntimeDynamicMesh,
   bounds: GroundRegionBounds,
 ): GroundHeightRegion | null {
@@ -3261,7 +3240,7 @@ function buildGroundManualRegionFromHeightMap(
   for (let row = normalized.minRow; row <= normalized.maxRow; row += 1) {
     const rowOffset = (row - normalized.minRow) * vertexColumns
     for (let column = normalized.minColumn; column <= normalized.maxColumn; column += 1) {
-      const source = Number(definition.manualHeightMap[getGroundVertexIndex(gridSize.columns, row, column)])
+      const source = Number(definition.planningHeightMap[getGroundVertexIndex(gridSize.columns, row, column)])
       values[rowOffset + (column - normalized.minColumn)] = Number.isFinite(source) ? source : GROUND_HEIGHT_UNSET_VALUE
     }
   }
@@ -9941,14 +9920,14 @@ export const useSceneStore = defineStore('scene', {
       if (!result.changed) {
         return false
       }
-      const manualRegion = buildGroundManualRegionFromHeightMap(currentDefinition, bounds)
+      const planningRegion = buildGroundPlanningRegionFromHeightMap(currentDefinition, bounds)
 
       return commitGroundHeightMapRuntimeEdit(
         this,
         groundNode.id,
         currentDefinition,
-        result.definition.manualHeightMap,
-        manualRegion,
+        result.definition.planningHeightMap,
+        planningRegion,
         dirtyBounds,
       )
     },
@@ -10754,9 +10733,9 @@ export const useSceneStore = defineStore('scene', {
     commitGroundHeightMapEdit(
       nodeId: string,
       definition: GroundDynamicMesh,
-      manualHeightMap: GroundHeightMap,
+      planningHeightMap: GroundHeightMap,
     ) {
-      const committed = commitGroundHeightMapRuntimeEdit(this, nodeId, definition, manualHeightMap)
+      const committed = commitGroundHeightMapRuntimeEdit(this, nodeId, definition, planningHeightMap)
       if (committed) {
         void this.rebuildCurrentSceneCompiledGroundChunks(nodeId, []).catch((error) => {
           console.warn('[SceneStore] Failed to rebuild compiled ground after heightmap edit', error)

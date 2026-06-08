@@ -16133,7 +16133,6 @@ function hydrateGroundSidecarFromPackage(
       const hasBounds = minRow !== EMPTY_GROUND_BOUND && maxRow !== EMPTY_GROUND_BOUND && minColumn !== EMPTY_GROUND_BOUND && maxColumn !== EMPTY_GROUND_BOUND;
       const hasGeneratedAt = Number.isFinite(generatedAt);
 
-      definition.manualHeightMap = new Float64Array(sidecarBuffer, GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES, vertexCount);
       definition.planningHeightMap = new Float64Array(
         sidecarBuffer,
         GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES + vertexCount * Float64Array.BYTES_PER_ELEMENT,

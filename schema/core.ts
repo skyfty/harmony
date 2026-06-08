@@ -1674,7 +1674,7 @@ export function ensureGroundHeightMap(
   return cloneGroundHeightMap(source, rows, columns, fill)
 }
 
-export type GroundHeightCompositionMode = 'planning_plus_manual'
+export type GroundHeightCompositionMode = 'planning_plus_edit'
 
 export type GroundContourBounds = {
   minRow: number
@@ -2112,7 +2112,6 @@ export type GroundTerrainHeightSampler = {
 }
 
 export type GroundRuntimeDynamicMesh = GroundDynamicMesh & {
-  manualHeightMap: GroundHeightMap
   planningHeightMap: GroundHeightMap
   localEditTiles?: GroundLocalEditTileMap | null
   runtimeSampleHeightRegion?: (
@@ -2145,11 +2144,8 @@ export type GroundRuntimeDynamicMesh = GroundDynamicMesh & {
   /** Runtime-only guard to bypass optimized streamed chunk geometry when sidecar/runtime overrides are active. */
   runtimeDisableOptimizedChunks?: boolean
   runtimeLoadedTileKeys?: string[]
-  runtimeManualHeightOverrideCount?: number
   runtimeEditHeightOverrideCount?: number
-  runtimeManualHeightOverrideSourceRef?: GroundHeightMap
   runtimeEditHeightOverrideSourceRef?: GroundHeightMap
-  runtimeManualHeightOverrideSourceLength?: number
   runtimeEditHeightOverrideSourceLength?: number
 }
 

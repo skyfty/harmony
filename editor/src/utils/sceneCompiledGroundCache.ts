@@ -488,9 +488,6 @@ export function computeSceneCompiledGroundSourceSignature(
     surfaceRevision,
     runtimeHydratedHeightState: runtimeGround.runtimeHydratedHeightState ?? null,
     runtimeDisableOptimizedChunks: runtimeGround.runtimeDisableOptimizedChunks === true,
-    runtimeManualHeightOverrideCount: Number.isFinite(runtimeGround.runtimeManualHeightOverrideCount)
-      ? Math.max(0, Math.trunc(runtimeGround.runtimeManualHeightOverrideCount as number))
-      : 0,
     runtimeEditHeightOverrideCount: Number.isFinite(runtimeGround.runtimeEditHeightOverrideCount)
       ? Math.max(0, Math.trunc(runtimeGround.runtimeEditHeightOverrideCount as number))
       : 0,
