@@ -659,26 +659,34 @@ function resolveTileWindowRecords(
 }
 
 export function syncCompiledGroundRenderTiles(params: SyncCompiledGroundRenderTilesParams): void {
+  // 没有相机时无法计算可见范围，也就无法进行瓦片同步，直接返回。
   if (!params.camera) {
     return
   }
+  // 确保当前 groundObject 对应的运行时结构已经存在。
   const runtime = ensureCompiledGroundRenderRuntime(params.groundObject)
+  // 当资源源标识或版本发生变化时，先清理旧瓦片，避免不同版本资源混用。
   if (runtime.sourceId !== params.sourceId || runtime.revision !== params.revision) {
     clearCompiledGroundRenderTiles(params.groundObject)
     runtime.sourceId = params.sourceId
     runtime.revision = params.revision
   }
+  // 规范化流式模式，仅允许内部支持的两种值。
   const streamingMode = params.streamingMode === 'editor-overview' ? 'editor-overview' : 'runtime-camera'
+  // 是否启用瓦片级视锥裁剪，由调用方显式控制。
   const tileFrustumCulled = params.tileFrustumCulled === true
+  // 将外部传入的排除列表清洗为稳定可查的 Set，去掉空白和无效值。
   const excludedChunkKeys = new Set(
     Array.from(params.excludedChunkKeys ?? [])
       .map((key) => typeof key === 'string' ? key.trim() : '')
       .filter((key) => key.length > 0),
   )
+  // 主动加载半径至少为 1，并允许由参数覆盖默认值。
   const activeRadiusTiles = Math.max(
     1,
     Math.trunc(params.activeRadiusTiles ?? resolveDefaultCompiledGroundActiveRadiusTiles(params.groundDefinition, params.manifest)),
   )
+  // 保留半径不能小于主动加载半径，避免相机移动时频繁卸载/重载。
   const retainRadiusTiles = Math.max(
     activeRadiusTiles,
     Math.trunc(params.retainRadiusTiles ?? resolveDefaultCompiledGroundRetainRadiusTiles(
@@ -687,6 +695,7 @@ export function syncCompiledGroundRenderTiles(params: SyncCompiledGroundRenderTi
       params.manifest,
     )),
   )
+  // 计算当前相机周围需要加载和临时保留的瓦片集合。
   const { desired, retainedKeys } = resolveTileWindowRecords(
     params.groundObject,
     params.manifest,
@@ -695,38 +704,52 @@ export function syncCompiledGroundRenderTiles(params: SyncCompiledGroundRenderTi
     retainRadiusTiles,
     streamingMode,
   )
+  // 排除掉不允许加载的瓦片。
   const filteredDesired = desired.filter((record) => !excludedChunkKeys.has(record.key))
+  // 目标加载瓦片 key 集合，用于判断哪些已有 mesh 仍然有效。
   const desiredKeys = new Set(filteredDesired.map((record) => record.key))
+  // 保留瓦片 key 集合，用于在过渡区域内暂不卸载。
   const filteredRetainedKeys = new Set(Array.from(retainedKeys).filter((key) => !excludedChunkKeys.has(key)))
+  // 获取相机世界坐标，并转换到 groundObject 局部坐标系，供后续逻辑或调试使用。
   params.camera.getWorldPosition(cameraLocalHelper)
   params.groundObject.worldToLocal(cameraLocalHelper)
 
+  // 先清理当前已经加载但不再需要的 mesh，并同步视锥裁剪状态。
   runtime.meshes.forEach((mesh, key) => {
     if (mesh.frustumCulled !== tileFrustumCulled) {
       mesh.frustumCulled = tileFrustumCulled
     }
+    // 如果仍在目标范围或保留范围内，则保留该瓦片。
     if (desiredKeys.has(key) || filteredRetainedKeys.has(key)) {
       return
     }
+    // 不再需要的瓦片释放几何体和相关资源，并从运行时容器中移除。
     disposeCompiledGroundRenderMesh(mesh)
     runtime.meshes.delete(key)
     runtime.loadedChunkKeysVersion += 1
   })
 
+  // 统一复用地表材质，避免每个瓦片重复创建材质实例。
   const material = resolveGroundMaterial(params.groundObject)
+  // 对需要加载的瓦片逐个发起异步读取。
   for (const record of filteredDesired) {
+    // 已经存在或正在加载的瓦片无需重复请求。
     if (runtime.meshes.has(record.key) || runtime.pendingLoads.has(record.key)) {
       continue
     }
+    // 发起瓦片数据加载，并在完成后构建 mesh。
     const pending = params.loadTileData(record)
       .then((buffer) => {
+        // 回调触发时重新验证运行时是否仍然有效，防止旧请求回填到新版本资源上。
         const activeRuntime = renderRuntimeMap.get(params.groundObject)
         if (!activeRuntime || activeRuntime.sourceId !== params.sourceId || activeRuntime.revision !== params.revision) {
           return
         }
+        // 如果该瓦片在等待期间已被排除，则直接丢弃结果。
         if (excludedChunkKeys.has(record.key)) {
           return
         }
+        // 只有 ArrayBuffer 才是合法的瓦片数据。
         if (!(buffer instanceof ArrayBuffer)) {
           console.warn('[CompiledGroundRender] Missing tile buffer', {
             sourceId: params.sourceId,
@@ -735,6 +758,7 @@ export function syncCompiledGroundRenderTiles(params: SyncCompiledGroundRenderTi
           })
           return
         }
+        // 将二进制数据解码为几何体；失败则记录告警并终止处理。
         const geometry = buildGeometryFromTileBuffer(buffer)
         if (!geometry) {
           console.warn('[CompiledGroundRender] Failed to decode tile geometry', {
@@ -745,15 +769,20 @@ export function syncCompiledGroundRenderTiles(params: SyncCompiledGroundRenderTi
           })
           return
         }
+        // 生成瓦片 mesh，并复用统一材质。
         const mesh = new THREE.Mesh(geometry, material)
         mesh.name = `CompiledGroundTile:${record.key}`
+        // 默认接收阴影；是否投射阴影由地形定义控制。
         mesh.receiveShadow = true
         mesh.castShadow = params.groundDefinition.castShadow === true
         // Tile streaming is controlled explicitly from the screen-visible ground footprint first.
         // Some camera modes still want mesh-level frustum culling on top, so keep this caller-configurable.
+        // 视锥裁剪是否开启由调用方决定，以兼容不同相机模式。
         mesh.frustumCulled = tileFrustumCulled
+        // 标记该 mesh 来自编译后的地表瓦片，便于后续识别和清理。
         mesh.userData.compiledGroundTile = true
         mesh.userData.compiledGroundTileKey = record.key
+        // 应用地表纹理与运行时相关配置。
         applyGroundTextureToRuntimeChunkMesh({
           mesh,
           definition: params.groundDefinition,
@@ -762,22 +791,27 @@ export function syncCompiledGroundRenderTiles(params: SyncCompiledGroundRenderTi
           rootUserData: (params.groundObject.userData as Record<string, unknown> | undefined) ?? null,
           groundSplatRuntimeProfile: params.groundSplatRuntimeProfile ?? null,
         })
+        // 若纹理尚未就绪，则注册回调；就绪后提升版本号，促使外部同步刷新。
         if (!isGroundChunkTextureReady(mesh)) {
           onGroundChunkTextureReady(mesh, () => {
             const latestRuntime = renderRuntimeMap.get(params.groundObject)
+            // 仅当该 mesh 仍是当前 key 对应的最新对象时才更新版本号。
             if (!latestRuntime || latestRuntime.meshes.get(record.key) !== mesh) {
               return
             }
             latestRuntime.loadedChunkKeysVersion += 1
           })
         }
+        // 将新 mesh 加入场景组和运行时索引，并更新已加载版本计数。
         activeRuntime.group.add(mesh)
         activeRuntime.meshes.set(record.key, mesh)
         activeRuntime.loadedChunkKeysVersion += 1
       })
       .finally(() => {
+        // 无论加载成功或失败，都必须清除 pending 标记，避免 key 永久处于加载中状态。
         renderRuntimeMap.get(params.groundObject)?.pendingLoads.delete(record.key)
       })
+    // 记录当前瓦片的异步加载任务，用于去重和状态跟踪。
     runtime.pendingLoads.set(record.key, pending)
   }
 }

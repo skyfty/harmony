@@ -936,26 +936,10 @@ export async function ensureSceneCompiledGroundPackage(
 export async function rebuildSceneCompiledGroundPackageChunks(
   document: SceneJsonExportDocument,
   buildKey: string,
-  chunkKeys: string[],
   options: RebuildSceneCompiledGroundChunksOptions = {},
 ): Promise<SceneCompiledGroundPackage> {
-  const normalizedChunkKeys = Array.from(new Set(
-    (Array.isArray(chunkKeys) ? chunkKeys : [])
-      .map((key) => typeof key === 'string' ? key.trim() : '')
-      .filter((key) => key.length > 0),
-  ))
-  if (!normalizedChunkKeys.length) {
-    return ensureSceneCompiledGroundPackage(document, buildKey, {
-      sourceSignature: options.sourceSignature,
-      workspaceId: options.workspaceId ?? null,
-      onProgress: options.onProgress,
-      onStatus: options.onStatus,
-    })
-  }
-
   emitEnsureStatus(options.onStatus, {
     step: 'Checking existing terrain cache',
-    detail: `Looking for ${normalizedChunkKeys.length} chunk updates in cache...`,
     progress: 5,
     phase: 'cache',
   })
@@ -973,7 +957,6 @@ export async function rebuildSceneCompiledGroundPackageChunks(
   }
 
   const patch = await buildSceneCompiledGroundPackage(document, {
-    includedTileKeys: normalizedChunkKeys,
     workspaceId: options.workspaceId ?? null,
     onProgress: (progress) => {
       options.onProgress?.(progress)
@@ -987,7 +970,6 @@ export async function rebuildSceneCompiledGroundPackageChunks(
   const merged = mergeSceneCompiledGroundPackages(cached.pkg, patch)
   emitEnsureStatus(options.onStatus, {
     step: 'Saving terrain cache',
-    detail: `Persisting ${normalizedChunkKeys.length} rebuilt chunks...`,
     progress: 92,
     phase: 'persist',
   })
@@ -995,7 +977,6 @@ export async function rebuildSceneCompiledGroundPackageChunks(
 
   emitEnsureStatus(options.onStatus, {
     step: 'Terrain cache ready',
-    detail: `${normalizedChunkKeys.length} chunks refreshed.`,
     progress: 100,
     phase: 'ready',
   })

@@ -447,7 +447,6 @@ export function computeCompiledGroundManifestRevision(
   pushNumber(Number(manifest.chunkSizeMeters) || 0)
   pushNumber(Number(manifest.baseHeight) || 0)
   pushNumber(Number(manifest.renderTileSizeMeters) || 0)
-  pushNumber(Number(manifest.collisionTileSizeMeters) || 0)
   pushNumber(Number(manifest.bounds?.minX) || 0)
   pushNumber(Number(manifest.bounds?.minY) || 0)
   pushNumber(Number(manifest.bounds?.minZ) || 0)
@@ -475,26 +474,6 @@ export function computeCompiledGroundManifestRevision(
     pushNumber(record.bounds?.maxZ ?? 0)
   }
 
-  for (const record of manifest.collisionTiles ?? []) {
-    pushString(record.key)
-    pushString(record.path)
-    pushNumber(record.row)
-    pushNumber(record.column)
-    pushNumber(record.centerX)
-    pushNumber(record.centerZ)
-    pushNumber(record.sizeMeters)
-    pushNumber(record.widthMeters)
-    pushNumber(record.depthMeters)
-    pushNumber(record.rows)
-    pushNumber(record.columns)
-    pushNumber(record.elementSize)
-    pushNumber(record.bounds?.minX ?? 0)
-    pushNumber(record.bounds?.minY ?? 0)
-    pushNumber(record.bounds?.minZ ?? 0)
-    pushNumber(record.bounds?.maxX ?? 0)
-    pushNumber(record.bounds?.maxY ?? 0)
-    pushNumber(record.bounds?.maxZ ?? 0)
-  }
 
   return hash >>> 0
 }

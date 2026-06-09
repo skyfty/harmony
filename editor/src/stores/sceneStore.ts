@@ -9543,14 +9543,19 @@ export const useSceneStore = defineStore('scene', {
       return snapshot
     },
     clearCurrentCompiledGroundPackage() {
+      // 清理当前场景地表编译包在内存中的缓存，避免后续读取到失效数据。
       clearSceneCompiledGroundPackageMemoryCache(this.compiledGroundBuildKey)
+      // 同步重置 store 内的编译包状态，确保运行时不会继续引用旧结果。
       applyCompiledGroundPackageToStore(this, '', null)
     },
     getCurrentCompiledGroundTileData(path: string): ArrayBuffer | null {
+      // 先对外部传入路径做标准化处理，避免空白字符影响文件命中。
       const normalizedPath = typeof path === 'string' ? path.trim() : ''
       if (!normalizedPath) {
+        // 路径无效时直接返回空，减少无意义的 Map 查询。
         return null
       }
+      // 按标准化后的路径从当前编译文件集合中读取瓦片二进制数据。
       return this.compiledGroundFiles.get(normalizedPath) ?? null
     },
     async ensureCurrentSceneCompiledGroundReady(
@@ -9559,30 +9564,38 @@ export const useSceneStore = defineStore('scene', {
         onStatus?: (status: SceneCompiledGroundEnsureStatus) => void
       } = {},
     ): Promise<boolean> {
+      // 构造当前场景的地表编译源文档，后续编译与缓存判断都依赖该文档。
       const document = createCompiledGroundSourceDocument(this)
+      // 读取当前场景中的地面节点，只有 Ground 类型节点才允许走地表编译流程。
       const groundNode = this.groundNode
       if ( !document  || !groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
+        // 源文档或地面节点不满足要求时，直接清理现有编译包以避免状态污染。
         applyCompiledGroundPackageToStore(this, '', null)
         return false
       }
 
+      // 获取地形数据集清单，用于判断当前地面定义是否需要启用编译地表。
       const scenesStore = useScenesStore()
       const terrainDatasetManifest = await scenesStore.loadTerrainDatasetManifest(document.id)
       if (!shouldUseCompiledGroundForDefinition(groundNode.dynamicMesh, terrainDatasetManifest?.datasetId ?? null)) {
+        // 若当前定义不适合使用编译地表，则清空本地状态并删除持久化缓存。
         applyCompiledGroundPackageToStore(this, '', null)
         await scenesStore.saveCompiledGroundBundle(document.id, null)
         return true
       }
+      // 组合场景 ID、地面定义和数据集 ID 生成构建键，用于区分不同编译版本。
       const buildKey = computeSceneCompiledGroundBuildKey(
         document.id,
         groundNode.dynamicMesh,
         terrainDatasetManifest?.datasetId ?? null,
       )
+      // 生成源签名，便于判断编译结果是否与当前源数据严格匹配。
       const sourceSignature = computeSceneCompiledGroundSourceSignature(
         document.id,
         groundNode.dynamicMesh,
         terrainDatasetManifest?.datasetId ?? null,
       )
+      // 执行地表编译；在需要时可强制重建，并通过回调汇报状态。
       const pkg = await ensureSceneCompiledGroundPackage(document, buildKey, {
         forceRebuild: options.forceRebuild === true,
         sourceSignature,
@@ -9605,9 +9618,12 @@ export const useSceneStore = defineStore('scene', {
             },
       })
       if (document.id !== this.currentSceneId) {
+        // 编译完成前若场景已切换，则丢弃结果，避免写回错误场景。
         return false
       }
+      // 将编译结果应用到当前 store，供运行时和界面直接使用。
       applyCompiledGroundPackageToStore(this, buildKey, pkg)
+      // 同步把编译包写入持久化层，保证下次可直接复用。
       await scenesStore.saveCompiledGroundBundle(document.id, {
         buildKey,
         sourceSignature,
@@ -9616,50 +9632,50 @@ export const useSceneStore = defineStore('scene', {
       })
       return true
     },
-    async rebuildCurrentSceneCompiledGroundChunks(
-      nodeId: string,
-      chunkKeys: string[],
-    ): Promise<boolean> {
+    async rebuildCurrentSceneCompiledGroundChunks(): Promise<boolean> {
+      // 重新构造当前场景的编译源文档，确保增量重建基于最新状态。
       const document = createCompiledGroundSourceDocument(this)
+      // 当前内存中的地面节点，用于和传入 nodeId 做严格校验。
       const groundNode = this.groundNode
-      const sourceGroundNode = document ? findGroundNode(document.nodes as unknown as SceneNode[]) : null
-      if (
-        !document
-        || !groundNode
-        || groundNode.id !== nodeId
-        || groundNode.dynamicMesh?.type !== 'Ground'
-        || !sourceGroundNode
-        || sourceGroundNode.dynamicMesh?.type !== 'Ground'
-      ) {
+      if ( !document  || !groundNode ) {
+        // 任一前置条件不满足时，都不允许继续执行增量重建。
         return false
       }
+      // 读取地形数据集清单，确保当前地面定义仍符合编译地表的使用条件。
       const scenesStore = useScenesStore()
       const terrainDatasetManifest = await scenesStore.loadTerrainDatasetManifest(document.id)
-      if (!shouldUseCompiledGroundForDefinition(sourceGroundNode.dynamicMesh, terrainDatasetManifest?.datasetId ?? null)) {
+      if (!shouldUseCompiledGroundForDefinition(groundNode.dynamicMesh, terrainDatasetManifest?.datasetId ?? null)) {
+        // 若定义不再需要编译地表，则清空状态并同步删除持久化包。
         applyCompiledGroundPackageToStore(this, '', null)
         await scenesStore.saveCompiledGroundBundle(document.id, null)
         return false
       }
+      // 根据最新源数据重新计算构建键，避免增量重建落到错误版本上。
       const buildKey = computeSceneCompiledGroundBuildKey(
         document.id,
-        sourceGroundNode.dynamicMesh,
+        groundNode.dynamicMesh,
         terrainDatasetManifest?.datasetId ?? null,
       )
+      // 重新计算源签名，确保保存和后续校验都基于当前内容。
       const sourceSignature = computeSceneCompiledGroundSourceSignature(
         document.id,
-        sourceGroundNode.dynamicMesh,
+        groundNode.dynamicMesh,
         terrainDatasetManifest?.datasetId ?? null,
       )
       if (this.compiledGroundBuildKey && this.compiledGroundBuildKey !== buildKey) {
+        // 如果当前已加载包的构建键与最新构建键不一致，说明旧包已过期，需要整体重建。
         const rebuilt = await ensureSceneCompiledGroundPackage(document, buildKey, {
           forceRebuild: true,
           sourceSignature,
           workspaceId: this.workspaceId,
         })
         if (document.id !== this.currentSceneId) {
+          // 重建过程中若场景已切换，则放弃结果，避免污染当前状态。
           return false
         }
+        // 将完整重建后的包写回 store。
         applyCompiledGroundPackageToStore(this, buildKey, rebuilt)
+        // 保存完整重建结果，保证内存状态与持久化状态一致。
         await scenesStore.saveCompiledGroundBundle(document.id, {
           buildKey,
           sourceSignature,
@@ -9668,14 +9684,18 @@ export const useSceneStore = defineStore('scene', {
         })
         return true
       }
-      const rebuilt = await rebuildSceneCompiledGroundPackageChunks(document, buildKey, chunkKeys, {
+      // 构建键未变化时，只对受影响的 chunk 进行增量重建，减少编译开销。
+      const rebuilt = await rebuildSceneCompiledGroundPackageChunks(document, buildKey, {
         sourceSignature,
         workspaceId: this.workspaceId,
       })
       if (document.id !== this.currentSceneId) {
+        // 场景切换后不再写回结果，避免跨场景污染。
         return false
       }
+      // 把增量重建后的结果应用到当前 store。
       applyCompiledGroundPackageToStore(this, buildKey, rebuilt)
+      // 同步保存增量重建结果，确保后续可快速加载。
       await scenesStore.saveCompiledGroundBundle(document.id, {
         buildKey,
         sourceSignature,
@@ -10737,7 +10757,7 @@ export const useSceneStore = defineStore('scene', {
     ) {
       const committed = commitGroundHeightMapRuntimeEdit(this, nodeId, definition, terrainHeightMap)
       if (committed) {
-        void this.rebuildCurrentSceneCompiledGroundChunks(nodeId, []).catch((error) => {
+        void this.rebuildCurrentSceneCompiledGroundChunks().catch((error) => {
           console.warn('[SceneStore] Failed to rebuild compiled ground after heightmap edit', error)
         })
       }
@@ -10751,7 +10771,7 @@ export const useSceneStore = defineStore('scene', {
     ) {
       const committed = commitGroundLocalEditTilesRuntimeEdit(this, nodeId, definition, localEditTiles, affectedRegion)
       if (committed) {
-        void this.rebuildCurrentSceneCompiledGroundChunks(nodeId, []).catch((error) => {
+        void this.rebuildCurrentSceneCompiledGroundChunks().catch((error) => {
           console.warn('[SceneStore] Failed to rebuild compiled ground after local edit tile update', error)
         })
       }
@@ -10775,7 +10795,7 @@ export const useSceneStore = defineStore('scene', {
         affectedRegion,
       )
       if (committed) {
-        void this.rebuildCurrentSceneCompiledGroundChunks(nodeId, []).catch((error) => {
+        void this.rebuildCurrentSceneCompiledGroundChunks().catch((error) => {
           console.warn('[SceneStore] Failed to rebuild compiled ground after ground region edit', error)
         })
       }
