@@ -634,8 +634,8 @@ async function clearPlanningGeneratedContentIncremental(options: {
 
 function resetGroundPlanningContours(definition: GroundRuntimeDynamicMesh): { definition: GroundRuntimeDynamicMesh; changed: boolean } {
   let hadPlanningContours = false
-  for (let index = 0; index < definition.planningHeightMap.length; index += 1) {
-    if (Number.isFinite(definition.planningHeightMap[index])) {
+  for (let index = 0; index < definition.terrainHeightMap.length; index += 1) {
+    if (Number.isFinite(definition.terrainHeightMap[index])) {
       hadPlanningContours = true
       break
     }
@@ -645,16 +645,16 @@ function resetGroundPlanningContours(definition: GroundRuntimeDynamicMesh): { de
   }
 
   const gridSize = resolveGroundWorkingGridSize(definition)
-  const clearedPlanningHeightMap = createGroundHeightMap(gridSize.rows, gridSize.columns)
-  for (let index = 0; index < clearedPlanningHeightMap.length; index += 1) {
-    clearedPlanningHeightMap[index] = GROUND_HEIGHT_UNSET_VALUE
+  const clearedterrainHeightMap = createGroundHeightMap(gridSize.rows, gridSize.columns)
+  for (let index = 0; index < clearedterrainHeightMap.length; index += 1) {
+    clearedterrainHeightMap[index] = GROUND_HEIGHT_UNSET_VALUE
   }
 
   return {
     changed: true,
     definition: {
       ...definition,
-      planningHeightMap: clearedPlanningHeightMap,
+      terrainHeightMap: clearedterrainHeightMap,
       planningMetadata: {
         ...(definition.planningMetadata ?? {}),
         contourBounds: null,
@@ -683,7 +683,7 @@ function derivePlanningContourBounds(definition: GroundRuntimeDynamicMesh): Grou
   const gridSize = resolveGroundWorkingGridSize(definition)
   for (let row = 0; row <= gridSize.rows; row += 1) {
     for (let column = 0; column <= gridSize.columns; column += 1) {
-      const value = definition.planningHeightMap[getGroundVertexIndex(gridSize.columns, row, column)]
+      const value = definition.terrainHeightMap[getGroundVertexIndex(gridSize.columns, row, column)]
       if (typeof value !== 'number' || !Number.isFinite(value)) {
         continue
       }
@@ -761,7 +761,7 @@ function syncPlanningHeightState(
   useGroundHeightmapStore().replaceGroundHeightMap(
     groundNode.id,
     groundNode.dynamicMesh as GroundDynamicMesh,
-    definition.planningHeightMap,
+    definition.terrainHeightMap,
     definition.planningMetadata ?? null,
   )
   useGroundHeightmapStore().markOptimizedMeshDirtyChunkKeys(
@@ -1403,11 +1403,11 @@ function resolvePlanningContourPolygonBounds(options: {
 
 function setHeightOverrideValueForContours(
   definition: GroundRuntimeDynamicMesh,
-  map: GroundRuntimeDynamicMesh['planningHeightMap'],
+  map: GroundRuntimeDynamicMesh['terrainHeightMap'],
   row: number,
   column: number,
   value: number,
-  baseHeightMap?: GroundRuntimeDynamicMesh['planningHeightMap'] | null,
+  baseHeightMap?: GroundRuntimeDynamicMesh['terrainHeightMap'] | null,
 ): void {
   const gridSize = resolveGroundWorkingGridSize(definition)
   const index = getGroundVertexIndex(gridSize.columns, row, column)
@@ -1519,7 +1519,7 @@ async function blurHeightGrid(
 async function applyPlanningTerrainContoursToGround(options: {
   definition: GroundRuntimeDynamicMesh
   contourPolygons: PlanningPolygonData[]
-  baseHeightMap?: GroundRuntimeDynamicMesh['planningHeightMap'] | null
+  baseHeightMap?: GroundRuntimeDynamicMesh['terrainHeightMap'] | null
   signal?: AbortSignal
   yieldController: ReturnType<typeof createYieldController>
   blendMeters?: number
@@ -1568,9 +1568,9 @@ async function applyPlanningTerrainContoursToGround(options: {
   const rewriteBounds = unionBounds(previousBounds, nextBounds)
   if (!rewriteBounds) {
     const gridSize = resolveGroundWorkingGridSize(definition)
-    const clearedPlanningHeightMap = createClearedGroundHeightMap(definition.planningHeightMap, gridSize.rows, gridSize.columns)
+    const clearedterrainHeightMap = createClearedGroundHeightMap(definition.terrainHeightMap, gridSize.rows, gridSize.columns)
     const cleared = { ...definition }
-    cleared.planningHeightMap = clearedPlanningHeightMap
+    cleared.terrainHeightMap = clearedterrainHeightMap
     cleared.planningMetadata = {
       ...(cleared.planningMetadata ?? {}),
       contourBounds: null,
@@ -1747,8 +1747,8 @@ async function applyPlanningTerrainContoursToGround(options: {
     }, true)
   }
 
-  // --- Phase 3: Write final heights into planningHeightMap ---
-  const nextHeightMap = definition.planningHeightMap
+  // --- Phase 3: Write final heights into terrainHeightMap ---
+  const nextHeightMap = definition.terrainHeightMap
   const writeRowTotal = Math.max(1, rows)
 
   reportProgress({
@@ -1785,7 +1785,7 @@ async function applyPlanningTerrainContoursToGround(options: {
 
   const next = {
     ...definition,
-    planningHeightMap: nextHeightMap,
+    terrainHeightMap: nextHeightMap,
     planningMetadata: {
       ...(definition.planningMetadata ?? {}),
       contourBounds: nextBounds,
@@ -2095,3 +2095,4 @@ void syncPlanningHeightState
 void resolvePlanningUnitsToMeters
 void resolvePlanningContourPolygonBounds
 void applyPlanningTerrainContoursToGround
+

@@ -3646,7 +3646,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			if (sculptSessionState && sculptSessionState.nodeId === node.id) {
 				if (!sculptSessionState.dirty) {
 					sculptSessionState.definition = mergedRuntimeDefinition
-					sculptSessionState.heightMap = mergedRuntimeDefinition.planningHeightMap
+					sculptSessionState.heightMap = mergedRuntimeDefinition.terrainHeightMap
 					return mergedRuntimeDefinition
 				}
 				return sculptSessionState.definition
@@ -3733,7 +3733,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		// PERF: Cloning a very large sparse heightMap can stall the UI for seconds.
 		// Sculpt currently has no cancel/revert flow, so we avoid the full clone and mutate the existing map.
 		const sessionDefinition = definition
-		const clonedHeightMap = sessionDefinition.planningHeightMap
+		const clonedHeightMap = sessionDefinition.terrainHeightMap
 		sculptSessionState = {
 			nodeId,
 			definition: sessionDefinition,
@@ -4485,7 +4485,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		// 如果雕刻成功且当前会话匹配，更新会话状态的定义和高度图
 		if (modified && sculptSessionState && sculptSessionState.nodeId === session.nodeId) {
 			sculptSessionState.definition = session.definition
-			sculptSessionState.heightMap = session.definition.planningHeightMap
+			sculptSessionState.heightMap = session.definition.terrainHeightMap
 		}
 		// 如果雕刻未发生任何修改，则返回失败
 		if (!modified) {
@@ -7263,7 +7263,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			})
 			if (modified && sculptSessionState && sculptSessionState.nodeId === groundNode.id) {
 				sculptSessionState.definition = definition
-				sculptSessionState.heightMap = definition.planningHeightMap
+				sculptSessionState.heightMap = definition.terrainHeightMap
 			}
 
 			if (modified) {
@@ -7967,3 +7967,4 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		dispose,
 	}
 }
+

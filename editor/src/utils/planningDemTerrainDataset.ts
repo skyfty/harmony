@@ -673,7 +673,7 @@ function clonePlanningDemTerrainDatasetDefinitionForWorker(definition: GroundRun
     if (key.startsWith('runtime') && key !== 'runtimeHydratedHeightState' && key !== 'runtimeDisableOptimizedChunks' && key !== 'runtimeLoadedTileKeys') {
       continue
     }
-    if (key === 'planningHeightMap' || key === 'localEditTiles') {
+    if (key === 'terrainHeightMap' || key === 'localEditTiles') {
       continue
     }
     const clonedValue = clonePlanningDemWorkerValue(value)
@@ -1232,3 +1232,4 @@ export async function buildPlanningDemTerrainDataset(
     regionPacks,
   }
 }
+

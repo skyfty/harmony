@@ -85,7 +85,7 @@ function manualDeepCloneLocal(source: unknown): unknown {
 
 type GroundDynamicMeshLike = GroundDynamicMesh & { terrainScatter?: unknown }
 type GroundDynamicMeshResult = GroundDynamicMesh & { terrainScatter?: unknown }
-type GroundRuntimeDynamicMesh = GroundDynamicMesh & { planningHeightMap: Float64Array }
+type GroundRuntimeDynamicMesh = GroundDynamicMesh & { terrainHeightMap: Float64Array }
 
 function buildPrimaryGroundMaterialProps(
   createMaterialProps: GroundDeps['createMaterialProps'],
@@ -358,7 +358,7 @@ export function applyGroundRegionTransform(
   const gridSize = resolveGroundWorkingGridSize(definition)
   const getBaseHeight = (row: number, column: number): number => computeGroundBaseHeightAtVertex(definition, row, column)
   const getPlanningHeight = (row: number, column: number): number => {
-    const raw = definition.planningHeightMap[getGroundVertexIndex(gridSize.columns, row, column)]
+    const raw = definition.terrainHeightMap[getGroundVertexIndex(gridSize.columns, row, column)]
     if (typeof raw === 'number' && Number.isFinite(raw)) {
       return raw
     }
@@ -374,7 +374,7 @@ export function applyGroundRegionTransform(
   }
 
   const normalized = normalizeGroundBounds(definition, bounds)
-  const nextHeightMap = definition.planningHeightMap
+  const nextHeightMap = definition.terrainHeightMap
   let changed = false
   for (let row = normalized.minRow; row <= normalized.maxRow; row += 1) {
     for (let column = normalized.minColumn; column <= normalized.maxColumn; column += 1) {
@@ -573,3 +573,4 @@ export default {
   createGroundSceneNodeWithDeps,
   normalizeGroundSceneNodeWithDeps,
 }
+

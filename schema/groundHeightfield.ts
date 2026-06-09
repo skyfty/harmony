@@ -280,7 +280,7 @@ function buildGroundRegionSampleGrid(node: SceneNode, mesh: GroundDynamicMesh): 
   const columns = gridSize.columns
   const { scaleY } = resolveNodeScaleVector(node.scale)
   const sample = sampleGroundEffectiveHeightRegion(
-    mesh as GroundDynamicMesh & { planningHeightMap: Float64Array },
+    mesh as GroundDynamicMesh & { terrainHeightMap: Float64Array },
     0,
     rows,
     0,
@@ -859,3 +859,4 @@ export function buildHeightfieldShapeFromGroundNode(node: SceneNode): RigidbodyP
     applyScale: false,
   }
 }
+

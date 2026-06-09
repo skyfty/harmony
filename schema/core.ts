@@ -2112,8 +2112,11 @@ export type GroundTerrainHeightSampler = {
 }
 
 export type GroundRuntimeDynamicMesh = GroundDynamicMesh & {
-  planningHeightMap: GroundHeightMap
+  /** 规划态高度图数据。 */
+  terrainHeightMap: GroundHeightMap
+  /** 本地编辑瓦片映射（可选）。 */
   localEditTiles?: GroundLocalEditTileMap | null
+  /** 运行时高度区域采样函数。 */
   runtimeSampleHeightRegion?: (
     kind: 'manual' | 'planning',
     minRowInput: number,
@@ -2128,24 +2131,35 @@ export type GroundRuntimeDynamicMesh = GroundDynamicMesh & {
     stride: number
     values: ArrayLike<number>
   }
+  /** 本地编辑瓦片数组缓存。 */
   runtimeLocalEditTileArrayCache?: GroundLocalEditTileData[]
+  /** 本地编辑瓦片查找缓存（key -> 瓦片）。 */
   runtimeLocalEditTileLookupCache?: Map<string, GroundLocalEditTileData>
+  /** 本地编辑瓦片覆盖索引缓存（桶 key -> 覆盖瓦片列表）。 */
   runtimeLocalEditTileCoverageIndexCache?: Map<string, GroundLocalEditTileData[]>
+  /** 本地编辑瓦片缓存对应的数据源引用。 */
   runtimeLocalEditTileSourceRef?: GroundLocalEditTileMap | null
+  /** 覆盖索引缓存对应的数据源引用。 */
   runtimeLocalEditTileCoverageIndexSourceRef?: GroundLocalEditTileMap | null
+  /** 覆盖索引的分桶粒度（chunk 数）。 */
   runtimeLocalEditTileCoverageIndexBucketChunks?: number
+  /** 本地编辑瓦片网格原点缓存。 */
   runtimeLocalEditTileGridOriginCache?: {
     cacheKey: string
     originX: number
     originZ: number
   }
-  /** Runtime-only hydration state used to distinguish untouched sidecar restore from in-session edits. */
+  /** 仅运行时使用：用于区分“未改动的 sidecar 恢复”与“会话内编辑”的水合状态。 */
   runtimeHydratedHeightState?: 'pristine' | 'dirty'
-  /** Runtime-only guard to bypass optimized streamed chunk geometry when sidecar/runtime overrides are active. */
+  /** 仅运行时使用：当 sidecar/运行时覆盖生效时，跳过优化的流式 chunk 几何。 */
   runtimeDisableOptimizedChunks?: boolean
+  /** 已加载的瓦片 key 列表。 */
   runtimeLoadedTileKeys?: string[]
+  /** 编辑高度覆盖点数量。 */
   runtimeEditHeightOverrideCount?: number
+  /** 编辑高度覆盖来源引用。 */
   runtimeEditHeightOverrideSourceRef?: GroundHeightMap
+  /** 编辑高度覆盖来源长度。 */
   runtimeEditHeightOverrideSourceLength?: number
 }
 
@@ -2526,3 +2540,4 @@ export interface SceneClipboard {
   runtimeSnapshots: Map<string, THREE.Object3D>
   cut: boolean
 }
+

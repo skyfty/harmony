@@ -739,8 +739,8 @@ export function serializeGroundHeightSidecar(definition: GroundRuntimeDynamicMes
     columns: gridSize.columns,
     planningMetadata: definition.planningMetadata ?? null,
     localEditTiles: definition.localEditTiles ?? null,
-    getManualHeight: (row, column) => definition.planningHeightMap[row * (gridSize.columns + 1) + column] ?? Number.NaN,
-    getPlanningHeight: (row, column) => definition.planningHeightMap[row * (gridSize.columns + 1) + column] ?? Number.NaN,
+    getManualHeight: (row, column) => definition.terrainHeightMap[row * (gridSize.columns + 1) + column] ?? Number.NaN,
+    getPlanningHeight: (row, column) => definition.terrainHeightMap[row * (gridSize.columns + 1) + column] ?? Number.NaN,
   })
 }
 
@@ -773,7 +773,7 @@ export function stripGroundHeightMapsFromSceneDocument(document: StoredSceneDocu
       return
     }
     const groundDynamicMesh = dynamicMesh as GroundDynamicMesh & Record<string, unknown>
-    delete groundDynamicMesh.planningHeightMap
+    delete groundDynamicMesh.terrainHeightMap
     delete groundDynamicMesh.planningMetadata
     delete groundDynamicMesh.surfaceRevision
     delete groundDynamicMesh.runtimeHydratedHeightState
@@ -829,13 +829,13 @@ export function createGroundRuntimeMeshFromSidecar(
   }
 
   const header = readSidecarHeader(new DataView(buffer, 0, headerByteLength + metadataByteLength))
-  const planningHeightMap = new Float64Array(buffer, layout.planningOffset, vertexCount)
+  const terrainHeightMap = new Float64Array(buffer, layout.planningOffset, vertexCount)
   const localEditTiles = layout.localEditTilesByteLength > 0
     ? decodeLocalEditTilesPayload(new Uint8Array(buffer, layout.localEditTilesOffset, layout.localEditTilesByteLength))
     : null
   return {
     ...definition,
-    planningHeightMap,
+    terrainHeightMap,
     planningMetadata: header.planningMetadata,
     localEditTiles,
     surfaceRevision: Number.isFinite(definition.surfaceRevision) ? Math.max(0, Math.trunc(definition.surfaceRevision as number)) : 0,
@@ -843,3 +843,4 @@ export function createGroundRuntimeMeshFromSidecar(
     runtimeDisableOptimizedChunks: false,
   }
 }
+

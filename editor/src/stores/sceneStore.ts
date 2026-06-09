@@ -2141,7 +2141,7 @@ function commitGroundHeightMapRuntimeEdit(
   },
   nodeId: string,
   definition: GroundDynamicMesh,
-  planningHeightMap: GroundHeightMap,
+  terrainHeightMap: GroundHeightMap,
   planningRegion: GroundHeightRegion | null = null,
   dirtyBounds: WorldBoundsXZ | null = null,
 ): boolean {
@@ -2157,7 +2157,7 @@ function commitGroundHeightMapRuntimeEdit(
   const runtimeDefinition = definition as GroundRuntimeDynamicMesh
   // 若调用方未显式提供脏区域，则通过旧/新规划高度图差异自动计算，
   // 以便后续仅刷新受影响的地形块与相关联的地貌节点。
-  const resolvedDirtyBounds = dirtyBounds ?? computeGroundDirtyBoundsXZ(target, runtimeDefinition, runtimeDefinition.planningHeightMap, planningHeightMap)
+  const resolvedDirtyBounds = dirtyBounds ?? computeGroundDirtyBoundsXZ(target, runtimeDefinition, runtimeDefinition.terrainHeightMap, terrainHeightMap)
   // 每次地表高度发生运行时编辑都递增 surfaceRevision，
   // 用于触发依赖地形表面的渲染、缓存和编译结果失效。
   const currentRevision = normalizeGroundSurfaceRevision(target.dynamicMesh.surfaceRevision)
@@ -3240,7 +3240,7 @@ function buildGroundPlanningRegionFromHeightMap(
   for (let row = normalized.minRow; row <= normalized.maxRow; row += 1) {
     const rowOffset = (row - normalized.minRow) * vertexColumns
     for (let column = normalized.minColumn; column <= normalized.maxColumn; column += 1) {
-      const source = Number(definition.planningHeightMap[getGroundVertexIndex(gridSize.columns, row, column)])
+      const source = Number(definition.terrainHeightMap[getGroundVertexIndex(gridSize.columns, row, column)])
       values[rowOffset + (column - normalized.minColumn)] = Number.isFinite(source) ? source : GROUND_HEIGHT_UNSET_VALUE
     }
   }
@@ -9926,7 +9926,7 @@ export const useSceneStore = defineStore('scene', {
         this,
         groundNode.id,
         currentDefinition,
-        result.definition.planningHeightMap,
+        result.definition.terrainHeightMap,
         planningRegion,
         dirtyBounds,
       )
@@ -10733,9 +10733,9 @@ export const useSceneStore = defineStore('scene', {
     commitGroundHeightMapEdit(
       nodeId: string,
       definition: GroundDynamicMesh,
-      planningHeightMap: GroundHeightMap,
+      terrainHeightMap: GroundHeightMap,
     ) {
-      const committed = commitGroundHeightMapRuntimeEdit(this, nodeId, definition, planningHeightMap)
+      const committed = commitGroundHeightMapRuntimeEdit(this, nodeId, definition, terrainHeightMap)
       if (committed) {
         void this.rebuildCurrentSceneCompiledGroundChunks(nodeId, []).catch((error) => {
           console.warn('[SceneStore] Failed to rebuild compiled ground after heightmap edit', error)
@@ -19656,3 +19656,4 @@ export const useSceneStore = defineStore('scene', {
     migrations: migrateScenePersistedState,
   },
 })
+

@@ -1176,10 +1176,10 @@ export function analyzeGroundOptimizedMeshUsage(definition: GroundDynamicMesh): 
     }
   }
 
-  const planningHeightMap = runtimeDefinition.planningHeightMap
-  const limit = planningHeightMap?.length ?? 0
+  const terrainHeightMap = runtimeDefinition.terrainHeightMap
+  const limit = terrainHeightMap?.length ?? 0
   for (let index = 0; index < limit; index += 1) {
-    const planning = planningHeightMap[index]
+    const planning = terrainHeightMap[index]
     if (typeof planning === 'number' && Number.isFinite(planning)) {
       return {
         ...base,
@@ -1256,8 +1256,8 @@ function ensureGroundRuntimeDefinition(definition: GroundDynamicMesh): GroundRun
   // 后续所有高度图、编辑图和采样索引都要依赖这个尺寸，所以这里必须先统一。
   const gridSize = resolveGroundWorkingGridSizeCached(runtimeDefinition)
   // 规划高度图用于未提交前的预览态或规划态数据，同样需要和当前工作网格严格对齐。
-  runtimeDefinition.planningHeightMap = ensureGroundHeightMap(
-    runtimeDefinition.planningHeightMap,
+  runtimeDefinition.terrainHeightMap = ensureGroundHeightMap(
+    runtimeDefinition.terrainHeightMap,
     gridSize.rows,
     gridSize.columns,
   )
@@ -1298,16 +1298,16 @@ function adjustRuntimeGroundHeightOverrideCount(
 }
 
 function ensureRuntimeGroundHeightOverrideCounts(definition: GroundRuntimeDynamicMesh): void {
-  const planningHeightMap = definition.planningHeightMap
-  const planningLength = planningHeightMap?.length ?? 0
+  const terrainHeightMap = definition.terrainHeightMap
+  const planningLength = terrainHeightMap?.length ?? 0
 
   if (
-    definition.runtimeEditHeightOverrideSourceRef !== planningHeightMap
+    definition.runtimeEditHeightOverrideSourceRef !== terrainHeightMap
     || definition.runtimeEditHeightOverrideSourceLength !== planningLength
     || !Number.isFinite(definition.runtimeEditHeightOverrideCount)
   ) {
-    definition.runtimeEditHeightOverrideCount = countGroundHeightOverrides(planningHeightMap)
-    definition.runtimeEditHeightOverrideSourceRef = planningHeightMap
+    definition.runtimeEditHeightOverrideCount = countGroundHeightOverrides(terrainHeightMap)
+    definition.runtimeEditHeightOverrideSourceRef = terrainHeightMap
     definition.runtimeEditHeightOverrideSourceLength = planningLength
   }
 }
@@ -2064,7 +2064,7 @@ export function resolveGroundEffectiveHeightAtVertex(definition: GroundDynamicMe
   const gridSize = resolveGroundWorkingGridSize(runtimeDefinition)
   const heightIndex = getGroundVertexIndex(gridSize.columns, row, column)
   // 规划/自动生成层的绝对高度；若无规划覆盖则同样退回 base。
-  const planningRaw = runtimeDefinition.planningHeightMap[heightIndex]
+  const planningRaw = runtimeDefinition.terrainHeightMap[heightIndex]
   const planning = typeof planningRaw === 'number' && Number.isFinite(planningRaw) ? planningRaw : base
   return planning
 }
@@ -2098,7 +2098,7 @@ function resolveGroundEffectiveHeightAtVertexWithContext(
   }
   const base = computeGroundBaseHeightAtVertex(runtimeDefinition, row, column)
   const heightIndex = getGroundVertexIndex(columns, row, column)
-  const planningRaw = runtimeDefinition.planningHeightMap[heightIndex]
+  const planningRaw = runtimeDefinition.terrainHeightMap[heightIndex]
   const planning = typeof planningRaw === 'number' && Number.isFinite(planningRaw) ? planningRaw : base
   return planning
 }
@@ -2234,7 +2234,7 @@ function sampleGroundEffectiveHeightRegionInternal(
 
         // localEdit 已经在最前面处理过；若没有局部覆盖，这里只保留规划层高度。
         const heightIndex = getGroundVertexIndex(gridSize.columns, row, column)
-        const planningRaw = planningValues ? planningValues[offset] : runtimeDefinition.planningHeightMap[heightIndex]
+        const planningRaw = planningValues ? planningValues[offset] : runtimeDefinition.terrainHeightMap[heightIndex]
         const planning = typeof planningRaw === 'number' && Number.isFinite(planningRaw) ? planningRaw : terrainBase
         effective = planning
       }
@@ -5310,7 +5310,7 @@ export function applyGroundGeneration(
   definition.generation = normalized
   // Generation is evaluated on demand; keep explicit edits as sparse absolute overrides.
   const gridSize = resolveGroundWorkingGridSize(definition)
-  definition.planningHeightMap = createGroundHeightMap(gridSize.rows, gridSize.columns)
+  definition.terrainHeightMap = createGroundHeightMap(gridSize.rows, gridSize.columns)
   return normalized
 }
 
@@ -5742,7 +5742,7 @@ export function sculptGround(definition: GroundRuntimeDynamicMesh, params: Sculp
     : Math.ceil((localZ + radius - bounds.minZ) / cellSize)
 
   let modified = false
-  let heightMap = definition.planningHeightMap
+  let heightMap = definition.terrainHeightMap
 
   if (shape === 'polygon') {
     // 多边形抬升/下压优先尝试子采样路径，提高大面积编辑效率
@@ -5754,7 +5754,7 @@ export function sculptGround(definition: GroundRuntimeDynamicMesh, params: Sculp
         slope,
       })
       if (subsampled) {
-        definition.planningHeightMap = heightMap
+        definition.terrainHeightMap = heightMap
         return true
       }
     }
@@ -5765,7 +5765,7 @@ export function sculptGround(definition: GroundRuntimeDynamicMesh, params: Sculp
       strength,
       targetHeight,
     })) {
-      definition.planningHeightMap = heightMap
+      definition.terrainHeightMap = heightMap
       return true
     }
 
@@ -5837,7 +5837,7 @@ export function sculptGround(definition: GroundRuntimeDynamicMesh, params: Sculp
     }
 
     if (modified) {
-      definition.planningHeightMap = heightMap
+      definition.terrainHeightMap = heightMap
     }
     return modified
   }
@@ -5848,7 +5848,7 @@ export function sculptGround(definition: GroundRuntimeDynamicMesh, params: Sculp
     strength,
     operation,
   })) {
-    definition.planningHeightMap = heightMap
+    definition.terrainHeightMap = heightMap
     return true
   }
 
@@ -5859,7 +5859,7 @@ export function sculptGround(definition: GroundRuntimeDynamicMesh, params: Sculp
     operation,
     targetHeight,
   })) {
-    definition.planningHeightMap = heightMap
+    definition.terrainHeightMap = heightMap
     return true
   }
 
@@ -5945,7 +5945,7 @@ export function sculptGround(definition: GroundRuntimeDynamicMesh, params: Sculp
     }
   }
   if (modified) {
-    definition.planningHeightMap = heightMap
+    definition.terrainHeightMap = heightMap
   }
   return modified
 }
@@ -8357,3 +8357,4 @@ export function releaseGroundMeshCache(disposeResources = true) {
   }
   cachedPrototypeMesh = null
 }
+

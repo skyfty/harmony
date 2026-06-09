@@ -16,7 +16,7 @@ import { loadPlanningDemBlobByHash } from '@/utils/planningDemStorage'
 import { isPlanningDemHeightmapImageSource, parsePlanningDemBlob } from '@/utils/planningDemImport'
 
 export interface PlanningDemGroundConversionResult {
-  planningHeightMap: GroundHeightMap
+  terrainHeightMap: GroundHeightMap
   localEditTiles: GroundLocalEditTileMap | null
   planningMetadata: GroundPlanningMetadata
   normalMapDataUrl?: string | null
@@ -1775,8 +1775,9 @@ export async function buildPlanningDemGroundData(options: {
   })
 
   return {
-    planningHeightMap: heightMap,
+    terrainHeightMap: heightMap,
     localEditTiles,
     planningMetadata: fullRegionResult.planningMetadata,
   }
 }
+

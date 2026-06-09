@@ -76,7 +76,7 @@ export type GroundHeightRuntimeState = {
 }
 
 export type GroundRuntimeDynamicMesh = GroundDynamicMesh & {
-  planningHeightMap: GroundHeightMap
+  terrainHeightMap: GroundHeightMap
   runtimeSampleHeightRegion?: (
     kind: 'manual' | 'planning',
     minRowInput: number,
@@ -112,6 +112,7 @@ function clampRegionIndex(value: number, min: number, max: number): number {
 
 function sampleRuntimeHeightRegion(
   state: GroundHeightRuntimeState,
+  _kind: 'manual' | 'planning',
   minRowInput: number,
   maxRowInput: number,
   minColumnInput: number,
@@ -654,7 +655,7 @@ function resolveRuntimeMeshView(
 
   state.cachedRuntimeMesh = {
     ...definition,
-    planningHeightMap: state.cachedEditHeightMap as GroundHeightMap,
+    terrainHeightMap: state.cachedEditHeightMap as GroundHeightMap,
     localEditTiles: state.cachedLocalEditTiles,
     runtimeSampleHeightRegion: (kind, minRowInput, maxRowInput, minColumnInput, maxColumnInput) => sampleRuntimeHeightRegion(
       state,
@@ -702,7 +703,7 @@ function replaceRuntimeGroundHeightmapsFromSidecar(
   runtimeGroundDefinition.runtimeLoadedTileKeys = runtimeDefinition.runtimeLoadedTileKeys ?? []
   runtimeGroundDefinition.runtimeEditHeightOverrideCount = runtimeDefinition.runtimeEditHeightOverrideCount
   const created = createRuntimeState(groundNode.id, runtimeDefinition)
-  syncFlatHeightMapIntoTiles(created, runtimeDefinition.planningHeightMap)
+  syncFlatHeightMapIntoTiles(created, runtimeDefinition.terrainHeightMap)
   created.heightMetadata = cloneGroundMetadata(runtimeDefinition.planningMetadata ?? null)
   created.optimizedMeshDirtyBounds = null
   created.runtimeHydratedHeightState = runtimeDefinition.runtimeHydratedHeightState
@@ -962,3 +963,4 @@ export const useGroundHeightmapStore = defineStore('groundHeightmap', {
     },
   },
 })
+
