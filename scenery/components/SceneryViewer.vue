@@ -1636,7 +1636,7 @@ const SCENERY_GROUND_FOG_UNLOAD_BUFFER_MIN_CHUNKS = 4;
 const SCENERY_GROUND_FOG_UNLOAD_BUFFER_RATIO = 0.5;
 const CAMERA_WATCH_DURATION = 0.35;
 const CAMERA_LEVEL_DURATION = 0.35;
-const VEHICLE_DRIVE_INTRO_HOLD_SECONDS = 1;
+const VEHICLE_DRIVE_INTRO_HOLD_SECONDS = 2.0;
 const VEHICLE_DRIVE_INTRO_BLEND_SECONDS = 1.2;
 const DEFAULT_SCENE_EXPOSURE = 0.7;
 
@@ -18811,21 +18811,14 @@ onUnmounted(() => {
 
 .viewer-vehicle-intro-banner {
   position: absolute;
-  top: 50%;
+  top: 38%;
   left: 50%;
   z-index: 2200;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   padding: 16rpx 28rpx;
-  border-radius: 999rpx;
   transform: translate(-50%, -50%);
-  background: rgba(10, 14, 28, 0.56);
-  border: 1px solid rgba(255, 255, 255, 0.22);
-  box-shadow:
-    0 18rpx 40rpx rgba(0, 0, 0, 0.18),
-    inset 0 1px 0 rgba(255, 255, 255, 0.18);
-  backdrop-filter: blur(22px) saturate(1.1);
   pointer-events: none;
 }
 
