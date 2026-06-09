@@ -24,6 +24,13 @@
         <text class="viewer-punch-summary__label">打卡</text>
         <text class="viewer-punch-summary__value">{{ punchCheckedCount }}/{{ punchTotalCount }}</text>
       </view>
+      <view
+        v-if="vehicleDriveIntroVisible"
+        class="viewer-vehicle-intro-banner"
+        aria-hidden="true"
+      >
+        <text class="viewer-vehicle-intro-banner__text">出发！</text>
+      </view>
       <button
         v-if="floatingAutoTourButton.visible"
         class="viewer-auto-tour-trigger"
@@ -1629,6 +1636,8 @@ const SCENERY_GROUND_FOG_UNLOAD_BUFFER_MIN_CHUNKS = 4;
 const SCENERY_GROUND_FOG_UNLOAD_BUFFER_RATIO = 0.5;
 const CAMERA_WATCH_DURATION = 0.35;
 const CAMERA_LEVEL_DURATION = 0.35;
+const VEHICLE_DRIVE_INTRO_HOLD_SECONDS = 1;
+const VEHICLE_DRIVE_INTRO_BLEND_SECONDS = 1.2;
 const DEFAULT_SCENE_EXPOSURE = 0.7;
 
 
@@ -3121,6 +3130,23 @@ const vehicleDriveCameraFollowState = reactive<VehicleDriveCameraFollowState>({
   motionDistanceBlend: 0,
   lookaheadOffset: new THREE.Vector3(),
 });
+type VehicleDriveIntroPhase = 'idle' | 'hold' | 'blend';
+const vehicleDriveIntroState = reactive({
+  active: false,
+  nodeId: null as string | null,
+  phase: 'idle' as VehicleDriveIntroPhase,
+  elapsedSeconds: 0,
+  holdSeconds: VEHICLE_DRIVE_INTRO_HOLD_SECONDS,
+  blendSeconds: VEHICLE_DRIVE_INTRO_BLEND_SECONDS,
+  startPosition: new THREE.Vector3(),
+  startTarget: new THREE.Vector3(),
+  startUp: new THREE.Vector3(0, 1, 0),
+});
+const vehicleDriveIntroVisible = computed(() => (
+  vehicleDriveIntroState.active
+  && vehicleDriveIntroState.phase === 'hold'
+  && vehicleDriveIntroState.elapsedSeconds < vehicleDriveIntroState.holdSeconds
+));
 const lanternJoystickRef = ref<ComponentPublicInstance | HTMLElement | null>(null);
 const floatingJoystickRef = ref<ComponentPublicInstance | HTMLElement | null>(null);
 const joystickVector = reactive({ x: 0, y: 0 });
@@ -3593,6 +3619,202 @@ function primeAutoTourCameraFollowTransition(object: THREE.Object3D, forwardWorl
   autoTourCameraFollowHasSample = true;
 }
 
+function clearVehicleDriveIntroState(): void {
+  vehicleDriveIntroState.active = false;
+  vehicleDriveIntroState.nodeId = null;
+  vehicleDriveIntroState.phase = 'idle';
+  vehicleDriveIntroState.elapsedSeconds = 0;
+  vehicleDriveIntroState.startPosition.set(0, 0, 0);
+  vehicleDriveIntroState.startTarget.set(0, 0, 0);
+  vehicleDriveIntroState.startUp.set(0, 1, 0);
+}
+
+function resolveVehicleDriveIntroAnchor(object: THREE.Object3D): THREE.Vector3 {
+  tempBox.makeEmpty();
+  tempBox.setFromObject(object);
+  if (!tempBox.isEmpty() && Number.isFinite(tempBox.min.x)) {
+    tempBox.getCenter(vehicleDriveIntroAnchorScratch);
+  } else {
+    object.getWorldPosition(vehicleDriveIntroAnchorScratch);
+  }
+  return vehicleDriveIntroAnchorScratch;
+}
+
+function resolveVehicleDriveIntroPose(nodeId: string): boolean {
+  const object = nodeObjectMap.get(nodeId) ?? null;
+  if (!object) {
+    return false;
+  }
+
+  object.updateMatrixWorld(true);
+  const anchor = resolveVehicleDriveIntroAnchor(object);
+  const instance = vehicleInstances.get(nodeId) ?? null;
+
+  if (instance) {
+    object.getWorldQuaternion(vehicleDriveIntroScratchCamera.quaternion);
+    vehicleDriveIntroForwardScratch.copy(instance.axisForward).applyQuaternion(vehicleDriveIntroScratchCamera.quaternion);
+    vehicleDriveIntroUpScratch.copy(instance.axisUp).applyQuaternion(vehicleDriveIntroScratchCamera.quaternion);
+  } else {
+    object.getWorldQuaternion(vehicleDriveIntroScratchCamera.quaternion);
+    vehicleDriveIntroForwardScratch.set(0, 0, -1).applyQuaternion(vehicleDriveIntroScratchCamera.quaternion);
+    vehicleDriveIntroUpScratch.set(0, 1, 0).applyQuaternion(vehicleDriveIntroScratchCamera.quaternion);
+  }
+
+  if (vehicleDriveIntroForwardScratch.lengthSq() < 1e-8) {
+    vehicleDriveIntroForwardScratch.set(0, 0, 1);
+  } else {
+    vehicleDriveIntroForwardScratch.normalize();
+  }
+  if (vehicleDriveIntroUpScratch.lengthSq() < 1e-8) {
+    vehicleDriveIntroUpScratch.set(0, 1, 0);
+  } else {
+    vehicleDriveIntroUpScratch.normalize();
+  }
+
+  vehicleDriveIntroRightScratch.crossVectors(vehicleDriveIntroForwardScratch, vehicleDriveIntroUpScratch);
+  if (vehicleDriveIntroRightScratch.lengthSq() < 1e-8) {
+    vehicleDriveIntroRightScratch.crossVectors(worldUp, vehicleDriveIntroForwardScratch);
+  }
+  if (vehicleDriveIntroRightScratch.lengthSq() < 1e-8) {
+    vehicleDriveIntroRightScratch.set(1, 0, 0);
+  } else {
+    vehicleDriveIntroRightScratch.normalize();
+  }
+
+  vehicleDriveIntroUpScratch.crossVectors(vehicleDriveIntroRightScratch, vehicleDriveIntroForwardScratch);
+  if (vehicleDriveIntroUpScratch.lengthSq() < 1e-8) {
+    vehicleDriveIntroUpScratch.set(0, 1, 0);
+  } else {
+    vehicleDriveIntroUpScratch.normalize();
+  }
+
+  const dimensions = getApproxDimensions(object);
+  const lateralOffset = Math.max(dimensions.width * 1.75, 4.8);
+  const verticalOffset = Math.max(dimensions.height * 2.1, 4.8);
+  const forwardOffset = Math.max(dimensions.length * 1.65, 5.8);
+  const targetLift = Math.max(dimensions.height * 0.38, 0.7);
+
+  vehicleDriveIntroPositionScratch
+    .copy(anchor)
+    .addScaledVector(vehicleDriveIntroRightScratch, lateralOffset)
+    .addScaledVector(vehicleDriveIntroUpScratch, verticalOffset)
+    .addScaledVector(vehicleDriveIntroForwardScratch, forwardOffset);
+  vehicleDriveIntroTargetScratch
+    .copy(anchor)
+    .addScaledVector(vehicleDriveIntroUpScratch, targetLift);
+
+  return true;
+}
+
+function startVehicleDriveIntroSequence(targetNodeId: string | null): boolean {
+  const context = renderContext;
+  const normalizedTargetNodeId = normalizeNodeId(targetNodeId);
+  if (!context || !normalizedTargetNodeId || !vehicleDriveActive.value || vehicleDriveNodeId.value !== normalizedTargetNodeId) {
+    clearVehicleDriveIntroState();
+    return false;
+  }
+
+  if (!resolveVehicleDriveIntroPose(normalizedTargetNodeId)) {
+    clearVehicleDriveIntroState();
+    return false;
+  }
+
+  vehicleDriveIntroState.active = true;
+  vehicleDriveIntroState.nodeId = normalizedTargetNodeId;
+  vehicleDriveIntroState.phase = 'hold';
+  vehicleDriveIntroState.elapsedSeconds = 0;
+  vehicleDriveIntroState.startPosition.copy(vehicleDriveIntroPositionScratch);
+  vehicleDriveIntroState.startTarget.copy(vehicleDriveIntroTargetScratch);
+  vehicleDriveIntroState.startUp.copy(vehicleDriveIntroUpScratch);
+
+  runWithProgrammaticCameraMutationAndAnchor(() => {
+    withControlsVerticalFreedom(context.controls, () => {
+      context.camera.position.copy(vehicleDriveIntroState.startPosition);
+      context.controls.target.copy(vehicleDriveIntroState.startTarget);
+      context.camera.up.copy(vehicleDriveIntroState.startUp);
+      context.camera.lookAt(context.controls.target);
+      context.controls.update();
+    });
+  });
+
+  return true;
+}
+
+function updateVehicleDriveIntroCamera(deltaSeconds: number): boolean {
+  const context = renderContext;
+  const nodeId = vehicleDriveIntroState.nodeId;
+  if (!context || !vehicleDriveIntroState.active || !nodeId || !vehicleDriveActive.value || vehicleDriveNodeId.value !== nodeId) {
+    return false;
+  }
+
+  if (!resolveVehicleDriveIntroPose(nodeId)) {
+    clearVehicleDriveIntroState();
+    return false;
+  }
+
+  vehicleDriveIntroScratchCamera.position.copy(vehicleDriveIntroState.startPosition);
+  vehicleDriveIntroScratchCamera.up.copy(vehicleDriveIntroState.startUp);
+  vehicleDriveIntroScratchControls.target.copy(vehicleDriveIntroState.startTarget);
+  vehicleDriveController.updateCamera(0, {
+    camera: vehicleDriveIntroScratchCamera,
+    mapControls: vehicleDriveIntroScratchControls,
+  }, { immediate: true });
+
+  const nowDelta = Math.max(0, deltaSeconds);
+  vehicleDriveIntroState.elapsedSeconds += nowDelta;
+  if (vehicleDriveIntroState.phase === 'hold' && vehicleDriveIntroState.elapsedSeconds >= vehicleDriveIntroState.holdSeconds) {
+    vehicleDriveIntroState.phase = 'blend';
+    vehicleDriveIntroState.startPosition.copy(context.camera.position);
+    vehicleDriveIntroState.startTarget.copy(context.controls.target);
+    vehicleDriveIntroState.startUp.copy(context.camera.up);
+  }
+
+  if (vehicleDriveIntroState.phase === 'hold') {
+    runWithProgrammaticCameraMutationAndAnchor(() => {
+      withControlsVerticalFreedom(context.controls, () => {
+        context.camera.position.copy(vehicleDriveIntroState.startPosition);
+        context.controls.target.copy(vehicleDriveIntroState.startTarget);
+        context.camera.up.copy(vehicleDriveIntroState.startUp);
+        context.camera.lookAt(context.controls.target);
+        context.controls.update();
+      });
+    });
+    return true;
+  }
+
+  const blendElapsedSeconds = Math.max(0, vehicleDriveIntroState.elapsedSeconds - vehicleDriveIntroState.holdSeconds);
+  const blendProgress = vehicleDriveIntroState.blendSeconds <= 1e-6
+    ? 1
+    : Math.min(1, blendElapsedSeconds / vehicleDriveIntroState.blendSeconds);
+  const easedBlend = easeInOutCubic(blendProgress);
+
+  vehicleDriveIntroBlendTargetPositionScratch.copy(vehicleDriveCameraFollowState.currentPosition);
+  vehicleDriveIntroBlendTargetTargetScratch.copy(vehicleDriveCameraFollowState.currentTarget);
+  runWithProgrammaticCameraMutationAndAnchor(() => {
+    withControlsVerticalFreedom(context.controls, () => {
+      context.camera.position.lerpVectors(
+        vehicleDriveIntroState.startPosition,
+        vehicleDriveIntroBlendTargetPositionScratch,
+        easedBlend,
+      );
+      context.controls.target.lerpVectors(
+        vehicleDriveIntroState.startTarget,
+        vehicleDriveIntroBlendTargetTargetScratch,
+        easedBlend,
+      );
+      context.camera.up.copy(vehicleDriveIntroState.startUp);
+      context.camera.lookAt(context.controls.target);
+      context.controls.update();
+    });
+  });
+
+  if (blendProgress >= 1) {
+    clearVehicleDriveIntroState();
+  }
+
+  return true;
+}
+
 const vehicleDriveController = new VehicleDriveController(
   {
     vehicleInstances,
@@ -3718,6 +3940,7 @@ watch(vehicleDriveCameraMode, (mode) => {
 
 watch(vehicleDriveActive, (active) => {
   if (!active) {
+    clearVehicleDriveIntroState();
     vehicleDriveCameraMode.value = 'follow';
     vehicleDriveCameraFollowState.initialized = false;
     vehicleSpeedDisplayMps.value = 0;
@@ -3788,6 +4011,23 @@ const tempObserverVector = new THREE.Vector3();
 const tempRegionObserverVector = new THREE.Vector3();
 const tempPitchVector = new THREE.Vector3();
 const tempSpherical = new THREE.Spherical();
+const vehicleDriveIntroScratchCamera = new THREE.PerspectiveCamera();
+const vehicleDriveIntroScratchControls = {
+  target: new THREE.Vector3(),
+  update: () => {},
+  enabled: false,
+  enablePan: true,
+  minDistance: 0,
+  maxDistance: Infinity,
+};
+const vehicleDriveIntroAnchorScratch = new THREE.Vector3();
+const vehicleDriveIntroForwardScratch = new THREE.Vector3();
+const vehicleDriveIntroRightScratch = new THREE.Vector3();
+const vehicleDriveIntroUpScratch = new THREE.Vector3();
+const vehicleDriveIntroBlendTargetPositionScratch = new THREE.Vector3();
+const vehicleDriveIntroBlendTargetTargetScratch = new THREE.Vector3();
+const vehicleDriveIntroPositionScratch = new THREE.Vector3();
+const vehicleDriveIntroTargetScratch = new THREE.Vector3();
 const LANTERN_SWIPE_DETECTION_THRESHOLD = 18;
 const LANTERN_SWIPE_TRIGGER_THRESHOLD = 60;
 let lanternSwipeStartX: number | null = null;
@@ -7643,6 +7883,7 @@ function syncAirWallsForDocument(sceneDocument: SceneJsonExportDocument | null):
 }
 
 function clearLegacyPhysicsWorld(): void {
+  clearVehicleDriveIntroState();
   vehicleInstances.clear();
   rigidbodyInstances.clear();
   protagonistNodeId = null;
@@ -10750,7 +10991,7 @@ function ensureRemoteMultiuserPeerRoot(): THREE.Group | null {
   return remoteMultiuserPeerRoot;
 }
 
-function hideRemoteMultiuserPeer(userId: string, entry: RemoteMultiuserPeerEntry): void {
+function hideRemoteMultiuserPeer(entry: RemoteMultiuserPeerEntry): void {
   if (entry.root) {
     entry.root.parent?.remove(entry.root);
   }
@@ -11762,7 +12003,7 @@ function syncRemoteMultiuserPeerVisibility(camera?: THREE.Camera | null): void {
   remoteMultiuserPeerEntries.forEach((entry, userId) => {
     if (!selected.has(userId)) {
       if (entry.visible) {
-        hideRemoteMultiuserPeer(userId, entry);
+        hideRemoteMultiuserPeer(entry);
       }
       return;
     }
@@ -14177,6 +14418,7 @@ function handleVehicleDriveResetTap(): void {
   }
   vehicleDriveResetBusy.value = true;
   try {
+    clearVehicleDriveIntroState();
     const success = resetActiveVehiclePose();
     if (!success) {
       uni.showToast({ title: '无法重置车辆', icon: 'none' });
@@ -14568,17 +14810,8 @@ function activatePendingDefaultSteerDriveIfNeeded(): void {
   if (!event || vehicleDriveActive.value || vehicleDrivePromptBusy.value) {
     return;
   }
-  const result = startVehicleDriveMode(event);
-  if (!result.success) {
-    if (isVehicleDrivePendingReadinessMessage(result.message)) {
-      return;
-    }
-    pendingDefaultSteerDriveEvent.value = null;
-    uni.showToast({ title: result.message ?? '无法进入驾驶模式', icon: 'none' });
-    return;
-  }
   pendingDefaultSteerDriveEvent.value = null;
-  handleVehicleDriveEvent(event);
+  handleVehicleDriveEvent(event, { intro: true });
 }
 
 function retryPendingVehicleDriveIfNeeded(): void {
@@ -14805,13 +15038,17 @@ function prepareAutoTourResumeFromCurrentCamera(targetNodeId: string): void {
   autoTourResumeBlendNodeId = targetNodeId;
 }
 
-function handleVehicleDriveEvent(event: Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }>): void {
+function handleVehicleDriveEvent(
+  event: Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }>,
+  options: { intro?: boolean } = {},
+): void {
   const targetNodeId = event.targetNodeId || event.nodeId || null;
   if (!targetNodeId) {
     uni.showToast({ title: '缺少驾驶目标', icon: 'none' });
     resolveBehaviorToken(event.token, { type: 'fail', message: '缺少驾驶目标' });
     return;
   }
+  clearVehicleDriveIntroState();
   if (vehicleDriveActive.value) {
     restoreVehicleDriveCameraState();
     vehicleDriveController.stopDrive(
@@ -14869,6 +15106,9 @@ function handleVehicleDriveEvent(event: Extract<BehaviorRuntimeEvent, { type: 'v
       return;
     }
     handleShowVehicleCockpitEvent();
+    if (options.intro) {
+      startVehicleDriveIntroSequence(targetNodeId);
+    }
     pendingVehicleDriveEvent.value = null;
     pendingVehicleDriveRetryRequested.value = false;
   } finally {
@@ -14877,6 +15117,7 @@ function handleVehicleDriveEvent(event: Extract<BehaviorRuntimeEvent, { type: 'v
 }
 
 function handleVehicleDebusEvent(): void {
+  clearVehicleDriveIntroState();
   if (pendingVehicleDriveEvent.value) {
     resolveBehaviorToken(pendingVehicleDriveEvent.value.token, {
       type: 'abort',
@@ -17008,6 +17249,7 @@ function teardownRenderer() {
   renderScope = null;
   teardownWheelControls();
   clearSceneInitState();
+  clearVehicleDriveIntroState();
   if (!renderContext) {
     return;
   }
@@ -17745,7 +17987,7 @@ function startRenderLoop(
           }
           if (vehicleDriveActive.value) {
             applyVehicleDriveForces(deltaSeconds);
-            if (!physicsEnvironmentEnabled.value) {
+            if (!physicsEnvironmentEnabled.value && !vehicleDriveIntroState.active) {
               updateVehicleDriveCamera(deltaSeconds);
             }
           }
@@ -17768,11 +18010,15 @@ function startRenderLoop(
           updateAutoTourFollowCamera(deltaSeconds);
         }
 
-          updateBillboardInstanceCameraWorldPosition(camera.position);
-
-        if (vehicleDriveActive.value && physicsEnvironmentEnabled.value) {
-          updateVehicleDriveCamera(deltaSeconds);
+        if (vehicleDriveActive.value) {
+          if (vehicleDriveIntroState.active) {
+            updateVehicleDriveIntroCamera(deltaSeconds);
+          } else if (physicsEnvironmentEnabled.value) {
+            updateVehicleDriveCamera(deltaSeconds);
+          }
         }
+
+        updateBillboardInstanceCameraWorldPosition(camera.position);
 
         updateBehaviorProximity();
         const instancingNow = typeof performance !== 'undefined' && typeof performance.now === 'function'
@@ -17849,6 +18095,8 @@ function cleanupForUnrelatedSceneSwitch(): void {
   if (!renderContext) {
     return;
   }
+
+  clearVehicleDriveIntroState();
 
   // Stop the old frame loop to avoid stacking multiple useFrame() tickers.
   renderScope?.stop();
@@ -18559,6 +18807,50 @@ onUnmounted(() => {
     radial-gradient(circle at left center, rgba(111, 214, 255, 0.14), transparent 42%),
     linear-gradient(180deg, rgba(255, 255, 255, 0.12), transparent 45%);
   pointer-events: none;
+}
+
+.viewer-vehicle-intro-banner {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 2200;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16rpx 28rpx;
+  border-radius: 999rpx;
+  transform: translate(-50%, -50%);
+  background: rgba(10, 14, 28, 0.56);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  box-shadow:
+    0 18rpx 40rpx rgba(0, 0, 0, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  backdrop-filter: blur(22px) saturate(1.1);
+  pointer-events: none;
+}
+
+.viewer-vehicle-intro-banner__text {
+  display: inline-block;
+  color: #ffffff;
+  font-size: 30px;
+  font-weight: 800;
+  letter-spacing: 0.18em;
+  text-shadow:
+    0 2px 0 rgba(0, 0, 0, 0.24),
+    0 0 24px rgba(122, 217, 255, 0.2);
+  animation: viewer-vehicle-intro-banner-pulse 1s ease-in-out infinite;
+}
+
+@keyframes viewer-vehicle-intro-banner-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.94;
+  }
+  50% {
+    transform: scale(1.03);
+    opacity: 1;
+  }
 }
 
 .viewer-auto-tour-trigger {
