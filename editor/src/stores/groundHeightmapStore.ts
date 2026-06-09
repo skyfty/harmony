@@ -943,6 +943,7 @@ export const useGroundHeightmapStore = defineStore('groundHeightmap', {
       if (metadata !== undefined) {
         state.heightMetadata = cloneGroundMetadata(metadata)
       }
+      touchRuntimeMeshState(state)
       return state
     },
     updateGroundHeightMetadata(

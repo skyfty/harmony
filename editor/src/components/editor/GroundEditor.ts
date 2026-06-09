@@ -3840,21 +3840,23 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				// 将本地坐标通过旋转变换转换为世界坐标
 				const worldX = sourceTransform.centerX + localX * cos - localZ * sin
 				const worldZ = sourceTransform.centerZ + localX * sin + localZ * cos
-				
-				// 首先尝试从运行时地形对象采样高度（具有更高精度）
+
+				// 提交阶段优先使用当前会话的 definition 作为权威来源，避免 runtime object 仍停留在旧快照。
+				const sampleRow = Math.max(0, Math.min(rows, Math.round((worldZ - bounds.minZ) / cellSize)))
+				const sampleColumn = Math.max(0, Math.min(columns, Math.round((worldX - bounds.minX) / cellSize)))
+				const definitionHeight = resolveGroundEffectiveHeightAtVertex(definition, sampleRow, sampleColumn)
+				if (Number.isFinite(definitionHeight)) {
+					rasterData[row * width + column] = definitionHeight
+					continue
+				}
+
+				// 如果 definition 读取失败，再退回到运行时地形对象进行采样。
 				const runtimeSample = groundObject
 					? sampleGroundRuntimeSurfaceAtWorldXZ(groundObject, worldX, worldZ)
 					: null
-				
-				if (runtimeSample && Number.isFinite(runtimeSample.height)) {
-					rasterData[row * width + column] = runtimeSample.height
-					continue
-				}
-				
-				// 如果运行时采样失败，则从网格定义中采样高度
-				const sampleRow = Math.max(0, Math.min(rows, Math.round((worldZ - bounds.minZ) / cellSize)))
-				const sampleColumn = Math.max(0, Math.min(columns, Math.round((worldX - bounds.minX) / cellSize)))
-				rasterData[row * width + column] = resolveGroundEffectiveHeightAtVertex(definition, sampleRow, sampleColumn)
+				rasterData[row * width + column] = runtimeSample && Number.isFinite(runtimeSample.height)
+					? runtimeSample.height
+					: definitionHeight
 			}
 		}
 
