@@ -16,6 +16,7 @@ import {
 import {
   buildCollisionTileData,
   buildRenderTileGeometry,
+  computeCompiledGroundRenderTileGeometrySignature,
 } from '@/utils/compiledGroundBuildShared'
 import type {
   CompiledGroundBuildWorkerCollisionResult,
@@ -266,6 +267,14 @@ self.onmessage = async (event: MessageEvent<CompiledGroundBuildWorkerRequest>) =
         if (!built) {
           continue
         }
+        const geometrySignature = computeCompiledGroundRenderTileGeometrySignature(
+          workerDefinition,
+          job.minX,
+          job.minZ,
+          job.widthMeters,
+          job.depthMeters,
+          Math.max(1e-6, message.renderSampleStepMeters ?? 1),
+        )
         built.header.key = job.key
         built.header.row = job.row
         built.header.column = job.column
@@ -279,6 +288,7 @@ self.onmessage = async (event: MessageEvent<CompiledGroundBuildWorkerRequest>) =
           bounds: built.header.bounds,
           vertexCount: built.header.vertexCount,
           triangleCount: built.header.triangleCount,
+          geometrySignature,
           encodedTile,
         })
         transfers.push(encodedTile)

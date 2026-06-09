@@ -12,6 +12,7 @@ import {
   resolveInfiniteGroundGridOriginMeters,
 } from '@schema/core'
 import { sampleGroundHeight } from '@schema/groundMesh'
+import { hashString, stableSerialize } from '@schema/stableSerialize'
 
 function clamp(value: number, min: number, max: number): number {
   if (value < min) {
@@ -87,6 +88,76 @@ function resolveGroundLocalEditTileCellSize(tile: GroundLocalEditTileLike): numb
   }
   const cellSize = tileSizeMeters / resolution
   return Number.isFinite(cellSize) && cellSize > 1e-6 ? cellSize : null
+}
+
+function collectCompiledGroundRenderTileLocalEditSignatures(
+  definition: GroundDynamicMesh,
+  minX: number,
+  minZ: number,
+  widthMeters: number,
+  depthMeters: number,
+): Array<[string, number, number, number, string | null]> {
+  const localEditTileMap = definition.localEditTiles && typeof definition.localEditTiles === 'object'
+    ? definition.localEditTiles
+    : null
+  if (!localEditTileMap) {
+    return []
+  }
+  const maxX = minX + widthMeters
+  const maxZ = minZ + depthMeters
+  const signatures: Array<[string, number, number, number, string | null]> = []
+
+  for (const [key, tile] of Object.entries(localEditTileMap)) {
+    if (!tile || typeof tile !== 'object') {
+      continue
+    }
+    const bounds = resolveGroundLocalEditTileWorldBounds(tile)
+    if (!bounds || !regionOverlapsBounds(minX, minZ, maxX, maxZ, bounds)) {
+      continue
+    }
+    signatures.push([
+      key,
+      Number.isFinite(Number(tile.updatedAt)) ? Math.trunc(Number(tile.updatedAt)) : 0,
+      Math.max(1, Math.trunc(Number(tile.resolution) || 0)),
+      Number.isFinite(Number(tile.tileSizeMeters)) ? Number(tile.tileSizeMeters) : 0,
+      typeof tile.source === 'string' ? tile.source : null,
+    ])
+  }
+
+  signatures.sort((left, right) => {
+    const keyOrder = left[0].localeCompare(right[0])
+    if (keyOrder !== 0) {
+      return keyOrder
+    }
+    return (left[1] - right[1]) || (left[2] - right[2]) || (left[3] - right[3])
+  })
+  return signatures
+}
+
+export function computeCompiledGroundRenderTileGeometrySignature(
+  definition: GroundDynamicMesh,
+  minX: number,
+  minZ: number,
+  widthMeters: number,
+  depthMeters: number,
+  sampleStepMeters?: number,
+): string {
+  const localEditSignatures = collectCompiledGroundRenderTileLocalEditSignatures(
+    definition,
+    minX,
+    minZ,
+    widthMeters,
+    depthMeters,
+  )
+  return hashString(stableSerialize({
+    minX: Number(minX.toFixed(6)),
+    minZ: Number(minZ.toFixed(6)),
+    widthMeters: Number(widthMeters.toFixed(6)),
+    depthMeters: Number(depthMeters.toFixed(6)),
+    sampleStepMeters: Number.isFinite(sampleStepMeters) ? Number(Number(sampleStepMeters).toFixed(6)) : null,
+    baseHeight: Number.isFinite(definition.baseHeight) ? Number(definition.baseHeight) : 0,
+    localEditSignatures,
+  }))
 }
 
 function findCompiledGroundLocalEditTileForRegion(

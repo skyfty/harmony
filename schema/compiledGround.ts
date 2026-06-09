@@ -44,6 +44,7 @@ export interface CompiledGroundRenderTileRecord {
   bounds: CompiledGroundBounds
   vertexCount: number
   triangleCount: number
+  geometrySignature: string
 }
 
 export interface CompiledGroundCollisionTileRecord {
@@ -156,6 +157,7 @@ function normalizeCompiledGroundRenderTileRecord(value: unknown): CompiledGround
     bounds,
     vertexCount: Math.max(0, Math.trunc(normalizeFiniteNumber(value.vertexCount))),
     triangleCount: Math.max(0, Math.trunc(normalizeFiniteNumber(value.triangleCount))),
+    geometrySignature: normalizeString(value.geometrySignature),
   }
 }
 
@@ -472,6 +474,7 @@ export function computeCompiledGroundManifestRevision(
     pushNumber(record.bounds?.maxX ?? 0)
     pushNumber(record.bounds?.maxY ?? 0)
     pushNumber(record.bounds?.maxZ ?? 0)
+    pushString(record.geometrySignature ?? '')
   }
 
 

@@ -522,6 +522,7 @@ function estimateCompiledGroundManifestBytes(manifest: CompiledGroundManifest): 
   for (const tile of manifest.renderTiles ?? []) {
     total += estimateStringBytes(tile.key)
     total += estimateStringBytes(tile.path)
+    total += estimateStringBytes(tile.geometrySignature)
   }
   for (const tile of manifest.collisionTiles ?? []) {
     total += estimateStringBytes(tile.key)

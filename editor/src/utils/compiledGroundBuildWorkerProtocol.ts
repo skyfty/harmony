@@ -46,6 +46,7 @@ export type CompiledGroundBuildWorkerRenderResult = {
   bounds: CompiledGroundBounds
   vertexCount: number
   triangleCount: number
+  geometrySignature: string
   encodedTile: ArrayBuffer
 }
 

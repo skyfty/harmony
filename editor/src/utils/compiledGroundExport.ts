@@ -23,6 +23,7 @@ import {
   buildCollisionTileData,
   buildRenderTileGeometry,
   collectCompiledGroundRenderChunkDiagnostics,
+  computeCompiledGroundRenderTileGeometrySignature,
   type CompiledGroundRenderChunkDiagnostic,
 } from './compiledGroundBuildShared'
 import type {
@@ -489,6 +490,14 @@ function appendRenderTile(
   if (!built) {
     return key
   }
+  const geometrySignature = computeCompiledGroundRenderTileGeometrySignature(
+    context.definition,
+    minX,
+    minZ,
+    widthMeters,
+    depthMeters,
+    context.renderSampleStepMeters,
+  )
   built.header.key = key
   built.header.row = row
   built.header.column = column
@@ -508,6 +517,7 @@ function appendRenderTile(
     bounds: built.header.bounds,
     vertexCount: built.header.vertexCount,
     triangleCount: built.header.triangleCount,
+    geometrySignature,
   })
   options?.onRenderTileBuilt?.({
     tileKey: key,
@@ -692,6 +702,7 @@ async function buildCompiledGroundPhaseWithWorkers(
             bounds: result.bounds,
             vertexCount: result.vertexCount,
             triangleCount: result.triangleCount,
+            geometrySignature: result.geometrySignature,
           })
           completed += 1
           completedSinceYield += 1
