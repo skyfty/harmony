@@ -1,6 +1,5 @@
 import type { GroundHeightMap, GroundLocalEditTileData, GroundLocalEditTileMap, GroundRuntimeDynamicMesh } from '@schema/core'
 import {
-  GROUND_HEIGHT_UNSET_VALUE,
   GROUND_TERRAIN_CHUNK_SIZE_METERS,
   createGroundHeightMap,
   formatGroundLocalEditTileKey,
@@ -531,7 +530,6 @@ function resolvePlanningDemChunkTileRange(options: {
 
 function resolvePlanningDemCoveredGridRegion(options: {
   definition: GroundRuntimeDynamicMesh
-  source: PlanningDemRasterSource
   startRow: number
   endRow: number
   startColumn: number
@@ -544,34 +542,11 @@ function resolvePlanningDemCoveredGridRegion(options: {
   const requestedEndRow = Math.max(requestedStartRow, Math.min(rows, Math.trunc(options.endRow)))
   const requestedStartColumn = Math.max(0, Math.min(columns, Math.trunc(options.startColumn)))
   const requestedEndColumn = Math.max(requestedStartColumn, Math.min(columns, Math.trunc(options.endColumn)))
-  const terrainBounds = resolvePlanningDemTargetWorldBounds(options.definition)
-  const overlapMinX = Math.max(terrainBounds.minX, options.source.sourceWorldBounds.minX)
-  const overlapMaxX = Math.min(terrainBounds.maxX, options.source.sourceWorldBounds.maxX)
-  const overlapMinZ = Math.max(terrainBounds.minZ, options.source.sourceWorldBounds.minZ)
-  const overlapMaxZ = Math.min(terrainBounds.maxZ, options.source.sourceWorldBounds.maxZ)
-  const cellSize = Number.isFinite(options.definition.cellSize) && options.definition.cellSize > 0 ? options.definition.cellSize : 1
-  const epsilon = Math.max(1e-9, cellSize * 1e-9)
-  const overlapStartColumn = Math.max(0, Math.min(columns, Math.ceil((overlapMinX - terrainBounds.minX - epsilon) / cellSize)))
-  const overlapEndColumn = Math.max(overlapStartColumn, Math.min(columns, Math.floor((overlapMaxX - terrainBounds.minX - epsilon) / cellSize)))
-  const overlapStartRow = Math.max(0, Math.min(rows, Math.ceil((overlapMinZ - terrainBounds.minZ - epsilon) / cellSize)))
-  const overlapEndRow = Math.max(overlapStartRow, Math.min(rows, Math.floor((overlapMaxZ - terrainBounds.minZ - epsilon) / cellSize)))
-  const startRow = Math.max(overlapStartRow, requestedStartRow)
-  const endRow = Math.min(overlapEndRow, requestedEndRow)
-  const startColumn = Math.max(overlapStartColumn, requestedStartColumn)
-  const endColumn = Math.min(overlapEndColumn, requestedEndColumn)
-  if (startRow > endRow || startColumn > endColumn) {
-    return {
-      startRow: rows + 1,
-      endRow: rows,
-      startColumn: columns + 1,
-      endColumn: columns,
-    }
-  }
   return {
-    startRow,
-    endRow,
-    startColumn,
-    endColumn,
+    startRow: requestedStartRow,
+    endRow: requestedEndRow,
+    startColumn: requestedStartColumn,
+    endColumn: requestedEndColumn,
   }
 }
 
@@ -585,7 +560,6 @@ function resolvePlanningDemHeightRegionBuildPlan(options: {
 }): PlanningDemHeightRegionBuildPlan | null {
   const { startRow, endRow, startColumn, endColumn } = resolvePlanningDemCoveredGridRegion({
     definition: options.definition,
-    source: options.source,
     startRow: options.startRow,
     endRow: options.endRow,
     startColumn: options.startColumn,
@@ -753,22 +727,18 @@ function resolvePlanningDemLocalEditTileBuildPlan(options: {
   const regionMaxX = terrainBounds.minX + options.endColumn * cellSize
   const regionMinZ = terrainBounds.minZ + options.startRow * cellSize
   const regionMaxZ = terrainBounds.minZ + options.endRow * cellSize
-  const minX = Math.max(regionMinX, options.source.sourceWorldBounds.minX)
-  const maxX = Math.min(regionMaxX, options.source.sourceWorldBounds.maxX)
-  const minZ = Math.max(regionMinZ, options.source.sourceWorldBounds.minZ)
-  const maxZ = Math.min(regionMaxZ, options.source.sourceWorldBounds.maxZ)
-  if (!(maxX > minX) || !(maxZ > minZ)) {
+  if (!(regionMaxX > regionMinX) || !(regionMaxZ > regionMinZ)) {
     return null
   }
   const { startTile: startTileColumn, endTile: endTileColumn } = resolvePlanningDemChunkTileRange({
-    minWorld: minX,
-    maxWorld: maxX,
+    minWorld: regionMinX,
+    maxWorld: regionMaxX,
     originWorld: originX,
     chunkSizeMeters: tileSizeMeters,
   })
   const { startTile: startTileRow, endTile: endTileRow } = resolvePlanningDemChunkTileRange({
-    minWorld: minZ,
-    maxWorld: maxZ,
+    minWorld: regionMinZ,
+    maxWorld: regionMaxZ,
     originWorld: originZ,
     chunkSizeMeters: tileSizeMeters,
   })
@@ -835,15 +805,9 @@ function buildPlanningDemLocalEditTilesForRegionSyncFromPlan(
       for (let row = 0; row <= plan.resolution; row += 1) {
         const z = tileMinZ + row * sampleStepMeters
         const rowOffset = row * samplesPerAxis
-        const rowWithinSourceBounds = z >= plan.sourceBounds.minZ && z <= plan.sourceBounds.maxZ
         for (let column = 0; column <= plan.resolution; column += 1) {
           const x = tileMinX + column * sampleStepMeters
-          const withinSourceBounds = rowWithinSourceBounds
-            && x >= plan.sourceBounds.minX
-            && x <= plan.sourceBounds.maxX
-          values[rowOffset + column] = withinSourceBounds
-            ? samplePlanningDemHeightAtWorld(source, x, z)
-            : GROUND_HEIGHT_UNSET_VALUE
+          values[rowOffset + column] = samplePlanningDemHeightAtWorld(source, x, z)
         }
       }
       result[key] = {
