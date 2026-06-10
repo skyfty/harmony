@@ -343,7 +343,6 @@ function handleAddDice() {
       <v-list-item title="Group" @click="handleAddGroup()" />
       <v-list-item title="Nominate" @click="handleCreateNominateNode()" />
       <v-list-item title="Multiuser Scene" @click="handleCreateMultiuserNode()" :disabled="!canAddMultiuser" />
-      <v-list-item title="Add Dice" @click="handleAddDice()" />
 
       <v-menu  transition="none" location="end" offset="8">
         <template #activator="{ props: lightMenuProps }">
@@ -358,6 +357,9 @@ function handleAddDice() {
           <!-- RectArea Light removed -->
         </v-list>
       </v-menu>
+      <v-divider class="add-menu-divider" />
+      <v-list-item title="Dice" @click="handleAddDice()" />
+
     </v-list>
   </v-menu>
   

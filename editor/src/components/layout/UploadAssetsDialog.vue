@@ -1311,6 +1311,12 @@ function registerPreviewRef(entryId: string, instance: InstanceType<typeof Asset
   }
 }
 
+function resolveEntryThumbnailPreviewUrl(entry: UploadAssetEntry): string | null {
+  return entry.thumbnailPreviewUrl
+    || entry.asset.thumbnail
+    || assetCacheStore.resolveAssetThumbnail({ asset: entry.asset, assetId: entry.assetId })
+}
+
 function registerThumbnailInput(entryId: string, element: HTMLInputElement | null): void {
   if (!element) {
     thumbnailInputRefs.delete(entryId)
@@ -1907,7 +1913,7 @@ function keepLocalReferencesAfterUpload(): void {
                         </template>
                       </div>
 
-                      <div v-if="isModelAsset(entry.asset) || entry.thumbnailPreviewUrl || entry.asset.thumbnail" class="upload-preview__actions">
+                      <div v-if="isModelAsset(entry.asset) || resolveEntryThumbnailPreviewUrl(entry)" class="upload-preview__actions">
                         <template v-if="isModelAsset(entry.asset)">
                           <v-btn
                             color="primary"
@@ -1937,10 +1943,6 @@ function keepLocalReferencesAfterUpload(): void {
                             @change="(event) => handleThumbnailFileSelected(entry, event)"
                           />
                         </template>
-                        <div v-if="entry.thumbnailPreviewUrl || entry.asset.thumbnail" class="upload-preview__thumb">
-                          <img :src="entry.thumbnailPreviewUrl || entry.asset.thumbnail || ''" alt="Captured thumbnail" />
-                          <span class="upload-preview__thumb-label">Current thumbnail</span>
-                        </div>
                       </div>
                     </div>
                   </div>
@@ -2119,6 +2121,8 @@ function keepLocalReferencesAfterUpload(): void {
   flex: 1 1 360px;
   min-width: 320px;
   display: flex;
+  flex-direction: column;
+  gap: 14px;
 }
 
 .upload-entry__preview-pane :deep(.upload-preview) {
@@ -2240,29 +2244,6 @@ function keepLocalReferencesAfterUpload(): void {
   align-items: center;
   justify-content: flex-end;
   z-index: 2;
-}
-
-.upload-preview__thumb {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 4px;
-  padding: 6px;
-  background: rgba(0, 0, 0, 0.5);
-  border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.2);
-}
-
-.upload-preview__thumb img {
-  width: 128px;
-  height: auto;
-  border-radius: 4px;
-  object-fit: cover;
-}
-
-.upload-preview__thumb-label {
-  font-size: 0.72rem;
-  color: rgba(255, 255, 255, 0.85);
 }
 
 .upload-preview__file-input {
