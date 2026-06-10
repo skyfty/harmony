@@ -212,7 +212,9 @@ export async function uploadFile(ctx: Context): Promise<void> {
     if (storedFile) {
       await fs.remove(resolveStorageAbsolutePath(storedFile.fileKey)).catch(() => undefined)
     }
-    await fs.remove(file.filepath).catch(() => undefined)
+    if (file.filepath) {
+     await fs.remove(file.filepath).catch(() => undefined)
+    }
     ctx.throw(400, error instanceof Error ? error.message : 'Upload failed')
   }
 }
