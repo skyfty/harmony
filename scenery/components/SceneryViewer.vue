@@ -29,7 +29,7 @@
         class="viewer-vehicle-intro-banner"
         aria-hidden="true"
       >
-        <text class="viewer-vehicle-intro-banner__text">出发！</text>
+        <text class="viewer-vehicle-intro-banner__text">出发</text>
       </view>
       <button
         v-if="floatingAutoTourButton.visible"
@@ -18811,7 +18811,7 @@ onUnmounted(() => {
 
 .viewer-vehicle-intro-banner {
   position: absolute;
-  top: 38%;
+  top: 20%;
   left: 50%;
   z-index: 2200;
   display: inline-flex;
@@ -18825,8 +18825,8 @@ onUnmounted(() => {
 .viewer-vehicle-intro-banner__text {
   display: inline-block;
   color: #ffffff;
-  font-size: 30px;
-  font-weight: 800;
+  font-size: 45px;
+  font-weight: 900;
   letter-spacing: 0.18em;
   text-shadow:
     0 2px 0 rgba(0, 0, 0, 0.24),
