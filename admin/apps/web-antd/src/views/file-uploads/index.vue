@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { UploadChangeParam, UploadFile, UploadProps } from 'ant-design-vue';
 
-import { onMounted, reactive, ref } from 'vue';
+import { h, onMounted, reactive, ref } from 'vue';
 
 import {
   deleteFileUploadApi,
@@ -68,37 +68,41 @@ const columns = [
     width: 120,
     customRender: ({ record }: { record: FileUploadItem }) => {
       if (record.mimeType?.startsWith('image/') && record.url) {
-        return <Image src={record.url} width={72} height={72} style="object-fit: cover; border-radius: 8px;" preview />;
+        return h(Image, {
+          src: record.url,
+          width: 72,
+          height: 72,
+          style: 'object-fit: cover; border-radius: 8px;',
+          preview: true,
+        });
       }
-      return <Tag color="blue">{record.mimeType?.split('/')[0] || 'file'}</Tag>;
+      return h(Tag, { color: 'blue' }, { default: () => record.mimeType?.split('/')[0] || 'file' });
     },
   },
   {
     title: '名称',
     dataIndex: 'label',
-    customRender: ({ record }: { record: FileUploadItem }) => (
-      <div>
-        <div style="font-weight: 600;">{record.label || record.originalFilename || record.fileKey}</div>
-        <div style="color: rgba(0, 0, 0, 0.45); font-size: 12px; word-break: break-all;">{record.fileKey}</div>
-      </div>
-    ),
+    customRender: ({ record }: { record: FileUploadItem }) =>
+      h('div', [
+        h('div', { style: 'font-weight: 600;' }, record.label || record.originalFilename || record.fileKey),
+        h('div', { style: 'color: rgba(0, 0, 0, 0.45); font-size: 12px; word-break: break-all;' }, record.fileKey),
+      ]),
   },
   {
     title: '模块',
     dataIndex: 'module',
     width: 120,
-    customRender: ({ record }: { record: FileUploadItem }) => <Tag>{record.module}</Tag>,
+    customRender: ({ record }: { record: FileUploadItem }) => h(Tag, null, { default: () => record.module }),
   },
   {
     title: '文件信息',
     width: 200,
-    customRender: ({ record }: { record: FileUploadItem }) => (
-      <div>
-        <div>{record.originalFilename || '-'}</div>
-        <div style="color: rgba(0, 0, 0, 0.45); font-size: 12px;">{record.mimeType || '-'}</div>
-        <div style="color: rgba(0, 0, 0, 0.45); font-size: 12px;">{formatFileSize(record.size)}</div>
-      </div>
-    ),
+    customRender: ({ record }: { record: FileUploadItem }) =>
+      h('div', [
+        h('div', record.originalFilename || '-'),
+        h('div', { style: 'color: rgba(0, 0, 0, 0.45); font-size: 12px;' }, record.mimeType || '-'),
+        h('div', { style: 'color: rgba(0, 0, 0, 0.45); font-size: 12px;' }, formatFileSize(record.size)),
+      ]),
   },
   {
     title: '上传者',
@@ -114,16 +118,34 @@ const columns = [
     title: '操作',
     width: 180,
     fixed: 'right' as const,
-    customRender: ({ record }: { record: FileUploadItem }) => (
-      <Space size="small">
-        <Button type="link" icon={<DownloadOutlined />} onClick={() => window.open(record.url, '_blank')}>
-          打开
-        </Button>
-        <Button danger type="link" icon={<DeleteOutlined />} onClick={() => handleDelete(record)}>
-          删除
-        </Button>
-      </Space>
-    ),
+    customRender: ({ record }: { record: FileUploadItem }) =>
+      h(
+        Space,
+        { size: 'small' },
+        {
+          default: () => [
+            h(
+              Button,
+              {
+                type: 'link',
+                icon: h(DownloadOutlined),
+                onClick: () => window.open(record.url, '_blank'),
+              },
+              { default: () => '打开' },
+            ),
+            h(
+              Button,
+              {
+                danger: true,
+                type: 'link',
+                icon: h(DeleteOutlined),
+                onClick: () => handleDelete(record),
+              },
+              { default: () => '删除' },
+            ),
+          ],
+        },
+      ),
   },
 ];
 
