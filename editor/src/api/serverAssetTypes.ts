@@ -59,6 +59,7 @@ export const SERVER_ASSET_PREVIEW_COLORS: Record<ProjectAsset['type'], string> =
   behavior: '#4DB6AC',
   prefab: '#7986CB',
   lod: '#7986CB',
+  dice: '#8D99AE',
   video: '#FF7043',
   mesh: '#26C6DA',
   file: '#546E7A',

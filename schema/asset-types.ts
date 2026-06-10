@@ -8,6 +8,7 @@ const AssetTypesList = [
   'file',
   'prefab',
   'lod',
+  'dice',
   'video',
   'mesh',
   'behavior',

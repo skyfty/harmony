@@ -7,7 +7,7 @@ import { isWallPresetFilename } from '@/utils/wallPreset'
 type AssetThumbnailTransparencySource = Pick<ProjectAsset, 'type'>
   & Partial<Pick<ProjectAsset, 'extension' | 'name' | 'description'>>
 
-const TRANSPARENT_THUMBNAIL_TYPES = new Set<ProjectAsset['type']>(['model', 'mesh', 'lod', 'prefab', 'material'])
+const TRANSPARENT_THUMBNAIL_TYPES = new Set<ProjectAsset['type']>(['model', 'mesh', 'lod', 'dice', 'prefab', 'material'])
 const TRANSPARENT_THUMBNAIL_EXTENSIONS = new Set(['wall', 'floor', 'road', 'landform'])
 
 function normalizeExtension(value: string | null | undefined): string {

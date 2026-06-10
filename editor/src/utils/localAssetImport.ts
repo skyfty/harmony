@@ -12,7 +12,7 @@ import type { ProjectAsset, ProjectAssetMetadata, ProjectAssetModelStats } from 
 
 const IMAGE_ASSET_TYPES = new Set<ProjectAsset['type']>(['image'])
 const TEXTURE_ASSET_TYPES = new Set<ProjectAsset['type']>(['texture'])
-const MODEL_ASSET_TYPES = new Set<ProjectAsset['type']>(['model', 'mesh', 'prefab'])
+const MODEL_ASSET_TYPES = new Set<ProjectAsset['type']>(['model', 'mesh', 'prefab', 'dice'])
 
 export type LocalAssetImportPhase = 'extract-metadata' | 'generate-thumbnail'
 

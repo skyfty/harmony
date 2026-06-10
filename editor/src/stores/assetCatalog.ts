@@ -13,6 +13,7 @@ export interface AssetCategoryDefinition {
     | 'behaviors'
     | 'prefabs'
     | 'lods'
+    | 'dicePresets'
     | 'wallPresets'
     | 'floorPresets'
     | 'videos'
@@ -84,6 +85,13 @@ export const ASSET_CATEGORY_CONFIG: AssetCategoryDefinition[] = [
     id: `${ASSETS_ROOT_DIRECTORY_ID}-lods`,
     label: 'LOD Presets',
     extensions: ['.lod'],
+  },
+  {
+    key: 'dicePresets',
+    assetType: 'dice',
+    id: `${ASSETS_ROOT_DIRECTORY_ID}-dice-presets`,
+    label: 'Dice Presets',
+    extensions: ['.dice'],
   },
   {
     key: 'wallPresets',

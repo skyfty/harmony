@@ -10,6 +10,8 @@ const props = withDefaults(
     assetId?: string
     assetType?: string
     seriesId?: string
+    multiple?: boolean
+    selectedAssetIds?: string[]
     /** Optional list of allowed filename extensions (without dot), e.g. ['wall', 'glb']. */
     extensions?: string[]
     assets?: ProjectAsset[]
@@ -18,22 +20,52 @@ const props = withDefaults(
     confirmText?: string
     cancelText?: string
     showSearch?: boolean
+    showClearSelection?: boolean;
     disabled?: boolean
   }>(),
   {
     assetId: '',
     assetType: '',
     seriesId: '',
+    multiple: false,
+    selectedAssetIds: () => [],
     anchor: null,
     showSearch: true,
+    showClearSelection: true,
   },
 )
 
 const emit = defineEmits<{
   (event: 'update:modelValue', value: boolean): void
   (event: 'update:asset', value: ProjectAsset | null): void
+  (event: 'update:selectedAssetIds', value: string[]): void
+  (event: 'confirm', value: ProjectAsset[]): void
   (event: 'cancel'): void
 }>()
+
+const selectedAssetIds = computed<string[]>({
+  get: () => props.selectedAssetIds ?? [],
+  set: (value) => emit('update:selectedAssetIds', value),
+})
+
+const allAssets = computed(() => {
+  const combined = [...(props.assets ?? []), ...(dialogRemoteAssets.value ?? [])]
+  const unique = new Map<string, ProjectAsset>()
+  combined.forEach((asset) => {
+    if (asset && asset.id && !unique.has(asset.id)) {
+      unique.set(asset.id, asset)
+    }
+  })
+  return Array.from(unique.values())
+})
+
+const selectedAssets = computed(() => {
+  if (!props.multiple) {
+    return []
+  }
+  const assetMap = new Map(allAssets.value.map((asset) => [asset.id, asset]))
+  return selectedAssetIds.value.map((id) => assetMap.get(id)).filter((asset): asset is ProjectAsset => !!asset)
+})
 
 const dialogOpen = computed({
   get: () => props.modelValue,
@@ -176,6 +208,11 @@ function handleCancel() {
   dialogOpen.value = false
 }
 
+function handleConfirm() {
+  emit('confirm', selectedAssets.value)
+  dialogOpen.value = false
+}
+
 function handleListLayout() {
   queuePanelReposition()
 }
@@ -234,13 +271,24 @@ watch(
             :asset-id="assetId"
             :asset-type="assetType"
             :series-id="seriesId"
+            :multiple="multiple"
+            v-model:selected-asset-ids="selectedAssetIds"
             :extensions="extensions"
-            :assets="[...(assets ?? []), ...dialogRemoteAssets]"
+            :assets="allAssets"
             :show-search="showSearch"
+            :show-clear-selection="showClearSelection"
             :thumbnail-size="50"
             @update:asset="(asset) => emit('update:asset', asset)"
             @layout="handleListLayout"
           />
+
+          <v-card-actions v-if="multiple" class="picker-actions">
+            <v-spacer />
+            <v-btn variant="text" @click="handleCancel">{{ cancelText ?? 'Cancel' }}</v-btn>
+            <v-btn color="primary" variant="flat" :disabled="!selectedAssets.length" @click="handleConfirm">
+              {{ confirmText ?? 'Confirm' }}
+            </v-btn>
+          </v-card-actions>
         </div>
       </div>
     </transition>
@@ -252,15 +300,15 @@ watch(
   position: fixed;
   inset: 0;
   pointer-events: none;
-  z-index: 40;
+  z-index: 3500;
 }
 
 .asset-picker-dialog__popover {
   position: fixed;
   pointer-events: auto;
-  width: 320px;
-  max-width: 360px;
-  max-height: min(600px, calc(100vh - 32px));
+  width: 440px;
+  max-width: min(560px, calc(100vw - 24px));
+  max-height: min(720px, calc(100vh - 24px));
   display: flex;
   flex-direction: column;
 
@@ -271,13 +319,14 @@ watch(
   backdrop-filter: blur(14px);
   box-shadow: 0 18px 42px rgba(0, 0, 0, 0.4);
   overflow: hidden;
+  z-index: 3501;
 }
 
 .panel-toolbar {
   background-color: transparent;
   color: #e9ecf1;
-  min-height: 20px;
-  padding: 0 8px;
+  min-height: 24px;
+  padding: 0 12px;
 }
 
 .toolbar-text {
@@ -295,5 +344,11 @@ watch(
   font-weight: 600;
   letter-spacing: 0.05em;
   color: rgba(233, 236, 241, 0.94);
+}
+
+.picker-actions {
+  padding: 10px 12px 12px;
+  background: rgba(18, 22, 28, 0.96);
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
 }
 </style>

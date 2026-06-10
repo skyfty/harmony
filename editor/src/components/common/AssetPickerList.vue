@@ -11,7 +11,7 @@ import { usesTransparentThumbnailBackground } from '@/utils/assetThumbnailTransp
 import { shouldHideDependantAssetInEditor } from '@/utils/assetDependencySubset'
 import { isBuiltinWaterNormalAsset } from '@/constants/builtinAssets'
 
-const CONFIG_PRESET_EXTENSIONS = new Set(['wall', 'floor', 'road', 'landform', 'lod'])
+const CONFIG_PRESET_EXTENSIONS = new Set(['wall', 'floor', 'road', 'landform', 'lod', 'dice'])
 
 const props = withDefaults(
   defineProps<{
@@ -19,28 +19,34 @@ const props = withDefaults(
     assetId?: string
     assetType?: string
     seriesId?: string
+    multiple?: boolean
+    selectedAssetIds?: string[]
     /** Optional list of allowed filename extensions (without dot), e.g. ['wall', 'glb']. */
     extensions?: string[]
     thumbnailSize?: number
     assets?: ProjectAsset[]
     showSearch?: boolean
+    showClearSelection?: boolean;
   }>(),
   {
     active: true,
     assetId: '',
     assetType: '',
     seriesId: '',
-      extensions: undefined,
-      thumbnailSize: 56,
+    multiple: false,
+    selectedAssetIds: () => [],
+    extensions: undefined,
+    thumbnailSize: 72,
     showSearch: true,
+    showClearSelection: true,
   },
 )
 
 const emit = defineEmits<{
   (event: 'update:asset', value: ProjectAsset | null): void
+  (event: 'update:selectedAssetIds', value: string[]): void
   (event: 'layout'): void
 }>()
-
 const sceneStore = useSceneStore()
 const assetCacheStore = useAssetCacheStore()
 const { assetCatalog } = storeToRefs(sceneStore)
@@ -52,6 +58,7 @@ const {
 } = useAudioAssetPreview()
 
 const selectedAssetId = ref(props.assetId ?? '')
+const selectedAssetIds = ref<string[]>(normalizeSelectionIds(props.selectedAssetIds ?? []))
 const selectingAssetId = ref<string | null>(null)
 const searchTerm = ref('')
 const showLocalSources = ref(true)
@@ -249,9 +256,9 @@ const filteredAssets = computed(() => {
 
 const gridStyle = computed(() => {
   const size = Number(props.thumbnailSize ?? 78)
-  const minThumb = Math.max(40, isFinite(size) ? size : 78)
+  const minThumb = Math.max(56, isFinite(size) ? size : 78)
   // add padding/label space so items have breathing room
-  const colWidth = Math.round(minThumb + 16)
+  const colWidth = Math.round(minThumb + 24)
   return {
     gridTemplateColumns: `repeat(auto-fit, minmax(${colWidth}px, 1fr))`,
     ['--thumb-size']: `${minThumb}px`,
@@ -263,6 +270,15 @@ function cssEscape(value: string): string {
     return CSS.escape(value)
   }
   return value.replace(/([!"#$%&'()*+,./:;<=>?@[\\]^`{|}~])/g, '\\$1')
+}
+
+function normalizeSelectionIds(ids: string[]): string[] {
+  return Array.from(new Set((ids ?? []).map((id) => (typeof id === 'string' ? id.trim() : '')).filter(Boolean)))
+}
+
+function syncSelectionIds(ids: string[]): void {
+  selectedAssetIds.value = normalizeSelectionIds(ids)
+  emit('update:selectedAssetIds', selectedAssetIds.value.slice())
 }
 
 function scrollSelectedAssetIntoView() {
@@ -311,6 +327,15 @@ function ensureSceneAssetMapping(asset: ProjectAsset): ProjectAsset {
 }
 
 async function handleAssetClick(asset: ProjectAsset) {
+  if (props.multiple) {
+    syncSelectionIds(
+      selectedAssetIds.value.includes(asset.id)
+        ? selectedAssetIds.value.filter((id) => id !== asset.id)
+        : [...selectedAssetIds.value, asset.id],
+    )
+    return
+  }
+
   if (isPackageBackedConfigPreset(asset)) {
     selectedAssetId.value = asset.id
     emit('update:asset', asset)
@@ -361,6 +386,14 @@ async function handleAssetClick(asset: ProjectAsset) {
     selectingAssetId.value = mapped.id
     try {
       const prepared = await sceneStore.prepareLodAsset(mapped)
+      if (props.multiple) {
+        syncSelectionIds(
+          selectedAssetIds.value.includes(prepared.requestedAsset.id)
+            ? selectedAssetIds.value.filter((id) => id !== prepared.requestedAsset.id)
+            : [...selectedAssetIds.value, prepared.requestedAsset.id],
+        )
+        return
+      }
       selectedAssetId.value = prepared.requestedAsset.id
       emit('update:asset', prepared.requestedAsset)
     } catch (error) {
@@ -373,12 +406,28 @@ async function handleAssetClick(asset: ProjectAsset) {
 
   const requiresCache = mapped.type === 'model' || mapped.type === 'mesh'
   if (!requiresCache) {
+    if (props.multiple) {
+      syncSelectionIds(
+        selectedAssetIds.value.includes(mapped.id)
+          ? selectedAssetIds.value.filter((id) => id !== mapped.id)
+          : [...selectedAssetIds.value, mapped.id],
+      )
+      return
+    }
     selectedAssetId.value = mapped.id
     emit('update:asset', mapped)
     return
   }
 
   if (isAssetReadyForPickerSelection(mapped)) {
+    if (props.multiple) {
+      syncSelectionIds(
+        selectedAssetIds.value.includes(mapped.id)
+          ? selectedAssetIds.value.filter((id) => id !== mapped.id)
+          : [...selectedAssetIds.value, mapped.id],
+      )
+      return
+    }
     selectedAssetId.value = mapped.id
     emit('update:asset', mapped)
     return
@@ -395,6 +444,10 @@ async function handleAssetClick(asset: ProjectAsset) {
 }
 
 function handleClearSelection() {
+  if (props.multiple) {
+    syncSelectionIds([])
+    return
+  }
   selectedAssetId.value = ''
   emit('update:asset', null)
 }
@@ -455,6 +508,14 @@ watch(
     }
     void scheduleScrollToSelected()
   },
+)
+
+watch(
+  () => props.selectedAssetIds,
+  (next) => {
+    selectedAssetIds.value = normalizeSelectionIds(next ?? [])
+  },
+  { immediate: true, deep: true },
 )
 
 watch(
@@ -543,12 +604,12 @@ onBeforeUnmount(() => {
 
     <div class="asset-picker-list__body">
       <div ref="gridRef" class="asset-picker-list__grid" :style="gridStyle">
-        <v-tooltip open-delay="150" location="top">
-          <template #activator="{ props }">
+        <v-tooltip v-if="showClearSelection" open-delay="150" location="top">
+          <template #activator="{ props: activatorProps }">
               <div
-                v-bind="props"
+                v-bind="activatorProps"
                 class="asset-picker-list__tile asset-picker-list__tile--none"
-                :class="{ 'asset-picker-list__tile--selected': !selectedAssetId }"
+                :class="{ 'asset-picker-list__tile--selected': multiple ? !selectedAssetIds.length : !selectedAssetId }"
                 data-asset-id="__none__"
                 @click="handleClearSelection"
                 tabindex="0"
@@ -569,11 +630,11 @@ onBeforeUnmount(() => {
 
         <template v-for="asset in filteredAssets" :key="asset.id">
           <v-tooltip open-delay="150" location="top">
-            <template #activator="{ props }">
+            <template #activator="{ props: activatorProps }">
               <div
-                v-bind="props"
+                v-bind="activatorProps"
                 class="asset-picker-list__tile"
-                :class="{ 'asset-picker-list__tile--selected': asset.id === selectedAssetId }"
+                :class="{ 'asset-picker-list__tile--selected': multiple ? selectedAssetIds.includes(asset.id) : asset.id === selectedAssetId }"
                 :data-asset-id="asset.id"
                 @click="handleAssetClick(asset)"
                 tabindex="0"
@@ -701,12 +762,12 @@ onBeforeUnmount(() => {
 
 .asset-picker-list__body {
   flex: 1;
-  padding: 6px 10px 6px;
+  padding: 10px 12px 10px;
   overflow-y: auto;
   overflow-x: hidden;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
   min-height: 0;
 }
 
@@ -721,14 +782,14 @@ onBeforeUnmount(() => {
 .asset-picker-list__grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0.25rem;
+  gap: 0.5rem;
 }
 
 .asset-picker-list__tile {
   position: relative;
   aspect-ratio: 1 / 1;
   border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 6px;
+  border-radius: 10px;
   background: transparent;
   overflow: hidden;
   cursor: pointer;
@@ -756,12 +817,12 @@ onBeforeUnmount(() => {
 
 .asset-picker-list__preview-action {
   position: absolute;
-  top: 6px;
-  right: 6px;
+  top: 8px;
+  right: 8px;
   z-index: 2;
-  min-width: 28px;
-  width: 28px;
-  height: 28px;
+  min-width: 32px;
+  width: 32px;
+  height: 32px;
   border-radius: 999px;
   background: rgba(7, 12, 18, 0.72);
   backdrop-filter: blur(8px);
@@ -769,16 +830,16 @@ onBeforeUnmount(() => {
 
 .asset-picker-list__meta-overlay {
   position: absolute;
-  left: 1px;
-  right: 1px;
-  bottom: 1px;
+  left: 2px;
+  right: 2px;
+  bottom: 2px;
   z-index: 1;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   min-width: 0;
-  padding: 1px 2px;
-  border-radius: 9px;
+  padding: 3px 4px;
+  border-radius: 11px;
   background: linear-gradient(135deg, color-mix(in srgb, var(--asset-source-accent) 24%, rgba(6, 10, 16, 0.76)), rgba(6, 10, 16, 0.7));
   border: 1px solid color-mix(in srgb, var(--asset-source-accent) 38%, transparent);
   backdrop-filter: blur(8px);
@@ -799,8 +860,8 @@ onBeforeUnmount(() => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
   border-radius: 999px;
   background: rgba(8, 12, 18, 0.72);
   color: var(--asset-type-accent);
@@ -812,7 +873,7 @@ onBeforeUnmount(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 0.72rem;
+  font-size: 0.8rem;
   font-weight: 600;
 }
 
@@ -849,7 +910,7 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: center;
   height: 100%;
-  font-size: 1.1rem;
+  font-size: 1.25rem;
   font-weight: 600;
   color: rgba(255, 255, 255, 0.8);
 }

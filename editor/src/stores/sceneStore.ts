@@ -21,6 +21,7 @@ import {
   type Light,
 } from 'three'
 import type { EnvironmentSettings, EnvironmentSettingsPatch } from '@schema/core'
+import type { DicePresetData } from '@/utils/dicePreset'
 import {
   GROUND_NODE_ID,
   ENVIRONMENT_NODE_ID,
@@ -227,6 +228,7 @@ import {
   type LodPresetData,
 } from '@/utils/lodPreset'
 import { createLodPresetActions } from './lodPresetActions'
+import { createDicePresetActions, type PreparedDiceAsset } from './dicePresetActions'
 import { type WallPresetData } from '@/utils/wallPreset'
 import { type FloorPresetData } from '@/utils/floorPreset'
 import { type LandformPresetData } from '@/utils/landformPreset'
@@ -436,6 +438,8 @@ type ResolvedPlaceableAsset = {
   lodPresetAssetId: string | null
   lodPresetData: LodPresetData | null
 }
+
+type PreparedDiceAssetResult = PreparedDiceAsset
 
 type PreparedLodAssetResult = {
   requestedAsset: ProjectAsset
@@ -1012,6 +1016,8 @@ const lodPresetActions = createLodPresetActions({
   LOD_PRESET_PREVIEW_COLOR,
   findNodeById,
 })
+
+const dicePresetActions = createDicePresetActions()
 
 const prefabDeps: PrefabActionsDeps = {
   PREFAB_SOURCE_METADATA_KEY,
@@ -12025,6 +12031,16 @@ export const useSceneStore = defineStore('scene', {
         }
       }
 
+      if (requestedAsset.type === 'dice') {
+        const prepared = await this.prepareDiceAsset(requestedAsset)
+        return {
+          requestedAsset,
+          modelAsset: prepared.previewAsset,
+          lodPresetAssetId: null,
+          lodPresetData: null,
+        }
+      }
+
       if (requestedAsset.type !== 'lod') {
         throw new Error('Asset is not a placeable model asset')
       }
@@ -12156,6 +12172,11 @@ export const useSceneStore = defineStore('scene', {
         throw new Error('Unable to find the requested asset')
       }
 
+      const resolvedDiceAsset = asset.type === 'dice'
+        ? await this.resolveRandomDicePlacementAsset(asset)
+        : null
+      const placementAsset = resolvedDiceAsset?.previewAsset ?? asset
+
       const parentMap = buildParentMap(this.nodes)
       let targetParentId = options.parentId ?? null
       while (targetParentId) {
@@ -12210,19 +12231,19 @@ export const useSceneStore = defineStore('scene', {
         })
       }
 
-      if (asset.type === 'prefab') {
-        const node = await this.spawnPrefabWithPlaceholder(asset.id, desiredWorldPosition, {
+      if (placementAsset.type === 'prefab') {
+        const node = await this.spawnPrefabWithPlaceholder(placementAsset.id, desiredWorldPosition, {
           parentId: targetParentId,
           rotation: options.rotation ?? null,
         })
         await this.withHistorySuppressed(() => adjustNodeWorldTransform(node?.id ?? null))
-        return { asset, node }
+        return { asset: placementAsset, node }
       }
 
-      const supportsDirectPlacement = asset.type === 'model' || asset.type === 'mesh' || asset.type === 'lod'
+      const supportsDirectPlacement = placementAsset.type === 'model' || placementAsset.type === 'mesh' || placementAsset.type === 'lod'
       const node = supportsDirectPlacement
         ? await this.addPlaceableAssetNode({
-            asset,
+            asset: placementAsset,
             position: desiredWorldPosition,
             rotation: options.rotation ?? undefined,
             scale: options.scale ?? undefined,
@@ -12237,7 +12258,7 @@ export const useSceneStore = defineStore('scene', {
         return { asset, node }
       }
 
-      const placeholder = this.addPlaceholderNode(asset, {
+      const placeholder = this.addPlaceholderNode(placementAsset, {
         position: toPlainVector(desiredWorldPosition),
         rotation: options.rotation ? toPlainVector(options.rotation) : { x: 0, y: 0, z: 0 },
         scale: options.scale ? toPlainVector(options.scale) : { x: 1, y: 1, z: 1 },
@@ -12249,9 +12270,9 @@ export const useSceneStore = defineStore('scene', {
       }
 
       const assetCache = useAssetCacheStore()
-      this.observeAssetDownloadForNode(placeholder.id, asset)
-      assetCache.setError(asset.id, null)
-      void assetCache.downloadProjectAsset(asset).catch((error) => {
+      this.observeAssetDownloadForNode(placeholder.id, placementAsset)
+      assetCache.setError(placementAsset.id, null)
+      void assetCache.downloadProjectAsset(placementAsset).catch((error) => {
         const target = findNodeById(this.nodes, placeholder.id)
         if (target) {
           target.downloadStatus = 'error'
@@ -12260,7 +12281,7 @@ export const useSceneStore = defineStore('scene', {
         }
       })
 
-      return { asset, node: placeholder }
+      return { asset: placementAsset, node: placeholder }
     },
 
     async spawnAssetAtPosition(
@@ -13586,6 +13607,27 @@ export const useSceneStore = defineStore('scene', {
 
     async loadLodPreset(assetId: string): Promise<LodPresetData> {
       return lodPresetActions.loadLodPreset(this as any, assetId)
+    },
+
+    async saveDicePreset(payload: {
+      name: string
+      assetIds: string[]
+      select?: boolean
+      assetId?: string | null
+    }): Promise<ProjectAsset> {
+      return dicePresetActions.saveDicePreset(this as any, payload)
+    },
+
+    async loadDicePreset(assetId: string): Promise<DicePresetData> {
+      return dicePresetActions.loadDicePreset(this as any, assetId)
+    },
+
+    async prepareDiceAsset(assetOrId: ProjectAsset | string): Promise<PreparedDiceAssetResult> {
+      return dicePresetActions.prepareDiceAsset(this as any, assetOrId)
+    },
+
+    async resolveRandomDicePlacementAsset(assetOrId: ProjectAsset | string): Promise<PreparedDiceAssetResult> {
+      return dicePresetActions.resolveRandomDicePlacementAsset(this as any, assetOrId)
     },
 
     async prepareLodAsset(assetOrId: ProjectAsset | string): Promise<PreparedLodAssetResult> {

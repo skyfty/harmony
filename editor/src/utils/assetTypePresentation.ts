@@ -1,6 +1,7 @@
 import { getLastExtensionFromFilenameOrUrl, isSkyCubeArchiveExtension } from '@schema/assetTypeConversion'
 import type { ProjectAsset } from '@/types/project-asset'
 import { isFloorPresetFilename } from '@/utils/floorPreset'
+import { isDicePresetFilename } from '@/utils/dicePreset'
 import { isLandformPresetFilename } from '@/utils/landformPreset'
 import { isLodPresetFilename } from '@/utils/lodPreset'
 import { isRoadPresetFilename } from '@/utils/roadPreset'
@@ -16,7 +17,7 @@ export interface AssetTypePresentation {
 type AssetTypePresentationSource = Pick<ProjectAsset, 'type'>
   & Partial<Pick<ProjectAsset, 'name' | 'downloadUrl' | 'id' | 'extension'>>
 
-export type PresetAssetKind = 'wall' | 'floor' | 'road' | 'landform' | 'lod'
+export type PresetAssetKind = 'wall' | 'floor' | 'road' | 'landform' | 'lod' | 'dice'
 
 const ASSET_TYPE_PRESENTATIONS: Record<ProjectAsset['type'], AssetTypePresentation> = {
   model: {
@@ -73,6 +74,12 @@ const ASSET_TYPE_PRESENTATIONS: Record<ProjectAsset['type'], AssetTypePresentati
     icon: 'mdi-layers-triple-outline',
     color: '#B0BEC5',
   },
+  dice: {
+    label: 'Dice',
+    shortLabel: 'DICE',
+    icon: 'mdi-dice-5-outline',
+    color: '#8D99AE',
+  },
   video: {
     label: 'Video',
     shortLabel: 'VID',
@@ -124,6 +131,12 @@ const PRESET_TYPE_PRESENTATIONS: Record<PresetAssetKind, AssetTypePresentation> 
     icon: 'mdi-layers-triple-outline',
     color: '#B0BEC5',
   },
+  dice: {
+    label: 'Dice',
+    shortLabel: 'DICE',
+    icon: 'mdi-dice-5-outline',
+    color: '#8D99AE',
+  },
 }
 
 const SKYCUBE_PRESENTATION: AssetTypePresentation = {
@@ -167,6 +180,9 @@ export function resolvePresetAssetKind(asset: AssetTypePresentationSource): Pres
   }
   if (extension === 'lod' || isLodPresetFilename(filename)) {
     return 'lod'
+  }
+  if (extension === 'dice' || isDicePresetFilename(filename)) {
+    return 'dice'
   }
 
   return null

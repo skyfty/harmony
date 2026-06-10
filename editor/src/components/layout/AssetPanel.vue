@@ -23,6 +23,7 @@ import {
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
+import { useDicePresetEditorStore } from '@/stores/dicePresetEditorStore'
 import { resourceProviders } from '@/resources/projectProviders'
 import { assetProvider, invalidateAssetManifestCache } from '@/resources/projectProviders/asset'
 import {
@@ -55,6 +56,7 @@ import type {
 
 const sceneStore = useSceneStore()
 const assetCacheStore = useAssetCacheStore()
+const dicePresetEditorStore = useDicePresetEditorStore()
 const uiStore = useUiStore()
 const buildToolsStore = useBuildToolsStore()
 const {
@@ -140,6 +142,10 @@ const addPendingAssetId = ref<string | null>(null)
 const deleteDialogOpen = ref(false)
 const pendingDeleteAssets = ref<ProjectAsset[]>([])
 const isBatchDeletion = ref(false)
+const saveDicePresetDialogOpen = ref(false)
+const saveDicePresetName = ref('')
+const saveDicePresetInProgress = ref(false)
+const saveDicePresetError = ref<string | null>(null)
 const selectedAssetIds = ref<string[]>([])
 const assetActivationPendingId = ref<string | null>(null)
 const draggingDirectoryId = ref<string | null>(null)
@@ -702,6 +708,12 @@ async function selectAsset(asset: ProjectAsset) {
 
   sceneStore.selectAsset(asset.id)
   uiStore.setActiveSelectionContext('asset-panel')
+}
+
+function handleAssetDoubleClick(asset: ProjectAsset) {
+  if (asset.type === 'dice' && canEditAssetMetadata(asset)) {
+    dicePresetEditorStore.openEdit(asset.id)
+  }
 }
 
 function prefabAggregateProgressState(asset: ProjectAsset) {
@@ -2446,6 +2458,7 @@ const DEFAULT_PREVIEW_COLORS: Record<ProjectAsset['type'], string> = {
   mesh: '#8D6E63',
   hdri: '#0097A7',
   lod: '#CCCCCC',
+  dice: '#8D99AE',
 }
 
 function resolvePreviewColor(type: ProjectAsset['type']): string {
@@ -3353,6 +3366,51 @@ async function handleSceneNodeDrop(nodeId: string): Promise<void> {
   await sceneStore.saveNodePrefab(nodeId, { select: false })
 }
 
+function getSelectedDicePresetAssets(): ProjectAsset[] {
+  return selectedAssets.value.filter((asset) => asset.type === 'model' || asset.type === 'mesh' || asset.type === 'lod')
+}
+
+const canSaveDicePreset = computed(() => getSelectedDicePresetAssets().length > 0 && !saveDicePresetInProgress.value)
+
+function openSaveDicePresetDialog(): void {
+  const assets = getSelectedDicePresetAssets()
+  if (!assets.length) {
+    return
+  }
+  saveDicePresetName.value = assets[0]?.name?.trim() ? assets[0].name.trim() : 'Dice Preset'
+  saveDicePresetError.value = null
+  saveDicePresetDialogOpen.value = true
+}
+
+async function confirmSaveDicePreset(): Promise<void> {
+  const assets = getSelectedDicePresetAssets()
+  const name = saveDicePresetName.value?.trim() ?? ''
+  if (!assets.length) {
+    saveDicePresetError.value = '请选择至少一个模型、网格或 LOD 资产'
+    return
+  }
+  if (!name.length) {
+    saveDicePresetError.value = '请输入预设名称'
+    return
+  }
+
+  saveDicePresetInProgress.value = true
+  saveDicePresetError.value = null
+  try {
+    await sceneStore.saveDicePreset({
+      name,
+      assetIds: assets.map((asset) => asset.id),
+      select: true,
+    })
+    saveDicePresetDialogOpen.value = false
+  } catch (error) {
+    console.error('Failed to save dice preset', error)
+    saveDicePresetError.value = (error as Error).message ?? 'Failed to save dice preset.'
+  } finally {
+    saveDicePresetInProgress.value = false
+  }
+}
+
 const selectedAssets = computed(() =>
   selectedAssetIds.value
     .map((id) => displayedAssets.value.find((asset) => asset.id === id))
@@ -4034,6 +4092,15 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
               title="Edit asset metadata"
               @click="openUploadDialog"
             />
+            <v-btn
+              color="primary"
+              variant="text"
+              density="compact"
+              icon="mdi-dice-5-outline"
+              :disabled="!canSaveDicePreset"
+              title="Save selected assets as Dice preset"
+              @click="openSaveDicePresetDialog"
+            />
             <v-divider vertical class="mx-1" />
             <div class="project-toolbar__search">
               <v-btn
@@ -4202,6 +4269,7 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
                 :draggable="true"
                 @pointerdown.left="primePrefabAsset(asset)"
                 @click="selectAsset(asset)"
+                @dblclick.stop="handleAssetDoubleClick(asset)"
                 @dragstart.stop="handleAssetDragStart($event, asset)"
                 @dragend="handleAssetDragEnd"
                 @dragenter="handleAssetCardDragEnter($event, asset.id)"
@@ -4368,6 +4436,31 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
           <v-spacer />
           <v-btn variant="text" @click="cancelDeleteDirectory">Cancel</v-btn>
           <v-btn color="error" variant="flat" @click="confirmDeleteDirectory">Delete Folder</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
+    <v-dialog v-model="saveDicePresetDialogOpen" max-width="420">
+      <v-card>
+        <v-card-title>Save Dice Preset</v-card-title>
+        <v-card-text>
+          <v-text-field
+            v-model="saveDicePresetName"
+            label="Preset name"
+            variant="outlined"
+            density="comfortable"
+            hide-details
+            autofocus
+            @keydown.enter.prevent="confirmSaveDicePreset"
+          />
+          <p v-if="saveDicePresetError" class="text-error text-body-2 mt-2">
+            {{ saveDicePresetError }}
+          </p>
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn variant="text" @click="saveDicePresetDialogOpen = false">Cancel</v-btn>
+          <v-btn color="primary" variant="flat" :loading="saveDicePresetInProgress" @click="confirmSaveDicePreset">Save</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>

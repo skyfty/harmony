@@ -10,6 +10,7 @@ export const CONFIG_ASSET_EXTENSIONS = [
   'json',
   'prefab',
   'lod',
+  'dice',
   'wall',
   'floor',
   'road',
@@ -20,6 +21,7 @@ export const CONFIG_ASSET_EXTENSIONS = [
 export const EDITOR_ONLY_CONFIG_ASSET_EXTENSIONS = [
   'prefab',
   'lod',
+  'dice',
   'wall',
   'floor',
   'road',
@@ -58,6 +60,7 @@ const ASSET_TYPE_BY_EXTENSION: Readonly<Record<string, AssetType>> = {
   // prefabs
   prefab: 'prefab',
   lod: 'lod',
+  dice: 'dice',
 
   // materials
   mtl: 'material',

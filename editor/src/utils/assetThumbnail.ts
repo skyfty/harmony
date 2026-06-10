@@ -9,7 +9,7 @@ import { usesTransparentThumbnailBackground } from '@/utils/assetThumbnailTransp
 
 const IMAGE_ASSET_TYPES = new Set<ProjectAsset['type']>(['image'])
 const TEXTURE_ASSET_TYPES = new Set<ProjectAsset['type']>(['texture'])
-const MODEL_ASSET_TYPES = new Set<ProjectAsset['type']>(['model', 'mesh', 'prefab'])
+const MODEL_ASSET_TYPES = new Set<ProjectAsset['type']>(['model', 'mesh', 'prefab', 'dice'])
 const HDRI_ASSET_TYPES = new Set<ProjectAsset['type']>(['hdri'])
 
 const DEFAULT_BACKGROUND = '#161b22'

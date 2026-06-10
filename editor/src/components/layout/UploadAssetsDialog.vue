@@ -81,6 +81,13 @@ const DEFAULT_CATEGORY_PATHS: Record<PresetAssetKind, string[][]> = {
     ['Prefab', 'LOD'],
     ['LOD Presets', 'LOD'],
   ],
+  dice: [
+    ['预置', '骰子'],
+    ['预制', '骰子'],
+    ['Prefabs', 'Dice'],
+    ['Prefab', 'Dice'],
+    ['Dice Presets', 'Dice'],
+  ],
 }
 
 const props = defineProps<{

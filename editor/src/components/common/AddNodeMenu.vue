@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed,   } from 'vue'
+import { computed } from 'vue'
 import { useSceneStore } from '@/stores/sceneStore'
+import { useDicePresetEditorStore } from '@/stores/dicePresetEditorStore'
 import * as THREE from 'three'
 import {
   NOMINATE_COMPONENT_TYPE,
@@ -9,6 +10,7 @@ import {
 import { MULTIUSER_NODE_ID, type SceneNode, type Vector3Like } from '@schema/core'
 
 const sceneStore = useSceneStore()
+const dicePresetEditorStore = useDicePresetEditorStore()
 
 const tempGroupCameraPosition = new THREE.Vector3()
 const tempGroupCameraTarget = new THREE.Vector3()
@@ -324,6 +326,10 @@ function handleAddLight(type: string) {
   sceneStore.addLightNode(type as any)
 }
 
+function handleAddDice() {
+  dicePresetEditorStore.openCreate()
+}
+
 </script>
 
 <template>
@@ -337,6 +343,7 @@ function handleAddLight(type: string) {
       <v-list-item title="Group" @click="handleAddGroup()" />
       <v-list-item title="Nominate" @click="handleCreateNominateNode()" />
       <v-list-item title="Multiuser Scene" @click="handleCreateMultiuserNode()" :disabled="!canAddMultiuser" />
+      <v-list-item title="Add Dice" @click="handleAddDice()" />
 
       <v-menu  transition="none" location="end" offset="8">
         <template #activator="{ props: lightMenuProps }">

@@ -11764,6 +11764,7 @@ function ensureSelectionPreviewVisibilityMonitor(): void {
 watch(
   () => sceneStore.selectedAssetId,
   (nextId) => {
+    const previewToken = ++lastSelectionPreviewUpdate
     try {
       if (!nextId) {
         selectionPreviewActive = false
@@ -11786,43 +11787,55 @@ watch(
         return
       }
 
-      const asset = sceneStore.getAsset(nextId)
-      if (!asset) {
-        selectionPreviewActive = false
-        selectionPreviewAssetId = null
-        placementPreviewYaw = 0
-        clearAssetPlacementPreviewSnapshot()
-        dragPreviewGroup.rotation.set(0, 0, 0)
-        dragPreview.dispose()
-        return
-      }
-
-      if ((asset.type === 'model' || asset.type === 'mesh' || asset.type === 'prefab' || asset.type === 'lod') && !isBuildToolPresetAsset(asset)) {
-        selectionPreviewActive = true
-        selectionPreviewAssetId = asset.id
-        placementPreviewYaw = 0
-        dragPreviewGroup.rotation.set(0, 0, 0)
-        // prepare preview object (use existing drag preview loader)
-        try {
-          clearAssetPlacementPreviewSnapshot()
-          dragPreview.prepare(asset.id)
-        } catch (e) {
-          console.warn('Failed to prepare selection preview', e)
-          clearAssetPlacementPreviewSnapshot()
-          dragPreview.dispose()
+      void (async () => {
+        if (previewToken !== lastSelectionPreviewUpdate) {
+          return
+        }
+        const asset = sceneStore.getAsset(nextId)
+        if (!asset) {
           selectionPreviewActive = false
           selectionPreviewAssetId = null
           placementPreviewYaw = 0
+          clearAssetPlacementPreviewSnapshot()
           dragPreviewGroup.rotation.set(0, 0, 0)
+          dragPreview.dispose()
+          return
         }
-      } else {
-        selectionPreviewActive = false
-        selectionPreviewAssetId = null
-        placementPreviewYaw = 0
-        clearAssetPlacementPreviewSnapshot()
-        dragPreviewGroup.rotation.set(0, 0, 0)
-        dragPreview.dispose()
-      }
+
+        const resolved = await sceneStore.resolvePlaceableAsset(nextId).catch(() => null)
+        if (previewToken !== lastSelectionPreviewUpdate) {
+          return
+        }
+        const previewAsset = resolved?.modelAsset ?? asset
+        if ((previewAsset.type === 'model' || previewAsset.type === 'mesh' || previewAsset.type === 'prefab' || previewAsset.type === 'lod') && !isBuildToolPresetAsset(asset)) {
+          selectionPreviewActive = true
+          selectionPreviewAssetId = previewAsset.id
+          placementPreviewYaw = 0
+          dragPreviewGroup.rotation.set(0, 0, 0)
+          // prepare preview object (use existing drag preview loader)
+          try {
+            clearAssetPlacementPreviewSnapshot()
+            dragPreview.prepare(previewAsset.id)
+          } catch (e) {
+            console.warn('Failed to prepare selection preview', e)
+            clearAssetPlacementPreviewSnapshot()
+            dragPreview.dispose()
+            selectionPreviewActive = false
+            selectionPreviewAssetId = null
+            placementPreviewYaw = 0
+            dragPreviewGroup.rotation.set(0, 0, 0)
+          }
+        } else {
+          selectionPreviewActive = false
+          selectionPreviewAssetId = null
+          placementPreviewYaw = 0
+          clearAssetPlacementPreviewSnapshot()
+          dragPreviewGroup.rotation.set(0, 0, 0)
+          dragPreview.dispose()
+        }
+      })().catch((err) => {
+        console.warn('selection preview watch failed', err)
+      })
     } catch (err) {
       console.warn('selection preview watch failed', err)
     }

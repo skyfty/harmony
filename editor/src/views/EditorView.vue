@@ -10,6 +10,7 @@ import VehicleSuspensionEditorDialog from '@/components/inspector/VehicleSuspens
 import RigidbodyColliderEditorDialog from '@/components/inspector/RigidbodyColliderEditorDialog.vue'
 import BehaviorDetailsPanel from '@/components/inspector/BehaviorDetailsPanel.vue'
 import ProjectPanel from '@/components/layout/ProjectPanel.vue'
+import DicePresetDialog from '@/components/layout/DicePresetDialog.vue'
 import SceneViewport from '@/components/editor/SceneViewport.vue'
 import MenuBar from './MenuBar.vue'
 import ProjectManagerView from './ProjectManagerView.vue'
@@ -2691,6 +2692,7 @@ onBeforeUnmount(() => {
         :anchor="rigidbodyColliderEditorState.anchor"
         @close="handleRigidbodyColliderEditorOverlayClose"
       />
+      <DicePresetDialog />
     </div>
     <SceneManagerDialog
       v-model="isSceneManagerOpen"

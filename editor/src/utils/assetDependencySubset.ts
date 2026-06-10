@@ -188,7 +188,7 @@ export function resolveProjectAssetConfigKind(asset: ProjectAssetLike | null | u
   if (!asset) {
     return null
   }
-  if (asset.type === 'lod') {
+  if (asset.type === 'lod' || asset.type === 'dice') {
     return 'config'
   }
   const extension = resolveProjectAssetExtension(asset)
