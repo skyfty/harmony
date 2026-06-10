@@ -7,6 +7,7 @@ import { loadObjectFromFile } from '@schema/assetImport'
 import { getCachedModelObject, getOrLoadModelObject } from '@schema/modelObjectCache'
 import { setDragPreviewReady } from '@/utils/dragPreviewRegistry'
 import { deserializeLodPreset, resolveFirstLodModelAssetId } from '@/utils/lodPreset'
+import { deserializeDicePreset, resolveFirstDiceAssetId } from '@/utils/dicePreset'
 import { cloneObject3DShared } from '@/utils/prefabPreviewCache'
 import { acquirePrefabPreviewRoot, type PrefabPreviewHandle } from '@/utils/prefabPreviewBuilder'
 import type { AssetCacheStoreLike } from '@/stores/assetCacheStore'
@@ -328,7 +329,7 @@ export function useDragPreview(options: Options): DragPreviewController {
     }
   }
 
-  const loadForLodPreset = async (asset: ProjectAsset): Promise<boolean> => {
+  const loadForLodPreset = async (asset: ProjectAsset, previewId = asset.id): Promise<boolean> => {
     if (pendingPreviewAssetId === asset.id) {
       return false
     }
@@ -360,7 +361,7 @@ export function useDragPreview(options: Options): DragPreviewController {
         return false
       }
 
-      return await loadForAsset(modelAsset, asset.id)
+      return await loadForAsset(modelAsset, previewId)
     } catch (error) {
       if (token === dragPreviewLoadToken) {
         clearObject(true)
@@ -371,9 +372,57 @@ export function useDragPreview(options: Options): DragPreviewController {
     }
   }
 
+  const loadForDicePreset = async (asset: ProjectAsset): Promise<boolean> => {
+    if (pendingPreviewAssetId === asset.id) {
+      return false
+    }
+
+    pendingPreviewAssetId = asset.id
+    clearObject(true)
+    const token = ++dragPreviewLoadToken
+
+    try {
+      const file = await options.assetCacheStore.ensureAssetFile(asset.id, { asset })
+      if (!file) {
+        pendingPreviewAssetId = null
+        return false
+      }
+
+      const preset = deserializeDicePreset(await file.text())
+      const modelAssetId = resolveFirstDiceAssetId(preset)
+      if (!modelAssetId) {
+        pendingPreviewAssetId = null
+        return false
+      }
+
+      const modelAsset = findAssetMetadata(modelAssetId, options.getProjectTree())
+      if (!modelAsset || (modelAsset.type !== 'model' && modelAsset.type !== 'mesh' && modelAsset.type !== 'lod')) {
+        pendingPreviewAssetId = null
+        return false
+      }
+      if (token !== dragPreviewLoadToken) {
+        pendingPreviewAssetId = null
+        return false
+      }
+
+      if (modelAsset.type === 'lod') {
+        return await loadForLodPreset(modelAsset, asset.id)
+      }
+
+      return await loadForAsset(modelAsset, asset.id)
+    } catch (error) {
+      if (token === dragPreviewLoadToken) {
+        clearObject(true)
+      }
+      pendingPreviewAssetId = null
+      console.warn('Failed to load Dice drag preview object', error)
+      return false
+    }
+  }
+
   const prepare = (assetId: string) => {
     const asset = findAssetMetadata(assetId, options.getProjectTree())
-    if (!asset || (asset.type !== 'model' && asset.type !== 'mesh' && asset.type !== 'prefab' && asset.type !== 'lod')) {
+    if (!asset || (asset.type !== 'model' && asset.type !== 'mesh' && asset.type !== 'prefab' && asset.type !== 'lod' && asset.type !== 'dice')) {
       dispose(true)
       return
     }
@@ -398,6 +447,8 @@ export function useDragPreview(options: Options): DragPreviewController {
       void loadForPrefab(asset)
     } else if (asset.type === 'lod') {
       void loadForLodPreset(asset)
+    } else if (asset.type === 'dice') {
+      void loadForDicePreset(asset)
     } else {
       void loadForAsset(asset)
     }

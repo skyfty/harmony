@@ -11402,6 +11402,7 @@ const placementPreviewWorldEulerHelper = new THREE.Euler()
 
 type AssetPlacementPreviewSnapshot = {
   assetId: string
+  placementAssetId: string
   worldPosition: THREE.Vector3
   rotation: THREE.Vector3
   scale: THREE.Vector3
@@ -11490,7 +11491,7 @@ function computeSpawnPointForSelectionClick(
 ): THREE.Vector3 {
   const placement = computePointerDropPlacement(event)
   const basePoint = computePreviewPointForPlacement(placement) ?? new THREE.Vector3(0, 0, 0)
-  const canUsePreviewBounds = selectionPreviewActive && selectionPreviewAssetId === assetId
+  const canUsePreviewBounds = selectionPreviewActive && assetPlacementPreviewSnapshot?.assetId === assetId
   const spawnPoint = canUsePreviewBounds
     ? (computeWorldAabbBottomAlignedPoint(basePoint, dragPreviewGroup) ?? basePoint)
     : basePoint
@@ -11507,6 +11508,7 @@ function clonePlacementPreviewSnapshot(snapshot: AssetPlacementPreviewSnapshot |
 
   return {
     assetId: snapshot.assetId,
+    placementAssetId: snapshot.placementAssetId,
     worldPosition: snapshot.worldPosition.clone(),
     rotation: snapshot.rotation.clone(),
     scale: snapshot.scale.clone(),
@@ -11517,7 +11519,7 @@ function clearAssetPlacementPreviewSnapshot(): void {
   assetPlacementPreviewSnapshot = null
 }
 
-function setAssetPlacementPreviewSnapshot(assetId: string, previewRoot: THREE.Object3D): void {
+function setAssetPlacementPreviewSnapshot(assetId: string, placementAssetId: string, previewRoot: THREE.Object3D): void {
   previewRoot.updateWorldMatrix(true, true)
   previewRoot.getWorldPosition(dragPreviewWorldPositionHelper)
   previewRoot.getWorldQuaternion(placementPreviewWorldQuaternionHelper)
@@ -11525,6 +11527,7 @@ function setAssetPlacementPreviewSnapshot(assetId: string, previewRoot: THREE.Ob
   previewRoot.getWorldScale(placementPreviewWorldScaleHelper)
   assetPlacementPreviewSnapshot = {
     assetId,
+    placementAssetId,
     worldPosition: dragPreviewWorldPositionHelper.clone(),
     rotation: new THREE.Vector3(
       placementPreviewWorldEulerHelper.x,
@@ -11544,10 +11547,11 @@ function getAssetPlacementPreviewSnapshot(assetId: string | null): AssetPlacemen
 
 function finalizeAssetPlacementPreview(params: {
   assetId: string
+  placementAssetId: string
   basePoint: THREE.Vector3 | null
   snapResult: PlacementSnapResult | null
 }): AssetPlacementPreviewSnapshot | null {
-  const { assetId, basePoint, snapResult } = params
+  const { assetId, placementAssetId, basePoint, snapResult } = params
 
   if (!basePoint) {
     clearAssetPlacementPreviewSnapshot()
@@ -11566,8 +11570,27 @@ function finalizeAssetPlacementPreview(params: {
 
   dragPreviewGroup.position.copy(finalPosition)
   dragPreviewGroup.visible = true
-  setAssetPlacementPreviewSnapshot(assetId, dragPreviewGroup)
+  setAssetPlacementPreviewSnapshot(assetId, placementAssetId, dragPreviewGroup)
   return clonePlacementPreviewSnapshot(assetPlacementPreviewSnapshot)
+}
+
+async function refreshRandomDiceSelectionPreview(assetId: string): Promise<void> {
+  const asset = sceneStore.getAsset(assetId)
+  if (!asset || asset.type !== 'dice' || sceneStore.draggingAssetId) {
+    return
+  }
+
+  const resolved = await sceneStore.resolveRandomDicePlacementAsset(assetId).catch(() => null)
+  if (!resolved) {
+    return
+  }
+
+  selectionPreviewActive = true
+  selectionPreviewAssetId = resolved.previewAsset.id
+  placementPreviewYaw = 0
+  clearAssetPlacementPreviewSnapshot()
+  dragPreviewGroup.rotation.set(0, 0, 0)
+  dragPreview.prepare(resolved.previewAsset.id)
 }
 
 function isUserCreatedEmptyGroupForPlacement(selectedId: string | null, parentGroupId: string | null): boolean {
@@ -11802,11 +11825,18 @@ watch(
           return
         }
 
-        const resolved = await sceneStore.resolvePlaceableAsset(nextId).catch(() => null)
+        const resolved = asset.type === 'dice'
+          ? await sceneStore.resolveRandomDicePlacementAsset(nextId).catch(() => null)
+          : await sceneStore.resolvePlaceableAsset(nextId).catch(() => null)
         if (previewToken !== lastSelectionPreviewUpdate) {
           return
         }
-        const previewAsset = resolved?.modelAsset ?? asset
+        let previewAsset = asset
+        if (asset.type === 'dice') {
+          previewAsset = ((resolved as { previewAsset?: ProjectAsset | null } | null)?.previewAsset) ?? asset
+        } else {
+          previewAsset = ((resolved as { modelAsset?: ProjectAsset | null } | null)?.modelAsset) ?? asset
+        }
         if ((previewAsset.type === 'model' || previewAsset.type === 'mesh' || previewAsset.type === 'prefab' || previewAsset.type === 'lod') && !isBuildToolPresetAsset(asset)) {
           selectionPreviewActive = true
           selectionPreviewAssetId = previewAsset.id
@@ -11882,7 +11912,7 @@ watch(
         return
       }
 
-      if (asset.type === 'model' || asset.type === 'mesh' || asset.type === 'prefab' || asset.type === 'lod') {
+      if (asset.type === 'model' || asset.type === 'mesh' || asset.type === 'prefab' || asset.type === 'lod' || asset.type === 'dice') {
         selectionPreviewActive = true
         selectionPreviewAssetId = asset.id
         placementPreviewYaw = 0
@@ -16271,7 +16301,7 @@ async function handlePointerDown(event: PointerEvent) {
   const canPlaceSelectedAsset =
     Boolean(selectedAssetId) &&
     Boolean(selectedAsset) &&
-    (selectedAsset?.type === 'model' || selectedAsset?.type === 'mesh' || selectedAsset?.type === 'prefab' || selectedAsset?.type === 'lod') &&
+    (selectedAsset?.type === 'model' || selectedAsset?.type === 'mesh' || selectedAsset?.type === 'prefab' || selectedAsset?.type === 'lod' || selectedAsset?.type === 'dice') &&
     !isBuildToolPresetAsset(selectedAsset) &&
     !sceneStore.draggingAssetId
 
@@ -17536,7 +17566,8 @@ function handlePointerMove(event: PointerEvent) {
           updatePlacementSideSnapMarkers(result)
           if (selectionPreviewAssetId) {
             finalizeAssetPlacementPreview({
-              assetId: selectionPreviewAssetId,
+              assetId: sceneStore.selectedAssetId ?? selectionPreviewAssetId,
+              placementAssetId: selectionPreviewAssetId,
               basePoint,
               snapResult: result,
             })
@@ -18202,7 +18233,7 @@ async function handlePointerUp(event: PointerEvent) {
       if (!session.moved) {
         const asset = sceneStore.getAsset(session.assetId)
         // 仅对可放置的 3D 资产执行放置逻辑
-        if (asset && (asset.type === 'model' || asset.type === 'mesh' || asset.type === 'prefab' || asset.type === 'lod')) {
+        if (asset && (asset.type === 'model' || asset.type === 'mesh' || asset.type === 'prefab' || asset.type === 'lod' || asset.type === 'dice')) {
           // 如果当前临时顶点吸附生效并且工具处于选择模式，则尝试消费一次放置侧吸附结果
           // `consumePlacementSideSnapResult()` 会返回当前预览时计算好的吸附信息并将其内部状态标记为已消费
           const placementSideSnap = (isVertexSnapActiveEffective.value && props.activeTool === 'select')
@@ -18216,14 +18247,16 @@ async function handlePointerUp(event: PointerEvent) {
             const fallbackPosition = computeSpawnPointForSelectionClick(event, session.assetId, placementSideSnap)
             const parentGroupId = resolveSelectedGroupDropParent()
             const rotation = previewSnapshot?.rotation ?? new THREE.Vector3(0, placementPreviewYaw, 0)
+            const placementAssetId = previewSnapshot?.placementAssetId ?? session.assetId
             await spawnAssetFromSelectionClick({
-              assetId: session.assetId,
+              assetId: placementAssetId,
               worldPosition: previewSnapshot?.worldPosition ?? fallbackPosition,
               rotation,
               scale: previewSnapshot?.scale ?? null,
               parentGroupId,
               selectedId: props.selectedNodeId ?? null,
             })
+            await refreshRandomDiceSelectionPreview(session.assetId)
           } catch (error) {
             console.warn('Failed to spawn asset from selection click', session.assetId, error)
           }
@@ -20231,6 +20264,7 @@ function handleViewportDragOver(event: DragEvent) {
         updatePlacementSideSnapMarkers(result)
         finalizeAssetPlacementPreview({
           assetId: info.assetId,
+          placementAssetId: info.assetId,
           basePoint,
           snapResult: result,
         })
@@ -20413,15 +20447,16 @@ async function handleViewportDrop(event: DragEvent) {
     const worldPosition = previewSnapshot?.worldPosition ?? fallbackPosition
     const rotation = previewSnapshot?.rotation ?? new THREE.Vector3(0, placementPreviewYaw, 0)
     const scale = previewSnapshot?.scale ?? null
+    const placementAssetId = previewSnapshot?.placementAssetId ?? assetId
 
     if (isEmptySelectedGroup && parentGroupId) {
-      spawnResult = await sceneStore.spawnAssetIntoEmptyGroupAtWorldTransform(assetId, parentGroupId, {
+      spawnResult = await sceneStore.spawnAssetIntoEmptyGroupAtWorldTransform(placementAssetId, parentGroupId, {
         position: worldPosition,
         rotation,
         scale,
       })
     } else {
-      spawnResult = await sceneStore.spawnAssetAtWorldTransform(assetId, {
+      spawnResult = await sceneStore.spawnAssetAtWorldTransform(placementAssetId, {
         position: worldPosition,
         rotation,
         scale,
@@ -20437,6 +20472,9 @@ async function handleViewportDrop(event: DragEvent) {
     dragPreview.dispose()
     sceneStore.setDraggingAssetObject(null)
     snapController.resetPlacementSideSnap()
+  }
+  if (sceneStore.getAsset(assetId)?.type === 'dice') {
+    await refreshRandomDiceSelectionPreview(assetId)
   }
   updateGridHighlight(null)
   restoreGridHighlightForSelection()

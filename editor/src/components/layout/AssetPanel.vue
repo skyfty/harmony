@@ -811,7 +811,7 @@ async function ensureAssetCached(asset: ProjectAsset) {
   }
 }
 
-const MODEL_ASSET_TYPES = new Set<ProjectAsset['type']>(['model', 'mesh', 'lod'])
+const MODEL_ASSET_TYPES = new Set<ProjectAsset['type']>(['model', 'mesh', 'lod', 'dice'])
 const MATERIAL_ASSET_TYPES = new Set<ProjectAsset['type']>(['material'])
 const TEXTURE_ASSET_TYPES = new Set<ProjectAsset['type']>(['texture', 'image'])
 

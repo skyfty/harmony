@@ -12172,10 +12172,7 @@ export const useSceneStore = defineStore('scene', {
         throw new Error('Unable to find the requested asset')
       }
 
-      const resolvedDiceAsset = asset.type === 'dice'
-        ? await this.resolveRandomDicePlacementAsset(asset)
-        : null
-      const placementAsset = resolvedDiceAsset?.previewAsset ?? asset
+      const placementAsset = asset
 
       const parentMap = buildParentMap(this.nodes)
       let targetParentId = options.parentId ?? null
