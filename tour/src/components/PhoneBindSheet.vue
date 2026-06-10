@@ -2,8 +2,8 @@
   <view v-if="modelValue" class="phone-bind-sheet">
     <view class="phone-bind-sheet__mask" @tap="close" />
     <view class="phone-bind-sheet__panel">
-      <text class="phone-bind-sheet__title">请先绑定手机号</text>
-      <text class="phone-bind-sheet__desc">下单和支付前需要先绑定手机号，请先完成微信手机号授权。</text>
+      <text class="phone-bind-sheet__title">绑定手机号</text>
+      <text class="phone-bind-sheet__desc">绑定后可用于联系方式和账号信息补充，支持微信手机号授权。</text>
       <button
         class="phone-bind-sheet__confirm"
         :disabled="loading"

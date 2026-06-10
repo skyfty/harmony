@@ -17,7 +17,7 @@ export async function ensureMiniCheckoutUser(ctx: Context): Promise<{
   id: string
   miniAppId?: string
   wxOpenId: string
-  phone: string
+  phone?: string
 }> {
   const userId = ensureUserId(ctx)
   const user = await AppUserModel.findById(userId).lean().exec()
@@ -31,14 +31,11 @@ export async function ensureMiniCheckoutUser(ctx: Context): Promise<{
   }
 
   const phone = typeof user.phone === 'string' ? user.phone.trim() : ''
-  if (!phone) {
-    ctx.throw(412, '请先绑定手机号后再下单支付')
-  }
 
   return {
     id: userId,
     miniAppId: typeof user.miniAppId === 'string' ? user.miniAppId.trim() || undefined : undefined,
     wxOpenId,
-    phone,
+    phone: phone || undefined,
   }
 }

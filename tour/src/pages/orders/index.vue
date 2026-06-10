@@ -44,9 +44,7 @@ import PhoneBindSheet from '@/components/PhoneBindSheet.vue';
 import type { OrderListItem, OrderStatus } from '@/types/order';
 import type { PaymentStatus } from '@/types/order';
 import {
-  isProfileCompletionRequiredError,
   isPhoneBindingRequiredError,
-  promptCompleteProfileBeforeCheckout,
   requestMiniProgramPayment,
   toCheckoutErrorMessage,
 } from '@/utils/checkout';
@@ -124,10 +122,6 @@ async function submitPayment(orderId: string) {
     if (isPhoneBindingRequiredError(error)) {
       pendingOrderId.value = orderId;
       showPhoneBindSheet.value = true;
-      return;
-    }
-    if (isProfileCompletionRequiredError(error)) {
-      await promptCompleteProfileBeforeCheckout();
       return;
     }
     void uni.showToast({ title: toCheckoutErrorMessage(error, '支付失败'), icon: 'none' });
