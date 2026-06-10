@@ -13,6 +13,7 @@ import {
   listVehiclesApi,
   updateVehicleApi,
 } from '#/api';
+import { uploadFileApi } from '#/api/core/file-uploads';
 
 import {
   Button,
@@ -27,7 +28,6 @@ import {
   Tabs,
 } from 'ant-design-vue';
 import { EditOutlined, DeleteOutlined } from '@ant-design/icons-vue';
-import { createResourceAssetApi } from '#/api/core/resources';
 
 interface VehicleFormModel {
   identifier: string;
@@ -204,8 +204,10 @@ async function uploadImageIfNeeded() {
   }
   const fd = new FormData();
   fd.append('file', origin);
-  const res = await createResourceAssetApi(fd);
-  return res?.asset?.previewUrl || res?.asset?.thumbnailUrl || res?.asset?.url || vehicleFormModel.coverUrl;
+  fd.append('module', 'vehicle');
+  fd.append('label', `${vehicleFormModel.name.trim() || '车辆'} 封面`);
+  const res = await uploadFileApi(fd);
+  return res?.url || vehicleFormModel.coverUrl;
 }
 
 async function submitVehicle() {

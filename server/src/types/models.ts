@@ -102,6 +102,20 @@ export interface AdminDocument extends Document<Types.ObjectId> {
   updatedAt: Date
 }
 
+export interface FileUploadDocument extends Document<Types.ObjectId> {
+  module: string
+  label?: string | null
+  fileKey: string
+  url: string
+  originalFilename?: string | null
+  mimeType?: string | null
+  size: number
+  uploaderAdminId?: Types.ObjectId | null
+  uploaderUsername?: string | null
+  createdAt: Date
+  updatedAt: Date
+}
+
 export interface AppUserDocument extends Document<Types.ObjectId> {
   miniAppId?: string
   username?: string

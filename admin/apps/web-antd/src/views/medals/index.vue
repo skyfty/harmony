@@ -13,7 +13,7 @@ import {
   type MedalRuleItem,
   type MedalRuleType,
 } from '#/api/core/medals';
-import { createResourceAssetApi } from '#/api/core/resources';
+import { uploadFileApi } from '#/api/core/file-uploads';
 import { listSceneSpotsApi, type SceneSpotItem } from '#/api/core/scene-spots';
 
 import {
@@ -381,8 +381,10 @@ async function uploadSingleImage(fileList: UploadFile[], currentValue: string) {
   }
   const fd = new FormData();
   fd.append('file', origin);
-  const res = await createResourceAssetApi(fd);
-  return res?.asset?.previewUrl || res?.asset?.thumbnailUrl || res?.asset?.url || currentValue;
+  fd.append('module', 'medal');
+  fd.append('label', `${formModel.name.trim() || '勋章'} 图标`);
+  const res = await uploadFileApi(fd);
+  return res?.url || currentValue;
 }
 
 async function submit() {

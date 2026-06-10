@@ -13,10 +13,10 @@ import {
   listProductsApi,
   updateProductApi,
 } from '#/api';
+import { uploadFileApi } from '#/api/core/file-uploads';
 
 import { Button, Form, Input, message, Modal, Space, Select, InputNumber, Upload, Tooltip } from 'ant-design-vue';
 import { EditOutlined, DeleteOutlined } from '@ant-design/icons-vue';
-import { createResourceAssetApi } from '#/api/core/resources';
 
 interface ProductFormModel {
   name: string;
@@ -104,8 +104,10 @@ async function uploadImageIfNeeded() {
   }
   const fd = new FormData();
   fd.append('file', origin);
-  const res = await createResourceAssetApi(fd);
-  return res?.asset?.previewUrl || res?.asset?.thumbnailUrl || res?.asset?.url || productFormModel.coverUrl;
+  fd.append('module', 'product');
+  fd.append('label', `${productFormModel.name.trim() || '商品'} 封面`);
+  const res = await uploadFileApi(fd);
+  return res?.url || productFormModel.coverUrl;
 }
 
 async function submitProduct() {

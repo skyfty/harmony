@@ -34,7 +34,7 @@ import {
 } from 'ant-design-vue';
 import { Tooltip } from 'ant-design-vue';
 import { DeleteOutlined, EditOutlined, EyeOutlined } from '@ant-design/icons-vue';
-import { createResourceAssetApi } from '#/api/core/resources';
+import { uploadFileApi } from '#/api/core/file-uploads';
 
 interface UserFormModel {
   bio: string;
@@ -155,9 +155,11 @@ async function submitUser() {
       if (origin) {
         const fd = new FormData();
         fd.append('file', origin);
+        fd.append('module', 'user');
+        fd.append('label', `${userFormModel.displayName.trim() || userFormModel.username.trim() || '用户'} 头像`);
         try {
-          const res = await createResourceAssetApi(fd);
-          uploadedAvatarUrl = res?.asset?.previewUrl || res?.asset?.thumbnailUrl || res?.asset?.url || uploadedAvatarUrl;
+          const res = await uploadFileApi(fd);
+          uploadedAvatarUrl = res?.url || uploadedAvatarUrl;
         } catch (err) {
           // upload failed — show error and abort
           message.error(t('page.systemUsers.index.message.avatarUploadFailed'));
