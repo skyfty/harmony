@@ -11825,19 +11825,12 @@ watch(
           return
         }
 
-        const resolved = asset.type === 'dice'
-          ? await sceneStore.resolveRandomDicePlacementAsset(nextId).catch(() => null)
-          : await sceneStore.resolvePlaceableAsset(nextId).catch(() => null)
+        const resolved = await sceneStore.resolvePlaceableAsset(nextId).catch(() => null)
         if (previewToken !== lastSelectionPreviewUpdate) {
           return
         }
-        let previewAsset = asset
-        if (asset.type === 'dice') {
-          previewAsset = ((resolved as { previewAsset?: ProjectAsset | null } | null)?.previewAsset) ?? asset
-        } else {
-          previewAsset = ((resolved as { modelAsset?: ProjectAsset | null } | null)?.modelAsset) ?? asset
-        }
-        if ((previewAsset.type === 'model' || previewAsset.type === 'mesh' || previewAsset.type === 'prefab' || previewAsset.type === 'lod') && !isBuildToolPresetAsset(asset)) {
+        const previewAsset = resolved?.modelAsset ?? asset
+        if ((previewAsset.type === 'model' || previewAsset.type === 'mesh' || previewAsset.type === 'prefab' || previewAsset.type === 'lod' || previewAsset.type === 'dice') && !isBuildToolPresetAsset(asset)) {
           selectionPreviewActive = true
           selectionPreviewAssetId = previewAsset.id
           placementPreviewYaw = 0
@@ -18247,7 +18240,8 @@ async function handlePointerUp(event: PointerEvent) {
             const fallbackPosition = computeSpawnPointForSelectionClick(event, session.assetId, placementSideSnap)
             const parentGroupId = resolveSelectedGroupDropParent()
             const rotation = previewSnapshot?.rotation ?? new THREE.Vector3(0, placementPreviewYaw, 0)
-            const placementAssetId = previewSnapshot?.placementAssetId ?? session.assetId
+            
+            const placementAssetId = asset.type === 'dice'? previewSnapshot?.placementAssetId ?? session.assetId : session.assetId
             await spawnAssetFromSelectionClick({
               assetId: placementAssetId,
               worldPosition: previewSnapshot?.worldPosition ?? fallbackPosition,
@@ -18256,7 +18250,9 @@ async function handlePointerUp(event: PointerEvent) {
               parentGroupId,
               selectedId: props.selectedNodeId ?? null,
             })
-            await refreshRandomDiceSelectionPreview(session.assetId)
+            if (asset.type === 'dice') {
+              await refreshRandomDiceSelectionPreview(session.assetId)
+            }
           } catch (error) {
             console.warn('Failed to spawn asset from selection click', session.assetId, error)
           }
@@ -20447,7 +20443,7 @@ async function handleViewportDrop(event: DragEvent) {
     const worldPosition = previewSnapshot?.worldPosition ?? fallbackPosition
     const rotation = previewSnapshot?.rotation ?? new THREE.Vector3(0, placementPreviewYaw, 0)
     const scale = previewSnapshot?.scale ?? null
-    const placementAssetId = previewSnapshot?.placementAssetId ?? assetId
+    const placementAssetId = assetType === 'dice' ? previewSnapshot?.placementAssetId ?? assetId : assetId
 
     if (isEmptySelectedGroup && parentGroupId) {
       spawnResult = await sceneStore.spawnAssetIntoEmptyGroupAtWorldTransform(placementAssetId, parentGroupId, {
@@ -20473,7 +20469,7 @@ async function handleViewportDrop(event: DragEvent) {
     sceneStore.setDraggingAssetObject(null)
     snapController.resetPlacementSideSnap()
   }
-  if (sceneStore.getAsset(assetId)?.type === 'dice') {
+  if (assetType === 'dice') {
     await refreshRandomDiceSelectionPreview(assetId)
   }
   updateGridHighlight(null)
