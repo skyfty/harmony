@@ -2,9 +2,14 @@ import * as THREE from 'three'
 import type { FloorDynamicMesh, LandformDynamicMesh, SceneNode, Vector3Like, WallDynamicMesh } from '@schema/core'
 import type { Object3D } from 'three'
 import type { FloorBuildShape } from '@/types/floor-build-shape'
+import type { LandformBuildShape } from '@/types/landform-build-shape'
 import type { WaterBuildShape } from '@/types/water-build-shape'
 import type { WallBuildShape } from '@/types/wall-build-shape'
-import { readFloorBuildShapeFromNode, readWallBuildShapeFromNode } from '@/utils/dynamicMeshBuildShapeUserData'
+import {
+  readFloorBuildShapeFromNode,
+  readLandformBuildShapeFromNode,
+  readWallBuildShapeFromNode,
+} from '@/utils/dynamicMeshBuildShapeUserData'
 import { isWaterSurfaceNode, readWaterBuildShapeFromNode } from '@/utils/waterBuildShapeUserData'
 import { getWaterContourLocalPoints } from './waterSurfaceEditUtils'
 
@@ -12,9 +17,9 @@ const FLOOR_SURFACE_Y_OFFSET = 0.01
 const AUTO_OVERLAY_WORLD_GAP = 0.02
 const POINT_EPSILON_SQ = 1e-8
 
-export type AutoOverlayTool = 'floor' | 'wall' | 'water'
+export type AutoOverlayTool = 'floor' | 'landform' | 'wall' | 'water'
 export type AutoOverlayReferenceType = 'floor' | 'landform' | 'wall' | 'water'
-export type AutoOverlayTargetBuildShape = FloorBuildShape | WallBuildShape | WaterBuildShape
+export type AutoOverlayTargetBuildShape = FloorBuildShape | LandformBuildShape | WallBuildShape | WaterBuildShape
 
 export type AutoOverlayBuildPlan = {
   supported: boolean
@@ -22,7 +27,7 @@ export type AutoOverlayBuildPlan = {
   referenceNodeId: string
   referenceNodeName: string
   referenceType: AutoOverlayReferenceType
-  referenceBuildShape: FloorBuildShape | WallBuildShape | WaterBuildShape | null
+  referenceBuildShape: FloorBuildShape | LandformBuildShape | WallBuildShape | WaterBuildShape | null
   targetTool: AutoOverlayTool
   targetBuildShape: AutoOverlayTargetBuildShape
   worldPoints: Vector3Like[]
@@ -82,7 +87,7 @@ function sanitizeWorldPoints(points: THREE.Vector3[]): Vector3Like[] {
 }
 
 function normalizeTargetBuildShape(
-  sourceShape: FloorBuildShape | WallBuildShape | WaterBuildShape | null,
+  sourceShape: FloorBuildShape | LandformBuildShape | WallBuildShape | WaterBuildShape | null,
   pointCount: number,
 ): AutoOverlayTargetBuildShape {
   if (sourceShape === 'rectangle' && pointCount === 4) {
@@ -222,7 +227,7 @@ function buildLandformOverlayPlan(
       .filter((entry): entry is THREE.Vector3 => Boolean(entry)),
   )
 
-  const buildShape = readFloorBuildShapeFromNode(node)
+  const buildShape = readLandformBuildShapeFromNode(node)
 
   if (contour.length < 3) {
     return {

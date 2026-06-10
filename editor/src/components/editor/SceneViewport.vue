@@ -2008,7 +2008,7 @@ const waterShapeMenuOpen = ref(false)
 const autoOverlayDialogOpen = ref(false)
 const autoOverlayPlan = ref<AutoOverlayBuildPlan | null>(null)
 const autoOverlaySubmitting = ref(false)
-type AutoOverlayTargetTool = 'floor' | 'wall' | 'water'
+type AutoOverlayTargetTool = 'floor' | 'landform' | 'wall' | 'water'
 type AutoOverlayDialogMode = 'build' | 'scatter'
 type AutoOverlayMarginTool = AutoOverlayTargetTool | 'scatter'
 const autoOverlayDialogMode = ref<AutoOverlayDialogMode>('build')
@@ -2016,6 +2016,7 @@ const autoOverlayHorizMargin = ref('0')
 const autoOverlayVertMargin = ref('0')
 const autoOverlayMarginHistory = reactive<Record<AutoOverlayMarginTool, { horiz: string; vert: string }>>({
   floor: { horiz: '0', vert: '0' },
+  landform: { horiz: '0', vert: '0' },
   wall: { horiz: '0', vert: '0' },
   water: { horiz: '0', vert: '0' },
   scatter: { horiz: '0', vert: '0' },
@@ -9010,6 +9011,9 @@ function isAutoOverlayBlockedBySelectionContext(targetTool: BuildTool | null): b
   if (context === 'build-tool:floor' && targetTool === 'floor') {
     return false
   }
+  if (context === 'build-tool:landform' && targetTool === 'landform') {
+    return false
+  }
   if (context === 'build-tool:water' && targetTool === 'water') {
     return false
   }
@@ -9044,6 +9048,13 @@ function hasAutoOverlayHandleConflict(event: PointerEvent): boolean {
     }
   }
 
+  if (activeBuildTool.value === 'landform' && isSelectedLandformEditMode() && selectedNodeIsLandform.value) {
+    ensureLandformVertexHandlesForSelectedNode()
+    if (pickLandformVertexHandleAtPointer(event)) {
+      return true
+    }
+  }
+
   if (activeBuildTool.value === 'water' && isSelectedWaterEditMode() && selectedNodeIsWater.value) {
     ensureWaterCircleHandlesForSelectedNode()
     if (pickWaterCircleHandleAtPointer(event)) {
@@ -9072,7 +9083,7 @@ function hasAutoOverlayHandleConflict(event: PointerEvent): boolean {
 
 function resolveAutoOverlayPlanForEvent(event: PointerEvent): AutoOverlayBuildPlan | null {
   const targetTool = activeBuildTool.value
-  if (targetTool !== 'wall' && targetTool !== 'floor' && targetTool !== 'water') {
+  if (targetTool !== 'wall' && targetTool !== 'floor' && targetTool !== 'landform' && targetTool !== 'water') {
     return null
   }
   if (isTemporaryNavigationOverrideActive()) {
@@ -9097,7 +9108,7 @@ function resolveAutoOverlayPlanForEvent(event: PointerEvent): AutoOverlayBuildPl
 }
 
 function resolveAutoOverlayReferenceNodeForEvent(event: PointerEvent): SceneNode | null {
-  const hit = pickNodeAtPointer(event)
+  const hit = pickSceneNodeAtPointerIncludingHiddenLandform(event)
   if (!hit) {
     return null
   }
@@ -9115,7 +9126,7 @@ function resolveAutoOverlayReferenceNodeForEvent(event: PointerEvent): SceneNode
 
 function resolveAutoOverlayBuildPlanForReferenceNode(
   node: SceneNode,
-  targetTool: 'floor' | 'wall' | 'water',
+  targetTool: 'floor' | 'landform' | 'wall' | 'water',
 ): AutoOverlayBuildPlan | null {
   return resolveAutoOverlayBuildPlan({
     referenceNode: node,
@@ -9309,6 +9320,28 @@ async function handleConfirmAutoOverlay(): Promise<void> {
             await sceneStore.applyWallPresetToNode(created.id, brush.presetAssetId, brush.presetData)
           } catch (error) {
             console.warn('Failed to apply auto overlay wall preset', brush.presetAssetId, error)
+          }
+        }
+        sceneStore.selectNode(created.id)
+      }
+    } else if (plan.targetTool === 'landform') {
+      const targetShape = plan.targetBuildShape as LandformBuildShape
+      buildToolsStore.setLandformBuildShape(targetShape, { activate: true })
+      const created = sceneStore.createLandformNode({
+        points: adjustedPoints,
+        buildShape: targetShape,
+      })
+
+      if (created) {
+        sceneStore.updateNodeUserData(
+          created.id,
+          mergeUserDataWithDynamicMeshBuildShape(created.userData, targetShape),
+        )
+        if (landformBrushPresetAssetId.value) {
+          try {
+            await sceneStore.applyLandformPresetToNode(created.id, landformBrushPresetAssetId.value, landformBrushPresetData.value)
+          } catch (error) {
+            console.warn('Failed to apply auto overlay landform preset', landformBrushPresetAssetId.value, error)
           }
         }
         sceneStore.selectNode(created.id)
