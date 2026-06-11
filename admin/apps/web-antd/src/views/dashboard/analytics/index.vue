@@ -7,7 +7,7 @@ import { useRoute, useRouter } from 'vue-router'
 
 import { AnalysisChartCard, AnalysisChartsTabs, AnalysisOverview } from '@vben/common-ui'
 import { SvgBellIcon, SvgCakeIcon, SvgCardIcon, SvgDownloadIcon } from '@vben/icons'
-import { message } from 'ant-design-vue'
+import { Button, Card, Col, Empty, Row, Select, Table, message } from 'ant-design-vue'
 
 import {
   getAnalyticsDashboardApi,
@@ -252,7 +252,7 @@ onMounted(async () => {
 
 <template>
   <div class="p-5">
-    <a-card
+    <Card
       :bordered="false"
       class="overflow-hidden border-0 bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800 shadow-sm"
       :body-style="{ padding: '0' }"
@@ -289,7 +289,7 @@ onMounted(async () => {
                 <div class="mt-1 text-xs text-slate-300">切换全局或单景点视角，面板内容会同步刷新。</div>
               </div>
               <div class="flex flex-col gap-3 lg:flex-row">
-                <a-select
+                <Select
                   v-model:value="selectedSpotId"
                   :options="spotOptions"
                   allow-clear
@@ -298,8 +298,8 @@ onMounted(async () => {
                   @change="handleSpotChange"
                 />
                 <div class="flex gap-3">
-                  <a-button :loading="loading" type="primary" @click="handleReload">刷新数据</a-button>
-                  <a-button v-if="isSpotDetail" @click="backToGlobal">回到全局</a-button>
+                  <Button :loading="loading" type="primary" @click="handleReload">刷新数据</Button>
+                  <Button v-if="isSpotDetail" @click="backToGlobal">回到全局</Button>
                 </div>
               </div>
               <div class="flex flex-wrap gap-2 text-xs text-slate-300">
@@ -320,7 +320,7 @@ onMounted(async () => {
           </div>
         </div>
       </div>
-    </a-card>
+    </Card>
 
     <div class="mt-6">
       <div class="mb-4 flex flex-wrap items-end justify-between gap-3">
@@ -342,9 +342,9 @@ onMounted(async () => {
         <div class="text-sm text-slate-500">把高频业务域前置成可点击的观察入口。</div>
       </div>
 
-      <a-row :gutter="[16, 16]">
-        <a-col v-for="card in domainCards" :key="card.item.key" :span="24" :lg="12">
-          <a-card
+      <Row :gutter="[16, 16]">
+        <Col v-for="card in domainCards" :key="card.item.key" :span="24" :lg="12">
+          <Card
             :bordered="false"
             class="h-full cursor-pointer overflow-hidden border-0 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:shadow-lg"
             :body-style="{ padding: '24px' }"
@@ -383,13 +383,13 @@ onMounted(async () => {
                 </div>
               </div>
             </div>
-          </a-card>
-        </a-col>
-      </a-row>
+          </Card>
+        </Col>
+      </Row>
     </div>
 
-    <a-row :gutter="[16, 16]" class="mt-6">
-      <a-col :span="24" :xl="16">
+    <Row :gutter="[16, 16]" class="mt-6">
+      <Col :span="24" :xl="16">
         <div class="rounded-3xl bg-white p-5 shadow-sm lg:p-6">
           <div class="mb-5 flex flex-wrap items-end justify-between gap-3">
             <div>
@@ -411,10 +411,10 @@ onMounted(async () => {
             </template>
           </AnalysisChartsTabs>
         </div>
-      </a-col>
+      </Col>
 
-      <a-col :span="24" :xl="8">
-        <a-card :bordered="false" class="h-full border-0 shadow-sm" :body-style="{ padding: '24px' }">
+      <Col :span="24" :xl="8">
+        <Card :bordered="false" class="h-full border-0 shadow-sm" :body-style="{ padding: '24px' }">
           <div class="flex h-full flex-col">
             <div class="flex items-start justify-between gap-3">
               <div>
@@ -448,8 +448,8 @@ onMounted(async () => {
             </div>
 
             <div class="mt-5 flex-1">
-              <a-empty v-if="!rankedTopSpots.length" description="暂无景点访问数据" />
-              <a-table
+              <Empty v-if="!rankedTopSpots.length" description="暂无景点访问数据" />
+              <Table
                 v-else
                 :columns="rankingColumns"
                 :data-source="rankedTopSpots"
@@ -463,9 +463,9 @@ onMounted(async () => {
               />
             </div>
           </div>
-        </a-card>
-      </a-col>
-    </a-row>
+        </Card>
+      </Col>
+    </Row>
 
     <div class="mt-6">
       <div class="mb-4 flex flex-wrap items-end justify-between gap-3">
@@ -476,32 +476,32 @@ onMounted(async () => {
         <div class="text-sm text-slate-500">用次级视图解释“趋势为什么发生”。</div>
       </div>
 
-      <a-row :gutter="[16, 16]">
-        <a-col :span="24" :md="12" :xl="8">
+      <Row :gutter="[16, 16]">
+        <Col :span="24" :md="12" :xl="8">
           <AnalysisChartCard class="h-full" title="访问设备分布">
             <div class="mb-4 rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-600">
               当前最活跃设备类型：<span class="font-semibold text-slate-900">{{ deviceHeadline }}</span>
             </div>
             <AnalyticsVisitsData :data="overviewData?.deviceDistribution || []" />
           </AnalysisChartCard>
-        </a-col>
-        <a-col :span="24" :md="12" :xl="8">
+        </Col>
+        <Col :span="24" :md="12" :xl="8">
           <AnalysisChartCard class="h-full" title="访问来源">
             <div class="mb-4 rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-600">
               当前主导来源：<span class="font-semibold text-slate-900">{{ sourceHeadline }}</span>
             </div>
             <AnalyticsVisitsSource :data="overviewData?.sourceDistribution || []" />
           </AnalysisChartCard>
-        </a-col>
-        <a-col :span="24" :md="24" :xl="8">
+        </Col>
+        <Col :span="24" :md="24" :xl="8">
           <AnalysisChartCard class="h-full" title="用户画像 / 行为路径">
             <div class="mb-4 rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-600">
               当前首要特征：<span class="font-semibold text-slate-900">{{ profileHeadline }}</span>
             </div>
             <AnalyticsVisitsSales :data="profileOrBehaviorData" />
           </AnalysisChartCard>
-        </a-col>
-      </a-row>
+        </Col>
+      </Row>
     </div>
   </div>
 </template>

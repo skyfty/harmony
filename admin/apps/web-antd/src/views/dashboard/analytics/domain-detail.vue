@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 
-import { message } from 'ant-design-vue'
+import { Button, Card, Col, Empty, Row, Select, Table, message } from 'ant-design-vue'
 
 import { getAnalyticsDomainSummaryApi, type AnalyticsDomainKey, type AnalyticsDomainSummaryResponse, type AnalyticsRecentItem } from '#/api'
 
@@ -155,35 +155,35 @@ onMounted(() => {
         <p v-if="description" class="mt-1 text-sm text-slate-500">{{ description }}</p>
       </div>
       <div class="flex flex-wrap items-center gap-2">
-        <a-select v-model:value="rangePreset" :options="[
+        <Select v-model:value="rangePreset" :options="[
           { label: '近 7 天', value: '7d' },
           { label: '近 30 天', value: '30d' },
           { label: '近 90 天', value: '90d' },
         ]" style="width: 130px" />
-        <a-select v-model:value="granularity" :options="[
+        <Select v-model:value="granularity" :options="[
           { label: '按天', value: 'day' },
           { label: '按周', value: 'week' },
           { label: '按月', value: 'month' },
         ]" style="width: 130px" />
-        <a-button :loading="loading" type="primary" @click="loadData">刷新</a-button>
-        <a-button @click="goBack">返回分析首页</a-button>
+        <Button :loading="loading" type="primary" @click="loadData">刷新</Button>
+        <Button @click="goBack">返回分析首页</Button>
       </div>
     </div>
 
-    <a-row :gutter="16">
-      <a-col v-for="item in summaryItems" :key="item.name" :span="24" :md="12" :xl="4">
-        <a-card class="mb-4 shadow-sm" :bordered="false">
+    <Row :gutter="16">
+      <Col v-for="item in summaryItems" :key="item.name" :span="24" :md="12" :xl="4">
+        <Card class="mb-4 shadow-sm" :bordered="false">
           <div class="text-xs uppercase tracking-wide text-slate-400">{{ item.name }}</div>
           <div class="mt-2 text-3xl font-semibold" :style="{ color: props.accent }">{{ item.value }}</div>
-        </a-card>
-      </a-col>
-    </a-row>
+        </Card>
+      </Col>
+    </Row>
 
-    <a-row :gutter="16">
-      <a-col :span="24" :lg="12">
-        <a-card :bordered="false" class="mb-4" title="趋势概览">
-          <a-empty v-if="!trendItems.length" description="暂无趋势数据" />
-          <a-table
+    <Row :gutter="16">
+      <Col :span="24" :lg="12">
+        <Card :bordered="false" class="mb-4" title="趋势概览">
+          <Empty v-if="!trendItems.length" description="暂无趋势数据" />
+          <Table
             v-else
             :columns="[
               { dataIndex: 'date', key: 'date', title: '日期' },
@@ -195,12 +195,12 @@ onMounted(() => {
             :row-key="(record: any) => record.date"
             size="small"
           />
-        </a-card>
-      </a-col>
-      <a-col :span="24" :lg="12">
-        <a-card :bordered="false" class="mb-4" title="分布概览">
-          <a-empty v-if="!breakdownItems.length" description="暂无分布数据" />
-          <a-table
+        </Card>
+      </Col>
+      <Col :span="24" :lg="12">
+        <Card :bordered="false" class="mb-4" title="分布概览">
+          <Empty v-if="!breakdownItems.length" description="暂无分布数据" />
+          <Table
             v-else
             :columns="[
               { dataIndex: 'name', key: 'name', title: '名称' },
@@ -211,13 +211,13 @@ onMounted(() => {
             :row-key="(record: any) => record.name"
             size="small"
           />
-        </a-card>
-      </a-col>
-    </a-row>
+        </Card>
+      </Col>
+    </Row>
 
-    <a-card :bordered="false" class="mb-4" title="最近记录">
-      <a-empty v-if="!recentItems.length" description="暂无最近记录" />
-      <a-table
+    <Card :bordered="false" class="mb-4" title="最近记录">
+      <Empty v-if="!recentItems.length" description="暂无最近记录" />
+      <Table
         v-else
         :columns="recentColumns"
         :data-source="recentItems"
@@ -227,13 +227,13 @@ onMounted(() => {
       >
         <template #bodyCell="{ column, record }">
           <span v-if="column.dataIndex === 'title'">
-            <a-button type="link" @click="openRecentItem(record)">{{ formatCellValue(record.title) }}</a-button>
+            <Button type="link" @click="openRecentItem(record)">{{ formatCellValue(record.title) }}</Button>
           </span>
           <span v-else>
             {{ formatCellValue(record[column.dataIndex]) }}
           </span>
         </template>
-      </a-table>
-    </a-card>
+      </Table>
+    </Card>
   </div>
 </template>

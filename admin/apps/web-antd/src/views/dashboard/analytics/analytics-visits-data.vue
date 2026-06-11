@@ -23,47 +23,51 @@ watch(
     const list = Array.isArray(items) && items.length
       ? items
       : [{ name: '未知', value: 0 }];
-  renderEcharts({
-    legend: {
-      bottom: 0,
-      data: ['访问', '趋势'],
-    },
-    radar: {
-      indicator: [
-        ...list.map((item) => ({ name: item.name, max: Math.max(item.value, 1) })),
-      ],
-      radius: '60%',
-      splitNumber: 8,
-    },
-    series: [
-      {
-        areaStyle: {
-          opacity: 1,
-          shadowBlur: 0,
-          shadowColor: 'rgba(0,0,0,.2)',
-          shadowOffsetX: 0,
-          shadowOffsetY: 10,
-        },
-        data: [
-          {
-            itemStyle: {
-              color: '#5ab1ef',
-            },
-            name: '访问设备',
-            value: list.map((item) => item.value),
-          },
-        ],
-        itemStyle: {
-          // borderColor: '#fff',
-          borderRadius: 10,
-          borderWidth: 2,
-        },
-        symbolSize: 0,
-        type: 'radar',
+    const axisMax = Math.max(
+      Math.ceil(Math.max(...list.map((item) => item.value), 1) * 1.2),
+      5,
+    );
+    renderEcharts({
+      legend: {
+        bottom: 0,
+        data: ['访问设备'],
       },
-    ],
-    tooltip: {},
-  });
+      radar: {
+        indicator: [
+          ...list.map((item) => ({ name: item.name, max: axisMax })),
+        ],
+        radius: '60%',
+        splitNumber: 8,
+      },
+      series: [
+        {
+          areaStyle: {
+            opacity: 1,
+            shadowBlur: 0,
+            shadowColor: 'rgba(0,0,0,.2)',
+            shadowOffsetX: 0,
+            shadowOffsetY: 10,
+          },
+          data: [
+            {
+              itemStyle: {
+                color: '#5ab1ef',
+              },
+              name: '访问设备',
+              value: list.map((item) => item.value),
+            },
+          ],
+          itemStyle: {
+            // borderColor: '#fff',
+            borderRadius: 10,
+            borderWidth: 2,
+          },
+          symbolSize: 0,
+          type: 'radar',
+        },
+      ],
+      tooltip: {},
+    });
   },
   { immediate: true },
 );

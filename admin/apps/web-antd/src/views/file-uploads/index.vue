@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import type { UploadChangeParam, UploadFile, UploadProps } from 'ant-design-vue';
 
-import { h, onMounted, reactive, ref } from 'vue';
+import { reactive, ref } from 'vue';
+
+import { useVbenVxeGrid } from '#/adapter/vxe-table';
 
 import {
   deleteFileUploadApi,
@@ -13,12 +15,10 @@ import {
 import {
   Button,
   Form,
-  Image,
   Input,
   Modal,
   Select,
   Space,
-  Table,
   Tag,
   Upload,
   message,
@@ -35,119 +35,74 @@ const moduleOptions = [
   { label: '其他', value: 'other' },
 ];
 
-const loading = ref(false);
 const submitting = ref(false);
 const openUploadModal = ref(false);
 const uploadFileList = ref<UploadFile[]>([]);
 const uploadPreview = ref('');
-const dataSource = ref<FileUploadItem[]>([]);
-const page = ref(1);
-const pageSize = ref(20);
-const total = ref(0);
-
-const queryForm = reactive({
-  keyword: '',
-  module: '',
-});
 
 const uploadForm = reactive({
   label: '',
   module: 'general',
 });
 
+const [FileUploadGrid, fileUploadGridApi] = useVbenVxeGrid<FileUploadItem>({
+  formOptions: {
+    schema: [
+      {
+        component: 'Input',
+        fieldName: 'keyword',
+        label: '关键字',
+        componentProps: {
+          allowClear: true,
+          placeholder: '按名称、文件名或上传者搜索',
+        },
+      },
+      {
+        component: 'Select',
+        fieldName: 'module',
+        label: '模块',
+        componentProps: {
+          allowClear: true,
+          options: moduleOptions,
+          placeholder: '按模块筛选',
+        },
+      },
+    ],
+  },
+  gridOptions: {
+    border: true,
+    columns: [
+      { field: 'url', minWidth: 120, title: '预览', slots: { default: 'preview' } },
+      { field: 'label', minWidth: 220, title: '名称', slots: { default: 'name' } },
+      { field: 'module', minWidth: 120, title: '模块', slots: { default: 'module' } },
+      { field: 'originalFilename', minWidth: 220, title: '原始文件名', slots: { default: 'originalFilename' } },
+      { field: 'mimeType', minWidth: 160, title: 'MIME 类型', slots: { default: 'mimeType' } },
+      { field: 'size', minWidth: 120, title: '大小', slots: { default: 'size' } },
+      { field: 'uploaderUsername', minWidth: 140, title: '上传者', slots: { default: 'uploader' } },
+      { field: 'createdAt', minWidth: 180, title: '创建时间', slots: { default: 'createdAt' } },
+      { align: 'left', fixed: 'right', minWidth: 180, field: 'actions', slots: { default: 'actions' }, title: '操作' },
+    ],
+    pagerConfig: { pageSize: 20 },
+    proxyConfig: {
+      ajax: {
+        query: async ({ page }: any, formValues: Record<string, any>) => {
+          return await listFileUploadsApi({
+            keyword: formValues.keyword?.trim() || undefined,
+            module: formValues.module || undefined,
+            page: page.currentPage,
+            pageSize: page.pageSize,
+          });
+        },
+      },
+    },
+    toolbarConfig: { custom: true, refresh: true, search: true, zoom: true },
+  },
+});
 const uploadProps: UploadProps = {
   beforeUpload: () => false,
   accept: '*',
   maxCount: 1,
 };
-
-const columns = [
-  {
-    title: '预览',
-    dataIndex: 'url',
-    width: 120,
-    customRender: ({ record }: { record: FileUploadItem }) => {
-      if (record.mimeType?.startsWith('image/') && record.url) {
-        return h(Image, {
-          src: record.url,
-          width: 72,
-          height: 72,
-          style: 'object-fit: cover; border-radius: 8px;',
-          preview: true,
-        });
-      }
-      return h(Tag, { color: 'blue' }, { default: () => record.mimeType?.split('/')[0] || 'file' });
-    },
-  },
-  {
-    title: '名称',
-    dataIndex: 'label',
-    customRender: ({ record }: { record: FileUploadItem }) =>
-      h('div', [
-        h('div', { style: 'font-weight: 600;' }, record.label || record.originalFilename || record.fileKey),
-        h('div', { style: 'color: rgba(0, 0, 0, 0.45); font-size: 12px; word-break: break-all;' }, record.fileKey),
-      ]),
-  },
-  {
-    title: '模块',
-    dataIndex: 'module',
-    width: 120,
-    customRender: ({ record }: { record: FileUploadItem }) => h(Tag, null, { default: () => record.module }),
-  },
-  {
-    title: '文件信息',
-    width: 200,
-    customRender: ({ record }: { record: FileUploadItem }) =>
-      h('div', [
-        h('div', record.originalFilename || '-'),
-        h('div', { style: 'color: rgba(0, 0, 0, 0.45); font-size: 12px;' }, record.mimeType || '-'),
-        h('div', { style: 'color: rgba(0, 0, 0, 0.45); font-size: 12px;' }, formatFileSize(record.size)),
-      ]),
-  },
-  {
-    title: '上传者',
-    width: 140,
-    customRender: ({ record }: { record: FileUploadItem }) => record.uploaderUsername || '-',
-  },
-  {
-    title: '创建时间',
-    width: 180,
-    customRender: ({ record }: { record: FileUploadItem }) => formatDateTime(record.createdAt),
-  },
-  {
-    title: '操作',
-    width: 180,
-    fixed: 'right' as const,
-    customRender: ({ record }: { record: FileUploadItem }) =>
-      h(
-        Space,
-        { size: 'small' },
-        {
-          default: () => [
-            h(
-              Button,
-              {
-                type: 'link',
-                icon: h(DownloadOutlined),
-                onClick: () => window.open(record.url, '_blank'),
-              },
-              { default: () => '打开' },
-            ),
-            h(
-              Button,
-              {
-                danger: true,
-                type: 'link',
-                icon: h(DeleteOutlined),
-                onClick: () => handleDelete(record),
-              },
-              { default: () => '删除' },
-            ),
-          ],
-        },
-      ),
-  },
-];
 
 function formatFileSize(size: number) {
   if (!Number.isFinite(size) || size < 0) {
@@ -173,36 +128,10 @@ function formatDateTime(value: string) {
   return date.toLocaleString()
 }
 
-async function loadData() {
-  loading.value = true
-  try {
-    const result = await listFileUploadsApi({
-      keyword: queryForm.keyword.trim() || undefined,
-      module: queryForm.module || undefined,
-      page: page.value,
-      pageSize: pageSize.value,
-    })
-    dataSource.value = result.items
-    total.value = result.total
-  } finally {
-    loading.value = false
-  }
-}
-
-function handleSearch() {
-  page.value = 1
-  loadData()
-}
-
-function handleReset() {
-  queryForm.keyword = ''
-  queryForm.module = ''
-  handleSearch()
-}
-
 function openUploadDialog() {
   uploadForm.label = ''
-  uploadForm.module = queryForm.module || 'general'
+  const formValues = (fileUploadGridApi.formApi?.getValues?.() ?? {}) as Record<string, any>
+  uploadForm.module = formValues.module || 'general'
   uploadFileList.value = []
   uploadPreview.value = ''
   openUploadModal.value = true
@@ -242,7 +171,7 @@ async function submitUpload() {
     await uploadFileApi(formData)
     message.success('上传成功')
     openUploadModal.value = false
-    await loadData()
+    fileUploadGridApi.reload()
   } finally {
     submitting.value = false
   }
@@ -256,60 +185,88 @@ function handleDelete(record: FileUploadItem) {
     onOk: async () => {
       await deleteFileUploadApi(record.id)
       message.success('删除成功')
-      await loadData()
+      fileUploadGridApi.reload()
     },
   })
 }
 
-function handleTableChange(pagination: { current?: number; pageSize?: number }) {
-  page.value = pagination.current || 1
-  pageSize.value = pagination.pageSize || 20
-  loadData()
-}
+function handleDownload(record: FileUploadItem) {
+  if (!record.url) {
+    message.warning('文件地址不存在')
+    return
+  }
 
-onMounted(() => {
-  loadData()
-})
+  globalThis.open(record.url, '_blank', 'noopener,noreferrer')
+}
 </script>
 
 <template>
   <div class="p-5">
-    <div class="file-upload-page">
-      <div class="page-card">
-        <div class="page-header">
-          <div class="page-heading">
-            <div class="page-title">文件管理</div>
-            <div class="page-description">统一查看、搜索和维护所有管理员上传的文件资源。</div>
-          </div>
-          <Button type="primary" @click="openUploadDialog">
-            <template #icon>
-              <UploadOutlined />
-            </template>
-            上传文件
-          </Button>
-        </div>
+    <FileUploadGrid>
+      <template #toolbar-actions>
+        <Button type="primary" @click="openUploadDialog">
+          <template #icon>
+            <UploadOutlined />
+          </template>
+          上传文件
+        </Button>
+      </template>
 
-        <div class="page-toolbar">
-          <Space wrap>
-            <Input v-model:value="queryForm.keyword" allow-clear placeholder="按名称、文件名或上传者搜索" style="width: 280px" @press-enter="handleSearch" />
-            <Select v-model:value="queryForm.module" allow-clear placeholder="按模块筛选" style="width: 180px" :options="moduleOptions" />
-            <Button type="primary" @click="handleSearch">搜索</Button>
-            <Button @click="handleReset">重置</Button>
-          </Space>
-        </div>
-
-        <Table
-          class="page-table"
-          :columns="columns"
-          :data-source="dataSource"
-          :loading="loading"
-          :pagination="{ current: page, pageSize, total, showSizeChanger: true, showTotal: (value: number) => `共 ${value} 项` }"
-          row-key="id"
-          :scroll="{ x: 1200 }"
-          @change="handleTableChange"
+      <template #preview="{ row }">
+        <img
+          v-if="row.mimeType?.startsWith('image/') && row.url"
+          :src="row.url"
+          :alt="row.label || row.originalFilename || row.fileKey"
+          style="width: 56px; height: 56px; object-fit: cover; border-radius: 8px; display: block"
         />
-      </div>
-    </div>
+        <Tag v-else color="blue">{{ row.mimeType?.split('/')[0] || 'file' }}</Tag>
+      </template>
+
+      <template #name="{ row }">
+        <div>
+          <div style="font-weight: 600;">{{ row.label || row.originalFilename || row.fileKey }}</div>
+        </div>
+      </template>
+
+      <template #module="{ row }">
+        <Tag>{{ row.module }}</Tag>
+      </template>
+
+      <template #originalFilename="{ row }">
+        <span>{{ row.originalFilename || '-' }}</span>
+      </template>
+
+      <template #mimeType="{ row }">
+        <Tag>{{ row.mimeType || '-' }}</Tag>
+      </template>
+
+      <template #size="{ row }">
+        <span>{{ formatFileSize(row.size) }}</span>
+      </template>
+
+      <template #uploader="{ row }">
+        <span>{{ row.uploaderUsername || '-' }}</span>
+      </template>
+
+      <template #createdAt="{ row }">
+        <span>{{ formatDateTime(row.createdAt) }}</span>
+      </template>
+
+      <template #actions="{ row }">
+        <Space size="small">
+          <Button type="link" @click="handleDownload(row)">
+            <template #icon>
+              <DownloadOutlined />
+            </template>
+          </Button>
+          <Button danger type="link" @click="handleDelete(row)">
+            <template #icon>
+              <DeleteOutlined />
+            </template>
+          </Button>
+        </Space>
+      </template>
+    </FileUploadGrid>
 
     <Modal v-model:open="openUploadModal" title="上传文件" :confirm-loading="submitting" ok-text="上传" cancel-text="取消" @ok="submitUpload">
       <Form layout="vertical">
@@ -330,7 +287,13 @@ onMounted(() => {
           </Upload>
         </Form.Item>
         <Form.Item v-if="uploadPreview" label="预览">
-          <Image :src="uploadPreview" width="120" height="120" style="object-fit: cover; border-radius: 8px;" preview />
+          <img
+            :src="uploadPreview"
+            alt="preview"
+            width="120"
+            height="120"
+            class="upload-preview-image"
+          />
         </Form.Item>
       </Form>
     </Modal>
@@ -338,60 +301,9 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.file-upload-page {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.page-card {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  padding: 16px;
-  border-radius: 16px;
-  background: #fff;
-  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
-}
-
-.page-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  flex-wrap: wrap;
-}
-
-.page-heading {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.page-title {
-  font-size: 20px;
-  font-weight: 600;
-  color: rgba(15, 23, 42, 0.95);
-}
-
-.page-description {
-  font-size: 13px;
-  color: rgba(100, 116, 139, 0.96);
-}
-
-.page-toolbar {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  flex-wrap: wrap;
-}
-
-.page-table :deep(.ant-table) {
-  border-radius: 12px;
-}
-
-.page-table :deep(.ant-table-thead > tr > th) {
-  background: #f8fafc;
+.upload-preview-image {
+  object-fit: cover;
+  border-radius: 8px;
+  display: block;
 }
 </style>

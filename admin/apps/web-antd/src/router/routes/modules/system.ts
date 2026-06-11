@@ -461,21 +461,12 @@ const routes: RouteRecordRaw[] = [
   {
     name: 'FileUploads',
     path: '/file-uploads',
+    component: () => import('#/views/file-uploads/index.vue'),
+
     meta: {
       icon: 'lucide:paperclip',
       title: '文件管理',
     },
-    children: [
-      {
-        name: 'FileUploadsIndex',
-        path: '',
-        component: () => import('#/views/file-uploads/index.vue'),
-        meta: {
-          icon: 'lucide:paperclip',
-          title: '文件管理',
-        },
-      },
-    ],
   },
   {
     name: 'SystemMiniApps',
