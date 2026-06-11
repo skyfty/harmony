@@ -15,6 +15,7 @@ import {
   listSceneSpotCategoriesApi,
   updateSceneSpotApi,
 } from '#/api';
+import { uploadFileApi } from '#/api/core/file-uploads';
 import { apiURL } from '#/api/request';
 import { $t } from '#/locales';
 
@@ -232,6 +233,15 @@ function getFileUrl(file?: UploadFile): string {
     return '';
   }
   return ((file.response as any)?.url || file.url || '') as string;
+}
+
+async function uploadSceneSpotResourceFile(file: File, label: string): Promise<string> {
+  const payload = new FormData();
+  payload.append('file', file);
+  payload.append('module', 'scene-spot');
+  payload.append('label', label);
+  const uploaded = await uploadFileApi(payload);
+  return uploaded.url;
 }
 
 async function validateImageSize(file: File, width: number, height: number): Promise<boolean> {
@@ -544,31 +554,29 @@ async function submitSceneSpot() {
     payload.append('category', '');
   }
 
+  const finalSlideUrls: string[] = [];
   const cover = coverImageFileList.value[0];
   if (cover?.originFileObj) {
-    payload.append('coverImage', cover.originFileObj as File);
+    const uploadedCoverUrl = await uploadSceneSpotResourceFile(cover.originFileObj as File, `scene-spot-cover-${sceneSpotFormModel.title.trim() || 'image'}`);
+    payload.append('coverImage', uploadedCoverUrl);
   } else if (editingId.value && originalCoverImageUrl.value && coverImageFileList.value.length === 0) {
     payload.append('removeCoverImage', 'true');
+  } else if (cover?.url) {
+    payload.append('coverImage', cover.url);
   }
 
-  const retainedSlideUrls: string[] = [];
   for (const file of slidesFileList.value) {
     if (file.originFileObj) {
-      payload.append('slides', file.originFileObj as File);
+      const uploadedSlideUrl = await uploadSceneSpotResourceFile(file.originFileObj as File, `scene-spot-slide-${sceneSpotFormModel.title.trim() || 'image'}`);
+      finalSlideUrls.push(uploadedSlideUrl);
       continue;
     }
     const existingUrl = getFileUrl(file);
     if (existingUrl) {
-      retainedSlideUrls.push(existingUrl);
+      finalSlideUrls.push(existingUrl);
     }
   }
-  if (editingId.value) {
-    payload.append('retainSlides', JSON.stringify(retainedSlideUrls));
-    const hadRemovedExistingSlides = retainedSlideUrls.length < originalSlides.value.length;
-    if (hadRemovedExistingSlides) {
-      payload.append('removeSlides', 'true');
-    }
-  }
+  payload.append('slides', JSON.stringify(finalSlideUrls));
 
   submitting.value = true;
   try {

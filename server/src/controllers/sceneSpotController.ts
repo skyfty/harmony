@@ -1,14 +1,12 @@
 import type { Context } from 'koa'
-import path from 'node:path'
-import fs from 'fs-extra'
 import { Types } from 'mongoose'
-import { nanoid } from 'nanoid'
-import { appConfig } from '@/config/env'
+import { FileUploadModel } from '@/models/FileUpload'
 import { SceneModel } from '@/models/Scene'
 import { SceneSpotModel } from '@/models/SceneSpot'
 import { HotSpotModel } from '@/models/HotSpot'
 import { FeaturedSpotModel } from '@/models/FeaturedSpot'
-import { deleteSceneFile, type UploadedFilePayload } from '@/services/sceneService'
+import { deleteStoredFile } from '@/services/uploadStorageService'
+import { type UploadedFilePayload } from '@/services/sceneService'
 
 type SceneSpotMutationPayload = {
   sceneId?: string
@@ -38,7 +36,6 @@ type SceneSpotMutationPayload = {
 
 type RequestFilesMap = Record<string, unknown> | undefined
 
-const SCENE_SPOT_STORAGE_PREFIX = 'scene-spots'
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024
 const MAX_SLIDES_COUNT = 10
 
@@ -101,79 +98,30 @@ function extractUploadedFiles(files: RequestFilesMap, field: string): UploadedFi
   return list.map(sanitizeUploadedFilePayload).filter((file): file is UploadedFilePayload => Boolean(file))
 }
 
-function normalizeFileKey(input: string): string {
-  return input.replace(/\\+/g, '/').replace(/^\/+/, '')
-}
-
-function buildPublicUrl(fileKey: string): string {
-  const base = appConfig.assetPublicUrl.replace(/\/?$/, '')
-  return `${base}/${normalizeFileKey(fileKey)}`
-}
-
-function resolveStorageAbsolutePath(fileKey: string): string {
-  const root = path.resolve(appConfig.assetStoragePath)
-  const absolutePath = path.resolve(root, normalizeFileKey(fileKey))
-  if (!absolutePath.startsWith(root)) {
-    throw new Error('Invalid file path')
-  }
-  return absolutePath
-}
-
-async function ensureSceneSpotStorageDir(): Promise<void> {
-  const root = path.resolve(appConfig.assetStoragePath)
-  await fs.ensureDir(path.join(root, SCENE_SPOT_STORAGE_PREFIX))
-}
-
-async function storeSceneSpotFile(file: UploadedFilePayload): Promise<{ fileKey: string; url: string }> {
-  if (!file.filepath) {
-    throw new Error('Invalid upload payload')
-  }
-  await ensureSceneSpotStorageDir()
-  const extension = typeof file.originalFilename === 'string' ? path.extname(file.originalFilename) : ''
-  const fileKey = `${SCENE_SPOT_STORAGE_PREFIX}/${nanoid(16)}${extension}`
-  const targetPath = resolveStorageAbsolutePath(fileKey)
-  await fs.copy(file.filepath, targetPath)
-  await fs.remove(file.filepath).catch(() => undefined)
-  return { fileKey, url: buildPublicUrl(fileKey) }
-}
-
-function toStoredFileKeyFromUrl(input: unknown): string | null {
-  const raw = toNullableString(input)
-  if (!raw || isDataUrl(raw)) {
-    return null
-  }
-
-  try {
-    const parsed = new URL(raw)
-    const publicBase = new URL(appConfig.assetPublicUrl.endsWith('/') ? appConfig.assetPublicUrl : `${appConfig.assetPublicUrl}/`)
-    if (parsed.origin === publicBase.origin && parsed.pathname.startsWith(publicBase.pathname)) {
-      return normalizeFileKey(parsed.pathname.slice(publicBase.pathname.length)) || null
-    }
-    return null
-  } catch {
-    if (raw.startsWith('/')) {
-      const publicBase = new URL(appConfig.assetPublicUrl.endsWith('/') ? appConfig.assetPublicUrl : `${appConfig.assetPublicUrl}/`)
-      if (raw.startsWith(publicBase.pathname)) {
-        return normalizeFileKey(raw.slice(publicBase.pathname.length)) || null
-      }
-      return null
-    }
-    if (raw.includes('://')) {
-      return null
-    }
-    return normalizeFileKey(raw) || null
-  }
-}
-
 async function deleteStoredFilesByUrls(urls: Array<string | null | undefined>): Promise<void> {
-  const keys = new Set<string>()
-  for (const url of urls) {
-    const fileKey = toStoredFileKeyFromUrl(url)
-    if (fileKey) {
-      keys.add(fileKey)
-    }
+  const normalizedUrls = Array.from(new Set(urls.map((url) => toNullableString(url)).filter(Boolean)))
+  if (!normalizedUrls.length) {
+    return
   }
-  await Promise.all(Array.from(keys).map((fileKey) => deleteSceneFile(fileKey).catch(() => undefined)))
+
+  const uploads = await FileUploadModel.find({ url: { $in: normalizedUrls }, module: 'scene-spot' }).lean().exec()
+  for (const upload of uploads) {
+    const url = toNullableString(upload.url)
+    if (!url) {
+      continue
+    }
+    const referenceCount = await SceneSpotModel.countDocuments({
+      $or: [{ coverImage: url }, { slides: url }],
+    }).exec()
+    if (referenceCount > 0) {
+      continue
+    }
+
+    await Promise.all([
+      deleteStoredFile(String(upload.fileKey)).catch(() => undefined),
+      FileUploadModel.findByIdAndDelete(upload._id).exec(),
+    ])
+  }
 }
 
 function validateImageUpload(file: UploadedFilePayload, fieldLabel: string): void {
@@ -442,10 +390,6 @@ export async function createSceneSpot(ctx: Context): Promise<void> {
   } catch (error) {
     ctx.throw(400, (error as Error).message)
   }
-
-  if (body.coverImage !== undefined || body.slides !== undefined) {
-    ctx.throw(400, 'coverImage/slides do not accept string payload, upload files only')
-  }
   if ('checkpointTotal' in body && (body as Record<string, unknown>).checkpointTotal !== undefined) {
     ctx.throw(400, 'checkpointTotal is read-only and derived from scene')
   }
@@ -497,24 +441,12 @@ export async function createSceneSpot(ctx: Context): Promise<void> {
     ctx.throw(400, 'Favorite count must be a non-negative integer')
   }
 
-  const uploadedFileKeys: string[] = []
-  let coverImageUrl: string | null = null
-  const slideUrls: string[] = []
-  try {
-    if (coverFiles[0]) {
-      const stored = await storeSceneSpotFile(coverFiles[0])
-      uploadedFileKeys.push(stored.fileKey)
-      coverImageUrl = stored.url
-    }
-
-    for (const file of slideFiles) {
-      const stored = await storeSceneSpotFile(file)
-      uploadedFileKeys.push(stored.fileKey)
-      slideUrls.push(stored.url)
-    }
-  } catch (error) {
-    await Promise.all(uploadedFileKeys.map((fileKey) => deleteSceneFile(fileKey).catch(() => undefined)))
-    throw error
+  const bodyCoverImage = body.coverImage === undefined ? undefined : toNullableString(body.coverImage)
+  const bodySlides = body.slides === undefined ? undefined : parseSlides(body.slides)
+  let uploadedCoverImageUrl: string | null = bodyCoverImage ?? null
+  const uploadedSlideUrls: string[] = bodySlides ?? []
+  if (coverFiles.length || slideFiles.length) {
+    ctx.throw(400, 'Please upload images through the file upload center and submit URLs')
   }
 
   let created
@@ -523,8 +455,8 @@ export async function createSceneSpot(ctx: Context): Promise<void> {
     const createPayload: any = {
       sceneId,
       title,
-      coverImage: coverImageUrl,
-      slides: slideUrls,
+      coverImage: uploadedCoverImageUrl,
+      slides: uploadedSlideUrls,
       description: toNullableString(body.description) ?? '',
       distance: toNullableString(body.distance) ?? '',
       address: toNullableString(body.address) ?? '',
@@ -572,7 +504,6 @@ export async function createSceneSpot(ctx: Context): Promise<void> {
 
     created = await SceneSpotModel.create(createPayload)
   } catch (error) {
-    await Promise.all(uploadedFileKeys.map((fileKey) => deleteSceneFile(fileKey).catch(() => undefined)))
     throw error
   }
 
@@ -611,19 +542,12 @@ export async function updateSceneSpot(ctx: Context): Promise<void> {
     ctx.throw(400, (error as Error).message)
   }
 
-  if (body.coverImage !== undefined || body.slides !== undefined) {
-    ctx.throw(400, 'coverImage/slides do not accept string payload, upload files only')
-  }
   if ('checkpointTotal' in body && (body as Record<string, unknown>).checkpointTotal !== undefined) {
     ctx.throw(400, 'checkpointTotal is read-only and derived from scene')
   }
 
   const removeCoverImage = toBoolean(body.removeCoverImage) === true
   const removeSlides = toBoolean(body.removeSlides) === true
-  const retainedSlides = body.retainSlides === undefined ? undefined : parseStringArray(body.retainSlides)
-  if (retainedSlides?.some((url) => isDataUrl(url))) {
-    ctx.throw(400, 'retainSlides does not accept base64 payload')
-  }
 
   const nextIsHome = toBoolean(body.isHome)
   const nextIsFeatured = toBoolean((body as any).isFeatured)
@@ -691,34 +615,21 @@ export async function updateSceneSpot(ctx: Context): Promise<void> {
     ctx.throw(400, 'Favorite count must be a non-negative integer')
   }
 
-  const uploadedFileKeys: string[] = []
-  let uploadedCoverImageUrl: string | null = null
-  const uploadedSlideUrls: string[] = []
-  try {
-    if (coverFiles[0]) {
-      const stored = await storeSceneSpotFile(coverFiles[0])
-      uploadedFileKeys.push(stored.fileKey)
-      uploadedCoverImageUrl = stored.url
-    }
-    for (const file of slideFiles) {
-      const stored = await storeSceneSpotFile(file)
-      uploadedFileKeys.push(stored.fileKey)
-      uploadedSlideUrls.push(stored.url)
-    }
-  } catch (error) {
-    await Promise.all(uploadedFileKeys.map((fileKey) => deleteSceneFile(fileKey).catch(() => undefined)))
-    throw error
+  const bodyCoverImage = body.coverImage === undefined ? undefined : toNullableString(body.coverImage)
+  const bodySlides = body.slides === undefined ? undefined : parseSlides(body.slides)
+  let uploadedCoverImageUrl: string | null = bodyCoverImage ?? null
+  const uploadedSlideUrls: string[] = bodySlides ?? []
+  if (coverFiles.length || slideFiles.length) {
+    ctx.throw(400, 'Please upload images through the file upload center and submit URLs')
   }
 
   const currentCoverImage = toNullableString(current.coverImage)
   const currentSlides = Array.isArray(current.slides) ? current.slides.map((item) => String(item).trim()).filter(Boolean) : []
 
-  const nextCoverImage = coverFiles.length ? uploadedCoverImageUrl : removeCoverImage ? null : currentCoverImage
+  const nextCoverImage = bodyCoverImage !== undefined ? uploadedCoverImageUrl : removeCoverImage ? null : currentCoverImage
 
-  const nextSlidesBase = removeSlides ? [] : retainedSlides === undefined ? currentSlides : retainedSlides
-  const nextSlides = [...nextSlidesBase, ...uploadedSlideUrls]
+  const nextSlides = bodySlides !== undefined ? uploadedSlideUrls : removeSlides ? [] : currentSlides
   if (nextSlides.length > MAX_SLIDES_COUNT) {
-    await Promise.all(uploadedFileKeys.map((fileKey) => deleteSceneFile(fileKey).catch(() => undefined)))
     ctx.throw(400, `Slides cannot exceed ${MAX_SLIDES_COUNT} images`)
   }
   // compute next phone & location values
@@ -812,26 +723,15 @@ export async function updateSceneSpot(ctx: Context): Promise<void> {
 
     updated = await SceneSpotModel.findByIdAndUpdate(id, updatePayload, { new: true }).lean().exec()
   } catch (error) {
-    await Promise.all(uploadedFileKeys.map((fileKey) => deleteSceneFile(fileKey).catch(() => undefined)))
     throw error
   }
 
-  const preservedUrls = new Set<string>()
-  if (nextCoverImage) {
-    preservedUrls.add(nextCoverImage)
-  }
-  nextSlides.forEach((url) => {
-    if (url) {
-      preservedUrls.add(url)
-    }
-  })
-
   const removedUrls: string[] = []
-  if (currentCoverImage && !preservedUrls.has(currentCoverImage)) {
+  if (currentCoverImage && currentCoverImage !== nextCoverImage) {
     removedUrls.push(currentCoverImage)
   }
   currentSlides.forEach((url) => {
-    if (url && !preservedUrls.has(url)) {
+    if (url && !nextSlides.includes(url)) {
       removedUrls.push(url)
     }
   })
@@ -857,6 +757,7 @@ export async function deleteSceneSpot(ctx: Context): Promise<void> {
       urlsToDelete.push(...deleted.slides.map((item: unknown) => toNullableString(item)).filter(Boolean))
     }
     await deleteStoredFilesByUrls(urlsToDelete)
+
     // remove any HotSpot / FeaturedSpot records referencing this scene spot
     try {
       await Promise.all([

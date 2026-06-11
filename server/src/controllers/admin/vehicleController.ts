@@ -4,6 +4,7 @@ import { VehicleModel } from '@/models/Vehicle'
 import { UserVehicleModel } from '@/models/UserVehicle'
 import { UserModel } from '@/models/User'
 import { ProductModel } from '@/models/Product'
+import { deleteFileUploadsByUrlsIfUnreferenced } from '@/services/resourceCleanupService'
 import { getTransportProductCategory } from '@/services/productCategoryService'
 
 type VehiclePayload = {
@@ -319,6 +320,14 @@ export async function deleteVehicle(ctx: Context): Promise<void> {
     await ProductModel.findByIdAndUpdate(current.productId, { isDeleted: true, deletedAt: new Date() }).exec()
   }
   await UserVehicleModel.deleteMany({ vehicleId: id }).exec()
+  await deleteFileUploadsByUrlsIfUnreferenced([current?.coverUrl, current?.prefabUrl], async (url) => {
+    const [vehicleCount, productCount] = await Promise.all([
+      VehicleModel.countDocuments({ coverUrl: url }).exec(),
+      ProductModel.countDocuments({ coverUrl: url, isDeleted: { $ne: true } }).exec(),
+    ])
+    const prefabCount = await VehicleModel.countDocuments({ prefabUrl: url }).exec()
+    return vehicleCount > 0 || productCount > 0 || prefabCount > 0
+  })
   ctx.status = 200
   ctx.body = {}
 }

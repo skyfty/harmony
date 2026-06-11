@@ -273,31 +273,43 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="file-upload-page">
-    <div class="page-toolbar">
-      <Space wrap>
-        <Input v-model:value="queryForm.keyword" allow-clear placeholder="按名称、文件名或上传者搜索" style="width: 280px" @press-enter="handleSearch" />
-        <Select v-model:value="queryForm.module" allow-clear placeholder="按模块筛选" style="width: 180px" :options="moduleOptions" />
-        <Button type="primary" @click="handleSearch">搜索</Button>
-        <Button @click="handleReset">重置</Button>
-      </Space>
-      <Button type="primary" @click="openUploadDialog">
-        <template #icon>
-          <UploadOutlined />
-        </template>
-        上传文件
-      </Button>
-    </div>
+  <div class="p-5">
+    <div class="file-upload-page">
+      <div class="page-card">
+        <div class="page-header">
+          <div class="page-heading">
+            <div class="page-title">文件管理</div>
+            <div class="page-description">统一查看、搜索和维护所有管理员上传的文件资源。</div>
+          </div>
+          <Button type="primary" @click="openUploadDialog">
+            <template #icon>
+              <UploadOutlined />
+            </template>
+            上传文件
+          </Button>
+        </div>
 
-    <Table
-      :columns="columns"
-      :data-source="dataSource"
-      :loading="loading"
-      :pagination="{ current: page, pageSize, total, showSizeChanger: true, showTotal: (value: number) => `共 ${value} 项` }"
-      row-key="id"
-      :scroll="{ x: 1200 }"
-      @change="handleTableChange"
-    />
+        <div class="page-toolbar">
+          <Space wrap>
+            <Input v-model:value="queryForm.keyword" allow-clear placeholder="按名称、文件名或上传者搜索" style="width: 280px" @press-enter="handleSearch" />
+            <Select v-model:value="queryForm.module" allow-clear placeholder="按模块筛选" style="width: 180px" :options="moduleOptions" />
+            <Button type="primary" @click="handleSearch">搜索</Button>
+            <Button @click="handleReset">重置</Button>
+          </Space>
+        </div>
+
+        <Table
+          class="page-table"
+          :columns="columns"
+          :data-source="dataSource"
+          :loading="loading"
+          :pagination="{ current: page, pageSize, total, showSizeChanger: true, showTotal: (value: number) => `共 ${value} 项` }"
+          row-key="id"
+          :scroll="{ x: 1200 }"
+          @change="handleTableChange"
+        />
+      </div>
+    </div>
 
     <Modal v-model:open="openUploadModal" title="上传文件" :confirm-loading="submitting" ok-text="上传" cancel-text="取消" @ok="submitUpload">
       <Form layout="vertical">
@@ -332,11 +344,54 @@ onMounted(() => {
   gap: 16px;
 }
 
+.page-card {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+}
+
+.page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.page-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.page-title {
+  font-size: 20px;
+  font-weight: 600;
+  color: rgba(15, 23, 42, 0.95);
+}
+
+.page-description {
+  font-size: 13px;
+  color: rgba(100, 116, 139, 0.96);
+}
+
 .page-toolbar {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
   flex-wrap: wrap;
+}
+
+.page-table :deep(.ant-table) {
+  border-radius: 12px;
+}
+
+.page-table :deep(.ant-table-thead > tr > th) {
+  background: #f8fafc;
 }
 </style>

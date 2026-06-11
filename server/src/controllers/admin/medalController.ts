@@ -3,6 +3,7 @@ import { Types } from 'mongoose'
 import { MedalModel } from '@/models/Medal'
 import { UserMedalModel } from '@/models/UserMedal'
 import { buildMedalStatusMapForUser } from '@/services/medalService'
+import { deleteFileUploadsByUrlsIfUnreferenced } from '@/services/resourceCleanupService'
 import type { MedalRule, MedalRuleCompleteType, MedalRuleScope, MedalRuleType } from '@/types/models'
 
 const MEDAL_RULE_TYPES: MedalRuleType[] = [
@@ -329,9 +330,16 @@ export async function updateMedal(ctx: Context): Promise<void> {
 export async function deleteMedal(ctx: Context): Promise<void> {
   const { id } = ctx.params
   if (!Types.ObjectId.isValid(id)) ctx.throw(400, 'Invalid id')
+  const current = await MedalModel.findById(id).lean().exec()
   await Promise.all([
     MedalModel.findByIdAndDelete(id).exec(),
     UserMedalModel.deleteMany({ medalId: new Types.ObjectId(id) }).exec(),
   ])
+  await deleteFileUploadsByUrlsIfUnreferenced([current?.lockedIconUrl, current?.unlockedIconUrl], async (url) => {
+    const referenceCount = await MedalModel.countDocuments({
+      $or: [{ lockedIconUrl: url }, { unlockedIconUrl: url }],
+    }).exec()
+    return referenceCount > 0
+  })
   ctx.body = {}
 }
