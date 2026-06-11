@@ -203,6 +203,7 @@ import ViewportToolbar from './ViewportToolbar.vue'
 import TransformToolbar from './TransformToolbar.vue'
 import PlaceholderOverlayList from './PlaceholderOverlayList.vue'
 import ViewportNorthCompass from './ViewportNorthCompass.vue'
+import FloatingPopover from '@/components/common/FloatingPopover.vue'
 import AssetPickerDialog from '@/components/common/AssetPickerDialog.vue'
 import CsmSunMenuContent from '@/components/editor/CsmSunMenuContent.vue'
 import {
@@ -5339,6 +5340,7 @@ type LandformContourVertexDragState = {
   pointerId: number
   nodeId: string
   vertexIndex: number
+  gizmoPart: any
   startX: number
   startY: number
   moved: boolean
@@ -5369,6 +5371,48 @@ type LandformCircleRadiusDragState = {
   basePoints: Array<[number, number]>
   workingPoints: Array<[number, number]>
 }
+
+type CoordinateEditorWallTarget = {
+  kind: 'wall-endpoint'
+  nodeId: string
+  chainStartIndex: number
+  chainEndIndex: number
+  endpointKind: 'start' | 'end'
+  gizmoPart: any
+  worldPoint: THREE.Vector3
+  dimensions: { height: number; width: number; thickness: number }
+  segmentsPayload: Array<{
+    start: { x: number; y: number; z: number }
+    end: { x: number; y: number; z: number }
+  }>
+}
+
+type CoordinateEditorFloorTarget = {
+  kind: 'floor-vertex'
+  nodeId: string
+  vertexIndex: number
+  gizmoPart: any
+  worldPoint: THREE.Vector3
+  workingDefinition: FloorDynamicMesh
+}
+
+type CoordinateEditorLandformTarget = {
+  kind: 'landform-vertex'
+  nodeId: string
+  vertexIndex: number
+  gizmoPart: any
+  worldPoint: THREE.Vector3
+  workingDefinition: LandformDynamicMesh
+}
+
+type CoordinateEditorTarget = CoordinateEditorWallTarget | CoordinateEditorFloorTarget | CoordinateEditorLandformTarget
+
+const coordinateEditorDraft = reactive({ x: 0, y: 0, z: 0 })
+const coordinateEditorOpen = ref(false)
+const coordinateEditorAnchorWorld = ref<THREE.Vector3 | null>(null)
+const coordinateEditorTarget = ref<CoordinateEditorTarget | null>(null)
+const coordinateEditorFocusedAxis = ref<'x' | 'y' | 'z'>('x')
+let coordinateEditorPreviousSelectionContext: string | null = null
 
 type RegionContourVertexDragState = {
   pointerId: number
@@ -7282,6 +7326,7 @@ function tryBeginLandformVertexDrag(event: PointerEvent): boolean {
     pointerId: event.pointerId,
     nodeId: selectedId,
     vertexIndex: hit.vertexIndex,
+    gizmoPart: hit.gizmoPart,
     startX: event.clientX,
     startY: event.clientY,
     moved: false,
@@ -7301,6 +7346,14 @@ function tryBeginLandformVertexDrag(event: PointerEvent): boolean {
   }
 
   setActiveLandformVertexHandle({ nodeId: selectedId, vertexIndex: hit.vertexIndex, gizmoPart: hit.gizmoPart })
+  setCoordinateEditorTarget({
+    kind: 'landform-vertex',
+    nodeId: selectedId,
+    vertexIndex: hit.vertexIndex,
+    gizmoPart: hit.gizmoPart,
+    worldPoint: startPointWorld.clone(),
+    workingDefinition: previewLandformContourNode(selectedId, basePoints) ?? (node.dynamicMesh as LandformDynamicMesh),
+  })
   pointerInteraction.capture(event.pointerId)
   return true
 }
@@ -15089,6 +15142,7 @@ function shouldSuppressSelectionOutlineDuringEditing(): boolean {
   return Boolean(
     transformControls?.dragging
     || sceneStore.activeTransformNodeId
+    || coordinateEditorOpen.value
     || roadVertexDragState
     || floorVertexDragState
     || floorThicknessDragState
@@ -15106,6 +15160,284 @@ function shouldSuppressSelectionOutlineDuringEditing(): boolean {
     || waterEdgeDragState
     || displayBoardCornerDragState
   )
+}
+
+function isCoordinateEditorAxisEditable(axis: 'x' | 'y' | 'z'): boolean {
+  const target = coordinateEditorTarget.value
+  if (!target) {
+    return false
+  }
+  if (target.kind === 'floor-vertex') {
+    return axis !== 'y'
+  }
+  return true
+}
+
+function syncCoordinateEditorDraftFromWorldPoint(point: THREE.Vector3) {
+  coordinateEditorDraft.x = point.x
+  coordinateEditorDraft.y = point.y
+  coordinateEditorDraft.z = point.z
+  coordinateEditorAnchorWorld.value = point.clone()
+}
+
+function projectCoordinateEditorAnchor(): { x: number; y: number } | null {
+  const anchorWorld = coordinateEditorAnchorWorld.value
+  if (!anchorWorld || !camera || !canvasRef.value) {
+    return null
+  }
+  const canvas = canvasRef.value
+  const rect = canvas.getBoundingClientRect()
+  if (rect.width <= 0 || rect.height <= 0) {
+    return null
+  }
+  const projected = anchorWorld.clone().project(camera)
+  const x = rect.left + ((projected.x + 1) * 0.5) * rect.width
+  const y = rect.top + ((1 - projected.y) * 0.5) * rect.height
+  return { x, y }
+}
+
+function refreshCoordinateEditorActiveHandle() {
+  const target = coordinateEditorTarget.value
+  if (!target) {
+    return
+  }
+  if (target.kind === 'wall-endpoint') {
+    setActiveWallEndpointHandle({
+      nodeId: target.nodeId,
+      chainStartIndex: target.chainStartIndex,
+      chainEndIndex: target.chainEndIndex,
+      handleKind: 'endpoint',
+      endpointKind: target.endpointKind,
+      gizmoPart: target.gizmoPart,
+    })
+    return
+  }
+  if (target.kind === 'floor-vertex') {
+    setActiveFloorVertexHandle({
+      nodeId: target.nodeId,
+      vertexIndex: target.vertexIndex,
+      gizmoPart: target.gizmoPart,
+    })
+    return
+  }
+  if (target.kind === 'landform-vertex') {
+    setActiveLandformVertexHandle({
+      nodeId: target.nodeId,
+      vertexIndex: target.vertexIndex,
+      gizmoPart: target.gizmoPart,
+    })
+  }
+}
+
+function clearCoordinateEditorActiveHandle() {
+  setActiveWallEndpointHandle(null)
+  setActiveFloorVertexHandle(null)
+  setActiveLandformVertexHandle(null)
+}
+
+function restoreCoordinateEditorSelectionContext() {
+  if (coordinateEditorPreviousSelectionContext !== null || uiStore.activeSelectionContext === 'coordinate-editor') {
+    uiStore.setActiveSelectionContext(coordinateEditorPreviousSelectionContext)
+  }
+  coordinateEditorPreviousSelectionContext = null
+}
+
+function closeCoordinateEditor(options?: { commit?: boolean; deferRestore?: boolean }) {
+  const shouldCommit = options?.commit !== false
+  if (!coordinateEditorTarget.value) {
+    coordinateEditorOpen.value = false
+    clearCoordinateEditorActiveHandle()
+    if (options?.deferRestore) {
+      queueMicrotask(() => restoreCoordinateEditorSelectionContext())
+    } else {
+      restoreCoordinateEditorSelectionContext()
+    }
+    return
+  }
+
+  if (shouldCommit) {
+    void commitCoordinateEditorDraft()
+  }
+
+  coordinateEditorOpen.value = false
+  clearCoordinateEditorActiveHandle()
+  if (options?.deferRestore) {
+    queueMicrotask(() => restoreCoordinateEditorSelectionContext())
+  } else {
+    restoreCoordinateEditorSelectionContext()
+  }
+}
+
+function openCoordinateEditor() {
+  const target = coordinateEditorTarget.value
+  if (!target) {
+    return false
+  }
+  if (coordinateEditorOpen.value) {
+    return true
+  }
+  coordinateEditorPreviousSelectionContext = uiStore.activeSelectionContext
+  uiStore.setActiveSelectionContext('coordinate-editor')
+  coordinateEditorOpen.value = true
+  syncCoordinateEditorDraftFromWorldPoint(target.worldPoint)
+  coordinateEditorFocusedAxis.value = 'x'
+  refreshCoordinateEditorActiveHandle()
+  return true
+}
+
+function setCoordinateEditorTarget(target: CoordinateEditorTarget | null) {
+  coordinateEditorTarget.value = target
+  if (!target) {
+    if (coordinateEditorOpen.value) {
+      closeCoordinateEditor({ commit: false })
+    } else {
+      clearCoordinateEditorActiveHandle()
+    }
+    return
+  }
+  syncCoordinateEditorDraftFromWorldPoint(target.worldPoint)
+  if (coordinateEditorOpen.value) {
+    refreshCoordinateEditorActiveHandle()
+  }
+}
+
+function stepCoordinateEditorAxis(axis: 'x' | 'y' | 'z', direction: 1 | -1, event?: KeyboardEvent) {
+  if (!coordinateEditorTarget.value || !isCoordinateEditorAxisEditable(axis)) {
+    return
+  }
+  const baseStep = event?.shiftKey ? 1 : event?.altKey ? 0.01 : 0.1
+  const multiplier = event?.ctrlKey || event?.metaKey ? 10 : 1
+  coordinateEditorDraft[axis] = Number(coordinateEditorDraft[axis]) + baseStep * multiplier * direction
+  void commitCoordinateEditorDraft({ keepOpen: true })
+}
+
+function handleCoordinateEditorKeydown(event: KeyboardEvent) {
+  if (!coordinateEditorOpen.value) {
+    return
+  }
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    event.stopPropagation()
+    closeCoordinateEditor({ commit: false })
+    return
+  }
+  if (event.key === 'Enter') {
+    event.preventDefault()
+    event.stopPropagation()
+    closeCoordinateEditor({ commit: true })
+    return
+  }
+  if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+    event.preventDefault()
+    event.stopPropagation()
+    const axis = coordinateEditorFocusedAxis.value
+    const direction = event.key === 'ArrowLeft' || event.key === 'ArrowDown' ? -1 : 1
+    stepCoordinateEditorAxis(axis, direction, event)
+  }
+}
+
+function handleCoordinateEditorAxisFocus(axis: 'x' | 'y' | 'z') {
+  coordinateEditorFocusedAxis.value = axis
+}
+
+function handleCoordinateEditorOutsideCancel() {
+  closeCoordinateEditor({ commit: true, deferRestore: true })
+}
+
+function updateCoordinateEditorDraftAxis(axis: 'x' | 'y' | 'z', value: unknown) {
+  const next = Number(value)
+  if (!Number.isFinite(next)) {
+    return
+  }
+  coordinateEditorDraft[axis] = next
+}
+
+async function commitCoordinateEditorDraft(options?: { keepOpen?: boolean }) {
+  const target = coordinateEditorTarget.value
+  if (!target) {
+    return false
+  }
+
+  const nextPoint = new THREE.Vector3(coordinateEditorDraft.x, coordinateEditorDraft.y, coordinateEditorDraft.z)
+
+  if (target.kind === 'wall-endpoint') {
+    const segmentsPayload = target.segmentsPayload.map((segment) => ({
+      start: { ...segment.start },
+      end: { ...segment.end },
+    }))
+    const segmentIndex = target.endpointKind === 'start' ? target.chainStartIndex : target.chainEndIndex
+    const segment = segmentsPayload[segmentIndex]
+    if (!segment) {
+      return false
+    }
+    if (target.endpointKind === 'start') {
+      segment.start = { x: nextPoint.x, y: nextPoint.y, z: nextPoint.z }
+    } else {
+      segment.end = { x: nextPoint.x, y: nextPoint.y, z: nextPoint.z }
+    }
+    sceneStore.updateWallNodeGeometry(target.nodeId, {
+      segments: segmentsPayload,
+      dimensions: target.dimensions,
+    })
+    ensureWallEndpointHandlesForSelectedNode({ force: true })
+    void nextTick(() => {
+      ensureWallEndpointHandlesForSelectedNode({ force: true })
+    })
+    coordinateEditorAnchorWorld.value = nextPoint.clone()
+    if (!options?.keepOpen) {
+      refreshCoordinateEditorActiveHandle()
+    }
+    return true
+  }
+
+  const runtimeObject = objectMap.get(target.nodeId) ?? null
+  if (!runtimeObject) {
+    return false
+  }
+  const localPoint = runtimeObject.worldToLocal(nextPoint.clone())
+
+  if (target.kind === 'floor-vertex') {
+    const nextDefinition = target.workingDefinition
+    const vertices = Array.isArray(nextDefinition.vertices) ? nextDefinition.vertices : []
+    if (!vertices[target.vertexIndex]) {
+      return false
+    }
+    vertices[target.vertexIndex] = [localPoint.x, localPoint.z]
+    sceneStore.updateNodeDynamicMesh(target.nodeId, nextDefinition)
+    ensureFloorVertexHandlesForSelectedNode()
+    void nextTick(() => {
+      ensureFloorVertexHandlesForSelectedNode()
+    })
+    coordinateEditorAnchorWorld.value = nextPoint.clone()
+    if (!options?.keepOpen) {
+      refreshCoordinateEditorActiveHandle()
+    }
+    return true
+  }
+
+  if (target.kind === 'landform-vertex') {
+    const nextDefinition = target.workingDefinition
+    const vertices = Array.isArray(nextDefinition.vertices) ? nextDefinition.vertices : []
+    if (!vertices[target.vertexIndex]) {
+      return false
+    }
+    vertices[target.vertexIndex] = [localPoint.x, localPoint.z]
+    const vertexHeights = Array.isArray(nextDefinition.vertexHeights) ? nextDefinition.vertexHeights : []
+    vertexHeights[target.vertexIndex] = localPoint.y
+    nextDefinition.vertexHeights = vertexHeights
+    sceneStore.updateNodeDynamicMesh(target.nodeId, nextDefinition)
+    ensureLandformVertexHandlesForSelectedNode({ force: true })
+    void nextTick(() => {
+      ensureLandformVertexHandlesForSelectedNode({ force: true })
+    })
+    coordinateEditorAnchorWorld.value = nextPoint.clone()
+    if (!options?.keepOpen) {
+      refreshCoordinateEditorActiveHandle()
+    }
+    return true
+  }
+
+  return false
 }
 
 function clearSelectionHighlights() {
@@ -16125,6 +16457,16 @@ function tryExitActiveNodeBuildToolEditMode(event?: MouseEvent | PointerEvent): 
 }
 
 async function handlePointerDown(event: PointerEvent) {
+  if (coordinateEditorOpen.value || uiStore.activeSelectionContext === 'coordinate-editor') {
+    if (coordinateEditorOpen.value) {
+      closeCoordinateEditor({ commit: true, deferRestore: true })
+    }
+    event.preventDefault()
+    event.stopPropagation()
+    event.stopImmediatePropagation()
+    return
+  }
+
   const applyPointerDownResult = (result: PointerDownResult) => {
     if (result.clearPointerTrackingState) {
       pointerTrackingState = null
@@ -16669,6 +17011,7 @@ async function handlePointerDown(event: PointerEvent) {
     pickWallEndpointHandleAtPointer,
 
     setActiveWallEndpointHandle,
+    setCoordinateEditorTarget,
     createEndpointDragPlane,
     raycastGroundPoint,
     raycastPlanePoint,
@@ -18767,9 +19110,26 @@ function handlePointerCancel(event: PointerEvent) {
 
   if (landformContourVertexDragState && event.pointerId === landformContourVertexDragState.pointerId) {
     const state = landformContourVertexDragState
+    const workingDefinition = previewLandformContourNode(state.nodeId, state.workingPoints)
     landformContourVertexDragState = null
     pointerInteraction.releaseIfCaptured(event.pointerId)
     setActiveLandformVertexHandle(null)
+    if (workingDefinition) {
+      setCoordinateEditorTarget({
+        kind: 'landform-vertex',
+        nodeId: state.nodeId,
+        vertexIndex: state.vertexIndex,
+        gizmoPart: state.gizmoPart,
+        worldPoint: state.runtimeObject.localToWorld(new THREE.Vector3(
+          state.workingPoints[state.vertexIndex]?.[0] ?? 0,
+          Array.isArray(workingDefinition.vertexHeights) && Number.isFinite(workingDefinition.vertexHeights[state.vertexIndex])
+            ? Number(workingDefinition.vertexHeights[state.vertexIndex])
+            : 0,
+          state.workingPoints[state.vertexIndex]?.[1] ?? 0,
+        )),
+        workingDefinition,
+      })
+    }
 
     try {
       sceneStore.restoreLandformSurfaceMeshRuntime(state.nodeId)
@@ -23064,6 +23424,7 @@ const VIEWPORT_OVERLAY_UI_SELECTORS = [
   '.transform-toolbar-host',
   '.viewport-toolbar',
   '.viewport-toolbar-host',
+  '.vertex-coordinate-editor',
   '.camera-status-hud__toolbar',
   '.camera-status-hud__icon-btn',
   '.camera-status-hud__help-btn',
@@ -23111,6 +23472,10 @@ function shouldHandleViewportShortcut(event: KeyboardEvent): boolean {
 function handleViewportShortcut(event: KeyboardEvent) {
   if (!shouldHandleViewportShortcut(event)) return
   let handled = false
+
+  if (!coordinateEditorOpen.value && event.code === 'Enter' && coordinateEditorTarget.value) {
+    handled = openCoordinateEditor()
+  }
 
   if (!event.ctrlKey && !event.metaKey && event.altKey && !event.shiftKey) {
     handled = handleDirectionalCameraShortcut(event.code)
@@ -23868,6 +24233,73 @@ defineExpose({
           @select-water-build-shape="handleSelectWaterBuildShape"
       />
     </div>
+    <FloatingPopover
+      v-model="coordinateEditorOpen"
+      :anchor="projectCoordinateEditorAnchor()"
+      :close-on-esc="false"
+      panel-class="vertex-coordinate-editor"
+      :width="340"
+      :max-width="380"
+      @cancel="handleCoordinateEditorOutsideCancel"
+    >
+      <template #header>
+        <div class="vertex-coordinate-editor__header">
+          <div>
+            <div class="vertex-coordinate-editor__title">
+              {{ coordinateEditorTarget?.kind === 'wall-endpoint' ? '墙体端点' : coordinateEditorTarget?.kind === 'floor-vertex' ? '地面顶点' : '地貌顶点' }}
+            </div>
+            <div class="vertex-coordinate-editor__subtitle">世界坐标精调</div>
+          </div>
+          <v-chip size="small" variant="tonal" color="primary">Enter 提交</v-chip>
+        </div>
+      </template>
+
+      <div class="vertex-coordinate-editor__surface" tabindex="0" @keydown="handleCoordinateEditorKeydown">
+        <div class="vertex-coordinate-editor__grid">
+          <v-text-field
+            :model-value="coordinateEditorDraft.x"
+            label="X"
+            type="number"
+            density="compact"
+            variant="underlined"
+            inputmode="decimal"
+            step="0.1"
+            @focus="handleCoordinateEditorAxisFocus('x')"
+            @update:modelValue="(value) => updateCoordinateEditorDraftAxis('x', value)"
+          />
+          <v-text-field
+            :model-value="coordinateEditorDraft.y"
+            label="Y"
+            type="number"
+            density="compact"
+            variant="underlined"
+            inputmode="decimal"
+            step="0.1"
+            :readonly="coordinateEditorTarget?.kind === 'floor-vertex'"
+            @focus="handleCoordinateEditorAxisFocus('y')"
+            @update:modelValue="(value) => updateCoordinateEditorDraftAxis('y', value)"
+          />
+          <v-text-field
+            :model-value="coordinateEditorDraft.z"
+            label="Z"
+            type="number"
+            density="compact"
+            variant="underlined"
+            inputmode="decimal"
+            step="0.1"
+            @focus="handleCoordinateEditorAxisFocus('z')"
+            @update:modelValue="(value) => updateCoordinateEditorDraftAxis('z', value)"
+          />
+        </div>
+
+        <p class="vertex-coordinate-editor__hint">
+          ←/→/↑/↓ 微调当前字段，Enter 提交，Esc 取消，点击空白区域提交并关闭。
+        </p>
+        <p v-if="coordinateEditorTarget?.kind === 'floor-vertex'" class="vertex-coordinate-editor__note">
+          地面顶点仅回写 X / Z，Y 仅作为当前世界高度显示。
+        </p>
+      </div>
+    </FloatingPopover>
     <div ref="gizmoContainerRef" class="viewport-gizmo-container"></div>
     <div ref="statsHostRef" class="stats-host" v-show="props.showStats"></div>
     <div
@@ -24739,6 +25171,57 @@ defineExpose({
   border-radius: 4px;
   text-transform: uppercase;
   pointer-events: none;
+}
+
+:deep(.vertex-coordinate-editor) {
+  background: rgba(12, 18, 26, 0.94);
+  border: 1px solid rgba(120, 200, 255, 0.22);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.42);
+  backdrop-filter: blur(18px);
+}
+
+.vertex-coordinate-editor__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.vertex-coordinate-editor__title {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: rgba(244, 248, 255, 0.98);
+}
+
+.vertex-coordinate-editor__subtitle {
+  margin-top: 2px;
+  font-size: 0.75rem;
+  color: rgba(158, 176, 198, 0.9);
+}
+
+.vertex-coordinate-editor__surface {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  outline: none;
+}
+
+.vertex-coordinate-editor__grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.vertex-coordinate-editor__hint,
+.vertex-coordinate-editor__note {
+  margin: 0;
+  font-size: 0.72rem;
+  line-height: 1.4;
+  color: rgba(170, 187, 207, 0.92);
+}
+
+.vertex-coordinate-editor__note {
+  color: rgba(134, 218, 255, 0.92);
 }
 
 </style>

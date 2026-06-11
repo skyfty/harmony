@@ -354,6 +354,7 @@ export function handlePointerDownTools(
     ) & {
       gizmoPart: any
     } | null) => void
+    setCoordinateEditorTarget?: (target: any | null) => void
 
     createEndpointDragPlane: (options: {
       mode: 'free' | 'axis'
@@ -946,6 +947,20 @@ export function handlePointerDownTools(
               endpointKind,
               gizmoPart: handleHit.gizmoPart,
             })
+            ctx.setCoordinateEditorTarget?.({
+              kind: 'wall-endpoint',
+              nodeId: handleHit.nodeId,
+              chainStartIndex,
+              chainEndIndex,
+              endpointKind,
+              gizmoPart: handleHit.gizmoPart,
+              worldPoint: endpointDragReferenceWorld.clone(),
+              dimensions,
+              segmentsPayload: workingSegmentsWorld.map((segment) => ({
+                start: { x: segment.start.x, y: segment.start.y, z: segment.start.z },
+                end: { x: segment.end.x, y: segment.end.y, z: segment.end.z },
+              })),
+            })
 
             return {
               handled: true,
@@ -1289,6 +1304,14 @@ export function handlePointerDownTools(
           }
 
           ctx.setActiveFloorVertexHandle({ nodeId: handleHit.nodeId, vertexIndex: handleHit.vertexIndex, gizmoPart: handleHit.gizmoPart })
+          ctx.setCoordinateEditorTarget?.({
+            kind: 'floor-vertex',
+            nodeId: handleHit.nodeId,
+            vertexIndex: handleHit.vertexIndex,
+            gizmoPart: handleHit.gizmoPart,
+            worldPoint: startPointWorld.clone(),
+            workingDefinition: floorVertexDragState.workingDefinition,
+          })
 
           return {
             handled: true,
