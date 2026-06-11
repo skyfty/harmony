@@ -1,10 +1,9 @@
-import path from 'node:path'
 import fs from 'fs-extra'
-import { nanoid } from 'nanoid'
 import { Types, type FilterQuery } from 'mongoose'
-import { appConfig } from '@/config/env'
+import { FileUploadModel } from '@/models/FileUpload'
 import { SceneModel } from '@/models/Scene'
 import type { SceneDocument } from '@/types/models'
+import { deleteStoredFile, resolveStorageAbsolutePath, storeUploadedFile, type UploadedFilePayload } from '@/services/uploadStorageService'
 import {
   decodeScenePackageSceneDocument,
   deserializeScenePackageManifest,
@@ -17,17 +16,10 @@ import {
   type SceneNodeComponentState,
 } from '@harmony/schema/core'
 
-const SCENE_STORAGE_PREFIX = 'scenes'
-
-export type UploadedFilePayload = {
-  filepath: string
-  originalFilename?: string | null
-  newFilename?: string | null
-  mimetype?: string | null
-  size?: number
-}
+export type { UploadedFilePayload } from '@/services/uploadStorageService'
 
 type StoredSceneFile = {
+  fileUploadId: Types.ObjectId
   fileKey: string
   fileUrl: string
   fileSize: number
@@ -64,11 +56,15 @@ export type SceneCreatePayload = {
   file: UploadedFilePayload
   publishedBy: string
   publishedByType: 'User' | 'Admin'
+  uploaderAdminId?: string | null
+  uploaderUsername?: string | null
 }
 
 export type SceneUpdatePayload = {
   name?: string
   file?: UploadedFilePayload | null
+  uploaderAdminId?: string | null
+  uploaderUsername?: string | null
 }
 
 type SceneDocLike = SceneDocument & { _id: Types.ObjectId }
@@ -115,28 +111,6 @@ function sanitizeString(value: unknown): string | null {
 
 function escapeRegex(input: string): string {
   return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
-
-function buildPublicUrl(fileKey: string): string {
-  const normalizedKey = fileKey.replace(/\\+/g, '/').replace(/^\/+/u, '')
-  const base = appConfig.assetPublicUrl.replace(/\/?$/, '')
-  return `${base}/${normalizedKey}`
-}
-
-async function ensureSceneStorageDir(): Promise<void> {
-  const root = path.resolve(appConfig.assetStoragePath)
-  const sceneDir = path.join(root, SCENE_STORAGE_PREFIX)
-  await fs.ensureDir(sceneDir)
-}
-
-function resolveAbsolutePath(fileKey: string): string {
-  const normalizedKey = fileKey.replace(/\\+/g, '/').replace(/^\/+/u, '')
-  const root = path.resolve(appConfig.assetStoragePath)
-  const absolute = path.resolve(root, normalizedKey)
-  if (!absolute.startsWith(root)) {
-    throw new Error('Invalid scene file key path')
-  }
-  return absolute
 }
 
 function asPlainRecord(value: unknown): Record<string, unknown> | null {
@@ -375,7 +349,7 @@ async function loadScenePackageMultiuserSummary(fileKey: string | null | undefin
     return null
   }
   try {
-    const sourcePath = resolveAbsolutePath(normalizedFileKey)
+    const sourcePath = resolveStorageAbsolutePath(normalizedFileKey)
     const exists = await fs.pathExists(sourcePath)
     if (!exists) {
       return null
@@ -441,39 +415,39 @@ async function parseScenePackageMetadataFromSceneFile(file: UploadedFilePayload)
   }
 }
 
-async function storeSceneFile(file: UploadedFilePayload): Promise<StoredSceneFile> {
-  const sourcePath = file.filepath
-  if (!sourcePath) {
-    throw new Error('Invalid upload payload')
-  }
-  await ensureSceneStorageDir()
-  const original = sanitizeString(file.originalFilename ?? file.newFilename)
-  const extension = original ? path.extname(original) : ''
-  const filename = `${nanoid(16)}${extension}`
-  const relativeKey = `${SCENE_STORAGE_PREFIX}/${filename}`
-  const targetPath = resolveAbsolutePath(relativeKey)
-  await fs.copy(sourcePath, targetPath)
-  await fs.remove(sourcePath).catch(() => undefined)
-  const fileSize = typeof file.size === 'number' ? file.size : await fs.stat(targetPath).then((stats) => stats.size)
+async function storeSceneFile(file: UploadedFilePayload, uploaderAdminId?: string | null, uploaderUsername?: string | null, label?: string | null): Promise<StoredSceneFile> {
+  const stored = await storeUploadedFile(file, 'scene')
+  const upload = await FileUploadModel.create({
+    module: 'scene',
+    label: label ?? stored.originalFilename,
+    fileKey: stored.fileKey,
+    url: stored.url,
+    originalFilename: stored.originalFilename,
+    mimeType: stored.mimeType,
+    size: stored.size,
+    uploaderAdminId: uploaderAdminId && Types.ObjectId.isValid(uploaderAdminId) ? new Types.ObjectId(uploaderAdminId) : null,
+    uploaderUsername: uploaderUsername ?? null,
+  })
   return {
-    fileKey: relativeKey,
-    fileUrl: buildPublicUrl(relativeKey),
-    fileSize,
-    fileType: sanitizeString(file.mimetype),
-    originalFilename: original,
+    fileUploadId: upload._id as Types.ObjectId,
+    fileKey: stored.fileKey,
+    fileUrl: stored.url,
+    fileSize: stored.size,
+    fileType: stored.mimeType,
+    originalFilename: stored.originalFilename,
   }
 }
 
-export async function deleteSceneFile(fileKey: string | null | undefined): Promise<void> {
-  if (!fileKey) {
+export async function deleteSceneFile(fileUploadIdOrKey: Types.ObjectId | string | null | undefined, fileKey?: string | null): Promise<void> {
+  const fileUploadId = typeof fileUploadIdOrKey === 'string' ? null : fileUploadIdOrKey
+  const resolvedFileKey = typeof fileUploadIdOrKey === 'string' ? fileUploadIdOrKey : fileKey
+  if (!fileUploadId && !resolvedFileKey) {
     return
   }
-  const absolute = resolveAbsolutePath(fileKey)
-  const exists = await fs.pathExists(absolute)
-  if (!exists) {
-    return
+  if (fileUploadId) {
+    await FileUploadModel.findByIdAndDelete(fileUploadId).exec().catch(() => undefined)
   }
-  await fs.remove(absolute).catch(() => undefined)
+  await deleteStoredFile(resolvedFileKey)
 }
 
 async function mapSceneDocument(scene: SceneDocLike): Promise<SceneData> {
@@ -561,10 +535,11 @@ export async function listScenes(query: SceneListQuery): Promise<{ data: SceneDa
 
 export async function createScene(payload: SceneCreatePayload): Promise<SceneData> {
   const packageMetadata = await parseScenePackageMetadataFromSceneFile(payload.file)
-  const stored = await storeSceneFile(payload.file)
+  const stored = await storeSceneFile(payload.file, payload.uploaderAdminId, payload.uploaderUsername, payload.name)
   try {
     const created = await SceneModel.create({
       name: payload.name,
+      fileUploadId: stored.fileUploadId,
       fileKey: stored.fileKey,
       fileUrl: stored.fileUrl,
       fileSize: stored.fileSize,
@@ -577,7 +552,7 @@ export async function createScene(payload: SceneCreatePayload): Promise<SceneDat
     })
     return await mapSceneDocument(created.toObject() as SceneDocLike)
   } catch (error) {
-    await deleteSceneFile(stored.fileKey)
+    await deleteSceneFile(stored.fileUploadId, stored.fileKey)
     throw error
   }
 }
@@ -591,13 +566,15 @@ export async function updateScene(id: string, payload: SceneUpdatePayload): Prom
   let newPackageMetadata: ParsedScenePackageMetadata | null = null
   if (payload.file) {
     newPackageMetadata = await parseScenePackageMetadataFromSceneFile(payload.file)
-    newFile = await storeSceneFile(payload.file)
+    newFile = await storeSceneFile(payload.file, payload.uploaderAdminId, payload.uploaderUsername, payload.name ?? scene.name)
   }
   const previousFileKey = scene.fileKey
+  const previousFileUploadId = scene.fileUploadId ?? null
   if (typeof payload.name === 'string' && payload.name.trim().length) {
     scene.name = payload.name.trim()
   }
   if (newFile) {
+    scene.fileUploadId = newFile.fileUploadId
     scene.fileKey = newFile.fileKey
     scene.fileUrl = newFile.fileUrl
     scene.fileSize = newFile.fileSize
@@ -610,12 +587,12 @@ export async function updateScene(id: string, payload: SceneUpdatePayload): Prom
     await scene.save()
   } catch (error) {
     if (newFile) {
-      await deleteSceneFile(newFile.fileKey)
+      await deleteSceneFile(newFile.fileUploadId, newFile.fileKey)
     }
     throw error
   }
-  if (newFile && previousFileKey !== newFile.fileKey) {
-    await deleteSceneFile(previousFileKey)
+  if (newFile && (previousFileKey !== newFile.fileKey || String(previousFileUploadId ?? '') !== String(newFile.fileUploadId ?? ''))) {
+    await deleteSceneFile(previousFileUploadId, previousFileKey)
   }
   return await mapSceneDocument(scene.toObject() as SceneDocLike)
 }
@@ -625,7 +602,7 @@ export async function deleteSceneById(id: string): Promise<boolean> {
   if (!deleted) {
     return false
   }
-  await deleteSceneFile(deleted.fileKey)
+  await deleteSceneFile((deleted as any).fileUploadId ?? null, deleted.fileKey)
   return true
 }
 
@@ -666,5 +643,5 @@ export function extractUploadedFile(files: Record<string, unknown> | undefined, 
 }
 
 export function resolveSceneFilePath(fileKey: string): string {
-  return resolveAbsolutePath(fileKey)
+  return resolveStorageAbsolutePath(fileKey)
 }

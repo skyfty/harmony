@@ -1,17 +1,13 @@
-import path from 'node:path'
 import fs from 'fs-extra'
-import { nanoid } from 'nanoid'
 import { Types } from 'mongoose'
+import { FileUploadModel } from '@/models/FileUpload'
 import { UserSceneModel } from '@/models/UserScene'
 import { SceneModel } from '@/models/Scene'
-import { appConfig } from '@/config/env'
-import type { UploadedFilePayload } from '@/services/sceneService'
+import { deleteStoredFile, resolveStorageAbsolutePath, storeUploadedFile, type UploadedFilePayload } from '@/services/uploadStorageService'
 import type { UserSceneBundleRecord, UserSceneSummary } from '@/types/userScene'
 import { decodeScenePackageSceneDocument, readBinaryFileFromScenePackage, unzipScenePackage } from '@harmony/schema/core'
 
-export type { UploadedFilePayload } from '@/services/sceneService'
-
-const USER_SCENE_BUNDLE_STORAGE_PREFIX = 'user-scenes'
+export type { UploadedFilePayload } from '@/services/uploadStorageService'
 
 export interface UserSceneQueryOptions {
   includeDeleted?: boolean
@@ -48,58 +44,13 @@ function buildDeletionFilter(options?: UserSceneQueryOptions): Record<string, un
   return { deletedAt: null }
 }
 
-function resolveAbsolutePath(fileKey: string): string {
-  const normalizedKey = fileKey.replace(/\\+/g, '/').replace(/^\/+/, '')
-  const root = path.resolve(appConfig.assetStoragePath)
-  const absolute = path.resolve(root, normalizedKey)
-  if (!absolute.startsWith(root)) {
-    throw new Error('Invalid bundle file key path')
-  }
-  return absolute
-}
-
 export function resolveUserSceneBundleFilePath(fileKey: string): string {
-  return resolveAbsolutePath(fileKey)
-}
-
-async function ensureBundleStorageDir(): Promise<void> {
-  const root = path.resolve(appConfig.assetStoragePath)
-  const dir = path.join(root, USER_SCENE_BUNDLE_STORAGE_PREFIX)
-  await fs.ensureDir(dir)
-}
-
-async function storeBundleFile(file: UploadedFilePayload): Promise<{
-  fileKey: string
-  fileSize: number
-  fileType: string | null
-  originalFilename: string | null
-}> {
-  const sourcePath = file.filepath
-  if (!sourcePath) {
-    throw new Error('Invalid upload payload')
-  }
-  await ensureBundleStorageDir()
-  const original = sanitizeString(file.originalFilename ?? file.newFilename) || null
-  const filename = `${nanoid(16)}.zip`
-  const relativeKey = `${USER_SCENE_BUNDLE_STORAGE_PREFIX}/${filename}`
-  const targetPath = resolveAbsolutePath(relativeKey)
-  await fs.copy(sourcePath, targetPath)
-  await fs.remove(sourcePath).catch(() => undefined)
-  const fileSize = typeof file.size === 'number' ? file.size : await fs.stat(targetPath).then((stats: { size: number }) => stats.size)
-  return {
-    fileKey: relativeKey,
-    fileSize,
-    fileType: sanitizeString(file.mimetype) || 'application/zip',
-    originalFilename: original,
-  }
+  return resolveStorageAbsolutePath(fileKey)
 }
 
 async function deleteBundleFile(fileKey: string | null | undefined): Promise<void> {
   if (!fileKey) return
-  const absolute = resolveAbsolutePath(fileKey)
-  const exists = await fs.pathExists(absolute)
-  if (!exists) return
-  await fs.remove(absolute).catch(() => undefined)
+  await deleteStoredFile(fileKey)
 }
 
 function parseSceneDocumentFromBundle(zipBytes: Uint8Array | ArrayBuffer, expectedSceneId: string): {
@@ -212,38 +163,65 @@ export async function saveUserSceneBundle(
   userId: string,
   sceneId: string,
   file: UploadedFilePayload,
+  uploaderAdminId?: string | null,
+  uploaderUsername?: string | null,
 ): Promise<UserSceneSummary> {
   const sourcePath = file.filepath
+  if (!sourcePath) {
+    throw new Error('Invalid upload payload')
+  }
   const zipBytes = await fs.readFile(sourcePath)
   const documentMeta = parseSceneDocumentFromBundle(zipBytes, sceneId)
-  const stored = await storeBundleFile(file)
-  const etag = `W/\"${stored.fileKey}-${stored.fileSize}\"`
+  const stored = await storeUploadedFile(file, 'user-scene-bundle')
+  const upload = await FileUploadModel.create({
+    module: 'user-scene-bundle',
+    label: documentMeta.name,
+    fileKey: stored.fileKey,
+    url: stored.url,
+    originalFilename: stored.originalFilename,
+    mimeType: stored.mimeType,
+    size: stored.size,
+    uploaderAdminId: uploaderAdminId && Types.ObjectId.isValid(uploaderAdminId) ? new Types.ObjectId(uploaderAdminId) : null,
+    uploaderUsername: uploaderUsername ?? null,
+  })
+  const etag = `W/"${stored.fileKey}-${stored.size}"`
 
   const existing = await UserSceneModel.findOne({ userId, sceneId }).lean()
   const previousFileKey = existing ? String((existing as any).bundleFileKey ?? '') : null
+  const previousBundleUploadId = existing ? (existing as any).bundleUploadId ?? null : null
 
-  await UserSceneModel.findOneAndUpdate(
-    { userId, sceneId },
-    {
-      userId,
-      sceneId,
-      projectId: documentMeta.projectId,
-      name: documentMeta.name,
-      thumbnail: documentMeta.thumbnail,
-      sceneCreatedAt: new Date(documentMeta.createdAt),
-      sceneUpdatedAt: new Date(documentMeta.updatedAt),
+  try {
+    await UserSceneModel.findOneAndUpdate(
+      { userId, sceneId },
+      {
+        userId,
+        sceneId,
+        projectId: documentMeta.projectId,
+        name: documentMeta.name,
+        thumbnail: documentMeta.thumbnail,
+        sceneCreatedAt: new Date(documentMeta.createdAt),
+        sceneUpdatedAt: new Date(documentMeta.updatedAt),
 
-      bundleFileKey: stored.fileKey,
-      bundleFileSize: stored.fileSize,
-      bundleFileType: stored.fileType,
-      bundleOriginalFilename: stored.originalFilename,
-      bundleEtag: etag,
-    },
-    { upsert: true, new: true, setDefaultsOnInsert: true },
-  )
+        bundleUploadId: upload._id,
+        bundleFileKey: stored.fileKey,
+        bundleFileSize: stored.size,
+        bundleFileType: stored.mimeType,
+        bundleOriginalFilename: stored.originalFilename,
+        bundleEtag: etag,
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true },
+    )
+  } catch (error) {
+    await FileUploadModel.findByIdAndDelete(upload._id).exec().catch(() => undefined)
+    await deleteStoredFile(stored.fileKey)
+    throw error
+  }
 
   if (previousFileKey && previousFileKey !== stored.fileKey) {
     await deleteBundleFile(previousFileKey)
+  }
+  if (previousBundleUploadId && String(previousBundleUploadId) !== String(upload._id)) {
+    await FileUploadModel.findByIdAndDelete(previousBundleUploadId).exec().catch(() => undefined)
   }
 
   const checkpointMap = await loadSceneCheckpointTotalMap([sceneId])
@@ -258,7 +236,7 @@ export async function saveUserSceneBundle(
     updatedAt: documentMeta.updatedAt,
     bundle: {
       url: buildBundleApiUrl(sceneId),
-      size: stored.fileSize,
+      size: stored.size,
       etag,
       updatedAt: documentMeta.updatedAt,
     },
@@ -268,6 +246,7 @@ export async function saveUserSceneBundle(
 export async function deleteUserScene(userId: string, sceneId: string): Promise<boolean> {
   const record = await UserSceneModel.findOneAndDelete({ userId, sceneId }).lean()
   if (record) {
+    await FileUploadModel.findByIdAndDelete((record as any).bundleUploadId ?? null).exec().catch(() => undefined)
     await deleteBundleFile(String((record as any).bundleFileKey ?? ''))
     return true
   }
@@ -287,7 +266,12 @@ export async function deleteUserScenesBulk(
   const notFoundIds = ids.filter((id) => !existingIds.has(id))
   try {
     await UserSceneModel.deleteMany({ userId, sceneId: { $in: ids } })
-    await Promise.all(existing.map((entry: unknown) => deleteBundleFile(String((entry as any).bundleFileKey ?? ''))))
+    await Promise.all(
+      existing.flatMap((entry: unknown) => [
+        FileUploadModel.findByIdAndDelete((entry as any).bundleUploadId ?? null).exec().catch(() => undefined),
+        deleteBundleFile(String((entry as any).bundleFileKey ?? '')),
+      ]),
+    )
     return { deletedIds: ids.filter((id) => existingIds.has(id)), notFoundIds, failedIds: [] }
   } catch {
     return { deletedIds: [], notFoundIds, failedIds: ids }

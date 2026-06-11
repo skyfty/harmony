@@ -99,6 +99,8 @@ export async function createScene(ctx: Context): Promise<void> {
     file: filePayload,
     publishedBy: publisher.id,
     publishedByType: publisher.type,
+    uploaderAdminId: ctx.state.adminAuthUser?.id ?? null,
+    uploaderUsername: ctx.state.adminAuthUser?.username ?? null,
   })
 
   ctx.status = 201
@@ -127,6 +129,8 @@ export async function updateScene(ctx: Context): Promise<void> {
   const updated = await updateSceneService(id, {
     name,
     file: filePayload,
+    uploaderAdminId: ctx.state.adminAuthUser?.id ?? null,
+    uploaderUsername: ctx.state.adminAuthUser?.username ?? null,
   })
   if (!updated) {
     ctx.throw(404, 'Scene not found')

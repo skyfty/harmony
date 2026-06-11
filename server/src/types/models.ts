@@ -716,6 +716,8 @@ export interface UserSceneDocument extends Document<Types.ObjectId> {
   /** 中文：删除时间（可选） */
   deletedAt?: Date | null
 
+  /** 中文：统一上传资源 ID（可选） */
+  bundleUploadId?: Types.ObjectId | null
   /** 中文：bundle 文件存储 key */
   bundleFileKey: string
   /** 中文：bundle 文件大小（字节） */
@@ -908,6 +910,7 @@ export interface AssetDocument extends Document<Types.ObjectId> {
  */
 export interface SceneDocument extends Document<Types.ObjectId> {
   name: string
+  fileUploadId?: Types.ObjectId | null
   fileKey: string
   fileUrl: string
   fileSize: number

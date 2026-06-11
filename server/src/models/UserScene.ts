@@ -13,6 +13,7 @@ const userSceneSchema = new Schema<UserSceneDocument>(
     isDeleted: { type: Boolean, default: false, index: true },
     deletedAt: { type: Date, default: null },
 
+    bundleUploadId: { type: Schema.Types.ObjectId, ref: 'FileUpload', default: null, index: true },
     bundleFileKey: { type: String, required: true },
     bundleFileSize: { type: Number, required: true },
     bundleFileType: { type: String, default: 'application/zip' },

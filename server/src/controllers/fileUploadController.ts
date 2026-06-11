@@ -1,10 +1,9 @@
 import type { Context } from 'koa'
-import path from 'node:path'
-import fs from 'fs-extra'
-import { nanoid } from 'nanoid'
 import { Types } from 'mongoose'
-import { appConfig } from '@/config/env'
 import { FileUploadModel } from '@/models/FileUpload'
+import { SceneModel } from '@/models/Scene'
+import { UserSceneModel } from '@/models/UserScene'
+import { deleteStoredFile, normalizeModuleName, storeUploadedFile } from '@/services/uploadStorageService'
 
 type RequestFilesMap = Record<string, unknown> | undefined
 
@@ -36,15 +35,6 @@ function normalizeString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
 }
 
-function normalizeModuleName(value: unknown): string {
-  const fallback = 'general'
-  const input = normalizeString(value)
-  if (!input) {
-    return fallback
-  }
-  return input.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '') || fallback
-}
-
 function sanitizeUploadedFilePayload(value: unknown): UploadedFilePayload | null {
   if (!value || typeof value !== 'object') {
     return null
@@ -70,42 +60,6 @@ function extractUploadedFile(files: RequestFilesMap, field: string): UploadedFil
   const raw = files[field]
   const first = Array.isArray(raw) ? raw[0] : raw
   return sanitizeUploadedFilePayload(first)
-}
-
-function normalizeFileKey(input: string): string {
-  return input.replace(/\\+/g, '/').replace(/^\/+/, '')
-}
-
-function buildPublicUrl(fileKey: string): string {
-  const base = appConfig.assetPublicUrl.replace(/\/?$/, '')
-  return `${base}/${normalizeFileKey(fileKey)}`
-}
-
-function resolveStorageAbsolutePath(fileKey: string): string {
-  const root = path.resolve(appConfig.assetStoragePath)
-  const absolutePath = path.resolve(root, normalizeFileKey(fileKey))
-  if (!absolutePath.startsWith(root)) {
-    throw new Error('Invalid file path')
-  }
-  return absolutePath
-}
-
-async function ensureModuleStorageDir(moduleName: string): Promise<void> {
-  const root = path.resolve(appConfig.assetStoragePath)
-  await fs.ensureDir(path.join(root, 'file-uploads', moduleName))
-}
-
-async function storeFileUpload(file: UploadedFilePayload, moduleName: string): Promise<{ fileKey: string; url: string }> {
-  if (!file.filepath) {
-    throw new Error('Invalid upload payload')
-  }
-  await ensureModuleStorageDir(moduleName)
-  const extension = typeof file.originalFilename === 'string' ? path.extname(file.originalFilename) : ''
-  const fileKey = `file-uploads/${moduleName}/${Date.now()}-${nanoid(12)}${extension}`
-  const targetPath = resolveStorageAbsolutePath(fileKey)
-  await fs.copy(file.filepath, targetPath)
-  await fs.remove(file.filepath).catch(() => undefined)
-  return { fileKey, url: buildPublicUrl(fileKey) }
 }
 
 function getUploadFileLabel(file: UploadedFilePayload): string {
@@ -195,7 +149,7 @@ export async function uploadFile(ctx: Context): Promise<void> {
   let storedFile: { fileKey: string; url: string } | null = null
 
   try {
-    storedFile = await storeFileUpload(file, moduleName)
+    storedFile = await storeUploadedFile(file, moduleName)
     const snapshot = toUploaderSnapshot(ctx)
     const upload = await FileUploadModel.create({
       module: moduleName,
@@ -210,10 +164,7 @@ export async function uploadFile(ctx: Context): Promise<void> {
     ctx.body = toUploadDto(upload)
   } catch (error) {
     if (storedFile) {
-      await fs.remove(resolveStorageAbsolutePath(storedFile.fileKey)).catch(() => undefined)
-    }
-    if (file.filepath) {
-     await fs.remove(file.filepath).catch(() => undefined)
+      await deleteStoredFile(storedFile.fileKey).catch(() => undefined)
     }
     ctx.throw(400, error instanceof Error ? error.message : 'Upload failed')
   }
@@ -228,7 +179,18 @@ export async function deleteFileUpload(ctx: Context): Promise<void> {
   if (!upload) {
     ctx.throw(404, 'Upload not found')
   }
-  await fs.remove(resolveStorageAbsolutePath(String(upload.fileKey))).catch(() => undefined)
+  const [sceneCount, bundleCount] = await Promise.all([
+    SceneModel.countDocuments({ fileUploadId: upload._id }).exec(),
+    UserSceneModel.countDocuments({ bundleUploadId: upload._id }).exec(),
+  ])
+  const [legacySceneCount, legacyBundleCount] = await Promise.all([
+    SceneModel.countDocuments({ fileKey: String(upload.fileKey) }).exec(),
+    UserSceneModel.countDocuments({ bundleFileKey: String(upload.fileKey) }).exec(),
+  ])
+  if (sceneCount > 0 || bundleCount > 0 || legacySceneCount > 0 || legacyBundleCount > 0) {
+    ctx.throw(409, 'Upload is still referenced by business records')
+  }
+  await deleteStoredFile(String(upload.fileKey)).catch(() => undefined)
   await FileUploadModel.findByIdAndDelete(id).exec()
   ctx.body = { success: true }
 }

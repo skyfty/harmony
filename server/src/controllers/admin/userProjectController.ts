@@ -299,7 +299,7 @@ export async function uploadProjectSceneBundle(ctx: Context): Promise<void> {
     ctx.throw(400, 'Scene bundle file is required')
   }
 
-  const stored = await saveUserSceneBundle(userId, sceneId, file as UploadedFilePayload)
+  const stored = await saveUserSceneBundle(userId, sceneId, file as UploadedFilePayload, ctx.state.adminAuthUser?.id ?? null, ctx.state.adminAuthUser?.username ?? null)
   if (stored.projectId !== projectId) {
     await deleteUserScene(userId, sceneId)
     ctx.throw(409, 'Scene bundle projectId mismatch')

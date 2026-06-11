@@ -4,6 +4,7 @@ import type { SceneDocument } from '@/types/models'
 const sceneSchema = new Schema<SceneDocument>(
   {
     name: { type: String, required: true, trim: true },
+    fileUploadId: { type: Schema.Types.ObjectId, ref: 'FileUpload', default: null, index: true },
     fileKey: { type: String, required: true },
     fileUrl: { type: String, required: true },
     fileSize: { type: Number, required: true, min: 0, default: 0 },
