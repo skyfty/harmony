@@ -18481,7 +18481,7 @@ async function handlePointerUp(event: PointerEvent) {
       event.pointerType === 'mouse' &&
       isPointerUpOnCanvas
     ) {
-      placementPreviewYaw += RIGHT_CLICK_ROTATION_STEP
+      placementPreviewYaw += event.shiftKey ? -RIGHT_CLICK_ROTATION_STEP : RIGHT_CLICK_ROTATION_STEP
       dragPreviewGroup.rotation.y = placementPreviewYaw
       dragPreviewGroup.updateMatrixWorld(true)
 
