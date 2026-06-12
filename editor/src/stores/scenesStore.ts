@@ -94,6 +94,34 @@ function normalizeSceneId(value: string | null | undefined): string | null {
   return normalized.length ? normalized : null
 }
 
+function toRemoteSceneSummary(entry: UserSceneBundleSummaryDto): SceneSummary {
+  return {
+    id: entry.id,
+    name: entry.name,
+    projectId: entry.projectId,
+    thumbnail: entry.thumbnail,
+    createdAt: entry.createdAt,
+    updatedAt: entry.updatedAt,
+    bundleEtag: entry.bundle.etag ?? null,
+  }
+}
+
+function resolvePreferredRemoteSceneId(
+  remoteScenes: UserSceneBundleSummaryDto[],
+  requestedSceneId: string | null | undefined,
+  lastEditedSceneId: string | null | undefined,
+): string | null {
+  const remoteSceneIds = new Set(remoteScenes.map((entry) => entry.id))
+  const candidates = [requestedSceneId, lastEditedSceneId, remoteScenes[0]?.id ?? null]
+  for (const candidate of candidates) {
+    const normalized = normalizeSceneId(candidate)
+    if (normalized && remoteSceneIds.has(normalized)) {
+      return normalized
+    }
+  }
+  return null
+}
+
 async function readResponseErrorMessage(response: Response): Promise<string | null> {
   const contentType = response.headers.get('content-type') ?? ''
   if (contentType.includes('application/json')) {
@@ -926,10 +954,10 @@ async function unpackSceneBundleIntoStores(
   }
 }
 
-async function uploadSceneToServer(document: StoredSceneDocument, authStore: ReturnType<typeof useAuthStore>): Promise<void> {
+async function uploadSceneToServer(document: StoredSceneDocument, authStore: ReturnType<typeof useAuthStore>): Promise<string | null> {
   const authorization = authStore.authorizationHeader
   if (!authorization) {
-    return
+    return null
   }
 
   const bundleUrl = buildServerApiUrl(`${USER_SCENE_API_PREFIX}/${encodeURIComponent(document.id)}/bundle`)
@@ -963,6 +991,11 @@ async function uploadSceneToServer(document: StoredSceneDocument, authStore: Ret
     const detail = serverMessage ? `: ${serverMessage}` : ''
     throw new Error(`Failed to upload scene bundle (${response.status})${detail}`)
   }
+  const payload = await response.json().catch(() => null)
+  if (payload == null || typeof payload !== 'object') {
+    return null
+  }
+  return payload.data.scene.bundle.etag;
 }
 
 async function removeSceneFromServer(sceneId: string, authStore: ReturnType<typeof useAuthStore>): Promise<void> {
@@ -1088,7 +1121,7 @@ async function readSceneDocument(
   return stripGroundHeightMapsFromSceneDocument(result)
 }
 
-function toMetadata(document: StoredSceneDocument): SceneSummary {
+function toMetadata(document: StoredSceneDocument, previous?: SceneSummary | null): SceneSummary {
   return {
     id: document.id,
     name: document.name,
@@ -1096,6 +1129,7 @@ function toMetadata(document: StoredSceneDocument): SceneSummary {
     thumbnail: document.thumbnail ?? null,
     createdAt: document.createdAt,
     updatedAt: document.updatedAt,
+    bundleEtag: previous?.bundleEtag ?? null,
   }
 }
 
@@ -1445,35 +1479,6 @@ export const useScenesStore = defineStore('scenes', {
         console.error('[ScenesStore] refreshMetadata failed', error)
       }
     },
-    async refreshUserWorkspaceMetadataFromServer() {
-      if (this.workspaceType !== 'user') {
-        await this.refreshMetadata()
-        return
-      }
-
-      const authStore = useAuthStore()
-      try {
-        const remoteScenes = await fetchUserScenesFromServer(authStore, this.workspaceId)
-        if (!remoteScenes) {
-          return
-        }
-        const metadata = remoteScenes.map((entry) => ({
-          id: entry.id,
-          name: entry.name,
-          projectId: entry.projectId,
-          thumbnail: entry.thumbnail,
-          createdAt: entry.createdAt,
-          updatedAt: entry.updatedAt,
-          bundleEtag: entry.bundle.etag ?? null,
-        }))
-        await writeSceneMetadataSummaries(this.workspaceId, metadata)
-        this.replaceMetadata(metadata)
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'Failed to refresh scenes from server'
-        this.error = message
-        console.error('[ScenesStore] refreshUserWorkspaceMetadataFromServer failed', error)
-      }
-    },
     upsertMetadata(entry: SceneSummary) {
       const next = [...this.metadata]
       const existingIndex = next.findIndex((item) => item.id === entry.id)
@@ -1527,8 +1532,10 @@ export const useScenesStore = defineStore('scenes', {
         options.terrainDatasetRegionPacks ?? {},
       )
       const nextMetadata = [...this.metadata]
+      const metadataById = new Map(nextMetadata.map((entry) => [entry.id, entry] as const))
       for (const doc of documents) {
-        const nextEntry = toMetadata(doc)
+        const nextEntry = toMetadata(doc, metadataById.get(doc.id) ?? null)
+        metadataById.set(nextEntry.id, nextEntry)
         const existingIndex = nextMetadata.findIndex((item) => item.id === nextEntry.id)
         if (existingIndex === -1) {
           nextMetadata.push(nextEntry)
@@ -1536,6 +1543,7 @@ export const useScenesStore = defineStore('scenes', {
           nextMetadata.splice(existingIndex, 1, nextEntry)
         }
       }
+      await writeSceneMetadataSummaries(this.workspaceId, nextMetadata)
       this.replaceMetadata(nextMetadata)
       if (this.workspaceType === 'user') {
         for (const doc of documents) {
@@ -1583,27 +1591,6 @@ export const useScenesStore = defineStore('scenes', {
     },
     async loadGroundScatterSidecar(sceneId: string): Promise<ArrayBuffer | null> {
       return await readSceneGroundScatterSidecar(this.workspaceId, sceneId)
-    },
-    async loadGroundChunkManifest(_sceneId: string): Promise<null> {
-      return null
-    },
-    async saveGroundChunkManifest(
-      _sceneId: string,
-      _manifest: unknown,
-      _options: { syncServer?: boolean } = {},
-    ): Promise<void> {
-      return
-    },
-    async loadGroundChunkData(_sceneId: string, _chunkKey: string): Promise<null> {
-      return null
-    },
-    async saveGroundChunkData(
-      _sceneId: string,
-      _chunkKey: string,
-      _data: ArrayBuffer | null,
-      _options: { syncServer?: boolean } = {},
-    ): Promise<void> {
-      return
     },
     async loadTerrainDatasetManifest(sceneId: string): Promise<QuantizedTerrainDatasetRootManifest | null> {
       return await readSceneTerrainDatasetManifest(this.workspaceId, sceneId)
@@ -1764,69 +1751,53 @@ export const useScenesStore = defineStore('scenes', {
         if (!remoteScenes) {
           return
         }
-        const remoteMetadata = remoteScenes.map((entry) => ({
-          id: entry.id,
-          name: entry.name,
-          projectId: entry.projectId,
-          thumbnail: entry.thumbnail,
-          createdAt: entry.createdAt,
-          updatedAt: entry.updatedAt,
-          bundleEtag: entry.bundle.etag ?? null,
-        }))
-        const localMetadataById = new Map(this.metadata.map((entry) => [entry.id, entry]))
         const project = await projectsStore.loadProjectDocument(options.projectId)
-        const remoteSceneIdSet = new Set(remoteScenes.map((entry) => entry.id))
-        const preferredSceneId = (() => {
-          const explicitSceneId = normalizeSceneId(options.sceneId)
-          if (explicitSceneId && remoteSceneIdSet.has(explicitSceneId)) {
-            return explicitSceneId
-          }
-          const projectSceneId = normalizeSceneId(project?.lastEditedSceneId)
-          if (projectSceneId && remoteSceneIdSet.has(projectSceneId)) {
-            return projectSceneId
-          }
-          return remoteScenes[0]?.id ?? null
-        })()
+        const remoteMetadata = remoteScenes.map(toRemoteSceneSummary)
+        const preferredSceneId = resolvePreferredRemoteSceneId(
+          remoteScenes,
+          options.sceneId,
+          project?.lastEditedSceneId,
+        )
+        const targetEntry = preferredSceneId
+          ? remoteScenes.find((entry) => entry.id === preferredSceneId) ?? null
+          : null
 
-        if (preferredSceneId) {
-          const targetEntry = remoteScenes.find((entry) => entry.id === preferredSceneId) ?? null
-          if (targetEntry) {
-            const localEtag = localMetadataById.get(preferredSceneId)?.bundleEtag ?? null
-            let bundle = await downloadSceneBundleZip(targetEntry.bundle.url, authStore, { etag: localEtag })
-            let bundleEtag = bundle?.etag ?? targetEntry.bundle.etag ?? null
-            if (!bundle) {
-              const localBundle = await readSceneBundleFromWorkspace(this.workspaceId, preferredSceneId)
-              if (localBundle) {
-                bundle = null
-              } else {
-                bundle = await downloadSceneBundleZip(targetEntry.bundle.url, authStore)
-                bundleEtag = bundle?.etag ?? targetEntry.bundle.etag ?? null
-              }
+        if (targetEntry) {
+          const sceneId = targetEntry.id
+          const localEtag = this.metadata.find((entry) => entry.id === sceneId)?.bundleEtag ?? null
+          let bundle = await downloadSceneBundleZip(targetEntry.bundle.url, authStore, { etag: localEtag })
+          let bundleEtag = bundle?.etag ?? targetEntry.bundle.etag ?? null
+
+          if (!bundle) {
+            const localBundle = await readSceneBundleFromWorkspace(this.workspaceId, sceneId)
+            if (!localBundle) {
+              bundle = await downloadSceneBundleZip(targetEntry.bundle.url, authStore)
+              bundleEtag = bundle?.etag ?? targetEntry.bundle.etag ?? null
             }
-            if (bundle) {
-              const downloaded = await unpackSceneBundleIntoStores(bundle.bytes, { allowLandformNodes: true })
-              await writeSceneDocuments(
-                this.workspaceId,
-                [downloaded.document],
-                { [downloaded.document.id]: downloaded.groundHeightSidecar ?? null },
-                { [downloaded.document.id]: downloaded.groundSplatSidecar ?? null },
-                { [downloaded.document.id]: downloaded.groundScatterSidecar ?? null },
-                { [downloaded.document.id]: downloaded.terrainDatasetManifest ?? null },
-                { [downloaded.document.id]: downloaded.terrainDatasetRegionPacks ?? {} },
-              )
-              remoteMetadata.splice(
-                remoteMetadata.findIndex((entry) => entry.id === downloaded.document.id),
-                1,
-                {
-                  id: downloaded.document.id,
-                  name: downloaded.document.name,
-                  projectId: downloaded.document.projectId,
-                  thumbnail: downloaded.document.thumbnail ?? null,
-                  createdAt: downloaded.document.createdAt,
-                  updatedAt: downloaded.document.updatedAt,
-                  bundleEtag,
-                },
-              )
+          }
+
+          if (bundle) {
+            const downloaded = await unpackSceneBundleIntoStores(bundle.bytes, { allowLandformNodes: true })
+            await writeSceneDocuments(
+              this.workspaceId,
+              [downloaded.document],
+              { [downloaded.document.id]: downloaded.groundHeightSidecar ?? null },
+              { [downloaded.document.id]: downloaded.groundSplatSidecar ?? null },
+              { [downloaded.document.id]: downloaded.groundScatterSidecar ?? null },
+              { [downloaded.document.id]: downloaded.terrainDatasetManifest ?? null },
+              { [downloaded.document.id]: downloaded.terrainDatasetRegionPacks ?? {} },
+            )
+            const remoteIndex = remoteMetadata.findIndex((entry) => entry.id === downloaded.document.id)
+            if (remoteIndex !== -1) {
+              remoteMetadata.splice(remoteIndex, 1, {
+                id: downloaded.document.id,
+                name: downloaded.document.name,
+                projectId: downloaded.document.projectId,
+                thumbnail: downloaded.document.thumbnail ?? null,
+                createdAt: downloaded.document.createdAt,
+                updatedAt: downloaded.document.updatedAt,
+                bundleEtag,
+              })
             }
           }
         }
@@ -1843,7 +1814,24 @@ export const useScenesStore = defineStore('scenes', {
       }
       const authStore = useAuthStore()
       try {
-        await uploadSceneToServer(document, authStore)
+        const bundleEtag = await uploadSceneToServer(document, authStore)
+        if (bundleEtag) {
+          const nextMetadata = [...this.metadata]
+          const existingEntry = nextMetadata.find((entry) => entry.id === document.id) ?? null
+          const baseEntry = existingEntry ?? toMetadata(document)
+          const nextEntry: SceneSummary = {
+            ...baseEntry,
+            bundleEtag,
+          }
+          const existingIndex = nextMetadata.findIndex((entry) => entry.id === document.id)
+          if (existingIndex === -1) {
+            nextMetadata.push(nextEntry)
+          } else {
+            nextMetadata.splice(existingIndex, 1, nextEntry)
+          }
+          await writeSceneMetadataSummaries(this.workspaceId, [nextEntry])
+          this.replaceMetadata(nextMetadata)
+        }
       } catch (error) {
         console.warn('[ScenesStore] syncSceneToServer failed', error)
       }
