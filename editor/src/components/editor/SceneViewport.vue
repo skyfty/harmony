@@ -1471,7 +1471,7 @@ function applyNodeMaterialOverrides(targetObject: THREE.Object3D, node: SceneNod
   if (node.materials && node.materials.length) {
     applyMaterialOverrides(targetObject, node.materials, materialOverrideOptions)
   } else {
-    resetMaterialOverrides(targetObject)
+    // resetMaterialOverrides(targetObject)
   }
 }
 

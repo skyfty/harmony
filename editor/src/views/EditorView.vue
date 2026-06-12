@@ -1960,10 +1960,18 @@ function handleSceneManagerCreateRequest() {
 }
 
 async function handleSelectScene(sceneId: string) {
+  const activeProjectId = projectsStore.activeProjectId
   if (sceneId !== sceneStore.currentSceneId) {
     const saved = await saveCurrentSceneWithOptions({ broadcastPreview: false })
     if (!saved) {
       return
+    }
+    if (activeProjectId) {
+      await scenesStore.syncUserWorkspaceFromServer({
+        replace: false,
+        projectId: activeProjectId,
+        sceneId,
+      })
     }
   }
   const changed = await sceneStore.selectScene(sceneId)

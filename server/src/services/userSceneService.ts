@@ -12,6 +12,7 @@ export type { UploadedFilePayload } from '@/services/uploadStorageService'
 export interface UserSceneQueryOptions {
   includeDeleted?: boolean
   deletedOnly?: boolean
+  projectId: string
 }
 
 function sanitizeString(value: unknown): string {
@@ -115,7 +116,12 @@ async function loadSceneCheckpointTotalMap(sceneIds: string[]): Promise<Map<stri
 }
 
 export async function listUserScenes(userId: string, options?: UserSceneQueryOptions): Promise<UserSceneSummary[]> {
-  const records = await UserSceneModel.find({ userId, ...buildDeletionFilter(options) }).sort({ sceneUpdatedAt: -1 }).lean()
+  const projectId = sanitizeString(options?.projectId)
+  const query: Record<string, unknown> = { userId, ...buildDeletionFilter(options) }
+  if (projectId) {
+    query.projectId = projectId
+  }
+  const records = await UserSceneModel.find(query).sort({ sceneUpdatedAt: -1 }).lean()
   const sceneIds = (records as any[]).map((entry) => String(entry.sceneId ?? '')).filter(Boolean)
   const checkpointMap = await loadSceneCheckpointTotalMap(sceneIds)
   return (records as any[]).map((entry) => {

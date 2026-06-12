@@ -7,6 +7,7 @@ import { toRaw, watch } from 'vue'
 import type { WatchStopHandle } from 'vue'
 import type { SessionUser } from '@/types/auth'
 import { useAuthStore } from '@/stores/authStore'
+import { useProjectsStore } from '@/stores/projectsStore'
 import { buildServerApiUrl } from '@/api/serverApiConfig'
 import { exportScenePackageZip } from '@/utils/scenePackageExport'
 import { ensureOptimizedGroundMeshOnDocument } from '@/utils/groundOptimizedMeshExport'
@@ -53,8 +54,6 @@ const LOCAL_WORKSPACE_DESCRIPTOR: SceneWorkspaceDescriptor = {
 }
 
 const USER_SCENE_API_PREFIX = '/api/user-scenes'
-const SCENE_BUNDLE_SYNC_CONCURRENCY = 4
-
 type UserSceneBundleSummaryDto = {
   id: string
   name: string
@@ -70,6 +69,12 @@ type UserSceneBundleSummaryDto = {
   }
 }
 
+interface SyncUserWorkspaceOptions {
+  replace?: boolean
+  projectId: string
+  sceneId?: string | null
+}
+
 type ApiEnvelope<T> = {
   code: number
   data: T
@@ -82,6 +87,11 @@ function isApiEnvelope<T>(value: unknown): value is ApiEnvelope<T> {
   }
   const candidate = value as Record<string, unknown>
   return typeof candidate.code === 'number' && 'data' in candidate && typeof candidate.message === 'string'
+}
+
+function normalizeSceneId(value: string | null | undefined): string | null {
+  const normalized = typeof value === 'string' ? value.trim() : ''
+  return normalized.length ? normalized : null
 }
 
 async function readResponseErrorMessage(response: Response): Promise<string | null> {
@@ -129,32 +139,6 @@ function resolveWorkspaceDescriptor(user: SessionUser | null | undefined): Scene
   }
 }
 
-async function mapWithConcurrency<T, R>(
-  items: T[],
-  concurrency: number,
-  iteratee: (item: T, index: number) => Promise<R>,
-): Promise<R[]> {
-  if (!items.length) {
-    return []
-  }
-  const limit = Math.max(1, Math.min(concurrency, items.length))
-  const results: R[] = new Array(items.length)
-  let cursor = 0
-  const runWorker = async () => {
-    while (true) {
-      const index = cursor
-      cursor += 1
-      if (index >= items.length) {
-        return
-      }
-      const item = items[index] as T
-      results[index] = await iteratee(item, index)
-    }
-  }
-  await Promise.all(Array.from({ length: limit }, () => runWorker()))
-  return results
-}
-
 const DB_NAME = 'harmony-editor-scenes'
 const DB_VERSION = 11
 const STORE_METADATA = 'sceneMetadata'
@@ -167,6 +151,7 @@ const STORE_TERRAIN_DATASET_REGION_PACKS = 'sceneTerrainDatasetRegionPacks'
 const STORE_COMPILED_GROUND_BUNDLES = 'sceneCompiledGroundBundles'
 
 const memoryWorkspaceDocuments = new Map<string, Map<string, StoredSceneDocument>>()
+const memoryWorkspaceMetadata = new Map<string, Map<string, SceneSummary>>()
 const memoryWorkspaceGroundHeightSidecars = new Map<string, Map<string, ArrayBuffer>>()
 const memoryWorkspaceGroundSplatSidecars = new Map<string, Map<string, ArrayBuffer>>()
 const memoryWorkspaceGroundScatterSidecars = new Map<string, Map<string, ArrayBuffer>>()
@@ -190,6 +175,15 @@ function getMemoryWorkspace(workspaceId: string): Map<string, StoredSceneDocumen
   if (!bucket) {
     bucket = new Map()
     memoryWorkspaceDocuments.set(workspaceId, bucket)
+  }
+  return bucket
+}
+
+function getMemoryMetadataWorkspace(workspaceId: string): Map<string, SceneSummary> {
+  let bucket = memoryWorkspaceMetadata.get(workspaceId)
+  if (!bucket) {
+    bucket = new Map()
+    memoryWorkspaceMetadata.set(workspaceId, bucket)
   }
   return bucket
 }
@@ -548,6 +542,7 @@ function openDatabase(workspaceId: string): Promise<IDBDatabase> {
 async function deleteWorkspaceStorage(workspaceId: string): Promise<void> {
   if (!isIndexedDbAvailable()) {
     memoryWorkspaceDocuments.delete(workspaceId)
+    memoryWorkspaceMetadata.delete(workspaceId)
     memoryWorkspaceGroundHeightSidecars.delete(workspaceId)
     memoryWorkspaceGroundSplatSidecars.delete(workspaceId)
     memoryWorkspaceGroundScatterSidecars.delete(workspaceId)
@@ -572,6 +567,7 @@ async function deleteWorkspaceStorage(workspaceId: string): Promise<void> {
     }
   })
   memoryWorkspaceDocuments.delete(workspaceId)
+  memoryWorkspaceMetadata.delete(workspaceId)
   memoryWorkspaceGroundHeightSidecars.delete(workspaceId)
   memoryWorkspaceGroundSplatSidecars.delete(workspaceId)
   memoryWorkspaceGroundScatterSidecars.delete(workspaceId)
@@ -844,26 +840,15 @@ async function writeSceneCompiledGroundBundle(
   })
 }
 
-async function replaceWorkspaceDocuments(
-  workspaceId: string,
-  documents: StoredSceneDocument[],
-  groundHeightSidecars: Record<string, ArrayBuffer | null> = {},
-  groundSplatSidecars: Record<string, ArrayBuffer | null> = {},
-  groundScatterSidecars: Record<string, ArrayBuffer | null> = {},
-): Promise<void> {
-  await deleteWorkspaceStorage(workspaceId)
-  if (!documents.length) {
-    return
-  }
-  await writeSceneDocuments(workspaceId, documents, groundHeightSidecars, groundSplatSidecars, groundScatterSidecars)
-}
-
-async function fetchUserScenesFromServer(authStore: ReturnType<typeof useAuthStore>): Promise<UserSceneBundleSummaryDto[] | null> {
+async function fetchUserScenesFromServer(
+  authStore: ReturnType<typeof useAuthStore>,
+  projectId: string,
+): Promise<UserSceneBundleSummaryDto[] | null> {
   const authorization = authStore.authorizationHeader
   if (!authorization) {
     return null
   }
-  const url = buildServerApiUrl(USER_SCENE_API_PREFIX)
+  const url =  buildServerApiUrl(`${USER_SCENE_API_PREFIX}?projectId=${encodeURIComponent(projectId)}`)
   const headers = new Headers({ Accept: 'application/json' })
   headers.set('Authorization', authorization)
   const response = await fetch(url, {
@@ -1007,10 +992,10 @@ function requestToPromise<T>(request: IDBRequest<T>): Promise<T> {
 
 async function readAllMetadata(workspaceId: string): Promise<SceneSummary[]> {
   if (!isIndexedDbAvailable()) {
-    const records: SceneSummary[] = []
+    const records = new Map<string, SceneSummary>()
     const bucket = getMemoryWorkspace(workspaceId)
     bucket.forEach((doc) => {
-      records.push({
+      records.set(doc.id, {
         id: doc.id,
         name: doc.name,
         projectId: doc.projectId,
@@ -1019,13 +1004,40 @@ async function readAllMetadata(workspaceId: string): Promise<SceneSummary[]> {
         updatedAt: doc.updatedAt,
       })
     })
-    return records
+    getMemoryMetadataWorkspace(workspaceId).forEach((entry, id) => {
+      records.set(id, { ...entry })
+    })
+    return Array.from(records.values())
   }
   const db = await openDatabase(workspaceId)
   const tx = db.transaction(STORE_METADATA, 'readonly')
   const store = tx.objectStore(STORE_METADATA)
   const records = await requestToPromise<SceneSummary[]>(store.getAll())
   return records
+}
+
+async function writeSceneMetadataSummaries(workspaceId: string, summaries: SceneSummary[]): Promise<void> {
+  if (!summaries.length) {
+    return
+  }
+  if (!isIndexedDbAvailable()) {
+    const bucket = getMemoryMetadataWorkspace(workspaceId)
+    summaries.forEach((summary) => {
+      bucket.set(summary.id, { ...summary })
+    })
+    return
+  }
+  const db = await openDatabase(workspaceId)
+  const tx = db.transaction(STORE_METADATA, 'readwrite')
+  const store = tx.objectStore(STORE_METADATA)
+  summaries.forEach((summary) => {
+    store.put({ ...summary })
+  })
+  await new Promise<void>((resolve, reject) => {
+    tx.oncomplete = () => resolve()
+    tx.onerror = () => reject(tx.error ?? new Error('Failed to write scene metadata summaries'))
+    tx.onabort = () => reject(tx.error ?? new Error('Scene metadata summary write aborted'))
+  })
 }
 
 async function readSceneDocument(
@@ -1087,13 +1099,6 @@ function toMetadata(document: StoredSceneDocument): SceneSummary {
   }
 }
 
-function toMetadataWithBundleEtag(document: StoredSceneDocument, bundleEtag: string | null): SceneSummary {
-  return {
-    ...toMetadata(document),
-    bundleEtag,
-  }
-}
-
 async function readSceneBundleFromWorkspace(
   workspaceId: string,
   sceneId: string,
@@ -1126,34 +1131,6 @@ async function readSceneBundleFromWorkspace(
   }
 }
 
-async function writeSceneBundleEtags(
-  workspaceId: string,
-  bundleEtags: Record<string, string | null>,
-): Promise<void> {
-  const entries = Object.entries(bundleEtags)
-  if (!entries.length) {
-    return
-  }
-  if (!isIndexedDbAvailable()) {
-    return
-  }
-  const db = await openDatabase(workspaceId)
-  const tx = db.transaction(STORE_METADATA, 'readwrite')
-  const store = tx.objectStore(STORE_METADATA)
-  for (const [sceneId, bundleEtag] of entries) {
-    const existing = await requestToPromise<SceneSummary | undefined>(store.get(sceneId))
-    if (!existing) {
-      continue
-    }
-    store.put({ ...existing, bundleEtag })
-  }
-  await new Promise<void>((resolve, reject) => {
-    tx.oncomplete = () => resolve()
-    tx.onerror = () => reject(tx.error ?? new Error('Failed to write scene bundle etags'))
-    tx.onabort = () => reject(tx.error ?? new Error('Scene bundle etag write aborted'))
-  })
-}
-
 async function writeSceneDocuments(
   workspaceId: string,
   documents: StoredSceneDocument[],
@@ -1166,9 +1143,11 @@ async function writeSceneDocuments(
   const preparedDocs = documents.map((doc) => ({ document: prepareSceneDocumentForPersistence(doc), source: doc }))
   if (!isIndexedDbAvailable()) {
     const bucket = getMemoryWorkspace(workspaceId)
+    const metadataBucket = getMemoryMetadataWorkspace(workspaceId)
     const sidecarBucket = getMemoryGroundHeightSidecars(workspaceId)
     preparedDocs.forEach(({ document: prepared }) => {
       bucket.set(prepared.id, prepared)
+      metadataBucket.set(prepared.id, toMetadata(prepared))
       const sidecar = groundHeightSidecars[prepared.id] ?? null
       const splatSidecar = groundSplatSidecars[prepared.id] ?? null
       const scatterSidecar = groundScatterSidecars[prepared.id] ?? null
@@ -1284,6 +1263,7 @@ async function writeSceneDocuments(
 async function removeSceneDocument(workspaceId: string, id: string): Promise<void> {
   if (!isIndexedDbAvailable()) {
     getMemoryWorkspace(workspaceId).delete(id)
+    getMemoryMetadataWorkspace(workspaceId).delete(id)
     getMemoryGroundHeightSidecars(workspaceId).delete(id)
     getMemoryGroundSplatSidecars(workspaceId).delete(id)
     getMemoryGroundScatterSidecars(workspaceId).delete(id)
@@ -1445,7 +1425,7 @@ export const useScenesStore = defineStore('scenes', {
         this.workspaceRevision += 1
         this.error = null
         if (options.syncFromServer && descriptor.type === 'user') {
-          await this.syncUserWorkspaceFromServer({ replace: true })
+          await this.syncUserWorkspaceFromServer({ replace: true, projectId: descriptor.id })
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Failed to load scenes workspace'
@@ -1473,11 +1453,11 @@ export const useScenesStore = defineStore('scenes', {
 
       const authStore = useAuthStore()
       try {
-        const remoteScenes = await fetchUserScenesFromServer(authStore)
+        const remoteScenes = await fetchUserScenesFromServer(authStore, this.workspaceId)
         if (!remoteScenes) {
           return
         }
-        this.replaceMetadata(remoteScenes.map((entry) => ({
+        const metadata = remoteScenes.map((entry) => ({
           id: entry.id,
           name: entry.name,
           projectId: entry.projectId,
@@ -1485,7 +1465,9 @@ export const useScenesStore = defineStore('scenes', {
           createdAt: entry.createdAt,
           updatedAt: entry.updatedAt,
           bundleEtag: entry.bundle.etag ?? null,
-        })))
+        }))
+        await writeSceneMetadataSummaries(this.workspaceId, metadata)
+        this.replaceMetadata(metadata)
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Failed to refresh scenes from server'
         this.error = message
@@ -1770,91 +1752,87 @@ export const useScenesStore = defineStore('scenes', {
         await this.syncSceneToServer(document)
       }
     },
-    async syncUserWorkspaceFromServer(options: { replace?: boolean } = {}) {
+    async syncUserWorkspaceFromServer(options: SyncUserWorkspaceOptions) {
       if (this.workspaceType !== 'user') {
         return
       }
       const authStore = useAuthStore()
+      const projectsStore = useProjectsStore()
+
       try {
-        const remoteScenes = await fetchUserScenesFromServer(authStore)
+        const remoteScenes = await fetchUserScenesFromServer(authStore, options.projectId)
         if (!remoteScenes) {
           return
         }
+        const remoteMetadata = remoteScenes.map((entry) => ({
+          id: entry.id,
+          name: entry.name,
+          projectId: entry.projectId,
+          thumbnail: entry.thumbnail,
+          createdAt: entry.createdAt,
+          updatedAt: entry.updatedAt,
+          bundleEtag: entry.bundle.etag ?? null,
+        }))
         const localMetadataById = new Map(this.metadata.map((entry) => [entry.id, entry]))
-        const syncResults = await mapWithConcurrency(remoteScenes, SCENE_BUNDLE_SYNC_CONCURRENCY, async (entry) => {
-          const localEtag = localMetadataById.get(entry.id)?.bundleEtag ?? null
-          const bundle = await downloadSceneBundleZip(entry.bundle.url, authStore, { etag: localEtag })
-          if (bundle) {
-            return {
-              sceneId: entry.id,
-              downloaded: await unpackSceneBundleIntoStores(bundle.bytes, { allowLandformNodes: true }),
-              bundleEtag: bundle.etag ?? entry.bundle.etag ?? null,
+        const project = await projectsStore.loadProjectDocument(options.projectId)
+        const remoteSceneIdSet = new Set(remoteScenes.map((entry) => entry.id))
+        const preferredSceneId = (() => {
+          const explicitSceneId = normalizeSceneId(options.sceneId)
+          if (explicitSceneId && remoteSceneIdSet.has(explicitSceneId)) {
+            return explicitSceneId
+          }
+          const projectSceneId = normalizeSceneId(project?.lastEditedSceneId)
+          if (projectSceneId && remoteSceneIdSet.has(projectSceneId)) {
+            return projectSceneId
+          }
+          return remoteScenes[0]?.id ?? null
+        })()
+
+        if (preferredSceneId) {
+          const targetEntry = remoteScenes.find((entry) => entry.id === preferredSceneId) ?? null
+          if (targetEntry) {
+            const localEtag = localMetadataById.get(preferredSceneId)?.bundleEtag ?? null
+            let bundle = await downloadSceneBundleZip(targetEntry.bundle.url, authStore, { etag: localEtag })
+            let bundleEtag = bundle?.etag ?? targetEntry.bundle.etag ?? null
+            if (!bundle) {
+              const localBundle = await readSceneBundleFromWorkspace(this.workspaceId, preferredSceneId)
+              if (localBundle) {
+                bundle = null
+              } else {
+                bundle = await downloadSceneBundleZip(targetEntry.bundle.url, authStore)
+                bundleEtag = bundle?.etag ?? targetEntry.bundle.etag ?? null
+              }
+            }
+            if (bundle) {
+              const downloaded = await unpackSceneBundleIntoStores(bundle.bytes, { allowLandformNodes: true })
+              await writeSceneDocuments(
+                this.workspaceId,
+                [downloaded.document],
+                { [downloaded.document.id]: downloaded.groundHeightSidecar ?? null },
+                { [downloaded.document.id]: downloaded.groundSplatSidecar ?? null },
+                { [downloaded.document.id]: downloaded.groundScatterSidecar ?? null },
+                { [downloaded.document.id]: downloaded.terrainDatasetManifest ?? null },
+                { [downloaded.document.id]: downloaded.terrainDatasetRegionPacks ?? {} },
+              )
+              remoteMetadata.splice(
+                remoteMetadata.findIndex((entry) => entry.id === downloaded.document.id),
+                1,
+                {
+                  id: downloaded.document.id,
+                  name: downloaded.document.name,
+                  projectId: downloaded.document.projectId,
+                  thumbnail: downloaded.document.thumbnail ?? null,
+                  createdAt: downloaded.document.createdAt,
+                  updatedAt: downloaded.document.updatedAt,
+                  bundleEtag,
+                },
+              )
             }
           }
-          return {
-            sceneId: entry.id,
-            downloaded: null,
-            bundleEtag: localEtag ?? entry.bundle.etag ?? null,
-          }
-        })
-
-        const downloaded: Array<{
-          document: StoredSceneDocument
-          groundHeightSidecar: ArrayBuffer | null
-          groundSplatSidecar: ArrayBuffer | null
-          groundScatterSidecar: ArrayBuffer | null
-        }> = []
-        const syncedBundleEtags: Record<string, string | null> = {}
-        for (const result of syncResults) {
-          syncedBundleEtags[result.sceneId] = result.bundleEtag
-          if (result.downloaded) {
-            downloaded.push(result.downloaded)
-            continue
-          }
-          if (!options.replace) {
-            continue
-          }
-          const localBundle = await readSceneBundleFromWorkspace(this.workspaceId, result.sceneId)
-          if (localBundle) {
-            downloaded.push(localBundle)
-            continue
-          }
-          const remoteEntry = remoteScenes.find((entry) => entry.id === result.sceneId)
-          if (!remoteEntry) {
-            continue
-          }
-          const fallbackBundle = await downloadSceneBundleZip(remoteEntry.bundle.url, authStore)
-          if (!fallbackBundle) {
-            continue
-          }
-          downloaded.push(await unpackSceneBundleIntoStores(fallbackBundle.bytes, { allowLandformNodes: true }))
-          syncedBundleEtags[result.sceneId] = fallbackBundle.etag ?? remoteEntry.bundle.etag ?? null
         }
 
-        if (options.replace) {
-          await replaceWorkspaceDocuments(
-            this.workspaceId,
-            downloaded.map((entry) => entry.document),
-            Object.fromEntries(downloaded.map((entry) => [entry.document.id, entry.groundHeightSidecar ?? null])),
-            Object.fromEntries(downloaded.map((entry) => [entry.document.id, entry.groundSplatSidecar ?? null])),
-            Object.fromEntries(downloaded.map((entry) => [entry.document.id, entry.groundScatterSidecar ?? null])),
-          )
-        } else {
-          await writeSceneDocuments(
-            this.workspaceId,
-            downloaded.map((entry) => entry.document),
-            Object.fromEntries(downloaded.map((entry) => [entry.document.id, entry.groundHeightSidecar ?? null])),
-            Object.fromEntries(downloaded.map((entry) => [entry.document.id, entry.groundSplatSidecar ?? null])),
-            Object.fromEntries(downloaded.map((entry) => [entry.document.id, entry.groundScatterSidecar ?? null])),
-          )
-        }
-        await writeSceneBundleEtags(this.workspaceId, syncedBundleEtags)
-        if (options.replace) {
-          this.metadata = downloaded.map((entry) => toMetadataWithBundleEtag(entry.document, syncedBundleEtags[entry.document.id] ?? null))
-        } else {
-          await this.refreshMetadata()
-        }
-        this.workspaceRevision += 1
+        await writeSceneMetadataSummaries(this.workspaceId, remoteMetadata)
+        this.replaceMetadata(remoteMetadata)
       } catch (error) {
         console.warn('[ScenesStore] syncUserWorkspaceFromServer failed', error)
       }

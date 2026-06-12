@@ -158,13 +158,10 @@ function resolveTargetSceneId(
     }
     return routeSceneId
   }
-  if (!project.lastEditedSceneId) {
-    throw new Error('Project is missing last edited scene')
+  if (project.lastEditedSceneId && sceneIds.has(project.lastEditedSceneId)) {
+    return project.lastEditedSceneId
   }
-  if (!sceneIds.has(project.lastEditedSceneId)) {
-    throw new Error('Project last edited scene is invalid')
-  }
-  return project.lastEditedSceneId
+  return project.scenes[0]?.id ?? ''
 }
 
 function classifyBootstrapError(error: unknown): { code: BootstrapErrorCode; message: string } {
@@ -177,18 +174,8 @@ function classifyBootstrapError(error: unknown): { code: BootstrapErrorCode; mes
         code: 'project-has-no-scenes',
         message: 'Project has no scenes. Create a scene from the project manager before opening the editor.',
       }
-    case 'Project is missing last edited scene':
-      return {
-        code: 'missing-last-scene',
-        message: 'Project is missing lastEditedSceneId. Set a valid scene before opening the editor.',
-      }
     case 'Requested scene is not part of this project':
       return { code: 'invalid-route-scene', message: 'The requested scene is not part of this project.' }
-    case 'Project last edited scene is invalid':
-      return {
-        code: 'invalid-last-scene',
-        message: 'Project lastEditedSceneId does not match any existing scene.',
-      }
     case 'Failed to open scene':
       return {
         code: 'scene-open-failed',
@@ -299,7 +286,7 @@ async function bootstrap() {
       progress: 60,
       detail: 'Preloading local scene bundles before opening the editor.',
     })
-    await scenesStore.syncUserWorkspaceFromServer({ replace: false })
+    await scenesStore.syncUserWorkspaceFromServer({ replace: false, projectId, sceneId: preferred })
 
     statusMessage.value = 'Opening project...'
     progress.value = 78
