@@ -9,7 +9,7 @@ import type { SessionUser } from '@/types/auth'
 import { useAuthStore } from '@/stores/authStore'
 import { useProjectsStore } from '@/stores/projectsStore'
 import { buildServerApiUrl } from '@/api/serverApiConfig'
-import { exportScenePackageZip } from '@/utils/scenePackageExport'
+import { enqueueSceneSyncUpload } from '@/utils/sceneSyncUploadQueue'
 import { ensureOptimizedGroundMeshOnDocument } from '@/utils/groundOptimizedMeshExport'
 import {
   stripGroundHeightMapsFromSceneDocument,
@@ -75,20 +75,6 @@ interface SyncUserWorkspaceOptions {
   sceneId?: string | null
 }
 
-type ApiEnvelope<T> = {
-  code: number
-  data: T
-  message: string
-}
-
-function isApiEnvelope<T>(value: unknown): value is ApiEnvelope<T> {
-  if (!value || typeof value !== 'object') {
-    return false
-  }
-  const candidate = value as Record<string, unknown>
-  return typeof candidate.code === 'number' && 'data' in candidate && typeof candidate.message === 'string'
-}
-
 function normalizeSceneId(value: string | null | undefined): string | null {
   const normalized = typeof value === 'string' ? value.trim() : ''
   return normalized.length ? normalized : null
@@ -120,37 +106,6 @@ function resolvePreferredRemoteSceneId(
     }
   }
   return null
-}
-
-async function readResponseErrorMessage(response: Response): Promise<string | null> {
-  const contentType = response.headers.get('content-type') ?? ''
-  if (contentType.includes('application/json')) {
-    const payload = await response.json().catch(() => null)
-    if (isApiEnvelope<unknown>(payload)) {
-      return payload.message || null
-    }
-    if (payload && typeof payload === 'object' && typeof (payload as { message?: unknown }).message === 'string') {
-      return (payload as { message: string }).message
-    }
-    return null
-  }
-
-  const text = await response.text().catch(() => '')
-  if (!text) {
-    return null
-  }
-  try {
-    const parsed = JSON.parse(text) as unknown
-    if (isApiEnvelope<unknown>(parsed)) {
-      return parsed.message || null
-    }
-    if (parsed && typeof parsed === 'object' && typeof (parsed as { message?: unknown }).message === 'string') {
-      return (parsed as { message: string }).message
-    }
-  } catch (_error) {
-    return text
-  }
-  return text
 }
 
 function resolveWorkspaceDescriptor(user: SessionUser | null | undefined): SceneWorkspaceDescriptor {
@@ -952,50 +907,6 @@ async function unpackSceneBundleIntoStores(
     terrainDatasetManifest: pkg.terrainDatasetManifests[scene.id] ?? null,
     terrainDatasetRegionPacks: pkg.terrainDatasetRegionPacks[scene.id] ?? {},
   }
-}
-
-async function uploadSceneToServer(document: StoredSceneDocument, authStore: ReturnType<typeof useAuthStore>): Promise<string | null> {
-  const authorization = authStore.authorizationHeader
-  if (!authorization) {
-    return null
-  }
-
-  const bundleUrl = buildServerApiUrl(`${USER_SCENE_API_PREFIX}/${encodeURIComponent(document.id)}/bundle`)
-  const bundleBlob = await exportScenePackageZip({
-    project: {
-      id: document.projectId,
-      name: document.projectId,
-      defaultSceneId: document.id,
-      lastEditedSceneId: document.id,
-      sceneOrder: [document.id],
-    },
-    scenes: [{ id: document.id, document: cloneForIndexedDb(document) }],
-    planningDataMode: 'withPlanningData',
-    preserveLandformNodes: true,
-  })
-
-  const filename = `${document.name || document.id}.zip`
-  const form = new FormData()
-  form.append('file', new File([bundleBlob], filename, { type: 'application/zip' }))
-
-  const headers = new Headers()
-  headers.set('Authorization', authorization)
-  const response = await fetch(bundleUrl, {
-    method: 'PUT',
-    credentials: 'include',
-    headers,
-    body: form,
-  })
-  if (!response.ok) {
-    const serverMessage = await readResponseErrorMessage(response)
-    const detail = serverMessage ? `: ${serverMessage}` : ''
-    throw new Error(`Failed to upload scene bundle (${response.status})${detail}`)
-  }
-  const payload = await response.json().catch(() => null)
-  if (payload == null || typeof payload !== 'object') {
-    return null
-  }
-  return payload.data.scene.bundle.etag;
 }
 
 async function removeSceneFromServer(sceneId: string, authStore: ReturnType<typeof useAuthStore>): Promise<void> {
@@ -1813,17 +1724,28 @@ export const useScenesStore = defineStore('scenes', {
         return
       }
       const authStore = useAuthStore()
-      try {
-        const bundleEtag = await uploadSceneToServer(document, authStore)
-        if (bundleEtag) {
+      const authorization = authStore.authorizationHeader
+      if (!authorization) {
+        return
+      }
+      enqueueSceneSyncUpload({
+        document,
+        authorization,
+        onSynced: async ({ document: syncedDocument, bundleEtag }) => {
+          if (!bundleEtag) {
+            return
+          }
           const nextMetadata = [...this.metadata]
-          const existingEntry = nextMetadata.find((entry) => entry.id === document.id) ?? null
-          const baseEntry = existingEntry ?? toMetadata(document)
+          const existingEntry = nextMetadata.find((entry) => entry.id === syncedDocument.id) ?? null
+          if (existingEntry && existingEntry.updatedAt !== syncedDocument.updatedAt) {
+            return
+          }
+          const baseEntry = existingEntry ?? toMetadata(syncedDocument)
           const nextEntry: SceneSummary = {
             ...baseEntry,
             bundleEtag,
           }
-          const existingIndex = nextMetadata.findIndex((entry) => entry.id === document.id)
+          const existingIndex = nextMetadata.findIndex((entry) => entry.id === syncedDocument.id)
           if (existingIndex === -1) {
             nextMetadata.push(nextEntry)
           } else {
@@ -1831,10 +1753,11 @@ export const useScenesStore = defineStore('scenes', {
           }
           await writeSceneMetadataSummaries(this.workspaceId, [nextEntry])
           this.replaceMetadata(nextMetadata)
-        }
-      } catch (error) {
-        console.warn('[ScenesStore] syncSceneToServer failed', error)
-      }
+        },
+        onFailed: (_failedDocument, error) => {
+          console.warn('[ScenesStore] syncSceneToServer failed', error)
+        },
+      })
     },
     async deleteSceneOnServer(sceneId: string) {
       if (this.workspaceType !== 'user') {

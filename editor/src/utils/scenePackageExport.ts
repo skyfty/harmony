@@ -1188,6 +1188,19 @@ export async function exportScenePackageZip(payload: {
   updateProgress?: (value: number, message?: string) => void
   reportEvent?: SceneExportEventReporter
 }): Promise<Blob> {
+  const files = await prepareScenePackageZipFiles(payload)
+  return createScenePackageZipBlob(files)
+}
+
+export async function prepareScenePackageZipFiles(payload: {
+  project: ProjectExportBundleProjectConfig
+  scenes: ScenePackageExportScene[]
+  embedAssets?: boolean
+  planningDataMode: ScenePackagePlanningDataMode
+  preserveLandformNodes?: boolean
+  updateProgress?: (value: number, message?: string) => void
+  reportEvent?: SceneExportEventReporter
+}): Promise<Record<string, Uint8Array>> {
   const createdAt = new Date().toISOString()
 
   const files: Record<string, Uint8Array> = {}
@@ -1715,26 +1728,21 @@ export async function exportScenePackageZip(payload: {
     message: `清单文件已生成 (${manifest.scenes.length} 个场景, ${manifest.resources.length} 个资源)`,
   })
 
-  payload.updateProgress?.(96, 'Compressing ZIP…')
   emitSceneExportEvent(payload.reportEvent, {
     phase: 'archive',
     level: 'info',
     status: 'running',
     progress: 96,
     detail: 'manifest.bin',
-    message: '开始压缩 ZIP 包',
+    message: 'ZIP 文件列表已准备完成',
   })
+  return files
+}
+
+export function createScenePackageZipBlob(files: Record<string, Uint8Array>): Blob {
   const zipBytes = zipSync(files, { level: 6 })
   // fflate returns Uint8Array<ArrayBufferLike> which fails BlobPart typing; copy into ArrayBuffer.
   const zipArrayBuffer = new ArrayBuffer(zipBytes.byteLength)
   new Uint8Array(zipArrayBuffer).set(zipBytes)
-  emitSceneExportEvent(payload.reportEvent, {
-    phase: 'archive',
-    level: 'success',
-    status: 'completed',
-    progress: 100,
-    detail: `${Object.keys(files).length} files`,
-    message: 'ZIP 压缩完成',
-  })
   return new Blob([zipArrayBuffer], { type: 'application/zip' })
 }
