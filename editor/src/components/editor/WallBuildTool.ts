@@ -802,6 +802,22 @@ export function createWallBuildTool(options: {
     if (lastCommitted && lastCommitted.end.distanceToSquared(start) <= 1e-6) {
       return lastCommitted.start.clone()
     }
+
+    if (targetSession.branchFrom?.nodeId === targetSession.nodeId) {
+      const branchSegmentIndex = targetSession.branchFrom.endpointKind === 'end'
+        ? targetSession.branchFrom.chainEndIndex
+        : targetSession.branchFrom.chainStartIndex
+      const branchSegment = targetSession.segments[branchSegmentIndex]
+      if (branchSegment) {
+        const reference = targetSession.branchFrom.endpointKind === 'end'
+          ? branchSegment.start
+          : branchSegment.end
+        if (reference) {
+          return reference.clone()
+        }
+      }
+    }
+
     for (let index = targetSession.segments.length - 1; index >= 0; index -= 1) {
       const segment = targetSession.segments[index]
       if (!segment) {
@@ -809,6 +825,9 @@ export function createWallBuildTool(options: {
       }
       if (segment.end.distanceToSquared(start) <= 1e-6) {
         return segment.start.clone()
+      }
+      if (segment.start.distanceToSquared(start) <= 1e-6) {
+        return segment.end.clone()
       }
     }
     return null
