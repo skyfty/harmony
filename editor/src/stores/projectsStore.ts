@@ -30,7 +30,7 @@ interface ProjectsState {
   workspaceUserId: string | null
   workspaceUsername: string | null
   workspaceRevision: number
-  activeProjectId: string
+  activeProjectId: string | null
 }
 
 const LOCAL_WORKSPACE_DESCRIPTOR: ProjectWorkspaceDescriptor = {
