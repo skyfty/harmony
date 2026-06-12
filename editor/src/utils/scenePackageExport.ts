@@ -1189,7 +1189,17 @@ export async function exportScenePackageZip(payload: {
   reportEvent?: SceneExportEventReporter
 }): Promise<Blob> {
   const files = await prepareScenePackageZipFiles(payload)
-  return createScenePackageZipBlob(files)
+  payload.updateProgress?.(96, 'Compressing ZIP…')
+  const blob = createScenePackageZipBlob(files)
+  emitSceneExportEvent(payload.reportEvent, {
+    phase: 'archive',
+    level: 'success',
+    status: 'completed',
+    progress: 100,
+    detail: `${Object.keys(files).length} files`,
+    message: 'ZIP 压缩完成',
+  })
+  return blob
 }
 
 export async function prepareScenePackageZipFiles(payload: {
