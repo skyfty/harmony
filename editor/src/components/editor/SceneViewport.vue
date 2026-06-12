@@ -2079,9 +2079,9 @@ const buildToolCursorClass = computed(() => {
   }
   return null
 })
-const scatterEraseModeActive = ref(false)
-const scatterEraseRestoreModifierActive = ref(false)
-const scatterEraseMenuOpen = ref(false)
+const eraseCutModeActive = ref(false)
+const eraseCutRestoreModifierActive = ref(false)
+const eraseCutMenuOpen = ref(false)
 const vertexSnapShiftModifierActive = ref(false)
 const relativeAngleSnapCModifierActive = ref(false)
 const rectangleAxisAlignedModifierActive = ref(false)
@@ -2119,8 +2119,8 @@ const selectionContainsLandform = computed(() => {
 // Shift modifier in scatter-erase mode means "repair/restore".
 // - Walls: repair a segment (hammer)
 // - InstanceLayout: restore erased instances
-const scatterRepairModifierActive = computed(() => scatterEraseModeActive.value && scatterEraseRestoreModifierActive.value)
-const wallRepairModeActive = computed(() => scatterRepairModifierActive.value && selectedNodeIsWall.value)
+const eraseCutRepairActive = computed(() => eraseCutModeActive.value && eraseCutRestoreModifierActive.value)
+const wallRepairModeActive = computed(() => eraseCutRepairActive.value && selectedNodeIsWall.value)
 
 function isTransformToolBlockedByLandform(tool: EditorTool): boolean {
   return selectionContainsLandform.value && (tool === 'rotate' || tool === 'scale')
@@ -2916,7 +2916,7 @@ watch(
     if (!isGroundScatterContext(ctx) && activeBuildTool.value !== 'scatter' && (terrainStore.scatterSelectedAsset ?? null)) {
       terrainStore.setScatterSelection({ asset: null, providerAssetId: null })
     }
-    if (!isGroundScatterContext(ctx) && activeBuildTool.value !== 'scatter' && scatterEraseModeActive.value) {
+    if (!isGroundScatterContext(ctx) && activeBuildTool.value !== 'scatter' && eraseCutModeActive.value) {
       exitScatterEraseMode()
     }
     if (!isGroundSculptContext(ctx) && activeBuildTool.value !== 'terrain' && (terrainStore.brushOperation ?? null)) {
@@ -2936,7 +2936,7 @@ const hasInstancedMeshes = computed(() => {
   return instancedMeshes.some((mesh) => mesh.visible && mesh.count > 0)
 })
 
-const canUseScatterEraseTool = computed(() => hasGroundNode.value || selectedNodeIsWall.value || hasInstancedMeshes.value)
+const canUseEraseCutTool = computed(() => hasGroundNode.value || selectedNodeIsWall.value || hasInstancedMeshes.value)
 
 const wallRenderer = createWallRenderer({
   assetCacheStore,
@@ -3352,7 +3352,7 @@ function applyWallMeshEraseResult(node: SceneNode, nodeId: string, nextWallMesh:
   if (shouldRemoveWallNodeAfterErase(node, nextWallMesh, wallObject)) {
     sceneStore.removeSceneNodes([nodeId])
     const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
-    if (selectedId === nodeId && scatterEraseModeActive.value) {
+    if (selectedId === nodeId && eraseCutModeActive.value) {
       exitScatterEraseMode()
     }
     return
@@ -3718,7 +3718,7 @@ const groundEditor = createGroundEditor({
   scatterDensityPercent,
   activeBuildTool,
   resolveAutoOverlayPlan: resolveScatterAutoOverlayPlanForEvent,
-  scatterEraseModeActive,
+  eraseCutModeActive,
   resolveVertexSnapPoint: resolveBuildToolVertexSnapPoint,
   clearVertexSnap: clearBuildToolVertexSnap,
   isAxisAlignedRectangleActive: rectangleAxisAlignedModifierActive,
@@ -3789,7 +3789,7 @@ const groundEditor = createGroundEditor({
     })
   },
   onScatterEraseStart: () => {
-    scatterEraseMenuOpen.value = false
+    eraseCutMenuOpen.value = false
   },
   onScatterPlacementStart: () => {
     groundScatterMenuOpen.value = false
@@ -3822,10 +3822,10 @@ const {
 } = groundEditor
 
 function exitScatterEraseMode() {
-  if (!scatterEraseModeActive.value) {
+  if (!eraseCutModeActive.value) {
     return
   }
-  scatterEraseModeActive.value = false
+  eraseCutModeActive.value = false
   if (uiStore.activeSelectionContext === 'scatter-erase') {
     uiStore.setActiveSelectionContext(null)
   }
@@ -3835,11 +3835,11 @@ function exitScatterEraseMode() {
   clearWallEraseHoverHighlight()
   cancelGroundEditorScatterErase()
   cancelGroundEditorScatterPlacement()
-  scatterEraseMenuOpen.value = false
+  eraseCutMenuOpen.value = false
 }
 
 watch(
-  () => [scatterEraseModeActive.value, selectedNodeIsWall.value] as const,
+  () => [eraseCutModeActive.value, selectedNodeIsWall.value] as const,
   ([active, isWall]) => {
     if (!active || !isWall) {
       clearWallEraseHoverHighlight()
@@ -3847,12 +3847,12 @@ watch(
   },
 )
 
-function toggleScatterEraseMode() {
-  if (!canUseScatterEraseTool.value) {
+function toggleEraseCutMode() {
+  if (!canUseEraseCutTool.value) {
     exitScatterEraseMode()
     return
   }
-  if (scatterEraseModeActive.value) {
+  if (eraseCutModeActive.value) {
     exitScatterEraseMode()
     return
   }
@@ -3872,7 +3872,7 @@ function toggleScatterEraseMode() {
     handleBuildToolChange(null)
   }
   cancelGroundEditorScatterPlacement()
-  scatterEraseModeActive.value = true
+  eraseCutModeActive.value = true
   uiStore.setActiveSelectionContext('scatter-erase')
   if (props.activeTool !== 'select') {
     emit('changeTool', 'select')
@@ -3881,7 +3881,7 @@ function toggleScatterEraseMode() {
 }
 
 watch(scatterSelectedAsset, (asset) => {
-  if (asset && scatterEraseModeActive.value) {
+  if (asset && eraseCutModeActive.value) {
     exitScatterEraseMode()
   }
 })
@@ -3891,20 +3891,20 @@ watch(scatterSelectedAsset, (asset) => {
 watch(
   () => sceneStore.selectedAssetId,
   (assetId) => {
-    if (assetId && scatterEraseModeActive.value) {
+    if (assetId && eraseCutModeActive.value) {
       exitScatterEraseMode()
     }
   },
 )
 
 watch(brushOperation, (operation) => {
-  if (operation && scatterEraseModeActive.value) {
+  if (operation && eraseCutModeActive.value) {
     exitScatterEraseMode()
   }
 })
 
-function handleScatterEraseMenuOpen(value: boolean) {
-  scatterEraseMenuOpen.value = value
+function handleEraseCutMenuOpen(value: boolean) {
+  eraseCutMenuOpen.value = value
 }
 
 function handleCameraResetMenuOpen(value: boolean) {
@@ -3918,7 +3918,7 @@ function handleClearAllScatterInstances() {
   cancelGroundEditorScatterPlacement()
   cancelGroundEditorScatterErase()
   clearScatterInstances()
-  scatterEraseMenuOpen.value = false
+  eraseCutMenuOpen.value = false
 }
 
 function clearRepairHoverHighlight(updateOutline = true) {
@@ -3933,7 +3933,7 @@ function clearRepairHoverHighlight(updateOutline = true) {
 }
 
 function updateRepairHoverHighlight(event: PointerEvent): boolean {
-  if (!scatterEraseModeActive.value) {
+  if (!eraseCutModeActive.value) {
     if (repairHoverGroup.visible) {
       clearRepairHoverHighlight(true)
     }
@@ -3941,7 +3941,7 @@ function updateRepairHoverHighlight(event: PointerEvent): boolean {
     return false
   }
 
-  scatterEraseRestoreModifierActive.value = Boolean(event.ctrlKey || event.metaKey)
+  eraseCutRestoreModifierActive.value = Boolean(event.ctrlKey || event.metaKey)
 
   if (!canvasRef.value || !camera) {
     clearRepairHoverHighlight(false)
@@ -4014,7 +4014,7 @@ function updateRepairHoverHighlight(event: PointerEvent): boolean {
       continue
     }
 
-    const hoverMaterial = scatterEraseRestoreModifierActive.value ? instancedHoverRestoreMaterial : instancedHoverMaterial
+    const hoverMaterial = eraseCutRestoreModifierActive.value ? instancedHoverRestoreMaterial : instancedHoverMaterial
 
     const activeHandles = new Set<string>()
     binding.slots.forEach((slot) => {
@@ -4061,7 +4061,7 @@ function updateRepairHoverHighlight(event: PointerEvent): boolean {
 
   // InstanceLayout grid restore: erased instances are not raycastable, so when Shift is held
   // we snap to the nearest grid index under the cursor (selected node only).
-  if (scatterEraseRestoreModifierActive.value) {
+  if (eraseCutRestoreModifierActive.value) {
     const selectedNodeId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
     if (!selectedNodeId) {
       if (repairHoverGroup.visible) {
@@ -4224,7 +4224,7 @@ function eraseContinuousInstance(nodeId: string, bindingId: string): boolean {
   if (basePositions.length === 0) {
     sceneStore.removeSceneNodes([nodeId])
     clearRepairHoverHighlight(true)
-    if (scatterEraseModeActive.value) {
+    if (eraseCutModeActive.value) {
       exitScatterEraseMode()
     }
     return true
@@ -4275,7 +4275,7 @@ function eraseInstancedBinding(nodeId: string, bindingId: string, hitPointWorld?
       if (Number.isFinite(index) && index >= 1 && index < maxCount) {
         const current = Array.isArray(layout.erasedIndices) ? layout.erasedIndices : []
         const set = new Set<number>(current)
-        if (scatterEraseRestoreModifierActive.value) {
+        if (eraseCutRestoreModifierActive.value) {
           set.delete(index)
         } else {
           set.add(index)
@@ -4354,7 +4354,7 @@ function eraseInstancedBinding(nodeId: string, bindingId: string, hitPointWorld?
   updatePlaceholderOverlayPositions()
 
   const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
-  if (selectedId === nodeId && scatterEraseModeActive.value) {
+  if (selectedId === nodeId && eraseCutModeActive.value) {
     exitScatterEraseMode()
   }
 
@@ -4419,7 +4419,7 @@ function tryEraseRepairTargetAtPointer(event: PointerEvent, options?: { skipKey?
     return { handled: false, erasedKey: null }
   }
 
-  scatterEraseRestoreModifierActive.value = Boolean(event.ctrlKey || event.metaKey)
+  eraseCutRestoreModifierActive.value = Boolean(event.ctrlKey || event.metaKey)
 
   // Selected wall: erase by raycasting the wall object itself (supports procedural walls)
   // and generate a per-interval key so drag erase doesn't spam the same spot.
@@ -4467,7 +4467,7 @@ function tryEraseRepairTargetAtPointer(event: PointerEvent, options?: { skipKey?
 
   // InstanceLayout grid restore: erased instances are not raycastable, so allow Shift-click
   // to restore the nearest grid index for the selected node.
-  if (scatterEraseRestoreModifierActive.value) {
+  if (eraseCutRestoreModifierActive.value) {
     const selectedNodeId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
     if (!selectedNodeId) {
       return { handled: false, erasedKey: null }
@@ -7645,7 +7645,7 @@ function resolveSelectionContextForBuildTool(tool: BuildTool | null): string | n
     return terrainStore.brushOperation ? 'terrain-sculpt' : 'build-tool:terrain'
   }
   if (tool === 'scatter') {
-    if (scatterEraseModeActive.value) {
+    if (eraseCutModeActive.value) {
       return 'scatter-erase'
     }
     return terrainStore.scatterSelectedAsset ? 'scatter' : 'build-tool:scatter'
@@ -7716,7 +7716,7 @@ function syncBrushIndicatorScaleImmediately(radius: number): void {
 // Removed handleViewportWheelDebug
 
 function resolveGroundWheelRadiusTarget(): 'terrain' | 'scatter' | 'scatter-erase' | null {
-  if (scatterEraseModeActive.value) {
+  if (eraseCutModeActive.value) {
     return 'scatter-erase'
   }
 
@@ -7820,7 +7820,7 @@ function maybeHandleBuildToolRightClick(event: PointerEvent): boolean {
 
   pointerInteraction.clearIfKind('buildToolRightClick')
 
-  if (scatterEraseModeActive.value) {
+  if (eraseCutModeActive.value) {
     exitScatterEraseMode()
     event.preventDefault()
     event.stopPropagation()
@@ -8574,7 +8574,7 @@ function toggleWallDoorSelectMode() {
   const next = !wallDoorSelectModeActive.value
   clearWallDoorRectangleSelectionState()
   clearWallDoorSelectionPayload()
-  if (next && scatterEraseModeActive.value) {
+  if (next && eraseCutModeActive.value) {
     exitScatterEraseMode()
   }
   buildToolsStore.setWallDoorSelectModeActive(next)
@@ -9190,7 +9190,7 @@ function resolveAutoOverlayBuildPlanForReferenceNode(
 
 function scatterAutoOverlayEnabled(): boolean {
   return activeBuildTool.value === 'scatter'
-    && !scatterEraseModeActive.value
+    && !eraseCutModeActive.value
     && Boolean(terrainStore.scatterSelectedAsset)
 }
 
@@ -13649,8 +13649,8 @@ const activeToolUsageHints = computed(() => resolveActiveToolUsageHints({
   activeBuildTool: activeBuildTool.value,
   brushOperation: brushOperation.value,
   groundPanelTab: groundPanelTab.value,
-  scatterEraseModeActive: scatterEraseModeActive.value,
-  scatterRestoreModifierActive: scatterEraseRestoreModifierActive.value,
+  eraseCutModeActive: eraseCutModeActive.value,
+  eraseCutRestoreModifierActive: eraseCutRestoreModifierActive.value,
   wallDoorSelectModeActive: wallDoorSelectModeActive.value,
   floorBuildShape: floorBuildShape.value,
   landformBuildShape: landformBuildShape.value,
@@ -13751,7 +13751,7 @@ function maybeBeginShiftOrbitPivotSession(event: PointerEvent): void {
   if (activeBuildTool.value || uiStore.activeSelectionContext || nodePickerStore.isActive) {
     return
   }
-  if (scatterEraseModeActive.value || hasPlacementPreviewActive()) {
+  if (eraseCutModeActive.value || hasPlacementPreviewActive()) {
     return
   }
   if (Boolean(transformControls?.dragging)) {
@@ -16664,7 +16664,7 @@ async function handlePointerDown(event: PointerEvent) {
 
   // Scatter erase mode: when a wall node is selected, erase by raycasting the wall object itself.
   // This ensures procedural wall geometry is erasable even when no instanced pick targets exist.
-  if (scatterEraseModeActive.value && selectedNodeIsWall.value && event.button === 0) {
+  if (eraseCutModeActive.value && selectedNodeIsWall.value && event.button === 0) {
     if (normalizedPointerGuard.setRayFromEvent(event)) {
       const target = resolveSelectedWallEraseTargetFromCurrentRay()
       if (target) {
@@ -16695,7 +16695,7 @@ async function handlePointerDown(event: PointerEvent) {
   }
 
   const scatter = handlePointerDownScatter(event, {
-    scatterEraseModeActive: scatterEraseModeActive.value,
+    eraseCutModeActive: eraseCutModeActive.value,
     hasInstancedMeshes: hasInstancedMeshes.value,
     selectedNodeIsGround: selectedNodeIsGround.value,
     activeTool: props.activeTool,
@@ -17782,7 +17782,7 @@ function handlePointerMove(event: PointerEvent) {
   }
 
   const scatter = handlePointerMoveScatter(event, {
-    scatterEraseModeActive: scatterEraseModeActive.value,
+    eraseCutModeActive: eraseCutModeActive.value,
     hasInstancedMeshes: hasInstancedMeshes.value,
     updateRepairHoverHighlight,
     instancedEraseDragState,
@@ -18409,7 +18409,7 @@ async function handlePointerUp(event: PointerEvent) {
       const scatter = handlePointerUpScatter(event, {
         instancedEraseDragState,
         pointerInteractionReleaseIfCaptured: (pointerId) => pointerInteraction.releaseIfCaptured(pointerId),
-        scatterEraseModeActive: scatterEraseModeActive.value,
+        eraseCutModeActive: eraseCutModeActive.value,
         pointerInteractionGet: () => pointerInteraction.get(),
         pointerInteractionEnsureMoved: (e) => pointerInteraction.ensureMoved(e),
         pointerInteractionClearIfPointer: (pointerId) => pointerInteraction.clearIfPointer(pointerId),
@@ -18451,7 +18451,7 @@ async function handlePointerUp(event: PointerEvent) {
     // Scatter erase mode: right-click without dragging exits erase mode.
     // Right-drag still belongs to camera orbit controls and should not cancel the mode.
     if (
-      scatterEraseModeActive.value &&
+      eraseCutModeActive.value &&
       pointerTrackingState &&
       pointerTrackingState.pointerId === event.pointerId &&
       pointerTrackingState.button === 2 &&
@@ -18686,7 +18686,7 @@ async function handlePointerUp(event: PointerEvent) {
         return
       }
       const isScatterContext =
-        scatterEraseModeActive.value ||
+        eraseCutModeActive.value ||
         activeBuildTool.value === 'scatter' ||
         uiStore.activeSelectionContext === 'scatter-erase'
       if (isScatterContext) {
@@ -23492,7 +23492,7 @@ function handleViewportShortcut(event: KeyboardEvent) {
         if (cancelAssetPlacementInteraction()) {
           handled = true
         }
-        if (scatterEraseModeActive.value) {
+        if (eraseCutModeActive.value) {
           exitScatterEraseMode()
           handled = true
           break
@@ -23517,6 +23517,11 @@ function handleViewportShortcut(event: KeyboardEvent) {
         if (!handled && activeBuildTool.value === 'modelCollision' && selectedModelCollisionFaceId.value) {
           handled = removeSelectedModelCollisionFace()
         }
+        break
+      }
+      case 'KeyX': {
+        toggleEraseCutMode()
+        handled = true
         break
       }
       case 'KeyF': {
@@ -23559,21 +23564,21 @@ function handleViewportShortcut(event: KeyboardEvent) {
 
 function handleScatterEraseRestoreKeyDown(event: KeyboardEvent) {
   if (!shouldHandleViewportShortcut(event)) return
-  if (!scatterEraseModeActive.value) return
+  if (!eraseCutModeActive.value) return
   if (event.key === 'Control' || event.key === 'Meta') {
-    scatterEraseRestoreModifierActive.value = true
+    eraseCutRestoreModifierActive.value = true
   }
 }
 
 function handleScatterEraseRestoreKeyUp(event: KeyboardEvent) {
-  if (!scatterEraseModeActive.value) return
+  if (!eraseCutModeActive.value) return
   if (event.key === 'Control' || event.key === 'Meta') {
-    scatterEraseRestoreModifierActive.value = false
+    eraseCutRestoreModifierActive.value = false
   }
 }
 
 function handleScatterEraseRestoreBlur() {
-  scatterEraseRestoreModifierActive.value = false
+  eraseCutRestoreModifierActive.value = false
 }
 
 function handleWallDoorDeleteKeyUp(event: KeyboardEvent) {
@@ -24137,13 +24142,13 @@ defineExpose({
         :can-align-selection="canAlignSelection"
         :can-rotate-selection="canRotateSelection"
         :can-mirror-selection="canRotateSelection"
-        :can-erase-scatter="canUseScatterEraseTool"
+        :can-erase-cut="canUseEraseCutTool"
         :canClearAllScatterInstances="hasGroundNode"
         :has-ground-node="hasGroundNode"
-        :scatter-erase-mode-active="scatterEraseModeActive"
-        :scatter-erase-repair-active="scatterRepairModifierActive"
+        :eraseCutModeActive="eraseCutModeActive"
+        :eraseCutRepairActive="eraseCutRepairActive"
           :scatter-erase-radius="scatterEraseRadius"
-          :scatter-erase-menu-open="scatterEraseMenuOpen"
+          :erase-cut-menu-open="eraseCutMenuOpen"
           :viewport-placement-menu-open="viewportPlacementMenuOpen"
           :viewport-placement-active="viewportPlacementActive"
         :floor-shape-menu-open="floorShapeMenuOpen"
@@ -24193,14 +24198,14 @@ defineExpose({
         @select-floor-preset="handleFloorPresetDialogUpdate"
         @select-landform-preset="handleLandformPresetDialogUpdate"
         @select-road-preset="handleRoadPresetDialogUpdate"
-        @toggle-scatter-erase="toggleScatterEraseMode"
+        @toggle-erase-cut="toggleEraseCutMode"
         @toggle-wall-door-select-mode="toggleWallDoorSelectMode"
         @start-viewport-placement="handleStartViewportPlacement"
         @cancel-viewport-placement="handleCancelViewportPlacement"
           @clear-all-scatter-instances="handleClearAllScatterInstances"
           @update-scatter-erase-radius="terrainStore.setScatterEraseRadius"
           @update:viewport-placement-menu-open="handleViewportPlacementMenuOpen"
-          @update:scatter-erase-menu-open="handleScatterEraseMenuOpen"
+          @update:erase-cut-menu-open="handleEraseCutMenuOpen"
           @update:ground-terrain-menu-open="handleGroundTerrainMenuOpen"
           @update:ground-scatter-menu-open="handleGroundScatterMenuOpen"
           @update:floor-shape-menu-open="handleFloorShapeMenuOpen"
@@ -24599,8 +24604,8 @@ defineExpose({
           buildToolCursorClass,
           {
               'cursor-auto-overlay': autoOverlayHoverIndicator.visible,
-            'cursor-scatter-hammer': scatterRepairModifierActive,
-            'cursor-scatter-erase': scatterEraseModeActive && !scatterRepairModifierActive,
+            'cursor-scatter-hammer': eraseCutRepairActive,
+            'cursor-scatter-erase': eraseCutModeActive && !eraseCutRepairActive,
           },
         ]"
       />

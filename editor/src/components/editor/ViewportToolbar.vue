@@ -800,28 +800,28 @@
         </v-list>
       </v-menu>
       <v-menu
-        :activator="menuActivators.scatterErase"
-        :model-value="scatterEraseMenuOpen"
+        :activator="menuActivators.eraseCut"
+        :model-value="eraseCutMenuOpen"
         location="bottom"
         :offset="6"
         :open-on-click="false"
         :close-on-content-click="false"
-        @update:modelValue="(value) => emit('update:scatter-erase-menu-open', value)"
+        @update:modelValue="(value) => emit('update:erase-cut-menu-open', value)"
       >
         <template #activator="{ props: menuProps }">
           <v-btn
             v-bind="menuProps"
-            :ref="(el: unknown) => setMenuActivator('scatterErase', el)"
-            :icon="scatterEraseButtonIcon"
+            :ref="(el: unknown) => setMenuActivator('eraseCut', el)"
+            :icon="eraseCutButtonIcon"
             density="compact"
             size="small"
             class="toolbar-button"
-            :color="scatterEraseModeActive ? 'primary' : undefined"
-            :variant="scatterEraseModeActive ? 'flat' : 'text'"
-            :disabled="!canEraseScatterEffective"
-            :title="scatterEraseButtonTitle"
-            @click="handleScatterEraseButtonClick"
-            @contextmenu.prevent.stop="handleScatterEraseContextMenu"
+            :color="eraseCutModeActive ? 'primary' : undefined"
+            :variant="eraseCutModeActive ? 'flat' : 'text'"
+            :disabled="!canEraseCutEffective"
+            :title="eraseCutButtonTitle"
+            @click="handleEraseCutButtonClick"
+            @contextmenu.prevent.stop="handleEraseCutButtonContextMenu"
           />
         </template>
         <v-list density="compact" class="scatter-erase-menu">
@@ -834,10 +834,10 @@
           >
             <v-toolbar density="compact" class="menu-toolbar" height="36px">
               <div class="toolbar-text">
-                <div class="menu-title">Scatter Erase</div>
+                <div class="menu-title">Erase / Cut</div>
               </div>
               <v-spacer />
-              <v-btn class="menu-close-btn" icon="mdi-close" size="small" variant="text" @click="emit('update:scatter-erase-menu-open', false)" />
+              <v-btn class="menu-close-btn" icon="mdi-close" size="small" variant="text" @click="emit('update:erase-cut-menu-open', false)" />
             </v-toolbar>
 
             <div class="scatter-erase-menu__slider" style="padding: 10px">
@@ -856,7 +856,7 @@
                 hide-details
                 inputmode="decimal"
                 class="scatter-erase-input"
-                :disabled="!canEraseScatterEffective"
+                :disabled="!canEraseCutEffective"
                 @blur="commitScatterEraseRadiusInput"
                 @keydown.enter.prevent="commitScatterEraseRadiusInput"
               />
@@ -1214,15 +1214,15 @@ const props = withDefaults(
   canAlignSelection: boolean
   canRotateSelection: boolean
   canMirrorSelection: boolean
-  canEraseScatter: boolean
+  canEraseCut: boolean
   canClearAllScatterInstances: boolean
   hasGroundNode: boolean
   activeBuildTool: BuildTool | null
   buildToolsDisabled?: boolean
-  scatterEraseModeActive: boolean
-  scatterEraseRepairActive?: boolean
+  eraseCutModeActive: boolean
+  eraseCutRepairActive?: boolean
   scatterEraseRadius: number
-  scatterEraseMenuOpen: boolean
+  eraseCutMenuOpen: boolean
   viewportPlacementMenuOpen: boolean
   viewportPlacementActive: boolean
   floorShapeMenuOpen: boolean
@@ -1265,7 +1265,7 @@ const props = withDefaults(
     buildToolsDisabled: false,
     vertexSnapEnabled: false,
     roadDirectModeActive: false,
-    scatterEraseRepairActive: false,
+    eraseCutRepairActive: false,
     wallDoorSelectModeActive: false,
   },
 )
@@ -1282,10 +1282,10 @@ const emit = defineEmits<{
   (event: 'select-floor-preset', asset: any): void
   (event: 'select-landform-preset', asset: any): void
   (event: 'select-road-preset', asset: any): void
-  (event: 'toggle-scatter-erase'): void
+  (event: 'toggle-erase-cut'): void
   (event: 'update-scatter-erase-radius', value: number): void
   (event: 'clear-all-scatter-instances'): void
-  (event: 'update:scatter-erase-menu-open', value: boolean): void
+  (event: 'update:erase-cut-menu-open', value: boolean): void
   (event: 'update:viewport-placement-menu-open', value: boolean): void
   (event: 'update:floor-shape-menu-open', value: boolean): void
   (event: 'update:landform-shape-menu-open', value: boolean): void
@@ -1329,15 +1329,15 @@ const {
   canAlignSelection,
   canRotateSelection,
   canMirrorSelection,
-  canEraseScatter,
+  canEraseCut,
   canClearAllScatterInstances,
   hasGroundNode,
-  scatterEraseModeActive,
-  scatterEraseRepairActive,
+  eraseCutModeActive: eraseCutModeActive,
+  eraseCutRepairActive,
   activeBuildTool,
   buildToolsDisabled,
   scatterEraseRadius,
-  scatterEraseMenuOpen,
+  eraseCutMenuOpen,
   viewportPlacementMenuOpen,
   viewportPlacementActive,
   floorShapeMenuOpen,
@@ -1406,7 +1406,7 @@ type MenuActivatorKey =
   | 'road'
   | 'water'
   | 'viewportPlacement'
-  | 'scatterErase'
+  | 'eraseCut'
 
 const menuActivators = reactive<Record<MenuActivatorKey, HTMLElement | undefined>>({
   terrain: undefined,
@@ -1418,7 +1418,7 @@ const menuActivators = reactive<Record<MenuActivatorKey, HTMLElement | undefined
   road: undefined,
   water: undefined,
   viewportPlacement: undefined,
-  scatterErase: undefined,
+  eraseCut: undefined,
 })
 
 function setMenuActivator(key: MenuActivatorKey, el: unknown) {
@@ -1646,8 +1646,8 @@ watch(wallRegularPolygonSides, (value) => {
 
 const scatterEraseRadiusLabel = computed(() => `${scatterEraseRadius.value.toFixed(2)} m`)
 
-const scatterEraseButtonIcon = computed(() => (scatterEraseRepairActive.value ? 'mdi-hammer' : 'mdi-broom'))
-const scatterEraseButtonTitle = computed(() => (scatterEraseRepairActive.value ? 'Repair / Restore (Hold Ctrl)' : 'Scatter Erase'))
+const eraseCutButtonIcon = computed(() => (eraseCutRepairActive.value ? 'mdi-hammer' : 'mdi-content-cut'))
+const eraseCutButtonTitle = computed(() => (eraseCutRepairActive.value ? 'Repair / Restore (Hold Ctrl)' : 'Erase / Cut (X)'))
 
 const groundTerrainButtonActive = computed(() => isGroundButtonActive('terrain'))
 const groundScatterButtonActive = computed(() => isGroundButtonActive('scatter'))
@@ -1779,20 +1779,20 @@ watch(canMirrorSelection, (enabled) => {
   }
 })
 
-watch(canEraseScatter, (enabled) => {
+watch(canEraseCut, (enabled) => {
   if (!enabled) {
-    emit('update:scatter-erase-menu-open', false)
+    emit('update:erase-cut-menu-open', false)
   }
 })
 
-const canEraseScatterEffective = computed(() => {
+const canEraseCutEffective = computed(() => {
   // Enable scatter erase either when parent allows it, or when the active node is a Wall dynamic mesh.
   try {
     const node = activeNode.value as any
     const isWall = Boolean(node && node.dynamicMesh && (node.dynamicMesh as any).type === 'Wall')
-    return Boolean(canEraseScatter.value) || isWall
+    return Boolean(canEraseCut.value) || isWall
   } catch (_e) {
-    return Boolean(canEraseScatter.value)
+    return Boolean(canEraseCut.value)
   }
 })
 
@@ -1802,9 +1802,9 @@ const activeMirrorMode = computed<MirrorMode | null>(() => {
   return m === 'horizontal' || m === 'vertical' ? m : null
 })
 
-watch(canEraseScatterEffective, (enabled) => {
+watch(canEraseCutEffective, (enabled) => {
   if (!enabled) {
-    emit('update:scatter-erase-menu-open', false)
+    emit('update:erase-cut-menu-open', false)
   }
 })
 
@@ -1848,7 +1848,7 @@ function closeExternalMenus() {
   displayBoardToolMenuOpen.value = false
   emit('update:ground-terrain-menu-open', false)
   emit('update:ground-scatter-menu-open', false)
-  emit('update:scatter-erase-menu-open', false)
+  emit('update:erase-cut-menu-open', false)
   emit('update:viewport-placement-menu-open', false)
   emit('update:floor-shape-menu-open', false)
   emit('update:landform-shape-menu-open', false)
@@ -2468,20 +2468,20 @@ function handleWaterShapeSelect(shape: WaterBuildShape) {
   emit('select-water-build-shape', shape)
 }
 
-function handleScatterEraseButtonClick() {
-  emit('toggle-scatter-erase')
+function handleEraseCutButtonClick() {
+  emit('toggle-erase-cut')
   // Left click only toggles the tool; do not auto-open the settings menu.
-  emit('update:scatter-erase-menu-open', false)
+  emit('update:erase-cut-menu-open', false)
 }
 
-function handleScatterEraseContextMenu(event: MouseEvent) {
+function handleEraseCutButtonContextMenu(event: MouseEvent) {
   event.preventDefault()
   event.stopPropagation()
-  if (!canEraseScatterEffective.value) {
+  if (!canEraseCutEffective.value) {
     return
   }
   closeAllMenus()
-  emit('update:scatter-erase-menu-open', true)
+  emit('update:erase-cut-menu-open', true)
 }
 
 function toggleGridVisibility() {
@@ -2519,7 +2519,7 @@ function handleClearScatterMenuAction() {
     return
   }
   emit('clear-all-scatter-instances')
-  emit('update:scatter-erase-menu-open', false)
+  emit('update:erase-cut-menu-open', false)
 }
 </script>
 

@@ -8,7 +8,7 @@ type EraseRepairResult = {
 export function handlePointerMoveScatter(
   event: PointerEvent,
   ctx: {
-    scatterEraseModeActive: boolean
+    eraseCutModeActive: boolean
     hasInstancedMeshes: boolean
 
     updateRepairHoverHighlight: (event: PointerEvent) => void
@@ -19,7 +19,7 @@ export function handlePointerMoveScatter(
     pointerInteractionUpdateMoved: (event: PointerEvent) => void
   },
 ): PointerMoveResult | null {
-  if (ctx.scatterEraseModeActive) {
+  if (ctx.eraseCutModeActive) {
     ctx.updateRepairHoverHighlight(event)
 
     if (ctx.instancedEraseDragState && ctx.instancedEraseDragState.pointerId === event.pointerId) {

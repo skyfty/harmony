@@ -10,7 +10,7 @@ type EraseRepairResult = {
 export function handlePointerDownScatter(
   event: PointerEvent,
   ctx: {
-    scatterEraseModeActive: boolean
+    eraseCutModeActive: boolean
     hasInstancedMeshes: boolean
     selectedNodeIsGround: boolean
 
@@ -32,12 +32,12 @@ export function handlePointerDownScatter(
     handleGroundEditorPointerDown: (event: PointerEvent) => boolean
   },
 ): PointerDownResult | null {
-  const terrainScatterEraseActive = ctx.scatterEraseModeActive && ctx.activeBuildTool === 'scatter'
+  const terrainScatterEraseActive = ctx.eraseCutModeActive && ctx.activeBuildTool === 'scatter'
 
   // Scatter erase mode: left click (and drag) erases continuous instanced instances.
   // Keep instance-target erase only when terrain scatter erase is not active.
   if (
-    ctx.scatterEraseModeActive &&
+    ctx.eraseCutModeActive &&
     !terrainScatterEraseActive &&
     ctx.hasInstancedMeshes &&
     event.button === 0 &&
@@ -74,7 +74,7 @@ export function handlePointerDownScatter(
   // We only treat a left-click with minimal movement as an erase action, handled on pointerup.
   // If Ground is selected, let ground-scatter erase handle the click instead.
   if (
-    ctx.scatterEraseModeActive &&
+    ctx.eraseCutModeActive &&
     !terrainScatterEraseActive &&
     ctx.hasInstancedMeshes &&
     event.button === 0 &&

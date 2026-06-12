@@ -152,7 +152,7 @@ export type GroundEditorOptions = {
 	resolveAutoOverlayPlan?: (event: PointerEvent) => AutoOverlayBuildPlan | null
 	onScatterEraseStart?: () => void
 	onScatterPlacementStart?: () => void
-	scatterEraseModeActive: Ref<boolean>
+	eraseCutModeActive: Ref<boolean>
 	resolveVertexSnapPoint?: (
 		event: PointerEvent,
 		sourceWorld: THREE.Vector3,
@@ -1761,7 +1761,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function getIndicatorBrushShape(): TerrainBrushShape {
-		if (options.scatterEraseModeActive.value) {
+		if (options.eraseCutModeActive.value) {
 			return 'circle'
 		}
 		if (scatterModeEnabled()) {
@@ -1775,7 +1775,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	function getBrushColor(): number {
-		if (options.scatterEraseModeActive.value) {
+		if (options.eraseCutModeActive.value) {
 			return 0xffb347
 		}
 		if (options.groundPanelTab.value === 'terrain') {
@@ -1816,7 +1816,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		}
 		refreshBrushAppearance()
 	})
-	const stopScatterEraseModeWatch = watch(options.scatterEraseModeActive, () => {
+	const stopScatterEraseModeWatch = watch(options.eraseCutModeActive, () => {
 		refreshBrushAppearance()
 	})
 	watch(paintAsset, () => {
@@ -4423,7 +4423,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (options.activeBuildTool.value !== 'scatter') {
 			return false
 		}
-		if (options.scatterEraseModeActive.value) {
+		if (options.eraseCutModeActive.value) {
 			return false
 		}
 		if (options.groundPanelTab.value === 'terrain' || options.groundPanelTab.value === 'paint') {
@@ -4439,7 +4439,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (options.activeBuildTool.value !== 'paint') {
 			return false
 		}
-		if (options.scatterEraseModeActive.value) {
+		if (options.eraseCutModeActive.value) {
 			return false
 		}
 		if (options.groundPanelTab.value !== 'paint') {
@@ -6618,7 +6618,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!isGroundBuildToolActive()) {
 			return false
 		}
-		const eraseModeActive = options.scatterEraseModeActive.value
+		const eraseModeActive = options.eraseCutModeActive.value
 		if (!eraseModeActive) {
 			return false
 		}
@@ -6927,7 +6927,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			event.clientY,
 			options.activeBuildTool.value,
 			options.groundPanelTab.value,
-			options.scatterEraseModeActive.value ? 1 : 0,
+			options.eraseCutModeActive.value ? 1 : 0,
 			scatterModeEnabled() ? 1 : 0,
 			options.brushRadius.value,
 			options.brushOperation.value ?? '',
@@ -6956,7 +6956,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			}
 			brushMesh.position.copy(brushTargetPoint)
 			brushMesh.rotation.set(-Math.PI / 2, 0, 0)
-			if (options.scatterEraseModeActive.value) {
+			if (options.eraseCutModeActive.value) {
 				const scale = resolveScatterEraseRadius()
 				brushMesh.scale.set(scale, scale, 1)
 			} else if (scatterModeEnabled()) {
@@ -7497,7 +7497,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		const hasGroundNode = getGroundNodeFromScene()?.dynamicMesh?.type === 'Ground'
 		const isGroundToolActivated = isGroundBuildToolActive()
 		const groundPanelTab = options.groundPanelTab.value
-		const scatterEraseModeActive = options.scatterEraseModeActive.value
+		const scatterEraseModeActive = options.eraseCutModeActive.value
 		const scatterModeActive = scatterModeEnabled()
 		const showBrush = isGroundToolActivated && hasGroundNode &&
 			(groundPanelTab === 'terrain' || groundPanelTab === 'paint' || scatterEraseModeActive || scatterModeActive)

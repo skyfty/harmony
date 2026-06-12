@@ -11,7 +11,7 @@ export function handlePointerUpScatter(
     instancedEraseDragState: InstancedEraseDragState | null
     pointerInteractionReleaseIfCaptured: (pointerId: number) => void
 
-    scatterEraseModeActive: boolean
+    eraseCutModeActive: boolean
     pointerInteractionGet: () => any
     pointerInteractionEnsureMoved: (event: PointerEvent) => boolean
     pointerInteractionClearIfPointer: (pointerId: number) => void
@@ -32,7 +32,7 @@ export function handlePointerUpScatter(
 
   const interaction = ctx.pointerInteractionGet()
   if (
-    ctx.scatterEraseModeActive &&
+    ctx.eraseCutModeActive &&
     interaction?.kind === 'repairClick' &&
     interaction.pointerId === event.pointerId &&
     event.button === 0

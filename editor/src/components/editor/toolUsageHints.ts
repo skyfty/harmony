@@ -21,8 +21,8 @@ export type ActiveToolUsageHintContext = {
   activeBuildTool: BuildTool | null
   brushOperation: GroundSculptOperation | null
   groundPanelTab: GroundPanelTab
-  scatterEraseModeActive: boolean
-  scatterRestoreModifierActive: boolean
+  eraseCutModeActive: boolean
+  eraseCutRestoreModifierActive: boolean
   wallDoorSelectModeActive: boolean
   floorBuildShape: FloorBuildShape
   landformBuildShape: LandformBuildShape
@@ -313,16 +313,16 @@ function resolveGenericRows(tool: BuildTool): ToolUsageHintRow[] {
 }
 
 export function resolveActiveToolUsageHints(context: ActiveToolUsageHintContext): ToolUsageHints | null {
-  if (context.scatterEraseModeActive) {
+  if (context.eraseCutModeActive) {
     return {
       tool: 'scatter',
-      title: context.scatterRestoreModifierActive ? '地面撒件 · 还原 / 修复' : '地面撒件 · 擦除',
+      title: context.eraseCutRestoreModifierActive ? '擦除 / 截断 · 还原 / 修复' : '擦除 / 截断',
       rows: createRows([
-        { label: '入口', text: 'Terrain Scatter -> Scatter Erase' },
-        { label: '鼠标', text: '左键点击或拖动擦除当前散布实例' },
+        { label: '入口', text: 'Terrain Scatter -> Erase / Cut' },
+        { label: '鼠标', text: '左键点击或拖动执行擦除 / 截断' },
         { label: '修饰', text: '按住 Ctrl/Cmd 临时切换为还原 / 修复' },
         { label: '尺寸', text: 'Ctrl/Cmd + 滚轮调整擦除半径' },
-        { label: '取消', text: '右键或 Escape 退出擦除模式' },
+        { label: '取消', text: '右键或 Escape 退出擦除 / 截断模式' },
       ]),
     }
   }
