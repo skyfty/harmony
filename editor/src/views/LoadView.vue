@@ -292,6 +292,15 @@ async function bootstrap() {
     const latestProject = (await projectsStore.loadProjectDocument(projectId)) ?? project
     const preferred = resolveTargetSceneId(latestProject, routeSceneId)
 
+    statusMessage.value = 'Syncing scene workspace...'
+    progress.value = 60
+    setBootstrapStatus({
+      status: 'Syncing scene workspace',
+      progress: 60,
+      detail: 'Preloading local scene bundles before opening the editor.',
+    })
+    await scenesStore.syncUserWorkspaceFromServer({ replace: false })
+
     statusMessage.value = 'Opening project...'
     progress.value = 78
     setBootstrapStatus({

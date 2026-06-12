@@ -158,7 +158,7 @@ export async function runProjectImportWorkflow(options: {
         for (const duplicate of duplicateProjects) {
           await projectsStore.deleteProjectCascade(duplicate.id)
         }
-        await Promise.all([projectsStore.refreshMetadata(), scenesStore.refreshMetadata()])
+        await projectsStore.refreshMetadata()
         nextProjectName = importedProjectName
       } else {
         nextProjectName = resolveUniqueName(importedProjectName, existingProjectNames)
@@ -225,7 +225,7 @@ export async function runProjectImportWorkflow(options: {
       await projectsStore.setLastEditedScene(createdProject.id, importedLastEditedMapped)
     }
 
-    await Promise.all([projectsStore.refreshMetadata(), scenesStore.refreshMetadata()])
+    await projectsStore.refreshMetadata()
 
     uiStore.updateLoadingOverlay({
       title: '导入工程',

@@ -1076,33 +1076,6 @@ async function readSceneDocument(
   return stripGroundHeightMapsFromSceneDocument(result)
 }
 
-async function resolveSceneGroundHeightSidecarForWrite(workspaceId: string, document: StoredSceneDocument): Promise<ArrayBuffer | null> {
-  const sceneStore = useSceneStore()
-  if (sceneStore.currentSceneId === document.id) {
-    return useGroundHeightmapStore().buildSceneDocumentSidecar(findGroundNodeInDocument(document))
-  }
-  return await readSceneGroundHeightSidecar(workspaceId, document.id)
-}
-
-async function resolveSceneGroundSplatSidecarForWrite(workspaceId: string, document: StoredSceneDocument): Promise<ArrayBuffer | null> {
-  const sceneStore = useSceneStore()
-  if (sceneStore.currentSceneId === document.id) {
-    return useGroundSplatStore().buildSceneDocumentSidecar(document.id, findGroundNodeInDocument(document))
-  }
-  return await readSceneGroundSplatSidecar(workspaceId, document.id)
-}
-
-async function resolveSceneGroundScatterSidecarForWrite(workspaceId: string, document: StoredSceneDocument): Promise<ArrayBuffer | null> {
-  const sceneStore = useSceneStore()
-  if (sceneStore.currentSceneId === document.id) {
-    const currentSidecar = useGroundScatterStore().buildSceneDocumentSidecar(document.id, findGroundNodeInDocument(document))
-    if (currentSidecar) {
-      return currentSidecar
-    }
-  }
-  return await readSceneGroundScatterSidecar(workspaceId, document.id)
-}
-
 function toMetadata(document: StoredSceneDocument): SceneSummary {
   return {
     id: document.id,
@@ -1178,49 +1151,6 @@ async function writeSceneBundleEtags(
     tx.oncomplete = () => resolve()
     tx.onerror = () => reject(tx.error ?? new Error('Failed to write scene bundle etags'))
     tx.onabort = () => reject(tx.error ?? new Error('Scene bundle etag write aborted'))
-  })
-}
-
-async function writeSceneDocument(workspaceId: string, document: StoredSceneDocument): Promise<void> {
-  const prepared = prepareSceneDocumentForPersistence(document)
-  const sidecar = await resolveSceneGroundHeightSidecarForWrite(workspaceId, document)
-  const splatSidecar = await resolveSceneGroundSplatSidecarForWrite(workspaceId, document)
-  const scatterSidecar = await resolveSceneGroundScatterSidecarForWrite(workspaceId, document)
-  if (!isIndexedDbAvailable()) {
-    getMemoryWorkspace(workspaceId).set(prepared.id, prepared)
-    await writeSceneGroundHeightSidecar(workspaceId, prepared.id, sidecar)
-    await writeSceneGroundSplatSidecar(workspaceId, prepared.id, splatSidecar)
-    await writeSceneGroundScatterSidecar(workspaceId, prepared.id, scatterSidecar)
-    return
-  }
-  const db = await openDatabase(workspaceId)
-  const tx = db.transaction([STORE_DOCUMENTS, STORE_METADATA, STORE_GROUND_HEIGHTMAPS, STORE_GROUND_SPLATS, STORE_GROUND_SCATTERS], 'readwrite')
-  const docs = tx.objectStore(STORE_DOCUMENTS)
-  const meta = tx.objectStore(STORE_METADATA)
-  const heightmaps = tx.objectStore(STORE_GROUND_HEIGHTMAPS)
-  const splats = tx.objectStore(STORE_GROUND_SPLATS)
-  const dynamics = tx.objectStore(STORE_GROUND_SCATTERS)
-  docs.put(prepared)
-  meta.put(toMetadata(prepared))
-  if (sidecar) {
-    heightmaps.put({ id: prepared.id, buffer: cloneArrayBuffer(sidecar) })
-  } else {
-    heightmaps.delete(prepared.id)
-  }
-  if (splatSidecar) {
-    splats.put({ id: prepared.id, buffer: cloneArrayBuffer(splatSidecar) })
-  } else {
-    splats.delete(prepared.id)
-  }
-  if (scatterSidecar) {
-    dynamics.put({ id: prepared.id, buffer: cloneArrayBuffer(scatterSidecar) })
-  } else {
-    dynamics.delete(prepared.id)
-  }
-  await new Promise<void>((resolve, reject) => {
-    tx.oncomplete = () => resolve()
-    tx.onerror = () => reject(tx.error ?? new Error('Failed to write scene document'))
-    tx.onabort = () => reject(tx.error ?? new Error('Scene write aborted'))
   })
 }
 
@@ -1528,10 +1458,7 @@ export const useScenesStore = defineStore('scenes', {
     },
     async refreshMetadata() {
       try {
-        const records = await readAllMetadata(this.workspaceId)
-        this.metadata = records
-        this.workspaceRevision += 1
-        this.error = null
+        this.replaceMetadata(await readAllMetadata(this.workspaceId))
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Failed to refresh scenes metadata'
         this.error = message
@@ -1550,7 +1477,7 @@ export const useScenesStore = defineStore('scenes', {
         if (!remoteScenes) {
           return
         }
-        this.metadata = remoteScenes.map((entry) => ({
+        this.replaceMetadata(remoteScenes.map((entry) => ({
           id: entry.id,
           name: entry.name,
           projectId: entry.projectId,
@@ -1558,9 +1485,7 @@ export const useScenesStore = defineStore('scenes', {
           createdAt: entry.createdAt,
           updatedAt: entry.updatedAt,
           bundleEtag: entry.bundle.etag ?? null,
-        }))
-        this.workspaceRevision += 1
-        this.error = null
+        })))
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Failed to refresh scenes from server'
         this.error = message
@@ -1568,22 +1493,17 @@ export const useScenesStore = defineStore('scenes', {
       }
     },
     upsertMetadata(entry: SceneSummary) {
-      const existingIndex = this.metadata.findIndex((item) => item.id === entry.id)
+      const next = [...this.metadata]
+      const existingIndex = next.findIndex((item) => item.id === entry.id)
       if (existingIndex === -1) {
-        this.metadata = [...this.metadata, entry]
+        next.push(entry)
       } else {
-        this.metadata = [
-          ...this.metadata.slice(0, existingIndex),
-          entry,
-          ...this.metadata.slice(existingIndex + 1),
-        ]
+        next.splice(existingIndex, 1, entry)
       }
-      this.workspaceRevision += 1
+      this.replaceMetadata(next)
     },
     removeMetadata(id: string) {
-      const next = this.metadata.filter((item) => item.id !== id)
-      this.metadata = next
-      this.workspaceRevision += 1
+      this.replaceMetadata(this.metadata.filter((item) => item.id !== id))
     },
     async loadSceneDocument(
       id: string,
@@ -1596,67 +1516,13 @@ export const useScenesStore = defineStore('scenes', {
         return null
       }
     },
-    async ensureSceneBundleAvailable(sceneId: string): Promise<boolean> {
-      const localBundle = await readSceneBundleFromWorkspace(this.workspaceId, sceneId)
-      if (this.workspaceType !== 'user') {
-        return !!localBundle
-      }
-
-      const authStore = useAuthStore()
-      try {
-        const remoteScenes = await fetchUserScenesFromServer(authStore)
-        const remoteEntry = remoteScenes?.find((entry) => entry.id === sceneId) ?? null
-        if (!remoteEntry) {
-          return !!localBundle
-        }
-
-        const localMetadata = this.metadata.find((entry) => entry.id === sceneId) ?? null
-        const localEtag = localMetadata?.bundleEtag ?? null
-        const remoteEtag = remoteEntry.bundle.etag ?? null
-
-        if (localBundle && remoteEtag && localEtag && localEtag === remoteEtag) {
-          return true
-        }
-
-        let bundle = await downloadSceneBundleZip(remoteEntry.bundle.url, authStore, { etag: localEtag })
-        if (!bundle) {
-          if (localBundle) {
-            return true
-          }
-          bundle = await downloadSceneBundleZip(remoteEntry.bundle.url, authStore)
-        }
-        if (!bundle) {
-          return false
-        }
-
-        const downloaded = await unpackSceneBundleIntoStores(bundle.bytes, { allowLandformNodes: true })
-        const bundleEtag = bundle.etag ?? remoteEtag ?? localEtag ?? null
-        await writeSceneDocuments(
-          this.workspaceId,
-          [downloaded.document],
-          { [downloaded.document.id]: downloaded.groundHeightSidecar ?? null },
-          { [downloaded.document.id]: downloaded.groundSplatSidecar ?? null },
-          { [downloaded.document.id]: downloaded.groundScatterSidecar ?? null },
-          { [downloaded.document.id]: downloaded.terrainDatasetManifest ?? null },
-          { [downloaded.document.id]: downloaded.terrainDatasetRegionPacks ?? {} },
-        )
-        await writeSceneBundleEtags(this.workspaceId, { [downloaded.document.id]: bundleEtag })
-        this.upsertMetadata(toMetadataWithBundleEtag(downloaded.document, bundleEtag))
-        return true
-      } catch (error) {
-        console.warn('[ScenesStore] ensureSceneBundleAvailable failed', error)
-        return !!(await readSceneBundleFromWorkspace(this.workspaceId, sceneId))
-      }
+    replaceMetadata(metadata: SceneSummary[]) {
+      this.metadata = metadata
+      this.workspaceRevision += 1
+      this.error = null
     },
     async saveSceneDocument(document: StoredSceneDocument) {
-      await writeSceneDocument(this.workspaceId, document)
-      this.upsertMetadata(toMetadata(document))
-      if (this.workspaceType === 'user') {
-        await this.syncSceneToServer(document)
-      }
-      if (!this.initialized) {
-        this.initialized = true
-      }
+      await this.saveSceneDocuments([document])
     },
     async saveSceneDocuments(
       documents: StoredSceneDocument[],
@@ -1678,7 +1544,17 @@ export const useScenesStore = defineStore('scenes', {
         options.terrainDatasetManifests ?? {},
         options.terrainDatasetRegionPacks ?? {},
       )
-      documents.forEach((doc) => this.upsertMetadata(toMetadata(doc)))
+      const nextMetadata = [...this.metadata]
+      for (const doc of documents) {
+        const nextEntry = toMetadata(doc)
+        const existingIndex = nextMetadata.findIndex((item) => item.id === nextEntry.id)
+        if (existingIndex === -1) {
+          nextMetadata.push(nextEntry)
+        } else {
+          nextMetadata.splice(existingIndex, 1, nextEntry)
+        }
+      }
+      this.replaceMetadata(nextMetadata)
       if (this.workspaceType === 'user') {
         for (const doc of documents) {
           await this.syncSceneToServer(doc)
@@ -1715,9 +1591,7 @@ export const useScenesStore = defineStore('scenes', {
       const source = cloneForIndexedDb(document)
       const sidecar = groundHeightmapStore.buildSceneDocumentSidecar(findGroundNodeInDocument(source))
       await writeSceneGroundHeightSidecar(this.workspaceId, source.id, sidecar)
-      if (this.workspaceType === 'user') {
-        await this.syncSceneToServer(document)
-      }
+      await this.syncSceneDocumentToServer(source.id)
     },
     async loadGroundHeightSidecar(sceneId: string): Promise<ArrayBuffer | null> {
       return await readSceneGroundHeightSidecar(this.workspaceId, sceneId)
@@ -1758,14 +1632,8 @@ export const useScenesStore = defineStore('scenes', {
       options: { syncServer?: boolean } = {},
     ): Promise<void> {
       await writeSceneTerrainDatasetManifest(this.workspaceId, sceneId, manifest)
-      if (options.syncServer !== false && this.workspaceType === 'user') {
-        const sceneStore = useSceneStore()
-        const document = sceneStore.currentSceneId === sceneId
-          ? sceneStore.createSceneDocumentSnapshot()
-          : await this.loadSceneDocument(sceneId, { hydrateGroundRuntime: false })
-        if (document) {
-          await this.syncSceneToServer(document)
-        }
+      if (options.syncServer !== false) {
+        await this.syncSceneDocumentToServer(sceneId)
       }
     },
     async loadTerrainDatasetRegionPack(sceneId: string, regionKey: string): Promise<ArrayBuffer | null> {
@@ -1818,14 +1686,8 @@ export const useScenesStore = defineStore('scenes', {
       options: { syncServer?: boolean } = {},
     ): Promise<void> {
       await writeSceneTerrainDatasetRegionPack(this.workspaceId, sceneId, regionKey, data)
-      if (options.syncServer !== false && this.workspaceType === 'user') {
-        const sceneStore = useSceneStore()
-        const document = sceneStore.currentSceneId === sceneId
-          ? sceneStore.createSceneDocumentSnapshot()
-          : await this.loadSceneDocument(sceneId, { hydrateGroundRuntime: false })
-        if (document) {
-          await this.syncSceneToServer(document)
-        }
+      if (options.syncServer !== false) {
+        await this.syncSceneDocumentToServer(sceneId)
       }
     },
     async replaceTerrainDatasetBundle(
@@ -1862,14 +1724,8 @@ export const useScenesStore = defineStore('scenes', {
         .map((regionKey) => [regionKey, null]))
       await writeRegionPackBatch(Object.entries(regionPacks).map(([regionKey, buffer]) => [regionKey, buffer ?? null]))
 
-      if (options.syncServer !== false && this.workspaceType === 'user') {
-        const sceneStore = useSceneStore()
-        const document = sceneStore.currentSceneId === sceneId
-          ? sceneStore.createSceneDocumentSnapshot()
-          : await this.loadSceneDocument(sceneId, { hydrateGroundRuntime: false })
-        if (document) {
-          await this.syncSceneToServer(document)
-        }
+      if (options.syncServer !== false) {
+        await this.syncSceneDocumentToServer(sceneId)
       }
     },
     async saveSceneGroundHeightSidecar(
@@ -1878,14 +1734,8 @@ export const useScenesStore = defineStore('scenes', {
       options: { syncServer?: boolean } = {},
     ): Promise<void> {
       await writeSceneGroundHeightSidecar(this.workspaceId, sceneId, sidecar)
-      if (options.syncServer !== false && this.workspaceType === 'user') {
-        const sceneStore = useSceneStore()
-        const document = sceneStore.currentSceneId === sceneId
-          ? sceneStore.createSceneDocumentSnapshot()
-          : await this.loadSceneDocument(sceneId, { hydrateGroundRuntime: false })
-        if (document) {
-          await this.syncSceneToServer(document)
-        }
+      if (options.syncServer !== false) {
+        await this.syncSceneDocumentToServer(sceneId)
       }
     },
     async saveSceneGroundSplatSidecar(
@@ -1894,14 +1744,8 @@ export const useScenesStore = defineStore('scenes', {
       options: { syncServer?: boolean } = {},
     ): Promise<void> {
       await writeSceneGroundSplatSidecar(this.workspaceId, sceneId, sidecar)
-      if (options.syncServer !== false && this.workspaceType === 'user') {
-        const sceneStore = useSceneStore()
-        const document = sceneStore.currentSceneId === sceneId
-          ? sceneStore.createSceneDocumentSnapshot()
-          : await this.loadSceneDocument(sceneId, { hydrateGroundRuntime: false })
-        if (document) {
-          await this.syncSceneToServer(document)
-        }
+      if (options.syncServer !== false) {
+        await this.syncSceneDocumentToServer(sceneId)
       }
     },
     async saveSceneGroundScatterSidecar(
@@ -1910,14 +1754,20 @@ export const useScenesStore = defineStore('scenes', {
       options: { syncServer?: boolean } = {},
     ): Promise<void> {
       await writeSceneGroundScatterSidecar(this.workspaceId, sceneId, sidecar)
-      if (options.syncServer !== false && this.workspaceType === 'user') {
-        const sceneStore = useSceneStore()
-        const document = sceneStore.currentSceneId === sceneId
-          ? sceneStore.createSceneDocumentSnapshot()
-          : await this.loadSceneDocument(sceneId, { hydrateGroundRuntime: false })
-        if (document) {
-          await this.syncSceneToServer(document)
-        }
+      if (options.syncServer !== false) {
+        await this.syncSceneDocumentToServer(sceneId)
+      }
+    },
+    async syncSceneDocumentToServer(sceneId: string) {
+      if (this.workspaceType !== 'user') {
+        return
+      }
+      const sceneStore = useSceneStore()
+      const document = sceneStore.currentSceneId === sceneId
+        ? sceneStore.createSceneDocumentSnapshot()
+        : await this.loadSceneDocument(sceneId, { hydrateGroundRuntime: false })
+      if (document) {
+        await this.syncSceneToServer(document)
       }
     },
     async syncUserWorkspaceFromServer(options: { replace?: boolean } = {}) {

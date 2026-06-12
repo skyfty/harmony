@@ -19018,11 +19018,6 @@ export const useSceneStore = defineStore('scene', {
         emitSceneLoadProgress(options.onProgress, { step, progress, detail })
       }
       const scenesStore = useScenesStore()
-      reportProgress('Checking scene bundle', 8, 'Verifying local scene data and remote bundle state...')
-      const sceneReady = await scenesStore.ensureSceneBundleAvailable(sceneId)
-      if (!sceneReady) {
-        return false
-      }
       if (!forceReload && sceneId === this.currentSceneId) {
         this.isSceneReady = false
         try {
@@ -19040,7 +19035,7 @@ export const useSceneStore = defineStore('scene', {
         reportProgress('Scene ready', 100, 'Current scene assets refreshed.')
         return true
       }
-      reportProgress('Reading scene document', 16, 'Loading scene document and ground sidecars...')
+      reportProgress('Reading scene document', 16, 'Loading local scene document and ground sidecars...')
       const scene = await scenesStore.loadSceneDocument(sceneId, { hydrateGroundRuntime: true })
       if (!scene) {
         return false
@@ -19122,7 +19117,6 @@ export const useSceneStore = defineStore('scene', {
       target.nodes.forEach((node) => releaseRuntimeTree(node))
 
       await scenesStore.deleteScene(sceneId)
-      await scenesStore.refreshMetadata()
 
       if (projectId) {
         await projectsStore.removeSceneFromProject(projectId, sceneId)
@@ -19301,7 +19295,6 @@ export const useSceneStore = defineStore('scene', {
           ),
         },
       )
-      await scenesStore.refreshMetadata()
 
       return {
         importedSceneIds: imported.map((scene) => scene.id),
@@ -19394,7 +19387,6 @@ export const useSceneStore = defineStore('scene', {
       }
 
       await scenesStore.saveSceneDocuments(imported)
-      await scenesStore.refreshMetadata()
 
       return {
         importedSceneIds: imported.map((scene) => scene.id),
