@@ -7431,13 +7431,45 @@ function createGroundChunkSplatMaterial(baseMaterial: THREE.Material): THREE.Mes
   return nextMaterial
 }
 
+function resetGroundChunkMaterialToBase(
+  mesh: THREE.Mesh,
+  baseMaterial: THREE.Material,
+  currentMaterial: THREE.Material | null,
+): void {
+  if (currentMaterial && currentMaterial !== baseMaterial) {
+    disposeGroundChunkTexturedMaterial(currentMaterial)
+  }
+  if (mesh.material !== baseMaterial) {
+    mesh.material = baseMaterial
+  }
+  delete (mesh.userData as Record<string, unknown>).groundChunkSplatMaps
+  setGroundChunkTextureReady(mesh, true)
+}
+
+function applyGroundChunkMaterial(
+  mesh: THREE.Mesh,
+  nextMaterial: THREE.Material,
+  currentMaterial: THREE.Material | null,
+  baseMaterial: THREE.Material,
+  retainIfCached = false,
+): void {
+  if (currentMaterial && currentMaterial !== baseMaterial && currentMaterial !== nextMaterial) {
+    disposeGroundChunkTexturedMaterial(currentMaterial)
+  }
+  if (mesh.material !== nextMaterial) {
+    if (retainIfCached) {
+      retainGroundChunkTexturedMaterial(nextMaterial)
+    }
+    mesh.material = nextMaterial
+  }
+}
+
 function applyGroundTextureToChunkMesh(
   mesh: THREE.Mesh,
   definition: GroundDynamicMesh,
   chunkKey: string | null,
   spec: Pick<GroundChunkSpec, 'startRow' | 'startColumn' | 'rows' | 'columns'> | null,
   baseMaterial: THREE.Material,
-  baseTexture: THREE.Texture | null,
   baseMaterialSignature: string,
   options: {
     isCompiledGroundTile?: boolean
@@ -7445,50 +7477,30 @@ function applyGroundTextureToChunkMesh(
     groundSplatRuntimeProfile?: GroundSplatRuntimeProfile | null
   } = {},
 ): void {
-  void baseTexture
   const currentMaterial = Array.isArray(mesh.material) ? (mesh.material[0] ?? null) : (mesh.material ?? null)
   const userData = mesh.userData as Record<string, unknown>
+  const resetToBaseMaterial = () => resetGroundChunkMaterialToBase(mesh, baseMaterial, currentMaterial)
+
   if (!chunkKey) {
     if (options.isCompiledGroundTile) {
       const tileLabel = options.compiledGroundTileKey ?? mesh.name ?? 'unknown'
-      throw new Error(
-        `Missing baked ground chunk key for compiled ground tile ${tileLabel}.`,
-      )
+      throw new Error(`Missing baked ground chunk key for compiled ground tile ${tileLabel}.`)
     }
-    if (currentMaterial && currentMaterial !== baseMaterial) {
-      disposeGroundChunkTexturedMaterial(currentMaterial)
-    }
-    if (mesh.material !== baseMaterial) {
-      mesh.material = baseMaterial
-    }
-    delete userData.groundChunkSplatMaps
-    setGroundChunkTextureReady(mesh, true)
+    resetToBaseMaterial()
     return
   }
+
   const bundle = resolveGroundChunkTextureBundleSources(definition, chunkKey)
   const activeSource = bundle?.albedo ?? null
   if (bundle && !definition.groundSurfaceChunks) {
     throw new Error(`Missing baked groundSurfaceChunks for ground chunk ${chunkKey}.`)
   }
-  const hasBakedBundle = Boolean(
-    activeSource
-    || bundle?.normal
-    || (bundle?.splatMaps?.length ?? 0) > 0,
-  )
+  const hasBakedBundle = Boolean(activeSource || bundle?.normal || (bundle?.splatMaps?.length ?? 0) > 0)
 
   if (!hasBakedBundle) {
-    // Compiled ground tiles may span many chunk coordinates, while baked surface data is sparse
-    // and only authored for chunks that actually need landform/texture blending.
-    // When a tile resolves to a chunk key without an authored bundle, fall back to the base ground
-    // material instead of treating it as a hard runtime error.
-    if (currentMaterial && currentMaterial !== baseMaterial) {
-      disposeGroundChunkTexturedMaterial(currentMaterial)
-    }
-    if (mesh.material !== baseMaterial) {
-      mesh.material = baseMaterial
-    }
-    delete userData.groundChunkSplatMaps
-    setGroundChunkTextureReady(mesh, true)
+    // Compiled ground tiles may span many chunk coordinates, while baked surface data is sparse.
+    // If no authored bundle exists for the resolved chunk, reuse the base material.
+    resetToBaseMaterial()
     return
   }
 
@@ -7551,15 +7563,7 @@ function applyGroundTextureToChunkMesh(
         ])
       }
       userData.groundChunkSplatMaps = (nextMaterial as THREE.MeshStandardMaterial & Record<string, unknown>)[GROUND_SPLAT_MASK_TEXTURES] ?? []
-      if (currentMaterial && currentMaterial !== baseMaterial && currentMaterial !== nextMaterial) {
-        disposeGroundChunkTexturedMaterial(currentMaterial)
-      }
-      if (mesh.material !== nextMaterial) {
-        if (cachedEntry) {
-          retainGroundChunkTexturedMaterial(nextMaterial)
-        }
-        mesh.material = nextMaterial
-      }
+      applyGroundChunkMaterial(mesh, nextMaterial, currentMaterial, baseMaterial, Boolean(cachedEntry))
       syncGroundChunkTextureReadyFromMaterial(mesh, nextMaterial)
       return
     }
@@ -7577,13 +7581,7 @@ function applyGroundTextureToChunkMesh(
   ].join('|')
   const cachedEntry = groundMaterialCache.get(signature)
   if (cachedEntry) {
-    if (currentMaterial && currentMaterial !== baseMaterial && currentMaterial !== cachedEntry.material) {
-      disposeGroundChunkTexturedMaterial(currentMaterial)
-    }
-    if (mesh.material !== cachedEntry.material) {
-      retainGroundChunkTexturedMaterial(cachedEntry.material)
-      mesh.material = cachedEntry.material
-    }
+    applyGroundChunkMaterial(mesh, cachedEntry.material, currentMaterial, baseMaterial, true)
     const cachedTyped = cachedEntry.material as THREE.MeshStandardMaterial & Record<string, unknown>
     userData.groundChunkSplatMaps = Array.isArray(cachedTyped[GROUND_SPLAT_MASK_TEXTURES])
       ? cachedTyped[GROUND_SPLAT_MASK_TEXTURES] as THREE.Texture[]
@@ -7648,11 +7646,8 @@ function applyGroundTextureToChunkMesh(
     ...(Array.isArray(userData.groundChunkSplatMaps) ? userData.groundChunkSplatMaps as THREE.Texture[] : []),
   ])
 
-  if (currentMaterial && currentMaterial !== baseMaterial) {
-    disposeGroundChunkTexturedMaterial(currentMaterial)
-  }
+  applyGroundChunkMaterial(mesh, nextMaterial, currentMaterial, baseMaterial)
   disposeGroundChunkSplatRuntimeState(splatRuntimeState)
-  mesh.material = nextMaterial
   syncGroundChunkTextureReadyFromMaterial(mesh, nextMaterial)
 }
 
@@ -7701,7 +7696,6 @@ export function applyGroundTextureToRuntimeChunkMesh(params: {
     resolvedChunkKey,
     chunkSpec ?? null,
     baseMaterial,
-    null,
     resolvedBaseMaterialSignature,
     {
       isCompiledGroundTile,

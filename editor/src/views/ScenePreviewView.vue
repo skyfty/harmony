@@ -76,7 +76,6 @@ import { subscribeToScenePreview } from '@/utils/previewChannel'
 import type { SceneExportOptions } from '@/types/scene-export'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import { prepareStoredSceneJsonExportBundle } from '@/utils/sceneExport'
-import { bakeLandformGroundSplatForSceneDocument } from '@/utils/landformGroundBake'
 import { type SceneAssetDiagnosticsSummary } from '@/utils/sceneAssetDiagnostics'
 import { collectRuntimeModelNodesByAssetId } from '@/utils/sceneAssetCollectors'
 import { createGroundRuntimeMeshFromSidecar } from '@/utils/groundHeightSidecar'
@@ -7728,10 +7727,6 @@ function handleLookLevelEvent(event: Extract<BehaviorRuntimeEvent, { type: 'look
 }
 
 async function ensureScenePreviewExportDocument(document: StoredSceneDocument) {
-	await bakeLandformGroundSplatForSceneDocument(document, {
-		maxTextureSize: 512,
-		maxSplatLayers: 4,
-	})
 	const bundle = await prepareStoredSceneJsonExportBundle(document, SCENE_PREVIEW_EXPORT_OPTIONS)
 	return bundle.document
 }

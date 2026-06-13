@@ -121,6 +121,36 @@ function hasSceneGroundTerrainOverrides(dynamicMesh: unknown): boolean {
   return Number.isFinite(planningOverrideCount) && planningOverrideCount > 0
 }
 
+function hasUsableGroundSplatBake(dynamicMesh: GroundDynamicMesh | null | undefined): boolean {
+  if (!dynamicMesh || dynamicMesh.type !== 'Ground') {
+    return false
+  }
+  if (dynamicMesh.groundSurfaceChunks && Object.keys(dynamicMesh.groundSurfaceChunks).length > 0) {
+    return true
+  }
+  return Boolean(
+    dynamicMesh.groundSplatBake?.chunkTextureMap
+    && Object.keys(dynamicMesh.groundSplatBake.chunkTextureMap).length > 0,
+  )
+}
+
+function hasLandformNodes(nodes: SceneJsonExportDocument['nodes']): boolean {
+  const stack = Array.isArray(nodes) ? [...nodes] : []
+  while (stack.length > 0) {
+    const node = stack.pop()
+    if (!node || typeof node !== 'object') {
+      continue
+    }
+    if ((node as { dynamicMesh?: { type?: string } | null }).dynamicMesh?.type === 'Landform') {
+      return true
+    }
+    if (Array.isArray(node.children) && node.children.length > 0) {
+      stack.push(...node.children)
+    }
+  }
+  return false
+}
+
 function buildEffectiveAssetRegistry(
   document: SceneJsonExportDocument | null | undefined,
 ): Record<string, SceneAssetRegistryEntry> {
@@ -581,10 +611,13 @@ async function prepareSceneDocumentForPackageExport(
     return document
   }
   stripGroundBakedTextureAssetIds(cloned.nodes ?? [])
-  await bakeLandformGroundSplatForSceneDocument(cloned as StoredSceneDocument, {
-    maxTextureSize: 512,
-    maxSplatLayers: 4,
-  })
+  const groundNode = findGroundNode(cloned.nodes ?? [])
+  if (groundNode && hasLandformNodes(cloned.nodes ?? []) && !hasUsableGroundSplatBake(groundNode.dynamicMesh as GroundDynamicMesh | null | undefined)) {
+    await bakeLandformGroundSplatForSceneDocument(cloned as StoredSceneDocument, {
+      maxTextureSize: 512,
+      maxSplatLayers: 4,
+    })
+  }
   if (options.preserveLandformNodes !== true) {
     stripLandformNodes(cloned.nodes ?? [])
     assertNoLandformNodes(cloned.nodes ?? [])
