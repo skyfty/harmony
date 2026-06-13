@@ -239,6 +239,7 @@ export type ScenePackageExportScene = {
 }
 
 export type ScenePackagePlanningDataMode = 'withPlanningData' | 'withoutPlanningData'
+export type ScenePackageExportMode = 'runtime' | 'source'
 
 // inferExtFromMimeType moved to @schema (assetTypeConversion)
 
@@ -506,6 +507,25 @@ function stripGroundBakedTextureAssetIds(nodes: SceneJsonExportDocument['nodes']
   }
 }
 
+function stripGroundRuntimeUserData(nodes: SceneJsonExportDocument['nodes']): void {
+  for (const node of nodes) {
+    if (node && typeof node === 'object') {
+      const userData = (node as { userData?: Record<string, unknown> | null }).userData
+      if (userData && typeof userData === 'object') {
+        delete userData.compiledGroundEnabled
+        delete userData.compiledGroundManifest
+        delete userData.compiledGroundBuildKey
+        delete userData.runtimeTerrainDatasetManifest
+        delete userData.runtimeTerrainDatasetEnabled
+        delete userData.runtimeTerrainHeightSampler
+      }
+    }
+    if (Array.isArray(node.children) && node.children.length > 0) {
+      stripGroundRuntimeUserData(node.children)
+    }
+  }
+}
+
 function stripLandformNodes(nodes: SceneJsonExportDocument['nodes']): void {
   if (!Array.isArray(nodes)) {
     return
@@ -574,26 +594,33 @@ function requiresGroundSplatSidecar(document: SceneJsonExportDocument): boolean 
 
 async function prepareSceneDocumentForPackageExport(
   document: SceneJsonExportDocument,
-  options: { preserveLandformNodes?: boolean } = {},
+  options: { preserveLandformNodes?: boolean; packageMode?: ScenePackageExportMode } = {},
 ): Promise<SceneJsonExportDocument> {
   const cloned = cloneSceneExportDocument(document) as SceneExportDocumentWithEditorFields
   if (!cloned || typeof cloned !== 'object') {
     return document
   }
   stripGroundBakedTextureAssetIds(cloned.nodes ?? [])
-  await bakeLandformGroundSplatForSceneDocument(cloned as StoredSceneDocument, {
-    maxTextureSize: 512,
-    maxSplatLayers: 4,
-  })
-  if (options.preserveLandformNodes !== true) {
-    stripLandformNodes(cloned.nodes ?? [])
-    assertNoLandformNodes(cloned.nodes ?? [])
+  const packageMode = options.packageMode ?? 'runtime'
+  if (packageMode === 'runtime') {
+    await bakeLandformGroundSplatForSceneDocument(cloned as StoredSceneDocument, {
+      maxTextureSize: 512,
+      maxSplatLayers: 4,
+    })
+    if (options.preserveLandformNodes !== true) {
+      stripLandformNodes(cloned.nodes ?? [])
+      assertNoLandformNodes(cloned.nodes ?? [])
+    }
+  } else {
+    stripGroundRuntimeUserData(cloned.nodes ?? [])
   }
   const looksEditableScene = 'assetCatalog' in cloned
   if (!looksEditableScene) {
     return cloned
   }
-  const editable = cloneSceneDocumentWithRuntimeGroundSidecars(cloned as StoredSceneDocument)
+  const editable = packageMode === 'runtime'
+    ? cloneSceneDocumentWithRuntimeGroundSidecars(cloned as StoredSceneDocument)
+    : cloned
   editable.assetRegistry = await buildAssetRegistryForExport(editable)
   editable.resourceSummary = await calculateSceneResourceSummary(editable, { embedResources: true })
 
@@ -1184,6 +1211,7 @@ export async function exportScenePackageZip(payload: {
   scenes: ScenePackageExportScene[]
   embedAssets?: boolean
   planningDataMode: ScenePackagePlanningDataMode
+  packageMode?: ScenePackageExportMode
   preserveLandformNodes?: boolean
   updateProgress?: (value: number, message?: string) => void
   reportEvent?: SceneExportEventReporter
@@ -1207,6 +1235,7 @@ export async function prepareScenePackageZipFiles(payload: {
   scenes: ScenePackageExportScene[]
   embedAssets?: boolean
   planningDataMode: ScenePackagePlanningDataMode
+  packageMode?: ScenePackageExportMode
   preserveLandformNodes?: boolean
   updateProgress?: (value: number, message?: string) => void
   reportEvent?: SceneExportEventReporter
@@ -1242,6 +1271,7 @@ export async function prepareScenePackageZipFiles(payload: {
   const resources: ScenePackageResourceEntry[] = []
   const sceneReferenceSummaryMaps = new Map<string, Map<string, SceneAssetReferenceSummary>>()
   const includePlanningData = payload.planningDataMode === 'withPlanningData'
+  const packageMode = payload.packageMode ?? 'runtime'
 
   payload.scenes.forEach((scene) => {
     const document = scene.document as SceneExportDocumentWithEditorFields
@@ -1369,6 +1399,7 @@ export async function prepareScenePackageZipFiles(payload: {
     })
     const preparedDocument = await prepareSceneDocumentForPackageExport(scene.document, {
       preserveLandformNodes: payload.preserveLandformNodes === true,
+      packageMode,
     })
     const scenePath = `scenes/${encodeURIComponent(scene.id)}/scene.bin`
     let planningPath: string | undefined
@@ -1379,12 +1410,17 @@ export async function prepareScenePackageZipFiles(payload: {
     let roadCollision: ScenePackageManifestV1['scenes'][number]['roadCollision'] | undefined
     const groundNode = findGroundNode(preparedDocument.nodes)
     const storedTerrainDatasetManifest = await scenesStore.loadTerrainDatasetManifest(scene.id)
-    const groundSplatSidecar = useGroundSplatStore().buildSceneDocumentSidecar(scene.id, groundNode)
-      ?? await scenesStore.loadGroundSplatSidecar(scene.id)
-    const groundScatterSidecar = scene.id === sceneStore.currentSceneId
-      ? useGroundScatterStore().buildSceneDocumentSidecar(scene.id, groundNode)
-      : await scenesStore.loadGroundScatterSidecar(scene.id)
-    if (groundNode?.dynamicMesh?.type === 'Ground') {
+    const includeRuntimeData = packageMode === 'runtime'
+    const groundSplatSidecar = includeRuntimeData
+      ? useGroundSplatStore().buildSceneDocumentSidecar(scene.id, groundNode)
+        ?? await scenesStore.loadGroundSplatSidecar(scene.id)
+      : null
+    const groundScatterSidecar = includeRuntimeData
+      ? (scene.id === sceneStore.currentSceneId
+          ? useGroundScatterStore().buildSceneDocumentSidecar(scene.id, groundNode)
+          : await scenesStore.loadGroundScatterSidecar(scene.id))
+      : null
+    if (includeRuntimeData && groundNode?.dynamicMesh?.type === 'Ground') {
       const compiledGroundStartedAt = typeof performance !== 'undefined' ? performance.now() : Date.now()
       const compiledGroundBuildKey = computeSceneCompiledGroundBuildKey(
         scene.id,
@@ -1477,28 +1513,30 @@ export async function prepareScenePackageZipFiles(payload: {
         })
       }
     }
-    if (requiresGroundSplatSidecar(preparedDocument) && !groundSplatSidecar) {
+    if (includeRuntimeData && requiresGroundSplatSidecar(preparedDocument) && !groundSplatSidecar) {
       throw new Error(`Ground baked splat sidecar is required for scene ${scene.id} before export.`)
     }
-    const roadCollisionExport = buildRoadCollisionCompiledExport(preparedDocument as SceneJsonExportDocument)
-    if (roadCollisionExport.manifest.roads.length > 0) {
-      roadCollision = {
-        manifestPath: roadCollisionExport.manifestPath,
+    if (includeRuntimeData) {
+      const roadCollisionExport = buildRoadCollisionCompiledExport(preparedDocument as SceneJsonExportDocument)
+      if (roadCollisionExport.manifest.roads.length > 0) {
+        roadCollision = {
+          manifestPath: roadCollisionExport.manifestPath,
+        }
+        attachRoadCollisionCompiledPackagesToDocument(
+          preparedDocument as SceneJsonExportDocument,
+          roadCollisionExport.packagesByNodeId,
+        )
+        Object.assign(files, roadCollisionExport.files)
+        emitSceneExportEvent(payload.reportEvent, {
+          phase: 'sidecar',
+          level: 'info',
+          status: 'completed',
+          sceneId: scene.id,
+          sceneName,
+          detail: roadCollisionExport.manifestPath,
+          message: `Road collision cache packaged (${roadCollisionExport.manifest.roads.length})`,
+        })
       }
-      attachRoadCollisionCompiledPackagesToDocument(
-        preparedDocument as SceneJsonExportDocument,
-        roadCollisionExport.packagesByNodeId,
-      )
-      Object.assign(files, roadCollisionExport.files)
-      emitSceneExportEvent(payload.reportEvent, {
-        phase: 'sidecar',
-        level: 'info',
-        status: 'completed',
-        sceneId: scene.id,
-        sceneName,
-        detail: roadCollisionExport.manifestPath,
-        message: `Road collision cache packaged (${roadCollisionExport.manifest.roads.length})`,
-      })
     }
     stripGroundHeightMapsFromSceneDocument(preparedDocument as StoredSceneDocument)
     const docClone = preparedDocument as SceneExportDocumentWithEditorFields

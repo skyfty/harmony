@@ -1465,6 +1465,7 @@ async function exportProjectPackageZip(
     scenes: embeddedScenes,
     embedAssets: options.embedAssets ?? false,
     planningDataMode: 'withoutPlanningData',
+    packageMode: 'source',
     updateProgress,
     reportEvent,
   })

@@ -132,7 +132,7 @@ export async function runProjectImportWorkflow(options: {
     uiStore.updateLoadingOverlay({ message: '解析工程包…' })
     uiStore.updateLoadingProgress(48)
 
-    const loaded = await loadStoredScenesFromScenePackage(bytes)
+    const loaded = await loadStoredScenesFromScenePackage(bytes, { allowLandformNodes: true })
 
     const existingProjectNames = new Set(projectsStore.metadata.map((entry) => entry.name))
     const existingSceneNames = new Set(scenesStore.metadata.map((entry) => entry.name))
@@ -317,6 +317,7 @@ export async function runProjectExportWorkflow(options: {
       scenes: embeddedScenes,
       embedAssets: true,
       planningDataMode: 'withPlanningData',
+      packageMode: 'source',
     })
 
     const fileNameBase = sanitizeExportFileName(project.name)

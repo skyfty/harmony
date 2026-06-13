@@ -19205,7 +19205,7 @@ export const useSceneStore = defineStore('scene', {
         groundScatterSidecars,
         terrainDatasetManifests,
         terrainDatasetRegionPacks,
-      } = await loadStoredScenesFromScenePackage(zipBytes)
+      } = await loadStoredScenesFromScenePackage(zipBytes, { allowLandformNodes: true })
       if (!Array.isArray(scenes) || !scenes.length) {
         throw new Error('Scene package does not contain any scene data')
       }
