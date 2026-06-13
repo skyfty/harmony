@@ -52,7 +52,7 @@ import { buildAssetRegistryAliasMap, normalizeAssetIdWithRegistry } from '@/util
 import {
   stripGroundHeightMapsFromSceneDocument,
 } from '@/utils/groundHeightSidecar'
-import { bakeLandformGroundSplatForSceneDocument } from '@/utils/landformGroundBake'
+import { resolveDocumentGroundNode } from '@schema/groundNode'
 import {
   computeSceneCompiledGroundBuildKey,
   computeSceneCompiledGroundSourceSignature,
@@ -119,36 +119,6 @@ function hasSceneGroundTerrainOverrides(dynamicMesh: unknown): boolean {
 
   const planningOverrideCount = Number(ground.runtimePlanningHeightOverrideCount)
   return Number.isFinite(planningOverrideCount) && planningOverrideCount > 0
-}
-
-function hasUsableGroundSplatBake(dynamicMesh: GroundDynamicMesh | null | undefined): boolean {
-  if (!dynamicMesh || dynamicMesh.type !== 'Ground') {
-    return false
-  }
-  if (dynamicMesh.groundSurfaceChunks && Object.keys(dynamicMesh.groundSurfaceChunks).length > 0) {
-    return true
-  }
-  return Boolean(
-    dynamicMesh.groundSplatBake?.chunkTextureMap
-    && Object.keys(dynamicMesh.groundSplatBake.chunkTextureMap).length > 0,
-  )
-}
-
-function hasLandformNodes(nodes: SceneJsonExportDocument['nodes']): boolean {
-  const stack = Array.isArray(nodes) ? [...nodes] : []
-  while (stack.length > 0) {
-    const node = stack.pop()
-    if (!node || typeof node !== 'object') {
-      continue
-    }
-    if ((node as { dynamicMesh?: { type?: string } | null }).dynamicMesh?.type === 'Landform') {
-      return true
-    }
-    if (Array.isArray(node.children) && node.children.length > 0) {
-      stack.push(...node.children)
-    }
-  }
-  return false
 }
 
 function buildEffectiveAssetRegistry(
@@ -269,6 +239,7 @@ export type ScenePackageExportScene = {
 }
 
 export type ScenePackagePlanningDataMode = 'withPlanningData' | 'withoutPlanningData'
+export type ScenePackageExportMode = 'runtime' | 'source'
 
 // inferExtFromMimeType moved to @schema (assetTypeConversion)
 
@@ -517,23 +488,40 @@ function buildCombinedAssetEventContext(
   }
 }
 
-function stripGroundBakedTextureAssetIds(nodes: SceneJsonExportDocument['nodes']): void {
-  for (const node of nodes) {
-    if (node && typeof node === 'object') {
-      const dynamicMesh = (node as { dynamicMesh?: Record<string, unknown> | null }).dynamicMesh
-      if (dynamicMesh && typeof dynamicMesh === 'object') {
-        if ('groundSurfaceChunks' in dynamicMesh) {
-          dynamicMesh.groundSurfaceChunks = null
-        }
-        if ('groundSplatBake' in dynamicMesh) {
-          dynamicMesh.groundSplatBake = null
-        }
-      }
-    }
-    if (Array.isArray(node.children) && node.children.length > 0) {
-      stripGroundBakedTextureAssetIds(node.children)
-    }
+function stripGroundBakedTextureAssetIds(groundNode: SceneJsonExportDocument['nodes'][number] | null | undefined): void {
+  if (!groundNode || typeof groundNode !== 'object') {
+    return
   }
+
+  const dynamicMesh = (groundNode as { dynamicMesh?: Record<string, unknown> | null }).dynamicMesh
+  if (!dynamicMesh || typeof dynamicMesh !== 'object') {
+    return
+  }
+
+  if ('groundSurfaceChunks' in dynamicMesh) {
+    dynamicMesh.groundSurfaceChunks = null
+  }
+  if ('groundSplatBake' in dynamicMesh) {
+    dynamicMesh.groundSplatBake = null
+  }
+}
+
+function stripGroundRuntimeUserData(groundNode: SceneJsonExportDocument['nodes'][number] | null | undefined): void {
+  if (!groundNode || typeof groundNode !== 'object') {
+    return
+  }
+
+  const userData = (groundNode as { userData?: Record<string, unknown> | null }).userData
+  if (!userData || typeof userData !== 'object') {
+    return
+  }
+
+  delete userData.compiledGroundEnabled
+  delete userData.compiledGroundManifest
+  delete userData.compiledGroundBuildKey
+  delete userData.runtimeTerrainDatasetManifest
+  delete userData.runtimeTerrainDatasetEnabled
+  delete userData.runtimeTerrainHeightSampler
 }
 
 function stripLandformNodes(nodes: SceneJsonExportDocument['nodes']): void {
@@ -578,57 +566,51 @@ function assertNoLandformNodes(nodes: SceneJsonExportDocument['nodes'], path = '
   })
 }
 
-function requiresGroundSplatSidecar(document: SceneJsonExportDocument): boolean {
-  const stack = Array.isArray(document.nodes) ? [...document.nodes] : []
-  while (stack.length > 0) {
-    const node = stack.pop()
-    if (!node || typeof node !== 'object') {
-      continue
-    }
-    const dynamicMesh = node.dynamicMesh as GroundDynamicMesh | { type?: string } | null | undefined
-    if (dynamicMesh?.type === 'Ground') {
-      const groundDynamicMesh = dynamicMesh as GroundDynamicMesh
-      if (groundDynamicMesh.groundSurfaceChunks && Object.keys(groundDynamicMesh.groundSurfaceChunks).length > 0) {
-        return true
-      }
-      if (groundDynamicMesh.groundSplatBake?.chunkTextureMap && Object.keys(groundDynamicMesh.groundSplatBake.chunkTextureMap).length > 0) {
-        return true
-      }
-    }
-    if (Array.isArray(node.children) && node.children.length > 0) {
-      stack.push(...node.children)
-    }
+function requiresGroundSplatSidecar(groundNode: SceneJsonExportDocument['nodes'][number] | null | undefined): boolean {
+  if (!groundNode || typeof groundNode !== 'object') {
+    return false
+  }
+
+  const dynamicMesh = groundNode.dynamicMesh as GroundDynamicMesh | { type?: string } | null | undefined
+  if (dynamicMesh?.type !== 'Ground') {
+    return false
+  }
+
+  const groundDynamicMesh = dynamicMesh as GroundDynamicMesh
+  if (groundDynamicMesh.groundSurfaceChunks && Object.keys(groundDynamicMesh.groundSurfaceChunks).length > 0) {
+    return true
+  }
+  if (groundDynamicMesh.groundSplatBake?.chunkTextureMap && Object.keys(groundDynamicMesh.groundSplatBake.chunkTextureMap).length > 0) {
+    return true
   }
   return false
 }
 
 async function prepareSceneDocumentForPackageExport(
   document: SceneJsonExportDocument,
-  options: { preserveLandformNodes?: boolean } = {},
+  options: { preserveLandformNodes?: boolean; packageMode?: ScenePackageExportMode } = {},
 ): Promise<SceneJsonExportDocument> {
   const cloned = cloneSceneExportDocument(document) as SceneExportDocumentWithEditorFields
   if (!cloned || typeof cloned !== 'object') {
     return document
   }
-  stripGroundBakedTextureAssetIds(cloned.nodes ?? [])
-  const groundNode = findGroundNode(cloned.nodes ?? [])
-  if (groundNode && hasLandformNodes(cloned.nodes ?? []) && !hasUsableGroundSplatBake(groundNode.dynamicMesh as GroundDynamicMesh | null | undefined)) {
-    await bakeLandformGroundSplatForSceneDocument(cloned as StoredSceneDocument, {
-      maxTextureSize: 512,
-      maxSplatLayers: 4,
-    })
-  }
-  if (options.preserveLandformNodes !== true) {
-    stripLandformNodes(cloned.nodes ?? [])
-    assertNoLandformNodes(cloned.nodes ?? [])
+
+  const packageMode = options.packageMode ?? 'runtime'
+  if (packageMode === 'runtime') {
+    if (options.preserveLandformNodes !== true) {
+      stripLandformNodes(cloned.nodes ?? [])
+      assertNoLandformNodes(cloned.nodes ?? [])
+    }
   }
   const looksEditableScene = 'assetCatalog' in cloned
   if (!looksEditableScene) {
     return cloned
   }
-  const editable = cloneSceneDocumentWithRuntimeGroundSidecars(cloned as StoredSceneDocument)
-  editable.assetRegistry = await buildAssetRegistryForExport(editable)
-  editable.resourceSummary = await calculateSceneResourceSummary(editable, { embedResources: true })
+  const editable = packageMode === 'runtime'
+    ? cloneSceneDocumentWithRuntimeGroundSidecars(cloned as StoredSceneDocument)
+    : cloned
+  editable.assetRegistry = await buildAssetRegistryForExport(editable as StoredSceneDocument)
+  editable.resourceSummary = await calculateSceneResourceSummary(editable as StoredSceneDocument, { embedResources: true })
 
   const unknownAssetIds = Array.isArray(editable.resourceSummary?.unknownAssetIds)
     ? editable.resourceSummary.unknownAssetIds
@@ -675,26 +657,11 @@ async function prepareSceneDocumentForPackageExport(
     )
 
     if (registryPatched) {
-      editable.resourceSummary = await calculateSceneResourceSummary(editable, { embedResources: true })
+      editable.resourceSummary = await calculateSceneResourceSummary(editable as StoredSceneDocument, { embedResources: true })
     }
   }
 
   return editable
-}
-
-function findGroundNode(nodes: SceneJsonExportDocument['nodes']): SceneJsonExportDocument['nodes'][number] | null {
-  for (const node of nodes) {
-    if (node.dynamicMesh?.type === 'Ground') {
-      return node
-    }
-    if (Array.isArray(node.children) && node.children.length > 0) {
-      const nested = findGroundNode(node.children)
-      if (nested) {
-        return nested
-      }
-    }
-  }
-  return null
 }
 
 function stripEditorOnlySceneFields(
@@ -1217,6 +1184,7 @@ export async function exportScenePackageZip(payload: {
   scenes: ScenePackageExportScene[]
   embedAssets?: boolean
   planningDataMode: ScenePackagePlanningDataMode
+  packageMode?: ScenePackageExportMode
   preserveLandformNodes?: boolean
   updateProgress?: (value: number, message?: string) => void
   reportEvent?: SceneExportEventReporter
@@ -1240,6 +1208,7 @@ export async function prepareScenePackageZipFiles(payload: {
   scenes: ScenePackageExportScene[]
   embedAssets?: boolean
   planningDataMode: ScenePackagePlanningDataMode
+  packageMode?: ScenePackageExportMode
   preserveLandformNodes?: boolean
   updateProgress?: (value: number, message?: string) => void
   reportEvent?: SceneExportEventReporter
@@ -1275,6 +1244,8 @@ export async function prepareScenePackageZipFiles(payload: {
   const resources: ScenePackageResourceEntry[] = []
   const sceneReferenceSummaryMaps = new Map<string, Map<string, SceneAssetReferenceSummary>>()
   const includePlanningData = payload.planningDataMode === 'withPlanningData'
+  const packageMode = payload.packageMode ?? 'runtime'
+  const includeRuntimeData = packageMode === 'runtime'
 
   payload.scenes.forEach((scene) => {
     const document = scene.document as SceneExportDocumentWithEditorFields
@@ -1401,7 +1372,8 @@ export async function prepareScenePackageZipFiles(payload: {
       message: `开始打包场景 ${sceneName}`,
     })
     const preparedDocument = await prepareSceneDocumentForPackageExport(scene.document, {
-      preserveLandformNodes: payload.preserveLandformNodes === true,
+      preserveLandformNodes: payload.preserveLandformNodes === true || packageMode === 'source',
+      packageMode,
     })
     const scenePath = `scenes/${encodeURIComponent(scene.id)}/scene.bin`
     let planningPath: string | undefined
@@ -1410,14 +1382,19 @@ export async function prepareScenePackageZipFiles(payload: {
     let terrain: ScenePackageManifestV1['scenes'][number]['terrain'] | undefined
     let compiledGround: ScenePackageManifestV1['scenes'][number]['compiledGround'] | undefined
     let roadCollision: ScenePackageManifestV1['scenes'][number]['roadCollision'] | undefined
-    const groundNode = findGroundNode(preparedDocument.nodes)
+    const groundNode = resolveDocumentGroundNode(preparedDocument)
+    const hasGroundSplatSidecarRequirement = requiresGroundSplatSidecar(groundNode)
     const storedTerrainDatasetManifest = await scenesStore.loadTerrainDatasetManifest(scene.id)
-    const groundSplatSidecar = useGroundSplatStore().buildSceneDocumentSidecar(scene.id, groundNode)
-      ?? await scenesStore.loadGroundSplatSidecar(scene.id)
-    const groundScatterSidecar = scene.id === sceneStore.currentSceneId
-      ? useGroundScatterStore().buildSceneDocumentSidecar(scene.id, groundNode)
-      : await scenesStore.loadGroundScatterSidecar(scene.id)
-    if (groundNode?.dynamicMesh?.type === 'Ground') {
+    const groundSplatSidecar = includeRuntimeData
+      ? useGroundSplatStore().buildSceneDocumentSidecar(scene.id, groundNode)
+        ?? await scenesStore.loadGroundSplatSidecar(scene.id)
+      : null
+    const groundScatterSidecar = includeRuntimeData
+      ? (scene.id === sceneStore.currentSceneId
+          ? useGroundScatterStore().buildSceneDocumentSidecar(scene.id, groundNode)
+          : await scenesStore.loadGroundScatterSidecar(scene.id))
+      : null
+    if (includeRuntimeData && groundNode?.dynamicMesh?.type === 'Ground') {
       const compiledGroundStartedAt = typeof performance !== 'undefined' ? performance.now() : Date.now()
       const compiledGroundBuildKey = computeSceneCompiledGroundBuildKey(
         scene.id,
@@ -1510,28 +1487,30 @@ export async function prepareScenePackageZipFiles(payload: {
         })
       }
     }
-    if (requiresGroundSplatSidecar(preparedDocument) && !groundSplatSidecar) {
+    if (includeRuntimeData && hasGroundSplatSidecarRequirement && !groundSplatSidecar) {
       throw new Error(`Ground baked splat sidecar is required for scene ${scene.id} before export.`)
     }
-    const roadCollisionExport = buildRoadCollisionCompiledExport(preparedDocument as SceneJsonExportDocument)
-    if (roadCollisionExport.manifest.roads.length > 0) {
-      roadCollision = {
-        manifestPath: roadCollisionExport.manifestPath,
+    if (includeRuntimeData) {
+      const roadCollisionExport = buildRoadCollisionCompiledExport(preparedDocument as SceneJsonExportDocument)
+      if (roadCollisionExport.manifest.roads.length > 0) {
+        roadCollision = {
+          manifestPath: roadCollisionExport.manifestPath,
+        }
+        attachRoadCollisionCompiledPackagesToDocument(
+          preparedDocument as SceneJsonExportDocument,
+          roadCollisionExport.packagesByNodeId,
+        )
+        Object.assign(files, roadCollisionExport.files)
+        emitSceneExportEvent(payload.reportEvent, {
+          phase: 'sidecar',
+          level: 'info',
+          status: 'completed',
+          sceneId: scene.id,
+          sceneName,
+          detail: roadCollisionExport.manifestPath,
+          message: `Road collision cache packaged (${roadCollisionExport.manifest.roads.length})`,
+        })
       }
-      attachRoadCollisionCompiledPackagesToDocument(
-        preparedDocument as SceneJsonExportDocument,
-        roadCollisionExport.packagesByNodeId,
-      )
-      Object.assign(files, roadCollisionExport.files)
-      emitSceneExportEvent(payload.reportEvent, {
-        phase: 'sidecar',
-        level: 'info',
-        status: 'completed',
-        sceneId: scene.id,
-        sceneName,
-        detail: roadCollisionExport.manifestPath,
-        message: `Road collision cache packaged (${roadCollisionExport.manifest.roads.length})`,
-      })
     }
     stripGroundHeightMapsFromSceneDocument(preparedDocument as StoredSceneDocument)
     const docClone = preparedDocument as SceneExportDocumentWithEditorFields
@@ -1659,7 +1638,10 @@ export async function prepareScenePackageZipFiles(payload: {
         }
       })
     }
-    stripGroundBakedTextureAssetIds(docClone.nodes ?? [])
+    if (packageMode !== 'runtime') {
+      stripGroundRuntimeUserData(groundNode)
+    }
+    stripGroundBakedTextureAssetIds(groundNode)
     stripEditorOnlySceneFields(docClone, retainedConfigAssetIds, { includePlanningData })
     // Add the prepared binary scene document to files and manifest.
     files[scenePath] = encodeScenePackageSceneDocument(docClone)

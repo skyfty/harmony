@@ -185,6 +185,7 @@ class SceneSyncUploadQueue {
         },
         scenes: [{ id: task.document.id, document: cloneForQueue(task.document) }],
         planningDataMode: 'withPlanningData',
+        packageMode: 'source',
         preserveLandformNodes: true,
       })
 

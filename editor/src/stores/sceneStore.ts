@@ -2729,6 +2729,41 @@ function findGroundNode(nodes: SceneNode[]): SceneNode | null {
   return null
 }
 
+function hasLandformNodes(nodes: SceneNode[] | null | undefined): boolean {
+  if (!Array.isArray(nodes)) {
+    return false
+  }
+  for (const node of nodes) {
+    if (!node || typeof node !== 'object') {
+      continue
+    }
+    if (node.dynamicMesh?.type === 'Landform') {
+      return true
+    }
+    if (Array.isArray(node.children) && node.children.length > 0 && hasLandformNodes(node.children)) {
+      return true
+    }
+  }
+  return false
+}
+
+function hasUsableGroundSplatBake(node: SceneNode | null | undefined): boolean {
+  if (!node || !isGroundNode(node)) {
+    return false
+  }
+  const dynamicMesh = node.dynamicMesh as {
+    groundSurfaceChunks?: Record<string, unknown> | null
+    groundSplatBake?: { chunkTextureMap?: Record<string, unknown> | null } | null
+  }
+  if (dynamicMesh.groundSurfaceChunks && Object.keys(dynamicMesh.groundSurfaceChunks).length > 0) {
+    return true
+  }
+  return Boolean(
+    dynamicMesh.groundSplatBake?.chunkTextureMap
+    && Object.keys(dynamicMesh.groundSplatBake.chunkTextureMap).length > 0,
+  )
+}
+
 function applyRuntimeHiddenInPreviewFlags(
   nodes: SceneNode[],
   shouldHideNode: (node: SceneNode) => boolean,
@@ -9301,6 +9336,9 @@ export const useSceneStore = defineStore('scene', {
         attachGroundScatterRuntimeToNode(scene.id, normalizedGroundNode)
       }
       replaceSceneNodes(this, normalizedNodes)
+      if (hasLandformNodes(normalizedNodes) && !hasUsableGroundSplatBake(normalizedGroundNode)) {
+        scheduleLandformGroundSplatBake(this, 'applySceneDocumentToState')
+      }
       this.rebuildGeneratedMeshRuntimes()
       this.planningData = clonePlanningData(scene.planningData)
       this.setSelection([])
