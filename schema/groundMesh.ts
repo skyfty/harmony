@@ -41,6 +41,7 @@ import type {
 } from './core'
 import { addMesh as markInstancedBoundsDirty } from './instancedBoundsTracker'
 import { createTextureSettings } from './material'
+import { getGroundTextureSourceResolver } from './groundTextureSourceResolver'
 import { hashString, stableSerialize } from './stableSerialize'
 
 import {
@@ -6460,6 +6461,11 @@ function loadGroundTextureFromSource(
   if (!normalizedSource) {
     return null
   }
+  const sourceResolver = getGroundTextureSourceResolver()
+  const resolvedSource = sourceResolver ? sourceResolver(normalizedSource) : normalizedSource
+  if (!resolvedSource) {
+    return null
+  }
   const cacheKey = resolveGroundTextureCacheKey(normalizedSource, options)
   const cached = groundTextureCache.get(cacheKey)
   if (cached) {
@@ -6468,7 +6474,7 @@ function loadGroundTextureFromSource(
     return cached.texture
   }
   const texture = textureLoader.load(
-    normalizedSource,
+    resolvedSource,
     () => {
       const entry = groundTextureCache.get(cacheKey)
       if (!entry) {
@@ -7337,8 +7343,7 @@ function createGroundChunkSplatRuntimeState(
     }
     return createGroundSplatLayerTexture(layer.albedoSource, index, layer.albedoTextureSettings)
   })
-  const layerNormalTextures = runtimeProfile.enableLayerNormalMap
-    ? activeLayers.map((layer, index) => {
+  const layerNormalTextures = activeLayers.map((layer, index) => {
       if (!layer.normalSource) {
         return null
       }
@@ -7348,7 +7353,6 @@ function createGroundChunkSplatRuntimeState(
       }
       return texture
     })
-    : activeLayers.map(() => null)
   return {
     chunkBounds,
     layerTextures,

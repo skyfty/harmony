@@ -773,6 +773,12 @@ class SceneGraphBuilder {
       }
     }
 
+    for (const usage of this.document.resourceSummary?.meshTextureUsage ?? []) {
+      for(const textureAssetId of usage.textureAssetIds) {
+        ids.add(textureAssetId);
+      }
+    }
+
     return Array.from(ids);
   }
 

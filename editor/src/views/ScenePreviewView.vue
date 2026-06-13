@@ -115,6 +115,7 @@ import { collectGroundAnchorWorldPositions } from '@schema/groundAnchorRuntime'
 import { setInfiniteGroundHiddenChunkKeys } from '@schema/groundMesh'
 import { prepareRuntimeGroundSceneDocument } from '@schema/groundSplatRuntimeDocument'
 import { resolveModelCollisionFaceSegments } from '@schema/physicsShapeResolvers'
+import { setGroundTextureSourceResolver } from '@schema/groundTextureSourceResolver'
 import {
 	createSceneCsmShadowRuntime,
 	DEFAULT_SCENE_CSM_CONFIG,
@@ -1992,6 +1993,18 @@ function computeEnvironmentAssetReloadKey(assetId: string | null | undefined): s
 	const serverUpdatedAt = entry?.serverUpdatedAt ?? null
 	const blobUrl = entry?.blobUrl ?? null
 	return `${trimmed}|${serverUpdatedAt ?? ''}|${blobUrl ?? ''}`
+}
+
+function resolveGroundTextureSource(assetId: string): string | null {
+	const trimmed = typeof assetId === 'string' ? assetId.trim() : ''
+	if (!trimmed) {
+		return null
+	}
+	if (trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.startsWith('data:') || trimmed.startsWith('blob:')) {
+		return trimmed
+	}
+	const entry = editorAssetCache.peekEntry(trimmed) ?? assetCacheStore.entries?.[trimmed] ?? null
+	return entry?.blobUrl ?? entry?.downloadUrl ?? null
 }
 
 function buildObjectUrlsFromSkycubeZipFaces(
@@ -14137,6 +14150,7 @@ onMounted(() => {
 	(globalThis as typeof globalThis & { [DISPLAY_BOARD_RESOLVER_KEY]?: typeof resolveDisplayBoardMediaSource })[
 		DISPLAY_BOARD_RESOLVER_KEY
 	] = resolveDisplayBoardMediaSource
+	setGroundTextureSourceResolver(resolveGroundTextureSource)
 	setParticleTextureResolver(resolveParticleTextureAssetSource)
 	addBehaviorRuntimeListener(behaviorRuntimeListener)
 	initRenderer()
@@ -14227,6 +14241,7 @@ onBeforeUnmount(() => {
 	;(globalThis as typeof globalThis & { [DISPLAY_BOARD_RESOLVER_KEY]?: typeof resolveDisplayBoardMediaSource })[
 		DISPLAY_BOARD_RESOLVER_KEY
 	] = undefined
+	setGroundTextureSourceResolver(null)
 	setParticleTextureResolver(null)
 })
 

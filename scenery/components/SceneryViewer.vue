@@ -789,6 +789,7 @@ import {
   applyParticleRuntimeCommand,
   setParticleTextureResolver,
 } from '@harmony/schema/components/definitions/particleSystemComponent';
+import { setGroundTextureSourceResolver } from '@harmony/schema/groundTextureSourceResolver';
 import {
   couponComponentDefinition,
   COUPON_COMPONENT_TYPE,
@@ -4532,6 +4533,21 @@ function getOrCreateObjectUrl(assetId: string, data: ArrayBuffer | Blob, mimeHin
 	const url = URL.createObjectURL(blob)
 	assetObjectUrlCache.set(assetId, url)
 	return url
+}
+
+function resolveGroundTextureSource(assetId: string): string | null {
+  const trimmed = typeof assetId === 'string' ? assetId.trim() : ''
+  if (!trimmed.length) {
+    return null
+  }
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.startsWith('data:') || trimmed.startsWith('blob:')) {
+    return trimmed
+  }
+  const cachedEntry = sceneAssetLoader.getCache().peekEntry(trimmed)
+  if (cachedEntry?.blobUrl) {
+    return cachedEntry.blobUrl
+  }
+  return cachedEntry?.downloadUrl ?? null
 }
 function buildResolvedAssetUrl(assetId: string, entry: AssetCacheEntry | null): ResolvedAssetUrl | null {
 	if (!entry) {
@@ -18568,6 +18584,7 @@ onMounted(() => {
   if (hasAnyPropInput()) {
     applySceneInputFromProps();
   }
+  setGroundTextureSourceResolver(resolveGroundTextureSource);
   setParticleTextureResolver(resolveParticleTextureAssetSource);
 });
 
@@ -18639,6 +18656,7 @@ function cleanupRuntime(): void {
   setActiveMultiuserRuntimeBridge(null);
   sharedResourceCache = null;
   lanternViewerInstance = null;
+  setGroundTextureSourceResolver(null);
   delete (globalThis as typeof globalThis & Record<string, unknown>)[DISPLAY_BOARD_RESOLVER_KEY];
   setParticleTextureResolver(null);
 }

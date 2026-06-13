@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import type {
+  AssetSourceMetadata,
   GroundDynamicMesh,
   GroundSurfaceChunkLayerRef,
   GroundSurfaceChunkTextureMap,
@@ -19,7 +20,10 @@ import {
   resolveInfiniteGroundGridOriginMeters,
 } from '@schema/core'
 import { createTextureSettings } from '@schema/material'
+import { computeBlobHash } from '@/utils/blob'
+import { determineAssetCategoryId } from '@/stores/assetCatalog'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
+import type { ProjectAsset } from '@/types/project-asset'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 
 type CanvasLike = OffscreenCanvas | HTMLCanvasElement
@@ -62,6 +66,14 @@ export type LandformGroundBakeOptions = {
   maxTextureSize?: number
   maxSplatLayers?: number
   debugBaseTextureOnly?: boolean
+  registerAssets?: (assets: ProjectAsset[], options?: {
+    categoryId?: string | ((asset: ProjectAsset) => string)
+    source?: AssetSourceMetadata | ((asset: ProjectAsset) => AssetSourceMetadata | undefined)
+    internal?: boolean | ((asset: ProjectAsset) => boolean)
+    isEditorOnly?: boolean | ((asset: ProjectAsset) => boolean)
+    commitOptions?: { updateNodes?: boolean }
+    autoSave?: boolean
+  }) => ProjectAsset[]
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -110,16 +122,56 @@ async function canvasToBlob(canvas: CanvasLike): Promise<Blob | null> {
   return null
 }
 
-async function blobToDataUrl(blob: Blob): Promise<string | null> {
-  if (typeof FileReader === 'undefined') {
-    return null
+async function storeGroundSurfaceTextureAsset(options: {
+  scene: StoredSceneDocument
+  blob: Blob
+  filename: string
+  description: string
+  registerAssets?: LandformGroundBakeOptions['registerAssets']
+}): Promise<string | null> {
+  const assetCache = useAssetCacheStore()
+  const textureAssetId = await computeBlobHash(options.blob)
+  const asset: ProjectAsset = {
+    id: textureAssetId,
+    name: options.filename,
+    type: 'texture',
+    downloadUrl: textureAssetId,
+    previewColor: '#ffffff',
+    thumbnail: null,
+    description: options.description,
+    tags: ['ground-surface-chunk'],
+    gleaned: true,
+    extension: 'png',
+    metadata: {
+      generatedBy: 'ground-landform-bake',
+    },
   }
-  return await new Promise((resolve) => {
-    const reader = new FileReader()
-    reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : null)
-    reader.onerror = () => resolve(null)
-    reader.readAsDataURL(blob)
+  await assetCache.storeAssetBlob(textureAssetId, {
+    blob: options.blob,
+    mimeType: 'image/png',
+    filename: options.filename,
+    downloadUrl: textureAssetId,
+    contentHash: textureAssetId,
   })
+  if (options.registerAssets) {
+    options.registerAssets([asset], {
+      source: { type: 'local' },
+      internal: true,
+      commitOptions: { updateNodes: false },
+    })
+  }
+  if (options.scene && options.scene.assetCatalog) {
+    const categoryId = determineAssetCategoryId(asset)
+    const existingCategoryId = Object.entries(options.scene.assetCatalog).find(([, list]) =>
+      (list ?? []).some((entry) => entry.id === asset.id),
+    )?.[0]
+    if (existingCategoryId && options.scene.assetCatalog[existingCategoryId]) {
+      options.scene.assetCatalog[existingCategoryId] = options.scene.assetCatalog[existingCategoryId]!.filter((entry) => entry.id !== asset.id)
+    }
+    const currentList = options.scene.assetCatalog[categoryId] ?? []
+    options.scene.assetCatalog[categoryId] = [...currentList.filter((entry) => entry.id !== asset.id), asset]
+  }
+  return textureAssetId
 }
 
 function resolveCanvasImageSourceSize(source: CanvasImageSource): { width: number; height: number } | null {
@@ -901,33 +953,6 @@ async function loadLayerTextureImage(
   return await loading
 }
 
-async function resolveLayerTextureRuntimeSource(
-  scene: StoredSceneDocument,
-  assetId: string | null | undefined,
-  cache: Map<string, Promise<string | null>>,
-): Promise<string | null> {
-  const normalized = typeof assetId === 'string' ? assetId.trim() : ''
-  if (!normalized) {
-    return null
-  }
-  const existing = cache.get(normalized)
-  if (existing) {
-    return await existing
-  }
-  const loading = (async () => {
-    const blob = await resolveSceneAssetBlob(scene, normalized)
-    if (blob) {
-      const dataUrl = await blobToDataUrl(blob)
-      if (typeof dataUrl === 'string' && dataUrl.length > 0) {
-        return dataUrl
-      }
-    }
-    return findAssetDownloadUrl(scene, normalized)
-  })()
-  cache.set(normalized, loading)
-  return await loading
-}
-
 function resolveLandformMaterialProps(node: SceneNode, layerId?: string | null): SceneMaterialProps | null {
   const layers = resolveLandformSurfaceLayers(node)
   const normalizedLayerId = typeof layerId === 'string' && layerId.trim().length ? layerId.trim() : ''
@@ -1502,11 +1527,11 @@ export async function bakeLandformGroundSurfaceChunks(
   // 最终输出纹理尺寸的上限。
   // 这里不是固定大小，而是根据 chunk 的实际世界尺寸按比例缩放后再限制最大值。
   const maxTextureSize = Math.max(128, Math.round(options.maxTextureSize ?? 1024))
+  const groundNodeId = findGroundNode(scene.nodes ?? [])?.id ?? 'ground'
 
   // nextChunks 就是最终返回的结果：chunkKey -> GroundSurfaceChunkTextureRef。
   // 这些缓存用来避免同一张贴图反复解码/转 dataURL。
   const nextChunks: GroundSurfaceChunkTextureMap = {}
-  const layerTextureRuntimeSourceCache = new Map<string, Promise<string | null>>()
 
   // 逐个处理受影响的 chunk。
   for (const chunkKey of affectedChunkKeys) {
@@ -1612,13 +1637,7 @@ export async function bakeLandformGroundSurfaceChunks(
       // 优先取 albedo 贴图；如果没有，则尝试 layer 自己声明的 textureAssetIds。
       const primaryTextureAssetId = resolveTextureAssetId(albedoTextureRef)
         ?? (Array.isArray(targetLayer?.textureAssetIds) ? targetLayer.textureAssetIds[0] ?? null : null)
-      const primaryTextureRuntimeSource = primaryTextureAssetId
-        ? await resolveLayerTextureRuntimeSource(scene, primaryTextureAssetId, layerTextureRuntimeSourceCache)
-        : null
       const normalTextureAssetId = resolveTextureAssetId(normalTextureRef)
-      const normalTextureRuntimeSource = normalTextureAssetId
-        ? await resolveLayerTextureRuntimeSource(scene, normalTextureAssetId, layerTextureRuntimeSourceCache)
-        : null
 
       // UV scale 决定这层在 chunk 内如何重复平铺。
       // 如果 layer 没有明确给，就回退到 1，保持导出结果和 preview/runtime 的默认语义一致。
@@ -1635,9 +1654,9 @@ export async function bakeLandformGroundSurfaceChunks(
         ? createTextureSettings(normalTextureRef.settings as Partial<SceneMaterialTextureSettings>)
         : null
       const pendingSurfaceLayer: GroundSurfaceChunkLayerRef = {
-        albedoSource: primaryTextureRuntimeSource,
+        albedoSource: primaryTextureAssetId,
         albedoTextureSettings,
-        normalSource: normalTextureRuntimeSource,
+        normalSource: normalTextureAssetId,
         normalTextureSettings,
         colorTint: landformColor,
         opacity,
@@ -1732,15 +1751,22 @@ export async function bakeLandformGroundSurfaceChunks(
     normalizePackedMaskWeights(splat0Buffer, size.width, size.height, chunkSurfaceLayers.length)
     splat0.context.putImageData(splat0Data, 0, 0)
 
-    // 最后把 canvas 编码成 blob，再转成 dataURL。
-    // 这样 GroundSurfaceChunkTextureRef 就能直接携带可序列化的纹理数据。
+    // 最后把 canvas 编码成 blob，再落成场景内可注册的纹理资产。
     const splat0Blob = await canvasToBlob(splat0.canvas)
+    const splatMapReference = splat0Blob
+      ? await storeGroundSurfaceTextureAsset({
+          scene,
+          blob: splat0Blob,
+          filename: `ground-surface-chunk_${groundNodeId}_${chunkKey}.png`,
+          description: `Ground splat chunk (${groundNodeId}:${chunkKey})`,
+          registerAssets: options.registerAssets,
+        })
+      : null
     const nextChunkRef: GroundSurfaceChunkTextureRef = {
       baseBlendMode: 'shader-splat-v1',
       textureAssetId: null,
       normalTextureAssetId: null,
-      splatMapAssetIds: [splat0Blob ? await blobToDataUrl(splat0Blob) : null]
-        .filter((value): value is string => typeof value === 'string' && value.length > 0),
+      splatMapAssetIds: splatMapReference ? [splatMapReference] : null,
       surfaceLayers: chunkSurfaceLayers,
       revision: Date.now(),
     }

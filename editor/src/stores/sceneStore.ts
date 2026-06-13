@@ -1107,12 +1107,21 @@ function buildSceneDocumentSidecarPayload(document: StoredSceneDocument): SceneD
 }
 
 type SceneStoreGroundSplatBakeTarget = Pick<SceneState, 'nodes'> & {
+  assetCatalog?: Record<string, ProjectAsset[]>
   currentSceneId?: string | null
   isSceneReady?: boolean
   hasUnsavedChanges?: boolean
   requestSceneAutoSave?: (options?: { mode?: SceneAutoSaveMode }) => void
   queueSceneNodePatch: (nodeId: string, fields: ScenePatchField[], options?: { bumpVersion?: boolean }) => boolean
   bumpSceneNodePropertyVersion?: () => void
+  registerAssets?: (assets: ProjectAsset[], options?: {
+    categoryId?: string | ((asset: ProjectAsset) => string)
+    source?: AssetSourceMetadata | ((asset: ProjectAsset) => AssetSourceMetadata | undefined)
+    internal?: boolean | ((asset: ProjectAsset) => boolean)
+    isEditorOnly?: boolean | ((asset: ProjectAsset) => boolean)
+    commitOptions?: { updateNodes?: boolean }
+    autoSave?: boolean
+  }) => ProjectAsset[]
 }
 
 function requestSceneAutoSaveAfterLandformBake(store: SceneStoreGroundSplatBakeTarget): void {
@@ -1158,7 +1167,9 @@ function collectLandformSurfaceLayerTextureAssetIdsFromNodes(nodes: SceneNode[] 
 let landformGroundSplatBakeVersion = 0
 const landformGroundSplatBakeScheduler = createLatestIdleScheduler<LandformGroundSplatBakeRequest>((request) => {
   void (async () => {
-    const baked = await bakeLandformGroundSplatForSceneDocument(request.snapshot)
+    const baked = await bakeLandformGroundSplatForSceneDocument(request.snapshot, {
+      registerAssets: request.scene.registerAssets?.bind(request.scene),
+    })
     if (request.version !== landformGroundSplatBakeVersion) {
       return
     }

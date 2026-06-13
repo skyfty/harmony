@@ -240,6 +240,7 @@ import {
   releaseGroundMeshCache,
   sampleGroundHeight,
 } from '@schema/groundMesh'
+import { setGroundTextureSourceResolver } from '@schema/groundTextureSourceResolver'
 import {
   computeCompiledGroundManifestRevision,
 } from '@schema/compiledGround'
@@ -1146,6 +1147,26 @@ function computeEnvironmentAssetReloadKey(assetId: string | null | undefined): s
   const blobUrl = entry?.blobUrl ?? null
   const downloadUrl = asset?.downloadUrl ?? null
   return `${trimmed}|${serverUpdatedAt ?? ''}|${blobUrl ?? ''}|${downloadUrl ?? ''}`
+}
+
+function resolveGroundTextureSource(assetId: string): string | null {
+  const trimmed = typeof assetId === 'string' ? assetId.trim() : ''
+  if (!trimmed) {
+    return null
+  }
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.startsWith('data:') || trimmed.startsWith('blob:')) {
+    return trimmed
+  }
+  const entry = assetCacheStore.entries?.[trimmed]
+  const asset = sceneStore.getAsset(trimmed)
+  const candidate = entry?.blobUrl ?? entry?.downloadUrl ?? asset?.downloadUrl ?? null
+  if (!candidate) {
+    return null
+  }
+  if (candidate === trimmed) {
+    return entry?.blobUrl ?? null
+  }
+  return candidate
 }
 
 const VIEWPORT_SCENE_CSM_BASE_CONFIG: SceneCsmConfig = {
@@ -23689,6 +23710,7 @@ function handleRectangleAxisAlignedBBlur() {
 }
 
 onMounted(() => {
+  setGroundTextureSourceResolver(resolveGroundTextureSource)
   initScene()
   if (canvasRef.value) {
     canvasRef.value.addEventListener('wheel', handleViewportWheel, { passive: false, capture: true })
@@ -23739,6 +23761,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  setGroundTextureSourceResolver(null)
   displayBoardBuildTool.dispose()
   billboardBuildTool.dispose()
   clearDisplayBoardSizeHud()
