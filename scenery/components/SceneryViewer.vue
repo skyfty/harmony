@@ -2100,10 +2100,12 @@ const sceneCsmCameraPosScratch = new THREE.Vector3();
 const sceneCsmCameraQuatScratch = new THREE.Quaternion();
 let sceneCsmLastUpdateAtMs = 0;
 let sceneCsmForceNextUpdate = true;
-const OVERLAY_SYNC_MOVE_THRESHOLD_M = isWeChatMiniProgram ? 0.12 : 0.06;
-const OVERLAY_SYNC_ROT_THRESHOLD_DEG = isWeChatMiniProgram ? 0.45 : 0.2;
-const OVERLAY_SYNC_MAX_STALE_MS = isWeChatMiniProgram ? 140 : 90;
-const OVERLAY_SYNC_MIN_INTERVAL_MS = isWeChatMiniProgram ? 48 : 33;
+// Overlay signboards are relatively expensive because they drive canvas texture redraws.
+// Keep them a bit less eager than the rest of the camera-dependent systems.
+const OVERLAY_SYNC_MOVE_THRESHOLD_M = isWeChatMiniProgram ? 0.16 : 0.1;
+const OVERLAY_SYNC_ROT_THRESHOLD_DEG = isWeChatMiniProgram ? 0.75 : 0.35;
+const OVERLAY_SYNC_MAX_STALE_MS = isWeChatMiniProgram ? 200 : 140;
+const OVERLAY_SYNC_MIN_INTERVAL_MS = isWeChatMiniProgram ? 66 : 48;
 const OVERLAY_SYNC_ROT_THRESHOLD_RAD = (OVERLAY_SYNC_ROT_THRESHOLD_DEG * Math.PI) / 180;
 const overlaySyncLastCameraPos = new THREE.Vector3();
 const overlaySyncLastCameraQuat = new THREE.Quaternion();
