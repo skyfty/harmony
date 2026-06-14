@@ -1344,6 +1344,7 @@ export function applyWallInstancedBindings(params: {
       nodeId,
       assetId,
       object: params.object,
+      worldMatrix: params.object.matrixWorld,
       localMatrices: binding.localMatrices,
       bindingIdPrefix: binding.bindingIdPrefix,
       useNodeIdForIndex0: binding.useNodeIdForIndex0,

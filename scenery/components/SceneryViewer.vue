@@ -631,7 +631,7 @@ import {
 import { listCouponCatalog, grantCouponById, type CouponSceneItem } from '@harmony/utils';
 import { addMesh as addInstancedBoundsMesh, flush as flushInstancedBounds, tick as tickInstancedBounds, clear as clearInstancedBounds, hasPending as instancedBoundsHasPending } from '@harmony/schema/instancedBoundsTracker';
 import { syncContinuousInstancedModelCommitted } from '@harmony/schema/continuousInstancedModel';
-import { hasWallInstancedBindings, syncWallInstancedBindingsForObject } from '@harmony/schema/wallInstancing';
+import { WALL_INSTANCED_BINDINGS_USERDATA_KEY, hasWallInstancedBindings, syncWallInstancedBindingsForObject } from '@harmony/schema/wallInstancing';
 import {
   DEFAULT_ENVIRONMENT_SETTINGS,
   DEFAULT_ENVIRONMENT_NORTH_DIRECTION,
@@ -721,7 +721,6 @@ import {
   type MultiuserPhysicsAuthoritySnapshot,
   type MultiuserPeerSnapshot,
   type MultiuserPeerState,
-  type MultiuserPresentationQuaternionLike,
   type MultiuserPresentationVector3Like,
   type MultiuserVehiclePresentation,
   type MultiuserVehicleWheelPresentation,
@@ -1428,6 +1427,19 @@ type InstancedTransformCacheEntry = {
 
 const instancedTransformCache = new Map<string, InstancedTransformCacheEntry>();
 
+type InstancedProxySyncSnapshot = {
+  kind: 'wall' | 'layout';
+  assetId: string | null;
+  visible: boolean;
+  renderKind?: 'billboard' | 'model';
+  layoutSource?: unknown;
+  wallBindingsSource?: unknown;
+  faceCamera?: boolean;
+  elements: number[];
+};
+
+const instancedProxySyncSnapshotCache = new WeakMap<THREE.Object3D, InstancedProxySyncSnapshot>();
+
 function clearInstancedTransformCacheForNode(nodeId: string): void {
   instancedTransformCache.delete(nodeId);
   const prefix = `${nodeId}:instance:`;
@@ -2109,7 +2121,7 @@ function markOverlayRuntimeDirty(): void {
 }
 
 function refreshCameraFrameSnapshot(camera: THREE.Camera, nowMs: number): CameraFrameSnapshot {
-  camera.updateMatrixWorld(true);
+  camera.updateWorldMatrix(true, false);
   camera.getWorldPosition(cameraFrameSnapshotPosition);
   camera.getWorldQuaternion(cameraFrameSnapshotQuaternion);
   return {
@@ -2490,6 +2502,7 @@ const physicsBridgeSyncQuaternionHelper = new THREE.Quaternion();
 const physicsBridgeSyncParentQuaternionHelper = new THREE.Quaternion();
 const physicsBridgeHeightfieldAdjustment = new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0));
 const physicsBridgeHeightfieldAdjustmentInverse = physicsBridgeHeightfieldAdjustment.clone().invert();
+let physicsBridgeFrameUpdatedParents = new WeakSet<THREE.Object3D>();
 const physicsBridgeBodySyncPositionHelper = new THREE.Vector3();
 const physicsBridgeBodySyncQuaternionHelper = new THREE.Quaternion();
 const physicsEnvironmentEnabled = ref(true);
@@ -2582,6 +2595,16 @@ const remoteMultiuserTargetPositionScratch = new THREE.Vector3();
 const remoteMultiuserDisplayQuaternionScratch = new THREE.Quaternion();
 const remoteMultiuserTargetQuaternionScratch = new THREE.Quaternion();
 const remoteMultiuserCameraPositionScratch = new THREE.Vector3();
+const remoteMultiuserWheelPositionScratch = new THREE.Vector3();
+const remoteMultiuserWheelTargetPositionScratch = new THREE.Vector3();
+const remoteMultiuserWheelScaleScratch = new THREE.Vector3();
+const remoteMultiuserWheelQuaternionScratch = new THREE.Quaternion();
+const remoteMultiuserWheelTargetQuaternionScratch = new THREE.Quaternion();
+const remoteMultiuserWheelSteeringAxisScratch = new THREE.Vector3();
+const remoteMultiuserWheelSpinAxisScratch = new THREE.Vector3();
+const remoteMultiuserWheelCurrentPositionScratch = new THREE.Vector3();
+const remoteMultiuserWheelCurrentQuaternionScratch = new THREE.Quaternion();
+const remoteMultiuserWheelCurrentScaleScratch = new THREE.Vector3();
 const remoteSharedEntityDisplayScaleScratch = new THREE.Vector3();
 const remoteSharedEntityTargetScaleScratch = new THREE.Vector3();
 const remotePhysicsAuthorityTargetPositionScratch = new THREE.Vector3();
@@ -2668,7 +2691,7 @@ function syncSceneNodeLocalTransformFromObject(node: SceneNode, object: THREE.Ob
 
 function applyObjectWorldPose(object: THREE.Object3D, worldPosition: THREE.Vector3, worldQuaternion: THREE.Quaternion): void {
   if (object.parent) {
-    object.parent.updateMatrixWorld(true);
+    object.parent.updateWorldMatrix(true, false);
     autoTourSnapLocalPosition.copy(worldPosition);
     object.parent.worldToLocal(autoTourSnapLocalPosition);
     object.position.copy(autoTourSnapLocalPosition);
@@ -2679,7 +2702,7 @@ function applyObjectWorldPose(object: THREE.Object3D, worldPosition: THREE.Vecto
     object.position.copy(worldPosition);
     object.quaternion.copy(worldQuaternion);
   }
-  object.updateMatrixWorld(true);
+  object.updateWorldMatrix(false, true);
 }
 
 const wheelForwardHelper = new THREE.Vector3();
@@ -3647,7 +3670,7 @@ function resolveVehicleDriveIntroPose(nodeId: string): boolean {
     return false;
   }
 
-  object.updateMatrixWorld(true);
+  object.updateWorldMatrix(true, false);
   const anchor = resolveVehicleDriveIntroAnchor(object);
   const instance = vehicleInstances.get(nodeId) ?? null;
 
@@ -4003,6 +4026,7 @@ let activeLazyLoadCount = 0;
 const tempOutlineSphere = new THREE.Sphere();
 const tempOutlineScale = new THREE.Vector3();
 const tempCameraMatrix = new THREE.Matrix4();
+const instanceLayoutWorldMatrixScratch = new THREE.Matrix4();
 const cameraViewFrustum = new THREE.Frustum();
 
 const tempBox = new THREE.Box3();
@@ -7165,7 +7189,7 @@ function updateInstancedLodRuntimeEntryCacheForObject(object: THREE.Object3D): v
     return;
   }
 
-  object.updateMatrixWorld(true);
+  object.updateWorldMatrix(true, false);
   instancedLodRuntimeEntryCache.set(nodeId, {
     nodeId,
     object,
@@ -7834,7 +7858,37 @@ function indexSceneObjects(root: THREE.Object3D) {
   sceneCsmShadowRuntime?.registerObject(root);
 }
 
+function markNestedInstancedProxyHints(root: THREE.Object3D): boolean {
+  let hasNestedInstancedProxy = Boolean(root.userData?.instancedAssetId);
+  root.children.forEach((child) => {
+    if (markNestedInstancedProxyHints(child)) {
+      hasNestedInstancedProxy = true;
+    }
+  });
+  root.userData.__harmonyHasNestedInstancedProxy = hasNestedInstancedProxy;
+  return hasNestedInstancedProxy;
+}
+
+function getNestedInstancedProxyTargets(root: THREE.Object3D): THREE.Object3D[] {
+  const cached = root.userData?.__harmonyNestedInstancedProxyTargets as THREE.Object3D[] | undefined;
+  if (Array.isArray(cached)) {
+    return cached;
+  }
+  const targets: THREE.Object3D[] = [];
+  root.traverse((child) => {
+    if (child !== root && child.userData?.instancedAssetId) {
+      targets.push(child);
+    }
+  });
+  root.userData.__harmonyNestedInstancedProxyTargets = targets;
+  return targets;
+}
+
 function registerSceneSubtree(root: THREE.Object3D): void {
+  markNestedInstancedProxyHints(root);
+  if (root.userData) {
+    delete root.userData.__harmonyNestedInstancedProxyTargets;
+  }
   root.traverse((object) => {
     const nodeId = object.userData?.nodeId as string | undefined;
     if (!nodeId) {
@@ -8474,6 +8528,7 @@ function applySceneryPhysicsBridgeFrameToObjects(): void {
   if (!physicsBridgeFrameBodiesByNodeId.size) {
     return;
   }
+  physicsBridgeFrameUpdatedParents = new WeakSet<THREE.Object3D>();
   physicsBridgeFrameBodiesByNodeId.forEach((state, nodeId) => {
     const rigidbodyEntry = rigidbodyInstances.get(nodeId);
     if (rigidbodyEntry) {
@@ -8513,6 +8568,17 @@ function applySceneryPhysicsBridgeFrameToObjects(): void {
   });
 }
 
+function ensurePhysicsBridgeParentWorldMatrix(parent: THREE.Object3D | null): void {
+  if (!parent || physicsBridgeFrameUpdatedParents.has(parent)) {
+    return;
+  }
+  parent.updateWorldMatrix(true, false);
+  physicsBridgeFrameUpdatedParents.add(parent);
+}
+
+function shouldSyncInstancedTransform(object: THREE.Object3D): boolean {
+  return Boolean(object.userData?.instancedAssetId || object.userData?.__harmonyHasNestedInstancedProxy === true);
+}
 
 function applySceneryPhysicsBridgeTransformToObject(
   object: THREE.Object3D,
@@ -8526,7 +8592,7 @@ function applySceneryPhysicsBridgeTransformToObject(
     physicsBridgeSyncQuaternionHelper.multiply(orientationAdjustment.threeInverse);
   }
   if (object.parent) {
-    object.parent.updateMatrixWorld(true);
+    ensurePhysicsBridgeParentWorldMatrix(object.parent);
     object.position.copy(physicsBridgeSyncPositionHelper);
     object.parent.worldToLocal(object.position);
     object.parent.getWorldQuaternion(physicsBridgeSyncParentQuaternionHelper).invert();
@@ -8535,8 +8601,10 @@ function applySceneryPhysicsBridgeTransformToObject(
     object.position.copy(physicsBridgeSyncPositionHelper);
     object.quaternion.copy(physicsBridgeSyncQuaternionHelper);
   }
-  object.updateMatrixWorld(true);
-  syncInstancedTransform(object);
+  object.updateWorldMatrix(false, true);
+  if (shouldSyncInstancedTransform(object)) {
+    syncInstancedTransform(object, false, true);
+  }
 }
 
 const VEHICLE_BRIDGE_SYNC_POSITION_EPSILON_SQ = 1e-8;
@@ -8710,7 +8778,7 @@ function syncSceneryPhysicsBridgeBodyTransforms(): void {
     if (!object) {
       return;
     }
-    object.updateMatrixWorld(true);
+    object.updateWorldMatrix(true, false);
     object.getWorldPosition(physicsBridgeBodySyncPositionHelper);
     object.getWorldQuaternion(physicsBridgeBodySyncQuaternionHelper).normalize();
     const frameState = physicsBridgeFrameBodiesByNodeId.get(nodeId);
@@ -8798,7 +8866,7 @@ function resolveSceneryPhysicsBridgeVehicleStopTransform(
   if (!object) {
     return null;
   }
-  object.updateMatrixWorld(true);
+  object.updateWorldMatrix(true, false);
   object.getWorldPosition(physicsBridgeBodySyncPositionHelper);
   object.getWorldQuaternion(physicsBridgeBodySyncQuaternionHelper).normalize();
   return {
@@ -9108,7 +9176,7 @@ function createBridgeVehicleInstance(
       ? [0, 1].filter((index) => index < wheelEntries.length)
       : Array.from({ length: wheelEntries.length }, (_unused, index) => index);
   }
-  object.updateMatrixWorld(true);
+  object.updateWorldMatrix(true, false);
   object.getWorldPosition(physicsBridgeSyncPositionHelper);
   object.getWorldQuaternion(physicsBridgeSyncQuaternionHelper).normalize();
   const vehicle = createBridgeVehicleProxy(
@@ -9429,6 +9497,7 @@ function updateVehicleWheelVisuals(delta: number): void {
   }
 
   const nowMs = Date.now();
+  const updatedWheelParents = new WeakSet<THREE.Object3D>();
 
   vehicleInstances.forEach((instance) => {
     const wheelBindings = instance.wheelBindings as VehicleWheelBinding[];
@@ -9586,8 +9655,13 @@ function updateVehicleWheelVisuals(delta: number): void {
       }
       wheelObject.quaternion.copy(wheelVisualQuaternionHelper);
 
+      if (wheelObject.parent && !updatedWheelParents.has(wheelObject.parent)) {
+        wheelObject.parent.updateWorldMatrix(true, false);
+        updatedWheelParents.add(wheelObject.parent);
+      }
+      wheelObject.updateWorldMatrix(false, true);
+
       if (binding.instancedTargets.length) {
-        wheelObject.updateMatrixWorld(true);
         binding.instancedTargets.forEach((target) => {
           syncInstancedTransformTarget(target);
         });
@@ -9702,6 +9776,7 @@ function syncInstancedTransformTarget(target: THREE.Object3D): void {
       signature: (target.userData.__harmonyInstanceLayoutSignature as string | null) ?? null,
       locals: (target.userData.__harmonyInstanceLayoutLocals as THREE.Matrix4[]) ?? [],
     },
+    matrixScratch: instanceLayoutWorldMatrixScratch,
     onMatrix: (bindingId, worldMatrix) => {
       const cached = instancedTransformCache.get(bindingId) ?? null;
       const shouldUpdate =
@@ -9876,7 +9951,7 @@ async function applyDeferredInstancingForNode(nodeId: string): Promise<boolean> 
       object.position.copy(snapshot.position);
       object.quaternion.copy(snapshot.quaternion);
       object.scale.copy(snapshot.scale);
-      object.updateMatrixWorld(true);
+      object.updateWorldMatrix(false, true);
     }
 
     const rigidbody = rigidbodyInstances.get(id);
@@ -9978,7 +10053,7 @@ function updateLazyPlaceholders(_delta: number): void {
   if (!lazyLoadMeshesEnabled || !camera || lazyPlaceholderStates.size === 0) {
     return;
   }
-  camera.updateMatrixWorld(true);
+  camera.updateWorldMatrix(true, false);
   tempCameraMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
   cameraViewFrustum.setFromProjectionMatrix(tempCameraMatrix);
   lazyPlaceholderStates.forEach((state, nodeId) => {
@@ -10152,7 +10227,7 @@ async function loadActualAssetForPlaceholder(state: LazyPlaceholderState): Promi
     } else {
       updateNodeProperties(container, node);
     }
-    detailed.updateMatrixWorld(true);
+    detailed.updateWorldMatrix(false, true);
     placeholder.parent?.remove(placeholder);
     disposeObject(placeholder);
     nodeObjectMap.delete(nodeId);
@@ -10189,14 +10264,19 @@ function prepareImportedObjectForPreview(object: THREE.Object3D): void {
   });
 }
 
-function syncInstancedTransform(object: THREE.Object3D | null, force = false): void {
+function syncInstancedTransform(object: THREE.Object3D | null, force = false, skipWorldMatrixUpdate = false): void {
   if (!object) {
     return;
   }
   // 注意：父层级存在旋转 + 非等比缩放时会产生 shear。
   // InstancedMesh 支持完整矩阵，但 decompose/compose 会丢失 shear，导致实例位置/朝向偏差。
   // 因此这里优先直接写入 matrixWorld，仅在需要“隐藏”(scale=0) 时才做分解。
-  object.updateMatrixWorld(true);
+  if (!skipWorldMatrixUpdate) {
+    object.updateWorldMatrix(true, false);
+  }
+  if (!shouldSyncInstancedTransform(object)) {
+    return;
+  }
   object.userData.__harmonyInstancedTransformRevision = getInstancedTransformRevision(object) + 1;
 
   const handleTarget = (target: THREE.Object3D) => {
@@ -10205,11 +10285,35 @@ function syncInstancedTransform(object: THREE.Object3D | null, force = false): v
     }
 
     if (hasWallInstancedBindings(target)) {
+      const visible = isRuntimeObjectEffectivelyVisible(target);
+      const cachedSnapshot = instancedProxySyncSnapshotCache.get(target);
+      const wallBindingsSource = target.userData?.[WALL_INSTANCED_BINDINGS_USERDATA_KEY];
+      const assetId = typeof target.userData?.instancedAssetId === 'string' ? target.userData.instancedAssetId as string : null;
+      if (
+        !force
+        && cachedSnapshot
+        && cachedSnapshot.kind === 'wall'
+        && cachedSnapshot.assetId === assetId
+        && cachedSnapshot.visible === visible
+        && cachedSnapshot.wallBindingsSource === wallBindingsSource
+        && matricesAlmostEqual(cachedSnapshot.elements, target.matrixWorld.elements)
+      ) {
+        return;
+      }
       const nodeId = target.userData?.nodeId as string | undefined;
       if (nodeId) {
         removeVehicleInstance(nodeId);
       }
-      syncWallInstancedBindingsForObject(target);
+      const didSync = syncWallInstancedBindingsForObject(target);
+      if (didSync) {
+        instancedProxySyncSnapshotCache.set(target, {
+          kind: 'wall',
+          assetId,
+          visible,
+          wallBindingsSource,
+          elements: Array.from(target.matrixWorld.elements),
+        });
+      }
       return;
     }
 
@@ -10225,10 +10329,26 @@ function syncInstancedTransform(object: THREE.Object3D | null, force = false): v
     }
 
     const layout = clampSceneNodeInstanceLayout(node.instanceLayout);
+    const layoutSource = (node as unknown as { instanceLayout?: unknown }).instanceLayout;
 
     const assetId = typeof target.userData?.instancedAssetId === 'string' ? (target.userData.instancedAssetId as string) : null;
     const visible = isRuntimeObjectEffectivelyVisible(target);
     const renderKind = target.userData?.instancedRenderKind === 'billboard' ? 'billboard' : 'model';
+    const faceCamera = target.userData?.__harmonyLodFaceCamera === true;
+    const cachedSnapshot = instancedProxySyncSnapshotCache.get(target);
+    if (
+      !force
+      && cachedSnapshot
+      && cachedSnapshot.kind === 'layout'
+      && cachedSnapshot.assetId === assetId
+      && cachedSnapshot.visible === visible
+      && cachedSnapshot.renderKind === renderKind
+      && cachedSnapshot.layoutSource === layoutSource
+      && cachedSnapshot.faceCamera === faceCamera
+      && matricesAlmostEqual(cachedSnapshot.elements, target.matrixWorld.elements)
+    ) {
+      return;
+    }
 
     const group = renderKind === 'model' && assetId ? getCachedModelObject(assetId) : null;
     if (renderKind === 'model' && !group) {
@@ -10302,6 +10422,7 @@ function syncInstancedTransform(object: THREE.Object3D | null, force = false): v
         signature: (target.userData.__harmonyInstanceLayoutSignature as string | null) ?? null,
         locals: (target.userData.__harmonyInstanceLayoutLocals as THREE.Matrix4[]) ?? [],
       },
+      matrixScratch: instanceLayoutWorldMatrixScratch,
       onMatrix: (bindingId, worldMatrix) => {
         const cached = instancedTransformCache.get(bindingId) ?? null;
         const shouldUpdate =
@@ -10347,19 +10468,36 @@ function syncInstancedTransform(object: THREE.Object3D | null, force = false): v
           visible,
           elements: Array.from(worldMatrix.elements),
         });
+        return shouldUpdate;
       },
     });
 
     target.userData.__harmonyInstanceLayoutSignature = result.signature;
     target.userData.__harmonyInstanceLayoutLocals = result.locals;
-    updateInstancedLodRuntimeEntryCacheForObject(target);
-    markInstancedCullingDirty();
+    if (result.updatedCount > 0) {
+      updateInstancedLodRuntimeEntryCacheForObject(target);
+      markInstancedCullingDirty();
+    }
+    instancedProxySyncSnapshotCache.set(target, {
+      kind: 'layout',
+      assetId,
+      visible,
+      renderKind,
+      layoutSource,
+      faceCamera,
+      elements: Array.from(target.matrixWorld.elements),
+    });
   };
 
   // Fast path: instanced proxy itself.
   handleTarget(object);
-  // Some objects (e.g. wheel visuals) may contain nested instanced proxies.
-  object.traverse(handleTarget);
+  if (object.userData?.__harmonyHasNestedInstancedProxy === true) {
+    // Some objects (e.g. wheel visuals) may contain nested instanced proxies.
+    const nestedTargets = getNestedInstancedProxyTargets(object);
+    for (const target of nestedTargets) {
+      handleTarget(target);
+    }
+  }
 }
 
 function updateNodeTransfrom(object: THREE.Object3D, node: SceneNode) {
@@ -10384,6 +10522,7 @@ function updateNodeTransfrom(object: THREE.Object3D, node: SceneNode) {
       node,
       object,
       assetId: object.userData.instancedAssetId as string,
+      worldMatrix: object.matrixWorld,
     });
     updateInstancedLodRuntimeEntryCacheForObject(object);
     markInstancedCullingDirty();
@@ -11138,14 +11277,6 @@ function cloneRemoteMultiuserPeerPresentation(presentation: MultiuserPeerPresent
   };
 }
 
-function cloneRemotePresentationVector3(value: MultiuserPresentationVector3Like): THREE.Vector3 {
-  return new THREE.Vector3(value.x, value.y, value.z);
-}
-
-function cloneRemotePresentationQuaternion(value: MultiuserPresentationQuaternionLike): THREE.Quaternion {
-  return new THREE.Quaternion(value.x, value.y, value.z, value.w);
-}
-
 function isFiniteVector3Like(value: MultiuserPresentationVector3Like | null | undefined): value is MultiuserPresentationVector3Like {
   if (!value) {
     return false;
@@ -11535,7 +11666,7 @@ function applyRemoteMultiuserPeerTransform(object: THREE.Object3D, state: Multiu
   object.position.set(state.position.x, state.position.y, state.position.z);
   object.quaternion.set(state.quaternion.x, state.quaternion.y, state.quaternion.z, state.quaternion.w);
   object.visible = true;
-  object.updateMatrixWorld(true);
+  object.updateWorldMatrix(true, false);
 }
 
 function applyRemoteMultiuserVehicleWheelState(
@@ -11546,8 +11677,14 @@ function applyRemoteMultiuserVehicleWheelState(
   if (!object) {
     return;
   }
-  object.position.copy(cloneRemotePresentationVector3(wheelState.position));
-  object.scale.copy(wheelState.scale ? cloneRemotePresentationVector3(wheelState.scale) : binding.baseScale);
+  remoteMultiuserWheelPositionScratch.set(wheelState.position.x, wheelState.position.y, wheelState.position.z);
+  object.position.copy(remoteMultiuserWheelPositionScratch);
+  if (wheelState.scale) {
+    remoteMultiuserWheelScaleScratch.set(wheelState.scale.x, wheelState.scale.y, wheelState.scale.z);
+    object.scale.copy(remoteMultiuserWheelScaleScratch);
+  } else {
+    object.scale.copy(binding.baseScale);
+  }
   const steeringAngle = typeof wheelState.steeringAngle === 'number' && Number.isFinite(wheelState.steeringAngle)
     ? wheelState.steeringAngle
     : null;
@@ -11555,10 +11692,10 @@ function applyRemoteMultiuserVehicleWheelState(
     ? wheelState.spinAngle
     : null;
   const steeringAxis = wheelState.steeringAxis && isFiniteVector3Like(wheelState.steeringAxis)
-    ? cloneRemotePresentationVector3(wheelState.steeringAxis).normalize()
+    ? remoteMultiuserWheelSteeringAxisScratch.set(wheelState.steeringAxis.x, wheelState.steeringAxis.y, wheelState.steeringAxis.z).normalize()
     : null;
   const spinAxis = wheelState.spinAxis && isFiniteVector3Like(wheelState.spinAxis)
-    ? cloneRemotePresentationVector3(wheelState.spinAxis).normalize()
+    ? remoteMultiuserWheelSpinAxisScratch.set(wheelState.spinAxis.x, wheelState.spinAxis.y, wheelState.spinAxis.z).normalize()
     : null;
   if (steeringAxis && spinAxis && steeringAngle !== null && spinAngle !== null) {
     wheelVisualQuaternionHelper.copy(binding.baseQuaternion);
@@ -11568,12 +11705,18 @@ function applyRemoteMultiuserVehicleWheelState(
     wheelVisualQuaternionHelper.multiply(wheelSpinQuaternionHelper);
     object.quaternion.copy(wheelVisualQuaternionHelper);
   } else {
-    object.quaternion.copy(cloneRemotePresentationQuaternion(wheelState.quaternion));
+    remoteMultiuserWheelQuaternionScratch.set(
+      wheelState.quaternion.x,
+      wheelState.quaternion.y,
+      wheelState.quaternion.z,
+      wheelState.quaternion.w,
+    );
+    object.quaternion.copy(remoteMultiuserWheelQuaternionScratch);
   }
-  object.updateMatrixWorld(true);
+  object.updateWorldMatrix(false, true);
   if (binding.instancedTargets.length) {
     binding.instancedTargets.forEach((target) => {
-      target.updateMatrixWorld(true);
+      target.updateWorldMatrix(false, true);
     });
   }
 }
@@ -11608,18 +11751,32 @@ function applyRemoteMultiuserVehiclePresentation(
       applyRemoteMultiuserVehicleWheelState(binding, wheelState);
       return;
     }
-    const currentPosition = binding.object.position.clone();
-    const currentQuaternion = binding.object.quaternion.clone();
-    currentPosition.lerp(cloneRemotePresentationVector3(wheelState.position), alpha);
-    currentQuaternion.slerp(cloneRemotePresentationQuaternion(wheelState.quaternion), alpha);
-    binding.object.position.copy(currentPosition);
-    binding.object.quaternion.copy(currentQuaternion);
+    remoteMultiuserWheelCurrentPositionScratch.copy(binding.object.position);
+    remoteMultiuserWheelCurrentPositionScratch.lerp(
+      remoteMultiuserWheelTargetPositionScratch.set(wheelState.position.x, wheelState.position.y, wheelState.position.z),
+      alpha,
+    );
+    remoteMultiuserWheelCurrentQuaternionScratch.copy(binding.object.quaternion);
+    remoteMultiuserWheelCurrentQuaternionScratch.slerp(
+      remoteMultiuserWheelTargetQuaternionScratch.set(
+        wheelState.quaternion.x,
+        wheelState.quaternion.y,
+        wheelState.quaternion.z,
+        wheelState.quaternion.w,
+      ),
+      alpha,
+    );
+    binding.object.position.copy(remoteMultiuserWheelCurrentPositionScratch);
+    binding.object.quaternion.copy(remoteMultiuserWheelCurrentQuaternionScratch);
     if (wheelState.scale) {
-      const currentScale = binding.object.scale.clone();
-      currentScale.lerp(cloneRemotePresentationVector3(wheelState.scale), alpha);
-      binding.object.scale.copy(currentScale);
+      remoteMultiuserWheelCurrentScaleScratch.copy(binding.object.scale);
+      remoteMultiuserWheelCurrentScaleScratch.lerp(
+        remoteMultiuserWheelScaleScratch.set(wheelState.scale.x, wheelState.scale.y, wheelState.scale.z),
+        alpha,
+      );
+      binding.object.scale.copy(remoteMultiuserWheelCurrentScaleScratch);
     }
-    binding.object.updateMatrixWorld(true);
+    binding.object.updateWorldMatrix(false, true);
   });
 }
 
@@ -11684,15 +11841,47 @@ function interpolateRemoteMultiuserPeerPresentation(
     next.vehicle = {
       wheels: targetWheels.map((wheel, index) => {
         const currentWheel = displayWheels[index] ?? wheel;
-        const position = cloneRemotePresentationVector3(currentWheel.position).lerp(cloneRemotePresentationVector3(wheel.position), alpha);
-        const quaternion = cloneRemotePresentationQuaternion(currentWheel.quaternion).slerp(cloneRemotePresentationQuaternion(wheel.quaternion), alpha);
-        const scale = wheel.scale
-          ? (currentWheel.scale
-              ? cloneRemotePresentationVector3(currentWheel.scale).lerp(cloneRemotePresentationVector3(wheel.scale), alpha)
-              : cloneRemotePresentationVector3(wheel.scale))
-          : currentWheel.scale
-            ? cloneRemotePresentationVector3(currentWheel.scale)
-            : null;
+        remoteMultiuserWheelCurrentPositionScratch.set(currentWheel.position.x, currentWheel.position.y, currentWheel.position.z);
+        remoteMultiuserWheelTargetPositionScratch.set(wheel.position.x, wheel.position.y, wheel.position.z);
+        remoteMultiuserWheelCurrentPositionScratch.lerp(remoteMultiuserWheelTargetPositionScratch, alpha);
+        remoteMultiuserWheelCurrentQuaternionScratch.set(
+          currentWheel.quaternion.x,
+          currentWheel.quaternion.y,
+          currentWheel.quaternion.z,
+          currentWheel.quaternion.w,
+        );
+        remoteMultiuserWheelTargetQuaternionScratch.set(
+          wheel.quaternion.x,
+          wheel.quaternion.y,
+          wheel.quaternion.z,
+          wheel.quaternion.w,
+        );
+        remoteMultiuserWheelCurrentQuaternionScratch.slerp(remoteMultiuserWheelTargetQuaternionScratch, alpha);
+        let scale: MultiuserPresentationVector3Like | null = null;
+        if (wheel.scale) {
+          if (currentWheel.scale) {
+            remoteMultiuserWheelCurrentScaleScratch.set(currentWheel.scale.x, currentWheel.scale.y, currentWheel.scale.z);
+            remoteMultiuserWheelScaleScratch.set(wheel.scale.x, wheel.scale.y, wheel.scale.z);
+            remoteMultiuserWheelCurrentScaleScratch.lerp(remoteMultiuserWheelScaleScratch, alpha);
+            scale = {
+              x: remoteMultiuserWheelCurrentScaleScratch.x,
+              y: remoteMultiuserWheelCurrentScaleScratch.y,
+              z: remoteMultiuserWheelCurrentScaleScratch.z,
+            };
+          } else {
+            scale = {
+              x: wheel.scale.x,
+              y: wheel.scale.y,
+              z: wheel.scale.z,
+            };
+          }
+        } else if (currentWheel.scale) {
+          scale = {
+            x: currentWheel.scale.x,
+            y: currentWheel.scale.y,
+            z: currentWheel.scale.z,
+          };
+        }
         const steeringAxis = wheel.steeringAxis
           ? {
               x: wheel.steeringAxis.x,
@@ -11723,15 +11912,15 @@ function interpolateRemoteMultiuserPeerPresentation(
           nodeId: wheel.nodeId ?? null,
           wheelIndex: wheel.wheelIndex,
           position: {
-            x: position.x,
-            y: position.y,
-            z: position.z,
+            x: remoteMultiuserWheelCurrentPositionScratch.x,
+            y: remoteMultiuserWheelCurrentPositionScratch.y,
+            z: remoteMultiuserWheelCurrentPositionScratch.z,
           },
           quaternion: {
-            x: quaternion.x,
-            y: quaternion.y,
-            z: quaternion.z,
-            w: quaternion.w,
+            x: remoteMultiuserWheelCurrentQuaternionScratch.x,
+            y: remoteMultiuserWheelCurrentQuaternionScratch.y,
+            z: remoteMultiuserWheelCurrentQuaternionScratch.z,
+            w: remoteMultiuserWheelCurrentQuaternionScratch.w,
           },
           scale: scale
             ? {
@@ -12115,7 +12304,7 @@ function applyNetworkSyncTransformToObject(
       state.transform.scale.z,
     );
     if (object.parent) {
-      object.parent.updateMatrixWorld(true);
+      object.parent.updateWorldMatrix(true, false);
       const parentScale = object.parent.getWorldScale(remoteSharedEntityDisplayScaleScratch);
       object.scale.set(
         parentScale.x !== 0 ? remoteSharedEntityTargetScaleScratch.x / parentScale.x : remoteSharedEntityTargetScaleScratch.x,
@@ -12125,8 +12314,8 @@ function applyNetworkSyncTransformToObject(
     } else {
       object.scale.copy(remoteSharedEntityTargetScaleScratch);
     }
-    object.updateMatrixWorld(true);
-    syncInstancedTransform(object);
+    object.updateWorldMatrix(false, true);
+    syncInstancedTransform(object, false, true);
   }
 }
 
@@ -12340,8 +12529,7 @@ function applyPhysicsAuthoritySnapshotToObject(object: THREE.Object3D, snapshot:
     snapshot.transform.quaternion.w,
   );
   applyObjectWorldPose(object, remotePhysicsAuthorityTargetPositionScratch, remotePhysicsAuthorityTargetQuaternionScratch);
-  object.updateMatrixWorld(true);
-  syncInstancedTransform(object, true);
+  syncInstancedTransform(object, true, true);
 }
 
 function getPhysicsAuthoritySnapThreshold(props: PhysicsAuthorityComponentProps): number {
@@ -12755,7 +12943,7 @@ function resolveLocalMultiuserVehiclePresentation(nodeId: string): MultiuserVehi
     if (!object) {
       return;
     }
-    object.updateMatrixWorld(true);
+    object.updateWorldMatrix(true, false);
     wheels.push({
       nodeId: binding.nodeId ?? null,
       wheelIndex,
@@ -12892,7 +13080,7 @@ function resolveLocalSharedEntityStates(): MultiuserSharedEntityState[] {
     if (!object) {
       return;
     }
-    object.updateMatrixWorld(true);
+    object.updateWorldMatrix(true, false);
     object.getWorldPosition(protagonistPosePosition);
     object.getWorldQuaternion(protagonistPoseQuaternion);
     const worldScale = object.getWorldScale(remoteSharedEntityTargetScaleScratch);
@@ -14411,7 +14599,7 @@ function updateVehicleSpeedFromVehicle(): void {
     return;
   }
 
-  driveObject.updateMatrixWorld(true);
+  driveObject.updateWorldMatrix(true, false);
   driveObject.getWorldQuaternion(vehicleCompassQuaternion);
   vehicleCompassForward.set(1, 0, 0).applyQuaternion(vehicleCompassQuaternion);
   vehicleCompassForward.y = 0;
@@ -15206,7 +15394,7 @@ function applySceneNodeTransformSnapshot(snapshot: Record<string, SceneNodeTrans
     sceneStackApplyVec3Tuple(object.position, transform.position);
     sceneStackApplyQuatTuple(object.quaternion, transform.quaternion);
     sceneStackApplyVec3Tuple(object.scale, transform.scale);
-    object.updateMatrixWorld(true);
+    object.updateWorldMatrix(false, true);
   });
 }
 
@@ -15616,7 +15804,7 @@ function ensureBehaviorTapHandler(canvas: HTMLCanvasElement, camera: THREE.Persp
     if (!raycastRoots.length) {
       return;
     }
-    raycastRoots.forEach((root) => root.updateMatrixWorld(true));
+    raycastRoots.forEach((root) => root.updateWorldMatrix(true, true));
     // Ensure moved instanced meshes are pickable immediately by flushing any pending bounds updates.
     if (instancedBoundsHasPending()) {
       flushInstancedBounds();
@@ -15815,7 +16003,7 @@ function resolveSceneryGroundFogCoverageDistance(
   if (snapshot) {
     sceneryFogCameraWorldScratch.copy(snapshot.position);
   } else {
-    activeCamera.updateMatrixWorld(true);
+        activeCamera.updateWorldMatrix(true, false);
     activeCamera.getWorldPosition(sceneryFogCameraWorldScratch);
   }
   const cameraLocal = groundObject.worldToLocal(sceneryFogCameraWorldScratch);

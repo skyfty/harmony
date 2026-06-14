@@ -93,7 +93,6 @@ export function createWaterRuntime(): WaterRuntime {
           return
         }
 
-        object.updateMatrixWorld(true)
         const geometry = (object as Mesh).geometry
         if (geometry && !geometry.boundingSphere) {
           geometry.computeBoundingSphere()

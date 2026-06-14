@@ -243,6 +243,9 @@ export function computeInstanceLayoutGridCenterOffsetLocal(
   return offset
 }
 
+const instanceLayoutCenterOffsetScratch = new Vector3()
+const instanceLayoutWorldMatrixScratch = new Matrix4()
+
 export function buildInstanceLayoutLocalMatrices(layout: SceneNodeInstanceLayout, templateBoundingBox: Box3 | null | undefined): {
   signature: string
   count: number
@@ -298,10 +301,9 @@ export function buildInstanceLayoutLocalMatrices(layout: SceneNodeInstanceLayout
   // Center the entire grid around the node origin.
   const centerOffset = computeInstanceLayoutGridCenterOffsetLocal(layout, box)
   if (centerOffset && centerOffset.lengthSq() > 1e-12) {
-    const tmp = new Vector3()
     for (const matrix of localMatrices) {
-      tmp.setFromMatrixPosition(matrix).sub(centerOffset)
-      matrix.setPosition(tmp)
+      instanceLayoutCenterOffsetScratch.setFromMatrixPosition(matrix).sub(centerOffset)
+      matrix.setPosition(instanceLayoutCenterOffsetScratch)
     }
   }
 
@@ -394,9 +396,10 @@ export function forEachInstanceWorldMatrix(params: {
     signature: string | null
     locals: Matrix4[]
   }
-  onMatrix: (bindingId: string, worldMatrix: Matrix4, instanceIndex: number) => void
-}): { signature: string; instanceCount: number; locals: Matrix4[] } {
-  const { nodeId, baseMatrixWorld, layout, templateBoundingBox, cache, onMatrix } = params
+  matrixScratch?: Matrix4
+  onMatrix: (bindingId: string, worldMatrix: Matrix4, instanceIndex: number) => boolean | void
+}): { signature: string; instanceCount: number; locals: Matrix4[]; updatedCount: number } {
+  const { nodeId, baseMatrixWorld, layout, templateBoundingBox, cache, matrixScratch, onMatrix } = params
 
   const { signature, count, localMatrices } = buildInstanceLayoutLocalMatrices(layout, templateBoundingBox)
 
@@ -407,8 +410,9 @@ export function forEachInstanceWorldMatrix(params: {
     ? new Set<number>(layout.erasedIndices)
     : null
 
-  const temp = new Matrix4()
+  const temp = matrixScratch ?? instanceLayoutWorldMatrixScratch
   let activeCount = 0
+  let updatedCount = 0
   for (let index = 0; index < count; index += 1) {
     if (erased?.has(index)) {
       continue
@@ -418,9 +422,11 @@ export function forEachInstanceWorldMatrix(params: {
       continue
     }
     temp.multiplyMatrices(baseMatrixWorld, local)
-    onMatrix(getInstanceLayoutBindingId(nodeId, index), temp, index)
+    if (onMatrix(getInstanceLayoutBindingId(nodeId, index), temp, index) === true) {
+      updatedCount += 1
+    }
     activeCount += 1
   }
 
-  return { signature, instanceCount: activeCount, locals }
+  return { signature, instanceCount: activeCount, locals, updatedCount }
 }

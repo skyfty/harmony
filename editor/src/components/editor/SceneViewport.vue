@@ -702,13 +702,45 @@ function getPickMaxDistance() {
   return cameraFar ?? PICK_MAX_DISTANCE_DEFAULT
 }
 let protagonistInitialVisibilityCapture: ProtagonistInitialVisibilityCapture | null = null
+let instancedCullingNeedsRefresh = true
+let instancedCullingCameraStateValid = false
+const instancedCullingLastCameraProjectionMatrix = new Float32Array(16)
+const instancedCullingLastCameraMatrixWorldInverse = new Float32Array(16)
 
 const instancedOutlineManager = createInstancedOutlineManager({ outlineGroup: instancedOutlineGroup })
 const createInstancedOutlineProxy = instancedOutlineManager.createInstancedProxy
 const updateInstancedOutlineEntry = instancedOutlineManager.updateInstancedOutlineEntry
+function markInstancedCullingDirty(): void {
+  instancedCullingNeedsRefresh = true
+}
+
+function areInstancedCullingCameraMatricesUnchanged(cameraToCompare: THREE.Camera): boolean {
+  if (!instancedCullingCameraStateValid) {
+    return false
+  }
+  const projectionMatrix = cameraToCompare.projectionMatrix.elements
+  const matrixWorldInverse = cameraToCompare.matrixWorldInverse.elements
+  for (let index = 0; index < 16; index += 1) {
+    if (projectionMatrix[index] !== instancedCullingLastCameraProjectionMatrix[index]) {
+      return false
+    }
+    if (matrixWorldInverse[index] !== instancedCullingLastCameraMatrixWorldInverse[index]) {
+      return false
+    }
+  }
+  return true
+}
+
+function rememberInstancedCullingCameraMatrices(cameraToRemember: THREE.Camera): void {
+  instancedCullingLastCameraProjectionMatrix.set(cameraToRemember.projectionMatrix.elements)
+  instancedCullingLastCameraMatrixWorldInverse.set(cameraToRemember.matrixWorldInverse.elements)
+  instancedCullingCameraStateValid = true
+}
+
 const syncInstancedOutlineEntryTransform = (nodeId: string) => {
   const object = objectMap.get(nodeId) ?? null
   const { needsRebuild } = instancedOutlineManager.syncInstancedOutlineEntryTransform(nodeId, object)
+  markInstancedCullingDirty()
   if (needsRebuild) {
     updateOutlineSelectionTargets()
   }
@@ -9514,6 +9546,7 @@ const {
   {
     syncInstancedOutlineEntryTransform,
     resolveSceneNodeById: (nodeId: string) => sceneStore.getNodeById(nodeId),
+    markInstancedCullingDirty,
     syncInstancedTransformOverride: ({ nodeId, object, baseMatrix, assetId }) => {
       if (wallRenderer.syncWallDragInstancedMatrices(nodeId, baseMatrix)) {
         return true
@@ -9760,7 +9793,12 @@ function resolveInstancedProxyRadius(object: THREE.Object3D): number {
   return radius
 }
 
-function syncInstancedBindingWithoutCulling(nodeId: string, object: THREE.Object3D, node: SceneNode): void {
+function syncInstancedBindingWithoutCulling(
+  nodeId: string,
+  object: THREE.Object3D,
+  node: SceneNode,
+  skipMatrixWorldUpdate = false,
+): void {
   object.userData.__harmonyCulled = false
   const desiredTarget = resolveDesiredLodTarget(node, object)
   if (!desiredTarget) {
@@ -9773,11 +9811,16 @@ function syncInstancedBindingWithoutCulling(nodeId: string, object: THREE.Object
     applyInstancedLodSwitch(nodeId, object, desiredTarget)
     return
   }
-  syncInstancedTransform(object)
+  syncInstancedTransform(object, false, skipMatrixWorldUpdate)
 }
 
 function updateInstancedCullingAndBinding(): void {
   if (!camera) {
+    return
+  }
+
+  camera.updateMatrixWorld(true)
+  if (!instancedCullingNeedsRefresh && areInstancedCullingCameraMatricesUnchanged(camera)) {
     return
   }
 
@@ -9817,10 +9860,10 @@ function updateInstancedCullingAndBinding(): void {
       }
       syncInstancedBindingWithoutCulling(nodeId, object, node)
     })
+    instancedCullingNeedsRefresh = false
+    rememberInstancedCullingCameraMatrices(camera)
     return
   }
-
-  camera.updateMatrixWorld(true)
   instancedCullingProjView.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)
   instancedCullingFrustum.setFromProjectionMatrix(instancedCullingProjView)
 
@@ -9859,8 +9902,11 @@ function updateInstancedCullingAndBinding(): void {
       return
     }
 
-    syncInstancedBindingWithoutCulling(nodeId, object, node)
+    syncInstancedBindingWithoutCulling(nodeId, object, node, true)
   })
+
+  instancedCullingNeedsRefresh = false
+  rememberInstancedCullingCameraMatrices(camera)
 }
 
 
@@ -10225,7 +10271,7 @@ function rotateActiveSelection(nodeId: string, reverse = false) {
     object.quaternion.premultiply(rotateDeltaQuaternion)
     object.rotation.setFromQuaternion(object.quaternion)
     object.updateMatrixWorld(true)
-    syncInstancedTransform(object, true)
+    syncInstancedTransform(object, true, true)
     syncInstancedOutlineEntryTransform(id)
 
     updates.push({

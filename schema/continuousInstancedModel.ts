@@ -113,32 +113,83 @@ const tempVec = new Vector3()
 const tempPos = new Vector3()
 const tempScale = new Vector3()
 const tempQuat = new Quaternion()
+const committedLocalMatrixSyncCache = new WeakMap<Object3D, {
+  assetId: string
+  visible: boolean
+  bindingIdPrefix: string
+  useNodeIdForIndex0: boolean
+  localMatrices: Matrix4[]
+  perInstanceUvScaleU: number[] | undefined
+  worldMatrixElements: number[]
+}>()
+const committedContinuousSyncCache = new WeakMap<Object3D, {
+  assetId: string
+  visible: boolean
+  positions: Vector3Like[] | null
+  count: number
+  spacing: number
+  worldMatrixElements: number[]
+}>()
+
+function matrixElementsAlmostEqual(a: ArrayLike<number>, b: ArrayLike<number>, epsilon = 1e-6): boolean {
+  for (let i = 0; i < 16; i += 1) {
+    const av = a[i] ?? 0
+    const bv = b[i] ?? 0
+    if (Math.abs(av - bv) > epsilon) {
+      return false
+    }
+  }
+  return true
+}
 
 export function syncContinuousInstancedModelCommitted(params: {
   node: SceneNode
   object: Object3D
   assetId: string
+  worldMatrix?: Matrix4
 }): void {
-  const { node, object, assetId } = params
+  const { node, object, assetId, worldMatrix } = params
   const nodeId = node.id
   if (!nodeId || !assetId) {
     return
   }
 
   const definition = getContinuousInstancedModelUserData(node)
-  object.updateMatrixWorld(true)
+  const objectWorldMatrix = worldMatrix ?? object.matrixWorld
   const isVisible = isObjectEffectivelyVisible(object)
+  const cachedState = committedContinuousSyncCache.get(object)
+  if (cachedState && cachedState.assetId === assetId && cachedState.visible === isVisible && matrixElementsAlmostEqual(cachedState.worldMatrixElements, objectWorldMatrix.elements)) {
+    if (definition) {
+      if ('positions' in definition) {
+        if (cachedState.positions === definition.positions) {
+          return
+        }
+      } else if (cachedState.positions === null && cachedState.count === definition.count && cachedState.spacing === definition.spacing) {
+        return
+      }
+    } else if (cachedState.positions === null && cachedState.count === 0 && cachedState.spacing === 0) {
+      return
+    }
+  }
   // Preserve shear when visible; only decompose/compose when hiding (scale=0).
   if (isVisible) {
-    tempBase.copy(object.matrixWorld)
+    tempBase.copy(objectWorldMatrix)
   } else {
-    ;(object.matrixWorld as Matrix4).decompose(tempPos, tempQuat, tempScale)
+    objectWorldMatrix.decompose(tempPos, tempQuat, tempScale)
     tempScale.setScalar(0)
     tempBase.compose(tempPos, tempQuat, tempScale)
   }
 
   if (!definition) {
     updateModelInstanceMatrix(nodeId, tempBase)
+    committedContinuousSyncCache.set(object, {
+      assetId,
+      visible: isVisible,
+      positions: null,
+      count: 0,
+      spacing: 0,
+      worldMatrixElements: Array.from(objectWorldMatrix.elements),
+    })
     return
   }
 
@@ -179,6 +230,14 @@ export function syncContinuousInstancedModelCommitted(params: {
       }
     }
 
+    committedContinuousSyncCache.set(object, {
+      assetId,
+      visible: isVisible,
+      positions: definition.positions,
+      count: definition.positions.length,
+      spacing: definition.spacing,
+      worldMatrixElements: Array.from(objectWorldMatrix.elements),
+    })
     return
   }
 
@@ -218,18 +277,28 @@ export function syncContinuousInstancedModelCommitted(params: {
       updateModelInstanceBindingMatrix(bindingId, tempInstance)
     }
   }
+
+  committedContinuousSyncCache.set(object, {
+    assetId,
+    visible: isVisible,
+    positions: null,
+    count: definition.count,
+    spacing: definition.spacing,
+    worldMatrixElements: Array.from(objectWorldMatrix.elements),
+  })
 }
 
 export function syncInstancedModelCommittedLocalMatrices(params: {
   nodeId: string
   assetId: string
   object: Object3D
+  worldMatrix?: Matrix4
   localMatrices: Matrix4[]
   perInstanceUvScaleU?: number[]
   bindingIdPrefix: string
   useNodeIdForIndex0?: boolean
 }): void {
-  const { nodeId, assetId, object, localMatrices, perInstanceUvScaleU, bindingIdPrefix } = params
+  const { nodeId, assetId, object, worldMatrix, localMatrices, perInstanceUvScaleU, bindingIdPrefix } = params
   if (!nodeId || !assetId) {
     return
   }
@@ -238,15 +307,28 @@ export function syncInstancedModelCommittedLocalMatrices(params: {
   }
 
   const useNodeIdForIndex0 = params.useNodeIdForIndex0 !== false
+  const objectWorldMatrix = worldMatrix ?? object.matrixWorld
+  const isVisible = isObjectEffectivelyVisible(object)
+  const cachedState = committedLocalMatrixSyncCache.get(object)
+  if (
+    cachedState
+    && cachedState.assetId === assetId
+    && cachedState.visible === isVisible
+    && cachedState.bindingIdPrefix === bindingIdPrefix
+    && cachedState.useNodeIdForIndex0 === useNodeIdForIndex0
+    && cachedState.localMatrices === localMatrices
+    && cachedState.perInstanceUvScaleU === perInstanceUvScaleU
+    && matrixElementsAlmostEqual(cachedState.worldMatrixElements, objectWorldMatrix.elements)
+  ) {
+    return
+  }
 
   ensureInstancedMeshesRegistered(assetId)
-  object.updateMatrixWorld(true)
 
-  const isVisible = isObjectEffectivelyVisible(object)
   if (isVisible) {
-    tempBase.copy(object.matrixWorld)
+    tempBase.copy(objectWorldMatrix)
   } else {
-    ;(object.matrixWorld as Matrix4).decompose(tempPos, tempQuat, tempScale)
+    objectWorldMatrix.decompose(tempPos, tempQuat, tempScale)
     tempScale.setScalar(0)
     tempBase.compose(tempPos, tempQuat, tempScale)
   }
@@ -299,6 +381,16 @@ export function syncInstancedModelCommittedLocalMatrices(params: {
       updateModelInstanceBindingUvScaleU(bindingId, perInstanceUvScaleU[i] ?? 1)
     }
   }
+
+  committedLocalMatrixSyncCache.set(object, {
+    assetId,
+    visible: isVisible,
+    bindingIdPrefix,
+    useNodeIdForIndex0,
+    localMatrices,
+    perInstanceUvScaleU,
+    worldMatrixElements: Array.from(objectWorldMatrix.elements),
+  })
 }
 
 export function buildLinearLocalPositions(count: number, spacing: number): Vector3Like[] {

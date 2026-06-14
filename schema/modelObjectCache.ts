@@ -129,6 +129,17 @@ const derivedAssetIdsBySource = new Map<string, Set<string>>()
 const tempMatrix = new Matrix4()
 const tempInstanceMatrix = new Matrix4()
 
+function matricesAlmostEqual(a: Matrix4, b: Matrix4, epsilon = 1e-6): boolean {
+  const ae = a.elements
+  const be = b.elements
+  for (let i = 0; i < 16; i += 1) {
+    if (Math.abs((ae[i] ?? 0) - (be[i] ?? 0)) > epsilon) {
+      return false
+    }
+  }
+  return true
+}
+
 function syncInstancedMeshShadowPolicy(handle: InstancedMeshHandle): void {
   const receiverOnly = shouldUseReceiverOnlyForDenseInstancedMesh(handle.mesh.count, handle.radius)
   handle.mesh.castShadow = !receiverOnly
@@ -402,6 +413,10 @@ export function updateModelInstanceMatrix(nodeId: string, matrix: Matrix4): void
     return
   }
   binding.slots.forEach(({ mesh, index }) => {
+    mesh.getMatrixAt(index, tempInstanceMatrix)
+    if (matricesAlmostEqual(tempInstanceMatrix, matrix)) {
+      return
+    }
     mesh.setMatrixAt(index, matrix)
     mesh.instanceMatrix.needsUpdate = true
     markInstancedBoundsDirty(mesh)
@@ -414,6 +429,10 @@ export function updateModelInstanceBindingMatrix(bindingId: string, matrix: Matr
     return
   }
   binding.slots.forEach(({ mesh, index }) => {
+    mesh.getMatrixAt(index, tempInstanceMatrix)
+    if (matricesAlmostEqual(tempInstanceMatrix, matrix)) {
+      return
+    }
     mesh.setMatrixAt(index, matrix)
     mesh.instanceMatrix.needsUpdate = true
     markInstancedBoundsDirty(mesh)

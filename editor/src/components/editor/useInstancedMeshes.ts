@@ -17,6 +17,7 @@ export function useInstancedMeshes(
   callbacks: {
     syncInstancedOutlineEntryTransform: (nodeId: string) => void
     resolveSceneNodeById?: (nodeId: string) => SceneNode | null
+    markInstancedCullingDirty?: () => void
     syncInstancedTransformOverride?: (params: {
       nodeId: string
       object: THREE.Object3D
@@ -49,6 +50,20 @@ export function useInstancedMeshes(
   }
 
   const multiBindingLocalCache = new Map<string, MultiBindingLocalCacheEntry>()
+
+  function markInstancedDescendantChain(object: THREE.Object3D | null): void {
+    let current = object?.parent ?? null
+    while (current) {
+      if (current.userData?.__harmonyHasInstancedDescendant === true) {
+        return
+      }
+      current.userData = {
+        ...(current.userData ?? {}),
+        __harmonyHasInstancedDescendant: true,
+      }
+      current = current.parent ?? null
+    }
+  }
 
   function buildModelInstanceBindingKey(binding: ModelInstanceBinding): string {
     return binding.slots.map((slot) => `${slot.mesh.uuid}:${slot.index}`).join('|')
@@ -142,6 +157,9 @@ export function useInstancedMeshes(
 
     const nextBindingKey = buildMultiBindingKey(bindings)
     const cached = multiBindingLocalCache.get(nodeId)
+    if (cached && cached.bindingKey === nextBindingKey && matrixArrayEqual(cached.base.elements, baseMatrix.elements, 1e-6)) {
+      return
+    }
     const needsRebuild = !cached || cached.bindingKey !== nextBindingKey
     const entry: MultiBindingLocalCacheEntry = cached ?? {
       bindingKey: nextBindingKey,
@@ -280,18 +298,19 @@ export function useInstancedMeshes(
     primeMultiBindingLocalCache(nodeId, instancedMatrixHelper)
   }
 
-  function syncInstancedTransform(object: THREE.Object3D | null, includeChildren = false) {
+  function syncInstancedTransform(object: THREE.Object3D | null, includeChildren = false, skipMatrixWorldUpdate = false) {
     if (!object) {
       return
     }
 
-    object.updateMatrixWorld(true)
+    if (!skipMatrixWorldUpdate) {
+      object.updateMatrixWorld(true)
+    }
 
     if (object.userData?.instancedAssetId) {
       const nodeId = object.userData.nodeId as string | undefined
       if (nodeId) {
         const assetId = object.userData.instancedAssetId as string | undefined
-        const node = callbacks.resolveSceneNodeById ? callbacks.resolveSceneNodeById(nodeId) : null
         const isCulled = object.userData?.__harmonyCulled === true
         const isVisible = object.visible !== false
         if (isCulled || !isVisible) {
@@ -315,11 +334,16 @@ export function useInstancedMeshes(
           // handled by override
         } else if (isCulled || !isVisible) {
           syncMultiBindingTransform(nodeId, instancedMatrixHelper)
-        } else if (assetId && node && getContinuousInstancedModelUserData(node)) {
-          syncContinuousInstancedModelCommitted({ node, object, assetId })
         } else {
-          syncMultiBindingTransform(nodeId, instancedMatrixHelper)
+          const node = assetId && callbacks.resolveSceneNodeById ? callbacks.resolveSceneNodeById(nodeId) : null
+          if (assetId && node && getContinuousInstancedModelUserData(node)) {
+            syncContinuousInstancedModelCommitted({ node, object, assetId })
+          } else {
+            syncMultiBindingTransform(nodeId, instancedMatrixHelper)
+          }
         }
+        markInstancedDescendantChain(object)
+        callbacks.markInstancedCullingDirty?.()
         callbacks.syncInstancedOutlineEntryTransform(nodeId)
       }
     }
@@ -328,7 +352,7 @@ export function useInstancedMeshes(
       return
     }
 
-    const stack = [...object.children]
+      const stack = [...object.children]
     while (stack.length > 0) {
       const current = stack.pop()
       if (!current) {
@@ -339,7 +363,6 @@ export function useInstancedMeshes(
         const nodeId = current.userData.nodeId as string | undefined
         if (nodeId) {
           const assetId = current.userData.instancedAssetId as string | undefined
-          const node = callbacks.resolveSceneNodeById ? callbacks.resolveSceneNodeById(nodeId) : null
           const isCulled = current.userData?.__harmonyCulled === true
           const isVisible = current.visible !== false
           if (isCulled || !isVisible) {
@@ -363,11 +386,16 @@ export function useInstancedMeshes(
             // handled by override
           } else if (isCulled || !isVisible) {
             syncMultiBindingTransform(nodeId, instancedMatrixHelper)
-          } else if (assetId && node && getContinuousInstancedModelUserData(node)) {
-            syncContinuousInstancedModelCommitted({ node, object: current, assetId })
           } else {
-            syncMultiBindingTransform(nodeId, instancedMatrixHelper)
+            const node = assetId && callbacks.resolveSceneNodeById ? callbacks.resolveSceneNodeById(nodeId) : null
+            if (assetId && node && getContinuousInstancedModelUserData(node)) {
+              syncContinuousInstancedModelCommitted({ node, object: current, assetId })
+            } else {
+              syncMultiBindingTransform(nodeId, instancedMatrixHelper)
+            }
           }
+          markInstancedDescendantChain(current)
+          callbacks.markInstancedCullingDirty?.()
           callbacks.syncInstancedOutlineEntryTransform(nodeId)
         }
       }
@@ -376,7 +404,7 @@ export function useInstancedMeshes(
       if (childCount > 0) {
         for (let index = 0; index < childCount; index += 1) {
           const child = current.children[index]
-          if (child) {
+          if (child && (child.userData?.instancedAssetId || child.userData?.__harmonyHasInstancedDescendant === true)) {
             stack.push(child)
           }
         }

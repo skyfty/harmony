@@ -686,7 +686,6 @@ function clampScatterBrushRadius(value: unknown): number {
 const scatterCullingProjView = new THREE.Matrix4()
 const scatterCullingFrustum = new THREE.Frustum()
 const scatterFrustumCuller = createInstancedBvhFrustumCuller()
-const scatterCandidateCenterHelper = new THREE.Vector3()
 const scatterEraseLocalPointHelper = new THREE.Vector3()
 const sculptStrokePrevPointHelper = new THREE.Vector3()
 const sculptStrokeNextPointHelper = new THREE.Vector3()
@@ -732,6 +731,15 @@ type ScatterSessionState = {
 type ScatterPreviewSample = {
 	key: string
 	point: THREE.Vector3
+}
+
+function matrixElementsEqual(a: Float32Array, b: ArrayLike<number>, epsilon = 1e-6): boolean {
+	for (let index = 0; index < 16; index += 1) {
+		if (Math.abs(a[index]! - (b[index] ?? 0)) > epsilon) {
+			return false
+		}
+	}
+	return true
 }
 
 function collectGroundChunkKeys(keys: Iterable<string>): string[] {
@@ -1675,6 +1683,23 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	let scatterAssetLoadToken = 0
 	let scatterSnapshotUpdatedAt: number | null = null
 	const scatterRuntimeAssetIdByNodeId = new Map<string, string>()
+	type ScatterRuntimeSpatialCacheEntry = {
+		groundMatrix: Float32Array
+		localPositionX: number
+		localPositionY: number
+		localPositionZ: number
+		localRotationX: number
+		localRotationY: number
+		localRotationZ: number
+		localScaleX: number
+		localScaleY: number
+		localScaleZ: number
+		targetKey: string
+		sourceModelHeight: number
+		worldPosition: THREE.Vector3
+		radius: number
+	}
+	const scatterRuntimeSpatialCache = new Map<string, ScatterRuntimeSpatialCacheEntry>()
 
 	const lockScatterLodToBaseAsset = Boolean(options.lockScatterLodToBaseAsset)
 	const scatterLodRuntimeDisabled = Boolean(options.disableScatterLodRuntime)
@@ -1705,6 +1730,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	let lastScatterChunkStreamingVisibilityUpdateAt = 0
 	let lastScatterChunkStreamingUpdateAt = 0
 	const scatterChunkStreamingLocalCameraHelper = new THREE.Vector3()
+	let scatterChunkStreamingCameraStateValid = false
+	const scatterChunkStreamingLastCameraProjectionMatrix = new Float32Array(16)
+	const scatterChunkStreamingLastCameraMatrixWorldInverse = new Float32Array(16)
 
 	function isScatterVisible(): boolean {
 		return options.isScatterVisible ? options.isScatterVisible() !== false : true
@@ -1714,6 +1742,30 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		const candidate = options.scatterChunkStreaming?.enabled
 		return typeof candidate === 'function' ? candidate() === true : candidate === true
 	}
+
+	function areScatterChunkStreamingCameraMatricesUnchanged(camera: THREE.Camera): boolean {
+		if (!scatterChunkStreamingCameraStateValid) {
+			return false
+		}
+		const projectionMatrix = camera.projectionMatrix.elements
+		const matrixWorldInverse = camera.matrixWorldInverse.elements
+		for (let index = 0; index < 16; index += 1) {
+			if (projectionMatrix[index] !== scatterChunkStreamingLastCameraProjectionMatrix[index]) {
+				return false
+			}
+			if (matrixWorldInverse[index] !== scatterChunkStreamingLastCameraMatrixWorldInverse[index]) {
+				return false
+			}
+		}
+		return true
+	}
+
+	function rememberScatterChunkStreamingCameraMatrices(camera: THREE.Camera): void {
+		scatterChunkStreamingLastCameraProjectionMatrix.set(camera.projectionMatrix.elements)
+		scatterChunkStreamingLastCameraMatrixWorldInverse.set(camera.matrixWorldInverse.elements)
+		scatterChunkStreamingCameraStateValid = true
+	}
+
 	const scatterChunkStreamingMatrixHelper = new THREE.Matrix4()
 	const scatterChunkStreamingWorldCameraHelper = new THREE.Vector3()
 	const scatterChunkStreamingGroupPromises = new Map<string, Promise<ModelInstanceGroup | null>>()
@@ -2043,7 +2095,9 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			try {
 				for (const layer of Array.from(scatterStore.layers.values())) {
 					for (const instance of layer.instances ?? []) {
-						scatterRuntimeAssetIdByNodeId.delete(buildScatterNodeId(layer.id, instance.id))
+						const nodeId = buildScatterNodeId(layer.id, instance.id)
+						scatterRuntimeAssetIdByNodeId.delete(nodeId)
+						scatterRuntimeSpatialCache.delete(nodeId)
 						releaseScatterInstance(instance)
 					}
 				}
@@ -2075,6 +2129,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		lastScatterChunkStreamingVisibilityUpdateAt = 0
 		lastScatterChunkStreamingUpdateAt = 0
 		scatterRuntimeAssetIdByNodeId.clear()
+		scatterRuntimeSpatialCache.clear()
 
 		const store = scatterStore
 		if (!store) {
@@ -2084,6 +2139,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		for (const layer of store.layers.values()) {
 			for (const instance of layer.instances ?? []) {
 				releaseScatterInstance(instance)
+				scatterRuntimeSpatialCache.delete(buildScatterNodeId(layer.id, instance.id))
 			}
 		}
 	}
@@ -2103,6 +2159,73 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return assetId
 		}
 		return null
+	}
+
+	function getScatterRuntimeSpatialCacheEntry(
+		nodeId: string,
+		instance: TerrainScatterInstance,
+		boundAssetKey: string | null,
+		sourceModelHeight: number,
+		groundMesh: THREE.Object3D,
+	): ScatterRuntimeSpatialCacheEntry {
+		const cacheKey = nodeId
+		const cached = scatterRuntimeSpatialCache.get(cacheKey)
+		const localPosition = instance.localPosition
+		const localRotation = instance.localRotation
+		const localScale = instance.localScale
+		const targetKey = boundAssetKey ?? ''
+		const groundMatrix = groundMesh.matrixWorld.elements
+
+		if (
+			cached
+			&& cached.targetKey === targetKey
+			&& cached.sourceModelHeight === sourceModelHeight
+			&& cached.localPositionX === (localPosition?.x ?? 0)
+			&& cached.localPositionY === (localPosition?.y ?? 0)
+			&& cached.localPositionZ === (localPosition?.z ?? 0)
+			&& cached.localRotationX === (localRotation?.x ?? 0)
+			&& cached.localRotationY === (localRotation?.y ?? 0)
+			&& cached.localRotationZ === (localRotation?.z ?? 0)
+			&& cached.localScaleX === (localScale?.x ?? 1)
+			&& cached.localScaleY === (localScale?.y ?? 1)
+			&& cached.localScaleZ === (localScale?.z ?? 1)
+			&& matrixElementsEqual(cached.groundMatrix, groundMatrix)
+		) {
+			return cached
+		}
+
+		const target: ScatterRuntimeTarget = boundAssetKey && boundAssetKey.startsWith('billboard:')
+			? {
+				kind: 'billboard',
+				assetId: boundAssetKey.slice('billboard:'.length),
+				sourceModelHeight,
+			}
+			: {
+				kind: 'model',
+				assetId: boundAssetKey?.startsWith('model:') ? boundAssetKey.slice('model:'.length) : (boundAssetKey ?? ''),
+				sourceModelHeight,
+			}
+		const matrix = computeScatterTargetMatrix(instance, groundMesh, target, sourceModelHeight)
+		scatterInstanceWorldPositionHelper.setFromMatrixPosition(matrix)
+		const radius = computeScatterTargetRadius(targetKey || null, instance, sourceModelHeight) * scatterChunkStreamingCullRadiusMultiplier
+		const nextEntry: ScatterRuntimeSpatialCacheEntry = {
+			groundMatrix: new Float32Array(groundMatrix),
+			localPositionX: localPosition?.x ?? 0,
+			localPositionY: localPosition?.y ?? 0,
+			localPositionZ: localPosition?.z ?? 0,
+			localRotationX: localRotation?.x ?? 0,
+			localRotationY: localRotation?.y ?? 0,
+			localRotationZ: localRotation?.z ?? 0,
+			localScaleX: localScale?.x ?? 1,
+			localScaleY: localScale?.y ?? 1,
+			localScaleZ: localScale?.z ?? 1,
+			targetKey,
+			sourceModelHeight,
+			worldPosition: scatterInstanceWorldPositionHelper.clone(),
+			radius,
+		}
+		scatterRuntimeSpatialCache.set(cacheKey, nextEntry)
+		return nextEntry
 	}
 
 	async function ensureScatterLodPresetCached(presetAssetId: string): Promise<void> {
@@ -2834,11 +2957,11 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			if (!entry) {
 				return null
 			}
-			const worldPos = getScatterInstanceWorldPosition(entry.instance, groundMesh, scatterCandidateCenterHelper)
-			centerTarget.copy(worldPos)
 			const boundAssetKey = scatterRuntimeAssetIdByNodeId.get(nodeId) ?? null
 			const sourceModelHeight = Number(entry.instance.metadata?.billboardSourceModelHeight ?? 1)
-			const radius = computeScatterTargetRadius(boundAssetKey, entry.instance, sourceModelHeight) * scatterChunkStreamingCullRadiusMultiplier
+			const spatial = getScatterRuntimeSpatialCacheEntry(nodeId, entry.instance, boundAssetKey, sourceModelHeight, groundMesh)
+			centerTarget.copy(spatial.worldPosition)
+			const radius = spatial.radius
 			return { radius }
 		})
 
@@ -2929,6 +3052,10 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!camera || !groundMesh || !definition || store.layers.size === 0) {
 			return
 		}
+		camera.updateMatrixWorld(true)
+		if (!scatterChunkIndexDirty && areScatterChunkStreamingCameraMatricesUnchanged(camera)) {
+			return
+		}
 
 		// Ensure active chunks are up to date.
 		updateScatterChunkStreaming(false)
@@ -3004,6 +3131,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				})
 			pendingScatterChunkBindings.set(nodeId, task)
 		}
+		rememberScatterChunkStreamingCameraMatrices(camera)
 	}
 
 	function updateScatterChunkStreaming(force = false): void {

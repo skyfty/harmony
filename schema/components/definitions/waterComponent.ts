@@ -106,6 +106,7 @@ const WATER_STATIC_MIRROR_CAMERA_ROTATION_COS_HALF_EPS = Math.cos((35 * Math.PI)
 
 // Water surface moved threshold before forcing a re-capture (world units).
 const WATER_STATIC_MIRROR_WORLD_POSITION_EPS_SQ = 0.05 * 0.05
+const WATER_STATIC_MIRROR_MIN_CAPTURE_INTERVAL_MS = 250
 
 // Removed unused PositionAttribute type
 
@@ -255,6 +256,7 @@ class WaterComponent extends Component<WaterComponentProps> {
   private staticEnvHasCaptured = false
   private staticEnvNeedsCapture = false
   private staticEnvIsCapturing = false
+  private staticEnvLastCapturedAtMs = 0
   private staticEnvLastCapturedWorldPos: Vector3 | null = null
   private staticEnvLastCapturedCameraPos: Vector3 | null = null
   private staticEnvLastCapturedCameraQuat: Quaternion | null = null
@@ -852,18 +854,18 @@ class WaterComponent extends Component<WaterComponentProps> {
       target.scale.copy(hostWorldScale)
       applyWaterSurfaceLayering(target)
       target.updateMatrix()
-      target.updateMatrixWorld(true)
+      target.updateMatrixWorld(false)
       return
     }
 
-    targetParent.updateMatrixWorld(true)
+    targetParent.updateMatrixWorld(false)
     const hostWorldMatrix = new Matrix4().compose(hostWorldPosition, hostWorldQuaternion, hostWorldScale)
     const parentInverseWorld = targetParent.matrixWorld.clone().invert()
     const targetLocalMatrix = new Matrix4().multiplyMatrices(parentInverseWorld, hostWorldMatrix)
     targetLocalMatrix.decompose(target.position, target.quaternion, target.scale)
     applyWaterSurfaceLayering(target)
     target.updateMatrix()
-    target.updateMatrixWorld(true)
+    target.updateMatrixWorld(false)
   }
 
   private prepareNormalTexture(source: Texture): Texture {
@@ -1031,6 +1033,10 @@ class WaterComponent extends Component<WaterComponentProps> {
     if (this.staticEnvHasCaptured && !this.staticEnvNeedsCapture) {
       return
     }
+    const nowMs = Date.now()
+    if (this.staticEnvHasCaptured && nowMs - this.staticEnvLastCapturedAtMs < WATER_STATIC_MIRROR_MIN_CAPTURE_INTERVAL_MS) {
+      return
+    }
     const scope = this.staticWaterMesh
     const mirrorCamera = this.staticMirrorCamera
 
@@ -1137,9 +1143,9 @@ class WaterComponent extends Component<WaterComponentProps> {
         uniforms.textureMatrix.value.copy(this.staticTextureMatrix)
       }
 
-      this.staticWaterMaterial.needsUpdate = true
       this.staticEnvHasCaptured = true
       this.staticEnvNeedsCapture = false
+      this.staticEnvLastCapturedAtMs = Date.now()
 
       scope.getWorldPosition(this.staticTempWorldPos)
       if (!this.staticEnvLastCapturedWorldPos) {
@@ -1271,6 +1277,7 @@ class WaterComponent extends Component<WaterComponentProps> {
     this.staticEnvHasCaptured = false
     this.staticEnvNeedsCapture = false
     this.staticEnvIsCapturing = false
+    this.staticEnvLastCapturedAtMs = 0
     this.staticEnvLastCapturedWorldPos = null
     this.staticEnvLastCapturedCameraPos = null
     this.staticEnvLastCapturedCameraQuat = null
