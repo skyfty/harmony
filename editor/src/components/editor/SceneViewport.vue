@@ -13514,6 +13514,24 @@ function handleViewportDoubleClickNode(nodeId: string): void {
   tryEnterNodeBuildToolEditMode(nodeId, toolForNode)
 }
 
+function handleSelectedNodeEditShortcut(): boolean {
+  if (sceneStore.selectedNodeIds.length !== 1) {
+    return false
+  }
+
+  const selectedNodeId = sceneStore.selectedNodeIds[0] ?? null
+  if (!selectedNodeId) {
+    return false
+  }
+
+  if (!resolveBuildToolForNodeId(selectedNodeId)) {
+    return false
+  }
+
+  handleViewportDoubleClickNode(selectedNodeId)
+  return true
+}
+
 function collectVisibleFocusNodeIds(options?: { includeGround?: boolean }): string[] {
   const includeGround = Boolean(options?.includeGround)
   const visibleIds: string[] = []
@@ -23552,6 +23570,10 @@ function handleViewportShortcut(event: KeyboardEvent) {
       case 'KeyM': {
         toggleViewportCameraControlMode()
         handled = true
+        break
+      }
+      case 'KeyD': {
+        handled = handleSelectedNodeEditShortcut()
         break
       }
       default: {
