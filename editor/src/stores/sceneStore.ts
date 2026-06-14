@@ -1169,6 +1169,8 @@ const landformGroundSplatBakeScheduler = createLatestIdleScheduler<LandformGroun
   void (async () => {
     const baked = await bakeLandformGroundSplatForSceneDocument(request.snapshot, {
       registerAssets: request.scene.registerAssets?.bind(request.scene),
+      debugProfiling: import.meta.env.DEV,
+      debugReason: request.reason,
     })
     if (request.version !== landformGroundSplatBakeVersion) {
       return
@@ -12481,9 +12483,7 @@ export const useSceneStore = defineStore('scene', {
         : synchronizeManifestWithCatalog(this.assetManifest, nextCatalog, {
             preferredDirectoryId: options?.preferredDirectoryId,
           })
-      const normalizedCatalog = nextManifest
-        ? buildAssetCatalogFromManifest(nextManifest, nextCatalog)
-        : nextCatalog
+      const normalizedCatalog = nextManifest ? buildAssetCatalogFromManifest(nextManifest, nextCatalog) : nextCatalog
       this.assetManifest = nextManifest
       if (options?.nextAssetRegistry) {
         this.assetRegistry = filterAssetRegistryByCatalog(options.nextAssetRegistry, normalizedCatalog)
@@ -12493,9 +12493,7 @@ export const useSceneStore = defineStore('scene', {
 
       this.assetCatalog = mergeCatalogAssetMetadataFromIndex(normalizedCatalog)
       this.refreshProjectTree()
-      if (options?.commitSnapshot) {
-        commitSceneSnapshot(this, { updateNodes: !!options.updateNodes })
-      }
+
     },
     markSceneDirty(options: { updateNodes?: boolean } = {}) {
       commitSceneSnapshot(this, { updateNodes: options.updateNodes === true })

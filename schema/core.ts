@@ -1820,6 +1820,7 @@ export interface GroundSurfaceChunkTextureRef {
   normalTextureAssetId?: string | null
   splatMapAssetIds?: string[] | null
   surfaceLayers?: GroundSurfaceChunkLayerRef[] | null
+  bakeSignature?: string | null
   revision: number
 }
 
@@ -2115,8 +2116,8 @@ export function normalizeGroundSurfaceChunkTextureMap(
       flipY: typeof record.flipY === 'boolean' ? record.flipY : true,
     }
   }
-  const normalizeOptionalAssetId = (assetId: unknown): string | null => {
-    const normalized = typeof assetId === 'string' ? assetId.trim() : ''
+  const normalizeOptionalString = (value: unknown): string | null => {
+    const normalized = typeof value === 'string' ? value.trim() : ''
     return normalized.length > 0 ? normalized : null
   }
   const entries: Array<readonly [string, GroundSurfaceChunkTextureRef]> = []
@@ -2143,9 +2144,9 @@ export function normalizeGroundSurfaceChunkTextureMap(
               ? String((layer as { colorTint?: unknown }).colorTint).trim()
               : ''
             return {
-              albedoSource: normalizeOptionalAssetId((layer as { albedoSource?: unknown }).albedoSource),
+              albedoSource: normalizeOptionalString((layer as { albedoSource?: unknown }).albedoSource),
               albedoTextureSettings: normalizeTextureSettings((layer as { albedoTextureSettings?: unknown }).albedoTextureSettings),
-              normalSource: normalizeOptionalAssetId((layer as { normalSource?: unknown }).normalSource),
+              normalSource: normalizeOptionalString((layer as { normalSource?: unknown }).normalSource),
               normalTextureSettings: normalizeTextureSettings((layer as { normalTextureSettings?: unknown }).normalTextureSettings),
               colorTint: colorTint.length > 0 ? colorTint : null,
               opacity: Number.isFinite(opacity) ? Math.max(0, Math.min(1, opacity)) : 1,
@@ -2163,14 +2164,15 @@ export function normalizeGroundSurfaceChunkTextureMap(
       : null
     entries.push([normalizedChunkKey, {
       baseBlendMode: chunkRef?.baseBlendMode === 'shader-splat-v1' ? 'shader-splat-v1' : null,
-      textureAssetId: normalizeOptionalAssetId(chunkRef?.textureAssetId),
-      normalTextureAssetId: normalizeOptionalAssetId(chunkRef?.normalTextureAssetId),
+      textureAssetId: normalizeOptionalString(chunkRef?.textureAssetId),
+      normalTextureAssetId: normalizeOptionalString(chunkRef?.normalTextureAssetId),
       splatMapAssetIds: Array.isArray(chunkRef?.splatMapAssetIds)
         ? chunkRef.splatMapAssetIds
-            .map((value) => normalizeOptionalAssetId(value))
+            .map((value) => normalizeOptionalString(value))
             .filter((value): value is string => Boolean(value))
         : null,
       surfaceLayers: normalizedSurfaceLayers,
+      bakeSignature: normalizeOptionalString(chunkRef?.bakeSignature),
       revision: Math.max(0, Math.trunc(Number.isFinite(Number(chunkRef?.revision)) ? Number(chunkRef?.revision) : 0)),
     }])
   }

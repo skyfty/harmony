@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { hashString, stableSerialize } from '@schema/stableSerialize'
 import type {
   AssetSourceMetadata,
   GroundDynamicMesh,
@@ -21,8 +22,8 @@ import {
 } from '@schema/core'
 import { createTextureSettings } from '@schema/material'
 import { computeBlobHash } from '@/utils/blob'
-import { determineAssetCategoryId } from '@/stores/assetCatalog'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
+import { useGroundSplatStore } from '@/stores/groundSplatStore'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 
@@ -66,6 +67,8 @@ export type LandformGroundBakeOptions = {
   maxTextureSize?: number
   maxSplatLayers?: number
   debugBaseTextureOnly?: boolean
+  debugProfiling?: boolean
+  debugReason?: string
   registerAssets?: (assets: ProjectAsset[], options?: {
     categoryId?: string | ((asset: ProjectAsset) => string)
     source?: AssetSourceMetadata | ((asset: ProjectAsset) => AssetSourceMetadata | undefined)
@@ -74,6 +77,134 @@ export type LandformGroundBakeOptions = {
     commitOptions?: { updateNodes?: boolean }
     autoSave?: boolean
   }) => ProjectAsset[]
+}
+
+const LANDFORM_BAKE_PERF_FLAG = '__HARMONY_LANDFORM_BAKE_PERF__'
+
+function nowMs(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now()
+}
+
+function isLandformBakePerfDebugEnabled(): boolean {
+  const flag = (globalThis as Record<string, unknown>)[LANDFORM_BAKE_PERF_FLAG]
+  return flag === true || flag === 'true' || flag === 1 || flag === '1'
+}
+
+type PreparedLandformChunkLayer = {
+  entry: LandformBakeEntry
+  props: SceneMaterialProps
+  featherSettings: LandformFeatherSettings
+  layerIndex: number
+  pendingSurfaceLayer: GroundSurfaceChunkLayerRef
+  geometrySignature: string
+}
+
+function normalizeSurfaceLayerSignature(layer: GroundSurfaceChunkLayerRef): unknown {
+  return {
+    albedoSource: layer.albedoSource ?? null,
+    albedoTextureSettings: layer.albedoTextureSettings ?? null,
+    normalSource: layer.normalSource ?? null,
+    normalTextureSettings: layer.normalTextureSettings ?? null,
+    colorTint: layer.colorTint ?? null,
+    opacity: layer.opacity ?? null,
+    uvScale: layer.uvScale ?? null,
+    maskChannel: layer.maskChannel,
+    featherEnabled: layer.featherEnabled ?? null,
+    featherWidth: layer.featherWidth ?? null,
+  }
+}
+
+function roundSignatureNumber(value: number, precision = 1e-4): number {
+  if (!Number.isFinite(value)) {
+    return 0
+  }
+  return Math.round(value / precision) * precision
+}
+
+function summarizePaintGeometriesSignature(geometries: Array<{
+  vertices: Array<{ x: number; y: number; z: number }>
+  indices: number[]
+  source: 'surface' | 'outline'
+}>): string {
+  const geometrySummaries = geometries.map((geometry) => {
+    let minX = Number.POSITIVE_INFINITY
+    let minY = Number.POSITIVE_INFINITY
+    let minZ = Number.POSITIVE_INFINITY
+    let maxX = Number.NEGATIVE_INFINITY
+    let maxY = Number.NEGATIVE_INFINITY
+    let maxZ = Number.NEGATIVE_INFINITY
+    const sampleIndices = geometry.indices.length > 0
+      ? [0, Math.floor(geometry.indices.length / 2), geometry.indices.length - 1]
+      : [0]
+    const samples = sampleIndices.map((sampleIndex) => {
+      const vertexIndex = geometry.indices[sampleIndex] ?? sampleIndex
+      const point = geometry.vertices[vertexIndex] ?? null
+      if (!point) {
+        return null
+      }
+      return [
+        roundSignatureNumber(point.x),
+        roundSignatureNumber(point.y),
+        roundSignatureNumber(point.z),
+      ]
+    }).filter((entry): entry is [number, number, number] => entry !== null)
+
+    for (const point of geometry.vertices) {
+      minX = Math.min(minX, point.x)
+      minY = Math.min(minY, point.y)
+      minZ = Math.min(minZ, point.z)
+      maxX = Math.max(maxX, point.x)
+      maxY = Math.max(maxY, point.y)
+      maxZ = Math.max(maxZ, point.z)
+    }
+
+    return {
+      source: geometry.source,
+      vertexCount: geometry.vertices.length,
+      indexCount: geometry.indices.length,
+      bounds: {
+        minX: roundSignatureNumber(minX),
+        minY: roundSignatureNumber(minY),
+        minZ: roundSignatureNumber(minZ),
+        maxX: roundSignatureNumber(maxX),
+        maxY: roundSignatureNumber(maxY),
+        maxZ: roundSignatureNumber(maxZ),
+      },
+      samples,
+    }
+  })
+  return hashString(stableSerialize(geometrySummaries))
+}
+
+function computeChunkBakeSignature(params: {
+  chunkKey: string
+  chunkSizeMeters: number
+  chunkWidth: number
+  chunkDepth: number
+  maxTextureSize: number
+  maxSplatLayers: number
+  chunkLayers: PreparedLandformChunkLayer[]
+}): string {
+  const signaturePayload = {
+    chunkKey: params.chunkKey,
+    chunkSizeMeters: params.chunkSizeMeters,
+    chunkWidth: roundSignatureNumber(params.chunkWidth),
+    chunkDepth: roundSignatureNumber(params.chunkDepth),
+    maxTextureSize: params.maxTextureSize,
+    maxSplatLayers: params.maxSplatLayers,
+    layers: params.chunkLayers.map((layer) => ({
+      entryId: layer.entry.node.id,
+      layerId: layer.entry.layer.id,
+      order: layer.entry.order,
+      nodeOrder: layer.entry.nodeOrder,
+      featherSettings: layer.featherSettings,
+      pendingSurfaceLayer: normalizeSurfaceLayerSignature(layer.pendingSurfaceLayer),
+      geometrySignature: layer.geometrySignature,
+    })),
+  }
+  return hashString(stableSerialize(signaturePayload))
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -123,12 +254,10 @@ async function canvasToBlob(canvas: CanvasLike): Promise<Blob | null> {
 }
 
 async function storeGroundSurfaceTextureAsset(options: {
-  scene: StoredSceneDocument
   blob: Blob
   filename: string
   description: string
-  registerAssets?: LandformGroundBakeOptions['registerAssets']
-}): Promise<string | null> {
+}): Promise<{ textureAssetId: string; asset: ProjectAsset } | null> {
   const assetCache = useAssetCacheStore()
   const textureAssetId = await computeBlobHash(options.blob)
   const asset: ProjectAsset = {
@@ -146,32 +275,14 @@ async function storeGroundSurfaceTextureAsset(options: {
       generatedBy: 'ground-landform-bake',
     },
   }
-  await assetCache.storeAssetBlob(textureAssetId, {
+  assetCache.storeAssetBlob(textureAssetId, {
     blob: options.blob,
     mimeType: 'image/png',
     filename: options.filename,
     downloadUrl: textureAssetId,
     contentHash: textureAssetId,
   })
-  if (options.registerAssets) {
-    options.registerAssets([asset], {
-      source: { type: 'local' },
-      internal: true,
-      commitOptions: { updateNodes: false },
-    })
-  }
-  if (options.scene && options.scene.assetCatalog) {
-    const categoryId = determineAssetCategoryId(asset)
-    const existingCategoryId = Object.entries(options.scene.assetCatalog).find(([, list]) =>
-      (list ?? []).some((entry) => entry.id === asset.id),
-    )?.[0]
-    if (existingCategoryId && options.scene.assetCatalog[existingCategoryId]) {
-      options.scene.assetCatalog[existingCategoryId] = options.scene.assetCatalog[existingCategoryId]!.filter((entry) => entry.id !== asset.id)
-    }
-    const currentList = options.scene.assetCatalog[categoryId] ?? []
-    options.scene.assetCatalog[categoryId] = [...currentList.filter((entry) => entry.id !== asset.id), asset]
-  }
-  return textureAssetId
+  return { textureAssetId, asset }
 }
 
 function resolveCanvasImageSourceSize(source: CanvasImageSource): { width: number; height: number } | null {
@@ -1481,6 +1592,33 @@ export async function bakeLandformGroundSurfaceChunks(
   definition: GroundDynamicMesh,
   options: LandformGroundBakeOptions = {},
 ): Promise<GroundSurfaceChunkTextureMap | null> {
+  const debugProfiling = Boolean(options.debugProfiling) || isLandformBakePerfDebugEnabled()
+  const debugStartedAt = debugProfiling ? nowMs() : 0
+  const debugSceneId = typeof scene.id === 'string' && scene.id.trim().length
+    ? scene.id.trim()
+    : typeof scene.name === 'string' && scene.name.trim().length
+      ? scene.name.trim()
+    : 'landform-ground-bake'
+  const debugReason = typeof options.debugReason === 'string' && options.debugReason.trim().length
+    ? options.debugReason.trim()
+    : null
+  const debugMetrics = debugProfiling
+    ? {
+        entriesMs: 0,
+        affectedMs: 0,
+        chunkFilterMs: 0,
+        paintMs: 0,
+        maskReadMs: 0,
+        encodeMs: 0,
+        chunkCount: 0,
+        chunkSkippedNoLandforms: 0,
+        chunkSkippedNoGeometry: 0,
+        chunkReused: 0,
+        paintedTriangles: 0,
+        paintedLayers: 0,
+      }
+    : null
+
   // 这个函数的目标很简单：
   // 把场景里的 landform（地形/地貌覆盖层）按 ground chunk 分块烘焙成 mask + 图层元数据，
   // 但不再烘焙 ground 底图本身。
@@ -1498,7 +1636,11 @@ export async function bakeLandformGroundSurfaceChunks(
     // 场景里根本没有 landform，就不需要烘焙任何地表图。
     return null
   }
+  const entriesStartedAt = debugProfiling ? nowMs() : 0
   const landformEntries = collectLandformBakeEntries(scene.nodes, definition)
+  if (debugMetrics) {
+    debugMetrics.entriesMs += nowMs() - entriesStartedAt
+  }
   if (!landformEntries.length) {
     // 没有可参与烘焙的有效几何数据，也直接返回。
     return null
@@ -1519,7 +1661,11 @@ export async function bakeLandformGroundSurfaceChunks(
 
   // 先做一次粗筛：只找“确实被 landform 覆盖到”的 chunk。
   // 这样后面不会无意义地给整张地表都生成贴图。
+  const affectedStartedAt = debugProfiling ? nowMs() : 0
   const affectedChunkKeys = collectLandformBakeAffectedChunkKeys(landformEntries, definition)
+  if (debugMetrics) {
+    debugMetrics.affectedMs += nowMs() - affectedStartedAt
+  }
   if (!affectedChunkKeys.length) {
     return null
   }
@@ -1528,6 +1674,12 @@ export async function bakeLandformGroundSurfaceChunks(
   // 这里不是固定大小，而是根据 chunk 的实际世界尺寸按比例缩放后再限制最大值。
   const maxTextureSize = Math.max(128, Math.round(options.maxTextureSize ?? 1024))
   const groundNodeId = findGroundNode(scene.nodes ?? [])?.id ?? 'ground'
+  const runtimeExistingChunkMap = useGroundSplatStore().getSceneGroundSplat(scene.id)?.groundSurfaceChunks ?? null
+  const existingChunkMap = definition.groundSurfaceChunks
+    ?? definition.groundSplatBake?.chunkTextureMap
+    ?? runtimeExistingChunkMap
+    ?? null
+  const pendingRegisterAssetsById = new Map<string, ProjectAsset>()
 
   // nextChunks 就是最终返回的结果：chunkKey -> GroundSurfaceChunkTextureRef。
   // 这些缓存用来避免同一张贴图反复解码/转 dataURL。
@@ -1535,6 +1687,9 @@ export async function bakeLandformGroundSurfaceChunks(
 
   // 逐个处理受影响的 chunk。
   for (const chunkKey of affectedChunkKeys) {
+    if (debugMetrics) {
+      debugMetrics.chunkCount += 1
+    }
     const chunkIndices = parseChunkKey(chunkKey)
     if (!chunkIndices) {
       continue
@@ -1569,13 +1724,20 @@ export async function bakeLandformGroundSurfaceChunks(
       minZ,
       maxZ: chunkMaxZ,
     }
+    const chunkFilterStartedAt = debugProfiling ? nowMs() : 0
     const chunkLandforms = landformEntries.filter((entry) => {
       const geometries = collectLandformIntersectionGeometries(entry)
       const featherWidth = computeLandformEntryMaxFeatherWidth(entry)
       const queryBounds = expandWorldRect(chunkBounds, featherWidth)
       return geometries.some((geometry) => landformIntersectsChunk(geometry.vertices, geometry.indices, queryBounds))
     })
+    if (debugMetrics) {
+      debugMetrics.chunkFilterMs += nowMs() - chunkFilterStartedAt
+    }
     if (!chunkLandforms.length) {
+      if (debugMetrics) {
+        debugMetrics.chunkSkippedNoLandforms += 1
+      }
       continue
     }
 
@@ -1591,6 +1753,7 @@ export async function bakeLandformGroundSurfaceChunks(
     // 它最终会影响 mask alpha，从而让图层在边缘过渡更自然。
     const activeLayerCount = Math.min(4, Math.max(1, chunkLayers.length))
     const chunkSurfaceLayers: GroundSurfaceChunkLayerRef[] = []
+    const preparedLayers: PreparedLandformChunkLayer[] = []
 
     // 为每个图层准备一张独立 mask 画布。
     // 这些 mask 最后会被打包进一张 RGBA 纹理，供 shader 读取每层权重。
@@ -1600,6 +1763,7 @@ export async function bakeLandformGroundSurfaceChunks(
     }
     const layerFeatherSettings: LandformFeatherSettings[] = []
     let chunkPaintedTriangleCount = 0
+    const paintStartedAt = debugProfiling ? nowMs() : 0
 
     // 逐图层烘焙。
     for (let entryIndex = 0; entryIndex < chunkLayers.length; entryIndex += 1) {
@@ -1670,6 +1834,15 @@ export async function bakeLandformGroundSurfaceChunks(
       // 这里可能同时包含 surface 和 outline 两类来源。
       let paintedTriangleCount = 0
       const paintGeometries = collectLandformChunkPaintGeometries(layerEntry, chunkBounds)
+      const geometrySignature = summarizePaintGeometriesSignature(paintGeometries)
+      const preparedLayer: PreparedLandformChunkLayer = {
+        entry: layerEntry,
+        props,
+        featherSettings,
+        layerIndex,
+        pendingSurfaceLayer,
+        geometrySignature,
+      }
       for (const geometry of paintGeometries) {
         const vertices = geometry.vertices
         const indices = geometry.indices
@@ -1709,17 +1882,49 @@ export async function bakeLandformGroundSurfaceChunks(
       if (paintedTriangleCount <= 0) {
         continue
       }
+      preparedLayers.push(preparedLayer)
       chunkSurfaceLayers.push({
         ...pendingSurfaceLayer,
         maskChannel: layerIndex,
       })
     }
 
+    if (debugMetrics) {
+      debugMetrics.paintMs += nowMs() - paintStartedAt
+      debugMetrics.paintedTriangles += chunkPaintedTriangleCount
+      debugMetrics.paintedLayers += chunkSurfaceLayers.length
+    }
+
     if (chunkPaintedTriangleCount <= 0 || chunkSurfaceLayers.length <= 0) {
+      if (debugMetrics) {
+        debugMetrics.chunkSkippedNoGeometry += 1
+      }
+      continue
+    }
+
+    const chunkBakeSignature = computeChunkBakeSignature({
+      chunkKey,
+      chunkSizeMeters,
+      chunkWidth,
+      chunkDepth,
+      maxTextureSize,
+      maxSplatLayers,
+      chunkLayers: preparedLayers,
+    })
+    const previousChunkRef = existingChunkMap?.[chunkKey] ?? null
+    if (previousChunkRef?.bakeSignature === chunkBakeSignature) {
+      nextChunks[chunkKey] = {
+        ...previousChunkRef,
+        bakeSignature: chunkBakeSignature,
+      }
+      if (debugMetrics) {
+        debugMetrics.chunkReused += 1
+      }
       continue
     }
 
     // 把每个独立 mask 画布读回 ImageData，按每层 feather 生成空间渐变权重后再打包。
+    const maskReadStartedAt = debugProfiling ? nowMs() : 0
     const metersPerPixel = Math.max(chunkWidth / Math.max(1, size.width), chunkDepth / Math.max(1, size.height), 1e-6)
     const maskImages = await Promise.all(maskCanvases.map(async ({ canvas }, index) => {
       const rawMask = await canvasToImageData(canvas)
@@ -1732,13 +1937,18 @@ export async function bakeLandformGroundSurfaceChunks(
         : 0
       return softenMaskImageData(rawMask, featherPixels, 1)
     }))
+      if (debugMetrics) {
+        debugMetrics.maskReadMs += nowMs() - maskReadStartedAt
+      }
 
     // splat 纹理只输出一张 RGBA 图：
     // splat0 = layer 0~3
+    const encodeStartedAt = debugProfiling ? nowMs() : 0
     const splat0 = createCanvas(size.width, size.height)
     if (!splat0) {
       continue
     }
+
     const splat0Data = splat0.context.createImageData(size.width, size.height)
     const splat0Buffer = splat0Data.data
     const emptyMask = new Uint8ClampedArray(size.width * size.height * 4)
@@ -1753,24 +1963,69 @@ export async function bakeLandformGroundSurfaceChunks(
 
     // 最后把 canvas 编码成 blob，再落成场景内可注册的纹理资产。
     const splat0Blob = await canvasToBlob(splat0.canvas)
-    const splatMapReference = splat0Blob
+    const splatAsset = splat0Blob
       ? await storeGroundSurfaceTextureAsset({
-          scene,
           blob: splat0Blob,
           filename: `ground-surface-chunk_${groundNodeId}_${chunkKey}.png`,
           description: `Ground splat chunk (${groundNodeId}:${chunkKey})`,
-          registerAssets: options.registerAssets,
         })
       : null
+    if (splatAsset) {
+      pendingRegisterAssetsById.set(splatAsset.textureAssetId, splatAsset.asset)
+    }
+    
     const nextChunkRef: GroundSurfaceChunkTextureRef = {
       baseBlendMode: 'shader-splat-v1',
       textureAssetId: null,
       normalTextureAssetId: null,
-      splatMapAssetIds: splatMapReference ? [splatMapReference] : null,
+      splatMapAssetIds: splatAsset ? [splatAsset.textureAssetId] : null,
       surfaceLayers: chunkSurfaceLayers,
+      bakeSignature: chunkBakeSignature,
       revision: Date.now(),
     }
     nextChunks[chunkKey] = nextChunkRef
+    if (debugMetrics) {
+      debugMetrics.encodeMs += nowMs() - encodeStartedAt
+    }
+  }
+
+  if (options.registerAssets && pendingRegisterAssetsById.size > 0) {
+    options.registerAssets(Array.from(pendingRegisterAssetsById.values()), {
+      source: { type: 'local' },
+      internal: true,
+      commitOptions: { updateNodes: false },
+      autoSave: false,
+    })
+  }
+
+  if (debugProfiling) {
+    console.info('[LandformBakePerf]', {
+      reason: debugReason,
+      sceneId: debugSceneId,
+      groundNodeId,
+      landformNodes: landformNodes.length,
+      landformEntries: landformEntries.length,
+      affectedChunkKeys: affectedChunkKeys.length,
+      maxTextureSize,
+      maxSplatLayers: Math.max(1, Math.min(4, Math.trunc(Number(options.maxSplatLayers) || 4))),
+      totalMs: Math.round(nowMs() - debugStartedAt),
+      timingsMs: {
+        entries: Math.round(debugMetrics?.entriesMs ?? 0),
+        affected: Math.round(debugMetrics?.affectedMs ?? 0),
+        chunkFilter: Math.round(debugMetrics?.chunkFilterMs ?? 0),
+        paint: Math.round(debugMetrics?.paintMs ?? 0),
+        maskRead: Math.round(debugMetrics?.maskReadMs ?? 0),
+        encode: Math.round(debugMetrics?.encodeMs ?? 0),
+      },
+      chunkStats: {
+        processed: debugMetrics?.chunkCount ?? 0,
+        skippedNoLandforms: debugMetrics?.chunkSkippedNoLandforms ?? 0,
+        skippedNoGeometry: debugMetrics?.chunkSkippedNoGeometry ?? 0,
+        reused: debugMetrics?.chunkReused ?? 0,
+        paintedTriangles: debugMetrics?.paintedTriangles ?? 0,
+        paintedLayers: debugMetrics?.paintedLayers ?? 0,
+      },
+    })
   }
 
   // 如果这轮烘焙一个 chunk 都没生成，就返回 null，
