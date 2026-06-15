@@ -3,6 +3,7 @@ import type { Object3D } from 'three'
 import { Component, type ComponentRuntimeContext } from '../Component'
 import { componentManager, type ComponentDefinition } from '../componentManager'
 import type { SceneNode, SceneNodeComponentState } from '../../index'
+import { loadTextureFromSourceUrl } from '../../textureSourceLoader'
 
 export const BILLBOARD_COMPONENT_TYPE = 'billboard'
 const BILLBOARD_RESOLVER_KEY = '__harmonyResolveDisplayBoardMedia'
@@ -81,7 +82,6 @@ class BillboardComponent extends Component<BillboardComponentProps> {
   private currentTexture: THREE.Texture | null = null
   private currentCleanup: (() => void) | null = null
   private pending: PendingToken | null = null
-  private readonly textureLoader = new THREE.TextureLoader()
   private baseMaterial: THREE.Material | THREE.Material[] | null = null
   private shaderMaterial: BillboardShaderMaterial | null = null
 
@@ -436,7 +436,7 @@ class BillboardComponent extends Component<BillboardComponentProps> {
     height: number
     dispose: () => void
   }> {
-    const texture = await this.textureLoader.loadAsync(resolved.url)
+    const texture = await loadTextureFromSourceUrl(resolved.url)
     texture.colorSpace = THREE.SRGBColorSpace
     const image = texture.image as { width?: number; height?: number; naturalWidth?: number; naturalHeight?: number }
     const width = image?.naturalWidth ?? image?.width ?? 1

@@ -6,6 +6,7 @@ import System, { Alpha, Body, BoxZone, Color as NebulaColor, Emitter, Force, Lif
 import type { ParticleBudgetDecision, ParticleBudgetRuntimeStats } from './particleBudget'
 import { applyEmitterBudget, resolveParticleBudgetDecision } from './particleBudget'
 import { getParticleTextureResolver } from './particleTextureResolver'
+import { loadTextureFromSourceUrl } from '../textureSourceLoader'
 import {
   PARTICLE_SYSTEM_ACTIVE_FLAG,
   PARTICLE_SYSTEM_METADATA_KEY,
@@ -36,7 +37,6 @@ export interface ParticleSystemRuntimeHandle extends ParticleRuntimeRegistryEntr
 
 const sharedTextureCache = new Map<string, THREE.Texture>()
 const pendingTextureLoads = new Map<string, Promise<THREE.Texture | null>>()
-const sharedTextureLoader = new THREE.TextureLoader()
 
 function createRadialSoftTexture(cacheKey: string): THREE.Texture {
   const cached = sharedTextureCache.get(cacheKey)
@@ -168,7 +168,7 @@ function isDirectTextureUrl(assetId: string): boolean {
 
 async function loadTextureFromDirectUrl(assetId: string): Promise<THREE.Texture | null> {
   try {
-    const texture = await sharedTextureLoader.loadAsync(assetId)
+    const texture = await loadTextureFromSourceUrl(assetId)
     return prepareParticleTexture(texture, assetId)
   } catch (error) {
     return null

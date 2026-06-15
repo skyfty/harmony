@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { createKtx2Loader, createKtx2SupportRenderer, disposeKtx2SupportRenderer, FAST_KTX2_TRANSCODER_PATH } from './ktx2Loader';
 
 export type LoaderProgressPayload = {
   loaded: number;
@@ -265,6 +266,7 @@ export interface GltfParseOptions {
   dracoDecoderPath?: string;
   ktx2TranscoderPath?: string;
   enableKtx2?: boolean;
+  ktx2Renderer?: THREE.WebGLRenderer | null;
 }
 
 export interface ParsedGltfResult {
@@ -273,7 +275,6 @@ export interface ParsedGltfResult {
 }
 
 const DEFAULT_DRACO_DECODER_PATH = '../examples/jsm/libs/draco/gltf/';
-
 export async function createGltfLoader(options: GltfParseOptions = {}): Promise<any> {
   const { GLTFLoader } = await safeImport(
     () => import('three/examples/jsm/loaders/GLTFLoader.js'),
@@ -287,6 +288,18 @@ export async function createGltfLoader(options: GltfParseOptions = {}): Promise<
     const dracoLoader = new DRACOLoader();
     dracoLoader.setDecoderPath(options.dracoDecoderPath ?? DEFAULT_DRACO_DECODER_PATH);
     loader.setDRACOLoader(dracoLoader);
+  }
+
+  if (options.enableKtx2 !== false && typeof window !== 'undefined') {
+    const renderer = options.ktx2Renderer ?? createKtx2SupportRenderer();
+    const ktx2Loader = await createKtx2Loader(renderer, {
+      manager: options.manager,
+      transcoderPath: options.ktx2TranscoderPath ?? FAST_KTX2_TRANSCODER_PATH,
+    });
+    loader.setKTX2Loader(ktx2Loader);
+    if (!options.ktx2Renderer) {
+      disposeKtx2SupportRenderer(renderer);
+    }
   }
 
   // loader.setMeshoptDecoder(MeshoptDecoder);

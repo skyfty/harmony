@@ -152,7 +152,6 @@ function buildPropsStructureSignature(props: PlanningImagesComponentProps): stri
 }
 
 class PlanningImagesComponent extends Component<PlanningImagesComponentProps> {
-  private readonly textureLoader = new THREE.TextureLoader()
   private artifactGroup: THREE.Group | null = null
   private pendingBuild: PendingBuildToken | null = null
   private readonly runtimeEntries = new Map<string, RuntimeImageEntry>()
@@ -259,7 +258,9 @@ class PlanningImagesComponent extends Component<PlanningImagesComponentProps> {
         if (!resolved) {
           return
         }
-        const texture = await this.textureLoader.loadAsync(resolved.url)
+        
+        const loader = new THREE.TextureLoader()
+        const texture = await loader.loadAsync(resolved.url)
         if (token.cancelled) {
           texture.dispose()
           resolved.dispose?.()

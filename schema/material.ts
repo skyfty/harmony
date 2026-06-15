@@ -16,6 +16,7 @@ import type ResourceCache from './ResourceCache';
 import { inferAssetTypeOrNull } from './assetTypeConversion';
 import { hashString, stableSerialize } from './stableSerialize';
 import { getDefaultUvDebugTexture } from './debugTextures';
+import { createKtx2Loader, createKtx2SupportRenderer, disposeKtx2SupportRenderer, FAST_KTX2_TRANSCODER_PATH } from './ktx2Loader';
 
 type RGBELoaderClass = new (manager?: THREE.LoadingManager) => RGBELoader;
 let rgbeLoaderClassPromise: Promise<RGBELoaderClass> | null = null;
@@ -28,6 +29,20 @@ async function createRgbELoader(manager?: THREE.LoadingManager): Promise<RGBELoa
   }
   const LoaderClass = await rgbeLoaderClassPromise;
   return new LoaderClass(manager).setDataType(THREE.FloatType);
+}
+
+function isKtx2LikeAsset(asset: AssetCacheEntry): boolean {
+  const candidates = [asset.filename, asset.downloadUrl, asset.blobUrl];
+  for (const candidate of candidates) {
+    if (!candidate) {
+      continue;
+    }
+    const match = /\.([a-z0-9]+)(?:\?.*)?$/i.exec(candidate);
+    if (match?.[1]?.toLowerCase() === 'ktx2') {
+      return true;
+    }
+  }
+  return false;
 }
 
 export interface SceneMaterialFactoryOptions {
@@ -926,7 +941,20 @@ export class SceneMaterialFactory {
         });
         return texture;
       }
-      const texture = await new Promise<THREE.Texture>((resolve, reject) => {
+      if (typeof window !== 'undefined' && isKtx2LikeAsset(asset)) {
+        const renderer = createKtx2SupportRenderer();
+        try {
+          const ktx2Loader = await createKtx2Loader(renderer, {
+            manager: this.loadingManager,
+            transcoderPath: FAST_KTX2_TRANSCODER_PATH,
+          });
+          const texture = await ktx2Loader.loadAsync(downloadUrl);
+          return texture;
+        } finally {
+          disposeKtx2SupportRenderer(renderer);
+        }
+      }
+      return await new Promise<THREE.Texture>((resolve, reject) => {
         this.textureLoader.load(
           downloadUrl,
           (loaded: THREE.Texture) => resolve(loaded),
@@ -934,7 +962,6 @@ export class SceneMaterialFactory {
           (error: unknown) => reject(error instanceof Error ? error : new Error(String(error))),
         );
       });
-      return texture;
     } catch (error) {
       console.warn('纹理资源加载失败', asset.assetId, error);
       return null;

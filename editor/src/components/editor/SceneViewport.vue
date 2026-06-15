@@ -59,7 +59,6 @@ import { extractCompiledStaticMeshMetadataFromUserData, createCompiledStaticMesh
 import { TransformControls } from '@/utils/transformControls.js'
 import Stats from 'three/examples/jsm/libs/stats.module.js'
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js'
-import { createKtx2Loader } from '@/utils/assetThumbnail'
 // RectAreaLight support removed; no import from lightsRuntime required.
 
 import type {
@@ -175,6 +174,8 @@ import {
 } from '@schema/continuousInstancedModel'
 import { flush as flushInstancedBounds, hasPending as instancedBoundsHasPending } from '@schema/instancedBoundsTracker'
 import { loadObjectFromFile } from '@schema/assetImport'
+import { loadTextureFromSourceUrl } from '@schema/textureSourceLoader'
+import { loadTextureFromFile } from '@/utils/textureAsset'
 import { createInstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCuller'
 import { createUvDebugMaterial } from '@schema/debugTextures'
 import {
@@ -1319,7 +1320,6 @@ const protagonistPreview = useProtagonistPreview({
   marginPx: 16,
 })
 
-const textureLoader = new THREE.TextureLoader()
 const rgbeLoader = new RGBELoader().setDataType(THREE.FloatType)
 const textureCache = new Map<string, THREE.Texture>()
 const pendingTextureRequests = new Map<string, Promise<THREE.Texture | null>>()
@@ -1383,7 +1383,7 @@ function resolveMaterialTexture(ref: SceneMaterialTextureRef): THREE.Texture | P
       if (isHdriLikeExtension(extension) && extension !== 'exr') {
         texture = await rgbeLoader.loadAsync(blobUrl)
       } else {
-        texture = await textureLoader.loadAsync(blobUrl)
+        texture = await loadTextureFromFile(file)
       }
       texture.name = ref.name ?? file.name ?? cacheKey
       texture.needsUpdate = true
@@ -14207,17 +14207,11 @@ async function loadEnvironmentTextureFromAsset(assetId: string): Promise<THREE.T
     return null
   }
 
-  const { url, extension } = resolved
+    const { url, extension } = resolved
 
     try {
       if (isKtx2LikeExtension(extension)) {
-        if (!renderer) {
-          return null
-        }
-        const ktx2Loader = await createKtx2Loader(renderer)
-        if (!ktx2Loader) {
-          return null
-        }
+        const ktx2Loader = await createKtx2Loader(renderer, { transcoderPath: FAST_KTX2_TRANSCODER_PATH })
         const texture = await ktx2Loader.loadAsync(url)
         texture.mapping = THREE.CubeUVReflectionMapping
         texture.colorSpace = THREE.SRGBColorSpace
@@ -14231,7 +14225,7 @@ async function loadEnvironmentTextureFromAsset(assetId: string): Promise<THREE.T
         return texture
       }
       // EXR not supported in all module environments; fall back to image loader.
-      const texture = await textureLoader.loadAsync(url)
+      const texture = await loadTextureFromSourceUrl(url)
       texture.mapping = THREE.EquirectangularReflectionMapping
       texture.colorSpace = THREE.SRGBColorSpace
       texture.flipY = false

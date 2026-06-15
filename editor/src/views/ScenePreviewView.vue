@@ -2,7 +2,6 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, toRaw, watch, type ComponentPublicInstance } from 'vue'
 import * as THREE from 'three'
 import { MapControls } from 'three/examples/jsm/controls/MapControls.js'
-import type { KTX2Loader } from 'three/examples/jsm/loaders/KTX2Loader.js'
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js'
 import Stats from 'three/examples/jsm/libs/stats.module.js'
 import {
@@ -32,6 +31,8 @@ import {
 	isRuntimeHiddenInPreview,
 	type InstancedLodTarget,
 } from '@schema/core'
+import { createKtx2Loader, FAST_KTX2_TRANSCODER_PATH } from '@schema/ktx2Loader'
+import { loadTextureFromSourceUrl } from '@schema/textureSourceLoader'
 import type {
 	EnvironmentCsmSettings,
 	EnvironmentSettings,
@@ -1540,11 +1541,7 @@ const characterAutoTourRuntime = new CharacterAutoTourRuntimeManager()
 const behaviorProximityCandidates = new Map<string, BehaviorProximityCandidate>()
 const behaviorProximityState = new Map<string, BehaviorProximityState>()
 const rgbeLoader = new RGBELoader().setDataType(THREE.FloatType)
-const FAST_HDR_KTX2_TRANSCODER_PATH = 'https://cdn.jsdelivr.net/npm/three@0.172.0/examples/jsm/libs/basis/'
-type KTX2LoaderClass = new (manager?: THREE.LoadingManager) => KTX2Loader
-let ktx2LoaderClassPromise: Promise<KTX2LoaderClass> | null = null
-let ktx2LoaderInstance: KTX2Loader | null = null
-const textureLoader = new THREE.TextureLoader()
+type ScenePreviewKtx2Loader = Awaited<ReturnType<typeof createKtx2Loader>>
 const materialTextureCache = new Map<string, THREE.Texture>()
 const pendingMaterialTextureRequests = new Map<string, Promise<THREE.Texture | null>>()
 
@@ -1672,25 +1669,15 @@ function resolveEnvironmentCsmSettings(settings: EnvironmentSettings): Environme
 	}
 }
 
-async function createKtx2Loader(): Promise<KTX2Loader | null> {
+async function ensureKtx2Loader(): Promise<ScenePreviewKtx2Loader | null> {
 	if (!renderer) {
 		return null
 	}
-	if (!ktx2LoaderClassPromise) {
-		ktx2LoaderClassPromise = import('three/examples/jsm/loaders/KTX2Loader.js').then(
-			(module) => module.KTX2Loader as KTX2LoaderClass,
-		)
-	}
-	const LoaderClass = await ktx2LoaderClassPromise
-	if (!ktx2LoaderInstance) {
-		ktx2LoaderInstance = new LoaderClass().setTranscoderPath(FAST_HDR_KTX2_TRANSCODER_PATH).detectSupport(renderer)
-	}
-	return ktx2LoaderInstance
+	return await createKtx2Loader(renderer, { transcoderPath: FAST_KTX2_TRANSCODER_PATH })
 }
 
 function disposeKtx2Loader() {
-	ktx2LoaderInstance?.dispose?.()
-	ktx2LoaderInstance = null
+	// Shared KTX2 loader is cached globally and reused across preview lifetimes.
 }
 
 function resolvePreviewSceneCsmConfig(): SceneCsmConfig {
@@ -5012,7 +4999,10 @@ async function resolveParticleTextureAssetSource(assetId: string): Promise<THREE
 	}
 	try {
 		if (trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.startsWith('data:')) {
-			const directTexture = await textureLoader.loadAsync(trimmed)
+			const directTexture = await loadTextureFromSourceUrl(trimmed)
+			if (!directTexture) {
+				return null
+			}
 			directTexture.name = trimmed
 			directTexture.colorSpace = THREE.SRGBColorSpace
 			directTexture.needsUpdate = true
@@ -5026,7 +5016,10 @@ async function resolveParticleTextureAssetSource(assetId: string): Promise<THREE
 		if (!source) {
 			return null
 		}
-		const texture = await textureLoader.loadAsync(source)
+		const texture = await loadTextureFromSourceUrl(source)
+		if (!texture) {
+			return null
+		}
 		texture.name = entry.filename ?? trimmed
 		texture.colorSpace = THREE.SRGBColorSpace
 		texture.needsUpdate = true
@@ -9941,7 +9934,7 @@ async function loadEnvironmentTextureFromAsset(
 	const dispose = resolved.dispose
 	try {
 		if (extension === 'ktx2' || mimeType.includes('ktx2') || mimeType.includes('basis')) {
-			const ktx2Loader = await createKtx2Loader()
+			const ktx2Loader = await ensureKtx2Loader()
 			if (!ktx2Loader) {
 				return null
 			}
@@ -10381,12 +10374,18 @@ async function resolveMaterialTexture(ref: SceneMaterialTextureRef): Promise<THR
 		const extension = resolveTextureExtension(entry, ref)
 		try {
 			let texture: THREE.Texture
-				if (extension === 'hdr' || extension === 'hdri' || extension === 'rgbe') {
-					texture = await rgbeLoader.loadAsync(source)
-				} else {
-					// EXR is not supported in all module runtimes; fall back to the image loader.
-					texture = await textureLoader.loadAsync(source)
+			if (extension === 'hdr' || extension === 'hdri' || extension === 'rgbe') {
+				texture = await rgbeLoader.loadAsync(source)
+			} else if (extension === 'ktx2') {
+				const ktx2Loader = await ensureKtx2Loader()
+				if (!ktx2Loader) {
+					return null
 				}
+				texture = await ktx2Loader.loadAsync(source)
+			} else {
+				// EXR is not supported in all module runtimes; fall back to the image loader.
+				texture = await loadTextureFromSourceUrl(source)
+			}
 			texture.name = ref.name ?? entry.filename ?? cacheKey
 			texture.colorSpace = THREE.LinearSRGBColorSpace
 			texture.needsUpdate = true
