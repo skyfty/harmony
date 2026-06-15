@@ -695,7 +695,6 @@ import {
   deserializeCompiledGroundManifest,
   resolveGroundWorkingGridSize,
 } from '@harmony/schema/core';
-import { isPointInsideRegionXZ } from '@harmony/schema/core';
 import { applyMirroredScaleToObject, syncMirroredMeshMaterials } from '@harmony/schema/mirror';
 import {
   DEFAULT_SCENE_CSM_CONFIG,
@@ -966,11 +965,19 @@ import {
   type BehaviorRuntimeEvent,
   type BehaviorEventResolution,
   type BehaviorRuntimeListener,
-  PROXIMITY_EXIT_PADDING,
-  DEFAULT_OBJECT_RADIUS,
-  PROXIMITY_MIN_DISTANCE,
-  PROXIMITY_RADIUS_SCALE,
 } from '@harmony/schema/behaviors/runtime';
+import {
+  createBehaviorProximityRuntime,
+  type BehaviorProximityCandidate,
+  type BehaviorProximityState,
+} from '@harmony/schema/behaviors/proximity';
+import {
+  applyBehaviorVisibilityChange,
+  handleBehaviorDelayEvent,
+  handleBehaviorPlayAnimationEvent,
+  handleBehaviorStopAnimationEvent,
+  dispatchPerformBehaviorEvent,
+} from '@harmony/schema/behaviors/eventHelpers';
 import {
   loadStoredPunchedNodeIds,
   mergeStoredPunchedNodeId,
@@ -3999,13 +4006,36 @@ const activeBehaviorSounds = new Map<string, BehaviorSoundInstance>();
 const nodeAnimationRuntime = new SceneAnimationRuntimeManager();
 const pendingParticleRuntimeCommands: Array<{ nodeId: string; command: { type: 'play' | 'stop' | 'burst'; componentId: string | null; emitterId?: string | null; count?: number; restart?: boolean; softStop?: boolean } }> = [];
 
-type BehaviorProximityCandidate = { hasApproach: boolean; hasDepart: boolean };
-type BehaviorProximityState = { inside: boolean; lastDistance: number | null };
-type BehaviorProximityThreshold = { enter: number; exit: number; objectId: string };
-
 const behaviorProximityCandidates = new Map<string, BehaviorProximityCandidate>();
 const behaviorProximityState = new Map<string, BehaviorProximityState>();
-const behaviorProximityThresholdCache = new Map<string, BehaviorProximityThreshold>();
+const behaviorProximityRuntime = createBehaviorProximityRuntime({
+  getCamera: () => renderContext?.camera ?? null,
+  getObserverNodeId: () => {
+    if (vehicleDriveActive.value && vehicleDriveNodeId.value) {
+      return vehicleDriveNodeId.value;
+    }
+    if (activeAutoTourNodeIds.size > 0) {
+      return resolveAutoTourFollowNodeId(
+        autoTourFollowNodeId.value,
+        cameraViewState.targetNodeId,
+        activeAutoTourNodeIds,
+        previewNodeMap.keys(),
+        autoTourRuntime,
+      );
+    }
+    return null;
+  },
+  resolveObserverPosition: (observerNodeId, scratch) => {
+    return resolveNodeFocusPoint(observerNodeId) ?? nodeObjectMap.get(observerNodeId)?.getWorldPosition(scratch) ?? null;
+  },
+  behaviorProximityCandidates,
+  behaviorProximityState,
+  nodeObjectMap,
+  resolveRegionNode: (nodeId) => previewNodeMap.get(nodeId) ?? null,
+  resolveNodeFocusPoint: (nodeId, fallback) => resolveNodeFocusPoint(nodeId) ?? fallback,
+  triggerBehaviorAction,
+  processBehaviorEvents,
+});
 
 const MAX_CONCURRENT_LAZY_LOADS = 2;
 
@@ -4034,8 +4064,6 @@ const cameraViewFrustum = new THREE.Frustum();
 const tempBox = new THREE.Box3();
 const tempSphere = new THREE.Sphere();
 const tempVector = new THREE.Vector3();
-const tempObserverVector = new THREE.Vector3();
-const tempRegionObserverVector = new THREE.Vector3();
 const tempPitchVector = new THREE.Vector3();
 const tempSpherical = new THREE.Spherical();
 const vehicleDriveIntroScratchCamera = new THREE.PerspectiveCamera();
@@ -13227,13 +13255,13 @@ function applyCameraWatchTween(deltaSeconds: number): void {
 function resetBehaviorProximity(): void {
   behaviorProximityCandidates.clear();
   behaviorProximityState.clear();
-  behaviorProximityThresholdCache.clear();
+  behaviorProximityRuntime.reset();
 }
 
 function removeBehaviorProximityCandidate(nodeId: string): void {
   behaviorProximityCandidates.delete(nodeId);
   behaviorProximityState.delete(nodeId);
-  behaviorProximityThresholdCache.delete(nodeId);
+  behaviorProximityRuntime.removeNode(nodeId);
 }
 
 function ensureBehaviorProximityState(nodeId: string): void {
@@ -13271,150 +13299,8 @@ const behaviorRuntimeListener: BehaviorRuntimeListener = {
   },
 };
 
-function computeObjectBoundingRadius(object: THREE.Object3D): number {
-  tempBox.setFromObject(object);
-  const hasFiniteBounds = [tempBox.min.x, tempBox.min.y, tempBox.min.z, tempBox.max.x, tempBox.max.y, tempBox.max.z].every((value) => Number.isFinite(value));
-  if (!hasFiniteBounds) {
-    return DEFAULT_OBJECT_RADIUS;
-  }
-  tempBox.getBoundingSphere(tempSphere);
-  return Number.isFinite(tempSphere.radius) && tempSphere.radius > 0 ? tempSphere.radius : DEFAULT_OBJECT_RADIUS;
-}
-
-function resolveProximityThresholds(nodeId: string, object: THREE.Object3D): BehaviorProximityThreshold {
-  const cached = behaviorProximityThresholdCache.get(nodeId);
-  if (cached && cached.objectId === object.uuid) {
-    return cached;
-  }
-  const radius = computeObjectBoundingRadius(object);
-  const enter = Math.max(PROXIMITY_MIN_DISTANCE, radius * PROXIMITY_RADIUS_SCALE);
-  const exit = enter + PROXIMITY_EXIT_PADDING;
-  const nextThreshold: BehaviorProximityThreshold = {
-    enter,
-    exit,
-    objectId: object.uuid,
-  };
-  behaviorProximityThresholdCache.set(nodeId, nextThreshold);
-  return nextThreshold;
-}
-
-function resolveRegionBehaviorContainment(
-  nodeId: string,
-  object: THREE.Object3D,
-  observerPosition: THREE.Vector3,
-): { inside: boolean; distance: number } | null {
-  const node = previewNodeMap.get(nodeId);
-  if (!node || node.dynamicMesh?.type !== 'Region') {
-    return null;
-  }
-  const vertices = (Array.isArray(node.dynamicMesh.vertices) ? node.dynamicMesh.vertices : [])
-    .map((entry) => [Number(entry?.[0]), Number(entry?.[1])] as [number, number])
-    .filter(([x, z]) => Number.isFinite(x) && Number.isFinite(z));
-  if (vertices.length < 3) {
-    return { inside: false, distance: Number.POSITIVE_INFINITY };
-  }
-  const localObserver = object.worldToLocal(tempRegionObserverVector.copy(observerPosition));
-  const inside = isPointInsideRegionXZ({ x: localObserver.x, z: localObserver.z }, vertices);
-  const focusPoint = resolveNodeFocusPoint(nodeId) ?? object.getWorldPosition(tempVector);
-  return {
-    inside,
-    distance: focusPoint.distanceTo(observerPosition),
-  };
-}
-
 function updateBehaviorProximity(): void {
-  const camera = renderContext?.camera;
-  if (!camera || !behaviorProximityCandidates.size) {
-    return;
-  }
-  const cameraPosition = camera.position;
-  let observerPosition = cameraPosition;
-  let observerNodeId: string | null = null;
-  if (vehicleDriveActive.value && vehicleDriveNodeId.value) {
-    observerNodeId = vehicleDriveNodeId.value;
-  } else if (activeAutoTourNodeIds.size > 0) {
-    observerNodeId = resolveAutoTourFollowNodeId(
-      autoTourFollowNodeId.value,
-      cameraViewState.targetNodeId,
-      activeAutoTourNodeIds,
-      previewNodeMap.keys(),
-      autoTourRuntime,
-    );
-  }
-  if (observerNodeId) {
-    const obs = resolveNodeFocusPoint(observerNodeId) ?? nodeObjectMap.get(observerNodeId)?.getWorldPosition(tempObserverVector) ?? null;
-    if (obs) {
-      observerPosition = obs instanceof THREE.Vector3 ? obs : tempObserverVector;
-    }
-  }
-  behaviorProximityCandidates.forEach((candidate, nodeId) => {
-    const object = nodeObjectMap.get(nodeId);
-    if (!object) {
-      return;
-    }
-    const state = behaviorProximityState.get(nodeId);
-    if (!state) {
-      return;
-    }
-    const regionContainment = resolveRegionBehaviorContainment(nodeId, object, observerPosition);
-    if (regionContainment) {
-      if (!state.inside && regionContainment.inside) {
-        state.inside = true;
-        if (candidate.hasApproach) {
-          const followUps = triggerBehaviorAction(nodeId, 'approach', {
-            payload: {
-              distance: regionContainment.distance,
-              threshold: 0,
-            },
-          });
-          processBehaviorEvents(followUps);
-        }
-      } else if (state.inside && !regionContainment.inside) {
-        state.inside = false;
-        if (candidate.hasDepart) {
-          const followUps = triggerBehaviorAction(nodeId, 'depart', {
-            payload: {
-              distance: regionContainment.distance,
-              threshold: 0,
-            },
-          });
-          processBehaviorEvents(followUps);
-        }
-      }
-      state.lastDistance = regionContainment.distance;
-      return;
-    }
-    const thresholds = resolveProximityThresholds(nodeId, object);
-    const focusPoint = resolveNodeFocusPoint(nodeId) ?? object.getWorldPosition(tempVector);
-    const distance = focusPoint.distanceTo(observerPosition);
-    if (!Number.isFinite(distance)) {
-      return;
-    }
-    if (!state.inside && distance <= thresholds.enter) {
-      state.inside = true;
-      if (candidate.hasApproach) {
-        const followUps = triggerBehaviorAction(nodeId, 'approach', {
-          payload: {
-            distance,
-            threshold: thresholds.enter,
-          },
-        });
-        processBehaviorEvents(followUps);
-      }
-    } else if (state.inside && distance >= thresholds.exit) {
-      state.inside = false;
-      if (candidate.hasDepart) {
-        const followUps = triggerBehaviorAction(nodeId, 'depart', {
-          payload: {
-            distance,
-            threshold: thresholds.exit,
-          },
-        });
-        processBehaviorEvents(followUps);
-      }
-    }
-    state.lastDistance = distance;
-  });
+  behaviorProximityRuntime.updateBehaviorProximity();
 }
 
 function resetEffectRuntimeTickers(): void {
@@ -13532,13 +13418,12 @@ function refreshAnimationControllers(root: THREE.Object3D): void {
 }
 
 function handleDelayEvent(event: Extract<BehaviorRuntimeEvent, { type: 'delay' }>) {
-  clearDelayTimer(event.token);
-  const durationMs = Math.max(0, event.seconds) * 1000;
-  const handle = setTimeout(() => {
-    activeBehaviorDelayTimers.delete(event.token);
-    resolveBehaviorToken(event.token, { type: 'continue' });
-  }, durationMs);
-  activeBehaviorDelayTimers.set(event.token, handle);
+  handleBehaviorDelayEvent(event, {
+    activeBehaviorDelayTimers,
+    clearDelayTimer,
+    resolveBehaviorToken,
+    scheduleTimeout: (callback, delayMs) => setTimeout(callback, delayMs),
+  });
 }
 
 function handleMoveCameraEvent(event: Extract<BehaviorRuntimeEvent, { type: 'move-camera' }>) {
@@ -13591,139 +13476,50 @@ function handleMoveCameraEvent(event: Extract<BehaviorRuntimeEvent, { type: 'mov
 }
 
 function handleSetVisibilityEvent(event: Extract<BehaviorRuntimeEvent, { type: 'set-visibility' }>) {
-  const object = nodeObjectMap.get(event.targetNodeId);
-  if (object) {
-    object.visible = event.visible;
-    syncInstancedTransform(object);
-  }
-  const node = resolveNodeById(event.targetNodeId);
-  if (node) {
-    node.visible = event.visible;
-  }
-  updateBehaviorVisibility(event.targetNodeId, event.visible);
+  applyBehaviorVisibilityChange(event.targetNodeId, event.visible, {
+    getObject: (nodeId) => nodeObjectMap.get(nodeId) ?? null,
+    getNode: (nodeId) => resolveNodeById(nodeId),
+    syncObject: (object) => syncInstancedTransform(object),
+    updateBehaviorVisibility,
+  });
 }
 
-function handlePlayAnimationEvent(event: Extract<BehaviorRuntimeEvent, { type: 'play-animation' }>) {
-  const targetNodeId = event.targetNodeId || event.nodeId;
-  if (!targetNodeId) {
-    if (event.token) {
-      resolveBehaviorToken(event.token, { type: 'fail', message: 'Animation target missing' });
-    }
-    console.warn('Play animation skipped: no target node');
-    return;
-  }
-  const controller = nodeAnimationRuntime.get(targetNodeId);
-  if (!controller) {
-    if (event.token) {
-      resolveBehaviorToken(event.token, { type: 'fail', message: 'Animation target not available' });
-    }
-    console.warn('Play animation skipped: animation target not available', { targetNodeId });
-    return;
-  }
-  const clip = nodeAnimationRuntime.resolveClip(targetNodeId, event.clipName);
-  if (!clip) {
-    if (event.token) {
-      resolveBehaviorToken(event.token, {
-        type: 'fail',
-        message: event.clipName ? `Animation clip "${event.clipName}" not found` : 'No animation clips available',
-      });
-    }
-    console.warn('Play animation skipped: clip not found', { targetNodeId, requestedName: event.clipName });
-    return;
-  }
-  const mixer = controller.mixer;
-  const action = nodeAnimationRuntime.playNodeAnimation(targetNodeId, event.clipName, { loop: Boolean(event.loop) });
-  if (!action) {
-    if (event.token) {
-      resolveBehaviorToken(event.token, { type: 'fail', message: 'Unable to start animation.' });
-    }
-    return;
-  }
-  const token = event.token;
-  if (token) {
-    stopBehaviorAnimation(token);
-  }
-  const isCharacterControlledTarget = isCharacterControllerAnimationNode(targetNodeId);
-  if (isCharacterControlledTarget) {
-    acquireCharacterControllerBehaviorOverride(targetNodeId, token);
-  }
-  if (!token) {
-    return;
-  }
-  if (event.loop) {
-    resolveBehaviorToken(token, { type: 'continue' });
-    return;
-  }
-  if (!Number.isFinite(clip.duration) || clip.duration <= 0) {
-    resolveBehaviorToken(token, { type: 'continue' });
-    return;
-  }
-  const onFinished = (payload: THREE.Event & { action?: THREE.AnimationAction }) => {
-    if (payload.action !== action) {
-      return;
-    }
-    mixer.removeEventListener('finished', onFinished);
-    activeBehaviorAnimations.delete(token);
-    releaseCharacterControllerBehaviorOverride(token);
-    if (!isCharacterControlledTarget) {
-      restartDefaultAnimation(targetNodeId);
-    }
-    resolveBehaviorToken(token, { type: 'continue' });
-  };
-  const cancel = () => {
-    mixer.removeEventListener('finished', onFinished);
-    try {
-      action.stop();
-    } catch (error) {
-      console.warn('Failed to stop animation', error);
-    }
-    releaseCharacterControllerBehaviorOverride(token);
-    if (!isCharacterControlledTarget) {
-      restartDefaultAnimation(targetNodeId);
-    }
-  };
-  activeBehaviorAnimations.set(token, cancel);
-  mixer.addEventListener('finished', onFinished);
+function handlePlayAnimationEvent(event: Extract<BehaviorRuntimeEvent, { type: 'play-animation' }>): void {
+  handleBehaviorPlayAnimationEvent(event, {
+    getController: (nodeId) => nodeAnimationRuntime.get(nodeId),
+    resolveClip: (nodeId, clipName) => nodeAnimationRuntime.resolveClip(nodeId, clipName),
+    playNodeAnimation: (nodeId, clipName, options) => nodeAnimationRuntime.playNodeAnimation(nodeId, clipName, options),
+    stopBehaviorAnimation,
+    isCharacterControllerAnimationNode,
+    acquireCharacterControllerBehaviorOverride,
+    releaseCharacterControllerBehaviorOverride,
+    restartDefaultAnimation,
+    resolveBehaviorToken,
+    activeBehaviorAnimations,
+    warnNoTarget: () => console.warn('Play animation skipped: no target node'),
+    warnTargetUnavailable: (nodeId) => console.warn('Play animation skipped: animation target not available', { targetNodeId: nodeId }),
+    warnClipNotFound: (nodeId, clipName) => console.warn('Play animation skipped: clip not found', { targetNodeId: nodeId, requestedName: clipName }),
+    warnFailedToStart: () => console.warn('Play animation skipped: unable to start animation.'),
+    warnFailedToStop: (error) => console.warn('Failed to stop animation', error),
+  });
 }
 
 function handleStopAnimationEvent(event: Extract<BehaviorRuntimeEvent, { type: 'stop-animation' }>) {
-  const targetNodeId = event.targetNodeId || event.nodeId;
-  if (!targetNodeId) {
-    return;
-  }
-  if (isCharacterControllerAnimationNode(targetNodeId)) {
-    const overrideTokens = characterControllerAnimationRuntime.getBehaviorOverrideTokens(targetNodeId);
-    if (overrideTokens.length) {
-      overrideTokens.forEach((token) => {
-        stopBehaviorAnimation(token);
-      });
-    } else {
-      scheduleCharacterControllerAnimationResync(targetNodeId);
-    }
-    nodeAnimationRuntime.stopNodeAnimation(targetNodeId, { restoreDefault: false });
-    return;
-  }
-  nodeAnimationRuntime.stopNodeAnimation(targetNodeId, { restoreDefault: true });
+  handleBehaviorStopAnimationEvent(event, {
+    isCharacterControllerAnimationNode,
+    getBehaviorOverrideTokens: (nodeId) => characterControllerAnimationRuntime.getBehaviorOverrideTokens(nodeId),
+    stopBehaviorAnimation,
+    scheduleCharacterControllerAnimationResync,
+    stopNodeAnimation: (nodeId, options) => nodeAnimationRuntime.stopNodeAnimation(nodeId, options),
+  });
 }
 
 function handleTriggerBehaviorEvent(event: Extract<BehaviorRuntimeEvent, { type: 'trigger-behavior' }>) {
-  const targetNodeId = event.targetNodeId || event.nodeId;
-  if (!targetNodeId) {
-    console.warn('触发行为失败：未提供目标节点');
-    return;
-  }
-  const sequenceId = event.targetSequenceId && event.targetSequenceId.trim().length ? event.targetSequenceId : undefined;
-  const followUps = triggerBehaviorAction(
-    targetNodeId,
-    'perform',
-    {
-      payload: {
-        sourceNodeId: event.nodeId,
-      },
-    },
-    sequenceId ? { sequenceId } : {},
-  );
-  processBehaviorEvents(followUps);
+  dispatchPerformBehaviorEvent(event, {
+    warnMissingTarget: (message) => console.warn(`触发行为失败：${message}`),
+    triggerBehaviorAction,
+    processBehaviorEvents,
+  });
 }
 
 function setCameraViewState(mode: CameraViewMode, targetNodeId: string | null = null): void {

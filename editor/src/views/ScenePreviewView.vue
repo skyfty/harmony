@@ -9,7 +9,6 @@ import {
 	DEFAULT_ENVIRONMENT_SETTINGS,
 	DEFAULT_ENVIRONMENT_GRAVITY,
 	cloneEnvironmentSettings,
-	isPointInsideRegionXZ,
 	resolveDocumentEnvironment,
 	clampSceneNodeInstanceLayout,
 	computeInstanceLayoutLocalBoundingBox,
@@ -320,11 +319,17 @@ import {
 	type BehaviorRuntimeListener,
 } from '@schema/behaviors/runtime'
 import {
-	PROXIMITY_EXIT_PADDING,
-	DEFAULT_OBJECT_RADIUS,
-	PROXIMITY_MIN_DISTANCE,
-	PROXIMITY_RADIUS_SCALE,
-} from '@schema/behaviors/runtime'
+	createBehaviorProximityRuntime,
+	type BehaviorProximityCandidate,
+	type BehaviorProximityState,
+} from '@schema/behaviors/proximity'
+import {
+	applyBehaviorVisibilityChange,
+	handleBehaviorDelayEvent,
+	handleBehaviorPlayAnimationEvent,
+	handleBehaviorStopAnimationEvent,
+	dispatchPerformBehaviorEvent,
+} from '@schema/behaviors/eventHelpers'
 import {
 	loadStoredPunchedNodeIds,
 	mergeStoredPunchedNodeId,
@@ -523,6 +528,17 @@ function shouldIgnoreDebugTriangleObject(object: THREE.Object3D): boolean {
 		current = current.parent
 	}
 	return false
+}
+
+function isRuntimeObjectEffectivelyVisible(object: THREE.Object3D | null | undefined): boolean {
+	let current = object
+	while (current) {
+		if (current.visible === false) {
+			return false
+		}
+		current = current.parent
+	}
+	return true
 }
 
 function resolveGeometryTriangleCount(geometry: THREE.BufferGeometry): number {
@@ -1521,15 +1537,8 @@ const behaviorSoundDistanceScratch = new THREE.Vector3()
 const nodeAnimationRuntime = new SceneAnimationRuntimeManager()
 const characterControllerAnimationRuntime = new CharacterControllerAnimationRuntimeManager()
 const characterAutoTourRuntime = new CharacterAutoTourRuntimeManager()
-type BehaviorProximityCandidate = { hasApproach: boolean; hasDepart: boolean }
-type BehaviorProximityStateEntry = { inside: boolean; lastDistance: number | null }
-type BehaviorProximityThreshold = { enter: number; exit: number; objectId: string }
-
 const behaviorProximityCandidates = new Map<string, BehaviorProximityCandidate>()
-const behaviorProximityState = new Map<string, BehaviorProximityStateEntry>()
-const behaviorProximityThresholdCache = new Map<string, BehaviorProximityThreshold>()
-
-
+const behaviorProximityState = new Map<string, BehaviorProximityState>()
 const rgbeLoader = new RGBELoader().setDataType(THREE.FloatType)
 const FAST_HDR_KTX2_TRANSCODER_PATH = 'https://cdn.jsdelivr.net/npm/three@0.172.0/examples/jsm/libs/basis/'
 type KTX2LoaderClass = new (manager?: THREE.LoadingManager) => KTX2Loader
@@ -1595,10 +1604,7 @@ const characterFollowForwardScratch = new THREE.Vector3()
 const characterFollowGroundSamplePosition = new THREE.Vector3()
 const characterFollowGroundRayOrigin = new THREE.Vector3()
 const tempBox = new THREE.Box3()
-const tempSphere = new THREE.Sphere()
 const tempPosition = new THREE.Vector3()
-const tempObserverPosition = new THREE.Vector3()
-const tempRegionObserverPosition = new THREE.Vector3()
 const tempCameraMatrix = new THREE.Matrix4()
 const cameraViewFrustum = new THREE.Frustum()
 const instancedCullingBox = new THREE.Box3()
@@ -2163,6 +2169,34 @@ const STEERING_WHEEL_RETURN_SPEED = 4
 const STEERING_KEYBOARD_RETURN_SPEED = 7
 const STEERING_KEYBOARD_CATCH_SPEED = 18
 const nodeObjectMap = new Map<string, THREE.Object3D>()
+const behaviorProximityRuntime = createBehaviorProximityRuntime({
+	getCamera: () => camera,
+	getObserverNodeId: () => {
+		if (vehicleDriveState.active && vehicleDriveState.nodeId) {
+			return vehicleDriveState.nodeId
+		}
+		if (activeAutoTourNodeIds.size > 0) {
+			return resolveAutoTourFollowNodeId(
+				autoTourFollowNodeId.value,
+				cameraViewState.watchTargetId,
+				activeAutoTourNodeIds,
+				previewNodeMap.keys(),
+				autoTourRuntime,
+			)
+		}
+		return null
+	},
+	resolveObserverPosition: (observerNodeId, scratch) => {
+		return resolveNodeFocusPoint(observerNodeId, scratch) ?? nodeObjectMap.get(observerNodeId)?.getWorldPosition(scratch) ?? null
+	},
+	behaviorProximityCandidates,
+	behaviorProximityState,
+	nodeObjectMap,
+	resolveRegionNode: (nodeId) => previewNodeMap.get(nodeId) ?? null,
+	resolveNodeFocusPoint: (nodeId, fallback) => resolveNodeFocusPoint(nodeId, fallback),
+	triggerBehaviorAction,
+	processBehaviorEvents,
+})
 const signboardNodeIds = new Set<string>()
 const SCENE_PREVIEW_SIGNBOARD_BILLBOARD_STYLE: SignboardBillboardStyle = {
 	backgroundTopColor: 'rgba(10, 16, 28, 0.92)',
@@ -2235,17 +2269,6 @@ function syncStoredPunchedNodeIdsForScene(preferredSceneId?: string | null): voi
 		? pruneStoredPunchedNodeIds(sceneId, punchNodeIds)
 		: loadStoredPunchedNodeIds(sceneId)
 	applyMergedPunchedNodeIds()
-}
-
-function isRuntimeObjectEffectivelyVisible(object: THREE.Object3D | null | undefined): boolean {
-	let current: THREE.Object3D | null | undefined = object
-	while (current) {
-		if (current.visible === false) {
-			return false
-		}
-		current = current.parent
-	}
-	return true
 }
 
 function syncInstancedProxyVisibilityAfterNominate(): void {
@@ -7199,13 +7222,13 @@ function updateCharacterPathFollow(delta: number): void {
 function resetBehaviorProximity(): void {
 	behaviorProximityCandidates.clear()
 	behaviorProximityState.clear()
-	behaviorProximityThresholdCache.clear()
+	behaviorProximityRuntime.reset()
 }
 
 function removeBehaviorProximityCandidate(nodeId: string): void {
 	behaviorProximityCandidates.delete(nodeId)
 	behaviorProximityState.delete(nodeId)
-	behaviorProximityThresholdCache.delete(nodeId)
+	behaviorProximityRuntime.removeNode(nodeId)
 }
 
 function ensureBehaviorProximityState(nodeId: string): void {
@@ -7245,169 +7268,17 @@ const behaviorRuntimeListener: BehaviorRuntimeListener = {
 	},
 }
 
-function computeObjectBoundingRadius(object: THREE.Object3D): number {
-	tempBox.setFromObject(object)
-	const hasFiniteBounds = [
-		tempBox.min.x,
-		tempBox.min.y,
-		tempBox.min.z,
-		tempBox.max.x,
-		tempBox.max.y,
-		tempBox.max.z,
-	].every((value) => Number.isFinite(value))
-	if (!hasFiniteBounds) {
-		return DEFAULT_OBJECT_RADIUS
-	}
-	tempBox.getBoundingSphere(tempSphere)
-	return Number.isFinite(tempSphere.radius) && tempSphere.radius > 0 ? tempSphere.radius : DEFAULT_OBJECT_RADIUS
-}
-
-function resolveProximityThresholds(nodeId: string, object: THREE.Object3D): BehaviorProximityThreshold {
-	const cached = behaviorProximityThresholdCache.get(nodeId)
-	if (cached && cached.objectId === object.uuid) {
-		return cached
-	}
-	const radius = computeObjectBoundingRadius(object)
-	const enter = Math.max(PROXIMITY_MIN_DISTANCE, radius * PROXIMITY_RADIUS_SCALE)
-	const exit = enter + PROXIMITY_EXIT_PADDING
-	const nextThreshold: BehaviorProximityThreshold = {
-		enter,
-		exit,
-		objectId: object.uuid,
-	}
-	behaviorProximityThresholdCache.set(nodeId, nextThreshold)
-	return nextThreshold
-}
-
-function resolveRegionBehaviorContainment(
-	nodeId: string,
-	object: THREE.Object3D,
-	observerPosition: THREE.Vector3,
-): { inside: boolean; distance: number } | null {
-	const node = previewNodeMap.get(nodeId)
-	if (!node || node.dynamicMesh?.type !== 'Region') {
-		return null
-	}
-	const vertices = (Array.isArray(node.dynamicMesh.vertices) ? node.dynamicMesh.vertices : [])
-		.map((entry) => [Number(entry?.[0]), Number(entry?.[1])] as [number, number])
-		.filter(([x, z]) => Number.isFinite(x) && Number.isFinite(z))
-	if (vertices.length < 3) {
-		return { inside: false, distance: Number.POSITIVE_INFINITY }
-	}
-	const localObserver = object.worldToLocal(tempRegionObserverPosition.copy(observerPosition))
-	const inside = isPointInsideRegionXZ({ x: localObserver.x, z: localObserver.z }, vertices)
-	const focusPoint = resolveNodeFocusPoint(nodeId, tempPosition) ?? object.getWorldPosition(tempPosition)
-	return {
-		inside,
-		distance: focusPoint.distanceTo(observerPosition),
-	}
-}
-
 function updateBehaviorProximity(): void {
-	if (!camera || !behaviorProximityCandidates.size) {
-		return
-	}
-	const cameraPosition = camera.position
-	let observerPosition = cameraPosition
-	let observerNodeId: string | null = null
-	if (vehicleDriveState.active && vehicleDriveState.nodeId) {
-		observerNodeId = vehicleDriveState.nodeId
-	} else if (activeAutoTourNodeIds.size > 0) {
-		observerNodeId = resolveAutoTourFollowNodeId(
-			autoTourFollowNodeId.value,
-			cameraViewState.watchTargetId,
-			activeAutoTourNodeIds,
-			previewNodeMap.keys(),
-			autoTourRuntime,
-		)
-	}
-	if (observerNodeId) {
-		const observerPoint =
-			resolveNodeFocusPoint(observerNodeId, tempObserverPosition) ??
-			nodeObjectMap.get(observerNodeId)?.getWorldPosition(tempObserverPosition) ??
-			null
-		if (observerPoint) {
-			observerPosition = observerPoint
-		}
-	}
-	behaviorProximityCandidates.forEach((candidate, nodeId) => {
-		const object = nodeObjectMap.get(nodeId)
-		if (!object) {
-			return
-		}
-		const state = behaviorProximityState.get(nodeId)
-		if (!state) {
-			return
-		}
-		const regionContainment = resolveRegionBehaviorContainment(nodeId, object, observerPosition)
-		if (regionContainment) {
-			if (!state.inside && regionContainment.inside) {
-				state.inside = true
-				if (candidate.hasApproach) {
-					const followUps = triggerBehaviorAction(nodeId, 'approach', {
-						payload: {
-							distance: regionContainment.distance,
-							threshold: 0,
-						},
-					})
-					processBehaviorEvents(followUps)
-				}
-			} else if (state.inside && !regionContainment.inside) {
-				state.inside = false
-				if (candidate.hasDepart) {
-					const followUps = triggerBehaviorAction(nodeId, 'depart', {
-						payload: {
-							distance: regionContainment.distance,
-							threshold: 0,
-						},
-					})
-					processBehaviorEvents(followUps)
-				}
-			}
-			state.lastDistance = regionContainment.distance
-			return
-		}
-		const thresholds = resolveProximityThresholds(nodeId, object)
-		const focusPoint = resolveNodeFocusPoint(nodeId, tempPosition) ?? object.getWorldPosition(tempPosition)
-		const distance = focusPoint.distanceTo(observerPosition)
-		if (!Number.isFinite(distance)) {
-			return
-		}
-		if (!state.inside && distance <= thresholds.enter) {
-			state.inside = true
-			if (candidate.hasApproach) {
-				const followUps = triggerBehaviorAction(nodeId, 'approach', {
-					payload: {
-						distance,
-						threshold: thresholds.enter,
-					},
-				})
-				processBehaviorEvents(followUps)
-			}
-		} else if (state.inside && distance >= thresholds.exit) {
-			state.inside = false
-			if (candidate.hasDepart) {
-				const followUps = triggerBehaviorAction(nodeId, 'depart', {
-					payload: {
-						distance,
-						threshold: thresholds.exit,
-					},
-				})
-				processBehaviorEvents(followUps)
-			}
-		}
-		state.lastDistance = distance
-	})
+	behaviorProximityRuntime.updateBehaviorProximity()
 }
 
 function handleDelayEvent(event: Extract<BehaviorRuntimeEvent, { type: 'delay' }>) {
-	clearDelayTimer(event.token)
-	const durationMs = Math.max(0, event.seconds) * 1000
-	const handle = window.setTimeout(() => {
-		activeBehaviorDelayTimers.delete(event.token)
-		resolveBehaviorToken(event.token, { type: 'continue' })
-	}, durationMs)
-	activeBehaviorDelayTimers.set(event.token, handle)
+	handleBehaviorDelayEvent(event, {
+		activeBehaviorDelayTimers,
+		clearDelayTimer,
+		resolveBehaviorToken,
+		scheduleTimeout: (callback, delayMs) => window.setTimeout(callback, delayMs),
+	})
 }
 
 function handleMoveCameraEvent(event: Extract<BehaviorRuntimeEvent, { type: 'move-camera' }>) {
@@ -7474,144 +7345,55 @@ function handleMoveCameraEvent(event: Extract<BehaviorRuntimeEvent, { type: 'mov
 }
 
 function handleSetVisibilityEvent(event: Extract<BehaviorRuntimeEvent, { type: 'set-visibility' }>) {
-	const object = nodeObjectMap.get(event.targetNodeId)
-	if (object) {
-		object.visible = event.visible
-		syncInstancedTransform(object)
-	}
-	const node = resolveNodeById(event.targetNodeId)
-	if (node) {
-		node.visible = event.visible
-	}
-	updateBehaviorVisibility(event.targetNodeId, event.visible)
+	applyBehaviorVisibilityChange(event.targetNodeId, event.visible, {
+		getObject: (nodeId) => nodeObjectMap.get(nodeId) ?? null,
+		getNode: (nodeId) => resolveNodeById(nodeId),
+		syncObject: (object) => syncInstancedTransform(object),
+		updateBehaviorVisibility,
+	})
 }
 
 function handlePlayAnimationEvent(event: Extract<BehaviorRuntimeEvent, { type: 'play-animation' }>) {
-	const targetNodeId = event.targetNodeId || event.nodeId
-	if (!targetNodeId) {
-		if (event.token) {
-			resolveBehaviorToken(event.token, { type: 'fail', message: 'Animation target missing' })
-		}
-		console.warn('[ScenePreview] Play animation skipped: no target node')
-		return
-	}
-	const controller = nodeAnimationRuntime.get(targetNodeId)
-	if (!controller) {
-		if (event.token) {
-			resolveBehaviorToken(event.token, { type: 'fail', message: 'Animation target not available' })
-		}
-		console.warn('[ScenePreview] Play animation skipped: target node does not expose animations', {
-			nodeId: targetNodeId,
-		})
-		return
-	}
-	const clip = nodeAnimationRuntime.resolveClip(targetNodeId, event.clipName)
-	if (!clip) {
-		if (event.token) {
-			resolveBehaviorToken(event.token, {
-				type: 'fail',
-				message: event.clipName ? `Animation clip "${event.clipName}" not found` : 'No animation clips available',
-			})
-		}
-		console.warn('[ScenePreview] Play animation skipped: clip not found', {
-			targetNodeId,
-			requestedName: event.clipName,
-		})
-		return
-	}
-	const action = nodeAnimationRuntime.playNodeAnimation(targetNodeId, event.clipName, { loop: Boolean(event.loop) })
-	const mixer = controller.mixer
-	if (!action) {
-		if (event.token) {
-			resolveBehaviorToken(event.token, { type: 'fail', message: 'Unable to start animation.' })
-		}
-		return
-	}
-	const token = event.token
-	if (token) {
-		stopBehaviorAnimation(token)
-	}
-	const isCharacterControlledTarget = isCharacterControllerAnimationNode(targetNodeId)
-	if (isCharacterControlledTarget) {
-		acquireCharacterControllerBehaviorOverride(targetNodeId, token)
-	}
-	if (!token) {
-		return
-	}
-	if (event.loop) {
-		resolveBehaviorToken(token, { type: 'continue' })
-		return
-	}
-	if (!Number.isFinite(clip.duration) || clip.duration <= 0) {
-		resolveBehaviorToken(token, { type: 'continue' })
-		return
-	}
-	const onFinished = (payload: THREE.Event & { action?: THREE.AnimationAction }) => {
-		if (payload.action !== action) {
-			return
-		}
-		mixer.removeEventListener('finished', onFinished)
-		activeBehaviorAnimations.delete(token)
-		releaseCharacterControllerBehaviorOverride(token)
-		if (!isCharacterControlledTarget) {
-			restartDefaultAnimation(targetNodeId)
-		}
-		resolveBehaviorToken(token, { type: 'continue' })
-	}
-	const cancel = () => {
-		mixer.removeEventListener('finished', onFinished)
-		try {
-			action.stop()
-		} catch (cancelError) {
-			console.warn('[ScenePreview] Failed to stop animation action', cancelError)
-		}
-		releaseCharacterControllerBehaviorOverride(token)
-		if (!isCharacterControlledTarget) {
-			restartDefaultAnimation(targetNodeId)
-		}
-	}
-	activeBehaviorAnimations.set(token, cancel)
-	mixer.addEventListener('finished', onFinished)
+	handleBehaviorPlayAnimationEvent(event, {
+		getController: (nodeId) => nodeAnimationRuntime.get(nodeId),
+		resolveClip: (nodeId, clipName) => nodeAnimationRuntime.resolveClip(nodeId, clipName),
+		playNodeAnimation: (nodeId, clipName, options) => nodeAnimationRuntime.playNodeAnimation(nodeId, clipName, options),
+		stopBehaviorAnimation,
+		isCharacterControllerAnimationNode,
+		acquireCharacterControllerBehaviorOverride,
+		releaseCharacterControllerBehaviorOverride,
+		restartDefaultAnimation,
+		resolveBehaviorToken,
+		activeBehaviorAnimations,
+		warnNoTarget: () => console.warn('[ScenePreview] Play animation skipped: no target node'),
+		warnTargetUnavailable: (nodeId) => console.warn('[ScenePreview] Play animation skipped: target node does not expose animations', {
+			nodeId,
+		}),
+		warnClipNotFound: (nodeId, clipName) => console.warn('[ScenePreview] Play animation skipped: clip not found', {
+			targetNodeId: nodeId,
+			requestedName: clipName,
+		}),
+		warnFailedToStart: () => console.warn('[ScenePreview] Play animation skipped: unable to start animation.'),
+		warnFailedToStop: (error) => console.warn('[ScenePreview] Failed to stop animation action', error),
+	})
 }
 
 function handleTriggerBehaviorEvent(event: Extract<BehaviorRuntimeEvent, { type: 'trigger-behavior' }>) {
-	const targetNodeId = event.targetNodeId || event.nodeId
-	if (!targetNodeId) {
-		console.warn('[ScenePreview] Trigger behavior skipped: no target node')
-		return
-	}
-	const sequenceId = event.targetSequenceId && event.targetSequenceId.trim().length ? event.targetSequenceId : null
-	const followUps = triggerBehaviorAction(
-		targetNodeId,
-		'perform',
-		{
-			payload: {
-				sourceNodeId: event.nodeId,
-			},
-		},
-		sequenceId ? { sequenceId } : {},
-	)
-	processBehaviorEvents(followUps)
+	dispatchPerformBehaviorEvent(event, {
+		warnMissingTarget: (message) => console.warn(`[ScenePreview] Trigger behavior skipped: ${message}`),
+		triggerBehaviorAction,
+		processBehaviorEvents,
+	})
 }
 
 function handleStopAnimationEvent(event: Extract<BehaviorRuntimeEvent, { type: 'stop-animation' }>) {
-	const targetNodeId = event.targetNodeId || event.nodeId
-	if (!targetNodeId) {
-		return
-	}
-	if (isCharacterControllerAnimationNode(targetNodeId)) {
-		const overrideTokens = characterControllerAnimationRuntime.getBehaviorOverrideTokens(targetNodeId)
-		if (overrideTokens.length) {
-			overrideTokens.forEach((token) => {
-				stopBehaviorAnimation(token)
-			})
-		} else {
-			scheduleCharacterControllerAnimationResync(targetNodeId)
-		}
-		nodeAnimationRuntime.stopNodeAnimation(targetNodeId, { restoreDefault: false })
-		return
-	}
-	nodeAnimationRuntime.stopNodeAnimation(targetNodeId, { restoreDefault: true })
+	handleBehaviorStopAnimationEvent(event, {
+		isCharacterControllerAnimationNode,
+		getBehaviorOverrideTokens: (nodeId) => characterControllerAnimationRuntime.getBehaviorOverrideTokens(nodeId),
+		stopBehaviorAnimation,
+		scheduleCharacterControllerAnimationResync,
+		stopNodeAnimation: (nodeId, options) => nodeAnimationRuntime.stopNodeAnimation(nodeId, options),
+	})
 }
 
 function setCameraViewState(mode: CameraViewMode, targetNodeId: string | null = null): void {
