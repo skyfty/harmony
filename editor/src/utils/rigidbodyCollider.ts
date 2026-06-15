@@ -59,7 +59,7 @@ export function computeColliderLocalBoundingBox(object: THREE.Object3D): THREE.B
 
 export function buildBoxShapeFromObject(
   object: THREE.Object3D,
-  scaleFactors: ColliderScaleFactors = DEFAULT_COLLIDER_SCALE,
+  _scaleFactors: ColliderScaleFactors = DEFAULT_COLLIDER_SCALE,
 ): RigidbodyPhysicsShape | null {
   const box = computeColliderLocalBoundingBox(object)
   if (!box) {
@@ -70,15 +70,15 @@ export function buildBoxShapeFromObject(
     return null
   }
   const halfExtents: [number, number, number] = [
-    Math.max(1e-4, (size.x * 0.5) / scaleFactors.x),
-    Math.max(1e-4, (size.y * 0.5) / scaleFactors.y),
-    Math.max(1e-4, (size.z * 0.5) / scaleFactors.z),
+    Math.max(1e-4, size.x * 0.5),
+    Math.max(1e-4, size.y * 0.5),
+    Math.max(1e-4, size.z * 0.5),
   ]
   const center = box.getCenter(colliderBoxCenterHelper)
   const offset: [number, number, number] = [
-    center.x / scaleFactors.x,
-    center.y / scaleFactors.y,
-    center.z / scaleFactors.z,
+    center.x,
+    center.y,
+    center.z,
   ]
   return {
     kind: 'box',
@@ -90,7 +90,7 @@ export function buildBoxShapeFromObject(
 
 export function buildSphereShapeFromObject(
   object: THREE.Object3D,
-  scaleFactors: ColliderScaleFactors = DEFAULT_COLLIDER_SCALE,
+  _scaleFactors: ColliderScaleFactors = DEFAULT_COLLIDER_SCALE,
 ): RigidbodyPhysicsShape | null {
   const box = computeColliderLocalBoundingBox(object)
   if (!box) {
@@ -100,17 +100,16 @@ export function buildSphereShapeFromObject(
   if (![size.x, size.y, size.z].every((value) => Number.isFinite(value) && value > 0)) {
     return null
   }
-  const dominantScale = Math.max(scaleFactors.x, scaleFactors.y, scaleFactors.z)
   const rawRadius = Math.max(size.x, size.y, size.z) * 0.5
-  const normalizedRadius = Math.max(1e-4, rawRadius / dominantScale)
+  const normalizedRadius = Math.max(1e-4, rawRadius)
   const center = box.getCenter(colliderBoxCenterHelper)
   return {
     kind: 'sphere',
     radius: normalizedRadius,
     offset: [
-      center.x / scaleFactors.x,
-      center.y / scaleFactors.y,
-      center.z / scaleFactors.z,
+      center.x,
+      center.y,
+      center.z,
     ],
     applyScale: true,
   }
@@ -118,7 +117,7 @@ export function buildSphereShapeFromObject(
 
 export function buildCylinderShapeFromObject(
   object: THREE.Object3D,
-  scaleFactors: ColliderScaleFactors = DEFAULT_COLLIDER_SCALE,
+  _scaleFactors: ColliderScaleFactors = DEFAULT_COLLIDER_SCALE,
 ): RigidbodyPhysicsShape | null {
   const box = computeColliderLocalBoundingBox(object)
   if (!box) {
@@ -129,9 +128,8 @@ export function buildCylinderShapeFromObject(
     return null
   }
   const radius = Math.max(size.x, size.z) * 0.5
-  const dominantHorizontalScale = Math.max(scaleFactors.x, scaleFactors.z)
-  const normalizedRadius = Math.max(1e-4, radius / dominantHorizontalScale)
-  const normalizedHeight = Math.max(1e-4, size.y / scaleFactors.y)
+  const normalizedRadius = Math.max(1e-4, radius)
+  const normalizedHeight = Math.max(1e-4, size.y)
   const center = box.getCenter(colliderBoxCenterHelper)
   return {
     kind: 'cylinder',
@@ -140,9 +138,9 @@ export function buildCylinderShapeFromObject(
     height: normalizedHeight,
     segments: 16,
     offset: [
-      center.x / scaleFactors.x,
-      center.y / scaleFactors.y,
-      center.z / scaleFactors.z,
+      center.x,
+      center.y,
+      center.z,
     ],
     applyScale: true,
   }

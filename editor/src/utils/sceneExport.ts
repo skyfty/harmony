@@ -55,6 +55,18 @@ import {
 } from '@schema/components'
 import { isGroundDynamicMesh } from '@schema/groundHeightfield'
 
+const sceneNodePositionHelper = new THREE.Vector3()
+const sceneNodeQuaternionHelper = new THREE.Quaternion()
+const sceneNodeScaleHelper = new THREE.Vector3()
+const sceneNodeEulerHelper = new THREE.Euler()
+const sceneNodeLocalMatrixHelper = new THREE.Matrix4()
+
+type SceneNodeWorldTransform = {
+  position: THREE.Vector3
+  quaternion: THREE.Quaternion
+  scale: THREE.Vector3
+}
+
 function countSceneNodeCategory(
   nodes: SceneNode[] | null | undefined,
   predicate: (node: SceneNode) => boolean,
@@ -146,6 +158,64 @@ function findGroundNode(nodes: SceneNode[]): SceneNode | null {
     }
   }
   return null
+}
+
+function getSceneNodeLocalMatrix(node: SceneNode): THREE.Matrix4 {
+  const position = node.position as { x?: unknown; y?: unknown; z?: unknown } | undefined
+  const rotation = node.rotation as { x?: unknown; y?: unknown; z?: unknown } | undefined
+  const scale = node.scale as { x?: unknown; y?: unknown; z?: unknown } | undefined
+
+  sceneNodePositionHelper.set(
+    typeof position?.x === 'number' && Number.isFinite(position.x) ? position.x : 0,
+    typeof position?.y === 'number' && Number.isFinite(position.y) ? position.y : 0,
+    typeof position?.z === 'number' && Number.isFinite(position.z) ? position.z : 0,
+  )
+  sceneNodeEulerHelper.set(
+    typeof rotation?.x === 'number' && Number.isFinite(rotation.x) ? rotation.x : 0,
+    typeof rotation?.y === 'number' && Number.isFinite(rotation.y) ? rotation.y : 0,
+    typeof rotation?.z === 'number' && Number.isFinite(rotation.z) ? rotation.z : 0,
+    'XYZ',
+  )
+  sceneNodeQuaternionHelper.setFromEuler(sceneNodeEulerHelper).normalize()
+  sceneNodeScaleHelper.set(
+    typeof scale?.x === 'number' && Number.isFinite(scale.x) ? Math.abs(scale.x) : 1,
+    typeof scale?.y === 'number' && Number.isFinite(scale.y) ? Math.abs(scale.y) : 1,
+    typeof scale?.z === 'number' && Number.isFinite(scale.z) ? Math.abs(scale.z) : 1,
+  )
+
+  return sceneNodeLocalMatrixHelper.compose(
+    sceneNodePositionHelper,
+    sceneNodeQuaternionHelper,
+    sceneNodeScaleHelper,
+  ).clone()
+}
+
+function buildSceneNodeWorldTransformMap(nodes: SceneNode[]): Map<string, SceneNodeWorldTransform> {
+  const map = new Map<string, SceneNodeWorldTransform>()
+
+  const visit = (node: SceneNode, parentWorldMatrix?: THREE.Matrix4): void => {
+    const localMatrix = getSceneNodeLocalMatrix(node)
+    const worldMatrix = parentWorldMatrix
+      ? parentWorldMatrix.clone().multiply(localMatrix)
+      : localMatrix.clone()
+    const position = new THREE.Vector3()
+    const quaternion = new THREE.Quaternion()
+    const scale = new THREE.Vector3()
+    worldMatrix.decompose(position, quaternion, scale)
+    map.set(node.id, { position, quaternion, scale })
+
+    if (Array.isArray(node.children) && node.children.length) {
+      for (const child of node.children) {
+        visit(child, worldMatrix)
+      }
+    }
+  }
+
+  for (const node of nodes) {
+    visit(node)
+  }
+
+  return map
 }
 
 export function collectPunchPointsFromNodes(nodes: SceneNode[]): ScenePunchPoint[] {
@@ -707,6 +777,7 @@ async function applyRigidbodyMetadata(nodes: SceneNode[], candidates: RigidbodyE
     return
   }
   const nodeLookup = buildSceneNodeLookup(nodes)
+  const worldTransformMap = buildSceneNodeWorldTransformMap(nodes)
   const groundNode = findGroundNode(nodes)
   const assetCacheStore = useAssetCacheStore()
   for (const entry of candidates) {
@@ -725,18 +796,21 @@ async function applyRigidbodyMetadata(nodes: SceneNode[], candidates: RigidbodyE
       }
       continue
     }
-    const existingShape = (entry.component.metadata?.[RIGIDBODY_METADATA_KEY] as RigidbodyComponentMetadata | undefined)?.shape
-    if (existingShape) {
-      entry.component.metadata = mergeRigidbodyMetadata(entry.component.metadata, existingShape)
-      continue
-    }
     let shape: RigidbodyPhysicsShape | null = null
-    const samplingObject = await buildRigidbodySamplingObject(samplingNode, assetCacheStore, groundNode)
+    const hostWorldTransform = worldTransformMap.get(entry.node.id) ?? null
+    const sourceWorldTransform = worldTransformMap.get(samplingNode.id) ?? hostWorldTransform
+    const samplingObject = await buildRigidbodySamplingObject(samplingNode, assetCacheStore, groundNode, sourceWorldTransform)
     if (!samplingObject) {
       continue
     }
     const props = clampRigidbodyComponentProps(entry.component.props as Partial<RigidbodyComponentProps>)
-    const nodeScale = resolveNodeScaleFactors(samplingNode)
+    const nodeScale = hostWorldTransform
+      ? {
+          x: Math.max(1e-4, Math.abs(hostWorldTransform.scale.x) || 1),
+          y: Math.max(1e-4, Math.abs(hostWorldTransform.scale.y) || 1),
+          z: Math.max(1e-4, Math.abs(hostWorldTransform.scale.z) || 1),
+        }
+      : resolveNodeScaleFactors(entry.node)
 
     let generatedConvexSimplify: RigidbodyConvexSimplifyConfig | undefined
     const buildConvex = () => {
@@ -769,7 +843,7 @@ async function applyRigidbodyMetadata(nodes: SceneNode[], candidates: RigidbodyE
 
       config.usedPass = usedPass
       generatedConvexSimplify = config
-      return buildConvexShapeFromOutline(outline)
+      return buildConvexShapeFromOutline(outline, nodeScale)
     }
 
     const buildBox = () => buildBoxShapeFromObject(samplingObject, nodeScale)
@@ -791,6 +865,9 @@ async function applyRigidbodyMetadata(nodes: SceneNode[], candidates: RigidbodyE
     if (!shape) {
       continue
     }
+    console.log(
+      `[SceneExportRigidbody] nodeId=${JSON.stringify(entry.node.id)} samplingNodeId=${JSON.stringify(samplingNode.id)} bodyType=${JSON.stringify(props.bodyType)} colliderType=${JSON.stringify(props.colliderType)} nodeScale=${JSON.stringify(nodeScale)} worldTransformScale=${JSON.stringify(hostWorldTransform ? { x: hostWorldTransform.scale.x, y: hostWorldTransform.scale.y, z: hostWorldTransform.scale.z } : null)} shapeKind=${JSON.stringify(shape.kind)} shapeApplyScale=${String(shape.applyScale === true)} shapeOffset=${JSON.stringify(shape.offset ?? null)}`,
+    )
     entry.component.metadata = mergeRigidbodyMetadata(
       entry.component.metadata,
       shape,
@@ -853,6 +930,7 @@ async function buildRigidbodySamplingObject(
   node: SceneNode,
   assetCacheStore: ReturnType<typeof useAssetCacheStore>,
   groundNode: SceneNode | null,
+  transform?: SceneNodeWorldTransform | null,
 ): Promise<THREE.Object3D | null> {
   let sourceObject: THREE.Object3D | null = null
   if (node.sourceAssetId) {
@@ -885,7 +963,13 @@ async function buildRigidbodySamplingObject(
 
   const root = new THREE.Group()
   root.add(sourceObject)
-  applyScaleToObject(root, node)
+  if (transform) {
+    root.position.copy(transform.position)
+    root.quaternion.copy(transform.quaternion)
+    root.scale.copy(transform.scale)
+  } else {
+    applyScaleToObject(root, node)
+  }
   root.updateMatrixWorld(true)
   return root
 }
@@ -1002,7 +1086,10 @@ function applyScaleToObject(object: THREE.Object3D, node: SceneNode): void {
   }
 }
 
-function buildConvexShapeFromOutline(outline: SceneOutlineMesh): RigidbodyPhysicsShape | null {
+function buildConvexShapeFromOutline(
+  outline: SceneOutlineMesh,
+  _scaleFactors: { x: number; y: number; z: number },
+): RigidbodyPhysicsShape | null {
   const positions = Array.isArray(outline.positions) ? outline.positions : []
   if (positions.length < 12) {
     return null
@@ -1013,7 +1100,11 @@ function buildConvexShapeFromOutline(outline: SceneOutlineMesh): RigidbodyPhysic
     const vy = positions[index + 1]
     const vz = positions[index + 2]
     if ([vx, vy, vz].every((value) => typeof value === 'number' && Number.isFinite(value))) {
-      vertices.push([vx as number, vy as number, vz as number])
+      vertices.push([
+        vx as number,
+        vy as number,
+        vz as number,
+      ])
     }
   }
   if (vertices.length < 4) {
@@ -1045,7 +1136,7 @@ function buildConvexShapeFromOutline(outline: SceneOutlineMesh): RigidbodyPhysic
     kind: 'convex',
     vertices,
     faces,
-    applyScale: false,
+    applyScale: true,
   }
 }
 

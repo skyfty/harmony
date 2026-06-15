@@ -809,6 +809,8 @@ import {
   vehicleComponentDefinition,
   VEHICLE_COMPONENT_TYPE,
   clampVehicleComponentProps,
+  projectVehicleComponentPropsToWorldScale,
+  resolveVehicleScaleFactors,
   DEFAULT_AXLE,
   type VehicleComponentProps,
   type VehicleWheelProps,
@@ -9158,13 +9160,14 @@ function createBridgeVehicleInstance(
   object: THREE.Object3D,
 ): VehicleInstanceWithWheels | null {
   const props = clampVehicleComponentProps(component.props);
+  const worldProps = projectVehicleComponentPropsToWorldScale(props, resolveVehicleScaleFactors(node));
   const rightAxis = clampVehicleAxisIndex(props.indexRightAxis);
   const upAxis = clampVehicleAxisIndex(props.indexUpAxis);
   const forwardAxis = clampVehicleAxisIndex(props.indexForwardAxis);
   const axisRightVector = resolveVehicleAxisVector(rightAxis).clone();
   const axisUpVector = resolveVehicleAxisVector(upAxis).clone();
   const axisForwardVector = resolveVehicleAxisVector(forwardAxis).clone();
-  const wheelEntries = (props.wheels ?? [])
+  const wheelEntries = (worldProps.wheels ?? [])
     .map((wheel) => {
       const axle = tupleToVec3(wheel.axleLocal, DEFAULT_AXLE);
       if (!axle) {

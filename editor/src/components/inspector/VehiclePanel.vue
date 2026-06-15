@@ -25,6 +25,10 @@ import {
   DEFAULT_IS_FRONT_WHEEL,
   VEHICLE_COMPONENT_TYPE,
   clampVehicleComponentProps,
+  createDefaultVehicleComponentProps,
+  projectVehicleComponentPropsToWorldScale,
+  resolveVehicleScaleFactors,
+  serializeVehicleComponentPropsFromWorldScale,
   type VehicleComponentProps,
   type VehicleWheelProps,
 } from '@schema/components'
@@ -54,14 +58,19 @@ function cloneVector(vector: Vector3Like): Vector3Like {
   return {x: vector.x, y: vector.y, z: vector.z}
 }
 
-const normalizedProps = computed(() => {
+const storedProps = computed(() => {
   const props = vehicleComponent.value?.props as Partial<VehicleComponentProps> | undefined
   return clampVehicleComponentProps(props ?? null)
 })
 
-const wheelEntries = computed(() => normalizedProps.value.wheels ?? [])
+const selectedNodeScale = computed(() => resolveVehicleScaleFactors(selectedNode.value))
+const displayProps = computed(() =>
+  projectVehicleComponentPropsToWorldScale(storedProps.value, selectedNodeScale.value),
+)
+
+const wheelEntries = computed(() => displayProps.value.wheels ?? [])
 const wheelDetailsActiveId = ref<string | null>(null)
-const DEFAULT_VEHICLE_PROPS = clampVehicleComponentProps(null)
+const DEFAULT_VEHICLE_PROPS = createDefaultVehicleComponentProps()
 const BASE_WHEEL_TEMPLATE: VehicleWheelProps =
   DEFAULT_VEHICLE_PROPS.wheels[0] ?? {
     id: 'wheel-template',
@@ -227,18 +236,25 @@ function updateComponent(patch: Partial<VehicleComponentProps>): void {
   if (!component || !nodeId) {
     return
   }
-  sceneStore.updateNodeComponentProps(nodeId, component.id, patch)
+  const nextDisplay = clampVehicleComponentProps({
+    ...displayProps.value,
+    ...patch,
+    wheelScaleMode: 'relative',
+  } as VehicleComponentProps)
+  const nextStored = serializeVehicleComponentPropsFromWorldScale(nextDisplay, selectedNodeScale.value)
+  sceneStore.updateNodeComponentProps(nodeId, component.id, nextStored as unknown as Partial<Record<string, unknown>>)
 }
 
 function commitClampedPatch(patch: Partial<VehicleComponentProps>): void {
   const clamped = clampVehicleComponentProps({
-    ...normalizedProps.value,
+    ...displayProps.value,
     ...patch,
+    wheelScaleMode: 'relative',
   })
   const diff: Partial<VehicleComponentProps> = {}
   ;(Object.keys(patch) as (keyof VehicleComponentProps)[]).forEach((key) => {
     const nextValue = clamped[key]
-    const previousValue = normalizedProps.value[key]
+    const previousValue = displayProps.value[key]
     const changed = Array.isArray(nextValue) && Array.isArray(previousValue)
       ? !arraysEqual(nextValue as unknown[], previousValue as unknown[])
       : nextValue !== previousValue
@@ -470,7 +486,7 @@ function handleOpenSuspensionEditor(): void {
               :items="AXIS_OPTIONS"
               item-title="label"
               item-value="value"
-              :model-value="normalizedProps.indexRightAxis"
+              :model-value="displayProps.indexRightAxis"
               :disabled="!vehicleComponent?.enabled"
               @update:modelValue="(value) => handleAxisChange('indexRightAxis', value as number | null)"
             />
@@ -481,7 +497,7 @@ function handleOpenSuspensionEditor(): void {
               :items="AXIS_OPTIONS"
               item-title="label"
               item-value="value"
-              :model-value="normalizedProps.indexUpAxis"
+              :model-value="displayProps.indexUpAxis"
               :disabled="!vehicleComponent?.enabled"
               @update:modelValue="(value) => handleAxisChange('indexUpAxis', value as number | null)"
             />
@@ -492,7 +508,7 @@ function handleOpenSuspensionEditor(): void {
               :items="AXIS_OPTIONS"
               item-title="label"
               item-value="value"
-              :model-value="normalizedProps.indexForwardAxis"
+              :model-value="displayProps.indexForwardAxis"
               :disabled="!vehicleComponent?.enabled"
               @update:modelValue="(value) => handleAxisChange('indexForwardAxis', value as number | null)"
             />
@@ -500,7 +516,7 @@ function handleOpenSuspensionEditor(): void {
               label="Wheelbase (m)"
               density="compact"
               variant="underlined"
-              :model-value="normalizedProps.wheelbaseMeters"
+              :model-value="displayProps.wheelbaseMeters"
               readonly
               :disabled="!vehicleComponent?.enabled"
             />

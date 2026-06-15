@@ -31,6 +31,9 @@ import { setBoundingBoxFromObject } from '@/components/editor/sceneUtils'
 import {
   VEHICLE_COMPONENT_TYPE,
   clampVehicleComponentProps,
+  projectVehicleComponentPropsToWorldScale,
+  resolveVehicleScaleFactors,
+  serializeVehicleComponentPropsFromWorldScale,
   type VehicleComponentProps,
   type VehicleWheelProps,
   RIGIDBODY_COMPONENT_TYPE,
@@ -39,13 +42,13 @@ import {
   type RigidbodyComponentMetadata,
   type RigidbodyPhysicsShape,
 } from '@schema/components'
+import { resolveNodeScaleFactors } from '@/utils/rigidbodyCollider'
 import type {
   PhysicsBackendPreference,
   PhysicsBridge,
   PhysicsSceneAsset,
   PhysicsStepFrame,
 } from '@harmony/physics-core'
-import { resolveNodeScaleFactors } from '@/utils/rigidbodyCollider'
 import type { SceneNode, SceneNodeComponentState } from '@schema/core'
 
 const props = defineProps<{
@@ -67,8 +70,12 @@ const vehicleComponent = computed<SceneNodeComponentState<VehicleComponentProps>
   return (component as SceneNodeComponentState<VehicleComponentProps> | undefined) ?? null
 })
 
-const normalizedProps = computed(() => clampVehicleComponentProps(vehicleComponent.value?.props ?? null))
-const wheelEntries = computed(() => normalizedProps.value.wheels ?? [])
+const storedProps = computed(() => clampVehicleComponentProps(vehicleComponent.value?.props ?? null))
+const selectedNodeScale = computed(() => resolveVehicleScaleFactors(selectedNode.value))
+const displayProps = computed(() =>
+  projectVehicleComponentPropsToWorldScale(storedProps.value, selectedNodeScale.value),
+)
+const wheelEntries = computed(() => displayProps.value.wheels ?? [])
 const isDisabled = computed(() => !vehicleComponent.value?.enabled)
 const panelStyle = computed(() => {
   // Center the dialog on screen; ignore anchor to avoid sitting too low.
@@ -140,7 +147,7 @@ function setAxisValue(vector: { x: number; y: number; z: number }, axis: AxisInd
   return { ...vector, z: value }
 }
 
-const rightAxisIndex = computed<AxisIndex>(() => normalizeAxisIndex(normalizedProps.value.indexRightAxis))
+const rightAxisIndex = computed<AxisIndex>(() => normalizeAxisIndex(displayProps.value.indexRightAxis))
 
 type PreviewChassisColliderInfo = {
   halfHeight: number
@@ -286,10 +293,10 @@ function buildPreviewPhysicsSceneAsset(): PreviewPhysicsAsset | null {
     vehicles.push({
       id: vehicleId,
       bodyId: chassisBodyId,
-      indexRightAxis: normalizedProps.value.indexRightAxis as 0 | 1 | 2,
-      indexUpAxis: normalizedProps.value.indexUpAxis as 0 | 1 | 2,
-      indexForwardAxis: normalizedProps.value.indexForwardAxis as 0 | 1 | 2,
-      maxSpeedKmh: normalizedProps.value.maxSpeedKmh,
+      indexRightAxis: displayProps.value.indexRightAxis as 0 | 1 | 2,
+      indexUpAxis: displayProps.value.indexUpAxis as 0 | 1 | 2,
+      indexForwardAxis: displayProps.value.indexForwardAxis as 0 | 1 | 2,
+      maxSpeedKmh: displayProps.value.maxSpeedKmh,
       wheels: wheels.map((wheel, index) => ({
         id: index + 1,
         radius: wheel.radius,
@@ -777,18 +784,36 @@ function patchGroupWheels(isFront: boolean, mutator: (wheel: VehicleWheelProps) 
   const component = vehicleComponent.value
   const nodeId = selectedNodeId.value
   if (!component || !nodeId) return
-  const current = clampVehicleComponentProps(component.props as VehicleComponentProps)
+  const current = displayProps.value
   const next = current.wheels.map((wheel) => (wheel.isFrontWheel === isFront ? mutator(wheel) : wheel))
-  sceneStore.updateNodeComponentProps(nodeId, component.id, { wheels: next })
+  const nextDisplay = clampVehicleComponentProps({
+    ...current,
+    wheels: next,
+    wheelScaleMode: 'relative',
+  } as VehicleComponentProps)
+  sceneStore.updateNodeComponentProps(
+    nodeId,
+    component.id,
+    serializeVehicleComponentPropsFromWorldScale(nextDisplay, selectedNodeScale.value) as unknown as Partial<Record<string, unknown>>,
+  )
 }
 
 function patchAllWheels(mutator: (wheel: VehicleWheelProps) => VehicleWheelProps) {
   const component = vehicleComponent.value
   const nodeId = selectedNodeId.value
   if (!component || !nodeId) return
-  const current = clampVehicleComponentProps(component.props as VehicleComponentProps)
+  const current = displayProps.value
   const next = current.wheels.map((wheel) => mutator(wheel))
-  sceneStore.updateNodeComponentProps(nodeId, component.id, { wheels: next })
+  const nextDisplay = clampVehicleComponentProps({
+    ...current,
+    wheels: next,
+    wheelScaleMode: 'relative',
+  } as VehicleComponentProps)
+  sceneStore.updateNodeComponentProps(
+    nodeId,
+    component.id,
+    serializeVehicleComponentPropsFromWorldScale(nextDisplay, selectedNodeScale.value) as unknown as Partial<Record<string, unknown>>,
+  )
 }
 
 const numericControls: Array<{ key: keyof VehicleWheelProps; label: string; min: number; max: number; step: number }> = [

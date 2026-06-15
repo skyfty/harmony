@@ -329,26 +329,165 @@ function orientConvexFaces(faces: number[][], vertices: CANNON.Vec3[]): number[]
   const normal = new CANNON.Vec3()
   const toCentroid = new CANNON.Vec3()
   return faces.map((face) => {
-    if (face.length < 3) {
+    const orderedFace = orderConvexFaceVertices(face, vertices)
+    if (orderedFace.length < 3) {
       return face
     }
-    const [i0, i1, i2] = face
-    if (i0 === undefined || i1 === undefined || i2 === undefined) {
-      return face
-    }
+    const [i0, i1, i2] = orderedFace
     const a = vertices[i0]
     const b = vertices[i1]
     const c = vertices[i2]
     if (!a || !b || !c) {
-      return face
+      return orderedFace
     }
     ab.set(b.x, b.y, b.z).vsub(a, ab)
     ac.set(c.x, c.y, c.z).vsub(a, ac)
     ab.cross(ac, normal)
     if (normal.lengthSquared() < 1e-12) {
-      return face
+      return orderedFace
     }
     toCentroid.set(a.x, a.y, a.z).vsub(centroid, toCentroid)
-    return normal.dot(toCentroid) >= 0 ? face : [...face].reverse()
+    return normal.dot(toCentroid) >= 0 ? orderedFace : [...orderedFace].reverse()
   })
+}
+
+function orderConvexFaceVertices(face: number[], vertices: CANNON.Vec3[]): number[] {
+  if (!Array.isArray(face) || face.length < 3) {
+    return Array.isArray(face) ? [...face] : []
+  }
+
+  const uniqueFace: number[] = []
+  const seen = new Set<number>()
+  for (const index of face) {
+    if (!Number.isInteger(index) || index < 0 || index >= vertices.length || seen.has(index)) {
+      continue
+    }
+    const vertex = vertices[index]
+    if (!vertex) {
+      continue
+    }
+    seen.add(index)
+    uniqueFace.push(index)
+  }
+
+  if (uniqueFace.length < 3) {
+    return uniqueFace
+  }
+
+  const centroid = new CANNON.Vec3()
+  uniqueFace.forEach((index) => {
+    const vertex = vertices[index]
+    if (vertex) {
+      centroid.vadd(vertex, centroid)
+    }
+  })
+  centroid.scale(1 / uniqueFace.length, centroid)
+
+  const normal = computeConvexFaceNormal(uniqueFace, vertices)
+  if (!normal) {
+    return uniqueFace
+  }
+
+  const tangent = new CANNON.Vec3()
+  const bitangent = new CANNON.Vec3()
+  buildConvexFaceBasis(normal, vertices, uniqueFace, tangent, bitangent)
+
+  const projected = uniqueFace.map((index) => {
+    const vertex = vertices[index]!
+    const relative = vertex.vsub(centroid)
+    const u = relative.dot(tangent)
+    const v = relative.dot(bitangent)
+    return {
+      index,
+      angle: Math.atan2(v, u),
+      radius: u * u + v * v,
+    }
+  })
+
+  projected.sort((left, right) => {
+    if (left.angle !== right.angle) {
+      return left.angle - right.angle
+    }
+    return left.radius - right.radius
+  })
+
+  return projected.map((entry) => entry.index)
+}
+
+function computeConvexFaceNormal(face: number[], vertices: CANNON.Vec3[]): CANNON.Vec3 | null {
+  const originIndex = face[0]
+  const origin = typeof originIndex === 'number' ? vertices[originIndex] : null
+  if (!origin) {
+    return null
+  }
+
+  const edgeA = new CANNON.Vec3()
+  const edgeB = new CANNON.Vec3()
+  const normal = new CANNON.Vec3()
+  for (let i = 1; i < face.length - 1; i += 1) {
+    const b = vertices[face[i]]
+    if (!b) {
+      continue
+    }
+    for (let j = i + 1; j < face.length; j += 1) {
+      const c = vertices[face[j]]
+      if (!c) {
+        continue
+      }
+      edgeA.copy(b).vsub(origin, edgeA)
+      edgeB.copy(c).vsub(origin, edgeB)
+      edgeA.cross(edgeB, normal)
+      if (normal.lengthSquared() >= 1e-12) {
+        return normal.unit()
+      }
+    }
+  }
+  return null
+}
+
+function buildConvexFaceBasis(
+  normal: CANNON.Vec3,
+  vertices: CANNON.Vec3[],
+  face: number[],
+  tangent: CANNON.Vec3,
+  bitangent: CANNON.Vec3,
+): void {
+  const seed = new CANNON.Vec3()
+  const projected = new CANNON.Vec3()
+  let tangentBuilt = false
+
+  for (const index of face) {
+    const vertex = vertices[index]
+    if (!vertex) {
+      continue
+    }
+    seed.set(vertex.x, vertex.y, vertex.z)
+    const normalComponent = normal.scale(seed.dot(normal), new CANNON.Vec3())
+    projected.copy(seed)
+    projected.vsub(normalComponent, projected)
+    if (projected.lengthSquared() > 1e-12) {
+      tangent.copy(projected.unit())
+      tangentBuilt = true
+      break
+    }
+  }
+
+  if (!tangentBuilt) {
+    const fallback = Math.abs(normal.x) < 0.9
+      ? new CANNON.Vec3(1, 0, 0)
+      : new CANNON.Vec3(0, 1, 0)
+    fallback.cross(normal, tangent)
+    if (tangent.lengthSquared() <= 1e-12) {
+      tangent.set(0, 0, 1)
+    } else {
+      tangent.unit()
+    }
+  }
+
+  normal.cross(tangent, bitangent)
+  if (bitangent.lengthSquared() <= 1e-12) {
+    bitangent.set(0, 1, 0)
+  } else {
+    bitangent.unit()
+  }
 }

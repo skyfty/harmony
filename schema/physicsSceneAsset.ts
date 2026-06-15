@@ -24,6 +24,8 @@ import {
   clampCharacterControllerComponentProps,
   clampRigidbodyComponentProps,
   clampRoadProps,
+  projectVehicleComponentPropsToWorldScale,
+  resolveVehicleScaleFactors,
   resolveModelCollisionComponentPropsFromNode,
   clampVehicleComponentProps,
   type BoundaryWallComponentProps,
@@ -285,6 +287,7 @@ function buildShapeInstancesFromDefinition(
     const shapeId = pushShapeDescriptor(shapes, {
       id: nextShapeId(),
       kind: 'box',
+      applyScale: false,
       halfExtents: [
         shape.halfExtents[0] * scale[0],
         shape.halfExtents[1] * scale[1],
@@ -298,6 +301,7 @@ function buildShapeInstancesFromDefinition(
     const shapeId = pushShapeDescriptor(shapes, {
       id: nextShapeId(),
       kind: 'sphere',
+      applyScale: false,
       radius: shape.radius * Math.max(scale[0], scale[1], scale[2]),
     })
     return [{ shapeId, transform: { position: scaledOffset, rotation: identityPhysicsRotation } }]
@@ -308,6 +312,7 @@ function buildShapeInstancesFromDefinition(
     const shapeId = pushShapeDescriptor(shapes, {
       id: nextShapeId(),
       kind: 'cylinder',
+      applyScale: false,
       radiusTop: shape.radiusTop * radiusScale,
       radiusBottom: shape.radiusBottom * radiusScale,
       height: shape.height * scale[1],
@@ -326,6 +331,7 @@ function buildShapeInstancesFromDefinition(
     const shapeId = pushShapeDescriptor(shapes, {
       id: nextShapeId(),
       kind: 'convex-hull',
+      applyScale: false,
       vertices,
       faces: Array.isArray(shape.faces)
         ? shape.faces
@@ -356,6 +362,7 @@ function buildShapeInstancesFromDefinition(
     const shapeId = pushShapeDescriptor(shapes, {
       id: nextShapeId(),
       kind: 'heightfield',
+      applyScale: false,
       rows,
       columns,
       elementSize: shape.elementSize * Math.max(scale[0], scale[2]),
@@ -381,6 +388,7 @@ function buildShapeInstancesFromDefinition(
     const shapeId = pushShapeDescriptor(shapes, {
       id: nextShapeId(),
       kind: 'static-mesh',
+      applyScale: false,
       vertices,
       indices,
     })
@@ -414,6 +422,7 @@ function buildBoundaryWallShapeInstances(
     const shapeId = pushShapeDescriptor(shapes, {
       id: nextShapeId(),
       kind: 'box',
+      applyScale: false,
       halfExtents: [hx as number, hy as number, hz as number],
     })
     children.push({
@@ -520,18 +529,21 @@ function cloneRoadCollisionShapeDesc(
       return {
         id: shapeIdMap.get(shape.id) ?? shape.id,
         kind: 'box',
+        applyScale: false,
         halfExtents: [...shape.halfExtents] as [number, number, number],
       }
     case 'sphere':
       return {
         id: shapeIdMap.get(shape.id) ?? shape.id,
         kind: 'sphere',
+        applyScale: false,
         radius: shape.radius,
       }
     case 'cylinder':
       return {
         id: shapeIdMap.get(shape.id) ?? shape.id,
         kind: 'cylinder',
+        applyScale: false,
         radiusTop: shape.radiusTop,
         radiusBottom: shape.radiusBottom,
         height: shape.height,
@@ -541,6 +553,7 @@ function cloneRoadCollisionShapeDesc(
       return {
         id: shapeIdMap.get(shape.id) ?? shape.id,
         kind: 'convex-hull',
+        applyScale: false,
         vertices: Array.isArray(shape.vertices) ? [...shape.vertices] : Array.from(shape.vertices ?? []),
         faces: Array.isArray(shape.faces)
           ? shape.faces.map((face: any) => face.map((entry: any) => Math.trunc(entry)))
@@ -550,6 +563,7 @@ function cloneRoadCollisionShapeDesc(
       return {
         id: shapeIdMap.get(shape.id) ?? shape.id,
         kind: 'heightfield',
+        applyScale: false,
         rows: shape.rows,
         columns: shape.columns,
         elementSize: shape.elementSize,
@@ -562,6 +576,7 @@ function cloneRoadCollisionShapeDesc(
       return {
         id: shapeIdMap.get(shape.id) ?? shape.id,
         kind: 'static-mesh',
+        applyScale: false,
         vertices: Array.isArray(shape.vertices) ? [...shape.vertices] : Array.from(shape.vertices ?? []),
         indices: Array.isArray(shape.indices) ? [...shape.indices] : Array.from(shape.indices ?? []),
       }
@@ -569,6 +584,7 @@ function cloneRoadCollisionShapeDesc(
       return {
         id: shapeIdMap.get(shape.id) ?? shape.id,
         kind: 'compound',
+        applyScale: false,
         children: shape.children.map((child: any) => ({
           shapeId: shapeIdMap.get(child.shapeId) ?? child.shapeId,
           transform: {
@@ -862,7 +878,8 @@ export async function buildPhysicsSceneAsset(
     const bodyId = bodyIdsByNodeId.get(node.id)
     if (vehicleState && typeof bodyId === 'number') {
       const vehicleProps = clampVehicleComponentProps(vehicleState.props as Partial<VehicleComponentProps> | null | undefined)
-      const wheels: PhysicsVehicleWheelDesc[] = vehicleProps.wheels.map((wheel) => ({
+      const worldVehicleProps = projectVehicleComponentPropsToWorldScale(vehicleProps, resolveVehicleScaleFactors(node))
+      const wheels: PhysicsVehicleWheelDesc[] = worldVehicleProps.wheels.map((wheel) => ({
         id: nextWheelId++,
         radius: wheel.radius,
         isFrontWheel: wheel.isFrontWheel,

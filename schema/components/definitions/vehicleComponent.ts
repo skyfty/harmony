@@ -3,6 +3,13 @@ import { componentManager, type ComponentDefinition } from '../componentManager'
 import type { SceneNode, SceneNodeComponentState, Vector3Like } from '../../index'
 
 export const VEHICLE_COMPONENT_TYPE = 'vehicle'
+export type VehicleScaleMode = 'relative'
+
+export interface VehicleScaleFactors {
+  x: number
+  y: number
+  z: number
+}
 
 export interface VehicleWheelProps {
   id: string
@@ -25,6 +32,8 @@ export interface VehicleWheelProps {
 }
 
 export interface VehicleComponentProps {
+  // Newer saves store wheel sizes relative to node scale.
+  wheelScaleMode?: VehicleScaleMode
   indexRightAxis: number
   indexUpAxis: number
   indexForwardAxis: number
@@ -36,6 +45,12 @@ export interface VehicleComponentProps {
   // Derived value (auto-computed) representing the vehicle wheelbase in meters.
   wheelbaseMeters: number
   wheels: VehicleWheelProps[]
+}
+
+export const DEFAULT_VEHICLE_WHEEL_SCALE_MODE: VehicleScaleMode = 'relative'
+
+export function createDefaultVehicleComponentProps(): VehicleComponentProps {
+  return clampVehicleComponentProps({ wheelScaleMode: DEFAULT_VEHICLE_WHEEL_SCALE_MODE })
 }
 
 function createVector(x: number, y: number, z: number): Vector3Like {
@@ -58,6 +73,123 @@ function normalizeVectorComponents(vector: Vector3Like): [number, number, number
 function cloneVectorLike(vector: Vector3Like): Vector3Like {
   const [x, y, z] = normalizeVectorComponents(vector)
   return { x, y, z }
+}
+
+function sanitizeScaleComponent(value: unknown): number {
+  const numeric = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(numeric)) {
+    return 1
+  }
+  const abs = Math.abs(numeric)
+  return abs > 1e-4 ? abs : 1
+}
+
+export function resolveVehicleScaleFactors(node: Pick<SceneNode, 'scale'> | null | undefined): VehicleScaleFactors {
+  return {
+    x: sanitizeScaleComponent(node?.scale?.x),
+    y: sanitizeScaleComponent(node?.scale?.y),
+    z: sanitizeScaleComponent(node?.scale?.z),
+  }
+}
+
+function getVehicleScalarScale(scale: VehicleScaleFactors): number {
+  return Math.max(scale.x, scale.y, scale.z)
+}
+
+function scaleVectorLike(vector: Vector3Like, scale: VehicleScaleFactors, direction: 'to-world' | 'to-relative'): Vector3Like {
+  const x = direction === 'to-world' ? vector.x * scale.x : vector.x / scale.x
+  const y = direction === 'to-world' ? vector.y * scale.y : vector.y / scale.y
+  const z = direction === 'to-world' ? vector.z * scale.z : vector.z / scale.z
+  return createVector(x, y, z)
+}
+
+function scaleScalarValue(value: number, scale: VehicleScaleFactors, direction: 'to-world' | 'to-relative'): number {
+  const scalar = getVehicleScalarScale(scale)
+  return direction === 'to-world' ? value * scalar : value / scalar
+}
+
+export function isRelativeVehicleScaleMode(props: Pick<VehicleComponentProps, 'wheelScaleMode'> | null | undefined): props is Pick<VehicleComponentProps, 'wheelScaleMode'> & { wheelScaleMode: VehicleScaleMode } {
+  return props?.wheelScaleMode === DEFAULT_VEHICLE_WHEEL_SCALE_MODE
+}
+
+function transformWheelForScale(
+  wheel: VehicleWheelProps,
+  scale: VehicleScaleFactors,
+  direction: 'to-world' | 'to-relative',
+): VehicleWheelProps {
+  const chassisConnectionPointLocal = scaleVectorLike(wheel.chassisConnectionPointLocal, scale, direction)
+  return {
+    ...wheel,
+    radius: scaleScalarValue(wheel.radius, scale, direction),
+    suspensionRestLength: scaleScalarValue(wheel.suspensionRestLength, scale, direction),
+    maxSuspensionTravel: scaleScalarValue(wheel.maxSuspensionTravel, scale, direction),
+    chassisConnectionPointLocal,
+    directionLocal: cloneVectorLike(wheel.directionLocal),
+    axleLocal: cloneVectorLike(wheel.axleLocal),
+  }
+}
+
+export function projectVehicleWheelPropsToWorldScale(
+  wheel: VehicleWheelProps,
+  scale: VehicleScaleFactors,
+  props?: Pick<VehicleComponentProps, 'wheelScaleMode'> | null,
+): VehicleWheelProps {
+  if (!isRelativeVehicleScaleMode(props)) {
+    return {
+      ...wheel,
+      directionLocal: cloneVectorLike(wheel.directionLocal),
+      axleLocal: cloneVectorLike(wheel.axleLocal),
+      chassisConnectionPointLocal: cloneVectorLike(wheel.chassisConnectionPointLocal),
+    }
+  }
+  return transformWheelForScale(wheel, scale, 'to-world')
+}
+
+export function serializeVehicleWheelPropsFromWorldScale(
+  wheel: VehicleWheelProps,
+  scale: VehicleScaleFactors,
+): VehicleWheelProps {
+  return transformWheelForScale(wheel, scale, 'to-relative')
+}
+
+function mapVehicleWheelListToWorldScale(
+  wheels: VehicleWheelProps[],
+  scale: VehicleScaleFactors,
+  props?: Pick<VehicleComponentProps, 'wheelScaleMode'> | null,
+): VehicleWheelProps[] {
+  return wheels.map((wheel) => projectVehicleWheelPropsToWorldScale(wheel, scale, props))
+}
+
+function mapVehicleWheelListFromWorldScale(
+  wheels: VehicleWheelProps[],
+  scale: VehicleScaleFactors,
+): VehicleWheelProps[] {
+  return wheels.map((wheel) => serializeVehicleWheelPropsFromWorldScale(wheel, scale))
+}
+
+export function projectVehicleComponentPropsToWorldScale(
+  props: VehicleComponentProps,
+  scale: VehicleScaleFactors,
+): VehicleComponentProps {
+  const wheels = mapVehicleWheelListToWorldScale(props.wheels, scale, props)
+  return {
+    ...props,
+    wheelbaseMeters: computeWheelbaseMeters({ indexForwardAxis: props.indexForwardAxis, wheels }),
+    wheels,
+  }
+}
+
+export function serializeVehicleComponentPropsFromWorldScale(
+  props: VehicleComponentProps,
+  scale: VehicleScaleFactors,
+): VehicleComponentProps {
+  const wheels = mapVehicleWheelListFromWorldScale(props.wheels, scale)
+  return {
+    ...props,
+    wheelScaleMode: DEFAULT_VEHICLE_WHEEL_SCALE_MODE,
+    wheelbaseMeters: computeWheelbaseMeters({ indexForwardAxis: props.indexForwardAxis, wheels }),
+    wheels,
+  }
 }
 
 function getVectorAxisValue(vector: Vector3Like, axisIndex: number): number {
@@ -385,6 +517,7 @@ export function clampVehicleComponentProps(
   }
   const wheelTemplate = resolveLegacyWheelTemplate(props ?? null, legacyVectors)
   const clamped: VehicleComponentProps = {
+    wheelScaleMode: isRelativeVehicleScaleMode(props) ? DEFAULT_VEHICLE_WHEEL_SCALE_MODE : undefined,
     indexRightAxis: clampAxisIndex(props?.indexRightAxis, DEFAULT_RIGHT_AXIS),
     indexUpAxis: clampAxisIndex(props?.indexUpAxis, DEFAULT_UP_AXIS),
     indexForwardAxis: clampAxisIndex(props?.indexForwardAxis, DEFAULT_FORWARD_AXIS),
@@ -428,6 +561,7 @@ export function clampVehicleComponentProps(
 
 export function cloneVehicleComponentProps(props: VehicleComponentProps): VehicleComponentProps {
   return {
+    wheelScaleMode: props.wheelScaleMode,
     indexRightAxis: props.indexRightAxis,
     indexUpAxis: props.indexUpAxis,
     indexForwardAxis: props.indexForwardAxis,
@@ -501,7 +635,7 @@ const vehicleComponentDefinition: ComponentDefinition<VehicleComponentProps> = {
     return nodeType !== 'light' && nodeType !== 'environment'
   },
   createDefaultProps(_node: SceneNode) {
-    return clampVehicleComponentProps(null)
+    return clampVehicleComponentProps({ wheelScaleMode: DEFAULT_VEHICLE_WHEEL_SCALE_MODE })
   },
   createInstance(context) {
     return new VehicleComponent(context)

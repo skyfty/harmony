@@ -49,12 +49,14 @@ export type PhysicsBoxShapeDesc = {
   id: number
   kind: 'box'
   halfExtents: PhysicsVector3
+  applyScale?: boolean
 }
 
 export type PhysicsSphereShapeDesc = {
   id: number
   kind: 'sphere'
   radius: number
+  applyScale?: boolean
 }
 
 export type PhysicsCylinderShapeDesc = {
@@ -64,6 +66,7 @@ export type PhysicsCylinderShapeDesc = {
   radiusBottom: number
   height: number
   segments?: number
+  applyScale?: boolean
 }
 
 export type PhysicsConvexHullShapeDesc = {
@@ -71,6 +74,7 @@ export type PhysicsConvexHullShapeDesc = {
   kind: 'convex-hull'
   vertices: Float32Array
   faces?: number[][]
+  applyScale?: boolean
 }
 
 export type PhysicsHeightfieldDesc = {
@@ -83,6 +87,7 @@ export type PhysicsHeightfieldDesc = {
   minHeight?: number
   maxHeight?: number
   localOffset?: PhysicsVector3
+  applyScale?: boolean
 }
 
 export type PhysicsStaticMeshDesc = {
@@ -90,6 +95,7 @@ export type PhysicsStaticMeshDesc = {
   kind: 'static-mesh'
   vertices: Float32Array
   indices: Uint32Array
+  applyScale?: boolean
 }
 
 export type PhysicsCompoundChildDesc = {
@@ -101,6 +107,7 @@ export type PhysicsCompoundShapeDesc = {
   id: number
   kind: 'compound'
   children: PhysicsCompoundChildDesc[]
+  applyScale?: boolean
 }
 
 export type PhysicsShapeDesc =

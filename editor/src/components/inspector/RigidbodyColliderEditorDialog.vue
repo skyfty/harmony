@@ -110,7 +110,23 @@ const componentConvexSimplify = computed<RigidbodyConvexSimplifyConfig>(() => {
   return DEFAULT_CONVEX_SIMPLIFY_CONFIG as unknown as RigidbodyConvexSimplifyConfig
 })
 
-const nodeScaleFactors = computed(() => targetNode.value ? resolveNodeScaleFactors(targetNode.value) : { x: 1, y: 1, z: 1 })
+const nodeScaleFactors = computed(() => {
+  const id = targetNodeId.value
+  if (id) {
+    const runtimeObject = getRuntimeObject(id)
+    if (runtimeObject) {
+      runtimeObject.updateMatrixWorld(true)
+      const scale = new THREE.Vector3()
+      runtimeObject.getWorldScale(scale)
+      return {
+        x: Math.max(1e-4, Math.abs(scale.x) || 1),
+        y: Math.max(1e-4, Math.abs(scale.y) || 1),
+        z: Math.max(1e-4, Math.abs(scale.z) || 1),
+      }
+    }
+  }
+  return targetNode.value ? resolveNodeScaleFactors(targetNode.value) : { x: 1, y: 1, z: 1 }
+})
 
 const canSave = computed(() => Boolean(rigidbodyComponent.value && selectedNodeId.value && isReady.value && !loadError.value))
 

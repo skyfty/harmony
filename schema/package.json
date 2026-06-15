@@ -21,7 +21,8 @@
     "check:infinite-ground-visibility": "npm run build && node ./scripts/fix-esm-extensions.mjs ./dist && node ./scripts/infinite-ground-visibility-regression.mjs",
     "check:quantized-terrain-mesh": "npm run build && node ./scripts/fix-esm-extensions.mjs ./dist && node ./scripts/quantized-terrain-mesh-regression.mjs",
     "check:quantized-terrain-dataset": "npm run build && node ./scripts/fix-esm-extensions.mjs ./dist && node ./scripts/quantized-terrain-dataset-regression.mjs",
-    "check:quantized-terrain-pack": "npm run build && node ./scripts/fix-esm-extensions.mjs ./dist && node ./scripts/quantized-terrain-pack-regression.mjs"
+    "check:quantized-terrain-pack": "npm run build && node ./scripts/fix-esm-extensions.mjs ./dist && node ./scripts/quantized-terrain-pack-regression.mjs",
+    "check:vehicle-scale": "npm run build && node ./scripts/fix-esm-extensions.mjs ./dist && node ./scripts/vehicle-scale-regression.mjs"
   },
   "engines": {
     "pnpm": ">=10.0.0"

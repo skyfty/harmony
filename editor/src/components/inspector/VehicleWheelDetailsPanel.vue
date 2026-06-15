@@ -7,6 +7,9 @@ import InspectorVectorControls from '@/components/common/VectorControls.vue'
 import {
   VEHICLE_COMPONENT_TYPE,
   clampVehicleComponentProps,
+  projectVehicleComponentPropsToWorldScale,
+  resolveVehicleScaleFactors,
+  serializeVehicleComponentPropsFromWorldScale,
   type VehicleComponentProps,
   type VehicleWheelProps,
 } from '@schema/components'
@@ -30,12 +33,16 @@ const vehicleComponent = computed(() =>
     | undefined,
 )
 
-const normalizedProps = computed(() => clampVehicleComponentProps(vehicleComponent.value?.props ?? null))
+const storedProps = computed(() => clampVehicleComponentProps(vehicleComponent.value?.props ?? null))
+const selectedNodeScale = computed(() => resolveVehicleScaleFactors(selectedNode.value))
+const displayProps = computed(() =>
+  projectVehicleComponentPropsToWorldScale(storedProps.value, selectedNodeScale.value),
+)
 const activeWheel = computed<VehicleWheelProps | null>(() => {
   if (!props.wheelId) {
     return null
   }
-  return normalizedProps.value.wheels.find((wheel) => wheel.id === props.wheelId) ?? null
+  return displayProps.value.wheels.find((wheel) => wheel.id === props.wheelId) ?? null
 })
 const isDisabled = computed(() => !vehicleComponent.value?.enabled)
 const panelStyle = computed(() => {
@@ -72,13 +79,21 @@ function patchActiveWheel(mutator: (wheel: VehicleWheelProps) => VehicleWheelPro
   if (!props.wheelId || !vehicleComponent.value || !selectedNodeId.value) {
     return
   }
-  const current = clampVehicleComponentProps(vehicleComponent.value.props as VehicleComponentProps)
+  const current = displayProps.value
   const nextWheels = current.wheels.map((wheel) =>
     wheel.id === props.wheelId ? mutator(wheel) : wheel,
   )
-  sceneStore.updateNodeComponentProps(selectedNodeId.value, vehicleComponent.value.id, {
+  const nextDisplayProps = clampVehicleComponentProps({
+    ...current,
     wheels: nextWheels,
-  })
+    wheelScaleMode: 'relative',
+  } as VehicleComponentProps)
+  const nextStoredProps = serializeVehicleComponentPropsFromWorldScale(nextDisplayProps, selectedNodeScale.value)
+  sceneStore.updateNodeComponentProps(
+    selectedNodeId.value,
+    vehicleComponent.value.id,
+    nextStoredProps as unknown as Partial<Record<string, unknown>>,
+  )
 }
 
 type WheelNumericKey = keyof Pick<VehicleWheelProps,
