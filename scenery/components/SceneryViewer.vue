@@ -495,7 +495,7 @@ import {
   type PhysicsStepFrame,
   type PhysicsTransform,
 } from '@harmony/physics-core';
-import { createKtx2Loader, createKtx2SupportRenderer, disposeKtx2SupportRenderer, FAST_KTX2_TRANSCODER_PATH } from '@harmony/schema/ktx2Loader'
+import {createKtx2Loader, createKtx2SupportRenderer, disposeKtx2SupportRenderer, FAST_KTX2_TRANSCODER_PATH } from '@harmony/schema/ktx2Loader'
 
 import { useProjectStore } from '../common/stores/projectStore';
 import { useDebugOverlay } from '../composables/useDebugOverlay';
@@ -1375,12 +1375,12 @@ async function loadRgbETextureFromUrl(url: string, manager?: THREE.LoadingManage
 
 
 async function loadKtx2TextureFromUrl(url: string, manager?: THREE.LoadingManager): Promise<THREE.Texture> {
-  const renderer = createKtx2SupportRenderer()
+  const render = createKtx2SupportRenderer();
   try {
-    const loader = await createKtx2Loader(renderer, { transcoderPath: FAST_KTX2_TRANSCODER_PATH })
-    return await loader.loadAsync(url);
+    const ktx2Loader = await createKtx2Loader(render, {loader:requestBinaryFromUrl, manager, transcoderPath: FAST_KTX2_TRANSCODER_PATH});
+    return ktx2Loader.loadAsync(url);
   } finally {
-    disposeKtx2SupportRenderer(renderer)
+    disposeKtx2SupportRenderer(render);
   }
 }
 
