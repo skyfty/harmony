@@ -1,9 +1,9 @@
-import * as THREE from 'three'
 import type { SceneMaterialTextureRef, SceneNode, SceneNodeComponentState, SceneNodeMaterial } from '@schema/core'
 import type { ProjectAsset } from '@/types/project-asset'
 import { useAssetCacheStore } from './assetCacheStore'
 import { extractExtension } from '@/utils/blob'
 import { ASSET_THUMBNAIL_HEIGHT, ASSET_THUMBNAIL_WIDTH } from '@/utils/assetThumbnail'
+import { loadTextureFromFile } from '@/utils/textureAsset'
 import {
   LANDFORM_COMPONENT_TYPE,
   clampLandformComponentProps,
@@ -220,18 +220,13 @@ export function createLandformPresetActions(deps: LandformPresetActionsDeps) {
       if (!file) {
         return null
       }
-
-      const blobUrl = URL.createObjectURL(file)
       try {
-        const loader = new THREE.TextureLoader()
-        const texture = await loader.loadAsync(blobUrl)
+        const texture = await loadTextureFromFile(file)
         texture.name = ref.name ?? file.name ?? assetId
         texture.needsUpdate = true
         return texture
       } catch {
         return null
-      } finally {
-        URL.revokeObjectURL(blobUrl)
       }
     }
 

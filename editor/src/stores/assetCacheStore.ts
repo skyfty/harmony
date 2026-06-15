@@ -107,7 +107,7 @@ function deriveThumbnailFromAsset(asset: ProjectAsset): string | null {
 }
 
 function shouldGenerateThumbnailForAsset(asset: ProjectAsset): boolean {
-  return asset.type === 'model' || asset.type === 'mesh' || asset.type === 'prefab'
+  return asset.type === 'model' || asset.type === 'mesh' || asset.type === 'prefab' || asset.type === 'texture'
 }
 
 async function generateDownloadedAssetThumbnail(
@@ -134,12 +134,37 @@ async function generateDownloadedAssetThumbnail(
       })
     }
 
+    if (asset.type === 'texture') {
+      const { generateAssetThumbnail } = await import('@/utils/assetThumbnail')
+      const thumbnailFile = await generateAssetThumbnail({
+        asset,
+        file,
+      })
+      return await fileToDataUrl(thumbnailFile)
+    }
+
     const { renderModelFileThumbnailDataUrl } = await import('@/utils/localAssetImport')
     return await renderModelFileThumbnailDataUrl(asset, file)
   } catch (error) {
     console.warn('Failed to generate downloaded asset thumbnail', asset.id, error)
     return null
   }
+}
+
+async function fileToDataUrl(file: File): Promise<string> {
+  return await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      const result = typeof reader.result === 'string' ? reader.result : null
+      if (!result) {
+        reject(new Error('Failed to read thumbnail data'))
+        return
+      }
+      resolve(result)
+    }
+    reader.onerror = () => reject(reader.error ?? new Error('Failed to read thumbnail data'))
+    reader.readAsDataURL(file)
+  })
 }
 
 async function persistThumbnailToCatalog(assetId: string, thumbnailDataUrl: string | null): Promise<void> {

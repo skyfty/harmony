@@ -1,4 +1,3 @@
-import * as THREE from 'three'
 import type {
   SceneMaterialTextureRef,
   SceneNode,
@@ -10,6 +9,7 @@ import type { ProjectAsset } from '@/types/project-asset'
 import { useAssetCacheStore } from './assetCacheStore'
 import { extractExtension } from '@/utils/blob'
 import { ASSET_THUMBNAIL_HEIGHT, ASSET_THUMBNAIL_WIDTH } from '@/utils/assetThumbnail'
+import { loadTextureFromFile } from '@/utils/textureAsset'
 import {
   ROAD_PRESET_FORMAT_VERSION,
   buildRoadComponentPatchFromPreset,
@@ -288,18 +288,13 @@ export function createRoadPresetActions(deps: RoadPresetActionsDeps) {
       if (!file) {
         return null
       }
-
-      const blobUrl = URL.createObjectURL(file)
       try {
-        const loader = new THREE.TextureLoader()
-        const texture = await loader.loadAsync(blobUrl)
+        const texture = await loadTextureFromFile(file)
         texture.name = ref.name ?? file.name ?? assetId
         texture.needsUpdate = true
         return texture
       } catch {
         return null
-      } finally {
-        URL.revokeObjectURL(blobUrl)
       }
     }
 

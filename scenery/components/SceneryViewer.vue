@@ -478,7 +478,6 @@ import * as THREE from 'three';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
-import type { KTX2Loader } from 'three/examples/jsm/loaders/KTX2Loader.js';
 import type { UseCanvasResult } from '@minisheep/three-platform-adapter';
 import PlatformCanvas from './PlatformCanvas.vue';
 import LanternImageFrame from './LanternImageFrame.vue';
@@ -487,6 +486,7 @@ import DriveCompass from './DriveCompass.vue';
 import SpeedReadout from './SpeedReadout.vue';
 import SceneLoadOverlay from './SceneLoadOverlay.vue';
 import { buildPhysicsSceneAsset } from '@harmony/schema/physicsSceneAsset';
+import { loadTextureFromSourceUrl } from '@harmony/schema/textureSourceLoader';
 import {
   type PhysicsBackendPreference,
   type PhysicsBridge,
@@ -495,7 +495,7 @@ import {
   type PhysicsStepFrame,
   type PhysicsTransform,
 } from '@harmony/physics-core';
-
+import {createKtx2Loader, createKtx2SupportRenderer, disposeKtx2SupportRenderer, FAST_KTX2_TRANSCODER_PATH } from '@harmony/schema/ktx2Loader'
 
 import { useProjectStore } from '../common/stores/projectStore';
 import { useDebugOverlay } from '../composables/useDebugOverlay';
@@ -1348,10 +1348,6 @@ let activeScenePackagePkg: ScenePackageUnzipped | null = null;
 let sceneDownloadTask: SceneRequestTask | null = null;
 type RGBELoaderClass = new (manager?: THREE.LoadingManager) => RGBELoader;
 let rgbeLoaderClassPromise: Promise<RGBELoaderClass> | null = null;
-type KTX2LoaderClass = new (manager?: THREE.LoadingManager) => KTX2Loader;
-let ktx2LoaderClassPromise: Promise<KTX2LoaderClass> | null = null;
-let ktx2LoaderInstance: KTX2Loader | null = null;
-
 async function createRgbELoader(manager?: THREE.LoadingManager): Promise<RGBELoader> {
   if (!rgbeLoaderClassPromise) {
     rgbeLoaderClassPromise = import('three/examples/jsm/loaders/RGBELoader.js').then(
@@ -1377,33 +1373,17 @@ async function loadRgbETextureFromUrl(url: string, manager?: THREE.LoadingManage
   return texture;
 }
 
-async function createKtx2Loader(renderer: THREE.WebGLRenderer): Promise<KTX2Loader> {
-  if (!ktx2LoaderClassPromise) {
-    ktx2LoaderClassPromise = import('@minisheep/three-platform-adapter/override/jsm/loaders/KTX2Loader.js').then(
-      (module) => module.KTX2Loader as KTX2LoaderClass,
-    );
+
+async function loadKtx2TextureFromUrl(url: string, manager?: THREE.LoadingManager): Promise<THREE.Texture> {
+  const render = createKtx2SupportRenderer();
+  try {
+    const ktx2Loader = await createKtx2Loader(render, {loader:requestBinaryFromUrl, manager, transcoderPath: FAST_KTX2_TRANSCODER_PATH});
+    return ktx2Loader.loadAsync(url);
+  } finally {
+    disposeKtx2SupportRenderer(render);
   }
-  const LoaderClass = await ktx2LoaderClassPromise;
-  if (!ktx2LoaderInstance) {
-    ktx2LoaderInstance = new LoaderClass().detectSupport(renderer);
-  }
-  return ktx2LoaderInstance;
 }
 
-async function loadKtx2TextureFromUrl(url: string, renderer: THREE.WebGLRenderer): Promise<THREE.Texture> {
-  const ktx2Loader = await createKtx2Loader(renderer);
-  const buffer = await requestBinaryFromUrl(url);
-  return new Promise<THREE.Texture>((resolve, reject) => {
-    (ktx2Loader as unknown as {
-      parse: (data: ArrayBuffer, onLoad: (texture: THREE.Texture) => void, onError?: (error: unknown) => void) => void;
-    }).parse(buffer, resolve, reject);
-  });
-}
-
-function disposeKtx2Loader() {
-  ktx2LoaderInstance?.dispose?.();
-  ktx2LoaderInstance = null;
-}
 
 function getGroundVertexCount(rows: number, columns: number): number {
   return (Math.max(1, Math.trunc(rows)) + 1) * (Math.max(1, Math.trunc(columns)) + 1);
@@ -1472,7 +1452,6 @@ function handleDebugOverlayTap(): void {
   debugMode.value = debugMode.value === 'full' ? 'fps' : 'full';
 }
 
-const textureLoader = new THREE.TextureLoader();
 const materialTextureCache = new Map<string, THREE.Texture>();
 const pendingMaterialTextureRequests = new Map<string, Promise<THREE.Texture | null>>();
 
@@ -1956,13 +1935,15 @@ async function resolveMaterialTexture(ref: SceneMaterialTextureRef): Promise<THR
     }
 
     const extension = resolveTextureExtension(entry, ref);
-      try {
+    try {
       let texture: THREE.Texture;
       if (extension === 'hdr' || extension === 'hdri' || extension === 'rgbe') {
         texture = await loadRgbETextureFromUrl(source);
+      } else if (extension === 'ktx2') {
+        texture = await loadKtx2TextureFromUrl(source);
       } else {
         // EXR is not available in all module environments; fall back to image loader.
-        texture = await textureLoader.loadAsync(source);
+        texture = await loadTextureFromSourceUrl(source);
       }
       texture.name = ref.name ?? entry.filename ?? cacheKey;
       texture.colorSpace = THREE.LinearSRGBColorSpace;
@@ -4771,7 +4752,7 @@ async function resolveParticleTextureAssetSource(assetId: string): Promise<THREE
   }
   try {
     if (trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.startsWith('data:')) {
-      const directTexture = await textureLoader.loadAsync(trimmed);
+      const directTexture = await loadTextureFromSourceUrl(trimmed);
       directTexture.name = trimmed;
       directTexture.colorSpace = THREE.SRGBColorSpace;
       ensureFloatTextureFilterCompatibility(directTexture);
@@ -4790,7 +4771,7 @@ async function resolveParticleTextureAssetSource(assetId: string): Promise<THREE
     if (!source) {
       return null;
     }
-    const texture = await textureLoader.loadAsync(source);
+    const texture = await loadTextureFromSourceUrl(source);
     texture.name = entry.filename ?? trimmed;
     texture.colorSpace = THREE.SRGBColorSpace;
     ensureFloatTextureFilterCompatibility(texture);
@@ -15721,18 +15702,14 @@ async function loadEnvironmentTextureFromAsset(
   const dispose = resolve.dispose;
   try {
     if (isKtx2EnvironmentTexture(extension, mimeType)) {
-      const renderer = renderContext?.renderer ?? null;
-      if (!renderer) {
-        return null;
-      }
-      const texture = await loadKtx2TextureFromUrl(resolve.url, renderer);
+      const texture = await loadKtx2TextureFromUrl(resolve.url);
       texture.mapping = THREE.CubeUVReflectionMapping;
       texture.needsUpdate = true;
       return { texture, dispose };
     }
     if (isExrEnvironmentTexture(extension, mimeType)) {
       // EXR not supported in this environment; use texture loader fallback.
-      const texture = await textureLoader.loadAsync(resolve.url);
+      const texture = await loadTextureFromSourceUrl(resolve.url);
       texture.mapping = THREE.EquirectangularReflectionMapping;
       texture.flipY = false;
       texture.magFilter = THREE.NearestFilter;
@@ -15750,7 +15727,7 @@ async function loadEnvironmentTextureFromAsset(
       ensureFloatTextureFilterCompatibility(texture);
       return { texture, dispose };
     }
-    const texture = await textureLoader.loadAsync(resolve.url);
+    const texture = await loadTextureFromSourceUrl(resolve.url);
     texture.mapping = THREE.EquirectangularReflectionMapping;
     texture.colorSpace = THREE.SRGBColorSpace;
     texture.magFilter = THREE.NearestFilter;
@@ -16241,7 +16218,6 @@ async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
 
 function disposeEnvironmentResources() {
   disposeBackgroundResources();
-  disposeKtx2Loader();
   backgroundLoadToken += 1;
   pendingEnvironmentSettings = null;
   activeEnvironmentSettings = cloneEnvironmentSettings(DEFAULT_ENVIRONMENT_SETTINGS);

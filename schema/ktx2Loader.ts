@@ -16,14 +16,50 @@ export class KTX2Loader extends KTX2LoaderBase {
     super(manager)
   }
 
-  async loadAsync(url: string, _onProgress?: (event: ProgressEvent<EventTarget>) => void): Promise<THREE.Texture> {
-    const response = await fetch(url)
-    const result = await response.arrayBuffer()
-    return this.parse(result)
+  override load(
+    url: string,
+    onLoad?: (texture: CompressedTexture) => void,
+    _onProgress?: (event: ProgressEvent<EventTarget>) => void,
+    onError?: (err: unknown) => void,
+  ): void {
+    void this.fetchAndParse(url)
+      .then((texture) => {
+        onLoad?.(texture)
+      })
+      .catch((error) => {
+        if (onError) {
+          onError(error)
+          return
+        }
+
+        console.error(error)
+      })
   }
 
-  async parse(data: ArrayBuffer, onLoad?: (texture: CompressedTexture) => void, onError?: (err: unknown) => void):void {
-    return super.parse(data, onLoad, onError)
+  override async loadAsync(
+    url: string,
+    _onProgress?: (event: ProgressEvent<EventTarget>) => void,
+  ): Promise<CompressedTexture> {
+    return await this.fetchAndParse(url)
+  }
+
+  private async fetchAndParse(url: string): Promise<CompressedTexture> {
+    const response = await fetch(url)
+    if (!response.ok) {
+      throw new Error(`Failed to fetch KTX2 texture: ${response.status} ${response.statusText}`)
+    }
+
+    const result = await response.arrayBuffer()
+    return await new Promise<CompressedTexture>((resolve, reject) => {
+      ;(KTX2LoaderBase.prototype as unknown as {
+        parse: (this: KTX2Loader, data: ArrayBuffer, onLoad?: (texture: CompressedTexture) => void, onError?: (err: unknown) => void) => void
+      }).parse.call(
+        this,
+        result,
+        resolve,
+        reject,
+      )
+    })
   }
 }
 

@@ -42,6 +42,7 @@ import type {
 import { addMesh as markInstancedBoundsDirty } from './instancedBoundsTracker'
 import { createTextureSettings } from './material'
 import { getGroundTextureSourceResolver } from './groundTextureSourceResolver'
+import { loadTextureFromSourceUrl } from './textureSourceLoader'
 import { hashString, stableSerialize } from './stableSerialize'
 
 import {
@@ -6452,6 +6453,64 @@ function disposeGroundTexture(texture: THREE.Texture | null | undefined) {
   clearDynamicGroundFlag(texture)
 }
 
+function isKtx2SourceUrl(source: string): boolean {
+  return /\.ktx2(?:\?.*)?$/i.test(source)
+}
+
+function snapshotGroundTextureState(texture: THREE.Texture): {
+  wrapS: THREE.Wrapping
+  wrapT: THREE.Wrapping
+  flipY: boolean
+  generateMipmaps: boolean
+  premultiplyAlpha: boolean
+  anisotropy: number
+  minFilter: THREE.TextureFilter
+  magFilter: THREE.MagnificationTextureFilter
+  colorSpace: THREE.ColorSpace
+  repeat: { x: number; y: number }
+  offset: { x: number; y: number }
+  center: { x: number; y: number }
+  rotation: number
+  needsUpdate: boolean
+} {
+  return {
+    wrapS: texture.wrapS,
+    wrapT: texture.wrapT,
+    flipY: texture.flipY,
+    generateMipmaps: texture.generateMipmaps,
+    premultiplyAlpha: texture.premultiplyAlpha,
+    anisotropy: texture.anisotropy,
+    minFilter: texture.minFilter,
+    magFilter: texture.magFilter,
+    colorSpace: texture.colorSpace as THREE.ColorSpace,
+    repeat: { x: texture.repeat.x, y: texture.repeat.y },
+    offset: { x: texture.offset.x, y: texture.offset.y },
+    center: { x: texture.center.x, y: texture.center.y },
+    rotation: texture.rotation,
+    needsUpdate: texture.needsUpdate,
+  }
+}
+
+function restoreGroundTextureState(
+  texture: THREE.Texture,
+  snapshot: ReturnType<typeof snapshotGroundTextureState>,
+): void {
+  texture.wrapS = snapshot.wrapS
+  texture.wrapT = snapshot.wrapT
+  texture.flipY = snapshot.flipY
+  texture.generateMipmaps = snapshot.generateMipmaps
+  texture.premultiplyAlpha = snapshot.premultiplyAlpha
+  texture.anisotropy = snapshot.anisotropy
+  texture.minFilter = snapshot.minFilter
+  texture.magFilter = snapshot.magFilter
+  texture.colorSpace = snapshot.colorSpace as THREE.ColorSpace
+  texture.repeat.set(snapshot.repeat.x, snapshot.repeat.y)
+  texture.offset.set(snapshot.offset.x, snapshot.offset.y)
+  texture.center.set(snapshot.center.x, snapshot.center.y)
+  texture.rotation = snapshot.rotation
+  texture.needsUpdate = snapshot.needsUpdate
+}
+
 function loadGroundTextureFromSource(
   source: string | null | undefined,
   textureName: string,
@@ -6473,30 +6532,52 @@ function loadGroundTextureFromSource(
     cached.texture.name = textureName
     return cached.texture
   }
-  const texture = textureLoader.load(
-    resolvedSource,
-    () => {
-      const entry = groundTextureCache.get(cacheKey)
-      if (!entry) {
-        return
-      }
-      entry.ready = true
-      entry.failed = false
-      entry.readyListeners.forEach((listener) => listener())
-      entry.readyListeners.clear()
-    },
-    undefined,
-    () => {
-      const entry = groundTextureCache.get(cacheKey)
-      if (!entry) {
-        return
-      }
-      entry.failed = true
-      entry.ready = true
-      entry.readyListeners.forEach((listener) => listener())
-      entry.readyListeners.clear()
-    },
-  )
+  const isKtx2 = isKtx2SourceUrl(resolvedSource)
+  if (!isKtx2) {
+    const texture = textureLoader.load(
+      resolvedSource,
+      () => {
+        const entry = groundTextureCache.get(cacheKey)
+        if (!entry) {
+          return
+        }
+        entry.ready = true
+        entry.failed = false
+        entry.readyListeners.forEach((listener) => listener())
+        entry.readyListeners.clear()
+      },
+      undefined,
+      () => {
+        const entry = groundTextureCache.get(cacheKey)
+        if (!entry) {
+          return
+        }
+        entry.failed = true
+        entry.ready = true
+        entry.readyListeners.forEach((listener) => listener())
+        entry.readyListeners.clear()
+      },
+    )
+    applyGroundTextureSamplingDefaults(texture)
+    if (typeof options.flipY === 'boolean') {
+      texture.flipY = options.flipY
+    }
+    texture.name = textureName
+    markDynamicGroundTexture(texture)
+    const userData = (texture.userData ??= {}) as GroundTextureMetadata
+    userData.groundTextureCacheKey = cacheKey
+    groundTextureCache.set(cacheKey, {
+      key: cacheKey,
+      texture,
+      refCount: 1,
+      ready: false,
+      failed: false,
+      readyListeners: new Set(),
+    })
+    return texture
+  }
+
+  const texture = new THREE.Texture()
   applyGroundTextureSamplingDefaults(texture)
   if (typeof options.flipY === 'boolean') {
     texture.flipY = options.flipY
@@ -6513,6 +6594,39 @@ function loadGroundTextureFromSource(
     failed: false,
     readyListeners: new Set(),
   })
+
+  void loadTextureFromSourceUrl(resolvedSource)
+    .then((loadedTexture) => {
+      const entry = groundTextureCache.get(cacheKey)
+      if (!entry || entry.texture !== texture) {
+        loadedTexture.dispose()
+        return
+      }
+      const snapshot = snapshotGroundTextureState(texture)
+      texture.copy(loadedTexture)
+      restoreGroundTextureState(texture, snapshot)
+      texture.name = textureName
+      markDynamicGroundTexture(texture)
+      const nextUserData = (texture.userData ??= {}) as GroundTextureMetadata
+      nextUserData.groundTextureCacheKey = cacheKey
+      entry.ready = true
+      entry.failed = false
+      entry.readyListeners.forEach((listener) => listener())
+      entry.readyListeners.clear()
+      loadedTexture.dispose()
+    })
+    .catch((error) => {
+      console.warn('[GroundMesh] Failed to load KTX2 texture', resolvedSource, error)
+      const entry = groundTextureCache.get(cacheKey)
+      if (!entry || entry.texture !== texture) {
+        return
+      }
+      entry.failed = true
+      entry.ready = true
+      entry.readyListeners.forEach((listener) => listener())
+      entry.readyListeners.clear()
+    })
+
   return texture
 }
 

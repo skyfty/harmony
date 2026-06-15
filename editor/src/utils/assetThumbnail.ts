@@ -1,8 +1,8 @@
 import Pica from 'pica'
 import * as THREE from 'three'
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js'
-import type { KTX2Loader } from 'three/examples/jsm/loaders/KTX2Loader.js'
 import { getLastExtensionFromFilenameOrUrl, isSkyCubeArchiveExtension } from '@schema/assetTypeConversion'
+import { createKtx2Loader, createKtx2SupportRenderer, disposeKtx2SupportRenderer, FAST_KTX2_TRANSCODER_PATH } from '@schema/ktx2Loader'
 import { disposeSkyCubeTexture, extractSkycubeZipFaces, loadSkyCubeTexture } from '@schema/skyCubeTexture'
 import type { ProjectAsset } from '@/types/project-asset'
 import { usesTransparentThumbnailBackground } from '@/utils/assetThumbnailTransparency'
@@ -18,13 +18,7 @@ const IMAGE_OUTPUT_QUALITY = 0.9
 const MODEL_OUTPUT_TYPE = 'image/png'
 const ALPHA_THRESHOLD = 10
 const MODEL_MARGIN_RATIO = 0.08
-const FAST_HDR_KTX2_TRANSCODER_PATH = 'https://cdn.jsdelivr.net/npm/three@0.172.0/examples/jsm/libs/basis/'
-
 const thumbnailResizer = typeof window !== 'undefined' ? Pica() : null
-type KTX2LoaderClass = new (manager?: THREE.LoadingManager) => KTX2Loader
-
-let ktx2LoaderClassPromise: Promise<KTX2LoaderClass> | null = null
-let ktx2LoaderInstance: KTX2Loader | null = null
 
 export const ASSET_THUMBNAIL_WIDTH = 192
 export const ASSET_THUMBNAIL_HEIGHT = 96
@@ -223,16 +217,23 @@ async function renderTextureThumbnail(
   const plane = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), material)
   const { width: textureWidth, height: textureHeight } = resolveTextureDimensions(texture)
   const textureAspect = textureWidth > 0 && textureHeight > 0 ? textureWidth / textureHeight : 1
-  if (textureAspect >= 1) {
-    plane.scale.set(textureAspect, 1, 1)
-  } else {
-    plane.scale.set(1, 1 / Math.max(textureAspect, 1e-6), 1)
+  if (material.map) {
+    const coverRatio = textureAspect >= 1 ? 1 / Math.max(textureAspect, 1e-6) : textureAspect
+    const coverScale = Math.min(1, Math.max(coverRatio, 1e-6))
+    if (textureAspect >= 1) {
+      material.map.repeat.set(coverScale, 1)
+      material.map.offset.set((1 - coverScale) / 2, 0)
+    } else {
+      material.map.repeat.set(1, coverScale)
+      material.map.offset.set(0, (1 - coverScale) / 2)
+    }
+    material.map.needsUpdate = true
   }
   scene.add(plane)
 
   try {
     renderer.render(scene, camera)
-    return await createThumbnailFromCanvas(asset, renderer.domElement, { width, height })
+    return await createThumbnailFromCanvas(asset, renderer.domElement, { width, height, marginRatio: 0 })
   } finally {
     plane.geometry.dispose()
     material.dispose()
@@ -250,14 +251,10 @@ export async function loadKtx2Texture(file: File): Promise<{ texture: THREE.Text
   }
 
   const objectUrl = URL.createObjectURL(file)
-  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
-  renderer.outputColorSpace = THREE.SRGBColorSpace
+  const renderer = createKtx2SupportRenderer()
 
   try {
-    const loader = await createKtx2Loader(renderer)
-    if (!loader) {
-      throw new Error('Failed to initialize KTX2 loader')
-    }
+    const loader = await createKtx2Loader(renderer, { transcoderPath: FAST_KTX2_TRANSCODER_PATH })
     const texture = await loader.loadAsync(objectUrl)
     const dimensions = resolveTextureDimensions(texture)
     return {
@@ -267,29 +264,8 @@ export async function loadKtx2Texture(file: File): Promise<{ texture: THREE.Text
     }
   } finally {
     URL.revokeObjectURL(objectUrl)
-    renderer.dispose()
-    if (typeof renderer.forceContextLoss === 'function') {
-      renderer.forceContextLoss()
-    }
+    disposeKtx2SupportRenderer(renderer)
   }
-}
-
-export async function createKtx2Loader(renderer: THREE.WebGLRenderer): Promise<KTX2Loader | null> {
-  if (typeof window === 'undefined') {
-    return null
-  }
-
-  if (!ktx2LoaderClassPromise) {
-    ktx2LoaderClassPromise = import('three/examples/jsm/loaders/KTX2Loader.js').then(
-      (module) => module.KTX2Loader as KTX2LoaderClass,
-    )
-  }
-
-  const LoaderClass = await ktx2LoaderClassPromise
-  if (!ktx2LoaderInstance) {
-    ktx2LoaderInstance = new LoaderClass().setTranscoderPath(FAST_HDR_KTX2_TRANSCODER_PATH).detectSupport(renderer)
-  }
-  return ktx2LoaderInstance
 }
 
 function resolveTextureDimensions(texture: THREE.Texture): { width: number; height: number } {

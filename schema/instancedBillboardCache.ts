@@ -11,6 +11,7 @@ import {
 } from 'three'
 import { addMesh as markInstancedBoundsDirty } from './instancedBoundsTracker'
 import ResourceCache from './ResourceCache'
+import { loadTextureFromSourceUrl } from './textureSourceLoader'
 
 const BILLBOARD_BASE_POSITION_ATTRIBUTE = 'billboardBasePosition'
 const DEFAULT_INSTANCE_CAPACITY = 2048
@@ -408,8 +409,7 @@ async function loadBillboardHandle(assetId: string, resolveUrl: () => Promise<st
     return null
   }
 
-  const textureLoader = new THREE.TextureLoader()
-  const texture = await textureLoader.loadAsync(url)
+  const texture = await loadTextureFromSourceUrl(url)
   texture.colorSpace = THREE.SRGBColorSpace
   texture.wrapS = THREE.ClampToEdgeWrapping
   texture.wrapT = THREE.ClampToEdgeWrapping

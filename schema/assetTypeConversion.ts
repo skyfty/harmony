@@ -134,6 +134,7 @@ const MIME_BY_EXTENSION: Record<string, string> = {
   avif: 'image/avif',
 
   // textures / hdri
+  ktx: 'image/ktx',
   hdr: 'image/vnd.radiance',
   exr: 'image/exr',
   ktx2:'image/ktx2',
@@ -247,6 +248,9 @@ export function getAssetTypeFromMimeType(mimeType: string | null | undefined): A
     return null
   }
   const normalized = mimeType.toLowerCase()
+  if (normalized.includes('ktx') || normalized.includes('texture') || normalized.includes('dds') || normalized.includes('tga')) {
+    return 'texture'
+  }
   if (normalized.startsWith('audio/')) {
     return 'audio'
   }
@@ -261,9 +265,6 @@ export function getAssetTypeFromMimeType(mimeType: string | null | undefined): A
   }
   if (normalized.includes('gltf') || normalized.includes('fbx') || normalized.includes('obj') || normalized.includes('stl')) {
     return 'model'
-  }
-  if (normalized.includes('ktx') || normalized.includes('texture') || normalized.includes('dds') || normalized.includes('tga')) {
-    return 'texture'
   }
   if (normalized.includes('material')) {
     return 'material'

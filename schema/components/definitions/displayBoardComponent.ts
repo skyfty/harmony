@@ -3,6 +3,7 @@ import type { Object3D } from 'three'
 import { Component, type ComponentRuntimeContext } from '../Component'
 import { componentManager, type ComponentDefinition } from '../componentManager'
 import type { SceneNode, SceneNodeComponentState } from '../../index'
+import { loadTextureFromSourceUrl } from '../../textureSourceLoader'
 
 export const DISPLAY_BOARD_COMPONENT_TYPE = 'displayBoard'
 const DISPLAY_BOARD_RESOLVER_KEY = '__harmonyResolveDisplayBoardMedia'
@@ -77,7 +78,6 @@ class DisplayBoardComponent extends Component<DisplayBoardComponentProps> {
   private currentTexture: THREE.Texture | null = null
   private currentCleanup: (() => void) | null = null
   private pending: PendingToken | null = null
-  private readonly textureLoader = new THREE.TextureLoader()
 
   constructor(context: ComponentRuntimeContext<DisplayBoardComponentProps>) {
     super(context)
@@ -476,7 +476,7 @@ class DisplayBoardComponent extends Component<DisplayBoardComponentProps> {
     height: number
     dispose: () => void
   }> {
-    const texture = await this.textureLoader.loadAsync(resolved.url)
+    const texture = await loadTextureFromSourceUrl(resolved.url)
     texture.colorSpace = THREE.SRGBColorSpace
     const image = texture.image as { width?: number; height?: number; naturalWidth?: number; naturalHeight?: number }
     const width = image?.naturalWidth ?? image?.width ?? 1

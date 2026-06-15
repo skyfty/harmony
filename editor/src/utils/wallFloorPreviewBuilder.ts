@@ -20,6 +20,7 @@ import {
 import { applyAirWallVisualToWallGroup } from '@/components/editor/WallRenderer'
 import { filterWallPreviewMaterialOverrides } from '@/utils/wallPresetNodeMaterials'
 import { prepareWallPreviewImportedObject } from '@/utils/wallPresetSceneGraphPreview'
+import { loadTextureFromFile } from '@/utils/textureAsset'
 
 export type PreviewAssetFileResolver = (assetId: string) => Promise<File | null>
 
@@ -162,16 +163,10 @@ export function createPreviewMaterialTextureResolver(resolveAssetFile: PreviewAs
     if (!file) {
       return null
     }
-    const blobUrl = URL.createObjectURL(file)
-    try {
-      const loader = new THREE.TextureLoader()
-      const texture = await loader.loadAsync(blobUrl)
-      texture.name = ref.name ?? file.name ?? assetId
-      texture.needsUpdate = true
-      return texture
-    } finally {
-      URL.revokeObjectURL(blobUrl)
-    }
+    const texture = await loadTextureFromFile(file)
+    texture.name = ref.name ?? file.name ?? assetId
+    texture.needsUpdate = true
+    return texture
   }
 }
 

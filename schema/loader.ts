@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import { createKtx2Loader, createKtx2SupportRenderer, disposeKtx2SupportRenderer, FAST_KTX2_TRANSCODER_PATH } from './ktx2Loader';
+import { KTX2Loader } from 'three/examples/jsm/loaders/KTX2Loader.js'
 
 export type LoaderProgressPayload = {
   loaded: number;
@@ -42,18 +44,6 @@ async function safeImport<T>(importer: () => Promise<T>): Promise<T> {
 
   return importer();
 }
-
-const GLTF_DRACO_ENABLED = (() => {
-  const runtime = globalThis as typeof globalThis & {
-    __HARMONY_RUNTIME__?: {
-      scenery?: {
-        enableGltfDraco?: boolean;
-      };
-    };
-  };
-  const configured = runtime.__HARMONY_RUNTIME__?.scenery?.enableGltfDraco;
-  return configured ?? true;
-})();
 
 function toError(error: unknown, fallbackMessage: string): Error {
   if (error instanceof Error) {
@@ -265,6 +255,7 @@ export interface GltfParseOptions {
   dracoDecoderPath?: string;
   ktx2TranscoderPath?: string;
   enableKtx2?: boolean;
+  ktx2Renderer?: THREE.WebGLRenderer | null;
 }
 
 export interface ParsedGltfResult {
@@ -273,20 +264,29 @@ export interface ParsedGltfResult {
 }
 
 const DEFAULT_DRACO_DECODER_PATH = '../examples/jsm/libs/draco/gltf/';
-
 export async function createGltfLoader(options: GltfParseOptions = {}): Promise<any> {
   const { GLTFLoader } = await safeImport(
     () => import('three/examples/jsm/loaders/GLTFLoader.js'),
   );
   const loader = new GLTFLoader(options.manager);
 
-  if (GLTF_DRACO_ENABLED) {
-    const { DRACOLoader } = await safeImport(
-      () => import('three/examples/jsm/loaders/DRACOLoader.js'),
-    );
-    const dracoLoader = new DRACOLoader();
-    dracoLoader.setDecoderPath(options.dracoDecoderPath ?? DEFAULT_DRACO_DECODER_PATH);
-    loader.setDRACOLoader(dracoLoader);
+  const { DRACOLoader } = await safeImport(
+    // Keep the normal three loader import; the viewer's build config rewrites
+    // the supported adapter entry point when targeting mini-program bundles.
+    () => import('three/examples/jsm/loaders/DRACOLoader.js'),
+  );
+  const dracoLoader = new DRACOLoader();
+  dracoLoader.setDecoderPath(options.dracoDecoderPath ?? DEFAULT_DRACO_DECODER_PATH);
+  loader.setDRACOLoader(dracoLoader);
+
+  const renderer = options.ktx2Renderer ?? createKtx2SupportRenderer();
+  const ktx2Loader = await createKtx2Loader(renderer, {
+    manager: options.manager,
+    transcoderPath: options.ktx2TranscoderPath ?? FAST_KTX2_TRANSCODER_PATH,
+  });
+  loader.setKTX2Loader(ktx2Loader as KTX2Loader);
+  if (!options.ktx2Renderer) {
+    disposeKtx2SupportRenderer(renderer);
   }
 
   // loader.setMeshoptDecoder(MeshoptDecoder);

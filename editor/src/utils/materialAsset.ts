@@ -14,6 +14,7 @@ import type { ProjectAsset } from '@/types/project-asset'
 import { sanitizeSceneAssetRegistry } from '@/utils/assetDependencySubset'
 import { normalizeAssetIdWithRegistry } from '@/utils/assetRegistryIdNormalization'
 import { disposeThumbnailObject, renderObjectThumbnailDataUrl } from '@/utils/objectThumbnailRenderer'
+import { loadTextureFromFile } from '@/utils/textureAsset'
 
 const MATERIAL_ASSET_FORMAT = 'harmony-material'
 const MATERIAL_ASSET_VERSION = 1
@@ -246,15 +247,10 @@ export function createMaterialAssetTextureResolver(options: {
     if (!file) {
       return null
     }
-    const blobUrl = URL.createObjectURL(file)
-    try {
-      const texture = await new THREE.TextureLoader().loadAsync(blobUrl)
-      texture.name = ref.name ?? file.name ?? assetId
-      texture.needsUpdate = true
-      return texture
-    } finally {
-      URL.revokeObjectURL(blobUrl)
-    }
+    const texture = await loadTextureFromFile(file)
+    texture.name = ref.name ?? file.name ?? assetId
+    texture.needsUpdate = true
+    return texture
   }
 }
 

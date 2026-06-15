@@ -155,6 +155,8 @@ export function syncSceneryDependencyMirrors(options: SyncSceneryDependencyMirro
   const physicsBridgeRoot = path.resolve(options.repoRoot, "physics-bridge", "src");
   const threeRoot = path.resolve(options.viewerRoot, "node_modules", "three");
   const meshBvhRoot = path.resolve(options.viewerRoot, "node_modules", "three-mesh-bvh");
+  // Mirror the adapter's shipped override tree so the viewer can stay aligned with
+  // the published package without hand-copying generated files into source control.
   const threeAdapterOverrideRoot = path.resolve(
     options.viewerRoot,
     "node_modules",
@@ -170,6 +172,8 @@ export function syncSceneryDependencyMirrors(options: SyncSceneryDependencyMirro
   const physicsBridgeMirrorDir = path.resolve(options.viewerRoot, "src/pages/scenery/physics-bridge");
   const threeMirrorDir = path.resolve(options.viewerRoot, "src/pages/scenery/three");
   const meshBvhMirrorDir = path.resolve(options.viewerRoot, "src/pages/scenery/three-mesh-bvh");
+  // This is a mirror link into the generated override tree under node_modules.
+  // It keeps the viewer's local source tree in sync with the adapter package.
   const threeAdapterOverrideMirrorDir = path.resolve(options.viewerRoot, "src/pages/scenery/three-platform-adapter/override/jsm");
   const cannonMirrorDir = path.resolve(options.viewerRoot, "src/pages/physics-cannon/cannon-es");
 
