@@ -13478,7 +13478,10 @@ function buildLandformWorldFootprintForPicking(node: SceneNode, object: THREE.Ob
     .filter((entry): entry is { x: number; z: number } => Boolean(entry))
 }
 
-function pickHiddenLandformNodeAtPointer(event: { clientX: number; clientY: number }): NodeHitResult | null {
+function pickHiddenLandformNodeAtPointer(
+  event: { clientX: number; clientY: number },
+  options?: { includeSelectionLocked?: boolean },
+): NodeHitResult | null {
   if (!setViewportRayFromClientPoint(event)) {
     return null
   }
@@ -13500,7 +13503,7 @@ function pickHiddenLandformNodeAtPointer(event: { clientX: number; clientY: numb
     if (!sceneStore.isNodeVisible(nodeId)) {
       continue
     }
-    if (sceneStore.isNodeSelectionLocked(nodeId)) {
+    if (!options?.includeSelectionLocked && sceneStore.isNodeSelectionLocked(nodeId)) {
       continue
     }
     if (isObjectWorldVisible(object)) {
@@ -13538,8 +13541,11 @@ function pickHiddenLandformNodeAtPointer(event: { clientX: number; clientY: numb
   return best ? best.hit : null
 }
 
-function pickSceneNodeAtPointerIncludingHiddenLandform(event: { clientX: number; clientY: number }): NodeHitResult | null {
-  return pickNodeAtPointer(event) ?? pickHiddenLandformNodeAtPointer(event)
+function pickSceneNodeAtPointerIncludingHiddenLandform(
+  event: { clientX: number; clientY: number },
+  options?: { includeSelectionLocked?: boolean },
+): NodeHitResult | null {
+  return pickNodeAtPointer(event, options) ?? pickHiddenLandformNodeAtPointer(event, options)
 }
 
 function handleViewportDoubleClickNode(nodeId: string): void {
@@ -19541,10 +19547,6 @@ function handleCanvasDoubleClick(event: MouseEvent) {
   if (transformControls?.dragging) {
     return
   }
-  if (event.ctrlKey || event.metaKey) {
-    return
-  }
-
   if (activeBuildTool.value === 'displayBoard') {
     if (displayBoardBuildTool.handleDoubleClick(event)) {
       clearDisplayBoardSizeHud()
@@ -19583,7 +19585,9 @@ function handleCanvasDoubleClick(event: MouseEvent) {
   }
 
   flushPendingScenePatchesForInteraction()
-  const hit = pickSceneNodeAtPointerIncludingHiddenLandform(event)
+  const hit = pickSceneNodeAtPointerIncludingHiddenLandform(event, {
+    includeSelectionLocked: Boolean(event.ctrlKey || event.metaKey),
+  })
   if (!hit) {
     return
   }
@@ -24507,7 +24511,7 @@ defineExpose({
             </div>
             <div class="camera-status-hud__hint-row">
               <span class="camera-status-hud__hint-label">操作</span>
-              <span class="camera-status-hud__hint-text">Escape 取消 · Delete 删除 · M 切换相机模式</span>
+              <span class="camera-status-hud__hint-text">Escape 取消 · Delete 删除 · D 编辑选中节点 · Ctrl/Cmd+双击 选中锁定节点 · M 切换相机模式</span>
             </div>
           </div>
         </Transition>
