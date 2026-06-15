@@ -283,6 +283,8 @@ export async function createGltfLoader(options: GltfParseOptions = {}): Promise<
 
   if (GLTF_DRACO_ENABLED) {
     const { DRACOLoader } = await safeImport(
+      // Keep the normal three loader import; the viewer's build config rewrites
+      // the supported adapter entry point when targeting mini-program bundles.
       () => import('three/examples/jsm/loaders/DRACOLoader.js'),
     );
     const dracoLoader = new DRACOLoader();

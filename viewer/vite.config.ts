@@ -49,6 +49,10 @@ const webStreamsPolyfillPath = fileURLToPath(new URL('./node_modules/web-streams
 const schemaMirrorPath = fileURLToPath(new URL('./src/pages/scenery/schema', import.meta.url)).replaceAll('\\', '/');
 const physicsCoreMirrorPath = fileURLToPath(new URL('./src/pages/scenery/physics-core', import.meta.url)).replaceAll('\\', '/');
 const sceneryPhysicsBridgeMirrorPath = fileURLToPath(new URL('./src/pages/scenery/physics-bridge', import.meta.url)).replaceAll('\\', '/');
+const sceneryThreeChunk = 'pages/scenery/chunks/three';
+const sceneryThreeExamplesChunk = 'pages/scenery/chunks/three-examples';
+const sceneryThreeCsmChunk = 'pages/scenery/chunks/three-csm';
+const sceneryThreeAdapterChunk = 'pages/scenery/chunks/three-adapter';
 const _require = createRequire(import.meta.url);
 let vueRuntimeAlias: string;
 try {
@@ -80,25 +84,31 @@ function resolveAssetFileName(assetInfo: { name?: string }): string | undefined 
 }
 
 function resolveSceneryChunkGroup(normalizedId: string): string | undefined {
+  // Keep the core three runtime and the adapter/runtime overrides in distinct chunks.
+  // Only the platform-specific entry points should land in the adapter chunk.
   if (normalizedId.includes('/node_modules/three/build/')) {
-    return 'pages/scenery/chunks/three';
+    return sceneryThreeChunk;
   }
   if (normalizedId.includes('/node_modules/three/examples/jsm/')) {
-    return 'pages/scenery/chunks/three-examples';
+    return sceneryThreeExamplesChunk;
   }
   if (normalizedId.includes('/node_modules/three-mesh-bvh/')) {
-    return 'pages/scenery/chunks/three';
+    return sceneryThreeChunk;
   }
   if (normalizedId.includes('/node_modules/three-csm/')) {
-    return 'pages/scenery/chunks/three-csm';
+    return sceneryThreeCsmChunk;
   }
   if (normalizedId.includes('/node_modules/@minisheep/three-platform-adapter/')) {
-    return 'pages/scenery/chunks/three-adapter';
+    return sceneryThreeAdapterChunk;
   }
   if (normalizedId.includes('/src/pages/scenery/schema/')) {
     return 'common/scenery-schema';
   }
   return undefined;
+}
+
+function isThreePlatformAdapterDep(normalizedId: string): boolean {
+  return normalizedId.includes('@minisheep/three-platform-adapter');
 }
 
 function resolveManualChunk(id: string): string | undefined {
@@ -137,11 +147,13 @@ function resolveManualChunk(id: string): string | undefined {
         normalizedId.includes('three/examples/jsm')
         || normalizedId.includes('three-mesh-bvh')
         || normalizedId.includes('three-csm')
-        || normalizedId.includes('@minisheep/three-platform-adapter')
+        || isThreePlatformAdapterDep(normalizedId)
         || normalizedId.includes('three')
         || (enableSceneryCannonDebugger && normalizedId.includes('@vladkrutenyuk/cannon-es-debugger-pro'))
       ) {
-        return resolveSceneryChunkGroup(normalizedId) ?? 'pages/scenery/chunks/three';
+        return resolveSceneryChunkGroup(normalizedId) ?? (
+          isThreePlatformAdapterDep(normalizedId) ? sceneryThreeAdapterChunk : sceneryThreeChunk
+        );
       }
       return resolveSceneryChunkGroup(normalizedId) ?? 'pages/scenery/common/vendor';
     }
@@ -173,7 +185,10 @@ function resolveManualChunk(id: string): string | undefined {
     || normalizedId.includes('/node_modules/three-csm/')
     || normalizedId.includes('/node_modules/@minisheep/three-platform-adapter/')
   ) {
-    return 'pages/scenery/chunks/three';
+    return normalizedId.includes('/src/pages/scenery/three-platform-adapter/')
+      || normalizedId.includes('/node_modules/@minisheep/three-platform-adapter/')
+      ? sceneryThreeAdapterChunk
+      : sceneryThreeChunk;
   }
 
   if (
@@ -231,8 +246,8 @@ function resolveManualChunk(id: string): string | undefined {
 export default {
   define: {
     __HARMONY_SCENERY_CANNON_DEBUGGER_ENABLED__: JSON.stringify(process.env.NODE_ENV !== 'production'),
-    'import.meta.env.VITE_SCENERY_ENABLE_GLTF_DRACO': JSON.stringify('false'),
-    'import.meta.env.VITE_SCENERY_ENABLE_GLTF_KTX2': JSON.stringify('false'),
+    'import.meta.env.VITE_SCENERY_ENABLE_GLTF_DRACO': JSON.stringify('true'),
+    'import.meta.env.VITE_SCENERY_ENABLE_GLTF_KTX2': JSON.stringify('true'),
   },
   optimizeDeps: {
     exclude: sceneOptimizerExcludes,
@@ -409,7 +424,9 @@ export default {
     visualizer({
       emitFile: true,
     }),
-    // Keep adapter-emitted workers/wasms inside the scenery package boundary.
+    // Adapter-generated workers/wasms stay inside the scenery package boundary.
+    // The plugin only rewrites supported three example entry points and emits
+    // the corresponding runtime assets; the core three runtime remains intact.
     threePlatformAdapter({
       assetsOutput: {
         worker: 'pages/scenery/workers',

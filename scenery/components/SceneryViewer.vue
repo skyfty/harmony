@@ -1374,14 +1374,14 @@ async function loadRgbETextureFromUrl(url: string, manager?: THREE.LoadingManage
 }
 
 
-async function loadKtx2TextureFromUrl(url: string, manager?: THREE.LoadingManager): Promise<THREE.DataTexture> {
+async function loadKtx2TextureFromUrl(url: string, manager?: THREE.LoadingManager): Promise<THREE.Texture> {
   const renderer = createKtx2SupportRenderer()
-    try {
-      const loader = await createKtx2Loader(renderer, { manager: options.manager, transcoderPath: FAST_KTX2_TRANSCODER_PATH })
-      return await loader.loadAsync(normalized)
-    } finally {
-      disposeKtx2SupportRenderer(renderer)
-    }
+  try {
+    const loader = await createKtx2Loader(renderer, { transcoderPath: FAST_KTX2_TRANSCODER_PATH })
+    return await loader.loadAsync(url);
+  } finally {
+    disposeKtx2SupportRenderer(renderer)
+  }
 }
 
 
@@ -15698,10 +15698,10 @@ async function loadEnvironmentTextureFromAsset(
     return null;
   }
   const extension = inferEnvironmentAssetExtension(assetId, resolve);
-    const mimeType = resolve.mimeType?.toLowerCase() ?? '';
-    const dispose = resolve.dispose;
-    try {
-      if (isKtx2EnvironmentTexture(extension, mimeType)) {
+  const mimeType = resolve.mimeType?.toLowerCase() ?? '';
+  const dispose = resolve.dispose;
+  try {
+    if (isKtx2EnvironmentTexture(extension, mimeType)) {
       const texture = await loadKtx2TextureFromUrl(resolve.url);
       texture.mapping = THREE.CubeUVReflectionMapping;
       texture.needsUpdate = true;

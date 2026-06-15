@@ -23,6 +23,8 @@ let rgbeLoaderClassPromise: Promise<RGBELoaderClass> | null = null;
 
 async function createRgbELoader(manager?: THREE.LoadingManager): Promise<RGBELoader> {
   if (!rgbeLoaderClassPromise) {
+    // RGBE loading stays on the standard three examples module; only the
+    // platform-sensitive loader entry points are overridden in the viewer build.
     rgbeLoaderClassPromise = import('three/examples/jsm/loaders/RGBELoader.js').then(
       (module) => module.RGBELoader as RGBELoaderClass,
     );

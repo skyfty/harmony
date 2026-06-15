@@ -231,8 +231,8 @@ function resolveManualChunk(id: string): string | undefined {
 export default {
   define: {
     __HARMONY_SCENERY_CANNON_DEBUGGER_ENABLED__: JSON.stringify(process.env.NODE_ENV !== 'production'),
-    'import.meta.env.VITE_SCENERY_ENABLE_GLTF_DRACO': JSON.stringify('false'),
-    'import.meta.env.VITE_SCENERY_ENABLE_GLTF_KTX2': JSON.stringify('false'),
+    'import.meta.env.VITE_SCENERY_ENABLE_GLTF_DRACO': JSON.stringify('true'),
+    'import.meta.env.VITE_SCENERY_ENABLE_GLTF_KTX2': JSON.stringify('true'),
   },
   optimizeDeps: {
     exclude: sceneOptimizerExcludes,
