@@ -157,7 +157,6 @@ import {
   releaseBillboardInstance,
   subscribeBillboardInstancedMeshes,
 } from '@schema/instancedBillboardCache'
-import { resolveLodRenderTarget } from '@schema/components'
 // duplicate import removed
 import {
   clampSceneNodeInstanceLayout,
@@ -187,6 +186,7 @@ import {
 import { applyMirroredScaleToObject, syncMirroredMeshMaterials } from '@schema/mirror'
 import { createPrimitiveMesh } from '@schema/import'
 import { PROTAGONIST_NODE_ID } from '@schema/core'
+import { resolveEditorInstancedLodTarget } from '@/utils/instancedLodTarget'
 
 
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
@@ -9648,34 +9648,22 @@ type InstancedLodTarget = {
 }
 
 function resolveDesiredLodTarget(node: SceneNode, object: THREE.Object3D): InstancedLodTarget | null {
-  // 兼容 instanceLayout 模板 assetId
-  const templateAssetIdRaw = object.userData?.__harmonyInstanceLayoutTemplateAssetId
-  const templateAssetId = typeof templateAssetIdRaw === 'string' ? templateAssetIdRaw.trim() : ''
-  if (templateAssetId) {
-    return { kind: 'model', assetId: templateAssetId }
-  }
-  // LOD 组件
-  const component = node.components?.[LOD_COMPONENT_TYPE] as SceneNodeComponentState<LodComponentProps> | undefined
-  if (component && component.enabled) {
-    const props = clampLodComponentProps(component.props)
-    // FIX: resolveLodRenderTarget expects a single LodLevelDefinition, not an array
-    const target = props.levels && props.levels.length > 0 ? resolveLodRenderTarget(props.levels[0]) : undefined
-    if (target && target.kind && target.assetId) {
-      return { kind: target.kind, assetId: target.assetId }
-    }
-  }
-  // 兜底：sourceAssetId
-  const sourceAssetId = typeof node.sourceAssetId === 'string' ? node.sourceAssetId.trim() : ''
-  if (sourceAssetId) {
-    return { kind: 'model', assetId: sourceAssetId }
-  }
-  // 兜底：当前 assetId
-  const currentAssetIdRaw = object.userData?.instancedAssetId
-  const currentAssetId = typeof currentAssetIdRaw === 'string' ? currentAssetIdRaw.trim() : ''
-  if (currentAssetId) {
-    return { kind: 'model', assetId: currentAssetId }
-  }
-  return null
+  return resolveEditorInstancedLodTarget({
+    node,
+    object,
+    worldPosition: {
+      x: object.position.x,
+      y: object.position.y,
+      z: object.position.z,
+    },
+    cameraPosition: camera
+      ? {
+        x: camera.position.x,
+        y: camera.position.y,
+        z: camera.position.z,
+      }
+      : null,
+  })
 }
 
 function applyInstancedLodSwitch(nodeId: string, object: THREE.Object3D, target: InstancedLodTarget): void {

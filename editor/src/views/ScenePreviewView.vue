@@ -26,7 +26,6 @@ import {
 	createRuntimePrefabDocument,
 	parseRuntimePrefabData,
   loadSkyCubeTexture,
-	resolveInstancedLodTargetFromSnapshot,
 	isRuntimeHiddenInPreview,
 	type InstancedLodTarget,
 } from '@schema/core'
@@ -66,6 +65,7 @@ import {
 	type PhysicsTransform,
 } from '@harmony/physics-core'
 import { createScenePreviewPhysicsBridge } from '@/physics/createScenePreviewPhysicsBridge'
+import { resolveEditorInstancedLodTarget } from '@/utils/instancedLodTarget'
  
 import {
 	applyMaterialOverrides,
@@ -3611,12 +3611,11 @@ function resolveLodComponent(
 	return component
 }
 
-function resolveDesiredLodTarget(node: SceneNode, object: THREE.Object3D): InstancedLodTarget {
+function resolveDesiredLodTarget(node: SceneNode, object: THREE.Object3D): InstancedLodTarget | null {
 	resolveInstancedProxyWorldCenter(object, instancedCullingWorldPosition)
-	return resolveInstancedLodTargetFromSnapshot({
-		sourceAssetId: typeof node.sourceAssetId === 'string' ? node.sourceAssetId : null,
-		instanceLayout: (node as unknown as { instanceLayout?: unknown }).instanceLayout,
-		lodProps: resolveLodComponent(node)?.props ?? null,
+	return resolveEditorInstancedLodTarget({
+		node,
+		object,
 		worldPosition: instancedCullingWorldPosition,
 		cameraPosition: camera?.position ?? null,
 	})
@@ -4064,11 +4063,15 @@ type InstancedLodRuntimeEntry = {
 }
 
 const instancedLodRuntimeEntryCache = new Map<string, InstancedLodRuntimeEntry>()
+const instancedLodRuntimeEntriesCache: InstancedLodRuntimeEntry[] = []
 let instancedLodRuntimeRevision = 0
+let instancedLodRuntimeEntriesCacheRevision = -1
 let instancedLodLastProcessedRevision = -1
 const instancedLodLastCameraProjectionMatrix = new Float32Array(16)
 const instancedLodLastCameraMatrixWorldInverse = new Float32Array(16)
 let instancedLodLastCameraStateValid = false
+let instancedLodUpdateInFlight = false
+let instancedLodUpdateQueued = false
 
 function clearInstancedLodRuntimeEntryCacheForNode(nodeId: string): void {
 	if (instancedLodRuntimeEntryCache.delete(nodeId)) {
@@ -4158,6 +4161,10 @@ function updateInstancedLodRuntimeEntryCacheForObject(object: THREE.Object3D): v
 }
 
 function collectInstancedLodRuntimeEntries(): InstancedLodRuntimeEntry[] {
+	if (instancedLodRuntimeEntriesCacheRevision === instancedLodRuntimeRevision) {
+		return instancedLodRuntimeEntriesCache
+	}
+
 	const entries: InstancedLodRuntimeEntry[] = []
 	nodeObjectMap.forEach((object, nodeId) => {
 		if (!object?.userData?.instancedAssetId) {
@@ -4170,7 +4177,10 @@ function collectInstancedLodRuntimeEntries(): InstancedLodRuntimeEntry[] {
 		}
 	})
 	entries.sort((a, b) => a.nodeId.localeCompare(b.nodeId))
-	return entries
+	instancedLodRuntimeEntriesCache.length = 0
+	instancedLodRuntimeEntriesCache.push(...entries)
+	instancedLodRuntimeEntriesCacheRevision = instancedLodRuntimeRevision
+	return instancedLodRuntimeEntriesCache
 }
 
 function areInstancedLodCameraMatricesUnchanged(camera: THREE.PerspectiveCamera): boolean {
@@ -4184,6 +4194,24 @@ function areInstancedLodCameraMatricesUnchanged(camera: THREE.PerspectiveCamera)
 			return false
 		}
 		if (matrixWorldInverse[i] !== instancedLodLastCameraMatrixWorldInverse[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+function areInstancedLodCameraMatricesEqualToSnapshot(
+	camera: THREE.PerspectiveCamera,
+	projectionSnapshot: Float32Array,
+	matrixWorldInverseSnapshot: Float32Array,
+): boolean {
+	const projectionMatrix = camera.projectionMatrix.elements
+	const matrixWorldInverse = camera.matrixWorldInverse.elements
+	for (let i = 0; i < 16; i += 1) {
+		if (projectionMatrix[i] !== projectionSnapshot[i]) {
+			return false
+		}
+		if (matrixWorldInverse[i] !== matrixWorldInverseSnapshot[i]) {
 			return false
 		}
 	}
@@ -4219,16 +4247,22 @@ function buildInstancedLodCullingRequestForFrame(
 	})
 }
 
-function updateInstancedCullingAndLod(): void {
-	if (!camera) {
+async function updateInstancedCullingAndLod(camera: THREE.PerspectiveCamera | null): Promise<void> {
+	if (instancedLodUpdateInFlight) {
+		instancedLodUpdateQueued = true
 		return
 	}
-	if (
+	instancedLodUpdateInFlight = true
+	try {
+		if (!camera) {
+			return
+		}
+		if (
 		instancedLodLastProcessedRevision === instancedLodRuntimeRevision
 		&& areInstancedLodCameraMatricesUnchanged(camera)
-	) {
-		return
-	}
+		) {
+			return
+		}
 	const cullingProjView = new THREE.Matrix4()
 	const cullingFrustum = new THREE.Frustum()
 	cullingProjView.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)
@@ -4275,8 +4309,17 @@ function updateInstancedCullingAndLod(): void {
 	}
 
 	const lodEntries = collectInstancedLodRuntimeEntries()
+	const plannedRevision = instancedLodRuntimeRevision
 	const cullingRequest = buildInstancedLodCullingRequestForFrame(camera, lodEntries)
+	const cullingRequestProjectionMatrix = new Float32Array(cullingRequest.cameraProjectionMatrix)
+	const cullingRequestMatrixWorldInverse = new Float32Array(cullingRequest.cameraMatrixWorldInverse)
 	const cullingResult = dispatchInstancedLodCullingRequestWithCandidates(cullingRequest, lodEntries, instancedLodRuntimeRevision)
+	if (
+		!areInstancedLodCameraMatricesEqualToSnapshot(camera, cullingRequestProjectionMatrix, cullingRequestMatrixWorldInverse)
+		|| instancedLodRuntimeRevision !== plannedRevision
+	) {
+		return
+	}
 	const visibleIndices = cullingResult.visibleIndices
 	const visibleCount = visibleIndices.length
 	let visibleCursor = 0
@@ -4354,7 +4397,7 @@ function updateInstancedCullingAndLod(): void {
 			: null
 		targetCursor += 1
 		const desiredTarget = workerTarget ?? resolveDesiredLodTarget(node, object)
-		if (!desiredTarget.assetId || !desiredTarget.key) {
+		if (!desiredTarget || !desiredTarget.assetId || !desiredTarget.key) {
 			return
 		}
 		if (entry.lastVisible === true && entry.appliedTargetKey === desiredTarget.key && entry.appliedTransformRevision === entry.transformRevision) {
@@ -4412,9 +4455,16 @@ function updateInstancedCullingAndLod(): void {
 		entry.appliedTargetKey = desiredTarget.key
 		entry.appliedTransformRevision = entry.transformRevision
 	})
-	instancedLodVisibleCount.value = lodVisibleCount
-	instancedLodLastProcessedRevision = instancedLodRuntimeRevision
-	rememberInstancedLodCameraMatrices(camera)
+		instancedLodVisibleCount.value = lodVisibleCount
+		instancedLodLastProcessedRevision = instancedLodRuntimeRevision
+		rememberInstancedLodCameraMatrices(camera)
+	} finally {
+		instancedLodUpdateInFlight = false
+		if (instancedLodUpdateQueued) {
+			instancedLodUpdateQueued = false
+			void updateInstancedCullingAndLod(camera)
+		}
+	}
 }
 
 function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
@@ -9568,7 +9618,7 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
 		terrainScatterRuntime.update(activeCamera, resolveGroundMeshObject)
 		const nowMs = Date.now()
 		if (scenePreviewPerf.shouldRunInstancedCulling(activeCamera, nowMs)) {
-			updateInstancedCullingAndLod()
+			void updateInstancedCullingAndLod(activeCamera)
 		}
 		updateBehaviorProximity()
 	}
