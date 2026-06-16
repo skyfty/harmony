@@ -796,14 +796,14 @@ async function applyRigidbodyMetadata(nodes: SceneNode[], candidates: RigidbodyE
       }
       continue
     }
-    let shape: RigidbodyPhysicsShape | null = null
+    const props = clampRigidbodyComponentProps(entry.component.props as Partial<RigidbodyComponentProps>)
+    const existingRigidbodyMetadata = entry.component.metadata?.[RIGIDBODY_METADATA_KEY] as RigidbodyComponentMetadata | undefined
     const hostWorldTransform = worldTransformMap.get(entry.node.id) ?? null
     const sourceWorldTransform = worldTransformMap.get(samplingNode.id) ?? hostWorldTransform
     const samplingObject = await buildRigidbodySamplingObject(samplingNode, assetCacheStore, groundNode, sourceWorldTransform)
     if (!samplingObject) {
       continue
     }
-    const props = clampRigidbodyComponentProps(entry.component.props as Partial<RigidbodyComponentProps>)
     const nodeScale = hostWorldTransform
       ? {
           x: Math.max(1e-4, Math.abs(hostWorldTransform.scale.x) || 1),
@@ -811,6 +811,8 @@ async function applyRigidbodyMetadata(nodes: SceneNode[], candidates: RigidbodyE
           z: Math.max(1e-4, Math.abs(hostWorldTransform.scale.z) || 1),
         }
       : resolveNodeScaleFactors(entry.node)
+
+    let shape: RigidbodyPhysicsShape | null = null
 
     let generatedConvexSimplify: RigidbodyConvexSimplifyConfig | undefined
     const buildConvex = () => {
@@ -865,9 +867,6 @@ async function applyRigidbodyMetadata(nodes: SceneNode[], candidates: RigidbodyE
     if (!shape) {
       continue
     }
-    console.log(
-      `[SceneExportRigidbody] nodeId=${JSON.stringify(entry.node.id)} samplingNodeId=${JSON.stringify(samplingNode.id)} bodyType=${JSON.stringify(props.bodyType)} colliderType=${JSON.stringify(props.colliderType)} nodeScale=${JSON.stringify(nodeScale)} worldTransformScale=${JSON.stringify(hostWorldTransform ? { x: hostWorldTransform.scale.x, y: hostWorldTransform.scale.y, z: hostWorldTransform.scale.z } : null)} shapeKind=${JSON.stringify(shape.kind)} shapeApplyScale=${String(shape.applyScale === true)} shapeOffset=${JSON.stringify(shape.offset ?? null)}`,
-    )
     entry.component.metadata = mergeRigidbodyMetadata(
       entry.component.metadata,
       shape,
