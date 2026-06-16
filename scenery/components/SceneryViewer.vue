@@ -657,6 +657,7 @@ import { rebuildSceneNodeIndex, resolveSceneNodeById, resolveSceneParentNodeId }
 import { resolveEnabledComponentState } from '@harmony/schema/componentRuntimeUtils';
 import { createGradientBackgroundDome, disposeGradientBackgroundDome, type GradientBackgroundDome } from '@harmony/schema/gradientBackground';
 import { disposeSkyCubeTexture, loadSkyCubeTexture, extractSkycubeZipFacesAsync, type ExtractSkycubeZipFacesResult } from '@harmony/schema/skyCubeTexture';
+import { configureScenerySharedWorkers } from '../workers/sceneryWorkerBootstrap'
 import {
   canNodeUseRuntimeModelInstancing,
   collectRuntimeModelNodesByAssetId,
@@ -690,6 +691,7 @@ import type {
   SceneResourceSummaryEntry,
   Vector3Like,
 } from '@harmony/schema/core';
+configureScenerySharedWorkers();
 import {
   isRuntimeHiddenInPreview,
   deserializeCompiledGroundManifest,
@@ -1359,7 +1361,7 @@ async function loadRgbETextureFromUrl(url: string, manager?: THREE.LoadingManage
 async function loadKtx2TextureFromUrl(url: string, manager?: THREE.LoadingManager): Promise<THREE.Texture> {
   const render = createKtx2SupportRenderer();
   try {
-    const ktx2Loader = await createKtx2Loader(render, {loader:requestBinaryFromUrl, manager, transcoderPath: FAST_KTX2_TRANSCODER_PATH});
+    const ktx2Loader = await createKtx2Loader(render, { manager, transcoderPath: FAST_KTX2_TRANSCODER_PATH });
     return ktx2Loader.loadAsync(url);
   } finally {
     disposeKtx2SupportRenderer(render);

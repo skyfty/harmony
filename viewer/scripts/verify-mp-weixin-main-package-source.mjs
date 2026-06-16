@@ -28,15 +28,12 @@ const forbiddenPatterns = [
   `from '${ammoWasmImportPath}'`,
   `from "${ammoWasmImportPath}"`,
   '@harmony/schema',
+  '@harmony/scenery',
   '@harmony/physics-ammo',
   '@harmony/physics-cannon',
   '@harmony/physics-bridge/wechat',
   'uni_modules/scenery',
 ];
-
-const allowedMainPackageImports = new Set([
-  '@harmony/schema',
-]);
 
 const excludedDirectories = new Set([
   resolve(viewerRoot, 'src/pages/scenery'),
@@ -76,13 +73,6 @@ for (const absolutePath of sourceFiles) {
   const relativePath = absolutePath.slice(viewerRoot.length + 1).replaceAll('\\', '/');
 
   for (const pattern of forbiddenPatterns) {
-    if (
-      pattern === '@harmony/schema'
-      && relativePath === 'src/main.ts'
-      && [...allowedMainPackageImports].some((allowedPattern) => content.includes(allowedPattern))
-    ) {
-      continue;
-    }
     if (content.includes(pattern)) {
       hits.push(`${relativePath} -> ${pattern}`);
     }

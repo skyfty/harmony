@@ -27,6 +27,7 @@
   "include": [
     "*.d.ts",
     "*.ts",
+    "workers/**/*.ts",
     "behaviors/**/*.ts",
     "components/**/*.ts"
   ],

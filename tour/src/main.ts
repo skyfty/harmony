@@ -7,7 +7,6 @@ import { createPinia } from 'pinia';
 import App from './App.vue';
 import { installShareSupport } from '@/services/share';
 import { configureHarmonyRuntime } from '@harmony/utils';
-import { configureScenerySharedWorkers } from '@harmony/schema';
 
 configureHarmonyRuntime({
   http: {
@@ -23,10 +22,6 @@ configureHarmonyRuntime({
   scenery: {
     enableGltfDraco: String(import.meta.env.VITE_SCENERY_ENABLE_GLTF_DRACO ?? '').trim().toLowerCase() !== 'false',
   },
-});
-
-configureScenerySharedWorkers({
-  baseUrl: import.meta.url,
 });
 
 export function createApp() {

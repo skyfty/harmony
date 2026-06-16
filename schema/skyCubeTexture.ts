@@ -103,10 +103,26 @@ type SkyCubeZipExtractorWorkerResponse =
       message: string
     }
 
-let skyCubeZipExtractorWorkerFactory: SkyCubeZipExtractorWorkerFactory | null = null
+type SkyCubeTextureRuntimeState = {
+  skyCubeZipExtractorWorkerFactory: SkyCubeZipExtractorWorkerFactory | null
+}
+
+const SKY_CUBE_TEXTURE_RUNTIME_STATE_KEY = '__harmony_schema_skycube_texture_runtime_state__'
+
+function getSkyCubeTextureRuntimeState(): SkyCubeTextureRuntimeState {
+  const globalObject = globalThis as typeof globalThis & {
+    [SKY_CUBE_TEXTURE_RUNTIME_STATE_KEY]?: SkyCubeTextureRuntimeState
+  }
+  if (!globalObject[SKY_CUBE_TEXTURE_RUNTIME_STATE_KEY]) {
+    globalObject[SKY_CUBE_TEXTURE_RUNTIME_STATE_KEY] = {
+      skyCubeZipExtractorWorkerFactory: null,
+    }
+  }
+  return globalObject[SKY_CUBE_TEXTURE_RUNTIME_STATE_KEY]!
+}
 
 export function configureSkyCubeZipExtractorWorkerFactory(factory: SkyCubeZipExtractorWorkerFactory | null): void {
-  skyCubeZipExtractorWorkerFactory = factory
+  getSkyCubeTextureRuntimeState().skyCubeZipExtractorWorkerFactory = factory
 }
 
 const DEFAULT_PLACEHOLDER_PNG =
@@ -277,18 +293,16 @@ export function extractSkycubeZipFaces(zip: ArrayBuffer | Uint8Array): ExtractSk
 }
 
 export async function extractSkycubeZipFacesAsync(zip: ArrayBuffer | Uint8Array): Promise<ExtractSkycubeZipFacesResult> {
-  const factory = skyCubeZipExtractorWorkerFactory
-  if (typeof Worker !== 'undefined' && typeof factory === 'function') {
-    try {
-      const worker = factory()
-      if (worker) {
-        return await extractSkycubeZipFacesViaWorker(worker, zip)
-      }
-    } catch {
-      // Fall back to the synchronous implementation below.
-    }
+  const factory = getSkyCubeTextureRuntimeState().skyCubeZipExtractorWorkerFactory
+  if (typeof Worker === 'undefined' || typeof factory !== 'function') {
+    throw new Error('SkyCube ZIP worker 未配置')
   }
-  return extractSkycubeZipFaces(zip)
+  const worker = factory()
+  if (!worker) {
+    throw new Error('SkyCube ZIP worker 创建失败')
+  }
+  console.info('[harmony-schema][skycube-zip] using worker extractor')
+  return await extractSkycubeZipFacesViaWorker(worker, zip)
 }
 
 async function extractSkycubeZipFacesViaWorker(

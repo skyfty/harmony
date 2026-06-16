@@ -1,4 +1,4 @@
-import { extractSkycubeZipFaces } from '../skyCubeTexture'
+import { extractSkycubeZipFaces } from '@harmony/schema/skyCubeTexture'
 
 type ExtractRequest = {
   type: 'extract'
@@ -31,6 +31,8 @@ function post(message: ExtractResponse, transfer?: Transferable[]) {
   ;(self as unknown as Worker).postMessage(message, transfer ?? [])
 }
 
+console.info('[harmony-scenery][skycube-zip][worker] module loaded')
+
 ;(self as unknown as Worker).addEventListener('message', (event: MessageEvent<ExtractRequest>) => {
   const message = event.data
   if (!message || typeof message !== 'object' || message.type !== 'extract') {
@@ -38,6 +40,10 @@ function post(message: ExtractResponse, transfer?: Transferable[]) {
   }
 
   try {
+    console.info('[harmony-scenery][skycube-zip][worker] start', {
+      requestId: message.requestId,
+      zipBytes: message.zip.byteLength,
+    })
     const extracted = extractSkycubeZipFaces(message.zip)
     const transfer: Transferable[] = []
     const facesInOrder = extracted.facesInOrder.map((face) => {
@@ -65,7 +71,16 @@ function post(message: ExtractResponse, transfer?: Transferable[]) {
       },
       transfer,
     )
+    console.info('[harmony-scenery][skycube-zip][worker] complete', {
+      requestId: message.requestId,
+      faceCount: facesInOrder.length,
+      missingFaces: extracted.missingFaces.length,
+    })
   } catch (error) {
+    console.warn('[harmony-scenery][skycube-zip][worker] error', {
+      requestId: message.requestId,
+      message: error instanceof Error ? error.message : String(error),
+    })
     post({
       type: 'error',
       requestId: message.requestId,

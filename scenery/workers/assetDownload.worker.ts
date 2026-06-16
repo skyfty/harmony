@@ -48,6 +48,8 @@ type OutgoingMessage = ProgressMessage | ResultMessage | ErrorMessage | ReadyMes
 
 const inFlight = new Map<number, AbortController>()
 
+console.info('[harmony-scenery][asset-download][worker] module loaded')
+
 function post(message: OutgoingMessage, transfer?: Transferable[]) {
   ;(self as unknown as Worker).postMessage(message, transfer ?? [])
 }
@@ -187,6 +189,11 @@ async function downloadViaFetch(
     return
   }
 
+  console.info('[harmony-scenery][asset-download][worker] start', {
+    requestId,
+    candidateCount: urlCandidates.length,
+  })
+
   const controller = new AbortController()
   inFlight.set(requestId, controller)
 
@@ -208,11 +215,21 @@ async function downloadViaFetch(
       },
       [result.buffer],
     )
+    console.info('[harmony-scenery][asset-download][worker] complete', {
+      requestId,
+      url: result.url,
+    })
   } catch (error) {
     inFlight.delete(requestId)
 
     const messageText = controller.signal.aborted ? 'Aborted' : error instanceof Error ? error.message : String(error)
 
+    console.warn('[harmony-scenery][asset-download][worker] error', {
+      requestId,
+      message: messageText,
+    })
     post({ type: 'error', requestId, message: messageText })
   }
 })
+
+export {}

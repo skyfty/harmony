@@ -14405,13 +14405,14 @@ async function applyBackgroundSettings(background: EnvironmentSettings['backgrou
       const { urls: faceUrls, dispose: disposeFaceUrls } = buildObjectUrlsFromSkycubeZipFaces(extracted.facesInOrder)
 
       const loaded = await loadSkyCubeTexture(faceUrls)
-      if (!loaded.texture || token !== backgroundLoadToken) {
+      if (token !== backgroundLoadToken) {
         disposeSkyCubeTexture(loaded.texture)
         disposeFaceUrls()
-        if (loaded.error) {
-          console.warn('[SceneViewport] Failed to load SkyCube background from zip', loaded.error)
-        }
         return false
+      }
+      if (!loaded.texture) {
+        disposeFaceUrls()
+        throw new Error(loaded.error || 'Failed to load SkyCube background from zip')
       }
 
       disposeBackgroundResources()

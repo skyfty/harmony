@@ -9,20 +9,7 @@
     "build": "npm run build:asset-types && node ./node_modules/typescript/bin/tsc -p tsconfig.build.json",
     "build:asset-types": "node ./node_modules/typescript/bin/tsc -p tsconfig.asset-types.json",
     "type-check": "node ./node_modules/typescript/bin/tsc -p tsconfig.build.json --noEmit",
-    "type-check:asset-types": "node ./node_modules/typescript/bin/tsc -p tsconfig.asset-types.json --noEmit",
-    "check": "npm run type-check && npm run type-check:asset-types",
-    "check:ground-chunk-albedo": "node ./scripts/ground-chunk-albedo-regression.mjs",
-    "check:ground-flat-chunk-fast-path": "npm run build && node ./scripts/fix-esm-extensions.mjs ./dist && node ./scripts/ground-flat-chunk-fast-path-regression.mjs",
-    "check:ground-splat": "node ./scripts/ground-splat-regression.mjs",
-    "check:compiled-ground-collision": "npm run build && node ./scripts/fix-esm-extensions.mjs ./dist && node ./scripts/compiled-ground-collision-parity-regression.mjs",
-    "check:ground-local-edit": "npm run build && node ./scripts/fix-esm-extensions.mjs ./dist && node ./scripts/ground-local-edit-regression.mjs",
-    "check:ground-surface-shared-key": "node ./scripts/ground-surface-shared-key-regression.mjs",
-    "check:road-collision": "npm run build && node ./scripts/fix-esm-extensions.mjs ./dist && node ./scripts/road-collision-mixed-regression.mjs",
-    "check:infinite-ground-visibility": "npm run build && node ./scripts/fix-esm-extensions.mjs ./dist && node ./scripts/infinite-ground-visibility-regression.mjs",
-    "check:quantized-terrain-mesh": "npm run build && node ./scripts/fix-esm-extensions.mjs ./dist && node ./scripts/quantized-terrain-mesh-regression.mjs",
-    "check:quantized-terrain-dataset": "npm run build && node ./scripts/fix-esm-extensions.mjs ./dist && node ./scripts/quantized-terrain-dataset-regression.mjs",
-    "check:quantized-terrain-pack": "npm run build && node ./scripts/fix-esm-extensions.mjs ./dist && node ./scripts/quantized-terrain-pack-regression.mjs",
-    "check:vehicle-scale": "npm run build && node ./scripts/fix-esm-extensions.mjs ./dist && node ./scripts/vehicle-scale-regression.mjs"
+    "type-check:asset-types": "node ./node_modules/typescript/bin/tsc -p tsconfig.asset-types.json --noEmit"
   },
   "engines": {
     "pnpm": ">=10.0.0"

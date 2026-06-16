@@ -69,6 +69,7 @@ type QueuedTask = {
 };
 
 const DEFAULT_POOL_SIZE = 2;
+const assetDownloadWorkerPoolModuleTag = Math.random().toString(36).slice(2, 10);
 
 function normalizePoolSize(): number {
   const hardwareConcurrency = (globalThis as unknown as { navigator?: { hardwareConcurrency?: number } }).navigator?.hardwareConcurrency;
@@ -425,6 +426,11 @@ export function createWorkerAssetBlobDownloader(
     if (!pool) {
       pool = new AssetDownloadWorkerPool(factory, poolSize);
     }
+    console.info('[harmony-schema][asset-download] dispatching request to worker pool', {
+      moduleTag: assetDownloadWorkerPoolModuleTag,
+      candidateCount: urlCandidates.length,
+      poolSize,
+    })
     return await pool.submit(urlCandidates, controller, onProgress);
   };
 }

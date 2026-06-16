@@ -8,7 +8,10 @@ import { useAuthStore } from '@/stores/authStore'
 import './style.css'
 import VueViewer from 'v-viewer'
 import 'viewerjs/dist/viewer.css'
-import { configureScenerySharedWorkers } from '@schema'
+import { configureScenerySharedWorkers } from './workers/sceneryWorkerBootstrap'
+
+console.info('[editor] configuring scenery shared workers')
+configureScenerySharedWorkers()
 
 async function preloadRuntimeConfig() {
 	try {
@@ -31,10 +34,6 @@ async function preloadRuntimeConfig() {
 	} catch (err) {
 		console.warn('[editor] runtime config preload failed', err)
 	}
-
-	configureScenerySharedWorkers({
-		baseUrl: import.meta.url,
-	})
 
 	const app = createApp(App)
 	const pinia = createPinia()

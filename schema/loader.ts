@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { createKtx2Loader, createKtx2SupportRenderer, disposeKtx2SupportRenderer, FAST_KTX2_TRANSCODER_PATH } from './ktx2Loader';
 import { KTX2Loader } from 'three/examples/jsm/loaders/KTX2Loader.js'
+import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js'
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 
 export type LoaderProgressPayload = {
   loaded: number;
@@ -38,12 +40,6 @@ type DataTransferItemWithEntry = DataTransferItem & {
 };
 
 type FilesMap = Record<string, File>;
-
-
-async function safeImport<T>(importer: () => Promise<T>): Promise<T> {
-
-  return importer();
-}
 
 function toError(error: unknown, fallbackMessage: string): Error {
   if (error instanceof Error) {
@@ -265,16 +261,8 @@ export interface ParsedGltfResult {
 
 const DEFAULT_DRACO_DECODER_PATH = '../examples/jsm/libs/draco/gltf/';
 export async function createGltfLoader(options: GltfParseOptions = {}): Promise<any> {
-  const { GLTFLoader } = await safeImport(
-    () => import('three/examples/jsm/loaders/GLTFLoader.js'),
-  );
   const loader = new GLTFLoader(options.manager);
 
-  const { DRACOLoader } = await safeImport(
-    // Keep the normal three loader import; the viewer's build config rewrites
-    // the supported adapter entry point when targeting mini-program bundles.
-    () => import('three/examples/jsm/loaders/DRACOLoader.js'),
-  );
   const dracoLoader = new DRACOLoader();
   dracoLoader.setDecoderPath(options.dracoDecoderPath ?? DEFAULT_DRACO_DECODER_PATH);
   loader.setDRACOLoader(dracoLoader);
@@ -288,7 +276,5 @@ export async function createGltfLoader(options: GltfParseOptions = {}): Promise<
   if (!options.ktx2Renderer) {
     disposeKtx2SupportRenderer(renderer);
   }
-
-  // loader.setMeshoptDecoder(MeshoptDecoder);
   return loader;
 }
