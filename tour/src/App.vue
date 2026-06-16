@@ -1,7 +1,15 @@
+<template>
+  <view class="app-root">
+    <MiniPrivacyConsent />
+    <slot />
+  </view>
+</template>
+
 <script setup lang="ts">
 import { onLaunch, onHide } from "@dcloudio/uni-app";
 import { initializeMiniAuth } from '@/api/mini/session';
 import { installMiniAuthRuntime } from '@/services/miniAuth/runtime'
+import MiniPrivacyConsent from '@/components/MiniPrivacyConsent.vue'
 
 installMiniAuthRuntime()
 

@@ -42,6 +42,7 @@
     },
     "mp-weixin" : {
         "appid" : "",
+        "__usePrivacyCheck__" : true,
         "optimization" : {
             "subPackages" : true
         },

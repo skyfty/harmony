@@ -8,8 +8,7 @@ import { useAuthStore } from '@/stores/authStore'
 import './style.css'
 import VueViewer from 'v-viewer'
 import 'viewerjs/dist/viewer.css'
-import { configureAssetBlobDownloader } from '@schema/assetCache'
-import { createWorkerAssetBlobDownloader } from '@/utils/assetDownloadWorkerPool'
+import { configureScenerySharedWorkers } from '@schema'
 
 async function preloadRuntimeConfig() {
 	try {
@@ -33,18 +32,9 @@ async function preloadRuntimeConfig() {
 		console.warn('[editor] runtime config preload failed', err)
 	}
 
-	configureAssetBlobDownloader(
-		createWorkerAssetBlobDownloader(() => {
-			if (typeof Worker === 'undefined') {
-				return null
-			}
-			try {
-				return new Worker(new URL('./workers/assetDownload.worker.ts', import.meta.url), { type: 'module' })
-			} catch {
-				return null
-			}
-		}),
-	)
+	configureScenerySharedWorkers({
+		baseUrl: import.meta.url,
+	})
 
 	const app = createApp(App)
 	const pinia = createPinia()

@@ -14,6 +14,7 @@ import {
   deleteSceneSpotComment,
 } from '@/controllers/miniprogram/sceneSpotController'
 import { listHotSpotsPublic, listFeaturedSpotsPublic } from '@/controllers/miniprogram/hotFeaturedController'
+import { getMiniAppPolicies } from '@/controllers/miniprogram/miniAppPolicyController'
 import { listHotEvents } from '@/controllers/miniprogram/eventController'
 import {
   listUserCoupons,
@@ -125,6 +126,7 @@ miniRouter.get('/hot-spots', optionalMiniAuth, listHotSpotsPublic)
 miniRouter.get('/featured-spots', optionalMiniAuth, listFeaturedSpotsPublic)
 
 miniRouter.get('/events/hot', optionalMiniAuth, listHotEvents)
+miniRouter.get('/mini-apps/policies', optionalMiniAuth, getMiniAppPolicies)
 miniRouter.post('/analytics/events', optionalMiniAuth, trackAnalyticsEvent)
 
 // products can be read anonymously; login adds purchased/state

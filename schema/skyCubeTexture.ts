@@ -70,6 +70,45 @@ export interface ExtractSkycubeZipFacesResult {
   discarded: Array<{ key: SkyCubeFaceKey; filename: string }>
 }
 
+export type SkyCubeZipExtractorWorkerFactory = () => Worker | null
+
+type SerializedSkycubeZipFaceBytes = {
+  key: SkyCubeFaceKey
+  filename: string
+  bytes: ArrayBuffer
+  mimeType: string | null
+}
+
+type SkyCubeZipExtractorWorkerResult = {
+  facesInOrder: Array<SerializedSkycubeZipFaceBytes | null>
+  missingFaces: SkyCubeFaceKey[]
+  discarded: Array<{ key: SkyCubeFaceKey; filename: string }>
+}
+
+type SkyCubeZipExtractorWorkerRequest = {
+  type: 'extract'
+  requestId: number
+  zip: ArrayBuffer
+}
+
+type SkyCubeZipExtractorWorkerResponse =
+  | {
+      type: 'result'
+      requestId: number
+      result: SkyCubeZipExtractorWorkerResult
+    }
+  | {
+      type: 'error'
+      requestId: number
+      message: string
+    }
+
+let skyCubeZipExtractorWorkerFactory: SkyCubeZipExtractorWorkerFactory | null = null
+
+export function configureSkyCubeZipExtractorWorkerFactory(factory: SkyCubeZipExtractorWorkerFactory | null): void {
+  skyCubeZipExtractorWorkerFactory = factory
+}
+
 const DEFAULT_PLACEHOLDER_PNG =
   'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMB/6X9o0wAAAAASUVORK5CYII='
 
@@ -234,6 +273,103 @@ export function extractSkycubeZipFaces(zip: ArrayBuffer | Uint8Array): ExtractSk
     facesInOrder,
     missingFaces,
     discarded,
+  }
+}
+
+export async function extractSkycubeZipFacesAsync(zip: ArrayBuffer | Uint8Array): Promise<ExtractSkycubeZipFacesResult> {
+  const factory = skyCubeZipExtractorWorkerFactory
+  if (typeof Worker !== 'undefined' && typeof factory === 'function') {
+    try {
+      const worker = factory()
+      if (worker) {
+        return await extractSkycubeZipFacesViaWorker(worker, zip)
+      }
+    } catch {
+      // Fall back to the synchronous implementation below.
+    }
+  }
+  return extractSkycubeZipFaces(zip)
+}
+
+async function extractSkycubeZipFacesViaWorker(
+  worker: Worker,
+  zip: ArrayBuffer | Uint8Array,
+): Promise<ExtractSkycubeZipFacesResult> {
+  const payload = zip instanceof Uint8Array
+    ? zip.slice().buffer
+    : new Uint8Array(zip).slice().buffer
+  const requestId = Math.floor(Math.random() * 1_000_000_000)
+
+  return await new Promise<ExtractSkycubeZipFacesResult>((resolve, reject) => {
+    const cleanup = () => {
+      worker.removeEventListener('message', handleMessage)
+      worker.removeEventListener('messageerror', handleMessageError)
+      worker.removeEventListener('error', handleError)
+      try {
+        worker.terminate()
+      } catch {
+        // ignore
+      }
+    }
+
+    const handleMessageError = () => {
+      cleanup()
+      reject(new Error('SkyCube ZIP worker 消息解析失败'))
+    }
+
+    const handleError = () => {
+      cleanup()
+      reject(new Error('SkyCube ZIP worker 执行失败'))
+    }
+
+    const handleMessage = (event: MessageEvent<SkyCubeZipExtractorWorkerResponse>) => {
+      const message = event.data
+      if (!message || typeof message !== 'object' || message.requestId !== requestId) {
+        return
+      }
+      if (message.type === 'error') {
+        cleanup()
+        reject(new Error(message.message))
+        return
+      }
+      cleanup()
+      resolve(rehydrateSkycubeZipFaces(message.result))
+    }
+
+    worker.addEventListener('message', handleMessage)
+    worker.addEventListener('messageerror', handleMessageError)
+    worker.addEventListener('error', handleError)
+
+    try {
+      worker.postMessage({ type: 'extract', requestId, zip: payload } satisfies SkyCubeZipExtractorWorkerRequest, [payload])
+    } catch (error) {
+      cleanup()
+      reject(error instanceof Error ? error : new Error(String(error)))
+    }
+  })
+}
+
+function rehydrateSkycubeZipFaces(result: SkyCubeZipExtractorWorkerResult): ExtractSkycubeZipFacesResult {
+  return {
+    missingFaces: Array.isArray(result.missingFaces) ? [...result.missingFaces] : [],
+    discarded: Array.isArray(result.discarded)
+      ? result.discarded
+          .filter((item) => item && typeof item.key === 'string' && typeof item.filename === 'string')
+          .map((item) => ({ key: item.key, filename: item.filename }))
+      : [],
+    facesInOrder: Array.isArray(result.facesInOrder)
+      ? result.facesInOrder.map((face) => {
+          if (!face) {
+            return null
+          }
+          return {
+            key: face.key,
+            filename: face.filename,
+            bytes: new Uint8Array(face.bytes),
+            mimeType: face.mimeType,
+          }
+        })
+      : [],
   }
 }
 

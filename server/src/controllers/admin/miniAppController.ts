@@ -1,8 +1,27 @@
 import type { Context } from 'koa'
 import { MiniAppModel } from '@/models/MiniApp'
+import {
+  getDefaultMiniAppPolicyContent,
+  mapPolicyContent,
+  normalizeMiniAppPolicyContent,
+  syncMiniAppPolicyFiles,
+} from '@/services/miniAppPolicyService'
 
 function normalizeString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
+}
+
+function mapMiniAppPolicy(kind: 'user-service-agreement' | 'privacy-policy', row: any) {
+  const fallback = getDefaultMiniAppPolicyContent(kind)
+  const source = kind === 'user-service-agreement' ? row.userServiceAgreement : row.privacyPolicy
+  return mapPolicyContent(kind, {
+    title: source?.title || fallback.title,
+    content: source?.content || fallback.content,
+    fileKey: source?.fileKey ?? '',
+    fileUrl: source?.fileUrl ?? '',
+    generatedAt: source?.generatedAt ?? null,
+    version: source?.version ?? 0,
+  })
 }
 
 function mapMiniApp(row: any) {
@@ -13,6 +32,8 @@ function mapMiniApp(row: any) {
     enabled: row.enabled !== false,
     isDefault: row.isDefault === true,
     appSecret: row.appSecret ?? '',
+    userServiceAgreement: mapMiniAppPolicy('user-service-agreement', row),
+    privacyPolicy: mapMiniAppPolicy('privacy-policy', row),
     wechatPay: {
       enabled: row.wechatPay?.enabled === true,
       mchId: row.wechatPay?.mchId ?? '',
@@ -94,6 +115,8 @@ export async function createMiniApp(ctx: Context): Promise<void> {
     },
   })
 
+  await syncMiniAppPolicyFiles(created)
+
   if (created.isDefault) {
     await ensureDefaultConstraint(created._id.toString())
   }
@@ -123,6 +146,17 @@ export async function updateMiniApp(ctx: Context): Promise<void> {
   }
   if (typeof body.isDefault === 'boolean') {
     row.isDefault = body.isDefault
+  }
+
+  if (body.userServiceAgreement && typeof body.userServiceAgreement === 'object') {
+    const agreement = normalizeMiniAppPolicyContent('user-service-agreement', body.userServiceAgreement)
+    row.userServiceAgreement.title = agreement.title
+    row.userServiceAgreement.content = agreement.content
+  }
+  if (body.privacyPolicy && typeof body.privacyPolicy === 'object') {
+    const privacy = normalizeMiniAppPolicyContent('privacy-policy', body.privacyPolicy)
+    row.privacyPolicy.title = privacy.title
+    row.privacyPolicy.content = privacy.content
   }
 
   if (body.wechatPay && typeof body.wechatPay === 'object') {
@@ -160,6 +194,7 @@ export async function updateMiniApp(ctx: Context): Promise<void> {
   }
 
   await row.save()
+  await syncMiniAppPolicyFiles(row)
   if (row.isDefault) {
     await ensureDefaultConstraint(row._id.toString())
   }

@@ -30,6 +30,8 @@ interface MiniAppFormModel {
   appSecret: string;
   enabled: boolean;
   isDefault: boolean;
+  userServiceAgreementContent: string;
+  privacyPolicyContent: string;
   paymentEnabled: boolean;
   mchId: string;
   serialNo: string;
@@ -42,6 +44,55 @@ interface MiniAppFormModel {
   mockPlatformPrivateKey: string;
 }
 
+const DEFAULT_USER_SERVICE_AGREEMENT = [
+  '欢迎使用本小程序。为保障你的合法权益，请在使用前仔细阅读并理解本协议全部内容。',
+  '',
+  '1. 服务内容',
+  '本小程序向你提供景区浏览、订单管理、手机号绑定、反馈提交、收藏与互动等功能，具体功能可能会随版本更新而调整。',
+  '',
+  '2. 账号与使用',
+  '你可以通过微信授权或账号密码方式使用本服务。你应保证提交信息真实、准确、完整，并妥善保管登录凭证。',
+  '',
+  '3. 个人信息处理',
+  '为实现登录、资料展示、手机号绑定、订单处理、客服与风控等必要功能，我们可能处理你的微信昵称、头像、手机号、订单信息及操作记录。',
+  '',
+  '4. 用户责任',
+  '你应合法合规使用本服务，不得利用本小程序从事违法违规、侵害他人权益或破坏系统安全的行为。',
+  '',
+  '5. 协议变更',
+  '我们可能根据法律法规、业务调整或平台要求更新本协议。更新后将通过页面提示或重新授权方式告知你。',
+  '',
+  '6. 联系与反馈',
+  '如你对本协议有疑问，可通过小程序内反馈入口或平台公布的联系方式与我们取得联系。',
+].join('\n');
+
+const DEFAULT_PRIVACY_POLICY = [
+  '本隐私政策说明我们如何收集、使用、存储和保护你的个人信息。请在使用本小程序前仔细阅读。',
+  '',
+  '1. 我们收集的信息',
+  '我们可能收集你主动提供的信息，例如昵称、头像、手机号、反馈内容、订单信息、收货地址等。',
+  '为完成登录和微信能力调用，我们可能获取微信授权标识、手机号验证码结果等信息。',
+  '你使用服务过程中产生的信息，例如浏览记录、订单记录、反馈记录、操作日志等，也可能被记录。',
+  '',
+  '2. 信息使用目的',
+  '我们收集上述信息的目的包括账号登录与识别、资料展示、手机号绑定、订单履约、客服沟通、服务安全、异常排查以及法律法规要求的合规管理。',
+  '',
+  '3. 信息使用方式',
+  '我们仅在实现对应功能所必要的范围内使用你的个人信息，不会超出合理关联目的进行处理。对于敏感信息，我们会在获得授权后再处理。',
+  '',
+  '4. 信息共享与公开',
+  '除法律法规要求、实现服务所必需或获得你明确同意外，我们不会向无关第三方共享你的个人信息。涉及微信支付、手机号能力等场景时，仅会在完成对应业务所需的最小范围内使用相关信息。',
+  '',
+  '5. 信息存储与保护',
+  '我们会采取合理的安全措施保护你的信息，并仅在达成处理目的所需的期限内保存。达到保存期限后，我们将按照法律法规要求处理。',
+  '',
+  '6. 你的权利',
+  '你可以依法查询、更正、删除相关个人信息，或撤回此前授予的授权。撤回后可能导致部分功能无法继续使用。',
+  '',
+  '7. 联系我们',
+  '如你对本隐私政策有任何疑问或投诉建议，可通过小程序内反馈入口联系我们。',
+].join('\n');
+
 const modalOpen = ref(false);
 const submitting = ref(false);
 const editingId = ref<null | string>(null);
@@ -53,6 +104,8 @@ const formModel = reactive<MiniAppFormModel>({
   appSecret: '',
   enabled: true,
   isDefault: false,
+  userServiceAgreementContent: DEFAULT_USER_SERVICE_AGREEMENT,
+  privacyPolicyContent: DEFAULT_PRIVACY_POLICY,
   paymentEnabled: false,
   mchId: '',
   serialNo: '',
@@ -73,6 +126,8 @@ function resetForm() {
   formModel.appSecret = '';
   formModel.enabled = true;
   formModel.isDefault = false;
+  formModel.userServiceAgreementContent = DEFAULT_USER_SERVICE_AGREEMENT;
+  formModel.privacyPolicyContent = DEFAULT_PRIVACY_POLICY;
   formModel.paymentEnabled = false;
   formModel.mchId = '';
   formModel.serialNo = '';
@@ -98,6 +153,8 @@ function openEdit(row: MiniAppItem) {
   formModel.appSecret = row.appSecret || '';
   formModel.enabled = row.enabled !== false;
   formModel.isDefault = row.isDefault === true;
+  formModel.userServiceAgreementContent = row.userServiceAgreement?.content || DEFAULT_USER_SERVICE_AGREEMENT;
+  formModel.privacyPolicyContent = row.privacyPolicy?.content || DEFAULT_PRIVACY_POLICY;
   formModel.paymentEnabled = row.wechatPay?.enabled === true;
   formModel.mchId = row.wechatPay?.mchId || '';
   formModel.serialNo = row.wechatPay?.serialNo || '';
@@ -125,6 +182,14 @@ async function submit() {
       appSecret: formModel.appSecret.trim(),
       enabled: formModel.enabled,
       isDefault: formModel.isDefault,
+      userServiceAgreement: {
+        title: '用户服务协议',
+        content: formModel.userServiceAgreementContent.trim(),
+      },
+      privacyPolicy: {
+        title: '隐私政策',
+        content: formModel.privacyPolicyContent.trim(),
+      },
       wechatPay: {
         enabled: formModel.paymentEnabled,
         mchId: formModel.mchId.trim(),
@@ -267,6 +332,21 @@ const [Grid, gridApi] = useVbenVxeGrid<MiniAppItem>({
         </Form.Item>
         <Form.Item label="默认小程序" name="isDefault">
           <Switch v-model:checked="formModel.isDefault" />
+        </Form.Item>
+
+        <Form.Item label="用户服务协议" name="userServiceAgreementContent" :rules="[{ required: true, message: '请输入用户服务协议内容' }]">
+          <Input.TextArea
+            v-model:value="formModel.userServiceAgreementContent"
+            :auto-size="{ minRows: 8, maxRows: 12 }"
+            placeholder="请输入用户服务协议正文，建议使用分段文本，空行分隔段落"
+          />
+        </Form.Item>
+        <Form.Item label="隐私政策" name="privacyPolicyContent" :rules="[{ required: true, message: '请输入隐私政策内容' }]">
+          <Input.TextArea
+            v-model:value="formModel.privacyPolicyContent"
+            :auto-size="{ minRows: 10, maxRows: 14 }"
+            placeholder="请输入隐私政策正文，建议明确说明收集、使用、存储和共享目的"
+          />
         </Form.Item>
 
         <Form.Item label="开启微信支付" name="paymentEnabled">

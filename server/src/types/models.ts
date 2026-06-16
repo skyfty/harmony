@@ -199,6 +199,17 @@ export interface MiniAppWechatPayConfig {
   mockPlatformPrivateKey?: string
 }
 
+export type MiniAppPolicyKind = 'user-service-agreement' | 'privacy-policy'
+
+export interface MiniAppPolicyContent {
+  title: string
+  content: string
+  fileKey?: string
+  fileUrl?: string
+  generatedAt?: Date | null
+  version?: number
+}
+
 export interface MiniAppDocument extends Document<Types.ObjectId> {
   miniAppId: string
   name: string
@@ -206,6 +217,8 @@ export interface MiniAppDocument extends Document<Types.ObjectId> {
   enabled: boolean
   isDefault: boolean
   wechatPay: MiniAppWechatPayConfig
+  userServiceAgreement: MiniAppPolicyContent
+  privacyPolicy: MiniAppPolicyContent
   createdAt: Date
   updatedAt: Date
 }

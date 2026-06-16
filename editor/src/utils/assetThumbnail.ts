@@ -3,7 +3,7 @@ import * as THREE from 'three'
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js'
 import { getLastExtensionFromFilenameOrUrl, isSkyCubeArchiveExtension } from '@schema/assetTypeConversion'
 import { createKtx2Loader, createKtx2SupportRenderer, disposeKtx2SupportRenderer, FAST_KTX2_TRANSCODER_PATH } from '@schema/ktx2Loader'
-import { disposeSkyCubeTexture, extractSkycubeZipFaces, loadSkyCubeTexture } from '@schema/skyCubeTexture'
+import { disposeSkyCubeTexture, extractSkycubeZipFacesAsync, loadSkyCubeTexture, type ExtractSkycubeZipFacesResult } from '@schema/skyCubeTexture'
 import type { ProjectAsset } from '@/types/project-asset'
 import { usesTransparentThumbnailBackground } from '@/utils/assetThumbnailTransparency'
 
@@ -416,7 +416,7 @@ function isSkycubeArchiveFile(asset: ProjectAsset, file: File): boolean {
 }
 
 function buildObjectUrlsFromSkycubeZipFaces(
-  facesInOrder: ReadonlyArray<ReturnType<typeof extractSkycubeZipFaces>['facesInOrder'][number]>,
+  facesInOrder: ReadonlyArray<ExtractSkycubeZipFacesResult['facesInOrder'][number]>,
 ): { urls: Array<string | null>; dispose: () => void } {
   const urls: Array<string | null> = []
   const created: string[] = []
@@ -470,7 +470,7 @@ async function generateSkycubeThumbnail(file: File, width: number, height: numbe
 
   try {
     const buffer = await file.arrayBuffer()
-    const extracted = extractSkycubeZipFaces(buffer)
+    const extracted = await extractSkycubeZipFacesAsync(buffer)
     const facesResult = buildObjectUrlsFromSkycubeZipFaces(extracted.facesInOrder)
     faceUrlCleanup = facesResult.dispose
     const loaded = await loadSkyCubeTexture(facesResult.urls)

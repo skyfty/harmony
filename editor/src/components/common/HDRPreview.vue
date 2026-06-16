@@ -7,7 +7,7 @@ import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js'
-import { disposeSkyCubeTexture, extractSkycubeZipFaces, loadSkyCubeTexture } from '@schema/skyCubeTexture'
+import { disposeSkyCubeTexture, extractSkycubeZipFacesAsync, loadSkyCubeTexture, type ExtractSkycubeZipFacesResult } from '@schema/skyCubeTexture'
 
 const props = defineProps<{
   file: File | null
@@ -41,7 +41,7 @@ function disposeSkyCubeFaceUrls(): void {
 }
 
 function buildObjectUrlsFromSkycubeZipFaces(
-  facesInOrder: ReadonlyArray<ReturnType<typeof extractSkycubeZipFaces>['facesInOrder'][number]>,
+  facesInOrder: ReadonlyArray<ExtractSkycubeZipFacesResult['facesInOrder'][number]>,
 ): { urls: Array<string | null>; dispose: () => void } {
   const urls: Array<string | null> = []
   const created: string[] = []
@@ -222,7 +222,7 @@ async function loadTexture(): Promise<void> {
         throw new Error('Skycube preview requires a local file')
       }
       const buffer = await skycubeFile.arrayBuffer()
-      const extracted = extractSkycubeZipFaces(buffer)
+      const extracted = await extractSkycubeZipFacesAsync(buffer)
       const faceUrlsResult = buildObjectUrlsFromSkycubeZipFaces(extracted.facesInOrder)
       skyCubeFaceUrlCleanup = faceUrlsResult.dispose
       const loaded = await loadSkyCubeTexture(faceUrlsResult.urls)

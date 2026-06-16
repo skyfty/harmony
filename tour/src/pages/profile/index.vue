@@ -46,8 +46,8 @@
       </view>
 
       <view class="card">
-        <view class="row" @tap="show('使用指南（mock）')"><text class="label">使用指南</text><text class="arrow">›</text></view>
-        <view class="row" @tap="show('隐私政策（mock）')"><text class="label">隐私政策</text><text class="arrow">›</text></view>
+        <view class="row" @tap="openPolicy('user-service-agreement')"><text class="label">用户服务协议</text><text class="arrow">›</text></view>
+        <view class="row" @tap="openPolicy('privacy-policy')"><text class="label">隐私政策</text><text class="arrow">›</text></view>
         <view class="row" @tap="show('已是最新版本（mock）')"><text class="label">版本更新</text><text class="arrow">›</text></view>
       </view>
 
@@ -59,7 +59,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, reactive } from 'vue';
+import { computed, ref } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
 
 import BottomNav from '@/components/BottomNav.vue';
@@ -71,10 +71,7 @@ import { resetMiniAuthSession } from '@/api/mini/session';
 import type { UserProfile } from '@/types/profile';
 import { redirectToNav, type NavKey } from '@/utils/navKey';
 import { applyLightNavigationBar } from '@/utils/safeArea';
-import { readStorageJson, writeStorageJson } from '@/utils/storage';
 import { isMiniProfileIncomplete } from '@/utils/miniProfile';
-
-const KEY = 'tour:settings:v1';
 
 const profile = ref<UserProfile>({
   id: '',
@@ -91,8 +88,6 @@ const defaultProfile: UserProfile = {
   gender: 'other',
   birthDate: '',
 };
-
-const settings = reactive(readStorageJson(KEY, { notify: true, autoDownload: false }));
 
 onShow(() => {
   applyLightNavigationBar();
@@ -131,15 +126,6 @@ async function reloadProfile() {
   }
 }
 
-function persist() {
-  writeStorageJson(KEY, settings);
-}
-
-function toggle<K extends keyof typeof settings>(key: K, value: (typeof settings)[K]) {
-  settings[key] = value;
-  persist();
-}
-
 const initials = computed(() => {
   const name = profile.value.displayName || '游客';
   return name.slice(0, 1);
@@ -176,6 +162,10 @@ function nav(url: string) {
 
 function show(message: string) {
   uni.showToast({ title: message, icon: 'none' });
+}
+
+function openPolicy(kind: 'user-service-agreement' | 'privacy-policy') {
+  uni.navigateTo({ url: `/pages/policy/index?kind=${kind}` });
 }
 
 function logout() {

@@ -583,7 +583,7 @@ import {
 } from '@harmony/schema/core';
 import { type NodePrefabData } from '@harmony/schema/runtimePrefab';
 import ResourceCache from '@harmony/schema/ResourceCache';
-import { AssetCache, AssetLoader, configureAssetDownloadHostMirrors, type AssetCacheEntry } from '@harmony/schema/assetCache';
+import { AssetCache, AssetLoader, configureAssetDownloadHostMirrors, fetchAssetBlob, type AssetCacheEntry } from '@harmony/schema/assetCache';
 import { ASSET_DOWNLOAD_HOST_MIRRORS } from '@harmony/schema/assetDownloadMirrors';
 import { isGroundDynamicMesh } from '@harmony/schema/groundHeightfield';
 import { resolveDocumentGroundNode as resolveSharedDocumentGroundNode } from '@harmony/schema/groundNode';
@@ -656,7 +656,7 @@ import { createWaterRuntime } from '@harmony/schema/water';
 import { rebuildSceneNodeIndex, resolveSceneNodeById, resolveSceneParentNodeId } from '@harmony/schema/nodeIndexUtils';
 import { resolveEnabledComponentState } from '@harmony/schema/componentRuntimeUtils';
 import { createGradientBackgroundDome, disposeGradientBackgroundDome, type GradientBackgroundDome } from '@harmony/schema/gradientBackground';
-import { disposeSkyCubeTexture, loadSkyCubeTexture, extractSkycubeZipFaces } from '@harmony/schema/skyCubeTexture';
+import { disposeSkyCubeTexture, loadSkyCubeTexture, extractSkycubeZipFacesAsync, type ExtractSkycubeZipFacesResult } from '@harmony/schema/skyCubeTexture';
 import {
   canNodeUseRuntimeModelInstancing,
   collectRuntimeModelNodesByAssetId,
@@ -1007,14 +1007,6 @@ type RequestedMode = 'project' | null;
 
 
 declare namespace UniApp {
-  interface OnProgressUpdateResult {
-    totalBytesWritten?: number;
-    totalBytesExpectedToWrite?: number;
-  }
-  interface RequestTask {
-    abort: () => void;
-    onProgressUpdate?: (callback: (res: OnProgressUpdateResult) => void) => void;
-  }
   interface NodeInfo {
     left?: number;
     top?: number;
@@ -1023,24 +1015,12 @@ declare namespace UniApp {
   }
 }
 
-interface SceneDownloadProgress extends UniApp.OnProgressUpdateResult {
-  progress?: number;
-  totalBytesWritten?: number;
-  totalBytesExpectedToWrite?: number;
-}
-
-type SceneRequestTask = UniApp.RequestTask & {
-  onProgressUpdate?: (callback: (res: SceneDownloadProgress) => void) => void;
-};
-
 interface RenderContext {
   renderer: THREE.WebGLRenderer;
   scene: THREE.Scene;
   camera: THREE.PerspectiveCamera;
   controls: OrbitControls;
 }
-
-const SCENE_DOWNLOAD_TIMEOUT = 120000;
 
 const projectStore = useProjectStore();
 const canvasId = `scene-viewer-${Date.now()}`;
@@ -1347,7 +1327,7 @@ let sharedResourceCache: ResourceCache | null = null;
 let viewerResourceCache: ResourceCache | null = null;
 let activeScenePackageAssetOverrides: SceneGraphBuildOptions['assetOverrides'] | null = null;
 let activeScenePackagePkg: ScenePackageUnzipped | null = null;
-let sceneDownloadTask: SceneRequestTask | null = null;
+let sceneDownloadController: AbortController | null = null;
 type RGBELoaderClass = new (manager?: THREE.LoadingManager) => RGBELoader;
 let rgbeLoaderClassPromise: Promise<RGBELoaderClass> | null = null;
 async function createRgbELoader(manager?: THREE.LoadingManager): Promise<RGBELoader> {
@@ -4558,32 +4538,53 @@ watch(
   },
 );
 
-async function fetchTextFromUrl(url: string): Promise<string> {
-  if (typeof fetch === 'function') {
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error(`请求失败 (${response.status})`);
-    }
-    return await response.text();
+function createDownloadAbortError(): Error {
+  if (typeof DOMException === 'function') {
+    return new DOMException('Aborted', 'AbortError');
   }
-  return await new Promise<string>((resolve, reject) => {
-    uni.request({
-      url,
-      method: 'GET',
-      success: (res: { data: unknown }) => {
-        if (typeof res.data === 'string') {
-          resolve(res.data);
-        } else if (res.data != null) {
-          resolve(JSON.stringify(res.data));
-        } else {
-          resolve('');
-        }
-      },
-      fail: (err: { errMsg?: unknown } | null) => {
-        reject(new Error(String(err?.errMsg ?? '网络请求失败')));
-      },
-    });
-  });
+  const error = new Error('Aborted');
+  (error as { name?: string }).name = 'AbortError';
+  return error;
+}
+
+async function downloadBlobFromUrl(
+  url: string,
+  options: {
+    signal?: AbortSignal | null;
+    onProgress?: (progress: number) => void;
+  } = {},
+): Promise<Blob> {
+  const controller = new AbortController();
+  const { signal, onProgress } = options;
+  const handleAbort = () => {
+    controller.abort();
+  };
+
+  if (signal?.aborted) {
+    throw createDownloadAbortError();
+  }
+
+  if (signal) {
+    signal.addEventListener('abort', handleAbort, { once: true });
+  }
+
+  try {
+    const { blob } = await fetchAssetBlob(url, controller, onProgress ?? (() => {}));
+    return blob;
+  } finally {
+    if (signal) {
+      signal.removeEventListener('abort', handleAbort);
+    }
+  }
+}
+
+async function fetchTextFromUrl(url: string, signal?: AbortSignal | null): Promise<string> {
+  const blob = await downloadBlobFromUrl(url, { signal });
+  if (typeof blob.text === 'function') {
+    return await blob.text();
+  }
+  const buffer = await blob.arrayBuffer();
+  return new TextDecoder().decode(buffer);
 }
 
 const EXTERNAL_ASSET_PATTERN = /^(https?:)?\/\//i;
@@ -4835,47 +4836,13 @@ async function resolveAssetUrlReference(candidate: string): Promise<ResolvedAsse
 	return await resolveAssetUrlFromCache(assetId)
 }
 
-function requestBinaryFromUrl(url: string): Promise<ArrayBuffer> {
-  if (typeof fetch === 'function') {
-    return fetch(url).then(async (response) => {
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-      return await response.arrayBuffer();
-    });
-  }
-  return new Promise((resolve, reject) => {
-    uni.request({
-      url,
-      method: 'GET',
-      responseType: 'arraybuffer',
-      timeout: SCENE_DOWNLOAD_TIMEOUT,
-      success: (res: { statusCode?: number; data: unknown }) => {
-        const statusCode = typeof res.statusCode === 'number' ? res.statusCode : 200;
-        if (statusCode >= 400) {
-          reject(new Error(`下载失败（${statusCode}）`));
-          return;
-        }
-        const buffer = res.data as ArrayBuffer;
-        if (!buffer || typeof buffer.byteLength !== 'number') {
-          reject(new Error('下载失败（响应不是二进制数据）'));
-          return;
-        }
-        resolve(buffer);
-      },
-      fail: (requestError: { errMsg?: unknown } | null) => {
-        const message =
-          requestError && typeof requestError === 'object' && 'errMsg' in requestError
-            ? String((requestError as { errMsg: unknown }).errMsg)
-            : '下载失败';
-        reject(new Error(message));
-      },
-    });
-  });
+async function requestBinaryFromUrl(url: string, signal?: AbortSignal | null): Promise<ArrayBuffer> {
+  const blob = await downloadBlobFromUrl(url, { signal });
+  return await blob.arrayBuffer();
 }
 
 function buildObjectUrlsFromSkycubeZipFaces(
-  facesInOrder: ReadonlyArray<ReturnType<typeof extractSkycubeZipFaces>['facesInOrder'][number]>,
+  facesInOrder: ReadonlyArray<ExtractSkycubeZipFacesResult['facesInOrder'][number]>,
 ): { urls: Array<string | null>; dispose: () => void } {
   const urls: Array<string | null> = [];
   const created: string[] = [];
@@ -16172,9 +16139,9 @@ async function applyBackgroundSettings(
       if (token !== backgroundLoadToken) {
         return false;
       }
-      let extracted: ReturnType<typeof extractSkycubeZipFaces>;
+      let extracted: Awaited<ReturnType<typeof extractSkycubeZipFacesAsync>>;
       try {
-        extracted = extractSkycubeZipFaces(buffer);
+        extracted = await extractSkycubeZipFacesAsync(buffer);
       } catch (error) {
         console.warn('[SceneViewer] Failed to unzip SkyCube zip', zipAssetId, error);
         return false;
@@ -16678,63 +16645,26 @@ async function loadProjectFromBundle(bundle: ScenePackageProjectData): Promise<v
 }
 
 function requestBinary(url: string): Promise<ArrayBuffer> {
-  return new Promise((resolve, reject) => {
-    if (sceneDownloadTask) {
-      sceneDownloadTask.abort();
-      sceneDownloadTask = null;
+  if (sceneDownloadController) {
+    sceneDownloadController.abort();
+  }
+  const controller = new AbortController();
+  sceneDownloadController = controller;
+  return fetchAssetBlob(url, controller, (progress) => {
+    sceneDownload.phase = 'download';
+    sceneDownload.percent = clampPercent(progress);
+    sceneDownload.indeterminate = false;
+    sceneDownload.label = `正在下载场景包… ${sceneDownload.percent}%`;
+  }).then(async ({ blob }) => {
+    if (sceneDownloadController === controller) {
+      sceneDownloadController = null;
     }
-    console.log(url);
-    const task = uni.request({
-      url,
-      method: 'GET',
-      responseType: 'arraybuffer',
-      timeout: SCENE_DOWNLOAD_TIMEOUT,
-      success: (res: { statusCode?: number; data: unknown }) => {
-        const statusCode = typeof res.statusCode === 'number' ? res.statusCode : 200;
-        if (statusCode >= 400) {
-          reject(new Error(`场景包下载失败（${statusCode}）`));
-          return;
-        }
-        const buffer = res.data as ArrayBuffer;
-        if (!buffer || typeof buffer.byteLength !== 'number') {
-          reject(new Error('场景包下载失败（响应不是二进制数据）'));
-          return;
-        }
-        resolve(buffer);
-      },
-      fail: (requestError: { errMsg?: unknown } | null) => {
-        const message =
-          requestError && typeof requestError === 'object' && 'errMsg' in requestError
-            ? String((requestError as { errMsg: unknown }).errMsg)
-            : '场景包下载失败';
-        reject(new Error(message));
-      },
-      complete: () => {
-        sceneDownloadTask = null;
-      },
-    }) as SceneRequestTask;
-    sceneDownloadTask = task;
-    task?.onProgressUpdate?.((info: SceneDownloadProgress) => {
-      sceneDownload.phase = 'download';
-      if (typeof info.progress === 'number' && Number.isFinite(info.progress)) {
-        sceneDownload.percent = clampPercent(info.progress);
-      }
-      if (typeof info.totalBytesWritten === 'number') {
-        sceneDownload.loaded = info.totalBytesWritten;
-      }
-      if (typeof info.totalBytesExpectedToWrite === 'number') {
-        sceneDownload.total = Math.max(0, Math.floor(info.totalBytesExpectedToWrite));
-      }
-      if (sceneDownload.total > 0) {
-        sceneDownload.indeterminate = false;
-        const ratio = Math.min(1, Math.max(0, sceneDownload.loaded / sceneDownload.total));
-        sceneDownload.percent = Math.round(ratio * 100);
-        sceneDownload.label = `正在下载场景包… ${sceneDownload.percent}%`;
-      } else if (typeof info.progress === 'number' && Number.isFinite(info.progress)) {
-        sceneDownload.indeterminate = true;
-        sceneDownload.label = `正在下载场景包… ${Math.max(0, Math.min(100, Math.round(info.progress)))}%`;
-      }
-    });
+    return await blob.arrayBuffer();
+  }, (error) => {
+    if (sceneDownloadController === controller) {
+      sceneDownloadController = null;
+    }
+    throw error;
   });
 }
 
@@ -17082,55 +17012,27 @@ async function loadProjectFromScenePackagePointer(pointer: ScenePackagePointer):
   }
 }
 function requestSceneDocument(url: string): Promise<SceneJsonExportDocument> {
-  return new Promise((resolve, reject) => {
-    if (sceneDownloadTask) {
-      sceneDownloadTask.abort();
-      sceneDownloadTask = null;
+  if (sceneDownloadController) {
+    sceneDownloadController.abort();
+  }
+  const controller = new AbortController();
+  sceneDownloadController = controller;
+  return fetchAssetBlob(url, controller, (progress) => {
+    sceneDownload.phase = 'download';
+    sceneDownload.percent = clampPercent(progress);
+    sceneDownload.indeterminate = false;
+    sceneDownload.label = `正在下载场景数据… ${sceneDownload.percent}%`;
+  }).then(async ({ blob }) => {
+    if (sceneDownloadController === controller) {
+      sceneDownloadController = null;
     }
-    const task = uni.request({
-      url,
-      method: 'GET',
-      responseType: 'text',
-      timeout: SCENE_DOWNLOAD_TIMEOUT,
-      success: (res: { statusCode?: number; data: unknown }) => {
-        const statusCode = typeof res.statusCode === 'number' ? res.statusCode : 200;
-        if (statusCode >= 400) {
-          reject(new Error(`场景下载失败（${statusCode}）`));
-          return;
-        }
-        try {
-          const payload = typeof res.data === 'string' ? res.data : JSON.stringify(res.data ?? {});
-          const document = parseSceneDocument(payload);
-          resolve(document);
-        } catch (parseError) {
-          const message = parseError instanceof Error ? parseError.message : '场景数据解析失败';
-          reject(new Error(message));
-        }
-      },
-      fail: (requestError: { errMsg?: unknown } | null) => {
-        const message =
-          requestError && typeof requestError === 'object' && 'errMsg' in requestError
-            ? String((requestError as { errMsg: unknown }).errMsg)
-            : '场景下载失败';
-        reject(new Error(message));
-      },
-      complete: () => {
-        sceneDownloadTask = null;
-      },
-    }) as SceneRequestTask;
-    sceneDownloadTask = task;
-    task?.onProgressUpdate?.((info: SceneDownloadProgress) => {
-      if (typeof info.progress === 'number' && Number.isFinite(info.progress)) {
-        sceneDownload.percent = info.progress;
-        sceneDownload.label = `正在下载场景数据… ${Math.max(0, Math.min(100, Math.round(info.progress)))}%`;
-      }
-      if (typeof info.totalBytesWritten === 'number') {
-        sceneDownload.loaded = info.totalBytesWritten;
-      }
-      if (typeof info.totalBytesExpectedToWrite === 'number') {
-        sceneDownload.total = info.totalBytesExpectedToWrite;
-      }
-    });
+    const payload = typeof blob.text === 'function' ? await blob.text() : new TextDecoder().decode(await blob.arrayBuffer());
+    return parseSceneDocument(payload);
+  }, (error) => {
+    if (sceneDownloadController === controller) {
+      sceneDownloadController = null;
+    }
+    throw error;
   });
 }
 
@@ -18763,9 +18665,9 @@ function cleanupRuntime(): void {
   detachDrivePadMouseListeners();
   hideDrivePadImmediate();
   resetCharacterControlInputs();
-  if (sceneDownloadTask) {
-    sceneDownloadTask.abort();
-    sceneDownloadTask = null;
+  if (sceneDownloadController) {
+    sceneDownloadController.abort();
+    sceneDownloadController = null;
   }
   clearBehaviorSounds();
   resetInfoBoardOverlay();

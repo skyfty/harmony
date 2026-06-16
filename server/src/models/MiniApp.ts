@@ -1,6 +1,20 @@
 import { Schema, model } from 'mongoose'
 import type { MiniAppDocument } from '@/types/models'
 
+const miniAppPolicyContentSchema = new Schema(
+  {
+    title: { type: String, trim: true, default: '' },
+    content: { type: String, default: '' },
+    fileKey: { type: String, trim: true, default: '' },
+    fileUrl: { type: String, trim: true, default: '' },
+    generatedAt: { type: Date, default: null },
+    version: { type: Number, default: 0 },
+  },
+  {
+    _id: false,
+  },
+)
+
 const miniAppWechatPaySchema = new Schema(
   {
     enabled: { type: Boolean, default: false },
@@ -27,6 +41,28 @@ const miniAppSchema = new Schema<MiniAppDocument>(
     enabled: { type: Boolean, default: true },
     isDefault: { type: Boolean, default: false },
     wechatPay: { type: miniAppWechatPaySchema, default: () => ({ enabled: false }) },
+    userServiceAgreement: {
+      type: miniAppPolicyContentSchema,
+      default: () => ({
+        title: '用户服务协议',
+        content: '',
+        fileKey: '',
+        fileUrl: '',
+        generatedAt: null,
+        version: 0,
+      }),
+    },
+    privacyPolicy: {
+      type: miniAppPolicyContentSchema,
+      default: () => ({
+        title: '隐私政策',
+        content: '',
+        fileKey: '',
+        fileUrl: '',
+        generatedAt: null,
+        version: 0,
+      }),
+    },
   },
   {
     timestamps: true,

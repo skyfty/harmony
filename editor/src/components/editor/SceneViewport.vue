@@ -84,7 +84,6 @@ import { resolveGroundWorkingGridSize } from '@schema/core'
 import {
   buildRegionDynamicMeshFromLocalVertices,
   disposeSkyCubeTexture,
-  extractSkycubeZipFaces,
   getLastExtensionFromFilenameOrUrl,
   isHdriLikeExtension,
   isKtx2LikeExtension,
@@ -98,6 +97,8 @@ import {
   disposeGradientBackgroundDome,
   type GradientBackgroundDome,
 } from '@schema/overlay'
+import { extractSkycubeZipFacesAsync, type ExtractSkycubeZipFacesResult } from '@schema/skyCubeTexture'
+import { createKtx2Loader, FAST_KTX2_TRANSCODER_PATH } from '@schema/ktx2Loader'
 import {
   createSceneCsmShadowRuntime,
   DEFAULT_SCENE_CSM_CONFIG,
@@ -1139,7 +1140,7 @@ function disposeGradientBackgroundResources() {
 }
 
 function buildObjectUrlsFromSkycubeZipFaces(
-  facesInOrder: ReadonlyArray<ReturnType<typeof extractSkycubeZipFaces>['facesInOrder'][number]>,
+  facesInOrder: ReadonlyArray<ExtractSkycubeZipFacesResult['facesInOrder'][number]>,
 ): { urls: Array<string | null>; dispose: () => void } {
   const urls: Array<string | null> = []
   const created: string[] = []
@@ -14217,7 +14218,7 @@ async function loadEnvironmentTextureFromAsset(assetId: string): Promise<THREE.T
 
     try {
       if (isKtx2LikeExtension(extension)) {
-        const ktx2Loader = await createKtx2Loader(renderer, { transcoderPath: FAST_KTX2_TRANSCODER_PATH })
+        const ktx2Loader = await createKtx2Loader(renderer!, { transcoderPath: FAST_KTX2_TRANSCODER_PATH })
         const texture = await ktx2Loader.loadAsync(url)
         texture.mapping = THREE.CubeUVReflectionMapping
         texture.colorSpace = THREE.SRGBColorSpace
@@ -14389,9 +14390,9 @@ async function applyBackgroundSettings(background: EnvironmentSettings['backgrou
         return false
       }
 
-      let extracted: ReturnType<typeof extractSkycubeZipFaces>
+      let extracted: Awaited<ReturnType<typeof extractSkycubeZipFacesAsync>>
       try {
-        extracted = extractSkycubeZipFaces(buffer)
+        extracted = await extractSkycubeZipFacesAsync(buffer)
       } catch (error) {
         console.warn('[SceneViewport] Failed to unzip SkyCube zip', zipAssetId, error)
         return false

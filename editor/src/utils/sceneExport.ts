@@ -853,13 +853,14 @@ async function applyRigidbodyMetadata(nodes: SceneNode[], candidates: RigidbodyE
     const buildBox = () => buildBoxShapeFromObject(samplingObject, nodeScale)
     const buildSphere = () => buildSphereShapeFromObject(samplingObject, nodeScale)
     const buildCylinder = () => buildCylinderShapeFromObject(samplingObject, nodeScale)
+    const rigidbodyProps = clampRigidbodyComponentProps(entry.component.props)
     const builderPriority: Record<RigidbodyColliderType, Array<() => RigidbodyPhysicsShape | null>> = {
       convex: [buildConvex, buildBox, buildSphere, buildCylinder],
       box: [buildBox, buildConvex, buildSphere, buildCylinder],
       sphere: [buildSphere, buildConvex, buildBox, buildCylinder],
       cylinder: [buildCylinder, buildConvex, buildBox, buildSphere],
     }
-    const builders = builderPriority[props.colliderType] ?? builderPriority.convex
+    const builders = builderPriority[rigidbodyProps.colliderType]
     for (const builder of builders) {
       shape = builder()
       if (shape) {

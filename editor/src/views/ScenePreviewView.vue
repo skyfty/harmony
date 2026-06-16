@@ -25,13 +25,13 @@ import {
 	disposeSkyCubeTexture,
 	createRuntimePrefabDocument,
 	parseRuntimePrefabData,
-	loadSkyCubeTexture,
-	extractSkycubeZipFaces,
+  loadSkyCubeTexture,
 	resolveInstancedLodTargetFromSnapshot,
 	isRuntimeHiddenInPreview,
 	type InstancedLodTarget,
 } from '@schema/core'
 import { createKtx2Loader, FAST_KTX2_TRANSCODER_PATH } from '@schema/ktx2Loader'
+import { extractSkycubeZipFacesAsync, type ExtractSkycubeZipFacesResult } from '@schema/skyCubeTexture'
 import { loadTextureFromSourceUrl } from '@schema/textureSourceLoader'
 import type {
 	EnvironmentCsmSettings,
@@ -165,6 +165,7 @@ import { applyMirroredScaleToObject, syncMirroredMeshMaterials } from '@schema/m
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { ComponentManager } from '@schema/components/componentManager'
 import { onlineComponentDefinition } from '@schema/components/definitions/onlineComponent'
+import { preloadableComponentDefinition } from '@schema/components/definitions/preloadableComponent'
 import { setActiveMultiuserSceneId } from '@schema/multiuserContext'
 import {
 	DEFAULT_REMOTE_MULTIUSER_VISIBLE_PEERS,
@@ -1235,6 +1236,7 @@ previewComponentManager.registerDefinition(purePursuitComponentDefinition)
 previewComponentManager.registerDefinition(sceneStateAnchorComponentDefinition)
 previewComponentManager.registerDefinition(groundAnchorComponentDefinition)
 previewComponentManager.registerDefinition(nominateComponentDefinition)
+previewComponentManager.registerDefinition(preloadableComponentDefinition)
 previewComponentManager.registerDefinition(onlineComponentDefinition)
 
 const previewNodeMap = new Map<string, SceneNode>()
@@ -1991,7 +1993,7 @@ function resolveGroundTextureSource(assetId: string): string | null {
 }
 
 function buildObjectUrlsFromSkycubeZipFaces(
-	facesInOrder: ReadonlyArray<ReturnType<typeof extractSkycubeZipFaces>['facesInOrder'][number]>,
+	facesInOrder: ReadonlyArray<ExtractSkycubeZipFacesResult['facesInOrder'][number]>,
 ): { urls: Array<string | null>; dispose: () => void } {
 	const urls: Array<string | null> = []
 	const created: string[] = []
@@ -10098,9 +10100,9 @@ async function applyBackgroundSettings(
 			if (token !== backgroundLoadToken) {
 				return false
 			}
-			let extracted: ReturnType<typeof extractSkycubeZipFaces>
+			let extracted: Awaited<ReturnType<typeof extractSkycubeZipFacesAsync>>
 			try {
-				extracted = extractSkycubeZipFaces(buffer)
+				extracted = await extractSkycubeZipFacesAsync(buffer)
 			} catch (error) {
 				console.warn('[ScenePreview] Failed to unzip SkyCube zip', normalizedZipAssetId, error)
 				return false

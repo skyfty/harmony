@@ -13,6 +13,15 @@ export interface MiniAppWechatPayConfig {
   mockPlatformPrivateKey: string;
 }
 
+export interface MiniAppPolicyContent {
+  title: string;
+  content: string;
+  fileKey: string;
+  fileUrl: string;
+  generatedAt: string | null;
+  version: number;
+}
+
 export interface MiniAppItem {
   id: string;
   miniAppId: string;
@@ -20,6 +29,8 @@ export interface MiniAppItem {
   appSecret: string;
   enabled: boolean;
   isDefault: boolean;
+  userServiceAgreement: MiniAppPolicyContent;
+  privacyPolicy: MiniAppPolicyContent;
   wechatPay: MiniAppWechatPayConfig;
   createdAt: string;
   updatedAt: string;
@@ -39,6 +50,8 @@ export async function createMiniAppApi(payload: {
   appSecret: string;
   enabled?: boolean;
   isDefault?: boolean;
+  userServiceAgreement?: Partial<MiniAppPolicyContent>;
+  privacyPolicy?: Partial<MiniAppPolicyContent>;
   wechatPay?: Partial<MiniAppWechatPayConfig>;
 }) {
   return requestClient.post<MiniAppItem>('/admin/mini-apps', payload);
@@ -51,6 +64,8 @@ export async function updateMiniAppApi(
     appSecret?: string;
     enabled?: boolean;
     isDefault?: boolean;
+    userServiceAgreement?: Partial<MiniAppPolicyContent>;
+    privacyPolicy?: Partial<MiniAppPolicyContent>;
     wechatPay?: Partial<MiniAppWechatPayConfig>;
   },
 ) {
