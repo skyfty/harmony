@@ -796,8 +796,10 @@ async function applyRigidbodyMetadata(nodes: SceneNode[], candidates: RigidbodyE
       }
       continue
     }
-    const props = clampRigidbodyComponentProps(entry.component.props as Partial<RigidbodyComponentProps>)
     const existingRigidbodyMetadata = entry.component.metadata?.[RIGIDBODY_METADATA_KEY] as RigidbodyComponentMetadata | undefined
+    if (existingRigidbodyMetadata?.shape) {
+      continue
+    }
     const hostWorldTransform = worldTransformMap.get(entry.node.id) ?? null
     const sourceWorldTransform = worldTransformMap.get(samplingNode.id) ?? hostWorldTransform
     const samplingObject = await buildRigidbodySamplingObject(samplingNode, assetCacheStore, groundNode, sourceWorldTransform)
