@@ -344,10 +344,6 @@ class AssetDownloadWorkerPool {
   }
 
   private ensureWorkers(): void {
-    if (typeof Worker === 'undefined') {
-      throw new AssetDownloadWorkerUnavailableError('当前环境不支持 Worker');
-    }
-
     for (let index = this.workers.length - 1; index >= 0; index -= 1) {
       if (!this.workers[index]!.isAlive()) {
         this.workers[index]!.dispose();

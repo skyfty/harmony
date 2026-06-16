@@ -1,5 +1,6 @@
 import { fileURLToPath, URL } from 'node:url';
 import { createRequire } from 'node:module';
+import { defineConfig } from 'vite';
 import uni from '@dcloudio/vite-plugin-uni';
 import bundleOptimizer from '@uni-ku/bundle-optimizer';
 import threePlatformAdapter from '@minisheep/three-platform-adapter/plugin';
@@ -228,7 +229,7 @@ function resolveManualChunk(id: string): string | undefined {
   return undefined;
 }
 
-export default {
+export default defineConfig({
   define: {
     __HARMONY_SCENERY_CANNON_DEBUGGER_ENABLED__: JSON.stringify(process.env.NODE_ENV !== 'production'),
     'import.meta.env.VITE_SCENERY_ENABLE_GLTF_DRACO': JSON.stringify('true'),
@@ -247,12 +248,8 @@ export default {
     target: buildTarget,
     rollupOptions: {
       output: {
-        manualChunks(id) {
-          return resolveManualChunk(id);
-        },
-        assetFileNames(assetInfo) {
-          return resolveAssetFileName(assetInfo) ?? 'assets/[name].[hash][extname]';
-        },
+        manualChunks: (id: string) => resolveManualChunk(id),
+        assetFileNames: (assetInfo: { name?: string }) => resolveAssetFileName(assetInfo) ?? 'assets/[name].[hash][extname]',
       },
     },
   },
@@ -422,7 +419,7 @@ export default {
     }),
     {
       name: 'find-dep',
-      config(config) {
+      config: (config: Record<string, unknown>) => {
         const resolve = (config as { resolve?: { preserveSymlinks?: boolean } }).resolve;
         if (resolve) {
           resolve.preserveSymlinks = true;
@@ -432,7 +429,7 @@ export default {
       },
     },
   ],
-};
+});
 
 function getUniPlugin() {
   const maybeModule = uni as unknown as { default?: () => unknown };

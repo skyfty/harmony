@@ -11,7 +11,6 @@ import 'viewerjs/dist/viewer.css'
 import { configureScenerySharedWorkers } from './workers/sceneryWorkerBootstrap'
 
 console.info('[editor] configuring scenery shared workers')
-configureScenerySharedWorkers()
 
 async function preloadRuntimeConfig() {
 	try {
@@ -26,6 +25,9 @@ async function preloadRuntimeConfig() {
 		console.warn('[editor] runtime config not found, fallback to env', err)
 	}
 }
+
+
+configureScenerySharedWorkers()
 
 
 ;(async () => {

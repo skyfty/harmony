@@ -22,6 +22,10 @@ type BundleAssetLike = {
 type BundleValueLike = BundleChunkLike | BundleAssetLike | undefined
 type BundleLike = Record<string, BundleValueLike>
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
 export function emitMpWorkerAssetPlugin(options: EmitMpWorkerAssetPluginOptions): Plugin {
   const isMp = process.env.UNI_PLATFORM?.startsWith('mp-') ?? false
   return {
@@ -83,9 +87,11 @@ export function emitMpWorkerAssetPlugin(options: EmitMpWorkerAssetPluginOptions)
         return
       }
 
+      const targetBaseName = path.basename(options.fileName, path.extname(options.fileName))
+      const expectedPattern = new RegExp(`^${escapeRegExp(targetBaseName)}-.*\\.js$`)
       const sourceFile = fs
         .readdirSync(assetsDir)
-        .find((name: string) => /^instancedLodCulling\.worker-.*\.js$/.test(name))
+        .find((name: string) => expectedPattern.test(name))
       if (!sourceFile) {
         return
       }

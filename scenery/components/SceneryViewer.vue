@@ -657,7 +657,6 @@ import { rebuildSceneNodeIndex, resolveSceneNodeById, resolveSceneParentNodeId }
 import { resolveEnabledComponentState } from '@harmony/schema/componentRuntimeUtils';
 import { createGradientBackgroundDome, disposeGradientBackgroundDome, type GradientBackgroundDome } from '@harmony/schema/gradientBackground';
 import { disposeSkyCubeTexture, loadSkyCubeTexture, extractSkycubeZipFacesAsync, type ExtractSkycubeZipFacesResult } from '@harmony/schema/skyCubeTexture';
-import { configureScenerySharedWorkers } from '../workers/sceneryWorkerBootstrap'
 import {
   canNodeUseRuntimeModelInstancing,
   collectRuntimeModelNodesByAssetId,
@@ -691,7 +690,6 @@ import type {
   SceneResourceSummaryEntry,
   Vector3Like,
 } from '@harmony/schema/core';
-configureScenerySharedWorkers();
 import {
   isRuntimeHiddenInPreview,
   deserializeCompiledGroundManifest,

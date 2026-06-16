@@ -1,7 +1,7 @@
 import * as THREE from 'three';
-import { createKtx2Loader, createKtx2SupportRenderer, disposeKtx2SupportRenderer, FAST_KTX2_TRANSCODER_PATH } from './ktx2Loader';
-import { KTX2Loader } from 'three/examples/jsm/loaders/KTX2Loader.js'
-import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js'
+// import { createKtx2Loader, createKtx2SupportRenderer, disposeKtx2SupportRenderer, FAST_KTX2_TRANSCODER_PATH } from './ktx2Loader';
+// import { KTX2Loader } from 'three/examples/jsm/loaders/KTX2Loader.js'
+// import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 
 export type LoaderProgressPayload = {
@@ -259,22 +259,22 @@ export interface ParsedGltfResult {
   animations: THREE.AnimationClip[];
 }
 
-const DEFAULT_DRACO_DECODER_PATH = '../examples/jsm/libs/draco/gltf/';
+// const DEFAULT_DRACO_DECODER_PATH = '../examples/jsm/libs/draco/gltf/';
 export async function createGltfLoader(options: GltfParseOptions = {}): Promise<any> {
   const loader = new GLTFLoader(options.manager);
 
-  const dracoLoader = new DRACOLoader();
-  dracoLoader.setDecoderPath(options.dracoDecoderPath ?? DEFAULT_DRACO_DECODER_PATH);
-  loader.setDRACOLoader(dracoLoader);
+  // const dracoLoader = new DRACOLoader();
+  // dracoLoader.setDecoderPath(options.dracoDecoderPath ?? DEFAULT_DRACO_DECODER_PATH);
+  // loader.setDRACOLoader(dracoLoader);
 
-  const renderer = options.ktx2Renderer ?? createKtx2SupportRenderer();
-  const ktx2Loader = await createKtx2Loader(renderer, {
-    manager: options.manager,
-    transcoderPath: options.ktx2TranscoderPath ?? FAST_KTX2_TRANSCODER_PATH,
-  });
-  loader.setKTX2Loader(ktx2Loader as KTX2Loader);
-  if (!options.ktx2Renderer) {
-    disposeKtx2SupportRenderer(renderer);
-  }
+  // const renderer = options.ktx2Renderer ?? createKtx2SupportRenderer();
+  // const ktx2Loader = await createKtx2Loader(renderer, {
+  //   manager: options.manager,
+  //   transcoderPath: options.ktx2TranscoderPath ?? FAST_KTX2_TRANSCODER_PATH,
+  // });
+  // loader.setKTX2Loader(ktx2Loader as KTX2Loader);
+  // if (!options.ktx2Renderer) {
+  //   disposeKtx2SupportRenderer(renderer);
+  // }
   return loader;
 }

@@ -2,15 +2,11 @@ import { configureAssetBlobDownloader } from '@schema/assetCache'
 import {
   createWorkerAssetBlobDownloader,
 } from '@schema/assetDownloadWorkerPool'
-import {
-  configureSkyCubeZipExtractorWorkerFactory,
-} from '@schema/skyCubeTexture'
 
 type ModuleWorkerFactory = () => Worker | null
 
 export const SCENERY_SHARED_WORKER_PATHS = {
   assetDownloadWorkerPath: './assetDownload.worker.ts',
-  skyCubeZipExtractorWorkerPath: './skyCubeTexture.worker.ts',
 } as const
 
 export function configureScenerySharedWorkers(): void {
@@ -18,9 +14,6 @@ export function configureScenerySharedWorkers(): void {
     createWorkerAssetBlobDownloader(
       createModuleWorkerFactory('asset-download', SCENERY_SHARED_WORKER_PATHS.assetDownloadWorkerPath),
     ),
-  )
-  configureSkyCubeZipExtractorWorkerFactory(
-    createModuleWorkerFactory('skycube-zip', SCENERY_SHARED_WORKER_PATHS.skyCubeZipExtractorWorkerPath),
   )
 }
 

@@ -7,12 +7,6 @@ export interface AssetBlobPayload {
   url: string
 }
 
-/**
- * Optional: configure a custom downloader implementation.
- *
- * The editor app can inject a worker-based downloader to keep downloads off the main thread.
- * Other runtimes can ignore this.
- */
 export type AssetBlobDownloader = (
   urlCandidates: string[],
   controller: AbortController,
@@ -20,7 +14,6 @@ export type AssetBlobDownloader = (
 ) => Promise<AssetBlobPayload>
 
 type AssetDownloadRuntimeState = {
-  assetBlobDownloader: AssetBlobDownloader | null
   assetDownloadModuleTag: string
   assetDownloadHostMirrors: AssetDownloadHostMirrorMap | null
 }
@@ -33,7 +26,6 @@ function getAssetDownloadRuntimeState(): AssetDownloadRuntimeState {
   }
   if (!globalObject[ASSET_DOWNLOAD_RUNTIME_STATE_KEY]) {
     globalObject[ASSET_DOWNLOAD_RUNTIME_STATE_KEY] = {
-      assetBlobDownloader: null,
       assetDownloadModuleTag: Math.random().toString(36).slice(2, 10),
       assetDownloadHostMirrors: null,
     }
@@ -54,12 +46,7 @@ export function configureAssetDownloadHostMirrors(mirrors: AssetDownloadHostMirr
 }
 
 export function configureAssetBlobDownloader(downloader: AssetBlobDownloader | null): void {
-  const state = getAssetDownloadRuntimeState()
-  state.assetBlobDownloader = downloader
-  console.info('[harmony-schema][asset-download] configured downloader', {
-    moduleTag: state.assetDownloadModuleTag,
-    hasDownloader: Boolean(downloader),
-  })
+  void downloader
 }
 
 export class AssetDownloadWorkerUnavailableError extends Error {
@@ -85,21 +72,12 @@ export async function fetchAssetBlob(
     throw createAbortError()
   }
 
-  if (!state.assetBlobDownloader) {
-    console.warn('[harmony-schema][asset-download] downloader missing on fetch', {
-      moduleTag: state.assetDownloadModuleTag,
-      candidateCount: candidates.length,
-      fallbackUrl,
-    })
-    throw new AssetDownloadWorkerUnavailableError('资源下载 Worker 未配置')
-  }
-
-  console.info('[harmony-schema][asset-download] using worker downloader', {
+  console.info('[harmony-schema][asset-download] using request downloader', {
     moduleTag: state.assetDownloadModuleTag,
     candidateCount: candidates.length,
     fallbackUrl,
   })
-  return await state.assetBlobDownloader(candidates, controller, onProgress)
+  return await downloadAssetBlob(candidates, controller, onProgress)
 }
 
 function createAbortError(): Error {
@@ -183,6 +161,236 @@ function createMirroredUrlCandidates(url: string): string[] {
     }
   }
   return results
+}
+
+async function downloadAssetBlob(
+  urlCandidates: string[],
+  controller: AbortController,
+  onProgress: (value: number) => void,
+): Promise<AssetBlobPayload> {
+  let lastNetworkError: unknown = null
+
+  for (const candidate of urlCandidates) {
+    try {
+      return await downloadAssetBlobFromCandidate(candidate, controller, onProgress)
+    } catch (error) {
+      if (isRetryableDownloadError(error) && candidate !== urlCandidates[0]) {
+        lastNetworkError = error
+        continue
+      }
+      throw error instanceof Error ? error : new Error(String(error))
+    }
+  }
+
+  if (lastNetworkError) {
+    throw lastNetworkError instanceof Error ? lastNetworkError : new Error(String(lastNetworkError))
+  }
+
+  throw new Error('资源下载失败（网络错误）')
+}
+
+async function downloadAssetBlobFromCandidate(
+  url: string,
+  controller: AbortController,
+  onProgress: (value: number) => void,
+): Promise<AssetBlobPayload> {
+  if (controller.signal.aborted) {
+    throw createAbortError()
+  }
+
+  if (typeof fetch === 'function') {
+    return await downloadAssetBlobViaFetch(url, controller, onProgress)
+  }
+
+  const uniApi = typeof uni !== 'undefined' ? uni : null
+  if (uniApi && typeof uniApi.request === 'function') {
+    return await downloadAssetBlobViaUniRequest(uniApi, url, controller, onProgress)
+  }
+
+  throw new Error('资源下载失败（当前环境不支持 fetch 或 uni.request）')
+}
+
+async function downloadAssetBlobViaFetch(
+  url: string,
+  controller: AbortController,
+  onProgress: (value: number) => void,
+): Promise<AssetBlobPayload> {
+  const response = await fetch(url, { signal: controller.signal })
+  if (!response.ok) {
+    throw new Error(`资源下载失败（${response.status}）`)
+  }
+
+  const mimeType = response.headers.get('content-type')
+  const filename = extractFilenameFromHeaders(response.headers, response.url || url)
+  const requestUrl = response.url || url
+  const total = Number.parseInt(response.headers.get('content-length') ?? '0', 10)
+
+  if (!response.body) {
+    const buffer = await response.arrayBuffer()
+    onProgress(100)
+    return buildAssetBlobPayload(buffer, requestUrl, mimeType, filename)
+  }
+
+  const reader = response.body.getReader()
+  const chunks: Uint8Array[] = []
+  let received = 0
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) {
+      break
+    }
+    if (value && value.byteLength) {
+      chunks.push(value)
+      received += value.byteLength
+      if (total > 0) {
+        onProgress(Math.min(99, Math.round((received / total) * 100)))
+      } else {
+        onProgress(Math.min(95, received % 100))
+      }
+    }
+  }
+
+  const joined = new Uint8Array(received)
+  let offset = 0
+  for (const chunk of chunks) {
+    joined.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+
+  onProgress(100)
+  return buildAssetBlobPayload(joined.buffer, requestUrl, mimeType, filename)
+}
+
+async function downloadAssetBlobViaUniRequest(
+  uniApi: { request?: (options: {
+    url: string
+    method?: string
+    responseType?: 'arraybuffer'
+    success: (payload: { statusCode?: number; data?: unknown; header?: Record<string, string> }) => void
+    fail: (error: unknown) => void
+  }) => { abort?: () => void } | void },
+  url: string,
+  controller: AbortController,
+  onProgress: (value: number) => void,
+): Promise<AssetBlobPayload> {
+  return await new Promise<AssetBlobPayload>((resolve, reject) => {
+    const task = uniApi.request?.({
+      url,
+      method: 'GET',
+      responseType: 'arraybuffer',
+      success: (payload) => {
+        const statusCode = payload.statusCode ?? 200
+        if (statusCode < 200 || statusCode >= 300) {
+          reject(new Error(`资源下载失败（${statusCode}）`))
+          return
+        }
+        const arrayBuffer = toArrayBuffer(payload.data)
+        const mimeType = payload.header?.['content-type'] ?? payload.header?.['Content-Type'] ?? null
+        const filename = extractFilenameFromResponseHeader(payload.header, url)
+        onProgress(100)
+        resolve(buildAssetBlobPayload(arrayBuffer, url, mimeType, filename))
+      },
+      fail: (error) => reject(error),
+    })
+
+    const abortListener = () => {
+      try {
+        task?.abort?.()
+      } catch {
+        /* noop */
+      }
+      reject(createAbortError())
+    }
+
+    if (controller.signal.aborted) {
+      abortListener()
+      return
+    }
+
+    controller.signal.addEventListener('abort', abortListener, { once: true })
+  })
+}
+
+function buildAssetBlobPayload(
+  arrayBuffer: ArrayBuffer,
+  url: string,
+  mimeType: string | null,
+  filename: string | null,
+): AssetBlobPayload {
+  return {
+    blob: new Blob([arrayBuffer], { type: mimeType ?? 'application/octet-stream' }),
+    mimeType,
+    filename,
+    url,
+  }
+}
+
+function extractFilenameFromResponseHeader(headers: Record<string, string> | undefined, url: string): string | null {
+  if (headers) {
+    const contentDisposition = headers['content-disposition'] ?? headers['Content-Disposition']
+    if (contentDisposition) {
+      const filenameMatch = /filename\*=UTF-8''([^;]+)|filename="?([^";]+)"?/i.exec(contentDisposition)
+      if (filenameMatch) {
+        const encoded = filenameMatch[1] ?? filenameMatch[2]
+        if (encoded) {
+          try {
+            return decodeURIComponent(encoded)
+          } catch {
+            return encoded
+          }
+        }
+      }
+    }
+  }
+  return extractFilenameFromUrl(url)
+}
+
+function extractFilenameFromHeaders(headers: Headers, url: string): string | null {
+  const contentDisposition = headers.get('content-disposition')
+  if (contentDisposition) {
+    const filenameMatch = /filename\*=UTF-8''([^;]+)|filename="?([^";]+)"?/i.exec(contentDisposition)
+    if (filenameMatch) {
+      const encoded = filenameMatch[1] ?? filenameMatch[2]
+      if (encoded) {
+        try {
+          return decodeURIComponent(encoded)
+        } catch {
+          return encoded
+        }
+      }
+    }
+  }
+  return extractFilenameFromUrl(url)
+}
+
+function extractFilenameFromUrl(url: string): string | null {
+  try {
+    const parsed = new URL(url)
+    const segment = parsed.pathname.split('/').filter(Boolean).pop()
+    return segment ? decodeURIComponent(segment) : null
+  } catch {
+    return null
+  }
+}
+
+function toArrayBuffer(data: unknown): ArrayBuffer {
+  if (data instanceof ArrayBuffer) {
+    return data
+  }
+  if (ArrayBuffer.isView(data)) {
+    const bytes = new Uint8Array(data.byteLength)
+    bytes.set(new Uint8Array(data.buffer, data.byteOffset, data.byteLength))
+    return bytes.buffer
+  }
+  if (typeof data === 'string') {
+    return new TextEncoder().encode(data).buffer
+  }
+  return new ArrayBuffer(0)
+}
+
+function isRetryableDownloadError(error: unknown): boolean {
+  return error instanceof TypeError || error instanceof Error
 }
 
 function normalizeHostKey(value: string): string {
