@@ -1,4 +1,6 @@
+import { createReadStream } from 'node:fs'
 import type { Context } from 'koa'
+import fs from 'fs-extra'
 import { Types } from 'mongoose'
 import { SceneModel } from '@/models/Scene'
 import { SceneSpotModel } from '@/models/SceneSpot'
@@ -11,6 +13,7 @@ import { UserProductModel } from '@/models/UserProduct'
 import { AppUserModel } from '@/models/AppUser'
 import { SceneSpotCommentModel } from '@/models/SceneSpotComment'
 import { ensureUserId, getOptionalUserId } from '@/controllers/miniprogram/utils'
+import { resolveStorageAbsolutePath } from '@/services/uploadStorageService'
 import {
   asString,
   computeUserProductState,
@@ -196,15 +199,32 @@ export async function downloadScenePackage(ctx: Context): Promise<void> {
   if (!scene) {
     ctx.throw(404, 'Scene not found')
   }
-  const fileUrl = typeof scene.fileUrl === 'string' ? scene.fileUrl.trim() : ''
-  if (!fileUrl) {
+  const fileKey = typeof scene.fileKey === 'string' ? scene.fileKey.trim() : ''
+  if (!fileKey) {
     ctx.throw(404, 'Scene package not found')
   }
+  const filePath = resolveStorageAbsolutePath(fileKey)
+  const exists = await fs.pathExists(filePath)
+  if (!exists) {
+    ctx.throw(404, 'Scene package file not found')
+  }
+  const stats = await fs.stat(filePath)
+  const etag = `W/"${fileKey}-${stats.size}-${Math.floor(stats.mtimeMs)}"`
+  const ifNoneMatch = ctx.get('If-None-Match')
+  if (ifNoneMatch && ifNoneMatch === etag) {
+    ctx.status = 304
+    return
+  }
 
-  ctx.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0')
+  ctx.set('Cache-Control', 'public, max-age=0, must-revalidate')
   ctx.set('Pragma', 'no-cache')
   ctx.set('Expires', '0')
-  ctx.redirect(fileUrl)
+  ctx.set('ETag', etag)
+  ctx.set('Last-Modified', stats.mtime.toUTCString())
+  ctx.type = 'application/zip'
+  ctx.length = stats.size
+  ctx.attachment(scene.originalFilename || `${scene.name || 'scene'}.zip`)
+  ctx.body = createReadStream(filePath)
 }
 
 function buildSceneSpotSummaryDto(ctx: Context, spot: any, scene: any) {
