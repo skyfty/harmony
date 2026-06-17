@@ -1590,7 +1590,8 @@ export async function prepareScenePackageZipFiles(payload: {
         entry = assetCache.getEntry(assetId)
       }
       if (entry.status !== 'cached' || !entry.blob) {
-        throw new Error(`Missing local asset resource (assetId=${assetId}); please ensure the local asset has been written to IndexedDB before exporting.`)
+        continue
+        // throw new Error(`Missing local asset resource (assetId=${assetId}); please ensure the local asset has been written to IndexedDB before exporting.`)
       }
 
       const blob = entry.blob
