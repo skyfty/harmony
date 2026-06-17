@@ -44,6 +44,8 @@ async function bootstrap(): Promise<void> {
   await ensureCouponProductCategory()
 
   const app: HarmonyKoa = new Koa()
+  // Trust the reverse proxy so ctx.origin reflects X-Forwarded-* headers.
+  app.proxy = true
 
   app.use(logger())
   app.use(
