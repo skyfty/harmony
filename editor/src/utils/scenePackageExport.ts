@@ -1389,11 +1389,9 @@ export async function prepareScenePackageZipFiles(payload: {
       ? useGroundSplatStore().buildSceneDocumentSidecar(scene.id, groundNode)
         ?? await scenesStore.loadGroundSplatSidecar(scene.id)
       : null
-    const groundScatterSidecar = includeRuntimeData
-      ? (scene.id === sceneStore.currentSceneId
+    const groundScatterSidecar = scene.id === sceneStore.currentSceneId
           ? useGroundScatterStore().buildSceneDocumentSidecar(scene.id, groundNode)
-          : await scenesStore.loadGroundScatterSidecar(scene.id))
-      : null
+          : await scenesStore.loadGroundScatterSidecar(scene.id)
     if (includeRuntimeData && groundNode?.dynamicMesh?.type === 'Ground') {
       const compiledGroundStartedAt = typeof performance !== 'undefined' ? performance.now() : Date.now()
       const compiledGroundBuildKey = computeSceneCompiledGroundBuildKey(
