@@ -19,6 +19,7 @@ import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
 import type { NodePrefabData } from '@/types/node-prefab'
 import type { DuplicateContext } from '@/types/duplicate-context'
+import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import { useAssetCacheStore, type AssetCacheEntry } from './assetCacheStore'
 import { determineAssetCategoryId } from './assetCatalog'
 import { extractExtension } from '@/utils/blob'
@@ -102,6 +103,7 @@ export type PrefabStoreLike = {
 
   ensureSceneAssetsReady: (options?: Record<string, unknown>) => Promise<void>
   withHistorySuppressed: <T>(fn: () => T | Promise<T>) => Promise<T>
+  flushPendingSceneAutoSave?: (options?: { force?: boolean }) => Promise<StoredSceneDocument | null>
   setNodeWorldPositionPositionOnly: (nodeId: string, worldPosition: Vector3) => void
   syncComponentSubtree: (node: SceneNode) => void
 
@@ -900,17 +902,22 @@ export function createPrefabActions(deps: PrefabActionsDeps) {
         if (existing.type !== 'prefab') {
           throw new Error('指定资源并非节点预制件')
         }
+        const preservedSource = existing.source ? { ...existing.source } : undefined
         const updated: ProjectAsset = {
           ...existing,
+          source: preservedSource,
           name: prefabData.name,
           description: fileName,
           previewColor: deps.NODE_PREFAB_PREVIEW_COLOR,
           thumbnail: thumbnailDataUrl ?? existing.thumbnail ?? null,
+          fileKey: existing.fileKey ?? undefined,
+          downloadUrl: existing.downloadUrl ?? targetAssetId,
           extension: extractExtension(fileName) ?? existing.extension ?? null,
         }
         const categoryId = store.resolveConfigAssetSaveDirectoryId()
         return store.registerAsset(updated, {
           categoryId,
+          source: preservedSource,
           commitOptions: { updateNodes: false },
         })
       }

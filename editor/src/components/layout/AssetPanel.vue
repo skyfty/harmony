@@ -3360,6 +3360,7 @@ async function handleSceneNodeDrop(nodeId: string): Promise<void> {
     throw new Error('该节点无法保存为预制件')
   }
   await sceneStore.saveNodePrefab(nodeId, { select: false })
+  sceneStore.saveActiveScene({ force: true })
 }
 
 function getSelectedDicePresetAssets(): ProjectAsset[] {

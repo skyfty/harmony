@@ -1995,6 +1995,7 @@ async function handleSavePrefab() {
   isSavingPrefab.value = true
   try {
     await sceneStore.saveNodePrefab(nodeId, { select: false })
+    sceneStore.saveActiveScene({ force: true })
   } catch (error) {
     console.warn('Failed to save prefab asset', error)
   } finally {

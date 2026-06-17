@@ -212,6 +212,16 @@ async function downloadAssetBlobViaFetch(
   }
 
   const mimeType = response.headers.get('content-type')
+  const normalizedContentType = mimeType?.toLowerCase() ?? ''
+  if (normalizedContentType.includes('text/html') || normalizedContentType.includes('application/xhtml+xml')) {
+    const body = await response.text().catch(() => '')
+    const snippet = body.trimStart().slice(0, 80)
+    const location = response.url && response.url !== url ? `${url} -> ${response.url}` : url
+    const htmlHint = /^<!doctype\s+html/i.test(snippet) || /^<html[\s>]/i.test(snippet)
+      ? 'HTML 页面'
+      : '网页内容'
+    throw new Error(`资源下载失败：${location} 返回了${htmlHint}，请检查下载地址或登录态是否有效`)
+  }
   const filename = extractFilenameFromHeaders(response.headers, response.url || url)
   const requestUrl = response.url || url
   const total = Number.parseInt(response.headers.get('content-length') ?? '0', 10)
