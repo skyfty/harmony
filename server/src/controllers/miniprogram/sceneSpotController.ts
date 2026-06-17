@@ -216,9 +216,6 @@ export async function downloadScenePackage(ctx: Context): Promise<void> {
     return
   }
 
-  ctx.set('Cache-Control', 'public, max-age=0, must-revalidate')
-  ctx.set('Pragma', 'no-cache')
-  ctx.set('Expires', '0')
   ctx.set('ETag', etag)
   ctx.set('Last-Modified', stats.mtime.toUTCString())
   ctx.type = 'application/zip'
