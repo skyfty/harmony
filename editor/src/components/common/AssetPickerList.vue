@@ -59,7 +59,6 @@ const {
 
 const selectedAssetId = ref(props.assetId ?? '')
 const selectedAssetIds = ref<string[]>(normalizeSelectionIds(props.selectedAssetIds ?? []))
-const selectingAssetId = ref<string | null>(null)
 const searchTerm = ref('')
 const showLocalSources = ref(true)
 const showRemoteSources = ref(true)
@@ -69,28 +68,7 @@ function isAssetDownloading(asset: ProjectAsset): boolean {
   if (!asset?.id) {
     return false
   }
-  return assetCacheStore.isDownloading(asset.id) || selectingAssetId.value === asset.id
-}
-
-function isPrefabSelectionInProgress(asset: ProjectAsset): boolean {
-  if (asset.type !== 'prefab') {
-    return false
-  }
-  const progress = sceneStore.prefabAssetDownloadProgress?.[asset.id] ?? null
-  return !!progress?.active
-}
-
-function isAssetReadyForPickerSelection(asset: ProjectAsset): boolean {
-  if (!asset?.id) {
-    return false
-  }
-  if (asset.type === 'prefab') {
-    return assetCacheStore.hasCache(asset.id) && !isPrefabSelectionInProgress(asset) && !assetCacheStore.isDownloading(asset.id)
-  }
-  if (asset.type === 'model' || asset.type === 'mesh' || asset.type === 'lod') {
-    return assetCacheStore.hasCache(asset.id) && !assetCacheStore.isDownloading(asset.id)
-  }
-  return true
+  return assetCacheStore.isDownloading(asset.id)
 }
 
 function assetDownloadProgress(asset: ProjectAsset): number {
@@ -327,99 +305,17 @@ async function handleAssetClick(asset: ProjectAsset) {
     return
   }
 
-  if (selectingAssetId.value === asset.id) {
+  if (props.multiple) {
+    syncSelectionIds(
+      selectedAssetIds.value.includes(asset.id)
+        ? selectedAssetIds.value.filter((id) => id !== asset.id)
+        : [...selectedAssetIds.value, asset.id],
+    )
     return
   }
 
-  if (!isAssetReadyForPickerSelection(asset) && (assetCacheStore.isDownloading(asset.id) || isPrefabSelectionInProgress(asset))) {
-    return
-  }
-
-  if (asset.type === 'prefab' && !isAssetReadyForPickerSelection(asset)) {
-    selectingAssetId.value = asset.id
-    try {
-      await sceneStore.preparePrefabAsset(asset.id, {
-        prefabAssetIdForDownloadProgress: asset.id,
-      })
-    } catch (error) {
-      console.warn('Failed to prepare selected prefab asset', asset.id, error)
-    } finally {
-      selectingAssetId.value = null
-    }
-    return
-  }
-
-  if (asset.type === 'lod') {
-    if (!isAssetReadyForPickerSelection(asset)) {
-      selectingAssetId.value = asset.id
-      try {
-        await sceneStore.prepareLodAsset(asset)
-      } catch (error) {
-        console.warn('Failed to prepare selected LOD asset', asset.id, error)
-      } finally {
-        selectingAssetId.value = null
-      }
-      return
-    }
-
-    selectingAssetId.value = asset.id
-    try {
-      const prepared = await sceneStore.prepareLodAsset(asset)
-      if (props.multiple) {
-        syncSelectionIds(
-          selectedAssetIds.value.includes(prepared.requestedAsset.id)
-            ? selectedAssetIds.value.filter((id) => id !== prepared.requestedAsset.id)
-            : [...selectedAssetIds.value, prepared.requestedAsset.id],
-        )
-        return
-      }
-      selectedAssetId.value = prepared.requestedAsset.id
-      emit('update:asset', prepared.requestedAsset)
-    } catch (error) {
-      console.warn('Failed to prepare selected LOD asset', asset.id, error)
-    } finally {
-      selectingAssetId.value = null
-    }
-    return
-  }
-
-  const requiresCache = asset.type === 'model' || asset.type === 'mesh'
-  if (!requiresCache) {
-    if (props.multiple) {
-      syncSelectionIds(
-        selectedAssetIds.value.includes(asset.id)
-          ? selectedAssetIds.value.filter((id) => id !== asset.id)
-          : [...selectedAssetIds.value, asset.id],
-      )
-      return
-    }
-    selectedAssetId.value = asset.id
-    emit('update:asset', asset)
-    return
-  }
-
-  if (isAssetReadyForPickerSelection(asset)) {
-    if (props.multiple) {
-      syncSelectionIds(
-        selectedAssetIds.value.includes(asset.id)
-          ? selectedAssetIds.value.filter((id) => id !== asset.id)
-          : [...selectedAssetIds.value, asset.id],
-      )
-      return
-    }
-    selectedAssetId.value = asset.id
-    emit('update:asset', asset)
-    return
-  }
-
-  selectingAssetId.value = asset.id
-  try {
-    await assetCacheStore.downloadProjectAsset(asset)
-  } catch (error) {
-    console.warn('Failed to download selected model asset', asset.id, error)
-  } finally {
-    selectingAssetId.value = null
-  }
+  selectedAssetId.value = asset.id
+  emit('update:asset', asset)
 }
 
 function handleClearSelection() {

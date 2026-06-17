@@ -312,6 +312,18 @@ function resolveSlotAssetFromEvent(event: DragEvent): MaterialAsset | TextureAss
   return null
 }
 
+function ensureMaterialAssetRegistered(asset: ProjectAsset): ProjectAsset {
+  try {
+    return sceneStore.ensureSceneAssetRegistered(asset, {
+      source: asset.source ?? { type: 'url' },
+      commitOptions: { updateNodes: false },
+    })
+  } catch (error) {
+    console.warn('Failed to register selected material asset', asset.id, error)
+    return asset
+  }
+}
+
 function ensureEditableNodeMaterial(slotId: string): SceneNodeMaterial | null {
   if (!selectedNodeId.value) {
     return null
@@ -399,11 +411,15 @@ async function handleMaterialAssetPicked(asset: ProjectAsset | null) {
   if (asset.type !== 'material') {
     return
   }
-  const applied = await sceneStore.applyMaterialAssetToNodeMaterialSlot(selectedNodeId.value, slotId, asset.id)
+  const registeredAsset = ensureMaterialAssetRegistered(asset)
+  const applied = await sceneStore.applyMaterialAssetToNodeMaterialSlot(selectedNodeId.value, slotId, registeredAsset.id)
   if (!applied) {
     return
   }
-  setMaterialPreviewThumbnail(slotId, applied.thumbnail ?? resolveMaterialAssetThumbnail(asset.id) ?? asset.thumbnail)
+  setMaterialPreviewThumbnail(
+    slotId,
+    applied.thumbnail ?? resolveMaterialAssetThumbnail(registeredAsset.id) ?? registeredAsset.thumbnail,
+  )
   setActiveSlot(slotId)
 }
 
