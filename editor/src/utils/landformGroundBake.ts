@@ -1998,35 +1998,6 @@ export async function bakeLandformGroundSurfaceChunks(
     })
   }
 
-  if (debugProfiling) {
-    console.info('[LandformBakePerf]', {
-      reason: debugReason,
-      sceneId: debugSceneId,
-      groundNodeId,
-      landformNodes: landformNodes.length,
-      landformEntries: landformEntries.length,
-      affectedChunkKeys: affectedChunkKeys.length,
-      maxTextureSize,
-      maxSplatLayers: Math.max(1, Math.min(4, Math.trunc(Number(options.maxSplatLayers) || 4))),
-      totalMs: Math.round(nowMs() - debugStartedAt),
-      timingsMs: {
-        entries: Math.round(debugMetrics?.entriesMs ?? 0),
-        affected: Math.round(debugMetrics?.affectedMs ?? 0),
-        chunkFilter: Math.round(debugMetrics?.chunkFilterMs ?? 0),
-        paint: Math.round(debugMetrics?.paintMs ?? 0),
-        maskRead: Math.round(debugMetrics?.maskReadMs ?? 0),
-        encode: Math.round(debugMetrics?.encodeMs ?? 0),
-      },
-      chunkStats: {
-        processed: debugMetrics?.chunkCount ?? 0,
-        skippedNoLandforms: debugMetrics?.chunkSkippedNoLandforms ?? 0,
-        skippedNoGeometry: debugMetrics?.chunkSkippedNoGeometry ?? 0,
-        reused: debugMetrics?.chunkReused ?? 0,
-        paintedTriangles: debugMetrics?.paintedTriangles ?? 0,
-        paintedLayers: debugMetrics?.paintedLayers ?? 0,
-      },
-    })
-  }
 
   // 如果这轮烘焙一个 chunk 都没生成，就返回 null，
   // 这样上层可以明确知道“没有新结果”，而不是一个空对象。
