@@ -31,6 +31,10 @@ export type LoadStoredScenePackageOptions = {
   allowLandformNodes?: boolean
 }
 
+function formatScenePackageImportLog(label: string, payload: Record<string, unknown>): string {
+  return `${label}: ${JSON.stringify(payload, null, 2)}`
+}
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
@@ -56,6 +60,11 @@ function assertNoLandformNodes(nodes: StoredSceneDocument['nodes'], path = 'root
 
 async function restoreRuntimeResourcesFromPackage(zip: ReturnType<typeof unzipScenePackage>): Promise<void> {
   const assetCache = useAssetCacheStore()
+  const resourceEntries = (zip.manifest.resources ?? []).filter((entry) => entry.resourceType !== 'planningImage')
+  console.info(formatScenePackageImportLog('Scene package resource restore start', {
+    resourceCount: resourceEntries.length,
+    resourceIds: resourceEntries.map((entry) => entry.logicalId),
+  }))
   for (const entry of zip.manifest.resources ?? []) {
     if (entry.resourceType === 'planningImage') {
       continue
@@ -68,6 +77,16 @@ async function restoreRuntimeResourcesFromPackage(zip: ReturnType<typeof unzipSc
     const filename = `${entry.logicalId}.${entry.ext}`
     const blob = new Blob([new Uint8Array(bytes)], { type: mimeType })
     await assetCache.storeAssetBlob(entry.logicalId, { blob, mimeType, filename })
+    console.info(formatScenePackageImportLog('Scene package resource restored', {
+      logicalId: entry.logicalId,
+      resourceType: entry.resourceType,
+      path: entry.path,
+      mimeType,
+      filename,
+      byteLength: bytes.byteLength,
+      cachedStatus: assetCache.getEntry(entry.logicalId)?.status ?? null,
+      hasBlob: !!assetCache.getEntry(entry.logicalId)?.blob,
+    }))
   }
 }
 

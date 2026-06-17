@@ -5893,9 +5893,12 @@ function buildSceneAssetRegistryEntry(
 
 export async function buildAssetRegistryForExport(
   scene: StoredSceneDocument,
+  options: { packageMode?: 'runtime' | 'source' } = {},
 ): Promise<Record<string, SceneAssetRegistryEntry>> {
   const runtimeAwareScene = cloneSceneDocumentWithRuntimeGroundSidecars(scene)
   const existingRegistry = runtimeAwareScene.assetRegistry ?? {}
+  const packageMode = options.packageMode ?? 'runtime'
+  const shouldApplyRuntimeFilter = packageMode === 'runtime'
   const normalizeExportAssetId = (assetId: string): string | null => normalizeAssetIdForExportLookup(assetId, existingRegistry)
   const usedAssetIds = normalizeAssetIdsWithRegistry(collectSceneAssetReferences(runtimeAwareScene), existingRegistry)
   const directReferenceAssetIds = normalizeAssetIdsWithRegistry(
@@ -5956,6 +5959,9 @@ export async function buildAssetRegistryForExport(
   const assetRegistry: Record<string, SceneAssetRegistryEntry> = {}
   exportAssetIds.forEach((assetId) => {
     const asset = getAssetFromCatalog(assetCatalog, assetId)
+    if (shouldApplyRuntimeFilter && shouldExcludeAssetFromRuntimeExport(asset, { assetId, retainedConfigAssetIds })) {
+      return
+    }
     const sourceMeta =
       asset?.source
       ?? inferPackageSourceFromAssetId(assetId)

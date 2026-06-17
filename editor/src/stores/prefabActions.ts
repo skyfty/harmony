@@ -693,7 +693,9 @@ export function buildSerializedPrefabPayload(
   const prefabData = createNodePrefabData(deps, prefabRoot, context.name ?? node.name ?? '')
   bakePrefabSubtreeTransforms(deps, prefabData.root, context.sceneNodes)
   const dependencyAssetIds = collectPrefabAssetReferences(prefabData.root)
-  if (dependencyAssetIds.length) {
+  if (!dependencyAssetIds.length) {
+    delete (prefabData as any).assetRegistry
+  } else {
     const dependencySubset = buildAssetDependencySubset({
       assetIds: dependencyAssetIds,
       assetRegistry: context.assetRegistry,
@@ -703,8 +705,6 @@ export function buildSerializedPrefabPayload(
     } else {
       delete (prefabData as any).assetRegistry
     }
-  } else {
-    delete (prefabData as any).assetRegistry
   }
   const serialized = serializeNodePrefab(prefabData)
   return {

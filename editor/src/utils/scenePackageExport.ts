@@ -73,6 +73,7 @@ import {
 import type { ProjectAsset } from '@/types/project-asset'
 import { resolveProjectAssetExtension, shouldExcludeAssetFromRuntimeExport } from '@/utils/assetDependencySubset'
 import {
+  collectPrefabAssetIdsFromSceneReferences,
   collectRuntimeRequiredConfigAssetIds,
   collectTransitiveConfigDependencyAssetIds,
 } from '@/stores/sceneAssetCleanup'
@@ -207,29 +208,51 @@ async function collectRuntimeRetainedEmbedAssetIds(
 function collectLocalAssetIdsForExport(
   document: SceneJsonExportDocument,
   retainedConfigAssetIds: ReadonlySet<string> = new Set<string>(),
+  options: { packageMode?: ScenePackageExportMode } = {},
 ): string[] {
   const localIds = new Set<string>()
   const effectiveRegistry = buildEffectiveAssetRegistry(document)
   const exportDocument = document as SceneExportDocumentWithEditorFields
+  const packageMode = options.packageMode ?? 'runtime'
+  const shouldApplyRuntimeFilter = packageMode === 'runtime'
 
   Object.entries(effectiveRegistry).forEach(([assetId, entry]) => {
     const normalized = typeof assetId === 'string' ? assetId.trim() : ''
     if (!normalized) {
       return
     }
-    if (shouldSkipRuntimeExportAsset(exportDocument, normalized, retainedConfigAssetIds)) {
+    if (shouldApplyRuntimeFilter && shouldSkipRuntimeExportAsset(exportDocument, normalized, retainedConfigAssetIds)) {
       return
     }
-    if (entry.sourceType !== 'package') {
+    if (packageMode !== 'source' && entry.sourceType !== 'package') {
       return
     }
-    const zipPath = typeof entry.zipPath === 'string' ? entry.zipPath.trim() : ''
-    if (zipPath === `local::${normalized}` || zipPath.startsWith('local::')) {
-      localIds.add(normalized)
-    }
+    localIds.add(normalized)
   })
 
   return Array.from(localIds)
+}
+
+function collectScenePackageAssetIdsForExport(
+  document: SceneExportDocumentWithEditorFields,
+  retainedConfigAssetIds: ReadonlySet<string>,
+  options: { packageMode?: ScenePackageExportMode } = {},
+): string[] {
+  const packageAssetIds = new Set<string>(collectLocalAssetIdsForExport(document, retainedConfigAssetIds, options))
+  collectPrefabAssetIdsFromSceneReferences(document as StoredSceneDocument, document.assetCatalog ?? {})
+    .forEach((assetId) => packageAssetIds.add(assetId))
+  return Array.from(packageAssetIds)
+}
+
+function buildPackagedAssetPathMap(
+  sharedAssetPathById: ReadonlyMap<string, string>,
+  resources: ScenePackageResourceEntry[],
+): Map<string, string> {
+  const packagedAssetPathById = new Map<string, string>(sharedAssetPathById)
+  resources.forEach((entry) => {
+    packagedAssetPathById.set(entry.logicalId, entry.path)
+  })
+  return packagedAssetPathById
 }
 
 export type ScenePackageExportScene = {
@@ -609,7 +632,7 @@ async function prepareSceneDocumentForPackageExport(
   const editable = packageMode === 'runtime'
     ? cloneSceneDocumentWithRuntimeGroundSidecars(cloned as StoredSceneDocument)
     : cloned
-  editable.assetRegistry = await buildAssetRegistryForExport(editable as StoredSceneDocument)
+  editable.assetRegistry = await buildAssetRegistryForExport(editable as StoredSceneDocument, { packageMode })
   editable.resourceSummary = await calculateSceneResourceSummary(editable as StoredSceneDocument, { embedResources: true })
 
   const unknownAssetIds = Array.isArray(editable.resourceSummary?.unknownAssetIds)
@@ -679,9 +702,6 @@ function stripEditorOnlySceneFields(
     return Object.keys(filtered).length ? filtered : undefined
   }
 
-  if (document.assetRegistry) {
-    document.assetRegistry = filterAssetMap(document.assetRegistry) ?? {}
-  }
   if (document.projectOverrideAssets) {
     document.projectOverrideAssets = filterAssetMap(document.projectOverrideAssets) ?? {}
   }
@@ -1513,9 +1533,10 @@ export async function prepareScenePackageZipFiles(payload: {
     stripGroundHeightMapsFromSceneDocument(preparedDocument as StoredSceneDocument)
     const docClone = preparedDocument as SceneExportDocumentWithEditorFields
     const retainedConfigAssetIds = collectRuntimeRetainedConfigAssetIds(docClone)
-    stripEditorOnlySceneFields(docClone, retainedConfigAssetIds, { includePlanningData })
-
-    const localAssetIds = collectLocalAssetIdsForExport(docClone, retainedConfigAssetIds)
+    if (packageMode === 'runtime') {
+      stripEditorOnlySceneFields(docClone, retainedConfigAssetIds, { includePlanningData })
+    }
+    const localAssetIds = collectScenePackageAssetIdsForExport(docClone, retainedConfigAssetIds, { packageMode })
     const sceneAssetReferenceSummaries = sceneReferenceSummaryMaps.get(scene.id) ?? new Map<string, SceneAssetReferenceSummary>()
     const excludedAssetIds = Array.isArray(docClone.resourceSummary?.excludedAssetIds)
       ? docClone.resourceSummary.excludedAssetIds
@@ -1620,19 +1641,20 @@ export async function prepareScenePackageZipFiles(payload: {
       })
     }
 
-    const packagedAssetPathById = new Map([
-      ...sharedAssetPathById.entries(),
-      ...resources.map((entry) => [entry.logicalId, entry.path] as const),
-    ])
+    const packagedAssetPathById = buildPackagedAssetPathMap(sharedAssetPathById, resources)
     if (docClone.assetRegistry) {
       Object.entries(docClone.assetRegistry).forEach(([assetId, entry]) => {
-        const packagedPath = packagedAssetPathById.get(assetId) ?? null
-        if (!packagedPath || entry?.sourceType !== 'package') {
+        const packagedPath = packagedAssetPathById.get(assetId)
+        if (!packagedPath || !entry) {
           return
         }
         docClone.assetRegistry![assetId] = {
-          ...entry,
+          sourceType: 'package',
           zipPath: packagedPath,
+          inline: entry.sourceType === 'package' ? entry.inline : undefined,
+          bytes: entry.bytes,
+          assetType: entry.assetType,
+          name: entry.name,
         }
       })
     }
@@ -1640,7 +1662,9 @@ export async function prepareScenePackageZipFiles(payload: {
       stripGroundRuntimeUserData(groundNode)
     }
     stripGroundBakedTextureAssetIds(groundNode)
-    stripEditorOnlySceneFields(docClone, retainedConfigAssetIds, { includePlanningData })
+    if (packageMode === 'runtime') {
+      stripEditorOnlySceneFields(docClone, retainedConfigAssetIds, { includePlanningData })
+    }
     // Add the prepared binary scene document to files and manifest.
     files[scenePath] = encodeScenePackageSceneDocument(docClone)
     emitSceneExportEvent(payload.reportEvent, {

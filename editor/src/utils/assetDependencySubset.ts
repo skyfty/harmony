@@ -5,6 +5,7 @@ import {
   type SceneAssetRegistryEntry,
 } from '@schema/core'
 import type { ProjectAsset } from '@/types/project-asset'
+import { buildAssetRegistryAliasMap } from '@/utils/assetRegistryIdNormalization'
 
 export type AssetDependencySubset = {
   assetRegistry?: Record<string, SceneAssetRegistryEntry>
@@ -405,12 +406,14 @@ export function buildAssetDependencySubset(payload: {
   }
 
   const assetRegistrySource = payload.assetRegistry ?? {}
+  const assetAliases = buildAssetRegistryAliasMap(assetRegistrySource)
   const assetRegistry: Record<string, SceneAssetRegistryEntry> = {}
 
   normalizedAssetIds.forEach((assetId) => {
-    const existingRegistryEntry = assetRegistrySource[assetId]
+    const canonicalAssetId = assetAliases.get(assetId) ?? assetId
+    const existingRegistryEntry = assetRegistrySource[canonicalAssetId] ?? assetRegistrySource[assetId]
     if (existingRegistryEntry) {
-      assetRegistry[assetId] = cloneRegistryEntry(existingRegistryEntry)
+      assetRegistry[canonicalAssetId] = cloneRegistryEntry(existingRegistryEntry)
     }
   })
 
