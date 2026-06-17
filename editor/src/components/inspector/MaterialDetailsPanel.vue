@@ -674,21 +674,15 @@ function ensureTextureAssetCached(asset: ProjectAsset) {
   })
 }
 
-function ensureSceneTextureAsset(asset: ProjectAsset | null): ProjectAsset | null {
+function prepareTextureAssetForSelection(asset: ProjectAsset | null): ProjectAsset | null {
   if (!asset) {
     return null
   }
   if (asset.type !== 'image' && asset.type !== 'texture' && asset.type !== 'hdri') {
     return null
   }
-  try {
-    return sceneStore.ensureSceneAssetRegistered(asset, {
-      commitOptions: { updateNodes: false },
-    })
-  } catch (error) {
-    console.warn('Failed to ensure texture asset is registered in scene assets', asset.id, error)
-    return asset
-  }
+  ensureTextureAssetCached(asset)
+  return asset
 }
 
 function resolveDefaultTileSizeMeters(asset: ProjectAsset): { x: number; y: number } | null {
@@ -790,7 +784,7 @@ function handleTextureUpdate(asset: ProjectAsset | null) {
     assetDialogVisible.value = false
     return
   }
-  const mappedAsset = ensureSceneTextureAsset(asset)
+  const mappedAsset = prepareTextureAssetForSelection(asset)
   if (mappedAsset) {
     applyTextureAsset(slot, mappedAsset)
   }
@@ -826,7 +820,7 @@ function handleTextureDrop(slot: SceneMaterialTextureSlot, event: DragEvent) {
     console.warn('Dragged asset is not an image and cannot be used as a material texture')
     return
   }
-  const mappedAsset = ensureSceneTextureAsset(asset)
+  const mappedAsset = prepareTextureAssetForSelection(asset)
   if (!mappedAsset) {
     return
   }

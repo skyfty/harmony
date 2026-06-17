@@ -1,11 +1,13 @@
 import type { WatchStopHandle } from 'vue'
 import type { Object3D } from 'three'
-import type { SceneNode } from '@schema/core'
+import type { SceneAssetRegistryEntry, SceneNode } from '@schema/core'
 import { cloneImportedObject } from '@schema/assetImport'
 import { canNodeUseRuntimeModelInstancing } from '@schema/runtimeModelInstancing'
+import { readServerDownloadBaseUrl } from '@/api/serverApiConfig'
 import type { EnsureSceneAssetsOptions, EnsureSceneAssetsProgress } from '@/types/ensure-scene-assets-options'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ModelInstanceGroup } from '@schema/modelObjectCache'
+import { resolveServerAssetDownloadUrl } from '@schema/core'
 import {
   collectRuntimeModelNodesByAssetId,
   collectSceneNodeDependencyAssetIds,
@@ -82,6 +84,7 @@ export async function updateSceneAssets(args: {
   watch: WatchFn
 
   getAsset: (assetId: string) => ProjectAsset | null
+  getAssetRegistryEntry: (assetId: string) => SceneAssetRegistryEntry | null
 
   // model/object helpers
   getCachedModelObject: (assetId: string) => ModelInstanceGroup | null
@@ -119,6 +122,7 @@ export async function updateSceneAssets(args: {
     registerRuntimeForNode,
     queueSceneNodePatch,
     prefabProgress,
+    getAssetRegistryEntry,
   } = args
 
   const normalizeUrl = (value: string | null | undefined): string | null => {
@@ -312,14 +316,37 @@ export async function updateSceneAssets(args: {
     }
   }
 
+  const resolveAssetDownloadUrlCandidate = (
+    asset: ProjectAsset | null,
+    registryEntry: SceneAssetRegistryEntry | null,
+  ): string | null => {
+    const directCandidate = normalizeUrl(asset?.downloadUrl) ?? normalizeUrl(asset?.description)
+    if (registryEntry?.sourceType === 'url') {
+      return normalizeUrl(registryEntry.url) ?? directCandidate
+    }
+    if (registryEntry?.sourceType === 'server') {
+      return resolveServerAssetDownloadUrl({
+        assetBaseUrl: readServerDownloadBaseUrl(),
+        fileKey: typeof registryEntry.fileKey === 'string' && registryEntry.fileKey.trim().length > 0
+          ? registryEntry.fileKey
+          : asset?.fileKey ?? null,
+        resolvedUrl: registryEntry.resolvedUrl ?? null,
+        downloadUrl: directCandidate,
+      }) ?? directCandidate
+    }
+    return directCandidate
+  }
+
   const ensureAssetCached = async (resolveArgs: {
     assetId: string
     assetLabel: string
-    fallbackDownloadUrl: string | null
     completedBeforeAsset: number
     overlayTotal: number
   }): Promise<void> => {
-    const { assetId, assetLabel, fallbackDownloadUrl, completedBeforeAsset, overlayTotal } = resolveArgs
+    const { assetId, assetLabel, completedBeforeAsset, overlayTotal } = resolveArgs
+    const asset = getAsset(assetId)
+    const registryEntry = getAssetRegistryEntry(assetId)
+    const fallbackDownloadUrl = resolveAssetDownloadUrlCandidate(asset, registryEntry)
     let entry = assetCache.getEntry(assetId)
     ensureEntryDownloadUrl(entry, fallbackDownloadUrl)
 
@@ -506,7 +533,6 @@ export async function updateSceneAssets(args: {
       const shouldBuildRuntime = nodesForAsset.length > 0
       const asset = getAsset(assetId)
       const assetLabel = normalizeUrl(asset?.name) ?? nodesForAsset[0]?.name ?? assetId
-      const fallbackDownloadUrl = normalizeUrl(asset?.downloadUrl) ?? normalizeUrl(asset?.description)
 
       try {
         emitProgress({
@@ -530,7 +556,6 @@ export async function updateSceneAssets(args: {
         await ensureAssetCached({
           assetId,
           assetLabel,
-          fallbackDownloadUrl,
           completedBeforeAsset,
           overlayTotal,
         })

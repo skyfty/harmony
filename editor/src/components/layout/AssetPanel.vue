@@ -651,26 +651,24 @@ async function selectAsset(asset: ProjectAsset) {
       return
     }
 
-    const prepared = prepareAssetForOperations(asset)
-    const preparedCacheId = resolveAssetCacheId(prepared)
-    if (assetCacheStore.hasCache(preparedCacheId) && !isAssetDownloading(prepared)) {
-      sceneStore.selectAsset(prepared.id)
+    if (assetCacheStore.hasCache(cacheId) && !isAssetDownloading(asset)) {
+      sceneStore.selectAsset(asset.id)
       uiStore.setActiveSelectionContext('asset-panel')
       return
     }
-    if (assetActivationPendingId.value === preparedCacheId || isAssetDownloading(prepared)) {
+    if (assetActivationPendingId.value === cacheId || isAssetDownloading(asset)) {
       return
     }
 
-    assetActivationPendingId.value = preparedCacheId
+    assetActivationPendingId.value = cacheId
     try {
-      assetCacheStore.setError(prepared.id, null)
-      await sceneStore.preparePrefabAsset(prepared.id, {
-        prefabAssetIdForDownloadProgress: prepared.id,
+      assetCacheStore.setError(asset.id, null)
+      await sceneStore.preparePrefabAsset(asset.id, {
+        prefabAssetIdForDownloadProgress: asset.id,
       })
     } catch (error) {
       const message = (error as Error).message ?? 'Failed to prepare prefab asset'
-      assetCacheStore.setError(prepared.id, message)
+      assetCacheStore.setError(asset.id, message)
       console.error('Failed to prepare prefab before select', error)
       return
     } finally {
@@ -680,24 +678,22 @@ async function selectAsset(asset: ProjectAsset) {
   }
 
   if (asset.type === 'lod') {
-    const prepared = prepareAssetForOperations(asset)
-    const preparedCacheId = resolveAssetCacheId(prepared)
-    if (assetCacheStore.hasCache(preparedCacheId) && !isAssetDownloading(prepared)) {
-      sceneStore.selectAsset(prepared.id)
+    if (assetCacheStore.hasCache(cacheId) && !isAssetDownloading(asset)) {
+      sceneStore.selectAsset(asset.id)
       uiStore.setActiveSelectionContext('asset-panel')
       return
     }
-    if (assetActivationPendingId.value === preparedCacheId || isAssetDownloading(prepared)) {
+    if (assetActivationPendingId.value === cacheId || isAssetDownloading(asset)) {
       return
     }
 
-    assetActivationPendingId.value = preparedCacheId
+    assetActivationPendingId.value = cacheId
     try {
-      assetCacheStore.setError(prepared.id, null)
-      await sceneStore.prepareLodAsset(prepared.id)
+      assetCacheStore.setError(asset.id, null)
+      await sceneStore.prepareLodAsset(asset.id)
     } catch (error) {
       const message = (error as Error).message ?? 'Failed to prepare LOD asset'
-      assetCacheStore.setError(prepared.id, message)
+      assetCacheStore.setError(asset.id, message)
       console.error('Failed to prepare LOD before select', error)
       return
     } finally {

@@ -88,20 +88,20 @@ async function hydrateDraft(): Promise<void> {
 }
 
 async function preparePickedAsset(asset: ProjectAsset): Promise<ProjectAsset | null> {
-  const registeredAsset = sceneStore.ensureSceneAssetRegistered(asset, {
-    source: asset.source ?? { type: 'url' },
-    commitOptions: { updateNodes: false },
-  })
-
-  if (registeredAsset.type !== 'model' && registeredAsset.type !== 'mesh' && registeredAsset.type !== 'lod') {
+  if (asset.type !== 'model' && asset.type !== 'mesh' && asset.type !== 'lod') {
     return null
   }
 
-  if (!assetCacheStore.hasCache(registeredAsset.id) && !assetCacheStore.isDownloading(registeredAsset.id)) {
-    await assetCacheStore.downloadProjectAsset(registeredAsset)
+  if (asset.type === 'lod') {
+    await sceneStore.prepareLodAsset(asset)
+    return asset
   }
 
-  return registeredAsset
+  if (!assetCacheStore.hasCache(asset.id) && !assetCacheStore.isDownloading(asset.id)) {
+    await assetCacheStore.downloadProjectAsset(asset)
+  }
+
+  return asset
 }
 
 watch(

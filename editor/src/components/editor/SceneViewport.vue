@@ -8141,8 +8141,7 @@ watch(wallBrushPresetAssetId, (assetId) => {
           ? presetData.assetRegistry
           : null
         try {
-          await sceneStore.ensurePrefabDependencies(dependencyAssetIds, {
-            prefabAssetIdForDownloadProgress: id,
+          await sceneStore.prewarmPrefabDependencies(dependencyAssetIds, {
             prefabAssetRegistry: presetAssetRegistry,
           })
         } catch (dependencyError) {
@@ -8207,8 +8206,7 @@ watch(floorBrushPresetAssetId, (assetId) => {
           ? presetData.assetRegistry
           : null
         try {
-          await sceneStore.ensurePrefabDependencies(dependencyAssetIds, {
-            prefabAssetIdForDownloadProgress: id,
+          await sceneStore.prewarmPrefabDependencies(dependencyAssetIds, {
             prefabAssetRegistry: presetAssetRegistry,
           })
         } catch (dependencyError) {
@@ -8255,8 +8253,7 @@ watch(landformBrushPresetAssetId, (assetId) => {
           ? presetData.assetRegistry
           : null
         try {
-          await sceneStore.ensurePrefabDependencies(dependencyAssetIds, {
-            prefabAssetIdForDownloadProgress: id,
+          await sceneStore.prewarmPrefabDependencies(dependencyAssetIds, {
             prefabAssetRegistry: presetAssetRegistry,
           })
         } catch (dependencyError) {
@@ -8302,8 +8299,7 @@ watch(roadBrushPresetAssetId, (assetId) => {
           ? presetData.assetRegistry
           : null
         try {
-          await sceneStore.ensurePrefabDependencies(dependencyAssetIds, {
-            prefabAssetIdForDownloadProgress: id,
+          await sceneStore.prewarmPrefabDependencies(dependencyAssetIds, {
             prefabAssetRegistry: presetAssetRegistry,
           })
         } catch (dependencyError) {

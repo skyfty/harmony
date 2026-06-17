@@ -154,6 +154,7 @@ import {
   normalizeAssetIdWithRegistry,
   normalizeAssetIdsWithRegistry,
 } from '@/utils/assetRegistryIdNormalization'
+import { collectAssetRegistryLookupIds } from '@schema/assetRegistryLookup'
 import { createServerAssetSource, isServerBackedProviderId, SERVER_ASSET_PROVIDER_ID } from '@/utils/serverAssetSource'
 import { createFloorNodeMaterials } from '@/utils/floorNodeMaterials'
 import { createLandformNodeMaterials } from '@/utils/landformNodeMaterials'
@@ -228,6 +229,10 @@ import {
   type LodPresetData,
 } from '@/utils/lodPreset'
 import { createLodPresetActions } from './lodPresetActions'
+import {
+  collectLodPresetDependencyAssetIds,
+  syncResolvedLodDependencyMetadata,
+} from './lodPresetActions'
 import { createDicePresetActions, type PreparedDiceAsset } from './dicePresetActions'
 import { type WallPresetData } from '@/utils/wallPreset'
 import { type FloorPresetData } from '@/utils/floorPreset'
@@ -6707,7 +6712,10 @@ function mapManifestAssetToProjectAsset(
     .filter((directory) => directory.id !== manifest.rootDirectoryId)
     .map((directory) => ({ id: directory.id, name: directory.name }))
   const fallbackCategoryPathString = fallbackCategoryPath.map((item) => item.name).join('/')
-  const downloadUrl = manifestAsset.resource?.url ?? manifestAsset.downloadUrl
+  const downloadUrl = manifestAsset.resource?.url
+    ?? manifestAsset.downloadUrl
+    ?? resolveAssetDownloadUrl(existingAsset)
+    ?? ''
   const thumbnailUrl = manifestAsset.thumbnail?.url ?? manifestAsset.thumbnailUrl ?? null
   const preservedCategoryPath = Array.isArray(manifestAsset.categoryPath) && manifestAsset.categoryPath.length
     ? manifestAsset.categoryPath
@@ -7314,6 +7322,63 @@ function cloneSceneAssetOverrides(
   return clone
 }
 
+function resolveSceneAssetRegistryEntry(
+  assetId: string,
+  sceneOverrideAssets: Record<string, SceneAssetOverrideEntry> | undefined,
+  projectOverrideAssets: Record<string, SceneAssetOverrideEntry> | undefined,
+  assetRegistry: Record<string, SceneAssetRegistryEntry> | undefined,
+): SceneAssetRegistryEntry | null {
+  const candidateIds = collectAssetRegistryLookupIds(
+    assetId,
+    sceneOverrideAssets,
+    projectOverrideAssets,
+    assetRegistry,
+  )
+
+  for (const candidateId of candidateIds) {
+    const sceneOverride = sceneOverrideAssets?.[candidateId]
+    if (sceneOverride && typeof sceneOverride === 'object' && typeof sceneOverride.sourceType === 'string') {
+      return sceneOverride
+    }
+  }
+
+  for (const candidateId of candidateIds) {
+    const projectOverride = projectOverrideAssets?.[candidateId]
+    if (projectOverride && typeof projectOverride === 'object' && typeof projectOverride.sourceType === 'string') {
+      return projectOverride
+    }
+  }
+
+  for (const candidateId of candidateIds) {
+    const registryEntry = assetRegistry?.[candidateId]
+    if (registryEntry && typeof registryEntry === 'object' && typeof registryEntry.sourceType === 'string') {
+      return registryEntry
+    }
+  }
+
+  return null
+}
+
+function resolveAssetDownloadUrlFromRegistryEntry(
+  asset: ProjectAsset | null,
+  registryEntry: SceneAssetRegistryEntry | null,
+): string | null {
+  const directCandidate = resolveAssetDownloadUrl(asset)
+  if (registryEntry?.sourceType === 'url') {
+    const registryUrl = typeof registryEntry.url === 'string' ? registryEntry.url.trim() : ''
+    return registryUrl.length ? registryUrl : directCandidate
+  }
+  if (registryEntry?.sourceType === 'server') {
+    return resolveServerAssetDownloadUrl({
+      assetBaseUrl: readServerDownloadBaseUrl(),
+      fileKey: typeof registryEntry.fileKey === 'string' ? registryEntry.fileKey : asset?.fileKey ?? null,
+      resolvedUrl: registryEntry.resolvedUrl ?? null,
+      downloadUrl: directCandidate,
+    }) ?? directCandidate
+  }
+  return directCandidate
+}
+
 function cloneSceneResourceSummary(
   summary: SceneResourceSummary,
 ): SceneResourceSummary {
@@ -7400,6 +7465,27 @@ function applySceneAssetState(store: SceneState, scene: StoredSceneDocument) {
   store.assetCatalog = mergeCatalogAssetMetadataFromIndex(baseCatalog)
   ensureBuiltinWallPresetAssets(store.assetCatalog)
   store.assetCatalog = mergeCatalogAssetMetadataFromIndex(store.assetCatalog)
+  Object.values(store.assetCatalog).forEach((list) => {
+    list.forEach((asset) => {
+      if (!asset) {
+        return
+      }
+      const registryEntry = resolveSceneAssetRegistryEntry(
+        asset.id,
+        store.sceneOverrideAssets,
+        store.projectOverrideAssets,
+        store.assetRegistry,
+      )
+      const sourceType = registryEntry?.sourceType ?? asset.source?.type ?? null
+      if (sourceType !== 'server' && sourceType !== 'url') {
+        return
+      }
+      const resolvedDownloadUrl = resolveAssetDownloadUrlFromRegistryEntry(asset, registryEntry)
+      if (resolvedDownloadUrl && resolvedDownloadUrl !== asset.downloadUrl) {
+        asset.downloadUrl = resolvedDownloadUrl
+      }
+    })
+  })
   store.materials = cloneSceneMaterials(initialMaterials)
   const nextTree = buildSceneProjectTree(store.assetManifest, store.assetCatalog, store.packageDirectoryCache)
   store.projectTree = nextTree
@@ -12070,6 +12156,7 @@ export const useSceneStore = defineStore('scene', {
         ui: uiStore,
         watch,
         getAsset: (assetId) => this.getAsset(assetId),
+        getAssetRegistryEntry: (assetId) => this.getAssetRegistryEntry(assetId),
         getCachedModelObject,
         getOrLoadModelObject,
         loadObjectFromFile,
@@ -12191,6 +12278,18 @@ export const useSceneStore = defineStore('scene', {
       const resolved = await this.resolvePlaceableAsset(payload.asset)
 
       if (resolved.lodPresetAssetId) {
+        const lodPresetData = resolved.lodPresetData
+        const dependencyAssetIds = collectLodPresetDependencyAssetIds(lodPresetData)
+        if (dependencyAssetIds.length) {
+          await this.ensurePrefabDependencies(dependencyAssetIds, {
+            prefabAssetIdForDownloadProgress: resolved.lodPresetAssetId,
+            prefabAssetRegistry: lodPresetData?.assetRegistry ?? null,
+          })
+        }
+        if (lodPresetData) {
+          syncResolvedLodDependencyMetadata(this, lodPresetData)
+        }
+
         const assetCache = useAssetCacheStore()
         if (!assetCache.hasCache(resolved.modelAsset.id)) {
           const entry = await assetCache.downloadProjectAsset(resolved.modelAsset)
@@ -12205,7 +12304,7 @@ export const useSceneStore = defineStore('scene', {
         asset: resolved.modelAsset,
       })
       if (node && resolved.lodPresetAssetId) {
-        await this.applyLodPresetToNode(node.id, resolved.lodPresetAssetId)
+        await this.applyLodPresetToNode(node.id, resolved.lodPresetAssetId, resolved.lodPresetData ?? null)
       }
       return node
     },
@@ -13070,6 +13169,20 @@ export const useSceneStore = defineStore('scene', {
       return null
     },
 
+    getAssetRegistryEntry(assetId: string): SceneAssetRegistryEntry | null {
+      const normalizedAssetId = typeof assetId === 'string' ? assetId.trim() : ''
+      if (!normalizedAssetId) {
+        return null
+      }
+
+      return resolveSceneAssetRegistryEntry(
+        normalizedAssetId,
+        this.sceneOverrideAssets,
+        this.projectOverrideAssets,
+        this.assetRegistry,
+      )
+    },
+
     getAsset(assetId: string): ProjectAsset | null {
       const foundInCatalog = this.getRegisteredAsset(assetId)
       if (foundInCatalog) {
@@ -13538,6 +13651,15 @@ export const useSceneStore = defineStore('scene', {
     ): Promise<NodePrefabData> {
       return prefabActions.preparePrefabAsset(this as unknown as PrefabStoreLike, assetId, options)
     },
+    async prewarmPrefabDependencies(
+      assetIds: string[],
+      options: {
+        providerId?: string | null
+        prefabAssetRegistry?: Record<string, SceneAssetRegistryEntry> | null
+      } = {},
+    ): Promise<void> {
+      return prefabActions.prewarmPrefabDependencies(this as unknown as PrefabStoreLike, assetIds, options)
+    },
     async ensurePrefabDependencies(
       assetIds: string[],
       options: {
@@ -13747,8 +13869,8 @@ export const useSceneStore = defineStore('scene', {
       return lodPresetActions.prepareLodAsset(this as any, assetOrId)
     },
 
-    async applyLodPresetToNode(nodeId: string, assetId: string): Promise<LodPresetData> {
-      return lodPresetActions.applyLodPresetToNode(this as any, nodeId, assetId)
+    async applyLodPresetToNode(nodeId: string, assetId: string, presetData?: LodPresetData | null): Promise<LodPresetData> {
+      return lodPresetActions.applyLodPresetToNode(this as any, nodeId, assetId, presetData)
     },
     async loadBehaviorPrefab(assetId: string): Promise<BehaviorPrefabData> {
       return prefabActions.loadBehaviorPrefab(this as unknown as PrefabStoreLike, assetId)

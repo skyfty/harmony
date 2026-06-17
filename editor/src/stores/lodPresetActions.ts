@@ -24,12 +24,15 @@ import { normalizeAssetIdWithRegistry, normalizeAssetIdsWithRegistry } from '@/u
 export type LodPresetStoreLike = {
   nodes: SceneNode[]
   assetRegistry: Record<string, any>
+  projectTree: any
+  packageDirectoryCache: Record<string, any>
 
   getAsset: (id: string) => ProjectAsset | null
   registerAsset: (asset: ProjectAsset, options: any) => ProjectAsset
   setActiveDirectory: (categoryId: string) => void
   selectAsset: (assetId: string) => void
   resolveConfigAssetSaveDirectoryId: () => string
+  prewarmPrefabDependencies: (assetIds: string[], options: any) => Promise<void>
   ensurePrefabDependencies: (assetIds: string[], options: any) => Promise<void>
 
   addNodeComponent: <T extends string>(nodeId: string, type: T) => any
@@ -48,7 +51,31 @@ export type PreparedLodAsset = {
   preset: LodPresetData
 }
 
-function collectLodPresetDependencyAssetIds(preset: LodPresetData | null | undefined): string[] {
+function findAssetInTreeLike(tree: unknown, assetId: string): ProjectAsset | null {
+  if (!Array.isArray(tree)) {
+    return null
+  }
+  const stack: unknown[] = [...tree]
+  while (stack.length) {
+    const entry = stack.pop()
+    if (!entry || typeof entry !== 'object') {
+      continue
+    }
+    const directory = entry as { assets?: ProjectAsset[]; children?: unknown[] }
+    if (Array.isArray(directory.assets)) {
+      const match = directory.assets.find((asset) => asset?.id === assetId)
+      if (match) {
+        return match
+      }
+    }
+    if (Array.isArray(directory.children) && directory.children.length) {
+      stack.push(...directory.children)
+    }
+  }
+  return null
+}
+
+export function collectLodPresetDependencyAssetIds(preset: LodPresetData | null | undefined): string[] {
   if (!preset) {
     return []
   }
@@ -73,7 +100,7 @@ function normalizeLodPresetPropsAssetIds(
   }
 }
 
-function syncResolvedLodDependencyMetadata(store: LodPresetStoreLike, preset: LodPresetData): void {
+export function syncResolvedLodDependencyMetadata(store: LodPresetStoreLike, preset: LodPresetData): void {
   const metadataByAssetId = new Map<string, Partial<ProjectAsset>>()
 
   ;(preset.assetRefs ?? []).forEach((assetRef) => {
@@ -289,11 +316,10 @@ export function createLodPresetActions(deps: LodPresetActionsDeps) {
       const dependencyAssetIds = collectLodPresetDependencyAssetIds(preset)
       const presetAssetRegistry = isSceneAssetRegistry(preset.assetRegistry) ? preset.assetRegistry : undefined
       if (dependencyAssetIds.length) {
-        await store.ensurePrefabDependencies(dependencyAssetIds, {
-          prefabAssetIdForDownloadProgress: requestedAsset.id,
+        await store.prewarmPrefabDependencies(dependencyAssetIds, {
+          providerId: null,
           prefabAssetRegistry: presetAssetRegistry ?? null,
         })
-        syncResolvedLodDependencyMetadata(store, preset)
       }
 
       const normalizedProps = normalizeLodPresetPropsAssetIds(preset)
@@ -303,33 +329,39 @@ export function createLodPresetActions(deps: LodPresetActionsDeps) {
       }
 
       const modelAsset = store.getAsset(modelAssetId)
-      if (!modelAsset) {
+      const fallbackModelAsset = modelAsset ?? findAssetInTreeLike(store.projectTree, modelAssetId)
+      if (!fallbackModelAsset) {
         throw new Error('Referenced LOD model asset is not available in this project')
       }
-      if (modelAsset.type !== 'model' && modelAsset.type !== 'mesh') {
+      if (fallbackModelAsset.type !== 'model' && fallbackModelAsset.type !== 'mesh') {
         throw new Error('Referenced LOD asset is not a model or mesh asset')
       }
 
       const assetCache = useAssetCacheStore()
-      const entry = await assetCache.ensureAssetEntry(modelAsset.id, { asset: modelAsset })
+      const entry = await assetCache.ensureAssetEntry(fallbackModelAsset.id, { asset: fallbackModelAsset })
       if (!entry || entry.status !== 'cached' || !entry.blob) {
         throw new Error(entry?.error ?? 'Referenced LOD model asset is not ready yet')
       }
 
       return {
         requestedAsset,
-        modelAsset,
+        modelAsset: fallbackModelAsset,
         preset,
       }
     },
 
-    async applyLodPresetToNode(store: LodPresetStoreLike, nodeId: string, assetId: string): Promise<LodPresetData> {
+    async applyLodPresetToNode(
+      store: LodPresetStoreLike,
+      nodeId: string,
+      assetId: string,
+      presetData?: LodPresetData | null,
+    ): Promise<LodPresetData> {
       const node = deps.findNodeById(store.nodes, nodeId)
       if (!node) {
         throw new Error('节点不存在或已被移除')
       }
 
-      const preset = await this.loadLodPreset(store, assetId)
+      const preset = presetData ?? (await this.loadLodPreset(store, assetId))
       const dependencyAssetIds = collectLodPresetDependencyAssetIds(preset)
       const presetAssetRegistry = isSceneAssetRegistry(preset.assetRegistry) ? preset.assetRegistry : undefined
 

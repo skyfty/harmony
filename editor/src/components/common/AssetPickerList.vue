@@ -306,26 +306,6 @@ async function scheduleScrollToSelected() {
   emit('layout')
 }
 
-function ensureSceneAssetMapping(asset: ProjectAsset): ProjectAsset {
-  if (!asset || !asset.id) {
-    return asset
-  }
-
-  try {
-    const normalizedAsset: ProjectAsset = {
-      ...asset,
-      gleaned: asset.gleaned ?? true,
-    }
-    return sceneStore.ensureSceneAssetRegistered(normalizedAsset, {
-      source: normalizedAsset.source ?? { type: 'url' },
-      commitOptions: { updateNodes: false },
-    })
-  } catch (error) {
-    console.warn('Failed to register selected asset for scene mapping', asset.id, error)
-    return asset
-  }
-}
-
 async function handleAssetClick(asset: ProjectAsset) {
   if (props.multiple) {
     syncSelectionIds(
@@ -342,50 +322,49 @@ async function handleAssetClick(asset: ProjectAsset) {
     return
   }
 
-  const mapped = ensureSceneAssetMapping(asset)
-  if (!mapped || !mapped.id) {
-    emit('update:asset', mapped)
+  if (!asset || !asset.id) {
+    emit('update:asset', asset)
     return
   }
 
-  if (selectingAssetId.value === mapped.id) {
+  if (selectingAssetId.value === asset.id) {
     return
   }
 
-  if (!isAssetReadyForPickerSelection(mapped) && (assetCacheStore.isDownloading(mapped.id) || isPrefabSelectionInProgress(mapped))) {
+  if (!isAssetReadyForPickerSelection(asset) && (assetCacheStore.isDownloading(asset.id) || isPrefabSelectionInProgress(asset))) {
     return
   }
 
-  if (mapped.type === 'prefab' && !isAssetReadyForPickerSelection(mapped)) {
-    selectingAssetId.value = mapped.id
+  if (asset.type === 'prefab' && !isAssetReadyForPickerSelection(asset)) {
+    selectingAssetId.value = asset.id
     try {
-      await sceneStore.preparePrefabAsset(mapped.id, {
-        prefabAssetIdForDownloadProgress: mapped.id,
+      await sceneStore.preparePrefabAsset(asset.id, {
+        prefabAssetIdForDownloadProgress: asset.id,
       })
     } catch (error) {
-      console.warn('Failed to prepare selected prefab asset', mapped.id, error)
+      console.warn('Failed to prepare selected prefab asset', asset.id, error)
     } finally {
       selectingAssetId.value = null
     }
     return
   }
 
-  if (mapped.type === 'lod') {
-    if (!isAssetReadyForPickerSelection(mapped)) {
-      selectingAssetId.value = mapped.id
+  if (asset.type === 'lod') {
+    if (!isAssetReadyForPickerSelection(asset)) {
+      selectingAssetId.value = asset.id
       try {
-        await sceneStore.prepareLodAsset(mapped)
+        await sceneStore.prepareLodAsset(asset)
       } catch (error) {
-        console.warn('Failed to prepare selected LOD asset', mapped.id, error)
+        console.warn('Failed to prepare selected LOD asset', asset.id, error)
       } finally {
         selectingAssetId.value = null
       }
       return
     }
 
-    selectingAssetId.value = mapped.id
+    selectingAssetId.value = asset.id
     try {
-      const prepared = await sceneStore.prepareLodAsset(mapped)
+      const prepared = await sceneStore.prepareLodAsset(asset)
       if (props.multiple) {
         syncSelectionIds(
           selectedAssetIds.value.includes(prepared.requestedAsset.id)
@@ -397,47 +376,47 @@ async function handleAssetClick(asset: ProjectAsset) {
       selectedAssetId.value = prepared.requestedAsset.id
       emit('update:asset', prepared.requestedAsset)
     } catch (error) {
-      console.warn('Failed to prepare selected LOD asset', mapped.id, error)
+      console.warn('Failed to prepare selected LOD asset', asset.id, error)
     } finally {
       selectingAssetId.value = null
     }
     return
   }
 
-  const requiresCache = mapped.type === 'model' || mapped.type === 'mesh'
+  const requiresCache = asset.type === 'model' || asset.type === 'mesh'
   if (!requiresCache) {
     if (props.multiple) {
       syncSelectionIds(
-        selectedAssetIds.value.includes(mapped.id)
-          ? selectedAssetIds.value.filter((id) => id !== mapped.id)
-          : [...selectedAssetIds.value, mapped.id],
+        selectedAssetIds.value.includes(asset.id)
+          ? selectedAssetIds.value.filter((id) => id !== asset.id)
+          : [...selectedAssetIds.value, asset.id],
       )
       return
     }
-    selectedAssetId.value = mapped.id
-    emit('update:asset', mapped)
+    selectedAssetId.value = asset.id
+    emit('update:asset', asset)
     return
   }
 
-  if (isAssetReadyForPickerSelection(mapped)) {
+  if (isAssetReadyForPickerSelection(asset)) {
     if (props.multiple) {
       syncSelectionIds(
-        selectedAssetIds.value.includes(mapped.id)
-          ? selectedAssetIds.value.filter((id) => id !== mapped.id)
-          : [...selectedAssetIds.value, mapped.id],
+        selectedAssetIds.value.includes(asset.id)
+          ? selectedAssetIds.value.filter((id) => id !== asset.id)
+          : [...selectedAssetIds.value, asset.id],
       )
       return
     }
-    selectedAssetId.value = mapped.id
-    emit('update:asset', mapped)
+    selectedAssetId.value = asset.id
+    emit('update:asset', asset)
     return
   }
 
-  selectingAssetId.value = mapped.id
+  selectingAssetId.value = asset.id
   try {
-    await assetCacheStore.downloadProjectAsset(mapped)
+    await assetCacheStore.downloadProjectAsset(asset)
   } catch (error) {
-    console.warn('Failed to download selected model asset', mapped.id, error)
+    console.warn('Failed to download selected model asset', asset.id, error)
   } finally {
     selectingAssetId.value = null
   }

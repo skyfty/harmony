@@ -3,7 +3,7 @@ import type { ProjectAsset } from '@/types/project-asset'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useTerrainStore } from '@/stores/terrainStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
-import { assetProvider, terrainScatterPresets, type ScatterAssetOption } from '@/resources/projectProviders/asset'
+import { terrainScatterPresets, type ScatterAssetOption } from '@/resources/projectProviders/asset'
 
 interface UseScatterAssetSelectionOptions {
   updateTerrainSelection?: boolean
@@ -109,11 +109,7 @@ export function useScatterAssetSelection(options?: UseScatterAssetSelectionOptio
       return null
     }
 
-    const workingAsset = source.source === 'scene'
-      ? source.asset
-      : sceneStore.ensureSceneAssetRegistered(source.asset, {
-          providerId: assetProvider.id,
-        })
+    const workingAsset = source.asset
 
     if (!workingAsset?.id) {
       return null
