@@ -10,8 +10,6 @@ import VueViewer from 'v-viewer'
 import 'viewerjs/dist/viewer.css'
 import { configureScenerySharedWorkers } from './workers/sceneryWorkerBootstrap'
 
-console.info('[editor] configuring scenery shared workers')
-
 async function preloadRuntimeConfig() {
 	try {
 		const resp = await fetch('/config/app-config.json', { cache: 'no-cache' })

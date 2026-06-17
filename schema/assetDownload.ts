@@ -61,22 +61,13 @@ export async function fetchAssetBlob(
   controller: AbortController,
   onProgress: (value: number) => void,
 ): Promise<AssetBlobPayload> {
-  const state = getAssetDownloadRuntimeState()
   const candidates = createDownloadUrlCandidates(url)
   if (!candidates.length) {
     throw new Error('资源下载失败（无效的下载地址）')
   }
-  const fallbackUrl = candidates[0] ?? url
-
   if (controller.signal.aborted) {
     throw createAbortError()
   }
-
-  console.info('[harmony-schema][asset-download] using request downloader', {
-    moduleTag: state.assetDownloadModuleTag,
-    candidateCount: candidates.length,
-    fallbackUrl,
-  })
   return await downloadAssetBlob(candidates, controller, onProgress)
 }
 

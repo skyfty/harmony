@@ -1920,8 +1920,13 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	})
 
 	const stopScatterSelectionWatch = watch(
-		() => ({ asset: options.scatterAsset.value, category: options.scatterCategory.value }),
-		({ asset, category }) => {
+		() => ({
+			asset: options.scatterAsset.value,
+			category: options.scatterCategory.value,
+			sceneId: options.sceneStore.currentSceneId,
+		}),
+		({ asset, category, sceneId }) => {
+			void sceneId
 			scatterLodImmediateSyncNeeded = lockScatterLodToBaseAsset
 			cancelScatterPlacement()
 			cancelScatterErase()
@@ -2027,8 +2032,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		const groundMesh = getGroundObject()
 		const asset = options.scatterAsset.value
 		const category = options.scatterCategory.value
-		const modelGroup = scatterModelGroup
-		const bindingAssetId = scatterResolvedBindingAssetId
+		const bindingAssetId = asset ? resolveScatterBindingAssetIdForSelection(asset) : null
+		const modelGroup = bindingAssetId ? ensureScatterModelGroupFromCache(bindingAssetId) : null
 		if (!definition || !groundMesh || !asset || !category || !modelGroup || !bindingAssetId) {
 			scatterPreviewGroup.visible = false
 			return
@@ -3354,6 +3359,38 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		scatterModelGroup = group
 	}
 
+	function resolveScatterBindingAssetIdForSelection(asset: ProjectAsset): string | null {
+		if (scatterResolvedBindingAssetId) {
+			return scatterResolvedBindingAssetId
+		}
+		if (asset.type === 'model' || asset.type === 'mesh') {
+			return asset.id
+		}
+		if (asset.type === 'prefab' || asset.type === 'lod') {
+			const preset = scatterLodPresetCache.get(asset.id) ?? null
+			return resolveLodBindingAssetId(preset)
+		}
+		return null
+	}
+
+	function ensureScatterModelGroupFromCache(bindingAssetId: string): ModelInstanceGroup | null {
+		const normalized = bindingAssetId.trim()
+		if (!normalized) {
+			return null
+		}
+		if (scatterModelGroup && scatterResolvedBindingAssetId === normalized) {
+			return scatterModelGroup
+		}
+		const cached = getCachedModelObject(normalized)
+		if (!cached) {
+			return scatterModelGroup
+		}
+		scatterModelGroup = cached
+		scatterResolvedBindingAssetId = normalized
+		ensureInstancedMeshesRegistered(normalized)
+		return cached
+	}
+
 	function persistScatterInstances(
 		layer: TerrainScatterLayer,
 		instances: TerrainScatterInstance[],
@@ -3512,7 +3549,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				const chunkKeysToPersist = collectGroundChunkKeys(pendingScatterChunkKeys)
 				const sidecar = useGroundScatterStore().buildSceneDocumentSidecar(sceneId, groundNode)
 				try {
-					await useScenesStore().saveSceneGroundScatterSidecar(sceneId, sidecar, { syncServer: false })
+					await useScenesStore().saveSceneGroundScatterSidecar(sceneId, sidecar)
 					const groundObject = getGroundObject()
 					const runtimeDefinition = getGroundDynamicMeshDefinition()
 					if (groundObject && runtimeDefinition && chunkKeysToPersist.length > 0) {
@@ -5779,18 +5816,19 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		const category = options.scatterCategory.value
 		const preset = getScatterPreset(category)
 		const layer = scatterLayer ?? ensureScatterLayerForAsset(asset, category)
-		if (!scatterModelGroup) {
-			console.warn('散布资源仍在加载，请稍后重试')
-			return false
-		}
-		const bindingAssetId = scatterResolvedBindingAssetId ?? scatterModelGroup.assetId
+		const bindingAssetId = resolveScatterBindingAssetIdForSelection(asset)
 		if (!bindingAssetId) {
 			console.warn('无法解析散布资源（可能为无效的 LOD 预设）')
 			return false
 		}
+		const modelGroup = ensureScatterModelGroupFromCache(bindingAssetId)
+		if (!modelGroup) {
+			console.warn('散布资源仍在加载，请稍后重试')
+			return false
+		}
 
 		const effectiveRadius = clampScatterBrushRadius(options.scatterBrushRadius.value)
-		scatterModelGroup.boundingBox.getSize(scatterBboxSizeHelper)
+		modelGroup.boundingBox.getSize(scatterBboxSizeHelper)
 		const sizeX = Math.max(0.01, Math.abs(scatterBboxSizeHelper.x))
 		const sizeZ = Math.max(0.01, Math.abs(scatterBboxSizeHelper.z))
 		const footprintAreaM2 = Math.max(1e-6, sizeX * sizeZ)
@@ -5845,7 +5883,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			maxScale: presetMaxScale,
 			store: ensureScatterStoreRef(),
 			layer,
-			modelGroup: scatterModelGroup,
+			modelGroup,
 			chunkCells,
 			neighborIndex: buildScatterNeighborIndex(layer, definition, chunkCells),
 			lastPoint: null,
@@ -5912,19 +5950,20 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		const category = options.scatterCategory.value
 		const preset = getScatterPreset(category)
 		const layer = scatterLayer ?? ensureScatterLayerForAsset(asset, category)
-		if (!scatterModelGroup) {
-			console.warn('散布资源仍在加载，请稍后重试')
-			return false
-		}
-		const bindingAssetId = scatterResolvedBindingAssetId ?? scatterModelGroup.assetId
+		const bindingAssetId = resolveScatterBindingAssetIdForSelection(asset)
 		if (!bindingAssetId) {
 			console.warn('无法解析散布资源（可能为无效的 LOD 预设）')
+			return false
+		}
+		const modelGroup = ensureScatterModelGroupFromCache(bindingAssetId)
+		if (!modelGroup) {
+			console.warn('散布资源仍在加载，请稍后重试')
 			return false
 		}
 		const effectiveRadius = clampScatterBrushRadius(options.scatterBrushRadius.value)
 
 		// Estimate capacity from brush area / (model footprint area * E[scale^2]).
-		scatterModelGroup.boundingBox.getSize(scatterBboxSizeHelper)
+		modelGroup.boundingBox.getSize(scatterBboxSizeHelper)
 		const sizeX = Math.max(0.01, Math.abs(scatterBboxSizeHelper.x))
 		const sizeZ = Math.max(0.01, Math.abs(scatterBboxSizeHelper.z))
 		const footprintAreaM2 = Math.max(1e-6, sizeX * sizeZ)
@@ -6017,7 +6056,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 					maxScale: presetMaxScale,
 					store: ensureScatterStoreRef(),
 					layer,
-					modelGroup: scatterModelGroup,
+					modelGroup,
 					chunkCells,
 					neighborIndex: buildScatterNeighborIndex(layer, definition, chunkCells),
 					lastPoint: null,
@@ -6083,7 +6122,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 					maxScale: presetMaxScale,
 					store: ensureScatterStoreRef(),
 					layer,
-					modelGroup: scatterModelGroup,
+					modelGroup,
 					chunkCells,
 					neighborIndex: buildScatterNeighborIndex(layer, definition, chunkCells),
 					lastPoint: null,
@@ -6100,8 +6139,12 @@ export function createGroundEditor(options: GroundEditorOptions) {
 					lastPreviewRefreshAt: 0,
 					lastPreviewRefreshPoint: null,
 				}
+				const currentSession = scatterSession
+				if (!currentSession) {
+					return false
+				}
 				options.onScatterPlacementStart?.()
-				refreshScatterSessionPreview(scatterSession)
+				refreshScatterSessionPreview(currentSession)
 				event.preventDefault()
 				event.stopPropagation()
 				event.stopImmediatePropagation()
@@ -6158,7 +6201,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			maxScale: presetMaxScale,
 			store: ensureScatterStoreRef(),
 			layer,
-			modelGroup: scatterModelGroup,
+			modelGroup,
 			chunkCells,
 			neighborIndex: buildScatterNeighborIndex(layer, definition, chunkCells),
 			lastPoint: null,

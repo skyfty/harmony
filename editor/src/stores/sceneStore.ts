@@ -8176,7 +8176,7 @@ const groundHeightSidecarSaveScheduler = createLatestIdleScheduler<{ sceneId: st
     }
     const sidecar = useGroundHeightmapStore().buildSceneDocumentSidecar(groundNode)
     try {
-      await useScenesStore().saveSceneGroundHeightSidecar(request.sceneId, sidecar, { syncServer: false })
+      await useScenesStore().saveSceneGroundHeightSidecar(request.sceneId, sidecar)
     } catch (error) {
       console.warn('[SceneStore] Failed to persist ground height sidecar', error)
     }
@@ -8199,7 +8199,7 @@ const groundScatterSidecarSaveScheduler = createLatestIdleScheduler<{ sceneId: s
     }
     const sidecar = useGroundScatterStore().buildSceneDocumentSidecar(request.sceneId, groundNode)
     try {
-      await useScenesStore().saveSceneGroundScatterSidecar(request.sceneId, sidecar, { syncServer: false })
+      await useScenesStore().saveSceneGroundScatterSidecar(request.sceneId, sidecar)
     } catch (error) {
       console.warn('[SceneStore] Failed to persist ground scatter sidecar', error)
     }
@@ -10600,7 +10600,7 @@ export const useSceneStore = defineStore('scene', {
       }
 
       const sidecar = useGroundHeightmapStore().buildSceneDocumentSidecar(target)
-      await useScenesStore().saveSceneGroundHeightSidecar(sceneId, sidecar, { syncServer: false })
+      await useScenesStore().saveSceneGroundHeightSidecar(sceneId, sidecar)
       await this.flushPendingSceneAutoSave({ force: true })
       return true
     },

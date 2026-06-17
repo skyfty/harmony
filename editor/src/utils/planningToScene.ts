@@ -1937,7 +1937,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
         )
         if (sceneStore.currentSceneId && terrainDataset) {
           emitDetailedProgress(options, 'Syncing terrain dataset…', 28, { phase: 'sync-terrain-dataset' })
-          await scenesStore.replaceTerrainDatasetBundle(sceneStore.currentSceneId, terrainDataset.manifest, terrainDataset.regionPacks, { syncServer: false })
+          await scenesStore.replaceTerrainDatasetBundle(sceneStore.currentSceneId, terrainDataset.manifest, terrainDataset.regionPacks)
           groundDefinition = await syncGroundTerrainDatasetRuntime({
             sceneStore,
             groundNode,
@@ -1948,7 +1948,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
         }
         await yieldController.maybeYield(true)
       } else if (sceneStore.currentSceneId) {
-        await scenesStore.replaceTerrainDatasetBundle(sceneStore.currentSceneId, null, {}, { syncServer: false })
+        await scenesStore.replaceTerrainDatasetBundle(sceneStore.currentSceneId, null, {})
         groundDefinition = await syncGroundTerrainDatasetRuntime({
           sceneStore,
           groundNode,
