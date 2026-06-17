@@ -146,8 +146,10 @@ export function createPickProxyManager(): PickProxyManager {
       }
 
       const mesh = proxy as THREE.Mesh
-      if (mesh.geometry !== instancedPickProxyGeometry) {
+      if (mesh.geometry && mesh.geometry !== instancedPickProxyGeometry) {
         mesh.geometry.dispose()
+        mesh.geometry = instancedPickProxyGeometry
+      } else if (!mesh.geometry) {
         mesh.geometry = instancedPickProxyGeometry
       }
       mesh.position.copy(center)

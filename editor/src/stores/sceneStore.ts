@@ -3484,6 +3484,67 @@ function cloneRuntimeObject(object: Object3D, converted: Set<Object3D>): Object3
   return clone
 }
 
+const runtimeSnapshotUserDataKeysToClear = [
+  'instancedPickProxy',
+  'floorGroup',
+  'roadGroup',
+  'guideRouteGroup',
+  'regionGroup',
+  'roadStaticGroup',
+  'groundMesh',
+] as const
+
+function pruneRuntimeSnapshotChildrenByNodeId(clone: Object3D, duplicateOriginalIds: Set<string>) {
+  const children = [...clone.children]
+  for (const child of children) {
+    const childNodeId = child.userData?.nodeId as string | undefined
+    if (childNodeId && duplicateOriginalIds.has(childNodeId)) {
+      child.removeFromParent()
+      continue
+    }
+    pruneRuntimeSnapshotChildrenByNodeId(child, duplicateOriginalIds)
+  }
+}
+
+function sanitizeRuntimeSnapshotObjectUserData(object: Object3D) {
+  object.traverse((child) => {
+    const userData = child.userData as Record<string, unknown> | undefined
+    if (!userData) {
+      return
+    }
+    runtimeSnapshotUserDataKeysToClear.forEach((key) => {
+      if (key in userData) {
+        delete userData[key]
+      }
+    })
+  })
+}
+
+function attachRuntimeSnapshotToDuplicate(params: {
+  originalId: string
+  duplicateId: string
+  duplicatedNode: SceneNode
+  context: DuplicateContext
+}): void {
+  const { originalId, duplicateId, duplicatedNode, context } = params
+  const runtimeSnapshot = context.runtimeSnapshots.get(originalId)
+  if (!runtimeSnapshot) {
+    componentManager.syncNode(duplicatedNode)
+    return
+  }
+
+  const runtimeClone = runtimeSnapshot.clone(true)
+  if (context.duplicateSourceIds?.size) {
+    pruneRuntimeSnapshotChildrenByNodeId(runtimeClone, context.duplicateSourceIds)
+  }
+  sanitizeRuntimeSnapshotObjectUserData(runtimeClone)
+  prepareRuntimeObjectForNode(runtimeClone)
+  tagObjectWithNodeId(runtimeClone, duplicateId)
+  registerRuntimeObject(duplicateId, runtimeClone)
+  componentManager.attachRuntime(duplicatedNode, runtimeClone)
+  componentManager.syncNode(duplicatedNode)
+}
+
 function prepareRuntimeObjectForNode(object: Object3D) {
   object.traverse((child) => {
     const meshChild = child as Object3D & { isMesh?: boolean; isSkinnedMesh?: boolean; isPoints?: boolean; isLine?: boolean }
@@ -5060,6 +5121,8 @@ function cloneNodeForDuplication(node: SceneNode): SceneNode {
 function duplicateNodeTree(original: SceneNode, context: DuplicateContext): SceneNode {
   const duplicated = cloneNodeForDuplication(original)
   const newId = generateUuid()
+  context.duplicateSourceIds ??= new Set<string>()
+  context.duplicateSourceIds.add(original.id)
   duplicated.id = newId
   context.idMap?.set(original.id, newId)
 
@@ -5073,10 +5136,16 @@ function duplicateNodeTree(original: SceneNode, context: DuplicateContext): Scen
     delete duplicated.children
   }
   remapNodeInternalReferences(duplicated, context)
+  attachRuntimeSnapshotToDuplicate({
+    originalId: original.id,
+    duplicateId: newId,
+    duplicatedNode: duplicated,
+    context,
+  })
+
   if (duplicated.sourceAssetId) {
     context.assetCache.touch(duplicated.sourceAssetId)
   }
-  componentManager.syncNode(duplicated)
 
   return duplicated
 }
@@ -18626,6 +18695,11 @@ export const useSceneStore = defineStore('scene', {
         }
         this.recenterGroupAncestry(parentId, { captureHistory: false })
       })
+
+      // The viewport reconciles Three.js objects from structure patches.
+      // Duplicating nodes changes the tree topology, so we must notify it here
+      // or the new subtree will only appear after a full reload.
+      this.queueSceneStructurePatch('duplicateNodes')
 
       if (selectDuplicates) {
         const duplicateIds = duplicates.map((node) => node.id)

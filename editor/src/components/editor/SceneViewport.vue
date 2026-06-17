@@ -11004,12 +11004,7 @@ const draggingChangedHandler = (event: unknown) => {
     updateOutlineSelectionTargets()
     updateGridHighlightFromObject(primaryObject ?? targetObject)
     updateSelectionHighlights()
-    if (pendingSceneGraphSync) {
-      pendingSceneGraphSync = false
-      sceneStore.drainScenePatches()
-      syncSceneGraph()
-      refreshPlaceholderOverlays()
-    }
+    flushPendingSceneGraphSync()
   } else {
     // Dragging begins
     hasTransformLastWorldPosition = false
@@ -11269,17 +11264,9 @@ function applyPendingScenePatches(): boolean {
     return false
   }
 
-  // previously recorded patch flag removed
-
   const needsPlaceholderOverlayRefresh = shouldRefreshPlaceholderOverlaysFromPatches(patches as Array<{ type: string }>)
   if (patches.some((patch) => patch.type === 'structure')) {
-    syncSceneGraph()
-    sceneStore.syncAllNodeComponents()
-
-    if (needsPlaceholderOverlayRefresh) {
-      refreshPlaceholderOverlays()
-    }
-    updatePlaceholderOverlayPositions()
+    syncStructureDrivenSceneGraph(needsPlaceholderOverlayRefresh)
     return true
   }
 
@@ -11328,6 +11315,29 @@ function shouldDeferSceneGraphSync(): boolean {
     return true
   }
   return false
+}
+
+function flushPendingSceneGraphSync(): boolean {
+  if (!pendingSceneGraphSync) {
+    return false
+  }
+  if (shouldDeferSceneGraphSync()) {
+    return false
+  }
+
+  sceneStore.drainScenePatches()
+  pendingSceneGraphSync = false
+  syncStructureDrivenSceneGraph(true)
+  return true
+}
+
+function syncStructureDrivenSceneGraph(refreshOverlays: boolean) {
+  sceneStore.syncAllNodeComponents()
+  syncSceneGraph()
+  if (refreshOverlays) {
+    refreshPlaceholderOverlays()
+  }
+  updatePlaceholderOverlayPositions()
 }
 
 const terrainGridHelper = new TerrainGridHelper({
@@ -15966,13 +15976,18 @@ async function beginDeferredDuplicateSelectionDrag(event: PointerEvent, tracking
     })
   }
 
-  await nextTick()
-  await nextTick()
-
   const duplicatePrimaryId =
-    sceneStore.selectedNodeId && duplicateIds.includes(sceneStore.selectedNodeId)
-      ? sceneStore.selectedNodeId
-      : duplicateIds[0] ?? null
+    trackingState.deferredDuplicateDrag?.primaryId
+    && duplicateIds.includes(trackingState.deferredDuplicateDrag.primaryId)
+      ? trackingState.deferredDuplicateDrag.primaryId
+      : sceneStore.selectedNodeId && duplicateIds.includes(sceneStore.selectedNodeId)
+        ? sceneStore.selectedNodeId
+        : duplicateIds[0] ?? null
+
+  await nextTick()
+  await nextTick()
+  syncStructureDrivenSceneGraph(false)
+
   if (!duplicatePrimaryId) {
     return fallbackDrag as any
   }
@@ -19510,6 +19525,7 @@ function handlePointerCancel(event: PointerEvent) {
       sceneStore.endTransformInteraction()
       wallRenderer.endWallDrag(dragState.nodeId)
       updateOutlineSelectionTargets()
+      flushPendingSceneGraphSync()
     }
   }
 

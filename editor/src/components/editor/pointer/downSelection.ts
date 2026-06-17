@@ -97,8 +97,6 @@ export async function handlePointerDownSelection(
     ? ctx.pickNodeAtPointer(event, { includeSelectionLocked: allowLockedSelectionPick })
     : null
 
-  const primaryBeforeDuplicate = ctx.sceneSelectedNodeId ?? ctx.selectedNodeIdProp ?? null
-
   if (!hit && shouldPickForRightClick) {
     const boundingHit = ctx.pickActiveSelectionBoundingBoxHit(event)
     if (boundingHit) {
@@ -178,17 +176,15 @@ export async function handlePointerDownSelection(
     button === 0 &&
     ctx.activeTool === 'select' &&
     selectionDrag &&
-    hit &&
+    dragHit &&
     (event.ctrlKey || event.metaKey) &&
-    primaryBeforeDuplicate &&
-    hit.nodeId === primaryBeforeDuplicate &&
-    !ctx.isNodeSelectionLocked(hit.nodeId)
+    !ctx.isNodeSelectionLocked(dragHit.nodeId)
       ? (() => {
           const unlockedSelection = ctx.selectedNodeIds.filter((id) => !ctx.isNodeSelectionLocked(id))
-          const nodeIds = unlockedSelection.length ? unlockedSelection : [hit.nodeId]
+          const nodeIds = unlockedSelection.length ? unlockedSelection : [dragHit.nodeId]
           return {
             nodeIds,
-            primaryId: hit.nodeId,
+            primaryId: dragHit.nodeId,
           }
         })()
       : null
