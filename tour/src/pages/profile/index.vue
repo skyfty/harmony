@@ -7,7 +7,7 @@
       </template>
     </PageHeader>
     <view class="header">
-      <view class="profile">
+      <view class="profile" @tap="openProfileEdit">
         <view class="avatar">
           <image v-if="profile.avatarUrl" class="avatar-img" :src="profile.avatarUrl" mode="aspectFill" />
           <text v-else class="avatar-text">{{ initials }}</text>
@@ -15,7 +15,6 @@
         <view class="info">
           <text class="name">{{ profile.displayName }}</text>
         </view>
-        <button class="edit" @tap="openProfileEdit">编辑个人资料</button>
       </view>
     </view>
 
@@ -34,13 +33,13 @@
         <view class="row phone-row">
           <text class="label">手机号</text>
           <view class="phone-cell">
-            <text class="phone-value">{{ maskedPhone }}</text>
             <button
               v-if="!profile.hasBoundPhone"
               class="phone-action"
               open-type="getPhoneNumber"
               @getphonenumber="handleGetPhoneNumber"
-            >绑定</button>
+            >{{ maskedPhone }}</button>
+            
           </view>
         </view>
       </view>
@@ -48,7 +47,6 @@
       <view class="card">
         <view class="row" @tap="openPolicy('user-service-agreement')"><text class="label">用户服务协议</text><text class="arrow">›</text></view>
         <view class="row" @tap="openPolicy('privacy-policy')"><text class="label">隐私政策</text><text class="arrow">›</text></view>
-        <view class="row" @tap="show('已是最新版本（mock）')"><text class="label">版本更新</text><text class="arrow">›</text></view>
       </view>
 
       <button class="logout" @tap="logout">退出登录</button>
@@ -160,10 +158,6 @@ function nav(url: string) {
   uni.navigateTo({ url });
 }
 
-function show(message: string) {
-  uni.showToast({ title: message, icon: 'none' });
-}
-
 function openPolicy(kind: 'user-service-agreement' | 'privacy-policy') {
   uni.navigateTo({ url: `/pages/policy/index?kind=${kind}` });
 }
@@ -212,11 +206,16 @@ function handleNavigate(key: NavKey) {
   padding: 0 12px;
   height: 30px;
   line-height: 30px;
-  border-radius: 999px;
-  background: rgba(25, 65, 133, 0.1);
+  border-radius: 0;
+  background: transparent;
+  border: none;
   color: #194185;
-  font-size: 12px;
+  font-size: 14px;
   white-space: nowrap;
+}
+
+.business-entry::after {
+  border: none;
 }
 
 .profile {
@@ -227,6 +226,10 @@ function handleNavigate(key: NavKey) {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+.profile:active {
+  opacity: 0.92;
 }
 
 .avatar {
@@ -270,16 +273,6 @@ function handleNavigate(key: NavKey) {
   background: rgba(255, 179, 64, 0.14);
   padding: 2px 8px;
   border-radius: 999px;
-}
-
-.edit {
-  background: rgba(31, 122, 236, 0.12);
-  color: #1f7aec;
-  border-radius: 999px;
-  font-size: 12px;
-  padding: 0 12px;
-  height: 30px;
-  line-height: 30px;
 }
 
 .content {
@@ -387,11 +380,15 @@ function handleNavigate(key: NavKey) {
   min-width: 68px;
   height: 28px;
   line-height: 28px;
-  border-radius: 999px;
-  background: rgba(31, 122, 236, 0.12);
+  border: none;
+  background: transparent;
   color: #1f7aec;
-  font-size: 12px;
+  font-size: 14px;
   padding: 0 12px;
+}
+
+.phone-action::after {
+  border: none;
 }
 
 .row:last-child {
