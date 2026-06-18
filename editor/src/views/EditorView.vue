@@ -43,6 +43,7 @@ import {
   type SceneAssetValidationReport,
 } from '@/utils/sceneAssetDiagnostics'
 import { exportScenePackagePublishZip } from '@/utils/scenePackagePublish'
+import type { ScenePackageSourceScene } from '@/utils/scenePackageSource'
 import { broadcastScenePreviewUpdate } from '@/utils/previewChannel'
 import { generateUuid } from '@/utils/uuid'
 import { findGroundNode } from '@/stores/groundUtils'
@@ -1336,7 +1337,7 @@ async function exportProjectPackageZip(
     total: orderedSceneIds.length,
   })
 
-  const embeddedScenes: Array<{ id: string; document: any; planningData?: any }> = []
+  const embeddedScenes: ScenePackageSourceScene[] = []
   const totalToEmbed = orderedSceneIds.length
   for (let index = 0; index < orderedSceneIds.length; index += 1) {
     const id = orderedSceneIds[index]!
@@ -1394,7 +1395,7 @@ async function exportProjectPackageZip(
         })
       }
       const exportDocument = exportBundle.document
-      embeddedScenes.push({ id, document: exportDocument, planningData: document.planningData ?? null })
+      embeddedScenes.push({ id, document: exportDocument })
       reportEvent?.({
         phase: 'scene',
         level: 'success',

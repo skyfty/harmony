@@ -3,19 +3,12 @@ import type {
   SceneAssetOverrideEntry,
   SceneAssetRegistryEntry,
   SceneJsonExportDocument,
-  ProjectExportBundleProjectConfig,
-  ScenePackageManifestV1,
 } from '@schema/core'
 import {
-  SCENE_PACKAGE_FORMAT,
-  SCENE_PACKAGE_VERSION,
-  serializeScenePackageManifest,
   type ScenePackageResourceEntry,
 } from '@schema/core'
 
 import { inferExtFromMimeType } from '@schema/core'
-import { useAssetCacheStore } from '@/stores/assetCacheStore'
-import { useScenesStore } from '@/stores/scenesStore'
 import type { PlanningImageData, PlanningSceneData } from '@/types/planning-scene-data'
 import type { PlanningScenePackageImageEntry, PlanningScenePackageSidecar } from '@/types/planning-package'
 import { getPlanningImageBlobByHash } from '@/utils/planningImageStorage'
@@ -73,63 +66,6 @@ export function buildPackagedAssetPathMap(
     packagedAssetPathById.set(entry.logicalId, entry.path)
   })
   return packagedAssetPathById
-}
-
-export type ScenePackageZipBuildPayload = {
-  project: ProjectExportBundleProjectConfig
-  scenes: Array<{ id: string; document: unknown; planningData?: PlanningSceneData | null }>
-  updateProgress?: (value: number, message?: string) => void
-}
-
-export type ScenePackageZipBuildState = {
-  createdAt: string
-  files: Record<string, Uint8Array>
-  projectPath: string
-  assetCache: ReturnType<typeof useAssetCacheStore>
-  scenesStore: ReturnType<typeof useScenesStore>
-  manifestScenes: ScenePackageManifestV1['scenes']
-  resources: ScenePackageResourceEntry[]
-  sharedAssetPathById: Map<string, string>
-}
-
-export function buildScenePackageZipState(_payload: ScenePackageZipBuildPayload): ScenePackageZipBuildState {
-  const createdAt = new Date().toISOString()
-  const files: Record<string, Uint8Array> = {}
-  const projectPath = 'project/project.json'
-
-  const assetCache = useAssetCacheStore()
-  const scenesStore = useScenesStore()
-  const manifestScenes: ScenePackageManifestV1['scenes'] = []
-  const resources: ScenePackageResourceEntry[] = []
-
-  return {
-    createdAt,
-    files,
-    projectPath,
-    assetCache,
-    scenesStore,
-    manifestScenes,
-    resources,
-    sharedAssetPathById: new Map<string, string>(),
-  }
-}
-
-export function finalizeScenePackageZipState(
-  state: ScenePackageZipBuildState,
-  payload: ScenePackageZipBuildPayload,
-): void {
-  const manifest: ScenePackageManifestV1 = {
-    format: SCENE_PACKAGE_FORMAT,
-    version: SCENE_PACKAGE_VERSION,
-    createdAt: state.createdAt,
-    project: { path: state.projectPath },
-    scenes: state.manifestScenes,
-    resources: state.resources,
-  }
-
-  const manifestBytes = serializeScenePackageManifest(manifest)
-  state.files[state.projectPath] = jsonBytes(payload.project)
-  state.files['manifest.bin'] = manifestBytes
 }
 
 // inferExtFromMimeType moved to @schema (assetTypeConversion)

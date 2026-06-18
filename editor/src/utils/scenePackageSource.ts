@@ -7,29 +7,21 @@ import {
   type SceneAssetPackageEntry,
   type SceneAssetRegistryEntry,
   type ScenePackageResourceEntry,
-  type SceneResourceSummary,
 } from '@schema/core'
 import { resolveDocumentGroundNode } from '@schema/groundNode'
 import { BUILTIN_WATER_NORMAL_FILENAME, isBuiltinWaterNormalAsset } from '@/constants/builtinAssets'
-import { fetchResourceAsset } from '@/api/resourceAssets'
-import { mapServerAssetToProjectAsset } from '@/api/serverAssetTypes'
 import { serializePlanningScenePackageSidecar } from '@/types/planning-package'
 import { sha256Hex } from '@harmony/utils/hash'
 import {
-  buildPackagedAssetPathMap,
   buildPlanningSidecar,
-  buildScenePackageZipState,
-  buildEffectiveAssetRegistry,
   createScenePackageZipBlob,
   inferExtFromFilename,
   stripGroundBakedTextureAssetIds,
   jsonBytes,
 } from '@/utils/scenePackageExport'
-import {
-  buildSourceAssetRegistryForExport,
-  calculateSourceSceneResourceSummary,
-} from '@/stores/sceneStore'
 import { collectPrefabAssetIdsFromSceneReferences } from '@/stores/sceneAssetCleanup'
+import { useAssetCacheStore } from '@/stores/assetCacheStore'
+import { useScenesStore } from '@/stores/scenesStore'
 
 interface ScenePackageSourceProjectConfig {
   id: string
@@ -41,7 +33,7 @@ interface ScenePackageSourceProjectConfig {
 
 interface ScenePackageSourceSceneDocument {
   id: string
-  projectId: string
+  projectId?: string
   name: string
   thumbnail?: string | null
   nodes: import('@/types/stored-scene-document').StoredSceneDocument['nodes']
@@ -55,18 +47,15 @@ interface ScenePackageSourceSceneDocument {
   resourceProviderId?: import('@/types/stored-scene-document').StoredSceneDocument['resourceProviderId']
   createdAt: string
   updatedAt: string
-  assetCatalog: Record<string, import('@/types/project-asset').ProjectAsset[]>
+  assetCatalog?: Record<string, import('@/types/project-asset').ProjectAsset[]>
   assetManifest?: import('@/types/stored-scene-document').StoredSceneDocument['assetManifest']
   assetRegistry?: Record<string, SceneAssetRegistryEntry>
-  projectOverrideAssets?: Record<string, SceneAssetRegistryEntry>
-  sceneOverrideAssets?: Record<string, SceneAssetRegistryEntry>
   planningData?: import('@/types/planning-scene-data').PlanningSceneData | null
 }
 
 export interface ScenePackageSourceScene {
   id: string
   document: ScenePackageSourceSceneDocument
-  planningData?: import('@/types/planning-scene-data').PlanningSceneData | null
 }
 
 type ScenePackageSourcePayload = {
@@ -89,6 +78,21 @@ type ScenePackageSourceManifest = {
   resources: ScenePackageResourceEntry[]
 }
 
+type ScenePackageSourceZipBuildPayload = {
+  project: ScenePackageSourceProjectConfig
+  scenes: ScenePackageSourceScene[]
+}
+
+type ScenePackageSourceZipBuildState = {
+  createdAt: string
+  files: Record<string, Uint8Array>
+  projectPath: string
+  assetCache: ReturnType<typeof useAssetCacheStore>
+  scenesStore: ReturnType<typeof useScenesStore>
+  manifestScenes: ScenePackageSourceSceneEntry[]
+  resources: ScenePackageResourceEntry[]
+}
+
 function cloneSourceSceneDocument(document: ScenePackageSourceSceneDocument): ScenePackageSourceSceneDocument {
   return structuredClone(document)
 }
@@ -96,9 +100,8 @@ function cloneSourceSceneDocument(document: ScenePackageSourceSceneDocument): Sc
 function collectSourceScenePackageAssetIdsForExport(
   document: ScenePackageSourceSceneDocument,
 ): string[] {
-  const effectiveRegistry = buildEffectiveAssetRegistry(document)
   const assetIds = new Set<string>()
-  Object.keys(effectiveRegistry).forEach((assetId) => {
+  Object.keys(document.assetRegistry ?? {}).forEach((assetId) => {
     const normalized = typeof assetId === 'string' ? assetId.trim() : ''
     if (normalized) {
       assetIds.add(normalized)
@@ -145,15 +148,12 @@ function updateSourceSceneAssetRegistry(
 
 async function normalizeSourceSceneDocument(document: ScenePackageSourceScene['document']): Promise<ScenePackageSourceSceneDocument> {
   const preparedDocument = cloneSourceSceneDocument(document)
-  if ('assetCatalog' in preparedDocument) {
-    await attachSourceSceneAssetMetadata(preparedDocument)
-  }
   stripGroundBakedTextureAssetIds(resolveDocumentGroundNode(preparedDocument))
   return preparedDocument
 }
 
 async function writeSourceScenePackageLocalAssets(options: {
-  state: ReturnType<typeof buildScenePackageZipState>
+  state: ScenePackageSourceZipBuildState
   preparedDocument: ScenePackageSourceSceneDocument
   assetIds: string[]
   resourcePathForAsset: (assetId: string, blob: Blob, entry: { filename?: string | null; mimeType?: string | null }) => Promise<string>
@@ -203,8 +203,8 @@ async function writeSourceScenePackageLocalAssets(options: {
 }
 
 function finalizeSourceScenePackageZipState(
-  state: ReturnType<typeof buildScenePackageZipState>,
-  payload: ScenePackageSourcePayload,
+  state: ScenePackageSourceZipBuildState,
+  payload: ScenePackageSourceZipBuildPayload,
   manifestScenes: ScenePackageSourceSceneEntry[],
 ): void {
   const manifest: ScenePackageSourceManifest = {
@@ -220,12 +220,31 @@ function finalizeSourceScenePackageZipState(
   state.files['manifest.bin'] = manifestBytes
 }
 
+function buildScenePackageSourceZipState(_payload: ScenePackageSourceZipBuildPayload): ScenePackageSourceZipBuildState {
+  const createdAt = new Date().toISOString()
+  const files: Record<string, Uint8Array> = {}
+  const projectPath = 'project/project.json'
+  const assetCache = useAssetCacheStore()
+  const scenesStore = useScenesStore()
+  const manifestScenes: ScenePackageSourceSceneEntry[] = []
+  const resources: ScenePackageResourceEntry[] = []
+
+  return {
+    createdAt,
+    files,
+    projectPath,
+    assetCache,
+    scenesStore,
+    manifestScenes,
+    resources,
+  }
+}
+
 export async function prepareScenePackageSourceZipFiles(payload: ScenePackageSourcePayload): Promise<Record<string, Uint8Array>> {
-  const state = buildScenePackageZipState(payload)
+  const state = buildScenePackageSourceZipState(payload)
   const {
     files,
     resources,
-    sharedAssetPathById,
   } = state
   const manifestScenes: ScenePackageSourceSceneEntry[] = []
 
@@ -251,26 +270,9 @@ export async function prepareScenePackageSourceZipFiles(payload: ScenePackageSou
       },
     })
 
-    const packagedAssetPathById = buildPackagedAssetPathMap(sharedAssetPathById, resources)
-    if (preparedDocument.assetRegistry) {
-      Object.entries(preparedDocument.assetRegistry).forEach(([assetId, entry]) => {
-        const packagedPath = packagedAssetPathById.get(assetId)
-        if (!packagedPath || !entry) {
-          return
-        }
-        preparedDocument.assetRegistry![assetId] = {
-          sourceType: 'package',
-          zipPath: packagedPath,
-          inline: entry.sourceType === 'package' ? entry.inline : undefined,
-          bytes: entry.bytes,
-          assetType: entry.assetType,
-          name: entry.name,
-        }
-      })
-    }
     files[scenePath] = encodeScenePackageSceneDocument(preparedDocument)
-    if (scene.planningData) {
-      const planningSidecar = await buildPlanningSidecar(scene.id, scene.planningData, files, resources)
+    if (scene.document.planningData) {
+      const planningSidecar = await buildPlanningSidecar(scene.id, scene.document.planningData, files, resources)
       planningPath = planningSidecar.planningPath
       files[planningPath] = serializePlanningScenePackageSidecar(planningSidecar.sidecar)
     }
@@ -288,77 +290,4 @@ export async function exportScenePackageSourceZip(payload: ScenePackageSourcePay
   const files = await prepareScenePackageSourceZipFiles(payload)
   const blob = createScenePackageZipBlob(files)
   return blob
-}
-
-type SourceSceneEditableDocument = ScenePackageSourceSceneDocument & {
-  resourceSummary?: SceneResourceSummary | null
-  assetRegistry?: Record<string, SceneAssetRegistryEntry>
-}
-
-async function resolveUnknownSourceExportAssetUrls(
-  editable: SourceSceneEditableDocument,
-  rebuildResourceSummary: () => Promise<SceneResourceSummary>,
-): Promise<void> {
-  const unknownAssetIds = Array.isArray(editable.resourceSummary?.unknownAssetIds)
-    ? editable.resourceSummary.unknownAssetIds
-        .map((value) => (typeof value === 'string' ? value.trim() : ''))
-        .filter((value) => value.length > 0)
-    : []
-
-  if (!unknownAssetIds.length) {
-    return
-  }
-
-  let registryPatched = false
-  await Promise.all(
-    unknownAssetIds.map(async (assetId) => {
-      try {
-        const registryEntry = editable.assetRegistry?.[assetId]
-        const serverAssetId =
-          registryEntry?.sourceType === 'server' && typeof registryEntry.serverAssetId === 'string' && registryEntry.serverAssetId.trim().length
-            ? registryEntry.serverAssetId.trim()
-            : assetId
-        const serverAsset = await fetchResourceAsset(serverAssetId)
-        const mappedAsset = mapServerAssetToProjectAsset(serverAsset)
-        const downloadUrl = typeof mappedAsset.downloadUrl === 'string' ? mappedAsset.downloadUrl.trim() : ''
-        if (!downloadUrl) {
-          return
-        }
-        editable.assetRegistry = {
-          ...(editable.assetRegistry ?? {}),
-          [assetId]: {
-            sourceType: 'url',
-            url: downloadUrl,
-          },
-        }
-        registryPatched = true
-      } catch (error) {
-        console.warn('Failed to resolve source asset download URL', {
-          registryAssetId: assetId,
-          serverAssetId: editable.assetRegistry?.[assetId]?.sourceType === 'server' && typeof editable.assetRegistry?.[assetId]?.serverAssetId === 'string'
-            ? editable.assetRegistry[assetId].serverAssetId
-            : assetId,
-          sourceType: editable.assetRegistry?.[assetId]?.sourceType ?? null,
-          error,
-        })
-      }
-    }),
-  )
-
-  if (registryPatched) {
-    editable.resourceSummary = await rebuildResourceSummary()
-  }
-}
-
-async function attachSourceSceneAssetMetadata(
-  editable: ScenePackageSourceSceneDocument,
-): Promise<ScenePackageSourceSceneDocument> {
-  const sceneDocument = editable as import('@/types/stored-scene-document').StoredSceneDocument
-  const working = editable as SourceSceneEditableDocument
-  const rebuildResourceSummary = async (): Promise<SceneResourceSummary> => await calculateSourceSceneResourceSummary(sceneDocument)
-  working.assetRegistry = await buildSourceAssetRegistryForExport(sceneDocument)
-  working.resourceSummary = await rebuildResourceSummary()
-  await resolveUnknownSourceExportAssetUrls(working, rebuildResourceSummary)
-  delete working.resourceSummary
-  return working
 }

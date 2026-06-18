@@ -299,7 +299,6 @@ export async function runProjectExportWorkflow(options: {
       embeddedScenes.push({
         id: exportDocument.id,
         document: exportDocument,
-        planningData: exportDocument.planningData ?? null,
       })
     }
 

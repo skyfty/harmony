@@ -27,13 +27,11 @@ import { useScenesStore } from '@/stores/scenesStore'
 import {
   buildPackagedAssetPathMap,
   buildPlanningSidecar,
-  buildScenePackageZipState,
   buildEffectiveAssetRegistry,
   createScenePackageZipBlob,
   inferExtFromFilename,
   stripGroundBakedTextureAssetIds,
   jsonBytes,
-  type ScenePackageZipBuildState,
   type ResolvedEmbedAsset,
 } from '@/utils/scenePackageExport'
 import {
@@ -99,7 +97,6 @@ interface ScenePackagePublishSceneDocument {
 interface ScenePackagePublishScene {
   id: string
   document: ScenePackagePublishSceneDocument
-  planningData?: import('@/types/planning-scene-data').PlanningSceneData | null
 }
 
 type ScenePackagePublishPayload = {
@@ -109,7 +106,22 @@ type ScenePackagePublishPayload = {
   reportEvent?: SceneExportEventReporter
 }
 
-type ScenePackagePublishZipBuildState = ScenePackageZipBuildState & {
+type ScenePackagePublishZipBuildPayload = {
+  project: ScenePackagePublishProjectConfig
+  scenes: ScenePackagePublishScene[]
+  updateProgress?: (value: number, message?: string) => void
+  reportEvent?: SceneExportEventReporter
+}
+
+type ScenePackagePublishZipBuildState = {
+  createdAt: string
+  files: Record<string, Uint8Array>
+  projectPath: string
+  assetCache: ReturnType<typeof useAssetCacheStore>
+  scenesStore: ReturnType<typeof useScenesStore>
+  manifestScenes: ScenePackagePublishSceneEntry[]
+  resources: ScenePackageResourceEntry[]
+  sharedAssetPathById: Map<string, string>
   projectWithCheckpointTotal: ScenePackagePublishProjectConfig
   checkpointTotal: number
   sceneReferenceSummaryMaps: Map<string, Map<string, SceneAssetReferenceSummary>>
@@ -1182,8 +1194,14 @@ async function writePublishSharedEmbeddedScenePackageAssets(options: {
   }
 }
 
-function buildPublishScenePackageZipState(payload: ScenePackagePublishPayload): ScenePackagePublishZipBuildState {
-  const state = buildScenePackageZipState(payload)
+function buildPublishScenePackageZipState(payload: ScenePackagePublishZipBuildPayload): ScenePackagePublishZipBuildState {
+  const createdAt = new Date().toISOString()
+  const files: Record<string, Uint8Array> = {}
+  const projectPath = 'project/project.json'
+  const assetCache = useAssetCacheStore()
+  const scenesStore = useScenesStore()
+  const manifestScenes: ScenePackagePublishSceneEntry[] = []
+  const resources: ScenePackageResourceEntry[] = []
   let checkpointTotal = 0
   payload.scenes.forEach((scene) => {
     checkpointTotal += countSceneCheckpoints(scene.document)
@@ -1207,7 +1225,14 @@ function buildPublishScenePackageZipState(payload: ScenePackagePublishPayload): 
   })
 
   return {
-    ...state,
+    createdAt,
+    files,
+    projectPath,
+    assetCache,
+    scenesStore,
+    manifestScenes,
+    resources,
+    sharedAssetPathById: new Map<string, string>(),
     projectWithCheckpointTotal,
     checkpointTotal,
     sceneReferenceSummaryMaps,
@@ -1548,8 +1573,8 @@ export async function prepareScenePackagePublishZipFiles(payload: ScenePackagePu
       detail: scenePath,
       message: `运行时场景已写入 ${sceneName}`,
     })
-    if (scene.planningData) {
-      const planningSidecar = await buildPlanningSidecar(scene.id, scene.planningData, files, resources)
+    if (scene.document.planningData) {
+      const planningSidecar = await buildPlanningSidecar(scene.id, scene.document.planningData, files, resources)
       planningPath = planningSidecar.planningPath
       files[planningPath] = serializePlanningScenePackageSidecar(planningSidecar.sidecar)
       emitSceneExportEvent(payload.reportEvent, {
