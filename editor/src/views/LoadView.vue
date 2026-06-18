@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, defineComponent, h, nextTick, onMounted, ref, resolveComponent, shallowRef, watch } from 'vue'
+import { computed, defineComponent, h, nextTick, onMounted, ref, shallowRef, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { VProgressLinear } from 'vuetify/components'
 import EditorView from '@/views/EditorView.vue'
 import { useScenesStore } from '@/stores/scenesStore'
 import { waitForPiniaHydration } from '@/utils/piniaPersist'
@@ -36,7 +37,6 @@ const LoadingScreen = defineComponent({
     })
 
     const hasError = computed(() => typeof props.error === 'string' && props.error.trim().length > 0)
-    const ProgressLinear = resolveComponent('v-progress-linear')
 
     const handleRetry = () => {
       if (!props.retrying) {
@@ -60,7 +60,7 @@ const LoadingScreen = defineComponent({
             props.detail ? h('p', { class: 'load-detail' }, props.detail) : null,
           ]),
           h('section', { class: 'load-body' }, [
-            h(ProgressLinear as never, {
+            h(VProgressLinear, {
               class: 'load-progress',
               modelValue: percent.value,
               height: 14,
