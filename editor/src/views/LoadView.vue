@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, defineComponent, h, nextTick, onMounted, ref, shallowRef, watch, type PropType } from 'vue'
+import { computed, defineComponent, h, nextTick, onMounted, ref, resolveComponent, shallowRef, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import EditorView from '@/views/EditorView.vue'
 import { useScenesStore } from '@/stores/scenesStore'
@@ -18,12 +18,6 @@ type BootstrapErrorCode =
   | 'scene-open-failed'
   | 'unknown'
 
-type StatusHistoryItem = {
-  label: string
-  description: string
-}
-
-
 const LoadingScreen = defineComponent({
   name: 'EditorLoadingScreen',
   props: {
@@ -33,7 +27,6 @@ const LoadingScreen = defineComponent({
     error: { type: String, default: null },
     retrying: { type: Boolean, default: false },
     canRetry: { type: Boolean, default: false },
-    statusHistory: { type: Array as PropType<StatusHistoryItem[]>, default: () => [] },
   },
   emits: ['retry', 'backToProjects'],
   setup(props, { emit }) {
@@ -43,6 +36,7 @@ const LoadingScreen = defineComponent({
     })
 
     const hasError = computed(() => typeof props.error === 'string' && props.error.trim().length > 0)
+    const ProgressLinear = resolveComponent('v-progress-linear')
 
     const handleRetry = () => {
       if (!props.retrying) {
@@ -57,40 +51,28 @@ const LoadingScreen = defineComponent({
     return () =>
       h('div', { class: 'load-root' }, [
         h('div', { class: 'load-card' }, [
-	          h('header', { class: 'load-header' }, [
-	            h('h1', { class: 'load-title' }, 'Harmony Scene Editor'),
-	            h('p', { class: 'load-subtitle' }, props.status),
-	            props.detail ? h('p', { class: 'load-detail' }, props.detail) : null,
-	          ]),
+          h('header', { class: 'load-header' }, [
+            h('h1', { class: 'load-title' }, 'Harmony Scene Editor'),
+            h('div', { class: 'load-status-row' }, [
+              h('span', { class: 'load-status-row__label', title: props.status }, props.status),
+              h('span', { class: 'load-status-row__percent' }, `${percent.value}%`),
+            ]),
+            props.detail ? h('p', { class: 'load-detail' }, props.detail) : null,
+          ]),
           h('section', { class: 'load-body' }, [
-            h(
-              'div',
-              {
-                class: 'progress-track',
-                role: 'progressbar',
-                'aria-valuemin': 0,
-                'aria-valuemax': 100,
-                'aria-valuenow': percent.value,
-              },
-              [h('div', { class: 'progress-fill', style: { width: `${percent.value}%` } })],
-	            ),
-	            h('div', { class: 'progress-label' }, `${percent.value}%`),
-	            props.statusHistory.length
-	              ? h(
-	                  'div',
-	                  { class: 'load-status-history' },
-	                  props.statusHistory.map((item) =>
-	                    h('div', { class: 'load-status-history__item', key: `${item.label}:${item.description}` }, [
-	                      h('div', { class: 'load-status-history__label' }, item.label),
-	                      h('div', { class: 'load-status-history__description' }, item.description),
-	                    ]),
-	                  ),
-	                )
-	              : null,
-	            hasError.value
+            h(ProgressLinear as never, {
+              class: 'load-progress',
+              modelValue: percent.value,
+              height: 14,
+              rounded: 'pill',
+              bgColor: 'rgba(255, 255, 255, 0.10)',
+              color: 'cyan-lighten-2',
+              'aria-valuetext': `${percent.value}%`,
+            }),
+            h('div', { class: 'progress-caption' }, `Progress ${percent.value}%`),
+            hasError.value
               ? h('div', { class: 'load-error' }, [
                   h('span', { class: 'load-error__text' }, props.error),
-                  // Action buttons (Retry + optional Return)
                   h(
                     'div',
                     { class: 'load-error__actions' },
@@ -137,7 +119,6 @@ const router = useRouter()
 const currentComponent = shallowRef<typeof LoadingScreen | typeof EditorView>(LoadingScreen)
 const progress = ref(5)
 const statusDetail = ref('')
-const statusHistory = ref<StatusHistoryItem[]>([])
 const statusMessage = ref('Initializing editor...')
 const errorMessage = ref<string | null>(null)
 const errorCode = ref<BootstrapErrorCode | null>(null)
@@ -190,15 +171,6 @@ function setBootstrapStatus(next: { status: string; progress: number; detail?: s
   statusMessage.value = next.status
   progress.value = Math.max(0, Math.min(100, Math.round(next.progress)))
   statusDetail.value = typeof next.detail === 'string' ? next.detail : ''
-  const description = statusDetail.value || `${progress.value}%`
-  const existingIndex = statusHistory.value.findIndex((item) => item.label === next.status)
-  if (existingIndex >= 0) {
-    statusHistory.value.splice(existingIndex, 1)
-  }
-  statusHistory.value = [
-    { label: next.status, description },
-    ...statusHistory.value,
-  ].slice(0, 6)
 }
 
 async function bootstrap() {
@@ -207,7 +179,6 @@ async function bootstrap() {
   }
   if (!isLocalEditEnabled() && !authStore.isAuthenticated) {
     currentComponent.value = LoadingScreen
-    statusHistory.value = []
     progress.value = 5
     statusDetail.value = ''
     statusMessage.value = 'Redirecting to projects...'
@@ -218,7 +189,6 @@ async function bootstrap() {
   }
   // Ensure the loading UI is visible when (re)bootstrapping
   currentComponent.value = LoadingScreen
-  statusHistory.value = []
   progress.value = 5
   setBootstrapStatus({
     status: 'Initializing editor',
@@ -286,7 +256,18 @@ async function bootstrap() {
       progress: 60,
       detail: 'Preloading local scene bundles before opening the editor.',
     })
-    await scenesStore.syncUserWorkspaceFromServer({ replace: false, projectId, sceneId: preferred })
+    await scenesStore.syncUserWorkspaceFromServer({
+      replace: false,
+      projectId,
+      sceneId: preferred,
+      onProgress: ({ step, progress: nextProgress, detail }) => {
+        setBootstrapStatus({
+          status: step,
+          progress: 60 + nextProgress * 0.18,
+          detail,
+        })
+      },
+    })
 
     statusMessage.value = 'Opening project...'
     progress.value = 78
@@ -363,7 +344,6 @@ const componentProps = computed(() =>
         error: errorMessage.value,
         retrying: isRetrying.value,
         canRetry: errorCode.value === 'scene-open-failed' || errorCode.value === 'unknown',
-        statusHistory: statusHistory.value,
         onRetry: handleRetry,
         onBackToProjects: errorCode.value !== null
           ? () => router.replace({ path: '/' })
@@ -386,7 +366,6 @@ watch(
       errorMessage.value = null
       errorCode.value = null
       currentComponent.value = LoadingScreen
-      statusHistory.value = []
       statusDetail.value = 'Bootstrapping editor shell.'
       progress.value = 5
       statusMessage.value = 'Initializing editor...'
@@ -434,10 +413,30 @@ watch(
   font-weight: 600;
 }
 
-.load-subtitle {
-  margin: 0;
+.load-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.load-status-row__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 1rem;
-  opacity: 0.78;
+  font-weight: 500;
+  color: rgba(245, 247, 250, 0.92);
+}
+
+.load-status-row__percent {
+  flex: none;
+  font-size: 0.92rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: rgba(255, 255, 255, 0.82);
 }
 
 .load-detail {
@@ -453,56 +452,17 @@ watch(
   gap: 18px;
 }
 
-.progress-track {
-  position: relative;
+.load-progress {
   width: 100%;
-  height: 12px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.12);
   overflow: hidden;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
 }
 
-.progress-fill {
-  height: 100%;
-  background: linear-gradient(90deg, #00acc1 0%, #26c6da 60%, #80deea 100%);
-  border-radius: 999px;
-  transition: width 200ms ease;
-}
-
-.progress-label {
-  align-self: flex-end;
-  font-size: 0.95rem;
-  font-weight: 500;
-  letter-spacing: 0.08em;
-  color: rgba(255, 255, 255, 0.82);
-}
-
-.load-status-history {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 14px;
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-}
-
-.load-status-history__item {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.load-status-history__label {
-  font-size: 0.88rem;
-  font-weight: 600;
-  color: rgba(255, 255, 255, 0.92);
-}
-
-.load-status-history__description {
-  font-size: 0.82rem;
-  line-height: 1.45;
-  color: rgba(214, 228, 236, 0.72);
+.progress-caption {
+  font-size: 0.86rem;
+  line-height: 1.2;
+  color: rgba(214, 228, 236, 0.78);
+  letter-spacing: 0.03em;
 }
 
 .load-error {

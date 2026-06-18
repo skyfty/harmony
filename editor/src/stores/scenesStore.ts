@@ -73,6 +73,23 @@ interface SyncUserWorkspaceOptions {
   replace?: boolean
   projectId: string
   sceneId?: string | null
+  onProgress?: (progress: SyncUserWorkspaceProgress) => void
+}
+
+interface SyncUserWorkspaceProgress {
+  step: string
+  progress: number
+  detail?: string
+}
+
+function emitSyncUserWorkspaceProgress(
+  callback: SyncUserWorkspaceOptions['onProgress'],
+  payload: SyncUserWorkspaceProgress,
+): void {
+  callback?.({
+    ...payload,
+    progress: Math.max(0, Math.min(100, Math.round(payload.progress))),
+  })
 }
 
 function normalizeSceneId(value: string | null | undefined): string | null {
@@ -861,7 +878,7 @@ async function fetchUserScenesFromServer(
 async function downloadSceneBundleZip(
   bundleUrl: string,
   authStore: ReturnType<typeof useAuthStore>,
-  options: { etag?: string | null } = {},
+  options: { etag?: string | null; onProgress?: (progress: number) => void } = {},
 ): Promise<{ bytes: ArrayBuffer; etag: string | null } | null> {
   const authorization = authStore.authorizationHeader
   if (!authorization) {
@@ -886,8 +903,48 @@ async function downloadSceneBundleZip(
     throw new Error(`Failed to download scene bundle (${response.status})`)
   }
   const etag = response.headers.get('ETag')
-  const bytes = await response.arrayBuffer()
-  return { bytes, etag }
+  const contentLengthRaw = response.headers.get('Content-Length')
+  const totalBytes = contentLengthRaw ? Number(contentLengthRaw) : null
+  if (!response.body) {
+    const bytes = await response.arrayBuffer()
+    options.onProgress?.(100)
+    return { bytes, etag }
+  }
+
+  const reader = response.body.getReader()
+  const chunks: Uint8Array[] = []
+  let receivedBytes = 0
+  const softTotalBytes = 25 * 1024 * 1024
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) {
+        break
+      }
+      if (value) {
+        chunks.push(value)
+        receivedBytes += value.byteLength
+        if (typeof options.onProgress === 'function') {
+          const nextProgress = totalBytes && totalBytes > 0
+            ? Math.min(99, Math.round((receivedBytes / totalBytes) * 100))
+            : Math.min(99, Math.round((receivedBytes / softTotalBytes) * 100))
+          options.onProgress(Math.max(0, nextProgress))
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock()
+  }
+
+  const bytes = new Uint8Array(receivedBytes)
+  let offset = 0
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  options.onProgress?.(100)
+  return { bytes: bytes.buffer, etag }
 }
 
 async function unpackSceneBundleIntoStores(
@@ -1658,10 +1715,25 @@ export const useScenesStore = defineStore('scenes', {
       const projectsStore = useProjectsStore()
 
       try {
+        emitSyncUserWorkspaceProgress(options.onProgress, {
+          step: 'Fetching remote scene list',
+          progress: 4,
+          detail: 'Loading the latest scene metadata from the server.',
+        })
         const remoteScenes = await fetchUserScenesFromServer(authStore, options.projectId)
         if (!remoteScenes) {
+          emitSyncUserWorkspaceProgress(options.onProgress, {
+            step: 'Scene workspace is up to date',
+            progress: 100,
+            detail: 'No remote workspace data is available.',
+          })
           return
         }
+        emitSyncUserWorkspaceProgress(options.onProgress, {
+          step: 'Remote scene list loaded',
+          progress: 12,
+          detail: `Found ${remoteScenes.length} remote scene${remoteScenes.length === 1 ? '' : 's'}.`,
+        })
         const project = await projectsStore.loadProjectDocument(options.projectId)
         const remoteMetadata = remoteScenes.map(toRemoteSceneSummary)
         const preferredSceneId = resolvePreferredRemoteSceneId(
@@ -1673,22 +1745,68 @@ export const useScenesStore = defineStore('scenes', {
           ? remoteScenes.find((entry) => entry.id === preferredSceneId) ?? null
           : null
 
+        emitSyncUserWorkspaceProgress(options.onProgress, {
+          step: 'Checking local scene cache',
+          progress: 22,
+          detail: targetEntry
+            ? `Preparing scene package "${targetEntry.name}".`
+            : 'No scene bundle needs to be downloaded.',
+        })
         if (targetEntry) {
           const sceneId = targetEntry.id
           const localEtag = this.metadata.find((entry) => entry.id === sceneId)?.bundleEtag ?? null
-          let bundle = await downloadSceneBundleZip(targetEntry.bundle.url, authStore, { etag: localEtag })
+          let bundle = await downloadSceneBundleZip(targetEntry.bundle.url, authStore, {
+            etag: localEtag,
+            onProgress: (progress) => {
+              const downloadProgress = 22 + Math.round(progress * 0.58)
+              emitSyncUserWorkspaceProgress(options.onProgress, {
+                step: 'Downloading scene package ZIP',
+                progress: downloadProgress,
+                detail: `Downloading "${targetEntry.name}" (${progress}%).`,
+              })
+            },
+          })
           let bundleEtag = bundle?.etag ?? targetEntry.bundle.etag ?? null
 
           if (!bundle) {
-            const localBundle = await readSceneBundleFromWorkspace(this.workspaceId, sceneId)
-            if (!localBundle) {
-              bundle = await downloadSceneBundleZip(targetEntry.bundle.url, authStore)
+            emitSyncUserWorkspaceProgress(options.onProgress, {
+              step: 'Using cached scene package',
+              progress: 85,
+              detail: `Scene package "${targetEntry.name}" is already cached locally.`,
+            })
+            const hasLocalBundle = (await readSceneBundleFromWorkspace(this.workspaceId, sceneId)) !== null
+            if (!hasLocalBundle) {
+              emitSyncUserWorkspaceProgress(options.onProgress, {
+                step: 'Re-downloading scene package',
+                progress: 45,
+                detail: `Local cache is missing for "${targetEntry.name}". Downloading again.`,
+              })
+              bundle = await downloadSceneBundleZip(targetEntry.bundle.url, authStore, {
+                onProgress: (progress) => {
+                  const downloadProgress = 22 + Math.round(progress * 0.58)
+                  emitSyncUserWorkspaceProgress(options.onProgress, {
+                    step: 'Downloading scene package ZIP',
+                    progress: downloadProgress,
+                    detail: `Downloading "${targetEntry.name}" (${progress}%).`,
+                  })
+                },
+              })
               bundleEtag = bundle?.etag ?? targetEntry.bundle.etag ?? null
             }
           }
 
           if (bundle) {
+            emitSyncUserWorkspaceProgress(options.onProgress, {
+              step: 'Unpacking scene package',
+              progress: 90,
+              detail: `Unpacking "${targetEntry.name}".`,
+            })
             const downloaded = await unpackSceneBundleIntoStores(bundle.bytes, { allowLandformNodes: true })
+            emitSyncUserWorkspaceProgress(options.onProgress, {
+              step: 'Writing scene data',
+              progress: 96,
+              detail: 'Writing scene documents and sidecars into local storage.',
+            })
             await writeSceneDocuments(
               this.workspaceId,
               [downloaded.document],
@@ -1713,8 +1831,18 @@ export const useScenesStore = defineStore('scenes', {
           }
         }
 
+        emitSyncUserWorkspaceProgress(options.onProgress, {
+          step: 'Refreshing scene metadata',
+          progress: 99,
+          detail: 'Updating local scene lists.',
+        })
         await writeSceneMetadataSummaries(this.workspaceId, remoteMetadata)
         this.replaceMetadata(remoteMetadata)
+        emitSyncUserWorkspaceProgress(options.onProgress, {
+          step: 'Scene workspace synced',
+          progress: 100,
+          detail: 'Local scene workspace is ready.',
+        })
       } catch (error) {
         console.warn('[ScenesStore] syncUserWorkspaceFromServer failed', error)
       }
