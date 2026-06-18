@@ -60,6 +60,10 @@ const sceneNodeQuaternionHelper = new THREE.Quaternion()
 const sceneNodeScaleHelper = new THREE.Vector3()
 const sceneNodeEulerHelper = new THREE.Euler()
 const sceneNodeLocalMatrixHelper = new THREE.Matrix4()
+const sceneNodeInverseWorldMatrixHelper = new THREE.Matrix4()
+const sceneNodeConvexPointHelper = new THREE.Vector3()
+const sceneNodeConvexBoundsHelper = new THREE.Box3()
+const sceneNodeConvexCenterHelper = new THREE.Vector3()
 
 type SceneNodeWorldTransform = {
   position: THREE.Vector3
@@ -847,7 +851,7 @@ async function applyRigidbodyMetadata(nodes: SceneNode[], candidates: RigidbodyE
 
       config.usedPass = usedPass
       generatedConvexSimplify = config
-      return buildConvexShapeFromOutline(outline, nodeScale)
+      return buildConvexShapeFromOutline(outline, nodeScale, sourceWorldTransform)
     }
 
     const buildBox = () => buildBoxShapeFromObject(samplingObject, nodeScale)
@@ -1090,26 +1094,47 @@ function applyScaleToObject(object: THREE.Object3D, node: SceneNode): void {
 
 function buildConvexShapeFromOutline(
   outline: SceneOutlineMesh,
-  _scaleFactors: { x: number; y: number; z: number },
+  scaleFactors: { x: number; y: number; z: number },
+  worldTransform: SceneNodeWorldTransform | null,
 ): RigidbodyPhysicsShape | null {
   const positions = Array.isArray(outline.positions) ? outline.positions : []
   if (positions.length < 12) {
     return null
   }
-  const vertices: [number, number, number][] = []
+  const safeScaleX = Math.max(1e-4, Math.abs(scaleFactors.x) || 1)
+  const safeScaleY = Math.max(1e-4, Math.abs(scaleFactors.y) || 1)
+  const safeScaleZ = Math.max(1e-4, Math.abs(scaleFactors.z) || 1)
+  if (worldTransform) {
+    sceneNodePositionHelper.copy(worldTransform.position)
+    sceneNodeQuaternionHelper.copy(worldTransform.quaternion)
+    sceneNodeScaleHelper.set(
+      safeScaleX,
+      safeScaleY,
+      safeScaleZ,
+    )
+    sceneNodeInverseWorldMatrixHelper.compose(
+      sceneNodePositionHelper,
+      sceneNodeQuaternionHelper,
+      sceneNodeScaleHelper,
+    ).invert()
+  } else {
+    sceneNodeInverseWorldMatrixHelper.identity()
+  }
+
+  const localPoints: THREE.Vector3[] = []
   for (let index = 0; index < positions.length; index += 3) {
     const vx = positions[index]
     const vy = positions[index + 1]
     const vz = positions[index + 2]
     if ([vx, vy, vz].every((value) => typeof value === 'number' && Number.isFinite(value))) {
-      vertices.push([
-        vx as number,
-        vy as number,
-        vz as number,
-      ])
+      sceneNodeConvexPointHelper.set(vx as number, vy as number, vz as number)
+      if (worldTransform) {
+        sceneNodeConvexPointHelper.applyMatrix4(sceneNodeInverseWorldMatrixHelper)
+      }
+      localPoints.push(sceneNodeConvexPointHelper.clone())
     }
   }
-  if (vertices.length < 4) {
+  if (localPoints.length < 4) {
     return null
   }
 
@@ -1125,7 +1150,7 @@ function buildConvexShapeFromOutline(
       }
     }
   } else {
-    for (let index = 0; index + 2 < vertices.length; index += 3) {
+    for (let index = 0; index + 2 < localPoints.length; index += 3) {
       faces.push([index, index + 1, index + 2])
     }
   }
@@ -1134,10 +1159,27 @@ function buildConvexShapeFromOutline(
     return null
   }
 
+  sceneNodeConvexBoundsHelper.setFromPoints(localPoints)
+  if (sceneNodeConvexBoundsHelper.isEmpty()) {
+    return null
+  }
+  sceneNodeConvexBoundsHelper.getCenter(sceneNodeConvexCenterHelper)
+
+  const vertices: [number, number, number][] = localPoints.map((point) => ([
+    point.x - sceneNodeConvexCenterHelper.x,
+    point.y - sceneNodeConvexCenterHelper.y,
+    point.z - sceneNodeConvexCenterHelper.z,
+  ]))
+
   return {
     kind: 'convex',
     vertices,
     faces,
+    offset: [
+      sceneNodeConvexCenterHelper.x,
+      sceneNodeConvexCenterHelper.y,
+      sceneNodeConvexCenterHelper.z,
+    ],
     applyScale: true,
   }
 }

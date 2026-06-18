@@ -32,6 +32,7 @@ export type SceneData = {
   name: string
   fileKey: string
   fileUrl: string
+  packageDownloadPath: string
   fileSize: number
   checkpointTotal: number
   metadata: Record<string, unknown> | null
@@ -141,6 +142,10 @@ function buildManifestMetadataFallback(manifestRaw: unknown): Record<string, unk
     resourceCount: resources.length,
     manifestResourceBytes,
   }
+}
+
+function buildScenePackageDownloadPath(sceneId: string): string {
+  return `/api/mini/scenes/${encodeURIComponent(sceneId)}/package`
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -473,6 +478,7 @@ async function mapSceneDocument(scene: SceneDocLike): Promise<SceneData> {
       name: scene.name,
       fileKey: scene.fileKey,
       fileUrl: scene.fileUrl,
+      packageDownloadPath: buildScenePackageDownloadPath(id),
       fileSize: scene.fileSize ?? 0,
       checkpointTotal: typeof scene.checkpointTotal === 'number' && scene.checkpointTotal > 0 ? Math.floor(scene.checkpointTotal) : 0,
       metadata: { multiuser },
@@ -489,6 +495,7 @@ async function mapSceneDocument(scene: SceneDocLike): Promise<SceneData> {
     name: scene.name,
     fileKey: scene.fileKey,
     fileUrl: scene.fileUrl,
+    packageDownloadPath: buildScenePackageDownloadPath(id),
     fileSize: scene.fileSize ?? 0,
     checkpointTotal: typeof scene.checkpointTotal === 'number' && scene.checkpointTotal > 0 ? Math.floor(scene.checkpointTotal) : 0,
     metadata: resolvedMetadata,

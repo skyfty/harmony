@@ -17,6 +17,7 @@ export interface SceneItem {
   name: string;
   fileKey: string;
   fileUrl: string;
+  packageDownloadPath: string;
   fileSize: number;
   checkpointTotal: number;
   metadata?: null | ScenePackageMetadata;

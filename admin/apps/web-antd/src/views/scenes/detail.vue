@@ -206,6 +206,17 @@ onMounted(load);
           <a v-if="scene?.fileUrl" :href="scene.fileUrl" target="_blank" rel="noopener noreferrer">{{ scene.fileUrl }}</a>
           <span v-else>-</span>
         </Descriptions.Item>
+        <Descriptions.Item label="场景包稳定路径">
+          <a
+            v-if="scene?.packageDownloadPath"
+            :href="`https://cdn.v.touchmagic.cn${scene.packageDownloadPath}`"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            https://cdn.v.touchmagic.cn{{ scene.packageDownloadPath }}
+          </a>
+          <span v-else>-</span>
+        </Descriptions.Item>
         <Descriptions.Item :label="t('page.scenes.detail.fields.fileSize')">{{ formatFileSize(scene?.fileSize) }}</Descriptions.Item>
         <Descriptions.Item :label="t('page.scenes.detail.fields.uncompressedEntryBytes')">{{ formatFileSize(metadata?.uncompressedEntryBytes) }}</Descriptions.Item>
         <Descriptions.Item :label="t('page.scenes.detail.fields.resourceCount')">{{ formatNumber(metadata?.resourceCount) }}</Descriptions.Item>
