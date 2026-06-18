@@ -98,7 +98,7 @@ export interface RigidbodyComponentMetadata {
 }
 
 export const DEFAULT_RIGIDBODY_MASS = 10000
-export const DEFAULT_RIGIDBODY_BODY_TYPE: RigidbodyBodyType = 'DYNAMIC'
+export const DEFAULT_RIGIDBODY_BODY_TYPE: RigidbodyBodyType = 'STATIC'
 export const DEFAULT_RIGIDBODY_COLLIDER_TYPE: RigidbodyColliderType = 'convex'
 export const MIN_RIGIDBODY_MASS = 0
 export const MAX_RIGIDBODY_MASS = 100000
@@ -112,7 +112,7 @@ export function clampRigidbodyComponentProps(
 ): RigidbodyComponentProps {
   const rawMass = typeof props?.mass === 'number' && Number.isFinite(props.mass) ? props.mass : DEFAULT_RIGIDBODY_MASS
   const normalizedMass = Math.min(MAX_RIGIDBODY_MASS, Math.max(MIN_RIGIDBODY_MASS, rawMass))
-  const normalizedType: RigidbodyBodyType = props?.bodyType === 'STATIC' || props?.bodyType === 'KINEMATIC'
+  const normalizedType: RigidbodyBodyType = props?.bodyType === 'DYNAMIC' || props?.bodyType === 'KINEMATIC'
     ? props.bodyType
     : DEFAULT_RIGIDBODY_BODY_TYPE
   const normalizedColliderType: RigidbodyColliderType = isRigidbodyColliderType(props?.colliderType)
@@ -190,6 +190,7 @@ const rigidbodyComponentDefinition: ComponentDefinition<RigidbodyComponentProps>
   createDefaultProps(node: SceneNode) {
     return clampRigidbodyComponentProps({
       bodyType: DEFAULT_RIGIDBODY_BODY_TYPE,
+      mass: 0,
       targetNodeId: node.id ?? null,
     })
   },

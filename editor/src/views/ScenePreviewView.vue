@@ -4665,14 +4665,7 @@ async function syncTerrainScatterInstances(
 	}
 	await terrainScatterRuntime.sync(document, resourceCache, resolveGroundMeshObject, {
 		onProgress: (progress) => {
-			onProgress?.({
-				phase: 'syncingScatter',
-				percent: progress.total > 0 ? (progress.loaded / progress.total) * 100 : 0,
-				detail: progress.detail || progress.label,
-				currentIndex: progress.loaded,
-				currentTotal: progress.total,
-				currentLabel: progress.label,
-			})
+			onProgress?.(createSceneSubsystemProgress('syncingScatter', progress))
 		},
 	})
 }
@@ -11040,14 +11033,7 @@ async function loadScenePreviewPhysicsBridgeScene(
 	const requestId = ++physicsBridgeSceneRequestId
 	const asset = await buildPhysicsSceneAsset(document, {
 		onProgress: (progress) => {
-			onProgress?.({
-				phase: 'syncingPhysics',
-				percent: progress.total > 0 ? (progress.loaded / progress.total) * 100 : 0,
-				detail: progress.detail || progress.label,
-				currentIndex: progress.loaded,
-				currentTotal: progress.total,
-				currentLabel: progress.label,
-			})
+			onProgress?.(createSceneSubsystemProgress('syncingPhysics', progress))
 		},
 	})
 	try {
@@ -11972,6 +11958,25 @@ type SceneSubsystemProgressReporter = (progress: {
 	currentLabel?: string
 }) => void
 
+function createSceneSubsystemProgress(
+	phase: SceneInitStage,
+	progress: {
+		loaded: number
+		total: number
+		detail?: string | null
+		label?: string | null
+	},
+): Parameters<SceneSubsystemProgressReporter>[0] {
+	return {
+		phase,
+		percent: progress.total > 0 ? (progress.loaded / progress.total) * 100 : 0,
+		detail: progress.detail || progress.label || '',
+		currentIndex: progress.loaded,
+		currentTotal: progress.total,
+		currentLabel: progress.label || undefined,
+	}
+}
+
 async function syncPhysicsBodiesForDocument(
 	document: SceneJsonExportDocument | null,
 	onProgress?: SceneSubsystemProgressReporter,
@@ -11984,18 +11989,6 @@ async function syncPhysicsBodiesForDocument(
 	await loadScenePreviewPhysicsBridgeScene(document, onProgress)
 	clearLegacyPhysicsWorld()
 	syncVehicleBindingsForDocument(document)
-	await buildPhysicsSceneAsset(document, {
-		onProgress: (progress) => {
-			onProgress?.({
-				phase: 'syncingPhysics',
-				percent: progress.total > 0 ? (progress.loaded / progress.total) * 100 : 0,
-				detail: progress.detail || progress.label,
-				currentIndex: progress.loaded,
-				currentTotal: progress.total,
-				currentLabel: progress.label,
-			})
-		},
-	})
 }
 
 function stepPhysicsWorld(delta: number): void {
