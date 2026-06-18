@@ -58,6 +58,16 @@ import {
 } from './compiledStaticMesh';
 import { compileRoadStaticMeshMetadata } from './roadMesh'
 
+const SCENE_GRAPH_DEBUG_PREFIX = '[SceneGraph][debug]';
+
+function logSceneGraphDebug(event: string, detail?: Record<string, unknown>): void {
+  if (typeof detail === 'undefined') {
+    console.log(`${SCENE_GRAPH_DEBUG_PREFIX} ${event}`);
+    return;
+  }
+  console.log(`${SCENE_GRAPH_DEBUG_PREFIX} ${event}`, detail);
+}
+
 export interface SceneGraphBuildResult {
   root: THREE.Group;
   warnings: string[];
@@ -453,9 +463,24 @@ class SceneGraphBuilder {
 
   async build(): Promise<THREE.Group> {
     const nodes = Array.isArray(this.document.nodes) ? (this.document.nodes as SceneNodeWithExtras[]) : [];
+    logSceneGraphDebug('build:start', {
+      documentName: this.document.name ?? '',
+      documentId: this.document.id ?? null,
+      nodeCount: nodes.length,
+      lazyLoadMeshes: this.lazyLoadMeshes,
+    });
+    logSceneGraphDebug('build:preload-assets:start');
     await this.preloadAssets(nodes);
+    logSceneGraphDebug('build:preload-assets:done');
+    logSceneGraphDebug('build:preload-instance-layout-models:start');
     await this.preloadInstanceLayoutModels(nodes);
+    logSceneGraphDebug('build:preload-instance-layout-models:done');
+    logSceneGraphDebug('build:build-nodes:start');
     await this.buildNodes(nodes, this.root);
+    logSceneGraphDebug('build:build-nodes:done', {
+      childCount: this.root.children.length,
+    });
+    logSceneGraphDebug('build:done');
     return this.root;
   }
 
@@ -581,9 +606,15 @@ class SceneGraphBuilder {
     const meshAssetIds = this.getMeshPreloadIds(nodes);
     const textureAssetIds = this.collectTextureAssetIds(nodes);
     const total = meshAssetIds.length + textureAssetIds.length;
+    logSceneGraphDebug('preloadAssets:start', {
+      meshCount: meshAssetIds.length,
+      textureCount: textureAssetIds.length,
+      total,
+    });
     this.beginProgress(total);
     if (total === 0) {
       this.finalizeProgress();
+      logSceneGraphDebug('preloadAssets:skip-empty');
       return;
     }
 
@@ -607,6 +638,7 @@ class SceneGraphBuilder {
 
     await Promise.all(tasks);
     this.finalizeProgress();
+    logSceneGraphDebug('preloadAssets:done');
   }
 
   private getMeshPreloadIds(nodes: SceneNodeWithExtras[]): string[] {
@@ -734,8 +766,13 @@ class SceneGraphBuilder {
   private async preloadInstanceLayoutModels(nodes: SceneNodeWithExtras[]): Promise<void> {
     const assetIds = this.collectInstanceLayoutAssetIds(nodes)
     if (!assetIds.length) {
+      logSceneGraphDebug('preloadInstanceLayoutModels:skip-empty');
       return
     }
+
+    logSceneGraphDebug('preloadInstanceLayoutModels:start', {
+      assetCount: assetIds.length,
+    });
 
     await Promise.all(
       assetIds.map(async (assetId) => {
@@ -752,6 +789,7 @@ class SceneGraphBuilder {
         }
       }),
     )
+    logSceneGraphDebug('preloadInstanceLayoutModels:done');
   }
 
   private collectTextureAssetIds(nodes: SceneNodeWithExtras[]): string[] {
@@ -963,12 +1001,45 @@ class SceneGraphBuilder {
       if (!node) {
         continue;
       }
+      logSceneGraphDebug('buildNodes:node:start', {
+        nodeId: node.id ?? null,
+        nodeName: node.name ?? '',
+        nodeType: node.nodeType ?? '',
+        sourceAssetId: typeof node.sourceAssetId === 'string' ? node.sourceAssetId : '',
+      });
       const built = await this.buildSingleNode(node);
       if (!built) {
+        logSceneGraphDebug('buildNodes:node:skip', {
+          nodeId: node.id ?? null,
+          nodeName: node.name ?? '',
+        });
         continue;
       }
+      logSceneGraphDebug('buildNodes:node:apply-metadata:start', {
+        nodeId: node.id ?? null,
+        nodeName: node.name ?? '',
+      });
       this.applyNodeMetadata(built, node);
+      logSceneGraphDebug('buildNodes:node:apply-metadata:done', {
+        nodeId: node.id ?? null,
+        nodeName: node.name ?? '',
+      });
+      logSceneGraphDebug('buildNodes:node:add-parent:start', {
+        nodeId: node.id ?? null,
+        nodeName: node.name ?? '',
+        parentType: parent.type,
+      });
       parent.add(built);
+      logSceneGraphDebug('buildNodes:node:add-parent:done', {
+        nodeId: node.id ?? null,
+        nodeName: node.name ?? '',
+      });
+      logSceneGraphDebug('buildNodes:node:done', {
+        nodeId: node.id ?? null,
+        nodeName: node.name ?? '',
+        childCount: built.children.length,
+        objectType: built.type,
+      });
     }
   }
 
@@ -987,44 +1058,114 @@ class SceneGraphBuilder {
   }
 
   private async buildSingleNode(node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
+    logSceneGraphDebug('buildSingleNode:enter', {
+      nodeId: node.id ?? null,
+      nodeName: node.name ?? '',
+      nodeType: node.nodeType ?? '',
+      editorOnly: Boolean(node.editorFlags?.editorOnly),
+    });
     if (isRuntimeHiddenInPreview(node)) {
+      logSceneGraphDebug('buildSingleNode:hidden', {
+        nodeId: node.id ?? null,
+        nodeName: node.name ?? '',
+      });
       return null;
     }
     if (node.editorFlags?.editorOnly) {
-      return this.buildEditorOnlyNode(node);
+      const result = await this.buildEditorOnlyNode(node);
+      logSceneGraphDebug('buildSingleNode:editorOnly:done', {
+        nodeId: node.id ?? null,
+        nodeName: node.name ?? '',
+        built: Boolean(result),
+      });
+      return result;
     }
     const explicitType = typeof node.nodeType === 'string' ? node.nodeType : ''
     const normalizedType = explicitType.toLowerCase()
 
     if (normalizedType === 'group') {
-      return this.buildGroupNode(node)
+      const result = await this.buildGroupNode(node);
+      logSceneGraphDebug('buildSingleNode:group:done', {
+        nodeId: node.id ?? null,
+        nodeName: node.name ?? '',
+        built: Boolean(result),
+      });
+      return result
     }
     if (normalizedType === 'light') {
-      return this.buildLightNode(node)
+      const result = await this.buildLightNode(node);
+      logSceneGraphDebug('buildSingleNode:light:done', {
+        nodeId: node.id ?? null,
+        nodeName: node.name ?? '',
+        built: Boolean(result),
+      });
+      return result
     }
     if (normalizedType === 'warpgate') {
-      return this.buildWarpGateNode(node)
+      const result = await this.buildWarpGateNode(node);
+      logSceneGraphDebug('buildSingleNode:warpgate:done', {
+        nodeId: node.id ?? null,
+        nodeName: node.name ?? '',
+        built: Boolean(result),
+      });
+      return result
     }
     if (normalizedType === 'guideboard') {
-      return this.buildGuideboardNode(node)
+      const result = await this.buildGuideboardNode(node);
+      logSceneGraphDebug('buildSingleNode:guideboard:done', {
+        nodeId: node.id ?? null,
+        nodeName: node.name ?? '',
+        built: Boolean(result),
+      });
+      return result
     }
     if (normalizedType === 'camera') {
       this.warn(`暂不支持相机节点 ${node.name ?? node.id}`)
+      logSceneGraphDebug('buildSingleNode:camera-unsupported', {
+        nodeId: node.id ?? null,
+        nodeName: node.name ?? '',
+      });
       return null
     }
 
     if (this.hasEnabledWarpGateComponent(node)) {
-      return this.buildWarpGateNode(node)
+      const result = await this.buildWarpGateNode(node);
+      logSceneGraphDebug('buildSingleNode:warpGateComponent:done', {
+        nodeId: node.id ?? null,
+        nodeName: node.name ?? '',
+        built: Boolean(result),
+      });
+      return result
     }
     if (this.hasEnabledGuideboardComponent(node)) {
-      return this.buildGuideboardNode(node)
+      const result = await this.buildGuideboardNode(node);
+      logSceneGraphDebug('buildSingleNode:guideboardComponent:done', {
+        nodeId: node.id ?? null,
+        nodeName: node.name ?? '',
+        built: Boolean(result),
+      });
+      return result
     }
 
     if (normalizedType === 'mesh') {
-      return this.buildMeshNode(node)
+      const result = await this.buildMeshNode(node);
+      logSceneGraphDebug('buildSingleNode:mesh:done', {
+        nodeId: node.id ?? null,
+        nodeName: node.name ?? '',
+        built: Boolean(result),
+        objectType: result?.type ?? '',
+      });
+      return result
     }
 
-    return this.buildPrimitiveNode(node)
+    const result = await this.buildPrimitiveNode(node);
+    logSceneGraphDebug('buildSingleNode:primitive:done', {
+      nodeId: node.id ?? null,
+      nodeName: node.name ?? '',
+      built: Boolean(result),
+      objectType: result?.type ?? '',
+    });
+    return result
   }
 
   private async buildEditorOnlyNode(node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
@@ -1174,18 +1315,37 @@ class SceneGraphBuilder {
   }
 
   private async buildMeshNode(node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
+    logSceneGraphDebug('buildMeshNode:enter', {
+      nodeId: node.id ?? null,
+      nodeName: node.name ?? '',
+      sourceAssetId: typeof node.sourceAssetId === 'string' ? node.sourceAssetId : '',
+      dynamicMeshType: node.dynamicMesh?.type ?? '',
+    });
     const compiledMeshNode = await this.buildCompiledStaticMeshNode(node);
     if (compiledMeshNode) {
+      logSceneGraphDebug('buildMeshNode:compiled-static:done', {
+        nodeId: node.id ?? null,
+        nodeName: node.name ?? '',
+      });
       return compiledMeshNode;
     }
 
     const dynamicMeshNode = await this.buildDynamicMeshNode(node);
     if (dynamicMeshNode) {
+      logSceneGraphDebug('buildMeshNode:dynamic:done', {
+        nodeId: node.id ?? null,
+        nodeName: node.name ?? '',
+        dynamicMeshType: node.dynamicMesh?.type ?? '',
+      });
       return dynamicMeshNode;
     }
 
     const waterSurfaceMeshNode = await this.buildWaterSurfaceMeshNode(node);
     if (waterSurfaceMeshNode) {
+      logSceneGraphDebug('buildMeshNode:water-surface:done', {
+        nodeId: node.id ?? null,
+        nodeName: node.name ?? '',
+      });
       return waterSurfaceMeshNode;
     }
 
@@ -1205,11 +1365,20 @@ class SceneGraphBuilder {
           await this.buildNodes(node.children as SceneNodeWithExtras[], container);
         }
         this.recordMeshStatistics(placeholder);
+        logSceneGraphDebug('buildMeshNode:lazy-placeholder:done', {
+          nodeId: node.id ?? null,
+          nodeName: node.name ?? '',
+        });
         return container;
       }
     }
 
     if (node.sourceAssetId) {
+      logSceneGraphDebug('buildMeshNode:load-asset-mesh:start', {
+        nodeId: node.id ?? null,
+        nodeName: node.name ?? '',
+        sourceAssetId: node.sourceAssetId,
+      });
       const container = new THREE.Group();
       container.name = node.name ?? 'Mesh';
       this.applyTransform(container, node);
@@ -1218,6 +1387,11 @@ class SceneGraphBuilder {
 
       const asset = await this.loadNodeAssetMesh(node);
       if (asset) {
+        logSceneGraphDebug('buildMeshNode:load-asset-mesh:asset-loaded', {
+          nodeId: node.id ?? null,
+          nodeName: node.name ?? '',
+          sourceAssetId: node.sourceAssetId,
+        });
         await this.applyMaterialOverridesToImportedObject(asset, node);
         this.resetImportedObjectLocalTransform(asset);
         asset.userData = {
@@ -1230,15 +1404,33 @@ class SceneGraphBuilder {
           await this.buildNodes(node.children as SceneNodeWithExtras[], container);
         }
         this.recordMeshStatistics(asset);
+        logSceneGraphDebug('buildMeshNode:load-asset-mesh:done', {
+          nodeId: node.id ?? null,
+          nodeName: node.name ?? '',
+        });
         return container;
       }
       if (hasChildNodes) {
+        logSceneGraphDebug('buildMeshNode:children-only-fallback', {
+          nodeId: node.id ?? null,
+          nodeName: node.name ?? '',
+        });
         await this.buildNodes(node.children as SceneNodeWithExtras[], container);
         return container;
       }
       this.warn(`使用源资源失败 ${node.sourceAssetId}`);
+      logSceneGraphDebug('buildMeshNode:source-asset-failed', {
+        nodeId: node.id ?? null,
+        nodeName: node.name ?? '',
+        sourceAssetId: node.sourceAssetId,
+      });
     }
 
+    logSceneGraphDebug('buildMeshNode:primitive-fallback', {
+      nodeId: node.id ?? null,
+      nodeName: node.name ?? '',
+      nodeType: node.nodeType ?? '',
+    });
     return this.buildPrimitiveNode({ ...node, nodeType: node.nodeType || 'Box' });
   }
 
@@ -1460,13 +1652,23 @@ class SceneGraphBuilder {
     if (!assetId) {
       return null;
     }
+    logSceneGraphDebug('loadAssetMesh:start', {
+      assetId,
+      cached: this.meshTemplateCache.has(assetId),
+      pending: this.pendingMeshLoads.has(assetId),
+    });
     if (this.meshTemplateCache.has(assetId)) {
+      logSceneGraphDebug('loadAssetMesh:cache-hit', { assetId });
       return this.instantiateCachedMesh(this.meshTemplateCache.get(assetId)!);
     }
 
     await this.warmMeshAsset(assetId);
 
     const base = this.meshTemplateCache.get(assetId);
+    logSceneGraphDebug('loadAssetMesh:resolved', {
+      assetId,
+      hit: Boolean(base),
+    });
     return base ? this.instantiateCachedMesh(base) : null;
   }
 
@@ -1483,8 +1685,10 @@ class SceneGraphBuilder {
   }
 
   private async fetchAndParseMesh(assetId: string): Promise<MeshTemplate | null> {
+    logSceneGraphDebug('fetchAndParseMesh:start', { assetId });
     const entry = await this.resourceCache.acquireAssetEntry(assetId);
     if (!entry) {
+      logSceneGraphDebug('fetchAndParseMesh:missing-entry', { assetId });
       return null;
     }
 
@@ -1494,18 +1698,28 @@ class SceneGraphBuilder {
     const file = createFileFromEntry(assetId, entry);
     if (!file) {
       this.warn(`无法创建文件对象 ${assetId}`);
+      logSceneGraphDebug('fetchAndParseMesh:file-create-failed', { assetId });
       return null;
     }
 
     try {
       const ext = file.name.split('.').pop()?.toLowerCase();
+      logSceneGraphDebug('fetchAndParseMesh:parse-start', { assetId, ext: ext ?? '' });
       const { loadObjectFromFile } = await loadAssetImportModule()
       const parsed = await loadObjectFromFile(file, ext);
       const animations = (parsed as unknown as { animations?: THREE.AnimationClip[] }).animations ?? [];
+      logSceneGraphDebug('fetchAndParseMesh:parse-done', {
+        assetId,
+        animationCount: animations.length,
+      });
       return { scene: parsed, animations };
     } catch (error) {
       console.warn('GLTF 解析异常', assetId, error);
       this.warn(`模型 ${assetId} 解析失败`);
+      logSceneGraphDebug('fetchAndParseMesh:error', {
+        assetId,
+        message: error instanceof Error ? error.message : String(error),
+      });
       return null;
     }
   }
@@ -1573,16 +1787,49 @@ class SceneGraphBuilder {
   }
 
   private async buildFloorMesh(meshInfo: FloorDynamicMesh, node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
-    return buildFloorDynamicMesh(
-      {
-        resolveNodeMaterials: (targetNode) => this.resolveNodeMaterials(targetNode),
-        pickMaterialAssignment: (materials) => this.pickMaterialAssignment(materials),
-        applyTransform: (object, targetNode) => this.applyTransform(object, targetNode),
-        applyVisibility: (object, targetNode) => this.applyVisibility(object, targetNode),
-      },
-      meshInfo,
-      node,
-    );
+    logSceneGraphDebug('buildFloorMesh:enter', {
+      nodeId: node.id ?? null,
+      nodeName: node.name ?? '',
+      hasMaterials: Array.isArray(node.materials) && node.materials.length > 0,
+    });
+    try {
+      const built = buildFloorDynamicMesh(
+        {
+          resolveNodeMaterials: (targetNode) => this.resolveNodeMaterials(targetNode),
+          pickMaterialAssignment: (materials) => this.pickMaterialAssignment(materials),
+          applyTransform: (object, targetNode) => this.applyTransform(object, targetNode),
+          applyVisibility: (object, targetNode) => this.applyVisibility(object, targetNode),
+        },
+        meshInfo,
+        node,
+      );
+      logSceneGraphDebug('buildFloorMesh:after-call', {
+        nodeId: node.id ?? null,
+        nodeName: node.name ?? '',
+        resultType: built?.constructor?.name ?? '',
+        isThenable: Boolean(built && typeof (built as PromiseLike<THREE.Object3D>).then === 'function'),
+      });
+      const result = await Promise.resolve(built);
+      logSceneGraphDebug('buildFloorMesh:done', {
+        nodeId: node.id ?? null,
+        nodeName: node.name ?? '',
+        built: Boolean(result),
+        objectType: result?.type ?? '',
+      });
+      return result;
+    } catch (error) {
+      logSceneGraphDebug('buildFloorMesh:error', {
+        nodeId: node.id ?? null,
+        nodeName: node.name ?? '',
+        message: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    } finally {
+      logSceneGraphDebug('buildFloorMesh:finally', {
+        nodeId: node.id ?? null,
+        nodeName: node.name ?? '',
+      });
+    }
   }
 
   private async buildGuideRouteMesh(meshInfo: GuideRouteDynamicMesh, node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {

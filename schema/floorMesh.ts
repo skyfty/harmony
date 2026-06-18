@@ -2,6 +2,16 @@ import * as THREE from 'three'
 import type { FloorDynamicMesh } from './core'
 import { MATERIAL_CONFIG_ID_KEY, MATERIAL_TEXTURE_REPEAT_INFO_KEY } from './material'
 
+const FLOOR_MESH_DEBUG_PREFIX = '[FloorMesh][debug]'
+
+function logFloorMeshDebug(event: string, detail?: Record<string, unknown>): void {
+  if (typeof detail === 'undefined') {
+    console.log(`${FLOOR_MESH_DEBUG_PREFIX} ${event}`)
+    return
+  }
+  console.log(`${FLOOR_MESH_DEBUG_PREFIX} ${event}`, detail)
+}
+
 export type FloorPerimeterChain = {
   points: Array<{ x: number; y: number; z: number }>
   closed: boolean
@@ -339,6 +349,11 @@ function mergeNonIndexedGeometries(geometries: THREE.BufferGeometry[]): THREE.Bu
 
 function buildFloorTopBottomGeometry(definition: FloorDynamicMesh, shape: THREE.Shape): THREE.BufferGeometry | null {
   const thickness = clampFloorThickness((definition as any).thickness)
+  logFloorMeshDebug('buildFloorTopBottomGeometry:start', {
+    thickness,
+    smooth: clampFloorSmooth(definition.smooth),
+    vertexCount: Array.isArray(definition.vertices) ? definition.vertices.length : 0,
+  })
 
   // Flat floors: single surface mesh.
   if (thickness <= FLOOR_EPSILON) {
@@ -350,6 +365,9 @@ function buildFloorTopBottomGeometry(definition: FloorDynamicMesh, shape: THREE.
     geometry.setAttribute('normal', buildFlatNormalAttribute(position.count, 1))
     geometry.computeBoundingBox()
     geometry.computeBoundingSphere()
+    logFloorMeshDebug('buildFloorTopBottomGeometry:flat-done', {
+      positionCount: position.count,
+    })
     return geometry
   }
 
@@ -369,6 +387,9 @@ function buildFloorTopBottomGeometry(definition: FloorDynamicMesh, shape: THREE.
   const merged = mergeNonIndexedGeometries([base, top])
   base.dispose()
   top.dispose()
+  logFloorMeshDebug('buildFloorTopBottomGeometry:thick-done', {
+    thickness,
+  })
   return merged
 }
 
@@ -384,7 +405,12 @@ function computePolygonAreaXZ(points: Array<{ x: number; z: number }>): number {
 
 function buildFloorSideGeometry(definition: FloorDynamicMesh, shape: THREE.Shape, fallback: THREE.Vector2[]): THREE.BufferGeometry | null {
   const thickness = clampFloorThickness((definition as any).thickness)
+  logFloorMeshDebug('buildFloorSideGeometry:start', {
+    thickness,
+    fallbackCount: fallback.length,
+  })
   if (thickness <= FLOOR_EPSILON) {
+    logFloorMeshDebug('buildFloorSideGeometry:skip-flat');
     return null
   }
 
@@ -416,6 +442,9 @@ function buildFloorSideGeometry(definition: FloorDynamicMesh, shape: THREE.Shape
     }
   }
   if (outline2.length < 2) {
+    logFloorMeshDebug('buildFloorSideGeometry:skip-short-outline', {
+      outlineCount: outline2.length,
+    })
     return null
   }
 
@@ -488,25 +517,44 @@ function buildFloorSideGeometry(definition: FloorDynamicMesh, shape: THREE.Shape
   geometry.computeVertexNormals()
   geometry.computeBoundingBox()
   geometry.computeBoundingSphere()
+  logFloorMeshDebug('buildFloorSideGeometry:done', {
+    segmentCount: outlineWorld.length,
+    vertexCount: positions.length / 3,
+  })
   return geometry
 }
 
 function rebuildFloorGroup(group: THREE.Group, definition: FloorDynamicMesh, materialTemplate: THREE.MeshStandardMaterial) {
+  logFloorMeshDebug('rebuildFloorGroup:start', {
+    definitionName: (definition as any)?.name ?? '',
+    thickness: clampFloorThickness((definition as any).thickness),
+  })
   disposeObject3D(group)
   group.clear()
 
   const shapeInfo = buildFloorShape(definition)
   if (!shapeInfo) {
+    logFloorMeshDebug('rebuildFloorGroup:skip-no-shape');
     return
   }
 
   const { topBottom, side } = resolveFloorMaterialConfigIds(definition)
   const sideUvScale = resolveSideUvScale((definition as any).sideUvScale)
+  logFloorMeshDebug('rebuildFloorGroup:shape-ready', {
+    pointCount: shapeInfo.points.length,
+    hasTopBottom: Boolean(topBottom),
+    hasSide: Boolean(side),
+  })
 
   const topBottomGeometry = buildFloorTopBottomGeometry(definition, shapeInfo.shape)
   if (!topBottomGeometry) {
+    logFloorMeshDebug('rebuildFloorGroup:skip-no-top-bottom-geometry');
     return
   }
+  logFloorMeshDebug('rebuildFloorGroup:top-bottom-geometry-ready', {
+    indexCount: topBottomGeometry.index?.count ?? 0,
+    positionCount: (topBottomGeometry.getAttribute('position') as THREE.BufferAttribute | undefined)?.count ?? 0,
+  })
 
   const topBottomMesh = new THREE.Mesh(topBottomGeometry, materialTemplate.clone())
   topBottomMesh.name = 'FloorTopBottomMesh'
@@ -521,6 +569,9 @@ function rebuildFloorGroup(group: THREE.Group, definition: FloorDynamicMesh, mat
 
   const sideGeometry = buildFloorSideGeometry(definition, shapeInfo.shape, shapeInfo.points)
   if (sideGeometry) {
+    logFloorMeshDebug('rebuildFloorGroup:side-geometry-ready', {
+      positionCount: (sideGeometry.getAttribute('position') as THREE.BufferAttribute | undefined)?.count ?? 0,
+    })
     const sideMesh = new THREE.Mesh(sideGeometry, materialTemplate.clone())
     sideMesh.name = 'FloorSideMesh'
     sideMesh.castShadow = true
@@ -532,6 +583,9 @@ function rebuildFloorGroup(group: THREE.Group, definition: FloorDynamicMesh, mat
     }
     group.add(sideMesh)
   }
+  logFloorMeshDebug('rebuildFloorGroup:done', {
+    childCount: group.children.length,
+  })
 }
 
 function collectInstancableMeshes(object: THREE.Object3D): Array<THREE.Mesh> {
@@ -616,6 +670,10 @@ function computeFloorBodyInstanceMatrices(definition: FloorDynamicMesh, template
 }
 
 export function createFloorRenderGroup(definition: FloorDynamicMesh, assets: FloorRenderAssetObjects = {}): THREE.Group {
+  logFloorMeshDebug('createFloorRenderGroup:start', {
+    definitionName: (definition as any)?.name ?? '',
+    hasBodyObject: Boolean(assets.bodyObject),
+  })
   const group = new THREE.Group()
   group.name = 'FloorGroup'
   group.userData.dynamicMeshType = 'Floor'
@@ -624,15 +682,21 @@ export function createFloorRenderGroup(definition: FloorDynamicMesh, assets: Flo
 
   let hasInstances = false
   if (assets.bodyObject) {
+    logFloorMeshDebug('createFloorRenderGroup:body-instance:start')
     const matrices = computeFloorBodyInstanceMatrices(definition, assets.bodyObject)
+    logFloorMeshDebug('createFloorRenderGroup:body-instance:matrices', {
+      matrixCount: matrices.length,
+    })
     const instancedGroup = buildInstancedMeshesFromTemplate(assets.bodyObject, matrices, { namePrefix: 'FloorBody' })
     if (instancedGroup) {
       hasInstances = true
       content.add(instancedGroup)
+      logFloorMeshDebug('createFloorRenderGroup:body-instance:done');
     }
   }
 
   if (!hasInstances) {
+    logFloorMeshDebug('createFloorRenderGroup:fallback-rebuild');
     rebuildFloorGroup(content, definition, createFloorMaterial())
   } else {
     // Tag instances for material selection (apply on traversal in sceneGraph).
@@ -650,25 +714,35 @@ export function createFloorRenderGroup(definition: FloorDynamicMesh, assets: Flo
     })
   }
 
+  logFloorMeshDebug('createFloorRenderGroup:done', {
+    childCount: group.children.length,
+  })
   return group
 }
 
 export function createFloorGroup(definition: FloorDynamicMesh): THREE.Group {
+  logFloorMeshDebug('createFloorGroup:start')
   const group = new THREE.Group()
   group.name = 'FloorGroup'
   group.userData.dynamicMeshType = 'Floor'
   const content = ensureFloorContentGroup(group)
   rebuildFloorGroup(content, definition, createFloorMaterial())
+  logFloorMeshDebug('createFloorGroup:done', {
+    childCount: group.children.length,
+  })
   return group
 }
 
 export function updateFloorGroup(object: THREE.Object3D, definition: FloorDynamicMesh): boolean {
+  logFloorMeshDebug('updateFloorGroup:start')
   const group = object as THREE.Group
   if (!group || !group.isGroup) {
+    logFloorMeshDebug('updateFloorGroup:invalid-group');
     return false
   }
 
   const content = ensureFloorContentGroup(group)
   rebuildFloorGroup(content, definition, createFloorMaterial())
+  logFloorMeshDebug('updateFloorGroup:done')
   return true
 }

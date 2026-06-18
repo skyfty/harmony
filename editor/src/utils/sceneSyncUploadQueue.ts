@@ -1,5 +1,5 @@
 import { buildServerApiUrl } from '@/api/serverApiConfig'
-import { prepareScenePackageZipFiles } from '@/utils/scenePackageExport'
+import { prepareScenePackageSourceZipFiles } from '@/utils/scenePackageSource'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import { decode, encode } from '@msgpack/msgpack'
 
@@ -175,7 +175,7 @@ class SceneSyncUploadQueue {
     this.active = true
 
     try {
-      const files = await prepareScenePackageZipFiles({
+      const files = await prepareScenePackageSourceZipFiles({
         project: {
           id: task.document.projectId,
           name: task.document.projectId,
@@ -184,9 +184,6 @@ class SceneSyncUploadQueue {
           sceneOrder: [task.document.id],
         },
         scenes: [{ id: task.document.id, document: cloneForQueue(task.document) }],
-        planningDataMode: 'withPlanningData',
-        packageMode: 'source',
-        preserveLandformNodes: true,
       })
 
       const runtime = this.ensureRuntime()

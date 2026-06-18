@@ -4,8 +4,8 @@ import { useScenesStore } from '@/stores/scenesStore'
 import { useUiStore } from '@/stores/uiStore'
 import { cloneSceneDocumentForExport } from '@/stores/sceneStore'
 import { loadStoredScenesFromScenePackage } from '@/utils/scenePackageImport'
-import { exportScenePackageZip } from '@/utils/scenePackageExport'
-import type { ScenePackageExportScene } from '@/utils/scenePackageExport'
+import { exportScenePackageSourceZip } from '@/utils/scenePackageSource'
+import type { ScenePackageSourceScene } from '@/utils/scenePackageSource'
 import { generateUuid } from '@/utils/uuid'
 
 type ProjectsStore = ReturnType<typeof useProjectsStore>
@@ -283,7 +283,7 @@ export async function runProjectExportWorkflow(options: {
       throw new Error('当前工程没有可导出的场景')
     }
 
-    const embeddedScenes: ScenePackageExportScene[] = []
+    const embeddedScenes: ScenePackageSourceScene[] = []
     for (let index = 0; index < orderedSceneIds.length; index += 1) {
       const sceneId = orderedSceneIds[index]!
       const progress = 10 + Math.round(((index + 1) / orderedSceneIds.length) * 60)
@@ -306,7 +306,7 @@ export async function runProjectExportWorkflow(options: {
     uiStore.updateLoadingOverlay({ message: '生成 ZIP 包…' })
     uiStore.updateLoadingProgress(82)
 
-    const bundleBlob = await exportScenePackageZip({
+    const bundleBlob = await exportScenePackageSourceZip({
       project: {
         id: project.id,
         name: project.name,
@@ -315,8 +315,6 @@ export async function runProjectExportWorkflow(options: {
         sceneOrder: embeddedScenes.map((entry) => entry.id),
       },
       scenes: embeddedScenes,
-      embedAssets: true,
-      planningDataMode: 'withPlanningData',
     })
 
     const fileNameBase = sanitizeExportFileName(project.name)

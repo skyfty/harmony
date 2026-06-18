@@ -5,6 +5,16 @@ import { createFloorRenderGroup } from '../../floorMesh';
 import { createAutoTiledMaterialVariant, MATERIAL_CONFIG_ID_KEY, MATERIAL_TEXTURE_REPEAT_INFO_KEY } from '../../material';
 import { buildMaterialConfigMap } from '../materialAssignment';
 
+const FLOOR_DYNAMIC_MESH_DEBUG_PREFIX = '[FloorDynamicMesh][debug]';
+
+function logFloorDynamicMeshDebug(event: string, detail?: Record<string, unknown>): void {
+  if (typeof detail === 'undefined') {
+    console.log(`${FLOOR_DYNAMIC_MESH_DEBUG_PREFIX} ${event}`);
+    return;
+  }
+  console.log(`${FLOOR_DYNAMIC_MESH_DEBUG_PREFIX} ${event}`, detail);
+}
+
 function isUnlitDefaultMaterial(material: THREE.Material | THREE.Material[]): boolean {
   const materials = Array.isArray(material) ? material : [material];
   return materials.length > 0 && materials.every((entry) => Boolean((entry as any)?.isMeshBasicMaterial));
@@ -76,22 +86,54 @@ export async function buildFloorMesh(
   meshInfo: FloorDynamicMesh,
   node: SceneNodeWithExtras,
 ): Promise<THREE.Object3D | null> {
+  logFloorDynamicMeshDebug('buildFloorMesh:start', {
+    nodeId: node.id ?? null,
+    nodeName: node.name ?? '',
+    hasMaterials: Array.isArray(node.materials) && node.materials.length > 0,
+  });
   const group = createFloorRenderGroup(meshInfo, {});
+  logFloorDynamicMeshDebug('buildFloorMesh:group-created', {
+    nodeId: node.id ?? null,
+    nodeName: node.name ?? '',
+  });
   group.name = node.name ?? (group.name || 'Floor');
 
   const nodeMaterialConfigs = Array.isArray(node.materials) ? (node.materials as SceneNodeMaterial[]) : [];
+  logFloorDynamicMeshDebug('buildFloorMesh:resolve-materials:start', {
+    nodeId: node.id ?? null,
+    nodeName: node.name ?? '',
+    materialConfigCount: nodeMaterialConfigs.length,
+  });
   const resolvedMaterials = await deps.resolveNodeMaterials(node);
+  logFloorDynamicMeshDebug('buildFloorMesh:resolve-materials:done', {
+    nodeId: node.id ?? null,
+    nodeName: node.name ?? '',
+    resolvedCount: resolvedMaterials.length,
+  });
   const defaultMaterialAssignment = deps.pickMaterialAssignment(resolvedMaterials);
 
   if (defaultMaterialAssignment) {
+    logFloorDynamicMeshDebug('buildFloorMesh:apply-material-config:start', {
+      nodeId: node.id ?? null,
+      nodeName: node.name ?? '',
+    });
     const materialByConfigId = buildMaterialConfigMap(nodeMaterialConfigs, resolvedMaterials);
     applyFloorMaterialConfigAssignment(group, {
       defaultMaterial: defaultMaterialAssignment,
       materialByConfigId,
     });
+    logFloorDynamicMeshDebug('buildFloorMesh:apply-material-config:done', {
+      nodeId: node.id ?? null,
+      nodeName: node.name ?? '',
+    });
   }
 
   deps.applyTransform(group, node);
   deps.applyVisibility(group, node);
+  logFloorDynamicMeshDebug('buildFloorMesh:done', {
+    nodeId: node.id ?? null,
+    nodeName: node.name ?? '',
+    childCount: group.children.length,
+  });
   return group;
 }

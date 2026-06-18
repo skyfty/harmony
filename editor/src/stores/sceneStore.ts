@@ -469,10 +469,6 @@ export interface SceneBundleExportPayload {
   scenes: StoredSceneDocument[]
 }
 
-export interface SceneBundleExportOptions {
-  embedResources: boolean
-}
-
 export interface SceneBundleImportScene {
   [key: string]: unknown
 }
@@ -5891,19 +5887,30 @@ function buildSceneAssetRegistryEntry(
   return buildServerRegistryEntry(assetId, asset, resolvedSourceMeta, { bytes: summaryBytes, assetType, name })
 }
 
-export async function buildAssetRegistryForExport(
+type ExportAssetRegistryBuildContext = {
+  runtimeAwareScene: StoredSceneDocument
+  existingRegistry: Record<string, SceneAssetRegistryEntry>
+  usedAssetIds: Set<string>
+  retainedConfigAssetIds: Set<string>
+  configDependencyAssetIds: Set<string>
+  assetCatalog: NonNullable<StoredSceneDocument['assetCatalog']>
+  summaryEntries: Map<string, SceneResourceSummaryEntry>
+}
+
+async function buildExportAssetRegistryBuildContext(
   scene: StoredSceneDocument,
-  options: { packageMode?: 'runtime' | 'source' } = {},
-): Promise<Record<string, SceneAssetRegistryEntry>> {
+): Promise<ExportAssetRegistryBuildContext> {
   const runtimeAwareScene = cloneSceneDocumentWithRuntimeGroundSidecars(scene)
   const existingRegistry = runtimeAwareScene.assetRegistry ?? {}
-  const packageMode = options.packageMode ?? 'runtime'
-  const shouldApplyRuntimeFilter = packageMode === 'runtime'
   const normalizeExportAssetId = (assetId: string): string | null => normalizeAssetIdForExportLookup(assetId, existingRegistry)
-  const usedAssetIds = normalizeAssetIdsWithRegistry(collectSceneAssetReferences(runtimeAwareScene), existingRegistry)
-  const directReferenceAssetIds = normalizeAssetIdsWithRegistry(
-    collectDirectSceneAssetReferenceIds(runtimeAwareScene),
-    existingRegistry,
+  const usedAssetIds = new Set(
+    normalizeAssetIdsWithRegistry(collectSceneAssetReferences(runtimeAwareScene), existingRegistry),
+  )
+  const directReferenceAssetIds = new Set(
+    normalizeAssetIdsWithRegistry(
+      collectDirectSceneAssetReferenceIds(runtimeAwareScene),
+      existingRegistry,
+    ),
   )
   const retainedConfigAssetIds = new Set(
     normalizeAssetIdsWithRegistry(collectRuntimeRequiredConfigAssetIds(runtimeAwareScene), existingRegistry),
@@ -5932,21 +5939,6 @@ export async function buildAssetRegistryForExport(
   )
   const assetCatalog = runtimeAwareScene.assetCatalog ?? {}
   const summaryEntries = new Map<string, SceneResourceSummaryEntry>()
-  const exportAssetIds = new Set<string>()
-
-
-  usedAssetIds.forEach((assetId) => {
-    const asset = getAssetFromCatalog(assetCatalog, assetId)
-    if (!shouldExcludeAssetFromRuntimeExport(asset, { assetId, retainedConfigAssetIds })) {
-      exportAssetIds.add(assetId)
-    }
-  })
-  configDependencyAssetIds.forEach((assetId) => {
-    const asset = getAssetFromCatalog(assetCatalog, assetId)
-    if (!shouldExcludeAssetFromRuntimeExport(asset, { assetId, retainedConfigAssetIds })) {
-      exportAssetIds.add(assetId)
-    }
-  })
 
   ;(runtimeAwareScene.resourceSummary?.assets ?? []).forEach((entry) => {
     const summaryAssetId = typeof entry?.assetId === 'string' ? entry.assetId.trim() : ''
@@ -5956,22 +5948,86 @@ export async function buildAssetRegistryForExport(
     }
   })
 
+  return {
+    runtimeAwareScene,
+    existingRegistry,
+    usedAssetIds,
+    retainedConfigAssetIds,
+    configDependencyAssetIds,
+    assetCatalog,
+    summaryEntries,
+  }
+}
+
+export async function buildSourceAssetRegistryForExport(
+  scene: StoredSceneDocument,
+): Promise<Record<string, SceneAssetRegistryEntry>> {
+  const context = await buildExportAssetRegistryBuildContext(scene)
+  const exportAssetIds = new Set<string>()
+  context.usedAssetIds.forEach((assetId) => {
+    exportAssetIds.add(assetId)
+  })
+  context.configDependencyAssetIds.forEach((assetId) => {
+    exportAssetIds.add(assetId)
+  })
+
   const assetRegistry: Record<string, SceneAssetRegistryEntry> = {}
   exportAssetIds.forEach((assetId) => {
-    const asset = getAssetFromCatalog(assetCatalog, assetId)
-    if (shouldApplyRuntimeFilter && shouldExcludeAssetFromRuntimeExport(asset, { assetId, retainedConfigAssetIds })) {
+    const asset = getAssetFromCatalog(context.assetCatalog, assetId)
+    const sourceMeta =
+      asset?.source
+      ?? inferPackageSourceFromAssetId(assetId)
+      ?? inferPackageSourceFromSceneProvider(assetId, context.runtimeAwareScene.resourceProviderId)
+    const entry = buildSceneAssetRegistryEntry(
+      assetId,
+      sourceMeta,
+      asset,
+      context.summaryEntries.get(assetId),
+      context.existingRegistry[assetId],
+    )
+    if (entry) {
+      assetRegistry[assetId] = entry
+    }
+  })
+
+  return assetRegistry
+}
+
+export async function buildRuntimeAssetRegistryForExport(
+  scene: StoredSceneDocument,
+): Promise<Record<string, SceneAssetRegistryEntry>> {
+  const context = await buildExportAssetRegistryBuildContext(scene)
+  const exportAssetIds = new Set<string>()
+
+  context.usedAssetIds.forEach((assetId) => {
+    const asset = getAssetFromCatalog(context.assetCatalog, assetId)
+    if (!shouldExcludeAssetFromRuntimeExport(asset, { assetId, retainedConfigAssetIds: context.retainedConfigAssetIds })) {
+      exportAssetIds.add(assetId)
+    }
+  })
+  context.configDependencyAssetIds.forEach((assetId) => {
+    const asset = getAssetFromCatalog(context.assetCatalog, assetId)
+    if (!shouldExcludeAssetFromRuntimeExport(asset, { assetId, retainedConfigAssetIds: context.retainedConfigAssetIds })) {
+      exportAssetIds.add(assetId)
+    }
+  })
+
+  const assetRegistry: Record<string, SceneAssetRegistryEntry> = {}
+  exportAssetIds.forEach((assetId) => {
+    const asset = getAssetFromCatalog(context.assetCatalog, assetId)
+    if (shouldExcludeAssetFromRuntimeExport(asset, { assetId, retainedConfigAssetIds: context.retainedConfigAssetIds })) {
       return
     }
     const sourceMeta =
       asset?.source
       ?? inferPackageSourceFromAssetId(assetId)
-      ?? inferPackageSourceFromSceneProvider(assetId, runtimeAwareScene.resourceProviderId)
+      ?? inferPackageSourceFromSceneProvider(assetId, context.runtimeAwareScene.resourceProviderId)
     const entry = buildSceneAssetRegistryEntry(
       assetId,
       sourceMeta,
       asset,
-      summaryEntries.get(assetId),
-      existingRegistry[assetId],
+      context.summaryEntries.get(assetId),
+      context.existingRegistry[assetId],
     )
     if (entry) {
       assetRegistry[assetId] = entry
@@ -6009,9 +6065,9 @@ function resolveAssetDownloadUrl(
   }) ?? candidate
 }
 
-export async function calculateSceneResourceSummary(
+async function calculateSceneResourceSummaryWithAssetRegistry(
   scene: StoredSceneDocument,
-  options: SceneBundleExportOptions,
+  buildAssetRegistry: (scene: StoredSceneDocument) => Promise<Record<string, SceneAssetRegistryEntry>>,
 ): Promise<SceneResourceSummary> {
   const runtimeAwareScene = cloneSceneDocumentWithRuntimeGroundSidecars(scene)
   const existingRegistry = runtimeAwareScene.assetRegistry ?? {}
@@ -6041,7 +6097,7 @@ export async function calculateSceneResourceSummary(
     },
   )
   const assetCatalog = runtimeAwareScene.assetCatalog ?? {}
-  const assetRegistry = await buildAssetRegistryForExport(runtimeAwareScene)
+  const assetRegistry = await buildAssetRegistry(runtimeAwareScene)
 
   const summary: SceneResourceSummary = {
     totalBytes: 0,
@@ -6261,8 +6317,8 @@ export async function calculateSceneResourceSummary(
         ? cacheEntry.size
         : 0
 
-    if (!bytes && options.embedResources) {
-      // If resources are embedded, fall back to cached blob size if available.
+    if (!bytes) {
+      // Fall back to cached blob size when the asset is embedded but the registry has no byte count.
       bytes = cacheEntry?.blob?.size ?? bytes
     }
 
@@ -6353,10 +6409,22 @@ export async function calculateSceneResourceSummary(
   return summary
 }
 
+export async function calculateSourceSceneResourceSummary(
+  scene: StoredSceneDocument,
+): Promise<SceneResourceSummary> {
+  return await calculateSceneResourceSummaryWithAssetRegistry(scene, buildSourceAssetRegistryForExport)
+}
+
+export async function calculateRuntimeSceneResourceSummary(
+  scene: StoredSceneDocument,
+): Promise<SceneResourceSummary> {
+  return await calculateSceneResourceSummaryWithAssetRegistry(scene, buildRuntimeAssetRegistryForExport)
+}
+
 export async function cloneSceneDocumentForExport(
   scene: StoredSceneDocument,
 ): Promise<StoredSceneDocument> {
-  const assetRegistry = await buildAssetRegistryForExport(scene)
+  const assetRegistry = await buildSourceAssetRegistryForExport(scene)
   return createSceneDocument(scene.name, {
     id: scene.id,
     nodes: scene.nodes,
@@ -19421,7 +19489,6 @@ export const useSceneStore = defineStore('scene', {
     },
     async exportSceneBundle(
       sceneIds: string[],
-      exportOptions: SceneBundleExportOptions = { embedResources: false },
     ): Promise<SceneBundleExportPayload | null> {
       if (!Array.isArray(sceneIds) || !sceneIds.length) {
         return null
@@ -19438,7 +19505,6 @@ export const useSceneStore = defineStore('scene', {
       if (!collected.length) {
         return null
       }
-      void exportOptions
       const scenes = await Promise.all(collected.map((scene) => cloneSceneDocumentForExport(scene)))
       return {
         formatVersion: SCENE_BUNDLE_FORMAT_VERSION,

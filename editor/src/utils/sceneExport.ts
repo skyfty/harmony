@@ -9,8 +9,8 @@ import { findObjectByPath } from '@schema/modelAssetLoader'
 import { getCachedModelObject, getOrLoadModelObject } from '@schema/modelObjectCache'
 import { loadObjectFromFile } from '@schema/assetImport'
 import { useSceneStore } from '@/stores/sceneStore'
-import { buildAssetRegistryForExport } from '@/stores/sceneStore'
-import { calculateSceneResourceSummary, cloneSceneDocumentForExport } from '@/stores/sceneStore'
+import { buildSourceAssetRegistryForExport } from '@/stores/sceneStore'
+import { calculateSourceSceneResourceSummary, cloneSceneDocumentForExport } from '@/stores/sceneStore'
 import { validateSceneAssetReferences } from '@/utils/sceneAssetDiagnostics'
 import { fetchResourceAsset } from '@/api/resourceAssets'
 import { mapServerAssetToProjectAsset } from '@/api/serverAssetTypes'
@@ -454,7 +454,7 @@ export async function prepareJsonSceneExportBundle(
   options: SceneExportOptions,
   reportEvent?: SceneExportEventReporter,
 ): Promise<PreparedSceneExportBundle> {
-  const baseAssetRegistry = await buildAssetRegistryForExport(snapshot)
+  const baseAssetRegistry = await buildSourceAssetRegistryForExport(snapshot)
   const assetRegistry = await patchUnknownExportRegistryEntries(snapshot, baseAssetRegistry)
 
   const environment: EnvironmentSettings | undefined = snapshot.environment ? { ...snapshot.environment } : undefined
@@ -515,7 +515,7 @@ export async function prepareStoredSceneJsonExportBundle(
   reportEvent?: SceneExportEventReporter,
 ): Promise<PreparedSceneExportBundle> {
   const exportableScene = await cloneSceneDocumentForExport(snapshot)
-  exportableScene.resourceSummary = await calculateSceneResourceSummary(exportableScene, { embedResources: true })
+  exportableScene.resourceSummary = await calculateSourceSceneResourceSummary(exportableScene)
   return await prepareJsonSceneExportBundle(exportableScene, options, reportEvent)
 }
 

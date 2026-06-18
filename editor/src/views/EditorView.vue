@@ -42,7 +42,7 @@ import {
   formatSceneAssetDiagnosticsReport,
   type SceneAssetValidationReport,
 } from '@/utils/sceneAssetDiagnostics'
-import { exportScenePackageZip } from '@/utils/scenePackageExport'
+import { exportScenePackagePublishZip } from '@/utils/scenePackagePublish'
 import { broadcastScenePreviewUpdate } from '@/utils/previewChannel'
 import { generateUuid } from '@/utils/uuid'
 import { findGroundNode } from '@/stores/groundUtils'
@@ -1454,7 +1454,7 @@ async function exportProjectPackageZip(
     current: embeddedScenes.length,
     total: embeddedScenes.length,
   })
-  return await exportScenePackageZip({
+  return await exportScenePackagePublishZip({
     project: {
       id: project.id,
       name: project.name,
@@ -1463,8 +1463,6 @@ async function exportProjectPackageZip(
       sceneOrder: embeddedScenes.map((entry) => entry.id),
     },
     scenes: embeddedScenes,
-    embedAssets: options.embedAssets ?? false,
-    planningDataMode: 'withoutPlanningData',
     updateProgress,
     reportEvent,
   })

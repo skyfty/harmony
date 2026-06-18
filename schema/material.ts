@@ -18,6 +18,16 @@ import { hashString, stableSerialize } from './stableSerialize';
 import { getDefaultUvDebugTexture } from './debugTextures';
 import { createKtx2Loader, createKtx2SupportRenderer, disposeKtx2SupportRenderer, FAST_KTX2_TRANSCODER_PATH } from './ktx2Loader';
 
+const MATERIAL_DEBUG_PREFIX = '[Material][debug]';
+
+function logMaterialDebug(event: string, detail?: Record<string, unknown>): void {
+  if (typeof detail === 'undefined') {
+    console.log(`${MATERIAL_DEBUG_PREFIX} ${event}`);
+    return;
+  }
+  console.log(`${MATERIAL_DEBUG_PREFIX} ${event}`, detail);
+}
+
 type RGBELoaderClass = new (manager?: THREE.LoadingManager) => RGBELoader;
 let rgbeLoaderClassPromise: Promise<RGBELoaderClass> | null = null;
 
@@ -593,16 +603,37 @@ export class SceneMaterialFactory {
       return [this.createDefaultMaterial('#ffffff')];
     }
 
+    logMaterialDebug('resolveNodeMaterials:start', {
+      nodeId: context.nodeId ?? null,
+      nodeName: context.nodeName ?? '',
+      entryCount: entries.length,
+    });
     const resolved: THREE.Material[] = [];
-    for (const entry of entries) {
+    for (let index = 0; index < entries.length; index += 1) {
+      const entry = entries[index];
       if (!entry) {
         continue;
       }
       try {
+        logMaterialDebug('resolveNodeMaterials:entry:start', {
+          nodeId: context.nodeId ?? null,
+          nodeName: context.nodeName ?? '',
+          index,
+          materialType: entry.type ?? '',
+          materialId: entry.id ?? '',
+          textureSlots: Object.keys(entry.textures ?? {}).length,
+        });
         const material = await this.createMaterialForNode(entry);
         if (material) {
           resolved.push(material);
         }
+        logMaterialDebug('resolveNodeMaterials:entry:done', {
+          nodeId: context.nodeId ?? null,
+          nodeName: context.nodeName ?? '',
+          index,
+          built: Boolean(material),
+          materialType: material?.type ?? '',
+        });
       } catch (error) {
         console.warn('节点材质创建失败', entry, error);
         const label = context.nodeName ?? context.nodeId ?? '未命名节点';
@@ -610,6 +641,11 @@ export class SceneMaterialFactory {
       }
     }
 
+    logMaterialDebug('resolveNodeMaterials:done', {
+      nodeId: context.nodeId ?? null,
+      nodeName: context.nodeName ?? '',
+      resolvedCount: resolved.length,
+    });
     return resolved.length ? resolved : [this.createDefaultMaterial('#ffffff')];
   }
 
@@ -626,6 +662,11 @@ export class SceneMaterialFactory {
   }
 
   async createMaterialForNode(entry: SceneNodeMaterial): Promise<THREE.Material | null> {
+    logMaterialDebug('createMaterialForNode:start', {
+      materialType: entry.type ?? '',
+      materialId: entry.id ?? '',
+      textureSlots: Object.keys(entry.textures ?? {}).length,
+    });
     return this.instantiateMaterial(entry);
   }
 
@@ -701,6 +742,11 @@ export class SceneMaterialFactory {
   }
 
   private async instantiateMaterial(material: SceneMaterial | SceneNodeMaterial): Promise<THREE.Material | null> {
+    logMaterialDebug('instantiateMaterial:start', {
+      materialType: material.type ?? '',
+      materialId: (material as SceneNodeMaterial).id ?? '',
+      textureSlots: Object.keys((material.textures ?? {}) as SceneMaterialTextureSlotMap).length,
+    });
     const props = this.extractMaterialProps(material);
     const side = resolveMaterialSide(props.side);
     const color = new THREE.Color(props.color);
@@ -794,11 +840,20 @@ export class SceneMaterialFactory {
     }
 
     if (!instance) {
+      logMaterialDebug('instantiateMaterial:no-instance', {
+        materialType: material.type ?? '',
+        materialId: (material as SceneNodeMaterial).id ?? '',
+      });
       return null;
     }
 
     this.applyMaterialProps(instance, material);
     await this.applyMaterialTextures(instance, props.textures);
+    logMaterialDebug('instantiateMaterial:done', {
+      materialType: material.type ?? '',
+      materialId: (material as SceneNodeMaterial).id ?? '',
+      resultType: instance.type ?? '',
+    });
     return instance;
   }
 
@@ -810,8 +865,16 @@ export class SceneMaterialFactory {
       return;
     }
 
+    logMaterialDebug('applyMaterialTextures:start', {
+      materialType: material.type ?? '',
+      textureSlots: Object.keys(textures).length,
+    });
     const assignments = await this.resolveMaterialTextures(textures);
     this.assignResolvedTextures(material, assignments);
+    logMaterialDebug('applyMaterialTextures:done', {
+      materialType: material.type ?? '',
+      assignedCount: Object.keys(assignments).length,
+    });
   }
 
   private async resolveMaterialTextures(
@@ -824,11 +887,16 @@ export class SceneMaterialFactory {
     ]>;
 
     await Promise.all(
-      entries.map(async ([slot, ref]) => {
+      entries.map(async ([slot, ref], index) => {
         if (!ref || typeof ref !== 'object' || typeof ref.assetId !== 'string') {
           return;
         }
         try {
+          logMaterialDebug('resolveMaterialTextures:slot:start', {
+            slot,
+            index,
+            assetId: ref.assetId,
+          });
           const texture = await this.ensureTexture(ref.assetId, ref.settings ?? null);
           if (texture) {
             const assignment = MATERIAL_TEXTURE_ASSIGNMENTS[slot];
@@ -838,6 +906,12 @@ export class SceneMaterialFactory {
             }
             resolved[assignment.key] = texture;
           }
+          logMaterialDebug('resolveMaterialTextures:slot:done', {
+            slot,
+            index,
+            assetId: ref.assetId,
+            hasTexture: Boolean(texture),
+          });
         } catch (error) {
           console.warn('材质纹理加载失败', ref, error);
           this.warn?.(`纹理 ${ref.assetId} 加载失败`);
@@ -845,6 +919,9 @@ export class SceneMaterialFactory {
       }),
     );
 
+    logMaterialDebug('resolveMaterialTextures:done', {
+      textureCount: Object.keys(resolved).length,
+    });
     return resolved;
   }
 
@@ -868,9 +945,11 @@ export class SceneMaterialFactory {
   ): Promise<THREE.Texture | null> {
     const signature = `${assetId}::${textureSettingsSignature(settings as SceneMaterialTextureSettings | null)}`;
     if (this.textureCache.has(signature)) {
+      logMaterialDebug('ensureTexture:cache-hit', { assetId, signature });
       return this.textureCache.get(signature)!;
     }
 
+    logMaterialDebug('ensureTexture:start', { assetId, signature });
     const pending = this.createTextureInstance(assetId, settings)
       .catch((error) => {
         console.warn('纹理加载失败', assetId, error);
@@ -906,8 +985,14 @@ export class SceneMaterialFactory {
     settings: Partial<SceneMaterialTextureSettings> | null,
   ): Promise<THREE.Texture | null> {
     let texture: THREE.Texture | null = null;
+    logMaterialDebug('createTextureInstance:start', { assetId });
     const entry = await this.provider.acquireAssetEntry(assetId);
     if (entry) {
+      logMaterialDebug('createTextureInstance:asset-entry', {
+        assetId,
+        filename: entry.filename ?? '',
+        mimeType: entry.mimeType ?? '',
+      });
       texture = await this.loadTextureFromEntry(entry, {
         hdr: this.isHdrTextureAsset(assetId, entry),
       });
@@ -915,11 +1000,20 @@ export class SceneMaterialFactory {
     if (texture !== null) {
       applyTextureSettings(texture, settings);
     }
+    logMaterialDebug('createTextureInstance:done', {
+      assetId,
+      hasTexture: Boolean(texture),
+    });
     return texture;
   }
 
   private async loadTextureFromEntry(asset: AssetCacheEntry, options?: { hdr?: boolean }): Promise<THREE.Texture | null> {
     try {
+      logMaterialDebug('loadTextureFromEntry:start', {
+        assetId: asset.assetId,
+        hdr: Boolean(options?.hdr),
+        filename: asset.filename ?? '',
+      });
       const isWeChatMiniProgram = Boolean((globalThis as typeof globalThis & { wx?: { getSystemInfoSync?: () => unknown } }).wx
         && typeof (globalThis as typeof globalThis & { wx?: { getSystemInfoSync?: () => unknown } }).wx?.getSystemInfoSync === 'function');
       const preferredUrl = isWeChatMiniProgram
@@ -928,10 +1022,12 @@ export class SceneMaterialFactory {
       const downloadUrl = preferredUrl ?? '';
       if (!downloadUrl) {
         console.warn('纹理资源下载链接缺失', asset.assetId);
+        logMaterialDebug('loadTextureFromEntry:no-url', { assetId: asset.assetId });
         return null;
       }
 
       if (options?.hdr) {
+        logMaterialDebug('loadTextureFromEntry:hdr', { assetId: asset.assetId, downloadUrl });
         const hdrLoader = await this.getHdrLoader();
         const texture = await new Promise<THREE.Texture>((resolve, reject) => {
           hdrLoader.load(
@@ -941,9 +1037,11 @@ export class SceneMaterialFactory {
             (error: unknown) => reject(error instanceof Error ? error : new Error(String(error))),
           );
         });
+        logMaterialDebug('loadTextureFromEntry:hdr-done', { assetId: asset.assetId });
         return texture;
       }
       if (typeof window !== 'undefined' && isKtx2LikeAsset(asset)) {
+        logMaterialDebug('loadTextureFromEntry:ktx2', { assetId: asset.assetId, downloadUrl });
         const renderer = createKtx2SupportRenderer();
         try {
           const ktx2Loader = await createKtx2Loader(renderer, {
@@ -951,21 +1049,42 @@ export class SceneMaterialFactory {
             transcoderPath: FAST_KTX2_TRANSCODER_PATH,
           });
           const texture = await ktx2Loader.loadAsync(downloadUrl);
+          logMaterialDebug('loadTextureFromEntry:ktx2-done', { assetId: asset.assetId });
           return texture;
         } finally {
           disposeKtx2SupportRenderer(renderer);
         }
       }
+      logMaterialDebug('loadTextureFromEntry:standard-load-start', {
+        assetId: asset.assetId,
+        downloadUrl,
+      });
+      logMaterialDebug('loadTextureFromEntry:standard', { assetId: asset.assetId, downloadUrl });
       return await new Promise<THREE.Texture>((resolve, reject) => {
         this.textureLoader.load(
           downloadUrl,
-          (loaded: THREE.Texture) => resolve(loaded),
+          (loaded: THREE.Texture) => {
+            logMaterialDebug('loadTextureFromEntry:standard-load-success', {
+              assetId: asset.assetId,
+            });
+            resolve(loaded);
+          },
           undefined,
-          (error: unknown) => reject(error instanceof Error ? error : new Error(String(error))),
+          (error: unknown) => {
+            logMaterialDebug('loadTextureFromEntry:standard-load-error', {
+              assetId: asset.assetId,
+              message: error instanceof Error ? error.message : String(error),
+            });
+            reject(error instanceof Error ? error : new Error(String(error)));
+          },
         );
       });
     } catch (error) {
       console.warn('纹理资源加载失败', asset.assetId, error);
+      logMaterialDebug('loadTextureFromEntry:error', {
+        assetId: asset.assetId,
+        message: error instanceof Error ? error.message : String(error),
+      });
       return null;
     }
   }

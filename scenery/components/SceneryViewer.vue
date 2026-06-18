@@ -1028,6 +1028,16 @@ const currentSceneId = ref<string | null>(null);
 const currentProjectId = ref<string | null>(null);
 const requestedMode = ref<RequestedMode>(null);
 
+const SCENE_VIEWER_DEBUG_PREFIX = '[SceneViewer][debug]';
+
+function logSceneViewerDebug(event: string, detail?: Record<string, unknown>): void {
+  if (typeof detail === 'undefined') {
+    console.log(`${SCENE_VIEWER_DEBUG_PREFIX} ${event}`);
+    return;
+  }
+  console.log(`${SCENE_VIEWER_DEBUG_PREFIX} ${event}`, detail);
+}
+
 type SceneStackVec3Tuple = [number, number, number];
 type SceneStackQuatTuple = [number, number, number, number];
 
@@ -16676,11 +16686,19 @@ async function loadProjectFromScenePackageUrl(url: string, cacheKey?: string): P
   lastCompiledGroundLoadedChunkVersion = -1;
   loading.value = true;
   try {
+    logSceneViewerDebug('loadProjectFromScenePackageUrl:start', {
+      url,
+      cacheKey: typeof cacheKey === 'string' ? cacheKey : '',
+    });
     resetSceneDownloadState();
     const cacheKeyParam = typeof cacheKey === 'string' && cacheKey.trim() ? cacheKey.trim() : '';
     if (cacheKeyParam) {
       const cachePointer = resolveScenePackageZipPointerByCacheKey(cacheKeyParam);
       try {
+        logSceneViewerDebug('loadProjectFromScenePackageUrl:try-cache', {
+          cacheKey: cacheKeyParam,
+          cachePointer,
+        });
         setSceneDownloadState({
           phase: 'read-cache',
           label: '正在读取本地缓存场景包',
@@ -16694,6 +16712,10 @@ async function loadProjectFromScenePackageUrl(url: string, cacheKey?: string): P
         await yieldToMainThread();
         const cachedBuffer = await loadScenePackageZip(cachePointer);
         try {
+          logSceneViewerDebug('loadProjectFromScenePackageUrl:cache-hit', {
+            cacheKey: cacheKeyParam,
+            bufferBytes: cachedBuffer.byteLength,
+          });
           await loadProjectFromScenePackageBytes(cachedBuffer, cacheKeyParam || url);
           return;
         } catch (parseError) {
@@ -16717,7 +16739,16 @@ async function loadProjectFromScenePackageUrl(url: string, cacheKey?: string): P
       currentLabel: '',
       indeterminate: false,
     });
+    logSceneViewerDebug('loadProjectFromScenePackageUrl:download-start', {
+      url,
+      cacheKey: cacheKeyParam,
+    });
     const buffer = await requestBinary(url);
+    logSceneViewerDebug('loadProjectFromScenePackageUrl:download-finished', {
+      url,
+      cacheKey: cacheKeyParam,
+      bufferBytes: buffer.byteLength,
+    });
     await loadProjectFromScenePackageBytes(buffer, cacheKeyParam || url);
     if (cacheKeyParam) {
       void saveScenePackageZipByCacheKey(buffer, cacheKeyParam).catch((saveError) => {
@@ -16725,6 +16756,9 @@ async function loadProjectFromScenePackageUrl(url: string, cacheKey?: string): P
       });
     }
   } catch (loadError) {
+    logSceneViewerDebug('loadProjectFromScenePackageUrl:error', {
+      message: loadError instanceof Error ? loadError.message : String(loadError),
+    });
     console.error('Failed loading scene package from url', loadError);
     throw loadError;
   } finally {
@@ -16912,6 +16946,10 @@ function parseScenePackageToProjectData(pkg: ScenePackageUnzipped, compiledGroun
   }
 
 async function loadProjectFromScenePackageBytes(buffer: ArrayBuffer, compiledGroundBuildKey: string): Promise<void> {
+  logSceneViewerDebug('loadProjectFromScenePackageBytes:start', {
+    bufferBytes: buffer.byteLength,
+    compiledGroundBuildKey,
+  });
   sceneDownload.active = true;
   setSceneDownloadState({
     phase: 'unzip',
@@ -16926,6 +16964,11 @@ async function loadProjectFromScenePackageBytes(buffer: ArrayBuffer, compiledGro
   await yieldToMainThread();
 
   const pkg = unzipScenePackage(buffer);
+  logSceneViewerDebug('loadProjectFromScenePackageBytes:unzipped', {
+    sceneCount: pkg.manifest.scenes.length,
+    resourceCount: pkg.manifest.resources.length,
+    projectPath: pkg.manifest.project.path,
+  });
   setSceneDownloadState({
     phase: 'manifest',
     label: '正在解析 manifest',
@@ -16939,6 +16982,7 @@ async function loadProjectFromScenePackageBytes(buffer: ArrayBuffer, compiledGro
   await yieldToMainThread();
 
   activeScenePackagePkg = pkg;
+  logSceneViewerDebug('loadProjectFromScenePackageBytes:build-asset-overrides');
   setSceneDownloadState({
     phase: 'resource-map',
     label: '正在构建资源覆盖表',
@@ -16951,6 +16995,10 @@ async function loadProjectFromScenePackageBytes(buffer: ArrayBuffer, compiledGro
   await yieldToMainThread();
   activeScenePackageAssetOverrides = buildAssetOverridesFromScenePackage(pkg);
 
+  logSceneViewerDebug('loadProjectFromScenePackageBytes:parse-project-meta', {
+    projectPath: pkg.manifest.project.path,
+    sceneCount: pkg.manifest.scenes.length,
+  });
   setSceneDownloadState({
     phase: 'project-meta',
     label: '正在解析项目配置',
@@ -16965,6 +17013,12 @@ async function loadProjectFromScenePackageBytes(buffer: ArrayBuffer, compiledGro
   const normalizedBuildKey = compiledGroundBuildKey.trim();
   activeScenePackageBuildKey = normalizedBuildKey || null;
   const projectData = parseScenePackageToProjectData(activeScenePackagePkg, normalizedBuildKey);
+  logSceneViewerDebug('loadProjectFromScenePackageBytes:project-data-ready', {
+    projectId: projectData.project.id,
+    projectName: projectData.project.name,
+    sceneCount: projectData.scenes.length,
+    compiledGroundBuildKey: normalizedBuildKey,
+  });
   setSceneDownloadState({
     phase: 'bundle',
     label: '正在组装场景索引',
@@ -16985,6 +17039,9 @@ async function loadProjectFromScenePackagePointer(pointer: ScenePackagePointer):
   lastCompiledGroundLoadedChunkVersion = -1;
   loading.value = true;
   try {
+    logSceneViewerDebug('loadProjectFromScenePackagePointer:start', {
+      pointerBuildKey: normalizeScenePackageBuildKey(pointer),
+    });
     resetSceneDownloadState();
     setSceneDownloadState({
       phase: 'read-cache',
@@ -17003,6 +17060,9 @@ async function loadProjectFromScenePackagePointer(pointer: ScenePackagePointer):
     }
     await loadProjectFromScenePackageBytes(buffer, normalizeScenePackageBuildKey(pointer));
   } catch (e) {
+    logSceneViewerDebug('loadProjectFromScenePackagePointer:error', {
+      message: e instanceof Error ? e.message : String(e),
+    });
     console.error(e);
     error.value = '场景包加载失败，请返回首页重新导入';
     previewPayload.value = null;
@@ -17102,6 +17162,11 @@ async function startRenderIfReady() {
   const payload = previewPayload.value;
   const canvas = canvasResult;
   if (!payload || !canvas) {
+    logSceneViewerDebug('startRenderIfReady:skip', {
+      hasPayload: Boolean(payload),
+      hasCanvas: Boolean(canvas),
+      initializing,
+    });
     return;
   }
 
@@ -17109,6 +17174,9 @@ async function startRenderIfReady() {
     // A newer payload arrived while we're initializing. Cancel the current init and restart after it settles.
     pendingRestartAfterCurrentInit = true;
     initializeToken += 1;
+    logSceneViewerDebug('startRenderIfReady:pending-restart', {
+      initializeToken,
+    });
     return;
   }
 
@@ -17118,29 +17186,54 @@ async function startRenderIfReady() {
   warnings.value = [];
   initializeToken += 1;
   const token = initializeToken;
+  logSceneViewerDebug('startRenderIfReady:begin', {
+    token,
+    documentId: payload.document?.id ?? null,
+    documentName: payload.document?.name ?? '',
+  });
   beginSceneSwitchTransition(token);
 
   try {
     await ensureRendererContext(canvas);
     resourcePreload.label = '正在准备运行时 prefab 资源...';
+    logSceneViewerDebug('startRenderIfReady:collect-runtime-prefab-preload-context');
     const runtimePrefabPreloadContext = await collectRuntimePrefabPreloadContext(props.runtimePrefabSpawns);
     if (!isCurrentInitializationToken(token)) {
+      logSceneViewerDebug('startRenderIfReady:stale-token-after-preload-context', {
+        token,
+        initializeToken,
+      });
       return;
     }
+    logSceneViewerDebug('startRenderIfReady:prepare-render-payload');
     const preparedPayload = await prepareRenderPayloadForSceneEntry(payload, runtimePrefabPreloadContext);
     if (!isCurrentInitializationToken(token)) {
+      logSceneViewerDebug('startRenderIfReady:stale-token-after-prepare-render-payload', {
+        token,
+        initializeToken,
+      });
       return;
     }
+    logSceneViewerDebug('startRenderIfReady:warm-runtime-assets');
     const warmReady = await warmRuntimePrefabAssetsForSceneEntry(preparedPayload, runtimePrefabPreloadContext, token);
     if (!warmReady) {
+      logSceneViewerDebug('startRenderIfReady:warm-runtime-assets-aborted', {
+        token,
+        initializeToken,
+      });
       return;
     }
+    logSceneViewerDebug('startRenderIfReady:commit-scene-entry-rendering');
     const rendered = await commitSceneEntryRendering(preparedPayload, canvas, token);
     if (rendered) {
+      logSceneViewerDebug('startRenderIfReady:loaded');
       hasRenderedSceneOnce = true;
       emit('loaded');
     }
   } catch (initializationError) {
+    logSceneViewerDebug('startRenderIfReady:error', {
+      message: initializationError instanceof Error ? initializationError.message : String(initializationError),
+    });
     console.error('Renderer initialization failed', initializationError);
     console.error(initializationError);
     if (isCurrentInitializationToken(token)) {
@@ -17384,13 +17477,23 @@ function teardownRenderer() {
 
 function handleUseCanvas(result: UseCanvasResult) {
   canvasResult = result;
+  logSceneViewerDebug('handleUseCanvas', {
+    canvasWidth: result.canvas?.width ?? 0,
+    canvasHeight: result.canvas?.height ?? 0,
+  });
   startRenderIfReady();
 }
 
 async function ensureRendererContext(result: UseCanvasResult) {
+  logSceneViewerDebug('ensureRendererContext:start', {
+    hasRenderContext: Boolean(renderContext),
+    canvasWidth: result.canvas?.width ?? 0,
+    canvasHeight: result.canvas?.height ?? 0,
+  });
   await result.recomputeSize?.();
 
   if (renderContext) {
+    logSceneViewerDebug('ensureRendererContext:reuse-existing');
     return;
   }
 
@@ -17497,6 +17600,9 @@ async function ensureRendererContext(result: UseCanvasResult) {
     camera,
     controls,
   };
+  logSceneViewerDebug('ensureRendererContext:created', {
+    rendererType: renderContext.renderer?.type ?? '',
+  });
   if (pendingEnvironmentSettings) {
     void applyEnvironmentSettingsToScene(pendingEnvironmentSettings);
   }
@@ -17535,14 +17641,30 @@ async function buildSceneGraphWithProgress(
   let graph: Awaited<ReturnType<typeof buildSceneGraph>> | null = null;
   let resourceCache: ResourceCache | null = null;
   let runtimePayload: ScenePreviewPayload = payload;
+  let lastResourceProgressLogKey = '';
   try {
+    logSceneViewerDebug('buildSceneGraphWithProgress:start', {
+      documentId: payload.document?.id ?? null,
+      documentName: payload.document?.name ?? '',
+      nodeCount: Array.isArray(payload.document?.nodes) ? payload.document.nodes.length : 0,
+    });
     const runtimeDocument = await prepareCouponSceneDocument(payload.document);
+    logSceneViewerDebug('buildSceneGraphWithProgress:prepared-document', {
+      documentId: runtimeDocument?.id ?? null,
+      documentName: runtimeDocument?.name ?? '',
+      nodeCount: Array.isArray(runtimeDocument?.nodes) ? runtimeDocument.nodes.length : 0,
+      lazyLoadMeshesEnabled: runtimeDocument.lazyLoadMeshes !== false,
+    });
     payload.document = runtimeDocument;
     runtimePayload = {
       ...payload,
       document: runtimeDocument,
     };
     lazyLoadMeshesEnabled = runtimeDocument.lazyLoadMeshes !== false;
+    logSceneViewerDebug('buildSceneGraphWithProgress:enter-building-phase', {
+      documentId: runtimeDocument?.id ?? null,
+      documentName: runtimeDocument?.name ?? '',
+    });
     setSceneInitState({
       stage: 'building',
       label: '姝ｅ湪鏋勫缓鍦烘櫙鍥炬牳',
@@ -17554,6 +17676,32 @@ async function buildSceneGraphWithProgress(
       active: true,
     });
     const buildOptions = createSceneGraphBuildOptions(runtimePayload, (info) => {
+      const progressPercent = info.total > 0
+        ? (info.loaded / info.total) * 100
+        : resourcePreload.totalBytes > 0
+          ? (resourcePreload.loadedBytes / Math.max(resourcePreload.totalBytes, 1)) * 100
+          : 0;
+      const progressKey = [
+        info.loaded,
+        info.total,
+        Math.round(progressPercent),
+        resourcePreload.loadedBytes,
+        resourcePreload.totalBytes,
+        info.assetId ?? '',
+        info.message ?? '',
+      ].join('|');
+      if (progressKey !== lastResourceProgressLogKey) {
+        lastResourceProgressLogKey = progressKey;
+        logSceneViewerDebug('buildSceneGraphWithProgress:resource-progress', {
+          assetId: info.assetId ?? null,
+          message: info.message || (info.assetId ? `加载 ${info.assetId}` : '正在加载资源'),
+          loaded: info.loaded,
+          total: info.total,
+          bytesLoaded: resourcePreload.loadedBytes,
+          bytesTotal: resourcePreload.totalBytes,
+          percent: Number(progressPercent.toFixed(2)),
+        });
+      }
       resourcePreload.total = info.total;
       resourcePreload.loaded = info.loaded;
 
@@ -17590,7 +17738,22 @@ async function buildSceneGraphWithProgress(
     resourceCache = ensureResourceCache(runtimePayload.document, buildOptions);
     viewerResourceCache = resourceCache;
     refreshDynamicGroundCache(runtimePayload.document);
-    graph = await buildSceneGraph(runtimePayload.document, resourceCache, buildOptions);
+    logSceneViewerDebug('buildSceneGraphWithProgress:before-buildSceneGraph', {
+      documentId: runtimePayload.document?.id ?? null,
+      documentName: runtimePayload.document?.name ?? '',
+    });
+    try {
+      graph = await buildSceneGraph(runtimePayload.document, resourceCache, buildOptions);
+      logSceneViewerDebug('buildSceneGraphWithProgress:build-finished', {
+        success: Boolean(graph),
+        rootChildren: graph?.root ? graph.root.children.length : 0,
+      });
+    } catch (error) {
+      logSceneViewerDebug('buildSceneGraphWithProgress:build-error', {
+        message: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
   } finally {
     const fullyLoadedByCount = resourcePreload.total > 0 && resourcePreload.loaded >= resourcePreload.total;
     const fullyLoadedByBytes =
@@ -17753,6 +17916,11 @@ async function mountGraphAndSyncSubsystems(
   canvas: HTMLCanvasElement,
   camera: THREE.PerspectiveCamera,
 ): Promise<void> {
+  logSceneViewerDebug('mountGraphAndSyncSubsystems:start', {
+    documentId: payload.document?.id ?? null,
+    documentName: payload.document?.name ?? '',
+    hasResourceCache: Boolean(resourceCache),
+  });
   sceneGraphRoot = root;
   renderContext?.scene?.add(root);
 
@@ -17766,7 +17934,9 @@ async function mountGraphAndSyncSubsystems(
     currentLabel: 'rebuildPreviewNodeMap',
     active: true,
   });
+  logSceneViewerDebug('mountGraphAndSyncSubsystems:rebuildPreviewNodeMap:start');
   rebuildPreviewNodeMap(payload.document);
+  logSceneViewerDebug('mountGraphAndSyncSubsystems:rebuildPreviewNodeMap:done');
   await yieldToMainThread();
 
   setSceneInitState({
@@ -17779,7 +17949,11 @@ async function mountGraphAndSyncSubsystems(
     currentLabel: 'previewComponentManager.syncScene',
     active: true,
   });
+  logSceneViewerDebug('mountGraphAndSyncSubsystems:previewComponentManager.syncScene:start', {
+    nodeCount: Array.isArray(payload.document.nodes) ? payload.document.nodes.length : 0,
+  });
   previewComponentManager.syncScene(payload.document.nodes ?? []);
+  logSceneViewerDebug('mountGraphAndSyncSubsystems:previewComponentManager.syncScene:done');
   await yieldToMainThread();
 
   setSceneInitState({
@@ -17792,12 +17966,14 @@ async function mountGraphAndSyncSubsystems(
     currentLabel: 'indexSceneObjects',
     active: true,
   });
+  logSceneViewerDebug('mountGraphAndSyncSubsystems:indexSceneObjects:start');
   indexSceneObjects(root);
   applyWeChatShadowPolicy(root);
   refreshMultiuserNodeReferences(payload.document);
   collectNetworkSyncNodeEntries(payload.document);
   collectPhysicsAuthorityNodeEntries(payload.document);
   refreshBehaviorProximityCandidates();
+  logSceneViewerDebug('mountGraphAndSyncSubsystems:indexSceneObjects:done');
   await yieldToMainThread();
 
   setSceneInitState({
@@ -17810,8 +17986,10 @@ async function mountGraphAndSyncSubsystems(
     currentLabel: 'refreshAnimationControllers',
     active: true,
   });
+  logSceneViewerDebug('mountGraphAndSyncSubsystems:refreshAnimationControllers:start');
   refreshAnimationControllers(root);
   ensureBehaviorTapHandler(canvas, camera);
+  logSceneViewerDebug('mountGraphAndSyncSubsystems:refreshAnimationControllers:done');
   await yieldToMainThread();
 
   setSceneInitState({
@@ -17824,8 +18002,10 @@ async function mountGraphAndSyncSubsystems(
     currentLabel: 'prepareSceneryPhysicsBridgeForDocument',
     active: true,
   });
+  logSceneViewerDebug('mountGraphAndSyncSubsystems:prepareSceneryPhysicsBridgeForDocument:start');
   await prepareSceneryPhysicsBridgeForDocument(payload.document);
   initializeLazyPlaceholders(payload.document);
+  logSceneViewerDebug('mountGraphAndSyncSubsystems:prepareSceneryPhysicsBridgeForDocument:done');
   await yieldToMainThread();
 
   setSceneInitState({
@@ -17839,7 +18019,15 @@ async function mountGraphAndSyncSubsystems(
     active: true,
   });
   // Bootstrap physics before the render loop so vehicle drive and ground collision never race initialization.
+  logSceneViewerDebug('mountGraphAndSyncSubsystems:syncPhysicsBodiesForDocument:start');
   await syncPhysicsBodiesForDocument(payload.document, (progress) => {
+    logSceneViewerDebug('mountGraphAndSyncSubsystems:syncPhysicsBodiesForDocument:progress', {
+      detail: progress.detail ?? '',
+      percent: progress.percent,
+      currentIndex: progress.currentIndex ?? 0,
+      currentTotal: progress.currentTotal ?? 0,
+      currentLabel: progress.currentLabel ?? '',
+    });
     setSceneInitState({
       stage: 'syncingPhysics',
       label: '正在同步物理系统',
@@ -17851,6 +18039,7 @@ async function mountGraphAndSyncSubsystems(
       active: true,
     });
   });
+  logSceneViewerDebug('mountGraphAndSyncSubsystems:syncPhysicsBodiesForDocument:done');
   await yieldToMainThread();
 
   setSceneInitState({
@@ -17863,7 +18052,15 @@ async function mountGraphAndSyncSubsystems(
     currentLabel: 'syncTerrainScatterInstances',
     active: true,
   });
+  logSceneViewerDebug('mountGraphAndSyncSubsystems:syncTerrainScatterInstances:start');
   await syncTerrainScatterInstances(payload.document, resourceCache, (progress) => {
+    logSceneViewerDebug('mountGraphAndSyncSubsystems:syncTerrainScatterInstances:progress', {
+      detail: progress.detail ?? '',
+      percent: progress.percent,
+      currentIndex: progress.currentIndex ?? 0,
+      currentTotal: progress.currentTotal ?? 0,
+      currentLabel: progress.currentLabel ?? '',
+    });
     setSceneInitState({
       stage: 'syncingScatter',
       label: '正在同步地形散点',
@@ -17875,6 +18072,7 @@ async function mountGraphAndSyncSubsystems(
       active: true,
     });
   });
+  logSceneViewerDebug('mountGraphAndSyncSubsystems:syncTerrainScatterInstances:done');
   await yieldToMainThread();
 
   setSceneInitState({
@@ -17887,11 +18085,13 @@ async function mountGraphAndSyncSubsystems(
     currentLabel: 'registerSceneSubtree',
     active: true,
   });
+  logSceneViewerDebug('mountGraphAndSyncSubsystems:registerSceneSubtree:start');
   registerSceneSubtree(root);
   const groundNode = resolveDocumentGroundNode(payload.document);
   if (groundNode && isGroundDynamicMesh(groundNode.dynamicMesh)) {
     primeSceneryGroundChunkTextureRefresh(root, groundNode.dynamicMesh);
   }
+  logSceneViewerDebug('mountGraphAndSyncSubsystems:registerSceneSubtree:done');
   await yieldToMainThread();
 
   setSceneInitState({
@@ -17904,7 +18104,9 @@ async function mountGraphAndSyncSubsystems(
     currentLabel: 'refreshAnimationControllers',
     active: true,
   });
+  logSceneViewerDebug('mountGraphAndSyncSubsystems:final-refreshAnimationControllers:start');
   refreshAnimationControllers(root);
+  logSceneViewerDebug('mountGraphAndSyncSubsystems:final-refreshAnimationControllers:done');
   await yieldToMainThread();
 
   setSceneInitState({
@@ -17917,6 +18119,7 @@ async function mountGraphAndSyncSubsystems(
     currentLabel: 'markInstancedCullingDirty',
     active: true,
   });
+  logSceneViewerDebug('mountGraphAndSyncSubsystems:markInstancedCullingDirty');
   markInstancedCullingDirty();
   await yieldToMainThread();
 
@@ -17930,6 +18133,7 @@ async function mountGraphAndSyncSubsystems(
     currentLabel: '',
     active: false,
   });
+  logSceneViewerDebug('mountGraphAndSyncSubsystems:ready');
 }
 
 /** Apply camera alignment and environment settings for the current document. */
@@ -18240,22 +18444,46 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   const { scene, renderer, camera, controls } = renderContext;
   activeCameraWatchTween = null;
   const { canvas } = result;
+  logSceneViewerDebug('initializeRenderer:start', {
+    token,
+    initializeToken,
+    documentId: payload.document?.id ?? null,
+    documentName: payload.document?.name ?? '',
+    canvasWidth: canvas?.width ?? 0,
+    canvasHeight: canvas?.height ?? 0,
+  });
 
   if (token !== initializeToken) {
+    logSceneViewerDebug('initializeRenderer:stale-token-before-start', {
+      token,
+      initializeToken,
+    });
     return;
   }
 
   // Always treat payload switches as unrelated: clear previous graph + behavior runtime.
   if (sceneGraphRoot || currentDocument) {
+    logSceneViewerDebug('initializeRenderer:cleanup-unrelated-switch', {
+      hasSceneGraphRoot: Boolean(sceneGraphRoot),
+      hasCurrentDocument: Boolean(currentDocument),
+    });
     cleanupForUnrelatedSceneSwitch();
   }
 
   if (token !== initializeToken) {
+    logSceneViewerDebug('initializeRenderer:stale-token-after-cleanup', {
+      token,
+      initializeToken,
+    });
     return;
   }
 
   // Phase 1: bind state for the new payload.
   currentDocument = payload.document;
+  logSceneViewerDebug('initializeRenderer:phase-1-bound-state', {
+    documentId: payload.document?.id ?? null,
+    documentName: payload.document?.name ?? '',
+  });
   refreshDynamicGroundCache(currentDocument);
   setActiveMultiuserRuntimeBridge(multiuserRuntimeBridge);
   setActiveMultiuserSceneId(payload.document.id ?? null);
@@ -18268,44 +18496,73 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   }
 
   // Phase 2: build the scene graph (loads assets) with UI progress updates.
+  logSceneViewerDebug('initializeRenderer:phase-2-build-start', {
+    documentId: payload.document?.id ?? null,
+  });
   resetResourcePreloadState();
   const buildResult = await buildSceneGraphWithProgress(payload);
   if (token !== initializeToken) {
+    logSceneViewerDebug('initializeRenderer:stale-token-after-build', {
+      token,
+      initializeToken,
+    });
     if (buildResult?.graph?.root) {
       disposeObject(buildResult.graph.root);
     }
     return;
   }
   if (!buildResult) {
+    logSceneViewerDebug('initializeRenderer:build-result-null');
     return;
   }
   const { graph, resourceCache } = buildResult;
+  logSceneViewerDebug('initializeRenderer:phase-2-build-done', {
+    hasGraph: Boolean(graph),
+    hasResourceCache: Boolean(resourceCache),
+    warningCount: graph.warnings.length,
+  });
   if (graph.warnings.length) {
     warnings.value = graph.warnings;
   }
 
   const instancingSkipNodeIds = collectInstancingSkipNodeIdsForLazyPlaceholders(graph.root);
+  logSceneViewerDebug('initializeRenderer:phase-3-prepare-instancing', {
+    skipNodeCount: instancingSkipNodeIds?.size ?? 0,
+  });
   await prepareInstancedNodesIfPossible(graph.root, payload, resourceCache, instancingSkipNodeIds);
   if (token !== initializeToken) {
+    logSceneViewerDebug('initializeRenderer:stale-token-after-instancing', {
+      token,
+      initializeToken,
+    });
     disposeObject(graph.root);
     return;
   }
 
   // Phase 4: mount the graph and synchronously initialize scene-dependent subsystems.
+  logSceneViewerDebug('initializeRenderer:phase-4-mount-start');
   await mountGraphAndSyncSubsystems(payload, graph.root, resourceCache, canvas, camera);
+  logSceneViewerDebug('initializeRenderer:phase-4-mount-done');
   applyNominateOverridesForCurrentScene();
   await flushPendingRuntimePrefabSpawnRequests();
 
   if (token !== initializeToken || sceneGraphRoot !== graph.root) {
+    logSceneViewerDebug('initializeRenderer:stale-token-after-mount', {
+      token,
+      initializeToken,
+      sceneGraphRootMatches: sceneGraphRoot === graph.root,
+    });
     return;
   }
 
   // Phase 5: apply view settings (camera alignment, environment, projection).
+  logSceneViewerDebug('initializeRenderer:phase-5-apply-view-settings');
   applyDocumentViewSettings(payload.document, camera);
   activatePendingDefaultSteerDriveIfNeeded();
   markInstancedCullingDirty();
 
   // Phase 6: start the render loop.
+  logSceneViewerDebug('initializeRenderer:phase-6-start-render-loop');
   startRenderLoop(result, renderer, scene, camera, controls);
 }
 
