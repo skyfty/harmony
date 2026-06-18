@@ -21,6 +21,7 @@ const props = withDefaults(
     placeholder?: string
     tip?: boolean
     disabled?: boolean
+    acceptNode?: (node: SceneNode) => boolean
   }>(),
   {
     owner: 'behavior-target',
@@ -195,6 +196,9 @@ function canAcceptNodeId(nodeId: string | null | undefined): boolean {
   }
   const node = findNodeById(nodes.value, nodeId)
   if (!node) {
+    return false
+  }
+  if (props.acceptNode && !props.acceptNode(node)) {
     return false
   }
   if (props.owner === 'steer-target') {

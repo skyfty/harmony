@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import type { SceneNodeComponentState } from '@schema/core'
+import type { SceneNode, SceneNodeComponentState } from '@schema/core'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useBuildToolsStore } from '@/stores/buildToolsStore'
+import NodePicker from '@/components/common/NodePicker.vue'
 import {
   BOUNDARY_WALL_COMPONENT_TYPE,
   BOUNDARY_WALL_DEFAULT_HEIGHT,
@@ -18,6 +19,7 @@ import {
   type BoundaryWallMode,
   type BoundaryWallComponentProps,
 } from '@schema/components'
+import {hasBoundaryWallReferenceSourceInSubtree,isBoundaryWallReferenceSourceNode} from '@schema/boundaryWallReference'
 
 const sceneStore = useSceneStore()
 const buildToolsStore = useBuildToolsStore()
@@ -47,6 +49,14 @@ const normalizedProps = computed(() =>
 const customLoopCount = computed(() => normalizedProps.value.customLoops.length)
 const customPointCount = computed(() => normalizedProps.value.customLoops.reduce((sum, loop) => sum + loop.points.length, 0))
 const isBoundaryWallDrawActive = computed(() => activeBuildTool.value === 'boundaryWall')
+const boundaryReferenceNodeId = computed(() => normalizedProps.value.boundaryReferenceNodeId)
+
+function isBoundaryWallReferencePickable(node: SceneNode | null | undefined): boolean {
+  if (!node) {
+    return false
+  }
+  return isBoundaryWallReferenceSourceNode(node) || hasBoundaryWallReferenceSourceInSubtree(node)
+}
 
 watch(
   () => boundaryWallComponent.value?.props,
@@ -118,6 +128,10 @@ function applyMode(value: BoundaryWallMode | null) {
   if (normalized !== 'custom' && activeBuildTool.value === 'boundaryWall') {
     buildToolsStore.setActiveBuildTool(null)
   }
+}
+
+function handleBoundaryReferenceNodeChange(value: string | null): void {
+  updateBoundaryWallProps({ boundaryReferenceNodeId: value ?? null })
 }
 
 function handleStartDraw() {
@@ -193,6 +207,18 @@ function handleClearCustomLoops() {
           :disabled="!boundaryWallComponent?.enabled"
           @update:model-value="applyMode"
         />
+        <div class="boundary-wall-reference-field">
+          <div class="boundary-wall-reference-label">Boundary Reference</div>
+          <NodePicker
+            :model-value="boundaryReferenceNodeId"
+            pick-hint="Pick a floor, wall, road, region, water, or a group that contains them"
+            selection-hint="If you pick a group, matching child nodes inside it will be used automatically"
+            placeholder="Use current node"
+            :disabled="!boundaryWallComponent?.enabled"
+            :accept-node="isBoundaryWallReferencePickable"
+            @update:modelValue="handleBoundaryReferenceNodeChange"
+          />
+        </div>
         <v-text-field
           v-model.number="localHeight"
           label="Height (m)"
@@ -289,6 +315,18 @@ function handleClearCustomLoops() {
   flex-direction: column;
   gap: 0.4rem;
   padding-inline: 0.4rem;
+}
+
+.boundary-wall-reference-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.boundary-wall-reference-label {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: rgba(235, 238, 245, 0.92);
 }
 
 .boundary-wall-custom-actions {

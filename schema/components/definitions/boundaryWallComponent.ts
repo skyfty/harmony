@@ -1,8 +1,8 @@
 import type { Object3D } from 'three'
-import { extractWaterSurfaceMeshMetadataFromUserData, type SceneNode, type SceneNodeComponentState } from '../../index'
+import type { SceneNode, SceneNodeComponentState } from '../../index'
 import { Component, type ComponentRuntimeContext } from '../Component'
 import { componentManager, type ComponentDefinition } from '../componentManager'
-import { WATER_COMPONENT_TYPE } from './waterComponent'
+import { resolveBoundaryWallReferenceNodeIdForMount } from '../../boundaryWallReference'
 
 export const BOUNDARY_WALL_COMPONENT_TYPE = 'boundaryWall'
 export const BOUNDARY_WALL_DEFAULT_HEIGHT = 8
@@ -36,6 +36,7 @@ export interface BoundaryWallComponentProps {
   offset: number
   mode: BoundaryWallMode
   customLoops: BoundaryWallCustomLoop[]
+  boundaryReferenceNodeId: string | null
 }
 
 function normalizeBoundaryWallMode(value: unknown): BoundaryWallMode {
@@ -108,6 +109,14 @@ function clampBoundaryWallCustomLoops(input: unknown): BoundaryWallCustomLoop[] 
   return loops
 }
 
+function normalizeBoundaryReferenceNodeId(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null
+  }
+  const trimmed = value.trim()
+  return trimmed.length ? trimmed : null
+}
+
 export function clampBoundaryWallComponentProps(
   props: Partial<BoundaryWallComponentProps> | null | undefined,
 ): BoundaryWallComponentProps {
@@ -116,6 +125,9 @@ export function clampBoundaryWallComponentProps(
   const offsetRaw = typeof props?.offset === 'number' ? props.offset : Number(props?.offset)
   const mode = normalizeBoundaryWallMode((props as { mode?: unknown } | null | undefined)?.mode)
   const customLoops = clampBoundaryWallCustomLoops((props as { customLoops?: unknown } | null | undefined)?.customLoops)
+  const boundaryReferenceNodeId = normalizeBoundaryReferenceNodeId(
+    (props as { boundaryReferenceNodeId?: unknown } | null | undefined)?.boundaryReferenceNodeId,
+  )
 
   return {
     height: Number.isFinite(heightRaw)
@@ -129,6 +141,7 @@ export function clampBoundaryWallComponentProps(
       : BOUNDARY_WALL_DEFAULT_OFFSET,
     mode,
     customLoops,
+    boundaryReferenceNodeId,
   }
 }
 
@@ -142,6 +155,7 @@ export function cloneBoundaryWallComponentProps(props: BoundaryWallComponentProp
       closed: loop.closed,
       points: loop.points.map((point) => ({ x: point.x, z: point.z })),
     })),
+    boundaryReferenceNodeId: props.boundaryReferenceNodeId,
   }
 }
 
@@ -149,22 +163,6 @@ export function canAttachBoundaryWallComponent(node: SceneNode): boolean {
   const nodeType = node.nodeType?.toLowerCase?.() ?? ''
   if (nodeType === 'light' || nodeType === 'environment') {
     return false
-  }
-  const dynamicType = node.dynamicMesh?.type
-  if (
-    dynamicType === 'Wall'
-    || dynamicType === 'Floor'
-    || dynamicType === 'Landform'
-    || dynamicType === 'Road'
-    || dynamicType === 'Region'
-  ) {
-    return true
-  }
-  if (node.components?.[WATER_COMPONENT_TYPE]) {
-    return true
-  }
-  if (extractWaterSurfaceMeshMetadataFromUserData(node.userData) !== null) {
-    return true
   }
   return true
 }
@@ -222,7 +220,9 @@ const boundaryWallComponentDefinition: ComponentDefinition<BoundaryWallComponent
     return canAttachBoundaryWallComponent(node)
   },
   createDefaultProps(_node: SceneNode) {
-    return clampBoundaryWallComponentProps(null)
+    return clampBoundaryWallComponentProps({
+      boundaryReferenceNodeId: resolveBoundaryWallReferenceNodeIdForMount(_node),
+    })
   },
   createInstance(context) {
     return new BoundaryWallComponent(context)
@@ -243,6 +243,7 @@ export function createBoundaryWallComponentState(
     offset: overrides?.offset ?? defaults.offset,
     mode: overrides?.mode ?? defaults.mode,
     customLoops: overrides?.customLoops ?? defaults.customLoops,
+    boundaryReferenceNodeId: overrides?.boundaryReferenceNodeId ?? defaults.boundaryReferenceNodeId,
   })
   return {
     id: options.id ?? '',

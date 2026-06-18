@@ -2,6 +2,10 @@ import * as THREE from 'three'
 import type { FloorDynamicMesh, LandformDynamicMesh, RegionDynamicMesh, SceneNode, Vector3Like, WallDynamicMesh } from './core'
 import { extractWaterSurfaceMeshMetadataFromUserData } from './core'
 import { WATER_COMPONENT_TYPE } from './components'
+import {
+  findBoundaryWallReferenceNodeById,
+  isBoundaryWallReferenceSourceNode,
+} from './boundaryWallReference'
 import { extractFloorPerimeterChains } from './floorMesh'
 import { extractRoadBoundaryChains } from './roadMesh'
 import { compileWallSegmentsFromDefinition } from './wallLayout'
@@ -24,7 +28,15 @@ const boxBoundsHelper = new THREE.Box3()
 const transformedBoundsHelper = new THREE.Box3()
 const matrixHelper = new THREE.Matrix4()
 const inverseRootMatrixHelper = new THREE.Matrix4()
+const localMatrixHelper = new THREE.Matrix4()
+const relativeMatrixHelper = new THREE.Matrix4()
 const quaternionHelper = new THREE.Quaternion()
+const relativeQuaternionHelper = new THREE.Quaternion()
+const segmentQuaternionHelper = new THREE.Quaternion()
+const relativeScaleHelper = new THREE.Vector3()
+const localPositionHelper = new THREE.Vector3()
+const localRotationHelper = new THREE.Euler()
+const localScaleHelper = new THREE.Vector3()
 const startHelper = new THREE.Vector3()
 const endHelper = new THREE.Vector3()
 const directionHelper = new THREE.Vector3()
@@ -32,6 +44,8 @@ const unitDirectionHelper = new THREE.Vector3()
 const axisXHelper = new THREE.Vector3(1, 0, 0)
 const outwardHelper = new THREE.Vector3()
 const pointHelper = new THREE.Vector3()
+const transformedSegmentCenterHelper = new THREE.Vector3()
+const transformedSegmentScaleHelper = new THREE.Vector3()
 const aabbCorners = [
   new THREE.Vector3(),
   new THREE.Vector3(),
@@ -42,6 +56,98 @@ const aabbCorners = [
   new THREE.Vector3(),
   new THREE.Vector3(),
 ]
+
+function composeSceneNodeLocalMatrix(node: SceneNode, target = localMatrixHelper): THREE.Matrix4 {
+  const position = node.position
+  const rotation = node.rotation
+  const scale = node.scale
+  localPositionHelper.set(
+    Number.isFinite(position?.x) ? position.x : 0,
+    Number.isFinite(position?.y) ? position.y : 0,
+    Number.isFinite(position?.z) ? position.z : 0,
+  )
+  localRotationHelper.set(
+    Number.isFinite(rotation?.x) ? rotation.x : 0,
+    Number.isFinite(rotation?.y) ? rotation.y : 0,
+    Number.isFinite(rotation?.z) ? rotation.z : 0,
+    'XYZ',
+  )
+  localScaleHelper.set(
+    Number.isFinite(scale?.x) ? scale.x : 1,
+    Number.isFinite(scale?.y) ? scale.y : 1,
+    Number.isFinite(scale?.z) ? scale.z : 1,
+  )
+  return target.compose(localPositionHelper, new THREE.Quaternion().setFromEuler(localRotationHelper), localScaleHelper)
+}
+
+function findSceneNodePath(root: SceneNode | null | undefined, targetId: string): SceneNode[] | null {
+  if (!root) {
+    return null
+  }
+  if (root.id === targetId) {
+    return [root]
+  }
+  for (const child of root.children ?? []) {
+    const childPath = findSceneNodePath(child, targetId)
+    if (childPath) {
+      return [root, ...childPath]
+    }
+  }
+  return null
+}
+
+function computeReferenceToMountMatrix(mountNode: SceneNode, referenceNode: SceneNode): THREE.Matrix4 | null {
+  if (mountNode.id === referenceNode.id) {
+    return relativeMatrixHelper.identity()
+  }
+  const path = findSceneNodePath(mountNode, referenceNode.id)
+  if (!path || path.length < 2) {
+    return null
+  }
+  relativeMatrixHelper.identity()
+  for (let index = 1; index < path.length; index += 1) {
+    const entry = path[index]
+    if (!entry) {
+      continue
+    }
+    relativeMatrixHelper.multiply(composeSceneNodeLocalMatrix(entry))
+  }
+  return relativeMatrixHelper
+}
+
+function transformBoundaryWallSegment(
+  segment: BoundaryWallShapeSegment,
+  referenceToMountMatrix: THREE.Matrix4,
+): BoundaryWallShapeSegment {
+  referenceToMountMatrix.decompose(transformedSegmentCenterHelper, relativeQuaternionHelper, relativeScaleHelper)
+  pointHelper.set(segment.offset[0], segment.offset[1], segment.offset[2]).applyMatrix4(referenceToMountMatrix)
+  segmentQuaternionHelper.set(
+    segment.orientation[0],
+    segment.orientation[1],
+    segment.orientation[2],
+    segment.orientation[3],
+  )
+  segmentQuaternionHelper.premultiply(relativeQuaternionHelper).normalize()
+  transformedSegmentScaleHelper.set(
+    Math.max(BOUNDARY_EPSILON, Math.abs(relativeScaleHelper.x) * segment.halfExtents[0]),
+    Math.max(BOUNDARY_EPSILON, Math.abs(relativeScaleHelper.y) * segment.halfExtents[1]),
+    Math.max(BOUNDARY_EPSILON, Math.abs(relativeScaleHelper.z) * segment.halfExtents[2]),
+  )
+  return {
+    halfExtents: [
+      transformedSegmentScaleHelper.x,
+      transformedSegmentScaleHelper.y,
+      transformedSegmentScaleHelper.z,
+    ],
+    offset: [pointHelper.x, pointHelper.y, pointHelper.z],
+    orientation: [
+      segmentQuaternionHelper.x,
+      segmentQuaternionHelper.y,
+      segmentQuaternionHelper.z,
+      segmentQuaternionHelper.w,
+    ],
+  }
+}
 
 function computeChainAreaXY(points: Array<{ x: number; y: number }>): number {
   if (points.length < 3) {
@@ -422,20 +528,13 @@ function extractBoundaryChains(node: SceneNode, object: THREE.Object3D | null | 
   return extractWaterChains(node, object)
 }
 
-export function buildBoundaryWallSegments(params: {
-  node: SceneNode
-  object: THREE.Object3D | null
-  props: BoundaryWallComponentProps
-}): BoundaryWallShapeSegment[] {
-  const { node, object, props } = params
+function extractBoundaryWallSegmentsForNode(
+  node: SceneNode,
+  object: THREE.Object3D | null | undefined,
+  props: BoundaryWallComponentProps,
+): BoundaryWallShapeSegment[] {
   if (props.mode === 'custom') {
-    const chains = extractCustomBoundaryChains(props.customLoops)
-    if (!chains.length) {
-      return []
-    }
-    const bounds = computeRootLocalBounds(object)
-    const baseY = bounds?.min.y ?? 0
-    return buildPlanarBoundaryWallSegments({ chains, props, baseY })
+    return []
   }
   if (isWaterBoundaryWallNode(node, object)) {
     return buildWaterBoundaryWallSegments(node, object, props)
@@ -453,4 +552,43 @@ export function buildBoundaryWallSegments(params: {
   const bounds = computeRootLocalBounds(object)
   const baseY = bounds?.min.y ?? computeFallbackBaseY(chains)
   return buildPlanarBoundaryWallSegments({ chains, props, baseY })
+}
+
+export function buildBoundaryWallSegments(params: {
+  node: SceneNode
+  object: THREE.Object3D | null
+  props: BoundaryWallComponentProps
+}): BoundaryWallShapeSegment[] {
+  const { node, object, props } = params
+  if (props.mode === 'custom') {
+    const chains = extractCustomBoundaryChains(props.customLoops)
+    if (!chains.length) {
+      return []
+    }
+    const bounds = computeRootLocalBounds(object)
+    const baseY = bounds?.min.y ?? 0
+    return buildPlanarBoundaryWallSegments({ chains, props, baseY })
+  }
+  const referenceNode = props.boundaryReferenceNodeId
+    ? findBoundaryWallReferenceNodeById(node, props.boundaryReferenceNodeId)
+    : node
+  if (!referenceNode || !isBoundaryWallReferenceSourceNode(referenceNode)) {
+    return []
+  }
+  const nextSegments = extractBoundaryWallSegmentsForNode(
+    referenceNode,
+    referenceNode === node ? object : null,
+    props,
+  )
+  if (!nextSegments.length) {
+    return []
+  }
+  if (referenceNode === node) {
+    return nextSegments
+  }
+  const referenceToMountMatrix = computeReferenceToMountMatrix(node, referenceNode)
+  if (!referenceToMountMatrix) {
+    return []
+  }
+  return nextSegments.map((segment) => transformBoundaryWallSegment(segment, referenceToMountMatrix))
 }

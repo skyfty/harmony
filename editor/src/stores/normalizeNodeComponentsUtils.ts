@@ -51,6 +51,7 @@ import {
   clampPlanningImagesComponentProps,
   clonePlanningImagesComponentProps,
 } from '@schema/components'
+import {resolveBoundaryWallReferenceNodeId} from '@schema/boundaryWallReference'
 
 const DISPLAY_BOARD_NAME_PATTERN = /^Display\s*Board(?:\b|$)/i
 const BILLBOARD_NAME_PATTERN = /^Billboard(?:\b|$)/i
@@ -199,7 +200,13 @@ export function normalizeNodeComponents(
     const shouldMigrateLegacyForbidden = !existingBoundaryWall && Boolean((existingProps as { forbidden?: boolean }).forbidden)
     if (existingBoundaryWall) {
       const nextBoundaryProps = cloneBoundaryWallComponentProps(
-        clampBoundaryWallComponentProps(existingBoundaryWall.props as any),
+        clampBoundaryWallComponentProps({
+          ...(existingBoundaryWall.props as any),
+          boundaryReferenceNodeId: resolveBoundaryWallReferenceNodeId(
+            node,
+            (existingBoundaryWall.props as any)?.boundaryReferenceNodeId,
+          ),
+        }),
       )
       normalized[BOUNDARY_WALL_COMPONENT_TYPE] = {
         id: existingBoundaryWall.id && existingBoundaryWall.id.trim().length ? existingBoundaryWall.id : generateUuid(),
@@ -374,7 +381,13 @@ export function normalizeNodeComponents(
   const existingBoundaryWall = normalized[BOUNDARY_WALL_COMPONENT_TYPE] as SceneNodeComponentState<any> | undefined
   if (existingBoundaryWall && canAttachBoundaryWallComponent(node)) {
     const nextProps = cloneBoundaryWallComponentProps(
-      clampBoundaryWallComponentProps(existingBoundaryWall.props as any),
+      clampBoundaryWallComponentProps({
+        ...(existingBoundaryWall.props as any),
+        boundaryReferenceNodeId: resolveBoundaryWallReferenceNodeId(
+          node,
+          (existingBoundaryWall.props as any)?.boundaryReferenceNodeId,
+        ),
+      }),
     )
     normalized[BOUNDARY_WALL_COMPONENT_TYPE] = {
       id: existingBoundaryWall.id && existingBoundaryWall.id.trim().length ? existingBoundaryWall.id : generateUuid(),
