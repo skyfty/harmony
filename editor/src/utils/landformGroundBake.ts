@@ -1593,15 +1593,6 @@ export async function bakeLandformGroundSurfaceChunks(
   options: LandformGroundBakeOptions = {},
 ): Promise<GroundSurfaceChunkTextureMap | null> {
   const debugProfiling = Boolean(options.debugProfiling) || isLandformBakePerfDebugEnabled()
-  const debugStartedAt = debugProfiling ? nowMs() : 0
-  const debugSceneId = typeof scene.id === 'string' && scene.id.trim().length
-    ? scene.id.trim()
-    : typeof scene.name === 'string' && scene.name.trim().length
-      ? scene.name.trim()
-    : 'landform-ground-bake'
-  const debugReason = typeof options.debugReason === 'string' && options.debugReason.trim().length
-    ? options.debugReason.trim()
-    : null
   const debugMetrics = debugProfiling
     ? {
         entriesMs: 0,
