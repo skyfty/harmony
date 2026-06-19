@@ -28,6 +28,7 @@ export type LodPresetStoreLike = {
   packageDirectoryCache: Record<string, any>
 
   getAsset: (id: string) => ProjectAsset | null
+  getRegisteredAsset: (id: string) => ProjectAsset | null
   registerAsset: (asset: ProjectAsset, options: any) => ProjectAsset
   setActiveDirectory: (categoryId: string) => void
   selectAsset: (assetId: string) => void
@@ -98,6 +99,70 @@ function normalizeLodPresetPropsAssetIds(
       billboardAssetId: normalizeAssetIdWithRegistry(level.billboardAssetId, preset.assetRegistry),
     })),
   }
+}
+
+function collectLodModelAssetIdCandidates(
+  preset: LodPresetData,
+  modelAssetId: string,
+): string[] {
+  const candidates = new Set<string>()
+  const normalizedModelAssetId = typeof modelAssetId === 'string' ? modelAssetId.trim() : ''
+  if (!normalizedModelAssetId) {
+    return []
+  }
+
+  candidates.add(normalizedModelAssetId)
+
+  const normalizedByRegistry = normalizeAssetIdWithRegistry(normalizedModelAssetId, preset.assetRegistry)
+  if (normalizedByRegistry) {
+    candidates.add(normalizedByRegistry)
+  }
+
+  const directRegistryEntry = preset.assetRegistry?.[normalizedModelAssetId]
+  if (directRegistryEntry?.sourceType === 'server') {
+    const serverAssetId = typeof directRegistryEntry.serverAssetId === 'string'
+      ? directRegistryEntry.serverAssetId.trim()
+      : ''
+    if (serverAssetId) {
+      candidates.add(serverAssetId)
+    }
+  }
+
+  Object.entries(preset.assetRegistry ?? {}).forEach(([registryKey, entry]) => {
+    if (!entry || typeof entry !== 'object' || entry.sourceType !== 'server') {
+      return
+    }
+    const serverAssetId = typeof entry.serverAssetId === 'string' ? entry.serverAssetId.trim() : ''
+    if (!serverAssetId || serverAssetId !== normalizedModelAssetId) {
+      return
+    }
+    const normalizedRegistryKey = registryKey.trim()
+    if (normalizedRegistryKey) {
+      candidates.add(normalizedRegistryKey)
+    }
+  })
+
+  return Array.from(candidates).filter((assetId) => assetId.length > 0)
+}
+
+function resolveLodModelAssetById(
+  store: LodPresetStoreLike,
+  preset: LodPresetData,
+  modelAssetId: string,
+): ProjectAsset | null {
+  const candidates = collectLodModelAssetIdCandidates(preset, modelAssetId)
+  for (const candidateId of candidates) {
+    const registered = store.getRegisteredAsset(candidateId)
+    if (registered) {
+      return registered
+    }
+
+    const resolved = findAssetInTreeLike(store.projectTree, candidateId)
+    if (resolved) {
+      return resolved
+    }
+  }
+  return null
 }
 
 export function syncResolvedLodDependencyMetadata(store: LodPresetStoreLike, preset: LodPresetData): void {
@@ -328,24 +393,23 @@ export function createLodPresetActions(deps: LodPresetActionsDeps) {
         throw new Error('LOD 预设未配置可用模型')
       }
 
-      const modelAsset = store.getAsset(modelAssetId)
-      const fallbackModelAsset = modelAsset ?? findAssetInTreeLike(store.projectTree, modelAssetId)
-      if (!fallbackModelAsset) {
+      const modelAsset = resolveLodModelAssetById(store, preset, modelAssetId)
+      if (!modelAsset) {
         throw new Error('Referenced LOD model asset is not available in this project')
       }
-      if (fallbackModelAsset.type !== 'model' && fallbackModelAsset.type !== 'mesh') {
+      if (modelAsset.type !== 'model' && modelAsset.type !== 'mesh') {
         throw new Error('Referenced LOD asset is not a model or mesh asset')
       }
 
       const assetCache = useAssetCacheStore()
-      const entry = await assetCache.ensureAssetEntry(fallbackModelAsset.id, { asset: fallbackModelAsset })
+      const entry = await assetCache.ensureAssetEntry(modelAsset.id, { asset: modelAsset })
       if (!entry || entry.status !== 'cached' || !entry.blob) {
         throw new Error(entry?.error ?? 'Referenced LOD model asset is not ready yet')
       }
 
       return {
         requestedAsset,
-        modelAsset: fallbackModelAsset,
+        modelAsset,
         preset,
       }
     },
