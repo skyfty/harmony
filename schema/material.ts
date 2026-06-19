@@ -823,7 +823,7 @@ export class SceneMaterialFactory {
     ]>;
 
     await Promise.all(
-      entries.map(async ([slot, ref], index) => {
+      entries.map(async ([slot, ref], _index) => {
         if (!ref || typeof ref !== 'object' || typeof ref.assetId !== 'string') {
           return;
         }
@@ -870,7 +870,7 @@ export class SceneMaterialFactory {
     }
 
     const pending = this.createTextureInstance(assetId, settings)
-      .catch((error) => {
+      .catch(() => {
         this.warn?.(`纹理 ${assetId} 加载失败`);
         return null;
       });
