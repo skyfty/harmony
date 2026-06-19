@@ -5275,7 +5275,6 @@ function scheduleViewportCompositionUpdate(force = false): void {
 }
 
 let pointerTrackingState: PointerTrackingState | null = null
-// debugHoverHit removed
 
 type MiddleClickSessionState = {
   pointerId: number
@@ -7812,11 +7811,6 @@ function syncBrushIndicatorScaleImmediately(radius: number): void {
   brushMesh.scale.set(radius, radius, 1)
   brushMesh.updateMatrixWorld(true)
 }
-
-// Camera controls debug (DEV only): set `window.__HARMONY_CAMERA_CONTROLS_DEBUG__ = true` in DevTools.
-// Removed camera controls debug logging.
-
-// Removed handleViewportWheelDebug
 
 function resolveGroundWheelRadiusTarget(): 'terrain' | 'scatter' | 'scatter-erase' | null {
   if (eraseCutModeActive.value) {
@@ -13279,23 +13273,6 @@ function syncControlsConstraintsAndSpeeds() {
   mapControls.zoomSpeed = 0.6
   mapControls.panSpeed = 1 * speedScale
   mapControls.keyPanSpeed = 7.5 * speedScale
-
-  // debug logs removed
-
-  // When users report wheel stops working, it's often because controls are disabled
-  // or distance hits a clamp. Surface both conditions quickly.
-  if (!mapControls.enabled) {
-    // debug logs removed
-  } else {
-    const eps = 1e-6
-    if (distance <= mapControls.minDistance + eps) {
-      // debug logs removed
-    }
-    if (distance >= mapControls.maxDistance - eps) {
-      // debug logs removed
-    }
-  }
-
   syncCameraClipPlanes({ target, radiusHint: radiusUsed })
 }
 
@@ -13990,8 +13967,6 @@ function applyCameraControlMode() {
   }
 
   mapControls.applyMode(cameraControlMode)
-
-  // debug logs removed
 
   // Apply scale-aware limits/speeds without changing current camera distance.
   if (!lastCameraFocusRadius) {

@@ -5,9 +5,12 @@ import {
   SCENE_PACKAGE_FORMAT,
   SCENE_PACKAGE_VERSION,
   serializeScenePackageManifest,
+  serializeGroundScatterSidecar,
+  serializeGroundSplatSidecar,
   type ProjectExportBundleMetadata,
   type ProjectExportBundleProjectConfig,
   type ProjectExportBundleResourceBreakdown,
+  type GroundRuntimeDynamicMesh,
   type SceneAssetRegistryEntry,
   type SceneJsonExportDocument,
   buildQuantizedTerrainRegionPackPath,
@@ -17,6 +20,8 @@ import {
   type QuantizedTerrainDatasetRootManifest,
 } from '@schema/core'
 import { resolveDocumentGroundNode } from '@schema/groundNode'
+import { GROUND_HEIGHTMAP_SIDECAR_FILENAME, serializeGroundHeightSidecar } from '@/utils/groundHeightSidecar'
+import type { TerrainScatterStoreSnapshot } from '@schema/terrain-scatter'
 import { BUILTIN_WATER_NORMAL_FILENAME, isBuiltinWaterNormalAsset } from '@/constants/builtinAssets'
 import { fetchResourceAsset } from '@/api/resourceAssets'
 import { mapServerAssetToProjectAsset } from '@/api/serverAssetTypes'
@@ -393,6 +398,60 @@ function cloneSceneDocumentForPublishPackageExport(
   document: SceneJsonExportDocument,
 ): ScenePackagePublishSceneDocument {
   return cloneSceneDocumentWithRuntimeGroundSidecars(structuredClone(document) as import('@/types/stored-scene-document').StoredSceneDocument) as ScenePackagePublishSceneDocument
+}
+
+function buildPublishSceneGroundHeightSidecar(
+  document: ScenePackagePublishSceneDocument,
+): ArrayBuffer | null {
+  const groundNode = resolveDocumentGroundNode(document)
+  if (!groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
+    return null
+  }
+  const definition = groundNode.dynamicMesh as GroundRuntimeDynamicMesh
+  if (!definition.manualHeightMap || !definition.planningHeightMap) {
+    return null
+  }
+  return serializeGroundHeightSidecar(definition)
+}
+
+function buildPublishSceneGroundSplatSidecar(
+  document: ScenePackagePublishSceneDocument,
+): ArrayBuffer | null {
+  const groundNode = resolveDocumentGroundNode(document)
+  if (!groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
+    return null
+  }
+  const definition = groundNode.dynamicMesh as GroundRuntimeDynamicMesh
+  const groundSurfaceChunks = definition.groundSurfaceChunks ?? definition.groundSplatBake?.chunkTextureMap ?? null
+  if (!groundSurfaceChunks || Object.keys(groundSurfaceChunks).length <= 0) {
+    return null
+  }
+  return serializeGroundSplatSidecar({
+    groundNodeId: groundNode.id,
+    revision: Number.isFinite(definition.groundSplatBake?.revision)
+      ? Math.max(0, Math.trunc(Number(definition.groundSplatBake?.revision)))
+      : 0,
+    surfaceLayerTextureAssetIds: definition.groundSplatBake?.surfaceLayerTextureAssetIds ?? null,
+    groundSurfaceChunks,
+  })
+}
+
+function buildPublishSceneGroundScatterSidecar(
+  document: ScenePackagePublishSceneDocument,
+): ArrayBuffer | null {
+  const groundNode = resolveDocumentGroundNode(document)
+  if (!groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
+    return null
+  }
+  const definition = groundNode.dynamicMesh as GroundRuntimeDynamicMesh & { terrainScatter?: TerrainScatterStoreSnapshot | null }
+  const terrainScatter = definition.terrainScatter ?? null
+  if (!terrainScatter || !Array.isArray(terrainScatter.layers) || terrainScatter.layers.length <= 0) {
+    return null
+  }
+  return serializeGroundScatterSidecar({
+    groundNodeId: groundNode.id,
+    terrainScatter,
+  })
 }
 
 function collectRuntimeRetainedConfigAssetIds(
@@ -1491,6 +1550,7 @@ export async function prepareScenePackagePublishZipFiles(payload: ScenePackagePu
     }
     const scenePath = `scenes/${encodeURIComponent(scene.id)}/scene.bin`
     let planningPath: string | undefined
+    let groundHeightPath: string | undefined
     let groundSplatPath: string | undefined
     let groundScatterPath: string | undefined
     let terrain: ScenePackageManifestV1['scenes'][number]['terrain'] | undefined
@@ -1555,6 +1615,22 @@ export async function prepareScenePackagePublishZipFiles(payload: ScenePackagePu
       resources,
     })
 
+    const groundHeightSidecar = buildPublishSceneGroundHeightSidecar(preparedDocument)
+    if (groundHeightSidecar) {
+      groundHeightPath = `scenes/${encodeURIComponent(scene.id)}/${GROUND_HEIGHTMAP_SIDECAR_FILENAME}`
+      files[groundHeightPath] = new Uint8Array(groundHeightSidecar)
+    }
+    const groundSplatSidecar = buildPublishSceneGroundSplatSidecar(preparedDocument)
+    if (groundSplatSidecar) {
+      groundSplatPath = `scenes/${encodeURIComponent(scene.id)}/ground-splat.bin`
+      files[groundSplatPath] = new Uint8Array(groundSplatSidecar)
+    }
+    const groundScatterSidecar = buildPublishSceneGroundScatterSidecar(preparedDocument)
+    if (groundScatterSidecar) {
+      groundScatterPath = `scenes/${encodeURIComponent(scene.id)}/ground-scatter.bin`
+      files[groundScatterPath] = new Uint8Array(groundScatterSidecar)
+    }
+
     stripGroundBakedTextureAssetIds(groundNode)
 
     terrain = await attachPublishTerrainPackage(scene.id, groundNode as NonNullable<ReturnType<typeof resolveDocumentGroundNode>>, storedTerrainDatasetManifest, scenesStore, files)
@@ -1602,6 +1678,7 @@ export async function prepareScenePackagePublishZipFiles(payload: ScenePackagePu
       sceneId: scene.id,
       path: scenePath,
       planningPath,
+      groundHeightPath,
       groundSplatPath,
       groundScatterPath,
       terrain,

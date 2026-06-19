@@ -432,12 +432,25 @@ export function createWallRenderer(options: WallRendererOptions) {
       try {
         let group = getCachedModelObject(assetId)
         if (!group) {
-          const asset = useSceneStore().getAsset(assetId)
-          const file = await options.assetCacheStore.ensureAssetFile(assetId, { asset })
+          const sceneStore = useSceneStore()
+          const requestedAsset = sceneStore.getAsset(assetId)
+          const resolvedAsset = requestedAsset
+            ? await sceneStore.resolvePlaceableAsset(requestedAsset).catch((error) => {
+                console.warn('[WallRenderer] Failed to resolve wall asset', assetId, error)
+                return null
+              })
+            : null
+          const loadAsset = resolvedAsset?.modelAsset ?? requestedAsset
+          const file = await options.assetCacheStore.ensureAssetFile(assetId, { asset: loadAsset ?? undefined })
           if (!file) {
+            console.warn('[WallRenderer] Failed to load wall asset file', {
+              assetId,
+              resolvedAssetId: resolvedAsset?.modelAsset?.id ?? requestedAsset?.id ?? null,
+              assetType: loadAsset?.type ?? null,
+            })
             return
           }
-          const ext = asset?.extension ?? undefined
+          const ext = file.name.split('.').pop()?.toLowerCase() ?? undefined
           group = await getOrLoadModelObject(assetId, () => loadObjectFromFile(file, ext))
           options.assetCacheStore.releaseInMemoryBlob(assetId)
         }
@@ -451,6 +464,7 @@ export function createWallRenderer(options: WallRendererOptions) {
           scheduleWallResync(nodeId)
         }
       } catch {
+        console.warn('[WallRenderer] Failed to preload wall asset', assetId)
       } finally {
         wallModelRequestCache.delete(assetId)
       }

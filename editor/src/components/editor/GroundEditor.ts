@@ -871,7 +871,6 @@ const SCATTER_CLICK_DRAG_THRESHOLD_PX = 6
 const SCATTER_DOUBLE_CLICK_INTERVAL_MS = 320
 const SCATTER_DOUBLE_CLICK_DISTANCE_PX = 8
 const SCATTER_ERASE_COMMIT_INTERVAL_MS = 16
-const SCATTER_PERF_REPORT_INTERVAL_MS = 1000
 const SCATTER_PREVIEW_REFRESH_INTERVAL_MS = 33
 const SCATTER_PREVIEW_MIN_MOVE_METERS = 0.1
 const SCULPT_POLYGON_DOUBLE_CLICK_INTERVAL_MS = 320
@@ -1169,85 +1168,6 @@ const pendingScatterChunkKeys = new Set<string>()
 let pendingScatterAssetCleanup: Promise<void> | null = null
 let scatterAssetCleanupQueued = false
 const pendingScatterAssetCleanupIds = new Set<string>()
-
-type ScatterPerfMetrics = {
-	eraseCommits: number
-	eraseDurationMs: number
-	eraseRemovedLayers: number
-	eraseRemovedInstances: number
-	restoreCalls: number
-	restoreDurationMs: number
-	lastReportAt: number
-}
-
-const scatterPerfMetrics: ScatterPerfMetrics = {
-	eraseCommits: 0,
-	eraseDurationMs: 0,
-	eraseRemovedLayers: 0,
-	eraseRemovedInstances: 0,
-	restoreCalls: 0,
-	restoreDurationMs: 0,
-	lastReportAt: 0,
-}
-
-function isScatterPerfDebugEnabled(): boolean {
-	const flag = (globalThis as { __HARMONY_SCATTER_PERF__?: unknown }).__HARMONY_SCATTER_PERF__
-	return flag === true
-}
-
-function flushScatterPerfMetricsIfNeeded(force = false): void {
-	if (!isScatterPerfDebugEnabled()) {
-		return
-	}
-	const now = typeof performance !== 'undefined' && typeof performance.now === 'function'
-		? performance.now()
-		: Date.now()
-	if (!force && now - scatterPerfMetrics.lastReportAt < SCATTER_PERF_REPORT_INTERVAL_MS) {
-		return
-	}
-	scatterPerfMetrics.lastReportAt = now
-	if (
-		scatterPerfMetrics.eraseCommits <= 0
-		&& scatterPerfMetrics.restoreCalls <= 0
-		&& scatterPerfMetrics.eraseRemovedInstances <= 0
-	) {
-		return
-	}
-	console.info('[ScatterPerf]', {
-		eraseCommits: scatterPerfMetrics.eraseCommits,
-		eraseDurationMs: Number(scatterPerfMetrics.eraseDurationMs.toFixed(2)),
-		eraseRemovedLayers: scatterPerfMetrics.eraseRemovedLayers,
-		eraseRemovedInstances: scatterPerfMetrics.eraseRemovedInstances,
-		restoreCalls: scatterPerfMetrics.restoreCalls,
-		restoreDurationMs: Number(scatterPerfMetrics.restoreDurationMs.toFixed(2)),
-	})
-	scatterPerfMetrics.eraseCommits = 0
-	scatterPerfMetrics.eraseDurationMs = 0
-	scatterPerfMetrics.eraseRemovedLayers = 0
-	scatterPerfMetrics.eraseRemovedInstances = 0
-	scatterPerfMetrics.restoreCalls = 0
-	scatterPerfMetrics.restoreDurationMs = 0
-}
-
-function recordScatterErasePerf(durationMs: number, removedLayers: number, removedInstances: number): void {
-	if (!isScatterPerfDebugEnabled()) {
-		return
-	}
-	scatterPerfMetrics.eraseCommits += 1
-	scatterPerfMetrics.eraseDurationMs += Math.max(0, durationMs)
-	scatterPerfMetrics.eraseRemovedLayers += Math.max(0, removedLayers)
-	scatterPerfMetrics.eraseRemovedInstances += Math.max(0, removedInstances)
-	flushScatterPerfMetricsIfNeeded(false)
-}
-
-function recordScatterRestorePerf(durationMs: number): void {
-	if (!isScatterPerfDebugEnabled()) {
-		return
-	}
-	scatterPerfMetrics.restoreCalls += 1
-	scatterPerfMetrics.restoreDurationMs += Math.max(0, durationMs)
-	flushScatterPerfMetricsIfNeeded(false)
-}
 
 type SculptSessionState = {
 	nodeId: string
@@ -2639,45 +2559,43 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	async function restoreGroupdScatter(): Promise<void> {
-		const perfStart = nowMs()
-		try {
-			const store = ensureScatterStoreRef()
-			const groundMesh = getGroundObject()
-			const definition = getGroundDynamicMeshDefinition()
-			if (!groundMesh || !definition) {
-				return
-			}
-			updateGroundChunks(groundMesh, definition, options.getCamera())
-			if (store.layers.size === 0) {
-				return
-			}
+		const store = ensureScatterStoreRef()
+		const groundMesh = getGroundObject()
+		const definition = getGroundDynamicMeshDefinition()
+		if (!groundMesh || !definition) {
+			return
+		}
+		updateGroundChunks(groundMesh, definition, options.getCamera())
+		if (store.layers.size === 0) {
+			return
+		}
 
-			if (isScatterChunkStreamingEnabled()) {
-				// Prepare/normalize LOD preset payloads once; binding is handled by chunk streaming.
-				for (const layer of store.layers.values()) {
-					const lodPresetId = getScatterLayerLodPresetId(layer)
-					if (!lodPresetId) {
-						continue
-					}
-					await ensureScatterLodPresetCached(lodPresetId)
-					if (scatterLodPresetCache.get(lodPresetId)) {
-						const payload = (layer.params?.payload && typeof layer.params.payload === 'object')
-							? ({ ...(layer.params.payload as Record<string, unknown>) } as Record<string, unknown>)
-							: ({} as Record<string, unknown>)
-						if (payload.lodPresetAssetId !== lodPresetId) {
-							payload.lodPresetAssetId = lodPresetId
-							upsertTerrainScatterLayer(store, { id: layer.id, params: { payload } })
-						}
+		if (isScatterChunkStreamingEnabled()) {
+			// Prepare/normalize LOD preset payloads once; binding is handled by chunk streaming.
+			for (const layer of store.layers.values()) {
+				const lodPresetId = getScatterLayerLodPresetId(layer)
+				if (!lodPresetId) {
+					continue
+				}
+				await ensureScatterLodPresetCached(lodPresetId)
+				if (scatterLodPresetCache.get(lodPresetId)) {
+					const payload = (layer.params?.payload && typeof layer.params.payload === 'object')
+						? ({ ...(layer.params.payload as Record<string, unknown>) } as Record<string, unknown>)
+						: ({} as Record<string, unknown>)
+					if (payload.lodPresetAssetId !== lodPresetId) {
+						payload.lodPresetAssetId = lodPresetId
+						upsertTerrainScatterLayer(store, { id: layer.id, params: { payload } })
 					}
 				}
-				updateScatterChunkStreaming(true)
-				updateScatterChunkStreamingVisibilityAndGrace(true)
-				const restoreBindingToken = scatterChunkStreamingToken
-				for (const nodeId of Array.from(scatterChunkStreamingLastFrustumVisibleIds.values())) {
-					await bindScatterChunkStreamingNodeId(nodeId, restoreBindingToken)
-				}
-				return
 			}
+			updateScatterChunkStreaming(true)
+			updateScatterChunkStreamingVisibilityAndGrace(true)
+			const restoreBindingToken = scatterChunkStreamingToken
+			for (const nodeId of Array.from(scatterChunkStreamingLastFrustumVisibleIds.values())) {
+				await bindScatterChunkStreamingNodeId(nodeId, restoreBindingToken)
+			}
+			return
+		}
 
 		const resolveSelectionAssetId = (instance: TerrainScatterInstance, layer: TerrainScatterLayer): string | null => {
 			return resolveScatterSelectionAssetId(instance, layer)
@@ -2773,10 +2691,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				}
 				scatterRuntimeAssetIdByNodeId.set(buildScatterNodeId(layer.id, instance.id), getScatterRuntimeTargetKey(target))
 			}
-		}
-		} finally {
-			recordScatterRestorePerf(nowMs() - perfStart)
-		}
+	}
 	}
 
 	function ensureScatterStoreRef(): TerrainScatterStore {
@@ -6644,7 +6559,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		groundMesh: THREE.Object3D,
 		definition: GroundDynamicMesh,
 	): boolean {
-		const perfStart = nowMs()
 		const store = ensureScatterStoreRef()
 		const selectedCategory = options.scatterCategory.value
 		let layers = Array.from(store.layers.values()).filter((layer) => layer.category === selectedCategory)
@@ -6655,7 +6569,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			layers = Array.from(store.layers.values())
 		}
 		if (!layers.length) {
-			recordScatterErasePerf(nowMs() - perfStart, 0, 0)
 			return false
 		}
 		const radiusSq = radius * radius
@@ -6683,7 +6596,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			radius,
 		)
 		if (chunkKeys.size === 0) {
-			recordScatterErasePerf(nowMs() - perfStart, 0, 0)
 			return false
 		}
 		const candidateIdsByLayer = new Map<string, Set<string>>()
@@ -6762,7 +6674,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			scatterSidecarPersistPending = true
 			queueScatterAssetCleanup(cleanupAssetIds)
 		}
-		recordScatterErasePerf(nowMs() - perfStart, removedLayerCount, removedInstanceCount)
 		return removed
 	}
 
