@@ -1,4 +1,4 @@
-import type { SceneNode, SceneNodeComponentState, SceneNodeMaterial } from '@schema/core'
+import type { SceneAssetRegistryEntry, SceneNode, SceneNodeComponentState, SceneNodeMaterial } from '@schema/core'
 import { FLOOR_COMPONENT_TYPE, clampFloorComponentProps, type FloorComponentProps } from '@schema/components'
 import type { SceneMaterialTextureRef } from '@schema/core'
 import type { ProjectAsset } from '@/types/project-asset'
@@ -18,6 +18,9 @@ import {
 } from '@/utils/floorPreset'
 import { buildAssetDependencySubset, isSceneAssetRegistry } from '@/utils/assetDependencySubset'
 import { normalizeAssetIdsWithRegistry, normalizeMaterialLikeTextureAssetIds } from '@/utils/assetRegistryIdNormalization'
+import { isServerBackedProviderId } from '@/utils/serverAssetSource'
+import { readServerDownloadBaseUrl } from '@/api/serverApiConfig'
+import { resolveServerAssetDownloadUrl } from '@schema/core'
 
 export type FloorPresetStoreLike = {
   nodes: SceneNode[]
@@ -86,6 +89,173 @@ function collectTextureAssetIdsFromMaterialLike(value: unknown): string[] {
     }
   })
   return Array.from(out)
+}
+
+function formatDebugLog(title: string, payload: Record<string, unknown>): string {
+  try {
+    return `${title}\n${JSON.stringify(payload, null, 2)}`
+  } catch (error) {
+    return `${title}\n{"error":"Failed to stringify debug payload","message":"${(error as Error)?.message ?? String(error)}"}`
+  }
+}
+
+function normalizeHttpUrl(value: string | null | undefined): string | null {
+  if (!value) {
+    return null
+  }
+  const trimmed = value.trim()
+  return /^https?:\/\//i.test(trimmed) ? trimmed : null
+}
+
+function cloneSceneAssetRegistryEntry(entry: SceneAssetRegistryEntry): SceneAssetRegistryEntry {
+  if (entry.sourceType === 'package') {
+    return {
+      sourceType: 'package',
+      zipPath: entry.zipPath,
+      inline: entry.inline,
+      bytes: entry.bytes,
+      assetType: entry.assetType,
+      name: entry.name,
+    }
+  }
+  if (entry.sourceType === 'url') {
+    return {
+      sourceType: 'url',
+      url: entry.url,
+      bytes: entry.bytes,
+      assetType: entry.assetType,
+      name: entry.name,
+    }
+  }
+  return {
+    sourceType: 'server',
+    serverAssetId: entry.serverAssetId,
+    fileKey: entry.fileKey,
+    resolvedUrl: entry.resolvedUrl,
+    bytes: entry.bytes,
+    assetType: entry.assetType,
+    name: entry.name,
+  }
+}
+
+function buildFloorPresetDependencyRegistryEntry(asset: ProjectAsset): SceneAssetRegistryEntry | null {
+  const assetId = typeof asset.id === 'string' ? asset.id.trim() : ''
+  if (!assetId) {
+    return null
+  }
+
+  const assetType = asset.type
+  const name = typeof asset.name === 'string' && asset.name.trim().length ? asset.name.trim() : undefined
+  const remoteCandidate =
+    normalizeHttpUrl(asset.downloadUrl)
+    ?? normalizeHttpUrl(asset.description)
+    ?? normalizeHttpUrl(asset.thumbnail)
+
+  const source = asset.source ?? null
+  if (source?.type === 'local') {
+    return {
+      sourceType: 'package',
+      zipPath: `local::${assetId}`,
+      assetType,
+      name,
+    }
+  }
+
+  if (source?.type === 'server') {
+    return {
+      sourceType: 'server',
+      serverAssetId: typeof source.serverAssetId === 'string' && source.serverAssetId.trim().length
+        ? source.serverAssetId.trim()
+        : assetId,
+      fileKey: asset.fileKey ?? null,
+      resolvedUrl: remoteCandidate,
+      bytes: undefined,
+      assetType,
+      name,
+    }
+  }
+
+  if (source?.type === 'package') {
+    if (isServerBackedProviderId(source.providerId)) {
+      return {
+        sourceType: 'server',
+        serverAssetId: typeof source.originalAssetId === 'string' && source.originalAssetId.trim().length
+          ? source.originalAssetId.trim()
+          : assetId,
+        fileKey: asset.fileKey ?? null,
+        resolvedUrl: remoteCandidate,
+        bytes: undefined,
+        assetType,
+        name,
+      }
+    }
+    return {
+      sourceType: 'package',
+      zipPath: `${source.providerId}::${source.originalAssetId ?? assetId}`,
+      assetType,
+      name,
+    }
+  }
+
+  if (source?.type === 'url' || remoteCandidate) {
+    return {
+      sourceType: 'url',
+      url: remoteCandidate ?? asset.downloadUrl,
+      bytes: undefined,
+      assetType,
+      name,
+    }
+  }
+
+  const serverResolvedUrl = resolveServerAssetDownloadUrl({
+    assetBaseUrl: readServerDownloadBaseUrl(),
+    fileKey: asset.fileKey ?? null,
+    downloadUrl: asset.downloadUrl ?? null,
+  })
+  if (serverResolvedUrl) {
+    return {
+      sourceType: 'server',
+      serverAssetId: assetId,
+      fileKey: asset.fileKey ?? null,
+      resolvedUrl: serverResolvedUrl,
+      bytes: undefined,
+      assetType,
+      name,
+    }
+  }
+
+  return null
+}
+
+function buildFloorPresetDependencyRegistrySource(
+  store: FloorPresetStoreLike,
+  assetIds: string[],
+  baseRegistry?: Record<string, SceneAssetRegistryEntry> | null,
+): Record<string, SceneAssetRegistryEntry> {
+  const nextRegistry: Record<string, SceneAssetRegistryEntry> = {}
+  Object.entries(baseRegistry ?? {}).forEach(([assetId, entry]) => {
+    if (!assetId || !entry) {
+      return
+    }
+    nextRegistry[assetId] = cloneSceneAssetRegistryEntry(entry)
+  })
+
+  for (const assetId of assetIds) {
+    const normalizedAssetId = typeof assetId === 'string' ? assetId.trim() : ''
+    if (!normalizedAssetId || nextRegistry[normalizedAssetId]) {
+      continue
+    }
+    const asset = store.getAsset(normalizedAssetId)
+    if (!asset) {
+      continue
+    }
+    const entry = buildFloorPresetDependencyRegistryEntry(asset)
+    if (entry) {
+      nextRegistry[normalizedAssetId] = entry
+    }
+  }
+
+  return nextRegistry
 }
 
 export function collectFloorPresetDependencyAssetIds(
@@ -416,6 +586,8 @@ export function createFloorPresetActions(deps: FloorPresetActionsDeps) {
         ),
       )
 
+      const dependencyRegistrySource = buildFloorPresetDependencyRegistrySource(store, dependencyAssetIds, store.assetRegistry)
+
       const presetData: FloorPresetData = {
         kind: 'floor-preset',
         formatVersion: FLOOR_PRESET_FORMAT_VERSION,
@@ -432,7 +604,7 @@ export function createFloorPresetActions(deps: FloorPresetActionsDeps) {
       if (dependencyAssetIds.length) {
         const dependencySubset = buildAssetDependencySubset({
           assetIds: dependencyAssetIds,
-          assetRegistry: store.assetRegistry,
+          assetRegistry: dependencyRegistrySource,
         })
         if (dependencySubset.assetRegistry) {
           presetData.assetRegistry = dependencySubset.assetRegistry
@@ -532,6 +704,7 @@ export function createFloorPresetActions(deps: FloorPresetActionsDeps) {
       if (preset.assetRegistry !== undefined && preset.assetRegistry !== null && !isSceneAssetRegistry(preset.assetRegistry)) {
         throw new Error('地板预设 assetRegistry 格式无效')
       }
+
       return preset
     },
 
@@ -558,6 +731,22 @@ export function createFloorPresetActions(deps: FloorPresetActionsDeps) {
       const presetAssetRegistry = isSceneAssetRegistry(preset.assetRegistry)
         ? preset.assetRegistry
         : undefined
+
+      console.info(formatDebugLog('[floorPresetActions] Applying floor preset dependencies', {
+        nodeId,
+        assetId,
+        dependencyAssetIds,
+        assetRegistryKeys: Object.keys(presetAssetRegistry ?? {}),
+        materialConfig: preset.materialConfig,
+        materialOrder: preset.materialOrder,
+      }))
+
+      if (presetAssetRegistry) {
+        store.assetRegistry = {
+          ...store.assetRegistry,
+          ...presetAssetRegistry,
+        }
+      }
 
       if (dependencyAssetIds.length) {
         await store.ensurePrefabDependencies(dependencyAssetIds, {

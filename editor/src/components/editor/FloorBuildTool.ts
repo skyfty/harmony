@@ -77,7 +77,7 @@ export function createFloorBuildTool(options: {
   }) => void
   getFloorBrush: () => { presetAssetId: string | null; presetData: FloorPresetData | null }
   applyFloorPreviewMaterials?: (group: THREE.Group, presetData: FloorPresetData | null) => void
-  syncCreatedFloorMaterials?: (nodeId: string) => void
+  syncCreatedFloorMaterials?: (nodeId: string) => void | Promise<void>
   clickDragThresholdPx: number
 }): FloorBuildToolHandle {
   const DOUBLE_CLICK_MAX_INTERVAL_MS = 320
@@ -410,7 +410,7 @@ export function createFloorBuildTool(options: {
     return true
   }
 
-  const finalize = () => {
+  const finalize = async () => {
     if (!session) {
       return
     }
@@ -430,7 +430,11 @@ export function createFloorBuildTool(options: {
 
     if (created) {
       options.sceneStore.updateNodeUserData(created.id, mergeUserDataWithDynamicMeshBuildShape(created.userData, buildShape))
-      options.syncCreatedFloorMaterials?.(created.id)
+      try {
+        await options.syncCreatedFloorMaterials?.(created.id)
+      } catch (error) {
+        console.warn('Failed to wait for floor textures before finishing build', created.id, error)
+      }
       options.sceneStore.selectNode(created.id)
     }
 
@@ -441,7 +445,7 @@ export function createFloorBuildTool(options: {
     }
   }
 
-  const finalizeFromVertices = (vertices: THREE.Vector3[]) => {
+  const finalizeFromVertices = async (vertices: THREE.Vector3[]) => {
     const buildShape = session?.shape ?? 'polygon'
     const points = vertices
       .map((p) => new THREE.Vector3(Number(p.x), Number(p.y), Number(p.z)))
@@ -459,7 +463,11 @@ export function createFloorBuildTool(options: {
 
     if (created) {
       options.sceneStore.updateNodeUserData(created.id, mergeUserDataWithDynamicMeshBuildShape(created.userData, buildShape))
-      options.syncCreatedFloorMaterials?.(created.id)
+      try {
+        await options.syncCreatedFloorMaterials?.(created.id)
+      } catch (error) {
+        console.warn('Failed to wait for floor textures before finishing build', created.id, error)
+      }
       options.sceneStore.selectNode(created.id)
     }
 
@@ -515,7 +523,7 @@ export function createFloorBuildTool(options: {
     if (!rectangle || rectangle.width * rectangle.depth <= 1e-6) {
       return true
     }
-    finalizeFromVertices(rectangle.corners)
+    void finalizeFromVertices(rectangle.corners)
     return true
   }
 
@@ -648,7 +656,7 @@ export function createFloorBuildTool(options: {
           }
 
           const circleVerts = buildFloorCircleOrRegularPolygonPoints(center, end, getRegularPolygonSides())
-          finalizeFromVertices(circleVerts)
+          void finalizeFromVertices(circleVerts)
           return true
         }
       }
@@ -663,7 +671,7 @@ export function createFloorBuildTool(options: {
         const handled = handlePlacementClick(event)
         if (handled) {
           if (isLeftDoubleClick(event) && (session?.shape === 'polygon') && (session.points.length >= 3)) {
-            finalize()
+            void finalize()
           }
           event.preventDefault()
           event.stopPropagation()

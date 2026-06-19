@@ -1434,6 +1434,55 @@ function refreshFloorRuntimeMaterials(nodeId: string, targetObject: THREE.Object
   }
 }
 
+function collectFloorMaterialTextureRefs(materials: SceneNodeMaterial[] | null | undefined): SceneMaterialTextureRef[] {
+  if (!Array.isArray(materials) || !materials.length) {
+    return []
+  }
+
+  const seen = new Set<string>()
+  const textureRefs: SceneMaterialTextureRef[] = []
+
+  materials.forEach((material) => {
+    Object.values(material.textures ?? {}).forEach((ref) => {
+      const assetId = typeof ref?.assetId === 'string' ? ref.assetId.trim() : ''
+      if (!assetId || seen.has(assetId) || !ref) {
+        return
+      }
+      seen.add(assetId)
+      textureRefs.push(ref)
+    })
+  })
+
+  return textureRefs
+}
+
+async function ensureFloorMaterialTexturesReady(materials: SceneNodeMaterial[] | null | undefined): Promise<void> {
+  const textureRefs = collectFloorMaterialTextureRefs(materials)
+  if (!textureRefs.length) {
+    return
+  }
+
+  await Promise.all(
+    textureRefs.map(async (ref) => {
+      await Promise.resolve(resolveMaterialTexture(ref))
+    }),
+  )
+}
+
+async function syncCreatedFloorMaterials(nodeId: string): Promise<void> {
+  const node = findSceneNode(sceneStore.nodes, nodeId)
+  if (!node || node.dynamicMesh?.type !== 'Floor') {
+    return
+  }
+
+  await ensureFloorMaterialTexturesReady(node.materials)
+
+  const runtimeObject = objectMap.get(nodeId) ?? null
+  if (runtimeObject) {
+    refreshFloorRuntimeMaterials(nodeId, runtimeObject)
+  }
+}
+
 function resolveSharedGroundRuntimeMaterial(targetObject: THREE.Object3D): THREE.Material | null {
   const groundObject = resolveGroundRuntimeObject(targetObject)
   if (!groundObject) {
@@ -8065,15 +8114,27 @@ let landformBrushPresetLoadToken = 0
 const roadBrushPresetData = ref<RoadPresetData | null>(null)
 let roadBrushPresetLoadToken = 0
 
+function ensurePresetAssetRegistered(asset: ProjectAsset): ProjectAsset {
+  try {
+    return sceneStore.ensureSceneAssetRegistered(asset, {
+      source: asset.source ?? { type: 'url' },
+      commitOptions: { updateNodes: false },
+    })
+  } catch (error) {
+    console.warn('Failed to register selected preset asset', asset.id, error)
+    return asset
+  }
+}
+
 function handleWallPresetDialogUpdate(asset: ProjectAsset | null): void {
   wallPresetDialogOpen.value = false
   wallPresetDialogAnchor.value = null
   // If a wall preset was selected, clear any current selection and
   // immediately activate the wall build tool so the user can begin building.
-  const assetId = asset?.id ?? null
-  if (assetId) {
+  if (asset) {
+    const registeredAsset = ensurePresetAssetRegistered(asset)
     sceneStore.setSelection([])
-    buildToolsStore.setWallBrushPresetAssetId(assetId, { activate: true })
+    buildToolsStore.setWallBrushPresetAssetId(registeredAsset.id, { activate: true })
   } else {
     buildToolsStore.setWallBrushPresetAssetId(null)
   }
@@ -8087,30 +8148,30 @@ function handleWallPresetDialogCancel(): void {
 function handleFloorPresetDialogUpdate(asset: ProjectAsset | null): void {
   // If a floor preset was selected, clear any current selection and
   // immediately activate the floor build tool so the user can begin building.
-  const assetId = asset?.id ?? null
-  if (assetId) {
+  if (asset) {
+    const registeredAsset = ensurePresetAssetRegistered(asset)
     sceneStore.setSelection([])
-    buildToolsStore.setFloorBrushPresetAssetId(assetId, { activate: true })
+    buildToolsStore.setFloorBrushPresetAssetId(registeredAsset.id, { activate: true })
   } else {
     buildToolsStore.setFloorBrushPresetAssetId(null)
   }
 }
 
 function handleLandformPresetDialogUpdate(asset: ProjectAsset | null): void {
-  const assetId = asset?.id ?? null
-  if (assetId) {
+  if (asset) {
+    const registeredAsset = ensurePresetAssetRegistered(asset)
     sceneStore.setSelection([])
-    buildToolsStore.setLandformBrushPresetAssetId(assetId, { activate: true })
+    buildToolsStore.setLandformBrushPresetAssetId(registeredAsset.id, { activate: true })
   } else {
     buildToolsStore.setLandformBrushPresetAssetId(null)
   }
 }
 
 function handleRoadPresetDialogUpdate(asset: ProjectAsset | null): void {
-  const assetId = asset?.id ?? null
-  if (assetId) {
+  if (asset) {
+    const registeredAsset = ensurePresetAssetRegistered(asset)
     sceneStore.setSelection([])
-    buildToolsStore.setRoadBrushPresetAssetId(assetId, { activate: true })
+    buildToolsStore.setRoadBrushPresetAssetId(registeredAsset.id, { activate: true })
   } else {
     buildToolsStore.setRoadBrushPresetAssetId(null)
   }
@@ -8387,12 +8448,7 @@ const floorBuildTool = createFloorBuildTool({
     presetData: floorBrushPresetData.value,
   }),
   applyFloorPreviewMaterials: (group, presetData) => applyFloorPreviewMaterials(group, presetData),
-  syncCreatedFloorMaterials: (nodeId) => {
-    const runtimeObject = objectMap.get(nodeId) ?? null
-    if (runtimeObject) {
-      refreshFloorRuntimeMaterials(nodeId, runtimeObject)
-    }
-  },
+  syncCreatedFloorMaterials,
   clickDragThresholdPx: CLICK_DRAG_THRESHOLD_PX,
 })
 
@@ -9462,9 +9518,10 @@ async function handleConfirmAutoOverlay(): Promise<void> {
           created.id,
           mergeUserDataWithDynamicMeshBuildShape(created.userData, targetShape),
         )
-        const runtimeObject = objectMap.get(created.id) ?? null
-        if (runtimeObject) {
-          refreshFloorRuntimeMaterials(created.id, runtimeObject)
+        try {
+          await syncCreatedFloorMaterials(created.id)
+        } catch (error) {
+          console.warn('Failed to wait for floor textures before finishing build', created.id, error)
         }
         sceneStore.selectNode(created.id)
       }

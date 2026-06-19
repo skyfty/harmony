@@ -87,23 +87,6 @@ async function hydrateDraft(): Promise<void> {
   }
 }
 
-async function preparePickedAsset(asset: ProjectAsset): Promise<ProjectAsset | null> {
-  if (asset.type !== 'model' && asset.type !== 'mesh' && asset.type !== 'lod') {
-    return null
-  }
-
-  if (asset.type === 'lod') {
-    await sceneStore.prepareLodAsset(asset)
-    return asset
-  }
-
-  if (!assetCacheStore.hasCache(asset.id) && !assetCacheStore.isDownloading(asset.id)) {
-    await assetCacheStore.downloadProjectAsset(asset)
-  }
-
-  return asset
-}
-
 watch(
   () => [isOpen.value, mode.value, assetId.value] as const,
   async ([open]) => {
@@ -194,26 +177,14 @@ function handleRowDragEnd(): void {
 }
 
 function handlePickerConfirm(assets: ProjectAsset[]): void {
-  void (async () => {
-    const preparedAssets: ProjectAsset[] = []
-    for (const asset of assets) {
-      if (asset.type !== 'model' && asset.type !== 'mesh' && asset.type !== 'lod') {
-        continue
-      }
-      const prepared = await preparePickedAsset(asset)
-      if (prepared) {
-        preparedAssets.push(prepared)
-      }
-    }
+  const nextIds = assets
+    .map((asset) => asset.id)
+    .filter((id) => typeof id === 'string' && id.trim().length > 0)
 
-    const nextIds = preparedAssets.map((asset) => asset.id)
-    draftAssetIds.value = normalizeAssetIds([...draftAssetIds.value, ...nextIds])
-    draftSelectionIds.value = []
-    pickerSelectedAssetIds.value = []
-    pickerOpen.value = false
-  })().catch((error) => {
-    dialogError.value = error instanceof Error ? error.message : 'Failed to prepare selected assets'
-  })
+  draftAssetIds.value = normalizeAssetIds([...draftAssetIds.value, ...nextIds])
+  draftSelectionIds.value = []
+  pickerSelectedAssetIds.value = []
+  pickerOpen.value = false
 }
 
 function handlePickerCancel(): void {

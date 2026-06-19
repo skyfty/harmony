@@ -145,6 +145,18 @@ function resolveAsset(assetId?: string | null): ProjectAsset | null {
   return sceneStore.getAsset(assetId) ?? null
 }
 
+function ensureLodAssetRegistered(asset: ProjectAsset): ProjectAsset {
+  try {
+    return sceneStore.ensureSceneAssetRegistered(asset, {
+      source: asset.source ?? { type: 'url' },
+      commitOptions: { updateNodes: false },
+    })
+  } catch (error) {
+    console.warn('Failed to register selected LOD asset', asset.id, error)
+    return asset
+  }
+}
+
 function resolveAssetPreviewStyle(asset: ProjectAsset | null): Record<string, string> {
   if (!asset) {
     return {
@@ -358,12 +370,13 @@ async function handleModelAssetDialogUpdate(asset: ProjectAsset | null): Promise
         console.warn('Selected asset is not an image/texture')
         return
       }
-      const cached = await ensureBillboardAssetCached(asset)
+      const registeredAsset = ensureLodAssetRegistered(asset)
+      const cached = await ensureBillboardAssetCached(registeredAsset)
       if (!cached) {
-        console.warn('Selected billboard asset is not cached and cannot be downloaded', asset.id)
+        console.warn('Selected billboard asset is not cached and cannot be downloaded', registeredAsset.id)
         return
       }
-      assignLevelAsset(index, asset.id)
+      assignLevelAsset(index, registeredAsset.id)
       modelAssetDialogVisible.value = false
       return
     }
@@ -373,12 +386,13 @@ async function handleModelAssetDialogUpdate(asset: ProjectAsset | null): Promise
       return
     }
 
-    const cached = await ensureModelAssetCached(asset)
+    const registeredAsset = ensureLodAssetRegistered(asset)
+    const cached = await ensureModelAssetCached(registeredAsset)
     if (!cached) {
-      console.warn('Selected model asset is not cached and cannot be downloaded', asset.id)
+      console.warn('Selected model asset is not cached and cannot be downloaded', registeredAsset.id)
       return
     }
-    assignLevelAsset(index, asset.id)
+    assignLevelAsset(index, registeredAsset.id)
     modelAssetDialogVisible.value = false
   } catch (error) {
     console.warn('Failed to download selected LOD asset', asset.id, error)
@@ -416,6 +430,10 @@ async function handleDropPreset(event: DragEvent): Promise<void> {
     return
   }
   try {
+    const asset = resolveAsset(assetId)
+    if (asset) {
+      ensureLodAssetRegistered(asset)
+    }
     await sceneStore.applyLodPresetToNode(nodeId, assetId)
   } catch (error) {
     console.warn('Failed to apply LOD preset', error)

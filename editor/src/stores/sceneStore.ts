@@ -16275,6 +16275,12 @@ export const useSceneStore = defineStore('scene', {
       }
 
       const presetMaterials = buildFloorNodeMaterialsFromPreset(payload.floorPresetData)
+      const presetAssetRegistry = payload.floorPresetData?.assetRegistry
+        ? sanitizeSceneAssetRegistry(payload.floorPresetData.assetRegistry) ?? undefined
+        : undefined
+      if (presetAssetRegistry) {
+        this.assetRegistry = upsertAssetRegistryEntries(this.assetRegistry, presetAssetRegistry)
+      }
       // Floors use 2 material slots by default: TopBottom + Side.
       const defaultMaterials = presetMaterials.length
         ? presetMaterials

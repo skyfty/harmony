@@ -407,6 +407,18 @@ function resolveCornerModelAsset(assetId: string | null | undefined): ProjectAss
   return sceneStore.getAsset(assetId) ?? null
 }
 
+function ensureWallAssetRegistered(asset: ProjectAsset): ProjectAsset {
+  try {
+    return sceneStore.ensureSceneAssetRegistered(asset, {
+      source: asset.source ?? { type: 'url' },
+      commitOptions: { updateNodes: false },
+    })
+  } catch (error) {
+    console.warn('Failed to register selected wall asset', asset.id, error)
+    return asset
+  }
+}
+
 watch(
   () => wallComponent.value?.props,
   (props) => {
@@ -967,31 +979,32 @@ async function handleWallAssetDialogUpdate(asset: ProjectAsset | null): Promise<
     console.warn('Selected asset is not a model/mesh')
     return
   }
+  const registeredAsset = ensureWallAssetRegistered(asset)
 
   if (target === 'body') {
-    await applyBodyAssetAndAutofit(asset.id)
+    await applyBodyAssetAndAutofit(registeredAsset.id)
   } else if (target === 'head') {
-    await applyWallHeadOrFootAsset('head', asset.id)
+    await applyWallHeadOrFootAsset('head', registeredAsset.id)
   } else if (target === 'foot') {
-    await applyWallHeadOrFootAsset('foot', asset.id)
+    await applyWallHeadOrFootAsset('foot', registeredAsset.id)
   } else if (target === 'bodyCap') {
     capFeedbackMessage.value = null
-    sceneStore.updateNodeComponentProps(nodeId, component.id, { bodyEndCapAssetId: asset.id } as any)
+    sceneStore.updateNodeComponentProps(nodeId, component.id, { bodyEndCapAssetId: registeredAsset.id } as any)
   } else if (target === 'headCap') {
     headCapFeedbackMessage.value = null
-    sceneStore.updateNodeComponentProps(nodeId, component.id, { headEndCapAssetId: asset.id } as any)
+    sceneStore.updateNodeComponentProps(nodeId, component.id, { headEndCapAssetId: registeredAsset.id } as any)
   } else if (target === 'footCap') {
     footCapFeedbackMessage.value = null
-    sceneStore.updateNodeComponentProps(nodeId, component.id, { footEndCapAssetId: asset.id } as any)
+    sceneStore.updateNodeComponentProps(nodeId, component.id, { footEndCapAssetId: registeredAsset.id } as any)
   } else {
     const index = assetDialogCornerIndex.value
     if (typeof index === 'number' && index >= 0) {
       if (target === 'cornerBody') {
-        updateCornerModel(index, { bodyAssetId: asset.id } as any)
+        updateCornerModel(index, { bodyAssetId: registeredAsset.id } as any)
       } else if (target === 'cornerHead') {
-        updateCornerModel(index, { headAssetId: asset.id } as any)
+        updateCornerModel(index, { headAssetId: registeredAsset.id } as any)
       } else {
-        updateCornerModel(index, { footAssetId: asset.id } as any)
+        updateCornerModel(index, { footAssetId: registeredAsset.id } as any)
       }
     }
   }
@@ -1093,6 +1106,10 @@ async function assignWallAsset(event: DragEvent, target: 'body' | 'head' | 'foot
 
   processing.value = true
   try {
+    const selectedAsset = sceneStore.getAsset(assetId)
+    if (selectedAsset) {
+      ensureWallAssetRegistered(selectedAsset)
+    }
     if (target === 'body') {
       await applyBodyAssetAndAutofit(assetId)
     } else if (target === 'head') {

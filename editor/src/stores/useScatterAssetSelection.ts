@@ -43,6 +43,18 @@ export function useScatterAssetSelection(options?: UseScatterAssetSelectionOptio
     return !!progress?.active
   }
 
+  function ensureScatterAssetRegistered(asset: ProjectAsset): ProjectAsset {
+    try {
+      return sceneStore.ensureSceneAssetRegistered(asset, {
+        source: asset.source ?? { type: 'url' },
+        commitOptions: { updateNodes: false },
+      })
+    } catch (error) {
+      console.warn('Failed to register selected scatter asset', asset.id, error)
+      return asset
+    }
+  }
+
   async function ensureAssetCached(asset: ProjectAsset) {
     if (asset.type === 'lod') {
       await sceneStore.prepareLodAsset(asset)
@@ -119,14 +131,15 @@ export function useScatterAssetSelection(options?: UseScatterAssetSelectionOptio
       return null
     }
 
-    const readyBeforeClick = isSelectionReady(workingAsset)
+    const registeredAsset = ensureScatterAssetRegistered(workingAsset)
+    const readyBeforeClick = isSelectionReady(registeredAsset)
     selectingAssetId.value = source.providerAssetId
     try {
       if (!readyBeforeClick) {
-        if (workingAsset.type === 'lod') {
-          await sceneStore.prepareLodAsset(workingAsset)
+        if (registeredAsset.type === 'lod') {
+          await sceneStore.prepareLodAsset(registeredAsset)
         } else {
-          await ensureAssetCached(workingAsset)
+          await ensureAssetCached(registeredAsset)
         }
         return null
       }
@@ -134,14 +147,14 @@ export function useScatterAssetSelection(options?: UseScatterAssetSelectionOptio
       let selectedAsset: ProjectAsset
       let spacingAsset: ProjectAsset
 
-      if (workingAsset.type === 'lod') {
-        const prepared = await sceneStore.prepareLodAsset(workingAsset)
+      if (registeredAsset.type === 'lod') {
+        const prepared = await sceneStore.prepareLodAsset(registeredAsset)
         selectedAsset = prepared.requestedAsset
         spacingAsset = prepared.modelAsset
       } else {
-        await ensureAssetCached(workingAsset)
-        selectedAsset = workingAsset
-        spacingAsset = workingAsset
+        await ensureAssetCached(registeredAsset)
+        selectedAsset = registeredAsset
+        spacingAsset = registeredAsset
       }
 
       if (options?.updateTerrainSelection !== false) {
