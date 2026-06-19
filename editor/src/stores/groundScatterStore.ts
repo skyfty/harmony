@@ -12,35 +12,6 @@ import {
   type TerrainScatterStoreSnapshot,
 } from '@schema/terrain-scatter'
 
-function formatGroundScatterLog(event: string, fields: Record<string, unknown> = {}): string {
-  const serializedFields = Object.entries(fields)
-    .map(([key, value]) => `${key}=${formatGroundScatterLogValue(value)}`)
-    .join(' | ')
-  return serializedFields
-    ? `[GroundScatterStore] ${event} | ${serializedFields}`
-    : `[GroundScatterStore] ${event}`
-}
-
-function formatGroundScatterLogValue(value: unknown): string {
-  if (value == null) {
-    return 'null'
-  }
-  if (typeof value === 'string') {
-    return JSON.stringify(value)
-  }
-  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
-    return String(value)
-  }
-  if (Array.isArray(value)) {
-    return `[${value.map((entry) => formatGroundScatterLogValue(entry)).join(', ')}]`
-  }
-  try {
-    return JSON.stringify(value)
-  } catch (_error) {
-    return Object.prototype.toString.call(value)
-  }
-}
-
 type GroundScatterRuntimeState = {
   sceneId: string
   nodeId: string
@@ -88,13 +59,6 @@ function replaceRuntimeState(
   runtimeGroundScatters.delete(sceneId)
   const definition = asGroundDynamicMesh(groundNode)
   if (!groundNode || !definition) {
-    console.log(formatGroundScatterLog('replaceRuntimeState skipped', {
-      sceneId,
-      groundNodeId: groundNode?.id ?? null,
-      hasGroundNode: Boolean(groundNode),
-      hasGroundDefinition: Boolean(definition),
-      hasPayload: Boolean(payload),
-    }))
     return
   }
   const state = ensureRuntimeState(sceneId, groundNode.id)
@@ -104,12 +68,6 @@ function replaceRuntimeState(
   } else {
     deleteTerrainScatterStore(groundNode.id)
   }
-  console.log(formatGroundScatterLog('replaceRuntimeState applied', {
-    sceneId,
-    groundNodeId: groundNode.id,
-    layerCount: state.terrainScatter?.layers?.length ?? 0,
-    source: payload ? 'sidecar' : 'empty',
-  }))
 }
 
 function buildPayload(sceneId: string, groundNode: SceneNode | null): GroundScatterSidecarPayload | null {
@@ -142,12 +100,6 @@ export function attachGroundScatterRuntimeToNode(
     ...definition,
     terrainScatter: cloneValue(state.terrainScatter),
   }
-  console.log(formatGroundScatterLog('attach applied', {
-    sceneId,
-    groundNodeId: groundNode.id,
-    layerCount: state.terrainScatter?.layers?.length ?? 0,
-    syncReason: state.lastSyncReason,
-  }))
   return groundNode
 }
 
@@ -173,12 +125,6 @@ export const useGroundScatterStore = defineStore('groundScatter', {
       if (runtimeState) {
         runtimeState.lastSyncReason = 'hydrate'
       }
-      console.log(formatGroundScatterLog('hydrateSceneDocument', {
-        sceneId,
-        groundNodeId: groundNode?.id ?? null,
-        hasSidecar: Boolean(sidecar),
-        layerCount: runtimeState?.terrainScatter?.layers?.length ?? 0,
-      }))
       this.bumpSceneRuntimeVersion(sceneId, 'hydrate')
     },
     clearSceneDocument(sceneId?: string): void {
@@ -226,7 +172,6 @@ export const useGroundScatterStore = defineStore('groundScatter', {
       const reason = typeof options.reason === 'string' && options.reason.trim().length > 0
         ? options.reason.trim()
         : 'unknown'
-      // Callers transfer ownership of terrainScatter into the runtime sidecar store.
       state.terrainScatter = terrainScatter
       state.lastSyncReason = reason
       if (terrainScatter) {
@@ -234,13 +179,6 @@ export const useGroundScatterStore = defineStore('groundScatter', {
       } else {
         deleteTerrainScatterStore(nodeId)
       }
-      console.log(formatGroundScatterLog('replaceTerrainScatter', {
-        sceneId,
-        nodeId,
-        layerCount: terrainScatter?.layers?.length ?? 0,
-        bumpRuntimeVersion: options.bumpRuntimeVersion !== false,
-        reason,
-      }))
       if (options.bumpRuntimeVersion !== false) {
         this.bumpSceneRuntimeVersion(sceneId, reason)
       } else {
@@ -255,11 +193,7 @@ export const useGroundScatterStore = defineStore('groundScatter', {
       const state = ensureRuntimeState(sceneId, nodeId)
       state.terrainScatter = saveTerrainScatterSnapshot(nodeId) ?? null
       state.lastSyncReason = 'capture'
-      console.log(formatGroundScatterLog('captureTerrainScatterSnapshot', {
-        sceneId,
-        nodeId,
-        layerCount: state.terrainScatter?.layers?.length ?? 0,
-      }))
+
       this.bumpSceneRuntimeVersion(sceneId, 'capture')
       return state
     },

@@ -12763,7 +12763,7 @@ async function captureScreenshot(mimeType: string = 'image/png'): Promise<Blob |
 }
 
 async function restoreGroundAllGuarded(): Promise<void> {
-  restoreGroupdScatter()
+  await restoreGroupdScatter()
 }
 
 async function restoreGroundScatterGuarded(): Promise<void> {
@@ -12806,7 +12806,6 @@ watch(isSceneReady, (ready) => {
 watch(
   [isSceneReady, groundScatterRuntimeVersion, groundScatterRuntimeReason],
   ([ready, version, reason], [prevReady, prevVersion, prevReason]) => {
-    console.log(`[SceneViewport][Scatter] runtime watch | ready=${ready} | version=${version} | reason=${JSON.stringify(reason ?? null)} | prevReady=${prevReady} | prevVersion=${prevVersion} | prevReason=${JSON.stringify(prevReason ?? null)}`)
     if (!ready) {
       return
     }
@@ -12817,10 +12816,8 @@ watch(
       return
     }
     if (typeof reason === 'string' && reason.startsWith('editor-local')) {
-      console.log(`[SceneViewport][Scatter] restore skipped | reason=${JSON.stringify(reason)}`)
       return
     }
-    console.log(`[SceneViewport][Scatter] restore requested | version=${version} | reason=${JSON.stringify(reason)}`)
     void restoreGroundScatterGuarded()
   },
 )

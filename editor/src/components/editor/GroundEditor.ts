@@ -259,35 +259,6 @@ function computeSoftBrushFalloff(normalizedDistanceSquared: number, feather: num
 	return 1 - smoothstep
 }
 
-function formatGroundEditorScatterLog(event: string, fields: Record<string, unknown> = {}): string {
-	const serializedFields = Object.entries(fields)
-		.map(([key, value]) => `${key}=${formatGroundEditorScatterLogValue(value)}`)
-		.join(' | ')
-	return serializedFields
-		? `[GroundEditor][Scatter] ${event} | ${serializedFields}`
-		: `[GroundEditor][Scatter] ${event}`
-}
-
-function formatGroundEditorScatterLogValue(value: unknown): string {
-	if (value == null) {
-		return 'null'
-	}
-	if (typeof value === 'string') {
-		return JSON.stringify(value)
-	}
-	if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
-		return String(value)
-	}
-	if (Array.isArray(value)) {
-		return `[${value.map((entry) => formatGroundEditorScatterLogValue(entry)).join(', ')}]`
-	}
-	try {
-		return JSON.stringify(value)
-	} catch (_error) {
-		return Object.prototype.toString.call(value)
-	}
-}
-
 function cloneGroundSurfaceChunks(definition: GroundDynamicMesh): GroundSurfaceChunkTextureMap | null {
 	const source = definition.groundSurfaceChunks
 	if (!source) {
@@ -2381,14 +2352,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return true
 		}
 		if (pendingScatterModelLoads.has(`billboard:${normalized}`)) {
-			console.log(formatGroundEditorScatterLog('ensureScatterBillboardCached pending', {
-				assetId: normalized,
-			}))
 			return false
 		}
-		console.log(formatGroundEditorScatterLog('ensureScatterBillboardCached queue load', {
-			assetId: normalized,
-		}))
 		const task = (async () => {
 			const asset = options.sceneStore.getAsset(normalized)
 			if (!asset || (asset.type !== 'image' && asset.type !== 'texture')) {
@@ -2400,9 +2365,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				console.warn('缓存散布 Billboard 资源失败', normalized, error)
 			}
 			await getOrLoadBillboardInstanceGroup(normalized, async () => resolveCachedAssetUrl(normalized))
-			console.log(formatGroundEditorScatterLog('ensureScatterBillboardCached loaded', {
-				assetId: normalized,
-			}))
 		})()
 			.finally(() => {
 				pendingScatterModelLoads.delete(`billboard:${normalized}`)
@@ -2465,14 +2427,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return true
 		}
 		if (pendingScatterModelLoads.has(normalized)) {
-			console.log(formatGroundEditorScatterLog('ensureScatterModelCached pending', {
-				assetId: normalized,
-			}))
 			return false
 		}
-		console.log(formatGroundEditorScatterLog('ensureScatterModelCached queue load', {
-			assetId: normalized,
-		}))
 		const task = (async () => {
 			const asset = options.sceneStore.getAsset(normalized)
 			if (!asset || (asset.type !== 'model' && asset.type !== 'mesh')) {
@@ -2492,11 +2448,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 					const object = await loadObjectFromFile(file, asset.extension ?? undefined)
 					normalizeScatterMaterials(object)
 					return object
-				})
+		})
 				ensureInstancedMeshesRegistered(normalized)
-				console.log(formatGroundEditorScatterLog('ensureScatterModelCached loaded', {
-					assetId: normalized,
-				}))
 			} finally {
 				assetCacheStore.releaseInMemoryBlob(normalized)
 			}
@@ -2691,24 +2644,11 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			const store = ensureScatterStoreRef()
 			const groundMesh = getGroundObject()
 			const definition = getGroundDynamicMeshDefinition()
-			console.log(formatGroundEditorScatterLog('restoreGroupdScatter start', {
-				sceneId: options.sceneStore.currentSceneId ?? null,
-				hasGroundMesh: Boolean(groundMesh),
-				hasDefinition: Boolean(definition),
-				layerCount: store.layers.size,
-				streamingEnabled: isScatterChunkStreamingEnabled(),
-			}))
 			if (!groundMesh || !definition) {
-				console.log(formatGroundEditorScatterLog('restoreGroupdScatter skipped', {
-					reason: !groundMesh ? 'missing-ground-mesh' : 'missing-definition',
-				}))
 				return
 			}
 			updateGroundChunks(groundMesh, definition, options.getCamera())
 			if (store.layers.size === 0) {
-				console.log(formatGroundEditorScatterLog('restoreGroupdScatter skipped', {
-					reason: 'no-scatter-layers',
-				}))
 				return
 			}
 
@@ -2732,13 +2672,10 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				}
 				updateScatterChunkStreaming(true)
 				updateScatterChunkStreamingVisibilityAndGrace(true)
-				console.log(formatGroundEditorScatterLog('restoreGroupdScatter chunk-streaming mode', {
-					layerCount: store.layers.size,
-					activeChunkCount: scatterActiveChunkKeys.size,
-					visibleCount: scatterChunkStreamingLastFrustumVisibleIds.size,
-					pendingCount: scatterChunkStreamingPendingBindIds.size,
-					allocatedCount: scatterChunkStreamingAllocatedNodeIds.size,
-				}))
+				const restoreBindingToken = scatterChunkStreamingToken
+				for (const nodeId of Array.from(scatterChunkStreamingLastFrustumVisibleIds.values())) {
+					await bindScatterChunkStreamingNodeId(nodeId, restoreBindingToken)
+				}
 				return
 			}
 
@@ -2763,34 +2700,19 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				const promise = (async () => {
 					const asset = options.sceneStore.getAsset(assetId)
 					if (!asset) {
-						console.log(formatGroundEditorScatterLog('restoreGroupdScatter missing asset', {
-							assetId,
-						}))
 						return null
 					}
 					try {
 						await assetCacheStore.ensureAssetEntry(assetId, { asset })
-					} catch (error) {
-						console.log(formatGroundEditorScatterLog('restoreGroupdScatter cache asset failed', {
-							assetId,
-							error: error instanceof Error ? error.message : String(error),
-						}))
+					} catch (_error) {
 					}
 					try {
 						return await loadScatterModelGroup(asset)
-					} catch (error) {
-						console.log(formatGroundEditorScatterLog('restoreGroupdScatter load asset failed', {
-							assetId,
-							error: error instanceof Error ? error.message : String(error),
-						}))
+					} catch (_error) {
 						return null
 					}
 				})()
-					.catch((error) => {
-						console.log(formatGroundEditorScatterLog('restoreGroupdScatter unexpected failure', {
-							assetId,
-							error: error instanceof Error ? error.message : String(error),
-						}))
+					.catch((_error) => {
 						return null
 					})
 				groupPromises.set(assetId, promise)
@@ -2837,21 +2759,11 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				const sourceModelHeight = resolveSourceModelHeight(resolveFirstLodModelAssetId(scatterLodPresetCache.get(resolved.lodPresetAssetId ?? '') ?? null) ?? selectionAssetId)
 				const group = await ensureModelGroup(bindingAssetId)
 				if (!group) {
-					console.log(formatGroundEditorScatterLog('restoreGroupdScatter waiting for model group', {
-						layerId: layer.id,
-						instanceId: instance.id,
-						bindingAssetId,
-					}))
 					continue
 				}
 				const target: ScatterRuntimeTarget = { kind: 'model', assetId: group.assetId, sourceModelHeight }
 				const matrix = computeScatterTargetMatrix(instance, groundMesh, target, sourceModelHeight)
 				if (!bindScatterInstance(instance, matrix, target)) {
-					console.log(formatGroundEditorScatterLog('restoreGroupdScatter bind failed', {
-						layerId: layer.id,
-						instanceId: instance.id,
-						assetId: bindingAssetId,
-					}))
 					continue
 				}
 				instance.metadata = {
@@ -3004,8 +2916,8 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			return existing
 		}
 		const promise = (async () => {
-			const asset = options.sceneStore.getAsset(normalized)
-			if (!asset || (asset.type !== 'model' && asset.type !== 'mesh')) {
+			const asset = await resolveScatterModelAssetForBinding(normalized)
+			if (!asset) {
 				return null
 			}
 			try {
@@ -3014,13 +2926,14 @@ export function createGroundEditor(options: GroundEditorOptions) {
 				console.warn('缓存地面散布资源失败', normalized, error)
 			}
 			try {
-				return await loadScatterModelGroup(asset)
+				const group = await loadScatterModelGroup(asset)
+				return group
 			} catch (error) {
 				console.warn('载入地面散布资源失败', normalized, error)
 				return null
 			}
 		})().finally(() => {
-			// keep promise cached
+			scatterChunkStreamingGroupPromises.delete(normalized)
 		})
 		scatterChunkStreamingGroupPromises.set(normalized, promise)
 		return promise
@@ -3377,24 +3290,63 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		return layer
 	}
 
+	function registerScatterSceneAsset(asset: ProjectAsset | null | undefined, _reason: string): void {
+		if (!asset?.id) {
+			return
+		}
+		if (!options.sceneStore.findAssetInCatalog(asset.id)) {
+			options.sceneStore.registerAssets([asset])
+		}
+	}
+
+	async function ensureScatterCatalogAssetLoaded(assetId: string): Promise<ProjectAsset | null> {
+		const normalized = assetId.trim()
+		if (!normalized) {
+			return null
+		}
+		const direct = options.sceneStore.findAssetInCatalog(normalized)
+		if (direct) {
+			return direct
+		}
+		const providerId = options.sceneStore.findPackageProviderIdForAsset(normalized)
+		if (!providerId) {
+			return null
+		}
+		try {
+			await options.sceneStore.ensurePackageDirectoriesLoaded(providerId)
+		} catch (error) {
+		}
+		return options.sceneStore.findAssetInCatalog(normalized)
+	}
+
+	async function resolveScatterModelAssetForBinding(bindingAssetId: string): Promise<ProjectAsset | null> {
+		const normalized = bindingAssetId.trim()
+		if (!normalized) {
+			return null
+		}
+		const direct = options.sceneStore.getAsset(normalized) ?? await ensureScatterCatalogAssetLoaded(normalized)
+		if (direct && (direct.type === 'model' || direct.type === 'mesh')) {
+			return direct
+		}
+		if (direct?.type !== 'prefab' && direct?.type !== 'lod') {
+			return null
+		}
+		try {
+			const prepared = await options.sceneStore.prepareLodAsset(direct)
+			return prepared.modelAsset
+		} catch (error) {
+			return null
+		}
+	}
+
 	async function loadScatterModelGroup(asset: ProjectAsset): Promise<ModelInstanceGroup | null> {
 		let group = getCachedModelObject(asset.id)
 		if (group) {
-			console.log(formatGroundEditorScatterLog('loadScatterModelGroup cache hit', {
-				assetId: asset.id,
-			}))
 			ensureInstancedMeshesRegistered(asset.id)
 			return group
 		}
-		console.log(formatGroundEditorScatterLog('loadScatterModelGroup cache miss', {
-			assetId: asset.id,
-			assetType: asset.type,
-		}))
 		const file = await assetCacheStore.ensureAssetFile(asset.id, { asset })
 		if (!file) {
-			console.log(formatGroundEditorScatterLog('loadScatterModelGroup missing file', {
-				assetId: asset.id,
-			}))
 			return null
 		}
 		try {
@@ -3405,10 +3357,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		})
 			ensureInstancedMeshesRegistered(asset.id)
 		} catch (error) {
-			console.log(formatGroundEditorScatterLog('loadScatterModelGroup failed', {
-				assetId: asset.id,
-				error: error instanceof Error ? error.message : String(error),
-			}))
 			return null
 		} finally {
 			assetCacheStore.releaseInMemoryBlob(asset.id)
@@ -3427,11 +3375,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	async function prepareScatterRuntime(asset: ProjectAsset, category: TerrainScatterCategory): Promise<void> {
 		ensureScatterStoreRef()
 		scatterLayer = ensureScatterLayerForAsset(asset, category)
-		console.log(formatGroundEditorScatterLog('prepareScatterRuntime start', {
-			assetId: asset.id,
-			assetType: asset.type,
-			category,
-		}))
+		registerScatterSceneAsset(asset, 'prepareScatterRuntime')
 		scatterAssetLoadToken += 1
 		const token = scatterAssetLoadToken
 		scatterModelGroup = null
@@ -3447,6 +3391,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			if (preset && base) {
 				bindingAssetId = base
 				lodPresetAssetId = asset.id
+				registerScatterSceneAsset(options.sceneStore.getAsset(bindingAssetId), 'prepareScatterRuntime-binding')
 				const store = ensureScatterStoreRef()
 				const layer = scatterLayer
 				if (layer) {
@@ -3463,21 +3408,11 @@ export function createGroundEditor(options: GroundEditorOptions) {
 
 		const group = bindingAssetId ? await loadScatterModelGroupById(bindingAssetId) : null
 		if (token !== scatterAssetLoadToken) {
-			console.log(formatGroundEditorScatterLog('prepareScatterRuntime aborted by token', {
-				assetId: asset.id,
-				bindingAssetId,
-			}))
 			return
 		}
 		scatterResolvedBindingAssetId = bindingAssetId
 		scatterResolvedLodPresetAssetId = lodPresetAssetId
 		scatterModelGroup = group
-		console.log(formatGroundEditorScatterLog('prepareScatterRuntime ready', {
-			assetId: asset.id,
-			bindingAssetId,
-			lodPresetAssetId,
-			hasGroup: Boolean(group),
-		}))
 	}
 
 	function resolveScatterBindingAssetIdForSelection(asset: ProjectAsset): string | null {
@@ -3497,7 +3432,6 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	function ensureScatterModelGroupFromCache(bindingAssetId: string): ModelInstanceGroup | null {
 		const normalized = bindingAssetId.trim()
 		if (!normalized) {
-			console.log(formatGroundEditorScatterLog('ensureScatterModelGroupFromCache empty asset id'))
 			return null
 		}
 		if (scatterModelGroup && scatterResolvedBindingAssetId === normalized) {
@@ -3505,18 +3439,30 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		}
 		const cached = getCachedModelObject(normalized)
 		if (!cached) {
-			console.log(formatGroundEditorScatterLog('ensureScatterModelGroupFromCache cache miss', {
-				assetId: normalized,
-				hasPendingLoad: pendingScatterModelLoads.has(normalized),
-				currentResolvedAssetId: scatterResolvedBindingAssetId,
-			}))
+			if (!pendingScatterModelLoads.has(normalized)) {
+				const task = (async () => {
+					const asset = await resolveScatterModelAssetForBinding(normalized)
+					if (!asset) {
+						return
+					}
+					try {
+						const group = await loadScatterModelGroup(asset)
+						if (group) {
+							scatterModelGroup = group
+							scatterResolvedBindingAssetId = group.assetId
+						}
+					} catch (error) {
+					}
+				})()
+					.finally(() => {
+						pendingScatterModelLoads.delete(normalized)
+					})
+				pendingScatterModelLoads.set(normalized, task)
+			}
 			return scatterModelGroup
 		}
 		scatterModelGroup = cached
 		scatterResolvedBindingAssetId = normalized
-		console.log(formatGroundEditorScatterLog('ensureScatterModelGroupFromCache reattached cached group', {
-			assetId: normalized,
-		}))
 		ensureInstancedMeshesRegistered(normalized)
 		return cached
 	}
@@ -5946,25 +5892,13 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		const category = options.scatterCategory.value
 		const preset = getScatterPreset(category)
 		const layer = scatterLayer ?? ensureScatterLayerForAsset(asset, category)
+		registerScatterSceneAsset(asset, 'applyScatterAutoOverlayPlan')
 		const bindingAssetId = resolveScatterBindingAssetIdForSelection(asset)
 		if (!bindingAssetId) {
-			console.log(formatGroundEditorScatterLog('beginScatterPlacement unresolved binding asset', {
-				assetId: asset.id,
-				assetType: asset.type,
-				category,
-				lodPresetAssetId: scatterResolvedLodPresetAssetId,
-			}))
 			return false
 		}
 		const modelGroup = ensureScatterModelGroupFromCache(bindingAssetId)
 		if (!modelGroup) {
-			console.log(formatGroundEditorScatterLog('beginScatterPlacement model still loading', {
-				assetId: asset.id,
-				bindingAssetId,
-				hasCachedGroup: Boolean(getCachedModelObject(bindingAssetId)),
-				hasPendingLoad: pendingScatterModelLoads.has(bindingAssetId),
-				resolvedBindingAssetId: scatterResolvedBindingAssetId,
-			}))
 			return false
 		}
 
@@ -6091,6 +6025,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		const category = options.scatterCategory.value
 		const preset = getScatterPreset(category)
 		const layer = scatterLayer ?? ensureScatterLayerForAsset(asset, category)
+		registerScatterSceneAsset(asset, 'beginScatterPlacement')
 		const bindingAssetId = resolveScatterBindingAssetIdForSelection(asset)
 		if (!bindingAssetId) {
 			console.warn('无法解析散布资源（可能为无效的 LOD 预设）')
@@ -6677,14 +6612,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		}
 		// After finishing a full scatter paint stroke, ensure the selected scatter asset is
 		// registered as a scene asset so it can be located and restored after reloading.
-		try {
-			const asset = scatterSession.asset
-			if (asset?.id && !options.sceneStore.findAssetInCatalog(asset.id)) {
-				options.sceneStore.registerAssets([asset])
-			}
-		} catch (error) {
-			console.warn('Failed to register scatter asset into scene assets', error)
-		}
+		registerScatterSceneAsset(scatterSession.asset, 'finalizeScatterPlacement')
 		queueScatterSidecarSave()
 		clearScatterAreaPreview()
 		options.clearVertexSnap?.()
