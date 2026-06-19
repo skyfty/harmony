@@ -11,7 +11,7 @@ import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { PlanningSceneData } from '@/types/planning-scene-data'
 import { deserializePlanningScenePackageSidecar, type PlanningScenePackageImageEntry } from '@/types/planning-package'
-import { stripGroundHeightMapsFromSceneDocument } from '@/utils/groundHeightSidecar'
+import { GROUND_HEIGHTMAP_SIDECAR_FILENAME, stripGroundHeightMapsFromSceneDocument } from '@/utils/groundHeightSidecar'
 import { storePlanningImageBlobByHash } from '@/utils/planningImageStorage'
 import { storePlanningDemBlobByHash } from '@/utils/planningDemStorage'
 
@@ -140,10 +140,22 @@ function extractGroundHeightSidecarFromPackage(
   sceneEntry: ScenePackageSceneEntry,
   rawScene: StoredSceneDocument,
 ): ArrayBuffer | null {
-  void zip
-  void sceneEntry
-  void rawScene
-  return null
+  const hasGroundNode = Array.isArray(rawScene.nodes)
+    && rawScene.nodes.some((node) => node?.dynamicMesh?.type === 'Ground')
+  if (!hasGroundNode) {
+    return null
+  }
+  const sidecarPath = typeof sceneEntry.groundHeightPath === 'string' && sceneEntry.groundHeightPath.trim().length
+    ? sceneEntry.groundHeightPath.trim()
+    : ''
+  if (!sidecarPath) {
+    return null
+  }
+  const bytes = zip.files[sidecarPath]
+  if (!bytes) {
+    throw new Error(`Missing ground height sidecar in scene bundle: ${sidecarPath || GROUND_HEIGHTMAP_SIDECAR_FILENAME}`)
+  }
+  return new Uint8Array(bytes).buffer
 }
 
 function extractGroundScatterSidecarFromPackage(

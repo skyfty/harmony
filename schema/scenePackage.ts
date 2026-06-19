@@ -38,6 +38,8 @@ export interface ScenePackageSceneEntry {
   path: string;
   /** Optional editor-only planning sidecar path, e.g. `scenes/<sceneId>/planning.bin` */
   planningPath?: string;
+  /** Optional ground height sidecar path, e.g. `scenes/<sceneId>/ground-heightmaps.bin` */
+  groundHeightPath?: string;
   /** Optional ground splat sidecar path, e.g. `scenes/<sceneId>/ground-splat.bin` */
   groundSplatPath?: string;
   /** Optional ground scatter sidecar path, e.g. `scenes/<sceneId>/ground-scatter.bin` */

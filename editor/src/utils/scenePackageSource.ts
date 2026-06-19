@@ -10,6 +10,7 @@ import {
 } from '@schema/core'
 import { resolveDocumentGroundNode } from '@schema/groundNode'
 import { BUILTIN_WATER_NORMAL_FILENAME, isBuiltinWaterNormalAsset } from '@/constants/builtinAssets'
+import { GROUND_HEIGHTMAP_SIDECAR_FILENAME } from '@/utils/groundHeightSidecar'
 import { serializePlanningScenePackageSidecar } from '@/types/planning-package'
 import { sha256Hex } from '@harmony/utils/hash'
 import {
@@ -67,6 +68,9 @@ type ScenePackageSourceSceneEntry = {
   sceneId: string
   path: string
   planningPath?: string
+  groundHeightPath?: string
+  groundSplatPath?: string
+  groundScatterPath?: string
 }
 
 type ScenePackageSourceManifest = {
@@ -253,6 +257,9 @@ export async function prepareScenePackageSourceZipFiles(payload: ScenePackageSou
     const preparedDocument = await normalizeSourceSceneDocument(scene.document)
     const scenePath = `scenes/${encodeURIComponent(scene.id)}/scene.bin`
     let planningPath: string | undefined
+    let groundHeightPath: string | undefined
+    let groundSplatPath: string | undefined
+    let groundScatterPath: string | undefined
     const sceneSourcePackageAssetIds = new Set<string>(
       collectSourceScenePackageAssetIdsForExport(
         preparedDocument,
@@ -276,10 +283,32 @@ export async function prepareScenePackageSourceZipFiles(payload: ScenePackageSou
       planningPath = planningSidecar.planningPath
       files[planningPath] = serializePlanningScenePackageSidecar(planningSidecar.sidecar)
     }
+
+    const groundHeightSidecar = await state.scenesStore.loadGroundHeightSidecar(scene.id)
+    if (groundHeightSidecar) {
+      groundHeightPath = `scenes/${encodeURIComponent(scene.id)}/${GROUND_HEIGHTMAP_SIDECAR_FILENAME}`
+      files[groundHeightPath] = new Uint8Array(groundHeightSidecar)
+    }
+
+    const groundSplatSidecar = await state.scenesStore.loadGroundSplatSidecar(scene.id)
+    if (groundSplatSidecar) {
+      groundSplatPath = `scenes/${encodeURIComponent(scene.id)}/ground-splat.bin`
+      files[groundSplatPath] = new Uint8Array(groundSplatSidecar)
+    }
+
+    const groundScatterSidecar = await state.scenesStore.loadGroundScatterSidecar(scene.id)
+    if (groundScatterSidecar) {
+      groundScatterPath = `scenes/${encodeURIComponent(scene.id)}/ground-scatter.bin`
+      files[groundScatterPath] = new Uint8Array(groundScatterSidecar)
+    }
+
     manifestScenes.push({
       sceneId: scene.id,
       path: scenePath,
       planningPath,
+      groundHeightPath,
+      groundSplatPath,
+      groundScatterPath,
     })
   }
   finalizeSourceScenePackageZipState(state, payload, manifestScenes)
