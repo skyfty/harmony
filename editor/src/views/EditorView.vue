@@ -1464,6 +1464,7 @@ async function exportProjectPackageZip(
       sceneOrder: embeddedScenes.map((entry) => entry.id),
     },
     scenes: embeddedScenes,
+    embedAssets: options.embedAssets,
     updateProgress,
     reportEvent,
   })

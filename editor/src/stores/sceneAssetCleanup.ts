@@ -536,18 +536,6 @@ function collectInternalAssetIdsFromCatalog(catalog: Record<string, ProjectAsset
   return internalAssetIds
 }
 
-function collectEditorOnlyAssetIdsFromCatalog(catalog: Record<string, ProjectAsset[]>): Set<string> {
-  const editorOnlyAssetIds = new Set<string>()
-  Object.values(catalog).forEach((assets) => {
-    assets.forEach((asset) => {
-      if (asset?.isEditorOnly && asset.id) {
-        editorOnlyAssetIds.add(asset.id)
-      }
-    })
-  })
-  return editorOnlyAssetIds
-}
-
 export function collectEditorOnlyConfigAssetIdsFromCatalog(catalog: Record<string, ProjectAsset[]>): Set<string> {
   const configAssetIds = new Set<string>()
   Object.values(catalog).forEach((assets) => {
@@ -572,7 +560,6 @@ export function collectRetainedAssetIdsForSceneCleanup(
 ): Set<string> {
   const retainedAssetIds = new Set<string>(collectSceneAssetReferences(scene))
   collectInternalAssetIdsFromCatalog(catalog).forEach((assetId) => retainedAssetIds.add(assetId))
-  collectEditorOnlyAssetIdsFromCatalog(catalog).forEach((assetId) => retainedAssetIds.add(assetId))
   return retainedAssetIds
 }
 

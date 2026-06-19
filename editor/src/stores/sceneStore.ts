@@ -266,7 +266,6 @@ import {
   collectDirectSceneAssetReferenceIds,
   collectRuntimeRequiredConfigAssetIds,
   collectSceneAssetReferences,
-  collectEditorOnlyConfigAssetIdsFromCatalog,
   collectRetainedAssetIdsForSceneCleanup,
   pruneAssetCatalogByRetainedIds,
   collectTransitiveConfigDependencyAssetIds,
@@ -13527,7 +13526,6 @@ export const useSceneStore = defineStore('scene', {
       const retainedAssetIds = collectRetainedAssetIdsForSceneCleanup(document, this.assetCatalog)
       const directReferenceAssetIds = collectDirectSceneAssetReferenceIds(document)
       const configRootAssetIds = new Set<string>(directReferenceAssetIds)
-      collectEditorOnlyConfigAssetIdsFromCatalog(this.assetCatalog).forEach((assetId) => configRootAssetIds.add(assetId))
       const configDependencyAssetIds = await collectTransitiveConfigDependencyAssetIds(
         configRootAssetIds,
         this.assetCatalog,
@@ -13580,7 +13578,6 @@ export const useSceneStore = defineStore('scene', {
       const retainedAssetIds = collectRetainedAssetIdsForSceneCleanup(document, this.assetCatalog)
       const directReferenceAssetIds = collectDirectSceneAssetReferenceIds(document)
       const configRootAssetIds = new Set<string>(directReferenceAssetIds)
-      collectEditorOnlyConfigAssetIdsFromCatalog(this.assetCatalog).forEach((assetId) => configRootAssetIds.add(assetId))
       const configDependencyAssetIds = await collectTransitiveConfigDependencyAssetIds(
         configRootAssetIds,
         this.assetCatalog,

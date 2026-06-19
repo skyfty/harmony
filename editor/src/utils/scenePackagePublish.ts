@@ -102,6 +102,7 @@ interface ScenePackagePublishScene {
 type ScenePackagePublishPayload = {
   project: ScenePackagePublishProjectConfig
   scenes: ScenePackagePublishScene[]
+  embedAssets: boolean
   updateProgress?: (value: number, message?: string) => void
   reportEvent?: SceneExportEventReporter
 }
@@ -109,6 +110,7 @@ type ScenePackagePublishPayload = {
 type ScenePackagePublishZipBuildPayload = {
   project: ScenePackagePublishProjectConfig
   scenes: ScenePackagePublishScene[]
+  embedAssets: boolean
   updateProgress?: (value: number, message?: string) => void
   reportEvent?: SceneExportEventReporter
 }
@@ -1442,20 +1444,29 @@ export async function prepareScenePackagePublishZipFiles(payload: ScenePackagePu
     sharedAssetPathById,
   } = state
   const manifestScenes = state.manifestScenes
-  const embedAssets = await collectPublishEmbedAssetsFromScenes(payload.scenes)
-  await writePublishSharedEmbeddedScenePackageAssets({
-    state,
-    payload,
-    reportEvent: payload.reportEvent,
-    embedAssets,
-    startMessage: '开始处理运行时嵌入资产',
-    emptyMessage: '没有需要嵌入的运行时资产',
-    itemMessage: (assetName) => `正在嵌入运行时资产 ${assetName}`,
-    completedMessage: (assetName) => `运行时资产已写入 ${assetName}`,
-    progressMessage: (done, total) => `Embedding assets… (${done}/${total})`,
-    resolveAssetContext: ({ item, resourcePath }) =>
-      buildPublishCombinedAssetEventContext(item.assetId, payload.scenes, state.sceneReferenceSummaryMaps, resourcePath),
-  })
+  if (payload.embedAssets) {
+    const embedAssets = await collectPublishEmbedAssetsFromScenes(payload.scenes)
+    await writePublishSharedEmbeddedScenePackageAssets({
+      state,
+      payload,
+      reportEvent: payload.reportEvent,
+      embedAssets,
+      startMessage: '开始处理运行时嵌入资产',
+      emptyMessage: '没有需要嵌入的运行时资产',
+      itemMessage: (assetName) => `正在嵌入运行时资产 ${assetName}`,
+      completedMessage: (assetName) => `运行时资产已写入 ${assetName}`,
+      progressMessage: (done, total) => `Embedding assets… (${done}/${total})`,
+      resolveAssetContext: ({ item, resourcePath }) =>
+        buildPublishCombinedAssetEventContext(item.assetId, payload.scenes, state.sceneReferenceSummaryMaps, resourcePath),
+    })
+  } else {
+    emitSceneExportEvent(payload.reportEvent, {
+      phase: 'asset',
+      level: 'info',
+      status: 'skipped',
+      message: 'Embed assets disabled for publish export',
+    })
+  }
 
   const scenesWorkspaceId = scenesStore.workspaceId
 
