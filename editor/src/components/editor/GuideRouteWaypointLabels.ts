@@ -26,7 +26,7 @@ export function createGuideRouteWaypointLabelsManager(sceneStore: any, objectMap
     try {
       if (!node || !container) return
 
-      const tokenSnapshot = sceneStore.sceneSwitchToken
+      const tokenSnapshot = sceneStore.sceneLifecycle.sessionToken
 
       const componentState = node.components?.[GUIDE_ROUTE_COMPONENT_TYPE] as
         | SceneNodeComponentState<GuideRouteComponentProps>
@@ -69,7 +69,7 @@ export function createGuideRouteWaypointLabelsManager(sceneStore: any, objectMap
       const font = await loadLabelFont()
 
       // Scene switched / viewport remounted while awaiting resources.
-      if (tokenSnapshot !== sceneStore.sceneSwitchToken || !sceneStore.isSceneReady) {
+      if (tokenSnapshot !== sceneStore.sceneLifecycle.sessionToken || sceneStore.sceneLifecycle.status !== 'ready') {
         return
       }
 

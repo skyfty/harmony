@@ -517,7 +517,7 @@ const nodePickerStore = useNodePickerStore()
 const assetCacheStore = useAssetCacheStore()
 const terrainStore = useTerrainStore()
 
-const { panelVisibility, isSceneReady, sceneGraphStructureVersion, sceneNodePropertyVersion } = storeToRefs(sceneStore)
+const { panelVisibility, sceneLifecycle, sceneGraphStructureVersion, sceneNodePropertyVersion } = storeToRefs(sceneStore)
 const {
   brushRadius,
   brushStrength,
@@ -537,6 +537,9 @@ const {
   scatterDensityPercent,
 } =
   storeToRefs(terrainStore)
+
+const sceneSwitchToken = computed(() => sceneLifecycle.value.sessionToken)
+const isSceneReady = computed(() => sceneLifecycle.value.status === 'ready')
 
 const hasGroundNode = computed(() => {
   const ground = sceneStore.groundNode
@@ -1947,7 +1950,7 @@ const snapController = useSnapController({
 
 protagonistInitialVisibilityCapture = createProtagonistInitialVisibilityCapture({
   getNodes: () => sceneStore.nodes,
-  isSceneReady: () => sceneStore.isSceneReady,
+  isSceneReady: () => isSceneReady.value,
   updateNodeComponentProps: (nodeId, componentId, propsPatch) =>
     sceneStore.updateNodeComponentProps(nodeId, componentId, propsPatch),
   objectMap,
@@ -11302,7 +11305,7 @@ function applyNodePatchesIncrementally(nodePatches: PendingNodePatch[], removedI
 }
 
 function applyPendingScenePatches(): boolean {
-  if (!sceneStore.isSceneReady) {
+  if (!isSceneReady.value) {
     return false
   }
 
@@ -11342,7 +11345,7 @@ function applyPendingScenePatches(): boolean {
 }
 
 function flushPendingScenePatchesForInteraction(): boolean {
-  if (!sceneStore.isSceneReady) {
+  if (!isSceneReady.value) {
     return false
   }
   if (shouldDeferSceneGraphSync()) {
@@ -11352,7 +11355,7 @@ function flushPendingScenePatchesForInteraction(): boolean {
 }
 
 function shouldDeferSceneGraphSync(): boolean {
-  if (!sceneStore.isSceneReady) {
+  if (!isSceneReady.value) {
     return false
   }
   if (transformControls?.dragging) {
@@ -12818,9 +12821,9 @@ async function restoreGroundAllGuarded(): Promise<void> {
 }
 
 async function restoreGroundScatterGuarded(): Promise<void> {
-  const tokenSnapshot = sceneStore.sceneSwitchToken
+  const tokenSnapshot = sceneSwitchToken.value
   await restoreGroupdScatter()
-  if (tokenSnapshot !== sceneStore.sceneSwitchToken) {
+  if (tokenSnapshot !== sceneSwitchToken.value) {
     return
   }
 }
@@ -23857,7 +23860,10 @@ onMounted(() => {
     })
     viewportResizeObserver.observe(viewportEl.value)
   }
-  sceneStore.ensureCurrentSceneLoaded();
+  if (isSceneReady.value) {
+    syncSceneGraph()
+    void restoreGroundAllGuarded()
+  }
 })
 
 onBeforeUnmount(() => {

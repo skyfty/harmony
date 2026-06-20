@@ -3,8 +3,13 @@ import type { Object3D } from 'three'
 import type { SceneAssetRegistryEntry, SceneNode } from '@schema/core'
 import { cloneImportedObject } from '@schema/assetImport'
 import { canNodeUseRuntimeModelInstancing } from '@schema/runtimeModelInstancing'
+import { normalizeAssetIdWithRegistry } from '@/utils/assetRegistryIdNormalization'
 import { readServerDownloadBaseUrl } from '@/api/serverApiConfig'
-import type { EnsureSceneAssetsOptions, EnsureSceneAssetsProgress } from '@/types/ensure-scene-assets-options'
+import type {
+  EnsureSceneAssetsOptions,
+  EnsureSceneAssetsProgress,
+  SceneAssetResolutionContext,
+} from '@/types/ensure-scene-assets-options'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ModelInstanceGroup } from '@schema/modelObjectCache'
 import { resolveServerAssetDownloadUrl } from '@schema/core'
@@ -83,8 +88,7 @@ export async function updateSceneAssets(args: {
   ui: OverlayController
   watch: WatchFn
 
-  getAsset: (assetId: string) => ProjectAsset | null
-  getAssetRegistryEntry: (assetId: string) => SceneAssetRegistryEntry | null
+  sceneContext: SceneAssetResolutionContext
 
   // model/object helpers
   getCachedModelObject: (assetId: string) => ModelInstanceGroup | null
@@ -111,7 +115,6 @@ export async function updateSceneAssets(args: {
     assetCache,
     ui,
     watch,
-    getAsset,
     getCachedModelObject,
     getOrLoadModelObject,
     loadObjectFromFile,
@@ -122,7 +125,7 @@ export async function updateSceneAssets(args: {
     registerRuntimeForNode,
     queueSceneNodePatch,
     prefabProgress,
-    getAssetRegistryEntry,
+    sceneContext,
   } = args
 
   const normalizeUrl =    (value: string | null | undefined): string | null => {
@@ -138,80 +141,45 @@ export async function updateSceneAssets(args: {
     return Math.max(0, Math.min(100, Math.round(numeric)))
   }
 
-  const formatDebugLog = (title: string, payload: Record<string, unknown>): string => {
-    try {
-      return `${title}\n${JSON.stringify(payload, null, 2)}`
-    } catch (error) {
-      return `${title}\n{"error":"Failed to stringify debug payload","message":"${(error as Error)?.message ?? String(error)}"}`
+  const assetCatalog = sceneContext.assetCatalog ?? {}
+  const assetRegistry = sceneContext.assetRegistry ?? {}
+  const projectOverrideAssets = sceneContext.projectOverrideAssets ?? null
+  const sceneOverrideAssets = sceneContext.sceneOverrideAssets ?? null
+
+  const getSceneRegistryEntry = (assetId: string): SceneAssetRegistryEntry | null => {
+    const normalizedAssetId = typeof assetId === 'string' ? assetId.trim() : ''
+    if (!normalizedAssetId) {
+      return null
     }
+    const canonicalAssetId = normalizeAssetIdWithRegistry(
+      normalizedAssetId,
+      {
+        ...sceneOverrideAssets,
+        ...projectOverrideAssets,
+        ...assetRegistry,
+      },
+    ) ?? normalizedAssetId
+    return sceneOverrideAssets?.[canonicalAssetId]
+      ?? sceneOverrideAssets?.[normalizedAssetId]
+      ?? projectOverrideAssets?.[canonicalAssetId]
+      ?? projectOverrideAssets?.[normalizedAssetId]
+      ?? assetRegistry[canonicalAssetId]
+      ?? assetRegistry[normalizedAssetId]
+      ?? null
   }
 
-  const describeAsset = (asset: ProjectAsset | null): Record<string, unknown> => {
-    if (!asset) {
-      return { asset: null }
+  const getSceneAsset = (assetId: string): ProjectAsset | null => {
+    const normalizedAssetId = typeof assetId === 'string' ? assetId.trim() : ''
+    if (!normalizedAssetId) {
+      return null
     }
-    return {
-      id: asset.id,
-      name: asset.name,
-      type: asset.type,
-      extension: asset.extension ?? null,
-      downloadUrl: normalizeUrl(asset.downloadUrl) ?? null,
-      description: normalizeUrl(asset.description) ?? asset.description ?? null,
-      fileKey: asset.fileKey ?? null,
-      source: asset.source ? { ...asset.source } : null,
-      internal: asset.internal ?? null,
-      gleaned: asset.gleaned ?? null,
+    for (const list of Object.values(assetCatalog)) {
+      const match = list.find((asset) => asset.id === normalizedAssetId)
+      if (match) {
+        return match
+      }
     }
-  }
-
-  const describeRegistryEntry = (entry: SceneAssetRegistryEntry | null): Record<string, unknown> => {
-    if (!entry) {
-      return { registryEntry: null }
-    }
-    switch (entry.sourceType) {
-      case 'server':
-        return {
-          sourceType: entry.sourceType,
-          serverAssetId: entry.serverAssetId ?? null,
-          fileKey: entry.fileKey ?? null,
-          resolvedUrl: normalizeUrl(entry.resolvedUrl) ?? null,
-          bytes: entry.bytes ?? null,
-          assetType: entry.assetType ?? null,
-          name: entry.name ?? null,
-        }
-      case 'package':
-        return {
-          sourceType: entry.sourceType,
-          zipPath: entry.zipPath,
-          inline: entry.inline ?? null,
-          bytes: entry.bytes ?? null,
-          assetType: entry.assetType ?? null,
-          name: entry.name ?? null,
-        }
-      case 'url':
-        return {
-          sourceType: entry.sourceType,
-          url: normalizeUrl(entry.url) ?? null,
-          bytes: entry.bytes ?? null,
-          assetType: entry.assetType ?? null,
-          name: entry.name ?? null,
-        }
-      default:
-        return { registryEntry: 'unknown' }
-    }
-  }
-
-  const describeCacheEntry = (entry: AssetCacheEntryLike | null | undefined): Record<string, unknown> => {
-    if (!entry) {
-      return { cacheEntry: null }
-    }
-    return {
-      status: entry.status,
-      progress: typeof entry.progress === 'number' && Number.isFinite(entry.progress) ? entry.progress : null,
-      filename: entry.filename ?? null,
-      downloadUrl: normalizeUrl(entry.downloadUrl) ?? null,
-      error: entry.error ?? null,
-    }
+    return null
   }
 
   const emitProgress = (payload: EnsureSceneAssetsProgress) => {
@@ -396,7 +364,7 @@ export async function updateSceneAssets(args: {
     asset: ProjectAsset | null,
     registryEntry: SceneAssetRegistryEntry | null,
   ): string | null => {
-    const directCandidate = normalizeUrl(asset?.downloadUrl) ?? normalizeUrl(asset?.description)
+    const directCandidate = normalizeUrl(asset?.downloadUrl)
     if (registryEntry?.sourceType === 'url') {
       return normalizeUrl(registryEntry.url) ?? directCandidate
     }
@@ -420,8 +388,8 @@ export async function updateSceneAssets(args: {
     overlayTotal: number
   }): Promise<void> => {
     const { assetId, assetLabel, completedBeforeAsset, overlayTotal } = resolveArgs
-    const asset = getAsset(assetId)
-    const registryEntry = getAssetRegistryEntry(assetId)
+    const asset = getSceneAsset(assetId)
+    const registryEntry = getSceneRegistryEntry(assetId)
     const fallbackDownloadUrl = resolveAssetDownloadUrlCandidate(asset, registryEntry)
     let entry = assetCache.getEntry(assetId)
     ensureEntryDownloadUrl(entry, fallbackDownloadUrl)
@@ -435,20 +403,6 @@ export async function updateSceneAssets(args: {
     const downloadUrl = normalizeUrl(entry?.downloadUrl) ?? fallbackDownloadUrl
     if (!assetCache.hasCache(assetId)) {
       if (!downloadUrl) {
-        console.warn(formatDebugLog('[ensureSceneAssetsReady] Missing asset download URL', {
-          assetId,
-          assetLabel,
-          completedBeforeAsset,
-          overlayTotal,
-          asset: describeAsset(asset),
-          registryEntry: describeRegistryEntry(registryEntry),
-          cacheEntry: describeCacheEntry(entry),
-          resolved: {
-            fallbackDownloadUrl: fallbackDownloadUrl ?? null,
-            entryDownloadUrl: normalizeUrl(entry?.downloadUrl) ?? null,
-            hasCache: assetCache.hasCache(assetId),
-          },
-        }))
         throw new Error('Missing asset download URL')
       }
       let stopDownloadWatcher: WatchStopHandle | null = null
@@ -490,18 +444,18 @@ export async function updateSceneAssets(args: {
     }
 
     if (!baseObject) {
-      const file = await assetCache.ensureAssetFile(assetId, { asset: getAsset(assetId) })
+      const file = await assetCache.ensureAssetFile(assetId)
       if (!file) {
         throw new Error('Missing asset file in cache')
       }
 
       if (shouldCacheModelObject) {
-        const loadedGroup = await getOrLoadModelObject(assetId, () => loadObjectFromFile(file, getAsset(assetId)?.extension ?? undefined))
+        const loadedGroup = await getOrLoadModelObject(assetId, () => loadObjectFromFile(file))
         modelGroup = loadedGroup
         baseObject = loadedGroup.object
         assetCache.releaseInMemoryBlob(assetId)
       } else {
-        baseObject = await loadObjectFromFile(file, getAsset(assetId)?.extension ?? undefined)
+        baseObject = await loadObjectFromFile(file)
       }
     }
 
@@ -621,7 +575,7 @@ export async function updateSceneAssets(args: {
     for (const assetId of allAssetIds) {
       const nodesForAsset = runtimeAssetNodeMap.get(assetId) ?? []
       const shouldBuildRuntime = nodesForAsset.length > 0
-      const asset = getAsset(assetId)
+      const asset = getSceneAsset(assetId)
       const assetLabel = normalizeUrl(asset?.name) ?? nodesForAsset[0]?.name ?? assetId
 
       try {
@@ -682,25 +636,6 @@ export async function updateSceneAssets(args: {
       } catch (error) {
         const message = (error as Error).message ?? 'Unknown error'
         errors.push({ assetId, message })
-        const failedAsset = getAsset(assetId)
-        const failedRegistryEntry = getAssetRegistryEntry(assetId)
-        const failedCacheEntry = assetCache.getEntry(assetId)
-        const failedFallbackDownloadUrl = resolveAssetDownloadUrlCandidate(failedAsset, failedRegistryEntry)
-        console.warn(formatDebugLog('[ensureSceneAssetsReady] Failed to load asset', {
-          assetId,
-          assetLabel,
-          message,
-          errorName: error instanceof Error ? error.name : null,
-          errorStack: error instanceof Error ? error.stack ?? null : null,
-          asset: describeAsset(failedAsset),
-          registryEntry: describeRegistryEntry(failedRegistryEntry),
-          cacheEntry: describeCacheEntry(failedCacheEntry),
-          resolved: {
-            fallbackDownloadUrl: failedFallbackDownloadUrl ?? null,
-            entryDownloadUrl: normalizeUrl(failedCacheEntry?.downloadUrl) ?? null,
-            hasCache: assetCache.hasCache(assetId),
-          },
-        }))
         emitProgress({
           step: 'Scene asset failed',
           detail: `${assetLabel}: ${message}`,

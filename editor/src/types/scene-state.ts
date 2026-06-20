@@ -19,16 +19,35 @@ import type { SceneViewportSettings } from './scene-viewport-settings'
 import type { SceneMaterial } from '@/types/material'
 import type { PlanningSceneData } from '@/types/planning-scene-data'
 
+export type SceneLifecycleStatus =
+  | 'idle'
+  | 'syncing-workspace'
+  | 'loading-document'
+  | 'hydrating-assets'
+  | 'applying-scene'
+  | 'preparing-runtime'
+  | 'compiling-terrain'
+  | 'ready'
+  | 'failed'
+
+export interface SceneLifecycleState {
+  sessionToken: number
+  sceneId: string | null
+  status: SceneLifecycleStatus
+  progress: number
+  detail: string
+  error: string | null
+}
+
 export interface SceneState {
   currentSceneId: string | null
-  /** Incremented whenever a scene load/switch begins; used to invalidate in-flight async work. */
-  sceneSwitchToken: number
   currentSceneMeta: {
     name: string
     createdAt: string
     updatedAt: string
     projectId: string
   } | null
+  sceneLifecycle: SceneLifecycleState
   nodes: SceneNode[]
   /** Runtime-only cached reference to the current unique ground node derived from nodes. */
   groundNode: SceneNode | null
@@ -74,6 +93,5 @@ export interface SceneState {
   isRestoringHistory: boolean
   activeTransformNodeId: string | null
   transformSnapshotCaptured: boolean
-  isSceneReady: boolean
   hasUnsavedChanges: boolean
 }

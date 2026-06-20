@@ -1518,13 +1518,6 @@ export async function prepareScenePackagePublishZipFiles(payload: ScenePackagePu
       resolveAssetContext: ({ item, resourcePath }) =>
         buildPublishCombinedAssetEventContext(item.assetId, payload.scenes, state.sceneReferenceSummaryMaps, resourcePath),
     })
-  } else {
-    emitSceneExportEvent(payload.reportEvent, {
-      phase: 'asset',
-      level: 'info',
-      status: 'skipped',
-      message: 'Embed assets disabled for publish export',
-    })
   }
 
   const scenesWorkspaceId = scenesStore.workspaceId

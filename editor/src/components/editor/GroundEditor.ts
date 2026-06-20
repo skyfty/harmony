@@ -2477,7 +2477,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	async function restoreTerrainSurfaceChunks(): Promise<void> {
-		const tokenSnapshot = options.sceneStore.sceneSwitchToken
+		const tokenSnapshot = options.sceneStore.sceneLifecycle.sessionToken
 		const groundNode = getGroundNodeFromScene()
 		const groundMesh = getGroundObject()
 		const definition = getGroundDynamicMeshDefinition()
@@ -2497,7 +2497,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		const visibleChunks = collectVisiblePaintChunks(groundMesh)
 		const nextVisibleKeys = new Set<string>()
 		for (const chunk of visibleChunks) {
-			if (tokenSnapshot !== options.sceneStore.sceneSwitchToken) {
+			if (tokenSnapshot !== options.sceneStore.sceneLifecycle.sessionToken) {
 				return
 			}
 			nextVisibleKeys.add(chunk.key)
@@ -2518,7 +2518,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 	}
 
 	async function syncPaintForVisibleChunksIncremental(): Promise<void> {
-		const tokenSnapshot = options.sceneStore.sceneSwitchToken
+		const tokenSnapshot = options.sceneStore.sceneLifecycle.sessionToken
 		// If we haven't successfully restored for this scene yet, do a full initial restore.
 		if (lastTerrainPaintSceneSwitchToken !== tokenSnapshot) {
 			await restoreTerrainSurfaceChunks()
@@ -2530,7 +2530,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 		if (!groundNode || groundNode.dynamicMesh?.type !== 'Ground' || !groundMesh || !definition) {
 			return
 		}
-		if (tokenSnapshot !== options.sceneStore.sceneSwitchToken) {
+		if (tokenSnapshot !== options.sceneStore.sceneLifecycle.sessionToken) {
 			return
 		}
 		const session = ensurePaintSession(definition, groundNode.id)
@@ -2545,7 +2545,7 @@ export function createGroundEditor(options: GroundEditorOptions) {
 			}
 		}
 		for (const chunk of newlyVisible) {
-			if (tokenSnapshot !== options.sceneStore.sceneSwitchToken) {
+			if (tokenSnapshot !== options.sceneStore.sceneLifecycle.sessionToken) {
 				return
 			}
 			warmPaintChunkState(session, chunk)

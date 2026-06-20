@@ -98,12 +98,14 @@ const {
   camera,
   panelVisibility,
   currentSceneId,
-  sceneSwitchToken,
+  sceneLifecycle,
   cameraFocusNodeId,
   cameraFocusRequestId,
   nodeHighlightTargetId,
   nodeHighlightRequestId,
 } = storeToRefs(sceneStore)
+
+const sceneSwitchToken = computed(() => sceneLifecycle.value.sessionToken)
 
 const { sortedMetadata: allSceneSummaries } = storeToRefs(scenesStore)
 const sceneSummaries = computed(() => {
@@ -1749,7 +1751,7 @@ watch(
     const ready = await new Promise<boolean>((resolve) => {
       let innerStop: (() => void) | null = null
       innerStop = watch(
-        [() => sceneStore.isSceneReady, currentSceneId],
+        [() => sceneLifecycle.value.status === 'ready', currentSceneId],
         ([isReady, currentId]) => {
           if (isStale()) {
             innerStop?.()
@@ -1960,21 +1962,17 @@ function handleSceneManagerCreateRequest() {
 }
 
 async function handleSelectScene(sceneId: string) {
-  const activeProjectId = projectsStore.activeProjectId
   if (sceneId !== sceneStore.currentSceneId) {
     const saved = await saveCurrentSceneWithOptions({ broadcastPreview: false })
     if (!saved) {
       return
     }
-    if (activeProjectId) {
-      await scenesStore.syncUserWorkspaceFromServer({
-        replace: false,
-        projectId: activeProjectId,
-        sceneId,
-      })
-    }
   }
-  const changed = await sceneStore.selectScene(sceneId)
+  const changed = await sceneStore.openScene(sceneId, {
+    projectId: projectsStore.activeProjectId ?? sceneStore.currentSceneMeta?.projectId ?? null,
+    setLastEdited: true,
+    showLoadingOverlay: false,
+  })
   if (changed) {
     isSceneManagerOpen.value = false
   }
