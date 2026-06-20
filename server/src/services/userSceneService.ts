@@ -147,8 +147,8 @@ export async function listUserScenes(userId: string | null | undefined, options?
   })
 }
 
-export async function getUserSceneBundle(userId: string, sceneId: string, options?: UserSceneQueryOptions): Promise<UserSceneBundleRecord | null> {
-  const record = await UserSceneModel.findOne({ userId, sceneId, ...buildDeletionFilter(options) }).lean()
+export async function getUserSceneBundle(sceneId: string, options?: UserSceneQueryOptions): Promise<UserSceneBundleRecord | null> {
+  const record = await UserSceneModel.findOne({sceneId, ...buildDeletionFilter(options) }).lean()
   if (!record) {
     return null
   }

@@ -57,9 +57,8 @@ export async function uploadUserSceneBundle(ctx: Context): Promise<void> {
 }
 
 export async function downloadUserSceneBundle(ctx: Context): Promise<void> {
-  const userId = ensureUserId(ctx)
   const sceneId = ensureSceneId(ctx)
-  const record = await getUserSceneBundle(userId, sceneId)
+  const record = await getUserSceneBundle(sceneId)
   if (!record) {
     ctx.throw(404, 'Scene not found')
   }
