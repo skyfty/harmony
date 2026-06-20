@@ -108,11 +108,19 @@ function collectSourceScenePackageAssetIdsForExport(
   Object.keys(document.assetRegistry ?? {}).forEach((assetId) => {
     const normalized = typeof assetId === 'string' ? assetId.trim() : ''
     if (normalized) {
+      if (document.assetRegistry?.[normalized]?.sourceType === 'server') {
+        return
+      }
       assetIds.add(normalized)
     }
   })
   collectPrefabAssetIdsFromSceneReferences(document as import('@/types/stored-scene-document').StoredSceneDocument, document.assetCatalog ?? {})
-    .forEach((assetId) => assetIds.add(assetId))
+    .forEach((assetId) => {
+      if (document.assetRegistry?.[assetId]?.sourceType === 'server') {
+        return
+      }
+      assetIds.add(assetId)
+    })
   return Array.from(assetIds)
 }
 

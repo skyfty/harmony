@@ -125,7 +125,7 @@ export async function updateSceneAssets(args: {
     getAssetRegistryEntry,
   } = args
 
-  const normalizeUrl = (value: string | null | undefined): string | null => {
+  const normalizeUrl =    (value: string | null | undefined): string | null => {
     if (!value) {
       return null
     }
