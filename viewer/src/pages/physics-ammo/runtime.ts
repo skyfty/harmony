@@ -23,6 +23,11 @@ type AmmoBootstrapModule = {
   default?: unknown;
 };
 
+type AmmoBootstrapSources = {
+  moduleSource: string;
+  functionSource: string;
+};
+
 let ammoControllerModulePromise: Promise<AmmoControllerModule> | null = null;
 let ammoSchemaBridgeModulePromise: Promise<AmmoSchemaBridgeModule> | null = null;
 let ammoBootstrapModulePromise: Promise<AmmoBootstrapModule> | null = null;
@@ -43,34 +48,58 @@ function loadAmmoBootstrapModule(): Promise<AmmoBootstrapModule> {
 }
 
 function resolveAmmoBootstrapFactory(module: AmmoBootstrapModule): (target?: Record<string, unknown>) => unknown {
+  if (typeof module === 'function') {
+    return module as unknown as (target?: Record<string, unknown>) => unknown;
+  }
   if (typeof module.Ammo === 'function') {
-    return module.Ammo;
+    return module.Ammo as (target?: Record<string, unknown>) => unknown;
   }
   if (typeof module.default === 'function') {
-    return module.default;
+    return module.default as (target?: Record<string, unknown>) => unknown;
   }
   if (module.default && typeof module.default === 'object') {
     const nestedModule = module.default as AmmoBootstrapModule;
     if (typeof nestedModule.Ammo === 'function') {
-      return nestedModule.Ammo;
+      return nestedModule.Ammo as (target?: Record<string, unknown>) => unknown;
     }
     if (typeof nestedModule.default === 'function') {
-      return nestedModule.default;
+      return nestedModule.default as (target?: Record<string, unknown>) => unknown;
     }
   }
-  throw new Error('Invalid Ammo bootstrap module');
+  const moduleType = typeof module;
+  const moduleKeys = module && typeof module === 'object' ? Object.keys(module as Record<string, unknown>).join(',') : '';
+  throw new Error(`Invalid Ammo bootstrap module (type=${moduleType}${moduleKeys ? `, keys=${moduleKeys}` : ''})`);
 }
 
-function createAmmoBootstrapModule(source: string): AmmoBootstrapModule {
-  const transformedSource = source
+function transformAmmoBootstrapSource(source: string, wasmAssetUrl: string): AmmoBootstrapSources {
+  const strippedSource = source
     .replace('import{LocalAsset as t}from"../utils/LocalAsset.js";', '')
     .replace(
       'WebAssembly.instantiate(t.resolve("wasm","ammo.wasm.wasm"),e).then((t=>n(t.instance)))',
-      `fetch(${JSON.stringify(ammoWasmUrl)}).then((response) => response.arrayBuffer()).then((bytes) => WebAssembly.instantiate(bytes, e)).then((t) => n(t.instance))`,
+      `fetch(${JSON.stringify(wasmAssetUrl)}).then((response) => response.arrayBuffer()).then((bytes) => WebAssembly.instantiate(bytes, e)).then((t) => n(t.instance))`,
     )
-    .replace('export{n as Ammo,n as default};', 'return { Ammo: n, default: n };')
+  return {
+    moduleSource: strippedSource,
+    functionSource: `${strippedSource.replace('export{n as Ammo,n as default};', '')}\nreturn { Ammo: n, default: n };`,
+  };
+}
 
-  return new Function(transformedSource)() as AmmoBootstrapModule
+async function createAmmoBootstrapModule(source: string): Promise<AmmoBootstrapModule> {
+  const { moduleSource, functionSource } = transformAmmoBootstrapSource(source, ammoWasmUrl)
+
+  if (typeof Blob !== 'undefined' && typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
+    const blob = new Blob([moduleSource], { type: 'text/javascript' })
+    const blobUrl = URL.createObjectURL(blob)
+    try {
+      return (await import(/* @vite-ignore */ blobUrl)) as AmmoBootstrapModule;
+    } catch {
+      // Fall back to the Function path below if blob module loading is unavailable.
+    } finally {
+      URL.revokeObjectURL(blobUrl);
+    }
+  }
+
+  return new Function(functionSource)() as AmmoBootstrapModule;
 }
 
 export async function createAmmoPhysicsBackend(): Promise<LoadedAmmoPhysicsBackend> {

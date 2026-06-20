@@ -9,6 +9,11 @@ type AmmoBootstrapModule = {
   default?: unknown
 }
 
+type AmmoBootstrapSources = {
+  moduleSource: string
+  functionSource: string
+}
+
 function resolveAmmoBootstrapFactory<TModule>(module: unknown): AmmoBootstrapFactory<TModule> {
   if (typeof module === 'function') {
     return module as AmmoBootstrapFactory<TModule>
@@ -37,24 +42,45 @@ function resolveAmmoBootstrapFactory<TModule>(module: unknown): AmmoBootstrapFac
       }
     }
   }
-  throw new Error('Invalid Ammo bootstrap module')
+  const moduleType = typeof module
+  const moduleKeys = module && typeof module === 'object' ? Object.keys(module as Record<string, unknown>).join(',') : ''
+  throw new Error(`Invalid Ammo bootstrap module (type=${moduleType}${moduleKeys ? `, keys=${moduleKeys}` : ''})`)
 }
 
-function createAmmoBootstrapModule(source: string): AmmoBootstrapModule {
-  const transformedSource = source
+function transformAmmoBootstrapSource(source: string, wasmAssetUrl: string): AmmoBootstrapSources {
+  const strippedSource = source
     .replace('import{LocalAsset as t}from"../utils/LocalAsset.js";', '')
     .replace(
       'WebAssembly.instantiate(t.resolve("wasm","ammo.wasm.wasm"),e).then((t=>n(t.instance)))',
-      `fetch(${JSON.stringify(wasmUrl)}).then((response) => response.arrayBuffer()).then((bytes) => WebAssembly.instantiate(bytes, e)).then((t) => n(t.instance))`,
+      `fetch(${JSON.stringify(wasmAssetUrl)}).then((response) => response.arrayBuffer()).then((bytes) => WebAssembly.instantiate(bytes, e)).then((t) => n(t.instance))`,
     )
-    .replace('export{n as Ammo,n as default};', 'return { Ammo: n, default: n };')
+  return {
+    moduleSource: strippedSource,
+    functionSource: `${strippedSource.replace('export{n as Ammo,n as default};', '')}\nreturn { Ammo: n, default: n };`,
+  }
+}
 
-  return new Function(transformedSource)() as AmmoBootstrapModule
+async function createAmmoBootstrapModule(source: string): Promise<AmmoBootstrapModule> {
+  const { moduleSource, functionSource } = transformAmmoBootstrapSource(source, wasmUrl)
+
+  if (typeof Blob !== 'undefined' && typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
+    const blob = new Blob([moduleSource], { type: 'text/javascript' })
+    const blobUrl = URL.createObjectURL(blob)
+    try {
+      return (await import(/* @vite-ignore */ blobUrl)) as AmmoBootstrapModule
+    } catch {
+      // Fall back to the Function path below if blob module loading is unavailable.
+    } finally {
+      URL.revokeObjectURL(blobUrl)
+    }
+  }
+
+  return new Function(functionSource)() as AmmoBootstrapModule
 }
 
 export function createDefaultAmmoModuleFactory<TModule = unknown>(): AmmoModuleFactory<TModule> {
   return async () => {
-    const importedModule = createAmmoBootstrapModule(ammoBootstrapSource)
+    const importedModule = await createAmmoBootstrapModule(ammoBootstrapSource)
     const bootstrap = resolveAmmoBootstrapFactory<TModule>(importedModule)
     return bootstrap.call(globalThis, {
     })
