@@ -29,7 +29,7 @@ function ensureSceneId(ctx: Context): string {
 }
 
 export async function listUserSceneDocuments(ctx: Context): Promise<void> {
-  const userId = ensureUserId(ctx)
+  const userId = typeof ctx.state.user?.id === 'string' ? ctx.state.user.id : null
   const projectId = typeof ctx.query?.projectId === 'string' ? ctx.query.projectId.trim() : ''
   const scenes = await listUserScenes(userId, { projectId })
   ctx.body = { scenes }

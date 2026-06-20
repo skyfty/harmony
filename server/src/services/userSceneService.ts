@@ -115,9 +115,12 @@ async function loadSceneCheckpointTotalMap(sceneIds: string[]): Promise<Map<stri
   return out
 }
 
-export async function listUserScenes(userId: string, options?: UserSceneQueryOptions): Promise<UserSceneSummary[]> {
+export async function listUserScenes(userId: string | null | undefined, options?: UserSceneQueryOptions): Promise<UserSceneSummary[]> {
   const projectId = sanitizeString(options?.projectId)
-  const query: Record<string, unknown> = { userId, ...buildDeletionFilter(options) }
+  const query: Record<string, unknown> = { ...buildDeletionFilter(options) }
+  if (typeof userId === 'string' && userId.trim()) {
+    query.userId = userId.trim()
+  }
   if (projectId) {
     query.projectId = projectId
   }

@@ -1,5 +1,5 @@
 import Router from 'koa-router'
-// import { authMiddleware } from '@/middleware/auth'
+import { optionalAuthMiddleware } from '@/middleware/auth'
 import {
   listUserSceneDocuments,
   uploadUserSceneBundle,
@@ -12,7 +12,7 @@ import { koaBody } from '@/utils/bodyParser'
 const userSceneRouter = new Router({ prefix: '/api/user-scenes' })
 
 // userSceneRouter.use(authMiddleware)
-userSceneRouter.get('/', listUserSceneDocuments)
+userSceneRouter.get('/', optionalAuthMiddleware, listUserSceneDocuments)
 userSceneRouter.put(
   '/:id/bundle',
   koaBody({
