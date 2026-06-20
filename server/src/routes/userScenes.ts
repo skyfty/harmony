@@ -11,10 +11,11 @@ import { koaBody } from '@/utils/bodyParser'
 
 const userSceneRouter = new Router({ prefix: '/api/user-scenes' })
 
-userSceneRouter.use(authMiddleware)
-userSceneRouter.get('/', listUserSceneDocuments)
+userSceneRouter.get('/:id/bundle', downloadUserSceneBundle)
+userSceneRouter.get('/', authMiddleware, listUserSceneDocuments)
 userSceneRouter.put(
   '/:id/bundle',
+  authMiddleware,
   koaBody({
     multipart: true,
     urlencoded: true,
@@ -22,8 +23,7 @@ userSceneRouter.put(
   }),
   uploadUserSceneBundle,
 )
-userSceneRouter.get('/:id/bundle', downloadUserSceneBundle)
-userSceneRouter.delete('/', deleteUserSceneDocumentsBulk)
-userSceneRouter.delete('/:id', deleteUserSceneDocument)
+userSceneRouter.delete('/', authMiddleware, deleteUserSceneDocumentsBulk)
+userSceneRouter.delete('/:id', authMiddleware, deleteUserSceneDocument)
 
 export default userSceneRouter
