@@ -415,23 +415,35 @@ function handleNavigate(key: NavKey) {
 }
 
 .medal-card {
+  position: relative;
+  overflow: hidden;
   padding: 7px 7px;
   border-radius: 22px;
   display: flex;
   align-items: center;
   gap: 10px;
-  border: 1px solid transparent;
+  border: 0;
+  background-clip: padding-box;
+}
+
+.medal-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  box-shadow: inset 0 0 0 1px var(--medal-card-stroke, rgba(255, 255, 255, 0.18));
 }
 
 .medal-card--earned {
   background: linear-gradient(135deg, rgba(255, 243, 204, 0.98) 0%, rgba(255, 225, 149, 0.88) 100%);
-  border-color: rgba(211, 153, 38, 0.18);
+  --medal-card-stroke: rgba(211, 153, 38, 0.32);
   box-shadow: 0 14px 28px rgba(179, 127, 16, 0.16);
 }
 
 .medal-card--locked {
   background: linear-gradient(135deg, rgba(234, 240, 249, 0.96) 0%, rgba(222, 229, 241, 0.92) 100%);
-  border-color: rgba(109, 123, 150, 0.14);
+  --medal-card-stroke: rgba(109, 123, 150, 0.3);
 }
 
 .medal-card--locked .medal-visual {
@@ -587,11 +599,11 @@ function handleNavigate(key: NavKey) {
   width: 100%;
   height: 100%;
   border-radius: 999px;
-  background: linear-gradient(180deg, rgba(23, 31, 55, 0.78) 0%, rgba(37, 47, 78, 0.84) 100%);
+  background: rgba(255, 255, 255, 0.28);
   overflow: hidden;
   position: relative;
-  box-shadow: 0 8px 16px rgba(18, 24, 43, 0.18);
-  border: 1rpx solid rgba(255, 255, 255, 0.2);
+  box-shadow: inset 0 1rpx 0 rgba(255, 255, 255, 0.72), 0 2rpx 8rpx rgba(255, 255, 255, 0.14);
+  border: 0;
 }
 
 .medal-progress-track::after {
@@ -599,7 +611,7 @@ function handleNavigate(key: NavKey) {
   position: absolute;
   inset: 1rpx;
   border-radius: 999px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.18) 0%, rgba(255, 255, 255, 0.02) 100%);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.16) 0%, rgba(255, 255, 255, 0.04) 100%);
   pointer-events: none;
 }
 
@@ -610,7 +622,7 @@ function handleNavigate(key: NavKey) {
   bottom: 0;
   min-width: 0;
   border-radius: 999px;
-  box-shadow: inset 0 1rpx 0 rgba(255, 255, 255, 0.3);
+  box-shadow: inset 0 1rpx 0 rgba(255, 255, 255, 0.28);
 }
 
 .medal-progress-text {

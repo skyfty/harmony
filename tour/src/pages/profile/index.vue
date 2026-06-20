@@ -34,7 +34,6 @@
           <text class="label">手机号</text>
           <view class="phone-cell">
             <button
-              v-if="!profile.hasBoundPhone"
               class="phone-action"
               open-type="getPhoneNumber"
               @getphonenumber="handleGetPhoneNumber"
