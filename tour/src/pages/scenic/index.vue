@@ -41,7 +41,7 @@
               :rating-count="scenic.ratingCount"
               :address="scenic.address"
             :summary="null"
-            :cover-url="(scenic.slides && scenic.slides[0]) || scenic.coverImage || ''"
+            :cover-url="scenic.coverImage || ''"
             :rating="scenic.averageRating"
             :is-featured="scenic.isFeatured"
             :is-hot="scenic.isHot"
