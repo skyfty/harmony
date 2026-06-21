@@ -2,16 +2,30 @@ declare const wx: any;
 
 import {
   normalizeScenePackageCacheKey,
+  readScenePackageCacheMetaSync,
+  readScenePackageZipSync,
+  removeScenePackageCacheMetaSync,
+  removeScenePackageZipSync,
   resolveScenePackageCacheZipPath,
   resolveScenePackageZipPath,
+  type ScenePackageCacheMetadata,
+  writeScenePackageCacheMetaSyncAtPath,
   writeScenePackageZipSyncAtPath,
-  readScenePackageZipSync,
-  removeScenePackageZipSync,
 } from './scenePackageFs';
 
 export type ScenePackagePointer =
   | { kind: 'wxfs'; ref: string }
   | { kind: 'idb'; ref: string };
+
+export type ScenePackageZipEntry = {
+  bytes: ArrayBuffer;
+  metadata: ScenePackageCacheMetadata | null;
+};
+
+type ScenePackageZipStorageRecord = {
+  bytes: ArrayBuffer;
+  metadata: ScenePackageCacheMetadata | null;
+};
 
 function isWeChatFileSystemAvailable(): boolean {
   const wxAny = typeof wx !== 'undefined' ? wx : null;
@@ -24,7 +38,7 @@ function isIndexedDbAvailable(): boolean {
 
 const IDB_DB_NAME = 'harmony-scene-packages';
 const IDB_STORE_NAME = 'zips';
-const IDB_VERSION = 1;
+const IDB_VERSION = 2;
 
 function openZipDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -45,7 +59,7 @@ function openZipDb(): Promise<IDBDatabase> {
   });
 }
 
-async function idbPutZip(key: string, buffer: ArrayBuffer): Promise<void> {
+async function idbPutZip(key: string, buffer: ArrayBuffer, metadata: ScenePackageCacheMetadata | null): Promise<void> {
   const db = await openZipDb();
   try {
     await new Promise<void>((resolve, reject) => {
@@ -53,7 +67,10 @@ async function idbPutZip(key: string, buffer: ArrayBuffer): Promise<void> {
       tx.onabort = () => reject(tx.error ?? new Error('IndexedDB 写入中止'));
       tx.onerror = () => reject(tx.error ?? new Error('IndexedDB 写入失败'));
       const store = tx.objectStore(IDB_STORE_NAME);
-      const req = store.put(buffer, key);
+      const req = store.put({
+        bytes: buffer,
+        metadata: metadata ?? null,
+      } satisfies ScenePackageZipStorageRecord, key);
       req.onerror = () => reject(req.error ?? new Error('IndexedDB 写入失败'));
       req.onsuccess = () => resolve();
     });
@@ -62,7 +79,7 @@ async function idbPutZip(key: string, buffer: ArrayBuffer): Promise<void> {
   }
 }
 
-async function idbGetZip(key: string): Promise<ArrayBuffer> {
+async function idbGetZipEntry(key: string): Promise<ScenePackageZipEntry> {
   const db = await openZipDb();
   try {
     const value = await new Promise<unknown>((resolve, reject) => {
@@ -76,12 +93,29 @@ async function idbGetZip(key: string): Promise<ArrayBuffer> {
     });
 
     if (value instanceof ArrayBuffer) {
-      return value;
+      return { bytes: value, metadata: null };
     }
 
-    if (value && typeof value === 'object' && 'buffer' in (value as any) && (value as any).buffer instanceof ArrayBuffer) {
-      const view = value as any;
-      return (view.buffer as ArrayBuffer).slice(view.byteOffset ?? 0, (view.byteOffset ?? 0) + (view.byteLength ?? (view.buffer as ArrayBuffer).byteLength));
+    if (value && typeof value === 'object') {
+      const record = value as { bytes?: unknown; buffer?: unknown; metadata?: unknown };
+      if (record.bytes instanceof ArrayBuffer) {
+        return {
+          bytes: record.bytes,
+          metadata: record.metadata && typeof record.metadata === 'object'
+            ? (record.metadata as ScenePackageCacheMetadata)
+            : null,
+        };
+      }
+
+      if (record.buffer instanceof ArrayBuffer) {
+        const view = record as { buffer: ArrayBuffer; byteOffset?: number; byteLength?: number; metadata?: unknown };
+        return {
+          bytes: (view.buffer as ArrayBuffer).slice(view.byteOffset ?? 0, (view.byteOffset ?? 0) + (view.byteLength ?? (view.buffer as ArrayBuffer).byteLength)),
+          metadata: view.metadata && typeof view.metadata === 'object'
+            ? (view.metadata as ScenePackageCacheMetadata)
+            : null,
+        };
+      }
     }
 
     throw new Error('IndexedDB 中未找到场景包数据');
@@ -114,6 +148,27 @@ function toArrayBuffer(input: ArrayBuffer | Uint8Array | any): ArrayBuffer {
   return input as ArrayBuffer;
 }
 
+function normalizeCacheMetadata(metadata: ScenePackageCacheMetadata | null | undefined): ScenePackageCacheMetadata | null {
+  if (!metadata || typeof metadata !== 'object') {
+    return null;
+  }
+  const sourceUrl = typeof metadata.sourceUrl === 'string' ? metadata.sourceUrl.trim() : '';
+  if (!sourceUrl) {
+    return null;
+  }
+  return {
+    sourceUrl,
+    etag: typeof metadata.etag === 'string' && metadata.etag.trim().length ? metadata.etag.trim() : null,
+    lastModified: typeof metadata.lastModified === 'string' && metadata.lastModified.trim().length ? metadata.lastModified.trim() : null,
+    contentLength: Number.isFinite(metadata.contentLength) && (metadata.contentLength ?? 0) >= 0
+      ? Math.max(0, Math.trunc(metadata.contentLength as number))
+      : null,
+    fetchedAt: Number.isFinite(metadata.fetchedAt) && (metadata.fetchedAt ?? 0) >= 0
+      ? Math.max(0, Math.trunc(metadata.fetchedAt as number))
+      : Date.now(),
+  };
+}
+
 export function resolveScenePackageZipPointer(projectId: string): ScenePackagePointer {
   if (isWeChatFileSystemAvailable()) {
     return { kind: 'wxfs', ref: resolveScenePackageZipPath(projectId) };
@@ -139,33 +194,54 @@ export function resolveScenePackageZipPointerByCacheKey(cacheKey: string): Scene
   throw new Error('当前环境不支持持久化大体积场景包（缺少文件系统/IndexedDB）');
 }
 
-export async function saveScenePackageZipAtPointer(bytes: ArrayBuffer | Uint8Array, pointer: ScenePackagePointer): Promise<void> {
+export async function saveScenePackageZipAtPointer(
+  bytes: ArrayBuffer | Uint8Array,
+  pointer: ScenePackagePointer,
+  metadata?: ScenePackageCacheMetadata | null,
+): Promise<void> {
   const buffer = toArrayBuffer(bytes);
+  const normalizedMetadata = normalizeCacheMetadata(metadata ?? null);
   if (pointer.kind === 'wxfs') {
     writeScenePackageZipSyncAtPath(buffer, pointer.ref);
+    writeScenePackageCacheMetaSyncAtPath(normalizedMetadata, pointer.ref);
     return;
   }
 
-  await idbPutZip(pointer.ref, buffer);
+  await idbPutZip(pointer.ref, buffer, normalizedMetadata);
 }
 
-export async function saveScenePackageZip(bytes: ArrayBuffer | Uint8Array, projectId: string): Promise<ScenePackagePointer> {
+export async function saveScenePackageZip(
+  bytes: ArrayBuffer | Uint8Array,
+  projectId: string,
+  metadata?: ScenePackageCacheMetadata | null,
+): Promise<ScenePackagePointer> {
   const pointer = resolveScenePackageZipPointer(projectId);
-  await saveScenePackageZipAtPointer(bytes, pointer);
+  await saveScenePackageZipAtPointer(bytes, pointer, metadata);
   return pointer;
 }
 
-export async function saveScenePackageZipByCacheKey(bytes: ArrayBuffer | Uint8Array, cacheKey: string): Promise<ScenePackagePointer> {
+export async function saveScenePackageZipByCacheKey(
+  bytes: ArrayBuffer | Uint8Array,
+  cacheKey: string,
+  metadata?: ScenePackageCacheMetadata | null,
+): Promise<ScenePackagePointer> {
   const pointer = resolveScenePackageZipPointerByCacheKey(cacheKey);
-  await saveScenePackageZipAtPointer(bytes, pointer);
+  await saveScenePackageZipAtPointer(bytes, pointer, metadata);
   return pointer;
+}
+
+export async function loadScenePackageZipEntry(pointer: ScenePackagePointer): Promise<ScenePackageZipEntry> {
+  if (pointer.kind === 'wxfs') {
+    return {
+      bytes: readScenePackageZipSync(pointer.ref),
+      metadata: readScenePackageCacheMetaSync(pointer.ref),
+    };
+  }
+  return await idbGetZipEntry(pointer.ref);
 }
 
 export async function loadScenePackageZip(pointer: ScenePackagePointer): Promise<ArrayBuffer> {
-  if (pointer.kind === 'wxfs') {
-    return readScenePackageZipSync(pointer.ref);
-  }
-  return await idbGetZip(pointer.ref);
+  return (await loadScenePackageZipEntry(pointer)).bytes;
 }
 
 export async function loadScenePackageZipByCacheKey(cacheKey: string): Promise<ArrayBuffer> {
@@ -177,6 +253,7 @@ export async function removeScenePackageZip(pointer: ScenePackagePointer | null 
   try {
     if (pointer.kind === 'wxfs') {
       removeScenePackageZipSync(pointer.ref);
+      removeScenePackageCacheMetaSync(pointer.ref);
       return;
     }
     await idbDeleteZip(pointer.ref);

@@ -503,12 +503,15 @@ import { useBehaviorAlert } from '../composables/useBehaviorAlert';
 import { useBehaviorBubble } from '../composables/useBehaviorBubble';
 import { useLanternAssets } from '../composables/useLanternAssets';
 import {
+  loadScenePackageZipEntry,
   loadScenePackageZip,
   removeScenePackageZip,
   resolveScenePackageZipPointerByCacheKey,
   saveScenePackageZipByCacheKey,
+  type ScenePackageCacheMetadata,
   type ScenePackagePointer,
 } from '@harmony/utils/scene-package-storage';
+import { fetchAssetBlobWithResponse, type AssetBlobDownloadResult } from '@harmony/schema/assetDownload';
 
 type SceneryProps = {
   projectId?: string;
@@ -16667,30 +16670,6 @@ async function loadProjectFromBundle(bundle: ScenePackageProjectData): Promise<v
   await switchToProjectScene(initialId);
 }
 
-function requestBinary(url: string): Promise<ArrayBuffer> {
-  if (sceneDownloadController) {
-    sceneDownloadController.abort();
-  }
-  const controller = new AbortController();
-  sceneDownloadController = controller;
-  return fetchAssetBlob(url, controller, (progress) => {
-    sceneDownload.phase = 'download';
-    sceneDownload.percent = clampPercent(progress);
-    sceneDownload.indeterminate = false;
-    sceneDownload.label = `正在下载场景包… ${sceneDownload.percent}%`;
-  }).then(async ({ blob }) => {
-    if (sceneDownloadController === controller) {
-      sceneDownloadController = null;
-    }
-    return await blob.arrayBuffer();
-  }, (error) => {
-    if (sceneDownloadController === controller) {
-      sceneDownloadController = null;
-    }
-    throw error;
-  });
-}
-
 async function loadProjectFromScenePackageUrl(url: string, cacheKey?: string): Promise<void> {
   error.value = null;
   activeScenePackageAssetOverrides = null;
@@ -16701,49 +16680,103 @@ async function loadProjectFromScenePackageUrl(url: string, cacheKey?: string): P
   try {
     resetSceneDownloadState();
     const cacheKeyParam = typeof cacheKey === 'string' && cacheKey.trim() ? cacheKey.trim() : '';
-    if (cacheKeyParam) {
-      const cachePointer = resolveScenePackageZipPointerByCacheKey(cacheKeyParam);
+    const cachePointer = cacheKeyParam ? resolveScenePackageZipPointerByCacheKey(cacheKeyParam) : null;
+    const cachedEntry = cachePointer ? await loadScenePackageZipEntry(cachePointer).catch(() => null) : null;
+    const cachedBuffer = cachedEntry?.bytes ?? null;
+    const cachedMetadata = cachedEntry?.metadata ?? null;
+
+    const loadCachedScenePackage = async (): Promise<boolean> => {
+      if (!cachedBuffer || !cachedBuffer.byteLength) {
+        return false;
+      }
       try {
-        setSceneDownloadState({
-          phase: 'read-cache',
-          label: '正在读取本地缓存场景包',
-          detail: '优先读取本地缓存，减少网络等待。',
-          percent: 8,
-          currentIndex: 0,
-          currentTotal: 0,
-          currentLabel: '',
-          indeterminate: true,
-        });
-        await yieldToMainThread();
-        const cachedBuffer = await loadScenePackageZip(cachePointer);
-        try {
-          await loadProjectFromScenePackageBytes(cachedBuffer, cacheKeyParam || url);
-          return;
-        } catch (parseError) {
-          console.warn('Cached scene package failed to parse, removing cache entry', parseError);
+        await loadProjectFromScenePackageBytes(cachedBuffer, cacheKeyParam || url);
+        return true;
+      } catch (parseError) {
+        console.warn('Cached scene package failed to parse, removing cache entry', parseError);
+        if (cachePointer) {
           await removeScenePackageZip(cachePointer);
         }
-      } catch (cacheError) {
-        void cacheError;
+        return false;
       }
+    };
+
+    const requestHeaders: Record<string, string> = {
+      Accept: 'application/zip',
+      'Cache-Control': 'no-cache',
+      Pragma: 'no-cache',
+    };
+    if (cachedMetadata?.etag) {
+      requestHeaders['If-None-Match'] = cachedMetadata.etag;
+    } else if (cachedMetadata?.lastModified) {
+      requestHeaders['If-Modified-Since'] = cachedMetadata.lastModified;
     }
 
     setSceneDownloadState({
       phase: 'download',
-      label: '正在下载场景包',
-      detail: '正在从远端获取场景包二进制数据。',
-      percent: 0,
+      label: cachedMetadata ? '正在校验场景包更新' : '正在下载场景包',
+      detail: cachedMetadata
+        ? '优先读取本地缓存，并向远端校验是否有新版本。'
+        : '正在从远端获取场景包二进制数据。',
+      percent: cachedMetadata ? 8 : 0,
       loaded: 0,
       total: 0,
       currentIndex: 0,
       currentTotal: 0,
       currentLabel: '',
-      indeterminate: false,
+      indeterminate: true,
     });
-    const buffer = await requestBinary(url);
+    await yieldToMainThread();
+
+    if (sceneDownloadController) {
+      sceneDownloadController.abort();
+    }
+    const controller = new AbortController();
+    sceneDownloadController = controller;
+
+    let downloadResult: AssetBlobDownloadResult | null = null;
+    try {
+      downloadResult = await fetchAssetBlobWithResponse(url, controller, (progress) => {
+        sceneDownload.phase = 'download';
+        sceneDownload.percent = clampPercent(progress);
+        sceneDownload.indeterminate = false;
+        sceneDownload.label = `正在下载场景包… ${sceneDownload.percent}%`;
+      }, requestHeaders).then((result) => result, async (requestError) => {
+        if (cachedBuffer && await loadCachedScenePackage()) {
+          return null;
+        }
+        throw requestError;
+      });
+    } finally {
+      if (sceneDownloadController === controller) {
+        sceneDownloadController = null;
+      }
+    }
+
+    if (!downloadResult) {
+      return;
+    }
+
+    if (downloadResult.kind === 'not-modified') {
+      if (await loadCachedScenePackage()) {
+        return;
+      }
+      throw new Error('远端场景包未变化，但本地缓存不存在或已损坏');
+    }
+
+    const buffer = await downloadResult.blob.arrayBuffer();
     await loadProjectFromScenePackageBytes(buffer, cacheKeyParam || url);
     if (cacheKeyParam) {
-      void saveScenePackageZipByCacheKey(buffer, cacheKeyParam).catch((saveError) => {
+      const metadata: ScenePackageCacheMetadata = {
+        sourceUrl: downloadResult.url || url,
+        etag: downloadResult.headers.etag ?? null,
+        lastModified: downloadResult.headers['last-modified'] ?? null,
+        contentLength: Number.isFinite(Number(downloadResult.headers['content-length']))
+          ? Math.max(0, Math.trunc(Number(downloadResult.headers['content-length'])))
+          : buffer.byteLength,
+        fetchedAt: Date.now(),
+      };
+      void saveScenePackageZipByCacheKey(buffer, cacheKeyParam, metadata).catch((saveError) => {
         console.warn('Failed to persist scene package cache', saveError);
       });
     }

@@ -7,6 +7,23 @@ export interface AssetBlobPayload {
   url: string
 }
 
+export type AssetBlobDownloadResult =
+  | {
+      kind: 'not-modified'
+      statusCode: 304
+      url: string
+      headers: Record<string, string>
+    }
+  | {
+      kind: 'downloaded'
+      statusCode: number
+      url: string
+      blob: Blob
+      mimeType: string | null
+      filename: string | null
+      headers: Record<string, string>
+    }
+
 export type AssetBlobDownloader = (
   urlCandidates: string[],
   controller: AbortController,
@@ -69,6 +86,22 @@ export async function fetchAssetBlob(
     throw createAbortError()
   }
   return await downloadAssetBlob(candidates, controller, onProgress)
+}
+
+export async function fetchAssetBlobWithResponse(
+  url: string,
+  controller: AbortController,
+  onProgress: (value: number) => void,
+  requestHeaders?: Record<string, string>,
+): Promise<AssetBlobDownloadResult> {
+  const candidates = createDownloadUrlCandidates(url)
+  if (!candidates.length) {
+    throw new Error('资源下载失败（无效的下载地址）')
+  }
+  if (controller.signal.aborted) {
+    throw createAbortError()
+  }
+  return await downloadAssetBlobWithResponse(candidates, controller, onProgress, requestHeaders)
 }
 
 function createAbortError(): Error {
@@ -180,6 +213,33 @@ async function downloadAssetBlob(
   throw new Error('资源下载失败（网络错误）')
 }
 
+async function downloadAssetBlobWithResponse(
+  urlCandidates: string[],
+  controller: AbortController,
+  onProgress: (value: number) => void,
+  requestHeaders?: Record<string, string>,
+): Promise<AssetBlobDownloadResult> {
+  let lastNetworkError: unknown = null
+
+  for (const candidate of urlCandidates) {
+    try {
+      return await downloadAssetBlobFromCandidateWithResponse(candidate, controller, onProgress, requestHeaders)
+    } catch (error) {
+      if (isRetryableDownloadError(error) && candidate !== urlCandidates[0]) {
+        lastNetworkError = error
+        continue
+      }
+      throw error instanceof Error ? error : new Error(String(error))
+    }
+  }
+
+  if (lastNetworkError) {
+    throw lastNetworkError instanceof Error ? lastNetworkError : new Error(String(lastNetworkError))
+  }
+
+  throw new Error('资源下载失败（网络错误）')
+}
+
 async function downloadAssetBlobFromCandidate(
   url: string,
   controller: AbortController,
@@ -196,6 +256,28 @@ async function downloadAssetBlobFromCandidate(
   const uniApi = typeof uni !== 'undefined' ? uni : null
   if (uniApi && typeof uniApi.request === 'function') {
     return await downloadAssetBlobViaUniRequest(uniApi, url, controller, onProgress)
+  }
+
+  throw new Error('资源下载失败（当前环境不支持 fetch 或 uni.request）')
+}
+
+async function downloadAssetBlobFromCandidateWithResponse(
+  url: string,
+  controller: AbortController,
+  onProgress: (value: number) => void,
+  requestHeaders?: Record<string, string>,
+): Promise<AssetBlobDownloadResult> {
+  if (controller.signal.aborted) {
+    throw createAbortError()
+  }
+
+  if (typeof fetch === 'function') {
+    return await downloadAssetBlobViaFetchWithResponse(url, controller, onProgress, requestHeaders)
+  }
+
+  const uniApi = typeof uni !== 'undefined' ? uni : null
+  if (uniApi && typeof uniApi.request === 'function') {
+    return await downloadAssetBlobViaUniRequestWithResponse(uniApi, url, controller, onProgress, requestHeaders)
   }
 
   throw new Error('资源下载失败（当前环境不支持 fetch 或 uni.request）')
@@ -263,6 +345,98 @@ async function downloadAssetBlobViaFetch(
   return buildAssetBlobPayload(joined.buffer, requestUrl, mimeType, filename)
 }
 
+async function downloadAssetBlobViaFetchWithResponse(
+  url: string,
+  controller: AbortController,
+  onProgress: (value: number) => void,
+  requestHeaders?: Record<string, string>,
+): Promise<AssetBlobDownloadResult> {
+  const response = await fetch(url, {
+    signal: controller.signal,
+    headers: normalizeRequestHeaders(requestHeaders),
+    cache: 'no-store',
+  })
+  const responseHeaders = headersToRecord(response.headers)
+  if (response.status === 304) {
+    return {
+      kind: 'not-modified',
+      statusCode: 304,
+      url: response.url || url,
+      headers: responseHeaders,
+    }
+  }
+  if (!response.ok) {
+    throw new Error(`资源下载失败（${response.status}）`)
+  }
+
+  const mimeType = response.headers.get('content-type')
+  const normalizedContentType = mimeType?.toLowerCase() ?? ''
+  if (normalizedContentType.includes('text/html') || normalizedContentType.includes('application/xhtml+xml')) {
+    const body = await response.text().catch(() => '')
+    const snippet = body.trimStart().slice(0, 80)
+    const location = response.url && response.url !== url ? `${url} -> ${response.url}` : url
+    const htmlHint = /^<!doctype\s+html/i.test(snippet) || /^<html[\s>]/i.test(snippet)
+      ? 'HTML 页面'
+      : '网页内容'
+    throw new Error(`资源下载失败：${location} 返回了${htmlHint}，请检查下载地址或登录态是否有效`)
+  }
+  const filename = extractFilenameFromHeaders(response.headers, response.url || url)
+  const requestUrl = response.url || url
+  const total = Number.parseInt(response.headers.get('content-length') ?? '0', 10)
+
+  if (!response.body) {
+    const buffer = await response.arrayBuffer()
+    onProgress(100)
+    return {
+      kind: 'downloaded',
+      statusCode: response.status,
+      url: requestUrl,
+      blob: new Blob([buffer], { type: mimeType ?? 'application/octet-stream' }),
+      mimeType,
+      filename,
+      headers: responseHeaders,
+    }
+  }
+
+  const reader = response.body.getReader()
+  const chunks: Uint8Array[] = []
+  let received = 0
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) {
+      break
+    }
+    if (value && value.byteLength) {
+      chunks.push(value)
+      received += value.byteLength
+      if (total > 0) {
+        onProgress(Math.min(99, Math.round((received / total) * 100)))
+      } else {
+        onProgress(Math.min(95, received % 100))
+      }
+    }
+  }
+
+  const joined = new Uint8Array(received)
+  let offset = 0
+  for (const chunk of chunks) {
+    joined.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+
+  onProgress(100)
+  return {
+    kind: 'downloaded',
+    statusCode: response.status,
+    url: requestUrl,
+    blob: new Blob([joined.buffer], { type: mimeType ?? 'application/octet-stream' }),
+    mimeType,
+    filename,
+    headers: responseHeaders,
+  }
+}
+
 async function downloadAssetBlobViaUniRequest(
   uniApi: { request?: (options: {
     url: string
@@ -291,6 +465,77 @@ async function downloadAssetBlobViaUniRequest(
         const filename = extractFilenameFromResponseHeader(payload.header, url)
         onProgress(100)
         resolve(buildAssetBlobPayload(arrayBuffer, url, mimeType, filename))
+      },
+      fail: (error) => reject(error),
+    })
+
+    const abortListener = () => {
+      try {
+        task?.abort?.()
+      } catch {
+        /* noop */
+      }
+      reject(createAbortError())
+    }
+
+    if (controller.signal.aborted) {
+      abortListener()
+      return
+    }
+
+    controller.signal.addEventListener('abort', abortListener, { once: true })
+  })
+}
+
+async function downloadAssetBlobViaUniRequestWithResponse(
+  uniApi: { request?: (options: {
+    url: string
+    method?: string
+    header?: Record<string, string>
+    responseType?: 'arraybuffer'
+    success: (payload: { statusCode?: number; data?: unknown; header?: Record<string, string> }) => void
+    fail: (error: unknown) => void
+  }) => { abort?: () => void } | void },
+  url: string,
+  controller: AbortController,
+  onProgress: (value: number) => void,
+  requestHeaders?: Record<string, string>,
+): Promise<AssetBlobDownloadResult> {
+  return await new Promise<AssetBlobDownloadResult>((resolve, reject) => {
+    const task = uniApi.request?.({
+      url,
+      method: 'GET',
+      header: normalizeRequestHeaders(requestHeaders),
+      responseType: 'arraybuffer',
+      success: (payload) => {
+        const statusCode = payload.statusCode ?? 200
+        const responseHeaders = normalizeResponseHeaders(payload.header)
+        if (statusCode === 304) {
+          resolve({
+            kind: 'not-modified',
+            statusCode: 304,
+            url,
+            headers: responseHeaders,
+          })
+          return
+        }
+        if (statusCode < 200 || statusCode >= 300) {
+          reject(new Error(`资源下载失败（${statusCode}）`))
+          return
+        }
+        const mimeType = responseHeaders['content-type'] ?? null
+        const filename = extractFilenameFromResponseHeader(responseHeaders, url)
+        const arrayBuffer = toArrayBuffer(payload.data)
+        onProgress(100)
+        resolve({
+          kind: 'downloaded',
+          statusCode,
+          url,
+          blob: new Blob([arrayBuffer], { type: mimeType ?? 'application/octet-stream' }),
+          mimeType,
+          filename,
+          headers: responseHeaders,
+        })
       },
       fail: (error) => reject(error),
     })
@@ -345,6 +590,51 @@ function extractFilenameFromResponseHeader(headers: Record<string, string> | und
     }
   }
   return extractFilenameFromUrl(url)
+}
+
+function normalizeRequestHeaders(headers?: Record<string, string>): Record<string, string> | undefined {
+  if (!headers || typeof headers !== 'object') {
+    return undefined
+  }
+  const normalized: Record<string, string> = {}
+  Object.entries(headers).forEach(([key, value]) => {
+    const normalizedKey = typeof key === 'string' ? key.trim() : ''
+    const normalizedValue = typeof value === 'string' ? value.trim() : ''
+    if (!normalizedKey || !normalizedValue) {
+      return
+    }
+    normalized[normalizedKey] = normalizedValue
+  })
+  return Object.keys(normalized).length ? normalized : undefined
+}
+
+function normalizeResponseHeaders(headers?: Record<string, string> | null): Record<string, string> {
+  const normalized: Record<string, string> = {}
+  if (!headers || typeof headers !== 'object') {
+    return normalized
+  }
+  Object.entries(headers).forEach(([key, value]) => {
+    const normalizedKey = typeof key === 'string' ? key.trim().toLowerCase() : ''
+    const normalizedValue = typeof value === 'string' ? value.trim() : ''
+    if (!normalizedKey || !normalizedValue) {
+      return
+    }
+    normalized[normalizedKey] = normalizedValue
+  })
+  return normalized
+}
+
+function headersToRecord(headers: Headers): Record<string, string> {
+  const out: Record<string, string> = {}
+  headers.forEach((value, key) => {
+    const normalizedKey = key.trim().toLowerCase()
+    const normalizedValue = value.trim()
+    if (!normalizedKey || !normalizedValue) {
+      return
+    }
+    out[normalizedKey] = normalizedValue
+  })
+  return out
 }
 
 function extractFilenameFromHeaders(headers: Headers, url: string): string | null {

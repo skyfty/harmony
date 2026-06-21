@@ -4,8 +4,16 @@ type WxFileSystemManagerLike = {
   accessSync?: (path: string) => void;
   mkdirSync?: (path: string, recursive?: boolean) => void;
   readFileSync?: (filePath: string, encoding?: string) => string | ArrayBuffer;
-  writeFileSync?: (filePath: string, data: ArrayBuffer, encoding?: string) => void;
+  writeFileSync?: (filePath: string, data: string | ArrayBuffer, encoding?: string) => void;
   unlinkSync?: (filePath: string) => void;
+};
+
+export type ScenePackageCacheMetadata = {
+  sourceUrl: string;
+  etag: string | null;
+  lastModified: string | null;
+  contentLength: number | null;
+  fetchedAt: number;
 };
 
 function getWxFileSystemManager(): WxFileSystemManagerLike {
@@ -40,7 +48,37 @@ function ensureDirExistsSync(dirPath: string): void {
   fs.mkdirSync(dirPath, true);
 }
 
+function normalizeScenePackageCacheMetadata(
+  metadata: ScenePackageCacheMetadata | null | undefined,
+): ScenePackageCacheMetadata | null {
+  if (!metadata || typeof metadata !== 'object') {
+    return null;
+  }
+  const sourceUrl = typeof metadata.sourceUrl === 'string' ? metadata.sourceUrl.trim() : '';
+  if (!sourceUrl) {
+    return null;
+  }
+  const etag = typeof metadata.etag === 'string' && metadata.etag.trim().length ? metadata.etag.trim() : null;
+  const lastModified = typeof metadata.lastModified === 'string' && metadata.lastModified.trim().length
+    ? metadata.lastModified.trim()
+    : null;
+  const contentLength = Number.isFinite(metadata.contentLength) && (metadata.contentLength ?? 0) >= 0
+    ? Math.max(0, Math.trunc(metadata.contentLength as number))
+    : null;
+  const fetchedAt = Number.isFinite(metadata.fetchedAt) && (metadata.fetchedAt ?? 0) >= 0
+    ? Math.max(0, Math.trunc(metadata.fetchedAt as number))
+    : Date.now();
+  return {
+    sourceUrl,
+    etag,
+    lastModified,
+    contentLength,
+    fetchedAt,
+  };
+}
+
 const SCENE_PACKAGE_DIR_NAME = 'harmony/scene-packages';
+const SCENE_PACKAGE_CACHE_META_SUFFIX = '.meta.json';
 
 export function normalizeScenePackageCacheKey(rawKey: string): string {
   const trimmed = String(rawKey ?? '').trim();
@@ -81,6 +119,17 @@ export function resolveScenePackageCacheZipPath(cacheKey: string): string {
   return `${dir}/${safeKey}.zip`;
 }
 
+export function resolveScenePackageCacheMetaPath(cacheKeyOrZipPath: string): string {
+  const normalized = String(cacheKeyOrZipPath ?? '').trim();
+  if (!normalized) {
+    return `${resolveScenePackageDir()}/scene-package${SCENE_PACKAGE_CACHE_META_SUFFIX}`;
+  }
+  if (normalized.endsWith('.zip')) {
+    return `${normalized}${SCENE_PACKAGE_CACHE_META_SUFFIX}`;
+  }
+  return `${resolveScenePackageCacheZipPath(normalized)}${SCENE_PACKAGE_CACHE_META_SUFFIX}`;
+}
+
 export function writeScenePackageZipSyncAtPath(bytes: ArrayBuffer | Uint8Array, filePath: string): string {
   const fs = getWxFileSystemManager();
   if (typeof fs.writeFileSync !== 'function') {
@@ -104,6 +153,34 @@ export function writeScenePackageZipSyncByCacheKey(bytes: ArrayBuffer | Uint8Arr
   return writeScenePackageZipSyncAtPath(bytes, resolveScenePackageCacheZipPath(cacheKey));
 }
 
+export function writeScenePackageCacheMetaSyncAtPath(
+  metadata: ScenePackageCacheMetadata | null | undefined,
+  filePath: string,
+): string | null {
+  const normalized = normalizeScenePackageCacheMetadata(metadata);
+  if (!normalized) {
+    removeScenePackageCacheMetaSync(filePath);
+    return null;
+  }
+  const fs = getWxFileSystemManager();
+  if (typeof fs.writeFileSync !== 'function') {
+    throw new Error('当前环境不支持 writeFileSync');
+  }
+  const normalizedFilePath = resolveScenePackageCacheMetaPath(filePath);
+  const dirSeparatorIndex = normalizedFilePath.lastIndexOf('/');
+  const dir = dirSeparatorIndex >= 0 ? normalizedFilePath.slice(0, dirSeparatorIndex) : '';
+  ensureDirExistsSync(dir);
+  fs.writeFileSync(normalizedFilePath, JSON.stringify(normalized), 'utf8');
+  return normalizedFilePath;
+}
+
+export function writeScenePackageCacheMetaSyncByCacheKey(
+  metadata: ScenePackageCacheMetadata | null | undefined,
+  cacheKey: string,
+): string | null {
+  return writeScenePackageCacheMetaSyncAtPath(metadata, resolveScenePackageCacheZipPath(cacheKey));
+}
+
 export function readScenePackageZipSync(filePath: string): ArrayBuffer {
   const fs = getWxFileSystemManager();
   if (typeof fs.readFileSync !== 'function') {
@@ -114,6 +191,38 @@ export function readScenePackageZipSync(filePath: string): ArrayBuffer {
     return result;
   }
   throw new Error('读取场景包失败（返回不是 ArrayBuffer）');
+}
+
+export function readScenePackageCacheMetaSync(filePath: string): ScenePackageCacheMetadata | null {
+  const fs = getWxFileSystemManager();
+  if (typeof fs.readFileSync !== 'function') {
+    throw new Error('当前环境不支持 readFileSync');
+  }
+  try {
+    const result = fs.readFileSync(resolveScenePackageCacheMetaPath(filePath) as any, 'utf8');
+    const text = typeof result === 'string' ? result.trim() : '';
+    if (!text) {
+      return null;
+    }
+    const parsed = JSON.parse(text) as ScenePackageCacheMetadata;
+    return normalizeScenePackageCacheMetadata(parsed);
+  } catch (_error) {
+    return null;
+  }
+}
+
+export function removeScenePackageCacheMetaSync(filePath: string | null | undefined): void {
+  const trimmed = typeof filePath === 'string' ? filePath.trim() : '';
+  if (!trimmed) return;
+
+  try {
+    const fs = getWxFileSystemManager();
+    if (typeof fs.unlinkSync === 'function') {
+      fs.unlinkSync(resolveScenePackageCacheMetaPath(trimmed));
+    }
+  } catch (_e) {
+    // Ignore cleanup failures.
+  }
 }
 
 export function removeScenePackageZipSync(filePath: string | null | undefined): void {
@@ -128,4 +237,5 @@ export function removeScenePackageZipSync(filePath: string | null | undefined): 
   } catch (_e) {
     // Ignore cleanup failures.
   }
+  removeScenePackageCacheMetaSync(trimmed);
 }
